@@ -404,7 +404,7 @@
 	Delete Frame	Supprimer l'image
 	Duplicate Frame	Dupliquer l'image
 	Frame from Layers	Image d'après les calques
-	Video Frames to Layers…	Images vidéo dans des calques…
+	Video Frames to Layers…	Images vidéo vers calques…
 	Rasterize	Rastériser
 	Rasterize Type	Rastériser le texte
 	Rasterize Type Layer	Rastériser le calque de texte
@@ -580,7 +580,7 @@
 	Noise	Bruit
 	Add Noise…	Ajout de bruit…
 	Despeckle	Supprimer les mouchetures
-	Dust & Scratches…	Poussière et rayures…
+	Dust & Scratches…	Poussières et rayures…
 	Median…	Médiane…
 	Reduce Noise…	Réduction du bruit…
 	Pixelate	Pixeliser
@@ -793,7 +793,7 @@
 	Report an Issue…	Signaler un problème…
 	WIA Support…	Prise en charge de WIA…
 	Apply	Appliquer
-	HSB/HSL	TSL/TSI
+	HSB/HSL	HSB/HSL
 	Invert…	Inverser…
 	Load Files into Stack…	Charger des fichiers dans une pile…
 	Motion	Mouvement
@@ -2269,7 +2269,7 @@
 	Alpha	Alpha
 	Spot Channel	Canal de ton direct
 	Working Gray Plate	Plaque grise de travail
-	HSL/Grayscale	TSL/Niveaux de gris
+	HSL/Grayscale	HSL/Niveaux de gris
 	Tone Curve	Courbe des tonalités
 	Split Toning	Virage partiel
 	Lens Corrections	Corrections de l'objectif
@@ -2424,7 +2424,7 @@
 	Actual Color	Couleur réelle
 	Grayscale Slider	Curseur de niveaux de gris
 	Web Color	Couleur Web
-	HSB Color	Couleur TSL
+	HSB Color	Couleur HSB
 	Total Ink	Encrage total
 	Opacity Mask	Masque d'opacité
 	Ruler	Règle
@@ -3458,7 +3458,7 @@ curves	Smooth	Lisser
 	Ask On Paste	Demander au collage
 	Assign Profile	Attribuer un profil
 	At	À
-	Auto Scale	Mise à l'échelle auto
+	Auto Scale	Échelle automatique
 	Auto-Align Layers	Alignement automatique des calques
 	Auto-Blend Layers	Fusion automatique des calques
 	Autosave failed: {error}	Échec de l'enregistrement automatique : {error}
@@ -3654,7 +3654,7 @@ curves	Smooth	Lisser
 	Duplicate Channel	Dupliquer le canal
 	Duplicate Layers	Dupliquer les calques
 	Duplication	Duplication
-	Dust & Scratches	Poussière et rayures
+	Dust & Scratches	Poussières et rayures
 	Edge Brightness	Luminosité du contour
 	Edge Extension	Extension du contour
 	Edge Fidelity	Fidélité des contours
@@ -3723,7 +3723,7 @@ curves	Smooth	Lisser
 	Flat	Plat
 	Flat Shading	Ombrage plat
 	Flower Color	Couleur des fleurs
-	Focal Distance	Distance de mise au point
+	Focal Distance	Distance focale
 	Focus	Mise au point
 	Focus Area	Zone de mise au point
 	Foreground Level	Niveau de premier plan
@@ -3733,8 +3733,8 @@ curves	Smooth	Lisser
 	Freeze Lasso	Lasso de figeage
 	Freeze Mask	Masque de figeage
 	Fresco	Fresque
-	From Left	À partir de la gauche
-	From Right	À partir de la droite
+	From Left	Depuis la gauche
+	From Right	Depuis la droite
 	Frosted	Dépoli
 	Full Screen	Plein écran
 	Fullscreen	Plein écran
@@ -3798,11 +3798,11 @@ curves	Smooth	Lisser
 	Highlight Tone	Amplitude tonale des hautes lumières
 	Horizontal Only	Horizontal seulement
 	Hotspot	Point chaud
-	Hsb	TSL
-	Hsl	TSI
-	Hsl Hue	Teinte TSI
-	Hsl Lum	Luminance TSI
-	Hsl Sat	Saturation TSI
+	Hsb	HSB
+	Hsl	HSL
+	Hsl Hue	Teinte HSL
+	Hsl Lum	Luminance HSL
+	Hsl Sat	Saturation HSL
 	Image Balance	Équilibre de l'image
 	Image Processor	Processeur d'images
 	Image compositor: {processor}	Compositeur d'images : {processor}
@@ -3827,7 +3827,7 @@ curves	Smooth	Lisser
 	Intent	Intention de rendu
 	Interpret Footage	Interpréter le métrage
 	Interval	Intervalle
-	Invalid panel layout; restored the default dock	Disposition des panneaux non valide ; l'ancrage par défaut a été rétabli
+	Invalid panel layout; restored the default dock	Disposition des panneaux invalide ; ancrage par défaut rétabli
 	Invert Mask	Inverser le masque
 	Invert Selection	Inverser la sélection
 	Iris Blur	Flou d'iris
@@ -4161,7 +4161,7 @@ curves	Smooth	Lisser
 	Shape Blur	Flou selon une forme
 	Sharpen Amount	Quantité de netteté
 	Sharpen Detail	Détail de la netteté
-	Sharpen Details	Détails de la netteté
+	Sharpen Details	Netteté des détails
 	Sharpen Masking	Masquage de la netteté
 	Sharpen Radius	Rayon de netteté
 	Shear	Cisaillement
@@ -4303,7 +4303,7 @@ curves	Smooth	Lisser
 	Vector Mask Hides Effects	Le masque vectoriel masque les effets
 	Vertical Only	Vertical seulement
 	Vertical Type Tool	Outil Texte vertical
-	Video Frames to Layers	Images vidéo dans des calques
+	Video Frames to Layers	Images vidéo vers calques
 	Vignette Amount	Quantité de vignettage
 	Vignette Feather	Adoucissement du vignettage
 	Vignette Highlights	Hautes lumières du vignettage
