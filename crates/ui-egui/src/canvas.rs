@@ -84,14 +84,73 @@ pub(crate) fn detail_plan(size: [u32; 2], side: u32, zoom: f32, visible: DRect) 
 
 pub(crate) struct ClonePreviewCache {
     key: String,
+    /// The brush a clipped overlay took its coverage from: a hardness or tip change redraws it.
+    brush: Option<photocraft_paint::BrushSettings>,
+    /// The document area the texture covers.
+    rect: DRect,
     texture: egui::TextureHandle,
 }
 
-/// A transient source image beneath the brush outline; never part of the document render.
+/// The most document pixels one dab's coverage is rendered over for the overlay: a 1000 px brush,
+/// the largest the overlay draws, at hardness 0 reaches about 1.73 × its radius (`tip_reach`).
+const CLONE_PREVIEW_MAX_PIXELS: u64 = 1800 * 1800;
+
+/// The largest side `retouch_cmds::clone_preview_periodic` samples, for the overlay's area and for
+/// the source area it reads (`Mapping::source_rect`: the overlay's, mapped, with a 2 px apron).
+const CLONE_PREVIEW_MAX_SIDE: u32 = 1024;
+
+/// The coverage of one dab of `brush` at `at`, as the brush engine paints it with opacity and flow
+/// at full: its tip, angle, roundness and hardness (a soft tip reaches past its radius). The area
+/// it covers and its `width × height` coverage values in 0..1. A very large soft tip, or a source
+/// the Clone Source panel scales down (which reads a larger area than it covers), is cropped
+/// around `at` to the sampling budget, keeping the middle of the dab.
+fn clone_dab_coverage(
+    brush: &photocraft_paint::BrushSettings,
+    at: [f64; 2],
+    map: &photocraft_engine::presets::clone_source::Mapping,
+) -> Option<(DRect, Vec<f32>)> {
+    let brush = photocraft_paint::BrushSettings { opacity: 1.0, flow: 1.0, erase: false, ..brush.clone() };
+    let stroke = photocraft_paint::Stroke { brush, points: vec![photocraft_paint::StrokePoint::new(at[0], at[1], 1.0)] };
+    let (rect, cov) = photocraft_paint::retouch::stroke_coverage_within(&stroke, CLONE_PREVIEW_MAX_PIXELS)?;
+    let fits = |r: DRect| r.width() <= CLONE_PREVIEW_MAX_SIDE && r.height() <= CLONE_PREVIEW_MAX_SIDE;
+    let (cx, cy) = (at[0].floor() as i32, at[1].floor() as i32);
+    let around = |half: i32| rect.intersect(&DRect::new(cx.saturating_sub(half), cy.saturating_sub(half), cx.saturating_add(half), cy.saturating_add(half)));
+    // The source area scales with the overlay's: shrink by what overflows, a few times for the
+    // apron's rounding.
+    let mut half = i32::try_from((CLONE_PREVIEW_MAX_SIDE - 4) / 2).unwrap_or(510);
+    let mut window = around(half);
+    for _ in 0..8 {
+        let src = map.source_rect(window);
+        if fits(window) && fits(src) {
+            break;
+        }
+        let over = f64::from(src.width().max(src.height())) / f64::from(CLONE_PREVIEW_MAX_SIDE - 4);
+        half = ((f64::from(half) / over.max(1.0)).floor() as i32).saturating_sub(2).max(1);
+        window = around(half);
+    }
+    if window.is_empty() || !fits(window) || !fits(map.source_rect(window)) {
+        return None;
+    }
+    if window == rect {
+        return Some((rect, cov));
+    }
+    let stride = rect.width() as usize;
+    let mut cropped = Vec::with_capacity(window.width() as usize * window.height() as usize);
+    for y in window.y0..window.y1 {
+        let row = (y - rect.y0) as usize * stride;
+        let from = row + (window.x0 - rect.x0) as usize;
+        cropped.extend_from_slice(cov.get(from..from + window.width() as usize)?);
+    }
+    Some((window, cropped))
+}
+
+/// A transient source image beneath the brush outline; never part of the document render. The
+/// Clone Source panel drives the Clone Stamp and the Healing Brush alike, so both show it.
 fn draw_clone_preview(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &ViewXform, at: [f64; 2], output: Option<u32>) {
     use photocraft_engine::presets::clone_source::{Mapping, overlay_blend, transform_matrix};
     let overlay = app.session.presets.clone.overlay.clone();
-    if app.ui.tool != Tool::CloneStamp || !overlay.show || (overlay.auto_hide && app.drag.is_some()) {
+    let tool = app.ui.tool;
+    if !matches!(tool, Tool::CloneStamp | Tool::Healing) || !overlay.show || (overlay.auto_hide && app.drag.is_some()) {
         return;
     }
     let slot = app.session.presets.clone.active().clone();
@@ -100,30 +159,43 @@ fn draw_clone_preview(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &Vie
     if !radius.is_finite() || radius <= 0.0 || radius > 500.0 || !at.iter().all(|v| v.is_finite() && v.abs() < 1_000_000.0) {
         return;
     }
+    // View › Pattern Preview repeats the source for the Clone Stamp only (`paint.cloneStamp`'s
+    // `wrap`); the Healing Brush samples it as it is.
+    let wrap = tool == Tool::CloneStamp && app.ui.view.pattern_preview;
     let stroke_start = app.drag.as_ref().map(|d| d.start);
     let anchor = if app.ui.tool_options.clone_aligned { slot.anchor.or(stroke_start) } else { stroke_start }.unwrap_or(at);
     let map =
         Mapping { source: (source[0], source[1]), anchor: (anchor[0], anchor[1]), m: transform_matrix(slot.scale, slot.rotation, slot.flip_h, slot.flip_v) };
-    let rect = DRect::new((at[0] - radius).floor() as i32, (at[1] - radius).floor() as i32, (at[0] + radius).ceil() as i32, (at[1] + radius).ceil() as i32);
     let Some(st) = app.session.active() else { return };
     let (display, display_key) = canvas_display(app, &st.doc, output);
-    // A shaped tip (sampled bitmap, or a rotated / flattened round one) clips the overlay to its
-    // outline instead of a circle, as Photoshop does with Clipped on.
-    let tip_rings = if overlay.clipped { crate::brush_cursor::rings(painter.ctx(), &app.session.tools.brush, true) } else { None };
-    let tip_key = tip_rings.as_ref().map(|r| {
-        use std::hash::{Hash, Hasher};
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        r.iter().flatten().for_each(|p| (p[0].to_bits(), p[1].to_bits()).hash(&mut h));
-        (h.finish(), radius.to_bits(), at.map(f64::to_bits))
-    });
     let key = format!(
-        "{:?}:{}:{:?}:{rect:?}:{map:?}:{}:{}:{}:{}:{}:{tip_key:?}",
-        st.doc.id, st.revision, st.active_layer, app.ui.tool_options.clone_sample, display_key, overlay.invert, overlay.blend, app.ui.view.pattern_preview
+        "{:?}:{}:{:?}:{:?}:{map:?}:{}:{}:{}:{}:{wrap}:{}:{}",
+        st.doc.id,
+        st.revision,
+        st.active_layer,
+        at.map(f64::to_bits),
+        app.ui.tool_options.clone_sample,
+        display_key,
+        overlay.invert,
+        overlay.blend,
+        overlay.clipped,
+        radius.to_bits()
     );
-    if app.clone_preview.as_ref().is_none_or(|c| c.key != key) {
-        let Ok(mut buf) =
-            photocraft_engine::retouch_cmds::clone_preview_periodic(&app.session, rect, &map, &app.ui.tool_options.clone_sample, app.ui.view.pattern_preview)
-        else {
+    let brush = overlay.clipped.then_some(&app.session.tools.brush);
+    if app.clone_preview.as_ref().is_none_or(|c| c.key != key || c.brush.as_ref() != brush) {
+        // Clipped (Photoshop's default): the dab the tool paints here, so a soft brush previews
+        // soft and a shaped tip keeps its outline. Unclipped: the brush's whole square.
+        let (rect, coverage) = match brush {
+            Some(b) => {
+                let Some((rect, coverage)) = clone_dab_coverage(b, at, &map) else { return };
+                (rect, Some(coverage))
+            }
+            None => (
+                DRect::new((at[0] - radius).floor() as i32, (at[1] - radius).floor() as i32, (at[0] + radius).ceil() as i32, (at[1] + radius).ceil() as i32),
+                None,
+            ),
+        };
+        let Ok(mut buf) = photocraft_engine::retouch_cmds::clone_preview_periodic(&app.session, rect, &map, &app.ui.tool_options.clone_sample, wrap) else {
             return;
         };
         if overlay.invert {
@@ -137,55 +209,43 @@ fn draw_clone_preview(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &Vie
         // composite, whatever Sample reads), so Difference turns black where they line up.
         if overlay.blend != "normal" {
             let here = Mapping { source: (0.0, 0.0), anchor: (0.0, 0.0), m: [1.0, 0.0, 0.0, 1.0] };
-            let Ok(under) = photocraft_engine::retouch_cmds::clone_preview_periodic(&app.session, rect, &here, "all", app.ui.view.pattern_preview) else {
+            let Ok(under) = photocraft_engine::retouch_cmds::clone_preview_periodic(&app.session, rect, &here, "all", wrap) else {
                 return;
             };
             for (px, d) in buf.px.iter_mut().zip(&under.px) {
                 *px = overlay_blend(&overlay.blend, *px, *d);
             }
         }
-        if let Some(rings) = &tip_rings {
-            let mask = crate::brush_cursor::tip_mask(rings, at, radius, [rect.x0, rect.y0, rect.x1, rect.y1]);
-            for (px, inside) in buf.px.iter_mut().zip(mask) {
-                if !inside {
-                    *px = [0.0; 4];
-                }
+        if let Some(coverage) = &coverage {
+            for (px, c) in buf.px.iter_mut().zip(coverage) {
+                px[3] *= c.clamp(0.0, 1.0);
             }
         }
         let image = display_image(display.as_deref(), &buf);
+        let brush = brush.cloned();
         match app.clone_preview.as_mut() {
             Some(cache) => {
                 cache.texture.set(image, canvas_texture_options(1));
                 cache.key = key;
+                cache.brush = brush;
+                cache.rect = rect;
             }
-            None => app.clone_preview = Some(ClonePreviewCache { key, texture: painter.ctx().load_texture("clone-preview", image, canvas_texture_options(1)) }),
+            None => {
+                let texture = painter.ctx().load_texture("clone-preview", image, canvas_texture_options(1));
+                app.clone_preview = Some(ClonePreviewCache { key, brush, rect, texture });
+            }
         }
     }
     let Some(cache) = &app.clone_preview else { return };
+    let rect = cache.rect;
     let tint = Color32::from_white_alpha((overlay.opacity.clamp(0.0, 100.0) * 2.55).round() as u8);
-    // A textured triangle fan provides a circular clip, including mirrored canvas views.
+    // A textured quad over the covered area: its texels carry the clip, in mirrored and rotated
+    // canvas views too.
     let mut mesh = egui::Mesh::with_texture(cache.texture.id());
-    let vertex = |x: f64, y: f64| egui::epaint::Vertex {
-        pos: xf.to_screen(x as f32, y as f32),
-        uv: pos2((x - f64::from(rect.x0)) as f32 / rect.width() as f32, (y - f64::from(rect.y0)) as f32 / rect.height() as f32),
-        color: tint,
-    };
-    if !overlay.clipped || tip_rings.is_some() {
-        for (x, y) in [(rect.x0, rect.y0), (rect.x1, rect.y0), (rect.x1, rect.y1), (rect.x0, rect.y1)] {
-            mesh.vertices.push(vertex(f64::from(x), f64::from(y)));
-        }
-        mesh.indices.extend_from_slice(&[0, 1, 2, 0, 2, 3]);
-        painter.add(egui::Shape::mesh(mesh));
-        return;
+    for (x, y, u, v) in [(rect.x0, rect.y0, 0.0, 0.0), (rect.x1, rect.y0, 1.0, 0.0), (rect.x1, rect.y1, 1.0, 1.0), (rect.x0, rect.y1, 0.0, 1.0)] {
+        mesh.vertices.push(egui::epaint::Vertex { pos: xf.to_screen(x as f32, y as f32), uv: pos2(u, v), color: tint });
     }
-    mesh.vertices.push(vertex(at[0], at[1]));
-    for i in 0..=64 {
-        let angle = f64::from(i) * std::f64::consts::TAU / 64.0;
-        mesh.vertices.push(vertex(at[0] + radius * angle.cos(), at[1] + radius * angle.sin()));
-    }
-    for i in 1..=64 {
-        mesh.indices.extend_from_slice(&[0, i, i + 1]);
-    }
+    mesh.indices.extend_from_slice(&[0, 1, 2, 0, 2, 3]);
     painter.add(egui::Shape::mesh(mesh));
 }
 
@@ -1686,6 +1746,13 @@ pub fn ensure_texture(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, 
     ensure_texture_in_view(app, ctx, idx, display, None).map(|t| (t.texture, t.scale))
 }
 
+/// Whether a filter preview of `preview` size shows a `doc` sized document reduced by `k` (its
+/// proxy factor), so the CPU canvas can draw it over the document's bounds unstretched.
+fn preview_fits(doc: photocraft_geom::Size, preview: photocraft_geom::Size, k: u32) -> bool {
+    let k = k.max(1);
+    doc.width.div_ceil(k) == preview.width && doc.height.div_ceil(k) == preview.height
+}
+
 /// [`ensure_texture`], and for a canvas showing `view` of a document too large for one
 /// full-resolution texture, the detail texture of the part in view ([`detail_plan`], #7568).
 pub(crate) fn ensure_texture_in_view(
@@ -1701,6 +1768,20 @@ pub(crate) fn ensure_texture_in_view(
         (st.revision, st.last_damage.map(|r| if r.is_empty() { r } else { r.inflate(effect_reach(&st.doc.layers)) }), st.doc.id)
     };
     let (mut doc, mut preview_key) = display_doc(app, idx);
+    // A filter dialog's live preview: the GPU canvas draws it from its own texture, but this CPU
+    // canvas (no usable GPU, a flipped or pixel-aspect-corrected view, a GPU fallback) showed the
+    // document unfiltered. Its result is drawn here instead, as the channel views draw it.
+    // A preview reduced for a zoomed-out view (a proxy, factor `k`) covers the whole document at
+    // its own size. One whose dimensions change otherwise (Image › Rotation) would be stretched
+    // over the document's bounds here, so the CPU canvas keeps the document for it, as before.
+    let mut reduced = false;
+    if let Some((preview, key)) = filter_channel_preview(app, idx, ctx) {
+        let k = app.filter_preview.as_ref().map_or(1, |p| p.key.k.max(1));
+        if app.session.documents().get(idx).is_some_and(|st| preview_fits(st.doc.size, preview.size, k)) {
+            (doc, preview_key, reduced) = (preview, key, k > 1);
+        }
+    }
+    let view = view.filter(|_| !reduced);
     // A flipped view draws a GPU machine's canvas through here: an adjustment dialog's preview of
     // a large document (taken by the GPU path) would cost a full-size CPU composite per change.
     if crate::adjust_preview::shown_key(app) == Some(preview_key)
@@ -1711,7 +1792,7 @@ pub(crate) fn ensure_texture_in_view(
     }
     let (display, display_key) = canvas_display(app, &doc, output);
     let seen = app.canvases.get(&cache_key(id, output)).map(|c| (c.tex_revision, c.tex_preview_key));
-    let damage = seen.and_then(|seen| damage_since(app, idx, seen, (revision, preview_key), display_key, last_damage));
+    let damage = seen.and_then(|seen| damage_since(app, idx, seen, (revision, preview_key), display_key, last_damage)).filter(|_| !reduced);
     // The detail texture can lag the whole-document one (made or moved later): its own damage.
     let detail_seen = view.and_then(|v| {
         let c = app.canvases.get(&cache_key(id, output))?;
@@ -5614,11 +5695,16 @@ fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &View
             let size = [st.doc.size.width, st.doc.size.height];
             let doc_rect = xf.doc_rect(st.doc.bounds());
             let trail = app.trail.get_or_insert_with(|| crate::stroke_trail::Trail::new(size));
-            if t == Tool::SpotHealing {
-                // What the heal covers, dab by dab: soft edges, pressure and shape dynamics (#2364).
-                trail.feed_dabs(&d.points, || photocraft_engine::retouch_cmds::stroke_brush(&app.session.tools.brush, &json!({})));
-            } else {
-                trail.feed(&d.points, app.session.tools.brush.size);
+            let brush = || photocraft_engine::retouch_cmds::stroke_brush(&app.session.tools.brush, &json!({}));
+            match t {
+                // Quick Selection reads the brush's size alone (`select.quick`).
+                Tool::QuickSelection => trail.feed(&d.points, app.session.tools.brush.size),
+                // Remove removes every pixel a dab touches, so its whole reach is tinted: a soft
+                // tip's reaches well past the nominal radius.
+                Tool::Remove => trail.feed_reach(&d.points, brush),
+                // What the stroke covers, dab by dab: soft edges, pressure and shape dynamics
+                // (Spot Healing #2364; the Mixer Brush, and a tool whose live stroke didn't start).
+                _ => trail.feed_dabs(&d.points, brush),
             }
             trail.draw(painter, doc_rect, xf.flip, col);
         }
@@ -6902,6 +6988,45 @@ mod tests {
     /// #7490: the inline (web) preview path composites and uploads each changed preview once, as
     /// the background worker does. It used to flatten and upload it twice and record it twice,
     /// so the frame's refresh time counted the preview twice.
+    /// The CPU canvas (no usable GPU; a flipped or pixel-aspect-corrected view, or a GPU fallback,
+    /// on a GPU machine) shows a filter dialog's live preview. It showed the document unfiltered.
+    #[test]
+    fn the_cpu_canvas_shows_a_filter_dialogs_preview() {
+        let pixels = |ctx: &egui::Context, id: egui::TextureId| {
+            let mut delta = ctx.tex_manager().write().take_delta();
+            let egui::ImageData::Color(image) = &delta.set.get(&id).and_then(|d| d.last()).expect("the canvas texture was written").image;
+            let (size, px) = (image.size, image.pixels.clone());
+            delta.clear();
+            (size, px)
+        };
+        for (size, zoom) in [([64u32, 48u32], 1.0f32), ([2400, 2200], 0.25)] {
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            app.background_jobs = false;
+            app.run("file.new", json!({"width": size[0], "height": size[1], "background": "white"})).unwrap();
+            app.run("edit.fill", json!({"color": "#3399cc"})).unwrap();
+            app.ui.views.get_mut(0).expect("the view").zoom = zoom;
+            let ctx = egui::Context::default();
+            let (tex, _) = ensure_texture(&mut app, &ctx, 0, None).unwrap();
+            let (_, plain) = pixels(&ctx, tex);
+            crate::filter_dialog::open(&mut app, "filter.stylize.solarize").unwrap();
+            let (tex, _) = ensure_texture(&mut app, &ctx, 0, None).unwrap();
+            let (tex_size, shown) = pixels(&ctx, tex);
+            let preview = app.filter_preview.as_ref().and_then(|p| p.result.clone()).expect("the dialog's preview");
+            let (display, _) = canvas_display(&app, &preview, None);
+            let expected = display_image(display.as_deref(), &photocraft_compose::flatten(&preview));
+            assert_eq!(tex_size, expected.size, "{size:?}: the preview's own size (a proxy when zoomed out)");
+            assert_eq!(shown, expected.pixels, "{size:?}: the canvas shows the preview");
+            assert_ne!(shown.first(), plain.first(), "{size:?}: not the unfiltered document");
+        }
+        // A preview that changes the canvas's dimensions (a 90° rotation) isn't stretched over the
+        // document's bounds: only one the document's size (reduced by its factor) is drawn.
+        let size = |w, h| photocraft_geom::Size::new(w, h);
+        assert!(preview_fits(size(64, 32), size(64, 32), 1));
+        assert!(preview_fits(size(2401, 2200), size(1201, 1100), 2), "a proxy");
+        assert!(!preview_fits(size(64, 32), size(32, 64), 1), "rotated");
+        assert!(!preview_fits(size(64, 32), size(80, 40), 1), "canvas grown");
+    }
+
     #[test]
     fn inline_filter_preview_is_composited_and_recorded_once() {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
@@ -7908,72 +8033,151 @@ mod tests {
         }
     }
 
+    /// An app with a 64 × 64 white document, a clone source and the Clone Stamp at `size` px.
+    fn clone_overlay_app(size: f32) -> PhotocraftApp {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+        app.run("cloneSource.set", json!({"source": [16, 16]})).unwrap();
+        app.ui.tool = Tool::CloneStamp;
+        app.session.tools.brush.size = size;
+        app
+    }
+
+    /// One frame of the overlay at (32, 32): its shapes and texture uploads.
+    fn clone_overlay_frame(ctx: &egui::Context, app: &mut PhotocraftApp, xf: &ViewXform) -> egui::FullOutput {
+        ctx.run_ui(Default::default(), |ui| {
+            let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("clone-test")));
+            draw_clone_preview(app, &painter, xf, [32.0, 32.0], None);
+        })
+    }
+
+    /// The overlay texture a frame uploaded and the alpha at a document pixel, read from the
+    /// document area the overlay covers (transparent outside it).
+    fn clone_overlay_alpha(app: &PhotocraftApp, output: &mut egui::FullOutput) -> impl Fn(i32, i32) -> u8 + use<> {
+        let cache = app.clone_preview.as_ref().expect("an overlay was drawn");
+        let image = output
+            .textures_delta
+            .set
+            .get(&cache.texture.id())
+            .and_then(|deltas| deltas.last())
+            .map(|d| match &d.image {
+                egui::ImageData::Color(c) => c.clone(),
+            })
+            .expect("the overlay uploads a texture");
+        output.textures_delta.clear();
+        let rect = cache.rect;
+        assert_eq!(image.size, [rect.width() as usize, rect.height() as usize], "the texture covers the overlay's area");
+        move |x, y| {
+            if x < rect.x0 || y < rect.y0 || x >= rect.x1 || y >= rect.y1 {
+                return 0;
+            }
+            image.pixels[(y - rect.y0) as usize * image.width() + (x - rect.x0) as usize].a()
+        }
+    }
+
+    fn clone_overlay_view(side: f32, zoom: f32) -> ViewXform {
+        ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(side, side)), zoom, center: [32.0, 32.0], flip: false, rotation: 0.0, aspect: 1.0 }
+    }
+
     #[test]
     fn clone_overlay_is_circular_and_respects_visibility() {
         let ctx = egui::Context::default();
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
-        app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
-        app.run("cloneSource.set", json!({"source": [16,16]})).unwrap();
-        app.ui.tool = Tool::CloneStamp;
-        app.session.tools.brush.size = 20.0;
-        let xf =
-            ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(100.0, 100.0)), zoom: 1.0, center: [32.0, 32.0], flip: false, rotation: 0.0, aspect: 1.0 };
+        let mut app = clone_overlay_app(20.0);
+        let xf = clone_overlay_view(100.0, 1.0);
         let revision = app.session.active().unwrap().revision;
-        let mut output = ctx.run_ui(Default::default(), |ui| {
-            let ctx = ui.ctx();
-            let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("clone-test")));
-            draw_clone_preview(&mut app, &painter, &xf, [32.0, 32.0], None);
-        });
-        output.textures_delta.clear();
-        let mesh = output
-            .shapes
-            .iter()
-            .find_map(|s| match &s.shape {
-                egui::Shape::Mesh(m) => Some(m),
-                _ => None,
-            })
-            .unwrap();
-        assert_eq!(mesh.indices.len(), 64 * 3);
-        let center = xf.to_screen(32.0, 32.0);
-        assert!(mesh.vertices.iter().all(|v| v.pos.distance(center) <= 10.01));
+        let mut output = clone_overlay_frame(&ctx, &mut app, &xf);
+        assert!(output.shapes.iter().any(|s| matches!(s.shape, egui::Shape::Mesh(_))), "the overlay is drawn");
+        let alpha = clone_overlay_alpha(&app, &mut output);
+        assert_eq!(alpha(32, 32), 255, "the centre shows the source");
+        assert_eq!(alpha(32 + 8, 32), 255, "inside the hard 10 px radius");
+        assert_eq!(alpha(32 + 8, 32 + 8), 0, "the brush square's corner, outside the circle, is clipped");
+        assert_eq!(alpha(32 + 12, 32), 0, "past the hard tip's rim");
         assert_eq!(app.session.active().unwrap().revision, revision);
         assert!(app.session.presets.clone.active().anchor.is_none());
         let ordinary_key = app.clone_preview.as_ref().unwrap().key.clone();
         app.ui.view.pattern_preview = true;
-        let mut periodic_output = ctx.run_ui(Default::default(), |ui| {
-            let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("clone-test")));
-            draw_clone_preview(&mut app, &painter, &xf, [32.0, 32.0], None);
-        });
+        let mut periodic_output = clone_overlay_frame(&ctx, &mut app, &xf);
         assert_ne!(app.clone_preview.as_ref().unwrap().key, ordinary_key, "toggling Pattern Preview invalidates source pixels");
         assert!(!periodic_output.textures_delta.set.is_empty(), "the overlay texture is refreshed without a document edit");
         periodic_output.textures_delta.clear();
         assert_eq!(app.session.active().unwrap().revision, revision);
         app.session.presets.clone.overlay.show = false;
-        let mut output = ctx.run_ui(Default::default(), |ui| {
-            let ctx = ui.ctx();
-            let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("clone-test")));
-            draw_clone_preview(&mut app, &painter, &xf, [32.0, 32.0], None);
-        });
+        let mut output = clone_overlay_frame(&ctx, &mut app, &xf);
         output.textures_delta.clear();
         assert!(output.shapes.iter().all(|s| !matches!(s.shape, egui::Shape::Mesh(_))));
+    }
+
+    /// A soft brush previews soft: the overlay fades towards the rim with the brush's hardness, as
+    /// the stroke it previews does, and reaches past the radius as a soft tip paints. A brush
+    /// change redraws an overlay that hasn't moved.
+    #[test]
+    fn clone_overlay_follows_the_brush_hardness() {
+        let ctx = egui::Context::default();
+        let mut app = clone_overlay_app(20.0);
+        let xf = clone_overlay_view(100.0, 1.0);
+        let mut output = clone_overlay_frame(&ctx, &mut app, &xf);
+        let hard = clone_overlay_alpha(&app, &mut output);
+        app.session.tools.brush.hardness = 0.0;
+        let mut output = clone_overlay_frame(&ctx, &mut app, &xf);
+        let soft = clone_overlay_alpha(&app, &mut output);
+        assert!(hard(32, 32) == 255 && soft(32, 32) > 240, "both show the source at the centre: {} {}", hard(32, 32), soft(32, 32));
+        assert_eq!(hard(32 + 8, 32), 255);
+        assert!(soft(32 + 8, 32) < 200, "a soft tip fades before its rim: {}", soft(32 + 8, 32));
+        assert!(soft(32 + 4, 32) > soft(32 + 8, 32), "and fades outwards");
+        assert!(hard(32 + 12, 32) == 0 && soft(32 + 13, 32) > 0, "a soft tip reaches past the radius, a hard one doesn't");
+        // The largest brush the overlay draws still shows at its softest.
+        let mut big = clone_overlay_app(1000.0);
+        big.session.tools.brush.hardness = 0.0;
+        let mut output = clone_overlay_frame(&ctx, &mut big, &xf);
+        assert_eq!(clone_overlay_alpha(&big, &mut output)(32, 32), 255, "a 1000 px soft brush previews too");
+    }
+
+    /// A scaled Clone Source reads a larger source area than the overlay covers: a large brush's
+    /// overlay shrinks around the pointer until that area fits the sampling budget, rather than
+    /// vanishing.
+    #[test]
+    fn clone_overlay_of_a_scaled_source_stays_within_the_sampling_budget() {
+        let ctx = egui::Context::default();
+        let xf = clone_overlay_view(100.0, 1.0);
+        for (size, scale) in [(600.0, 200), (1000.0, 300), (1000.0, 50)] {
+            let mut app = clone_overlay_app(size);
+            app.run("cloneSource.set", json!({"width": scale, "height": scale})).unwrap();
+            let mut output = clone_overlay_frame(&ctx, &mut app, &xf);
+            assert!(output.shapes.iter().any(|s| matches!(s.shape, egui::Shape::Mesh(_))), "{size} px at {scale} %: the overlay shows");
+            assert_eq!(clone_overlay_alpha(&app, &mut output)(32, 32), 255, "{size} px at {scale} %: the source under the pointer");
+        }
+    }
+
+    /// The Healing Brush shares the Clone Stamp's source and overlay (Photoshop's Clone Source
+    /// panel drives both); other tools show none.
+    #[test]
+    fn clone_overlay_shows_for_the_healing_brush_too() {
+        let ctx = egui::Context::default();
+        let xf = clone_overlay_view(100.0, 1.0);
+        for (tool, shown) in [(Tool::Healing, true), (Tool::CloneStamp, true), (Tool::Brush, false), (Tool::SpotHealing, false)] {
+            let mut app = clone_overlay_app(20.0);
+            app.ui.tool = tool;
+            let mut output = clone_overlay_frame(&ctx, &mut app, &xf);
+            assert_eq!(output.shapes.iter().any(|s| matches!(s.shape, egui::Shape::Mesh(_))), shown, "{tool:?}");
+            if shown {
+                assert_eq!(clone_overlay_alpha(&app, &mut output)(32, 32), 255, "{tool:?}: the source shows under the brush");
+            }
+            output.textures_delta.clear();
+        }
     }
 
     #[test]
     fn clone_overlay_keeps_magnified_pixels_crisp_on_upload_and_refresh() {
         let ctx = egui::Context::default();
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
-        app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
-        app.run("cloneSource.set", json!({"source": [16, 16]})).unwrap();
-        app.ui.tool = Tool::CloneStamp;
-        app.session.tools.brush.size = 20.0;
-        let xf =
-            ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(200.0, 200.0)), zoom: 4.0, center: [32.0, 32.0], flip: false, rotation: 0.0, aspect: 1.0 };
+        let mut app = clone_overlay_app(20.0);
+        let xf = clone_overlay_view(200.0, 4.0);
         for invert in [false, true] {
             app.session.presets.clone.overlay.invert = invert;
             let mut output = ctx.run_ui(Default::default(), |ui| {
                 draw_clone_preview(&mut app, ui.painter(), &xf, [32.0, 32.0], None);
             });
-            let upload = output.textures_delta.set.values().flatten().find(|d| d.image.size() == [20, 20]).expect("clone overlay upload");
+            let id = app.clone_preview.as_ref().unwrap().texture.id();
+            let upload = output.textures_delta.set.get(&id).and_then(|d| d.last()).expect("clone overlay upload");
             let options = upload.options;
             output.textures_delta.clear();
             assert_eq!(options.magnification, egui::TextureFilter::Nearest, "invert={invert}");
@@ -7984,28 +8188,20 @@ mod tests {
     #[test]
     fn clone_overlay_blend_mode_mixes_with_the_image_under_the_brush() {
         let ctx = egui::Context::default();
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
-        app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
-        app.run("cloneSource.set", json!({"source": [16,16]})).unwrap();
-        app.ui.tool = Tool::CloneStamp;
-        app.session.tools.brush.size = 20.0;
-        let xf =
-            ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(100.0, 100.0)), zoom: 1.0, center: [32.0, 32.0], flip: false, rotation: 0.0, aspect: 1.0 };
-        // The centre texel of the overlay texture uploaded for `mode`.
+        let mut app = clone_overlay_app(20.0);
+        let xf = clone_overlay_view(100.0, 1.0);
+        // The overlay texel at the brush centre for `mode`.
         let mut centre = |mode: &str| {
             app.run("cloneSource.overlay", json!({"blend": mode})).unwrap();
-            let mut output = ctx.run_ui(Default::default(), |ui| {
-                let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("clone-test")));
-                draw_clone_preview(&mut app, &painter, &xf, [32.0, 32.0], None);
-            });
-            // The brush's 20 × 20 px square (the font atlas may upload too).
-            let image = output.textures_delta.set.values().flatten().find_map(|d| match &d.image {
-                egui::ImageData::Color(c) if c.size == [20, 20] => Some(c.clone()),
-                _ => None,
+            let mut output = clone_overlay_frame(&ctx, &mut app, &xf);
+            let cache = app.clone_preview.as_ref().unwrap();
+            let image = output.textures_delta.set.get(&cache.texture.id()).and_then(|d| d.last()).map(|d| match &d.image {
+                egui::ImageData::Color(c) => c.clone(),
             });
             output.textures_delta.clear();
             let image = image.expect("the overlay uploads a texture");
-            image.pixels[image.width() * (image.height() / 2) + image.width() / 2]
+            let rect = cache.rect;
+            image.pixels[(32 - rect.y0) as usize * image.width() + (32 - rect.x0) as usize]
         };
         // A white source over the white image: Normal shows white, Difference black.
         assert_eq!(centre("normal"), Color32::WHITE);
@@ -8017,33 +8213,14 @@ mod tests {
     #[test]
     fn clone_overlay_is_clipped_to_a_shaped_tip() {
         let ctx = egui::Context::default();
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
-        app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
-        app.run("cloneSource.set", json!({"source": [16,16]})).unwrap();
-        app.ui.tool = Tool::CloneStamp;
-        app.session.tools.brush.size = 20.0;
+        let mut app = clone_overlay_app(20.0);
         app.session.tools.brush.roundness = 0.25;
-        let xf =
-            ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(100.0, 100.0)), zoom: 1.0, center: [32.0, 32.0], flip: false, rotation: 0.0, aspect: 1.0 };
-        let mut output = ctx.run_ui(Default::default(), |ui| {
-            let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("clone-test")));
-            draw_clone_preview(&mut app, &painter, &xf, [32.0, 32.0], None);
-        });
-        let image = output
-            .textures_delta
-            .set
-            .values()
-            .flatten()
-            .find_map(|d| match &d.image {
-                egui::ImageData::Color(c) if c.size == [20, 20] => Some(c.clone()),
-                _ => None,
-            })
-            .expect("the overlay uploads a texture");
-        output.textures_delta.clear();
-        let alpha = |x: usize, y: usize| image.pixels[y * image.width() + x].a();
-        assert_eq!(alpha(10, 10), 255, "the tip's centre shows the source");
-        assert_eq!(alpha(10, 2), 0, "inside the circle but outside the flat tip: clipped");
-        assert_eq!(alpha(1, 10), 255, "the tip's long axis stays");
+        let xf = clone_overlay_view(100.0, 1.0);
+        let mut output = clone_overlay_frame(&ctx, &mut app, &xf);
+        let alpha = clone_overlay_alpha(&app, &mut output);
+        assert_eq!(alpha(32, 32), 255, "the tip's centre shows the source");
+        assert_eq!(alpha(32, 24), 0, "inside the circle but outside the flat tip: clipped");
+        assert!(alpha(25, 32) > 240, "the tip's long axis stays: {}", alpha(25, 32));
     }
 
     #[test]
@@ -9129,43 +9306,48 @@ mod tests {
     #[test]
     fn retouch_drags_show_the_footprint_without_wedges() {
         // The retouching tools' trail was the same brush-wide polyline (#189): now a mask of the
-        // footprint, with nothing outside the brush radius of the path, however small the steps.
-        let ctx = egui::Context::default();
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
-        app.run("file.new", json!({"width": 120, "height": 60})).unwrap();
-        app.run("tools.setBrush", json!({"brush": {"size": 30}})).unwrap();
-        // Remove: the dab tools draw their stroke live instead of a trail, and Spot Healing's
-        // trail is its dabs' coverage.
-        app.ui.tool = Tool::Remove;
-        tool_event(&mut app, ToolEvent::Down { x: 20.0, y: 30.0, pressure: 1.0 }, egui::Modifiers::NONE);
-        let mut pts = vec![[20.0, 30.0]];
-        for i in 1..80 {
-            let t = f64::from(i) * 0.5;
-            let p = [20.0 + t, 30.0 + (t / 2.0).sin() * 3.0];
-            tool_event(&mut app, ToolEvent::Move { x: p[0], y: p[1], pressure: 1.0 }, egui::Modifiers::NONE);
-            pts.push(p);
-            if i % 20 == 0 {
-                // One mesh for the trail, however long the drag.
-                let shapes = drag_preview_shapes(&mut app, &ctx, 12.0);
-                assert!(!shapes.iter().any(|s| matches!(s.shape, egui::Shape::Path(_))), "no polyline");
-            }
-        }
-        drag_preview_shapes(&mut app, &ctx, 12.0);
-        let trail = app.trail.as_ref().unwrap();
-        assert_eq!(trail.scale(), 1.0);
-        for y in 0..60 {
-            for x in 0..120 {
-                let d = pts.iter().map(|p| (x as f64 + 0.5 - p[0]).hypot(y as f64 + 0.5 - p[1])).fold(f64::MAX, f64::min);
-                if d < 14.0 {
-                    assert_eq!(trail.coverage(x, y), 255, "({x}, {y}) inside the footprint");
-                } else if d > 16.0 {
-                    assert_eq!(trail.coverage(x, y), 0, "({x}, {y}) outside the footprint");
+        // footprint, with nothing outside it, however small the steps. The Remove Tool's is where
+        // the stroke's dabs reach at all, which is what it removes, so a soft tip's whole reach
+        // past the radius is tinted.
+        for hardness in [1.0, 0.0] {
+            let ctx = egui::Context::default();
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+            app.run("file.new", json!({"width": 120, "height": 60})).unwrap();
+            app.run("tools.setBrush", json!({"brush": {"size": 30, "hardness": hardness}})).unwrap();
+            app.ui.tool = Tool::Remove;
+            tool_event(&mut app, ToolEvent::Down { x: 20.0, y: 30.0, pressure: 1.0 }, egui::Modifiers::NONE);
+            for i in 1..80 {
+                let t = f64::from(i) * 0.5;
+                tool_event(&mut app, ToolEvent::Move { x: 20.0 + t, y: 30.0 + (t / 2.0).sin() * 3.0, pressure: 1.0 }, egui::Modifiers::NONE);
+                if i % 20 == 0 {
+                    // One mesh for the trail, however long the drag.
+                    let shapes = drag_preview_shapes(&mut app, &ctx, 12.0);
+                    assert!(!shapes.iter().any(|s| matches!(s.shape, egui::Shape::Path(_))), "no polyline");
                 }
             }
+            drag_preview_shapes(&mut app, &ctx, 12.0);
+            // The stroke the removal gets on release, and the pixels its hole takes.
+            let points = app.drag.as_ref().unwrap().points.iter().map(|p| photocraft_paint::StrokePoint::new(p[0], p[1], p[2] as f32)).collect();
+            let brush = photocraft_engine::retouch_cmds::stroke_brush(&app.session.tools.brush, &json!({}));
+            let (b, cov) = photocraft_paint::retouch::stroke_coverage(&photocraft_paint::Stroke { brush, points });
+            let trail = app.trail.as_ref().unwrap();
+            assert_eq!(trail.scale(), 1.0);
+            let mut beyond = 0;
+            for y in 0..60 {
+                for x in 0..120 {
+                    let removed = b.contains(x, y) && cov[(y - b.y0) as usize * b.width() as usize + (x - b.x0) as usize] > 0.0;
+                    assert_eq!(trail.coverage(x as usize, y as usize), if removed { 255 } else { 0 }, "hardness {hardness}: ({x}, {y})");
+                    // Past the 15 px radius of the path's ends and sides (y 27..33).
+                    beyond += usize::from(removed && !(12..=48).contains(&y));
+                }
+            }
+            if hardness == 0.0 {
+                assert!(beyond > 100, "a soft tip's removal reaches past its radius: {beyond} px");
+            }
+            tool_event(&mut app, ToolEvent::Up { x: 59.5, y: 30.0 }, egui::Modifiers::NONE);
+            drag_preview_shapes(&mut app, &ctx, 12.0);
+            assert!(app.trail.is_none(), "the trail ends with the drag");
         }
-        tool_event(&mut app, ToolEvent::Up { x: 59.5, y: 30.0 }, egui::Modifiers::NONE);
-        drag_preview_shapes(&mut app, &ctx, 12.0);
-        assert!(app.trail.is_none(), "the trail ends with the drag");
     }
 
     #[test]

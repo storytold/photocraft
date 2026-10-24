@@ -1096,6 +1096,90 @@ fn txt2_style_runs(layer: &TextLayer, base: &E, fonts: &mut Vec<E>, dpi: f32) ->
     Some(out)
 }
 
+/// Whether the style runs of a `Txt2` text model (`/6 /0`) agree with `layer`'s character runs
+/// on every key [`txt2_style_runs`] writes, the auto-kern mode aside ([`with_modes`] refits that
+/// on its own): font (by name, through `fonts`, the block's font list), size, faux bold and
+/// italic, leading, scales, tracking, fill colour and the OpenType keys. A key the file's run
+/// lacks, or holds as another type, is no evidence of an edit and is skipped, so an unedited
+/// save still gets the file's block back byte for byte (#2374); a key that disagrees means the
+/// layer's style was edited since the file was written (#8415).
+fn txt2_style_matches(layer: &TextLayer, model: &E, fonts: &[E], dpi: f32) -> bool {
+    let Some(file_runs) = model.path(&["6", "0"]).and_then(E::as_array) else { return true };
+    let k = if dpi.is_finite() && dpi > 0.0 { dpi / 72.0 } else { 1.0 };
+    let run_len = |i: usize| file_runs.get(i).and_then(|r| r.get("1")).and_then(E::as_i64).unwrap_or(0);
+    let runs = layer.char_runs();
+    let default = CharStyle::default();
+    let ed_text = format!("{}\r", layer.text.replace('\n', "\r"));
+    let (mut ri, mut run_end) = (0usize, runs.first().map_or(0, |r| r.len));
+    let (mut fi, mut left) = (0usize, run_len(0));
+    // Each (layer run, file run) pair is compared once, however long it is.
+    let mut compared = None;
+    for (b, ch) in ed_text.char_indices() {
+        while b >= run_end && ri + 1 < runs.len() {
+            ri += 1;
+            run_end = run_end.saturating_add(runs.get(ri).map_or(0, |r| r.len));
+        }
+        while left <= 0 && fi + 1 < file_runs.len() {
+            fi += 1;
+            left = run_len(fi);
+        }
+        if compared != Some((ri, fi)) {
+            let s = runs.get(ri).map_or(&default, |r| &r.style);
+            if let Some(style) = file_runs.get(fi).and_then(|r| r.path(&["0", "0", "6"]))
+                && !txt2_style_agrees(s, style, fonts, k)
+            {
+                return false;
+            }
+            compared = Some((ri, fi));
+        }
+        left = left.saturating_sub(ch.len_utf16() as i64);
+    }
+    true
+}
+
+/// Whether one `Txt2` style dictionary agrees with `s` (see [`txt2_style_matches`]); `k` is the
+/// document's points per PostScript point, as in [`txt2_style_runs`].
+fn txt2_style_agrees(s: &CharStyle, style: &E, fonts: &[E], k: f32) -> bool {
+    let close = |a: f64, b: f64| (a - b).abs() <= 1e-3 * a.abs().max(b.abs()).max(1.0);
+    let number = |key: &str, want: f32| style.get(key).and_then(E::as_f64).is_none_or(|v| close(v, f64::from(want)));
+    let flag = |key: &str, want: bool| style.get(key).and_then(E::as_bool).is_none_or(|v| v == want);
+    let font = style.get("0").and_then(E::as_i64).and_then(|i| usize::try_from(i).ok()).and_then(|i| fonts.get(i)).and_then(|f| f.path(&["0", "0", "0"]));
+    if font.and_then(E::as_str).is_some_and(|name| name != postscript_for(s)) {
+        return false;
+    }
+    let auto_leading = s.leading_pt.is_none();
+    if !(number("1", s.size_pt * k) && flag("2", s.faux_bold) && flag("3", s.faux_italic) && flag("4", auto_leading)) {
+        return false;
+    }
+    // An automatic leading's value is Photoshop's own; only a set one is ours to compare.
+    if style.get("4").and_then(E::as_bool) == Some(false) && !auto_leading && !number("5", s.leading_pt.unwrap_or(0.0) * k) {
+        return false;
+    }
+    if !(number("6", s.horizontal_scale) && number("7", s.vertical_scale) && number("8", s.tracking.round())) {
+        return false;
+    }
+    if let Some(paint) = style.get("53").and_then(|p| p.get("0")) {
+        let (kind, values) = fill_color(&s.color);
+        if paint.get("0").and_then(E::as_i64).is_some_and(|v| v != kind) {
+            return false;
+        }
+        if let Some(have) = paint.get("1").and_then(E::as_array) {
+            let same =
+                have.len() == values.len() && have.iter().zip(&values).all(|(a, b)| matches!((a.as_f64(), b.as_f64()), (Some(a), Some(b)) if close(a, b)));
+            if !same {
+                return false;
+            }
+        }
+    }
+    let feature = |tag: &str| s.features.iter().find(|f| f.tag == tag).map(|f| f.value > 0);
+    if !TXT2_FEATURES.iter().all(|&(key, tag)| flag(key, feature(tag).unwrap_or(tag == "calt"))) {
+        return false;
+    }
+    // A mask beyond the 20 sets is ignored on import (`add_txt2_features`), so here too.
+    let sets = (0..20).filter(|n| feature(&format!("ss{:02}", n + 1)) == Some(true)).fold(0i64, |m, n| m | 1 << n);
+    style.get(TXT2_STYLISTIC_SETS).and_then(E::as_i64).filter(|m| (0..1 << 20).contains(m)).is_none_or(|m| m == sets)
+}
+
 /// The index of the PostScript font `name` in a `Txt2` font list (`<< /0 << /99 /CoolTypeFont
 /// /0 << /0 name /2 type >> >> >>` entries), appending it (shaped like the list's first entry)
 /// when missing. `None` for an empty list: there is no entry to shape a new one on.
@@ -1199,7 +1283,13 @@ pub fn build_txt2_at(objects: &[(i32, &TextLayer)], previous: Option<&[u8]>, dpi
         // it is replaced like a missing one (below) and re-saving such a file repairs it, whether
         // or not the layer's text changed.
         let slot = prev_objects.get(at).filter(|o| !is_stub(o) || all_stubs);
-        let kept = slot.filter(|o| o.get("0").and_then(|m| m.get("0")).and_then(E::as_str) == Some(text.as_str()));
+        // Kept only while its style runs still say what the layer says (#8415): Photoshop reads
+        // the character style from them, so a style-only edit (font, faux bold, size, …) must
+        // restyle the object the way an edited one is, or the file's old style shows on reopen.
+        let kept = slot.filter(|o| {
+            let model = o.get("0");
+            model.and_then(|m| m.get("0")).and_then(E::as_str) == Some(text.as_str()) && model.is_some_and(|m| txt2_style_matches(layer, m, &fonts, dpi))
+        });
         // An edited object (#6968): the file's object at this slot with its text changed. It keeps
         // the file's structure — paragraph runs, the view naming its frame, the rest — with every
         // run array refitted to the new text. A bare `<< /0 << /0 text /6 runs >> >>` stub in

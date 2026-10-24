@@ -1126,7 +1126,12 @@ pub fn handle_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
                     Key::Enter if m.command => commit_with(app, *m),
                     Key::Enter => insert(app, "\n"),
                     // Photoshop types a tab character; layout advances it to the next tab stop.
-                    Key::Tab if !m.command && !m.alt && !m.shift => insert(app, "\t"),
+                    Key::Tab if !m.command && !m.alt && !m.shift => {
+                        // egui queues focus navigation before this handler runs; consuming the
+                        // key alone would let the menu bar take focus after the first tab (#8889).
+                        ctx.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
+                        insert(app, "\t");
+                    }
                     Key::Escape if crate::type_transform::active(app) => crate::type_transform::cancel_drag(app),
                     // The Type Mask tools: Escape always cancels, leaving the selection as it was.
                     Key::Escape if ed.mask => cancel(app),

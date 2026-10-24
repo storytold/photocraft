@@ -265,8 +265,9 @@ fn new_adjustment_and_fill_layers_are_masked_by_the_selection() {
             assert_eq!(mask.value(10, 10), 1.0, "{id} at {depth}-bit: the mask hides the selected area");
             assert_eq!(mask.value(2, 2), 0.0, "{id} at {depth}-bit: the mask reveals outside the selection");
             assert!(mask.linked && mask.enabled, "{id}");
-            // The selection stays, as after Layer › Layer Mask › Reveal Selection.
-            assert!(d.doc.selection.is_some(), "{id} dropped the selection");
+            // The selection went into the mask, so Photoshop drops it, as Layer › Layer Mask ›
+            // Reveal Selection does (#5251, #8801).
+            assert!(d.doc.selection.is_none(), "{id} at {depth}-bit kept the selection");
             // The white canvas is untouched outside the selection.
             assert_eq!(px(&mut s, 2, 2), vec![1.0, 1.0, 1.0, 1.0], "{id} at {depth}-bit changed pixels outside the selection");
             if blackens {
@@ -274,6 +275,29 @@ fn new_adjustment_and_fill_layers_are_masked_by_the_selection() {
             }
             s.execute("edit.undo", json!({})).unwrap();
             assert!(s.active().unwrap().doc.layer(layer).is_none(), "{id}: undo keeps the layer");
+            let sel = s.active().unwrap().doc.selection.as_ref().unwrap_or_else(|| panic!("{id}: undo does not bring the selection back"));
+            assert_eq!(sel.content_bounds(), photocraft_geom::Rect::new(8, 8, 24, 24), "{id}: undo restores the same selection");
+        }
+    }
+}
+
+#[test]
+fn an_edit_after_a_new_fill_layer_on_a_selection_reaches_the_whole_layer() {
+    // #8801: the selection that masked a new fill or adjustment layer is gone, so the next
+    // pixel edit on another layer is not limited to it.
+    for (id, params) in [("layer.newFillLayer.solidColor", json!({"color": "#000000"})), ("layer.newAdjustmentLayer.invert", json!({}))] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 40, "height": 20})).unwrap();
+        s.execute("edit.fill", json!({"contents": "color", "color": "#3366cc"})).unwrap();
+        s.execute("select.rect", json!({"x": 0, "y": 0, "width": 20, "height": 20})).unwrap();
+        s.execute(id, params).unwrap();
+        s.execute("layer.setProps", json!({"visible": false})).unwrap();
+        s.execute("layer.selectBottom", json!({})).unwrap();
+        s.execute("layer.duplicate", json!({})).unwrap();
+        s.execute("image.adjustments.desaturate", json!({})).unwrap();
+        for x in [5, 35] {
+            let p = px(&mut s, x, 10);
+            assert!((p[0] - p[1]).abs() < 1e-3 && (p[1] - p[2]).abs() < 1e-3, "{id}: ({x}, 10) is not grey: {p:?}");
         }
     }
 }
@@ -351,6 +375,7 @@ fn new_fill_and_adjustment_layers_take_the_active_path_as_their_vector_mask() {
                 let want = if path_name == "work" { d.doc.work_path.clone().unwrap() } else { d.doc.paths[0].path.clone() };
                 assert_eq!(vm.path, want, "{id}: the vector mask is the path");
                 assert!(l.mask.is_none(), "{id}: the path wins over the selection");
+                assert!(d.doc.selection.is_some(), "{id}: an unused selection stays");
                 for (x, y) in [(2, 2), (42, 32), (30, 30)] {
                     assert_eq!(px(&mut s, x, y), vec![1.0, 1.0, 1.0, 1.0], "{id} ({path_name}) at {depth}-bit changed pixels outside the path at ({x}, {y})");
                 }

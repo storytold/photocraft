@@ -82,6 +82,9 @@ pub const RESIDENT_BUDGET: u64 = 4 << 30;
 /// GPU memory pattern textures may hold before the least recently painted are dropped (those the
 /// current frame paints with always stay).
 pub const PATTERN_BUDGET: u64 = 256 << 20;
+/// The most a single pattern's RGBA32F texture may take. A pattern over it paints on the CPU, which
+/// holds a large 8-bit pattern at 4 bytes a pixel instead of 16 (`Pattern::working_bytes`).
+const MAX_PATTERN_TEXTURE_BYTES: u64 = 256 << 20;
 /// A pattern texture no frame has painted with for this many frames is dropped.
 pub const PATTERN_IDLE_FRAMES: u64 = 240;
 /// Uploads (bytes) [`Compositor::render`] stages before submitting the work recorded so far, so
@@ -1022,15 +1025,28 @@ impl Compositor {
                     if s.lut.as_ref().is_some_and(|l| l.len() > 4096) {
                         return Err(Unsupported(format!("effect blur on `{}` too wide for the GPU path", f.layer.name)));
                     }
+                    if let Some(pat) = &s.pattern {
+                        self.check_pattern(pat)?;
+                    }
                 }
             }
         }
         for pass in &p.passes {
-            if let Some(pat) = pass.pattern
-                && (pat.width > self.device_max || pat.height > self.device_max)
-            {
-                return Err(Unsupported(format!("pattern `{}` larger than the GPU texture limit", pat.name)));
+            if let Some(pat) = pass.pattern {
+                self.check_pattern(pat)?;
             }
+        }
+        Ok(())
+    }
+
+    /// A pattern's texture must fit the device and the per-pattern cap; a larger one renders on
+    /// the CPU compositor.
+    fn check_pattern(&self, pat: &Pattern) -> Result<(), Unsupported> {
+        if pat.width > self.device_max || pat.height > self.device_max {
+            return Err(Unsupported(format!("pattern `{}` larger than the GPU texture limit", pat.name)));
+        }
+        if u64::from(pat.width) * u64::from(pat.height) * 16 > MAX_PATTERN_TEXTURE_BYTES {
+            return Err(Unsupported(format!("pattern `{}` too large for a GPU texture; the CPU path paints it", pat.name)));
         }
         Ok(())
     }

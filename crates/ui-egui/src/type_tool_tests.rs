@@ -969,6 +969,33 @@ fn tab_while_typing_inserts_a_tab() {
     assert_eq!(h.state().ui.panels.dock, panels, "the panels stay as they were");
 }
 
+/// #8889: separate Tab presses must keep inserting text with the menu bar and panels present.
+#[test]
+fn repeated_tabs_while_typing_keep_keyboard_focus_on_the_canvas() {
+    let mut app = new_app();
+    let id = LayerId(app.run("type.create", json!({"text": "HOHO", "size": 60, "x": 300, "y": 420})).unwrap()["layer"].as_u64().unwrap());
+    let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).with_max_steps(32).build_eframe(move |cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        app
+    });
+    h.run_steps(4);
+    let p = glyph(&mut h, id, 1, 0.2);
+    click(&mut h, p);
+    assert_eq!(selection(&h), (1, 1));
+    let panels = h.state().ui.panels.dock;
+    for (expected, caret) in [("H\tOHO", 2), ("H\t\tOHO", 3), ("H\t\t\tOHO", 4)] {
+        h.key_press(egui::Key::Tab);
+        h.run_steps(2);
+        assert_eq!(text(h.state(), id).text, expected);
+        assert_eq!(selection(&h), (caret, caret));
+        assert!(h.state().ui.text_edit.is_some(), "still editing");
+        assert_eq!(h.state().ui.panels.dock, panels, "the panels stay as they were");
+    }
+    h.event(egui::Event::Text("typed".into()));
+    h.run_steps(2);
+    assert_eq!(text(h.state(), id).text, "H\t\t\ttypedOHO");
+}
+
 #[test]
 fn text_color_dialog_edits_only_the_selected_range_and_cancel_is_inert() {
     let mut app = new_app();

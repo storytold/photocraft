@@ -1436,6 +1436,56 @@ fn edited_text_keeps_the_files_txt2_object() {
     }
 }
 
+/// #8415: a style-only edit (`type.setStyle` with no text change) reaches the file's `Txt2`.
+/// Photoshop reads the character style from the object's style runs, and an object whose text
+/// still matched kept the file's runs, so Photoshop reopened the layer in its old font with faux
+/// bold still on. A layer whose style agrees with the runs still gets the block back byte for
+/// byte (#2374); one whose font or faux bold changed is restyled like an edited object, and the
+/// glyph pen positions laid out in the old style are dropped.
+#[test]
+fn style_only_edit_restyles_the_kept_txt2_object() {
+    use crate::engine_data::Value as E;
+    // Strings in the block are UTF-16 with a BOM; every character here is below U+0100.
+    let utf16 = |s: &str| format!("(\u{fe}\u{ff}{})", s.chars().map(|c| format!("\0{c}")).collect::<String>());
+    let font = |name: &str| format!("<< /0 << /99 /CoolTypeFont /0 << /0 {} /2 1 >> >> >> ", utf16(name));
+    // One object as Photoshop writes it: paragraph runs, style runs, a view and pen positions.
+    let prev = format!(
+        "\n\n/98 << /0 14 >> /0 << /1 << /0 [ {}{}] >> >> /1 << /1 [ << /0 << /0 {} /5 << /0 [ << /0 << /0 << /0 (\u{fe}\u{ff}) /5 << /7 1.2 >> >> >> /1 3 >> ] >> /6 << /0 [ << /0 << /0 << /0 (\u{fe}\u{ff}) /6 << /0 0 /1 12.0 /2 true /3 false /11 1 >> >> >> /1 3 >> ] >> >> /1 << /0 [ << /0 0 >> ] >> /21 << /1 [ 1.25 2.5 ] >> >> ] >>",
+        font("Arial-Black"),
+        font("ArialMT"),
+        utf16("AV\r"),
+    );
+    let prev: Vec<u8> = prev.chars().map(|c| c as u32 as u8).collect();
+    let style = CharStyle { postscript_name: Some("Arial-Black".into()), size_pt: 12.0, faux_bold: true, ..Default::default() };
+    let t = styled("AV", style.clone());
+    assert_eq!(crate::psd::build_txt2(&[(0, &t)], Some(&prev)), prev, "an unedited style keeps the file's block");
+
+    let font_name = |out: &E, run: &E| {
+        let i = run.path(&["0", "0", "6", "0"]).and_then(E::as_i64).and_then(|i| usize::try_from(i).ok()).expect("a font index");
+        out.path(&["0", "1", "0"]).and_then(E::as_array).and_then(|f| f.get(i)).and_then(|f| f.path(&["0", "0", "0"])).and_then(E::as_str).map(str::to_owned)
+    };
+    for (what, edited, want_font) in [
+        ("faux bold off", CharStyle { faux_bold: false, ..style.clone() }, "Arial-Black"),
+        (
+            "font and faux bold",
+            CharStyle { postscript_name: Some("AppleSDGothicNeo-Heavy".into()), faux_bold: false, ..style.clone() },
+            "AppleSDGothicNeo-Heavy",
+        ),
+    ] {
+        let t = styled("AV", edited);
+        let out = crate::psd::parse_txt2(&crate::psd::build_txt2(&[(0, &t)], Some(&prev))).unwrap();
+        let object = &out.path(&["1", "1"]).and_then(E::as_array).unwrap()[0];
+        assert_eq!(object.path(&["0", "0"]).and_then(E::as_str), Some("AV\r"), "{what}: the text is unchanged");
+        let runs = object.path(&["0", "6", "0"]).and_then(E::as_array).unwrap();
+        assert!(!runs.is_empty(), "{what}: the object has style runs");
+        for run in runs {
+            assert_eq!(run.path(&["0", "0", "6", "2"]).and_then(E::as_bool), Some(false), "{what}: faux bold is off in Txt2");
+            assert_eq!(font_name(&out, run).as_deref(), Some(want_font), "{what}: Txt2 names the layer's font");
+        }
+        assert!(object.get("21").is_none(), "{what}: pen positions of the old style are dropped");
+    }
+}
+
 /// A type layer the file's `Txt2` has no object for (one added before the save, #7698) gets an
 /// object shaped like the file's own, with a view naming its own frame and a frame in `/0 /8 /0`,
 /// instead of a bare stub: Photoshop and Photopea refused the file when the frames ran out.

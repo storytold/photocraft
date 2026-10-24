@@ -1257,8 +1257,7 @@ fn paint_pattern(
         m,
         |i| {
             let (x, y) = (f64::from(big.x0 + (i % w) as i32) + 0.5, f64::from(big.y0 + (i / w) as i32) + 0.5);
-            let (u, v) = place.map(x, y);
-            tile.sample(u, v)
+            tile.sample_area(&place, x, y)
         },
         blend,
         opacity,
@@ -1609,8 +1608,7 @@ fn bevel_height(shape: &Map, b: &Bevel, g: &BevelGeom, tex: &TextureCtx, pattern
             || (),
             |_, y, row, _| {
                 for (x, o) in row.iter_mut().enumerate() {
-                    let (u, v) = place.map(f64::from(x0 + x as i32) + 0.5, f64::from(y0 + y as i32) + 0.5);
-                    let p = tile.sample(u, v);
+                    let p = tile.sample_area(&place, f64::from(x0 + x as i32) + 0.5, f64::from(y0 + y as i32) + 0.5);
                     let l = (0.299 * p[0] + 0.587 * p[1] + 0.114 * p[2]) * p[3];
                     *o += k * if t.invert { 1.0 - l } else { l };
                 }

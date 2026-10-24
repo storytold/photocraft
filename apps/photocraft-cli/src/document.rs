@@ -93,6 +93,11 @@ pub(crate) fn run_cmds(a: &RunArgs, out: &mut dyn Write, err: &mut dyn Write) ->
     }
     let cmds = command_list(a)?;
     for (id, params) in cmds {
+        // Deselect with nothing selected is a silent no-op in a script, as in action playback (#8802).
+        if photocraft_engine::actions_cmds::noop_step(&h.session, &id) {
+            print_json(out, &json!({"command": id, "result": null}), JsonStyle::Compact)?;
+            continue;
+        }
         let r = h.command_run(&id, params).map_err(|source| CliError::Command { id: id.clone(), source })?;
         if let Some(message) = photocraft_engine::actions_cmds::nested_failure(&id, &r) {
             return Err(CliError::NestedFailure { id, message });

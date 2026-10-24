@@ -368,7 +368,8 @@ fn stop(s: &mut Session, _p: &Value) -> Result<Value> {
 
 /// A step Photoshop plays as a silent no-op although its menu item is greyed: Deselect with an
 /// open document and nothing selected (actions often start with it to clear any selection, #6744).
-fn noop_step(s: &Session, id: &str) -> bool {
+/// The CLI's `run` and `batch` scripts skip it too (#8802).
+pub fn noop_step(s: &Session, id: &str) -> bool {
     id == "select.deselect" && s.active().is_some_and(|d| d.doc.selection.is_none())
 }
 

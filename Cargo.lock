@@ -4795,6 +4795,7 @@ dependencies = [
 name = "photocraft-algo"
 version = "0.15.1"
 dependencies = [
+ "criterion",
  "photocraft-color",
  "photocraft-geom",
  "photocraft-raster",

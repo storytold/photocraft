@@ -2579,6 +2579,27 @@ fn closed_documents_release_their_pattern_textures() {
     check(&mut g, &a, "the pattern is uploaded again after being forgotten");
 }
 
+/// A pattern whose RGBA32F texture would pass the per-pattern cap (Define Pattern accepts 8-bit
+/// ones up to 8000 x 8000) is declined by the GPU path and painted by the CPU compositor, which
+/// holds a large 8-bit pattern at a quarter of the texture's size.
+#[test]
+fn a_pattern_too_large_for_a_gpu_texture_falls_back_to_the_cpu() {
+    let Some(mut g) = gpu() else { return };
+    let mut d = Document::new("big pattern", Size::new(8, 6), ColorMode::Rgb, SampleType::U8);
+    // 100 MB as RGBA8, 400 MB as an RGBA32F texture.
+    let surface = photocraft_raster::Surface::with_default(PixelFormat::RGBA8, &[1.0, 0.0, 0.0, 1.0]);
+    let pat = Pattern { id: "big".into(), name: "big".into(), width: 5000, height: 5000, surface };
+    assert!(pat.is_paintable());
+    d.layers.push(Layer::new(
+        "pattern",
+        LayerContent::Fill(Fill::Pattern { name: pat.name.clone(), id: pat.id.clone(), scale: 1.0, angle: 0.0, link: true, phase: (0.0, 0.0) }),
+    ));
+    d.patterns.push(pat);
+    assert!(render_to_vec(&mut g.comp, &g.device, &g.queue, &d, d.bounds()).is_err(), "the GPU path declines it");
+    assert_eq!(g.comp.pattern_cache_bytes(), 0, "nothing was uploaded");
+    assert!(photocraft_compose::flatten(&d).px.iter().all(|p| *p == [1.0, 0.0, 0.0, 1.0]), "the CPU compositor paints it");
+}
+
 /// #4971: pattern textures are bounded while their documents stay open, by a byte budget and
 /// by age. What the current frame paints with is never dropped.
 #[test]
@@ -2658,7 +2679,7 @@ fn pattern_cache_tracks_source_format_and_cow_tiles() {
 fn pattern_fill_layers() {
     let Some(mut g) = gpu() else { return };
     let pat = checker_pattern();
-    for (link, scale, angle, masked) in [(true, 1.0, 0.0, false), (false, 0.7, 25.0, true), (true, 1.6, -40.0, false)] {
+    for (link, scale, angle, masked) in [(true, 1.0, 0.0, false), (false, 0.7, 25.0, true), (true, 1.6, -40.0, false), (true, 0.3, 10.0, false)] {
         let mut d = base_doc(70, 50);
         d.patterns.push(pat.clone());
         let fill = Fill::Pattern { name: pat.name.clone(), id: pat.id.clone(), scale, angle, link, phase: (3.0, -2.0) };
