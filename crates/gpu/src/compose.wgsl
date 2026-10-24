@@ -59,6 +59,7 @@ const F_HDR: u32 = 262144u;     // 32-bit float document: HDR blends and Exposur
 const F_QUANT: u32 = 32768u;    // lerp: A rounded to p0.x steps (adjustment results, integer docs)
 const F_ADD_DIFF: u32 = 16384u;  // lerp: A + (B - C) premultiplied (clips on pass-through groups)
 const F_BLEND_IF: u32 = 524288u; // lerp: B back towards A by the Blend If ranges in p0..p3
+const F_REPLACE: u32 = 2097152u; // effect paint: Normal inside/center stroke replaces A by its coverage
 const F_TEXT_GAMMA: u32 = 8192u; // blend / atop / fx merge: type layer, mix coverage at gamma p4.w
 const F_LAYER_SHAPE: u32 = 1048576u; // fx merge: B is the shape; layer = its colour at fill p0.x inside it × its alpha
 
@@ -1216,7 +1217,7 @@ fn outline_share(cov: f32, l: f32) -> f32 {
 // is the effect shape). Coverage `kind`: 0 the effect map, 1 full; then F_KNOCKOUT m × (1 − a k)
 // (k = `p4.w`),
 // F_GATE inside ? m : 0, F_REL inside ? min(m / a, 1) : 0, F_STROKE_OUT inside ? (vector ? 0 : 1)
-// : m.
+// : m. F_REPLACE: the paint replaces A by the coverage instead of blending over it.
 @fragment
 fn fs_fxpaint(in: VOut) -> @location(0) vec4<f32> {
     let p = local(in.pos);
@@ -1244,6 +1245,16 @@ fn fs_fxpaint(in: VOut) -> @location(0) vec4<f32> {
     let k = m * op.opacity;
     if (k <= 0.0) { return dst; }
     let c = fx_color(d);
+    if ((op.flags & F_REPLACE) != 0u) {
+        // effects.rs: a Normal inside stroke knocks the layer out by its coverage and adds the
+        // stroke (`layer × (1 − coverage) + stroke × opacity × coverage`, premultiplied), also on
+        // Lab documents (no CIELAB mix).
+        let sa = c.a * k;
+        if (sa <= 0.0) { return dst; }
+        let kept = dst.a * (1.0 - clamp(m, 0.0, 1.0));
+        let ao = kept + sa;
+        return vec4((dst.rgb * kept + c.rgb * sa) / ao, min(ao, 1.0));
+    }
     return fx_composite(d, dst, vec4(c.rgb, c.a * k));
 }
 
