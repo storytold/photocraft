@@ -2764,6 +2764,9 @@ curves	Smooth	平滑
 	Clear History	清除步驟記錄
 	New Snapshot…	新增快照…
 	History Options…	步驟記錄選項…
+# History panel › History Options… (#2966)
+	Allow Non-Linear History	允許非線性步驟記錄
+	Make Layer Visibility Changes Undoable	允許復原圖層可見度變更
 # Print dialog (#2697)
 	Emulsion Down	感光乳劑面朝下
 	Functions	功能

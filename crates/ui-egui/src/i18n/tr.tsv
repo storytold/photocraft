@@ -745,6 +745,8 @@
 	Gradients	Degradeler
 	Histogram	Histogram
 	History	Geçmiş
+	Allow Non-Linear History	Doğrusal Olmayan Geçmişe İzin Ver
+	Make Layer Visibility Changes Undoable	Katman Görünürlüğü Değişikliklerini Geri Alınabilir Yap
 	Info	Bilgi
 	Measurement Log	Ölçüm Günlüğü
 	Modifier Keys	Değiştirici Tuşlar

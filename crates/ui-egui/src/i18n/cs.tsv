@@ -3609,6 +3609,9 @@ curves	Smooth	Vyhladit
 	Clear History	Vymazat historii
 	New Snapshot…	Nový snímek…
 	History Options…	Volby historie…
+# History panel › History Options… (#2966)
+	Allow Non-Linear History	Povolit nelineární historii
+	Make Layer Visibility Changes Undoable	Umožnit vrácení změn viditelnosti vrstev
 	Drag (lasso) or click points (polygonal) · {add} add · {sub} subtract	Táhněte (laso) nebo klikejte na body (mnohoúhelník) · {add} přidat · {sub} odečíst
 	The current gradient (pick one in Window › Gradients)	Aktuální přechod (vyberte v Okno › Přechody)
 # Canvas context menus, Channels panel menu, Layer Style blending page (labels rendered through a variable).

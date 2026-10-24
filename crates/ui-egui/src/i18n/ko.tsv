@@ -3369,6 +3369,9 @@ curves	Smooth	매끄럽게
 	Clear History	작업 내역 지우기
 	New Snapshot…	새 스냅샷…
 	History Options…	작업 내역 옵션…
+# History panel › History Options… (#2966)
+	Allow Non-Linear History	비선형 작업 내역 허용
+	Make Layer Visibility Changes Undoable	레이어 표시 여부 변경을 실행 취소할 수 있게 하기
 # Print dialog (#2697)
 	Emulsion Down	감광면 아래로
 	Functions	기능

@@ -2824,6 +2824,9 @@ curves	Smooth	Leviga
 # History panel menu (#2966)
 	New Snapshot…	Nuova istantanea…
 	History Options…	Opzioni cronologia…
+# History panel › History Options… (#2966)
+	Allow Non-Linear History	Consenti cronologia non lineare
+	Make Layer Visibility Changes Undoable	Rendi annullabili le modifiche di visibilità dei livelli
 # Print dialog (#2697)
 	Emulsion Down	Emulsione sotto
 	Functions	Funzioni

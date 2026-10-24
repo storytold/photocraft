@@ -3943,6 +3943,9 @@ layerLabel	No Color	Sem cor
 # History panel menu (#2966)
 	New Snapshot…	Novo instantâneo…
 	History Options…	Opções de histórico…
+# History panel › History Options… (#2966)
+	Allow Non-Linear History	Permitir histórico não linear
+	Make Layer Visibility Changes Undoable	Permitir desfazer alterações de visibilidade das camadas
 # Print dialog (#2697)
 	Emulsion Down	Emulsão para baixo
 	Functions	Funções

@@ -3913,6 +3913,9 @@ curves	Smooth	Vloeiend maken
 # History panel menu (#2966)
 	New Snapshot…	Nieuwe momentopname…
 	History Options…	Geschiedenisopties…
+# History panel › History Options… (#2966)
+	Allow Non-Linear History	Niet-lineaire geschiedenis toestaan
+	Make Layer Visibility Changes Undoable	Wijzigingen in laagzichtbaarheid ongedaan kunnen maken
 # Print dialog (#2697)
 	Emulsion Down	Emulsie omlaag
 	Functions	Functies

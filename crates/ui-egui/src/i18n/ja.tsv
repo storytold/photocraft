@@ -3765,6 +3765,9 @@ curves	Smooth	スムーズ
 # History panel menu (#2966)
 	New Snapshot…	新規スナップショット…
 	History Options…	ヒストリーオプション…
+# History panel › History Options… (#2966)
+	Allow Non-Linear History	非線形のヒストリーを許可
+	Make Layer Visibility Changes Undoable	レイヤーの表示/非表示の変更を取り消し可能にする
 # Print dialog (#2697)
 	Emulsion Down	乳剤面を下
 	Functions	機能

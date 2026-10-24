@@ -3853,6 +3853,9 @@ curves	Smooth	Згладити
 # History panel menu (#2966)
 	New Snapshot…	Новий знімок стану…
 	History Options…	Параметри історії…
+# History panel › History Options… (#2966)
+	Allow Non-Linear History	Дозволити нелінійну історію
+	Make Layer Visibility Changes Undoable	Дозволити скасування змін видимості шарів
 # Print dialog (#2697)
 	Emulsion Down	Емульсією донизу
 	Functions	Функції

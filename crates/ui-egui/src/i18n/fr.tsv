@@ -3175,6 +3175,9 @@ curves	Smooth	Lisser
 # History panel menu (#2966)
 	New Snapshot…	Nouvel instantané…
 	History Options…	Options d'historique…
+# History panel › History Options… (#2966)
+	Allow Non-Linear History	Autoriser l'historique non linéaire
+	Make Layer Visibility Changes Undoable	Permettre d'annuler les changements de visibilité des calques
 # Print dialog (#2697)
 	Emulsion Down	Émulsion verso
 	Functions	Fonctions

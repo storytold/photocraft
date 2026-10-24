@@ -115,6 +115,7 @@ pub mod gradient_ui;
 pub mod guide_layout_ui;
 pub mod guide_select;
 pub mod history_menu_ui;
+pub mod history_options_ui;
 pub mod hold_keys;
 pub mod i18n;
 mod icon_data;

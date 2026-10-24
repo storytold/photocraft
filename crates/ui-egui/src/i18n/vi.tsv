@@ -3687,6 +3687,9 @@ curves	Smooth	Làm mượt
 	Clear History	Xóa lịch sử
 	History Options…	Tùy chọn lịch sử…
 	Background (Default)	Nền (mặc định)
+# History panel › History Options… (#2966)
+	Allow Non-Linear History	Cho phép lịch sử không tuyến tính
+	Make Layer Visibility Changes Undoable	Cho phép hoàn tác thay đổi hiển thị lớp
 	Presentation	Trình bày
 # Batch / Image Processor
 	Include All Subfolders	Bao gồm tất cả thư mục con
