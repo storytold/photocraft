@@ -5825,7 +5825,12 @@ fn tool_move(app: &mut PhotocraftApp, x: f64, y: f64, pressure: f32, mods: egui:
         let held = app.stylus.last_point_ms().is_some_and(|t| app.stylus.clock_ms - t >= HOLD_REPEAT_MS)
             && app.live_stroke.as_ref().is_some_and(|l| l.stroke.wants_time());
         if moved || held {
-            d.points.push([x, y, pressure as f64]);
+            let pressure = if d.tool.is_brushlike() && app.stylus.use_pressure {
+                d.points.last().map(|p| crate::stylus::ease_pressure_step(p[2], pressure as f64, (p[0] - x).hypot(p[1] - y))).unwrap_or(pressure as f64)
+            } else {
+                pressure as f64
+            };
+            d.points.push([x, y, pressure]);
             app.stylus.record_point();
         }
     }

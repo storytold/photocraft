@@ -1,6 +1,6 @@
 # Hardware parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** major (first version: GPU, pen tablets, displays, gestures per platform against Photoshop 2026) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-19 · **Last updated:** 2026-10-19 · **Change:** minor (Linux XInput2: slave-copy raw events only; emulated pointer motion does not clear pen pressure; Xwayland Abs Wheel barrel rotation) · **Target:** Adobe Photoshop 2026
 
 Each hardware feature Photoshop 2026 (27.11.0) uses, per platform, against PhotoCraft. Photoshop
 side: its bundle (Metal and OpenCL paths, "Precise Color Management for HDR Display" and EDR
@@ -29,9 +29,9 @@ HDR display to verify.
 
 | Feature | Photoshop | macOS | Windows | Linux X11 | Linux Wayland | Web |
 |---|---|---|---|---|---|---|
-| Pressure | yes | yes (AppKit monitor) | yes (WM_POINTER), jumpy (#2046) | yes (XInput2) | via Xwayland only; GNOME 50 pen doesn't click (#2622), KDE (#2297) | yes |
+| Pressure | yes | yes (AppKit monitor) | yes (WM_POINTER), jumpy (#2046) | yes (XInput2 raw valuators) | via Xwayland when clicks reach the window; GNOME 50 may drop pen clicks before any X11 client (#2622); native Wayland open (#79) | yes |
 | Tilt | yes | yes | **no** | yes | no | yes |
-| Barrel rotation | yes | yes (not applied to tip angle, #1301) | no | partial | no | yes (twist) |
+| Barrel rotation | yes | yes (not applied to tip angle, #1301) | no | partial (Abs Wheel on Xwayland) | no | yes (twist) |
 | Eraser end | yes | yes | no (#2285) | partial | no | partial |
 | WinTab driver mode | yes | – | no | – | – | – |
 | Pressure curve | Windows Ink / driver | global curve in Preferences (#2195) | same | same | same | same |
@@ -62,5 +62,7 @@ HDR display to verify.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-19 | minor | Linux XInput2: process slave-copy raw events only; emulated pointer motion does not clear pen pressure; Xwayland Abs Wheel barrel rotation |
+| 2026-10-16 | minor | Linux XInput2: raw events use `sourceid`; ignore emulated pointer motion while the pen is active; Xwayland `Abs Wheel` rotation |
 | 2026-10-10 | major | First version |
 | 2026-10-19 | minor | Graphics Adapter choice on Linux (#1885) |

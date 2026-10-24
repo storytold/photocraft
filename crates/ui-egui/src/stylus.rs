@@ -68,6 +68,17 @@ impl PenSample {
 /// Most samples a [`StylusFeed`] keeps between two frames (a stalled UI drops the oldest).
 const FEED_QUEUE: usize = 1024;
 
+/// Limit how fast pen pressure may fall along a stroke. A full drop takes about 48 document
+/// pixels. Rises pass through, so pressing down stays immediate.
+pub(crate) fn ease_pressure_step(prev: f64, next: f64, dist: f64) -> f64 {
+    let next = if next.is_finite() { next.clamp(0.0, 1.0) } else { 0.0 };
+    if !prev.is_finite() || next >= prev {
+        return next;
+    }
+    let room = (dist.abs() / 48.0).clamp(0.012, 0.28);
+    (prev - room).max(next)
+}
+
 #[derive(Debug, Default)]
 struct FeedState {
     /// The current sample (`None` = no pen down).
@@ -258,6 +269,13 @@ impl Stylus {
         }
     }
 
+    fn with_pressure_curve(&self, s: PenSample) -> PenSample {
+        match &self.pressure_curve {
+            Some(c) => PenSample { pressure: c.eval(s.pressure), ..s },
+            None => s,
+        }
+    }
+
     /// The current pen sample, `None` for a mouse (and for any pen while Use Tablet Pressure is
     /// off).
     pub fn sample(&self) -> Option<PenSample> {
@@ -265,11 +283,7 @@ impl Stylus {
             return None;
         }
         let s = self.current.or_else(|| self.latest()).or(self.touch.map(|pressure| PenSample { pressure, ..Default::default() }))?;
-        // The pen's pressure through Preferences › Tools › Pressure Curve, before any brush sees it.
-        Some(match &self.pressure_curve {
-            Some(c) => PenSample { pressure: c.eval(s.pressure), ..s },
-            None => s,
-        })
+        Some(self.with_pressure_curve(s))
     }
 
     /// Preferences › Tools › Pressure Curve (rebuilt only when the points change).
@@ -349,8 +363,11 @@ impl Stylus {
         }
     }
 
-    /// Pressure for the next tool event (1 for a mouse).
+    /// Pressure for the next tool event (1 for a mouse, and until a pen sample arrives).
     pub fn pressure(&self) -> f32 {
+        if !self.use_pressure {
+            return 1.0;
+        }
         self.sample().map_or(1.0, |s| s.pressure)
     }
 
@@ -562,6 +579,34 @@ mod tests {
 
     fn pen(pressure: f32) -> PenSample {
         PenSample { pressure, ..Default::default() }
+    }
+
+    #[test]
+    fn a_fast_pressure_drop_eases_over_distance() {
+        let stepped = ease_pressure_step(0.9, 0.05, 2.0);
+        assert!(stepped > 0.84, "{stepped}");
+        let mut p = 0.9;
+        for _ in 0..12 {
+            p = ease_pressure_step(p, 0.05, 2.0);
+        }
+        // 24 px is only halfway across the ~48 px fall.
+        assert!(p > 0.35, "a short tail must not collapse to a hairline, got {p}");
+        for _ in 0..20 {
+            p = ease_pressure_step(p, 0.05, 2.0);
+        }
+        assert!(p < 0.2, "a longer tail still reaches the light pressure, got {p}");
+        assert!((ease_pressure_step(0.4, 0.42, 10.0) - 0.42).abs() < 1e-9);
+    }
+
+    #[test]
+    fn no_pen_sample_is_mouse_pressure() {
+        let mut s = Stylus::default();
+        s.use_pressure = true;
+        s.begin_stroke();
+        assert_eq!(s.pressure(), 1.0, "a mouse has no pen sample");
+        s.feed.set(Some(pen(0.5)));
+        s.update(&[]);
+        assert!((s.pressure() - 0.5).abs() < 1e-6);
     }
 
     #[test]
