@@ -55,8 +55,14 @@ pub fn validate_curve(points: &[[f32; 2]]) -> Result<(), String> {
 
 use crate::photo_util::{hash01, linear_to_srgb, par_rows, srgb_to_linear};
 
-mod local_tone;
+pub mod local_tone;
+mod per_pixel;
 mod whites_blacks;
+
+pub use local_tone::{LocalTone, ToneKind, TonePass};
+pub use per_pixel::{
+    CURVE_LUT, Grade, Grain, PerPixel, Vignette, VignetteStyle, WB_STEPS, WhitesBlacks, WhitesBlacksModel, per_pixel, white_black_points, whites_blacks_model,
+};
 
 /// How the pixels encode light: the sRGB curve (gamma 0) or a pure power law (ProPhoto's 1.8,
 /// Adobe RGB's 2.2). The tone controls work on light, so the document's own curve decodes it.
@@ -580,15 +586,10 @@ pub fn develop(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float: bo
     let ps = p.pixel_scale.clamp(0.01, 1.0);
     let long = w.max(h) as f32;
     // 1. White balance + exposure in linear light.
-    if !p.wb_neutral() {
-        let mut g = white_balance_gains(p.temperature, p.tint);
-        let norm = luma(g);
-        g = g.map(|v| v / norm * 2f32.powf(p.exposure));
+    if let Some(g) = per_pixel::gains(p) {
         par_rows(px, w, 1, |_, row| {
             for q in row.iter_mut() {
-                for c in 0..3 {
-                    q[c] = linear_to_srgb((srgb_to_linear(q[c]) * g[c]).max(0.0));
-                }
+                *q = balance(*q, g);
             }
         });
     }
@@ -606,7 +607,6 @@ pub fn develop(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float: bo
         let clar = (p.clarity != 0.0).then(|| guided_fast(&lc, &lc, w, h, ((long * 0.02) as usize).max(3), 0.005));
         let tex = (p.texture != 0.0).then(|| gauss(&lc, w, h, (long * 0.002).max(1.5 * ps)));
         let k_con = p.contrast / 100.0 * 0.6;
-        let tau = std::f32::consts::TAU;
         par_rows(px, w, 1, |y, row| {
             for (x, q) in row.iter_mut().enumerate() {
                 let i = y * w + x;
@@ -619,22 +619,14 @@ pub fn develop(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float: bo
                 if let Some(t) = &tex {
                     lv += p.texture / 100.0 * 0.9 * (lc[i] - t[i]).clamp(-0.1, 0.1);
                 }
-                if k_con != 0.0 {
-                    let xx = lv.clamp(0.0, 1.0);
-                    lv += -k_con * (tau * xx).sin() / tau;
-                }
-                let lv = lv.max(0.0) + (l0 - lc[i]);
-                let ratio = if l0 > 1e-5 { lv / l0 } else { 1.0 };
-                for c in 0..3 {
-                    q[c] = if l0 > 1e-5 { q[c] * ratio } else { q[c] + (lv - l0) };
-                }
+                *q = tone(*q, l0, lc[i], lv, k_con);
             }
         });
     }
     // 3b. Whites and Blacks: global curves adapted to the image's black and white points.
     if p.whites != 0.0 || p.blacks != 0.0 {
         let enc = Encoding::of(p.encoding_gamma);
-        let (bp, wp) = luminance_points(px, w, h, enc);
+        let (bp, wp) = luminance_points(px, w, h, enc, |q| q);
         let (xw, xb) = whites_blacks::amounts(p.whites.clamp(-100.0, 100.0), p.blacks.clamp(-100.0, 100.0), bp, wp);
         whites_blacks::apply(px, w, xw, xb, enc);
     }
@@ -646,14 +638,7 @@ pub fn develop(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float: bo
         let (master, cr, cg, cb) = (pts(&p.point_curve), pts(&p.point_curve_red), pts(&p.point_curve_green), pts(&p.point_curve_blue));
         let hsl = !p.hsl_neutral();
         let grade = !p.grade_neutral();
-        let wheel_tint = |wh: &Wheel| -> [f32; 3] {
-            let c = hsv_to_rgb(wh.hue, 1.0, 1.0);
-            let l = luma(c);
-            [c[0] - l, c[1] - l, c[2] - l].map(|v| v * wh.sat / 100.0 * 0.3)
-        };
-        let tints = [wheel_tint(&p.grade_shadows), wheel_tint(&p.grade_midtones), wheel_tint(&p.grade_highlights), wheel_tint(&p.grade_global)];
-        let blend = 0.15 + p.grade_blending.clamp(0.0, 100.0) / 100.0 * 0.35;
-        let bal = p.grade_balance.clamp(-100.0, 100.0) / 100.0 * 0.25;
+        let Grade { tints, lums, blend, balance: bal } = Grade::new(p);
         par_rows(px, w, 1, |_, row| {
             for q in row.iter_mut() {
                 let mut c = [q[0], q[1], q[2]];
@@ -706,7 +691,6 @@ pub fn develop(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float: bo
                     let hi = smoothstep(0.5 + bal - blend, 1.0, l);
                     let mid = (1.0 - sh - hi).max(0.0);
                     let masks = [sh, mid, hi, 1.0];
-                    let lums = [p.grade_shadows.lum, p.grade_midtones.lum, p.grade_highlights.lum, p.grade_global.lum];
                     for k in 0..4 {
                         for ch in 0..3 {
                             c[ch] += masks[k] * tints[k][ch];
@@ -732,11 +716,7 @@ pub fn develop(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float: bo
         vignette(px, w, h, p);
     }
     if p.grain_amount > 0.0 {
-        let cell = 1.0 + p.grain_size / 25.0;
-        let rough = p.grain_roughness / 100.0;
-        let amt = p.grain_amount / 100.0 * 0.12;
-        let seed = p.seed as u64;
-        let pscale = 1.0 / ps;
+        let Grain { cell, roughness: rough, amount: amt, seed, scale: pscale } = Grain::new(p);
         par_rows(px, w, 1, |y, row| {
             for (x, q) in row.iter_mut().enumerate() {
                 // Sample in full-resolution coordinates so previews match the result.
@@ -759,33 +739,75 @@ pub fn develop(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float: bo
     }
 }
 
+/// The end of stage 3 on one pixel: Contrast (strength `k_con`) on the luminance `lv` that
+/// Clarity and Texture left, then the pixel rescaled to it. `l0` is its luminance, `lc` that
+/// clipped to 1.
+fn tone(mut q: [f32; 4], l0: f32, lc: f32, mut lv: f32, k_con: f32) -> [f32; 4] {
+    if k_con != 0.0 {
+        let tau = std::f32::consts::TAU;
+        let xx = lv.clamp(0.0, 1.0);
+        lv += -k_con * (tau * xx).sin() / tau;
+    }
+    let lv = lv.max(0.0) + (l0 - lc);
+    let ratio = if l0 > 1e-5 { lv / l0 } else { 1.0 };
+    for c in 0..3 {
+        q[c] = if l0 > 1e-5 { q[c] * ratio } else { q[c] + (lv - l0) };
+    }
+    q
+}
+
+/// Stage 3 on one pixel when Contrast is its only control.
+fn contrast(q: [f32; 4], k_con: f32) -> [f32; 4] {
+    let l0 = luma([q[0], q[1], q[2]]).max(0.0);
+    let lc = l0.min(1.0);
+    tone(q, l0, lc, lc, k_con)
+}
+
+/// Stage 1 on one pixel: white balance and exposure `gains` in linear light.
+fn balance(mut q: [f32; 4], g: [f32; 3]) -> [f32; 4] {
+    for c in 0..3 {
+        q[c] = linear_to_srgb((srgb_to_linear(q[c]) * g[c]).max(0.0));
+    }
+    q
+}
+
+/// The index of the `q` quantile (0 … 1) among `len` sorted values, as every percentile in the
+/// develop picks it.
+pub fn quantile_rank(len: usize, q: f32) -> usize {
+    (len.saturating_sub(1) as f32 * q).round() as usize
+}
+
 /// The image's black and white points as sRGB-encoded grey levels: the 3rd percentile of the
 /// luminance and the 99.5th of the brightest channel, on a copy at most 256 pixels across (so a
-/// preview proxy and the full image agree).
-fn luminance_points(px: &[[f32; 4]], w: usize, h: usize, enc: Encoding) -> (f32, f32) {
-    let f = w.max(h).div_ceil(256).max(1);
+/// preview proxy and the full image agree). `map` is applied to each pixel first.
+fn luminance_points(px: &[[f32; 4]], w: usize, h: usize, enc: Encoding, map: impl Fn([f32; 4]) -> [f32; 4] + Sync) -> (f32, f32) {
+    let f = w.max(h).div_ceil(whites_blacks::POINTS_SIDE).max(1);
     let (sw, sh) = (w.div_ceil(f), h.div_ceil(f));
-    let mut sum = vec![[0.0f64; 4]; sw * sh];
-    for y in 0..h {
-        for x in 0..w {
-            let q = px[y * w + x];
-            let s = &mut sum[(y / f) * sw + x / f];
-            for c in 0..3 {
-                s[c] += f64::from(enc.decode(q[c]).clamp(0.0, 1.0));
+    // Each band of `f` rows sums into its own row of cells, in the same order as one pass would.
+    let bands = crate::photo_util::par_map(sh, |sy| {
+        let mut sum = vec![[0.0f64; 4]; sw];
+        for y in sy * f..((sy + 1) * f).min(h) {
+            for x in 0..w {
+                let q = map(px[y * w + x]);
+                let s = &mut sum[x / f];
+                for c in 0..3 {
+                    s[c] += f64::from(enc.decode(q[c]).clamp(0.0, 1.0));
+                }
+                s[3] += 1.0;
             }
-            s[3] += 1.0;
         }
-    }
-    let cells: Vec<[f32; 3]> = sum.iter().filter(|s| s[3] > 0.0).map(|s| [0, 1, 2].map(|c| (s[c] / s[3]) as f32)).collect();
+        sum
+    });
+    let cells: Vec<[f32; 3]> = bands.iter().flatten().filter(|s| s[3] > 0.0).map(|s| [0, 1, 2].map(|c| (s[c] / s[3]) as f32)).collect();
     if cells.is_empty() {
         return (0.0, 1.0);
     }
     let pct = |mut v: Vec<f32>, q: f32| {
         v.sort_by(f32::total_cmp);
-        v[((v.len() - 1) as f32 * q).round() as usize]
+        v[quantile_rank(v.len(), q)]
     };
-    let bp = pct(cells.iter().map(|c| luma(*c)).collect(), 0.03);
-    let wp = pct(cells.iter().map(|c| c[0].max(c[1]).max(c[2])).collect(), 0.995);
+    let bp = pct(cells.iter().map(|c| luma(*c)).collect(), whites_blacks::POINT_QUANTILES[0]);
+    let wp = pct(cells.iter().map(|c| c[0].max(c[1]).max(c[2])).collect(), whites_blacks::POINT_QUANTILES[1]);
     (linear_to_srgb(bp), linear_to_srgb(wp))
 }
 
@@ -923,24 +945,7 @@ fn detail(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, ps: f32) {
 }
 
 fn vignette(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw) {
-    let amt = p.vignette_amount / 100.0;
-    let mid = p.vignette_midpoint.clamp(0.0, 100.0) / 100.0;
-    let feather = p.vignette_feather.clamp(0.0, 100.0) / 100.0;
-    let round = p.vignette_roundness.clamp(-100.0, 100.0) / 100.0;
-    let hl = p.vignette_highlights.clamp(0.0, 100.0) / 100.0;
-    let style = p.vignette_style.as_str();
-    let (cx, cy) = (w as f32 / 2.0, h as f32 / 2.0);
-    // Roundness: 0 follows the frame's aspect, +1 a circle, −1 a rounded rectangle.
-    let (ax, ay) = if round >= 0.0 {
-        let r = cx.min(cy) + (cx.max(cy) - cx.min(cy)) * (1.0 - round);
-        (if cx >= cy { r } else { cx }, if cy > cx { r } else { cy })
-    } else {
-        (cx, cy)
-    };
-    let pw = 2.0 + (-round).max(0.0) * 6.0;
-    let inner = 1.0 - mid * 0.8;
-    let edge0 = inner - feather * 0.5 * inner;
-    let edge1 = inner + feather * 0.5 * (1.4 - inner) + 0.02;
+    let Vignette { amount: amt, highlights: hl, style, centre: [cx, cy], axes: [ax, ay], power: pw, edges: [edge0, edge1] } = Vignette::new(w, h, p);
     par_rows(px, w, 1, |y, row| {
         for (x, q) in row.iter_mut().enumerate() {
             let (dx, dy) = (((x as f32 + 0.5 - cx) / ax).abs(), ((y as f32 + 0.5 - cy) / ay).abs());
@@ -951,7 +956,7 @@ fn vignette(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw) {
             }
             let l = luma([q[0], q[1], q[2]]).clamp(0.0, 1.0);
             match style {
-                "paintOverlay" => {
+                VignetteStyle::PaintOverlay => {
                     let target = if amt < 0.0 { 0.0 } else { 1.0 };
                     let k = m * amt.abs();
                     for c in 0..3 {
@@ -965,7 +970,7 @@ fn vignette(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw) {
                         let protect = smoothstep(0.6, 1.0, l) * hl;
                         k += (1.0 - k) * protect;
                     }
-                    if style == "colorPriority" {
+                    if style == VignetteStyle::ColorPriority {
                         let nl = l * k;
                         for c in 0..3 {
                             q[c] += nl - l;
