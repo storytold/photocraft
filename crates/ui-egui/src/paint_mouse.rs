@@ -110,8 +110,9 @@ pub fn right_erases(app: &PhotocraftApp, tool: Tool) -> bool {
 
 /// Route the canvas response's buttons: the left one drives the tool; the right one resizes the
 /// brush with Alt held (#297), erases (Erase preference) or opens the Brush Preset picker. Arms
-/// `secondary_erase` or `brush_resize_armed` for this frame's `Down`.
-pub fn canvas_buttons(app: &mut PhotocraftApp, response: &Response, tool: Tool) -> Buttons {
+/// `secondary_erase` or `brush_resize_armed` for this frame's `Down`. `popups` is false on a canvas
+/// whose window can't show the picker (an extra document window, #6022): a right-click opens nothing.
+pub fn canvas_buttons(app: &mut PhotocraftApp, response: &Response, tool: Tool, popups: bool) -> Buttons {
     let physical_right = app.services.right_button_down.as_ref().is_some_and(|f| f());
     let (mods, mut right_down) = response.ctx.input(|i| (i.modifiers, i.pointer.secondary_down()));
     right_down |= physical_right;
@@ -140,6 +141,7 @@ pub fn canvas_buttons(app: &mut PhotocraftApp, response: &Response, tool: Tool) 
     let right_start = erase && right_started;
     let right_click = response.secondary_clicked();
     if right_click
+        && popups
         && !erase
         && !layer_menu
         && right_click_picker(tool)

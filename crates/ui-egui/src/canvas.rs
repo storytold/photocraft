@@ -3456,22 +3456,124 @@ fn hdr_preview(app: &PhotocraftApp, doc: &photocraft_doc::Document) -> Option<[f
     app.session.color.hdr_preview(doc).map(|h| [h.exposure, h.gamma])
 }
 
-/// Draw one canvas view and handle its input. `primary` = main window (tools active).
-pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect: Rect, mut view: View, primary: bool) -> View {
+/// What a canvas does with the pointer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CanvasRole {
+    /// The main window's canvas of the active document: tools, rulers, overlays and pop-up menus.
+    Main,
+    /// An extra window showing the active document (#6022): the tools work in the window's own
+    /// view, so [`extra_windows`] lends it the app slots the tools read the canvas from. The
+    /// pop-up menus, guides dragged out of the rulers and the Type tool's keyboard editing stay
+    /// with the main window.
+    Window,
+    /// Only shows its document: a tile that isn't active, a window of another document.
+    View,
+}
+
+/// Draw one canvas view and handle its input. `primary` = main window (tools active); any other
+/// canvas only shows the document. A window of the active document uses [`canvas_view_as`].
+pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect: Rect, view: View, primary: bool) -> View {
+    canvas_view_as(app, ui, idx, rect, view, if primary { CanvasRole::Main } else { CanvasRole::View })
+}
+
+/// The pass the canvases count their drag claims in: the main window's. A window in a viewport of
+/// its own is drawn inside the main window's pass, and its own counter numbers that viewport's
+/// passes. Passes, not seconds: egui runs none while the pointer is held still, so a pause in a
+/// drag is no sign that its canvas stopped.
+fn drag_pass(ctx: &egui::Context) -> u64 {
+    ctx.cumulative_pass_nr_for(egui::ViewportId::ROOT)
+}
+
+/// Did a canvas that last ran its tools in pass `last_run` miss a pass before `pass`? A canvas
+/// drawn earlier in the pass than the drag's owner sees the claim from the pass before.
+fn missed_a_pass(last_run: u64, pass: u64) -> bool {
+    last_run.saturating_add(1) < pass
+}
+
+/// The canvas that owns the drag in flight and the pass it last ran its tools in.
+fn drag_owner(app: &PhotocraftApp) -> Option<(egui::Id, u64)> {
+    app.drag_canvas.map(|(canvas, last_run, _)| (canvas, last_run))
+}
+
+/// Is the drag in flight another canvas's to carry on? `owner` is [`drag_owner`].
+pub(crate) fn drag_is_foreign(owner: Option<(egui::Id, u64)>, me: egui::Id, pass: u64) -> bool {
+    owner.is_some_and(|(canvas, last_run)| canvas != me && !missed_a_pass(last_run, pass))
+}
+
+/// Did the canvas that owns the drag in flight stop running its tools (its window closed
+/// mid-gesture)? Then the drag is nobody's to carry on: [`end_abandoned_drag`] ends it.
+pub(crate) fn drag_is_abandoned(owner: Option<(egui::Id, u64)>, me: egui::Id, pass: u64) -> bool {
+    owner.is_some_and(|(canvas, last_run)| canvas != me && missed_a_pass(last_run, pass))
+}
+
+/// End an abandoned drag where it last was, as its release would have: what it drew is kept, and
+/// no other canvas feeds it moves mapped through its own view. If another document has come
+/// forward since, that release would land in it, so the drag is dropped uncommitted instead, as
+/// `lasso_ui::cancel_stale` drops a lasso.
+fn end_abandoned_drag(app: &mut PhotocraftApp) {
+    let started_on = app.drag_canvas.take().map(|(_, _, doc)| doc);
+    app.press_stroke = false;
+    if started_on.is_some_and(|doc| app.session.active().map(|st| st.doc.id) != Some(doc)) {
+        app.drag = None;
+        app.live_stroke = None;
+        app.move_preview = None;
+        // An ⌥-drag's copy stays a step of its own document: `move_mods::abandon` would undo in
+        // this one.
+        app.move_mods = Default::default();
+        return;
+    }
+    let Some((p, mods)) = app.drag.as_ref().map(|d| (d.points.last().map_or(d.start, |q| [q[0], q[1]]), d.live)) else { return };
+    tool_event(app, ToolEvent::Up { x: p[0], y: p[1] }, mods);
+}
+
+/// [`canvas_view`] for a [`CanvasRole`].
+pub(crate) fn canvas_view_as(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect: Rect, mut view: View, role: CanvasRole) -> View {
     let ctx = ui.ctx().clone();
+    let primary = role == CanvasRole::Main;
+    // Tools work here. A window's stop while a dialog is open: the dialog is in the main window,
+    // and that is where the canvas goes inert under it (`under_dialog`).
+    let tools = match role {
+        CanvasRole::Main => true,
+        CanvasRole::Window => app.ui.dialogs.is_empty(),
+        CanvasRole::View => false,
+    };
+    // The main window draws the pop-up menus and pickers, and typing goes to its keyboard focus.
+    // So only its canvas opens them or starts editing type.
+    let popups = primary;
+    // Ids that belong to this canvas alone. The main canvas and a window of the same document are
+    // drawn in the same frame and share egui's temporary data (and, where windows are embedded, as
+    // on the web, its widget ids).
+    let canvas_id = ui.id().with(("pc-canvas", idx));
+    // A drag belongs to the canvas it started in (`PhotocraftApp::drag_canvas`), which keeps its
+    // claim fresh while it runs tools. One whose canvas stopped ends here, before a canvas that
+    // runs tools could take it over.
+    let pass = drag_pass(&ctx);
+    if app.drag.is_none() {
+        app.drag_canvas = None;
+    }
+    if tools
+        && let Some((c, _, doc)) = app.drag_canvas
+        && c == canvas_id
+    {
+        app.drag_canvas = Some((canvas_id, pass, doc));
+    }
+    if tools && app.drag.is_some() && drag_is_abandoned(drag_owner(app), canvas_id, pass) {
+        end_abandoned_drag(app);
+    }
+    let foreign_drag = app.drag.is_some() && drag_is_foreign(drag_owner(app), canvas_id, pass);
     // The camera as the app holds it before this frame's input. The canvas works on its own copy
     // (`view`) and writes it back at the end; a tool that moves the camera itself meanwhile (the
     // Crop tool's default mode pans and turns the view with the image, `crop_mode`) must not be
     // undone by that write-back.
-    let camera = if primary { app.ui.views.get(idx).map(|v| (v.center, v.rotation)) } else { None };
+    let camera = if tools { app.ui.views.get(idx).map(|v| (v.center, v.rotation)) } else { None };
     // `View::zoom` is device pixels per document pixel; this canvas's geometry is in its own
     // viewport's egui points. A document window can sit on another display with a different
-    // scale, so only the primary canvas records `app.ppp` for the frame's shared helpers
+    // scale, so only a canvas that runs tools records `app.ppp` for the frame's shared helpers
     // (`point_zoom`, the navigator, control-channel coordinate mapping). `pixels_per_point`
     // folds in the display scale and Interface › UI Scale alike, so dividing by it keeps 100%
     // one document pixel per physical display pixel at any UI scale (#2121).
     let ppp = ctx.pixels_per_point();
-    if primary {
+    if tools {
         app.ppp = ppp;
     }
     // The display this window is on: its monitor profile (#569). A document window on a display
@@ -3559,7 +3661,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     let border = app.session.prefs().interface.canvas_border;
     // Default-mode Crop changes its camera during input. Defer its image until the new camera
     // is known; other tools keep their existing paint order and texture/outline snapshots.
-    let crop_camera = primary && crate::crop_mode::moves_image(app);
+    let crop_camera = tools && crate::crop_mode::moves_image(app);
     let paint_canvas = |app: &mut PhotocraftApp, ui: &egui::Ui, view: &View, xf: ViewXform| {
         let point_zoom = view.zoom / ppp;
         let drop_shadow = border == photocraft_engine::prefs::CanvasBorder::DropShadow;
@@ -3717,7 +3819,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                     }
                 }
             }
-            if primary {
+            if tools {
                 crate::artboard_ui::draw_frames(app, &painter, &xf);
             }
         }
@@ -3841,7 +3943,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     }
     // Navigation (wheel_nav.rs): scroll pans (⇧ or ⌘/Ctrl sideways); pinch and ⌥-scroll zoom around the pointer.
     // The wheel also scrolls over the scrollbars drawn on top of the canvas (last frame's hover).
-    let bars_id = egui::Id::new(("pc-canvas-bars-hover", idx));
+    let bars_id = canvas_id.with("bars-hover");
     let over_bars = ctx.data(|d| d.get_temp::<bool>(bars_id)).unwrap_or(false);
     let nav_hovered = response.hovered() || free_hover || over_bars;
     // Interface › Enable Animations off: the wheel moves the canvas without a glide (#5721).
@@ -4057,11 +4159,11 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             crate::color_range_ui::canvas_eyedropper(app, &ctx, p, press);
         }
     }
-    // The selected Hand yields to an open Free Transform box in this (primary) window: the box
+    // The selected Hand yields to an open Free Transform box in a canvas that runs tools: the box
     // owns the pointer, so the tool behind it cannot steal the resize drag (#2302). The held Hand
-    // (Space) and a middle-button drag still pan, and a secondary window's Hand never stops, as the
-    // box is only drawn and driven on the primary canvas.
-    let transform_owns_pointer = primary && app.ui.transform.is_some() && temporary.is_none() && !middle;
+    // (Space) and a middle-button drag still pan, and a canvas that only shows the document never
+    // stops its Hand, as the box is neither drawn nor driven there.
+    let transform_owns_pointer = tools && app.ui.transform.is_some() && temporary.is_none() && !middle;
     let hand_pan = tool == Tool::Hand && !transform_owns_pointer;
     // Preferences › Tools › Enable Flick Panning: a Hand drag let go while moving glides on.
     let flick_id = egui::Id::new(("pc-flick-pan", idx, primary, ctx.viewport_id()));
@@ -4085,7 +4187,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         view.center[1] -= d.y;
         // The tool cursors below are skipped while panning: the fist is set here (#2196).
         ctx.set_cursor_icon(crate::tool_cursor::hand(&ctx, true));
-    } else if primary && !stroke_dismissal && temporary.is_none() && !middle && crate::layer_picker::armed(app).is_some() {
+    } else if tools && !stroke_dismissal && temporary.is_none() && !middle && crate::layer_picker::armed(app).is_some() {
         // A Properties Levels/Curves eyedropper (layer_picker.rs) owns the image until Esc or another
         // tool; Space and the middle button still pan. It samples on the press.
         if response.hovered()
@@ -4104,14 +4206,15 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             let d = xf.to_doc(p);
             crate::layer_picker::sample_at(app, d[0], d[1]);
         }
-    } else if primary && !stroke_dismissal {
+    } else if tools && !foreign_drag && !stroke_dismissal && (popups || !tool.is_type()) {
+        let had_drag = app.drag.is_some();
         let mods = ui.input(|i| i.modifiers);
         // An ⌥-click the window manager took never arrives; say so (alt_grab.rs).
-        crate::alt_grab::watch(app, &ctx, egui::Id::new(("pc-alt-grab", idx)), rect, tool, !under_dialog);
+        crate::alt_grab::watch(app, &ctx, canvas_id.with("alt-grab"), rect, tool, !under_dialog);
         // Tools follow the left button; the right one opens the Brush Preset picker or erases
         // (Preferences › Tools, `paint_mouse`).
         crate::paint_mouse::sync_tool_brush(app);
-        let mut buttons = crate::paint_mouse::canvas_buttons(app, &response, tool);
+        let mut buttons = crate::paint_mouse::canvas_buttons(app, &response, tool, popups);
         // The Crop tool's frame is edited from the press (before egui's drag threshold), so the
         // pixels past the canvas show at once, as in Photoshop.
         if tool == Tool::Crop && response.is_pointer_button_down_on() && ui.input(|i| i.pointer.primary_down()) && crate::crop_ui::press(app) {
@@ -4121,7 +4224,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         // Type transforms keep Command; selections keep Add/Subtract if Shift/Alt is released.
         let capture_press = tool.is_type()
             || matches!(tool, Tool::RectMarquee | Tool::EllipseMarquee | Tool::SingleRowMarquee | Tool::SingleColumnMarquee | Tool::ObjectSelection);
-        let tool_press = egui::Id::new(("tool-pointer-press-modifiers", idx));
+        let tool_press = canvas_id.with("tool-pointer-press-modifiers");
         if capture_press
             && let Some((p, press_mods)) = ui.input(|i| {
                 i.events.iter().find_map(|e| match e {
@@ -4142,7 +4245,8 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         // Right-click while transforming: switch the box's mode (Free Transform, Scale, Rotate,
         // Skew, Distort, Perspective, Warp), or rotate or flip the box.
         let transforming = app.ui.transform.as_ref().is_some_and(|t| t.warp.is_none());
-        if response.secondary_clicked()
+        let popup_click = popups && response.secondary_clicked();
+        if popup_click
             && transforming
             && let Some(p) = response.interact_pointer_pos()
         {
@@ -4163,12 +4267,12 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         }
         // Right-click on a guide where it could be dragged (the Move tool, or ⌘ with a selection
         // tool): select it and open the guide menu, as Photoshop does.
-        let guide_menu = response.secondary_clicked()
+        let guide_menu = popup_click
             && !lasso_retracted
             && !transforming
             && response.interact_pointer_pos().is_some_and(|p| crate::canvas_tool_menu::open_guide(app, &ctx, tool, mods, [p.x, p.y], xf.to_doc(p)));
         // Right-click with the Move tool, or ⌘/Ctrl+right-click: the layers under the pointer.
-        if response.secondary_clicked()
+        if popup_click
             && !lasso_retracted
             && !transforming
             && !guide_menu
@@ -4182,7 +4286,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                 crate::canvas_tool_menu::open_pasteboard(app, &ctx, tool, [p.x, p.y]);
             }
         }
-        if response.secondary_clicked()
+        if popup_click
             && !lasso_retracted
             && !transforming
             && !guide_menu
@@ -4431,7 +4535,8 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         // Move tool: a double-click on type edits it, as in Photoshop (#1132). Only the selected
         // Move tool, not ⌘ held over another tool; an open transform box keeps its double-click
         // (commit, below).
-        if tool == Tool::Move
+        if popups
+            && tool == Tool::Move
             && app.ui.tool == Tool::Move
             && app.ui.transform.is_none()
             && response.double_clicked()
@@ -4469,6 +4574,10 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                 crate::type_tool::multi_click(app, n, d[0], d[1]);
             }
         }
+        // The canvas that starts a drag owns it, and keeps the claim fresh while it carries on.
+        if app.drag.is_some() && (!had_drag || drag_owner(app).is_some_and(|(c, _)| c == canvas_id)) {
+            app.drag_canvas = Some((canvas_id, pass, doc.id));
+        }
     }
     if crop_camera && let (Some((center, rotation)), Some(now)) = (camera, app.ui.views.get(idx)) {
         if now.center != center {
@@ -4494,7 +4603,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     // Photoshop: the Pen path being drawn, paths, guides, grid, transform box (#6592). Only the
     // tool cursors below give way to the fist.
     let panning = hand_pan && response.dragged();
-    if primary {
+    if tools {
         // The transform preview is image content: it goes under the grid and guides, which
         // stay visible across a layer being transformed (#5086); the box is drawn later.
         crate::transform_tool::draw_content(app, &painter, &xf);
@@ -4520,16 +4629,18 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         draw_transform_controls(app, &painter, &xf);
         crate::move_hover::draw(app, &painter, &xf, idx, response.hover_pos());
         crate::object_finder::draw(app, &painter, &xf, idx, response.hover_pos());
-        crate::layer_pick_ui::show(app, &ctx);
-        let shown = app.ui.views.get(idx).cloned();
-        crate::canvas_tool_menu::show(app, &ctx);
-        // A view menu row (Zoom In, Fit on Screen…) changed the camera: it wins over this
-        // frame's copy, which is written back at the end.
-        if let Some(now) = app.ui.views.get(idx)
-            && Some(now) != shown.as_ref()
-        {
-            view = now.clone();
-            ctx.request_repaint();
+        if popups {
+            crate::layer_pick_ui::show(app, &ctx);
+            let shown = app.ui.views.get(idx).cloned();
+            crate::canvas_tool_menu::show(app, &ctx);
+            // A view menu row (Zoom In, Fit on Screen…) changed the camera: it wins over this
+            // frame's copy, which is written back at the end.
+            if let Some(now) = app.ui.views.get(idx)
+                && Some(now) != shown.as_ref()
+            {
+                view = now.clone();
+                ctx.request_repaint();
+            }
         }
         crate::snap_ui::draw(app, &painter, &xf);
         crate::move_distance::draw(app, &painter, &xf, idx, response.hover_pos());
@@ -4817,8 +4928,9 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     }
     // A tool drag held past the canvas edge scrolls the view toward the pointer (#4183); the
     // drag's next move then extends into what scrolled in.
-    if primary
+    if tools
         && app.drag.is_some()
+        && !foreign_drag
         && tool != Tool::Hand
         && !middle
         && let Some(p) = ui.input(|i| i.pointer.primary_down().then(|| i.pointer.latest_pos()).flatten())
@@ -4831,14 +4943,16 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     // Scrollbars (scrollbars.rs): drawn over the canvas edges, they take the pointer there.
     let t0 = crate::gpu_canvas::now_ms();
     let before = view.center;
-    let over_bars = app.ui.view.shows_scrollbars()
-        && crate::scrollbars::show(ui, rect, &mut view, flip, aspect, app.session.prefs().tools.overscroll, egui::Id::new(("pc-canvas", idx)));
+    let over_bars =
+        app.ui.view.shows_scrollbars() && crate::scrollbars::show(ui, rect, &mut view, flip, aspect, app.session.prefs().tools.overscroll, canvas_id);
     ctx.data_mut(|d| d.insert_temp(bars_id, over_bars));
     if view.center != before {
         ctx.request_repaint();
     }
     if primary {
         app.perf.span("scrollbars", crate::gpu_canvas::now_ms() - t0);
+    }
+    if tools {
         app.hover_doc = response.hover_pos().map(|p| xf.to_doc(p));
     }
     if primary && app.ui.extras.rulers {
@@ -4857,7 +4971,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         crate::rulers::draw_guide_drag_readout(app, &ctx);
     }
     crate::rotate_view::overlay(app, &ctx, &painter, &xf, &mut view, &response);
-    if primary {
+    if tools {
         // Tool input can change the stored camera while navigation edits the local view.
         // Merge changed camera values so write-back preserves tool-driven pan and rotation.
         if let (Some((center, rotation)), Some(now)) = (camera, app.ui.views.get(idx)) {
@@ -6619,6 +6733,71 @@ pub(crate) fn finish_gesture(app: &mut PhotocraftApp, d: Drag) {
     }
 }
 
+/// Where window `id`'s canvas was laid out in its own viewport's points, rulers included, as of
+/// the last frame (what the tests aim their pointer at).
+#[cfg(test)]
+pub(crate) fn window_canvas_rect(ctx: &egui::Context, id: u64) -> Option<Rect> {
+    ctx.data(|d| d.get_temp(window_canvas_id(id)))
+}
+
+/// The temporary-data key [`extra_windows`] stores window `id`'s canvas rectangle under.
+fn window_canvas_id(id: u64) -> egui::Id {
+    egui::Id::new(("docwin-canvas", id))
+}
+
+/// One document window's canvas (#6022). In a window of the active document the tools work, in
+/// the window's own view. A press in a window of another document brings that document forward
+/// first, as a click on a tile does in a tiled layout, and goes on to use the tool there. While a
+/// dialog is open or a drag is in flight the press changes nothing: the dialog stays with the
+/// document it was opened on, and the drag with the one it started on.
+fn window_canvas(app: &mut PhotocraftApp, ui: &mut egui::Ui, doc: usize, rect: Rect, view: View) -> View {
+    let pressed = ui.input(|i| i.pointer.any_pressed() && i.pointer.interact_pos().is_some_and(|p| rect.contains(p)));
+    if pressed && app.drag.is_none() && app.ui.dialogs.is_empty() && app.session.active_index() != Some(doc) {
+        app.session.set_active(doc);
+    }
+    if app.session.active_index() != Some(doc) {
+        return canvas_view_as(app, ui, doc, rect, view, CanvasRole::View);
+    }
+    let Some(main) = MainCanvas::lend(app, doc, &view, rect) else {
+        return canvas_view_as(app, ui, doc, rect, view, CanvasRole::View);
+    };
+    let view = canvas_view_as(app, ui, doc, rect, view, CanvasRole::Window);
+    main.restore(app, doc);
+    view
+}
+
+/// The app slots the tools read "the canvas" from: the active document's view, the display scale,
+/// the canvas rectangle (`ViewXform::active`, `point_zoom`, drag and drop) and where the pointer
+/// is in the document. They hold the main window's. While a window's tools run they hold the
+/// window's instead, and the main window's come back afterwards. View › Rulers stays as it is:
+/// the window has rulers too (#6017), so its canvas is inset by them like the main one.
+struct MainCanvas {
+    view: View,
+    ppp: f32,
+    rect: Rect,
+    hover: Option<[f64; 2]>,
+}
+
+impl MainCanvas {
+    /// Put `view` (a window's, drawn in `rect`) in the main canvas's slots; `None` when the
+    /// document has no view (nothing is changed).
+    fn lend(app: &mut PhotocraftApp, doc: usize, view: &View, rect: Rect) -> Option<Self> {
+        let main_view = std::mem::replace(app.ui.views.get_mut(doc)?, view.clone());
+        Some(Self { view: main_view, ppp: app.ppp, rect: std::mem::replace(&mut app.last_canvas_rect, rect), hover: app.hover_doc })
+    }
+
+    /// Give the main window its slots back once the window's tools have run.
+    fn restore(self, app: &mut PhotocraftApp, doc: usize) {
+        if let Some(slot) = app.ui.views.get_mut(doc) {
+            *slot = self.view;
+        }
+        app.ppp = self.ppp;
+        app.last_canvas_rect = self.rect;
+        // One pointer: the window's position when it is over the window, else the main canvas's.
+        app.hover_doc = app.hover_doc.or(self.hover);
+    }
+}
+
 /// Extra OS windows showing documents (multi-window / multi-monitor).
 pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let wins = app.ui.windows.clone();
@@ -6638,7 +6817,8 @@ pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
             }
             egui::CentralPanel::default().frame(egui::Frame::NONE.fill(crate::theme::Tokens::get(ui.ctx()).canvas)).show(ui, |ui| {
                 let rect = ui.available_rect_before_wrap();
-                view = canvas_view(app, ui, w.document, rect, view.clone(), false);
+                ui.ctx().data_mut(|d| d.insert_temp(window_canvas_id(w.id), rect));
+                view = window_canvas(app, ui, w.document, rect, view.clone());
                 // Preferences › Zoom Resizes Windows: a zoom wraps the window around the image.
                 crate::zoom_window_fit::follow(app, ui.ctx(), class, vid, &w, &mut view, rect);
             });
