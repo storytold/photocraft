@@ -18,3 +18,4 @@ rayon = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
+stats_alloc = "0.1.10"
