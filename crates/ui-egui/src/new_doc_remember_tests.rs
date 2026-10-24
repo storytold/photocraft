@@ -100,3 +100,53 @@ fn created_documents_fill_the_recent_category() {
         (&json!(640), &json!(480), &json!("cmyk"), &json!(16), &json!("transparent"), &json!("Next"), &json!("in"))
     );
 }
+
+/// #5410: File › New suggests "Untitled-N" choosing the first unused index among open documents:
+/// - Creating 1 then 2, closing 2 -> first unused is 2.
+/// - Creating 1 then 2, closing 1 (keeping 2 open) -> first unused is 1.
+#[test]
+fn new_document_increments_default_name_while_untitled_documents_exist() {
+    let mut app = app();
+    assert_eq!(app.new_document_fields()["name"], "Untitled-1");
+
+    // Creating Untitled-1 increments the next suggested name to Untitled-2.
+    create(&mut app, json!({}));
+    assert_eq!(app.session.documents()[0].doc.name, "Untitled-1");
+    assert_eq!(app.new_document_fields()["name"], "Untitled-2");
+
+    // Creating Untitled-2 increments the next suggested name to Untitled-3.
+    create(&mut app, json!({}));
+    assert_eq!(app.session.documents()[1].doc.name, "Untitled-2");
+    assert_eq!(app.new_document_fields()["name"], "Untitled-3");
+
+    // Scenario 1: 1 and 2 open. Close 2 -> open is [1] -> first unused is 2.
+    app.session.close(1).unwrap();
+    assert_eq!(app.session.documents().len(), 1);
+    assert_eq!(app.session.documents()[0].doc.name, "Untitled-1");
+    assert_eq!(app.new_document_fields()["name"], "Untitled-2");
+
+    // Re-create 2.
+    create(&mut app, json!({}));
+    assert_eq!(app.session.documents()[1].doc.name, "Untitled-2");
+
+    // Scenario 2: 1 and 2 open. Close 1 (2 remains open) -> first unused is 1.
+    app.session.close(0).unwrap();
+    assert_eq!(app.session.documents().len(), 1);
+    assert_eq!(app.session.documents()[0].doc.name, "Untitled-2");
+    assert_eq!(app.new_document_fields()["name"], "Untitled-1");
+
+    // If an untitled document has been saved (e.g. Untitled-1.psd), its stem is counted.
+    app.session.set_active(0);
+    std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).name = "Untitled-1.psd".into();
+    // Now Untitled-1.psd is open -> first unused is 2.
+    assert_eq!(app.new_document_fields()["name"], "Untitled-2");
+
+    // An open document with a large number (e.g. Untitled-4294967295) must not overflow or panic.
+    std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).name = "Untitled-4294967295".into();
+    assert_eq!(app.new_document_fields()["name"], "Untitled-1");
+
+    // Closing all documents resets back to Untitled-1.
+    app.session.close(0).unwrap();
+    assert!(app.session.documents().is_empty());
+    assert_eq!(app.new_document_fields()["name"], "Untitled-1");
+}

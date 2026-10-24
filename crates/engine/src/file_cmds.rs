@@ -213,10 +213,22 @@ pub fn untitled_name(base: &str, taken: impl Fn(&str) -> bool) -> String {
     (1..).map(|i| format!("{base}-{i}")).find(|n| !taken(n)).unwrap_or_default()
 }
 
+/// Whether an open document's name matches an untitled candidate, accounting for file extensions
+/// (e.g. `Untitled-1.psd`) and legacy unnumbered `Untitled`.
+pub fn is_taken_untitled(candidate: &str, open_name: &str) -> bool {
+    let stem = open_name.rsplit_once('.').map_or(open_name, |(s, _)| s);
+    stem == candidate || (candidate == "Untitled-1" && stem == "Untitled")
+}
+
+/// The default name for a new untitled document: the first "Untitled-N" no open document has.
+pub fn untitled_document_name(s: &Session) -> String {
+    untitled_name("Untitled", |n| s.documents().iter().any(|d| is_taken_untitled(n, &d.doc.name)))
+}
+
 /// The name a document opened from `path` gets when `path` is a template: the first "Untitled-N"
 /// no open document has.
 pub fn template_name(s: &Session, path: &str) -> Option<String> {
-    is_template(path).then(|| untitled_name("Untitled", |n| s.documents().iter().any(|d| d.doc.name == n)))
+    is_template(path).then(|| untitled_document_name(s))
 }
 
 pub(crate) fn stem(path: &str) -> String {

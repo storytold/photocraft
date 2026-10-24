@@ -691,7 +691,7 @@ fn split_and_merge_channels() {
     assert_eq!(r["documents"].as_array().unwrap().len(), 4);
     assert_eq!(s.documents().len(), 4, "original closed");
     let names: Vec<_> = s.documents().iter().map(|d| d.doc.name.clone()).collect();
-    assert_eq!(names, ["Untitled_R", "Untitled_G", "Untitled_B", "Untitled_A"]);
+    assert_eq!(names, ["Untitled-1_R", "Untitled-1_G", "Untitled-1_B", "Untitled-1_A"]);
     let v = |s: &Session, i: usize| s.documents()[i].doc.layers[0].surface().unwrap().pixel(1, 1)[0];
     assert_eq!(v(&s, 0), 1.0);
     assert!((v(&s, 1) - 128.0 / 255.0).abs() < 0.003);

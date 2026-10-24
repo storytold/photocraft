@@ -7668,7 +7668,7 @@ mod tests {
             h.ctx.set_os(os);
             h.state_mut().1 = true;
             h.run_steps(2);
-            let tab = h.get_by_label_contains("Untitled @").rect();
+            let tab = h.get_by_label_contains("Untitled-1 @").rect();
             let x = h.get_by_label("Close").rect();
             assert!(tab.contains_rect(x), "{os:?}: the × is inside its tab");
             assert_eq!(x.center().x > tab.center().x, after_title, "{os:?}: × at {x:?} in tab {tab:?}");
@@ -7777,12 +7777,12 @@ mod tests {
         PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Pro);
         h.state_mut().1 = true;
         h.run_steps(2);
-        let normal_h = h.get_by_label_contains("Untitled @").rect().height();
+        let normal_h = h.get_by_label_contains("Untitled-1 @").rect().height();
         assert_eq!(normal_h, 26.0);
 
         h.state_mut().0.session.execute("prefs.set", json!({"values": {"workspace.largeTabs": true}})).unwrap();
         h.run_steps(2);
-        let large_h = h.get_by_label_contains("Untitled @").rect().height();
+        let large_h = h.get_by_label_contains("Untitled-1 @").rect().height();
         assert_eq!(large_h, 34.0);
     }
 

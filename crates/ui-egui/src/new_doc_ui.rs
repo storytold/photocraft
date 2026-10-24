@@ -263,6 +263,19 @@ pub fn command_params(f: &Map<String, Value>) -> Value {
     Value::Object(f.iter().filter(|(k, _)| !k.starts_with("__")).map(|(k, v)| (k.clone(), v.clone())).collect())
 }
 
+/// Localize an untitled document name ("Untitled-1", "Untitled-2", ...) for display in the New Document dialog.
+pub(crate) fn translate_untitled_name(raw: &str) -> String {
+    if raw == "Untitled-1" {
+        tl!("Untitled-1").to_string()
+    } else if let Some(suffix) = raw.strip_prefix("Untitled-").filter(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit())) {
+        format!("{}-{suffix}", tl!("Untitled"))
+    } else if raw == "Untitled" {
+        tl!("Untitled").to_string()
+    } else {
+        raw.to_string()
+    }
+}
+
 /// Set the resolution (pixels/inch) the way Photoshop's New Document does (#758): with Width/Height
 /// in a physical unit the physical size is kept and the pixel count changes; in pixels the pixels
 /// are kept.
@@ -646,7 +659,7 @@ pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
             ui.add_space(4.0);
             // Keep the canonical English default in state; only the TextEdit shows a translation.
             let raw = get_s(f, "name", "Untitled-1");
-            let mut name = if raw == "Untitled-1" { tl!("Untitled-1").to_string() } else { raw };
+            let mut name = translate_untitled_name(&raw);
             let r = ui.add(egui::TextEdit::singleline(&mut name).desired_width(250.0).font(egui::FontId::proportional(15.0)));
             if r.changed() {
                 f.insert("name".into(), json!(name));
@@ -887,6 +900,15 @@ mod tests {
         assert_eq!(from_unit(7.0, "in", 300.0), 2100.0);
         assert_eq!(from_unit(2.54, "cm", 300.0), 300.0);
         assert_eq!(to_unit(640.0, "px", 72.0), 640.0);
+    }
+
+    #[test]
+    fn untitled_names_translate() {
+        assert_eq!(translate_untitled_name("Untitled-1"), tl!("Untitled-1"));
+        assert_eq!(translate_untitled_name("Untitled-2"), format!("{}-2", tl!("Untitled")));
+        assert_eq!(translate_untitled_name("Untitled-10"), format!("{}-10", tl!("Untitled")));
+        assert_eq!(translate_untitled_name("Untitled"), tl!("Untitled"));
+        assert_eq!(translate_untitled_name("Custom Name"), "Custom Name");
     }
 
     /// #1147: 5 mm at 72 ppi is 14 px, which is 4.94 mm. The field must keep showing the typed 5.

@@ -3143,6 +3143,18 @@ impl PhotocraftApp {
     /// request, so the OS clipboard is read here, as for a paste.
     pub(crate) fn new_document_fields(&mut self) -> serde_json::Map<String, serde_json::Value> {
         let mut f = crate::state::UiState::new_document_fields();
+        let default_name = photocraft_engine::file_cmds::untitled_name("Untitled", |candidate| {
+            self.session.documents().iter().any(|d| photocraft_engine::file_cmds::is_taken_untitled(candidate, &d.doc.name))
+                || self.jobs.opens.iter().any(|o| photocraft_engine::file_cmds::is_taken_untitled(candidate, &o.name))
+                || self.ui.dialogs.iter().any(|d| {
+                    d.kind == crate::state::DialogKind::NewDocument
+                        && d.fields
+                            .get("name")
+                            .and_then(serde_json::Value::as_str)
+                            .is_some_and(|name| photocraft_engine::file_cmds::is_taken_untitled(candidate, name))
+                })
+        });
+        f.insert("name".into(), serde_json::Value::String(default_name));
         if let Some(serde_json::Value::Object(saved)) = self.session.prefs().dialogs.get(NEW_DOCUMENT) {
             for k in NEW_DOCUMENT_REMEMBERED {
                 if let Some(v) = saved.get(k).filter(|v| remembered_new_document_value(k, v)) {
