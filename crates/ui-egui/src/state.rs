@@ -1433,6 +1433,9 @@ pub struct UiState {
     /// its screen position (points).
     #[serde(default)]
     pub brush_picker: Option<[f32; 2]>,
+    /// Brush Mode menu opened by Shift+right-click: screen position in points.
+    #[serde(default)]
+    pub brush_mode_menu: Option<[f32; 2]>,
     /// The Brush Preset picker's preset list: search, collapsed groups, view, a rename in progress.
     #[serde(default = "crate::brush_picker::list_state")]
     pub brush_picker_list: crate::brush_panel::BrushesPanelState,
@@ -1643,6 +1646,7 @@ impl Default for UiState {
             vector_mask_target: false,
             properties_layer: None,
             brush_picker: None,
+            brush_mode_menu: None,
             brush_picker_list: crate::brush_picker::list_state(),
             brush_picker_size: None,
             layer_menu: None,

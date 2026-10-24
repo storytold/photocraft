@@ -112,6 +112,10 @@ pub fn right_erases(app: &PhotocraftApp, tool: Tool) -> bool {
 /// brush with Alt held (#297), erases (Erase preference) or opens the Brush Preset picker. Arms
 /// `secondary_erase` or `brush_resize_armed` for this frame's `Down`.
 pub fn canvas_buttons(app: &mut PhotocraftApp, response: &Response, tool: Tool) -> Buttons {
+    if crate::brush_mode_menu::blocks_canvas(app, &response.ctx) {
+        app.secondary_erase = false;
+        return Buttons::default();
+    }
     let physical_right = app.services.right_button_down.as_ref().is_some_and(|f| f());
     let (mods, mut right_down) = response.ctx.input(|i| (i.modifiers, i.pointer.secondary_down()));
     right_down |= physical_right;
@@ -135,6 +139,22 @@ pub fn canvas_buttons(app: &mut PhotocraftApp, response: &Response, tool: Tool) 
     app.brush_resize_armed = resize_start || (physical_right && resizing);
     // ⌘/Ctrl+right-click lists the layers under the pointer instead (layer_pick_ui.rs, #307).
     let layer_menu = crate::layer_pick_ui::is_gesture(tool, mods);
+    // Decided by the modifiers held when the button went down, not by those of the release frame that reports the click.
+    let mode_menu = crate::brush_mode_menu::is_gesture(tool, crate::workspace_ui::sticky_mods(app, crate::brush_mode_menu::gesture_mods(&response.ctx, mods)));
+    if mode_menu && !resizing && app.drag.is_none() {
+        app.secondary_erase = false;
+        if response.secondary_clicked()
+            && let Some(p) = response.interact_pointer_pos()
+        {
+            crate::brush_mode_menu::open(app, &response.ctx, [p.x, p.y]);
+        }
+        return Buttons {
+            started: response.drag_started_by(PointerButton::Primary),
+            dragged: response.dragged_by(PointerButton::Primary),
+            stopped: response.drag_stopped_by(PointerButton::Primary),
+            clicked: response.clicked(),
+        };
+    }
     let erase = right_erases(app, tool) && !resize_start && !resizing && !layer_menu;
     let right_stroke = erase && app.drag.is_some();
     let right_start = erase && right_started;
@@ -167,6 +187,13 @@ pub fn pointer_secondary(app: &mut PhotocraftApp, ctx: &egui::Context, down: boo
     if crate::brush_resize::applies(tool) && (crate::brush_resize::is_right_gesture(mods) || app.brush_resize.is_some_and(|r| r.secondary)) {
         app.brush_resize_armed = down && app.drag.is_none();
         return true;
+    }
+    if crate::brush_mode_menu::is_gesture(tool, mods) && app.drag.is_none() && app.brush_resize.is_none() {
+        app.secondary_erase = false;
+        if down {
+            crate::brush_mode_menu::open(app, ctx, at);
+        }
+        return false;
     }
     if right_erases(app, tool) {
         app.secondary_erase = down;
@@ -300,6 +327,179 @@ mod tests {
 
     fn strokes(h: &Harness<'static, PhotocraftApp>) -> Vec<serde_json::Value> {
         h.state().session.journal.iter().filter(|(id, _)| id == "paint.stroke").map(|(_, p)| p.clone()).collect()
+    }
+
+    fn mode_right_click(h: &mut Harness<'static, PhotocraftApp>, mods: Modifiers) {
+        let p = h.state().last_canvas_rect.center();
+        h.event(egui::Event::ModifiersChanged(mods));
+        h.event(egui::Event::PointerMoved(p));
+        h.run_steps(1);
+        h.event(egui::Event::PointerButton { pos: p, button: PointerButton::Secondary, pressed: true, modifiers: mods });
+        h.run_steps(1);
+        h.event(egui::Event::PointerButton { pos: p, button: PointerButton::Secondary, pressed: false, modifiers: mods });
+        h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+        h.run_steps(2);
+    }
+
+    #[test]
+    fn shift_right_mode_picker_selects_journals_and_clear_erases() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = harness(Some("erase"));
+        let history = h.state().session.active().unwrap().history.past_len();
+        let journal = h.state().session.journal.len();
+        mode_right_click(&mut h, Modifiers::SHIFT);
+        assert!(h.state().ui.brush_mode_menu.is_some());
+        assert!(h.state().ui.brush_picker.is_none() && h.state().drag.is_none());
+        assert_eq!(h.state().session.journal.len(), journal);
+        assert_eq!(h.state().session.active().unwrap().history.past_len(), history);
+        h.get_by_label("Multiply").click();
+        h.run_steps(2);
+        assert!(h.state().ui.brush_mode_menu.is_none());
+        assert_eq!(h.state().session.tools.brush.mode, photocraft_doc::BlendMode::Multiply);
+        assert_eq!(h.state().session.journal.last().unwrap(), &("tools.setBrush".into(), json!({"brush": {"mode": "Multiply"}})));
+        let (a, b) = drag(&mut h, PointerButton::Primary);
+        let mid = a + (b - a) * 0.5;
+        assert!(alpha_at(&h, mid) > 0.9);
+        mode_right_click(&mut h, Modifiers::SHIFT);
+        h.get_by_label("Clear").click();
+        h.run_steps(2);
+        assert!(h.state().ui.tool_options.brush_clear);
+        assert_eq!(h.state().session.tools.brush.mode, photocraft_doc::BlendMode::Multiply, "Clear keeps the underlying mode, as the options bar does");
+        drag(&mut h, PointerButton::Primary);
+        assert_eq!(alpha_at(&h, mid), 0.0);
+        assert!(strokes(&h).last().unwrap()["erase"].as_bool().unwrap());
+    }
+
+    #[test]
+    fn mode_picker_outside_dismissal_does_not_paint_or_erase() {
+        for button in [PointerButton::Primary, PointerButton::Secondary] {
+            let mut h = harness(Some("erase"));
+            drag(&mut h, PointerButton::Primary);
+            let journal = h.state().session.journal.len();
+            let history = h.state().session.active().unwrap().history.past_len();
+            mode_right_click(&mut h, Modifiers::SHIFT);
+            // A full outside drag must only dismiss, including its release click.
+            drag(&mut h, button);
+            assert!(h.state().ui.brush_mode_menu.is_none());
+            assert_eq!(h.state().session.journal.len(), journal, "dismissal must not paint/erase with {button:?}");
+            assert_eq!(h.state().session.active().unwrap().history.past_len(), history);
+        }
+    }
+
+    #[test]
+    fn mode_control_can_pick_a_row_with_ui_click() {
+        use crate::control::{ControlRequest, Outcome, handle};
+        use egui_kittest::kittest::Queryable;
+        let mut h = harness(Some("erase"));
+        let ctx = h.ctx.clone();
+        let before = h.state().session.journal.len();
+        let (req, _) = ControlRequest::new(
+            "ui.pointer",
+            json!({"button": "right", "shift": true,
+            "events": [{"kind": "down", "x": 200, "y": 150}, {"kind": "up", "x": 200, "y": 150}]}),
+        );
+        assert!(matches!(handle(h.state_mut(), &ctx, &req), Outcome::Done(_)));
+        h.run_steps(2);
+        assert!(h.state().ui.brush_mode_menu.is_some());
+        assert_eq!(h.state().session.journal.len(), before);
+        let at = h.get_by_label("Darken").rect().center();
+        let (req, _) = ControlRequest::new("ui.click", json!({"x": at.x, "y": at.y}));
+        assert!(matches!(handle(h.state_mut(), &ctx, &req), Outcome::AfterInput));
+        // The app injects these queued control events into its next frame's input.
+        let events = std::mem::take(&mut h.state_mut().synthetic);
+        for event in events {
+            h.event(event);
+        }
+        h.run_steps(2);
+        assert!(h.state().ui.brush_mode_menu.is_none());
+        assert_eq!(h.state().session.tools.brush.mode, photocraft_doc::BlendMode::Darken);
+        assert_eq!(h.state().session.journal.last().unwrap(), &("tools.setBrush".into(), json!({"brush": {"mode": "Darken"}})));
+    }
+
+    #[test]
+    fn shift_right_mode_picker_cancels_and_other_gestures_keep_their_routes() {
+        let mut h = harness(None);
+        let journal = h.state().session.journal.len();
+        mode_right_click(&mut h, Modifiers::SHIFT);
+        h.key_press(egui::Key::Escape);
+        h.run_steps(2);
+        assert!(h.state().ui.brush_mode_menu.is_none());
+        mode_right_click(&mut h, Modifiers::SHIFT);
+        let outside = h.state().last_canvas_rect.min + vec2(2.0, 2.0);
+        h.event(egui::Event::PointerMoved(outside));
+        press(&mut h, outside, PointerButton::Secondary, true);
+        press(&mut h, outside, PointerButton::Secondary, false);
+        assert!(h.state().ui.brush_mode_menu.is_none());
+        mode_right_click(&mut h, Modifiers::SHIFT);
+        h.state_mut().ui.tool = Tool::Pencil;
+        h.run_steps(2);
+        assert!(h.state().ui.brush_mode_menu.is_none());
+        mode_right_click(&mut h, Modifiers::SHIFT);
+        assert!(h.state().ui.brush_mode_menu.is_none() && h.state().ui.brush_picker.is_some());
+        h.state_mut().ui.brush_picker = None;
+        h.state_mut().ui.tool = Tool::Brush;
+        mode_right_click(&mut h, Modifiers::NONE);
+        assert!(h.state().ui.brush_picker.is_some() && h.state().ui.brush_mode_menu.is_none());
+        assert_eq!(h.state().session.journal.len(), journal, "opening/cancelling never changes brush or pixels");
+    }
+
+    #[test]
+    fn escape_dismissal_consumes_a_held_secondary_release() {
+        for release_shift in [false, true] {
+            let mut h = harness(Some("erase"));
+            let journal = h.state().session.journal.len();
+            let history = h.state().session.active().unwrap().history.past_len();
+            let p = h.state().last_canvas_rect.center();
+            h.event(egui::Event::ModifiersChanged(Modifiers::SHIFT));
+            h.event(egui::Event::PointerMoved(p));
+            h.event(egui::Event::PointerButton { pos: p, button: PointerButton::Secondary, pressed: true, modifiers: Modifiers::SHIFT });
+            h.run_steps(1);
+            // A quick second press can arrive in the frame that opens the menu for the first
+            // click's release, leaving the secondary button held while the picker is visible.
+            h.event(egui::Event::PointerButton { pos: p, button: PointerButton::Secondary, pressed: false, modifiers: Modifiers::SHIFT });
+            h.event(egui::Event::PointerButton { pos: p, button: PointerButton::Secondary, pressed: true, modifiers: Modifiers::SHIFT });
+            h.run_steps(1);
+            assert!(h.state().ui.brush_mode_menu.is_some());
+            assert!(h.ctx.input(|i| i.pointer.secondary_down()));
+            h.key_press(egui::Key::Escape);
+            h.run_steps(1);
+            assert!(h.state().ui.brush_mode_menu.is_none());
+            let mods = if release_shift { Modifiers::NONE } else { Modifiers::SHIFT };
+            h.event(egui::Event::ModifiersChanged(mods));
+            h.run_steps(1);
+            h.event(egui::Event::PointerButton { pos: p, button: PointerButton::Secondary, pressed: false, modifiers: mods });
+            h.run_steps(2);
+            assert!(h.state().ui.brush_mode_menu.is_none(), "Escape must consume the pending release");
+            assert!(h.state().ui.brush_picker.is_none() && h.state().drag.is_none() && !h.state().secondary_erase);
+            assert_eq!(h.state().session.journal.len(), journal);
+            assert_eq!(h.state().session.active().unwrap().history.past_len(), history);
+            mode_right_click(&mut h, Modifiers::SHIFT);
+            assert!(h.state().ui.brush_mode_menu.is_some(), "the next gesture must still work");
+        }
+    }
+
+    #[test]
+    fn shift_released_before_the_right_button_still_opens_the_mode_picker() {
+        // egui reports `secondary_clicked` on release. With Erase on, a click that lost Shift a
+        // frame early must open the menu, not erase a dab.
+        let mut h = harness(Some("erase"));
+        let history = h.state().session.active().unwrap().history.past_len();
+        let journal = h.state().session.journal.len();
+        let p = h.state().last_canvas_rect.center();
+        h.event(egui::Event::ModifiersChanged(Modifiers::SHIFT));
+        h.event(egui::Event::PointerMoved(p));
+        h.run_steps(1);
+        h.event(egui::Event::PointerButton { pos: p, button: PointerButton::Secondary, pressed: true, modifiers: Modifiers::SHIFT });
+        h.run_steps(1);
+        // Shift goes up in a frame of its own while the right button is still down.
+        h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+        h.run_steps(1);
+        h.event(egui::Event::PointerButton { pos: p, button: PointerButton::Secondary, pressed: false, modifiers: Modifiers::NONE });
+        h.run_steps(2);
+        assert!(h.state().ui.brush_mode_menu.is_some(), "the press decided the gesture");
+        assert!(h.state().drag.is_none() && !h.state().secondary_erase);
+        assert_eq!(h.state().session.journal.len(), journal, "no erase dab");
+        assert_eq!(h.state().session.active().unwrap().history.past_len(), history);
     }
 
     #[test]

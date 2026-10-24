@@ -4368,9 +4368,7 @@ fn brush_tip(p: &egui::Painter, c: egui::Pos2, rad: f32, hardness: f32, color: C
 /// after Dissolve (#3439). Clear erases with the brush (`clear`); it shows while chosen, or while
 /// `~` is held (`held`). The wheel over it steps the mode, as over the Layers panel's (#2061).
 fn paint_mode_dropdown(ui: &mut egui::Ui, id: &str, b: &mut photocraft_engine::BrushSettings, clear: &mut bool, held: bool) {
-    let mut opts: Vec<(Option<BlendMode>, &str)> = BlendMode::LAYER_MODES.iter().map(|m| (Some(*m), m.label())).collect();
-    let at = opts.iter().position(|o| o.0 == Some(BlendMode::Dissolve)).map_or(opts.len(), |i| i + 1);
-    opts.insert(at, (None, "Clear"));
+    let opts = crate::brush_mode_menu::choices();
     let mut mode = if *clear || held { None } else { Some(b.mode) };
     if !widgets::dropdown_wheel_hovered(ui, id, &mut mode, &opts, 96.0).0.is_empty() {
         *clear = mode.is_none();

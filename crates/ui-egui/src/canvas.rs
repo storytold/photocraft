@@ -2545,6 +2545,7 @@ pub fn document_area(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     crate::layer_transfer::finish(app, ui.ctx());
     // Once a frame, not per document view: the right-click or options-bar Brush Preset picker.
     crate::paint_mouse::show_picker(app, ui.ctx());
+    crate::brush_mode_menu::show(app, ui.ctx());
 }
 
 /// Window › Arrange tiles: each document shown with its tile in `rect`, or `None` when the
@@ -4258,6 +4259,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             && app.drag.is_none()
             && response.is_pointer_button_down_on()
             && ui.input(|i| i.pointer.primary_pressed())
+            && !crate::brush_mode_menu::blocks_canvas(app, &ctx)
             && let Some(p) = ui.input(|i| i.pointer.press_origin()).filter(|p| rect.contains(*p))
         {
             let d = xf.to_doc(p);
