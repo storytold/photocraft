@@ -485,6 +485,141 @@ pub(crate) fn pen_replace(app: &mut PhotocraftApp, path: &Path) {
     }
 }
 
+/// A Pen or Curvature Pen path finished: closed on its first anchor, ended with ↩/Esc or by
+/// another tool. It keeps the path being drawn as it was just before, and the document the finish
+/// made. Undo back to that document takes back only the finish and the Pen carries on drawing the
+/// path, as in Photoshop; Redo finishes it again. `PhotocraftApp::finished_pens` keeps one per
+/// path, so this holds for every path drawn, not just the last.
+#[derive(Clone, Debug)]
+pub(crate) struct FinishedPen {
+    draft: PenPath,
+    /// The document the finish made, or once resumed the one Undo went back to. A `Weak` keeps
+    /// the allocation, so a later document can't reuse its address and match by mistake, and
+    /// dies once History lets go of that document.
+    doc: std::sync::Weak<Document>,
+    /// The History state the finish made. Redo must bring back this state, not just a document
+    /// (`Session::redo` may hand back a copy of it).
+    state: Option<u64>,
+    /// Undo has given the Pen the path back: Redo can finish it again.
+    resumed: bool,
+}
+
+/// Is `doc` still the active document's current state (no step since)?
+fn is_current(app: &PhotocraftApp, doc: &std::sync::Weak<Document>) -> bool {
+    app.session.active().is_some_and(|st| std::ptr::eq(std::sync::Arc::as_ptr(&st.doc), doc.as_ptr()))
+}
+
+/// The id of the active document's current History state (`History::row_id`); `next` for the
+/// state Redo would bring back.
+fn history_state(app: &PhotocraftApp, next: bool) -> Option<u64> {
+    let history = &app.session.active()?.history;
+    history.row_id(history.past_len().checked_add(usize::from(next))?)
+}
+
+fn current_doc(app: &PhotocraftApp) -> std::sync::Weak<Document> {
+    app.session.active().map(|st| std::sync::Arc::downgrade(&st.doc)).unwrap_or_default()
+}
+
+/// Remember `finished`, forgetting the finishes whose documents History no longer holds and the
+/// resumed ones, whose Redo the new step has cleared.
+fn remember_finish(app: &mut PhotocraftApp, finished: FinishedPen) {
+    app.finished_pens.retain(|f| !f.resumed && f.doc.strong_count() > 0);
+    app.finished_pens.push(finished);
+}
+
+/// The path being finished as it was being drawn: without the stand-in that took a close-drag
+/// (`pen_down`), whose handles went to the closed path only.
+fn draft_before_finish(pen: &PenPath) -> PenPath {
+    let mut draft = pen.clone();
+    if !draft.curvature && closing(&draft) {
+        draft.knots.pop();
+        let n = draft.knots.len();
+        draft.unlinked.retain(|&i| i < n);
+    }
+    draft.dragging = false;
+    draft.adjusting_last = false;
+    draft.moving = None;
+    draft
+}
+
+/// Edit › Undo back to the moment a Pen path was finished: undo the finish and give the Pen back
+/// the path being drawn, rather than deleting the whole path. Also when another tool finished it
+/// (the Pen that drew it comes back) and after undoing what came next, such as the selection
+/// Make Selection made from it, or later paths. False for a plain Undo.
+pub(crate) fn pen_resume_on_undo(app: &mut PhotocraftApp) -> Result<bool, String> {
+    if app.ui.pen.is_some() || box_steps(app, "edit.undo") {
+        return Ok(false);
+    }
+    let Some(i) = app.finished_pens.iter().rposition(|f| !f.resumed && is_current(app, &f.doc)) else { return Ok(false) };
+    let before = current_doc(app);
+    app.run("edit.undo", json!({}))?;
+    // The finish wasn't taken back: the path stays finished.
+    if is_current(app, &before) {
+        return Ok(true);
+    }
+    let doc = current_doc(app);
+    let Some(finished) = app.finished_pens.get_mut(i) else { return Ok(true) };
+    finished.doc = doc;
+    finished.resumed = true;
+    let draft = finished.draft.clone();
+    if !draft.drawn_with(app.ui.tool) {
+        // Otherwise the next frame finishes it again (`PhotocraftApp::logic`).
+        crate::tool_memory::select(app, if draft.curvature { Tool::CurvaturePen } else { Tool::Pen });
+    }
+    app.ui.pen = Some(draft);
+    app.ui.pen_doc = app.session.active().map(|st| st.doc.id);
+    Ok(true)
+}
+
+/// The finish [`pen_resume_on_undo`] took back, while the Pen still draws that path and Redo
+/// would bring back the finish's History state (not a step made and undone since).
+fn resumed_finish(app: &PhotocraftApp) -> Option<usize> {
+    app.ui.pen.as_ref()?;
+    let next = history_state(app, true)?;
+    app.finished_pens.iter().rposition(|f| f.resumed && is_current(app, &f.doc) && f.state == Some(next))
+}
+
+/// Edit › Redo would put back the finish of the path the Pen is drawing, edited since Undo gave
+/// it back: the finished path would sit beside its own draft. Redo does nothing until the draft is
+/// finished (a new step, clearing Redo) or undone back to what Undo gave back.
+pub(crate) fn pen_blocks_redo(app: &PhotocraftApp) -> bool {
+    !box_steps(app, "edit.redo") && resumed_finish(app).and_then(|i| app.finished_pens.get(i)).is_some_and(|f| app.ui.pen.as_ref() != Some(&f.draft))
+}
+
+/// Edit › Redo after [`pen_resume_on_undo`], with the path untouched since: finish it again.
+/// Edited since, Redo does nothing ([`pen_blocks_redo`]).
+pub(crate) fn pen_finish_on_redo(app: &mut PhotocraftApp) -> Result<bool, String> {
+    if box_steps(app, "edit.redo") {
+        return Ok(false);
+    }
+    if pen_blocks_redo(app) {
+        return Ok(true);
+    }
+    let Some(i) = resumed_finish(app) else { return Ok(false) };
+    let state = app.finished_pens.get(i).and_then(|f| f.state);
+    let (pen, pen_doc) = (app.ui.pen.take(), app.ui.pen_doc);
+    let redone = app.run("edit.redo", json!({}));
+    // Redo didn't bring back the finish's state: the Pen keeps its path, and the finish stays taken back.
+    if redone.is_err() || history_state(app, false) != state {
+        app.ui.pen = pen;
+        app.ui.pen_doc = pen_doc;
+        return redone.map(|_| true);
+    }
+    app.ui.pen_doc = None;
+    let doc = current_doc(app);
+    if let Some(finished) = app.finished_pens.get_mut(i) {
+        finished.doc = doc;
+        finished.resumed = false;
+    }
+    Ok(true)
+}
+
+/// Do Free Transform's or the Crop tool's own box steps take `id` (Undo/Redo) rather than History
+/// (`transform_tool::intercept`, `crop_ui::intercept`)?
+pub(crate) fn box_steps(app: &PhotocraftApp, id: &str) -> bool {
+    crate::transform_tool::is_enabled(app, id).is_some() || crate::crop_ui::is_enabled(app, id).is_some()
+}
+
 /// Preserve a foreign document's draft as its Work Path before another document can edit it.
 /// A failed commit retains the draft and blocks the caller until it can be retried.
 pub fn cancel_stale(app: &mut PhotocraftApp) -> bool {
@@ -533,10 +668,17 @@ pub fn pen_commit(app: &mut PhotocraftApp, closed: bool) {
         // Its anchors are no longer the Pen's: the committed path is another path.
         app.ui.direct_selection = Default::default();
     }
+    let draft = draft_before_finish(&pen);
     if pen.curvature {
         curvature_refresh(&mut pen, closed);
     }
+    let before = current_doc(app);
     commit_path(app, &pen, closed);
+    // Only a finish that made a History step can be taken back.
+    if !is_current(app, &before) {
+        let (doc, state) = (current_doc(app), history_state(app, false));
+        remember_finish(app, FinishedPen { draft, doc, state, resumed: false });
+    }
 }
 
 /// Commit a finished Pen, Freeform Pen or Curvature Pen path, as one History step: a new shape
@@ -2900,6 +3042,413 @@ mod tests {
         let work = app.session.active().unwrap().doc.work_path.as_ref().unwrap();
         assert_eq!(work.subpaths[0].knots.len(), 2);
         assert!(work.subpaths[0].knots[1].smooth, "retained smooth handles are unchanged");
+    }
+
+    /// Edit › Undo or Redo as the menu, the shortcut and the control channel run it.
+    fn menu(app: &mut PhotocraftApp, id: &str) {
+        crate::menus::invoke(app, &egui::Context::default(), id, json!({})).unwrap();
+    }
+
+    /// A triangle drawn with the Pen and closed by clicking its first anchor; the knots it had
+    /// before the close.
+    fn close_triangle(app: &mut PhotocraftApp) -> Vec<[[f64; 2]; 3]> {
+        app.ui.tool = Tool::Pen;
+        for (x, y) in [(20.0, 20.0), (120.0, 20.0), (120.0, 120.0)] {
+            pen_down(app, x, y, false);
+            pen_up(app);
+        }
+        let knots = app.ui.pen.as_ref().unwrap().knots.clone();
+        pen_down(app, 20.0, 20.0, false);
+        pen_up(app);
+        assert!(app.ui.pen.is_none(), "clicking the first anchor commits the path");
+        knots
+    }
+
+    /// [`close_triangle`] in Path mode: the closed triangle is the work path.
+    fn closed_triangle(app: &mut PhotocraftApp) -> Vec<[[f64; 2]; 3]> {
+        let knots = close_triangle(app);
+        assert!(app.session.active().unwrap().doc.work_path.as_ref().unwrap().subpaths[0].closed);
+        knots
+    }
+
+    #[test]
+    fn pen_undo_after_closing_reopens_the_path_instead_of_deleting_it() {
+        let mut app = app();
+        let before = app.session.active().unwrap().history.past_len();
+        let knots = closed_triangle(&mut app);
+
+        // Undo takes back only the closing segment: the path is open again, still being drawn.
+        menu(&mut app, "edit.undo");
+        let pen = app.ui.pen.as_ref().expect("the open path is back on the Pen");
+        assert_eq!(pen.knots, knots);
+        assert_eq!(app.session.active().unwrap().history.past_len(), before);
+        assert!(app.session.active().unwrap().doc.work_path.is_none(), "the closed path is no longer committed");
+
+        // The next Undo removes the last anchor, as for any path being drawn.
+        menu(&mut app, "edit.undo");
+        assert_eq!(app.ui.pen.as_ref().unwrap().knots, knots[..2].to_vec());
+    }
+
+    #[test]
+    fn pen_command_z_after_closing_reopens_the_path() {
+        let mut app = app();
+        let knots = closed_triangle(&mut app);
+        press(&mut app, egui::Key::Z, egui::Modifiers::COMMAND);
+        assert_eq!(app.ui.pen.as_ref().map(|p| p.knots.clone()), Some(knots));
+        assert!(app.session.active().unwrap().doc.work_path.is_none());
+    }
+
+    /// A key press through the keyboard shortcuts, as the app handles it.
+    fn press(app: &mut PhotocraftApp, key: egui::Key, modifiers: egui::Modifiers) {
+        let ctx = egui::Context::default();
+        ctx.begin_pass(egui::RawInput {
+            events: vec![egui::Event::ModifiersChanged(modifiers), egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }],
+            ..Default::default()
+        });
+        crate::shortcuts::handle(app, &ctx);
+        ctx.end_pass().textures_delta.clear();
+    }
+
+    #[test]
+    fn pen_undo_after_enter_or_esc_gives_the_open_path_back() {
+        for key in [egui::Key::Enter, egui::Key::Escape] {
+            let mut app = app();
+            app.ui.tool = Tool::Pen;
+            for (x, y) in [(20.0, 20.0), (120.0, 20.0), (120.0, 120.0)] {
+                pen_down(&mut app, x, y, false);
+                pen_up(&mut app);
+            }
+            let knots = app.ui.pen.as_ref().unwrap().knots.clone();
+            press(&mut app, key, egui::Modifiers::NONE);
+            assert!(app.ui.pen.is_none(), "{key:?} ends the path");
+            assert!(!app.session.active().unwrap().doc.work_path.as_ref().unwrap().subpaths[0].closed);
+
+            // Undo takes back only the ending: the Pen carries on from the last anchor.
+            press(&mut app, egui::Key::Z, egui::Modifiers::COMMAND);
+            assert_eq!(app.ui.pen.as_ref().map(|p| p.knots.clone()), Some(knots.clone()), "{key:?}");
+            assert!(app.session.active().unwrap().doc.work_path.is_none());
+            assert_eq!(app.ui.pen_doc, Some(app.session.active().unwrap().doc.id), "the path given back belongs to its document");
+            press(&mut app, egui::Key::Z, egui::Modifiers::COMMAND);
+            assert_eq!(app.ui.pen.as_ref().unwrap().knots, knots[..2].to_vec(), "then Undo removes the last anchor");
+
+            // Ending it again, then Undo and Redo, works as for a closed path.
+            press(&mut app, key, egui::Modifiers::NONE);
+            menu(&mut app, "edit.undo");
+            menu(&mut app, "edit.redo");
+            assert!(app.ui.pen.is_none() && app.ui.pen_doc.is_none());
+            assert_eq!(app.session.active().unwrap().doc.work_path.as_ref().unwrap().subpaths[0].knots.len(), 2);
+        }
+    }
+
+    #[test]
+    fn pen_undo_after_a_close_drag_gives_back_the_first_anchor_unchanged() {
+        let mut app = app();
+        app.ui.tool = Tool::Pen;
+        for (x, y) in [(20.0, 20.0), (120.0, 20.0), (120.0, 120.0)] {
+            pen_down(&mut app, x, y, false);
+            pen_up(&mut app);
+        }
+        let knots = app.ui.pen.as_ref().unwrap().knots.clone();
+        // Dragging from the first anchor pulls out its handles in the closed path only.
+        pen_down(&mut app, 20.0, 20.0, false);
+        pen_move(&mut app, 20.0, 60.0, false);
+        pen_up(&mut app);
+        let first = &app.session.active().unwrap().doc.work_path.as_ref().unwrap().subpaths[0].knots[0];
+        assert!(first.smooth && first.out_ctrl.y > 20.0, "the close-drag shaped the closed path");
+
+        menu(&mut app, "edit.undo");
+        let pen = app.ui.pen.as_ref().unwrap();
+        assert_eq!(pen.knots, knots, "no stand-in knot and no pulled handles");
+        assert!(!pen.dragging && !pen.adjusting_last);
+    }
+
+    #[test]
+    fn curvature_pen_undo_after_closing_reopens_the_path() {
+        let mut app = app();
+        app.ui.tool = Tool::CurvaturePen;
+        for (x, y) in [(20.0, 20.0), (120.0, 20.0), (120.0, 120.0)] {
+            curvature_down(&mut app, x, y);
+            curvature_up(&mut app);
+        }
+        let knots = app.ui.pen.as_ref().unwrap().knots.clone();
+        curvature_down(&mut app, 20.0, 20.0);
+        curvature_up(&mut app);
+        assert!(app.ui.pen.is_none());
+        assert!(app.session.active().unwrap().doc.work_path.as_ref().unwrap().subpaths[0].closed);
+
+        menu(&mut app, "edit.undo");
+        let pen = app.ui.pen.as_ref().unwrap();
+        assert!(pen.curvature);
+        assert_eq!(pen.knots, knots);
+        assert!(app.session.active().unwrap().doc.work_path.is_none());
+    }
+
+    #[test]
+    fn redo_closes_a_reopened_pen_path_again() {
+        let mut app = app();
+        let knots = closed_triangle(&mut app);
+        let closed = app.session.active().unwrap().doc.work_path.clone();
+        for _ in 0..2 {
+            menu(&mut app, "edit.undo");
+            assert_eq!(app.ui.pen.as_ref().unwrap().knots, knots);
+            menu(&mut app, "edit.redo");
+            assert!(app.ui.pen.is_none(), "Redo takes the draft back into the closed path");
+            assert_eq!(app.session.active().unwrap().doc.work_path, closed);
+        }
+    }
+
+    #[test]
+    fn redo_after_editing_a_reopened_path_leaves_the_draft_alone() {
+        let mut app = app();
+        closed_triangle(&mut app);
+        menu(&mut app, "edit.undo");
+        pen_down(&mut app, 60.0, 160.0, false);
+        pen_up(&mut app);
+        let draft = app.ui.pen.clone();
+        // The draft changed since the reopen, so the closed path is not the one Redo brings back.
+        menu(&mut app, "edit.redo");
+        assert_eq!(app.ui.pen, draft);
+    }
+
+    #[test]
+    fn undo_after_a_later_step_takes_that_step_back_first() {
+        let mut app = app();
+        let knots = closed_triangle(&mut app);
+        app.run("shape.create", json!({"kind": "rect", "rect": [10, 10, 40, 40], "fill": "#ff0000"})).unwrap();
+        let after_close = app.session.active().unwrap().history.past_len() - 1;
+        menu(&mut app, "edit.undo");
+        assert!(app.ui.pen.is_none(), "Undo takes back the rectangle only");
+        assert_eq!(app.session.active().unwrap().history.past_len(), after_close);
+        assert!(app.session.active().unwrap().doc.work_path.is_some());
+        // Back at the close, the next Undo reopens the path.
+        menu(&mut app, "edit.undo");
+        assert_eq!(app.ui.pen.as_ref().map(|p| p.knots.clone()), Some(knots));
+        assert!(app.session.active().unwrap().doc.work_path.is_none());
+    }
+
+    #[test]
+    fn undo_gives_every_finished_path_back_to_the_pen_not_just_the_last() {
+        let mut app = app();
+        app.ui.tool = Tool::Pen;
+        let mut drafts = Vec::new();
+        // Three paths, finished by closing, by ↩ and by choosing another tool.
+        for (n, dy) in [0.0, 50.0, 100.0].into_iter().enumerate() {
+            crate::tool_memory::select(&mut app, Tool::Pen);
+            for (x, y) in [(20.0, 20.0 + dy), (120.0, 20.0 + dy), (120.0, 60.0 + dy)] {
+                pen_down(&mut app, x, y, false);
+                pen_up(&mut app);
+            }
+            drafts.push(app.ui.pen.as_ref().unwrap().knots.clone());
+            match n {
+                0 => {
+                    pen_down(&mut app, 20.0, 20.0 + dy, false);
+                    pen_up(&mut app);
+                }
+                1 => press(&mut app, egui::Key::Enter, egui::Modifiers::NONE),
+                _ => {
+                    crate::tool_memory::select(&mut app, Tool::Move);
+                    pen_commit(&mut app, false);
+                }
+            }
+            assert!(app.ui.pen.is_none());
+        }
+        let subpaths = |app: &PhotocraftApp| app.session.active().unwrap().doc.work_path.as_ref().map_or(0, |p| p.subpaths.len());
+        assert_eq!(subpaths(&app), 3, "the paths build up in the work path");
+
+        // Undo walks back through each path: given back to the Pen, then one anchor at a time.
+        for (n, knots) in drafts.iter().enumerate().rev() {
+            press(&mut app, egui::Key::Z, egui::Modifiers::COMMAND);
+            assert_eq!(app.ui.tool, Tool::Pen);
+            assert_eq!(app.ui.pen.as_ref().map(|p| p.knots.clone()), Some(knots.clone()), "path {n} is being drawn again");
+            assert_eq!(subpaths(&app), n, "path {n} is no longer in the work path");
+            for left in (0..knots.len()).rev() {
+                press(&mut app, egui::Key::Z, egui::Modifiers::COMMAND);
+                assert_eq!(app.ui.pen.as_ref().map_or(0, |p| p.knots.len()), left);
+            }
+            assert_eq!(subpaths(&app), n, "taking back the anchors leaves the earlier paths alone");
+        }
+    }
+
+    #[test]
+    fn undo_steps_back_from_make_selection_to_the_path_being_drawn() {
+        let mut app = app();
+        app.ui.tool = Tool::Pen;
+        for (x, y) in [(20.0, 20.0), (120.0, 20.0), (120.0, 120.0)] {
+            pen_down(&mut app, x, y, false);
+            pen_up(&mut app);
+        }
+        let knots = app.ui.pen.as_ref().unwrap().knots.clone();
+        // The canvas menu's Make Selection ends the path, then makes the selection from it.
+        pen_commit(&mut app, false);
+        app.run("path.toSelection", json!({"name": "work"})).unwrap();
+        let doc = |app: &PhotocraftApp| app.session.active().unwrap().doc.clone();
+        assert!(doc(&app).selection.is_some());
+
+        menu(&mut app, "edit.undo");
+        assert!(doc(&app).selection.is_none(), "Undo takes back the selection first");
+        assert!(doc(&app).work_path.is_some() && app.ui.pen.is_none());
+        menu(&mut app, "edit.undo");
+        assert_eq!(app.ui.pen.as_ref().map(|p| p.knots.clone()), Some(knots.clone()), "then the path is being drawn again");
+        assert!(doc(&app).work_path.is_none());
+
+        // Redo walks forward again, and Undo back still finds the path being drawn.
+        menu(&mut app, "edit.redo");
+        menu(&mut app, "edit.redo");
+        assert!(doc(&app).selection.is_some() && app.ui.pen.is_none());
+        menu(&mut app, "edit.undo");
+        menu(&mut app, "edit.undo");
+        assert_eq!(app.ui.pen.as_ref().map(|p| p.knots.clone()), Some(knots));
+    }
+
+    #[test]
+    fn undo_after_switching_tools_gives_the_path_back_to_the_pen() {
+        for (pen_tool, curvature) in [(Tool::Pen, false), (Tool::CurvaturePen, true)] {
+            let mut app = app();
+            app.ui.tool = pen_tool;
+            for (x, y) in [(20.0, 20.0), (120.0, 20.0), (120.0, 120.0)] {
+                if curvature {
+                    curvature_down(&mut app, x, y);
+                    curvature_up(&mut app);
+                } else {
+                    pen_down(&mut app, x, y, false);
+                    pen_up(&mut app);
+                }
+            }
+            let knots = app.ui.pen.as_ref().unwrap().knots.clone();
+            // Choosing another tool ends the path, as the frame loop does (`PhotocraftApp::logic`).
+            crate::tool_memory::select(&mut app, Tool::Move);
+            pen_commit(&mut app, false);
+            assert!(app.session.active().unwrap().doc.work_path.is_some());
+
+            press(&mut app, egui::Key::Z, egui::Modifiers::COMMAND);
+            assert_eq!(app.ui.tool, pen_tool, "the tool that drew the path comes back");
+            assert_eq!(app.ui.pen.as_ref().map(|p| p.knots.clone()), Some(knots));
+            assert!(app.session.active().unwrap().doc.work_path.is_none());
+        }
+    }
+
+    #[test]
+    fn a_free_transform_box_keeps_its_own_undo_and_redo_over_a_finished_pen_path() {
+        let ctx = egui::Context::default();
+        let mut app = app();
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.run("select.rect", json!({"x": 50, "y": 50, "width": 60, "height": 60})).unwrap();
+        app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+        app.run("select.deselect", json!({})).unwrap();
+        app.ui.tool = Tool::Pen;
+        for (x, y) in [(20.0, 20.0), (120.0, 20.0), (120.0, 120.0)] {
+            pen_down(&mut app, x, y, false);
+            pen_up(&mut app);
+        }
+        let knots = app.ui.pen.as_ref().unwrap().knots.clone();
+        crate::tool_memory::select(&mut app, Tool::Move);
+        pen_commit(&mut app, false);
+
+        // Undo under the box steps the box: the path stays finished, and comes back once it closes.
+        crate::transform_tool::begin(&mut app, &ctx).unwrap();
+        menu(&mut app, "edit.undo");
+        assert!(app.ui.transform.is_some() && app.ui.pen.is_none(), "the box took the Undo");
+        assert!(app.session.active().unwrap().doc.work_path.is_some());
+        crate::transform_tool::cancel(&mut app);
+        menu(&mut app, "edit.undo");
+        assert_eq!(app.ui.pen.as_ref().map(|p| p.knots.clone()), Some(knots));
+
+        // Redo under the box steps the box too, leaving the Pen its path.
+        crate::transform_tool::begin(&mut app, &ctx).unwrap();
+        menu(&mut app, "edit.redo");
+        assert!(app.ui.transform.is_some() && app.ui.pen.is_some(), "the box took the Redo");
+        assert!(app.session.active().unwrap().doc.work_path.is_none());
+
+        // Nor do ⌘/Ctrl+Z or Edit › Undo take an anchor off the draft under the box.
+        let knots = app.ui.pen.as_ref().unwrap().knots.clone();
+        press(&mut app, egui::Key::Z, egui::Modifiers::COMMAND);
+        menu(&mut app, "edit.undo");
+        assert!(app.ui.transform.is_some());
+        assert_eq!(app.ui.pen.as_ref().unwrap().knots, knots, "the box took the Undo");
+        crate::transform_tool::cancel(&mut app);
+        press(&mut app, egui::Key::Z, egui::Modifiers::COMMAND);
+        assert_eq!(app.ui.pen.as_ref().unwrap().knots, knots[..knots.len() - 1].to_vec(), "then Undo takes the last anchor");
+    }
+
+    #[test]
+    fn redo_does_not_put_a_finished_path_beside_its_edited_draft() {
+        let ctx = egui::Context::default();
+        let mut app = app();
+        app.ui.tool = Tool::Pen;
+        for (x, y) in [(20.0, 20.0), (120.0, 20.0), (120.0, 120.0)] {
+            pen_down(&mut app, x, y, false);
+            pen_up(&mut app);
+        }
+        press(&mut app, egui::Key::Enter, egui::Modifiers::NONE);
+        menu(&mut app, "edit.undo");
+        pen_down(&mut app, 20.0, 120.0, false);
+        pen_up(&mut app);
+        let knots = app.ui.pen.as_ref().unwrap().knots.clone();
+        assert!(!crate::menus::is_enabled(&app, "edit.redo"), "Redo greys out over the edited draft");
+        crate::menus::invoke(&mut app, &ctx, "edit.redo", json!({})).unwrap();
+        assert!(app.session.active().unwrap().doc.work_path.is_none(), "no finished path beside the draft");
+        assert_eq!(app.ui.pen.as_ref().unwrap().knots, knots);
+
+        // Back to what Undo gave back, Redo finishes it again.
+        press(&mut app, egui::Key::Z, egui::Modifiers::COMMAND);
+        assert!(crate::menus::is_enabled(&app, "edit.redo"));
+        menu(&mut app, "edit.redo");
+        assert!(app.ui.pen.is_none());
+        assert_eq!(app.session.active().unwrap().doc.work_path.as_ref().unwrap().subpaths[0].knots.len(), 3);
+    }
+
+    #[test]
+    fn redo_of_a_step_made_and_undone_over_a_resumed_path_leaves_the_pen_its_path() {
+        let mut app = app();
+        app.ui.tool = Tool::Pen;
+        for (x, y) in [(20.0, 20.0), (120.0, 20.0), (120.0, 120.0)] {
+            pen_down(&mut app, x, y, false);
+            pen_up(&mut app);
+        }
+        press(&mut app, egui::Key::Enter, egui::Modifiers::NONE);
+        menu(&mut app, "edit.undo");
+        let (knots, owner) = (app.ui.pen.as_ref().unwrap().knots.clone(), app.ui.pen_doc);
+        // Another step over the resumed path, undone: it, not the finish, is next to redo.
+        app.run("select.all", json!({})).unwrap();
+        app.run("edit.undo", json!({})).unwrap();
+        assert!(crate::menus::is_enabled(&app, "edit.redo"));
+        menu(&mut app, "edit.redo");
+        let st = app.session.active().unwrap();
+        assert!(st.doc.selection.is_some(), "Redo made the selection again");
+        assert!(st.doc.work_path.is_none(), "and didn't finish the path");
+        assert_eq!(app.ui.pen.as_ref().map(|p| p.knots.clone()), Some(knots));
+        assert_eq!(app.ui.pen_doc, owner);
+    }
+
+    #[test]
+    fn a_refused_pen_redo_keeps_the_path_claimed_by_its_document() {
+        let mut app = app();
+        app.ui.tool = Tool::Pen;
+        for (x, y) in [(20.0, 20.0), (120.0, 20.0), (120.0, 120.0)] {
+            pen_down(&mut app, x, y, false);
+            pen_up(&mut app);
+        }
+        press(&mut app, egui::Key::Enter, egui::Modifiers::NONE);
+        menu(&mut app, "edit.undo");
+        let owner = app.ui.pen_doc;
+        assert!(app.ui.pen.is_some() && owner.is_some());
+        app.automation_input = true;
+        app.services.automation_command = Some(Box::new(|id, _| if id == "edit.redo" { Err("denied".into()) } else { Ok(()) }));
+        assert!(pen_finish_on_redo(&mut app).is_err());
+        assert!(app.ui.pen.is_some());
+        assert_eq!(app.ui.pen_doc, owner, "the path given back still belongs to its document");
+    }
+
+    #[test]
+    fn pen_undo_after_closing_a_shape_reopens_the_path() {
+        let mut app = app();
+        app.ui.tool_options.vector_mode = "shape".into();
+        let layers = app.session.active().unwrap().doc.layers.len();
+        let knots = close_triangle(&mut app);
+        assert_eq!(app.session.active().unwrap().doc.layers.len(), layers + 1);
+        menu(&mut app, "edit.undo");
+        assert_eq!(app.session.active().unwrap().doc.layers.len(), layers, "the shape layer is gone");
+        assert_eq!(app.ui.pen.as_ref().unwrap().knots, knots);
     }
 
     #[test]
