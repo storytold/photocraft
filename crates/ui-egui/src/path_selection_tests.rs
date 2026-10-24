@@ -84,6 +84,33 @@ fn cmd_enter_while_drawing_finishes_the_path_and_loads_it() {
     assert!(h.state().session.active().unwrap().doc.selection.is_none());
 }
 
+/// #8069: ⌘↩ deselects the path it loaded in the Paths panel, as in Photoshop, so the next Pen
+/// path starts a new Work Path instead of joining the one that became the selection.
+#[test]
+fn cmd_enter_deselects_the_path_so_the_next_pen_path_replaces_it() {
+    let mut h = harness();
+    h.state_mut().ui.tool = Tool::Pen;
+    let p = |x: f64, y: f64| [[x, y], [x, y], [x, y]];
+    h.state_mut().ui.pen = Some(PenPath { knots: vec![p(20.0, 20.0), p(80.0, 20.0), p(80.0, 80.0)], ..Default::default() });
+    h.run_steps(2);
+    press(&mut h, Key::Enter, command());
+    assert!(h.state().session.active().unwrap().doc.selection.is_some(), "{}", h.state().ui.status);
+    assert_eq!(h.state().ui.selected_path, None, "the loaded path is no longer selected");
+    h.state_mut().ui.pen = Some(PenPath { knots: vec![p(120.0, 20.0), p(180.0, 20.0), p(180.0, 80.0)], ..Default::default() });
+    h.run_steps(2);
+    press(&mut h, Key::Enter, Modifiers::NONE);
+    let wp = h.state().session.active().unwrap().doc.work_path.clone().unwrap();
+    assert_eq!(wp.subpaths.len(), 1, "the new path replaced the Work Path");
+    assert_eq!(wp.subpaths[0].knots[0].anchor.x, 120.0);
+    assert_eq!(h.state().ui.selected_path.as_deref(), Some("work"));
+    // A path selected in the Paths panel is deselected too; ⌘↩ again falls back to the Work Path.
+    h.state_mut().run("path.set", json!({"name": "Path 1", "path": rect_path(10.0, 10.0, 30.0, 30.0)})).unwrap();
+    h.state_mut().ui.selected_path = Some("Path 1".into());
+    press(&mut h, Key::Enter, command());
+    assert_eq!(selection(&h), Some([10, 10, 30, 30]));
+    assert_eq!(h.state().ui.selected_path, None);
+}
+
 #[test]
 fn cmd_enter_loads_the_path_selected_in_the_paths_panel() {
     let mut h = harness();

@@ -877,8 +877,14 @@ pub fn path_to_selection(app: &mut PhotocraftApp, params: Value) -> Result<Value
     let name = active_path_name(app)
         .ok_or_else(|| tl!("No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.").to_string())?;
     let mut p = params.as_object().cloned().unwrap_or_default();
-    p.insert("name".into(), json!(name));
-    app.run("path.toSelection", Value::Object(p))
+    p.insert("name".into(), json!(name.clone()));
+    let r = app.run("path.toSelection", Value::Object(p));
+    if r.is_ok() && name != "layer" {
+        // Photoshop deselects the loaded path in the Paths panel, so the next Pen path starts a new
+        // Work Path instead of joining the one that just became the selection (#8069).
+        app.ui.selected_path = None;
+    }
+    r
 }
 
 // ---------------------------------------------------------------------------------------------
