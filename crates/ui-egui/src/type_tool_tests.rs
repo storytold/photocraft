@@ -1916,6 +1916,14 @@ mod multi_layer_formatting {
         h.run();
     }
 
+    fn preset(h: &mut Harness<'static, PhotocraftApp>, label: &str) {
+        // Presets near the end of the popup can be below its scroll viewport.
+        h.get_by_label(label).scroll_to_me();
+        h.run();
+        h.get_by_label(label).click();
+        h.run();
+    }
+
     fn editing(app: &mut PhotocraftApp, id: LayerId) {
         app.ui.text_edit = Some(crate::state::TextEdit {
             layer: id.0,
@@ -1985,6 +1993,40 @@ mod multi_layer_formatting {
         let id = h.state().session.active().unwrap().active_layer.unwrap();
         assert!(!ids.contains(&id), "a new type layer");
         assert_eq!(text(h.state(), id).paragraph_runs()[0].style.direction, TextDirection::Rtl, "new type starts right to left");
+    }
+
+    #[test]
+    fn character_panel_preset_menus_edit_size_leading_and_tracking() {
+        let (app, ids) = fixture();
+        let untouched = style(&app, ids[2], 0);
+        let mut h = controls(app, true);
+
+        // The three chevrons are additional combo boxes after family and face.
+        // They use the same setStyle path as the adjacent editable fields.
+        h.get_all_by_role(Role::ComboBox).nth(2).expect("size presets").click();
+        h.run();
+        preset(&mut h, "72 pt");
+
+        h.get_all_by_role(Role::ComboBox).nth(3).expect("leading presets").click();
+        h.run();
+        preset(&mut h, "Auto");
+
+        h.get_all_by_role(Role::ComboBox).nth(5).expect("tracking presets").click();
+        h.run();
+        preset(&mut h, "50");
+
+        for id in &ids[..2] {
+            let c = style(h.state(), *id, 0);
+            assert_eq!(c.size_pt, 72.0);
+            assert_eq!(c.leading_pt, None, "Auto restores font-relative line spacing");
+            assert_eq!(c.tracking, 50.0);
+        }
+        assert_eq!(style(h.state(), ids[2], 0), untouched, "unselected type layers are unchanged");
+
+        // The numeric spin boxes must remain usable beside their preset chevrons.
+        number(&mut h, "Font size", "40");
+        assert_eq!(style(h.state(), ids[0], 0).size_pt, 40.0);
+        assert_eq!(style(h.state(), ids[1], 0).size_pt, 40.0);
     }
 
     #[test]
@@ -2126,6 +2168,15 @@ mod multi_layer_formatting {
         let c = style(h.state(), ids[0], 0);
         assert_eq!((c.size_pt, c.leading_pt, c.baseline_shift_pt), (30.0, Some(42.0), 5.0));
         assert_eq!(text(h.state(), ids[0]).paragraph_runs()[0].style.start_indent_pt, 4.5);
+
+        h.get_all_by_role(Role::ComboBox).nth(2).expect("size presets").click();
+        h.run();
+        preset(&mut h, "144 px");
+        h.get_all_by_role(Role::ComboBox).nth(3).expect("leading presets").click();
+        h.run();
+        preset(&mut h, "192 px");
+        let c = style(h.state(), ids[0], 0);
+        assert_eq!((c.size_pt, c.leading_pt), (72.0, Some(96.0)), "presets preserve point values in pixel display units");
     }
 
     /// #5717: a layer scaled so its shown size or leading is past a field's range (2400 pt, or

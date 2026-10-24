@@ -174,14 +174,15 @@ fn type_controls_fill_the_panel_at_every_width_and_scale() {
                 .filter(|r| r.top() >= transform.bottom() && r.bottom() <= header.top())
                 .map(|r| r.right())
                 .fold(f32::MIN, f32::max);
-            // (Both rows have a unit suffix: compare with the size/leading row.)
-            // Variable-font axes can precede the size/leading row and have no unit suffix.
-            // Compare the intended point-valued controls, retaining the same edge tolerance.
+            // Preset-bearing fields reserve the right edge for their combo button.
+            // Verify the complete field (editable value plus preset) aligns with Transform.
             let lead = ["Font size", "Leading (set to the font size × auto-leading when Auto)"]
                 .into_iter()
                 .map(|label| h.get_by_role_and_label(egui::accesskit::Role::SpinButton, label).rect().right())
                 .fold(f32::MIN, f32::max);
-            assert!((t_right - lead).abs() < 0.5, "{what}: Transform fields end at {t_right}, Character at {lead}");
+            let lead_combo = combos[3].right(); // Family, style, size presets, leading presets.
+            assert!(lead + 20.0 <= lead_combo, "{what}: the leading preset must not overlap its editable field");
+            assert!((t_right - lead_combo).abs() <= 2.0, "{what}: Transform fields end at {t_right}, Character controls at {lead_combo}");
             // Quick Actions buttons span the panel too.
             let qa = h.get_by_label("Rasterize Type").rect();
             assert!(qa.right() >= header.right() - 2.0 && qa.right() <= header.right() + 1.0, "{what}: {qa:?}");
