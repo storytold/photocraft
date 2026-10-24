@@ -992,7 +992,7 @@ mod tests {
             params: serde_json::json!({"radius": 4.0}),
             k: 1,
         };
-        app.filter_preview = Some(crate::filter_dialog::FilterPreview { key, result: result.map(std::sync::Arc::new), committing: false });
+        app.filter_preview = Some(crate::filter_dialog::FilterPreview { key, result: result.map(std::sync::Arc::new), flat: None, committing: false });
         (app, id)
     }
 

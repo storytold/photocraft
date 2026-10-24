@@ -1360,7 +1360,7 @@ fn color_image(img: &photocraft_raster::Rgba8Image) -> egui::ColorImage {
 
 /// A composite as monitor pixels: document profile → monitor profile (nothing to do in the
 /// common sRGB-on-sRGB case).
-pub(crate) fn display_image(display: Option<&photocraft_engine::display_color::CanvasDisplay>, buf: &photocraft_compose::Buffer) -> egui::ColorImage {
+pub fn display_image(display: Option<&photocraft_engine::display_color::CanvasDisplay>, buf: &photocraft_compose::Buffer) -> egui::ColorImage {
     match display {
         Some(d) if !d.is_identity() => color_image(&d.to_rgba8(buf)),
         _ => buffer_to_image(buf),
@@ -2267,7 +2267,7 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
                 // Errors stay on the exact request: a value the pointer has already dragged past
                 // must not raise a notice, and a still one will raise it when it is recomputed.
                 Err(error) if finished == request => {
-                    app.filter_preview = Some(crate::filter_dialog::FilterPreview { key: finished, result: None, committing: false });
+                    app.filter_preview = Some(crate::filter_dialog::FilterPreview { key: finished, result: None, flat: None, committing: false });
                     crate::notices::error(app, error);
                 }
                 Err(_) => {}
@@ -2298,7 +2298,7 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
                 });
                 crate::filter_preview_worker::Computed { result, ms: crate::gpu_canvas::now_ms() - t0 }
             }) {
-                app.filter_preview = Some(crate::filter_dialog::FilterPreview { key: request.clone(), result: None, committing: false });
+                app.filter_preview = Some(crate::filter_dialog::FilterPreview { key: request.clone(), result: None, flat: None, committing: false });
                 crate::notices::error(app, error);
             }
         }
@@ -2362,7 +2362,7 @@ fn publish_filter_preview(
     computed: Option<(std::sync::Arc<photocraft_doc::Document>, photocraft_compose::Buffer)>,
     ms: f64,
 ) {
-    let result = computed.and_then(|(result, buffer)| {
+    let computed = computed.and_then(|(result, buffer)| {
         let t0 = crate::gpu_canvas::now_ms();
         let doc = app.session.documents().get(idx)?.doc.clone();
         // Shown through the preview's own colour management, as the result will be: Assign and
@@ -2373,9 +2373,10 @@ fn publish_filter_preview(
             gpu.upload_buffer_full(request.doc.0 ^ (1u64 << 61), &texture_buffer(display.as_deref(), &buffer), doc.depth);
         }
         app.perf.record("filter-preview", result.size.area(), ms, crate::gpu_canvas::now_ms() - t0);
-        Some(result)
+        Some((result, std::sync::Arc::new(buffer)))
     });
-    app.filter_preview = Some(crate::filter_dialog::FilterPreview { key: request, result, committing: false });
+    let (result, flat) = computed.unzip();
+    app.filter_preview = Some(crate::filter_dialog::FilterPreview { key: request, result, flat, committing: false });
 }
 
 /// The document whose colour management the canvas texture under `key` is shown through: a filter

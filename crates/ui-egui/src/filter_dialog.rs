@@ -1270,6 +1270,9 @@ fn add_source_documents(s: &mut photocraft_engine::Session, doc_id: photocraft_d
 pub struct FilterPreview {
     pub key: FilterPreviewKey,
     pub result: Option<Arc<Document>>,
+    /// `result` flattened, as the worker composited it for the canvas upload. The preview window
+    /// shows it rather than flattening the result again on the UI thread (#5772).
+    pub flat: Option<Arc<photocraft_compose::Buffer>>,
     /// OK was pressed and the filter runs as a background job: the preview stays on screen until
     /// the job lands, so the canvas doesn't flash the unfiltered image in between.
     pub committing: bool,
