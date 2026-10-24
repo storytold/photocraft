@@ -225,6 +225,24 @@ impl B {
         let Some(k) = blur_kernel(size) else { return src };
         self.conv(src, k)
     }
+    fn max(&mut self, a: In, b: In) -> In {
+        self.push(stage(Kernel::MFinish, Some(a), Some(b), [2.0, 0.0, 0.0, 0.0], 0))
+    }
+    fn softer_glow_tail(&mut self, blur: In, size: f32, range: f32) -> In {
+        let width = photocraft_compose::effects::softer_glow_tail_width(size);
+        if width == 0.0 {
+            return blur;
+        }
+        let distance = self.field(FieldKind::Outside, size + width);
+        let tail = self.push(stage(
+            Kernel::MGlow,
+            Some(distance),
+            None,
+            [size - width, width, photocraft_compose::effects::softer_glow_tail_amplitude(range), 1.0],
+            0,
+        ));
+        self.max(blur, tail)
+    }
     /// Separable convolution with a symmetric kernel `(radius, weights)` (two `MBlur` passes).
     fn conv(&mut self, src: In, (r, w): (i32, Vec<f32>)) -> In {
         if r <= 0 {
@@ -351,6 +369,7 @@ pub(crate) fn program_with(e: &Effect, light: &GlobalLight, vector_shape: bool, 
                         m = b.dilate(src, d, r);
                     }
                     let m = b.blur(m, bw);
+                    let m = if inner { m } else { b.softer_glow_tail(m, g.size, g.range) };
                     b.finish_glow(m, photocraft_compose::effects::glow_lut(g), inner, center);
                 }
             }
@@ -809,6 +828,36 @@ mod tests {
         assert_eq!(a.key, b.key);
         s.size += 1.0;
         assert_ne!(a.key, program(&Effect::DropShadow(s), &light, false).key);
+    }
+
+    #[test]
+    fn softer_outer_glow_program_keeps_the_tent_and_adds_a_distance_tail() {
+        let effect = Effect::OuterGlow(photocraft_doc::Glow {
+            common: FxCommon::new(BlendMode::Screen, 1.0),
+            paint: photocraft_doc::FxPaint::Color(photocraft_color::Color::WHITE),
+            technique: GlowTechnique::Softer,
+            spread: 0.0,
+            size: 60.0,
+            contour: Contour::Linear,
+            anti_alias: false,
+            range: 0.5,
+            jitter: 0.0,
+            noise: 0.0,
+            source: GlowSource::Edge,
+        });
+        let kernel = blur_kernel(60.0).unwrap();
+        let p = program(&effect, &GlobalLight::default(), false);
+        let blur: Vec<_> = p.stages.iter().filter(|s| s.kernel == Kernel::MBlur).collect();
+        assert_eq!(blur.len(), 2);
+        for stage in blur {
+            assert_eq!(stage.radius, kernel.0);
+            assert_eq!(stage.lut.as_deref().unwrap(), kernel.1.as_slice());
+        }
+        let tail = p.stages.iter().find(|s| s.kernel == Kernel::MGlow).unwrap();
+        assert_eq!(tail.a, Some(In::Field(FieldKind::Outside)));
+        assert_eq!(tail.p0, [54.0, 6.0, 0.0025, 1.0]);
+        assert!(p.stages.iter().any(|s| s.kernel == Kernel::MFinish && s.p0[0] == 2.0));
+        assert!(p.fields.contains(&(FieldKind::Outside, reach_for(66.0))));
     }
 
     /// A styled group's effect shape follows its own vector mask and its children's Blend If and

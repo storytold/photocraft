@@ -19,7 +19,8 @@
 //! Shapes come from the layer's alpha (after its mask). A stroke's outer edge, and precise glows /
 //! chiselled bevels, use an exact Euclidean transform: a 5 × 5 chamfer's level sets are polygons,
 //! which a wide stroke shows as flat facets (#3646). Inside stroke edges and spread / choke keep the
-//! cheaper chamfer. Soft falloffs are two box blurs (a tent).
+//! cheaper chamfer. Soft falloffs are two box blurs (a tent); Softer outer glows retain a short
+//! fading tail beyond Size.
 
 use photocraft_color::blend::BlendMode;
 use photocraft_doc::Pattern;
@@ -62,7 +63,14 @@ pub fn margin(layer: &Layer) -> i32 {
     for e in layer.effects.items.iter().filter(|e| e.enabled()) {
         let r = match e {
             Effect::DropShadow(s) | Effect::InnerShadow(s) => s.distance + s.size,
-            Effect::OuterGlow(g) | Effect::InnerGlow(g) => g.size,
+            Effect::OuterGlow(g) => {
+                if g.technique == GlowTechnique::Softer {
+                    g.size + softer_glow_tail_width(g.size)
+                } else {
+                    g.size
+                }
+            }
+            Effect::InnerGlow(g) => g.size,
             Effect::Stroke(s) => s.size,
             Effect::Satin(s) => satin_distance(s) + s.size,
             Effect::BevelEmboss(b) => b.size + b.soften,
@@ -1221,6 +1229,9 @@ fn glow_map(shape: &Map, g: &Glow, inner: bool, origin: (i32, i32)) -> Map {
             let (r, bw) = spread_split(g.size, g.spread);
             let mut m = dilate(&src, r);
             blur(&mut m, bw);
+            if !inner {
+                add_softer_glow_tail(&mut m, &src, g.size, g.range);
+            }
             m
         }
     };
@@ -1502,6 +1513,39 @@ fn tent_fast(m: &mut Map, w: f32) {
     let mut b = vec![0.0f32; t.len()];
     rows_par(&t, &mut b, mh, twice);
     m.v = transpose_map(&b, mh, mw);
+}
+
+/// Width of the added fading tail on a Softer outer glow, capped so large settings stay local.
+pub fn softer_glow_tail_width(size: f32) -> f32 {
+    if size.is_finite() && size > 0.0 { (size * 0.1).clamp(1.0, 6.0) } else { 0.0 }
+}
+
+/// Raw coverage at the Size boundary, scaled through the glow's Range to a subtle one-percent tail.
+pub fn softer_glow_tail_amplitude(range: f32) -> f32 {
+    let range = if range.is_finite() { range.clamp(0.01, 1.0) } else { 1.0 };
+    0.005 * range
+}
+
+fn add_softer_glow_tail(map: &mut Map, shape: &Map, size: f32, range: f32) {
+    let width = softer_glow_tail_width(size);
+    if width == 0.0 {
+        return;
+    }
+    let amp = softer_glow_tail_amplitude(range);
+    let distance = dist_outside(shape);
+    for (coverage, distance) in map.v.iter_mut().zip(distance) {
+        let t = (distance + 0.5 - (size - width)) / width;
+        let tail = if (0.0..=1.0).contains(&t) {
+            amp * t * t * (3.0 - 2.0 * t)
+        } else if (1.0..=2.0).contains(&t) {
+            let u = t - 1.0;
+            let remaining = 1.0 - u;
+            amp * remaining * remaining * (1.0 + 2.0 * u)
+        } else {
+            0.0
+        };
+        *coverage = coverage.max(tail);
+    }
 }
 
 /// Where a bevel's maps paint: inside the shape (with the layer), outside it (onto the
@@ -3316,6 +3360,56 @@ mod tests {
                 assert!((at(&c, x) - (1.0 - at(&e, x))).abs() < 1e-5, "{t:?} at {x}");
             }
         }
+    }
+
+    #[test]
+    fn softer_outer_glow_keeps_a_fading_tail_past_its_size() {
+        let mut shape = Map::new(220, 220, 0.0);
+        for y in 0..shape.h {
+            for x in 20..100 {
+                shape.v[y * shape.w + x] = 1.0;
+            }
+        }
+        let glow = Glow {
+            common: photocraft_doc::FxCommon::new(BlendMode::Screen, 1.0),
+            paint: FxPaint::Color(photocraft_color::Color::WHITE),
+            technique: GlowTechnique::Softer,
+            spread: 0.0,
+            size: 60.0,
+            contour: Contour::Linear,
+            anti_alias: false,
+            range: 0.5,
+            jitter: 0.0,
+            noise: 0.0,
+            source: GlowSource::Edge,
+        };
+        let m = glow_map(&shape, &glow, false, (0, 0));
+        let row = shape.h / 2;
+        let at = |distance: usize| m.v[row * m.w + 100 + distance];
+        assert!(at(50) > 0.024, "the softer shoulder should stay visible: {}", at(50));
+        assert!(at(60) > 1.0 / 255.0, "the glow must retain a visible tail at its Size: {}", at(60));
+        assert!(at(62) > 0.5 / 255.0, "the glow must extend beyond its Size: {}", at(62));
+        assert!(at(66) < 1e-6, "the added tail should fade to zero: {}", at(66));
+    }
+
+    #[test]
+    fn softer_outer_glow_margin_includes_its_tail_support() {
+        let glow = Glow {
+            common: photocraft_doc::FxCommon::new(BlendMode::Screen, 1.0),
+            paint: FxPaint::Color(photocraft_color::Color::WHITE),
+            technique: GlowTechnique::Softer,
+            spread: 0.0,
+            size: 60.0,
+            contour: Contour::Linear,
+            anti_alias: false,
+            range: 0.5,
+            jitter: 0.0,
+            noise: 0.0,
+            source: GlowSource::Edge,
+        };
+        let mut layer = Layer::raster("glow", photocraft_color::PixelFormat::RGBA8);
+        layer.effects.items.push(Effect::OuterGlow(glow));
+        assert_eq!(margin(&layer), 68);
     }
 
     #[test]
