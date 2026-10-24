@@ -490,6 +490,15 @@ pub(crate) fn marquee_drag_ants(d: &Drag, xf: &ViewXform, marquee: Option<[f64; 
     marquee_ants(xf, d.tool, a, b)
 }
 
+/// The corners on screen of the document-axis box dragged from `a` to `b`, clockwise from its
+/// top-left: a turned parallelogram in a rotated view, as the box the release creates (the Type
+/// tools' text box, the Move tool's layer marquee).
+pub(crate) fn doc_box_corners(xf: &ViewXform, a: [f64; 2], b: [f64; 2]) -> [Pos2; 4] {
+    let (x0, x1) = (a[0].min(b[0]) as f32, a[0].max(b[0]) as f32);
+    let (y0, y1) = (a[1].min(b[1]) as f32, a[1].max(b[1]) as f32);
+    [xf.to_screen(x0, y0), xf.to_screen(x1, y0), xf.to_screen(x1, y1), xf.to_screen(x0, y1)]
+}
+
 /// The size readout shown beside the cursor while dragging a marquee: the width and height values.
 pub fn marquee_readout(r: [f64; 4]) -> [String; 2] {
     [format!("{} px", r[2] - r[0]), format!("{} px", r[3] - r[1])]
@@ -5680,8 +5689,8 @@ fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &View
             painter.circle_filled(b, 3.0, Color32::WHITE);
         }
         Tool::Type | Tool::VerticalType | Tool::HorizontalTypeMask | Tool::VerticalTypeMask => {
-            let r = Rect::from_two_pos(xf.to_screen(d.start[0] as f32, d.start[1] as f32), xf.to_screen(last[0] as f32, last[1] as f32));
-            let pts = [r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom(), r.left_top()];
+            let [p0, p1, p2, p3] = doc_box_corners(xf, d.start, last);
+            let pts = [p0, p1, p2, p3, p0];
             painter.add(egui::Shape::line(pts.to_vec(), Stroke::new(1.0, Color32::WHITE)));
             painter.add(egui::Shape::dashed_line(&pts, Stroke::new(1.0, Color32::BLACK), 3.0, 3.0));
         }

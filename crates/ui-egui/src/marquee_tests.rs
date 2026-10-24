@@ -454,6 +454,91 @@ fn the_live_outline_matches_the_committed_selection_in_a_rotated_view() {
     }
 }
 
+/// The closed outlines the last frame drew as a solid white line under black dashes: the Type
+/// tools' drag box and the Move tool's layer marquee (four corners, the first repeated).
+fn white_box_outlines(h: &Harness<'static, PhotocraftApp>) -> Vec<Vec<Pos2>> {
+    h.output()
+        .shapes
+        .iter()
+        .filter_map(|c| match &c.shape {
+            egui::Shape::Path(p)
+                if matches!(p.stroke.color, egui::epaint::ColorMode::Solid(col) if col == egui::Color32::WHITE)
+                    && p.points.len() == 5
+                    && p.points.first() == p.points.last() =>
+            {
+                Some(p.points.clone())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// Every drawn corner of `outline` maps back, through the view, to the document corner of `want`
+/// ([x0, y0, x1, y1]) with the same index, clockwise from the top-left.
+fn assert_doc_box(xf: &ViewXform, outline: &[Pos2], want: [f64; 4], what: &str) {
+    let corners = [[want[0], want[1]], [want[2], want[1]], [want[2], want[3]], [want[0], want[3]]];
+    for (i, (p, w)) in outline.iter().zip(corners).enumerate() {
+        let [x, y] = xf.to_doc(*p);
+        assert!(
+            (x - w[0]).abs() <= 1.0 && (y - w[1]).abs() <= 1.0,
+            "{what}: corner {i} drawn at {p:?} is document ({x:.1}, {y:.1}), the box's corner is {w:?}"
+        );
+    }
+}
+
+/// #7063: in a rotated view the Type tools' drag box previews the document-axis text box the
+/// release creates. An upright screen box through two of its corners is another shape (at 45° a
+/// dragged square previews as a sliver).
+#[test]
+fn the_type_drag_box_matches_the_committed_text_box_in_a_rotated_view() {
+    for rotation in [30.0, 45.0] {
+        let mut h = harness(Tool::Type);
+        h.state_mut().ui.extras.snap = false;
+        h.state_mut().ui.views[0].rotation = rotation;
+        h.run_steps(2);
+        press_at(&mut h, 50.0, 50.0, Modifiers::NONE);
+        move_to(&mut h, 150.0, 90.0);
+        let xf = view_xform(&h);
+        let drawn = white_box_outlines(&h);
+        assert_eq!(drawn.len(), 1, "{rotation}°: one text box is previewed: {drawn:?}");
+        release_at(&mut h, 150.0, 90.0, Modifiers::NONE);
+        // The text box the release created, in document pixels.
+        let committed = {
+            let st = h.state().session.active().unwrap();
+            let layer = st.doc.layer(st.active_layer.unwrap()).unwrap();
+            let photocraft_doc::LayerContent::Text(t) = &layer.content else { panic!("{rotation}°: a type layer") };
+            let photocraft_doc::text::TextShape::Box { x, y, width, height } = t.shape else { panic!("{rotation}°: paragraph text") };
+            let (tx, ty) = (t.transform.m[4], t.transform.m[5]);
+            [tx + f64::from(x), ty + f64::from(y), tx + f64::from(x + width), ty + f64::from(y + height)]
+        };
+        assert!((committed[0] - 50.0).abs() <= 1.0 && (committed[3] - 90.0).abs() <= 1.0, "{rotation}°: the drag made {committed:?}");
+        assert_doc_box(&xf, &drawn[0], committed, &format!("{rotation}°: the Type preview"));
+    }
+}
+
+/// #7063: in a rotated view the Move tool's layer marquee (#2844) previews the document-axis box
+/// `layer.selectInRect` gets on the release, not an upright screen box through two of its corners.
+#[test]
+fn the_move_layer_marquee_follows_the_document_axes_in_a_rotated_view() {
+    for rotation in [30.0, 45.0] {
+        let mut h = harness(Tool::Move);
+        let app = h.state_mut();
+        app.ui.extras.snap = false;
+        app.ui.tool_options.move_auto_select = true;
+        app.ui.views[0].rotation = rotation;
+        h.run_steps(2);
+        // On the locked Background, so the drag draws the marquee (#4058).
+        press_at(&mut h, 50.0, 50.0, Modifiers::NONE);
+        move_to(&mut h, 150.0, 90.0);
+        assert!(h.state().layer_box.is_some(), "{rotation}°: the drag draws the layer marquee");
+        let xf = view_xform(&h);
+        let drawn = white_box_outlines(&h);
+        assert_eq!(drawn.len(), 1, "{rotation}°: one marquee is drawn: {drawn:?}");
+        assert_doc_box(&xf, &drawn[0], [50.0, 50.0, 150.0, 90.0], &format!("{rotation}°: the layer marquee"));
+        release_at(&mut h, 150.0, 90.0, Modifiers::NONE);
+    }
+}
+
 /// 800 %, snapping off, the view centred on (30, 30): the pointer lands between pixel edges.
 fn zoomed(tool: Tool) -> Harness<'static, PhotocraftApp> {
     let mut h = harness(tool);
