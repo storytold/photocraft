@@ -100,11 +100,15 @@ pub fn parse(file_name: &str, bytes: &[u8]) -> Result<LutFile, LutError> {
     }
 }
 
-/// Adobe / Resolve `.cube`. 1D LUTs (`LUT_1D_SIZE`) are expanded to a 33³ table.
+/// Adobe / Resolve `.cube`. 1D LUTs (`LUT_1D_SIZE`) are expanded to a 33³ table. A Resolve file
+/// with both sizes holds a 1D shaper and then a 3D table; the shaper runs first and its output
+/// feeds the table, so the two are baked into one table ([`compose_shaper`]).
 pub fn parse_cube(text: &str) -> Result<LutFile, LutError> {
     let mut title = String::new();
     let (mut size3, mut size1) = (0usize, 0usize);
     let (mut dmin, mut dmax) = ([0.0f32; 3], [1.0f32; 3]);
+    // Resolve's per-stage input ranges, kept apart for a file with both stages.
+    let (mut range1, mut range3): (Option<[f32; 2]>, Option<[f32; 2]>) = (None, None);
     let mut rows: Vec<f32> = Vec::new();
     for line in text.lines() {
         // A '#' inside a quoted TITLE is part of the title, not a comment.
@@ -131,10 +135,16 @@ pub fn parse_cube(text: &str) -> Result<LutFile, LutError> {
             "DOMAIN_MIN" => dmin = nums(it)?,
             "DOMAIN_MAX" => dmax = nums(it)?,
             "LUT_3D_INPUT_RANGE" | "LUT_1D_INPUT_RANGE" => {
-                let v: Vec<f32> = it.filter_map(|s| s.parse().ok()).collect();
-                if v.len() == 2 {
-                    dmin = [v[0]; 3];
-                    dmax = [v[1]; 3];
+                // Exactly two numbers, as OpenColorIO reads it: a malformed range is refused, not
+                // replaced by the default 0..1.
+                let v: Vec<f32> = it.map(|s| s.parse()).collect::<Result<_, _>>().map_err(|_| LutError(format!("bad line `{line}`")))?;
+                let [lo, hi] = v[..] else { return err(format!("bad line `{line}`")) };
+                dmin = [lo; 3];
+                dmax = [hi; 3];
+                if key == "LUT_1D_INPUT_RANGE" {
+                    range1 = Some([lo, hi]);
+                } else {
+                    range3 = Some([lo, hi]);
                 }
             }
             k if k.starts_with(|c: char| c.is_ascii_digit() || c == '-' || c == '+' || c == '.') => {
@@ -152,6 +162,9 @@ pub fn parse_cube(text: &str) -> Result<LutFile, LutError> {
     let domain_ok = (0..3).all(|k| dmin[k] < dmax[k] && dmin[k].is_finite() && dmax[k].is_finite());
     if (size3 > 0 || size1 >= 2) && !domain_ok {
         return err(format!("DOMAIN_MIN {:?} must lie below DOMAIN_MAX {:?}", dmin, dmax));
+    }
+    if size3 > 0 && size1 >= 2 {
+        return compose_shaper(title, size1, size3, &rows, range1.unwrap_or([0.0, 1.0]), range3.unwrap_or([0.0, 1.0]));
     }
     if size3 > 0 {
         return LutFile { title, size: size3, data: rows, domain_min: dmin, domain_max: dmax }.check();
@@ -176,6 +189,41 @@ pub fn parse_cube(text: &str) -> Result<LutFile, LutError> {
         return l.check();
     }
     err("no LUT_3D_SIZE in .cube file")
+}
+
+/// A Resolve `.cube` with both stages (#9177): `rows` holds the `size1` shaper rows, then the
+/// `size3`³ table (red fastest). The shaper reads its input over `range1`; its output enters the
+/// table over `range3` (OpenColorIO's reading of the format). Both are baked into one table of at
+/// least 33 points a side, as a lone 1D LUT is.
+fn compose_shaper(title: String, size1: usize, size3: usize, rows: &[f32], range1: [f32; 2], range3: [f32; 2]) -> Result<LutFile, LutError> {
+    let (_, table_len) = checked_data_len(size3)?;
+    let shaper_len = size1.checked_mul(3).ok_or_else(|| LutError(format!("unsupported 1D LUT size {size1}")))?;
+    let expected = shaper_len.checked_add(table_len).ok_or_else(|| LutError(format!("unsupported LUT size {size3}")))?;
+    if rows.len() != expected {
+        return err(format!("a {size1}-row shaper and a {size3}³ table need {} rows, found {}", expected / 3, rows.len() / 3));
+    }
+    for (name, [lo, hi]) in [("LUT_1D_INPUT_RANGE", range1), ("LUT_3D_INPUT_RANGE", range3)] {
+        if !(lo < hi && lo.is_finite() && hi.is_finite()) {
+            return err(format!("{name} {lo} {hi}: the minimum must lie below the maximum"));
+        }
+    }
+    let (shaper, table) = rows.split_at(shaper_len);
+    let table = crate::lut3d::Lut3d { size: size3, data: table.as_chunks::<3>().0.iter().map(|c| [c[0], c[1], c[2], 1.0]).collect() };
+    let unit = |v: f32, [lo, hi]: [f32; 2]| {
+        let t = (v - lo) / (hi - lo);
+        if t.is_finite() { t.clamp(0.0, 1.0) } else { 0.0 }
+    };
+    let shape = |ch: usize, v: f32| {
+        let x = unit(v, range1) * (size1 - 1) as f32;
+        let i = (x.floor() as usize).min(size1 - 2);
+        let f = x - i as f32;
+        let at = |k: usize| shaper.get(k * 3 + ch).copied().unwrap_or(0.0);
+        at(i) * (1.0 - f) + at(i + 1) * f
+    };
+    let n = size3.clamp(33, MAX_SIZE);
+    let mut l = LutFile::from_fn(&title, n, |c| table.sample([unit(shape(0, c[0]), range3), unit(shape(1, c[1]), range3), unit(shape(2, c[2]), range3)]));
+    l.title = title;
+    l.check()
 }
 
 /// Lustre `.3dl`: an optional shaper line of input values, then integer RGB rows with **blue**
@@ -319,6 +367,19 @@ pub fn builtin(id: &str) -> Option<LutFile> {
 mod tests {
     use super::*;
 
+    /// #9183 review: an input-range header must be exactly two numbers; a malformed one is
+    /// refused rather than silently replaced by the default 0..1 (as OpenColorIO does).
+    #[test]
+    fn cube_malformed_input_range_is_refused() {
+        let table = "0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n";
+        let combined = |range: &str| format!("LUT_1D_SIZE 2\nLUT_3D_SIZE 2\n{range}\n0 0 0\n1 1 1\n{table}");
+        assert!(parse_cube(&combined("LUT_3D_INPUT_RANGE 0 1")).is_ok());
+        for bad in ["LUT_3D_INPUT_RANGE 0 bad", "LUT_1D_INPUT_RANGE 0", "LUT_3D_INPUT_RANGE 0 bad 1", "LUT_1D_INPUT_RANGE 0 1 2"] {
+            assert!(parse_cube(&combined(bad)).is_err(), "{bad}");
+        }
+        assert!(parse_cube(&format!("LUT_3D_SIZE 2\nLUT_3D_INPUT_RANGE 0 bad\n{table}")).is_err(), "a 3D-only file too");
+    }
+
     #[test]
     fn cube_title_with_hash_round_trips() {
         let l = LutFile::from_fn("Look #3", 2, |c| c);
@@ -402,6 +463,41 @@ DOMAIN_MAX 0.5 1 1
         // A degenerate 1D domain is rejected like the 3D one.
         let e = parse_cube("LUT_1D_SIZE 2\nLUT_1D_INPUT_RANGE 1 1\n0 0 0\n1 1 1\n").unwrap_err();
         assert!(e.0.contains("below DOMAIN_MAX"), "{e}");
+    }
+
+    /// The 2³ table that inverts each channel (red fastest).
+    const INVERT: &str = "1 1 1\n0 1 1\n1 0 1\n0 0 1\n1 1 0\n0 1 0\n1 0 0\n0 0 0\n";
+
+    fn look(l: &LutFile, c: f32) -> [f32; 3] {
+        crate::lut3d::Lut3d { size: l.size, data: l.data.as_chunks::<3>().0.iter().map(|v| [v[0], v[1], v[2], 1.0]).collect() }.sample([c; 3])
+    }
+
+    /// #9177: a Resolve `.cube` with a 1D shaper and a 3D table runs the shaper first and feeds
+    /// its output to the table, as OpenColorIO reads it, instead of being refused.
+    #[test]
+    fn cube_shaper_runs_before_the_3d_table() {
+        let shaper = "0 0 0\n0.2 0.2 0.2\n1 1 1\n";
+        let l = parse_cube(&format!("LUT_1D_SIZE 3\nLUT_3D_SIZE 2\n{shaper}{INVERT}")).expect("1D + 3D");
+        assert!(l.domain_is_default() && l.size >= 33);
+        // 0.5 → shaper 0.2 → inverted 0.8; 0.75 → shaper 0.6 → 0.4.
+        for (c, want) in [(0.5, 0.8), (0.75, 0.4), (0.0, 1.0), (1.0, 0.0)] {
+            let got = look(&l, c);
+            assert!(got.iter().all(|v| (v - want).abs() < 1e-5), "{c} → {got:?}, want {want}");
+        }
+        // The header order doesn't matter.
+        let swapped = parse_cube(&format!("LUT_3D_SIZE 2\nLUT_1D_SIZE 3\n{shaper}{INVERT}")).unwrap();
+        assert_eq!(swapped, l);
+        // Each stage reads its own input range: the shaper halves 0..1, and the table's 0..0.5
+        // range stretches that back, so an identity table gives the input again.
+        let identity: String = (0..8).map(|i| format!("{} {} {}\n", i & 1, (i >> 1) & 1, i >> 2)).collect();
+        let l = parse_cube(&format!("LUT_1D_SIZE 2\nLUT_1D_INPUT_RANGE 0 1\nLUT_3D_SIZE 2\nLUT_3D_INPUT_RANGE 0 0.5\n0 0 0\n0.5 0.5 0.5\n{identity}")).unwrap();
+        let got = look(&l, 0.25);
+        assert!(got.iter().all(|v| (v - 0.25).abs() < 1e-5), "{got:?}");
+        // A file short of either stage is refused with both counts.
+        let e = parse_cube(&format!("LUT_1D_SIZE 3\nLUT_3D_SIZE 2\n{shaper}{}", &INVERT[6..])).unwrap_err();
+        assert!(e.0.contains("need 11 rows, found 10"), "{e}");
+        let e = parse_cube(&format!("LUT_1D_SIZE 3\nLUT_3D_SIZE 2\nLUT_3D_INPUT_RANGE 1 1\n{shaper}{INVERT}")).unwrap_err();
+        assert!(e.0.contains("below"), "a degenerate range is refused: {e}");
     }
 
     #[test]
