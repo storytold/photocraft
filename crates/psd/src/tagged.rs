@@ -352,9 +352,14 @@ impl TaggedBlock {
 
     /// Serialized size in bytes as a layer block (two-byte alignment).
     pub fn encoded_len(&self, version: Version) -> usize {
+        self.encoded_len_aligned(version, 2)
+    }
+
+    /// Serialized size in bytes as [`Self::write`] writes it with `alignment`.
+    pub(crate) fn encoded_len_aligned(&self, version: Version, alignment: usize) -> usize {
         let l = if uses_long_length(version, &self.key) { 8 } else { 4 };
-        let p = self.padding.as_ref().map_or(Self::default_padding(self.data.len(), 2), Vec::len);
-        8 + l + self.data.len() + p
+        let p = self.padding.as_ref().map_or(Self::default_padding(self.data.len(), alignment), Vec::len);
+        (8 + l + p).saturating_add(self.data.len())
     }
 }
 

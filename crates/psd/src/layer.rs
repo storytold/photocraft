@@ -1,7 +1,7 @@
 //! Layer records, layer masks, blending ranges and per-layer channel data.
 
 use crate::blend::BlendMode;
-use crate::compression::{Compression, PlaneLayout, decode_planes, encode_planes};
+use crate::compression::{Compression, PlaneLayout, decode_planes, encode_planes, put_widened_rle, rle_widening};
 use crate::error::{PsdError, Result};
 use crate::header::{MAX_DIMENSION, Version};
 use crate::io::{Reader, WriteExt, decode_legacy_name, read_pascal, write_pascal};
@@ -598,6 +598,12 @@ impl LayerRecord {
         Ok((LayerRecord { rect, channels, blend_mode, opacity, clipping, flags, filler, mask, blending_ranges, name, blocks, extra_trailing }, lens))
     }
 
+    /// Rows of a channel's RLE count table that grow when a PSD model is written as PSB
+    /// (`widen`, see [`crate::PsdFile::promote_to_psb`]); 0 for other channels.
+    pub(crate) fn widened_rows(&self, c: &ChannelData, widen: bool) -> Result<usize> {
+        if widen && c.compression == Some(Compression::Rle) { Ok(self.channel_rect(c.id).size()?.1) } else { Ok(0) }
+    }
+
     /// Bytes [`Self::write`] produces, computed without serializing. Errors where `write` would.
     fn encoded_len(&self, version: Version) -> Result<u64> {
         let too_big = || PsdError::LimitExceeded("section too large for 32-bit length (use PSB)");
@@ -628,13 +634,15 @@ impl LayerRecord {
         Ok((16 + 2 + self.channels.len() as u64 * (2 + channel_len) + 8 + 4 + 4).saturating_add(extra))
     }
 
-    fn write(&self, out: &mut Vec<u8>, version: Version) -> Result<()> {
+    fn write(&self, out: &mut Vec<u8>, version: Version, widen: bool) -> Result<()> {
         self.rect.write(out);
         let nch = u16::try_from(self.channels.len()).map_err(|_| PsdError::LimitExceeded("too many channels"))?;
         out.put_u16(nch);
         for c in &self.channels {
             out.put_i16(c.id);
-            out.put_len(c.stored_len(), version.is_psb())?;
+            let rows = self.widened_rows(c, widen)?;
+            let grown = if rows == 0 { 0 } else { rle_widening(&c.data, rows)? };
+            out.put_len(c.stored_len().saturating_add(grown), version.is_psb())?;
         }
         out.put(b"8BIM");
         out.put(&self.blend_mode.key());
@@ -709,14 +717,24 @@ impl LayerInfo {
     /// Length of the body (layer count, records and channel data) without
     /// its trailing padding.
     pub fn unpadded_len(&self, version: Version) -> Result<u64> {
+        self.unpadded_len_as(version, false)
+    }
+
+    /// [`Self::unpadded_len`] of the body written with its RLE count tables widened (`widen`).
+    pub(crate) fn unpadded_len_as(&self, version: Version, widen: bool) -> Result<u64> {
         // Computed from the field sizes: serializing the records just to measure them would copy
-        // every tagged block.
+        // every tagged block. Widening changes channel data only: the record's length fields keep
+        // their width.
         let mut n = 2u64;
         for l in &self.layers {
             n = n.saturating_add(l.encoded_len(version)?);
         }
-        for c in self.layers.iter().flat_map(|l| &l.channels).filter(|c| c.compression.is_some()) {
-            n = n.saturating_add(2).saturating_add(c.data.len() as u64);
+        for l in &self.layers {
+            for c in l.channels.iter().filter(|c| c.compression.is_some()) {
+                let rows = l.widened_rows(c, widen)?;
+                let grown = if rows == 0 { 0 } else { rle_widening(&c.data, rows)? };
+                n = n.saturating_add(2).saturating_add(c.data.len() as u64).saturating_add(grown);
+            }
         }
         Ok(n)
     }
@@ -732,8 +750,13 @@ impl LayerInfo {
 
     /// Number of zero bytes [`Self::pad_to`] would set, without touching `self`.
     pub(crate) fn pad_len(&self, version: Version, align: u64) -> Result<usize> {
+        self.pad_len_as(version, false, align)
+    }
+
+    /// [`Self::pad_len`] for the body written with its RLE count tables widened (`widen`).
+    pub(crate) fn pad_len_as(&self, version: Version, widen: bool, align: u64) -> Result<usize> {
         let align = align.max(1);
-        let len = self.unpadded_len(version)?;
+        let len = self.unpadded_len_as(version, widen)?;
         Ok(((align - len % align) % align) as usize)
     }
 
@@ -745,16 +768,25 @@ impl LayerInfo {
 
     /// Serializes the body without any trailing padding (the padding field is ignored).
     pub(crate) fn write_unpadded(&self, out: &mut Vec<u8>, version: Version) -> Result<()> {
+        self.write_unpadded_as(out, version, false)
+    }
+
+    /// [`Self::write_unpadded`], widening the RLE count tables of a PSD model written as PSB
+    /// (`widen`) on the way out.
+    fn write_unpadded_as(&self, out: &mut Vec<u8>, version: Version, widen: bool) -> Result<()> {
         let n = i16::try_from(self.layers.len()).map_err(|_| PsdError::LimitExceeded("more than 32767 layers"))?;
         out.put_i16(if self.merged_alpha { -n } else { n });
         for l in &self.layers {
-            l.write(out, version)?;
+            l.write(out, version, widen)?;
         }
         for l in &self.layers {
             for c in &l.channels {
                 if let Some(comp) = c.compression {
                     out.put_u16(comp.as_u16());
-                    out.put(&c.data);
+                    match l.widened_rows(c, widen)? {
+                        0 => out.put(&c.data),
+                        rows => put_widened_rle(out, &c.data, rows)?,
+                    }
                 }
             }
         }
@@ -762,9 +794,15 @@ impl LayerInfo {
     }
 
     /// Serializes the body (without a length field).
+    #[cfg(test)]
     pub(crate) fn write_body(&self, out: &mut Vec<u8>, version: Version) -> Result<()> {
+        self.write_body_as(out, version, false)
+    }
+
+    /// [`Self::write_body`], widening RLE count tables when `widen` (see [`Self::write_unpadded_as`]).
+    pub(crate) fn write_body_as(&self, out: &mut Vec<u8>, version: Version, widen: bool) -> Result<()> {
         let start = out.len();
-        self.write_unpadded(out, version)?;
+        self.write_unpadded_as(out, version, widen)?;
         match &self.padding {
             Some(p) => out.put(p),
             None => {
