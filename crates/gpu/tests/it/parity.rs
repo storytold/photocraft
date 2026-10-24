@@ -3091,3 +3091,7 @@ fn dissolve_clipped_adjustment_matches_cpu() {
         diff_rect(&mut g, &d, Rect::new(250, 1, 270, 20), "clipped adjustment offset region").unwrap_or_else(|e| panic!("{e}"));
     }
 }
+
+// Layer operators (#5772), with the helpers above.
+#[path = "operator.rs"]
+mod operator;
