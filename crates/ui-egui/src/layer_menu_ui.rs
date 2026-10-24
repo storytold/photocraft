@@ -107,6 +107,9 @@ pub fn entries(l: &Layer, multi: bool, has_selection: bool) -> Vec<Entry> {
     v.push(Some((tl!("Link Layers"), "layer.linkLayers")));
     v.push(Some((tl!("Select Linked Layers"), "layer.selectLinkedLayers")));
     v.push(None);
+    if matches!(l.content, LayerContent::Text(_) | LayerContent::Shape(_)) || multi {
+        v.push(Some((tl!("Copy CSS"), "layer.copyCss")));
+    }
     v.push(Some((tl!("Copy Layer Style"), "layer.layerStyle.copyLayerStyle")));
     v.push(Some((tl!("Paste Layer Style"), "layer.layerStyle.pasteLayerStyle")));
     v.push(Some((tl!("Clear Layer Style"), "layer.layerStyle.clear")));
@@ -319,6 +322,31 @@ mod color_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #8099: type and shape layers (and a selection) offer Copy CSS, pixel layers don't; running
+    /// it queues the CSS for the OS clipboard, which the next frame copies.
+    #[test]
+    fn copy_css_is_offered_for_type_and_shape_layers_and_queues_the_clipboard() {
+        use photocraft_doc::{Layer, LayerContent, TextLayer};
+        let offers = |l: &Layer, multi: bool| entries(l, multi, false).into_iter().flatten().any(|e| e.1 == "layer.copyCss");
+        let pixels = Layer::raster("P", photocraft_doc::PixelFormat::RGBA8);
+        let text = Layer::new("T", LayerContent::Text(TextLayer { text: "Hi".into(), font_family: "Inter".into(), ..Default::default() }));
+        assert!(!offers(&pixels, false), "a pixel layer has no CSS");
+        assert!(offers(&text, false) && offers(&pixels, true), "type layers and selections offer it");
+        let mut s = photocraft_engine::Session::new();
+        s.execute("file.new", json!({"width": 40, "height": 40})).unwrap();
+        let id = s
+            .edit("setup", |doc, _| {
+                let id = text.id;
+                doc.layers.push(text);
+                Ok(id)
+            })
+            .unwrap();
+        let mut app = crate::PhotocraftApp::new(s, Default::default());
+        let r = app.run("layer.copyCss", json!({"layer": id.0})).unwrap();
+        assert_eq!(app.pending_clipboard_text.as_deref(), r["css"].as_str());
+        assert!(r["css"].as_str().is_some_and(|c| c.contains("font-family: \"Inter\"")));
+    }
 
     #[test]
     fn mask_toggle_label_follows_history_and_selected_layer() {

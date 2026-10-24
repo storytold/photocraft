@@ -32,6 +32,7 @@ pub mod commands;
 pub mod comps_cmds;
 pub mod contour_lib_cmds;
 mod crop_fill;
+mod css_cmds;
 pub mod cutout_cmds;
 pub mod display_color;
 pub mod distort_cmds;

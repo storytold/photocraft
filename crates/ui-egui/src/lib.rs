@@ -905,6 +905,8 @@ pub struct PhotocraftApp {
     /// The filter a "Rasterize?" prompt answered for, run after the dialog closes, where the
     /// egui context is available again (rasterize_prompt).
     pub(crate) pending_after_prompt: Option<(String, serde_json::Value)>,
+    /// Text a command asked the shell to put on the OS clipboard (Copy CSS); copied next frame.
+    pending_clipboard_text: Option<String>,
     /// Last mirrored or imported OS image; this can predate the current internal copy.
     os_clip_sig: Option<u64>,
     /// The session copy, if any, need not track the OS clipboard. An older OS signature is kept
@@ -1137,6 +1139,7 @@ impl PhotocraftApp {
             wide_angle: None,
             dialog_edits: Default::default(),
             pending_after_prompt: None,
+            pending_clipboard_text: None,
             tone_hist: None,
             doc_hist: None,
             hist_job: None,
@@ -1277,6 +1280,13 @@ impl PhotocraftApp {
         let result = self.run_command(id, params);
         if gate.is_some() {
             self.session.authorize = None;
+        }
+        if let Ok(v) = &result
+            && let Some(text) = v.get("clipboardText").and_then(Value::as_str)
+        {
+            self.pending_clipboard_text = Some(text.to_string());
+            self.ui.status = tl!("Copied to the clipboard").into();
+            self.ui.status_error = false;
         }
         // An explicit channel target (⌘2, ⌘\, ⌘3…) decides what the Layers panel targets too:
         // ⌘2 after the mask was targeted goes back to the layer's pixels.
@@ -2266,6 +2276,9 @@ impl eframe::App for PhotocraftApp {
 
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         self.cap_frame_rate();
+        if let Some(text) = self.pending_clipboard_text.take() {
+            ctx.copy_text(text);
+        }
         i18n::set_current(i18n::Lang::from_pref(&self.session.prefs().interface.language));
         // Caps Lock state read from the OS once per frame (see `Services::caps_lock`): the canvas
         // cursor block needs it before the frame renders. `None` (Wayland/web) keeps `false`.
