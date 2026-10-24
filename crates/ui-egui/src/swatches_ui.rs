@@ -95,8 +95,9 @@ fn handle(app: &mut PhotocraftApp, e: Ev, background: bool) {
             sel(app, &k);
             app.ui.presets_ui.renaming = Some((PANEL.into(), k.clone(), k));
         }
-        // Swatches don't drop onto the canvas.
-        Ev::Drop(..) => {}
+        // A swatch dropped on the canvas fills the selection, or the whole active layer, with its
+        // colour (#7359); the foreground colour stays as it was.
+        Ev::Drop(k, _) => drop_on_canvas(app, &k),
         Ev::Rename(k, n) => {
             if run(app, "swatches.rename", json!({"swatch": k, "name": n})).is_some() && app.ui.presets_ui.selected.get(PANEL) == Some(&k) {
                 sel(app, &n);
@@ -113,6 +114,12 @@ fn handle(app: &mut PhotocraftApp, e: Ev, background: bool) {
         Ev::NewGroup => new_group(app),
         Ev::New => new_swatch(app),
     }
+}
+
+fn drop_on_canvas(app: &mut PhotocraftApp, name: &str) {
+    let Some(color) = app.session.presets.swatches.iter().flat_map(|g| g.items.iter()).find(|s| s.name == name).map(|s| s.color) else { return };
+    let rgb = photocraft_engine::presets::swatches::SwatchConv::new(&app.session).rgb(&color);
+    run(app, "edit.fill", json!({"contents": "color", "color": [rgb[0], rgb[1], rgb[2], 1.0]}));
 }
 
 /// New Swatch: the foreground colour, named and selected, then renamed in place (Photoshop asks
@@ -361,6 +368,27 @@ mod tests {
         let p = first_cell(&h);
         click(&mut h, p + vec2(DEFAULT_SIZE / 2.0 + 1.0, 0.0), Modifiers::NONE);
         assert_eq!(h.state().ui.presets_ui.selected.get(PANEL), Some(&second), "the second swatch, not a gap");
+    }
+
+    /// #7359: a swatch dropped on the canvas fills the selection (else the layer) with its colour
+    /// and leaves the foreground colour alone.
+    #[test]
+    fn a_swatch_dropped_on_the_canvas_fills_the_selection() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 8, "height": 8, "background": "#ffffff"})).unwrap();
+        app.run("select.rect", json!({"x": 0, "y": 0, "width": 4, "height": 8})).unwrap();
+        let name = app.session.presets.swatches.first().and_then(|g| g.items.get(1)).map(|s| s.name.clone()).unwrap();
+        let swatch = app.session.presets.swatches.first().and_then(|g| g.items.get(1)).map(|s| s.color).unwrap();
+        let want = photocraft_engine::presets::swatches::SwatchConv::new(&app.session).rgb(&swatch);
+        let foreground = app.session.tools.foreground;
+        handle(&mut app, Ev::Drop(name, egui::pos2(300.0, 300.0)), false);
+        let px = |app: &mut PhotocraftApp, x: u32| -> Vec<f32> { serde_json::from_value(app.run("document.pixel", json!({"x": x, "y": 3})).unwrap()).unwrap() };
+        let inside = px(&mut app, 1);
+        assert!(inside.iter().zip(want).all(|(a, b)| (a - b).abs() < 0.02), "{inside:?} vs {want:?}");
+        assert!(px(&mut app, 6).iter().take(3).all(|v| *v > 0.99), "outside the selection stays white");
+        assert_eq!(app.session.tools.foreground, foreground);
+        assert!(app.run("edit.undo", json!({})).is_ok());
+        assert!(px(&mut app, 1).iter().take(3).all(|v| *v > 0.99), "one undo step removes the fill");
     }
 
     /// Clicking a swatch while characters are selected recolours them, not just the foreground.
