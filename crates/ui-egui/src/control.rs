@@ -15,7 +15,7 @@
 //! - `ui.window.open {document?}` / `ui.window.close {window}`: extra document windows
 //! - `ui.pointer {events: [{kind: down|move|up, x, y, pressure?, tiltX?, tiltY?, rotation?}], tool?, modifiers?, button?}`: drive the active tool in document coordinates (`button: "secondary"` opens the tool's canvas context menu (the pasteboard colour menu outside the image) or Brush Preset picker, or erases with Preferences › Tools › Right-click with painting tools = erase)
 //! - `ui.click {x, y, button?, count?}` / `ui.move {x, y}`: synthetic pointer input in screen points
-//!   (`count` at most [`MAX_CLICKS`])
+//!   (`count` at most [`MAX_CLICKS`], `x` and `y` within ±[`MAX_SCREEN_POINT`])
 //! - `ui.key {key, command?, shift?, alt?, ctrl?}` / `ui.type {text}`: synthetic keyboard input
 //! - The synthetic input methods reject unknown fields, wrong types, unknown enum values and
 //!   out-of-range numbers before acting, naming the parameter (#2449)
@@ -179,6 +179,10 @@ pub const UI_SET_FIELDS: [&str; 39] = [
 /// feeds in its own frame before replying, so `count` sizes both the input queue and the wait;
 /// the same ceiling as the steps of one batch request.
 pub const MAX_CLICKS: u64 = 256;
+
+/// Largest `ui.click` / `ui.move` coordinate, in screen points either way (#9137). Far beyond any
+/// display, yet small enough that egui's pointer delta between two such points stays finite.
+pub const MAX_SCREEN_POINT: f64 = 1e6;
 
 fn ok(v: Value) -> Outcome {
     Outcome::Done(json!({"ok": true, "result": v}))
@@ -1183,8 +1187,9 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
             let parsed = (|| -> std::result::Result<_, String> {
                 let p = input_object(p, None, fields)?;
                 // Screen coordinates in points (as reported by ui.inspect window size).
-                let x = input_number(&p, "x", "x", None)?.unwrap_or(0.0) as f32;
-                let y = input_number(&p, "y", "y", None)?.unwrap_or(0.0) as f32;
+                let range = Some((-MAX_SCREEN_POINT, MAX_SCREEN_POINT));
+                let x = input_number(&p, "x", "x", range)?.unwrap_or(0.0) as f32;
+                let y = input_number(&p, "y", "y", range)?.unwrap_or(0.0) as f32;
                 let button = match input_choice(&p, "button", "button", &BUTTONS)?.unwrap_or("left") {
                     "right" | "secondary" => egui::PointerButton::Secondary,
                     "middle" => egui::PointerButton::Middle,
@@ -3125,6 +3130,35 @@ mod tests {
             assert!(matches!(handle(&mut app, &ctx, &req), Outcome::AfterInput));
             assert_eq!(app.synthetic.len(), events);
             app.synthetic.clear();
+        }
+    }
+
+    /// #9137: a coordinate past f32's range became `inf`, and on the next frame egui's pointer
+    /// delta `inf - inf` panicked outside the dispatch guard, closing the app.
+    #[test]
+    fn huge_click_coordinate_is_rejected() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        for method in ["ui.click", "ui.move"] {
+            for (field, v) in [("x", 1e308), ("y", -1e308), ("x", 3.5e38), ("y", 1e7), ("x", -1.5e6)] {
+                let (req, _rx) = ControlRequest::new(method, json!({ field: v }));
+                let Outcome::Done(r) = handle(&mut app, &ctx, &req) else { panic!("{method} {field}={v}: accepted") };
+                assert_eq!(r["ok"], false, "{method} {field}={v}: {r}");
+                assert!(r["error"].as_str().unwrap().starts_with(&format!("{field} must be between")), "{r}");
+                assert!(app.synthetic.is_empty(), "a rejected {method} queues nothing");
+            }
+        }
+        // Points at the edges of the range, off-window included, reach egui and run a frame each.
+        let edge = MAX_SCREEN_POINT;
+        for (method, x, y) in [("ui.move", edge, -edge), ("ui.click", -edge, edge), ("ui.click", -5.0, 20.0)] {
+            let (req, _rx) = ControlRequest::new(method, json!({"x": x, "y": y}));
+            assert!(matches!(handle(&mut app, &ctx, &req), Outcome::AfterInput));
+            while !app.synthetic.is_empty() {
+                let events = app.take_synthetic_step();
+                ctx.run_ui(egui::RawInput { events, ..Default::default() }, |_| {}).textures_delta.clear();
+            }
+            let pos = ctx.input(|i| i.pointer.latest_pos());
+            assert_eq!(pos, Some(egui::pos2(x as f32, y as f32)), "{method} {x},{y}");
         }
     }
 
