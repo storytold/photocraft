@@ -723,6 +723,17 @@ fn resample_label(label: &str) -> &'static str {
         "Bicubic Sharper" => tl!("Bicubic Sharper"),
         "Bilinear" => tl!("Bilinear"),
         "Nearest Neighbor" => tl!("Nearest Neighbor"),
+        "Preserve Details" => tl!("Preserve Details"),
+        "Lanczos 3" => tl!("Lanczos 3"),
+        "Lanczos 2" => tl!("Lanczos 2"),
+        "Lanczos 4" => tl!("Lanczos 4"),
+        "Mitchell-Netravali" => tl!("Mitchell-Netravali"),
+        "Catmull-Rom" => tl!("Catmull-Rom"),
+        "B-Spline" => tl!("B-Spline"),
+        "Gaussian" => tl!("Gaussian"),
+        "Hermite" => tl!("Hermite"),
+        "Spline16" => tl!("Spline16"),
+        "Spline36" => tl!("Spline36"),
         _ => tl!("Bicubic Automatic"),
     }
 }
@@ -1313,7 +1324,7 @@ mod tests {
             let out = export_document(&doc, &f, None).unwrap();
             assert_eq!((out.size.width, out.size.height), (15, 9), "{method}");
         }
-        for bad in [json!("lanczos"), json!("NEAREST"), json!(""), json!(1), json!({"m": "nearest"})] {
+        for bad in [json!("sinc"), json!("NEAREST"), json!(""), json!(1), json!({"m": "nearest"})] {
             f.insert("resample".into(), bad.clone());
             let err = export_document(&doc, &f, None).unwrap_err();
             assert!(err.contains("resample must be"), "{bad}: {err}");
@@ -1339,7 +1350,7 @@ mod tests {
         let id = open(&mut app).unwrap();
         assert_eq!(app.ui.dialog_mut(id).unwrap().fields["resample"], "nearest");
 
-        for bad in [json!("lanczos"), json!(7), json!(null)] {
+        for bad in [json!("sinc"), json!(7), json!(null)] {
             app.session.prefs.edit(|p| {
                 p.dialogs.insert(COMMAND.into(), json!({"resample": bad}));
             });

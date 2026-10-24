@@ -206,6 +206,7 @@ fn unit_dropdown(ui: &mut egui::Ui, f: &mut Map<String, Value>, id: &str) {
     }
 }
 
+/// The Image Size dialog body: dimensions, resolution, constrain, and the Resample method list.
 fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let t = Tokens::get(ui.ctx());
     let (ow, oh) = (num(f, "__origW"), num(f, "__origH"));
@@ -335,6 +336,16 @@ fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 ("nearest".to_string(), tl!("Nearest Neighbor (hard edges)")),
                 ("bilinear".to_string(), tl!("Bilinear")),
                 ("lanczos".to_string(), tl!("Lanczos (sharp)")),
+                // more filters, beyond Photoshop's
+                ("lanczos2".to_string(), tl!("Lanczos 2")),
+                ("lanczos4".to_string(), tl!("Lanczos 4 (sharpest)")),
+                ("mitchell".to_string(), tl!("Mitchell-Netravali (balanced)")),
+                ("catmullRom".to_string(), tl!("Catmull-Rom")),
+                ("spline16".to_string(), tl!("Spline16")),
+                ("spline36".to_string(), tl!("Spline36 (sharp, less ringing)")),
+                ("hermite".to_string(), tl!("Hermite")),
+                ("bSpline".to_string(), tl!("B-Spline (smoothest)")),
+                ("gaussian".to_string(), tl!("Gaussian (soft)")),
             ];
             // Indexed Color: every other method blends colours the colour table doesn't have,
             // which the command doesn't use and a save quantises away (#6019).

@@ -14,13 +14,25 @@ const FORMATS: [&str; 6] = ["png", "jpg", "webp", "tif", "tga", "ico"];
 
 /// Export As › Image Size › Resample, in Photoshop's order: the `image.imageSize` method each
 /// choice sends, and its menu label. The first one is the default.
-pub const RESAMPLE: [(&str, &str); 6] = [
+pub const RESAMPLE: [(&str, &str); 17] = [
     ("bicubicAutomatic", "Bicubic Automatic"),
+    ("preserveDetails", "Preserve Details"),
     ("bicubic", "Bicubic"),
     ("bicubicSmoother", "Bicubic Smoother"),
     ("bicubicSharper", "Bicubic Sharper"),
     ("bilinear", "Bilinear"),
     ("nearest", "Nearest Neighbor"),
+    // beyond Photoshop's list (Image Size's extra filters)
+    ("lanczos", "Lanczos 3"),
+    ("lanczos2", "Lanczos 2"),
+    ("lanczos4", "Lanczos 4"),
+    ("mitchell", "Mitchell-Netravali"),
+    ("catmullRom", "Catmull-Rom"),
+    ("bSpline", "B-Spline"),
+    ("gaussian", "Gaussian"),
+    ("hermite", "Hermite"),
+    ("spline16", "Spline16"),
+    ("spline36", "Spline36"),
 ];
 
 /// Photoshop's Export As default: Bicubic Automatic.
@@ -201,6 +213,7 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"deleted": name}))
 }
 
+/// The Export As preset commands: list, save and delete.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec {
@@ -228,7 +241,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Save Export Preset",
             menu: &[],
             shortcut: None,
-            params: r#"{"name":str,"settings":{"format":"png|jpg|webp|tif|tga|ico","quality":1..100,"lossless":bool,"transparency":bool,"scale":1..1000,"width":px,"height":px,"lockAspect":bool,"sizing":"scale|pixels","metadata":"none|exif|all","profile":"document|srgb","embedProfile":bool,"tgaBits":"auto|24|32","resample":"bicubicAutomatic|bicubic|bicubicSmoother|bicubicSharper|bilinear|nearest"="bicubicAutomatic"}} (a saved name is replaced)"#,
+            params: r#"{"name":str,"settings":{"format":"png|jpg|webp|tif|tga|ico","quality":1..100,"lossless":bool,"transparency":bool,"scale":1..1000,"width":px,"height":px,"lockAspect":bool,"sizing":"scale|pixels","metadata":"none|exif|all","profile":"document|srgb","embedProfile":bool,"tgaBits":"auto|24|32","resample":"bicubicAutomatic|preserveDetails|bicubic|bicubicSmoother|bicubicSharper|bilinear|nearest|lanczos|lanczos2|lanczos4|mitchell|catmullRom|bSpline|gaussian|hermite|spline16|spline36"="bicubicAutomatic"}} (a saved name is replaced)"#,
             enabled: always,
             run: save,
             journal: false,
@@ -310,7 +323,7 @@ mod tests {
         assert!(s.execute("file.export.presets.save", json!({"name": "x", "settings": {"scale": 0}})).is_err());
         assert!(s.execute("file.export.presets.save", json!({"name": "x", "settings": {"metadata": "copyright"}})).is_err());
         assert!(s.execute("file.export.presets.save", json!({"name": "x", "settings": {"profile": "fogra39"}})).is_err());
-        let err = s.execute("file.export.presets.save", json!({"name": "x", "settings": {"resample": "lanczos"}})).unwrap_err().to_string();
+        let err = s.execute("file.export.presets.save", json!({"name": "x", "settings": {"resample": "sinc"}})).unwrap_err().to_string();
         assert!(err.contains("resample must be one of"), "{err}");
         assert!(s.execute("file.export.presets.save", json!({"name": "x", "settings": {"resample": 3}})).is_err());
         assert!(s.execute("file.export.presets.delete", json!({"name": "missing"})).is_err());

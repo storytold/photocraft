@@ -24,6 +24,118 @@ pub enum Resample {
     /// Lanczos followed by a light sharpening when enlarging; Bicubic Sharper when reducing, as
     /// Photoshop's Preserve Details reduces.
     PreserveDetails,
+    /// Lanczos with 2 lobes: a little softer than [`Resample::Lanczos`] (3 lobes), less ringing.
+    Lanczos2,
+    /// Lanczos with 4 lobes: the sharpest, with the most ringing beside hard edges.
+    Lanczos4,
+    /// Mitchell–Netravali cubic (B = C = ⅓): balanced sharpness and ringing.
+    Mitchell,
+    /// Catmull-Rom cubic (B = 0, C = ½): the "bicubic" most other apps mean.
+    CatmullRom,
+    /// Cubic B-spline (B = 1, C = 0): the smoothest; never rings.
+    BSpline,
+    /// Gaussian (σ = ½ pixel): soft, no ringing.
+    Gaussian,
+    /// Hermite cubic: smooth, no overshoot.
+    Hermite,
+    /// Spline16: close to Lanczos 2 with less ringing.
+    Spline16,
+    /// Spline36: close to Lanczos 3 with less ringing.
+    Spline36,
+}
+
+/// A separable filter shape beyond Photoshop's own (all widened by 1/scale when reducing).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Shape {
+    Lanczos(f64),
+    Mitchell,
+    CatmullRom,
+    BSpline,
+    Gaussian,
+    Hermite,
+    Spline16,
+    Spline36,
+}
+
+impl Shape {
+    /// Radius in source pixels at scale 1.
+    fn support(self) -> f64 {
+        match self {
+            Shape::Lanczos(a) => a,
+            Shape::Hermite => 1.0,
+            Shape::Mitchell | Shape::CatmullRom | Shape::BSpline | Shape::Gaussian | Shape::Spline16 => 2.0,
+            Shape::Spline36 => 3.0,
+        }
+    }
+
+    /// Weight at distance `x` (source pixels at scale 1).
+    fn weight(self, x: f64) -> f64 {
+        let x = x.abs();
+        // Mitchell & Netravali's family of cubics, by B and C
+        let bc = |b: f64, c: f64| {
+            if x < 1.0 {
+                ((12.0 - 9.0 * b - 6.0 * c) * x * x * x + (-18.0 + 12.0 * b + 6.0 * c) * x * x + (6.0 - 2.0 * b)) / 6.0
+            } else if x < 2.0 {
+                ((-b - 6.0 * c) * x * x * x + (6.0 * b + 30.0 * c) * x * x + (-12.0 * b - 48.0 * c) * x + (8.0 * b + 24.0 * c)) / 6.0
+            } else {
+                0.0
+            }
+        };
+        match self {
+            Shape::Lanczos(a) if (a - 3.0).abs() < 1e-12 => lanczos_weight(x),
+            Shape::Lanczos(a) => {
+                if x < 1e-9 {
+                    1.0
+                } else if x < a {
+                    let px = std::f64::consts::PI * x;
+                    a * px.sin() * (px / a).sin() / (px * px)
+                } else {
+                    0.0
+                }
+            }
+            Shape::Mitchell => bc(1.0 / 3.0, 1.0 / 3.0),
+            Shape::CatmullRom => bc(0.0, 0.5),
+            Shape::BSpline => bc(1.0, 0.0),
+            Shape::Gaussian => {
+                if x < 2.0 {
+                    (-2.0 * x * x).exp()
+                } else {
+                    0.0
+                }
+            }
+            Shape::Hermite => {
+                if x < 1.0 {
+                    (2.0 * x - 3.0) * x * x + 1.0
+                } else {
+                    0.0
+                }
+            }
+            // piecewise cubic interpolating splines fitted for minimal ringing
+            Shape::Spline16 => {
+                if x < 1.0 {
+                    ((x - 9.0 / 5.0) * x - 1.0 / 5.0) * x + 1.0
+                } else if x < 2.0 {
+                    let t = x - 1.0;
+                    ((-1.0 / 3.0 * t + 4.0 / 5.0) * t - 7.0 / 15.0) * t
+                } else {
+                    0.0
+                }
+            }
+            Shape::Spline36 => {
+                if x < 1.0 {
+                    ((13.0 / 11.0 * x - 453.0 / 209.0) * x - 3.0 / 209.0) * x + 1.0
+                } else if x < 2.0 {
+                    let t = x - 1.0;
+                    ((-6.0 / 11.0 * t + 270.0 / 209.0) * t - 156.0 / 209.0) * t
+                } else if x < 3.0 {
+                    let t = x - 2.0;
+                    ((1.0 / 11.0 * t - 45.0 / 209.0) * t + 26.0 / 209.0) * t
+                } else {
+                    0.0
+                }
+            }
+        }
+    }
 }
 
 /// Sub-pixel positions Photoshop's filters resolve: a sample's offset is rounded to 1/128 pixel.
@@ -41,8 +153,8 @@ enum Kernel {
         a: f64,
         stretch: f64,
     },
-    /// Lanczos-3, widened by 1/scale when reducing.
-    Lanczos,
+    /// A [`Shape`] (Lanczos-3 for [`Resample::Lanczos`]), widened by 1/scale when reducing.
+    Window(Shape),
 }
 
 /// Photoshop's bicubic filters, measured on Photoshop 25.4 (the Keys cubic, phase table and
@@ -64,6 +176,7 @@ fn keys(method: Resample, s: f64) -> Kernel {
     Kernel::Keys { a, stretch: stretch / s }
 }
 
+/// The Keys cubic's weight at distance `x` (source pixels) for parameter `a`: Photoshop's bicubic family.
 fn keys_weight(x: f64, a: f64) -> f64 {
     let x = x.abs();
     if x < 1.0 {
@@ -75,6 +188,7 @@ fn keys_weight(x: f64, a: f64) -> f64 {
     }
 }
 
+/// The Lanczos-3 weight at distance `x` (source pixels): `sinc(x)·sinc(x/3)` inside ±3, else 0.
 fn lanczos_weight(x: f64) -> f64 {
     let x = x.abs();
     if x < 1e-9 {
@@ -108,8 +222,17 @@ fn plan(filter: Resample, sx: f64, sy: f64) -> Vec<Pass> {
     match filter {
         Resample::Nearest => both(Kernel::Nearest),
         Resample::Bilinear => both(Kernel::Bilinear),
-        Resample::Lanczos => both(Kernel::Lanczos),
-        Resample::PreserveDetails if sx > 1.0 || sy > 1.0 => both(Kernel::Lanczos),
+        Resample::Lanczos => both(Kernel::Window(Shape::Lanczos(3.0))),
+        Resample::PreserveDetails if sx > 1.0 || sy > 1.0 => both(Kernel::Window(Shape::Lanczos(3.0))),
+        Resample::Lanczos2 => both(Kernel::Window(Shape::Lanczos(2.0))),
+        Resample::Lanczos4 => both(Kernel::Window(Shape::Lanczos(4.0))),
+        Resample::Mitchell => both(Kernel::Window(Shape::Mitchell)),
+        Resample::CatmullRom => both(Kernel::Window(Shape::CatmullRom)),
+        Resample::BSpline => both(Kernel::Window(Shape::BSpline)),
+        Resample::Gaussian => both(Kernel::Window(Shape::Gaussian)),
+        Resample::Hermite => both(Kernel::Window(Shape::Hermite)),
+        Resample::Spline16 => both(Kernel::Window(Shape::Spline16)),
+        Resample::Spline36 => both(Kernel::Window(Shape::Spline36)),
         Resample::PreserveDetails => plan(Resample::BicubicSharper, sx, sy),
         Resample::BicubicAutomatic if sx <= 1.0 && sy <= 1.0 => plan(Resample::BicubicSharper, sx, sy),
         Resample::BicubicAutomatic if sx >= 1.0 && sy >= 1.0 => plan(Resample::BicubicSmoother, sx, sy),
@@ -233,13 +356,14 @@ fn weights(o: i32, scale: f64, kernel: Kernel, edge: Option<(i32, i32)>, content
             let sum: f64 = w.iter().sum();
             (lo, w.into_iter().map(|v| v / sum).collect())
         }
-        Kernel::Lanczos => {
+        Kernel::Window(shape) => {
             let stretch = if scale < 1.0 { 1.0 / scale } else { 1.0 };
             let u = (o as f64 + 0.5) / scale - 0.5;
             let u = edge.map_or(u, |(a, b)| u.clamp(a as f64, b.max(a) as f64));
-            let lo = (u - 3.0 * stretch).ceil() as i32;
-            let hi = (u + 3.0 * stretch).floor() as i32;
-            let w: Vec<f64> = (lo..=hi).map(|i| lanczos_weight((i as f64 - u) / stretch)).collect();
+            let r = shape.support();
+            let lo = (u - r * stretch).ceil() as i32;
+            let hi = (u + r * stretch).floor() as i32;
+            let w: Vec<f64> = (lo..=hi).map(|i| shape.weight((i as f64 - u) / stretch)).collect();
             let sum: f64 = w.iter().sum();
             let k = if sum.abs() > 1e-12 { 1.0 / sum } else { 1.0 };
             (lo, w.into_iter().map(|v| v * k).collect())
@@ -526,11 +650,21 @@ mod tests {
         s
     }
 
+    /// The fixed-channel row kernels give exactly what the generic one does, for every kernel
+    /// (Photoshop's and the added shapes), scale and edge mode.
     #[test]
     fn fixed_channel_rows_match_dynamic_resampling() {
         fn check<const N: usize>() {
             for scale in [0.12, 0.5, 1.0, 2.3] {
-                for filter in [Kernel::Nearest, Kernel::Bilinear, keys(Resample::Bicubic, scale), keys(Resample::BicubicSharper, scale), Kernel::Lanczos] {
+                for filter in [
+                    Kernel::Nearest,
+                    Kernel::Bilinear,
+                    keys(Resample::Bicubic, scale),
+                    keys(Resample::BicubicSharper, scale),
+                    Kernel::Window(Shape::Lanczos(3.0)),
+                    Kernel::Window(Shape::Spline16),
+                    Kernel::Window(Shape::Hermite),
+                ] {
                     for clamp in [None, Some((-3, 31))] {
                         let ts = taps(-5, 41, scale, filter, clamp, (-3, 31));
                         let row: Vec<f32> = (0..35 * N).map(|i| ((i * 73) % 251) as f32 / 250.0).collect();
@@ -915,6 +1049,67 @@ mod tests {
                 let p = reduced.pixel(x, y)[0];
                 assert!(p == 0.0 || p == 1.0, "nearest produced an averaged value {p} at ({x}, {y})");
             }
+        }
+    }
+
+    /// The added filters: every one keeps a flat image flat and its size at any scale, the
+    /// interpolating ones reproduce a ramp when enlarging, and a hard edge stays in range only
+    /// for the ones that never ring.
+    #[test]
+    fn extra_filters_keep_flat_images_flat_and_ramps_straight() {
+        let extras = [
+            Resample::Lanczos2,
+            Resample::Lanczos4,
+            Resample::Mitchell,
+            Resample::CatmullRom,
+            Resample::BSpline,
+            Resample::Gaussian,
+            Resample::Hermite,
+            Resample::Spline16,
+            Resample::Spline36,
+        ];
+        for f in extras {
+            for scale in [0.1, 0.37, 0.5, 1.0, 1.7, 3.0] {
+                for o in -2..30 {
+                    let (_, w) = weights(o, scale, plan(f, scale, scale)[0].kx, Some((0, 63)));
+                    let sum: f64 = w.iter().sum();
+                    assert!((sum - 1.0).abs() < 1e-9, "{f:?} at scale {scale}: weights sum to {sum}");
+                    assert!(w.iter().all(|v| v.is_finite()));
+                }
+            }
+            // serde round trip by the camelCase name
+            let name = serde_json::to_value(f).unwrap();
+            assert_eq!(serde_json::from_value::<Resample>(name.clone()).unwrap(), f, "{name}");
+        }
+        // interpolating kernels: zero at the other integers, one at zero
+        for sh in [Shape::Lanczos(2.0), Shape::Lanczos(4.0), Shape::CatmullRom, Shape::Hermite, Shape::Spline16, Shape::Spline36] {
+            assert!((sh.weight(0.0) - 1.0).abs() < 1e-12, "{sh:?}");
+            for k in 1..=4 {
+                assert!(sh.weight(k as f64).abs() < 1e-9, "{sh:?} at {k}");
+            }
+        }
+        // continuous at the spline knots, nothing past the support
+        for sh in [Shape::Mitchell, Shape::CatmullRom, Shape::BSpline, Shape::Spline16, Shape::Spline36] {
+            for k in [1.0, 2.0] {
+                assert!((sh.weight(k - 1e-6) - sh.weight(k + 1e-6)).abs() < 1e-4, "{sh:?} jumps at {k}");
+            }
+        }
+        for sh in [
+            Shape::Lanczos(2.0),
+            Shape::Lanczos(4.0),
+            Shape::Mitchell,
+            Shape::CatmullRom,
+            Shape::BSpline,
+            Shape::Gaussian,
+            Shape::Hermite,
+            Shape::Spline16,
+            Shape::Spline36,
+        ] {
+            assert_eq!(sh.weight(sh.support() + 0.01), 0.0, "{sh:?}");
+        }
+        // Lanczos-3 is the same as before, weight for weight
+        for x in [0.0, 0.3, 1.0, 1.5, 2.7, 3.2] {
+            assert_eq!(Shape::Lanczos(3.0).weight(x), lanczos_weight(x));
         }
     }
 }
