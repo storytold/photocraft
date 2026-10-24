@@ -382,11 +382,11 @@ pub struct UiSetParams {
     /// combine, subtract, intersect or exclude: how the next Pen path joins the selected shape
     /// layer or path), shapeStroke (an object patching width, align, cap, join, miterLimit,
     /// dashes, dashOffset and opacity; null disables the stroke). Shape stroke fields use
-    /// `shape.edit` names and units; colour comes from `tools.setColors`. frameShape (rectangle,
+    /// `shape.edit` names and units; the shape tools' own Fill and Stroke colours have no setter
+    /// (`tools.setColors` sets only the foreground and background). frameShape (rectangle,
     /// ellipse, triangle, polygon or custom: the Frame tool's shape), frameSides (3..100, the
     /// polygon's sides), frameTarget (frame, content or both: what the selected frame's handles
-    /// edit). camTransformOnDrop (bool,
-    /// the Content-Aware Move tool's Transform On Drop). tileGrid (bool, a developer overlay of the
+    /// edit). camTransformOnDrop (bool, the Content-Aware Move tool's Transform On Drop). tileGrid (bool, a developer overlay of the
     /// active layer's storage tiles). layerFilter (an object patching by ("kind", "name", "effect",
     /// "mode", "attribute", "color", "smartObject" or "artboard", which lists the artboards that
     /// hold the selected layers), kinds (a list of layer kinds), name (matches part of the layer
