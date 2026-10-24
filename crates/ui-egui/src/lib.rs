@@ -3324,6 +3324,9 @@ mod options_bar_mode_wheel_tests;
 mod field_wheel_app_tests;
 
 #[cfg(test)]
+mod layer_style_blend_wheel_tests;
+
+#[cfg(test)]
 mod dropdown_press_tests;
 
 #[cfg(test)]
