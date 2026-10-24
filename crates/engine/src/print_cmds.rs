@@ -193,9 +193,15 @@ fn cups_spool(job: &PrintJob) -> std::result::Result<String, SpoolError> {
 fn system_printers(_s: &mut Session, p: &Value) -> Result<Value> {
     let named = p.get("printServer").and_then(Value::as_str).filter(|v| !v.is_empty());
     if named.is_none() && system_spooler().is_some() {
-        let list = craft_print::printers();
-        let default = list.iter().find(|p| p.default).map(|p| p.name.clone());
-        let printers: Vec<Value> = list.into_iter().map(|p| json!({"name": p.name, "default": p.default})).collect();
+        // craft-print asks each Windows driver about two-sided printing through prntvpt.dll;
+        // without it, list the spooler's printers through GDI instead (#8272).
+        let list: Vec<(String, bool)> = if require_print_tickets().is_ok() {
+            craft_print::printers().into_iter().map(|p| (p.name, p.default)).collect()
+        } else {
+            craft_print::rgb::printers().map_err(other)?.into_iter().map(|p| (p.name, p.default)).collect()
+        };
+        let default = list.iter().find(|p| p.1).map(|p| p.0.clone());
+        let printers: Vec<Value> = list.into_iter().map(|(name, default)| json!({"name": name, "default": default})).collect();
         return Ok(json!({"server": Value::Null, "default": default, "printers": printers}));
     }
     #[cfg(all(not(target_arch = "wasm32"), not(target_os = "windows")))]
@@ -822,31 +828,55 @@ fn render_and_spool(doc: &Document, p: &Value, cmd: &str, spooler: Option<&Spool
     )
 }
 
-/// Windows prints a PDF through Windows.Data.Pdf.dll, which the apps delay-load (see their
-/// `build.rs`) so a Windows image without it still starts. Calling into it when it cannot load
-/// would abort the process, so check that it loads first (#5884).
+/// Windows prints a PDF through Windows.Data.Pdf.dll and sets its options through the Print
+/// Ticket API in prntvpt.dll, which the apps delay-load (see their `build.rs`) so a Windows image
+/// without them still starts. Calling into one that cannot load would abort the process, so check
+/// that both load first (#5884, #8272).
 fn require_windows_pdf() -> Result<()> {
     #[cfg(target_os = "windows")]
     {
-        let root = std::env::var_os("SystemRoot").unwrap_or_else(|| std::ffi::OsString::from(r"C:\Windows"));
-        if !windows_pdf_loads(&windows_pdf_dll(std::path::Path::new(&root))) {
+        if !system_dll_loads(WINDOWS_PDF_DLL) {
             return Err(other(
                 "printing this page needs the Windows PDF component (Windows.Data.Pdf.dll), which is missing or cannot load. Save as PDF and print it from another app, or print an RGB image without page text or labels to print directly.",
             ));
         }
+        require_print_tickets()?;
+    }
+    Ok(())
+}
+
+/// `craft-print` reads and sets Windows printer options through prntvpt.dll (the Print Ticket
+/// API), which stripped Windows images can lack; the apps delay-load it (#8272).
+fn require_print_tickets() -> Result<()> {
+    #[cfg(target_os = "windows")]
+    if !system_dll_loads(PRINT_TICKET_DLL) {
+        return Err(other(
+            "printing this page needs the Windows Print Ticket component (prntvpt.dll), which is missing or cannot load. Save as PDF and print it from another app, or print an RGB image without page text or labels to print directly.",
+        ));
     }
     Ok(())
 }
 
 #[cfg(target_os = "windows")]
-fn windows_pdf_dll(system_root: &std::path::Path) -> std::path::PathBuf {
-    system_root.join("System32").join("Windows.Data.Pdf.dll")
+const WINDOWS_PDF_DLL: &str = "Windows.Data.Pdf.dll";
+#[cfg(target_os = "windows")]
+const PRINT_TICKET_DLL: &str = "prntvpt.dll";
+
+#[cfg(target_os = "windows")]
+fn system_dll_loads(name: &str) -> bool {
+    let root = std::env::var_os("SystemRoot").unwrap_or_else(|| std::ffi::OsString::from(r"C:\Windows"));
+    dll_loads(&system_dll(std::path::Path::new(&root), name))
+}
+
+#[cfg(target_os = "windows")]
+fn system_dll(system_root: &std::path::Path, name: &str) -> std::path::PathBuf {
+    system_root.join("System32").join(name)
 }
 
 /// Loads the DLL rather than checking the file exists: one that is present but cannot load (a
 /// dependency stripped too) would still abort at the delay-load stub.
 #[cfg(target_os = "windows")]
-fn windows_pdf_loads(dll: &std::path::Path) -> bool {
+fn dll_loads(dll: &std::path::Path) -> bool {
     dll.to_str().is_some_and(|p| winsafe::HINSTANCE::LoadLibrary(p).is_ok())
 }
 

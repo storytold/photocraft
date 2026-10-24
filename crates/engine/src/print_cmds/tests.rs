@@ -910,26 +910,29 @@ mod cups {
 
 #[cfg(target_os = "windows")]
 #[test]
-fn windows_pdf_component_is_detected_by_loading_its_dll() {
-    // #5884: a Windows image without a loadable Windows.Data.Pdf.dll reports an error instead of
-    // aborting at the delay-load stub.
+fn windows_print_components_are_detected_by_loading_their_dlls() {
+    // #5884, #8272: a Windows image without a loadable Windows.Data.Pdf.dll or prntvpt.dll reports
+    // an error instead of aborting at the delay-load stub.
     let dir = tempfile::tempdir().unwrap();
-    let dll = windows_pdf_dll(dir.path());
-    assert!(!windows_pdf_loads(&dll));
-    // Present but not loadable counts as missing.
     std::fs::create_dir(dir.path().join("System32")).unwrap();
-    std::fs::write(&dll, b"MZ").unwrap();
-    assert!(!windows_pdf_loads(&dll));
-    let root = std::env::var_os("SystemRoot").unwrap();
-    // The real DLL may be missing or unloadable on a stripped image; the check follows the loader.
-    let system = windows_pdf_dll(std::path::Path::new(&root));
-    assert_eq!(require_windows_pdf().is_ok(), windows_pdf_loads(&system));
+    for name in [WINDOWS_PDF_DLL, PRINT_TICKET_DLL] {
+        let dll = system_dll(dir.path(), name);
+        assert!(!dll_loads(&dll), "{name}: missing");
+        // Present but not loadable counts as missing.
+        std::fs::write(&dll, b"MZ").unwrap();
+        assert!(!dll_loads(&dll), "{name}: not loadable");
+    }
+    // The real DLLs may be missing or unloadable on a stripped image; the checks follow the loader.
+    let tickets = system_dll_loads(PRINT_TICKET_DLL);
+    assert_eq!(require_print_tickets().is_ok(), tickets);
+    assert_eq!(require_windows_pdf().is_ok(), system_dll_loads(WINDOWS_PDF_DLL) && tickets);
 }
 
 #[cfg(not(target_os = "windows"))]
 #[test]
 fn the_windows_pdf_check_is_a_no_op_elsewhere() {
     assert!(require_windows_pdf().is_ok());
+    assert!(require_print_tickets().is_ok());
 }
 
 /// A 500 × 1000 pt document (72 ppi) on A3 (841.89 × 1190.55 pt): its height sets the fit.
