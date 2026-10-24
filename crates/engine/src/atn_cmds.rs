@@ -1567,6 +1567,10 @@ fn set_from(d: &Descriptor) -> Mapped {
 }
 
 fn set_to(id: &str, p: &Value) -> Option<Descriptor> {
+    // A multi-layer reference cannot be represented by the current single-layer exporter.
+    if id == "layer.setProps" && p.get("layers").is_some_and(|value| !value.is_null()) {
+        return None;
+    }
     let fsel = D::Reference(vec![ReferenceItem::Property { class: class("Chnl"), key: Id::new("fsel") }]);
     let sel = |t: D| desc("null").with("null", fsel.clone()).with("T   ", t);
     Some(match id {

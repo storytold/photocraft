@@ -102,7 +102,7 @@ what an agent can't finish alone.
 - **Estimate:** 120–200 h.
 
 ### G11. Actions and scripting
-- **2026-10-21 evidence (#8304):** Save Actions expands compound layer-property edits into
+- **2026-10-22 evidence (#8304):** Save Actions expands compound layer-property edits into
   separate Photoshop Set events, with rename last so named layer references remain valid.
   Exported descriptors and native playback at RGB 8/16/32-bit have [regression coverage](../crates/engine/src/atn_cmds/layer_props_tests.rs);
   independent Photoshop replay of the fix is still pending. No readiness percentage or estimate changed.
