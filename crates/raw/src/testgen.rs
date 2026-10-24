@@ -19,7 +19,7 @@ pub use canon::{Cr2Spec, craw_block, craw_encode, nef_compressed, sony_craw, tif
 pub use dng::{DngSpec, DngStorage, baseline_jpeg, gain_map_opcode_list, map_polynomial_opcode_list};
 pub use lj92::{lj92_encode, lj92_encode_tables};
 pub use orf::orf;
-pub use raf::{RafPacking, RafSpec, XTRANS, mosaic, mosaic_cfa, scene};
+pub use raf::{RafPacking, RafSpec, XTRANS, fuji_compressed_is, mosaic, mosaic_cfa, scene};
 pub use rw2::{rw2, rw2_format4, rw2_pack, rw2_v4_pack};
 pub use tiff::{TiffBuilder, Val};
 
