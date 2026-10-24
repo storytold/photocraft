@@ -495,6 +495,17 @@ fn document_to_image_for(doc: &Document, warnings: &mut Vec<String>, cmyk_target
     Ok(img.with_icc(icc).with_meta(meta))
 }
 
+/// Whether a rendered alpha rounds to the zero code at the output precision: at 8 and 16 bits any
+/// alpha below half a sample step stores a zero alpha byte, so the colour samples stored under it
+/// have to be paper too, not only when the float alpha is exactly zero (#8777).
+fn alpha_rounds_to_zero(a: f32, cs: CSample) -> bool {
+    match cs {
+        CSample::U8 => (a.clamp(0.0, 1.0) * 255.0).round() == 0.0,
+        CSample::U16 => (a.clamp(0.0, 1.0) * 65535.0).round() == 0.0,
+        CSample::F16 | CSample::F32 => a <= 0.0,
+    }
+}
+
 /// A CMYK document's composite as interleaved CMYK + alpha samples (`cs`), with whether every
 /// pixel came out opaque (the caller then drops the alpha). Stacks the native CMYK compositor
 /// handles are mixed on their ink values, so opaque pixels keep their exact inks; any other
@@ -516,8 +527,11 @@ fn cmyk_composite(doc: &Document, canvas: Rect, cs: CSample, n: usize, warnings:
         let parts = crate::pixels::par_map(crate::pixels::bands(band.px.len()), |range| {
             let mut out = Vec::with_capacity(range.len() * 5 * cs.bytes());
             for p in band.px.get(range).unwrap_or_default() {
-                for v in p {
-                    put(&mut out, *v);
+                // A clear pixel has no colour of its own: the inks stored under a zero alpha byte
+                // are paper, not whatever the compositor mixed there (#8777).
+                let clear = alpha_rounds_to_zero(p[4], cs);
+                for (i, v) in p.iter().enumerate() {
+                    put(&mut out, if clear && i < 4 { 0.0 } else { *v });
                 }
             }
             out
@@ -541,6 +555,11 @@ fn cmyk_composite(doc: &Document, canvas: Rect, cs: CSample, n: usize, warnings:
                     let mut v = [0.0f32; 5];
                     for p in band.px.get(range).unwrap_or_default() {
                         photocraft_raster::from_rgba_into(&to, *p, &mut v);
+                        // Converting the compositor's black for a clear pixel would store CMYK
+                        // black (C176 M146 Y127 K238) where the file means paper (#8777).
+                        if alpha_rounds_to_zero(p[3], cs) {
+                            v[..4].fill(0.0);
+                        }
                         for x in v {
                             put(&mut out, x);
                         }

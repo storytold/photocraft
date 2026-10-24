@@ -202,6 +202,101 @@ fn transparency_is_straight_in_the_composite() {
     assert_docs_eq(&d, &back);
 }
 
+/// #8777: a CMYK TIFF that keeps its transparency stores paper (`0,0,0,0`) under the clear
+/// pixels, flat or layered. The composite comes from an RGBA render, where a clear pixel is
+/// black; converting that black to CMYK used to put `C176 M146 Y127 K238` there, so a reader
+/// that ignores the alpha sample printed a dark sheet instead of the artwork on paper.
+#[test]
+fn cmyk_transparency_is_paper_under_the_clear_pixels() {
+    let mut d = Document::new("t", photocraft_geom::Size::new(4, 4), ColorMode::Cmyk, SampleType::U8);
+    let fmt = d.pixel_format();
+    let mut ink = raster("Ink", fmt, photocraft_geom::Rect::new(0, 0, 2, 4), 0, false);
+    if let LayerContent::Raster(s) = &mut ink.content {
+        let px: Vec<f32> = (0..8).flat_map(|_| [0.2, 0.4, 0.6, 0.1, 1.0]).collect();
+        s.write_region(photocraft_geom::Rect::new(0, 0, 2, 4), &px);
+    }
+    d.layers.push(ink);
+    // A second, off-canvas layer keeps the flat export on its composite path instead of copying
+    // one layer's own samples.
+    d.layers.push(raster("Empty", fmt, photocraft_geom::Rect::new(8, 8, 9, 9), 0, false));
+    for layers in [false, true] {
+        let r = tiff(&d, layers);
+        let img = photocraft_codecs::decode(&r.bytes).unwrap();
+        assert!(img.layout().has_alpha(), "layers={layers}");
+        let px = img.data();
+        let at = |x: usize, y: usize| (y * 4 + x) * 5;
+        // Clear pixels: paper, and transparent.
+        assert_eq!(&px[at(2, 0)..at(2, 0) + 5], &[0, 0, 0, 0, 0], "layers={layers}");
+        assert_eq!(&px[at(3, 3)..at(3, 3) + 5], &[0, 0, 0, 0, 0], "layers={layers}");
+        // Painted pixels: the layer's ink, opaque.
+        assert_ne!(&px[at(0, 0)..at(0, 0) + 4], &[0, 0, 0, 0], "layers={layers}");
+        assert_eq!(px[at(0, 0) + 4], 255, "layers={layers}");
+    }
+}
+
+/// #8777, review follow-up: "clear" is judged at output precision, not on the float alpha. A
+/// 0.1 % layer renders an alpha of 0.001, which the 8-bit encoder stores as alpha byte 0 — the
+/// ink under that byte must be paper, otherwise a reader that ignores the alpha sample prints the
+/// invisible pixel's colour.
+#[test]
+fn cmyk_alpha_below_half_a_step_stores_paper() {
+    let mut d = Document::new("t", photocraft_geom::Size::new(4, 4), ColorMode::Cmyk, SampleType::U8);
+    let fmt = d.pixel_format();
+    let mut ink = raster("Ink", fmt, photocraft_geom::Rect::new(0, 0, 4, 4), 0, false);
+    if let LayerContent::Raster(s) = &mut ink.content {
+        let px: Vec<f32> = (0..16).flat_map(|_| [0.2, 0.4, 0.6, 0.1, 1.0]).collect();
+        s.write_region(photocraft_geom::Rect::new(0, 0, 4, 4), &px);
+    }
+    ink.opacity = 0.001;
+    d.layers.push(ink);
+    // An off-canvas layer keeps the flat export on its composite path.
+    d.layers.push(raster("Empty", fmt, photocraft_geom::Rect::new(8, 8, 9, 9), 0, false));
+    for layers in [false, true] {
+        let r = tiff(&d, layers);
+        let img = photocraft_codecs::decode(&r.bytes).unwrap();
+        assert!(img.layout().has_alpha(), "layers={layers}");
+        let px = img.data();
+        assert_eq!(&px[..5], &[0, 0, 0, 0, 0], "alpha byte is 0, so the ink is paper, layers={layers}");
+    }
+}
+
+/// A layer opacity past 1 (an out-of-range float a script can set) must not leak alpha past 1.0
+/// into the native CMYK composite: the exporters disagree there — flat drops the alpha at
+/// `>= 1.0` while the merged-plane writer would store the raw value — so the compositor bounds
+/// the alpha it hands them.
+#[test]
+fn native_cmyk_composite_alpha_is_bounded() {
+    let mut d = Document::new("t", photocraft_geom::Size::new(4, 4), ColorMode::Cmyk, SampleType::U8);
+    let fmt = d.pixel_format();
+    let mut ink = raster("Ink", fmt, photocraft_geom::Rect::new(0, 0, 4, 4), 0, false);
+    if let LayerContent::Raster(s) = &mut ink.content {
+        let px: Vec<f32> = (0..16).flat_map(|_| [0.2, 0.4, 0.6, 0.1, 1.0]).collect();
+        s.write_region(photocraft_geom::Rect::new(0, 0, 4, 4), &px);
+    }
+    ink.opacity = 2.0;
+    d.layers.push(ink);
+    let b = photocraft_compose::cmyk::render_cmyk(&d, d.bounds()).expect("native CMYK composite");
+    assert!(b.px.iter().all(|p| (0.0..=1.0).contains(&p[4])), "alpha must stay in 0..=1, got {:?}", b.px.iter().map(|p| p[4]).fold(0.0f32, f32::max));
+}
+
+/// A non-finite alpha (two finite float opacities can overflow their product) must not leave the
+/// tile holding NaN inks: the buffer's contract is finite inks in `0..=1`, so the pixel clears
+/// entirely rather than keeping invisible NaN samples.
+#[test]
+fn native_cmyk_composite_clears_non_finite_alpha() {
+    let mut d = Document::new("t", photocraft_geom::Size::new(4, 4), ColorMode::Cmyk, SampleType::F32);
+    let fmt = d.pixel_format();
+    let mut ink = raster("Ink", fmt, photocraft_geom::Rect::new(0, 0, 4, 4), 0, false);
+    if let LayerContent::Raster(s) = &mut ink.content {
+        let px: Vec<f32> = (0..16).flat_map(|_| [0.2, 0.4, 0.6, 0.1, 3.0e38]).collect();
+        s.write_region(photocraft_geom::Rect::new(0, 0, 4, 4), &px);
+    }
+    ink.opacity = 3.0e38;
+    d.layers.push(ink);
+    let b = photocraft_compose::cmyk::render_cmyk(&d, d.bounds()).expect("native CMYK composite");
+    assert!(b.px.iter().all(|p| p.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v))), "inks and alpha must be finite and in 0..=1");
+}
+
 #[test]
 fn big_documents_use_the_psb_signature() {
     // Forcing PSB stands in for a > 30000 px document.
@@ -398,4 +493,32 @@ fn layered_tiff_nested_past_the_cap_is_rejected() {
     assert!(err.to_string().contains("nested deeper than 100"), "{err}");
     let r = import("hundred.tif", &tiff_nested(100)).unwrap();
     assert_eq!(r.document.max_group_depth(), 100);
+}
+
+/// An opacity past 1 also pushes *inks* out of the buffer's promised `0..=1` range, through a
+/// blend mode, while the alpha stays finite: Multiply at ink 0.2 over paper renders 1.8, Screen
+/// over 0.5 renders -0.25. The F32 exporter writes those raw, so the tile bounds them.
+#[test]
+fn native_cmyk_composite_bounds_inks() {
+    use photocraft_color::BlendMode;
+    for (blend, base_ink, top_ink) in [(BlendMode::Multiply, 0.2f32, 1.0f32), (BlendMode::Screen, 0.5, 0.5)] {
+        let mut d = Document::new("t", photocraft_geom::Size::new(2, 2), ColorMode::Cmyk, SampleType::F32);
+        let fmt = d.pixel_format();
+        let mut base = raster("Base", fmt, photocraft_geom::Rect::new(0, 0, 2, 2), 0, false);
+        if let LayerContent::Raster(s) = &mut base.content {
+            let px: Vec<f32> = (0..4).flat_map(|_| [base_ink, base_ink, base_ink, base_ink, 1.0]).collect();
+            s.write_region(photocraft_geom::Rect::new(0, 0, 2, 2), &px);
+        }
+        d.layers.push(base);
+        let mut top = raster("Top", fmt, photocraft_geom::Rect::new(0, 0, 2, 2), 0, false);
+        if let LayerContent::Raster(s) = &mut top.content {
+            let px: Vec<f32> = (0..4).flat_map(|_| [top_ink, top_ink, top_ink, top_ink, 1.0]).collect();
+            s.write_region(photocraft_geom::Rect::new(0, 0, 2, 2), &px);
+        }
+        top.blend = blend;
+        top.opacity = 2.0;
+        d.layers.push(top);
+        let b = photocraft_compose::cmyk::render_cmyk(&d, d.bounds()).expect("native CMYK composite");
+        assert!(b.px.iter().all(|p| p.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v))), "{blend:?}: inks and alpha must be finite and in 0..=1");
+    }
 }

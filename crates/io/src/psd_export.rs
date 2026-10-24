@@ -1400,8 +1400,15 @@ fn merged_planes(doc: &Document, fmt: &PixelFormat, cmyk: bool, matte: bool, ctl
                 for p in &band.px[range.clone()] {
                     photocraft_raster::from_rgba_into(fmt, *p, &mut v);
                     for c in 0..=cc {
-                        // Matte against white like Photoshop (see `pixels::matte`).
-                        let m = if c < cc && matte { crate::pixels::matte(v[c], v[cc], white[c]) } else { v[c] };
+                        // Matte against white like Photoshop (see `pixels::matte`). A pixel
+                        // that is completely clear has no colour of its own either: the RGBA
+                        // composite is black there, and converting that black into CMYK puts a
+                        // dark brown in the colour samples of a TIFF that keeps its
+                        // transparency. Photoshop stores paper, as the CMYK flat path does, so
+                        // encode paper for clear pixels too (#8777). "Clear" is judged at output
+                        // precision: at 8/16 bits an alpha below half a step stores a zero byte.
+                        let clear = c < cc && cmyk && !matte && crate::pixels::rounds_to_zero(v[cc], fmt.sample);
+                        let m = if c < cc && (matte || clear) { crate::pixels::matte(v[c], v[cc], white[c]) } else { v[c] };
                         let x = if cmyk && c < cc { 1.0 - m } else { m };
                         // 16-bit Lab a*/b* use Photoshop's 0..65280 scale (`pixels::lab16_chroma`).
                         let x = if lab16 && (c == 1 || c == 2) { x * (crate::pixels::LAB16_CHROMA_MAX / 65535.0) } else { x };
@@ -1451,10 +1458,24 @@ fn merged_ink_planes(doc: &Document, sample: SampleType, matte: bool, ctl: &Inte
         let parts = crate::pixels::par_map(crate::pixels::bands(band.px.len()), |range| {
             let mut out: Vec<Vec<u8>> = (0..5).map(|_| Vec::with_capacity(range.len() * bps)).collect();
             for p in band.px.get(range.clone()).unwrap_or(&[]) {
+                // A clear pixel has no colour of its own: store paper (no ink), not the inks the
+                // native compositor mixed under an alpha byte that encodes as zero (#8777).
+                let clear = crate::pixels::rounds_to_zero(p[4], sample);
                 for (c, o) in out.iter_mut().enumerate() {
                     // Inks matted against white paper (no ink) like Photoshop (see
                     // `pixels::matte`), and stored inverted as PSD's CMYK is.
-                    let v = if c < 4 { 1.0 - if matte { crate::pixels::matte(p[c], p[4], 0.0) } else { p[c] } } else { p[4] };
+                    let v = if c < 4 {
+                        let ink = if clear {
+                            0.0
+                        } else if matte {
+                            crate::pixels::matte(p[c], p[4], 0.0)
+                        } else {
+                            p[c]
+                        };
+                        1.0 - ink
+                    } else {
+                        p[4]
+                    };
                     encode_be(v, sample, o);
                 }
             }

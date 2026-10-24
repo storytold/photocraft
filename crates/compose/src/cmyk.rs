@@ -581,6 +581,23 @@ fn render_tile(doc: &Document, rect: Rect, cx: &Ctx, space: Option<&Arc<CmykSpac
     // brightness above 1, i.e. negative ink. Set explicitly, since a tile can run on a thread
     // that is in the middle of an RGB composite of a 32-bit document.
     photocraft_color::convert::with_cmyk_space(space, || super::in_blend_space(false, false, || composite_stack(&doc.layers, &mut b, cx)));
+    // Alpha past 1 (an out-of-range layer opacity on a float document) would leave the exporters
+    // disagreeing: flat treats >= 1.0 as opaque and drops the sample, the merged-plane writer
+    // stores the raw value. Bound it here; a non-finite alpha clears the whole pixel, since the
+    // inks mixed against it can be non-finite too and the buffer keeps inks in 0..=1.
+    for p in &mut b.px {
+        if p[4].is_finite() {
+            p[4] = p[4].clamp(0.0, 1.0);
+            // An opacity past 1 also pushes inks out of 0..=1 through a blend mode while the
+            // alpha stays finite (Multiply at ink 0.2 over paper renders 1.8), and the F32
+            // exporter writes inks raw. Bound them with the alpha.
+            for ink in &mut p[..4] {
+                *ink = if ink.is_finite() { ink.clamp(0.0, 1.0) } else { 0.0 };
+            }
+        } else {
+            *p = [0.0; 5];
+        }
+    }
     b
 }
 
