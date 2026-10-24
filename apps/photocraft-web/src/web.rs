@@ -1,6 +1,6 @@
 //! The browser shell: web `Services`, drag-and-drop, and the eframe web runner.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -100,9 +100,13 @@ pub fn start() {
                         log::info!("photocraft-web: wgpu backend {:?}", rs.adapter.get_info().backend);
                         app.set_wgpu(rs);
                     }
+                    let (commands, control) = crate::command::Commands::new();
+                    let app = app.with_control(control);
+                    let commands = Rc::new(RefCell::new(commands));
+                    expose_command(commands.clone(), cc.egui_ctx.clone());
                     let unsaved = Arc::new(AtomicBool::new(false));
                     guard_unload(unsaved.clone());
-                    Ok(Box::new(WebShell { app, inbox, place_inbox, unsaved, served, database, presets }))
+                    Ok(Box::new(WebShell { app, inbox, place_inbox, unsaved, served, database, presets, commands }))
                 }),
             )
             .await;
@@ -113,6 +117,45 @@ pub fn start() {
             }
         }
     });
+}
+
+/// Installs `globalThis.photocraft = { command }` for automation: `await photocraft.command(id,
+/// paramsJson)` resolves to the result as JSON text or rejects with the error (`crate::command`).
+/// Installed once the app exists, so its presence means commands can run.
+fn expose_command(commands: Rc<RefCell<crate::command::Commands>>, ctx: egui::Context) {
+    use js_sys::{Object, Promise, Reflect};
+    use wasm_bindgen::{JsValue, closure::Closure};
+    let command = Closure::<dyn FnMut(JsValue, JsValue) -> Promise>::new(move |id: JsValue, params: JsValue| {
+        let (commands, ctx) = (commands.clone(), ctx.clone());
+        Promise::new(&mut |resolve, reject| {
+            let fail = |e: &str| {
+                let _ = reject.call1(&JsValue::NULL, &JsValue::from_str(e));
+            };
+            let Some(id) = id.as_string() else { return fail("command id must be a string") };
+            let params = if params.is_undefined() || params.is_null() { Some(String::new()) } else { params.as_string() };
+            let Some(params) = params else { return fail("params must be JSON text, e.g. JSON.stringify({width: 1080})") };
+            let Ok(mut queue) = commands.try_borrow_mut() else { return fail("PhotoCraft is busy; try again") };
+            let (resolve, reject) = (resolve.clone(), reject.clone());
+            queue.submit(
+                &id,
+                &params,
+                Box::new(move |r| {
+                    let _ = match r {
+                        Ok(text) => resolve.call1(&JsValue::NULL, &JsValue::from_str(&text)),
+                        Err(e) => reject.call1(&JsValue::NULL, &JsValue::from_str(&e)),
+                    };
+                }),
+            );
+            ctx.request_repaint();
+        })
+    });
+    let api = Object::new();
+    let installed = Reflect::set(&api, &JsValue::from_str("command"), command.as_ref())
+        .and_then(|_| Reflect::set(&js_sys::global(), &JsValue::from_str("photocraft"), &api));
+    match installed {
+        Ok(_) => command.forget(),
+        Err(e) => log::error!("couldn't install photocraft.command: {e:?}"),
+    }
 }
 
 /// Pen pressure, tilt, twist and the eraser button from Pointer Events (eframe forwards none of them for pens) into
@@ -269,6 +312,8 @@ struct WebShell {
     served: Served,
     database: Option<web_sys::IdbDatabase>,
     presets: crate::preset_bridge::Bridge,
+    /// `photocraft.command` calls waiting for the app's reply ([`expose_command`]).
+    commands: Rc<RefCell<crate::command::Commands>>,
 }
 
 impl WebShell {
@@ -357,6 +402,14 @@ impl eframe::App for WebShell {
         }
         self.serve_fonts(ctx);
         self.app.logic(ctx, frame);
+        // The app drained the control channel above: settle the calls it answered. A command
+        // running as a background job answers on a later frame, so keep frames coming meanwhile.
+        if let Ok(mut commands) = self.commands.try_borrow_mut() {
+            commands.poll();
+            if commands.waiting() {
+                ctx.request_repaint_after(std::time::Duration::from_millis(50));
+            }
+        }
         self.save_presets(ctx);
     }
 

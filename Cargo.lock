@@ -5106,6 +5106,7 @@ version = "0.15.1"
 dependencies = [
  "eframe",
  "egui",
+ "egui_kittest",
  "js-sys",
  "log",
  "photocraft-codecs",

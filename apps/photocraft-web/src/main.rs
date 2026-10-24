@@ -9,7 +9,9 @@
 //! - file pickers return browser file contents asynchronously through `Services::file_dialog`;
 //!   this includes File → Open and commands such as Place Embedded;
 //! - saving/exporting triggers a browser download;
-//! - dropped files are read asynchronously by `web::WebShell` and delivered through `Services::inbox`.
+//! - dropped files are read asynchronously by `web::WebShell` and delivered through `Services::inbox`;
+//! - automation calls `await photocraft.command(id, paramsJson)` on the page instead of the control
+//!   server's `engine.execute` (see `command`).
 //!
 //! URL query flags: `?cpu` forces the CPU canvas path (same as `PHOTOCRAFT_CPU_CANVAS=1`);
 //! `?webgl` forces the WebGL2 backend instead of WebGPU.
@@ -18,6 +20,9 @@
 
 #[cfg(any(target_arch = "wasm32", test))]
 mod preset_bridge;
+
+#[cfg(any(target_arch = "wasm32", test))]
+mod command;
 
 #[cfg(target_arch = "wasm32")]
 mod indexed_presets;
