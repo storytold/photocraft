@@ -262,6 +262,7 @@ pub fn photoshop_key(sc: &str) -> Option<String> {
     // The key is the last part; `Cmd++` ends in an empty part, so take it from the string.
     let (mods, key) = match n.strip_suffix("++") {
         Some(m) => (m, "+"),
+        None if n == "+" => ("", "+"),
         None => n.rsplit_once('+').unwrap_or(("", n.as_str())),
     };
     let has = |m: &str| mods.split('+').any(|x| x == m);
@@ -321,6 +322,14 @@ mod tests {
 
     fn c(id: &str, label: &str, default: Option<&str>) -> Candidate {
         Candidate { id: id.into(), label: label.into(), default: default.map(str::to_string) }
+    }
+
+    #[test]
+    fn a_bare_plus_key_is_kept_when_saving() {
+        assert_eq!(photoshop_key("+").as_deref(), Some("+"));
+        assert_eq!(photoshop_key("Cmd++").as_deref(), Some("Cmd++"));
+        let e = Entry { id: "tools.zoom".into(), label: "Zoom Tool".into(), tool: true, keys: vec!["+".into()] };
+        assert!(write("Mine", &[e]).contains(">+</tool>"));
     }
 
     #[test]
