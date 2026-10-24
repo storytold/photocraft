@@ -14,7 +14,10 @@
 //!   (paper → L* 100).
 //! * **BToA1** (colorimetric): for every Lab node, black generation (GCR) from the gray
 //!   component of the K-free solution, then a bounded least-squares solve for C, M, Y with the
-//!   total ink limit; out-of-gamut colours land on the closest reachable colour (clipping).
+//!   total ink limit; a target the solve misses by more than ΔE 0.5 is re-solved with black from
+//!   none to `k_max` and the closest, least-inky hit wins (a dark *saturated* colour needs black
+//!   the gray component does not predict: Y100 K33 separated to C25 M22 Y100 K4, ΔE 6.2).
+//!   Out-of-gamut colours land on the closest reachable colour (clipping).
 //! * **BToA0/BToA2** (perceptual/saturation): the target is first compressed into the gamut —
 //!   L* is scaled onto the device black, chroma is softly compressed against a gamut boundary
 //!   descriptor sampled from the forward model — then solved as above.
@@ -246,8 +249,34 @@ pub fn separate(model: &CmykModel, p: &CmykParams, target: [f64; 3], warm: Optio
     let k = if g <= p.gcr_start { 0.0 } else { p.k_max * ((g - p.gcr_start) / (1.0 - p.gcr_start)).powf(p.gcr_gamma) };
     let mut seeds2 = vec![[(cmy0[0] - k).max(0.0), (cmy0[1] - k).max(0.0), (cmy0[2] - k).max(0.0)], cmy0];
     seeds2.extend_from_slice(&seeds);
-    let (cmy, de) = solve_cmy(model, target, k, (p.tac - k).max(0.0), &seeds2);
-    ([cmy[0], cmy[1], cmy[2], k], de)
+    let (mut best, mut de) = solve_cmy(model, target, k, (p.tac - k).max(0.0), &seeds2);
+    let mut best_k = k;
+    if de > 0.5 {
+        // The GCR black comes from the gray component of the K-free solution, which is small for
+        // a *saturated* dark colour, so the K fixed above cannot reach a target that needs black
+        // (Y100 K33 came back C25 M22 Y100 K4, ΔE 6.2 on the model's own colour). Try black from
+        // none to the ink limit, then let the closest hit decide and take the least-ink hit within
+        // ΔE 0.2 of it, so a neutral still separates to black rather than C=M=Y and the result
+        // does not depend on which black step was tried first.
+        let mut seen: Vec<([f64; 3], f64, f64)> = vec![(best, k, de)];
+        for i in 0..=10 {
+            let kk = p.k_max * i as f64 / 10.0;
+            if (kk - k).abs() < 1e-9 {
+                continue;
+            }
+            let seeds3 = [[(cmy0[0] - kk).max(0.0), (cmy0[1] - kk).max(0.0), (cmy0[2] - kk).max(0.0)], cmy0];
+            let (cmy, d) = solve_cmy(model, target, kk, (p.tac - kk).max(0.0), &seeds3);
+            seen.push((cmy, kk, d));
+        }
+        let closest = seen.iter().map(|c| c.2).fold(f64::INFINITY, f64::min);
+        let ink = |c: &([f64; 3], f64, f64)| c.0.iter().sum::<f64>() + c.1;
+        if let Some(best_hit) = seen.iter().filter(|c| c.2 <= closest + 0.2).min_by(|a, b| ink(a).total_cmp(&ink(b))) {
+            best = best_hit.0;
+            best_k = best_hit.1;
+            de = best_hit.2;
+        }
+    }
+    ([best[0], best[1], best[2], best_k], de)
 }
 
 /// Gamut boundary descriptor: maximum chroma per (L*, hue) bin, sampled from the model.
@@ -470,6 +499,31 @@ mod tests {
                 let l = m.lab(v)[0];
                 assert!(l < prev + 1e-9, "ink {ink} step {i}: {l} >= {prev}");
                 prev = l;
+            }
+        }
+    }
+
+    #[test]
+    fn separation_reproduces_the_models_own_colours() {
+        let m = CmykModel::coated(CmykParams::default().tvi);
+        let p = CmykParams::default();
+        // Every target is reachable by construction: it is the model's Lab of an ink combination
+        // inside the total ink limit, so the separation has to find inks that hit it. It used to
+        // miss the dark saturated ones (C100 K50 came back C100 M40 Y25 K12, ΔE 8.1) because the
+        // GCR black was spent out of the total ink budget the chroma inks needed.
+        for c in 0..=3 {
+            for mm in 0..=3 {
+                for y in 0..=3 {
+                    for k in 0..=3 {
+                        let inks = [c as f64 / 3.0, mm as f64 / 3.0, y as f64 / 3.0, k as f64 / 3.0];
+                        if inks.iter().sum::<f64>() > p.tac {
+                            continue;
+                        }
+                        let (back, de) = separate(&m, &p, m.lab(inks), None);
+                        assert!(de < 2.0, "reachable {inks:?} -> {back:?} misses by ΔE {de}");
+                        assert!(back.iter().sum::<f64>() <= p.tac + 1e-6, "{back:?} is over the ink limit");
+                    }
+                }
             }
         }
     }
