@@ -786,7 +786,7 @@ fn build() -> Vec<CommandSpec> {
                 let nid = s.edit("Duplicate Layer", |doc, active| {
                     let mut dup = layer_copy(doc, id, add_copy)?;
                     if let Some(name) = &name {
-                        dup.name.clone_from(name);
+                        crate::type_cmds::set_custom_name(&mut dup, name.clone());
                     }
                     let nid = doc.insert_above(Some(id), dup);
                     if !in_place {
@@ -895,7 +895,7 @@ fn build() -> Vec<CommandSpec> {
                         }
                         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
                         if let Some(v) = p.get("name").and_then(Value::as_str) {
-                            l.name = v.to_string();
+                            crate::type_cmds::set_custom_name(l, v.to_string());
                         }
                         if let Some(v) = p.get("visible").and_then(Value::as_bool) {
                             l.visible = v;
@@ -1767,6 +1767,10 @@ pub(crate) fn layer_copy(doc: &Document, id: LayerId, add_copy: bool) -> Result<
     let mut dup = src.duplicate();
     if add_copy {
         dup.name = doc.copy_name(&dup.name);
+        let auto_named = crate::type_cmds::is_auto_named(src);
+        if let LayerContent::Text(t) = &mut dup.content {
+            t.auto_name = auto_named.then(|| dup.name.clone());
+        }
     }
     if from_background {
         dup.locks = Default::default();

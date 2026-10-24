@@ -549,9 +549,7 @@ fn layer_via(s: &mut Session, cut: bool) -> Result<Value> {
     if !has_sel && !cut {
         // No selection: Layer via Copy duplicates the whole layer (Photoshop).
         let nid = s.edit("Layer Via Copy", |doc, active| {
-            let src = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
-            let mut dup = src.duplicate();
-            dup.name = doc.copy_name(&src.name);
+            let mut dup = crate::commands::layer_copy(doc, id, true)?;
             dup.locks = Default::default();
             let nid = doc.insert_above(Some(id), dup);
             *active = Some(nid);

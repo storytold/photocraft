@@ -188,7 +188,7 @@ fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
         copies.layers.push(l);
     }
     if let (Some(name), [l]) = (p.get("name").and_then(Value::as_str).filter(|n| !n.is_empty()), copies.layers.as_mut_slice()) {
-        l.name = name.to_string();
+        crate::type_cmds::set_custom_name(l, name.to_string());
     }
     // Measure in source space: destination refresh may clip a shape before it is moved.
     // Missing caches must participate too, including shapes nested inside groups.
@@ -269,7 +269,7 @@ pub(crate) fn duplicate_to_new_document(s: &mut Session, p: &Value) -> Result<Va
         if ids.len() == 1
             && let Some(name) = p.get("name").and_then(Value::as_str).filter(|n| !n.is_empty())
         {
-            l.name = name.to_string();
+            crate::type_cmds::set_custom_name(&mut l, name.to_string());
         }
         nd.layers.push(l);
     }

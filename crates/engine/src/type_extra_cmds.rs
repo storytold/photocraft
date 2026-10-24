@@ -82,10 +82,12 @@ pub(crate) fn with_text<R>(s: &mut Session, p: &Value, label: &str, f: impl FnOn
         let LayerContent::Text(t) = &mut l.content else {
             return Err(EngineError::Other(format!("layer {} is {} {} layer, not a type layer", id.0, l.content.article(), l.content.kind_name())));
         };
+        let old_text = t.text.clone();
         let r = f(t, dpi)?;
         refresh_at(dpi, format, t);
-        let name = auto_named.then(|| layer_name(&t.text));
+        let name = (auto_named && t.text != old_text).then(|| layer_name(&t.text));
         if let Some(n) = name {
+            t.auto_name = None;
             l.name = n;
         }
         Ok(r)
