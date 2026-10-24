@@ -1630,54 +1630,53 @@ fn dropdown_with<T: PartialEq + Clone>(
     // The list opens on the press: press, drag onto an option and release to choose it (#2735).
     let (press, close) = crate::press_menu::PressCombo::before(ui, id);
     let texts: Vec<String> = options.iter().map(|(_, l)| shown(l)).collect();
-    let response =
-        egui::ComboBox::from_id_salt(id).selected_text(label).width(width).height(420.0).icon(chevron_icon).close_behavior(close).show_ui(ui, |ui| {
-            fit_widest_option(ui, texts.iter().map(|l| l.as_str()));
-            // A typed letter jumps to the next option starting with it, ↩ closes the list (#1481).
-            let labels: Vec<&str> = texts.iter().map(|l| l.as_str()).collect();
-            let shown = options.iter().position(|(v, _)| v == current);
-            if let Some((v, _)) = type_ahead::keys(ui, ui.make_persistent_id(id), shown, &labels).and_then(|i| options.get(i)) {
+    let response = combo_list(ui, id, label, width, close, |ui| {
+        fit_widest_option(ui, texts.iter().map(|l| l.as_str()));
+        // A typed letter jumps to the next option starting with it, ↩ closes the list (#1481).
+        let labels: Vec<&str> = texts.iter().map(|l| l.as_str()).collect();
+        let shown = options.iter().position(|(v, _)| v == current);
+        if let Some((v, _)) = type_ahead::keys(ui, ui.make_persistent_id(id), shown, &labels).and_then(|i| options.get(i)) {
+            *current = v.clone();
+            chosen.push(v.clone());
+            reveal = true;
+            keyed = true;
+        }
+        // Over the open list the wheel steps the value too, instead of scrolling the list.
+        over_list = wheel && ui.rect_contains_pointer(ui.clip_rect());
+        if over_list {
+            let stepped = wheel_steps(ui, wheel_id, true, current, options);
+            wheeled = !stepped.is_empty();
+            reveal |= wheeled;
+            chosen.extend(stepped);
+        }
+        // The row nearest the pointer, by its distance to each row.
+        let pointer = ui.ctx().pointer_hover_pos().filter(|_| ui.rect_contains_pointer(ui.clip_rect()));
+        let mut nearest: Option<(f32, &T)> = None;
+        for ((v, _), text) in options.iter().zip(texts.iter()) {
+            let item = ui.selectable_label(v == current, text.as_str());
+            if reveal && v == current {
+                item.scroll_to_me(None);
+            }
+            if item.hovered() {
+                hovered = Some(v.clone());
+            }
+            if let Some(p) = pointer {
+                let d = (item.rect.top() - p.y).max(p.y - item.rect.bottom()).max(0.0);
+                if nearest.is_none_or(|(n, _)| d < n) {
+                    nearest = Some((d, v));
+                }
+            }
+            if press.chosen(ui, &item) {
                 *current = v.clone();
                 chosen.push(v.clone());
-                reveal = true;
-                keyed = true;
             }
-            // Over the open list the wheel steps the value too, instead of scrolling the list.
-            over_list = wheel && ui.rect_contains_pointer(ui.clip_rect());
-            if over_list {
-                let stepped = wheel_steps(ui, wheel_id, true, current, options);
-                wheeled = !stepped.is_empty();
-                reveal |= wheeled;
-                chosen.extend(stepped);
-            }
-            // The row nearest the pointer, by its distance to each row.
-            let pointer = ui.ctx().pointer_hover_pos().filter(|_| ui.rect_contains_pointer(ui.clip_rect()));
-            let mut nearest: Option<(f32, &T)> = None;
-            for ((v, _), text) in options.iter().zip(texts.iter()) {
-                let item = ui.selectable_label(v == current, text.as_str());
-                if reveal && v == current {
-                    item.scroll_to_me(None);
-                }
-                if item.hovered() {
-                    hovered = Some(v.clone());
-                }
-                if let Some(p) = pointer {
-                    let d = (item.rect.top() - p.y).max(p.y - item.rect.bottom()).max(0.0);
-                    if nearest.is_none_or(|(n, _)| d < n) {
-                        nearest = Some((d, v));
-                    }
-                }
-                if press.chosen(ui, &item) {
-                    *current = v.clone();
-                    chosen.push(v.clone());
-                }
-            }
-            // Between two rows (item spacing) the pointer hovers neither; it is still over the list,
-            // so keep previewing the nearest row instead of flashing the current value back (#2553).
-            if hovered.is_none() {
-                hovered = nearest.map(|(_, v)| v.clone());
-            }
-        });
+        }
+        // Between two rows (item spacing) the pointer hovers neither; it is still over the list,
+        // so keep previewing the nearest row instead of flashing the current value back (#2553).
+        if hovered.is_none() {
+            hovered = nearest.map(|(_, v)| v.clone());
+        }
+    });
     press.after(&response.response);
     if combo_box_arrow_keys(ui, &response.response, current, options) {
         chosen.push(current.clone());
@@ -1789,6 +1788,114 @@ pub fn menu_scroll<R>(ui: &mut Ui, add_contents: impl FnOnce(&mut Ui) -> R) -> R
     egui::ScrollArea::vertical().max_height(room).min_scrolled_height(room).show(ui, add_contents).inner
 }
 
+/// A dropdown: a button showing `selected_text` (at least `width` wide, wider for a longer text)
+/// whose list (`add_contents`) opens below it on a click. The list is as tall as its options up to
+/// the room the window has on that side, scrolling only past that (#5495): Photoshop's dropdowns
+/// open at full height. egui's `ComboBox` capped every list at the size its popup takes on the
+/// frame it opens (`default_area_size`, 400 pt), so the Layers panel's 27 blend modes scrolled.
+///
+/// The list never covers its button, as in Photoshop: it opens below the button, or above it when
+/// the whole list doesn't fit below and there is more room above, and scrolls when it doesn't fit
+/// on that side either. Over the button, the release of the click that opened it would choose the
+/// row under the pointer. Its left edge is the button's and its side only depends on its rows'
+/// height, so it stays put while its value (and with it the button's width) changes, as the wheel
+/// steps it over the open list (#1747). The ids are egui's `ComboBox` ones, so
+/// `ComboBox::is_open` and [`crate::press_menu::PressCombo`] apply.
+pub fn combo_list<R>(
+    ui: &mut Ui,
+    id_salt: impl egui::AsIdSalt,
+    selected_text: impl Into<egui::WidgetText>,
+    width: f32,
+    close: egui::PopupCloseBehavior,
+    add_contents: impl FnOnce(&mut Ui) -> R,
+) -> egui::InnerResponse<Option<R>> {
+    let button_id = ui.make_persistent_id(egui::IdSalt::new(id_salt));
+    let popup_id = button_id.with("popup");
+    let selected_text = selected_text.into();
+    ui.horizontal(|ui| {
+        let ctx = ui.ctx().clone();
+        let button = combo_button(ui, button_id, &selected_text, width, egui::Popup::is_id_open(&ctx, popup_id));
+        let enabled = ui.is_enabled();
+        button.widget_info(|| {
+            let mut info = egui::WidgetInfo::new(egui::WidgetType::ComboBox);
+            info.enabled = enabled;
+            info.current_text_value = Some(selected_text.text().to_owned());
+            info
+        });
+        // The room below and above the button, less the popup frame's margin and stroke. The
+        // rows' full height is measured on the (invisible) pass that sizes the list as it opens.
+        let visible = crate::work_area::visible_rect(&ctx).shrink(MENU_EDGE);
+        let frame = ui.spacing().menu_margin.sum().y + 2.0;
+        let below = visible.bottom() - button.rect.bottom() - frame;
+        let above = button.rect.top() - visible.top() - frame;
+        let rows_id = popup_id.with("rows");
+        let rows = ctx.data(|d| d.get_temp::<f32>(rows_id));
+        let up = rows.is_some_and(|rows| rows > below) && above > below;
+        let (align, room) = if up { (egui::RectAlign::TOP_START, above) } else { (egui::RectAlign::BOTTOM_START, below) };
+        // Only the room that side has, even when it is small: a taller list would be pushed back
+        // into the window, over its button (#5495 review).
+        let room = room.max(0.0);
+        let parent_layer = ui.layer_id();
+        let inner = egui::Popup::menu(&button)
+            .id(popup_id)
+            .anchor(button.rect)
+            .align(align)
+            .align_alternatives(&[])
+            .width(button.rect.width())
+            .close_behavior(close)
+            .style(egui::style::StyleModifier::default())
+            .show(|ui| {
+                crate::press_menu::above_parent_ui(parent_layer, ui);
+                ui.set_min_width(ui.available_width());
+                // A popup's Ui is only as tall as the popup was last frame (400 pt on the first),
+                // so ask for the whole room: the area still shrinks to its rows when they need less.
+                let scroll = egui::ScrollArea::vertical().max_height(room).min_scrolled_height(room).show(ui, |ui| {
+                    // Options don't wrap in a list as narrow as its button: they widen it.
+                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+                    add_contents(ui)
+                });
+                let rows = scroll.content_size.y;
+                ui.ctx().data_mut(|d| d.insert_temp(rows_id, rows));
+                scroll.inner
+            })
+            .map(|r| r.inner);
+        egui::InnerResponse::new(inner, button)
+    })
+    .inner
+}
+
+/// The button of a [`combo_list`], drawn as egui's `ComboBox` draws its own.
+fn combo_button(ui: &mut Ui, id: egui::Id, text: &egui::WidgetText, width: f32, open: bool) -> Response {
+    let background = ui.painter().add(egui::Shape::Noop);
+    let margin = ui.spacing().button_padding;
+    let min_height = ui.spacing().interact_size.y;
+    let mut outer = ui.available_rect_before_wrap();
+    outer.set_height(outer.height().max(min_height));
+    let mut content = ui.new_child(egui::UiBuilder::new().max_rect(outer.shrink2(margin)));
+    let icon_spacing = content.spacing().icon_spacing;
+    let icon_size = Vec2::splat(content.spacing().icon_width);
+    let wrap_mode = content.wrap_mode();
+    let wrap_width = if wrap_mode == egui::TextWrapMode::Extend { f32::INFINITY } else { content.available_width() - icon_spacing - icon_size.x };
+    let galley = text.clone().into_galley(&content, Some(wrap_mode), wrap_width, egui::TextStyle::Button);
+    let size = vec2((galley.size().x + icon_spacing + icon_size.x).max(width - 2.0 * margin.x), galley.size().y.max(icon_size.y));
+    let (_, rect) = content.allocate_space(size);
+    let mut outer = content.min_rect().expand2(margin);
+    outer.set_height(outer.height().max(min_height));
+    let response = ui.interact(outer, id, Sense::click());
+    if ui.is_rect_visible(outer) {
+        let visuals = if open { &ui.visuals().widgets.open } else { ui.style().interact(&response) };
+        let shape =
+            egui::epaint::RectShape::new(outer.expand(visuals.expansion), visuals.corner_radius, visuals.weak_bg_fill, visuals.bg_stroke, StrokeKind::Inside);
+        ui.painter().set(background, shape);
+        let icon_rect = Align2::RIGHT_CENTER.align_size_within_rect(icon_size, rect);
+        chevron_icon(ui, icon_rect.expand(visuals.expansion), visuals, open);
+        let text_rect = Align2::LEFT_CENTER.align_size_within_rect(galley.size(), rect);
+        ui.painter().galley(text_rect.min, galley, visuals.text_color());
+    }
+    ui.advance_cursor_after_rect(outer);
+    response
+}
+
 /// Gap kept between a context menu and the window's edges, and the shortest it gets.
 const MENU_EDGE: f32 = 4.0;
 const MENU_MIN_HEIGHT: f32 = 120.0;
@@ -1828,23 +1935,22 @@ pub fn dropdown_with_tooltips<T: PartialEq + Clone>(ui: &mut Ui, id: &str, curre
     let label = options.iter().find(|(v, _, _)| v == current).map(|(_, l, _)| tl!(l)).unwrap_or("—");
     let mut changed = false;
     let (press, close) = crate::press_menu::PressCombo::before(ui, id);
-    let response =
-        egui::ComboBox::from_id_salt(id).selected_text(label).width(width).height(420.0).icon(chevron_icon).close_behavior(close).show_ui(ui, |ui| {
-            fit_widest_option(ui, options.iter().map(|(_, l, _)| tl!(l)));
-            let labels: Vec<&str> = options.iter().map(|(_, l, _)| tl!(l)).collect();
-            let shown = options.iter().position(|(v, _, _)| v == current);
-            if let Some((v, _, _)) = type_ahead::keys(ui, ui.make_persistent_id(id), shown, &labels).and_then(|i| options.get(i)) {
+    let response = combo_list(ui, id, label, width, close, |ui| {
+        fit_widest_option(ui, options.iter().map(|(_, l, _)| tl!(l)));
+        let labels: Vec<&str> = options.iter().map(|(_, l, _)| tl!(l)).collect();
+        let shown = options.iter().position(|(v, _, _)| v == current);
+        if let Some((v, _, _)) = type_ahead::keys(ui, ui.make_persistent_id(id), shown, &labels).and_then(|i| options.get(i)) {
+            *current = v.clone();
+            changed = true;
+        }
+        for (v, l, tip) in options {
+            let item = ui.selectable_label(v == current, tl!(l)).on_hover_text(tl!(tip));
+            if press.chosen(ui, &item) {
                 *current = v.clone();
                 changed = true;
             }
-            for (v, l, tip) in options {
-                let item = ui.selectable_label(v == current, tl!(l)).on_hover_text(tl!(tip));
-                if press.chosen(ui, &item) {
-                    *current = v.clone();
-                    changed = true;
-                }
-            }
-        });
+        }
+    });
     press.after(&response.response);
     if let Some((_, _, tip)) = options.iter().find(|(v, _, _)| v == current) {
         let _ = response.response.on_hover_text(tl!(tip));
@@ -2907,6 +3013,154 @@ mod tests {
             h.run();
             assert_eq!(list(&h).map(|r| r.width()), Some(open.width()));
         }
+    }
+
+    /// A window `height` tall with the Layers panel's blend mode dropdown (all 27 modes, wheel
+    /// steps them) `down` from its top, opened.
+    fn open_blend_modes(height: f32, down: f32) -> Harness<'static, photocraft_color::BlendMode> {
+        use photocraft_color::BlendMode;
+        let mut h = Harness::builder().with_size(egui::vec2(400.0, height)).build_ui_state(
+            move |ui, mode: &mut BlendMode| {
+                ui.add_space(down);
+                let opts: Vec<(BlendMode, &str)> = BlendMode::LAYER_MODES.iter().map(|m| (*m, m.label())).collect();
+                super::dropdown_wheel_hovered(ui, "blend-mode", mode, &opts, 120.0);
+            },
+            BlendMode::Normal,
+        );
+        crate::theme::apply(&h.ctx, crate::theme::ThemeKind::ProMedium);
+        h.run();
+        h.get_by_role(egui::accesskit::Role::ComboBox).click();
+        h.run_steps(4);
+        h
+    }
+
+    /// The open list's rect.
+    fn open_list<T>(h: &Harness<'_, T>) -> egui::Rect {
+        let list = h.ctx.memory(|m| m.layer_ids().filter(|l| l.order == egui::Order::Foreground).find_map(|l| m.area_rect(l.id)));
+        let Some(list) = list else { panic!("the list is open") };
+        list
+    }
+
+    /// Each mode's row in the open list: its label's last node, as the box shows the chosen one's.
+    fn mode_rows<T>(h: &Harness<'_, T>) -> Vec<egui::Rect> {
+        use photocraft_color::BlendMode;
+        BlendMode::LAYER_MODES.iter().map(|m| h.get_all_by_label(m.label()).last().map(|n| n.rect()).unwrap_or(egui::Rect::NOTHING)).collect()
+    }
+
+    /// Photoshop opens the Layers panel's blend modes at full height when the window has room, no
+    /// scroll bar (#5495): not capped at a fixed height. A short window still scrolls the list,
+    /// which stays inside the window.
+    #[test]
+    fn dropdown_list_is_as_tall_as_its_options_up_to_the_window() {
+        let h = open_blend_modes(1000.0, 0.0);
+        let (list, rows) = (open_list(&h), mode_rows(&h));
+        for (i, row) in rows.iter().enumerate() {
+            assert!(list.contains_rect(*row), "row {i} {row:?} shows in the list {list:?}");
+        }
+        let h = open_blend_modes(300.0, 0.0);
+        let (list, rows) = (open_list(&h), mode_rows(&h));
+        assert!(list.top() >= 0.0 && list.bottom() <= 300.0, "the list {list:?} stays in the window");
+        assert!(list.height() > 200.0, "the list {list:?} uses the window's height");
+        assert!(rows.last().is_some_and(|r| !list.contains_rect(*r)), "the last rows scroll: {rows:?}");
+    }
+
+    /// The open list opens at the button's left edge, below the button or above it, never over it
+    /// (#5495 review: a click released in place would choose the row under the pointer): below
+    /// when the whole list fits there, else on the side with more room, scrolling when it doesn't
+    /// fit there either. It stays put while the wheel steps through every mode over it (#1747),
+    /// although the button widens for the longer names.
+    #[test]
+    fn dropdown_list_opens_beside_its_button_and_stays_put_while_the_wheel_steps_its_value() {
+        use photocraft_color::BlendMode;
+        // (window height, button's distance from the top, list below it, all modes in sight)
+        let cases = [
+            (1000.0, 0.0, true, true),    // room below
+            (900.0, 420.0, true, false),  // room on neither side, more below
+            (900.0, 520.0, false, false), // room on neither side, more above
+            (1000.0, 900.0, false, true), // room above only, near the bottom edge
+            (300.0, 150.0, false, false), // a window shorter than the list
+        ];
+        for (height, down, below, all) in cases {
+            let mut h = open_blend_modes(height, down);
+            let button = h.get_by_role(egui::accesskit::Role::ComboBox).rect();
+            let list = open_list(&h);
+            assert!(list.top() >= 0.0 && list.bottom() <= height, "{height}/{down}: the list {list:?} is in the window");
+            assert!((list.left() - button.left()).abs() < 8.0, "{height}/{down}: the list {list:?} starts at the button {button:?}");
+            assert!(!list.intersects(button.shrink(1.0)), "{height}/{down}: the list {list:?} leaves the button {button:?} free");
+            assert_eq!(list.top() >= button.bottom() - 1.0, below, "{height}/{down}: the list {list:?} is below the button {button:?}");
+            let rows = mode_rows(&h);
+            assert_eq!(rows.iter().all(|r| list.contains_rect(*r)), all, "{height}/{down}: all modes show in {list:?}");
+            let over = list.center();
+            for _ in 1..BlendMode::LAYER_MODES.len() {
+                h.hover_at(over);
+                h.event(egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Line,
+                    delta: egui::vec2(0.0, -1.0),
+                    phase: egui::TouchPhase::Move,
+                    modifiers: Modifiers::NONE,
+                });
+                h.run_steps(3);
+                assert_eq!(open_list(&h), list, "{height}/{down}: the list stays put at {:?}", h.state());
+            }
+            assert_eq!(*h.state(), BlendMode::Luminosity, "{height}/{down}: the wheel stepped through every mode");
+        }
+    }
+
+    /// A short list opens below its button when it fits there, and above it near the window's
+    /// bottom edge, whole either way.
+    #[test]
+    fn a_short_dropdown_list_opens_below_or_above_its_button_whole() {
+        for (down, below) in [(100.0, true), (360.0, false)] {
+            let mut h = Harness::builder().with_size(egui::vec2(300.0, 400.0)).build_ui_state(
+                move |ui, selected: &mut usize| {
+                    ui.add_space(down);
+                    super::dropdown(ui, "blend-mode", selected, &MODES, 120.0);
+                },
+                0,
+            );
+            h.run();
+            h.get_by_role(egui::accesskit::Role::ComboBox).click();
+            h.run_steps(4);
+            let button = h.get_by_role(egui::accesskit::Role::ComboBox).rect();
+            let list = open_list(&h);
+            assert_eq!(list.top() >= button.bottom() - 1.0, below, "{down}: the list {list:?} is below the button {button:?}");
+            assert!(!list.intersects(button.shrink(1.0)), "{down}: the list {list:?} leaves the button {button:?} free");
+            for (_, label) in MODES {
+                let row = h.get_all_by_label(label).last().map(|n| n.rect()).unwrap_or(egui::Rect::NOTHING);
+                assert!(list.contains_rect(row), "{down}: {label} {row:?} shows in {list:?}");
+            }
+            assert!(list.height() < 150.0, "{down}: the list {list:?} is only as tall as its rows");
+            assert_eq!(*h.state(), 0, "{down}: the click chose nothing");
+        }
+    }
+
+    /// In a window with less than 120 pt on either side of the button the list still leaves
+    /// its button free, scrolling in the room that side has, and stays in the window; the release
+    /// of the click that opened it, held a few frames, chooses nothing (#5495 review).
+    #[test]
+    fn in_a_very_short_window_the_list_still_leaves_its_button_free_and_the_opening_click_chooses_nothing() {
+        use photocraft_color::BlendMode;
+        let mut h = Harness::builder().with_size(egui::vec2(400.0, 110.0)).build_ui_state(
+            |ui, mode: &mut BlendMode| {
+                ui.add_space(40.0);
+                let opts: Vec<(BlendMode, &str)> = BlendMode::LAYER_MODES.iter().map(|m| (*m, m.label())).collect();
+                super::dropdown_wheel_hovered(ui, "blend-mode", mode, &opts, 120.0);
+            },
+            BlendMode::Normal,
+        );
+        h.run();
+        let button = h.get_by_role(egui::accesskit::Role::ComboBox).rect();
+        let at = button.center();
+        h.hover_at(at);
+        h.run();
+        for (pressed, frames) in [(true, 6), (false, 4)] {
+            h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+            h.run_steps(frames);
+        }
+        let list = open_list(&h);
+        assert!(!list.intersects(button.shrink(1.0)), "the list {list:?} leaves the button {button:?} free");
+        assert!(list.top() >= 0.0 && list.bottom() <= 110.0, "the list {list:?} is in the window");
+        assert_eq!(*h.state(), BlendMode::Normal, "the click chose nothing");
     }
 
     const MODES: [(usize, &str); 4] = [(0, "Normal"), (1, "Dissolve"), (2, "Darken"), (3, "Multiply")];
