@@ -4351,19 +4351,6 @@ fn hex_edit(ui: &mut egui::Ui, id: egui::Id, color: &mut [f32; 4]) -> bool {
     false
 }
 
-/// Photoshop's brush preset picker chip: a soft/hard round tip preview with the size underneath.
-/// Draw a round brush tip preview (hard core fading to a soft edge).
-fn brush_tip(p: &egui::Painter, c: egui::Pos2, rad: f32, hardness: f32, color: Color32) {
-    let inner = rad * hardness.clamp(0.05, 1.0);
-    let steps = 8;
-    for k in (0..=steps).rev() {
-        let f = k as f32 / steps as f32;
-        let rr = inner + (rad - inner) * f;
-        let a = if hardness >= 0.99 { 1.0 } else { (1.0 - f).powf(1.5) };
-        p.circle_filled(c, rr, color.gamma_multiply(a));
-    }
-}
-
 /// The Brush's or Pencil's Mode dropdown: the blend modes, with Photoshop's painting-only Clear
 /// after Dissolve (#3439). Clear erases with the brush (`clear`); it shows while chosen, or while
 /// `~` is held (`held`). The wheel over it steps the mode, as over the Layers panel's (#2061).
@@ -4456,7 +4443,11 @@ fn brush_preset_chip(ui: &mut egui::Ui, b: &photocraft_engine::BrushSettings, st
     let c = pos2(r.left() + 14.0, r.top() + 11.0);
     // Photoshop's white tip vanishes on light chrome; light themes use their icon colour.
     let tip = if t.dark() { Color32::WHITE } else { t.icon };
-    brush_tip(ui.painter(), c, 7.0, b.hardness, tip);
+    // The brush's own tip, as the Brush Preset picker's thumbnails draw it: the engine's falloff
+    // for its hardness, its angle and roundness, a sampled tip's shape.
+    let tex = crate::brush_preview::tip_texture(ui.ctx(), "options-bar-chip", &b.tip, (b.hardness, b.angle, b.roundness), 32, tip);
+    let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+    ui.painter().image(tex.id(), Rect::from_center_size(c, vec2(14.0, 14.0)), uv, Color32::WHITE);
     ui.painter().text(pos2(c.x, r.bottom() - 5.0), Align2::CENTER_CENTER, format!("{}", b.size.round() as i64), egui::FontId::proportional(9.5), t.text_dim);
     icons::paint(ui, Rect::from_center_size(pos2(r.right() - 9.0, c.y), vec2(10.0, 10.0)), "chevron-down", 9.0, t.text_faint);
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Brush Preset picker")));
@@ -7583,5 +7574,44 @@ mod sampler_readout_tests {
         assert_eq!(b[0]["rgb"], json!([255, 0, 0]), "an edit shows");
         app.run("view.colorSamplers.add", json!({"x": 8, "y": 8})).unwrap();
         assert_eq!(sampler_readouts(&mut app).len(), 2, "so does a new sampler");
+    }
+}
+
+#[cfg(test)]
+mod brush_chip_tests {
+    use super::*;
+
+    /// The options-bar chip's tip texture for `brush`, row-major alpha (32 × 32).
+    fn chip_tip(brush: &photocraft_engine::BrushSettings) -> Vec<u8> {
+        let ctx = egui::Context::default();
+        let mut state = crate::state::UiState::default();
+        let mut out = ctx.run_ui(Default::default(), |ui| brush_preset_chip(ui, brush, &mut state));
+        // `Painter::image` is a textured mesh.
+        let id = out.shapes.iter().find_map(|c| match &c.shape {
+            egui::Shape::Mesh(m) if (m.calc_bounds().width() - 14.0).abs() < 0.01 => Some(m.texture_id),
+            _ => None,
+        });
+        let image = id.and_then(|id| out.textures_delta.set.get(&id)).and_then(|d| d.last()).map(|d| match &d.image {
+            egui::ImageData::Color(c) => c.clone(),
+        });
+        out.textures_delta.clear();
+        let image = image.expect("the chip draws its tip as an uploaded texture");
+        assert_eq!(image.size, [32, 32]);
+        image.pixels.iter().map(|p| p.a()).collect()
+    }
+
+    /// The chip shows the brush's own tip: a soft brush fades from its centre as its dabs do, a
+    /// hard one is solid to its rim, and a flattened tip is flat, not a round blob.
+    #[test]
+    fn the_brush_chip_draws_the_brushs_own_tip() {
+        let at = |a: &[u8], x: usize, y: usize| a[y * 32 + x];
+        let hard = chip_tip(&photocraft_engine::BrushSettings { hardness: 1.0, ..Default::default() });
+        let soft = chip_tip(&photocraft_engine::BrushSettings { hardness: 0.0, ..Default::default() });
+        assert!(at(&hard, 16, 16) == 255 && at(&hard, 16 + 11, 16) == 255, "hard: solid to near the rim");
+        assert!(at(&soft, 16, 16) > 230, "soft: full at the centre");
+        assert!(at(&soft, 16 + 11, 16) < 80, "soft: faint near the rim: {}", at(&soft, 16 + 11, 16));
+        assert!(at(&soft, 16 + 6, 16) > at(&soft, 16 + 11, 16), "and fading outwards");
+        let flat = chip_tip(&photocraft_engine::BrushSettings { hardness: 1.0, roundness: 0.3, ..Default::default() });
+        assert!(at(&flat, 16 + 11, 16) > 200 && at(&flat, 16, 16 + 11) == 0, "a flattened tip is flat");
     }
 }
