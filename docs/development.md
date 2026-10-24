@@ -349,6 +349,25 @@ none). A missing translation shows in English and fails nothing: `cargo xtask ci
 as its last step so the list appears in the log, and only prints a warning if the report itself
 can't run.
 
+## Panel command routing
+
+Every panel button must dispatch an engine command by id (AGENTS.md rule 1), so the UI, CLI,
+control channel and MCP stay equivalent. `cargo xtask panel-commands` (also a step of
+`cargo xtask ci` and of CI) scans `crates/ui-egui/src` outside test code for click handlers: the
+block of an `if` whose condition calls `.clicked()`, `.changed()`, `.dragged()` and friends, or a
+widget function that takes a `Ui` and returns `bool`. Inside one it fails, with file:line, on a
+direct document or session change: `active_mut()`, `Arc::make_mut` on a doc,
+`session.undo/redo/select_layer/add_document/close(…)` or an assignment to a session field
+(`app.session.tools.foreground = …`). Dispatch the command instead (`app.run`, `menus::invoke`).
+A passing scan is not complete coverage. The scanner is lexical: it does not follow calls into
+helpers, and it only recognises an `if` block (a `match` arm guard with a block counts) or a
+`let` local holding a response, so a `match` on a response without such a guard, a response kept
+in a struct field and tested later, or a closure callback is not checked. Preferences
+(`edit_prefs`), shell view state (`app.ui`, the `UI_COMMANDS`) and switching the active document
+are out of scope. Existing violations are listed in
+`ALLOWLIST` in `xtask/src/panel_commands.rs` by file and function, each with its reason; an entry
+that matches nothing any more is an error, so the list only shrinks.
+
 ## Testing strategy
 
 - **Unit and property tests** in every crate. proptest is used for tile COW, regions and codecs.

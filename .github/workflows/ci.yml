@@ -132,7 +132,7 @@ jobs:
         PHOTOCRAFT_NO_PRINT=1
         LPDEST=photocraft-no-such-printer
       timeout-minutes: 100
-      # fmt, clippy, layers, scorecard, tests, panic_hunt, doctests and the wasm32 check, with
+      # fmt, clippy, layers, panel-commands, scorecard, tests, panic_hunt, doctests and the wasm32 check, with
       # `--locked --features heif`, then the missing-translations report (xtask/src/main.rs).
       command: cargo xtask ci
 

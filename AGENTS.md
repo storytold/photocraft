@@ -96,6 +96,7 @@ When parity rises, raise `FLOOR` in `crates/ui-egui/src/parity.rs` (never lower 
 cargo test -p <crates you touched>
 cargo clippy -p <crates> --all-targets -- -D warnings
 cargo xtask layers
+cargo xtask panel-commands  # if you touched ui-egui: click handlers dispatch command ids (rule 1)
 cargo xtask wasm            # if you touched L0–L6
 cargo xtask parity          # if you added commands; commit the regenerated docs/parity-checklist.md
 cargo test -p photocraft-engine --test panic_hunt -- --ignored   # if you added/changed commands: no panic on adversarial input (Rule 9)
