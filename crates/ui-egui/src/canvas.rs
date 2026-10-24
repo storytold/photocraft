@@ -1431,6 +1431,12 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> (std::sync::Ar
     if let Some(shown) = crate::gradient_ui::display_doc(app, idx) {
         return shown;
     }
+    // Move › Show Transform Controls on several selected layers: one shared live transform.
+    // It comes before the Move preview so a floating selection can remain part of that shared
+    // transform instead of short-circuiting to its untransformed floating preview.
+    if let Some(shown) = crate::transform_tool::multi_display_doc(app, idx) {
+        return shown;
+    }
     // Move tool drag: the moving layers at the pointer.
     if let Some(shown) = crate::move_ui::display_doc(app, idx) {
         return shown;
@@ -4598,10 +4604,8 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             // corner badge, as Photoshop's corner radius cursor.
             ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
             crate::icons::cursor_badge(&ctx, "scan", p);
-        } else if let Some((r, p, c)) = response
-            .hover_pos()
-            .filter(|_| !transform_controls_several(app))
-            .and_then(|p| transform_controls_rect(app, &xf).and_then(|r| transform_controls_cursor(r, p).map(|c| (r, p, c))))
+        } else if let Some((r, p, c)) =
+            response.hover_pos().and_then(|p| transform_controls_rect(app, &xf).and_then(|r| transform_controls_cursor(r, p).map(|c| (r, p, c))))
         {
             // The Move tool draws handles without opening a Free Transform session.
             // Give them their resize/rotate cursors before the first pointer press (#2871).
@@ -5438,13 +5442,42 @@ fn transform_controls_layers(app: &PhotocraftApp) -> Vec<&photocraft_doc::Layer>
         return Vec::new();
     }
     let Some(st) = app.session.active() else { return Vec::new() };
-    st.selected_layers().into_iter().filter_map(|id| st.doc.layer(id)).filter(|l| !crate::doc_props_ui::is_background(&st.doc, l)).collect()
+    let layers: Vec<_> =
+        st.selected_layers().into_iter().filter_map(|id| st.doc.layer(id)).filter(|l| !crate::doc_props_ui::is_background(&st.doc, l)).collect();
+    if layers.len() > 1 && layers.iter().any(|l| photocraft_engine::transform_cmds::locked_for_transform(&st.doc, l.id)) {
+        return Vec::new();
+    }
+    layers
 }
 
-/// Several layers are selected: Show Transform Controls frames them all, as Photoshop does, but
-/// Free Transform works on one layer, so the frame has no handles to scale or rotate them.
+/// Several layers are selected: Show Transform Controls frames and transforms them together.
 fn transform_controls_several(app: &PhotocraftApp) -> bool {
     transform_controls_layers(app).len() > 1
+}
+
+/// The document-space frame behind Move › Show Transform Controls. Several selected layers are
+/// transformed as whole layers, so a pixel selection does not crop every one to the selection.
+fn transform_controls_bounds(app: &PhotocraftApp) -> Option<photocraft_geom::Rect> {
+    let st = app.session.active()?;
+    let layers = transform_controls_layers(app);
+    let several = layers.len() > 1;
+    let floating = photocraft_engine::float_cmds::floating(st).map(|f| f.layer);
+    let floating_piece = app.session.active_index().and_then(|idx| floating_outline(app, idx)).map(|o| o.content_bounds());
+    let (dx, dy) = crate::move_ui::floating_offset(app).unwrap_or((0, 0));
+    layers
+        .into_iter()
+        .map(|l| {
+            if several && floating == Some(l.id) {
+                let remaining = photocraft_engine::transform_cmds::whole_layer_bounds(&st.doc, l);
+                floating_piece.map_or(remaining, |piece| remaining.union(&piece.translate(dx, dy)))
+            } else if several {
+                photocraft_engine::transform_cmds::whole_layer_bounds(&st.doc, l)
+            } else {
+                photocraft_engine::transform_cmds::transform_frame(&st.doc, l)
+            }
+        })
+        .filter(|b| !b.is_empty())
+        .reduce(|a, b| a.union(&b))
 }
 
 /// Move tool › Show Transform Controls: the boxes Free Transform would open on the selected
@@ -5452,13 +5485,17 @@ fn transform_controls_several(app: &PhotocraftApp) -> bool {
 fn transform_controls_rect(app: &PhotocraftApp, xf: &ViewXform) -> Option<Rect> {
     let st = app.session.active()?;
     let layers = transform_controls_layers(app);
-    let b = layers.iter().map(|l| photocraft_engine::transform_cmds::transform_frame(&st.doc, l)).filter(|b| !b.is_empty()).reduce(|a, b| a.union(&b))?;
+    let b = transform_controls_bounds(app)?;
     // Floating selected pixels are framed by their outline, as their ants are (#7538), not by the
     // selection they were cut with; a frame round other selected layers too keeps them all.
     let alone = matches!(layers.as_slice(), [l] if photocraft_engine::float_cmds::floating(st).is_some_and(|f| f.layer == l.id));
-    let b = app.session.active_index().filter(|_| alone).and_then(|idx| floating_outline(app, idx)).map_or(b, |o| o.content_bounds());
-    let (dx, dy) = crate::move_ui::floating_offset(app).unwrap_or((0, 0));
-    let b = b.translate(dx, dy);
+    let b = if alone {
+        let b = app.session.active_index().and_then(|idx| floating_outline(app, idx)).map_or(b, |o| o.content_bounds());
+        let (dx, dy) = crate::move_ui::floating_offset(app).unwrap_or((0, 0));
+        b.translate(dx, dy)
+    } else {
+        b
+    };
     if b.is_empty() {
         return None;
     }
@@ -5513,14 +5550,18 @@ fn transform_controls_hit(r: Rect, p: Pos2) -> bool {
 
 /// Enter the existing Free Transform session when a Move-tool transform control is pressed.
 fn begin_transform_controls_at(app: &mut PhotocraftApp, ctx: &egui::Context, xf: &ViewXform, p: Pos2) -> bool {
-    if transform_controls_several(app) {
-        return false;
-    }
     let Some(r) = transform_controls_rect(app, xf) else { return false };
     if !transform_controls_hit(r, p) {
         return false;
     }
-    match crate::transform_tool::begin(app, ctx) {
+    let result = if transform_controls_several(app) {
+        let Some(b) = transform_controls_bounds(app) else { return false };
+        let ids = transform_controls_layers(app).into_iter().map(|l| l.id).collect();
+        crate::transform_tool::begin_layers(app, ids, [b.x0 as f64, b.y0 as f64, b.x1 as f64, b.y1 as f64])
+    } else {
+        crate::transform_tool::begin(app, ctx)
+    };
+    match result {
         Ok(()) => true,
         Err(e) => {
             app.ui.status = e;
@@ -5529,8 +5570,8 @@ fn begin_transform_controls_at(app: &mut PhotocraftApp, ctx: &egui::Context, xf:
     }
 }
 
-/// Move tool › Show Transform Controls: the selected layers' bounding box, with its eight handles
-/// for one layer, and the outline of every selected shape layer, as in Photoshop.
+/// Move tool › Show Transform Controls: the selected layers' bounding box with its eight handles,
+/// and the outline of every selected shape layer, as in Photoshop.
 fn draw_transform_controls(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &ViewXform) {
     let Some(r) = transform_controls_rect(app, xf) else { return };
     let accent = crate::theme::Tokens::get(painter.ctx()).accent;
@@ -5541,9 +5582,6 @@ fn draw_transform_controls(app: &mut PhotocraftApp, painter: &egui::Painter, xf:
         }
     }
     painter.rect_stroke(r, 0.0, Stroke::new(1.0, accent), egui::StrokeKind::Middle);
-    if transform_controls_several(app) {
-        return;
-    }
     for p in [r.left_top(), r.center_top(), r.right_top(), r.right_center(), r.right_bottom(), r.center_bottom(), r.left_bottom(), r.left_center()] {
         let h = Rect::from_center_size(p, vec2(7.0, 7.0));
         painter.rect_filled(h, 0.0, Color32::WHITE);
@@ -5865,6 +5903,7 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
     // Move tool (⌘ with a painting tool too, `event_tool`) drags it from anywhere.
     if let ToolEvent::Down { x, y, .. } = raw
         && app.session.active().is_some_and(|st| photocraft_engine::float_cmds::floating(st).is_some())
+        && app.ui.transform.is_none()
         && !crate::move_ui::moves_selected_pixels_with(app, event_tool(app, mods))
         && selection_drag_kind(app, app.ui.tool, [x, y], mods) != Some(true)
     {
@@ -9489,6 +9528,10 @@ mod transform_controls_tests {
         let mut app = floating_square();
         app.session.execute("select.drop", json!({})).unwrap();
         let a = app.session.active().unwrap().active_layer.unwrap();
+        // Leave some pixels on the floating layer outside the later marquee. A shared frame must
+        // enclose both these stationary pixels and the translated floating piece.
+        app.session.execute("select.rect", json!({"x": 5, "y": 10, "width": 10, "height": 10})).unwrap();
+        app.session.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
         app.session.execute("layer.new.layer", json!({})).unwrap();
         app.session.execute("select.rect", json!({"x": 150, "y": 150, "width": 20, "height": 20})).unwrap();
         app.session.execute("edit.fill", json!({"color": "#0000ff"})).unwrap();
@@ -9503,18 +9546,46 @@ mod transform_controls_tests {
             ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(200.0, 200.0)), zoom: 1.0, center: [100.0, 100.0], flip: false, rotation: 0.0, aspect: 1.0 };
         let r = transform_controls_rect(&app, &xf).unwrap();
         let (lt, rb) = (xf.to_doc(r.left_top()), xf.to_doc(r.right_bottom()));
-        assert!(rb[0] - lt[0] > 60.0 && rb[1] - lt[1] > 60.0, "the frame isn't shrunk to the one piece: {lt:?} {rb:?}");
+        assert_eq!(
+            [lt[0], lt[1], rb[0], rb[1]],
+            [5.0, 10.0, 170.0, 170.0],
+            "the frame encloses the remaining pixels, translated floating piece, and other selected layer"
+        );
+
+        let ctx = egui::Context::default();
+        assert!(begin_transform_controls_at(&mut app, &ctx, &xf, r.right_bottom()));
+        let shown = app.ui.transform.as_ref().unwrap().rect;
+        for (actual, expected) in shown.into_iter().zip([lt[0], lt[1], rb[0], rb[1]]) {
+            assert!((actual - expected).abs() < 1e-3, "the transform starts on the displayed shared frame: {shown:?}");
+        }
+
+        // The shared preview must start from the displayed floating document too. Otherwise the
+        // Move preview wins first, or the transformed clone is built from the cut-out document,
+        // and the floating pixels disappear while the shared box is moved.
+        let st = app.session.active().unwrap();
+        let floating = photocraft_engine::float_cmds::floating(st).unwrap();
+        let piece = floating.parts.outline().unwrap().content_bounds();
+        let at = [(piece.x0 + piece.x1) / 2 + floating.offset.0, (piece.y0 + piece.y1) / 2 + floating.offset.1];
+        let displayed = photocraft_engine::float_cmds::displayed(st, (0, 0)).unwrap();
+        assert!(photocraft_compose::render(&displayed, displayed.bounds()).get(at[0], at[1])[3] > 0.5, "the floating piece is visible before transform");
+
+        for p in &mut app.ui.transform.as_mut().unwrap().quad {
+            p[0] += 60.0;
+        }
+        let (preview, _) = display_doc(&mut app, 0);
+        let rendered = photocraft_compose::render(&preview, preview.bounds());
+        assert!(rendered.get(at[0] + 60, at[1])[3] > 0.5, "the floating piece follows the shared transform preview");
+        assert!(rendered.get(at[0], at[1])[3] < 0.5, "the floating piece no longer stays at its untransformed preview position");
     }
 
     #[test]
-    fn several_selected_layers_share_one_frame_without_handles() {
-        // As in Photoshop: Show Transform Controls frames every selected layer. Free Transform
-        // works on one layer, so the shared frame doesn't start it.
+    fn several_selected_layers_share_one_frame_with_handles_and_transform_session() {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.session.execute("file.new", json!({"width": 200, "height": 200})).unwrap();
         app.session.execute("shape.create", json!({"kind": "rect", "rect": [20, 30, 40, 40], "fill": "#ff0000"})).unwrap();
         let a = app.session.active().unwrap().active_layer.unwrap();
         app.session.execute("shape.create", json!({"kind": "rect", "rect": [100, 120, 50, 30], "fill": "#ff0000"})).unwrap();
+        let b = app.session.active().unwrap().active_layer.unwrap();
         app.sync_views();
         app.ui.tool = Tool::Move;
         app.ui.tool_options.move_show_transform = true;
@@ -9528,13 +9599,61 @@ mod transform_controls_tests {
         assert!(both.contains_rect(one) && both.width() > one.width() && both.height() > one.height(), "{both:?} frames both");
         let (lt, rb) = (xf.to_doc(both.left_top()), xf.to_doc(both.right_bottom()));
         assert!((lt[0] - 20.0).abs() < 1e-3 && (lt[1] - 30.0).abs() < 1e-3 && (rb[0] - 150.0).abs() < 1e-3 && (rb[1] - 150.0).abs() < 1e-3, "{lt:?} {rb:?}");
-        let ctx = egui::Context::default();
-        assert!(!begin_transform_controls_at(&mut app, &ctx, &xf, both.right_bottom()));
-        assert!(app.ui.transform.is_none());
-        // The Background never joins the frame.
+        assert_eq!(transform_controls_cursor(both, both.right_bottom()), Some(egui::CursorIcon::ResizeNwSe));
+        assert_eq!(transform_controls_cursor(both, both.center_top()), Some(egui::CursorIcon::ResizeVertical));
+
+        // The Background never joins the frame, even when selected too.
         let bg = app.session.active().unwrap().doc.layers[0].id;
         app.session.execute("layer.select", json!({"layer": bg.0, "mode": "add"})).unwrap();
         assert_eq!(transform_controls_layers(&app).len(), 2);
+
+        // A shared handle now opens a real multi-layer Free Transform session.
+        let ctx = egui::Context::default();
+        assert!(begin_transform_controls_at(&mut app, &ctx, &xf, both.right_bottom()));
+        assert!(app.ui.transform.is_some());
+        assert!(app.multi_transform.is_some());
+        assert!(app.transform_preview.is_none(), "multi-layer preview uses a transformed document clone");
+        assert_eq!(app.ui.transform.as_ref().unwrap().rect, [20.0, 30.0, 150.0, 150.0]);
+
+        // Applying the shared box routes one transform to both selected layers.
+        app.background_jobs = false;
+        app.ui.transform.as_mut().unwrap().quad = [[30.0, 35.0], [160.0, 35.0], [160.0, 155.0], [30.0, 155.0]];
+        crate::transform_tool::commit(&mut app);
+        assert!(app.ui.transform.is_none() && app.multi_transform.is_none());
+        let st = app.session.active().unwrap();
+        assert_eq!(photocraft_engine::transform_cmds::whole_layer_bounds(&st.doc, st.doc.layer(a).unwrap()), photocraft_geom::Rect::new(30, 35, 70, 75));
+        assert_eq!(photocraft_engine::transform_cmds::whole_layer_bounds(&st.doc, st.doc.layer(b).unwrap()), photocraft_geom::Rect::new(110, 125, 160, 155));
+    }
+
+    #[test]
+    fn shared_transform_controls_hide_if_any_selected_layer_is_locked() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.session.execute("file.new", json!({"width": 200, "height": 200})).unwrap();
+        app.session.execute("shape.create", json!({"kind": "rect", "rect": [20, 30, 40, 40], "fill": "#ff0000"})).unwrap();
+        let a = app.session.active().unwrap().active_layer.unwrap();
+        app.session.execute("shape.create", json!({"kind": "rect", "rect": [100, 120, 50, 30], "fill": "#ff0000"})).unwrap();
+        let b = app.session.active().unwrap().active_layer.unwrap();
+        app.session.execute("layer.select", json!({"layer": a.0, "mode": "add"})).unwrap();
+        app.session
+            .edit("lock", |doc, _| {
+                doc.layer_mut(b).unwrap().locks.position = true;
+                Ok(())
+            })
+            .unwrap();
+        app.sync_views();
+        app.ui.tool = Tool::Move;
+        app.ui.tool_options.move_show_transform = true;
+        let xf =
+            ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(200.0, 200.0)), zoom: 1.0, center: [100.0, 100.0], flip: false, rotation: 0.0, aspect: 1.0 };
+
+        assert!(transform_controls_layers(&app).is_empty(), "a shared box that cannot start must not be shown");
+        assert!(transform_controls_rect(&app, &xf).is_none());
+
+        // Preserve the existing single-layer behaviour: a locked layer still shows its controls;
+        // pressing one reports the lock rather than silently removing the frame.
+        app.session.execute("layer.select", json!({"layer": b.0})).unwrap();
+        assert_eq!(transform_controls_layers(&app).len(), 1);
+        assert!(transform_controls_rect(&app, &xf).is_some());
     }
 
     #[test]

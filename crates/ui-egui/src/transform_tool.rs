@@ -93,6 +93,23 @@ pub struct TransformPreview {
     pub(crate) content_aware: Option<crate::cas_transform::Live>,
 }
 
+/// A Free Transform geometry session started from the Move tool's shared controls for several
+/// selected layers. Unlike [`TransformPreview`], the preview is a transformed clone of the whole
+/// document, because there is no single moving texture to peel out and draw on a quad.
+pub(crate) struct MultiTransform {
+    document: DocId,
+    revision: u64,
+    layers: Vec<LayerId>,
+    gesture: Option<Gesture>,
+    shown_quad: Option<[[f64; 2]; 4]>,
+    shown_interpolation: Option<String>,
+    shown: Option<Arc<Document>>,
+    generation: u64,
+    tool: Tool,
+    /// A background `edit.transform` applying the shared transform.
+    committing: Option<JobId>,
+}
+
 /// What [`follow_edits`] needs to rebuild the preview document.
 #[derive(Clone, Copy, Debug)]
 struct Follow {
@@ -190,6 +207,9 @@ fn corners(r: [f64; 4]) -> [[f64; 2]; 4] {
 /// Start Free Transform on the active layer (or its selected pixels), or on the targeted unlinked
 /// layer mask, alpha channel or Quick Mask.
 pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> {
+    if app.multi_transform.is_some() {
+        return Err("Commit or cancel the transform first".into());
+    }
     if let Some((params, path)) = crate::vector_ui::free_transform_path(app) {
         return begin_path(app, ctx, params, path);
     }
@@ -284,9 +304,77 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
     Ok(())
 }
 
+/// Start one shared transform box for several selected layers from Move › Show Transform
+/// Controls. Every layer is transformed by the same homography around `rect`; the engine commits
+/// them together as one history step. This path deliberately does not use the single-layer lifted
+/// texture preview: [`multi_display_doc`] previews a transformed document clone instead.
+pub(crate) fn begin_layers(app: &mut PhotocraftApp, layers: Vec<LayerId>, rect: [f64; 4]) -> Result<(), String> {
+    if layers.len() < 2 {
+        return Err("select two or more layers".into());
+    }
+    let st = app.session.active().ok_or("no document")?;
+    let doc = st.doc.clone();
+    let revision = st.revision;
+    let active_layer = st.active_layer;
+    let mut ids = Vec::with_capacity(layers.len());
+    for id in layers {
+        let Some(layer) = doc.layer(id) else { return Err("a selected layer no longer exists".into()) };
+        if crate::doc_props_ui::is_background(&doc, layer) {
+            continue;
+        }
+        if photocraft_engine::transform_cmds::locked_for_transform(&doc, id) {
+            app.ui.open_dialog(crate::state::DialogKind::Error, json!({"message": tl!(LOCKED)}).as_object().cloned().unwrap_or_default());
+            return Err(LOCKED.into());
+        }
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+    if ids.len() < 2 {
+        return Err("select two or more transformable layers".into());
+    }
+    crate::type_tool::commit(app);
+    let fallback = ids.first().copied().ok_or("select two or more transformable layers")?;
+    let active = active_layer.filter(|id| ids.contains(id)).unwrap_or(fallback);
+    let session = app.ui.alloc_id();
+    app.transform_preview = None;
+    app.multi_transform = Some(MultiTransform {
+        document: doc.id,
+        revision,
+        layers: ids,
+        gesture: None,
+        shown_quad: None,
+        shown_interpolation: None,
+        shown: None,
+        generation: 0,
+        tool: app.ui.tool,
+        committing: None,
+    });
+    app.ui.transform = Some(TransformSession {
+        session,
+        layer: active.0,
+        rect,
+        quad: corners(rect),
+        pivot: [(rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0],
+        interpolation: "bicubic".into(),
+        warp: None,
+        selection: false,
+        target: None,
+        path: None,
+        made: None,
+        mode: Default::default(),
+        content_aware: None,
+        skew_v: 0.0,
+    });
+    Ok(())
+}
+
 /// Free Transform on a copy (⌥⌘T, no menu item): duplicates the active layer (with a selection,
 /// its selected pixels, as Layer via Copy) and transforms the copy (#352).
 pub fn begin_copy(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> {
+    if app.multi_transform.is_some() {
+        return Err("Commit or cancel the transform first".into());
+    }
     let selection = app.session.active().is_some_and(|d| d.doc.selection.is_some());
     let params = if selection { json!({}) } else { json!({"inPlace": true}) };
     app.run(if selection { "layer.new.layerViaCopy" } else { "layer.duplicate" }, params)?;
@@ -583,6 +671,9 @@ fn rect_to_quad_affine(r: [f64; 4], q: [[f64; 2]; 4]) -> Option<photocraft_geom:
 /// Start Select › Transform Selection: the same box over the selection's bounds, previewing the
 /// selection mask (the marching ants are hidden meanwhile); commits `select.transformSelection`.
 pub fn begin_selection(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> {
+    if app.multi_transform.is_some() {
+        return Err("Commit or cancel the transform first".into());
+    }
     let st = app.session.active().ok_or("no document")?;
     let doc = st.doc.clone();
     let sel = doc.selection.clone().ok_or("no selection")?;
@@ -650,6 +741,9 @@ pub fn begin_selection(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(
 
 /// Start (or switch an active Free Transform into) Warp mode.
 pub fn begin_warp(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> {
+    if app.multi_transform.is_some() {
+        return Err("Warp is not available for a multi-layer transform".into());
+    }
     if app.ui.transform.as_ref().is_some_and(|t| t.content_aware.is_some()) {
         return Err(CAS_ONLY_SCALES.into());
     }
@@ -669,6 +763,10 @@ pub fn begin_warp(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), St
 /// custom mesh following the current box (so a transform made first carries over). Editable type
 /// gets its own Warp Text style instead ([`enter_type_warp`]).
 pub fn enter_warp(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    if app.multi_transform.is_some() {
+        app.ui.status = "Warp is not available for a multi-layer transform".into();
+        return;
+    }
     if app.ui.transform.as_ref().is_some_and(|t| t.warp.is_none()) && warps_type(app) {
         return enter_type_warp(app, ctx);
     }
@@ -700,6 +798,9 @@ pub fn enter_warp(app: &mut PhotocraftApp, ctx: &egui::Context) {
 /// The open transform moves an editable type layer as a whole (not a lone mask, channel, path or
 /// the selection). Its Warp is Warp Text: only the styles, and the type stays editable (#3004).
 pub fn warps_type(app: &PhotocraftApp) -> bool {
+    if app.multi_transform.is_some() {
+        return false;
+    }
     let Some(t) = &app.ui.transform else { return false };
     if t.selection || t.target.is_some() || t.path.is_some() {
         return false;
@@ -1036,7 +1137,7 @@ pub fn commit(app: &mut PhotocraftApp) {
     if committing(app).is_some() {
         return;
     }
-    let document = app.transform_preview.as_ref().map(|pv| pv.doc.id);
+    let document = app.transform_preview.as_ref().map(|pv| pv.doc.id).or_else(|| app.multi_transform.as_ref().map(|m| m.document));
     if document.is_some_and(|id| app.session.active().is_none_or(|st| st.doc.id != id)) {
         cancel(app);
         return;
@@ -1044,6 +1145,41 @@ pub fn commit(app: &mut PhotocraftApp) {
     let type_layer = warps_type(app);
     let Some(t) = app.ui.transform.take() else { return };
     let mut preview = app.transform_preview.take();
+    let mut multi = app.multi_transform.take();
+    if let Some(mut m) = multi.take() {
+        if t.warp.is_some() {
+            app.ui.transform = Some(t);
+            app.multi_transform = Some(m);
+            app.ui.status = "Warp is not available for a multi-layer transform".into();
+            return;
+        }
+        if t.quad == corners(t.rect) {
+            return;
+        }
+        let r = app.run(
+            "edit.transform",
+            json!({
+                "layers": m.layers.iter().map(|id| id.0).collect::<Vec<_>>(),
+                "rect": t.rect,
+                "quad": t.quad,
+                "interpolation": t.interpolation,
+            }),
+        );
+        if let Ok(v) = &r
+            && let Some(job) = v.get("pending").and_then(serde_json::Value::as_bool).filter(|p| *p).and(v.get("job")).and_then(serde_json::Value::as_u64)
+        {
+            m.committing = Some(JobId(job));
+            app.ui.transform = Some(t);
+            app.multi_transform = Some(m);
+            return;
+        }
+        if let Err(e) = r {
+            app.ui.transform = Some(t);
+            app.multi_transform = Some(m);
+            app.ui.status = e;
+        }
+        return;
+    }
     if let Some(options) = &t.content_aware {
         crate::cas_transform::commit(app, &t, options);
         return;
@@ -1130,13 +1266,37 @@ fn finish(app: &mut PhotocraftApp, document: Option<DocId>, layer: LayerId, made
 
 /// The job applying the transform, while it runs.
 pub(crate) fn committing(app: &PhotocraftApp) -> Option<JobId> {
-    app.transform_preview.as_ref().and_then(|pv| pv.committing)
+    app.transform_preview.as_ref().and_then(|pv| pv.committing).or_else(|| app.multi_transform.as_ref().and_then(|m| m.committing))
+}
+
+/// Whether the selected transformable layers no longer match a shared transform session.
+fn multi_selection_changed(app: &PhotocraftApp, m: &MultiTransform) -> bool {
+    let Some(st) = app.session.active() else { return true };
+    if st.doc.id != m.document {
+        return true;
+    }
+    let selected =
+        st.selected_layers().into_iter().filter(|id| st.doc.layer(*id).is_some_and(|l| !crate::doc_props_ui::is_background(&st.doc, l))).collect::<Vec<_>>();
+    selected.len() != m.layers.len() || m.layers.iter().any(|id| !selected.contains(id))
 }
 
 /// A job ended (see [`crate::jobs_ui`]): when it was the commit, the session ends with it. Its
 /// status and errors are reported like any job's.
 pub fn on_job_event(app: &mut PhotocraftApp, e: &JobEvent) {
     if committing(app) != Some(e.id) {
+        return;
+    }
+    if app.multi_transform.as_ref().is_some_and(|m| m.committing == Some(e.id)) {
+        let Some(t) = app.ui.transform.take() else { return };
+        let Some(mut m) = app.multi_transform.take() else { return };
+        if let JobOutcome::Failed(msg) = &e.outcome {
+            app.ui.status = msg.clone();
+            if m.tool == app.ui.tool && !multi_selection_changed(app, &m) {
+                m.committing = None;
+                app.ui.transform = Some(t);
+                app.multi_transform = Some(m);
+            }
+        }
         return;
     }
     let (Some(t), Some(mut pv)) = (app.ui.transform.take(), app.transform_preview.take()) else { return };
@@ -1174,6 +1334,22 @@ pub fn end_if_left(app: &mut PhotocraftApp) {
     }
     let Some(st) = app.session.active() else { return cancel(app) };
 
+    if let Some(m) = app.multi_transform.as_ref() {
+        let switched_document = st.doc.id != m.document;
+        let missing = m.layers.iter().any(|id| st.doc.layer(*id).is_none());
+        let switched_tool = m.tool != app.ui.tool;
+        let changed_selection = multi_selection_changed(app, m);
+        if switched_document || missing {
+            cancel(app);
+        } else if switched_tool || changed_selection {
+            commit(app);
+            if app.ui.transform.is_some() && committing(app).is_none() {
+                cancel(app);
+            }
+        }
+        return;
+    }
+
     let layer = LayerId(t.layer);
     let made = t.made;
     let preview_doc_id = app.transform_preview.as_ref().map(|pv| pv.doc.id);
@@ -1199,6 +1375,65 @@ pub fn end_if_left(app: &mut PhotocraftApp) {
             cancel(app);
         }
     }
+}
+
+/// Document shown while a shared Move-tool transform is open. The engine applies the current
+/// quad to a clone, so all selected layers preview together while the source document stays
+/// untouched until [`commit`]. The clone is rebuilt only when the quad or source revision changes.
+pub(crate) fn multi_display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Document>, u64)> {
+    if app.session.active_index() != Some(idx) {
+        return None;
+    }
+    let t = app.ui.transform.as_ref()?.clone();
+    let st = app.session.documents().get(idx)?;
+    let (doc_id, revision) = (st.doc.id, st.revision);
+    let (document, ids, old_revision, shown_quad, shown_interpolation, committing) = {
+        let m = app.multi_transform.as_ref()?;
+        (m.document, m.layers.clone(), m.revision, m.shown_quad, m.shown_interpolation.clone(), m.committing)
+    };
+    if document != doc_id {
+        return None;
+    }
+    if t.quad == corners(t.rect) && committing.is_none() {
+        if let Some(m) = app.multi_transform.as_mut() {
+            m.shown = None;
+            m.shown_quad = None;
+            m.shown_interpolation = None;
+            m.revision = revision;
+        }
+        return None;
+    }
+    if committing.is_some() {
+        let m = app.multi_transform.as_ref()?;
+        return m.shown.as_ref().map(|doc| {
+            let key = (1_u64 << 62) ^ t.session.wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ m.generation;
+            (doc.clone(), key)
+        });
+    }
+    let fresh = old_revision == revision && shown_quad == Some(t.quad) && shown_interpolation.as_deref() == Some(t.interpolation.as_str());
+    if !fresh {
+        let st = app.session.documents().get(idx)?;
+        let source =
+            photocraft_engine::float_cmds::displayed(st, crate::canvas::selection_drag_delta(app).unwrap_or((0, 0))).unwrap_or_else(|| st.doc.as_ref().clone());
+        let shown = match photocraft_engine::transform_cmds::preview_layers(&source, &ids, t.rect, t.quad, &t.interpolation) {
+            Ok(doc) => Some(Arc::new(doc)),
+            Err(e) => {
+                log::warn!("multi-layer transform preview: {e}");
+                None
+            }
+        };
+        if let Some(m) = app.multi_transform.as_mut() {
+            m.revision = revision;
+            m.shown_quad = Some(t.quad);
+            m.shown_interpolation = Some(t.interpolation.clone());
+            m.shown = shown;
+            m.generation = m.generation.wrapping_add(1);
+        }
+    }
+    let m = app.multi_transform.as_ref()?;
+    let shown = m.shown.clone()?;
+    let key = (1_u64 << 62) ^ t.session.wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ m.generation;
+    Some((shown, key))
 }
 
 /// Another tool picked, or (outside Transform Selection) another layer selected, since the box
@@ -1239,6 +1474,7 @@ pub fn cancel(app: &mut PhotocraftApp) {
         crate::jobs_ui::cancel(app, job);
         return;
     }
+    app.multi_transform = None;
     let transform = app.ui.transform.take();
     let preview = app.transform_preview.take();
     if let (Some(t), Some(pv)) = (transform, preview)
@@ -1311,6 +1547,9 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> Option<bool> {
 
 /// Does the box move an editable type layer (not its selection outline, a lone mask or a path)?
 fn moves_type(app: &PhotocraftApp, t: &TransformSession) -> bool {
+    if app.multi_transform.is_some() {
+        return multi_has_text(app);
+    }
     !t.selection
         && t.target.is_none()
         && t.path.is_none()
@@ -1447,6 +1686,49 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
         warp_pointer(app, ev, tol, mods);
         return true;
     }
+
+    if app.multi_transform.is_some() {
+        match ev {
+            ToolEvent::Down { x, y, .. } => {
+                let mut h = hit(&t, [x, y], tol);
+                // ⌥-click away from the handles moves the reference point there (and drags it).
+                if mods.alt
+                    && matches!(h, Hit::Inside | Hit::Outside)
+                    && let Some(s) = app.ui.transform.as_mut()
+                {
+                    s.pivot = [x, y];
+                    h = Hit::Pivot;
+                }
+                let g = (mode_allows(t.mode, h) || h == Hit::Outside).then_some(Gesture { hit: h, start: [x, y], quad0: t.quad, pivot0: t.pivot });
+                if let Some(m) = app.multi_transform.as_mut() {
+                    m.gesture = g;
+                }
+            }
+            ToolEvent::Move { x, y, .. } | ToolEvent::Up { x, y } => {
+                let g = app.multi_transform.as_ref().and_then(|m| m.gesture);
+                if matches!(ev, ToolEvent::Up { .. })
+                    && let Some(m) = app.multi_transform.as_mut()
+                {
+                    m.gesture = None;
+                }
+                if matches!(ev, ToolEvent::Up { .. }) && g.is_some_and(|g| accepts_outside_click(g, [x, y], tol)) {
+                    commit(app);
+                    return true;
+                }
+                let type_layer = multi_has_text(app);
+                let adjusted = g.map(|g| drag_mods(app, &t, g.hit, mods));
+                if let (Some(g), Some((mode, mods)), Some(s)) = (g, adjusted, app.ui.transform.as_mut())
+                    && mode_allows(t.mode, g.hit)
+                {
+                    apply_mode_drag(s, g, [x, y], mode, type_layer, mods);
+                    round_to_pixel_grid(app);
+                }
+            }
+        }
+        crate::snap_ui::retain_transform_lines(app, mods);
+        return true;
+    }
+
     let Some(pv) = app.transform_preview.as_mut() else { return false };
     match ev {
         ToolEvent::Down { x, y, .. } => {
@@ -1505,6 +1787,9 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
 /// offset, and a proportional scale off by its ratio: a shape dragged to 540 px came out 539.6.
 /// Rotated, skewed and distorted boxes are left as dragged.
 fn round_to_pixel_grid(app: &mut PhotocraftApp) {
+    if app.multi_transform.is_some() {
+        return;
+    }
     if !app.session.prefs().tools.snap_vector_tools_and_transforms_to_pixel_grid {
         return;
     }
@@ -1556,11 +1841,17 @@ pub(crate) fn corner_distorts(app: &PhotocraftApp, index: usize, mods: egui::Mod
 /// Editable type can be scaled, rotated and skewed but not distorted (#2630): the rule that greys
 /// Distort and Perspective in `enable_rules::disabled`, for the box's own layer. A box on a path,
 /// on the selection outline or on a lone mask or channel moves no type.
+fn multi_has_text(app: &PhotocraftApp) -> bool {
+    let (Some(st), Some(m)) = (app.session.active(), app.multi_transform.as_ref()) else { return false };
+    m.layers.iter().any(|id| st.doc.layer(*id).is_some_and(|l| matches!(l.content, LayerContent::Text(_))))
+}
+
 fn distort_refused(app: &PhotocraftApp, t: &TransformSession) -> bool {
     t.path.is_none()
         && !t.selection
         && t.target.is_none()
-        && app.session.active().and_then(|st| st.doc.layer(LayerId(t.layer))).is_some_and(|l| matches!(l.content, LayerContent::Text(_)))
+        && (multi_has_text(app)
+            || app.session.active().and_then(|st| st.doc.layer(LayerId(t.layer))).is_some_and(|l| matches!(l.content, LayerContent::Text(_))))
 }
 
 /// Where Distort and Perspective are refused ([`distort_refused`]), ⌘-drag and ⌘⌥⇧-drag of a
@@ -2121,10 +2412,16 @@ fn rotation_degrees(quad: [[f64; 2]; 4]) -> f64 {
 /// just outside a corner, or anywhere while a rotate drag is on. It points into the box along the
 /// bisector of the nearest corner, so each corner gets its own arrow and they turn with the box.
 pub(crate) fn rotate_cursor_dir(app: &PhotocraftApp, p: [f64; 2]) -> Option<[f64; 2]> {
-    rotate_dir(app.ui.transform.as_ref()?, app.transform_preview.as_ref(), p, handle_tolerance(app))
+    let rotating = app
+        .transform_preview
+        .as_ref()
+        .and_then(|pv| pv.gesture)
+        .or_else(|| app.multi_transform.as_ref().and_then(|m| m.gesture))
+        .is_some_and(|g| g.hit == Hit::Outside);
+    rotate_dir(app.ui.transform.as_ref()?, rotating, p, handle_tolerance(app))
 }
 
-fn rotate_dir(t: &TransformSession, pv: Option<&TransformPreview>, p: [f64; 2], tol: f64) -> Option<[f64; 2]> {
+fn rotate_dir(t: &TransformSession, rotating: bool, p: [f64; 2], tol: f64) -> Option<[f64; 2]> {
     // Content-Aware Scale's box only scales, and Skew doesn't rotate: no rotate arrow.
     if !(p[0].is_finite() && p[1].is_finite())
         || t.warp.is_some()
@@ -2133,7 +2430,6 @@ fn rotate_dir(t: &TransformSession, pv: Option<&TransformPreview>, p: [f64; 2], 
     {
         return None;
     }
-    let rotating = pv.is_some_and(|pv| pv.gesture.is_some_and(|g| g.hit == Hit::Outside));
     if !rotating && !near_rotate_corner(t, p, tol) {
         return None;
     }
@@ -2271,9 +2567,14 @@ pub fn draw_content(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
 /// The box, handles, reference point and path outline over the preview that [`draw_content`]
 /// drew; the warp grid and its split guides for a warp.
 pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform) {
-    let (Some(t), Some(pv)) = (&app.ui.transform, &app.transform_preview) else { return };
+    let Some(t) = &app.ui.transform else { return };
+    let pv = app.transform_preview.as_ref();
+    if pv.is_none() && app.multi_transform.is_none() {
+        return;
+    }
     let scr = |q: [f64; 2]| xf.to_screen(q[0] as f32, q[1] as f32);
     if let Some(w) = &t.warp {
+        let Some(pv) = pv else { return };
         let over_canvas = painter.ctx().input(|i| i.pointer.hover_pos()).filter(|p| xf.rect.contains(*p)).map(|p| xf.to_doc(p));
         let at = pv.split_pointer.or(over_canvas);
         let alt = painter.ctx().input(|i| i.modifiers.alt || i.modifiers.command);
@@ -2289,11 +2590,13 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
         draw_warp_overlay(painter, xf, w, pv, guide);
         return;
     }
-    if pv.committing.is_some() {
+    if committing(app).is_some() {
         return;
     }
     let accent = crate::theme::Tokens::get(painter.ctx()).accent;
-    if let (Some(path), Some(h)) = (&pv.path, Homography::rect_to_quad(t.rect, t.quad)) {
+    if let Some(pv) = pv
+        && let (Some(path), Some(h)) = (&pv.path, Homography::rect_to_quad(t.rect, t.quad))
+    {
         crate::vector_ui::draw_outline(
             painter,
             path,
@@ -2321,7 +2624,13 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
     if let Some(at) = painter.ctx().pointer_hover_pos().filter(|p| xf.rect.contains(*p)) {
         let p = xf.to_doc(at);
         let tol = HANDLE_PX / f64::from(xf.zoom.max(0.01));
-        if let Some(k) = rotate_dir(t, Some(pv), p, tol) {
+        let rotating = app
+            .transform_preview
+            .as_ref()
+            .and_then(|pv| pv.gesture)
+            .or_else(|| app.multi_transform.as_ref().and_then(|m| m.gesture))
+            .is_some_and(|g| g.hit == Hit::Outside);
+        if let Some(k) = rotate_dir(t, rotating, p, tol) {
             // Through the view, so the arc bends round the corner as it shows under a turned or
             // flipped view.
             let toward = xf.to_screen((p[0] + k[0] * 16.0) as f32, (p[1] + k[1] * 16.0) as f32) - at;
@@ -2440,7 +2749,7 @@ pub(crate) enum Readout {
 /// reference point, a warp, or a distortion that has no single scale).
 pub(crate) fn live_readout(app: &PhotocraftApp) -> Option<Readout> {
     let t = app.ui.transform.as_ref().filter(|t| t.warp.is_none())?;
-    let g = app.transform_preview.as_ref()?.gesture?;
+    let g = app.transform_preview.as_ref().and_then(|pv| pv.gesture).or_else(|| app.multi_transform.as_ref().and_then(|m| m.gesture))?;
     match g.hit {
         Hit::Outside => Some(Readout::Angle(rotation_degrees(t.quad))),
         Hit::Inside => Some(Readout::Offset([t.quad[0][0] - g.quad0[0][0], t.quad[0][1] - g.quad0[0][1]])),
@@ -4376,6 +4685,92 @@ mod tests {
         assert_eq!(app.session.active().unwrap().doc.layers.len(), layers);
     }
 
+    /// Changing interpolation rerenders a shared preview even when its geometry is unchanged.
+    #[test]
+    fn shared_transform_preview_refreshes_when_interpolation_changes() {
+        let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+        let first = app.session.active().unwrap().active_layer.unwrap();
+        app.session.execute("layer.new.layer", json!({})).unwrap();
+        let second = app.session.active().unwrap().active_layer.unwrap();
+        app.session
+            .edit("paint second", |doc, _| {
+                doc.layer_mut(second).unwrap().surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(32, 8, 48, 24), &[0.0, 1.0, 0.0, 1.0]);
+                Ok(())
+            })
+            .unwrap();
+        begin_layers(&mut app, vec![first, second], [8.0, 8.0, 48.0, 24.0]).unwrap();
+        for p in &mut app.ui.transform.as_mut().unwrap().quad {
+            p[0] += 4.0;
+        }
+
+        let (_, first_key) = multi_display_doc(&mut app, 0).expect("bicubic preview");
+        app.ui.transform.as_mut().unwrap().interpolation = "nearest".into();
+        let (_, second_key) = multi_display_doc(&mut app, 0).expect("nearest preview");
+        assert_ne!(first_key, second_key, "changing interpolation invalidates the cached shared preview");
+        assert_eq!(app.multi_transform.as_ref().unwrap().shown_interpolation.as_deref(), Some("nearest"));
+    }
+
+    /// A shared session is kept only while the same transformable layers stay selected.
+    #[test]
+    fn shared_transform_detects_a_changed_layer_selection() {
+        let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+        let first = app.session.active().unwrap().active_layer.unwrap();
+        app.session.execute("layer.new.layer", json!({})).unwrap();
+        let second = app.session.active().unwrap().active_layer.unwrap();
+        app.session.execute("layer.select", json!({"layer": first.0, "mode": "add"})).unwrap();
+        begin_layers(&mut app, vec![first, second], [8.0, 8.0, 48.0, 24.0]).unwrap();
+        assert!(!multi_selection_changed(&app, app.multi_transform.as_ref().unwrap()));
+
+        app.session.execute("layer.select", json!({"layer": first.0})).unwrap();
+        assert!(multi_selection_changed(&app, app.multi_transform.as_ref().unwrap()));
+    }
+
+    /// Transform Selection cannot replace a shared transform that is already open.
+    #[test]
+    fn transform_selection_rejects_an_open_multi_transform_without_replacing_it() {
+        let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+        let first = app.session.active().unwrap().active_layer.unwrap();
+        app.session.execute("layer.new.layer", json!({})).unwrap();
+        let second = app.session.active().unwrap().active_layer.unwrap();
+        app.session
+            .edit("paint second", |doc, _| {
+                doc.layer_mut(second).unwrap().surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(32, 8, 48, 24), &[0.0, 1.0, 0.0, 1.0]);
+                Ok(())
+            })
+            .unwrap();
+        app.session.execute("select.rect", json!({"x": 4, "y": 4, "width": 48, "height": 24})).unwrap();
+        begin_layers(&mut app, vec![first, second], [8.0, 8.0, 48.0, 24.0]).unwrap();
+        let session = app.ui.transform.as_ref().unwrap().session;
+
+        assert_eq!(begin_selection(&mut app, &egui::Context::default()), Err("Commit or cancel the transform first".into()));
+        assert_eq!(app.ui.transform.as_ref().map(|t| t.session), Some(session));
+        assert!(app.multi_transform.is_some(), "the existing shared transform stays open");
+    }
+
+    /// Transform Copy rejects an overlapping shared transform before it creates a layer.
+    #[test]
+    fn free_transform_copy_rejects_an_open_multi_transform_without_making_a_layer() {
+        let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+        let first = app.session.active().unwrap().active_layer.unwrap();
+        app.session.execute("layer.new.layer", json!({})).unwrap();
+        let second = app.session.active().unwrap().active_layer.unwrap();
+        app.session
+            .edit("paint second", |doc, _| {
+                doc.layer_mut(second).unwrap().surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(32, 8, 48, 24), &[0.0, 1.0, 0.0, 1.0]);
+                Ok(())
+            })
+            .unwrap();
+        begin_layers(&mut app, vec![first, second], [8.0, 8.0, 48.0, 24.0]).unwrap();
+        let before = {
+            let st = app.session.active().unwrap();
+            (st.doc.layers.len(), st.revision, st.history.past_len())
+        };
+
+        assert_eq!(begin_copy(&mut app, &egui::Context::default()), Err("Commit or cancel the transform first".into()));
+        let st = app.session.active().unwrap();
+        assert_eq!((st.doc.layers.len(), st.revision, st.history.past_len()), before, "a rejected start is mutation-free");
+        assert!(app.multi_transform.is_some() && app.ui.transform.is_some(), "the existing transform stays open");
+    }
     /// #4112: ⌥⌘T on a cylinder smart object, Warp mode, Enter with nothing touched: the copy
     /// keeps the cylinder and stays its own step (no warp step to fold into), so one undo takes
     /// back the copy and nothing before it.

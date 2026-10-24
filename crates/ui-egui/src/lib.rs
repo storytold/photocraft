@@ -877,6 +877,8 @@ pub struct PhotocraftApp {
     pub(crate) hist_job: Option<HistJob>,
     /// Free Transform preview (document without the moving pixels + their texture).
     pub(crate) transform_preview: Option<transform_tool::TransformPreview>,
+    /// Move-tool Show Transform Controls session spanning several selected layers.
+    pub(crate) multi_transform: Option<transform_tool::MultiTransform>,
     /// Move-tool ⇧/⌥ drag state (move_mods).
     pub(crate) move_mods: move_mods::MoveDrag,
     /// Cached document for a modal text Style Options color preview.
@@ -1126,6 +1128,7 @@ impl PhotocraftApp {
             clip_external: false,
             clip_read_for_paste: false,
             transform_preview: None,
+            multi_transform: None,
             move_mods: Default::default(),
             nudge_bundle: Default::default(),
             style_preview: None,
