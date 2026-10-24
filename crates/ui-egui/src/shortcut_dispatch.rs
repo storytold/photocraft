@@ -329,6 +329,11 @@ fn clip_key_command(app: &PhotocraftApp, id: String) -> String {
 
 /// Why `id` can't run now (the engine's reason when it has one).
 pub fn disabled_reason(app: &PhotocraftApp, id: &str) -> String {
+    if id == crate::cas_transform::COMMAND
+        && let Some(reason) = crate::cas_transform::disabled_reason(app)
+    {
+        return reason.into();
+    }
     photocraft_engine::commands::find(id).and_then(|_| app.session.disabled_reason_with(id, &app.with_mask_target(id, serde_json::Value::Null))).unwrap_or_else(
         || match id {
             "tools.decreaseBrushHardness" | "tools.increaseBrushHardness" => "the current tool has no brush tip".into(),

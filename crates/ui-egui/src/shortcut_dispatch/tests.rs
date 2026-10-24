@@ -308,6 +308,185 @@ fn a_disabled_shortcut_says_why() {
 }
 
 #[test]
+fn content_aware_scale_explains_background_and_runs_after_conversion() {
+    for has_selection in [false, true] {
+        let mut session = photocraft_engine::Session::new();
+        session.execute("file.new", json!({"width": 32, "height": 24})).unwrap();
+        if has_selection {
+            session.execute("select.all", json!({})).unwrap();
+        }
+        let mut app = PhotocraftApp::new(session, Default::default());
+        let ctx = egui::Context::default();
+        let id = "edit.contentAwareScale";
+        assert!(app.session.is_enabled(id), "the engine can scale the pixels");
+        assert!(!crate::menus::is_enabled(&app, id), "the UI requires a regular layer");
+        super::dispatch(&mut app, &ctx, id);
+        assert!(app.ui.status.contains("Layer from Background"), "{}", app.ui.status);
+        assert!(!app.ui.status.contains("current state"), "{}", app.ui.status);
+        assert!(app.ui.status_error);
+        assert!(app.ui.transform.is_none());
+        assert!(!app.ui.status.contains("Select > All"), "a selection does not enable Background scaling on main");
+
+        app.run("layer.new.layerFromBackground", json!({})).unwrap();
+        assert!(crate::menus::is_enabled(&app, id));
+        super::dispatch(&mut app, &ctx, id);
+        assert!(app.ui.transform.as_ref().is_some_and(|t| t.content_aware.is_some()));
+    }
+}
+
+#[test]
+fn content_aware_scale_explains_background_and_pending_crop_in_order() {
+    for has_selection in [false, true] {
+        let mut session = photocraft_engine::Session::new();
+        session.execute("file.new", json!({"width": 32, "height": 24})).unwrap();
+        if has_selection {
+            session.execute("select.all", json!({})).unwrap();
+        }
+        let mut app = PhotocraftApp::new(session, Default::default());
+        let ctx = egui::Context::default();
+        let id = "edit.contentAwareScale";
+        let conversion = "layer.new.layerFromBackground";
+        app.sync_views();
+        app.ui.tool = Tool::Crop;
+        app.ui.crop_rect = Some([2.0, 2.0, 20.0, 16.0]);
+        app.crop.default_frame = false;
+        let revision = app.session.active().unwrap().revision;
+        assert!(!crate::menus::is_enabled(&app, id));
+        assert!(!crate::menus::is_enabled(&app, conversion), "the pending crop blocks Background conversion too");
+
+        super::dispatch(&mut app, &ctx, id);
+        let crop_step = app.ui.status.find("commit or cancel the current crop").expect("explain the pending crop first");
+        let background_step = app.ui.status.find("Layer > New > Layer from Background").expect("explain Background conversion too");
+        assert!(crop_step < background_step, "{}", app.ui.status);
+        assert!(app.ui.status_error);
+        assert_eq!(app.ui.crop_rect, Some([2.0, 2.0, 20.0, 16.0]));
+        assert_eq!(app.session.active().unwrap().revision, revision);
+        assert!(app.ui.transform.is_none());
+
+        crate::crop_ui::cancel(&mut app);
+        assert!(crate::menus::is_enabled(&app, conversion));
+        assert!(!crate::menus::is_enabled(&app, id), "the Background still needs conversion");
+        super::dispatch(&mut app, &ctx, id);
+        assert!(app.ui.status.contains("Layer from Background"), "{}", app.ui.status);
+        assert!(!app.ui.status.contains("current crop"), "{}", app.ui.status);
+
+        app.run(conversion, json!({})).unwrap();
+        assert!(crate::menus::is_enabled(&app, id));
+        super::dispatch(&mut app, &ctx, id);
+        assert!(app.ui.transform.as_ref().is_some_and(|t| t.content_aware.is_some()));
+    }
+}
+
+#[test]
+fn content_aware_scale_explains_transform_on_background() {
+    for has_selection in [false, true] {
+        let mut session = photocraft_engine::Session::new();
+        session.execute("file.new", json!({"width": 32, "height": 24})).unwrap();
+        if has_selection {
+            session.execute("select.all", json!({})).unwrap();
+        }
+        let mut app = PhotocraftApp::new(session, Default::default());
+        let ctx = egui::Context::default();
+        app.sync_views();
+        crate::transform_tool::begin(&mut app, &ctx).unwrap();
+        let pending = serde_json::to_value(&app.ui.transform).unwrap();
+        let revision = app.session.active().unwrap().revision;
+
+        super::dispatch(&mut app, &ctx, "edit.contentAwareScale");
+        let transform_step = app.ui.status.find("commit or cancel the current transform").expect("explain the pending transform first");
+        let background_step = app.ui.status.find("Layer > New > Layer from Background").expect("explain Background conversion too");
+        assert!(transform_step < background_step, "{}", app.ui.status);
+        assert!(app.ui.status_error);
+        assert_eq!(serde_json::to_value(&app.ui.transform).unwrap(), pending, "the pending transform stays intact");
+        assert_eq!(app.session.active().unwrap().revision, revision);
+
+        crate::transform_tool::cancel(&mut app);
+        assert!(!crate::menus::is_enabled(&app, "edit.contentAwareScale"));
+        app.run("layer.new.layerFromBackground", json!({})).unwrap();
+        super::dispatch(&mut app, &ctx, "edit.contentAwareScale");
+        assert!(app.ui.transform.as_ref().is_some_and(|t| t.content_aware.is_some()));
+    }
+}
+
+#[test]
+fn content_aware_scale_keeps_locked_background_reason() {
+    for (pixels, all) in [(true, false), (false, true)] {
+        let mut session = photocraft_engine::Session::new();
+        session.execute("file.new", json!({"width": 32, "height": 24})).unwrap();
+        session
+            .edit("Lock Background", |doc, active| {
+                // Retain the transparency/position locks that identify a Background.
+                let layer = doc.layer_mut(active.unwrap()).unwrap();
+                layer.locks.pixels = pixels;
+                layer.locks.all = all;
+                Ok(())
+            })
+            .unwrap();
+        let id = "edit.contentAwareScale";
+        let expected = session.disabled_reason(id).expect("the engine refuses a locked Background");
+        assert!(expected.contains("locked"), "{expected}");
+        let revision = session.active().unwrap().revision;
+        let mut app = PhotocraftApp::new(session, Default::default());
+        let ctx = egui::Context::default();
+        super::dispatch(&mut app, &ctx, id);
+        assert!(app.ui.status_error);
+        assert!(app.ui.status.contains(&expected), "{}", app.ui.status);
+        assert!(!app.ui.status.contains("Layer from Background"), "{}", app.ui.status);
+        assert!(app.ui.transform.is_none());
+        let st = app.session.active().unwrap();
+        assert!(st.doc.is_background(st.active_layer.unwrap()));
+        assert_eq!(st.revision, revision, "the shortcut must not change the locked document");
+
+        app.session.execute("layer.lockLayers", json!({"pixels": false, "all": false})).unwrap();
+        super::dispatch(&mut app, &ctx, id);
+        assert!(app.ui.status.contains("Layer from Background"), "{}", app.ui.status);
+    }
+}
+
+#[test]
+fn content_aware_scale_explains_pending_transform_and_crop() {
+    let mut session = photocraft_engine::Session::new();
+    session.execute("file.new", json!({"width": 32, "height": 24})).unwrap();
+    session.execute("layer.new.layerFromBackground", json!({})).unwrap();
+    let mut app = PhotocraftApp::new(session, Default::default());
+    let ctx = egui::Context::default();
+    app.sync_views();
+    crate::transform_tool::begin(&mut app, &ctx).unwrap();
+    super::dispatch(&mut app, &ctx, "edit.contentAwareScale");
+    assert!(app.ui.status.contains("commit or cancel the current transform"), "{}", app.ui.status);
+    assert!(app.ui.status_error);
+    assert!(app.ui.transform.as_ref().unwrap().content_aware.is_none(), "the existing transform stays intact");
+    crate::transform_tool::cancel(&mut app);
+
+    app.ui.tool = Tool::Crop;
+    app.ui.crop_rect = Some([2.0, 2.0, 20.0, 16.0]);
+    app.crop.default_frame = false;
+    super::dispatch(&mut app, &ctx, "edit.contentAwareScale");
+    assert!(app.ui.status.contains("commit or cancel the current crop"), "{}", app.ui.status);
+    assert!(app.ui.status_error);
+    assert_eq!(app.ui.crop_rect, Some([2.0, 2.0, 20.0, 16.0]));
+    assert!(app.ui.transform.is_none());
+}
+
+#[test]
+fn content_aware_scale_keeps_engine_disabled_reasons() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    let ctx = egui::Context::default();
+    super::dispatch(&mut app, &ctx, "edit.contentAwareScale");
+    assert!(app.ui.status.contains("no document open"), "{}", app.ui.status);
+    app.run("file.new", json!({"width": 32, "height": 24})).unwrap();
+    app.run("layer.new.layerFromBackground", json!({"name": "Photo"})).unwrap();
+    app.run("layer.lockLayers", json!({"pixels": true})).unwrap();
+    super::dispatch(&mut app, &ctx, "edit.contentAwareScale");
+    assert!(app.ui.status.contains("locked"), "{}", app.ui.status);
+    assert!(!app.ui.status.contains("Layer from Background"));
+    app.run("type.create", json!({"text": "Hi", "x": 2, "y": 12})).unwrap();
+    super::dispatch(&mut app, &ctx, "edit.contentAwareScale");
+    assert!(app.ui.status.contains("not a pixel layer"), "{}", app.ui.status);
+    assert!(!app.ui.status.contains("Layer from Background"));
+}
+
+#[test]
 fn a_disabled_shortcut_uses_the_command_id_translation() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     let cs = crate::i18n::Lang::from_code("cs").unwrap();

@@ -20,6 +20,32 @@ use crate::transform_tex::PreviewTextures;
 
 pub const COMMAND: &str = "edit.contentAwareScale";
 
+/// UI-only restrictions aren't visible to the engine's disabled-reason lookup (#7107).
+pub(crate) fn disabled_reason(app: &PhotocraftApp) -> Option<&'static str> {
+    let is_background = app.session.active().is_some_and(|st| st.active_layer.is_some_and(|id| st.doc.is_background(id)));
+    if crate::crop_ui::blocks(app, COMMAND) {
+        // A pending edit also blocks Background conversion, so give the steps in usable order.
+        return Some(if is_background {
+            "commit or cancel the current crop, then convert the Background using Layer > New > Layer from Background"
+        } else {
+            "commit or cancel the current crop first"
+        });
+    }
+    if crate::transform_tool::is_enabled(app, COMMAND) == Some(false) {
+        return Some(if crate::transform_tool::committing(app).is_some() {
+            "wait for the transform to finish"
+        } else if is_background {
+            "commit or cancel the current transform, then convert the Background using Layer > New > Layer from Background"
+        } else {
+            "commit or cancel the current transform first"
+        });
+    }
+    if is_background && app.session.is_enabled(COMMAND) {
+        return Some("convert the Background using Layer > New > Layer from Background");
+    }
+    None
+}
+
 /// Long side of the live preview's reduced copy, px: carving it takes milliseconds, so the
 /// preview follows a drag.
 const PROXY_SIDE: u32 = 384;
