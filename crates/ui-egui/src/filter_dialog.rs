@@ -1193,7 +1193,7 @@ pub(crate) fn smart_preview_factor(doc: &Document, command: &str, params: &Value
 }
 
 /// Scale the pixel-sized parameters of `command` down by the preview proxy factor `k`, keeping each above its minimum and negative lengths negative.
-fn scale_preview_params(command: &str, params: &mut Value, k: u32) {
+pub(crate) fn scale_preview_params(command: &str, params: &mut Value, k: u32) {
     if command == photocraft_engine::plugin_cmds::RUN {
         // A plug-in declares its pixel lengths (`"unit": "px"` in its manifest), and only those
         // are scaled: a 12 px shift previewed 4 times too wide at k = 4, and a unitless param that
@@ -1270,6 +1270,12 @@ fn add_source_documents(s: &mut photocraft_engine::Session, doc_id: photocraft_d
 pub struct FilterPreview {
     pub key: FilterPreviewKey,
     pub result: Option<Arc<Document>>,
+    /// `result` flattened, as the worker composited it for the canvas upload. The preview window
+    /// shows it rather than flattening the result again on the UI thread (#5772).
+    pub flat: Option<Arc<photocraft_compose::Buffer>>,
+    /// The part of `result` (its pixels) on the GPU canvas texture. At 100 % only what the view
+    /// shows is uploaded, and pans add to it (`canvas::upload_filter_preview_view`, #5772).
+    pub uploaded: photocraft_geom::Rect,
     /// OK was pressed and the filter runs as a background job: the preview stays on screen until
     /// the job lands, so the canvas doesn't flash the unfiltered image in between.
     pub committing: bool,

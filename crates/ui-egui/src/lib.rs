@@ -102,6 +102,7 @@ pub mod file_open;
 pub mod file_ui;
 pub mod fill_ui;
 pub mod filter_dialog;
+pub mod filter_gpu_preview;
 mod filter_preview_ui;
 #[cfg(not(target_arch = "wasm32"))]
 mod filter_preview_worker;
@@ -183,6 +184,7 @@ pub mod preset_files_ui;
 pub mod preset_panels;
 pub mod press_menu;
 mod pressure_curve_ui;
+pub mod preview_session;
 pub mod props_layout;
 pub mod proxy;
 pub mod puppet_ui;
@@ -704,6 +706,9 @@ pub struct PhotocraftApp {
     /// The main canvas's last GPU view of each document while it shows the plain document on
     /// the GPU canvas: the Navigator draws the same texture at its own size (#4518).
     navigator_gpu: HashMap<DocId, crate::gpu_canvas::ViewParams>,
+    /// The main canvas's last GPU view of each document (any preview key): the filter dialog's
+    /// preview window draws from the same texture (`filter_gpu_preview`).
+    pub(crate) canvas_gpu: HashMap<DocId, crate::gpu_canvas::ViewParams>,
     /// Documents whose GPU canvas texture holds the plain document (`canvas::ensure_gpu`).
     navigator_plain: std::collections::HashSet<DocId>,
     /// The Info panel's Color Sampler readouts for (document, revision) (`panels::sampler_readouts`).
@@ -857,6 +862,8 @@ pub struct PhotocraftApp {
     pub(crate) color_range: Option<color_range_ui::Preview>,
     /// Image › Adjustments dialog preview through a temporary clipped adjustment layer.
     pub(crate) adjust_preview: Option<adjust_preview::AdjustPreview>,
+    /// The filter dialog's GPU preview session (`filter_gpu_preview`).
+    pub(crate) filter_gpu_preview: Option<filter_gpu_preview::FilterGpuPreview>,
     /// The Properties panel's live adjustment-layer drag: its damage region and coverage
     /// (`adjust_preview::live_key`).
     pub(crate) live_adjust_preview: Option<adjust_preview::LiveAdjust>,
@@ -1029,6 +1036,7 @@ impl PhotocraftApp {
             navigator_textures: HashMap::new(),
             display_memo: HashMap::new(),
             navigator_gpu: HashMap::new(),
+            canvas_gpu: HashMap::new(),
             navigator_plain: std::collections::HashSet::new(),
             info_samplers: None,
             monitors: Default::default(),
@@ -1102,6 +1110,7 @@ impl PhotocraftApp {
             kept: Default::default(),
             color_range: None,
             adjust_preview: None,
+            filter_gpu_preview: None,
             live_adjust_preview: None,
             synthetic: Vec::new(),
             automation_input: false,
