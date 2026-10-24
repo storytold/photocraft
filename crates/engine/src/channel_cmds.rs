@@ -302,6 +302,13 @@ fn materialize(s: &mut Surface, r: Rect) {
     s.write_region(r, &v);
 }
 
+/// A colour channel sample as the Channels panel shows it: CMYK stores ink (1 = full ink) but a
+/// CMYK channel reads as its tone (white = no ink), as in Photoshop. Its own inverse, so it also
+/// turns a tone back into ink. Other modes are unchanged.
+pub(crate) fn tone(mode: ColorMode, v: f32) -> f32 {
+    if mode == ColorMode::Cmyk { 1.0 - v } else { v }
+}
+
 fn luminosity(rgba: [f32; 4]) -> f32 {
     0.299 * rgba[0] + 0.587 * rgba[1] + 0.114 * rgba[2]
 }
@@ -431,11 +438,19 @@ fn ref_planes(doc: &Document, layer: Option<LayerId>, active: Option<LayerId>, r
             let (px, n) = native_pixels(doc, layer)?;
             let planes: Vec<Vec<f32>> = (0..colors).map(|c| px.chunks_exact(n).map(|p| p[c]).collect()).collect();
             match r {
-                ChanRef::Color(k) => vec![planes.get(k).cloned().ok_or_else(|| EngineError::Other(format!("no colour channel {k}")))?],
+                ChanRef::Color(k) => {
+                    let plane = planes.get(k).ok_or_else(|| EngineError::Other(format!("no colour channel {k}")))?;
+                    vec![plane.iter().map(|&v| tone(edit_mode(doc), v)).collect()]
+                }
                 _ => planes,
             }
         }
-        ChanRef::Alpha(i) => vec![read_plane(&doc.channels.get(i).ok_or_else(|| EngineError::Other(format!("no alpha channel {i}")))?.surface, area)],
+        ChanRef::Alpha(i) => {
+            let ch = doc.channels.get(i).ok_or_else(|| EngineError::Other(format!("no alpha channel {i}")))?;
+            let plane = read_plane(&ch.surface, area);
+            // A spot channel stores ink (1 = solid) but reads as its tone, as in Photoshop.
+            vec![if ch.spot.is_some() { plane.into_iter().map(|v| 1.0 - v).collect() } else { plane }]
+        }
         ChanRef::QuickMask => vec![read_plane(&doc.quick_mask.as_ref().ok_or_else(|| EngineError::Other("not in Quick Mask mode".into()))?.surface, area)],
         ChanRef::Selection => vec![sel::mask_from_surface(doc.selection.as_ref(), area)],
         ChanRef::Transparency => {
@@ -621,6 +636,19 @@ pub(crate) fn target_of(p: &Value) -> Target {
 /// The target is an alpha channel or the Quick Mask (no layer involved).
 pub(crate) fn is_channel_target(p: &Value) -> bool {
     matches!(target_of(p), Target::Alpha(_) | Target::QuickMask)
+}
+
+/// The target is a spot channel: it stores ink but takes tone, as it reads.
+pub(crate) fn is_spot_target(doc: &Document, p: &Value) -> bool {
+    matches!(target_of(p), Target::Alpha(i) if doc.channels.get(i).is_some_and(|c| c.spot.is_some()))
+}
+
+/// Inverts `r` of a channel surface (ink to tone and back).
+pub(crate) fn invert_region(s: &mut Surface, r: Rect) -> Result<()> {
+    let mut v = crate::allocation::read_region(s, r, "inverting a channel")?;
+    v.iter_mut().for_each(|x| *x = 1.0 - *x);
+    s.try_write_region(r, &v)?;
+    Ok(())
 }
 
 /// The surface a pixel command writes to and whether the layer's transparency is locked.
@@ -1587,7 +1615,7 @@ fn split(s: &mut Session, p: &Value) -> Result<Value> {
     let short = |name: &str| name.chars().next().map(|c| c.to_ascii_uppercase().to_string()).unwrap_or_default();
     let mut docs: Vec<Document> = Vec::new();
     for (c, name) in names.iter().enumerate() {
-        let plane: Vec<f32> = px.chunks_exact(n).map(|p| p[c]).collect();
+        let plane: Vec<f32> = px.chunks_exact(n).map(|p| tone(mode, p[c])).collect();
         docs.push(gray_document(&format!("{}_{}", doc.name, short(name)), &doc, &plane));
     }
     for ch in &doc.channels {
@@ -1654,7 +1682,7 @@ fn merge(s: &mut Session, p: &Value) -> Result<Value> {
     let mut data = Vec::with_capacity(npx * fmt.channels());
     for i in 0..npx {
         for pl in &planes[..cc] {
-            data.push(pl[i].clamp(0.0, 1.0));
+            data.push(tone(mode, pl[i]).clamp(0.0, 1.0));
         }
         data.push(1.0);
     }
@@ -1689,7 +1717,11 @@ fn apply_image(s: &mut Session, p: &Value) -> Result<Value> {
     let opacity = p.get("opacity").and_then(Value::as_f64).unwrap_or(100.0).clamp(0.0, 100.0) as f32 / 100.0;
     let preserve = p.get("preserveTransparency").and_then(Value::as_bool).unwrap_or(false);
     let src_spec = source_spec(p, "source", "source").unwrap_or_else(|| json!({}));
-    let src = source(s, &src_spec, cmd, false)?;
+    // A composite's planes are in its own document's mode, which may not be the target's.
+    let src_mode = s.documents().get(doc_index(s, &src_spec, "document")?).map(|d| edit_mode(&d.doc)).ok_or(EngineError::NoDocument)?;
+    // A CMYK composite reaches a channel or a layer mask as its luminosity, as Calculations reads
+    // it: its planes are ink, and an average of their tones would leave Black alone light gray.
+    let src = source(s, &src_spec, cmd, src_mode == ColorMode::Cmyk && (is_channel_target(p) || target_of(p) == Target::Mask))?;
     let mask = mask_plane(s, p, cmd)?;
     let layer = s.active().and_then(|d| d.active_layer);
     s.edit("Apply Image", |doc, _| {
@@ -1698,12 +1730,22 @@ fn apply_image(s: &mut Session, p: &Value) -> Result<Value> {
         let weight = |i: usize| opacity * mask.as_ref().map_or(1.0, |m| m[i]) * selection.as_ref().map_or(1.0, |m| m[i]);
         let mask_target = target_of(p) == Target::Mask;
         if is_channel_target(p) || mask_target {
-            // A grayscale target gets the luminosity of a colour source (one plane).
+            // A grayscale target gets one plane: a CMYK composite's luminosity (above), the average of
+            // another composite's planes.
             let srcp =
                 if src.len() == 1 { src[0].clone() } else { (0..src[0].len()).map(|i| src.iter().map(|pl| pl[i]).sum::<f32>() / src.len() as f32).collect() };
+            let spot = is_spot_target(doc, p);
+            let ink = |v: f32| if spot { 1.0 - v } else { v };
             let (surf, _) = target_surface(doc, layer, p)?;
             let base = read_plane(surf, area);
-            let out: Vec<f32> = base.iter().enumerate().map(|(i, &b)| b + (blending.apply(b, srcp[i]) - b) * weight(i)).collect();
+            let out: Vec<f32> = base
+                .iter()
+                .enumerate()
+                .map(|(i, &b)| {
+                    let b = ink(b);
+                    ink(b + (blending.apply(b, srcp[i]) - b) * weight(i))
+                })
+                .collect();
             if mask_target {
                 // A layer mask keeps its default (reveal or hide) outside the canvas.
                 if surf.channels() != 1 {
@@ -1740,9 +1782,15 @@ fn apply_image(s: &mut Session, p: &Value) -> Result<Value> {
             // source-over, so applying to an empty layer copies the source in any mode.
             let out_a = if preserve { base_a } else { w + base_a * (1.0 - w) };
             for (c, b) in px[..colors].iter_mut().enumerate() {
-                let top = src.get(c).unwrap_or(&src[0])[i];
-                let blended = top + (blending.apply(*b, top) - top) * base_a;
-                *b = if preserve { *b + (blended - *b) * w } else { (w * blended + base_a * (1.0 - w) * *b) / out_a };
+                // Blended as tone, as Photoshop does: a CMYK layer's ink turns into tone and back
+                // (Multiply darkens, so it adds ink). One plane (a channel, a mask) is a tone already.
+                // A CMYK composite onto another mode darkens each tone by its Black, so Black
+                // alone stays black.
+                let k = if src_mode == ColorMode::Cmyk && sf.mode != ColorMode::Cmyk { src.get(3).map_or(1.0, |pl| tone(src_mode, pl[i])) } else { 1.0 };
+                let top = if src.len() > 1 { tone(src_mode, src.get(c).unwrap_or(&src[0])[i]) * k } else { src[0][i] };
+                let base = tone(sf.mode, *b);
+                let blended = top + (blending.apply(base, top) - top) * base_a;
+                *b = tone(sf.mode, if preserve { base + (blended - base) * w } else { (w * blended + base_a * (1.0 - w) * base) / out_a });
             }
             if sf.alpha {
                 px[colors] = out_a;

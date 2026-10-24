@@ -499,8 +499,16 @@ pub(crate) fn paste_to_target(s: &mut Session, p: &Value, in_place: bool, limit:
     let src = shifted(&clip.surface, dx, dy);
     let area = src.content_bounds().intersect(&canvas);
     s.edit(label, |doc, _| {
+        // A spot channel stores ink: the paste goes over its tone, then back to ink (#5787).
+        let spot = crate::channel_cmds::is_spot_target(doc, p);
         let (surf, _) = crate::channel_cmds::target_surface(doc, layer, p)?;
+        if spot {
+            crate::channel_cmds::invert_region(surf, area)?;
+        }
         crate::fill_cmds::composite_over(surf, &src, area, limit)?;
+        if spot {
+            crate::channel_cmds::invert_region(surf, area)?;
+        }
         surf.prune();
         doc.selection = None;
         Ok(())
