@@ -1217,14 +1217,13 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         app.ui.status_error = true;
     }
     let Some(d) = app.camera_raw.as_ref() else { return };
-    // Where the platform has no extra windows (the web build), draw over the main window.
-    if ctx.embed_viewports() {
+    if draws_over_main_window(ctx, app.services.is_wayland) {
         draw(app, ctx, false);
         return;
     }
     let window_title = d.window_title();
     // Camera Raw is modal, as in Photoshop: the main window is dimmed and takes no input while it
-    // is open (in a separate window, or drawn over it where there are no extra windows).
+    // is open (in a separate window, or drawn over it: see `draws_over_main_window`).
     let main = ctx.content_rect();
     egui::Area::new(egui::Id::new("camera-raw-modal")).order(egui::Order::Foreground).fixed_pos(main.min).show(ctx, |ui| {
         let (r, _) = ui.allocate_exact_size(main.size(), Sense::click_and_drag());
@@ -1242,6 +1241,21 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if close && app.camera_raw.is_some() {
         cancel(app);
     }
+}
+
+/// Whether the dialog is drawn over the main window instead of in a window of its own: where the
+/// platform has no extra windows (the web build), while the main window is full screen, and on
+/// Wayland while it is maximized.
+///
+/// The dialog's window is an immediate viewport, so it takes input and redraws only while the
+/// main window draws a frame. A window opened over a full-screen or maximized one can cover it
+/// (Hyprland hands the new window the full screen or the maximized state), the compositor then
+/// sends the hidden main window no frame callbacks, and the dialog freezes: its sliders don't
+/// move and nothing else responds. Elsewhere a maximized main window keeps Camera Raw in its own
+/// window, as in Photoshop.
+fn draws_over_main_window(ctx: &egui::Context, wayland: bool) -> bool {
+    let (fullscreen, maximized) = ctx.input(|i| (i.viewport().fullscreen == Some(true), i.viewport().maximized == Some(true)));
+    ctx.embed_viewports() || fullscreen || (wayland && maximized)
 }
 
 impl CameraRawDialog {
@@ -1597,6 +1611,56 @@ mod tests {
         frame(&mut app, true);
         assert!(app.camera_raw.is_none(), "closing the window is Cancel");
         assert_eq!(app.session.active().unwrap().history.past_len(), steps);
+    }
+
+    /// Over a full-screen main window (or a maximized one on Wayland) the dialog is drawn in that
+    /// window, not in a window of its own: a separate window would cover the main one, which then
+    /// draws no frames, and the dialog drawn inside those frames would freeze.
+    #[test]
+    fn camera_raw_stays_in_a_full_screen_or_wayland_maximized_window() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        let ctx = egui::Context::default();
+        PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::Pro);
+        ctx.set_embed_viewports(false);
+        // Stands in for the desktop backend: records each window the dialog asks for and draws it,
+        // as eframe does, in a frame of its own.
+        let windows = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let seen = std::rc::Rc::clone(&windows);
+        egui::Context::set_immediate_viewport_renderer(move |ctx, mut viewport| {
+            seen.borrow_mut().push(viewport.ids.this);
+            let mut input = egui::RawInput { viewport_id: viewport.ids.this, ..Default::default() };
+            input.viewports.insert(viewport.ids.this, egui::ViewportInfo::default());
+            ctx.run_ui(input, |ui| (viewport.viewport_ui_cb)(ui)).textures_delta.clear();
+        });
+        app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        open(&mut app, &ctx).unwrap();
+        let window = egui::ViewportId::from_hash_of("camera-raw-window");
+
+        // (Wayland, full screen, maximized, a window of its own)
+        for (wayland, fullscreen, maximized, own_window) in [
+            (false, false, false, true),
+            (true, false, false, true),
+            (false, true, false, false),
+            (true, true, false, false),
+            (false, false, true, true),
+            (true, false, true, false),
+        ] {
+            app.services.is_wayland = wayland;
+            windows.borrow_mut().clear();
+            app.camera_raw.as_mut().unwrap().viewport = None;
+            let mut input = egui::RawInput::default();
+            let root = input.viewports.entry(egui::ViewportId::ROOT).or_default();
+            (root.fullscreen, root.maximized) = (Some(fullscreen), Some(maximized));
+            ctx.run_ui(input, |ui| show(&mut app, ui.ctx())).textures_delta.clear();
+            let case = format!("wayland {wayland}, full screen {fullscreen}, maximized {maximized}");
+            if own_window {
+                assert_eq!(*windows.borrow(), [window], "a window of its own ({case})");
+            } else {
+                assert!(windows.borrow().is_empty(), "no window of its own ({case})");
+            }
+            assert!(app.camera_raw.as_ref().unwrap().viewport.is_some(), "the dialog is drawn ({case})");
+        }
     }
 
     /// A layer with tonal variation, a selection over part of it and the dialog open on it.
