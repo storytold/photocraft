@@ -133,7 +133,7 @@ pub enum Outcome {
 /// field's value is validated before the first one is applied, so a typo, an unknown field, a
 /// bad value or a bad nested key can't reply with success while nothing — or only half of it —
 /// changed (#412).
-pub const UI_SET_FIELDS: [&str; 39] = [
+pub const UI_SET_FIELDS: [&str; 42] = [
     "updatesOpen",
     "tool",
     "strokeTrace",
@@ -170,6 +170,9 @@ pub const UI_SET_FIELDS: [&str; 39] = [
     "cropShield",
     "cropFill",
     "shapeStroke",
+    "frameShape",
+    "frameSides",
+    "frameTarget",
     "camTransformOnDrop",
     "tileGrid",
     "layerFilter",
@@ -377,6 +380,7 @@ fn modifiers_from(p: &Value) -> egui::Modifiers {
 const SHELL_DIALOG: &str = "shell";
 
 pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) -> Outcome {
+    app.frame_tool_ctx = Some(ctx.clone());
     let saved = app.session.authorize;
     if let Some(gate) = app.services.automation_authorize {
         app.session.authorize = Some(gate);
@@ -491,6 +495,24 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
             // rejected call applies none of its fields (#412's guarantee, down to the values
             // and nested keys).
             let applied = (|| -> std::result::Result<Value, String> {
+                let frame_shape = p
+                    .get("frameShape")
+                    .filter(|v| !v.is_null())
+                    .map(|v| {
+                        v.as_str()
+                            .filter(|s| ["rectangle", "ellipse", "triangle", "polygon", "custom"].contains(s))
+                            .ok_or("frameShape must be rectangle, ellipse, triangle, polygon or custom")
+                    })
+                    .transpose()?;
+                let frame_sides = uint_field(p, "frameSides")?;
+                if frame_sides.is_some_and(|n| !(3..=100).contains(&n)) {
+                    return Err("frameSides must be 3..=100".into());
+                }
+                let frame_target = p
+                    .get("frameTarget")
+                    .filter(|v| !v.is_null())
+                    .map(|v| serde_json::from_value::<crate::frame_tool::Target>(v.clone()).map_err(|_| "frameTarget must be frame, content or both"))
+                    .transpose()?;
                 let shape_stroke = match p.get("shapeStroke") {
                     Some(v) => {
                         if let Some(object) = v.as_object() {
@@ -679,7 +701,24 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 let bridge_pro = matches!(theme.unwrap_or(app.ui.theme), crate::theme::ThemeKind::Pro | crate::theme::ThemeKind::ProMedium);
                 let legacy_update = crate::panel_docking::prepare_legacy_update(app, p, panels.as_ref(), dock_tabs.as_ref(), dock.as_ref(), bridge_pro)?;
 
+                // All fields are validated. Select the requested frame thumbnail before applying
+                // the remaining view state, so a denied selection leaves the other fields intact.
+                if let Some(target) = frame_target {
+                    if let Some(id) = crate::frame_tool::selected(app).map(|l| l.id) {
+                        crate::frame_tool::select_result(app, id, target)?;
+                    } else {
+                        app.ui.frame_tool.target = target;
+                        app.ui.frame_tool.selected = None;
+                    }
+                }
                 // Apply (nothing below can fail).
+                if let Some(shape) = frame_shape {
+                    app.ui.frame_tool.shape = shape.into();
+                    app.ui.frame_tool.ellipse = shape == "ellipse";
+                }
+                if let Some(sides) = frame_sides {
+                    app.ui.frame_tool.sides = sides as u32;
+                }
                 if let Some(stroke) = shape_stroke {
                     if let Some(stroke) = stroke {
                         app.ui.tool_options.stroke_width = stroke.width;

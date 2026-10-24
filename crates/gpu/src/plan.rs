@@ -686,6 +686,7 @@ impl<'a> Planner<'a> {
         let clip_base_adjusts = !visible_clipped.is_empty()
             && matches!(&layer.content, LayerContent::Group(g) if g.children.iter().any(|c| c.visible && matches!(c.content, LayerContent::Adjustment(_))));
         if let LayerContent::Group(g) = &layer.content
+            && layer.frame.is_none()
             && layer.blend == BlendMode::PassThrough
             && layer.fill_opacity >= 1.0
             && !has_effects(layer)
@@ -881,12 +882,19 @@ impl<'a> Planner<'a> {
         match &layer.content {
             LayerContent::Group(g) => {
                 let empty = self.clear();
-                let s = self.stack(&g.children, empty)?;
+                let mut s = self.stack(&g.children, empty)?;
                 if layer.mask.is_some() || layer.vector_mask.is_some() {
                     let mut p = Pass::new(Kernel::Mask, 0);
                     p.a = Some(s);
                     p.mask = self.mask_use(layer);
-                    return Ok(self.emit(p));
+                    s = self.emit(p);
+                }
+                if let Some(border) = photocraft_compose::frame_stroke(layer, self.cx.canvas, self.cx.depth) {
+                    let stroke = self.shape_part(layer, Role::Stroke, border);
+                    let mut p = Pass::new(Kernel::Blend, 0);
+                    p.a = Some(s);
+                    p.b = Some(stroke);
+                    s = self.emit(p);
                 }
                 Ok(s)
             }

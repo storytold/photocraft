@@ -1092,6 +1092,16 @@ fn dissolve_noise(x: i32, y: i32) -> f32 {
 /// Bounds of a layer's own pixels (union over group children; the canvas
 /// for fill layers; an artboard's board).
 pub fn layer_bounds(layer: &Layer, canvas: Rect) -> Rect {
+    if let Some(f) = &layer.frame {
+        // Empty placeholders are shell overlays, so they must not schedule a full frame-sized
+        // mask/composite on either renderer (particularly on 24+ MP documents).
+        if layer.children().is_some_and(|c| c.is_empty()) && f.stroke.as_ref().is_none_or(|s| s.width <= 0.0 || s.opacity <= 0.0) {
+            return Rect::EMPTY;
+        }
+        let b = f.bounds();
+        let n = f.stroke.as_ref().map_or(0, |s| s.width.ceil() as i32);
+        return Rect::new(b.x0.saturating_sub(n), b.y0.saturating_sub(n), b.x1.saturating_add(n), b.y1.saturating_add(n));
+    }
     // Transparency Shapes Layer off: effects and knockout cover the whole layer (the canvas).
     if advanced::shapeless(layer) {
         return canvas;
@@ -1138,6 +1148,9 @@ pub fn layer_bounds(layer: &Layer, canvas: Rect) -> Rect {
 /// children count with their own effects (a child's outside stroke shapes the group's drop
 /// shadow and must not be cut off at the child's pixels, #3274).
 pub fn effect_source_bounds(layer: &Layer, canvas: Rect) -> Rect {
+    if layer.frame.is_some() {
+        return layer_bounds(layer, canvas);
+    }
     match &layer.content {
         LayerContent::Group(g) if g.artboard.is_none() && !advanced::shapeless(layer) => g.children.iter().filter(|c| c.visible).fold(Rect::EMPTY, |acc, c| {
             let m = if effects::has_effects(c) { effects::margin(c) } else { 0 };
@@ -1412,7 +1425,19 @@ fn render_content(layer: &Layer, rect: Rect, cx: &Ctx) -> Option<Buffer> {
             p[3] *= k;
         }
     }
+    if let Some(stroke) = frame_stroke(layer, cx.canvas, cx.depth) {
+        let border = surface_to_buffer(&stroke, rect);
+        for (d, s) in buf.px.iter_mut().zip(&border.px) {
+            *d = psblend::composite(BlendMode::Normal, *d, *s, 1.0);
+        }
+    }
     Some(buf)
+}
+
+/// A frame's vector border, cached by shape geometry and depth, shared by CPU and GPU.
+pub fn frame_stroke(layer: &Layer, canvas: Rect, depth: photocraft_color::SampleType) -> Option<Surface> {
+    let shape = layer.frame.as_ref()?.stroke_shape()?;
+    shape_split::split(&shape, canvas, depth).map(|(_, stroke)| stroke)
 }
 
 /// The shape `layer`'s effect maps are built from over `rect` (row-major; for the GPU
@@ -1605,6 +1630,10 @@ fn restore_channels(out: &mut Buffer, before: &Buffer, w: [f32; 3]) {
 /// Adjustment layers count as empty: they only change pixels already there (which is what an
 /// isolated group needs; see [`change_bounds`] for the document-level question).
 pub fn composite_bounds(layer: &Layer, canvas: Rect) -> Option<Rect> {
+    if layer.frame.is_some() {
+        let bounds = layer_bounds(layer, canvas);
+        return Some(if bounds.is_empty() { bounds } else { bounds.inflate(effects::margin(layer)).intersect(&canvas) });
+    }
     if !transparent_outside(layer) {
         return None;
     }
@@ -1935,6 +1964,7 @@ fn composite_layer_plain(layer: &Layer, clipped: &[Layer], backdrop: &mut Buffer
     let clip_base_adjusts = clipped.iter().any(|c| c.visible)
         && matches!(&layer.content, LayerContent::Group(g) if g.children.iter().any(|c| c.visible && matches!(c.content, LayerContent::Adjustment(_))));
     if let LayerContent::Group(g) = &layer.content
+        && layer.frame.is_none()
         && layer.blend == BlendMode::PassThrough
         && layer.fill_opacity >= 1.0
         && !effects::has_effects(layer)
@@ -2164,6 +2194,7 @@ fn layer_identity(layer: &Layer, h: &mut std::collections::hash_map::DefaultHash
                 layer_identity(c, h, pin);
             }
             format!("{:?}", g.artboard).hash(h);
+            format!("{:?}", layer.frame).hash(h);
         }
         LayerContent::Fill(f) => {
             format!("{f:?}").hash(h);

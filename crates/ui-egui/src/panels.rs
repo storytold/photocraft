@@ -3148,7 +3148,7 @@ fn layer_row(
     row: RowSel,
     actions: &mut Vec<(String, Value)>,
 ) -> Rect {
-    let selected = row.selected;
+    let selected = row.selected || (l.frame.is_some() && crate::frame_tool::selected(app).is_some_and(|f| f.id == l.id));
     let t = Tokens::get(ctx);
     // The Layers Panel Options thumbnail size controls rows and both layer/mask thumbnails.
     let (base, row_h) = crate::layers_panel_ui::thumbnail_geometry(app.ui.layers_panel_options.thumbnail_size, t.pro);
@@ -3251,6 +3251,41 @@ fn layer_row(
         draw_layer_thumb(app, ctx, ui, doc, l, thumb, row.primary);
         x += ts + 6.0;
     }
+    let mut frame_clicked = false;
+    if l.frame.is_some() && ts > 0.0 {
+        if selected && crate::frame_tool::target(app, l) != crate::frame_tool::Target::Content {
+            crate::mask_thumbs_ui::paint_brackets(&painter, thumb, t.text);
+        }
+        let content_thumb = Rect::from_min_size(pos2(x, rect.center().y - ts / 2.0), vec2(ts, ts));
+        if let Some(child) = l.children().and_then(|c| c.first()) {
+            draw_layer_thumb(app, ctx, ui, doc, child, content_thumb, false);
+        } else {
+            icons::paint(ui, content_thumb, "frame-placeholder", ts.min(24.0), t.icon);
+        }
+        if selected && crate::frame_tool::target(app, l) != crate::frame_tool::Target::Frame {
+            crate::mask_thumbs_ui::paint_brackets(&painter, content_thumb, t.text);
+        }
+        if resp.clicked() && !ui.input(|i| i.modifiers.command) && resp.interact_pointer_pos().is_some_and(|p| content_thumb.contains(p) || thumb.contains(p)) {
+            let content = resp.interact_pointer_pos().is_some_and(|p| content_thumb.contains(p));
+            let target = if ui.input(|i| i.modifiers.shift) {
+                crate::frame_tool::Target::Both
+            } else if content {
+                crate::frame_tool::Target::Content
+            } else {
+                crate::frame_tool::Target::Frame
+            };
+            crate::frame_tool::select(app, l.id, target);
+            frame_clicked = true;
+        }
+        if resp.double_clicked()
+            && resp.interact_pointer_pos().is_some_and(|p| content_thumb.contains(p))
+            && let Some(child) = l.children().and_then(|c| c.first())
+            && matches!(child.content, LayerContent::Smart(_))
+        {
+            actions.push(("layer.smartObjects.editContents".into(), json!({"layer":child.id.0})));
+        }
+        x += ts + 6.0;
+    }
     // With thumbnails disabled the labels and disclosure controls remain interactive.
     let masks = if ts > 0.0 { crate::mask_thumbs_ui::paint(app, ctx, ui, &painter, doc, l, &mut x, rect.center().y, ts, actions) } else { Default::default() };
     let mask_rect = masks.thumb(crate::mask_thumbs_ui::MaskKind::Pixel);
@@ -3301,6 +3336,7 @@ fn layer_row(
     if !is_pixel {
         let sub = match &l.content {
             LayerContent::Adjustment(a) => tl!(a.label()).to_string(),
+            LayerContent::Group(_) if l.frame.is_some() => tl!("Frame").to_string(),
             LayerContent::Group(g) => crate::i18n::trn(crate::i18n::current(), g.children.len() as u64, "Group · {n} layer", "Group · {n} layers"),
             other => tl!(other.kind_name()).to_string(),
         };
@@ -3315,6 +3351,9 @@ fn layer_row(
     let load_at = |m: egui::Modifiers, p: Pos2| {
         if !m.command {
             return None;
+        }
+        if l.frame.is_some() && thumb.contains(p) {
+            return Some(crate::mask_thumbs_ui::load_params(l, MaskKind::Vector, m));
         }
         if let Some(kind) = masks.hit(p) {
             return Some(crate::mask_thumbs_ui::load_params(l, kind, m));
@@ -3340,7 +3379,12 @@ fn layer_row(
         actions.push(("select.loadSelection".into(), p));
     } else if let Some(cmd) = mask_toggle {
         actions.push(cmd);
-    } else if resp.clicked() && !eye_resp.clicked() && !toggled && !fx_toggled && !masks.clicked {
+    } else if resp.clicked() && !frame_clicked && !eye_resp.clicked() && !toggled && !fx_toggled && !masks.clicked {
+        if l.frame.is_some() {
+            app.ui.frame_tool.selected = Some(l.id.0);
+            app.ui.frame_tool.target =
+                if l.children().is_some_and(|c| !c.is_empty()) { crate::frame_tool::Target::Both } else { crate::frame_tool::Target::Frame };
+        }
         let m = ui.input(|i| i.modifiers);
         let pos = resp.interact_pointer_pos();
         let on_thumb = ts > 0.0 && pos.is_some_and(|p| thumb.expand(2.0).contains(p));
@@ -3384,7 +3428,16 @@ fn layer_row(
     // #2812) and a Smart Object thumbnail its contents, and a type thumbnail edits its text;
     // anywhere else on the row opens Layer Style (#350, #537).
     // The first click already made this the active layer.
-    if resp.double_clicked() {
+    // A frame row's thumbnails are handled above; its name still renames in place.
+    if resp.double_clicked()
+        && l.frame.is_some()
+        && name_rect.is_some_and(|n| resp.interact_pointer_pos().is_some_and(|p| Rect::from_x_y_ranges(n.x_range(), rect.y_range()).expand(2.0).contains(p)))
+        && let Some(done) = crate::layer_row_ui::start_rename(ctx, l.id.0, &l.name)
+    {
+        // One rename at a time: starting this one commits any other (#314).
+        actions.push(done);
+    }
+    if resp.double_clicked() && l.frame.is_none() {
         let pos = resp.interact_pointer_pos();
         let on = |r: Rect| pos.is_some_and(|p| r.expand(2.0).contains(p));
         if crate::doc_props_ui::is_background(doc, l) {
@@ -3458,6 +3511,21 @@ fn layer_thumb_fit(cell: Rect, w: u32, h: u32) -> (Rect, Rect) {
 fn draw_layer_thumb(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &egui::Ui, doc: &photocraft_doc::Document, l: &Layer, rect: Rect, selected: bool) {
     let t = Tokens::get(ctx);
     let p = ui.painter();
+    if let Some(f) = &l.frame {
+        let t = Tokens::get(ctx);
+        let path = f.path.clone();
+        for line in photocraft_vector::flatten::flatten_path(&path, 0.01) {
+            let mut points: Vec<Pos2> =
+                line.pts.iter().map(|&(x, y)| pos2(rect.left() + x as f32 * rect.width(), rect.top() + y as f32 * rect.height())).collect();
+            if line.closed
+                && let Some(p) = points.first().copied()
+            {
+                points.push(p);
+            }
+            ui.painter().add(egui::Shape::line(points, Stroke::new(1.0, t.icon)));
+        }
+        return;
+    }
     match &l.content {
         LayerContent::Adjustment(_) | LayerContent::Group(_) => {
             p.rect_filled(rect, 6.0, t.field);
@@ -3984,6 +4052,10 @@ fn properties_body_inner(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         && crate::mask_props_ui::targeted(app, layer)
     {
         crate::props_layout::header(ui, layer);
+        if layer.frame.is_some() {
+            crate::frame_tool::properties(app, ui, layer);
+            return;
+        }
         crate::mask_props_ui::properties(app, ui, layer);
         return;
     }
@@ -4019,6 +4091,8 @@ fn properties_body_inner(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         adjustment_controls(app, ui, id, adj);
     } else if layer.artboard().is_some() {
         crate::artboard_ui::properties(app, ui, layer);
+    } else if layer.frame.is_some() {
+        crate::frame_tool::properties(app, ui, layer);
     } else if t.pro {
         // Transform, Align, the kind's sections and Quick Actions.
         crate::layer_props_ui::properties(app, ui, layer);
@@ -4562,6 +4636,22 @@ fn layer_drag_and_drop(
         "below"
     };
     let Some(st) = app.session.active() else { return };
+    if position == "into" && l.frame.is_some() {
+        let selected = st.selected_layers();
+        if selected.len() > 1 && selected.iter().any(|id| id.0 == dragged) {
+            return;
+        }
+        let source = LayerId(dragged);
+        if st.doc.layer(source).is_none_or(|l| !matches!(l.content, LayerContent::Raster(_) | LayerContent::Smart(_))) {
+            return;
+        }
+        ui.painter().rect_stroke(rect.shrink(1.0), t.radius_sm, Stroke::new(2.0, t.accent), StrokeKind::Inside);
+        if released {
+            app.reorder_preview = None;
+            actions.push(("layer.frame.setContent".into(), json!({"layer":l.id.0,"content":dragged,"copy":copy})));
+        }
+        return;
+    }
     let mut payload = layer_drop_payload(dragged, l.id, position, &st.selected_layers());
     if background_drop_refused(&st.doc, &payload, l.id, position, copy) {
         return;

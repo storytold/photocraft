@@ -607,3 +607,45 @@ fn psd_16bit_layers_with_compatibility_section_open_visible() {
     assert!(imported.layers[0].surface().unwrap().tile_count() > 0);
     assert!(imported.layers[1].surface().unwrap().tile_count() > 0);
 }
+
+fn framed(children: Vec<photocraft_doc::Layer>, stroke: Option<photocraft_doc::ShapeStroke>) -> photocraft_doc::Layer {
+    let mut g = photocraft_doc::Layer::group("frame", children);
+    g.frame = Some(photocraft_doc::Frame {
+        path: photocraft_vector::shapes::rect(0.0, 0.0, 1.0, 1.0),
+        transform: photocraft_geom::Affine { m: [6.0, 0.0, 0.0, 6.0, 1.0, 1.0] },
+        stroke,
+    });
+    g
+}
+
+#[test]
+fn frame_children_keep_their_links() {
+    use photocraft_doc::{Document, Layer, LayerContent, Size};
+    let mut d = Document::new("l", Size::new(8, 8), ColorMode::Rgb, SampleType::U8);
+    let fmt = d.pixel_format();
+    let mut a = Layer::raster("a", fmt);
+    a.link_group = Some(5);
+    let b = Layer::raster("b", fmt);
+    let mut outside = Layer::raster("outside", fmt);
+    outside.link_group = Some(5);
+    d.layers = vec![framed(vec![a, b], Some(photocraft_doc::ShapeStroke::default())), outside];
+    let back = roundtrip(&d);
+    let LayerContent::Group(g) = &back.layers[0].content else { panic!("frame is not a group") };
+    let names: Vec<_> = g.children.iter().map(|l| (l.name.as_str(), l.link_group)).collect();
+    assert_eq!(names, [("a", Some(5)), ("b", None)]);
+    assert_eq!(back.layers[0].link_group, None);
+    assert_eq!(back.layers[1].link_group, Some(5));
+}
+
+#[test]
+fn frame_stroke_exports_its_pixels() {
+    use photocraft_doc::{Document, Layer, Size};
+    let mut d = Document::new("s", Size::new(8, 8), ColorMode::Rgb, SampleType::U8);
+    let fmt = d.pixel_format();
+    let stroke = photocraft_doc::ShapeStroke { width: 2.0, ..Default::default() };
+    d.layers = vec![framed(vec![Layer::raster("a", fmt)], Some(stroke))];
+    let r = export(&d, "x.psd", &ExportOptions::default()).unwrap();
+    let f = PsdFile::from_bytes(&r.bytes).unwrap();
+    let rec = f.layers().iter().find(|r| r.name() == "Frame Stroke").expect("stroke record");
+    assert!(!rec.rect.is_empty(), "the border has no pixels: {:?}", rec.rect);
+}

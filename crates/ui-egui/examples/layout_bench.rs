@@ -165,11 +165,13 @@ fn main() {
         let t = Instant::now();
         let r = photocraft_io::import("layout.psd", &psd).expect("psd import");
         println!("PSD: {:.1} MB, save {t_save:.0} ms, open {:.0} ms ({} warnings)", psd.len() as f64 / 1e6, ms(t), r.warnings.len());
-        // PSD export writes engine-made smart objects as pixels (no SoLd yet): convert them back,
-        // as a Photoshop-made file would have them.
+        // Older PSD exports flattened smart objects. Restore those pixels, while keeping the
+        // editable Smart Objects that current exports already preserve.
         let mut s = photocraft_engine::Session::new();
         s.open_document(r.document, None);
-        let smart = |l: &photocraft_doc::Layer| l.name == "Logo" || (l.name.starts_with("Product ") && !l.name.contains('—') && !l.is_group());
+        let smart = |l: &photocraft_doc::Layer| {
+            !matches!(l.content, LayerContent::Smart(_)) && (l.name == "Logo" || (l.name.starts_with("Product ") && !l.name.contains('—') && !l.is_group()))
+        };
         let ids: Vec<u64> = s.active().map(|st| st.doc.walk().iter().filter(|(_, _, l)| smart(l)).map(|(_, _, l)| l.id.0).collect()).unwrap_or_default();
         for id in ids {
             s.execute("layer.smartObjects.convertToSmartObject", json!({"layer": id})).expect("convert");

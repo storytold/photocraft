@@ -747,6 +747,13 @@ impl Ex {
         if !matches!(l.content, LayerContent::Shape(_)) {
             self.vector_mask_block(l, &mut raw);
         }
+        if let Some(frame) = &l.frame {
+            raw.retain(|(k, _)| k != b"pcFr");
+            match serde_json::to_vec(frame) {
+                Ok(data) => raw.push((*b"pcFr", data)),
+                Err(e) => self.warnings.push(format!("frame metadata could not be written: {e}")),
+            }
+        }
         crate::comps_map::artboard_block(&self.guides, l, &mut raw);
         if let Some((comps, last)) = &self.comps {
             // Ids are assigned to every layer before emitting.
@@ -1128,6 +1135,41 @@ impl Ex {
     /// it reports progress and returns `false` to stop early (a cancelled save, #3389).
     fn emit(&mut self, layers: &[Layer], tick: &mut dyn FnMut() -> bool) {
         for l in layers {
+            // Export a frame as ordinary editable groups, a vector clip and a separate border.
+            // Photoshop's private native-frame metadata is deliberately not fabricated.
+            if let (Some(frame), Some(children)) = (&l.frame, l.children()) {
+                let mut clip = Layer::group("Frame Image", children.to_vec());
+                clip.blend = photocraft_color::BlendMode::Normal;
+                clip.mask = l.mask.clone();
+                clip.vector_mask = l.vector_mask.clone();
+                clip.psd_blocks.push((*b"pcFc", std::sync::Arc::new(vec![1])));
+                let cid = self.fresh_id();
+                self.layer_ids.insert(clip.id, cid);
+                let mut outer = l.clone();
+                outer.frame = None;
+                outer.mask = None;
+                outer.vector_mask = None;
+                let mut parts = vec![clip];
+                if let Some(mut shape) = frame.stroke_shape() {
+                    // Readers that composite pixels see the border too, as for any shape layer.
+                    shape.cache = Some(photocraft_vector::render_shape(&shape, self.fmt, self.canvas));
+                    let mut border = Layer::new("Frame Stroke", LayerContent::Shape(shape));
+                    border.psd_blocks.push((*b"pcFs", std::sync::Arc::new(vec![1])));
+                    let bid = self.fresh_id();
+                    self.layer_ids.insert(border.id, bid);
+                    parts.push(border);
+                }
+                if let Some(target) = outer.children_mut() {
+                    *target = parts;
+                }
+                outer.psd_blocks.retain(|(key, _)| key != b"pcFr");
+                match serde_json::to_vec(frame) {
+                    Ok(data) => outer.psd_blocks.push((*b"pcFr", std::sync::Arc::new(data))),
+                    Err(e) => self.warnings.push(format!("frame metadata could not be written: {e}")),
+                }
+                self.emit(&[outer], tick);
+                continue;
+            }
             let extra = self.content_blocks(l);
             match &l.content {
                 LayerContent::Group(g) => {
@@ -1196,7 +1238,18 @@ fn link_group_resource(layers: &[Layer]) -> Option<Vec<u8>> {
         for l in layers {
             if let LayerContent::Group(g) = &l.content {
                 out.push(None);
-                walk(&g.children, out);
+                // `emit` writes a frame as its group around a "Frame Image" group (divider,
+                // children, record) and an optional "Frame Stroke" shape; none of those is linked.
+                if let Some(frame) = &l.frame {
+                    out.push(None);
+                    walk(&g.children, out);
+                    out.push(None);
+                    if frame.stroke.is_some() {
+                        out.push(None);
+                    }
+                } else {
+                    walk(&g.children, out);
+                }
             }
             out.push(l.link_group);
         }

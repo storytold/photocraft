@@ -966,6 +966,7 @@ mod tests {
                 | "layer.combineShapes.intersectShapeAreas"
                 | "layer.combineShapes.excludeOverlappingShapes"
                 | "layer.combineShapes.mergeShapeComponents"
+                | "layer.new.frame"
         ) || id.starts_with("layer.newFillLayer.")
             || id.starts_with("layer.newAdjustmentLayer.")
         {

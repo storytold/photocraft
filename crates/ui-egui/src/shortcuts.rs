@@ -530,6 +530,9 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if focus == Focus::None && crate::perspective_crop_ui::keys(app, ctx) {
         return;
     }
+    if focus == Focus::None && crate::frame_tool::keys(app, ctx) {
+        return;
+    }
     // Move tool / Free Transform: arrows nudge (⇧ ×10, ⌥ duplicates first).
     if focus == Focus::None && crate::move_mods::arrow_keys(app, ctx) {
         return;
@@ -666,6 +669,10 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
             crate::retouch_ui::remove_pending_cancel(app);
             return;
         }
+    }
+    if app.ui.frame_tool.drag.is_some() && pressed(Key::Escape) {
+        crate::frame_tool::cancel(app);
+        return;
     }
     // Enter / Escape commit or cancel in-progress tool state (polygonal lasso, crop).
     if crate::lasso_ui::active(app) {

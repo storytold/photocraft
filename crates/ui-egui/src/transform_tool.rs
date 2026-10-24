@@ -205,6 +205,7 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
     }
     let id = st.active_layer.ok_or("no active layer")?;
     let layer = doc.layer(id).ok_or("no layer")?;
+    let frame_only = app.ui.tool == Tool::Frame && layer.frame.is_some() && crate::frame_tool::target(app, layer) == crate::frame_tool::Target::Frame;
     if photocraft_engine::transform_cmds::locked_for_transform(&doc, id) {
         // Photoshop refuses before the box opens rather than when it is committed (#2585).
         app.ui.open_dialog(crate::state::DialogKind::Error, json!({"message": tl!(LOCKED)}).as_object().cloned().unwrap_or_default());
@@ -246,12 +247,12 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
     let texture = crate::transform_tex::PreviewTextures::new(ctx, format!("transform-{session}"), image, uv);
     app.transform_preview = Some(TransformPreview {
         session,
-        doc: Arc::new(pd),
+        doc: if frame_only { doc.clone() } else { Arc::new(pd) },
         texture,
         opacity: layer.opacity * layer.fill_opacity,
-        above: Some(above),
-        styled: styled.then(|| crate::transform_fx::StyledPreview::new(format!("transform-{session}-styled"))),
-        follow: Some(Follow { revision, hidden: lifted.is_none() }),
+        above: (!frame_only).then_some(above),
+        styled: (styled && !frame_only).then(|| crate::transform_fx::StyledPreview::new(format!("transform-{session}-styled"))),
+        follow: Some(Follow { revision, hidden: lifted.is_none() && !frame_only }),
         committing: None,
         gesture: None,
         warp_drag: None,
@@ -273,7 +274,7 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
         interpolation: "bicubic".into(),
         warp: None,
         selection: false,
-        target: None,
+        target: frame_only.then(|| json!({"frame": id.0})),
         path: None,
         made: None,
         mode: Default::default(),
@@ -1044,6 +1045,17 @@ pub fn commit(app: &mut PhotocraftApp) {
     let type_layer = warps_type(app);
     let Some(t) = app.ui.transform.take() else { return };
     let mut preview = app.transform_preview.take();
+    if crate::frame_tool::frame_transform(&t) {
+        app.frame_preview = None;
+        if t.quad != corners(t.rect) {
+            let result = crate::frame_tool::transformed_frame(app, &t)
+                .and_then(|transform| app.run("layer.frame.set", json!({"layer": t.layer, "transform": transform.m})));
+            if let Err(error) = result {
+                keep_open(app, t, preview, error);
+            }
+        }
+        return;
+    }
     if let Some(options) = &t.content_aware {
         crate::cas_transform::commit(app, &t, options);
         return;
@@ -1234,6 +1246,11 @@ pub fn follow_edits(app: &mut PhotocraftApp) {
 }
 
 pub fn cancel(app: &mut PhotocraftApp) {
+    if app.ui.transform.as_ref().is_some_and(crate::frame_tool::frame_transform) {
+        app.frame_preview = None;
+    }
+    // A frame drag's session (frame or content) ends here; a later one must not commit on release.
+    app.ui.frame_tool.auto_transform = false;
     // Esc while the commit runs cancels the job; the session ends when it does.
     if let Some(job) = committing(app) {
         crate::jobs_ui::cancel(app, job);
@@ -2212,6 +2229,9 @@ fn front_vertices(h: &Homography, n: usize) -> Vec<bool> {
 /// Photoshop. The box, handles and reference point are [`draw_overlay`], drawn over the guides.
 pub fn draw_content(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform) {
     let (Some(t), Some(pv)) = (&app.ui.transform, &app.transform_preview) else { return };
+    if crate::frame_tool::frame_transform(t) {
+        return;
+    }
     let output = crate::monitor_status::view_display(app, painter.ctx());
     let (display, _) = crate::canvas::canvas_display(app, &pv.doc, output);
     // Selection tint and lone mask/channel values are UI diagnostics, not document colors.
@@ -2338,7 +2358,7 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
 /// `edit.transform.warp` map it like the pixels. Not Transform Selection (its ants are hidden), a
 /// path, Content-Aware Scale or a type layer's Warp Text, which leave the selection alone.
 fn carries_selection(app: &PhotocraftApp, t: &TransformSession) -> bool {
-    !t.selection && t.path.is_none() && t.content_aware.is_none() && !(t.warp.is_some() && warps_type(app))
+    !t.selection && !crate::frame_tool::frame_transform(t) && t.path.is_none() && t.content_aware.is_none() && !(t.warp.is_some() && warps_type(app))
 }
 
 /// A transform of `document` is open that carries its selection along (#5297): the canvas traces

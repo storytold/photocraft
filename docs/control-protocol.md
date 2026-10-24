@@ -692,3 +692,7 @@ dock target. The panel menu and icon rail remain
 available in custom workspaces. `window.panel.<id> {show:true}` always reveals, selects
 and expands the panel, including when another tab is selected. Workspace snapshots
 retain custom collapse settings and Timeline visibility.
+
+### Frame Tool controls
+
+`ui.set {"tool":"frame","frameShape":"rectangle|ellipse|triangle|polygon|custom","frameSides":5,"frameTarget":"frame|content|both"}` selects creation options or the target inside the active frame. `ui.inspect` includes `frameTool`. `layer.frame.info {"layer":id}` queries geometry, stroke, and content without adding history. Frame edits use `layer.frame.set`, `layer.frame.fit`, `layer.frame.convert` and `layer.frame.setContent`; placement accepts `frame: id` to target an explicit frame or `frame: false` to place outside frames. See [Frame Tool behavior and persistence limits](frame-tool.md).
