@@ -504,6 +504,12 @@ fn main() -> eframe::Result {
         errors: _,
     } = launch;
 
+    // Imported ICC profiles (Edit › Color Settings › Load…, `edit.importProfile`) live next to
+    // the other settings and stay available as working spaces, proofs and printer profiles.
+    if let Some(dir) = services::config_dir() {
+        photocraft_engine::installed_profiles::set_user_dir(Some(dir.join("Profiles")));
+    }
+
     // The log file lives under the settings directory; opened after the arguments, so `--version`
     // and usage errors leave no file behind. Records logged until now are written to it first.
     if let (Some(logger), Some(dir)) = (logger, services::config_dir()) {
