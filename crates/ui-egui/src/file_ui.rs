@@ -807,8 +807,9 @@ pub fn open_print(app: &mut PhotocraftApp) -> u64 {
     let mut f = Map::new();
     f.insert("__print".into(), json!(true));
     f.insert("__label".into(), json!("PhotoCraft Print Settings"));
-    // Asked once per opening: the Printer menu lists what the spooler knows now.
-    let printers = app.session.execute("file.printers", json!({})).unwrap_or_default();
+    // Asked once per opening: the Printer menu lists what the spooler knows now, or what it knew at
+    // the last listing while a print job or Print Settings… is in a printer driver.
+    let printers = photocraft_engine::print_cmds::printers_without_waiting(&mut app.session);
     f.insert("__systemPrinters".into(), printers["printers"].clone());
     // The settings of the last print, also from an earlier session (#7410).
     if let Some(Value::Object(m)) = photocraft_engine::print_cmds::last_print(&app.session) {
@@ -840,7 +841,7 @@ pub fn open_print(app: &mut PhotocraftApp) -> u64 {
         f.entry(k.to_string()).or_insert(v);
     }
     // Windows: the system's printers, and the paper from the chosen printer's driver settings.
-    if let Ok(list) = craft_print::rgb::printers() {
+    if let Ok(list) = photocraft_engine::print_cmds::rgb_printers_without_waiting(&app.session) {
         f.insert("__printers".into(), json!(list.iter().map(|p| p.name.clone()).collect::<Vec<_>>()));
         let known = |n: &str| list.iter().any(|p| p.name == n);
         if !known(&s(&f, "printer", "")) {
@@ -861,16 +862,19 @@ fn driver_paper_is_wide(f: &Map<String, Value>) -> bool {
 
 /// The Orientation buttons: the driver settings (or the printer's own) turned portrait or
 /// landscape through `file.print.page`. An error stays on the dialog, with the settings left as
-/// they were.
+/// they were. While another thread is in a printer driver, the dialog says so and does not wait.
 fn turn_driver(app: &mut PhotocraftApp, f: &mut Map<String, Value>, landscape: bool) {
     let mut q = json!({"printer": s(f, "printer", ""), "orientation": if landscape { "landscape" } else { "portrait" }});
     if let (Some(h), Some(o)) = (f.get("printerSettings").cloned(), q.as_object_mut()) {
         o.insert("printerSettings".into(), h);
     }
-    match app.session.execute("file.print.page", q) {
-        Ok(r) => take_turned_page(f, &r),
-        Err(e) => {
+    match photocraft_engine::print_cmds::try_with_spooler(|| app.session.execute("file.print.page", q)) {
+        Some(Ok(r)) => take_turned_page(f, &r),
+        Some(Err(e)) => {
             f.insert("__pageError".into(), json!(e.to_string()));
+        }
+        None => {
+            f.insert("__pageError".into(), json!(photocraft_engine::print_cmds::SPOOLER_BUSY));
         }
     }
 }
@@ -890,22 +894,30 @@ fn take_turned_page(f: &mut Map<String, Value>, r: &Value) {
     f.remove("__pageError");
 }
 
-/// Takes the paper from the printer's driver settings (Windows), as Photoshop does.
-fn driver_page(f: &mut Map<String, Value>) {
+/// Takes the paper from the printer's driver settings (Windows), as Photoshop does. While another
+/// thread is in a printer driver, the dialog says so and does not wait, and the page is asked for
+/// again on a later frame; then this returns false.
+fn driver_page(f: &mut Map<String, Value>) -> bool {
     let printer = s(f, "printer", "");
     let settings = f.get("printerSettings").and_then(Value::as_str).and_then(|h| craft_print::rgb::DevMode::from_hex(h).ok());
-    match craft_print::rgb::page(&printer, settings.as_ref()) {
-        Ok(pg) => {
+    match photocraft_engine::print_cmds::try_with_spooler(|| craft_print::rgb::page(&printer, settings.as_ref())) {
+        Some(Ok(pg)) => {
             f.insert("paper".into(), json!([pg.paper.0, pg.paper.1]));
             f.insert("printable".into(), json!([pg.printable.0, pg.printable.1, pg.printable.2, pg.printable.3]));
             f.insert("orientation".into(), json!("portrait"));
             f.remove("__pageError");
         }
-        Err(e) => {
+        Some(Err(e)) => {
             f.remove("printable");
             f.insert("__pageError".into(), json!(e.to_string()));
         }
+        None => {
+            f.insert("__pageError".into(), json!(photocraft_engine::print_cmds::SPOOLER_BUSY));
+            f.remove("__driverPageInitialized");
+            return false;
+        }
     }
+    true
 }
 
 /// Points per unit for the Position and Size fields.
@@ -1062,8 +1074,8 @@ fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Va
         None
     };
     if printers.is_some() {
-        if !b(f, "__driverPageInitialized", false) {
-            driver_page(f);
+        // Asked again on the next frame while the driver is busy.
+        if !b(f, "__driverPageInitialized", false) && driver_page(f) {
             f.insert("__driverPageInitialized".into(), json!(true));
         }
     } else {
@@ -1187,14 +1199,17 @@ fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Va
                     if ui.button(tl!("Print Settings…")).clicked() {
                         let printer = s(f, "printer", "");
                         let current = f.get("printerSettings").and_then(Value::as_str).and_then(|h| craft_print::rgb::DevMode::from_hex(h).ok());
-                        match craft_print::rgb::settings_dialog(&printer, current.as_ref(), None) {
-                            Ok(Some(dm)) => {
+                        match photocraft_engine::print_cmds::try_with_spooler(|| craft_print::rgb::settings_dialog(&printer, current.as_ref(), None)) {
+                            Some(Ok(Some(dm))) => {
                                 f.insert("printerSettings".into(), json!(dm.to_hex()));
                                 driver_page(f);
                             }
-                            Ok(None) => {}
-                            Err(e) => {
+                            Some(Ok(None)) => {}
+                            Some(Err(e)) => {
                                 f.insert("__pageError".into(), json!(e.to_string()));
+                            }
+                            None => {
+                                f.insert("__pageError".into(), json!(photocraft_engine::print_cmds::SPOOLER_BUSY));
                             }
                         }
                     }
@@ -1476,6 +1491,8 @@ mod tests {
 
     fn app() -> (PhotocraftApp, egui::Context) {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        // Print lists this printer and does not ask the spooler.
+        app.session.printer_source = Some(Arc::new(|| vec![craft_print::Printer { name: "Test printer".into(), default: true, two_sided: None }]));
         app.run("file.new", json!({"width": 120, "height": 80, "name": "web"})).unwrap();
         (app, egui::Context::default())
     }
@@ -1851,9 +1868,16 @@ mod tests {
         let (mut app, ctx) = app();
         let id = crate::menus::invoke(&mut app, &ctx, "file.print", json!({})).unwrap()["dialog"].as_u64().unwrap();
         let f = &app.ui.dialog_mut(id).unwrap().fields;
-        assert!(f.get("__systemPrinters").is_some_and(Value::is_array));
+        assert_eq!(f["__systemPrinters"], json!([{"name": "Test printer", "default": true}]));
+        // The driver Printer menu lists the stand-in on Windows only, where the GDI route is.
+        assert_eq!(f.get("__printers"), cfg!(windows).then(|| json!(["Test printer"])).as_ref());
+        if cfg!(windows) {
+            assert_eq!(f["printer"], "Test printer");
+        }
         assert!(params(f).get("__systemPrinters").is_none());
         assert!(params(f).get("__printers").is_none());
+        // Every test in this binary that opens Print lists the session's printers.
+        assert_eq!(photocraft_engine::print_cmds::system_printer_listings(), 0, "a test asked the system spooler for its printers");
     }
 
     /// An output path or a preview typed and confirmed in one frame doesn't take the driver's area.
@@ -1897,7 +1921,10 @@ mod tests {
         let (show, asked) = crate::file_dialog::fake(vec![Some(FileDialogAnswer::SaveTo(out.clone()))]);
         let mut h = Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_max_steps(64).build_eframe(move |cc| {
             PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-            PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services { file_dialog: Some(show), ..Default::default() })
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services { file_dialog: Some(show), ..Default::default() });
+            // Print lists this printer and does not ask the spooler.
+            app.session.printer_source = Some(Arc::new(|| vec![craft_print::Printer { name: "Test printer".into(), default: true, two_sided: None }]));
+            app
         });
         h.state_mut().run("file.new", json!({"width": 120, "height": 80, "name": "poster"})).unwrap();
         let id = open_print(h.state_mut());
@@ -1980,6 +2007,45 @@ mod tests {
             assert_eq!((f.get("printerSettings"), f.get("paper")), (Some(&json!("old")), Some(&json!([595.28, 841.89]))), "{partial}");
             assert!(f.get("__pageError").is_some(), "{partial}");
         }
+    }
+
+    /// While another thread is in a printer driver (a print job being handed over), the Print
+    /// dialog's driver calls say so at once and leave the settings as they were.
+    #[test]
+    fn driver_calls_do_not_wait_while_the_spooler_is_busy() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let (mut app, _) = app();
+        let (held_tx, held) = std::sync::mpsc::channel();
+        let (release, released_rx) = std::sync::mpsc::channel::<()>();
+        let released = Arc::new(AtomicBool::new(false));
+        let holder = {
+            let released = Arc::clone(&released);
+            std::thread::spawn(move || {
+                photocraft_engine::print_cmds::with_spooler(|| {
+                    held_tx.send(()).unwrap();
+                    // Bounded, so a call that waits fails the test rather than hanging it.
+                    let _ = released_rx.recv_timeout(std::time::Duration::from_secs(5));
+                    released.store(true, Ordering::SeqCst);
+                });
+            })
+        };
+        held.recv().unwrap();
+        let mut page = Map::new();
+        page.insert("printer".into(), json!("Test printer"));
+        page.insert("__driverPageInitialized".into(), json!(true));
+        let answered = driver_page(&mut page);
+        let mut turn = Map::new();
+        turn.insert("printer".into(), json!("Test printer"));
+        turn.insert("paper".into(), json!([595.28, 841.89]));
+        turn_driver(&mut app, &mut turn, true);
+        assert!(!released.load(Ordering::SeqCst), "a driver call waited for the spooler");
+        release.send(()).unwrap();
+        holder.join().unwrap();
+        assert!(!answered);
+        assert!(page.get("__driverPageInitialized").is_none(), "the page is asked for again on a later frame");
+        assert_eq!(page["__pageError"], photocraft_engine::print_cmds::SPOOLER_BUSY);
+        assert_eq!(turn["__pageError"], photocraft_engine::print_cmds::SPOOLER_BUSY);
+        assert_eq!((turn.get("paper"), turn.get("printerSettings")), (Some(&json!([595.28, 841.89])), None));
     }
 }
 

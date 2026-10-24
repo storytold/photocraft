@@ -521,6 +521,9 @@ pub struct Session {
     /// A further route for File › Print when neither `lp` nor a CUPS server over IPP is
     /// reachable (the XDG Print portal in a Flatpak); see `print_cmds::Spooler`.
     pub print_spooler: Option<print_cmds::Spooler>,
+    /// The printers `file.printers`, `file.print.printers` and the Print dialog list in place of
+    /// the system's (tests); see `print_cmds::PrinterSource`. `None` asks the spooler.
+    pub printer_source: Option<print_cmds::PrinterSource>,
     /// Background jobs (see [`jobs`]).
     jobs: jobs::Jobs,
     /// Color Sampler points dropped by the last canvas-size change (crop, Canvas Size, Image Size,
