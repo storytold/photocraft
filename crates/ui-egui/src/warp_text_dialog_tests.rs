@@ -3,7 +3,7 @@
 
 use egui::vec2;
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use photocraft_doc::text::TextWarp;
 use photocraft_doc::{Document, LayerContent};
 use serde_json::{Map, Value, json};
@@ -205,4 +205,63 @@ fn warp_text_dialog_lists_style_orientation_then_bend_and_distortions() {
     let order = ["Style", "Orientation", "Bend", "Horizontal Distortion", "Vertical Distortion"].map(top);
     assert!(order.iter().all(|y| y.is_finite()), "every field is shown: {order:?}");
     assert!(order.windows(2).all(|w| w[0] < w[1]), "fields top to bottom: {order:?}");
+}
+
+/// A harness that shows the options bar, as the shell draws it for the active tool.
+fn options_bar_harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+    let mut h = Harness::builder().with_size(vec2(1400.0, 60.0)).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                return;
+            }
+            crate::panels::options_bar(app, ui);
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
+    h.run_steps(4);
+    h
+}
+
+/// The Type tool's options bar shows the Warp Text button after the colour swatch: it opens the
+/// dialog and is drawn pressed when the shown type layer has a warp (Photoshop's button).
+#[test]
+fn options_bar_warp_button_opens_the_dialog_and_tracks_the_warp() {
+    assert!(crate::icons::exists("text-warp"), "the button's icon is embedded");
+    let mut app = app_with_type();
+    app.ui.tool = crate::state::Tool::Type;
+    assert!(!crate::type_tool::warp_active(&app), "a new type layer has no warp");
+    let mut h = options_bar_harness(app);
+    h.get_by_label("Create warped text").click();
+    h.run_steps(2);
+    assert!(!h.state().ui.dialogs.is_empty(), "the options-bar button opens the Warp Text dialog");
+    h.state_mut().ui.dialogs.clear();
+    h.state_mut().run("type.warpText", flag()).unwrap();
+    h.run_steps(2);
+    assert!(crate::type_tool::warp_active(h.state()), "the button follows the layer's warp");
+}
+
+/// A layer deleted while `text_edit` stayed set (a menu or dropdown owned the keys and skipped
+/// `type_tool::handle_keys`) must leave the button disabled: there is no live layer to warp.
+#[test]
+fn options_bar_warp_button_is_disabled_for_a_stale_text_edit() {
+    let mut app = app_with_type();
+    app.ui.tool = crate::state::Tool::Type;
+    let id = app.session.active().unwrap().active_layer.unwrap().0;
+    app.run("layer.delete", json!({"layer": id})).unwrap();
+    app.ui.text_edit = Some(crate::state::TextEdit {
+        layer: id,
+        document: None,
+        caret: 0,
+        anchor: 0,
+        session: "stale".into(),
+        created: false,
+        mask: false,
+        dragging: false,
+        resize: None,
+        preedit: None,
+    });
+    assert!(crate::type_tool::target_text(&app).is_none(), "the layer is gone from the document");
+    let h = options_bar_harness(app);
+    assert!(h.get_by_label("Create warped text").accesskit_node().is_disabled(), "no live type layer, no Warp Text");
 }

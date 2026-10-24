@@ -264,3 +264,6 @@ sync_github_name = false
 
 [people.drunkeninja42]
 real_name = "Kushagra Sharma"
+
+[people.Myosh1]
+sync_github_name = true
