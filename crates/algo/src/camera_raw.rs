@@ -930,15 +930,17 @@ fn vignette(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw) {
     let hl = p.vignette_highlights.clamp(0.0, 100.0) / 100.0;
     let style = p.vignette_style.as_str();
     let (cx, cy) = (w as f32 / 2.0, h as f32 / 2.0);
-    // Roundness: 0 follows the frame's aspect, +1 a circle, −1 a rounded rectangle.
+    // Roundness: 0 follows the frame's aspect, +1 a circle (frame inside the circle, corners at r≈1),
+    // −1 a rounded rectangle.
     let (ax, ay) = if round >= 0.0 {
-        let r = cx.min(cy) + (cx.max(cy) - cx.min(cy)) * (1.0 - round);
-        (if cx >= cy { r } else { cx }, if cy > cx { r } else { cy })
+        let circ = (cx - 0.5).hypot(cy - 0.5);
+        (cx + (circ - cx) * round, cy + (circ - cy) * round)
     } else {
         (cx, cy)
     };
     let pw = 2.0 + (-round).max(0.0) * 6.0;
-    let inner = 1.0 - mid * 0.8;
+    // Midpoint 0: falloff circle larger than the frame (corners only); 100: tight to the centre.
+    let inner = 1.4 - mid * 1.2;
     let edge0 = inner - feather * 0.5 * inner;
     let edge1 = inner + feather * 0.5 * (1.4 - inner) + 0.02;
     par_rows(px, w, 1, |y, row| {
@@ -1142,6 +1144,28 @@ mod tests {
         let mut v = flat.clone();
         develop(&mut v, w, h, &CameraRaw { vignette_amount: -80.0, ..Default::default() }, false);
         assert!(v[0][0] < 0.35 && (v[(h / 2) * w + w / 2][0] - 0.5).abs() < 0.01, "{:?}", v[0]);
+    }
+
+    #[test]
+    fn vignette_full_roundness_still_darkens_corners() {
+        let (w, h) = (200usize, 100usize);
+        let flat = vec![[0.5f32, 0.5, 0.5, 1.0]; w * h];
+        let mut out = flat.clone();
+        develop(&mut out, w, h, &CameraRaw { vignette_amount: -80.0, vignette_roundness: 100.0, vignette_feather: 50.0, ..Default::default() }, false);
+        assert!(out[0][0] < 0.35, "corner should darken with roundness 100");
+        assert!((out[(h / 2) * w + w / 2][0] - 0.5).abs() < 0.01, "centre should stay neutral");
+    }
+
+    #[test]
+    fn vignette_midpoint_zero_targets_corners_not_frame_edges() {
+        let (w, h) = (200usize, 100usize);
+        let flat = vec![[0.5f32, 0.5, 0.5, 1.0]; w * h];
+        let mut out = flat.clone();
+        develop(&mut out, w, h, &CameraRaw { vignette_amount: -80.0, vignette_midpoint: 0.0, vignette_feather: 50.0, ..Default::default() }, false);
+        let corner = out[0][0];
+        let top_mid = out[w / 2][0];
+        assert!(corner < top_mid - 0.05, "corner {corner} should be darker than top edge {top_mid}");
+        assert!((out[(h / 2) * w + w / 2][0] - 0.5).abs() < 0.01, "centre should stay neutral");
     }
 
     #[test]
