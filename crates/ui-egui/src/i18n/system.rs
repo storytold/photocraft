@@ -101,6 +101,8 @@ mod tests {
             (vec!["sr-Latn-RS", "en-US"], "sr"),
             (vec!["sv-SE", "sr_RS@latin", "ru-RU"], "sr"),
             (vec!["hi-IN", "en-US"], "hi"),
+            (vec!["fi-FI", "sv-FI", "en-US"], "fi"),
+            (vec!["sv-FI", "en-US"], "en"),
             (vec![], "en"),
         ] {
             with_system_tags(&tags, || assert_eq!(system_lang().code(), expected));
