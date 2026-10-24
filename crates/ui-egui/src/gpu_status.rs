@@ -221,6 +221,10 @@ fn retry_now(app: &mut PhotocraftApp) -> bool {
     // The CPU canvas's egui textures: rebuild every view on the GPU.
     app.canvases.clear();
     app.proxy_uploaded = None;
+    // The 100 % filter preview's texels were on the old canvas.
+    if let Some(p) = app.filter_preview.as_mut() {
+        p.uploaded = photocraft_geom::Rect::EMPTY;
+    }
     app.perf.gpu_fallback = None;
     app.perf.gpu_info.lost = None;
     app.ui.status = tl!("GPU acceleration resumed.").to_string();
@@ -444,6 +448,24 @@ mod tests {
         app.set_wgpu(rs);
         app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
         let ctx = egui::Context::default();
+        // A 100 % filter preview whose view was on the old canvas's texture.
+        let doc = app.session.active().unwrap().doc.id;
+        app.filter_preview = Some(crate::filter_dialog::FilterPreview {
+            key: crate::filter_dialog::FilterPreviewKey {
+                doc,
+                revision: 0,
+                dialog: 1,
+                active: None,
+                target: photocraft_engine::channel_cmds::ChannelTarget::Composite,
+                command: "filter.stylize.solarize".into(),
+                params: json!({}),
+                k: 1,
+            },
+            result: None,
+            flat: None,
+            uploaded: photocraft_geom::Rect::new(0, 0, 64, 48),
+            committing: false,
+        });
         // An error on a live device (one not retried by itself, see #6564): Retry GPU rebuilds
         // the canvas now.
         app.gpu_health().unwrap().mark(photocraft_gpu::Fault::Error("Validation Error".into()));
@@ -458,6 +480,7 @@ mod tests {
         assert_eq!(app.ui.status, "GPU acceleration resumed.");
         assert!(app.ui.gpu_fallback_notice.is_none() && app.ui.notices.is_empty(), "no restart notice");
         assert_eq!(app.session.documents().len(), 1, "the document stayed open");
+        assert_eq!(app.filter_preview.as_ref().map(|p| p.uploaded), Some(photocraft_geom::Rect::EMPTY), "the preview goes up again, to the new canvas");
         // A loss: the device can't be reused, so the retry is scheduled for the next launch.
         app.gpu_health().unwrap().mark(photocraft_gpu::Fault::Lost("simulated".into()));
         check(&mut app, &ctx);
