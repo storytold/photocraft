@@ -200,13 +200,19 @@ pub enum Tool {
     Polygon,
     Line,
     CustomShape,
+    /// Snagit-style arrow: drag tail to tip; a stroked open path with arrowheads, bendable.
+    Arrow,
+    /// Snagit-style Cut Out: drag across a band to remove it and join the sides.
+    CutOut,
+    /// Click to stamp a star, asterisk, circle or triangle marker.
+    Marker,
     Slice,
     SliceSelect,
     Frame,
 }
 
 impl Tool {
-    pub const ALL: [Tool; 67] = [
+    pub const ALL: [Tool; 70] = [
         Tool::Move,
         Tool::Artboard,
         Tool::RectMarquee,
@@ -218,6 +224,7 @@ impl Tool {
         Tool::MagneticLasso,
         Tool::MagicWand,
         Tool::Crop,
+        Tool::CutOut,
         Tool::PerspectiveCrop,
         Tool::Eyedropper,
         Tool::ColorSampler,
@@ -270,6 +277,8 @@ impl Tool {
         Tool::Triangle,
         Tool::Polygon,
         Tool::Line,
+        Tool::Arrow,
+        Tool::Marker,
         Tool::CustomShape,
         Tool::Slice,
         Tool::SliceSelect,
@@ -301,6 +310,7 @@ impl Tool {
             Tool::MagneticLasso => "Magnetic Lasso Tool",
             Tool::MagicWand => "Magic Wand Tool",
             Tool::Crop => "Crop Tool",
+            Tool::CutOut => "Cut Out Tool",
             Tool::PerspectiveCrop => "Perspective Crop Tool",
             Tool::Slice => "Slice Tool",
             Tool::SliceSelect => "Slice Select Tool",
@@ -345,6 +355,8 @@ impl Tool {
             Tool::Polygon => "Polygon Tool",
             Tool::Line => "Line Tool",
             Tool::CustomShape => "Custom Shape Tool",
+            Tool::Arrow => "Arrow Tool",
+            Tool::Marker => "Marker Tool",
         }
     }
     pub fn is_type(self) -> bool {
@@ -393,7 +405,7 @@ impl Tool {
             Tool::Eyedropper | Tool::ColorSampler | Tool::Ruler | Tool::Note | Tool::Count => 'I',
             Tool::Lasso | Tool::PolygonLasso | Tool::MagneticLasso => 'L',
             Tool::MagicWand => 'W',
-            Tool::Crop | Tool::PerspectiveCrop | Tool::Slice | Tool::SliceSelect => 'C',
+            Tool::Crop | Tool::PerspectiveCrop | Tool::CutOut | Tool::Slice | Tool::SliceSelect => 'C',
             Tool::Frame => 'K',
             Tool::Gradient | Tool::PaintBucket => 'G',
             Tool::Type | Tool::VerticalType | Tool::HorizontalTypeMask | Tool::VerticalTypeMask => 'T',
@@ -410,7 +422,7 @@ impl Tool {
             Tool::QuickSelection | Tool::ObjectSelection => 'W',
             Tool::Pen | Tool::FreeformPen | Tool::CurvaturePen | Tool::AddAnchorPoint | Tool::DeleteAnchorPoint | Tool::ConvertPoint => 'P',
             Tool::PathSelection | Tool::DirectSelection => 'A',
-            Tool::Rectangle | Tool::EllipseShape | Tool::Triangle | Tool::Polygon | Tool::Line | Tool::CustomShape => 'U',
+            Tool::Rectangle | Tool::EllipseShape | Tool::Triangle | Tool::Polygon | Tool::Line | Tool::Arrow | Tool::Marker | Tool::CustomShape => 'U',
         }
     }
     /// Glyph drawn in the toolbar (vector icons come later).
@@ -714,6 +726,15 @@ pub struct ToolOptions {
     pub corner_radius: f32,
     pub polygon_sides: u32,
     pub line_weight: f32,
+    /// Arrow tool: the next arrow's colour, width, line and heads.
+    #[serde(default)]
+    pub arrow: crate::arrow_ui::ArrowOptions,
+    /// Cut Out tool: band direction and seam style.
+    #[serde(default)]
+    pub cut_out: crate::cutout_ui::CutOutOptions,
+    /// Marker tool: shape, size, colour and outline of the next marker.
+    #[serde(default)]
+    pub marker: crate::marker_ui::MarkerOptions,
     /// Freeform Pen › Curve Fit: how far (px) the fitted path may stray from the pointer trace.
     #[serde(default = "default_curve_fit")]
     pub curve_fit: f32,
@@ -1005,6 +1026,9 @@ impl Default for ToolOptions {
             corner_radius: 0.0,
             polygon_sides: 5,
             line_weight: 3.0,
+            arrow: Default::default(),
+            cut_out: Default::default(),
+            marker: Default::default(),
             curve_fit: default_curve_fit(),
             pen_auto_add_delete: true,
             marquee_style: default_marquee_style(),
@@ -1471,6 +1495,12 @@ pub struct UiState {
     /// A live rectangle's corner radius widget being dragged (TOOL-214-12).
     #[serde(skip)]
     pub corner_radius: Option<crate::corner_radius::Drag>,
+    /// An Arrow tool handle being dragged (tail, bend or tip).
+    #[serde(skip)]
+    pub arrow_drag: Option<crate::arrow_ui::Drag>,
+    /// Panel edges the Cut Out tool snaps to (found when a drag starts).
+    #[serde(skip)]
+    pub cut_out_edges: Option<crate::cutout_ui::PanelEdges>,
     /// Selected row in the Paths panel ("work" or a saved path name).
     #[serde(default)]
     pub selected_path: Option<String>,
@@ -1676,6 +1706,8 @@ impl Default for UiState {
             stroke_editor: None,
             direct_selection: Default::default(),
             corner_radius: None,
+            arrow_drag: None,
+            cut_out_edges: None,
             selected_path: None,
             panels: Panels::default(),
             views: Vec::new(),
@@ -1800,7 +1832,11 @@ mod tests {
         assert!(!Tool::RedEye.is_brushlike());
         assert_eq!(Tool::from_name("patternStamp"), Some(Tool::PatternStamp));
         assert_eq!(Tool::from_name("Pattern Stamp Tool"), Some(Tool::PatternStamp));
-        assert_eq!(Tool::ALL.len(), 67);
+        assert_eq!(Tool::ALL.len(), 70);
+        assert_eq!(Tool::from_name("Marker Tool"), Some(Tool::Marker));
+        assert_eq!(Tool::from_name("Arrow Tool"), Some(Tool::Arrow));
+        assert_eq!(Tool::from_name("cutOut"), Some(Tool::CutOut));
+        assert_eq!((Tool::Arrow.key(), Tool::CutOut.key()), ('U', 'C'));
         assert_eq!(Tool::from_name("Vertical Type Mask Tool"), Some(Tool::VerticalTypeMask));
         assert_eq!(Tool::from_name("addAnchorPoint"), Some(Tool::AddAnchorPoint));
         assert_eq!(Tool::from_name("Delete Anchor Point Tool"), Some(Tool::DeleteAnchorPoint));

@@ -231,6 +231,8 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
         "file.import.videoFramesToLayers" if params.get("path").and_then(Value::as_str).is_none() => {
             app.ask_folder(|app, path| app.run("file.import.videoFramesToLayers", json!({"path": path})).map_err(|e| e.to_string()))
         }
+        "file.screenshot.new" => crate::screenshot::start(app, ctx),
+        "file.screenshot.library" => Ok(crate::screenshot::open_library(app)),
         "file.save" => {
             // Writes back only to a layered file that holds the whole document; anything else
             // goes through Save As, so the original is never overwritten with less (#3806).
@@ -733,6 +735,9 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
         "window.panel.activate" | "window.panel.layout" => true,
         "window.panel.group" | "window.panel.move" | "window.panel.float" | "window.panel.dock" | "window.panel.close" => !app.session.prefs().workspace_locked,
         "file.open" | "file.exit" | "file.clearRecent" | "file.removeRecent" | "help.about" | "help.systemInfo" | "edit.search" => true,
+        // Screenshots need no document; the system capture exists on macOS only.
+        "file.screenshot.new" => cfg!(target_os = "macos") && app.screenshot.is_none(),
+        "file.screenshot.library" => true,
         i if i.starts_with("file.openRecent.") => true,
         i if i.starts_with(DOCUMENT_ITEM) => true,
         i if crate::links::url_for(i).is_some() => true,

@@ -25,6 +25,7 @@ pub mod analysis_ui;
 pub mod anchor_tools;
 mod ants;
 pub mod apply_color;
+pub mod arrow_ui;
 pub mod artboard_tool;
 pub mod artboard_ui;
 pub(crate) mod background_redraw;
@@ -76,6 +77,7 @@ pub mod crop_shield;
 pub mod crop_size;
 pub mod crop_straighten;
 pub mod crop_ui;
+pub mod cutout_ui;
 pub mod dds_options_ui;
 pub mod delete_layer_prompt;
 pub mod dialog_alt_reset;
@@ -139,6 +141,7 @@ mod layout_keys;
 pub mod links;
 pub mod liquify_ui;
 pub mod magnetic_lasso_ui;
+pub mod marker_ui;
 mod mask_props_ui;
 pub mod mask_thumbs_ui;
 pub mod mask_trash_prompt;
@@ -194,6 +197,7 @@ mod rgb_histogram;
 pub mod rotate_view;
 pub mod rulers;
 pub mod screen_picker;
+pub mod screenshot;
 pub mod scrollbars;
 mod scrub_wrap;
 pub mod select_mask_view;
@@ -876,6 +880,8 @@ pub struct PhotocraftApp {
     pub(crate) transform_preview: Option<transform_tool::TransformPreview>,
     /// Move-tool ⇧/⌥ drag state (move_mods).
     pub(crate) move_mods: move_mods::MoveDrag,
+    /// A screenshot being taken (File › New Screenshot), finished by `screenshot::tick`.
+    pub(crate) screenshot: Option<screenshot::Pending>,
     /// Cached document for a modal text Style Options color preview.
     pub(crate) text_style_preview: Option<type_panels_ui::color_picker::Preview>,
     /// The run of arrow-key nudges that share one History state (nudge_bundle).
@@ -1123,6 +1129,7 @@ impl PhotocraftApp {
             clip_read_for_paste: false,
             transform_preview: None,
             move_mods: Default::default(),
+            screenshot: None,
             nudge_bundle: Default::default(),
             style_preview: None,
             text_style_preview: None,
@@ -2039,6 +2046,8 @@ impl PhotocraftApp {
             }
         };
         self.ui.status = crate::i18n::fmt(tl!("Saved {name}"), &[("name", path)]);
+        // A screenshot library PNG that could not follow the save: shown last, as an error.
+        let mut png_error = None;
         // The file was written, copy or not: another tab bound to it no longer matches it.
         self.detach_others_from_file(path, doc);
         if !copy {
@@ -2052,6 +2061,11 @@ impl PhotocraftApp {
                     // The job locked the document, but record the revision that was written.
                     st.saved_revision = revision;
                     app.remember_stamp(doc, path);
+                }
+                // A screenshot library document keeps its PNG in step with the editable file, for
+                // automation saves too: it is part of the library, not a user-configured hook.
+                if arm {
+                    png_error = crate::screenshot::after_save(app, path);
                 }
                 // "Save Document" script events and File › Generate › Image Assets.
                 if hooks
@@ -2078,6 +2092,10 @@ impl PhotocraftApp {
         self.ui.status_error = false;
         let what = crate::i18n::fmt(tl!("Saved {name}"), &[("name", file_open::display_name(path).as_str())]);
         notices::io_warnings(self, &what, warnings);
+        if let Some(e) = png_error {
+            self.ui.status = e;
+            self.ui.status_error = true;
+        }
         self.sync_views();
     }
 
@@ -2318,6 +2336,7 @@ impl eframe::App for PhotocraftApp {
         discard_ui::guard_window_close(self, ctx);
         // Background jobs: apply finished ones, keep frames coming, Esc cancels (before the
         // shortcuts see Esc).
+        screenshot::tick(self, ctx);
         if !screen_picker::tick(self, ctx) {
             jobs_ui::tick(self, ctx);
             #[cfg(not(target_arch = "wasm32"))]

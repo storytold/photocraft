@@ -264,3 +264,8 @@ sync_github_name = false
 
 [people.drunkeninja42]
 real_name = "Kushagra Sharma"
+
+[people.drajaygarg-spec]
+real_name = "Ajay Garg"
+display_name = "Ajay Garg"
+sync_github_name = false

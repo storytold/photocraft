@@ -4537,3 +4537,44 @@ shape	Appearance	Aspetto
 	Grayscale Ramp	Barra scala di grigio
 	Current Colors	Colori correnti
 	Make Ramp Web Safe	Limita la barra ai colori web
+	Arrow color	Colore della freccia
+	Arrowheads	Punte di freccia
+	Concavity	Concavità
+	Direction:	Direzione:
+	Drag left or right across the part to remove; the sides join	Trascina a sinistra o a destra sulla parte da rimuovere; i lati si uniscono
+	Drag to draw · Drag the blue dot to bend · ⇧ 45°	Trascina per disegnare · Trascina il punto blu per curvare · ⇧ 45°
+	Drag up or down across the part to remove; the sides join	Trascina in alto o in basso sulla parte da rimuovere; i lati si uniscono
+	Edge color	Colore del bordo
+	Edge:	Bordo:
+	Head length	Lunghezza della punta
+	Head width	Larghezza della punta
+	Heads:	Punte:
+	Line:	Linea:
+	Quick styles:	Stili rapidi:
+	Export for Publication	Esporta per pubblicazione
+	Export for Publication…	Esporta per pubblicazione…
+	Drag across the part to remove: sideways cuts a vertical band, up or down a horizontal one	Trascina sulla parte da rimuovere: di lato taglia una fascia verticale, in alto o in basso una orizzontale
+	Outline	Contorno
+	Curved	Curva
+	Marker:	Indicatore:
+	Marker color	Colore dell'indicatore
+	Click to place a marker	Fai clic per inserire un indicatore
+	Make Figure	Crea figura
+	Make Figure…	Crea figura…
+	Prepare Collage for Publication	Prepara collage per pubblicazione
+	Prepare Collage for Publication…	Prepara collage per pubblicazione…
+	Snap to panels	Aggancia ai pannelli
+	Figure ready. Next: add arrows (Arrow tool) or markers, then File › Export › Export for Publication…	Figura pronta. Ora: aggiungi frecce (strumento Freccia) o indicatori, poi File › Esporta › Esporta per pubblicazione…
+	New Screenshot	Nuova istantanea dello schermo
+	Screenshot Library…	Libreria istantanee…
+	Screenshot Library	Libreria istantanee
+	Show in Finder	Mostra nel Finder
+	Change Folder…	Cambia cartella…
+	No screenshots yet. Use New Screenshot to take one.	Nessuna istantanea. Usa Nuova istantanea dello schermo.
+	Open for editing	Apri per modificare
+	Screenshots are available on macOS for now	Le istantanee sono per ora disponibili su macOS
+	A screenshot is already being taken	È già in corso un'istantanea
+	The screen capture failed. Allow {app} in System Settings › Privacy & Security › Screen Recording	Acquisizione non riuscita. Consenti {app} in Impostazioni di Sistema › Privacy e sicurezza › Registrazione schermo
+	Screenshot {name} saved to the library	Istantanea {name} salvata nella libreria
+	Saved, but the library PNG could not be updated: {error}	Salvato, ma il PNG della libreria non è stato aggiornato: {error}
+	Could not open the screenshot	Impossibile aprire l'istantanea

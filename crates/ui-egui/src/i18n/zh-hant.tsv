@@ -3045,3 +3045,44 @@ curves	Smooth	平滑
 	Grayscale Ramp	灰階色帶
 	Current Colors	目前色彩
 	Make Ramp Web Safe	讓色帶成為網頁安全色
+	Arrow color	箭頭顏色
+	Arrowheads	箭頭
+	Concavity	凹度
+	Direction:	方向:
+	Drag left or right across the part to remove; the sides join	左右拖過要刪除的部分，兩側會拼接在一起
+	Drag to draw · Drag the blue dot to bend · ⇧ 45°	拖曳繪製 · 拖曳藍點使其彎曲 · ⇧ 45°
+	Drag up or down across the part to remove; the sides join	上下拖過要刪除的部分，兩側會拼接在一起
+	Edge color	邊緣顏色
+	Edge:	邊緣:
+	Head length	箭頭長度
+	Head width	箭頭寬度
+	Heads:	箭頭:
+	Line:	線條:
+	Quick styles:	快速樣式:
+	Export for Publication	匯出用於出版
+	Export for Publication…	匯出用於出版…
+	Drag across the part to remove: sideways cuts a vertical band, up or down a horizontal one	拖過要刪除的部分：左右拖曳刪除直條，上下拖曳刪除橫條
+	Outline	輪廓
+	Curved	彎曲
+	Marker:	標記:
+	Marker color	標記顏色
+	Click to place a marker	按一下放置標記
+	Make Figure	製作圖片
+	Make Figure…	製作圖片…
+	Prepare Collage for Publication	準備拼圖用於出版
+	Prepare Collage for Publication…	準備拼圖用於出版…
+	Snap to panels	對齊到面板
+	Figure ready. Next: add arrows (Arrow tool) or markers, then File › Export › Export for Publication…	圖片已就緒。下一步：加入箭頭（箭頭工具）或標記，然後選擇 檔案 › 匯出 › 匯出用於出版…
+	New Screenshot	新增截圖
+	Screenshot Library…	截圖資料庫…
+	Screenshot Library	截圖資料庫
+	Show in Finder	在 Finder 中顯示
+	Change Folder…	更改檔案夾…
+	No screenshots yet. Use New Screenshot to take one.	尚無截圖。使用「新增截圖」來擷取。
+	Open for editing	開啟以編輯
+	Screenshots are available on macOS for now	截圖目前僅適用於 macOS
+	A screenshot is already being taken	正在擷取截圖
+	The screen capture failed. Allow {app} in System Settings › Privacy & Security › Screen Recording	螢幕擷取失敗。請在 系統設定 › 隱私權與安全性 › 螢幕錄製 中允許 {app}
+	Screenshot {name} saved to the library	截圖 {name} 已儲存到資料庫
+	Saved, but the library PNG could not be updated: {error}	已儲存，但無法更新資料庫中的 PNG：{error}
+	Could not open the screenshot	無法開啟截圖

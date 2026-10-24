@@ -19,8 +19,8 @@
 use photocraft_algo::selection::{self as sel, SelectionMode};
 use photocraft_color::{BlendMode, Color};
 use photocraft_doc::{
-    ClippingPath, Document, Fill, FillRule, GradientStyle, Knot, Layer, LayerContent, LayerId, LineCap, LineJoin, LiveShape, NamedPath, Path, PathOp,
-    ShapeLayer, ShapeStroke, StrokeAlign, Subpath, VectorMask,
+    Arrowhead, ClippingPath, Document, Fill, FillRule, GradientStyle, Knot, Layer, LayerContent, LayerId, LineCap, LineJoin, LiveShape, NamedPath, Path,
+    PathOp, ShapeLayer, ShapeStroke, StrokeAlign, Subpath, VectorMask,
 };
 use photocraft_geom::{Affine, Point, Rect};
 use photocraft_vector as vector;
@@ -302,7 +302,36 @@ fn stroke_json(s: &ShapeStroke) -> Value {
         "width": s.width, "fill": fill_json(&s.paint), "opacity": s.opacity * 100.0,
         "align": format!("{:?}", s.align).to_ascii_lowercase(), "cap": format!("{:?}", s.cap).to_ascii_lowercase(),
         "join": format!("{:?}", s.join).to_ascii_lowercase(), "miterLimit": s.miter_limit, "dashes": s.dashes, "dashOffset": s.dash_offset,
+        "arrowStart": s.arrow_start.as_ref().map(arrow_json), "arrowEnd": s.arrow_end.as_ref().map(arrow_json),
     })
+}
+
+fn arrow_json(h: &Arrowhead) -> Value {
+    json!({"width": h.width, "length": h.length, "concavity": h.concavity * 100.0})
+}
+
+/// An arrowhead from `null`/`false` (none), `true` (default head) or
+/// `{"width":widths,"length":widths,"concavity":-50..50}` merged onto `base`.
+fn parse_arrow(v: &Value, base: Option<Arrowhead>) -> std::result::Result<Option<Arrowhead>, String> {
+    match v {
+        Value::Null | Value::Bool(false) => return Ok(None),
+        Value::Bool(true) => return Ok(Some(base.unwrap_or_default())),
+        Value::Object(_) => {}
+        _ => return Err("an arrowhead must be an object, true or null".into()),
+    }
+    let mut h = base.unwrap_or_default();
+    for key in ["width", "length", "concavity"] {
+        if let Some(n) = v.get(key) {
+            let n = n.as_f64().filter(|n| n.is_finite()).ok_or_else(|| format!("arrowhead `{key}` must be a finite number"))?;
+            match key {
+                "width" => h.width = n as f32,
+                "length" => h.length = n as f32,
+                _ => h.concavity = (n / 100.0) as f32,
+            }
+        }
+    }
+    h.validate()?;
+    Ok(Some(h))
 }
 
 /// Applies stroke keys onto `base` (`null` → no stroke).
@@ -379,6 +408,12 @@ pub fn parse_stroke(v: &Value, base: Option<ShapeStroke>, fg: Color) -> std::res
     }
     if let Some(o) = f64p(v, "dashOffset") {
         s.dash_offset = o as f32;
+    }
+    if let Some(a) = v.get("arrowStart") {
+        s.arrow_start = parse_arrow(a, s.arrow_start)?;
+    }
+    if let Some(a) = v.get("arrowEnd") {
+        s.arrow_end = parse_arrow(a, s.arrow_end)?;
     }
     s.validate()?;
     Ok(Some(s))
@@ -1755,7 +1790,7 @@ pub(crate) fn leak(s: String) -> &'static str {
 }
 
 pub fn specs() -> Vec<CommandSpec> {
-    let stroke = r##""stroke":{"width":px,"color":"#rrggbb"|fill,"opacity":0..100,"align":"inside|center|outside","cap":"butt|round|square","join":"miter|round|bevel","miterLimit":n,"dashes":[multiples of width],"dashOffset":n}|null"##;
+    let stroke = r##""stroke":{"width":px,"color":"#rrggbb"|fill,"opacity":0..100,"align":"inside|center|outside","cap":"butt|round|square","join":"miter|round|bevel","miterLimit":n,"dashes":[multiples of width],"dashOffset":n,"arrowStart"|"arrowEnd":{"width":widths=4,"length":widths=4,"concavity":-50..50=0}|true|null (heads on open subpaths)}|null"##;
     let fill = r##""fill":"#rrggbb"|[r,g,b,a]|{"gradient":{"stops":[[t,"#hex"]],"angle":deg,"scale":%,"style":"linear|radial|angle|reflected|diamond","reverse":bool}}|{"pattern":name}|null (no fill)"##;
     vec![
         spec!(

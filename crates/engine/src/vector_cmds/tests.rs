@@ -8,6 +8,10 @@ fn stroke_validation_rejects_hostile_values_without_editing_history() {
     let id = s.execute("shape.create", json!({"rect": [20, 20, 50, 30], "stroke": {"width": 4}})).unwrap()["layer"].as_u64().unwrap();
     let before = s.active().unwrap().doc.clone();
     let history = s.active().unwrap().history.past_len();
+    // A valid width with an invalid head: nothing of it is applied.
+    assert!(s.execute("shape.edit", json!({"layer": id, "stroke": {"width": 8, "arrowEnd": 3}})).is_err());
+    assert_eq!(s.active().unwrap().doc, before);
+    assert_eq!(s.active().unwrap().history.past_len(), history);
     let invalid = [
         json!(true),
         json!([]),
@@ -27,6 +31,12 @@ fn stroke_validation_rejects_hostile_values_without_editing_history() {
         json!({"dashOffset": 1e100}),
         json!({"width": "4"}),
         json!({"width": 0.00001, "dashes": [0.01, 0.01]}),
+        json!({"arrowEnd": 3}),
+        json!({"arrowEnd": "yes"}),
+        json!({"arrowEnd": {"width": 0}}),
+        json!({"arrowEnd": {"length": 1e9}}),
+        json!({"arrowStart": {"concavity": 90}}),
+        json!({"arrowStart": {"width": "4"}}),
     ];
     for stroke in invalid {
         assert!(s.execute("shape.edit", json!({"layer": id, "stroke": stroke})).is_err(), "{stroke}");
@@ -1137,6 +1147,53 @@ fn combine_shapes_fails_gracefully() {
     let before = doc(&s).clone();
     assert!(s.execute("layer.combineShapes.unite", json!({})).is_err());
     assert_eq!(*doc(&s), before);
+}
+
+#[test]
+fn arrowheads_render_on_open_paths_at_every_depth_and_undo() {
+    for depth in [8, 16, 32] {
+        let mut s = session(120, 60, depth);
+        let path = json!({"subpaths": [{"closed": false, "knots": [[10, 30], [100, 30]]}]});
+        let stroke = json!({"width": 4, "color": "#ff0000", "arrowEnd": {"width": 5, "length": 5}});
+        let info = s.execute("shape.create", json!({"kind": "path", "path": path, "fill": null, "stroke": stroke})).unwrap();
+        let id = LayerId(info["layer"].as_u64().unwrap());
+        assert_eq!(info["stroke"]["arrowEnd"]["width"], json!(5.0), "{info}");
+        assert_eq!(info["stroke"]["arrowStart"], Value::Null);
+        let alpha = |s: &Session, x: i32, y: i32| match &s.active().unwrap().doc.layer(id).unwrap().content {
+            LayerContent::Shape(sh) => sh.cache.as_ref().map_or(0.0, |c| c.pixel(x, y).last().copied().unwrap_or(0.0)),
+            _ => 0.0,
+        };
+        // The head is 20 px wide and long: 6 px off the line is inside it 15 px before the tip.
+        assert!(alpha(&s, 85, 36) > 0.5, "head at depth {depth}");
+        assert!(alpha(&s, 40, 36) < 0.01, "plain shaft at depth {depth}");
+        assert!(alpha(&s, 40, 30) > 0.5, "shaft at depth {depth}");
+        assert!(alpha(&s, 104, 30) < 0.01, "nothing past the tip at depth {depth}");
+        // Turning the head off is one step that undo restores.
+        s.execute("shape.edit", json!({"layer": id.0, "stroke": {"arrowEnd": null}})).unwrap();
+        assert!(alpha(&s, 85, 36) < 0.01);
+        s.execute("edit.undo", json!({})).unwrap();
+        assert!(alpha(&s, 85, 36) > 0.5);
+    }
+}
+
+#[test]
+fn arrowheads_merge_onto_the_current_head_and_ignore_closed_paths() {
+    let mut s = session(80, 80, 8);
+    let id = s.execute("shape.create", json!({"rect": [10, 10, 40, 40], "fill": null, "stroke": {"width": 3, "arrowEnd": true}})).unwrap()["layer"]
+        .as_u64()
+        .unwrap();
+    let info = s.execute("shape.edit", json!({"layer": id, "stroke": {"arrowEnd": {"concavity": 25}}})).unwrap();
+    assert_eq!(info["stroke"]["arrowEnd"], json!({"width": 4.0, "length": 4.0, "concavity": 25.0}));
+    // A closed rectangle has no open ends: its pixels match the same stroke without heads.
+    let pixels = |s: &Session| match &s.active().unwrap().doc.layer(LayerId(id)).unwrap().content {
+        LayerContent::Shape(sh) => {
+            (0..80).flat_map(|y| (0..80).map(move |x| (x, y))).map(|(x, y)| sh.cache.as_ref().map(|c| c.pixel(x, y))).collect::<Vec<_>>()
+        }
+        _ => Vec::new(),
+    };
+    let with = pixels(&s);
+    s.execute("shape.edit", json!({"layer": id, "stroke": {"arrowEnd": null}})).unwrap();
+    assert_eq!(with, pixels(&s));
 }
 
 #[test]

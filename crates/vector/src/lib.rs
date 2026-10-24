@@ -4,6 +4,7 @@
 //! shape layers (fill + stroke), vector masks, and the inverse direction (tracing a coverage
 //! mask back into a path for "Make Work Path").
 //!
+//! * [`arrow`]: arrowheads at the open ends of a shape stroke.
 //! * [`edit`]: point-level path editing (Direct Selection, Convert Point) and hit testing.
 //! * [`feather`]: the Gaussian blur of a feathered mask (vector masks, pixel masks, soft shapes).
 //! * [`flatten`]: cubic Bézier flattening with a distance tolerance.
@@ -20,6 +21,7 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod arrow;
 pub mod edit;
 pub mod feather;
 pub mod flatten;
@@ -59,6 +61,20 @@ pub fn stroke_rasterizer(path: &Path, style: &StrokeStyle, tol: f64) -> Rasteriz
     // Stroke outlines tolerate a coarser flattening than fills (the offset hides chord error).
     let lines = flatten_path(path, (tol * 4.0).min(style.width.max(0.01) * 0.1).max(1e-3));
     let polys = stroke_polygons(&lines, style, tol);
+    let mut r = Rasterizer::new(false);
+    r.add_component(&polys, PathOp::Combine, FillRule::NonZero);
+    r
+}
+
+/// Compiles the stroke outline of `path` with the arrowheads of `s` on its open subpaths.
+pub fn stroke_rasterizer_with_arrows(path: &Path, style: &StrokeStyle, s: &ShapeStroke, tol: f64) -> Rasterizer {
+    if s.arrow_start.is_none() && s.arrow_end.is_none() {
+        return stroke_rasterizer(path, style, tol);
+    }
+    let mut lines = flatten_path(path, (tol * 4.0).min(style.width.max(0.01) * 0.1).max(1e-3));
+    let heads = arrow::arrowheads(&mut lines, s.arrow_start.as_ref(), s.arrow_end.as_ref(), style.width);
+    let mut polys = stroke_polygons(&lines, style, tol);
+    polys.extend(heads);
     let mut r = Rasterizer::new(false);
     r.add_component(&polys, PathOp::Combine, FillRule::NonZero);
     r
@@ -587,7 +603,7 @@ impl CompiledShape {
                 st.width *= 2.0;
                 align = Some((area.clone(), s.align == StrokeAlign::Inside));
             }
-            let r = stroke_rasterizer(&shape.path, &st, tol);
+            let r = stroke_rasterizer_with_arrows(&shape.path, &st, s, tol);
             let sb = r.pixel_bounds();
             bounds = match (bounds, sb) {
                 (Some(a), Some(b)) => Some(a.union(&b)),

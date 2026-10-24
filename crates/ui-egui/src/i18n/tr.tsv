@@ -4149,3 +4149,44 @@ cameraData	Lens	Lens
 	Grayscale Ramp	Gri Tonlama Şeridi
 	Current Colors	Geçerli Renkler
 	Make Ramp Web Safe	Şeridi Web Renkleriyle Sınırla
+	Arrow color	Ok rengi
+	Arrowheads	Ok uçları
+	Concavity	İçbükeylik
+	Direction:	Yön:
+	Drag left or right across the part to remove; the sides join	Kaldırılacak kısım boyunca sola veya sağa sürükleyin; kenarlar birleşir
+	Drag to draw · Drag the blue dot to bend · ⇧ 45°	Çizmek için sürükleyin · Bükmek için mavi noktayı sürükleyin · ⇧ 45°
+	Drag up or down across the part to remove; the sides join	Kaldırılacak kısım boyunca yukarı veya aşağı sürükleyin; kenarlar birleşir
+	Edge color	Kenar rengi
+	Edge:	Kenar:
+	Head length	Uç uzunluğu
+	Head width	Uç genişliği
+	Heads:	Uçlar:
+	Line:	Çizgi:
+	Quick styles:	Hızlı stiller:
+	Export for Publication	Yayın için dışa aktar
+	Export for Publication…	Yayın için dışa aktar…
+	Drag across the part to remove: sideways cuts a vertical band, up or down a horizontal one	Kaldırılacak kısım boyunca sürükleyin: yana dikey, yukarı veya aşağı yatay bir şerit keser
+	Outline	Dış çizgi
+	Curved	Eğri
+	Marker:	İşaret:
+	Marker color	İşaret rengi
+	Click to place a marker	İşaret koymak için tıklayın
+	Make Figure	Şekil oluştur
+	Make Figure…	Şekil oluştur…
+	Prepare Collage for Publication	Kolajı yayına hazırla
+	Prepare Collage for Publication…	Kolajı yayına hazırla…
+	Snap to panels	Panellere yasla
+	Figure ready. Next: add arrows (Arrow tool) or markers, then File › Export › Export for Publication…	Şekil hazır. Sonraki: ok (Ok aracı) veya işaret ekleyin, ardından Dosya › Dışa Aktar › Yayın için dışa aktar…
+	New Screenshot	Yeni ekran görüntüsü
+	Screenshot Library…	Ekran görüntüsü kitaplığı…
+	Screenshot Library	Ekran görüntüsü kitaplığı
+	Show in Finder	Finder'da göster
+	Change Folder…	Klasörü değiştir…
+	No screenshots yet. Use New Screenshot to take one.	Henüz ekran görüntüsü yok. Yeni ekran görüntüsü ile alın.
+	Open for editing	Düzenlemek için aç
+	Screenshots are available on macOS for now	Ekran görüntüleri şimdilik macOS'ta kullanılabilir
+	A screenshot is already being taken	Zaten bir ekran görüntüsü alınıyor
+	The screen capture failed. Allow {app} in System Settings › Privacy & Security › Screen Recording	Ekran yakalama başarısız oldu. Sistem Ayarları › Gizlilik ve Güvenlik › Ekran Kaydı'nda {app}'e izin verin
+	Screenshot {name} saved to the library	{name} ekran görüntüsü kitaplığa kaydedildi
+	Saved, but the library PNG could not be updated: {error}	Kaydedildi, ancak kitaplıktaki PNG güncellenemedi: {error}
+	Could not open the screenshot	Ekran görüntüsü açılamadı

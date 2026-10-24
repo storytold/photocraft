@@ -210,6 +210,9 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
         Tool::Pen => reset!(vector_mode, pen_auto_add_delete),
         Tool::CurvaturePen => reset!(vector_mode),
         Tool::FreeformPen => reset!(vector_mode, curve_fit),
+        Tool::Arrow => reset!(arrow),
+        Tool::CutOut => reset!(cut_out),
+        Tool::Marker => reset!(marker),
         Tool::Rectangle | Tool::EllipseShape | Tool::Triangle | Tool::Polygon | Tool::Line | Tool::CustomShape => {
             reset!(vector_mode, shape_fill, stroke_width, shape_stroke, corner_radius, polygon_sides, line_weight)
         }

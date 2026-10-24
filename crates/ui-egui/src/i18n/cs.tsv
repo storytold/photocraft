@@ -4166,3 +4166,44 @@ cameraRaw	Dehaze	Odstranění oparu
 	Grayscale Ramp	Přechod stupňů šedi
 	Current Colors	Aktuální barvy
 	Make Ramp Web Safe	Omezit pruh na webové barvy
+	Arrow color	Barva šipky
+	Arrowheads	Hroty šipky
+	Concavity	Prohnutí
+	Direction:	Směr:
+	Drag left or right across the part to remove; the sides join	Táhněte doleva nebo doprava přes část, kterou chcete odstranit; strany se spojí
+	Drag to draw · Drag the blue dot to bend · ⇧ 45°	Tažením kreslete · Tažením modrého bodu ohnete · ⇧ 45°
+	Drag up or down across the part to remove; the sides join	Táhněte nahoru nebo dolů přes část, kterou chcete odstranit; strany se spojí
+	Edge color	Barva okraje
+	Edge:	Okraj:
+	Head length	Délka hrotu
+	Head width	Šířka hrotu
+	Heads:	Hroty:
+	Line:	Čára:
+	Quick styles:	Rychlé styly:
+	Export for Publication	Exportovat pro publikaci
+	Export for Publication…	Exportovat pro publikaci…
+	Drag across the part to remove: sideways cuts a vertical band, up or down a horizontal one	Táhněte přes část k odstranění: do strany vyřízne svislý pás, nahoru či dolů vodorovný
+	Outline	Obrys
+	Curved	Zakřivená
+	Marker:	Značka:
+	Marker color	Barva značky
+	Click to place a marker	Kliknutím umístíte značku
+	Make Figure	Vytvořit obrázek
+	Make Figure…	Vytvořit obrázek…
+	Prepare Collage for Publication	Připravit koláž k publikaci
+	Prepare Collage for Publication…	Připravit koláž k publikaci…
+	Snap to panels	Přichytit k panelům
+	Figure ready. Next: add arrows (Arrow tool) or markers, then File › Export › Export for Publication…	Obrázek je hotov. Dále: přidejte šipky (nástroj Šipka) nebo značky, pak Soubor › Export › Exportovat pro publikaci…
+	New Screenshot	Nový snímek obrazovky
+	Screenshot Library…	Knihovna snímků…
+	Screenshot Library	Knihovna snímků
+	Show in Finder	Zobrazit ve Finderu
+	Change Folder…	Změnit složku…
+	No screenshots yet. Use New Screenshot to take one.	Zatím žádné snímky. Pořiďte je příkazem Nový snímek obrazovky.
+	Open for editing	Otevřít k úpravám
+	Screenshots are available on macOS for now	Snímky obrazovky jsou zatím dostupné jen v macOS
+	A screenshot is already being taken	Snímek obrazovky se již pořizuje
+	The screen capture failed. Allow {app} in System Settings › Privacy & Security › Screen Recording	Snímání obrazovky selhalo. Povolte {app} v Nastavení systému › Soukromí a zabezpečení › Nahrávání obrazovky
+	Screenshot {name} saved to the library	Snímek {name} uložen do knihovny
+	Saved, but the library PNG could not be updated: {error}	Uloženo, ale PNG v knihovně se nepodařilo aktualizovat: {error}
+	Could not open the screenshot	Snímek nelze otevřít

@@ -4130,3 +4130,44 @@ curves	Smooth	Згладити
 	Grayscale Ramp	Шкала градацій сірого
 	Current Colors	Поточні кольори
 	Make Ramp Web Safe	Зробити шкалу безпечною для вебу
+	Arrow color	Колір стрілки
+	Arrowheads	Наконечники
+	Concavity	Увігнутість
+	Direction:	Напрямок:
+	Drag left or right across the part to remove; the sides join	Проведіть ліворуч або праворуч по частині, яку треба видалити; краї з'єднаються
+	Drag to draw · Drag the blue dot to bend · ⇧ 45°	Перетягніть, щоб намалювати · Тягніть синю точку, щоб вигнути · ⇧ 45°
+	Drag up or down across the part to remove; the sides join	Проведіть угору або вниз по частині, яку треба видалити; краї з'єднаються
+	Edge color	Колір краю
+	Edge:	Край:
+	Head length	Довжина наконечника
+	Head width	Ширина наконечника
+	Heads:	Наконечники:
+	Line:	Лінія:
+	Quick styles:	Швидкі стилі:
+	Export for Publication	Експорт для публікації
+	Export for Publication…	Експорт для публікації…
+	Drag across the part to remove: sideways cuts a vertical band, up or down a horizontal one	Проведіть по частині, яку треба видалити: ліворуч-праворуч — вертикальна смуга, угору-вниз — горизонтальна
+	Outline	Обведення
+	Curved	Вигнута
+	Marker:	Маркер:
+	Marker color	Колір маркера
+	Click to place a marker	Клацніть, щоб поставити маркер
+	Make Figure	Створити рисунок
+	Make Figure…	Створити рисунок…
+	Prepare Collage for Publication	Підготувати колаж до публікації
+	Prepare Collage for Publication…	Підготувати колаж до публікації…
+	Snap to panels	Прив'язка до панелей
+	Figure ready. Next: add arrows (Arrow tool) or markers, then File › Export › Export for Publication…	Рисунок готовий. Далі: додайте стрілки (інструмент «Стрілка») або маркери, потім Файл › Експорт › Експорт для публікації…
+	New Screenshot	Новий знімок екрана
+	Screenshot Library…	Бібліотека знімків…
+	Screenshot Library	Бібліотека знімків
+	Show in Finder	Показати у Finder
+	Change Folder…	Змінити теку…
+	No screenshots yet. Use New Screenshot to take one.	Знімків ще немає. Скористайтеся «Новий знімок екрана».
+	Open for editing	Відкрити для редагування
+	Screenshots are available on macOS for now	Знімки екрана поки доступні лише в macOS
+	A screenshot is already being taken	Знімок екрана вже робиться
+	The screen capture failed. Allow {app} in System Settings › Privacy & Security › Screen Recording	Не вдалося зняти екран. Дозвольте {app} у Системних параметрах › Приватність і безпека › Запис екрана
+	Screenshot {name} saved to the library	Знімок {name} збережено до бібліотеки
+	Saved, but the library PNG could not be updated: {error}	Збережено, але PNG у бібліотеці не оновлено: {error}
+	Could not open the screenshot	Не вдалося відкрити знімок

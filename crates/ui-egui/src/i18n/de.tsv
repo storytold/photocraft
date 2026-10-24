@@ -3433,3 +3433,44 @@ curves	Smooth	Glätten
 	Grayscale Ramp	Graustufenbalken
 	Current Colors	Aktuelle Farben
 	Make Ramp Web Safe	Farbbalken auf Webfarben beschränken
+	Arrow color	Pfeilfarbe
+	Arrowheads	Pfeilspitzen
+	Concavity	Wölbung
+	Direction:	Richtung:
+	Drag left or right across the part to remove; the sides join	Nach links oder rechts über den zu entfernenden Teil ziehen; die Seiten werden verbunden
+	Drag to draw · Drag the blue dot to bend · ⇧ 45°	Ziehen zum Zeichnen · Blauen Punkt ziehen zum Biegen · ⇧ 45°
+	Drag up or down across the part to remove; the sides join	Nach oben oder unten über den zu entfernenden Teil ziehen; die Seiten werden verbunden
+	Edge color	Kantenfarbe
+	Edge:	Kante:
+	Head length	Spitzenlänge
+	Head width	Spitzenbreite
+	Heads:	Spitzen:
+	Line:	Linie:
+	Quick styles:	Schnellstile:
+	Export for Publication	Für Publikation exportieren
+	Export for Publication…	Für Publikation exportieren…
+	Drag across the part to remove: sideways cuts a vertical band, up or down a horizontal one	Über den zu entfernenden Teil ziehen: seitlich schneidet einen senkrechten Streifen, nach oben oder unten einen waagerechten
+	Outline	Kontur
+	Curved	Gebogen
+	Marker:	Markierung:
+	Marker color	Markierungsfarbe
+	Click to place a marker	Klicken, um eine Markierung zu setzen
+	Make Figure	Abbildung erstellen
+	Make Figure…	Abbildung erstellen…
+	Prepare Collage for Publication	Collage für Publikation vorbereiten
+	Prepare Collage for Publication…	Collage für Publikation vorbereiten…
+	Snap to panels	An Feldern ausrichten
+	Figure ready. Next: add arrows (Arrow tool) or markers, then File › Export › Export for Publication…	Abbildung fertig. Weiter: Pfeile (Pfeilwerkzeug) oder Markierungen hinzufügen, dann Datei › Exportieren › Für Publikation exportieren…
+	New Screenshot	Neues Bildschirmfoto
+	Screenshot Library…	Bildschirmfoto-Bibliothek…
+	Screenshot Library	Bildschirmfoto-Bibliothek
+	Show in Finder	Im Finder zeigen
+	Change Folder…	Ordner ändern…
+	No screenshots yet. Use New Screenshot to take one.	Noch keine Bildschirmfotos. Nehmen Sie eines mit „Neues Bildschirmfoto“ auf.
+	Open for editing	Zum Bearbeiten öffnen
+	Screenshots are available on macOS for now	Bildschirmfotos gibt es vorerst nur unter macOS
+	A screenshot is already being taken	Es wird bereits ein Bildschirmfoto aufgenommen
+	The screen capture failed. Allow {app} in System Settings › Privacy & Security › Screen Recording	Die Bildschirmaufnahme ist fehlgeschlagen. Erlauben Sie {app} unter Systemeinstellungen › Datenschutz & Sicherheit › Bildschirmaufnahme
+	Screenshot {name} saved to the library	Bildschirmfoto {name} in der Bibliothek gespeichert
+	Saved, but the library PNG could not be updated: {error}	Gespeichert, aber das Bibliotheks-PNG konnte nicht aktualisiert werden: {error}
+	Could not open the screenshot	Das Bildschirmfoto konnte nicht geöffnet werden

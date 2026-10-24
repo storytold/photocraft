@@ -4180,3 +4180,44 @@ curves	Smooth	Vloeiend maken
 	Grayscale Ramp	Grijswaardenbalk
 	Current Colors	Huidige kleuren
 	Make Ramp Web Safe	Balk beperken tot webkleuren
+	Arrow color	Pijlkleur
+	Arrowheads	Pijlpunten
+	Concavity	Holheid
+	Direction:	Richting:
+	Drag left or right across the part to remove; the sides join	Sleep naar links of rechts over het deel dat weg moet; de zijden sluiten aan
+	Drag to draw · Drag the blue dot to bend · ⇧ 45°	Sleep om te tekenen · Sleep de blauwe stip om te buigen · ⇧ 45°
+	Drag up or down across the part to remove; the sides join	Sleep omhoog of omlaag over het deel dat weg moet; de zijden sluiten aan
+	Edge color	Randkleur
+	Edge:	Rand:
+	Head length	Puntlengte
+	Head width	Puntbreedte
+	Heads:	Punten:
+	Line:	Lijn:
+	Quick styles:	Snelle stijlen:
+	Export for Publication	Exporteren voor publicatie
+	Export for Publication…	Exporteren voor publicatie…
+	Drag across the part to remove: sideways cuts a vertical band, up or down a horizontal one	Sleep over het deel dat weg moet: zijwaarts knipt een verticale strook, omhoog of omlaag een horizontale
+	Outline	Omtrek
+	Curved	Gebogen
+	Marker:	Markering:
+	Marker color	Markeringskleur
+	Click to place a marker	Klik om een markering te plaatsen
+	Make Figure	Figuur maken
+	Make Figure…	Figuur maken…
+	Prepare Collage for Publication	Collage voorbereiden voor publicatie
+	Prepare Collage for Publication…	Collage voorbereiden voor publicatie…
+	Snap to panels	Uitlijnen op panelen
+	Figure ready. Next: add arrows (Arrow tool) or markers, then File › Export › Export for Publication…	Figuur klaar. Volgende: voeg pijlen (Pijlgereedschap) of markeringen toe, dan Bestand › Exporteren › Exporteren voor publicatie…
+	New Screenshot	Nieuwe schermafbeelding
+	Screenshot Library…	Schermafbeeldingenbibliotheek…
+	Screenshot Library	Schermafbeeldingenbibliotheek
+	Show in Finder	Toon in Finder
+	Change Folder…	Map wijzigen…
+	No screenshots yet. Use New Screenshot to take one.	Nog geen schermafbeeldingen. Gebruik Nieuwe schermafbeelding.
+	Open for editing	Openen om te bewerken
+	Screenshots are available on macOS for now	Schermafbeeldingen zijn voorlopig alleen beschikbaar op macOS
+	A screenshot is already being taken	Er wordt al een schermafbeelding gemaakt
+	The screen capture failed. Allow {app} in System Settings › Privacy & Security › Screen Recording	Schermopname mislukt. Sta {app} toe in Systeeminstellingen › Privacy en beveiliging › Schermopname
+	Screenshot {name} saved to the library	Schermafbeelding {name} opgeslagen in de bibliotheek
+	Saved, but the library PNG could not be updated: {error}	Opgeslagen, maar de PNG in de bibliotheek kon niet worden bijgewerkt: {error}
+	Could not open the screenshot	Kan de schermafbeelding niet openen

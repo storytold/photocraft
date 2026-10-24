@@ -278,6 +278,8 @@ pub fn parse_vstk(data: &[u8], dpi: f32) -> Option<VstkInfo> {
         miter_limit: num(d.get("strokeStyleMiterLimit")).unwrap_or(100.0) as f32,
         dashes,
         dash_offset: num(d.get("strokeStyleLineDashOffset")).unwrap_or(0.0) as f32,
+        arrow_start: None,
+        arrow_end: None,
     };
     Some(VstkInfo { stroke: Some(stroke), fill_enabled })
 }
@@ -672,6 +674,8 @@ mod tests {
             miter_limit: 10.0,
             dashes: vec![2.0, 1.0],
             dash_offset: 0.5,
+            arrow_start: None,
+            arrow_end: None,
         };
         let b = vstk_bytes(Some(&s), false, 72.0);
         let v = parse_vstk(&b, 72.0).unwrap();
