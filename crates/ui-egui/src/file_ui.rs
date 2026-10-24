@@ -202,13 +202,17 @@ mod web_preview;
 
 const WEB_FORMATS: [(&str, &str); 5] = [("gif", "GIF"), ("png8", "PNG-8"), ("png24", "PNG-24"), ("jpeg", "JPEG"), ("wbmp", "WBMP")];
 const WEB_COMMAND: &str = "file.export.saveForWebLegacy";
+/// Save for Web's preview tabs: the `__view` field's values and their labels.
+const WEB_VIEWS: [(&str, &str); 4] = [("original", "Original"), ("optimized", "Optimized"), ("2up", "2-Up"), ("4up", "4-Up")];
 
 pub fn open_web(app: &mut PhotocraftApp) -> u64 {
     let mut f = Map::new();
     f.insert("__web".into(), json!(true));
     f.insert("__command".into(), json!(WEB_COMMAND));
     f.insert("__label".into(), json!("Save for Web (Legacy)"));
-    f.insert("__view".into(), json!("2up"));
+    // The preview tab chosen last time, 2-Up at first (#9174).
+    let view = app.ui.web_view.as_deref().filter(|v| WEB_VIEWS.iter().any(|(k, _)| k == v)).unwrap_or("2up");
+    f.insert("__view".into(), json!(view));
     // Remember encoding choices, but each document starts at its own full size. This session's
     // last export lives in `file_menu`; the last one before a restart comes from the
     // preferences' remembered dialog settings (`web_cmds::remember_web_settings`).
@@ -485,9 +489,11 @@ fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
     let Some(doc) = app.session.active().map(|d| d.doc.clone()) else { return };
     ui.horizontal(|ui| {
         let mut view = s(f, "__view", "2up");
-        for (k, l) in [("original", tl!("Original")), ("optimized", tl!("Optimized")), ("2up", "2-Up"), ("4up", "4-Up")] {
-            if ui.selectable_label(view == k, tl!(&l)).clicked() {
+        for (k, l) in WEB_VIEWS {
+            if ui.selectable_label(view == k, tl!(l)).clicked() {
                 view = k.into();
+                // The next Save for Web opens on this tab, as Photoshop's does.
+                app.ui.web_view = Some(view.clone());
             }
         }
         f.insert("__view".into(), json!(view));
@@ -2014,6 +2020,28 @@ mod web_playback_tests {
         PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
         h.run_steps(3);
         h
+    }
+
+    /// #9174: Save for Web reopens on the preview tab chosen last, as Photoshop's does; 2-Up at
+    /// first, and for a remembered value it doesn't know.
+    #[test]
+    fn save_for_web_reopens_on_the_last_preview_tab() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 40, "height": 30})).unwrap();
+        let id = open_web(&mut app);
+        let fields = app.ui.dialog_mut(id).unwrap().fields.clone();
+        assert_eq!(fields["__view"], "2up");
+        let mut h = harness(app, fields);
+        use egui_kittest::kittest::Queryable;
+        h.get_by_label("4-Up").click();
+        h.run_steps(2);
+        assert_eq!(h.state().1["__view"], "4up");
+        let (mut app, _) = h.into_state();
+        let id = open_web(&mut app);
+        assert_eq!(app.ui.dialog_mut(id).unwrap().fields["__view"], "4up");
+        app.ui.web_view = Some("6up".into());
+        let id = open_web(&mut app);
+        assert_eq!(app.ui.dialog_mut(id).unwrap().fields["__view"], "2up");
     }
 
     #[test]
