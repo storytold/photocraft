@@ -1,0 +1,9 @@
+services:
+  photocraft-web:
+    build:
+      context: .
+    image: photocraft-web:local
+    container_name: photocraft-web
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
