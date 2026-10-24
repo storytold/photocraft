@@ -15,7 +15,8 @@
 //! Layer references by name (`select` of layer "Shadow") become `{"layer": "Shadow"}`, which
 //! `commands::layer_param` resolves in whatever document the action plays on (#219). A switch
 //! to another open document (`select` of `Dcmn` by offset) becomes `document.activate
-//! {"offset"}`, the tab that many places from the active one (#7103).
+//! {"offset"}`, the document that many places from the active one in opening order, not dragged
+//! tab order (#7103).
 
 use photocraft_psd::atn::{self, AtnAction, AtnEvent, AtnFile, AtnItem};
 use photocraft_psd::descriptor::{Class, Descriptor, Id, ReferenceItem, UnicodeString, Value as D};
@@ -1759,7 +1760,7 @@ fn select_from(d: &Descriptor) -> Mapped {
             None => Mapped::Unsupported { harmless: false },
         },
         // Switching to another open document: its offset from the active one, -1 for the previous
-        // tab and 1 for the next (a template action copies from one and pastes into the other, #7103).
+        // opened document and 1 for the next, independently of dragged tabs (#7103).
         (Some("Dcmn"), Target::Offset(o)) => step("document.activate", json!({"offset": o})),
         _ => Mapped::Unsupported { harmless: false },
     }

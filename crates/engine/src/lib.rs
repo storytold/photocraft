@@ -469,6 +469,8 @@ pub const PRECHECKED: &[&str] = &["layer.new.layer", "layer.new.group", "layer.n
 #[derive(Default)]
 pub struct Session {
     docs: Vec<DocState>,
+    /// Admitted document identities in opening order, independent of visual-tab reordering.
+    open_document_order: Vec<photocraft_doc::DocId>,
     active: Option<usize>,
     pub tools: ToolState,
     /// Log of executed commands (for action recording and debugging).
@@ -626,6 +628,20 @@ impl Session {
         Some(to)
     }
 
+    /// Resolve a Photoshop action's offset in opening order, returning its current tab index.
+    /// Tab dragging changes `docs`, but must not change which document an imported action edits.
+    pub(crate) fn document_at_offset(&self, offset: i64) -> Result<usize> {
+        let id = self.active().ok_or(EngineError::NoDocument)?.doc.id;
+        let active = self.open_document_order.iter().position(|&open| open == id).ok_or(EngineError::NoDocument)?;
+        let len = self.open_document_order.len();
+        let target = i64::try_from(active).ok().and_then(|a| a.checked_add(offset)).and_then(|i| usize::try_from(i).ok());
+        let Some(id) = target.and_then(|i| self.open_document_order.get(i)) else {
+            let side = if offset < 0 { "before" } else { "after" };
+            return Err(EngineError::Other(format!("no document {} {side} the active one, which is {} of {len}", offset.unsigned_abs(), active + 1)));
+        };
+        self.docs.iter().position(|st| st.doc.id == *id).ok_or(EngineError::NoDocument)
+    }
+
     /// Add a document (from File → New, an import, etc.) and make it active.
     /// Preserve its identity unless another open document already owns it.
     /// Identity-dependent callers must read the admitted document at the returned index.
@@ -634,6 +650,7 @@ impl Session {
         while self.docs.iter().any(|st| st.doc.id == doc.id) {
             doc.id = photocraft_doc::DocId::fresh();
         }
+        self.open_document_order.push(doc.id);
         let mut st = DocState::new(doc, path);
         st.history.max_states = self.prefs.get().performance.history_states.max(1) as usize;
         st.history.max_bytes = self.prefs.get().performance.history_budget_bytes();
@@ -669,6 +686,7 @@ impl Session {
             self.object_finder.forget_doc(id);
         }
         let d = self.docs.remove(index);
+        self.open_document_order.retain(|&id| id != d.doc.id);
         self.active = if self.docs.is_empty() {
             None
         } else {

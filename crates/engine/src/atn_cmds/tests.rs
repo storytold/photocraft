@@ -1526,6 +1526,8 @@ fn select_document_by_offset_imports_plays_and_saves_back() {
     s.execute("file.new", json!({"width": 8, "height": 8, "name": "source"})).unwrap();
     s.execute("edit.fill", json!({"contents": "color", "color": "#ff0000"})).unwrap();
     s.execute("file.new", json!({"width": 8, "height": 8, "name": "template", "background": "transparent"})).unwrap();
+    // Reorder tabs before playback: the source remains the previous *opened* document.
+    s.execute("document.move", json!({"document": 1, "to": 0})).unwrap();
     let r = s.execute("actions.load", json!({"data": data})).unwrap();
     assert_eq!(r["unsupported"], json!([]), "{r}");
     let steps = &s.actions.list[0].steps;
@@ -1539,7 +1541,7 @@ fn select_document_by_offset_imports_plays_and_saves_back() {
     assert_eq!(s.active().unwrap().doc.name, "template");
     assert_eq!(s.active().unwrap().doc.layers.len(), 2, "the source's pixels are pasted on a new layer");
     assert_eq!(pixel(&mut s), [1.0, 0.0, 0.0, 1.0]);
-    assert_eq!(s.documents()[0].doc.layers.len(), 1, "the source is only copied from");
+    assert_eq!(s.documents()[1].doc.layers.len(), 1, "the source is only copied from");
 
     let first = s.actions.list.clone();
     let r = s.execute("actions.save", json!({"set": "Template"})).unwrap();
