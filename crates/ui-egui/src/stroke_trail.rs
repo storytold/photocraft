@@ -85,6 +85,15 @@ impl Trail {
     /// it (`photocraft_paint::retouch::stroke_coverage`): soft edges for a soft brush, the size and
     /// shape each dab takes from pen pressure and dynamics. `brush` is asked for once, on the first
     /// call. What finishing the stroke now would add (the press's lone first dab) shows too.
+    /// Stamp a whole new drag showing its dabs' coverage (the Remove tool's waiting strokes,
+    /// #6555): points count from the stroke's own start and the dab renderer is fresh, so one
+    /// waiting stroke's coverage never inherits the previous one's.
+    pub fn feed_dabs_stroke(&mut self, points: &[[f64; 3]], brush: impl FnOnce() -> BrushSettings) {
+        self.fed = 0;
+        self.dabs = None;
+        self.feed_dabs(points, brush);
+    }
+
     pub fn feed_dabs(&mut self, points: &[[f64; 3]], brush: impl FnOnce() -> BrushSettings) {
         if self.dabs.is_some() && self.fed >= points.len() {
             return;
@@ -229,6 +238,35 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn a_soft_brush_trail_reaches_as_far_as_its_dabs() {
+        // #8916: a hard capsule at the nominal radius under-showed a soft tip's reach. An 80 px
+        // brush at hardness 0 removes ~140 px wide; the tint must cover what the dabs cover.
+        let mut t = Trail::new([400, 200]);
+        let pts: Vec<[f64; 3]> = (0..80).map(|i| [60.0 + f64::from(i) * 3.0, 100.0, 1.0]).collect();
+        t.feed_dabs(&pts, || BrushSettings { size: 80.0, hardness: 0.0, pressure_size: false, ..BrushSettings::default() });
+        // On the path: fully covered.
+        assert!(t.coverage(180, 100) > 200, "on the path");
+        // Just past the nominal radius (40 px): the soft falloff still removes here, so the tint
+        // must show it. A hard-capsule trail would be 0 here.
+        assert!(t.coverage(180, 145) > 0, "inside the soft falloff past the nominal radius");
+        // Far outside even the soft reach (~1.73x radius): nothing.
+        assert_eq!(t.coverage(180, 185), 0, "past the soft reach");
+    }
+
+    #[test]
+    fn feed_dabs_stroke_restarts_for_each_waiting_stroke() {
+        // #6555 waiting strokes: each drag is stamped from its own start with a fresh dab renderer.
+        let mut t = Trail::new([400, 200]);
+        let a: Vec<[f64; 3]> = (0..20).map(|i| [40.0 + f64::from(i) * 4.0, 50.0, 1.0]).collect();
+        let b: Vec<[f64; 3]> = (0..20).map(|i| [40.0 + f64::from(i) * 4.0, 150.0, 1.0]).collect();
+        t.feed_dabs_stroke(&a, || BrushSettings { size: 30.0, ..BrushSettings::default() });
+        t.feed_dabs_stroke(&b, || BrushSettings { size: 30.0, ..BrushSettings::default() });
+        assert!(t.coverage(100, 50) > 0, "first stroke stays tinted");
+        assert!(t.coverage(100, 150) > 0, "second stroke is tinted from its own start");
+        assert_eq!(t.coverage(100, 100), 0, "no bridge between separate strokes");
     }
 
     #[test]

@@ -5600,11 +5600,15 @@ fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &View
             let size = [st.doc.size.width, st.doc.size.height];
             let doc_rect = xf.doc_rect(st.doc.bounds());
             let trail = app.trail.get_or_insert_with(|| crate::stroke_trail::Trail::new(size));
-            if t == Tool::SpotHealing {
-                // What the heal covers, dab by dab: soft edges, pressure and shape dynamics (#2364).
-                trail.feed_dabs(&d.points, || photocraft_engine::retouch_cmds::stroke_brush(&app.session.tools.brush, &json!({})));
-            } else {
+            if t == Tool::QuickSelection {
+                // Quick Selection commits on brush size alone, so its trail is the plain capsule.
                 trail.feed(&d.points, app.session.tools.brush.size);
+            } else {
+                // What the stroke covers, dab by dab: soft edges, pressure and shape dynamics
+                // (#2364). Every brush-like tool paints or removes with the brush's own dabs, so
+                // every trail must show their coverage — a hard capsule at the nominal radius
+                // under-showed a soft tip's reach (#8916).
+                trail.feed_dabs(&d.points, || photocraft_engine::retouch_cmds::stroke_brush(&app.session.tools.brush, &json!({})));
             }
             trail.draw(painter, doc_rect, xf.flip, col);
         }
@@ -9142,9 +9146,12 @@ mod tests {
         for y in 0..60 {
             for x in 0..120 {
                 let d = pts.iter().map(|p| (x as f64 + 0.5 - p[0]).hypot(y as f64 + 0.5 - p[1])).fold(f64::MAX, f64::min);
-                if d < 14.0 {
-                    assert_eq!(trail.coverage(x, y), 255, "({x}, {y}) inside the footprint");
-                } else if d > 16.0 {
+                // The trail is now the dabs' own coverage (the same surface the removal acts
+                // on, #8916), so its exact falloff is the brush engine's business. What this
+                // test guards is #189: the footprint never fans out past the brush.
+                if d < 8.0 {
+                    assert!(trail.coverage(x, y) > 0, "({x}, {y}) inside the footprint is tinted");
+                } else if d > 17.0 {
                     assert_eq!(trail.coverage(x, y), 0, "({x}, {y}) outside the footprint");
                 }
             }
