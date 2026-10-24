@@ -187,7 +187,7 @@ fn expand(packed: &str, keys: &[&str]) -> Result<String, String> {
 }
 
 /// The registry. English first: it is the fallback and the source language.
-pub static LANGUAGES: [LangInfo; 22] = [
+pub static LANGUAGES: [LangInfo; 23] = [
     LangInfo { code: "en", name: "English", source: b"", plural: plural_one_other, complete_menus: false, catalog: OnceLock::new() },
     LangInfo { code: "ja", name: "日本語", source: catalog!("ja"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
     LangInfo { code: "zh-hans", name: "简体中文", source: catalog!("zh-hans"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
@@ -222,6 +222,8 @@ pub static LANGUAGES: [LangInfo; 22] = [
     LangInfo { code: "vi", name: "Tiếng Việt", source: catalog!("vi"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
     // Hindi; `hi`, `hi-IN` locales resolve here.
     LangInfo { code: "hi", name: "हिन्दी", source: catalog!("hi"), plural: plural_one_other, complete_menus: false, catalog: OnceLock::new() },
+    // Finnish; `fi-FI` and `fi_FI` locales resolve here.
+    LangInfo { code: "fi", name: "Suomi", source: catalog!("fi"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
 ];
 
 impl LangInfo {
@@ -513,6 +515,17 @@ mod tests {
         assert!(pos("uk") < pos("ja"), "Cyrillic names come before CJK");
         assert_eq!(name_sort_key("Tiếng Việt"), "tieng viet");
         assert_eq!(name_sort_key("Türkçe"), "turkce");
+    }
+
+    #[test]
+    fn finnish_tags_resolve() {
+        let fi = Lang::from_code("fi").expect("fi registered");
+        for tag in ["fi", "fi-FI", "fi_FI", "fi_FI.UTF-8"] {
+            assert_eq!(lang_from_tag(tag), Some(fi), "{tag}");
+        }
+        assert_eq!(fi.name(), "Suomi");
+        assert!(fi.complete_menus(), "Finnish translates every source key");
+        assert_eq!(Lang::from_pref("fi"), fi);
     }
 
     #[test]
