@@ -203,7 +203,8 @@ fn move_target(s: &Session, p: &Value, moved: &[LayerId]) -> Result<LayerId> {
 /// For `layer.select`, captures the layer by name. For other commands, if a numeric `layer`
 /// parameter references the document's sole selected layer, normalises it to the target form
 /// (omitting `layer`) so that the recorded step applies to whatever layer is targeted when
-/// replayed or exported to `.atn` (#7248).
+/// replayed or exported to `.atn` (#7248). When it drops `layer` from an `edit.checkSpelling` step,
+/// it also records `"allLayers": false`.
 pub(crate) fn recorded_step(s: &Session, id: &str, p: Value, pre_selected: Option<&[LayerId]>) -> Value {
     if id == "layer.select" {
         return recorded_selection(s, p);
@@ -220,6 +221,9 @@ pub(crate) fn recorded_step(s: &Session, id: &str, p: Value, pre_selected: Optio
         let mut p = p;
         if let Some(fields) = p.as_object_mut() {
             fields.remove("layer");
+            if id == "edit.checkSpelling" {
+                fields.insert("allLayers".into(), json!(false));
+            }
         }
         return p;
     }

@@ -117,7 +117,7 @@ fn list(s: &Session, p: &Value) -> Result<Value> {
 /// Replaces one occurrence (verified to still be `word` when given).
 fn change(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "edit.checkSpelling";
-    let id = LayerId(p.get("layer").and_then(Value::as_u64).ok_or_else(|| bad(cmd, "`change` needs `layer`"))?);
+    let id = layer_param(s, p)?;
     let start = p.get("start").and_then(Value::as_u64).ok_or_else(|| bad(cmd, "`change` needs `start`"))? as usize;
     let end = p.get("end").and_then(Value::as_u64).ok_or_else(|| bad(cmd, "`change` needs `end`"))? as usize;
     let to = p.get("replace").and_then(Value::as_str).ok_or_else(|| bad(cmd, "`change` needs `replace`"))?.to_string();
@@ -270,7 +270,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Check Spelling…",
             menu: &["Edit"],
             shortcut: None,
-            params: r#"{"action":"list|change|changeAll|addToDictionary|removeFromDictionary|suggest"="list","allLayers":bool=true,"layer":id? (check one layer),"ignore":[word]? (Ignore All for this check),"suggestions":n=5; change: "layer","start","end" (chars),"word"? (verified),"replace"; changeAll: "word","replace"; addToDictionary/removeFromDictionary/suggest: "word"} → list: {"misspellings":[{"layer","start","end","word","suggestions"}],"count"}"#,
+            params: r#"{"action":"list|change|changeAll|addToDictionary|removeFromDictionary|suggest"="list","allLayers":bool=true,"layer":id? (check one layer),"ignore":[word]? (Ignore All for this check),"suggestions":n=5; change: "layer"? (default: the active layer),"start","end" (chars),"word"? (verified),"replace"; changeAll: "word","replace"; addToDictionary/removeFromDictionary/suggest: "word"} → list: {"misspellings":[{"layer","start","end","word","suggestions"}],"count"}"#,
             enabled: has_type,
             journal: true,
             run: check_spelling,
@@ -367,6 +367,47 @@ mod tests {
         assert!(s.execute("edit.checkSpelling", json!({"action": "bogus"})).is_err());
         let r = s.execute("edit.checkSpelling", json!({"action": "suggest", "word": "recieve"})).unwrap();
         assert_eq!(r["correct"], false);
+    }
+
+    #[test]
+    fn change_without_layer_edits_the_active_type_layer() {
+        let (mut s, id) = session("Teh end");
+        let r = s.execute("edit.checkSpelling", json!({"action": "change", "start": 0, "end": 3, "word": "Teh", "replace": "The"})).unwrap();
+        assert_eq!((r["layer"].as_u64(), r["end"].as_u64()), (Some(id), Some(3)));
+        assert_eq!(text_of(&s, id), "The end");
+    }
+
+    #[test]
+    fn recorded_change_on_the_selected_layer_plays_on_another_document() {
+        let (mut s, id) = session("Teh end");
+        s.execute("actions.record", json!({"name": "Spell"})).unwrap();
+        s.execute("edit.checkSpelling", json!({"action": "change", "layer": id, "start": 0, "end": 3, "word": "Teh", "replace": "The"})).unwrap();
+        s.execute("actions.stop", json!({})).unwrap();
+        assert_eq!(text_of(&s, id), "The end");
+        // The recorded step names no layer, so it acts on the layer targeted when it plays.
+        assert!(s.actions.list[0].steps[0].1.get("layer").is_none(), "{:?}", s.actions.list[0].steps);
+        s.execute("file.new", json!({"width": 300, "height": 100, "background": "white"})).unwrap();
+        let other = s.execute("type.create", json!({"x": 10, "y": 50, "text": "Teh end", "size": 12})).unwrap()["layer"].as_u64().unwrap();
+        let r = s.execute("actions.play", json!({"action": "Spell"})).unwrap();
+        assert!(r.get("failed").is_none(), "{r}");
+        assert_eq!(r["ran"], 1);
+        assert_eq!(text_of(&s, other), "The end");
+    }
+
+    #[test]
+    fn recorded_change_all_on_the_selected_layer_plays_on_that_layer_only() {
+        let (mut s, a) = session("teh one");
+        let b = s.execute("type.create", json!({"x": 10, "y": 90, "text": "teh two", "size": 12})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("layer.select", json!({"layer": a})).unwrap();
+        s.execute("actions.record", json!({"name": "All"})).unwrap();
+        s.execute("edit.checkSpelling", json!({"action": "changeAll", "layer": a, "word": "teh", "replace": "the"})).unwrap();
+        s.execute("actions.stop", json!({})).unwrap();
+        assert_eq!((text_of(&s, a).as_str(), text_of(&s, b).as_str()), ("the one", "teh two"));
+        s.execute("edit.undo", json!({})).unwrap();
+        s.execute("layer.select", json!({"layer": a})).unwrap();
+        let r = s.execute("actions.play", json!({"action": "All"})).unwrap();
+        assert!(r.get("failed").is_none(), "{r}");
+        assert_eq!((text_of(&s, a).as_str(), text_of(&s, b).as_str()), ("the one", "teh two"));
     }
 
     #[test]
