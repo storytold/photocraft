@@ -4,8 +4,10 @@
 //! The preview runs [`photocraft_algo::camera_raw::develop`] on a CPU proxy of the layer
 //! (≤ 900 px, `pixel_scale` keeps pixel radii true to the full image), recomputed when a
 //! control changes: on a worker for the dialog's own controls, so a drag never waits for it, and
-//! on the UI thread for the control channel, so a reply describes its own settings. OK runs `filter.cameraRaw` with the non-default settings, so the result is
-//! one history step (or a smart filter on a smart object) and exactly replayable.
+//! on the UI thread for the control channel, so a reply describes its own settings. Settings
+//! whose stages are all per pixel develop on the GPU instead where it can (`camera_raw_gpu`).
+//! OK runs `filter.cameraRaw` with the non-default settings, so the result is one history step
+//! (or a smart filter on a smart object) and exactly replayable.
 //!
 //! Control channel: `ui.menu.invoke {"id":"filter.cameraRaw","params":{"ui":{"set":{…},
 //! "commit":true | "cancel":true}}}`; the reply describes the dialog. `{"ui":{"saveSettings":true}}`
@@ -47,7 +49,7 @@ pub struct CameraRawDialog {
     pub(crate) selection: Option<std::sync::Arc<Vec<f32>>>,
     pub(crate) pw: usize,
     pub(crate) ph: usize,
-    full_w: usize,
+    pub(crate) full_w: usize,
     full_h: usize,
     preview_ppp: f32,
     pub(crate) detail: super::camera_raw_detail_ui::DetailPreview,
@@ -78,6 +80,13 @@ pub struct CameraRawDialog {
     pending: Option<std::sync::mpsc::Receiver<Result<ProxyFrame, String>>>,
     /// The last worker failure the status bar shows, with the preview revision it failed on.
     preview_error: Option<(String, u64)>,
+    /// The GPU develop, when the app may use one.
+    pub(crate) gpu: Option<crate::camera_raw_gpu::CameraRawGpu>,
+    /// Names [`Self::proxy`] for the GPU pass's upload cache.
+    source_key: u64,
+    /// The last frame's develop alone, and where it ran ("gpu" or "cpu").
+    develop_ms: f64,
+    pub(crate) develop_backend: &'static str,
     /// Settings before each finished edit, so Ctrl+Z works inside the dialog (#4100).
     undo: Vec<CameraRaw>,
     redo: Vec<CameraRaw>,
@@ -89,7 +98,7 @@ impl CameraRawDialog {
     pub fn describe(&self, view: &crate::state::CameraRawScopeState, navigation: &crate::state::CameraRawPreviewState) -> Value {
         let h = self.histogram();
         let mut result = json!({"layer": self.layer.0, "params": serde_json::to_value(&self.params).unwrap_or(Value::Null), "proxy": [self.pw, self.ph],
-            "renderMs": self.render_ms, "histogramMs": self.histogram_ms, "previewRevision": self.preview_revision, "before": self.show_before,
+            "renderMs": self.render_ms, "developMs": self.develop_ms, "developBackend": self.develop_backend, "histogramMs": self.histogram_ms, "previewRevision": self.preview_revision, "before": self.show_before,
             "histogram": {"source": if self.show_before { "before" } else { "after" }, "approximate": true, "size": [self.pw, self.ph],
                 "sampleDomain": "preview-rgb", "range": [0, 1], "red": h.channels[0].as_slice(), "green": h.channels[1].as_slice(), "blue": h.channels[2].as_slice(),
                 "samples": h.samples, "transparent": h.transparent, "invalid": h.invalid, "underflow": h.underflow, "overflow": h.overflow, "shadows": h.shadows, "highlights": h.highlights}});
@@ -170,6 +179,8 @@ impl CameraRawDialog {
             size: (self.pw, self.ph),
             full_w: self.full_w,
             display: self.display.clone(),
+            gpu: self.gpu.clone(),
+            source_key: self.source_key,
         }
     }
 
@@ -191,6 +202,8 @@ impl CameraRawDialog {
         self.processed = frame.px;
         self.scope.cache = None;
         self.render_ms = frame.ms;
+        self.develop_ms = frame.develop_ms;
+        self.develop_backend = frame.backend;
         self.preview_revision = self.preview_revision.saturating_add(1);
     }
 
@@ -270,6 +283,8 @@ struct ProxyJob {
     size: (usize, usize),
     full_w: usize,
     display: std::sync::Arc<photocraft_engine::display_color::CanvasDisplay>,
+    gpu: Option<crate::camera_raw_gpu::CameraRawGpu>,
+    source_key: u64,
 }
 
 /// A developed proxy, ready to show.
@@ -280,21 +295,38 @@ struct ProxyFrame {
     image: egui::ColorImage,
     display: std::sync::Arc<photocraft_engine::display_color::CanvasDisplay>,
     ms: f64,
+    develop_ms: f64,
+    backend: &'static str,
 }
 
 impl ProxyJob {
     fn run(self) -> ProxyFrame {
         let t0 = crate::gpu_canvas::now_ms();
         let (pw, ph) = self.size;
-        let mut px = self.proxy.to_vec();
         let mut p = self.params;
         p.pixel_scale = (pw as f32 / self.full_w.max(1) as f32).min(1.0);
-        if let Some(curve) = &self.raw_curve {
-            let tone = raw_stage(&p);
-            photocraft_io::raw::retone(&mut px, pw, ph, curve, tone);
+        // The open-time dialog re-tones the proxy for each job; otherwise the GPU reads the
+        // proxy as it is and uploads it once.
+        let retoned = self.raw_curve.as_ref().map(|curve| {
+            let mut px = self.proxy.to_vec();
+            photocraft_io::raw::retone(&mut px, pw, ph, curve, raw_stage(&p));
+            px
+        });
+        if retoned.is_some() {
             (p.shadows, p.highlights, p.clarity, p.texture, p.dehaze) = (0.0, 0.0, 0.0, 0.0, 0.0);
         }
-        photocraft_algo::camera_raw::develop(&mut px, pw, ph, &p, self.float);
+        let develop_start = crate::gpu_canvas::now_ms();
+        let key = retoned.is_none().then_some(self.source_key);
+        let input = retoned.as_deref().unwrap_or(&self.proxy);
+        let (mut px, backend) = match self.gpu.as_ref().and_then(|g| g.develop(input, key, pw, ph, &p, self.float)) {
+            Some(out) => (out, "gpu"),
+            None => {
+                let mut px = retoned.unwrap_or_else(|| self.proxy.to_vec());
+                photocraft_algo::camera_raw::develop(&mut px, pw, ph, &p, self.float);
+                (px, "cpu")
+            }
+        };
+        let develop_ms = crate::gpu_canvas::now_ms() - develop_start;
         if let Some(mask) = &self.selection {
             let blend = |(out, (original, coverage)): (&mut [f32; 4], (&[f32; 4], &f32))| {
                 for (out, original) in out.iter_mut().zip(original) {
@@ -314,7 +346,7 @@ impl ProxyJob {
         let histogram = RgbHistogram::from_rgba(&px);
         let histogram_ms = crate::gpu_canvas::now_ms() - histogram_start;
         let image = CameraRawDialog::image(&px, pw, ph, &self.display);
-        ProxyFrame { px, histogram, histogram_ms, image, display: self.display, ms: crate::gpu_canvas::now_ms() - t0 }
+        ProxyFrame { px, histogram, histogram_ms, image, display: self.display, ms: crate::gpu_canvas::now_ms() - t0, develop_ms, backend }
     }
 }
 
@@ -767,6 +799,8 @@ fn open_pixels(
         app.ui.camera_raw_scope.selected_region = false;
     }
     let float = surf.format().sample == photocraft_color::SampleType::F32;
+    // Builds the GPU pass the first time any Camera Raw dialog opens.
+    let gpu = crate::camera_raw_gpu::for_app(app);
     let mut d = CameraRawDialog {
         layer,
         layer_name: name,
@@ -815,6 +849,10 @@ fn open_pixels(
         raw_curve: None,
         pending: None,
         preview_error: None,
+        gpu,
+        source_key: crate::camera_raw_gpu::source_key(),
+        develop_ms: 0.0,
+        develop_backend: "cpu",
         undo: Vec::new(),
         redo: Vec::new(),
         edit_origin: None,
