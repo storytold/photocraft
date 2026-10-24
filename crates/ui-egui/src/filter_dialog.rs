@@ -297,6 +297,7 @@ pub const PREVIEWED: &[&str] = &[
     "image.adjustments.hdrToning",
     "image.rotation.arbitrary",
     "image.mode.indexedColor",
+    "image.mode.colorTable",
     "image.mode.bitmap",
     "image.mode.duotone",
     "layer.matting.defringe",
@@ -420,6 +421,26 @@ fn apply_command_defaults(app: &PhotocraftApp, command: &str, fields: &mut Map<S
     // on the image picks the colour.
     if command == REPLACE_COLOR {
         fields.insert(COLOR_EYEDROPPER.into(), json!(true));
+    }
+    if command == "image.mode.colorTable" {
+        color_table_defaults(app, fields);
+    }
+}
+
+/// Color Table reflects the active documents current table, never remembered values.
+fn color_table_defaults(app: &PhotocraftApp, fields: &mut Map<String, Value>) {
+    let Some(st) = app.session.active() else { return };
+    let Some(table) = st.doc.color_table.as_ref() else { return };
+    fields.insert("table".into(), json!("custom"));
+    let colors: Vec<String> = table.colors.iter().map(|c| format!("#{:02x}{:02x}{:02x}", c[0], c[1], c[2])).collect();
+    fields.insert("colors".into(), json!(colors));
+    match table.transparent {
+        Some(t) => {
+            fields.insert("transparent".into(), json!(t));
+        }
+        None => {
+            fields.remove("transparent");
+        }
     }
 }
 
@@ -697,6 +718,11 @@ fn uses_angle_dial(command: &str, key: &str) -> bool {
     key == "angle" && ANGLE_DIAL.contains(&command)
 }
 
+/// Indexed Color's Palette is Custom… (the table comes from `paletteColors`).
+fn palette_is_custom(f: &Map<String, Value>) -> bool {
+    f.get("palette").and_then(Value::as_str) == Some("custom")
+}
+
 /// Replace Color (#4143): the dialog's "From" colour, sampled from the image with a canvas
 /// eyedropper like Photoshop's. While armed, the next click on the image writes the merged
 /// composite colour into the `color` field (the same sampler the Color Picker uses).
@@ -776,6 +802,52 @@ fn replace_color_result(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     }
 }
 
+/// Indexed Color's Custom palette and Color Table: the canvas eyedropper that highlights the
+/// matching entry, and the armed "Set Transparent" pick (a grid click sets the transparent entry).
+/// Both are private dialog fields, like [`COLOR_EYEDROPPER`].
+const PALETTE_EYEDROPPER: &str = crate::color_table_ui::PALETTE_EYEDROPPER;
+#[cfg(test)]
+const TRANSPARENT_PICK: &str = crate::color_table_ui::TRANSPARENT_PICK;
+/// The grid cell highlighted by the palette eyedropper (a private field, not a command param).
+const PALETTE_HIGHLIGHT: &str = crate::color_table_ui::PALETTE_HIGHLIGHT;
+
+fn palette_eyedropper_owns(f: &Map<String, Value>) -> bool {
+    f.get("__filter").and_then(Value::as_bool) == Some(true)
+        && match f.get("__command").and_then(Value::as_str) {
+            // The grid (and its eyedropper) only exists with a Custom palette; the flag can
+            // survive a switch back to a preset, so it must not arm there.
+            Some("image.mode.indexedColor") => palette_is_custom(f),
+            Some("image.mode.colorTable") => true,
+            _ => false,
+        }
+        && f.get(PALETTE_EYEDROPPER).and_then(Value::as_bool) == Some(true)
+}
+
+/// Whether the top dialog is an Indexed Color or Color Table with its palette eyedropper armed.
+pub(crate) fn palette_eyedropper_armed(app: &PhotocraftApp) -> bool {
+    app.ui.dialogs.last().is_some_and(|d| palette_eyedropper_owns(&d.fields))
+}
+
+/// Sample the merged image at document point (x, y) and highlight the matching entry of the
+/// armed dialog's palette: an exact match, else the nearest by squared RGB distance (dithered
+/// edges). Returns true when the click was consumed, even off-image or over transparency, where
+/// nothing changes and the eyedropper stays armed.
+pub(crate) fn palette_eyedropper_sample(app: &mut PhotocraftApp, x: f64, y: f64) -> bool {
+    let Some(id) = app.ui.dialogs.last().filter(|d| palette_eyedropper_owns(&d.fields)).map(|d| d.id) else {
+        return false;
+    };
+    if let Some(rgb) = crate::canvas::composite_color(app, x, y)
+        && let Some(d) = app.ui.dialog_mut(id)
+    {
+        let colors = crate::color_table_ui::table_colors(&d.fields);
+        if let Some(idx) = crate::palette_file_ui::match_entry(&colors, rgb) {
+            d.fields.remove(crate::color_table_ui::PALETTE_RANGE);
+            d.fields.insert(PALETTE_HIGHLIGHT.into(), json!(idx));
+        }
+    }
+    true
+}
+
 /// Dialog body for filter commands.
 pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let t = Tokens::get(ui.ctx());
@@ -803,7 +875,14 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 let mut v = f.get(&p.key).and_then(Value::as_f64).unwrap_or(default as f64) as f32;
                 if cmd == "image.mode.indexedColor" && p.key == "colors" {
                     let mut count = v.round().clamp(2.0, 256.0) as u32;
-                    crate::widgets::color_count_row(ui, &label(&p.key), &mut count);
+                    // Disabled with a custom table (its length rules), as in Photoshop.
+                    if palette_is_custom(f) {
+                        ui.add_enabled_ui(false, |ui| {
+                            crate::widgets::color_count_row(ui, &label(&p.key), &mut count);
+                        });
+                    } else {
+                        crate::widgets::color_count_row(ui, &label(&p.key), &mut count);
+                    }
                     f.insert(p.key, json!(count));
                     continue;
                 }
@@ -891,7 +970,14 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                     if lists_installed && !opts.iter().any(|(v, _)| *v == cur) {
                         opts.push((cur.clone(), stem.as_str()));
                     }
-                    crate::widgets::dropdown(ui, &format!("flt-{cmd}-{}", p.key), &mut cur, &opts, 170.0);
+                    // Forced is disabled with a custom table (its entries are used as-is).
+                    if cmd == "image.mode.indexedColor" && p.key == "forced" && palette_is_custom(f) {
+                        ui.add_enabled_ui(false, |ui| {
+                            crate::widgets::dropdown(ui, &format!("flt-{cmd}-{}", p.key), &mut cur, &opts, 170.0);
+                        });
+                    } else {
+                        crate::widgets::dropdown(ui, &format!("flt-{cmd}-{}", p.key), &mut cur, &opts, 170.0);
+                    }
                     if let Some(i) = cur.strip_prefix("channel:").filter(|_| depth).and_then(|i| i.parse::<usize>().ok()) {
                         f.insert("depthChannel".into(), json!(i));
                         cur = "channel".into();
@@ -1004,6 +1090,11 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     }
     if cmd == REPLACE_COLOR {
         replace_color_result(ui, f);
+    }
+    // Indexed Color (Palette: Custom…) and Color Table share the 256-cell grid, Load…/Save…,
+    // the "Set Transparent" toggle button, and the "Color Picker" canvas eyedropper.
+    if (cmd == "image.mode.indexedColor" && palette_is_custom(f)) || crate::color_table_ui::owns(f) {
+        crate::color_table_ui::controls(ui, f);
     }
     // Read-only context the dialog opener supplies (e.g. the monitor profile in use).
     if let Some(note) = f.get("__note").and_then(Value::as_str) {
@@ -2835,6 +2926,122 @@ mod tests {
         assert_eq!(h.state_mut().ui.dialog_mut(id).unwrap().fields["lightness"], json!(10.0));
     }
 
+    /// Indexed Color's Custom palette eyedropper samples the merged image and highlights the
+    /// matching entry (exact or nearest), like Replace Color's From-colour picker.
+    #[test]
+    fn palette_eyedropper_samples_the_image() {
+        let mut s = photocraft_engine::Session::new();
+        s.execute("file.new", json!({"width": 16, "height": 16, "background": "#00ff00"})).unwrap();
+        let mut app = PhotocraftApp::new(s, crate::Services::default());
+        let id = open(&mut app, "image.mode.indexedColor").unwrap();
+        {
+            let f = &mut app.ui.dialog_mut(id).unwrap().fields;
+            f.insert("palette".into(), json!("custom"));
+            f.insert(crate::palette_file_ui::CUSTOM_FIELD.into(), json!(["#ff0000", "#00ff00"]));
+        }
+        assert!(!palette_eyedropper_armed(&app));
+        app.ui.dialog_mut(id).unwrap().fields.insert(PALETTE_EYEDROPPER.into(), json!(true));
+        assert!(palette_eyedropper_armed(&app));
+        // Exact match: the green image maps to palette entry 1.
+        assert!(palette_eyedropper_sample(&mut app, 4.0, 4.0));
+        assert_eq!(app.ui.dialogs.last().unwrap().fields[PALETTE_HIGHLIGHT], json!(1));
+        // Off-image: consumed, nothing changes and the eyedropper stays armed.
+        assert!(palette_eyedropper_sample(&mut app, -1.0, 4.0));
+        assert_eq!(app.ui.dialogs.last().unwrap().fields[PALETTE_HIGHLIGHT], json!(1));
+        assert!(palette_eyedropper_armed(&app));
+        // Disarmed, the dialog never claims the click.
+        app.ui.dialog_mut(id).unwrap().fields.insert(PALETTE_EYEDROPPER.into(), json!(false));
+        assert!(!palette_eyedropper_armed(&app));
+        assert!(!palette_eyedropper_sample(&mut app, 4.0, 4.0));
+
+        // Armed in Custom…, then switched to a preset: the grid is gone, so the surviving flag
+        // must not arm an invisible eyedropper that would swallow canvas clicks.
+        app.ui.dialog_mut(id).unwrap().fields.insert(PALETTE_EYEDROPPER.into(), json!(true));
+        assert!(palette_eyedropper_armed(&app), "armed while Custom");
+        app.ui.dialog_mut(id).unwrap().fields.insert("palette".into(), json!("systemMac"));
+        assert!(!palette_eyedropper_armed(&app), "a preset has no grid to highlight");
+        assert!(!palette_eyedropper_sample(&mut app, 4.0, 4.0), "the click is not consumed");
+
+        // Also works in the Color Table dialog (when the image is already in Indexed Color mode).
+        app.session.execute("image.mode.indexedColor", json!({"palette": "custom", "paletteColors": ["#ff0000", "#00ff00"], "dither": "none"})).unwrap();
+        app.ui.close_dialog(id);
+        let ct_id = open(&mut app, "image.mode.colorTable").unwrap();
+        assert!(!palette_eyedropper_armed(&app));
+        app.ui.dialog_mut(ct_id).unwrap().fields.insert(PALETTE_EYEDROPPER.into(), json!(true));
+        assert!(palette_eyedropper_armed(&app));
+        assert!(palette_eyedropper_sample(&mut app, 4.0, 4.0));
+        assert_eq!(app.ui.dialogs.last().unwrap().fields[PALETTE_HIGHLIGHT], json!(1));
+    }
+
+    /// Indexed Color (Custom…) and Color Table both have Set Transparent and Color Picker buttons.
+    #[test]
+    fn indexed_color_dialog_arms_transparent_and_palette_eyedropper() {
+        use egui_kittest::Harness;
+        use egui_kittest::kittest::Queryable;
+
+        let mut s = photocraft_engine::Session::new();
+        s.execute("file.new", json!({"width": 16, "height": 16})).unwrap();
+        let mut app = PhotocraftApp::new(s, crate::Services::default());
+        let mut h = Harness::builder().with_size(egui::vec2(900.0, 700.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), &mut app);
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        let id = open(h.state_mut(), "image.mode.indexedColor").unwrap();
+        {
+            let f = &mut h.state_mut().ui.dialog_mut(id).unwrap().fields;
+            f.insert("palette".into(), json!("custom"));
+            f.insert(crate::palette_file_ui::CUSTOM_FIELD.into(), json!(["#ff0000", "#00ff00"]));
+        }
+        h.run_steps(3);
+        let armed = |app: &PhotocraftApp| app.ui.dialogs.last().unwrap().fields.get(TRANSPARENT_PICK).and_then(Value::as_bool) == Some(true);
+        assert!(!armed(h.state()));
+        // The custom grid makes the body scroll; click via accesskit (works off-viewport).
+        h.get_by_label("Set Transparent").click_accesskit();
+        h.run_steps(2);
+        assert!(armed(h.state()), "the Set Transparent button arms the pick");
+        h.get_by_label("Set Transparent").click_accesskit();
+        h.run_steps(2);
+        assert!(!armed(h.state()), "clicking again disarms it");
+        h.get_by_label("Pick a Palette Colour From the Image").click_accesskit();
+        h.run_steps(2);
+        assert!(palette_eyedropper_armed(h.state()), "the pipette arms the palette eyedropper");
+        h.get_by_label("Pick a Palette Colour From the Image").click_accesskit();
+        h.run_steps(2);
+        assert!(!palette_eyedropper_armed(h.state()));
+
+        // Open Color Table on an Indexed Color document: both buttons are available there too.
+        h.state_mut().ui.close_dialog(id);
+        h.state_mut()
+            .session
+            .execute("image.mode.indexedColor", json!({"palette": "custom", "paletteColors": ["#ff0000", "#00ff00"], "dither": "none"}))
+            .unwrap();
+        let _ct_id = open(h.state_mut(), "image.mode.colorTable").unwrap();
+        h.run_steps(3);
+        h.get_by_label("Set Transparent").click_accesskit();
+        h.run_steps(2);
+        assert!(armed(h.state()), "Color Table's Set Transparent button arms the pick");
+        h.get_by_label("Pick a Palette Colour From the Image").click_accesskit();
+        h.run_steps(2);
+        assert!(palette_eyedropper_armed(h.state()), "Color Table's pipette arms the palette eyedropper");
+    }
+
+    /// Indexed Color's transparent entry reaches the command when set; private pick fields never leak.
+    #[test]
+    fn indexed_color_params_include_transparent_when_set() {
+        let mut f = Map::new();
+        f.insert("__command".into(), json!("image.mode.indexedColor"));
+        f.insert("palette".into(), json!("custom"));
+        f.insert(crate::palette_file_ui::CUSTOM_FIELD.into(), json!(["#ff0000", "#00ff00"]));
+        assert!(!params_of(&f).as_object().unwrap().contains_key("transparent"), "absent until set");
+        f.insert("transparent".into(), json!(1));
+        assert_eq!(params_of(&f)["transparent"].as_u64(), Some(1));
+        f.insert(PALETTE_EYEDROPPER.into(), json!(true));
+        f.insert(TRANSPARENT_PICK.into(), json!(true));
+        f.insert(PALETTE_HIGHLIGHT.into(), json!(0));
+        let params_value = params_of(&f);
+        let params = params_value.as_object().unwrap();
+        assert!(!params.contains_key(PALETTE_EYEDROPPER));
+        assert!(!params.contains_key(TRANSPARENT_PICK));
+        assert!(!params.contains_key(PALETTE_HIGHLIGHT));
+    }
     /// #4457: Localized Color Clusters and its Range, as in Photoshop's dialog; the sampled point
     /// and both settings reach the command.
     #[test]

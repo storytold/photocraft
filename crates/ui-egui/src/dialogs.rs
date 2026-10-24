@@ -512,10 +512,6 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     outcome = Some(true);
                 }
             } else {
-                // The Color Table dialog loads and saves `.act` files, as in Photoshop.
-                if matches!(d.kind, DialogKind::Command) && crate::color_table_ui::owns(&fields) {
-                    crate::color_table_ui::buttons(app, ui, d.id, &mut fields);
-                }
                 ui.add_space(8.0);
                 // Align::Min, not Center: a centred row fills the height left over from last frame's
                 // (larger) size, so a dialog whose body gets shorter would never shrink back.
@@ -654,6 +650,12 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         // A colour swatch (Edit › Fill, Edit › Stroke) opens the Color Picker over the dialog.
         if outcome.is_none() {
             crate::color_picker_ui::open_requested(app, d.id);
+        }
+        // A palette Load…/Save… asked by the dialog body (Indexed Color Custom…, Color Table).
+        if outcome.is_none()
+            && let Err(error) = crate::palette_file_ui::take_request(app, d.id)
+        {
+            app.ui.status = error;
         }
         if apply_requested && outcome.is_none() {
             let _ = crate::prefs_ui::apply(app, d.id);

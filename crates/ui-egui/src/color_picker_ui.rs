@@ -201,7 +201,7 @@ pub fn open_for_target(app: &mut PhotocraftApp, target: &str, label: &str, rgb: 
 }
 
 /// Set by a dialog body (to the picker's title) to open the Color Picker on its `color` field.
-const REQUEST: &str = "__pickColor";
+pub(crate) const REQUEST: &str = "__pickColor";
 
 /// A dialog body asks for the Color Picker on its `color` field (Edit › Fill's Color… and colour
 /// swatch, Edit › Stroke's swatch). The dialog loop opens it ([`open_requested`]), since that
@@ -214,6 +214,23 @@ pub fn request(f: &mut Map<String, Value>, title: &str) {
 /// JSON pointer into the fields (`/values/guidesGridAndSlices/guideColor`).
 pub fn request_field(f: &mut Map<String, Value>, field: &str, title: &str) {
     f.insert(REQUEST.into(), json!({ "title": title, "field": field }));
+}
+
+/// Request a two-step Color Picker for a dragged range `lo..=hi` of palette array `array_field`:
+/// picks the first colour (`lo`), then opens a second Color Picker for the last colour (`hi`),
+/// and linearly interpolates the entries in between on confirm.
+pub fn request_field_range(f: &mut Map<String, Value>, array_field: &str, lo: usize, hi: usize) {
+    let (lo, hi) = (lo.min(hi), lo.max(hi));
+    f.insert(
+        REQUEST.into(),
+        json!({
+            "title": tl!("Color Picker (First Color)"),
+            "field": format!("/{array_field}/{lo}"),
+            "rangeField": array_field,
+            "rangeLo": lo,
+            "rangeHi": hi,
+        }),
+    );
 }
 
 /// The picker's title for the colour called `name`: "Color Picker (Vine Color)".
@@ -249,21 +266,31 @@ fn set_field(f: &mut Map<String, Value>, field: &str, value: Value) -> Result<()
     Ok(())
 }
 
-/// Opens the Color Picker dialog `id`'s body asked for ([`request`], [`request_field`]), on its
-/// colour: OK sets that field of the dialog (not the foreground), Cancel leaves it as it was.
+/// Opens the Color Picker dialog `id`'s body asked for ([`request`], [`request_field`],
+/// [`request_field_range`]), on its colour: OK sets that field of the dialog (not the foreground),
+/// Cancel leaves it as it was.
 pub fn open_requested(app: &mut PhotocraftApp, id: u64) {
     let Some(d) = app.ui.dialog_mut(id) else { return };
-    let (title, field) = match d.fields.remove(REQUEST) {
-        Some(Value::String(title)) => (title, "color".to_string()),
+    let (title, field, range) = match d.fields.remove(REQUEST) {
+        Some(Value::String(title)) => (title, "color".to_string(), None),
         Some(Value::Object(o)) => {
             let get = |k: &str| o.get(k).and_then(Value::as_str).map(str::to_string);
             let (Some(title), Some(field)) = (get("title"), get("field")) else { return };
-            (title, field)
+            let range = get("rangeField").zip(o.get("rangeLo").and_then(Value::as_u64)).zip(o.get("rangeHi").and_then(Value::as_u64));
+            (title, field, range)
         }
         _ => return,
     };
     let rgb = field_value(&d.fields, &field).and_then(parse_hex).unwrap_or([0.0; 3]);
-    open_for_field(app, &title, rgb, id, &field);
+    let picker_id = open_for_field(app, &title, rgb, id, &field);
+    if let Some(((range_field, lo), hi)) = range
+        && let Some(p) = app.ui.dialog_mut(picker_id)
+    {
+        p.fields.insert("__rangeField".into(), json!(range_field));
+        p.fields.insert("__rangeLo".into(), json!(lo));
+        p.fields.insert("__rangeHi".into(), json!(hi));
+        p.fields.insert("__rangeStep".into(), json!("first"));
+    }
 }
 
 pub fn owns(f: &Map<String, Value>) -> bool {
@@ -779,8 +806,40 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
         let (Some(dialog), Some(field)) = (f.get("__dialog").and_then(Value::as_u64), f.get("__field").and_then(Value::as_str)) else {
             return Err("the Color Picker has no field to set".into());
         };
-        let d = app.ui.dialog_mut(dialog).ok_or("the dialog this colour was for is closed")?;
-        set_field(&mut d.fields, field, json!(color))?;
+        let range = f
+            .get("__rangeStep")
+            .and_then(Value::as_str)
+            .zip(f.get("__rangeField").and_then(Value::as_str))
+            .zip(f.get("__rangeLo").and_then(Value::as_u64))
+            .zip(f.get("__rangeHi").and_then(Value::as_u64));
+        let mut next_last: Option<(String, usize, usize, [f32; 3])> = None;
+        {
+            let d = app.ui.dialog_mut(dialog).ok_or("the dialog this colour was for is closed")?;
+            set_field(&mut d.fields, field, json!(color))?;
+            if let Some((((step, range_field), lo), hi)) = range {
+                let (lo, hi) = (lo as usize, hi as usize);
+                if step == "first" {
+                    let last_field = format!("/{range_field}/{hi}");
+                    let rgb = field_value(&d.fields, &last_field).and_then(parse_hex).unwrap_or([0.0; 3]);
+                    next_last = Some((range_field.to_string(), lo, hi, rgb));
+                } else if step == "last"
+                    && let Some(mut colors) = d.fields.get(range_field).and_then(crate::palette_file_ui::hex_array_to_rgb)
+                {
+                    crate::palette_file_ui::lerp_range(&mut colors, lo, hi);
+                    d.fields.insert(range_field.into(), json!(crate::palette_file_ui::hex_array(&colors)));
+                }
+            }
+        }
+        if let Some((range_field, lo, hi, rgb)) = next_last {
+            let last_field = format!("/{range_field}/{hi}");
+            let id2 = open_for_field(app, tl!("Color Picker (Last Color)"), rgb, dialog, &last_field);
+            if let Some(d2) = app.ui.dialog_mut(id2) {
+                d2.fields.insert("__rangeField".into(), json!(range_field));
+                d2.fields.insert("__rangeLo".into(), json!(lo));
+                d2.fields.insert("__rangeHi".into(), json!(hi));
+                d2.fields.insert("__rangeStep".into(), json!("last"));
+            }
+        }
         return Ok(json!({ "color": color }));
     }
     if target == "cropShield" {

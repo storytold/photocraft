@@ -4180,3 +4180,12 @@ curves	Smooth	Vloeiend maken
 	Grayscale Ramp	Grijswaardenbalk
 	Current Colors	Huidige kleuren
 	Make Ramp Web Safe	Balk beperken tot webkleuren
+
+# Palette grid (Color Table / Indexed Color Custom…)
+	Set Transparent	Als transparant instellen
+	Clear Transparency	Transparantie opheffen
+	Color Picker (First Color)	Kleurkiezer (eerste kleur)
+	Color Picker (Last Color)	Kleurkiezer (laatste kleur)
+	Pick a Palette Colour From the Image	Een paletkleur uit de afbeelding kiezen
+	Table Color	Tabelkleur
+	Palette Color	Paletkleur

@@ -3433,3 +3433,13 @@ curves	Smooth	Glätten
 	Grayscale Ramp	Graustufenbalken
 	Current Colors	Aktuelle Farben
 	Make Ramp Web Safe	Farbbalken auf Webfarben beschränken
+
+# Palette grid (Color Table / Indexed Color Custom…)
+	Set Transparent	Als transparent festlegen
+	Clear Transparency	Transparenz aufheben
+	Color Picker (First Color)	Farbwähler (Erste Farbe)
+	Color Picker (Last Color)	Farbwähler (Letzte Farbe)
+	Pick a Palette Colour From the Image	Eine Palettefarbe aus dem Bild wählen
+	Table Color	Tabellenfarbe
+	Palette Color	Palettenfarbe
+	Color Picker	Farbwähler

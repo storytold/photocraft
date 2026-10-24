@@ -4099,3 +4099,13 @@ curves	Smooth	スムーズ
 	Grayscale Ramp	グレースケールランプ
 	Current Colors	現在のカラー
 	Make Ramp Web Safe	ランプを Web セーフにする
+
+# Palette grid (Color Table / Indexed Color Custom…)
+	Set Transparent	透明に設定
+	Clear Transparency	透明を解除
+	Color Picker (First Color)	カラーピッカー（最初の色）
+	Color Picker (Last Color)	カラーピッカー（最後の色）
+	Pick a Palette Colour From the Image	画像からパレットの色を選択
+	Table Color	テーブルの色
+	Palette Color	パレットの色
+	Color Picker	カラーピッカー

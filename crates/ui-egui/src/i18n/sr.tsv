@@ -4493,3 +4493,12 @@ shape	Appearance	Izgled
 	Grayscale Ramp	Skala nijansi sive
 	Current Colors	Trenutne boje
 	Make Ramp Web Safe	Učini skalu bezbednom za veb
+
+# Palette grid (Color Table / Indexed Color Custom…)
+	Set Transparent	Postavi kao providno
+	Clear Transparency	Očisti providnost
+	Color Picker (First Color)	Birač boja (prva boja)
+	Color Picker (Last Color)	Birač boja (poslednja boja)
+	Pick a Palette Colour From the Image	Izaberite boju palete sa slike
+	Table Color	Boja tabele
+	Palette Color	Boja palete

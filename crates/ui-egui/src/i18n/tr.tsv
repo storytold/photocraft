@@ -4149,3 +4149,12 @@ cameraData	Lens	Lens
 	Grayscale Ramp	Gri Tonlama Şeridi
 	Current Colors	Geçerli Renkler
 	Make Ramp Web Safe	Şeridi Web Renkleriyle Sınırla
+
+# Palette grid (Color Table / Indexed Color Custom…)
+	Set Transparent	Şeffaf Olarak Ayarla
+	Clear Transparency	Şeffaflığı Kaldır
+	Color Picker (First Color)	Renk Seçici (İlk Renk)
+	Color Picker (Last Color)	Renk Seçici (Son Renk)
+	Pick a Palette Colour From the Image	Görselden bir palet rengi seçin
+	Table Color	Tablo Rengi
+	Palette Color	Palet Rengi

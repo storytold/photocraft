@@ -4382,3 +4382,12 @@ navigator	Zoom	Zoom
 	Grayscale Ramp	Rampa de escala de grises
 	Current Colors	Colores actuales
 	Make Ramp Web Safe	Hacer rampa segura para web
+
+# Palette grid (Color Table / Indexed Color Custom…)
+	Set Transparent	Establecer transparente
+	Clear Transparency	Quitar transparencia
+	Color Picker (First Color)	Selector de color (primer color)
+	Color Picker (Last Color)	Selector de color (último color)
+	Pick a Palette Colour From the Image	Elegir un color de la paleta de la imagen
+	Table Color	Color de la tabla
+	Palette Color	Color de la paleta

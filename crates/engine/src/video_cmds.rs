@@ -569,7 +569,7 @@ fn gif_frame(mut px: Vec<[f32; 4]>, w: usize, delay_cs: u16) -> Result<photocraf
         pal.push(pal.first().copied().unwrap_or([0, 0, 0]));
         pal.len() - 1
     });
-    let indices = quantize::quantize(&mut px, w, &pal, Dither::None, 1.0, t);
+    let indices = quantize::quantize(&mut px, w, &pal, Dither::None, 1.0, t, false);
     Ok(photocraft_codecs::web::GifFrame { indices, palette: pal, transparent: t.map(|i| i as u8), delay_cs })
 }
 

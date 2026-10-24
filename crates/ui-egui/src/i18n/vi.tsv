@@ -3913,3 +3913,13 @@ curves	Smooth	Làm mượt
 	Grayscale Ramp	Dải thang xám
 	Current Colors	Màu hiện tại
 	Make Ramp Web Safe	Giới hạn dải màu ở màu web
+
+# Palette grid (Color Table / Indexed Color Custom…)
+	Set Transparent	Đặt trong suốt
+	Clear Transparency	Xóa trong suốt
+	Color Picker (First Color)	Ống hút màu (màu đầu tiên)
+	Color Picker (Last Color)	Ống hút màu (màu cuối cùng)
+	Pick a Palette Colour From the Image	Chọn một màu bảng màu từ hình ảnh
+	Table Color	Màu bảng
+	Palette Color	Màu bảng màu
+	Color Picker	Ống hút màu

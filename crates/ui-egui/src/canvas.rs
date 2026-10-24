@@ -3965,7 +3965,8 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         // sampler as the Color Picker, never the reduced adjustment preview.
         let curves_picking = crate::adjust_dialog::picker_armed(app);
         let replace_picking = crate::filter_dialog::color_eyedropper_armed(app);
-        let picking = primary && (crate::color_picker_ui::top(app).is_some() || curves_picking || replace_picking);
+        let palette_picking = crate::filter_dialog::palette_eyedropper_armed(app);
+        let picking = primary && (crate::color_picker_ui::top(app).is_some() || curves_picking || replace_picking || palette_picking);
         let range_picking =
             primary && app.ui.dialogs.last().is_some_and(|d| crate::color_range_ui::owns(&d.fields) && crate::color_range_ui::controls(&d.fields).sampling);
         // Select and Mask's Refine Edge Brush paints on the image.
@@ -4039,6 +4040,8 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                     crate::adjust_dialog::sample_at(app, d[0], d[1]);
                 } else if replace_picking {
                     crate::filter_dialog::color_eyedropper_sample(app, d[0], d[1]);
+                } else if palette_picking {
+                    crate::filter_dialog::palette_eyedropper_sample(app, d[0], d[1]);
                 } else {
                     crate::color_picker_ui::sample_at(app, d[0], d[1]);
                 }

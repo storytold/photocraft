@@ -4166,3 +4166,12 @@ cameraRaw	Dehaze	Odstranění oparu
 	Grayscale Ramp	Přechod stupňů šedi
 	Current Colors	Aktuální barvy
 	Make Ramp Web Safe	Omezit pruh na webové barvy
+
+# Palette grid (Color Table / Indexed Color Custom…)
+	Set Transparent	Nastavit jako průhledné
+	Clear Transparency	Zrušit průhlednost
+	Color Picker (First Color)	Výběr barvy (první barva)
+	Color Picker (Last Color)	Výběr barvy (poslední barva)
+	Pick a Palette Colour From the Image	Vyberte barvu palety z obrázku
+	Table Color	Barva tabulky
+	Palette Color	Barva palety

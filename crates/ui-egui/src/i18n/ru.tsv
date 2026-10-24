@@ -4623,3 +4623,12 @@ shape	Appearance	Оформление
 	Grayscale Ramp	Шкала градаций серого
 	Current Colors	Текущие цвета
 	Make Ramp Web Safe	Сделать шкалу безопасной для web
+
+# Palette grid (Color Table / Indexed Color Custom…)
+	Set Transparent	Сделать прозрачным
+	Clear Transparency	Убрать прозрачность
+	Color Picker (First Color)	Палитра цветов (первый цвет)
+	Color Picker (Last Color)	Палитра цветов (последний цвет)
+	Pick a Palette Colour From the Image	Выбрать цвет палитры с изображения
+	Table Color	Цвет таблицы
+	Palette Color	Цвет палитры

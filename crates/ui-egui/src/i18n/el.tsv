@@ -4120,3 +4120,12 @@ curves	Smooth	Εξομάλυνση
 	Grayscale Ramp	Διαβάθμιση του γκρι
 	Current Colors	Τρέχοντα χρώματα
 	Make Ramp Web Safe	Μόνο χρώματα ιστού στη διαβάθμιση
+
+# Palette grid (Color Table / Indexed Color Custom…)
+	Set Transparent	Ορισμός διαφάνειας
+	Clear Transparency	Καθαρισμός διαφάνειας
+	Color Picker (First Color)	Επιλογέας χρώματος (Πρώτο χρώμα)
+	Color Picker (Last Color)	Επιλογέας χρώματος (Τελευταίο χρώμα)
+	Pick a Palette Colour From the Image	Επιλέξτε ένα χρώμα παλέτας από την εικόνα
+	Table Color	Χρώμα πίνακα
+	Palette Color	Χρώμα παλέτας

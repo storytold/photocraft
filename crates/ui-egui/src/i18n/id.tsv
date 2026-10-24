@@ -3435,3 +3435,13 @@ curves	Smooth	Haluskan
 	Grayscale Ramp	Gradasi Grayscale
 	Current Colors	Warna Saat Ini
 	Make Ramp Web Safe	Jadikan Gradasi Aman untuk Web
+
+# Palette grid (Color Table / Indexed Color Custom…)
+	Set Transparent	Jadikan Transparan
+	Clear Transparency	Hapus Transparansi
+	Color Picker (First Color)	Pemilih Warna (Warna Pertama)
+	Color Picker (Last Color)	Pemilih Warna (Warna Terakhir)
+	Pick a Palette Colour From the Image	Pilih Warna Palet dari Gambar
+	Table Color	Warna Tabel
+	Palette Color	Warna Palet
+	Color Picker	Pemilih Warna

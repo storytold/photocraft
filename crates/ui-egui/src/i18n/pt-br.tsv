@@ -4350,3 +4350,12 @@ layerLabel	No Color	Sem cor
 	Grayscale Ramp	Rampa de tons de cinza
 	Current Colors	Cores atuais
 	Make Ramp Web Safe	Tornar rampa segura para a Web
+
+# Palette grid (Color Table / Indexed Color Custom…)
+	Set Transparent	Definir como transparente
+	Clear Transparency	Remover transparência
+	Color Picker (First Color)	Seletor de cores (primeira cor)
+	Color Picker (Last Color)	Seletor de cores (última cor)
+	Pick a Palette Colour From the Image	Escolher uma cor da paleta na imagem
+	Table Color	Cor da tabela
+	Palette Color	Cor da paleta

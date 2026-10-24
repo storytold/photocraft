@@ -4037,3 +4037,13 @@ curves	Smooth	Wygładź
 	Grayscale Ramp	Pasek skali szarości
 	Current Colors	Bieżące kolory
 	Make Ramp Web Safe	Ogranicz pasek do kolorów internetowych
+
+# Palette grid (Color Table / Indexed Color Custom…)
+	Set Transparent	Ustaw jako przezroczyste
+	Clear Transparency	Usuń przezroczystość
+	Color Picker (First Color)	Próbnik kolorów (pierwszy kolor)
+	Color Picker (Last Color)	Próbnik kolorów (ostatni kolor)
+	Pick a Palette Colour From the Image	Wybierz kolor palety z obrazu
+	Table Color	Kolor tabeli
+	Palette Color	Kolor palety
+	Color Picker	Próbnik kolorów

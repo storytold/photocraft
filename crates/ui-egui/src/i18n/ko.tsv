@@ -3631,3 +3631,13 @@ curves	Smooth	매끄럽게
 	Grayscale Ramp	회색 음영 램프
 	Current Colors	현재 색상
 	Make Ramp Web Safe	램프를 웹 안전 색상으로 만들기
+
+# Palette grid (Color Table / Indexed Color Custom…)
+	Set Transparent	투명으로 설정
+	Clear Transparency	투명성 해제
+	Color Picker (First Color)	색상 선택기 (첫 번째 색상)
+	Color Picker (Last Color)	색상 선택기 (마지막 색상)
+	Pick a Palette Colour From the Image	이미지에서 팔레트 색상을 선택하세요
+	Table Color	테이블 색상
+	Palette Color	팔레트 색상
+	Color Picker	색상 선택기
