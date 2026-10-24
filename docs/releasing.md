@@ -221,6 +221,12 @@ Why these formats:
   ~/.local/share/applications/ai.storyteller.photocraft.desktop` and `find
   ~/.local/share/icons/hicolor -name 'ai.storyteller.photocraft*' -delete`. The script is
   covered by `packaging/linux/apprun-test.sh` in the packaging-lint workflow.
+  A leading `--cli` launches the bundled `usr/bin/photocraft-cli`, without desktop
+  integration: `./photocraft-<version>-linux-x86_64.AppImage --cli mcp` serves MCP on
+  stdio. A symlink named `photocraft-cli` also selects that binary via the runtime's
+  `ARGV0`. Arguments and process streams pass through unchanged; the entry point
+  uses `exec` so signals and exit status reach the caller directly. CLI routing is
+  covered by `packaging/linux/apprun-cli-test.sh` in the same workflow.
 - **.deb** covers Debian, Ubuntu, Mint, Pop!_OS and elementary. **.rpm** covers Fedora, RHEL
   and its clones, and openSUSE. Both integrate with the menu, MIME and icon caches (the
   `postinst.sh` hook) and uninstall cleanly. Both are built by
