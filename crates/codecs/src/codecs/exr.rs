@@ -49,6 +49,12 @@ pub(super) fn read_meta(bytes: &[u8], limits: &Limits) -> Result<MetaData, Codec
     if total > limits.max_alloc {
         return Err(CodecError::LimitExceeded(format!("{total} bytes across {} parts exceed max_alloc {}", meta.headers.len(), limits.max_alloc)));
     }
+    // The `exr` crate allocates a flat part's samples before reading its chunks, so the file
+    // must be able to hold them (#8597). Lossless EXR compression stays far below 2^16:1 even
+    // against this f32 budget; deep parts size their samples from the file's own counts.
+    if !meta.requirements.has_deep_data {
+        Limits::check_plausible(total, bytes.len(), 1 << 16)?;
+    }
     Ok(meta)
 }
 
