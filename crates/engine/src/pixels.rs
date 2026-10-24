@@ -416,6 +416,7 @@ fn edit_tiles(
 }
 
 /// Remap a surface through a pixel-coordinate mapping (used for flips/rotations).
+#[cfg(test)]
 pub fn remap_surface(s: &Surface, map: impl Fn(i32, i32) -> (i32, i32)) -> Surface {
     let r = s.content_bounds();
     let mut out = Surface::with_default(s.format(), &s.default_pixel());

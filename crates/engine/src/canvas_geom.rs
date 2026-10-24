@@ -9,9 +9,7 @@ use std::sync::Arc;
 
 use photocraft_doc::{Document, Fill, Layer, LayerContent, TextLayer};
 use photocraft_geom::{Affine, Point, Rect};
-use photocraft_raster::Surface;
-
-use crate::pixels::remap_surface;
+use photocraft_raster::{Orient, Surface};
 
 const EPS: f64 = 1e-9;
 
@@ -260,7 +258,9 @@ pub(crate) enum Turn {
 }
 
 impl Turn {
-    /// Pixel map `(x, y) → (x', y')` (pixel indices) for a `w × h` canvas.
+    /// Pixel map `(x, y) → (x', y')` (pixel indices) for a `w × h` canvas: the reference the
+    /// tests check [`Surface::oriented`] against.
+    #[cfg(test)]
     pub(crate) fn pixel_map(self, w: i32, h: i32) -> impl Fn(i32, i32) -> (i32, i32) {
         move |x, y| match self {
             Turn::FlipHorizontal => (w - 1 - x, y),
@@ -282,6 +282,16 @@ impl Turn {
             },
         }
     }
+    /// The raster crate's tile-level form of this turn.
+    fn orient(self) -> Orient {
+        match self {
+            Turn::FlipHorizontal => Orient::FlipHorizontal,
+            Turn::FlipVertical => Orient::FlipVertical,
+            Turn::Rotate180 => Orient::Rotate180,
+            Turn::Cw90 => Orient::Cw90,
+            Turn::Ccw90 => Orient::Ccw90,
+        }
+    }
     fn swaps(self) -> bool {
         matches!(self, Turn::Cw90 | Turn::Ccw90)
     }
@@ -289,10 +299,11 @@ impl Turn {
 
 /// Every pixel surface a canvas turn moves: content, rendered caches (type, shape, smart object,
 /// fill), stored video frames (current and original), masks (layer, smart filter), alpha
-/// channels, Quick Mask and the selection.
-fn remap_pixels(doc: &mut Document, map: &dyn Fn(i32, i32) -> (i32, i32)) {
-    fn rec(layers: &mut [Layer], map: &dyn Fn(i32, i32) -> (i32, i32)) {
-        let re = |s: &mut Surface| *s = remap_surface(s, map);
+/// channels, Quick Mask and the selection. Each one is turned tile by tile in parallel
+/// ([`Surface::oriented`]), not pixel by pixel.
+fn remap_pixels(doc: &mut Document, turn: Turn, w: i32, h: i32) {
+    fn rec(layers: &mut [Layer], o: Orient, w: i32, h: i32) {
+        let re = |s: &mut Surface| *s = s.oriented(o, w, h);
         for l in layers {
             if let Some(m) = &mut l.mask {
                 re(&mut m.surface);
@@ -314,17 +325,18 @@ fn remap_pixels(doc: &mut Document, map: &dyn Fn(i32, i32) -> (i32, i32)) {
                         re(&mut m.surface);
                     }
                 }
-                LayerContent::Group(g) => rec(&mut g.children, map),
+                LayerContent::Group(g) => rec(&mut g.children, o, w, h),
                 _ => {}
             }
         }
     }
-    rec(&mut doc.layers, map);
+    let o = turn.orient();
+    rec(&mut doc.layers, o, w, h);
     for ch in doc.channels.iter_mut().chain(doc.quick_mask.as_mut()) {
-        ch.surface = remap_surface(&ch.surface, map);
+        ch.surface = ch.surface.oriented(o, w, h);
     }
     if let Some(sel) = &doc.selection {
-        doc.selection = Some(remap_surface(sel, map));
+        doc.selection = Some(sel.oriented(o, w, h));
     }
 }
 
@@ -332,8 +344,7 @@ fn remap_pixels(doc: &mut Document, map: &dyn Fn(i32, i32) -> (i32, i32)) {
 /// is re-rendered; vector geometry follows through the matching affine map.
 pub(crate) fn turn_canvas(doc: &mut Document, turn: Turn) {
     let (w, h) = (doc.size.width as i32, doc.size.height as i32);
-    let map = turn.pixel_map(w, h);
-    remap_pixels(doc, &map);
+    remap_pixels(doc, turn, w, h);
     let a = turn.affine(f64::from(doc.size.width), f64::from(doc.size.height));
     if turn.swaps() {
         doc.size = photocraft_doc::Size::new(doc.size.height, doc.size.width);

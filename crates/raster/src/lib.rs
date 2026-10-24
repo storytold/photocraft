@@ -8,7 +8,9 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod interrupt;
+mod orient;
 pub use interrupt::{Cancelled, Interrupt};
+pub use orient::Orient;
 
 use std::collections::BTreeMap;
 use std::fmt;

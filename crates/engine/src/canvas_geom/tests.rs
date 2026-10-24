@@ -364,3 +364,29 @@ fn turns_on_empty_and_tiny_documents_never_panic() {
         assert!(s.execute(command(t), json!({})).is_err(), "no document");
     }
 }
+
+/// Timing of Flip Canvas on a large layered document, against the per-pixel remap it replaced
+/// (`cargo test --release -p photocraft-engine flip_canvas_timing -- --ignored --nocapture`).
+#[test]
+#[ignore = "timing; run by hand"]
+fn flip_canvas_timing() {
+    let (w, h, layers) = (4000u32, 3000u32, 6);
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": w, "height": h})).unwrap();
+    paint(&mut s, |x, y| [x as f32 / w as f32, y as f32 / h as f32, 0.3, 1.0]);
+    for i in 1..layers {
+        s.execute("layer.new.layer", json!({})).unwrap();
+        paint(&mut s, move |x, y| if (x + y * i) % 7 < 4 { [0.9, 0.1 * i as f32, 0.6, 1.0] } else { [0.0; 4] });
+    }
+    let surfaces: Vec<Surface> = doc(&s).layers.iter().filter_map(|l| l.surface().cloned()).collect();
+    let t = std::time::Instant::now();
+    let map = Turn::FlipHorizontal.pixel_map(w as i32, h as i32);
+    for sf in &surfaces {
+        std::hint::black_box(crate::pixels::remap_surface(sf, &map));
+    }
+    let old = t.elapsed();
+    let t = std::time::Instant::now();
+    s.execute("image.imageRotation.flipCanvasHorizontal", json!({})).unwrap();
+    let new = t.elapsed();
+    println!("{w}x{h}, {layers} layers: per-pixel remap {old:?}, Flip Canvas Horizontal command {new:?}");
+}
