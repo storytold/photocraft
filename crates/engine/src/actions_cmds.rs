@@ -367,9 +367,18 @@ fn stop(s: &mut Session, _p: &Value) -> Result<Value> {
 }
 
 /// A step Photoshop plays as a silent no-op although its menu item is greyed: Deselect with an
-/// open document and nothing selected (actions often start with it to clear any selection, #6744).
-fn noop_step(s: &Session, id: &str) -> bool {
-    id == "select.deselect" && s.active().is_some_and(|d| d.doc.selection.is_none())
+/// open document and nothing selected (actions often start with it to clear any selection, #6744),
+/// and an Arrange that can't move the layer, such as Bring to Front on a new adjustment layer that
+/// is already on top (#8453).
+fn noop_step(s: &Session, id: &str, params: &Value) -> bool {
+    let Some(d) = s.active() else { return false };
+    let dir = match id {
+        "select.deselect" => return d.doc.selection.is_none(),
+        "layer.arrange.bringForward" | "layer.arrange.bringToFront" => 1,
+        "layer.arrange.sendBackward" | "layer.arrange.sendToBack" => -1,
+        _ => return false,
+    };
+    crate::commands::layer_param(s, params).is_ok_and(|layer| crate::commands::arrange_at_end(&d.doc, layer, dir))
 }
 
 fn run_recorded(s: &mut Session, action: &Action, from: usize) -> (u64, Option<Value>) {
@@ -386,7 +395,7 @@ fn run_recorded(s: &mut Session, action: &Action, from: usize) -> (u64, Option<V
             failed = Some(json!({"step": i, "id": id, "error": e.to_string()}));
             break;
         }
-        if noop_step(s, id) {
+        if noop_step(s, id, params) {
             ran += 1;
             continue;
         }
@@ -807,6 +816,51 @@ mod tests {
         let played = s.execute("actions.play", json!({"action": 0})).unwrap();
         assert_eq!(played["ran"], 2, "{played}");
         assert_eq!(s.active().unwrap().doc.layers.last().unwrap().name, "A");
+    }
+
+    #[test]
+    fn arrange_that_cannot_move_is_a_noop_in_playback() {
+        // #8453: imported actions make an adjustment layer, then Bring it to Front, where it already is.
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+        let steps = vec![
+            ("layer.newAdjustmentLayer.curves".to_string(), json!({})),
+            ("layer.arrange.bringToFront".to_string(), json!({})),
+            ("layer.new.layer".to_string(), json!({"name": "After"})),
+        ];
+        s.actions.list.push(Action::new("Repro", steps));
+        let before = s.active().unwrap().history.past_len();
+        let played = s.execute("actions.play", json!({"action": 0})).unwrap();
+        assert_eq!(played["ran"], 3, "{played}");
+        assert!(played.get("failed").is_none(), "{played}");
+        assert_eq!(s.active().unwrap().history.past_len(), before + 2, "the no-op adds no history step");
+
+        // The predicate agrees with the command for every layer: top level, above the Background,
+        // and inside a group.
+        let a = s.execute("layer.new.layer", json!({"name": "A"})).unwrap()["layer"].clone();
+        s.execute("layer.select", json!({"layer": a})).unwrap();
+        s.execute("layer.groupLayers", json!({})).unwrap();
+        s.execute("layer.new.layer", json!({"name": "B"})).unwrap();
+        let cmds = [("layer.arrange.bringForward", 1), ("layer.arrange.bringToFront", 1), ("layer.arrange.sendBackward", -1), ("layer.arrange.sendToBack", -1)];
+        let ids: Vec<_> = s.active().unwrap().doc.walk().into_iter().map(|(_, _, l)| l.id).collect();
+        let bg = crate::background_cmds::background_id(&s.active().unwrap().doc);
+        for id in ids.into_iter().filter(|id| Some(*id) != bg) {
+            for (cmd, dir) in cmds {
+                let at_end = crate::commands::arrange_at_end(&s.active().unwrap().doc, id, dir);
+                let ran = s.execute(cmd, json!({"layer": id.0}));
+                assert_eq!(at_end, ran.is_err(), "{cmd} on {id:?}: {ran:?}");
+                if ran.is_ok() {
+                    s.execute("edit.undo", json!({})).unwrap();
+                }
+            }
+        }
+
+        // Arranging the Background still stops playback: Photoshop refuses it too.
+        let bg = bg.unwrap();
+        s.actions.list.push(Action::new("Bg", vec![("layer.arrange.bringToFront".to_string(), json!({"layer": bg.0}))]));
+        let played = s.execute("actions.play", json!({"action": 1})).unwrap();
+        assert_eq!(played["ran"], 0, "{played}");
+        assert!(played["failed"].is_object(), "{played}");
     }
 
     #[test]
