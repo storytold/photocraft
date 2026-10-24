@@ -361,8 +361,8 @@ fn new_guide_layout_remembers_successful_values_not_cancelled_edits() {
     let (mut app, ctx) = app_with(1);
     let first = menu(&mut app, &ctx, "view.newGuideLayout", json!({})).unwrap()["dialog"].as_u64().unwrap();
     assert_eq!(app.ui.dialog_mut(first).unwrap().fields["columns"], 8);
-    assert_eq!(app.ui.dialog_mut(first).unwrap().fields["gutter"], 20);
-    for (key, value) in [("columns", json!(2)), ("gutter", json!(0)), ("rows", json!(2)), ("rowGutter", json!(0))] {
+    assert_eq!(app.ui.dialog_mut(first).unwrap().fields["gutter"], "20 px");
+    for (key, value) in [("columns", json!(2)), ("gutter", json!("0 px")), ("rows", json!(2)), ("rowGutter", json!("0 px"))] {
         app.ui.dialog_mut(first).unwrap().fields.insert(key.into(), value);
     }
     crate::dialogs::confirm(&mut app, first).unwrap();
@@ -370,9 +370,9 @@ fn new_guide_layout_remembers_successful_values_not_cancelled_edits() {
     let second = menu(&mut app, &ctx, "view.newGuideLayout", json!({})).unwrap()["dialog"].as_u64().unwrap();
     let fields = &app.ui.dialog_mut(second).unwrap().fields;
     assert_eq!(fields["columns"], 2);
-    assert_eq!(fields["gutter"], 0);
+    assert_eq!(fields["gutter"], "0 px");
     assert_eq!(fields["rows"], 2);
-    assert_eq!(fields["rowGutter"], 0);
+    assert_eq!(fields["rowGutter"], "0 px");
     assert_eq!(fields["clearExisting"], false);
     // A cancelled edit must not replace the last successfully used values.
     app.ui.dialog_mut(second).unwrap().fields.insert("columns".into(), json!(9));
