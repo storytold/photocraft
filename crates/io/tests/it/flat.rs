@@ -1190,3 +1190,51 @@ fn a_stereo_png_keeps_its_stereo_mark_on_save() {
     let plain = export(&single(ColorMode::Rgb, SampleType::U8, false), "png", &ExportOptions::default()).unwrap();
     assert_eq!(photocraft_codecs::png_stereo(&plain.bytes), None);
 }
+
+/// An 8-bit RGB document whose only layer is red on its left half and transparent on its right.
+fn half_transparent_doc() -> photocraft_doc::Document {
+    let mut d = photocraft_doc::Document::new("b", photocraft_geom::Size::new(8, 4), ColorMode::Rgb, SampleType::U8);
+    let rgba: Vec<u8> = (0..4).flat_map(|_| (0..8).flat_map(|x| if x < 4 { [200, 30, 40, 255] } else { [0, 0, 0, 0] })).collect();
+    let s = photocraft_raster::Surface::from_interleaved(d.pixel_format(), d.bounds(), &rgba);
+    d.layers.push(photocraft_doc::Layer::new("Layer 1", photocraft_doc::LayerContent::Raster(s)));
+    d
+}
+
+/// A BMP's bits per pixel (the BITMAPINFOHEADER's `biBitCount`).
+fn bmp_bpp(bytes: &[u8]) -> u16 {
+    u16::from_le_bytes([bytes[28], bytes[29]])
+}
+
+/// #8374: BMP Options' depth. 24 bits composite the transparency over white (as Photoshop writes
+/// a 24-bit BMP), 32 keep it as the alpha, and no choice keeps the automatic depth (32 with
+/// transparency, else 24).
+#[test]
+fn bmp_bits_choose_the_bmp_depth() {
+    let d = half_transparent_doc();
+    let bmp = |bits: Option<photocraft_io::BmpBits>| export(&d, "a.bmp", &ExportOptions { bmp_bits: bits, ..ExportOptions::default() }).unwrap();
+    assert_eq!(bmp_bpp(&bmp(None).bytes), 32, "transparency picks 32 without a choice");
+
+    let r = bmp(Some(photocraft_io::BmpBits::Bits24));
+    assert_eq!(bmp_bpp(&r.bytes), 24);
+    assert!(r.warnings.iter().any(|w| w.contains("composited over white")), "{:?}", r.warnings);
+    let img = photocraft_codecs::decode(&r.bytes).unwrap();
+    let px = img.data();
+    let ch = img.layout().channels();
+    assert_eq!(&px[..3], &[200, 30, 40], "the opaque half keeps its colour");
+    assert_eq!(&px[7 * ch..7 * ch + 3], &[255, 255, 255], "the transparent half is white");
+
+    let r = bmp(Some(photocraft_io::BmpBits::Bits32));
+    assert_eq!(bmp_bpp(&r.bytes), 32);
+    let img = photocraft_codecs::decode(&r.bytes).unwrap();
+    assert_eq!(img.layout(), photocraft_codecs::ChannelLayout::Rgba);
+    assert_eq!((img.data()[3], img.data()[7 * 4 + 3]), (255, 0), "the transparency is the alpha");
+
+    // An opaque document: 24 without a choice, and 32 adds an opaque alpha.
+    let (opaque, _) = tga_rgb_doc();
+    let o = |bits| export(&opaque, "a.bmp", &ExportOptions { bmp_bits: bits, ..ExportOptions::default() }).unwrap();
+    assert_eq!(bmp_bpp(&o(None).bytes), 24);
+    let r = o(Some(photocraft_io::BmpBits::Bits32));
+    assert_eq!(bmp_bpp(&r.bytes), 32);
+    let img = photocraft_codecs::decode(&r.bytes).unwrap();
+    assert!(img.data().as_chunks::<4>().0.iter().all(|p| p[3] == 255), "opaque alpha");
+}

@@ -1014,6 +1014,8 @@ mod tests {
     #[path = "tiff_tests.rs"]
     mod tiff_tests;
 
+    #[path = "bmp_tests.rs"]
+    mod bmp_tests;
     #[path = "targa_tests.rs"]
     mod targa_tests;
 

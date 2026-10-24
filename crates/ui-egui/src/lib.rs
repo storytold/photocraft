@@ -33,6 +33,7 @@ pub(crate) mod bitmap_dialog;
 mod blend_keys;
 pub(crate) mod blend_preview;
 pub mod blur_pins;
+pub mod bmp_options_ui;
 mod brand;
 pub(crate) mod brush_cursor;
 pub mod brush_panel;
@@ -285,6 +286,7 @@ pub(crate) const SAVE_OPTIONS_OPEN: &str = "Answer the TIFF, Targa, DDS or JPEG 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct FormatChoices {
     pub tga_bits: Option<photocraft_io::TgaBits>,
+    pub bmp_bits: Option<photocraft_io::BmpBits>,
     pub dds: Option<photocraft_io::DdsOptions>,
     pub jpeg: Option<jpeg_options_ui::JpegChoice>,
 }
@@ -294,6 +296,7 @@ impl FormatChoices {
     pub fn from_params(params: &Value, cmd: &str) -> Result<Self, String> {
         Ok(FormatChoices {
             tga_bits: targa_options_ui::bits_param(params, cmd)?,
+            bmp_bits: bmp_options_ui::bits_param(params, cmd)?,
             dds: dds_options_ui::options_param(params, cmd)?,
             jpeg: jpeg_options_ui::choice_param(params, cmd)?,
         })
@@ -304,6 +307,7 @@ impl FormatChoices {
     pub(crate) fn from_step(params: &Value, cmd: &str) -> Result<Self, String> {
         Ok(FormatChoices {
             tga_bits: targa_options_ui::bits_param(params, cmd)?,
+            bmp_bits: bmp_options_ui::bits_param(params, cmd)?,
             dds: dds_options_ui::options_param(params, cmd)?,
             jpeg: jpeg_options_ui::recorded_choice(params, cmd)?,
         })
@@ -311,7 +315,12 @@ impl FormatChoices {
 
     /// The export settings with these answers applied.
     pub fn apply(self, settings: ExportSettings) -> ExportSettings {
-        let settings = ExportSettings { tga_bits: self.tga_bits.or(settings.tga_bits), dds: self.dds.unwrap_or(settings.dds), ..settings };
+        let settings = ExportSettings {
+            tga_bits: self.tga_bits.or(settings.tga_bits),
+            bmp_bits: self.bmp_bits.or(settings.bmp_bits),
+            dds: self.dds.unwrap_or(settings.dds),
+            ..settings
+        };
         match self.jpeg {
             Some(j) => j.apply(settings),
             None => settings,
@@ -322,6 +331,9 @@ impl FormatChoices {
     pub(crate) fn record(self, step: &mut Value) {
         if let Some(bits) = self.tga_bits {
             step["tgaBits"] = bits.bits().into();
+        }
+        if let Some(bits) = self.bmp_bits {
+            step["bmpBits"] = bits.bits().into();
         }
         if let Some(dds) = self.dds {
             dds_options_ui::record(dds, step);
@@ -354,6 +366,8 @@ pub struct ExportSettings {
     /// Targa: bits per pixel from Targa Options or Export As (`None`: 32 with an alpha channel or
     /// transparency, else 24).
     pub tga_bits: Option<photocraft_io::TgaBits>,
+    /// BMP: bits per pixel from BMP Options (`None`: 32 with transparency, else 24).
+    pub bmp_bits: Option<photocraft_io::BmpBits>,
     /// DDS: the compression and mip chain from DDS Options (uncompressed without mipmaps unless
     /// chosen).
     pub dds: photocraft_io::DdsOptions,
@@ -389,6 +403,7 @@ impl Default for ExportSettings {
             tiff_layers: true,
             xmp_all: true,
             tga_bits: None,
+            bmp_bits: None,
             dds: photocraft_io::DdsOptions::default(),
             image_previews: true,
             psd_maximize_compatibility: true,
@@ -419,6 +434,7 @@ impl ExportSettings {
         opts.tiff_layers = self.tiff_layers;
         opts.xmp = if self.xmp_all { photocraft_io::XmpEmbed::All } else { photocraft_io::XmpEmbed::None };
         opts.tga_bits = self.tga_bits;
+        opts.bmp_bits = self.bmp_bits;
         opts.encode.dds = self.dds;
         opts.image_previews = self.image_previews;
         opts.psd_maximize_compatibility = self.psd_maximize_compatibility;
@@ -990,6 +1006,8 @@ pub struct PhotocraftApp {
     pub(crate) disk_stamps: HashMap<photocraft_doc::DocId, (String, FileStamp)>,
     /// A save to an RGB Targa parked behind the Targa Options prompt (see `targa_options_ui`).
     pub(crate) targa_options: Option<targa_options_ui::Prompt>,
+    /// A save to an RGB BMP parked behind the BMP Options prompt (see `bmp_options_ui`).
+    pub(crate) bmp_options: Option<bmp_options_ui::Prompt>,
     /// A save to a JPEG parked behind the JPEG Options prompt (see `jpeg_options_ui`).
     pub(crate) jpeg_options: Option<jpeg_options_ui::Prompt>,
     /// A save to a DDS texture parked behind the DDS Options prompt (see `dds_options_ui`).
@@ -1162,6 +1180,7 @@ impl PhotocraftApp {
             save_dirs: HashMap::new(),
             disk_stamps: HashMap::new(),
             targa_options: None,
+            bmp_options: None,
             jpeg_options: None,
             dds_options: None,
             held_opens: Default::default(),
@@ -1791,6 +1810,11 @@ impl PhotocraftApp {
             targa_options_ui::park(self, path.clone(), copy, "file.saveAs")?;
             return Ok(serde_json::json!({"path": path, "warnings": []}));
         }
+        if choices.bmp_bits.is_none() && bmp_options_ui::wants_prompt(self, &path) {
+            let copy = self.saves_copy(&path, None)?;
+            bmp_options_ui::park(self, path.clone(), copy, "file.saveAs", None)?;
+            return Ok(serde_json::json!({"path": path, "warnings": []}));
+        }
         if choices.dds.is_none() && dds_options_ui::wants_prompt(&path) {
             let copy = self.saves_copy(&path, None)?;
             dds_options_ui::park(self, path.clone(), copy, "file.saveAs")?;
@@ -1846,6 +1870,7 @@ impl PhotocraftApp {
     pub(crate) fn journal_as_plain_save(&mut self, path: &str) {
         let parked = [
             self.targa_options.as_mut().map(|p| (&p.path, &mut p.record)),
+            self.bmp_options.as_mut().map(|p| (&p.path, &mut p.record)),
             self.dds_options.as_mut().map(|p| (&p.path, &mut p.record)),
             self.jpeg_options.as_mut().map(|p| (&p.path, &mut p.record)),
         ];
@@ -1859,7 +1884,7 @@ impl PhotocraftApp {
             && last.0 == "file.saveAs"
             && last.1.get("path").and_then(Value::as_str) == Some(path)
             && let Some(step) = last.1.as_object()
-            && step.keys().all(|k| matches!(k.as_str(), "path" | "tgaBits" | "ddsCompression" | "ddsMipmaps" | "quality" | "jpegFormat"))
+            && step.keys().all(|k| matches!(k.as_str(), "path" | "tgaBits" | "bmpBits" | "ddsCompression" | "ddsMipmaps" | "quality" | "jpegFormat"))
         {
             let mut step = step.clone();
             step.remove("path");
@@ -2102,7 +2127,7 @@ impl PhotocraftApp {
 
     /// TIFF, Targa, DDS or JPEG Options is waiting on an answer before a save is written.
     pub(crate) fn save_options_open(&self) -> bool {
-        self.tiff_options.is_some() || self.targa_options.is_some() || self.dds_options.is_some() || self.jpeg_options.is_some()
+        self.tiff_options.is_some() || self.targa_options.is_some() || self.bmp_options.is_some() || self.dds_options.is_some() || self.jpeg_options.is_some()
     }
 
     /// Writes a save that waited on a format prompt (Targa, DDS or JPEG Options) once answered:
@@ -2489,6 +2514,7 @@ impl eframe::App for PhotocraftApp {
         discard_ui::show(self, &ctx);
         tiff_options_ui::show(self, &ctx);
         targa_options_ui::show(self, &ctx);
+        bmp_options_ui::show(self, &ctx);
         jpeg_options_ui::show(self, &ctx);
         dds_options_ui::show(self, &ctx);
         distort_ui::show(self, &ctx);

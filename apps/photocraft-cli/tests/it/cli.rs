@@ -682,6 +682,35 @@ fn tga_bits_choose_the_targa_depth() {
     }
 }
 
+/// #8374: `--bmp-bits` picks a BMP's bits per pixel (`biBitCount`, bytes 28–29); anything but
+/// 24 or 32 is refused and nothing is written.
+#[test]
+fn bmp_bits_choose_the_bmp_depth() {
+    let d = tmp("bmp-bits");
+    let a = d.join("a.png");
+    // The PNG has partial transparency: without a choice the BMP keeps it, at 32 bits.
+    write_png(&a, 8, 4, 3);
+    for (bits, want) in [(None, 32), (Some("24"), 24), (Some("32"), 32)] {
+        let out = d.join("a.bmp");
+        let mut convert = bin();
+        convert.arg("convert").arg(&a).arg(&out);
+        if let Some(b) = bits {
+            convert.args(["--bmp-bits", b]);
+        }
+        ok(&mut convert);
+        let bytes = std::fs::read(&out).unwrap();
+        assert_eq!(u16::from_le_bytes([bytes[28], bytes[29]]), want, "--bmp-bits {bits:?}");
+    }
+    for bad in ["16", "0", "abc", ""] {
+        let out = d.join("bad.bmp");
+        let o = bin().arg("convert").arg(&a).arg(&out).args(["--bmp-bits", bad]).output().unwrap();
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert_eq!(o.status.code(), Some(2), "--bmp-bits {bad}");
+        assert!(err.contains("--bmp-bits") && err.contains("expected 24 or 32"), "--bmp-bits {bad}: {err}");
+        assert!(!out.exists(), "--bmp-bits {bad} wrote a file");
+    }
+}
+
 /// #7437: `run <file> --out` to that same file, however `--out` is spelt, is refused before the
 /// file is read or any command runs, unless `--in-place` asks for it (as `batch` does, #492).
 #[test]
