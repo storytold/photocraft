@@ -1345,6 +1345,30 @@ mod tests {
         }
     }
 
+    /// Consumers identify tiles by their `Arc` pointer (e.g. ui-egui's histogram cache keys), so a
+    /// write through COW must hand the written copy a *new* tile, never keep the shared pointer:
+    /// mutating in place would make two different surfaces hash alike. This pins that invariant
+    /// for both `tile_mut` and `try_tile_mut`.
+    #[test]
+    fn writing_a_shared_surface_replaces_the_tile_not_its_bytes() {
+        let fmt = PixelFormat::GRAY8;
+        let mut a = Surface::with_default(fmt, &[0.0]);
+        a.write_pixel(10, 10, &[0.5]);
+        let coord = a.tiles().next().map(|(c, _)| *c).expect("the write allocated a tile");
+        let before = Arc::as_ptr(a.tile(coord).expect("tile exists")) as usize;
+        for mutate in ["tile_mut", "try_tile_mut"] {
+            let mut b = a.clone();
+            let ptr = Arc::as_ptr(b.tile(coord).expect("clone shares the tile")) as usize;
+            assert_eq!(ptr, before, "{}: the clone shares the tile before writing", mutate);
+            match mutate {
+                "tile_mut" => b.tile_mut(coord).data.fill(255),
+                _ => b.try_tile_mut(coord).expect("allocation of a modest tile cannot fail").data.fill(128),
+            }
+            let after = Arc::as_ptr(b.tile(coord).expect("tile exists")) as usize;
+            assert_ne!(after, ptr, "{}: a COW write must allocate a new tile", mutate);
+        }
+    }
+
     #[test]
     fn region_writes_match_scalar_bytes_for_every_format() {
         let special = [
