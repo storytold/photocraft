@@ -49,6 +49,18 @@ pub struct KysSet {
     pub windows: bool,
 }
 
+/// The set name in the root `filename` attribute (`$$$/.../{name}={name}`). The name may itself
+/// contain `/` or `=`, so split on the key prefix and the doubled name, not on the last separator.
+fn filename_to_name(f: &str) -> &str {
+    let Some(rest) = f.strip_prefix("$$$/") else { return f.rsplit(['=', '/']).next().unwrap_or(f).trim() };
+    let rest = rest.strip_prefix("FileName/Presets/KeyboardCustomization/").unwrap_or(rest);
+    let mid = rest.len() / 2;
+    if rest.len() % 2 == 1 && rest.is_char_boundary(mid) && rest.as_bytes()[mid] == b'=' && rest[..mid] == rest[mid + 1..] {
+        return rest[..mid].trim();
+    }
+    rest.split_once('=').map_or(rest, |(_, n)| n).trim()
+}
+
 /// Parse a `.kys` file (or Photoshop's live `Keyboard Shortcuts.psp`, the same XML). Rows
 /// without a name or a shortcut are skipped.
 pub fn parse(text: &str) -> Result<KysSet, String> {
@@ -61,7 +73,7 @@ pub fn parse(text: &str) -> Result<KysSet, String> {
     if root.tag_name().name() != "photoshop-keyboard-shortcuts" {
         return Err("not a keyboard shortcut set (.kys): no <photoshop-keyboard-shortcuts> root".into());
     }
-    let name = root.attribute("filename").map(|f| f.rsplit(['=', '/']).next().unwrap_or(f).trim()).filter(|n| !n.is_empty()).map(str::to_string);
+    let name = root.attribute("filename").map(filename_to_name).filter(|n| !n.is_empty()).map(str::to_string);
     let mut set = KysSet { name, ..Default::default() };
     for node in root.children().filter(|n| n.is_element()) {
         match node.tag_name().name() {
@@ -308,6 +320,13 @@ pub fn write(name: &str, entries: &[Entry]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn set_name_with_separators_round_trips() {
+        for n in ["Retouch 1/2", "a=b", "x/y=z"] {
+            assert_eq!(parse(&write(n, &[])).unwrap().name.as_deref(), Some(n));
+        }
+    }
 
     const SET: &str = "\u{feff}<?xml version=\"1.0\" encoding=\"UTF-8\"?>
 <photoshop-keyboard-shortcuts version=\"4\" filename=\"$$$/FileName/Presets/KeyboardCustomization/texcuts=texcuts\">
