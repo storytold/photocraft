@@ -145,6 +145,9 @@ pub struct Metadata {
     /// Photoshop layer data (TIFF tag 37724 `ImageSourceData`): a layered TIFF's layers. Kept
     /// opaque here; `photocraft-io` reads and writes it through `photocraft-psd`.
     pub photoshop_layers: Option<Vec<u8>>,
+    /// TIFF extra samples other than transparency, in file order. Each plane uses
+    /// the image's native-endian sample type and dimensions; names/types live in 34377.
+    pub tiff_extra_samples: Vec<Vec<u8>>,
 }
 
 impl Metadata {
@@ -155,6 +158,7 @@ impl Metadata {
             && self.text.is_empty()
             && self.photoshop_resources.is_none()
             && self.photoshop_layers.is_none()
+            && self.tiff_extra_samples.is_empty()
     }
 }
 

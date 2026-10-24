@@ -154,6 +154,10 @@ impl ImageSourceData {
     pub fn to_bytes(&self, order: ByteOrder) -> Result<(Vec<u8>, Vec<String>)> {
         let version = self.version;
         let mut body = Vec::new();
+        let before_layers = self.global_blocks.iter().rposition(|b| matches!(&b.key, b"Mtrn" | b"Mt16" | b"Mt32")).map_or(0, |i| i + 1);
+        for b in self.global_blocks.iter().take(before_layers) {
+            b.write(&mut body, version, 4)?;
+        }
         if let Some(info) = &self.layer_info {
             // Pad to 4 without cloning the layers (and all their pixel data) just to set `padding`.
             let pad = info.pad_len(version, 4)?;
@@ -166,10 +170,14 @@ impl ImageSourceData {
         // Blocks without explicit padding are padded to 4 as they are written (alignment 4), so
         // the global mask and blocks are written from the model, without a copy of their data.
         // The signature stays (a foreign-order marker included).
-        if let Some(m) = &self.global_layer_mask {
+        // A zero-length PSD global mask section means "no mask". It is not a valid
+        // TIFF LMsk record: readers expect the color, opacity and kind fields there.
+        if let Some(m) = &self.global_layer_mask
+            && !m.data.is_empty()
+        {
             TaggedBlock::write_parts(&mut body, *b"8BIM", *b"LMsk", &m.data, None, version, 4)?;
         }
-        for b in &self.global_blocks {
+        for b in self.global_blocks.iter().skip(before_layers) {
             b.write(&mut body, version, 4)?;
         }
         body.put(&self.trailing);
@@ -192,7 +200,7 @@ impl ImageSourceData {
             byte_order: ByteOrder::Big,
             layer_info: file.layer_info.clone(),
             layer_info_key: key,
-            global_layer_mask: file.global_layer_mask.clone(),
+            global_layer_mask: file.global_layer_mask.clone().filter(|m| !m.data.is_empty()),
             global_blocks: file.global_blocks.clone(),
             trailing: file.layer_mask_trailing.clone(),
         }
@@ -2010,6 +2018,33 @@ mod tests {
                 assert_ne!(big, little, "{}", String::from_utf8_lossy(&key));
             }
         }
+    }
+
+    #[test]
+    fn absent_psd_global_mask_is_not_an_empty_tiff_mask_record() {
+        let mut file = testgen::layered(Version::Psd, ColorMode::Rgb, 8, Compression::Rle);
+        file.global_layer_mask = Some(GlobalLayerMask::default());
+        file.global_blocks.clear();
+        for layer in &mut file.layer_info.as_mut().unwrap().layers {
+            layer.blocks.retain(|b| !UNKNOWN.contains(&&b.key));
+        }
+        for order in [ByteOrder::Big, ByteOrder::Little] {
+            let (bytes, warnings) = ImageSourceData::from_psd(&file).to_bytes(order).unwrap();
+            assert!(warnings.is_empty());
+            let (back, _) = ImageSourceData::from_bytes(&bytes).unwrap();
+            assert!(back.global_layer_mask.is_none());
+            assert_eq!(known(&back).layer_info, known(&ImageSourceData::from_psd(&file)).layer_info);
+        }
+    }
+
+    #[test]
+    fn tiff_transparency_marker_precedes_layer_block() {
+        let file = testgen::layered(Version::Psd, ColorMode::Rgb, 32, Compression::Raw);
+        let mut data = ImageSourceData::from_psd(&file);
+        data.global_blocks = vec![TaggedBlock::new(*b"Mt32", Vec::new())];
+        let bytes = data.to_bytes(ByteOrder::Big).unwrap().0;
+        assert_eq!(bytes.get(36..44), Some(&b"8BIMMt32"[..]));
+        assert_eq!(known(&ImageSourceData::from_bytes(&bytes).unwrap().0).layer_info, known(&data).layer_info);
     }
 
     #[test]

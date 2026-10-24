@@ -309,3 +309,8 @@ pub fn encode(image: &Image, format: Format, opts: &EncodeOptions) -> Result<Vec
         Format::Gif | Format::Bmp | Format::Tga | Format::Ico | Format::Qoi | Format::Hdr | Format::Avif => via_image::encode(format, image, plan, opts),
     }
 }
+/// Write an RGB/RGBA TIFF with one additional unspecified spot sample.
+/// The caller supplies Photoshop channel names and DisplayInfo in image metadata.
+pub fn encode_tiff_rgb_spot(image: &Image, spot: &[u8], opts: &EncodeOptions) -> Result<Vec<u8>, CodecError> {
+    codecs::tiff::encode_rgb_spot(image, spot, opts)
+}

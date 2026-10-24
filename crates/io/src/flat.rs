@@ -241,7 +241,10 @@ pub fn import_tiff_page(name: &str, bytes: &[u8], page: Option<usize>) -> Result
         }
         return Ok(r);
     }
-    image_to_document(name, &img.oriented(orientation)?)
+    let img = img.oriented(orientation)?;
+    let mut r = image_to_document(name, &img)?;
+    crate::tiff_layers::restore_extra_channels(&mut r.document, &img, &mut r.warnings)?;
+    Ok(r)
 }
 
 /// A decoded flat image as a single-layer document: a locked "Background" when it is opaque, a

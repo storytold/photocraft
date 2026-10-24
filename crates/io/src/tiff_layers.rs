@@ -53,6 +53,7 @@ pub(crate) fn import_layered(name: &str, img: &Image, layers: &[u8]) -> Result<I
         Ok(v) => v,
         Err(e) => {
             let mut r = image_to_document(name, img)?;
+            restore_extra_channels(&mut r.document, img, &mut r.warnings)?;
             r.warnings.push(format!("the PSD layer data could not be read ({e}); opened flattened"));
             return Ok(r);
         }
@@ -115,6 +116,7 @@ pub(crate) fn import_layered(name: &str, img: &Image, layers: &[u8]) -> Result<I
         doc.icc_profile = img.icc.clone().map(Arc::new);
     }
     doc.metadata.text = img.meta.text.clone();
+    restore_extra_channels(&mut doc, &img, &mut warnings)?;
     Ok(ImportResult { document: doc, warnings, source_read_only: false, preview_only: false })
 }
 
@@ -260,7 +262,12 @@ pub(crate) fn export_layered(doc: &Document, opts: &ExportOptions, ctl: &photocr
     let has_alpha = file.layer_info.as_ref().is_some_and(|l| l.merged_alpha);
     let channels = cc + usize::from(has_alpha);
     let extra = usize::from(file.header.channels).saturating_sub(channels);
-    if extra > 0 {
+    let write_spot = fmt.mode == ColorMode::Rgb
+        && extra == 1
+        && doc.channels.len() == 1
+        && doc.channels.first().is_some_and(|c| c.spot.is_some())
+        && doc.quick_mask.is_none();
+    if extra > 0 && !write_spot {
         warnings.push(format!("{extra} alpha channel(s) are not written to TIFF (one transparency channel only)"));
     }
     let sample = csample(fmt.sample);
@@ -281,9 +288,26 @@ pub(crate) fn export_layered(doc: &Document, opts: &ExportOptions, ctl: &photocr
         text: if opts.xmp == crate::XmpEmbed::All { doc.metadata.text.clone() } else { Vec::new() },
         dpi: Some((doc.resolution_dpi, doc.resolution_dpi)),
         photoshop_resources: Some(resources),
-        photoshop_layers: Some(layers),
+        photoshop_layers: opts.tiff_layers.then_some(layers),
         ..Default::default()
     };
+    if write_spot {
+        // Extract an actual decoded merged plane, never a compressed byte offset.
+        let plane_bytes = (w as usize)
+            .checked_mul(h as usize)
+            .and_then(|n| n.checked_mul(sample.bytes()))
+            .ok_or_else(|| IoError::Unsupported("spot plane size overflow".into()))?;
+        let at = channels.checked_mul(plane_bytes).ok_or_else(|| IoError::Unsupported("spot offset overflow".into()))?;
+        let spot = file.image_data.data.get(at..at.saturating_add(plane_bytes)).ok_or_else(|| IoError::Unsupported("missing spot channel pixels".into()))?;
+        let mut native = spot.to_vec();
+        if cfg!(target_endian = "little") {
+            for value in native.chunks_exact_mut(sample.bytes()) {
+                value.reverse();
+            }
+        }
+        let bytes = codecs::encode_tiff_rgb_spot(&img, &native, &opts.encode)?;
+        return Ok(ExportResult { bytes, warnings });
+    }
     encode_image(&img, Format::Tiff, opts, warnings)
 }
 
@@ -314,6 +338,60 @@ pub fn strip_foreign_order_blocks(file: &mut photocraft_psd::PsdFile) -> Vec<Str
     }
     strip(&mut file.global_blocks, "document");
     warnings
+}
+
+/// Restore non-transparency samples independently of whether layer data exists or is readable.
+pub(crate) fn restore_extra_channels(doc: &mut Document, img: &Image, warnings: &mut Vec<String>) -> Result<(), IoError> {
+    let Some(raw) = img.meta.photoshop_resources.as_deref() else {
+        if !img.meta.tiff_extra_samples.is_empty() {
+            warnings.push("TIFF extra samples have no Photoshop channel metadata; restored as alpha channels".into());
+        }
+        return restore_planes(doc, img, &[], None);
+    };
+    let (resources, w) = resources_from_bytes(raw)?;
+    warnings.extend(w);
+    let names = resources.iter().find(|r| r.id == 1045).map(|r| crate::psd_import::unicode_names(&r.data)).unwrap_or_default();
+    let display = resources
+        .iter()
+        .find(|r| r.id == crate::channel_map::DISPLAY_INFO)
+        .map(|r| (r.data.as_slice(), true))
+        .or_else(|| resources.iter().find(|r| r.id == crate::channel_map::DISPLAY_INFO_OLD).map(|r| (r.data.as_slice(), false)));
+    restore_planes(doc, img, &names, display)?;
+    Ok(())
+}
+
+fn restore_planes(doc: &mut Document, img: &Image, names: &[String], display: Option<(&[u8], bool)>) -> Result<(), IoError> {
+    use photocraft_doc::AlphaChannel;
+    use photocraft_raster::Surface;
+    let skip = usize::from(img.layout().has_alpha() && names.len() == img.meta.tiff_extra_samples.len() + 1);
+    let fmt = photocraft_color::PixelFormat::new(ColorMode::Grayscale, doc.depth, false);
+    let mut channels = Vec::new();
+    let expected = (doc.size.width as usize)
+        .checked_mul(doc.size.height as usize)
+        .and_then(|n| n.checked_mul(doc.depth.bytes()))
+        .ok_or_else(|| IoError::Unsupported("TIFF extra plane size overflow".into()))?;
+    for (i, plane) in img.meta.tiff_extra_samples.iter().enumerate() {
+        if plane.len() != expected {
+            return Err(IoError::Unsupported("TIFF extra sample depth/size does not match the document".into()));
+        }
+        let mut surface = Surface::new(fmt);
+        surface.write_interleaved(doc.bounds(), plane);
+        surface.prune();
+        channels.push(AlphaChannel::new(names.get(i + skip).cloned().unwrap_or_else(|| format!("Alpha {}", i + 1)), surface));
+    }
+    if let Some((data, versioned)) = display {
+        crate::channel_map::apply_display_info(data, versioned, skip, &mut channels);
+    }
+    for c in &mut channels {
+        if c.spot.is_some() {
+            let mut bytes = c.surface.to_interleaved(doc.bounds());
+            crate::channel_map::invert_spot_samples(&mut bytes, doc.depth);
+            c.surface.write_interleaved(doc.bounds(), &bytes);
+            c.surface.prune();
+        }
+    }
+    doc.channels = channels;
+    Ok(())
 }
 
 #[cfg(test)]

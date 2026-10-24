@@ -249,7 +249,9 @@ pub(crate) fn decode_page(bytes: &[u8], page: Option<usize>, limits: &Limits) ->
         .ok_or_else(|| CodecError::InvalidImage(format!("TIFF page {index} does not exist (the file has {} directories)", info.pages.len())))?;
     let dir = file.ifd(p.ifd_offset).ok_or_else(|| err("image directory cut off"))?;
     let mut img = decode_ifd(&file, &dir, limits)?;
+    let extra = std::mem::take(&mut img.meta.tiff_extra_samples);
     img.meta = metadata(&file, &dir, &mut img.icc);
+    img.meta.tiff_extra_samples = extra;
     let pages = info.page_count();
     if pages > 1 {
         img.warnings.push(DecodeWarning::MorePages { total: info.complete.then_some(u32::try_from(pages).unwrap_or(u32::MAX)) });
@@ -399,8 +401,10 @@ impl Src {
 }
 
 /// Everything needed to decode and place the chunks of one directory.
+#[derive(Clone)]
 struct Layout {
     w: usize,
+    selected_sample: Option<usize>,
     src: Src,
     out: SampleType,
     out_layout: ChannelLayout,
@@ -431,6 +435,9 @@ impl Layout {
     }
     /// The decoded sample (chunky) or file plane (planar) of output channel `k`.
     fn source_sample(&self, k: usize) -> usize {
+        if let Some(sample) = self.selected_sample {
+            return sample;
+        }
         if self.out_layout.has_alpha() && k + 1 == self.out_channels() { self.alpha_sample } else { k }
     }
     fn out_row(&self) -> usize {
@@ -442,7 +449,7 @@ impl Layout {
     }
     /// Chunk rows are output rows: copied without conversion.
     fn copyable(&self) -> bool {
-        !self.planar && self.palette.is_none() && self.src.is_identity() && self.chunk_spp == self.out_channels()
+        self.selected_sample.is_none() && !self.planar && self.palette.is_none() && self.src.is_identity() && self.chunk_spp == self.out_channels()
     }
 }
 
@@ -549,7 +556,10 @@ fn decode_ifd(f: &File<'_>, dir: &Ifd, limits: &Limits) -> Result<Image, CodecEr
         _ => 1,
     };
     let alpha_at = extra.iter().position(|&e| e == 1 || e == 2).filter(|&a| (color + a as u64) < spp);
-    let all_samples = palette.is_none() && matches!(photometric, 2 | 5 | 8 | 9) && alpha_at.is_some_and(|a| a > 0);
+    let extra_indices: Vec<usize> = (color as usize..spp as usize)
+        .filter(|&i| Some(i - color as usize) != alpha_at && !(photometric <= 1 && extra.is_empty() && spp == 2 && i == 1))
+        .collect();
+    let all_samples = palette.is_none() && matches!(photometric, 2 | 5 | 8 | 9) && (alpha_at.is_some_and(|a| a > 0) || !extra_indices.is_empty());
     let mut patches: Vec<(u64, Vec<u8>)> = Vec::new();
     let encode_u = |v: u64, len: usize| -> Vec<u8> {
         let b = if f.le { v.to_le_bytes() } else { v.to_be_bytes() };
@@ -591,9 +601,15 @@ fn decode_ifd(f: &File<'_>, dir: &Ifd, limits: &Limits) -> Result<Image, CodecEr
     let (out_layout, chunk_spp) = match ct {
         _ if palette.is_some() => (ChannelLayout::Rgb, 1),
         tiff::ColorType::Gray(_) => (ChannelLayout::Gray, 1),
-        tiff::ColorType::Multiband { num_samples, .. } if all_samples => {
-            (if photometric == 5 { ChannelLayout::CmykA } else { ChannelLayout::Rgba }, usize::from(num_samples))
-        }
+        tiff::ColorType::Multiband { num_samples, .. } if all_samples => (
+            match (photometric == 5, alpha_at.is_some()) {
+                (true, true) => ChannelLayout::CmykA,
+                (true, false) => ChannelLayout::Cmyk,
+                (false, true) => ChannelLayout::Rgba,
+                (false, false) => ChannelLayout::Rgb,
+            },
+            usize::from(num_samples),
+        ),
         tiff::ColorType::Multiband { num_samples, .. } if photometric <= 1 => {
             (if gray_alpha { ChannelLayout::GrayA } else { ChannelLayout::Gray }, usize::from(num_samples))
         }
@@ -663,6 +679,7 @@ fn decode_ifd(f: &File<'_>, dir: &Ifd, limits: &Limits) -> Result<Image, CodecEr
     let scratch_cap = chunk_bytes.saturating_mul(2).max(64 << 20).min(limits.alloc_usize());
     let lay = Layout {
         w: wu,
+        selected_sample: None,
         src,
         out,
         out_layout,
@@ -695,6 +712,30 @@ fn decode_ifd(f: &File<'_>, dir: &Ifd, limits: &Limits) -> Result<Image, CodecEr
     let mut img = Image::from_raw(w, h, out_layout, out, data)?;
     if tally.missing > 0 {
         img.warnings.push(DecodeWarning::Truncated { format: F });
+    }
+    // Decode extra planes with the same bounded strip/tile machinery, including planar TIFFs.
+    // Count all retained samples against the allocation budget before allocating extras.
+    let total_bytes = u64::from(w).saturating_mul(u64::from(h)).saturating_mul(spp).saturating_mul(out.bytes() as u64);
+    if total_bytes > limits.alloc_usize() as u64 {
+        return Err(CodecError::LimitExceeded("TIFF extra samples".into()));
+    }
+    for sample in extra_indices {
+        let plane_layout = Layout {
+            out_layout: ChannelLayout::Gray,
+            selected_sample: Some(sample),
+            planes: 1,
+            invert: false,
+            premultiplied: false,
+            palette: None,
+            ..lay.clone()
+        };
+        let row = plane_layout.out_row();
+        let mut plane = zeroed(row.checked_mul(hu).ok_or_else(|| err("extra plane size"))?)?;
+        let tally = decode_bands(&plane_layout, &mut plane, row * ch.min(hu), &mut dec, &open)?;
+        if tally.missing > 0 {
+            return Err(err("TIFF extra sample data is truncated"));
+        }
+        img.meta.tiff_extra_samples.push(plane);
     }
     Ok(img)
 }
@@ -800,7 +841,7 @@ fn decode_band(lay: &Layout, dec: &mut Decoder<Patched<'_>>, scratch: &mut Vec<u
     let px = lay.out_channels() * lay.out.bytes();
     let mut tally = Tally::default();
     for plane in 0..lay.planes {
-        let file_plane = lay.source_sample(plane);
+        let file_plane = if lay.planar { lay.source_sample(plane) } else { 0 };
         for col in 0..lay.across {
             let chunk = file_plane
                 .checked_mul(lay.chunks_per_plane)
@@ -1061,6 +1102,13 @@ macro_rules! custom_colortype {
 }
 
 use PhotometricInterpretation as PI;
+// RGB plus straight transparency and one unspecified (spot) sample.
+custom_colortype!(RgbExtra8, u8, PI::RGB, &[8; 4], &[SampleFormat::Uint; 4], int);
+custom_colortype!(RgbExtra16, u16, PI::RGB, &[16; 4], &[SampleFormat::Uint; 4], int);
+custom_colortype!(RgbExtra32F, f32, PI::RGB, &[32; 4], &[SampleFormat::IEEEFP; 4], float);
+custom_colortype!(RgbSpot8, u8, PI::RGB, &[8; 5], &[SampleFormat::Uint; 5], int);
+custom_colortype!(RgbSpot16, u16, PI::RGB, &[16; 5], &[SampleFormat::Uint; 5], int);
+custom_colortype!(RgbSpot32F, f32, PI::RGB, &[32; 5], &[SampleFormat::IEEEFP; 5], float);
 custom_colortype!(GrayA8, u8, PI::BlackIsZero, &[8, 8], &[SampleFormat::Uint; 2], int);
 custom_colortype!(GrayA16, u16, PI::BlackIsZero, &[16, 16], &[SampleFormat::Uint; 2], int);
 custom_colortype!(GrayA32F, f32, PI::BlackIsZero, &[32, 32], &[SampleFormat::IEEEFP; 2], float);
@@ -1080,6 +1128,7 @@ struct TagSet<'a> {
     dpi: Option<(f32, f32)>,
     text: Vec<(Tag, &'a str)>,
     alpha: bool,
+    spot: bool,
     photoshop_resources: Option<&'a [u8]>,
     photoshop_layers: Option<&'a [u8]>,
 }
@@ -1109,8 +1158,10 @@ where
         im.y_resolution(Rational { n: (y * 1000.0).round() as u32, d: 1000 });
     }
     let d = im.encoder();
-    if tags.alpha {
-        // 2 = unassociated alpha
+    if tags.spot {
+        // 2 = unassociated transparency, 0 = unspecified (Photoshop spot plate).
+        d.write_tag(Tag::ExtraSamples, if tags.alpha { &[2u16, 0u16][..] } else { &[0u16][..] })?;
+    } else if tags.alpha {
         d.write_tag(Tag::ExtraSamples, &[2u16][..])?;
     }
     if let Some(icc) = tags.icc {
@@ -1187,6 +1238,28 @@ fn write_image<K: TiffKind>(enc: &mut TiffEncoder<&mut Cursor<Vec<u8>>, K>, img:
     }
 }
 
+fn write_spot<K: TiffKind>(enc: &mut TiffEncoder<&mut Cursor<Vec<u8>>, K>, img: &Image, data: &[u8], tags: &TagSet<'_>) -> tiff::TiffResult<()> {
+    let (w, h) = img.dimensions();
+    match img.sample_type() {
+        SampleType::U8 => {
+            if tags.alpha {
+                write_one::<RgbSpot8, K>(enc, w, h, data, tags)
+            } else {
+                write_one::<RgbExtra8, K>(enc, w, h, data, tags)
+            }
+        }
+        SampleType::U16 => {
+            let samples: Vec<u16> = data.as_chunks::<2>().0.iter().map(|b| u16::from_ne_bytes(*b)).collect();
+            if tags.alpha { write_one::<RgbSpot16, K>(enc, w, h, &samples, tags) } else { write_one::<RgbExtra16, K>(enc, w, h, &samples, tags) }
+        }
+        SampleType::F32 => {
+            let samples: Vec<f32> = data.as_chunks::<4>().0.iter().map(|b| f32::from_ne_bytes(*b)).collect();
+            if tags.alpha { write_one::<RgbSpot32F, K>(enc, w, h, &samples, tags) } else { write_one::<RgbExtra32F, K>(enc, w, h, &samples, tags) }
+        }
+        _ => Err(io::Error::new(io::ErrorKind::InvalidInput, "unsupported spot sample depth").into()),
+    }
+}
+
 /// Classic TIFF offsets are 32-bit: a file that may grow past this is written as BigTIFF.
 const CLASSIC_LIMIT: u64 = u32::MAX as u64;
 
@@ -1203,6 +1276,33 @@ fn estimated_size(img: &Image, tags: &TagSet<'_>) -> u64 {
 
 pub(crate) fn encode(src: &Image, plan: Plan, opts: &EncodeOptions) -> Result<Vec<u8>, CodecError> {
     let img = src.converted(plan.layout, plan.sample);
+    encode_impl(&img, opts, None)
+}
+
+/// Encodes RGB, optional straight alpha, and one spot plate. `extra` is a single
+/// sample plane, with one sample per pixel in the same native sample type as `src`.
+pub(crate) fn encode_rgb_spot(src: &Image, extra: &[u8], opts: &EncodeOptions) -> Result<Vec<u8>, CodecError> {
+    if !src.layout().is_rgb() || src.sample_type() == SampleType::F16 {
+        return Err(CodecError::unsupported(F, "spot TIFF requires RGB/RGBA at 8, 16 or 32 bits"));
+    }
+    let bytes = src.sample_type().bytes();
+    let count = src.pixel_count();
+    let plane_len = count.checked_mul(bytes).ok_or_else(|| CodecError::LimitExceeded("spot plane size".into()))?;
+    if extra.len() != plane_len {
+        return Err(CodecError::unsupported(F, "spot sample plane has incorrect length"));
+    }
+    let pixel_bytes = src.layout().channels() * bytes;
+    let mut data = Vec::new();
+    let len = count.checked_mul(pixel_bytes + bytes).ok_or_else(|| CodecError::LimitExceeded("spot TIFF size".into()))?;
+    data.try_reserve_exact(len).map_err(|_| CodecError::LimitExceeded("spot TIFF allocation".into()))?;
+    for (pixel, spot) in src.data().chunks_exact(pixel_bytes).zip(extra.chunks_exact(bytes)) {
+        data.extend_from_slice(pixel);
+        data.extend_from_slice(spot);
+    }
+    encode_impl(src, opts, Some(&data))
+}
+
+fn encode_impl(img: &Image, opts: &EncodeOptions, spot_data: Option<&[u8]>) -> Result<Vec<u8>, CodecError> {
     let compression = match opts.tiff_compression {
         TiffCompression::None => tiff::encoder::Compression::Uncompressed,
         TiffCompression::Lzw => tiff::encoder::Compression::Lzw,
@@ -1233,6 +1333,7 @@ pub(crate) fn encode(src: &Image, plan: Plan, opts: &EncodeOptions) -> Result<Ve
         dpi: if opts.embed_metadata { img.meta.dpi.filter(|d| d.0 > 0.0 && d.1 > 0.0) } else { None },
         text,
         alpha: img.layout().has_alpha(),
+        spot: spot_data.is_some(),
         // Document content, not metadata: written whenever present.
         photoshop_resources: img.meta.photoshop_resources.as_deref().filter(|r| !r.is_empty()),
         photoshop_layers: img.meta.photoshop_layers.as_deref().filter(|l| !l.is_empty()),
@@ -1245,14 +1346,22 @@ pub(crate) fn encode(src: &Image, plan: Plan, opts: &EncodeOptions) -> Result<Ve
         let mut cursor = Cursor::new(Vec::new());
         if big {
             let mut enc = TiffEncoder::new_big(&mut cursor)?.with_compression(compression).with_predictor(predictor);
-            write_image::<TiffKindBig>(&mut enc, &img, &tags)?;
+            if let Some(data) = spot_data {
+                write_spot::<TiffKindBig>(&mut enc, img, data, &tags)?;
+            } else {
+                write_image::<TiffKindBig>(&mut enc, img, &tags)?;
+            }
         } else {
             let mut enc = TiffEncoder::new(&mut cursor)?.with_compression(compression).with_predictor(predictor);
-            write_image::<TiffKindStandard>(&mut enc, &img, &tags)?;
+            if let Some(data) = spot_data {
+                write_spot::<TiffKindStandard>(&mut enc, img, data, &tags)?;
+            } else {
+                write_image::<TiffKindStandard>(&mut enc, img, &tags)?;
+            }
         }
         Ok(cursor.into_inner())
     };
-    let big = opts.tiff_bigtiff || estimated_size(&img, &tags) > CLASSIC_LIMIT;
+    let big = opts.tiff_bigtiff || estimated_size(img, &tags).saturating_add(spot_data.map_or(0, |d| d.len() as u64)) > CLASSIC_LIMIT;
     match write(big) {
         Ok(v) => Ok(v),
         Err(tiff::TiffError::IntSizeError) if !big => write(true).map_err(|e| CodecError::encode(F, e)),

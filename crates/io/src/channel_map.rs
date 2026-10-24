@@ -126,6 +126,17 @@ pub(crate) fn hsb_to_rgb(h: f32, s: f32, v: f32) -> [f32; 3] {
     }
 }
 
+/// Convert between coverage masks (zero = no ink) and Photoshop spot plates
+/// (maximum = no ink). This operation is its own inverse; alpha is never passed here.
+pub(crate) fn invert_spot_samples(bytes: &mut [u8], sample: photocraft_color::SampleType) {
+    use photocraft_color::SampleType;
+    match sample {
+        SampleType::U8 => bytes.iter_mut().for_each(|v| *v = 255 - *v),
+        SampleType::U16 => bytes.as_chunks_mut::<2>().0.iter_mut().for_each(|v| *v = (u16::MAX - u16::from_ne_bytes(*v)).to_ne_bytes()),
+        SampleType::F32 => bytes.as_chunks_mut::<4>().0.iter_mut().for_each(|v| *v = (1.0 - f32::from_ne_bytes(*v)).to_ne_bytes()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

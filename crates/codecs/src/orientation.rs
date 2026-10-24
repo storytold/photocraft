@@ -331,6 +331,9 @@ impl Image {
         }
         let data = orient_bytes(self.data(), bpp, o, (w, h), ow)?;
         let mut meta = self.meta.clone();
+        for plane in &mut meta.tiff_extra_samples {
+            *plane = orient_bytes(plane, sample.bytes(), o, (w, h), ow)?;
+        }
         if let Some(e) = &mut meta.exif
             && let Cow::Owned(fixed) = upright_exif(e)
         {
