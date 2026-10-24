@@ -25,6 +25,7 @@ mod blur2;
 pub mod camera_raw;
 pub mod color_to_alpha;
 pub mod content_aware;
+mod cutout;
 mod denoise;
 pub mod dff;
 pub mod direct;
