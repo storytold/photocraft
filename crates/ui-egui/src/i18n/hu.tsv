@@ -4297,6 +4297,25 @@ cameraRaw	Yellow	Sárga
 
 # Graphics Adapter preference (#1885)
 	GPU adapter	GPU-adapter
+# Window › Design Timeline
+	Design Timeline	Tervezési idővonal
+	Start Design Timeline	Tervezési idővonal indítása
+	Stop Design Timeline	Tervezési idővonal leállítása
+	Roll to End	Ugrás a végére
+	Roll to Start	Ugrás az elejére
+	Roll to Here	Ugrás ide
+	Edit Parameters…	Paraméterek szerkesztése…
+	This step has no dialog to edit.	Ennek a lépésnek nincs szerkeszthető párbeszédablaka.
+	Suppress	Kihagyás
+	Unsuppress	Kihagyás visszavonása
+	No steps yet: edits to this document appear here.	Még nincsenek lépések: a dokumentum szerkesztései itt jelennek meg.
+	Open a document to use the design timeline.	A tervezési idővonal használatához nyiss meg egy dokumentumot.
+	Records each edit from now on, so you can suppress, delete or edit any of them later.	Mostantól minden szerkesztést rögzít, így később bármelyiket kihagyhatod, törölheted vagy szerkesztheted.
+	A layer this step acted on was removed.	Egy réteg, amelyen ez a lépés dolgozott, el lett távolítva.
+	This step would now change a layer it didn't change before, so it was skipped.	Ez a lépés most egy olyan réteget módosítana, amelyet korábban nem, ezért kimaradt.
+	The layer this step placed its new layers beside was removed; they went elsewhere.	Eltávolítottuk azt a réteget, amely mellé ez a lépés az új rétegeit tette; ezek máshová kerültek.
+	An earlier step changed, so this step's stored result may be out of date.	Egy korábbi lépés megváltozott, ezért ennek a lépésnek a tárolt eredménye elavult lehet.
+
 
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Stílusok importálása…

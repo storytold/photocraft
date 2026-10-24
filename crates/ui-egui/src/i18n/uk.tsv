@@ -4090,6 +4090,25 @@ curves	Smooth	Згладити
 
 # Graphics Adapter preference (#1885)
 	GPU adapter	Адаптер GPU
+# Window › Design Timeline
+	Design Timeline	Шкала дизайну
+	Start Design Timeline	Почати шкалу дизайну
+	Stop Design Timeline	Зупинити шкалу дизайну
+	Roll to End	Перейти в кінець
+	Roll to Start	Перейти на початок
+	Roll to Here	Перейти сюди
+	Edit Parameters…	Змінити параметри…
+	This step has no dialog to edit.	Цей крок не має діалогу для змінення.
+	Suppress	Придушити
+	Unsuppress	Скасувати придушення
+	No steps yet: edits to this document appear here.	Кроків ще немає: тут з’являться зміни цього документа.
+	Open a document to use the design timeline.	Відкрийте документ, щоб користуватися шкалою дизайну.
+	Records each edit from now on, so you can suppress, delete or edit any of them later.	Відтепер записується кожна зміна, щоб пізніше будь-яку з них можна було придушити, видалити чи змінити.
+	A layer this step acted on was removed.	Шар, з яким працював цей крок, видалено.
+	This step would now change a layer it didn't change before, so it was skipped.	Тепер цей крок змінив би шар, якого раніше не змінював, тому його пропущено.
+	The layer this step placed its new layers beside was removed; they went elsewhere.	Шар, поруч із яким цей крок розміщував нові шари, видалено; їх розміщено в іншому місці.
+	An earlier step changed, so this step's stored result may be out of date.	Попередній крок змінився, тож збережений результат цього кроку може бути застарілим.
+
 
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Імпортувати стилі…

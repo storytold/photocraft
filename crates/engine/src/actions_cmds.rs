@@ -1167,6 +1167,8 @@ mod tests {
             let saved = serde_json::to_string(&s.actions.list).unwrap();
             let mut replay = Session::new();
             replay.actions.list = serde_json::from_str(&saved).unwrap();
+            // Ids are step-keyed, so spend a step first to make the target's id differ.
+            replay.execute("file.new", json!({"width": 8, "height": 8, "depth": depth})).unwrap();
             replay.execute("file.new", json!({"width": 8, "height": 8, "depth": depth})).unwrap();
             replay.execute("layer.setProps", json!({"name": "Photo"})).unwrap();
             let target = replay.active().unwrap().active_layer.unwrap();

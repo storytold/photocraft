@@ -4,6 +4,7 @@ mod analysis;
 mod autosave;
 mod common;
 mod corruption;
+mod design_timeline;
 mod directory_symlinks;
 mod float_roundtrip;
 mod layer_labels;

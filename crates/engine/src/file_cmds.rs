@@ -731,6 +731,13 @@ pub const PLACE_EMBEDDED: &str = "Place Embedded";
 /// With Preferences ▸ General ▸ Always Create Smart Objects When Placing off, an embedded place
 /// lands as a plain pixel layer instead (an explicit `"smartObject": false` asks for one).
 pub fn place_bytes(s: &mut Session, name: &str, bytes: Vec<u8>, linked: Option<String>, p: &Value) -> Result<Value> {
+    // From File › Place… or a drop, this runs outside any command: record it as one step.
+    let id = if linked.is_some() { "file.placeLinked" } else { "file.placeEmbedded" };
+    s.record_outside(id, json!({ "path": name }), |s| place_unrecorded(s, name, bytes, linked, p))
+}
+
+/// [`place_bytes`] without recording a step: callers record it.
+fn place_unrecorded(s: &mut Session, name: &str, bytes: Vec<u8>, linked: Option<String>, p: &Value) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let (cw, ch) = (d.doc.size.width as f64, d.doc.size.height as f64);
     let fmt = d.doc.pixel_format();

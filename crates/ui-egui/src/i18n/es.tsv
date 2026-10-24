@@ -4342,6 +4342,25 @@ navigator	Zoom	Zoom
 
 # Graphics Adapter preference (#1885)
 	GPU adapter	Adaptador de GPU
+# Window › Design Timeline
+	Design Timeline	Línea de tiempo de diseño
+	Start Design Timeline	Iniciar línea de tiempo de diseño
+	Stop Design Timeline	Detener línea de tiempo de diseño
+	Roll to End	Avanzar hasta el final
+	Roll to Start	Retroceder hasta el inicio
+	Roll to Here	Ir hasta aquí
+	Edit Parameters…	Editar parámetros…
+	This step has no dialog to edit.	Este paso no tiene un cuadro de diálogo para editar.
+	Suppress	Suprimir
+	Unsuppress	Dejar de suprimir
+	No steps yet: edits to this document appear here.	Aún no hay pasos: las ediciones de este documento aparecen aquí.
+	Open a document to use the design timeline.	Abra un documento para usar la línea de tiempo de diseño.
+	Records each edit from now on, so you can suppress, delete or edit any of them later.	Registra cada edición a partir de ahora, para que pueda suprimir, eliminar o editar cualquiera más adelante.
+	A layer this step acted on was removed.	Se eliminó una capa sobre la que actuaba este paso.
+	This step would now change a layer it didn't change before, so it was skipped.	Este paso cambiaría ahora una capa que antes no cambiaba, así que se omitió.
+	The layer this step placed its new layers beside was removed; they went elsewhere.	Se eliminó la capa junto a la que este paso colocaba sus capas nuevas; se colocaron en otro lugar.
+	An earlier step changed, so this step's stored result may be out of date.	Cambió un paso anterior, así que el resultado guardado de este paso puede estar desactualizado.
+
 
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Importar estilos…

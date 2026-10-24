@@ -3392,6 +3392,25 @@ curves	Smooth	Glätten
 
 # Graphics Adapter preference (#1885)
 	GPU adapter	GPU-Adapter
+# Window › Design Timeline
+	Design Timeline	Design-Zeitleiste
+	Start Design Timeline	Design-Zeitleiste starten
+	Stop Design Timeline	Design-Zeitleiste beenden
+	Roll to End	Bis zum Ende
+	Roll to Start	Zum Anfang
+	Roll to Here	Bis hierher
+	Edit Parameters…	Parameter bearbeiten…
+	This step has no dialog to edit.	Dieser Schritt hat keinen Dialog zum Bearbeiten.
+	Suppress	Unterdrücken
+	Unsuppress	Nicht mehr unterdrücken
+	No steps yet: edits to this document appear here.	Noch keine Schritte: Bearbeitungen dieses Dokuments erscheinen hier.
+	Open a document to use the design timeline.	Öffne ein Dokument, um die Design-Zeitleiste zu nutzen.
+	Records each edit from now on, so you can suppress, delete or edit any of them later.	Zeichnet ab jetzt jede Bearbeitung auf, damit du jede davon später unterdrücken, löschen oder bearbeiten kannst.
+	A layer this step acted on was removed.	Eine Ebene, auf die dieser Schritt wirkte, wurde entfernt.
+	This step would now change a layer it didn't change before, so it was skipped.	Dieser Schritt würde jetzt eine Ebene ändern, die er vorher nicht geändert hat, und wurde daher übersprungen.
+	The layer this step placed its new layers beside was removed; they went elsewhere.	Die Ebene, neben die dieser Schritt seine neuen Ebenen gelegt hat, wurde entfernt; sie liegen jetzt woanders.
+	An earlier step changed, so this step's stored result may be out of date.	Ein früherer Schritt hat sich geändert, daher ist das gespeicherte Ergebnis dieses Schritts eventuell veraltet.
+
 
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Stile importieren…

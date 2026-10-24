@@ -38,3 +38,18 @@ fn workspace_encoded_native_bundle_uses_requested_name_without_mutating_source()
     assert_eq!(reopened.name, "Renamed.pcraft");
     assert_eq!(doc.name, "Original", "a copy should not retarget the open document");
 }
+
+#[test]
+fn a_timeline_the_load_drops_is_reported_with_the_open() {
+    let mut headless = Headless::trusted_local();
+    headless.handle("doc.new", json!({"width": 8, "height": 8, "name": "Lossy"})).unwrap();
+    let mut doc = (*headless.session.active().unwrap().doc).clone();
+    // An unscoped id far ahead of the counter makes the loader remap, dropping the timeline.
+    doc.layers[0].id = photocraft_doc::LayerId((1 << 52) + 50_000_000);
+    let base = std::sync::Arc::new(doc.clone());
+    doc.design_timeline = Some(std::sync::Arc::new(photocraft_doc::design::DesignTimeline { base, steps: Vec::new(), marker: None }));
+    let bytes = photocraft_format::save_to_bytes(&doc, &Default::default()).unwrap();
+    let opened = files::open_bytes("Lossy.pcraft", &bytes).unwrap();
+    assert!(opened.document.design_timeline.is_none());
+    assert!(opened.warnings.iter().any(|w| w.contains("design timeline")), "{:?}", opened.warnings);
+}

@@ -146,6 +146,9 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
     if let Some(r) = crate::timeline_ui::menu(app, id, &params) {
         return r;
     }
+    if let Some(r) = crate::design_timeline_ui::menu(app, id, &params) {
+        return r;
+    }
     // Filter › Plug-ins (installed WebAssembly plug-ins, Install Plug-in…).
     if let Some(r) = crate::plugin_ui::menu(app, id, &params) {
         return r;
@@ -685,6 +688,7 @@ fn open_path(app: &mut PhotocraftApp, path: &str) -> Result<Value, String> {
     app.open_path(path).map(|w| json!({"warnings": w}))
 }
 
+/// Whether menu item `id` can run now.
 pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
     if crate::tool_shortcuts::tool(id).is_some() {
         return true;
@@ -714,7 +718,7 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
     if crate::analysis_ui::handles(id) {
         return true;
     }
-    if crate::preset_panels::handles(id) || crate::type_panels_ui::handles(id) || crate::timeline_ui::handles(id) {
+    if crate::preset_panels::handles(id) || crate::type_panels_ui::handles(id) || crate::timeline_ui::handles(id) || crate::design_timeline_ui::handles(id) {
         return true;
     }
     if let Some(e) = crate::view_cmds::is_enabled(app, id) {
@@ -808,6 +812,9 @@ fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
         return Some(c);
     }
     if let Some(c) = crate::timeline_ui::checked(app, id) {
+        return Some(c);
+    }
+    if let Some(c) = crate::design_timeline_ui::checked(app, id) {
         return Some(c);
     }
     if let Some(c) = crate::type_panels_ui::checked(app, id) {
@@ -934,6 +941,7 @@ pub fn is_live(id: &str) -> bool {
         || crate::preset_panels::handles(id)
         || crate::type_panels_ui::handles(id)
         || crate::timeline_ui::handles(id)
+        || crate::design_timeline_ui::handles(id)
 }
 
 /// Commands outside the catalogue that belong right after a catalogue item: `(id, after)`.
@@ -944,6 +952,7 @@ const PLACE_AFTER: &[(&str, &str)] = &[
     ("filter.render.relight", "filter.render.lightingEffects"),
     ("view.resetView", "view.flipHorizontal"),
     ("filter.other.colorToAlpha", "filter.other.offset"),
+    ("window.panel.designTimeline", "window.panel.timeline"),
 ];
 
 pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {

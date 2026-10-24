@@ -34,7 +34,7 @@ pub enum Group {
     Character,
     /// Navigator | Histogram | Info.
     Navigator,
-    /// History | Actions | Layer Comps.
+    /// History | Actions | Layer Comps | Design Timeline.
     History,
     /// Layers | Channels | Paths.
     Layers,
@@ -113,7 +113,7 @@ impl Group {
             Group::Properties => &["Properties", "Adjustments"],
             Group::Character => &["Character", "Paragraph"],
             Group::Navigator => &["Navigator", "Histogram", "Info"],
-            Group::History => &["History", "Actions", "Layer Comps"],
+            Group::History => &["History", "Actions", "Layer Comps", "Design Timeline"],
             Group::Layers => &["Layers", "Channels", "Paths"],
             Group::Brushes => &["Brushes"],
         }

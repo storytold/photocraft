@@ -245,6 +245,9 @@ fn smart_filters_are_re_editable() {
     for depth in [8, 16] {
         let mut s = session(depth);
         paint(&mut s);
+        // The decode count below is per source bytes, process-wide: a name no other test uses keeps
+        // their identical conversions out of it.
+        s.execute("layer.setProps", json!({"name": "re-editable"})).unwrap();
         let original = flat(&s);
         s.execute("filter.convertForSmartFilters", json!({})).unwrap();
         assert!(!s.is_enabled("filter.convertForSmartFilters"), "already smart");

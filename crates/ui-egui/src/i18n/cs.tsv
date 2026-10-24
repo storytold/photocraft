@@ -4125,6 +4125,25 @@ cameraRaw	Dehaze	Odstranění oparu
 
 # Graphics Adapter preference (#1885)
 	GPU adapter	Adaptér GPU
+# Window › Design Timeline
+	Design Timeline	Časová osa návrhu
+	Start Design Timeline	Spustit časovou osu návrhu
+	Stop Design Timeline	Zastavit časovou osu návrhu
+	Roll to End	Přejít na konec
+	Roll to Start	Přejít na začátek
+	Roll to Here	Přejít sem
+	Edit Parameters…	Upravit parametry…
+	This step has no dialog to edit.	Tento krok nemá dialog k úpravě.
+	Suppress	Potlačit
+	Unsuppress	Zrušit potlačení
+	No steps yet: edits to this document appear here.	Zatím žádné kroky: zde se zobrazí úpravy tohoto dokumentu.
+	Open a document to use the design timeline.	Chcete-li použít časovou osu návrhu, otevřete dokument.
+	Records each edit from now on, so you can suppress, delete or edit any of them later.	Od této chvíle zaznamenává každou úpravu, abyste mohli kteroukoli z nich později potlačit, odstranit nebo upravit.
+	A layer this step acted on was removed.	Vrstva, se kterou tento krok pracoval, byla odstraněna.
+	This step would now change a layer it didn't change before, so it was skipped.	Tento krok by teď změnil vrstvu, kterou dříve neměnil, proto byl přeskočen.
+	The layer this step placed its new layers beside was removed; they went elsewhere.	Vrstva, vedle které tento krok umisťoval nové vrstvy, byla odstraněna; byly umístěny jinam.
+	An earlier step changed, so this step's stored result may be out of date.	Dřívější krok se změnil, takže uložený výsledek tohoto kroku může být zastaralý.
+
 
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Importovat styly…

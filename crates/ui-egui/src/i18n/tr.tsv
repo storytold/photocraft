@@ -4109,6 +4109,25 @@ cameraData	Lens	Lens
 
 # Graphics Adapter preference (#1885)
 	GPU adapter	GPU bağdaştırıcısı
+# Window › Design Timeline
+	Design Timeline	Tasarım zaman çizelgesi
+	Start Design Timeline	Tasarım zaman çizelgesini başlat
+	Stop Design Timeline	Tasarım zaman çizelgesini durdur
+	Roll to End	Sona ilerle
+	Roll to Start	Başa geri al
+	Roll to Here	Buraya kadar
+	Edit Parameters…	Parametreleri Düzenle…
+	This step has no dialog to edit.	Bu adımın düzenlenecek bir iletişim kutusu yok.
+	Suppress	Bastır
+	Unsuppress	Bastırmayı kaldır
+	No steps yet: edits to this document appear here.	Henüz adım yok: bu belgedeki düzenlemeler burada görünür.
+	Open a document to use the design timeline.	Tasarım zaman çizelgesini kullanmak için bir belge açın.
+	Records each edit from now on, so you can suppress, delete or edit any of them later.	Şu andan itibaren her düzenlemeyi kaydeder; böylece daha sonra herhangi birini bastırabilir, silebilir veya düzenleyebilirsiniz.
+	A layer this step acted on was removed.	Bu adımın üzerinde çalıştığı bir katman kaldırıldı.
+	This step would now change a layer it didn't change before, so it was skipped.	Bu adım artık önceden değiştirmediği bir katmanı değiştirecekti, bu yüzden atlandı.
+	The layer this step placed its new layers beside was removed; they went elsewhere.	Bu adımın yeni katmanlarını yanına yerleştirdiği katman kaldırıldı; yeni katmanlar başka bir yere yerleştirildi.
+	An earlier step changed, so this step's stored result may be out of date.	Önceki bir adım değişti, bu yüzden bu adımın kayıtlı sonucu güncel olmayabilir.
+
 
 # Styles panel: Import / Export Styles (.asl)
 @plural	Imported {n} style from {file}|Imported {n} styles from {file}	{file} dosyasından {n} stil içe aktarıldı

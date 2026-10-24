@@ -13,6 +13,7 @@ pub mod advanced;
 pub mod analysis;
 pub mod blend_if;
 pub mod comps;
+pub mod design;
 pub mod effects;
 pub mod mode;
 pub mod pattern;
@@ -49,10 +50,115 @@ pub use vector::{
 };
 pub use video::{Timeline, VideoData, VideoSource};
 
-static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+// Layer and smart-contents ids are (step, counter): bits 51–24 the step that minted them, bits
+// 23–0 a counter within it, so replaying the same steps mints the same ids. Ids minted outside
+// any step scope set bit 52 and come from a process counter. Everything stays below 2^53 so ids
+// survive JSON readers that parse numbers as f64.
+const STEP_SHIFT: u32 = 24;
+const COUNTER_MASK: u64 = (1 << STEP_SHIFT) - 1;
+const UNSCOPED: u64 = 1 << 52;
+/// Largest step id a scope can carry.
+pub const MAX_STEP: u64 = (UNSCOPED >> STEP_SHIFT) - 1;
 
+static NEXT_UNSCOPED: AtomicU64 = AtomicU64::new(1);
+static NEXT_DOC_ID: AtomicU64 = AtomicU64::new(1);
+
+thread_local! {
+    static ID_SCOPE: std::cell::RefCell<Option<IdScope>> = const { std::cell::RefCell::new(None) };
+}
+
+/// The step new layer and smart-contents ids on this thread are keyed to. Clones share one
+/// counter, so a background job's worker and its apply keep minting where the command left off.
+#[derive(Clone, Debug)]
+pub struct IdScope {
+    step: u64,
+    next: Arc<AtomicU64>,
+}
+
+impl IdScope {
+    /// A scope minting ids for step `step`, from its first counter value.
+    pub fn new(step: u64) -> Self {
+        IdScope { step, next: Arc::new(AtomicU64::new(1)) }
+    }
+
+    /// The scope installed on this thread, if any.
+    pub fn current() -> Option<IdScope> {
+        ID_SCOPE.with(|s| s.borrow().clone())
+    }
+
+    /// The step this scope mints ids for.
+    pub fn step(&self) -> u64 {
+        self.step
+    }
+
+    /// Whether any id was minted in this scope.
+    pub fn used(&self) -> bool {
+        self.next.load(Ordering::Relaxed) > 1
+    }
+
+    /// Install this scope on the current thread until the guard drops.
+    pub fn enter(&self) -> IdScopeGuard {
+        IdScopeGuard(ID_SCOPE.with(|s| s.replace(Some(self.clone()))))
+    }
+
+    /// The next id of this step, or `None` once the step or its counter is out of range.
+    fn mint(&self) -> Option<u64> {
+        let n = self.next.fetch_add(1, Ordering::Relaxed);
+        // ponytail: past 16M ids in one step, or a step past MAX_STEP, ids fall back to the unscoped
+        // counter (unique, not replay-stable).
+        (self.step <= MAX_STEP && n <= COUNTER_MASK).then_some((self.step << STEP_SHIFT) | n)
+    }
+}
+
+/// Restores the previously installed [`IdScope`] on drop.
+pub struct IdScopeGuard(Option<IdScope>);
+
+impl Drop for IdScopeGuard {
+    /// Reinstall the scope this guard replaced.
+    fn drop(&mut self) {
+        ID_SCOPE.with(|s| *s.borrow_mut() = self.0.take());
+    }
+}
+
+/// The next id: from the installed step scope, else from the unscoped counter.
 fn next_id() -> u64 {
-    NEXT_ID.fetch_add(1, Ordering::Relaxed)
+    ID_SCOPE
+        .with(|s| s.borrow().as_ref().and_then(IdScope::mint))
+        .unwrap_or_else(|| UNSCOPED | (NEXT_UNSCOPED.fetch_add(1, Ordering::Relaxed) & (UNSCOPED - 1)))
+}
+
+/// The step a scoped id was minted in (None for an unscoped or out-of-range id).
+pub fn id_step(id: u64) -> Option<u64> {
+    (id < UNSCOPED).then_some(id >> STEP_SHIFT)
+}
+
+/// Keep an unscoped id loaded from a file: advance the unscoped counter past it so later ids never
+/// collide. False when it is implausibly far ahead (the caller remaps instead). Scoped ids need nothing.
+pub fn reserve_unscoped_id(id: u64) -> bool {
+    let Some(n) = id.checked_sub(UNSCOPED) else { return true };
+    let probe = NEXT_UNSCOPED.load(Ordering::Relaxed);
+    if n >= UNSCOPED || n.saturating_sub(probe) > 10_000_000 {
+        return false;
+    }
+    NEXT_UNSCOPED.fetch_max(n + 1, Ordering::Relaxed);
+    true
+}
+
+/// The first step id after every step that minted a layer or smart-contents id in `doc`, and
+/// every step of its design timeline (which may have minted none).
+pub fn next_step_after(doc: &Document) -> u64 {
+    let minted = doc
+        .walk()
+        .into_iter()
+        .flat_map(|(_, _, l)| {
+            let contents = if let LayerContent::Smart(sm) = &l.content { Some(sm.contents_id.0) } else { None };
+            [Some(l.id.0), contents]
+        })
+        .flatten()
+        .filter_map(id_step)
+        .max();
+    let steps = doc.design_timeline.as_ref().and_then(|t| t.steps.iter().map(|st| st.step).max());
+    minted.max(steps).map_or(0, |s| s.saturating_add(1))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -74,19 +180,19 @@ impl SmartContentsId {
     }
 }
 
-/// Advance the process-wide id counter (shared by layer, document and smart-contents ids) past `max`, so ids
-/// loaded from a file never collide with ids minted later.
-pub fn ensure_ids_above(max: u64) {
-    NEXT_ID.fetch_max(max.saturating_add(1), Ordering::Relaxed);
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct DocId(pub u64);
 
 impl DocId {
     pub fn fresh() -> Self {
-        DocId(next_id())
+        DocId(NEXT_DOC_ID.fetch_add(1, Ordering::Relaxed))
     }
+}
+
+/// Advance the document id counter past `max`, so a document id loaded from a file never
+/// collides with ids minted later.
+pub fn ensure_doc_ids_above(max: u64) {
+    NEXT_DOC_ID.fetch_max(max.saturating_add(1), Ordering::Relaxed);
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -920,6 +1026,8 @@ pub struct Document {
     pub variables: Variables,
     /// Window › Timeline (None until a video timeline is created).
     pub timeline: Option<Timeline>,
+    /// The design timeline (None until it is turned on).
+    pub design_timeline: Option<Arc<design::DesignTimeline>>,
     /// How the document's lossy file was encoded (its JPEG quality, WebP lossy or lossless,
     /// PNG stereo pairing), so a save writes it back the same way rather than at fixed defaults.
     pub file_encoding: FileEncoding,
@@ -957,6 +1065,7 @@ impl FileEncoding {
 pub type LayerPath = Vec<usize>;
 
 impl Document {
+    /// An empty document: no layers, a fresh id, 72 ppi.
     pub fn new(name: impl Into<String>, size: Size, mode: ColorMode, depth: SampleType) -> Self {
         Document {
             id: DocId::fresh(),
@@ -990,6 +1099,7 @@ impl Document {
             slices: Slices::default(),
             variables: Variables::default(),
             timeline: None,
+            design_timeline: None,
             file_encoding: FileEncoding::default(),
         }
     }
@@ -1515,12 +1625,75 @@ mod tests {
 
 #[cfg(test)]
 mod id_tests {
+    use super::{IdScope, LayerId, SmartContentsId};
+
     #[test]
-    fn ensure_ids_above_advances_counter() {
-        let far = super::LayerId::fresh().0 + 1000;
-        super::ensure_ids_above(far);
-        assert!(super::LayerId::fresh().0 > far);
-        super::ensure_ids_above(3); // never moves backwards
+    fn ensure_doc_ids_above_advances_counter() {
+        let far = super::DocId::fresh().0 + 1000;
+        super::ensure_doc_ids_above(far);
         assert!(super::DocId::fresh().0 > far);
+        super::ensure_doc_ids_above(3); // never moves backwards
+        assert!(super::DocId::fresh().0 > far);
+    }
+
+    #[test]
+    fn scoped_ids_are_keyed_to_the_step() {
+        let mint = |step| {
+            let _g = IdScope::new(step).enter();
+            [LayerId::fresh().0, SmartContentsId::fresh().0, LayerId::fresh().0]
+        };
+        let a = mint(7);
+        assert_eq!(a, mint(7), "same step, same ids");
+        assert_eq!(a.map(super::id_step), [Some(7); 3]);
+        assert!(mint(8).iter().all(|id| !a.contains(id)));
+        let unscoped = LayerId::fresh().0;
+        assert_eq!(super::id_step(unscoped), None);
+        assert!(unscoped < 1 << 53, "JSON-safe");
+    }
+
+    #[test]
+    fn scopes_nest_and_restore() {
+        let outer = IdScope::new(3);
+        let _g = outer.enter();
+        {
+            let _inner = IdScope::new(4).enter();
+            assert_eq!(super::id_step(LayerId::fresh().0), Some(4));
+        }
+        assert!(!outer.used());
+        assert_eq!(super::id_step(LayerId::fresh().0), Some(3));
+        assert!(outer.used());
+    }
+
+    #[test]
+    fn next_step_after_covers_nested_layers() {
+        let doc = {
+            let _g = IdScope::new(5).enter();
+            let mut d = super::Document::new("d", super::Size::new(1, 1), super::ColorMode::Rgb, super::SampleType::U8);
+            let child = {
+                let _g = IdScope::new(9).enter();
+                super::Layer::raster("c", super::PixelFormat::RGBA8)
+            };
+            d.layers.push(super::Layer::group("g", vec![child]));
+            d
+        };
+        assert_eq!(super::next_step_after(&doc), 10);
+    }
+
+    #[test]
+    fn a_step_past_max_step_never_reissues_an_id() {
+        let at_max = {
+            let _g = IdScope::new(super::MAX_STEP).enter();
+            LayerId::fresh()
+        };
+        let mut doc = super::Document::new("d", super::Size::new(1, 1), super::ColorMode::Rgb, super::SampleType::U8);
+        let mut l = super::Layer::raster("l", super::PixelFormat::RGBA8);
+        l.id = at_max;
+        doc.layers.push(l);
+        let next = super::next_step_after(&doc);
+        assert_eq!(next, super::MAX_STEP + 1);
+        let _g = IdScope::new(next).enter();
+        let fresh = LayerId::fresh();
+        assert_ne!(fresh, at_max);
+        assert_eq!(super::id_step(fresh.0), None, "past MAX_STEP ids come from the unscoped counter");
     }
 }

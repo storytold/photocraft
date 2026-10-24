@@ -824,6 +824,9 @@ pub fn layer_to_smart(doc: &Document, l: &Layer) -> Result<Layer> {
 pub fn layers_to_smart(doc: &Document, name: &str, layers: Vec<Layer>) -> Result<Layer> {
     let canvas = doc.bounds();
     let mut sub = Document::new(format!("{name}.pcraft"), doc.size, doc.mode, doc.depth);
+    // Edit Contents gives each opened copy a fresh id; a fixed one keeps the embedded bytes the
+    // same whenever the conversion is replayed.
+    sub.id = DocId(0);
     sub.resolution_dpi = doc.resolution_dpi;
     sub.icc_profile = doc.icc_profile.clone();
     sub.global_light = doc.global_light;
@@ -1031,6 +1034,7 @@ fn export_contents(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"path": path, "fileName": name, "bytes": r.bytes.len(), "converted": true, "warnings": r.warnings}))
 }
 
+/// Open a smart object's contents as a document of their own, linked back to the layer.
 fn edit_contents(s: &mut Session, p: &Value) -> Result<Value> {
     let id = layer_param(s, p)?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
@@ -1049,6 +1053,11 @@ fn edit_contents(s: &mut Session, p: &Value) -> Result<Value> {
     let mut child = decode_source(&name, &bytes)?;
     // Bundles keep their document id; each open copy needs its own.
     child.id = DocId::fresh();
+    // Contents edited from a document with a design timeline get one of their own, saved inside
+    // the contents (a `.pcraft`), so it resumes at the next Edit Contents.
+    if st.doc.design_timeline.is_some() && child.design_timeline.is_none() {
+        child.design_timeline = Some(Arc::new(photocraft_doc::design::DesignTimeline::new(Arc::new(child.clone()))));
+    }
     child.name = name;
     let index = s.add_document(child, None);
     // Admission may replace an ID already owned by another open document.

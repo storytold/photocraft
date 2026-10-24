@@ -45,7 +45,7 @@ pub use atomic::{atomic_write, atomic_write_progress};
 pub use autosave::RecoveryStore;
 pub use autosave::{Autosaver, RecoveryEntry, discard_recovery, list_recovery, recover};
 pub use convert::MAX_GROUP_DEPTH;
-pub use manifest::{FORMAT_VERSION, Manifest};
+pub use manifest::{BASE_FORMAT_VERSION, FORMAT_VERSION, Manifest};
 pub use read::read_file;
 pub use store::{ByteSource, DEFAULT_REVERIFY_BUDGET, PcraftWriter, SaveStats, read_entry};
 
@@ -160,6 +160,13 @@ pub fn load_from_bytes(bytes: &[u8]) -> Result<Document> {
 pub fn load_from_bytes_with(bytes: &[u8], opts: &LoadOptions) -> Result<Document> {
     let src = store::ZipSource::new(bytes)?;
     store::load(&src, opts)
+}
+
+/// [`load_from_bytes_with`], with warnings for what loaded without part of its stored data (a
+/// design timeline whose layer ids couldn't be kept), where the other loads fail instead.
+pub fn load_from_bytes_reporting(bytes: &[u8], opts: &LoadOptions) -> Result<(Document, Vec<String>)> {
+    let src = store::ZipSource::new(bytes)?;
+    store::load_reporting(&src, opts)
 }
 
 /// Load a bundle from a path: a directory bundle or a ZIP file.

@@ -4080,6 +4080,25 @@ curves	Smooth	Εξομάλυνση
 
 # Graphics Adapter preference (#1885)
 	GPU adapter	Προσαρμογέας GPU
+# Window › Design Timeline
+	Design Timeline	Χρονογραμμή σχεδίασης
+	Start Design Timeline	Έναρξη χρονογραμμής σχεδίασης
+	Stop Design Timeline	Διακοπή χρονογραμμής σχεδίασης
+	Roll to End	Μετάβαση στο τέλος
+	Roll to Start	Μετάβαση στην αρχή
+	Roll to Here	Μετάβαση εδώ
+	Edit Parameters…	Επεξεργασία παραμέτρων…
+	This step has no dialog to edit.	Αυτό το βήμα δεν έχει παράθυρο διαλόγου για επεξεργασία.
+	Suppress	Αναστολή
+	Unsuppress	Άρση αναστολής
+	No steps yet: edits to this document appear here.	Δεν υπάρχουν ακόμη βήματα: οι επεξεργασίες αυτού του εγγράφου εμφανίζονται εδώ.
+	Open a document to use the design timeline.	Ανοίξτε ένα έγγραφο για να χρησιμοποιήσετε τη χρονογραμμή σχεδίασης.
+	Records each edit from now on, so you can suppress, delete or edit any of them later.	Καταγράφει κάθε επεξεργασία από τώρα και στο εξής, ώστε να μπορείτε αργότερα να αναστείλετε, να διαγράψετε ή να επεξεργαστείτε οποιαδήποτε.
+	A layer this step acted on was removed.	Ένα επίπεδο στο οποίο ενεργούσε αυτό το βήμα αφαιρέθηκε.
+	This step would now change a layer it didn't change before, so it was skipped.	Αυτό το βήμα θα άλλαζε τώρα ένα επίπεδο που δεν άλλαζε πριν, γι’ αυτό παραλείφθηκε.
+	The layer this step placed its new layers beside was removed; they went elsewhere.	Το επίπεδο δίπλα στο οποίο αυτό το βήμα τοποθετούσε τα νέα του επίπεδα αφαιρέθηκε· τοποθετήθηκαν αλλού.
+	An earlier step changed, so this step's stored result may be out of date.	Ένα προηγούμενο βήμα άλλαξε, οπότε το αποθηκευμένο αποτέλεσμα αυτού του βήματος ίσως δεν είναι πια επίκαιρο.
+
 
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Εισαγωγή στιλ…

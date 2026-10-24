@@ -4059,6 +4059,25 @@ curves	Smooth	スムーズ
 
 # Graphics Adapter preference (#1885)
 	GPU adapter	GPU アダプター
+# Window › Design Timeline
+	Design Timeline	デザインタイムライン
+	Start Design Timeline	デザインタイムラインを開始
+	Stop Design Timeline	デザインタイムラインを停止
+	Roll to End	最後まで進める
+	Roll to Start	最初まで戻す
+	Roll to Here	ここまで移動
+	Edit Parameters…	パラメーターを編集…
+	This step has no dialog to edit.	このステップには編集できるダイアログがありません。
+	Suppress	抑制
+	Unsuppress	抑制を解除
+	No steps yet: edits to this document appear here.	まだステップはありません。このドキュメントの編集がここに表示されます。
+	Open a document to use the design timeline.	デザインタイムラインを使うには、ドキュメントを開いてください。
+	Records each edit from now on, so you can suppress, delete or edit any of them later.	これ以降の編集をすべて記録し、あとで抑制・削除・編集できるようにします。
+	A layer this step acted on was removed.	このステップが操作したレイヤーは削除されました。
+	This step would now change a layer it didn't change before, so it was skipped.	このステップは以前は変更しなかったレイヤーを変更してしまうため、スキップされました。
+	The layer this step placed its new layers beside was removed; they went elsewhere.	このステップが新しいレイヤーを配置する基準のレイヤーが削除されたため、別の位置に配置されました。
+	An earlier step changed, so this step's stored result may be out of date.	前のステップが変更されたため、このステップに保存された結果は古くなっている可能性があります。
+
 
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	スタイルを読み込み…

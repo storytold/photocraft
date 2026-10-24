@@ -819,3 +819,14 @@ fn the_dock_can_be_as_wide_as_the_window_allows() {
         assert_eq!((*range.start(), *range.end()), (crate::panels::DOCK_MIN_WIDTH, max), "{window}");
     }
 }
+
+#[test]
+fn design_timeline_menu_toggles_the_strip_in_a_custom_layout() {
+    let mut app = app();
+    app.run("window.panel.move", json!({"panel":"swatches", "anchor":"layers", "zone":"top"})).unwrap();
+    assert!(app.ui.docking.is_some());
+    let id = crate::design_timeline_ui::ID;
+    assert!(crate::menus::invoke(&mut app, &egui::Context::default(), id, json!({})).is_ok());
+    assert!(app.ui.design_timeline.open, "the docked History tab must not take the strip's command");
+    assert!(!app.ui.docking.as_ref().unwrap().contains(&"designTimelineList".into()));
+}

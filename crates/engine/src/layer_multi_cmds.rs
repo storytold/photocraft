@@ -814,6 +814,7 @@ fn doc_pixels_equal(a: &Document, b: &Document) -> bool {
         slices: _,
         variables: _,
         timeline: _,
+        design_timeline: _,
         file_encoding: _,
     } = a;
     *size == b.size
@@ -916,6 +917,10 @@ pub fn selection_only_change(a: &Document, b: &Document) -> bool {
         slices,
         variables,
         timeline,
+        // Compared by identity: a recorded selection step grows the timeline after this check
+        // (timeline::record), so it stays clean, while design.* commands that rewrite it or
+        // start or stop it change what a save writes.
+        design_timeline,
         file_encoding,
     } = a;
     // The ignored fields above are the pixel ones `pixels_equal_with` already compares.
@@ -939,6 +944,10 @@ pub fn selection_only_change(a: &Document, b: &Document) -> bool {
         && *slices == b.slices
         && *variables == b.variables
         && *timeline == b.timeline
+        && match (design_timeline, &b.design_timeline) {
+            (Some(x), Some(y)) => std::sync::Arc::ptr_eq(x, y),
+            (x, y) => x.is_none() && y.is_none(),
+        }
         && *file_encoding == b.file_encoding
 }
 

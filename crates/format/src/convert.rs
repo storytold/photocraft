@@ -32,6 +32,32 @@ pub(crate) fn check_nesting(layers: &[Layer]) -> Result<()> {
     if too_deep_at(layers, 0) { Err(too_deep()) } else { Ok(()) }
 }
 
+/// Whether to keep the stored ids of `trees`, reserving unscoped ones: not when one is implausibly
+/// far ahead of the unscoped counter; then the whole document is remapped while retaining shared
+/// contents groups. Scoped ids are always kept: past `MAX_STEP`, steps mint unscoped ids.
+fn keep_ids(trees: &[&[LayerM]]) -> Result<bool> {
+    /// Raise `max` to the largest layer or contents id in `layers`, refusing nesting past the cap.
+    fn max_ids(layers: &[LayerM], depth: usize, max: &mut u64) -> Result<()> {
+        if depth > MAX_GROUP_DEPTH && !layers.is_empty() {
+            return Err(too_deep());
+        }
+        for l in layers {
+            *max = (*max).max(l.id);
+            match &l.content {
+                ContentM::Group { children, .. } => max_ids(children, depth + 1, max)?,
+                ContentM::Smart { contents_id: Some(id), .. } => *max = (*max).max(*id),
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+    let mut max = 0;
+    for t in trees {
+        max_ids(t, 0, &mut max)?;
+    }
+    Ok(photocraft_doc::reserve_unscoped_id(max))
+}
+
 pub(crate) trait Sink {
     /// Register a tile, returning its hash.
     fn tile(&mut self, format: PixelFormat, tile: &Arc<Tile>) -> Hash;
@@ -221,6 +247,7 @@ fn channel_m(c: &AlphaChannel, sink: &mut dyn Sink) -> ChannelM {
     ChannelM { name: name.clone(), surface: surface_m(surface, sink), spot: *spot, color: *color, opacity: *opacity, indicates: *indicates }
 }
 
+/// The manifest form of `d`, its design timeline included; tiles and blobs go to `sink`.
 pub(crate) fn doc_m(d: &Document, sink: &mut dyn Sink) -> DocM {
     DocM {
         id: d.id.0,
@@ -265,7 +292,27 @@ pub(crate) fn doc_m(d: &Document, sink: &mut dyn Sink) -> DocM {
         notes: d.notes.clone(),
         text_styles: d.text_styles.clone(),
         slices: d.slices.clone(),
+        design_timeline: d.design_timeline.as_ref().map(|t| Box::new(design_timeline_m(t, sink))),
     }
+}
+
+/// The manifest form of `t`: its base, steps and baked results (checkpoints are caches, not saved).
+fn design_timeline_m(t: &photocraft_doc::design::DesignTimeline, sink: &mut dyn Sink) -> DesignTimelineM {
+    let steps = t
+        .steps
+        .iter()
+        .map(|st| DesignStepM {
+            step: st.clone(),
+            baked: st.baked.as_ref().map(|b| BakedM {
+                layers: b.layers.iter().map(|l| layer_m(l, sink)).collect(),
+                placed: b.placed.iter().map(|(id, below, above)| (id.0, below.map(|l| l.0), above.map(|l| l.0))).collect(),
+                selection_changed: b.selection.is_some(),
+                selection: b.selection.as_ref().and_then(|s| s.as_ref().map(|s| surface_m(s, sink))),
+                color: b.color.as_ref().map(|(mode, depth, profile)| (*mode, *depth, opt_blob(profile, sink))),
+            }),
+        })
+        .collect();
+    DesignTimelineM { base: doc_m(&t.base, sink), steps, marker: t.marker }
 }
 
 fn effects_m(e: &Effects, sink: &mut dyn Sink) -> EffectsM {
@@ -316,6 +363,8 @@ pub(crate) struct Loader<'a> {
     /// budget once per distinct tile and hands every reference the same copy-on-write `Arc`
     /// (#3315). Grouped by sample type: in-memory byte order depends on it.
     pub tiles: std::collections::HashMap<SampleType, std::collections::HashMap<Hash, Arc<Tile>>>,
+    /// What loaded without part of its stored data, for the open's warnings.
+    pub warnings: Vec<String>,
 }
 
 impl Loader<'_> {
@@ -552,28 +601,65 @@ impl Loader<'_> {
         })
     }
 
+    /// The document of `m` with its design timeline, warning when the timeline must be dropped.
     pub(crate) fn document(&mut self, m: &DocM) -> Result<Document> {
-        // Reserve every stored id before allocating identities missing from older bundles. If an
-        // id is implausibly large, remap the whole document while retaining shared contents groups.
+        // One decision for the document and its timeline's base and baked trees: the steps name
+        // their layers by stored id, so remapping any one tree would break them.
         if self.preserve_ids {
-            fn max_ids(layers: &[LayerM], depth: usize, max: &mut u64) -> Result<()> {
-                if depth > MAX_GROUP_DEPTH && !layers.is_empty() {
-                    return Err(too_deep());
-                }
-                for l in layers {
-                    *max = (*max).max(l.id);
-                    match &l.content {
-                        ContentM::Group { children, .. } => max_ids(children, depth + 1, max)?,
-                        ContentM::Smart { contents_id: Some(id), .. } => *max = (*max).max(*id),
-                        _ => {}
-                    }
-                }
-                Ok(())
+            let mut trees = vec![m.layers.as_slice()];
+            if let Some(t) = m.design_timeline.as_deref() {
+                trees.push(&t.base.layers);
+                trees.extend(t.steps.iter().filter_map(|st| st.baked.as_ref()).map(|b| b.layers.as_slice()));
             }
-            let mut max = m.id;
-            max_ids(&m.layers, 0, &mut max)?;
-            self.preserve_ids = reserve_ids_through(max);
+            self.preserve_ids = keep_ids(&trees)?;
+            // Remapped ids would no longer name the steps' layers: the image opens without its
+            // timeline, and the user is told before a save makes that permanent.
+            if !self.preserve_ids && m.design_timeline.is_some() {
+                self.warnings
+                    .push("its design timeline names layer ids this build can't keep; the image opened without its history, and saving it removes the history from the file".into());
+            }
         }
+        let mut doc = self.document_only(m)?;
+        // Loaded without its ids (embedded as a smart object's contents, say), it has no timeline.
+        if let Some(t) = m.design_timeline.as_deref().filter(|_| self.preserve_ids) {
+            doc.design_timeline = Some(Arc::new(self.design_timeline(t, &doc)?));
+        }
+        Ok(doc)
+    }
+
+    /// The timeline of the loaded `doc`; its last step in effect resumes from `doc`.
+    fn design_timeline(&mut self, t: &DesignTimelineM, doc: &Document) -> Result<photocraft_doc::design::DesignTimeline> {
+        use photocraft_doc::design::{Baked, Checkpoint, DesignTimeline};
+        let mut base = self.document_only(&t.base)?;
+        base.id = doc.id;
+        let mut steps = Vec::with_capacity(t.steps.len());
+        for m in &t.steps {
+            let mut st = m.step.clone();
+            st.baked = match &m.baked {
+                Some(b) => Some(Arc::new(Baked {
+                    layers: b.layers.iter().map(|l| self.layer(l, 0)).collect::<Result<Vec<_>>>()?,
+                    placed: b.placed.iter().map(|(id, below, above)| (LayerId(*id), below.map(LayerId), above.map(LayerId))).collect(),
+                    selection: if b.selection_changed { Some(self.opt_surface(&b.selection)?) } else { None },
+                    color: match &b.color {
+                        Some((mode, depth, profile)) => Some((*mode, *depth, self.opt_blob(profile)?)),
+                        None => None,
+                    },
+                })),
+                None => None,
+            };
+            steps.push(st);
+        }
+        let mut tl = DesignTimeline { base: Arc::new(base), steps, marker: t.marker };
+        // The saved document is what the steps in effect produce: replay can resume from it.
+        let n = tl.in_effect();
+        if let Some(last) = n.checked_sub(1).and_then(|i| tl.steps.get_mut(i)) {
+            last.checkpoint = Checkpoint(Some(Arc::new(doc.clone())));
+        }
+        Ok(tl)
+    }
+
+    /// The document of `m` without its timeline, under the id decision already made.
+    fn document_only(&mut self, m: &DocM) -> Result<Document> {
         let layers = m.layers.iter().map(|l| self.layer(l, 0)).collect::<Result<Vec<_>>>()?;
         let mut channels = Vec::with_capacity(m.channels.len());
         for c in &m.channels {
@@ -632,7 +718,7 @@ impl Loader<'_> {
                 vd.layer = self.id_map.get(&vd.layer.0).copied().unwrap_or(LayerId(u64::MAX - vd.layer.0.min(u64::MAX / 2)));
             }
         }
-        let id = if self.preserve_ids { DocId(m.id) } else { DocId::fresh() };
+        let id = if self.preserve_ids && reserve_doc_ids_through(m.id) { DocId(m.id) } else { DocId::fresh() };
         Ok(Document {
             id,
             name: m.name.clone(),
@@ -658,6 +744,7 @@ impl Loader<'_> {
             duotone: m.duotone.clone(),
             variables,
             timeline: m.timeline.clone(),
+            design_timeline: None,
             file_encoding: m.file_encoding,
             layer_comps,
             last_applied_comp: m.last_applied_comp,
@@ -674,18 +761,18 @@ impl Loader<'_> {
     }
 }
 
-/// Advance the global id counter past `max` so ids loaded from a file never
-/// collide with ids minted later in this process. Returns `false` if `max`
-/// is implausibly far ahead (the caller then remaps ids instead).
-pub(crate) fn reserve_ids_through(max: u64) -> bool {
-    let probe = LayerId::fresh().0;
+/// Advance the document id counter past `max` so a loaded document id never
+/// collides with ids minted later in this process. Returns `false` if `max`
+/// is implausibly far ahead (the caller then mints a fresh id instead).
+pub(crate) fn reserve_doc_ids_through(max: u64) -> bool {
+    let probe = DocId::fresh().0;
     if max < probe {
         return true;
     }
     if max - probe > 10_000_000 {
         return false;
     }
-    photocraft_doc::ensure_ids_above(max);
+    photocraft_doc::ensure_doc_ids_above(max);
     true
 }
 

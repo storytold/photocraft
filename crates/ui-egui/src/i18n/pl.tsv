@@ -3997,6 +3997,25 @@ curves	Smooth	Wygładź
 
 # Graphics Adapter preference (#1885)
 	GPU adapter	Karta GPU
+# Window › Design Timeline
+	Design Timeline	Oś czasu projektu
+	Start Design Timeline	Rozpocznij oś czasu projektu
+	Stop Design Timeline	Zatrzymaj oś czasu projektu
+	Roll to End	Przejdź do końca
+	Roll to Start	Przejdź do początku
+	Roll to Here	Przejdź tutaj
+	Edit Parameters…	Edytuj parametry…
+	This step has no dialog to edit.	Ten krok nie ma okna dialogowego do edycji.
+	Suppress	Wstrzymaj
+	Unsuppress	Przywróć
+	No steps yet: edits to this document appear here.	Brak kroków: tu pojawią się zmiany w tym dokumencie.
+	Open a document to use the design timeline.	Otwórz dokument, aby użyć osi czasu projektu.
+	Records each edit from now on, so you can suppress, delete or edit any of them later.	Od teraz zapisuje każdą zmianę, aby można było później wstrzymać, usunąć lub edytować dowolną z nich.
+	A layer this step acted on was removed.	Warstwa, na której działał ten krok, została usunięta.
+	This step would now change a layer it didn't change before, so it was skipped.	Ten krok zmieniłby teraz warstwę, której wcześniej nie zmieniał, więc został pominięty.
+	The layer this step placed its new layers beside was removed; they went elsewhere.	Warstwa, obok której ten krok umieszczał nowe warstwy, została usunięta; umieszczono je gdzie indziej.
+	An earlier step changed, so this step's stored result may be out of date.	Wcześniejszy krok się zmienił, więc zapisany wynik tego kroku może być nieaktualny.
+
 
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Importuj style…

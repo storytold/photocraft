@@ -259,53 +259,7 @@ fn file_error(operation: &str, path: &str, error: std::io::Error) -> AutomationE
 /// directory capabilities. Automation must use `doc.open`, `doc.save` and
 /// `doc.render` for file effects until those commands are migrated.
 pub fn authorize_engine_command(id: &str, params: &Value) -> Result<(), AutomationError> {
-    let safe_file_command = matches!(
-        id,
-        "file.new"
-            | "file.newFromClipboard"
-            | "file.close"
-            | "file.closeAll"
-            | "file.closeOthers"
-            | "file.fileInfo"
-            | "file.automate.fitImage"
-            | "file.automate.conditionalModeChange"
-            | "file.automate.cropAndStraightenPhotos"
-            | "file.scripts.flattenAllLayerEffects"
-            | "file.scripts.flattenAllMasks"
-            | "file.scripts.deleteAllEmptyLayers"
-            | "file.export.exportPreferences"
-    );
-    if id.starts_with("file.") && !safe_file_command {
-        return Err(command_error(id));
-    }
-    // Contents commands re-check the resolved source in the engine before any disk read.
-    // Photoshop's embedded linked-layer blocks count as in-memory sources too.
-    let in_memory_smart_command = matches!(
-        id,
-        "layer.smartObjects.convertToSmartObject"
-            | "layer.smartObjects.editContents"
-            | "layer.smartObjects.convertToLayers"
-            | "layer.smartObjects.saveContents"
-    );
-    if (id.starts_with("layer.smartObjects.") && !in_memory_smart_command)
-        || matches!(
-            id,
-            "pattern.import"
-                | "pattern.export"
-                | "edit.presets.migratePresets"
-                | "measurementLog.export"
-                | "layer.videoLayers.newVideoLayerFromFile"
-                | "layer.videoLayers.replaceFootage"
-                | "layer.videoLayers.reloadFrame"
-        )
-        || command_uses_ambient_path(id, params)
-        || profile_command_may_read_ambient(id, params)
-        || preferences_may_grant_ambient_paths(id, params)
-        || params_contain_ambient_path(id, params)
-    {
-        return Err(command_error(id));
-    }
-    Ok(())
+    if photocraft_engine::untrusted::reaches_outside(id, params) { Err(command_error(id)) } else { Ok(()) }
 }
 
 /// Desktop sessions may already contain user-configured ambient colour-profile
@@ -313,11 +267,7 @@ pub fn authorize_engine_command(id: &str, params: &Value) -> Result<(), Automati
 /// when their request parameters contain no path. Fresh headless sessions
 /// cannot acquire such settings through the automation interface.
 pub fn authorize_desktop_engine_command(id: &str, params: &Value) -> Result<(), AutomationError> {
-    authorize_engine_command(id, params)?;
-    if id.starts_with("image.mode.") {
-        return Err(command_error(id));
-    }
-    Ok(())
+    if photocraft_engine::untrusted::reaches_outside_desktop(id, params) { Err(command_error(id)) } else { Ok(()) }
 }
 
 /// [`authorize_engine_command`] as the function pointer [`photocraft_engine::Session::authorize`]
@@ -329,97 +279,6 @@ pub fn authorize_engine_step(id: &str, params: &Value) -> photocraft_engine::Res
 /// [`authorize_desktop_engine_command`] as a [`photocraft_engine::Session::authorize`] hook.
 pub fn authorize_desktop_engine_step(id: &str, params: &Value) -> photocraft_engine::Result<()> {
     authorize_desktop_engine_command(id, params).map_err(|e| photocraft_engine::EngineError::Other(e.to_string()))
-}
-
-fn params_contain_ambient_path(id: &str, params: &Value) -> bool {
-    let keys: &[&str] = match id {
-        "image.adjustments.colorLookup" | "layer.newAdjustmentLayer.colorLookup" | "layer.setAdjustment" => &["file"],
-        "filter.distort.displace" => &["mapPath"],
-        "layer.quickExportAsPng" | "layer.exportAs" | "image.applyDataSet" | "layer.smartObjects.editContents" | "layer.smartObjects.convertToLayers" => {
-            &["path"]
-        }
-        "image.mode.rgb" | "image.mode.grayscale" | "image.mode.cmyk" | "image.mode.lab" => &["profile"],
-        "edit.assignProfile" | "edit.convertToProfile" | "edit.profileInfo" | "view.proofSetup" | "view.gamutWarning" => &["profile"],
-        // New Document's Color Profile (#321) can name an .icc file.
-        "file.new" => &["profile"],
-        "edit.colorSettings" => &["workingRgb", "workingCmyk", "workingGray"],
-        _ => &[],
-    };
-    keys.iter().any(|key| {
-        params
-            .get(*key)
-            .and_then(Value::as_str)
-            .is_some_and(|value| if matches!(*key, "file" | "mapPath" | "path") { !value.is_empty() } else { looks_like_path(value) })
-    })
-}
-
-fn profile_command_may_read_ambient(id: &str, params: &Value) -> bool {
-    // Installed profiles scan OS and user directories even without a request path.
-    if matches!(id, "color.profileMismatch" | "edit.colorSettings" | "edit.installedProfiles" | "view.proofSetup") {
-        return true;
-    }
-    // New Document skips exact `working` and `none`; the other working aliases resolve
-    // the configured working space, which may be an .icc path.
-    if id == "file.new" {
-        return params.get("profile").and_then(Value::as_str).is_some_and(|profile| {
-            matches!(profile, "default" | "working-cmyk" | "workingCmyk" | "working-rgb" | "workingRgb" | "working-gray" | "workingGray")
-        });
-    }
-    matches!(id, "edit.assignProfile" | "edit.convertToProfile" | "edit.profileInfo")
-        && params.get("profile").and_then(Value::as_str).is_some_and(|profile| {
-            matches!(profile, "working" | "default" | "working-cmyk" | "workingCmyk" | "working-rgb" | "workingRgb" | "working-gray" | "workingGray")
-        })
-}
-
-fn preferences_may_grant_ambient_paths(id: &str, params: &Value) -> bool {
-    if id != "prefs.set" {
-        return false;
-    }
-    let direct = params.get("path").and_then(Value::as_str).is_some_and(preference_uses_ambient_filesystem);
-    let batch = params.get("values").and_then(Value::as_object).is_some_and(|values| values.keys().any(|path| preference_uses_ambient_filesystem(path)));
-    direct || batch
-}
-
-fn preference_uses_ambient_filesystem(path: &str) -> bool {
-    // The engine skips empty segments (`.scriptEvents.enabled` sets `scriptEvents.enabled`), so
-    // judge the first non-empty one; no segment at all is the whole-preferences update.
-    let mut segments = path.split('.').filter(|segment| !segment.is_empty());
-    let Some(section) = segments.next() else { return true };
-    // File Handling's LUT folder (#6558) is listed from disk; the rest of that section is not.
-    matches!(section, "colorSettings" | "scriptEvents" | "historyLog" | "plugIns" | "scratchDisks")
-        || (section == "fileHandling" && segments.next().is_none_or(|key| key == "lutFolder"))
-}
-
-fn command_uses_ambient_path(id: &str, params: &Value) -> bool {
-    match id {
-        "actions.load"
-        | "brush.presets.importAbr"
-        | "brush.presets.importImage"
-        | "gradient.presets.importGrd"
-        | "plugin.install"
-        | "swatches.import"
-        | "style.presets.importAsl"
-        | "layer.layerStyle.contours.load" => {
-            // `data` wins over `path` in these commands; any `path` without it reads the filesystem.
-            params.get("data").is_none() && params.get("path").is_some()
-        }
-        // With a `path` the file is written there; without one the bytes come back as `data`.
-        "actions.save" | "swatches.export" | "style.presets.exportAsl" | "layer.layerStyle.contours.save" => params.get("path").is_some(),
-        // Shortcut sets: a .kys read or written by path, or a Summarize page written by path.
-        "edit.keyboardShortcuts" => {
-            params.get("path").is_some() || ["importKys", "exportKys", "summarize"].iter().any(|k| params.get(*k).and_then(|v| v.get("path")).is_some())
-        }
-        "plugin.reload" => true,
-        _ => false,
-    }
-}
-
-fn looks_like_path(value: &str) -> bool {
-    value.contains('/')
-        || value.contains('\\')
-        || value.contains(':')
-        || value.to_ascii_lowercase().ends_with(".icc")
-        || value.to_ascii_lowercase().ends_with(".icm")
 }
 
 fn command_error(id: &str) -> AutomationError {

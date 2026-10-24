@@ -4140,6 +4140,25 @@ curves	Smooth	Vloeiend maken
 
 # Graphics Adapter preference (#1885)
 	GPU adapter	GPU-adapter
+# Window › Design Timeline
+	Design Timeline	Ontwerptijdlijn
+	Start Design Timeline	Ontwerptijdlijn starten
+	Stop Design Timeline	Ontwerptijdlijn stoppen
+	Roll to End	Naar het einde
+	Roll to Start	Naar het begin
+	Roll to Here	Tot hier
+	Edit Parameters…	Parameters bewerken…
+	This step has no dialog to edit.	Deze stap heeft geen dialoogvenster om te bewerken.
+	Suppress	Onderdrukken
+	Unsuppress	Niet meer onderdrukken
+	No steps yet: edits to this document appear here.	Nog geen stappen: bewerkingen van dit document verschijnen hier.
+	Open a document to use the design timeline.	Open een document om de ontwerptijdlijn te gebruiken.
+	Records each edit from now on, so you can suppress, delete or edit any of them later.	Legt vanaf nu elke bewerking vast, zodat u ze later allemaal kunt onderdrukken, verwijderen of bewerken.
+	A layer this step acted on was removed.	Een laag waarop deze stap werkte, is verwijderd.
+	This step would now change a layer it didn't change before, so it was skipped.	Deze stap zou nu een laag wijzigen die hij eerder niet wijzigde, dus is hij overgeslagen.
+	The layer this step placed its new layers beside was removed; they went elsewhere.	De laag waarnaast deze stap zijn nieuwe lagen plaatste, is verwijderd; ze zijn ergens anders geplaatst.
+	An earlier step changed, so this step's stored result may be out of date.	Een eerdere stap is gewijzigd, dus het opgeslagen resultaat van deze stap is mogelijk verouderd.
+
 
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Stijlen importeren…

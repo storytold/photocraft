@@ -817,6 +817,9 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
         crate::guide_layout_ui::validate(app, &d.fields)?;
     }
     let d = app.ui.close_dialog(id).ok_or_else(|| format!("no dialog {id}"))?;
+    if let Some(r) = crate::design_timeline_ui::confirm_edit(app, &d.fields) {
+        return r;
+    }
     match d.kind {
         DialogKind::NewDocument => {
             let r = app.run("file.new", crate::new_doc_ui::command_params(&d.fields));
@@ -923,6 +926,7 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
 pub fn cancel(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
     let closed = app.ui.close_dialog(id).ok_or_else(|| format!("no dialog {id}"))?;
     crate::actions::stopped(app, &closed.fields);
+    crate::design_timeline_ui::cancel_edit(app, &closed.fields);
     if crate::guide_layout_ui::owns(&closed.fields) {
         app.ui.dialogs.retain(|child| child.fields.get("__dialog").and_then(Value::as_u64) != Some(id));
     }

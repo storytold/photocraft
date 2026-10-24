@@ -3392,6 +3392,25 @@ curves	Smooth	Lisser
 
 # Graphics Adapter preference (#1885)
 	GPU adapter	Adaptateur GPU
+# Window › Design Timeline
+	Design Timeline	Chronologie de conception
+	Start Design Timeline	Démarrer la chronologie de conception
+	Stop Design Timeline	Arrêter la chronologie de conception
+	Roll to End	Avancer jusqu’à la fin
+	Roll to Start	Revenir au début
+	Roll to Here	Aller jusqu’ici
+	Edit Parameters…	Modifier les paramètres…
+	This step has no dialog to edit.	Cette étape n’a pas de boîte de dialogue à modifier.
+	Suppress	Suspendre
+	Unsuppress	Rétablir
+	No steps yet: edits to this document appear here.	Aucune étape pour l’instant : les modifications de ce document apparaissent ici.
+	Open a document to use the design timeline.	Ouvrez un document pour utiliser la chronologie de conception.
+	Records each edit from now on, so you can suppress, delete or edit any of them later.	Enregistre désormais chaque modification, pour que vous puissiez ensuite suspendre, supprimer ou modifier n’importe laquelle.
+	A layer this step acted on was removed.	Un calque sur lequel agissait cette étape a été supprimé.
+	This step would now change a layer it didn't change before, so it was skipped.	Cette étape modifierait maintenant un calque qu’elle ne modifiait pas auparavant ; elle a donc été ignorée.
+	The layer this step placed its new layers beside was removed; they went elsewhere.	Le calque à côté duquel cette étape plaçait ses nouveaux calques a été supprimé ; ils ont été placés ailleurs.
+	An earlier step changed, so this step's stored result may be out of date.	Une étape précédente a changé : le résultat enregistré de cette étape n’est peut-être plus à jour.
+
 
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Importer des styles…

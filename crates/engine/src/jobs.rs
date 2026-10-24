@@ -234,6 +234,8 @@ struct Running {
     layers: Option<LayerSelection>,
     rx: std::sync::mpsc::Receiver<Result<Payload>>,
     apply: Option<Apply>,
+    /// Design timelines to record the step into once applied: (documents before, step, params).
+    timeline: Option<(Vec<crate::timeline::Before>, u64, Value)>,
     #[cfg(not(target_arch = "wasm32"))]
     handle: Option<std::thread::JoinHandle<()>>,
 }
@@ -375,9 +377,12 @@ pub fn run<T: Send + 'static>(
     let ctx = JobCtx::new();
     let (tx, rx) = std::sync::mpsc::channel::<Result<Payload>>();
     let apply_document = document.clone();
+    let id_scope = photocraft_doc::IdScope::current();
+    let apply_scope = id_scope.clone();
     let erased: Apply = Box::new(move |s, any| {
         let _authorization = AuthorizationScope::enter(authorization);
         let _document = crate::doc_path::scope(apply_document.as_deref());
+        let _id_scope = apply_scope.as_ref().map(photocraft_doc::IdScope::enter);
         let t = any.downcast::<T>().map_err(|_| EngineError::Other("internal error: job result type mismatch".into()))?;
         apply(s, *t)
     });
@@ -392,6 +397,7 @@ pub fn run<T: Send + 'static>(
         let spawned = std::thread::Builder::new().name(format!("photocraft-job-{}", id.0)).spawn(move || {
             let _authorization = AuthorizationScope::enter(authorization);
             let _document = crate::doc_path::scope(document.as_deref());
+            let _id_scope = id_scope.as_ref().map(photocraft_doc::IdScope::enter);
             let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work(&wctx).map(|t| Box::new(t) as Payload)))
                 .unwrap_or_else(|_| Err(EngineError::Other(format!("`{label_w}` failed with an internal error (logged); the document is unchanged"))));
             // The receiver is gone when the job was cancelled: nothing to report.
@@ -402,7 +408,7 @@ pub fn run<T: Send + 'static>(
     #[cfg(target_arch = "wasm32")]
     {
         // Unreachable (wasm runs inline above); keep the types used.
-        drop((work, tx));
+        drop((work, tx, id_scope));
     }
     s.jobs.pending = Some(Running {
         id,
@@ -421,6 +427,7 @@ pub fn run<T: Send + 'static>(
         layers,
         rx,
         apply: Some(erased),
+        timeline: None,
         #[cfg(not(target_arch = "wasm32"))]
         handle,
     });
@@ -760,8 +767,62 @@ impl Session {
         }
     }
 
+    /// Run `f`, an edit made outside any command (a file placed from a picker's bytes), as one
+    /// design-timeline step `id` with `params`, keeping its result: a replay can't make it again.
+    /// Inside a command, that command's step records it instead.
+    pub fn record_outside<T>(&mut self, id: &str, params: Value, f: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
+        if photocraft_doc::IdScope::current().is_some() {
+            return f(self);
+        }
+        let scope = photocraft_doc::IdScope::new(self.next_step);
+        let before = crate::timeline::capture(self);
+        let timed = !before.is_empty();
+        let r = {
+            let _g = scope.enter();
+            f(self)
+        };
+        if r.is_ok() {
+            crate::timeline::record(self, before, scope.step(), id, &params, true);
+        }
+        if scope.used() || timed {
+            self.next_step = self.next_step.max(scope.step().saturating_add(1));
+        }
+        r
+    }
+
     /// Run the command `id`: inline, or (with `background`) as a job when it is one.
+    /// Ids a command mints are keyed to its step; a command run on another's behalf shares it.
     pub(crate) fn dispatch(&mut self, id: &str, params: Value, background: bool) -> Result<Started> {
+        if photocraft_doc::IdScope::current().is_some() {
+            return self.dispatch_scoped(id, params, background);
+        }
+        let scope = photocraft_doc::IdScope::new(self.next_step);
+        let before = crate::timeline::capture(self);
+        let recorded = (!before.is_empty()).then(|| params.clone());
+        let timed = recorded.is_some();
+        let r = {
+            let _g = scope.enter();
+            self.dispatch_scoped(id, params, background)
+        };
+        match (&r, recorded) {
+            (Ok(Started::Done(_)), Some(p)) => crate::timeline::record(self, before, scope.step(), id, &p, false),
+            (Ok(Started::Job(j)), Some(p)) => {
+                if let Some(job) = self.jobs.running.iter_mut().find(|job| job.id == *j) {
+                    job.timeline = Some((before, scope.step(), p));
+                }
+            }
+            _ => {}
+        }
+        // A started job may still mint ids under this step, and a design-timeline step is named
+        // by it, so either spends it too.
+        if scope.used() || timed || matches!(r, Ok(Started::Job(_))) {
+            self.next_step = self.next_step.max(scope.step().saturating_add(1));
+        }
+        r
+    }
+
+    /// [`Session::dispatch`] inside the step's id scope: validate, run and journal the command.
+    fn dispatch_scoped(&mut self, id: &str, params: Value, background: bool) -> Result<Started> {
         let spec = crate::commands::find(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
         // Params are named fields: anything but an object (or null, meaning none) is a caller
         // mistake, not "use every default".
@@ -936,6 +997,7 @@ impl Session {
     /// Apply (or report the failure of) a job whose worker has delivered `r`.
     fn finish_job(&mut self, mut job: Running, r: Result<Payload>) {
         let apply = job.apply.take();
+        let timeline = job.timeline.take();
         let outcome = match r {
             Err(EngineError::Cancelled) => JobOutcome::Cancelled,
             Err(e) => JobOutcome::Failed(e.to_string()),
@@ -946,6 +1008,9 @@ impl Session {
                 Err(e) => JobOutcome::Failed(e.to_string()),
             },
         };
+        if let (JobOutcome::Done(_), Some((before, step, params))) = (&outcome, timeline) {
+            crate::timeline::record(self, before, step, &job.command, &params, false);
+        }
         self.end_job(&job, outcome);
     }
 

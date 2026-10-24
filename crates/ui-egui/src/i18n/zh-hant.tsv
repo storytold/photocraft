@@ -3004,6 +3004,25 @@ curves	Smooth	平滑
 
 # Graphics Adapter preference (#1885)
 	GPU adapter	GPU 介面卡
+# Window › Design Timeline
+	Design Timeline	設計時間軸
+	Start Design Timeline	開始設計時間軸
+	Stop Design Timeline	停止設計時間軸
+	Roll to End	前進到結尾
+	Roll to Start	回到開頭
+	Roll to Here	移到此處
+	Edit Parameters…	編輯參數…
+	This step has no dialog to edit.	此步驟沒有可編輯的對話框。
+	Suppress	抑制
+	Unsuppress	取消抑制
+	No steps yet: edits to this document appear here.	尚無步驟：此文件的編輯會顯示在這裡。
+	Open a document to use the design timeline.	請開啟文件以使用設計時間軸。
+	Records each edit from now on, so you can suppress, delete or edit any of them later.	從現在起記錄每一次編輯，之後可抑制、刪除或編輯其中任何一項。
+	A layer this step acted on was removed.	此步驟所作用的圖層已被移除。
+	This step would now change a layer it didn't change before, so it was skipped.	此步驟現在會變更它先前未變更的圖層，因此已略過。
+	The layer this step placed its new layers beside was removed; they went elsewhere.	此步驟放置新圖層時所依據的圖層已被移除，新圖層已放到其他位置。
+	An earlier step changed, so this step's stored result may be out of date.	先前的某個步驟已變更，此步驟儲存的結果可能已過時。
+
 
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	匯入樣式…

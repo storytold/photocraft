@@ -398,8 +398,9 @@ fn import_psd(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, dama
 fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, opts: &ImportOptions, damaged: &mut bool) -> Result<ImportResult, IoError> {
     // A declared native extension must reach its loader so malformed bundles retain format errors.
     if has_extension(name, photocraft_format::EXTENSION) || photocraft_format::is_pcraft(bytes) {
-        let document = photocraft_format::load_from_bytes(bytes)?;
-        return Ok(ImportResult { warnings: open_warnings(&document), document, source_read_only: false, preview_only: false });
+        let (document, mut warnings) = photocraft_format::load_from_bytes_reporting(bytes, &Default::default())?;
+        warnings.extend(open_warnings(&document));
+        return Ok(ImportResult { warnings, document, source_read_only: false, preview_only: false });
     }
     // Magic first: an Affinity file renamed .psd is still Affinity (#5258 corpus
     // preview_never_saves_back_to_its_native_or_renamed_source).

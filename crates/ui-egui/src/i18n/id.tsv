@@ -3395,6 +3395,25 @@ curves	Smooth	Haluskan
 
 # Graphics Adapter preference (#1885)
 	GPU adapter	Adaptor GPU
+# Window › Design Timeline
+	Design Timeline	Timeline Desain
+	Start Design Timeline	Mulai Timeline Desain
+	Stop Design Timeline	Hentikan Timeline Desain
+	Roll to End	Maju ke Akhir
+	Roll to Start	Mundur ke Awal
+	Roll to Here	Pindah ke Sini
+	Edit Parameters…	Edit Parameter…
+	This step has no dialog to edit.	Langkah ini tidak memiliki dialog untuk diedit.
+	Suppress	Tekan
+	Unsuppress	Batalkan Tekan
+	No steps yet: edits to this document appear here.	Belum ada langkah: suntingan pada dokumen ini muncul di sini.
+	Open a document to use the design timeline.	Buka dokumen untuk memakai timeline desain.
+	Records each edit from now on, so you can suppress, delete or edit any of them later.	Mencatat setiap suntingan mulai sekarang, agar nanti Anda bisa menekan, menghapus, atau menyunting yang mana saja.
+	A layer this step acted on was removed.	Layer yang dikenai langkah ini telah dihapus.
+	This step would now change a layer it didn't change before, so it was skipped.	Langkah ini sekarang akan mengubah layer yang sebelumnya tidak diubahnya, jadi langkah ini dilewati.
+	The layer this step placed its new layers beside was removed; they went elsewhere.	Layer tempat langkah ini menaruh layer barunya telah dihapus; layer baru ditaruh di tempat lain.
+	An earlier step changed, so this step's stored result may be out of date.	Langkah sebelumnya berubah, jadi hasil tersimpan langkah ini mungkin sudah tidak terkini.
+
 
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Impor Gaya…

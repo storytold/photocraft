@@ -4497,6 +4497,25 @@ shape	Appearance	Aspetto
 
 # Graphics Adapter preference (#1885)
 	GPU adapter	Adattatore GPU
+# Window › Design Timeline
+	Design Timeline	Timeline di progettazione
+	Start Design Timeline	Avvia timeline di progettazione
+	Stop Design Timeline	Interrompi timeline di progettazione
+	Roll to End	Vai alla fine
+	Roll to Start	Vai all’inizio
+	Roll to Here	Vai fin qui
+	Edit Parameters…	Modifica parametri…
+	This step has no dialog to edit.	Questo passaggio non ha una finestra di dialogo da modificare.
+	Suppress	Sopprimi
+	Unsuppress	Annulla soppressione
+	No steps yet: edits to this document appear here.	Ancora nessun passaggio: qui compaiono le modifiche a questo documento.
+	Open a document to use the design timeline.	Apri un documento per usare la timeline di progettazione.
+	Records each edit from now on, so you can suppress, delete or edit any of them later.	Registra ogni modifica da ora in poi, così potrai sopprimerne, eliminarne o modificarne una qualsiasi in seguito.
+	A layer this step acted on was removed.	Un livello su cui agiva questo passaggio è stato rimosso.
+	This step would now change a layer it didn't change before, so it was skipped.	Questo passaggio ora modificherebbe un livello che prima non modificava, quindi è stato saltato.
+	The layer this step placed its new layers beside was removed; they went elsewhere.	Il livello accanto al quale questo passaggio collocava i nuovi livelli è stato rimosso; sono stati collocati altrove.
+	An earlier step changed, so this step's stored result may be out of date.	Un passaggio precedente è cambiato, quindi il risultato salvato di questo passaggio potrebbe non essere aggiornato.
+
 
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Importa stili…

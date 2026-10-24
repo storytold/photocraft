@@ -4170,6 +4170,25 @@ layerLabel	No Color	Sem cor
 
 # Graphics Adapter preference (#1885)
 	GPU adapter	Adaptador de GPU
+# Window › Design Timeline
+	Design Timeline	Linha do tempo de design
+	Start Design Timeline	Iniciar linha do tempo de design
+	Stop Design Timeline	Parar linha do tempo de design
+	Roll to End	Avançar até o fim
+	Roll to Start	Voltar ao início
+	Roll to Here	Ir até aqui
+	Edit Parameters…	Editar parâmetros…
+	This step has no dialog to edit.	Esta etapa não tem uma caixa de diálogo para editar.
+	Suppress	Suprimir
+	Unsuppress	Deixar de suprimir
+	No steps yet: edits to this document appear here.	Ainda não há etapas: as edições deste documento aparecem aqui.
+	Open a document to use the design timeline.	Abra um documento para usar a linha do tempo de design.
+	Records each edit from now on, so you can suppress, delete or edit any of them later.	Registra cada edição a partir de agora, para que você possa suprimir, excluir ou editar qualquer uma delas depois.
+	A layer this step acted on was removed.	Uma camada em que esta etapa atuava foi removida.
+	This step would now change a layer it didn't change before, so it was skipped.	Esta etapa agora alteraria uma camada que antes não alterava, por isso foi ignorada.
+	The layer this step placed its new layers beside was removed; they went elsewhere.	A camada ao lado da qual esta etapa colocava suas novas camadas foi removida; elas foram colocadas em outro lugar.
+	An earlier step changed, so this step's stored result may be out of date.	Uma etapa anterior mudou, então o resultado salvo desta etapa pode estar desatualizado.
+
 
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Importar estilos…

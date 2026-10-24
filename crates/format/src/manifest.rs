@@ -14,8 +14,12 @@ use photocraft_doc::{
 use photocraft_geom::{Affine, Size};
 use serde::{Deserialize, Serialize};
 
-/// Current manifest version written by this build.
-pub const FORMAT_VERSION: u32 = 1;
+/// Newest manifest version this build reads and writes.
+pub const FORMAT_VERSION: u32 = 2;
+/// The version written for a document without a design timeline. Version 2 adds only
+/// `design_timeline`, so a file without one stays readable by builds that predate it; a file with
+/// one is refused by them rather than opened and saved back without its timeline.
+pub const BASE_FORMAT_VERSION: u32 = 1;
 
 /// Hex-encoded BLAKE3 hash (64 chars).
 pub type Hash = String;
@@ -102,6 +106,43 @@ pub struct DocM {
     /// Web slices (user and layer-based; layer ids are remapped on load).
     #[serde(default, skip_serializing_if = "photocraft_doc::Slices::is_empty")]
     pub slices: photocraft_doc::Slices,
+    /// The design timeline (format 2). Its base shares tiles with the document, so layers no
+    /// step changed cost nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub design_timeline: Option<Box<DesignTimelineM>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DesignTimelineM {
+    /// The document when the timeline started.
+    pub base: DocM,
+    pub steps: Vec<DesignStepM>,
+    #[serde(default)]
+    pub marker: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DesignStepM {
+    #[serde(flatten)]
+    pub step: photocraft_doc::design::DesignStep,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baked: Option<BakedM>,
+}
+
+/// A baked step's stored result (see `photocraft_doc::design::Baked`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BakedM {
+    pub layers: Vec<LayerM>,
+    /// (created layer, layer below it, layer above it).
+    pub placed: Vec<(u64, Option<u64>, Option<u64>)>,
+    /// Whether the step changed the selection, and to what.
+    #[serde(default)]
+    pub selection_changed: bool,
+    #[serde(default)]
+    pub selection: Option<SurfaceM>,
+    /// The document's mode, depth and profile when the step changed them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<(ColorMode, SampleType, Option<Hash>)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

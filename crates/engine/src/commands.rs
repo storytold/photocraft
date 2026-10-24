@@ -346,18 +346,19 @@ pub(crate) fn explicit_layer(s: &Session, p: &Value) -> Result<Option<LayerId>> 
         }
         Some(Value::String(name)) => {
             let d = s.active().ok_or(EngineError::NoDocument)?;
-            let layers = d.doc.walk();
-            let mut top_down = layers.iter().rev();
-            top_down
-                .clone()
-                .find(|(_, _, l)| l.name == *name)
-                .or_else(|| top_down.find(|(_, _, l)| l.name.to_lowercase() == name.to_lowercase()))
-                .map(|(_, _, l)| Some(l.id))
-                .ok_or_else(|| EngineError::Other(format!("no layer named \"{name}\"; {}", layer_listing(&d.doc))))
+            layer_named(&d.doc, name).map(Some).ok_or_else(|| EngineError::Other(format!("no layer named \"{name}\"; {}", layer_listing(&d.doc))))
         }
         Some(Value::Null) | None => Ok(None),
         Some(other) => Err(EngineError::Other(format!("`layer` must be an id or a name, not {other}"))),
     }
+}
+
+/// The layer a command's `"layer"` name picks: the topmost exact match, else the topmost
+/// case-insensitive one.
+pub(crate) fn layer_named(doc: &Document, name: &str) -> Option<LayerId> {
+    let layers = doc.walk();
+    let mut top_down = layers.iter().rev();
+    top_down.clone().find(|(_, _, l)| l.name == name).or_else(|| top_down.find(|(_, _, l)| l.name.to_lowercase() == name.to_lowercase())).map(|(_, _, l)| l.id)
 }
 
 /// The layers of `doc` as a caller can name them, for an error about a layer that isn't there:
@@ -1554,6 +1555,7 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::adjust_cmds::specs());
     v.extend(crate::layer_menu_cmds::specs());
     v.extend(crate::layer_label_cmds::specs());
+    v.extend(crate::design_cmds::specs());
     v.extend(crate::layer_xmp_cmds::specs());
     v.extend(crate::mode_cmds::specs());
     v.extend(crate::multichannel_cmds::specs());

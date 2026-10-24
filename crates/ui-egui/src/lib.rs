@@ -78,6 +78,7 @@ pub mod crop_straighten;
 pub mod crop_ui;
 pub mod dds_options_ui;
 pub mod delete_layer_prompt;
+mod design_timeline_ui;
 pub mod dialog_alt_reset;
 pub mod dialog_blend_ui;
 pub mod dialogs;
@@ -846,6 +847,9 @@ pub struct PhotocraftApp {
     /// Selection outline cache: (doc, revision, segments).
     /// Live filter preview (proxy document with the filter applied).
     pub(crate) filter_preview: Option<filter_dialog::FilterPreview>,
+    /// Edit Parameters: (dialog, size) of the canvas texture left as it was before the rollback,
+    /// shown until the worker's first preview for that dialog lands.
+    pub(crate) filter_preview_hold: Option<(u64, [u32; 2])>,
     pub(crate) smart_filter_targets: smart_filter_dialog::Targets,
     #[cfg(not(target_arch = "wasm32"))]
     filter_preview_worker: filter_preview_worker::Worker,
@@ -1095,6 +1099,7 @@ impl PhotocraftApp {
             proxy_uploaded: None,
             outline_cache: None,
             filter_preview: None,
+            filter_preview_hold: None,
             smart_filter_targets: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             filter_preview_worker: Default::default(),
@@ -2467,6 +2472,9 @@ impl eframe::App for PhotocraftApp {
         }
         if (chrome && self.ui.panels.dock) || tabbed_in {
             panels::right_dock(self, ui);
+        }
+        if chrome {
+            design_timeline_ui::strip(self, ui);
         }
         let t = theme::Tokens::get(&ctx);
         let backdrop = if chrome { prefs_ui::pasteboard_color(self).unwrap_or(t.canvas) } else { egui::Color32::BLACK };

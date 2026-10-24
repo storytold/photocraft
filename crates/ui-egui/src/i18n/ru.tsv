@@ -3861,6 +3861,25 @@ curves	Smooth	Сгладить
 
 # Graphics Adapter preference (#1885)
 	GPU adapter	Адаптер GPU
+# Window › Design Timeline
+	Design Timeline	Шкала дизайна
+	Start Design Timeline	Начать шкалу дизайна
+	Stop Design Timeline	Остановить шкалу дизайна
+	Roll to End	Перейти в конец
+	Roll to Start	Перейти в начало
+	Roll to Here	Перейти сюда
+	Edit Parameters…	Изменить параметры…
+	This step has no dialog to edit.	У этого шага нет диалога для изменения.
+	Suppress	Подавить
+	Unsuppress	Отменить подавление
+	No steps yet: edits to this document appear here.	Шагов пока нет: здесь появятся правки этого документа.
+	Open a document to use the design timeline.	Откройте документ, чтобы работать со шкалой дизайна.
+	Records each edit from now on, so you can suppress, delete or edit any of them later.	С этого момента записывается каждая правка, чтобы позже любую из них можно было подавить, удалить или изменить.
+	A layer this step acted on was removed.	Слой, с которым работал этот шаг, был удалён.
+	This step would now change a layer it didn't change before, so it was skipped.	Теперь этот шаг изменил бы слой, который раньше не менял, поэтому он пропущен.
+	The layer this step placed its new layers beside was removed; they went elsewhere.	Слой, рядом с которым этот шаг размещал новые слои, удалён; они размещены в другом месте.
+	An earlier step changed, so this step's stored result may be out of date.	Предыдущий шаг изменился, поэтому сохранённый результат этого шага может быть устаревшим.
+
 
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Импортировать стили…

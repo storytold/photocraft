@@ -22,6 +22,8 @@ const PANELS: &[(&str, &str, Group)] = &[
     ("history", "History", Group::History),
     ("actions", "Actions", Group::History),
     ("layerComps", "Layer Comps", Group::History),
+    // The History-card tab; `window.panel.designTimeline` toggles the strip under the canvas.
+    ("designTimelineList", "Design Timeline", Group::History),
     ("layers", "Layers", Group::Layers),
     ("channels", "Channels", Group::Layers),
     ("paths", "Paths", Group::Layers),

@@ -3590,6 +3590,25 @@ curves	Smooth	매끄럽게
 
 # Graphics Adapter preference (#1885)
 	GPU adapter	GPU 어댑터
+# Window › Design Timeline
+	Design Timeline	디자인 타임라인
+	Start Design Timeline	디자인 타임라인 시작
+	Stop Design Timeline	디자인 타임라인 중지
+	Roll to End	끝으로 이동
+	Roll to Start	처음으로 이동
+	Roll to Here	여기로 이동
+	Edit Parameters…	매개변수 편집…
+	This step has no dialog to edit.	이 단계에는 편집할 대화 상자가 없습니다.
+	Suppress	억제
+	Unsuppress	억제 해제
+	No steps yet: edits to this document appear here.	아직 단계가 없습니다. 이 문서의 편집 내용이 여기에 표시됩니다.
+	Open a document to use the design timeline.	디자인 타임라인을 사용하려면 문서를 여세요.
+	Records each edit from now on, so you can suppress, delete or edit any of them later.	지금부터 모든 편집을 기록하므로, 나중에 어느 것이든 억제하거나 삭제하거나 편집할 수 있습니다.
+	A layer this step acted on was removed.	이 단계가 작업한 레이어가 제거되었습니다.
+	This step would now change a layer it didn't change before, so it was skipped.	이 단계가 이전에는 변경하지 않은 레이어를 이제 변경하게 되므로 건너뛰었습니다.
+	The layer this step placed its new layers beside was removed; they went elsewhere.	이 단계가 새 레이어를 배치하던 기준 레이어가 제거되어 다른 위치에 배치되었습니다.
+	An earlier step changed, so this step's stored result may be out of date.	이전 단계가 바뀌어 이 단계에 저장된 결과가 최신이 아닐 수 있습니다.
+
 
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	스타일 가져오기…

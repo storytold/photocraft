@@ -2305,6 +2305,13 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
         if app.filter_preview_worker.busy() {
             ctx.request_repaint_after(std::time::Duration::from_millis(16));
         }
+        // Until its first frame lands, Edit Parameters keeps the canvas texture from before the
+        // rollback (drawn as is, not recomposited) rather than flash the rolled-back document.
+        let landed = app.filter_preview.as_ref().is_some_and(|p| p.key.same_target(&request));
+        if let Some((_, size)) = app.filter_preview_hold.filter(|h| h.0 == request.dialog && !landed && app.filter_preview_worker.busy()) {
+            return Some((1, request.doc.0, size));
+        }
+        app.filter_preview_hold = None;
         let preview = app.filter_preview.as_ref()?;
         // Keep the last preview during a drag, but never one from another source or dialog.
         if !preview.key.same_target(&request) {

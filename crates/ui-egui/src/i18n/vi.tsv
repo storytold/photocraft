@@ -3872,6 +3872,25 @@ curves	Smooth	Làm mượt
 
 # Graphics Adapter preference (#1885)
 	GPU adapter	Bộ điều hợp GPU
+# Window › Design Timeline
+	Design Timeline	Dòng thời gian thiết kế
+	Start Design Timeline	Bắt đầu dòng thời gian thiết kế
+	Stop Design Timeline	Dừng dòng thời gian thiết kế
+	Roll to End	Tiến đến cuối
+	Roll to Start	Lùi về đầu
+	Roll to Here	Đến đây
+	Edit Parameters…	Sửa tham số…
+	This step has no dialog to edit.	Bước này không có hộp thoại để sửa.
+	Suppress	Tạm bỏ
+	Unsuppress	Bỏ tạm bỏ
+	No steps yet: edits to this document appear here.	Chưa có bước nào: các chỉnh sửa trên tài liệu này sẽ hiện ở đây.
+	Open a document to use the design timeline.	Mở một tài liệu để dùng dòng thời gian thiết kế.
+	Records each edit from now on, so you can suppress, delete or edit any of them later.	Ghi lại mọi chỉnh sửa từ bây giờ, để sau này bạn có thể tạm bỏ, xóa hoặc sửa bất kỳ chỉnh sửa nào.
+	A layer this step acted on was removed.	Một lớp mà bước này tác động đã bị xóa.
+	This step would now change a layer it didn't change before, so it was skipped.	Bước này giờ sẽ thay đổi một lớp mà trước đây nó không thay đổi, nên đã bị bỏ qua.
+	The layer this step placed its new layers beside was removed; they went elsewhere.	Lớp mà bước này đặt các lớp mới bên cạnh đã bị xóa; các lớp mới đã được đặt ở chỗ khác.
+	An earlier step changed, so this step's stored result may be out of date.	Một bước trước đó đã thay đổi, nên kết quả đã lưu của bước này có thể đã lỗi thời.
+
 
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Nhập kiểu…

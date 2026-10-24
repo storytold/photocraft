@@ -18,6 +18,8 @@ pub const SHELL_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("window.panel.dock", "Dock Panel", &[], None),
     ("window.panel.activate", "Activate Panel", &[], None),
     ("window.panel.close", "Close Panel", &[], None),
+    // PhotoCraft's own panel, listed after Window › Timeline (engine `design.*`).
+    ("window.panel.designTimeline", "Design Timeline", &["Window"], None),
     ("file.open", "Open…", &["File"], Some("Cmd+O")),
     ("file.save", "Save", &["File"], Some("Cmd+S")),
     ("file.saveAs", "Save As…", &["File"], Some("Cmd+Shift+S")),

@@ -1075,7 +1075,8 @@ impl Ex {
             if self.smart.depth >= MAX_NESTING {
                 return Err(format!("smart objects nest more than {MAX_NESTING} deep"));
             }
-            let doc = photocraft_format::load_from_bytes(bytes).map_err(|e| format!("its contents can't be read: {e}"))?;
+            // A PSD holds no design timeline, so one the load had to drop loses nothing here.
+            let (doc, _) = photocraft_format::load_from_bytes_reporting(bytes, &Default::default()).map_err(|e| format!("its contents can't be read: {e}"))?;
             let (file, warnings) = document_to_psd_nested(
                 &doc,
                 &PsdExportOptions { force_psb: true, document_path: self.document.clone(), read_linked_files: self.read_linked_files, ..Default::default() },
