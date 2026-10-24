@@ -12,6 +12,7 @@ impl From<&ExportArgs> for ExportOptions {
             tiff_layers: a.tiff_layers,
             tiff_transparency: a.tiff_transparency,
             tga_bits: a.tga_bits,
+            bmp_bits: a.bmp_bits,
             pcraft_full_composite: a.pcraft_full_composite,
             ..Default::default()
         };
