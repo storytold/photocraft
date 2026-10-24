@@ -19,6 +19,7 @@
 
 pub mod area;
 pub mod cjk;
+mod color_glyphs;
 pub mod craft_fonts;
 pub mod engine_data;
 pub mod fonts;
@@ -306,6 +307,8 @@ mod warm {
     }
 }
 
+#[cfg(test)]
+mod color_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
