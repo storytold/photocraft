@@ -54,7 +54,7 @@ Baseline: 2026-10-05, commit `f5d2bcb54a`, Apple M4 Pro (48 GB), GPU Apple M4 Pr
 | P26 | Select › Modify › Smooth on 24 MP (radius 50) | ≤ 100 ms p95 | 99.9 | 216 | 251 | 1.0 GB | – | over budget (target not met yet) | [#211](https://github.com/storytold/photocraft/issues/211) |
 | P27 | Select › Modify › Feather on 24 MP (radius 50) | ≤ 100 ms p95 | 122 | 357 | 360 | 1.1 GB | – | over budget (target not met yet) | [#211](https://github.com/storytold/photocraft/issues/211) |
 | P28 | Content-Aware Scale 24 MP (to 90 % width) | ≤ 3000 ms p95 | 954192 | 954192 | 954192 | 2.1 GB | – | over budget (target not met yet) | [#211](https://github.com/storytold/photocraft/issues/211) |
-| P29 | Select Subject on 24 MP, repeated | ≤ 100 ms p95 | 559 | 693 | 693 | 1.4 GB | – | over budget (target not met yet) | [#211](https://github.com/storytold/photocraft/issues/211) |
+| P29 | Select Subject on 24 MP, repeated | ≤ 100 ms p95 | 559 | 693 | 693 | 1.4 GB | – | **BUDGET BROKEN** | [#211](https://github.com/storytold/photocraft/issues/211) |
 | P30 | Liquify 800 px brush on 3500×2200 at full resolution | ≤ 1 ms per update | – | – | – | – | – | not run | [#211](https://github.com/storytold/photocraft/issues/211) |
 | P31 | Camera Raw exposure change (proxy) | ≤ 10 ms | – | – | – | – | – | not run | [#211](https://github.com/storytold/photocraft/issues/211) |
 | P32 | Brush release on a long stroke | ≤ 16 ms (no hitch at mouse-up) | – | – | – | – | – | not run | [#211](https://github.com/storytold/photocraft/issues/211) |
