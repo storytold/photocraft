@@ -939,6 +939,40 @@ fn background_open_warns_about_missing_fonts() {
     assert!(app.ui.notices.last().is_some_and(|n| n.title.contains("poster.psd") && n.lines == want), "{:?}", app.ui.notices);
 }
 
+#[test]
+fn splash_active_blocks_escape_job_cancellation() {
+    let mut h = app_harness();
+    let gate = Arc::new(AtomicBool::new(false));
+    let job = slow_job(h.state_mut(), &gate);
+    assert!(h.state().session.job(job).is_some());
+
+    // Enable splash screen
+    let mut splash = crate::splash::SplashState::new();
+    splash.start_time = 1.0;
+    splash.fonts_preloaded = true;
+    h.state_mut().splash = Some(splash);
+
+    // Press Escape key via Context input
+    let ctx = h.ctx.clone();
+    ctx.input_mut(|i| {
+        i.events.push(egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        })
+    });
+
+    // Run tick; jobs_ui should NOT cancel the job while splash is active
+    super::tick(h.state_mut(), &ctx);
+    assert!(h.state().session.job(job).is_some(), "job must not be cancelled while splash is active");
+
+    // Clean up
+    gate.store(true, Ordering::Relaxed);
+    let _ = h.state_mut().session.cancel_job(job);
+}
+
 fn identity_app() -> PhotocraftApp {
     let mut session = photocraft_engine::Session::new();
     session.execute("file.new", json!({"width": 8, "height": 6})).unwrap();
@@ -1091,3 +1125,4 @@ fn open_identity_keeps_same_poll_results_in_the_profile_queue() {
     assert!(app.held_opens.is_empty());
     control.assert_untouched(&app);
 }
+

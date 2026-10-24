@@ -422,6 +422,67 @@ pub fn install_with(ctx: &egui::Context, sources: Sources) {
         ctx.add_plugin(CjkFontPlugin(fallback));
     }
 }
+
+/// Status outcome of preloading a CJK fallback font during startup.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PreloadStatus {
+    /// A fallback font was just registered with egui; a subsequent UI pass is required before glyphs activate.
+    JustInstalled,
+    /// Fallback font is already active or no CJK font is required for the active locale.
+    Ready,
+    /// Background font discovery scan (e.g. fontconfig scan on Linux) is in progress; retry on subsequent frames.
+    Pending,
+}
+
+/// Preload the primary fallback font for the active CJK locale if one hasn't been loaded yet.
+///
+/// Call this during startup (e.g. from the splash screen or first UI frame) to prevent
+/// missing glyphs ('tofu' / 'ㅁㅁㅁ') on early frames.
+///
+/// Returns [`PreloadStatus`]:
+/// - [`PreloadStatus::JustInstalled`]: A font was added this pass; a repaint is requested to activate it.
+/// - [`PreloadStatus::Ready`]: The font is already active or no CJK fallback font is required.
+/// - [`PreloadStatus::Pending`]: An asynchronous font discovery scan is in progress; call again on later frames.
+pub fn preload_cjk(ctx: &egui::Context) -> PreloadStatus {
+    let mut status = PreloadStatus::Ready;
+    ctx.with_plugin::<CjkFontPlugin, _>(|plugin| {
+        let fallback = &mut plugin.0;
+        let Some(loc) = (fallback.sources.locale)() else { return };
+        let tag = loc.split(['.', '@']).next().unwrap_or("").to_ascii_lowercase().replace('_', "-");
+        let lang = tag.split('-').next().unwrap_or("");
+        let script = match lang {
+            "ko" => Some(CjkScript::Korean),
+            "ja" => Some(CjkScript::Japanese),
+            "zh" | "yue" => {
+                let is_hant = tag.contains("hant") || tag.contains("tw") || tag.contains("hk") || tag.contains("mo");
+                if is_hant || lang == "yue" { Some(CjkScript::TraditionalChinese) } else { Some(CjkScript::SimplifiedChinese) }
+            }
+            _ => None,
+        };
+
+        if let Some(s) = script {
+            if fallback.tried.contains(&s) {
+                return;
+            }
+            if let Some((name, data)) = fallback.load_embedded(s).or_else(|| {
+                let files = (fallback.sources.files)(s);
+                fallback.load_first(&files)
+            }) {
+                fallback.tried.push(s);
+                add_to_all_families(ctx, name, data);
+                status = PreloadStatus::JustInstalled;
+            } else if cjk::fontconfig_cjk_scan_pending() {
+                // Background fontconfig scan is still discovering fonts; keep pending and retry later.
+                ctx.request_repaint_after(std::time::Duration::from_millis(50));
+                status = PreloadStatus::Pending;
+            } else {
+                // Scan is finished and no candidate was found; mark tried so we do not spin indefinitely.
+                fallback.tried.push(s);
+            }
+        }
+    });
+    status
+}
 #[cfg(test)]
 #[cfg(not(target_arch = "wasm32"))]
 mod tests {
@@ -936,5 +997,33 @@ mod tests {
         crate::theme::install_fonts(&ctx);
         let all: String = samples.iter().filter(|(_, s)| available(*s)).map(|(t, _)| *t).collect::<Vec<_>>().join(" ");
         assert!(render(&ctx, &all), "{all}");
+    }
+
+    /// Verifies that `preload_cjk` installs fallback font data before text shaping occurs.
+    #[test]
+    fn preload_cjk_loads_font_before_any_rendered_character() {
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts_with(&ctx, fake_sources(|| Some("ko".into())));
+        ctx.run_ui(Default::default(), |_| {}).textures_delta.clear();
+        let n_before = ctx.fonts(|f| f.definitions().font_data.keys().filter(|k| k.starts_with(FONT_PREFIX)).count());
+        assert_eq!(n_before, 0);
+        let status = preload_cjk(&ctx);
+        assert_eq!(status, PreloadStatus::JustInstalled);
+        ctx.with_plugin::<CjkFontPlugin, _>(|p| assert_eq!(p.0.registered.len(), 1)).unwrap();
+        ctx.run_ui(Default::default(), |_| {}).textures_delta.clear();
+        let n_after = ctx.fonts(|f| f.definitions().font_data.keys().filter(|k| k.starts_with(FONT_PREFIX)).count());
+        assert_eq!(n_after, 1, "preloaded 1 font for Korean locale");
+        let status_again = preload_cjk(&ctx);
+        assert_eq!(status_again, PreloadStatus::Ready);
+    }
+
+    /// Verifies that `preload_cjk` returns `PreloadStatus::Ready` immediately for non-CJK locales.
+    #[test]
+    fn preload_cjk_returns_ready_for_non_cjk_locale() {
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts_with(&ctx, fake_sources(|| Some("en_US".into())));
+        ctx.run_ui(Default::default(), |_| {}).textures_delta.clear();
+        let status = preload_cjk(&ctx);
+        assert_eq!(status, PreloadStatus::Ready);
     }
 }

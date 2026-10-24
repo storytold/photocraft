@@ -3631,3 +3631,9 @@ curves	Smooth	매끄럽게
 	Grayscale Ramp	회색 음영 램프
 	Current Colors	현재 색상
 	Make Ramp Web Safe	램프를 웹 안전 색상으로 만들기
+
+# Startup splash screen
+	Initializing graphics & engine…	그래픽 및 엔진 초기화 중…
+	Loading workspace & font assets…	작업 영역 및 글꼴 준비 중…
+	Ready	준비 완료
+	Click anywhere to skip	아무 곳이나 클릭하여 건너뛰기

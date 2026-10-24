@@ -264,3 +264,8 @@ sync_github_name = false
 
 [people.drunkeninja42]
 real_name = "Kushagra Sharma"
+
+[people.sbjwin]
+real_name = "Baekjin Sung"
+display_name = "Baekjin"
+sync_github_name = true

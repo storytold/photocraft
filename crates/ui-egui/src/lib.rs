@@ -212,6 +212,7 @@ pub mod smart_filter_dialog;
 pub mod smart_ui;
 pub mod snap_ui;
 pub(crate) mod solid_fill_ui;
+pub mod splash;
 pub mod spring_tools;
 pub mod stack_dialog;
 pub mod state;
@@ -807,6 +808,8 @@ pub struct PhotocraftApp {
     /// sent again only when it changes, so idle frames don't spam the backend.
     last_window_title: String,
     fonts_ready: bool,
+    /// Startup splash screen showing loading progress before workspace is presented.
+    pub splash: Option<splash::SplashState>,
     /// Screen rect of the main canvas last frame (for overlays and the navigator).
     pub last_canvas_rect: egui::Rect,
     /// Window › Arrange: the first document of the shown run of tiles, when there are more
@@ -1019,6 +1022,7 @@ pub struct PhotocraftApp {
 }
 
 impl PhotocraftApp {
+    /// Creates a new [`PhotocraftApp`] instance with initial session state, platform services, and startup components.
     pub fn new(mut session: Session, mut services: Services) -> Self {
         session.updates.check = services.check_updates.take();
         let mut app = Self {
@@ -1077,6 +1081,7 @@ impl PhotocraftApp {
             custom_titlebar: false,
             last_window_title: String::new(),
             fonts_ready: false,
+            splash: None,
             last_canvas_rect: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0)),
             arrange_start: 0,
             ppp: 1.0,
@@ -1184,6 +1189,11 @@ impl PhotocraftApp {
         // File › Scripts › Script Events Manager: "Start Application".
         photocraft_engine::automate_cmds::fire_event(&mut app.session, "startApplication");
         app
+    }
+
+    /// Enables the startup splash screen overlay and font preloading for application launches.
+    pub fn enable_splash(&mut self) {
+        self.splash = Some(splash::SplashState::new());
     }
 
     /// Draw the document canvas on the GPU (custom WGSL shader) instead of via egui textures.
@@ -2321,12 +2331,15 @@ impl eframe::App for PhotocraftApp {
         work_area::fit_window(ctx);
         discard_ui::guard_window_close(self, ctx);
         // Background jobs: apply finished ones, keep frames coming, Esc cancels (before the
-        // shortcuts see Esc).
+        // shortcuts see Esc; cancellation on Esc is blocked while splash is active).
+        let splash_active = self.splash.as_ref().is_some_and(|s| s.is_active(now));
         if !screen_picker::tick(self, ctx) {
             jobs_ui::tick(self, ctx);
             #[cfg(not(target_arch = "wasm32"))]
             filter_preview_worker::discard_closed(self);
-            shortcuts::handle(self, ctx);
+            if !splash_active {
+                shortcuts::handle(self, ctx);
+            }
         }
         let arrived: Vec<(String, Vec<u8>)> =
             self.services.inbox.as_ref().map(|q| std::mem::take(&mut *q.lock().unwrap_or_else(|e| e.into_inner()))).unwrap_or_default();
@@ -2398,6 +2411,7 @@ impl eframe::App for PhotocraftApp {
         }
     }
 
+    /// Renders the main application UI or the startup splash screen overlay if active.
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.hover_layer = None;
@@ -2407,6 +2421,23 @@ impl eframe::App for PhotocraftApp {
             ctx.request_repaint();
             self.automation_input = false;
             return;
+        }
+        let now = ctx.input(|i| i.time);
+        if !self.synthetic.is_empty()
+            && let Some(s) = &mut self.splash
+        {
+            s.dismiss();
+            ctx.request_repaint();
+        }
+        if let Some(splash) = &mut self.splash {
+            if splash.is_active(now) {
+                splash.show(&ctx, ui);
+                self.automation_input = false;
+                return;
+            } else {
+                self.splash = None;
+                ctx.request_repaint();
+            }
         }
         let t0 = gpu_canvas::now_ms();
         self.perf.frame_refresh_ms = 0.0;
