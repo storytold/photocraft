@@ -2712,6 +2712,25 @@ fn font_metadata_large_nameless_lists_rebuild_after_edit() {
     }
 }
 
+#[test]
+fn font_metadata_reordered_duplicates_keep_distinct_dictionary_records() {
+    use crate::engine_data::Value as E;
+    let record = |name: &str, marker| E::Dict(vec![("Name".into(), E::String(name.into())), ("PrivateFontFlag".into(), E::Int(marker))]);
+    let mut layer = point("Original", 24.0);
+    let mut template = crate::psd::build_engine_data(&layer, None, 72.0);
+    let resource = vec![record("A", 1), record("A", 2), record("B", 3)];
+    let document = vec![record("B", 30), record("A", 10), record("A", 20)];
+    template.get_mut("ResourceDict").unwrap().set("FontSet", E::Array(resource.clone()));
+    template.get_mut("DocumentResources").unwrap().set("FontSet", E::Array(document.clone()));
+    layer.text = "Edited".into();
+    let rebuilt = crate::psd::build_engine_data(&layer, Some(template), 72.0);
+    assert_eq!(&rebuilt.path(&["ResourceDict", "FontSet"]).unwrap().as_array().unwrap()[..3], resource.as_slice());
+    let fonts = rebuilt.path(&["DocumentResources", "FontSet"]).unwrap().as_array().unwrap();
+    assert_eq!(&fonts[..3], &[document[1].clone(), document[2].clone(), document[0].clone()], "reordered duplicates must keep distinct metadata");
+    let repeated = crate::psd::font_set(&["A", "A", "A", "A"].map(str::to_string), Some(&E::Array(resource.clone())));
+    assert_eq!(repeated, E::Array(vec![resource[0].clone(), resource[1].clone(), resource[0].clone(), resource[0].clone()]));
+}
+
 /// Same-runner release probe: compare the original and repaired source, not a wall-clock CI limit.
 #[test]
 #[ignore = "release performance measurement for large imported FontSets"]
