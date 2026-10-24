@@ -187,7 +187,7 @@ fn expand(packed: &str, keys: &[&str]) -> Result<String, String> {
 }
 
 /// The registry. English first: it is the fallback and the source language.
-pub static LANGUAGES: [LangInfo; 22] = [
+pub static LANGUAGES: [LangInfo; 23] = [
     LangInfo { code: "en", name: "English", source: b"", plural: plural_one_other, complete_menus: false, catalog: OnceLock::new() },
     LangInfo { code: "ja", name: "日本語", source: catalog!("ja"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
     LangInfo { code: "zh-hans", name: "简体中文", source: catalog!("zh-hans"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
@@ -222,6 +222,9 @@ pub static LANGUAGES: [LangInfo; 22] = [
     LangInfo { code: "vi", name: "Tiếng Việt", source: catalog!("vi"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
     // Hindi; `hi`, `hi-IN` locales resolve here.
     LangInfo { code: "hi", name: "हिन्दी", source: catalog!("hi"), plural: plural_one_other, complete_menus: false, catalog: OnceLock::new() },
+    // Norwegian Bokmal. `nb-NO` from browsers and Windows/macOS; `no` and `nn` POSIX locales
+    // resolve here too (see `candidates`). Plurals follow the English rule: one (1), other.
+    LangInfo { code: "nb", name: "Norsk", source: catalog!("nb"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
 ];
 
 impl LangInfo {
@@ -350,6 +353,11 @@ fn candidates(tag: &str) -> Vec<String> {
     if primary == "pt" && !out.iter().any(|c| c == "pt-br") {
         // The only Portuguese catalog is Brazilian; other regions use it rather than English.
         out.insert(out.len() - 1, "pt-br".to_string());
+    }
+    if matches!(primary, "no" | "nb" | "nn") && !out.iter().any(|c| c == "nb") {
+        // Norwegian arrives as `nb` (Bokmal) from browsers, Windows and macOS, but as `no` or
+        // `nn` from POSIX locales; all three select this Bokmal catalog rather than English.
+        out.insert(out.len() - 1, "nb".to_string());
     }
     out
 }
