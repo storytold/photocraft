@@ -1386,6 +1386,11 @@ pub struct UiState {
     /// Tool to restore when an inline type edit session commits or cancels (e.g. Move tool, #1132).
     #[serde(skip)]
     pub text_edit_return_tool: Option<Tool>,
+    /// A keyboard step just moved the type caret: the canvas scrolls the caret back into view
+    /// like Photoshop (set by [`crate::type_tool::handle_keys`], taken by [`crate::canvas`]).
+    /// Mouse clicks and drags never pull the camera back, so they never set this.
+    #[serde(skip)]
+    pub type_caret_moved: bool,
     /// Ctrl/Cmd Type-tool gesture, exposed to automation but never restored as a held pointer.
     #[serde(default, skip_deserializing)]
     pub type_transform: Option<TypeTransform>,
@@ -1632,6 +1637,7 @@ impl Default for UiState {
             text_edit: None,
             caret_blink_time: 0.0,
             text_edit_return_tool: None,
+            type_caret_moved: false,
             type_transform: None,
             type_transform_pivot: None,
             cam_transform: None,

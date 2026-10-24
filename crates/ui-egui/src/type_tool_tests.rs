@@ -2789,6 +2789,207 @@ fn justify_buttons_are_greyed_on_point_text() {
     assert!(h.get_by_label("Justify all").accesskit_node().is_disabled(), "one of the formatted layers is point text");
 }
 
+fn caret_of(app: &PhotocraftApp) -> usize {
+    app.ui.text_edit.as_ref().map_or(0, |ed| ed.caret)
+}
+
+fn key_session(app: &mut PhotocraftApp, id: u64, caret: usize) {
+    app.ui.text_edit = Some(crate::state::TextEdit {
+        layer: id,
+        document: None,
+        caret,
+        anchor: caret,
+        session: "s".into(),
+        created: false,
+        mask: false,
+        dragging: false,
+        resize: None,
+        preedit: None,
+    });
+}
+
+/// A keyboard-only harness: the events reach [`super::handle_keys`] with no canvas, like the
+/// focused-font-search regression above but feeding ordinary keys.
+fn keys_harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+    let mut h = Harness::builder().build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                super::handle_keys(app, ui.ctx());
+            }
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h.run_steps(4);
+    h
+}
+
+/// ⌘Home / ⌘End go to the first / last character of the whole text (Photoshop's Ctrl+Home /
+/// Ctrl+End), while bare Home / End still stop at the line's edges; ⌘Delete removes to the end
+/// of the line, mirroring ⌘Backspace's removal to the line start.
+#[test]
+fn command_home_end_delete_cover_the_whole_text_and_line() {
+    let mut app = new_app();
+    let id = app.run("type.create", json!({"text": "One\nTwo", "size": 24})).unwrap()["layer"].as_u64().unwrap();
+    app.session.select_layer(LayerId(id)).unwrap();
+    key_session(&mut app, id, 5);
+    let mut h = keys_harness(app);
+    // "One\nTwo": 0 O, 1 n, 2 e, 3 \n, 4 T, 5 w, 6 o. Caret 5 sits on the second line.
+    assert_eq!(caret_of(h.state()), 5, "caret setup landed");
+    h.key_press_modifiers(Modifiers::COMMAND, egui::Key::Home);
+    h.run();
+    assert_eq!(caret_of(h.state()), 0, "⌘Home: the first character of the whole text");
+    h.key_press_modifiers(Modifiers::COMMAND, egui::Key::End);
+    h.run();
+    assert_eq!(caret_of(h.state()), 7, "⌘End: past the last character");
+    h.key_press(egui::Key::Home);
+    h.run();
+    assert_eq!(caret_of(h.state()), 4, "bare Home stops at the start of the line");
+    h.key_press_modifiers(Modifiers::COMMAND, egui::Key::Home);
+    h.run();
+    assert_eq!(caret_of(h.state()), 0);
+    h.key_press_modifiers(Modifiers::COMMAND, egui::Key::Delete);
+    h.run();
+    assert_eq!(super::current_text(h.state_mut(), LayerId(id)).as_deref(), Some("\nTwo"), "⌘Delete removed to the end of the line");
+}
+
+/// [`super::caret_follow_step`] is a lesser version of [`crate::canvas_autoscroll::edge_step`]:
+/// a caret stroke inside the margin-free perimeter doesn't move the camera, one past it points
+/// the step toward it, and hostile input moves nothing.
+#[test]
+fn caret_follow_step_points_toward_the_caret_only_when_it_is_outside() {
+    let rect = egui::Rect::from_min_size(egui::pos2(100.0, 50.0), egui::vec2(400.0, 300.0));
+    // A normal caret stroke: a hairline centred on the point.
+    let stroke = |x: f32, y: f32| egui::Rect::from_center_size(egui::pos2(x, y), egui::vec2(1.0, 20.0));
+    assert_eq!(super::caret_follow_step(stroke(300.0, 200.0), rect), vec2(0.0, 0.0), "inside: no move");
+    // Well inside the 20 pt margin nothing happens; deep inside but past the margin it starts.
+    assert_eq!(super::caret_follow_step(stroke(121.0, 235.0), rect), vec2(0.0, 0.0), "the margin holds the caret");
+    assert_eq!(super::caret_follow_step(stroke(119.5, 235.0), rect), vec2(-0.5, 0.0), "hair past the margin: a small step");
+    let left = super::caret_follow_step(stroke(60.0, 235.0), rect);
+    assert_eq!(left, vec2(-60.0, 0.0), "past the left edge: toward the caret");
+    let right = super::caret_follow_step(stroke(540.0, 235.0), rect);
+    assert_eq!(right, vec2(60.0, 0.0), "past the right edge: toward the caret");
+    assert_eq!(super::caret_follow_step(stroke(479.0, 235.0), rect), vec2(0.0, 0.0), "just inside the right margin");
+    let down = super::caret_follow_step(stroke(300.0, 2000.0), rect);
+    assert!(down.x == 0.0 && down.y > 0.0 && down.y < 2000.0, "down and capped by the caret's position: {down:?}");
+    let up = super::caret_follow_step(stroke(300.0, -500.0), rect);
+    assert_eq!(up, vec2(0.0, -580.0), "up: the stroke's top (−510) minus the top margin (70)");
+    // The whole stroke must come in, not just its centre: the near edge drives the step, so a
+    // centre-only rule would leave the far half clipped here.
+    let over_bottom = super::caret_follow_step(stroke(300.0, 355.0), rect);
+    assert_eq!(over_bottom, vec2(0.0, 35.0), "the stroke's bottom (365) clears the bottom margin (330)");
+    let top_out = super::caret_follow_step(stroke(300.0, 340.0), rect);
+    assert_eq!(top_out, vec2(0.0, 20.0), "the stroke's bottom (350) clears the bottom margin (330)");
+    // Empty edges (the layout can't be built): nothing.
+    assert_eq!(super::caret_follow_step(egui::Rect::NOTHING, rect), vec2(0.0, 0.0));
+    // A stroke taller than the margin box can't fully fit: the centre rule takes over, so it
+    // still gets brought in rather than sticking at an unreachable edge target.
+    let huge = egui::Rect::from_center_size(egui::pos2(300.0, 360.0), egui::vec2(1.0, 400.0));
+    assert_eq!(super::caret_follow_step(huge, rect), vec2(0.0, 30.0), "huge caret: centre (360) past the bottom margin (330)");
+    // Hostile input never moves the camera.
+    for bad in [
+        egui::Rect::from_center_size(egui::pos2(f32::NAN, 200.0), egui::vec2(1.0, 20.0)),
+        egui::Rect::from_center_size(egui::pos2(f32::INFINITY, 200.0), egui::vec2(1.0, 20.0)),
+    ] {
+        assert_eq!(super::caret_follow_step(bad, rect), vec2(0.0, 0.0));
+    }
+    assert_eq!(super::caret_follow_step(egui::Rect::NOTHING, egui::Rect::NOTHING), vec2(0.0, 0.0));
+    assert_eq!(
+        super::caret_follow_step(egui::Rect::NOTHING, egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(30.0, 30.0))),
+        vec2(0.0, 0.0),
+        "narrower than the margin: no move"
+    );
+}
+
+// The canvas-following integration test lives in tests/type_caret_follow.rs: keyboard caret
+// steps offscreen scroll the view, and while the caret is back in view the camera stays put.
+
+/// A same-frame pair of an arrow key and a pointer press: the key asked the canvas to follow
+/// the caret, but a click that lands in the text also moves the caret before the canvas
+/// consumes the flag, and the camera must not scroll toward a caret a click just placed
+/// (clicks never pull the camera). The press kills the pending follow request.
+#[test]
+fn a_pointer_press_kills_a_pending_keyboard_follow() {
+    let mut app = new_app();
+    let v = app.run("type.create", json!({"text": "Click beats the arrow", "size": 24})).unwrap();
+    let id = LayerId(v["layer"].as_u64().unwrap());
+    app.session.select_layer(id).unwrap();
+    key_session(&mut app, id.0, 0);
+    let ctx = egui::Context::default();
+    let mut moved = false;
+    let mut out = ctx.run_ui(
+        egui::RawInput {
+            time: Some(1.0),
+            events: vec![egui::Event::Key { key: egui::Key::ArrowDown, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }],
+            ..Default::default()
+        },
+        |_ui| moved = super::handle_keys(&mut app, &ctx),
+    );
+    out.textures_delta.clear();
+    assert!(moved, "the arrow key was the type session's");
+    assert!(app.ui.type_caret_moved, "the keyboard step asked the canvas to follow");
+    // The same frame's press lands on the glyphs: placement wins, the follow request dies.
+    let (l, aff, _) = super::layout(&mut app, id).expect("layout");
+    let (x, top, bot) = l.caret(0);
+    let (tx, ty) = l.to_text(x, (top + bot) / 2.0);
+    let p = aff.apply(Point::new(f64::from(tx), f64::from(ty)));
+    let hit = super::pointer_down(&mut app, p.x, p.y, egui::Modifiers::NONE);
+    assert!(hit, "the press hit the text");
+    assert!(!app.ui.type_caret_moved, "the click cancelled the keyboard's follow request");
+}
+
+/// Type on a path bends the caret: [`super::caret_screen`] must map the stroke through the
+/// same warp [`super::draw_overlay`] paints with, or the camera chases the unwarped line's
+/// place while the visible caret sits on the curve. The rect equals the drawn stroke's box.
+#[test]
+fn the_caret_rect_follows_the_path_warp() {
+    let mut app = new_app();
+    let v = app.run("type.create", json!({"text": "Bendy type on a path", "size": 24})).unwrap();
+    let id = LayerId(v["layer"].as_u64().unwrap());
+    // A zig-zag path: far enough between the anchors that an unwarped caret stroke lands far
+    // from where the bent glyphs (and their caret) draw.
+    std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).work_path =
+        Some(photocraft_doc::Path::new(vec![photocraft_doc::Subpath::polygon(&[(100.0, 400.0), (200.0, 80.0), (300.0, 400.0), (400.0, 80.0)])]));
+    app.run("type.attachToPath", json!({"layer": id.0})).unwrap();
+    app.session.select_layer(id).unwrap();
+    key_session(&mut app, id.0, 0);
+    // Draw with the caret solid (dragging skips the blink phase) and take the rect it paints.
+    if let Some(ed) = app.ui.text_edit.as_mut() {
+        ed.dragging = true;
+    }
+    let xf = ViewXform {
+        rect: egui::Rect::from_min_size(Pos2::ZERO, vec2(600.0, 500.0)),
+        zoom: 1.0,
+        center: [250.0, 250.0],
+        flip: false,
+        rotation: 0.0,
+        aspect: 1.0,
+    };
+    let xf = std::rc::Rc::new(xf);
+    let xf2 = xf.clone();
+    let mut h =
+        Harness::builder().with_size(vec2(600.0, 500.0)).build_ui_state(move |ui, app: &mut PhotocraftApp| super::draw_overlay(app, ui.painter(), &xf2), app);
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h.run();
+    let drawn: Vec<(Pos2, Pos2)> = h
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|s| match &s.shape {
+            egui::Shape::LineSegment { points: [a, b], stroke } if *stroke == super::CARET_STROKES[0] || *stroke == super::CARET_STROKES[1] => Some((*a, *b)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(drawn.len(), 2, "the caret's halo and line: {drawn:?}");
+    let (mut lo, mut hi) = (drawn[0].0, drawn[0].1);
+    for &(a, b) in drawn.iter() {
+        lo = lo.min(a).min(b);
+        hi = hi.max(a).max(b);
+    }
+    let got = super::caret_screen(h.state_mut(), &xf).expect("a caret stroke rect");
+    assert!((got.min.x - lo.x).abs() < 0.5 && (got.max.x - hi.x).abs() < 0.5, "x follows the drawn stroke: {got:?} vs [{lo:?}..{hi:?}]");
+    assert!((got.min.y - lo.y).abs() < 0.5 && (got.max.y - hi.y).abs() < 0.5, "y follows the drawn stroke: {got:?} vs [{lo:?}..{hi:?}]");
+}
 fn ellipse_layer(app: &mut PhotocraftApp) -> u64 {
     app.run("shape.create", json!({"kind": "ellipse", "rect": [200, 200, 400, 300], "fill": "#dddddd"})).unwrap()["layer"].as_u64().unwrap()
 }

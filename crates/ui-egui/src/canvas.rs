@@ -4842,6 +4842,18 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             ctx.request_repaint();
         }
     }
+    // A keyboard step moved the type caret past a canvas edge: scroll the view toward the
+    // caret, as in Photoshop. Clicks never set the flag, so the camera is never pulled back for
+    // them, and the scroll limits keep the move from dragging in an image that already fits.
+    if primary {
+        let follow = std::mem::take(&mut app.ui.type_caret_moved);
+        if follow && let Some(caret) = crate::type_tool::caret_screen(app, &xf) {
+            let step = crate::type_tool::caret_follow_step(caret, rect);
+            if crate::canvas_autoscroll::scroll(&mut view, step, xf) {
+                ctx.request_repaint();
+            }
+        }
+    }
     // Scrollbars (scrollbars.rs): drawn over the canvas edges, they take the pointer there.
     let t0 = crate::gpu_canvas::now_ms();
     let before = view.center;

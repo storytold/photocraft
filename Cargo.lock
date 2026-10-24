@@ -5182,6 +5182,7 @@ dependencies = [
  "photocraft-testkit",
  "photocraft-text",
  "photocraft-vector",
+ "pollster 1.0.1",
  "rayon",
  "serde",
  "serde_json",
