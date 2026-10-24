@@ -77,6 +77,10 @@ impl StrokePoint {
 pub struct Stroke {
     pub brush: BrushSettings,
     pub points: Vec<StrokePoint>,
+    /// Fit a midpoint Bézier curve through the points (live pointer input). Off keeps the exact
+    /// polyline, which Stroke Path, scripts and recorded actions rely on.
+    #[serde(default)]
+    pub fit_curve: bool,
 }
 
 /// A dab placed along the stroke (after dynamics).
@@ -248,6 +252,7 @@ mod tests {
         Stroke {
             brush: BrushSettings { size, pressure_size: false, ..Default::default() },
             points: points.iter().map(|&(x, y)| StrokePoint::new(x, y, 1.0)).collect(),
+            fit_curve: false,
         }
     }
 

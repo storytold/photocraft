@@ -458,6 +458,35 @@ fn releasing_a_clone_stamp_stroke_commits_what_a_replay_paints() {
     assert!(a.px.iter().zip(&b.px).all(|(x, y)| x == y), "live commit and replay differ");
 }
 
+#[test]
+fn rapid_strokes_release_cleanly_and_allow_further_strokes() {
+    let mut h = harness();
+    // Rapid stroke 1: press, tiny move, release.
+    move_to(&mut h, 20.0, 50.0);
+    button(&mut h, 20.0, 50.0, true);
+    move_to(&mut h, 22.0, 50.0);
+    button(&mut h, 22.0, 50.0, false);
+    h.run_steps(1);
+    assert!(h.state().drag.is_none(), "drag must be cleared on release");
+
+    // Rapid stroke 2: immediately press, tiny move, release.
+    move_to(&mut h, 50.0, 50.0);
+    button(&mut h, 50.0, 50.0, true);
+    move_to(&mut h, 52.0, 50.0);
+    button(&mut h, 52.0, 50.0, false);
+    h.run_steps(1);
+    assert!(h.state().drag.is_none(), "drag must be cleared on second release");
+
+    // Rapid stroke 3: press and release in same or consecutive steps.
+    move_to(&mut h, 80.0, 50.0);
+    button(&mut h, 80.0, 50.0, true);
+    button(&mut h, 80.0, 50.0, false);
+    h.run_steps(2);
+    assert!(h.state().drag.is_none(), "tap release must clear drag");
+
+    // Ensure journal has recorded all 3 strokes.
+    let count = h.state().session.journal.iter().filter(|(id, _)| id == "paint.stroke").count();
+    assert_eq!(count, 3, "all 3 rapid strokes were committed");
 /// A Blur, Smudge or Dodge stroke through the canvas: releasing it commits the pixels its live
 /// stroke drew (`Session::offer_live_dab`), which are what replaying the journaled command paints.
 #[test]

@@ -208,6 +208,105 @@ pub fn smooth_points(cfg: &Smoothing, zoom: f32, pts: &[StrokePoint]) -> Vec<Str
 }
 
 // ---------------------------------------------------------------------------
+// Spline (midpoint quadratic Bézier)
+// ---------------------------------------------------------------------------
+
+/// Longest chord (in pixels) used to approximate a curve piece.
+const SPLINE_STEP_PX: f64 = 2.0;
+/// Cap on samples per curve piece (a huge jump must not flood the walker).
+const MAX_SPLINE_STEPS: usize = 64;
+
+#[inline]
+fn mid_pt(a: &StrokePoint, b: &StrokePoint) -> StrokePoint {
+    lerp_pt(a, b, 0.5)
+}
+
+/// Quadratic Bézier from `a` to `b` with control point `c`, on every field (pressure, tilt, time...).
+fn quad_pt(a: &StrokePoint, c: &StrokePoint, b: &StrokePoint, t: f64) -> StrokePoint {
+    let u = 1.0 - t;
+    let (wa, wc, wb) = (u * u, 2.0 * u * t, t * t);
+    let (fa, fc, fb) = (wa as f32, wc as f32, wb as f32);
+    StrokePoint {
+        x: wa * a.x + wc * c.x + wb * b.x,
+        y: wa * a.y + wc * c.y + wb * b.y,
+        pressure: fa * a.pressure + fc * c.pressure + fb * b.pressure,
+        tilt_x: fa * a.tilt_x + fc * c.tilt_x + fb * b.tilt_x,
+        tilt_y: fa * a.tilt_y + fc * c.tilt_y + fb * b.tilt_y,
+        rotation: fa * a.rotation + fc * c.rotation + fb * b.rotation,
+        wheel: fa * a.wheel + fc * c.wheel + fb * b.wheel,
+        time: wa * a.time + wc * c.time + wb * b.time,
+    }
+}
+
+fn spline_steps(len: f64) -> usize {
+    ((len / SPLINE_STEP_PX).ceil() as usize).clamp(1, MAX_SPLINE_STEPS)
+}
+
+fn dist(a: &StrokePoint, b: &StrokePoint) -> f64 {
+    (b.x - a.x).hypot(b.y - a.y)
+}
+
+/// Incremental midpoint-Bézier path: turns the smoothed points into a smooth curve of points.
+/// Keeps the last two input points; each new point completes one curve piece m0 -> m1.
+#[derive(Clone, Debug, Default)]
+pub struct Spline {
+    p0: Option<StrokePoint>,
+    p1: Option<StrokePoint>,
+    /// The lead-in a -> m0 has been emitted (the stroke has three or more points).
+    led: bool,
+}
+
+impl Spline {
+    /// Feed one point; appends the curve points to `out`.
+    pub fn push(&mut self, p: StrokePoint, out: &mut Vec<StrokePoint>) {
+        match (self.p0, self.p1) {
+            (None, _) => {
+                self.p0 = Some(p);
+                out.push(p); // stroke start, passed through untouched
+            }
+            // Two points may still be the whole stroke, a plain straight line: hold back.
+            (Some(_), None) => self.p1 = Some(p),
+            (Some(a), Some(b)) => {
+                if !self.led {
+                    Self::line(&a, &mid_pt(&a, &b), out); // straight lead-in
+                    self.led = true;
+                }
+                Self::curve(&a, &b, &p, out);
+                self.p0 = Some(b);
+                self.p1 = Some(p);
+            }
+        }
+    }
+
+    /// End of stroke: a two-point stroke is one straight line to the last point, otherwise the
+    /// straight run from the last midpoint to the last input point.
+    pub fn finish(&mut self, out: &mut Vec<StrokePoint>) {
+        match (self.p0, self.p1) {
+            (Some(_), Some(b)) if !self.led => out.push(b),
+            (Some(a), Some(b)) => Self::line(&mid_pt(&a, &b), &b, out),
+            _ => {}
+        }
+        *self = Self::default();
+    }
+
+    fn curve(a: &StrokePoint, b: &StrokePoint, c: &StrokePoint, out: &mut Vec<StrokePoint>) {
+        let (m0, m1) = (mid_pt(a, b), mid_pt(b, c));
+        let steps = spline_steps(dist(&m0, b) + dist(b, &m1));
+        for s in 1..=steps {
+            out.push(quad_pt(&m0, b, &m1, s as f64 / steps as f64));
+        }
+    }
+
+    fn line(a: &StrokePoint, b: &StrokePoint, out: &mut Vec<StrokePoint>) {
+        let steps = spline_steps(dist(a, b));
+        for s in 1..steps {
+            out.push(lerp_pt(a, b, s as f64 / steps as f64));
+        }
+        out.push(*b); // exact endpoint, no rounding gap
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Path walking
 // ---------------------------------------------------------------------------
 
@@ -734,11 +833,13 @@ pub fn apply_pose(b: &BrushSettings, mut p: StrokePoint) -> StrokePoint {
 #[derive(Clone, Debug)]
 pub struct DabGenerator {
     smoother: Smoother,
+    spline: Option<Spline>,
     walker: PathWalker,
     dual_walker: Option<PathWalker>,
     builder: DabBuilder,
     dual: Option<DualBuilder>,
     scratch: Vec<StrokePoint>,
+    smooth_scratch: Vec<StrokePoint>,
 }
 
 impl DabGenerator {
@@ -764,12 +865,20 @@ impl DabGenerator {
         }
         Self {
             smoother: Smoother::new(&brush.smoothing, zoom),
+            spline: None,
             walker,
             dual_walker: dual_on.then(|| PathWalker::new(None)),
             builder: DabBuilder::new(&brush),
             dual: dual_on.then(|| DualBuilder::new(&brush)),
             scratch: Vec::new(),
+            smooth_scratch: Vec::new(),
         }
+    }
+    /// Fit a midpoint Bézier curve through the input points (live pointer input). Off keeps the
+    /// exact polyline, which Stroke Path, scripts and recorded actions rely on.
+    pub fn fit_curve(mut self, on: bool) -> Self {
+        self.spline = on.then(Spline::default);
+        self
     }
 
     fn walk(&mut self, pts: &[StrokePoint], dabs: &mut Vec<Dab>, dual: &mut Vec<Dab>) {
@@ -795,20 +904,40 @@ impl DabGenerator {
 
     /// Feed input points; appends the new primary and dual dabs.
     pub fn push(&mut self, pts: &[StrokePoint], dabs: &mut Vec<Dab>, dual: &mut Vec<Dab>) {
-        let mut sm = std::mem::take(&mut self.scratch);
-        sm.clear();
+        let mut curve = std::mem::take(&mut self.scratch);
+        curve.clear();
         for p in pts {
+            match self.spline.as_mut() {
+                Some(s) => s.push(*p, &mut curve),
+                None => curve.push(*p),
+            }
+        }
+        let mut sm = std::mem::take(&mut self.smooth_scratch);
+        sm.clear();
+        for p in &curve {
             self.smoother.push(*p, &mut sm);
         }
         self.walk(&sm, dabs, dual);
-        self.scratch = sm;
+        self.scratch = curve;
+        self.smooth_scratch = sm;
     }
 
     /// End of stroke.
     pub fn finish(&mut self, dabs: &mut Vec<Dab>, dual: &mut Vec<Dab>) {
-        let mut sm = Vec::new();
+        let mut curve = std::mem::take(&mut self.scratch);
+        curve.clear();
+        if let Some(s) = self.spline.as_mut() {
+            s.finish(&mut curve);
+        }
+
+        let mut sm = std::mem::take(&mut self.smooth_scratch);
+        sm.clear();
+        for p in &curve {
+            self.smoother.push(*p, &mut sm);
+        }
         self.smoother.finish(&mut sm);
         self.walk(&sm, dabs, dual);
+
         let mut steps = Vec::new();
         self.walker.finish(&mut |s| steps.push(s));
         for s in &steps {
@@ -821,6 +950,114 @@ impl DabGenerator {
                 db.build(s, dual);
             }
         }
+        self.scratch = curve;
+        self.smooth_scratch = sm;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn spt(x: f64, y: f64, pressure: f32, time: f64) -> StrokePoint {
+        StrokePoint { x, y, pressure, tilt_x: 0.0, tilt_y: 0.0, rotation: 0.0, wheel: 0.0, time }
+    }
+
+    fn pt(x: f64, y: f64) -> StrokePoint {
+        spt(x, y, 1.0, 0.0)
+    }
+
+    fn run_spline(points: &[StrokePoint]) -> Vec<StrokePoint> {
+        let mut s = Spline::default();
+        let mut out = Vec::new();
+        for p in points {
+            s.push(*p, &mut out);
+        }
+        s.finish(&mut out);
+        out
+    }
+
+    #[test]
+    fn spline_single_point_is_just_that_point() {
+        let out = run_spline(&[pt(3.0, 4.0)]);
+        assert_eq!(out.len(), 1);
+        assert_eq!((out[0].x, out[0].y), (3.0, 4.0));
+    }
+
+    #[test]
+    fn spline_starts_at_first_point() {
+        let out = run_spline(&[pt(1.0, 2.0), pt(10.0, 0.0), pt(20.0, 5.0)]);
+        assert_eq!((out[0].x, out[0].y), (1.0, 2.0));
+    }
+
+    #[test]
+    fn spline_two_points_ends_at_last_point() {
+        let out = run_spline(&[pt(0.0, 0.0), pt(10.0, 0.0)]);
+        let last = out.last().unwrap(); // unwrap is fine in tests
+        assert_eq!((last.x, last.y), (10.0, 0.0));
+    }
+
+    #[test]
+    fn spline_long_stroke_ends_exactly_at_last_point() {
+        let pts: Vec<StrokePoint> = (0..12)
+            .map(|i| {
+                let a = i as f64 * 0.5;
+                pt(50.0 + 30.0 * a.cos(), 50.0 + 30.0 * a.sin())
+            })
+            .collect();
+        let out = run_spline(&pts);
+        let (last_in, last_out) = (pts.last().unwrap(), out.last().unwrap());
+        assert_eq!((last_out.x, last_out.y), (last_in.x, last_in.y));
+    }
+
+    #[test]
+    fn spline_rounds_a_corner_instead_of_passing_through_it() {
+        // L-shape: the raw path turns sharply at (10, 0).
+        let out = run_spline(&[pt(0.0, 0.0), pt(10.0, 0.0), pt(10.0, 10.0)]);
+        let min = out.iter().map(|p| (p.x - 10.0).hypot(p.y)).fold(f64::MAX, f64::min);
+        assert!(min > 1.0, "curve should cut the corner, closest approach was {min}");
+    }
+
+    #[test]
+    fn spline_time_never_goes_backwards() {
+        let pts: Vec<StrokePoint> = (0..10).map(|i| spt(i as f64 * 7.0, (i as f64).sin() * 20.0, 1.0, i as f64 * 16.0)).collect();
+        let out = run_spline(&pts);
+        for w in out.windows(2) {
+            assert!(w[1].time >= w[0].time - 1e-9, "time went backwards: {} -> {}", w[0].time, w[1].time);
+        }
+    }
+
+    #[test]
+    fn spline_pressure_stays_within_input_range() {
+        let pressures = [0.2_f32, 1.0, 0.4, 0.9, 0.3, 0.8];
+        let pts: Vec<StrokePoint> =
+            pressures.iter().enumerate().map(|(i, p)| spt(i as f64 * 9.0, (i as f64 * 1.3).sin() * 15.0, *p, i as f64 * 16.0)).collect();
+        let out = run_spline(&pts);
+        for p in &out {
+            assert!(p.pressure >= 0.2 - 1e-5 && p.pressure <= 1.0 + 1e-5, "pressure out of range: {}", p.pressure);
+        }
+    }
+
+    #[test]
+    fn spline_identical_points_do_not_panic() {
+        let out = run_spline(&[pt(5.0, 5.0), pt(5.0, 5.0), pt(5.0, 5.0)]);
+        assert!(!out.is_empty());
+        assert!(out.iter().all(|p| p.x == 5.0 && p.y == 5.0));
+    }
+
+    #[test]
+    fn spline_survives_nan_and_huge_coordinates() {
+        let out = run_spline(&[pt(f64::NAN, 0.0), pt(1.0, f64::NAN), pt(2.0, 2.0)]);
+        assert!(out.len() <= 1 + 64 * 3);
+        let out = run_spline(&[pt(f64::MAX, f64::MAX), pt(-f64::MAX, 0.0), pt(f64::MAX, -f64::MAX)]);
+        assert!(out.len() <= 1 + 64 * 3);
+    }
+
+    #[test]
+    fn spline_two_points_are_one_straight_segment() {
+        let out = run_spline(&[pt(0.0, 0.0), pt(10.0, 4.0)]);
+        assert_eq!(out.len(), 2);
+        assert_eq!((out[1].x, out[1].y), (10.0, 4.0));
     }
 }
 

@@ -218,6 +218,7 @@ mod tests {
         Stroke {
             brush: BrushSettings { size: 30.0, hardness: 1.0, spacing: 0.25, pressure_size: false, ..Default::default() },
             points: vec![StrokePoint::new(20.0, 20.0, 1.0), StrokePoint::new(60.0, 20.0, 1.0)],
+            fit_curve: false,
         }
     }
 

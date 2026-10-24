@@ -683,6 +683,10 @@ fn live_stroke(app: &PhotocraftApp, idx: usize) -> Option<&LiveStroke> {
 fn stroke_params(app: &PhotocraftApp, d: &Drag, points: &[Vec<f64>]) -> serde_json::Value {
     let tool = d.tool;
     let mut p = json!({ "points": points, "erase": d.erase, "zoom": app.point_zoom(), "target": paint_target(app) });
+    // Round fast curves for the Brush and Eraser; the Pencil follows its points exactly.
+    if tool != Tool::Pencil && !crate::eraser_ui::pencil_mode(app, tool) && !crate::eraser_ui::block_mode(app, tool) {
+        p["fitCurve"] = json!(true);
+    }
     if d.clear {
         p["mode"] = json!("clear");
     }
@@ -4344,11 +4348,15 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             feed_live_stroke(app);
             crate::magnetic_lasso_ui::flush(app);
         }
-        if buttons.stopped {
+        let any_down = ui.input(|i| i.pointer.primary_down() || i.pointer.secondary_down());
+        let release = buttons.stopped
+            || (press_stroke && ui.input(|i| i.pointer.primary_released()))
+            || (app.drag.is_some() && !any_down);
+        if release {
             // The live painting press already created the stroke and this release commits it.
             // egui may also report clicked on the same release; replaying that click paints a
             // second full-pressure dab over the real (possibly light-pressure) pen dab.
-            if press_stroke {
+            if press_stroke || buttons.stopped {
                 buttons.clicked = false;
             }
             let at = response.interact_pointer_pos();
@@ -4365,21 +4373,11 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             if let Some(d) = p {
                 tap_at_peak_pressure(app);
                 tool_event(app, ToolEvent::Up { x: d[0], y: d[1] }, mods);
+            } else if let Some(d) = app.drag.take() {
+                finish_gesture(app, d);
             }
-        }
-        // A stroke started on the press ends with the release, whether egui saw a drag, a click,
-        // or neither (a long press that never moved).
-        if press_stroke && !buttons.stopped && ui.input(|i| i.pointer.primary_released()) {
-            buttons.clicked = false;
-            let p = response.interact_pointer_pos().map(|p| xf.to_doc(p)).or_else(|| app.drag.as_ref().and_then(|d| d.points.last().map(|q| [q[0], q[1]])));
-            if let Some(d) = p
-                && app.drag.is_some()
-            {
-                tap_at_peak_pressure(app);
-                tool_event(app, ToolEvent::Up { x: d[0], y: d[1] }, mods);
-            }
-        }
-        if press_stroke && (app.drag.is_none() || !ui.input(|i| i.pointer.primary_down())) {
+            app.press_stroke = false;
+        } else if !any_down {
             app.press_stroke = false;
         }
         if buttons.clicked
@@ -8672,7 +8670,7 @@ mod tests {
         let mut pts = vec![json!([10.0, 40.0, 1.0])];
         pts.extend(xs.iter().map(|&x| json!([x, 40.0 + (x / 7.0).sin() * 8.0, 1.0])));
         // (Round tips without dynamics draw the same for any seed.)
-        s.execute("paint.stroke", json!({"points": pts, "seed": 0})).unwrap();
+        s.execute("paint.stroke", json!({"points": pts, "seed": 0,"fitCurve": true})).unwrap();
         assert!(same_pixels(&s.active().unwrap().doc, &done));
     }
 
@@ -9185,7 +9183,7 @@ mod tests {
         // The stroke the heal gets on release, and its coverage.
         let points = app.drag.as_ref().unwrap().points.iter().map(|p| photocraft_paint::StrokePoint::new(p[0], p[1], p[2] as f32)).collect();
         let brush = photocraft_engine::retouch_cmds::stroke_brush(&app.session.tools.brush, &json!({}));
-        let (b, cov) = photocraft_paint::retouch::stroke_coverage(&photocraft_paint::Stroke { brush, points });
+        let (b, cov) = photocraft_paint::retouch::stroke_coverage(&photocraft_paint::Stroke { brush, points, fit_curve: false });
         let trail = app.trail.as_ref().unwrap();
         let mut soft = 0;
         for y in 0..60 {

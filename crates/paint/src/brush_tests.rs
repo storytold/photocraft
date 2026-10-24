@@ -19,7 +19,7 @@ fn line(x0: f64, x1: f64, y: f64) -> Vec<StrokePoint> {
 }
 
 fn dabs_of(b: &BrushSettings, pts: &[StrokePoint]) -> Vec<Dab> {
-    dabs(&Stroke { brush: b.clone(), points: pts.to_vec() })
+    dabs(&Stroke { brush: b.clone(), points: pts.to_vec(), fit_curve: false })
 }
 
 fn raster(b: &BrushSettings, d: &Dab) -> (Rect, Vec<f32>) {
@@ -1206,6 +1206,21 @@ fn tail_preview_shows_the_stroke_as_finishing_it_would() {
     let mut r = StrokeRenderer::new(&brush(), Some(fmt), 1.0);
     r.push(&pts);
     assert!(r.tail_preview().is_none());
+    // With fit_curve, the spline holds back its last piece: finishing adds it, and the
+    // tail preview shows exactly that.
+    let plain = brush();
+    let mut live = pre.clone();
+    let mut r = StrokeRenderer::new(&plain, Some(fmt), 1.0).fit_curve(true);
+    r.push(&pts);
+    r.composite(&pre, &mut live, None, false, false);
+    let mut tail = r.tail_preview().expect("fit_curve holds back the last segment: there is a tail");
+    tail.composite(&pre, &mut live, None, false, false);
+    let mut done = pre.clone();
+    let mut r_done = StrokeRenderer::new(&plain, Some(fmt), 1.0).fit_curve(true);
+    r_done.push(&pts);
+    r_done.finish();
+    r_done.composite(&pre, &mut done, None, false, true);
+    assert!((0..60).all(|y| (0..120).all(|x| live.rgba(x, y) == done.rgba(x, y))));
 }
 
 #[test]

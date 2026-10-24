@@ -211,6 +211,7 @@ mod tests {
         Stroke {
             brush: BrushSettings { size: 30.0, hardness: 1.0, spacing: 0.25, pressure_size: false, ..Default::default() },
             points: points.iter().map(|&(x, y)| StrokePoint::new(x, y, 1.0)).collect(),
+            fit_curve: false,
         }
     }
 

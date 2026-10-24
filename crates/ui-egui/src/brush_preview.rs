@@ -127,7 +127,7 @@ pub fn preview_pixels(b: &BrushSettings, w: u32, h: u32, color: [f32; 4]) -> Vec
         .collect();
     let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::U8, true);
     let mut s = photocraft_raster::Surface::new(fmt);
-    paint::apply_stroke(&mut s, &paint::Stroke { brush, points }, None, false);
+    paint::apply_stroke(&mut s, &paint::Stroke { brush, points, fit_curve: false }, None, false);
     let r = photocraft_geom::Rect::new(0, 0, w as i32, h as i32);
     let mut px = vec![[0.0f32; 4]; (w * h) as usize];
     s.read_rgba_into(r, &mut px);

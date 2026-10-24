@@ -754,6 +754,11 @@ impl StrokeRenderer {
         self.all_dabs = Some(Vec::new());
         self
     }
+    /// See [`DabGenerator::fit_curve`].
+    pub fn fit_curve(mut self, on: bool) -> Self {
+        self.generator = self.generator.fit_curve(on);
+        self
+    }
     pub fn dabs(&self) -> &[Dab] {
         self.all_dabs.as_deref().unwrap_or(&[])
     }

@@ -116,7 +116,7 @@ fn main() {
             StrokePoint::new(200.0 + t * (size - 400.0), size / 2.0 + (t * 24.0).sin() * 1500.0, (0.3 + 0.7 * (t * 25.0).sin().abs()) as f32)
         })
         .collect();
-    let dabs = photocraft_paint::dabs(&photocraft_paint::Stroke { brush: brush.clone(), points: pts.clone() }).len();
+    let dabs = photocraft_paint::dabs(&photocraft_paint::Stroke { brush: brush.clone(), points: pts.clone(), fit_curve: false }).len();
     let t = Instant::now();
     render_stroke(&mut s, &brush, &pts, None, false, 1.0);
     println!("Stroke: {dabs} primary dabs (scatter count 2), {:.1} ms", t.elapsed().as_secs_f64() * 1000.0);

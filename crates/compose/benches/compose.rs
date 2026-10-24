@@ -59,6 +59,7 @@ fn benches(c: &mut Criterion) {
     let stroke = photocraft_paint::Stroke {
         brush: photocraft_paint::BrushSettings { size: 60.0, hardness: 0.5, ..Default::default() },
         points: (0..500).map(|i| photocraft_paint::StrokePoint::new(100.0 + i as f64 * 7.0, 1000.0 + (i as f64 * 0.05).sin() * 400.0, 1.0)).collect(),
+        fit_curve: false,
     };
     let base = filled(4096, 5);
     let mut sel = Surface::with_default(PixelFormat::GRAY8, &[1.0]);

@@ -1400,7 +1400,7 @@ fn path_stroke(s: &mut Session, p: &Value) -> Result<Value> {
             if pts.is_empty() {
                 continue;
             }
-            let r = photocraft_paint::apply_stroke(surf, &photocraft_paint::Stroke { brush: brush.clone(), points: pts }, sel.as_ref(), lock);
+            let r = photocraft_paint::apply_stroke(surf, &photocraft_paint::Stroke { brush: brush.clone(), points: pts, fit_curve: false }, sel.as_ref(), lock);
             dmg = if dmg.is_empty() { r } else { dmg.union(&r) };
         }
         Ok(dmg)

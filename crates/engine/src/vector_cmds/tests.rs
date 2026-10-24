@@ -490,6 +490,22 @@ fn stroke_path_simulate_pressure_tapers_both_ends() {
     assert!(middle >= 18 && end + 2 >= middle, "plain: {end} px near the start, {middle} px in the middle");
 }
 
+#[test]
+fn stroke_path_rectangle_keeps_square_corners() {
+    let mut s = session(100, 100, 8);
+    s.execute("layer.new.layer", json!({})).unwrap();
+    // A closed rectangle path with sharp 90° corners.
+    s.execute("path.set", json!({"path": {"subpaths": [{"closed": true, "knots": [[20, 20], [80, 20], [80, 80], [20, 80]]}]}})).unwrap();
+    s.execute("path.stroke", json!({"tool": "brush", "size": 6, "hardness": 1.0, "color": "#0000ff", "opacity": 100})).unwrap();
+    let d = doc(&s);
+    let surf = d.layer(s.active().unwrap().active_layer.unwrap()).unwrap().surface().unwrap();
+    // With fitCurve off, the stroke follows the exact polyline, preserving square corners.
+    assert!(surf.rgba(20, 20)[2] > 0.9, "corner knot (20, 20) must be painted");
+    assert!(surf.rgba(80, 20)[2] > 0.9, "corner knot (80, 20) must be painted");
+    assert!(surf.rgba(80, 80)[2] > 0.9, "corner knot (80, 80) must be painted");
+    assert!(surf.rgba(20, 80)[2] > 0.9, "corner knot (20, 80) must be painted");
+}
+
 /// #2978: Stroke Path runs the other brush-based tools along the path (here the Blur tool) as one
 /// history step, and only the path.stroke call is journalled, so an action replays it once.
 #[test]

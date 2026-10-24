@@ -165,13 +165,13 @@ fn parse_brush(s: &Session, p: &Value, cmd: &str) -> Result<(Stroke, Option<Laye
     let brush = stroke_brush(&s.tools.brush, p);
     crate::brush_cmds::validate_brush(&brush, cmd)?;
     if crate::channel_cmds::is_channel_target(p) {
-        return Ok((Stroke { brush, points: pts }, None));
+        return Ok((Stroke { brush, points: pts, fit_curve: false }, None));
     }
     let id = match p.get("layer").and_then(Value::as_u64) {
         Some(id) => LayerId(id),
         None => s.active().and_then(|d| d.active_layer).ok_or(EngineError::Other("no active layer".into()))?,
     };
-    Ok((Stroke { brush, points: pts }, Some(id)))
+    Ok((Stroke { brush, points: pts, fit_curve: false }, Some(id)))
 }
 
 /// Run `f` on the targeted surface (layer pixels, layer mask, alpha channel or Quick Mask: the
@@ -1380,6 +1380,15 @@ impl LiveDab {
         self.bounds
     }
 
+    /// Render more points; returns the rectangle that changed.
+    /// Invalid coordinates reject the whole batch without changing the preview.
+    pub fn push(&mut self, pts: &[StrokePoint]) -> Result<Rect> {
+        crate::brush_cmds::check_coords(pts, &self.cmd)?;
+        self.renderer.push(pts);
+        self.run_new_dabs()
+    }
+
+   
     /// Run the dabs the renderer has generated since the last call on the working copy; returns
     /// the rectangle they changed.
     fn run_new_dabs(&mut self) -> Rect {
