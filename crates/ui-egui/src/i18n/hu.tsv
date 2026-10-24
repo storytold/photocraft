@@ -4297,6 +4297,7 @@ cameraRaw	Yellow	Sárga
 
 # Graphics Adapter preference (#1885)
 	GPU adapter	GPU-adapter
+	More text than the box holds — enlarge the box, reduce the type, or delete text	Több szöveg, mint amennyi a keretbe fér – nagyítsd a keretet, csökkentsd a betűméretet, vagy törölj szöveget
 
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Stílusok importálása…

@@ -3392,6 +3392,7 @@ curves	Smooth	Lisser
 
 # Graphics Adapter preference (#1885)
 	GPU adapter	Adaptateur GPU
+	More text than the box holds — enlarge the box, reduce the type, or delete text	Plus de texte que le bloc ne peut en contenir — agrandissez le bloc, réduisez la taille des caractères ou supprimez du texte
 
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Importer des styles…

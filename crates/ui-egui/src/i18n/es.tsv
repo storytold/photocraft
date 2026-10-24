@@ -4342,6 +4342,7 @@ navigator	Zoom	Zoom
 
 # Graphics Adapter preference (#1885)
 	GPU adapter	Adaptador de GPU
+	More text than the box holds — enlarge the box, reduce the type, or delete text	Más texto del que cabe en el cuadro — agranda el cuadro, reduce el cuerpo o elimina texto
 
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Importar estilos…

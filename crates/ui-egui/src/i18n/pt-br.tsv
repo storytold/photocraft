@@ -4170,6 +4170,7 @@ layerLabel	No Color	Sem cor
 
 # Graphics Adapter preference (#1885)
 	GPU adapter	Adaptador de GPU
+	More text than the box holds — enlarge the box, reduce the type, or delete text	Mais texto do que o quadro comporta — amplie o quadro, reduza o corpo do texto ou exclua texto
 
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Importar estilos…

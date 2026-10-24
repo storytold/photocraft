@@ -2777,6 +2777,39 @@ fn a_word_wider_than_the_paragraph_box_breaks_at_the_box_edge() {
     assert_eq!(l.lines[1].range.start, 3, "{:?}", l.lines);
 }
 
+/// [`TextLayout::overflows`] reads dropped lines off the layout: text that fits covers its end
+/// through trailing empty paragraphs; a taller text's lines stop short of the text's end; an
+/// empty uncovered tail of pure trailing breaks that fit is not an overflow.
+#[test]
+fn overflows_says_whether_a_box_holds_its_text() {
+    let mut e = TextEngine::new();
+    let tall_box = TextShape::Box { x: 0.0, y: 0.0, width: 220.0, height: 900.0 };
+    // Everything fits, trailing breaks included: the trailing empty paragraphs cover the
+    // text's end.
+    for text in ["a", "a\n", "a\n\n", "", "Lorem ipsum dolor sit amet"] {
+        let l = e.layout(&TextLayer { shape: tall_box.clone(), ..point(text, 24.0) }, 72.0);
+        assert!(!l.overflows(text), "{text:?}: {} lines", l.lines.len());
+    }
+    // The box holds one line of 24 pt type — additional lines are dropped, and the last line
+    // stops short of the text.
+    let short_box = TextShape::Box { x: 0.0, y: 0.0, width: 220.0, height: 34.0 };
+    let text = "ab\ncd\nef";
+    let l = e.layout(&TextLayer { shape: short_box.clone(), ..point(text, 24.0) }, 72.0);
+    assert!(l.overflows(text), "{:?}", l.lines.last().map(|ln| ln.range.clone()));
+    // A trailing break whose empty paragraph doesn't fit is an overflow as well.
+    let l = e.layout(&TextLayer { shape: short_box.clone(), ..point("ab\n\n", 24.0) }, 72.0);
+    assert!(l.overflows("ab\n\n"), "{:?}", l.lines.last().map(|ln| ln.range.clone()));
+    // A box holding one full line plus exactly one more empty paragraph is not.
+    let exact = point("ab\n", 24.0);
+    let l = e.layout(&TextLayer { shape: tall_box.clone(), ..exact }, 72.0);
+    assert!(!l.overflows("ab\n"), "{:?}", l.lines.last().map(|ln| ln.range.clone()));
+    // Empty text never overflows: even a box too short for its paragraph (no lines laid out)
+    // has nothing to lose, so no port.
+    let l = e.layout(&TextLayer { shape: short_box.clone(), ..point("", 24.0) }, 72.0);
+    assert!(!l.overflows(""), "{} lines", l.lines.len());
+    let _ = &mut e;
+}
+
 /// Closed polygon in text space.
 fn area_poly(pts: &[(f64, f64)]) -> photocraft_doc::vector::Path {
     photocraft_doc::vector::Path::new(vec![photocraft_doc::vector::Subpath::polygon(pts)])

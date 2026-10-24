@@ -3392,6 +3392,7 @@ curves	Smooth	Glätten
 
 # Graphics Adapter preference (#1885)
 	GPU adapter	GPU-Adapter
+	More text than the box holds — enlarge the box, reduce the type, or delete text	Mehr Text, als in den Rahmen passt – vergrößern Sie den Rahmen, verkleinern Sie die Schrift oder löschen Sie Text
 
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Stile importieren…

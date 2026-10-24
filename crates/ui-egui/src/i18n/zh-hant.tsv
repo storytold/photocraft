@@ -3004,6 +3004,7 @@ curves	Smooth	平滑
 
 # Graphics Adapter preference (#1885)
 	GPU adapter	GPU 介面卡
+	More text than the box holds — enlarge the box, reduce the type, or delete text	文字超出文字框容量 — 放大文字框、縮小字級或刪除部分文字
 
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	匯入樣式…

@@ -1356,6 +1356,9 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
         "strokeEditor": app.ui.stroke_editor,
         "magnetic": app.ui.magnetic,
         "textEdit": app.ui.text_edit,
+        // The paragraph box's overflow port's flag (set by the overlay each frame): agents
+        // learn the overflow without a screen; never persisted (serde skip).
+        "typeBoxOverflow": app.ui.type_box_overflow,
         "typeTransform": app.ui.type_transform,
         "camTransform": app.ui.cam_transform,
         "layerMenu": app.ui.layer_menu,

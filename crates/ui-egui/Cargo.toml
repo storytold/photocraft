@@ -63,6 +63,9 @@ photocraft-testkit = { workspace = true }
 # examples/perf_scenarios.rs (a 500-brush .abr for the #210 import row) and large_file_bench.rs
 # (the generated 2 GB PSD and 4.4 GB PSB of P20, `fixtures`).
 photocraft-psd = { workspace = true, features = ["testgen"] }
+# Probing the adapter list for the GPU-dependent tests before render-state creation: skip only
+# when the machine has no adapter, so a real device failure fails the test (type_overflow_port).
+pollster = "1"
 # Isolated, self-cleaning folders for filesystem tests (the LUT folder, #6558).
 tempfile = "3"
 

@@ -4080,6 +4080,7 @@ curves	Smooth	Εξομάλυνση
 
 # Graphics Adapter preference (#1885)
 	GPU adapter	Προσαρμογέας GPU
+	More text than the box holds — enlarge the box, reduce the type, or delete text	Περισσότερο κείμενο από όσο χωράει το πλαίσιο — μεγεθύνετε το πλαίσιο, μικρύνετε τη γραμματοσειρά ή σβήστε κείμενο
 
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Εισαγωγή στιλ…

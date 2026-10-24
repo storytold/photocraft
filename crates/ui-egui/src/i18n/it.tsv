@@ -4497,6 +4497,7 @@ shape	Appearance	Aspetto
 
 # Graphics Adapter preference (#1885)
 	GPU adapter	Adattatore GPU
+	More text than the box holds — enlarge the box, reduce the type, or delete text	Più testo di quanto ne contiene il riquadro — allarga il riquadro, riduci il corpo o elimina testo
 
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Importa stili…

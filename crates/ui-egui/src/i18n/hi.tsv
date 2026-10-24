@@ -535,3 +535,6 @@ cameraRaw	Yellow	पीला
 	Missing delete command	हटाने का कमांड नहीं मिला
 	Invalid delete command	हटाने का कमांड अमान्य है
 	Layer deleted, but confirmation preference could not be saved: {error}	लेयर हटा दी गई, लेकिन पुष्टि की प्राथमिकता सहेजी नहीं जा सकी: {error}
+
+# Type paragraph box
+	More text than the box holds — enlarge the box, reduce the type, or delete text	बॉक्स में टेक्स्ट क्षमता से अधिक है — बॉक्स बढ़ाएँ, टाइप छोटा करें या टेक्स्ट हटाएँ

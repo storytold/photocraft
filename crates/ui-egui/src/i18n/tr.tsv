@@ -4109,6 +4109,7 @@ cameraData	Lens	Lens
 
 # Graphics Adapter preference (#1885)
 	GPU adapter	GPU bağdaştırıcısı
+	More text than the box holds — enlarge the box, reduce the type, or delete text	Kutunun sığdırdığından fazla metin var — kutuyu büyüt, puntoyu küçült ya da metni sil
 
 # Styles panel: Import / Export Styles (.asl)
 @plural	Imported {n} style from {file}|Imported {n} styles from {file}	{file} dosyasından {n} stil içe aktarıldı

@@ -3590,6 +3590,7 @@ curves	Smooth	매끄럽게
 
 # Graphics Adapter preference (#1885)
 	GPU adapter	GPU 어댑터
+	More text than the box holds — enlarge the box, reduce the type, or delete text	상자에 들어가지 않는 텍스트가 있습니다 — 상자를 크게 하거나, 글자 크기를 줄이거나, 텍스트를 삭제하세요
 
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	스타일 가져오기…

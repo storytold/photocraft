@@ -4090,6 +4090,7 @@ curves	Smooth	Згладити
 
 # Graphics Adapter preference (#1885)
 	GPU adapter	Адаптер GPU
+	More text than the box holds — enlarge the box, reduce the type, or delete text	Тексту більше, ніж вміщує блок — збільшіть блок, зменшіть кегль або вилучіть текст
 
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Імпортувати стилі…

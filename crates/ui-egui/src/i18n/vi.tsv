@@ -3872,6 +3872,7 @@ curves	Smooth	Làm mượt
 
 # Graphics Adapter preference (#1885)
 	GPU adapter	Bộ điều hợp GPU
+	More text than the box holds — enlarge the box, reduce the type, or delete text	Văn bản nhiều hơn số chữ khung chứa được — phóng to khung, giảm cỡ chữ hoặc xóa bớt chữ
 
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Nhập kiểu…

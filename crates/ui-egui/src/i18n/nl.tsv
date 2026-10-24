@@ -4140,6 +4140,7 @@ curves	Smooth	Vloeiend maken
 
 # Graphics Adapter preference (#1885)
 	GPU adapter	GPU-adapter
+	More text than the box holds — enlarge the box, reduce the type, or delete text	Meer tekst dan in het kader past — maak het kader groter, verklein het lettertype of verwijder tekst
 
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Stijlen importeren…
