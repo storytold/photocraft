@@ -376,7 +376,7 @@ pub struct ToolState {
 
 impl ToolState {
     /// How many CMYK picks are remembered.
-    const CMYK_PICKS: usize = 8;
+    pub const CMYK_PICKS: usize = 8;
 
     /// Remember that sRGB colour `rgb` was picked as the inks `cmyk` (each 0..1).
     pub fn remember_cmyk(&mut self, rgb: [f32; 3], cmyk: [f32; 4]) {

@@ -53,6 +53,8 @@ pub struct Runtime {
     /// Tool options as last remembered in the preferences (see `tool_memory`).
     pub(crate) tool_options: Option<crate::state::ToolOptions>,
     pub(crate) selected_tool: Option<crate::state::Tool>,
+    pub(crate) tool_colors: Option<[[[f32; 4]; 2]; 2]>,
+    pub(crate) tool_cmyk_picks: crate::tool_memory::CmykPicks,
     /// The tool owning the session brush and the other tools' brushes, as last remembered.
     pub(crate) tool_brushes: Option<crate::tool_memory::ToolBrushes>,
 }
@@ -3667,6 +3669,176 @@ mod tests {
         tick(&mut app3, &ctx);
         assert_eq!(app3.ui.brush_picker_list.scale, *crate::brush_picker::SCALE_RANGE.end());
         assert!(app3.ui.brush_picker_list.show_name && app3.ui.brush_picker_list.show_stroke && app3.ui.brush_picker_list.show_tip);
+    }
+
+    #[test]
+    fn tool_colors_survive_restart_before_the_first_frame() {
+        let (mut app, store) = app_with_store();
+        let ctx = egui::Context::default();
+        let fg = [0.2, 0.4, 0.6, 0.8];
+        let bg = [0.9, 0.7, 0.3, 1.0];
+        app.run("tools.setColors", json!({"foreground": fg, "background": bg})).unwrap();
+        crate::tool_memory::persist(&mut app, &ctx);
+        tick(&mut app, &ctx);
+        let (restored, _) = app_with_saved(store.lock().unwrap().clone());
+        assert_eq!(restored.session.tools.foreground, fg);
+        assert_eq!(restored.session.tools.background, bg);
+        let rev = app.session.prefs.rev();
+        crate::tool_memory::persist(&mut app, &ctx);
+        assert_eq!(app.session.prefs.rev(), rev, "unchanged colours do not rewrite preferences");
+    }
+
+    #[test]
+    fn tool_colors_survive_restart_after_rejecting_an_invalid_preset() {
+        for bad_channel in [json!(1e100), json!(null), json!("red"), json!(true), json!({}), json!([])] {
+            let (mut app, store) = app_with_store();
+            let color = [0.2, 0.4, 0.6, 0.8];
+            app.run("tools.setColors", json!({"foreground": color})).unwrap();
+            crate::tool_memory::save_on_exit(&mut app).unwrap();
+            app.run(
+                "tool.presets.new",
+                json!({
+                    "name": "Invalid", "tool": "move", "options": {"foreground": [bad_channel, 0.4, 0.6, 1.0]}
+                }),
+            )
+            .unwrap();
+            assert!(app.run("tool.presets.select", json!({"preset": "Invalid"})).is_err());
+            crate::tool_memory::save_on_exit(&mut app).unwrap();
+            assert_eq!(stored(&store)["toolColors"]["foreground"], json!(color));
+            let (restored, _) = app_with_saved(store.lock().unwrap().clone());
+            assert_eq!(restored.session.tools.foreground, color);
+        }
+    }
+
+    #[test]
+    fn tool_colors_preserve_finite_hdr_components() {
+        let (mut app, store) = app_with_store();
+        let fg = [1.5, -0.1, 0.6, 1.0];
+        app.run("tools.setColors", json!({"foreground": fg})).unwrap();
+        crate::tool_memory::save_on_exit(&mut app).unwrap();
+        let (restored, _) = app_with_saved(store.lock().unwrap().clone());
+        assert_eq!(restored.session.tools.foreground, fg);
+    }
+
+    #[test]
+    fn tool_colors_restore_cmyk_inks_for_picker_and_fill_after_swapping_and_exiting_on_a_mask() {
+        let (mut app, store) = app_with_store();
+        let cyan = [1.0, 0.0, 0.0, 0.0];
+        let magenta = [0.0, 1.0, 0.0, 0.0];
+        let fg = photocraft_color::convert::cmyk_to_rgb(cyan).map(|c| c.clamp(0.0, 1.0));
+        let bg = photocraft_color::convert::cmyk_to_rgb(magenta).map(|c| c.clamp(0.0, 1.0));
+        app.run(
+            "tools.setColors",
+            json!({
+                "foreground": fg, "foregroundCmyk": cyan, "background": bg, "backgroundCmyk": magenta
+            }),
+        )
+        .unwrap();
+        app.run("tools.swapColors", json!({})).unwrap();
+        app.session.tools.target_mask(true);
+        crate::tool_memory::save_on_exit(&mut app).unwrap();
+        let (mut restored, _) = app_with_saved(store.lock().unwrap().clone());
+        assert_eq!(restored.session.tools.picked_cmyk(fg), Some(cyan));
+        assert_eq!(restored.session.tools.picked_cmyk(bg), Some(magenta));
+        for (target, expected) in [("foreground", magenta), ("background", cyan)] {
+            crate::color_picker_ui::open(&mut restored, target);
+            assert_eq!(restored.ui.dialogs.last().unwrap().fields["__cmyk"], json!(expected));
+        }
+        restored.run("file.new", json!({"width": 4, "height": 4})).unwrap();
+        restored.run("image.mode.cmyk", json!({})).unwrap();
+        for (command, expected) in [("edit.fillForeground", magenta), ("edit.fillBackground", cyan)] {
+            restored.run(command, json!({})).unwrap();
+            let st = restored.session.active().unwrap();
+            let surface = st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap();
+            let pixel = surface.read_region(photocraft_geom::Rect::new(0, 0, 1, 1));
+            assert!(pixel.iter().take(4).zip(expected).all(|(a, b)| (a - b).abs() < 0.01), "{command}: {pixel:?}");
+        }
+    }
+
+    #[test]
+    fn tool_colors_save_changed_cmyk_inks_even_when_rgba_is_unchanged() {
+        let (mut app, store) = app_with_store();
+        let ctx = egui::Context::default();
+        let rgb = [0.2, 0.4, 0.6];
+        app.run("tools.setColors", json!({"foreground": rgb, "foregroundCmyk": [1, 0, 0, 0]})).unwrap();
+        crate::tool_memory::persist(&mut app, &ctx);
+        tick(&mut app, &ctx);
+        let rev = app.session.prefs.rev();
+        let inks = [0.1, 0.2, 0.3, 0.4];
+        app.run("tools.setColors", json!({"foreground": rgb, "foregroundCmyk": inks})).unwrap();
+        crate::tool_memory::persist(&mut app, &ctx);
+        assert!(app.session.prefs.rev() > rev);
+        tick(&mut app, &ctx);
+        let (restored, _) = app_with_saved(store.lock().unwrap().clone());
+        assert_eq!(restored.session.tools.picked_cmyk(rgb), Some(inks));
+    }
+
+    #[test]
+    fn tool_colors_restore_only_bounded_valid_cmyk_picks() {
+        let limit = photocraft_engine::ToolState::CMYK_PICKS;
+        let mut picks: Vec<Value> = (0..limit + 3).map(|i| json!([[i as f32 / 16.0, 0.2, 0.3], [0.1, 0.2, 0.3, 0.4]])).collect();
+        picks.extend([json!("bad"), json!([[0, 0, 0], [1, 0, 0]]), json!([[0, 0, 0], [2, 0, 0, 0]]), json!([[1e100, 0, 0], [1, 0, 0, 0]])]);
+        let (app, _) = app_with_saved(Some(
+            json!({
+                "toolColors": {"foreground": [0.2, 0.4, 0.6, 1.0], "cmykPicks": picks}
+            })
+            .to_string(),
+        ));
+        assert_eq!(app.session.tools.foreground, [0.2, 0.4, 0.6, 1.0]);
+        assert_eq!(app.session.tools.cmyk_picks.len(), limit);
+        assert_eq!(app.session.tools.picked_cmyk([0.0, 0.2, 0.3]), None);
+        assert_eq!(app.session.tools.picked_cmyk([(limit + 2) as f32 / 16.0, 0.2, 0.3]), Some([0.1, 0.2, 0.3, 0.4]));
+    }
+
+    #[test]
+    fn tool_colors_flush_swaps_and_defaults_on_exit_without_another_frame() {
+        let (mut app, store) = app_with_store();
+        app.run("tools.setColors", json!({"foreground": "#336699", "background": "#cc8844"})).unwrap();
+        app.run("tools.swapColors", json!({})).unwrap();
+        crate::tool_memory::save_on_exit(&mut app).unwrap();
+        let (mut restored, restored_store) = app_with_saved(store.lock().unwrap().clone());
+        assert_eq!(restored.session.tools.foreground, app.session.tools.foreground);
+        assert_eq!(restored.session.tools.background, app.session.tools.background);
+        restored.run("tools.defaultColors", json!({})).unwrap();
+        crate::tool_memory::save_on_exit(&mut restored).unwrap();
+        let (defaults, _) = app_with_saved(restored_store.lock().unwrap().clone());
+        assert_eq!(defaults.session.tools.foreground, [0.0, 0.0, 0.0, 1.0]);
+        assert_eq!(defaults.session.tools.background, [1.0; 4]);
+    }
+
+    #[test]
+    fn tool_colors_keep_pixel_and_mask_pairs_when_exiting_on_a_mask() {
+        let (mut app, store) = app_with_store();
+        app.session.tools.foreground = [0.2, 0.4, 0.6, 1.0];
+        app.session.tools.background = [0.9, 0.7, 0.3, 1.0];
+        let pixels = [app.session.tools.foreground, app.session.tools.background];
+        app.session.tools.target_mask(true);
+        app.session.tools.foreground = [0.5, 0.5, 0.5, 1.0];
+        let masks = [app.session.tools.foreground, app.session.tools.background];
+        crate::tool_memory::save_on_exit(&mut app).unwrap();
+        let (mut restored, _) = app_with_saved(store.lock().unwrap().clone());
+        assert_eq!([restored.session.tools.foreground, restored.session.tools.background], pixels);
+        restored.session.tools.target_mask(true);
+        assert_eq!([restored.session.tools.foreground, restored.session.tools.background], masks);
+    }
+
+    #[test]
+    fn tool_colors_ignore_invalid_swatches_without_losing_valid_preferences() {
+        for bad in [json!(null), json!("red"), json!([1, 0, 0]), json!([1e100, 0, 0, 1]), json!([0, "bad", 0, 1])] {
+            let (app, _) = app_with_saved(Some(
+                json!({
+                    "toolColors": {"foreground": bad, "background": [0.2, 0.4, 0.6, 1.0]},
+                    "toolOptions": {"feather": 12.0}
+                })
+                .to_string(),
+            ));
+            assert_eq!(app.session.tools.foreground, [0.0, 0.0, 0.0, 1.0]);
+            assert_eq!(app.session.tools.background, [0.2, 0.4, 0.6, 1.0]);
+            assert_eq!(app.ui.tool_options.feather, 12.0);
+        }
+        let (app, _) = app_with_saved(Some(json!({"toolOptions": {"feather": 12.0}}).to_string()));
+        assert_eq!(app.session.tools.foreground, [0.0, 0.0, 0.0, 1.0]);
+        assert_eq!(app.session.tools.background, [1.0; 4]);
     }
 
     #[test]

@@ -2260,7 +2260,7 @@ impl PhotocraftApp {
 impl eframe::App for PhotocraftApp {
     fn on_exit(&mut self) {
         if let Err(err) = tool_memory::save_on_exit(self) {
-            log::warn!("Preferences: could not save the final tool selection: {err}");
+            log::warn!("Preferences: could not save the final tool state: {err}");
         }
     }
 
