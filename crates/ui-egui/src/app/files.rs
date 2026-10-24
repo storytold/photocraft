@@ -234,7 +234,7 @@ impl PhotocraftApp {
         }
         if choices.bmp_bits.is_none() && bmp_options_ui::wants_prompt(self, &path) {
             let copy = self.saves_copy(&path, None)?;
-            bmp_options_ui::park(self, path.clone(), copy, "file.saveAs")?;
+            bmp_options_ui::park(self, path.clone(), copy, "file.saveAs", None)?;
             return Ok(serde_json::json!({"path": path, "warnings": []}));
         }
         if choices.dds.is_none() && dds_options_ui::wants_prompt(&path) {

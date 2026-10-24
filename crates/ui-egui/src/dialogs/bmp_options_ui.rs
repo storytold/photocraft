@@ -6,6 +6,9 @@
 //! The save is parked in [`Prompt`] while the modal is up (egui is immediate-mode) and written
 //! once answered. Cancel drops the save. Scripts skip the prompt by passing `bmpBits`.
 
+use std::sync::Arc;
+
+use photocraft_doc::Document;
 use photocraft_io::BmpBits;
 
 use crate::{ExportSettings, PhotocraftApp};
@@ -23,6 +26,9 @@ pub struct Prompt {
     /// The step the answered save is recorded as: `file.saveAs`, `file.saveACopy`, or
     /// `file.save` when File › Save confirmed the document's own BMP.
     pub record: &'static str,
+    /// Save a Copy: the document as it was when asked, written as is even if it changes while
+    /// this is open.
+    snapshot: Option<Arc<Document>>,
 }
 
 /// `true` when `path` names a BMP (`.bmp`, `.dib`).
@@ -43,13 +49,14 @@ pub fn bits_param(params: &serde_json::Value, cmd: &str) -> Result<Option<BmpBit
 }
 
 /// Parks the save behind the prompt, starting at 24 bits. A prompt already waiting is never
-/// replaced (a shortcut can still reach Save a Copy).
-pub fn park(app: &mut PhotocraftApp, path: String, copy: bool, record: &'static str) -> Result<(), String> {
+/// replaced (a shortcut can still reach Save a Copy). `snapshot` is Save a Copy's document as it
+/// was when asked.
+pub fn park(app: &mut PhotocraftApp, path: String, copy: bool, record: &'static str, snapshot: Option<Arc<Document>>) -> Result<(), String> {
     if app.save_options_open() {
         return Err(crate::SAVE_OPTIONS_OPEN.into());
     }
     let doc = app.active_doc_id()?;
-    app.bmp_options = Some(Prompt { doc, path, bits: BmpBits::Bits24, copy, record });
+    app.bmp_options = Some(Prompt { doc, path, bits: BmpBits::Bits24, copy, record, snapshot });
     Ok(())
 }
 
@@ -78,10 +85,22 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // A focused button takes Enter as its click without consuming the key: Enter on Cancel cancels.
     if ok || (!cancel && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter))) {
         let Some(p) = app.bmp_options.take() else { return };
-        let settings = ExportSettings { bmp_bits: Some(p.bits), ..app.save_settings() };
         // A plain Save writes whichever file the action is played on: no path.
         let mut step = if p.record == "file.save" { serde_json::json!({}) } else { serde_json::json!({"path": p.path}) };
         step["bmpBits"] = p.bits.bits().into();
+        if let Some(doc) = p.snapshot {
+            // Save a Copy writes the document as it was when asked.
+            let choices = crate::FormatChoices { bmp_bits: Some(p.bits), ..Default::default() };
+            match crate::view_cmds::write_copy(app, &doc, &p.path, choices) {
+                Ok(_) => app.session.journal.push((p.record.into(), step)),
+                Err(e) => {
+                    app.ui.status = crate::i18n::fmt(tl!("Save failed: {error}"), &[("error", &e)]);
+                    app.ui.status_error = true;
+                }
+            }
+            return;
+        }
+        let settings = ExportSettings { bmp_bits: Some(p.bits), ..app.save_settings() };
         app.write_answered_save(ctx, p.doc, p.path, &settings, p.copy, (p.record, step));
     } else if cancel {
         app.bmp_options = None;
