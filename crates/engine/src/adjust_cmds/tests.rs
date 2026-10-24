@@ -500,7 +500,7 @@ fn locked_smart_objects_refuse_adjustment_smart_filters() {
 }
 
 /// A wrong-typed value errors before anything is recorded (never a panic), and the adjustments
-/// that can't re-render from a source (Replace Color, Match Color) stay off a smart object.
+/// that can't re-render from a source (Match Color) stays off a smart object.
 #[test]
 fn a_bad_adjustment_param_on_a_smart_object_is_an_error() {
     let mut s = smart_session();
@@ -510,7 +510,6 @@ fn a_bad_adjustment_param_on_a_smart_object_is_an_error() {
     assert_eq!(smart_filters_of(&s).len(), filters, "nothing recorded");
     assert_eq!(s.active().unwrap().history.past_len(), steps, "no history step");
     assert_eq!(flatten(&s), flat, "pixels untouched");
-    assert!(!s.is_enabled("image.adjustments.replaceColor"), "only adjustments that re-render become smart filters");
     assert!(!s.is_enabled("image.adjustments.matchColor"), "only adjustments that re-render become smart filters");
 }
 
@@ -545,6 +544,56 @@ fn a_targeted_mask_enables_editing_it_on_any_layer() {
     assert!(!s.is_enabled_with("image.adjustments.invert", &mask));
     assert!(s.execute("image.adjustments.invert", mask).is_err());
     assert_eq!(rgba(&s, 23, 3), pixels);
+}
+
+/// Desaturate, Equalize and Replace Color on a smart object record a smart filter that renders
+/// what the destructive command bakes into the same pixels (they used to be refused).
+#[test]
+fn desaturate_equalize_and_replace_color_record_smart_filters() {
+    let replace = json!({"color": "#ff0000", "fuzziness": 120, "hue": 90});
+    for (id, params) in [("image.adjustments.desaturate", json!({})), ("image.adjustments.equalize", json!({})), ("image.adjustments.replaceColor", replace)] {
+        let mut plain = session(8, "rgb");
+        let original = flatten(&plain);
+        plain.execute(id, params.clone()).unwrap();
+        let baked = flatten(&plain);
+        assert!(max_diff(&original, &baked) > 0.02, "{id}: the control changes the pixels");
+
+        let mut s = smart_session();
+        assert!(s.is_enabled(id), "{id} runs on a smart object");
+        s.execute(id, params).unwrap();
+        let sf = smart_filters_of(&s);
+        assert_eq!(sf.len(), 1, "{id}");
+        assert_eq!(sf[0].command, id);
+        assert_eq!(max_diff(&flatten(&s), &baked), 0.0, "{id}: the smart filter renders the destructive result");
+        s.undo();
+        assert!(smart_filters_of(&s).is_empty(), "{id}: undo removes the filter");
+    }
+}
+
+/// Replace Color without `color` samples the foreground: the smart filter records that colour, so
+/// changing the foreground afterwards and re-rendering the filter leaves its result unchanged.
+#[test]
+fn replace_color_smart_filter_keeps_the_foreground_it_was_run_with() {
+    let picked = [0.27, 0.6, 0.52, 1.0];
+    let params = json!({"fuzziness": 60, "hue": 90});
+    let mut plain = session(8, "rgb");
+    plain.tools.foreground = picked;
+    plain.execute("image.adjustments.replaceColor", params.clone()).unwrap();
+    let baked = flatten(&plain);
+
+    let mut s = smart_session();
+    let original = flatten(&s);
+    s.tools.foreground = picked;
+    s.execute("image.adjustments.replaceColor", params).unwrap();
+    assert!(smart_filters_of(&s)[0].params.get("color").is_some(), "the foreground colour is recorded");
+    assert_eq!(max_diff(&flatten(&s), &baked), 0.0, "the filter replaces the foreground colour");
+    assert!(max_diff(&original, &baked) > 0.02, "the control changes the pixels");
+    // A new foreground, then a re-render (hide and show the filter): the result stays put.
+    s.tools.foreground = [1.0, 0.0, 0.0, 1.0];
+    s.execute("layer.smartFilter.setVisible", json!({"index": 0})).unwrap();
+    s.execute("layer.smartFilter.setVisible", json!({"index": 0})).unwrap();
+    assert!(smart_filters_of(&s)[0].visible);
+    assert_eq!(max_diff(&flatten(&s), &baked), 0.0, "changing the foreground leaves the filter unchanged");
 }
 
 /// #5335: Curves (⌘M) edits the targeted layer mask, saved channel or Quick Mask at every depth.
@@ -728,6 +777,49 @@ fn invert_turns_the_black_of_quick_mask_and_alpha_channels_white() {
                 (got.0 - inside).abs() < 0.01 && (got.1 - outside).abs() < 0.01,
                 "{depth}-bit Selected Areas, {start}: selection (inside, outside) {got:?}"
             );
+        }
+    }
+}
+
+#[test]
+fn equalize_smart_filter_uses_selected_pixels_for_its_histogram() {
+    for depth in DEPTHS {
+        let mut plain = session(depth, "rgb");
+        let mut smart = session(depth, "rgb");
+        smart.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        for s in [&mut plain, &mut smart] {
+            s.execute("select.rect", json!({"x": 0, "y": 0, "width": 12, "height": 32})).unwrap();
+            s.execute("image.adjustments.equalize", json!({})).unwrap();
+        }
+        assert!(max_diff(&flatten(&plain), &flatten(&smart)) < 2.0 / 255.0, "depth={depth}");
+        // Disabling the filter mask changes the histogram too: no stale cached stage.
+        let mut full = session(depth, "rgb");
+        full.execute("image.adjustments.equalize", json!({})).unwrap();
+        smart.execute("select.deselect", json!({})).unwrap();
+        smart.execute("layer.smartFilter.disableFilterMask", json!({"enabled": false})).unwrap();
+        assert!(max_diff(&flatten(&full), &flatten(&smart)) < 2.0 / 255.0, "disabled mask, depth={depth}");
+    }
+}
+
+#[test]
+fn replace_color_null_records_foreground_and_bad_color_does_not_edit() {
+    for depth in DEPTHS {
+        let mut plain = session(depth, "rgb");
+        let mut smart = session(depth, "rgb");
+        smart.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        let params = json!({"color": null, "fuzziness": 200, "hue": 90});
+        for s in [&mut plain, &mut smart] {
+            s.tools.foreground = [0.27, 0.6, 0.52, 1.0];
+            s.execute("image.adjustments.replaceColor", params.clone()).unwrap();
+        }
+        assert_eq!(max_diff(&flatten(&plain), &flatten(&smart)), 0.0);
+        assert_eq!(smart_filters_of(&smart)[0].params["color"], json!([0.27_f32, 0.6_f32, 0.52_f32, 1.0_f32]));
+        let before = smart.active().unwrap().doc.clone();
+        let steps = smart.active().unwrap().history.past_len();
+        for color in [json!(3), json!("wrong"), json!([1, 2]), json!([1e300, 0, 0]), json!(["red", 0, 0])] {
+            assert!(smart.execute("image.adjustments.replaceColor", json!({"color": color})).is_err());
+            assert!(std::sync::Arc::ptr_eq(&smart.active().unwrap().doc, &before));
+            assert_eq!(smart.active().unwrap().history.past_len(), steps);
         }
     }
 }
