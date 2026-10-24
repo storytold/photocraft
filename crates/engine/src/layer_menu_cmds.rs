@@ -208,7 +208,6 @@ fn hide_selection(s: &mut Session, p: &Value) -> Result<Value> {
             crate::extra_cmds::background_to_layer_for_mask(doc, id);
             doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?.mask = Some(mask.clone());
         }
-        doc.selection = None;
         Ok(Value::Null)
     })
 }

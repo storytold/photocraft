@@ -396,7 +396,7 @@ pub fn blend_from_str(s: &str) -> Option<BlendMode> {
 
 /// The active selection as the mask of a layer being created, or None without a selection.
 /// Photoshop masks a new adjustment or fill layer with the selection, so the adjustment acts on
-/// the selected area only (#1250); the selection itself stays, as Reveal Selection leaves it.
+/// the selected area only (#1250); the selection itself stays.
 pub(crate) fn selection_mask(doc: &Document) -> Result<Option<LayerMask>> {
     doc.selection.as_ref().map(|sel| mask_at_depth(LayerMask { surface: sel.clone(), ..LayerMask::reveal_all() }, doc.depth)).transpose()
 }
@@ -999,9 +999,9 @@ fn build() -> Vec<CommandSpec> {
             |s, p| {
                 let sel = s.active().and_then(|d| d.doc.selection.clone()).ok_or(EngineError::Other("no selection".into()))?;
                 let mask = LayerMask { surface: sel, ..LayerMask::reveal_all() };
-                // The selection becomes the mask, so Photoshop drops it (as Hide Selection does): a
-                // following Invert (⌘I) on the targeted mask then inverts all of it, not just the
-                // part inside the old selection. Same undo step as the mask.
+                // The selection becomes the mask, so Photoshop drops it: a following Invert (⌘I)
+                // on the targeted mask then inverts all of it, not just the part inside the old
+                // selection. Same undo step as the mask.
                 set_mask_and_deselect(s, p, "Add Layer Mask", mask)
             }
         ),

@@ -61,7 +61,8 @@ fn mask_apply_from_transparency_hide_selection() {
         assert!(!s.is_enabled("layer.layerMask.apply"));
         select_left_half(&mut s);
         s.execute("layer.layerMask.hideSelection", json!({})).unwrap();
-        assert!(doc(&s).selection.is_none());
+        // Photoshop keeps the selection active after Hide Selection.
+        assert!(doc(&s).selection.is_some());
         let m = active(&s).mask.as_ref().unwrap();
         assert_eq!((m.value(5, 5), m.value(30, 5)), (0.0, 1.0));
         s.execute("layer.layerMask.apply", json!({})).unwrap();
@@ -81,6 +82,27 @@ fn mask_apply_from_transparency_hide_selection() {
         s.execute("edit.undo", json!({})).unwrap();
         assert!(active(&s).mask.is_none());
     }
+}
+
+/// Photoshop keeps the selection active after Layer › Layer Mask › Hide Selection, so dependent
+/// selection commands (Deselect, a second Hide Selection on another layer) keep working.
+#[test]
+fn hide_selection_keeps_the_selection_active() {
+    let mut s = session(8, "rgb");
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("select.rect", json!({"x": 20, "y": 20, "width": 100, "height": 100})).unwrap();
+    s.execute("layer.layerMask.hideSelection", json!({})).unwrap();
+    assert!(active(&s).mask.is_some());
+    assert!(doc(&s).selection.is_some(), "the selection survives Hide Selection");
+    assert!(s.is_enabled("select.deselect"));
+    s.execute("select.deselect", json!({})).unwrap();
+    assert!(doc(&s).selection.is_none());
+    // A second Hide Selection on another layer still has a selection to work from.
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("select.rect", json!({"x": 20, "y": 20, "width": 100, "height": 100})).unwrap();
+    s.execute("layer.layerMask.hideSelection", json!({})).unwrap();
+    assert!(active(&s).mask.is_some());
+    assert!(doc(&s).selection.is_some());
 }
 
 #[test]
