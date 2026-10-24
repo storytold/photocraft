@@ -532,6 +532,10 @@ fn main() -> eframe::Result {
         // above keeps its `mut` off macOS, where nothing is folded in.
         let mut launch_options = launch_options;
         launch_options.extend_from_slice(&single_instance::env_launch_options());
+        // The CPU-compatibility relaunch's `--safe-gpu` is not a person's: it takes part.
+        if !single_instance::safe_gpu_is_launch_option(std::env::var_os("PHOTOCRAFT_GPU_STARTUP_FAILURE").as_deref()) {
+            launch_options.retain(|option| *option != "--safe-gpu");
+        }
         let context = single_instance::LaunchContext {
             per_user_settings: app_dirs::current().mode == app_dirs::Mode::Platform,
             new_instance_flag: new_instance,
