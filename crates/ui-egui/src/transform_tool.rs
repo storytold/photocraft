@@ -60,6 +60,7 @@ enum WarpDrag {
 /// full-resolution textures of those pixels (transform_tex.rs).
 pub struct TransformPreview {
     pub session: u64,
+    pub(crate) channel: Option<crate::channel_transform_preview::Preview>,
     pub doc: Arc<Document>,
     pub texture: crate::transform_tex::PreviewTextures,
     pub opacity: f32,
@@ -187,21 +188,42 @@ fn corners(r: [f64; 4]) -> [[f64; 2]; 4] {
     [[r[0], r[1]], [r[2], r[1]], [r[2], r[3]], [r[0], r[3]]]
 }
 
-/// Start Free Transform on the active layer (or its selected pixels), or on the targeted unlinked
-/// layer mask, alpha channel or Quick Mask.
+/// Start Free Transform on the active layer or its selected pixels, or on the captured
+/// colour component, raster mask, alpha/spot channel or Quick Mask.
 pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> {
-    if let Some((params, path)) = crate::vector_ui::free_transform_path(app) {
+    begin_with_params(app, ctx, json!({}))
+}
+
+fn begin_with_params(app: &mut PhotocraftApp, ctx: &egui::Context, params: serde_json::Value) -> Result<(), String> {
+    if app.session.active().is_some_and(|st| st.channel_transform.is_some()) {
+        return Err(photocraft_engine::channel_transform::LOCKED.into());
+    }
+    if app.session.active_job().is_some() {
+        return Err("Wait for the document operation to finish before starting a transform".into());
+    }
+    if params.get("layer").is_none()
+        && let Some((params, path)) = crate::vector_ui::free_transform_path(app)
+    {
         return begin_path(app, ctx, params, path);
     }
     if app.session.active().is_some_and(|st| photocraft_engine::float_cmds::floating(st).is_some()) {
         app.run("select.drop", json!({}))?;
     }
-    let target = crate::canvas::paint_target(app);
+    let mut params = photocraft_engine::channel_transform::params(&app.session, &params).map_err(|e| e.to_string())?;
+    if params.get("layer").is_none() && params["target"] == "pixels" && crate::canvas::paint_target(app) == "mask" {
+        // Layers thumbnail targeting is a fallback; a visible mask overlay never overrides
+        // a colour component explicitly selected in Channels.
+        params["target"] = json!("mask");
+    }
+    let target = params["target"].clone();
     let st = app.session.active().ok_or("no document")?;
     let (doc, revision) = (st.doc.clone(), st.revision);
-    let lone = photocraft_engine::transform_cmds::lone_target(&doc, st.active_layer, &json!({ "target": target })).map_err(|e| e.to_string())?.cloned();
-    if let Some(surf) = lone {
-        return begin_lone(app, ctx, doc, surf, target);
+    let lone = photocraft_engine::channel_transform::source_bounds(&doc, st.active_layer, &params).map_err(|e| e.to_string())?;
+    if let Some(bounds) = lone {
+        if !photocraft_engine::channel_transform::visible(&app.session, &params).map_err(|e| e.to_string())? {
+            return Err(photocraft_engine::channel_transform::HIDDEN.into());
+        }
+        return begin_lone(app, ctx, doc, bounds, target);
     }
     let id = st.active_layer.ok_or("no active layer")?;
     let layer = doc.layer(id).ok_or("no layer")?;
@@ -246,6 +268,7 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
     let texture = crate::transform_tex::PreviewTextures::new(ctx, format!("transform-{session}"), image, uv);
     app.transform_preview = Some(TransformPreview {
         session,
+        channel: None,
         doc: Arc::new(pd),
         texture,
         opacity: layer.opacity * layer.fill_opacity,
@@ -306,7 +329,9 @@ pub fn begin_copy(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), St
 /// Free Transform on the layer a file dropped on the canvas just placed, like the reference app's
 /// Place: Esc takes the place back, ↩ makes the place and the transform one Place Embedded step.
 pub fn begin_placed(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> {
-    begin(app, ctx)?;
+    let layer = app.session.active().and_then(|st| st.active_layer).ok_or("no active layer")?;
+    // Placement explicitly transforms the new layer, regardless of the previous channel target.
+    begin_with_params(app, ctx, json!({"layer":layer.0}))?;
     if let Some(t) = app.ui.transform.as_mut() {
         t.made = Some(MadeLayer::Place);
     }
@@ -347,6 +372,7 @@ pub(crate) fn begin_content_aware(
     let texture = crate::transform_tex::PreviewTextures::new(ctx, format!("transform-{session}"), image, uv);
     app.transform_preview = Some(TransformPreview {
         session,
+        channel: None,
         doc: Arc::new(pd),
         texture,
         opacity: layer.opacity * layer.fill_opacity,
@@ -432,49 +458,26 @@ fn fold_made(app: &mut PhotocraftApp, document: DocId, layer: LayerId, made: Mad
     }
 }
 
-/// Free Transform of a targeted unlinked layer mask, alpha channel or Quick Mask by itself: the
-/// box frames its content (or the selection) and previews the moving values in grey over the
-/// document with them vacated.
-fn begin_lone(
-    app: &mut PhotocraftApp,
-    ctx: &egui::Context,
-    doc: Arc<Document>,
-    surf: photocraft_raster::Surface,
-    target: serde_json::Value,
-) -> Result<(), String> {
-    use photocraft_engine::transform_cmds as tc;
-    let b = tc::target_frame(&doc, &surf);
+/// Capture a scalar channel and its target without changing any channel eyes.
+fn begin_lone(app: &mut PhotocraftApp, ctx: &egui::Context, doc: Arc<Document>, b: photocraft_geom::Rect, target: serde_json::Value) -> Result<(), String> {
     if b.is_empty() {
         return Err("Could not transform: nothing is selected".into());
     }
-    let whole;
-    let sel = match &doc.selection {
-        Some(s) => s,
-        None => {
-            let mut s = photocraft_raster::Surface::new(photocraft_color::PixelFormat::GRAY8);
-            s.fill_rect(b, &[1.0]);
-            whole = s;
-            &whole
-        }
-    };
-    let (lifted, rest) = tc::split_gray_selected(&surf, sel).map_err(|e| e.to_string())?.ok_or("this channel can't be transformed")?;
     crate::type_tool::commit(app);
     let layer = app.session.active().and_then(|st| st.active_layer).map_or(0, |l| l.0);
-    let mut pd = (*doc).clone();
-    let tp = json!({ "target": target });
-    if let Ok(Some(s)) = tc::lone_target_mut(&mut pd, Some(LayerId(layer)), &tp) {
-        *s = rest;
-    }
+    let active = app.session.active().and_then(|st| st.active_layer);
+    let channel = crate::channel_transform_preview::Preview::new(&doc, active, app.session.tools.background, crate::proxy::reduced_previews(app));
     let rect = [b.x0 as f64, b.y0 as f64, b.x1 as f64, b.y1 as f64];
     let session = app.ui.alloc_id();
-    let max_side = ctx.input(|i| i.max_texture_side).max(app.gpu.as_ref().map_or(1, |g| g.max_texture_side()));
-    let (image, uv) = crate::transform_tex::read_surface(&lifted, None, b, max_side);
-    let texture = crate::transform_tex::PreviewTextures::new(ctx, format!("transform-{session}"), image, uv);
+    // Scalar previews are composited as a document; the raw moving-quad texture is unused.
+    let texture =
+        crate::transform_tex::PreviewTextures::new(ctx, format!("transform-{session}"), egui::ColorImage::new([1, 1], vec![Color32::TRANSPARENT]), [1.0; 2]);
     app.transform_preview = Some(TransformPreview {
         session,
-        doc: Arc::new(pd),
+        channel: Some(channel),
+        doc: doc.clone(),
         texture,
-        opacity: 0.6,
+        opacity: 0.0,
         above: None,
         styled: None,
         follow: None,
@@ -499,13 +502,16 @@ fn begin_lone(
         interpolation: "bicubic".into(),
         warp: None,
         selection: false,
-        target: Some(target),
+        target: Some(target.clone()),
         path: None,
         made: None,
         mode: Default::default(),
         content_aware: None,
         skew_v: 0.0,
     });
+    if let Some(st) = app.session.active_mut() {
+        st.channel_transform = Some(photocraft_engine::channel_transform::Guard { layer: active, target });
+    }
     start_steps(app);
     Ok(())
 }
@@ -525,6 +531,7 @@ fn begin_path(app: &mut PhotocraftApp, ctx: &egui::Context, params: serde_json::
         crate::transform_tex::PreviewTextures::new(ctx, format!("transform-{session}"), egui::ColorImage::new([1, 1], vec![Color32::TRANSPARENT]), [1.0, 1.0]);
     app.transform_preview = Some(TransformPreview {
         session,
+        channel: None,
         doc,
         texture,
         opacity: 1.0,
@@ -610,6 +617,7 @@ pub fn begin_selection(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(
     pd.selection = None;
     app.transform_preview = Some(TransformPreview {
         session,
+        channel: None,
         doc: Arc::new(pd),
         texture,
         opacity: 1.0,
@@ -672,11 +680,15 @@ pub fn enter_warp(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if app.ui.transform.as_ref().is_some_and(|t| t.warp.is_none()) && warps_type(app) {
         return enter_type_warp(app, ctx);
     }
-    let existing =
-        app.session.active().and_then(|d| d.doc.layer(LayerId(app.ui.transform.as_ref()?.layer)).and_then(photocraft_engine::warp_cmds::smart_warp_doc_space));
+    let existing = app
+        .ui
+        .transform
+        .as_ref()
+        .filter(|t| t.target.is_none())
+        .and_then(|t| app.session.active()?.doc.layer(LayerId(t.layer)).and_then(photocraft_engine::warp_cmds::smart_warp_doc_space));
     let Some(t) = app.ui.transform.as_mut() else { return };
-    // Warp moves layers and paths (#3027): a lone mask or channel keeps the box.
-    if t.warp.is_some() || t.target.is_some() {
+    // Warp retains the captured target and box.
+    if t.warp.is_some() {
         return;
     }
     if t.quad == corners(t.rect)
@@ -1036,6 +1048,7 @@ pub fn commit(app: &mut PhotocraftApp) {
     if committing(app).is_some() {
         return;
     }
+    let background = app.transform_preview.as_ref().and_then(|pv| pv.channel.as_ref()).map(|pv| pv.background());
     let document = app.transform_preview.as_ref().map(|pv| pv.doc.id);
     if document.is_some_and(|id| app.session.active().is_none_or(|st| st.doc.id != id)) {
         cancel(app);
@@ -1044,6 +1057,7 @@ pub fn commit(app: &mut PhotocraftApp) {
     let type_layer = warps_type(app);
     let Some(t) = app.ui.transform.take() else { return };
     let mut preview = app.transform_preview.take();
+    release_channel_guard(app);
     if let Some(options) = &t.content_aware {
         crate::cas_transform::commit(app, &t, options);
         return;
@@ -1082,22 +1096,28 @@ pub fn commit(app: &mut PhotocraftApp) {
         return;
     }
     let made = t.made;
+    if t.warp.as_ref().is_some_and(|w| w.is_identity() && !type_layer) || (t.warp.is_none() && t.quad == corners(t.rect)) {
+        return;
+    }
+    let live_background = app.session.tools.background;
+    if let Some(background) = background {
+        app.session.tools.background = background;
+    }
     let r = if let Some(w) = &t.warp {
         // Type with a Warp Text can be warped back to None; the engine skips an unchanged style.
-        if w.is_identity() && !type_layer {
-            return;
+        let mut params = json!({"layer": t.layer, "rect": t.rect, "warp": w, "interpolation": t.interpolation});
+        if let Some(target) = &t.target {
+            params["target"] = target.clone();
         }
-        app.run("edit.transform.warp", json!({"layer": t.layer, "rect": t.rect, "warp": w, "interpolation": t.interpolation}))
+        app.run("edit.transform.warp", params)
     } else {
-        if t.quad == corners(t.rect) {
-            return; // untouched: nothing to do and no history step; a ⌥⌘T copy or a place stays
-        }
         let mut p = json!({"layer": t.layer, "rect": t.rect, "quad": t.quad, "interpolation": t.interpolation});
         if let Some(target) = &t.target {
             p["target"] = target.clone();
         }
         app.run("edit.transform", p)
     };
+    app.session.tools.background = live_background;
     // A large layer's warp runs in the background: the session stays until the job ends.
     if let Ok(v) = &r
         && let Some(job) = v.get("pending").and_then(serde_json::Value::as_bool).filter(|p| *p).and(v.get("job")).and_then(serde_json::Value::as_u64)
@@ -1150,6 +1170,7 @@ pub fn on_job_event(app: &mut PhotocraftApp, e: &JobEvent) {
         }
         return;
     }
+    release_channel_guard(app);
     finish(app, Some(pv.doc.id), LayerId(t.layer), t.made, matches!(e.outcome, JobOutcome::Done(_)));
 }
 
@@ -1157,6 +1178,12 @@ pub fn on_job_event(app: &mut PhotocraftApp, e: &JobEvent) {
 /// was, with the reason in the status bar, so the transform can be changed or cancelled. A copy or
 /// a placed layer it made goes only when it is cancelled.
 fn keep_open(app: &mut PhotocraftApp, t: TransformSession, preview: Option<TransformPreview>, e: String) {
+    if preview.as_ref().is_some_and(|pv| pv.channel.is_some()) {
+        release_channel_guard(app);
+        finish(app, preview.as_ref().map(|pv| pv.doc.id), LayerId(t.layer), t.made, false);
+        app.ui.status = e;
+        return;
+    }
     app.ui.transform = Some(t);
     app.transform_preview = preview;
     app.ui.status = e;
@@ -1187,7 +1214,7 @@ pub fn end_if_left(app: &mut PhotocraftApp) {
     if editing_placed_smart_object {
         app.ui.transform = None;
         app.transform_preview = None;
-    } else if switched_document || st.doc.layer(layer).is_none() {
+    } else if switched_document || (st.doc.layer(layer).is_none() && t.target.as_ref().is_none_or(|p| p != "quickMask" && p.get("channel").is_none())) {
         cancel(app);
     } else if switched_away(app) {
         commit(app);
@@ -1233,12 +1260,17 @@ pub fn follow_edits(app: &mut PhotocraftApp) {
     pv.doc = Arc::new(pd);
 }
 
+fn release_channel_guard(app: &mut PhotocraftApp) {
+    app.session.clear_channel_transforms();
+}
+
 pub fn cancel(app: &mut PhotocraftApp) {
     // Esc while the commit runs cancels the job; the session ends when it does.
     if let Some(job) = committing(app) {
         crate::jobs_ui::cancel(app, job);
         return;
     }
+    release_channel_guard(app);
     let transform = app.ui.transform.take();
     let preview = app.transform_preview.take();
     if let (Some(t), Some(pv)) = (transform, preview)
@@ -1295,10 +1327,12 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> Option<bool> {
         // Content-Aware Scale's box only scales: no switching it to another transform or Warp.
         "edit.freeTransform" | "edit.freeTransformCopy" if t.content_aware.is_some() => Some(false),
         i if i.starts_with("edit.transform.") && t.content_aware.is_some() => Some(false),
-        "edit.undo" => Some(steps.is_some_and(|s| s.can_undo(&Step::of(t)))),
-        "edit.redo" => Some(steps.is_some_and(|s| !s.redo.is_empty())),
+        "edit.undo" | "history.undo" => Some(steps.is_some_and(|s| s.can_undo(&Step::of(t)))),
+        "edit.redo" | "history.redo" => Some(steps.is_some_and(|s| !s.redo.is_empty())),
         // No Toggle Last State or history jump under the box, and one box at a time.
         "edit.toggleLastState" | "history.selectState" | "edit.contentAwareScale" | "edit.puppetWarp" => Some(false),
+        // Switching the captured channel box to Warp edits the session, not document pixels.
+        "edit.transform.warp" => Some(t.warp.is_none()),
         // Save for Web exports the committed document and would ignore the pending box (#6737).
         SAVE_FOR_WEB => Some(false),
         // Rotate and Flip turn the box (not while warping, where the mesh is the box).
@@ -1340,7 +1374,18 @@ fn box_preset(id: &str) -> Option<(f64, f64, f64)> {
 /// `None` for other commands or when not transforming.
 /// The commands the open box answers itself ([`is_enabled`], [`intercept`]).
 fn box_command(id: &str) -> bool {
-    matches!(id, "edit.undo" | "edit.redo" | "edit.toggleLastState" | "edit.contentAwareScale" | "edit.puppetWarp" | SAVE_FOR_WEB) || box_preset(id).is_some()
+    matches!(
+        id,
+        "edit.undo"
+            | "edit.redo"
+            | "history.undo"
+            | "history.redo"
+            | "edit.toggleLastState"
+            | "history.selectState"
+            | "edit.contentAwareScale"
+            | "edit.puppetWarp"
+            | SAVE_FOR_WEB
+    ) || box_preset(id).is_some()
 }
 
 pub fn intercept(app: &mut PhotocraftApp, id: &str) -> Option<Result<serde_json::Value, String>> {
@@ -1349,8 +1394,8 @@ pub fn intercept(app: &mut PhotocraftApp, id: &str) -> Option<Result<serde_json:
         return box_command(id).then(|| Err(if warping { STILL_WARPING } else { STILL_APPLYING }.into()));
     }
     match id {
-        "edit.undo" => Some(Ok(step(app, false))),
-        "edit.redo" => Some(Ok(step(app, true))),
+        "edit.undo" | "history.undo" => Some(Ok(step(app, false))),
+        "edit.redo" | "history.redo" => Some(Ok(step(app, true))),
         "edit.toggleLastState" | "history.selectState" | "edit.contentAwareScale" | "edit.puppetWarp" | SAVE_FOR_WEB => {
             Some(Err("Commit or cancel the transform first".into()))
         }
@@ -2231,7 +2276,9 @@ pub fn draw_content(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
         mesh.add_triangle(0, 1, 2);
         mesh.add_triangle(0, 2, 3);
         painter.add(clip_to_canvas(mesh, canvas_size(pv), |p| xf.to_screen(p.x, p.y)));
-    } else if let Some(h) = Homography::rect_to_quad([0.0, 0.0, 1.0, 1.0], t.quad) {
+    } else if pv.channel.is_none()
+        && let Some(h) = Homography::rect_to_quad([0.0, 0.0, 1.0, 1.0], t.quad)
+    {
         // A 24×24 grid keeps perspective previews straight.
         let n = 24;
         let zoom = xf.zoom * painter.ctx().pixels_per_point();
@@ -2596,22 +2643,25 @@ fn draw_warp_content(
 ) {
     let r = t.rect;
     let m = w.to_mesh(1, 1);
-    let (us, vs) = crate::warp_preview::samples(&m, xf.zoom as f64);
-    let (tex, uv) = pv.texture.pick_display(painter.ctx(), xf.zoom * painter.ctx().pixels_per_point(), 1.0, t.interpolation == "nearest", display);
-    let mut mesh = egui::Mesh::with_texture(tex);
-    let tint = Color32::from_white_alpha((pv.opacity.clamp(0.0, 1.0) * 255.0) as u8);
-    for v in &vs {
-        for u in &us {
-            let (x, y) = w.map(r[0] + u * (r[2] - r[0]), r[1] + v * (r[3] - r[1]));
-            mesh.vertices.push(egui::epaint::Vertex { pos: pos2(x as f32, y as f32), uv: pos2(*u as f32 * uv[0], *v as f32 * uv[1]), color: tint });
+    if pv.channel.is_none() {
+        let (us, vs) = crate::warp_preview::samples(&m, xf.zoom as f64);
+        let (tex, uv) = pv.texture.pick_display(painter.ctx(), xf.zoom * painter.ctx().pixels_per_point(), 1.0, t.interpolation == "nearest", display);
+        let mut mesh = egui::Mesh::with_texture(tex);
+        let tint = Color32::from_white_alpha((pv.opacity.clamp(0.0, 1.0) * 255.0) as u8);
+        for v in &vs {
+            for u in &us {
+                let (x, y) = w.map(r[0] + u * (r[2] - r[0]), r[1] + v * (r[3] - r[1]));
+                mesh.vertices.push(egui::epaint::Vertex { pos: pos2(x as f32, y as f32), uv: pos2(*u as f32 * uv[0], *v as f32 * uv[1]), color: tint });
+            }
         }
-    }
-    let pos: Vec<[f32; 2]> = mesh.vertices.iter().map(|v| [v.pos.x, v.pos.y]).collect();
-    let rest: Vec<[f32; 2]> = vs.iter().flat_map(|v| us.iter().map(move |u| [(r[0] + u * (r[2] - r[0])) as f32, (r[1] + v * (r[3] - r[1])) as f32])).collect();
-    mesh.indices = crate::warp_preview::triangle_order(&pos, &rest, us.len());
-    painter.add(clip_to_canvas(mesh, canvas_size(pv), |p| xf.to_screen(p.x, p.y)));
-    if let Some(a) = &pv.above {
-        a.draw(painter, xf, display);
+        let pos: Vec<[f32; 2]> = mesh.vertices.iter().map(|v| [v.pos.x, v.pos.y]).collect();
+        let rest: Vec<[f32; 2]> =
+            vs.iter().flat_map(|v| us.iter().map(move |u| [(r[0] + u * (r[2] - r[0])) as f32, (r[1] + v * (r[3] - r[1])) as f32])).collect();
+        mesh.indices = crate::warp_preview::triangle_order(&pos, &rest, us.len());
+        painter.add(clip_to_canvas(mesh, canvas_size(pv), |p| xf.to_screen(p.x, p.y)));
+        if let Some(a) = &pv.above {
+            a.draw(painter, xf, display);
+        }
     }
 }
 
@@ -5094,6 +5144,57 @@ mod tests {
     }
 
     #[test]
+    fn channel_transform_warp_is_enabled_in_both_menus_without_retargeting_or_committing() {
+        for target in [json!("green"), json!("mask"), json!(0), json!("quickMask")] {
+            let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+            let expected = if target == "mask" {
+                app.run("layer.layerMask.revealAll", json!({})).unwrap();
+                app.run("channel.target", json!({"channel":"mask"})).unwrap();
+                app.run("view.layerMask", json!({"mode":"gray"})).unwrap();
+                json!("mask")
+            } else if target == 0 {
+                app.run("channel.new", json!({})).unwrap();
+                app.run("channel.target", json!({"channel":0})).unwrap();
+                json!({"channel":0})
+            } else if target == "quickMask" {
+                app.run("select.editInQuickMaskMode", json!({"on":true})).unwrap();
+                json!("quickMask")
+            } else {
+                app.run("channel.target", json!({"channel":"green"})).unwrap();
+                json!({"color":1})
+            };
+            app.run("select.rect", json!({"x":8,"y":8,"width":16,"height":16})).unwrap();
+            let ctx = egui::Context::default();
+            begin(&mut app, &ctx).unwrap_or_else(|e| panic!("{target}: {e}"));
+            let t = app.ui.transform.as_mut().unwrap();
+            t.quad = t.quad.map(|[x, y]| [x + 3.0, y + 2.0]);
+            let before = t.clone();
+            let st = app.session.active().unwrap();
+            let (source, eyes, history) = (st.doc.clone(), st.channel_view.clone(), st.history.past_len());
+            assert_eq!(before.target, Some(expected.clone()));
+            assert!(crate::menus::is_enabled(&app, "edit.transform.warp"), "main menu: {target}");
+            crate::canvas_tool_menu::open_transform(&mut app, &ctx, [10.0, 10.0]);
+            let menu = app.ui.canvas_tool_menu.clone().unwrap();
+            assert!(crate::canvas_tool_menu::available(&app, &menu, "edit.transform.warp"), "context menu: {target}");
+            crate::canvas_tool_menu::choose(&mut app, &ctx, "edit.transform.warp");
+            let t = app.ui.transform.as_ref().unwrap();
+            assert!(t.warp.is_some(), "{target}");
+            assert_eq!((t.session, t.rect, t.quad, t.target.as_ref()), (before.session, before.rect, before.quad, before.target.as_ref()));
+            let [x, y] = before.quad[0];
+            let mapped = t.warp.as_ref().unwrap().map(before.rect[0], before.rect[1]);
+            assert!((mapped.0 - x).abs() < 1e-6 && (mapped.1 - y).abs() < 1e-6, "the prior drag carries into Warp");
+            let st = app.session.active().unwrap();
+            assert!(std::sync::Arc::ptr_eq(&source, &st.doc));
+            assert_eq!(st.channel_view, eyes);
+            assert_eq!(st.history.past_len(), history);
+            assert_eq!(st.channel_transform.as_ref().unwrap().target, expected);
+            assert!(!crate::menus::is_enabled(&app, "edit.transform.warp"));
+            assert!(!crate::canvas_tool_menu::available(&app, &menu, "edit.transform.warp"));
+            cancel(&mut app);
+        }
+    }
+
+    #[test]
     fn right_click_menu_offers_warp_for_a_path() {
         // Photoshop's Transform Path menu has Warp too (#3027).
         let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
@@ -6072,14 +6173,15 @@ mod tests {
     fn targeted_unlinked_mask_transforms_alone_through_the_box() {
         let mut app = masked_app(false);
         app.ui.mask_target = true;
+        app.run("view.layerMask", json!({"mode":"overlay"})).unwrap();
         let ctx = egui::Context::default();
         begin(&mut app, &ctx).unwrap();
         let t = app.ui.transform.as_ref().unwrap();
         assert_eq!(t.target, Some(json!("mask")));
         assert_eq!(t.rect, [0.0, 0.0, 16.0, 64.0], "the box frames the mask's content");
-        // The preview document shows the mask vacated (revealed).
+        // The captured preview source stays immutable.
         let pd = &app.transform_preview.as_ref().unwrap().doc;
-        assert!(pd.layer(app.session.active().unwrap().active_layer.unwrap()).unwrap().mask.as_ref().unwrap().surface.sample_channel(4, 4, 0) > 0.99);
+        assert!(pd.layer(app.session.active().unwrap().active_layer.unwrap()).unwrap().mask.as_ref().unwrap().surface.sample_channel(4, 4, 0) < 0.01);
         // Move the box 20 px right and commit.
         let t = app.ui.transform.as_mut().unwrap();
         t.quad = t.quad.map(|[x, y]| [x + 20.0, y]);
@@ -6090,21 +6192,22 @@ mod tests {
         let m = &l.mask.as_ref().unwrap().surface;
         assert!(m.sample_channel(4, 30, 0) > 0.99 && m.sample_channel(30, 30, 0) < 0.01, "mask moved 20 px right");
         assert_eq!(l.surface().unwrap().content_bounds(), photocraft_geom::Rect::new(8, 8, 24, 24), "pixels untouched");
-        // Warp mode doesn't apply to a lone mask.
+        // Warp uses the same isolated mask target.
         app.ui.mask_target = true;
         begin(&mut app, &ctx).unwrap();
         enter_warp(&mut app, &egui::Context::default());
-        assert!(app.ui.transform.as_ref().unwrap().warp.is_none());
+        assert!(app.ui.transform.as_ref().unwrap().warp.is_some());
     }
 
     #[test]
-    fn linked_mask_target_transforms_the_layer() {
+    fn linked_mask_target_transforms_alone() {
         let mut app = masked_app(true);
         app.ui.mask_target = true;
+        app.run("view.layerMask", json!({"mode":"overlay"})).unwrap();
         let ctx = egui::Context::default();
         begin(&mut app, &ctx).unwrap();
-        assert_eq!(app.ui.transform.as_ref().unwrap().target, None);
-        assert_eq!(app.ui.transform.as_ref().unwrap().rect, [8.0, 8.0, 24.0, 24.0]);
+        assert_eq!(app.ui.transform.as_ref().unwrap().target, Some(json!("mask")));
+        assert_eq!(app.ui.transform.as_ref().unwrap().rect, [0.0, 0.0, 16.0, 64.0]);
     }
 
     /// ⌘T with Path Selection and a path transforms the path, not the layer's pixels, as one

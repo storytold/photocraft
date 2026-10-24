@@ -1598,6 +1598,14 @@ pub fn navigator_texture(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usiz
     // Keyed by the document snapshot, not its revision: selecting a layer changes no pixels.
     let (snapshot, id, revision, last_damage) =
         app.session.documents().get(idx).map(|st| (std::sync::Arc::downgrade(&st.doc), st.doc.id, st.revision, st.last_damage))?;
+    // Keep the last thumbnail during a Move drag. Asking display_doc first would build a
+    // full-resolution CPU Move preview even when the canvas uses the cached GPU source.
+    if app.session.active_index() == Some(idx)
+        && app.drag.as_ref().is_some_and(|d| d.tool == Tool::Move && d.points.len() > 1)
+        && let Some((_, _, _, t)) = app.navigator_textures.get(&id)
+    {
+        return Some(t.id());
+    }
     let (doc, preview_key) = display_doc(app, idx);
     let (display, display_key) = canvas_display(app, &doc, None);
     let preview_key = preview_key ^ display_key;
@@ -1944,10 +1952,8 @@ pub(crate) fn damage_since(app: &PhotocraftApp, idx: usize, seen: (u64, u64), no
 /// refreshes only that area instead of everything.
 pub(crate) fn shown_as_document(app: &mut PhotocraftApp, doc: photocraft_doc::DocId, was_preview: impl Fn(u64) -> bool) {
     let Some(d) = app.session.documents().iter().find(|st| st.doc.id == doc).map(|st| st.doc.clone()) else { return };
-    if let Some(c) = app.channel_views.get_mut(&doc.0)
-        && was_preview(c.preview_key)
-    {
-        c.preview_key = 0;
+    if let Some(c) = app.channel_views.get_mut(&doc.0) {
+        c.shown_as_document(&was_preview);
     }
     // Every display's cache of the document: the GPU state folds in the texture key, CPU
     // textures their display's key.
@@ -3579,10 +3585,19 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         // Live adjustment previews on big documents use a downsampled proxy (see proxy.rs), unless
         // Preferences › Performance › Low Resolution Previews is off.
         let mut on_gpu = false;
+        let channel_texture = crate::channel_transform_preview::texture(app, &ctx, idx, output).or_else(|| crate::move_ui::channel_texture(app, idx, output));
         // A flipped or pixel-aspect-corrected view draws through the CPU path (the GPU canvas shader
         // has no mirroring or non-square pixels). Rotation stays on the GPU: it is a view uniform.
         let gpu_ok = crate::gpu_canvas::gpu_view_ok(flip, view.rotation, aspect);
-        if app.gpu.is_some()
+        if let Some(tex) = channel_texture {
+            let checkerboard = app.session.prefs().transparency_and_gamut.square().map(|square| (checker(app, &ctx), square));
+            // A channel preview can change mask transparency: retain its checker rather than
+            // borrowing the committed document texture's cached opacity.
+            paint_cpu_document(&painter, &xf, doc.bounds(), view.rotation.abs() > 0.05, checkerboard, Some(tex), false);
+            for &c in &pattern {
+                paint_cpu_document(&painter, &pattern_xf(&xf, c, size), doc.bounds(), view.rotation.abs() > 0.05, checkerboard, Some(tex), false);
+            }
+        } else if app.gpu.is_some()
             && gpu_ok
             && let Some((k, key, preview_size)) = ensure_adjust_proxy(app, idx, render_zoom)
                 .or_else(|| ensure_filter_preview(app, idx, &ctx))
@@ -3666,7 +3681,9 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             }
         }
         // Channels panel: alpha / Quick Mask overlays and single-channel views (channel_view.rs).
-        if let Some(tex) = crate::channel_view::ensure(app, &ctx, idx) {
+        if channel_texture.is_none()
+            && let Some(tex) = crate::channel_view::ensure_for_display(app, &ctx, idx, output)
+        {
             if view.rotation.abs() > 0.05 {
                 paint_mapped_image(
                     &painter,
@@ -6242,6 +6259,7 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
             // the release point would otherwise nudge the layer onto a nearby edge.
             if d.tool == Tool::Move && d.points.len() < 2 && matches!(raw, ToolEvent::Up { x, y } if [x, y] == d.start) {
                 app.move_preview = None;
+                app.move_gpu_preview = None;
                 crate::move_mods::finish(app);
                 if d.sel_move.is_some() {
                     finish_selection_drag(app, true, d.start, d.start);
@@ -7278,6 +7296,37 @@ mod tests {
             Display { id: 4, name: "B".into(), frame: [100.0, 0.0, 100.0, 100.0], profile_name: None, icc: icc("display-p3") },
         ]));
         app
+    }
+
+    #[test]
+    fn pattern_preview_keeps_its_copies_during_a_channel_transform() {
+        let ctx = egui::Context::default();
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+        app.run("channel.target", json!({"channel":"green"})).unwrap();
+        app.ui.extras.rulers = false;
+        app.sync_views();
+        crate::transform_tool::begin(&mut app, &ctx).unwrap();
+        let tex = crate::channel_transform_preview::texture(&mut app, &ctx, 0, None).unwrap();
+        let mut view = app.ui.views[0].clone();
+        view.zoom = 1.0;
+        view.center = [32.0, 32.0];
+        view.fit_pending = false;
+        view.fill_pending = false;
+        let rect = Rect::from_min_size(Pos2::ZERO, vec2(256.0, 256.0));
+        let mut draw = |pattern: bool| {
+            app.ui.view.pattern_preview = pattern;
+            let input = egui::RawInput { screen_rect: Some(rect), ..Default::default() };
+            let mut out = ctx.run_ui(input, |ui| {
+                canvas_view(&mut app, ui, 0, rect, view.clone(), false);
+            });
+            let copies = out.shapes.iter().filter(|s| matches!(&s.shape, egui::Shape::Mesh(mesh) if mesh.texture_id == tex)).count();
+            out.textures_delta.clear();
+            copies
+        };
+        assert_eq!(draw(false), 1, "ordinary transform preview draws the centre tile");
+        assert!(draw(true) > 1, "Pattern Preview draws its surrounding copies during a channel transform");
+        crate::transform_tool::cancel(&mut app);
     }
 
     #[test]
@@ -8507,6 +8556,75 @@ mod tests {
                 .unwrap()
             );
             delta.clear();
+        }
+    }
+
+    #[test]
+    fn colour_channel_strokes_stay_coloured_in_live_and_committed_canvas_caches() {
+        for depth in [8, 16, 32] {
+            for (channel, component) in [("red", 0), ("green", 1), ("blue", 2)] {
+                for tool in [Tool::Brush, Tool::Pencil] {
+                    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+                    app.run("file.new", json!({"width":160,"height":80,"depth":depth})).unwrap();
+                    app.run("edit.fill", json!({"color":"#000000"})).unwrap();
+                    app.run("channel.target", json!({"channel":channel})).unwrap();
+                    app.run("channel.setVisible", json!({"channel":"composite","visible":true})).unwrap();
+                    app.run("tools.setColors", json!({"foreground":"#ffffff"})).unwrap();
+                    app.run("tools.setBrush", json!({"brush":{"size":12,"hardness":1.0,"smoothing":{"amount":0.0}}})).unwrap();
+                    app.ui.tool = tool;
+                    let ctx = egui::Context::default();
+                    let tex = ensure_texture(&mut app, &ctx, 0, None).unwrap().0;
+                    let mut delta = ctx.tex_manager().write().take_delta();
+                    let egui::ImageData::Color(image) = &delta.set.get(&tex).unwrap()[0].image;
+                    let mut cached = (**image).clone();
+                    delta.clear();
+                    let original = app.session.active().unwrap().doc.clone();
+                    let layer = app.session.active().unwrap().active_layer.unwrap();
+                    let mut expected = [0.0, 0.0, 0.0, 1.0];
+                    expected[component] = 1.0;
+                    tool_event(&mut app, ToolEvent::Down { x: 10.0, y: 40.0, pressure: 1.0 }, egui::Modifiers::NONE);
+                    for x in [40.0, 80.0, 130.0] {
+                        tool_event(&mut app, ToolEvent::Move { x, y: 40.0, pressure: 1.0 }, egui::Modifiers::NONE);
+                        let shown = display_doc(&mut app, 0).0;
+                        assert_eq!(shown.layer(layer).unwrap().surface().unwrap().rgba(20, 40), expected, "{depth} {channel} {tool:?}: live data");
+                        ensure_texture(&mut app, &ctx, 0, None);
+                        let mut delta = ctx.tex_manager().write().take_delta();
+                        let upload = &delta.set.get(&tex).unwrap()[0];
+                        let pos = upload.pos.expect("live stroke only uploads damage");
+                        let egui::ImageData::Color(image) = &upload.image;
+                        for row in 0..image.size[1] {
+                            let dst = (pos[1] + row) * cached.size[0] + pos[0];
+                            cached.pixels[dst..dst + image.size[0]].copy_from_slice(&image.pixels[row * image.size[0]..(row + 1) * image.size[0]]);
+                        }
+                        delta.clear();
+                        let (display, _) = canvas_display(&app, &shown, None);
+                        assert_eq!(
+                            cached,
+                            display_image(display.as_deref(), &photocraft_compose::flatten(&shown)),
+                            "{depth} {channel} {tool:?}: partial uploads match full preview"
+                        );
+                        assert!(std::sync::Arc::ptr_eq(&original, &app.session.active().unwrap().doc));
+                    }
+                    let shown = display_doc(&mut app, 0).0;
+                    tool_event(&mut app, ToolEvent::Up { x: 130.0, y: 40.0 }, egui::Modifiers::NONE);
+                    let committed = app.session.active().unwrap().doc.clone();
+                    assert_eq!(
+                        shown.layer(layer).unwrap().surface().unwrap().try_to_interleaved(shown.bounds()).unwrap(),
+                        committed.layer(layer).unwrap().surface().unwrap().try_to_interleaved(committed.bounds()).unwrap(),
+                        "{depth} {channel} {tool:?}: commit must exactly match the preview retained by the cache"
+                    );
+                    ensure_texture(&mut app, &ctx, 0, None);
+                    let mut delta = ctx.tex_manager().write().take_delta();
+                    let uploaded = delta.set.contains_key(&tex);
+                    delta.clear();
+                    assert!(!uploaded, "a matching commit needs no corrective upload");
+                    assert_eq!(committed.layer(layer).unwrap().surface().unwrap().rgba(20, 40), expected);
+                    app.session.undo();
+                    assert_eq!(app.session.active().unwrap().doc.layers, original.layers);
+                    app.session.redo();
+                    assert_eq!(app.session.active().unwrap().doc.layers, committed.layers);
+                }
+            }
         }
     }
 

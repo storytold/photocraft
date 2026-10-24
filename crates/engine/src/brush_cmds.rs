@@ -442,6 +442,8 @@ pub struct LiveStroke {
     /// passes it merged (a mirror joining redraws every tile).
     union_live: Option<(photocraft_paint::UnionLive, usize)>,
     pre: Surface,
+    /// Native colour component captured at stroke start; the preview and commit restrict alike.
+    color: Option<usize>,
     sel: Option<Surface>,
     lock: bool,
     layer: Option<photocraft_doc::LayerId>,
@@ -470,6 +472,7 @@ pub struct LiveCommit {
     pub(crate) points: Vec<StrokePoint>,
     pub(crate) surface: Surface,
     pub(crate) bounds: Rect,
+    pub(crate) color: Option<usize>,
 }
 
 impl LiveCommit {
@@ -486,6 +489,7 @@ impl LiveCommit {
     pub(crate) fn matches(&self, s: &Session, cmd: &str, p: &Value, pts: &[StrokePoint]) -> bool {
         let base = s.active().map(|st| (st.doc.id, st.revision));
         self.cmd == cmd
+            && self.color == crate::channel_cmds::color_restriction(s, cmd, p)
             && base == Some(self.base)
             && p.get("seed").and_then(Value::as_u64) == self.seed
             && self.points == pts
@@ -536,6 +540,7 @@ impl LiveStroke {
             mirror_distinct,
             union_live: None,
             pre,
+            color: crate::channel_cmds::color_restriction(s, cmd, p),
             sel,
             lock,
             layer,
@@ -553,7 +558,16 @@ impl LiveStroke {
     pub fn into_commit(mut self) -> Result<LiveCommit> {
         let bounds = self.bounds();
         let (surf, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc), self.layer, &self.params)?;
-        Ok(LiveCommit { cmd: self.cmd, base: self.base, params: self.params, seed: Some(self.seed), points: self.points, surface: surf.clone(), bounds })
+        Ok(LiveCommit {
+            cmd: self.cmd,
+            base: self.base,
+            params: self.params,
+            seed: Some(self.seed),
+            points: self.points,
+            surface: surf.clone(),
+            bounds,
+            color: self.color,
+        })
     }
 
     /// Everything the stroke has touched so far.
@@ -583,7 +597,7 @@ impl LiveStroke {
         check_coords(pts, &self.cmd)?;
         self.points.extend_from_slice(pts);
         let cmyk = self.cmyk.clone();
-        photocraft_color::convert::with_cmyk_space(cmyk.as_ref(), || {
+        let damage = photocraft_color::convert::with_cmyk_space(cmyk.as_ref(), || -> Result<Rect> {
             self.renderer.push(pts);
             if let Some(symmetry) = &self.symmetry {
                 for ((mirror, distinct), reflected) in self.mirrors.iter_mut().zip(&mut self.mirror_distinct).zip(symmetry.reflected_passes(pts)) {
@@ -629,7 +643,12 @@ impl LiveStroke {
                 dmg = dmg.union(&self.tail);
             }
             Ok(dmg)
-        })
+        })?;
+        if let Some(k) = self.color {
+            let (surf, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc), self.layer, &self.params)?;
+            crate::channel_cmds::restrict_color_region(&self.pre, surf, k, damage)?;
+        }
+        Ok(damage)
     }
 }
 

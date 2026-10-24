@@ -149,6 +149,8 @@ fn save_for_recovery(app: &mut PhotocraftApp) -> Result<(), String> {
 pub fn fall_back(app: &mut PhotocraftApp, fault: &photocraft_gpu::Fault) {
     let Some(gpu) = app.gpu.take() else { return };
     log::error!("{fault}; using the CPU renderer");
+    app.move_gpu_preview = None;
+    crate::channel_transform_preview::release_gpu(app);
     gpu.release();
     app.gpu_fault = Some(fault.clone());
     // Canvas caches pointed at GPU textures: rebuild them as egui textures.

@@ -55,6 +55,7 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     };
     let doc = st.doc.clone();
     let view = st.channel_view.clone();
+    let target_locked = photocraft_engine::channel_transform::locked(&app.session);
     // ⌥-click mask view (#196): gray shows the mask alone (colour eyes off), overlay over the composite.
     let mask_view = photocraft_engine::mask_view_cmds::current(st).map(|v| v.mode);
     let gray_view = mask_view == Some(photocraft_engine::mask_view_cmds::MaskViewMode::Gray);
@@ -113,12 +114,16 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     doc.channels[i].name.clone(),
                     1 + shown_colors + i,
                     Some(3 + shown_colors + i).filter(|s| *s <= 9),
-                    view.alpha_shown(i),
+                    view.alpha_shown(i) && !gray_view,
                     view.target == ChannelTarget::Alpha(i),
                 ),
-                Row::QuickMask => {
-                    ("Quick Mask".to_string(), 1 + shown_colors + doc.channels.len(), None, !view.quick_mask_hidden, view.target == ChannelTarget::Composite)
-                }
+                Row::QuickMask => (
+                    "Quick Mask".to_string(),
+                    1 + shown_colors + doc.channels.len(),
+                    None,
+                    !view.quick_mask_hidden && !gray_view,
+                    view.target == ChannelTarget::Composite,
+                ),
                 Row::LayerMask => {
                     (masked.as_ref().map(|l| format!("{} Mask", l.name)).unwrap_or_default(), usize::MAX, None, mask_view.is_some(), mask_targeted)
                 }
@@ -152,8 +157,6 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 match row {
                     // The mask's eye: the overlay on, or the mask view off.
                     Row::LayerMask => actions.push((view_cmd, json!({ "layer": layer_id, "mode": if visible { "off" } else { "overlay" } }))),
-                    // Showing the composite again over a gray mask view keeps the mask as an overlay.
-                    Row::Composite if gray_view => actions.push((view_cmd, json!({ "layer": layer_id, "mode": "overlay" }))),
                     _ => actions.push(("channel.setVisible".into(), json!({ "channel": row.reference(), "visible": !visible }))),
                 }
             }
@@ -167,7 +170,7 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             }
             drawn.push((name.clone(), thumb));
             // Rows are painted: name them for screen readers and UI tests.
-            resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected, &name));
+            resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, !target_locked, selected, &name));
             // Spot channels: a swatch of the ink on the thumbnail corner.
             if let Row::Alpha(i) = row
                 && let Some((ink, _)) = doc.channels[i].spot
@@ -198,7 +201,7 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 );
             }
             let rename_id = egui::Id::new(("chan-rename", doc.id.0, format!("{:?}", row.reference())));
-            if resp.clicked() && !eye_resp.clicked() {
+            if resp.clicked() && !eye_resp.clicked() && !target_locked {
                 let m = ui.input(|i| i.modifiers);
                 if m.command && row == Row::LayerMask {
                     let layer = masked.as_ref().map(|l| l.id.0);
@@ -220,7 +223,7 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             // Like Photoshop: double-clicking the thumbnail opens Channel Options (where an alpha
             // channel becomes a spot channel, #3761), double-clicking the name renames it.
             let on_thumb = resp.interact_pointer_pos().is_some_and(|p| p.x < cell.right() + 4.0);
-            if row == Row::QuickMask && resp.double_clicked() {
+            if row == Row::QuickMask && resp.double_clicked() && !target_locked {
                 actions.push(("ui.channelOptions".into(), json!("quickMask")));
             }
             // The layer mask's row: Layer Mask Display Options (the rubylith's colour, opacity).
@@ -228,9 +231,9 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 actions.push(("ui.channelOptions".into(), json!("mask")));
             }
             if let Row::Alpha(i) = row {
-                if resp.double_clicked() && on_thumb {
+                if resp.double_clicked() && on_thumb && !target_locked {
                     actions.push(("ui.channelOptions".into(), json!(i)));
-                } else if resp.double_clicked() {
+                } else if resp.double_clicked() && !target_locked {
                     ctx.data_mut(|d| d.insert_temp(rename_id, name.clone()));
                 }
                 if let Some(mut text) = ctx.data(|d| d.get_temp::<String>(rename_id)) {
@@ -467,12 +470,85 @@ mod tests {
     use super::*;
 
     #[test]
+    fn live_transform_eyes_accept_clicks_while_channel_rows_stay_locked() {
+        use egui_kittest::kittest::Queryable;
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width":32,"height":24})).unwrap();
+        app.run("channel.target", json!({"channel":"red"})).unwrap();
+        app.sync_views();
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(300.0, 400.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    show(app, ui);
+                }
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, Default::default());
+        h.run_steps(2);
+        let ctx = h.ctx.clone();
+        crate::transform_tool::begin(h.state_mut(), &ctx).unwrap();
+        h.run_steps(2);
+        let quad = h.state().ui.transform.as_ref().unwrap().quad;
+        let history = h.state().session.active().unwrap().history.past_len();
+        h.get_by_label("Green").click();
+        h.run_steps(2);
+        assert_eq!(h.state().session.active().unwrap().channel_view.target, ChannelTarget::Color(0));
+        h.get_by_label("Visibility Green").click();
+        h.run_steps(2);
+        assert!(h.state().session.active().unwrap().channel_view.color_visible(1));
+        h.get_by_label("Visibility Red").click();
+        h.run_steps(2);
+        assert!(!h.state().session.active().unwrap().channel_view.color_visible(0));
+        assert_eq!(h.state().ui.transform.as_ref().unwrap().quad, quad);
+        h.get_by_label("Visibility RGB").click();
+        h.run_steps(2);
+        assert_eq!(h.state().session.active().unwrap().channel_view.visible_colors(3), 3);
+        assert_eq!(h.state().session.active().unwrap().channel_view.target, ChannelTarget::Color(0));
+        assert_eq!(h.state().session.active().unwrap().history.past_len(), history);
+        crate::transform_tool::cancel(h.state_mut());
+    }
+
+    #[test]
     fn modifier_operations() {
         let m = |shift, alt| egui::Modifiers { command: true, shift, alt, ..Default::default() };
         assert_eq!(load_operation(m(false, false)), "new");
         assert_eq!(load_operation(m(true, false)), "add");
         assert_eq!(load_operation(m(false, true)), "subtract");
         assert_eq!(load_operation(m(true, true)), "intersect");
+    }
+
+    #[test]
+    fn colour_eye_exits_grayscale_mask_view_without_unlocking_the_transform_target() {
+        use egui_kittest::kittest::Queryable;
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width":32,"height":24})).unwrap();
+        app.run("layer.layerMask.revealAll", json!({})).unwrap();
+        app.run("channel.target", json!({"channel":"mask"})).unwrap();
+        app.run("view.layerMask", json!({"mode":"gray"})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(300.0, 400.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    show(app, ui);
+                }
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, Default::default());
+        h.run_steps(2);
+        let ctx = h.ctx.clone();
+        crate::transform_tool::begin(h.state_mut(), &ctx).unwrap();
+        h.get_by_label("Visibility Green").click();
+        h.run_steps(2);
+        let st = h.state().session.active().unwrap();
+        assert_eq!(photocraft_engine::mask_view_cmds::current(st).unwrap().mode, photocraft_engine::mask_view_cmds::MaskViewMode::Overlay);
+        assert_eq!(st.channel_view.visible_colors(3), 1);
+        assert!(st.channel_view.color_visible(1));
+        h.get_by_label("Green").click();
+        h.run_steps(2);
+        assert_eq!(h.state().session.active().unwrap().channel_view.target, ChannelTarget::LayerMask);
+        assert_eq!(h.state().ui.transform.as_ref().unwrap().target, Some(json!("mask")));
+        crate::transform_tool::cancel(h.state_mut());
     }
 
     #[test]

@@ -584,6 +584,11 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 let mask_target = bool_field(p, "maskTarget")?;
                 let updates_open = bool_field(p, "updatesOpen")?;
                 let vector_mask_target = bool_field(p, "vectorMaskTarget")?;
+                if photocraft_engine::channel_transform::locked(&app.session)
+                    && (mask_target.is_some_and(|v| v != app.ui.mask_target) || vector_mask_target.is_some_and(|v| v != app.ui.vector_mask_target))
+                {
+                    return Err(photocraft_engine::channel_transform::LOCKED.into());
+                }
                 let selection_mode = uint_field(p, "selectionMode")?;
                 let dock_tabs = merged_object(&app.ui.dock_tabs, p.get("dockTabs"), "dockTabs")?;
                 let dock = whole_object(&app.ui.dock, p.get("dock"), "dock")?;
@@ -847,6 +852,7 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 "layerStyle" | "LayerStyle" => {
                     return match crate::layer_style::open(app, s("effect")) {
                         Some(id) => ok(json!({"dialog": id})),
+                        None if photocraft_engine::channel_transform::locked(&app.session) => err(photocraft_engine::channel_transform::LOCKED),
                         None => err("no active layer"),
                     };
                 }
@@ -1455,6 +1461,24 @@ mod tests {
             Outcome::Done(v) => v,
             _ => panic!("{method}: expected an immediate reply"),
         }
+    }
+
+    #[test]
+    fn layer_style_automation_reports_the_channel_transform_lock() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        assert_eq!(call(&mut app, &ctx, "ui.dialog.open", json!({"kind":"layerStyle"}))["error"], "no active layer");
+        app.run("file.new", json!({"width":16,"height":16})).unwrap();
+        app.run("channel.target", json!({"channel":"green"})).unwrap();
+        crate::transform_tool::begin(&mut app, &ctx).unwrap();
+        let before = app.session.active().unwrap().doc.clone();
+        let captured = app.ui.transform.clone();
+        let error = call(&mut app, &ctx, "ui.dialog.open", json!({"kind":"layerStyle"}));
+        assert_eq!(error["ok"], false);
+        assert!(error["error"].as_str().is_some_and(|message| message.contains(photocraft_engine::channel_transform::LOCKED)));
+        assert!(std::sync::Arc::ptr_eq(&before, &app.session.active().unwrap().doc));
+        assert_eq!(app.ui.transform, captured);
+        crate::transform_tool::cancel(&mut app);
     }
 
     #[test]

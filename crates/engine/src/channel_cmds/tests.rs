@@ -169,6 +169,37 @@ fn channel_management_and_view_state() {
 }
 
 #[test]
+fn invalidated_channel_target_restores_a_visible_composite_only_when_needed() {
+    let mut s = session();
+    s.execute("channel.new", json!({"name":"Temporary"})).unwrap();
+    assert_eq!(s.active().unwrap().channel_view.target, ChannelTarget::Alpha(0));
+    assert_eq!(s.active().unwrap().channel_view.visible_colors(3), 0);
+    assert!(s.undo(), "undo removes the targeted alpha channel");
+    let view = &s.active().unwrap().channel_view;
+    assert!(doc(&s).channels.is_empty());
+    assert_eq!(view.target, ChannelTarget::Composite);
+    assert_eq!(view.visible_colors(3), 3, "invalidated solo view must not leave an empty canvas");
+
+    // Deliberately hiding every eye does not silently restore them when the target is valid.
+    let st = s.active_mut().unwrap();
+    for channel in 0..3 {
+        st.channel_view.set_color_visible(channel, false);
+    }
+    fix_view(st);
+    assert_eq!(st.channel_view.visible_colors(3), 0);
+
+    // A different visible channel remains the user's view when a stale target is repaired.
+    s.execute("channel.new", json!({"name":"Keep"})).unwrap();
+    let st = s.active_mut().unwrap();
+    st.channel_view.target = ChannelTarget::Alpha(9);
+    st.channel_view.set_alpha_visible(0, true);
+    fix_view(st);
+    assert_eq!(st.channel_view.target, ChannelTarget::Composite);
+    assert_eq!(st.channel_view.visible_colors(3), 0);
+    assert!(st.channel_view.alpha_shown(0));
+}
+
+#[test]
 fn deleting_an_earlier_channel_keeps_the_last_channel_targeted() {
     for depth in [8, 16, 32] {
         let mut s = session_depth(depth);
@@ -822,6 +853,47 @@ fn channel_target_layer_mask_and_vector_mask() {
 }
 
 #[test]
+fn rejecting_a_mask_eye_preserves_gray_mask_view_and_revision() {
+    let mut s = session();
+    s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+    s.execute("view.layerMask", json!({"mode":"gray"})).unwrap();
+    let st = s.active().unwrap();
+    let before = st.doc.clone();
+    let view = st.channel_view.clone();
+    let revision = st.revision;
+    let steps = st.history.past_len();
+    assert!(s.execute("channel.setVisible", json!({"channel":"mask","visible":false})).is_err());
+    let st = s.active().unwrap();
+    assert!(std::sync::Arc::ptr_eq(&before, &st.doc));
+    assert_eq!(st.channel_view, view);
+    assert_eq!(st.revision, revision);
+    assert_eq!(st.history.past_len(), steps);
+}
+
+#[test]
+fn nonexistent_quick_mask_eye_preserves_view_and_revision() {
+    for gray_mask in [false, true] {
+        let mut s = session();
+        if gray_mask {
+            s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+            s.execute("view.layerMask", json!({"mode":"gray"})).unwrap();
+        }
+        assert!(s.active().unwrap().doc.quick_mask.is_none());
+        let st = s.active().unwrap();
+        let before = st.doc.clone();
+        let view = st.channel_view.clone();
+        let revision = st.revision;
+        let steps = st.history.past_len();
+        assert!(s.execute("channel.setVisible", json!({"channel":"quickMask","visible":true})).is_err());
+        let st = s.active().unwrap();
+        assert!(std::sync::Arc::ptr_eq(&before, &st.doc));
+        assert_eq!(st.channel_view, view);
+        assert_eq!(st.revision, revision);
+        assert_eq!(st.history.past_len(), steps);
+    }
+}
+
+#[test]
 fn clear_with_a_colour_channel_targeted_clears_only_that_channel() {
     let near = |a: &[f32], b: &[f32]| a.len() == b.len() && a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-3);
     // The Background, then a normal layer (Delete there can't make one channel transparent).
@@ -968,4 +1040,180 @@ fn layers_panel_mask_target_isolates_the_curve_channel() {
     s.execute("select.editInQuickMaskMode", json!({"on": true})).unwrap();
     let row = isolated_curve_channel_for(s.active().unwrap(), true).expect("quick mask wins");
     assert_eq!((row.name.as_str(), row.gray), ("Quick Mask", Some(GraySurface::QuickMask)));
+}
+
+/// #6068: with one colour channel targeted, the Move tool moves that channel of the active
+/// layer; the other channels, the transparency and the layer's position stay. Where the channel
+/// moved away from takes the background colour's value for it, as Clear does (#2720).
+#[test]
+fn move_with_a_colour_channel_targeted_moves_only_that_channel() {
+    let mut s = session();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("edit.fill", json!({"color": "#808080"})).unwrap();
+    rect(&mut s, 0, 0, 4, 4, "replace");
+    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    let gray = px(&s, 20, 10);
+    let red_block = px(&s, 1, 1);
+    let bounds = |s: &Session| {
+        let d = s.active().unwrap();
+        d.doc.layer(d.active_layer.unwrap()).unwrap().surface().unwrap().content_bounds()
+    };
+    let before_bounds = bounds(&s);
+    let steps = s.active().unwrap().history.entries().len();
+    s.tools.background = [0.0, 0.0, 0.0, 1.0];
+    s.execute("channel.target", json!({"channel": "red"})).unwrap();
+    s.execute("layer.translate", json!({"dx": 10, "dy": 5})).unwrap();
+    // The block's red moved to (11, 6); its green and blue stayed where they were.
+    assert_eq!(px(&s, 11, 6), vec![red_block[0], gray[1], gray[2], 1.0]);
+    // Where the red came from it is the background colour's red (black: 0); green and blue stay.
+    assert_eq!(px(&s, 1, 1), vec![0.0, red_block[1], red_block[2], 1.0]);
+    // Elsewhere the red is the gray's, moved along from (10, 5).
+    assert_eq!(px(&s, 20, 10), gray);
+    assert_eq!(bounds(&s), before_bounds, "the layer itself does not move");
+    let entries = s.active().unwrap().history.entries();
+    assert_eq!(entries.len(), steps + 1);
+    assert!(entries.last().unwrap().to_string().contains("Move"), "{entries:?}");
+    // One undo puts the channel back.
+    s.undo();
+    assert_eq!(px(&s, 1, 1), red_block);
+    assert_eq!(px(&s, 11, 6), gray);
+    // With the composite targeted the Move tool moves the layer again.
+    s.execute("channel.target", json!({"channel": "composite"})).unwrap();
+    s.execute("layer.translate", json!({"dx": 10, "dy": 5})).unwrap();
+    assert_eq!(px(&s, 11, 6), red_block);
+    assert_ne!(bounds(&s), before_bounds);
+}
+
+/// #6068: a channel can't move on a layer without pixels, or on a position-locked layer; the
+/// document stays as it was.
+#[test]
+fn move_with_a_colour_channel_targeted_refuses_layers_it_cannot_move() {
+    let mut s = session();
+    // The Background is position-locked.
+    s.execute("channel.target", json!({"channel": "green"})).unwrap();
+    let before = s.active().unwrap().doc.clone();
+    let err = s.execute("layer.translate", json!({"dx": 3, "dy": 0})).unwrap_err().to_string();
+    assert!(err.contains("position-locked"), "{err}");
+    assert_eq!(*s.active().unwrap().doc, *before);
+    // A fill layer has no pixels of its own.
+    s.execute("layer.newFillLayer.solidColor", json!({"color": "#336699"})).unwrap();
+    s.execute("channel.target", json!({"channel": "green"})).unwrap();
+    let before = s.active().unwrap().doc.clone();
+    assert!(s.execute("layer.translate", json!({"dx": 3, "dy": 0})).is_err());
+    assert_eq!(*s.active().unwrap().doc, *before);
+}
+
+#[test]
+fn move_channel_preserves_native_samples_and_undo_across_modes_and_depths() {
+    use photocraft_color::Color;
+    use photocraft_doc::Size;
+
+    for mode in [ColorMode::Rgb, ColorMode::Cmyk, ColorMode::Lab] {
+        for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+            let mut s = Session::new();
+            s.add_document(Document::with_background("move", Size::new(8, 4), mode, depth, Color::WHITE), None);
+            s.execute("layer.new.layer", json!({})).unwrap();
+            s.edit("fixture", |doc, active| {
+                let surf = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+                let n = surf.format().channels();
+                for y in 0..4 {
+                    for x in 0..8 {
+                        let mut pixel: Vec<_> = (0..n).map(|c| (x + 1 + y * 8 + c as i32) as f32 / 40.0).collect();
+                        if depth == SampleType::F32 {
+                            pixel[1] = if x % 2 == 0 { -0.25 } else { 1.75 };
+                        }
+                        pixel[n - 1] = 0.75;
+                        surf.write_pixel(x, y, &pixel);
+                    }
+                }
+                Ok(())
+            })
+            .unwrap();
+            let id = s.active().unwrap().active_layer.unwrap();
+            let surface = |s: &Session| s.active().unwrap().doc.layer(id).unwrap().surface().unwrap().clone();
+            let original = surface(&s);
+            let fmt = original.format();
+            let bpp = fmt.bytes_per_pixel();
+            let bytes = depth.bytes();
+            let k = 1;
+            let before = original.try_to_interleaved(Rect::new(0, 0, 8, 4)).unwrap();
+            s.tools.background = [0.2, 0.4, 0.6, 1.0];
+            s.execute("channel.target", json!({"channel":{"color":k}})).unwrap();
+            s.execute("layer.translate", json!({"dx":1,"dy":0})).unwrap();
+            let after = surface(&s).try_to_interleaved(Rect::new(0, 0, 8, 4)).unwrap();
+            for (a, b) in after.chunks_exact(bpp).zip(before.chunks_exact(bpp)) {
+                for c in 0..fmt.channels() {
+                    if c != k {
+                        assert_eq!(&a[c * bytes..(c + 1) * bytes], &b[c * bytes..(c + 1) * bytes], "{mode:?}/{depth:?}/{c}");
+                    }
+                }
+            }
+            for x in 1..8 {
+                let src = ((x - 1) * bpp) + k * bytes;
+                let dst = x * bpp + k * bytes;
+                assert_eq!(&after[dst..dst + bytes], &before[src..src + bytes], "{mode:?}/{depth:?}/x={x}");
+            }
+            s.undo();
+            assert_eq!(surface(&s).try_to_interleaved(Rect::new(0, 0, 8, 4)).unwrap(), before);
+            s.redo();
+            assert_eq!(surface(&s).try_to_interleaved(Rect::new(0, 0, 8, 4)).unwrap(), after);
+        }
+    }
+}
+
+#[test]
+fn move_channel_target_precedence_and_bad_input() {
+    let mut s = session();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("edit.fill", json!({"color":"#804020"})).unwrap();
+    let id = s.active().unwrap().active_layer.unwrap();
+    s.execute("channel.target", json!({"channel":"red"})).unwrap();
+    let before = s.active().unwrap().doc.clone();
+    for target in [json!({"color":99}), json!({"color":"red"})] {
+        assert!(s.execute("layer.translate", json!({"dx":1,"target":target})).is_err());
+        assert_eq!(*s.active().unwrap().doc, *before);
+    }
+    // An explicit channel beats the Channels panel; an explicit layer alone moves all pixels.
+    s.execute("layer.translate", json!({"dx":1,"target":{"color":1}})).unwrap();
+    assert_eq!(px(&s, 1, 0)[0], before.layer(id).unwrap().surface().unwrap().sample_channel(1, 0, 0));
+    s.undo();
+    s.execute("layer.translate", json!({"dx":1,"layer":null})).unwrap();
+    assert_eq!(px(&s, 0, 0)[1], before.layer(id).unwrap().surface().unwrap().sample_channel(0, 0, 1));
+    assert_ne!(px(&s, 0, 0)[0], before.layer(id).unwrap().surface().unwrap().sample_channel(0, 0, 0));
+    s.undo();
+    s.execute("layer.translate", json!({"dx":1,"layer":id.0})).unwrap();
+    let after = s.active().unwrap().doc.layer(id).unwrap().surface().unwrap();
+    assert_eq!(after.pixel(1, 0), before.layer(id).unwrap().surface().unwrap().pixel(0, 0));
+}
+
+#[test]
+fn move_channel_crosses_tiles_and_handles_extreme_offsets() {
+    use photocraft_color::Color;
+    use photocraft_doc::Size;
+
+    let mut s = Session::new();
+    s.add_document(Document::with_background("move", Size::new(260, 2), ColorMode::Rgb, SampleType::F32, Color::WHITE), None);
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.edit("fixture", |doc, active| {
+        let surf = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+        for x in 0..260 {
+            surf.write_pixel(x, 0, &[x as f32 / 100.0 - 0.5, 0.3, 0.7, 1.0]);
+        }
+        Ok(())
+    })
+    .unwrap();
+    let id = s.active().unwrap().active_layer.unwrap();
+    let original = s.active().unwrap().doc.layer(id).unwrap().surface().unwrap().clone();
+    s.execute("channel.target", json!({"channel":"red"})).unwrap();
+    s.execute("layer.translate", json!({"dx":9})).unwrap();
+    let shifted = s.active().unwrap().doc.layer(id).unwrap().surface().unwrap();
+    for x in [127, 128, 129, 255] {
+        assert_eq!(shifted.sample_channel(x, 0, 0).to_bits(), original.sample_channel(x - 9, 0, 0).to_bits());
+        assert_eq!(shifted.sample_channel(x, 0, 1).to_bits(), original.sample_channel(x, 0, 1).to_bits());
+    }
+    s.undo();
+    s.execute("layer.translate", json!({"dx":i32::MIN})).unwrap();
+    let shifted = s.active().unwrap().doc.layer(id).unwrap().surface().unwrap();
+    assert_eq!(shifted.sample_channel(128, 0, 0), 1.0, "no source remains in bounds; white background fills red");
 }

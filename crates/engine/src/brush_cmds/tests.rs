@@ -733,6 +733,44 @@ fn pencil_latency_24mp() {
     }
 }
 
+/// Native channel restoration must scale with stroke damage, rather than the 24 MP canvas.
+#[test]
+#[ignore]
+fn colour_channel_brush_latency_24mp() {
+    for target in ["composite", "green"] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width":6000,"height":4000,"background":"#000000"})).unwrap();
+        s.execute("channel.target", json!({"channel":target})).unwrap();
+        let mut p = json!({"points":[[100,1000]],"color":"#ffffff","seed":17,
+            "brush":{"size":32,"hardness":1.0,"smoothing":{"amount":0.0}}});
+        let t = std::time::Instant::now();
+        let mut live = LiveStroke::begin(&s, &p).unwrap();
+        let begin = t.elapsed().as_secs_f64() * 1000.0;
+        let mut points = vec![[100.0, 1000.0]];
+        let mut steps = Vec::new();
+        for i in 1..=300 {
+            let q = [100.0 + f64::from(i) * 15.0, 1000.0 + (f64::from(i) * 0.07).sin() * 200.0];
+            points.push(q);
+            let t = std::time::Instant::now();
+            live.push(&[StrokePoint::new(q[0], q[1], 1.0)]).unwrap();
+            steps.push(t.elapsed().as_secs_f64() * 1000.0);
+        }
+        p["points"] = json!(points);
+        p["seed"] = json!(live.seed);
+        let t = std::time::Instant::now();
+        s.offer_live_stroke(live).unwrap();
+        assert_eq!(s.execute("paint.stroke", p).unwrap()["fromLive"], true);
+        let commit = t.elapsed().as_secs_f64() * 1000.0;
+        steps.sort_by(f64::total_cmp);
+        println!(
+            "24 MP {target}: begin {begin:.3} ms, move p50 {:.3} ms p95 {:.3} ms max {:.3} ms, live commit {commit:.3} ms",
+            steps[steps.len() / 2],
+            steps[steps.len() * 95 / 100],
+            steps[steps.len() - 1]
+        );
+    }
+}
+
 #[test]
 fn live_stroke_equals_the_commit_at_every_zoom_with_smoothing() {
     // #189: the preview while dragging must be the committed stroke (within 1/255), with a soft
@@ -1147,6 +1185,125 @@ fn a_commit_takes_the_live_strokes_pixels_and_they_equal_a_fresh_render() {
         s.undo();
         assert!(same_pixels(&surface(&s), &surface(&session(200, 100)), Rect::new(0, 0, 200, 100)));
     }
+}
+
+#[test]
+fn colour_channel_live_strokes_preserve_native_samples_and_match_replay() {
+    use crate::channel_cmds::ChannelTarget;
+    use photocraft_color::{Color, ColorMode, SampleType};
+    use photocraft_doc::{Document, LayerContent, Size};
+    let points = [[12.0, 25.0, 1.0], [110.0, 50.0, 0.6], [252.0, 30.0, 1.0], [290.0, 45.0, 0.8]];
+    for mode in [ColorMode::Rgb, ColorMode::Cmyk, ColorMode::Lab] {
+        for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+            for k in 0..mode.color_channels() {
+                for (cmd, selected) in [("paint.stroke", false), ("paint.stroke", true), ("paint.pencil", true)] {
+                    let mut doc = Document::with_background("paint channels", Size::new(320, 80), mode, depth, Color::WHITE);
+                    let fmt = doc.pixel_format();
+                    let mut pixels = Surface::new(fmt);
+                    for y in 0..80 {
+                        for x in 0..320 {
+                            let mut p: Vec<f32> = (0..fmt.channels()).map(|c| ((x + y + c as i32) % 19) as f32 / 24.0).collect();
+                            // Untargeted signed/HDR colour and non-opaque alpha must survive bit for bit.
+                            if depth == SampleType::F32 {
+                                for (c, v) in p.iter_mut().enumerate().take(mode.color_channels()) {
+                                    if c != k {
+                                        *v = if c % 2 == 0 { -0.75 } else { 3.5 };
+                                    }
+                                }
+                            }
+                            *p.last_mut().unwrap() = 0.625;
+                            pixels.write_pixel(x, y, &p);
+                        }
+                    }
+                    doc.layers[0].content = LayerContent::Raster(pixels);
+                    let mut s = Session::new();
+                    s.add_document(doc, None);
+                    if selected {
+                        s.execute("select.rect", json!({"x":20,"y":10,"width":260,"height":55})).unwrap();
+                        s.execute("select.modify.feather", json!({"radius":4})).unwrap();
+                        s.execute("paint.setSymmetry", json!({"mode":"vertical","center":[160,40]})).unwrap();
+                    }
+                    s.execute("channel.target", json!({"channel":{"color":k}})).unwrap();
+                    let original = s.active().unwrap().doc.clone();
+                    let before = surface(&s).try_to_interleaved(original.bounds()).unwrap();
+                    let base = json!({"points":[points[0]],"color":"#ffffff","seed":17,"target":"pixels",
+                        "brush":{"size":14,"hardness":0.3,"pressureSize":true,"smoothing":{"amount":if selected {0.3} else {0.0}}}});
+                    let mut live = LiveStroke::begin_with(&s, cmd, &base).unwrap();
+                    let mut params = base;
+                    for n in 1..points.len() {
+                        let q = points[n];
+                        live.push(&[StrokePoint::new(q[0], q[1], q[2] as f32)]).unwrap();
+                        params["points"] = json!(&points[..=n]);
+                        params["seed"] = json!(live.seed);
+                        let preview = live.doc.layers[0].surface().unwrap().try_to_interleaved(original.bounds()).unwrap();
+                        for (a, b) in preview.chunks_exact(fmt.bytes_per_pixel()).zip(before.chunks_exact(fmt.bytes_per_pixel())) {
+                            for c in 0..fmt.channels() {
+                                if c != k {
+                                    let r = c * depth.bytes()..(c + 1) * depth.bytes();
+                                    assert_eq!(a[r.clone()], b[r], "{mode:?}/{depth:?}/{k}/{cmd}/{selected}: native component {c}");
+                                }
+                            }
+                        }
+                        let mut replay = Session::new();
+                        replay.add_document((*original).clone(), None);
+                        replay.active_mut().unwrap().channel_view.target = ChannelTarget::Color(k);
+                        replay.active_mut().unwrap().symmetry = s.active().unwrap().symmetry.clone();
+                        replay.execute(cmd, params.clone()).unwrap();
+                        assert_eq!(
+                            preview,
+                            surface(&replay).try_to_interleaved(original.bounds()).unwrap(),
+                            "{mode:?}/{depth:?}/{k}/{cmd}/{selected}: each live update matches replay"
+                        );
+                        assert!(std::sync::Arc::ptr_eq(&original, &s.active().unwrap().doc));
+                    }
+                    let preview = live.doc.layers[0].surface().unwrap().try_to_interleaved(original.bounds()).unwrap();
+                    assert_ne!(preview, before, "targeted component changed");
+                    let history = s.active().unwrap().history.past_len();
+                    s.offer_live_stroke(live).unwrap();
+                    assert_eq!(s.execute(cmd, params).unwrap()["fromLive"], true);
+                    assert_eq!(surface(&s).try_to_interleaved(original.bounds()).unwrap(), preview);
+                    assert_eq!(s.active().unwrap().history.past_len(), history + 1);
+                    s.undo();
+                    assert_eq!(surface(&s).try_to_interleaved(original.bounds()).unwrap(), before);
+                    s.redo();
+                    assert_eq!(surface(&s).try_to_interleaved(original.bounds()).unwrap(), preview);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn colour_channel_live_offer_cannot_be_reused_for_a_different_component() {
+    use crate::channel_cmds::ChannelTarget;
+    let mut s = session(80, 40);
+    s.active_mut().unwrap().channel_view.target = ChannelTarget::Color(1);
+    let (live, p) = live_and_commit(&s, "paint.stroke", json!({"size":8,"color":"#ffffff"}), &[[10.0, 20.0, 1.0], [70.0, 20.0, 1.0]]);
+    s.offer_live_stroke(live).unwrap();
+    // Simulate a target change without a document revision, so matching must check the component.
+    s.active_mut().unwrap().channel_view.target = ChannelTarget::Color(0);
+    let result = s.execute("paint.stroke", p).unwrap();
+    assert!(result.get("fromLive").is_none());
+    assert_eq!(surface(&s).pixel(40, 20), vec![1.0, 0.0, 0.0, 0.0]);
+}
+
+#[test]
+fn colour_channel_restore_rejects_bad_indices_and_allocation_failures_transactionally() {
+    let mut s = session(80, 40);
+    s.execute("channel.target", json!({"channel":"green"})).unwrap();
+    let original = s.active().unwrap().doc.clone();
+    let steps = s.active().unwrap().history.past_len();
+    crate::allocation::fail_next_for_test();
+    assert!(LiveStroke::begin(&s, &json!({"points":[[20,20]],"size":8})).is_err());
+    assert!(std::sync::Arc::ptr_eq(&original, &s.active().unwrap().doc));
+    crate::allocation::fail_next_for_test();
+    assert!(s.execute("paint.stroke", json!({"points":[[20,20]],"size":8})).is_err());
+    assert!(std::sync::Arc::ptr_eq(&original, &s.active().unwrap().doc));
+    assert_eq!(s.active().unwrap().history.past_len(), steps);
+    let old = surface(&s);
+    let mut new = old.clone();
+    assert!(crate::channel_cmds::restrict_color_region(&old, &mut new, usize::MAX, Rect::new(0, 0, 1, 1)).is_err());
+    assert_eq!(new, old);
 }
 
 #[test]

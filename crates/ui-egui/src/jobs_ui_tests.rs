@@ -868,6 +868,84 @@ fn esc_cancels_a_background_free_transform_commit() {
     assert_eq!(st.doc.layers.len(), before.layers.len());
 }
 
+#[test]
+fn isolated_channel_background_commit_preserves_target_samples_eyes_and_cancel() {
+    for cancel in [false, true] {
+        let mut h = app_harness();
+        let ctx = h.ctx.clone();
+        let app = h.state_mut();
+        app.run("select.rect", json!({"x":40,"y":40,"width":80,"height":60})).unwrap();
+        app.run("channel.target", json!({"channel":"green"})).unwrap();
+        app.run("channel.setVisible", json!({"channel":"composite","visible":true})).unwrap();
+        app.session.tools.background = [0.11, 0.22, 0.33, 1.0];
+        let before = app.session.active().unwrap().doc.clone();
+        let steps = app.session.active().unwrap().history.past_len();
+        crate::transform_tool::begin(app, &ctx).unwrap();
+        let t = app.ui.transform.as_mut().unwrap();
+        t.quad = t.quad.map(|[x, y]| [x + 24.0, y + 8.0]);
+        app.run("channel.setVisible", json!({"channel":"red","visible":false})).unwrap();
+        app.run("channel.setVisible", json!({"channel":"blue","visible":false})).unwrap();
+        let view = app.session.active().unwrap().channel_view.clone();
+        assert_eq!(view.visible_colors(3), 1);
+        app.session.tools.background = [0.25, 0.5, 0.75, 1.0];
+        crate::transform_tool::commit(app);
+        assert!(crate::transform_tool::committing(app).is_some());
+        assert!(app.ui.transform.is_some() && app.transform_preview.is_some());
+        assert!(app.run("channel.target", json!({"channel":"red"})).is_err());
+        assert!(app.run("history.undo", json!({})).is_err());
+        assert!(app.session.edit::<()>("direct edit", |_, _| panic!("the captured source is locked")).is_err());
+        app.run("channel.setVisible", json!({"channel":"green","visible":false})).unwrap();
+        assert_eq!(app.session.active().unwrap().channel_view.visible_colors(3), 0, "hiding the last eye must not restore RGB during commit");
+        assert!(crate::transform_tool::committing(app).is_some());
+        assert!(app.ui.transform.is_some() && app.transform_preview.is_some());
+        app.run("channel.setVisible", json!({"channel":"green","visible":true})).unwrap();
+        assert_eq!(app.session.active().unwrap().channel_view, view, "showing the target restores only its own eye");
+        app.run("channel.setVisible", json!({"channel":"composite","visible":false})).unwrap();
+        let view = app.session.active().unwrap().channel_view.clone();
+        assert_eq!(view.visible_colors(3), 0, "the composite eye can hide every colour during commit");
+        assert_eq!(view.target, photocraft_engine::channel_cmds::ChannelTarget::Color(1));
+        assert_eq!(app.session.tools.background, [0.25, 0.5, 0.75, 1.0]);
+        if cancel {
+            crate::transform_tool::cancel(app);
+        }
+        let deadline = Instant::now();
+        while h.state().session.has_jobs() && deadline.elapsed() < Duration::from_secs(10) {
+            h.step();
+        }
+        h.run_steps(2);
+        let app = h.state_mut();
+        assert!(!app.session.has_jobs());
+        assert!(app.ui.transform.is_none() && app.transform_preview.is_none());
+        let st = app.session.active().unwrap();
+        assert!(st.channel_transform.is_none());
+        assert_eq!(st.channel_view, view);
+        assert_eq!(st.history.past_len(), steps + usize::from(!cancel));
+        if cancel {
+            assert!(Arc::ptr_eq(&before, &st.doc));
+        } else {
+            let id = st.active_layer.unwrap();
+            let original = before.layer(id).unwrap().surface().unwrap().to_interleaved(before.bounds());
+            let surface = st.doc.layer(id).unwrap().surface().unwrap();
+            let moved = surface.to_interleaved(st.doc.bounds());
+            assert_ne!(moved, original);
+            for (a, b) in moved.as_chunks::<4>().0.iter().zip(original.as_chunks::<4>().0) {
+                for c in [0, 2, 3] {
+                    assert_eq!(a[c], b[c], "untargeted encoded sample {c}");
+                }
+            }
+            assert!((surface.sample_channel(45, 45, 1) - 0.22).abs() < 0.01, "use the captured background");
+            assert_eq!(st.doc.selection.as_ref().unwrap().content_bounds(), photocraft_geom::Rect::new(64, 48, 144, 108));
+            assert!(app.session.undo());
+            assert_eq!(app.session.active().unwrap().doc.layer(id).unwrap().surface().unwrap().to_interleaved(before.bounds()), original);
+            assert_eq!(app.session.active().unwrap().channel_view, view);
+            assert!(app.session.redo());
+            assert_eq!(app.session.active().unwrap().doc.layer(id).unwrap().surface().unwrap().to_interleaved(before.bounds()), moved);
+            assert_eq!(app.session.active().unwrap().channel_view, view);
+        }
+        app.run("channel.target", json!({"channel":"red"})).unwrap();
+    }
+}
+
 /// Warp the active layer into an arc, then ↩.
 fn warp_and_commit(h: &mut Harness<'static, PhotocraftApp>) {
     let ctx = h.ctx.clone();

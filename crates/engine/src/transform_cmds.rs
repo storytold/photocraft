@@ -182,8 +182,8 @@ pub(crate) fn move_gray_selected(
 }
 
 /// The surface Free Transform moves by itself when the params target one (`"target"`): an
-/// unlinked layer mask, an alpha channel or the Quick Mask. `None` means the layer, with its
-/// linked masks (a targeted *linked* mask moves together with its layer, as in Photoshop).
+/// layer mask, an alpha channel or the Quick Mask. Explicit mask targeting isolates even a
+/// linked mask; an ordinary layer transform still carries its linked masks.
 pub fn lone_target<'a>(doc: &'a Document, layer: Option<LayerId>, p: &Value) -> Result<Option<&'a Surface>> {
     use crate::channel_cmds::Target;
     match crate::channel_cmds::target_of(p) {
@@ -192,7 +192,7 @@ pub fn lone_target<'a>(doc: &'a Document, layer: Option<LayerId>, p: &Value) -> 
             let id = layer.ok_or_else(|| EngineError::Other("no active layer".into()))?;
             let l = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
             let m = l.mask.as_ref().ok_or_else(|| EngineError::Other("layer has no mask".into()))?;
-            Ok((!m.linked).then_some(&m.surface))
+            Ok(Some(&m.surface))
         }
         Target::Alpha(i) => doc
             .channels
@@ -726,24 +726,14 @@ fn quad_param(p: &Value) -> Option<[[f64; 2]; 4]> {
     Some(q)
 }
 
-/// `p`, with the Channels panel's targeted alpha channel or Quick Mask as its `"target"` when it
-/// names neither a target nor a layer (#2835).
-fn with_panel_target(s: &Session, p: &Value) -> Value {
-    let mut p = if p.is_object() { p.clone() } else { json!({}) };
-    if p.get("target").is_none()
-        && p.get("layer").is_none()
-        && let (Some(m), Some(Value::Object(t))) = (p.as_object_mut(), crate::channel_cmds::targeted_channel(s))
-    {
-        m.extend(t);
-    }
-    p
-}
-
+/// Transform the resolved layer or isolated scalar channel through one geometric map.
 fn transform(s: &mut Session, p: &Value) -> Result<Value> {
-    let p = &with_panel_target(s, p);
+    let p = &crate::channel_transform::params(s, p)?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let id = crate::commands::explicit_layer(s, p)?.or(st.active_layer);
-    let lone = lone_target(&st.doc, id, p)?;
+    crate::channel_transform::check_locks(&st.doc, id, p)?;
+    let plane = crate::channel_transform::plane(&st.doc, id, p, s.tools.background)?;
+    let lone = plane.as_ref();
     let id = match (id, lone.is_some() && crate::channel_cmds::is_channel_target(p)) {
         (_, true) => None,
         (Some(id), false) => Some(id),
@@ -756,7 +746,7 @@ fn transform(s: &mut Session, p: &Value) -> Result<Value> {
         }
         _ => {
             let b = match (lone, id) {
-                (Some(surf), _) => target_bounds(&st.doc, surf),
+                (Some(surf), _) => crate::channel_transform::bounds(&st.doc, surf, p)?,
                 (None, Some(id)) => transform_bounds(&st.doc, st.doc.layer(id).ok_or(EngineError::NoLayer(id))?),
                 (None, None) => Rect::EMPTY,
             };
@@ -783,18 +773,39 @@ fn transform(s: &mut Session, p: &Value) -> Result<Value> {
     if h.inverse().is_none() {
         return Err(bad("the transform collapses the layer"));
     }
+    if lone.is_some() {
+        let source = st.doc.selection.as_ref().map_or_else(|| lone.map_or(Rect::EMPTY, Surface::content_bounds), Surface::content_bounds);
+        crate::channel_transform::validate_area(source)?;
+        let source_corners = [
+            [f64::from(source.x0), f64::from(source.y0)],
+            [f64::from(source.x1), f64::from(source.y0)],
+            [f64::from(source.x1), f64::from(source.y1)],
+            [f64::from(source.x0), f64::from(source.y1)],
+        ];
+        let denominators = source_corners.map(|[x, y]| h.0[6] * x + h.0[7] * y + h.0[8]);
+        if denominators.iter().any(|v| !v.is_finite() || v.abs() < 1e-12) || denominators.iter().any(|v| v.signum() != denominators[0].signum()) {
+            return Err(bad("channel transform crosses a perspective horizon"));
+        }
+        let points = source_corners.map(|[x, y]| h.apply(x, y));
+        let b = points
+            .iter()
+            .fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |b, &(x, y)| [b[0].min(x), b[1].min(y), b[2].max(x), b[3].max(y)]);
+        if b.iter().any(|v| !v.is_finite() || v.abs() > f64::from(1 << 28)) {
+            return Err(bad("channel transform coordinates are out of range"));
+        }
+        crate::channel_transform::validate_area(Rect::new(b[0].floor() as i32, b[1].floor() as i32, b[2].ceil() as i32, b[3].ceil() as i32))?;
+    }
     let m = h.0;
     let affine =
         (m[6].abs() < 1e-12 && m[7].abs() < 1e-12).then(|| Affine { m: [m[0] / m[8], m[3] / m[8], m[1] / m[8], m[4] / m[8], m[2] / m[8], m[5] / m[8]] });
     let interp = Interp::parse(p.get("interpolation").and_then(Value::as_str).unwrap_or("bicubic"));
-    let lone = lone.is_some();
     let p = p.clone();
     // A background job when started with `Session::start` (#1015): the warp of a large layer runs
     // on a worker with progress, and can be cancelled.
     crate::jobs::edit_job(
         s,
         "Free Transform",
-        move |doc, _, ctx| ctx.stage(0.0, 1.0, "Transforming", |ctl| transform_doc(doc, id, &p, lone, &h, affine, interp, ctl)),
+        move |doc, _, ctx| ctx.stage(0.0, 1.0, "Transforming", |ctl| transform_doc(doc, id, &p, plane.as_ref(), &h, affine, interp, ctl)),
         move |()| json!({"rect": rect}),
     )
 }
@@ -805,7 +816,7 @@ fn transform_doc(
     doc: &mut Document,
     id: Option<LayerId>,
     p: &Value,
-    lone: bool,
+    plane: Option<&Surface>,
     h: &Homography,
     affine: Option<Affine>,
     interp: Interp,
@@ -816,16 +827,16 @@ fn transform_doc(
     if let Some(sel) = sel.as_ref().filter(|_| !h.is_identity()) {
         check_budget(sel.content_bounds(), h, "selection", sel.format())?;
     }
-    if lone {
-        // A targeted unlinked mask, alpha channel or Quick Mask transforms by itself.
+    if let Some(surf) = plane {
+        // A captured colour component, raster mask or saved channel transforms by itself.
         if !h.is_identity() {
-            let (surf, _) = crate::channel_cmds::target_surface(doc, id, p)?;
             let src = sel.as_ref().map_or_else(|| surf.content_bounds(), Surface::content_bounds);
             check_budget(src, h, "mask or channel", surf.format())?;
-            *surf = match &sel {
+            let moved = match &sel {
                 Some(sel) => warp_gray_selected(surf, sel, h, interp)?,
                 None => warp_gray(surf, h, interp)?,
             };
+            crate::channel_transform::write_plane(doc, id, p, moved)?;
             if let Some(sel) = &doc.selection {
                 doc.selection = Some(warp_gray(sel, h, Interp::Bilinear)?).filter(|s| !s.content_bounds().is_empty());
             }
@@ -863,7 +874,7 @@ pub fn specs() -> Vec<CommandSpec> {
         label: "Free Transform",
         menu: &[],
         shortcut: None,
-        params: r##"{"layer":id?,"rect":[x0,y0,x1,y1]? (source frame; default = layer content ∩ selection),"quad":[[x,y]×4]? (where the frame's corners go, clockwise from top-left),"matrix":[a,b,c,d,e,f]? (affine alternative),"scaleX":%?,"scaleY":%?,"rotate":deg?,"dx":px?,"dy":px? (relative alternative: scale and rotate about the frame's centre, then move, as a Photoshop action records a Free Transform),"interpolation":"bicubic|bilinear|nearest|bicubicSharper|bicubicSmoother|bicubicAutomatic"="bicubic" (Photoshop's bicubic variants render as Bicubic),"target":"pixels"|"mask"|"quickMask"|{"channel":i}=Channels panel target (an unlinked mask, an alpha channel or the Quick Mask transforms alone; a linked mask moves with its layer)}"##,
+        params: r##"{"layer":id|name?,"rect":[x0,y0,x1,y1]? (source frame; default = target content ∩ selection),"quad":[[x,y]×4]? (where the frame's corners go, clockwise from top-left),"matrix":[a,b,c,d,e,f]? (affine alternative),"scaleX":%?,"scaleY":%?,"rotate":deg?,"dx":px?,"dy":px? (relative alternative: scale and rotate about the frame's centre, then move, as a Photoshop action records a Free Transform),"interpolation":"bicubic|bilinear|nearest|bicubicSharper|bicubicSmoother|bicubicAutomatic"="bicubic" (Photoshop's bicubic variants render as Bicubic),"target":"pixels"|"mask"|"quickMask"|{"channel":i}|{"color":i}=Channels panel target (a single colour component, mask including linked masks, alpha/spot channel or Quick Mask transforms alone; an explicit layer without target transforms the layer)}"##,
         enabled: has_layer,
         journal: true,
         run: transform,
@@ -873,6 +884,7 @@ pub fn specs() -> Vec<CommandSpec> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
     fn session() -> Session {
         session_depth(8)
@@ -1373,11 +1385,11 @@ mod tests {
     }
 
     #[test]
-    fn targeted_linked_mask_moves_with_its_layer() {
-        // Photoshop: a linked mask can't move without its layer.
+    fn targeted_linked_mask_moves_alone() {
+        // An explicit mask target stays isolated even when linked.
         let mut s = masked(&[Rect::new(10, 10, 20, 20)], true);
         s.execute("edit.transform", json!({"matrix": [1, 0, 0, 1, 40, 50], "target": "mask"})).unwrap();
-        assert_eq!(active_bounds(&s), Rect::new(50, 60, 70, 70));
+        assert_eq!(active_bounds(&s), Rect::new(10, 10, 30, 20));
         assert!(mask_at(&s, 55, 65) < 0.01);
     }
 
@@ -1431,12 +1443,16 @@ mod tests {
     fn transform_targets_fail_gracefully() {
         let mut s = session();
         let m = json!([1, 0, 0, 1, 5, 5]);
+        let before = s.active().unwrap().doc.clone();
+        let steps = s.active().unwrap().history.past_len();
         assert!(s.execute("edit.transform", json!({"matrix": m, "target": "mask"})).is_err(), "no mask");
         assert!(s.execute("edit.transform", json!({"matrix": m, "target": {"channel": 9}})).is_err());
         assert!(s.execute("edit.transform", json!({"matrix": m, "target": "quickMask"})).is_err());
-        // Unknown target shapes fall back to the pixels.
-        s.execute("edit.transform", json!({"matrix": m, "target": 7})).unwrap();
-        s.execute("edit.transform", json!({"matrix": m, "target": {"channel": "x"}})).unwrap();
+        // Malformed explicit targets fail without falling through to layer pixels.
+        assert!(s.execute("edit.transform", json!({"matrix": m, "target": 7})).is_err());
+        assert!(s.execute("edit.transform", json!({"matrix": m, "target": {"channel": "x"}})).is_err());
+        assert!(Arc::ptr_eq(&before, &s.active().unwrap().doc));
+        assert_eq!(s.active().unwrap().history.past_len(), steps);
         // Selections that miss the mask entirely transform nothing, without panicking.
         let mut s = masked(&[Rect::new(10, 10, 20, 20)], false);
         s.execute("select.rect", json!({"x": 80, "y": 80, "width": 5, "height": 5})).unwrap();

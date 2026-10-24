@@ -146,6 +146,11 @@ pub fn supports_f16_canvas(adapter: &wgpu::Adapter) -> bool {
 }
 
 impl GpuCanvas {
+    /// Share the healthy renderer with transient display previews; document edits stay in the engine.
+    pub(crate) fn render_state(&self) -> &RenderState {
+        &self.rs
+    }
+
     /// Create pipelines and register resources with the egui renderer.
     pub fn new(rs: &RenderState) -> Self {
         Self::with_tile(rs, None)

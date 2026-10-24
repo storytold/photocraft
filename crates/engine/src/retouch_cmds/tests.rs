@@ -2122,6 +2122,47 @@ fn a_live_clone_or_history_stroke_commits_its_own_pixels() {
     }
 }
 
+/// Unrestricted retouch previews cannot become a persistent isolated-channel canvas texture.
+#[test]
+fn isolated_retouch_commits_do_not_retain_unrestricted_live_pixels() {
+    for depth in DEPTHS {
+        for (cmd, extra) in [("paint.cloneStamp", json!({"source":[20,15]})), ("paint.historyBrush", json!({"state":1}))] {
+            let setup = || {
+                let mut s = session(96, 64, depth, "rgb");
+                paint_layer(&mut s, texture);
+                s.execute("paint.stroke", json!({"points":[[0,30],[96,30]],"size":16,"color":"#c03030"})).unwrap();
+                s.execute("channel.target", json!({"channel":"green"})).unwrap();
+                s
+            };
+            let mut p = json!({"points":[[50,30],[60,34],[70,30]],"size":12,"hardness":50,"opacity":70});
+            p.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            let mut s = setup();
+            let before = s.active().unwrap().doc.clone();
+            let live = LiveRetouch::begin(&s, cmd, &p).unwrap();
+            s.offer_live_retouch(live).unwrap();
+            let result = s.execute(cmd, p.clone()).unwrap();
+            assert!(result.get("fromLive").is_none(), "unrestricted {cmd} pixels cannot retain the preview texture");
+            let mut fresh = setup();
+            fresh.execute(cmd, p).unwrap();
+            let st = s.active().unwrap();
+            let id = st.active_layer.unwrap();
+            let surf = st.doc.layer(id).unwrap().surface().unwrap();
+            let got = surf.try_to_interleaved(st.doc.bounds()).unwrap();
+            let expected = fresh.active().unwrap();
+            assert_eq!(got, expected.doc.layer(expected.active_layer.unwrap()).unwrap().surface().unwrap().try_to_interleaved(st.doc.bounds()).unwrap());
+            let original = before.layer(id).unwrap().surface().unwrap().try_to_interleaved(st.doc.bounds()).unwrap();
+            let fmt = surf.format();
+            let bytes = fmt.sample.bytes();
+            for (a, b) in got.chunks_exact(fmt.bytes_per_pixel()).zip(original.chunks_exact(fmt.bytes_per_pixel())) {
+                for k in [0, 2, 3] {
+                    assert_eq!(&a[k * bytes..(k + 1) * bytes], &b[k * bytes..(k + 1) * bytes], "{cmd}/{depth}-bit/channel {k}");
+                }
+            }
+            assert_ne!(got, original, "the targeted Green component changes");
+        }
+    }
+}
+
 /// An offered live stroke is taken only by the commit it was drawn for, and only once.
 #[test]
 fn a_live_retouch_offer_is_taken_only_by_its_own_commit() {

@@ -1149,7 +1149,7 @@ fn build() -> Vec<CommandSpec> {
             "Move Layer",
             [],
             None,
-            r##"{"layer":id?,"dx":i32,"dy":i32,"units":"px"|"pt"="px" (pt: points, whole pixels at the document's resolution),"target":"pixels"|"mask"="pixels","selection":bool=false} (no layer: every selected layer; linked layers follow; target mask: a layer whose mask is unlinked moves that mask alone, a linked mask moves with the layer; selection: the selection moves too, in the same step)"##,
+            r##"{"layer":id?,"dx":i32,"dy":i32,"units":"px"|"pt"="px" (pt: points, whole pixels at the document's resolution),"target":"pixels"|"mask"|{"color":index}?,"selection":bool=false} (no layer/target: follow the Channels panel; one colour channel moves alone without a pixel selection; explicit layer without target moves the whole layer; no layer: every selected layer; linked layers follow whole-layer moves; an unlinked target mask moves alone; selection: move the selection in the same step)"##,
             has_layer,
             crate::layer_multi_cmds::translate
         ),

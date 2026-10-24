@@ -476,6 +476,16 @@ pub fn translate(s: &mut Session, p: &Value) -> Result<Value> {
     if dx == 0 && dy == 0 {
         return Ok(Value::Null);
     }
+    // An explicit target wins. An explicit layer without one retains whole-layer movement,
+    // matching the other geometric commands; an implicit Move-tool command follows Channels.
+    let color = match crate::channel_transform::color_index(p)? {
+        Some(k) => Some(k),
+        None if p.get("target").is_none() && p.get("layer").is_none_or(Value::is_null) => crate::channel_cmds::targeted_color(s),
+        None => None,
+    };
+    if let Some(k) = color {
+        return translate_color_channel(s, p, k, dx, dy);
+    }
     let roots = match crate::commands::explicit_layer(s, p)? {
         Some(id) => vec![id],
         None => selected(s),
@@ -516,6 +526,28 @@ pub fn translate(s: &mut Session, p: &Value) -> Result<Value> {
         Ok(ids)
     })?;
     note_damage(s, &before, &ids);
+    Ok(Value::Null)
+}
+
+/// `layer.translate` with colour channel `k` targeted: [`crate::channel_cmds::move_color_channel`]
+/// on the named or active layer, one "Move" step. Its linked layers stay put: a channel is the
+/// active layer's alone.
+fn translate_color_channel(s: &mut Session, p: &Value, k: usize, dx: i32, dy: i32) -> Result<Value> {
+    let id = match crate::commands::explicit_layer(s, p)? {
+        Some(id) => id,
+        None => s.active().and_then(|d| d.active_layer).ok_or_else(|| EngineError::Other("no active layer".into()))?,
+    };
+    let background = s.tools.background;
+    let before = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
+    s.edit("Move", |doc, _| {
+        let locks = doc.effective_locks(id);
+        if locks.position || locks.all {
+            let name = doc.layer(id).map_or_else(String::new, |l| l.name.clone());
+            return Err(EngineError::Other(format!("layer \"{name}\" is position-locked")));
+        }
+        crate::channel_cmds::move_color_channel(doc, id, k, dx, dy, background)
+    })?;
+    note_damage(s, &before, &[id]);
     Ok(Value::Null)
 }
 

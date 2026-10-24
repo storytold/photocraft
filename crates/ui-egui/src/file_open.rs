@@ -229,7 +229,13 @@ impl PhotocraftApp {
         // A box still open from an earlier drop (or any Free Transform) is applied first (#4833):
         // the queue below places the next file only once no box is open, so a separate drop
         // would otherwise wait unseen for ↩. Files dropped together still go one by one.
-        if target == DropTarget::Canvas && self.ui.transform.is_some() && files.iter().any(|f| !crate::preset_files_ui::is_preset_file(&dropped_name(f))) {
+        // An isolated channel's captured target remains locked until an explicit commit/cancel;
+        // leave this drop queued until then.
+        if target == DropTarget::Canvas
+            && self.ui.transform.is_some()
+            && !photocraft_engine::channel_transform::locked(&self.session)
+            && files.iter().any(|f| !crate::preset_files_ui::is_preset_file(&dropped_name(f)))
+        {
             crate::transform_tool::commit(self);
         }
         for f in files {
@@ -253,12 +259,13 @@ impl PhotocraftApp {
     /// [`Services::place_inbox`](crate::Services::place_inbox) and the rest through
     /// [`Services::inbox`](crate::Services::inbox). The pointer comes from
     /// [`Services::cursor_pos`](crate::Services::cursor_pos). As with a desktop canvas drop, a Free
-    /// Transform still open is applied first (#4833).
+    /// Transform still open is applied first (#4833), unless an isolated channel transform
+    /// holds the edit-target lock; that placement waits for an explicit commit or cancel.
     pub fn dropped_on_canvas(&mut self, ctx: &egui::Context, names: &[String]) -> Vec<bool> {
         let at = self.services.cursor_pos.as_mut().and_then(|f| f(ctx));
         let canvas = self.drop_target(ctx, at) == DropTarget::Canvas;
         let places: Vec<bool> = names.iter().map(|n| canvas && !crate::preset_files_ui::is_preset_file(n)).collect();
-        if places.contains(&true) && self.ui.transform.is_some() {
+        if places.contains(&true) && self.ui.transform.is_some() && !photocraft_engine::channel_transform::locked(&self.session) {
             crate::transform_tool::commit(self);
         }
         places

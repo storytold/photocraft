@@ -628,10 +628,6 @@ pub fn entry_enabled(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) 
     if menu.pasteboard {
         return PASTEBOARD_MENU.iter().flatten().any(|(_, id)| *id == command);
     }
-    // Warp needs a layer, selection or path box: a lone mask or channel keeps the plain box.
-    if menu.transform && command == "edit.transform.warp" {
-        return app.ui.transform.as_ref().is_some_and(|t| t.warp.is_none() && t.target.is_none());
-    }
     if menu.anchor.is_some() && command == FILL_SCREEN {
         return app.session.active().is_some();
     }

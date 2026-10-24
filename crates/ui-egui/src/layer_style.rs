@@ -569,6 +569,11 @@ pub fn initial_fields(layer: &Layer, select: Option<&str>, light: f32) -> Map<St
 }
 
 pub fn open(app: &mut PhotocraftApp, select: Option<&str>) -> Option<u64> {
+    if photocraft_engine::channel_transform::locked(&app.session) {
+        app.ui.status = photocraft_engine::channel_transform::LOCKED.into();
+        app.ui.status_error = true;
+        return None;
+    }
     // An open Free Transform box is applied first, as in Photoshop (#4821): the canvas shows the
     // box's preview while it is open, so the dialog's preview would not show until Enter.
     if app.ui.transform.is_some() {

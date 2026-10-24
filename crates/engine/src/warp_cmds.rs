@@ -172,6 +172,7 @@ fn cancelled(ctl: &Interrupt) -> Result<()> {
     if ctl.cancelled() { Err(EngineError::Cancelled) } else { Ok(()) }
 }
 
+/// Warp a whole layer, carrying its linked masks without the isolated-channel area cap.
 /// `ctl` reports progress and cancels (`Err(Cancelled)`, the layer left half-done for the caller
 /// to discard).
 #[allow(clippy::too_many_arguments)]
@@ -269,15 +270,20 @@ fn warp_layer(
     if let Some(m) = l.mask.as_mut()
         && m.linked
     {
-        let whole = |m: &Surface| Ok(warp_mesh_gray(m, &map, interp));
         m.surface = match mask_sel {
-            Some(sel) => crate::transform_cmds::move_gray_selected(
+            // Use the selection directly when its frame fits the warp box. An explicit
+            // smaller box still needs the clipped coverage built by `warp_scalar`.
+            Some(sel) if sel.content_bounds().intersect(&rect) == sel.content_bounds() => crate::transform_cmds::move_gray_selected(
                 &m.surface,
                 sel,
                 &|lifted, src| warp_mesh_surface_with(lifted, src, &map, interp, ctl).ok_or(EngineError::Cancelled),
-                &whole,
+                &|s| Ok(warp_mesh_gray(s, &map, interp)),
             )?,
-            None => whole(&m.surface)?,
+            Some(sel) => warp_scalar(&m.surface, Some(sel), rect, w, interp, ctl)?,
+            // Whole-layer transforms carry the complete linked mask, whose content can
+            // extend beyond the layer's pixel bounds (or the explicit warp frame). The
+            // scalar-channel working-area cap must not reject an ordinary layer warp.
+            None => warp_mesh_gray(&m.surface, &map, interp),
         };
     }
     if let Some(vm) = l.vector_mask.as_mut()
@@ -426,7 +432,91 @@ fn warp_type_layer(s: &mut Session, cmd: &str, id: LayerId, w: &Warp) -> Result<
     Ok(json!({"layer": id.0, "changed": true, "warp": tw}))
 }
 
+/// Lift only scalar samples inside the source frame, leaving all other samples in place.
+/// Coverage also includes default-valued samples, which must move with a selected mask.
+fn warp_scalar(s: &Surface, selection: Option<&Surface>, frame: Rect, w: &Warp, interp: Interp, ctl: &Interrupt) -> Result<Surface> {
+    let area = selection.map_or(frame, |sel| frame.intersect(&sel.content_bounds()));
+    let mut coverage = Surface::new(photocraft_color::PixelFormat::new(photocraft_color::ColorMode::Grayscale, photocraft_color::SampleType::F32, false));
+    for tile in area.tiles() {
+        cancelled(ctl)?;
+        let r = tile.rect().intersect(&area);
+        let values = match selection {
+            Some(sel) => crate::allocation::read_region(sel, r, "clipping a Warp selection")?,
+            None => crate::allocation::filled(r.width() as usize * r.height() as usize, 1.0, "framing a channel Warp")?,
+        };
+        coverage.try_write_region(r, &values)?;
+    }
+    let map = |x, y| w.map(x, y);
+    crate::transform_cmds::move_gray_selected(
+        s,
+        &coverage,
+        &|src, bounds| warp_mesh_surface_with(src, bounds, &map, interp, ctl).ok_or(EngineError::Cancelled),
+        &|_| Err(bad("edit.transform.warp", "expected a scalar channel")),
+    )
+}
+
 fn apply(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
+    let p = &crate::channel_transform::params(
+        s,
+        &if cmd == "layer.smartObjects.warp" && p.get("target").is_none() {
+            let mut p = p.clone();
+            p["target"] = json!("pixels");
+            p
+        } else {
+            p.clone()
+        },
+    )?;
+    let st = s.active().ok_or(EngineError::NoDocument)?;
+    let layer = p.get("layer").and_then(Value::as_u64).map(LayerId).or(st.active_layer);
+    if let Some(plane) = crate::channel_transform::plane(&st.doc, layer, p, s.tools.background)? {
+        crate::channel_transform::check_locks(&st.doc, layer, p)?;
+        let bounds = crate::channel_transform::bounds(&st.doc, &plane, p)?;
+        let mut rect = match p.get("rect") {
+            Some(r) => {
+                let r: [f64; 4] = serde_json::from_value(r.clone()).map_err(|_| bad(cmd, "rect must contain four numbers"))?;
+                if r.iter().any(|v| !v.is_finite() || v.abs() > f64::from(1 << 28)) {
+                    return Err(bad(cmd, "warp frame is out of range"));
+                }
+                r
+            }
+            None => rect_f(bounds),
+        };
+        crate::channel_transform::validate_area(plane.content_bounds())?;
+        if let Some(sel) = &st.doc.selection {
+            crate::channel_transform::validate_area(sel.content_bounds())?;
+        }
+        let w = warp_from_params(cmd, p, rect)?;
+        // A complete inline warp carries its source frame. An explicit rect can restrict it.
+        if p.get("rect").is_none() && p.get("warp").is_some() {
+            rect = w.bounds;
+        }
+        if rect.iter().any(|v| !v.is_finite() || v.abs() > f64::from(1 << 28)) || rect[2] <= rect[0] || rect[3] <= rect[1] {
+            return Err(bad(cmd, "warp frame is empty or out of range"));
+        }
+        let frame = Rect::new(rect[0].floor() as i32, rect[1].floor() as i32, rect[2].ceil() as i32, rect[3].ceil() as i32);
+        crate::channel_transform::validate_area(frame)?;
+        let mesh = w.to_mesh(1, 1);
+        let b = mesh.points.iter().fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |b, v| {
+            [b[0].min(v[0]), b[1].min(v[1]), b[2].max(v[0]), b[3].max(v[1])]
+        });
+        if mesh.points.iter().flatten().any(|v| !v.is_finite() || v.abs() > f64::from(1 << 28)) {
+            return Err(bad(cmd, "warp coordinates are out of range"));
+        }
+        crate::channel_transform::validate_area(Rect::new(b[0].floor() as i32, b[1].floor() as i32, b[2].ceil() as i32, b[3].ceil() as i32))?;
+        if w.is_identity() {
+            return Ok(json!({"changed": false}));
+        }
+        let interp = Interp::parse(p.get("interpolation").and_then(Value::as_str).unwrap_or("bicubic"));
+        s.edit("Warp", |doc, _| {
+            let moved = warp_scalar(&plane, doc.selection.as_ref(), frame, &w, interp, &Interrupt::NONE)?;
+            crate::channel_transform::write_plane(doc, layer, p, moved)?;
+            if let Some(sel) = &doc.selection {
+                doc.selection = Some(warp_scalar(sel, None, frame, &w, Interp::Bilinear, &Interrupt::NONE)?).filter(|s| !s.content_bounds().is_empty());
+            }
+            Ok(())
+        })?;
+        return Ok(json!({"changed": true, "rect": rect}));
+    }
     let (id, rect) = target(s, cmd, p)?;
     let w = warp_from_params(cmd, p, rect_f(rect))?;
     if matches!(s.active().and_then(|d| d.doc.layer(id)).map(|l| &l.content), Some(LayerContent::Text(_))) {
@@ -551,6 +641,18 @@ fn inline_warp(cmd: &str, p: &Value) -> Result<Option<Warp>> {
     Ok(Some(warp_from_params(cmd, p, param_rect(p))?))
 }
 
+/// These calls only return an edited mesh; they cannot change the stored document warp.
+pub(crate) fn inline_edit(id: &str, p: &Value) -> bool {
+    matches!(
+        id,
+        "edit.transform.splitWarpCrosswise"
+            | "edit.transform.splitWarpHorizontally"
+            | "edit.transform.splitWarpVertically"
+            | "edit.transform.removeWarpSplit"
+            | "edit.transform.warpGrid"
+    ) && (p.get("warp").is_some() || p.get("mesh").is_some() || p.get("style").is_some())
+}
+
 fn split(s: &mut Session, p: &Value, cmd: &str, how: Split) -> Result<Value> {
     let at = p.get("at").and_then(Value::as_array).and_then(|a| Some([a.first()?.as_f64()?, a.get(1)?.as_f64()?]));
     if let Some(w) = inline_warp(cmd, p)? {
@@ -650,7 +752,7 @@ fn grid(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 pub fn specs() -> Vec<CommandSpec> {
-    const P: &str = r##"{"layer":id?,"rect":[x0,y0,x1,y1]? (warp box; default = layer content ∩ selection),"style":"custom|none|arc|arcLower|arcUpper|arch|bulge|shellLower|shellUpper|flag|wave|fish|rise|fisheye|inflate|squeeze|twist|cylinder","bend":%=50,"hDistort":%,"vDistort":%,"vertical":bool,"values":[left,bottom,right,top,topDepth,bottomDepth,wrap]? (cylinder: silhouettes and edges in document px, the ellipses' depths in half-axis units, wrap 0..1; horizontal only),"mesh":{"us":[0,…,1],"vs":[0,…,1],"points":[[x,y]…]} ((3c+1)×(3r+1) control points, row-major, document px; on a smart object `us`/`vs` span the source contents, so points equal to the placement are an identity warp even when it is skewed),"grid":[cols,rows]?,"warp":{full warp object}?,"interpolation":"bicubic|bilinear|nearest"} — on a type layer a style (or none) sets its Warp Text and the type stays editable"##;
+    const P: &str = r##"{"layer":id?,"rect":[x0,y0,x1,y1]? (source box; default = layer content/selection bounds; scalar targets use inline warp bounds when given, otherwise target/selection bounds, and preserve samples outside the box),"style":"custom|none|arc|arcLower|arcUpper|arch|bulge|shellLower|shellUpper|flag|wave|fish|rise|fisheye|inflate|squeeze|twist|cylinder","bend":%=50,"hDistort":%,"vDistort":%,"vertical":bool,"values":[left,bottom,right,top,topDepth,bottomDepth,wrap]? (cylinder: silhouettes and edges in document px, the ellipses' depths in half-axis units, wrap 0..1; horizontal only),"mesh":{"us":[0,…,1],"vs":[0,…,1],"points":[[x,y]…]} ((3c+1)×(3r+1) control points, row-major, document px; on a smart object `us`/`vs` span the source contents, so points equal to the placement are an identity warp even when it is skewed),"grid":[cols,rows]?,"warp":{full warp object}?,"interpolation":"bicubic|bilinear|nearest","target":"pixels"|"mask"|"quickMask"|{"channel":i}|{"color":i}=Channels panel target (explicit layer without target transforms the layer; explicit mask transforms alone regardless of linking)} — on a type layer a style (or none) sets its Warp Text and the type stays editable"##;
     const S: &str = r##"{"warp":{…}? (the warp being edited; returned split),"rect":[x0,y0,x1,y1]?,"at":[x,y]? (document point; default = middle of the patch)} — without `warp`, edits the active smart object's warp. A 1×1 custom mesh is divided at the thirds first (the guides drawn on the default grid), so splitWarpCrosswise on an identity custom warp returns a 4×4 mesh (knots at 0, 1/3, 1/2, 2/3 and 1), not a 2×2. A preset is fitted as one patch and split without that step."##;
     const G: &str = r##"{"warp":{…}? (the warp being edited; returned with the new mesh),"rect":[x0,y0,x1,y1]?,"size":n|"default"|"3"|"4"|"5" (square patches, 1..=64; 1 and "default" are the single-patch grid)} — without `warp`/`style`/`mesh`, edits the active smart object's warp. The surface is kept and the new lines are real splits at i/n."##;
     vec![

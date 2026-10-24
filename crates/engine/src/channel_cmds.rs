@@ -117,7 +117,7 @@ impl Default for QuickMaskOptions {
 pub(crate) fn fix_view(st: &mut DocState) {
     let n = st.doc.channels.len();
     let colors = color_count(&st.doc);
-    let quick = st.doc.quick_mask.is_some();
+    let previous_target = st.channel_view.target;
     {
         let v = &mut st.channel_view;
         v.alpha_visible.truncate(n);
@@ -135,15 +135,12 @@ pub(crate) fn fix_view(st: &mut DocState) {
         }
     }
     crate::mask_view_cmds::fix(st);
-    // An alpha/spot eye, Quick Mask, or the active layer's mask can be the only thing on the
-    // canvas (so R, G and B can all be off). Otherwise the colour channels come back.
-    let active = st.active_layer;
-    let shown = {
-        let doc = &st.doc;
-        let v = &st.channel_view;
-        (0..n).any(|i| v.alpha_shown(i)) || (quick && !v.quick_mask_hidden) || active.is_some_and(|id| doc.layer(id).is_some_and(|l| l.mask.is_some()))
-    };
-    if st.channel_view.visible_colors(colors) == 0 && !shown {
+    // Undo/deletion can remove the only channel the user was viewing. A forced return to
+    // Composite must not leave an empty canvas; an intentional all-hidden view with a still-
+    // valid target, or another visible mask/channel, keeps its existing eyes.
+    let v = &st.channel_view;
+    let other_shown = (0..n).any(|i| v.alpha_shown(i)) || (st.doc.quick_mask.is_some() && !v.quick_mask_hidden) || v.shown_layer_mask(&st.doc).is_some();
+    if previous_target != v.target && v.visible_colors(colors) == 0 && !other_shown {
         st.channel_view.color_hidden.clear();
     }
 }
@@ -738,6 +735,10 @@ pub(crate) fn routed(id: &str) -> bool {
 
 /// Fill in `"target"` from the targeted channel (or Quick Mask mode) when the caller gave none.
 pub(crate) fn inject_target(s: &Session, id: &str, params: Value) -> Value {
+    // Geometric edits resolve individual colour components as well as masks and saved channels.
+    if id.starts_with("edit.transform") {
+        return params;
+    }
     if !routed(id) || params.get("target").is_some() {
         return params;
     }
@@ -761,7 +762,7 @@ pub(crate) fn inject_target(s: &Session, id: &str, params: Value) -> Value {
 
 /// The colour channel pixel commands are limited to, if a single colour channel is targeted.
 pub(crate) fn color_restriction(s: &Session, id: &str, params: &Value) -> Option<usize> {
-    if !routed(id) || is_channel_target(params) || crate::commands::is_mask_target(params) {
+    if id.starts_with("edit.transform") || !routed(id) || is_channel_target(params) || crate::commands::is_mask_target(params) {
         return None;
     }
     match s.active()?.channel_view.target {
@@ -772,29 +773,130 @@ pub(crate) fn color_restriction(s: &Session, id: &str, params: &Value) -> Option
 
 /// After a pixel edit with colour channel `k` targeted, put the other channels (and the layer's
 /// transparency) of layer `id` back as they were. Only changed tiles are touched.
-pub(crate) fn restrict_to_color(before: &Document, after: &mut Document, id: LayerId, k: usize) {
-    let Some(old) = before.layer(id).and_then(Layer::surface) else { return };
-    let Some(new) = after.layer_mut(id).and_then(Layer::surface_mut) else { return };
+pub(crate) fn restrict_to_color(before: &Document, after: &mut Document, id: LayerId, k: usize) -> Result<()> {
+    let Some(old) = before.layer(id).and_then(Layer::surface) else { return Ok(()) };
+    let Some(new) = after.layer_mut(id).and_then(Layer::surface_mut) else { return Ok(()) };
     if old.format() != new.format() {
-        return;
+        return Ok(());
     }
     let mut coords: Vec<TileCoord> = new.tiles().filter(|(c, t)| old.tile(**c).is_none_or(|o| !std::sync::Arc::ptr_eq(o, t))).map(|(c, _)| *c).collect();
     coords.extend(old.tiles().filter(|(c, _)| new.tile(**c).is_none()).map(|(c, _)| *c));
-    let n = new.channels();
     for c in coords {
-        let r = c.rect();
-        let o = old.read_region(r);
-        let mut v = new.read_region(r);
-        for (pn, po) in v.chunks_exact_mut(n).zip(o.chunks_exact(n)) {
-            for ch in 0..n {
-                if ch != k {
-                    pn[ch] = po[ch];
+        restrict_color_region(old, new, k, c.rect())?;
+    }
+    new.prune();
+    Ok(())
+}
+
+/// Restore untargeted native samples only where a live stroke changed. Shared with commit so
+/// keeping the preview's texture after pen-up is valid, including alpha and high-bit samples.
+pub(crate) fn restrict_color_region(old: &Surface, new: &mut Surface, k: usize, area: Rect) -> Result<()> {
+    let fmt = new.format();
+    if old.format() != fmt {
+        return Ok(());
+    }
+    if k >= fmt.mode.color_channels() {
+        return Err(bad("paint.stroke", "colour channel index is out of range"));
+    }
+    let bytes = fmt.sample.bytes();
+    let start = k.checked_mul(bytes).ok_or_else(|| bad("paint.stroke", "colour channel offset overflow"))?;
+    let end = start.checked_add(bytes).ok_or_else(|| bad("paint.stroke", "colour channel offset overflow"))?;
+    for c in area.tiles() {
+        if match (old.tile(c), new.tile(c)) {
+            (Some(a), Some(b)) => std::sync::Arc::ptr_eq(a, b),
+            (None, None) => true,
+            _ => false,
+        } {
+            continue;
+        }
+        crate::allocation::checkpoint("preserving untargeted paint channels")?;
+        let r = c.rect().intersect(&area);
+        let original = old.try_to_interleaved(r)?;
+        let mut painted = new.try_to_interleaved(r)?;
+        for (dst, src) in painted.chunks_exact_mut(fmt.bytes_per_pixel()).zip(original.chunks_exact(fmt.bytes_per_pixel())) {
+            dst.get_mut(..start)
+                .ok_or_else(|| bad("paint.stroke", "missing colour samples"))?
+                .copy_from_slice(src.get(..start).ok_or_else(|| bad("paint.stroke", "missing colour samples"))?);
+            dst.get_mut(end..)
+                .ok_or_else(|| bad("paint.stroke", "missing colour samples"))?
+                .copy_from_slice(src.get(end..).ok_or_else(|| bad("paint.stroke", "missing colour samples"))?);
+        }
+        // The encoded region is tile-bounded; reserve its COW tile before the infallible write.
+        new.try_tile_mut(c)?;
+        new.write_interleaved(r, &painted);
+    }
+    Ok(())
+}
+
+/// The Move tool with colour channel `k` targeted (#6068): shift that channel of layer `id` by
+/// (`dx`, `dy`) and leave the other channels and the layer's transparency where they are, as
+/// Photoshop moves one channel. Where the channel moves away from it takes the background colour's
+/// value for it, as Clear does with a channel targeted (#2720); values moved past the layer's
+/// pixels are dropped. Only pixel layers have colour channels to move.
+pub fn move_color_channel(doc: &mut Document, id: LayerId, k: usize, dx: i32, dy: i32, background: [f32; 4]) -> Result<()> {
+    let space = photocraft_compose::cmyk_space(doc);
+    let surf = crate::commands::paint_surface(doc, id, &Value::Null)?;
+    let fmt = surf.format();
+    if k >= fmt.mode.color_channels() {
+        return Err(EngineError::Other(format!("no colour channel {k} in this layer")));
+    }
+    let area = surf.content_bounds();
+    if area.is_empty() || (dx == 0 && dy == 0) {
+        return Ok(());
+    }
+    crate::channel_transform::validate_area(area)?;
+    let native = photocraft_color::convert::with_cmyk_space(space.as_ref(), || from_rgba(&fmt, background));
+    let bpp = fmt.bytes_per_pixel();
+    let bytes = fmt.sample.bytes();
+    let offset = k * bytes;
+    let end = offset + bytes;
+    let mut encoded = [0u8; 20];
+    let pixel = encoded.get_mut(..bpp).ok_or_else(|| bad("layer.translate", "invalid pixel format"))?;
+    photocraft_raster::encode_pixel(&fmt, &native, pixel);
+    let fill = pixel.get(offset..end).ok_or_else(|| bad("layer.translate", "missing background component"))?;
+    // The snapshot keeps source samples intact while changed tiles copy on write. Work a tile at
+    // a time so a large channel move never needs two full-document pixel buffers.
+    let source = surf.clone();
+    for tile in area.tiles() {
+        let tile_rect = tile.rect();
+        let r = tile_rect.intersect(&area);
+        // Widen before subtracting: a hostile command may provide i32::MIN as an offset.
+        let sx0 = (i64::from(r.x0) - i64::from(dx)).max(i64::from(area.x0));
+        let sy0 = (i64::from(r.y0) - i64::from(dy)).max(i64::from(area.y0));
+        let sx1 = (i64::from(r.x1) - i64::from(dx)).min(i64::from(area.x1));
+        let sy1 = (i64::from(r.y1) - i64::from(dy)).min(i64::from(area.y1));
+        let shifted = if sx0 < sx1 && sy0 < sy1 {
+            let src = Rect::new(sx0 as i32, sy0 as i32, sx1 as i32, sy1 as i32);
+            Some((src, source.try_to_interleaved(src)?))
+        } else {
+            None
+        };
+        let data = surf.try_tile_mut(tile)?.bytes_mut();
+        let tile_width = photocraft_geom::TILE_SIZE as usize;
+        let width = r.width() as usize;
+        for y in r.y0..r.y1 {
+            let base = (((y - tile_rect.y0) as usize) * tile_width + (r.x0 - tile_rect.x0) as usize) * bpp;
+            let row = data.get_mut(base..base + width * bpp).ok_or_else(|| bad("layer.translate", "missing destination row"))?;
+            for pixel in row.chunks_exact_mut(bpp) {
+                pixel.get_mut(offset..end).ok_or_else(|| bad("layer.translate", "missing colour component"))?.copy_from_slice(fill);
+            }
+        }
+        if let Some((src, values)) = shifted {
+            let sw = src.width() as usize;
+            let ox = (sx0 + i64::from(dx) - i64::from(tile_rect.x0)) as usize;
+            let oy = (sy0 + i64::from(dy) - i64::from(tile_rect.y0)) as usize;
+            for (y, row) in values.chunks_exact(sw * bpp).enumerate() {
+                let base = ((oy + y) * tile_width + ox) * bpp;
+                let dest = data.get_mut(base..base + sw * bpp).ok_or_else(|| bad("layer.translate", "missing shifted destination row"))?;
+                for (pixel, from) in dest.chunks_exact_mut(bpp).zip(row.chunks_exact(bpp)) {
+                    let sample = from.get(offset..end).ok_or_else(|| bad("layer.translate", "missing source component"))?;
+                    pixel.get_mut(offset..end).ok_or_else(|| bad("layer.translate", "missing destination component"))?.copy_from_slice(sample);
                 }
             }
         }
-        new.write_region(r, &v);
     }
-    new.prune();
+    surf.prune();
+    Ok(())
 }
 
 /// The colour channel Clear is limited to: the Channels panel targets a single one.
@@ -1252,13 +1354,30 @@ fn delete_channel(s: &mut Session, p: &Value) -> Result<Value> {
             ChannelTarget::Alpha(t) if t > i => ChannelTarget::Alpha(t - 1),
             t => t,
         };
-        fix_view_now(st);
     }
+    fix_view_now(s);
     Ok(Value::Null)
 }
 
-fn fix_view_now(st: &mut DocState) {
+fn fix_view_now(s: &mut Session) {
+    // Native commits release the interactive guard and retain their lock on the running job.
+    let transform_locked = crate::channel_transform::locked(s);
+    let Some(st) = s.active_mut() else { return };
     fix_view(st);
+    // Recover an empty view only for ordinary eye/target operations. Document edits and
+    // undo/redo preserve valid visibility exactly, including all eyes hidden by a transform.
+    let n = st.doc.channels.len();
+    let colors = color_count(&st.doc);
+    let quick = st.doc.quick_mask.is_some();
+    let active = st.active_layer;
+    let shown = {
+        let doc = &st.doc;
+        let v = &st.channel_view;
+        (0..n).any(|i| v.alpha_shown(i)) || (quick && !v.quick_mask_hidden) || active.is_some_and(|id| doc.layer(id).is_some_and(|l| l.mask.is_some()))
+    };
+    if st.channel_view.visible_colors(colors) == 0 && !shown && !transform_locked {
+        st.channel_view.color_hidden.clear();
+    }
     touch(st);
 }
 
@@ -1335,8 +1454,8 @@ fn target(s: &mut Session, t: ChannelTarget) {
                 v.alpha_visible = (0..n).map(|c| c == i).collect();
             }
         }
-        fix_view_now(st);
     }
+    fix_view_now(s);
     s.tools.target_mask(t == ChannelTarget::LayerMask);
 }
 
@@ -1394,27 +1513,49 @@ fn set_visible(s: &mut Session, p: &Value) -> Result<Value> {
     let r = p.get("channel").and_then(|v| parse_ref(v, doc)).ok_or_else(|| bad(cmd, "missing or unknown `channel`"))?;
     let colors = color_count(doc);
     let n = doc.channels.len();
-    let st = s.active_mut().ok_or(EngineError::NoDocument)?;
-    let v = &mut st.channel_view;
-    let visible = |cur: bool| p.get("visible").and_then(Value::as_bool).unwrap_or(!cur);
     match r {
-        ChanRef::Composite => {
-            let all = v.visible_colors(colors) == colors;
-            let on = visible(all);
-            v.color_hidden = vec![!on; colors];
-        }
-        ChanRef::Color(k) if k < colors => {
-            let on = visible(v.color_visible(k));
-            v.set_color_visible(k, on);
-        }
-        ChanRef::Alpha(i) if i < n => {
-            let on = visible(v.alpha_shown(i));
-            v.set_alpha_visible(i, on);
-        }
-        ChanRef::QuickMask => v.quick_mask_hidden = !visible(!v.quick_mask_hidden),
+        ChanRef::Composite => {}
+        ChanRef::QuickMask if doc.quick_mask.is_some() => {}
+        ChanRef::Color(k) if k < colors => {}
+        ChanRef::Alpha(i) if i < n => {}
         _ => return Err(bad(cmd, "that channel has no visibility")),
     }
-    fix_view_now(st);
+    let st = s.active_mut().ok_or(EngineError::NoDocument)?;
+    let v = &mut st.channel_view;
+    let gray_mask = v.layer_mask.is_some_and(|m| m.mode == crate::mask_view_cmds::MaskViewMode::Gray);
+    let visible = |cur: bool| p.get("visible").and_then(Value::as_bool).unwrap_or(!cur);
+    // Grayscale mask view suppresses the other channels. Showing one of their eyes leaves
+    // that view without changing the edit target; the mask remains visible as an overlay.
+    let showing = visible(
+        !gray_mask
+            && match r {
+                ChanRef::Composite => v.visible_colors(colors) == colors,
+                ChanRef::Color(k) => v.color_visible(k),
+                ChanRef::Alpha(i) => v.alpha_shown(i),
+                ChanRef::QuickMask => !v.quick_mask_hidden,
+                _ => false,
+            },
+    );
+    if gray_mask && showing {
+        v.color_hidden = vec![true; colors];
+        if let Some(mask) = v.layer_mask.as_mut() {
+            mask.mode = crate::mask_view_cmds::MaskViewMode::Overlay;
+        }
+    }
+    match r {
+        ChanRef::Composite => {
+            v.color_hidden = vec![!showing; colors];
+        }
+        ChanRef::Color(k) if k < colors => {
+            v.set_color_visible(k, showing);
+        }
+        ChanRef::Alpha(i) if i < n => {
+            v.set_alpha_visible(i, showing);
+        }
+        ChanRef::QuickMask => v.quick_mask_hidden = !showing,
+        _ => return Err(bad(cmd, "that channel has no visibility")),
+    }
+    fix_view_now(s);
     Ok(list(s))
 }
 
@@ -1571,8 +1712,8 @@ fn merge_spot(s: &mut Session, p: &Value) -> Result<Value> {
     })?;
     if let Some(st) = s.active_mut() {
         st.channel_view = ChannelView::default();
-        fix_view_now(st);
     }
+    fix_view_now(s);
     Ok(Value::Null)
 }
 

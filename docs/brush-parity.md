@@ -52,6 +52,8 @@ tablets against Photoshop side by side.
 
 ## Stroke quality and feel
 
+> **Channel painting update · 2026-10-14 · minor:** live Brush/Pencil previews and committed pixels agree for the targeted native colour component; untargeted samples remain unchanged. Brush-feel estimates are unchanged.
+
 | Behaviour | Status | Evidence |
 |---|---|---|
 | No seams, hard edges stay hard, zero-scatter defaults, ABR tips never black | done | TOOL-213-13 |
@@ -63,6 +65,7 @@ tablets against Photoshop side by side.
 | Latency: dab to screen within a frame | partial | budgets P13/P16/P33 over (scorecard); big-brush lag #2619, #1994; cursor lag #2566, #1343 |
 | No hitch at mouse-up on a long stroke | not measurable | P32 needs a frame harness |
 | Live stroke for Brush and Eraser | done | |
+| Brush/Pencil preview edits only the targeted colour component and remains correct after release | done | 2026-10-12: RGB/CMYK/Lab, 8/16/32-bit, signed/HDR untargeted samples, feathering/symmetry/smoothing, native replay and canvas partial-upload regressions |
 | Live stroke for every brush-based retouch tool | partial | TOOL-213-7: all live but the Mixer Brush (PR #3627); Spot Healing shows the area it heals and heals on release, as Photoshop does |
 | No OS arrow cursor over the canvas with a pen | partial | TOOL-213-14 |
 
@@ -123,6 +126,7 @@ tablets against Photoshop side by side.
 | 2026-10-11 | minor | Pattern Stamp and Background Eraser draw live (#3754); live retouch row now partial (Mixer Brush left) |
 | 2026-10-10 | major | First version, from a source audit and the open issues |
 | 2026-10-11 | minor | `~` held with the Brush or Pencil erases with that tool's brush, and Clear joins their Mode menus (#3439) |
+| 2026-10-12 | minor | Restrict live Brush/Pencil updates to the captured colour component; preview and commit preserve untargeted native samples and agree with the canvas cache |
 | 2026-10-12 | minor | Five Brush Settings switch rows toggle without selecting a properties pane; Smoothing has a default-on switch and retains its settings while disabled (#4283). No brush-feel estimate changed. |
 | 2026-10-12 | minor | A shaped tip's cursor outline turns and flips with a rotated or flipped view, and follows pixel aspect correction |
 | 2026-10-13 | minor | Shape Dynamics and Transfer minimum inputs follow their Control and retain their values while disabled (#3825, partial). No brush-feel estimate changed. |

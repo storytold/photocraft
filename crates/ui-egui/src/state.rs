@@ -1107,8 +1107,8 @@ pub struct TransformSession {
     /// Select › Transform Selection: the box transforms the selection outline, not pixels.
     #[serde(default)]
     pub selection: bool,
-    /// `edit.transform`'s `"target"` when the box moves an unlinked layer mask, an alpha channel or
-    /// the Quick Mask by itself (`None`: the layer, with its linked masks).
+    /// Captured isolated colour component, raster mask, alpha/spot channel or Quick Mask
+    /// (`None`: the whole layer, with its linked masks).
     #[serde(default)]
     pub target: Option<serde_json::Value>,
     /// Free Transform Path: `path.transform`'s `name` (and `layer`) when the box moves a
