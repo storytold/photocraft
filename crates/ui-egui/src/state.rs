@@ -705,6 +705,11 @@ pub struct ToolOptions {
     pub enhance_edge: bool,
     /// Pen: "path" (work path) or "shape" (shape layer).
     pub vector_mode: String,
+    /// Pen, Freeform Pen and Curvature Pen › Path Operations (#1397): how a new path combines with
+    /// the path or shape it is drawn into: "newLayer" (Shape mode: a new shape layer; Path mode
+    /// draws it as "combine"), "combine", "subtract", "intersect" or "exclude".
+    #[serde(default = "default_pen_path_op")]
+    pub pen_path_op: String,
     /// Shape tools: fill with the foreground colour, stroke width (0 = none), rectangle corner
     /// radius, polygon sides, line weight.
     pub shape_fill: bool,
@@ -861,6 +866,10 @@ fn default_move_target() -> String {
     "group".into()
 }
 
+fn default_pen_path_op() -> String {
+    "newLayer".into()
+}
+
 fn default_curve_fit() -> f32 {
     2.0
 }
@@ -999,6 +1008,7 @@ impl Default for ToolOptions {
             finger_painting: false,
             enhance_edge: false,
             vector_mode: "path".into(),
+            pen_path_op: default_pen_path_op(),
             shape_fill: true,
             stroke_width: 0.0,
             shape_stroke: Default::default(),

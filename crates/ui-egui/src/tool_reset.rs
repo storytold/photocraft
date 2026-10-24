@@ -207,9 +207,9 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
         Tool::Dodge | Tool::Burn => reset!(tone_range, exposure, protect_tones),
         Tool::Sponge => reset!(sponge_mode, vibrance),
         Tool::Slice => reset!(slice_style, slice_width, slice_height),
-        Tool::Pen => reset!(vector_mode, pen_auto_add_delete),
-        Tool::CurvaturePen => reset!(vector_mode),
-        Tool::FreeformPen => reset!(vector_mode, curve_fit),
+        Tool::Pen => reset!(vector_mode, pen_path_op, pen_auto_add_delete),
+        Tool::CurvaturePen => reset!(vector_mode, pen_path_op),
+        Tool::FreeformPen => reset!(vector_mode, pen_path_op, curve_fit),
         Tool::Rectangle | Tool::EllipseShape | Tool::Triangle | Tool::Polygon | Tool::Line | Tool::CustomShape => {
             reset!(vector_mode, shape_fill, stroke_width, shape_stroke, corner_radius, polygon_sides, line_weight)
         }

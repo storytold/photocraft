@@ -237,8 +237,11 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool 
             }
             if !pen_idle && tool != Tool::DirectSelection && !hits_pen(app, [x, y]) {
                 // ⌘-click off the path being drawn ends it, which becomes editable, as in
-                // Photoshop. A press on it edits it in place and the Pen carries on (#4022).
-                crate::vector_ui::pen_commit(app, false);
+                // Photoshop. A press on it edits it in place and the Pen carries on (#4022). A
+                // refused commit keeps the draft and the press does nothing more.
+                if !crate::vector_ui::pen_commit(app, false) {
+                    return true;
+                }
             }
             if tool == Tool::FreeformPen {
                 // The same for a Freeform Pen path waiting for its next ⌥-click.

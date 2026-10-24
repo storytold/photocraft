@@ -133,7 +133,7 @@ pub enum Outcome {
 /// field's value is validated before the first one is applied, so a typo, an unknown field, a
 /// bad value or a bad nested key can't reply with success while nothing — or only half of it —
 /// changed (#412).
-pub const UI_SET_FIELDS: [&str; 39] = [
+pub const UI_SET_FIELDS: [&str; 41] = [
     "updatesOpen",
     "tool",
     "strokeTrace",
@@ -169,6 +169,8 @@ pub const UI_SET_FIELDS: [&str; 39] = [
     "cropOverlayOrientation",
     "cropShield",
     "cropFill",
+    "penMode",
+    "penPathOp",
     "shapeStroke",
     "camTransformOnDrop",
     "tileGrid",
@@ -575,6 +577,20 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                     }),
                     None => None,
                 };
+                // The Pen tools' options bar (#1397): Path or Shape mode, and the Path Operation.
+                let pen_mode = match p.get("penMode") {
+                    Some(v) => Some(v.as_str().filter(|m| matches!(*m, "path" | "shape")).ok_or("penMode must be \"path\" or \"shape\"")?.to_string()),
+                    None => None,
+                };
+                let pen_path_op = match p.get("penPathOp") {
+                    Some(v) => Some(
+                        v.as_str()
+                            .filter(|o| crate::vector_ui::PATH_OPS.iter().any(|(id, ..)| id == o))
+                            .ok_or("penPathOp must be one of newLayer, combine, subtract, intersect, exclude")?
+                            .to_string(),
+                    ),
+                    None => None,
+                };
                 // The Crop tool's gear menu: Show Cropped Area and the shield (#1919).
                 let crop_shield = merged_object(&app.ui.tool_options.crop_shield, p.get("cropShield"), "cropShield")?;
                 if crop_shield.as_ref().is_some_and(|s| !(0.0..=100.0).contains(&s.opacity)) {
@@ -730,6 +746,12 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 }
                 if let Some(on) = crop_content_aware {
                     app.ui.tool_options.crop_content_aware = on;
+                }
+                if let Some(m) = pen_mode {
+                    app.ui.tool_options.vector_mode = m;
+                }
+                if let Some(o) = pen_path_op {
+                    app.ui.tool_options.pen_path_op = o;
                 }
                 if let Some(v) = crop_overlay_show {
                     app.ui.tool_options.crop_overlay_show = v;
@@ -2147,6 +2169,20 @@ mod tests {
         }
         assert_eq!(call(&mut app, &ctx, "ui.set", json!({"cropFill": "background"}))["ok"], true);
         assert!(!app.ui.tool_options.crop_content_aware);
+    }
+
+    /// #1397: the Pen's mode and Path Operation over the control channel, reported by `ui.inspect`.
+    #[test]
+    fn ui_set_drives_the_pen_path_operation() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        assert_eq!(call(&mut app, &ctx, "ui.set", json!({"tool": "pen", "penMode": "shape", "penPathOp": "subtract"}))["ok"], true);
+        let o = &call(&mut app, &ctx, "ui.inspect", json!({}))["result"]["toolOptions"];
+        assert_eq!((o["vector_mode"].clone(), o["pen_path_op"].clone()), (json!("shape"), json!("subtract")));
+        for bad in [json!({"penPathOp": "melt"}), json!({"penPathOp": 1}), json!({"penMode": "pixels"}), json!({"penMode": "path", "penPathOp": "xor"})] {
+            assert_eq!(call(&mut app, &ctx, "ui.set", bad.clone())["ok"], false, "{bad}");
+            assert_eq!((app.ui.tool_options.vector_mode.as_str(), app.ui.tool_options.pen_path_op.as_str()), ("shape", "subtract"), "{bad}: unchanged");
+        }
     }
 
     /// #1919: the Crop tool's overlay menu over the control channel, reported by `ui.inspect`.

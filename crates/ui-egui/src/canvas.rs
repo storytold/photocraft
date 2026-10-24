@@ -6115,6 +6115,8 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
                     {
                         let _ = app.run("layer.select", json!({"layer": id.0}));
                     }
+                    // The component pressed is selected, so the drag moves it (and the others selected).
+                    crate::path_components::press(app, [x, y], mods.shift);
                 }
                 Tool::Pen => {
                     if !(mods.alt && crate::vector_ui::pen_grab_handle(app, x, y)) {

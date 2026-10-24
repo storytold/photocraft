@@ -452,6 +452,7 @@
 	Intersect Shape Areas	シェイプの重なりを抽出
 	Exclude Overlapping Shapes	シェイプの重なりを除外
 	Merge Shape Components	シェイプの構成要素を結合
+	Path operations	パスの操作
 	Align	整列
 	Top Edges	上端
 	Vertical Centers	垂直方向の中央
