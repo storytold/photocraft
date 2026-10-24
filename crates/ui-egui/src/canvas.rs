@@ -748,27 +748,6 @@ fn visible_crosshair(icon: egui::CursorIcon, painter: &egui::Painter, p: Pos2, d
     crate::tool_cursor::crosshair(painter, p, 8.0, 2.0)
 }
 
-/// The Pencil's cursor at `doc` (document pixels): the whole-pixel square its dab fills
-/// (`paint::grid_square`), in screen points with its edges on physical pixels (`ppp` = pixels
-/// per point), so it lines up with the pixel grid at any zoom.
-pub(crate) fn pencil_cursor_rect(xf: &ViewXform, doc: [f64; 2], size: f32, ppp: f32) -> Rect {
-    let [x0, y0, x1, y1] = photocraft_engine::paint::grid_square(doc[0], doc[1], size);
-    let r = Rect::from_two_pos(xf.to_screen(x0 as f32, y0 as f32), xf.to_screen(x1 as f32, y1 as f32));
-    let ppp = if ppp.is_finite() && ppp > 0.0 { ppp } else { 1.0 };
-    let snap = |v: f32| (v * ppp).round() / ppp;
-    Rect::from_min_max(pos2(snap(r.min.x), snap(r.min.y)), pos2(snap(r.max.x), snap(r.max.y)))
-}
-
-/// Whether an aliased (Pencil) dab of `size` pixels is round rather than its whole
-/// [`pencil_cursor_rect`] square. The dab fills the pixels whose centres lie within its radius of
-/// the grid centre (`paint::grid_center`), so up to 3 px the corner pixels are in and the dab is
-/// a square; from 4 px on they fall outside and it is a disc (#2662).
-pub(crate) fn pencil_tip_is_round(size: f32) -> bool {
-    let n = if size.is_finite() { size.round().clamp(1.0, 100_000.0) } else { 1.0 };
-    let h = n / 2.0;
-    (h - 0.5) * std::f32::consts::SQRT_2 > h
-}
-
 /// Whether a brush-tip circle draws its centre mark.
 /// Clone Stamp and Healing Brush stay an empty circle until Option is held, the source-point
 /// cursor. Other brushes follow Preferences › Cursors › Show Crosshair in Brush Tip, as in
@@ -4699,29 +4678,11 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                             PaintingCursor::Precise => crate::tool_cursor::crosshair(&painter, p, 6.0, 0.0),
                             _ if painting && cur.show_only_crosshair_while_painting => crate::tool_cursor::crosshair(&painter, p, 5.0, 0.0),
                             // The Pencil (and the Eraser in Pencil mode): the outline of the
-                            // whole pixels its dab fills, on the pixel grid. A round tip is a
-                            // disc, a tiny one the whole square (#2662). The Block-mode Eraser:
-                            // its square, 16 screen pixels at any zoom (#2770).
+                            // whole pixels its dab fills, on the pixel grid (#5262). The
+                            // Block-mode Eraser: its square, 16 screen pixels at any zoom (#2770).
                             _ if tool == Tool::Pencil || crate::eraser_ui::pencil_mode(app, tool) || crate::eraser_ui::block_mode(app, tool) => {
-                                let block = crate::eraser_ui::block_mode(app, tool);
-                                let size = if block { crate::eraser_ui::block_size(app) } else { brush.size };
-                                let ppp = painter.ctx().pixels_per_point();
-                                let sq = pencil_cursor_rect(&xf, xf.to_doc(p), size, ppp);
-                                let px = 1.0 / ppp;
-                                let (dark, light) = (Stroke::new(px, Color32::from_black_alpha(160)), Stroke::new(px, Color32::from_white_alpha(230)));
-                                if !block && pencil_tip_is_round(size) {
-                                    let r = sq.width() / 2.0;
-                                    painter.circle_stroke(sq.center(), r + px / 2.0, dark);
-                                    painter.circle_stroke(sq.center(), (r - px / 2.0).max(0.0), light);
-                                } else {
-                                    painter.rect_stroke(sq, 0.0, dark, egui::StrokeKind::Outside);
-                                    painter.rect_stroke(sq, 0.0, light, egui::StrokeKind::Inside);
-                                }
-                                // Too small to see where it is: the hotspot as well.
-                                if cur.show_crosshair_in_brush_tip || sq.width() < 6.0 {
-                                    crate::tool_cursor::crosshair(&painter, p, 4.0, 0.0);
-                                }
-                                egui::CursorIcon::None
+                                let block = crate::eraser_ui::block_mode(app, tool).then(|| crate::eraser_ui::block_size(app));
+                                crate::pencil_cursor::cursor(&painter, &xf, p, brush, block, cur.show_crosshair_in_brush_tip)
                             }
                             // A shaped tip (sampled bitmap, or a rotated/flattened round tip)
                             // traces its outline, turned and flipped with the view; a plain round
