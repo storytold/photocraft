@@ -39,6 +39,7 @@ fn kept(doc: &Arc<Document>, bytes: usize) -> Kept {
         doc: Arc::downgrade(doc),
         id: doc.id,
         display: 7,
+        text_gamma: 1,
         format: eframe::wgpu::TextureFormat::Rgba8Unorm,
         bytes: (bytes * all.len()) as u64,
         blocks: all,
@@ -65,8 +66,8 @@ fn kept_composites_come_back_only_for_the_exact_state_and_stay_bounded() {
     let mut cache = KeptComposites::default();
     cache.store(kept(&a, 4), &a, u64::MAX);
     // The same state hits, also as an equal document that isn't the same Arc (a restore after a solo).
-    assert!(cache.find(&a, 7, Rgba8Unorm, &all).is_some());
-    assert!(cache.find(&Arc::new((*a).clone()), 7, Rgba8Unorm, &all).is_some());
+    assert!(cache.find(&a, 7, 1, Rgba8Unorm, &all).is_some());
+    assert!(cache.find(&Arc::new((*a).clone()), 7, 1, Rgba8Unorm, &all).is_some());
     // Any change to what the composite depends on misses.
     let hidden = changed(&|d| d.layers[0].visible = false);
     let faded = changed(&|d| d.layers[0].opacity = 0.5);
@@ -77,18 +78,23 @@ fn kept_composites_come_back_only_for_the_exact_state_and_stay_bounded() {
         }
     });
     for (what, d) in [("visibility", &hidden), ("opacity", &faded), ("blend mode", &multiplied), ("pixels", &painted)] {
-        assert!(cache.find(d, 7, Rgba8Unorm, &all).is_none(), "{what} changed");
+        assert!(cache.find(d, 7, 1, Rgba8Unorm, &all).is_none(), "{what} changed");
     }
-    assert!(cache.find(&a, 8, Rgba8Unorm, &all).is_none(), "another display transform");
-    assert!(cache.find(&a, 7, Rgba16Float, &all).is_none(), "another texture format");
-    assert!(cache.find(&a, 7, Rgba8Unorm, &all[1..]).is_none(), "other blocks");
+    assert!(cache.find(&a, 8, 1, Rgba8Unorm, &all).is_none(), "another display transform");
+    assert!(cache.find(&a, 7, 2, Rgba8Unorm, &all).is_none(), "another text gamma");
+    assert!(cache.find(&a, 7, 1, Rgba16Float, &all).is_none(), "another texture format");
+    assert!(cache.find(&a, 7, 1, Rgba8Unorm, &all[1..]).is_none(), "other blocks");
     // At most KEEP entries, the least recently used going first.
     cache.store(kept(&hidden, 4), &hidden, u64::MAX);
-    assert!(cache.find(&a, 7, Rgba8Unorm, &all).is_some());
+    assert!(cache.find(&a, 7, 1, Rgba8Unorm, &all).is_some());
     cache.store(kept(&faded, 4), &faded, u64::MAX);
     assert_eq!(cache.entries.len(), KEEP);
-    assert!(cache.find(&hidden, 7, Rgba8Unorm, &all).is_none(), "the least recently used went");
-    assert!(cache.find(&a, 7, Rgba8Unorm, &all).is_some() && cache.find(&faded, 7, Rgba8Unorm, &all).is_some());
+    assert!(cache.find(&hidden, 7, 1, Rgba8Unorm, &all).is_none(), "the least recently used went");
+    assert!(cache.find(&a, 7, 1, Rgba8Unorm, &all).is_some() && cache.find(&faded, 7, 1, Rgba8Unorm, &all).is_some());
+    // A stored entry makes the next frame take the cap again, over every kept document.
+    cache.capped = (vec![(a.id, 1)], 1);
+    cache.store(kept(&faded, 4), &faded, u64::MAX);
+    assert_eq!(cache.capped, Default::default());
     // Storing a state again replaces its entry.
     cache.store(kept(&faded, 4), &faded, u64::MAX);
     assert_eq!(cache.entries.len(), 2);
@@ -109,7 +115,7 @@ fn kept_composites_come_back_only_for_the_exact_state_and_stay_bounded() {
     cache.store(kept(&gone, 4), &gone, u64::MAX);
     let equal = Arc::new((*gone).clone());
     drop(gone);
-    assert!(cache.find(&equal, 7, Rgba8Unorm, &all).is_none(), "no strong reference to the drawn state");
+    assert!(cache.find(&equal, 7, 1, Rgba8Unorm, &all).is_none(), "no strong reference to the drawn state");
     cache.trim(u64::MAX);
     assert!(cache.entries.is_empty());
 }
@@ -279,6 +285,175 @@ fn a_redraw_finishing_after_memory_usage_drops_keeps_nothing_over_it() {
     g.harness.state_mut().session.edit_prefs(|p| p.performance.memory_usage_mb = 1);
     settle(&mut g);
     assert!(g.harness.state().kept.entries.is_empty(), "a composite was kept over the current cap");
+}
+
+/// Color Settings › "Blend Text Colors Using Gamma" isn't part of the document, but type layers
+/// composite with it: a state drawn before it changed is composited again, not uploaded from
+/// blocks drawn with the old gamma. Only the session's setting changes here, not the process-wide
+/// gamma compose reads, so tests compositing type layers at the same time aren't affected.
+#[test]
+fn a_state_drawn_before_the_text_gamma_changed_is_composited_again() {
+    let _gpu = photocraft_testkit::gpu_lock();
+    let Some(mut g) = gpu_app() else { return };
+    let doc = cpu_only_document(g.harness.state_mut(), 2600, 1700);
+    let layer = g.harness.state().session.active().and_then(|st| st.active_layer).expect("layer");
+    settle(&mut g);
+    g.harness.state_mut().run("layer.setProps", json!({"layer": layer.0, "visible": false})).expect("hide");
+    settle(&mut g);
+    g.harness.state_mut().session.color.settings.blend_text_gamma = 1.0;
+    g.harness.state_mut().run("layer.setProps", json!({"layer": layer.0, "visible": true})).expect("show");
+    g.harness.step();
+    assert!(g.harness.state().redraws.contains_key(&doc), "served from blocks of the old gamma: {}", g.harness.state().perf.last_refresh);
+    settle(&mut g);
+    assert_eq!(g.harness.state().perf.last_refresh, "background");
+    assert_matches_synchronous(&mut g, doc);
+}
+
+/// The text gamma changing while a redraw runs: its blocks were drawn with both, so it isn't kept.
+#[test]
+fn a_redraw_across_a_text_gamma_change_is_not_kept() {
+    let _gpu = photocraft_testkit::gpu_lock();
+    let Some(mut g) = gpu_app() else { return };
+    let doc = cpu_only_document(g.harness.state_mut(), 4096, 3072);
+    g.harness.step();
+    assert!(g.harness.state().redraws.contains_key(&doc));
+    g.harness.state_mut().session.color.settings.blend_text_gamma = 1.0;
+    settle(&mut g);
+    assert!(g.harness.state().kept.entries.is_empty(), "a composite of two gammas was kept");
+}
+
+/// Changed and changed back while a redraw runs: blocks drawn in between still mix both.
+#[test]
+fn a_redraw_across_a_text_gamma_change_and_back_is_not_kept() {
+    let _gpu = photocraft_testkit::gpu_lock();
+    let Some(mut g) = gpu_app() else { return };
+    let doc = cpu_only_document(g.harness.state_mut(), 4096, 3072);
+    let gamma = g.harness.state().session.color.settings.blend_text_gamma;
+    g.harness.step();
+    g.harness.state_mut().session.color.settings.blend_text_gamma = 1.0;
+    g.harness.step();
+    g.harness.state_mut().session.color.settings.blend_text_gamma = gamma;
+    assert!(g.harness.state().redraws.contains_key(&doc), "the redraw finished before the change back");
+    settle(&mut g);
+    assert!(g.harness.state().kept.entries.is_empty(), "a composite of two gammas was kept");
+}
+
+/// The same while another document is shown: its redraw goes on without being polled, so the
+/// change is seen every frame, not only when it shows again.
+#[test]
+fn a_hidden_documents_redraw_across_a_text_gamma_change_and_back_is_not_kept() {
+    let _gpu = photocraft_testkit::gpu_lock();
+    let Some(mut g) = gpu_app() else { return };
+    let doc = cpu_only_document(g.harness.state_mut(), 4096, 3072);
+    let gamma = g.harness.state().session.color.settings.blend_text_gamma;
+    g.harness.step();
+    g.harness.state_mut().run("file.new", json!({"width": 64, "height": 64})).expect("another document");
+    g.harness.step();
+    g.harness.state_mut().session.color.settings.blend_text_gamma = 1.0;
+    g.harness.step();
+    g.harness.state_mut().session.color.settings.blend_text_gamma = gamma;
+    g.harness.step();
+    assert!(g.harness.state().redraws.contains_key(&doc), "the hidden document's redraw stopped");
+    let i = g.harness.state().session.documents().iter().position(|st| st.doc.id == doc).expect("document");
+    g.harness.state_mut().session.set_active(i);
+    settle(&mut g);
+    assert!(g.harness.state().kept.entries.iter().all(|k| k.id != doc), "a composite of two gammas was kept");
+}
+
+/// Memory Usage lowered with no redraw running: the kept composites go at the next frame, not
+/// only when the next redraw starts.
+#[test]
+fn kept_composites_go_when_memory_usage_drops_between_redraws() {
+    let _gpu = photocraft_testkit::gpu_lock();
+    let Some(mut g) = gpu_app() else { return };
+    cpu_only_document(g.harness.state_mut(), 2600, 1700);
+    settle(&mut g);
+    assert!(!g.harness.state().kept.entries.is_empty(), "the finished redraw is kept");
+    g.harness.state_mut().session.edit_prefs(|p| p.performance.memory_usage_mb = 1);
+    g.harness.step();
+    assert!(g.harness.state().redraws.is_empty());
+    assert!(g.harness.state().kept.entries.is_empty(), "kept over the current cap");
+}
+
+/// An edit too small for a background redraw that grows the document past what Memory Usage
+/// leaves: the kept composite goes at the next frame. The test holds the kept state itself, so
+/// only the cap can drop it, not History letting go of the state.
+#[test]
+fn kept_composites_go_when_a_small_edit_grows_the_document_past_the_cap() {
+    let _gpu = photocraft_testkit::gpu_lock();
+    let Some(mut g) = gpu_app() else { return };
+    cpu_only_document(g.harness.state_mut(), 2600, 1700);
+    settle(&mut g);
+    let app = g.harness.state_mut();
+    let st = app.session.active().expect("document");
+    let held = st.doc.clone();
+    let (used, kept) = (st.memory_bytes() as u64, app.kept.bytes());
+    assert!(kept > 0, "the finished redraw is kept");
+    // Room for the kept composite and 2-3 MB more.
+    let mb = (used + kept).div_ceil(1 << 20) + 2;
+    app.session.edit_prefs(|p| p.performance.memory_usage_mb = mb as _);
+    g.harness.step();
+    assert_eq!(g.harness.state().kept.entries.len(), 1, "still within the cap");
+    // 2 MP of new pixels (8 MB): under the size that redraws in the background.
+    for (cmd, p) in
+        [("layer.new.layer", json!({})), ("select.rect", json!({"x": 0, "y": 0, "width": 2000, "height": 1000})), ("edit.fill", json!({"color": "#cc2244"}))]
+    {
+        g.harness.state_mut().run(cmd, p).expect(cmd);
+        g.harness.step();
+        assert!(g.harness.state().redraws.is_empty(), "{cmd} redrew in the background");
+    }
+    assert!(g.harness.state().kept.entries.is_empty(), "kept over the cap after the edit");
+    drop(held);
+}
+
+/// The same for an older kept composite of another document: every kept document's edits count,
+/// not only the newest one's.
+#[test]
+fn an_older_kept_composite_goes_when_its_document_grows_past_the_cap() {
+    let _gpu = photocraft_testkit::gpu_lock();
+    let Some(mut g) = gpu_app() else { return };
+    let a = cpu_only_document(g.harness.state_mut(), 2600, 1700);
+    settle(&mut g);
+    let b = cpu_only_document(g.harness.state_mut(), 2600, 1700);
+    settle(&mut g);
+    let app = g.harness.state_mut();
+    let held: Vec<_> = app.session.documents().iter().map(|st| st.doc.clone()).collect();
+    assert_eq!(app.kept.entries.iter().map(|k| k.id).collect::<Vec<_>>(), [b, a], "both kept, the second newest");
+    let used = app.session.documents().iter().map(|st| st.memory_bytes() as u64).max().unwrap_or(0);
+    let mb = (used + app.kept.bytes()).div_ceil(1 << 20) + 2;
+    app.session.edit_prefs(|p| p.performance.memory_usage_mb = mb as _);
+    let i = app.session.documents().iter().position(|st| st.doc.id == a).expect("document");
+    app.session.set_active(i);
+    g.harness.step();
+    assert_eq!(g.harness.state().kept.entries.len(), 2, "still within the cap");
+    for (cmd, p) in
+        [("layer.new.layer", json!({})), ("select.rect", json!({"x": 0, "y": 0, "width": 2000, "height": 1000})), ("edit.fill", json!({"color": "#cc2244"}))]
+    {
+        g.harness.state_mut().run(cmd, p).expect(cmd);
+        g.harness.step();
+        assert!(g.harness.state().redraws.is_empty(), "{cmd} redrew in the background");
+    }
+    assert!(g.harness.state().kept.entries.len() < 2, "kept over the cap after the older document grew");
+    drop(held);
+}
+
+/// A kept state History no longer holds goes at the next frame: its texels aren't held until
+/// some later redraw.
+#[test]
+fn a_kept_state_history_purged_goes_at_the_next_frame() {
+    let _gpu = photocraft_testkit::gpu_lock();
+    let Some(mut g) = gpu_app() else { return };
+    cpu_only_document(g.harness.state_mut(), 2600, 1700);
+    let layer = g.harness.state().session.active().and_then(|st| st.active_layer).expect("layer");
+    settle(&mut g);
+    // Hidden, the document is drawn on the GPU: the kept state is the one before, in History.
+    g.harness.state_mut().run("layer.setProps", json!({"layer": layer.0, "visible": false})).expect("hide");
+    settle(&mut g);
+    assert_eq!(g.harness.state().kept.entries.len(), 1, "the state before hiding is kept");
+    g.harness.state_mut().run("edit.purge.histories", json!({})).expect("purge");
+    g.harness.step();
+    assert!(g.harness.state().redraws.is_empty());
+    assert!(g.harness.state().kept.entries.is_empty(), "the purged state's composite is still held");
 }
 
 #[test]

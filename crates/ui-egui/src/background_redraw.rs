@@ -63,6 +63,7 @@ pub(crate) struct Redraw {
     /// The state the blocks are drawn from, and what the texels depend on besides it.
     doc: Arc<Document>,
     display: u64,
+    text_gamma: u32,
     format: eframe::wgpu::TextureFormat,
     /// Uploaded blocks of `doc` kept for [`Kept`] (empty once over `cap`), and their bytes.
     collected: Vec<Option<Vec<u8>>>,
@@ -72,6 +73,16 @@ pub(crate) struct Redraw {
 }
 
 impl Redraw {
+    /// The text gamma changed while it runs (even if back since): its blocks may mix both, so
+    /// none of them are kept. Checked every frame for every redraw, shown or not ([`retain`]); a
+    /// change and back between two frames (one batch of agent commands) isn't seen.
+    fn forget_if_gamma_changed(&mut self, gamma: u32) {
+        if self.text_gamma != gamma {
+            self.collected = Vec::new();
+            self.collected_bytes = 0;
+        }
+    }
+
     /// Share of the document drawn, 0..=1.
     pub fn fraction(&self) -> f32 {
         if self.blocks.is_empty() { 1.0 } else { 1.0 - self.left as f32 / self.blocks.len() as f32 }
@@ -91,6 +102,7 @@ pub(crate) struct Kept {
     doc: Weak<Document>,
     id: DocId,
     display: u64,
+    text_gamma: u32,
     format: eframe::wgpu::TextureFormat,
     blocks: Vec<Rect>,
     texels: Vec<Vec<u8>>,
@@ -101,9 +113,11 @@ impl Kept {
     /// Whether these are the texels a redraw of `doc` would draw. The key is the whole document
     /// (layers and their pixels, visibility, opacity, blending, masks, adjustments and everything
     /// else it holds), so a stale composite can't come back; Arc-shared tiles compare without
-    /// reading their pixels.
-    fn matches(&self, doc: &Arc<Document>, display: u64, format: eframe::wgpu::TextureFormat, blocks: &[Rect]) -> bool {
+    /// reading their pixels. Besides the document, the display transform and the text gamma
+    /// ([`text_gamma`]) decide the texels.
+    fn matches(&self, doc: &Arc<Document>, display: u64, text_gamma: u32, format: eframe::wgpu::TextureFormat, blocks: &[Rect]) -> bool {
         self.display == display
+            && self.text_gamma == text_gamma
             && self.format == format
             && self.blocks == blocks
             && self.doc.upgrade().is_some_and(|kept| Arc::ptr_eq(&kept, doc) || *kept == **doc)
@@ -114,12 +128,14 @@ impl Kept {
 #[derive(Default)]
 pub(crate) struct KeptComposites {
     entries: VecDeque<Kept>,
+    /// The entries' documents and their revisions, and Memory Usage, when the cap was last taken.
+    capped: (Vec<(DocId, u64)>, u64),
 }
 
 impl KeptComposites {
     /// The kept redraw of exactly this state, now the newest.
-    fn find(&mut self, doc: &Arc<Document>, display: u64, format: eframe::wgpu::TextureFormat, blocks: &[Rect]) -> Option<&Kept> {
-        let i = self.entries.iter().position(|k| k.matches(doc, display, format, blocks))?;
+    fn find(&mut self, doc: &Arc<Document>, display: u64, text_gamma: u32, format: eframe::wgpu::TextureFormat, blocks: &[Rect]) -> Option<&Kept> {
+        let i = self.entries.iter().position(|k| k.matches(doc, display, text_gamma, format, blocks))?;
         let k = self.entries.remove(i)?;
         self.entries.push_front(k);
         self.entries.front()
@@ -128,7 +144,9 @@ impl KeptComposites {
     /// Keep `k`, the redraw of `doc` (in place of an entry of the same state), within `cap` bytes
     /// in all.
     fn store(&mut self, k: Kept, doc: &Arc<Document>, cap: u64) {
-        self.entries.retain(|e| !e.matches(doc, k.display, k.format, &k.blocks));
+        // Another list: [`retain`] takes the cap over all its documents again.
+        self.capped = Default::default();
+        self.entries.retain(|e| !e.matches(doc, k.display, k.text_gamma, k.format, &k.blocks));
         self.entries.push_front(k);
         self.trim(cap);
     }
@@ -149,6 +167,13 @@ impl KeptComposites {
     fn retain(&mut self, live: impl Fn(DocId) -> bool) {
         self.entries.retain(|k| live(k.id));
     }
+}
+
+/// Color Settings › "Blend Text Colors Using Gamma": type layers composite with it, but it is an
+/// application setting, not part of the document. Read from the session's settings, which the
+/// engine keeps in step with the process-wide value compose reads (`psblend::set_text_gamma`).
+fn text_gamma(app: &PhotocraftApp) -> u32 {
+    app.session.color.settings.blend_text_gamma.to_bits()
 }
 
 /// Bytes kept composites of document `doc` may hold: what Memory Usage leaves beside its pixels
@@ -208,13 +233,14 @@ pub(crate) fn start(
 ) {
     let all = blocks(doc.bounds());
     let display_key = display.as_deref().map_or(0, |d| d.texture_key);
+    let gamma = text_gamma(app);
     // Taken again when a running redraw continues: the edit (or Memory Usage) may have changed it.
     let cap = keep_cap(app, doc.id);
     app.kept.trim(cap);
     let (mut pending, since, fallback, mut keep) = match app.redraws.remove(&doc.id) {
         Some(mut old) if old.blocks == all => {
             // Blocks drawn from another state aren't part of this one's composite.
-            let same = old.display == display_key && (Arc::ptr_eq(&old.doc, &doc) || *old.doc == *doc);
+            let same = old.display == display_key && old.text_gamma == gamma && (Arc::ptr_eq(&old.doc, &doc) || *old.doc == *doc);
             let (collected, bytes) =
                 if same && old.collected_bytes <= cap { (std::mem::take(&mut old.collected), old.collected_bytes) } else { (vec![None; all.len()], 0) };
             (std::mem::take(&mut old.pending), (old.started_ms, old.drawn), fallback.or_else(|| old.fallback.take()), (collected, bytes, cap))
@@ -229,7 +255,7 @@ pub(crate) fn start(
     }
     let Some(format) = gpu.prepare_texture(doc.id.0, &doc) else { return };
     // This exact state was drawn a moment ago: upload its blocks rather than composite them.
-    if let Some(k) = app.kept.find(&doc, display_key, format, &all) {
+    if let Some(k) = app.kept.find(&doc, display_key, gamma, format, &all) {
         let t0 = crate::gpu_canvas::now_ms();
         let mut px = 0u64;
         for (i, p) in pending.iter_mut().enumerate() {
@@ -246,7 +272,7 @@ pub(crate) fn start(
         }
         keep = (vec![None; all.len()], 0, keep.2);
     }
-    spawn(app, ctx, Spawn { doc, display, display_key, format, visible, blocks: all, pending, since, fallback, keep });
+    spawn(app, ctx, Spawn { doc, display, display_key, text_gamma: gamma, format, visible, blocks: all, pending, since, fallback, keep });
 }
 
 /// After an edit drew its own damage: continue document `doc.id`'s redraw, if one is running, on
@@ -261,7 +287,9 @@ pub(crate) fn restart(app: &mut PhotocraftApp, ctx: &egui::Context, gpu: &GpuCan
 /// lands, the redraw is recorded like the synchronous refresh it replaces (and explained once if
 /// it was slow).
 pub(crate) fn poll(app: &mut PhotocraftApp, gpu: &GpuCanvas, doc: DocId) {
+    let gamma = text_gamma(app);
     let Some(r) = app.redraws.get_mut(&doc) else { return };
+    r.forget_if_gamma_changed(gamma);
     loop {
         match r.rx.try_recv() {
             Ok(p) => {
@@ -288,6 +316,7 @@ pub(crate) fn poll(app: &mut PhotocraftApp, gpu: &GpuCanvas, doc: DocId) {
             doc: Arc::downgrade(&r.doc),
             id: r.doc.id,
             display: r.display,
+            text_gamma: r.text_gamma,
             format: r.format,
             blocks: r.blocks.clone(),
             texels,
@@ -335,6 +364,26 @@ pub(crate) fn retain(app: &mut PhotocraftApp) {
     let docs = app.session.documents();
     app.redraws.retain(|id, _| docs.iter().any(|st| st.doc.id == *id));
     app.kept.retain(|id| docs.iter().any(|st| st.doc.id == id));
+    let gamma = text_gamma(app);
+    for r in app.redraws.values_mut() {
+        r.forget_if_gamma_changed(gamma);
+    }
+    // Not only when the next redraw starts: states History dropped (purged or trimmed) go at once,
+    // and the cap is taken again when a kept document (its pixels and History) or Memory Usage
+    // changed.
+    app.kept.entries.retain(|k| k.doc.strong_count() > 0);
+    if app.kept.entries.is_empty() {
+        return;
+    }
+    let docs = app.session.documents();
+    let mut ids: Vec<(DocId, u64)> = app.kept.entries.iter().filter_map(|k| docs.iter().find(|st| st.doc.id == k.id).map(|st| (k.id, st.revision))).collect();
+    ids.dedup();
+    let capped = (ids, app.session.prefs().performance.history_budget_bytes() as u64);
+    if capped != app.kept.capped {
+        let cap = capped.0.iter().map(|&(id, _)| keep_cap(app, id)).min().unwrap_or(0);
+        app.kept.capped = capped;
+        app.kept.trim(cap);
+    }
 }
 
 /// What [`spawn`] starts a redraw with.
@@ -342,6 +391,7 @@ struct Spawn {
     doc: Arc<Document>,
     display: Option<Arc<CanvasDisplay>>,
     display_key: u64,
+    text_gamma: u32,
     format: eframe::wgpu::TextureFormat,
     visible: Rect,
     blocks: Vec<Rect>,
@@ -354,8 +404,19 @@ struct Spawn {
 }
 
 fn spawn(app: &mut PhotocraftApp, ctx: &egui::Context, s: Spawn) {
-    let Spawn { doc, display, display_key, format, visible, blocks, pending, since: (started_ms, drawn), fallback, keep: (collected, collected_bytes, cap) } =
-        s;
+    let Spawn {
+        doc,
+        display,
+        display_key,
+        text_gamma,
+        format,
+        visible,
+        blocks,
+        pending,
+        since: (started_ms, drawn),
+        fallback,
+        keep: (collected, collected_bytes, cap),
+    } = s;
     let id = doc.id;
     let kept_doc = doc.clone();
     let todo = order(&blocks, (0..blocks.len()).filter(|&i| pending[i]), visible);
@@ -375,7 +436,23 @@ fn spawn(app: &mut PhotocraftApp, ctx: &egui::Context, s: Spawn) {
     }
     app.redraws.insert(
         id,
-        Redraw { blocks, pending, left, drawn, rx, stop, started_ms, fallback, doc: kept_doc, display: display_key, format, collected, collected_bytes, cap },
+        Redraw {
+            blocks,
+            pending,
+            left,
+            drawn,
+            rx,
+            stop,
+            started_ms,
+            fallback,
+            doc: kept_doc,
+            display: display_key,
+            text_gamma,
+            format,
+            collected,
+            collected_bytes,
+            cap,
+        },
     );
 }
 
