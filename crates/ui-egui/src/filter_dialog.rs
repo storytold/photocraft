@@ -1017,6 +1017,15 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     }
 }
 
+/// Whether a dialog with fields `f` previews its command on the canvas: the filter dialogs, and a
+/// `__form` dialog that opts in with `__canvasPreview` (Image › Apply Image, as in Photoshop).
+pub(crate) fn previews_on_canvas(f: &Map<String, Value>) -> bool {
+    f.contains_key("__filter") || f.get(CANVAS_PREVIEW).and_then(Value::as_bool) == Some(true)
+}
+
+/// A `__form` dialog's opt-in to the canvas preview ([`previews_on_canvas`]).
+pub(crate) const CANVAS_PREVIEW: &str = "__canvasPreview";
+
 /// A new seed for a dialog's Random button: 0..=30000 (what the field takes), never `current`.
 /// `entropy` varies per click (the input time); the process's random hasher keys mix it.
 fn random_seed(entropy: u64, current: i64) -> i64 {
@@ -1088,7 +1097,7 @@ pub fn preview_document_with(
     cancel: Option<&photocraft_engine::jobs::JobCtx>,
 ) -> Option<Document> {
     preview_document_for_target(
-        doc,
+        &Arc::new(doc.clone()),
         active,
         command,
         params,
@@ -1106,7 +1115,7 @@ pub fn preview_document_with(
 /// to Profile's `working` is the working space chosen there, not the built-in default.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn preview_document_for_target(
-    doc: &Document,
+    doc: &Arc<Document>,
     active: Option<photocraft_doc::LayerId>,
     command: &str,
     params: &Value,
@@ -1117,7 +1126,7 @@ pub(crate) fn preview_document_for_target(
     color: &ColorSettings,
 ) -> Option<Document> {
     if command == crate::select_mask_view::COMMAND {
-        return crate::select_mask_view::preview_document(doc, active, params, k, cancel);
+        return crate::select_mask_view::preview_document_cached(doc, active, params, k, cancel);
     }
     // Warp Text renders the type again from the layer model (font size, position), which a
     // reduced proxy doesn't scale: it runs at full size and the result is reduced (#218).
@@ -1193,7 +1202,7 @@ pub(crate) fn smart_preview_factor(doc: &Document, command: &str, params: &Value
 }
 
 /// Scale the pixel-sized parameters of `command` down by the preview proxy factor `k`, keeping each above its minimum and negative lengths negative.
-fn scale_preview_params(command: &str, params: &mut Value, k: u32) {
+pub(crate) fn scale_preview_params(command: &str, params: &mut Value, k: u32) {
     if command == photocraft_engine::plugin_cmds::RUN {
         // A plug-in declares its pixel lengths (`"unit": "px"` in its manifest), and only those
         // are scaled: a 12 px shift previewed 4 times too wide at k = 4, and a unitless param that
@@ -1270,6 +1279,12 @@ fn add_source_documents(s: &mut photocraft_engine::Session, doc_id: photocraft_d
 pub struct FilterPreview {
     pub key: FilterPreviewKey,
     pub result: Option<Arc<Document>>,
+    /// `result` flattened, as the worker composited it for the canvas upload. The preview window
+    /// shows it rather than flattening the result again on the UI thread (#5772).
+    pub flat: Option<Arc<photocraft_compose::Buffer>>,
+    /// The part of `result` (its pixels) on the GPU canvas texture. At 100 % only what the view
+    /// shows is uploaded, and pans add to it (`canvas::upload_filter_preview_view`, #5772).
+    pub uploaded: photocraft_geom::Rect,
     /// OK was pressed and the filter runs as a background job: the preview stays on screen until
     /// the job lands, so the canvas doesn't flash the unfiltered image in between.
     pub committing: bool,

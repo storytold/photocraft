@@ -23,6 +23,8 @@ log = { workspace = true }
 rayon = { workspace = true }
 
 [dev-dependencies]
+# The CPU filter the layer-operator parity tests compare with.
+photocraft-algo = { workspace = true }
 wgpu = { version = "30" }
 pollster = "1"
 # Shape layers in the effect parity tests.

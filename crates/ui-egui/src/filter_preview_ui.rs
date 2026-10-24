@@ -42,11 +42,12 @@ pub(crate) fn window(app: &PhotocraftApp, dialog: u64, ui: &mut egui::Ui, f: &mu
     // the dialog keeps a stacked dialog from showing another's preview; the Preview checkbox still
     // decides whether the filtered result (rather than the original) is shown.
     let preview_on = f.get("__preview").and_then(Value::as_bool) == Some(true);
-    let filtered: Option<(FilterPreviewKey, std::sync::Arc<Document>)> = app.filter_preview.as_ref().and_then(|p| {
+    type Flat = Option<std::sync::Arc<photocraft_compose::Buffer>>;
+    let filtered: Option<(FilterPreviewKey, std::sync::Arc<Document>, Flat)> = app.filter_preview.as_ref().and_then(|p| {
         // An edited smart filter previews as `layer.smartFilter.setParams` (#6324).
         let previewed = crate::smart_ui::preview_command(f, &cmd);
         (preview_on && p.key.dialog == dialog && p.key.doc == doc_id && p.key.command == previewed)
-            .then(|| p.result.clone().map(|r| (p.key.clone(), r)))
+            .then(|| p.result.clone().map(|r| (p.key.clone(), r, p.flat.clone())))
             .flatten()
     });
     // The proxy factor the preview runs at (the filtered key's when it exists, else the request's).
@@ -55,50 +56,22 @@ pub(crate) fn window(app: &PhotocraftApp, dialog: u64, ui: &mut egui::Ui, f: &mu
     // uncapped factor built a proxy the canvas never asked for, then rebuilt it (a full-size copy
     // and upload on the UI thread at 100 %) the moment the first result arrived, shifting this
     // window's 100 % mapping and pan clamp for a frame.
-    let base_k = filtered.as_ref().map(|(k, _)| k.k).unwrap_or_else(|| {
+    let base_k = filtered.as_ref().map(|(k, ..)| k.k).unwrap_or_else(|| {
         let params = app.with_mask_target(&cmd, crate::filter_dialog::params_of(f));
         crate::canvas::filter_preview_factor(app, &st.doc, &cmd, &params)
     });
 
     let t = Tokens::get(ui.ctx());
-    let cache_id = egui::Id::new(("filter-preview-ui", dialog));
-    let mut cache: Cache = ui.ctx().data_mut(|d| std::mem::take(d.get_temp_mut_or_default::<Cache>(cache_id)));
-    // Channel visibility and the active mask can change without a document revision. Both the
-    // original (press-and-hold) and filtered textures must follow the canvas's current view.
-    let view = (st.channel_view.clone(), app.session.prefs().interface.show_channels_in_color, st.active_layer);
-    if cache.view.as_ref() != Some(&view) {
-        cache = Cache { view: Some(view), ..Default::default() };
-    }
-
-    // Unfiltered proxy: built once per document revision and factor (cheap at the proxy factor).
-    let orig_key = TexKey::Original(doc_id, revision, base_k);
-    if cache.original.as_ref().map(|c| &c.key) != Some(&orig_key) {
-        let proxy = crate::proxy::proxy_document(&st.doc, base_k);
-        let tex = upload(ui.ctx(), app, "filter-preview-original", &proxy);
-        cache.original = Some(CachedTex { key: orig_key, tex, size: [proxy.size.width, proxy.size.height] });
-    }
-    // Filtered proxy: rebuilt whenever the worker publishes a new result.
-    match &filtered {
-        Some((key, filtered_doc)) => {
-            let fkey = TexKey::Filtered(key.clone());
-            if cache.filtered.as_ref().map(|c| &c.key) != Some(&fkey) {
-                let tex = upload(ui.ctx(), app, "filter-preview-filtered", filtered_doc);
-                cache.filtered = Some(CachedTex { key: fkey, tex, size: [filtered_doc.size.width, filtered_doc.size.height] });
-            }
-        }
-        None => cache.filtered = None,
-    }
-    let orig = cache.original.as_ref().map(|c| (c.tex.clone(), c.size));
-    let filt = cache.filtered.as_ref().map(|c| (c.tex.clone(), c.size));
-    ui.ctx().data_mut(|d| d.insert_temp(cache_id, cache));
-
-    let Some([img_w, img_h]) = filt.as_ref().map(|(_, s)| *s).or_else(|| orig.as_ref().map(|(_, s)| *s)) else { return };
+    // The image the window shows: the filtered result, else the unfiltered proxy (same size).
+    let k = base_k.max(1);
+    let img = filtered.as_ref().map(|(_, d, _)| [d.size.width, d.size.height]).unwrap_or([st.doc.size.width.div_ceil(k), st.doc.size.height.div_ceil(k)]);
+    let [img_w, img_h] = img;
     if img_w == 0 || img_h == 0 {
         return;
     }
     // The proxy is the document reduced by `base_k`, so the view works in *document* pixels: at
     // 100% one document pixel covers one point, whatever the proxy factor (#3769).
-    let doc = document_size([img_w, img_h], base_k);
+    let doc = document_size(img, base_k);
 
     // View state, sanitised: a corrupt field must not divide by zero or draw off the texture.
     let mut zoom = f.get(ZOOM_FIELD).and_then(Value::as_f64).map(|v| v as f32).filter(|z| z.is_finite() && *z > 0.0).unwrap_or(DEFAULT_ZOOM);
@@ -111,15 +84,79 @@ pub(crate) fn window(app: &PhotocraftApp, dialog: u64, ui: &mut egui::Ui, f: &mu
     let (rect, response) = ui.allocate_exact_size(vec2(width, PREVIEW_H), Sense::click_and_drag());
     let (x0, y0, sw, sh) = source_rect(cx, cy, zoom, rect.size(), doc);
     let (dest, uv) = placement(rect, (x0, y0, sw, sh), zoom, doc);
+    // At 100 % only the part of the image around the view becomes a texture (#5772): a whole
+    // 36 MP result was converted and uploaded for a window a few hundred points wide. A proxy is
+    // already small and keeps one texture of the whole image.
+    let max_side = ui.ctx().input(|i| i.max_texture_side);
+    let crop_for = |size: [u32; 2]| if k == 1 { crop_around(visible_pixels(uv, size), size, max_side) } else { full(size) };
+    let covers = |c: &CachedTex| c.crop.contains_rect(&visible_pixels(uv, c.size));
+
+    let cache_id = egui::Id::new(("filter-preview-ui", dialog));
+    let mut cache: Cache = ui.ctx().data_mut(|d| std::mem::take(d.get_temp_mut_or_default::<Cache>(cache_id)));
+    // Channel visibility and the active mask can change without a document revision. Both the
+    // original (press-and-hold) and filtered textures must follow the canvas's current view.
+    let view = (st.channel_view.clone(), app.session.prefs().interface.show_channels_in_color, st.active_layer);
+    if cache.view.as_ref() != Some(&view) {
+        cache = Cache { view: Some(view), ..Default::default() };
+    }
+
+    // Unfiltered proxy: rebuilt per document revision and factor, and when the view leaves it.
+    let orig_key = TexKey::Original(doc_id, revision, base_k);
+    if !cache.original.as_ref().is_some_and(|c| c.key == orig_key && covers(c)) {
+        let proxy = (k > 1).then(|| crate::proxy::proxy_document(&st.doc, k));
+        let source = proxy.as_ref().unwrap_or(&st.doc);
+        let size = [source.size.width, source.size.height];
+        let crop = crop_for(size);
+        let tex = upload(ui.ctx(), app, "filter-preview-original", source, crop, None);
+        cache.original = Some(CachedTex { key: orig_key, tex, crop, size });
+    }
+    // Filtered proxy: rebuilt whenever the worker publishes a new result, and when the view
+    // leaves it (cropped from the worker's composite, so a pan doesn't composite again).
+    match &filtered {
+        Some((key, filtered_doc, flat)) => {
+            let fkey = TexKey::Filtered(key.clone());
+            if !cache.filtered.as_ref().is_some_and(|c| c.key == fkey && covers(c)) {
+                let size = [filtered_doc.size.width, filtered_doc.size.height];
+                let crop = crop_for(size);
+                let tex = upload(ui.ctx(), app, "filter-preview-filtered", filtered_doc, crop, flat.as_deref());
+                cache.filtered = Some(CachedTex { key: fkey, tex, crop, size });
+            }
+        }
+        None => cache.filtered = None,
+    }
+    let orig = cache.original.as_ref().map(|c| (c.tex.clone(), c.crop, c.size));
+    let filt = cache.filtered.as_ref().map(|c| (c.tex.clone(), c.crop, c.size));
+    ui.ctx().data_mut(|d| d.insert_temp(cache_id, cache));
 
     // Press-and-hold shows the unfiltered image, as Photoshop's preview does.
     let holding = response.is_pointer_button_down_on();
     let shown = if holding { orig.as_ref() } else { filt.as_ref().or(orig.as_ref()) };
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, t.radius_sm, t.canvas);
-    if let Some((tex, _)) = shown {
+    // Previewing on the GPU (#5772): the filtered image is the canvas's texture, which composites
+    // this window's part of the document too; drawn here as the Navigator draws it.
+    let (vx0, vy0) = (x0.max(0.0), y0.max(0.0));
+    let (vx1, vy1) = ((x0 + sw).min(doc.x), (y0 + sh).min(doc.y));
+    let source = photocraft_geom::Rect::new(vx0.floor() as i32, vy0.floor() as i32, vx1.ceil() as i32, vy1.ceil() as i32);
+    let gpu_view = crate::filter_gpu_preview::window_view(app, dialog, source).filter(|_| !holding);
+    if let Some((params, k)) = gpu_view {
         crate::widgets::checker(&painter, dest, 8.0);
-        painter.image(tex.id(), dest, uv, Color32::WHITE);
+        // A zoomed-out preview's texture is the proxy, `k` document pixels per texel.
+        let k = k.max(1) as f32;
+        let view = crate::gpu_canvas::ViewParams {
+            zoom: zoom * k,
+            center: [(vx0 + vx1) / 2.0 / k, (vy0 + vy1) / 2.0 / k],
+            rotation: 0.0,
+            shadow: false,
+            pixel_grid: false,
+            view_key: egui::Id::new(("filter-preview-window", dialog)).value(),
+            offset: [0.0, 0.0],
+            ..params
+        };
+        crate::gpu_canvas::GpuCanvas::paint(&painter, dest, view);
+    } else if let Some((tex, crop, size)) = shown {
+        crate::widgets::checker(&painter, dest, 8.0);
+        painter.image(tex.id(), dest, crop_uv(uv, *size, *crop), Color32::WHITE);
     }
     painter.rect_stroke(rect, t.radius_sm, Stroke::new(1.0, t.field_border), egui::StrokeKind::Inside);
 
@@ -226,23 +263,103 @@ fn document_size(proxy: [u32; 2], k: u32) -> Vec2 {
     if doc.x.is_finite() && doc.y.is_finite() && doc.x > 0.0 && doc.y > 0.0 { doc } else { vec2(proxy[0] as f32, proxy[1] as f32) }
 }
 
-/// A composite as monitor pixels, matching the canvas (`canvas::display_image`).
-fn upload(ctx: &egui::Context, app: &PhotocraftApp, name: &str, doc: &Document) -> egui::TextureHandle {
+/// `region` of a composite as monitor pixels, matching the canvas (`canvas::display_image`).
+/// `flat` is `doc` already flattened (the filter worker's composite), cropped instead of
+/// compositing again.
+fn upload(
+    ctx: &egui::Context,
+    app: &PhotocraftApp,
+    name: &str,
+    doc: &Document,
+    region: photocraft_geom::Rect,
+    flat: Option<&photocraft_compose::Buffer>,
+) -> egui::TextureHandle {
+    let region = match region.intersect(&doc.bounds()) {
+        r if r.is_empty() => doc.bounds(),
+        r => r,
+    };
     // Reduce only the display texture when a full-resolution result exceeds the device limit.
     // The cached document and the window's document-pixel zoom coordinates stay at full size.
-    let factor = texture_factor(doc.size.width, doc.size.height, ctx.input(|i| i.max_texture_side));
-    let (width, height) = (doc.size.width.div_ceil(factor), doc.size.height.div_ceil(factor));
+    let factor = texture_factor(region.width(), region.height(), ctx.input(|i| i.max_texture_side));
+    let (width, height) = (region.width().div_ceil(factor), region.height().div_ceil(factor));
     if let Some(st) = app.session.active()
-        && let Some(pixels) =
-            crate::channel_view::render(doc, &st.channel_view, doc.bounds(), factor, crate::channel_view::Look::of(&app.session), st.active_layer)
+        && let Some(pixels) = crate::channel_view::render(doc, &st.channel_view, region, factor, crate::channel_view::Look::of(&app.session), st.active_layer)
     {
         let image = egui::ColorImage::new([width as usize, height as usize], pixels);
         return ctx.load_texture(name, image, egui::TextureOptions::LINEAR);
     }
-    let buf = if factor == 1 { photocraft_compose::flatten(doc) } else { photocraft_compose::render_reduced(doc, width, height) };
     let (display, _) = crate::canvas::canvas_display(app, doc, None);
-    let img = crate::canvas::display_image(display.as_deref(), &buf);
+    let img = match flat.filter(|f| factor == 1 && f.rect == doc.bounds()) {
+        Some(flat) if region == flat.rect => crate::canvas::display_image(display.as_deref(), flat),
+        Some(flat) => crate::canvas::display_image(display.as_deref(), &crop(flat, region)),
+        None => {
+            let buf = if factor == 1 { photocraft_compose::render(doc, region) } else { photocraft_compose::render_reduced_rect(doc, region, width, height) };
+            crate::canvas::display_image(display.as_deref(), &buf)
+        }
+    };
     ctx.load_texture(name, img, egui::TextureOptions::LINEAR)
+}
+
+/// The pixels of `buf` inside `region` (transparent if `buf` doesn't hold them all).
+pub(crate) fn crop(buf: &photocraft_compose::Buffer, region: photocraft_geom::Rect) -> photocraft_compose::Buffer {
+    let r = region.intersect(&buf.rect);
+    let stride = buf.rect.width() as usize;
+    let (dx, w) = ((r.x0 - buf.rect.x0) as usize, r.width() as usize);
+    let mut px = Vec::with_capacity(w * r.height() as usize);
+    for y in r.y0..r.y1 {
+        let start = (y - buf.rect.y0) as usize * stride + dx;
+        px.extend_from_slice(buf.px.get(start..start + w).unwrap_or_default());
+    }
+    if px.len() == w * r.height() as usize { photocraft_compose::Buffer { rect: r, px } } else { photocraft_compose::Buffer::transparent(r) }
+}
+
+/// The whole of a `size` image.
+fn full(size: [u32; 2]) -> photocraft_geom::Rect {
+    photocraft_geom::Rect::new(0, 0, size[0].min(i32::MAX as u32) as i32, size[1].min(i32::MAX as u32) as i32)
+}
+
+/// The pixels of a `size` image that texture coordinates `uv` (0..1 over the image) cover.
+fn visible_pixels(uv: Rect, size: [u32; 2]) -> photocraft_geom::Rect {
+    let px = |t: f32, n: u32| (t.clamp(0.0, 1.0) * n as f32).clamp(0.0, i32::MAX as f32);
+    let (w, h) = (size[0], size[1]);
+    let r = photocraft_geom::Rect::new(
+        px(uv.min.x, w).floor() as i32,
+        px(uv.min.y, h).floor() as i32,
+        px(uv.max.x, w).ceil() as i32,
+        px(uv.max.y, h).ceil() as i32,
+    );
+    r.intersect(&full(size))
+}
+
+/// The texture to build for `visible` pixels of a `size` image: the view plus half of it again on
+/// every side (so a pan rebuilds it rarely), snapped to 64 pixels, inside the image and, where the
+/// view allows, inside a `max_side` texture.
+fn crop_around(visible: photocraft_geom::Rect, size: [u32; 2], max_side: usize) -> photocraft_geom::Rect {
+    let max_side = i32::try_from(max_side).unwrap_or(i32::MAX).max(1);
+    let margin = |extent: u32| {
+        let extent = i32::try_from(extent).unwrap_or(i32::MAX);
+        (extent / 2).min(max_side.saturating_sub(extent) / 2).max(0)
+    };
+    let (mx, my) = (margin(visible.width()), margin(visible.height()));
+    let snap_down = |v: i32| v - v.rem_euclid(64);
+    let snap_up = |v: i32| v.saturating_add((64 - v.rem_euclid(64)) % 64);
+    let wide =
+        photocraft_geom::Rect::new(visible.x0.saturating_sub(mx), visible.y0.saturating_sub(my), visible.x1.saturating_add(mx), visible.y1.saturating_add(my))
+            .intersect(&full(size));
+    let snapped = photocraft_geom::Rect::new(snap_down(wide.x0), snap_down(wide.y0), snap_up(wide.x1), snap_up(wide.y1)).intersect(&full(size));
+    let fits = |r: &photocraft_geom::Rect| r.width().max(r.height()) <= max_side.unsigned_abs();
+    let r = if fits(&snapped) || !fits(&wide) { snapped } else { wide };
+    if r.is_empty() { full(size) } else { r }
+}
+
+/// Texture coordinates `uv` over a whole `size` image, mapped into a texture holding only `crop`.
+fn crop_uv(uv: Rect, size: [u32; 2], crop: photocraft_geom::Rect) -> Rect {
+    let (cw, ch) = (crop.width().max(1) as f32, crop.height().max(1) as f32);
+    let map = |t: f32, n: u32, c0: i32, cn: f32| ((t * n as f32 - c0 as f32) / cn).clamp(0.0, 1.0);
+    Rect::from_min_max(
+        pos2(map(uv.min.x, size[0], crop.x0, cw), map(uv.min.y, size[1], crop.y0, ch)),
+        pos2(map(uv.max.x, size[0], crop.x0, cw), map(uv.max.y, size[1], crop.y0, ch)),
+    )
 }
 
 /// The reduction that fits a `w`×`h` image inside a `max_side` texture (1: it already fits).
@@ -264,6 +381,8 @@ struct CachedTex {
     tex: egui::TextureHandle,
     /// The image's size in pixels.
     size: [u32; 2],
+    /// The part of the image (in its pixels) the texture holds.
+    crop: photocraft_geom::Rect,
 }
 
 /// The dialog's live textures: the filtered proxy and the unfiltered proxy.
@@ -296,7 +415,7 @@ mod tests {
                     .unwrap();
             }
             let doc = &app.session.active().unwrap().doc;
-            let texture = upload(&ctx, &app, "full-resolution-preview", doc);
+            let texture = upload(&ctx, &app, "full-resolution-preview", doc, doc.bounds(), None);
             let mut delta = ctx.tex_manager().write().take_delta();
             let egui::ImageData::Color(image) = &delta.set.get(&texture.id()).unwrap()[0].image;
             let pixels = image.pixels.clone();
@@ -337,7 +456,7 @@ mod tests {
                 )
                 .unwrap();
                 let ctx = egui::Context::default();
-                let texture = upload(&ctx, &app, "alpha-preview", &preview);
+                let texture = upload(&ctx, &app, "alpha-preview", &preview, preview.bounds(), None);
                 let mut delta = ctx.tex_manager().write().take_delta();
                 let egui::ImageData::Color(image) = &delta.set.get(&texture.id()).unwrap()[0].image;
                 let pixels = image.pixels.clone();
@@ -378,6 +497,152 @@ mod tests {
         output.textures_delta.clear();
         assert_ne!(before, after, "press-and-hold must not reuse the old channel");
         assert!(pixels.unwrap().iter().all(|p| *p == Color32::BLACK));
+    }
+
+    /// #5772: the worker flattens each preview once for the canvas, and the window shows that
+    /// composite rather than flattening the result a second time on the UI thread.
+    #[test]
+    fn the_window_shows_the_workers_composite_without_flattening_again() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.background_jobs = false;
+        app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+        crate::filter_dialog::open(&mut app, "filter.stylize.solarize").unwrap();
+        crate::canvas::ensure_filter_preview(&mut app, 0, &egui::Context::default()).expect("a preview");
+        let preview = app.filter_preview.as_ref().unwrap();
+        let (result, flat) = (preview.result.clone().unwrap(), preview.flat.clone().expect("the worker's composite is kept"));
+        assert_eq!(*flat, photocraft_compose::flatten(&result), "the kept composite is the result's");
+
+        let pixels = |flat: Option<&photocraft_compose::Buffer>| {
+            let ctx = egui::Context::default();
+            let texture = upload(&ctx, &app, "filtered", &result, result.bounds(), flat);
+            let mut delta = ctx.tex_manager().write().take_delta();
+            let egui::ImageData::Color(image) = &delta.set.get(&texture.id()).unwrap()[0].image;
+            let pixels = image.pixels.clone();
+            delta.clear();
+            pixels
+        };
+        assert_eq!(pixels(Some(&flat)), pixels(None), "the same texture as flattening again");
+        // A stand-in composite proves the window uses the one it is given...
+        let marker = photocraft_compose::Buffer { rect: result.bounds(), px: vec![[1.0, 0.0, 0.0, 1.0]; 64 * 48] };
+        assert!(pixels(Some(&marker)).iter().all(|p| *p == Color32::RED));
+        // ...but never one that doesn't cover the result (it flattens instead).
+        let partial = photocraft_compose::Buffer { rect: photocraft_geom::Rect::new(0, 0, 8, 8), px: vec![[1.0, 0.0, 0.0, 1.0]; 64] };
+        assert_eq!(pixels(Some(&partial)), pixels(None));
+    }
+
+    /// The texture's pixels from a frame's delta.
+    fn texture_pixels(delta: &egui::TexturesDelta, tex: &egui::TextureHandle) -> (Vec<Color32>, [usize; 2]) {
+        let egui::ImageData::Color(image) = &delta.set.get(&tex.id()).expect("the texture was uploaded")[0].image;
+        (image.pixels.clone(), image.size)
+    }
+
+    /// `crop` of a whole-image texture's pixels (`width` wide).
+    fn crop_pixels(pixels: &[Color32], width: usize, crop: photocraft_geom::Rect) -> Vec<Color32> {
+        (crop.y0..crop.y1).flat_map(|y| pixels[y as usize * width + crop.x0 as usize..][..crop.width() as usize].iter().copied()).collect()
+    }
+
+    /// #5772: at 100 % the window's textures hold only the part of the image around the view, and
+    /// show the same pixels there as whole-image textures did, before and after a pan, at every
+    /// depth. A proxy keeps its whole-image texture.
+    #[test]
+    fn the_window_textures_hold_only_the_view_and_match_a_whole_image_upload() {
+        for depth in [8, 16, 32] {
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            app.background_jobs = false;
+            app.run("file.new", json!({"width": 1600, "height": 1200, "depth": depth})).unwrap();
+            app.session
+                .edit("Fixture", |doc, _| {
+                    let s = doc.layers[0].surface_mut().unwrap();
+                    for i in 0..40 {
+                        let v = i as f32 / 39.0;
+                        s.fill_rect(photocraft_geom::Rect::new(i * 40, 0, i * 40 + 40, 1200), &[v, 1.0 - v, (i % 3) as f32 / 2.0, 1.0]);
+                    }
+                    Ok(())
+                })
+                .unwrap();
+            let id = crate::filter_dialog::open(&mut app, "filter.stylize.solarize").unwrap();
+            let mut fields = app.ui.dialogs.last().unwrap().fields.clone();
+            crate::canvas::ensure_filter_preview(&mut app, 0, &egui::Context::default()).expect("a preview");
+            let preview = app.filter_preview.as_ref().unwrap();
+            assert_eq!(preview.key.k, 1, "a full-resolution preview");
+            let result = preview.result.clone().unwrap();
+
+            // Whole-image textures, as the window built them before.
+            let whole = |doc: &Document| {
+                let ctx = egui::Context::default();
+                let tex = upload(&ctx, &app, "whole", doc, doc.bounds(), None);
+                let mut delta = ctx.tex_manager().write().take_delta();
+                let (pixels, size) = texture_pixels(&delta, &tex);
+                delta.clear();
+                assert_eq!(size, [1600, 1200]);
+                pixels
+            };
+            let (whole_filtered, whole_original) = (whole(&result), whole(&app.session.active().unwrap().doc));
+
+            let ctx = egui::Context::default();
+            let cache_id = egui::Id::new(("filter-preview-ui", id));
+            let (mut compared, mut crops) = (0, Vec::new());
+            for centre in [None, Some((150.0, 1100.0)), Some((1500.0, 80.0))] {
+                if let Some((cx, cy)) = centre {
+                    fields.insert(CENTER_X_FIELD.into(), json!(cx));
+                    fields.insert(CENTER_Y_FIELD.into(), json!(cy));
+                }
+                let mut output = ctx.run_ui(Default::default(), |ui| window(&app, id, ui, &mut fields));
+                let cache = ctx.data(|d| d.get_temp::<Cache>(cache_id).unwrap());
+                for (tex, whole) in [(cache.filtered.unwrap(), &whole_filtered), (cache.original.unwrap(), &whole_original)] {
+                    assert!(
+                        u64::from(tex.crop.width()) * u64::from(tex.crop.height()) < 1600 * 1200 / 2,
+                        "{depth}-bit, {centre:?}: only the view's part, not {:?}",
+                        tex.crop
+                    );
+                    if let Some((pixels, size)) =
+                        output.textures_delta.set.contains_key(&tex.tex.id()).then(|| texture_pixels(&output.textures_delta, &tex.tex))
+                    {
+                        assert_eq!(size, [tex.crop.width() as usize, tex.crop.height() as usize]);
+                        assert_eq!(pixels, crop_pixels(whole, 1600, tex.crop), "{depth}-bit, {centre:?}: the same pixels as the whole image");
+                        compared += 1;
+                    }
+                    crops.push(tex.crop);
+                }
+                output.textures_delta.clear();
+            }
+            assert_eq!(compared, 6, "{depth}-bit: both textures are rebuilt for each pan that leaves them");
+            assert!(crops[0] != crops[2] && crops[2] != crops[4], "{depth}-bit: the crop follows the view: {crops:?}");
+        }
+    }
+
+    #[test]
+    fn crops_cover_the_view_and_map_back_to_the_same_pixels() {
+        let size = [7360, 4912];
+        for (visible, max_side) in [
+            (photocraft_geom::Rect::new(3000, 2000, 3400, 2150), 8192),
+            (photocraft_geom::Rect::new(0, 0, 3200, 1200), 8192),
+            (photocraft_geom::Rect::new(7000, 4800, 7360, 4912), 8192),
+            (photocraft_geom::Rect::new(100, 100, 2000, 600), 2048),
+            (photocraft_geom::Rect::new(0, 0, 7360, 4912), 2048),
+        ] {
+            let crop = crop_around(visible, size, max_side);
+            assert!(crop.contains_rect(&visible), "{visible:?} -> {crop:?}");
+            assert!(full(size).contains_rect(&crop));
+            if visible.width() as usize <= max_side && visible.height() as usize <= max_side {
+                assert!(crop.width() as usize <= max_side && crop.height() as usize <= max_side, "{crop:?} fits a {max_side} texture");
+            }
+            // The view's texture coordinates land on the same image pixels inside the crop.
+            let uv = Rect::from_min_max(
+                pos2(visible.x0 as f32 / size[0] as f32, visible.y0 as f32 / size[1] as f32),
+                pos2(visible.x1 as f32 / size[0] as f32, visible.y1 as f32 / size[1] as f32),
+            );
+            assert_eq!(visible_pixels(uv, size), visible);
+            let c = crop_uv(uv, size, crop);
+            let back = |t: f32, c0: i32, n: u32| c0 as f32 + t * n as f32;
+            assert!((back(c.min.x, crop.x0, crop.width()) - visible.x0 as f32).abs() < 0.01);
+            assert!((back(c.max.y, crop.y0, crop.height()) - visible.y1 as f32).abs() < 0.01);
+        }
+        // Degenerate input stays inside the image.
+        assert_eq!(crop_around(photocraft_geom::Rect::new(0, 0, 0, 0), [10, 10], 0), full([10, 10]));
+        assert_eq!(visible_pixels(Rect::from_min_max(pos2(f32::NAN, -3.0), pos2(9.0, f32::INFINITY)), [10, 10]), full([10, 10]));
+        let buf = photocraft_compose::Buffer::transparent(photocraft_geom::Rect::new(0, 0, 4, 4));
+        assert_eq!(crop(&buf, photocraft_geom::Rect::new(2, 2, 9, 9)).rect, photocraft_geom::Rect::new(2, 2, 4, 4));
     }
 
     #[test]

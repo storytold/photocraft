@@ -20,8 +20,8 @@ pub(crate) fn min_max_preserve(src: &Image, out: Rect, radius: f32, max: bool, p
 /// (constant work per pixel whatever the window), so the cost is O(radius) per pixel.
 pub(crate) fn min_max_round(src: &Image, out: Rect, radius: f32, max: bool) -> Vec<f32> {
     let n = src.ch;
-    let r = radius.max(0.0);
-    let ri = r.floor() as i32;
+    let half_widths = disc_half_widths(radius);
+    let ri = (half_widths.len() / 2) as i32;
     if ri == 0 {
         return src.crop(out);
     }
@@ -29,9 +29,8 @@ pub(crate) fn min_max_round(src: &Image, out: Rect, radius: f32, max: bool) -> V
     let pick = |a: f32, b: f32| if max { a.max(b) } else { a.min(b) };
     let mut res = vec![if max { f32::MIN } else { f32::MAX }; w * out.height() as usize * n];
     let (mut row, mut ext) = (Vec::new(), Vec::new());
-    for dy in -ri..=ri {
-        // Half-width of the disc on this row (the epsilon keeps exact squares, e.g. r 5, dy 3 → 4).
-        let hw = ((r * r - (dy * dy) as f32).max(0.0).sqrt() + 1e-4).floor() as i32;
+    for (dy, hw) in (-ri..=ri).zip(half_widths) {
+        let hw = hw as i32;
         for y in out.y0..out.y1 {
             let o = (y - out.y0) as usize * w * n;
             for c in 0..n {
@@ -46,6 +45,18 @@ pub(crate) fn min_max_round(src: &Image, out: Rect, radius: f32, max: bool) -> V
         }
     }
     res
+}
+
+/// The half-widths of a disc of `radius` (Preserve: Roundness), one per row `dy` in
+/// `-floor(radius) ..= floor(radius)` (empty for a radius under 1): the epsilon keeps exact
+/// squares, e.g. r 5, dy 3 → 4. Shared with the GPU's layer operators (`separable`).
+pub(crate) fn disc_half_widths(radius: f32) -> Vec<u32> {
+    let r = radius.max(0.0);
+    let ri = if r.is_finite() { r.floor().min(100_000.0) as i32 } else { 0 };
+    if ri == 0 {
+        return Vec::new();
+    }
+    (-ri..=ri).map(|dy| ((r * r - (dy * dy) as f32).max(0.0).sqrt() + 1e-4).floor() as u32).collect()
 }
 
 /// `out[i]` = extreme of `v[i..i + k]` for every full window (van Herk / Gil-Werman: prefix

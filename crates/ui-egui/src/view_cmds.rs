@@ -1198,6 +1198,12 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     if let Some(key) = browse {
         f.insert(crate::dialogs::BROWSE_FIELD.into(), json!(key));
     }
+    // A form that previews on the canvas (Apply Image) has the Preview checkbox.
+    if let Some(mut preview) = f.get("__preview").and_then(Value::as_bool) {
+        ui.add_space(4.0);
+        crate::widgets::checkbox(ui, &mut preview, tl!("Preview"));
+        f.insert("__preview".into(), json!(preview));
+    }
     camera_data(ui, f);
 }
 
@@ -1522,12 +1528,20 @@ fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Value)
                         }
                     }
                     let names: Map<String, Value> = layers.iter().skip(1).map(|n| (n.clone(), json!(n))).collect();
-                    // Scale and Offset only affect Add and Subtract.
-                    dialog(
+                    // Scale and Offset only affect Add and Subtract. It previews on the canvas, with
+                    // Photoshop's Preview checkbox.
+                    let dialog = form(
                         app,
+                        id,
+                        label,
                         json!({"sourceLayer": "merged", "sourceChannel": chans[0], "sourceInvert": false, "blending": "multiply", "opacity": 100.0, "scale": 1.0, "offset": 0, "preserveTransparency": false, "maskChannel": "none", "__labels": names}),
                         json!({"sourceLayer": layers, "sourceChannel": load, "blending": blends, "maskChannel": masks}),
-                    )
+                    );
+                    if let Some(d) = app.ui.dialog_mut(dialog) {
+                        d.fields.insert(crate::filter_dialog::CANVAS_PREVIEW.into(), json!(true));
+                        d.fields.insert("__preview".into(), json!(true));
+                    }
+                    Some(Ok(json!({ "dialog": dialog })))
                 }
                 _ => dialog(
                     app,
