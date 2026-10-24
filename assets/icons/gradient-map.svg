@@ -1,0 +1,20 @@
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  width="24"
+  height="24"
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="currentColor"
+  stroke-width="1.75"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+>
+  <defs>
+    <linearGradient id="gm-grad" x1="3" y1="0" x2="21" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="currentColor" stop-opacity="1" />
+      <stop offset="100%" stop-color="currentColor" stop-opacity="0" />
+    </linearGradient>
+  </defs>
+  <rect width="18" height="18" x="3" y="3" rx="1.5" />
+  <rect width="18" height="18" x="3" y="3" rx="1.5" fill="url(#gm-grad)" stroke="none" />
+</svg>
