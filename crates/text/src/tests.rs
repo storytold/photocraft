@@ -2456,6 +2456,20 @@ fn shared_missing_glyph_protection_follows_the_setting() {
 }
 
 #[test]
+fn retransform_tysh_sets_only_the_transform() {
+    let mut t = point("Hello!", 26.0);
+    t.transform = Affine { m: [1.5, 0.0, 0.0, 1.5, 80.0, 340.0] };
+    let tysh = crate::psd::build_tysh(&t, 72.0, Some([0.0, -20.0, 300.0, 4.0]));
+    let m = Affine { m: [0.0, 2.0, -2.0, 0.0, 12.5, -7.0] };
+    let turned = crate::psd::retransform_tysh(&tysh, &m).unwrap();
+    assert_eq!(crate::psd::parse_tysh(&turned).unwrap().transform.m, m.m);
+    // Everything but the 48 transform bytes is unchanged.
+    assert_eq!(turned.len(), tysh.len());
+    assert_eq!((&turned[..2], &turned[50..]), (&tysh[..2], &tysh[50..]));
+    assert!(crate::psd::retransform_tysh(&tysh[..40], &m).is_none(), "a truncated block is refused");
+}
+
+#[test]
 fn translate_tysh_moves_only_the_translation() {
     let mut t = point("Hello!", 26.0);
     t.transform = Affine { m: [1.5, 0.0, 0.0, 1.5, 80.0, 340.0] };
