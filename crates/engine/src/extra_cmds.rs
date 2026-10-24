@@ -262,27 +262,6 @@ fn equalize(s: &mut Session, p: &Value) -> Result<Value> {
     })
 }
 
-/// Filter › Blur › Average: the selection (or layer) filled with its mean colour.
-fn average(s: &mut Session, p: &Value) -> Result<Value> {
-    map_pixels(s, "Average", p, |_, px, cover| {
-        let (mut sum, mut wsum, mut asum, mut n) = ([0f64; 3], 0f64, 0f64, 0f64);
-        for (p, &k) in px.iter().zip(cover) {
-            let w = (p[3] * k) as f64;
-            for c in 0..3 {
-                sum[c] += p[c] as f64 * w;
-            }
-            wsum += w;
-            asum += (p[3] * k) as f64;
-            n += k as f64;
-        }
-        if wsum <= 0.0 {
-            return;
-        }
-        let avg = [(sum[0] / wsum) as f32, (sum[1] / wsum) as f32, (sum[2] / wsum) as f32, (asum / n.max(1e-9)) as f32];
-        px.fill(avg);
-    })
-}
-
 // ---------- transform presets ----------
 
 /// The presets' params: like Free Transform, they follow the Channels and Layers panel target.
@@ -1022,7 +1001,6 @@ pub fn specs() -> Vec<CommandSpec> {
             has_layer,
             show_only
         ),
-        spec!("filter.blur.average", "Average", &["Filter", "Blur"], None, "{}", has_pixels, average),
     ]
 }
 
@@ -1054,7 +1032,7 @@ mod tests {
                     s.tools.foreground = [0.0, 0.0, 0.0, 1.0];
                     s.tools.background = [1.0, 1.0, 1.0, 1.0];
                     s.execute("edit.fill", json!({"contents": "color", "color": "#808080"})).unwrap();
-                    let p = match target {
+                    let mut p = match target {
                         "quickMask" => {
                             s.execute("select.editInQuickMaskMode", json!({"on": true})).unwrap();
                             json!({"seed": 1})
@@ -1069,6 +1047,10 @@ mod tests {
                             json!({"seed": 1, "target": "mask"})
                         }
                     };
+                    // Average has no seed parameter; only Clouds uses it.
+                    if cmd == "filter.blur.average" {
+                        p.as_object_mut().unwrap().remove("seed");
+                    }
                     // Two levels in the target, so Equalize and Average have something to change.
                     let edit_target = json!({ "target": if target == "alpha" { json!({"channel": 0}) } else { json!(target) } });
                     s.edit("levels", |doc, active| {
@@ -1527,6 +1509,52 @@ mod tests {
                 assert!((0..4).all(|c| (a[c] - b[c]).abs() < 1e-3), "depth {depth} at {x},{y}: {a:?} vs {b:?}");
             }
             assert_eq!(pixel(&s, 300, 200)[3], 0.0, "outside the selection the layer stays empty");
+        }
+    }
+
+    #[test]
+    fn average_preserves_transparency_and_averages_hidden_colours() {
+        // Photoshop 26.6.1, RGB8 PNG with opaque red and transparent blue halves:
+        // Average produces (128, 0, 128), retaining each pixel's original alpha.
+        for depth in [8, 16, 32] {
+            let mut s = session(depth);
+            paint_square(&mut s, Rect::new(0, 0, 20, 30), [1.0, 0.0, 0.0, 1.0]);
+            paint_square(&mut s, Rect::new(20, 0, 40, 30), [0.0, 0.0, 1.0, 0.0]);
+            let bounds = Rect::new(0, 0, 40, 30);
+            let before = active(&s).surface().unwrap().read_region(bounds);
+            let steps = s.active().unwrap().history.past_len();
+            s.execute("filter.blur.average", json!({})).unwrap();
+            let after = active(&s).surface().unwrap().read_region(bounds);
+            for (old, new) in before.as_chunks::<4>().0.iter().zip(after.as_chunks::<4>().0) {
+                assert_eq!(new[3], old[3], "depth {depth}: Average must preserve alpha");
+                assert!((new[0] - 0.5).abs() < 0.003 && new[1] == 0.0 && (new[2] - 0.5).abs() < 0.003, "{depth}: {new:?}");
+            }
+            assert_eq!(s.active().unwrap().history.past_len(), steps + 1);
+            s.undo();
+            assert_eq!(active(&s).surface().unwrap().read_region(bounds), before);
+            s.redo();
+            assert_eq!(active(&s).surface().unwrap().read_region(bounds), after);
+        }
+    }
+
+    #[test]
+    fn average_preserves_partial_alpha_and_pixels_outside_selection() {
+        for depth in [8, 16, 32] {
+            let mut s = session(depth);
+            paint_square(&mut s, Rect::new(0, 0, 20, 30), [1.0, 0.0, 0.0, 0.25]);
+            paint_square(&mut s, Rect::new(20, 0, 40, 30), [0.0, 0.0, 1.0, 0.75]);
+            s.execute("select.rect", json!({"x": 10, "y": 0, "width": 20, "height": 30})).unwrap();
+            let before: Vec<_> = (0..40).map(|x| pixel(&s, x, 15)).collect();
+            s.execute("filter.blur.average", json!({})).unwrap();
+            for x in 0..40 {
+                let p = pixel(&s, x, 15);
+                assert_eq!(p[3], before[x as usize][3], "depth {depth}, x {x}");
+                if (10..30).contains(&x) {
+                    assert!((p[0] - 0.5).abs() < 0.003 && (p[2] - 0.5).abs() < 0.003, "{depth}: {p:?}");
+                } else {
+                    assert_eq!(p, before[x as usize]);
+                }
+            }
         }
     }
 
