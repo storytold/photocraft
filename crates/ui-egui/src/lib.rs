@@ -173,6 +173,7 @@ pub mod parity;
 pub mod patch_preview;
 pub(crate) mod pattern_fill_ui;
 pub mod pattern_preview;
+pub mod pen_barrel;
 pub mod perspective_crop_ui;
 pub mod perspective_ui;
 pub mod pixel_grid;
@@ -557,6 +558,8 @@ pub type WindowFrameFn = Box<dyn FnMut()>;
 pub type CaptionStyleFn = Box<dyn Fn(&egui::Context) -> CaptionStyle>;
 /// Physical right mouse button or stylus barrel button down (Windows; read for brush resize).
 pub type RightButtonDownFn = Box<dyn Fn() -> bool + Send + Sync>;
+/// What the pen's barrel button did since the last frame (Windows; see `pen_barrel`).
+pub type PenBarrelFn = Box<dyn FnMut() -> pen_barrel::BarrelInput>;
 
 /// Platform services injected by the app binary (file dialogs, codecs), keeping this crate free of
 /// I/O dependencies.
@@ -666,6 +669,9 @@ pub struct Services {
     pub caption_style: Option<CaptionStyleFn>,
     /// Physical right mouse button or pen barrel button currently down.
     pub right_button_down: Option<RightButtonDownFn>,
+    /// The pen's barrel button, read once a frame to turn pen presses made with it into
+    /// right-clicks (Windows, where winit drops it; `pen_barrel`). `None` elsewhere.
+    pub pen_barrel: Option<PenBarrelFn>,
     /// The persistent brush preset store, loading in the background (desktop; see
     /// `photocraft_engine::preset_store`). Attached to the session once it arrives; without
     /// one, brush presets are session-only unless the shell attached a store before startup.
@@ -2380,6 +2386,12 @@ impl eframe::App for PhotocraftApp {
         // Leave Ctrl+whole-notch mouse scrolling alone, and honour the pinch preference.
         if cfg!(any(target_os = "windows", target_os = "linux")) && self.session.prefs().enhanced_controls.zoom_with_trackpad_pinch {
             wheel_nav::fold_legacy_pinch(ctx, raw_input);
+        }
+        // The pen's barrel button is the right button (Windows Ink drops it; pen_barrel.rs).
+        if let Some(read) = self.services.pen_barrel.as_mut() {
+            let input = read();
+            let modifiers = ctx.input(|i| i.modifiers);
+            self.stylus.barrel.apply(input, &mut raw_input.events, modifiers);
         }
         raw_input.events.extend(self.take_synthetic_step());
         // After the control channel's own events (`ui.type`) join the OS's, before any widget.

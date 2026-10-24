@@ -7,7 +7,8 @@
 //!   has its pen sample.
 //! - **Windows** ([`windows::Monitor`]): a thread-local message hook inspects `WM_POINTER*`
 //!   messages on the UI thread's message queue to read `PEN_FLAG_BARREL` (`GetPointerPenInfo`),
-//!   which winit 0.30 drops by mapping pen inputs to touch events.
+//!   which winit 0.30 drops by mapping pen inputs to touch events. The pure [`pen_buttons`]
+//!   tracks it: held, pressed since the UI last looked, and a quick click (a driver's Right Click).
 //!   AppKit's monitor API and Windows' thread hook need OS interop, so `macos.rs` and `windows.rs`
 //!   allow `unsafe` (craftrules never-crash: an isolated, tested helper crate with `SAFETY:`
 //!   comments on every block).
@@ -31,6 +32,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod appkit;
+pub mod pen_buttons;
 pub mod xi;
 
 #[cfg(target_os = "macos")]

@@ -4,13 +4,20 @@
 //! inputs into `WindowEvent::Touch`, mapping them to `PointerButton::Primary`. Windows Ink also
 //! does not update `GetAsyncKeyState(VK_RBUTTON)` for stylus barrel buttons. This thread-local
 //! `WH_GETMESSAGE` hook inspects `WM_POINTER*` messages on the UI thread's message queue to
-//! track the physical barrel button state.
+//! track the physical barrel button state ([`crate::pen_buttons::Tracker`]): held, pressed since
+//! the UI last looked, and a quick click, which a driver sends for a side switch set to Right Click.
 
 #![allow(unsafe_code, clippy::upper_case_acronyms)]
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, PoisonError};
 
-static BARREL_DOWN: AtomicBool = AtomicBool::new(false);
+use crate::pen_buttons::{Buttons, Tracker};
+
+static BARREL: Mutex<Tracker> = Mutex::new(Tracker::DEFAULT);
+
+fn barrel() -> std::sync::MutexGuard<'static, Tracker> {
+    BARREL.lock().unwrap_or_else(PoisonError::into_inner)
+}
 
 #[repr(C)]
 struct POINT {
@@ -78,12 +85,20 @@ const WM_POINTERUPDATE: u32 = 0x0245;
 const WM_POINTERDOWN: u32 = 0x0246;
 const WM_POINTERUP: u32 = 0x0247;
 const WM_POINTERLEAVE: u32 = 0x024A;
+const WM_POINTERCAPTURECHANGED: u32 = 0x024C;
 
 /// `PEN_FLAG_BARREL` (winuser.h): the barrel button of the pen is pressed.
 pub const PEN_FLAG_BARREL: u32 = 0x00000001;
 
+/// `POINTER_FLAG_INCONTACT` (winuser.h): the pointer is in contact with the digitizer.
+pub const POINTER_FLAG_INCONTACT: u32 = 0x00000004;
+
 /// `POINTER_MESSAGE_FLAG_SECONDBUTTON` (winuser.h): the secondary action button is pressed.
 pub const POINTER_FLAG_SECONDBUTTON: u32 = 0x00000020;
+
+/// `POINTER_BUTTON_CHANGE_TYPE::POINTER_CHANGE_SECONDBUTTON_DOWN`: the secondary button went down
+/// with this message (Wacom's Right Click with Windows Ink, not always with the barrel flag).
+pub const POINTER_CHANGE_SECONDBUTTON_DOWN: i32 = 3;
 
 /// Pure decode of whether the stylus barrel button is pressed.
 ///
@@ -103,21 +118,29 @@ unsafe extern "system" fn get_msg_proc(code: i32, w_param: usize, l_param: isize
         // dispatched to this thread's message queue.
         let msg = unsafe { &*(l_param as *const MSG) };
         match msg.message {
-            WM_POINTERDOWN | WM_POINTERUPDATE => {
+            // The button's state after each pen message, the lift included: a tap with the button
+            // held keeps it held, while the driver's emulated Right Click releases it with the
+            // contact (a click).
+            WM_POINTERDOWN | WM_POINTERUPDATE | WM_POINTERUP => {
                 let pointer_id = (msg.w_param & 0xFFFF) as u32;
                 let pointer_message_flags = (msg.w_param >> 16) as u32;
-                // SAFETY: `pen_info` is a stack-allocated buffer initialized to zero, and `pointer_id`
+                // SAFETY: `info` is a stack-allocated buffer initialized to zero, and `pointer_id`
                 // is the pointer identifier from the valid WM_POINTER message.
-                let pen_flags = unsafe {
+                let pen = unsafe {
                     let mut info: POINTER_PEN_INFO = std::mem::zeroed();
-                    (GetPointerPenInfo(pointer_id, &mut info) != 0).then_some(info.pen_flags)
+                    (GetPointerPenInfo(pointer_id, &mut info) != 0).then_some(info)
                 };
-                let is_barrel = is_barrel_pressed(pen_flags, pointer_message_flags);
-                BARREL_DOWN.store(is_barrel, Ordering::Relaxed);
+                // Not a pen (a mouse, a finger): leave the button as it is.
+                if let Some(info) = pen {
+                    let flags = pointer_message_flags | info.pointer_info.pointer_flags;
+                    let is_barrel = is_barrel_pressed(Some(info.pen_flags), flags) || info.pointer_info.button_change_type == POINTER_CHANGE_SECONDBUTTON_DOWN;
+                    let in_contact = msg.message != WM_POINTERUP && (flags & POINTER_FLAG_INCONTACT) != 0;
+                    let mut b = barrel();
+                    b.update(is_barrel, msg.time);
+                    b.contact(in_contact, info.pressure > 0);
+                }
             }
-            WM_POINTERUP | WM_POINTERLEAVE => {
-                BARREL_DOWN.store(false, Ordering::Relaxed);
-            }
+            WM_POINTERLEAVE | WM_POINTERCAPTURECHANGED => barrel().leave(),
             _ => {}
         }
     }
@@ -156,20 +179,24 @@ impl Drop for Monitor {
         unsafe {
             UnhookWindowsHookEx(self.hook);
         }
-        BARREL_DOWN.store(false, Ordering::Relaxed);
+        barrel().leave();
     }
 }
 
 /// Returns true if the stylus barrel button is physically pressed.
 pub fn is_barrel_button_down() -> bool {
-    BARREL_DOWN.load(Ordering::Relaxed)
+    barrel().held()
+}
+
+/// What the barrel button did since the last call: held, pressed, clicked (UI thread, once a frame).
+pub fn take_buttons() -> Buttons {
+    barrel().take()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const POINTER_FLAG_INCONTACT: u32 = 0x0004;
     const POINTER_FLAG_FIRSTBUTTON: u32 = 0x0010;
 
     #[test]
