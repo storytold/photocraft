@@ -68,6 +68,8 @@ mod presentation;
 mod print_portal;
 mod screen_color;
 mod services;
+#[cfg(target_os = "linux")]
+mod startup_notify;
 // macOS gets one instance from LaunchServices (open-documents Apple events).
 #[cfg(any(not(target_os = "macos"), test))]
 mod single_instance;
@@ -863,6 +865,9 @@ fn main() -> eframe::Result {
             }
             // Where file drags and drops are (winit 0.30 doesn't say).
             app.services.cursor_pos = cursor::service(cc);
+            // End the launcher's busy cursor (X11 startup notification).
+            #[cfg(target_os = "linux")]
+            startup_notify::finish(cc);
             // The custom title bar's undecorated window must stay borderless, or its caption and
             // border offset the content and the pointer on some Windows systems (#2246).
             app.services.window_frame = window_frame::service(cc, custom_titlebar);
