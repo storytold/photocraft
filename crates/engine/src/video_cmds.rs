@@ -558,7 +558,8 @@ pub fn render_video_with(
 /// under 50 % opacity get the frame's transparent index, the rest are drawn opaque, and the
 /// palette is built from the visible pixels with one entry kept for transparency.
 fn gif_frame(mut px: Vec<[f32; 4]>, w: usize, delay_cs: u16) -> Result<photocraft_codecs::web::GifFrame> {
-    use photocraft_algo::quantize::{self, Dither, Forced, PaletteKind};
+    use photocraft_algo::palette_map::{AlphaMode, Method, Palette, Settings};
+    use photocraft_algo::quantize::{self, Forced, PaletteKind};
     let transparent = px.iter().any(|p| p[3] < 0.5);
     let visible: Vec<[f32; 4]> = px.iter().filter(|p| p[3] >= 0.5).map(|p| [p[0], p[1], p[2], 1.0]).collect();
     // A fully transparent frame still needs a palette.
@@ -569,7 +570,13 @@ fn gif_frame(mut px: Vec<[f32; 4]>, w: usize, delay_cs: u16) -> Result<photocraf
         pal.push(pal.first().copied().unwrap_or([0, 0, 0]));
         pal.len() - 1
     });
-    let indices = quantize::quantize(&mut px, w, &pal, Dither::None, 1.0, t);
+    let palette = Palette { name: "Animation".into(), colors: pal.iter().map(|c| c.map(|v| f32::from(v) / 255.0)).collect() };
+    let mapping = Settings { method: Method::None, alpha: AlphaMode::Binary, ..Settings::default() };
+    let indices = photocraft_algo::palette_map::render(&mut px, w, &palette, &mapping, [0, 0], t)
+        .map_err(EngineError::Other)?
+        .into_iter()
+        .map(|index| u8::try_from(index).map_err(|error| EngineError::Other(error.to_string())))
+        .collect::<Result<Vec<_>>>()?;
     Ok(photocraft_codecs::web::GifFrame { indices, palette: pal, transparent: t.map(|i| i as u8), delay_cs })
 }
 

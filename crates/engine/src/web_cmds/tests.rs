@@ -243,6 +243,41 @@ fn gif_and_png8_keep_transparency_and_palette() {
     assert_eq!(&img.data()[..4], &[0, 255, 0, 255]);
 }
 
+#[test]
+fn black_white_web_palette_keeps_two_opaque_entries_with_transparency() {
+    let px = vec![[0.0, 0.0, 0.0, 1.0], [1.0, 1.0, 1.0, 1.0], [0.4, 0.4, 0.4, 1.0], [0.0, 0.0, 0.0, 0.0]];
+    let settings = WebSettings::from_params(&json!({"format": "gif", "palette": "blackWhite", "colors": 2, "dither": "none"}), "test").unwrap();
+    assert_eq!(settings.to_params()["palette"], "blackWhite");
+    let optimized = optimize(&px, 4, Rect::new(0, 0, 4, 1), &settings, None, None, None, 72.0, false).unwrap();
+    assert_eq!(optimized.colors, Some(3));
+    assert_eq!(optimized.color_table, vec![[0, 0, 0], [255, 255, 255]]);
+    assert_eq!(optimized.transparent_index, Some(2));
+}
+
+#[test]
+fn fixed_web_palette_overrides_black_white_generation_and_count() {
+    let px = vec![[0.0, 0.0, 0.0, 1.0], [0.5, 0.0, 0.0, 1.0], [1.0, 1.0, 1.0, 1.0]];
+    let settings = WebSettings::from_params(
+        &json!({
+            "format": "gif",
+            "palette": "blackWhite",
+            "colors": 2,
+            "transparency": false,
+            "dither": "none",
+            "paletteSnapshot": {
+                "name": "fixed",
+                "colors": [[0.0, 0.0, 0.0], [0.5, 0.0, 0.0], [1.0, 1.0, 1.0]]
+            }
+        }),
+        "test",
+    )
+    .unwrap();
+    let optimized = optimize(&px, 3, Rect::new(0, 0, 3, 1), &settings, None, None, None, 72.0, false).unwrap();
+    assert_eq!(optimized.colors, Some(3));
+    assert_eq!(optimized.color_table, vec![[0, 0, 0], [128, 0, 0], [255, 255, 255]]);
+    assert_eq!(optimized.transparent_index, None);
+}
+
 /// #4115: Photoshop's scripted Save for Web has no matte unless one is asked for, so a soft black
 /// shadow exported to PNG-8 stays black (alpha only 0 or 255) instead of turning grey. A preset
 /// keeps its white matte, and a matte asked for still applies.
@@ -1162,4 +1197,109 @@ fn quick_export_exr_preserves_linear_hdr_and_alpha() {
     assert_eq!(std::fs::read(&own).unwrap(), before);
     s.execute("file.export.quickExport", json!({"path": format!("{dir}/explicit.exr")})).unwrap();
     assert_eq!(decode(&format!("{dir}/explicit.exr")).dimensions(), (2, 1));
+}
+
+#[test]
+fn custom_palette_and_composed_alpha_dither_match_encoded_previews_at_every_depth() {
+    use photocraft_algo::palette_map::{AlphaMode, Pattern, PatternKind};
+    let palette = Palette { name: "Frozen palette".into(), colors: vec![[0.0; 3], [0.75, 0.25, 0.5], [1.0; 3]] };
+    let mapping = Settings {
+        method: Method::FloydSteinberg,
+        alpha: AlphaMode::Dither,
+        patterns: vec![
+            Pattern { kind: PatternKind::Bayer, amount: 0.6, ..Pattern::default() },
+            Pattern { kind: PatternKind::WhiteNoise, amount: 0.4, seed: 19, ..Pattern::default() },
+        ],
+        ..Settings::default()
+    };
+    for depth in [8, 16, 32] {
+        let s = session(depth);
+        let document = &s.active().unwrap().doc;
+        let source = photocraft_compose::flatten(document);
+        for format in ["gif", "png8"] {
+            let params = json!({
+                "format": format, "paletteId": "gimp:no-longer-present", "paletteSnapshot": palette,
+                "mapping": mapping, "colors": 2
+            });
+            let settings = WebSettings::from_params(&params, "test").unwrap();
+            let output = optimize(&source.px, 64, document.bounds(), &settings, None, None, None, 72.0, true).unwrap();
+            assert_eq!(output.color_table, [[0, 0, 0], [191, 64, 128], [255, 255, 255]], "a fixed palette is not limited by the generated-colour count");
+            let decoded = photocraft_codecs::decode(&output.bytes).unwrap().convert(photocraft_codecs::ChannelLayout::Rgba, photocraft_codecs::SampleType::U8);
+            for (preview, encoded) in output.preview.chunks_exact(4).zip(decoded.data().chunks_exact(4)) {
+                assert_eq!(preview[3], encoded[3], "{depth}-bit {format} alpha");
+                if preview[3] != 0 {
+                    assert_eq!(preview, encoded, "{depth}-bit {format} opaque colour");
+                }
+            }
+            let visible_edge = (8..32).flat_map(|y| (32..34).map(move |x| (y * 64 + x) * 4 + 3)).filter(|index| output.preview[*index] == 255).count();
+            assert!((12..=28).contains(&visible_edge), "40% alpha should retain approximately 40% of 48 edge pixels, got {visible_edge}");
+            let restored = WebSettings::from_params(&settings.to_params(), "restore").unwrap();
+            let reopened = optimize(&source.px, 64, document.bounds(), &restored, None, None, None, 72.0, true).unwrap();
+            assert_eq!(reopened.preview, output.preview, "remembered settings retain the palette and dither composition");
+        }
+    }
+}
+
+#[test]
+fn oversized_export_palette_requires_deliberate_reduction() {
+    let s = session(16);
+    let document = &s.active().unwrap().doc;
+    let source = photocraft_compose::flatten(document);
+    let mut params = json!({"format": "png8", "paletteId": "gimp:Named_Colors", "dither": "none"});
+    let settings = WebSettings::from_params(&params, "test").unwrap();
+    let error = optimize(&source.px, 64, document.bounds(), &settings, None, None, None, 72.0, false).err().unwrap().to_string();
+    assert!(error.contains("448") && error.contains("Reduce Palette"), "{error}");
+    params["reducePalette"] = json!(true);
+    let settings = WebSettings::from_params(&params, "test").unwrap();
+    let output = optimize(&source.px, 64, document.bounds(), &settings, None, None, None, 72.0, true).unwrap();
+    assert!(output.color_table.len() <= 255, "one slot is reserved for this image's transparency");
+    assert_eq!(output.transparent_index, Some(output.color_table.len()));
+    let decoded = photocraft_codecs::decode(&output.bytes).unwrap().convert(photocraft_codecs::ChannelLayout::Rgba, photocraft_codecs::SampleType::U8);
+    assert_eq!(decoded.data()[3], 0);
+    assert_eq!(photocraft_algo::palettes::builtin("gimp:Named_Colors").unwrap().palette.colors.len(), 448, "reduction must not replace the library palette");
+}
+
+#[test]
+fn indexed_export_preserves_distinct_colours_outside_the_srgb_gamut() {
+    let mut s = session(8);
+    s.execute("edit.assignProfile", json!({"profile": "display-p3"})).unwrap();
+    let icc = s.active().unwrap().doc.icc_profile.as_deref().map(Vec::as_slice);
+    let pixels = [[1.0, 0.0, 0.0, 1.0], [1.0, 20.0 / 255.0, 0.0, 1.0]];
+    for format in ["png8", "gif"] {
+        let params = json!({
+            "format": format, "convertToSrgb": false, "transparency": false,
+            "colorTable": ["#ff0000", "#ff1400"], "mapping": {"method": "none"}
+        });
+        let settings = WebSettings::from_params(&params, "test").unwrap();
+        let output = optimize(&pixels, 2, Rect::new(0, 0, 2, 1), &settings, icc, None, None, 72.0, true).unwrap();
+        assert_eq!(output.indices, [0, 1], "{format}: clipping comparison colours would collapse these distinct P3 reds");
+        assert_eq!(output.color_table, [[255, 0, 0], [255, 20, 0]]);
+        let decoded = photocraft_codecs::decode(&output.bytes).unwrap().convert(photocraft_codecs::ChannelLayout::Rgba, photocraft_codecs::SampleType::U8);
+        assert_eq!(decoded.data(), [255, 0, 0, 255, 255, 20, 0, 255]);
+        assert_eq!(output.preview, decoded.data());
+    }
+}
+
+#[test]
+fn srgb_snapshot_colours_are_encoded_in_the_retained_export_profile() {
+    let mut s = session(8);
+    s.execute("edit.assignProfile", json!({"profile": "display-p3"})).unwrap();
+    let icc = s.active().unwrap().doc.icc_profile.as_deref().map(Vec::as_slice);
+    let pixels = [[1.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.0, 1.0]];
+    for format in ["png8", "gif"] {
+        let params = json!({
+            "format": format, "convertToSrgb": false, "transparency": false,
+            "paletteSnapshot": {"name": "sRGB red and black", "colors": [[1, 0, 0], [0, 0, 0]]},
+            "mapping": {"method": "floydSteinberg", "amount": 0.85, "distance": "lab"}
+        });
+        let settings = WebSettings::from_params(&params, "test").unwrap();
+        let output = optimize(&pixels, 2, Rect::new(0, 0, 2, 1), &settings, icc, None, None, 72.0, true).unwrap();
+        let decoded = photocraft_codecs::decode(&output.bytes).unwrap().convert(photocraft_codecs::ChannelLayout::Rgba, photocraft_codecs::SampleType::U8);
+        // Encoded Display P3 coordinates for sRGB red, independently rounded to eight bits.
+        for (&actual, expected) in decoded.data()[..3].iter().zip([234u8, 51, 35]) {
+            assert!(actual.abs_diff(expected) <= 1, "{format}: {actual} differs from {expected}");
+        }
+        assert_eq!(&decoded.data()[3..], [255, 0, 0, 0, 255]);
+        assert_eq!(output.preview, decoded.data());
+    }
 }

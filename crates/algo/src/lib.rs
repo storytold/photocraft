@@ -50,6 +50,8 @@ mod oil;
 mod other;
 mod other2;
 pub mod paint;
+pub mod palette_map;
+pub mod palettes;
 pub mod panorama;
 mod par;
 pub mod perspective;

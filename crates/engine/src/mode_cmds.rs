@@ -7,8 +7,10 @@
 //! inks (`Document::duotone`), which display and flat export render through. Like Photoshop the
 //! conversions flatten (Indexed, Bitmap) and require a grayscale source (Bitmap, Duotone).
 
-use photocraft_algo::quantize::{self, BitmapMethod, Dither, Forced, HalftoneShape, PaletteKind};
+use photocraft_algo::palette_map::{AlphaMode, Palette};
+use photocraft_algo::quantize::{self, BitmapMethod, Forced, HalftoneShape, PaletteKind};
 use photocraft_algo::transform::{Homography, Interp};
+use photocraft_cms::{Builtin, Intent, Transform};
 use photocraft_color::{ColorMode, PixelFormat, SampleType};
 use photocraft_doc::adjust::CurvePoint;
 use photocraft_doc::{ColorTable, Document, Duotone, DuotoneInk, Layer, LayerContent, LayerId, Size};
@@ -21,10 +23,6 @@ use crate::{EngineError, Result, Session};
 
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: cmd.into(), msg: msg.into() }
-}
-
-fn num(p: &Value, key: &str, default: f32) -> f32 {
-    p.get(key).and_then(Value::as_f64).map_or(default, |v| v as f32)
 }
 
 /// A finite number param, `default` when absent or null; anything else is a bad-params error.
@@ -169,6 +167,28 @@ fn composite(doc: &Document, opaque: bool) -> Vec<[f32; 4]> {
     if opaque { buf.over_background([1.0, 1.0, 1.0]).px } else { buf.px }
 }
 
+/// Flattened mode pixels are still encoded in the document's native RGB/Gray profile. Indexed
+/// storage is explicitly sRGB, so convert the composite before quantisation rather than merely
+/// changing the destination ICC tag.
+fn composite_in_srgb(doc: &Document, opaque: bool) -> Result<Vec<[f32; 4]>> {
+    let mut pixels = composite(doc, opaque);
+    let channels = match doc.mode {
+        ColorMode::Grayscale | ColorMode::Bitmap | ColorMode::Duotone => 1,
+        ColorMode::Rgb | ColorMode::Indexed => 3,
+        _ => return Ok(pixels),
+    };
+    let source = crate::color_cmds::document_profile(doc);
+    let transform = Transform::new(source.as_ref(), Builtin::Srgb.profile(), Intent::RelativeColorimetric, true)
+        .map_err(|e| bad("image.mode.indexedColor", format!("could not convert the composite to sRGB: {e}")))?;
+    for pixel in &mut pixels {
+        let mut converted = [0.0f32; 16];
+        let input = if channels == 1 { &pixel[..1] } else { &pixel[..3] };
+        transform.eval(input, &mut converted);
+        pixel[..3].copy_from_slice(&converted[..3]);
+    }
+    Ok(pixels)
+}
+
 /// Replace the document's layers by one 8-bit layer holding `px` in `mode`'s storage format.
 fn single_layer(doc: &mut Document, active: &mut Option<LayerId>, mode: ColorMode, px: &[[f32; 4]], name: &str, background: bool) {
     doc.mode = mode;
@@ -213,22 +233,28 @@ fn parse_forced(s: &str) -> Option<Forced> {
     })
 }
 
-fn parse_dither(s: &str) -> Option<Dither> {
-    Some(match s {
-        "none" => Dither::None,
-        "diffusion" => Dither::Diffusion,
-        "pattern" => Dither::Pattern,
-        "noise" => Dither::Noise,
-        _ => return None,
-    })
-}
-
-fn indexed_color(s: &mut Session, p: &Value) -> Result<Value> {
+fn indexed_color(s: &mut Session, raw: &Value) -> Result<Value> {
+    let params = if raw.is_null() { json!({}) } else { raw.clone() };
+    let p = &params;
     const CMD: &str = "image.mode.indexedColor";
-    let kind = PaletteKind::from_id(str_or(p, "palette", "selective"))
-        .ok_or_else(|| bad(CMD, "palette: exact|systemMac|systemWindows|web|uniform|perceptual|selective|adaptive"))?;
-    let forced = parse_forced(str_or(p, "forced", "blackWhite")).ok_or_else(|| bad(CMD, "forced: none|blackWhite|primaries|web"))?;
-    let dither = parse_dither(str_or(p, "dither", "diffusion")).ok_or_else(|| bad(CMD, "dither: none|diffusion|pattern|noise"))?;
+    let custom_palette = crate::palette_cmds::palette_from_snapshot_for_indexed(p)?;
+    let reduce = match p.get("reducePalette") {
+        None => false,
+        Some(Value::Bool(v)) => *v,
+        Some(_) => return Err(bad(CMD, "reducePalette must be a boolean")),
+    };
+    let transparency = match p.get("transparency") {
+        None => true,
+        Some(Value::Bool(v)) => *v,
+        Some(_) => return Err(bad(CMD, "transparency must be a boolean")),
+    };
+    let transparent_hint = match p.get("transparentIndex") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(v.as_u64().and_then(|n| usize::try_from(n).ok()).ok_or_else(|| bad(CMD, "transparentIndex must be a non-negative integer"))?),
+    };
+    if !transparency && transparent_hint.is_some() {
+        return Err(bad(CMD, "transparentIndex requires transparency=true"));
+    }
     let colors = match p.get("colors") {
         None => 256,
         Some(value) => {
@@ -239,25 +265,118 @@ fn indexed_color(s: &mut Session, p: &Value) -> Result<Value> {
             value as usize
         }
     };
-    let amount = num(p, "amount", 75.0).clamp(0.0, 100.0) / 100.0;
-    let transparency = p.get("transparency").and_then(Value::as_bool).unwrap_or(true);
-    let (pal_len, transparent) = s.edit("Indexed Color", |doc, active| {
-        let mut px = composite(doc, !transparency);
-        let has_clear = transparency && px.iter().any(|q| q[3] < 0.5);
-        let mut pal = quantize::build_palette(&px, kind, if has_clear { colors.saturating_sub(1).max(2) } else { colors }, forced).map_err(|e| bad(CMD, e))?;
-        let transparent = if has_clear && pal.len() < 256 {
-            pal.push([255, 255, 255]);
-            Some(pal.len() - 1)
-        } else {
-            None
-        };
-        let w = doc.size.width as usize;
-        quantize::quantize(&mut px, w, &pal, dither, amount, transparent);
-        single_layer(doc, active, ColorMode::Indexed, &px, if transparent.is_some() { "Index" } else { "Background" }, transparent.is_none());
-        doc.color_table = Some(ColorTable { colors: pal.clone(), transparent: transparent.map(|t| t as u8) });
-        Ok((pal.len(), transparent))
+    let settings = crate::palette_cmds::mapping_settings(p, "amount").map_err(|e| match e {
+        EngineError::BadParams { msg, .. } => bad(CMD, msg),
+        other => other,
     })?;
-    Ok(json!({"colors": pal_len, "transparentIndex": transparent}))
+    let (kind, forced) = if custom_palette.is_none() {
+        let kind = PaletteKind::from_id(str_or(p, "palette", "selective"))
+            .ok_or_else(|| bad(CMD, "palette: blackWhite|exact|systemMac|systemWindows|web|uniform|perceptual|selective|adaptive"))?;
+        let forced = parse_forced(str_or(p, "forced", "blackWhite")).ok_or_else(|| bad(CMD, "forced: none|blackWhite|primaries|web"))?;
+        (Some(kind), Some(forced))
+    } else {
+        // A fixed palette is authoritative: generated-palette and forced-colour controls do not
+        // alter its order or entries.
+        (None, None)
+    };
+    let generated_black_white = custom_palette.is_none() && kind == Some(PaletteKind::BlackWhite);
+    if let Some(custom) = &custom_palette {
+        if let Some(index) = transparent_hint
+            && index >= custom.colors.len()
+        {
+            return Err(bad(CMD, format!("transparentIndex {index} is outside the {}-entry palette", custom.colors.len())));
+        }
+        if custom.colors.len() > 256 && !reduce {
+            return Err(bad(
+                CMD,
+                format!(
+                    "fixed palette has {} entries; Indexed Color supports at most 256 (including transparency). Enable reducePalette for deliberate reduction",
+                    custom.colors.len()
+                ),
+            ));
+        }
+    }
+    let (pal_len, transparent, palette_snapshot) = s.edit("Indexed Color", |doc, active| {
+        let mut px = composite_in_srgb(doc, !transparency)?;
+        let mut mapping = settings.clone();
+        let custom = custom_palette.clone();
+        let mut palette = if let Some(custom) = custom {
+            custom
+        } else {
+            let has_clear = transparency
+                && px.iter().any(|q| match mapping.alpha {
+                    AlphaMode::Dither => q[3] < 1.0,
+                    _ => q[3] < 0.5,
+                });
+            let requested = if generated_black_white {
+                // BlackWhite is a fixed two-opaque-entry preset. Its palette count is intentionally
+                // independent of the Indexed Color total-count field so transparency can add a
+                // third slot without reducing either required entry.
+                2
+            } else if has_clear {
+                colors.saturating_sub(1).max(2)
+            } else {
+                colors
+            };
+            let kind = kind.ok_or_else(|| bad(CMD, "generated palette kind is missing"))?;
+            let forced = forced.ok_or_else(|| bad(CMD, "generated forced-colour mode is missing"))?;
+            let pal = quantize::build_palette(&px, kind, requested, forced).map_err(|e| bad(CMD, e))?;
+            let mut generated = Palette { name: str_or(p, "palette", "selective").to_string(), colors: pal.into_iter().map(|c| c.map(|v| f32::from(v) / 255.0)).collect() };
+            // The quantizer requires two samples, but a two-entry Indexed image with a
+            // transparency slot has capacity for exactly one opaque colour. Reduce that
+            // generated result algorithmically instead of silently exceeding `colors`; the
+            // explicit BlackWhite preset is the intentional two-opaque-entry exception.
+            if !generated_black_white && has_clear && colors == 2 {
+                generated = crate::palette_cmds::reduce_palette(&generated, 1).map_err(|e| match e {
+                    EngineError::BadParams { msg, .. } => bad(CMD, msg),
+                    other => other,
+                })?;
+            }
+            generated
+        };
+        let mut transparent = transparent_hint;
+        if custom_palette.is_some() {
+            let (mapped, slot) = crate::palette_cmds::indexed_palette(palette, reduce, transparent)?;
+            palette = mapped;
+            transparent = slot;
+        } else if let Some(index) = transparent
+            && index >= palette.colors.len()
+        {
+            return Err(bad(CMD, format!("transparentIndex {index} is outside the {}-entry palette", palette.colors.len())));
+        }
+        let needs_transparency = transparency
+            && transparent.is_none()
+            && px.iter().any(|q| match mapping.alpha {
+                AlphaMode::Dither => q[3] < 1.0,
+                _ => q[3] < 0.5,
+            });
+        if needs_transparency {
+            let room = if custom_palette.is_some() { 255 } else { colors.saturating_sub(1).max(1) };
+            if !generated_black_white && palette.colors.len() > room {
+                if custom_palette.is_some() && !reduce {
+                    return Err(bad(CMD, format!("the fixed palette has {} opaque entries but Indexed Color allows {room} with a transparency slot; enable reducePalette for deliberate reduction", palette.colors.len())));
+                }
+                palette = crate::palette_cmds::reduce_palette(&palette, room).map_err(|e| match e {
+                    EngineError::BadParams { msg, .. } => bad(CMD, msg),
+                    other => other,
+                })?;
+            }
+            transparent = crate::palette_cmds::append_transparency(&mut palette);
+        }
+        crate::palette_cmds::alpha_for_indexed(&mut mapping, transparent);
+        let w = doc.size.width as usize;
+        crate::palette_cmds::indexed_render(&mut px, w, &palette, &mapping, transparent)?;
+        single_layer(doc, active, ColorMode::Indexed, &px, if transparent.is_some() { "Index" } else { "Background" }, transparent.is_none());
+        // Indexed storage holds expanded sRGB samples; retaining an AdobeRGB/Display-P3 tag here
+        // would make those samples get transformed a second time by compositors and exporters.
+        doc.icc_profile = Some(photocraft_cms::Builtin::Srgb.profile().to_bytes());
+        let mut table = crate::palette_cmds::palette_to_color_table(&palette);
+        table.transparent = transparent.map(|index| index as u8);
+        let snapshot = palette.clone();
+        doc.color_table = Some(table);
+        Ok((palette.colors.len(), transparent, snapshot))
+    })?;
+    Ok(json!({"colors": pal_len, "transparentIndex": transparent, "paletteSnapshot": palette_snapshot}))
 }
 
 fn hex(c: [u8; 3]) -> String {
@@ -586,7 +705,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "image.mode.indexedColor",
             "Indexed Color…",
             ["Image", "Mode"],
-            r##"{"palette":"selective|perceptual|adaptive|exact|systemMac|systemWindows|web|uniform"="selective","colors":2..256=256,"forced":"blackWhite|none|primaries|web"="blackWhite","transparency":bool=true,"dither":"diffusion|none|pattern|noise"="diffusion","amount":0..100=75} (flattens)"##,
+            r##"{"palette":"blackWhite|selective|perceptual|adaptive|exact|systemMac|systemWindows|web|uniform"="selective","paletteId":string?,"paletteSnapshot":json?,"colors":2..256=256,"forced":"blackWhite|none|primaries|web"="blackWhite","transparency":bool=true,"transparentIndex":integer?,"reducePalette":bool=false,"mapping":json?,"dither":"diffusion|none|pattern|noise"="diffusion","amount":0..100=75} (flattens; fixed palette controls override generated palette; blackWhite always keeps two opaque entries and may add one transparency slot)"##,
             |s| mode_is(
                 s,
                 &[ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Indexed, ColorMode::Duotone, ColorMode::Cmyk, ColorMode::Lab],

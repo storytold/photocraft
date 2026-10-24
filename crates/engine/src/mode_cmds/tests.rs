@@ -233,6 +233,55 @@ fn indexed_exact_transparency_and_sources() {
 }
 
 #[test]
+fn indexed_black_white_generation_keeps_both_opaque_entries_and_replays() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 1, "background": "transparent"})).unwrap();
+    paint(&mut s, |x, _| {
+        if x < 2 {
+            [0.0, 0.0, 0.0, 1.0]
+        } else if x < 4 {
+            [1.0, 1.0, 1.0, 1.0]
+        } else if x < 6 {
+            [0.4, 0.4, 0.4, 1.0]
+        } else {
+            [0.0, 0.0, 0.0, 0.0]
+        }
+    });
+    let params = json!({"palette": "blackWhite", "colors": 2, "forced": "none", "dither": "none"});
+    let result = s.execute("image.mode.indexedColor", params.clone()).unwrap();
+    let first_table = doc(&s).color_table.clone().unwrap();
+    assert_eq!(result["colors"], 3);
+    assert_eq!(result["transparentIndex"], 2);
+    assert_eq!(first_table.colors.as_slice(), &[[0, 0, 0], [255, 255, 255], [255, 255, 255]]);
+    assert_eq!(first_table.transparent, Some(2));
+    assert_eq!(colours(doc(&s)), std::collections::HashSet::from([[0, 0, 0], [255, 255, 255]]));
+    assert_eq!(doc(&s).layers[0].surface().unwrap().rgba(7, 0)[3], 0.0);
+
+    // Reapplying the same generated recipe to the indexed result is deterministic, including the
+    // transparent slot and expanded pixels.
+    let first_pixels = doc(&s).layers[0].surface().unwrap().to_interleaved(doc(&s).bounds());
+    s.execute("image.mode.indexedColor", params).unwrap();
+    assert_eq!(doc(&s).color_table.as_ref(), Some(&first_table));
+    assert_eq!(doc(&s).layers[0].surface().unwrap().to_interleaved(doc(&s).bounds()), first_pixels);
+}
+
+#[test]
+fn indexed_non_black_white_generation_keeps_existing_total_count_semantics() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 3, "height": 1, "background": "transparent"})).unwrap();
+    paint(&mut s, |x, _| match x {
+        0 => [1.0, 0.0, 0.0, 1.0],
+        1 => [0.0, 0.0, 1.0, 1.0],
+        _ => [0.0, 0.0, 0.0, 0.0],
+    });
+    let result = s.execute("image.mode.indexedColor", json!({"palette": "selective", "colors": 2, "forced": "none", "dither": "none"})).unwrap();
+    let table = doc(&s).color_table.as_ref().unwrap();
+    assert_eq!(result["colors"], 2);
+    assert_eq!(table.colors.len(), 2, "one opaque entry plus one transparency slot");
+    assert_eq!(table.transparent, Some(1));
+}
+
+#[test]
 fn color_table_presets_and_entries() {
     let mut s = session(16, 16, 8, "rgb");
     assert!(!s.is_enabled("image.mode.colorTable"));

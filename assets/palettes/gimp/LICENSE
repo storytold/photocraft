@@ -1,0 +1,49 @@
+* The GIMP application core, and other portions of the official GIMP
+  distribution not explicitly licensed otherwise, are licensed under
+  the GNU GENERAL PUBLIC LICENSE -- see the 'COPYING' file in this
+  directory for details.
+
+[ The below explicit exemption, we hope, clears up the GIMP
+  developers' position concerning an ambiguity with the GNU General
+  Public License concerning what constitutes a 'mere aggregation'
+  versus a combined or derived work.  The intention is to make it
+  clear that arbitrarily-licensed programs such as GIMP plug-ins do
+  not automatically assume the GNU General Public License (GPL)
+  themselves simply because of their invocation of (or by) procedures
+  implemented in GPL-licensed code, via libgimp or a similar interface
+  to methods provided by the pdb: ]
+
+* If you create a program which invokes (or provides) methods within
+  (or for) the GPL GIMP application core through the medium of libgimp
+  or another implementation of the 'procedural database' (pdb) serial
+  protocol, then the GIMP developers' position is that this is a 'mere
+  aggregation' of the program invoking the method and the program
+  implementing the method as per section 2 of the GNU General Public
+  License.
+
+* 'libgimp' and the other GIMP libraries are licensed under the
+  GNU LESSER GENERAL PUBLIC LICENSE -- see the 'COPYING' file in the
+  libgimp directory for details.
+
+* Icon themes are licensed under Creative Commons by-sa 3.0 or 4.0. See
+  the 'COPYING' files in icons/Symbolic and icons/Color respectively.
+
+* Any data used in artworks, such as brushes, patterns and the like, and more
+  broadly likely all data inside the data/ folder should be under a CC0 license
+  (Creative Commons Zero) or equivalent, i.e. "No rights Reserved", because GIMP
+  contributors clearly don't intend to claim any right on anyone's work just
+  because they used GIMP and its default data.
+  We cannot clearly give proper licensing on all existing data, prior to the
+  addition of this note in the LICENSE file (for historical reasons, simply
+  because their contributors are since long gone), though we can say that an
+  uncountable number of users have used these for dozens of years and never had
+  legal problems as far as we know (it is anyway unclear whether anyone could
+  really claim any right for very basic brush or pattern usage). Since 2015, we
+  even have a clear FAQ entry to explicitly say the GIMP project has no
+  intention whatsoever to put restrictions on people's work:
+  https://www.gimp.org/docs/userfaq.html#can-i-use-gimp-commercially
+
+  Therefore any new data file under the data/ folder will be expected to be CC0.
+  All contributors are expected to read the LICENSE file and therefore are
+  implicitly agreeing to license their data under CC0 by contributing it as core
+  GIMP data.

@@ -2,7 +2,8 @@
 //! Run in release: `cargo run -p photocraft-engine --release --example indexed_color_perf -- image.png`.
 //! Reports palette construction, diffusion and the complete CPU preview path (no GPU upload).
 
-use photocraft_algo::quantize::{self, Dither, Forced, PaletteKind};
+use photocraft_algo::palette_map::{AlphaMode, Method, Palette, Settings};
+use photocraft_algo::quantize::{self, Forced, PaletteKind};
 use photocraft_engine::Session;
 use serde_json::json;
 use std::{error::Error, time::Instant};
@@ -41,7 +42,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             let palette_ms = elapsed(start);
             let mut out = px.clone();
             let start = Instant::now();
-            let indices = quantize::quantize(&mut out, doc.size.width as usize, &pal, Dither::Diffusion, 0.75, transparent);
+            let palette = Palette { name: "Generated".into(), colors: pal.iter().map(|color| color.map(|v| f32::from(v) / 255.0)).collect() };
+            let settings = Settings { method: Method::FloydSteinberg, amount: 0.75, alpha: AlphaMode::Binary, ..Settings::default() };
+            let indices = photocraft_algo::palette_map::render(&mut out, doc.size.width as usize, &palette, &settings, [0, 0], transparent)?;
             let diffusion_ms = elapsed(start);
             std::hint::black_box(indices);
             let start = Instant::now();

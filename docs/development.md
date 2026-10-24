@@ -515,6 +515,39 @@ How the web shell (`apps/photocraft-web/src/web.rs`) differs from desktop:
 - Headless Chrome on macOS (`--headless=new --enable-unsafe-webgpu`) gets a real WebGPU adapter.
 
 
+## Shared palette mapping backend
+
+Indexed Color, GIF/PNG-8 Save for Web and animated GIF video export use the same
+`photocraft_algo::palette_map` kernel. It maps row-major floating-point RGBA pixels in encoded
+sRGB through an ordered `palette_map::Palette`; `Settings` selects nearest-colour, Bayer,
+clustered-dot, blue-noise, white-noise, Floyd–Steinberg, Sierra-family, Atkinson, Jarvis, Stucki,
+Burkes or Riemersma mapping. `AlphaMode` controls preserved, binary or dithered alpha, and the
+kernel accepts a document-space origin so pattern phases do not move when a region is rendered in
+tiles or previews.
+
+`Palette::validate()` checks normalized catalog/import snapshots. Mapping preserves bounded
+extended-sRGB comparison colours produced by ICC conversion rather than clipping them to the
+display gamut; this keeps distinct native-profile colours distinct when indexed exports disable
+conversion to sRGB. Alpha remains in `0..=1`.
+
+The catalog API is `photocraft_algo::palettes::{builtins, builtin, parse_gpl, parse_act}`.
+Bundled GIMP palettes are pinned source data under `assets/palettes/gimp/`; the adjacent upstream
+`LICENSE` and the root `ATTRIBUTION.md` record provenance. Historical GIMP palette ownership is
+not asserted: the upstream policy says new data is expected to be CC0 but does not resolve the
+status of historical individual files. GPL and ACT imports are bounded, preserve order and
+duplicates, and validate channel/count limits before use.
+
+Engine adapters expose shared `Palette`/`Settings` resolution and legacy `dither`, `amount`,
+`ditherAmount`, `paletteId` and `paletteSnapshot` spellings in `crates/engine/src/palette_cmds.rs`.
+Indexed conversion keeps its existing 256-entry/transparency-slot rules and stores the expanded
+sRGB samples plus `ColorTable`; Save for Web and video use the same mapping implementation.
+No Palette Map filter command or UI is registered by this backend change.
+
+`crates/engine/examples/indexed_color_perf.rs` measures palette construction and the full Indexed
+preview with warmup plus repeated runs. Keep reports local, and compare runs built with the same
+release settings and machine class. The `generate_blue_noise` example regenerates the committed
+deterministic threshold tile when algorithm data changes; normal startup does not regenerate it.
+
 ## Indexed Color timings
 
 `cargo run --release -p photocraft-engine --example indexed_color_perf -- image.png` measures
@@ -524,11 +557,8 @@ It prints JSON lines for 8, 16, 32, 64, 128 and 256 colours, with one warmup and
 runs per count, plus palette and pixel hashes for exact before/after comparisons. Input files
 stay local; do not publish personal images, palettes, or metadata with benchmark reports.
 
-The synthetic 24 MP lookup comparison is reproducible with
-`cargo test --release -p photocraft-algo indexed_diffusion_24mp_release_comparison -- --ignored --nocapture`.
-It alternates linear/accelerated lookup order and checks identical indices and pixels.
-For the 2026-10-09 local timings both binaries used `CARGO_PROFILE_RELEASE_LTO=false` and
-`CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16`; compare binaries built with the same settings.
+The output includes palette and pixel hashes for deterministic comparisons; compare measurements
+only between binaries built with the same release settings and machine class.
 
 On native desktop sessions, Indexed Color live previews calculate and flatten on one worker.
 The last preview remains visible while dragging; intermediate settings are coalesced, and only
