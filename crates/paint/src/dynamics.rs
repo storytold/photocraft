@@ -244,7 +244,8 @@ pub struct PathWalker {
     /// Pixel-grid stepping for small aliased tips: the dab-centre offset inside a pixel (see
     /// [`PathWalker::pixel_grid`]).
     grid: Option<f64>,
-    /// The grid cell of the last pixel-grid step, so the next segment joins it (#8040).
+    /// The grid cell of the last pixel-grid step, so the next segment joins it (#8040). Only pixel
+    /// steps set it: speed spacing and airbrush build-up leave their gaps on purpose.
     cell: Option<(f64, f64)>,
 }
 
@@ -290,6 +291,7 @@ impl PathWalker {
         let (dm, dn) = (pm - am, pn - an);
         let n = (m1 - m0).abs();
         if !(n.is_finite() && dn.is_finite()) || n > MAX_GRID_STEPS || dm == 0.0 {
+            self.cell = None;
             return false;
         }
         let dir = (m1 - m0).signum();
@@ -303,6 +305,7 @@ impl PathWalker {
             (q.x, q.y) = if steep { (cn, c) } else { (c, cn) };
             self.bridge(&q, out);
             self.emit(q, out);
+            self.cell = Some((q.x, q.y));
         }
         true
     }
@@ -335,9 +338,6 @@ impl PathWalker {
     }
 
     fn emit(&mut self, point: StrokePoint, out: &mut impl FnMut(StepInput)) {
-        if let Some(g) = self.grid {
-            self.cell = Some((grid_cell(point.x, g), grid_cell(point.y, g)));
-        }
         let s = StepInput { point, direction: self.dir, initial_direction: self.initial_dir.unwrap_or(self.dir), step: self.step };
         self.step += 1;
         out(s);
@@ -359,6 +359,9 @@ impl PathWalker {
             }
         }
         if let Some(f) = self.pending_first.take() {
+            if let Some(g) = self.grid {
+                self.cell = Some((grid_cell(f.x, g), grid_cell(f.y, g)));
+            }
             self.emit(f, out);
         }
         if len > 1e-9 {
@@ -885,5 +888,40 @@ mod walker_budget_tests {
         let before = steps.get();
         walker.push(StrokePoint::new(end + 0.8, 0.0, 1.0), &one, &mut count);
         assert_eq!(steps.get(), before + 1);
+    }
+}
+
+#[cfg(test)]
+mod grid_bridge_tests {
+    use super::*;
+
+    fn walk(mut walker: PathWalker, pts: &[StrokePoint]) -> Vec<StrokePoint> {
+        let mut steps = Vec::new();
+        let mut out = |s: StepInput| steps.push(s.point);
+        for p in pts {
+            walker.push(*p, &|_: &StrokePoint| 1.0, &mut out);
+        }
+        walker.finish(&mut out);
+        steps
+    }
+
+    fn at(x: f64, y: f64, time: f64) -> StrokePoint {
+        StrokePoint { time, ..StrokePoint::new(x, y, 1.0) }
+    }
+
+    /// #9059 review: only the pixel steps are bridged. Speed spacing (Spacing off) and airbrush
+    /// build-up leave out dabs on purpose, and pixel-grid mode must not put them back.
+    #[test]
+    fn pixel_grid_bridges_only_its_own_steps() {
+        // Fast enough that speed-spaced steps land 3 px apart.
+        let fast = [at(0.0, 0.0, 0.0), at(30.0, 0.0, 80.0), at(30.0, 30.0, 160.0)];
+        let speed = walk(PathWalker::new(None).speed_spacing(SPEED_SPACING_MS), &fast);
+        let speed_grid = walk(PathWalker::new(None).speed_spacing(SPEED_SPACING_MS).pixel_grid(0.5), &fast);
+        assert_eq!(speed_grid.len(), speed.len(), "speed spacing keeps its gaps");
+        // Three airbrush steps on top of the pixel steps, and nothing else.
+        let seg = [at(0.0, 0.0, 0.0), at(10.0, 0.0, 30.0)];
+        let grid = walk(PathWalker::new(None).pixel_grid(0.5), &seg);
+        let airbrush = walk(PathWalker::new(Some(10.0)).pixel_grid(0.5), &seg);
+        assert_eq!(airbrush.len(), grid.len() + 3, "airbrush adds only its own steps");
     }
 }
