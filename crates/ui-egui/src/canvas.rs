@@ -1042,6 +1042,18 @@ fn pointer_moves(events: &[egui::Event], button: egui::PointerButton, down_at_st
     out
 }
 
+/// Where `button` was released this frame: the first release, as [`pointer_moves`] stops there.
+/// A stroke ends at this point, not at the pointer's latest position, which a move after the
+/// release (a pen hovering away, or Windows' delayed mouse messages for a pen behind its
+/// `WM_POINTER` input) has already carried elsewhere: ending there drew a tail at the stroke's
+/// end with the pen's last pressure.
+fn release_pos(events: &[egui::Event], button: egui::PointerButton) -> Option<Pos2> {
+    events.iter().find_map(|e| match e {
+        egui::Event::PointerButton { pos, button: b, pressed: false, .. } if *b == button => Some(*pos),
+        _ => None,
+    })
+}
+
 /// Modifiers attached to the pointer event itself. Some input sources provide these without a
 /// separate `ModifiersChanged` event, so use them for click gestures before falling back to the
 /// frame-wide modifier state.
@@ -4316,10 +4328,11 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                 Vec::new()
             };
             // A frame with no raw move still tracks a held gesture (a still pointer, a modifier
-            // change): fall back to the latest position, as the old code always did.
+            // change): fall back to the latest position, as the old code always did. A gesture
+            // released this frame holds where it was released, never a move after the release.
             if positions.is_empty()
                 && (buttons.dragged || press_stroke_moving)
-                && let Some(p) = response.interact_pointer_pos().or(ui.input(|i| i.pointer.latest_pos()))
+                && let Some(p) = release_pos(&events, button).or(response.interact_pointer_pos()).or(ui.input(|i| i.pointer.latest_pos()))
             {
                 positions.push(p);
             }
@@ -4351,7 +4364,9 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             if press_stroke {
                 buttons.clicked = false;
             }
-            let at = response.interact_pointer_pos();
+            // Where the button was let go, not the pointer's latest position (`release_pos`).
+            let button = if response.drag_stopped_by(PointerButton::Secondary) { PointerButton::Secondary } else { PointerButton::Primary };
+            let at = ui.input(|i| release_pos(&i.events, button)).or(response.interact_pointer_pos());
             // #6286: a guide let go over a ruler is removed, whichever ruler it is. Tested here in
             // screen space, where the rulers are: on the guide's own axis the release can still be
             // inside the document, which is what `finish_drag` sees.
@@ -4371,7 +4386,11 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         // or neither (a long press that never moved).
         if press_stroke && !buttons.stopped && ui.input(|i| i.pointer.primary_released()) {
             buttons.clicked = false;
-            let p = response.interact_pointer_pos().map(|p| xf.to_doc(p)).or_else(|| app.drag.as_ref().and_then(|d| d.points.last().map(|q| [q[0], q[1]])));
+            let released = ui.input(|i| release_pos(&i.events, PointerButton::Primary));
+            let p = released
+                .or(response.interact_pointer_pos())
+                .map(|p| xf.to_doc(p))
+                .or_else(|| app.drag.as_ref().and_then(|d| d.points.last().map(|q| [q[0], q[1]])));
             if let Some(d) = p
                 && app.drag.is_some()
             {

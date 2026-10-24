@@ -2,6 +2,7 @@
 resolver = "3"
 members = ["crates/*", "apps/*", "xtask"]
 default-members = ["crates/*", "apps/photocraft", "apps/photocraft-cli", "xtask"]
+exclude = ["vendor/winit"]
 
 [workspace.package]
 version = "0.15.1"
@@ -172,3 +173,9 @@ opt-level = "z"
 [profile.wasm-release.package.photocraft-paint]
 opt-level = 3
 
+
+# winit 0.30.13 gives every coalesced Windows pen sample the newest pressure, so a pen lifting
+# while it moves draws its last stretch at near-zero pressure. `vendor/winit` reads each
+# sample's own pressure (`GetPointerPenInfoHistory`); drop it once winit ships the fix.
+[patch.crates-io]
+winit = { path = "vendor/winit" }

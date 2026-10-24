@@ -197,6 +197,8 @@ impl Stylus {
         }
         self.frame = self.feed.drain();
         self.current = None;
+        // The force of the last touch sample this frame, to drop repeats (see below).
+        let mut last_touch_force = None;
         for e in events {
             if let egui::Event::Touch { id, phase, force, .. } = e {
                 let force = force.filter(|f| f.is_finite()).map(|f| f.clamp(0.0, 1.0));
@@ -227,7 +229,16 @@ impl Stylus {
                         let force = force.or((down && self.touch_pen && (start || self.touch.is_none())).then_some(0.0));
                         if let Some(f) = force {
                             self.touch = Some(f);
-                            self.frame.push(PenSample { pressure: f, ..Default::default() });
+                            // Upstream winit (0.30.13) gives every coalesced `WM_POINTER` position
+                            // of a message the pen's latest pressure, not each position's own
+                            // (`vendor/winit` reads each one's), so a frame's touch moves can repeat
+                            // one force. Keeping one sample for the run lets `select` ramp the
+                            // frame's moves from the previous frame's pressure instead of stepping:
+                            // a lift no longer drops the frame's whole last stretch to the lift's
+                            // near-zero force at once (a thin tail at every stroke's end).
+                            if last_touch_force.replace(f) != Some(f) {
+                                self.frame.push(PenSample { pressure: f, ..Default::default() });
+                            }
                         }
                     }
                     egui::TouchPhase::End | egui::TouchPhase::Cancel => {
@@ -695,6 +706,28 @@ mod tests {
         assert_eq!(s.pressure(), 0.4);
         s.update(&[]);
         assert_eq!(s.pressure(), 1.0);
+    }
+
+    /// winit on Windows stamps each coalesced move of a message with the latest pressure, so the
+    /// frame before a lift (logged from a Cintiq Pro: three moves at 0.47, then four at 0.035)
+    /// repeats the lift's near-zero force. The four moves ramp down to it instead of all being
+    /// near zero, which drew the last stretch of every stroke as a thin tail.
+    #[test]
+    fn repeated_touch_forces_ramp_across_the_frame() {
+        use egui::TouchPhase::{Move, Start};
+        let mut s = Stylus::default();
+        s.update(&[touch(Start, Some(0.47)), touch(Move, Some(0.47)), touch(Move, Some(0.47))]);
+        s.begin_stroke();
+        s.update(&[touch(Move, Some(0.035)), touch(Move, Some(0.035)), touch(Move, Some(0.035)), touch(Move, Some(0.035))]);
+        let ramp: Vec<f32> = (0..4)
+            .map(|k| {
+                s.select(k, 4);
+                s.pressure()
+            })
+            .collect();
+        assert!(ramp.windows(2).all(|w| w[1] < w[0]), "pressure falls move by move: {ramp:?}");
+        assert!(ramp[0] > 0.3, "the first move keeps most of the previous pressure: {ramp:?}");
+        assert!((ramp[3] - 0.035).abs() < 1e-6, "the last move reaches the frame's force: {ramp:?}");
     }
 
     fn touch_id(id: u64, phase: egui::TouchPhase, force: Option<f32>) -> egui::Event {
