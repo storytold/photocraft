@@ -119,17 +119,68 @@ pub fn lj92_encode(samples: &[u16], width: usize, height: usize, components: usi
                         _ => (ra + rb) >> 1,
                     }
                 };
-                let mut d = (i32::from(samples[i]) - px) & 0xFFFF;
-                if d > 32768 {
-                    d -= 65536;
-                }
-                diffs.push(d);
+                diffs.push(wrap_diff(i32::from(samples[i]) - px));
             }
         }
     }
+    let restart = restart_rows.map(|r| (r * width, interval.saturating_mul(row)));
+    lj92_stream(&diffs, width, height, &vec![0x11; components], precision, predictor, restart)
+}
+
+/// A difference modulo 2^16, in −32767..=32768 (T.81 H.1.2.2).
+fn wrap_diff(d: i32) -> i32 {
+    let d = d & 0xFFFF;
+    if d > 32768 { d - 65536 } else { d }
+}
+
+/// Encodes a Canon sRAW / mRAW frame: `seq` is the sample sequence in decode order (per MCU the
+/// `h × v` Y samples, then Cb and Cr; `width / h` MCUs a row), predicted as
+/// `ljpeg::decode_subsampled` describes: each Y from the previous Y, Cb and Cr from the previous
+/// MCU's, the first MCU of a row from the first of the row above. `restart_rows` counts MCU rows.
+pub fn lj92_encode_sraw(seq: &[u16], width: usize, height: usize, h: usize, v: usize, precision: u8, restart_rows: Option<usize>) -> Vec<u8> {
+    let (luma, mcus) = (h * v, width / h);
+    let per_mcu = luma + 2;
+    let row_len = mcus * per_mcu;
+    assert_eq!(seq.len(), row_len * (height / v));
+    let interval = restart_rows.unwrap_or(usize::MAX);
+    let initial = 1i32 << (precision - 1);
+    let mut diffs = Vec::with_capacity(seq.len());
+    let mut top = [initial; 3];
+    for (r, row) in seq.chunks_exact(row_len).enumerate() {
+        if r % interval == 0 {
+            top = [initial; 3];
+        }
+        let (mut y, mut cb, mut cr) = (top[0], top[1], top[2]);
+        for (m, mcu) in row.chunks_exact(per_mcu).enumerate() {
+            for (k, &s) in mcu[..luma].iter().enumerate() {
+                let pred = if m == 0 && k == 0 { top[0] } else { y };
+                diffs.push(wrap_diff(i32::from(s) - pred));
+                y = i32::from(s);
+                if m == 0 && k == 0 {
+                    top[0] = y;
+                }
+            }
+            diffs.push(wrap_diff(i32::from(mcu[luma]) - cb));
+            diffs.push(wrap_diff(i32::from(mcu[luma + 1]) - cr));
+            (cb, cr) = (i32::from(mcu[luma]), i32::from(mcu[luma + 1]));
+            if m == 0 {
+                (top[1], top[2]) = (cb, cr);
+            }
+        }
+    }
+    let factors = [(h as u8) << 4 | v as u8, 0x11, 0x11];
+    let restart = restart_rows.map(|r| (r * mcus, interval.saturating_mul(row_len)));
+    lj92_stream(&diffs, width, height, &factors, precision, 1, restart)
+}
+
+/// Writes SOI, SOF3 (one component per entry of `factors`), one Huffman table for every
+/// component, the restart interval `(DRI value, differences per interval)`, SOS and the
+/// entropy-coded `diffs`.
+fn lj92_stream(diffs: &[i32], width: usize, height: usize, factors: &[u8], precision: u8, predictor: u8, restart: Option<(usize, usize)>) -> Vec<u8> {
+    let components = factors.len();
     // Table: categories ordered by frequency get increasing code lengths.
     let mut freq = [0usize; 17];
-    for &d in &diffs {
+    for &d in diffs {
         freq[category(d) as usize] += 1;
     }
     let mut order: Vec<usize> = (0..17).collect();
@@ -161,8 +212,8 @@ pub fn lj92_encode(samples: &[u16], width: usize, height: usize, components: usi
     out.extend_from_slice(&(height as u16).to_be_bytes());
     out.extend_from_slice(&(width as u16).to_be_bytes());
     out.push(components as u8);
-    for c in 0..components {
-        out.extend_from_slice(&[c as u8 + 1, 0x11, 0]);
+    for (c, &f) in factors.iter().enumerate() {
+        out.extend_from_slice(&[c as u8 + 1, f, 0]);
     }
     // DHT (one table, id 0)
     out.extend_from_slice(&[0xFF, 0xC4]);
@@ -170,10 +221,11 @@ pub fn lj92_encode(samples: &[u16], width: usize, height: usize, components: usi
     out.push(0x00);
     out.extend_from_slice(&counts);
     out.extend_from_slice(&vals);
-    if let Some(r) = restart_rows {
+    if let Some((dri, _)) = restart {
         out.extend_from_slice(&[0xFF, 0xDD, 0, 4]);
-        out.extend_from_slice(&((r * width) as u16).to_be_bytes());
+        out.extend_from_slice(&(dri as u16).to_be_bytes());
     }
+    let every = restart.map_or(usize::MAX, |(_, n)| n);
     // SOS
     out.extend_from_slice(&[0xFF, 0xDA]);
     out.extend_from_slice(&((6 + 2 * components) as u16).to_be_bytes());
@@ -185,7 +237,7 @@ pub fn lj92_encode(samples: &[u16], width: usize, height: usize, components: usi
     let mut w = BitWriter { out, acc: 0, n: 0 };
     let mut rst = 0u8;
     for (i, &d) in diffs.iter().enumerate() {
-        if i > 0 && i % (interval.saturating_mul(row)) == 0 {
+        if i > 0 && i % every == 0 {
             w.flush();
             w.out.extend_from_slice(&[0xFF, 0xD0 + rst]);
             rst = (rst + 1) % 8;
@@ -930,6 +982,103 @@ impl Cr2Spec {
             (274, Val::Short(vec![self.orientation])),
             (277, Val::Short(vec![3])),
             (279, Val::Long(vec![12])),
+            (34665, Val::Ifds(vec![exif_ifd])),
+        ]);
+        let ifd1 = t.ifd(vec![(256, Val::Long(vec![1]))]);
+        let ifd2 = t.ifd(vec![(256, Val::Long(vec![1]))]);
+        t.chain = vec![ifd0, ifd1, ifd2, raw_ifd];
+        t.cr2_raw_ifd = Some(raw_ifd);
+        t.build()
+    }
+}
+
+/// A synthetic Canon sRAW / mRAW CR2: Y, Cb and Cr planes in one subsampled lossless JPEG
+/// (see `ljpeg::decode_subsampled` and `sraw.rs`).
+#[derive(Debug, Clone)]
+pub struct Cr2SrawSpec {
+    /// Image size in pixels (multiples of `h` and `v`).
+    pub width: usize,
+    pub height: usize,
+    /// Y sampling factors: 2×2 (sRAW1 / mRAW) or 2×1 (sRAW2).
+    pub h: usize,
+    pub v: usize,
+    pub precision: u8,
+    /// `width * height` Y samples, row-major.
+    pub y: Vec<u16>,
+    /// One Cb and one Cr per MCU (`width / h` by `height / v`), offset by `2^(precision−1)`.
+    pub cb: Vec<u16>,
+    pub cr: Vec<u16>,
+    /// Slice widths in samples (all but the last equal); empty = no slice tag.
+    pub slices: Vec<usize>,
+    /// Restart interval in MCU rows.
+    pub restart_rows: Option<usize>,
+    /// As-shot RGGB levels at ColorData word 0x3F.
+    pub wb_rggb: Option<[u16; 4]>,
+    /// sRAW gains (RGGB) at ColorData word 0x80; ColorData version 15 is written either way.
+    pub gains: Option<[u16; 4]>,
+    /// Image borders: left, top, right, bottom (inclusive), as in SensorInfo.
+    pub borders: Option<[u16; 4]>,
+}
+
+impl Cr2SrawSpec {
+    pub fn build(&self) -> Vec<u8> {
+        let (h, v) = (self.h, self.v);
+        let per_mcu = h * v + 2;
+        let (mcus, rows) = (self.width / h, self.height / v);
+        let widths: Vec<usize> = if self.slices.is_empty() { vec![mcus * per_mcu] } else { self.slices.clone() };
+        assert_eq!(widths.iter().sum::<usize>(), mcus * per_mcu);
+        // Slice the MCUs into the JPEG sample order.
+        let mut seq = Vec::with_capacity(mcus * rows * per_mcu);
+        let mut m0 = 0;
+        for &sw in &widths {
+            assert_eq!(sw % per_mcu, 0);
+            let n = sw / per_mcu;
+            for r in 0..rows {
+                for mx in m0..m0 + n {
+                    for k in 0..h * v {
+                        seq.push(self.y[(r * v + k / h) * self.width + mx * h + k % h]);
+                    }
+                    seq.push(self.cb[r * mcus + mx]);
+                    seq.push(self.cr[r * mcus + mx]);
+                }
+            }
+            m0 += n;
+        }
+        let jpeg = lj92_encode_sraw(&seq, self.width, self.height, h, v, self.precision, self.restart_rows);
+        let mut t = TiffBuilder::default();
+        let jb = t.blob(jpeg.clone());
+        let mut raw = vec![
+            (256, Val::Short(vec![self.width as u16])),
+            (257, Val::Short(vec![self.height as u16])),
+            (259, Val::Short(vec![6])),
+            (273, Val::Blobs(vec![jb])),
+            (279, Val::Long(vec![jpeg.len() as u32])),
+        ];
+        if !self.slices.is_empty() {
+            let n = widths.len() - 1;
+            raw.push((50752, Val::Short(vec![n as u16, widths[0] as u16, widths[n] as u16])));
+        }
+        let raw_ifd = t.ifd(raw);
+        let mut mn: Vec<(u16, Val)> = Vec::new();
+        if let Some([l, tp, r, b]) = self.borders {
+            mn.push((0x00E0, Val::Short(vec![34, self.width as u16, self.height as u16, 0, 0, l, tp, r, b, 0, 0, 0, 0, 0, 0, 0, 0])));
+        }
+        let mut cd = vec![0u8; 2 * 1602];
+        cd[0..2].copy_from_slice(&15u16.to_le_bytes());
+        for (at, levels) in [(0x3F, self.wb_rggb), (0x80, self.gains)] {
+            for (i, v) in levels.iter().flatten().enumerate() {
+                cd[2 * (at + i)..2 * (at + i) + 2].copy_from_slice(&v.to_le_bytes());
+            }
+        }
+        mn.push((0x4001, Val::Undefined(cd)));
+        let mi = t.ifd(mn);
+        let exif_ifd = t.ifd(vec![(33434, Val::Rational(vec![(1, 100)])), (37500, Val::IfdBytes(mi))]);
+        let ifd0 = t.ifd(vec![
+            (256, Val::Long(vec![2])),
+            (257, Val::Long(vec![2])),
+            (271, Val::Ascii("Canon".into())),
+            (272, Val::Ascii("Canon EOS Synthetic".into())),
+            (274, Val::Short(vec![1])),
             (34665, Val::Ifds(vec![exif_ifd])),
         ]);
         let ifd1 = t.ifd(vec![(256, Val::Long(vec![1]))]);

@@ -29,7 +29,7 @@
 //!   image area (the D800E, the ILCE-7).
 //!
 //! Decoded today: DNG (uncompressed, deflate, lossless-JPEG, lossy-JPEG and JPEG XL, strips and
-//! tiles, CFA and LinearRaw), CR2 (lossless JPEG with Canon slices), uncompressed or
+//! tiles, CFA and LinearRaw), CR2 (lossless JPEG with Canon slices, and sRAW / mRAW), uncompressed or
 //! lossless-JPEG TIFF/EP raws (NEF, ARW, PEF… when not vendor-compressed),
 //! Nikon compressed NEF (lossless and lossy), Sony compressed ARW (cRAW),
 //! Panasonic RW2 (RawFormat 5 packed and RawFormat 3/4 vendor-compressed),
@@ -64,6 +64,7 @@ mod rw2;
 mod saturation;
 mod sensor;
 mod sony;
+mod sraw;
 mod tiff;
 mod tiffep;
 mod tone;
