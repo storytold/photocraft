@@ -6,6 +6,7 @@
   Produces, in $env:DIST (default: dist/release):
     photocraft-<version>-windows-<arch>.msi            per-machine installer (WiX v5)
     photocraft-<version>-windows-<arch>-portable.zip   photocraft.exe + photocraft-cli.exe + portable.txt
+    photocraft-<version>-windows-<arch>-symbols.zip    photocraft.pdb + photocraft_cli.pdb (optional, for profilers)
 
   The binaries link the C runtime statically (+crt-static), so neither the MSI nor the portable
   zip needs the Visual C++ redistributable. Signing is delegated to sign.ps1 (skipped with a
@@ -170,6 +171,25 @@ $Zip = Join-Path $Dist "photocraft-$Version-windows-$Arch-portable.zip"
 Remove-Item -Force $Zip -ErrorAction SilentlyContinue
 Compress-Archive -Path $Portable -DestinationPath $Zip
 
+# ---- debug symbols -----------------------------------------------------------------------------
+# The linker writes a PDB beside each exe, and the exe names it without a path (photocraft.pdb,
+# photocraft_cli.pdb). They ship as a separate, optional download so profilers (Windows Performance
+# Analyzer, Superluminal, Visual Studio) show PhotoCraft's function names for the released
+# binaries (#688). Signing doesn't change the PDB signature an exe records, so they match the
+# signed exes; a rebuild of the same commit writes a PDB that doesn't.
+$Symbols = Join-Path $TargetDir "windows-package\photocraft-$Version-windows-$Arch-symbols"
+Remove-Item -Recurse -Force $Symbols -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Force -Path $Symbols | Out-Null
+foreach ($pdb in 'photocraft.pdb', 'photocraft_cli.pdb') {
+  $p = Join-Path $Bin $pdb
+  if (-not (Test-Path $p)) { throw "$pdb is missing from $($Bin), where the release build writes it" }
+  Copy-Item $p $Symbols
+}
+Copy-Item (Join-Path $PSScriptRoot 'symbols.txt') $Symbols
+$SymbolsZip = Join-Path $Dist "photocraft-$Version-windows-$Arch-symbols.zip"
+Remove-Item -Force $SymbolsZip -ErrorAction SilentlyContinue
+Compress-Archive -Path $Symbols -DestinationPath $SymbolsZip
+
 # Smoke-test the CLI when this machine can run it. An ARM64 build made on an x64 runner can't run
 # here; .github/workflows/windows-arm64.yml installs and runs it on ARM64 instead.
 $HostArch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant()
@@ -178,4 +198,4 @@ if ($Arch -ne 'arm64' -or $HostArch -eq 'arm64') {
 } else {
   Write-Output "skipping photocraft-cli --version: an $Arch build doesn't run on this $HostArch machine"
 }
-Get-Item $Msi, $Zip | Format-Table Name, Length
+Get-Item $Msi, $Zip, $SymbolsZip | Format-Table Name, Length
