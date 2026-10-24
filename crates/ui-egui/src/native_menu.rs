@@ -763,6 +763,7 @@ pub(crate) fn state_hash(app: &PhotocraftApp, input: Option<u64>) -> u64 {
     (app.discard.is_some(), app.camera_raw.is_some()).hash(&mut h);
     serde_json::to_string(&(&ui.panels, &ui.extras, &ui.view, ui.theme, ui.tool)).unwrap_or_default().hash(&mut h);
     s.prefs().interface.language.hash(&mut h);
+    photocraft_plugins::registry::revision().hash(&mut h);
     h.finish()
 }
 

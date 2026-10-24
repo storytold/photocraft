@@ -187,18 +187,19 @@ fn b64_decode(s: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
-fn install(_s: &mut Session, p: &Value) -> Result<Value> {
+fn install(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "plugin.install";
-    let plugin = if let Some(data) = p.get("data") {
+    let (mut plugin, wasm_bytes) = if let Some(data) = p.get("data") {
         let data = data.as_str().ok_or_else(|| bad(CMD, "`data` must be a base64 string"))?;
         if data.len() > MAX_DATA_CHARS {
             return Err(bad(CMD, "`data` is larger than the module limit"));
         }
-        let bytes = b64_decode(data).ok_or_else(|| bad(CMD, "`data` is not valid base64"))?;
-        Plugin::load(&bytes, photocraft_plugins::Limits::default()).map_err(err)?
+        let raw = b64_decode(data).ok_or_else(|| bad(CMD, "`data` is not valid base64"))?;
+        let plug = Plugin::load(&raw, photocraft_plugins::Limits::default()).map_err(err)?;
+        (plug, Some(raw))
     } else if let Some(path) = p.get("path") {
         let path = path.as_str().filter(|s| !s.is_empty()).ok_or_else(|| bad(CMD, "`path` must be a file path"))?;
-        load_path(path)?
+        load_path_with_bytes(path)?
     } else {
         return Err(bad(CMD, "give `path` (a .wasm file) or `data` (the module as base64)"));
     };
@@ -206,21 +207,125 @@ fn install(_s: &mut Session, p: &Value) -> Result<Value> {
     if !replace && registry::get(plugin.id()).is_some() {
         return Err(bad(CMD, format!("a plug-in with id {:?} is already installed", plugin.id())));
     }
-    Ok(describe(&registry::install(plugin)))
+    #[cfg(not(target_arch = "wasm32"))]
+    let mut written: Option<String> = None;
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(bytes) = wasm_bytes {
+        let pi = &s.prefs().plug_ins;
+        let folder = pi.additional_plugins_folder.trim();
+        if pi.use_additional_plugins_folder && !folder.is_empty() {
+            let dir = std::path::Path::new(folder);
+            if dir.is_dir() {
+                let slug: String = plugin.id().chars().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '_' }).collect();
+                let mut dest = dir.join(format!("{slug}.wasm"));
+                let is_already_at_dest = plugin.source().is_some_and(|src| {
+                    let sp = std::path::Path::new(src);
+                    sp == dest.as_path() || sp.canonicalize().ok() == dest.canonicalize().ok()
+                });
+                if !is_already_at_dest {
+                    if dest.exists() {
+                        let existing_id = std::fs::read(&dest).ok().and_then(|b| {
+                            Plugin::load(&b, photocraft_plugins::Limits::default()).ok()
+                        }).map(|p| p.id().to_string());
+
+                        if existing_id.as_deref() == Some(plugin.id()) {
+                            if !replace {
+                                return Err(bad(CMD, format!("a plug-in with id {:?} is already installed at {}", plugin.id(), dest.display())));
+                            }
+                        } else {
+                            // Slug collision with a different plug-in or file: rename to avoid overwriting.
+                            let mut counter = 2;
+                            loop {
+                                let candidate = dir.join(format!("{slug}_{counter}.wasm"));
+                                if !candidate.exists() {
+                                    dest = candidate;
+                                    break;
+                                }
+                                let cand_id = std::fs::read(&candidate).ok().and_then(|b| {
+                                    Plugin::load(&b, photocraft_plugins::Limits::default()).ok()
+                                }).map(|p| p.id().to_string());
+                                if cand_id.as_deref() == Some(plugin.id()) {
+                                    if !replace {
+                                        return Err(bad(CMD, format!("a plug-in with id {:?} is already installed at {}", plugin.id(), candidate.display())));
+                                    }
+                                    dest = candidate;
+                                    break;
+                                }
+                                counter += 1;
+                            }
+                        }
+                    }
+                    std::fs::write(&dest, &bytes).map_err(|e| EngineError::Other(format!("failed to write plug-in to {}: {e}", dest.display())))?;
+                    let written_str = dest.display().to_string();
+                    plugin = plugin.with_source(written_str.clone());
+                    written = Some(written_str);
+                    if let Some(stamp) = folder_stamp(folder) {
+                        *FOLDER_STAMP.lock().unwrap_or_else(|e| e.into_inner()) = Some((folder.to_string(), stamp));
+                    }
+                }
+            }
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    let _ = (s, &mut plugin, wasm_bytes);
+
+    let mut result = describe(&registry::install(plugin));
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(path) = written {
+        if let Value::Object(ref mut map) = result {
+            map.insert("written".into(), json!(path));
+        }
+    }
+    Ok(result)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn load_path(path: &str) -> Result<Plugin> {
-    registry::load_file(std::path::Path::new(path), photocraft_plugins::Limits::default()).map_err(err)
+fn load_path_with_bytes(path: &str) -> Result<(Plugin, Option<Vec<u8>>)> {
+    let p = std::path::Path::new(path);
+    let ext = p.extension().and_then(|s| s.to_str()).map(str::to_ascii_lowercase).unwrap_or_default();
+    if ext != "wasm" {
+        return Err(bad("plugin.install", "only `.wasm` WebAssembly plug-ins are supported"));
+    }
+    let plug = registry::load_file(p, photocraft_plugins::Limits::default()).map_err(err)?;
+    let bytes = std::fs::read(p).map_err(|e| err(photocraft_plugins::Error::Io(format!("{}: {e}", p.display()))))?;
+    Ok((plug, Some(bytes)))
 }
 
 #[cfg(target_arch = "wasm32")]
-fn load_path(_: &str) -> Result<Plugin> {
+fn load_path_with_bytes(_: &str) -> Result<(Plugin, Option<Vec<u8>>)> {
     Err(EngineError::Other("installing from a path is not available on the web; pass the module as base64 `data`".into()))
 }
 
 /// The plug-in folder last loaded from the preferences, and what happened.
 static FOLDER: Mutex<Option<(String, Value)>> = Mutex::new(None);
+
+#[cfg(not(target_arch = "wasm32"))]
+type FileStamp = (std::path::PathBuf, u64, Option<std::time::SystemTime>);
+
+#[cfg(not(target_arch = "wasm32"))]
+static FOLDER_STAMP: Mutex<Option<(String, Vec<FileStamp>)>> = Mutex::new(None);
+
+#[cfg(not(target_arch = "wasm32"))]
+fn folder_stamp(folder: &str) -> Option<Vec<FileStamp>> {
+    let rd = std::fs::read_dir(std::path::Path::new(folder)).ok()?;
+    let mut stamps: Vec<FileStamp> = rd
+        .filter_map(|e| {
+            let e = e.ok()?;
+            let path = e.path();
+            if !path.extension().is_some_and(|x| x.eq_ignore_ascii_case("wasm")) {
+                return None;
+            }
+            let meta = e.metadata().ok()?;
+            if !meta.is_file() {
+                return None;
+            }
+            Some((path, meta.len(), meta.modified().ok()))
+        })
+        .collect();
+    stamps.sort_by(|a, b| a.0.cmp(&b.0));
+    stamps.truncate(1000);
+    Some(stamps)
+}
 
 /// Loads the Plug-ins preference folder (`*.wasm`) when it is enabled and has changed since the
 /// last load. Called whenever preferences are applied (startup, `prefs.set`). Native only.
@@ -234,13 +339,46 @@ pub(crate) fn sync_prefs(s: &Session) {
     if last.as_ref().is_some_and(|(f, _)| f == folder) {
         return;
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(stamp) = folder_stamp(folder) {
+        *FOLDER_STAMP.lock().unwrap_or_else(|e| e.into_inner()) = Some((folder.to_string(), stamp));
+    }
     *last = Some((folder.to_string(), load_folder(folder)));
+}
+
+impl Session {
+    /// Checks whether `.wasm` files in the active Plug-ins preference folder were added, updated,
+    /// or removed on disk (e.g. by ArtCraft Launcher while PhotoCraft is open) and hot-reloads
+    /// the registry without disturbing open documents. Returns `Some(report)` when reloaded.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn poll_plugin_folder(&self) -> Option<Value> {
+        let pi = &self.prefs().plug_ins;
+        let folder = pi.additional_plugins_folder.trim();
+        if !pi.use_additional_plugins_folder || folder.is_empty() {
+            return None;
+        }
+        let stamp = folder_stamp(folder)?;
+        let mut last_stamp = FOLDER_STAMP.lock().unwrap_or_else(|e| e.into_inner());
+        if last_stamp.as_ref().is_some_and(|(f, s)| f == folder && *s == stamp) {
+            return None;
+        }
+        *last_stamp = Some((folder.to_string(), stamp));
+        drop(last_stamp);
+        let report = load_folder(folder);
+        *FOLDER.lock().unwrap_or_else(|e| e.into_inner()) = Some((folder.to_string(), report.clone()));
+        Some(report)
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 fn load_folder(folder: &str) -> Value {
     match registry::load_folder(std::path::Path::new(folder)) {
-        Ok(r) => json!({"folder": folder, "loaded": r.loaded, "failed": r.failed.iter().map(|(f, e)| json!({"file": f, "error": e})).collect::<Vec<_>>()}),
+        Ok(r) => json!({
+            "folder": folder,
+            "loaded": r.loaded,
+            "removed": r.removed,
+            "failed": r.failed.iter().map(|(f, e)| json!({"file": f, "error": e})).collect::<Vec<_>>(),
+        }),
         Err(e) => json!({"folder": folder, "error": e.to_string()}),
     }
 }
@@ -261,6 +399,10 @@ fn reload(s: &mut Session, p: &Value) -> Result<Value> {
     let report = load_folder(&folder);
     if let Some(e) = report.get("error").and_then(Value::as_str) {
         return Err(EngineError::Other(e.to_string()));
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(stamp) = folder_stamp(&folder) {
+        *FOLDER_STAMP.lock().unwrap_or_else(|e| e.into_inner()) = Some((folder.clone(), stamp));
     }
     *FOLDER.lock().unwrap_or_else(|e| e.into_inner()) = Some((folder, report.clone()));
     Ok(report)

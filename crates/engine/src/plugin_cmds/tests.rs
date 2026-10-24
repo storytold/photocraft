@@ -312,8 +312,11 @@ fn bad_params_are_errors_not_panics() {
     assert_eq!(b64_decode("a"), None);
 }
 
+static FOLDER_TEST_LOCK: Mutex<()> = Mutex::new(());
+
 #[test]
 fn preference_folder_is_loaded() {
+    let _guard = FOLDER_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dir = std::env::temp_dir().join(format!("pc-plugin-prefs-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("grey.wasm"), wat_plugin("test.cmds.folder", "{}", GREY)).unwrap();
@@ -329,6 +332,61 @@ fn preference_folder_is_loaded() {
     registry::remove("test.cmds.folder");
     let r = s.execute("plugin.reload", json!({})).unwrap();
     assert_eq!(r["loaded"], json!(["test.cmds.folder"]));
+    assert!(s.poll_plugin_folder().is_none(), "no change on disk -> no reload");
+    // Adding a new .wasm file while a document is open hot-reloads it without touching the document.
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    std::fs::write(dir.join("hot.wasm"), wat_plugin("test.cmds.hot", "{}", GREY)).unwrap();
+    let r = s.poll_plugin_folder().expect("new file detected");
+    assert_eq!(r["loaded"], json!(["test.cmds.folder", "test.cmds.hot"]));
+    assert!(registry::get("test.cmds.hot").is_some());
+    assert_eq!(s.documents().len(), 1, "open document is untouched");
+    // Removing a .wasm file on disk uninstalls it on the next poll.
+    std::fs::remove_file(dir.join("hot.wasm")).unwrap();
+    let r = s.poll_plugin_folder().expect("deleted file detected");
+    assert_eq!(r["removed"], json!(["test.cmds.hot"]));
+    assert!(registry::get("test.cmds.hot").is_none());
     registry::remove("test.cmds.folder");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn install_writes_to_folder_and_handles_collisions_and_reports_path() {
+    let _guard = FOLDER_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = std::env::temp_dir().join(format!("pc-plugin-install-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut s = Session::new();
+    s.execute("prefs.set", json!({"path": "plugIns.additionalPluginsFolder", "value": dir.to_str().unwrap()})).unwrap();
+    s.execute("prefs.set", json!({"path": "plugIns.useAdditionalPluginsFolder", "value": true})).unwrap();
+
+    let bytes1 = wat_plugin("test.slug.one", "{}", GREY);
+    let r1 = s.execute("plugin.install", json!({"data": b64(&bytes1)})).unwrap();
+    let written1 = r1.get("written").and_then(Value::as_str).expect("written path reported");
+    assert!(std::path::Path::new(written1).exists());
+    assert!(written1.ends_with("test_slug_one.wasm"));
+
+    // Second plug-in whose ID has different punctuation but produces the same initial slug: "test_slug_one"
+    let bytes2 = wat_plugin("test_slug-one", "{}", GREY);
+    let r2 = s.execute("plugin.install", json!({"data": b64(&bytes2)})).unwrap();
+    let written2 = r2.get("written").and_then(Value::as_str).expect("renamed written path reported");
+    assert!(std::path::Path::new(written2).exists());
+    assert!(written2.ends_with("test_slug_one_2.wasm"), "renamed on collision: {written2}");
+
+    // Installing the exact same plug-in with replace: false returns an error
+    let err = s.execute("plugin.install", json!({"data": b64(&bytes1), "replace": false}));
+    assert!(err.is_err());
+
+    registry::remove("test.slug.one");
+    registry::remove("test_slug-one");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn install_from_non_wasm_path_fails() {
+    let dir = std::env::temp_dir().join(format!("pc-plugin-bad-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let bad_file = dir.join("test.txt");
+    std::fs::write(&bad_file, b"not wasm").unwrap();
+    let err = Session::new().execute("plugin.install", json!({"path": bad_file.to_str().unwrap()}));
+    assert!(err.is_err());
     std::fs::remove_dir_all(&dir).ok();
 }

@@ -93,12 +93,19 @@ pub fn load_file(path: &std::path::Path, limits: Limits) -> Result<Plugin> {
 pub struct FolderReport {
     /// Ids of the plug-ins installed.
     pub loaded: Vec<String>,
+    /// Ids of plug-ins previously loaded from this folder whose `.wasm` file was removed.
+    pub removed: Vec<String>,
     /// `(file, error)` for each `.wasm` that failed to load.
     pub failed: Vec<(String, String)>,
 }
 
-/// Installs every `*.wasm` directly in `dir` (not recursive), in file-name order. A bad module is
-/// reported and skipped; the others still load.
+/// Synchronizes `dir` with the registry: installs every `*.wasm` directly in `dir` (not recursive)
+/// in file-name order, and removes any previously installed plug-in whose source was directly in
+/// `dir` but is no longer present. A bad module is reported and skipped; the others still load.
+///
+/// Note: If a previously loaded plug-in whose `.wasm` file still exists in `dir` now fails to
+/// load (for example, following an invalid or broken update), it is unloaded from the active
+/// registry so broken modules cannot be executed, and is reported in both `failed` and `removed`.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn load_folder(dir: &std::path::Path) -> Result<FolderReport> {
     let rd = std::fs::read_dir(dir).map_err(|e| Error::Io(format!("{}: {e}", dir.display())))?;
@@ -111,6 +118,15 @@ pub fn load_folder(dir: &std::path::Path) -> Result<FolderReport> {
         match load_file(&f, Limits::default()) {
             Ok(p) => report.loaded.push(install(p).id().to_string()),
             Err(e) => report.failed.push((f.display().to_string(), e.to_string())),
+        }
+    }
+    let canonical_dir = dir.canonicalize().ok();
+    for p in list() {
+        let from_dir = p.source().and_then(|s| std::path::Path::new(s).parent()).is_some_and(|parent| {
+            parent == dir || (canonical_dir.is_some() && parent.canonicalize().ok().as_deref() == canonical_dir.as_deref())
+        });
+        if from_dir && !report.loaded.iter().any(|id| id == p.id()) && remove(p.id()) {
+            report.removed.push(p.id().to_string());
         }
     }
     Ok(report)
