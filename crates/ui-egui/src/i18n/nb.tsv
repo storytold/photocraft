@@ -4773,3 +4773,8 @@ cameraRaw	White Balance: As Shot	Hvitbalanse: som fotografert
 	The path was discarded	Banen ble forkastet
 	The path was kept as the Work Path	Banen ble beholdt som arbeidsbane
 	Edit Brush…	Rediger pensel…
+
+# DPX Options (#1049)
+	DPX Options	DPX-alternativer
+	10 Bits/Channel	10 biter/kanal
+	12 Bits/Channel	12 biter/kanal

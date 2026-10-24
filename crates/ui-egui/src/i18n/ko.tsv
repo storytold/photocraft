@@ -3753,3 +3753,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Learn	학습
 	No recent files	최근 파일 없음
 	Website	웹사이트
+
+# DPX Options (#1049)
+	DPX Options	DPX 옵션
+	10 Bits/Channel	10비트/채널
+	12 Bits/Channel	12비트/채널

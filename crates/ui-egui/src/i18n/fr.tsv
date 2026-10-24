@@ -4566,3 +4566,8 @@ shape	Appearance	Apparence
 	New file	Nouveau fichier
 	Learn	Apprendre
 	Website	Site web
+
+# DPX Options (#1049)
+	DPX Options	Options DPX
+	10 Bits/Channel	10 bits/canal
+	12 Bits/Channel	12 bits/canal
