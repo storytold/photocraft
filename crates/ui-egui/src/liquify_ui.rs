@@ -194,8 +194,9 @@ pub struct LiquifyDialog {
     pub dab_ms: f64,
     /// CPU time spent refreshing the zoomed-in source-resolution preview.
     pub preview_ms: f64,
-    /// The smart filter being edited: OK updates it instead of adding a new Liquify filter.
-    smart_filter: Option<usize>,
+    /// The smart filter being edited, with its `smart_filter_dialog::target`: OK checks the target
+    /// and updates that filter instead of adding a new Liquify filter.
+    smart_filter: Option<(usize, Value)>,
 }
 
 fn union(a: Option<[usize; 4]>, b: [usize; 4]) -> Option<[usize; 4]> {
@@ -233,7 +234,7 @@ impl LiquifyDialog {
             "dabMs": self.dab_ms,
             "fullResolutionPreview": self.view_bounds.is_some(),
             "previewMs": self.preview_ms,
-            "smartFilter": self.smart_filter,
+            "smartFilter": self.smart_filter.as_ref().map(|(index, _)| index),
         })
     }
 
@@ -498,7 +499,7 @@ pub fn open(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> 
 
 /// Re-opens Liquify smart filter `index` of smart object `layer` with its recorded strokes and
 /// mesh size, previewing on the pixels below it; OK updates that filter
-/// (`layer.smartFilter.setParams`).
+/// (`layer.smartFilter.setParams`) unless the document or the filter changed in the meantime.
 pub fn open_smart_filter(app: &mut PhotocraftApp, ctx: &egui::Context, layer: LayerId, index: usize) -> Result<(), String> {
     use photocraft_engine::distort_cmds::{LIQUIFY, liquify_params};
     let st = app.session.active().ok_or("no document")?;
@@ -513,7 +514,8 @@ pub fn open_smart_filter(app: &mut PhotocraftApp, ctx: &egui::Context, layer: La
     let surf = photocraft_engine::smart_cmds::render_below_filter(&st.doc, sm, index)
         .map_err(|e| e.to_string())?
         .ok_or("the smart object's contents are unavailable (missing linked file?)")?;
-    open_on(app, ctx, layer, surf, strokes, cell, Some(index))
+    let target = crate::smart_filter_dialog::target(app, layer, index)?;
+    open_on(app, ctx, layer, surf, strokes, cell, Some((index, target)))
 }
 
 fn open_on(
@@ -523,7 +525,7 @@ fn open_on(
     surf: Surface,
     strokes: Vec<LiquifyStroke>,
     cell: f64,
-    smart_filter: Option<usize>,
+    smart_filter: Option<(usize, Value)>,
 ) -> Result<(), String> {
     let st = app.session.active().ok_or("no document")?;
     let canvas = st.doc.bounds();
@@ -593,16 +595,25 @@ pub fn cancel(app: &mut PhotocraftApp) {
 }
 
 /// OK: runs `filter.liquify` with the recorded strokes (one history step). When the dialog edits
-/// a smart filter, OK updates that filter instead (also when Restore All left no strokes). The
-/// dialog closes either way. `app.run` shows a failed command's error in the status bar, and
-/// `commit` returns it.
+/// a smart filter, OK updates that filter instead (also when Restore All left no strokes), after
+/// `smart_filter_dialog::validate_target` checks that the document and the filter did not change.
+/// The dialog closes either way. The status bar shows the error of a failed check or command
+/// (`app.run` shows the latter), and `commit` returns it.
 pub fn commit(app: &mut PhotocraftApp) -> Result<(), String> {
     let Some(mut d) = app.distort.liquify.take() else { return Ok(()) };
     remember(app, &d.opts);
     d.end();
-    if let Some(index) = d.smart_filter {
+    if let Some((_, target)) = &d.smart_filter {
+        let (layer, index) = match crate::smart_filter_dialog::validate_target(app, target) {
+            Ok(edit) => edit,
+            Err(e) => {
+                app.ui.status = e.clone();
+                app.ui.status_error = true;
+                return Err(e);
+            }
+        };
         let params = json!({"strokes": d.strokes, "meshSize": d.cell});
-        return app.run("layer.smartFilter.setParams", json!({"layer": d.layer.0, "index": index, "params": params})).map(|_| ());
+        return app.run("layer.smartFilter.setParams", json!({"layer": layer.0, "index": index, "params": params})).map(|_| ());
     }
     if d.strokes.is_empty() {
         return Ok(());
@@ -1932,7 +1943,7 @@ mod tests {
         crate::smart_ui::open_editor(&mut app, &ctx, layer.0, &sm, 0);
         assert!(app.ui.dialogs.is_empty(), "no generic parameter form");
         let d = app.distort.liquify.as_ref().expect("the Liquify workspace opens");
-        assert_eq!((d.smart_filter, d.cell), (Some(0), 3.0));
+        assert_eq!((d.smart_filter.as_ref().map(|(index, _)| *index), d.cell), (Some(0), 3.0));
         assert_eq!(d.strokes, recorded);
         assert_eq!(d.field, LiquifyField::from_strokes(d.canvas, 3.0, &recorded));
         // The preview starts from the pixels below the filter (no liquify, no blur).
@@ -2001,8 +2012,33 @@ mod tests {
         let r = control(&mut app, &json!({"commit": true}));
         assert!(app.distort.liquify.is_none());
         assert!(app.ui.status_error);
-        assert!(app.ui.status.contains("no smart filters"), "{}", app.ui.status);
+        assert!(app.ui.status.contains("no longer exists"), "{}", app.ui.status);
         assert!(smart(&app, layer).smart_filters.is_empty());
+        assert_eq!(app.session.active().unwrap().history.past_len(), steps);
+        assert_eq!(r, Err(app.ui.status.clone()));
+    }
+
+    /// OK after the stack was reordered while the workspace was open: the filter now at the
+    /// edited index (the Gaussian Blur) is left alone and the status bar asks to reopen.
+    #[test]
+    fn smart_filter_edit_after_the_stack_changed_updates_nothing() {
+        let ctx = egui::Context::default();
+        let (mut app, layer) = smart_liquify_app();
+        open_smart_filter(&mut app, &ctx, layer, 0).unwrap();
+        drag(&mut app, 70.0, 84.0);
+        app.session.execute("layer.smartFilter.move", json!({"layer": layer.0, "index": 0, "to": 1})).unwrap();
+        let before = smart(&app, layer).smart_filters;
+        assert_eq!(before[0].command, "filter.blur.gaussianBlur");
+        let steps = app.session.active().unwrap().history.past_len();
+        let r = control(&mut app, &json!({"commit": true}));
+        assert!(app.distort.liquify.is_none());
+        assert!(app.ui.status_error);
+        assert!(app.ui.status.contains("Reopen its dialog"), "{}", app.ui.status);
+        let after = smart(&app, layer).smart_filters;
+        assert_eq!(after.len(), before.len());
+        for (a, b) in after.iter().zip(&before) {
+            assert_eq!((&a.command, &a.params), (&b.command, &b.params));
+        }
         assert_eq!(app.session.active().unwrap().history.past_len(), steps);
         assert_eq!(r, Err(app.ui.status.clone()));
     }
