@@ -6804,9 +6804,13 @@ pub fn paint_target(app: &PhotocraftApp) -> serde_json::Value {
         ChannelTarget::LayerMask => return json!("mask"),
         _ => {}
     }
+    // A smart object's targeted (or shown) filter mask takes the paint (FILE-215-3).
+    if app.filter_mask_targeted() {
+        return json!("filterMask");
+    }
     let has_mask = st.active_layer.and_then(|id| st.doc.layer(id)).is_some_and(|l| l.mask.is_some());
     // Viewing the mask (⌥-click its thumbnail, #196) paints the mask.
-    let viewing = photocraft_engine::mask_view_cmds::current(st).is_some();
+    let viewing = photocraft_engine::mask_view_cmds::current(st).is_some_and(|v| !v.filter);
     let mask = app.ui.mask_target || viewing || crate::adjustment_layer_active(st);
     json!(if mask && has_mask { "mask" } else { "pixels" })
 }

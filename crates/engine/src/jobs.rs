@@ -229,6 +229,7 @@ struct Running {
     started_ms: f64,
     coalesce: Option<String>,
     color_restrict: Option<usize>,
+    filter_mask_layer: Option<LayerId>,
     /// The document's layer selection when the job started: applying targets it, not whatever
     /// got selected meanwhile (a Type click does that without editing the document, #7366).
     layers: Option<LayerSelection>,
@@ -418,6 +419,7 @@ pub fn run<T: Send + 'static>(
         started_ms: now_ms(),
         coalesce: s.coalesce_request.clone(),
         color_restrict: s.color_restrict,
+        filter_mask_layer: s.filter_mask_layer,
         layers,
         rx,
         apply: Some(erased),
@@ -818,6 +820,7 @@ impl Session {
         let expand_new_fx = crate::commands::layer_panel_option(self, "expandNewEffects", true);
         self.coalesce_request = params.get("coalesce").and_then(Value::as_str).map(str::to_string);
         self.color_restrict = crate::channel_cmds::color_restriction(self, id, &run_params);
+        self.filter_mask_layer = crate::channel_cmds::filter_mask_layer(self, &run_params);
         self.jobs.spawn = background;
         // Commands this one runs on its own behalf journal after this mark (#3067).
         let nested_from = self.journal.len();
@@ -838,6 +841,7 @@ impl Session {
         self.jobs.spawn = false;
         self.coalesce_request = None;
         self.color_restrict = None;
+        self.filter_mask_layer = None;
         let pending = self.jobs.pending.take();
         match (r, pending) {
             (Err(e), Some(job)) => {
@@ -950,7 +954,8 @@ impl Session {
     }
 
     fn apply_job(&mut self, job: &Running, apply: Option<Apply>, payload: Payload) -> Result<Value> {
-        let Running { label, doc, snapshot, coalesce, color_restrict, layers, command, params, journal, recorded_by, pre_selected, .. } = job;
+        let Running { label, doc, snapshot, coalesce, color_restrict, filter_mask_layer, layers, command, params, journal, recorded_by, pre_selected, .. } =
+            job;
         // A recording started after the job (#7289) keeps what it has so far, and the job's step
         // goes into the journal past its start, so that recording doesn't get it.
         let foreign = self.actions.recording.is_some() && *recorded_by != Some(self.actions.take);
@@ -986,6 +991,7 @@ impl Session {
         };
         self.coalesce_request = coalesce.clone();
         self.color_restrict = *color_restrict;
+        self.filter_mask_layer = *filter_mask_layer;
         // Apply-time hooks can dispatch commands too. Keep the same single-step recording
         // contract as synchronous dispatch without truncating work done while the worker ran.
         let nested_from = self.journal.len();
@@ -1000,6 +1006,7 @@ impl Session {
         }
         self.coalesce_request = None;
         self.color_restrict = None;
+        self.filter_mask_layer = None;
         // Finish successful command bookkeeping on the document the job edited.
         // Restoring the viewed document first would attribute Fade and slice updates
         // to that document instead, when the user switched tabs mid-job.

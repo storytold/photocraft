@@ -94,7 +94,7 @@ impl ChannelView {
     /// The layer mask shown on the canvas (#196) and how, if its layer still has a mask.
     pub fn shown_layer_mask<'a>(&self, doc: &'a Document) -> Option<(&'a photocraft_doc::LayerMask, crate::mask_view_cmds::MaskViewMode)> {
         let v = self.layer_mask?;
-        Some((doc.layer(v.layer)?.mask.as_ref()?, v.mode))
+        Some((crate::mask_view_cmds::viewed_mask(doc.layer(v.layer)?, v.filter)?, v.mode))
     }
 }
 
@@ -602,6 +602,9 @@ fn mask_plane(s: &Session, p: &Value, cmd: &str) -> Result<Option<Vec<f32>>> {
 pub(crate) enum Target {
     Pixels,
     Mask,
+    /// A smart object's filter mask (`"target":"filterMask"`): where it is black the smart
+    /// filters don't show (FILE-215-3).
+    FilterMask,
     Alpha(usize),
     QuickMask,
 }
@@ -610,6 +613,7 @@ pub(crate) fn target_of(p: &Value) -> Target {
     match p.get("target") {
         Some(Value::String(s)) => match s.as_str() {
             "mask" => Target::Mask,
+            "filterMask" => Target::FilterMask,
             "quickMask" => Target::QuickMask,
             _ => Target::Pixels,
         },
@@ -654,6 +658,13 @@ pub(crate) fn read_target_surface<'a>(doc: &'a Document, layer: Option<LayerId>,
             let id = layer.ok_or_else(|| EngineError::Other("no active layer".into()))?;
             doc.layer(id).and_then(|l| l.mask.as_ref()).map(|m| &m.surface).ok_or(EngineError::NoLayer(id))
         }
+        Target::FilterMask => {
+            let id = layer.ok_or_else(|| EngineError::Other("no active layer".into()))?;
+            doc.layer(id)
+                .and_then(|l| crate::mask_view_cmds::viewed_mask(l, true))
+                .map(|m| &m.surface)
+                .ok_or_else(|| EngineError::Other("the layer has no filter mask".into()))
+        }
     }
 }
 
@@ -686,10 +697,14 @@ fn edits_mask(id: &str) -> bool {
 /// The precondition of `id` when `p` targets the active layer's mask (`"target":"mask"`): the
 /// layer needs a mask. None when another precondition applies.
 pub(crate) fn mask_target_enabled(s: &Session, id: &str, p: &Value) -> Option<std::result::Result<(), String>> {
-    if target_of(p) != Target::Mask || !edits_mask(id) {
-        return None;
+    match target_of(p) {
+        // Every pixel command that follows the target paints, fills or filters the filter mask.
+        Target::FilterMask if routed(id) => Some(crate::active_layer_of(s).and_then(crate::smart_cmds::filter_mask_paintable)),
+        Target::Mask if edits_mask(id) => {
+            Some(crate::active_layer_of(s).and_then(|l| if l.mask.is_some() { Ok(()) } else { Err("the active layer has no layer mask".into()) }))
+        }
+        _ => None,
     }
-    Some(crate::active_layer_of(s).and_then(|l| if l.mask.is_some() { Ok(()) } else { Err("the active layer has no layer mask".into()) }))
 }
 
 /// Whether command `id` edits the targeted channel or mask when its params name no `"target"`
@@ -747,6 +762,7 @@ pub(crate) fn inject_target(s: &Session, id: &str, params: Value) -> Value {
         ChannelTarget::Composite if st.doc.quick_mask.is_some() => json!("quickMask"),
         ChannelTarget::LayerMask => json!("mask"),
         // Viewing the active layer's mask (⌥-click): pixel commands edit the mask.
+        ChannelTarget::Composite if crate::mask_view_cmds::current(st).is_some_and(|v| v.filter) => json!("filterMask"),
         ChannelTarget::Composite if crate::mask_view_cmds::current(st).is_some() => json!("mask"),
         _ => return params,
     };
@@ -757,6 +773,15 @@ pub(crate) fn inject_target(s: &Session, id: &str, params: Value) -> Value {
         }
         _ => json!({ "target": t }),
     }
+}
+
+/// The smart object whose filter mask a command with `params` edits (`"target":"filterMask"`):
+/// its `"layer"` param, else the active layer.
+pub(crate) fn filter_mask_layer(s: &Session, params: &Value) -> Option<LayerId> {
+    if target_of(params) != Target::FilterMask {
+        return None;
+    }
+    params.get("layer").and_then(Value::as_u64).map(LayerId).or_else(|| s.active()?.active_layer)
 }
 
 /// The colour channel pixel commands are limited to, if a single colour channel is targeted.
