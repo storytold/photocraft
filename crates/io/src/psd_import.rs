@@ -496,7 +496,7 @@ impl Ctx<'_> {
                 }
                 _ => stored,
             };
-            LayerContent::Smart(SmartObject {
+            let mut sm = SmartObject {
                 contents_id,
                 source: SmartSource::Linked { path: id },
                 transform,
@@ -508,7 +508,9 @@ impl Ctx<'_> {
                 warp,
                 stack_mode: None,
                 perspective,
-            })
+            };
+            crate::smart_map::pin_puppet_meshes(&mut sm);
+            LayerContent::Smart(sm)
         } else if let Some((f, soft)) = soft_shape_fill(rec, vector_key.is_some(), fill_key) {
             // A pattern-filled shape is a pattern fill layer seen through its vector mask (soft
             // or not). Unless that mask is soft, the stored pixels stay its rendering (a soft

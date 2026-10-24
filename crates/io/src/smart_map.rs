@@ -25,7 +25,7 @@
 //! (`HStr`) maps to its adjustment command in `hue_sat_filter_map.rs`.
 
 use photocraft_color::{BlendMode, ColorMode, PixelFormat, SampleType};
-use photocraft_doc::{LayerMask, SmartFilter};
+use photocraft_doc::{LayerMask, SmartFilter, SmartObject};
 use photocraft_geom::warp::{BezierMesh, Warp, WarpStyle};
 use photocraft_geom::{Affine, Rect as GeomRect};
 use photocraft_psd::Compression;
@@ -45,6 +45,8 @@ mod displace;
 mod hue_sat;
 #[path = "perspective_warp_map.rs"]
 mod perspective_warp;
+#[path = "puppet_map.rs"]
+mod puppet;
 
 pub use displace::{embed_map as displace_embed_map, embedded_map as displace_embedded_map, without_map as displace_without_map};
 
@@ -111,8 +113,42 @@ pub fn parse_sold(data: &[u8]) -> Option<Placed> {
     let d = sold_descriptor(data)?;
     let (idnt, transform) = crate::blocks::parse_smart(b"SoLd", data);
     let placed = text_of(&d, "placed").unwrap_or_default();
-    let stack = get_desc(&d, "filterFX").map(filter_stack);
+    let mut stack = get_desc(&d, "filterFX").map(filter_stack);
+    if let Some(stack) = &mut stack {
+        drop_moved_puppet_meshes(stack, &d);
+    }
     Some(Placed { descriptor: d, idnt, placed, transform, stack })
+}
+
+/// A Puppet Warp's stored mesh sits where the layer was when it was built (document pixels); one
+/// built on other corners than the layer's own doesn't fit it, so its pins are solved instead.
+fn drop_moved_puppet_meshes(stack: &mut FilterStack, d: &Descriptor) {
+    let corners = |k: &str| match d.get(k) {
+        Some(Value::List(v)) if v.len() == 8 => v.iter().map(|x| num(Some(x))).collect::<Option<Vec<f64>>>(),
+        _ => None,
+    };
+    let quad = corners("nonAffineTransform").or_else(|| corners("Trnf"));
+    for f in stack.filters.iter_mut().filter(|f| f.command == puppet::COMMAND) {
+        let fits = match (&quad, puppet::built_on(&f.params)) {
+            (Some(q), Some(b)) => q.iter().zip(b).all(|(a, b)| (a - b).abs() < 0.01),
+            _ => false,
+        };
+        if !fits && let Some(p) = f.params.as_object_mut() {
+            p.remove("mesh");
+        }
+    }
+}
+
+/// Records on each imported Puppet Warp mesh the placement it was solved for (`mesh.placement`,
+/// [`SmartObject::placement_json`]): once the smart object is moved, transformed or warped, the
+/// mesh no longer fits it and the pins are solved instead.
+pub(crate) fn pin_puppet_meshes(sm: &mut SmartObject) {
+    let placement = sm.placement_json();
+    for f in sm.smart_filters.iter_mut().filter(|f| f.command == puppet::COMMAND) {
+        if let Some(m) = f.params.get_mut("mesh").and_then(J::as_object_mut) {
+            m.insert("placement".into(), placement.clone());
+        }
+    }
 }
 
 /// Reads a `filterFX` object.
@@ -910,6 +946,7 @@ pub fn filter_from_item(item: &Descriptor) -> SmartFilter {
         Some(displace::CLASS) => displace::import_params(item).map(|p| (displace::COMMAND, p)),
         Some(hue_sat::CLASS) => fltr.and_then(hue_sat::import_params).map(|p| (hue_sat::COMMAND, p)),
         Some(perspective_warp::CLASS) => perspective_warp::import_params(item).map(|p| (perspective_warp::COMMAND, p)),
+        Some(puppet::CLASS) => puppet::import_params(item).map(|p| (puppet::COMMAND, p)),
         Some(GALLERY_CLASS) => fltr.and_then(|f| gallery_params(item, f)).map(|p| (GALLERY_COMMAND, p)),
         Some(c @ ("Fbrs" | "Clds" | "DfrC")) => fltr.and_then(|f| coloured_params(c, item, f)),
         // A `Fltr` that is there but not a descriptor is settings we can't read: kept verbatim
@@ -1234,6 +1271,12 @@ pub fn item_for_filter(f: &SmartFilter) -> Result<Descriptor, String> {
     }
     if perspective_warp::handles(&f.command) {
         return perspective_warp::export_item(f);
+    }
+    if f.command == puppet::COMMAND && f.params.get(puppet::TEMPLATE_KEY).is_some() {
+        let mut d = puppet::export_item(&f.params)?;
+        set(&mut d, "blendOptions", blend_options(f));
+        set(&mut d, "enab", Value::Boolean(f.visible));
+        return Ok(d);
     }
     if f.command == UNSUPPORTED_FILTER {
         let raw = f.params.get("psd").and_then(J::as_str).and_then(from_hex).ok_or("its filter data is missing")?;
