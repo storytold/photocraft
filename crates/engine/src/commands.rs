@@ -725,6 +725,24 @@ fn build() -> Vec<CommandSpec> {
         ),
         // Layer
         cmd!(
+            "layer.removeBackgroundAI",
+            "Remove Background (AI)…",
+            ["Layer", "Matting"],
+            None,
+            r##"{"variant":"general|hr"="general","device":"auto|cpu"="auto"}"##,
+            has_pixel_or_channel,
+            |s, p| crate::matting_cmds::remove_background_ai(s, p)
+        ),
+        cmd!(
+            "layer.removeBackgroundAIHd",
+            "Remove Background (AI, HD)…",
+            ["Layer", "Matting"],
+            None,
+            r#"{"device":"auto|cpu"="auto"}"#,
+            has_pixel_or_channel,
+            |s, p| crate::matting_cmds::remove_background_ai_hd(s, p)
+        ),
+        cmd!(
             "layer.new.layer",
             "Layer…",
             ["Layer", "New"],

@@ -46,7 +46,8 @@ pub fn mask_button_command(layer: Option<&Layer>, has_selection: bool, alt: bool
 /// Export As (one file per layer, #3629) run on every selected layer instead.
 pub fn single_layer_only(id: &str) -> bool {
     let adds_mask = matches!(id, "layer.layerMask.revealAll" | "layer.layerMask.hideAll" | "layer.layerMask.revealSelection" | "layer.layerMask.hideSelection");
-    matches!(id, "layer.layerStyle.blendingOptions" | "layer.layerStyle.copyLayerStyle") || (id.starts_with("layer.layerMask.") && !adds_mask)
+    matches!(id, "layer.layerStyle.blendingOptions" | "layer.layerStyle.copyLayerStyle" | "layer.removeBackgroundAI" | "layer.removeBackgroundAIHd")
+        || (id.starts_with("layer.layerMask.") && !adds_mask)
 }
 
 /// The context menu entries for a layer (Photoshop 2026 order, trimmed to the layer kind).
@@ -89,6 +90,16 @@ pub fn entries(l: &Layer, multi: bool, has_selection: bool) -> Vec<Entry> {
     // Photoshop offers it under Rasterize Layer for a layer with a style (it bakes the effects).
     if multi || !l.effects.items.is_empty() {
         v.push(Some(("Rasterize Layer Style", "layer.rasterize.layerStyle")));
+    }
+    if !multi {
+        // The matte is a neural inference that replaces this layer's pixels; text, shape,
+        // fill and smart layers must be rasterized first (the command writes through
+        // `Layer::surface_mut()`, which is `Raster`-only). Hidden layers are gated out:
+        // the composite cannot address their surfaces.
+        if matches!(l.content, LayerContent::Raster(_)) && l.visible {
+            v.push(Some((tl!("Remove Background (AI)…"), "layer.removeBackgroundAI")));
+            v.push(Some((tl!("Remove Background (AI, HD)…"), "layer.removeBackgroundAIHd")));
+        }
     }
     v.push(None);
     // A selection has no single mask to toggle, apply or delete, so its menu offers Add Layer Mask only.
@@ -221,6 +232,12 @@ fn items(app: &crate::PhotocraftApp, ui: &mut egui::Ui, l: &Layer, on_set: bool,
                 last_sep = true;
             }
             Some((label, id)) => {
+                // The HD matte needs its own 2048-px weights; without them the
+                // item would only ever produce an error, so it is not offered.
+                // The probe hits the filesystem, hence the process-lifetime cache.
+                if id == "layer.removeBackgroundAIHd" && !hr_matting_installed() {
+                    continue;
+                }
                 // Skip commands this build doesn't have rather than showing dead items.
                 if photocraft_engine::commands::find(id).is_none() && !crate::menu_catalog::CATALOG.iter().any(|m| m.3 == id) {
                     continue;
@@ -244,6 +261,13 @@ fn items(app: &crate::PhotocraftApp, ui: &mut egui::Ui, l: &Layer, on_set: bool,
 
 pub(crate) fn color_name(color: LabelColor) -> &'static str {
     crate::i18n::tr_ctx(crate::i18n::current(), "layerLabel", color.label())
+}
+
+/// Whether the HD matting weights are present; cached after the first probe
+/// (installing the file takes a restart, which is fine for a menu).
+pub(crate) fn hr_matting_installed() -> bool {
+    static INSTALLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *INSTALLED.get_or_init(photocraft_engine::matting_cmds::hr_available)
 }
 
 fn common_color(app: &crate::PhotocraftApp, l: &Layer, on_set: bool) -> Option<LabelColor> {
@@ -765,6 +789,7 @@ mod tests {
         let l = st.doc.layer(st.active_layer.unwrap()).unwrap().clone();
         let ids: Vec<&str> = entries(&l, false, false).into_iter().flatten().map(|e| e.1).collect();
         assert_eq!(ids.first(), Some(&"layer.layerStyle.blendingOptions"));
+        assert!(ids.contains(&"layer.removeBackgroundAIHd"), "the entries offer HD; the renderer hides it when its weights are absent");
         assert!(ids.contains(&"layer.mergeDown") && !ids.contains(&"layer.mergeLayers"));
         assert!(ids.contains(&"layer.layerMask.revealAll"));
         let ids: Vec<&str> = entries(&l, false, true).into_iter().flatten().map(|e| e.1).collect();

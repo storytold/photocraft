@@ -1131,6 +1131,13 @@ pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
             it.color = prefs.menus.colors.get(&it.id).cloned();
         }
     }
+    // Layer › Matting › Remove Background (AI, HD) is offered only where the HD
+    // weights are installed, mirroring the layers-panel right-click menu; the
+    // native menu bar consumes this same list. Hidden rather than disabled so a
+    // feature the user cannot run yet never appears.
+    if !crate::layer_menu_ui::hr_matting_installed() {
+        items.retain(|i| i.id != "layer.removeBackgroundAIHd");
+    }
     // Layer › Create Clipping Mask is Photoshop's one Create / Release item: when its shortcut
     // would release ([`crate::shortcut_dispatch::clip_key_releases`]) it reads Release Clipping
     // Mask and runs it, keeping that shortcut. The engine's own Release item lives in that slot.

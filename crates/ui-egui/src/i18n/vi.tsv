@@ -2588,6 +2588,8 @@ shape	Appearance	Diện mạo
 	Quick Actions	Hành động nhanh
 	Remove	Gỡ bỏ
 	Remove Background	Gỡ bỏ nền
+	Remove Background (AI)…	Gỡ bỏ nền (AI)…
+	Remove Background (AI, HD)…	Gỡ bỏ nền (AI, HD)…
 	Remove Tool	Gỡ bỏ công cụ
 	Keyboard shortcuts imported	Đã nhập phím tắt
 	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	Bộ phím tắt {set} của bạn đang được dùng ở đây: {n} phím tắt khác với mặc định. Chỉnh sửa › Phím tắt hiển thị chúng; Đặt lại tất cả về mặc định huỷ thay đổi này.

@@ -80,6 +80,7 @@ pub mod lens_cmds;
 pub mod link_watch;
 pub mod magnetic_cmds;
 pub mod mask_view_cmds;
+pub mod matting_cmds;
 mod migrate_cmds;
 pub mod mode_cmds;
 pub mod multichannel_cmds;
