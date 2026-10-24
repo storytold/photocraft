@@ -2071,6 +2071,26 @@ mod tests {
         }
     }
 
+    /// The Layers panel's Color filter takes a layer color id.
+    #[test]
+    fn ui_set_drives_the_layers_panel_color_filter() {
+        use crate::layer_filter_ui::FilterBy;
+        use photocraft_doc::LabelColor;
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        let ok = call(&mut app, &ctx, "ui.set", json!({"layerFilter": {"by": "color", "color": "seafoam"}}));
+        assert_eq!(ok["ok"], true, "{ok}");
+        assert_eq!((app.ui.layer_filter_by, app.ui.layer_filter_color), (FilterBy::Color, LabelColor::Seafoam));
+        let ok = call(&mut app, &ctx, "ui.set", json!({"layerFilter": {"color": "none"}}));
+        assert_eq!(ok["ok"], true, "{ok}");
+        assert_eq!((app.ui.layer_filter_by, app.ui.layer_filter_color), (FilterBy::Color, LabelColor::None));
+        for bad in [json!({"layerFilter": {"color": "Red"}}), json!({"layerFilter": {"color": 1}}), json!({"layerFilter": {"by": "kind", "color": "teal"}})] {
+            let r = call(&mut app, &ctx, "ui.set", bad.clone());
+            assert_eq!(r["ok"], false, "{bad} → {r}");
+            assert_eq!((app.ui.layer_filter_by, app.ui.layer_filter_color), (FilterBy::Color, LabelColor::None), "{bad} changed nothing");
+        }
+    }
+
     #[test]
     fn ui_set_toggles_the_developer_tile_grid() {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());

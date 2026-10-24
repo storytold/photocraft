@@ -1492,6 +1492,9 @@ pub struct UiState {
     /// Layers panel blend-mode filter.
     #[serde(default = "default_layer_filter_mode")]
     pub layer_filter_mode: photocraft_color::BlendMode,
+    /// Layers panel color-label filter.
+    #[serde(default)]
+    pub layer_filter_color: photocraft_doc::LabelColor,
     /// Actions panel: which row is selected and which are expanded. The list lives on the session.
     #[serde(default)]
     pub actions: crate::actions::ActionsUi,
@@ -1671,6 +1674,7 @@ impl Default for UiState {
             layer_filter_by: Default::default(),
             layer_filter_name: String::new(),
             layer_filter_mode: default_layer_filter_mode(),
+            layer_filter_color: Default::default(),
             pen: None,
             pen_doc: None,
             stroke_editor: None,

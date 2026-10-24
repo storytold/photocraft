@@ -1,10 +1,10 @@
-//! #5048: the Layers panel's filter-type dropdown (Kind, Name, Mode).
+//! #5048: the Layers panel's filter-type dropdown (Kind, Name, Mode, Color).
 
 use egui::vec2;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use photocraft_color::BlendMode;
-use photocraft_doc::Document;
+use photocraft_doc::{Document, LabelColor};
 use serde_json::json;
 
 use super::{Filter, FilterBy};
@@ -68,6 +68,24 @@ fn each_filter_type_lists_its_matches() {
 }
 
 #[test]
+fn the_color_filter_lists_the_layers_with_that_label() {
+    let mut s = session();
+    let doc = &s.active().unwrap().doc;
+    let (ink, notes, paper) = (layer(doc, "Ink"), layer(doc, "ink notes"), layer(doc, "Paper"));
+    s.execute("layer.setLabelColor", json!({"layer": ink, "color": "red"})).unwrap();
+    s.execute("layer.setLabelColor", json!({"layer": notes, "color": "red"})).unwrap();
+    s.execute("layer.setLabelColor", json!({"layer": paper, "color": "seafoam"})).unwrap();
+    let doc = &s.active().unwrap().doc;
+    let by_color = |color| Filter { color, ..filter(FilterBy::Color, &[], "", BlendMode::Normal) };
+    assert_eq!(listed(doc, &by_color(LabelColor::Red)), ["ink notes", "Ink"]);
+    assert_eq!(listed(doc, &by_color(LabelColor::Seafoam)), ["Paper"]);
+    // No Color lists the layers without a label; a group's own label counts, as with Mode.
+    assert_eq!(listed(doc, &by_color(LabelColor::None)), ["Sheets", "Background"]);
+    assert_eq!(listed(doc, &by_color(LabelColor::Violet)), Vec::<String>::new());
+    assert!(by_color(LabelColor::None).active(), "Color filters by No Color at first, as Mode does by Normal");
+}
+
+#[test]
 fn only_a_criterion_turns_kind_and_name_on_while_mode_always_filters() {
     let kinds_left_on = filter(FilterBy::Name, &["pixel"], "", BlendMode::Multiply);
     assert!(!kinds_left_on.active(), "the other types' criteria don't apply");
@@ -80,13 +98,17 @@ fn only_a_criterion_turns_kind_and_name_on_while_mode_always_filters() {
 fn saved_settings_without_the_new_fields_still_load() {
     let mut saved = serde_json::to_value(UiState::default()).unwrap();
     let fields = saved.as_object_mut().unwrap();
-    for key in ["layer_filter_by", "layer_filter_name", "layer_filter_mode"] {
+    for key in ["layer_filter_by", "layer_filter_name", "layer_filter_mode", "layer_filter_color"] {
         assert!(fields.remove(key).is_some(), "{key} is saved");
     }
     let ui: UiState = serde_json::from_value(saved).unwrap();
     assert_eq!((ui.layer_filter_by, ui.layer_filter_name.as_str(), ui.layer_filter_mode), (FilterBy::Kind, "", BlendMode::Normal));
+    assert_eq!(ui.layer_filter_color, LabelColor::None);
     let round = serde_json::to_value(UiState { layer_filter_by: FilterBy::Mode, ..UiState::default() }).unwrap();
     assert_eq!(round["layer_filter_by"], "mode");
+    let round = serde_json::to_value(UiState { layer_filter_by: FilterBy::Color, layer_filter_color: LabelColor::Green, ..UiState::default() }).unwrap();
+    let back: UiState = serde_json::from_value(round.clone()).unwrap();
+    assert_eq!((round["layer_filter_by"].as_str(), back.layer_filter_by, back.layer_filter_color), (Some("color"), FilterBy::Color, LabelColor::Green));
 }
 
 fn harness() -> Harness<'static, PhotocraftApp> {
@@ -129,6 +151,24 @@ fn the_dropdown_switches_the_panel_between_filter_types() {
     assert_eq!(drawn(&h), ["ink notes", "Paper", "Background"]);
     h.state_mut().ui.layer_filter_mode = BlendMode::Multiply;
     h.run_steps(4);
+    assert_eq!(drawn(&h), ["Ink"]);
+    // Color starts at No Color: every layer here is unlabeled until one gets a label.
+    h.get_by_value("Mode").click();
+    h.run_steps(4);
+    h.query_all_by_label("Color").last().expect("Color in the open list").click();
+    h.run_steps(4);
+    assert_eq!(h.state().ui.layer_filter_by, FilterBy::Color);
+    assert_eq!(drawn(&h), ["ink notes", "Sheets", "Ink", "Paper", "Background"]);
+    let ink = layer(&h.state().session.active().unwrap().doc, "Ink");
+    h.state_mut().session.execute("layer.setLabelColor", json!({"layer": ink, "color": "orange"})).unwrap();
+    h.run_steps(4);
+    assert_eq!(drawn(&h), ["ink notes", "Sheets", "Paper", "Background"]);
+    // The color dropdown shows its choice as its value; pick Orange from it.
+    h.get_by_value("No Color").click();
+    h.run_steps(4);
+    h.query_all_by_label("Orange").last().expect("Orange in the open list").click();
+    h.run_steps(4);
+    assert_eq!(h.state().ui.layer_filter_color, LabelColor::Orange);
     assert_eq!(drawn(&h), ["Ink"]);
     // Back to Kind: its own criterion applies again.
     h.state_mut().ui.layer_filter_by = FilterBy::Kind;
