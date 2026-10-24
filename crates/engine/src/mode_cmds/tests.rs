@@ -696,3 +696,95 @@ fn color_table_rejects_an_invalid_transparent_index_without_editing() {
     s.execute("image.mode.colorTable", json!({"transparent": 0})).unwrap();
     assert_eq!(doc(&s).color_table.as_ref().unwrap().transparent, Some(0));
 }
+
+/// A white 16×16 document in Indexed Color with the two-entry black/white table (#8669's repro).
+fn black_white_indexed(transparency: bool) -> Session {
+    let mut s = Session::new();
+    let background = if transparency { "transparent" } else { "white" };
+    s.execute("file.new", json!({"width": 16, "height": 16, "background": background})).unwrap();
+    paint(&mut s, |x, _| {
+        if x < 2 {
+            [0.0; 4]
+        } else if x < 4 {
+            [0.0, 0.0, 0.0, 1.0]
+        } else {
+            [1.0; 4]
+        }
+    });
+    s.execute("image.mode.indexedColor", json!({"palette": "exact", "forced": "none", "transparency": transparency, "dither": "none"})).unwrap();
+    s
+}
+
+#[test]
+fn brush_stroke_stays_in_indexed_color_table() {
+    let mut s = black_white_indexed(false);
+    assert_eq!(doc(&s).color_table.as_ref().unwrap().colors, vec![[0, 0, 0], [255, 255, 255]]);
+    s.execute("paint.stroke", json!({"points": [[8, 8, 1]], "size": 8, "color": "#ff0000", "opacity": 1, "flow": 1})).unwrap();
+    // Red's nearest entry is black.
+    assert_eq!(doc(&s).layers[0].surface().unwrap().rgba(8, 8), [0.0, 0.0, 0.0, 1.0]);
+    // Soft edges and partial opacity blend, and the blends map back onto the table too.
+    s.execute("paint.stroke", json!({"points": [[4, 12], [14, 12]], "size": 6, "hardness": 0.0, "color": "#808080", "opacity": 0.5})).unwrap();
+    let table = doc(&s).color_table.clone().unwrap();
+    assert!(colours(doc(&s)).iter().all(|c| table.colors.contains(c)), "off-table pixels: {:?}", colours(doc(&s)));
+    assert_eq!(doc(&s).mode, ColorMode::Indexed);
+}
+
+#[test]
+fn brush_stroke_keeps_indexed_transparency_binary() {
+    let mut s = black_white_indexed(true);
+    let table = doc(&s).color_table.clone().unwrap();
+    assert!(table.transparent.is_some());
+    s.execute("paint.stroke", json!({"points": [[0, 8], [15, 8]], "size": 8, "hardness": 0.0, "color": "#ff0000", "opacity": 0.7})).unwrap();
+    let d = doc(&s);
+    let surf = d.layers[0].surface().unwrap();
+    for (x, y) in (0..16).flat_map(|y| (0..16).map(move |x| (x, y))) {
+        let a = surf.rgba(x, y)[3];
+        assert!(a == 0.0 || a == 1.0, "alpha {a} at ({x},{y})");
+    }
+    assert!(colours(d).iter().all(|c| table.colors.contains(c)), "off-table pixels: {:?}", colours(d));
+}
+
+#[test]
+fn live_brush_preview_matches_indexed_commit() {
+    let mut s = black_white_indexed(false);
+    let params = json!({"points": [[4, 8], [12, 8]], "size": 7, "hardness": 0.0, "color": "#ff0000", "opacity": 0.6, "smoothing": 0.0, "seed": 1});
+    let preview = crate::brush_cmds::LiveStroke::begin(&s, &params).unwrap();
+    let table = doc(&s).color_table.clone().unwrap();
+    assert!(colours(&preview.doc).iter().all(|c| table.colors.contains(c)), "preview off the table: {:?}", colours(&preview.doc));
+    s.execute("paint.stroke", params).unwrap();
+    let (live, committed) = (preview.doc.layers[0].surface().unwrap(), doc(&s).layers[0].surface().unwrap());
+    for (x, y) in (0..16).flat_map(|y| (0..16).map(move |x| (x, y))) {
+        assert_eq!(live.rgba(x, y), committed.rgba(x, y), "preview/commit at ({x},{y})");
+    }
+}
+
+#[test]
+fn indexed_brush_stroke_leaves_pixels_it_did_not_paint() {
+    let mut s = black_white_indexed(false);
+    // An off-table pixel inside the stroke's bounds but away from its dabs (Paint Bucket can
+    // still leave one) is not the stroke's to remap.
+    s.edit("setup", |doc, active| {
+        let surf = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+        let px = photocraft_raster::from_rgba(&surf.format(), [1.0, 0.0, 0.0, 1.0]);
+        surf.write_region(Rect::new(13, 2, 14, 3), &px);
+        Ok(())
+    })
+    .unwrap();
+    s.execute("paint.stroke", json!({"points": [[2, 2], [14, 14]], "size": 2, "hardness": 1.0, "color": "#ff0000", "smoothing": 0.0})).unwrap();
+    let surf = doc(&s).layers[0].surface().unwrap();
+    assert_eq!(surf.rgba(13, 2), [1.0, 0.0, 0.0, 1.0]);
+    assert_eq!(surf.rgba(8, 8), [0.0, 0.0, 0.0, 1.0]);
+}
+
+#[test]
+fn pencil_auto_erase_knows_the_indexed_foreground() {
+    let mut s = black_white_indexed(false);
+    let pencil = json!({"points": [[8, 8]], "size": 3, "color": "#ff0000", "autoErase": true});
+    s.execute("paint.pencil", pencil.clone()).unwrap();
+    assert_eq!(doc(&s).layers[0].surface().unwrap().rgba(8, 8), [0.0, 0.0, 0.0, 1.0]);
+    // Red painted as black, so a stroke starting there auto-erases to the (white) background.
+    let preview = crate::brush_cmds::LiveStroke::begin_with(&s, "paint.pencil", &pencil).unwrap();
+    assert_eq!(preview.doc.layers[0].surface().unwrap().rgba(8, 8), [1.0, 1.0, 1.0, 1.0]);
+    s.execute("paint.pencil", pencil).unwrap();
+    assert_eq!(doc(&s).layers[0].surface().unwrap().rgba(8, 8), [1.0, 1.0, 1.0, 1.0]);
+}
