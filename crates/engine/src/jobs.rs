@@ -909,6 +909,11 @@ impl Session {
     /// Edit › Transform › Again (and Again on a Copy) is not replayable and keeps the concrete
     /// steps it ran instead.
     fn after_command(&mut self, id: &str, params: Value, journal: bool, nested_from: Option<usize>, pre_selected: Option<&[LayerId]>) {
+        // Comparison observes committed pixels without repairing unrelated slice metadata or
+        // transient view state. Other commands keep their existing synchronization behavior.
+        if id == "document.comparePixels" {
+            return;
+        }
         // A layer-mask view ends when another layer becomes active (#196).
         if let Some(st) = self.active_mut() {
             crate::mask_view_cmds::fix(st);

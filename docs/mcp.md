@@ -86,6 +86,15 @@ control token.
 - `render_preview`: bounded PNG content; `index` and `max_side` (default 1024, maximum 2048).
 - `ui_inspect` and `ui_screenshot`: live app state/window in bridge mode.
 
+To check that a protected area survives an edit, use `command_run` with
+`{"id":"history.newSnapshot","params":{"from":"fullDocument","name":"Before retouch"}}`
+and keep the returned `snapshot` id. After the edit, run
+`{"id":"document.comparePixels","params":{"snapshot":1,"regions":[{"x":20,"y":100,"width":160,"height":240}],"tolerance":0}}`
+with that id. Each region reports `comparedPixels`, `changedPixels` and
+`maxChannelDifference` without changing the document or its history. See the
+[comparison contract](control-protocol.md#protected-region-pixel-comparison) for limits and
+the distinction between composited pixels and native stored channels.
+
 Existing document/session/job/UI tools remain listed, including the documented
 `doc_render_preview` spelling. There are no hidden legacy aliases. Every tool has a title
 and all four annotation hints. Generic command/control tools conservatively advertise writes;

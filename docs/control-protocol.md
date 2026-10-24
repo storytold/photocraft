@@ -426,6 +426,39 @@ The MCP server has the same batching as the `command_batch` tool (`{steps:[{id, 
 in headless and bridge mode. A step with `wait: false` returns `{job, pending}` at once, as `command_run`
 does; later steps that edit the same document fail with a message naming the job until it ends.
 
+### Protected-region pixel comparison
+
+`document.comparePixels` is a read-only engine command available through `engine.execute`,
+CLI `run --cmd`, and MCP `command_run`. Take a `history.newSnapshot` with
+`{"from":"fullDocument"}` before editing, then compare the current document with that
+snapshot without selecting or restoring it:
+
+```json
+{"command":"document.comparePixels","params":{"snapshot":1,"regions":[{"x":20,"y":100,"width":160,"height":240}],"tolerance":0}}
+```
+
+Replace `1` with the returned snapshot id. Regions are integer document-coordinate
+rectangles with positive dimensions and half-open edges. Supply 1–32 regions, entirely
+inside both documents, totaling at most 1,048,576 pixels. Overlaps are compared separately
+and count toward that limit. The current document and snapshot must have the same dimensions,
+color mode, sample type and ICC profile. Any snapshot can be compared; `fullDocument` records
+the complete pre-edit appearance, including existing deformations. Snapshots belong to the
+open document's session; compare before closing or reopening it.
+
+The result identifies `space: "composited-rgba-f32"` and returns the effective `tolerance`
+and one record per region: `rect: [x0,y0,x1,y1]`, `comparedPixels`, `changedPixels`, and
+`maxChannelDifference`. It compares the CPU compositor's full-resolution, straight-alpha
+RGBA floats, including alpha. A pixel counts once if any channel's absolute difference
+exceeds `tolerance` (default 0; finite and non-negative). The maximum reports the actual
+difference even when it is below that threshold. Non-finite rendered samples produce an error.
+
+This measures the committed document's composited appearance, including masks and Smart Filters.
+Pending floating selections and other transient tool previews are excluded and remain pending. It does not
+compare hidden native channels, exported file bytes or monitor-transformed colors. The active selection
+does not restrict the requested regions. The command does not change layers, snapshots, undo/redo state,
+the journal or the document's saved state. Comparison buffers are processed in bounded tiles; the
+compositor's own caches and rendering costs still apply.
+
 ## Transport limits
 
 The desktop and headless TCP listeners currently enforce:

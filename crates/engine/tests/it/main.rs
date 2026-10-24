@@ -55,6 +55,7 @@ mod path_blur_speed_clamp;
 mod path_transform_target;
 mod pdn;
 mod photoshop_oracles;
+mod pixel_compare;
 mod pixel_lock_edits;
 mod precheck;
 mod prefs_usage;
