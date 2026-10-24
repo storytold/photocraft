@@ -11,7 +11,9 @@ use photocraft_engine::jobs::JobCtx;
 use crate::filter_dialog::FilterPreviewKey;
 
 pub(crate) struct Computed {
-    pub result: Option<(std::sync::Arc<photocraft_doc::Document>, photocraft_compose::Buffer)>,
+    /// The preview document and, unless the canvas renders just what it shows
+    /// ([`crate::canvas::flattens_whole`]), its whole composite.
+    pub result: Option<(std::sync::Arc<photocraft_doc::Document>, Option<photocraft_compose::Buffer>)>,
     pub ms: f64,
 }
 
