@@ -96,3 +96,22 @@ fn save_a_copy_to_a_bmp_asks_and_keeps_the_document_unsaved() {
     assert!(st.is_dirty());
     assert_eq!(st.path, None);
 }
+
+/// #9175 review: Save a Copy writes the document as it was when asked, even if it changes while
+/// BMP Options is open (as the direct Save a Copy path does).
+#[test]
+fn save_a_copy_to_a_bmp_writes_the_document_as_it_was_asked() {
+    let (mut h, writes) = bmp_app("copy.bmp");
+    // Each export records the layer count of the document it was given.
+    h.state_mut().services.export = Some(Box::new(|doc, _, _| Ok((serde_json::to_vec(&doc.layers.len()).unwrap(), Vec::new()))));
+    let before = h.state().session.active().unwrap().doc.layers.len();
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "file.saveACopy", json!({})).unwrap();
+    h.run_steps(3);
+    assert!(h.state().bmp_options.is_some(), "BMP Options is open");
+    h.state_mut().run("layer.new.layer", json!({})).unwrap();
+    assert_eq!(h.state().session.active().unwrap().doc.layers.len(), before + 1);
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert_eq!(writes.borrow().as_slice(), &[("copy.bmp".to_string(), serde_json::to_vec(&before).unwrap())]);
+}
