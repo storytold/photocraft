@@ -115,6 +115,7 @@ pub mod gradient_ui;
 pub mod guide_layout_ui;
 pub mod guide_select;
 pub mod history_menu_ui;
+pub mod history_options_ui;
 pub mod hold_keys;
 pub mod i18n;
 mod icon_data;
@@ -211,6 +212,7 @@ pub mod slice_ui;
 pub mod smart_filter_dialog;
 pub mod smart_ui;
 pub mod snap_ui;
+pub mod snapshot_dialog;
 pub(crate) mod solid_fill_ui;
 pub mod spring_tools;
 pub mod stack_dialog;
@@ -832,9 +834,10 @@ pub struct PhotocraftApp {
     /// The document area each layer thumbnail in `thumbs` frames (the canvas, or the layer's
     /// bounds with Clip Thumbnails to Layer Bounds; #4281).
     thumb_frames: HashMap<photocraft_doc::LayerId, photocraft_geom::Rect>,
-    /// History snapshot thumbnails by (document, snapshot id): a snapshot never changes, so each
-    /// is made once (`snapshot_thumb`, #2966).
-    snapshot_thumbs: HashMap<(DocId, u64), egui::TextureHandle>,
+    /// History snapshot thumbnails by (document, snapshot id), each with the snapshot document it
+    /// shows (`snapshot_thumb`, #2966): made once, and again only when that is a different one (a
+    /// preserved-ID reopen, or the first snapshot refreshed for a served font, #6087).
+    snapshot_thumbs: HashMap<(DocId, u64), (std::sync::Weak<Document>, egui::TextureHandle)>,
     /// Snapshots whose live layer/mask keys were last used to prune thumbnail handles.
     thumb_documents: Vec<(DocId, std::sync::Weak<Document>)>,
     /// Content bounds cached per (key, revision): scanning a 36 MP layer every frame cost ~77 ms.
@@ -1531,6 +1534,7 @@ impl PhotocraftApp {
         }
         self.canvases.retain(|(doc, _), _| ids.contains(doc));
         self.navigator_textures.retain(|doc, _| ids.contains(doc));
+        self.snapshot_thumbs.retain(|(doc, _), _| ids.contains(doc));
         self.view_docs = ids;
         self.prune_thumbs();
         self.sync_mask_targets();
@@ -2056,6 +2060,8 @@ impl PhotocraftApp {
                     // The job locked the document, but record the revision that was written.
                     st.saved_revision = revision;
                     app.remember_stamp(doc, path);
+                    // History Options › Automatically Create New Snapshot When Saving (#2966).
+                    photocraft_engine::history_options_cmds::snapshot_on_save(&mut app.session);
                 }
                 // "Save Document" script events and File › Generate › Image Assets.
                 if hooks
@@ -2743,11 +2749,18 @@ impl PhotocraftApp {
         (self.store_thumb(ctx, key, rev, img), frame)
     }
 
-    /// The History panel thumbnail of snapshot `snap` of document `doc` (#2966): its composite,
-    /// centred in a square. Thumbnails of `doc`'s snapshots not in `live` are dropped.
-    pub fn snapshot_thumb(&mut self, ctx: &egui::Context, doc: DocId, snap: &photocraft_engine::history_cmds::Snapshot, live: &[u64]) -> egui::TextureId {
+    /// Drops the thumbnails of `doc`'s snapshots not in `live` (deleted ones). Those of closed
+    /// documents go in `sync_views`.
+    pub fn retain_snapshot_thumbs(&mut self, doc: DocId, live: &[u64]) {
         self.snapshot_thumbs.retain(|(d, id), _| *d != doc || live.contains(id));
-        if let Some(tex) = self.snapshot_thumbs.get(&(doc, snap.id)) {
+    }
+
+    /// The History panel thumbnail of snapshot `snap` of document `doc` (#2966): its composite,
+    /// centred in a square.
+    pub fn snapshot_thumb(&mut self, ctx: &egui::Context, doc: DocId, snap: &photocraft_engine::history_cmds::Snapshot) -> egui::TextureId {
+        if let Some((shown, tex)) = self.snapshot_thumbs.get(&(doc, snap.id))
+            && shown.ptr_eq(&std::sync::Arc::downgrade(&snap.doc))
+        {
             return tex.id();
         }
         let comp = photocraft_compose::thumbnail(&snap.doc, 56);
@@ -2762,7 +2775,7 @@ impl PhotocraftApp {
         }
         let tex = ctx.load_texture(format!("snapshot-{}", snap.id), egui::ColorImage::new([side, side], px), egui::TextureOptions::LINEAR);
         let id = tex.id();
-        self.snapshot_thumbs.insert((doc, snap.id), tex);
+        self.snapshot_thumbs.insert((doc, snap.id), (std::sync::Arc::downgrade(&snap.doc), tex));
         id
     }
 

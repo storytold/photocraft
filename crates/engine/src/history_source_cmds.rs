@@ -366,7 +366,7 @@ mod tests {
             json!({"state": 1.5}),
             json!({"state": "1"}),
             json!({"state": [1]}),
-            json!({"snapshot": 0}),
+            json!({"snapshot": 99}),
             json!({"snapshot": 1}),
             json!({"snapshot": -1}),
             json!({"snapshot": "Open"}),
@@ -376,5 +376,7 @@ mod tests {
             assert!(s.execute(CMD, p.clone()).is_err(), "{p}");
         }
         assert_eq!(s.active().unwrap().history.brush_source(), Some(0), "nothing changed");
+        // The first snapshot History Options › Automatically Create First Snapshot adds is one.
+        assert!(s.execute(CMD, json!({"snapshot": 0})).is_ok());
     }
 }

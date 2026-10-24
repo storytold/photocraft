@@ -981,6 +981,10 @@
 	Frame from Layers…	Frame từ các lớp…
 	Create new document from current state	Tạo tài liệu mới từ trạng thái hiện tại
 	Create new snapshot	Tạo ảnh chụp trạng thái mới
+	From:	Từ:
+	Full Document	Toàn bộ tài liệu
+	Merged Layers	Các lớp đã gộp
+	New Snapshot	Ảnh chụp trạng thái mới
 	Delete current state	Xóa trạng thái hiện tại
 	No properties	Không có thuộc tính
 	Hide Properties	Ẩn Thuộc tính
@@ -3687,6 +3691,9 @@ curves	Smooth	Làm mượt
 	Clear History	Xóa lịch sử
 	History Options…	Tùy chọn lịch sử…
 	Background (Default)	Nền (mặc định)
+# History panel › History Options… (#2966)
+	Allow Non-Linear History	Cho phép lịch sử không tuyến tính
+	Make Layer Visibility Changes Undoable	Cho phép hoàn tác thay đổi hiển thị lớp
 	Presentation	Trình bày
 # Batch / Image Processor
 	Include All Subfolders	Bao gồm tất cả thư mục con
@@ -3702,6 +3709,10 @@ curves	Smooth	Làm mượt
 	Sent to {printer}	Đã gửi tới {printer}
 	set in Print Settings…	đặt trong thiết lập in…
 	ICO is limited to 256 × 256 pixels	ICO giới hạn ở 256 × 256 pixel
+# History panel › History Options… (#2966)
+	Automatically Create First Snapshot	Tự động tạo ảnh chụp trạng thái đầu tiên
+	Automatically Create New Snapshot When Saving	Tự động tạo ảnh chụp trạng thái mới khi lưu
+	Show New Snapshot Dialog by Default	Mặc định hiện hộp thoại Ảnh chụp trạng thái mới
 	Check for Updates…	Kiểm tra bản cập nhật…
 	PhotoCraft Updates	Bản cập nhật PhotoCraft
 	Checking for updates…	Đang kiểm tra bản cập nhật…

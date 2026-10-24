@@ -60,6 +60,7 @@ pub mod guide_layout;
 pub mod hidden_target;
 pub mod history_cmds;
 pub mod history_menu_cmds;
+pub mod history_options_cmds;
 pub mod history_select_cmds;
 pub mod history_source_cmds;
 pub mod image_cmds;
@@ -244,14 +245,33 @@ pub struct DocState {
     /// pixel coordinates. Per-document view state: discarded when the document closes, never saved
     /// to `.pcraft` or PSD, and not a history step.
     pub color_samplers: Vec<[f64; 2]>,
-    /// History panel snapshots, oldest first (`history.newSnapshot`, #2966). Kept for the
-    /// session only, as in Photoshop: not history states, and not saved with the document.
+    /// History panel snapshots, oldest first (`history.newSnapshot`, #2966): the first (id 0) is
+    /// the document as opened (unless History Options › Automatically Create First Snapshot is
+    /// off). Kept for the session only, as in Photoshop: not history states,
+    /// and not saved with the document.
     pub snapshots: Vec<history_cmds::Snapshot>,
     /// The id the next snapshot gets; ids are never reused, so deleting one keeps the others.
     next_snapshot: u64,
+    /// The snapshot the latest save added (History Options › Automatically Create New Snapshot
+    /// When Saving), so saving an unchanged document again doesn't add a duplicate row.
+    save_snapshot: Option<u64>,
     /// The snapshot set as the History Brush's source (`history.setSource {snapshot}`); `None`:
     /// the source is a state, kept by the history ([`photocraft_ops::History::brush_source`]).
     pub(crate) source_snapshot: Option<u64>,
+}
+
+/// `doc` with its type layers among `ids` re-rendered (`Session::refresh_type_layers`), or `None`
+/// when none of them is a type layer of `doc`.
+fn refresh_text_layers(doc: &Arc<photocraft_doc::Document>, ids: &[LayerId]) -> Option<photocraft_doc::Document> {
+    let mut out = (**doc).clone();
+    let mut changed = false;
+    for id in ids {
+        if let Some(photocraft_doc::Layer { content: photocraft_doc::LayerContent::Text(t), .. }) = out.layer_mut(*id) {
+            type_cmds::refresh(doc, t);
+            changed = true;
+        }
+    }
+    changed.then_some(out)
 }
 
 impl DocState {
@@ -272,9 +292,14 @@ impl DocState {
     pub fn new(doc: Document, path: Option<String>) -> Self {
         let active_layer = doc.top_layer();
         let mut history = History::default();
-        history.set_current_layers(LayerTarget { active: active_layer, selected: active_layer.into_iter().collect() });
+        let target = LayerTarget { active: active_layer, selected: active_layer.into_iter().collect() };
+        history.set_current_layers(target.clone());
+        let doc = Arc::new(doc);
+        // Photoshop's first snapshot: the document as opened, named after it, so the History
+        // panel's top row can always bring it back (#2966).
+        let first = history_cmds::Snapshot { id: 0, name: doc.name.clone(), doc: doc.clone(), layers: target };
         Self {
-            doc: Arc::new(doc),
+            doc,
             history,
             active_layer,
             selected_layers: active_layer.into_iter().collect(),
@@ -294,8 +319,9 @@ impl DocState {
             show_only: None,
             floating: None,
             color_samplers: Vec::new(),
-            snapshots: Vec::new(),
+            snapshots: vec![first],
             next_snapshot: 1,
+            save_snapshot: None,
             source_snapshot: None,
         }
     }
@@ -637,6 +663,12 @@ impl Session {
         let mut st = DocState::new(doc, path);
         st.history.max_states = self.prefs.get().performance.history_states.max(1) as usize;
         st.history.max_bytes = self.prefs.get().performance.history_budget_bytes();
+        st.history.non_linear = self.prefs.get().history_options.allow_non_linear_history;
+        // History Options › Automatically Create First Snapshot off: no snapshot of the document
+        // as opened, so the History panel starts at the opening state (#2966).
+        if !self.prefs.get().history_options.automatically_create_first_snapshot {
+            st.snapshots.clear();
+        }
         self.docs.push(st);
         let i = self.docs.len() - 1;
         self.active = Some(i);
@@ -842,6 +874,25 @@ impl Session {
 
     /// Apply an undoable edit to the active document.
     pub fn edit<R>(&mut self, label: &str, f: impl FnOnce(&mut Document, &mut Option<LayerId>) -> Result<R>) -> Result<R> {
+        self.edit_with(label, true, f)
+    }
+
+    /// Apply a change of layer visibility (and nothing else): a history state when History
+    /// Options › Make Layer Visibility Changes Undoable is on (the default, as in Photoshop),
+    /// otherwise the document changes without one, so the History panel and Undo skip it.
+    pub fn edit_visibility<R>(&mut self, label: &str, f: impl FnOnce(&mut Document, &mut Option<LayerId>) -> Result<R>) -> Result<R> {
+        let record = self.visibility_undoable();
+        self.edit_with(label, record, f)
+    }
+
+    /// History Options › Make Layer Visibility Changes Undoable.
+    pub fn visibility_undoable(&self) -> bool {
+        self.prefs().history_options.make_layer_visibility_changes_undoable
+    }
+
+    /// [`Self::edit`], recording a history state only when `record` is set. An unrecorded change
+    /// still marks the document modified and leaves the redo states alone.
+    pub(crate) fn edit_with<R>(&mut self, label: &str, record: bool, f: impl FnOnce(&mut Document, &mut Option<LayerId>) -> Result<R>) -> Result<R> {
         // Every mutation path (linked-file refresh, transform, place) re-renders smart objects
         // through this entry; the requesting session's authority must reach those renders.
         let _authorization = crate::jobs::render_authorization_scope(self.authorize);
@@ -898,14 +949,20 @@ impl Session {
         let key = self.coalesce_request.clone();
         let st = self.active_mut().ok_or(EngineError::NoDocument)?;
         let layers = st.layer_target();
-        if key.is_none() || st.coalesce != key || !st.history.can_undo() {
+        if !record {
+            // Nothing to coalesce with: the next recorded step starts a state of its own.
+            st.coalesce = None;
+        } else if key.is_none() || st.coalesce != key || !st.history.can_undo() {
             st.history.set_current_layers(prior);
-            st.history.record(label, before, layers);
+            st.history.record(label, before.clone(), layers);
+            st.history.add_current_visibility(&visibility_changes(&before, &st.doc));
             st.trim_history();
+            st.coalesce = key;
         } else {
             st.history.set_current_layers(layers);
+            st.history.add_current_visibility(&visibility_changes(&before, &st.doc));
+            st.coalesce = key;
         }
-        st.coalesce = key;
         st.bump_revision(keep_clean);
         st.last_damage = damage;
         self.samplers_removed += samplers_removed;
@@ -976,30 +1033,35 @@ impl Session {
             }
         }
         for doc_id in docs {
-            let mine = layers.iter().filter(|(d, _)| *d == doc_id);
+            let mine: Vec<LayerId> = layers.iter().filter(|(d, _)| *d == doc_id).map(|(_, id)| *id).collect();
             if self.job_on(doc_id).is_some() {
-                busy.extend(mine);
+                busy.extend(mine.iter().map(|id| (doc_id, *id)));
                 continue;
             }
             let Some(st) = self.docs.iter_mut().find(|st| st.doc.id == doc_id) else { continue };
-            let snapshot = st.doc.clone();
-            let mut doc = (*snapshot).clone();
-            let mut changed = false;
-            for (_, id) in mine {
-                if let Some(photocraft_doc::Layer { content: photocraft_doc::LayerContent::Text(t), .. }) = doc.layer_mut(*id) {
-                    type_cmds::refresh(&snapshot, t);
-                    changed = true;
-                }
+            // The first snapshot is the document as opened (#2966, #6087): it was taken before the
+            // font arrived, so its type layers get the same refresh, or returning to it brings the
+            // fallback-font pixels back. While it still is the open document, it shares the
+            // refreshed one.
+            let first_is_doc = st.snapshots.iter().any(|s| s.id == 0 && Arc::ptr_eq(&s.doc, &st.doc));
+            if !first_is_doc
+                && let Some(first) = st.snapshots.iter_mut().find(|s| s.id == 0)
+                && let Some(doc) = refresh_text_layers(&first.doc, &mine)
+            {
+                first.doc = Arc::new(doc);
             }
-            if changed {
-                let clean = st.saved_revision == st.revision;
-                st.doc = Arc::new(doc);
-                st.revision += 1;
-                if clean {
-                    st.saved_revision = st.revision;
-                }
-                st.last_damage = None;
+            let Some(doc) = refresh_text_layers(&st.doc, &mine) else { continue };
+            let doc = Arc::new(doc);
+            if first_is_doc && let Some(first) = st.snapshots.iter_mut().find(|s| s.id == 0) {
+                first.doc = doc.clone();
             }
+            let clean = st.saved_revision == st.revision;
+            st.doc = doc;
+            st.revision += 1;
+            if clean {
+                st.saved_revision = st.revision;
+            }
+            st.last_damage = None;
         }
         busy
     }
@@ -1009,8 +1071,11 @@ impl Session {
         if self.active_job().is_some() {
             return false;
         }
+        let keep_visibility = !self.visibility_undoable();
         let Some(st) = self.active_mut() else { return false };
         st.coalesce = None;
+        // The step being undone: the layers whose visibility it changed get it back.
+        let changed = st.history.current_visibility().to_vec();
         match st.history.undo(st.doc.clone()) {
             // Undo Clear History: the list comes back, the document is the same one. Not an
             // edit: keep a clean document clean (the revision still moves for the panels).
@@ -1028,6 +1093,9 @@ impl Session {
                 // Save As changes file identity outside history, just like the saved path.
                 if d.name != st.doc.name {
                     Arc::make_mut(&mut d).name.clone_from(&st.doc.name);
+                }
+                if keep_visibility {
+                    carry_visibility(&st.doc, &mut d, &changed);
                 }
                 // Pixels this step can have touched, so the canvas recomposites only that
                 // (it recomposited everything before).
@@ -1047,12 +1115,18 @@ impl Session {
         if self.active_job().is_some() {
             return false;
         }
+        let keep_visibility = !self.visibility_undoable();
         let Some(st) = self.active_mut() else { return false };
         st.coalesce = None;
         match st.history.redo(st.doc.clone()) {
             Some((mut d, layers)) => {
                 if d.name != st.doc.name {
                     Arc::make_mut(&mut d).name.clone_from(&st.doc.name);
+                }
+                if keep_visibility {
+                    // The step being redone sets the visibility it changed again.
+                    let changed = st.history.current_visibility().to_vec();
+                    carry_visibility(&st.doc, &mut d, &changed);
                 }
                 let damage = layer_multi_cmds::step_damage(&st.doc, &d);
                 let before = std::mem::replace(&mut st.doc, d);
@@ -1065,6 +1139,79 @@ impl Session {
             None => false,
         }
     }
+}
+
+impl Session {
+    /// Take back the step a compound command just recorded, after its later part failed: the
+    /// document before the command is current again, nothing is left to redo, and in non-linear
+    /// history the later states that step moved stay where they were (an undo would land on the
+    /// last of them). Falls back to Undo plus forgetting the redo states when the history
+    /// changed since that step. Returns whether a step was taken back.
+    pub fn rollback(&mut self) -> bool {
+        if self.active_job().is_some() {
+            return false;
+        }
+        let keep_visibility = !self.visibility_undoable();
+        let Some(st) = self.active_mut() else { return false };
+        st.coalesce = None;
+        // The step taken back (and the later states it moved, in non-linear history): the layers
+        // whose visibility it changed get it back, the unrecorded changes stay, as for Undo.
+        let changed = st.history.current_visibility().to_vec();
+        let Some((mut d, layers)) = st.history.rollback() else {
+            let undone = self.undo();
+            if undone && let Some(st) = self.active_mut() {
+                st.history.clear_redo();
+            }
+            return undone;
+        };
+        if d.name != st.doc.name {
+            Arc::make_mut(&mut d).name.clone_from(&st.doc.name);
+        }
+        if keep_visibility {
+            carry_visibility(&st.doc, &mut d, &changed);
+        }
+        let damage = layer_multi_cmds::step_damage(&d, &st.doc);
+        let before = std::mem::replace(&mut st.doc, d);
+        // Taking back a selection-only step keeps a clean document clean, as Undo does (#6865).
+        let keep_clean = st.keeps_clean(&before);
+        restore_target(st, layers);
+        st.bump_revision(keep_clean);
+        st.last_damage = damage;
+        true
+    }
+}
+
+/// History Options › Make Layer Visibility Changes Undoable off: showing or hiding a layer is not
+/// a history state, so stepping through history must not bring the old visibility back either
+/// (history states hold whole documents). Gives every layer of `to` that `from` also has the
+/// visibility it has in `from`, except the `stepped` layers: a recorded step between the two
+/// states changed their visibility (Apply Layer Comp, a snapshot, a visibility change recorded
+/// while the option was on), so they keep the visibility `to` holds. Layers only one of them has
+/// keep theirs. Copies `to` only when something differs.
+pub(crate) fn carry_visibility(from: &Document, to: &mut Arc<Document>, stepped: &[LayerId]) {
+    let visible: std::collections::HashMap<LayerId, bool> = from.walk().into_iter().map(|(_, _, l)| (l.id, l.visible)).collect();
+    let changes: Vec<(LayerId, bool)> = to
+        .walk()
+        .into_iter()
+        .filter(|(_, _, l)| !stepped.contains(&l.id))
+        .filter_map(|(_, _, l)| visible.get(&l.id).filter(|v| **v != l.visible).map(|v| (l.id, *v)))
+        .collect();
+    if changes.is_empty() {
+        return;
+    }
+    let d = Arc::make_mut(to);
+    for (id, v) in changes {
+        if let Some(l) = d.layer_mut(id) {
+            l.visible = v;
+        }
+    }
+}
+
+/// The layers (in both documents) whose visibility differs between `before` and `after`: what a
+/// recorded step changed, for [`photocraft_ops::History::add_current_visibility`].
+pub(crate) fn visibility_changes(before: &Document, after: &Document) -> Vec<LayerId> {
+    let visible: std::collections::HashMap<LayerId, bool> = before.walk().into_iter().map(|(_, _, l)| (l.id, l.visible)).collect();
+    after.walk().into_iter().filter(|(_, _, l)| visible.get(&l.id).is_some_and(|v| *v != l.visible)).map(|(_, _, l)| l.id).collect()
 }
 
 /// Undo / redo: target the layers the restored state targeted, as far as they still exist.

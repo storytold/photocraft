@@ -745,6 +745,8 @@
 	Gradients	Degradeler
 	Histogram	Histogram
 	History	Geçmiş
+	Allow Non-Linear History	Doğrusal Olmayan Geçmişe İzin Ver
+	Make Layer Visibility Changes Undoable	Katman Görünürlüğü Değişikliklerini Geri Alınabilir Yap
 	Info	Bilgi
 	Measurement Log	Ölçüm Günlüğü
 	Modifier Keys	Değiştirici Tuşlar
@@ -2708,6 +2710,9 @@ cameraRaw	Color	Renk
 	Color indicates	Renk şunu gösterir:
 	Create Snapshot	Anlık Görüntü Oluştur
 	Delete Snapshot	Anlık Görüntüyü Sil
+	From:	Kaynak:
+	Full Document	Tam Belge
+	Merged Layers	Birleştirilmiş Katmanlar
 	New Snapshot	Yeni Anlık Görüntü
 	New Snapshot…	Yeni Anlık Görüntü…
 	History Options…	Geçmiş Seçenekleri…

@@ -1018,6 +1018,9 @@
 	Create new pattern from the selection	Buat pola baru dari seleksi
 	Create new shape from the current path	Buat bentuk baru dari path saat ini
 	Create new snapshot	Buat snapshot baru
+	From:	Dari:
+	Full Document	Seluruh Dokumen
+	Merged Layers	Layer Gabungan
 	Create new tool preset	Buat preset alat baru
 	Crop Factor	Faktor Crop
 	Ctrl	Ctrl
@@ -3178,6 +3181,9 @@ curves	Smooth	Haluskan
 # History panel menu (#2966)
 	New Snapshot…	Snapshot Baru…
 	History Options…	Opsi Riwayat…
+# History panel › History Options… (#2966)
+	Allow Non-Linear History	Izinkan Riwayat Non-Linier
+	Make Layer Visibility Changes Undoable	Perubahan Visibilitas Layer Dapat Diurungkan
 # Print dialog (#2697)
 	Emulsion Down	Emulsi di Bawah
 	Functions	Fungsi

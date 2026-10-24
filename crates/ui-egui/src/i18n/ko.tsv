@@ -1016,6 +1016,10 @@
 	Create new pattern from the selection	선택 영역으로 새 패턴 만들기
 	Create new shape from the current path	현재 패스로 새 모양 만들기
 	Create new snapshot	새 스냅샷 만들기
+	From:	원본:
+	Full Document	전체 문서
+	Merged Layers	병합된 레이어
+	New Snapshot	새 스냅샷
 	Create new style (from the selected type)	새 스타일 만들기(선택한 문자에서)
 	Create new style from the selected layer	선택한 레이어로 새 스타일 만들기
 	Create new tool preset	새 도구 사전 설정 만들기
@@ -3369,6 +3373,9 @@ curves	Smooth	매끄럽게
 	Clear History	작업 내역 지우기
 	New Snapshot…	새 스냅샷…
 	History Options…	작업 내역 옵션…
+# History panel › History Options… (#2966)
+	Allow Non-Linear History	비선형 작업 내역 허용
+	Make Layer Visibility Changes Undoable	레이어 표시 여부 변경을 실행 취소할 수 있게 하기
 # Print dialog (#2697)
 	Emulsion Down	감광면 아래로
 	Functions	기능
@@ -3441,6 +3448,9 @@ curves	Smooth	매끄럽게
 	Sent to {printer}	{printer}(으)로 전송됨
 	set in Print Settings…	인쇄 설정에서 지정…
 	ICO is limited to 256 × 256 pixels	ICO는 256 × 256픽셀로 제한됩니다
+	Automatically Create First Snapshot	첫 번째 스냅샷 자동 만들기
+	Automatically Create New Snapshot When Saving	저장할 때 새 스냅샷 자동 만들기
+	Show New Snapshot Dialog by Default	기본적으로 새 스냅샷 대화 상자 표시
 # PhotoCraft release checks.
 	Check for Updates…	업데이트 확인…
 	PhotoCraft Updates	PhotoCraft 업데이트

@@ -1045,6 +1045,10 @@
 	Create new pattern from the selection	从选区创建图案
 	Create new shape from the current path	从当前路径创建形状
 	Create new snapshot	创建快照
+	From:	自：
+	Full Document	完整文档
+	Merged Layers	合并的图层
+	New Snapshot	新建快照
 	Create new tool preset	创建工具预设
 	Crop Factor	裁切系数
 	Ctrl	Ctrl
@@ -2815,6 +2819,9 @@ curves	Smooth	平滑
 	Clear History	清除历史记录
 	New Snapshot…	新建快照…
 	History Options…	历史记录选项…
+# History panel › History Options… (#2966)
+	Allow Non-Linear History	允许非线性历史记录
+	Make Layer Visibility Changes Undoable	允许撤销图层可见性更改
 # Print dialog (#2697)
 	Emulsion Down	药膜朝下
 	Functions	功能
@@ -2888,6 +2895,9 @@ curves	Smooth	平滑
 	Sent to {printer}	已发送到 {printer}
 	set in Print Settings…	在打印设置中设置…
 	ICO is limited to 256 × 256 pixels	ICO 最大为 256 × 256 像素
+	Automatically Create First Snapshot	自动创建第一幅快照
+	Automatically Create New Snapshot When Saving	存储时自动创建新快照
+	Show New Snapshot Dialog by Default	默认显示新建快照对话框
 # PhotoCraft release checks.
 	Check for Updates…	检查更新…
 	PhotoCraft Updates	PhotoCraft 更新

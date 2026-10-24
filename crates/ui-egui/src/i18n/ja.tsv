@@ -1021,6 +1021,9 @@
 	Create new pattern from the selection	選択範囲から新規パターンを作成
 	Create new shape from the current path	現在のパスから新規シェイプを作成
 	Create new snapshot	新規スナップショットを作成
+	From:	作成元:
+	Full Document	ドキュメント全体
+	Merged Layers	結合されたレイヤー
 	Create new tool preset	新規ツールプリセットを作成
 	Crop Factor	切り抜き係数
 	Ctrl	Ctrl
@@ -3765,6 +3768,9 @@ curves	Smooth	スムーズ
 # History panel menu (#2966)
 	New Snapshot…	新規スナップショット…
 	History Options…	ヒストリーオプション…
+# History panel › History Options… (#2966)
+	Allow Non-Linear History	非線形のヒストリーを許可
+	Make Layer Visibility Changes Undoable	レイヤーの表示/非表示の変更を取り消し可能にする
 # Print dialog (#2697)
 	Emulsion Down	乳剤面を下
 	Functions	機能

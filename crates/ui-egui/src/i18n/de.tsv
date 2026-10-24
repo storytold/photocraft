@@ -1014,6 +1014,10 @@
 	Create new pattern from the selection	Neues Muster aus der Auswahl erstellen
 	Create new shape from the current path	Neue Form aus dem aktuellen Pfad erstellen
 	Create new snapshot	Neuen Snapshot erstellen
+	From:	Von:
+	Full Document	Gesamtes Dokument
+	Merged Layers	Zusammengefügte Ebenen
+	New Snapshot	Neuer Snapshot
 	Create new style (from the selected type)	Neuen Stil erstellen (aus dem ausgewählten Text)
 	Create new style from the selected layer	Neuen Stil aus der ausgewählten Ebene erstellen
 	Create new tool preset	Neue Werkzeugvorgabe erstellen
@@ -2804,6 +2808,9 @@ curves	Smooth	Glätten
 	Clear History	Protokoll löschen
 	New Snapshot…	Neuer Schnappschuss…
 	History Options…	Protokolloptionen…
+# History panel › History Options… (#2966)
+	Allow Non-Linear History	Nicht-lineare Protokolle zulassen
+	Make Layer Visibility Changes Undoable	Änderungen der Ebenensichtbarkeit widerrufbar machen
 # Print dialog (#2697)
 	Emulsion Down	Schichtseite unten
 	Functions	Funktionen
@@ -3254,6 +3261,9 @@ curves	Smooth	Glätten
 	Sent to {printer}	An {printer} gesendet
 	set in Print Settings…	in den Druckeinstellungen festlegen…
 	ICO is limited to 256 × 256 pixels	ICO ist auf 256 × 256 Pixel begrenzt
+	Automatically Create First Snapshot	Ersten Snapshot automatisch erstellen
+	Automatically Create New Snapshot When Saving	Beim Speichern automatisch neuen Snapshot erstellen
+	Show New Snapshot Dialog by Default	Dialogfeld „Neuer Snapshot“ standardmäßig anzeigen
 # PhotoCraft release checks.
 	Check for Updates…	Nach Updates suchen…
 	PhotoCraft Updates	PhotoCraft-Updates

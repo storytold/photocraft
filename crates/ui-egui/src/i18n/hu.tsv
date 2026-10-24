@@ -607,6 +607,8 @@
 	High Pass…	Felüláteresztő…
 	Histogram	Hisztogram
 	History	Előzmények
+	Allow Non-Linear History	Nem lineáris előzmények engedélyezése
+	Make Layer Visibility Changes Undoable	A rétegláthatósági változások visszavonhatók
 	Horizontal	Vízszintes
 	HSB/HSL	HSB/HSL
 	Huge	Óriási
@@ -3897,6 +3899,9 @@ cameraRaw	Yellow	Sárga
 	New document…     ⌘N	Új dokumentum…     ⌘N
 	New Layer from Brush	Új réteg ecsetből
 	New Path	Új útvonal
+	From:	Forrás:
+	Full Document	Teljes dokumentum
+	Merged Layers	Egyesített rétegek
 	New Snapshot	Új pillanatkép
 	New Snapshot…	Új pillanatkép…
 	History Options…	Előzménybeállítások…

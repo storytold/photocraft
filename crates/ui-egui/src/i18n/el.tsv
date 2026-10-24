@@ -761,6 +761,9 @@
 	Create new pattern from the selection	Δημιουργία μοτίβου από την επιλογή
 	Create new shape from the current path	Δημιουργία σχήματος από την τρέχουσα διαδρομή
 	Create new snapshot	Δημιουργία νέου στιγμιότυπου
+	From:	Από:
+	Full Document	Ολόκληρο έγγραφο
+	Merged Layers	Συγχωνευμένα επίπεδα
 	Create new style (from the selected type)	Δημιουργία στυλ από τον επιλεγμένο τύπο
 	Create new style from the selected layer	Δημιουργία στυλ από το επιλεγμένο επίπεδο
 	Current & Below	Τρέχον και υποκείμενα
@@ -3851,6 +3854,9 @@ curves	Smooth	Εξομάλυνση
 # History panel menu (#2966)
 	New Snapshot…	Νέο στιγμιότυπο…
 	History Options…	Επιλογές ιστορικού…
+# History panel › History Options… (#2966)
+	Allow Non-Linear History	Να επιτρέπεται μη γραμμικό ιστορικό
+	Make Layer Visibility Changes Undoable	Οι αλλαγές ορατότητας επιπέδων να αναιρούνται
 # Print dialog (#2697)
 	Emulsion Down	Γαλάκτωμα προς τα κάτω
 	Functions	Λειτουργίες

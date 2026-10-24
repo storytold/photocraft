@@ -2910,6 +2910,9 @@ fontWeight	Italic	Курсив
 	Create new document from current state	Создать новый документ из текущего состояния
 	Create new fill or adjustment layer	Создать новый слой-заливку или корректирующий слой
 	Create new snapshot	Создать новый снимок
+	From:	Из:
+	Full Document	Весь документ
+	Merged Layers	Объединённые слои
 	Delete Cropped Pixels	Удалить отсечённые пикселы
 	Delete current state	Удалить текущее состояние
 	Delete layer	Удалить слой
@@ -3106,6 +3109,9 @@ curves	Smooth	Сгладить
 # History panel menu (#2966)
 	New Snapshot…	Новый снимок…
 	History Options…	Параметры истории…
+# History panel › History Options… (#2966)
+	Allow Non-Linear History	Разрешить нелинейную историю
+	Make Layer Visibility Changes Undoable	Разрешить отмену изменений видимости слоёв
 # Print dialog (#2697)
 	Emulsion Down	Эмульсией вниз
 	Functions	Функции

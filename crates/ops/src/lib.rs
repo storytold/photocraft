@@ -33,6 +33,9 @@ pub struct HistoryState {
     pub doc: Arc<Document>,
     /// The layers targeted when this state was created.
     pub layers: LayerTarget,
+    /// The layers whose visibility the step that created this state changed, as stepping to this
+    /// state from the one before it in the list must apply it; see [`History::current_visibility`].
+    pub visibility: Vec<LayerId>,
     /// Stable while the state is held: indices shift when older states fall off, ids don't.
     pub id: u64,
 }
@@ -52,6 +55,16 @@ pub struct History {
     current_label: String,
     /// The layers targeted when the current document was created (opened or edited).
     current_layers: LayerTarget,
+    /// [`HistoryState::visibility`] of the current state.
+    current_visibility: Vec<LayerId>,
+    /// History Options › Allow Non-Linear History: a step recorded while later states exist
+    /// (after stepping back) keeps them and goes to the end of the list, instead of discarding
+    /// them; see [`History::record`] and [`History::remove`].
+    pub non_linear: bool,
+    /// The most recent [`History::record`], while it is still the latest change to the list;
+    /// `None` once anything else changed it. [`History::rollback`] needs it to take the step back
+    /// exactly.
+    last_record: Option<LastRecord>,
     /// The states History panel › Clear History took off the list, kept so the next undo puts
     /// them back (Clear History is itself undoable). Any new step drops them.
     cleared: Option<Box<Cleared>>,
@@ -61,6 +74,21 @@ pub struct History {
     next_id: u64,
     /// The History Brush's source state, set in the History panel (`None`: the default).
     brush_source: Option<u64>,
+}
+
+/// What [`History::rollback`] needs to take the most recent [`History::record`] back.
+#[derive(Clone, Debug)]
+struct LastRecord {
+    /// The document it replaced (the state a rollback makes current again).
+    before: Arc<Document>,
+    /// How many former redo states it moved onto the undo side (always 0 in linear history).
+    moved: usize,
+    /// The states it (and the [`History::trim`] after it) dropped for the state limit or the
+    /// byte budget, in the order they were taken off, each with its index in the undo list at
+    /// that moment (not always the front: the History Brush's source is never dropped).
+    /// Their tiles are no longer counted; they are only held until the next change to the
+    /// list, so a rollback can put them back where they were.
+    evicted: Vec<(usize, HistoryState)>,
 }
 
 /// The undo and redo states [`History::clear_states`] removed, and the History Brush source set
@@ -91,6 +119,9 @@ impl History {
             max_bytes: 0,
             current_label: "Open".into(),
             current_layers: LayerTarget::default(),
+            current_visibility: Vec::new(),
+            non_linear: false,
+            last_record: None,
             cleared: None,
             current_id: 0,
             next_id: 1,
@@ -100,6 +131,11 @@ impl History {
 
     /// Record that `before` was replaced by a new current document via step `label`, which left
     /// `layers` targeted.
+    ///
+    /// Linear history (the default) discards the redo states, as Photoshop does when you edit
+    /// after selecting an earlier state. With [`History::non_linear`] they are kept: the list
+    /// reads `…, before, the former redo states (oldest first), the new step`, so the new step is
+    /// appended at the end and every earlier state can still be stepped to.
     pub fn record(&mut self, label: impl Into<String>, before: Arc<Document>, layers: LayerTarget) {
         if self.max_bytes == 0 {
             self.tiles = None;
@@ -113,19 +149,36 @@ impl History {
         }
         let prev_label = std::mem::replace(&mut self.current_label, label.into());
         let prev_layers = std::mem::replace(&mut self.current_layers, layers);
+        let prev_visibility = std::mem::take(&mut self.current_visibility);
         let prev_id = std::mem::replace(&mut self.current_id, self.next_id);
         self.next_id = self.next_id.wrapping_add(1);
-        self.undo.push_back(HistoryState { label: prev_label, doc: before, layers: prev_layers, id: prev_id });
-        self.clear_redo();
+        self.undo.push_back(HistoryState { label: prev_label, doc: before.clone(), layers: prev_layers, visibility: prev_visibility, id: prev_id });
+        let mut moved = 0;
+        if self.non_linear {
+            // `redo` holds the next state last; the list order is oldest first. Their tiles stay
+            // counted: they only move from the redo side to the undo side.
+            while let Some(state) = self.redo.pop() {
+                // The new step follows the last of them in the list but was made from `before`:
+                // stepping back to them walks back over their steps.
+                merge_ids(&mut self.current_visibility, &state.visibility);
+                self.undo.push_back(state);
+                moved += 1;
+            }
+        } else {
+            self.clear_redo();
+        }
+        let mut evicted = Vec::new();
         while self.undo.len() > self.max_states {
             // The History Brush's source doesn't fall off (as in Photoshop): the next oldest does.
             let pinned = self.max_states > 1 && self.undo.front().is_some_and(|s| Some(s.id) == self.brush_source);
-            if let Some(state) = self.undo.remove(usize::from(pinned))
-                && let Some(tiles) = &mut self.tiles
-            {
+            let at = usize::from(pinned);
+            let Some(state) = self.undo.remove(at) else { break };
+            if let Some(tiles) = &mut self.tiles {
                 tiles.remove(&state.doc);
             }
+            evicted.push((at, state));
         }
+        self.last_record = Some(LastRecord { before, moved, evicted });
     }
 
     pub fn can_undo(&self) -> bool {
@@ -154,6 +207,21 @@ impl History {
         self.current_layers = layers;
     }
 
+    /// The layers whose visibility the step that produced the current document changed, as the
+    /// session reported them with [`History::add_current_visibility`]. With History Options ›
+    /// Make Layer Visibility Changes Undoable off, showing or hiding a layer is not a step, so
+    /// stepping through history keeps every other layer's visibility as it is; these layers take
+    /// the visibility of the state stepped to, since a recorded step changed them.
+    pub fn current_visibility(&self) -> &[LayerId] {
+        &self.current_visibility
+    }
+
+    /// Note layers whose visibility the current step changed (after [`History::record`], and
+    /// again when a later change coalesces into the step).
+    pub fn add_current_visibility(&mut self, ids: &[LayerId]) {
+        merge_ids(&mut self.current_visibility, ids);
+    }
+
     /// Undo: `current` becomes redoable; returns the document to make current and the layers it
     /// targeted when it was created.
     pub fn undo(&mut self, current: Arc<Document>) -> Option<(Arc<Document>, LayerTarget)> {
@@ -167,28 +235,32 @@ impl History {
             return Some((current, self.current_layers.clone()));
         }
         let prev = self.undo.pop_back()?;
+        self.last_record = None;
         if let Some(tiles) = &mut self.tiles {
             tiles.remove(&prev.doc);
             tiles.add(&current);
         }
         let label = std::mem::replace(&mut self.current_label, prev.label);
         let layers = std::mem::replace(&mut self.current_layers, prev.layers.clone());
+        let visibility = std::mem::replace(&mut self.current_visibility, prev.visibility);
         let id = std::mem::replace(&mut self.current_id, prev.id);
-        self.redo.push(HistoryState { label, doc: current, layers, id });
+        self.redo.push(HistoryState { label, doc: current, layers, visibility, id });
         Some((prev.doc, prev.layers))
     }
 
     /// Redo: the mirror of [`Self::undo`].
     pub fn redo(&mut self, current: Arc<Document>) -> Option<(Arc<Document>, LayerTarget)> {
         let next = self.redo.pop()?;
+        self.last_record = None;
         if let Some(tiles) = &mut self.tiles {
             tiles.remove(&next.doc);
             tiles.add(&current);
         }
         let label = std::mem::replace(&mut self.current_label, next.label);
         let layers = std::mem::replace(&mut self.current_layers, next.layers.clone());
+        let visibility = std::mem::replace(&mut self.current_visibility, next.visibility);
         let id = std::mem::replace(&mut self.current_id, next.id);
-        self.undo.push_back(HistoryState { label, doc: current, layers, id });
+        self.undo.push_back(HistoryState { label, doc: current, layers, visibility, id });
         Some((next.doc, next.layers))
     }
 
@@ -270,6 +342,7 @@ impl History {
     /// last step can no longer be undone and its pixels are released.
     pub fn purge_last(&mut self) -> bool {
         self.clear_redo();
+        self.last_record = None;
         if self.cleared.take().is_some() {
             self.tiles = None;
             return true;
@@ -278,11 +351,118 @@ impl History {
         if let Some(tiles) = &mut self.tiles {
             tiles.remove(&state.doc);
         }
+        // The current step now starts where the purged one did.
+        merge_ids(&mut self.current_visibility, &state.visibility);
         true
+    }
+
+    /// Delete the past state at entry `i` (indexed like [`History::entries`]) and nothing else,
+    /// as the History panel's Delete does in non-linear history. The current state is not held
+    /// here (the session steps back first) and the oldest state can't be removed this way
+    /// either, since every later state would lose its starting point in the list. Returns
+    /// whether a state was removed.
+    pub fn remove(&mut self, i: usize) -> bool {
+        if i == 0 {
+            return false;
+        }
+        let Some(state) = self.undo.remove(i) else { return false };
+        self.last_record = None;
+        if let Some(tiles) = &mut self.tiles {
+            tiles.remove(&state.doc);
+        }
+        // The state after it now follows the one before it.
+        match self.undo.get_mut(i) {
+            Some(next) => merge_ids(&mut next.visibility, &state.visibility),
+            None => merge_ids(&mut self.current_visibility, &state.visibility),
+        }
+        true
+    }
+
+    /// Delete the later (redo) state `j` (0 = the next redo, as [`History::redo_labels`] lists
+    /// them) and nothing else: the History panel's Delete on a dimmed state in non-linear
+    /// history. Returns whether a state was removed.
+    pub fn remove_later(&mut self, j: usize) -> bool {
+        let Some(k) = self.redo.len().checked_sub(j.saturating_add(1)) else { return false };
+        let state = self.redo.remove(k);
+        self.last_record = None;
+        if let Some(tiles) = &mut self.tiles {
+            tiles.remove(&state.doc);
+        }
+        // The state after it in the list (the one before it in `redo`) now follows the state
+        // before it.
+        if let Some(next) = k.checked_sub(1).and_then(|n| self.redo.get_mut(n)) {
+            merge_ids(&mut next.visibility, &state.visibility);
+        }
+        true
+    }
+
+    /// Step back like [`History::undo`] but drop the current document instead of making it
+    /// redoable: the current state is deleted while the redo states (later states in the
+    /// list) stay. Returns the document to make current and the layers it targeted.
+    pub fn drop_current(&mut self) -> Option<(Arc<Document>, LayerTarget)> {
+        let prev = self.undo.pop_back()?;
+        self.last_record = None;
+        if let Some(tiles) = &mut self.tiles {
+            tiles.remove(&prev.doc);
+        }
+        self.current_label = prev.label;
+        self.current_layers = prev.layers.clone();
+        self.current_id = prev.id;
+        let dropped = std::mem::replace(&mut self.current_visibility, prev.visibility);
+        // The next later state now follows `prev`.
+        if let Some(next) = self.redo.last_mut() {
+            merge_ids(&mut next.visibility, &dropped);
+        }
+        Some((prev.doc, prev.layers))
+    }
+
+    /// Take back the most recent [`History::record`] exactly, for a compound command whose later
+    /// part failed: the document it replaced becomes current again, the current document is
+    /// dropped (nothing to redo), and in non-linear history the states that record moved from
+    /// the redo side go back there, so the list reads as before the command, with the oldest
+    /// states the state limit or the byte budget dropped for it back too. Returns `None`
+    /// (changing nothing) when something else changed the list since that record, e.g. an undo;
+    /// the caller then falls back to [`History::undo`].
+    pub fn rollback(&mut self) -> Option<(Arc<Document>, LayerTarget)> {
+        let held = self.last_record.as_ref()?;
+        if self.undo.len().saturating_add(held.evicted.len()) <= held.moved {
+            return None;
+        }
+        let LastRecord { moved, evicted, .. } = self.last_record.take()?;
+        // Put each back where it was taken off, the last one taken off first.
+        for (at, state) in evicted.into_iter().rev() {
+            if let Some(tiles) = &mut self.tiles {
+                tiles.add(&state.doc);
+            }
+            self.undo.insert(at.min(self.undo.len()), state);
+        }
+        for _ in 0..moved {
+            // Tiles stay counted: they only move back to the redo side.
+            let state = self.undo.pop_back()?;
+            self.redo.push(state);
+        }
+        let prev = self.undo.pop_back()?;
+        if let Some(tiles) = &mut self.tiles {
+            tiles.remove(&prev.doc);
+        }
+        self.current_label = prev.label;
+        self.current_layers = prev.layers.clone();
+        self.current_visibility = prev.visibility;
+        self.current_id = prev.id;
+        Some((prev.doc, prev.layers))
+    }
+
+    /// The document the most recent [`History::record`] replaced, while [`History::rollback`]
+    /// can still take that record back.
+    pub fn recorded_before(&self) -> Option<Arc<Document>> {
+        self.last_record.as_ref().map(|held| held.before.clone())
     }
 
     /// Forget the redo states, e.g. after undoing half of a compound step that failed.
     pub fn clear_redo(&mut self) {
+        if !self.redo.is_empty() {
+            self.last_record = None;
+        }
         if let Some(tiles) = &mut self.tiles {
             for state in &self.redo {
                 tiles.remove(&state.doc);
@@ -295,6 +475,8 @@ impl History {
     /// goes back to the default, the oldest state held (now the current one): a source set on a
     /// state the purge removed would otherwise leave no source.
     pub fn clear(&mut self) {
+        self.last_record = None;
+        self.current_visibility.clear();
         self.undo.clear();
         self.redo.clear();
         self.tiles = None;
@@ -320,6 +502,7 @@ impl History {
         let redo = std::mem::take(&mut self.redo);
         let brush_source = self.brush_source.take();
         self.cleared = Some(Box::new(Cleared { undo, redo, brush_source }));
+        self.last_record = None;
         self.tiles = None;
         true
     }
@@ -462,10 +645,24 @@ impl History {
             } else {
                 tiles.remove(&state.doc);
                 dropped += 1;
+                // Held for a rollback of the step that pushed them out. Taking them off from the
+                // highest index down keeps each index valid, so a rollback can insert them back.
+                if let Some(held) = &mut self.last_record {
+                    held.evicted.push((i, state));
+                }
             }
         }
         *undo = kept;
         dropped
+    }
+}
+
+/// Add the ids of `from` that `into` lacks.
+fn merge_ids(into: &mut Vec<LayerId>, from: &[LayerId]) {
+    for id in from {
+        if !into.contains(id) {
+            into.push(*id);
+        }
     }
 }
 
@@ -692,6 +889,321 @@ mod tests {
         edit(&mut h, &mut cur, "B", |d| d.name = "b".into());
         assert!(!h.can_redo());
         assert_eq!(h.entries(), vec!["Open".to_string(), "B".to_string()]);
+    }
+
+    /// Open, A, B, C, then two steps back: A is current, B and C are redo states.
+    fn stepped_back(non_linear: bool) -> (History, Arc<Document>) {
+        let mut h = History { non_linear, ..History::default() };
+        let mut cur = Arc::new(base());
+        for n in ["A", "B", "C"] {
+            edit(&mut h, &mut cur, n, |d| d.name = n.to_lowercase());
+        }
+        cur = h.undo(cur).unwrap().0;
+        cur = h.undo(cur).unwrap().0;
+        assert_eq!(cur.name, "a");
+        (h, cur)
+    }
+
+    #[test]
+    fn non_linear_history_keeps_later_states_and_appends_the_new_step() {
+        let (mut h, mut cur) = stepped_back(true);
+        edit(&mut h, &mut cur, "D", |d| d.name = format!("{}+d", d.name));
+        assert_eq!(h.entries(), ["Open", "A", "B", "C", "D"], "B and C are kept, D goes to the end");
+        assert!(!h.can_redo());
+        assert_eq!(cur.name, "a+d", "D was made from the state selected (A), not from C");
+        // Stepping back walks the list: C, B, A, Open, each with its own document.
+        let mut names = Vec::new();
+        while let Some((d, _)) = h.undo(cur.clone()) {
+            cur = d;
+            names.push(cur.name.clone());
+        }
+        assert_eq!(names, ["c", "b", "a", "h"]);
+        // Linear history (the default) discards them.
+        let (mut h, mut cur) = stepped_back(false);
+        edit(&mut h, &mut cur, "D", |d| d.name = "d".into());
+        assert_eq!(h.entries(), ["Open", "A", "D"]);
+    }
+
+    #[test]
+    fn non_linear_steps_respect_the_state_limit_and_the_tile_counter() {
+        let mut h = History::new(3);
+        h.non_linear = true;
+        h.max_bytes = usize::MAX;
+        let mut cur = Arc::new(base());
+        for i in 0..4 {
+            edit(&mut h, &mut cur, &format!("paint {i}"), |d| {
+                d.layers[0].surface_mut().unwrap().write_pixel(1, 1, &[i as f32 / 8.0, 0.0, 0.0, 1.0]);
+            });
+            h.trim(&cur);
+        }
+        cur = h.undo(cur).unwrap().0;
+        cur = h.undo(cur).unwrap().0;
+        edit(&mut h, &mut cur, "branch", |d| d.name = "branch".into());
+        assert_eq!(h.past_len(), 3, "the oldest states beyond the limit go");
+        assert_eq!(h.entries(), ["paint 1", "paint 2", "paint 3", "branch"]);
+        assert_counter(&h, &cur);
+    }
+
+    #[test]
+    fn remove_deletes_one_past_state_and_drop_current_keeps_the_redo_states() {
+        let (mut h, _) = stepped_back(true);
+        assert!(!h.remove(0), "the oldest state stays");
+        assert!(!h.remove(1), "the current state (A) is not held");
+        assert!(!h.remove(99));
+        let (mut h, mut cur) = stepped_back(true);
+        edit(&mut h, &mut cur, "D", |d| d.name = "d".into());
+        assert!(h.remove(1));
+        assert_eq!(h.entries(), ["Open", "B", "C", "D"]);
+        assert_eq!(h.state(1).unwrap().name, "b", "each state keeps its own document");
+        // Deleting the current state: the one before becomes current, the later ones stay.
+        let (mut h, _) = stepped_back(true);
+        let (d, _) = h.drop_current().unwrap();
+        assert_eq!(d.name, "h");
+        assert_eq!(h.entries(), ["Open"]);
+        assert_eq!(h.redo_labels().collect::<Vec<_>>(), ["B", "C"]);
+        assert!(h.drop_current().is_none(), "nothing before Open");
+        // The tile counter follows both.
+        let mut h = History::new(50);
+        h.non_linear = true;
+        h.max_bytes = usize::MAX;
+        let mut cur = Arc::new(base());
+        for i in 0..4 {
+            edit(&mut h, &mut cur, "Paint", |d| {
+                d.layers[0].surface_mut().unwrap().write_pixel(1, 1, &[i as f32 / 8.0, 0.0, 0.0, 1.0]);
+            });
+            h.trim(&cur);
+        }
+        cur = h.undo(cur).unwrap().0;
+        assert!(h.remove(2));
+        assert_counter(&h, &cur);
+        cur = h.drop_current().unwrap().0;
+        assert_counter(&h, &cur);
+    }
+
+    #[test]
+    fn remove_later_deletes_one_redo_state() {
+        let mut h = History::new(50);
+        h.non_linear = true;
+        h.max_bytes = usize::MAX;
+        let mut cur = Arc::new(base());
+        for (i, n) in ["A", "B", "C"].into_iter().enumerate() {
+            edit(&mut h, &mut cur, n, |d| {
+                d.layers[0].surface_mut().unwrap().write_pixel(1, 1, &[i as f32 / 8.0, 0.0, 0.0, 1.0]);
+            });
+            h.trim(&cur);
+        }
+        cur = h.undo(cur).unwrap().0;
+        cur = h.undo(cur).unwrap().0;
+        assert!(!h.remove_later(2) && !h.remove_later(usize::MAX));
+        assert!(h.remove_later(0), "B");
+        assert_eq!(h.redo_labels().collect::<Vec<_>>(), ["C"]);
+        assert_counter(&h, &cur);
+        let (c, _) = h.redo(cur).unwrap();
+        assert_eq!(h.entries(), ["Open", "A", "C"]);
+        assert_counter(&h, &c);
+    }
+
+    /// Each state keeps the layers whose visibility its own step changed; when a state goes
+    /// (Purge, a non-linear Delete) or a step is appended after the kept later states, the step
+    /// that now follows covers the changes of the steps it now spans.
+    #[test]
+    fn step_visibility_follows_steps_and_spans_removed_ones() {
+        let vis = |h: &History| {
+            let mut v: Vec<u64> = h.current_visibility().iter().map(|l| l.0).collect();
+            v.sort_unstable();
+            v
+        };
+        // Open, then steps A, B, C, D changing layers 1, 2, 3, 4.
+        let steps = |n: usize, non_linear: bool| {
+            let mut h = History { non_linear, ..History::default() };
+            let mut cur = Arc::new(base());
+            for (i, label) in ["A", "B", "C", "D"].into_iter().take(n).enumerate() {
+                edit(&mut h, &mut cur, label, |d| d.name = label.to_lowercase());
+                h.add_current_visibility(&[LayerId(i as u64 + 1)]);
+            }
+            (h, cur)
+        };
+        let (mut h, cur) = steps(3, false);
+        assert_eq!(vis(&h), [3]);
+        let (cur, _) = h.undo(cur).unwrap();
+        assert_eq!(vis(&h), [2]);
+        h.redo(cur).unwrap();
+        assert_eq!(vis(&h), [3]);
+        // Purge: C now starts from A.
+        h.purge_last();
+        assert_eq!(vis(&h), [2, 3]);
+        // Non-linear Delete of B (between A and C): C now follows A.
+        let (mut h, cur) = steps(4, true);
+        assert!(h.remove(2));
+        h.undo(cur).unwrap();
+        assert_eq!(vis(&h), [2, 3]);
+        // Of the later B (A current): C follows A.
+        let (mut h, mut cur) = steps(3, true);
+        cur = h.undo(cur).unwrap().0;
+        cur = h.undo(cur).unwrap().0;
+        assert!(h.remove_later(0));
+        h.redo(cur).unwrap();
+        assert_eq!(vis(&h), [2, 3]);
+        // Of the current B (C later): A is current, C follows it.
+        let (mut h, cur) = steps(3, true);
+        h.undo(cur).unwrap();
+        let cur = h.drop_current().unwrap().0;
+        assert_eq!(vis(&h), [1]);
+        h.redo(cur).unwrap();
+        assert_eq!(vis(&h), [2, 3]);
+        // A step after the kept later states B and C (made from A) follows C in the list.
+        let (mut h, mut cur) = steps(3, true);
+        cur = h.undo(cur).unwrap().0;
+        cur = h.undo(cur).unwrap().0;
+        edit(&mut h, &mut cur, "D", |d| d.name = "d".into());
+        h.add_current_visibility(&[LayerId(4)]);
+        assert_eq!(vis(&h), [2, 3, 4]);
+        h.rollback().unwrap();
+        assert_eq!(vis(&h), [1], "rollback restores A's");
+        h.clear();
+        assert_eq!(vis(&h), Vec::<u64>::new());
+    }
+
+    #[test]
+    fn rollback_takes_the_last_record_back_exactly_in_both_modes() {
+        // Non-linear, with redo states: the moved states go back to the redo side and the
+        // document the step replaced (A) is current again, not the last former redo state (C).
+        let (mut h, mut cur) = stepped_back(true);
+        let a = cur.clone();
+        let entries = h.entries();
+        let redo: Vec<String> = h.redo_labels().map(str::to_string).collect();
+        edit(&mut h, &mut cur, "D", |d| d.name = "d".into());
+        assert_eq!(h.recorded_before().map(|d| d.name.clone()).as_deref(), Some("a"));
+        let (d, _) = h.rollback().unwrap();
+        assert!(Arc::ptr_eq(&d, &a));
+        assert_eq!(h.entries(), entries);
+        assert_eq!(h.redo_labels().map(str::to_string).collect::<Vec<_>>(), redo);
+        assert!(h.rollback().is_none(), "only once");
+        // Redoing still walks the kept states.
+        let (b, _) = h.redo(d).unwrap();
+        assert_eq!(b.name, "b");
+        // Linear: the same as an undo whose redo state is dropped.
+        let (mut h, mut cur) = stepped_back(false);
+        edit(&mut h, &mut cur, "D", |d| d.name = "d".into());
+        assert_eq!(h.rollback().unwrap().0.name, "a");
+        assert_eq!(h.entries(), ["Open", "A"]);
+        assert!(!h.can_redo());
+        // Anything else since the record: no rollback (the caller undoes instead).
+        let (mut h, mut cur) = stepped_back(true);
+        edit(&mut h, &mut cur, "D", |d| d.name = "d".into());
+        cur = h.undo(cur).unwrap().0;
+        assert!(h.recorded_before().is_none() && h.rollback().is_none());
+        h.redo(cur).unwrap();
+        assert!(h.rollback().is_none());
+        // The tile counter follows.
+        let mut h = History::new(50);
+        h.non_linear = true;
+        h.max_bytes = usize::MAX;
+        let mut cur = Arc::new(base());
+        for i in 0..3 {
+            edit(&mut h, &mut cur, "Paint", |d| {
+                d.layers[0].surface_mut().unwrap().write_pixel(1, 1, &[i as f32 / 8.0, 0.0, 0.0, 1.0]);
+            });
+            h.trim(&cur);
+        }
+        cur = h.undo(cur).unwrap().0;
+        cur = h.undo(cur).unwrap().0;
+        edit(&mut h, &mut cur, "Paint", |d| {
+            d.layers[0].surface_mut().unwrap().write_pixel(2, 2, &[1.0, 0.0, 0.0, 1.0]);
+        });
+        cur = h.rollback().unwrap().0;
+        assert_counter(&h, &cur);
+    }
+
+    /// A failed compound command whose first step moved more later states than the state limit
+    /// leaves room for (or whose step the byte budget trimmed for) is still taken back exactly:
+    /// the states the limit dropped for it come back, as in the list before the command.
+    #[test]
+    fn rollback_brings_back_the_states_the_limit_dropped_for_the_step() {
+        for max in 1..=4 {
+            let (mut h, mut cur) = stepped_back(true);
+            h.max_states = max;
+            let a = cur.clone();
+            edit(&mut h, &mut cur, "D", |d| d.name = "d".into());
+            assert!(h.past_len() <= max);
+            assert_eq!(h.recorded_before().map(|d| d.name.clone()).as_deref(), Some("a"), "max {max}");
+            let (d, _) = h.rollback().unwrap();
+            assert!(Arc::ptr_eq(&d, &a), "max {max}: back on A, not on an Undo of C");
+            assert_eq!(h.entries(), ["Open", "A"], "max {max}");
+            assert_eq!(h.redo_labels().collect::<Vec<_>>(), ["B", "C"], "max {max}");
+            assert!(h.rollback().is_none());
+        }
+        // Once anything else changed the list, the dropped states stay dropped.
+        let (mut h, mut cur) = stepped_back(true);
+        h.max_states = 2;
+        edit(&mut h, &mut cur, "D", |d| d.name = "d".into());
+        cur = h.undo(cur).unwrap().0;
+        h.redo(cur).unwrap();
+        assert!(h.rollback().is_none());
+        assert_eq!(h.entries(), ["B", "C", "D"]);
+        // The byte budget: the trim after the step keeps only its newest state; the rollback
+        // brings back the rest and the tile counter follows.
+        let mut h = History { non_linear: true, ..History::default() };
+        let mut cur = Arc::new(base());
+        for (i, n) in ["A", "B", "C"].into_iter().enumerate() {
+            edit(&mut h, &mut cur, n, |d| {
+                d.layers[0].surface_mut().unwrap().write_pixel(1, 1, &[i as f32 / 8.0, 0.0, 0.0, 1.0]);
+            });
+        }
+        cur = h.undo(cur).unwrap().0;
+        cur = h.undo(cur).unwrap().0;
+        h.max_bytes = 1;
+        edit(&mut h, &mut cur, "D", |d| {
+            d.layers[0].surface_mut().unwrap().write_pixel(2, 2, &[1.0, 0.0, 0.0, 1.0]);
+        });
+        assert!(h.trim(&cur) > 0);
+        assert_eq!(h.entries(), ["C", "D"]);
+        assert_counter(&h, &cur);
+        cur = h.rollback().unwrap().0;
+        assert_eq!(h.entries(), ["Open", "A"]);
+        assert_eq!(h.redo_labels().collect::<Vec<_>>(), ["B", "C"]);
+        assert_counter(&h, &cur);
+    }
+
+    /// The History Brush's source never falls off, so the limit and the byte budget drop states
+    /// behind it, not at the front; a rollback still puts each back where it was.
+    #[test]
+    fn rollback_puts_states_back_behind_the_pinned_brush_source() {
+        let (mut h, mut cur) = stepped_back(true);
+        assert!(h.set_brush_source(0));
+        h.max_states = 2;
+        let a = cur.clone();
+        edit(&mut h, &mut cur, "D", |d| d.name = "d".into());
+        assert_eq!(h.entries(), ["Open", "C", "D"], "A and B go, the source (Open) stays");
+        let (d, _) = h.rollback().unwrap();
+        assert!(Arc::ptr_eq(&d, &a));
+        assert_eq!(h.entries(), ["Open", "A"]);
+        assert_eq!(h.redo_labels().collect::<Vec<_>>(), ["B", "C"]);
+        assert_eq!(h.brush_source(), Some(0));
+        assert_eq!(h.state(0).unwrap().name, "h");
+        // The byte budget, with the source on the oldest state.
+        let mut h = History { non_linear: true, ..History::default() };
+        let mut cur = Arc::new(base());
+        for (i, n) in ["A", "B", "C"].into_iter().enumerate() {
+            edit(&mut h, &mut cur, n, |d| {
+                d.layers[0].surface_mut().unwrap().write_pixel(1, 1, &[i as f32 / 8.0, 0.0, 0.0, 1.0]);
+            });
+        }
+        cur = h.undo(cur).unwrap().0;
+        cur = h.undo(cur).unwrap().0;
+        assert!(h.set_brush_source(0));
+        h.max_bytes = 1;
+        edit(&mut h, &mut cur, "D", |d| {
+            d.layers[0].surface_mut().unwrap().write_pixel(2, 2, &[1.0, 0.0, 0.0, 1.0]);
+        });
+        assert!(h.trim(&cur) > 0);
+        assert_eq!(h.entries(), ["Open", "C", "D"]);
+        cur = h.rollback().unwrap().0;
+        assert_eq!(cur.name, "h");
+        assert_eq!(h.entries(), ["Open", "A"]);
+        assert_eq!(h.redo_labels().collect::<Vec<_>>(), ["B", "C"]);
+        assert_eq!(h.state(0).unwrap().name, "h");
+        assert_counter(&h, &cur);
     }
 
     #[test]
