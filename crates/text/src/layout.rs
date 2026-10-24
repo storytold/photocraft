@@ -19,7 +19,7 @@ use std::ops::Range;
 
 use parley::{
     Alignment, AlignmentOptions, FontData, FontFamily, FontFeatures, FontStyle, FontVariations, FontWeight, IndentOptions, Layout, LayoutContext,
-    PositionedLayoutItem, StyleProperty,
+    LineBreakContext, LineBreakOverrideFn, PositionedLayoutItem, StyleProperty,
 };
 use photocraft_doc::TextLayer;
 use photocraft_doc::text::{Caps, CharStyle, FontBaseline, Kerning, Orientation, ParagraphStyle, TextAlign, TextDirection, TextShape};
@@ -142,6 +142,43 @@ pub fn vertical_class(c: char) -> VClass {
     let upright = crate::cjk::classify(c).is_some()
         || matches!(u, 0xA7 | 0xA9 | 0xAE | 0xB1 | 0xBC..=0xBE | 0xD7 | 0xF7 | 0x2E80..=0x2EFF | 0xFE10..=0xFE1F | 0xFE30..=0xFE4F | 0x1F000..=0x1FAFF);
     if upright { VClass::Upright } else { VClass::Rotate }
+}
+
+/// JIS X 4051 line-start prohibition (行頭禁則): characters that must not begin a line in Japanese
+/// type — closing brackets and quotation marks, sentence punctuation, small kana, the long-vowel
+/// mark, iteration marks and voiced-sound marks. [`line_start_keep_ranges`] applies it to vertical
+/// type; horizontal type keeps Unicode's UAX #14 breaks (Photoshop's behaviour). Line-end
+/// prohibition (行末禁則) and hanging punctuation (ぶら下げ) are not implemented yet.
+pub(crate) fn forbidden_line_start(c: char) -> bool {
+    matches!(
+        c,
+        // Closing brackets and quotation marks.
+        '）' | '］' | '｝' | '〕' | '〉' | '》' | '」' | '』' | '】' | '〗' | '〙' | '〛' | '〟' | '｣' | '｠'
+            | '”' | '’' | '\'' | '"'
+            // Sentence punctuation.
+            | '、' | '。' | '，' | '．' | '・' | '：' | '；' | '？' | '！' | '｡' | '､' | '･'
+            // Small kana (hiragana and katakana) and their half-width forms.
+            | 'ぁ' | 'ぃ' | 'ぅ' | 'ぇ' | 'ぉ' | 'っ' | 'ゃ' | 'ゅ' | 'ょ' | 'ゎ' | 'ゕ' | 'ゖ'
+            | 'ァ' | 'ィ' | 'ゥ' | 'ェ' | 'ォ' | 'ッ' | 'ャ' | 'ュ' | 'ョ' | 'ヮ' | 'ヵ' | 'ヶ'
+            | 'ㇰ'
+            ..='ㇿ'
+            | 'ｧ' | 'ｨ' | 'ｩ' | 'ｪ' | 'ｫ' | 'ｬ' | 'ｭ' | 'ｮ' | 'ｯ'
+            // Long-vowel and voiced-sound marks.
+            | 'ー' | 'ｰ' | '゛' | '゜'
+            // Iteration marks.
+            | 'ヽ' | 'ヾ' | 'ゝ' | 'ゞ' | '々' | '〻'
+    )
+}
+
+/// The line-break override that applies 行頭禁則 in vertical type: it suppresses the break before
+/// a character that must not begin a line, and leaves every other decision to ICU's UAX #14
+/// rules. The break then moves one character earlier (追い出し) instead of the forbidden character
+/// starting the next column. Mandatory breaks — a forced line break or a paragraph end — are
+/// parley's and are never suppressed.
+static KINSOKU_LINE_BREAK_OVERRIDE: &LineBreakOverrideFn = &(kinsoku_break_override as fn(LineBreakContext) -> Option<bool>);
+
+fn kinsoku_break_override(cx: LineBreakContext) -> Option<bool> {
+    forbidden_line_start(cx.after).then_some(false)
 }
 
 /// How a placed glyph's outline is oriented in text space.
@@ -611,6 +648,12 @@ impl Layouter {
             // Shapes the paragraph, each tab widened by its letter spacing in `tab_spacing` (px).
             let build = |lcx: &mut LayoutContext<RunBrush>, fcx: &mut parley::FontContext, tab_spacing: &[f32]| -> Layout<RunBrush> {
                 let mut b = lcx.ranged_builder(fcx, &ptext, 1.0, false);
+                // 行頭禁則 (JIS X 4051) in vertical type: no line may begin with a small kana, the
+                // long-vowel mark, a closing bracket, sentence punctuation or an iteration mark.
+                // Horizontal type keeps Unicode's UAX #14 breaks as before.
+                if vertical {
+                    b.set_line_break_override(Some(KINSOKU_LINE_BREAK_OVERRIDE));
+                }
                 // Paragraph-start style as the default (covers the direction mark and empty
                 // paragraphs), then every run piece intersecting this paragraph.
                 for p in style_props(&out.styles[si0], k, &fallback, si0 as u32, small_caps[si0]) {
@@ -621,6 +664,16 @@ impl Layouter {
                 // word run out of the box. Point text has no width to overflow.
                 if is_box {
                     b.push_default(StyleProperty::OverflowWrap(parley::style::OverflowWrap::BreakWord));
+                    if vertical {
+                        // 行頭禁則: no emergency (BreakWord) break before a line-start-forbidden
+                        // character either, or the box would still start a column with one when
+                        // the column overflows; such a character hangs on the previous column.
+                        for (i, ch) in ptext.char_indices() {
+                            if forbidden_line_start(ch) {
+                                b.push(StyleProperty::OverflowWrap(parley::style::OverflowWrap::Normal), i..i + ch.len_utf8());
+                            }
+                        }
+                    }
                 }
                 for (ri, st) in out.styles.iter().enumerate().take(si_end).skip(si0) {
                     let rs = run_starts[ri];

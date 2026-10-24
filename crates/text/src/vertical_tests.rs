@@ -8,7 +8,7 @@ use photocraft_doc::text::{CharStyle, Orientation, TextRun, TextShape};
 use photocraft_geom::Affine;
 
 use crate::TextEngine;
-use crate::layout::{GlyphOrient, VClass, vertical_class};
+use crate::layout::{FORCED_LINE_BREAK, GlyphOrient, VClass, forbidden_line_start, vertical_class};
 
 fn vertical(text: &str, family: &str, size_pt: f32) -> TextLayer {
     TextLayer {
@@ -132,6 +132,81 @@ fn horizontal_layout_is_unchanged_by_the_vertical_path() {
     assert!(!l.vertical && l.glyphs.iter().all(|g| g.orient == GlyphOrient::Horizontal));
     assert_eq!(l.bounds(), l.line_bounds());
     assert_eq!(l.to_text(3.0, 4.0), (3.0, 4.0));
+}
+
+/// JIS X 4051 行頭禁則: a vertical column must not begin with a small kana, the long-vowel mark, a
+/// closing bracket, sentence punctuation or an iteration mark — the break moves one character
+/// earlier instead. A forced line break is respected (the next line may start with one), and
+/// horizontal type keeps Unicode's UAX #14 breaks.
+#[test]
+fn line_start_kinsoku_keeps_forbidden_characters_off_the_column_start() {
+    // The character sets, without a font.
+    for c in [
+        'ぁ', 'ぃ', 'ぅ', 'ぇ', 'ぉ', 'っ', 'ゃ', 'ゅ', 'ょ', 'ゎ', 'ゕ', 'ゖ', 'ァ', 'ィ', 'ゥ', 'ェ', 'ォ', 'ッ', 'ャ', 'ュ', 'ョ', 'ヮ', 'ヵ', 'ヶ', 'ｧ',
+        'ｯ', 'ー', 'ｰ', '、', '。', '，', '．', '・', '：', '；', '？', '！', '｡', '､', '･', '」', '』', '）', '］', '｝', '】', '〉', '》', '〟', '々', 'ゝ',
+        'ヽ', '゛', '゜', '”', '’',
+    ] {
+        assert!(forbidden_line_start(c), "{c}");
+    }
+    for c in ['あ', '漢', 'ア', 'a', '1', '「', '（', ' '] {
+        assert!(!forbidden_line_start(c), "{c}");
+    }
+    let Some((mut e, fam)) = cjk_engine() else { return };
+    // Two characters per column at this box height (20 pt type, 45 pt columns).
+    let box_layer = |text: &str| TextLayer { shape: TextShape::Box { x: 0.0, y: 0.0, width: 200.0, height: 45.0 }, ..vertical(text, &fam, 20.0) };
+    // The break before the forbidden character moves one character earlier: "あいょーうえ" would
+    // start its second column with ょ without 行頭禁則.
+    let text = "あいょーうえ";
+    let l = e.layout(&box_layer(text), 72.0);
+    assert!(l.lines.len() >= 2, "{fam}: {text}");
+    assert!(text[l.lines[1].range.clone()].starts_with('い'), "{fam}: {:?}", l.lines.iter().map(|l| &text[l.range.clone()]).collect::<Vec<_>>());
+    for (text, forbidden) in [("あいょ、うえ", 'ょ'), ("コヒーと", 'ー'), ("あい」うえ", '」'), ("あい、うえ", '、'), ("あい々うえ", '々')]
+    {
+        let l = e.layout(&box_layer(text), 72.0);
+        assert!(l.lines.len() >= 2, "{fam}: {text} needs columns");
+        for (i, line) in l.lines.iter().enumerate() {
+            let start = text[line.range.clone()].chars().next();
+            assert!(!start.is_some_and(forbidden_line_start), "{fam}: {text} line {i} starts with {start:?}");
+        }
+        assert!(l.lines.iter().skip(1).all(|line| !text[line.range.clone()].starts_with(forbidden)), "{fam}: {text}");
+    }
+    // A forced line break is respected: the line after it may begin with the forbidden character.
+    let forced = format!("あい{FORCED_LINE_BREAK}ょう");
+    let l = e.layout(&box_layer(&forced), 72.0);
+    assert!(l.lines.len() >= 2, "{fam}");
+    assert!(forced[l.lines[1].range.clone()].starts_with('ょ'), "{fam}: {:?}", l.lines.iter().map(|l| &forced[l.range.clone()]).collect::<Vec<_>>());
+    // Horizontal type is unchanged: UAX #14 still allows a break before a small kana, so the
+    // second line of a two-character-wide box begins with it (no 行頭禁則 in horizontal type).
+    let horizontal = "あいょ";
+    let h = e.layout(
+        &TextLayer {
+            orientation: Orientation::Horizontal,
+            shape: TextShape::Box { x: 0.0, y: 0.0, width: 20.0, height: 1000.0 },
+            ..vertical(horizontal, &fam, 20.0)
+        },
+        72.0,
+    );
+    assert!(h.lines.len() >= 2, "{fam}: {horizontal}");
+    assert!(
+        h.lines.iter().skip(1).any(|line| horizontal[line.range.clone()].starts_with('ょ')),
+        "{fam}: {:?}",
+        h.lines.iter().map(|l| &horizontal[l.range.clone()]).collect::<Vec<_>>()
+    );
+}
+
+/// U+301F 〟 is a closing quotation mark (JLREQ cl-02) used in vertical composition. In a narrow
+/// one-character column an emergency BreakWord break would otherwise start a column with it:
+/// "あい〟うえ" would set 〟 at the start of the third column. 行頭禁則 keeps it on the previous
+/// column instead.
+#[test]
+fn narrow_box_keeps_u301f_quote_off_the_column_start() {
+    let Some((mut e, fam)) = cjk_engine() else { return };
+    let text = "あい〟うえ";
+    let layer = TextLayer { shape: TextShape::Box { x: 0.0, y: 0.0, width: 200.0, height: 30.0 }, ..vertical(text, &fam, 20.0) };
+    let l = e.layout(&layer, 72.0);
+    assert!(l.lines.len() >= 2, "{fam}: {text} needs columns");
+    let columns: Vec<&str> = l.lines.iter().map(|line| &text[line.range.clone()]).collect();
+    assert!(!columns.iter().any(|column| column.starts_with('〟')), "{fam}: {columns:?}");
 }
 
 #[test]

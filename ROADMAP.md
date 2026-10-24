@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~30 points (ready for real work ~45% → ~75%, with reliable PSD) and ~1,100–1,800 h away
 
-> **Last reviewed:** 2026-10-17 · **Last updated:** 2026-10-17 · **Change:** minor (Object Finder retains large enclosed foregrounds (#6548); Russian catalog covers every dynamic label; previously minor: oracle floor 145 of 258 and 953 open issues, as in gaps.md and on GitHub; toolbox count 56 of 68, 12 missing) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-17 · **Last updated:** 2026-10-22 · **Change:** minor (Text: JIS X 4051 line-start prohibition (行頭禁則) for vertical Japanese paragraphs; Object Finder retains large enclosed foregrounds (#6548); Russian catalog covers every dynamic label; previously minor: oracle floor 145 of 258 and 953 open issues, as in gaps.md and on GitHub; toolbox count 56 of 68, 12 missing) · **Target:** Adobe Photoshop 2026
 
 PhotoCraft's one-page summary of how close it is to Adobe Photoshop 2026 (27.11.0, measured from
 the installed app on 2026-10-10) at version 0.6.0. Detail: [target-app parity](docs/target-app-parity.md)
@@ -122,6 +122,7 @@ Detail and the next releases: [docs/roadmap.md](docs/roadmap.md).
 
 | Date | Entry |
 |---|---|
+| 2026-10-22 | Vertical type (tategaki) gets JIS X 4051 line-start prohibition (行頭禁則): a column no longer begins with a small kana (ぁぃっゃゅょ…, ァィッャュョ…, half-width forms), the long-vowel mark (ー/ｰ), a closing bracket (」』）…), sentence punctuation (、。，．・：；？！) or an iteration/voiced-sound mark (々 ヽ ゛…); the break moves one character earlier, and a forced line break is still respected. Horizontal type keeps its Unicode UAX #14 breaks. Line-end prohibition (行末禁則), hanging punctuation (ぶら下げ) and full mojikumi remain. |
 | 2026-10-17 | Object Finder classifies background by boundary coverage, retaining large enclosed foregrounds and rejecting surrounding backdrop (#6548); learned segmentation remains open (#2788) |
 | 2026-10-10 | Full re-measure against Photoshop 2026 27.11.0 (installed bundle inspected): breadth ~76%, ready ~45%, alpha. Progress docs reorganized to the craftrules standard (`parity.md` → `parity-checklist.md`, `parity-estimate.md` merged into `target-app-parity.md`). 0.6.0 released. |
 | 2026-10-09 | Remove tool, Rotate View, crop rotation; OpenRaster and Paint.NET; 39 Affinity documents in the corpus |
@@ -136,6 +137,7 @@ Detail and the next releases: [docs/roadmap.md](docs/roadmap.md).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-22 | minor | Text: JIS X 4051 line-start prohibition (行頭禁則) for vertical Japanese paragraphs; horizontal type unchanged; line-end prohibition and hanging punctuation remain |
 | 2026-10-17 | minor | Object Finder retains large enclosed foregrounds (#6548) |
 | 2026-10-13 | minor | Focus item 1 quoted the oracle floor as 133 of 256; it is 145 of 258 (`crates/io/tests/it/corpus.rs`, gaps.md G1). Open issues 579 → 953 (2026-10-13) |
 | 2026-10-15 | minor | Russian catalog covers every dynamic UI label the other catalogs translate |
