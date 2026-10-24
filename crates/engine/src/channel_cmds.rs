@@ -797,6 +797,42 @@ pub(crate) fn restrict_to_color(before: &Document, after: &mut Document, id: Lay
     new.prune();
 }
 
+/// The Move tool with colour channel `k` targeted (#6068): shift that channel of layer `id` by
+/// (`dx`, `dy`) and leave the other channels and the layer's transparency where they are, as
+/// Photoshop moves one channel. Where the channel moves away from it takes the background colour's
+/// value for it, as Clear does with a channel targeted (#2720); values moved past the layer's
+/// pixels are dropped. Only pixel layers have colour channels to move.
+pub fn move_color_channel(doc: &mut Document, id: LayerId, k: usize, dx: i32, dy: i32, background: [f32; 4]) -> Result<()> {
+    let surf = crate::commands::paint_surface(doc, id, &Value::Null)?;
+    let fmt = surf.format();
+    let n = fmt.channels();
+    let Some(bg) = from_rgba(&fmt, [background[0], background[1], background[2], 1.0]).get(k).copied().filter(|_| k < n) else {
+        return Err(EngineError::Other(format!("no colour channel {k} in this layer")));
+    };
+    let area = surf.content_bounds();
+    if area.is_empty() || (dx == 0 && dy == 0) {
+        return Ok(());
+    }
+    let old = crate::allocation::read_region(surf, area, "moving a channel")?;
+    let mut px = crate::allocation::filled(old.len(), 0.0f32, "moving a channel")?;
+    px.copy_from_slice(&old);
+    let (w, h) = (i64::from(area.width()), i64::from(area.height()));
+    let (dx, dy) = (i64::from(dx), i64::from(dy));
+    let at = |x: i64, y: i64| usize::try_from(y * w + x).ok().and_then(|i| i.checked_mul(n)).and_then(|i| i.checked_add(k));
+    for y in 0..h {
+        for x in 0..w {
+            let (sx, sy) = (x - dx, y - dy);
+            let v = if (0..w).contains(&sx) && (0..h).contains(&sy) { at(sx, sy).and_then(|i| old.get(i)).copied().unwrap_or(bg) } else { bg };
+            if let Some(c) = at(x, y).and_then(|i| px.get_mut(i)) {
+                *c = v;
+            }
+        }
+    }
+    surf.try_write_region(area, &px)?;
+    surf.prune();
+    Ok(())
+}
+
 /// The colour channel Clear is limited to: the Channels panel targets a single one.
 pub(crate) fn targeted_color(s: &Session) -> Option<usize> {
     match s.active()?.channel_view.target {
