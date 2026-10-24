@@ -1,5 +1,5 @@
-//! Toolbar tools in Edit › Keyboard Shortcuts (#4086). Explicit assignments select an
-//! individual tool; unchanged tools keep Photoshop's shared keys and Shift cycling.
+//! Toolbar tools in Edit › Keyboard Shortcuts (#4086). Tools sharing a key keep the current
+//! member and cycle with Shift, including custom assignments (#8056).
 
 use crate::{PhotocraftApp, state::Tool};
 
@@ -27,6 +27,40 @@ pub(crate) fn shortcut(app: &PhotocraftApp, tool: Tool) -> Option<String> {
 
 pub(crate) fn uses_default(app: &PhotocraftApp, tool: Tool) -> bool {
     !app.session.prefs().shortcuts.contains_key(&id(tool))
+}
+
+/// Resolve a dispatched tool binding against its live group. The general shortcut table has
+/// one owner per key, but tools may share it; choosing that first owner on every press would
+/// discard the active group member. Rebuild from preferences so removed keys cannot stick.
+pub(crate) fn for_key(app: &PhotocraftApp, first: Tool, shortcut: egui::KeyboardShortcut) -> Tool {
+    let group_for = |shortcut| {
+        Tool::ALL
+            .into_iter()
+            .filter(|t| {
+                let id = id(*t);
+                let default = default(*t);
+                let prefs = app.session.prefs();
+                let main = prefs.shortcut(&id, default.as_deref());
+                main.and_then(crate::shortcuts::parse) == Some(shortcut)
+                    || prefs.alternates(&id, main).iter().any(|key| crate::shortcuts::parse(key) == Some(shortcut))
+            })
+            .collect::<Vec<_>>()
+    };
+    let shift_switch = app.session.prefs().tools.use_shift_key_for_tool_switch;
+    let mut group = group_for(shortcut);
+    let cycle = if group.is_empty() && shift_switch && shortcut.modifiers.shift {
+        let mut plain = shortcut;
+        plain.modifiers.shift = false;
+        group = group_for(plain);
+        true
+    } else {
+        !shift_switch
+    };
+    match group.iter().position(|t| *t == app.ui.tool) {
+        Some(i) if cycle => group.get(i + 1).or_else(|| group.first()).copied().unwrap_or(first),
+        Some(_) => app.ui.tool,
+        None => app.ui.group_tool(first.key()).filter(|t| group.contains(t)).or_else(|| group.first().copied()).unwrap_or(first),
+    }
 }
 
 #[cfg(test)]

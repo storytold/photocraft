@@ -110,6 +110,31 @@ pub fn bindings(app: &PhotocraftApp) -> Vec<(String, KeyboardShortcut)> {
             all.push((id.to_string(), sc));
         }
     }
+    // Custom tool groups cycle just like the default letter groups. Explicit Shift and symbol
+    // bindings keep their keys; these derived bindings disappear as soon as their tool key is removed.
+    if prefs.tools.use_shift_key_for_tool_switch {
+        let cycles: Vec<_> = all
+            .iter()
+            .filter(|(id, sc)| crate::tool_shortcuts::tool(id).is_some() && !sc.modifiers.shift)
+            .map(|(id, sc)| {
+                let mut sc = *sc;
+                sc.modifiers.shift = true;
+                (id.clone(), sc)
+            })
+            .collect();
+        for (id, sc) in cycles {
+            // Shift+= can arrive as +. The tool's own plain symbol still needs its Shift cycle.
+            if !all.iter().any(|(_, bound)| {
+                *bound == sc
+                    || (bound.logical_key != sc.logical_key
+                        && [bound.logical_key, sc.logical_key]
+                            .into_iter()
+                            .any(|key| key_matches(&sc, key, sc.modifiers) && key_matches(bound, key, sc.modifiers)))
+            }) {
+                all.push((id, sc));
+            }
+        }
+    }
     all.sort_by_key(|(_, sc)| std::cmp::Reverse(sc.modifiers.shift as u8 + sc.modifiers.alt as u8 + sc.modifiers.command as u8));
     all
 }
@@ -235,18 +260,19 @@ pub fn dispatch_pressed(app: &mut PhotocraftApp, ctx: &egui::Context, focus: Foc
     let table: Vec<(String, KeyboardShortcut)> =
         bindings(app).into_iter().filter(|(id, sc)| focus.allows(sc) && !(editing && TEXT_OWNED.contains(&id.as_str()))).collect();
     let command = |e: &egui::Event| match e {
-        egui::Event::Key { key, physical_key, pressed: true, modifiers, .. } => {
+        egui::Event::Key { key, physical_key, pressed: true, modifiers, repeat, .. } => {
             let by_position = physical_key
                 .filter(|p| POSITIONAL.contains(p))
                 .and_then(|p| table.iter().find(|(_, sc)| sc.modifiers.command && sc.logical_key == p && key_matches(sc, p, *modifiers)));
-            let bound =
-                by_position.or_else(|| table.iter().find(|(_, sc)| key_matches(sc, *key, *modifiers))).map(|(id, _)| (id.clone(), *key == Key::Tab, false));
+            let bound = by_position
+                .or_else(|| table.iter().find(|(_, sc)| key_matches(sc, *key, *modifiers)))
+                .map(|(id, sc)| (id.clone(), *sc, *key == Key::Tab, *repeat, false));
             // Photoshop: ⌥ added to an adjustment's own key opens it at its last settings (⌥⌘L,
             // ⌥⌘M, #8900), unless that key is bound to something else.
             bound.or_else(|| {
                 let plain = egui::Modifiers { alt: false, ..*modifiers };
                 let last = modifiers.alt.then(|| table.iter().find(|(id, sc)| crate::adjust_dialog::has_dialog(id) && key_matches(sc, *key, plain))).flatten();
-                last.map(|(id, _)| (id.clone(), false, true))
+                last.map(|(id, sc)| (id.clone(), *sc, false, *repeat, true))
             })
         }
         _ => None,
@@ -258,11 +284,20 @@ pub fn dispatch_pressed(app: &mut PhotocraftApp, ctx: &egui::Context, focus: Foc
             i.events.remove(at);
             Some(hit)
         });
-        let Some((id, tab, last)) = next else { break };
+        let Some((mut id, sc, tab, repeat, last)) = next else { break };
         if tab {
             // egui already read this Tab as "focus the next widget" (Photoshop's Tab hides the
             // panels instead, #1313): the shortcut took it, so cancel that move.
             ctx.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
+        }
+        if let Some(tool) = crate::tool_shortcuts::tool(&id) {
+            // A held tool key is one choice. Consume repeats without switching the group or
+            // passing the tool binding's events to later handlers.
+            if repeat {
+                ran = true;
+                continue;
+            }
+            id = crate::tool_shortcuts::id(crate::tool_shortcuts::for_key(app, tool, sc));
         }
         let id = clip_key_command(app, delete_key_command(app, id));
         let owner = key_owner(app, ctx);

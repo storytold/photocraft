@@ -115,6 +115,111 @@ fn toolbar_shortcut_overrides_remove_old_keys_and_skip_removed_group_members() {
     app.session.edit_prefs(|p| p.tools.use_shift_key_for_tool_switch = false);
     press(&mut app, Key::B, Modifiers::NONE);
     assert_eq!(app.ui.tool, Tool::MixerBrush, "plain-key cycling still follows the preference");
+
+    // #8056 applies to every shared tool key, not just B.
+    app.session.edit_prefs(|p| p.tools.use_shift_key_for_tool_switch = true);
+    for tool in Tool::ALL {
+        let Some(key) = crate::spring_tools::key_of(tool.key()) else { continue };
+        app.ui.tool = tool;
+        press(&mut app, key, Modifiers::NONE);
+        press(&mut app, key, Modifiers::NONE);
+        assert_eq!(app.ui.tool, tool, "repeated default key keeps {tool:?}");
+    }
+    app.run("edit.keyboardShortcuts", json!({"set": {"tools.select.brush": "F6", "tools.select.pencil": "F6"}})).unwrap();
+    app.ui.tool = Tool::Pencil;
+    press(&mut app, Key::F6, Modifiers::NONE);
+    press(&mut app, Key::F6, Modifiers::NONE);
+    assert_eq!(app.ui.tool, Tool::Pencil, "a shared custom key keeps the current member too");
+    assert_eq!(
+        crate::shortcut_dispatch::bindings(&app).into_iter().find(|(_, sc)| *sc == egui::KeyboardShortcut::new(Modifiers::SHIFT, Key::F6)).map(|(id, _)| id),
+        Some("select.modify.feather".into()),
+        "cycling must not steal an existing Shift shortcut"
+    );
+    app.run("edit.keyboardShortcuts", json!({"set": {"select.modify.feather": ""}})).unwrap();
+    press(&mut app, Key::F6, Modifiers::SHIFT);
+    assert_eq!(app.ui.tool, Tool::Brush, "Shift cycles the custom group");
+    app.session.edit_prefs(|p| p.tools.use_shift_key_for_tool_switch = false);
+    press(&mut app, Key::F6, Modifiers::NONE);
+    assert_eq!(app.ui.tool, Tool::Pencil, "custom groups honor plain-key cycling when enabled");
+    ctx.begin_pass(egui::RawInput {
+        events: vec![Event::Key { key: Key::F6, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }],
+        ..Default::default()
+    });
+    crate::shortcuts::handle(&mut app, &ctx);
+    ctx.end_pass().textures_delta.clear();
+    let held_tool = app.ui.tool;
+    ctx.begin_pass(egui::RawInput {
+        events: vec![Event::Key { key: Key::F6, physical_key: None, pressed: true, repeat: true, modifiers: Modifiers::NONE }],
+        ..Default::default()
+    });
+    crate::shortcuts::handle(&mut app, &ctx);
+    ctx.end_pass().textures_delta.clear();
+    assert_eq!(app.ui.tool, held_tool, "holding a custom tool key must not cycle on auto-repeat");
+    ctx.begin_pass(egui::RawInput {
+        events: vec![Event::Key { key: Key::F6, physical_key: None, pressed: false, repeat: false, modifiers: Modifiers::NONE }],
+        ..Default::default()
+    });
+    ctx.end_pass().textures_delta.clear();
+    app.session.edit_prefs(|p| p.tools.use_shift_key_for_tool_switch = true);
+    app.run("edit.keyboardShortcuts", json!({"set": {"tools.select.move": "Shift+F6"}})).unwrap();
+    press(&mut app, Key::F6, Modifiers::SHIFT);
+    assert_eq!(app.ui.tool, Tool::Move, "an explicit Shift binding takes precedence over cycling");
+    app.run("edit.keyboardShortcuts", json!({"set": {"tools.select.move": ""}})).unwrap();
+    app.run("edit.keyboardShortcuts", json!({"set": {"tools.select.pencil": ""}})).unwrap();
+    press(&mut app, Key::F6, Modifiers::NONE);
+    press(&mut app, Key::F6, Modifiers::SHIFT);
+    assert_eq!(app.ui.tool, Tool::Brush, "removed members cannot return through a custom group");
+    app.run("edit.keyboardShortcuts", json!({"set": {"tools.select.brush": ""}})).unwrap();
+    app.ui.tool = Tool::Move;
+    for modifiers in [Modifiers::NONE, Modifiers::SHIFT] {
+        press(&mut app, Key::F6, modifiers);
+        assert_eq!(app.ui.tool, Tool::Move, "removing the group also removes Shift cycling");
+    }
+    app.run("edit.keyboardShortcuts", json!({"set": {"tools.select.brush": "B", "tools.select.pencil": null}})).unwrap();
+    app.ui.tool = Tool::Pencil;
+    press(&mut app, Key::B, Modifiers::NONE);
+    assert_eq!(app.ui.tool, Tool::Pencil, "an explicit default key still shares the unchanged tools' group");
+    press(&mut app, Key::B, Modifiers::SHIFT);
+    assert_eq!(app.ui.tool, Tool::MixerBrush);
+
+    // Shift may arrive as a different logical symbol. An explicit symbol command owns that
+    // press ahead of derived tool cycling; removing it makes cycling available again.
+    // Free the default Shift+[ / Shift+] commands to isolate the derived bracket bindings.
+    app.run("edit.keyboardShortcuts", json!({"set": {"tools.decreaseBrushHardness": "", "tools.increaseBrushHardness": ""}})).unwrap();
+    for (tool_key, command_key, event_key) in [
+        (Key::Equals, Key::Plus, Key::Plus),
+        (Key::Semicolon, Key::Colon, Key::Colon),
+        (Key::OpenBracket, Key::OpenCurlyBracket, Key::OpenCurlyBracket),
+        (Key::CloseBracket, Key::CloseCurlyBracket, Key::CloseCurlyBracket),
+        (Key::Slash, Key::Questionmark, Key::Questionmark),
+        (Key::Backslash, Key::Pipe, Key::Pipe),
+        (Key::Num1, Key::Exclamationmark, Key::Exclamationmark),
+        (Key::Plus, Key::Equals, Key::Plus),
+    ] {
+        app.run(
+            "edit.keyboardShortcuts",
+            json!({"set": {
+                "tools.select.brush": tool_key.name(), "tools.select.pencil": tool_key.name(), "edit.search": command_key.name()
+            }}),
+        )
+        .unwrap();
+        app.ui.tool = Tool::Pencil;
+        crate::shortcut_dispatch::take_log(&ctx);
+        crate::shortcut_dispatch::set_dry_run(&ctx, true);
+        press(&mut app, event_key, Modifiers::SHIFT);
+        assert_eq!(crate::shortcut_dispatch::take_log(&ctx).last().map(|(id, _)| id.as_str()), Some("edit.search"), "{event_key:?} keeps its explicit command");
+        assert_eq!(app.ui.tool, Tool::Pencil);
+        crate::shortcut_dispatch::set_dry_run(&ctx, false);
+
+        app.run("edit.keyboardShortcuts", json!({"set": {"edit.search": ""}})).unwrap();
+        press(&mut app, event_key, Modifiers::SHIFT);
+        assert_eq!(app.ui.tool, Tool::Brush, "{event_key:?} cycles when its explicit command is removed");
+
+        app.run("edit.keyboardShortcuts", json!({"set": {"tools.select.brush": event_key.name(), "tools.select.pencil": event_key.name()}})).unwrap();
+        app.ui.tool = Tool::Pencil;
+        press(&mut app, event_key, Modifiers::SHIFT);
+        assert_eq!(app.ui.tool, Tool::Brush, "a group bound directly to {event_key:?} still cycles");
+    }
 }
 
 #[test]
@@ -134,6 +239,42 @@ fn toolbar_shortcuts_participate_in_conflict_resolution() {
     assert!(h.state().ui.palette_open, "B now runs Search");
     assert_eq!(h.state().ui.tool, crate::state::Tool::Move);
     assert_eq!(crate::shortcut_dispatch::take_log(&ctx).last().map(|i| i.0.as_str()), Some("edit.search"));
+
+    // Photoshop reports a conflict when reassigning an occupied shortcut and removes the
+    // previous assignment. Deleting the new binding must also survive a restart (#8056).
+    let (mut h, id) = dialog(1.0, "tools.select.pencil", "Pencil Tool");
+    h.state_mut().session.edit_prefs(|prefs| prefs.shortcuts.insert("tools.select.brush".into(), "F13".into()));
+    h.state_mut().ui.dialog_mut(id).unwrap().fields["overrides"]["tools.select.brush"] = json!("F13");
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "B").click();
+    h.run_steps(2);
+    h.key_press(Key::F13);
+    h.run_steps(2);
+    assert!(!field(&h, id, "conflict").is_null(), "reassigning an occupied tool key reports its previous owner");
+    crate::dialogs::confirm(h.state_mut(), id).unwrap();
+    assert_eq!(crate::tool_shortcuts::shortcut(h.state(), crate::state::Tool::Pencil).as_deref(), Some("F13"));
+    assert_eq!(crate::tool_shortcuts::shortcut(h.state(), crate::state::Tool::Brush), None);
+
+    let ctx = h.ctx.clone();
+    let id = crate::menus::invoke(h.state_mut(), &ctx, "edit.keyboardShortcuts", json!({})).unwrap()["dialog"].as_u64().unwrap();
+    let fields = &mut h.state_mut().ui.dialog_mut(id).unwrap().fields;
+    fields.insert("filter".into(), json!("Pencil Tool"));
+    fields.insert("selected".into(), json!("tools.select.pencil"));
+    h.run_steps(4);
+    h.get_by_label("Delete Shortcut").click();
+    h.run_steps(2);
+    crate::dialogs::confirm(h.state_mut(), id).unwrap();
+    let saved = h.state().session.prefs_to_json();
+    let mut session = photocraft_engine::Session::new();
+    session.load_prefs_json(&saved).unwrap();
+    let restarted = PhotocraftApp::new(session, crate::Services::default());
+    assert_eq!(crate::tool_shortcuts::shortcut(&restarted, crate::state::Tool::Pencil), None, "removal survives a restart");
+    assert_eq!(crate::tool_shortcuts::shortcut(&restarted, crate::state::Tool::Brush), None);
+    for modifiers in [Modifiers::NONE, Modifiers::SHIFT] {
+        assert!(
+            crate::shortcut_dispatch::bindings(&restarted).iter().all(|(_, sc)| *sc != egui::KeyboardShortcut::new(modifiers, Key::F13)),
+            "removed shortcuts and their Shift variants must disappear after restarting"
+        );
+    }
 }
 
 /// Click the selected command's shortcut button, then press `modifier` and `k` like a keyboard:
