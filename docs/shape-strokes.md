@@ -79,8 +79,11 @@ are not implemented. No Photoshop-authored oracle establishes exact stroke UI pa
 Automation: `shape.create`, `shape.edit`, and `shape.info` expose document strokes. The
 control channel also supports `ui.set {shapeStroke: {width, align, cap, join, miterLimit,
 dashes, dashOffset, opacity}}` for tool defaults, merging partial fields; null sets width to
-zero. Set tool colours with `tools.setColors`. `ui.inspect` reports `toolOptions.shape_stroke`,
-`toolOptions.stroke_width`, and the transient `strokeEditor`. Keyboard focus, standard number
+zero. The shape tools keep their own Fill and Stroke colours: `tools.setColors` changes only the
+foreground and background, and there is no automation setter for the tools' colours yet.
+`ui.inspect` reports them as `toolOptions.shape_fill_color` and `toolOptions.shape_stroke_color`,
+along with `toolOptions.shape_stroke`, `toolOptions.stroke_width`, and the transient
+`strokeEditor`. Keyboard focus, standard number
 fields, colour pickers, and ComboBoxes remain native egui controls.
 
 ## Paint
