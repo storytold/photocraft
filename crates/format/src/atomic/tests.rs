@@ -330,6 +330,112 @@ fn keeps_the_original_file_mode() {
     assert_eq!(std::fs::metadata(&p).unwrap().permissions().mode() & 0o777, 0o600);
 }
 
+/// #6602: saving a hard-linked file updates every link, not just the path that was saved.
+#[cfg(unix)]
+#[test]
+fn keeps_hard_links() {
+    use std::os::unix::fs::MetadataExt;
+    let d = TempDir::new("hardlink");
+    let a = d.0.join("a.psd");
+    let b = d.0.join("b.psd");
+    std::fs::write(&a, ORIGINAL).unwrap();
+    std::fs::hard_link(&a, &b).unwrap();
+    atomic_write(&a, b"new").unwrap();
+    assert_eq!(std::fs::read(&b).unwrap(), b"new");
+    assert_eq!(std::fs::metadata(&a).unwrap().nlink(), 2);
+    assert_no_temp(&d.0);
+}
+
+/// While another save holds the file, an in-place save renames instead of interleaving with it.
+#[cfg(unix)]
+#[test]
+fn locked_hard_linked_file_falls_back_to_the_rename() {
+    let d = TempDir::new("hardlink-locked");
+    let a = d.0.join("a.psd");
+    let b = d.0.join("b.psd");
+    std::fs::write(&a, ORIGINAL).unwrap();
+    std::fs::hard_link(&a, &b).unwrap();
+    let other_save = std::fs::OpenOptions::new().write(true).open(&a).unwrap();
+    other_save.lock().unwrap();
+    atomic_write(&a, b"new").unwrap();
+    assert_eq!(std::fs::read(&a).unwrap(), b"new");
+    assert_eq!(std::fs::read(&b).unwrap(), ORIGINAL);
+    assert_no_temp(&d.0);
+}
+
+/// An in-place save that can't remove its temporary file says so instead of reporting success.
+#[cfg(unix)]
+#[test]
+fn in_place_save_reports_a_temporary_file_it_could_not_remove() {
+    struct StuckTemp;
+    impl AtomicFs for StuckTemp {
+        fn is_hard_linked(&self, path: &Path) -> bool {
+            RealFs.is_hard_linked(path)
+        }
+        fn write_in_place(&self, path: &Path, bytes: &[u8]) -> io::Result<()> {
+            RealFs.write_in_place(path, bytes)
+        }
+        fn write_new(&self, tmp: &Path, bytes: &[u8]) -> io::Result<()> {
+            RealFs.write_new(tmp, bytes)
+        }
+        fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+            RealFs.rename(from, to)
+        }
+        fn remove(&self, _path: &Path) -> io::Result<()> {
+            Err(io::Error::new(io::ErrorKind::PermissionDenied, "injected: cannot remove"))
+        }
+        fn sync_dir(&self, dir: &Path) -> io::Result<()> {
+            RealFs.sync_dir(dir)
+        }
+        fn copy_metadata(&self, from: &Path, to: &Path) -> io::Result<()> {
+            RealFs.copy_metadata(from, to)
+        }
+    }
+    let d = TempDir::new("hardlink-stuck");
+    let a = d.0.join("a.psd");
+    let b = d.0.join("b.psd");
+    std::fs::write(&a, ORIGINAL).unwrap();
+    std::fs::hard_link(&a, &b).unwrap();
+    let e = atomic_write_with(&StuckTemp, NO_RETRY, &a, b"new").unwrap_err();
+    assert!(e.to_string().contains("could not remove the temporary file"), "{e}");
+    assert_eq!(std::fs::read(&b).unwrap(), b"new");
+}
+
+/// A hard-linked file whose in-place write fails still gets the new bytes, by the usual rename.
+#[test]
+fn failed_in_place_write_falls_back_to_the_rename() {
+    struct NoInPlace;
+    impl AtomicFs for NoInPlace {
+        fn is_hard_linked(&self, _path: &Path) -> bool {
+            true
+        }
+        fn write_in_place(&self, _path: &Path, _bytes: &[u8]) -> io::Result<()> {
+            Err(io::Error::new(io::ErrorKind::StorageFull, "injected: no space left on device"))
+        }
+        fn write_new(&self, tmp: &Path, bytes: &[u8]) -> io::Result<()> {
+            RealFs.write_new(tmp, bytes)
+        }
+        fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+            RealFs.rename(from, to)
+        }
+        fn remove(&self, path: &Path) -> io::Result<()> {
+            RealFs.remove(path)
+        }
+        fn sync_dir(&self, dir: &Path) -> io::Result<()> {
+            RealFs.sync_dir(dir)
+        }
+        fn copy_metadata(&self, from: &Path, to: &Path) -> io::Result<()> {
+            RealFs.copy_metadata(from, to)
+        }
+    }
+    let d = TempDir::new("inplace-fail");
+    let p = d.0.join("doc.psd");
+    std::fs::write(&p, ORIGINAL).unwrap();
+    atomic_write_with(&NoInPlace, NO_RETRY, &p, b"new").unwrap();
+    assert_eq!(std::fs::read(&p).unwrap(), b"new");
+    assert_no_temp(&d.0);
+}
+
 #[cfg(unix)]
 #[test]
 fn new_file_follows_the_process_umask() {

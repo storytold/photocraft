@@ -18,6 +18,12 @@
 //!   needs the folder to be writable, so without this check Linux and macOS would silently replace
 //!   a `chmod 444` file while Windows refuses; now every platform refuses, as Photoshop does, and
 //!   the user saves a copy with Save As.
+//! - **Hard links (Unix):** a file with more than one link is rewritten in place once the new
+//!   bytes are safely in the temporary file, so every link sees the save (#6602); a rename would
+//!   give this path a new inode and leave the other links on the old content. If the in-place
+//!   write fails, or another save is writing the same file (an exclusive lock), the temporary
+//!   file is renamed over the path as usual. Windows keeps the rename:
+//!   std has no stable link count there.
 //! - **Network shares (macOS):** `sync_all` asks for a full flush to the disk's platters
 //!   (`F_FULLFSYNC`), which SMB shares and some virtual file systems refuse while a plain `fsync`
 //!   works. [`sync_file`] falls back to the plain one there (#1336).
@@ -47,6 +53,18 @@ pub trait AtomicFs {
     fn is_readonly(&self, path: &Path) -> bool {
         let _ = path;
         false
+    }
+    /// Whether the existing file at `path` has other hard links (#6602). By default it has none.
+    fn is_hard_linked(&self, path: &Path) -> bool {
+        let _ = path;
+        false
+    }
+    /// Overwrite the existing file at `path` with `bytes` in place, keeping its inode, and flush
+    /// it. Only called for [`is_hard_linked`](Self::is_hard_linked) files. An error (including
+    /// another save holding the file) means the caller falls back to the rename.
+    fn write_in_place(&self, path: &Path, bytes: &[u8]) -> io::Result<()> {
+        let _ = (path, bytes);
+        Err(io::Error::new(io::ErrorKind::Unsupported, "in-place writes are not supported"))
     }
     /// Create `tmp` (it must not exist), write all of `bytes` and flush it ([`sync_file`]).
     fn write_new(&self, tmp: &Path, bytes: &[u8]) -> io::Result<()>;
@@ -135,6 +153,29 @@ impl AtomicFs for RealFs {
     }
     fn is_readonly(&self, path: &Path) -> bool {
         std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().readonly())
+    }
+    fn is_hard_linked(&self, path: &Path) -> bool {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.nlink() > 1)
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = path;
+            false
+        }
+    }
+    fn write_in_place(&self, path: &Path, bytes: &[u8]) -> io::Result<()> {
+        // Write over the old bytes, then cut off any tail, rather than truncating first: a write
+        // that fails early leaves the file mostly as it was, not empty.
+        let mut f = std::fs::OpenOptions::new().write(true).open(path)?;
+        // Two saves writing the same inode at once could interleave their writes and `set_len`.
+        // Whoever doesn't get the lock falls back to the rename, which can't corrupt anything.
+        f.try_lock().map_err(io::Error::from)?;
+        f.write_all(bytes)?;
+        f.set_len(u64::try_from(bytes.len()).map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "file too large"))?)?;
+        sync_file(&f)
     }
 }
 
@@ -237,6 +278,21 @@ pub fn atomic_write_with_progress(fs: &dyn AtomicFs, retry: RenameRetry, path: &
         }
     }
     let tmp = tmp.ok_or_else(|| io::Error::new(io::ErrorKind::AlreadyExists, format!("{}: could not create a temporary file", dir.display())))?;
+
+    // A hard-linked file is rewritten in place so its other links see the save too (#6602). The
+    // complete new bytes are already flushed to `tmp`, so if this fails the rename below still
+    // puts them at `path`.
+    // ponytail: a write that fails partway leaves the *other* links half-written; copying the old
+    // bytes aside first would keep them intact, at the cost of a third copy of the document.
+    if fs.is_hard_linked(&target) && fs.write_in_place(&target, bytes).is_ok() {
+        // The document is saved, but a full copy of it must not be left lying beside it.
+        fs.remove(&tmp).map_err(|e| {
+            io::Error::new(e.kind(), format!("saved {}, but could not remove the temporary file {} ({e}); delete it by hand", path.display(), tmp.display()))
+        })?;
+        // Best effort, as after the rename below: the new bytes are already in place.
+        let _ = fs.sync_dir(&dir);
+        return Ok(());
+    }
 
     // Keep what the file being replaced carried: its mode (e.g. 0600) instead of the process
     // default, its extended attributes, and its ACL. Best effort, and before the swap, so the
