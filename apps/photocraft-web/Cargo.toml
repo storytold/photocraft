@@ -26,6 +26,8 @@ photocraft-doc = { workspace = true }
 photocraft-ui-egui = { workspace = true }
 egui = { workspace = true }
 log = { workspace = true }
+base64 = "0.22"
+serde_json = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # `wgpu` pulls egui-wgpu's defaults: WebGPU plus the WebGL2 fallback.
@@ -37,6 +39,7 @@ js-sys = "0.3"
 web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlElement", "HtmlCanvasElement", "DomRect", "HtmlAnchorElement", "Blob", "BlobPropertyBag", "Url", "Location", "CssStyleDeclaration", "Storage", "Event", "EventTarget", "MouseEvent", "PointerEvent", "BeforeUnloadEvent", "AbortController", "AbortSignal", "DomException", "Response", "IdbFactory", "IdbOpenDbRequest", "IdbDatabase", "IdbRequest", "IdbTransaction", "IdbTransactionMode", "IdbObjectStore", "IdbCursor", "IdbCursorWithValue", "RequestInit", "RequestMode", "Navigator"] }
 
 [dev-dependencies]
-serde_json = { workspace = true }
+# `command` tests run the real app headless.
+egui_kittest = { workspace = true, features = ["eframe"] }
 photocraft-paint = { workspace = true }
 photocraft-psd = { workspace = true }
