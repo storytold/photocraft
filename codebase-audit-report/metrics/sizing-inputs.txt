@@ -1,0 +1,38 @@
+# Sizing inputs for PhotoCraft (2026-10-14). Basis: metrics/fp-transactions.md (fpcount over commands.json).
+count.EI = 824 | state-changing engine commands from the registry (907 commands, 12 parameter-only variants collapsed); see fp-transactions.md
+count.EQ = 43  | read-only registry commands (info / list / get / inspect / printers / browse); listed in fp-transactions.md
+count.EO = 28  | export, print, save-a-copy, preset/action save, package, contact sheet, render video, image assets; listed in fp-transactions.md
+count.ILF = 10 | logical files maintained: document (.pcraft incl. layers/channels/paths/history), preferences, shortcuts+workspaces, brush presets, swatches, gradients, patterns, layer styles, actions, tool/document/shape presets
+count.EIF = 11 | logical groups read from elsewhere: PSD/PSB, flat raster codecs, HDR (EXR/DPX), camera raw/DNG, HEIF, Affinity, Krita/OpenRaster, Photoshop preset files (ABR/ASE/ACO/GRD/PAT/ATN/ASL), ICC profiles, fonts, plug-ins
+
+gsc.1 = 2  | Data communications: local TCP control channel and MCP over stdio; no network service
+gsc.2 = 1  | Distributed data processing: none beyond sandboxed in-process WASM plug-ins
+gsc.3 = 4  | Performance: explicit budgets (perf/budgets.toml), 24-36 MP targets, GPU compositor, nightly perf runs
+gsc.4 = 2  | Heavily used configuration: runs on the user's own machine; varied GPUs handled by wgpu
+gsc.5 = 1  | Transaction rate: single-user interactive editing
+gsc.6 = 3  | Online data entry: all editing is interactive (dialogs, tools, canvas)
+gsc.7 = 4  | End-user efficiency: Photoshop-parity menus, shortcuts, panels, command palette are a stated goal
+gsc.8 = 3  | Online update: interactive updates of the document ILF with undo and atomic saves
+gsc.9 = 4  | Complex processing: imaging algorithms, ICC colour management, compositing, type layout (rated 4, not 5)
+gsc.10 = 3 | Reusability: psd, codecs, cms are designed as publishable standalone crates
+gsc.11 = 3 | Installation ease: signed installers for macOS, Windows, Linux, FreeBSD, plus a web build
+gsc.12 = 2 | Operational ease: autosave and recovery; no operator role
+gsc.13 = 3 | Multiple sites: five platforms incl. browser from one codebase
+gsc.14 = 3 | Facilitate change: data-driven command registry, preferences, actions/scripting
+
+fp_basis = 1 | carry AFP
+
+ratio.Rust = 55 | analyst-assumed: no SPR/QSM ratio for Rust; nearest SPR peers C++ 55, Java 53
+ratio.WebGPU Shading Language = 50 | analyst-assumed shader ratio
+ratio.HTML = 40 | analyst-assumed markup ratio
+ratio.default = 50 | analyst-assumed for TOML/YAML/shell/PowerShell/Python/other build assets
+phys_to_logical = 1.3 | scc physical code lines per logical statement for rustfmt-formatted Rust (assumed; band 1.0-1.5 printed)
+
+salary.bls = 133080       | US BLS Occupational Outlook Handbook, software developers median annual wage May 2024 (cited via scaler.com; secondary sites report $135,980 for May 2025), accessed 2026-10-14
+salary.payscale = 98101   | PayScale software engineer average base pay, self-reported (cited via scaler.com; not verified on payscale.com), accessed 2026-10-14
+salary.salarycom = 128709 | Salary.com Software Engineer III US median, Oct 2025 (from a non-official mirror of the Salary.com page), accessed 2026-10-14
+burden.low = 1.5
+burden.high = 1.75
+days_per_month = 22
+workdays_per_year = 260
+schedule_exponent = 0.42 | mid-to-large commercial desktop product (Jones: ~0.4 mid-sized, ~0.45 large systems)

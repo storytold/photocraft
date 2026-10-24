@@ -1,0 +1,47 @@
+# Inputs for `sizing` (Modules 11 and 12). Copy to codebase-audit-report/metrics/sizing-inputs.txt,
+# replace every 0 and every REPLACE note, then run:
+#   ~/.cache/cartography/bin/sizing metrics/sizing-inputs.txt metrics/category-language.tsv > metrics/sizing.md
+# Format: key = number | note (the note is printed as the basis / justification / source).
+# Basis guidance for PhotoCraft: references/00-photocraft-context.md section 0.3.
+
+# --- IFPUG counts (System). Optional level.<TYPE> = 0 low | 1 average (default) | 2 high
+count.EI = 0  | REPLACE: state-changing engine commands from `photocraft-cli commands --json`, families collapsed (say how)
+count.EQ = 0  | REPLACE: read-only commands / queries (info, histogram, layer lists, MCP read tools)
+count.EO = 0  | REPLACE: export writers and derived outputs (one per format/report)
+count.ILF = 0 | REPLACE: logical files PhotoCraft maintains (document, prefs, preset libraries, actions, workspaces)
+count.EIF = 0 | REPLACE: logical groups read from elsewhere (PSD/PSB, flat codecs, camera raw, HEIF, Affinity, Krita/ORA, ICC, fonts, plug-ins)
+
+# --- 14 General System Characteristics, 0-5 each; default 2-3 unless clearly high
+gsc.1 = 0  | REPLACE: Data communications
+gsc.2 = 0  | REPLACE: Distributed data processing
+gsc.3 = 0  | REPLACE: Performance
+gsc.4 = 0  | REPLACE: Heavily used configuration
+gsc.5 = 0  | REPLACE: Transaction rate
+gsc.6 = 0  | REPLACE: Online data entry
+gsc.7 = 0  | REPLACE: End-user efficiency
+gsc.8 = 0  | REPLACE: Online update
+gsc.9 = 0  | REPLACE: Complex processing
+gsc.10 = 0 | REPLACE: Reusability
+gsc.11 = 0 | REPLACE: Installation ease
+gsc.12 = 0 | REPLACE: Operational ease
+gsc.13 = 0 | REPLACE: Multiple sites
+gsc.14 = 0 | REPLACE: Facilitate change
+
+fp_basis = 1 | 1 = carry AFP into the valuation, 0 = carry UFP (IFPUG CPM 4.3+ / ISO 20926 make VAF optional)
+
+# --- Backfiring (Capers Jones / SPR LOC per FP); languages without a line use ratio.default
+ratio.Rust = 55 | analyst-assumed: no SPR/QSM ratio for Rust; nearest SPR peers C++ 55, Java 53
+ratio.WebGPU Shading Language = 50 | analyst-assumed shader ratio
+ratio.HTML = 40 | analyst-assumed markup ratio
+ratio.default = 50 | analyst-assumed for TOML/YAML/shell/other build assets
+phys_to_logical = 1.3 | scc physical code lines per logical statement (state it; band 1.0-1.5 is printed)
+
+# --- Valuation. Look salaries up live; one line per source with figure + access date.
+salary.bls = 0      | REPLACE: US BLS software developers median annual wage, <year>, accessed <date>
+salary.payscale = 0 | REPLACE: PayScale software engineer median, accessed <date>
+salary.salarycom = 0 | REPLACE: Salary.com software engineer III median, accessed <date>
+burden.low = 1.5
+burden.high = 1.75
+days_per_month = 22
+workdays_per_year = 260
+schedule_exponent = 0.42 | REPLACE: why this class (0.32 small agile, ~0.4 mid, ~0.45 large systems)

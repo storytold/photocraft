@@ -1,0 +1,50 @@
+@startuml
+!include <C4/C4_Component>
+LAYOUT_TOP_DOWN()
+skinparam dpi 110
+title PhotoCraft - Logical view annotated with LOC and cyclomatic complexity (System code, inline tests removed)
+AddElementTag("hot", $bgColor="#E74C3C", $fontColor="#FFFFFF", $legendText="CC > 5,000")
+AddElementTag("warm", $bgColor="#F5B041", $legendText="CC 1,000 - 5,000")
+AddElementTag("cool", $bgColor="#82E0AA", $legendText="CC < 1,000")
+AddElementTag("devops", $bgColor="#D5D8DC", $legendText="DevOps/Test asset")
+System_Boundary(sys, "SYSTEM code - 257,637 LOC / CC 61,232") {
+  Boundary(l6, "L6 + apps") {
+    Component(ui, "ui-egui", "L6", "LOC 82,376\nCC 20,699\nworst: canvas.rs CC 1,434", $tags="hot")
+    Component(auto, "automation", "L6", "LOC 2,586\nCC 529", $tags="cool")
+    Component(apps, "apps (desktop, cli, web)", "L7", "LOC 5,438\nCC 1,141", $tags="warm")
+  }
+  Boundary(l5, "L5") {
+    Component(eng, "engine", "L5", "LOC 56,306\nCC 12,308\nworst: atn_cmds.rs CC 774", $tags="hot")
+  }
+  Boundary(l34, "L3-L4") {
+    Component(io, "io", "L4", "LOC 13,002\nCC 3,264", $tags="warm")
+    Component(plug, "plugins", "L4", "LOC 846\nCC 175", $tags="cool")
+    Component(comp, "compose", "L3", "LOC 5,419\nCC 1,506", $tags="warm")
+    Component(gpu, "gpu", "L3", "LOC 5,403\nCC 1,202", $tags="warm")
+    Component(fmt, "format", "L3", "LOC 2,804\nCC 533", $tags="cool")
+  }
+  Boundary(l12, "L1-L2") {
+    Component(algo, "algo", "L2", "LOC 33,115\nCC 7,879\nworst: inpaint.rs CC 435", $tags="hot")
+    Component(text, "text", "L2", "LOC 5,749\nCC 1,434", $tags="warm")
+    Component(paint, "paint", "L2", "LOC 4,488\nCC 943", $tags="cool")
+    Component(vec, "vector + ops", "L2", "LOC 2,406\nCC 653", $tags="cool")
+    Component(doc, "doc", "L1", "LOC 2,997\nCC 558", $tags="cool")
+  }
+  Boundary(l0, "L0") {
+    Component(codecs, "codecs + heif", "L0", "LOC 10,437\nCC 2,582", $tags="warm")
+    Component(psd, "psd", "L0", "LOC 7,733\nCC 1,746", $tags="warm")
+    Component(raw, "raw + affinity", "L0", "LOC 10,010\nCC 2,387", $tags="warm")
+    Component(found, "cms, color, geom, raster, tablet", "L0", "LOC 6,522\nCC 1,693", $tags="warm")
+  }
+}
+System_Boundary(dev, "DEVOPS/TEST code - 205,552 LOC / CC 27,196") {
+  Component(t1, "ui-egui + engine tests", "", "LOC 119,285\nCC 14,355", $tags="devops")
+  Component(t2, "all other tests", "", "LOC 76,450\nCC 11,661", $tags="devops")
+  Component(t3, "xtask, CI, packaging, config", "", "LOC 9,817\nCC 1,180", $tags="devops")
+}
+Lay_D(ui, eng)
+Lay_D(eng, io)
+Lay_D(io, algo)
+Lay_D(algo, codecs)
+SHOW_LEGEND()
+@enduml

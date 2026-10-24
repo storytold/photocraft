@@ -1,0 +1,168 @@
+## Per-component rollup (Rust CC = extended McCabe; other languages = scc proxy)
+
+| Component | Category | Files | LOC | Types | Fns | CC | CC/type | CC/fn | Density | `?` | Hottest file (CC) |
+|---|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|---|
+| crates/ui-egui | System | 229 | 82,376 | 424 | 4,082 | 20,699 | 48.8 | 5.07 | 0.251 | 1,463 | crates/ui-egui/src/canvas.rs (1,434) |
+| crates/engine | System | 136 | 56,306 | 210 | 3,059 | 12,308 | 58.6 | 4.02 | 0.219 | 4,128 | crates/engine/src/atn_cmds.rs (774) |
+| crates/algo | System | 107 | 33,115 | 235 | 1,361 | 7,879 | 33.5 | 5.79 | 0.238 | 661 | crates/algo/src/inpaint.rs (435) |
+| crates/io | System | 35 | 13,002 | 51 | 663 | 3,264 | 64.0 | 4.92 | 0.251 | 971 | crates/io/src/psd_export.rs (394) |
+| crates/codecs | System | 36 | 10,325 | 80 | 489 | 2,563 | 32.0 | 5.24 | 0.248 | 696 | crates/codecs/src/codecs/tiff.rs (306) |
+| crates/psd | System | 29 | 7,733 | 93 | 516 | 1,746 | 18.8 | 3.38 | 0.226 | 1,082 | crates/psd/src/tiff.rs (345) |
+| crates/raw | System | 26 | 7,173 | 66 | 323 | 1,682 | 25.5 | 5.21 | 0.234 | 293 | crates/raw/src/testgen.rs (233) |
+| crates/text | System | 16 | 5,749 | 55 | 318 | 1,434 | 26.1 | 4.51 | 0.249 | 149 | crates/text/src/layout.rs (287) |
+| crates/compose | System | 14 | 5,419 | 32 | 345 | 1,506 | 47.1 | 4.37 | 0.278 | 15 | crates/compose/src/effects.rs (480) |
+| crates/gpu | System | 7 | 5,403 | 39 | 204 | 1,202 | 30.8 | 5.89 | 0.222 | 58 | crates/gpu/src/plan.rs (340) |
+| crates/paint | System | 15 | 4,488 | 53 | 229 | 943 | 17.8 | 4.12 | 0.210 | 6 | crates/paint/src/render.rs (261) |
+| apps/photocraft | System | 24 | 4,022 | 33 | 232 | 879 | 26.6 | 3.79 | 0.219 | 166 | apps/photocraft/src/screen_color.rs (104) |
+| crates/cms | System | 13 | 3,484 | 26 | 191 | 866 | 33.3 | 4.53 | 0.249 | 126 | crates/cms/src/profile.rs (201) |
+| crates/doc | System | 15 | 2,997 | 113 | 227 | 558 | 4.9 | 2.46 | 0.186 | 24 | crates/doc/src/lib.rs (185) |
+| crates/affinity | System | 12 | 2,837 | 41 | 141 | 705 | 17.2 | 5.00 | 0.249 | 290 | crates/affinity/src/model.rs (121) |
+| crates/format | System | 10 | 2,804 | 54 | 231 | 533 | 9.9 | 2.31 | 0.190 | 203 | crates/format/src/store.rs (195) |
+| crates/automation | System | 12 | 2,586 | 38 | 163 | 529 | 13.9 | 3.25 | 0.205 | 148 | crates/automation/src/server.rs (146) |
+| crates/vector | System | 8 | 2,137 | 13 | 129 | 588 | 45.2 | 4.56 | 0.275 | 24 | crates/vector/src/trace.rs (124) |
+| crates/geom | System | 2 | 994 | 9 | 77 | 316 | 35.1 | 4.10 | 0.318 | 0 | crates/geom/src/warp.rs (270) |
+| crates/raster | System | 2 | 906 | 7 | 71 | 209 | 29.9 | 2.94 | 0.231 | 21 | crates/raster/src/lib.rs (197) |
+| apps/photocraft-web | System | 6 | 886 | 6 | 43 | 167 | 27.8 | 3.88 | 0.188 | 60 | apps/photocraft-web/src/web.rs (78) |
+| crates/plugins | System | 5 | 846 | 12 | 50 | 175 | 14.6 | 3.50 | 0.207 | 52 | crates/plugins/src/manifest.rs (71) |
+| crates/color | System | 3 | 695 | 7 | 58 | 220 | 31.4 | 3.79 | 0.317 | 4 | crates/color/src/blend.rs (156) |
+| apps/photocraft-cli | System | 2 | 530 | 2 | 26 | 95 | 47.5 | 3.65 | 0.179 | 51 | apps/photocraft-cli/src/lib.rs (94) |
+| crates/tablet | System | 5 | 443 | 10 | 25 | 82 | 8.2 | 3.28 | 0.185 | 11 | crates/tablet/src/xi.rs (29) |
+| crates/ops | System | 2 | 269 | 4 | 27 | 65 | 16.2 | 2.41 | 0.242 | 2 | crates/ops/src/lib.rs (44) |
+| crates/heif | System | 1 | 112 | 4 | 9 | 19 | 4.8 | 2.11 | 0.170 | 3 | crates/heif/src/lib.rs (19) |
+| **System subtotal** | | **772** | **257,637** | **1,717** | **13,289** | **61,232** | 35.7 | 4.61 | 0.238 | 10,707 | |
+| crates/ui-egui (tests) | DevOps/Test | 312 | 75,302 | 33 | 4,278 | 9,061 | 274.6 | 2.12 | 0.120 | 229 | crates/ui-egui/src/panels.rs (232) |
+| crates/engine (tests) | DevOps/Test | 198 | 43,983 | 7 | 2,494 | 5,294 | 756.3 | 2.12 | 0.120 | 129 | crates/engine/src/retouch_cmds/tests.rs (305) |
+| crates/io (tests) | DevOps/Test | 97 | 15,565 | 8 | 865 | 2,152 | 269.0 | 2.49 | 0.138 | 21 | crates/io/tests/flat.rs (128) |
+| crates/algo (tests) | DevOps/Test | 89 | 13,127 | 1 | 694 | 2,645 | 2645.0 | 3.81 | 0.201 | 28 | crates/algo/src/segment/tests.rs (146) |
+| crates/codecs (tests) | DevOps/Test | 51 | 8,121 | 12 | 623 | 1,510 | 125.8 | 2.42 | 0.186 | 10 | crates/codecs/tests/deep_exr.rs (136) |
+| crates/psd (tests) | DevOps/Test | 48 | 5,981 | 2 | 419 | 848 | 424.0 | 2.02 | 0.142 | 31 | crates/psd/tests/swatch_malformed.rs (105) |
+| crates/compose (tests) | DevOps/Test | 18 | 5,402 | 1 | 347 | 812 | 812.0 | 2.34 | 0.150 | 3 | crates/compose/src/tests.rs (332) |
+| xtask | DevOps/Test | 12 | 4,393 | 30 | 232 | 832 | 27.7 | 3.59 | 0.189 | 171 | xtask/src/perf.rs (166) |
+| crates/raw (tests) | DevOps/Test | 31 | 3,681 | 3 | 235 | 562 | 187.3 | 2.39 | 0.153 | 2 | crates/raw/tests/dng.rs (84) |
+| crates/automation (tests) | DevOps/Test | 18 | 3,614 | 4 | 182 | 362 | 90.5 | 1.99 | 0.100 | 2 | crates/automation/tests/mcp.rs (125) |
+| crates/gpu (tests) | DevOps/Test | 10 | 3,281 | 1 | 139 | 379 | 379.0 | 2.73 | 0.116 | 19 | crates/gpu/tests/parity.rs (215) |
+| crates/text (tests) | DevOps/Test | 18 | 3,155 | 0 | 185 | 424 | 0.0 | 2.29 | 0.134 | 0 | crates/text/src/tests.rs (220) |
+| apps/photocraft (tests) | DevOps/Test | 25 | 2,627 | 1 | 186 | 307 | 307.0 | 1.65 | 0.117 | 2 | apps/photocraft/src/services.rs (57) |
+| crates/format (tests) | DevOps/Test | 17 | 2,486 | 9 | 167 | 266 | 29.6 | 1.59 | 0.107 | 6 | crates/format/tests/roundtrip.rs (70) |
+| crates/paint (tests) | DevOps/Test | 13 | 2,072 | 0 | 124 | 335 | 0.0 | 2.70 | 0.162 | 0 | crates/paint/src/brush_tests.rs (207) |
+| devops: packaging/ | DevOps/Test | 24 | 1,776 | 0 | 0 | 244 | 0.0 | 0.00 | 0.137 | 0 | packaging/linux/apprun-test.sh (36) |
+| build: Cargo manifests + build.rs | DevOps/Test | 40 | 1,323 | 0 | 15 | 58 | 0.0 | 3.87 | 0.044 | 24 | crates/ui-egui/build.rs (32) |
+| devops: scorecard/ | DevOps/Test | 8 | 1,072 | 0 | 0 | 20 | 0.0 | 0.00 | 0.019 | 0 | scorecard/tools.toml (7) |
+| crates/cms (tests) | DevOps/Test | 9 | 1,065 | 0 | 64 | 189 | 0.0 | 2.95 | 0.177 | 0 | crates/cms/tests/cms.rs (125) |
+| crates/vector (tests) | DevOps/Test | 9 | 1,009 | 0 | 75 | 139 | 0.0 | 1.85 | 0.138 | 0 | crates/vector/src/tests.rs (59) |
+| apps/photocraft-cli (tests) | DevOps/Test | 3 | 937 | 0 | 49 | 102 | 0.0 | 2.08 | 0.109 | 0 | apps/photocraft-cli/tests/cli.rs (76) |
+| crates/doc (tests) | DevOps/Test | 14 | 829 | 0 | 66 | 91 | 0.0 | 1.38 | 0.110 | 0 | crates/doc/src/lib.rs (32) |
+| crates/affinity (tests) | DevOps/Test | 5 | 508 | 0 | 33 | 69 | 0.0 | 2.09 | 0.136 | 1 | crates/affinity/src/tests.rs (49) |
+| crates/ops (tests) | DevOps/Test | 2 | 495 | 0 | 21 | 55 | 0.0 | 2.62 | 0.111 | 0 | crates/ops/src/lib.rs (41) |
+| crates/raster (tests) | DevOps/Test | 2 | 478 | 0 | 27 | 77 | 0.0 | 2.85 | 0.161 | 0 | crates/raster/src/lib.rs (75) |
+| ci: .github | DevOps/Test | 8 | 466 | 0 | 0 | 0 | 0.0 | 0.00 | 0.000 | 0 |  (0) |
+| crates/color (tests) | DevOps/Test | 3 | 460 | 0 | 29 | 108 | 0.0 | 3.72 | 0.235 | 0 | crates/color/src/blend.rs (80) |
+| devops: perf/ | DevOps/Test | 1 | 451 | 0 | 0 | 1 | 0.0 | 0.00 | 0.002 | 0 | perf/budgets.toml (1) |
+| crates/plugins (tests) | DevOps/Test | 4 | 450 | 0 | 26 | 48 | 0.0 | 1.85 | 0.107 | 0 | crates/plugins/tests/abi.rs (31) |
+| crates/geom (tests) | DevOps/Test | 2 | 365 | 0 | 24 | 88 | 0.0 | 3.67 | 0.241 | 0 | crates/geom/src/warp.rs (79) |
+| crates/tablet (tests) | DevOps/Test | 5 | 302 | 0 | 26 | 43 | 0.0 | 1.65 | 0.142 | 1 | crates/tablet/src/appkit.rs (17) |
+| apps/photocraft-web (tests) | DevOps/Test | 2 | 212 | 0 | 13 | 16 | 0.0 | 1.23 | 0.075 | 0 | apps/photocraft-web/src/preset_bridge.rs (14) |
+| crates/testkit | DevOps/Test | 3 | 192 | 2 | 19 | 26 | 13.0 | 1.37 | 0.135 | 8 | crates/testkit/src/perf.rs (21) |
+| devops: contributors/ | DevOps/Test | 1 | 102 | 0 | 0 | 0 | 0.0 | 0.00 | 0.000 | 0 |  (0) |
+| devops: scripts/ | DevOps/Test | 2 | 91 | 0 | 0 | 3 | 0.0 | 0.00 | 0.033 | 0 | scripts/layered_tiff_fixtures.py (3) |
+| build: repo root config | DevOps/Test | 4 | 72 | 0 | 0 | 6 | 0.0 | 0.00 | 0.083 | 0 | Dockerfile (6) |
+| devops: examples/ | DevOps/Test | 2 | 64 | 0 | 5 | 16 | 0.0 | 3.20 | 0.250 | 0 | examples/plugins/invert-rs/src/lib.rs (16) |
+| crates/heif (tests) | DevOps/Test | 1 | 36 | 0 | 4 | 8 | 0.0 | 2.00 | 0.222 | 0 | crates/heif/src/lib.rs (8) |
+| devops: .config/ | DevOps/Test | 1 | 5 | 0 | 0 | 0 | 0.0 | 0.00 | 0.000 | 0 |  (0) |
+| devops: .cargo/ | DevOps/Test | 1 | 2 | 0 | 0 | 0 | 0.0 | 0.00 | 0.000 | 0 |  (0) |
+| **DevOps/Test subtotal** | | **1,113** | **205,552** | **114** | **11,666** | **27,196** | 238.6 | 2.33 | 0.132 | 687 | |
+| Excluded: Markdown | Excluded | 102 | 8,784 | 0 | 0 | 0 | 0.0 | 0.00 | 0.000 | 0 |  (0) |
+| Excluded: JSON | Excluded | 4 | 3,801 | 0 | 0 | 0 | 0.0 | 0.00 | 0.000 | 0 |  (0) |
+| Excluded: SVG | Excluded | 151 | 2,227 | 0 | 0 | 0 | 0.0 | 0.00 | 0.000 | 0 |  (0) |
+| Excluded: Plain Text | Excluded | 12 | 960 | 0 | 0 | 0 | 0.0 | 0.00 | 0.000 | 0 |  (0) |
+| Excluded: License | Excluded | 2 | 167 | 0 | 0 | 0 | 0.0 | 0.00 | 0.000 | 0 |  (0) |
+| Excluded: generated Rust | Excluded | 1 | 46 | 1 | 0 | 1 | 1.0 | 0.00 | 0.022 | 0 | crates/raw/src/tone/tables.rs (1) |
+| Excluded: book/ | Excluded | 1 | 27 | 0 | 0 | 0 | 0.0 | 0.00 | 0.000 | 0 |  (0) |
+| **Excluded subtotal** | | **273** | **16,012** | **1** | **0** | **1** | 1.0 | 0.00 | 0.000 | 0 | |
+| **GRAND TOTAL (System + DevOps/Test)** | | | **463,189** | | | | | | | | |
+
+## Reconciliation
+
+- Σ(System components) = 257,637 == subtotal 257,637 -> OK
+- Σ(DevOps/Test components) = 205,552 == subtotal 205,552 -> OK
+- Σ(Excluded components) = 16,012 == subtotal 16,012 -> OK
+- Σ(System) + Σ(DevOps/Test) + Σ(Excluded) = 257,637 + 205,552 + 16,012 = 479,201 == scc whole-repo code total 479,201 -> OK
+- System / DevOps-Test split: 55.6% / 44.4%
+
+## Excluded (non-authored / non-code) bucket
+
+- Excluded: JSON: 3,801 LOC - docs/data/assets, not program code
+- Excluded: License: 167 LOC - docs/data/assets, not program code
+- Excluded: Markdown: 8,784 LOC - docs/data/assets, not program code
+- Excluded: Plain Text: 960 LOC - docs/data/assets, not program code
+- Excluded: SVG: 2,227 LOC - docs/data/assets, not program code
+- Excluded: book/: 27 LOC - documentation sources
+- Excluded: generated Rust: 46 LOC - header marks file as generated
+
+## LOC by category and language (backfiring input)
+
+| Category | Language | LOC |
+|---|---|--:|
+| DevOps/Test | Autoconf | 309 |
+| DevOps/Test | Docker ignore | 18 |
+| DevOps/Test | Dockerfile | 48 |
+| DevOps/Test | Powershell | 257 |
+| DevOps/Test | Python | 210 |
+| DevOps/Test | Rust | 200,478 |
+| DevOps/Test | Shell | 933 |
+| DevOps/Test | TOML | 2,669 |
+| DevOps/Test | XML | 33 |
+| DevOps/Test | YAML | 597 |
+| Excluded | JSON | 3,801 |
+| Excluded | License | 167 |
+| Excluded | Markdown | 8,784 |
+| Excluded | Plain Text | 960 |
+| Excluded | Rust | 46 |
+| Excluded | SVG | 2,227 |
+| Excluded | TOML | 27 |
+| System | HTML | 30 |
+| System | Rust | 256,463 |
+| System | TOML | 8 |
+| System | WebGPU Shading Language | 1,136 |
+
+## Files over 2,000 code LOC (confirm each is authored source)
+
+- crates/ui-egui/src/canvas.rs: 6,635 LOC (System)
+- crates/ui-egui/src/panels.rs: 5,197 LOC (System)
+- crates/ui-egui/src/transform_tool.rs: 4,115 LOC (System)
+- crates/engine/src/atn_cmds.rs: 2,910 LOC (System)
+- crates/ui-egui/src/prefs_ui.rs: 2,896 LOC (System)
+- crates/ui-egui/src/control.rs: 2,607 LOC (System)
+- crates/ui-egui/src/type_tool.rs: 2,598 LOC (System)
+- contributors/contributors.json: 2,578 LOC (Excluded)
+- crates/compose/src/effects.rs: 2,550 LOC (System)
+- crates/compose/src/tests.rs: 2,251 LOC (DevOps/Test)
+- crates/ui-egui/src/filter_dialog.rs: 2,249 LOC (System)
+- crates/engine/src/layer_multi_cmds.rs: 2,245 LOC (System)
+- crates/ui-egui/src/vector_ui.rs: 2,239 LOC (System)
+- crates/ui-egui/src/lib.rs: 2,196 LOC (System)
+- crates/gpu/tests/parity.rs: 2,146 LOC (DevOps/Test)
+- crates/gpu/src/lib.rs: 2,103 LOC (System)
+- crates/psd/src/tiff.rs: 2,031 LOC (System)
+- crates/ui-egui/src/widgets.rs: 2,028 LOC (System)
+- crates/algo/src/inpaint.rs: 2,007 LOC (System)
+
+## Top 15 most complex Rust files (System + DevOps/Test; inline tests removed from System files)
+
+| # | File | CC | LOC | Density |
+|--:|---|--:|--:|--:|
+| 1 | crates/ui-egui/src/canvas.rs | 1,434 | 4,666 | 0.307 |
+| 2 | crates/ui-egui/src/panels.rs | 896 | 3,368 | 0.266 |
+| 3 | crates/engine/src/atn_cmds.rs | 774 | 2,910 | 0.266 |
+| 4 | crates/ui-egui/src/transform_tool.rs | 652 | 2,434 | 0.268 |
+| 5 | crates/ui-egui/src/type_tool.rs | 566 | 2,369 | 0.239 |
+| 6 | crates/compose/src/effects.rs | 480 | 1,732 | 0.277 |
+| 7 | crates/ui-egui/src/menus.rs | 480 | 1,325 | 0.362 |
+| 8 | crates/ui-egui/src/prefs_ui.rs | 467 | 1,749 | 0.267 |
+| 9 | crates/algo/src/inpaint.rs | 435 | 1,625 | 0.268 |
+| 10 | crates/ui-egui/src/vector_ui.rs | 420 | 1,564 | 0.269 |
+| 11 | crates/engine/src/layer_multi_cmds.rs | 410 | 1,223 | 0.335 |
+| 12 | crates/engine/src/channel_cmds.rs | 398 | 1,615 | 0.246 |
+| 13 | crates/io/src/psd_export.rs | 394 | 1,473 | 0.267 |
+| 14 | crates/compose/src/lib.rs | 385 | 1,381 | 0.279 |
+| 15 | crates/engine/src/vector_cmds.rs | 371 | 1,703 | 0.218 |

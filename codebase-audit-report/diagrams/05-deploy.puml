@@ -1,0 +1,46 @@
+@startuml
+!include <C4/C4_Deployment>
+LAYOUT_LEFT_RIGHT()
+skinparam dpi 105
+title PhotoCraft - Build, DevOps and deploy (from .github/workflows, packaging/, xtask)
+AddElementTag("devops", $bgColor="#D5D8DC", $fontColor="#1B2631", $borderColor="#808B96", $legendText="DevOps/Test asset (9,817 LOC excl. tests)")
+AddElementTag("art", $bgColor="#2471A3", $fontColor="#FFFFFF", $legendText="shipped artifact (System code)")
+Deployment_Node(src, "GitHub repo", "main + PRs") {
+  Container(code, "Rust workspace", "crates/, apps/", "System 257,637 LOC + tests", $tags="art")
+  Container(xt, "xtask", "Rust", "layers, wasm, parity, perf, scorecard, corpus, version", $tags="devops")
+}
+Deployment_Node(ci, "GitHub Actions", "ci.yml (push / PR)") {
+  Container(test, "test matrix", "Linux / macOS / Windows", "fmt, cargo test, craft-fonts test, clippy -D warnings, xtask layers, scorecard --check", $tags="devops")
+  Container(corp, "corpus", "Linux", "xtask corpus --all; test-corpus", $tags="devops")
+  Container(wasm, "wasm + web", "Linux", "xtask wasm; trunk build; size gate", $tags="devops")
+  Container(fuzz, "fuzz", "cargo-fuzz", "20 targets: psd, codecs, affinity, format", $tags="devops")
+}
+Deployment_Node(night, "Scheduled workflows", "nightly cron") {
+  Container(perf, "perf-nightly", "macOS Apple GPU", "benchmarks vs perf/budgets.toml", $tags="devops")
+  Container(bsd, "freebsd + windows-arm64", "VM / runner", "build, test, package", $tags="devops")
+}
+Deployment_Node(rel, "release.yml", "storytold/craft-common-actions@main (reusable)") {
+  Container(pkg, "packaging scripts", "sh / ps1 / WiX / nfpm / flatpak", "signing: Apple notarization, Azure signing", $tags="devops")
+}
+Deployment_Node(dist, "Release artifacts", "GitHub Releases") {
+  Container(mac, "macOS .dmg", "signed + notarized", "", $tags="art")
+  Container(win, "Windows .msi + portable", "signed", "", $tags="art")
+  Container(lin, "Linux AppImage, .deb/.rpm, Flatpak", "", "", $tags="art")
+  Container(fb, "FreeBSD package", "", "", $tags="art")
+  Container(webapp, "Web build", "static WASM site", "nginx / _headers", $tags="art")
+}
+Rel(code, test, "push / PR")
+Rel(code, corp, "push / PR")
+Rel(code, wasm, "push / PR")
+Rel(code, fuzz, "dispatch")
+Rel(xt, test, "used by")
+Rel(code, perf, "nightly")
+Rel(code, bsd, "nightly")
+Rel(code, pkg, "tag / dispatch")
+Rel(pkg, mac, "")
+Rel(pkg, win, "")
+Rel(pkg, lin, "")
+Rel(bsd, fb, "")
+Rel(pkg, webapp, "")
+SHOW_LEGEND()
+@enduml
