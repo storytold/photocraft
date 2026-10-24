@@ -2421,6 +2421,44 @@ fn txt2_frame_moves_box_text_onto_its_bounds() {
     assert_eq!(l.transform, before);
 }
 
+/// #1431: the `Txt2` frame matrix's uniform scale is frame placement, not a glyph scale. Folding
+/// it whole into the layer transform shrank the type (the panel read 9.8 pt for the 10.1 pt
+/// Photoshop shows, and entering edit re-rendered smaller). The fold must keep the matrix's
+/// rotation and translation — the anchor and frame box land where the full matrix maps them —
+/// while its scale stays out of the transform the panel's √|det| and the glyph mapping read,
+/// and into the box coordinates, which are frame-space.
+#[test]
+fn txt2_frame_scale_does_not_shrink_the_type() {
+    let scale_of = |m: [f64; 6]| (m[0] * m[3] - m[1] * m[2]).abs().sqrt();
+    // Point text whose frame matrix scales by 0.97 about the anchor (recent Photoshop).
+    let mut t = point("2", 100.0);
+    t.transform = Affine::translate(-1000.0, -2000.0);
+    let tysh = with_text_index(&crate::psd::build_tysh(&t, 72.0, Some([950.0, 2050.0, 1050.0, 2150.0])), 0);
+    let txt2 = crate::psd::parse_txt2(&txt2_with_frame("2", Some([1000.0, 2100.0]), [0.97, 0.0, 0.0, 0.97, 30.0, 63.0])).unwrap();
+    let mut l = crate::psd::text_layer_from_tysh(&tysh, 72.0).unwrap();
+    crate::psd::apply_txt2_frame(&mut l, &tysh, &txt2);
+    // The anchor lands where the full matrix maps it …
+    let o = l.transform.apply(photocraft_geom::Point::new(0.0, 0.0));
+    assert!((o.x - 0.0).abs() < 1e-6 && (o.y - 100.0).abs() < 1e-6, "anchor at {o:?}");
+    // … and the scale stays out of the transform: the panel reads the parsed 10.1 pt, not 9.8.
+    assert!((scale_of(l.transform.m) - 1.0).abs() < 1e-9, "frame scale leaked into the transform: {}", scale_of(l.transform.m));
+
+    // Box text: the box keeps its text-space place, with the scale in its coordinates.
+    let mut t = styled("Casemiro 45", CharStyle { size_pt: 25.0, ..Default::default() });
+    t.shape = TextShape::Box { x: 500.0, y: 600.0, width: 300.0, height: 90.0 };
+    t.transform = Affine::translate(-700.0, -300.0);
+    let built = with_text_index(&crate::psd::build_tysh(&t, 72.0, None), 0);
+    let tysh = with_bounds(&built, [900.0, 250.0, 1260.0, 390.0]);
+    let txt2 = crate::psd::parse_txt2(&txt2_with_frame("Casemiro 45", None, [0.97, 0.0, 0.0, 0.97, 460.0, -300.0])).unwrap();
+    let mut l = crate::psd::text_layer_from_tysh(&tysh, 72.0).unwrap();
+    crate::psd::apply_txt2_frame(&mut l, &tysh, &txt2);
+    let TextShape::Box { x, y, .. } = l.shape else { panic!("not a box") };
+    assert!((f64::from(x) - 485.0).abs() < 1e-3, "box carries the frame scale: {x}");
+    let o = l.transform.apply(photocraft_geom::Point::new(f64::from(x), f64::from(y)));
+    assert!((o.x - 245.0).abs() < 1e-3 && (o.y + 18.0).abs() < 1e-3, "box top left at {o:?}");
+    assert!((scale_of(l.transform.m) - 1.0).abs() < 1e-9, "frame scale leaked into the transform: {}", scale_of(l.transform.m));
+}
+
 /// Preferences ▸ Type ▸ Missing Glyph Protection: off, only the default family is in the
 /// fallback stack, so a face without the glyph shows the missing-glyph box instead of a
 /// fallback's glyph (#1909).
