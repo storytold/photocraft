@@ -1003,7 +1003,9 @@ impl Ex {
                         return Err(format!("the linked file {path} is not read for this export"));
                     }
                     let file = crate::doc_path::resolve(path, self.document.as_deref()).map_err(|e| format!("the linked file {path} is not opened: {e}"))?;
-                    let bytes = std::fs::read(file).map_err(|e| format!("the linked file {path} can't be read: {e}"))?;
+                    // Regular files only, in bounded reads: a link to a FIFO would block the save
+                    // and one to a device such as `/dev/zero` would never end (#8601).
+                    let bytes = photocraft_format::read_file(&file).map_err(|e| format!("the linked file {path} can't be read: {e}"))?;
                     let name = path.rsplit(['/', '\\']).next().unwrap_or(path).to_string();
                     self.warnings.push(format!("the linked smart object {name} was embedded (PSD export keeps no external links)"));
                     self.embed(sm.contents_id, &name, &bytes)
@@ -2322,5 +2324,40 @@ mod tests {
         assert_eq!(back.channels.len(), 1);
         assert_eq!(back.channels[0].name, "Alpha 1");
         assert!((back.channels[0].opacity - 0.5).abs() < 1e-6);
+    }
+
+    /// A linked smart object whose path names a FIFO is not read (#8601): opening a FIFO for
+    /// reading blocks until a writer appears, and a device such as `/dev/zero` never ends, so the
+    /// export would hang or run out of memory. The export finishes and writes the layer as pixels,
+    /// saying why. The export runs on its own thread so that a regression fails here instead of
+    /// hanging the test run.
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_fifo_is_not_read() {
+        let dir = std::env::temp_dir().join(format!("photocraft-linked-fifo-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let fifo = dir.join("link.png");
+        let _ = std::fs::remove_file(&fifo);
+        assert!(std::process::Command::new("mkfifo").arg(&fifo).status().unwrap().success(), "mkfifo failed");
+        let mut doc = document(8, 6);
+        let smart = photocraft_doc::SmartObject {
+            contents_id: SmartContentsId::fresh(),
+            source: photocraft_doc::SmartSource::Linked { path: fifo.to_string_lossy().into_owned() },
+            transform: photocraft_geom::Affine::IDENTITY,
+            smart_filters: vec![],
+            cache: Some(Surface::new(doc.pixel_format())),
+            psd_raw: None,
+            filters_enabled: true,
+            filter_mask: None,
+            warp: None,
+            stack_mode: None,
+            perspective: None,
+        };
+        doc.layers.push(Layer::new("Linked", LayerContent::Smart(smart)));
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || tx.send(document_to_psd_with(&doc, &PsdExportOptions::default()).1));
+        let warnings = rx.recv_timeout(std::time::Duration::from_secs(30)).expect("the export blocked reading the FIFO");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(warnings.iter().any(|w| w.contains("smart object written as pixels") && w.contains("not a regular file")), "{warnings:?}");
     }
 }
