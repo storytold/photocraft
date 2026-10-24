@@ -25,7 +25,7 @@ pub use panels::{
     tool_presets_panel, windows,
 };
 #[cfg(test)]
-use panels::{new_tool_preset_params, tool_id};
+use panels::{new_tool_preset_params, shape_fill, tool_id};
 
 /// Panel state (serde, so the control channel can read and drive it).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -806,6 +806,20 @@ mod tests {
         select_tool_preset(&mut app, &name);
         assert!(app.ui.tool_options.sample_all.blur);
         assert!(app.ui.tool_options.sample_all.magic_wand, "the Magic Wand's Sample All Layers is not Blur's");
+    }
+
+    /// #9176 review: a shape placed from the Shapes panel takes the tool's fill with its alpha,
+    /// as one drawn with the Shape tool does.
+    #[test]
+    fn a_shapes_panel_preset_keeps_the_tool_fill_alpha() {
+        let (mut app, _) = app();
+        app.ui.tool_options.shape_fill = true;
+        app.ui.tool_options.shape_fill_color = [1.0, 0.0, 0.0, 0.5];
+        let fill = shape_fill(&app);
+        app.run("shape.presets.place", json!({"preset": "Heart", "rect": [10, 10, 30, 20], "fill": fill})).unwrap();
+        let d = app.session.active().unwrap();
+        let photocraft_doc::LayerContent::Shape(sh) = &d.doc.layer(d.active_layer.unwrap()).unwrap().content else { panic!("a shape layer") };
+        assert_eq!(sh.fill, Some(photocraft_doc::Fill::Solid(photocraft_doc::Color::rgba(1.0, 0.0, 0.0, 0.5))));
     }
 
     #[test]
