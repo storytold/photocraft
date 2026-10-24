@@ -1157,6 +1157,18 @@ fn path_to_selection(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "selected": selected }))
 }
 
+/// Runs `path.toSelection` with a forced combine mode (Ctrl+Shift+Enter / Ctrl+Alt+Enter).
+/// Any `mode` passed by the caller is overridden; the other params (`name`, `feather`,
+/// `antiAlias`) are forwarded unchanged and validated by `path_to_selection`.
+fn path_to_selection_with_mode(s: &mut Session, p: &Value, mode: &str) -> Result<Value> {
+    let mut q = match p {
+        Value::Object(_) => p.clone(),
+        _ => json!({}),
+    };
+    q["mode"] = json!(mode);
+    path_to_selection(s, &q)
+}
+
 fn select_to_work_path(s: &mut Session, p: &Value) -> Result<Value> {
     let tol = f64p(p, "tolerance").unwrap_or(2.0).clamp(0.5, 10.0);
     let d = s.active().ok_or(EngineError::NoDocument)?;
@@ -1872,6 +1884,28 @@ pub fn specs() -> Vec<CommandSpec> {
             params: r##"{"name":str|"work"|"layer"="work","feather":px=0,"antiAlias":bool=true,"mode":"replace|add|subtract|intersect"="replace"}"##,
             enabled: has_doc,
             run: path_to_selection,
+            journal: true,
+        },
+        // Ctrl+Shift+Enter: add the path to the active selection.
+        CommandSpec {
+            id: "path.addToSelection",
+            label: "Add Path to Selection",
+            menu: &[],
+            shortcut: Some("Cmd+Shift+Enter"),
+            params: r##"{"name":str|"work"|"layer"="work","feather":px=0,"antiAlias":bool=true} (same as path.toSelection with mode "add")"##,
+            enabled: has_doc,
+            run: |s, p| path_to_selection_with_mode(s, p, "add"),
+            journal: true,
+        },
+        // Ctrl+Alt+Enter: subtract the path from the active selection.
+        CommandSpec {
+            id: "path.subtractFromSelection",
+            label: "Subtract Path from Selection",
+            menu: &[],
+            shortcut: Some("Cmd+Alt+Enter"),
+            params: r##"{"name":str|"work"|"layer"="work","feather":px=0,"antiAlias":bool=true} (same as path.toSelection with mode "subtract")"##,
+            enabled: has_doc,
+            run: |s, p| path_to_selection_with_mode(s, p, "subtract"),
             journal: true,
         },
         spec!("select.toWorkPath", "Make Work Path", [], r##"{"tolerance":0.5..10 px=2} → {subpaths,knots}"##, has_selection, select_to_work_path),

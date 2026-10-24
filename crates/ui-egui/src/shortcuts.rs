@@ -942,6 +942,84 @@ mod tests {
         assert!(app.ui.pen.is_none());
     }
 
+    /// A document with a work path, and a `press` helper that feeds one key press to `handle`.
+    fn selection_app() -> PhotocraftApp {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", serde_json::json!({"width": 200, "height": 200})).unwrap();
+        app
+    }
+
+    fn set_work_rect(app: &mut PhotocraftApp, x: i32, y: i32, w: i32, h: i32) {
+        let knots = serde_json::json!([[x, y], [x + w, y], [x + w, y + h], [x, y + h]]);
+        app.run("path.set", serde_json::json!({"path": {"subpaths": [{"closed": true, "op": "combine", "knots": knots}]}})).unwrap();
+    }
+
+    fn selected(app: &PhotocraftApp) -> bool {
+        app.session.active().unwrap().doc.selection.is_some()
+    }
+
+    fn press_key(app: &mut PhotocraftApp, ctx: &egui::Context, key: Key, modifiers: Modifiers) {
+        ctx.begin_pass(egui::RawInput {
+            events: vec![
+                egui::Event::ModifiersChanged(modifiers),
+                egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers },
+            ],
+            ..Default::default()
+        });
+        handle(app, ctx);
+        ctx.end_pass().textures_delta.clear();
+    }
+
+    #[test]
+    fn ctrl_shift_enter_adds_the_path_to_the_selection() {
+        let mut app = selection_app();
+        let ctx = egui::Context::default();
+        set_work_rect(&mut app, 10, 10, 40, 40);
+        app.run("path.toSelection", serde_json::json!({})).unwrap();
+        let history = app.session.active().unwrap().history.past_len();
+
+        set_work_rect(&mut app, 100, 100, 40, 40);
+        press_key(&mut app, &ctx, Key::Enter, Modifiers::COMMAND | Modifiers::SHIFT);
+        assert_eq!(app.session.active().unwrap().history.past_len(), history + 2, "path.set + selection");
+        assert!(selected(&app));
+
+        // Removing the second rectangle leaves the first one: the key added, it did not replace.
+        press_key(&mut app, &ctx, Key::Enter, Modifiers::COMMAND | Modifiers::ALT);
+        assert!(selected(&app));
+    }
+
+    #[test]
+    fn ctrl_alt_enter_subtracts_the_path_from_the_selection() {
+        let mut app = selection_app();
+        let ctx = egui::Context::default();
+        set_work_rect(&mut app, 10, 10, 40, 40);
+        app.run("path.toSelection", serde_json::json!({})).unwrap();
+        assert!(selected(&app));
+
+        press_key(&mut app, &ctx, Key::Enter, Modifiers::COMMAND | Modifiers::ALT);
+        assert!(!selected(&app), "the only selected area was subtracted");
+    }
+
+    #[test]
+    fn add_and_subtract_path_keys_are_ignored_while_a_text_field_has_focus() {
+        let mut app = selection_app();
+        let ctx = egui::Context::default();
+        set_work_rect(&mut app, 10, 10, 40, 40);
+        app.run("path.toSelection", serde_json::json!({})).unwrap();
+
+        // Give a text field the keyboard focus, as a panel's numeric field would have it.
+        let mut text = String::new();
+        ctx.begin_pass(egui::RawInput::default());
+        egui::CentralPanel::default().show(&ctx, |ui| ui.text_edit_singleline(&mut text).request_focus());
+        ctx.end_pass().textures_delta.clear();
+
+        let history = app.session.active().unwrap().history.past_len();
+        press_key(&mut app, &ctx, Key::Enter, Modifiers::COMMAND | Modifiers::ALT);
+        press_key(&mut app, &ctx, Key::Enter, Modifiers::COMMAND | Modifiers::SHIFT);
+        assert_eq!(app.session.active().unwrap().history.past_len(), history);
+        assert!(selected(&app));
+    }
+
     #[test]
     fn parses_registry_shortcuts() {
         let sc = parse("Cmd+Shift+N").unwrap();
