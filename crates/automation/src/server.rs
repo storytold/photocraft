@@ -331,7 +331,9 @@ pub struct UiSetParams {
     /// ({background: bool} picks which swatch the Color panel edits), maskTarget,
     /// vectorMaskTarget, selectionMode, zoom, center, rotation (view angle in degrees), fit, theme (pro, proMedium, studio,
     /// studioLight, classic, solarizedDark, adwaita, adwaitaDark, breezeLight, breezeDark, softLight, softDark), brushSection, brushTab,
-    /// brushesView, brushPicker ([x, y] opens the Brush Preset picker there, null closes it),
+    /// brushesView, brushesName, brushesStroke, brushesTip (the docked Brushes panel's preview
+    /// parts, at least one on), brushesScale (the panel preview-size slider, 0.5 to 2, 1 the standard),
+    /// brushPicker ([x, y] opens the Brush Preset picker there, null closes it),
     /// brushPickerName, brushPickerStroke, brushPickerTip (the picker card's parts, at least one
     /// on), brushPickerScale (the picker footer's card-scale slider, 0.15 to 2, 1 the standard),
     /// brushSize, gradientBlendMode

@@ -7,6 +7,8 @@ use egui_kittest::kittest::{NodeT, Queryable};
 
 use super::*;
 
+/// Drag previews preserve the library until a drop; grid ordering uses the horizontal halves
+/// even when the preview's name or stroke is shown.
 #[test]
 fn dragging_a_brush_shows_its_tip_preview() {
     for theme in crate::theme::ThemeKind::ALL {
@@ -47,6 +49,32 @@ fn dragging_a_brush_shows_its_tip_preview() {
             assert!(h.query_by_role_and_label(Role::Image, &name).is_none(), "preview disappears on release");
             assert_eq!(h.state().session.tools.brush, brush, "preview does not change brush settings");
             assert_eq!(h.state().session.tools.presets, presets, "dropping on the source preserves the library");
+            if mode == 1 {
+                let target = presets[1].name.clone();
+                for show in [(true, true, true), (true, false, true), (false, true, false), (false, false, true)] {
+                    for after in [false, true] {
+                        h.state_mut().session.tools.presets = presets.clone();
+                        let st = &mut h.state_mut().ui.brushes_panel;
+                        (st.show_name, st.show_stroke, st.show_tip) = show;
+                        h.run_steps(4);
+                        let start = h.get_by_role_and_label(Role::Button, &name).rect().center();
+                        let cell = h.get_by_role_and_label(Role::Button, &target).rect();
+                        // Opposite vertical and horizontal halves expose accidental row ordering.
+                        let offset = vec2(cell.width() * 0.25, -cell.height() * 0.25);
+                        let end = cell.center() + if after { offset } else { -offset };
+                        h.drag_at(start);
+                        h.run_steps(1);
+                        h.hover_at(end);
+                        h.run_steps(3);
+                        h.drop_at(end);
+                        h.run_steps(4);
+                        let ordered: Vec<_> =
+                            h.state().session.tools.presets.iter().filter(|p| p.name == name || p.name == target).map(|p| p.name.as_str()).collect();
+                        let expected = if after { [target.as_str(), name.as_str()] } else { [name.as_str(), target.as_str()] };
+                        assert_eq!(ordered, expected, "grid drop after={after}, parts={show:?}, theme={theme:?}");
+                    }
+                }
+            }
         }
     }
 }
@@ -214,6 +242,49 @@ fn brush_picker_cards_follow_the_part_boxes() {
     h.state_mut().ui.brush_picker_list.show_stroke = true;
     h.run_steps(2);
     assert!(cards(&h).iter().all(|r| (r.height() - one_row).abs() < 0.5), "tip + stroke: one row");
+
+    // #8046: the docked panel offers the same menu, independently of the popup, and both its
+    // layouts actually hide the unchecked parts (a name-only preview has no image meshes).
+    let picker = h.state().ui.brush_picker_list.clone();
+    h.state_mut().ui.brush_picker = None;
+    h.state_mut().ui.panels.brush_settings = true;
+    h.state_mut().ui.brush_tab = 1;
+    for view in [BrushesView::List, BrushesView::Grid] {
+        h.state_mut().ui.brushes_panel = BrushesPanelState { view, ..Default::default() };
+        h.run_steps(4);
+        h.get_by_label("Brush Preset Options").click();
+        h.run_steps(2);
+        for label in ["Brush Name", "Brush Stroke"] {
+            h.get_by_role_and_label(Role::CheckBox, label).click();
+            h.run_steps(2);
+        }
+        let st = &h.state().ui.brushes_panel;
+        assert!(!st.show_name && !st.show_stroke && st.show_tip);
+        h.get_by_role_and_label(Role::CheckBox, "Brush Tip").click();
+        h.run_steps(2);
+        assert!(h.state().ui.brushes_panel.show_tip, "the last visible part stays on");
+        h.get_by_role_and_label(Role::CheckBox, "Brush Name").click();
+        h.run_steps(2);
+        h.get_by_role_and_label(Role::CheckBox, "Brush Tip").click();
+        h.run_steps(2);
+        let st = &h.state().ui.brushes_panel;
+        assert!(st.show_name && !st.show_stroke && !st.show_tip);
+        assert_eq!(h.state().ui.brush_picker_list, picker, "panel options leave the popup alone");
+        h.key_press(egui::Key::Escape);
+        h.run_steps(2);
+        let rect = h.get_by_role_and_label(Role::Button, &presets[0].name).rect();
+        fn has_image(shape: &egui::Shape, rect: Rect) -> bool {
+            match shape {
+                egui::Shape::Vec(shapes) => shapes.iter().any(|s| has_image(s, rect)),
+                egui::Shape::Mesh(mesh) => mesh.texture_id != egui::TextureId::default() && mesh.vertices.iter().any(|v| rect.contains(v.pos)),
+                _ => false,
+            }
+        }
+        assert!(!h.output().shapes.iter().any(|s| has_image(&s.shape, rect)), "{view:?}: hidden tip and stroke must not be drawn");
+        h.get_by_role_and_label(Role::Button, &presets[1].name).click();
+        h.run_steps(2);
+        assert_eq!(h.state().session.tools.current_preset.as_deref(), Some(presets[1].name.as_str()), "hidden previews remain selectable");
+    }
 }
 
 /// The footer slider's widths take the raw scale; heights, padding and text stop at
@@ -326,6 +397,7 @@ fn brush_picker_upper_controls_stop_at_their_max_width() {
     assert_eq!(h.state().session.tools.brush.size, inside, "just past the block the click lands on nothing");
 }
 
+/// Grid rows stay centred, and large previews fit even in a narrow panel with nested folders.
 #[test]
 fn the_brushes_tab_grid_is_centred_past_its_indent() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
@@ -345,6 +417,36 @@ fn the_brushes_tab_grid_is_centred_past_its_indent() {
     PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
     h.run_steps(6);
     rows_are_centred(&h, PANEL_LIST.indent, 2);
+    for nested in [false, true] {
+        for show in [(true, true, true), (true, false, true), (false, true, false), (false, false, true)] {
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+            if nested {
+                for preset in &mut app.session.tools.presets {
+                    preset.folder = vec!["Outer".into(), "Inner".into()];
+                }
+            }
+            let st = &mut app.ui.brushes_panel;
+            st.view = BrushesView::Grid;
+            st.scale = 2.0;
+            st.collapsed.clear();
+            (st.show_name, st.show_stroke, st.show_tip) = show;
+            let name = app.session.tools.presets[0].name.clone();
+            let mut h = Harness::builder().with_size(vec2(180.0, 600.0)).build_ui_state(
+                |ui, app: &mut PhotocraftApp| {
+                    if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                        preset_list(ui, &app.session.tools.presets, None, &mut app.ui.brushes_panel, PANEL_LIST);
+                    }
+                },
+                app,
+            );
+            PhotocraftApp::setup_context(&h.ctx, Default::default());
+            h.run_steps(4);
+            let cell = h.get_by_role_and_label(Role::Button, &name).rect();
+            let panel = h.ctx.content_rect();
+            assert!(cell.left() >= panel.left() && cell.right() <= panel.right(), "grid cell {cell:?} exceeds {panel:?}: nested={nested}, parts={show:?}");
+            assert_eq!(h.state().ui.brushes_panel.scale, 2.0, "fitting the preview leaves the chosen scale unchanged");
+        }
+    }
 }
 
 /// #4454: a card's size number sat under the tip thumbnail of any medium or large brush (the

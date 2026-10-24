@@ -63,7 +63,7 @@ pub enum BrushesView {
     /// Rows: tip, size, stroke preview, name.
     #[default]
     List,
-    /// Tip thumbnails with their sizes.
+    /// A grid of previews, showing the selected name, stroke and tip parts.
     Grid,
 }
 
@@ -91,12 +91,12 @@ pub struct BrushesPanelState {
     pub filter: String,
     pub view: BrushesView,
     pub renaming: Option<Renaming>,
-    /// The Brush Preset picker's cards: show the preset's name. At least one of the three parts
-    /// is always on, and the picker's cards never go empty (see [`crate::brush_picker`]).
+    /// Show the preset's name in the panel or picker. At least one of the three parts is always
+    /// on, so previews never go empty (see [`crate::brush_picker::gear_menu`]).
     pub show_name: bool,
-    /// The Brush Preset picker's cards: show the stroke preview.
+    /// Show the stroke preview.
     pub show_stroke: bool,
-    /// The Brush Preset picker's cards: show the tip thumbnail.
+    /// Show the tip thumbnail.
     pub show_tip: bool,
     /// The Brush Preset picker's cards and the Brushes tab's grid cells and list rows: their size
     /// scale, from the picker's footer slider (`crate::brush_picker::body`) or the tab's preview-size

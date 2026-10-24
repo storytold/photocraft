@@ -133,7 +133,7 @@ pub enum Outcome {
 /// field's value is validated before the first one is applied, so a typo, an unknown field, a
 /// bad value or a bad nested key can't reply with success while nothing — or only half of it —
 /// changed (#412).
-pub const UI_SET_FIELDS: [&str; 39] = [
+pub const UI_SET_FIELDS: [&str; 43] = [
     "updatesOpen",
     "tool",
     "strokeTrace",
@@ -153,6 +153,10 @@ pub const UI_SET_FIELDS: [&str; 39] = [
     "brushSection",
     "brushTab",
     "brushesView",
+    "brushesName",
+    "brushesStroke",
+    "brushesTip",
+    "brushesScale",
     "brushPicker",
     "brushPickerName",
     "brushPickerStroke",
@@ -628,6 +632,25 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                     Some(v) => serde_json::from_value(v.clone()).map(Some).map_err(|e| format!("brushesView: {e} (list, grid)"))?,
                     None => None,
                 };
+                let brushes_name = bool_field(p, "brushesName")?;
+                let brushes_stroke = bool_field(p, "brushesStroke")?;
+                let brushes_tip = bool_field(p, "brushesTip")?;
+                if [brushes_name, brushes_stroke, brushes_tip].iter().any(Option::is_some)
+                    && ![
+                        brushes_name.unwrap_or(app.ui.brushes_panel.show_name),
+                        brushes_stroke.unwrap_or(app.ui.brushes_panel.show_stroke),
+                        brushes_tip.unwrap_or(app.ui.brushes_panel.show_tip),
+                    ]
+                    .into_iter()
+                    .any(|on| on)
+                {
+                    return Err("brushesName, brushesStroke and brushesTip: at least one must stay on".into());
+                }
+                let brushes_scale = match num_field(p, "brushesScale")? {
+                    Some(s) if !(0.5..=2.0).contains(&s) => return Err("brushesScale must be between 0.5 and 2".into()),
+                    Some(s) => Some(s as f32),
+                    None => None,
+                };
                 // The three parts of the picker's cards. At least one stays on (a rejected call
                 // leaves them all alone).
                 let brush_picker_name = bool_field(p, "brushPickerName")?;
@@ -813,6 +836,18 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 }
                 if let Some(v) = brushes_view {
                     app.ui.brushes_panel.view = v;
+                }
+                if let Some(v) = brushes_name {
+                    app.ui.brushes_panel.show_name = v;
+                }
+                if let Some(v) = brushes_stroke {
+                    app.ui.brushes_panel.show_stroke = v;
+                }
+                if let Some(v) = brushes_tip {
+                    app.ui.brushes_panel.show_tip = v;
+                }
+                if let Some(v) = brushes_scale {
+                    app.ui.brushes_panel.scale = v;
                 }
                 if let Some(v) = brush_picker_name {
                     app.ui.brush_picker_list.show_name = v;
@@ -1360,6 +1395,7 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
         "camTransform": app.ui.cam_transform,
         "layerMenu": app.ui.layer_menu,
         "layerPicker": app.ui.layer_picker,
+        "brushesPanel": app.ui.brushes_panel,
         "brushPicker": app.ui.brush_picker.map(|pos| json!({
             "pos": pos,
             // The picker's content size once its corner grip was dragged (null: the default).
@@ -2234,6 +2270,24 @@ mod tests {
         assert!(app.ui.brush_picker_list.show_name, "a rejected call leaves the card parts alone");
         assert_eq!(call(&mut app, &ctx, "ui.set", json!({"brushPicker": null}))["ok"], true);
         assert_eq!(app.ui.brush_picker, None);
+        // The docked panel has the same options, without changing the popup's view.
+        let picker = app.ui.brush_picker_list.clone();
+        let r = call(&mut app, &ctx, "ui.set", json!({"brushesName": false, "brushesTip": false, "brushesScale": 0.5}));
+        assert_eq!(r["ok"], true, "{r}");
+        let panel = app.ui.brushes_panel.clone();
+        assert!(!panel.show_name && panel.show_stroke && !panel.show_tip);
+        assert_eq!(panel.scale, 0.5);
+        assert_eq!(call(&mut app, &ctx, "ui.inspect", json!({}))["result"]["brushesPanel"], json!(panel));
+        for bad in [
+            json!({"brushesStroke": false, "brushesScale": 1}),
+            json!({"brushesName": "no"}),
+            json!({"brushesScale": 0.1, "brushesTip": true}),
+            json!({"brushesScale": 3}),
+        ] {
+            assert_eq!(call(&mut app, &ctx, "ui.set", bad.clone())["ok"], false, "{bad}");
+            assert_eq!(app.ui.brushes_panel, panel, "invalid options apply none of the call");
+        }
+        assert_eq!(app.ui.brush_picker_list, picker);
     }
 
     #[test]
