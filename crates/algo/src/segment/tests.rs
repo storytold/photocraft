@@ -663,6 +663,70 @@ fn saliency_highlights_the_object() {
     assert!(fi / fn_ > 0.6 && bi / bn < 0.25, "fg {} bg {}", fi / fn_, bi / bn);
 }
 
+/// A sharp, finely textured disc on a blurred backdrop of the same average colour (#6570): a
+/// shallow-depth-of-field portrait in miniature. The backdrop's blobs differ from each other
+/// as much as the disc differs from them, so colour alone cannot tell them apart.
+fn blurred_backdrop_scene(w: usize, h: usize, cx: f32, cy: f32, r: f32, seed: u64) -> (RgbImage, Vec<bool>) {
+    let mut rng = Rng::new(seed);
+    let blob = |rng: &mut Rng| -> Vec<f32> {
+        let noise: Vec<f32> = (0..w * h).map(|_| rng.f32() - 0.5).collect();
+        crate::matting::box_mean(&crate::matting::box_mean(&noise, w, h, 7), w, h, 7)
+    };
+    let (b0, b1, b2) = (blob(&mut rng), blob(&mut rng), blob(&mut rng));
+    let gain = 0.45 / b0.iter().chain(&b1).chain(&b2).fold(1e-6f32, |m, v| m.max(v.abs()));
+    let mut truth = vec![false; w * h];
+    let mut img = RgbImage::new(w, h);
+    for y in 0..h {
+        for x in 0..w {
+            let i = y * w + x;
+            let (dx, dy) = (x as f32 + 0.5 - cx, y as f32 + 0.5 - cy);
+            truth[i] = dx * dx + dy * dy <= r * r;
+            let tex = if truth[i] { 0.2 * (rng.f32() - 0.5) } else { 0.0 };
+            img.px[i] = [0.45 + gain * b0[i] + tex, 0.5 + gain * b1[i] + tex, 0.4 + gain * b2[i] + tex].map(|v| v.clamp(0.0, 1.0));
+        }
+    }
+    (img, truth)
+}
+
+#[test]
+fn sharpness_separates_a_subject_from_a_same_coloured_blurred_backdrop() {
+    let (w, h) = (160usize, 120usize);
+    let (img, truth) = blurred_backdrop_scene(w, h, 95.0, 62.0, 30.0, 17);
+    let sal = subject::saliency(&img);
+    let mean = |on: bool| {
+        let v: Vec<f32> = sal.iter().zip(&truth).filter(|(_, t)| **t == on).map(|(s, _)| *s).collect();
+        v.iter().sum::<f32>() / v.len() as f32
+    };
+    // Colour alone rated the backdrop's blobs at about 0.49 on average, close behind the subject.
+    let (fg, bg) = (mean(true), mean(false));
+    assert!(fg > 0.7 && bg < 0.3, "fg {fg} bg {bg}");
+}
+
+/// The sharpness map only counts when it splits the picture into a sharp and a blurred part.
+#[test]
+fn focus_split_ignores_maps_without_a_sharp_subject() {
+    let (w, h) = (100usize, 80usize);
+    // A flat picture, evenly textured pictures, and a thin ring of edge energy around a flat shape.
+    assert_eq!(subject::focus_split(&vec![0.0; w * h]), 0.0);
+    assert_eq!(subject::focus_split(&vec![0.7; w * h]), 0.0);
+    assert_eq!(subject::focus_split(&[]), 0.0);
+    let mut rng = Rng::new(3);
+    let even: Vec<f32> = (0..w * h).map(|_| 0.4 + 0.2 * rng.f32()).collect();
+    assert_eq!(subject::focus_split(&even), 0.0);
+    let ring: Vec<f32> = (0..w * h)
+        .map(|i| {
+            let (x, y) = ((i % w) as f32 - 50.0, (i / w) as f32 - 40.0);
+            if ((x * x + y * y).sqrt() - 20.0).abs() < 1.5 { 1.0 } else { 0.0 }
+        })
+        .collect();
+    assert_eq!(subject::focus_split(&ring), 0.0, "a ring is a sliver of the picture");
+    // A sharp quarter of the picture against a blurred rest does split it.
+    let split: Vec<f32> = (0..w * h).map(|i| if (i % w) < w / 4 { 0.8 + 0.2 * rng.f32() } else { 0.1 * rng.f32() }).collect();
+    assert!(subject::focus_split(&split) > 0.9, "{}", subject::focus_split(&split));
+    // NaN and infinite samples neither panic nor split.
+    assert!(subject::focus_split(&vec![f32::NAN; 64]).is_finite());
+}
+
 // ---------- Focus area ----------
 
 #[test]
