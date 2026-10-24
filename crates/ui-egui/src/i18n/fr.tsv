@@ -3429,8 +3429,8 @@ curves	Smooth	Lisser
 	All shortcuts reset to Photoshop defaults.	Tous les raccourcis ont été réinitialisés aux valeurs par défaut de Photoshop.
 	Ambience	Ambiance
 	Ambient	Ambiante
-	Amplitude Max	Amplitude max.
-	Amplitude Min	Amplitude min.
+	Amplitude Max	Amplitude maximale
+	Amplitude Min	Amplitude minimale
 	Angled Strokes	Traits obliques
 	Anisotropic	Anisotrope
 	Apply Data Set	Appliquer un jeu de données
@@ -3458,9 +3458,9 @@ curves	Smooth	Lisser
 	Ask On Paste	Demander au collage
 	Assign Profile	Attribuer un profil
 	At	À
-	Auto Scale	Mise à l'échelle auto
-	Auto-Align Layers	Alignement automatique des calques
-	Auto-Blend Layers	Fusion automatique des calques
+	Auto Scale	Échelle automatique
+	Auto-Align Layers	Aligner automatiquement les calques
+	Auto-Blend Layers	Fusionner automatiquement les calques
 	Autosave failed: {error}	Échec de l'enregistrement automatique : {error}
 	Back	Retour
 	Backend: {backend} ({type})	Moteur : {backend} ({type})
@@ -3472,14 +3472,14 @@ curves	Smooth	Lisser
 	Batch	Traitement par lots
 	Before	Avant
 	Berries	Baies
-	Best	Optimale
+	Best	Meilleur
 	Black Clip	Écrêtage des noirs
 	Black Intensity	Intensité du noir
-	Blade Curvature	Courbure des lames
+	Blade Curvature	Courbure des lamelles
 	Blast	Rafale
-	Bleach Bypass	Sans blanchiment
-	Blend Clipped Layers as Group	Fusionner les calques découpés en tant que groupe
-	Blend Interior Effects as Group	Fusionner les effets internes en tant que groupe
+	Bleach Bypass	Traitement sans blanchiment
+	Blend Clipped Layers as Group	Fusionner les calques écrêtés en groupe
+	Blend Interior Effects as Group	Fusionner les effets intérieurs en groupe
 	Blend Text Gamma	Gamma de fusion du texte
 	Blending Mode	Mode de fusion
 	Bloat	Dilatation
@@ -3505,7 +3505,7 @@ curves	Smooth	Lisser
 	Camera Raw	Camera Raw
 	Camera Raw Filter	Filtre Camera Raw
 	Cancel transform	Annuler la transformation
-	Candle Light	Bougie
+	Candle Light	Lumière de bougie
 	Canvas Size	Taille du canevas
 	Cell Size	Taille des cellules
 	Center X	Centre X
@@ -3525,7 +3525,7 @@ curves	Smooth	Lisser
 	Circle	Cercle
 	Circularity	Circularité
 	Cleanliness	Propreté
-	Clear Amount	Zone sans lueur
+	Clear Amount	Quantité sans lueur
 	Clear Selection	Effacer la sélection
 	Clipping Mask	Masque de découpe
 	Clipping Path…	Tracé de détourage…
@@ -3535,15 +3535,15 @@ curves	Smooth	Lisser
 	Clumped	Aggloméré
 	Coarse Dots	Points grossiers
 	Coated-cmyk	CMJN papier couché
-	Color Decontaminate	Décontaminer les couleurs
-	Color Halftone	Trame de demi-teintes couleur
+	Color Decontaminate	Décontaminer la couleur
+	Color Halftone	Demi-teintes couleur
 	Color Indicates Masked Areas	La couleur indique les zones masquées
 	Color Indicates Selected Areas	La couleur indique les zones sélectionnées
 	Color Lookup Tables	Tables de correspondance des couleurs
 	Color Picker	Sélecteur de couleurs
-	Color Picker (Background Color)	Sélecteur de couleurs (Couleur d'arrière-plan)
-	Color Picker (Custom Canvas Color)	Sélecteur de couleurs (Couleur personnalisée du canevas)
-	Color Picker (Foreground Color)	Sélecteur de couleurs (Couleur de premier plan)
+	Color Picker (Background Color)	Sélecteur de couleurs (couleur d'arrière-plan)
+	Color Picker (Custom Canvas Color)	Sélecteur de couleurs (couleur personnalisée du canevas)
+	Color Picker (Foreground Color)	Sélecteur de couleurs (couleur de premier plan)
 	Color Settings	Paramètres de couleur
 	Color Swatches	Nuancier
 	Color Table	Table des couleurs
@@ -3563,7 +3563,7 @@ curves	Smooth	Lisser
 	Cooling L B B	Refroidissement LBB
 	Cooling80	Refroidissement 80
 	Cooling82	Refroidissement 82
-	Copy Complete Stroke	Copier le contour complet
+	Copy Complete Stroke	Copier le trait complet
 	Copy Fill	Copier le remplissage
 	Correct C A	Corriger l'aberration chromatique
 	Correct Distortion	Corriger la distorsion
@@ -3582,13 +3582,13 @@ curves	Smooth	Lisser
 	Crosshatch	Hachures croisées
 	Crystallize	Cristallisation
 	Currency	Devise
-	Curve Darks	Courbe : tons sombres
-	Curve Highlights	Courbe : hautes lumières
-	Curve Lights	Courbe : tons clairs
-	Curve Shadows	Courbe : ombres
-	Curve Splits	Courbe : points de séparation
+	Curve Darks	Tons foncés de la courbe
+	Curve Highlights	Hautes lumières de la courbe
+	Curve Lights	Tons clairs de la courbe
+	Curve Shadows	Ombres de la courbe
+	Curve Splits	Points de séparation de la courbe
 	Custom Branch Color	Couleur de branche personnalisée
-	Custom Pixel Aspect Ratio	Format des pixels personnalisé
+	Custom Pixel Aspect Ratio	Rapport d'aspect personnalisé des pixels
 	Cutout	Découpage
 	Cyrillic	Cyrillique
 	Daisies	Pâquerettes
@@ -3596,7 +3596,7 @@ curves	Smooth	Lisser
 	Dark Intensity	Intensité des tons foncés
 	Dark Rough	Foncé rugueux
 	Dark Strokes	Traits sombres
-	Darken Only	Assombrir seulement
+	Darken Only	Assombrir uniquement
 	Darkness	Obscurité
 	Data	Données
 	Data Set: {name}  ({index}/{total})	Jeu de données : {name}  ({index}/{total})
@@ -3607,7 +3607,7 @@ curves	Smooth	Lisser
 	De-Interlace	Désentrelacer
 	Deep	Profond
 	Deep Blue	Bleu profond
-	Deep Emerald	Émeraude profond
+	Deep Emerald	Émeraude profonde
 	Deep Red	Rouge profond
 	Deep Yellow	Jaune profond
 	Default Foreground and Background Colors	Couleurs par défaut du premier plan et de l'arrière-plan
@@ -3626,14 +3626,14 @@ curves	Smooth	Lisser
 	Depth Map	Carte de profondeur
 	Depth Mode	Mode de profondeur
 	Diameter	Diamètre
-	Diffuse	Diffuser
+	Diffuse	Diffusion
 	Diffuse Glow	Lueur diffuse
 	Direction Balance	Équilibre des directions
 	Disable	Désactiver
 	Disable Mask	Désactiver le masque
 	Disable Symmetry Path	Désactiver le tracé de symétrie
 	Disabled	Désactivé
-	Discard Changes	Ignorer les modifications
+	Discard Changes	Abandonner les modifications
 	Displace	Déplacement
 	Display	Affichage
 	Display profile not used	Profil d'affichage non utilisé
@@ -3654,7 +3654,7 @@ curves	Smooth	Lisser
 	Duplicate Channel	Dupliquer le canal
 	Duplicate Layers	Dupliquer les calques
 	Duplication	Duplication
-	Dust & Scratches	Poussière et rayures
+	Dust & Scratches	Poussières et rayures
 	Edge Brightness	Luminosité du contour
 	Edge Extension	Extension du contour
 	Edge Fidelity	Fidélité des contours
@@ -3690,8 +3690,8 @@ curves	Smooth	Lisser
 	Extrude	Extruder
 	Faded Film	Film délavé
 	Failed	Échec
-	Failed to open file	Échec de l'ouverture du fichier
-	Failed to save file	Échec de l'enregistrement du fichier
+	Failed to open file	Impossible d'ouvrir le fichier
+	Failed to save file	Impossible d'enregistrer le fichier
 	Fallback: {reason}	Repli : {reason}
 	Feather Radius	Rayon d'adoucissement
 	Fiber Length	Longueur des fibres
@@ -3709,7 +3709,7 @@ curves	Smooth	Lisser
 	Filter Gallery	Galerie de filtres
 	Find	Rechercher
 	Find and Replace Text	Rechercher et remplacer du texte
-	Fine	Fine
+	Fine	Fin
 	Fine Dots	Points fins
 	Finish	Terminer
 	Fit Image	Adapter l'image
@@ -3733,8 +3733,8 @@ curves	Smooth	Lisser
 	Freeze Lasso	Lasso de figeage
 	Freeze Mask	Masque de figeage
 	Fresco	Fresque
-	From Left	À partir de la gauche
-	From Right	À partir de la droite
+	From Left	Depuis la gauche
+	From Right	Depuis la droite
 	Frosted	Dépoli
 	Full Screen	Plein écran
 	Fullscreen	Plein écran
@@ -3756,12 +3756,12 @@ curves	Smooth	Lisser
 	Glow Size	Taille de la lueur
 	Glowing Edges	Contours lumineux
 	Good	Bonne
-	Grade Balance	Balance de l'étalonnage
+	Grade Balance	Équilibre de l'étalonnage
 	Grade Blending	Fusion de l'étalonnage
 	Grade Global	Étalonnage global
-	Grade Highlights	Étalonnage des hautes lumières
-	Grade Midtones	Étalonnage des tons moyens
-	Grade Shadows	Étalonnage des ombres
+	Grade Highlights	Hautes lumières de l'étalonnage
+	Grade Midtones	Tons moyens de l'étalonnage
+	Grade Shadows	Ombres de l'étalonnage
 	Grain Amount	Quantité de grain
 	Grain Roughness	Rugosité du grain
 	Grain Size	Taille du grain
@@ -3791,18 +3791,18 @@ curves	Smooth	Lisser
 	Hide {app}	Masquer {app}
 	High Pass	Passe-haut
 	Highlight	Hautes lumières
-	Highlight Amount	Quantité des hautes lumières
+	Highlight Amount	Quantité de hautes lumières
 	Highlight Area	Zone des hautes lumières
 	Highlight Radius	Rayon des hautes lumières
-	Highlight Strength	Intensité des hautes lumières
-	Highlight Tone	Amplitude tonale des hautes lumières
-	Horizontal Only	Horizontal seulement
+	Highlight Strength	Force des hautes lumières
+	Highlight Tone	Ton des hautes lumières
+	Horizontal Only	Horizontal uniquement
 	Hotspot	Point chaud
-	Hsb	TSL
-	Hsl	TSI
-	Hsl Hue	Teinte TSI
-	Hsl Lum	Luminance TSI
-	Hsl Sat	Saturation TSI
+	Hsb	HSB
+	Hsl	HSL
+	Hsl Hue	Teinte HSL
+	Hsl Lum	Luminance HSL
+	Hsl Sat	Saturation HSL
 	Image Balance	Équilibre de l'image
 	Image Processor	Processeur d'images
 	Image compositor: {processor}	Compositeur d'images : {processor}
@@ -3843,7 +3843,7 @@ curves	Smooth	Lisser
 	Latin Extended-A	Latin étendu A
 	Latin Extended-B	Latin étendu B
 	Layer Comps to Files	Compositions de calques en fichiers
-	Layer Content Options	Options de contenu du calque
+	Layer Content Options	Options du contenu du calque
 	Layer From Background	Calque d'après l'arrière-plan
 	Layer Mask Hides Effects	Le masque de calque masque les effets
 	Layer Properties	Propriétés du calque
@@ -3873,7 +3873,7 @@ curves	Smooth	Lisser
 	Light Y	Lumière Y
 	Light Z	Lumière Z
 	Lighten Grout	Éclaircir le joint
-	Lighten Only	Éclaircir seulement
+	Lighten Only	Éclaircir uniquement
 	Lighting	Éclairage
 	Lighting Effects	Effets d'éclairage
 	Linear Dodge	Densité linéaire −
@@ -3908,8 +3908,8 @@ curves	Smooth	Lisser
 	Masks	Masques
 	Match Color	Faire correspondre la couleur
 	Math Symbols	Symboles mathématiques
-	Max Offset	Décalage max.
-	Max Radius	Rayon max.
+	Max Offset	Décalage maximal
+	Max Radius	Rayon maximal
 	Medium Dots	Points moyens
 	Medium Gray	Gris moyen
 	Medium Lines	Lignes moyennes
@@ -3920,14 +3920,14 @@ curves	Smooth	Lisser
 	Metallic	Métallique
 	Mezzotint	Manière noire
 	Middle	Milieu
-	Midtone	Contraste des tons moyens
+	Midtone	Ton moyen
 	Monitor Profile	Profil du moniteur
 	Monitor profile in use on {display}: {profile}	Profil du moniteur utilisé sur {display} : {profile}
 	Monitor profile in use: {profile}	Profil du moniteur utilisé : {profile}
 	Monitor profile on {display} (main window): {profile}	Profil du moniteur sur {display} (fenêtre principale) : {profile}
 	Monitor profile on {display}: {profile}	Profil du moniteur sur {display} : {profile}
 	Monitor profile: {profile}	Profil du moniteur : {profile}
-	Mono Contrast	Contraste mono
+	Mono Contrast	Contraste monochrome
 	Monochromatic	Monochromatique
 	More	Plus
 	Mosaic	Mosaïque
@@ -3958,7 +3958,7 @@ curves	Smooth	Lisser
 	No Results	Aucun résultat
 	No Results Found	Aucun résultat trouvé
 	No Selection	Aucune sélection
-	No custom shape "{name}": pick one in the options bar or Window › Shapes	Aucune forme personnalisée « {name} » : choisissez-en une dans la barre d'options ou via Fenêtre › Formes
+	No custom shape "{name}": pick one in the options bar or Window › Shapes	Aucune forme personnalisée « {name} » : choisissez-en une dans la barre d'options ou dans Fenêtre › Formes
 	No layers	Aucun calque
 	No recent files	Aucun fichier récent
 	No selection	Aucune sélection
@@ -4002,7 +4002,7 @@ curves	Smooth	Lisser
 	Panel	Panneau
 	Paper Brightness	Luminosité du papier
 	Parallel	Parallèle
-	Paste Complete Stroke	Coller le contour complet
+	Paste Complete Stroke	Coller le trait complet
 	Paste Fill	Coller le remplissage
 	Patchwork	Patchwork
 	Path Blur	Flou de tracé
@@ -4027,21 +4027,21 @@ curves	Smooth	Lisser
 	Platform: {os} {arch}	Plateforme : {os} {arch}
 	Please wait…	Veuillez patienter…
 	Point	Point
-	Point Curve	Courbe de points
-	Point Curve Blue	Courbe de points bleue
-	Point Curve Green	Courbe de points verte
-	Point Curve Red	Courbe de points rouge
+	Point Curve	Courbe par points
+	Point Curve Blue	Courbe par points bleue
+	Point Curve Green	Courbe par points verte
+	Point Curve Red	Courbe par points rouge
 	Pointed	Pointu
 	Pointillize	Pointillisme
 	Polar Coordinates	Coordonnées polaires
-	Polar To Rectangular	Polaires vers rectangulaires
+	Polar To Rectangular	Polaire vers rectangulaire
 	Policy Cmyk	Règle CMJN
 	Policy Gray	Règle niveaux de gris
 	Policy Rgb	Règle RVB
 	Pond Ripples	Ondulations d'étang
 	Poster Edges	Contours postérisés
 	Posterization	Postérisation
-	Preferences can't be saved	Les préférences ne peuvent pas être enregistrées
+	Preferences can't be saved	Impossible d'enregistrer les préférences
 	Preferences saved	Préférences enregistrées
 	Preferences were reset: {error}	Les préférences ont été réinitialisées : {error}
 	Preferences…	Préférences…
@@ -4076,7 +4076,7 @@ curves	Smooth	Lisser
 	Reconstruct All	Tout reconstruire
 	Recovered {name}	{name} récupéré
 	Rectangular Selection	Sélection rectangulaire
-	Rectangular To Polar	Rectangulaires vers polaires
+	Rectangular To Polar	Rectangulaire vers polaire
 	Red Cyan	Rouge/Cyan
 	Reduce Color Noise	Réduire le bruit de couleur
 	Reduce Noise	Réduction du bruit
@@ -4088,9 +4088,9 @@ curves	Smooth	Lisser
 	Rename Channel…	Renommer le canal…
 	Rename Group	Renommer le groupe
 	Rename Tool Preset	Renommer le préréglage d'outil
-	Render Video	Rendu vidéo
+	Render Video	Lancer le rendu vidéo
 	Rendering…	Rendu en cours…
-	Reorder Layer	Réorganiser le calque
+	Reorder Layer	Réordonner le calque
 	Replace Color	Remplacer la couleur
 	Replace Contents	Remplacer le contenu
 	Replace Footage	Remplacer le métrage
@@ -4107,8 +4107,8 @@ curves	Smooth	Lisser
 	Ridges	Crêtes
 	Right Diagonal	Diagonale droite
 	Ripple	Ondulation
-	Ripple Magnitude	Amplitude de l'ondulation
-	Ripple Size	Taille de l'ondulation
+	Ripple Magnitude	Amplitude des ondulations
+	Ripple Size	Taille des ondulations
 	Rope	Corde
 	Roses	Roses
 	Rough Pastels	Pastels rugueux
@@ -4136,7 +4136,7 @@ curves	Smooth	Lisser
 	Script Events Manager	Gestionnaire d'événements de script
 	Scroll menu down	Faire défiler le menu vers le bas
 	Scroll menu up	Faire défiler le menu vers le haut
-	Search commands, tools and panels	Rechercher des commandes, outils et panneaux
+	Search commands, tools and panels	Rechercher des commandes, des outils et des panneaux
 	Search menus	Rechercher dans les menus
 	Seed	Valeur initiale
 	Select Custom Color…	Choisir une couleur personnalisée…
@@ -4152,20 +4152,20 @@ curves	Smooth	Lisser
 	Set Measurement Scale	Définir l'échelle de mesure
 	Sgray	sGray
 	Shadow	Ombres
-	Shadow Amount	Quantité des ombres
+	Shadow Amount	Quantité d'ombre
 	Shadow Intensity	Intensité des ombres
 	Shadow Radius	Rayon des ombres
-	Shadow Tone	Amplitude tonale des ombres
+	Shadow Tone	Ton des ombres
 	Shadows/Highlights	Ombres/Hautes lumières
 	Shallow	Superficiel
-	Shape Blur	Flou selon une forme
+	Shape Blur	Flou de forme
 	Sharpen Amount	Quantité de netteté
 	Sharpen Detail	Détail de la netteté
 	Sharpen Details	Détails de la netteté
 	Sharpen Masking	Masquage de la netteté
 	Sharpen Radius	Rayon de netteté
 	Shear	Cisaillement
-	Shine	Brillance
+	Shine	Éclat
 	Short Lines	Lignes courtes
 	Short Strokes	Traits courts
 	Shortcut	Raccourci
@@ -4180,7 +4180,7 @@ curves	Smooth	Lisser
 	Smart Blur	Flou intelligent
 	Smart Sharpen	Netteté intelligente
 	Smoothness	Lissage
-	Smudge Stick	Estompe
+	Smudge Stick	Bâtonnet d'estompe
 	Snap to Grid	Aimanter à la grille
 	Snowflakes	Flocons de neige
 	Softness	Douceur
@@ -4189,7 +4189,7 @@ curves	Smooth	Lisser
 	Solid Color	Couleur unie
 	Solid Front Faces	Faces avant pleines
 	Source Layer	Calque source
-	Sparkle	Étincelle
+	Sparkle	Scintillement
 	Spatter	Éclaboussures
 	Speckle	Moucheté
 	Speed	Vitesse
@@ -4197,12 +4197,12 @@ curves	Smooth	Lisser
 	Spin	Rotation
 	Spin Blur	Flou de rotation
 	Split Channels	Séparer les canaux
-	Spot	Spot
+	Spot	Projecteur
 	Spray Radius	Rayon de pulvérisation
 	Sprayed Strokes	Traits pulvérisés
-	Sprinkles	Saupoudré
+	Sprinkles	Saupoudrage
 	Square Size	Taille des carrés
-	Squareness	Forme carrée
+	Squareness	Tendance au carré
 	Stagger	Décalage
 	Stained Glass	Vitrail
 	Star	Étoile
@@ -4212,7 +4212,7 @@ curves	Smooth	Lisser
 	Statistics	Statistiques
 	Step {step} ({id}) failed: {error}	Échec de l'étape {step} ({id}) : {error}
 	Stippled	Pointillé
-	Stops	Arrêts
+	Stops	Points du dégradé
 	Strength	Intensité
 	Stretch	Étirement
 	Stroke Color	Couleur du contour
@@ -4248,23 +4248,23 @@ curves	Smooth	Lisser
 	The file could not be saved.	Impossible d'enregistrer le fichier.
 	Thickness	Épaisseur
 	This Layer:	Ce calque :
-	This Smart Object must be rasterized before proceeding. Its contents will no longer be editable. Rasterize the Smart Object?	Cet objet intelligent doit être rastérisé pour continuer. Son contenu ne sera plus modifiable. Rastériser l'objet intelligent ?
+	This Smart Object must be rasterized before proceeding. Its contents will no longer be editable. Rasterize the Smart Object?	Cet objet intelligent doit être rastérisé avant de continuer. Son contenu ne sera plus modifiable. Rastériser l'objet intelligent ?
 	This adjustment ({key}) is kept as imported and can't be edited yet.	Cet ajustement ({key}) est conservé tel qu'il a été importé et ne peut pas encore être modifié.
-	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	Ce calque de remplissage doit être rastérisé pour continuer. Son contenu de remplissage ne sera plus modifiable. Rastériser le calque ?
-	This layer must be rasterized before proceeding.	Ce calque doit être rastérisé pour continuer.
+	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	Ce calque de remplissage doit être rastérisé avant de continuer. Son contenu de remplissage ne sera plus modifiable. Rastériser le calque ?
+	This layer must be rasterized before proceeding.	Ce calque doit être rastérisé avant de continuer.
 	This session: {reason}	Cette session : {reason}
-	This shape layer must be rasterized before proceeding. It will no longer be editable as a shape. Rasterize the shape?	Ce calque de forme doit être rastérisé pour continuer. Il ne sera plus modifiable en tant que forme. Rastériser la forme ?
-	This type layer must be rasterized before proceeding. Its text will no longer be editable. Rasterize the type?	Ce calque de texte doit être rastérisé pour continuer. Son texte ne sera plus modifiable. Rastériser le texte ?
+	This shape layer must be rasterized before proceeding. It will no longer be editable as a shape. Rasterize the shape?	Ce calque de forme doit être rastérisé avant de continuer. Il ne sera plus modifiable en tant que forme. Rastériser la forme ?
+	This type layer must be rasterized before proceeding. Its text will no longer be editable. Rasterize the type?	Ce calque de texte doit être rastérisé avant de continuer. Son texte ne sera plus modifiable. Rastériser le texte ?
 	Tile Size	Taille des carreaux
 	Tiles	Carreaux
 	Tilt-Shift	Inclinaison-décalage
 	Tint Color	Couleur de la nuance
-	Tiny Lens	Petites lentilles
+	Tiny Lens	Petite lentille
 	To	À
 	To Center	Vers le centre
 	Toggle the Brush Settings panel	Afficher/masquer le panneau Paramètres du pinceau
-	Tool Options	Options d'outil
-	Trace Contour	Tracer les contours
+	Tool Options	Options de l'outil
+	Trace Contour	Tracé des contours
 	Transformation	Transformation
 	Transition	Transition
 	Transparency Shapes Layer	La transparence détermine la forme du calque
@@ -4301,7 +4301,7 @@ curves	Smooth	Lisser
 	Vanishing Point	Point de fuite
 	Variable Data Sets	Jeux de données variables
 	Vector Mask Hides Effects	Le masque vectoriel masque les effets
-	Vertical Only	Vertical seulement
+	Vertical Only	Vertical uniquement
 	Vertical Type Tool	Outil Texte vertical
 	Video Frames to Layers	Images vidéo dans des calques
 	Vignette Amount	Quantité de vignettage
@@ -4323,8 +4323,8 @@ curves	Smooth	Lisser
 	Warning	Avertissement
 	Warp Text	Déformer le texte
 	Watercolor	Aquarelle
-	Wavelength Max	Longueur d'onde max.
-	Wavelength Min	Longueur d'onde min.
+	Wavelength Max	Longueur d'onde maximale
+	Wavelength Min	Longueur d'onde minimale
 	Waves	Vagues
 	Wetness	Humidité
 	White Clip	Écrêtage des blancs
@@ -4367,7 +4367,7 @@ curves	Smooth	Lisser
 	{message} (notes: {n}; {warning})	{message} (remarques : {n} ; {warning})
 	{shortcut} assigned.	{shortcut} attribué.
 	{shortcut} is already in use by {commands} and will be removed from it when you click OK.	{shortcut} est déjà utilisé par {commands} et lui sera retiré lorsque vous cliquerez sur OK.
-	{verb} {mask} {layer}	{verb} le {mask} ({layer})
+	{verb} {mask} {layer}	{verb} {mask} {layer}
 	✓ Color Indicates Masked Areas	✓ La couleur indique les zones masquées
 	✓ Color Indicates Selected Areas	✓ La couleur indique les zones sélectionnées
 @id	edit.clear	Effacer
