@@ -55,8 +55,11 @@ pub fn validate_curve(points: &[[f32; 2]]) -> Result<(), String> {
 
 use crate::photo_util::{hash01, linear_to_srgb, par_rows, srgb_to_linear};
 
+mod auto;
 mod local_tone;
 mod whites_blacks;
+
+pub use auto::{AutoTone, auto_tone, auto_white_balance};
 
 /// How the pixels encode light: the sRGB curve (gamma 0) or a pure power law (ProPhoto's 1.8,
 /// Adobe RGB's 2.2). The tone controls work on light, so the document's own curve decodes it.

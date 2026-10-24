@@ -35,7 +35,7 @@ fn all_seven_languages_render_camera_raw_and_switch_without_resetting_view_or_fi
         h.run_steps(12);
         h.get_by_role_and_label(Role::Button, tr("Color")).click();
         h.run_steps(12);
-        for label in ["White Balance: As Shot", "Temperature", "Tint", "Vibrance", "Saturation"] {
+        for label in ["White Balance", "Temperature", "Tint", "Vibrance", "Saturation"] {
             assert!(h.query_by_label(tr(label)).is_some(), "{}: {label}", lang.code());
         }
         h.get_by_role_and_label(Role::Button, tr("Color")).click();

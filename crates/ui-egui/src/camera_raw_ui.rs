@@ -11,9 +11,12 @@
 //! "commit":true | "cancel":true}}}`; the reply describes the dialog. `{"ui":{"saveSettings":true}}`
 //! and `{"ui":{"loadSettings":true}}` run Save Settings… / Load Settings… (Camera Raw `.xmp`
 //! settings files, see [`photocraft_io::camera_raw_xmp`]) through the file dialog.
+//! `{"ui":{"auto":true}}` and `{"ui":{"blackAndWhite":true}}` turn the Edit row's Auto and B&W
+//! on (`false` turns them off), as their buttons do; `{"ui":{"whiteBalance":"auto"}}` (or
+//! `"asShot"`) picks White Balance.
 
 use egui::{Align2, Color32, FontId, Pos2, Rect as ERect, Sense, Stroke, TextureHandle, pos2, vec2};
-use photocraft_algo::camera_raw::{CameraRaw, Wheel, curve_lut};
+use photocraft_algo::camera_raw::{AutoTone, CameraRaw, Wheel, curve_lut};
 use photocraft_algo::histogram::RgbHistogram;
 
 use crate::camera_raw_scope_ui::{MAX_SAMPLERS, ToneZone};
@@ -79,10 +82,17 @@ pub struct CameraRawDialog {
     /// The last worker failure the status bar shows, with the preview revision it failed on.
     preview_error: Option<(String, u64)>,
     /// Settings before each finished edit, so Ctrl+Z works inside the dialog (#4100).
-    undo: Vec<CameraRaw>,
-    redo: Vec<CameraRaw>,
-    /// Params at pointer-down. One drag is one undo step.
-    edit_origin: Option<CameraRaw>,
+    undo: Vec<EditState>,
+    redo: Vec<EditState>,
+    /// Settings and what Auto, B&W and White Balance remember, at pointer-down. One drag or
+    /// click is one undo step.
+    edit_origin: Option<EditState>,
+    /// Edit › Auto while it is on: the settings it replaced and the ones it set.
+    auto: Option<(AutoTone, AutoTone)>,
+    /// Edit › B&W while it is on: the Saturation and Vibrance it replaced.
+    black_and_white: Option<(f32, f32)>,
+    /// The Temperature and Tint White Balance › Auto last set.
+    white_balance_auto: Option<(f32, f32)>,
 }
 
 impl CameraRawDialog {
@@ -97,6 +107,9 @@ impl CameraRawDialog {
             Target::SmartFilter(index) => Some(index),
             Target::NewFilter | Target::OpenRaw => None,
         });
+        result["auto"] = json!(self.auto_on());
+        result["blackAndWhite"] = json!(self.black_and_white_on());
+        result["whiteBalance"] = json!(self.white_balance_mode());
         result["openingRaw"] = json!(self.raw_open.as_ref().map(|r| json!({"name": r.name, "path": r.path, "demosaic": r.demosaic.id()})));
         result["view"] = json!(navigation);
         result["sourceSize"] = json!([self.full_w, self.full_h]);
@@ -136,6 +149,93 @@ impl CameraRawDialog {
     /// Params for the engine: only the settings that differ from the defaults.
     pub fn command_params(&self) -> Value {
         non_defaults(&self.params)
+    }
+
+    /// Edit › Auto is on: it set the Light settings and they have not been moved since.
+    pub fn auto_on(&self) -> bool {
+        self.auto.is_some_and(|(_, set)| AutoTone::of(&self.params) == set)
+    }
+
+    /// Edit › B&W is on: Saturation is at −100.
+    pub fn black_and_white_on(&self) -> bool {
+        self.params.saturation <= -100.0
+    }
+
+    /// Edit › Auto: fits the Light settings to the image, or puts back the ones it replaced.
+    fn toggle_auto(&mut self) {
+        if self.auto_on()
+            && let Some((before, _)) = self.auto.take()
+        {
+            let black_and_white = self.black_and_white_on();
+            before.apply(&mut self.params);
+            if black_and_white {
+                // B&W stays on; turning it off later brings back the colour from before Auto. If B&W
+                // was already on before Auto, the colour it saved is older than that and stays.
+                self.params.saturation = -100.0;
+                self.params.vibrance = 0.0;
+                if before.saturation > -100.0
+                    && let Some(kept) = &mut self.black_and_white
+                {
+                    *kept = (before.saturation, before.vibrance);
+                }
+            }
+        } else {
+            let before = AutoTone::of(&self.params);
+            let set = photocraft_algo::camera_raw::auto_tone(&self.proxy, self.pw, self.ph, &self.params);
+            set.apply(&mut self.params);
+            self.auto = Some((before, set));
+        }
+        self.dirty = true;
+    }
+
+    /// Edit › B&W: a black-and-white treatment (Saturation −100, no Vibrance), or the colour back.
+    fn toggle_black_and_white(&mut self) {
+        if self.black_and_white_on() {
+            let (saturation, vibrance) = self.black_and_white.take().unwrap_or((0.0, 0.0));
+            self.params.saturation = if saturation <= -100.0 { 0.0 } else { saturation };
+            self.params.vibrance = vibrance;
+        } else {
+            self.black_and_white = Some((self.params.saturation, self.params.vibrance));
+            self.params.saturation = -100.0;
+            self.params.vibrance = 0.0;
+        }
+        if let Some((_, set)) = &mut self.auto {
+            set.vibrance = self.params.vibrance;
+            set.saturation = self.params.saturation;
+        }
+        self.dirty = true;
+    }
+
+    /// White Balance: `asShot`, `auto` (what Auto last set, still unmoved) or `custom`.
+    pub fn white_balance_mode(&self) -> &'static str {
+        let now = (self.params.temperature, self.params.tint);
+        if self.white_balance_auto == Some(now) {
+            "auto"
+        } else if now == (0.0, 0.0) {
+            "asShot"
+        } else {
+            "custom"
+        }
+    }
+
+    /// White Balance › As Shot or Auto; `custom` (or anything else) leaves the sliders.
+    fn set_white_balance(&mut self, mode: &str) {
+        let (temperature, tint) = match mode {
+            "asShot" => {
+                // Forget Auto, or an Auto result of (0, 0) would still read as Auto. Undo puts it back.
+                self.white_balance_auto = None;
+                (0.0, 0.0)
+            }
+            "auto" => {
+                let wb = photocraft_algo::camera_raw::auto_white_balance(&self.proxy, self.pw, self.ph);
+                self.white_balance_auto = Some(wb);
+                wb
+            }
+            _ => return,
+        };
+        self.params.temperature = temperature;
+        self.params.tint = tint;
+        self.dirty = true;
     }
 
     fn image(px: &[[f32; 4]], w: usize, h: usize, display: &photocraft_engine::display_color::CanvasDisplay) -> egui::ColorImage {
@@ -818,6 +918,9 @@ fn open_pixels(
         undo: Vec::new(),
         redo: Vec::new(),
         edit_origin: None,
+        auto: None,
+        black_and_white: None,
+        white_balance_auto: None,
     };
     d.render(ctx);
     app.camera_raw = Some(d);
@@ -856,8 +959,10 @@ pub fn menu(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Val
     for (key, value) in fields {
         match key.as_str() {
             "set" | "scope" | "view" | "demosaic" => {}
-            "before" | "commit" | "cancel" | "saveSettings" | "loadSettings" | "undo" | "redo" if value.is_boolean() => {}
-            "before" | "commit" | "cancel" | "saveSettings" | "loadSettings" | "undo" | "redo" => {
+            "whiteBalance" if matches!(value.as_str(), Some("asShot" | "auto")) => {}
+            "whiteBalance" => return Some(Err("Camera Raw whiteBalance must be \"asShot\" or \"auto\"".into())),
+            "before" | "commit" | "cancel" | "saveSettings" | "loadSettings" | "undo" | "redo" | "auto" | "blackAndWhite" if value.is_boolean() => {}
+            "before" | "commit" | "cancel" | "saveSettings" | "loadSettings" | "undo" | "redo" | "auto" | "blackAndWhite" => {
                 return Some(Err(format!("Camera Raw {key} must be a boolean")));
             }
             _ => return Some(Err(format!("unknown Camera Raw ui property {key}"))),
@@ -952,6 +1057,26 @@ fn menu_update(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &Value) -> Opti
         d.dirty = true;
         d.params = next_params;
     }
+    // Edit › Auto and B&W: `true` turns one on, `false` off; already there is no edit.
+    type Toggle = (&'static str, fn(&CameraRawDialog) -> bool, fn(&mut CameraRawDialog));
+    let toggles: [Toggle; 2] = [
+        ("auto", CameraRawDialog::auto_on, CameraRawDialog::toggle_auto),
+        ("blackAndWhite", CameraRawDialog::black_and_white_on, CameraRawDialog::toggle_black_and_white),
+    ];
+    for (key, is_on, toggle) in toggles {
+        if let Some(want) = ui.get(key).and_then(Value::as_bool)
+            && want != is_on(d)
+        {
+            remember_edit(d);
+            toggle(d);
+        }
+    }
+    if let Some(mode) = ui.get("whiteBalance").and_then(Value::as_str)
+        && mode != d.white_balance_mode()
+    {
+        remember_edit(d);
+        d.set_white_balance(mode);
+    }
     if let Some(b) = ui.get("before").and_then(Value::as_bool) {
         d.show_before = b;
     }
@@ -1036,35 +1161,58 @@ fn report_file_error(app: &mut PhotocraftApp, r: Result<Value, String>) {
 
 const RAW_UNDO_LIMIT: usize = 40;
 
+/// One dialog undo step: the settings, and what Edit › Auto, B&W and White Balance › Auto
+/// remember about them, so undo and redo bring those back with the settings.
+#[derive(Clone, Debug, PartialEq)]
+struct EditState {
+    params: CameraRaw,
+    auto: Option<(AutoTone, AutoTone)>,
+    black_and_white: Option<(f32, f32)>,
+    white_balance_auto: Option<(f32, f32)>,
+}
+
+impl EditState {
+    fn of(d: &CameraRawDialog) -> Self {
+        Self { params: d.params.clone(), auto: d.auto, black_and_white: d.black_and_white, white_balance_auto: d.white_balance_auto }
+    }
+
+    fn restore(self, d: &mut CameraRawDialog) {
+        if d.params.point_curve != self.params.point_curve {
+            d.curve_state = Default::default();
+        }
+        d.params = self.params;
+        d.auto = self.auto;
+        d.black_and_white = self.black_and_white;
+        d.white_balance_auto = self.white_balance_auto;
+        d.dirty = true;
+        d.edit_origin = None;
+    }
+}
+
 fn remember_edit(d: &mut CameraRawDialog) {
+    remember_state(d, EditState::of(d));
+}
+
+/// Records `state`, from before an edit, as the next undo step.
+fn remember_state(d: &mut CameraRawDialog, state: EditState) {
     if d.undo.len() == RAW_UNDO_LIMIT {
         d.undo.remove(0);
     }
-    d.undo.push(d.params.clone());
+    d.undo.push(state);
     d.redo.clear();
 }
 
 fn undo_edit(d: &mut CameraRawDialog) -> bool {
     let Some(prev) = d.undo.pop() else { return false };
-    d.redo.push(d.params.clone());
-    if d.params.point_curve != prev.point_curve {
-        d.curve_state = Default::default();
-    }
-    d.params = prev;
-    d.dirty = true;
-    d.edit_origin = None;
+    d.redo.push(EditState::of(d));
+    prev.restore(d);
     true
 }
 
 fn redo_edit(d: &mut CameraRawDialog) -> bool {
     let Some(next) = d.redo.pop() else { return false };
-    d.undo.push(d.params.clone());
-    if d.params.point_curve != next.point_curve {
-        d.curve_state = Default::default();
-    }
-    d.params = next;
-    d.dirty = true;
-    d.edit_origin = None;
+    d.undo.push(EditState::of(d));
+    next.restore(d);
     true
 }
 
@@ -1154,6 +1302,46 @@ fn tone_row(ui: &mut egui::Ui, dirty: &mut bool, alt: &mut Option<ToneZone>, zon
     if r.dragged() && ui.input(|i| i.modifiers.alt) {
         *alt = Some(zone);
     }
+}
+
+/// The Edit row above Light, as in Camera Raw: Auto and B&W, each a toggle. The pointer-up
+/// bookkeeping in [`draw`] makes each click one dialog undo step.
+fn edit_header(ui: &mut egui::Ui, d: &mut CameraRawDialog) {
+    let tr = |s| crate::i18n::tr_ctx(crate::i18n::current(), "cameraRaw", s);
+    let text = Tokens::get(ui.ctx()).text;
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(tr("Edit")).font(crate::theme::medium(13.0)).color(text));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if edit_toggle(ui, tr("B&W"), d.black_and_white_on()).on_hover_text(tr("Black & White treatment")).clicked() {
+                d.toggle_black_and_white();
+            }
+            if edit_toggle(ui, tr("Auto"), d.auto_on()).on_hover_text(tr("Automatic Light settings for this image")).clicked() {
+                d.toggle_auto();
+            }
+        });
+    });
+    ui.add_space(4.0);
+}
+
+/// White Balance: As Shot / Auto / Custom, as in Camera Raw. Custom only names moved sliders.
+/// True when the user picked an option.
+fn white_balance_row(ui: &mut egui::Ui, mode: &mut &'static str) -> bool {
+    let tr = |s| crate::i18n::tr_ctx(crate::i18n::current(), "cameraRaw", s);
+    let mut picked = false;
+    ui.horizontal(|ui| {
+        widgets::section_label(ui, tr("White Balance"));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let options = [("asShot", tr("As Shot")), ("auto", tr("Auto")), ("custom", tr("Custom"))];
+            picked = widgets::dropdown_literal(ui, "cr-white-balance", mode, &options, 150.0);
+        });
+    });
+    picked
+}
+
+fn edit_toggle(ui: &mut egui::Ui, label: &str, on: bool) -> egui::Response {
+    let r = ui.add(egui::Button::selectable(on, label).min_size(vec2(44.0, 22.0)));
+    r.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, on, label));
+    r
 }
 
 fn section(ui: &mut egui::Ui, title: &str, open: bool, body: impl FnOnce(&mut egui::Ui)) {
@@ -1267,7 +1455,7 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         history_keys(d, ctx);
         let pointer = ctx.input(|i| i.pointer.primary_down());
         if pointer && d.edit_origin.is_none() {
-            d.edit_origin = Some(d.params.clone());
+            d.edit_origin = Some(EditState::of(d));
         }
         if let Some(display) = &current_display
             && display.key != d.display.key
@@ -1350,6 +1538,9 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         let mut dirty = false;
         egui::ScrollArea::vertical().id_salt("camera-raw-props").show(&mut props, |ui| {
             ui.spacing_mut().item_spacing.y = 4.0;
+            edit_header(ui, d);
+            let mut white_balance = d.white_balance_mode();
+            let mut white_balance_picked = false;
             let p = &mut d.params;
             let alt = &mut d.scope.alt_tone;
             let (ts, tn) = (temp_stops(), tint_stops());
@@ -1362,7 +1553,7 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
                 tone_row(ui, &mut dirty, alt, ToneZone::Blacks, &mut p.blacks);
             });
             section(ui, "Color", false, |ui| {
-                widgets::section_label(ui, tl!("White Balance: As Shot"));
+                white_balance_picked = white_balance_row(ui, &mut white_balance);
                 row(ui, &mut dirty, "Temperature", &mut p.temperature, -100.0..=100.0, Some(&ts));
                 row(ui, &mut dirty, "Tint", &mut p.tint, -100.0..=100.0, Some(&tn));
                 row(ui, &mut dirty, "Vibrance", &mut p.vibrance, -100.0..=100.0, None);
@@ -1451,6 +1642,9 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
                 row(ui, &mut dirty, "Color", &mut p.noise_color, 0.0..=100.0, None);
                 row(ui, &mut dirty, "Color Detail", &mut p.noise_color_detail, 0.0..=100.0, None);
             });
+            if white_balance_picked {
+                d.set_white_balance(white_balance);
+            }
         });
         super::camera_raw_scope_ui::floating(ctx, d, scope, right);
         super::camera_raw_scope_ui::shortcuts(ctx, scope);
@@ -1488,11 +1682,9 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         }
         if !ctx.input(|i| i.pointer.primary_down())
             && let Some(origin) = d.edit_origin.take()
-            && origin != d.params
+            && origin != EditState::of(d)
         {
-            let edited = std::mem::replace(&mut d.params, origin);
-            remember_edit(d);
-            d.params = edited;
+            remember_state(d, origin);
         }
     });
     super::camera_raw_scope_ui::persist(app, ctx);
@@ -1835,6 +2027,195 @@ mod tests {
         let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"cancel": true}})).unwrap().unwrap();
         assert_eq!(r["cancelled"], true);
         assert!(menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": "x"}}})).unwrap().is_err());
+    }
+
+    #[test]
+    fn edit_auto_and_black_and_white_toggle_and_undo() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        let ctx = egui::Context::default();
+        app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.run("edit.fill", json!({"color": "#3a2a20"})).unwrap();
+        let ui = |app: &mut PhotocraftApp, v: Value| menu(app, &ctx, "filter.cameraRaw", &json!({"ui": v})).unwrap().unwrap();
+        menu(&mut app, &ctx, "filter.cameraRaw", &json!({})).unwrap().unwrap();
+        let r = ui(&mut app, json!({"set": {"clarity": 10}}));
+        assert_eq!((r["auto"].clone(), r["blackAndWhite"].clone()), (json!(false), json!(false)));
+        // Auto brightens a dark layer and leaves the other settings alone.
+        let r = ui(&mut app, json!({"auto": true}));
+        assert_eq!(r["auto"], true);
+        assert!(r["params"]["exposure"].as_f64().unwrap() > 0.0, "{}", r["params"]);
+        assert_eq!(r["params"]["clarity"], 10.0);
+        let again = ui(&mut app, json!({"auto": true}));
+        assert_eq!(again["params"], r["params"], "already on: no edit");
+        // B&W is Saturation −100 without Vibrance, and Auto stays on.
+        let r = ui(&mut app, json!({"blackAndWhite": true}));
+        assert_eq!((r["blackAndWhite"].clone(), r["auto"].clone()), (json!(true), json!(true)));
+        assert_eq!((r["params"]["saturation"].clone(), r["params"]["vibrance"].clone()), (json!(-100.0), json!(0.0)));
+        // Off again puts back what each replaced; undo steps back through them.
+        let r = ui(&mut app, json!({"auto": false, "blackAndWhite": false}));
+        assert_eq!((r["params"]["exposure"].clone(), r["params"]["saturation"].clone()), (json!(0.0), json!(0.0)));
+        let r = ui(&mut app, json!({"undo": true}));
+        assert_eq!(r["params"]["saturation"], -100.0);
+        // Moving a Light slider by hand turns Auto off.
+        let r = ui(&mut app, json!({"set": {"exposure": 0.3}}));
+        assert_eq!(r["auto"], false);
+        assert!(menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"auto": 1}})).unwrap().is_err());
+        // White Balance › Auto cools the warm layer; As Shot puts it back; a moved slider is Custom.
+        let r = ui(&mut app, json!({"whiteBalance": "auto"}));
+        assert_eq!(r["whiteBalance"], "auto");
+        assert!(r["params"]["temperature"].as_f64().unwrap() < 0.0, "{}", r["params"]);
+        let r = ui(&mut app, json!({"set": {"tint": 7}}));
+        assert_eq!(r["whiteBalance"], "custom");
+        let r = ui(&mut app, json!({"whiteBalance": "asShot"}));
+        assert_eq!((r["whiteBalance"].clone(), r["params"]["temperature"].clone(), r["params"]["tint"].clone()), (json!("asShot"), json!(0.0), json!(0.0)));
+        assert!(menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"whiteBalance": "custom"}})).unwrap().is_err());
+        ui(&mut app, json!({"cancel": true}));
+    }
+
+    #[test]
+    fn black_and_white_before_auto_keeps_its_colour_when_auto_turns_off() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        let ctx = egui::Context::default();
+        app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.run("edit.fill", json!({"color": "#3a2a20"})).unwrap();
+        let ui = |app: &mut PhotocraftApp, v: Value| menu(app, &ctx, "filter.cameraRaw", &json!({"ui": v})).unwrap().unwrap();
+        menu(&mut app, &ctx, "filter.cameraRaw", &json!({})).unwrap().unwrap();
+        ui(&mut app, json!({"set": {"saturation": 20, "vibrance": 15}}));
+        ui(&mut app, json!({"blackAndWhite": true}));
+        let r = ui(&mut app, json!({"auto": true}));
+        assert_eq!((r["auto"].clone(), r["blackAndWhite"].clone()), (json!(true), json!(true)));
+        let r = ui(&mut app, json!({"auto": false}));
+        assert_eq!((r["auto"].clone(), r["blackAndWhite"].clone()), (json!(false), json!(true)));
+        // B&W off brings back the colour it saved, not the B&W state Auto replaced.
+        let r = ui(&mut app, json!({"blackAndWhite": false}));
+        assert_eq!((r["params"]["saturation"].clone(), r["params"]["vibrance"].clone()), (json!(20.0), json!(15.0)));
+        ui(&mut app, json!({"cancel": true}));
+    }
+
+    #[test]
+    fn as_shot_after_an_auto_white_balance_of_zero_reads_as_shot() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        let ctx = egui::Context::default();
+        app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.run("edit.fill", json!({"color": "#3a2a20"})).unwrap();
+        let ui = |app: &mut PhotocraftApp, v: Value| menu(app, &ctx, "filter.cameraRaw", &json!({"ui": v})).unwrap().unwrap();
+        menu(&mut app, &ctx, "filter.cameraRaw", &json!({})).unwrap().unwrap();
+        // A neutral image: Auto found nothing to correct.
+        ui(&mut app, json!({"set": {"temperature": 12}}));
+        app.camera_raw.as_mut().unwrap().white_balance_auto = Some((0.0, 0.0));
+        let r = ui(&mut app, json!({"whiteBalance": "asShot"}));
+        assert_eq!((r["whiteBalance"].clone(), r["params"]["temperature"].clone()), (json!("asShot"), json!(0.0)));
+        // Undo brings back what Auto set, and reads Auto again; redo is As Shot.
+        let r = ui(&mut app, json!({"whiteBalance": "auto"}));
+        assert_eq!(r["whiteBalance"], "auto");
+        assert_eq!(ui(&mut app, json!({"whiteBalance": "asShot"}))["whiteBalance"], "asShot");
+        let r = ui(&mut app, json!({"undo": true}));
+        assert_eq!(r["whiteBalance"], "auto");
+        assert!(r["params"]["temperature"].as_f64().unwrap() < 0.0, "{}", r["params"]);
+        assert_eq!(ui(&mut app, json!({"redo": true}))["whiteBalance"], "asShot");
+        ui(&mut app, json!({"cancel": true}));
+    }
+
+    #[test]
+    fn undo_and_redo_bring_back_what_auto_and_black_and_white_remember() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        let ctx = egui::Context::default();
+        app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.run("edit.fill", json!({"color": "#3a2a20"})).unwrap();
+        let ui = |app: &mut PhotocraftApp, v: Value| menu(app, &ctx, "filter.cameraRaw", &json!({"ui": v})).unwrap().unwrap();
+        menu(&mut app, &ctx, "filter.cameraRaw", &json!({})).unwrap().unwrap();
+        // B&W off, then undo: B&W is on again and still knows the colour it replaced.
+        ui(&mut app, json!({"set": {"saturation": 20, "vibrance": 15}}));
+        ui(&mut app, json!({"blackAndWhite": true}));
+        let r = ui(&mut app, json!({"blackAndWhite": false}));
+        assert_eq!(r["params"]["saturation"], 20.0);
+        let r = ui(&mut app, json!({"undo": true}));
+        assert_eq!((r["blackAndWhite"].clone(), r["params"]["saturation"].clone()), (json!(true), json!(-100.0)));
+        let r = ui(&mut app, json!({"blackAndWhite": false}));
+        assert_eq!((r["params"]["saturation"].clone(), r["params"]["vibrance"].clone()), (json!(20.0), json!(15.0)));
+        // Auto off, then undo: Auto is on again, and off puts back the settings before it.
+        let on = ui(&mut app, json!({"auto": true}));
+        assert!(on["params"]["exposure"].as_f64().unwrap() > 0.0, "{}", on["params"]);
+        assert_eq!(ui(&mut app, json!({"auto": false}))["params"]["exposure"], 0.0);
+        let r = ui(&mut app, json!({"undo": true}));
+        assert_eq!((r["auto"].clone(), r["params"].clone()), (json!(true), on["params"].clone()));
+        let r = ui(&mut app, json!({"auto": false}));
+        assert_eq!((r["auto"].clone(), r["params"]["exposure"].clone()), (json!(false), json!(0.0)));
+        // Undo past Auto on turns it off; redo turns it on again.
+        ui(&mut app, json!({"undo": true}));
+        let r = ui(&mut app, json!({"undo": true}));
+        assert_eq!((r["auto"].clone(), r["params"]["exposure"].clone()), (json!(false), json!(0.0)));
+        let r = ui(&mut app, json!({"redo": true}));
+        assert_eq!((r["auto"].clone(), r["params"].clone()), (json!(true), on["params"].clone()));
+        ui(&mut app, json!({"cancel": true}));
+    }
+
+    /// A click in the dialog is one undo step that also brings back what B&W and White Balance
+    /// › Auto remember, even when the click changes only that and no setting moves.
+    #[test]
+    fn a_dialog_click_undoes_with_what_auto_and_black_and_white_remember() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        fn click(h: &mut Harness<'_, PhotocraftApp>, at: egui::Pos2) {
+            h.hover_at(at);
+            h.run_steps(1);
+            for pressed in [true, false] {
+                h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() });
+                h.run_steps(1);
+            }
+            h.run_steps(2);
+        }
+        fn state(h: &Harness<'_, PhotocraftApp>) -> Value {
+            let app = h.state();
+            app.camera_raw.as_ref().unwrap().describe(&app.ui.camera_raw_scope, &app.ui.camera_raw_preview)
+        }
+        let mut h = Harness::builder().with_size(egui::vec2(1440.0, 1000.0)).with_max_steps(64).build_eframe(|cc| {
+            PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+            app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+            app.run("layer.new.layer", json!({})).unwrap();
+            app.run("edit.fill", json!({"color": "#3a2a20"})).unwrap();
+            open(&mut app, &cc.egui_ctx).unwrap();
+            app
+        });
+        h.run_steps(4);
+        let ctx = h.ctx.clone();
+        let ui = |h: &mut Harness<'_, PhotocraftApp>, v: Value| menu(h.state_mut(), &ctx, "filter.cameraRaw", &json!({"ui": v})).unwrap().unwrap();
+        ui(&mut h, json!({"set": {"saturation": 20, "vibrance": 15}}));
+        let bw = h.get_by_label("B&W").rect().center();
+        click(&mut h, bw);
+        assert_eq!(state(&h)["blackAndWhite"], true);
+        click(&mut h, bw);
+        assert_eq!(state(&h)["params"]["saturation"], 20.0);
+        // Undoing the click turns B&W on again, still knowing the colour it replaced.
+        let r = ui(&mut h, json!({"undo": true}));
+        assert_eq!((r["blackAndWhite"].clone(), r["params"]["saturation"].clone()), (json!(true), json!(-100.0)));
+        h.run_steps(2);
+        click(&mut h, bw);
+        let r = state(&h);
+        assert_eq!((r["params"]["saturation"].clone(), r["params"]["vibrance"].clone()), (json!(20.0), json!(15.0)));
+
+        // White Balance › Auto found nothing to correct: As Shot moves no slider, yet undo
+        // still has the step and reads Auto again.
+        h.state_mut().camera_raw.as_mut().unwrap().white_balance_auto = Some((0.0, 0.0));
+        h.run_steps(2);
+        assert_eq!(state(&h)["whiteBalance"], "auto");
+        let color = h.get_by_role_and_label(egui::accesskit::Role::Button, "Color").rect();
+        click(&mut h, color.center());
+        h.run_steps(12);
+        // The White Balance selector: right-aligned on its row, like the B&W toggle above it.
+        let row = h.get_by_label("White Balance").rect();
+        let selector = egui::pos2(h.get_by_label("B&W").rect().right() - 40.0, row.center().y);
+        click(&mut h, selector);
+        h.run_steps(4);
+        let as_shot = h.get_by_label("As Shot").rect().center();
+        click(&mut h, as_shot);
+        let r = state(&h);
+        assert_eq!((r["whiteBalance"].clone(), r["params"]["temperature"].clone()), (json!("asShot"), json!(0.0)));
+        let r = ui(&mut h, json!({"undo": true}));
+        assert_eq!((r["whiteBalance"].clone(), r["params"]["saturation"].clone()), (json!("auto"), json!(20.0)));
     }
 
     /// An app whose importer is the real one, opening a synthetic DNG.

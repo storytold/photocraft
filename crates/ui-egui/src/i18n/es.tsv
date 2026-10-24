@@ -2357,6 +2357,14 @@
 	Tone Histogram	Histograma tonal
 	Show Selected Region	Mostrar región seleccionada
 cameraRaw	Light	Luz
+cameraRaw	Edit	Editar
+cameraRaw	Auto	Auto
+cameraRaw	B&W	B&W
+cameraRaw	Black & White treatment	Tratamiento en blanco y negro
+cameraRaw	Automatic Light settings for this image	Ajustes de luz automáticos para esta imagen
+cameraRaw	White Balance	Balance de blancos
+cameraRaw	As Shot	Como se tomó
+cameraRaw	Custom	Personalizado
 # Camera Raw: contextual controls and window title
 	Camera Raw Filter ({layer})	Filtro de Camera Raw ({layer})
 	Camera Raw ({name})	Camera Raw ({name})
