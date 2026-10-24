@@ -1,4 +1,4 @@
-PhotoCraft's Korean, German, Spanish, Brazilian Portuguese, Italian, Ukrainian, Dutch, Czech,
+PhotoCraft's Arabic, Korean, German, Spanish, Brazilian Portuguese, Italian, Ukrainian, Dutch, Czech,
 Turkish, Hungarian, Serbian and Russian UI translation catalogs are licensed under MIT OR
 Apache-2.0, at your option.
 The full license texts are in ../../../../LICENSE-MIT and ../../../../LICENSE-APACHE.
