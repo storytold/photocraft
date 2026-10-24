@@ -457,7 +457,7 @@
 	All Layers	Todas as camadas
 	Hidden Layers	Camadas ocultas
 	Mask All Objects	Mascarar todos os objetos
-	Subject	Assunto
+	Subject	Objeto
 	Sky	Céu
 	Panels	Painéis
 	Character Panel	Painel Caractere
@@ -1395,7 +1395,7 @@
 	Relative Colorimetric	Colorimétrico relativo
 	Remove	Remover
 	Remove All Pins	Remover todos os alfinetes
-	Remove Background	Remover plano de fundo
+	Remove Background	Remover fundo
 	Remove Planes	Remover planos
 	Remove Tool	Ferramenta Remover
 	Remove stop	Remover parada
@@ -1454,7 +1454,7 @@
 	Search commands, tools and panels…	Pesquisar comandos, ferramentas e painéis…
 	Search fonts	Pesquisar fontes
 	Select All	Selecionar tudo
-	Select Subject	Selecionar assunto
+	Select Subject	Selecionar objeto
 	Select a type layer or click into text to insert glyphs	Selecione uma camada de texto ou clique no texto para inserir glifos
 	Select text to apply a character style	Selecione um texto para aplicar um estilo de caractere
 	Select:	Selecionar:
@@ -2483,7 +2483,7 @@
 	Flash	Flash
 	Lens Info	Informações da lente
 	ISO Speed	Sensibilidade ISO
-	Subject Distance	Distância do assunto
+	Subject Distance	Distância do objeto
 	DateTime Original	Data e hora originais
 	Create Date	Data de criação
 	Modify Date	Data de modificação
@@ -3017,10 +3017,10 @@ fontWeight	Italic	Itálico
 	Dash offset	Deslocamento do tracejado
 	Open paths use centered strokes	Caminhos abertos usam traçados centralizados
 	Use finite lengths and a positive pattern total	Use comprimentos finitos e um total de padrão positivo
-	No subject found — try Object Selection or the Lasso	Nenhum assunto encontrado — tente Seleção de objeto ou o Laço
+	No subject found — try Object Selection or the Lasso	Nenhum objeto encontrado — tente Seleção de objeto ou o Laço
 	Quick Selection found nothing there	A Seleção rápida não encontrou nada ali
 	Object Selection found nothing there — try a tighter rectangle	A Seleção de objeto não encontrou nada ali — tente um retângulo mais justo
-	No subject found — try a rectangle around the object	Nenhum assunto encontrado — tente um retângulo ao redor do objeto
+	No subject found — try a rectangle around the object	Nenhum objeto encontrado — tente um retângulo ao redor do objeto
 	Click the first point or press {key} to close · {del} removes a point · Esc cancels	Clique no primeiro ponto ou pressione {key} para fechar · {del} remove um ponto · Esc cancela
 	Click, then move along an edge · click to fasten a point · {alt}-click for a straight segment · double-click to close	Clique e siga uma borda · clique para fixar um ponto · {alt}-clique para um segmento reto · clique duas vezes para fechar
 	Follows only edges this close to the pointer ([ and ] change it)	Segue só bordas a esta distância do ponteiro ([ e ] mudam o valor)
