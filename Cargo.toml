@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/*", "apps/*", "xtask"]
+exclude = ["vendor/winit"]
 default-members = ["crates/*", "apps/photocraft", "apps/photocraft-cli", "xtask"]
 
 [workspace.package]
@@ -172,3 +173,6 @@ opt-level = "z"
 [profile.wasm-release.package.photocraft-paint]
 opt-level = 3
 
+# Windows 11 mixed-DPI backport; provenance/removal criteria: vendor/README.md.
+[patch.crates-io]
+winit = { path = "vendor/winit" }
