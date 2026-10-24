@@ -275,7 +275,8 @@ fn variants(p: &Value) -> Vec<Value> {
 
 /// The flattened preview image: pixels, width, height, full-size / proxy pixel ratio.
 type WebProxy = (Arc<Vec<[f32; 4]>>, u32, u32, f64, egui::Vec2);
-type WebCache = (String, Arc<egui::TextureHandle>, Option<(usize, Option<usize>, &'static str)>);
+/// The pane's texture with its size estimate, or the error that kept it from encoding.
+type WebCache = (String, Arc<egui::TextureHandle>, Result<Option<(usize, Option<usize>, &'static str)>, String>);
 
 /// Renders one preview pane: the original (`None`) or an optimised variant.
 fn web_pane(app: &PhotocraftApp, ui: &mut egui::Ui, size: egui::Vec2, p: Option<&Value>, f: &mut Map<String, Value>, pane: usize, frame: Option<usize>) {
@@ -296,7 +297,8 @@ fn web_pane(app: &PhotocraftApp, ui: &mut egui::Ui, size: egui::Vec2, p: Option<
             let (fw, fh) = match web_preview::dimensions(&doc, &base) {
                 Ok(size) => size,
                 Err(error) => {
-                    ui.label(error);
+                    // Truncated: a long error must not widen the row of panes (#8830).
+                    ui.add(egui::Label::new(error).truncate());
                     return;
                 }
             };
@@ -328,18 +330,16 @@ fn web_pane(app: &PhotocraftApp, ui: &mut egui::Ui, size: egui::Vec2, p: Option<
         Some((_, tex, info)) => (tex, info),
         None => {
             let (rgba, info) = match p {
-                None => (px.iter().flat_map(|q| q.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8)).collect::<Vec<u8>>(), None),
+                None => (px.iter().flat_map(|q| q.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8)).collect::<Vec<u8>>(), Ok(None)),
                 Some(p) => match web_preview::optimized(ui, key, &format!("{}|{rev}|{frame:?}|{size_sig}", doc.id.0), p, &px, w, h) {
-                    Ok((preview, bytes, colors, ext)) => (preview, Some(((bytes as f64 * ratio) as usize, colors, ext))),
-                    Err(error) => {
-                        ui.label(error);
-                        (vec![0; (w * h * 4) as usize], None)
-                    }
+                    Ok((preview, bytes, colors, ext)) => (preview, Ok(Some(((bytes as f64 * ratio) as usize, colors, ext)))),
+                    // Shown in the pane's own caption, which can't widen the dialog (#8830).
+                    Err(error) => (vec![0; (w * h * 4) as usize], Err(error)),
                 },
             };
             let img = egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &rgba);
             let tex = Arc::new(ui.ctx().load_texture("web-pane", img, egui::TextureOptions::LINEAR));
-            ui.data_mut(|d| d.insert_temp(key, (sig, tex.clone(), info)));
+            ui.data_mut(|d| d.insert_temp(key, (sig, tex.clone(), info.clone())));
             (tex, info)
         }
     };
@@ -355,7 +355,7 @@ fn web_pane(app: &PhotocraftApp, ui: &mut egui::Ui, size: egui::Vec2, p: Option<
         ui.painter().rect_stroke(r, 0.0, egui::Stroke::new(1.0, t.separator), egui::StrokeKind::Inside);
         let (l1, l2) = match (p, info) {
             (None, _) => ("Original".to_string(), format!("{}  ·  {} × {} px", doc.name, doc.size.width, doc.size.height)),
-            (Some(_), Some((bytes, colors, ext))) => {
+            (Some(_), Ok(Some((bytes, colors, ext)))) => {
                 // Photoshop's download estimate at 56.6 Kbps.
                 let secs = (bytes as f64 * 8.0 / 56_600.0).ceil();
                 (
@@ -363,7 +363,8 @@ fn web_pane(app: &PhotocraftApp, ui: &mut egui::Ui, size: egui::Vec2, p: Option<
                     format!("{secs} sec @ 56.6 Kbps{}", colors.map(|c| format!("  ·  {c} colors")).unwrap_or_default()),
                 )
             }
-            (Some(_), None) => ("—".into(), String::new()),
+            (Some(_), Ok(None)) => ("—".into(), String::new()),
+            (Some(_), Err(error)) => ("—".into(), error),
         };
         let l1 = if ratio > 1.001 { format!("{l1}  ·  Proxy preview") } else { l1 };
         ui.add(egui::Label::new(egui::RichText::new(l1).color(t.text).size(11.5)).truncate());
@@ -601,10 +602,7 @@ fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                 if fmt != "png24" || !b(f, "transparency", true) {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new(tl!("Matte")).color(t.text_dim));
-                        let mut m = s(f, "matte", "#ffffff");
-                        if ui.add(egui::TextEdit::singleline(&mut m).desired_width(80.0)).changed() {
-                            f.insert("matte".into(), json!(m));
-                        }
+                        matte_field(ui, f);
                     });
                 }
                 ui.add_space(6.0);
@@ -641,6 +639,32 @@ fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
             });
         });
     });
+}
+
+/// Save for Web's Matte: `#rrggbb` or `none`. While it has focus the field shows exactly what is
+/// typed, and only a valid entry reaches the settings, so the previews never see a partial
+/// colour such as `#1111` (#8830); an invalid entry snaps back when focus leaves.
+fn matte_field(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
+    let id = ui.make_persistent_id("web-matte");
+    let typing = if ui.memory(|m| m.has_focus(id)) { ui.data(|d| d.get_temp::<String>(id)) } else { None };
+    let mut text = typing.unwrap_or_else(|| s(f, "matte", "#ffffff"));
+    let resp = ui.add(egui::TextEdit::singleline(&mut text).id(id).desired_width(80.0));
+    if resp.has_focus() {
+        ui.data_mut(|d| d.insert_temp(id, text.clone()));
+    } else {
+        ui.data_mut(|d| d.remove::<String>(id));
+    }
+    if !resp.changed() {
+        return;
+    }
+    let matte = if text.trim().eq_ignore_ascii_case("none") {
+        Some("none".to_string())
+    } else {
+        crate::color_picker_ui::parse_hex(&text).map(crate::color_picker_ui::hex)
+    };
+    if let Some(matte) = matte {
+        f.insert("matte".into(), json!(matte));
+    }
 }
 
 /// A size row in a two-column grid: the label, then a field showing `shown`. Returns the typed
@@ -1718,6 +1742,68 @@ mod tests {
             app.services.write = Some(Box::new(|_, _| panic!("denied palette must not write")));
             assert_eq!(crate::dialogs::confirm(&mut app, id).unwrap_err(), "palette denied");
             assert!(!app.file_dialog_open());
+        }
+    }
+
+    /// #8830: an invalid Matte (`#1111`, empty; set here as `ui.dialog.set` would) fails the
+    /// preview's encode, and the error must not widen the dialog.
+    #[test]
+    fn save_for_web_keeps_its_width_while_the_matte_is_typed() {
+        let (mut app, _) = app();
+        let id = open_web(&mut app);
+        let fields = &mut app.ui.dialog_mut(id).unwrap().fields;
+        fields.insert("format".into(), json!("png8"));
+        fields.insert("matte".into(), json!("#111111"));
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1600.0, 1100.0)).build_ui_state(
+            |ui, app| {
+                if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("semibold".into()))) {
+                    crate::dialogs::show(app, ui.ctx());
+                }
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, Default::default());
+        h.run_steps(5);
+        let dialog = |h: &egui_kittest::Harness<'_, PhotocraftApp>| h.ctx.data(|m| m.get_temp::<Vec<egui::Rect>>(egui::Id::new("pc-dialog-rects"))).unwrap()[0];
+        let before = dialog(&h);
+        for matte in ["#1111", "", "#22222", "#222222"] {
+            h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("matte".into(), json!(matte));
+            h.run_steps(4);
+            let after = dialog(&h);
+            assert_eq!(after.width(), before.width(), "matte {matte:?}: before {before:?}, after {after:?}");
+        }
+    }
+
+    /// #8830: a typed Matte reaches the settings only once it is a whole colour (or `none`).
+    #[test]
+    fn save_for_web_matte_takes_only_whole_colours() {
+        use egui_kittest::kittest::{NodeT, Queryable};
+        let (app, _) = app();
+        let (mut h, id) = web_size_dialog(app);
+        h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("format".into(), json!("png8"));
+        h.run_steps(3);
+        let matte = |h: &egui_kittest::Harness<'static, PhotocraftApp>| h.state().ui.dialogs.iter().find(|d| d.id == id).unwrap().fields["matte"].clone();
+        let field = h
+            .query_all_by_role(egui::accesskit::Role::TextInput)
+            .find(|n| n.accesskit_node().value().as_deref() == Some("#ffffff"))
+            .map(|n| n.rect())
+            .expect("the Matte field");
+        h.hover_at(field.center());
+        h.run_steps(1);
+        h.drag_at(field.center());
+        h.run_steps(1);
+        h.drop_at(field.center());
+        h.run_steps(2);
+        for (typed, want) in [("#1111", "#ffffff"), ("", "#ffffff"), ("#22222g", "#ffffff"), ("#2A2a2A", "#2a2a2a"), ("None", "none")] {
+            h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+            h.key_press(egui::Key::Backspace);
+            if !typed.is_empty() {
+                h.event(egui::Event::Text(typed.into()));
+            }
+            h.run_steps(2);
+            assert_eq!(matte(&h), json!(want), "typed {typed:?}");
+            let shown = h.query_all_by_role(egui::accesskit::Role::TextInput).any(|n| n.accesskit_node().value().unwrap_or_default() == typed);
+            assert!(shown, "the field shows {typed:?} as typed");
         }
     }
 
