@@ -18,6 +18,8 @@
 //! output's layout is decoded in place; anything else goes through one strip- or tile-sized
 //! scratch buffer per worker, so no second full-size buffer exists. Image data cut off by the
 //! end of the file leaves the missing chunks empty and adds a [`DecodeWarning::Truncated`].
+//! [`TiffBands`] runs the same decode a group of bands at a time and hands each group to its
+//! caller, so a document can be filled without the image ever existing whole (#8169).
 //!
 //! Photoshop's private tags are carried as opaque bytes in [`Metadata`]: 34377 (image
 //! resources) and 37724 (`ImageSourceData`, the layers of a layered TIFF). They are read with
@@ -234,6 +236,16 @@ pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError>
 /// carries the page's metadata, a [`DecodeWarning::MorePages`] when the file holds more
 /// full-resolution pages, and a [`DecodeWarning::Truncated`] when image data is cut off.
 pub(crate) fn decode_page(bytes: &[u8], page: Option<usize>, limits: &Limits) -> Result<Image, CodecError> {
+    let (file, dir, more) = open_page(bytes, page)?;
+    let mut img = decode_ifd(&file, &dir, limits)?;
+    img.meta = metadata(&file, &dir, &mut img.icc);
+    img.warnings.extend(more);
+    Ok(img)
+}
+
+/// The file, page `page`'s directory (`None`: the default page) and the
+/// [`DecodeWarning::MorePages`] the page opens with when the file holds more.
+fn open_page(bytes: &[u8], page: Option<usize>) -> Result<(File<'_>, Ifd, Option<DecodeWarning>), CodecError> {
     if camera_raw(bytes) {
         return Err(CodecError::unsupported(F, "camera raw files (such as CR2, NEF, ARW or DNG) are not flat images; decode them with photocraft-raw"));
     }
@@ -248,13 +260,150 @@ pub(crate) fn decode_page(bytes: &[u8], page: Option<usize>, limits: &Limits) ->
         .get(index)
         .ok_or_else(|| CodecError::InvalidImage(format!("TIFF page {index} does not exist (the file has {} directories)", info.pages.len())))?;
     let dir = file.ifd(p.ifd_offset).ok_or_else(|| err("image directory cut off"))?;
-    let mut img = decode_ifd(&file, &dir, limits)?;
-    img.meta = metadata(&file, &dir, &mut img.icc);
     let pages = info.page_count();
-    if pages > 1 {
-        img.warnings.push(DecodeWarning::MorePages { total: info.complete.then_some(u32::try_from(pages).unwrap_or(u32::MAX)) });
+    let more = (pages > 1).then(|| DecodeWarning::MorePages { total: info.complete.then_some(u32::try_from(pages).unwrap_or(u32::MAX)) });
+    Ok((file, dir, more))
+}
+
+/// Output bytes [`TiffBands::decode`] aims to decode at once (at least one band per worker): small
+/// next to the document the rows are written into, and to the copy a caller may convert them to.
+const GROUP_BYTES: usize = 64 << 20;
+
+/// A TIFF page opened for decoding a group of bands at a time, for images too large to hold
+/// twice (#8169): [`TiffBands::decode`] hands each group to its caller, who writes it into the
+/// document, so only one group exists beside the document. The pixels, layout and metadata are
+/// those [`decode_page`] returns; [`TiffBands::upright`] applies the orientation as
+/// [`Image::oriented`] does.
+pub struct TiffBands<'a> {
+    b: &'a [u8],
+    p: Prepared,
+    /// The page's Orientation tag (1–8).
+    stored: u16,
+    /// The orientation the bands are turned by (1: as stored).
+    turn: u16,
+    /// `Limits::max_alloc`: the most one group of bands may take.
+    cap: u64,
+    pub icc: Option<Vec<u8>>,
+    pub meta: Metadata,
+    /// What the decoder noticed: more pages, and after [`TiffBands::decode`] data cut off.
+    pub warnings: Vec<DecodeWarning>,
+}
+
+impl<'a> TiffBands<'a> {
+    /// Opens page `page` (`None`: the page [`decode_page`] opens by default) and checks it
+    /// against `limits`; on 64-bit targets its `max_alloc` bounds each group of bands, not the
+    /// whole image.
+    pub fn open(bytes: &'a [u8], page: Option<usize>, limits: &Limits) -> Result<Self, CodecError> {
+        let (file, dir, more) = open_page(bytes, page)?;
+        // On 32-bit targets the whole image must still fit `max_alloc`, as it did before: the
+        // document holding it shares the same small address space (wasm32: 4 GiB).
+        let p = prepare(&file, &dir, limits, cfg!(target_pointer_width = "32"))?;
+        let band = p.band_bytes()?;
+        if band as u64 > limits.max_alloc {
+            return Err(CodecError::LimitExceeded(format!(
+                "one strip or row of tiles of this {}x{} image decodes to {band} bytes, over the {} byte limit",
+                p.w, p.h, limits.max_alloc
+            )));
+        }
+        let mut icc = None;
+        let meta = metadata(&file, &dir, &mut icc);
+        let stored = ifd::orientation_of(&file, &dir);
+        Ok(TiffBands { b: bytes, p, stored, turn: 1, cap: limits.max_alloc, icc, meta, warnings: more.into_iter().collect() })
     }
-    Ok(img)
+
+    /// The bands turned upright for the page's Orientation tag, as [`Image::oriented`] turns a
+    /// whole image: the size and resolution swap for 5–8, and the EXIF and XMP orientation are
+    /// rewritten to 1.
+    pub fn upright(mut self) -> Self {
+        let o = self.stored;
+        if !(2..=8).contains(&o) || self.turn == o {
+            return self;
+        }
+        self.turn = o;
+        if let Some(e) = &mut self.meta.exif
+            && let Cow::Owned(fixed) = crate::orientation::upright_exif(e)
+        {
+            *e = fixed;
+        }
+        if let Some(x) = &mut self.meta.xmp
+            && let Cow::Owned(fixed) = crate::orientation::upright_xmp(x)
+        {
+            *x = fixed;
+        }
+        if o >= 5 {
+            self.meta.dpi = self.meta.dpi.map(|(x, y)| (y, x));
+        }
+        self
+    }
+
+    /// The page's Orientation tag (1–8; 1 when absent or invalid).
+    pub fn orientation(&self) -> u16 {
+        self.stored
+    }
+
+    /// The size of the image the bands make up (upright when [`TiffBands::upright`] was applied).
+    pub fn dimensions(&self) -> (u32, u32) {
+        if self.turn >= 5 { (self.p.h, self.p.w) } else { (self.p.w, self.p.h) }
+    }
+
+    pub fn layout(&self) -> ChannelLayout {
+        self.p.lay.out_layout
+    }
+
+    pub fn sample_type(&self) -> SampleType {
+        self.p.lay.out
+    }
+
+    /// Decodes the image a group of bands at a time, in order, handing each group to `sink`
+    /// with the position of its top-left pixel in the image [`TiffBands::dimensions`] gives. A
+    /// group is about 64 MiB (at least one strip or row of tiles per worker, at most `max_alloc`). Data
+    /// cut off by the end of the file adds a [`DecodeWarning::Truncated`] to `warnings`.
+    pub fn decode<E: From<CodecError>>(&mut self, mut sink: impl FnMut(u32, u32, &Image) -> Result<(), E>) -> Result<(), E> {
+        let p = &self.p;
+        let band = p.band_bytes()?.max(1);
+        #[cfg(not(target_arch = "wasm32"))]
+        let workers = rayon::current_num_threads();
+        #[cfg(target_arch = "wasm32")]
+        let workers = 1;
+        let cap = usize::try_from(self.cap).unwrap_or(usize::MAX);
+        let per_group = (GROUP_BYTES / band).max(workers).min(cap / band).max(1);
+        let bands = (p.h as usize).div_ceil(p.band_rows.max(1));
+        let mut buf: Vec<u8> = Vec::new();
+        let mut tally = Tally::default();
+        let mut first = 0;
+        while first < bands {
+            let n = per_group.min(bands - first);
+            let y0 = first * p.band_rows;
+            let rows = (n * p.band_rows).min(p.h as usize - y0);
+            let len = p.lay.out_row().checked_mul(rows).ok_or_else(|| CodecError::LimitExceeded("band size".into()))?;
+            // Missing chunks leave their rows as they are: they must start empty in every group.
+            buf = refill_zeroed(buf, len)?;
+            tally = tally + decode_bands(p, self.b, &mut buf, band, first)?;
+            if let Some(signed) = p.lab {
+                convert_ab(&mut buf, p.lay.out_channels(), p.lay.out, signed, false);
+            }
+            let rows = u32::try_from(rows).map_err(|_| err("band too tall"))?;
+            let y0 = u32::try_from(y0).map_err(|_| err("band out of range"))?;
+            let group = Image::from_raw(p.w, rows, p.lay.out_layout, p.lay.out, std::mem::take(&mut buf))?;
+            let (x, y) = match self.turn {
+                3 | 4 => (0, p.h.saturating_sub(y0 + rows)),
+                5 | 8 => (y0, 0),
+                6 | 7 => (p.h.saturating_sub(y0 + rows), 0),
+                _ => (0, y0),
+            };
+            let group = group.oriented(self.turn)?;
+            sink(x, y, &group)?;
+            buf = group.into_data();
+            first += n;
+        }
+        if tally.decoded == 0 && tally.missing > 0 {
+            return Err(err("the image data is missing (cut off or past the end of the file)").into());
+        }
+        if tally.missing > 0 {
+            self.warnings.push(DecodeWarning::Truncated { format: F });
+        }
+        Ok(())
+    }
 }
 
 /// The Orientation (1–8) of page `page` (`None`: the default page); 1 when absent, malformed
@@ -451,8 +600,54 @@ fn is_eof(e: &tiff::TiffError) -> bool {
     matches!(e, tiff::TiffError::IoError(io) if io.kind() == io::ErrorKind::UnexpectedEof)
 }
 
+/// A directory checked and laid out for decoding, before any pixel is read.
+struct Prepared {
+    w: u32,
+    h: u32,
+    lay: Layout,
+    /// Rows per band: one strip, or one row of tiles.
+    band_rows: usize,
+    patches: Vec<(u64, Vec<u8>)>,
+    tl: tiff::decoder::Limits,
+    /// Lab samples: `Some(true)` for CIELab (a* and b* stored signed), `Some(false)` for ICCLab.
+    lab: Option<bool>,
+}
+
+impl Prepared {
+    /// A decoder over `b` (the file the directory was read from) that opens the directory.
+    fn open<'a>(&'a self, b: &'a [u8]) -> Result<Decoder<Patched<'a>>, CodecError> {
+        Decoder::new(Patched { b, patches: &self.patches, pos: 0 }).map(|d| d.with_limits(self.tl.clone())).map_err(map_err)
+    }
+
+    /// Output bytes of one full band.
+    fn band_bytes(&self) -> Result<usize, CodecError> {
+        self.lay.out_row().checked_mul(self.band_rows).ok_or_else(|| CodecError::LimitExceeded("band size".into()))
+    }
+}
+
 /// Decodes the pixels of one directory.
 fn decode_ifd(f: &File<'_>, dir: &Ifd, limits: &Limits) -> Result<Image, CodecError> {
+    let p = prepare(f, dir, limits, true)?;
+    // The output, allocated once and fallibly.
+    let len = p.lay.out_row().checked_mul(p.h as usize).ok_or_else(|| CodecError::LimitExceeded("image size".into()))?;
+    let mut data = zeroed(len)?;
+    let tally = decode_bands(&p, f.b, &mut data, p.band_bytes()?, 0)?;
+    if tally.decoded == 0 && tally.missing > 0 {
+        return Err(err("the image data is missing (cut off or past the end of the file)"));
+    }
+    if let Some(signed) = p.lab {
+        convert_ab(&mut data, p.lay.out_channels(), p.lay.out, signed, false);
+    }
+    let mut img = Image::from_raw(p.w, p.h, p.lay.out_layout, p.lay.out, data)?;
+    if tally.missing > 0 {
+        img.warnings.push(DecodeWarning::Truncated { format: F });
+    }
+    Ok(img)
+}
+
+/// Checks one directory and lays it out for decoding. `whole`: the image is decoded into one
+/// buffer, which `limits.max_alloc` bounds; otherwise only its size is checked here.
+fn prepare(f: &File<'_>, dir: &Ifd, limits: &Limits, whole: bool) -> Result<Prepared, CodecError> {
     // The values the `tiff` crate reads must exist: a count past the end of the file is
     // neither allocated nor read.
     if let Some(e) = dir.entries.iter().find(|e| ifd::STRUCTURAL_TAGS.contains(&e.tag) && f.data(e).is_none()) {
@@ -581,8 +776,7 @@ fn decode_ifd(f: &File<'_>, dir: &Ifd, limits: &Limits) -> Result<Image, CodecEr
         l.intermediate_buffer_size = f.b.len().max(1);
         l
     };
-    let open = || Decoder::new(Patched { b: f.b, patches: &patches, pos: 0 }).map(|d| d.with_limits(tl.clone())).map_err(map_err);
-    let mut dec = open()?;
+    let mut dec = Decoder::new(Patched { b: f.b, patches: &patches, pos: 0 }).map(|d| d.with_limits(tl.clone())).map_err(map_err)?;
     if dec.dimensions().map_err(map_err)? != (w, h) || (dec.get_chunk_type() == ChunkType::Tile) != tiled {
         return Err(err("inconsistent image directory"));
     }
@@ -626,19 +820,45 @@ fn decode_ifd(f: &File<'_>, dir: &Ifd, limits: &Limits) -> Result<Image, CodecEr
         (Some(_), _) => SampleType::U8,
         _ => src.out(),
     };
-    limits.check(w, h, out_layout, out)?;
+    if whole {
+        limits.check(w, h, out_layout, out)?;
+    } else {
+        limits.check_size(w, h)?;
+    }
     // Decompression-bomb guard: no compression method expands data by more than a few thousand
     // times (Deflate at most ~1032:1, LZW ~2730:1, PackBits 128:1), so a file far too small for
-    // its declared size is refused before the image is allocated. Uncompressed data may be up
-    // to three quarters missing (that decodes with a `Truncated` warning).
+    // its declared size is refused before the image is allocated. CCITT Group 4 codes a blank row
+    // of a strip or tile in one bit (a V0 code), so its bound is the chunk width (the decoder
+    // reads at most 65535): a blank landscape A4 page at 600 dpi, 7016 px wide, compresses past
+    // 4096:1 (Groups 3 and 2 are not decoded). Uncompressed data may be up
+    // to three quarters missing (that decodes with a `Truncated` warning). Only the bytes the
+    // strip or tile tables point at inside the file count (and never more than the file), so
+    // padding the file while pointing the chunks past its end does not raise the bound: the
+    // banded decoder has no whole-image `max_alloc` to fall back on.
     let stored = u64::from(w).saturating_mul(u64::from(h)).saturating_mul(spp).saturating_mul(bits).div_ceil(8);
     let ratio: u64 = match f.tag_uint(dir, ifd::TAG_COMPRESSION).unwrap_or(1) {
         1 => 4,
         32773 => 130,
+        4 => cw.clamp(4096, 65_535),
         _ => 4096,
     };
-    if stored > (f.b.len() as u64).saturating_mul(ratio).saturating_add(1 << 20) {
-        return Err(err(format!("a {} byte file cannot hold a {w}x{h} image", f.b.len())));
+    let len = f.b.len() as u64;
+    let (offsets, sizes) = (
+        dir.get(offsets_tag).ok_or_else(|| err("missing strip or tile offsets"))?,
+        dir.get(counts_tag).ok_or_else(|| err("missing strip or tile byte counts"))?,
+    );
+    let mut held = 0u64;
+    for i in 0..expected {
+        if held >= len {
+            break;
+        }
+        if let (Some(at), Some(n)) = (f.uint(offsets, i), f.uint(sizes, i)) {
+            held = held.saturating_add(n.min(len.saturating_sub(at)));
+        }
+    }
+    let held = held.min(len);
+    if stored > held.saturating_mul(ratio).saturating_add(1 << 20) {
+        return Err(err(format!("the strips or tiles in this file hold {held} bytes, too few for a {w}x{h} image")));
     }
 
     let (wu, hu) = (w as usize, h as usize);
@@ -648,6 +868,7 @@ fn decode_ifd(f: &File<'_>, dir: &Ifd, limits: &Limits) -> Result<Image, CodecEr
     let chunks_per_plane = across.checked_mul(down).ok_or_else(|| err("too many tiles"))?;
     let planes_in_file = if planar { spp as usize } else { 1 };
     let total = if tiled { dec.tile_count() } else { dec.strip_count() }.map_err(map_err)?;
+    drop(dec);
     if Some(total as usize) != chunks_per_plane.checked_mul(planes_in_file) {
         return Err(err("strip or tile count does not match the image size"));
     }
@@ -678,25 +899,7 @@ fn decode_ifd(f: &File<'_>, dir: &Ifd, limits: &Limits) -> Result<Image, CodecEr
         palette,
         scratch_cap,
     };
-
-    // The output, allocated once and fallibly.
-    let out_row = lay.out_row();
-    let len = out_row.checked_mul(hu).ok_or_else(|| CodecError::LimitExceeded("image size".into()))?;
-    let mut data = zeroed(len)?;
-    let band_bytes = out_row.checked_mul(ch.min(hu)).ok_or_else(|| CodecError::LimitExceeded("band size".into()))?;
-
-    let tally = decode_bands(&lay, &mut data, band_bytes, &mut dec, &open)?;
-    if tally.decoded == 0 && tally.missing > 0 {
-        return Err(err("the image data is missing (cut off or past the end of the file)"));
-    }
-    if lab {
-        convert_ab(&mut data, out_layout.channels(), out, photometric == 8, false);
-    }
-    let mut img = Image::from_raw(w, h, out_layout, out, data)?;
-    if tally.missing > 0 {
-        img.warnings.push(DecodeWarning::Truncated { format: F });
-    }
-    Ok(img)
+    Ok(Prepared { w, h, lay, band_rows: ch.min(hu), patches, tl, lab: lab.then_some(photometric == 8) })
 }
 
 /// The a* and b* samples (1 and 2 of every pixel) of a Lab image between the file's encoding and
@@ -745,6 +948,23 @@ fn zeroed(len: usize) -> Result<Vec<u8>, CodecError> {
     Ok(v)
 }
 
+/// `v` refilled with `len` zero bytes, reusing its allocation when it is large enough.
+fn refill_zeroed(mut v: Vec<u8>, len: usize) -> Result<Vec<u8>, CodecError> {
+    if v.capacity() < len {
+        drop(v);
+        return zeroed(len);
+    }
+    v.clear();
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use rayon::prelude::*;
+        v.par_extend(rayon::iter::repeat_n(0u8, len));
+    }
+    #[cfg(target_arch = "wasm32")]
+    v.resize(len, 0);
+    Ok(v)
+}
+
 /// Chunks decoded and chunks whose data ended early.
 #[derive(Default, Clone, Copy)]
 struct Tally {
@@ -759,36 +979,31 @@ impl std::ops::Add for Tally {
     }
 }
 
-/// Decodes every band into `data`, in parallel on native targets (one decoder and scratch
-/// buffer per worker).
+/// Decodes the bands from `first` on into `data` (`band_bytes` each), in parallel on native
+/// targets (one decoder and scratch buffer per worker).
 #[cfg(not(target_arch = "wasm32"))]
-fn decode_bands<'a, O>(lay: &Layout, data: &mut [u8], band_bytes: usize, _first: &mut Decoder<Patched<'a>>, open: &O) -> Result<Tally, CodecError>
-where
-    O: Fn() -> Result<Decoder<Patched<'a>>, CodecError> + Sync,
-{
+fn decode_bands(p: &Prepared, b: &[u8], data: &mut [u8], band_bytes: usize, first: usize) -> Result<Tally, CodecError> {
     use rayon::prelude::*;
     data.par_chunks_mut(band_bytes.max(1))
         .enumerate()
         .map_init(
-            || open().map(|d| (d, Vec::new())).map_err(|e| e.to_string()),
-            |worker, (b, band)| {
+            || p.open(b).map(|d| (d, Vec::new())).map_err(|e| e.to_string()),
+            |worker, (i, band)| {
                 let (dec, scratch) = worker.as_mut().map_err(|e| err(e.clone()))?;
-                decode_band(lay, dec, scratch, b, band)
+                decode_band(&p.lay, dec, scratch, first + i, band)
             },
         )
         .try_reduce(Tally::default, |a, b| Ok(a + b))
 }
 
-/// Decodes every band into `data`, one after the other.
+/// Decodes the bands from `first` on into `data` (`band_bytes` each), one after the other.
 #[cfg(target_arch = "wasm32")]
-fn decode_bands<'a, O>(lay: &Layout, data: &mut [u8], band_bytes: usize, first: &mut Decoder<Patched<'a>>, _open: &O) -> Result<Tally, CodecError>
-where
-    O: Fn() -> Result<Decoder<Patched<'a>>, CodecError> + Sync,
-{
+fn decode_bands(p: &Prepared, b: &[u8], data: &mut [u8], band_bytes: usize, first: usize) -> Result<Tally, CodecError> {
+    let mut dec = p.open(b)?;
     let mut scratch = Vec::new();
     let mut tally = Tally::default();
-    for (b, band) in data.chunks_mut(band_bytes.max(1)).enumerate() {
-        tally = tally + decode_band(lay, first, &mut scratch, b, band)?;
+    for (i, band) in data.chunks_mut(band_bytes.max(1)).enumerate() {
+        tally = tally + decode_band(&p.lay, &mut dec, &mut scratch, first + i, band)?;
     }
     Ok(tally)
 }
@@ -814,7 +1029,11 @@ fn decode_band(lay: &Layout, dec: &mut Decoder<Patched<'_>>, scratch: &mut Vec<u
             if lay.direct() && pref.len == band.len() && stride == out_row {
                 match dec.read_chunk_bytes(chunk, band) {
                     Ok(()) => tally.decoded += 1,
-                    Err(e) if is_eof(&e) => tally.missing += 1,
+                    // The rows read before the end stay in `band`: a missing strip is zeros.
+                    Err(e) if is_eof(&e) => {
+                        band.fill(0);
+                        tally.missing += 1;
+                    }
                     Err(e) => return Err(map_err(e)),
                 }
                 continue;
@@ -823,6 +1042,9 @@ fn decode_band(lay: &Layout, dec: &mut Decoder<Patched<'_>>, scratch: &mut Vec<u
                 return Err(CodecError::LimitExceeded(format!("a {} byte strip or tile", pref.len)));
             }
             if scratch.len() < pref.len {
+                scratch
+                    .try_reserve_exact(pref.len - scratch.len())
+                    .map_err(|_| CodecError::LimitExceeded(format!("cannot allocate {} bytes for a strip or tile", pref.len)))?;
                 scratch.resize(pref.len, 0);
             }
             let buf = scratch.get_mut(..pref.len).ok_or_else(|| err("scratch buffer"))?;

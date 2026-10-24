@@ -71,6 +71,7 @@ mod smart_corpus;
 mod svg;
 mod text_corpus;
 mod text_styles;
+mod tiff_banded_import;
 mod tiff_corpus;
 mod tiff_layers;
 mod tiff_pages;

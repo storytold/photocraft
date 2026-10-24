@@ -225,23 +225,99 @@ pub fn tga_alpha_channel_to_transparency(doc: &mut Document) {
 
 /// Opens one page of a TIFF or BigTIFF file: `None` is the page Photoshop opens (the first
 /// full-resolution one), `Some(i)` an index into [`codecs::tiff_info`]'s pages (every IFD and
-/// SubIFD). A page with Photoshop layer data opens layered.
+/// SubIFD). A page with Photoshop layer data opens layered. Any other page is decoded a group of
+/// rows at a time straight into the layer's tiles, so it opens up to Photoshop's 300,000 px a
+/// side without a second full-size copy (#8169).
 pub fn import_tiff_page(name: &str, bytes: &[u8], page: Option<usize>) -> Result<ImportResult, IoError> {
-    // The orientation is applied after the layer check: rotating the composite but not the
-    // layers would misalign them, so a layered TIFF keeps its stored orientation.
+    let bands = codecs::TiffBands::open(bytes, page, &codecs::Limits::banded())?;
+    if bands.meta.photoshop_layers.as_deref().is_some_and(|l| !l.is_empty()) {
+        // Its copy of the layer data is not kept through the whole-image decode.
+        drop(bands);
+        return import_layered_tiff(name, bytes, page);
+    }
+    tiff_to_document(name, bands.upright())
+}
+
+/// A layered TIFF, decoded whole: its layers are built from the composite.
+fn import_layered_tiff(name: &str, bytes: &[u8], page: Option<usize>) -> Result<ImportResult, IoError> {
+    // The orientation is ignored: rotating the composite but not the layers would misalign them,
+    // so a layered TIFF keeps its stored orientation.
     let keep = codecs::DecodeOptions { keep_orientation: true, ..Default::default() };
     let (img, orientation) = match page {
         None => (codecs::decode_with(bytes, &keep)?, codecs::tiff_orientation(bytes)),
         Some(p) => (codecs::decode_tiff_page(bytes, p, &keep)?, codecs::tiff_page_orientation(bytes, p)),
     };
-    if let Some(layers) = img.meta.photoshop_layers.as_deref().filter(|l| !l.is_empty()) {
-        let mut r = crate::tiff_layers::import_layered(name, &img, layers)?;
-        if orientation != 1 {
-            r.warnings.push("the TIFF's orientation tag was ignored so the layers stay aligned with the image".to_string());
-        }
-        return Ok(r);
+    let layers = img.meta.photoshop_layers.as_deref().unwrap_or_default();
+    let mut r = crate::tiff_layers::import_layered(name, &img, layers)?;
+    if orientation != 1 {
+        r.warnings.push("the TIFF's orientation tag was ignored so the layers stay aligned with the image".to_string());
     }
-    image_to_document(name, &img.oriented(orientation)?)
+    Ok(r)
+}
+
+/// A flat TIFF page as a single-layer document, decoded a group of rows at a time into the
+/// layer's tiles: only one group exists beside the document.
+fn tiff_to_document(name: &str, mut bands: codecs::TiffBands<'_>) -> Result<ImportResult, IoError> {
+    let (w, h) = bands.dimensions();
+    let (layout, sample) = (bands.layout(), bands.sample_type());
+    let f = document_format(layout, sample);
+    let fmt = PixelFormat::new(f.mode, f.depth, true);
+    let mut s = Surface::new(fmt);
+    let out_of_memory = |e: photocraft_raster::AllocationError| {
+        let gb = (u64::from(w) * u64::from(h)).saturating_mul(fmt.bytes_per_pixel() as u64) as f64 / 1e9;
+        IoError::Unsupported(format!("not enough memory to open this {w} × {h} px image: it needs about {gb:.1} GB ({e})"))
+    };
+    bands.decode(|x, y, group: &Image| -> Result<(), IoError> {
+        let (gw, gh) = group.dimensions();
+        let (x, y) = (x as i32, y as i32);
+        let rect = |rows: &std::ops::Range<usize>| Rect::new(x, y + rows.start as i32, x.saturating_add(gw as i32), y + rows.end as i32);
+        if layout == f.layout && sample == f.sample {
+            return s.try_write_interleaved(rect(&(0..gh as usize)), group.data()).map_err(out_of_memory);
+        }
+        // Converted in pieces of rows on all cores, then each piece written (on all cores too).
+        let row = group.data().len() / (gh.max(1) as usize);
+        let pieces = crate::pixels::par_map(crate::pixels::bands(gh as usize), |rows| {
+            let part = group.data().get(rows.start * row..rows.end * row).unwrap_or_default().to_vec();
+            Image::from_raw(gw, rows.len() as u32, layout, sample, part).map(|p| (rows, p.convert(f.layout, f.sample)))
+        });
+        for piece in pieces {
+            let (rows, part) = piece?;
+            s.try_write_interleaved(rect(&rows), part.data()).map_err(out_of_memory)?;
+        }
+        Ok(())
+    })?;
+    s.prune();
+    let mut warnings: Vec<String> = bands.warnings.iter().map(ToString::to_string).collect();
+    warnings.extend(f.warning.clone());
+    let meta = std::mem::take(&mut bands.meta);
+    Ok(single_layer_document(name, (w, h), f, layout.has_alpha(), s, bands.icc.take(), meta, warnings))
+}
+
+/// How a decoded image's pixels are kept in a document.
+struct DocumentFormat {
+    mode: ColorMode,
+    depth: SampleType,
+    /// The layer's layout (always with alpha) and sample type, as the codec names them.
+    layout: ChannelLayout,
+    sample: CSample,
+    /// What the conversion loses.
+    warning: Option<String>,
+}
+
+fn document_format(layout: ChannelLayout, sample: CSample) -> DocumentFormat {
+    let (mode, layout) = match layout {
+        ChannelLayout::Gray | ChannelLayout::GrayA => (ColorMode::Grayscale, ChannelLayout::GrayA),
+        ChannelLayout::Rgb | ChannelLayout::Rgba => (ColorMode::Rgb, ChannelLayout::Rgba),
+        ChannelLayout::Cmyk | ChannelLayout::CmykA => (ColorMode::Cmyk, ChannelLayout::CmykA),
+        ChannelLayout::Lab | ChannelLayout::LabA => (ColorMode::Lab, ChannelLayout::LabA),
+    };
+    let (depth, sample, warning) = match sample {
+        CSample::U8 => (SampleType::U8, CSample::U8, None),
+        CSample::U16 => (SampleType::U16, CSample::U16, None),
+        CSample::F16 => (SampleType::F32, CSample::F32, Some("16-bit float samples are stored as 32-bit float".to_string())),
+        CSample::F32 => (SampleType::F32, CSample::F32, None),
+    };
+    DocumentFormat { mode, depth, layout, sample, warning }
 }
 
 /// A decoded flat image as a single-layer document: a locked "Background" when it is opaque, a
@@ -249,29 +325,30 @@ pub fn import_tiff_page(name: &str, bytes: &[u8], page: Option<usize>) -> Result
 pub(crate) fn image_to_document(name: &str, img: &Image) -> Result<ImportResult, IoError> {
     // What the decoder noticed (frames or pages left out, data ending early) comes first.
     let mut warnings: Vec<String> = img.warnings.iter().map(ToString::to_string).collect();
-    let (mode, target_layout) = match img.layout() {
-        ChannelLayout::Gray | ChannelLayout::GrayA => (ColorMode::Grayscale, ChannelLayout::GrayA),
-        ChannelLayout::Rgb | ChannelLayout::Rgba => (ColorMode::Rgb, ChannelLayout::Rgba),
-        ChannelLayout::Cmyk | ChannelLayout::CmykA => (ColorMode::Cmyk, ChannelLayout::CmykA),
-        ChannelLayout::Lab | ChannelLayout::LabA => (ColorMode::Lab, ChannelLayout::LabA),
-    };
-    let (depth, csample) = match img.sample_type() {
-        CSample::U8 => (SampleType::U8, CSample::U8),
-        CSample::U16 => (SampleType::U16, CSample::U16),
-        CSample::F16 => {
-            warnings.push("16-bit float samples are stored as 32-bit float".to_string());
-            (SampleType::F32, CSample::F32)
-        }
-        CSample::F32 => (SampleType::F32, CSample::F32),
-    };
-    let (w, h) = img.dimensions();
-    let mut doc = Document::new(name, Size::new(w, h), mode, depth);
-    let mut s = image_surface(img, target_layout, csample)?;
+    let f = document_format(img.layout(), img.sample_type());
+    warnings.extend(f.warning.clone());
+    let mut s = image_surface(img, f.layout, f.sample)?;
     s.prune();
+    Ok(single_layer_document(name, img.dimensions(), f, img.layout().has_alpha(), s, img.icc.clone(), img.meta.clone(), warnings))
+}
+
+/// The document of one layer holding `s`, with the image's profile and metadata.
+#[allow(clippy::too_many_arguments)]
+fn single_layer_document(
+    name: &str,
+    (w, h): (u32, u32),
+    f: DocumentFormat,
+    alpha: bool,
+    s: Surface,
+    icc: Option<Vec<u8>>,
+    meta: codecs::Metadata,
+    mut warnings: Vec<String>,
+) -> ImportResult {
+    let mut doc = Document::new(name, Size::new(w, h), f.mode, f.depth);
     // As in Photoshop: an opaque image opens as the locked Background layer, one with
     // transparency (an alpha channel, or a tRNS chunk the decoder expands to one) as a normal
     // layer named "Layer 0", since a Background can't hold transparency.
-    let layer = if img.layout().has_alpha() {
+    let layer = if alpha {
         Layer::new("Layer 0", LayerContent::Raster(s))
     } else {
         let mut bg = Layer::new("Background", LayerContent::Raster(s));
@@ -280,20 +357,20 @@ pub(crate) fn image_to_document(name: &str, img: &Image) -> Result<ImportResult,
         bg
     };
     doc.layers.push(layer);
-    doc.icc_profile = img.icc.clone().map(Arc::new);
-    doc.metadata.exif = img.meta.exif.clone().map(Arc::new);
-    doc.metadata.xmp = img.meta.xmp.as_deref().map(Arc::from);
-    doc.metadata.text = img.meta.text.clone();
-    if let Some((x, y)) = img.meta.dpi {
+    doc.icc_profile = icc.map(Arc::new);
+    doc.metadata.exif = meta.exif.map(Arc::new);
+    doc.metadata.xmp = meta.xmp.map(Arc::from);
+    doc.metadata.text = meta.text;
+    if let Some((x, y)) = meta.dpi {
         doc.resolution_dpi = x;
         warnings.extend(crate::unequal_resolution_warning(f64::from(x), f64::from(y)));
     }
     // Guides in the Photoshop resources a JPEG (APP13) or TIFF carries: resource 1032.
-    let guides = img.meta.photoshop_resources.as_deref().and_then(|r| photocraft_psd::tiff::resources_from_bytes(r).ok());
+    let guides = meta.photoshop_resources.as_deref().and_then(|r| photocraft_psd::tiff::resources_from_bytes(r).ok());
     if let Some(g) = guides.as_ref().and_then(|(res, _)| res.iter().find(|r| r.id == 1032)) {
         crate::psd_import::parse_guides(&g.data, &mut doc);
     }
-    Ok(ImportResult { document: doc, warnings, source_read_only: false, preview_only: false })
+    ImportResult { document: doc, warnings, source_read_only: false, preview_only: false }
 }
 
 /// The pixels of a decoded image as a surface of `fmt`, converting layout and sample type a
