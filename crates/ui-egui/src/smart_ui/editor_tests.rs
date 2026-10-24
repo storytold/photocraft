@@ -185,3 +185,82 @@ fn filter_editor_starts_missing_parameters_from_defaults_not_remembered_values()
     let id = crate::filter_dialog::open(&mut app, command).unwrap();
     assert_eq!(app.ui.dialog_mut(id).unwrap().fields["reduceNoise"].as_f64(), Some(60.0));
 }
+
+/// Re-editing a whole-image tone Smart Filter keeps its colour controls and stored records,
+/// even when a colour component, alpha, Quick Mask or either layer-mask UI target is selected.
+#[test]
+fn tone_filter_editor_ignores_current_channel_target() {
+    use photocraft_engine::{adjust_params, channel_cmds::ChannelTarget};
+    for mode in ["rgb", "lab", "cmyk"] {
+        for kind in ["levels", "curves"] {
+            for view in 0..5 {
+                let (mut app, layer) = app(8, mode);
+                let command = format!("image.adjustments.{kind}");
+                let color_mode = app.session.active().unwrap().doc.mode;
+                let mut recorded = adjust_params::to_params(&adjust_params::default_for(kind, color_mode).unwrap());
+                let key = if mode == "lab" {
+                    "lightness"
+                } else if kind == "curves" {
+                    "points"
+                } else {
+                    ""
+                };
+                if kind == "levels" {
+                    if key.is_empty() {
+                        recorded["gamma"] = json!(1.4);
+                    } else {
+                        recorded[key]["gamma"] = json!(1.4);
+                    }
+                } else {
+                    recorded[key] = json!([[0, 0], [128, 180], [255, 255]]);
+                }
+                app.run(&command, recorded.clone()).unwrap();
+                app.run("layer.layerMask.revealAll", json!({})).unwrap();
+                app.run("channel.new", json!({"name":"Saved sky", "fill":"white"})).unwrap();
+                if view == 4 {
+                    app.run("select.editInQuickMaskMode", json!({})).unwrap();
+                }
+                app.session.active_mut().unwrap().channel_view.target = match view {
+                    0 => ChannelTarget::Alpha(0),
+                    1 => ChannelTarget::LayerMask,
+                    2 => ChannelTarget::Color(1),
+                    _ => ChannelTarget::Composite,
+                };
+                app.ui.mask_target = view == 3;
+                let before = app.session.active().unwrap().doc.clone();
+                let filters = smart(&app, layer).clone();
+                let mut h = Harness::builder().with_size(vec2(1200.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
+                PhotocraftApp::setup_context(&h.ctx, Default::default());
+                let ctx = h.ctx.clone();
+                super::open_editor(h.state_mut(), &ctx, layer.0, &filters, 2);
+                let id = h.state().ui.dialogs.last().unwrap().id;
+                let values = crate::filter_dialog::params_of(&h.state().ui.dialogs.last().unwrap().fields);
+                assert_eq!(values.get("target"), None, "{mode} {kind} view={view}: no channel target is added to a Smart Filter");
+                assert_eq!(values, recorded, "{mode} {kind} view={view}: recorded colour parameters survive reopening");
+                h.run_steps(3);
+                let names: Vec<_> = h.query_all_by_role(egui::accesskit::Role::ComboBox).filter_map(|n| n.value()).collect();
+                let expected = match mode {
+                    "lab" => "Lightness",
+                    "cmyk" => "CMYK",
+                    _ => "RGB",
+                };
+                assert!(names.iter().any(|n| n == expected), "{mode} {kind} view={view}: {names:?}");
+                assert!(
+                    !names.iter().any(|n| n == "Saved sky" || n == "Quick Mask" || n == "Smart Object Mask" || n == "Green" || n == "Magenta" || n == "a"),
+                    "{names:?}"
+                );
+                let ctx = h.ctx.clone();
+                let idx = h.state().session.active_index().unwrap();
+                assert!(crate::canvas::ensure_filter_preview(h.state_mut(), idx, &ctx).is_some());
+                assert!(std::sync::Arc::ptr_eq(&h.state().session.active().unwrap().doc, &before), "preview never writes to the selected plane");
+                crate::dialogs::confirm(h.state_mut(), id).unwrap();
+                assert_eq!(smart(h.state(), layer).smart_filters.len(), 3);
+                assert_eq!(smart(h.state(), layer).smart_filters[2].params, recorded);
+                let after = &h.state().session.active().unwrap().doc;
+                assert_eq!(after.channels, before.channels);
+                assert_eq!(after.quick_mask, before.quick_mask);
+                assert_eq!(after.layer(layer).unwrap().mask, before.layer(layer).unwrap().mask);
+            }
+        }
+    }
+}

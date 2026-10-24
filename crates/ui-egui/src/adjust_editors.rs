@@ -92,7 +92,7 @@ pub struct EditorCx {
     /// Preferences ▸ Interface ▸ Dynamic Color Sliders: colour tracks on the colour sliders
     /// (off: the plain track).
     pub dynamic_color_sliders: bool,
-    /// Image › Curves with a single Channels-panel target: that channel only (#5335).
+    /// Image › Levels/Curves with a single Channels-panel target: that channel only (#5335).
     pub isolated_curve: Option<photocraft_engine::channel_cmds::IsolatedCurveChannel>,
 }
 
@@ -696,23 +696,31 @@ fn nearest(xs: &[f32], x: f32) -> Option<u8> {
     xs.iter().enumerate().min_by(|a, b| (a.1 - x).abs().total_cmp(&(b.1 - x).abs())).map(|(i, _)| i as u8)
 }
 
+/// Edit the selected Levels record using its own channel label, histogram and Auto endpoints.
 fn levels(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     let t = Tokens::get(ui.ctx());
     let chans = tone_channels(space_of(v), cx.gray);
+    let isolated = cx.isolated_curve.as_ref();
     let mut ch = 0;
     let mut auto = false;
     ui.horizontal(|ui| {
-        ch = channel_picker(ui, cx.mem.with("levels-ch"), chans, tl!("Channel:"));
+        ch = if let Some(iso) = isolated {
+            channel_picker_opts(ui, cx.mem.with("levels-ch"), &[(0, iso.name.as_str())], tl!("Channel:"), iso.translate)
+        } else {
+            channel_picker(ui, cx.mem.with("levels-ch"), chans, tl!("Channel:"))
+        };
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             auto = widgets::secondary_button(ui, tl!("Auto"), 0.0).clicked();
         });
     });
-    let chan = chans.get(ch).copied().unwrap_or(ToneChannel { key: "", label: "" });
+    let chan =
+        if let Some(iso) = isolated { ToneChannel { key: iso.key, label: "" } } else { chans.get(ch).copied().unwrap_or(ToneChannel { key: "", label: "" }) };
+    let hist_i = isolated.map_or(ch, |c| c.hist);
     let mut l = read_levels(v, chan.key);
     let mut e = Edit::default();
     let mut changed = false;
     if auto && let Some(h) = &cx.hist {
-        let (lo, hi) = auto_levels(&h[ch]);
+        let (lo, hi) = auto_levels(&h[hist_i]);
         l[0] = lo;
         l[2] = hi;
         l[1] = 1.0;
@@ -726,7 +734,7 @@ fn levels(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     let p = ui.painter_at(hr.expand(1.0));
     p.rect_filled(hr, 0.0, t.field);
     if let Some(h) = &cx.hist {
-        tone::draw_histogram(&p, hr, &h[ch], hist_color(&chan, &t));
+        tone::draw_histogram(&p, hr, &h[hist_i], hist_color(&chan, &t));
     }
     p.rect_stroke(hr, 0.0, Stroke::new(1.0, t.field_border), StrokeKind::Inside);
     // Input sliders: black, gamma, white.

@@ -182,13 +182,13 @@ pub fn composite_name(mode: ColorMode) -> &'static str {
     }
 }
 
-/// The Curves dialog's Channel popup lists only this channel when the Channels panel has a
+/// The Levels/Curves Channel popup lists only this channel when the Channels panel has a
 /// single non-composite target (a colour component, layer mask, saved channel or Quick Mask).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IsolatedCurveChannel {
     /// Channels-panel name, including a custom alpha name or "{layer} Mask".
     pub name: String,
-    /// Curves param key: empty = composite `points`; otherwise `red`/`green`/…
+    /// Tone parameter key: empty = composite; otherwise `red`/`green`/…
     pub key: &'static str,
     /// Index into the tone-space histograms (composite = 0 for RGB/CMYK).
     pub hist: usize,
@@ -202,7 +202,7 @@ pub struct IsolatedCurveChannel {
     pub gray: Option<GraySurface>,
 }
 
-/// A grayscale plane Curves can target: the dialog parses and previews its curves in gray levels
+/// A grayscale plane Levels/Curves can target: the dialog parses and previews gray levels
 /// even in Lab and CMYK documents (#5335).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GraySurface {
@@ -223,9 +223,40 @@ pub fn isolated_curve_channel(st: &DocState) -> Option<IsolatedCurveChannel> {
 /// thumbnail targets it without touching the Channels panel, and both ways of selecting the mask
 /// must give the same Curves dropdown (#5335).
 pub fn isolated_curve_channel_for(st: &DocState, layers_panel_mask: bool) -> Option<IsolatedCurveChannel> {
+    isolated_curve_channel_with_params(st, layers_panel_mask, &Value::Null)
+}
+
+/// The channel a tone dialog edits, with an explicit command target taking precedence over
+/// panel state (notably when an Action opens a recorded step's dialog).
+pub fn isolated_curve_channel_with_params(st: &DocState, layers_panel_mask: bool, params: &Value) -> Option<IsolatedCurveChannel> {
     let doc = &st.doc;
     let mode = edit_mode(doc);
-    match st.channel_view.target {
+    let target = if params.get("target").is_some() {
+        match target_of(params) {
+            Target::Mask => ChannelTarget::LayerMask,
+            Target::Alpha(i) => ChannelTarget::Alpha(i),
+            Target::QuickMask => {
+                doc.quick_mask.as_ref()?;
+                return Some(IsolatedCurveChannel {
+                    name: "Quick Mask".into(),
+                    key: "",
+                    hist: 0,
+                    tint: false,
+                    translate: true,
+                    gray: Some(GraySurface::QuickMask),
+                });
+            }
+            // Explicit pixel commands retain the engine's single-colour restriction, but
+            // bypass implicit Quick Mask and Layers-panel mask targeting.
+            Target::Pixels => match st.channel_view.target {
+                ChannelTarget::Color(k) => ChannelTarget::Color(k),
+                _ => return None,
+            },
+        }
+    } else {
+        st.channel_view.target
+    };
+    match target {
         ChannelTarget::Color(k) => {
             let names = color_names(mode);
             let keys = crate::adjust_params::channel_keys(crate::adjust_params::default_space(mode));
@@ -621,6 +652,17 @@ pub(crate) fn target_of(p: &Value) -> Target {
 /// The target is an alpha channel or the Quick Mask (no layer involved).
 pub(crate) fn is_channel_target(p: &Value) -> bool {
     matches!(target_of(p), Target::Alpha(_) | Target::QuickMask)
+}
+
+/// The grayscale plane named by an explicit pixel-command target. Unlike the dialog metadata,
+/// this also identifies missing targets, so preview dispatch can report the command's error.
+pub fn gray_target(p: &Value) -> Option<GraySurface> {
+    match target_of(p) {
+        Target::Mask => Some(GraySurface::LayerMask),
+        Target::Alpha(i) => Some(GraySurface::Alpha(i)),
+        Target::QuickMask => Some(GraySurface::QuickMask),
+        Target::Pixels => None,
+    }
 }
 
 /// The surface a pixel command writes to and whether the layer's transparency is locked.

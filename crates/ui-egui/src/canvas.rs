@@ -3947,8 +3947,8 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
 
     if under_dialog {
         // With a colour dialog picker armed the image is its eyedropper, whatever the tool; Space
-        // and the middle button still pan. Curves and Replace Color use the same merged-composite
-        // sampler as the Color Picker, never the reduced adjustment preview.
+        // and the middle button still pan. Pickers sample committed data (the colour composite
+        // or Curves/Levels' targeted gray plane), never the reduced adjustment preview.
         let curves_picking = crate::adjust_dialog::picker_armed(app);
         let replace_picking = crate::filter_dialog::color_eyedropper_armed(app);
         let picking = primary && (crate::color_picker_ui::top(app).is_some() || curves_picking || replace_picking);

@@ -69,6 +69,23 @@ pub fn default_for(kind: &str, mode: ColorMode) -> Result<Adjustment> {
     from_params(kind, &json!({}), None, mode)
 }
 
+/// Tone params for a gray plane target: drop RGB, CMYK and Lab component records so only the
+/// composite (or `gray` alias) can affect the plane. Hidden colour curves must stay neutral (#5335).
+pub fn gray_tone_params(p: &Value) -> Value {
+    match p {
+        Value::Object(m) => {
+            let mut o = Map::new();
+            for (k, v) in m {
+                if !matches!(k.as_str(), "red" | "green" | "blue" | "cyan" | "magenta" | "yellow" | "black" | "lightness" | "a" | "b") {
+                    o.insert(k.clone(), v.clone());
+                }
+            }
+            Value::Object(o)
+        }
+        other => other.clone(),
+    }
+}
+
 /// Reads the adjustment of `kind` from `p` over `base` (or the kind's defaults when `base` is
 /// None or of another kind). `mode` picks the Levels/Curves channel space when neither the params
 /// nor the base name one.
@@ -864,12 +881,34 @@ pub fn curves_eyedropper(base: &Value, picker: CurvesEyedropper, sample: [f32; 3
 pub fn eyedropper_from_params(s: &crate::Session, kind: &str, p: &Value) -> Result<Option<Adjustment>> {
     let Some(e) = p.get("eyedropper") else { return Ok(None) };
     let d = s.active().ok_or(EngineError::NoDocument)?;
-    let (picker, sample) = eyedropper_sample(&d.doc, None, e)?;
+    let (picker, sample) = eyedropper_sample(&d.doc, None, e, None)?;
     let mut base = p.clone();
     if let Some(o) = base.as_object_mut() {
         o.remove("eyedropper");
     }
     adjustment_eyedropper(kind, &base, picker, sample, d.doc.mode).map(Some)
+}
+
+/// The Image > Adjustments picker: a mask/alpha/Quick Mask is sampled directly in gray levels,
+/// at its native depth, independently of the document's colour mode and channel visibility.
+/// Adjustment-layer pickers keep sampling the colour composite through [`eyedropper_from_params`].
+pub fn destructive_eyedropper(s: &crate::Session, kind: &str, p: &Value) -> Result<Option<Adjustment>> {
+    if p.get("eyedropper").is_none() {
+        return Ok(None);
+    }
+    let p = crate::channel_cmds::inject_target(s, &format!("image.adjustments.{kind}"), p.clone());
+    if crate::channel_cmds::gray_target(&p).is_none() {
+        return eyedropper_from_params(s, kind, &p);
+    }
+    let d = s.active().ok_or(EngineError::NoDocument)?;
+    let surface = crate::channel_cmds::read_target_surface(&d.doc, d.active_layer, &p)?;
+    let e = p.get("eyedropper").ok_or_else(|| bad(EYEDROPPER, "missing eyedropper"))?;
+    let (picker, sample) = eyedropper_sample(&d.doc, None, e, Some(surface))?;
+    let mut base = gray_tone_params(&p);
+    if let Some(o) = base.as_object_mut() {
+        o.remove("eyedropper");
+    }
+    adjustment_eyedropper(kind, &base, picker, sample, ColorMode::Grayscale).map(Some)
 }
 
 /// The `eyedropper` param of `layer.setAdjustment` on Levels or Curves adjustment layer `layer`:
@@ -891,14 +930,19 @@ pub fn layer_eyedropper(s: &crate::Session, layer: photocraft_doc::LayerId, p: &
         o.remove("eyedropper");
     }
     let current = if user_keys(&rest).is_empty() { adj.clone() } else { from_params(kind, &rest, Some(adj), d.doc.mode)? };
-    let (picker, sample) = eyedropper_sample(&d.doc, Some(layer), e)?;
+    let (picker, sample) = eyedropper_sample(&d.doc, Some(layer), e, None)?;
     adjustment_eyedropper(kind, &to_params(&current), picker, sample, d.doc.mode).map(Some)
 }
 
 const EYEDROPPER: &str = "eyedropper";
 
 /// The picker and sample of an `eyedropper` param; `at` samples `doc` with layer `hide` hidden.
-fn eyedropper_sample(doc: &photocraft_doc::Document, hide: Option<photocraft_doc::LayerId>, e: &Value) -> Result<(CurvesEyedropper, [f32; 3])> {
+fn eyedropper_sample(
+    doc: &photocraft_doc::Document,
+    hide: Option<photocraft_doc::LayerId>,
+    e: &Value,
+    gray: Option<&photocraft_raster::Surface>,
+) -> Result<(CurvesEyedropper, [f32; 3])> {
     const CMD: &str = EYEDROPPER;
     let picker = match e.get("point").and_then(Value::as_str) {
         Some("black") => CurvesEyedropper::Black,
@@ -921,6 +965,29 @@ fn eyedropper_sample(doc: &photocraft_doc::Document, hide: Option<photocraft_doc
             return Err(bad(CMD, "`eyedropper.at` is outside the image"));
         }
         let size = crate::sample_cmds::size_param(CMD, e)?;
+        if let Some(surface) = gray {
+            let area = crate::sample_cmds::sample_rect(x, y, size, doc.bounds()).ok_or_else(|| bad(CMD, "invalid sample area"))?;
+            let mut sum = 0.0f64;
+            for y in area.y0..area.y1 {
+                for x in area.x0..area.x1 {
+                    sum += f64::from(surface.sample_channel(x, y, 0));
+                }
+            }
+            let count = u64::from(area.width()) * u64::from(area.height());
+            if count == 0 {
+                return Err(bad(CMD, "empty sample area"));
+            }
+            let mean = (sum / count as f64) as f32;
+            if !mean.is_finite() {
+                return Err(bad(CMD, "sample components must be finite"));
+            }
+            // Integer channels round the averaged value to their own depth; floats keep HDR.
+            let depth = surface.format().sample;
+            let mut encoded = [0u8; 4];
+            photocraft_color::write_sample(&mut encoded, depth, 0, mean);
+            let mean = photocraft_color::read_sample(&encoded, depth, 0);
+            return Ok((picker, [mean; 3]));
+        }
         let all = crate::sample_cmds::SampleLayers::All;
         let [r, g, b, a] = match hide {
             Some(id) => {

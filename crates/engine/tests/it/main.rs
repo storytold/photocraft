@@ -72,6 +72,7 @@ mod smart_object_tones;
 mod smart_psd;
 mod style_and_align;
 mod svg_smart_object;
+mod tone_target_picker;
 mod transform_budget_unclamped;
 mod type_format_targets;
 mod type_postscript_font;
