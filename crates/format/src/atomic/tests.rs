@@ -298,6 +298,26 @@ fn read_only_file_on_disk_is_never_replaced() {
     atomic_write(&d.0.join("fresh.psd"), b"x").unwrap();
 }
 
+/// Controlled folder access refuses the write with "Access is denied" in a folder the user can
+/// write to; on Windows the error names it and the way out (#5750), elsewhere nothing changes.
+#[test]
+fn access_denied_names_controlled_folder_access_on_windows() {
+    let hint = access_denied_hint(true);
+    assert!(hint.contains("Controlled folder access") && hint.contains("Allow an app through Controlled folder access"), "{hint}");
+    assert_eq!(access_denied_hint(false), "");
+
+    let denied = io::Error::new(io::ErrorKind::PermissionDenied, "Access is denied. (os error 5)");
+    let e = write_error(denied, Path::new("C:/Users/a/Pictures/art.png"), Path::new("C:/Users/a/Pictures"));
+    assert_eq!(e.kind(), io::ErrorKind::PermissionDenied);
+    let msg = e.to_string();
+    assert!(msg.contains("not writable") && msg.contains(UNCHANGED), "{msg}");
+    assert_eq!(msg.contains("Controlled folder access"), cfg!(windows), "{msg}");
+
+    // A read-only volume is not Controlled folder access: no hint, on any platform.
+    let ro = write_error(io::Error::new(io::ErrorKind::ReadOnlyFilesystem, "read-only"), Path::new("/mnt/a.png"), Path::new("/mnt"));
+    assert!(!ro.to_string().contains("Controlled folder access"), "{ro}");
+}
+
 #[cfg(unix)]
 #[test]
 fn read_only_folder_errors_clearly_and_never_writes_in_place() {

@@ -408,9 +408,26 @@ pub(crate) fn publication_error(error: io::Error, path: &Path) -> io::Error {
     )
 }
 
+/// What to try when Windows refuses a write in a folder the user can otherwise write to.
+/// Controlled folder access (Windows Security's ransomware protection) blocks apps it doesn't
+/// know from writing to Documents, Pictures, Desktop and other protected folders: the write fails
+/// with "Access is denied", and the Save As dialog, which test-creates the file first, reports
+/// "File not found" instead (#5750, #7600, #7999). Empty elsewhere.
+fn access_denied_hint(windows: bool) -> &'static str {
+    if windows {
+        ". If Controlled folder access is on in Windows Security, allow PhotoCraft under Ransomware protection › \
+         Allow an app through Controlled folder access, or save to a folder outside Documents, Pictures and Desktop"
+    } else {
+        ""
+    }
+}
+
 fn write_error(e: io::Error, path: &Path, dir: &Path) -> io::Error {
     let msg = match e.kind() {
-        io::ErrorKind::PermissionDenied | io::ErrorKind::ReadOnlyFilesystem => {
+        io::ErrorKind::PermissionDenied => {
+            format!("cannot save {}: the folder {} is not writable ({e}); {UNCHANGED}{}", path.display(), dir.display(), access_denied_hint(cfg!(windows)))
+        }
+        io::ErrorKind::ReadOnlyFilesystem => {
             format!("cannot save {}: the folder {} is not writable ({e}); {UNCHANGED}", path.display(), dir.display())
         }
         io::ErrorKind::StorageFull => format!("cannot save {}: the disk is full ({e}); {UNCHANGED}", path.display()),
