@@ -5,7 +5,7 @@
 //! The selection itself lives in [`DocState::selected_layers`] (UI state, like the active layer):
 //! changing it never adds a history step. Every structural change below is one history step.
 
-use photocraft_color::PixelFormat;
+use photocraft_color::{PixelFormat, SampleType};
 use photocraft_doc::{Document, Layer, LayerContent, LayerId, VideoData};
 use photocraft_geom::Rect;
 use serde_json::{Value, json};
@@ -601,7 +601,7 @@ pub fn layers_damage(before: &Document, after: &Document, ids: &[LayerId]) -> Op
         for id in ids {
             // A layer gone from one side (never for a move) changes who knows what.
             let (siblings, k, outer) = siblings_of(d, *id)?;
-            let b = photocraft_compose::change_bounds_in(siblings, k, outer, canvas)?;
+            let b = photocraft_compose::change_bounds_in(siblings, k, outer, canvas, d.depth)?;
             if !b.is_empty() {
                 out = if out.is_empty() { b } else { out.union(&b) };
             }
@@ -963,8 +963,8 @@ pub fn step_damage(a: &Document, b: &Document) -> Option<Rect> {
     fn walk(xs: &[Layer], ys: &[Layer], (ox, oy): (Outer, Outer), a: &Document, b: &Document, out: &mut Rect) -> bool {
         // Pair the layers by id, stepping over layers only one side has: one that draws nothing
         // changes no pixels (a new empty layer or group, #1771), any other only where it draws.
-        let one_sided = |layers: &[Layer], k: usize, outer: Outer, canvas: Rect, out: &mut Rect| {
-            let Some(r) = one_sided_bounds(layers, k, outer, canvas) else { return false };
+        let one_sided = |layers: &[Layer], k: usize, outer: Outer, canvas: Rect, depth: SampleType, out: &mut Rect| {
+            let Some(r) = one_sided_bounds(layers, k, outer, canvas, depth) else { return false };
             if !r.is_empty() {
                 *out = if out.is_empty() { r } else { out.union(&r) };
             }
@@ -984,14 +984,14 @@ pub fn step_damage(a: &Document, b: &Document) -> Option<Rect> {
                     continue;
                 }
                 (_, Some(y)) if xs.iter().all(|x| x.id != y.id) => {
-                    if !one_sided(ys, j, oy, b.bounds(), out) {
+                    if !one_sided(ys, j, oy, b.bounds(), b.depth, out) {
                         return false;
                     }
                     j += 1;
                     continue;
                 }
                 (Some(x), _) if ys.iter().all(|y| y.id != x.id) => {
-                    if !one_sided(xs, i, ox, a.bounds(), out) {
+                    if !one_sided(xs, i, ox, a.bounds(), a.depth, out) {
                         return false;
                     }
                     i += 1;
@@ -1014,9 +1014,10 @@ pub fn step_damage(a: &Document, b: &Document) -> Option<Rect> {
             if !layer_pixels_equal(x, y) {
                 // Both sides' extents: a move changes pixels where it left and where it landed.
                 // A clipped adjustment reaches as far as its base (#6535).
-                let (Some(bx), Some(by)) =
-                    (photocraft_compose::change_bounds_in(xs, xk, ox, a.bounds()), photocraft_compose::change_bounds_in(ys, yk, oy, b.bounds()))
-                else {
+                let (Some(bx), Some(by)) = (
+                    photocraft_compose::change_bounds_in(xs, xk, ox, a.bounds(), a.depth),
+                    photocraft_compose::change_bounds_in(ys, yk, oy, b.bounds(), b.depth),
+                ) else {
                     return false;
                 };
                 *out = if out.is_empty() { bx.union(&by) } else { out.union(&bx).union(&by) };
@@ -1042,7 +1043,7 @@ pub fn step_damage(a: &Document, b: &Document) -> Option<Rect> {
 /// of clipped layers above it (they would change base), and neither it nor anything inside it is
 /// a video layer or excludes channels (both reach outside the layer's bounds, see
 /// [`step_damage`]).
-fn one_sided_bounds(layers: &[Layer], k: usize, outer: Option<(&[Layer], usize)>, canvas: Rect) -> Option<Rect> {
+fn one_sided_bounds(layers: &[Layer], k: usize, outer: Option<(&[Layer], usize)>, canvas: Rect, depth: SampleType) -> Option<Rect> {
     fn contained(l: &Layer, depth: usize) -> bool {
         depth < 256 && l.video.is_none() && l.excluded_channels == 0 && l.children().is_none_or(|c| c.iter().all(|c| contained(c, depth + 1)))
     }
@@ -1051,7 +1052,7 @@ fn one_sided_bounds(layers: &[Layer], k: usize, outer: Option<(&[Layer], usize)>
     if new_base || !contained(l, 0) {
         return None;
     }
-    photocraft_compose::change_bounds_in(layers, k, outer, canvas)
+    photocraft_compose::change_bounds_in(layers, k, outer, canvas, depth)
 }
 
 /// Whether `layers[k]` draws nothing wherever it sits, so adding or removing it leaves the
@@ -2153,6 +2154,52 @@ mod tests {
             s.execute("layer.releaseClippingMask", json!({"layer": adj.0})).unwrap();
             s.execute("layer.hideLayers", json!({"layer": adj.0})).unwrap();
             assert_eq!(damage(&s), None);
+        }
+    }
+
+    /// #6533: hiding or showing an adjustment layer masked to a selection (and undoing it)
+    /// damages only the mask's painted area, not the whole canvas, and every pixel the toggle
+    /// changes lies inside it.
+    #[test]
+    fn toggling_a_masked_adjustment_damages_only_its_mask_area() {
+        let mut s = session(32);
+        rect_layer(&mut s, Rect::new(0, 0, 100, 80));
+        let adj = LayerId(s.execute("layer.newAdjustmentLayer.invert", json!({})).unwrap()["layer"].as_u64().unwrap());
+        s.execute("select.rect", json!({"x": 10, "y": 10, "width": 20, "height": 15})).unwrap();
+        s.execute("layer.layerMask.revealSelection", json!({"layer": adj.0})).unwrap();
+        let area = Rect::new(10, 10, 30, 25);
+        let all = |s: &Session| photocraft_compose::render(doc(s), doc(s).bounds());
+        let shown = all(&s);
+        s.execute("layer.hideLayers", json!({"layer": adj.0})).unwrap();
+        assert_eq!(damage(&s), Some(area));
+        let hidden = all(&s);
+        let w = shown.rect.width() as usize;
+        let outside = shown.px.iter().zip(&hidden.px).enumerate().filter(|(i, (a, b))| a != b && !area.contains((i % w) as i32, (i / w) as i32)).count();
+        assert_eq!(outside, 0, "pixels changed outside the mask");
+        assert_ne!(shown, hidden);
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(damage(&s), Some(area));
+        s.execute("layer.showLayers", json!({"layer": adj.0})).unwrap();
+        // Revealing everything makes it reach the whole canvas again.
+        s.execute("layer.layerMask.revealAll", json!({"layer": adj.0})).unwrap();
+        s.execute("layer.hideLayers", json!({"layer": adj.0})).unwrap();
+        assert_eq!(damage(&s), None);
+    }
+
+    /// At 8 and 16 bits the compositor rounds the whole backdrop after each adjustment layer, so
+    /// toggling a masked one can move pixels outside its mask: the step damages everything.
+    #[test]
+    fn toggling_a_masked_adjustment_in_an_integer_document_damages_everything() {
+        for depth in [8, 16] {
+            let mut s = session(depth);
+            rect_layer(&mut s, Rect::new(0, 0, 100, 80));
+            let adj = LayerId(s.execute("layer.newAdjustmentLayer.invert", json!({})).unwrap()["layer"].as_u64().unwrap());
+            s.execute("select.rect", json!({"x": 10, "y": 10, "width": 20, "height": 15})).unwrap();
+            s.execute("layer.layerMask.revealSelection", json!({"layer": adj.0})).unwrap();
+            s.execute("layer.hideLayers", json!({"layer": adj.0})).unwrap();
+            assert_eq!(damage(&s), None, "{depth}-bit");
+            s.execute("edit.undo", json!({})).unwrap();
+            assert_eq!(damage(&s), None, "{depth}-bit");
         }
     }
 

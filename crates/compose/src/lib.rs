@@ -1660,8 +1660,12 @@ pub fn change_bounds(layer: &Layer, canvas: Rect) -> Option<Rect> {
 /// (layers clipped to one composite atop the adjusted backdrop, everywhere). `outer` is the list
 /// holding the group whose children `layers` are, and that group's index there (`None` at the
 /// top level): a pass-through group that is a clip base renders isolated while it holds a visible
-/// adjustment, so showing or hiding one inside can change the whole group.
-pub fn change_bounds_in(layers: &[Layer], k: usize, outer: Option<(&[Layer], usize)>, canvas: Rect) -> Option<Rect> {
+/// adjustment, so showing or hiding one inside can change the whole group. An adjustment layer
+/// masked to an area, or a pass-through group holding only such ones, is bounded by its masks
+/// (#6533), but only in a 32-bit document (`depth`): at 8 and 16 bits the compositor rounds the
+/// whole backdrop after each adjustment layer ([`adjustment_quantum`]), so showing or hiding one
+/// can move pixels outside its mask by a level.
+pub fn change_bounds_in(layers: &[Layer], k: usize, outer: Option<(&[Layer], usize)>, canvas: Rect, depth: photocraft_color::SampleType) -> Option<Rect> {
     let layer = layers.get(k)?;
     if layer.clipped && matches!(layer.content, LayerContent::Adjustment(_)) {
         let base = layers.get(..k)?.iter().rev().find(|l| !l.clipped)?;
@@ -1679,7 +1683,65 @@ pub fn change_bounds_in(layers: &[Layer], k: usize, outer: Option<(&[Layer], usi
         }
         return change_bounds(base, canvas);
     }
-    change_bounds(layer, canvas)
+    change_bounds(layer, canvas).or_else(|| adjustment_quantum(depth).is_none().then(|| masked_change_bounds(layers, k, outer, canvas)).flatten())
+}
+
+/// #6533: an adjustment layer whose mask hides everything outside its painted area (enabled,
+/// black by default, full density, no feather) changes no pixel outside that area, so showing or
+/// hiding it, or a pass-through group whose adjustments are all so masked, is a bounded redraw.
+/// `None` when the layer is a clip base (layers clipped to an adjustment composite everywhere
+/// atop the adjusted backdrop), or sits in a pass-through group that is one (such a group renders
+/// isolated while it holds a visible adjustment, so the toggle can change the whole group).
+fn masked_change_bounds(layers: &[Layer], k: usize, outer: Option<(&[Layer], usize)>, canvas: Rect) -> Option<Rect> {
+    fn mask_reach(l: &Layer, canvas: Rect) -> Option<Rect> {
+        let m = l.mask.as_ref().filter(|m| m.enabled)?;
+        let hidden_outside = m.surface.default_pixel().first().is_some_and(|v| *v <= 0.0);
+        let dense = m.density >= 1.0; // false for NaN
+        if !hidden_outside || !dense || masks::feather_sigma(m.feather) > 0.0 {
+            return None;
+        }
+        Some(bounds::content_bounds(&m.surface).intersect(&canvas))
+    }
+    // Where the adjustments in `l` can change the pixels beneath it (empty when none can). A
+    // clipped one changes its base's pixels under its mask, so its mask bounds it too. A
+    // pass-through group that mixes its result with the backdrop (below 100 % opacity or fill, a
+    // mask, effects) recomputes every pixel it renders, which rounds even where nothing in it
+    // drew, so showing or hiding it isn't bounded.
+    fn reach(l: &Layer, canvas: Rect, depth: usize) -> Option<Rect> {
+        match &l.content {
+            LayerContent::Adjustment(_) => mask_reach(l, canvas),
+            LayerContent::Group(_)
+                if l.blend == BlendMode::PassThrough
+                    && (l.opacity * l.fill_opacity < 1.0 || l.mask.is_some() || l.vector_mask.is_some() || effects::has_effects(l)) =>
+            {
+                None
+            }
+            LayerContent::Group(g) if l.blend == BlendMode::PassThrough && depth < 256 => {
+                g.children.iter().try_fold(Rect::EMPTY, |acc, c| Some(union_nonempty(acc, reach(c, canvas, depth + 1)?)))
+            }
+            _ => Some(Rect::EMPTY),
+        }
+    }
+    fn union_nonempty(a: Rect, b: Rect) -> Rect {
+        if a.is_empty() {
+            b
+        } else if b.is_empty() {
+            a
+        } else {
+            a.union(&b)
+        }
+    }
+    let layer = layers.get(k)?;
+    if !layer.clipped && layers.get(k + 1).is_some_and(|above| above.clipped) {
+        return None;
+    }
+    if let Some((outer, g)) = outer
+        && outer.get(g).is_some_and(|group| group.blend == BlendMode::PassThrough)
+        && outer.get(g + 1).is_some_and(|above| above.clipped)
+    {
+        return None;
+    }
+    Some(union_nonempty(reach(layer, canvas, 0)?, composite_bounds(layer, canvas)?))
 }
 
 /// Whether the layer's content is transparent outside its bounds (every surface it draws from
