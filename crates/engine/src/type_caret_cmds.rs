@@ -184,10 +184,29 @@ fn navigate(s: &Session, p: &Value) -> Result<Value> {
         }
         "lineStart" => photocraft_text::line_edge(&frame.layout, &frame.text, index, false),
         "lineEnd" => photocraft_text::line_edge(&frame.layout, &frame.text, index, true),
+        // A paragraph is its hard returns' run: the start is past the previous hard return, the
+        // end stands before the next one (the return itself is its own caret spot, so a caret
+        // on the return ends its paragraph after the return).
+        "paragraphStart" => {
+            let mut start = 0usize;
+            for (i, c) in frame.text.chars().enumerate() {
+                if i >= index {
+                    break;
+                }
+                if c == '\n' {
+                    start = i + 1;
+                }
+            }
+            start
+        }
+        "paragraphEnd" => frame.text.chars().enumerate().skip(index).take_while(|(_, c)| *c != '\n').count() + index,
         "start" => 0,
         "end" => frame.text.chars().count(),
         other => {
-            return Err(bad(CMD, format!("move {other:?} must be wordPrev, wordNext, linePrev, lineNext, lineStart, lineEnd, start or end")));
+            return Err(bad(
+                CMD,
+                format!("move {other:?} must be wordPrev, wordNext, linePrev, lineNext, lineStart, lineEnd, paragraphStart, paragraphEnd, start or end"),
+            ));
         }
     };
     Ok(json!({ "index": next }))
@@ -220,7 +239,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Navigate Type",
             menu: &[],
             shortcut: None,
-            params: r##"{"layer":id?, "index":char, "move":"wordPrev|wordNext|linePrev|lineNext|lineStart|lineEnd|start|end", "x":px?} → {"index"}. Words are alphanumeric runs. x is the document x to keep across linePrev/lineNext (a caret segment's x); omitted uses the caret's own column. Empty text returns index 0"##,
+            params: r##"{"layer":id?, "index":char, "move":"wordPrev|wordNext|linePrev|lineNext|lineStart|lineEnd|paragraphStart|paragraphEnd|start|end", "x":px?} → {"index"}. Words are alphanumeric runs. x is the document x to keep across linePrev/lineNext (a caret segment's x); omitted uses the caret's own column. paragraphStart/End jump to the current hard-return run's start / to the character before its next hard return. Empty text returns index 0"##,
             enabled: has_doc,
             journal: false,
             run: |s, p| navigate(s, p),
@@ -377,6 +396,38 @@ mod tests {
         assert_eq!(s.active().unwrap().history.entries().len(), steps);
         assert_eq!(s.active().unwrap().revision, rev);
         assert_eq!(s.journal.len(), journal);
+    }
+
+    /// paragraphStart / paragraphEnd jump over the caret's hard-return run: the start is past
+    /// the previous hard return, the end before the next one. A caret standing on a hard
+    /// return ends the paragraph before it; the empty paragraph between two returns is the one
+    /// caret spot wide. Paragraph edges match a click's paragraph selection, which leaves the
+    /// hard return out.
+    #[test]
+    fn navigate_paragraph_jumps_cover_the_hard_return_run() {
+        let mut s = session();
+        let id = create(&mut s, json!({"x": 20, "y": 60, "text": "one\ntwo\n\nthree", "size": 18}));
+        // "one\ntwo\n\nthree": 0..2 one, 3 return, 4..6 two, 7 and 8 returns, 9..13 three.
+        assert_eq!(go(&mut s, id, 0, "paragraphStart", None), 0);
+        assert_eq!(go(&mut s, id, 2, "paragraphEnd", None), 3);
+        assert_eq!(go(&mut s, id, 5, "paragraphStart", None), 4);
+        assert_eq!(go(&mut s, id, 5, "paragraphEnd", None), 7);
+        // A caret on a hard return ends the paragraph before it.
+        assert_eq!(go(&mut s, id, 3, "paragraphEnd", None), 3);
+        assert_eq!(go(&mut s, id, 3, "paragraphStart", None), 0);
+        assert_eq!(go(&mut s, id, 7, "paragraphStart", None), 4);
+        assert_eq!(go(&mut s, id, 7, "paragraphEnd", None), 7);
+        // The one-spot empty paragraph between the two returns.
+        assert_eq!(go(&mut s, id, 8, "paragraphStart", None), 8);
+        assert_eq!(go(&mut s, id, 8, "paragraphEnd", None), 8);
+        // The last paragraph clamps at the text's end in both directions.
+        assert_eq!(go(&mut s, id, 11, "paragraphStart", None), 9);
+        assert_eq!(go(&mut s, id, 11, "paragraphEnd", None) as usize, "one\ntwo\n\nthree".chars().count());
+        // Sanity: a paragraph jump is idempotent from its own edge.
+        let end = go(&mut s, id, 5, "paragraphEnd", None);
+        assert_eq!(go(&mut s, id, end as usize, "paragraphEnd", None), end);
+        let start = go(&mut s, id, 5, "paragraphStart", None);
+        assert_eq!(go(&mut s, id, start as usize, "paragraphStart", None), start);
     }
 
     #[test]

@@ -810,6 +810,127 @@ fn key(h: &mut Harness<'static, PhotocraftApp>, k: egui::Key) {
     h.run_steps(1);
 }
 
+/// Page Down/Up: the caret steps down/up over the lines that fit the canvas (at least one), the
+/// column stays put like with the arrows, ⇧ extends the selection, and ⌘/Ctrl+PageUp/Down passes
+/// to the menus (Photoshop's next/previous document), so the caret stays put for it too.
+#[test]
+fn page_keys_step_by_the_visible_lines() {
+    let mut app = new_app();
+    let text = "Lorem ipsum dolor sit amet.\n".repeat(40);
+    let id = app.run("type.create", json!({"text": text.clone(), "size": 24, "x": 200, "y": 200})).unwrap()["layer"].as_u64().unwrap();
+    app.session.select_layer(LayerId(id)).unwrap();
+    app.ui.text_edit = Some(crate::state::TextEdit {
+        layer: id,
+        document: None,
+        caret: 0,
+        anchor: 0,
+        session: "s".into(),
+        created: false,
+        mask: false,
+        dragging: false,
+        resize: None,
+        preedit: None,
+    });
+    let mut h = harness(1.0, app);
+    h.run_steps(4);
+    let caret = |a: &PhotocraftApp| a.ui.text_edit.as_ref().map_or(0, |e| e.caret);
+    let anchor = |a: &PhotocraftApp| a.ui.text_edit.as_ref().map_or(0, |e| e.anchor);
+    assert_eq!(caret(h.state()), 0, "caret setup landed");
+    // Each line is 28 chars ("Lorem….\n" minus nothing else); one page of type is many lines.
+    h.key_press(egui::Key::PageDown);
+    h.run_steps(2);
+    let after = caret(h.state());
+    assert!(after >= 5 * 28, "page down stepped past several lines: {after}");
+    // Downs end at the text's end and stay there.
+    for _ in 0..6 {
+        h.key_press(egui::Key::PageDown);
+        h.run_steps(2);
+    }
+    assert_eq!(caret(h.state()), text.chars().count(), "the last page lands at the text end");
+    h.key_press(egui::Key::PageUp);
+    h.run_steps(2);
+    assert!(caret(h.state()) < text.chars().count(), "page up leaves the text end");
+    // ⌘A selected all; a plain Page Up moves off the selection, collapsing it.
+    h.key_press_modifiers(Modifiers::COMMAND, egui::Key::A);
+    h.run_steps(2);
+    h.key_press(egui::Key::PageUp);
+    h.run_steps(2);
+    assert_eq!(anchor(h.state()), caret(h.state()), "Page Up collapsed the selection");
+    // One page up from the text's end came back at least ten (~28-char) lines.
+    let up = 1120 - anchor(h.state());
+    assert!(up >= 10 * 28, "page up covered {up} chars of lines");
+    // ⇧ extends the anchored selection: the anchor stays at the caret the plain Page Up left.
+    let mid = anchor(h.state());
+    h.key_press_modifiers(Modifiers::SHIFT, egui::Key::PageUp);
+    h.run_steps(2);
+    assert_eq!(anchor(h.state()), mid, "⇧ keeps the anchor where the caret was");
+    assert!(caret(h.state()) < mid, "⇧ moved the caret above the anchor");
+    // A page covers at least ten lines: the window is far taller than ten (~29 px) lines.
+    let before = caret(h.state());
+    h.key_press_modifiers(Modifiers::SHIFT, egui::Key::PageDown);
+    h.run_steps(2);
+    assert!(caret(h.state()) >= before + 10 * 28, "⇧Page Down paged many lines: {before} → {}", caret(h.state()));
+    assert_eq!(anchor(h.state()), mid, "⇧ keeps the anchor");
+    // ⌘PageDown passes to the menus: the caret doesn't move.
+    let before = caret(h.state());
+    h.key_press_modifiers(Modifiers::COMMAND, egui::Key::PageDown);
+    h.run_steps(2);
+    assert_eq!(caret(h.state()), before, "⌘PageDown is not the type tool's");
+}
+
+/// Vertical type pages over the columns the canvas spans horizontally: with the columns 300 pt
+/// apart the view fits exactly three of them, so one Page Down is three columns — not the one
+/// line the old baseline-only count collapsed to, and not the whole text either.
+#[test]
+fn vertical_page_columns_count_the_visible_columns() {
+    let mut app = new_app();
+    let text = "ab\ncd\nef\ngh\nij\nkl";
+    let id = LayerId(
+        app.run("type.create", json!({"text": text, "size": 40, "leading": 300, "x": 600, "y": 100, "orientation": "vertical"})).unwrap()["layer"]
+            .as_u64()
+            .unwrap(),
+    );
+    app.session.select_layer(id).unwrap();
+    app.ui.views[0].zoom = 1.0;
+    app.ui.views[0].center = [300.0, 450.0];
+    app.ui.text_edit = Some(crate::state::TextEdit {
+        layer: id.0,
+        document: None,
+        caret: 0,
+        anchor: 0,
+        session: "s".into(),
+        created: false,
+        mask: false,
+        dragging: false,
+        resize: None,
+        preedit: None,
+    });
+    let mut h = harness(1.0, app);
+    h.run_steps(4);
+    let caret = |a: &PhotocraftApp| a.ui.text_edit.as_ref().map_or(0, |e| e.caret);
+    assert_eq!(caret(h.state()), 0, "caret setup landed");
+    let (l, _, _) = super::layout(h.state_mut(), id).unwrap();
+    assert!(l.vertical, "the layer is vertical");
+    // The columns hang leftward from the origin at 300 pt steps: 600, 300, 0, −300, −600, −900.
+    // The view is centred on x = 300 at zoom 1 (no rotation), so a column is visible when its
+    // centre sits strictly inside the canvas's doc-x interval [300 − w, 300 + w]; the canvas
+    // half width `w` sits in [450, 600] for this window, so the −300 column is out either way
+    // (a centre on the edge is not inside), −600 and −900 never fit.
+    let w = h.state().last_canvas_rect.width() / 2.0;
+    let centres = [0usize, 1, 2, 3, 4, 5].map(|k| 600.0 - 300.0 * k as f32);
+    let k = centres.iter().filter(|c| (**c - 300.0).abs() < w).count();
+    assert_eq!(k, 3, "columns 600, 300 and 0 sit inside the view's doc-x span [300−w, 300+w]");
+    // Page Down: three columns later, at the start of column 3 ("gh") — exactly one screen of
+    // columns for vertical type.
+    h.key_press(egui::Key::PageDown);
+    h.run_steps(2);
+    assert_eq!(caret(h.state()), 9, "one page down = {k} visible columns, landing at \"gh\"");
+    // Page Up returns to the first column's top.
+    h.key_press(egui::Key::PageUp);
+    h.run_steps(2);
+    assert_eq!(caret(h.state()), 0, "back up the paged columns");
+}
+
 /// Vertical type (#199): clicks and drags land on the glyph under the pointer down the column,
 /// and the arrow keys follow the vertical flow (↓ next character, ← next column).
 #[test]

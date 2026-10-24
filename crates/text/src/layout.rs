@@ -415,12 +415,19 @@ pub fn line_step(layout: &TextLayout, text: &str, idx: usize, x: f32, dir: i32) 
         return idx;
     }
     let current_line = line_index(layout, byte_index(text, idx));
+    // |dir| lines at once (a paging step): the magnitude beyond ±1 is a page's worth of lines,
+    // and stepping past the first/last line clamps to 0 / the text's end as a single step does.
+    let step = dir.unsigned_abs() as usize;
     let target_line = if dir < 0 {
-        let Some(target) = current_line.checked_sub(1) else { return 0 };
-        target
+        match current_line.checked_sub(step) {
+            Some(target) => target,
+            None => return 0,
+        }
     } else {
-        let Some(target) = current_line.checked_add(1).filter(|target| *target < layout.lines.len()) else { return n };
-        target
+        match current_line.checked_add(step) {
+            Some(target) if target < layout.lines.len() => target,
+            _ => return n,
+        }
     };
     char_index(text, layout.hit_test_x_on_line(target_line, x))
 }
