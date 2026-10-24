@@ -810,6 +810,10 @@ pub struct ToolOptions {
     /// Zoom tool › Scrubby Zoom: dragging left/right zooms continuously (else a zoom rectangle).
     #[serde(default = "yes")]
     pub zoom_scrubby: bool,
+    /// Hand tool › Scroll All Windows: a Hand drag pans every shown document view, not only the
+    /// one dragged in (`scroll_all_windows.rs`). Shift held while dragging does the same.
+    #[serde(default)]
+    pub hand_scroll_all: bool,
     /// Pencil › Auto Erase: a stroke that starts on the foreground colour paints the background colour.
     #[serde(default)]
     pub pencil_auto_erase: bool,
@@ -1042,6 +1046,7 @@ impl Default for ToolOptions {
             cr_tolerance: 30.0,
             cr_anti_alias: true,
             zoom_scrubby: true,
+            hand_scroll_all: false,
             pencil_auto_erase: false,
             brush_clear: false,
             pencil_clear: false,

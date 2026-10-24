@@ -4080,6 +4080,16 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     // Preferences › Tools › Enable Flick Panning: a Hand drag let go while moving glides on.
     let flick_id = egui::Id::new(("pc-flick-pan", idx, primary, ctx.viewport_id()));
     let flick_on = app.session.prefs().tools.enable_flick_panning;
+    // Hand › Scroll All Windows, or Shift held (on the keyboard or in Window › Modifier Keys): the
+    // other shown views follow this one.
+    let scroll_all = hand_pan && crate::scroll_all_windows::active(app, crate::workspace_ui::sticky_mods(app, ctx.input(|i| i.modifiers)).shift);
+    let scroll_source = crate::scroll_all_windows::source(app, idx);
+    // A glide keeps the drag's choice after Space, Shift or the button is let go.
+    let scroll_all_id = flick_id.with("scroll-all");
+    if hand_pan && response.dragged() && !stroke_dismissal {
+        ctx.data_mut(|m| m.insert_temp(scroll_all_id, scroll_all));
+    }
+    let glide_scroll_all = ctx.data(|m| m.get_temp::<bool>(scroll_all_id)).unwrap_or(false);
     if let Some(d) = crate::flick_pan::frame(&ctx, flick_id, hand_pan && response.dragged() && !stroke_dismissal, response.drag_delta(), flick_on) {
         let d = xf.unmap_vec(d) / (view.zoom / ppp);
         if d.is_finite() {
@@ -4092,11 +4102,22 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         if !app.session.prefs().tools.overscroll && crate::scrollbars::clamp_view_with_aspect(&mut view, rect.size(), ppp, aspect) {
             ctx.data_mut(|m| m.get_temp_mut_or_default::<crate::flick_pan::Flick>(flick_id).stop());
         }
+        if glide_scroll_all {
+            crate::scroll_all_windows::follow(app, scroll_source, idx, view.center);
+        }
     }
     if hand_pan && response.dragged() && !stroke_dismissal {
         let d = xf.unmap_vec(response.drag_delta()) / (view.zoom / ppp);
         view.center[0] -= d.x;
         view.center[1] -= d.y;
+        if scroll_all {
+            // Overscroll off: the other views follow the center that the next frame clamps this one to.
+            let mut target = view.clone();
+            if !app.session.prefs().tools.overscroll {
+                crate::scrollbars::clamp_view_with_aspect(&mut target, rect.size(), ppp, aspect);
+            }
+            crate::scroll_all_windows::follow(app, scroll_source, idx, target.center);
+        }
         // The tool cursors below are skipped while panning: the fist is set here (#2196).
         ctx.set_cursor_icon(crate::tool_cursor::hand(&ctx, true));
     } else if primary && !stroke_dismissal && temporary.is_none() && !middle && crate::layer_picker::armed(app).is_some() {
@@ -6644,7 +6665,9 @@ pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
         if let Some([x, y]) = w.position {
             builder = builder.with_position([x, y]);
         }
-        let mut view = w.view.clone();
+        // Read the window's view from `app.ui.windows`, not from `wins`: a Scroll All Windows drag in a
+        // window drawn earlier in this loop may have moved it since `wins` was taken.
+        let mut view = app.ui.windows.iter().find(|x| x.id == w.id).map_or_else(|| w.view.clone(), |x| x.view.clone());
         let mut close = false;
         ctx.show_viewport_immediate(vid, builder, |ui, class| {
             if ui.ctx().input(|i| i.viewport().close_requested()) {
@@ -6652,7 +6675,9 @@ pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
             }
             egui::CentralPanel::default().frame(egui::Frame::NONE.fill(crate::theme::Tokens::get(ui.ctx()).canvas)).show(ui, |ui| {
                 let rect = ui.available_rect_before_wrap();
+                app.drawing_window = Some(w.id);
                 view = canvas_view(app, ui, w.document, rect, view.clone(), false);
+                app.drawing_window = None;
                 // Preferences › Zoom Resizes Windows: a zoom wraps the window around the image.
                 crate::zoom_window_fit::follow(app, ui.ctx(), class, vid, &w, &mut view, rect);
             });

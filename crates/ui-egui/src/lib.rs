@@ -194,6 +194,7 @@ mod rgb_histogram;
 pub mod rotate_view;
 pub mod rulers;
 pub mod screen_picker;
+pub mod scroll_all_windows;
 pub mod scrollbars;
 mod scrub_wrap;
 pub mod select_mask_view;
@@ -812,6 +813,9 @@ pub struct PhotocraftApp {
     /// Window › Arrange: the first document of the shown run of tiles, when there are more
     /// documents than tiles (`canvas::arranged_cells`).
     pub(crate) arrange_start: usize,
+    /// The document window (`DocWindow::id`) whose canvas `canvas::extra_windows` is drawing.
+    /// `scroll_all_windows::source` reads it to skip the view that a Hand drag moves itself.
+    pub(crate) drawing_window: Option<u64>,
     /// Physical pixels per egui point of the canvas last frame (`ctx.pixels_per_point`, which
     /// folds in both the display scale and Interface › UI Scale). The canvas maps document pixels
     /// to physical pixels, so point-space geometry divides the view zoom by this (see
@@ -1079,6 +1083,7 @@ impl PhotocraftApp {
             fonts_ready: false,
             last_canvas_rect: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0)),
             arrange_start: 0,
+            drawing_window: None,
             ppp: 1.0,
             drop_canvas_rect: None,
             tab_strip: None,
