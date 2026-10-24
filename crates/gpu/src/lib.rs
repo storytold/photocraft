@@ -526,6 +526,33 @@ fn uniform_entry(binding: u32, size: u64) -> wgpu::BindGroupLayoutEntry {
 /// The compositor's WGSL source (exposed for validation in tests).
 pub const SHADER: &str = include_str!("compose.wgsl");
 
+/// The compositor's pipelines, grouped by the thread that builds them: one job per kernel, and
+/// an effect-map kernel's R32F and R16F pipelines in the same job. With [`vertex_entry`], no two
+/// jobs share a shader (see [`Compositor::build`]).
+fn build_jobs(acc_format: wgpu::TextureFormat) -> Vec<Vec<(Kernel, wgpu::TextureFormat)>> {
+    let one = |k: Kernel| if k.is_map() { vec![(k, MAP32), (k, MAP16)] } else { vec![(k, acc_format)] };
+    let (plain, maps): (Vec<Kernel>, Vec<Kernel>) = Kernel::DRAWN.iter().partition(|k| !k.is_map());
+    plain.into_iter().chain(maps).map(one).collect()
+}
+
+/// The vertex entry point of build job `job` in [`vertex_shader`].
+fn vertex_entry(job: usize) -> String {
+    format!("vs_{job}")
+}
+
+/// The full-chunk triangle's vertex stage, once per build job (`vs_0`, `vs_1`, ...): the same
+/// code under distinct names, so each job compiles its own vertex shader.
+fn vertex_shader(jobs: usize) -> String {
+    let mut s = String::from("struct VOut { @builtin(position) pos: vec4<f32> };\n");
+    for job in 0..jobs {
+        s.push_str(&format!(
+            "@vertex fn {}(@builtin(vertex_index) vi: u32) -> VOut {{\n    let uv = vec2(f32((vi << 1u) & 2u), f32(vi & 2u));\n    return VOut(vec4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.0, 1.0));\n}}\n",
+            vertex_entry(job)
+        ));
+    }
+    s
+}
+
 /// Pass-level resources resolved for one page cell: resident pages (texture, mask) and effect
 /// maps (view and region) per pass.
 struct Bound {
@@ -705,8 +732,22 @@ impl Compositor {
     /// built in parallel, each inside its own error scope on the thread that builds it (wgpu's
     /// scopes are per thread): on DX12, FXC compiles one shader at a time and the ~30 pipelines
     /// took about 8 s on one core (#6419).
+    ///
+    /// No shader is used by two threads at once (#9173): wgpu-hal's D3D12 backend caches each
+    /// compiled shader and hands every pipeline a reference to it, but FXC's blobs count
+    /// references without atomics (gfx-rs/wgpu#10547), so threads sharing one could free it
+    /// while the cache still held it, and dropping the device then aborted the process. So each
+    /// job has its own vertex entry point and fragment shaders ([`build_jobs`]), and builds of
+    /// several compositors take turns.
     fn build(device: &wgpu::Device, acc_format: wgpu::TextureFormat) -> (Self, Option<wgpu::Error>) {
+        static BUILDING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _building = BUILDING.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("pc_compose"), source: wgpu::ShaderSource::Wgsl(SHADER.into()) });
+        let jobs = build_jobs(acc_format);
+        let vertex = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("pc_compose_vertex"),
+            source: wgpu::ShaderSource::Wgsl(vertex_shader(jobs.len()).into()),
+        });
         let bgl0 = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("pc_compose_uniforms"),
             entries: &[uniform_entry(0, CHUNK_UNIFORM), uniform_entry(1, OP_UNIFORM)],
@@ -721,12 +762,12 @@ impl Compositor {
             immediate_size: 0,
         });
         // `None` only for kernels without a fragment entry point, which are never drawn.
-        let pipeline = |k: Kernel, format: wgpu::TextureFormat| {
+        let pipeline = |k: Kernel, format: wgpu::TextureFormat, vs: &str| {
             let entry = k.entry()?;
             Some(device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(entry),
                 layout: Some(&layout),
-                vertex: wgpu::VertexState { module: &module, entry_point: Some("vs"), buffers: &[], compilation_options: Default::default() },
+                vertex: wgpu::VertexState { module: &vertex, entry_point: Some(vs), buffers: &[], compilation_options: Default::default() },
                 primitive: wgpu::PrimitiveState::default(),
                 depth_stencil: None,
                 multisample: wgpu::MultisampleState::default(),
@@ -742,12 +783,16 @@ impl Compositor {
         };
         // Effect maps render to R32Float / R16Float, which some adapters (e.g. GL without float
         // render targets) can't: then layer effects use the CPU compositor and the rest stays here.
-        let keys = Kernel::DRAWN.iter().filter(|k| !k.is_map()).map(|&k| (k, acc_format));
-        let keys: Vec<_> = keys.chain(Kernel::DRAWN.iter().filter(|k| k.is_map()).flat_map(|&k| [(k, MAP32), (k, MAP16)])).collect();
-        let built = fx::par_map(keys, |key| {
-            let (built, error) = first_error(device, || pipeline(key.0, key.1));
-            (key, built, error)
+        let built = fx::par_map(jobs.into_iter().enumerate().collect(), |(job, keys)| {
+            let vs = vertex_entry(job);
+            keys.into_iter()
+                .map(|key| {
+                    let (built, error) = first_error(device, || pipeline(key.0, key.1, &vs));
+                    (key, built, error)
+                })
+                .collect::<Vec<_>>()
         });
+        let built = built.into_iter().flatten();
         let (mut pipelines, mut maps) = (HashMap::new(), Vec::new());
         let (mut error, mut map_error) = (None, None);
         for (key, built, e) in built {
@@ -3090,6 +3135,39 @@ mod tests {
         for v in [0.0f32, 1.0, 0.5, 0.25, 1.0 / 255.0, 0.333, 65504.0, -2.5, 1e-6] {
             let r = f16_to_f32(f32_to_f16(v));
             assert!((r - v).abs() <= v.abs() / 1024.0 + 1e-7, "{v} -> {r}");
+        }
+    }
+
+    /// #9173: no two pipeline build jobs share a shader, so no FXC blob is shared across threads.
+    #[test]
+    fn build_jobs_share_no_shader() {
+        let jobs = build_jobs(wgpu::TextureFormat::Rgba32Float);
+        let mut seen = std::collections::HashSet::new();
+        for (job, keys) in jobs.iter().enumerate() {
+            let fragments: std::collections::HashSet<_> = keys.iter().filter_map(|k| k.0.entry()).collect();
+            for f in fragments {
+                assert!(seen.insert(f.to_string()), "fragment shader {f} is built by two jobs");
+            }
+            assert!(seen.insert(vertex_entry(job)), "vertex entry of job {job} is shared");
+        }
+        // Every drawn pipeline is still built, in the same formats.
+        let keys: Vec<_> = jobs.concat();
+        let plain = Kernel::DRAWN.iter().filter(|k| !k.is_map()).count();
+        assert_eq!(keys.len(), plain + 2 * (Kernel::DRAWN.len() - plain));
+        for k in Kernel::DRAWN {
+            let formats: Vec<_> = keys.iter().filter(|key| key.0 == k).map(|key| key.1).collect();
+            let want = if k.is_map() { vec![MAP32, MAP16] } else { vec![wgpu::TextureFormat::Rgba32Float] };
+            assert_eq!(formats, want, "{k:?}");
+        }
+        // The vertex module validates and has every job's entry point.
+        let src = vertex_shader(jobs.len());
+        let module = wgpu::naga::front::wgsl::parse_str(&src).unwrap_or_else(|e| panic!("{}", e.emit_to_string(&src)));
+        wgpu::naga::valid::Validator::new(wgpu::naga::valid::ValidationFlags::all(), wgpu::naga::valid::Capabilities::empty())
+            .validate(&module)
+            .unwrap_or_else(|e| panic!("{e:?}"));
+        for job in 0..jobs.len() {
+            let e = vertex_entry(job);
+            assert!(module.entry_points.iter().any(|ep| ep.name == e && ep.stage == wgpu::naga::ShaderStage::Vertex), "missing {e}");
         }
     }
 
