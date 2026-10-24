@@ -889,6 +889,8 @@ enum PathTarget {
     Shape(u64),
     /// The active layer's vector mask, when its Layers thumbnail is targeted (#196).
     VectorMask(u64),
+    /// The saved path selected in the Paths panel, by name (#8478).
+    Saved(String),
     Work,
 }
 
@@ -924,14 +926,19 @@ pub(crate) fn delete_key_deletes_work_path(app: &PhotocraftApp) -> bool {
         && matches!(target_path(app), Some((PathTarget::Work, _)))
 }
 
-/// The path Path Selection edits: the targeted vector mask, the active shape layer's path, else
-/// the work path.
+/// The path Path Selection edits: the targeted vector mask, the active shape layer's path, the
+/// saved path selected in the Paths panel (#8478), else the work path.
 fn target_path(app: &PhotocraftApp) -> Option<(PathTarget, Path)> {
     if let Some((id, p)) = targeted_vector_mask(app) {
         return Some((PathTarget::VectorMask(id), p));
     }
     if let Some((id, p)) = active_shape_path(app) {
         return Some((PathTarget::Shape(id), p));
+    }
+    if let Some(name) = app.ui.selected_path.as_deref()
+        && let Some((_, p)) = selected_saved_path_index(app)
+    {
+        return Some((PathTarget::Saved(name.to_string()), p));
     }
     app.session.active()?.doc.work_path.clone().map(|p| (PathTarget::Work, p))
 }
@@ -946,6 +953,7 @@ pub(crate) fn free_transform_path(app: &PhotocraftApp) -> Option<(Value, Path)> 
     path.control_bounds()?;
     let params = match target {
         PathTarget::Shape(id) | PathTarget::VectorMask(id) => json!({"name": "layer", "layer": id}),
+        PathTarget::Saved(name) => json!({"name": name}),
         PathTarget::Work => json!({"name": "work"}),
     };
     Some((params, path))
@@ -1049,6 +1057,10 @@ pub fn path_selection_finish(app: &mut PhotocraftApp, start: [f64; 2], end: [f64
         PathTarget::VectorMask(id) => {
             let moved = path.transform(&Affine::translate(dx.round(), dy.round()));
             app.run("layer.vectorMask.edit", json!({"layer": id, "path": photocraft_engine::vector_cmds::path_json(&moved)}))
+        }
+        PathTarget::Saved(name) => {
+            let moved = path.transform(&Affine::translate(dx.round(), dy.round()));
+            app.run("path.set", json!({"name": name, "path": photocraft_engine::vector_cmds::path_json(&moved)}))
         }
         PathTarget::Work => {
             let moved = path.transform(&Affine::translate(dx.round(), dy.round()));
@@ -1166,6 +1178,13 @@ pub(crate) fn selected_saved_path(app: &PhotocraftApp) -> Option<&Path> {
     app.session.active()?.doc.paths.iter().find(|p| p.name == sel).map(|p| &p.path)
 }
 
+/// [`selected_saved_path`] with its index in the document's `paths`: the saved path Path
+/// Selection and Direct Selection edit (#8478).
+pub(crate) fn selected_saved_path_index(app: &PhotocraftApp) -> Option<(usize, Path)> {
+    let sel = app.ui.selected_path.as_deref().filter(|s| !matches!(*s, "work" | "layer"))?;
+    app.session.active()?.doc.paths.iter().enumerate().find(|(_, p)| p.name == sel).map(|(i, p)| (i, p.path.clone()))
+}
+
 /// Work path / active shape path / selected saved path outlines, anchors, and the pen path in
 /// progress.
 pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform, doc: &Document) {
@@ -1187,10 +1206,6 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
         // Direct Selection (or the Pen with ⌘/Ctrl held) draws the paths it edits (#790).
         crate::direct_select::draw_overlay(app, painter, &to_scr, accent, paths);
         if paths {
-            // The selected saved path shows too, though Direct Selection doesn't edit it yet.
-            if let Some(p) = selected_saved_path(app) {
-                draw_path(p, true);
-            }
             crate::anchor_tools::draw_hover(app, painter, &to_scr, accent, painter.ctx().input(|i| i.modifiers));
         }
     } else if paths {

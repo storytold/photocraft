@@ -1,7 +1,8 @@
 //! Direct Selection tool (A, #790), the Convert Point tool (#3204), the Pens' ⌘/Ctrl (Direct
 //! Selection: the Pen, Freeform Pen and Curvature Pen) and the Pen's ⌥/Alt (Convert Point)
 //! modifiers, as in Photoshop. It edits the paths the canvas shows: the targeted vector mask or
-//! the active shape layer's path, and the work path.
+//! the active shape layer's path, the saved path selected in the Paths panel (#8478), and the
+//! work path.
 //!
 //! * Click an anchor to select it (⇧ adds or removes, ⌥ selects its whole subpath), drag on empty
 //!   canvas to marquee-select anchors, click empty canvas to deselect.
@@ -39,16 +40,23 @@ pub enum PathRef {
     Work,
     /// A layer's shape path, or its vector mask.
     Layer(u64),
+    /// A saved path, by its index in the document's `paths`: the one selected in the Paths panel.
+    Saved(usize),
     /// The Pen path being drawn (`ui.pen`): edited in place, not through the engine.
     Pen,
 }
 
 impl PathRef {
-    /// The engine's target params for this path.
-    pub(crate) fn params(self) -> Value {
+    /// The engine's target params for this path. A saved path goes by its name; one that is gone
+    /// gets an empty name, which the engine refuses.
+    pub(crate) fn params(self, app: &PhotocraftApp) -> Value {
         match self {
             PathRef::Work => json!({"name": "work"}),
             PathRef::Layer(id) => json!({"name": "layer", "layer": id}),
+            PathRef::Saved(i) => {
+                let name = app.session.active().and_then(|st| st.doc.paths.get(i)).map(|p| p.name.clone()).unwrap_or_default();
+                json!({"name": name})
+            }
             // Never sent: edits to the Pen path being drawn don't go through the engine.
             PathRef::Pen => json!({}),
         }
@@ -163,12 +171,14 @@ pub fn shows(app: &PhotocraftApp, mods: Modifiers) -> bool {
         || matches!(app.ui.tool, Tool::AddAnchorPoint | Tool::DeleteAnchorPoint | Tool::ConvertPoint)
 }
 
-/// The active paths, front first: the targeted vector mask or the active shape layer's path, then
-/// the work path. The Pen's Auto Add/Delete edits these (`anchor_tools::pen_auto`).
+/// The active paths, front first: the targeted vector mask or the active shape layer's path, the
+/// saved path selected in the Paths panel (Photoshop's target path, #8478), then the work path.
+/// The Pen's Auto Add/Delete edits these (`anchor_tools::pen_auto`).
 pub(crate) fn active_paths(app: &PhotocraftApp) -> Vec<(PathRef, Path)> {
     let layer = crate::vector_ui::targeted_vector_mask(app).or_else(|| crate::vector_ui::active_shape_path(app));
+    let saved = crate::vector_ui::selected_saved_path_index(app);
     let work = app.session.active().and_then(|st| st.doc.work_path.clone());
-    layer.map(|(id, p)| (PathRef::Layer(id), p)).into_iter().chain(work.map(|p| (PathRef::Work, p))).collect()
+    layer.map(|(id, p)| (PathRef::Layer(id), p)).into_iter().chain(saved.map(|(i, p)| (PathRef::Saved(i), p))).chain(work.map(|p| (PathRef::Work, p))).collect()
 }
 
 /// The paths Direct Selection edits, front first: the Pen path being drawn, the active paths, then
@@ -386,7 +396,7 @@ pub fn curvature_hover(app: &PhotocraftApp, p: [f64; 2], mods: Modifiers) -> Opt
 pub(crate) fn curvature_toggle_active(app: &mut PhotocraftApp, p: [f64; 2]) {
     let Some((target, _, Hit::Anchor([s, k]))) = curvature_target(app, p) else { return };
     let mut params = json!({"subpath": s, "knot": k, "curvature": true});
-    if let (Some(o), Some(tp)) = (params.as_object_mut(), target.params().as_object()) {
+    if let (Some(o), Some(tp)) = (params.as_object_mut(), target.params(app).as_object()) {
         o.extend(tp.clone());
     }
     if let Err(e) = app.run("path.convertPoint", params) {
@@ -409,7 +419,7 @@ fn curvature_press(app: &mut PhotocraftApp, p: [f64; 2]) -> bool {
         Hit::Segment([s, k], t) => {
             let key = format!("curvature-add-{}", app.ui.alloc_id());
             let mut params = json!({"subpath": s, "knot": k, "t": t.clamp(0.01, 0.99), "coalesce": key});
-            if let (Some(o), Some(tp)) = (params.as_object_mut(), target.params().as_object()) {
+            if let (Some(o), Some(tp)) = (params.as_object_mut(), target.params(app).as_object()) {
                 o.extend(tp.clone());
             }
             let added = match app.run("path.addAnchor", params) {
@@ -458,7 +468,7 @@ fn release(app: &mut PhotocraftApp, target: PathRef, base: &Path, edit: &Edit, s
         _ if !moved => return,
         e => e.command(start, end),
     };
-    if let (Some(p), Some(t)) = (params.as_object_mut(), target.params().as_object()) {
+    if let (Some(p), Some(t)) = (params.as_object_mut(), target.params(app).as_object()) {
         p.extend(t.clone());
     }
     if let (Some(p), Some(key)) = (params.as_object_mut(), app.ui.direct_selection.coalesce.take()) {
@@ -502,7 +512,14 @@ pub fn arrow_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     let Some(target) = ds.target.filter(|_| app.ui.tool == Tool::DirectSelection && !ds.anchors.is_empty() && ds.drag.is_none()) else {
         return false;
     };
-    let anchors = ds.anchors.clone();
+    // The anchors belong to a path the canvas no longer offers (another saved path picked in the
+    // Paths panel, the path deleted): drop them rather than nudge that path, or another one that
+    // took its index.
+    if !candidates(app).iter().any(|(r, _)| *r == target) {
+        app.ui.direct_selection = DirectSelection::default();
+        return false;
+    }
+    let anchors = app.ui.direct_selection.anchors.clone();
     use egui::Key;
     let keys = [(Key::ArrowLeft, -1.0, 0.0), (Key::ArrowRight, 1.0, 0.0), (Key::ArrowUp, 0.0, -1.0), (Key::ArrowDown, 0.0, 1.0)];
     for (key, ux, uy) in keys {
@@ -511,7 +528,7 @@ pub fn arrow_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
             if ctx.input_mut(|i| i.consume_key(mods, key)) {
                 let k = if mods.shift { 10.0 } else { 1.0 };
                 let mut params = json!({"anchors": anchors, "move": [ux * k, uy * k]});
-                if let (Some(p), Some(t)) = (params.as_object_mut(), target.params().as_object()) {
+                if let (Some(p), Some(t)) = (params.as_object_mut(), target.params(app).as_object()) {
                     p.extend(t.clone());
                 }
                 if let Err(e) = app.run("path.moveAnchors", params) {

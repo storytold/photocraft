@@ -135,7 +135,7 @@ fn apply(app: &mut PhotocraftApp, r: PathRef, hit: Hit) {
         Hit::Handle(..) => return,
     };
     // A hit right at a segment's end is an anchor (anchors win the hit test), so `t` is inside.
-    if let (Some(o), Some(t)) = (params.as_object_mut(), r.params().as_object()) {
+    if let (Some(o), Some(t)) = (params.as_object_mut(), r.params(app).as_object()) {
         o.extend(t.clone());
     }
     match app.run(id, params) {
