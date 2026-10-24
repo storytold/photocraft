@@ -16,7 +16,7 @@ use crate::pinned::{PinnedCorpus, Upstream};
 pub const PHOTOCRAFT_CORPUS_COMMIT: &str = "f5b1178cab15309e05b7b504545df3c701f6d8fd";
 /// https://github.com/storytold/photocraft-corpus: our GIMP-authored XCF oracles (`gimp/`). Its own
 /// pin, so that set can move without refetching `photoshop/`. Bump through a PR after committing there.
-pub const PHOTOCRAFT_CORPUS_GIMP_COMMIT: &str = "fbe9227a48d06de87061e527541209a178fd685c";
+pub const PHOTOCRAFT_CORPUS_GIMP_COMMIT: &str = "0d3343b04edda369e277572d4c65ea97bba25b1f";
 /// https://github.com/psd-tools/psd-tools (MIT): `tests/psd_files` (main, 2026-10-05).
 pub const PSD_TOOLS_COMMIT: &str = "96eb134c17b2c65edf4c4151c0f00b802ada86c2";
 /// https://github.com/Agamnentzar/ag-psd (MIT): `test/` (master, 2026-07-02).
