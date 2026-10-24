@@ -4104,6 +4104,20 @@ curves	Smooth	Εξομάλυνση
 	Not rendered: this adjustment ({key}) is kept as imported.	Δεν αποδίδεται: αυτή η προσαρμογή ({key}) διατηρείται όπως εισήχθη.
 # Print preview image (#8236)
 	Print preview image	Print preview image
+	Color Aware	Με βάση το χρώμα
+	Decontaminate Colors	Απολύμανση χρωμάτων
+	Edge Detection	Ανίχνευση άκρης
+	Global Refinements	Καθολικές βελτιώσεις
+	High Quality Preview	Προεπισκόπηση υψηλής ποιότητας
+	Object Aware	Με βάση το αντικείμενο
+	Real-Time Refinement	Βελτίωση σε πραγματικό χρόνο
+	Refine Edge Brush Tool	Εργαλείο πινέλου βελτίωσης ακμής
+	Refine Hair	Βελτίωση μαλλιών
+	Refine Mode	Λειτουργία βελτίωσης
+	Remember Settings	Απομνημόνευση ρυθμίσεων
+	View Mode	Λειτουργία προβολής
+	Object Aware needs a segmentation model, which isn't available yet	Η λειτουργία Με βάση το αντικείμενο χρειάζεται μοντέλο τμηματοποίησης, που δεν είναι ακόμη διαθέσιμο
+	Refine Hair needs hair detection, which isn't available yet	Η Βελτίωση μαλλιών χρειάζεται ανίχνευση μαλλιών, που δεν είναι ακόμη διαθέσιμη
 # Color panel menu: modes, copy commands and colour ramps (#6000)
 	Hue Cube	Κύβος απόχρωσης
 	Brightness Cube	Κύβος φωτεινότητας

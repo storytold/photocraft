@@ -4083,6 +4083,21 @@ curves	Smooth	スムーズ
 	Not rendered: this adjustment ({key}) is kept as imported.	レンダリングされません: この調整（{key}）はインポートされたまま保持されます。
 # Print preview image (#8236)
 	Print preview image	Print preview image
+	Clear Selection	選択範囲をクリア
+	Color Aware	カラー認識
+	Decontaminate Colors	不要なカラーの除去
+	Edge Detection	エッジの検出
+	Global Refinements	グローバル調整
+	High Quality Preview	高品質プレビュー
+	Object Aware	オブジェクト認識
+	Real-Time Refinement	リアルタイム調整
+	Refine Edge Brush Tool	境界線調整ブラシツール
+	Refine Hair	髪の毛を調整
+	Refine Mode	調整モード
+	Remember Settings	設定を保存
+	View Mode	表示モード
+	Object Aware needs a segmentation model, which isn't available yet	オブジェクト認識にはセグメンテーションモデルが必要ですが、まだ利用できません
+	Refine Hair needs hair detection, which isn't available yet	髪の毛を調整には髪の毛の検出が必要ですが、まだ利用できません
 # Color panel menu: modes, copy commands and colour ramps (#6000)
 	Hue Cube	色相キューブ
 	Brightness Cube	明るさキューブ

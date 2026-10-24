@@ -3028,6 +3028,21 @@ curves	Smooth	平滑
 	Not rendered: this adjustment ({key}) is kept as imported.	未算繪：此調整（{key}）依匯入時的原樣保留。
 # Print preview image (#8236)
 	Print preview image	Print preview image
+	Clear Selection	清除選取範圍
+	Color Aware	顏色感知
+	Decontaminate Colors	淨化顏色
+	Edge Detection	邊緣偵測
+	Global Refinements	整體調整
+	High Quality Preview	高品質預視
+	Object Aware	物件感知
+	Real-Time Refinement	即時調整
+	Refine Edge Brush Tool	調整邊緣筆刷工具
+	Refine Hair	調整毛髮
+	Refine Mode	調整模式
+	Remember Settings	記住設定
+	View Mode	檢視模式
+	Object Aware needs a segmentation model, which isn't available yet	物件感知需要分割模型，目前尚無法使用
+	Refine Hair needs hair detection, which isn't available yet	調整毛髮需要毛髮偵測，目前尚無法使用
 # Color panel menu: modes, copy commands and colour ramps (#6000)
 	Hue Cube	色相立方體
 	Brightness Cube	亮度立方體

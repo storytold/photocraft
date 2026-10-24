@@ -4319,6 +4319,20 @@ cameraRaw	Yellow	Sárga
 	Not rendered: this adjustment ({key}) is kept as imported.	Nem jelenik meg: ez a korrekció ({key}) importált állapotában marad.
 # Print preview image (#8236)
 	Print preview image	Print preview image
+	Color Aware	Színalapú
+	Decontaminate Colors	Színek fertőtlenítése
+	Edge Detection	Élészlelés
+	Global Refinements	Globális finomítások
+	High Quality Preview	Kiváló minőségű előnézet
+	Object Aware	Objektumalapú
+	Real-Time Refinement	Valós idejű finomítás
+	Refine Edge Brush Tool	Élfinomító ecset eszköz
+	Refine Hair	Haj finomítása
+	Refine Mode	Finomítási mód
+	Remember Settings	Beállítások megjegyzése
+	View Mode	Nézetmód
+	Object Aware needs a segmentation model, which isn't available yet	Az Objektumalapú módhoz szegmentálási modell kell, amely még nem érhető el
+	Refine Hair needs hair detection, which isn't available yet	A Haj finomításához hajfelismerés kell, amely még nem érhető el
 # Color panel menu: modes, copy commands and colour ramps (#6000)
 	Hue Cube	Színárnyalat-kocka
 	Brightness Cube	Fényerő-kocka

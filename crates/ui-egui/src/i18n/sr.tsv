@@ -4464,6 +4464,20 @@ shape	Appearance	Izgled
 	Not rendered: this adjustment ({key}) is kept as imported.	Није приказано: ово прилагођавање ({key}) је задржано онако како је увезено.
 # Print preview image (#8236)
 	Print preview image	Print preview image
+	Color Aware	Prema boji
+	Decontaminate Colors	Dekontaminiraj boje
+	Edge Detection	Detekcija ivice
+	Global Refinements	Globalna doterivanja
+	High Quality Preview	Pregled visokog kvaliteta
+	Object Aware	Prema objektu
+	Real-Time Refinement	Doterivanje u realnom vremenu
+	Refine Edge Brush Tool	Alatka četkica za doterivanje ivice
+	Refine Hair	Doteraj kosu
+	Refine Mode	Režim doterivanja
+	Remember Settings	Zapamti podešavanja
+	View Mode	Režim prikaza
+	Object Aware needs a segmentation model, which isn't available yet	Režim Prema objektu zahteva model segmentacije, koji još nije dostupan
+	Refine Hair needs hair detection, which isn't available yet	Doterivanje kose zahteva detekciju kose, koja još nije dostupna
 # PhotoCraft release checks.
 	Check for Updates…	Proveri ažuriranja…
 	PhotoCraft Updates	Ažuriranja za PhotoCraft

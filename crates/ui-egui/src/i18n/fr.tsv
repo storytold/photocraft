@@ -4446,6 +4446,20 @@ shape	Appearance	Apparence
 	Not rendered: this adjustment ({key}) is kept as imported.	Non rendu : ce réglage ({key}) est conservé tel qu'importé.
 # Print preview image (#8236)
 	Print preview image	Print preview image
+	Color Aware	Selon la couleur
+	Decontaminate Colors	Décontaminer les couleurs
+	Edge Detection	Détection des contours
+	Global Refinements	Améliorations globales
+	High Quality Preview	Aperçu haute qualité
+	Object Aware	Selon l'objet
+	Real-Time Refinement	Amélioration en temps réel
+	Refine Edge Brush Tool	Outil Pinceau d'amélioration du contour
+	Refine Hair	Améliorer les cheveux
+	Refine Mode	Mode d'amélioration
+	Remember Settings	Mémoriser les paramètres
+	View Mode	Mode d'affichage
+	Object Aware needs a segmentation model, which isn't available yet	Selon l'objet nécessite un modèle de segmentation, pas encore disponible
+	Refine Hair needs hair detection, which isn't available yet	Améliorer les cheveux nécessite une détection des cheveux, pas encore disponible
 # Color panel menu: modes, copy commands and colour ramps (#6000)
 	Hue Cube	Cube de teinte
 	Brightness Cube	Cube de luminosité
