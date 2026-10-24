@@ -686,8 +686,8 @@ pub struct Services {
 /// (document, compute ms, histograms)).
 pub(crate) type HistJob = (DocId, u64, std::sync::mpsc::Receiver<(DocId, f64, std::sync::Arc<tone::Histograms>)>);
 
-/// The Info panel's cached sample: pixel x, y, document revision and Eyedropper Sample Size.
-type InfoSampleKey = (i32, i32, u64, u32);
+/// The Info panel's cached sample: document, pixel x, y, revision and Eyedropper Sample Size.
+type InfoSampleKey = (DocId, i32, i32, u64, u32);
 
 pub struct PhotocraftApp {
     pub session: Session,

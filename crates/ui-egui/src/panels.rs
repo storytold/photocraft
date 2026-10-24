@@ -1870,7 +1870,7 @@ fn info_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         empty(ui, tl!("No document"));
         return;
     };
-    let (rev, size, origin) = (st.revision, st.doc.size, st.doc.ruler_origin);
+    let (doc_id, rev, size, origin) = (st.doc.id, st.revision, st.doc.size, st.doc.ruler_origin);
     let cmyk_space = photocraft_compose::cmyk_space(&st.doc);
     // Positions and sizes in the ruler unit (Preferences › Units & Rulers).
     let units = app.session.prefs().units_and_rulers.clone();
@@ -1893,21 +1893,21 @@ fn info_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // The readout averages the Eyedropper's Sample Size, as in Photoshop (#1649).
     let sample_size = app.ui.tool_options.eyedropper_size;
     let rgba = pos.and_then(|(x, y)| {
-        if let Some(((cx, cy, cr, cs), v)) = app.info_sample
-            && (cx, cy, cr, cs) == (x, y, rev, sample_size)
+        if let Some((key, v)) = app.info_sample
+            && key == (doc_id, x, y, rev, sample_size)
         {
             return Some(v);
         }
         let params = json!({"x": f64::from(x) + 0.5, "y": f64::from(y) + 0.5, "size": sample_size});
         let v: Vec<f32> = serde_json::from_value(app.session.execute("document.sampleColor", params).ok()?).ok()?;
         let v = [*v.first()?, *v.get(1)?, *v.get(2)?, *v.get(3)?];
-        app.info_sample = Some(((x, y, rev, sample_size), v));
+        app.info_sample = Some(((doc_id, x, y, rev, sample_size), v));
         Some(v)
     });
     let mono = theme::mono(11.5);
     let row = |ui: &mut egui::Ui, k: &str, v: String| {
         ui.horizontal(|ui| {
-            ui.add_sized([18.0, 16.0], egui::Label::new(RichText::new(k).color(t.text_dim).size(11.5)));
+            ui.add_sized([24.0, 16.0], egui::Label::new(RichText::new(k).color(t.text_dim).size(11.5)));
             ui.label(RichText::new(v).font(mono.clone()).color(t.text));
         });
     };
@@ -1917,6 +1917,8 @@ fn info_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         row(&mut cols[0], "R:", rgba.map_or_else(dash, |c| q(c[0]).to_string()));
         row(&mut cols[0], "G:", rgba.map_or_else(dash, |c| q(c[1]).to_string()));
         row(&mut cols[0], "B:", rgba.map_or_else(dash, |c| q(c[2]).to_string()));
+        // The sample already includes composite alpha, including the Eyedropper's averaging.
+        row(&mut cols[0], "Op:", rgba.map_or_else(dash, |c| format!("{}%", (c[3].clamp(0.0, 1.0) * 100.0).round() as u32)));
         // Colour-managed CMYK in percent like Photoshop's readout, through the same conversion as
         // the Color Picker (#8101) and the Color Sampler readout (`sampler_cmds::device_cmyk`).
         let cmyk =
@@ -5446,6 +5448,131 @@ mod color_tests {
 mod info_panel_sampler_tests {
     use super::*;
     use egui_kittest::{Harness, kittest::Queryable};
+    use photocraft_color::{ColorMode, SampleType};
+
+    fn opacity_app(mode: ColorMode, depth: SampleType) -> PhotocraftApp {
+        let mut doc = photocraft_doc::Document::new("Opacity", photocraft_doc::Size::new(3, 1), mode, depth);
+        let mut layer = Layer::raster("Pixels", doc.pixel_format());
+        let surface = layer.surface_mut().unwrap();
+        let format = surface.format();
+        for (x, alpha) in [0.0, 0.5, 1.0].into_iter().enumerate() {
+            surface.write_pixel(x as i32, 0, &photocraft_raster::from_rgba(&format, [1.0, 1.0, 1.0, alpha]));
+        }
+        doc.layers.push(layer);
+        let mut session = photocraft_engine::Session::new();
+        session.add_document(doc, None);
+        let mut app = PhotocraftApp::new(session, crate::Services::default());
+        app.hover_doc = Some([1.5, 0.5]);
+        app
+    }
+
+    fn assert_opacity(h: &Harness<'_, PhotocraftApp>, value: &str) {
+        let label = h.get_by_label("Op:").rect();
+        assert!(
+            h.query_all_by_label(value).any(|node| {
+                let rect = node.rect();
+                rect.left() >= label.right() && rect.left() < h.get_by_label("C:").rect().left() && (rect.center().y - label.center().y).abs() < 1.0
+            }),
+            "the Op: row displays {value}"
+        );
+    }
+
+    #[test]
+    fn info_panel_shows_composite_opacity_at_every_depth_and_colour_model() {
+        for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab] {
+            for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+                let app = opacity_app(mode, depth);
+                let mut h = Harness::builder().with_size(vec2(260.0, 240.0)).build_ui_state(|ui, app| info_panel(app, ui), app);
+                for (x, expected) in [(0.5, "0%"), (1.5, "50%"), (2.5, "100%")] {
+                    h.state_mut().hover_doc = Some([x, 0.5]);
+                    h.run_steps(2);
+                    assert_opacity(&h, expected);
+                }
+                // Composite coverage, rather than the active layer's opacity setting alone.
+                h.state_mut().run("layer.setProps", json!({"opacity": 0.5})).unwrap();
+                h.run_steps(2);
+                assert_opacity(&h, "50%");
+                let pixels = h.state().session.active().unwrap().active_layer.unwrap();
+                h.state_mut().run("layer.newFillLayer.solidColor", json!({"color": "#ffffff"})).unwrap();
+                h.state_mut().run("layer.arrange.sendToBack", json!({})).unwrap();
+                h.state_mut().run("layer.select", json!({"layer": pixels.0})).unwrap();
+                h.run_steps(2);
+                assert_opacity(&h, "100%");
+            }
+        }
+    }
+
+    #[test]
+    fn info_panel_opacity_uses_sample_size_and_clears_outside_the_canvas() {
+        let app = opacity_app(ColorMode::Rgb, SampleType::U8);
+        let mut h = Harness::builder().with_size(vec2(260.0, 240.0)).build_ui_state(|ui, app| info_panel(app, ui), app);
+        h.state_mut().hover_doc = Some([0.5, 0.5]);
+        h.run_steps(2);
+        assert_opacity(&h, "0%");
+        h.state_mut().ui.tool_options.eyedropper_size = 5;
+        h.run_steps(2);
+        assert_opacity(&h, "50%");
+        for pos in [None, Some([-0.5, 0.5]), Some([3.0, 0.5]), Some([0.5, 1.0])] {
+            h.state_mut().hover_doc = pos;
+            h.run_steps(2);
+            assert_opacity(&h, "—");
+        }
+        h.state_mut().hover_doc = Some([2.5, 0.5]);
+        h.state_mut().ui.tool_options.eyedropper_size = 1;
+        h.run_steps(2);
+        assert_opacity(&h, "100%");
+    }
+
+    #[test]
+    fn info_panel_without_a_document_has_no_opacity_readout() {
+        let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let h = Harness::builder().build_ui_state(|ui, app| info_panel(app, ui), app);
+        assert!(h.query_by_label("No document").is_some());
+        assert!(h.query_by_label("Op:").is_none());
+    }
+
+    #[test]
+    fn info_panel_opacity_cache_follows_the_active_document() {
+        let app = opacity_app(ColorMode::Rgb, SampleType::U8);
+        let mut h = Harness::builder().with_size(vec2(260.0, 240.0)).build_ui_state(|ui, app| info_panel(app, ui), app);
+        h.run_steps(2);
+        assert_opacity(&h, "50%");
+        let mut opaque = h.state().session.active().unwrap().doc.as_ref().clone();
+        let surface = opaque.layers.first_mut().unwrap().surface_mut().unwrap();
+        let format = surface.format();
+        surface.write_pixel(1, 0, &photocraft_raster::from_rgba(&format, [1.0, 1.0, 1.0, 1.0]));
+        h.state_mut().session.add_document(opaque, None);
+        h.run_steps(2);
+        assert_opacity(&h, "100%");
+        assert!(h.state_mut().session.set_active(0));
+        h.run_steps(2);
+        assert_opacity(&h, "50%");
+    }
+
+    #[test]
+    fn info_panel_opacity_layout_in_every_theme() {
+        let directory = std::env::var_os("PHOTOCRAFT_INFO_SNAPSHOTS").map(std::path::PathBuf::from);
+        if let Some(dir) = &directory {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        let _gpu = directory.as_ref().map(|_| photocraft_testkit::gpu_lock());
+        for theme in theme::ThemeKind::ALL {
+            for width in [220.0, 340.0] {
+                let app = opacity_app(ColorMode::Rgb, SampleType::U8);
+                let builder = Harness::builder().with_size(vec2(width, 240.0)).with_pixels_per_point(2.0);
+                let builder = if directory.is_some() { builder.wgpu() } else { builder };
+                let mut h = builder.build_ui_state(|ui, app| info_panel(app, ui), app);
+                PhotocraftApp::setup_context(&h.ctx, theme);
+                h.run_steps(3);
+                assert_opacity(&h, "50%");
+                let op = h.get_by_label("Op:").rect();
+                assert!(op.height() <= 16.0 && op.left() >= 0.0 && op.right() < width / 2.0, "{theme:?} at {width}: {op:?}");
+                if let Some(dir) = &directory {
+                    h.render().unwrap().save(dir.join(format!("info-opacity-{}-{width}.png", theme.id()))).unwrap();
+                }
+            }
+        }
+    }
 
     /// #1046: the Info panel lists each Color Sampler point under its number, with its position and
     /// the composite RGB/CMYK readout, one composite pixel each.
