@@ -454,6 +454,9 @@ pub(crate) fn plain_raster(doc: &Document) -> Option<&photocraft_doc::Layer> {
 
 /// Encode a document: (file bytes, warnings about anything approximated or dropped).
 pub type ExportFn = Box<dyn Fn(&Document, &str, &ExportSettings) -> Result<(Vec<u8>, Vec<String>), String>>;
+/// See [`PhotocraftApp::save_hook`].
+pub type SaveHook = Box<dyn FnMut(&mut dyn eframe::Storage)>;
+
 pub type WriteFn = Box<dyn FnMut(&str, &[u8]) -> Result<(), String>>;
 /// What a file on disk looked like when a document last read or wrote it: File › Save asks
 /// before replacing a file another app changed since (#6596).
@@ -1011,6 +1014,9 @@ pub struct PhotocraftApp {
     /// anything keeps requesting repaints (a drag hovering, autoscroll, Liquify held still).
     /// After #4472 (astigmata).
     pub min_frame_ms: Option<f64>,
+    /// Runs after eframe has put the window geometry into `storage`, on every save (the shell
+    /// corrects what is stored there).
+    pub save_hook: Option<SaveHook>,
     last_frame_start_ms: f64,
     /// Background job bookkeeping: opening tabs, control replies waiting on a job.
     pub jobs: jobs_ui::JobsUi,
@@ -1170,6 +1176,7 @@ impl PhotocraftApp {
             control_click: Default::default(),
             background_jobs: false,
             min_frame_ms: None,
+            save_hook: None,
             last_frame_start_ms: 0.0,
             jobs: Default::default(),
             #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
@@ -2262,6 +2269,12 @@ impl PhotocraftApp {
 }
 
 impl eframe::App for PhotocraftApp {
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        if let Some(hook) = self.save_hook.as_mut() {
+            hook(storage);
+        }
+    }
+
     fn on_exit(&mut self) {
         if let Err(err) = tool_memory::save_on_exit(self) {
             log::warn!("Preferences: could not save the final tool selection: {err}");

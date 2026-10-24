@@ -44,6 +44,42 @@ fn saved_position(text: &str) -> bool {
     matches!(field(&window, key), Some(ron::Value::Option(Some(_))))
 }
 
+/// eframe's key for the window entry of `ui.ron`.
+const WINDOW_KEY: &str = "window";
+
+/// Keeps the windowed size and position in `ui.ron` while the window is maximized (#8643).
+/// eframe saves the size the window has at that moment, so a window closed maximized reopened
+/// maximized, but un-maximizing it gave a screen-sized window. Every save of a window that is
+/// neither maximized nor full screen is remembered; a save of a maximized one stores that
+/// remembered geometry instead, with the maximized flag kept.
+#[derive(Default)]
+pub struct WindowMemory {
+    windowed: Option<String>,
+}
+
+impl WindowMemory {
+    /// Correct the window entry eframe has just written to `storage`.
+    pub fn correct(&mut self, storage: &mut dyn eframe::Storage) {
+        let Some(saved) = storage.get_string(WINDOW_KEY) else { return };
+        if let Some(entry) = self.entry(&saved) {
+            storage.set_string(WINDOW_KEY, entry);
+        }
+    }
+
+    /// The entry to store instead of `saved` (eframe's RON), or `None` to keep it.
+    fn entry(&mut self, saved: &str) -> Option<String> {
+        let value = ron::from_str::<ron::Value>(saved).ok()?;
+        let flag = |name| matches!(field(&value, name), Some(ron::Value::Bool(true)));
+        let (maximized, fullscreen) = (flag("maximized"), flag("fullscreen"));
+        if !maximized && !fullscreen {
+            self.windowed = Some(saved.to_string());
+            return None;
+        }
+        let windowed = self.windowed.as_deref()?;
+        Some(if maximized { windowed.replacen("maximized:false", "maximized:true", 1) } else { windowed.to_string() })
+    }
+}
+
 /// `Err` names the first value that would crash startup.
 fn check(text: &str) -> Result<(), String> {
     // eframe stores a map of key → RON string; a file that doesn't parse is ignored by eframe.
@@ -95,6 +131,7 @@ fn field<'a>(v: &'a ron::Value, name: &str) -> Option<&'a ron::Value> {
 
 #[cfg(test)]
 mod tests {
+    use super::WindowMemory;
     use super::{check, saved_position};
 
     fn file(window: &str, zoom: &str) -> String {
@@ -135,6 +172,36 @@ mod tests {
         }
         assert!(!super::has_saved_position(None));
         assert!(!super::has_saved_position(Some(&std::env::temp_dir().join("photocraft-missing-ui.ron"))));
+    }
+
+    #[test]
+    fn a_maximized_window_keeps_the_windowed_size_in_the_saved_entry() {
+        let windowed = "(outer_position_pixels:Some((x:600.0,y:400.0)),fullscreen:false,maximized:false,inner_size_points:Some((x:1100.0,y:760.0)))";
+        let maximized = "(outer_position_pixels:Some((x:-8.0,y:-8.0)),fullscreen:false,maximized:true,inner_size_points:Some((x:2560.0,y:1392.0)))";
+        let mut memory = WindowMemory::default();
+        assert_eq!(memory.entry(windowed), None, "a windowed save is stored as eframe wrote it");
+        assert_eq!(memory.entry(maximized), Some(windowed.replace("maximized:false", "maximized:true")));
+        // Un-maximized and moved: the new windowed geometry is the one remembered.
+        let moved = windowed.replace("x:1100.0", "x:900.0");
+        assert_eq!(memory.entry(&moved), None);
+        assert_eq!(memory.entry(maximized), Some(moved.replace("maximized:false", "maximized:true")));
+    }
+
+    #[test]
+    fn full_screen_never_replaces_the_windowed_size() {
+        let windowed = "(fullscreen:false,maximized:false,inner_size_points:Some((x:1100.0,y:760.0)))";
+        let full = "(fullscreen:true,maximized:false,inner_size_points:Some((x:2560.0,y:1440.0)))";
+        let mut memory = WindowMemory::default();
+        assert_eq!(memory.entry(windowed), None);
+        assert_eq!(memory.entry(full).as_deref(), Some(windowed));
+    }
+
+    #[test]
+    fn a_maximized_window_with_nothing_remembered_is_stored_as_it_is() {
+        let maximized = "(fullscreen:false,maximized:true,inner_size_points:Some((x:2560.0,y:1392.0)))";
+        let mut memory = WindowMemory::default();
+        assert_eq!(memory.entry(maximized), None);
+        assert_eq!(memory.entry("not ron {{{"), None);
     }
 
     #[test]

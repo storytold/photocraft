@@ -750,6 +750,9 @@ fn main() -> eframe::Result {
             app.min_frame_ms = uncapped.then_some(1000.0 / 240.0);
             app.integrated_titlebar = cfg!(target_os = "macos");
             app.custom_titlebar = custom_titlebar;
+            // A window closed maximized keeps its windowed size for un-maximizing (#8643).
+            let mut window_memory = ui_state::WindowMemory::default();
+            app.save_hook = Some(Box::new(move |storage: &mut dyn eframe::Storage| window_memory.correct(storage)));
             // Only the title bar's free gap drags the window, never the menus (mac_window.rs).
             #[cfg(target_os = "macos")]
             mac_window::disable_native_title_drag();
