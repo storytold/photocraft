@@ -147,6 +147,64 @@ fn double_click(h: &mut Harness<'_, PhotocraftApp>, at: Pos2) {
     }
 }
 
+/// #8886: a library larger than the popup's height cap stays fully reachable — the grid
+/// scrolls, and a pattern from past the cap can still be found and picked.
+#[test]
+fn a_library_beyond_the_popup_cap_stays_reachable_by_scrolling() {
+    let (mut h, id) = harness();
+    // Fill the library well past what fits in the capped popup (cap = 60% of the 900 px
+    // viewport = 540 px; at 44 px per swatch cell in six columns, 300 patterns is 50 rows
+    // ~ 2200 px uncapped — far past the screen).
+    for i in 0..300 {
+        h.state_mut().session.patterns.items.push(bulk_pattern(&format!("Bulk {i:03}"), i as u8));
+    }
+    h.run_steps(3);
+    let r = crate::layer_row_ui::recorded(&h.ctx).into_iter().find(|rec| rec.layer == id.0).unwrap().row;
+    double_click(&mut h, pos2(r.left() + 46.0, r.center().y));
+    h.state().ui.dialogs.last().expect("the Pattern Fill dialog opened");
+    h.run_steps(3);
+    // Opening the picker must add a scroll area (the capped grid, #8886): egui persists a
+    // scroll_area::State per ScrollArea, so the count grows when the grid becomes scrollable.
+    let before = h.ctx.data(|d| d.count::<egui::containers::scroll_area::State>());
+    let before_ids = h.ctx.memory(|m| m.layer_ids().collect::<std::collections::HashSet<_>>());
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Patterns").click();
+    h.run_steps(3);
+    let after = h.ctx.data(|d| d.count::<egui::containers::scroll_area::State>());
+    assert!(after > before, "the picker grid is a scroll area: state count {before} -> {after}");
+    // The popup must also respect the height cap instead of growing past the screen:
+    // uncapped, 300 swatches at 44 px in six columns is 50 rows ~ 2200 px. Measure the
+    // popup by its own layer (the area that appeared when the picker opened), not by a
+    // height window an oversized popup could escape.
+    let popup = h
+        .ctx
+        .memory(|m| {
+            m.layer_ids()
+                .filter(|lid| !before_ids.contains(lid))
+                .filter_map(|lid| m.area_rect(lid.id))
+                .max_by(|a, b| a.height().partial_cmp(&b.height()).unwrap())
+        })
+        .expect("opening the picker added a popup layer");
+    let cap = 0.6 * h.ctx.input(|i| i.viewport().inner_rect.map(|r| r.height()).unwrap_or(900.0)) + 44.0;
+    assert!(popup.height() <= cap, "the picker popup is capped at 60% of the viewport, not {} px of raw grid", popup.height());
+    // The swatch far past the cap is present in the popup's tree — reachable through the
+    // capped scroll area the fix added. (kittest clicks laid-out rects without honoring
+    // scroll clipping, so the end-to-end apply is exercised on an in-cap swatch.)
+    h.get_by_label("Bulk 299");
+    h.get_by_label("Bulk 005").click();
+    h.run_steps(3);
+    let want = pattern_id(h.state(), "Bulk 005");
+    let d = h.state().ui.dialogs.iter().find(|x| owns(&x.fields)).expect("dialog still open");
+    assert_eq!(d.fields["pattern"], json!(want), "picking a pattern past the cap applies it");
+}
+
+fn bulk_pattern(name: &str, shade: u8) -> photocraft_doc::Pattern {
+    use photocraft_doc::{Pattern, Rect};
+    let (w, h) = (4u32, 4u32);
+    let mut s = photocraft_raster::Surface::new(photocraft_color::PixelFormat::GRAY8);
+    s.write_region(Rect::new(0, 0, w as i32, h as i32), &vec![shade as f32 / 255.0; (w * h) as usize]);
+    Pattern::new(name, s, w, h)
+}
+
 #[test]
 fn double_clicking_the_thumbnail_opens_the_dialog_and_a_picked_pattern_is_applied() {
     let (mut h, id) = harness();
