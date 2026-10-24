@@ -4062,7 +4062,8 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     // (Space) and a middle-button drag still pan, and a secondary window's Hand never stops, as the
     // box is only drawn and driven on the primary canvas.
     let transform_owns_pointer = primary && app.ui.transform.is_some() && temporary.is_none() && !middle;
-    let hand_pan = tool == Tool::Hand && !transform_owns_pointer;
+    let middle_rotate = middle && ui.input(|i| i.modifiers.shift);
+    let hand_pan = tool == Tool::Hand && !transform_owns_pointer && !middle_rotate;
     // Preferences › Tools › Enable Flick Panning: a Hand drag let go while moving glides on.
     let flick_id = egui::Id::new(("pc-flick-pan", idx, primary, ctx.viewport_id()));
     let flick_on = app.session.prefs().tools.enable_flick_panning;
@@ -4079,7 +4080,14 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             ctx.data_mut(|m| m.get_temp_mut_or_default::<crate::flick_pan::Flick>(flick_id).stop());
         }
     }
-    if hand_pan && response.dragged() && !stroke_dismissal {
+    if middle_rotate && response.dragged() && !stroke_dismissal {
+        if let Some(pointer) = response.interact_pointer_pos()
+            && crate::rotate_view::middle_drag(&mut view, &xf, pointer, response.drag_delta().x)
+        {
+            ctx.request_repaint();
+        }
+        ctx.set_cursor_icon(crate::rotate_view::cursor(true));
+    } else if hand_pan && response.dragged() && !stroke_dismissal {
         let d = xf.unmap_vec(response.drag_delta()) / (view.zoom / ppp);
         view.center[0] -= d.x;
         view.center[1] -= d.y;
@@ -4104,7 +4112,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             let d = xf.to_doc(p);
             crate::layer_picker::sample_at(app, d[0], d[1]);
         }
-    } else if primary && !stroke_dismissal {
+    } else if primary && !stroke_dismissal && !middle_rotate {
         let mods = ui.input(|i| i.modifiers);
         // An ⌥-click the window manager took never arrives; say so (alt_grab.rs).
         crate::alt_grab::watch(app, &ctx, egui::Id::new(("pc-alt-grab", idx)), rect, tool, !under_dialog);
