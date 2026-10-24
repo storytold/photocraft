@@ -4191,8 +4191,10 @@ pub(crate) fn color_field(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         }
         let (kx, ky) = if brightness { (hsva.h, 1.0 - hsva.s) } else { (hsva.s, 1.0 - hsva.v) };
         let knob = pos2(field.left() + kx * field.width(), field.top() + ky * field.height());
-        ui.painter().circle_stroke(knob, 5.0, Stroke::new(1.5, Color32::WHITE));
-        ui.painter().circle_stroke(knob, 6.5, Stroke::new(1.0, Color32::from_black_alpha(160)));
+        // At the extremes the knob sits on the edge: clip it to the field (#8968).
+        let painter = ui.painter().with_clip_rect(field);
+        painter.circle_stroke(knob, 5.0, Stroke::new(1.5, Color32::WHITE));
+        painter.circle_stroke(knob, 6.5, Stroke::new(1.0, Color32::from_black_alpha(160)));
         // The strip: hue (red at both ends, as Photoshop's) or brightness (the colour down to black).
         let (strip, sresp) = ui.allocate_exact_size(vec2(strip_w, h), Sense::click_and_drag());
         let strip_at = |f: f32| {
@@ -5235,6 +5237,36 @@ mod color_tests {
         h.run_steps(2);
         assert!(h.query_by_label("R").is_some(), "RGB readout stays visible when the group is short");
         assert!(h.query_by_role(egui::accesskit::Role::TextInput).is_some(), "hex field stays visible");
+    }
+
+    /// #8968: the round cursor sits on the field's edge at the extremes and must not paint past it
+    /// (over the hue strip or the chips).
+    #[test]
+    fn color_field_cursor_stays_inside_the_field() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        // Black is s = 0, v = 0: the bottom-left corner.
+        app.session.tools.foreground = [0.0, 0.0, 0.0, 1.0];
+        let h = field_harness(app);
+        let mut field = None;
+        let mut circles = Vec::new();
+        for clipped in &h.output().shapes {
+            match &clipped.shape {
+                // The saturation/brightness field is the 17 x 17 mesh; the hue strip is a 25 x 25 grid.
+                egui::Shape::Mesh(m) if m.vertices.len() == 17 * 17 => field = Some(m.calc_bounds()),
+                egui::Shape::Circle(c) => circles.push((c.center, c.radius, clipped.clip_rect)),
+                _ => {}
+            }
+        }
+        let field = field.expect("colour field drawn");
+        let expected_center = pos2(field.left(), field.bottom());
+        let rings: Vec<_> =
+            circles.into_iter().filter(|(center, radius, _)| center.distance(expected_center) < 0.01 && (*radius == 5.0 || *radius == 6.5)).collect();
+        assert!(rings.iter().any(|(_, radius, _)| *radius == 5.0), "inner ring sits at the field's bottom-left corner");
+        assert!(rings.iter().any(|(_, radius, _)| *radius == 6.5), "outer ring sits at the field's bottom-left corner");
+        for (center, radius, clip) in rings {
+            let visible = egui::Rect::from_center_size(center, vec2(2.0 * radius, 2.0 * radius)).intersect(clip);
+            assert!(field.contains_rect(visible), "cursor ring {visible:?} leaves the field {field:?}");
+        }
     }
 
     fn field_harness(app: PhotocraftApp) -> egui_kittest::Harness<'static, PhotocraftApp> {

@@ -480,7 +480,8 @@ fn color_field(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     ui.painter().add(mesh(field, &|x, y| field_color(&mode, fz, x, y)));
     ui.painter().rect_stroke(field, 0.0, Stroke::new(1.0, t.field_border), StrokeKind::Outside);
     let marker = pos2(field.left() + fx * field.width(), field.top() + fy * field.height());
-    ui.painter().circle_stroke(marker, 5.0, Stroke::new(1.5, if hsv[2] > 0.6 && hsv[1] < 0.4 { Color32::BLACK } else { Color32::WHITE }));
+    // Clipped to the field: at the extremes the marker sits on the edge (#8968).
+    ui.painter().with_clip_rect(field).circle_stroke(marker, 5.0, Stroke::new(1.5, if hsv[2] > 0.6 && hsv[1] < 0.4 { Color32::BLACK } else { Color32::WHITE }));
     // Photoshop updates the colour on the press itself, not only when the button is released
     // (#6937): `is_pointer_button_down_on` is true from the press frame onwards (it covers
     // dragging too), while `clicked` fires on release and `dragged` only after a move.
@@ -849,6 +850,33 @@ mod tests {
         PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
         h.run_steps(2);
         h
+    }
+
+    /// #8968: at the extremes the marker sits on the field's edge and must not paint past it.
+    #[test]
+    fn field_marker_stays_inside_the_field() {
+        // Black in the default "h" mode: the marker is at the bottom-left corner.
+        let h = picker("#000000");
+        let mut field = None;
+        let mut circles = Vec::new();
+        for clipped in &h.output().shapes {
+            match &clipped.shape {
+                egui::Shape::Mesh(m) if m.vertices.len() == 33 * 33 => {
+                    // The component slider is a 33 x 33 mesh too, drawn after the field.
+                    field.get_or_insert(m.calc_bounds());
+                }
+                egui::Shape::Circle(c) => circles.push((c.center, c.radius, clipped.clip_rect)),
+                _ => {}
+            }
+        }
+        let field = field.expect("colour field drawn");
+        // The radio buttons draw circles too: keep the ones on the field.
+        circles.retain(|(center, _, _)| field.expand(6.0).contains(*center));
+        assert!(!circles.is_empty(), "the marker is drawn");
+        for (center, radius, clip) in circles {
+            let visible = Rect::from_center_size(center, vec2(2.0 * radius, 2.0 * radius)).intersect(clip);
+            assert!(field.contains_rect(visible), "marker {visible:?} leaves the field {field:?}");
+        }
     }
 
     /// Type `text` into the focused field one key per frame, like a person typing.
