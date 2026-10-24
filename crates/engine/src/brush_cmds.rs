@@ -11,9 +11,7 @@ use photocraft_geom::Rect;
 use photocraft_paint::mixer::{MixerSettings, apply_mixer_stroke};
 use photocraft_paint::replace::{Limits, ReplaceMode, ReplaceSettings, Sampling, apply_color_replacement, color_replacement_effect};
 use photocraft_paint::tile::PREVIEW_SIDE;
-use photocraft_paint::{
-    BrushPreset, BrushSettings, GrayTile, Pattern, PresetCaptures, StoredTile, Stroke, StrokePoint, StrokeRenderer, TipShape, render_stroke,
-};
+use photocraft_paint::{BrushPreset, BrushSettings, GrayTile, Pattern, PresetCaptures, StoredTile, Stroke, StrokePoint, StrokeRenderer, TipShape};
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
 
@@ -258,6 +256,24 @@ fn stroke_target(s: &Session, p: &Value, brush: BrushSettings) -> Result<(Option
     Ok((id, brush, num(p, "zoom").unwrap_or(1.0)))
 }
 
+/// A renderer for a stroke with params `p`: `"pixelSteps": true` steps its dabs one pixel at a
+/// time on the pixel grid, as the canvas paints while the pixel grid shows (#9188).
+fn stroke_renderer(brush: &BrushSettings, fmt: photocraft_color::PixelFormat, zoom: f32, p: &Value) -> StrokeRenderer {
+    StrokeRenderer::new(brush, Some(fmt), zoom).pixel_steps(flag(p, "pixelSteps", false))
+}
+
+/// [`photocraft_paint::render_stroke`] with the stroke's `pixelSteps` (see [`stroke_renderer`]).
+fn render_stroke_with(p: &Value, target: &mut Surface, brush: &BrushSettings, pts: &[StrokePoint], sel: Option<&Surface>, lock: bool, zoom: f32) -> Rect {
+    if pts.is_empty() {
+        return Rect::EMPTY;
+    }
+    let pre = target.clone();
+    let mut r = stroke_renderer(brush, target.format(), zoom, p);
+    r.push(pts);
+    r.finish();
+    r.composite(&pre, target, sel, lock, true)
+}
+
 /// Erasing a layer with locked transparency (e.g. the Background) can't remove opacity, so it
 /// paints the background colour instead (Photoshop).
 fn erase_locked(brush: &mut BrushSettings, lock: bool, bg: [f32; 4]) {
@@ -303,25 +319,25 @@ fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushS
                 let reflected = axis.reflected_passes(&pts);
                 let copies: Vec<_> = reflected
                     .iter()
-                    .filter(|p| crate::symmetry_cmds::SymmetryAxis::has_distinct_mirror(&pts, p))
-                    .map(|p| {
-                        let mut renderer = StrokeRenderer::new(&brush, Some(surf.format()), zoom);
-                        renderer.push(p);
+                    .filter(|q| crate::symmetry_cmds::SymmetryAxis::has_distinct_mirror(&pts, q))
+                    .map(|q| {
+                        let mut renderer = stroke_renderer(&brush, surf.format(), zoom, p);
+                        renderer.push(q);
                         renderer.finish();
                         renderer
                     })
                     .collect();
                 if copies.is_empty() {
-                    render_stroke(surf, &brush, &pts, sel.as_ref(), lock, zoom)
+                    render_stroke_with(p, surf, &brush, &pts, sel.as_ref(), lock, zoom)
                 } else {
                     let pre = surf.clone();
-                    let mut original = StrokeRenderer::new(&brush, Some(surf.format()), zoom);
+                    let mut original = stroke_renderer(&brush, surf.format(), zoom, p);
                     original.push(&pts);
                     original.finish();
                     original.composite_union_many(&copies, &pre, surf, sel.as_ref(), lock)
                 }
             } else {
-                render_stroke(surf, &brush, &pts, sel.as_ref(), lock, zoom)
+                render_stroke_with(p, surf, &brush, &pts, sel.as_ref(), lock, zoom)
             };
             Ok(damage)
         })
@@ -521,9 +537,9 @@ impl LiveStroke {
         if pencil && flag(p, "autoErase", false) {
             apply_auto_erase(&mut brush, surf, pts.first(), fg, s.tools.background);
         }
-        let renderer = StrokeRenderer::new(&brush, Some(surf.format()), zoom);
+        let renderer = stroke_renderer(&brush, surf.format(), zoom, p);
         let symmetry = s.active().and_then(|st| st.symmetry.clone());
-        let mirrors: Vec<_> = (0..symmetry.as_ref().map_or(0, |s| s.mirror_count())).map(|_| StrokeRenderer::new(&brush, Some(surf.format()), zoom)).collect();
+        let mirrors: Vec<_> = (0..symmetry.as_ref().map_or(0, |s| s.mirror_count())).map(|_| stroke_renderer(&brush, surf.format(), zoom, p)).collect();
         let mirror_distinct = vec![false; mirrors.len()];
         let pre = surf.clone();
         let mut live = Self {
@@ -1195,7 +1211,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "paint.pencil",
             "Pencil",
-            r##"{"points":[[x,y,pressure?,tiltX?,tiltY?,rotation?,timeMs?,wheel?],…],"brush":{…}?,"preset":name?,"size":0.5..5000 px?,"opacity":0..1?,"color":"#rrggbb"?=foreground,"mode":"normal|multiply|screen|…|clear (erases with this brush)"="normal","erase":bool?,"block":bool=false (a hard 16×16 screen-px square, 16/zoom doc px; size, opacity, flow, hardness and dynamics ignored: the Eraser's Block mode),"zoom":view zoom=1,"autoErase":bool=false,"seed":u64?,"target":"pixels"|"mask"|"quickMask"|{"channel":i}=Channels panel target}"##,
+            r##"{"points":[[x,y,pressure?,tiltX?,tiltY?,rotation?,timeMs?,wheel?],…],"brush":{…}?,"preset":name?,"size":0.5..5000 px?,"opacity":0..1?,"color":"#rrggbb"?=foreground,"mode":"normal|multiply|screen|…|clear (erases with this brush)"="normal","erase":bool?,"block":bool=false (a hard 16×16 screen-px square, 16/zoom doc px; size, opacity, flow, hardness and dynamics ignored: the Eraser's Block mode),"zoom":view zoom=1,"pixelSteps":bool=false (dabs step one pixel at a time on the pixel grid, as when painting with the pixel grid showing),"autoErase":bool=false,"seed":u64?,"target":"pixels"|"mask"|"quickMask"|{"channel":i}=Channels panel target}"##,
             has_paintable,
             pencil,
             true

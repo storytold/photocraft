@@ -246,6 +246,55 @@ fn pencil_1px_line_is_the_same_whichever_way_and_however_smoothed() {
     assert_eq!(sampled, pixels((1.5, 1.5), (20.5, 9.5), 0.0));
 }
 
+#[test]
+fn pixel_steps_put_every_dab_one_pixel_further_on_the_grid() {
+    // #9188: painting with the pixel grid showing steps one pixel row or column at a time, for
+    // any tip: every dab on the grid, one per pixel along the major axis, none skipped or doubled.
+    let steps = |b: &BrushSettings, pts: &[StrokePoint]| {
+        let mut r = StrokeRenderer::new(b, None, 8.0).pixel_steps(true).record_dabs();
+        r.push(pts);
+        r.finish();
+        r.dabs().iter().map(|d| (d.center.x, d.center.y)).collect::<Vec<_>>()
+    };
+    let soft = BrushSettings { size: 9.0, hardness: 0.0, spacing: 0.25, ..brush() };
+    let pts = [StrokePoint::new(2.2, 3.9, 1.0), StrokePoint::new(6.4, 4.1, 1.0), StrokePoint::new(9.7, 11.3, 1.0)];
+    let c = steps(&soft, &pts);
+    assert_eq!(c.first(), Some(&(2.5, 3.5)), "the first dab snaps to its pixel");
+    for w in c.windows(2) {
+        let (dx, dy) = ((w[1].0 - w[0].0).abs(), (w[1].1 - w[0].1).abs());
+        assert!(dx.max(dy) == 1.0 && dx.min(dy) <= 1.0, "{w:?}: one pixel step");
+    }
+    assert!(c.iter().all(|&(x, y)| x.fract() == 0.5 && y.fract() == 0.5), "odd tips centre on pixels: {c:?}");
+    assert_eq!(c.last(), Some(&(9.5, 11.5)));
+    // Even tips sit on pixel corners; a big spacing and speed spacing step every pixel too.
+    for b in
+        [BrushSettings { size: 10.0, ..soft.clone() }, BrushSettings { spacing: 3.0, ..soft.clone() }, BrushSettings { spacing_enabled: false, ..soft.clone() }]
+    {
+        let mut timed = pts;
+        for (i, p) in timed.iter_mut().enumerate() {
+            p.time = i as f64 * 40.0;
+        }
+        let c = steps(&b, &timed);
+        assert_eq!(c.len(), 1 + 4 + 7, "{b:?}: one dab per pixel step");
+        let f = if b.size == 10.0 { 0.0 } else { 0.5 };
+        assert!(c.iter().all(|&(x, y)| x.fract() == f && y.fract() == f), "{c:?}");
+    }
+    // Scattered dabs land back on the grid.
+    let mut scattered = soft.clone();
+    scattered.scattering.enabled = true;
+    scattered.scattering.both_axes = true;
+    scattered.scattering.scatter.jitter = 2.0;
+    let c = steps(&scattered, &pts);
+    assert!(c.iter().all(|&(x, y)| x.rem_euclid(1.0) == 0.5 && y.rem_euclid(1.0) == 0.5), "scattered off the grid: {c:?}");
+    assert!(c.iter().zip(steps(&soft, &pts)).any(|(a, b)| *a != b), "the scatter still moves dabs");
+    // Moving inside one pixel adds nothing; without pixel steps the dabs stay where the pointer was.
+    assert_eq!(steps(&soft, &[StrokePoint::new(4.1, 4.1, 1.0), StrokePoint::new(4.9, 4.8, 1.0)]), vec![(4.5, 4.5)]);
+    let mut free = StrokeRenderer::new(&soft, None, 8.0).pixel_steps(false).record_dabs();
+    free.push(&pts);
+    free.finish();
+    assert_eq!((free.dabs()[0].center.x, free.dabs()[0].center.y), (2.2, 3.9));
+}
+
 // ---------- spacing ----------
 
 #[test]

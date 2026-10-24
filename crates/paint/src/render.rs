@@ -749,6 +749,15 @@ impl StrokeRenderer {
         }
     }
 
+    /// Step the dabs one pixel at a time on the pixel grid when `on` (see
+    /// [`DabGenerator::pixel_steps`]): a stroke painted while the pixel grid shows.
+    pub fn pixel_steps(mut self, on: bool) -> Self {
+        if on {
+            self.generator = self.generator.pixel_steps();
+        }
+        self
+    }
+
     /// Keep a copy of every primary dab (for tests and sequential tools).
     pub fn record_dabs(mut self) -> Self {
         self.all_dabs = Some(Vec::new());
