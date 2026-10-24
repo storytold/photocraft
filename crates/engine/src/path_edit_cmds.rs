@@ -66,8 +66,50 @@ fn edit_path(s: &mut Session, cmd: &str, p: &Value, label: &str, f: impl FnOnce(
     Ok(json!({ "name": name, "path": path }))
 }
 
+/// Move one path or atomically stage every selected path before publishing the document edit.
 fn move_anchors(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "path.moveAnchors";
+    if let Some(targets) = p.get("targets") {
+        let targets = targets.as_array().filter(|a| !a.is_empty() && a.len() <= 1024).ok_or_else(|| bad(CMD, "invalid target list"))?;
+        let delta = offset(CMD, p)?;
+        let mut staged = Vec::new();
+        for target in targets {
+            let name = target.get("name").and_then(Value::as_str).unwrap_or("work").to_owned();
+            let id = if name == "layer" { Some(layer_id(s, target)?) } else { None };
+            if let Some(id) = id {
+                let locks = s.active().ok_or(crate::EngineError::NoDocument)?.doc.effective_locks(id);
+                if locks.all || locks.pixels || locks.position {
+                    return Err(bad(CMD, "a selected layer is locked"));
+                }
+            }
+            let anchors: Vec<[usize; 2]> =
+                serde_json::from_value(target.get("anchors").cloned().unwrap_or(Value::Null)).map_err(|_| bad(CMD, "invalid anchors"))?;
+            if anchors.is_empty() {
+                return Err(bad(CMD, "empty anchors"));
+            }
+            staged.push((name, id, anchors));
+        }
+        return s.edit("Drag Anchor Points", |doc, _| {
+            let mut next = doc.clone();
+            let snapshot = doc.clone();
+            for (name, id, anchors) in &staged {
+                if let Some(id) = id {
+                    let layer = next.layer_mut(*id).ok_or(crate::EngineError::NoLayer(*id))?;
+                    if let LayerContent::Shape(shape) = &mut layer.content {
+                        edit::move_anchors(&mut shape.path, anchors, delta).map_err(|e| bad(CMD, e))?;
+                        shape.live = None;
+                        shape.psd_raw = None;
+                        crate::vector_cmds::refresh_shape(&snapshot, shape);
+                        continue;
+                    }
+                }
+                edit::move_anchors(path_mut(&mut next, name, *id)?, anchors, delta).map_err(|e| bad(CMD, e))?;
+            }
+            *doc = next;
+            Ok(json!({"targets": staged.len()}))
+        });
+    }
+
     let anchors: Vec<[usize; 2]> = p
         .get("anchors")
         .and_then(Value::as_array)
@@ -155,13 +197,16 @@ pub fn specs() -> Vec<CommandSpec> {
         label,
         menu: &[],
         shortcut: None,
-        params: crate::vector_cmds::leak(format!("{{{TARGET},{params}}} → {{name,path}}")),
+        params: crate::vector_cmds::leak(format!(
+            "{{{TARGET},{params}}} → {}",
+            if id == "path.moveAnchors" { "{name,path} or {targets:count}" } else { "{name,path}" }
+        )),
         enabled: has_doc,
         run,
         journal: true,
     };
     vec![
-        spec("path.moveAnchors", "Drag Anchor Points", r#""anchors":[[subpath,knot],…],"move":[dx,dy],"curvature":bool=false (anchors move with their handles; Direct Selection drag. curvature = the Curvature Pen's drag: every smooth knot of the touched subpaths gets its handles recomputed so the curve flows through the anchors)"#.into(), move_anchors),
+        spec("path.moveAnchors", "Drag Anchor Points", r#""anchors":[[subpath,knot],…],"move":[dx,dy],"targets":[{name,layer?,anchors}]? (atomic multi-path edit, replaces top-level target/anchors),"curvature":bool=false (anchors move with their handles; Direct Selection drag. curvature = the Curvature Pen's drag: every smooth knot of the touched subpaths gets its handles recomputed so the curve flows through the anchors)"#.into(), move_anchors),
         spec(
             "path.moveHandle",
             "Drag Direction Point",
@@ -218,6 +263,20 @@ mod tests {
 
     fn work(s: &Session) -> photocraft_doc::Path {
         s.active().unwrap().doc.work_path.clone().unwrap()
+    }
+
+    /// A malformed later target must preserve both document contents and Undo history.
+    #[test]
+    fn multi_path_anchor_move_rejects_bad_targets_without_partial_edits() {
+        let mut s = session();
+        s.execute("path.set", json!({"path": square()})).unwrap();
+        let before = s.active().unwrap().doc.clone();
+        let history = s.active().unwrap().history.past_len();
+        for targets in [json!([]), json!(42), json!([{"name":"work","anchors":[[0,0]]},{"name":"work","anchors":[[0,999]]}])] {
+            assert!(s.execute("path.moveAnchors", json!({"targets":targets,"move":[5,3]})).is_err());
+            assert_eq!(s.active().unwrap().doc, before);
+            assert_eq!(s.active().unwrap().history.past_len(), history);
+        }
     }
 
     #[test]
