@@ -197,6 +197,9 @@ pub fn default_name(s: &Session) -> String {
     (2..).map(|i| format!("{base} {i}")).find(|n| !taken(n)).unwrap_or(base)
 }
 
+/// Longest edge Define Pattern accepts; 8000² stays under `MAX_PAINT_PIXELS`, so a defined pattern always paints.
+const MAX_DEFINE_EDGE: u32 = 8000;
+
 fn define(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "edit.definePattern";
     let st = s.active().ok_or(EngineError::NoDocument)?;
@@ -212,8 +215,8 @@ fn define(s: &mut Session, p: &Value) -> Result<Value> {
     if r.is_empty() {
         return Err(bad(cmd, "the area is empty"));
     }
-    if r.width() > 4000 || r.height() > 4000 {
-        return Err(bad(cmd, "patterns are limited to 4000 × 4000 px"));
+    if r.width() > MAX_DEFINE_EDGE || r.height() > MAX_DEFINE_EDGE {
+        return Err(bad(cmd, "patterns are limited to 8000 × 8000 px"));
     }
     let mut surf = composite_surface(doc, r);
     // Opaque patterns drop their alpha channel (as Photoshop does).
@@ -529,6 +532,17 @@ mod tests {
         assert!(s.execute("pattern.import", json!({"path": "/nonexistent.pat"})).is_err());
         for bad in [json!({}), json!({"data": "not base64!"}), json!({"data": "aGVsbG8="})] {
             assert!(s.execute("pattern.import", bad.clone()).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn define_pattern_accepts_edges_over_4000_up_to_8000() {
+        for (w, ok) in [(4100, true), (8000, true), (8001, false)] {
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width": w, "height": 2, "depth": 8})).unwrap();
+            s.execute("edit.fill", json!({"color": "#336699"})).unwrap();
+            let r = s.execute("edit.definePattern", json!({}));
+            assert_eq!(r.is_ok(), ok, "width {w}: {r:?}");
         }
     }
 

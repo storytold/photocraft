@@ -5,7 +5,7 @@
 use photocraft_geom::Rect;
 use photocraft_raster::Surface;
 
-/// Largest pattern edge a file may declare (the PSD reader's limit; Define Pattern stops at 4000).
+/// Largest pattern edge a file may declare (the PSD reader's limit; Define Pattern stops at 8000).
 pub const MAX_EDGE: u32 = 30_000;
 
 /// Most pixels a pattern may have to be painted. Renderers expand a pattern into a 16-byte-per-pixel
