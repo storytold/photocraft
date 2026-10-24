@@ -390,6 +390,8 @@ impl PathWalker {
                     }
                 }
                 Some(iv) => {
+                    // The stroke moves on without pixel steps: a later pixel segment starts afresh.
+                    self.cell = None;
                     self.speed_acc += dt;
                     let max_n = (len / MIN_SPEED_STEP).ceil().max(1.0) as usize;
                     let mut n = 0;
@@ -928,6 +930,17 @@ mod grid_bridge_tests {
         let grid = walk(PathWalker::new(None).pixel_grid(0.5), &seg);
         let airbrush = walk(PathWalker::new(Some(10.0)).pixel_grid(0.5), &seg);
         assert_eq!(airbrush.len(), grid.len() + 3, "airbrush adds only its own steps");
+    }
+
+    /// #9059 review: a speed-spaced segment moves the stroke on without pixel steps, so a pixel
+    /// segment after it starts afresh instead of bridging from the cell before it.
+    #[test]
+    fn a_pixel_segment_after_speed_spacing_does_not_step_back() {
+        let pts = [at(0.5, 0.5, 0.0), at(2.5, 0.5, 8.0), at(4.5, 0.5, 8.0)];
+        let steps = walk(PathWalker::new(None).speed_spacing(SPEED_SPACING_MS).pixel_grid(0.5), &pts);
+        let xs: Vec<f64> = steps.iter().map(|p| p.x).collect();
+        assert!(xs.windows(2).all(|w| w[1] > w[0]), "forward only, each cell once: {xs:?}");
+        assert!(steps.windows(2).all(|w| w[1].time >= w[0].time), "time runs on: {steps:?}");
     }
 
     /// #9059 review: a cell filled in at a bend takes the pressure and time between its two
