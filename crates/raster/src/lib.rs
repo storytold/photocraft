@@ -998,9 +998,11 @@ impl Surface {
             }
             // A target that got only default pixels isn't stored, as `prune` would drop it. Checked
             // after the copy, a row at a time: a tile with content stops at its first such row.
-            let finished = tile.data.chunks(default_row.len()).any(|row| row != default_row).then(|| Arc::new(tile));
+            let mut finished = tile.data.chunks(default_row.len()).any(|row| row != default_row).then(|| Arc::new(tile));
             if let Some(k) = memo_key {
-                built.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(k, finished.clone());
+                // Other threads can build a target with the same key at the same time: every one
+                // of them takes the tile stored first, so the targets share one buffer.
+                finished = built.lock().unwrap_or_else(std::sync::PoisonError::into_inner).entry(k).or_insert(finished).clone();
             }
             finished.map(|t| (dc, t))
         };
@@ -1870,7 +1872,7 @@ mod tests {
         let distinct: std::collections::HashSet<_> = moved.tiles().map(|(_, t)| Arc::as_ptr(t)).collect();
         // The 15 × 15 interior tiles read the same four source tiles at the same offset, so they are
         // one tile; only the 64 border tiles (cut by the content's edge) are built one by one.
-        assert!(moved.tile_count() == 289 && distinct.len() <= 64 + 5, "{} tiles, {} distinct", moved.tile_count(), distinct.len());
+        assert!(moved.tile_count() == 289 && distinct.len() <= 64 + 1, "{} tiles, {} distinct", moved.tile_count(), distinct.len());
         let all = Rect::new(-50, -50, 16 * TILE_SIZE + 50, 16 * TILE_SIZE + 50);
         assert_eq!(moved.read_region(all), s.read_region(all.translate(-7, -5)));
     }
