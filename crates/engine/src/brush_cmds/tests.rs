@@ -1320,3 +1320,52 @@ fn brush_and_pencil_paint_a_cmyk_pick_with_the_picked_inks() {
         assert!(got.iter().zip(cyan).all(|(a, b)| (a - b).abs() < 0.02), "{cmd}: {got:?}");
     }
 }
+
+/// The `paint.stroke` result's `warnings`, as strings (an absent list reads as empty).
+fn stroke_warnings(r: &Value) -> Vec<String> {
+    r["warnings"].as_array().map(|w| w.iter().filter_map(|m| m.as_str().map(str::to_string)).collect()).unwrap_or_default()
+}
+
+/// #8389: `spacing` multiplies the brush diameter, so `size: 150, spacing: 5` steps dabs 750 px
+/// apart and a 320 px stroke gets its first dab only. The result reports that pitch and warns
+/// instead of losing the rest of the stroke's coverage silently.
+#[test]
+fn a_stroke_shorter_than_its_dab_pitch_reports_the_pitch_and_warns() {
+    let mut s = session(400, 400);
+    let r = s.execute("paint.stroke", json!({"points": [[200, 40], [200, 360]], "size": 150, "spacing": 5, "color": "#ff0000"})).unwrap();
+    assert_eq!(r["pitch"].as_f64(), Some(750.0), "{r}");
+    let warnings = stroke_warnings(&r);
+    assert_eq!(warnings.len(), 1, "{r}");
+    assert!(warnings[0].contains("750") && warnings[0].contains("320"), "names the pitch and the path length: {r}");
+    // Only the first dab landed: the far end of the stroke is untouched.
+    assert_eq!(rgba(&s, 200, 330)[3], 0.0);
+}
+
+/// #8389: the warning is only for strokes that lose coverage, and their result keeps its old
+/// shape (no `pitch`, no `warnings`). A normal spacing, a tap (a path the first dab already
+/// covers) and Spacing turned off (dabs follow the stroke's speed, so there is no pitch) all
+/// paint without one.
+#[test]
+fn strokes_that_keep_their_coverage_do_not_warn() {
+    let mut s = session(400, 400);
+    let quiet = |r: &Value| r.get("pitch").is_none() && r.get("warnings").is_none();
+    let r = s.execute("paint.stroke", json!({"points": [[200, 40], [200, 360]], "size": 150, "spacing": 0.25})).unwrap();
+    assert!(quiet(&r), "{r}");
+    let tap = s.execute("paint.stroke", json!({"points": [[100, 100], [130, 100]], "size": 150, "spacing": 5})).unwrap();
+    assert!(quiet(&tap), "the first dab covers the whole path: {tap}");
+    let timed = s.execute("paint.stroke", json!({"points": [[20, 20], [380, 20]], "size": 10, "spacing": 5, "brush": {"spacingEnabled": false}})).unwrap();
+    assert!(quiet(&timed), "{timed}");
+}
+
+/// #8389: whether the first dab covers the path is judged by that dab's diameter, not the brush
+/// size. With the default pressure sizing, a first point at pressure 0.2 makes a `size: 150` dab
+/// 30 px wide, so `spacing: 5` steps 150 px and a 50 px path reaches past the dab and still warns.
+#[test]
+fn a_light_first_point_is_judged_by_its_own_dab_diameter() {
+    let mut s = session(400, 400);
+    let r = s.execute("paint.stroke", json!({"points": [[100, 200, 0.2], [150, 200, 0.2]], "size": 150, "spacing": 5, "color": "#ff0000"})).unwrap();
+    assert_eq!(r["pitch"].as_f64(), Some(150.0), "{r}");
+    let warnings = stroke_warnings(&r);
+    assert_eq!(warnings.len(), 1, "{r}");
+    assert!(warnings[0].contains("30.0 px") && warnings[0].contains("150.0 px apart") && warnings[0].contains("50.0 px path"), "{r}");
+}

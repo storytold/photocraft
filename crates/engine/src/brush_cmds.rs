@@ -417,12 +417,48 @@ fn with_blend_mode(mut b: BrushSettings, p: &Value) -> BrushSettings {
     b
 }
 
-/// `paint.stroke`: the Brush (and Eraser) tool.
+/// When a stroke gets its first dab only although its path reaches past that dab: the distance
+/// in pixels between dabs, as the paint crate steps them (`size × spacing` at the first point's
+/// pressure), is longer than the whole path. A large brush with a large `spacing` does that
+/// without any other sign (#8389). Returns that pitch and a warning naming it; `None` when the
+/// stroke keeps its coverage or Spacing is off (dabs then follow the stroke's speed, not a pitch).
+/// Whether the first dab covers the path is judged by that dab's own diameter, so a light first
+/// point that shrinks a pressure-sized dab still warns.
+fn spacing_warning(brush: &BrushSettings, pts: &[StrokePoint]) -> Option<(f64, String)> {
+    use photocraft_paint::dynamics::{DabBuilder, StepInput, apply_pose, base_diameter};
+    let brush = brush.bounded_for_render();
+    let first = pts.first()?;
+    if !brush.spacing_enabled {
+        return None;
+    }
+    let first = apply_pose(&brush, *first);
+    let pitch = DabBuilder::new(&brush).step_len(&first);
+    let step = StepInput { point: first, direction: 0.0, initial_direction: 0.0, step: 0 };
+    let diameter = base_diameter(&brush, &step).max(1.0);
+    let length: f64 = pts.windows(2).map(|w| (w[1].x - w[0].x).hypot(w[1].y - w[0].y)).filter(|d| d.is_finite()).sum();
+    (length > f64::from(diameter) / 2.0 && pitch > length).then(|| {
+        let dab = if (diameter - brush.size).abs() < 0.05 { format!("size {}", brush.size) } else { format!("the first dab's {diameter:.1} px (size {} at its pressure)", brush.size) };
+        let warning = format!(
+            "spacing {} × {dab} puts dabs {pitch:.1} px apart, more than the {length:.1} px path, so the stroke got only its first dab; lower `spacing` for a continuous stroke",
+            brush.spacing
+        );
+        (pitch, warning)
+    })
+}
+
+/// `paint.stroke`: the Brush (and Eraser) tool. When the spacing left the stroke with its first
+/// dab only, the result also has the dab `pitch` in pixels and `warnings` saying so (#8389).
 pub fn paint_stroke(s: &mut Session, p: &Value) -> Result<Value> {
     let pts = parse_points(p, "paint.stroke")?;
     let brush = with_blend_mode(resolve_brush(s, p, "paint.stroke")?, p);
     let label = if brush.erase && !clear_mode(p) { "Eraser" } else { "Brush Tool" };
-    stroke_with(s, "paint.stroke", p, label, brush, pts, false)
+    let warning = spacing_warning(&brush, &pts);
+    let mut r = stroke_with(s, "paint.stroke", p, label, brush, pts, false)?;
+    if let Some((pitch, warning)) = warning {
+        r["pitch"] = json!(pitch);
+        r["warnings"] = json!([warning]);
+    }
+    Ok(r)
 }
 
 /// A `paint.stroke` rendered while it is drawn, onto a copy of the active document, so the canvas
