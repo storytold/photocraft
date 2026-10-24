@@ -1905,7 +1905,8 @@ impl Session {
         let mut invalid = Vec::new();
         let prefs: Preferences = read_lenient(v, &[], &mut invalid);
         if let Some(c) = color {
-            self.color.settings = read_lenient(c, &["colorSettings"], &mut invalid);
+            // Keep tolerant per-field recovery for ordinary preferences, but reject malformed color settings atomically.
+            self.color.settings = serde_json::from_value(c).map_err(|e| format!("preferences.colorSettings: {e}"))?;
             photocraft_compose::psblend::set_text_gamma(self.color.settings.blend_text_gamma);
         }
         self.prefs.edit(|p| *p = prefs);
