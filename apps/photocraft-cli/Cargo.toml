@@ -28,6 +28,7 @@ photocraft-engine = { workspace = true }
 photocraft-io = { workspace = true }
 photocraft-format = { path = "../../crates/format" }
 photocraft-codecs = { workspace = true }
+photocraft-doc = { path = "../../crates/doc" }
 serde_json = { workspace = true }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 

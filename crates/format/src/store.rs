@@ -171,6 +171,13 @@ pub(crate) fn read_manifest(src: &dyn ByteSource, opts: &LoadOptions) -> Result<
     if let Err(crate::finite::Problem::NonFinite { path }) = crate::finite::check(&m) {
         return Err(FormatError::corrupt(format!("`{path}` is out of range")));
     }
+    fn count_layers(layers: &[LayerM]) -> usize {
+        layers.iter().fold(layers.len(), |count, layer| match &layer.content {
+            ContentM::Group { children, .. } => count.saturating_add(count_layers(children)),
+            _ => count,
+        })
+    }
+    m.document.responsive.validate(count_layers(&m.document.layers)).map_err(|message| FormatError::LimitExceeded(message.into()))?;
     Ok(m)
 }
 
@@ -867,7 +874,9 @@ impl PcraftWriter {
         self.hash_cache.retain(|_, (w, _)| w.strong_count() > 0);
         self.blob_hash_cache.retain(|_, (w, _)| w.strong_count() > 0);
         convert::check_nesting(&doc.layers)?;
+        doc.responsive.validate(doc.walk().len()).map_err(|message| FormatError::LimitExceeded(message.into()))?;
         let mut c = Collect { hash_cache: Some(&mut self.hash_cache), blob_hash_cache: Some(&mut self.blob_hash_cache), ..Default::default() };
+
         let document = convert::doc_m(doc, &mut c);
         let mut previews = Vec::new();
         if let Some(t) = &opts.thumbnail {

@@ -104,6 +104,8 @@ struct Ex {
     guides: photocraft_doc::Guides,
     /// Layer comps to regenerate into each layer's `cmls`; None = preserved data still matches.
     comps: Option<(Vec<photocraft_doc::LayerComp>, Option<photocraft_doc::LayerComp>)>,
+    /// Explicit semantic artboard roles, keyed by document layer id.
+    semantic_roles: std::collections::HashMap<photocraft_doc::LayerId, String>,
     /// Smart objects: embedded files and filter caches for the global blocks.
     smart: SmartOut,
     /// The document's patterns, which Pattern Fill layers are rendered from.
@@ -754,6 +756,8 @@ impl Ex {
             crate::comps_map::set_cmls(&mut raw, crate::comps_map::write_cmls(comps, last.as_ref(), l, id));
         }
         self.layer_xmp_block(l, &mut raw);
+        let role = self.semantic_roles.get(&l.id).map(String::as_str).filter(|role| *role != "auto");
+        crate::comps_map::set_artboard_role(&mut raw, role);
         regenerated.into_iter().chain(raw).map(|(k, d)| TaggedBlock::new(k, d)).collect()
     }
 
@@ -1689,6 +1693,14 @@ fn document_to_psd_nested(doc: &Document, opts: &PsdExportOptions, depth: u32, c
         warnings: Vec::new(),
         guides: doc.guides.clone(),
         comps: (!crate::comps_map::comps_unchanged(doc)).then(|| (doc.layer_comps.clone(), doc.last_document_state.clone())),
+        semantic_roles: doc
+            .metadata
+            .text
+            .iter()
+            .filter_map(|(key, role)| {
+                key.strip_prefix(crate::comps_map::ARTBOARD_ROLE_PREFIX)?.parse::<u64>().ok().map(|id| (photocraft_doc::LayerId(id), role.clone()))
+            })
+            .collect(),
         smart: SmartOut::new(doc, depth),
         patterns: doc.patterns.clone(),
         background: psd_background(doc),

@@ -34,9 +34,12 @@ pub const SHELL_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("view.rulers", "Rulers", &["View"], Some("Cmd+R")),
     ("view.show.grid", "Grid", &["View", "Show"], Some("Cmd+'")),
     ("view.show.guides", "Guides", &["View", "Show"], Some("Cmd+;")),
+    ("view.show.safeAreas", "Safe Areas", &["View", "Show"], None),
+    ("view.show.responsiveWarnings", "Responsive Warnings", &["View", "Show"], None),
     ("view.snap", "Snap", &["View"], Some("Cmd+Shift+;")),
     ("view.lockGuides", "Lock Guides", &["View"], Some("Cmd+Alt+;")),
     ("view.extras", "Extras", &["View"], Some("Cmd+H")),
+    ("view.artboardOverview", "Artboard Overview", &["View"], None),
     ("view.show.targetPath", "Target Path", &["View", "Show"], Some("Cmd+Shift+H")),
     ("view.screenMode.cycle", "Cycle Screen Mode", &[], Some("F")),
     // Photoshop's interface brightness shortcuts: step through the four Pro themes.
