@@ -12,7 +12,8 @@ use crate::{PhotocraftApp, widgets};
 
 /// `edit.transform` params that scale the content box `b` = [x0, y0, x1, y1] to `w` x `h`, keeping
 /// the top-left corner (Photoshop's Properties W/H fields), or `layer.translate` params for X/Y.
-pub fn transform_params(layer: u64, b: [i32; 4], w: Option<f32>, h: Option<f32>, linked: bool) -> Option<Value> {
+/// `tol` is the smallest change, in px, that counts as an edit (see [`edit_tolerance`]).
+pub fn transform_params(layer: u64, b: [f64; 4], w: Option<f32>, h: Option<f32>, linked: bool, tol: f32) -> Option<Value> {
     let (bw, bh) = ((b[2] - b[0]) as f32, (b[3] - b[1]) as f32);
     if bw <= 0.0 || bh <= 0.0 {
         return None;
@@ -25,7 +26,7 @@ pub fn transform_params(layer: u64, b: [i32; 4], w: Option<f32>, h: Option<f32>,
             nw = (nh * bw / bh).max(1.0);
         }
     }
-    if (nw - bw).abs() < 0.5 && (nh - bh).abs() < 0.5 {
+    if (nw - bw).abs() < tol && (nh - bh).abs() < tol {
         return None;
     }
     let (x0, y0) = (b[0] as f32, b[1] as f32);
@@ -35,7 +36,21 @@ pub fn transform_params(layer: u64, b: [i32; 4], w: Option<f32>, h: Option<f32>,
 
 /// A number field that reports a value once committed (drag released, Enter, focus lost). `label` is its own
 /// label and the one stacked with it in the same column ("W" over "X"), which share a centre.
-fn field(ui: &mut egui::Ui, id: &str, label: (&str, &str), current: f32, width: f32, u: LenUnit, extent: f64) -> Option<f32> {
+/// The smallest W/H change, in px, that counts as an edit. A pixel frame is whole pixels: under
+/// half a pixel is noise. A shape's path is fractional and is scaled to exactly the typed size,
+/// so anything past the field's own rounding (half its last shown decimal) is an edit: 400.25 px
+/// typed as 400 applies, while focusing and leaving the field (which re-reads its rounded text)
+/// doesn't.
+fn edit_tolerance(layer: &Layer, u: LenUnit, extent: f64) -> f32 {
+    match &layer.content {
+        LayerContent::Shape(sh) if !sh.path.inverted => ((u.px(0.05, extent) - u.px(0.0, extent)).abs() as f32 + 1e-3).min(0.5),
+        _ => 0.5,
+    }
+}
+
+/// `len` is the unit shown and its 100% extent (for percent).
+fn field(ui: &mut egui::Ui, id: &str, label: (&str, &str), current: f32, width: f32, len: (LenUnit, f64), tol: f32) -> Option<f32> {
+    let (u, extent) = len;
     stacked_label(ui, tl!(label.0), &[tl!(label.0), tl!(label.1)], LABEL_W, 2.0);
     let key = ui.make_persistent_id(("layer-props-field", id));
     let mut v = ui.data(|d| d.get_temp::<f32>(key)).unwrap_or_else(|| u.shown(f64::from(current), extent));
@@ -49,7 +64,7 @@ fn field(ui: &mut egui::Ui, id: &str, label: (&str, &str), current: f32, width: 
         return None;
     }
     let px = u.px(v, extent) as f32;
-    ((px - current).abs() >= 0.5).then_some(px)
+    ((px - current).abs() >= tol).then_some(px)
 }
 
 /// Lengths in the Units & Rulers unit, as Photoshop's Properties panel shows them (cm when the
@@ -116,6 +131,17 @@ fn align_glyph(ui: &egui::Ui, r: Rect, kind: &str, color: egui::Color32) {
     }
 }
 
+/// The box the Transform fields show and edit, [x0, y0, x1, y1]: the layer's pixel frame `px`,
+/// or for a shape its path's geometry, as Photoshop's Properties shows it, without the pixels its
+/// stroke adds around it; W/H then scale the path to exactly the typed size.
+fn frame(layer: &Layer, px: photocraft_geom::Rect) -> [f64; 4] {
+    let path = match &layer.content {
+        LayerContent::Shape(sh) if !sh.path.inverted => sh.path.control_bounds().filter(|c| c.2 > c.0 && c.3 > c.1),
+        _ => None,
+    };
+    path.map_or([f64::from(px.x0), f64::from(px.y0), f64::from(px.x1), f64::from(px.y1)], |c| [c.0, c.1, c.2, c.3])
+}
+
 /// Width of the link toggle between the W and H fields (the X/Y row leaves the same gap).
 const LINK_W: f32 = 20.0;
 
@@ -125,36 +151,36 @@ const LINK_W: f32 = 20.0;
 pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
     let mut run: Vec<(String, Value)> = Vec::new();
     if let Some(s) = layer.surface() {
-        let b = app.layer_frame_bounds(layer, s);
+        let bb = frame(layer, app.layer_frame_bounds(layer, s));
         let u = LenUnit::of(app);
         let (dw, dh) = app.session.active().map_or((1.0, 1.0), |s| (f64::from(s.doc.size.width), f64::from(s.doc.size.height)));
+        let (tw, th) = (edit_tolerance(layer, u, dw), edit_tolerance(layer, u, dh));
         if section(ui, "transform", tl!("Transform")) {
             let link_key = egui::Id::new("layer-props-link");
             let linked = ui.data(|d| d.get_temp::<bool>(link_key)).unwrap_or(true);
-            let bb = [b.x0, b.y0, b.x1, b.y1];
             // Two label+field columns with the link toggle between them, filling the panel.
             let w = ((ui.available_width() - 2.0 * (LABEL_W + LABEL_GAP) - LINK_W - 2.0 * LABEL_GAP) / 2.0).max(36.0);
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = LABEL_GAP;
-                if let Some(v) = field(ui, "w", ("W", "X"), b.width() as f32, w, u, dw) {
-                    run.extend(transform_params(layer.id.0, bb, Some(v), None, linked).map(|p| ("edit.transform".to_string(), p)));
+                if let Some(v) = field(ui, "w", ("W", "X"), (bb[2] - bb[0]) as f32, w, (u, dw), tw) {
+                    run.extend(transform_params(layer.id.0, bb, Some(v), None, linked, tw).map(|p| ("edit.transform".to_string(), p)));
                 }
                 if crate::icons::button(ui, if linked { "link" } else { "unlink" }, LINK_W, linked, tl!("Link width and height")).clicked() {
                     ui.data_mut(|d| d.insert_temp(link_key, !linked));
                 }
-                if let Some(v) = field(ui, "h", ("H", "Y"), b.height() as f32, w, u, dh) {
-                    run.extend(transform_params(layer.id.0, bb, None, Some(v), linked).map(|p| ("edit.transform".to_string(), p)));
+                if let Some(v) = field(ui, "h", ("H", "Y"), (bb[3] - bb[1]) as f32, w, (u, dh), th) {
+                    run.extend(transform_params(layer.id.0, bb, None, Some(v), linked, th).map(|p| ("edit.transform".to_string(), p)));
                 }
             });
             ui.add_space(ROW_GAP);
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = LABEL_GAP;
-                if let Some(v) = field(ui, "x", ("X", "W"), b.x0 as f32, w, u, dw) {
-                    run.push(("layer.translate".into(), json!({"layer": layer.id.0, "dx": (v - b.x0 as f32).round() as i32, "dy": 0})));
+                if let Some(v) = field(ui, "x", ("X", "W"), bb[0] as f32, w, (u, dw), 0.5) {
+                    run.push(("layer.translate".into(), json!({"layer": layer.id.0, "dx": (v - bb[0] as f32).round() as i32, "dy": 0})));
                 }
                 ui.add_space(LINK_W + LABEL_GAP);
-                if let Some(v) = field(ui, "y", ("Y", "H"), b.y0 as f32, w, u, dh) {
-                    run.push(("layer.translate".into(), json!({"layer": layer.id.0, "dx": 0, "dy": (v - b.y0 as f32).round() as i32})));
+                if let Some(v) = field(ui, "y", ("Y", "H"), bb[1] as f32, w, (u, dh), 0.5) {
+                    run.push(("layer.translate".into(), json!({"layer": layer.id.0, "dx": 0, "dy": (v - bb[1] as f32).round() as i32})));
                 }
             });
             ui.add_space(ROW_GAP);
@@ -333,13 +359,13 @@ mod tests {
 
     #[test]
     fn width_edit_scales_from_the_top_left() {
-        let p = transform_params(7, [10, 20, 110, 70], Some(200.0), None, true).unwrap();
+        let p = transform_params(7, [10.0, 20.0, 110.0, 70.0], Some(200.0), None, true, 0.5).unwrap();
         assert_eq!(p["layer"], 7);
         assert_eq!(p["quad"], json!([[10.0, 20.0], [210.0, 20.0], [210.0, 120.0], [10.0, 120.0]]));
-        let p = transform_params(7, [10, 20, 110, 70], None, Some(25.0), false).unwrap();
+        let p = transform_params(7, [10.0, 20.0, 110.0, 70.0], None, Some(25.0), false, 0.5).unwrap();
         assert_eq!(p["quad"][2], json!([110.0, 45.0]));
-        assert!(transform_params(7, [10, 20, 110, 70], Some(100.0), None, true).is_none());
-        assert!(transform_params(7, [0, 0, 0, 0], Some(5.0), None, true).is_none());
+        assert!(transform_params(7, [10.0, 20.0, 110.0, 70.0], Some(100.0), None, true, 0.5).is_none());
+        assert!(transform_params(7, [0.0, 0.0, 0.0, 0.0], Some(5.0), None, true, 0.5).is_none());
     }
 
     #[test]
@@ -351,9 +377,57 @@ mod tests {
         s.execute("select.deselect", json!({})).unwrap();
         let st = s.active().unwrap();
         let id = st.active_layer.unwrap();
-        let p = transform_params(id.0, [10, 20, 110, 70], Some(50.0), None, true).unwrap();
+        let p = transform_params(id.0, [10.0, 20.0, 110.0, 70.0], Some(50.0), None, true, 0.5).unwrap();
         s.execute("edit.transform", p).unwrap();
         let b = s.active().unwrap().doc.layer(id).unwrap().surface().unwrap().content_bounds();
         assert_eq!((b.x0, b.y0, b.width(), b.height()), (10, 20, 50, 25));
+    }
+
+    /// A stroked shape's Transform fields show its path, not the stroke's pixels, and a W edit
+    /// scales the path to that width, as in Photoshop.
+    #[test]
+    fn shape_fields_show_and_scale_the_path_without_its_stroke() {
+        let mut s = photocraft_engine::Session::new();
+        s.execute("file.new", json!({"width": 800, "height": 600})).unwrap();
+        s.execute("shape.create", json!({"kind": "rect", "rect": [200, 150, 400, 300], "fill": "#3366cc", "stroke": {"width": 15, "color": "#000000"}}))
+            .unwrap();
+        let st = s.active().unwrap();
+        let id = st.active_layer.unwrap();
+        let layer = st.doc.layer(id).unwrap();
+        let px = photocraft_compose::bounds::content_bounds(layer.surface().unwrap());
+        assert!(px.width() > 400, "the stroke's pixels reach past the path: {px:?}");
+        let bb = frame(layer, px);
+        assert_eq!(bb, [200.0, 150.0, 600.0, 450.0]);
+        s.execute("edit.transform", transform_params(id.0, bb, Some(200.0), None, true, 0.5).unwrap()).unwrap();
+        let LayerContent::Shape(sh) = &s.active().unwrap().doc.layer(id).unwrap().content else { panic!("still a shape") };
+        let c = sh.path.control_bounds().unwrap();
+        assert_eq!((c.0, c.1, c.2 - c.0, c.3 - c.1), (200.0, 150.0, 200.0, 150.0), "the path is exactly 200 × 150");
+    }
+
+    /// #9181 review: a shape's fractional path takes a W edit smaller than half a pixel (400.25
+    /// px typed as 400), while a pixel layer still ignores sub-pixel noise.
+    #[test]
+    fn a_shape_path_takes_a_width_edit_under_half_a_pixel() {
+        let mut s = photocraft_engine::Session::new();
+        s.execute("file.new", json!({"width": 800, "height": 600})).unwrap();
+        s.execute("shape.create", json!({"kind": "rect", "rect": [200, 150, 400.25, 100], "fill": "#3366cc"})).unwrap();
+        let st = s.active().unwrap();
+        let id = st.active_layer.unwrap();
+        let layer = st.doc.layer(id).unwrap();
+        let u = LenUnit { unit: photocraft_engine::prefs::Unit::Pixels, dpi: 72.0, ppi: 72.0 };
+        let bb = frame(layer, photocraft_compose::bounds::content_bounds(layer.surface().unwrap()));
+        assert_eq!(bb[2] - bb[0], 400.25);
+        let tol = edit_tolerance(layer, u, 800.0);
+        assert!(tol < 0.25, "{tol}");
+        let p = transform_params(id.0, bb, Some(400.0), None, false, tol).expect("a quarter-pixel edit applies");
+        s.execute("edit.transform", p).unwrap();
+        let LayerContent::Shape(sh) = &s.active().unwrap().doc.layer(id).unwrap().content else { panic!("still a shape") };
+        let c = sh.path.control_bounds().unwrap();
+        assert!((c.2 - c.0 - 400.0).abs() < 1e-6, "the path is exactly 400 wide: {c:?}");
+        // The field's own rounding (400.25 shown as 400.3) is not an edit.
+        assert!(transform_params(id.0, bb, Some(400.3), None, false, tol).is_none());
+        s.execute("layer.new.layer", json!({})).unwrap();
+        let st = s.active().unwrap();
+        assert_eq!(edit_tolerance(st.doc.layer(st.active_layer.unwrap()).unwrap(), u, 800.0), 0.5, "a pixel layer keeps half a pixel");
     }
 }
