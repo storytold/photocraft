@@ -138,7 +138,8 @@ fn start_folder_scan(folder: String, ctx: egui::Context) -> Arc<Mutex<Option<Fol
     let result = Arc::new(Mutex::new(None));
     let shared = Arc::clone(&result);
     let work = move || {
-        let luts = photocraft_engine::adjust_cmds::folder_luts(&folder);
+        let luts =
+            if folder.trim().is_empty() { photocraft_engine::adjust_cmds::discovered_luts() } else { photocraft_engine::adjust_cmds::folder_luts(&folder) };
         *shared.lock().unwrap_or_else(PoisonError::into_inner) = Some(luts);
         ctx.request_repaint();
     };
@@ -183,9 +184,14 @@ pub fn color_lookup_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: Layer
     let current = app
         .live_adjust
         .as_ref()
-        .filter(|(layer, params)| *layer == id && params.get("lut").is_some())
-        .and_then(|(_, params)| params.get("lut").and_then(Value::as_str))
-        .map(str::to_owned)
+        .filter(|(layer, params)| *layer == id && (params.get("lut").is_some() || params.get("file").is_some()))
+        .and_then(|(_, params)| {
+            params
+                .get("lut")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .or_else(|| params.get("file").and_then(Value::as_str).map(|p| format!("{FOLDER_LUT}{p}")))
+        })
         .unwrap_or(current);
     let custom_label = format!("{name} ({size}³)");
     let mut opts: Vec<(String, &str)> = vec![("load".into(), tl!("Load 3D LUT…")), ("none".into(), tl!("None"))];
@@ -210,10 +216,8 @@ pub fn color_lookup_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: Layer
         let (chosen, _) = widgets::dropdown_wheel_hovered(ui, &format!("clrl-{}", id.0), &mut sel, &opts, 170.0);
         if !chosen.is_empty() {
             if cycle_input {
-                // ponytail: wheel previews cover the built-ins only; a folder LUT would be re-read
-                // from disk on every step. Pick it with a click.
-                if sel != "load" && sel != "custom" && !sel.starts_with(FOLDER_LUT) {
-                    app.live_adjust = Some((id, json!({"lut": sel})));
+                if sel != "load" && sel != "custom" {
+                    app.live_adjust = Some((id, lookup_params(&sel)));
                     cycling_preview = true;
                 }
             } else if sel == "load" {
@@ -231,7 +235,7 @@ pub fn color_lookup_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: Layer
         if ui.input(|input| input.time - since) >= 0.75 {
             if let Some((layer, preview)) = &app.live_adjust
                 && *layer == id
-                && preview.get("lut").is_some()
+                && (preview.get("lut").is_some() || preview.get("file").is_some())
             {
                 params = Some(preview.clone());
             }
@@ -263,11 +267,15 @@ pub fn color_lookup_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: Layer
     }
     if let Some(mut p) = params {
         if p.get("lut").is_none()
+            && p.get("file").is_none()
             && let Some((layer, preview)) = &app.live_adjust
             && *layer == id
-            && let Some(lut) = preview.get("lut")
         {
-            p["lut"] = lut.clone();
+            if let Some(lut) = preview.get("lut") {
+                p["lut"] = lut.clone();
+            } else if let Some(file) = preview.get("file") {
+                p["file"] = file.clone();
+            }
         }
         p["layer"] = json!(id.0);
         // Errors (an unreadable LUT file) land in the status bar.
@@ -339,6 +347,15 @@ mod lookup_picker_tests {
         assert_eq!(current_lookup(name, true, &folder), key);
         assert_eq!(current_lookup(name, true, &[]), "custom");
         assert_eq!(lookup_params("none"), json!({"lut": "none"}));
+    }
+
+    /// Discovered LUTs from candidate directories are offered when fileHandling.lutFolder is empty.
+    #[test]
+    fn discovered_luts_are_offered_when_folder_preference_is_empty() {
+        let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        let folder = folder_luts(&app, &ctx);
+        assert!(folder.iter().all(|(name, path)| !name.is_empty() && !path.is_empty()));
     }
 
     #[test]

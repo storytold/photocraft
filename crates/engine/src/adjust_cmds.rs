@@ -173,6 +173,134 @@ const MAX_FOLDER_LUTS: usize = 500;
 /// Largest LUT file [`folder_luts`] lists: a 129³ `.cube` (the parser's largest) is about 60 MB.
 const MAX_FOLDER_LUT_BYTES: u64 = 64 << 20;
 
+/// Standard directories to search for LUT files when no explicit folder is configured.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn discovered_lut_dirs_with(env_dir: Option<std::ffi::OsString>, exe: Option<std::path::PathBuf>) -> Vec<std::path::PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(dir) = env_dir.filter(|s| !s.is_empty()) {
+        dirs.push(std::path::PathBuf::from(dir));
+    }
+    if let Some(parent) = exe.as_deref().and_then(std::path::Path::parent) {
+        dirs.push(parent.join("LUTs"));
+        dirs.push(parent.join("PhotoCraftData").join("LUTs"));
+        dirs.push(parent.join("luts"));
+    }
+    #[cfg(windows)]
+    {
+        if let Some(appdata) = std::env::var_os("APPDATA").filter(|s| !s.is_empty()) {
+            let base = std::path::PathBuf::from(appdata);
+            dirs.push(base.join("Photocraft").join("LUTs"));
+            dirs.push(base.join("Photocraft").join("luts"));
+        }
+        if let Some(local) = std::env::var_os("LOCALAPPDATA").filter(|s| !s.is_empty()) {
+            let base = std::path::PathBuf::from(local);
+            dirs.push(base.join("Photocraft").join("LUTs"));
+        }
+        for var in ["ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"] {
+            if let Some(pf) = std::env::var_os(var).filter(|s| !s.is_empty()) {
+                let adobe = std::path::PathBuf::from(pf).join("Adobe");
+                if let Ok(entries) = std::fs::read_dir(adobe) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.is_dir() && path.file_name().and_then(|s| s.to_str()).is_some_and(|n| n.starts_with("Adobe Photoshop")) {
+                            dirs.push(path.join("Presets").join("3DLUTs"));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(home) = std::env::var_os("HOME").filter(|s| !s.is_empty()) {
+            let base = std::path::PathBuf::from(home);
+            dirs.push(base.join("Library/Application Support/Photocraft/LUTs"));
+        }
+        let apps = std::path::Path::new("/Applications");
+        if let Ok(entries) = std::fs::read_dir(apps) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() && path.file_name().and_then(|s| s.to_str()).is_some_and(|n| n.starts_with("Adobe Photoshop")) {
+                    dirs.push(path.join("Presets/3DLUTs"));
+                }
+            }
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(xdg) = std::env::var_os("XDG_DATA_HOME").filter(|s| !s.is_empty()) {
+            dirs.push(std::path::PathBuf::from(xdg).join("photocraft/luts"));
+        } else if let Some(home) = std::env::var_os("HOME").filter(|s| !s.is_empty()) {
+            dirs.push(std::path::PathBuf::from(home).join(".local/share/photocraft/luts"));
+        }
+        if let Some(xdg_cfg) = std::env::var_os("XDG_CONFIG_HOME").filter(|s| !s.is_empty()) {
+            dirs.push(std::path::PathBuf::from(xdg_cfg).join("photocraft/LUTs"));
+        } else if let Some(home) = std::env::var_os("HOME").filter(|s| !s.is_empty()) {
+            dirs.push(std::path::PathBuf::from(home).join(".config/photocraft/LUTs"));
+        }
+    }
+    dirs
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn default_lut_dirs() -> Vec<std::path::PathBuf> {
+    discovered_lut_dirs_with(std::env::var_os("PHOTOCRAFT_LUTS_DIR"), std::env::current_exe().ok())
+}
+
+/// Scan `.cube`, `.3dl` and `.look` files from directories, deduplicating by stem.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn scan_lut_dirs(dirs: impl IntoIterator<Item = std::path::PathBuf>) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    let mut seen_names = std::collections::HashSet::new();
+
+    for dir in dirs {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let Some(name) = entry.file_name().into_string().ok() else {
+                continue;
+            };
+            let Some(ext) = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()) else {
+                continue;
+            };
+            if name.starts_with('.') || !matches!(ext.as_str(), "cube" | "3dl" | "look") {
+                continue;
+            }
+            let path = entry.path();
+            let Ok(meta) = std::fs::metadata(&path) else {
+                continue;
+            };
+            if !meta.is_file() || meta.len() > MAX_FOLDER_LUT_BYTES {
+                continue;
+            }
+            let stem = name.rsplit_once('.').map_or(name.as_str(), |(s, _)| s);
+            let Some(p) = path.to_str() else {
+                continue;
+            };
+            if seen_names.insert(stem.to_ascii_lowercase()) {
+                out.push((name, p.to_string()));
+            }
+        }
+    }
+    out.sort_by_key(|(name, _)| name.to_lowercase());
+    out.truncate(MAX_FOLDER_LUTS);
+    out
+}
+
+/// Automatically discover `.cube`, `.3dl` and `.look` files from standard application, user
+/// config, and system preset directories (native only).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn discovered_luts() -> Vec<(String, String)> {
+    scan_lut_dirs(default_lut_dirs())
+}
+
+/// No file system on the web: discovered LUTs list nothing there.
+#[cfg(target_arch = "wasm32")]
+pub fn discovered_luts() -> Vec<(String, String)> {
+    Vec::new()
+}
+
 /// The `.cube`, `.3dl` and `.look` files directly in `dir`, as (file name, path) sorted by name,
 /// for Color Lookup's dropdown (Preferences › File Handling › LUT Folder, #6558). An empty,
 /// missing or unreadable folder lists nothing; hidden files, subfolders and files too large to be

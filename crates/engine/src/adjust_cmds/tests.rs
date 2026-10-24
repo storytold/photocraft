@@ -751,3 +751,13 @@ fn folder_luts_lists_lut_files_by_name() {
     assert!(folder_luts("").is_empty());
     assert!(folder_luts(dir.path().join("missing").to_str().unwrap()).is_empty());
 }
+
+#[test]
+fn discovered_luts_discovers_candidate_luts() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("preset.cube");
+    std::fs::write(&file, "LUT_3D_SIZE 2\n").unwrap();
+    let dirs = discovered_lut_dirs_with(Some(dir.path().into()), None);
+    let list = scan_lut_dirs(dirs);
+    assert!(list.iter().any(|(name, path)| name == "preset.cube" && path == file.to_str().unwrap()));
+}
