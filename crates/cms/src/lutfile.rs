@@ -182,9 +182,19 @@ pub fn parse_cube(text: &str) -> Result<LutFile, LutError> {
 /// varying fastest; the output bit depth is inferred from the largest value.
 pub fn parse_3dl(text: &str) -> Result<LutFile, LutError> {
     let mut rows: Vec<[f64; 3]> = Vec::new();
+    let mut declared_max: Option<f64> = None;
     for line in text.lines() {
         let line = line.split('#').next().unwrap_or("").trim();
-        if line.is_empty() || line.starts_with(|c: char| c.is_ascii_alphabetic()) {
+        if line.is_empty() {
+            continue;
+        }
+        if line.starts_with(|c: char| c.is_ascii_alphabetic()) {
+            // `Mesh <input bits> <output bits>` declares the depth of the node values.
+            let mut words = line.split_whitespace();
+            if words.next().is_some_and(|w| w.eq_ignore_ascii_case("mesh")) {
+                let bits = words.nth(1).and_then(|w| w.parse::<i32>().ok()).filter(|b| (1..=32).contains(b));
+                declared_max = bits.map(|b| 2f64.powi(b) - 1.0);
+            }
             continue;
         }
         let v: Vec<f64> = line.split_whitespace().filter_map(|s| s.parse().ok()).collect();
@@ -198,7 +208,12 @@ pub fn parse_3dl(text: &str) -> Result<LutFile, LutError> {
         return err(format!("{} rows is not a cube", rows.len()));
     }
     let max = rows.iter().flatten().fold(0.0f64, |a, &b| a.max(b));
-    let scale = if max <= 1.0 { 1.0 } else { [1023.0, 4095.0, 16383.0, 65535.0].into_iter().find(|&s| max <= s).unwrap_or(max) };
+    // The declared depth wins over guessing it from the largest value, unless the values don't fit it.
+    let scale = match declared_max {
+        Some(declared) if max <= declared => declared,
+        _ if max <= 1.0 => 1.0,
+        _ => [1023.0, 4095.0, 16383.0, 65535.0].into_iter().find(|&s| max <= s).unwrap_or(max),
+    };
     let mut data = vec![0.0f32; n * n * n * 3];
     for (i, row) in rows.iter().enumerate() {
         let (r, g, b) = (i / (n * n), (i / n) % n, i % n);
@@ -453,6 +468,25 @@ DOMAIN_MAX 0.5 1 1
         let l = parse_3dl(&text).unwrap();
         assert_eq!(l.size, 2);
         assert_eq!(l.data, LutFile::identity(2).data);
+    }
+
+    #[test]
+    fn three_dl_mesh_header_sets_the_output_depth() {
+        let mut nodes = String::from("0 1023\n");
+        for r in 0..2 {
+            for g in 0..2 {
+                for b in 0..2 {
+                    nodes.push_str(&format!("{} {} {}\n", r * 1023, g * 1023, b * 1023));
+                }
+            }
+        }
+        let ten_bit = parse_3dl(&format!("3DMESH\nMesh 1 10\n{nodes}")).unwrap();
+        assert_eq!(ten_bit.data, LutFile::identity(2).data);
+        let twelve_bit = parse_3dl(&format!("3DMESH\nMesh 1 12\n{nodes}")).unwrap();
+        assert_eq!(twelve_bit.data.iter().copied().fold(0.0, f32::max), (1023.0f64 / 4095.0) as f32);
+        // Values that don't fit the declared depth fall back to the inferred one.
+        let too_big = nodes.replace("1023", "4095");
+        assert_eq!(parse_3dl(&format!("Mesh 1 10\n{too_big}")).unwrap().data, LutFile::identity(2).data);
     }
 
     #[test]
