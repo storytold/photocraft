@@ -163,8 +163,14 @@ fn render_ramp<const N: usize>(f: &Fill, rect: Rect, frame: Rect, ramp: Option<R
     let row = |y: i32, out: &mut [[f32; N]]| {
         for (i, p) in out.iter_mut().enumerate() {
             let x = rect.x0 + i as i32;
-            let t = crate::effects::gradient_t(*style, *angle, *scale, *reverse, *offset, frame, x as f32 + 0.5, y as f32 + 0.5);
-            *p = ramp.sample(t);
+            let (t, wrap, seam) = crate::effects::gradient_seam(*style, *angle, *scale, *reverse, *offset, frame, x as f32 + 0.5, y as f32 + 0.5);
+            let c = ramp.sample(t);
+            *p = if seam > 0.0 {
+                let past = ramp.sample(wrap);
+                std::array::from_fn(|i| c[i] + (past[i] - c[i]) * seam)
+            } else {
+                c
+            };
             if *dith {
                 dither_channels_to(p.get_mut(..N.saturating_sub(1)).unwrap_or_default(), x, y, quantum);
             }
@@ -331,5 +337,40 @@ mod tests {
         assert!(render(&f, Rect::new(0, 0, 0, 5), Rect::new(0, 0, 0, 0)).is_empty());
         let px = render(&f, Rect::new(0, 0, 3, 2), Rect::new(0, 0, 0, 0));
         assert_eq!(px.len(), 6);
+    }
+
+    #[test]
+    fn angle_gradient_seam_is_anti_aliased() {
+        // An Angle fill's sweep wraps at the gradient angle (0 → the +x ray from the centre):
+        // the ramp jumps from its last stop back to its first there. Offset the centre half a
+        // pixel up (a fraction of the 16 px frame) so the seam passes through row 7's pixel
+        // centres: those pixels mix the end value into the start's instead of stepping across
+        // the seam (#4933), so no adjacent pair measures the full ramp.
+        let frame = Rect::new(0, 0, 17, 16);
+        let mut f = Fill::gradient(vec![(0.0, Color::BLACK), (1.0, Color::WHITE)], 0.0, 1.0, GradientStyle::Angle, false);
+        if let Fill::Gradient { offset, .. } = &mut f {
+            *offset = (0.0, -0.5 / 16.0);
+        }
+        let px = render(&f, frame, frame);
+        let at = |x: i32, y: i32| px[(y * 17 + x) as usize][0];
+        for x in 8..17 {
+            // On the seam the two sides weigh the same (before the fix: the start value, 0).
+            assert!((at(x, 7) - 0.5).abs() < 1e-4, "seam pixel ({x},7): {}", at(x, 7));
+            // No adjacent pair measures the full ramp (before the fix: up to 0.98 across it).
+            let step = (at(x, 6) - at(x, 7)).abs().max((at(x, 7) - at(x, 8)).abs());
+            assert!(step < 0.55, "step at ({x},7): {step}");
+        }
+        // Away from the seam the fill is unchanged: exactly the ramp at the pixel's position.
+        let ramp = Ramp::new(&f).unwrap();
+        for y in 0..16 {
+            for x in 0..17 {
+                if y == 7 && x >= 8 {
+                    continue;
+                }
+                let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+                let t = crate::effects::gradient_t(GradientStyle::Angle, 0.0, 1.0, false, (0.0, -0.5 / 16.0), frame, px, py);
+                assert!((at(x, y) - ramp.sample(t)[0]).abs() < 1e-6, "({x},{y}) left the plain ramp");
+            }
+        }
     }
 }
