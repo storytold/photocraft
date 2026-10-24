@@ -353,6 +353,42 @@ pub fn value_field_units(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInc
     value_field_in(ui, value, range, "", width, 0.0, FieldOpts { decimals: Some(decimals), units: Some(units), ..Default::default() }).0
 }
 
+/// A [`value_field`] whose dimmed unit suffix is itself the button: the unit is drawn in the
+/// field's right edge (where a plain suffix sits) and a left click on it opens `menu` — the unit
+/// list — right there, as in Photoshop's size dialogs. The value is shown in `units.unit` and a
+/// typed unit converts at `units`' resolution. Returns whether the value changed and, when the
+/// menu picked a unit, its name.
+#[allow(clippy::too_many_arguments)]
+pub fn value_field_unit_menu(
+    ui: &mut Ui,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    width: f32,
+    decimals: u32,
+    units: FieldUnits,
+    mut menu: impl FnMut(&mut Ui) -> Option<&'static str>,
+) -> (bool, Option<&'static str>) {
+    let t = Tokens::get(ui.ctx());
+    let suffix = units.unit.suffix().to_owned();
+    let suffix_font = theme::mono(11.0);
+    // Room for the suffix plus a little padding: the number stops clear of it, and that same room
+    // is the click target. Drawn here (not by the field) so it can be sensed.
+    let suffix_w = if suffix.is_empty() { 0.0 } else { ui.painter().layout_no_wrap(suffix.clone(), suffix_font.clone(), t.text_faint).size().x + 6.0 };
+    let (resp, rect) = value_field_in(ui, value, range, "", width, suffix_w, FieldOpts { decimals: Some(decimals), units: Some(units), ..Default::default() });
+    let mut chosen = None;
+    if !suffix.is_empty() {
+        let suffix_rect = Rect::from_min_max(pos2(rect.right() - suffix_w, rect.top()), rect.max);
+        let click = ui.interact(suffix_rect, resp.id.with("unit-menu"), Sense::click());
+        ui.painter().text(pos2(rect.right() - 6.0, rect.center().y), Align2::RIGHT_CENTER, &suffix, suffix_font, t.text_faint);
+        let click = click.on_hover_text(format!("Unit: {suffix}"));
+        click.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::Button, true, format!("Margin unit: {suffix}"))
+        });
+        egui::Popup::menu(&click).show(|ui| chosen = menu(ui));
+    }
+    (resp.changed(), chosen)
+}
+
 /// A [`value_field_prec`] in `units` whose 100 % is a length of `extent` px (Free Transform's W
 /// and H): a length typed while it shows percent becomes that share of `extent` (`40px`, `2in`),
 /// and a percentage typed while it shows a length becomes that share of `extent` (`50%`), at

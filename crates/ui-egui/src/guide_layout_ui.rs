@@ -42,7 +42,14 @@ pub fn reset(app: &PhotocraftApp, f: &mut Map<String, Value>) {
         k.starts_with("__")
             && !matches!(
                 k.as_str(),
-                "__preset" | "__columnsEnabled" | "__rowsEnabled" | "__marginEnabled" | "__previewGuides" | "__previewParams" | "__previewSource"
+                "__preset"
+                    | "__columnsEnabled"
+                    | "__rowsEnabled"
+                    | "__marginEnabled"
+                    | "__marginUnit"
+                    | "__previewGuides"
+                    | "__previewParams"
+                    | "__previewSource"
             )
     });
     f.extend(defaults);
@@ -63,6 +70,17 @@ fn on(f: &Map<String, Value>, key: &str, fallback: bool) -> bool {
 }
 fn positive(f: &Map<String, Value>, key: &str) -> bool {
     f.get(key).and_then(Value::as_f64).is_some_and(|n| n > 0.0)
+}
+
+/// The unit the Margin fields are shown in: the dialog's transient `__marginUnit`, defaulting to
+/// the Units & Rulers preference (as Photoshop reads a size in the current ruler unit). Percent is
+/// never offered — a margin is a length in the document, not a share of the page.
+fn margin_unit(app: &PhotocraftApp, f: &Map<String, Value>) -> photocraft_engine::prefs::Unit {
+    use photocraft_engine::prefs::Unit;
+    f.get("__marginUnit").and_then(Value::as_str).and_then(Unit::parse).unwrap_or_else(|| match app.session.prefs().units_and_rulers.rulers {
+        Unit::Percent => Unit::Pixels,
+        unit => unit,
+    })
 }
 
 pub fn open(app: &mut PhotocraftApp) -> u64 {
@@ -163,7 +181,8 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
     app.ui.extras.guides = true;
     app.session.prefs.edit(|prefs| prefs.guides_grid_and_slices.guide_color = hex);
     let mut remembered = f.clone();
-    for key in [MARK, "__command", "__label", "__document", "__previewGuides", "__previewParams", "__previewSource"] {
+    // The unit is the dialog's own view (transient), never a parameter or a remembered default.
+    for key in [MARK, "__command", "__label", "__document", "__marginUnit", "__previewGuides", "__previewParams", "__previewSource"] {
         remembered.remove(key);
     }
     app.ui.view.guide_layout = Value::Object(remembered);
@@ -332,15 +351,36 @@ fn main_fields(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value
     group(ui, |ui| {
         let enabled = check(ui, f, "__marginEnabled", tl!("Margin"), true);
         let mut margins = f.get("margin").and_then(Value::as_array).cloned().unwrap_or_else(|| vec![json!(0); 4]);
+        // Margins are document pixels from edge to edge; the unit only changes how they are read
+        // and typed, converting at the document's resolution so a printed margin is the right size
+        // (0.5 cm at 300 ppi is 59 px, and the guides actually sit at 59). One unit for all four.
+        let unit = margin_unit(app, f);
+        let dpi = app.session.active().map_or(72.0, |st| f64::from(st.doc.resolution_dpi.max(1.0)));
+        let ppi = app.session.prefs().units_and_rulers.point_size.per_inch();
         ui.add_space(5.0);
         ui.add_enabled_ui(enabled, |ui| {
             ui.horizontal(|ui| {
                 for (value, label) in margins.iter_mut().zip([tl!("Top:"), tl!("Left:"), tl!("Bottom:"), tl!("Right:")]) {
                     ui.vertical(|ui| {
                         ui.label(label);
-                        let mut n = value.as_f64().unwrap_or(0.0) as f32;
-                        if widgets::value_field(ui, &mut n, 0.0..=300_000.0, "px", 64.0).changed() {
-                            *value = json!(n);
+                        let mut n = unit.from_px(value.as_f64().unwrap_or(0.0), dpi, 1.0, ppi) as f32;
+                        let range = 0.0..=unit.from_px(300_000.0, dpi, 1.0, ppi) as f32;
+                        let units = widgets::FieldUnits { unit, dpi, ppi };
+                        // Keep at least one display decimal for pixel margins so 0.5 px shows as
+                        // "0.5 px" rather than rounding to "1 px" (#7876).
+                        let decimals = unit.decimals().max(1) as u32;
+                        let (changed, chosen) = widgets::value_field_unit_menu(ui, &mut n, range, 64.0, decimals, units, |ui| {
+                            crate::rulers::unit_menu_of(ui, unit, &crate::rulers::LENGTH_UNITS)
+                        });
+                        if let Some(name) = chosen {
+                            f.insert("__marginUnit".into(), json!(name));
+                            // The pick changes no committed parameter, so nothing else would
+                            // schedule the redraw that shows all four fields in the new unit.
+                            ui.ctx().request_repaint();
+                        }
+                        if changed {
+                            // Committed parameters stay in pixels whatever the field showed.
+                            *value = json!(unit.to_px(f64::from(n), dpi, 1.0, ppi));
                         }
                     });
                 }
