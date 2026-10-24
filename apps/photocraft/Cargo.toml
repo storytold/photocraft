@@ -45,6 +45,8 @@ ron = "0.12"
 ureq = { version = "3.4", default-features = false, features = ["rustls", "platform-verifier"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+# Creates the wgpu device before eframe so startup errors are captured (gpu_startup::precreate_device).
+pollster = "1.0"
 # Safe CoreGraphics bindings, compatible with the existing macOS 11 deployment target.
 # `event` (CGEventSource) is used for the Caps Lock poll (#1758).
 core-graphics2 = { version = "=0.6.1", default-features = false, features = ["display", "window", "link", "event"] }

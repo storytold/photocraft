@@ -172,3 +172,10 @@ opt-level = "z"
 [profile.wasm-release.package.photocraft-paint]
 opt-level = 3
 
+
+# wgpu-hal 30.0.1 plus one change (vendor/wgpu-hal/src/metal/adapter.rs, `supported_msl_version`):
+# use the newest Metal language version the device's shader compiler accepts, not the OS's. Without
+# it Macs running a newer macOS than their GPU's compiler supports can't compile any shader.
+# Drop this when upstream wgpu does the same.
+[patch.crates-io]
+wgpu-hal = { path = "vendor/wgpu-hal" }
