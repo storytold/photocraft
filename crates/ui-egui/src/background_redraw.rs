@@ -43,6 +43,38 @@ const KEEP: usize = 2;
 /// [`GpuCanvas::refresh`] kind of a redraw served from a [`Kept`] composite.
 pub(crate) const KEPT: &str = "kept";
 
+/// Tests: how many more blocks the app's redraw workers may composite (#9119). A worker waits
+/// before each batch until the allowance covers it, so a test can keep a redraw running however
+/// fast the machine is. Unlimited by default.
+#[cfg(test)]
+#[derive(Clone)]
+pub(crate) struct Allowance(Arc<std::sync::atomic::AtomicUsize>);
+
+#[cfg(test)]
+impl Default for Allowance {
+    fn default() -> Self {
+        Allowance(Arc::new(std::sync::atomic::AtomicUsize::new(usize::MAX)))
+    }
+}
+
+#[cfg(test)]
+impl Allowance {
+    pub(crate) fn set(&self, blocks: usize) {
+        self.0.store(blocks, Ordering::SeqCst);
+    }
+
+    /// Wait until `n` more blocks are allowed and take them; `false` if `stop` comes first.
+    fn take(&self, n: usize, stop: &AtomicBool) -> bool {
+        while !stop.load(Ordering::Relaxed) {
+            if self.0.try_update(Ordering::SeqCst, Ordering::SeqCst, |left| left.checked_sub(n)).is_ok() {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        false
+    }
+}
+
 /// One finished block, as texels of the canvas texture.
 struct Piece {
     block: usize,
@@ -363,10 +395,16 @@ fn spawn(app: &mut PhotocraftApp, ctx: &egui::Context, s: Spawn) {
     let (tx, rx) = std::sync::mpsc::sync_channel(BATCH);
     let stop = Arc::new(AtomicBool::new(false));
     let work = (blocks.clone(), stop.clone(), ctx.clone());
+    #[cfg(test)]
+    let allowance = app.redraw_allowance.clone();
     let spawned = std::thread::Builder::new().name("canvas-redraw".into()).spawn(move || {
         let (blocks, stop, ctx) = work;
+        #[cfg(test)]
+        let turn = |n| allowance.take(n, &stop);
+        #[cfg(not(test))]
+        let turn = |_| true;
         // A panic stops the redraw: the receiver sees the worker gone and drops it.
-        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| draw(&doc, display.as_deref(), format, &blocks, &todo, &stop, &tx, &ctx)));
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| draw(&doc, display.as_deref(), format, &blocks, &todo, &stop, turn, &tx, &ctx)));
         ctx.request_repaint();
     });
     if let Err(e) = spawned {
@@ -380,7 +418,7 @@ fn spawn(app: &mut PhotocraftApp, ctx: &egui::Context, s: Spawn) {
 }
 
 /// The worker: composite `todo`'s blocks of `doc` in batches and hand each over, until done or
-/// stopped.
+/// stopped. `turn(n)` is asked before each batch of `n` blocks (always yes outside tests).
 #[allow(clippy::too_many_arguments)]
 fn draw(
     doc: &Document,
@@ -389,11 +427,12 @@ fn draw(
     blocks: &[Rect],
     todo: &[usize],
     stop: &AtomicBool,
+    turn: impl Fn(usize) -> bool,
     tx: &SyncSender<Piece>,
     ctx: &egui::Context,
 ) {
     for batch in todo.chunks(BATCH) {
-        if stop.load(Ordering::Relaxed) {
+        if stop.load(Ordering::Relaxed) || !turn(batch.len()) {
             return;
         }
         // Never reached in the browser ([`enabled`]); it only has to build there, without rayon.

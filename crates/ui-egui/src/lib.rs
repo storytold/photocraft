@@ -850,6 +850,9 @@ pub struct PhotocraftApp {
     pub(crate) redraws: std::collections::HashMap<photocraft_doc::DocId, background_redraw::Redraw>,
     /// The last finished background redraws, for going back to a state drawn a moment ago (#6528).
     pub(crate) kept: background_redraw::KeptComposites,
+    /// Tests: blocks the background redraws may still composite (#9119).
+    #[cfg(test)]
+    pub(crate) redraw_allowance: background_redraw::Allowance,
     /// Select › Color Range dialog preview (proxy document + mask / image textures).
     pub(crate) color_range: Option<color_range_ui::Preview>,
     /// Image › Adjustments dialog preview through a temporary clipped adjustment layer.
@@ -1096,6 +1099,8 @@ impl PhotocraftApp {
             filter_preview_worker: Default::default(),
             redraws: Default::default(),
             kept: Default::default(),
+            #[cfg(test)]
+            redraw_allowance: Default::default(),
             color_range: None,
             adjust_preview: None,
             live_adjust_preview: None,
