@@ -38,6 +38,21 @@ fn hash01(x: u32, y: u32, seed: u32) -> f32 {
     (h & 0xffff) as f32 / 65535.0
 }
 
+/// Smoothed value noise in 0..1 on a `cell`-px lattice that wraps every `tile` px (`cell`
+/// divides `tile`), so a pattern built from it tiles seamlessly.
+fn tiling_noise(x: u32, y: u32, tile: u32, cell: u32, seed: u32) -> f32 {
+    let cell = cell.max(1);
+    let n = (tile / cell).max(1);
+    let (cx, cy) = (x / cell, y / cell);
+    let (fx, fy) = ((x % cell) as f32 / cell as f32, (y % cell) as f32 / cell as f32);
+    let v = |i: u32, j: u32| hash01(i % n, j % n, seed);
+    let s = |t: f32| t * t * (3.0 - 2.0 * t);
+    let (sx, sy) = (s(fx), s(fy));
+    let a = v(cx, cy) + (v(cx + 1, cy) - v(cx, cy)) * sx;
+    let b = v(cx, cy + 1) + (v(cx + 1, cy + 1) - v(cx, cy + 1)) * sx;
+    a + (b - a) * sy
+}
+
 fn procedural(name: &str, w: u32, h: u32, f: impl Fn(u32, u32) -> [f32; 3]) -> Pattern {
     let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::U8, false);
     let mut s = Surface::new(fmt);
@@ -90,6 +105,21 @@ pub fn builtin() -> Vec<Pattern> {
                 a + (b - a) * sy
             };
             g(0.78 + 0.14 * oct(8, 1) + 0.08 * oct(2, 2))
+        }),
+        procedural("Zebra", 128, 128, |x, y| {
+            // Wavy, roughly vertical stripes: a whole number of periods across the tile plus
+            // noise that wraps, so the tile is seamless both ways.
+            use std::f32::consts::TAU;
+            let noise = |cell: u32, seed: u32| tiling_noise(x, y, 128, cell, seed) - 0.5;
+            let warp = 0.6 * noise(64, 10) + 0.6 * noise(32, 11) + 0.2 * noise(16, 12) + 0.1 * (TAU * 2.0 * y as f32 / 128.0).sin();
+            let u = 6.0 * x as f32 / 128.0 + warp;
+            // A drifting threshold makes the stripes thicken, thin and fork.
+            let t = 1.1 * noise(32, 13) + 0.5 * noise(16, 14);
+            // A triangle wave keeps the same slope everywhere, so every edge is about 1 px soft
+            // (a sine goes flat at its peaks and blurs the thin stripe ends).
+            let tri = 1.0 - 4.0 * (u.rem_euclid(1.0) - 0.5).abs();
+            let ink = ((tri - t) / 0.2 + 0.5).clamp(0.0, 1.0);
+            [0.95, 0.94, 0.91].map(|paper: f32| paper + (0.07 - paper) * ink)
         }),
     ]
 }
@@ -624,5 +654,31 @@ mod tests {
         s.patterns.items.push(huge);
         let e = s.execute("brush.texturePattern", json!({"pattern": "huge"})).unwrap_err();
         assert!(e.to_string().contains("too large"), "{e}");
+    }
+
+    #[test]
+    fn zebra_has_black_and_white_stripes_and_tiles_seamlessly() {
+        let z = Session::new().patterns.items.into_iter().find(|p| p.name == "Zebra").unwrap();
+        assert_eq!((z.width, z.height), (128, 128));
+        let lum = |x: u32, y: u32| z.surface.pixel(x as i32, y as i32)[1];
+        let (mut ink, mut paper) = (0, 0);
+        for y in 0..128 {
+            for x in 0..128 {
+                let v = lum(x, y);
+                if v < 0.2 {
+                    ink += 1;
+                } else if v > 0.8 {
+                    paper += 1;
+                }
+            }
+        }
+        assert!(ink * 4 > 128 * 128 && paper * 4 > 128 * 128, "ink {ink}, paper {paper}");
+        // Seamless: the step across the wrap is no bigger than a step inside the tile.
+        let step_x = |x0: u32, x1: u32| (0..128).map(|y| (lum(x0, y) - lum(x1, y)).abs()).sum::<f32>() / 128.0;
+        let step_y = |y0: u32, y1: u32| (0..128).map(|x| (lum(x, y0) - lum(x, y1)).abs()).sum::<f32>() / 128.0;
+        let inner_x = (0..127).map(|x| step_x(x, x + 1)).sum::<f32>() / 127.0;
+        let inner_y = (0..127).map(|y| step_y(y, y + 1)).sum::<f32>() / 127.0;
+        assert!(step_x(127, 0) <= 2.0 * inner_x, "x seam {} vs {inner_x}", step_x(127, 0));
+        assert!(step_y(127, 0) <= 2.0 * inner_y, "y seam {} vs {inner_y}", step_y(127, 0));
     }
 }

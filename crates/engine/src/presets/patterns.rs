@@ -17,7 +17,10 @@ const UNGROUPED: &str = "Patterns";
 pub fn builtin_groups() -> Vec<Group<String>> {
     let lib = crate::pattern_cmds::builtin();
     let ids = |names: &[&str]| -> Vec<String> { names.iter().filter_map(|n| lib.iter().find(|p| p.name == *n).map(|p| p.id.clone())).collect() };
-    vec![Group::new("Geometric", ids(&["Checkerboard", "Diagonal Lines", "Dots", "Grid"])), Group::new("Textures", ids(&["Bricks", "Weave", "Paper Noise"]))]
+    vec![
+        Group::new("Geometric", ids(&["Checkerboard", "Diagonal Lines", "Dots", "Grid"])),
+        Group::new("Textures", ids(&["Bricks", "Weave", "Paper Noise", "Zebra"])),
+    ]
 }
 
 /// Bring the groups in line with the library (see the module docs).

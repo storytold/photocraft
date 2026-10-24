@@ -512,6 +512,24 @@ fn styles_with_pattern_overlay_copy_the_pattern() {
     assert!(s.active().unwrap().doc.patterns.iter().any(|p| p.name == "Bricks"));
 }
 
+#[test]
+fn zebra_style_fills_the_layer_with_stripes_at_every_depth() {
+    for depth in [8, 16, 32] {
+        let mut s = session(depth);
+        s.execute("layer.new.layer", json!({})).unwrap();
+        let id = active(&s);
+        s.execute("select.rect", json!({"x": 4, "y": 4, "width": 56, "height": 40})).unwrap();
+        s.execute("edit.fill", json!({"color": "#808080"})).unwrap();
+        s.execute("style.presets.apply", json!({"preset": "Zebra", "layer": id.0})).unwrap();
+        let d = s.active().unwrap();
+        assert!(d.doc.patterns.iter().any(|p| p.name == "Zebra"), "depth {depth}");
+        assert_eq!(d.doc.layer(id).unwrap().effects.items.len(), 4, "depth {depth}");
+        // Inside the shape, clear of the stroke and the bevel, both stripe colours show.
+        let b = photocraft_compose::render(&d.doc, photocraft_doc::Rect::new(12, 12, 52, 36));
+        assert!(b.px.iter().any(|p| p[1] < 0.25) && b.px.iter().any(|p| p[1] > 0.75), "depth {depth}");
+    }
+}
+
 // ------------------------------------------------------------------ shapes
 
 #[test]
