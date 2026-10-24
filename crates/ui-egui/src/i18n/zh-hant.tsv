@@ -757,6 +757,7 @@
 	Reset All Tools	重設所有工具
 	Reset all tools to their default settings?	要將所有工具重設為預設設定嗎？
 	Lock Workspace	鎖定工作區
+	Open Panels Floating	以浮動方式開啟面板
 	Theme	主題
 	Pro Theme	專業主題
 	Pro Medium Gray Theme	專業中灰主題
@@ -2966,6 +2967,12 @@ curves	Smooth	平滑
 	Increase Brush Size	放大筆刷大小
 	Decrease Brush Hardness	降低筆刷硬度
 	Increase Brush Hardness	提高筆刷硬度
+	Move to Separate Window	移到獨立視窗
+	Return to PhotoCraft Window	返回 PhotoCraft 視窗
+	Dock Panel Group	停駐面板群組
+	Dock to Icon Bar	停駐到圖示列
+	Remove from Icon Bar	從圖示列移除
+	Move Icon	移動圖示
 	Demosaic	去馬賽克
 	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	如何填補相機彩色濾鏡陣列的馬賽克。在開啟檔案時套用；預覽顯示開啟時所用的方法。
 	AHD (adaptive homogeneity)	AHD（自適應同質性）

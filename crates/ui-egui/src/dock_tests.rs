@@ -634,7 +634,9 @@ fn panel_tab_context_menu_closes_one_tab_or_its_group() {
     {
         let pro = is_pro(theme);
         let names = g.tabs(pro);
-        let (app, _, _) = app_with_layers();
+        let (mut app, _, _) = app_with_layers();
+        // These Window items reopen closed tabs in the dock (Open Panels Floating off).
+        app.session.prefs.edit(|p| p.window_panels_docked = true);
         let mut h = harness(app, vec2(1300.0, 850.0), theme);
         // Close the first tab: the group stays, showing (and selecting) the next one.
         right_click_tab(&mut h, g, 0);
@@ -819,7 +821,9 @@ fn defaults_give_way_to_layers_but_user_sizes_stay() {
 #[test]
 fn window_character_opens_its_own_group_and_keeps_properties() {
     for theme in [ThemeKind::ProMedium, ThemeKind::Studio] {
-        let (app, _, _) = app_with_layers();
+        let (mut app, _, _) = app_with_layers();
+        // Window › Character opens its dock group (Open Panels Floating off).
+        app.session.prefs.edit(|p| p.window_panels_docked = true);
         let mut h = harness(app, vec2(1440.0, 900.0), theme);
         let ctx = h.ctx.clone();
         crate::menus::invoke(h.state_mut(), &ctx, "window.panel.character", json!({})).unwrap();

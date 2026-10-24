@@ -18,6 +18,11 @@ pub const SHELL_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("window.panel.dock", "Dock Panel", &[], None),
     ("window.panel.activate", "Activate Panel", &[], None),
     ("window.panel.close", "Close Panel", &[], None),
+    ("window.panel.detach", "Move to Separate Window", &[], None),
+    ("window.panel.attach", "Return to PhotoCraft Window", &[], None),
+    ("window.panel.toRail", "Dock to Icon Bar", &[], None),
+    ("window.panel.fromRail", "Remove from Icon Bar", &[], None),
+    ("window.panel.railMove", "Move Icon", &[], None),
     ("file.open", "Open…", &["File"], Some("Cmd+O")),
     ("file.save", "Save", &["File"], Some("Cmd+S")),
     ("file.saveAs", "Save As…", &["File"], Some("Cmd+Shift+S")),
@@ -63,6 +68,8 @@ pub const SHELL_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("window.togglePanels", "Show/Hide All Panels", &[], Some("Tab")),
     ("window.toggle.dock", "Show/Hide Panels", &[], Some("Shift+Tab")),
     ("window.toggle.options", "Options", &["Window"], None),
+    // A dock panel opened from the Window menu floats, ready to drag and resize (off: it docks).
+    ("window.workspace.openPanelsFloating", "Open Panels Floating", &["Window", "Workspace"], None),
     // Photoshop's Ctrl+Tab and Ctrl+Shift+Tab, on macOS too (⌘Tab belongs to the system, #2340).
     ("window.nextDocument", "Next Document", &[], Some("Ctrl+Tab")),
     ("window.previousDocument", "Previous Document", &[], Some("Ctrl+Shift+Tab")),

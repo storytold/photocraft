@@ -1752,26 +1752,73 @@ pub fn right_dock(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 ui.painter().line_segment([pos2(x, r.top() - 8.0), pos2(x, r.bottom() + 8.0)], Stroke::new(1.0, t.separator));
                 ui.spacing_mut().item_spacing.y = 4.0;
                 use crate::dock::Group;
-                let entries: [(&str, &str, Group); 6] = [
-                    ("sliders-horizontal", tl!("Properties"), Group::Properties),
-                    ("navigation", tl!("Navigator"), Group::Navigator),
-                    ("palette", tl!("Color & Swatches"), Group::Color),
-                    ("layers", tl!("Layers"), Group::Layers),
-                    ("clock", tl!("History"), Group::History),
-                    ("brush", tl!("Brushes"), Group::Brushes),
-                ];
-                for (icon, name, g) in entries {
+                use crate::panel_docking::RailItem;
+                // Icons dragged up or down the bar are rearranged (each section on its own).
+                let mut dragged: Option<(RailItem, bool)> = None;
+                let mut groups_drawn: Vec<(Group, egui::Rect)> = Vec::new();
+                for g in crate::panel_docking::rail_group_order(app) {
+                    if customized && crate::panel_docking::rail_replaces(app, g) {
+                        continue;
+                    }
+                    let (icon, name) = match g {
+                        Group::Properties => ("sliders-horizontal", tl!("Properties")),
+                        Group::Navigator => ("navigation", tl!("Navigator")),
+                        Group::Color => ("palette", tl!("Color & Swatches")),
+                        Group::Layers => ("layers", tl!("Layers")),
+                        Group::Brushes => ("brush", tl!("Brushes")),
+                        _ => ("clock", tl!("History")),
+                    };
                     // Studio floats Properties outside the dock.
                     let docked = t.pro || g != Group::Properties;
                     let on = if customized { crate::panel_docking::rail_on(app, g) } else { g.shown(&p) && !(docked && app.ui.dock.is_collapsed(g)) };
-                    if icons::rail_button(ui, icon, rb, on, name).clicked() {
+                    let response = icons::rail_button(ui, icon, rb, on, name);
+                    if response.clicked() {
                         if customized {
                             crate::panel_docking::rail_click(app, g);
                         } else {
                             crate::dock::rail_click(app, g, docked);
                         }
                     }
+                    if response.dragged() || response.drag_stopped() {
+                        dragged = Some((RailItem::Group(g), response.drag_stopped()));
+                    }
+                    groups_drawn.push((g, response.rect));
                 }
+                // Panels docked to the bar: each icon opens its panel in a flyout beside the bar.
+                let docked_here = crate::panel_docking::rail_entries(app);
+                let mut open_button = None;
+                if !docked_here.is_empty() {
+                    ui.add_space(2.0);
+                    let (line, _) = ui.allocate_exact_size(vec2(rb, 1.0), Sense::hover());
+                    ui.painter().rect_filled(line, 0.0, t.separator);
+                    ui.add_space(2.0);
+                }
+                let rail = ui.max_rect().expand2(vec2(4.0, 8.0));
+                let mut panels_drawn: Vec<(String, egui::Rect)> = Vec::new();
+                for (panel, icon, name) in docked_here {
+                    let on = app.ui.rail_open.as_deref() == Some(panel.as_str());
+                    let response = icons::rail_button(ui, icon, rb, on, name);
+                    if on {
+                        open_button = Some(response.rect);
+                    }
+                    if response.clicked() {
+                        app.ui.rail_open = if on { None } else { Some(panel.clone()) };
+                    }
+                    // Dragged off the bar, the panel undocks into a floating window where it
+                    // lands; dragged along the bar, it moves among the others.
+                    if response.dragged() || response.drag_stopped() {
+                        crate::panel_docking::rail_icon_drag(app, ui.ctx(), &panel, name, rail, response.drag_stopped());
+                        dragged = Some((RailItem::Panel(panel.clone()), response.drag_stopped()));
+                    }
+                    panels_drawn.push((panel, response.rect));
+                }
+                if let Some((item, released)) = dragged {
+                    let ctx = ui.ctx().clone();
+                    crate::panel_docking::rail_reorder(app, &ctx, &item, released, &groups_drawn, &panels_drawn, rail);
+                }
+                crate::panel_docking::note_rail_rect(ui.ctx(), rail);
+                let ctx = ui.ctx().clone();
+                crate::panel_docking::rail_flyout(app, &ctx, rail, open_button);
             });
     }
     if !t.pro && !customized {

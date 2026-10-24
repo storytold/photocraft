@@ -2681,6 +2681,7 @@
 	Lock Layers	Κλείδωμα επιπέδων
 	Lock Slices	Κλείδωμα τομών
 	Lock Workspace	Κλείδωμα χώρου εργασίας
+	Open Panels Floating	Άνοιγμα πλαισίων ως αιωρούμενων
 	Lock all	Κλείδωμα όλων
 	Lock image pixels	Κλείδωμα εικονοστοιχείων εικόνας
 	Lock layer	Κλείδωμα επιπέδου
@@ -4044,6 +4045,12 @@ curves	Smooth	Εξομάλυνση
 	Increase Brush Size	Αύξηση μεγέθους πινέλου
 	Decrease Brush Hardness	Μείωση σκληρότητας πινέλου
 	Increase Brush Hardness	Αύξηση σκληρότητας πινέλου
+	Move to Separate Window	Μετακίνηση σε ξεχωριστό παράθυρο
+	Return to PhotoCraft Window	Επιστροφή στο παράθυρο του PhotoCraft
+	Dock Panel Group	Αγκύρωση ομάδας πλαισίων
+	Dock to Icon Bar	Αγκύρωση στη γραμμή εικονιδίων
+	Remove from Icon Bar	Αφαίρεση από τη γραμμή εικονιδίων
+	Move Icon	Μετακίνηση εικονιδίου
 	Demosaic	Αποψηφιδοποίηση
 	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Πώς συμπληρώνεται το ψηφιδωτό του χρωματικού φίλτρου της κάμερας. Εφαρμόζεται όταν ανοίγει το αρχείο· η προεπισκόπηση δείχνει τη μέθοδο με την οποία άνοιξε.
 	AHD (adaptive homogeneity)	AHD (προσαρμοστική ομοιογένεια)

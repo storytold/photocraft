@@ -720,6 +720,7 @@
 	Reset All Tools	Resetuj sve alatke
 	Reset all tools to their default settings?	Vratiti sve alatke na podrazumevana podešavanja?
 	Lock Workspace	Zaključaj radni prostor
+	Open Panels Floating	Otvaraj panele kao plutajuće
 	Theme	Tema
 	Pro Theme	Pro tema
 	Pro Medium Gray Theme	Pro srednje siva tema
@@ -4404,6 +4405,12 @@ shape	Appearance	Izgled
 	Increase Brush Size	Povećaj veličinu četkice
 	Decrease Brush Hardness	Smanji tvrdoću četkice
 	Increase Brush Hardness	Povećaj tvrdoću četkice
+	Move to Separate Window	Premesti u zaseban prozor
+	Return to PhotoCraft Window	Vrati u prozor PhotoCraft-a
+	Dock Panel Group	Usidri grupu panela
+	Dock to Icon Bar	Usidri na traku ikona
+	Remove from Icon Bar	Ukloni sa trake ikona
+	Move Icon	Premesti ikonu
 	Demosaic	Demozaikovanje
 	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Kako se popunjava mozaik filtera boja kamere. Primenjuje se pri otvaranju datoteke; pregled prikazuje metod kojim je datoteka otvorena.
 	AHD (adaptive homogeneity)	AHD (adaptivna homogenost)

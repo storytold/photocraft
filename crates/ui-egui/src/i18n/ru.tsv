@@ -1502,6 +1502,7 @@
 	Reset All Tools	Сбросить все инструменты
 	Reset all tools to their default settings?	Сбросить все инструменты к настройкам по умолчанию?
 	Lock Workspace	Заблокировать рабочую среду
+	Open Panels Floating	Открывать панели плавающими
 	Photography	Фотография
 	Graphic and web	Графика и web
 	Painting	Живопись
@@ -3823,6 +3824,12 @@ curves	Smooth	Сгладить
 	In Black	Входной чёрный
 	In White	Входной белый
 	Increase Brush Hardness	Увеличить жёсткость кисти
+	Move to Separate Window	Переместить в отдельное окно
+	Return to PhotoCraft Window	Вернуть в окно PhotoCraft
+	Dock Panel Group	Закрепить группу панелей
+	Dock to Icon Bar	Закрепить на панели значков
+	Remove from Icon Bar	Убрать с панели значков
+	Move Icon	Переместить значок
 	Demosaic	Демозаик
 	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Как восстанавливается мозаика цветного фильтра камеры. Применяется при открытии файла; превью показывает метод, с которым файл был открыт.
 	AHD (adaptive homogeneity)	AHD (адаптивная однородность)

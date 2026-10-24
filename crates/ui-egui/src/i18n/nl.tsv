@@ -726,6 +726,7 @@
 	Reset All Tools	Alle gereedschappen herstellen
 	Reset all tools to their default settings?	Alle gereedschappen herstellen naar hun standaardinstellingen?
 	Lock Workspace	Werkruimte vergrendelen
+	Open Panels Floating	Deelvensters zwevend openen
 	Theme	Thema
 	Pro Theme	Pro-thema
 	Pro Medium Gray Theme	Pro-thema middelgrijs
@@ -4104,6 +4105,12 @@ curves	Smooth	Vloeiend maken
 	Increase Brush Size	Penseelgrootte vergroten
 	Decrease Brush Hardness	Penseelhardheid verlagen
 	Increase Brush Hardness	Penseelhardheid verhogen
+	Move to Separate Window	Naar apart venster verplaatsen
+	Return to PhotoCraft Window	Terug naar PhotoCraft-venster
+	Dock Panel Group	Deelvenstergroep koppelen
+	Dock to Icon Bar	Koppelen aan pictogrammenbalk
+	Remove from Icon Bar	Verwijderen uit pictogrammenbalk
+	Move Icon	Pictogram verplaatsen
 	Demosaic	Demosaicing
 	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Hoe het kleurfiltermozaïek van de camera wordt ingevuld. Wordt toegepast bij het openen van het bestand; de voorvertoning toont de methode waarmee het is geopend.
 	AHD (adaptive homogeneity)	AHD (adaptieve homogeniteit)
