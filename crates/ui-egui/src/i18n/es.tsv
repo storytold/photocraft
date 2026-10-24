@@ -1109,6 +1109,9 @@
 	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or copy the image in your file manager and paste it with {paste}.	Arrastrar y soltar archivos de forma nativa aún no es compatible con Wayland. Use Archivo › Abrir, o copie la imagen en su gestor de archivos y péguela con {paste}.
 	To drop files, start PhotoCraft under XWayland: `{command}`	Para soltar archivos, inicie PhotoCraft con XWayland: `{command}`
 	Or set Preferences › Performance › Linux display server to X11: PhotoCraft then always starts under XWayland.	O establezca Preferencias › Rendimiento › Servidor de pantalla de Linux en X11: PhotoCraft se iniciará siempre con XWayland.
+	Dragging files from File Explorer is blocked	Arrastrar archivos desde el Explorador de archivos está bloqueado
+	PhotoCraft is running as administrator, and Windows blocks files dragged in from apps that are not. Use File › Open, or copy the image in File Explorer and paste it with {paste}.	PhotoCraft se está ejecutando como administrador y Windows bloquea los archivos arrastrados desde aplicaciones que no lo son. Use Archivo › Abrir, o copie la imagen en el Explorador de archivos y péguela con {paste}.
+	To drop files, start PhotoCraft normally, without Run as administrator.	Para soltar archivos, inicie PhotoCraft de forma normal, sin Ejecutar como administrador.
 	Edit › Paste	Edición › Pegar
 	Duplicate Layers…	Duplicar capas…
 	Duplicate style	Duplicar estilo
