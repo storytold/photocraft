@@ -424,8 +424,9 @@ pub(crate) fn prepare(s: &Session, id: &str, p: &Value) -> Value {
     out
 }
 
-/// A flattened document (or one of its layers) as an RGBA map image.
-fn map_from_document(doc: &Document, layer: Option<u64>) -> Option<algo::Image> {
+/// A flattened document (or one of its layers) as an RGBA map image. Public for the GPU preview,
+/// which uploads the same map.
+pub fn map_from_document(doc: &Document, layer: Option<u64>) -> Option<algo::Image> {
     let buf = match layer.and_then(|l| doc.layer(photocraft_doc::LayerId(l))) {
         Some(l) => photocraft_compose::render_layer(l, l.surface().map(|s| s.content_bounds()).filter(|r| !r.is_empty()).unwrap_or_else(|| doc.bounds())),
         None => photocraft_compose::flatten(doc),

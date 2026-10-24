@@ -363,6 +363,8 @@ pub fn evaluate(
                 None => {}
                 Some(Err(e)) => o.status = Status::Missing(format!("bench `{bench}` failed: {e}")),
                 Some(Ok(rep)) => match find_row(rep, row) {
+                    // A row the bench says this machine can't time (no GPU layer operators, say).
+                    None if skipped(rep, row) => {}
                     None => {
                         let err = rep
                             .get("context")
@@ -385,6 +387,15 @@ pub fn evaluate(
             o
         })
         .collect()
+}
+
+/// Whether `rep` lists `row` among the rows it skipped on this machine: `context.skipped` holds
+/// `{"rows": <part of the names>, "why": …}` entries.
+fn skipped(rep: &Value, row: &str) -> bool {
+    rep.get("context")
+        .and_then(|c| c.get("skipped"))
+        .and_then(Value::as_array)
+        .is_some_and(|a| a.iter().filter_map(|e| e.get("rows").and_then(Value::as_str)).any(|part| !part.is_empty() && row.contains(part)))
 }
 
 // ---- formatting ------------------------------------------------------------------------------
@@ -1061,6 +1072,15 @@ not_measurable = "needs a frame harness"
         let out = evaluate(&b, &reports, None, 15.0, true);
         assert_eq!(out[0].status, Status::Missing("boom".into()));
         assert!(matches!(&out[1].status, Status::Missing(e) if e.contains("not in")));
+        // A row the bench skipped on this machine (by a part of its name): not run, not a failure.
+        let mut reports = BTreeMap::new();
+        reports.insert(
+            "b".to_string(),
+            Ok(json!({"rows": [], "context": {"skipped": [{"rows": "move", "why": "no GPU"}, {"rows": "", "why": "matches nothing"}]}})),
+        );
+        let out = evaluate(&b, &reports, None, 15.0, true);
+        assert_eq!(out[0].status, Status::NotRun, "skipped by the bench");
+        assert!(matches!(&out[1].status, Status::Missing(e) if e.contains("not in")), "an empty part skips nothing");
         // A bench that didn't run in this mode: not run, not a failure.
         let out = evaluate(&b, &BTreeMap::new(), None, 15.0, true);
         assert_eq!(out[0].status, Status::NotRun);

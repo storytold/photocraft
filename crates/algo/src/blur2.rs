@@ -385,27 +385,34 @@ pub(crate) struct LensSpec<'a> {
 }
 
 /// Depth levels the per-pixel iris radius is interpolated between.
-const LENS_LEVELS: usize = 8;
+pub(crate) const LENS_LEVELS: usize = 8;
 
 /// Lens Blur: an iris-shaped (polygon → circle by curvature) bokeh kernel,
 /// with highlights above the threshold brightened first so they bloom into
 /// iris shapes. With a depth map the iris radius grows with distance from
 /// the focal plane. Finally optional noise restores grain.
-pub(crate) fn lens_blur(src: &Image, out: Rect, ctx: &Ctx, spec: &LensSpec) -> Vec<f32> {
-    let n = src.ch;
-    let cc = ncol(ctx, n);
-    let win = src.rect;
-    let (ww, wh) = (win.width() as usize, win.height() as usize);
-    let rmax = spec.radius.clamp(0.0, 100.0);
-    let blades = spec.blades.clamp(3, 8);
-    let curv = spec.curvature.clamp(0.0, 100.0) / 100.0;
-    let rot = spec.rotation.to_radians();
+/// Lens Blur's iris kernels, from no blur (level 0) to the full radius (level `LENS_LEVELS`): a
+/// polygon of `blades` rounded towards a circle by `curvature`, turned by `rotation` (degrees).
+/// Shared with the GPU's layer operators (`separable::Lens`).
+pub(crate) fn lens_levels(radius: f32, blades: u32, curvature: f32, rotation: f32) -> Vec<Spans> {
+    let rmax = radius.clamp(0.0, 100.0);
+    let blades = blades.clamp(3, 8);
+    let curv = curvature.clamp(0.0, 100.0) / 100.0;
+    let rot = rotation.to_radians();
     let iris = move |u: f32, v: f32| {
         let rho = (u * u + v * v).sqrt();
         let pr = polygon_radius(v.atan2(u), blades, rot - PI / 2.0);
         rho <= pr + (1.0 - pr) * curv
     };
-    let levels: Vec<Spans> = (0..=LENS_LEVELS).map(|k| Spans::new(rmax * k as f32 / LENS_LEVELS as f32, iris)).collect();
+    (0..=LENS_LEVELS).map(|k| Spans::new(rmax * k as f32 / LENS_LEVELS as f32, iris)).collect()
+}
+
+pub(crate) fn lens_blur(src: &Image, out: Rect, ctx: &Ctx, spec: &LensSpec) -> Vec<f32> {
+    let n = src.ch;
+    let cc = ncol(ctx, n);
+    let win = src.rect;
+    let (ww, wh) = (win.width() as usize, win.height() as usize);
+    let levels = lens_levels(spec.radius, spec.blades, spec.curvature, spec.rotation);
     // Specular highlight boost before blurring.
     let mut p = premul_window(src, win, ctx.alpha);
     let boost = spec.brightness.clamp(0.0, 100.0) / 100.0 * 4.0;
