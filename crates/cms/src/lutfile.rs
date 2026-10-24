@@ -193,6 +193,11 @@ pub fn parse_3dl(text: &str) -> Result<LutFile, LutError> {
         }
         // Lines with more than three numbers are the input shaper; it is assumed linear.
     }
+    // A 3³ table's shaper has three values, so it reads like a node row: it is the shaper when
+    // it is an increasing input ramp and exactly 3³ nodes follow it.
+    if rows.len() == 28 && rows[0][0] < rows[0][1] && rows[0][1] < rows[0][2] {
+        rows.remove(0);
+    }
     let n = (rows.len() as f64).cbrt().round() as usize;
     if n < 2 || n * n * n != rows.len() {
         return err(format!("{} rows is not a cube", rows.len()));
@@ -453,6 +458,25 @@ DOMAIN_MAX 0.5 1 1
         let l = parse_3dl(&text).unwrap();
         assert_eq!(l.size, 2);
         assert_eq!(l.data, LutFile::identity(2).data);
+    }
+
+    #[test]
+    fn three_dl_three_point_shaper_is_not_a_node() {
+        let mut nodes = String::new();
+        for r in 0..3 {
+            for g in 0..3 {
+                for b in 0..3 {
+                    nodes.push_str(&format!("{} {} {}\n", 4095 - r * 2047, 4095 - g * 2047, 4095 - b * 2047));
+                }
+            }
+        }
+        let with_shaper = parse_3dl(&format!("3DMESH\nMesh 1 12\n0 512 1023\n{nodes}")).unwrap();
+        assert_eq!(with_shaper.size, 3);
+        assert_eq!(with_shaper, parse_3dl(&nodes).unwrap());
+        // 28 rows whose first row is not an increasing ramp is still not a cube.
+        assert!(parse_3dl(&format!("4095 4095 4095\n{nodes}")).is_err());
+        // A two-value line before it doesn't hide it.
+        assert_eq!(parse_3dl(&format!("0 1023\n0 512 1023\n{nodes}")).unwrap().size, 3);
     }
 
     #[test]
