@@ -77,6 +77,15 @@ pub(crate) fn preview_reorder(app: &mut PhotocraftApp, payload: &serde_json::Val
     // Mark the destination as hovered even if the cached preview already matches.
     app.reorder_preview_hit = true;
     let Some(st) = app.session.active() else { return };
+    // Skip heavy documents: recompositing on every hover frame freezes the UI during reorder dragging.
+    if st.doc.layers.len() >= 30
+        || (st.doc.size.width as u64 * st.doc.size.height as u64 >= 4_000_000)
+        || app.gpu.is_none()
+        || app.gpu.as_ref().is_some_and(|g| !g.fits_canvas(&st.doc))
+    {
+        app.reorder_preview = None;
+        return;
+    }
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     use std::hash::{Hash, Hasher};
     payload.to_string().hash(&mut hasher);
@@ -104,6 +113,13 @@ pub(crate) fn display_reorder(app: &PhotocraftApp, index: usize) -> Option<(std:
         return None;
     }
     let st = app.session.documents().get(index)?;
+    if st.doc.layers.len() >= 30
+        || (st.doc.size.width as u64 * st.doc.size.height as u64 >= 4_000_000)
+        || app.gpu.is_none()
+        || app.gpu.as_ref().is_some_and(|g| !g.fits_canvas(&st.doc))
+    {
+        return None;
+    }
     let cached = app.reorder_preview.as_ref()?;
     (cached.source == st.doc.id && cached.revision == st.revision).then(|| (cached.document.clone(), cached.key))
 }
@@ -351,8 +367,37 @@ mod tests {
         assert!(options.use_default_masks_on_fill_layers);
         assert!(options.expand_new_effects);
         assert!(options.add_copy_to_copied_layers_and_groups);
-        assert!(options.preview_on_canvas_when_reordering_layers);
+        assert!(!options.preview_on_canvas_when_reordering_layers);
         assert!(!options.show_layer_mask_badges);
+    }
+
+    #[test]
+    fn cpu_or_dense_or_large_document_bypasses_canvas_reorder_preview() {
+        let mut session = photocraft_engine::Session::new();
+        session.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+        session.execute("layer.new.layer", json!({})).unwrap();
+        let mut app = PhotocraftApp::new(session, crate::Services::default());
+        app.ui.layers_panel_options.preview_on_canvas_when_reordering_layers = true;
+        let doc = &app.session.active().unwrap().doc;
+        let (l0, l1) = (doc.layers[0].id.0, doc.layers[1].id.0);
+        let payload = json!({"target": l0, "position": "above", "layers": [l1]});
+
+        // CPU mode (app.gpu.is_none()) bypasses canvas preview to prevent main-thread recompositing lag
+        preview_reorder(&mut app, &payload);
+        assert!(app.reorder_preview.is_none());
+        assert!(display_reorder(&app, 0).is_none());
+        // Heavy doc (>4MP) clears and bypasses preview
+        let mut heavy_session = photocraft_engine::Session::new();
+        heavy_session.execute("file.new", json!({"width": 2500, "height": 2000})).unwrap();
+        heavy_session.execute("layer.new.layer", json!({})).unwrap();
+        let mut heavy_app = PhotocraftApp::new(heavy_session, crate::Services::default());
+        heavy_app.ui.layers_panel_options.preview_on_canvas_when_reordering_layers = true;
+        let hdoc = &heavy_app.session.active().unwrap().doc;
+        let (hl0, hl1) = (hdoc.layers[0].id.0, hdoc.layers[1].id.0);
+        let heavy_payload = json!({"target": hl0, "position": "above", "layers": [hl1]});
+        preview_reorder(&mut heavy_app, &heavy_payload);
+        assert!(heavy_app.reorder_preview.is_none());
+        assert!(display_reorder(&heavy_app, 0).is_none());
     }
 
     /// Thumbnail Contents is the same setting as the panel menu's Clip Thumbnails to Layer Bounds

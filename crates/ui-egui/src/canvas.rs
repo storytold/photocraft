@@ -5424,6 +5424,9 @@ fn transform_controls_layers(app: &PhotocraftApp) -> Vec<&photocraft_doc::Layer>
         return Vec::new();
     }
     let Some(st) = app.session.active() else { return Vec::new() };
+    if st.doc.quick_mask.is_some() && !st.channel_view.quick_mask_hidden {
+        return Vec::new();
+    }
     st.selected_layers().into_iter().filter_map(|id| st.doc.layer(id)).filter(|l| !crate::doc_props_ui::is_background(&st.doc, l)).collect()
 }
 
@@ -5506,7 +5509,7 @@ fn begin_transform_controls_at(app: &mut PhotocraftApp, ctx: &egui::Context, xf:
     if !transform_controls_hit(r, p) {
         return false;
     }
-    match crate::transform_tool::begin(app, ctx) {
+    match crate::transform_tool::begin_layer(app, ctx) {
         Ok(()) => true,
         Err(e) => {
             app.ui.status = e;
@@ -5675,7 +5678,30 @@ fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &View
         Tool::Move if !crate::move_ui::showing(app) => {
             let from = xf.to_screen(d.start[0] as f32, d.start[1] as f32);
             let off = xf.to_screen(last[0] as f32, last[1] as f32) - from;
-            painter.arrow(from, off, Stroke::new(2.0, crate::theme::Tokens::get(painter.ctx()).accent));
+            let accent = crate::theme::Tokens::get(painter.ctx()).accent;
+            painter.arrow(from, off, Stroke::new(2.0, accent));
+            if let Some(st) = app.session.active() {
+                let ids = photocraft_engine::layer_multi_cmds::move_targets(&st.doc, &st.selected_layers());
+                let b = ids
+                    .iter()
+                    .filter_map(|id| st.doc.layer(*id))
+                    .map(|l| {
+                        photocraft_compose::composite_bounds(l, st.doc.bounds())
+                            .or_else(|| l.surface().map(photocraft_compose::bounds::content_bounds))
+                            .unwrap_or_else(|| photocraft_engine::transform_cmds::transform_frame(&st.doc, l))
+                    })
+                    .filter(|b| !b.is_empty())
+                    .reduce(|a, b| a.union(&b));
+                if let Some(b) = b {
+                    let dx = (last[0] - d.start[0]).round().clamp(-1e7, 1e7) as i32;
+                    let dy = (last[1] - d.start[1]).round().clamp(-1e7, 1e7) as i32;
+                    let b = b.translate(dx, dy);
+                    if !b.is_empty() {
+                        let r = xf.doc_rect(b);
+                        painter.rect_stroke(r, 0.0, Stroke::new(1.5, accent), egui::StrokeKind::Middle);
+                    }
+                }
+            }
         }
         _ => {}
     }
@@ -6800,7 +6826,7 @@ pub fn paint_target(app: &PhotocraftApp) -> serde_json::Value {
     // A targeted alpha channel (Channels panel) or Quick Mask mode wins over the layer.
     match st.channel_view.target {
         ChannelTarget::Alpha(i) if i < st.doc.channels.len() => return json!({ "channel": i }),
-        ChannelTarget::Composite if st.doc.quick_mask.is_some() => return json!("quickMask"),
+        ChannelTarget::Composite if st.doc.quick_mask.is_some() && !st.channel_view.quick_mask_hidden => return json!("quickMask"),
         ChannelTarget::LayerMask => return json!("mask"),
         _ => {}
     }
@@ -9926,6 +9952,26 @@ mod rotation_preview_isolation_tests {
             assert_eq!(image.pixels, expected, "quick_mask={quick_mask}");
             delta.clear();
         }
+    }
+
+    #[test]
+    fn quick_mask_opens_hidden_and_does_not_hijack_tools_or_transform() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 200, "height": 200})).unwrap();
+        app.run("select.rect", json!({"x": 10, "y": 10, "width": 50, "height": 50})).unwrap();
+        app.run("select.editInQuickMaskMode", json!({"on": true})).unwrap();
+        let qm_doc = app.session.active().unwrap().doc.as_ref().clone();
+
+        let mut app2 = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app2.session.add_document(qm_doc, None);
+        app2.sync_views();
+
+        assert_eq!(paint_target(&app2), json!("pixels"), "quick mask must not hijack paint target on open");
+        let ctx = egui::Context::default();
+        crate::transform_tool::begin_layer(&mut app2, &ctx).unwrap();
+        let session = app2.ui.transform.as_ref().expect("transform session started");
+        assert_eq!(session.target, None, "transform must target the active layer, not quick mask");
+        assert!(!session.selection);
     }
 
     /// Assign and Convert to Profile have Photoshop's Preview. Assign changes only the profile, so

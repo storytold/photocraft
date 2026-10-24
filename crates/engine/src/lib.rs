@@ -273,6 +273,7 @@ impl DocState {
         let active_layer = doc.top_layer();
         let mut history = History::default();
         history.set_current_layers(LayerTarget { active: active_layer, selected: active_layer.into_iter().collect() });
+        let quick_mask_hidden = doc.quick_mask.is_some();
         Self {
             doc: Arc::new(doc),
             history,
@@ -287,7 +288,7 @@ impl DocState {
             view_revision: 0,
             last_damage: None,
             coalesce: None,
-            channel_view: Default::default(),
+            channel_view: channel_cmds::ChannelView { quick_mask_hidden, ..Default::default() },
             isolated_layers: Vec::new(),
             symmetry: None,
             fx_collapsed: Vec::new(),

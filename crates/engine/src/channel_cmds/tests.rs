@@ -969,3 +969,23 @@ fn layers_panel_mask_target_isolates_the_curve_channel() {
     let row = isolated_curve_channel_for(s.active().unwrap(), true).expect("quick mask wins");
     assert_eq!((row.name.as_str(), row.gray), ("Quick Mask", Some(GraySurface::QuickMask)));
 }
+
+#[test]
+fn opening_document_with_quick_mask_initializes_hidden_and_inactive() {
+    let mut s = session();
+    s.execute("select.editInQuickMaskMode", json!({"on": true})).unwrap();
+    let qm_doc = s.active().unwrap().doc.as_ref().clone();
+    assert!(qm_doc.quick_mask.is_some());
+
+    let mut opened = Session::new();
+    opened.add_document(qm_doc, None);
+    assert!(opened.active().unwrap().channel_view.quick_mask_hidden, "opened doc must hide quick mask overlay by default");
+    assert_eq!(targeted_channel(&opened), None, "quick mask must not be targeted on open");
+    assert!(!edits_channel(&opened), "edits must not target quick mask on open");
+
+    // Entering quick mask mode unhides it
+    opened.execute("select.editInQuickMaskMode", json!({"on": true})).unwrap();
+    assert!(!opened.active().unwrap().channel_view.quick_mask_hidden);
+    assert_eq!(targeted_channel(&opened), Some(json!({"target": "quickMask"})));
+    assert!(edits_channel(&opened));
+}

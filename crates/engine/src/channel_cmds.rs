@@ -242,7 +242,7 @@ pub fn isolated_curve_channel_for(st: &DocState, layers_panel_mask: bool) -> Opt
             translate: false,
             gray: Some(GraySurface::Alpha(i)),
         }),
-        ChannelTarget::Composite if doc.quick_mask.is_some() => {
+        ChannelTarget::Composite if doc.quick_mask.is_some() && !st.channel_view.quick_mask_hidden => {
             Some(IsolatedCurveChannel { name: "Quick Mask".into(), key: "", hist: 0, tint: false, translate: true, gray: Some(GraySurface::QuickMask) })
         }
         ChannelTarget::LayerMask => layer_mask_curve_channel(st),
@@ -744,7 +744,7 @@ pub(crate) fn inject_target(s: &Session, id: &str, params: Value) -> Value {
     let Some(st) = s.active() else { return params };
     let t = match st.channel_view.target {
         ChannelTarget::Alpha(i) if i < st.doc.channels.len() => json!({ "channel": i }),
-        ChannelTarget::Composite if st.doc.quick_mask.is_some() => json!("quickMask"),
+        ChannelTarget::Composite if st.doc.quick_mask.is_some() && !st.channel_view.quick_mask_hidden => json!("quickMask"),
         ChannelTarget::LayerMask => json!("mask"),
         // Viewing the active layer's mask (⌥-click): pixel commands edit the mask.
         ChannelTarget::Composite if crate::mask_view_cmds::current(st).is_some() => json!("mask"),
@@ -843,7 +843,7 @@ pub(crate) fn targeted_channel(s: &Session) -> Option<Value> {
     let st = s.active()?;
     let t = match st.channel_view.target {
         ChannelTarget::Alpha(i) if i < st.doc.channels.len() => json!({ "channel": i }),
-        ChannelTarget::Composite if st.doc.quick_mask.is_some() => json!("quickMask"),
+        ChannelTarget::Composite if st.doc.quick_mask.is_some() && !st.channel_view.quick_mask_hidden => json!("quickMask"),
         _ => return None,
     };
     Some(json!({ "target": t }))
@@ -867,7 +867,7 @@ pub(crate) fn clear_channel(doc: &mut Document, target: &Value, background: [f32
 /// work without a pixel layer.
 pub(crate) fn edits_channel(s: &Session) -> bool {
     s.active().is_some_and(|st| {
-        st.doc.quick_mask.is_some() && st.channel_view.target == ChannelTarget::Composite
+        (st.doc.quick_mask.is_some() && !st.channel_view.quick_mask_hidden && st.channel_view.target == ChannelTarget::Composite)
             || matches!(st.channel_view.target, ChannelTarget::Alpha(i) if i < st.doc.channels.len())
     })
 }
@@ -1047,19 +1047,22 @@ fn selection_from(doc: &Document, ch: &AlphaChannel) -> Option<Surface> {
 }
 
 fn quick_mask(s: &mut Session, p: &Value) -> Result<Value> {
-    let on = s.active().ok_or(EngineError::NoDocument)?.doc.quick_mask.is_some();
+    let st = s.active().ok_or(EngineError::NoDocument)?;
+    let on = st.doc.quick_mask.is_some() && !st.channel_view.quick_mask_hidden;
     let want = p.get("on").and_then(Value::as_bool).unwrap_or(!on);
     if want == on {
         return Ok(json!({ "quickMask": on }));
     }
     let opts = s.quick_mask_options;
     if want {
-        s.edit("Edit in Quick Mask", |doc, _| {
-            doc.quick_mask = Some(quick_mask_from(doc, &opts));
-            doc.quick_mask_unselected = doc.selection.is_none();
-            doc.selection = None;
-            Ok(())
-        })?;
+        if s.active().is_some_and(|st| st.doc.quick_mask.is_none()) {
+            s.edit("Edit in Quick Mask", |doc, _| {
+                doc.quick_mask = Some(quick_mask_from(doc, &opts));
+                doc.quick_mask_unselected = doc.selection.is_none();
+                doc.selection = None;
+                Ok(())
+            })?;
+        }
         if let Some(st) = s.active_mut() {
             st.channel_view.target = ChannelTarget::Composite;
             st.channel_view.quick_mask_hidden = false;

@@ -39,6 +39,8 @@ pub const INTEL: u32 = 0x8086;
 pub const QUALCOMM: u32 = 0x5143;
 /// Qualcomm's vendor id as DXGI (DX12) reports it: "QCOM".
 pub const QUALCOMM_DXGI: u32 = 0x4D4F_4351;
+/// PCI vendor id of AMD.
+pub const AMD: u32 = 0x1002;
 /// Largest marker read (a marker is a few hundred bytes).
 const MARKER_MAX: u64 = 64 << 10;
 
@@ -115,6 +117,8 @@ pub struct Plan {
     pub reason: Option<String>,
     /// Store `backend` in the preferences once the start succeeded (a crash fallback).
     pub remember: bool,
+    /// Whether `--safe-gpu` is active for this launch.
+    pub safe_gpu: bool,
 }
 
 /// A backend the platform has (others fall back to `auto`).
@@ -151,10 +155,10 @@ pub fn keep_marker_after_error(plan: &Plan, os: Os) -> bool {
 pub fn plan(pref: GpuBackend, crashed: Option<&Marker>, env: Option<&str>, safe_gpu: bool, os: Os) -> Plan {
     if let Some(v) = env.map(str::trim).filter(|v| !v.is_empty()) {
         let backend = if safe_gpu { GpuBackend::Cpu } else { GpuBackend::Auto };
-        return Plan { backend, env: Some(v.to_string()), reason: Some(format!("WGPU_BACKEND={v} overrides the backend")), remember: false };
+        return Plan { backend, env: Some(v.to_string()), reason: Some(format!("WGPU_BACKEND={v} overrides the backend")), remember: false, safe_gpu };
     }
     if safe_gpu {
-        return Plan { backend: GpuBackend::Cpu, env: None, reason: Some("--safe-gpu: CPU renderer for this launch".into()), remember: false };
+        return Plan { backend: GpuBackend::Cpu, env: None, reason: Some("--safe-gpu: CPU renderer for this launch".into()), remember: false, safe_gpu: true };
     }
     let pref = sanitize(pref, os);
     if let Some((m, tried)) = crashed.and_then(|m| Some((m, m.tried()?))) {
@@ -165,9 +169,10 @@ pub fn plan(pref: GpuBackend, crashed: Option<&Marker>, env: Option<&str>, safe_
             env: None,
             reason: Some(format!("the previous start didn't finish on {}{on}; using {}", tried.name(), next.name())),
             remember: next != pref,
+            safe_gpu,
         };
     }
-    Plan { backend: pref, env: None, reason: None, remember: false }
+    Plan { backend: pref, env: None, reason: None, remember: false, safe_gpu }
 }
 
 /// Resolve the rendering policy before the window exists. Explicit GPU/Automatic selections
@@ -217,7 +222,7 @@ pub fn backends(plan: &Plan, os: Os) -> Option<wgpu::Backends> {
 /// choice.
 pub fn windows_auto_backends(plan: &Plan, os: Os, dx12_vendors: impl FnOnce() -> Vec<u32>) -> Option<wgpu::Backends> {
     let auto = plan.env.is_none() && plan.backend == GpuBackend::Auto && os == Os::Windows;
-    (auto && dx12_vendors().contains(&INTEL)).then_some(wgpu::Backends::DX12 | wgpu::Backends::GL)
+    (auto && dx12_vendors().iter().any(|&v| v == INTEL || v == AMD)).then_some(wgpu::Backends::DX12 | wgpu::Backends::GL)
 }
 
 /// The PCI vendor ids of the DX12 adapters, from a DX12-only instance (DXGI, no Vulkan driver)
@@ -256,6 +261,7 @@ fn dx12_first_on_windows(vendor: u32) -> Option<&'static str> {
     match vendor {
         INTEL => Some("Intel"),
         QUALCOMM | QUALCOMM_DXGI => Some("Qualcomm"),
+        AMD => Some("AMD"),
         _ => None,
     }
 }
@@ -278,7 +284,7 @@ pub struct Candidate {
 /// before Vulkan, which is only the fallback for presenting the window (see [`backends`]). On
 /// Windows GL comes after every other adapter, WARP included: GL there (VMware's SVGA3D, GL-only
 /// old GPUs) drew a black window (#5191, #1788).
-fn rank(a: &Candidate, backend: GpuBackend, os: Os) -> (u8, u8, u8) {
+fn rank(a: &Candidate, backend: GpuBackend, os: Os, safe_gpu: bool) -> (u8, u8, u8) {
     let fallback = u8::from((backend == GpuBackend::Cpu && a.backend == wgpu::Backend::Vulkan) || (os == Os::Windows && a.backend == wgpu::Backend::Gl));
     let ty = match a.device_type {
         wgpu::DeviceType::DiscreteGpu => 0,
@@ -288,8 +294,8 @@ fn rank(a: &Candidate, backend: GpuBackend, os: Os) -> (u8, u8, u8) {
         wgpu::DeviceType::Cpu => 4,
     };
     let ty = match (backend, a.device_type) {
-        (GpuBackend::Cpu, wgpu::DeviceType::Cpu) => 0,
-        (GpuBackend::Cpu, _) => ty + 1,
+        (GpuBackend::Cpu, wgpu::DeviceType::Cpu) if safe_gpu => 0,
+        (GpuBackend::Cpu, _) if safe_gpu => ty + 1,
         _ => ty,
     };
     let be = match a.backend {
@@ -305,10 +311,20 @@ fn rank(a: &Candidate, backend: GpuBackend, os: Os) -> (u8, u8, u8) {
 /// The adapter to use among `adapters` (`None` when there is none). Adapters the user asked for
 /// win over the rest when any of them can present; otherwise the ranking decides (see
 /// [`wanted_missed`]).
+#[cfg(test)]
 pub fn pick(adapters: &[Candidate], backend: GpuBackend, os: Os) -> Option<usize> {
+    pick_with_safe_gpu(adapters, backend, os, false)
+}
+
+pub fn pick_with_safe_gpu(adapters: &[Candidate], backend: GpuBackend, os: Os, safe_gpu: bool) -> Option<usize> {
     let usable = |a: &&Candidate| a.surface_ok;
     let any_wanted = adapters.iter().filter(usable).any(|a| a.wanted);
-    adapters.iter().enumerate().filter(|(_, a)| a.surface_ok && (a.wanted || !any_wanted)).min_by_key(|(i, a)| (rank(a, backend, os), *i)).map(|(i, _)| i)
+    adapters
+        .iter()
+        .enumerate()
+        .filter(|(_, a)| a.surface_ok && (a.wanted || !any_wanted))
+        .min_by_key(|(i, a)| (rank(a, backend, os, safe_gpu), *i))
+        .map(|(i, _)| i)
 }
 
 /// Whether an adapter called `name` is the one the user asked for: `wanted` is a case-insensitive
@@ -355,8 +371,8 @@ pub fn dx12_default_applied(adapters: &[Candidate], chosen: usize, os: Os, vulka
         return None;
     }
     let maker = dx12_first_on_windows(c.vendor)?;
-    let applied =
-        (vulkan_left_out && c.vendor == INTEL) || adapters.iter().any(|a| a.backend == wgpu::Backend::Vulkan && dx12_first_on_windows(a.vendor) == Some(maker));
+    let applied = (vulkan_left_out && (c.vendor == INTEL || c.vendor == AMD))
+        || adapters.iter().any(|a| a.backend == wgpu::Backend::Vulkan && dx12_first_on_windows(a.vendor) == Some(maker));
     applied.then_some(maker)
 }
 
@@ -393,6 +409,7 @@ pub fn configure(setup: &mut egui_wgpu::WgpuSetup, plan: &Plan, os: Os, wanted: 
         let select = wanted.is_some() || (plan.env.is_none() && (plan.backend == GpuBackend::Cpu || (plan.backend == GpuBackend::Auto && os == Os::Windows)));
         if select {
             let backend = plan.backend;
+            let safe_gpu = plan.safe_gpu;
             create.native_adapter_selector = Some(Arc::new(move |adapters: &[wgpu::Adapter], surface: Option<&wgpu::Surface<'_>>| {
                 let cands: Vec<Candidate> = adapters
                     .iter()
@@ -407,14 +424,17 @@ pub fn configure(setup: &mut egui_wgpu::WgpuSetup, plan: &Plan, os: Os, wanted: 
                         }
                     })
                     .collect();
-                let i = pick(&cands, backend, os).ok_or_else(|| "no graphics adapter found".to_string())?;
+                let i = pick_with_safe_gpu(&cands, backend, os, safe_gpu).ok_or_else(|| "no graphics adapter found".to_string())?;
                 if let Some(w) = wanted.as_deref().filter(|_| wanted_missed(&cands, wanted.as_deref())) {
                     *note.lock().unwrap_or_else(PoisonError::into_inner) =
                         Some(format!("No graphics adapter named \"{w}\" can draw the window; using the automatic choice"));
                 }
                 if backend == GpuBackend::Cpu && cands.get(i).is_some_and(|c| c.device_type != wgpu::DeviceType::Cpu) {
-                    *note.lock().unwrap_or_else(PoisonError::into_inner) =
-                        Some("CPU image rendering; no software graphics adapter is available, so the window uses hardware graphics".into());
+                    *note.lock().unwrap_or_else(PoisonError::into_inner) = Some(if safe_gpu {
+                        "CPU image rendering; no software graphics adapter is available, so the window uses hardware graphics".into()
+                    } else {
+                        "CPU image rendering; the window uses hardware graphics".into()
+                    });
                 }
                 if backend == GpuBackend::Auto
                     && let Some(maker) = dx12_default_applied(&cands, i, os, vulkan_left_out)
@@ -630,7 +650,7 @@ mod tests {
     fn no_marker_uses_the_preference() {
         for os in [Os::Windows, Os::Mac, Os::Other] {
             let p = plan(Auto, None, None, false, os);
-            assert_eq!(p, Plan { backend: Auto, env: None, reason: None, remember: false });
+            assert_eq!(p, Plan { backend: Auto, env: None, reason: None, remember: false, safe_gpu: false });
         }
         assert_eq!(plan(Dx12, None, None, false, Os::Windows).backend, Dx12);
         assert_eq!(plan(Gl, None, None, false, Os::Other).backend, Gl);
@@ -832,6 +852,17 @@ mod tests {
         assert_eq!(adreno[pick(&adreno, Auto, Os::Other).unwrap()].backend, B::Vulkan);
     }
 
+    #[test]
+    fn amd_on_windows_defaults_to_dx12() {
+        use wgpu::{Backend as B, DeviceType as T};
+        let amd = [cand(AMD, T::IntegratedGpu, B::Vulkan), cand(AMD, T::IntegratedGpu, B::Dx12)];
+        let i = pick(&amd, Auto, Os::Windows).unwrap();
+        assert_eq!(amd[i].backend, B::Dx12);
+        assert_eq!(dx12_default_applied(&amd, i, Os::Windows, false), Some("AMD"));
+        // Elsewhere Vulkan stays first.
+        assert_eq!(amd[pick(&amd, Auto, Os::Other).unwrap()].backend, B::Vulkan);
+    }
+
     /// #4: an instance with Vulkan loads the Intel Vulkan driver, which crashed at startup, before
     /// the selector picks Intel's DX12 adapter. With an Intel adapter in the DX12 list, `auto` on
     /// Windows creates the instance without Vulkan.
@@ -839,7 +870,6 @@ mod tests {
     fn auto_on_windows_with_an_intel_adapter_leaves_vulkan_out_of_the_instance() {
         use wgpu::{Backend as B, DeviceType as T};
         const NVIDIA: u32 = 0x10de;
-        const AMD: u32 = 0x1002;
         const WARP: u32 = 0x1414;
         let auto = plan(Auto, None, None, false, Os::Windows);
         let dx12_gl = Some(wgpu::Backends::DX12 | wgpu::Backends::GL);
@@ -848,7 +878,7 @@ mod tests {
         assert_eq!(windows_auto_backends(&auto, Os::Windows, || vec![NVIDIA, INTEL, WARP]), dx12_gl);
         // No Intel adapter: egui's default backends, Vulkan included.
         assert_eq!(windows_auto_backends(&auto, Os::Windows, || vec![NVIDIA, WARP]), None);
-        assert_eq!(windows_auto_backends(&auto, Os::Windows, || vec![AMD]), None);
+        assert_eq!(windows_auto_backends(&auto, Os::Windows, || vec![AMD]), dx12_gl);
         assert_eq!(windows_auto_backends(&auto, Os::Windows, Vec::new), None);
         // `WGPU_BACKEND`, `--safe-gpu`, a chosen backend, a crash fallback and other platforms
         // don't list the DX12 adapters at all.
@@ -875,7 +905,8 @@ mod tests {
     fn cpu_prefers_software_adapters() {
         use wgpu::{Backend as B, DeviceType as T};
         let a = [cand(INTEL, T::IntegratedGpu, B::Dx12), cand(0x1414, T::Cpu, B::Dx12)];
-        assert_eq!(pick(&a, Cpu, Os::Windows), Some(1));
+        assert_eq!(pick_with_safe_gpu(&a, Cpu, Os::Windows, true), Some(1));
+        assert_eq!(pick(&a, Cpu, Os::Windows), Some(0), "normal CPU mode keeps hardware graphics for the window");
         // No software adapter: still something.
         assert_eq!(pick(&a[..1], Cpu, Os::Windows), Some(0));
     }
@@ -891,14 +922,13 @@ mod tests {
         let nvidia_vk = cand(NVIDIA, T::DiscreteGpu, B::Vulkan);
         let lavapipe = cand(0x10005, T::Cpu, B::Vulkan);
         // GL presents: same choice as GL-only, software first, then hardware GL over any Vulkan.
-        assert_eq!(pick(&[nvidia_vk, lavapipe, llvmpipe], Cpu, Os::Other), Some(2));
-        assert_eq!(pick(&[nvidia_vk, lavapipe, nvidia_gl], Cpu, Os::Other), Some(2));
+        assert_eq!(pick_with_safe_gpu(&[nvidia_vk, lavapipe, llvmpipe], Cpu, Os::Other, true), Some(2));
+        assert_eq!(pick_with_safe_gpu(&[nvidia_vk, lavapipe, nvidia_gl], Cpu, Os::Other, true), Some(2));
         // GL can't present: Vulkan for the window, software first.
         let mut gl = nvidia_gl;
         gl.surface_ok = false;
-        assert_eq!(pick(&[gl, nvidia_vk, lavapipe], Cpu, Os::Other), Some(2));
-        assert_eq!(pick(&[gl, nvidia_vk], Cpu, Os::Other), Some(1));
-        // Other backends rank as before.
+        assert_eq!(pick_with_safe_gpu(&[gl, nvidia_vk, lavapipe], Cpu, Os::Other, true), Some(2));
+        assert_eq!(pick_with_safe_gpu(&[gl, nvidia_vk], Cpu, Os::Other, true), Some(1));
         assert_eq!(pick(&[nvidia_gl, nvidia_vk], Auto, Os::Other), Some(1));
     }
 

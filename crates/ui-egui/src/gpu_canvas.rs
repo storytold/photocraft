@@ -535,8 +535,27 @@ impl GpuCanvas {
         let keep_hdr = i32::from(format == FORMAT_HIGH);
         // Last-resort guard: a wgpu panic (e.g. polling a device lost mid-refresh) marks the
         // device lost instead of taking the app and its documents down.
+        let mut cleared_all = false;
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             comp.render(device, queue, doc, region, |enc, out| {
+                if fresh && !cleared_all {
+                    for t in &d.tiles {
+                        let _pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("pc_canvas_tile_clear"),
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view: &t.levels[0],
+                                resolve_target: None,
+                                depth_slice: None,
+                                ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
+                            })],
+                            depth_stencil_attachment: None,
+                            timestamp_writes: None,
+                            occlusion_query_set: None,
+                            multiview_mask: None,
+                        });
+                    }
+                    cleared_all = true;
+                }
                 for t in &d.tiles {
                     let [tx, ty, tw, th] = t.rect.map(|v| v as i32);
                     let r = out.rect.intersect(&photocraft_geom::Rect::from_xywh(tx, ty, tw as u32, th as u32));

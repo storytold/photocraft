@@ -49,7 +49,7 @@ impl LayersPanelOptions {
             use_default_masks_on_fill_layers: true,
             expand_new_effects: true,
             add_copy_to_copied_layers_and_groups: true,
-            preview_on_canvas_when_reordering_layers: true,
+            preview_on_canvas_when_reordering_layers: false,
             show_layer_mask_badges: false,
         }
     }

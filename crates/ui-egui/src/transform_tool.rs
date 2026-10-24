@@ -190,18 +190,31 @@ fn corners(r: [f64; 4]) -> [[f64; 2]; 4] {
 /// Start Free Transform on the active layer (or its selected pixels), or on the targeted unlinked
 /// layer mask, alpha channel or Quick Mask.
 pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> {
-    if let Some((params, path)) = crate::vector_ui::free_transform_path(app) {
+    begin_internal(app, ctx, false)
+}
+
+/// Start Free Transform on the active layer, bypassing lone targets (unlinked mask or Quick Mask).
+pub fn begin_layer(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> {
+    begin_internal(app, ctx, true)
+}
+
+fn begin_internal(app: &mut PhotocraftApp, ctx: &egui::Context, layer_only: bool) -> Result<(), String> {
+    if !layer_only
+        && let Some((params, path)) = crate::vector_ui::free_transform_path(app)
+    {
         return begin_path(app, ctx, params, path);
     }
     if app.session.active().is_some_and(|st| photocraft_engine::float_cmds::floating(st).is_some()) {
         app.run("select.drop", json!({}))?;
     }
-    let target = crate::canvas::paint_target(app);
     let st = app.session.active().ok_or("no document")?;
     let (doc, revision) = (st.doc.clone(), st.revision);
-    let lone = photocraft_engine::transform_cmds::lone_target(&doc, st.active_layer, &json!({ "target": target })).map_err(|e| e.to_string())?.cloned();
-    if let Some(surf) = lone {
-        return begin_lone(app, ctx, doc, surf, target);
+    if !layer_only {
+        let target = crate::canvas::paint_target(app);
+        let lone = photocraft_engine::transform_cmds::lone_target(&doc, st.active_layer, &json!({ "target": target })).map_err(|e| e.to_string())?.cloned();
+        if let Some(surf) = lone {
+            return begin_lone(app, ctx, doc, surf, target);
+        }
     }
     let id = st.active_layer.ok_or("no active layer")?;
     let layer = doc.layer(id).ok_or("no layer")?;

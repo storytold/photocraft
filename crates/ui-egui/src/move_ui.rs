@@ -122,13 +122,24 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
     if app.session.active_index() != Some(idx) || app.session.prefs().interface.show_bounding_box_when_dragging_layer {
         return None;
     }
+    let st = app.session.documents().get(idx)?;
+    let (doc_id, revision, doc) = (st.doc.id, st.revision, st.doc.clone());
+    // Large canvases, dense layer stacks or unsupported GPU sizes bypass live recomposition
+    // to keep dragging responsive on the UI thread (#8740).
+    if app.gpu.as_ref().is_some_and(|g| !g.fits_canvas(&doc)) {
+        return None;
+    }
+    if doc.layers.len() >= 50 {
+        return None;
+    }
+    if doc.size.width as u64 * doc.size.height as u64 >= 4_000_000 {
+        return None;
+    }
     let Some(offset) = drag_offset(app) else {
         app.move_preview = None;
         return None;
     };
     let mask_target = app.layer_mask_targeted();
-    let st = app.session.documents().get(idx)?;
-    let (doc_id, revision, doc) = (st.doc.id, st.revision, st.doc.clone());
     let fresh = app.move_preview.as_ref().is_some_and(|p| p.doc == doc_id && p.revision == revision);
     if !fresh {
         let ids = photocraft_engine::layer_multi_cmds::move_targets(&doc, &st.selected_layers());
@@ -143,6 +154,9 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
         app.move_preview = Some(MovePreview { doc: doc_id, revision, ids, moving, bounds, canvas, offsets: Vec::new(), shown: None, floating: false });
     }
     let p = app.move_preview.as_mut()?;
+    if p.bounds.is_some_and(|b| b.width() as u64 * b.height() as u64 >= 4_000_000) {
+        return None;
+    }
     if offset == (0, 0) && p.offsets.is_empty() {
         return None;
     }
@@ -466,6 +480,18 @@ mod tests {
     fn bounding_box_preference_turns_the_live_drag_off() {
         assert!(live(false), "by default the layer follows the pointer");
         assert!(!live(true), "with the preference on, only the outline and arrow move");
+    }
+
+    #[test]
+    fn dense_layer_stack_or_huge_document_bypasses_live_recomposite_in_display_doc() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.session.execute("file.new", json!({"width": 2000, "height": 2000})).unwrap();
+        app.sync_views();
+        app.ui.tool = Tool::Move;
+        let m = egui::Modifiers::NONE;
+        crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 100.0, y: 100.0, pressure: 1.0 }, m);
+        crate::canvas::tool_event(&mut app, ToolEvent::Move { x: 120.0, y: 110.0, pressure: 1.0 }, m);
+        assert!(!super::showing(&app), "4MP canvas must bypass live recomposite to keep drag responsive");
     }
 
     /// A `depth`-bit transparent document whose layer holds a red square (8..24)² and a blue one

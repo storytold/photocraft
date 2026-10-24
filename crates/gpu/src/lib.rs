@@ -1926,12 +1926,15 @@ impl Compositor {
                 for c in region.tiles().filter(|c| !kept.contains_rect(&c.rect())) {
                     match surface.tile(c) {
                         Some(t) => present.push((c, t.clone())),
-                        None if default_nonzero => missing.push(c),
-                        None => {}
+                        None => missing.push(c),
                     }
                 }
                 if !missing.is_empty() {
-                    let bytes = convert_tile(surface, None, kind, TileCoord::new(0, 0));
+                    let bytes = if default_nonzero {
+                        convert_tile(surface, None, kind, TileCoord::new(0, 0))
+                    } else {
+                        vec![0u8; (TILE_SIZE * TILE_SIZE) as usize * kind.bytes_per_pixel()]
+                    };
                     self.staged += put_tiles(device, queue, encoder, &r, &missing, &bytes);
                 }
                 let staged = &mut self.staged;
