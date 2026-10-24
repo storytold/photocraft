@@ -631,6 +631,9 @@ pub struct Services {
     pub system_theme: Option<SystemThemeFn>,
     /// The native window is connected directly to a Wayland compositor.
     pub is_wayland: bool,
+    /// Native file drops arrive on Wayland too (`storytold/winit`), so the "no drops on Wayland"
+    /// guidance is not shown.
+    pub wayland_drops: bool,
     /// On Wayland, the shell command that starts this install under XWayland, where native file
     /// drops work (#386); `None` when there is no X server to run it on.
     pub xwayland_command: Option<String>,

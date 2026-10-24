@@ -172,3 +172,8 @@ opt-level = "z"
 [profile.wasm-release.package.photocraft-paint]
 opt-level = 3
 
+# Patched winit 0.30.13 with native Wayland file drag and drop (wl_data_device, #386).
+# Drop once egui moves to winit 0.31, which has it upstream.
+[patch.crates-io]
+winit = { git = "https://github.com/storytold/winit.git", rev = "2732964c88457e3e4b796ac6b15ef7fb332a6aad" }
+

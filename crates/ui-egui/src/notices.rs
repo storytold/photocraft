@@ -70,6 +70,7 @@ pub(crate) fn paste_hint(app: &PhotocraftApp) -> String {
 /// command that starts this install under XWayland (where drops work), when there is one.
 pub fn wayland_file_drop_guidance(app: &mut PhotocraftApp) {
     if !app.services.is_wayland
+        || app.services.wayland_drops
         || app.session.prefs().dialogs.get(WAYLAND_FILE_DROP_DISMISSED).and_then(serde_json::Value::as_bool) == Some(true)
         || app.ui.notices.iter().any(|notice| notice.dismiss_pref.as_deref() == Some(WAYLAND_FILE_DROP_DISMISSED))
     {
@@ -325,6 +326,14 @@ mod tests {
         crate::menus::invoke(&mut empty, &ctx, "edit.paste", serde_json::json!({})).unwrap();
         assert_eq!(empty.ui.status, "Nothing to paste: the clipboard holds no image");
         assert!(empty.ui.notices.iter().all(|notice| notice.title != CLIPBOARD_UNREADABLE));
+    }
+
+    /// When native Wayland file drops are active, the fallback notice stays hidden.
+    #[test]
+    fn no_wayland_guidance_when_drops_arrive_on_wayland() {
+        let command = Some("WAYLAND_DISPLAY= photocraft".to_string());
+        let app = PhotocraftApp::new(Session::new(), Services { is_wayland: true, wayland_drops: true, xwayland_command: command, ..Default::default() });
+        assert!(app.ui.notices.is_empty());
     }
 
     /// A notice's lines in English with their arguments filled in.
