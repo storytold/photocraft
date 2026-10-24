@@ -333,11 +333,21 @@ pub(crate) fn begin_content_aware(
     crate::type_tool::commit(app);
     let rect = [region.x0 as f64, region.y0 as f64, region.x1 as f64, region.y1 as f64];
     let session = app.ui.alloc_id();
-    // The command clears the area before writing the result (a layer without transparency keeps it).
+    // The command vacates the area before writing the result, as Delete does: transparent, or on
+    // the Background the background colour (a layer without transparency otherwise keeps it).
+    let background = doc.is_background(id).then_some(app.session.tools.background);
     let mut pd = (*doc).clone();
-    if let Some(s) = pd.layer_mut(id).and_then(|l| l.surface_mut()).filter(|s| s.format().alpha) {
-        let clear = vec![0.0; s.format().channels()];
-        s.fill_rect(region, &clear);
+    if let Some(s) = pd.layer_mut(id).and_then(|l| l.surface_mut()).filter(|s| background.is_some() || s.format().alpha) {
+        let fmt = s.format();
+        let mut fill = vec![0.0; fmt.channels()];
+        if let Some([r, g, b, _]) = background {
+            let mut enc = [0.0f32; 8];
+            let n = photocraft_raster::from_rgba_into(&fmt, [r, g, b, 1.0], &mut enc);
+            if let (Some(dst), Some(src)) = (fill.get_mut(..n), enc.get(..n)) {
+                dst.copy_from_slice(src);
+            }
+        }
+        s.fill_rect(region, &fill);
         s.prune();
     }
     let max_side = ctx.input(|i| i.max_texture_side).max(app.gpu.as_ref().map_or(1, |g| g.max_texture_side()));
