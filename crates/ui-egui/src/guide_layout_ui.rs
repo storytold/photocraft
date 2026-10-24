@@ -208,8 +208,8 @@ fn optional(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str) {
         Some(v) if v.is_number() => v.to_string(),
         _ => String::new(),
     };
-    let t = Tokens::get(ui.ctx());
-    let response = ui.add(egui::TextEdit::singleline(&mut value).id_salt(key).desired_width(60.0).font(crate::theme::mono(12.0)).background_color(t.field));
+    let id = ui.id().with(key);
+    let response = widgets::outlined_text_edit(ui, id, &mut value, widgets::OutlinedTextEdit::new(60.0));
     if ui.is_enabled() {
         crate::field_tab::register(ui.ctx(), response.id);
     }

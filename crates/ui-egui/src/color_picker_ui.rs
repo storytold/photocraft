@@ -668,7 +668,7 @@ fn fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, mode: &str, now: &Compo
                         _ => shown.trim_start_matches('#').to_ascii_uppercase(),
                     },
                 };
-                let r = crate::widgets::text_field_ex(ui, id, &mut h, "", 64.0, true, Some(6));
+                let r = crate::widgets::outlined_text_edit(ui, id, &mut h, crate::widgets::OutlinedTextEdit::new(64.0).char_limit(6));
                 if let Some(c) = pasted {
                     edit = Some((c, Keep::Nothing));
                 }

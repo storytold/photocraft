@@ -61,6 +61,99 @@ pub fn surface(ui: &Ui, rect: Rect, fill: Color32, raised: bool) {
     }
 }
 
+/// Border of a themed field box on its outer `rect`: accent when focused (same colour as text
+/// selection), otherwise `field_border`. Classic bevel themes skip the idle stroke (the bevel is
+/// the frame) but still get the accent ring while focused.
+pub fn field_outline(ui: &Ui, rect: Rect, focused: bool) {
+    let t = Tokens::get(ui.ctx());
+    if !focused && t.bevel {
+        return;
+    }
+    let (width, color) = if focused { (1.5, t.accent) } else { (1.0, t.field_border) };
+    ui.painter().rect_stroke(rect, t.radius_sm, Stroke::new(width, color), StrokeKind::Inside);
+}
+
+/// Make a nested `DragValue` / `TextEdit` paint no chrome of its own: the outer [`field_outline`]
+/// owns the border. Clears widget fills/strokes and zeroes the width of egui's focused-TextEdit
+/// ring (`visuals.selection.stroke`), which would otherwise sit inside our accent outline as a
+/// second box. Keeps `selection.stroke.color` as primary text so selected digits stay readable
+/// (egui paints selected glyphs with that colour) and leaves `selection.bg_fill` alone.
+pub fn suppress_nested_edit_frame(ui: &mut Ui) {
+    {
+        let w = &mut ui.style_mut().visuals.widgets;
+        for wv in [&mut w.inactive, &mut w.hovered, &mut w.active, &mut w.open] {
+            wv.bg_fill = Color32::TRANSPARENT;
+            wv.weak_bg_fill = Color32::TRANSPARENT;
+            wv.bg_stroke = Stroke::NONE;
+            wv.expansion = 0.0;
+        }
+    }
+    // Width 0: no focus frame. Colour `t.text`: selected text stays primary (not transparent).
+    let text = Tokens::get(ui.ctx()).text;
+    ui.style_mut().visuals.selection.stroke = Stroke::new(0.0, text);
+}
+
+/// Inner padding between the outer field box and the [`TextEdit`] in [`outlined_text_edit`].
+const OUTLINED_TEXT_INSET: Vec2 = vec2(4.0, 2.0);
+
+/// Options for [`outlined_text_edit`]: themed fill and [`field_outline`] on the outer box.
+pub struct OutlinedTextEdit<'a> {
+    pub width: f32,
+    pub height: f32,
+    pub font_size: f32,
+    pub char_limit: Option<usize>,
+    pub hint: &'a str,
+}
+
+impl<'a> OutlinedTextEdit<'a> {
+    /// `width` is the outer box width (same convention as [`value_field`]).
+    pub fn new(width: f32) -> Self {
+        Self { width, height: VALUE_FIELD_H, font_size: 12.0, char_limit: None, hint: "" }
+    }
+
+    pub fn height(mut self, height: f32) -> Self {
+        self.height = height;
+        self
+    }
+
+    pub fn font_size(mut self, font_size: f32) -> Self {
+        self.font_size = font_size;
+        self
+    }
+
+    pub fn char_limit(mut self, limit: usize) -> Self {
+        self.char_limit = Some(limit);
+        self
+    }
+
+    pub fn hint_text(mut self, hint: &'a str) -> Self {
+        self.hint = hint;
+        self
+    }
+}
+
+/// Single-line text in a [`surface`] box with [`field_outline`] on focus — same chrome as
+/// [`value_field`] and the Color panel hex readout. The nested [`TextEdit`] has no frame of its
+/// own ([`suppress_nested_edit_frame`]).
+pub fn outlined_text_edit(ui: &mut Ui, id: egui::Id, text: &mut String, opts: OutlinedTextEdit<'_>) -> Response {
+    let t = Tokens::get(ui.ctx());
+    let (rect, _) = ui.allocate_exact_size(vec2(opts.width, opts.height), Sense::hover());
+    surface(ui, rect, t.field, false);
+    let inner = rect.shrink2(OUTLINED_TEXT_INSET);
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(inner).layout(egui::Layout::left_to_right(egui::Align::Center)));
+    suppress_nested_edit_frame(&mut child);
+    let mut edit = egui::TextEdit::singleline(text).id(id).desired_width(inner.width()).frame(egui::Frame::NONE).font(theme::mono(opts.font_size));
+    if let Some(n) = opts.char_limit {
+        edit = edit.char_limit(n);
+    }
+    if !opts.hint.is_empty() {
+        edit = edit.hint_text(opts.hint);
+    }
+    let resp = child.add(edit);
+    field_outline(ui, rect, resp.has_focus());
+    resp
+}
+
 /// A dock card: rounded container with a header of pill tabs and optional trailing actions.
 /// Returns the index of the selected tab.
 pub fn card(ui: &mut Ui, id: &str, tabs: &[&str], selected: &mut usize, body: impl FnOnce(&mut Ui, usize)) {
@@ -606,9 +699,6 @@ fn value_field_box(
         None => crate::numeric_expression::Units { unit: unit_of_suffix(typed_suffix), suffix: typed_suffix, dpi, ppi, extent },
     };
     surface(ui, rect, t.field, false);
-    if !t.bevel {
-        ui.painter().rect_stroke(rect, t.radius_sm, Stroke::new(1.0, t.field_border), StrokeKind::Inside);
-    }
     // The number's slot ends 1 pt left of the suffix, by its measured width (the suffix is drawn
     // 6 pt from the right edge), so a one-character unit like `%` leaves the number room (#3040).
     let suffix_font = theme::mono(11.0);
@@ -643,11 +733,8 @@ fn value_field_box(
     let mut resp = {
         let ui = &mut child;
         {
-            ui.style_mut().visuals.widgets.inactive.bg_fill = Color32::TRANSPARENT;
-            ui.style_mut().visuals.widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
-            ui.style_mut().visuals.widgets.inactive.bg_stroke = Stroke::NONE;
-            ui.style_mut().visuals.widgets.hovered.bg_stroke = Stroke::NONE;
-            ui.style_mut().visuals.widgets.hovered.weak_bg_fill = Color32::TRANSPARENT;
+            // Outer `rect` owns the border; kill egui's nested TextEdit frame (incl. selection.stroke).
+            suppress_nested_edit_frame(ui);
             ui.style_mut().override_font_id = Some(font);
             // The theme's interact height (24) is taller than the number's slot: the DragValue
             // would grow past the slot's bottom and sit low, or spill out of a slim box (#2823).
@@ -712,6 +799,9 @@ fn value_field_box(
     if ui.memory(|m| m.has_focus(resp.id)) {
         crate::field_wheel::set_focused(ui.ctx(), resp.id, slot.id);
     }
+    // After the number (and any focus request): accent ring sits on the outer box, not the
+    // nested TextEdit's smaller rect.
+    field_outline(ui, rect, resp.has_focus());
     (resp, rect)
 }
 

@@ -1342,7 +1342,7 @@ fn hex_field(ui: &mut egui::Ui, key: &str, rgb: &mut [u8; 3]) {
     let id = egui::Id::new(("pref-hex", key));
     let shown = format!("#{:02x}{:02x}{:02x}", rgb[0], rgb[1], rgb[2]);
     let mut text = ui.data(|d| d.get_temp::<String>(id)).unwrap_or_else(|| shown.clone());
-    let r = crate::widgets::text_field_ex(ui, id, &mut text, "", 72.0, true, Some(7));
+    let r = crate::widgets::outlined_text_edit(ui, id, &mut text, crate::widgets::OutlinedTextEdit::new(72.0).font_size(11.5).char_limit(7));
     if r.changed()
         && let Some(c) = prefs::parse_hex(&text)
     {
@@ -1390,7 +1390,13 @@ fn prefs_body(ui: &mut egui::Ui, f: &mut Map<String, Value>, system: Option<egui
     // The dialog follows the language being edited, so a change shows before OK.
     let lang = crate::i18n::Lang::from_pref(values.pointer("/interface/language").and_then(Value::as_str).unwrap_or("auto"));
     let mut search = f.get("__search").and_then(Value::as_str).unwrap_or("").to_string();
-    crate::widgets::text_field(ui, ui.id().with("prefs-search"), &mut search, tl!("Search settings…"), ui.available_width(), false);
+    let search_w = ui.available_width().max(200.0);
+    crate::widgets::outlined_text_edit(
+        ui,
+        egui::Id::new("prefs-search"),
+        &mut search,
+        crate::widgets::OutlinedTextEdit::new(search_w).hint_text(tl!("Search settings…")),
+    );
     let found = preference_sections(&values, &search);
     if !found.iter().any(|(id, _)| *id == section)
         && let Some((first, _)) = found.first()
@@ -1896,20 +1902,24 @@ fn field_rows(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>, ke
             Value::String(s) => {
                 ui.label(RichText::new(tl!(&label)).color(t.text_dim));
                 let mut s = s.clone();
-                ui.add(egui::TextEdit::singleline(&mut s).desired_width(260.0));
+                crate::widgets::outlined_text_edit(ui, egui::Id::new(("pref-string", path.as_str())), &mut s, crate::widgets::OutlinedTextEdit::new(260.0));
                 obj.insert(k, json!(s));
             }
             Value::Number(n) => {
                 ui.label(RichText::new(tl!(&label)).color(t.text_dim));
                 let (lo, hi) = prefs::range(&path).unwrap_or((-1e9, 1e9));
+                let lo_f = lo as f32;
+                let hi_f = hi as f32;
                 if n.is_u64() || n.is_i64() {
-                    let mut x = n.as_i64().unwrap_or(0);
-                    ui.add(egui::DragValue::new(&mut x).range(lo as i64..=hi as i64).custom_parser(crate::widgets::parse_num));
-                    obj.insert(k, json!(x));
+                    let mut x = n.as_i64().unwrap_or(0) as f32;
+                    if crate::widgets::value_field(ui, &mut x, lo_f..=hi_f, "", 72.0).changed() {
+                        obj.insert(k, json!(x.round() as i64));
+                    }
                 } else {
-                    let mut x = n.as_f64().unwrap_or(0.0);
-                    ui.add(egui::DragValue::new(&mut x).range(lo..=hi).speed(0.1).max_decimals(3).custom_parser(crate::widgets::parse_num));
-                    obj.insert(k, json!(x));
+                    let mut x = n.as_f64().unwrap_or(0.0) as f32;
+                    if crate::widgets::value_field(ui, &mut x, lo_f..=hi_f, "", 72.0).changed() {
+                        obj.insert(k, json!(x));
+                    }
                 }
             }
             Value::Array(_) if path == "tools.pressureCurve" => {
@@ -1922,12 +1932,12 @@ fn field_rows(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>, ke
                 ui.label(RichText::new(tl!("Scratch disks")).color(t.text_dim));
                 let mut items = items.clone();
                 ui.vertical(|ui| {
-                    for d in &mut items {
+                    for (i, d) in items.iter_mut().enumerate() {
                         ui.horizontal(|ui| {
                             let mut on = d.get("enabled").and_then(Value::as_bool).unwrap_or(false);
                             let mut path = d.get("path").and_then(Value::as_str).unwrap_or("").to_string();
                             crate::widgets::checkbox(ui, &mut on, "");
-                            ui.add(egui::TextEdit::singleline(&mut path).desired_width(240.0));
+                            crate::widgets::outlined_text_edit(ui, ui.id().with(("scratch-disk", i)), &mut path, crate::widgets::OutlinedTextEdit::new(240.0));
                             *d = json!({"enabled": on, "path": path});
                         });
                     }
@@ -1997,7 +2007,12 @@ fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String
     let mut filter = f.get("filter").and_then(Value::as_str).unwrap_or("").to_string();
     ui.horizontal(|ui| {
         ui.label(RichText::new(tl!("Search")).color(t.text_dim));
-        ui.add(egui::TextEdit::singleline(&mut filter).desired_width(260.0).hint_text(tl!("command or shortcut")));
+        crate::widgets::outlined_text_edit(
+            ui,
+            egui::Id::new("shortcut-filter"),
+            &mut filter,
+            crate::widgets::OutlinedTextEdit::new(260.0).hint_text(tl!("command or shortcut")),
+        );
     });
     f.insert("filter".into(), json!(filter));
     // Menu path and command label as shown in the menus, in the UI language.
@@ -2525,7 +2540,7 @@ fn presets_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, 
     });
     let mut new_name = f.get("newName").and_then(Value::as_str).unwrap_or("").to_string();
     ui.horizontal(|ui| {
-        ui.add(egui::TextEdit::singleline(&mut new_name).desired_width(200.0));
+        crate::widgets::outlined_text_edit(ui, egui::Id::new("preset-rename"), &mut new_name, crate::widgets::OutlinedTextEdit::new(200.0));
         if ui.add_enabled(selected < list.len() && !new_name.trim().is_empty(), egui::Button::new(tl!("Rename"))).clicked() {
             let _ = app.run("edit.presets.presetManager", json!({"action": "rename", "kind": kind, "index": selected, "newName": new_name}));
         }
