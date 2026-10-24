@@ -1312,6 +1312,14 @@ version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=82a24b006eefa036b43c09a67fb9a3fbd17ffe63#82a24b006eefa036b43c09a67fb9a3fbd17ffe63"
 
 [[package]]
+name = "craft-jpeg"
+version = "0.1.0"
+source = "git+https://github.com/aiongg/craft-libs?rev=955831a3a260e398a8e060c4336fe1277d82a2fa#955831a3a260e398a8e060c4336fe1277d82a2fa"
+dependencies = [
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-print"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=3d37da389a3618ab9b76109da11416e9ca4ea719#3d37da389a3618ab9b76109da11416e9ca4ea719"
@@ -4860,6 +4868,7 @@ dependencies = [
 name = "photocraft-codecs"
 version = "0.15.1"
 dependencies = [
+ "craft-jpeg",
  "exr",
  "flate2",
  "half",

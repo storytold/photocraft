@@ -41,6 +41,7 @@ photocraft-ipp = { path = "crates/ipp" }
 # external
 craft-print = { git = "https://github.com/storytold/craft-libs", rev = "3d37da389a3618ab9b76109da11416e9ca4ea719" }
 craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "82a24b006eefa036b43c09a67fb9a3fbd17ffe63" }
+craft-jpeg = { git = "https://github.com/aiongg/craft-libs", rev = "955831a3a260e398a8e060c4336fe1277d82a2fa" }
 thiserror = "2"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
