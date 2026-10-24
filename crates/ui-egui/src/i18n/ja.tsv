@@ -4099,3 +4099,39 @@ curves	Smooth	スムーズ
 	Grayscale Ramp	グレースケールランプ
 	Current Colors	現在のカラー
 	Make Ramp Web Safe	ランプを Web セーフにする
+
+# Historical import conversion report
+	Import Conversion Report	インポート変換レポート
+	Import-time outcomes. Editing uses native PhotoCraft rules.	インポート時の処理結果です。編集にはPhotoCraft標準のルールを使用します。
+	A newer report format is retained. Its details cannot be displayed.	新しい形式のレポートが保持されています。詳細は表示できません。
+	No conversion report was recorded.	変換レポートは記録されていません。
+	No entries on this page.	このページに項目はありません。
+	Layer mask	レイヤーマスク
+	Next	次へ
+	Previous	前へ
+	Source item	元の項目
+	{first}–{last} of {total}	{total}件中 {first}–{last}件
+	Native equivalent	ネイティブの同等表現
+	Native approximation	ネイティブによる近似
+	Retained, not applied	保持済み・未適用
+	Nonessential data skipped	必須でないデータを省略
+	Unknown outcome	不明な処理結果
+	Native rules	ネイティブのルール
+	Native capability limit	ネイティブ機能の制限
+	Conversion not implemented	変換は未実装
+	Resource unavailable	リソースを利用できません
+	Invalid optional data	任意データが不正です
+	Retention limit	保持容量の上限
+	Precision conversion	精度変換
+	Unknown reason	不明な理由
+	Native layer {id} (removed; historical reference)	ネイティブレイヤー {id}（削除済み・過去の参照）
+	Native layer: {name}	ネイティブレイヤー: {name}
+
+# Native filter parameter labels
+	Alpha Percentile	アルファのパーセンタイル
+	Alpha Weighted	アルファで重み付け
+	Color Percentile	色のパーセンタイル
+	Connectivity	連結性
+	Disc	円形近傍
+	Each	各チャンネル
+	Value	値

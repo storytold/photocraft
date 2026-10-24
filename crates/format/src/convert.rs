@@ -42,6 +42,7 @@ pub(crate) trait Fetch {
     /// Canonical (little-endian) tile bytes of the given expected length.
     fn tile(&mut self, hash: &str, len: usize) -> Result<Vec<u8>>;
     fn blob(&mut self, hash: &str) -> Result<Arc<Vec<u8>>>;
+    fn blob_bounded(&mut self, hash: &str, max: usize) -> Result<Arc<Vec<u8>>>;
 }
 
 pub(crate) fn hex(bytes: &[u8]) -> String {
@@ -221,8 +222,9 @@ fn channel_m(c: &AlphaChannel, sink: &mut dyn Sink) -> ChannelM {
     ChannelM { name: name.clone(), surface: surface_m(surface, sink), spot: *spot, color: *color, opacity: *opacity, indicates: *indicates }
 }
 
-pub(crate) fn doc_m(d: &Document, sink: &mut dyn Sink) -> DocM {
-    DocM {
+pub(crate) fn doc_m(d: &Document, sink: &mut dyn Sink) -> Result<DocM> {
+    let import_conversion = d.metadata.import_conversion.as_ref().map(|report| crate::import_conversion::to_manifest(report, sink)).transpose()?;
+    Ok(DocM {
         id: d.id.0,
         name: d.name.clone(),
         size: d.size,
@@ -236,6 +238,7 @@ pub(crate) fn doc_m(d: &Document, sink: &mut dyn Sink) -> DocM {
         ruler_origin: d.ruler_origin,
         selection: d.selection.as_ref().map(|s| surface_m(s, sink)),
         metadata: MetadataM {
+            import_conversion,
             xmp: d.metadata.xmp.as_deref().map(str::to_owned),
             exif: opt_blob(&d.metadata.exif, sink),
             text: d.metadata.text.clone(),
@@ -265,7 +268,7 @@ pub(crate) fn doc_m(d: &Document, sink: &mut dyn Sink) -> DocM {
         notes: d.notes.clone(),
         text_styles: d.text_styles.clone(),
         slices: d.slices.clone(),
-    }
+    })
 }
 
 fn effects_m(e: &Effects, sink: &mut dyn Sink) -> EffectsM {
@@ -581,6 +584,7 @@ impl Loader<'_> {
         }
         let quick_mask = m.quick_mask.as_ref().map(|c| self.channel(c)).transpose()?;
         let mut md = Metadata {
+            import_conversion: m.metadata.import_conversion.as_ref().map(|report| crate::import_conversion::from_manifest(report, self.fetch)).transpose()?,
             xmp: m.metadata.xmp.as_deref().map(std::sync::Arc::from),
             exif: self.opt_blob(&m.metadata.exif)?,
             text: m.metadata.text.clone(),

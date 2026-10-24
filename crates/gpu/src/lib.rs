@@ -1288,11 +1288,13 @@ impl Compositor {
         // Runs of plain layers drawn as one pass each (`fs_layerbatch`). The grouping is the same
         // for every render of this plan, so a layer's bits don't depend on the cache: renders
         // capture and resume only where a run starts.
-        let runs = batch_runs(&plan);
+        let (runs, complete) = batch_layout(&plan);
         let checkpoint = if flush {
             let starts = run_starts(&runs);
+            let captures = capture_starts(&runs, &complete);
             let resumable: Vec<_> = plan.checkpoints.iter().filter(|c| starts.get(c.pass_end).copied().unwrap_or(false)).copied().collect();
-            self.prefix.prepare(doc, &resumable)
+            let capturable: Vec<_> = resumable.iter().filter(|c| captures.get(c.pass_end).copied().unwrap_or(false)).copied().collect();
+            self.prefix.prepare(doc, &resumable, &capturable)
         } else {
             None
         };
@@ -2410,7 +2412,7 @@ const BATCH: usize = 4;
 /// The runs depend on the plan alone, never on the prefix cache: a compiler may give a layer
 /// other bits batched than drawn alone (FXC on D3D12 does), and reusing a prefix must stay exact
 /// (#5286). The cache captures and resumes only at `run_starts` instead.
-fn batch_runs(plan: &Plan<'_>) -> Vec<usize> {
+fn batch_layout(plan: &Plan<'_>) -> (Vec<usize>, Vec<bool>) {
     let passes = &plan.passes;
     let n = passes.len();
     let reads = |p: &plan::Pass<'_>, s: plan::Slot| [p.a, p.b, p.c, p.d].contains(&Some(s));
@@ -2438,7 +2440,7 @@ fn batch_runs(plan: &Plan<'_>) -> Vec<usize> {
     let extra = |p: &plan::Pass<'_>| lead(p) && p.mask.is_none() && p.flags & plan::F_TEXT_GAMMA == 0 && p.mode != photocraft_color::BlendMode::Dissolve;
     (0..n)
         .map(|i| {
-            let Some(first) = passes.get(i).filter(|p| lead(p)) else { return 1 };
+            let Some(first) = passes.get(i).filter(|p| lead(p)) else { return (1, true) };
             let (mut k, mut best) = (1, 1);
             while k < BATCH && feeds_next.get(i + k - 1).copied().unwrap_or(false) && passes.get(i + k).is_some_and(extra) {
                 k += 1;
@@ -2446,9 +2448,37 @@ fn batch_runs(plan: &Plan<'_>) -> Vec<usize> {
                     best = k;
                 }
             }
-            best
+            // In an ordinary unmasked plain tail, complete lookahead fixes the
+            // chosen length before future compatible passes are appended. Short
+            // tails expose singleton boundaries the next insertion can absorb.
+            // Other leading pass types retain their existing capture policy.
+            (best, !extra(first) || k == BATCH)
         })
-        .collect()
+        .unzip()
+}
+
+#[cfg(test)]
+fn batch_runs(plan: &Plan<'_>) -> Vec<usize> {
+    batch_layout(plan).0
+}
+
+/// Prefer complete-lookahead boundaries in ordinary unmasked plain tails.
+/// Restore remains legal at every actual run start: a valid
+/// older checkpoint need not be overwritten merely because it is not a preferred
+/// capture point in the current plan.
+fn capture_starts(runs: &[usize], complete: &[bool]) -> Vec<bool> {
+    let mut starts = vec![false; runs.len() + 1];
+    let mut i = 0;
+    while i < runs.len() {
+        let next = i.saturating_add(runs.get(i).copied().unwrap_or(1).max(1));
+        if complete.get(i).copied().unwrap_or(false)
+            && let Some(start) = starts.get_mut(next)
+        {
+            *start = true;
+        }
+        i = next;
+    }
+    starts
 }
 
 /// For each pass and the end of the plan, whether the executor draws `runs` (`batch_runs`) so
@@ -2959,6 +2989,35 @@ pub fn render_to_vec_stats(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn capture_points_survive_compatible_plain_tail_extension() {
+        use photocraft_color::{ColorMode, SampleType};
+        use photocraft_doc::Layer;
+        use photocraft_geom::Size;
+        for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+            let mut doc = Document::new("Tail boundaries", Size::new(8, 8), ColorMode::Rgb, depth);
+            for count in 1..=25 {
+                let mut layer = Layer::raster("Plain", doc.pixel_format());
+                layer.surface_mut().unwrap().fill_rect(doc.bounds(), &[0.2, 0.4, 0.6, 0.5]);
+                doc.layers.push(layer);
+                let before = plan::plan(&doc).unwrap();
+                let (runs, complete) = batch_layout(&before);
+                let captures = capture_starts(&runs, &complete);
+                let actual = run_starts(&runs);
+                assert!(captures.iter().zip(&actual).all(|(capture, start)| !capture || *start));
+                let selected: Vec<_> = before.checkpoints.iter().filter(|point| captures[point.pass_end]).copied().collect();
+                let mut extended = doc.clone();
+                extended.layers.push(doc.layers.last().unwrap().duplicate());
+                let after = plan::plan(&extended).unwrap();
+                let after_starts = run_starts(&batch_runs(&after));
+                for point in selected {
+                    assert!(after.checkpoints.contains(&point), "{depth:?} length{count}: capture tuple changed after compatible extension");
+                    assert!(after_starts[point.pass_end], "{depth:?} length{count}: capture moved inside an extended batch");
+                }
+            }
+        }
+    }
 
     /// A run joins `LayerBlend` passes that only feed each other, at most `BATCH` of them, and
     /// never ends in the slot it reads from.

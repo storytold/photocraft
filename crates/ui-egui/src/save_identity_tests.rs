@@ -9,9 +9,7 @@ fn app() -> PhotocraftApp {
     let mut app = PhotocraftApp::new(
         Session::new(),
         Services {
-            import: Some(Box::new(|name, bytes, opts| {
-                photocraft_io::import_with_options(name, bytes, opts).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())
-            })),
+            import: Some(Box::new(|name, bytes, opts| photocraft_io::import_with_options(name, bytes, opts).map_err(|e| e.to_string()))),
             export: Some(Box::new(|doc, path, _| {
                 photocraft_io::export(doc, path, &Default::default()).map(|r| (r.bytes, r.warnings)).map_err(|e| e.to_string())
             })),
@@ -113,6 +111,28 @@ fn save_copy_and_export_keep_the_editable_document_identity() {
     app.poll_file_dialog(&ctx, None);
     assert_eq!(identity(&app), before);
     assert!(app.ui.status.starts_with("Exported export.png"), "{}", app.ui.status);
+}
+
+#[test]
+fn delayed_save_copy_checks_the_copied_documents_source_after_switching_tabs() {
+    let mut app = app();
+    app.services.same_file = Some(Box::new(|a, b| a == b || (a == "source.xcf" && b == "alias.pcraft")));
+    app.session.active_mut().unwrap().protected_import_source = Some("source.xcf".into());
+    let copied = app.session.active().unwrap().doc.clone();
+    app.run("file.new", json!({"width": 2, "height": 2})).unwrap();
+    let active = app.active_doc_id().unwrap();
+    let written = Rc::new(RefCell::new(Vec::new()));
+    let w = written.clone();
+    app.services.write = Some(Box::new(move |path, _| {
+        w.borrow_mut().push(path.to_owned());
+        Ok(())
+    }));
+    assert!(crate::view_cmds::write_copy(&mut app, &copied, "alias.pcraft", Default::default()).is_err());
+    assert!(written.borrow().is_empty(), "no source alias may reach the writer");
+    assert_eq!(app.active_doc_id().unwrap(), active);
+    crate::view_cmds::write_copy(&mut app, &copied, "converted.pcraft", Default::default()).unwrap();
+    assert_eq!(*written.borrow(), ["converted.pcraft"]);
+    assert_eq!(app.active_doc_id().unwrap(), active);
 }
 
 #[test]
@@ -291,4 +311,147 @@ fn unconfirmed_download_names_the_document_but_keeps_it_unsaved() {
     app.services.write_unconfirmed = false;
     app.save_as(Some("download.psd".into())).unwrap();
     assert!(!app.has_unsaved_work());
+}
+
+#[test]
+fn read_only_conversion_reports_default_to_native_while_existing_format_choices_keep_priority() {
+    use photocraft_doc::import_conversion::{ConversionReport, ImportConversion};
+    for opaque in [false, true] {
+        for (read_only, reported, path, name, expected) in [
+            (false, true, Some("existing.psd"), "Display name", "existing.psd"),
+            (false, true, Some("existing.pcraft"), "Display name", "existing.pcraft"),
+            (false, true, None, "reopened.psd", "reopened.pcraft"),
+            (false, false, None, "ordinary.psd", "ordinary.psd"),
+            (true, false, Some("legacy.psd"), "Display name", "legacy.psd"),
+            (true, false, None, "ordinary.xcf", "ordinary.psd"),
+            (true, false, None, "paint.pdn", "paint.pcraft"),
+            (true, false, None, "drawing.kra", "drawing.ora"),
+            (true, true, None, "historical.arbitrary", "historical.pcraft"),
+            (true, true, Some("misleading.psd"), "Display name", "misleading.pcraft"),
+        ] {
+            let mut app = app();
+            let st = app.session.active_mut().unwrap();
+            st.source_read_only = read_only;
+            st.path = path.map(str::to_owned);
+            let doc = std::sync::Arc::make_mut(&mut st.doc);
+            doc.name = name.into();
+            doc.metadata.import_conversion = reported.then(|| {
+                if opaque {
+                    ImportConversion::Opaque { schema_version: 77, record: std::sync::Arc::new(b"future inert report".to_vec()), attachments: Vec::new() }
+                } else {
+                    ImportConversion::Report(ConversionReport {
+                        source_format: "arbitrary historical label, never a format dispatch".into(),
+                        ..Default::default()
+                    })
+                }
+            });
+            let before = identity(&app);
+            let (dialog, requests) = crate::file_dialog::fake(vec![None]);
+            app.services.file_dialog = Some(dialog);
+            app.save_as(None).unwrap();
+            app.poll_file_dialog(&egui::Context::default(), None);
+            assert_eq!(
+                *requests.borrow(),
+                [crate::file_dialog::FileDialogRequest::Save { suggested: expected.into() }],
+                "readonly={read_only},report={reported},opaque={opaque}"
+            );
+            assert_eq!(identity(&app), before, "a cancelled suggestion does not rename or save the original");
+            assert_eq!(app.session.active().unwrap().source_read_only, read_only);
+        }
+    }
+}
+
+#[test]
+fn actual_xcf_bytes_and_wrappers_download_native_reports_without_confirming_a_browser_save() {
+    use std::io::Write;
+    // Independently specification-authored1x1 v3 RGB XCF, no source layers/channels.
+    let mut plain = b"gimp xcf v003\0".to_vec();
+    for value in [1u32, 1, 0, 0, 0, 0, 0] {
+        plain.extend_from_slice(&value.to_be_bytes());
+    }
+    let mut gzip = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    gzip.write_all(&plain).unwrap();
+    let wrapped = gzip.finish().unwrap();
+    for (name, input) in [("plain.xcf", plain.clone()), ("misnamed.psd", plain), ("wrapped.xcf.gz", wrapped.clone()), ("wrapped-as-native.pcraft", wrapped)] {
+        let original = input.clone();
+        let writes = Rc::new(RefCell::new(Vec::<(String, Vec<u8>)>::new()));
+        let captured = writes.clone();
+        let mut app = PhotocraftApp::new(
+            Session::new(),
+            Services {
+                import: Some(Box::new(|name, bytes, opts| photocraft_io::import_with_options(name, bytes, opts).map_err(|e| e.to_string()))),
+                export: Some(Box::new(|doc, path, _| {
+                    photocraft_io::export(doc, path, &Default::default()).map(|r| (r.bytes, r.warnings)).map_err(|e| e.to_string())
+                })),
+                write: Some(Box::new(move |path, bytes| {
+                    captured.borrow_mut().push((path.to_owned(), bytes.to_vec()));
+                    Ok(())
+                })),
+                write_unconfirmed: true,
+                ..Default::default()
+            },
+        );
+        app.session.color.settings.ask_on_missing = false;
+        app.open_bytes(name, &input).unwrap();
+        assert!(app.session.active().unwrap().source_read_only);
+        let report = app.session.active().unwrap().doc.metadata.import_conversion.clone();
+        assert!(report.is_some());
+        app.run("layer.new.layer", json!({})).unwrap();
+        assert!(app.session.active().unwrap().is_dirty());
+        let before_saved = app.session.active().unwrap().saved_revision;
+        let expected = std::path::Path::new(name).with_extension(photocraft_format::EXTENSION).to_string_lossy().into_owned();
+        // Browser behavior: no format picker; return exactly the suggested download name.
+        let requests = Rc::new(RefCell::new(Vec::new()));
+        let request_log = requests.clone();
+        app.services.file_dialog = Some(Box::new(move |request, _, reply| {
+            let crate::file_dialog::FileDialogRequest::Save { suggested } = &request else { panic!("expected Save request") };
+            let suggested = suggested.clone();
+            request_log.borrow_mut().push(request);
+            reply.send(Some(crate::file_dialog::FileDialogAnswer::SaveTo(suggested)));
+        }));
+        app.save_as(None).unwrap();
+        app.poll_file_dialog(&egui::Context::default(), None);
+        assert_eq!(*requests.borrow(), [crate::file_dialog::FileDialogRequest::Save { suggested: expected.clone() }]);
+        let (download_name, bytes) = writes.borrow()[0].clone();
+        assert_eq!(download_name, expected);
+        assert!(photocraft_format::is_pcraft(&bytes));
+        let reopened = photocraft_io::import(&download_name, &bytes).unwrap();
+        assert_eq!(reopened.document.metadata.import_conversion, report);
+        assert!(!reopened.source_read_only);
+        assert_eq!(app.session.active().unwrap().path.as_deref(), Some(expected.as_str()));
+        assert_eq!(app.session.active().unwrap().saved_revision, before_saved);
+        assert!(app.session.active().unwrap().is_dirty());
+        assert!(app.has_unsaved_work());
+        assert_eq!(input, original);
+        app.services.write_unconfirmed = false;
+        app.save_as(Some(expected)).unwrap();
+        assert!(!app.session.active().unwrap().is_dirty());
+        assert!(!app.has_unsaved_work());
+        assert_eq!(app.session.active().unwrap().doc.metadata.import_conversion, report);
+        // Native bytes opened through the browser have no writable path, even when their
+        // misleading filename looks like PSD. A second download must preserve the report.
+        let first_native_bytes = bytes.clone();
+        app.open_bytes("native-reopen-misnamed.psd", &first_native_bytes).unwrap();
+        let st = app.session.active().unwrap();
+        assert!(!st.source_read_only);
+        assert!(st.path.is_none());
+        assert_eq!(st.doc.metadata.import_conversion, report);
+        let second_expected = std::path::Path::new(&st.doc.name).with_extension(photocraft_format::EXTENSION).to_string_lossy().into_owned();
+        app.run("layer.new.layer", json!({})).unwrap();
+        let second_saved = app.session.active().unwrap().saved_revision;
+        app.services.write_unconfirmed = true;
+        app.save_as(None).unwrap();
+        app.poll_file_dialog(&egui::Context::default(), None);
+        assert_eq!(requests.borrow().last(), Some(&crate::file_dialog::FileDialogRequest::Save { suggested: second_expected.clone() }));
+        let (second_name, second_bytes) = writes.borrow().last().unwrap().clone();
+        assert_eq!(second_name, second_expected);
+        assert!(photocraft_format::is_pcraft(&second_bytes));
+        let second_reopened = photocraft_io::import("second-generation-misnamed.psd", &second_bytes).unwrap();
+        assert!(!second_reopened.source_read_only);
+        assert_eq!(second_reopened.document.metadata.import_conversion, report);
+        assert_eq!(app.session.active().unwrap().saved_revision, second_saved);
+        assert!(app.session.active().unwrap().is_dirty());
+        assert!(app.has_unsaved_work());
+        assert_eq!(first_native_bytes, bytes);
+    }
 }

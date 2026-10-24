@@ -1571,6 +1571,9 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::proof_sim::specs());
     v.extend(crate::presets::specs());
     v.extend(crate::document_preset_cmds::specs());
+    v.extend(crate::import_report_cmds::specs());
+    v.extend(crate::coverage_cmds::specs());
+    v.extend(crate::hdr_filter::specs());
     v.extend(crate::export_preset_cmds::specs());
     v.extend(crate::render_cmds::specs());
     v.extend(crate::slice_cmds::specs());

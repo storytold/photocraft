@@ -670,6 +670,93 @@ pub fn masked_copy(src: &Surface, alpha: &Region) -> Surface {
     out
 }
 
+/// Failure of the bounded native Remove Black Matte operation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Error {
+    Cancelled,
+    Allocation,
+    InvalidGeometry,
+    ChannelMismatch,
+    WorkspaceLimit,
+}
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Cancelled => "native matting cancelled",
+            Self::Allocation => "native matting allocation unavailable",
+            Self::InvalidGeometry => "native matting geometry is invalid",
+            Self::ChannelMismatch => "native matting color channels do not match",
+            Self::WorkspaceLimit => "native matting exceeds its working-byte allowance",
+        })
+    }
+}
+impl std::error::Error for Error {}
+
+/// Existing ordinary Remove Black/White Matte equation. Zero/opaque alpha is unchanged.
+/// Conversion to/from document channels belongs to the caller's native pixel format.
+pub fn remove_matte_pixel(q: &mut [f32; 4], white: bool) {
+    if q[3] > 0.0 && q[3] < 1.0 {
+        let a = q[3];
+        for v in &mut q[..3] {
+            *v = if white { (*v - (1.0 - a)) / a } else { *v / a }.clamp(0.0, 1.0);
+        }
+    }
+}
+
+/// Existing native Remove Black Matte with fallible COW tiles/rows and cancellation.
+/// It changes only content inside `bounds`, preserves native color/depth conversion,
+/// and is identity on a surface without alpha. No partial result is published on error.
+pub fn remove_black_matte_with(src: &Surface, bounds: Rect, ctl: &photocraft_raster::Interrupt) -> Result<Surface, Error> {
+    ctl.check().map_err(|_| Error::Cancelled)?;
+    let area = src.content_bounds().intersect(&bounds);
+    if !src.format().alpha || area.is_empty() {
+        return Ok(src.clone());
+    }
+    let format = src.format();
+    let channels = format.channels();
+    if channels == 0 || channels > 8 {
+        return Err(Error::ChannelMismatch);
+    }
+    let width = usize::try_from(area.width()).map_err(|_| Error::InvalidGeometry)?;
+    let height = usize::try_from(area.height()).map_err(|_| Error::InvalidGeometry)?;
+    if width.checked_mul(height).is_none_or(|n| n > crate::coverage::MAX_PIXELS) {
+        return Err(Error::WorkspaceLimit);
+    }
+    let tile = i64::from(photocraft_geom::TILE_SIZE);
+    let tiles = |a: i32, b: i32| -> Result<usize, Error> {
+        usize::try_from((i64::from(b) - 1).div_euclid(tile) - i64::from(a).div_euclid(tile) + 1).map_err(|_| Error::InvalidGeometry)
+    };
+    let bytes = tiles(area.x0, area.x1)?
+        .checked_mul(tiles(area.y0, area.y1)?)
+        .and_then(|n| n.checked_mul((tile * tile) as usize * format.bytes_per_pixel() + 128))
+        .and_then(|n| n.checked_add(src.tile_count().checked_mul(128)?))
+        .and_then(|n| n.checked_add(width.checked_mul(channels)?.checked_mul(4)?))
+        .ok_or(Error::WorkspaceLimit)?;
+    if bytes > crate::coverage::MAX_WORKSPACE_BYTES {
+        return Err(Error::WorkspaceLimit);
+    }
+    let mut out = src.clone();
+    for y in area.y0..area.y1 {
+        ctl.check().map_err(|_| Error::Cancelled)?;
+        let row_bounds = Rect::new(area.x0, y, area.x1, y + 1);
+        let mut row = src.try_read_region(row_bounds).map_err(|_| Error::Allocation)?;
+        for (index, samples) in row.chunks_exact_mut(channels).enumerate() {
+            if index.is_multiple_of(1024) {
+                ctl.check().map_err(|_| Error::Cancelled)?;
+            }
+            let mut rgba = photocraft_raster::to_rgba(&format, samples);
+            remove_matte_pixel(&mut rgba, false);
+            let mut encoded = [0.; 8];
+            let count = photocraft_raster::from_rgba_into(&format, rgba, &mut encoded);
+            let converted = encoded.get(..count).filter(|v| v.len() == samples.len()).ok_or(Error::ChannelMismatch)?;
+            samples.copy_from_slice(converted);
+        }
+        out.try_write_region(row_bounds, &row).map_err(|_| Error::Allocation)?;
+    }
+    ctl.check().map_err(|_| Error::Cancelled)?;
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -848,5 +935,100 @@ mod tests {
         assert_eq!(c.format(), PixelFormat::GRAYA8);
         assert_eq!(c.pixel(3, 1)[1], 0.0);
         assert!((c.pixel(1, 1)[0] - 0.5).abs() < 0.01 && c.pixel(1, 1)[1] == 1.0);
+    }
+}
+
+#[cfg(test)]
+mod native_matte_tests {
+    use super::*;
+    use photocraft_color::{ColorMode, SampleType};
+    use photocraft_raster::{Interrupt, from_rgba_into, to_rgba};
+    #[test]
+    fn native_black_matte_matches_independent_existing_equation_all_depths_and_models() {
+        for mode in [ColorMode::Rgb, ColorMode::Grayscale] {
+            for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+                let format = PixelFormat::new(mode, depth, true);
+                let rect = Rect::new(-2, 3, 2, 4);
+                let mut source = Surface::new(format);
+                let colors = [[0.1, 0.2, 0.3, 0.5], [0.4, 0.2, 0.1, 0.], [0.2, 0.4, 0.6, 1.], [0.9, 0.2, 0.1, 0.25]];
+                for (index, color) in colors.into_iter().enumerate() {
+                    let mut values = [0.; 8];
+                    let n = from_rgba_into(&format, color, &mut values);
+                    let x = rect.x0 + index as i32;
+                    source.write_region(Rect::new(x, 3, x + 1, 4), &values[..n]);
+                }
+                let before = source.read_region(rect);
+                let result = remove_black_matte_with(&source, rect, &Interrupt::NONE).unwrap();
+                for x in rect.x0..rect.x1 {
+                    let mut expected = to_rgba(&format, &source.pixel(x, 3));
+                    if expected[3] > 0. && expected[3] < 1. {
+                        let alpha = expected[3];
+                        for color in &mut expected[..3] {
+                            *color = (*color / alpha).clamp(0., 1.);
+                        }
+                    }
+                    let mut values = [0.; 8];
+                    let n = from_rgba_into(&format, expected, &mut values);
+                    let actual = result.pixel(x, 3);
+                    for (a, b) in actual.iter().zip(&values[..n]) {
+                        assert!((a - b).abs() < 0.005, "{mode:?}/{depth:?}/{x}: {actual:?}");
+                    }
+                }
+                assert_eq!(source.read_region(rect), before);
+                let restricted = remove_black_matte_with(&source, Rect::new(-2, 3, -1, 4), &Interrupt::NONE).unwrap();
+                assert_eq!(restricted.pixel(1, 3), source.pixel(1, 3));
+            }
+        }
+    }
+    #[test]
+    fn native_black_and_white_pixel_equations_and_hidden_hdr_are_unchanged() {
+        let mut black = [0.1, 0.2, 0.3, 0.5];
+        remove_matte_pixel(&mut black, false);
+        assert_eq!(black, [0.2, 0.4, 0.6, 0.5]);
+        let mut white = [0.6, 0.7, 0.8, 0.5];
+        remove_matte_pixel(&mut white, true);
+        for (a, b) in white.into_iter().zip([0.2, 0.4, 0.6, 0.5]) {
+            assert!((a - b).abs() < 1e-6);
+        }
+        for alpha in [0., 1.] {
+            for white in [false, true] {
+                let mut p = [-2., 3., 0.4, alpha];
+                let before = p;
+                remove_matte_pixel(&mut p, white);
+                assert_eq!(p, before);
+            }
+        }
+    }
+    #[test]
+    fn sparse_hostile_geometry_is_rejected_before_dense_row_or_tile_allocation() {
+        let mut source = Surface::new(PixelFormat::RGBA32F);
+        source.fill_rect(Rect::new(0, 0, 1, 1), &[0.1, 0.2, 0.3, 0.5]);
+        source.fill_rect(Rect::new(65535, 65535, 65536, 65536), &[0.1, 0.2, 0.3, 0.5]);
+        let count = source.tile_count();
+        assert!(matches!(remove_black_matte_with(&source, Rect::new(0, 0, 65536, 65536), &Interrupt::NONE), Err(Error::WorkspaceLimit)));
+        assert_eq!(source.tile_count(), count);
+        assert_eq!(source.pixel(0, 0), vec![0.1, 0.2, 0.3, 0.5]);
+    }
+    #[test]
+    fn no_alpha_empty_bounds_and_cancel_are_atomic() {
+        for mode in [ColorMode::Rgb, ColorMode::Grayscale] {
+            for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+                let format = PixelFormat::new(mode, depth, false);
+                let mut source = Surface::new(format);
+                let r = Rect::new(0, 0, 2, 2);
+                source.fill_rect(r, &vec![0.25; format.channels()]);
+                assert_eq!(remove_black_matte_with(&source, r, &Interrupt::NONE).unwrap().read_region(r), source.read_region(r));
+            }
+        }
+        let mut source = Surface::new(PixelFormat::RGBA32F);
+        let r = Rect::new(0, 0, 2048, 4);
+        source.fill_rect(r, &[0.1, 0.2, 0.3, 0.5]);
+        assert_eq!(remove_black_matte_with(&source, Rect::EMPTY, &Interrupt::NONE).unwrap().read_region(r), source.read_region(r));
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let checks = AtomicUsize::new(0);
+        let cancel = || checks.fetch_add(1, Ordering::Relaxed) >= 4;
+        let before = source.read_region(r);
+        assert!(matches!(remove_black_matte_with(&source, r, &Interrupt::cancel_only(&cancel)), Err(Error::Cancelled)));
+        assert_eq!(source.read_region(r), before);
     }
 }

@@ -13,6 +13,8 @@
 //! `--wayland-notice` previews the native file drag-and-drop guidance shown in Wayland sessions.
 //! `--update-notice` previews a newer release without contacting the network.
 //! `--custom-titlebar` draws the Windows/Linux title bar (caption buttons in the top bar).
+//! `--import-report` previews the read-only conversion report; `--import-report-many` and
+//! `--import-report-empty` exercise paging and the empty state with procedural native data.
 //!
 //! `--monitor 1366x768 --window-top 31` simulates the display the window is on (in points) and
 //! where its content starts on it, e.g. a window running under a Windows taskbar.
@@ -40,12 +42,21 @@ fn main() {
     let scale: f32 = arg(&args, "--scale").and_then(|s| s.parse().ok()).unwrap_or(2.0);
     let wayland_notice = args.iter().any(|a| a == "--wayland-notice");
     let update_notice = args.iter().any(|a| a == "--update-notice");
+    let report_demo = if args.iter().any(|a| a == "--import-report-many") {
+        Some(61)
+    } else if args.iter().any(|a| a == "--import-report-empty") {
+        Some(0)
+    } else if args.iter().any(|a| a == "--import-report") {
+        Some(5)
+    } else {
+        None
+    };
     let script: Vec<(String, Value)> =
         arg(&args, "--script").map(|s| serde_json::from_str::<Vec<(String, Value)>>(&s).expect("--script must be [[method, params], …]")).unwrap_or_default();
 
     let services = Services {
         import: Some(Box::new(|name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions| {
-            photocraft_io::import_with_options(name, bytes, opts).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())
+            photocraft_io::import_with_options(name, bytes, opts).map_err(|e| e.to_string())
         })),
         export: Some(Box::new(|doc: &photocraft_doc::Document, path: &str, settings: &photocraft_ui_egui::ExportSettings| {
             let mut opts = photocraft_io::ExportOptions::default();
@@ -108,6 +119,9 @@ fn main() {
             }
             if let Some(path) = &open {
                 app.open_path(path).expect("open --open file");
+            }
+            if let Some(count) = report_demo {
+                import_report_demo(&mut app, count);
             }
             app
         });
@@ -189,4 +203,80 @@ fn main() {
     let img = harness.render().expect("render");
     img.save(&out).expect("save png");
     println!("wrote {out} ({}×{})", img.width(), img.height());
+}
+
+fn import_report_demo(app: &mut PhotocraftApp, count: u32) {
+    use photocraft_doc::import_conversion::{
+        ConversionDisposition as D, ConversionEntry, ConversionReason as R, ConversionReport, ImportConversion, NativeTargetRef, RetainedImportData,
+        SourceItemRef,
+    };
+    use photocraft_doc::{Color, ColorMode, Document, SampleType, Size};
+    let mut doc = Document::with_background("Converted project.pcraft", Size::new(64, 48), ColorMode::Rgb, SampleType::U8, Color::rgb(0.1, 0.2, 0.4));
+    let target = doc.layers.first().map(|l| l.id);
+    let outcomes = [
+        ("Background", D::NativeEquivalent, R::NativePolicy, "Stored raster samples and layer properties", "Native raster layer and properties"),
+        (
+            "Duplicate",
+            D::NativeApproximation,
+            R::NativePolicy,
+            "Source Clip to backdrop coverage and linear-light compositing",
+            "Native PhotoCraft compositing and independent editable layers",
+        ),
+        (
+            "Duplicate",
+            D::RetainedUnapplied,
+            R::MissingMapping,
+            "Unknown optional source operation configuration",
+            "Configuration retained inertly; this operation is not applied",
+        ),
+        (
+            "Source UI",
+            D::SkippedNonessential,
+            R::NativeLimitation,
+            "Nonessential source UI preference",
+            "Source UI preference omitted; native editing is unchanged",
+        ),
+        (
+            "Long source name λ · Long source name λ · Long source name λ · Long source name λ · Long source name λ · Long source name λ · Long source name λ · Long source name λ",
+            D::NativeApproximation,
+            R::MissingMapping,
+            "Source editable text",
+            "Stored pixels preserved; editable text conversion remains unfinished",
+        ),
+    ];
+    doc.metadata.import_conversion = Some(ImportConversion::Report(ConversionReport {
+        source_format: "xcf".into(),
+        source_version: Some(26),
+        policy_version: 1,
+        entries: outcomes
+            .iter()
+            .copied()
+            .cycle()
+            .zip(0..count)
+            .map(|((name, disposition, reason, source, native), ordinal)| ConversionEntry {
+                feature_code: "xcf.example".into(),
+                source: SourceItemRef {
+                    kind: "layer".into(),
+                    ordinal,
+                    name: if ordinal == 0 { "Long source label λ · ".repeat(20) } else { name.into() },
+                    ..Default::default()
+                },
+                targets: vec![NativeTargetRef { layer_id: if ordinal == 2 { Some(photocraft_doc::LayerId::fresh()) } else { target }, ..Default::default() }],
+                disposition,
+                reason,
+                source_description: source.into(),
+                native_description: native.into(),
+                attachments: if ordinal == 2 { vec![0] } else { Vec::new() },
+            })
+            .collect(),
+        attachments: vec![RetainedImportData {
+            owner: SourceItemRef::default(),
+            kind: "demo configuration".into(),
+            encoding: "opaque".into(),
+            bytes: std::sync::Arc::new(b"inert procedural example".to_vec()),
+        }],
+    }));
+    app.session.add_document(doc, None);
+    app.sync_views();
+    photocraft_ui_egui::import_report::open(app);
 }

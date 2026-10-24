@@ -36,6 +36,34 @@ pub struct AuthorizedWorkspace {
 }
 
 impl AuthorizedWorkspace {
+    /// Compare an imported read-root source with a write-root destination using only held
+    /// directory capabilities. No file contents or ambient path lookups are used.
+    pub fn is_import_source(&self, source: &str, destination: &str) -> Result<bool, AutomationError> {
+        let identity_error = |e| AutomationError::Io(format!("cannot inspect import source identity: {e}"));
+        let source = request_path(source, self.read.as_ref())?;
+        let destination = request_path(destination, self.write.as_ref())?;
+        let read = self.read.as_ref().ok_or_else(|| AutomationError::BadRequest(format!("{DENIED}: read authority is absent")))?;
+        let write = self.write.as_ref().ok_or_else(|| AutomationError::BadRequest(format!("{DENIED}: write authority is absent")))?;
+        if source == destination {
+            let a = read.dir.try_clone().map_err(identity_error)?.into_std_file();
+            let b = write.dir.try_clone().map_err(identity_error)?.into_std_file();
+            if photocraft_engine::file_cmds::same_open_files(&a, &b).map_err(identity_error)? {
+                return Ok(true);
+            }
+        }
+        let a = match read.dir.open(&source) {
+            Ok(file) => file.into_std(),
+            Err(error) if matches!(error.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied) => return Ok(false),
+            Err(error) => return Err(file_error("inspect source", &source.to_string_lossy(), error)),
+        };
+        let b = match write.dir.open(&destination) {
+            Ok(file) => file.into_std(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(file_error("inspect destination", &destination.to_string_lossy(), error)),
+        };
+        photocraft_engine::file_cmds::same_open_files(&a, &b).map_err(identity_error)
+    }
+
     /// Open the configured roots as capabilities. Either authority may be
     /// omitted; omitted authority fails closed.
     pub fn new(read_root: Option<&Path>, write_root: Option<&Path>) -> Result<Self, AutomationError> {
@@ -531,6 +559,24 @@ mod tests {
         assert_eq!(workspace.read("read.txt").unwrap(), b"canary");
         workspace.write("new-output.txt", b"created").unwrap();
         assert_eq!(std::fs::read(inside.join("new-output.txt")).unwrap(), b"created");
+    }
+
+    #[test]
+    fn import_source_identity_respects_separate_read_and_write_roots() {
+        let (inside, outside, _) = roots("import-source-identity");
+        std::fs::write(inside.join("source.xcf"), b"source").unwrap();
+        std::fs::write(outside.join("source.xcf"), b"other").unwrap();
+        std::fs::hard_link(inside.join("source.xcf"), outside.join("alias.pcraft")).unwrap();
+        let workspace = AuthorizedWorkspace::new(Some(&inside), Some(&outside)).unwrap();
+        assert!(!workspace.is_import_source("source.xcf", "source.xcf").unwrap(), "equal relative names in separate roots are distinct");
+        assert!(workspace.is_import_source("source.xcf", "alias.pcraft").unwrap());
+        assert!(!workspace.is_import_source("source.xcf", "new.pcraft").unwrap());
+        assert!(workspace.is_import_source("../outside/source.xcf", "new.pcraft").is_err());
+        assert!(workspace.is_import_source("source.xcf", "../inside/source.xcf").is_err());
+        std::fs::remove_file(inside.join("source.xcf")).unwrap();
+        assert!(!workspace.is_import_source("source.xcf", "new.pcraft").unwrap());
+        let same_root = AuthorizedWorkspace::new(Some(&inside), Some(&inside)).unwrap();
+        assert!(same_root.is_import_source("source.xcf", "source.xcf").unwrap(), "the original path stays protected after removal");
     }
 
     #[test]

@@ -90,14 +90,19 @@ impl Headless {
 
     /// Open a file and make it the active document.
     pub fn open(&mut self, path: &Path) -> Result<Value, AutomationError> {
+        self.open_with_sample_order(path, None)
+    }
+
+    /// Open using a caller-selected byte order for historical XCF7–11 samples.
+    pub fn open_with_sample_order(&mut self, path: &Path, order: Option<photocraft_io::HistoricalXcfSampleOrder>) -> Result<Value, AutomationError> {
         let requested = path.to_str().ok_or_else(|| AutomationError::BadRequest("automation paths must be valid UTF-8".into()))?;
         let mut o = match &self.filesystem {
             Filesystem::Denied => return Err(AutomationError::BadRequest("automation filesystem access is not granted: read authority is absent".into())),
-            Filesystem::TrustedLocal => files::open(path)?,
+            Filesystem::TrustedLocal => files::open_with_sample_order(path, order)?,
             Filesystem::Workspace(workspace) => {
                 let bytes = workspace.read(requested)?;
                 let name = path.file_name().and_then(|name| name.to_str()).unwrap_or(requested);
-                files::open_bytes(name, &bytes)?
+                files::open_bytes_with_sample_order(name, &bytes, order)?
             }
         };
         // Preferences › Raw Defaults › Resolution, as the app's File › Open applies it.
@@ -109,9 +114,15 @@ impl Headless {
             }
             None => Some(requested.to_string()),
         };
-        let index = self.session.add_document(o.document, path.filter(|_| !o.source_read_only));
+        if let Some(view) = &o.initial_view {
+            view.validate(&o.document)?;
+        }
+        let protected = path.as_ref().filter(|_| o.source_read_only).cloned();
+        let (index, color) = self.session.open_imported_document(o.document, path.filter(|_| !o.source_read_only), &photocraft_engine::jobs::JobCtx::new())?;
+        self.session.apply_import_initial_view(o.initial_view)?;
         if let Some(st) = self.session.active_mut() {
             st.source_read_only = o.source_read_only;
+            st.protected_import_source = protected;
         }
         let d = &self.session.documents()[index];
         let mut warnings = o.warnings;
@@ -123,6 +134,8 @@ impl Headless {
             "height": d.doc.size.height,
             "layers": d.doc.layer_count(),
             "warnings": warnings,
+            "color": color,
+            "importConversion": photocraft_engine::import_report_cmds::summary(d.doc.metadata.import_conversion.as_ref()),
         }))
     }
 
@@ -282,6 +295,16 @@ impl Headless {
             }
         };
         let target_text = target.to_str().ok_or_else(|| AutomationError::BadRequest("automation paths must be valid UTF-8".into()))?;
+        if let Some(source) = self.session.documents().get(i).and_then(|st| st.protected_import_source.as_deref()) {
+            let protected = match &self.filesystem {
+                Filesystem::TrustedLocal => file_cmds::same_file(source, target_text),
+                Filesystem::Workspace(workspace) => workspace.is_import_source(source, target_text)?,
+                Filesystem::Denied => return Err(AutomationError::BadRequest("automation filesystem access is not granted: write authority is absent".into())),
+            };
+            if protected {
+                return Err(AutomationError::BadRequest("the destination is the import-only source; choose a different native or export path".into()));
+            }
+        }
         let mut warnings = match &self.filesystem {
             Filesystem::Denied => return Err(AutomationError::BadRequest("automation filesystem access is not granted: write authority is absent".into())),
             Filesystem::TrustedLocal => {
@@ -381,7 +404,10 @@ impl Headless {
             authorize_engine_command(id, &params)?;
         }
         // Background jobs that finished since the last request (or batch step) are applied first.
-        self.sync_jobs();
+        // Cancellation instead discards a pending result before it can publish a document.
+        if id != "jobs.cancel" {
+            self.sync_jobs();
+        }
         if wait {
             return Ok(self.session.execute(id, params)?);
         }

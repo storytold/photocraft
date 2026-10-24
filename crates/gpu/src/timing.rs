@@ -306,3 +306,64 @@ impl GpuTimer {
         self.written += 1;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn timer() -> Option<(wgpu::Device, GpuTimer)> {
+        let instance = wgpu::Instance::default();
+        let Ok(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) else {
+            eprintln!("SKIP timestamp readback test: no adapter");
+            return None;
+        };
+        if !adapter.features().contains(FEATURES) {
+            eprintln!("SKIP timestamp readback test: adapter lacks timestamp features");
+            return None;
+        }
+        let descriptor = wgpu::DeviceDescriptor { required_features: FEATURES, ..Default::default() };
+        let (device, queue) = pollster::block_on(adapter.request_device(&descriptor)).expect("timestamp-capable test device");
+        let timer = GpuTimer::new(&device, &queue).expect("timestamp-capable timer");
+        Some((device, timer))
+    }
+
+    /// Inject resolved timestamp bytes, not a precomputed timing result: ordinary mapped-buffer
+    /// decoding, span aggregation, readiness and consumption all remain under test.
+    fn mapped_readback(device: &wgpu::Device, timer: &mut GpuTimer, pairs: &[(u64, u64)], px: u64) {
+        let bytes = (pairs.len() * 16) as u64;
+        timer.read = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("known_timestamp_readback"),
+            size: bytes,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: true,
+        });
+        {
+            let mut view = timer.read.slice(..).get_mapped_range_mut().expect("initially mapped timestamp buffer");
+            let mut resolved = Vec::with_capacity(pairs.len() * 16);
+            for (start, end) in pairs {
+                resolved.extend_from_slice(&start.to_le_bytes());
+                resolved.extend_from_slice(&end.to_le_bytes());
+            }
+            view.copy_from_slice(&resolved);
+        }
+        timer.period_ns = 2.5;
+        timer.in_flight = Some(((pairs.len() * 2) as u32, px, Arc::new(AtomicU8::new(MAPPED))));
+    }
+
+    #[test]
+    fn mapped_nonuniform_spans_sum_through_collect_and_take() {
+        let Some((device, mut timer)) = timer() else { return };
+        // Durations 1000, 9000 and 3000 ticks; the much larger gaps must not be counted.
+        mapped_readback(&device, &mut timer, &[(100, 1100), (50_000, 59_000), (1_000_000, 1_003_000)], 6_000_000);
+        let expected = GpuTiming { ms: 0.0325, px: 6_000_000, spans: 3 };
+        assert_eq!(timer.collect(), Some(expected), "sum all spans, neither the last span nor the enclosing interval");
+        assert!(!timer.busy(), "collect releases the completed readback");
+        assert_eq!(timer.take(), Some(expected));
+        assert_eq!(timer.take(), None, "the same measurement must not be attributed twice");
+
+        // Reuse after consuming the first measurement, with a different count and pixel total.
+        mapped_readback(&device, &mut timer, &[(200, 2200), (70_000, 74_000)], 1500);
+        assert_eq!(timer.take(), Some(GpuTiming { ms: 0.015, px: 1500, spans: 2 }));
+        assert_eq!(timer.take(), None);
+    }
+}

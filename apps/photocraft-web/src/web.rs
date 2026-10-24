@@ -19,10 +19,10 @@ type Inbox = Arc<Mutex<Vec<(String, Vec<u8>)>>>;
 /// Everything File › Open reads: PhotoCraft, Photoshop, OpenRaster, Krita and Affinity documents, flat images, and
 /// Photoshop brushes (.abr), gradients (.grd), layer styles (.asl) and swatches (.aco, .act, .ase), which go to the preset libraries.
 const OPEN_EXTS: &[&str] = &[
-    "pcraft", "pdn", "ora", "xcf", "xcfgz", "gz", "kra", "krz", "psd", "psb", "psdt", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "tga", "ico",
-    "qoi", "exr", "hdr", "pbm", "pgm", "ppm", "pam", "pfm", "dds", "fits", "fit", "fts", "dpx", "cin", "dcm", "dicom", "dc3", "iff", "lbm", "ilbm", "heic",
-    "heif", "hif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf", "abr", "grd", "asl", "svg", "svgz", "aco", "act", "ase", "af",
-    "afdesign", "afphoto", "afpub",
+    "pcraft", "pdn", "ora", "xcf", "xcfgz", "xcfbz2", "xcfxz", "bz2", "xz", "gz", "kra", "krz", "psd", "psb", "psdt", "png", "jpg", "jpeg", "tif", "tiff",
+    "webp", "gif", "bmp", "tga", "ico", "qoi", "exr", "hdr", "pbm", "pgm", "ppm", "pam", "pfm", "dds", "fits", "fit", "fts", "dpx", "cin", "dcm", "dicom",
+    "dc3", "iff", "lbm", "ilbm", "heic", "heif", "hif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf", "abr", "grd", "asl", "svg",
+    "svgz", "aco", "act", "ase", "af", "afdesign", "afphoto", "afpub",
 ];
 const SVG_EXTS: &[&str] = &["svg", "svgz"];
 const CANVAS_ID: &str = "photocraft_canvas";
@@ -393,7 +393,7 @@ fn services(inbox: Inbox, place_inbox: Inbox, cursor_pos: photocraft_ui_egui::Cu
     Services {
         screen_pick: screen_color_service(),
         import: Some(Box::new(|name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions| {
-            photocraft_io::import_with_options(name, bytes, opts).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())
+            photocraft_io::import_with_options(name, bytes, opts).map_err(|e| e.to_string())
         })),
         export: Some(Box::new(|doc: &Document, path: &str, settings: &photocraft_ui_egui::ExportSettings| {
             photocraft_io::export(doc, path, &settings.io_options()).map(|r| (r.bytes, r.warnings)).map_err(|e| e.to_string())

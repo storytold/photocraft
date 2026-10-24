@@ -3089,3 +3089,41 @@ curves	Smooth	平滑
 	Exported {path}	已导出 {path}
 	Exported {n} files	已导出 {n} 个文件
 	Driver: {driver}	驱动程序：{driver}
+
+# Historical import conversion report
+	Import Conversion Report	导入转换报告
+	Import-time outcomes. Editing uses native PhotoCraft rules.	导入时的处理结果。编辑使用 PhotoCraft 自身的规则。
+	A newer report format is retained. Its details cannot be displayed.	已保留较新格式的报告，无法显示其详细信息。
+	No conversion report was recorded.	未记录转换报告。
+	No entries on this page.	此页没有条目。
+	Layer mask	图层蒙版
+	Next	下一页
+	Previous	上一页
+	Source item	源项目
+	{first}–{last} of {total}	第 {first}–{last} 项，共 {total} 项
+	Native equivalent	原生等效表示
+	Native approximation	原生近似表示
+	Retained, not applied	已保留，未应用
+	Nonessential data skipped	已跳过非必要数据
+	Unknown outcome	未知结果
+	Native rules	原生规则
+	Native capability limit	原生功能限制
+	Conversion not implemented	尚未实现转换
+	Resource unavailable	资源不可用
+	Invalid optional data	可选数据无效
+	Retention limit	保留容量限制
+	Precision conversion	精度转换
+	Unknown reason	未知原因
+	Native layer {id} (removed; historical reference)	原生图层 {id}（已删除；历史引用）
+	Native layer: {name}	原生图层：{name}
+
+# Native filter parameter labels
+	Alpha Percentile	Alpha 百分位数
+	Alpha Weighted	按 Alpha 加权
+	Color Percentile	颜色百分位数
+	Connectivity	连通性
+	Disc	圆形邻域
+	Each	每个通道
+	Value	值
+	Repeat	重复
+	Wrap	环绕

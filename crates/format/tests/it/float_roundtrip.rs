@@ -18,6 +18,11 @@ fn f64_coordinates_reload_bit_exact() {
     doc.guides.horizontal.push(x);
     doc.guides.vertical.push(y);
     doc.ruler_origin = [x, y];
+    doc.metadata.import_conversion = Some(photocraft_doc::import_conversion::ImportConversion::Opaque {
+        schema_version: 2,
+        record: std::sync::Arc::new(b"inert future provenance".to_vec()),
+        attachments: Vec::new(),
+    });
     let bytes = photocraft_format::save_to_bytes(&doc, &Default::default()).unwrap();
     let back = photocraft_format::load_from_bytes(&bytes).unwrap();
     assert_eq!(back.guides.horizontal[0].to_bits(), x.to_bits());

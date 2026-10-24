@@ -14,28 +14,38 @@ pub struct Opened {
     pub document: Document,
     pub warnings: Vec<String>,
     pub source_read_only: bool,
+    pub initial_view: Option<photocraft_io::NativeInitialView>,
 }
 
-/// Decode a document that was read through a filesystem capability.
+/// Decode a document that was read through a filesystem capability. Hosts prepare missing
+/// native caches through their engine session before installation or export; this low-level
+/// decoder must not evaluate stored commands before the host installs its authority.
 pub fn open_bytes(name: &str, bytes: &[u8]) -> Result<Opened, AutomationError> {
-    if Path::new(name).extension().is_some_and(|extension| extension.eq_ignore_ascii_case(photocraft_format::EXTENSION)) {
-        let document = photocraft_format::load_from_bytes(bytes)?;
-        return Ok(Opened { warnings: photocraft_io::open_warnings(&document), document, source_read_only: false });
-    }
-    let r = photocraft_io::import(name, bytes)?;
-    Ok(Opened { document: r.document, warnings: r.warnings, source_read_only: r.source_read_only })
+    open_bytes_with_sample_order(name, bytes, None)
+}
+
+/// Decode with an explicit order for unmarked historical XCF multi-byte samples.
+pub fn open_bytes_with_sample_order(name: &str, bytes: &[u8], order: Option<photocraft_io::HistoricalXcfSampleOrder>) -> Result<Opened, AutomationError> {
+    let opts = photocraft_io::ImportOptions { historical_xcf_sample_order: order, ..Default::default() };
+    let r = photocraft_io::import_with_options(name, bytes, &opts)?;
+    Ok(Opened { document: r.document, warnings: r.warnings, source_read_only: r.source_read_only, initial_view: r.initial_view })
 }
 
 /// Open a document from disk. Directory bundles and `.pcraft` ZIPs load
 /// natively; everything else goes through `photocraft-io` (PSD, PNG, …).
 pub fn open(path: &Path) -> Result<Opened, AutomationError> {
+    open_with_sample_order(path, None)
+}
+
+/// Open with the caller's explicit historical XCF sample order, without guessing.
+pub fn open_with_sample_order(path: &Path, order: Option<photocraft_io::HistoricalXcfSampleOrder>) -> Result<Opened, AutomationError> {
     if path.is_dir() {
         let document = photocraft_format::load_path(path)?;
-        return Ok(Opened { warnings: photocraft_io::open_warnings(&document), document, source_read_only: false });
+        return Ok(Opened { warnings: photocraft_io::open_warnings(&document), document, source_read_only: false, initial_view: None });
     }
     let bytes = photocraft_format::read_file(path).map_err(|e| AutomationError::Io(format!("{}: {e}", path.display())))?;
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    open_bytes(&name, &bytes)
+    open_bytes_with_sample_order(&name, &bytes, order)
 }
 
 /// Previews for a `.pcraft` bundle.

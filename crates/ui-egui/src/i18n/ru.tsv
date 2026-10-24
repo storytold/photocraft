@@ -4623,3 +4623,37 @@ shape	Appearance	Оформление
 	Grayscale Ramp	Шкала градаций серого
 	Current Colors	Текущие цвета
 	Make Ramp Web Safe	Сделать шкалу безопасной для web
+
+# Historical import conversion report
+	Import Conversion Report	Отчёт о преобразовании при импорте
+	Import-time outcomes. Editing uses native PhotoCraft rules.	Результаты на момент импорта. Редактирование следует собственным правилам PhotoCraft.
+	A newer report format is retained. Its details cannot be displayed.	Сохранён отчёт в более новом формате. Его подробности нельзя отобразить.
+	No conversion report was recorded.	Отчёт о преобразовании не был записан.
+	No entries on this page.	На этой странице нет записей.
+	Layer mask	Маска слоя
+	Source item	Исходный элемент
+	{first}–{last} of {total}	{first}–{last} из {total}
+	Native equivalent	Собственный эквивалент
+	Native approximation	Приближённое преобразование
+	Retained, not applied	Сохранено, не применено
+	Nonessential data skipped	Необязательные данные пропущены
+	Unknown outcome	Неизвестный результат
+	Native rules	Собственные правила
+	Native capability limit	Ограничение собственных возможностей
+	Conversion not implemented	Преобразование не реализовано
+	Resource unavailable	Ресурс недоступен
+	Invalid optional data	Некорректные необязательные данные
+	Retention limit	Лимит хранения
+	Precision conversion	Преобразование точности
+	Unknown reason	Неизвестная причина
+	Native layer {id} (removed; historical reference)	Собственный слой {id} (удалён; историческая ссылка)
+	Native layer: {name}	Собственный слой: {name}
+
+# Native coverage and rank filter controls.
+	Alpha Percentile	Процентиль альфа-канала
+	Alpha Weighted	С учётом альфа-канала
+	Color Percentile	Процентиль цвета
+	Connectivity	Связность
+	Disc	Диск
+	Each	Каждый
+	Value	Значение

@@ -115,7 +115,7 @@ pub(crate) fn import_layered(name: &str, img: &Image, layers: &[u8]) -> Result<I
         doc.icc_profile = img.icc.clone().map(Arc::new);
     }
     doc.metadata.text = img.meta.text.clone();
-    Ok(ImportResult { document: doc, warnings, source_read_only: false, preview_only: false })
+    Ok(ImportResult { initial_view: None, document: doc, warnings, source_read_only: false, preview_only: false })
 }
 
 /// Interleaved native-endian samples → planar big-endian planes (PSD merged-image order),

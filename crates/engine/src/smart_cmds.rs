@@ -102,7 +102,7 @@ pub fn source_bytes(meta: &Metadata, src: &SmartSource) -> Option<(String, Arc<V
 }
 
 /// Memory-only resolution also covers Photoshop's embedded files addressed by a `Linked` UUID.
-fn embedded_source_bytes(meta: &Metadata, src: &SmartSource) -> Option<(String, Arc<Vec<u8>>)> {
+pub(crate) fn embedded_source_bytes(meta: &Metadata, src: &SmartSource) -> Option<(String, Arc<Vec<u8>>)> {
     match src {
         SmartSource::Embedded { file_name, bytes } => Some((file_name.clone(), bytes.clone())),
         SmartSource::Linked { path } => photocraft_io::linked::find_linked_file(meta, path).map(|f| (f.file_name, Arc::new(f.bytes))),
@@ -341,55 +341,12 @@ pub fn stack_image(file_name: &str, bytes: &[u8], fmt: PixelFormat, mode: photoc
 // ---------- rendering ----------
 
 /// Mix a filter's result with its input, without stacking the same pixel coverage twice.
-fn blend_surfaces(base: &Surface, top: &Surface, mode: BlendMode, opacity: f32) -> Surface {
-    if opacity <= 0.0 {
-        return base.clone();
-    }
-    let fmt = base.format();
+fn blend_surfaces(base: &Surface, top: &Surface, mode: BlendMode, opacity: f32, ctl: &photocraft_raster::Interrupt<'_>) -> Result<Surface> {
     let area = base.content_bounds().union(&top.content_bounds());
-    let mut out = base.clone();
-    if area.is_empty() {
-        return out;
-    }
-    let n = fmt.channels();
-    let (b, t) = (base.read_region(area), top.read_region(area));
-    // Alpha-preserving filters edit the same coverage. A non-Normal filter that
-    // changes coverage (e.g. blur) must also retain input-only pixels and admit
-    // filtered-only pixels, as Photoshop's Smart Filter blend oracles require.
-    // Classify the whole result so unchanged pixels do not switch blend rules
-    // independently at the edge of a blur.
-    let composite_coverage = mode != BlendMode::Normal && fmt.alpha && b.chunks_exact(n).zip(t.chunks_exact(n)).any(|(bp, tp)| bp.last() != tp.last());
-    let mut o = vec![0.0f32; b.len()];
-    for ((bp, tp), op) in b.chunks_exact(n).zip(t.chunks_exact(n)).zip(o.chunks_exact_mut(n)) {
-        let b = photocraft_raster::to_rgba(&fmt, bp);
-        let t = photocraft_raster::to_rgba(&fmt, tp);
-        if composite_coverage {
-            let rgba = photocraft_color::blend::composite(mode, b, t, opacity);
-            photocraft_raster::from_rgba_into(&fmt, rgba, op);
-            continue;
-        }
-        let cb = [b[0], b[1], b[2]];
-        let ct = [t[0], t[1], t[2]];
-        let color = if fmt.sample == photocraft_color::SampleType::F32 {
-            photocraft_color::blend::blend_rgb_hdr(mode, cb, ct)
-        } else {
-            photocraft_color::blend::blend_rgb(mode, cb, ct)
-        };
-        // A filter edits this surface, rather than adding a second source-over layer. Mix
-        // premultiplied results so alpha-preserving filters keep coverage at every opacity,
-        // while Normal-mode filters that change coverage interpolate it too.
-        let a = b[3] + (t[3] - b[3]) * opacity;
-        let mut rgba = [0.0, 0.0, 0.0, a];
-        if a > 0.0 {
-            for c in 0..3 {
-                rgba[c] = (cb[c] * b[3] * (1.0 - opacity) + color[c] * t[3] * opacity) / a;
-            }
-        }
-        photocraft_raster::from_rgba_into(&fmt, rgba, op);
-    }
-    out.write_region(area, &o);
-    out.prune();
-    out
+    photocraft_compose::smart_mix::mix(base, top, area, mode, opacity, ctl).map_err(|error| match error {
+        photocraft_compose::smart_mix::Error::Cancelled => EngineError::Cancelled,
+        _ => EngineError::Other(error.to_string()),
+    })
 }
 
 /// Runs the smart filter stack on the placed (unfiltered) content. A filter the session's
@@ -430,12 +387,16 @@ fn renders_in_object(f: &SmartFilter) -> bool {
 /// requesting session's authority denies the filter's params: callers surface the error instead of
 /// rendering (and caching) unfiltered pixels.
 fn apply_smart_filter(f: &SmartFilter, cur: &Surface, canvas: Rect, extent: Rect) -> Result<Surface> {
-    let out = match crate::filters::apply_filter_to_surface(&f.command, &f.params, cur, canvas, None, extent)? {
+    apply_smart_filter_in(f, cur, canvas, extent, &photocraft_raster::Interrupt::NONE)
+}
+
+fn apply_smart_filter_in(f: &SmartFilter, cur: &Surface, canvas: Rect, extent: Rect, ctl: &photocraft_raster::Interrupt) -> Result<Surface> {
+    let out = match crate::filters::apply_filter_to_surface_in(&f.command, &f.params, cur, canvas, None, extent, ctl)? {
         // Unknown ids (e.g. Photoshop filters we don't implement) leave the pixels alone.
         Some(out) => out,
         None => cur.clone(),
     };
-    if f.blend == BlendMode::Normal && f.opacity >= 1.0 { Ok(out) } else { Ok(blend_surfaces(cur, &out, f.blend, f.opacity.clamp(0.0, 1.0))) }
+    if f.blend == BlendMode::Normal && f.opacity >= 1.0 { Ok(out) } else { blend_surfaces(cur, &out, f.blend, f.opacity.clamp(0.0, 1.0), ctl) }
 }
 
 /// The source placed in document pixels, before any smart filter.
@@ -539,7 +500,10 @@ fn render_in(doc: &Document, sm: &SmartObject, ctx: &JobCtx) -> Result<Option<Su
             Some(b) => b,
             None => *object_bounds.insert(filter_bounds(f, &placed()?.surface, canvas)),
         };
-        cur = Stage { surface: apply_smart_filter(f, &cur.surface, bounds, cur.extent)?, extent: cur.extent };
+        cur = Stage {
+            surface: ctx.stage(i as f32 / n, (i + 1) as f32 / n, "", |ctl| apply_smart_filter_in(f, &cur.surface, bounds, cur.extent, ctl))?,
+            extent: cur.extent,
+        };
         stack_cache::put(*key, &cur);
     }
     ctx.progress(1.0, "");
@@ -563,10 +527,16 @@ pub fn purge_stack_cache() -> usize {
 /// source and the filters under it, without the filter mask. `Ok(None)` when the source is
 /// unavailable.
 pub fn render_below_filter(doc: &Document, sm: &SmartObject, index: usize) -> Result<Option<Surface>> {
+    render_below_filter_in(doc, sm, index, &JobCtx::new())
+}
+
+/// The same native prefix render with the importing job's cancellation and authority.
+pub(crate) fn render_below_filter_in(doc: &Document, sm: &SmartObject, index: usize, ctx: &JobCtx) -> Result<Option<Surface>> {
+    ctx.check()?;
     let mut below = sm.clone();
     below.smart_filters.truncate(index);
     below.filter_mask = None;
-    render(doc, &below)
+    render_in(doc, &below, ctx)
 }
 
 /// Re-renders smart layer `l` (which lives in `doc`) in place. Returns false if its source is
@@ -584,6 +554,18 @@ fn unapplied_filters(sm: &SmartObject) -> Vec<String> {
         .filter(|f| sm.filters_enabled && f.visible && crate::commands::find(&f.command).is_none())
         .map(|f| f.params.get("name").and_then(Value::as_str).unwrap_or(&f.command).to_string())
         .collect()
+}
+
+/// A missing import cache must not silently omit a stored native filter. Valid imported caches
+/// are left alone by the caller, including caches for filters this build cannot reproduce.
+pub(crate) fn prepare_layer(doc: &Document, layer: &mut Layer, ctx: &JobCtx) -> Result<bool> {
+    if let LayerContent::Smart(sm) = &layer.content {
+        let missing = unapplied_filters(sm);
+        if !missing.is_empty() {
+            return Err(other(format!("cannot prepare native smart layer: unavailable filter(s): {}", missing.join(", "))));
+        }
+    }
+    refresh_layer_in(doc, layer, ctx)
 }
 
 fn refresh_layer_in(doc: &Document, l: &mut Layer, ctx: &JobCtx) -> Result<bool> {
@@ -652,6 +634,11 @@ fn mask_from_selection(sel: &Surface) -> LayerMask {
 /// filter mask, as in Photoshop. Without a renderable source the filter is applied to the cached
 /// pixels (and still recorded).
 pub(crate) fn add_smart_filter(doc: &mut Document, id: LayerId, sf: photocraft_doc::SmartFilter, selection: Option<&Surface>) -> Result<()> {
+    add_smart_filter_in(doc, id, sf, selection, &JobCtx::new())
+}
+
+pub(crate) fn add_smart_filter_in(doc: &mut Document, id: LayerId, sf: photocraft_doc::SmartFilter, selection: Option<&Surface>, ctx: &JobCtx) -> Result<()> {
+    ctx.check()?;
     let canvas = doc.bounds();
     let renderable = source_bytes(&doc.metadata, &smart(doc, id)?.source).is_some();
     let sm = smart_mut(doc, id)?;
@@ -662,12 +649,14 @@ pub(crate) fn add_smart_filter(doc: &mut Document, id: LayerId, sf: photocraft_d
             sm.filter_mask = Some(mask_from_selection(sel));
         }
         sm.smart_filters.push(sf);
-        return refresh_or_fail(doc, id);
+        return refresh_or_fail_in(doc, id, ctx);
     }
     let bounds = selection.map(Surface::content_bounds).filter(|b| !b.is_empty()).unwrap_or(canvas);
     let cache = sm.cache.as_ref().ok_or_else(|| other("smart object has no pixels"))?;
-    let out = crate::filters::apply_filter_to_surface(&sf.command, &sf.params, cache, bounds, selection, canvas)?
+    let out = ctx
+        .stage(0., 1., "", |ctl| crate::filters::apply_filter_to_surface_in(&sf.command, &sf.params, cache, bounds, selection, canvas, ctl))?
         .ok_or_else(|| other(format!("unknown filter {}", sf.command)))?;
+    ctx.check()?;
     sm.cache = Some(out);
     sm.smart_filters.push(sf);
     Ok(())

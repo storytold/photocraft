@@ -426,6 +426,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     ui.add_space(8.0);
                     about_tab_body(app, ui, chosen);
                 }
+                DialogKind::Command if crate::open_prompt::owns_historical(&fields) => crate::open_prompt::historical_body(ui, &mut fields),
                 DialogKind::Command if crate::open_prompt::owns_damage(&fields) => crate::open_prompt::damage_body(ui, &fields),
                 DialogKind::Command if crate::guide_layout_ui::owns(&fields) => outcome = crate::guide_layout_ui::body(app, ui, &mut fields, interactive),
                 DialogKind::Command if crate::brush_preset_dialog::owns(&fields) => {
@@ -502,6 +503,12 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 }
             }
             crate::field_tab::end(ui.ctx(), tab);
+            if fields.get("__command").and_then(Value::as_str) == Some("file.fileInfo")
+                && crate::import_report::available(app)
+                && ui.button(format!("{}…", tl!("Import Conversion Report"))).clicked()
+            {
+                crate::import_report::open(app);
+            }
             if let Some(Value::String(key)) = fields.remove(BROWSE_FIELD) {
                 browse_field(app, d.id, &fields, &key);
             }
@@ -547,7 +554,9 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                             crate::file_ui::ok_label(&d.fields).unwrap_or(tl!("OK"))
                         };
                         // Dialogs that need an input first (a preset name, a selection) grey OK out.
-                        let can_ok = crate::crop_presets::can_confirm(app, &fields) && crate::stack_dialog::can_confirm(&fields);
+                        let can_ok = crate::crop_presets::can_confirm(app, &fields)
+                            && crate::stack_dialog::can_confirm(&fields)
+                            && crate::open_prompt::historical_can_confirm(&fields);
                         let ok = DialogButton::new(ButtonRole::Default, ok_label, 84.0).enabled(can_ok);
                         // Photoshop: holding Alt turns Cancel into Reset (the dialog stays open).
                         // Dialogs opt in via `dialog_alt_reset::supported` (per marker).
@@ -764,6 +773,7 @@ const ROUTES: &[fn(&Fields) -> bool] = &[
     crate::color_range_ui::owns,
     crate::prefs_ui::owns,
     crate::open_prompt::owns,
+    crate::open_prompt::owns_historical,
     crate::replace_prompt::owns,
     crate::layer_style::color_picker::owns,
     |f| f.contains_key("__export"),
@@ -830,6 +840,7 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
             }
             r
         }
+        DialogKind::Command if crate::open_prompt::owns_historical(&d.fields) => crate::open_prompt::answer_historical(app, &d.fields, true),
         DialogKind::Command if crate::open_prompt::owns_damage(&d.fields) => crate::open_prompt::answer_damage(app, true),
         DialogKind::Command if crate::guide_layout_ui::owns(&d.fields) => crate::guide_layout_ui::confirm(app, &d.fields),
         DialogKind::Command if crate::brush_preset_dialog::owns(&d.fields) => crate::brush_preset_dialog::confirm(app, &d.fields),
@@ -927,7 +938,9 @@ pub fn cancel(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
         app.ui.dialogs.retain(|child| child.fields.get("__dialog").and_then(Value::as_u64) != Some(id));
     }
     // Cancel on a profile prompt opens neither its file nor the ones still to come.
-    if crate::open_prompt::owns_damage(&closed.fields) {
+    if crate::open_prompt::owns_historical(&closed.fields) {
+        crate::open_prompt::answer_historical(app, &closed.fields, false)?;
+    } else if crate::open_prompt::owns_damage(&closed.fields) {
         crate::open_prompt::answer_damage(app, false)?;
     } else if crate::open_prompt::owns(&closed.fields) {
         crate::open_prompt::answer(app, None)?;

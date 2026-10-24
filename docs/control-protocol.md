@@ -96,6 +96,19 @@ The transport is `apps/photocraft/src/control_server.rs`, and the handlers are i
 
 ## Engine commands
 
+`document.inspect` includes `importConversion`: null when no import report was recorded, or a
+summary of its schema/source versions, entry count, disposition counts and attachment count.
+`document.importReport {offset: 0, limit: 100}` reads historical conversion entries without changing
+the document or history. Offset must be a nonnegative integer; limit is 1–250. An offset beyond the
+last entry returns an empty page. Native target references describe the import snapshot; `present`
+and `currentName` describe a layer's current availability. Retained binary payloads are not returned.
+An opaque future report has an unknown entry count and cannot be interpreted by this version.
+
+`ui.set {importReport: true}` opens the read-only report view; false closes it. The same view is
+available from File Info and import notices, including after native save/reopen. Its window/page
+state appears under `import_report` in `ui.inspect`; cached entry data is excluded from UI state.
+Historical source format metadata does not make a reopened native document read-only.
+
 Change the UI language without restarting with `prefs.set`:
 `{"path":"interface.language","value":"fr"}`. Supported codes and preview/apply behaviour
 are documented in [UI localisation](localization.md). `prefs.get` and the existing preference
@@ -399,7 +412,7 @@ stdio, and a value that is not a port is a usage error naming the variable. Impl
 | `jobs.list` / `jobs.cancel` | `{}` / `{job?}`: background jobs; cancel one or all. Every request (and MCP tool call) first applies the jobs that finished, so `doc.save`, `doc.inspect`, `doc.render` and `session.list` include a finished job's result without polling `jobs.list` first |
 | `engine.commands` | `{filter?}`: registry with params docs and enablement (`enabled`, `disabledReason`, `needsDocument`); `result` is a bare array of command objects ([Command list replies](#command-list-replies)) |
 | `session.list` | open documents and the active index |
-| `doc.open` / `doc.new` | `{path}` / `file.new` params |
+| `doc.open` / `doc.new` | `{path, historicalXcfSampleOrder?}` / `file.new` params. For unmarked high-depth XCF7–11, choose `"little-endian"` or `"big-endian"`; omission refuses the ambiguous import |
 | `doc.place` | `{path, scale? (percent), fit? (true), center? ([x, y]), index?}`: places a file as a Smart Object layer above the active one and returns `{layer, scale, bounds}`. `path` resolves beneath the read root, so this is the capability-scoped `file.placeEmbedded` — that command itself still refuses an ambient path |
 | `doc.replaceSmartObject` | `{path, layer? (id or name; default the active layer), index?}` → the command's `{layer, instances}`: replaces a Smart Object's contents (one history step, transform and filters kept). `path` resolves beneath the read root, so this is the capability-scoped `layer.smartObjects.replaceContents`, which itself still refuses an ambient path (#8061) |
 | `doc.exportLayers` | `{dir, format? (png), prefix?, visibleOnly? (true), quality?, index?}` → `{files, skipped}` (plus `count` for workspace exports): one file per exported top-level layer, named like `file.export.layersToFiles` names them. `count` is present only for workspace exports and counts written files only. `skipped` is always an array (empty when nothing is omitted), in top-to-bottom order, of `{layer, name, reason}`: the session layer id, original unsanitized name, and `"hidden by visibleOnly"` or `"adjustment layer has no pixels of its own"`. Visibility takes precedence for hidden adjustments; `visibleOnly:false` exports hidden non-adjustment layers. Groups export merged; their children are not separate exports or skips. Existing filenames/numbering are unchanged. `dir` resolves beneath the write root, so the ambient command stays refused. The bytes come from the command's own core, so both paths write the same files; the write capability refuses to overwrite an existing file. Encode/write failures are errors, not skips |
@@ -695,3 +708,5 @@ dock target. The panel menu and icon rail remain
 available in custom workspaces. `window.panel.<id> {show:true}` always reveals, selects
 and expands the panel, including when another tab is selected. Workspace snapshots
 retain custom collapse settings and Timeline visibility.
+
+Historical XCF7–11 byte-order choice: MCP `doc_open` and desktop `app.open` accept the same optional `historicalXcfSampleOrder` field as headless `doc.open`. It affects only ambiguous historical multi-byte sample data. Native `.pcraft` reopen and modern XCF imports do not require it. The interactive Open dialog asks before decoding samples; automation must supply the choice explicitly.

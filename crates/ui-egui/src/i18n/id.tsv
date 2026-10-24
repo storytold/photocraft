@@ -3435,3 +3435,40 @@ curves	Smooth	Haluskan
 	Grayscale Ramp	Gradasi Grayscale
 	Current Colors	Warna Saat Ini
 	Make Ramp Web Safe	Jadikan Gradasi Aman untuk Web
+
+# Historical import conversion report
+	Import Conversion Report	Laporan Konversi Impor
+	Import-time outcomes. Editing uses native PhotoCraft rules.	Hasil pada saat impor. Pengeditan menggunakan aturan asli PhotoCraft.
+	A newer report format is retained. Its details cannot be displayed.	Laporan dalam format yang lebih baru disimpan. Detailnya tidak dapat ditampilkan.
+	No conversion report was recorded.	Tidak ada laporan konversi yang dicatat.
+	No entries on this page.	Tidak ada entri di halaman ini.
+	Layer mask	Masker lapisan
+	Next	Berikutnya
+	Previous	Sebelumnya
+	Source item	Item sumber
+	{first}–{last} of {total}	{first}–{last} dari {total}
+	Native equivalent	Padanan asli
+	Native approximation	Pendekatan asli
+	Retained, not applied	Disimpan, tidak diterapkan
+	Nonessential data skipped	Data tidak esensial dilewati
+	Unknown outcome	Hasil tidak diketahui
+	Native rules	Aturan asli
+	Native capability limit	Batas kemampuan asli
+	Conversion not implemented	Konversi belum diimplementasikan
+	Resource unavailable	Sumber daya tidak tersedia
+	Invalid optional data	Data opsional tidak valid
+	Retention limit	Batas penyimpanan
+	Precision conversion	Konversi presisi
+	Unknown reason	Alasan tidak diketahui
+	Native layer {id} (removed; historical reference)	Lapisan asli {id} (dihapus; referensi historis)
+	Native layer: {name}	Lapisan asli: {name}
+
+# Native filter parameter labels
+	Alpha Percentile	Persentil Alfa
+	Alpha Weighted	Berbobot Alfa
+	Color Percentile	Persentil Warna
+	Connectivity	Konektivitas
+	Disc	Lingkungan Melingkar
+	Each	Setiap Kanal
+	Value	Nilai
+	Wrap	Bungkus

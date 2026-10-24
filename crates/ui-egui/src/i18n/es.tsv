@@ -4382,3 +4382,37 @@ navigator	Zoom	Zoom
 	Grayscale Ramp	Rampa de escala de grises
 	Current Colors	Colores actuales
 	Make Ramp Web Safe	Hacer rampa segura para web
+
+# Historical import conversion report
+	Import Conversion Report	Informe de conversión de importación
+	Import-time outcomes. Editing uses native PhotoCraft rules.	Resultados al importar. La edición utiliza las reglas nativas de PhotoCraft.
+	A newer report format is retained. Its details cannot be displayed.	Se conserva un informe en un formato más reciente. No se pueden mostrar sus detalles.
+	No conversion report was recorded.	No se registró ningún informe de conversión.
+	No entries on this page.	No hay entradas en esta página.
+	Layer mask	Máscara de capa
+	Source item	Elemento de origen
+	{first}–{last} of {total}	{first}–{last} de {total}
+	Native equivalent	Equivalente nativo
+	Native approximation	Aproximación nativa
+	Retained, not applied	Conservado, sin aplicar
+	Nonessential data skipped	Datos no esenciales omitidos
+	Unknown outcome	Resultado desconocido
+	Native rules	Reglas nativas
+	Native capability limit	Límite de las funciones nativas
+	Conversion not implemented	Conversión no implementada
+	Resource unavailable	Recurso no disponible
+	Invalid optional data	Datos opcionales no válidos
+	Retention limit	Límite de conservación
+	Precision conversion	Conversión de precisión
+	Unknown reason	Motivo desconocido
+	Native layer {id} (removed; historical reference)	Capa nativa {id} (eliminada; referencia histórica)
+	Native layer: {name}	Capa nativa: {name}
+
+# Native coverage and rank filter controls.
+	Alpha Percentile	Percentil de alfa
+	Alpha Weighted	Ponderado por alfa
+	Color Percentile	Percentil de color
+	Connectivity	Conectividad
+	Disc	Disco
+	Each	Cada uno
+	Value	Valor

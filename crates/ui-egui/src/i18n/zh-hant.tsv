@@ -3045,3 +3045,41 @@ curves	Smooth	平滑
 	Grayscale Ramp	灰階色帶
 	Current Colors	目前色彩
 	Make Ramp Web Safe	讓色帶成為網頁安全色
+
+# Historical import conversion report
+	Import Conversion Report	匯入轉換報告
+	Import-time outcomes. Editing uses native PhotoCraft rules.	匯入時的處理結果。編輯使用 PhotoCraft 自身的規則。
+	A newer report format is retained. Its details cannot be displayed.	已保留較新格式的報告，無法顯示其詳細資訊。
+	No conversion report was recorded.	未記錄轉換報告。
+	No entries on this page.	此頁沒有項目。
+	Layer mask	圖層遮色片
+	Next	下一頁
+	Previous	上一頁
+	Source item	來源項目
+	{first}–{last} of {total}	第 {first}–{last} 項，共 {total} 項
+	Native equivalent	原生等效表示
+	Native approximation	原生近似表示
+	Retained, not applied	已保留，未套用
+	Nonessential data skipped	已略過非必要資料
+	Unknown outcome	未知結果
+	Native rules	原生規則
+	Native capability limit	原生功能限制
+	Conversion not implemented	尚未實作轉換
+	Resource unavailable	資源無法使用
+	Invalid optional data	選用資料無效
+	Retention limit	保留容量限制
+	Precision conversion	精度轉換
+	Unknown reason	未知原因
+	Native layer {id} (removed; historical reference)	原生圖層 {id}（已刪除；歷史參照）
+	Native layer: {name}	原生圖層：{name}
+
+# Native filter parameter labels
+	Alpha Percentile	Alpha 百分位數
+	Alpha Weighted	依 Alpha 加權
+	Color Percentile	色彩百分位數
+	Connectivity	連通性
+	Disc	圓形鄰域
+	Each	各色版
+	Value	值
+	Repeat	重複
+	Wrap	環繞

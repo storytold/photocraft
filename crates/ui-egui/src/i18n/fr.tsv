@@ -4462,3 +4462,37 @@ shape	Appearance	Apparence
 	Grayscale Ramp	Barre de niveaux de gris
 	Current Colors	Couleurs actuelles
 	Make Ramp Web Safe	Limiter la barre aux couleurs Web
+
+# Historical import conversion report
+	Import Conversion Report	Rapport de conversion à l’importation
+	Import-time outcomes. Editing uses native PhotoCraft rules.	Résultats au moment de l’importation. L’édition suit les règles natives de PhotoCraft.
+	A newer report format is retained. Its details cannot be displayed.	Un rapport dans un format plus récent est conservé. Ses détails ne peuvent pas être affichés.
+	No conversion report was recorded.	Aucun rapport de conversion n’a été enregistré.
+	No entries on this page.	Aucune entrée sur cette page.
+	Layer mask	Masque de calque
+	Source item	Élément source
+	{first}–{last} of {total}	{first}–{last} sur {total}
+	Native equivalent	Équivalent natif
+	Native approximation	Approximation native
+	Retained, not applied	Conservé, non appliqué
+	Nonessential data skipped	Données non essentielles ignorées
+	Unknown outcome	Résultat inconnu
+	Native rules	Règles natives
+	Native capability limit	Limite des fonctions natives
+	Conversion not implemented	Conversion non implémentée
+	Resource unavailable	Ressource indisponible
+	Invalid optional data	Données facultatives non valides
+	Retention limit	Limite de conservation
+	Precision conversion	Conversion de précision
+	Unknown reason	Motif inconnu
+	Native layer {id} (removed; historical reference)	Calque natif {id} (supprimé ; référence historique)
+	Native layer: {name}	Calque natif : {name}
+
+# Native filter parameter labels
+	Alpha Percentile	Centile alpha
+	Alpha Weighted	Pondération par l’alpha
+	Color Percentile	Centile de couleur
+	Connectivity	Connexité
+	Disc	Voisinage circulaire
+	Each	Chaque canal
+	Value	Valeur

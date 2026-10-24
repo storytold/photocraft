@@ -38,6 +38,10 @@ blake3 = { version = "1.8", default-features = false, features = ["pure"] }
 # svg.rs inflates `.svgz` itself (with a size cap) so the XML can be checked before it is parsed;
 # pdn.rs inflates Paint.NET's gzip pixel chunks.
 flate2 = { workspace = true }
+# XCF wrappers: safe, single-threaded decoders only. Keep unsafe/C/parallel and XZ encoder
+# features disabled; XZ decoding also requires an explicit pre-allocation memory limit.
+crabz2 = { version = "=0.7.0", default-features = false, features = ["std"] }
+lzma-rust2 = { version = "=0.23.0", default-features = false, features = ["std", "xz"] }
 # ora.rs reads OpenRaster's stack.xml (already in the tree through usvg).
 roxmltree = "0.21"
 # SVG import (svg.rs): usvg parses, resvg rasterises what the shape model can't hold. Both are

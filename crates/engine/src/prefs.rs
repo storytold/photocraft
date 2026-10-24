@@ -1667,10 +1667,29 @@ pub enum BindKind {
 /// so Edit › Keyboard Shortcuts works the same with or without the app's UI.
 pub fn bindable_items() -> impl Iterator<Item = (&'static str, &'static str, &'static [&'static str], Option<&'static str>, BindKind)> {
     let engine = crate::command_specs().iter().map(|c| (c.id, c.label, c.menu, c.shortcut, BindKind::Command));
-    let shell = crate::shell_commands::SHELL_COMMANDS.iter().map(|c| (c.0, c.1, c.2, c.3, BindKind::Command));
+    // Shell entries are fallbacks: commands promoted to the engine retain one
+    // binding identity, otherwise their own default appears to conflict with itself.
+    let shell = crate::shell_commands::SHELL_COMMANDS
+        .iter()
+        .filter(|c| !crate::command_specs().iter().any(|engine| engine.id == c.0))
+        .map(|c| (c.0, c.1, c.2, c.3, BindKind::Command));
     let tools = crate::shell_commands::TOOLS.iter().map(|t| (t.0, t.1, &["Tools"][..], t.2, BindKind::Tool));
     let hold = TEMPORARY_TOOLS.iter().map(|t| (t.0, t.1, &["Tools", "Temporary"][..], Some(t.2), BindKind::Hold));
     engine.chain(shell).chain(tools).chain(hold)
+}
+
+#[cfg(test)]
+#[test]
+fn engine_commands_replace_shell_keyboard_fallbacks_once() {
+    let items: Vec<_> = bindable_items().collect();
+    let mut identities = std::collections::BTreeSet::new();
+    for item in &items {
+        assert!(identities.insert(item.0), "duplicate keyboard identity: {}", item.0);
+    }
+    let open: Vec<_> = items.iter().filter(|item| item.0 == "file.open").collect();
+    assert_eq!(open.len(), 1);
+    assert_eq!(open[0].3, Some("Cmd+O"));
+    assert_eq!(open[0].4, BindKind::Command);
 }
 
 /// Every bindable id with its default.

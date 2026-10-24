@@ -214,7 +214,16 @@ fn float_linear_opens_as_32_bit_float_with_a_linear_profile() {
     let d = open("float-linear.xcf").document;
     assert_eq!((d.mode, d.depth), (ColorMode::Rgb, SampleType::F32));
     let icc = d.icc_profile.as_ref().expect("a linear-light profile");
-    assert_eq!(**icc, photocraft_cms::Builtin::LinearSrgb.profile().to_bytes().as_ref().clone());
+    let profile = photocraft_cms::Profile::parse(icc).expect("usable native ICC");
+    let expected = photocraft_cms::Profile::parse(&photocraft_cms::Builtin::LinearSrgb.profile().to_bytes()).unwrap();
+    assert_eq!(profile.color_space, photocraft_cms::ColorSpace::Rgb);
+    assert_eq!(profile.matrix, expected.matrix, "implicit source sRGB colorants are preserved");
+    assert_eq!(profile.white_point, expected.white_point);
+    for curve in profile.trc.as_ref().expect("native RGB curves") {
+        for value in [-0.25, 0.0, 0.25, 0.5, 1.0, 2.0] {
+            assert!((curve.eval64(value) - value).abs() < 0.00001, "linear curve at {value}");
+        }
+    }
     let bg = &d.layers[0];
     for (x, y) in [(0, 0), (39, 29), (5, 21)] {
         let p = px(bg, x as i32, y as i32);
@@ -237,14 +246,15 @@ fn indexed_opens_as_rgb_with_a_note() {
 }
 
 #[test]
-fn text_layers_open_as_pixels_with_a_note() {
+fn text_layers_open_as_native_editable_data_without_source_cache() {
     let r = open("text.xcf");
     assert_eq!(names(&r.document.layers), ["Background", "XCF"]);
-    assert!(r.warnings.iter().any(|w| w.contains("text layer")), "{:?}", r.warnings);
-    let text = &r.document.layers[1];
-    let s = raster(text);
-    let region = s.read_region(Rect::new(10, 10, 10 + 60, 10 + 30));
-    assert!(region.as_chunks::<4>().0.iter().any(|p| p[3] > 0.5), "the rendered glyphs are there");
+    assert!(r.warnings.iter().any(|w| w.contains("native text")), "{:?}", r.warnings);
+    let LayerContent::Text(text) = &r.document.layers[1].content else { panic!("expected native text") };
+    assert_eq!(text.text, "XCF");
+    assert_eq!(text.font_family, "DejaVu Sans");
+    assert!((text.size_pt - 24.0 * 72.0 / r.document.resolution_dpi).abs() < 0.001);
+    assert!(text.cache.is_none(), "the host prepares native typography after its final color policy");
 }
 
 #[test]
@@ -308,7 +318,6 @@ const COMPOSITES: &[(&str, f32, f32, &str)] = &[
         "groups and pass-through in gamma space; the 15% over are where GIMP's Clip to backdrop hides the Multiply and Screen children above the transparent part of the background",
     ),
     ("mask-perceptual.xcf", 2.5 / 255.0, 0.0, "masks in gamma space"),
-    ("text-perceptual.xcf", 2.5 / 255.0, 0.0, "antialiased text in gamma space"),
     (
         "legacy-modes-perceptual.xcf",
         2.5 / 255.0,
@@ -321,7 +330,6 @@ const COMPOSITES: &[(&str, f32, f32, &str)] = &[
     ("layers-8bit.xcf", 40.0 / 255.0, 0.0, "GIMP's default: Multiply blended in linear light"),
     ("groups.xcf", 140.0 / 255.0, 0.0, "GIMP's default: linear light and Clip to backdrop over a transparent background"),
     ("mask.xcf", 60.0 / 255.0, 0.0, "GIMP's default: alpha composited in linear light"),
-    ("text.xcf", 75.0 / 255.0, 0.0, "GIMP's default: antialiased edges composited in linear light"),
 ];
 
 #[test]

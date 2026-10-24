@@ -32,6 +32,11 @@ pub use crate::codecs::gif_frames::{AnimationFrame, MAX_GIF_FRAMES};
 pub use crate::codecs::png::{PngPalette, encode_indexed as encode_png_indexed, palette as png_palette, stereo as png_stereo};
 pub use crate::codecs::tiff::{PhotoshopTags as TiffPhotoshopTags, photoshop_tags as tiff_photoshop_tags, writes_little_endian as tiff_writes_little_endian};
 pub use crate::codecs::tiff_ifd::{TiffInfo, TiffPage, TiffPageKind};
+/// Look up a lowercase, space-free X11 color name as normalized RGB channels.
+/// This uses X11 values (which differ from CSS for some names) without normalization or CSS overrides.
+pub fn x11_color_rgb(name: &str) -> Option<[f32; 3]> {
+    crate::codecs::xpm::x11_color_rgb(name)
+}
 pub use crate::error::CodecError;
 pub use crate::exif_color::{EXIF_COLOR_SPACE_SRGB, exif_color_space};
 pub use crate::fidelity::{FidelityWarning, fidelity_warnings, fidelity_warnings_with};

@@ -484,6 +484,62 @@ release build of the benches alone takes longer than PR CI should. To give the n
 its own baseline, run the workflow by hand with `update_baseline` and commit the `perf-baseline`
 artifact as `perf/baseline.json`.
 
+### Reproducing large XCF import measurements
+
+`xcf_import_bench` generates original deterministic, uncompressed v026 XCF stress inputs;
+these are synthetic wire-format cases, not GIMP-authored producer oracles. It measures IO
+translation, ordinary native preparation and the first CPU composite separately. File reading,
+finite-output validation and report serialization are outside timing; retained input bytes,
+one warmup, all measured runs and allocator retention contribute to process memory. Graph
+cases require applied native effect targets, so retained source configuration alone cannot pass.
+
+```sh
+cargo build --release -p photocraft-ui-egui --example xcf_import_bench
+# Use .exe on Windows. Generation refuses to overwrite an existing file.
+target/release/examples/xcf_import_bench generate graph-u16-24mp target/graph-u16-24mp.xcf
+target/release/examples/xcf_import_bench measure graph-u16-24mp target/graph-u16-24mp.xcf 5
+cargo test -p photocraft-ui-egui --example xcf_import_bench
+```
+
+`measure` accepts 1–5 repetitions after one warmup (default 5); use 5 for the reported median.
+Run each case in a fresh process, sequentially on an otherwise quiet host. JSON preserves every
+sample, native depth, notices and conversion report. Import/preparation failures identify their
+stage; a failed warmup has no completed measured samples. Inputs are limited to 512 MiB with
+fallible reads/allocation; this benchmark bound does not change the importer's product limits.
+
+| Case | Canvas and source | Generated SHA256 |
+|---|---|---|
+| `u16-36mp` |7200×5000, encoded U16|`9cfab13b3b593f4f48e97860ef8bd576edc951adecac82e628189259d8ca19dd`|
+| `f32-hdr-24mp` |6000×4000, linear F32 HDR|`83d66bc4e9eb221872f144107e224379e01413ac4273ddedc24eb99d337a38aa`|
+| `graph-u16-24mp` |6000×4000, U16 fork/join|`3a6aee4bcb02b633eca020b3fef65c6280d01834410c220ddf9393f2d9c0b134`|
+| `graph-f32-hdr-24mp` |6000×4000, F32 HDR fork/join|`086f8398c0b3b1ad161a8e388c112feb84ceb683d90370e970cc0123efff6e5f`|
+| `smoke-graph-f32` |96×65, partial edge tiles|`349e034278072e2065b15767d59b08947385fa6a27de3a90473b22917d1409ab`|
+
+Both graph cases use `id=in over aux=[ref=in invert-linear]`: actual source pixels, native
+Invert and a native Normal join. F32 source RGB spans[-.25,1.75] with fractional alpha[.25,1].
+These named workloads do not establish arbitrary graph-depth/fanout, universal RSS bounds,
+GIMP rendering equivalence or a new importer latency SLA.
+
+On Windows, collect whole-process **lifetime** peak working set externally, rather than
+calling a sampled instantaneous value a peak. Build first; measure only the example executable:
+
+```powershell
+$exe=(Resolve-Path 'target/release/examples/xcf_import_bench.exe').Path
+$inputArgument='"'+(Resolve-Path 'target/graph-u16-24mp.xcf').Path+'"'
+$child=Start-Process -FilePath $exe -ArgumentList @('measure','graph-u16-24mp',$inputArgument,'5') -WindowStyle Hidden -PassThru -RedirectStandardOutput 'target/xcf-timing.jsonl' -RedirectStandardError 'target/xcf-errors.txt'
+$peak=0L
+while(-not $child.HasExited){
+    try{$child.Refresh();$peak=[Math]::Max($peak,$child.PeakWorkingSet64)}catch{}
+    Start-Sleep -Milliseconds 20
+}
+$child.WaitForExit()
+[ordered]@{exit=$child.ExitCode;peakWorkingSetBytes=$peak;method='Windows lifetime PeakWorkingSet64 polled 20 ms'}|ConvertTo-Json
+```
+
+Record runtime revision/build, input hash, host RAM/other activity and any host abort alongside
+the raw samples. A host scheduling/abort guard is not a product rejection or a passing result.
+A controlled preparation error's peak covers the failed attempt, not completed graph rendering.
+
 ## Web build
 
 `apps/photocraft-web` runs the same `PhotocraftApp` in the browser through eframe's web runner. The renderer is wgpu: WebGPU where the browser has it, WebGL2 otherwise. It is Rust only. The only JavaScript is the glue that wasm-bindgen generates.

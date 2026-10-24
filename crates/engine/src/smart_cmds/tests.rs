@@ -25,7 +25,7 @@ fn filter_strength_preserves_alpha_and_interpolates_changed_coverage() {
         };
         for opacity in [0.0, 0.01, 0.5, 1.0] {
             for mode in [BlendMode::Normal, BlendMode::Multiply, BlendMode::Screen, BlendMode::Luminosity] {
-                let mixed = blend_surfaces(&base, &filtered, mode, opacity).pixel(0, 0);
+                let mixed = blend_surfaces(&base, &filtered, mode, opacity, &photocraft_raster::Interrupt::NONE).unwrap().pixel(0, 0);
                 assert!((mixed[3] - before[3]).abs() <= tolerance);
                 if mode == BlendMode::Normal {
                     for c in 0..3 {
@@ -35,7 +35,7 @@ fn filter_strength_preserves_alpha_and_interpolates_changed_coverage() {
             }
         }
         filtered.fill_rect(Rect::new(0, 0, 1, 1), &[0.8, 0.6, 0.4, 0.0]);
-        let mixed = blend_surfaces(&base, &filtered, BlendMode::Normal, 0.5).pixel(0, 0);
+        let mixed = blend_surfaces(&base, &filtered, BlendMode::Normal, 0.5, &photocraft_raster::Interrupt::NONE).unwrap().pixel(0, 0);
         assert!((mixed[3] - before[3] * 0.5).abs() <= tolerance);
         for c in 0..3 {
             assert!((mixed[c] - before[c]).abs() <= tolerance);
@@ -59,7 +59,7 @@ fn non_normal_coverage_changes_retain_source_over_semantics() {
         }
         for mode in [BlendMode::Screen, BlendMode::Multiply, BlendMode::Luminosity] {
             for opacity in [0.0, 0.01, 0.5, 1.0] {
-                let mixed = blend_surfaces(&base, &filtered, mode, opacity);
+                let mixed = blend_surfaces(&base, &filtered, mode, opacity, &photocraft_raster::Interrupt::NONE).unwrap();
                 for x in 0..4 {
                     if opacity == 0.0 {
                         assert_eq!(mixed.pixel(x, 0), base.pixel(x, 0));

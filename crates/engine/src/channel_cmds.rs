@@ -677,6 +677,11 @@ pub(crate) fn channel_surface_for_filter<'a>(doc: &'a mut Document, layer: Optio
 fn edits_mask(id: &str) -> bool {
     id.strip_prefix("image.adjustments.").is_some_and(|kind| crate::adjust_params::default_for(kind, ColorMode::Rgb).is_ok())
         || crate::filters::params_for(id, &Value::Null).is_some()
+        || id == crate::coverage_cmds::FILL_HOLES
+        || id == crate::coverage_cmds::PERCENTILE
+        || id == crate::coverage_cmds::CHANNEL_NOISE
+        || id == crate::coverage_cmds::CONVOLUTION
+        || id == crate::hdr_filter::ID
         || id == "edit.fill"
         // Copying a targeted mask (#2928).
         || id == "edit.copy"

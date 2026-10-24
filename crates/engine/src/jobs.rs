@@ -294,7 +294,14 @@ pub struct Jobs {
     draining: Vec<std::thread::JoinHandle<()>>,
     /// The context inline job work runs under (see [`Session::set_inline_job_ctx`]).
     inline: Option<JobCtx>,
+    historical_xcf: Vec<historical_xcf_open::Held>,
+    next_historical_xcf: u64,
 }
+
+#[path = "historical_xcf_open.rs"]
+mod historical_xcf_open;
+
+pub(crate) use historical_xcf_open::command as open_command;
 
 const RECENT: usize = 16;
 
@@ -325,7 +332,8 @@ pub enum Started {
 /// Commands that never edit the active document, allowed while a job runs on it.
 fn independent_of_document(id: &str) -> bool {
     const PREFIXES: &[&str] = &["jobs.", "tools.", "view.", "window.", "help.", "brush.presets.", "gradient.presets."];
-    const IDS: &[&str] = &["file.new", "file.close", "file.closeAll", "edit.preferences", "edit.colorSettings", "edit.keyboardShortcuts", "edit.menus"];
+    const IDS: &[&str] =
+        &["file.new", "file.open", "file.close", "file.closeAll", "edit.preferences", "edit.colorSettings", "edit.keyboardShortcuts", "edit.menus"];
     PREFIXES.iter().any(|p| id.starts_with(p)) || IDS.contains(&id)
 }
 
@@ -501,6 +509,7 @@ pub fn import_options(prefs: &crate::prefs::Preferences) -> photocraft_io::Impor
     photocraft_io::ImportOptions {
         max_group_depth: prefs.file_handling.rasterize_svg_groups_deeper_than as usize,
         demosaic: prefs.raw_defaults.demosaic.method(),
+        historical_xcf_sample_order: None,
     }
 }
 
@@ -539,68 +548,22 @@ impl Session {
         self.start_open_inner(name, source, true)
     }
 
+    pub fn start_open_for_user_with_path(&mut self, name: &str, source: OpenSource, path: Option<String>) -> Result<Started> {
+        historical_xcf_open::interactive(self, name, source, path, true)
+    }
+
+    pub fn open_for_user_inline(&mut self, name: &str, source: OpenSource, path: Option<String>) -> Result<Value> {
+        match historical_xcf_open::interactive(self, name, source, path, false)? {
+            Started::Done(value) => Ok(value),
+            Started::Job(_) => Err(EngineError::Other("inline file open unexpectedly started a job".into())),
+        }
+    }
+
     /// Decodes a file in a job and optionally holds damaged PSD content for
     /// interactive confirmation while leaving headless opens non-interactive.
     fn start_open_inner(&mut self, name: &str, source: OpenSource, confirm_damage: bool) -> Result<Started> {
-        let label = format!("Opening {name}");
-        let name_w = name.to_string();
-        let name_a = name.to_string();
-        let opts = import_options(self.prefs());
-        self.start_job(
-            OPEN_JOB,
-            json!({"name": name}),
-            &label,
-            false,
-            move |ctx| {
-                ctx.progress(0.0, "Reading");
-                let bytes = match source {
-                    OpenSource::Bytes(b) => b,
-                    OpenSource::Path(p) => Arc::new(read_path(&p)?),
-                };
-                ctx.check()?;
-                ctx.progress(0.02, "Decoding");
-                let imported =
-                    ctx.stage(0.02, 0.95, "Decoding", |ctl| photocraft_io::import_for_open_with(&name_w, &bytes, &opts, ctl)).map_err(|e| match e {
-                        photocraft_io::IoError::Cancelled => EngineError::Cancelled,
-                        e => EngineError::Other(e.to_string()),
-                    })?;
-                ctx.progress(0.95, "Preparing layers");
-                warm_layer_bounds(&imported.0.document, || ctx.check())?;
-                // Type layers need the shared text engine, whose first use waits for the
-                // installed-font scan started at launch (minutes on some machines). Wait here,
-                // so the shell's missing-font check after the open finds it ready instead of
-                // freezing the window (#7332).
-                if crate::type_extra_cmds::has_type_layers(&imported.0.document) {
-                    ctx.progress(0.97, "Loading fonts");
-                    let _ = photocraft_text::shared();
-                    ctx.check()?;
-                }
-                Ok(imported)
-            },
-            move |s, (mut r, damaged): (photocraft_io::ImportResult, bool)| {
-                // File Handling's ACEScg option, before the colour prompt looks at the profile.
-                crate::file_cmds::tag_exr_colorspace(s, &name_a, &mut r.document);
-                crate::file_cmds::raw_defaults(s, &r.warnings, &mut r.document);
-                // Ask When Opening: held back until the prompt is answered (`take_held_open`). A
-                // developed raw has no embedded profile to ask about.
-                let raw = r.warnings.iter().any(|w| w.contains(photocraft_io::raw::DEVELOPED_NOTE));
-                let damaged = confirm_damage && damaged;
-                let question = s.color.open_question(&r.document).filter(|_| !raw);
-                if damaged || question.is_some() {
-                    let held = s.hold_open(r.document, r.source_read_only);
-                    return Ok(json!({"held": held, "name": name_a, "warnings": r.warnings, "color": question, "damaged": damaged}));
-                }
-                let (index, color) = s.open_document(r.document, None);
-                // Persisted IDs can collide: report the identity the session actually admitted.
-                let id = s.documents().get(index).ok_or(EngineError::NoDocument)?.doc.id;
-                if let Some(st) = s.active_mut() {
-                    st.source_read_only = r.source_read_only;
-                }
-                Ok(json!({"document": index, "docId": id.0, "name": name_a, "warnings": r.warnings, "color": color}))
-            },
-        )
+        historical_xcf_open::start(self, name, source, confirm_damage)
     }
-
     /// Start a job that isn't an engine command (opening a file, a shell operation, a test's fake
     /// job): `work` runs on a worker, `apply` on this thread when [`Session::poll_jobs`] or
     /// [`Session::wait_job`] picks the result up. `command` and `params` identify it in

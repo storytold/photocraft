@@ -4130,3 +4130,39 @@ curves	Smooth	Згладити
 	Grayscale Ramp	Шкала градацій сірого
 	Current Colors	Поточні кольори
 	Make Ramp Web Safe	Зробити шкалу безпечною для вебу
+
+# Historical import conversion report
+	Import Conversion Report	Звіт про перетворення під час імпорту
+	Import-time outcomes. Editing uses native PhotoCraft rules.	Результати на момент імпорту. Редагування використовує власні правила PhotoCraft.
+	A newer report format is retained. Its details cannot be displayed.	Збережено звіт у новішому форматі. Його подробиці неможливо відобразити.
+	No conversion report was recorded.	Звіт про перетворення не було записано.
+	No entries on this page.	На цій сторінці немає записів.
+	Layer mask	Маска шару
+	Next	Далі
+	Previous	Назад
+	Source item	Вихідний елемент
+	{first}–{last} of {total}	{first}–{last} із {total}
+	Native equivalent	Власний еквівалент
+	Native approximation	Наближене перетворення
+	Retained, not applied	Збережено, не застосовано
+	Nonessential data skipped	Необов’язкові дані пропущено
+	Unknown outcome	Невідомий результат
+	Native rules	Власні правила
+	Native capability limit	Обмеження власних можливостей
+	Conversion not implemented	Перетворення не реалізовано
+	Resource unavailable	Ресурс недоступний
+	Invalid optional data	Некоректні необов’язкові дані
+	Retention limit	Ліміт зберігання
+	Precision conversion	Перетворення точності
+	Unknown reason	Невідома причина
+	Native layer {id} (removed; historical reference)	Власний шар {id} (видалено; історичне посилання)
+	Native layer: {name}	Власний шар: {name}
+
+# Native filter parameter labels
+	Alpha Percentile	Перцентиль альфа
+	Alpha Weighted	Зважено за альфою
+	Color Percentile	Перцентиль кольору
+	Connectivity	Зв’язність
+	Disc	Круговий окіл
+	Each	Кожен канал
+	Value	Значення

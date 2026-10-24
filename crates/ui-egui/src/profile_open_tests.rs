@@ -33,9 +33,7 @@ fn harness(background: bool) -> Harness<'static, PhotocraftApp> {
         PhotocraftApp::new(
             Session::new(),
             Services {
-                import: Some(Box::new(|name, bytes, opts| {
-                    photocraft_io::import_with_options(name, bytes, opts).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())
-                })),
+                import: Some(Box::new(|name, bytes, opts| photocraft_io::import_with_options(name, bytes, opts).map_err(|e| e.to_string()))),
                 ..Default::default()
             },
         )
@@ -147,9 +145,7 @@ fn the_prompt_is_translated_and_still_names_its_file() {
     let template = "The document “{name}” has an embedded color profile that does not match the current {mode} working space.";
     for code in ["en", "de", "fr", "ja"] {
         let services = Services {
-            import: Some(Box::new(|name, bytes, opts| {
-                photocraft_io::import_with_options(name, bytes, opts).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())
-            })),
+            import: Some(Box::new(|name, bytes, opts| photocraft_io::import_with_options(name, bytes, opts).map_err(|e| e.to_string()))),
             ..Default::default()
         };
         let mut app = PhotocraftApp::new(Session::new(), services);
@@ -181,8 +177,10 @@ fn a_held_file_still_reports_its_missing_fonts() {
     s.execute("type.create", serde_json::json!({"text": "Hi", "x": 2, "y": 12, "size": 10, "font": MISSING})).unwrap();
     let mut doc = (*s.active().unwrap().doc).clone();
     doc.icc_profile = Some(photocraft_cms::Builtin::from_id("adobe-rgb-compat").unwrap().profile().to_bytes());
-    let services =
-        Services { import: Some(Box::new(move |_: &str, _: &[u8], _: &photocraft_io::ImportOptions| Ok((doc.clone(), Vec::new())))), ..Default::default() };
+    let services = Services {
+        import: Some(Box::new(move |_: &str, _: &[u8], _: &photocraft_io::ImportOptions| Ok(crate::test_import_result(doc.clone(), Vec::new())))),
+        ..Default::default()
+    };
     let mut app = PhotocraftApp::new(Session::new(), services);
     app.run("edit.colorSettings", serde_json::json!({"askOnMismatch": true, "policyRgb": "preserve"})).unwrap();
     assert_eq!(app.open_bytes("poster.psd", b"x").unwrap(), vec![warning.clone()]);
@@ -191,6 +189,45 @@ fn a_held_file_still_reports_its_missing_fonts() {
     assert_eq!(app.session.documents().len(), 1);
     assert_eq!(app.ui.notices.len(), 1);
     assert_eq!(app.ui.notices[0].lines, vec![warning]);
+}
+
+#[test]
+fn held_color_choices_preserve_conversion_reports_and_the_decoders_source_policy() {
+    use photocraft_doc::import_conversion::{ConversionReport, ImportConversion};
+    for read_only in [false, true] {
+        for action in ["preserve", "convert"] {
+            let mut doc = Document::with_background("Converted", Size::new(3, 2), ColorMode::Rgb, SampleType::U16, Color::rgba(0.2, 0.6, 0.9, 1.0));
+            doc.icc_profile = Some(photocraft_cms::Builtin::AdobeRgbCompat.profile().to_bytes());
+            doc.metadata.import_conversion = Some(ImportConversion::Report(ConversionReport {
+                source_format: "xcf".into(),
+                source_version: Some(11),
+                policy_version: 1,
+                ..Default::default()
+            }));
+            let report = doc.metadata.import_conversion.clone();
+            let services = Services {
+                import: Some(Box::new(move |_, _, _| {
+                    let mut imported = crate::test_import_result(doc.clone(), vec!["Conversion detail".into()]);
+                    imported.source_read_only = read_only;
+                    Ok(imported)
+                })),
+                ..Default::default()
+            };
+            let mut app = PhotocraftApp::new(Session::new(), services);
+            app.run("edit.colorSettings", serde_json::json!({"askOnMismatch": true, "policyRgb": "preserve"})).unwrap();
+            let path = if read_only { "source.xcf" } else { "converted.pcraft" };
+            app.open_file(path, b"test service input").unwrap();
+            assert!(app.session.documents().is_empty());
+            crate::open_prompt::answer(&mut app, Some(action)).unwrap();
+            let state = app.session.active().unwrap();
+            assert_eq!(state.doc.metadata.import_conversion, report);
+            assert_eq!(state.source_read_only, read_only);
+            assert_eq!(state.path.as_deref(), (!read_only).then_some(path));
+            assert_eq!(state.protected_import_source.as_deref(), read_only.then_some(path));
+            assert_eq!(app.ui.notices.len(), 1);
+            assert_eq!(app.ui.notices[0].lines, ["Conversion detail"]);
+        }
+    }
 }
 
 #[test]

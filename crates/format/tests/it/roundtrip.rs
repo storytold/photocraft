@@ -11,6 +11,202 @@ use photocraft_raster::Rgba8Image;
 
 const MODES: [ColorMode; 4] = [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab];
 
+fn conversion_report() -> photocraft_doc::import_conversion::ImportConversion {
+    use photocraft_doc::import_conversion::*;
+    let owner = SourceItemRef { kind: "layer".into(), ordinal: 3, name: "Duplicate".into(), ..Default::default() };
+    ImportConversion::Report(ConversionReport {
+        source_format: "xcf".into(),
+        source_version: Some(26),
+        policy_version: 1,
+        entries: vec![ConversionEntry {
+            feature_code: "blend.composite".into(),
+            source: owner.clone(),
+            targets: vec![NativeTargetRef { layer_id: Some(LayerId(800_000)), label: "Historical target".into(), ..Default::default() }],
+            disposition: ConversionDisposition::NativeApproximation,
+            reason: ConversionReason::NativePolicy,
+            source_description: "Source intersection".into(),
+            native_description: "Native source-over".into(),
+            attachments: vec![0],
+        }],
+        attachments: vec![RetainedImportData {
+            owner,
+            kind: "configuration".into(),
+            encoding: "utf-8".into(),
+            bytes: std::sync::Arc::new(b"inert-config".to_vec()),
+        }],
+    })
+}
+
+#[test]
+fn converted_native_groups_masks_off_canvas_pixels_and_report_survive_at_every_depth() {
+    for depth in SampleType::ALL {
+        let mut doc = Document::new("Native converted components", photocraft_geom::Size::new(4, 3), ColorMode::Rgb, depth);
+        let mut raster = Layer::raster("Pixels", doc.pixel_format());
+        raster.surface_mut().unwrap().write_pixel(-2, 1, &[if depth == SampleType::F32 { 1.5 } else { 0.75 }, 0.25, 0.5, 0.8]);
+        let mut coverage = photocraft_raster::Surface::new(photocraft_color::PixelFormat::new(ColorMode::Grayscale, depth, false));
+        coverage.write_pixel(-2, 1, &[0.5]);
+        raster.mask = Some(photocraft_doc::LayerMask { surface: coverage, enabled: true, linked: true, density: 0.8, feather: 1.25 });
+        let child = raster.id;
+        let group = Layer::group("Native group", vec![raster]);
+        let group_id = group.id;
+        doc.layers.push(group);
+        let mut report = conversion_report();
+        if let photocraft_doc::import_conversion::ImportConversion::Report(report) = &mut report {
+            report.entries[0].targets = vec![
+                photocraft_doc::import_conversion::NativeTargetRef { layer_id: Some(group_id), ..Default::default() },
+                photocraft_doc::import_conversion::NativeTargetRef { layer_id: Some(child), ..Default::default() },
+            ];
+        }
+        doc.metadata.import_conversion = Some(report);
+        let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
+        let reopened = load_from_bytes(&bytes).unwrap();
+        assert!(reopened == doc, "native components or inert report changed at {depth:?}");
+    }
+}
+
+#[test]
+fn import_conversion_roundtrip_is_inert_and_uses_native_blobs() {
+    for depth in SampleType::ALL {
+        let mut doc = Document::new("Converted", photocraft_geom::Size::new(4, 3), ColorMode::Rgb, depth);
+        doc.metadata.import_conversion = Some(conversion_report());
+        let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
+        assert_eq!(load_from_bytes(&bytes).unwrap(), doc);
+        let fresh = load_from_bytes_with(&bytes, &LoadOptions { preserve_ids: false, ..Default::default() }).unwrap();
+        assert_eq!(fresh.metadata.import_conversion, doc.metadata.import_conversion, "historical targets do not become live identity references");
+        let zip = zip::ZipReader::new(&bytes).unwrap();
+        let manifest: serde_json::Value = serde_json::from_slice(&zip.read(zip.find("manifest.json").unwrap(), 1 << 20).unwrap()).unwrap();
+        let report = &manifest["document"]["metadata"]["import_conversion"];
+        assert_eq!(report["schema_version"], 1);
+        assert!(report["record"].is_string());
+        assert!(report["attachments"][0].is_string());
+        assert!(!String::from_utf8_lossy(&zip.read(zip.find("manifest.json").unwrap(), 1 << 20).unwrap()).contains("inert-config"));
+        assert_eq!(zip.entries.iter().filter(|e| e.name.starts_with("blobs/")).count(), 2);
+    }
+}
+
+#[test]
+fn unknown_optional_import_report_survives_without_interpretation() {
+    use photocraft_doc::import_conversion::ImportConversion;
+    use std::sync::Arc;
+    let mut doc = Document::new("Future report", photocraft_geom::Size::new(1, 1), ColorMode::Grayscale, SampleType::U16);
+    doc.metadata.import_conversion = Some(ImportConversion::Opaque {
+        schema_version: 99,
+        record: Arc::new(br#"{"future-fields":["never execute"]}"#.to_vec()),
+        attachments: vec![Arc::new(vec![0, 255, 8])],
+    });
+    let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
+    assert_eq!(load_from_bytes(&bytes).unwrap(), doc);
+}
+
+#[test]
+fn import_report_invalid_references_are_rejected_before_save() {
+    use photocraft_doc::import_conversion::ImportConversion;
+    let mut doc = Document::new("Invalid report", photocraft_geom::Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
+    let mut report = conversion_report();
+    if let ImportConversion::Report(report) = &mut report {
+        report.entries[0].attachments = vec![1];
+    }
+    doc.metadata.import_conversion = Some(report);
+    assert!(save_to_bytes(&doc, &SaveOptions::default()).is_err());
+}
+
+#[test]
+fn import_report_distinguishes_duplicate_names_and_preserves_one_to_many_targets() {
+    use photocraft_doc::import_conversion::*;
+    let mut doc = Document::new("Duplicate items", photocraft_geom::Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
+    let mut data = conversion_report();
+    if let ImportConversion::Report(report) = &mut data {
+        let mut other = report.entries[0].clone();
+        other.source.ordinal = 4;
+        other.targets.push(NativeTargetRef { channel_index: Some(2), ..Default::default() });
+        report.entries.push(other);
+        assert_eq!(report.entries[0].source.name, report.entries[1].source.name);
+        assert_ne!(report.entries[0].source, report.entries[1].source);
+    }
+    doc.metadata.import_conversion = Some(data);
+    assert_eq!(load_from_bytes(&save_to_bytes(&doc, &SaveOptions::default()).unwrap()).unwrap(), doc);
+}
+
+#[test]
+fn older_bundles_without_import_conversion_still_load() {
+    let doc = Document::new("Older bundle", photocraft_geom::Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
+    let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
+    let zip = zip::ZipReader::new(&bytes).unwrap();
+    let manifest: serde_json::Value = serde_json::from_slice(&zip.read(zip.find("manifest.json").unwrap(), 1 << 20).unwrap()).unwrap();
+    assert!(manifest["document"]["metadata"].get("import_conversion").is_none());
+    assert_eq!(load_from_bytes(&bytes).unwrap(), doc);
+}
+
+fn edit_import_manifest(bytes: &[u8], edit: impl Fn(&mut serde_json::Value)) -> Vec<u8> {
+    let zip = zip::ZipReader::new(bytes).unwrap();
+    let mut out = zip::ZipWriter::new();
+    for entry in &zip.entries {
+        let mut data = zip.read(entry, usize::MAX).unwrap();
+        if entry.name == "manifest.json" {
+            let mut value = serde_json::from_slice(&data).unwrap();
+            edit(&mut value);
+            data = serde_json::to_vec(&value).unwrap();
+        }
+        out.add(&entry.name, &data).unwrap();
+    }
+    out.finish().unwrap()
+}
+
+#[test]
+fn import_report_corrupt_framing_and_missing_blobs_fail_without_panic() {
+    let mut doc = Document::new("Report framing", photocraft_geom::Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
+    doc.metadata.import_conversion = Some(conversion_report());
+    let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
+    for bad in [
+        edit_import_manifest(&bytes, |v| v["document"]["metadata"]["import_conversion"]["schema_version"] = 0.into()),
+        edit_import_manifest(&bytes, |v| v["document"]["metadata"]["import_conversion"]["attachments"] = serde_json::json!([])),
+        edit_import_manifest(&bytes, |v| v["document"]["metadata"]["import_conversion"]["record"] = "0".repeat(64).into()),
+    ] {
+        assert!(load_from_bytes(&bad).is_err());
+    }
+}
+
+#[test]
+fn import_report_encoded_size_is_bounded_even_when_strings_expand_in_json() {
+    use photocraft_doc::import_conversion::ImportConversion;
+    let mut doc = Document::new("Escaped report", photocraft_geom::Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
+    let mut report = conversion_report();
+    if let ImportConversion::Report(report) = &mut report {
+        let mut entry = report.entries[0].clone();
+        entry.native_description = "\0".repeat(600_000);
+        report.entries = vec![entry; 10];
+    }
+    assert!(report.validate().is_ok(), "unescaped model fits, encoded record does not");
+    doc.metadata.import_conversion = Some(report);
+    assert!(matches!(save_to_bytes(&doc, &SaveOptions::default()), Err(FormatError::LimitExceeded(_))));
+}
+
+#[test]
+fn import_report_limits_also_apply_to_already_cached_blobs() {
+    use photocraft_doc::import_conversion::MAX_CONVERSION_BYTES;
+    let mut doc = Document::new("Cached blob", photocraft_geom::Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
+    doc.icc_profile = Some(std::sync::Arc::new(vec![0; MAX_CONVERSION_BYTES + 1]));
+    doc.metadata.import_conversion = Some(conversion_report());
+    let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
+    let bad = edit_import_manifest(&bytes, |v| {
+        v["document"]["metadata"]["import_conversion"]["attachments"][0] = v["document"]["icc_profile"].clone();
+    });
+    assert!(matches!(load_from_bytes(&bad), Err(FormatError::LimitExceeded(_))));
+}
+
+#[test]
+fn measured_native_load_reports_existing_unique_blob_accounting() {
+    let mut doc = Document::new("Measured contents", photocraft_geom::Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
+    let shared = std::sync::Arc::new(vec![7; 123]);
+    doc.metadata.exif = Some(shared.clone());
+    doc.metadata.psd_resources.push((1000, "Shared".into(), shared));
+    let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
+    let (loaded, decoded) = load_from_bytes_measured(&bytes, &LoadOptions::default()).unwrap();
+    assert_eq!(loaded, doc);
+    assert_eq!(decoded, 123, "shared native blobs are decoded and charged once");
+    assert!(load_from_bytes_measured(&bytes, &LoadOptions { max_total_bytes: 122, ..Default::default() }).is_err());
+}
+
 #[test]
 fn gradient_overlay_interpolation_roundtrips_in_native_documents() {
     use photocraft_doc::effects::GradientInterpolation;

@@ -417,7 +417,7 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // Camera Raw is modal like Photoshop's filter dialog: no application shortcut (Save, Undo,
     // tools) runs beneath it, and it handles its own keys (Y, U, O, S). Unlike the other dialogs
     // below it covers the canvas, so canvas zoom keys are blocked too.
-    if app.camera_raw.is_some() {
+    if app.camera_raw.is_some() || app.ui.import_report.open {
         return;
     }
     // A foreground save (Save in Background off, #6207) blocks the app until the file is written;
@@ -1243,10 +1243,20 @@ mod tests {
     #[test]
     fn no_duplicate_shortcuts() {
         let mut seen = std::collections::HashMap::new();
+        for (id, _, _, shortcut) in crate::menus::UI_COMMANDS {
+            if let Some(engine) = photocraft_engine::commands::find(id) {
+                assert_eq!(engine.shortcut, *shortcut, "engine and shell defaults disagree for {id}");
+            }
+        }
         let all = photocraft_engine::command_specs()
             .iter()
             .filter_map(|c| c.shortcut.map(|s| (c.id, s)))
-            .chain(crate::menus::UI_COMMANDS.iter().filter_map(|(id, _, _, s)| s.map(|s| (*id, s))))
+            .chain(
+                crate::menus::UI_COMMANDS
+                    .iter()
+                    .filter(|(id, ..)| photocraft_engine::commands::find(id).is_none())
+                    .filter_map(|(id, _, _, s)| s.map(|s| (*id, s))),
+            )
             // Photoshop's second keys (#3665) are taken by no other command either.
             .chain(photocraft_engine::prefs::ALTERNATE_SHORTCUTS.iter().copied());
         for (id, s) in all {
@@ -1255,5 +1265,25 @@ mod tests {
                 panic!("shortcut {s} bound to both {prev} and {id}");
             }
         }
+    }
+
+    #[test]
+    fn engine_and_shell_open_identity_dispatches_one_native_picker() {
+        let (dialog, requests) = crate::file_dialog::fake(vec![None]);
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services { file_dialog: Some(dialog), ..Default::default() });
+        let ctx = egui::Context::default();
+        assert_eq!(crate::shortcut_dispatch::bindings(&app).iter().filter(|(id, _)| id == "file.open").count(), 1);
+        ctx.begin_pass(egui::RawInput {
+            events: vec![egui::Event::Key { key: Key::O, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::COMMAND }],
+            ..Default::default()
+        });
+        assert!(crate::shortcut_dispatch::dispatch_pressed(&mut app, &ctx, crate::shortcut_dispatch::Focus::None, false));
+        assert!(!crate::shortcut_dispatch::dispatch_pressed(&mut app, &ctx, crate::shortcut_dispatch::Focus::None, false));
+        app.poll_file_dialog(&ctx, None);
+        ctx.end_pass().textures_delta.clear();
+        assert_eq!(requests.borrow().len(), 1);
+        assert!(matches!(requests.borrow().first(), Some(crate::file_dialog::FileDialogRequest::Open { multiple: true, .. })));
+        assert_eq!(crate::shortcut_dispatch::take_log(&ctx), vec![("file.open".into(), crate::shortcut_dispatch::Outcome::Ran)]);
+        assert!(app.session.documents().is_empty());
     }
 }

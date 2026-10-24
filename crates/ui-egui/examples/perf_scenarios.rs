@@ -22,7 +22,7 @@ use photocraft_engine::Session;
 use photocraft_geom::Rect;
 use photocraft_raster::Surface;
 use photocraft_testkit::perf::{RssSampler, report, row, write_report};
-use photocraft_ui_egui::gpu_canvas::GpuCanvas;
+use photocraft_ui_egui::gpu_canvas::{GpuCanvas, Refresh};
 use serde_json::{Value, json};
 
 type Res<T> = Result<T, String>;
@@ -132,23 +132,35 @@ impl Bench {
     }
 
     fn refresh(&self, s: &Session, full: bool) -> Res<f64> {
+        self.refresh_observed(s, full).map(|(elapsed, _)| elapsed)
+    }
+
+    /// Same single composite and completed GPU wait, retaining its diagnostic counters.
+    fn refresh_observed(&self, s: &Session, full: bool) -> Res<(f64, Refresh)> {
         let st = s.active().ok_or("no document")?;
         let doc = &st.doc;
         let damage = if full { None } else { st.last_damage.map(|r| r.inflate(reach(&doc.layers)).intersect(&doc.bounds())) };
         let t = Instant::now();
-        match &self.gpu {
+        let observed = match &self.gpu {
             Some((g, rs)) => {
-                g.refresh(doc.id.0, doc, damage, None);
+                let observed = g.refresh(doc.id.0, doc, damage, None);
                 let _ = rs.device.poll(eframe::wgpu::PollType::Wait { submission_index: None, timeout: None });
+                Some(observed)
             }
             None => {
                 let r = damage.unwrap_or(doc.bounds()).intersect(&doc.bounds());
                 if !r.is_empty() {
                     std::hint::black_box(photocraft_compose::render(doc, r));
                 }
+                None
             }
-        }
-        Ok(ms(t))
+        };
+        let elapsed = ms(t);
+        let observed = observed.unwrap_or_else(|| {
+            let r = damage.unwrap_or(doc.bounds()).intersect(&doc.bounds());
+            Refresh { kind: "cpu", px: u64::from(r.width()) * u64::from(r.height()), ..Default::default() }
+        });
+        Ok((elapsed, observed))
     }
 
     /// Frame `i` of a Move tool drag of `layer` (#128): the canvas shows the document with the
@@ -181,6 +193,49 @@ impl Bench {
         let tex = s.active().and_then(|d| g.texture_info(d.doc.id.0)).map_or(0, |(_, b)| b);
         let (resident, fx) = g.compositor_bytes().unwrap_or((0, 0));
         Some(tex + resident + fx as u64)
+    }
+
+    /// Keep the existing command + completed refresh metric, with separately recorded phases.
+    /// Top-level layer counts and JSON allocation stay outside both measured intervals.
+    fn edit_refresh_phased(&self, s: &mut Session, command: &str, params: impl FnOnce() -> Value, phases: &mut Vec<Value>) -> Res<f64> {
+        let layers_before = s.active().ok_or("no document before edit")?.doc.layers.len();
+        let started = Instant::now();
+        exec(s, command, params())?;
+        let command_ms = ms(started);
+        let (refresh_ms, observed) = self.refresh_observed(s, false)?;
+        let total_ms = command_ms + refresh_ms;
+        let layers_after = s.active().ok_or("no document after edit")?.doc.layers.len();
+        phases.push(json!({
+            "command_ms": command_ms,
+            "refresh_ms": refresh_ms,
+            "total_ms": total_ms,
+            "layers_before": layers_before,
+            "layers_after": layers_after,
+            "refresh_kind": observed.kind,
+            "refresh_fallback": observed.fallback,
+            // These are this composite's counters. Do not attribute asynchronous GPU
+            // timestamps from `observed.gpu` to this sample's completed wall time.
+            "gpu_counters": observed.gpu_stats.map(|stats| json!({
+                "tiles_uploaded": stats.tiles_uploaded,
+                "tiles_shared": stats.tiles_shared,
+                "bytes_uploaded": stats.bytes_uploaded,
+                "prefix_hits": stats.prefix_hits,
+                "prefix_passes_skipped": stats.prefix_passes_skipped,
+                "evicted": stats.evicted,
+                "passes": stats.passes,
+                "chunks": stats.chunks,
+            })),
+        }));
+        Ok(total_ms)
+    }
+
+    /// Optional diagnostics on these four rows; ordinary result names/statistics are unchanged.
+    fn attach_phases(&mut self, name: &str, phases: Vec<Value>) {
+        if let Some(row) = self.rows.iter_mut().find(|row| row.get("name").and_then(Value::as_str) == Some(name))
+            && let Some(object) = row.as_object_mut()
+        {
+            object.insert("phase_samples".into(), Value::Array(phases));
+        }
     }
 
     /// Times `f` `reps` times after one untimed warm-up run; `f` returns its own time in ms.
@@ -511,21 +566,22 @@ fn layered_scenarios(b: &mut Bench, sz: &Sizes) {
     };
     let reps_big = reps.min(5);
     let mut src = 0;
+    let mut phases = Vec::new();
     b.time("duplicate 12 MP layer (first) + refresh", &mut s, reps_big, false, |b, s, _| {
         src = fresh_layer(s)?;
         b.refresh(s, false)?;
-        let t = Instant::now();
-        exec(s, "layer.duplicate", json!({"layer": src}))?;
-        Ok(ms(t) + b.refresh(s, false)?)
+        b.edit_refresh_phased(s, "layer.duplicate", || json!({"layer": src}), &mut phases)
     });
+    b.attach_phases("duplicate 12 MP layer (first) + refresh", phases);
+    let mut phases = Vec::new();
     b.time("duplicate 12 MP layer (repeat) + refresh", &mut s, reps_big, false, |b, s, _| {
-        let t = Instant::now();
-        exec(s, "layer.duplicate", json!({"layer": src}))?;
-        let v = ms(t) + b.refresh(s, false)?;
+        let v = b.edit_refresh_phased(s, "layer.duplicate", || json!({"layer": src}), &mut phases)?;
         exec(s, "edit.undo", json!({}))?;
         b.refresh(s, false)?;
         Ok(v)
     });
+    b.attach_phases("duplicate 12 MP layer (repeat) + refresh", phases);
+    let mut phases = Vec::new();
     b.time("paste 12 MP layer (first) + refresh", &mut s, reps_big, false, |b, s, _| {
         let id = fresh_layer(s)?;
         exec(s, "layer.select", json!({"layer": id}))?;
@@ -533,18 +589,17 @@ fn layered_scenarios(b: &mut Bench, sz: &Sizes) {
         exec(s, "edit.copy", json!({}))?;
         exec(s, "select.deselect", json!({}))?;
         b.refresh(s, false)?;
-        let t = Instant::now();
-        exec(s, "edit.paste", json!({}))?;
-        Ok(ms(t) + b.refresh(s, false)?)
+        b.edit_refresh_phased(s, "edit.paste", || json!({}), &mut phases)
     });
+    b.attach_phases("paste 12 MP layer (first) + refresh", phases);
+    let mut phases = Vec::new();
     b.time("paste 12 MP layer (repeat) + refresh", &mut s, reps_big, false, |b, s, _| {
-        let t = Instant::now();
-        exec(s, "edit.paste", json!({}))?;
-        let v = ms(t) + b.refresh(s, false)?;
+        let v = b.edit_refresh_phased(s, "edit.paste", || json!({}), &mut phases)?;
         exec(s, "edit.undo", json!({}))?;
         b.refresh(s, false)?;
         Ok(v)
     });
+    b.attach_phases("paste 12 MP layer (repeat) + refresh", phases);
 }
 
 /// Layers overhaul L3: edits that redraw the whole document (a layer's opacity, hiding it) with

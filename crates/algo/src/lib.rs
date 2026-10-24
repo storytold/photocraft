@@ -20,11 +20,15 @@
 
 mod artistic;
 mod artistic_fx;
+pub mod average;
 mod blur;
 mod blur2;
 pub mod camera_raw;
+pub mod channel_noise;
 pub mod color_to_alpha;
 pub mod content_aware;
+pub mod convolution;
+pub mod coverage;
 mod denoise;
 pub mod dff;
 pub mod direct;
@@ -59,6 +63,7 @@ pub mod poisson;
 pub mod puppet;
 pub mod pyramid;
 pub mod quantize;
+pub mod rank;
 pub mod redeye;
 mod relight;
 pub mod remove;
@@ -545,6 +550,39 @@ pub enum FilterParams {
         opacity_threshold: f32,
     },
 
+    /// Whole-owner native HDR local adaptation; existing document adjustment remains separate.
+    HdrToning(tone::HdrToning),
+    /// Independent native color/coverage order statistics.
+    Percentile(rank::Params),
+    /// Native channel-wise additive or signal-relative deterministic noise.
+    ChannelNoise(channel_noise::Params),
+    Convolution(convolution::Params),
+    Average,
+    /// Coverage onto model-native neutral axes, producing opaque native pixels.
+    AlphaToColor,
+    /// Bounded native256-sample alpha transfer, piecewise-linear between samples.
+    AlphaCurve {
+        values: Vec<f32>,
+    },
+    /// Replace native coverage while preserving every native color channel, including HDR.
+    SetAlpha {
+        value: f32,
+    },
+    /// Clamp existing native alpha; colors remain unchanged.
+    ClampAlpha {
+        low: f32,
+        high: f32,
+    },
+    /// Native strict > threshold on alpha; colors remain unchanged.
+    ThresholdAlpha {
+        value: f32,
+    },
+    /// Boundary-connected grayscale hole filling on each native channel or alpha only.
+    FillHoles {
+        connectivity: u8,
+        alpha_only: bool,
+    },
+
     // ---- Video ----
     /// Removes the even (or odd) lines and rebuilds them by interpolation (or duplication).
     DeInterlace {
@@ -584,7 +622,17 @@ impl FilterParams {
             | FilterParams::Spherize { .. }
             | FilterParams::Wave { .. }
             | FilterParams::Ripple { .. }
-            | FilterParams::PolarCoordinates { .. } => Halo::Bounds,
+            | FilterParams::PolarCoordinates { .. }
+            | FilterParams::SetAlpha { .. }
+            | FilterParams::AlphaCurve { .. }
+            | FilterParams::AlphaToColor
+            | FilterParams::ClampAlpha { .. }
+            | FilterParams::ThresholdAlpha { .. }
+            | FilterParams::FillHoles { .. }
+            | FilterParams::HdrToning(_)
+            | FilterParams::Percentile(_) => Halo::Bounds,
+            FilterParams::ChannelNoise(_) => Halo::Bounds,
+            FilterParams::Convolution(_) | FilterParams::Average => Halo::Bounds,
             other => halo_ext(other),
         }
     }
@@ -598,11 +646,29 @@ impl FilterParams {
         }
     }
 
-    /// Whether the filter's job is to make pixels transparent (Color to Alpha): it needs a layer
+    /// Whether the filter explicitly changes alpha coverage: it needs a layer
     /// that can hold transparency, so callers turn the Background into a normal layer first and
     /// refuse a layer whose transparency is locked instead of putting the old alpha back.
     pub fn makes_transparency(&self) -> bool {
-        matches!(self, FilterParams::ColorToAlpha { .. })
+        if let Self::ChannelNoise(params) = self {
+            return params.amounts.last().is_some_and(|amount| *amount > 0.);
+        }
+        if let Self::Convolution(params) = self {
+            return params.channels.last().copied().unwrap_or(false);
+        }
+        if let Self::Percentile(params) = self {
+            return params.channels.as_ref().is_none_or(|channels| channels.last().copied().unwrap_or(false));
+        }
+        matches!(
+            self,
+            FilterParams::ColorToAlpha { .. }
+                | FilterParams::SetAlpha { .. }
+                | FilterParams::AlphaCurve { .. }
+                | FilterParams::AlphaToColor
+                | FilterParams::ClampAlpha { .. }
+                | FilterParams::ThresholdAlpha { .. }
+                | FilterParams::FillHoles { .. }
+        )
     }
 
     /// Whether the filter moves pixels around the reference bounds (its
@@ -621,7 +687,22 @@ impl FilterParams {
     /// Whether the filter places and sizes its pattern by the canvas even with a selection
     /// (Clouds, Fibers): its bounds are then the canvas, and the selection only masks the result.
     pub fn sizes_by_canvas(&self) -> bool {
-        matches!(self, FilterParams::Clouds { .. } | FilterParams::Fibers { .. })
+        matches!(
+            self,
+            FilterParams::Clouds { .. }
+                | FilterParams::Fibers { .. }
+                | FilterParams::SetAlpha { .. }
+                | FilterParams::AlphaCurve { .. }
+                | FilterParams::AlphaToColor
+                | FilterParams::ClampAlpha { .. }
+                | FilterParams::ThresholdAlpha { .. }
+                | FilterParams::FillHoles { .. }
+                | FilterParams::HdrToning(_)
+                | FilterParams::Percentile(_)
+                | FilterParams::ChannelNoise(_)
+                | FilterParams::Convolution(_)
+                | FilterParams::Average
+        )
     }
 
     /// Human-readable name.
@@ -686,6 +767,17 @@ impl FilterParams {
             FilterParams::Custom { .. } => "Custom",
             FilterParams::HsbHsl { .. } => "HSB/HSL",
             FilterParams::ColorToAlpha { .. } => "Color to Alpha",
+            FilterParams::HdrToning(_) => "HDR Toning",
+            FilterParams::Percentile(_) => "Percentile",
+            FilterParams::ChannelNoise(_) => "Channel Noise",
+            FilterParams::Convolution(_) => "Convolution",
+            FilterParams::Average => "Average",
+            FilterParams::AlphaToColor => "Alpha to Color",
+            FilterParams::AlphaCurve { .. } => "Alpha Curve",
+            FilterParams::SetAlpha { .. } => "Set Alpha",
+            FilterParams::ClampAlpha { .. } => "Clamp Alpha",
+            FilterParams::ThresholdAlpha { .. } => "Threshold Alpha",
+            FilterParams::FillHoles { .. } => "Fill Holes",
             FilterParams::DeInterlace { .. } => "De-Interlace",
             FilterParams::NtscColors => "NTSC Colors",
             FilterParams::FilterGallery { effects } => match effects.as_slice() {
@@ -733,6 +825,16 @@ fn halo_ext(p: &FilterParams) -> Halo {
         _ => Halo::Radius(0),
     }
 }
+
+/// Number of workers the current native filter pool can use (one on WebAssembly).
+/// Callers admitting temporary filter work can bound live tile buffers with the same pool.
+pub fn filter_worker_count() -> usize {
+    par::threads()
+}
+
+/// Target byte allowance for retained native tile results in one filter group.
+/// A group also holds at least one tile per worker; callers must account for that minimum.
+pub const FILTER_RESULT_BUDGET: usize = RESULT_BUDGET;
 
 /// Context a filter runs in.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -920,6 +1022,19 @@ pub fn kernel(params: &FilterParams, src: &Image, out: Rect, ctx: &Ctx) -> Vec<f
         FilterParams::PathBlur { paths } => gallery::path(src, out, ctx, paths),
         FilterParams::Custom { kernel, scale, offset } => other2::custom(src, out, ctx, kernel, *scale, *offset),
         FilterParams::HsbHsl { input, output } => other2::hsb_hsl(src, out, ctx, *input, *output),
+        FilterParams::HdrToning(options) => tone::checked_hdr::run_image(src, out, ctx, options),
+        FilterParams::Percentile(options) => rank::run_image(src, out, ctx, options),
+        FilterParams::ChannelNoise(options) => channel_noise::run_image(src, out, ctx, options),
+        FilterParams::Convolution(options) => convolution::run_image(src, out, ctx, options),
+        FilterParams::Average => average::run_image(src, out, ctx),
+        FilterParams::AlphaToColor => coverage::run_image(src, out, ctx, coverage::Operation::AlphaToColor),
+        FilterParams::AlphaCurve { values } => coverage::run_image(src, out, ctx, coverage::Operation::AlphaCurve(values)),
+        FilterParams::SetAlpha { value } => coverage::run_image(src, out, ctx, coverage::Operation::SetAlpha(*value)),
+        FilterParams::ClampAlpha { low, high } => coverage::run_image(src, out, ctx, coverage::Operation::ClampAlpha { low: *low, high: *high }),
+        FilterParams::ThresholdAlpha { value } => coverage::run_image(src, out, ctx, coverage::Operation::ThresholdAlpha(*value)),
+        FilterParams::FillHoles { connectivity, alpha_only } => {
+            coverage::run_image(src, out, ctx, coverage::Operation::FillHoles { connectivity: *connectivity, alpha_only: *alpha_only })
+        }
         FilterParams::ColorToAlpha { color, transparency_threshold, opacity_threshold } => {
             color_to_alpha::color_to_alpha(src, out, ctx, *color, *transparency_threshold, *opacity_threshold)
         }
@@ -1072,6 +1187,33 @@ fn apply_tiled_with_impl(
             || extent.is_some_and(|e| !sharpen::exact::valid_area(e)))
     {
         return None;
+    }
+    if let FilterParams::HdrToning(options) = params {
+        return tone::checked_hdr::apply_with(surface, options, area, bounds, selection, ctl).ok();
+    }
+    if let FilterParams::Percentile(options) = params {
+        return rank::apply_with(surface, options, area, extent.unwrap_or(bounds), selection, ctl).ok();
+    }
+    if let FilterParams::ChannelNoise(options) = params {
+        return channel_noise::apply_with(surface, options, area, extent.unwrap_or(bounds), selection, ctl).ok();
+    }
+    if let FilterParams::Convolution(options) = params {
+        return convolution::apply_with(surface, options, area, extent.unwrap_or(bounds), selection, ctl).ok();
+    }
+    if matches!(params, FilterParams::Average) {
+        return average::apply_with(surface, area, bounds, selection, ctl).ok();
+    }
+    let coverage_operation = match params {
+        FilterParams::AlphaToColor => Some(coverage::Operation::AlphaToColor),
+        FilterParams::AlphaCurve { values } => Some(coverage::Operation::AlphaCurve(values)),
+        FilterParams::SetAlpha { value } => Some(coverage::Operation::SetAlpha(*value)),
+        FilterParams::ClampAlpha { low, high } => Some(coverage::Operation::ClampAlpha { low: *low, high: *high }),
+        FilterParams::ThresholdAlpha { value } => Some(coverage::Operation::ThresholdAlpha(*value)),
+        FilterParams::FillHoles { connectivity, alpha_only } => Some(coverage::Operation::FillHoles { connectivity: *connectivity, alpha_only: *alpha_only }),
+        _ => None,
+    };
+    if let Some(operation) = coverage_operation {
+        return coverage::apply_with(surface, operation, area, extent.unwrap_or(bounds), selection, ctl).ok();
     }
     let mut out = surface.clone();
     if area.is_empty() {
@@ -1352,11 +1494,28 @@ fn mix_selection(data: &mut [f32], t: Rect, sel: &Surface, orig: &Image, alpha: 
             let original_alpha = orig.get(x, y, a);
             let filtered_alpha = px[a];
             if original_alpha != filtered_alpha {
-                let mixed_alpha = original_alpha + (filtered_alpha - original_alpha) * k;
+                let mut mixed_alpha = original_alpha + (filtered_alpha - original_alpha) * k;
+                if !mixed_alpha.is_finite() && original_alpha.is_finite() && filtered_alpha.is_finite() && k.is_finite() {
+                    let precise = f64::from(original_alpha) + (f64::from(filtered_alpha) - f64::from(original_alpha)) * f64::from(k);
+                    if precise.is_finite() && precise.abs() <= f64::from(f32::MAX) {
+                        mixed_alpha = precise as f32;
+                    }
+                }
                 let original_weight = original_alpha * (1.0 - k);
                 let filtered_weight = filtered_alpha * k;
                 for (c, v) in px[..a].iter_mut().enumerate() {
-                    *v = if mixed_alpha > 0.0 { (orig.get(x, y, c) * original_weight + *v * filtered_weight) / mixed_alpha } else { 0.0 };
+                    let original = orig.get(x, y, c);
+                    let filtered = *v;
+                    *v = if mixed_alpha > 0.0 { (original * original_weight + filtered * filtered_weight) / mixed_alpha } else { 0.0 };
+                    if !v.is_finite() && [original, filtered, original_alpha, filtered_alpha, k].into_iter().all(f32::is_finite) {
+                        let ow = f64::from(original_alpha) * (1. - f64::from(k));
+                        let fw = f64::from(filtered_alpha) * f64::from(k);
+                        let alpha = ow + fw;
+                        let precise = if alpha > 0. { f64::from(original) + (f64::from(filtered) - f64::from(original)) * (fw / alpha) } else { 0. };
+                        if precise.is_finite() && precise.abs() <= f64::from(f32::MAX) {
+                            *v = precise as f32;
+                        }
+                    }
                 }
                 px[a] = mixed_alpha;
                 continue;
@@ -1364,7 +1523,14 @@ fn mix_selection(data: &mut [f32], t: Rect, sel: &Surface, orig: &Image, alpha: 
         }
         for (c, v) in px.iter_mut().enumerate() {
             let o = orig.get(x, y, c);
-            *v = o + (*v - o) * k;
+            let filtered = *v;
+            *v = o + (filtered - o) * k;
+            if !v.is_finite() && [o, filtered, k].into_iter().all(f32::is_finite) {
+                let precise = f64::from(o) + (f64::from(filtered) - f64::from(o)) * f64::from(k);
+                if precise.is_finite() && precise.abs() <= f64::from(f32::MAX) {
+                    *v = precise as f32;
+                }
+            }
         }
     }
 }
@@ -1396,4 +1562,60 @@ fn apply_radial_reference(
     ctl: &photocraft_raster::Interrupt,
 ) -> Option<Surface> {
     apply_tiled_with_impl(surface, params, area.intersect(&extent), bounds, selection, auto_tile(params, bounds), Some(extent), ctl, false)
+}
+
+#[cfg(test)]
+mod selected_alpha_tests {
+    use super::*;
+    use photocraft_color::{ColorMode, PixelFormat, SampleType};
+
+    #[test]
+    fn selective_filters_declare_transparency_only_for_selected_alpha() {
+        let bounds = Rect::new(0, 0, 4, 3);
+        for mode in [ColorMode::Grayscale, ColorMode::Rgb, ColorMode::Cmyk] {
+            for depth in SampleType::ALL {
+                let format = PixelFormat::new(mode, depth, true);
+                let mut source = Surface::new(format);
+                let mut pixel = vec![0.4; format.channels()];
+                *pixel.last_mut().unwrap() = 0.6;
+                source.fill_rect(bounds, &pixel);
+                for alpha in [false, true] {
+                    let mut amounts = vec![30.; format.channels()];
+                    *amounts.last_mut().unwrap() = if alpha { 100. } else { 0. };
+                    let noise = FilterParams::ChannelNoise(channel_noise::Params {
+                        amounts,
+                        distribution: Distribution::Uniform,
+                        monochromatic: false,
+                        relative: false,
+                        seed: 71,
+                    });
+                    let mut channels = vec![true; format.channels()];
+                    *channels.last_mut().unwrap() = alpha;
+                    let mut kernel = vec![0.; 25];
+                    kernel[12] = 0.5;
+                    let convolution = FilterParams::Convolution(convolution::Params {
+                        kernel,
+                        scale: 1.,
+                        offset: 0.,
+                        channels,
+                        alpha_weighted: false,
+                        edge: convolution::Edge::Repeat,
+                    });
+                    for filter in [noise, convolution] {
+                        assert_eq!(filter.makes_transparency(), alpha, "{mode:?} {depth:?}");
+                        let out = apply_in_with(&source, &filter, bounds, bounds, None, bounds, &photocraft_raster::Interrupt::NONE).unwrap();
+                        if alpha {
+                            assert_ne!(out.pixel(1, 1).last(), source.pixel(1, 1).last());
+                        } else {
+                            for y in 0..3 {
+                                for x in 0..4 {
+                                    assert_eq!(out.pixel(x, y).last(), source.pixel(x, y).last());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }

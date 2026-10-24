@@ -3433,3 +3433,39 @@ curves	Smooth	Glätten
 	Grayscale Ramp	Graustufenbalken
 	Current Colors	Aktuelle Farben
 	Make Ramp Web Safe	Farbbalken auf Webfarben beschränken
+
+# Historical import conversion report
+	Import Conversion Report	Import-Konvertierungsbericht
+	Import-time outcomes. Editing uses native PhotoCraft rules.	Ergebnisse zum Importzeitpunkt. Die Bearbeitung folgt den nativen Regeln von PhotoCraft.
+	A newer report format is retained. Its details cannot be displayed.	Ein Bericht in einem neueren Format wurde aufbewahrt. Seine Details können nicht angezeigt werden.
+	No conversion report was recorded.	Es wurde kein Konvertierungsbericht aufgezeichnet.
+	No entries on this page.	Keine Einträge auf dieser Seite.
+	Layer mask	Ebenenmaske
+	Next	Weiter
+	Previous	Zurück
+	Source item	Quellelement
+	{first}–{last} of {total}	{first}–{last} von {total}
+	Native equivalent	Natives Äquivalent
+	Native approximation	Native Annäherung
+	Retained, not applied	Aufbewahrt, nicht angewendet
+	Nonessential data skipped	Nicht notwendige Daten übersprungen
+	Unknown outcome	Unbekanntes Ergebnis
+	Native rules	Native Regeln
+	Native capability limit	Grenze der nativen Funktionen
+	Conversion not implemented	Konvertierung nicht implementiert
+	Resource unavailable	Ressource nicht verfügbar
+	Invalid optional data	Ungültige optionale Daten
+	Retention limit	Aufbewahrungsgrenze
+	Precision conversion	Präzisionskonvertierung
+	Unknown reason	Unbekannter Grund
+	Native layer {id} (removed; historical reference)	Native Ebene {id} (entfernt; historischer Verweis)
+	Native layer: {name}	Native Ebene: {name}
+
+# Native filter parameter labels
+	Alpha Percentile	Alpha-Perzentil
+	Alpha Weighted	Alpha-gewichtet
+	Color Percentile	Farbperzentil
+	Connectivity	Nachbarschaft
+	Disc	Kreisförmige Nachbarschaft
+	Each	Jeder Kanal
+	Value	Wert

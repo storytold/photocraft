@@ -256,5 +256,5 @@ pub(super) fn import(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<Im
     {
         warnings.push("Paint.NET document metadata was not imported".into());
     }
-    Ok(ImportResult { document, warnings, source_read_only: true, preview_only: false })
+    Ok(ImportResult { initial_view: None, document, warnings, source_read_only: true, preview_only: false })
 }

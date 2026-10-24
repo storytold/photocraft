@@ -214,6 +214,9 @@ pub struct HdrToning {
     pub curve: Vec<(f32, f32)>,
 }
 
+pub mod auto_levels;
+pub mod checked_hdr;
+
 impl Default for HdrToning {
     fn default() -> Self {
         HdrToning {

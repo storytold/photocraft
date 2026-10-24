@@ -3631,3 +3631,39 @@ curves	Smooth	매끄럽게
 	Grayscale Ramp	회색 음영 램프
 	Current Colors	현재 색상
 	Make Ramp Web Safe	램프를 웹 안전 색상으로 만들기
+
+# Historical import conversion report
+	Import Conversion Report	가져오기 변환 보고서
+	Import-time outcomes. Editing uses native PhotoCraft rules.	가져올 때의 처리 결과입니다. 편집에는 PhotoCraft의 기본 규칙이 적용됩니다.
+	A newer report format is retained. Its details cannot be displayed.	더 새로운 형식의 보고서가 보존되어 있습니다. 세부 정보는 표시할 수 없습니다.
+	No conversion report was recorded.	기록된 변환 보고서가 없습니다.
+	No entries on this page.	이 페이지에는 항목이 없습니다.
+	Layer mask	레이어 마스크
+	Next	다음
+	Previous	이전
+	Source item	원본 항목
+	{first}–{last} of {total}	전체 {total}개 중 {first}–{last}
+	Native equivalent	네이티브 동등 표현
+	Native approximation	네이티브 근사 표현
+	Retained, not applied	보존됨, 적용되지 않음
+	Nonessential data skipped	필수가 아닌 데이터 생략
+	Unknown outcome	알 수 없는 결과
+	Native rules	네이티브 규칙
+	Native capability limit	네이티브 기능 제한
+	Conversion not implemented	변환 미구현
+	Resource unavailable	리소스를 사용할 수 없음
+	Invalid optional data	잘못된 선택적 데이터
+	Retention limit	보존 용량 제한
+	Precision conversion	정밀도 변환
+	Unknown reason	알 수 없는 이유
+	Native layer {id} (removed; historical reference)	네이티브 레이어 {id} (삭제됨, 과거 참조)
+	Native layer: {name}	네이티브 레이어: {name}
+
+# Native coverage and rank filter controls.
+	Alpha Percentile	알파 백분위수
+	Alpha Weighted	알파 가중
+	Color Percentile	색상 백분위수
+	Connectivity	연결성
+	Disc	원형
+	Each	각각
+	Value	값

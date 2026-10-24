@@ -227,9 +227,12 @@ const FULL_RESOLUTION_PREVIEW: &[&str] = &[
     "filter.render.fibers",
     "filter.pixelate.mezzotint",
     "filter.noise.addNoise",
+    "filter.noise.channelNoise",
     "filter.noise.dustAndScratches",
     "filter.noise.reduceNoise",
     "filter.other.custom",
+    "filter.other.convolution",
+    "filter.other.fillHoles",
     "filter.video.deInterlace",
     "filter.stylize.traceContour",
     "filter.stylize.wind",
@@ -276,14 +279,22 @@ pub fn preview_factor(command: &str, params: &Value, k: u32) -> u32 {
         },
         _ => k,
     });
-    // Mosaic rounds its cells to whole pixels: 10 px cells at k = 4 became 3 proxy px = 12 px.
-    // Divide the cell size evenly instead.
-    match params.get("cellSize").and_then(Value::as_f64) {
-        Some(v) if command == "filter.pixelate.mosaic" && v.is_finite() && v >= 1.0 => {
-            let cell = v.round().min(f64::from(u32::MAX)) as u32;
-            (1..=k).rev().find(|d| cell.is_multiple_of(*d)).unwrap_or(1)
-        }
-        _ => k,
+    // Mosaic rounds its cells to whole pixels. Percentile explicitly requires
+    // an integral neighborhood radius. Choose an exact divisor instead of
+    // changing either operator's document-pixel support in the proxy.
+    let discrete = match command {
+        "filter.pixelate.mosaic" => params.get("cellSize").and_then(Value::as_f64).filter(|v| v.is_finite() && *v >= 1.0).map(f64::round),
+        "filter.other.percentile" => params.get("radius").and_then(Value::as_f64).filter(|v| v.is_finite() && v.fract() == 0.0 && (1.0..=500.0).contains(v)),
+        _ => None,
+    };
+    if command == "filter.other.percentile" && discrete.is_none() {
+        return 1; // Invalid native radius stays unchanged, rather than becoming valid by scaling.
+    }
+    if let Some(value) = discrete {
+        let value = value.min(f64::from(u32::MAX)) as u32;
+        (1..=k).rev().find(|divisor| value.is_multiple_of(*divisor)).unwrap_or(1)
+    } else {
+        k
     }
 }
 
@@ -1217,7 +1228,19 @@ fn scale_preview_params(command: &str, params: &mut Value, k: u32) {
                 // Negative lengths (Offset's left/up shift, Displace's inverted scale) keep their
                 // sign: the floor that keeps a radius positive turned them into +0.1 (#2063).
                 let x = x / k as f64;
-                *v = json!(if x > 0.0 { x.max(floor) } else { minimum.map_or(x, |m| x.max(m)) });
+                let scaled = if x > 0.0 { x.max(floor) } else { minimum.map_or(x, |m| x.max(m)) };
+                // Percentile has a discrete radius; retain its exact integer
+                // representation while preserving established float proxies
+                // for every other native command.
+                let integer = if command == "filter.other.percentile" && key == "radius" {
+                    v.as_i64()
+                        .filter(|value| value.checked_rem(i64::from(k)) == Some(0))
+                        .map(|value| json!(value / i64::from(k)))
+                        .or_else(|| v.as_u64().filter(|value| value.is_multiple_of(u64::from(k))).map(|value| json!(value / u64::from(k))))
+                } else {
+                    None
+                };
+                *v = integer.filter(|value| value.as_f64() == Some(scaled)).unwrap_or_else(|| json!(scaled));
             }
         }
     }
@@ -2409,6 +2432,35 @@ mod tests {
                     assert!(v / f64::from(k) >= f64::from(min) - 1e-9, "{} {}={v}: k={k} clamps to {min}", c.id, p.key);
                 }
             }
+        }
+    }
+
+    #[test]
+    fn discrete_native_rank_proxy_preserves_radius_support_and_json_number_kind() {
+        let command = "filter.other.percentile";
+        for (radius, requested, expected) in [(4, 4, 4), (4, 3, 2), (5, 4, 1), (6, 4, 3), (7, 4, 1), (8, 4, 4)] {
+            let mut params = json!({"radius":radius,"colorPercentile":37,"alphaPercentile":83,"shape":"disc"});
+            let factor = preview_factor(command, &params, requested);
+            assert_eq!(factor, expected);
+            scale_preview_params(command, &mut params, factor);
+            assert_eq!(params["radius"].as_u64(), Some(radius as u64 / u64::from(factor)));
+            assert_eq!(params["radius"].as_u64().unwrap() * u64::from(factor), radius as u64);
+            assert_eq!(params["colorPercentile"], 37);
+            assert_eq!(params["alphaPercentile"], 83);
+        }
+        for radius in [json!(1.5), json!(0), json!(501), json!(null)] {
+            assert_eq!(preview_factor(command, &json!({"radius":radius}), 4), 1, "invalid native inputs must not be repaired by proxy scaling");
+        }
+        let mut numeric = json!({"radius":4.0});
+        let factor = preview_factor(command, &numeric, 3);
+        assert_eq!(factor, 2);
+        scale_preview_params(command, &mut numeric, factor);
+        assert_eq!(numeric["radius"].as_f64(), Some(2.0));
+        let mut legacy = json!({"radius":8});
+        scale_preview_params("filter.blur.gaussianBlur", &mut legacy, 4);
+        assert_eq!(legacy["radius"], json!(2.0), "established continuous native previews retain floating JSON values");
+        for command in ["filter.noise.channelNoise", "filter.other.convolution", "filter.other.fillHoles"] {
+            assert_eq!(preview_factor(command, &json!({}), 4), 1, "fixed pixel/connected topology must use actual native resolution");
         }
     }
 

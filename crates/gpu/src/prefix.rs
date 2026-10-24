@@ -36,11 +36,17 @@ pub(crate) struct Chunk {
 
 pub(crate) struct Prefix {
     context: Option<Document>,
+    /// Native text compositing is process-wide, outside Document's stored data.
+    /// Equal layer snapshots may still render differently after Color Settings.
+    text_gamma_bits: u32,
     /// The root layers of the last prepared render, all of them: a chunk stays valid while every
     /// render since its capture left the layers below its checkpoint as they were.
     layers: Vec<Layer>,
     /// Where renders capture: the highest useful checkpoint below the latest edit.
     checkpoint: Option<Checkpoint>,
+    /// Batch-safe boundaries from the preceding plan. A boundary newly exposed
+    /// by Undo may disappear again when the same layer is inserted on the next edit.
+    previous_checkpoints: Vec<Checkpoint>,
     chunks: HashMap<Rect, Chunk>,
     bytes: u64,
     budget: u64,
@@ -49,7 +55,17 @@ pub(crate) struct Prefix {
 
 impl Default for Prefix {
     fn default() -> Self {
-        Self { context: None, layers: Vec::new(), checkpoint: None, chunks: HashMap::new(), bytes: 0, budget: MAX_BYTES, step: 512 }
+        Self {
+            context: None,
+            text_gamma_bits: 0,
+            layers: Vec::new(),
+            checkpoint: None,
+            previous_checkpoints: Vec::new(),
+            chunks: HashMap::new(),
+            bytes: 0,
+            budget: MAX_BYTES,
+            step: 512,
+        }
     }
 }
 
@@ -60,11 +76,28 @@ fn cell_of(rect: Rect, step: i32) -> Rect {
     Rect::new(x0, y0, x0.saturating_add(step), y0.saturating_add(step))
 }
 
+/// Prefer the highest useful boundary safe in both neighboring plans. Otherwise
+/// Undo can promote a cached prefix into the middle of the next paste's batch,
+/// discarding the useful lower prefix on every repeat. This only chooses where
+/// to capture; exact context/layer/checkpoint validation still governs reuse.
+fn capture_below(checkpoints: &[Checkpoint], previous: &[Checkpoint], changed: usize) -> Option<Checkpoint> {
+    let useful = || checkpoints.iter().rev().filter(|c| c.layer_end <= changed && c.pass_end > 1);
+    // Root stack units strictly advance layer_end (Planner::stack_inner); the
+    // run-start filter preserves that order. Keep exact tuple equality while
+    // avoiding a quadratic search on a document with many root layers.
+    useful()
+        .find(|c| previous.binary_search_by_key(&c.layer_end, |p| p.layer_end).ok().and_then(|index| previous.get(index)) == Some(*c))
+        .or_else(|| useful().next())
+        .copied()
+}
+
 impl Prefix {
     pub(crate) fn clear(&mut self) {
         self.context = None;
+        self.text_gamma_bits = 0;
         self.layers.clear();
         self.checkpoint = None;
+        self.previous_checkpoints.clear();
         self.chunks.clear();
         self.bytes = 0;
     }
@@ -107,7 +140,7 @@ impl Prefix {
     /// Drops the chunks `doc` invalidated and returns the checkpoint this render captures at, one
     /// of `checkpoints` (the plan's that a batch run starts at). A chunk held at any other point
     /// is dropped too: resuming there would group the layers above it differently.
-    pub(crate) fn prepare(&mut self, doc: &Document, checkpoints: &[Checkpoint]) -> Option<Checkpoint> {
+    pub(crate) fn prepare(&mut self, doc: &Document, checkpoints: &[Checkpoint], captures: &[Checkpoint]) -> Option<Checkpoint> {
         if self.budget == 0 {
             return None;
         }
@@ -115,7 +148,8 @@ impl Prefix {
         // Tile data is Arc-shared; shared Tile equality does not scan its pixel bytes.
         let mut context = doc.clone();
         let layers = std::mem::take(&mut context.layers);
-        let same_context = self.context.as_ref() == Some(&context);
+        let text_gamma_bits = photocraft_compose::psblend::text_gamma().to_bits();
+        let same_context = self.context.as_ref() == Some(&context) && self.text_gamma_bits == text_gamma_bits;
         // The lowest root layer this render changes since the last one (a layer added or removed
         // at the top changes from there on).
         let changed = self
@@ -140,9 +174,12 @@ impl Prefix {
         let kept = self.checkpoint.filter(|c| same_context && changed.is_none() && checkpoints.contains(c));
         let checkpoint = kept.or_else(|| match changed {
             // Just below the edit; nothing when it is at the bottom.
-            Some(changed) if same_context => checkpoints.iter().rev().find(|c| c.layer_end <= changed && c.pass_end > 1).copied(),
+            Some(changed) if same_context => {
+                capture_below(captures, &self.previous_checkpoints, changed).or_else(|| capture_below(checkpoints, &self.previous_checkpoints, changed))
+            }
             _ => {
-                let mut useful = checkpoints.iter().rev().filter(|c| c.pass_end > 1);
+                let points = if captures.iter().any(|c| c.pass_end > 1) { captures } else { checkpoints };
+                let mut useful = points.iter().rev().filter(|c| c.pass_end > 1);
                 let last = useful.next().copied();
                 useful.next().copied().or(last)
             }
@@ -150,8 +187,11 @@ impl Prefix {
         // Remember bottom-layer edits even when no useful prefix survives: otherwise every other
         // edit would populate and immediately discard the default checkpoint.
         self.context = Some(context);
+        self.text_gamma_bits = text_gamma_bits;
         self.layers = layers;
         self.checkpoint = checkpoint;
+        self.previous_checkpoints.clear();
+        self.previous_checkpoints.extend_from_slice(checkpoints);
         checkpoint
     }
 
@@ -243,5 +283,38 @@ impl Prefix {
         if chunk.covered.iter().any(|c| c == &cell) {
             chunk.covered = vec![cell];
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn point(layer_end: usize, pass_end: usize, slot: u32) -> Checkpoint {
+        Checkpoint { layer_start: 0, layer_end, pass_end, slot }
+    }
+
+    #[test]
+    fn capture_prefers_a_shared_boundary_over_a_newly_exposed_batch_end() {
+        let lower = point(21, 34, 1);
+        let exposed = point(23, 36, 1);
+        let after_paste = [lower, point(24, 37, 2)];
+        let after_undo = [lower, exposed];
+        assert_eq!(capture_below(&after_undo, &after_paste, 23), Some(lower));
+        assert_eq!(capture_below(&after_paste, &after_undo, 23), Some(lower));
+        // The prefix still advances when the higher point is safe in both plans.
+        assert_eq!(capture_below(&after_undo, &after_undo, 23), Some(exposed));
+    }
+
+    #[test]
+    fn capture_keeps_exact_tuple_bounds_and_has_a_first_plan_fallback() {
+        let lower = point(21, 34, 1);
+        let upper = point(23, 36, 1);
+        let points = [point(0, 1, 0), lower, upper];
+        assert_eq!(capture_below(&points, &[], 23), Some(upper));
+        assert_eq!(capture_below(&points, &[point(23, 36, 2)], 23), Some(upper));
+        assert_eq!(capture_below(&points, &[lower, point(23, 36, 2)], 23), Some(lower));
+        assert_eq!(capture_below(&points, &[upper], 21), Some(lower));
+        assert_eq!(capture_below(&points, &[upper], 0), None);
     }
 }

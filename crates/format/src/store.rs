@@ -236,17 +236,26 @@ impl Fetch for LoadFetch<'_> {
     }
 
     fn blob(&mut self, hash: &str) -> Result<Arc<Vec<u8>>> {
+        self.blob_bounded(hash, self.opts.max_blob_bytes)
+    }
+
+    fn blob_bounded(&mut self, hash: &str, max: usize) -> Result<Arc<Vec<u8>>> {
+        let max = max.min(self.opts.max_blob_bytes);
         if let Some(b) = self.blobs.get(hash) {
+            if b.len() > max {
+                return Err(FormatError::LimitExceeded(format!("blob exceeds {max} bytes")));
+            }
             return Ok(b.clone());
         }
         if !is_valid_hash(hash) {
             return Err(FormatError::corrupt(format!("invalid blob hash `{hash}`")));
         }
         let path = blob_path(hash);
-        let z = self.src.get(&path, self.opts.max_blob_bytes)?;
+        let compressed_max = max.saturating_add(max / 8).saturating_add(4096).min(self.opts.max_blob_bytes);
+        let z = self.src.get(&path, compressed_max)?;
         // Blob length is not in the manifest; the frame header bounds it and
         // we cap at max_blob_bytes.
-        let data = decompress_bounded(&z, self.opts.max_blob_bytes, None, &path)?;
+        let data = decompress_bounded(&z, max, None, &path)?;
         self.account(data.len())?;
         if hash_bytes(&data) != hash {
             return Err(FormatError::corrupt(format!("{path}: content does not match its hash")));
@@ -273,6 +282,10 @@ fn admit_canvas(size: photocraft_geom::Size, opts: &LoadOptions) -> Result<()> {
 }
 
 pub(crate) fn load(src: &dyn ByteSource, opts: &LoadOptions) -> Result<Document> {
+    load_measured(src, opts).map(|(doc, _)| doc)
+}
+
+pub(crate) fn load_measured(src: &dyn ByteSource, opts: &LoadOptions) -> Result<(Document, u64)> {
     let m = read_manifest(src, opts)?;
     admit_canvas(m.document.size, opts)?;
     let mut fetch = LoadFetch { src, opts: *opts, total: 0, blobs: HashMap::new() };
@@ -284,7 +297,8 @@ pub(crate) fn load(src: &dyn ByteSource, opts: &LoadOptions) -> Result<Document>
         legacy_linked_contents: HashMap::new(),
         tiles: HashMap::new(),
     };
-    loader.document(&m.document)
+    let document = loader.document(&m.document)?;
+    Ok((document, fetch.total))
 }
 
 // ---------------------------------------------------------------------------
@@ -868,7 +882,7 @@ impl PcraftWriter {
         self.blob_hash_cache.retain(|_, (w, _)| w.strong_count() > 0);
         convert::check_nesting(&doc.layers)?;
         let mut c = Collect { hash_cache: Some(&mut self.hash_cache), blob_hash_cache: Some(&mut self.blob_hash_cache), ..Default::default() };
-        let document = convert::doc_m(doc, &mut c);
+        let document = convert::doc_m(doc, &mut c)?;
         let mut previews = Vec::new();
         if let Some(t) = &opts.thumbnail {
             previews.push((THUMB, png(t)?));

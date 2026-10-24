@@ -4120,3 +4120,37 @@ curves	Smooth	Εξομάλυνση
 	Grayscale Ramp	Διαβάθμιση του γκρι
 	Current Colors	Τρέχοντα χρώματα
 	Make Ramp Web Safe	Μόνο χρώματα ιστού στη διαβάθμιση
+
+# Historical import conversion report
+	Import Conversion Report	Αναφορά μετατροπής εισαγωγής
+	Import-time outcomes. Editing uses native PhotoCraft rules.	Αποτελέσματα κατά την εισαγωγή. Η επεξεργασία ακολουθεί τους εγγενείς κανόνες του PhotoCraft.
+	A newer report format is retained. Its details cannot be displayed.	Διατηρείται αναφορά σε νεότερη μορφή. Δεν είναι δυνατή η εμφάνιση των λεπτομερειών της.
+	No conversion report was recorded.	Δεν καταγράφηκε αναφορά μετατροπής.
+	No entries on this page.	Δεν υπάρχουν καταχωρίσεις σε αυτή τη σελίδα.
+	Layer mask	Μάσκα στρώσης
+	Source item	Στοιχείο προέλευσης
+	{first}–{last} of {total}	{first}–{last} από {total}
+	Native equivalent	Εγγενές ισοδύναμο
+	Native approximation	Εγγενής προσέγγιση
+	Retained, not applied	Διατηρήθηκε, δεν εφαρμόστηκε
+	Nonessential data skipped	Παραλείφθηκαν μη απαραίτητα δεδομένα
+	Unknown outcome	Άγνωστο αποτέλεσμα
+	Native rules	Εγγενείς κανόνες
+	Native capability limit	Περιορισμός εγγενών δυνατοτήτων
+	Conversion not implemented	Η μετατροπή δεν έχει υλοποιηθεί
+	Resource unavailable	Ο πόρος δεν είναι διαθέσιμος
+	Invalid optional data	Μη έγκυρα προαιρετικά δεδομένα
+	Retention limit	Όριο διατήρησης
+	Precision conversion	Μετατροπή ακρίβειας
+	Unknown reason	Άγνωστος λόγος
+	Native layer {id} (removed; historical reference)	Εγγενής στρώση {id} (διαγράφηκε· ιστορική αναφορά)
+	Native layer: {name}	Εγγενής στρώση: {name}
+
+# Native filter parameter labels
+	Alpha Percentile	Εκατοστημόριο άλφα
+	Alpha Weighted	Στάθμιση με άλφα
+	Color Percentile	Εκατοστημόριο χρώματος
+	Connectivity	Συνδεσιμότητα
+	Disc	Κυκλική γειτονιά
+	Each	Κάθε κανάλι
+	Value	Τιμή

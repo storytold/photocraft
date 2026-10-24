@@ -657,6 +657,7 @@ impl GpuCanvas {
                 out.composite_ms = now_ms() - t0;
                 out.uploads = stats.tiles_uploaded as u64;
                 out.gpu = stats.gpu_time;
+                out.gpu_stats = Some(stats);
                 return out;
             }
             Err(e) => out.fallback = Some(e.0),
@@ -916,6 +917,9 @@ pub struct Refresh {
     /// leaves out layer-tile uploads (`uploads` above counts them), so a first refresh of a
     /// document under-reports by more than the few per cent of a warm one.
     pub gpu: Option<photocraft_gpu::GpuTiming>,
+    /// Counters from this successful GPU composite; absent on CPU/fallback paths.
+    /// The contained GPU timestamp, like `gpu`, may describe an earlier submission.
+    pub gpu_stats: Option<photocraft_gpu::Stats>,
     /// Why the wgpu compositor wasn't used.
     pub fallback: Option<String>,
 }

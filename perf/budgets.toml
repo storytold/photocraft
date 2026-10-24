@@ -174,7 +174,7 @@ issue = 209
 bench = "perf_scenarios"
 row = "paste 12 MP layer (repeat) + refresh"
 budget_ms = 20
-enforce = false  # over budget in the 2026-10-05 baseline
+enforce = false  # Windows/RTX 4080 runs pass; qualify the macOS nightly and refresh its baseline before enforcing
 
 [[scenario]]
 id = "P12"

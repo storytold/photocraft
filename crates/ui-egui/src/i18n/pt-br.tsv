@@ -4350,3 +4350,37 @@ layerLabel	No Color	Sem cor
 	Grayscale Ramp	Rampa de tons de cinza
 	Current Colors	Cores atuais
 	Make Ramp Web Safe	Tornar rampa segura para a Web
+
+# Historical import conversion report
+	Import Conversion Report	Relatório de conversão de importação
+	Import-time outcomes. Editing uses native PhotoCraft rules.	Resultados no momento da importação. A edição usa as regras nativas do PhotoCraft.
+	A newer report format is retained. Its details cannot be displayed.	Um relatório em um formato mais recente foi preservado. Seus detalhes não podem ser exibidos.
+	No conversion report was recorded.	Nenhum relatório de conversão foi registrado.
+	No entries on this page.	Não há entradas nesta página.
+	Layer mask	Máscara de camada
+	Source item	Item de origem
+	{first}–{last} of {total}	{first}–{last} de {total}
+	Native equivalent	Equivalente nativo
+	Native approximation	Aproximação nativa
+	Retained, not applied	Preservado, não aplicado
+	Nonessential data skipped	Dados não essenciais ignorados
+	Unknown outcome	Resultado desconhecido
+	Native rules	Regras nativas
+	Native capability limit	Limite dos recursos nativos
+	Conversion not implemented	Conversão não implementada
+	Resource unavailable	Recurso indisponível
+	Invalid optional data	Dados opcionais inválidos
+	Retention limit	Limite de preservação
+	Precision conversion	Conversão de precisão
+	Unknown reason	Motivo desconhecido
+	Native layer {id} (removed; historical reference)	Camada nativa {id} (removida; referência histórica)
+	Native layer: {name}	Camada nativa: {name}
+
+# Native filter parameter labels
+	Alpha Percentile	Percentil alfa
+	Alpha Weighted	Ponderado pelo alfa
+	Color Percentile	Percentil de cor
+	Connectivity	Conectividade
+	Disc	Vizinhança circular
+	Each	Cada canal
+	Value	Valor

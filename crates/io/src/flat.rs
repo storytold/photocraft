@@ -293,7 +293,7 @@ pub(crate) fn image_to_document(name: &str, img: &Image) -> Result<ImportResult,
     if let Some(g) = guides.as_ref().and_then(|(res, _)| res.iter().find(|r| r.id == 1032)) {
         crate::psd_import::parse_guides(&g.data, &mut doc);
     }
-    Ok(ImportResult { document: doc, warnings, source_read_only: false, preview_only: false })
+    Ok(ImportResult { initial_view: None, document: doc, warnings, source_read_only: false, preview_only: false })
 }
 
 /// The pixels of a decoded image as a surface of `fmt`, converting layout and sample type a

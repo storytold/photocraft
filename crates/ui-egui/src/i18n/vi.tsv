@@ -3913,3 +3913,39 @@ curves	Smooth	Làm mượt
 	Grayscale Ramp	Dải thang xám
 	Current Colors	Màu hiện tại
 	Make Ramp Web Safe	Giới hạn dải màu ở màu web
+
+# Historical import conversion report
+	Import Conversion Report	Báo cáo chuyển đổi khi nhập
+	Import-time outcomes. Editing uses native PhotoCraft rules.	Kết quả tại thời điểm nhập. Việc chỉnh sửa dùng các quy tắc gốc của PhotoCraft.
+	A newer report format is retained. Its details cannot be displayed.	Một báo cáo ở định dạng mới hơn được giữ lại. Không thể hiển thị chi tiết của báo cáo đó.
+	No conversion report was recorded.	Không có báo cáo chuyển đổi nào được ghi lại.
+	No entries on this page.	Không có mục nào trên trang này.
+	Layer mask	Mặt nạ lớp
+	Next	Tiếp theo
+	Previous	Trước đó
+	Source item	Mục nguồn
+	{first}–{last} of {total}	{first}–{last} trên {total}
+	Native equivalent	Biểu diễn gốc tương đương
+	Native approximation	Biểu diễn gốc gần đúng
+	Retained, not applied	Được giữ lại, chưa áp dụng
+	Nonessential data skipped	Đã bỏ qua dữ liệu không thiết yếu
+	Unknown outcome	Kết quả không xác định
+	Native rules	Quy tắc gốc
+	Native capability limit	Giới hạn khả năng gốc
+	Conversion not implemented	Chuyển đổi chưa được triển khai
+	Resource unavailable	Tài nguyên không khả dụng
+	Invalid optional data	Dữ liệu tùy chọn không hợp lệ
+	Retention limit	Giới hạn lưu giữ
+	Precision conversion	Chuyển đổi độ chính xác
+	Unknown reason	Lý do không xác định
+	Native layer {id} (removed; historical reference)	Lớp gốc {id} (đã xóa; tham chiếu lịch sử)
+	Native layer: {name}	Lớp gốc: {name}
+
+# Native filter parameter labels
+	Alpha Percentile	Phân vị alpha
+	Alpha Weighted	Có trọng số alpha
+	Color Percentile	Phân vị màu
+	Connectivity	Độ liên thông
+	Disc	Lân cận hình tròn
+	Each	Mỗi kênh
+	Value	Giá trị

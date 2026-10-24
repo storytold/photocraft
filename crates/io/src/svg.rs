@@ -409,7 +409,7 @@ fn import_parsed_with_budget(name: &str, parsed: Parsed, max_group_depth: usize,
     if doc.layers.is_empty() {
         conv.warnings.push("SVG: nothing to draw (an empty drawing)".to_string());
     }
-    Ok(ImportResult { document: doc, warnings: conv.warnings, source_read_only: false, preview_only: false })
+    Ok(ImportResult { initial_view: None, document: doc, warnings: conv.warnings, source_read_only: false, preview_only: false })
 }
 
 /// The whole drawing rendered at `scale` (1 = its own size), as a straight-alpha RGBA buffer at

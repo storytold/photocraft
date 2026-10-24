@@ -12,6 +12,18 @@ static char *icon[] = {
 "#;
 
 #[test]
+fn exact_x11_lookup_has_bounded_input_and_preserves_x11_values() {
+    use photocraft_codecs::x11_color_rgb;
+    assert_eq!(x11_color_rgb("gray"), Some([190.0 / 255.0; 3]));
+    assert_eq!(x11_color_rgb("gray42"), Some([107.0 / 255.0; 3]));
+    assert_eq!(x11_color_rgb("steelblue4"), Some([54.0 / 255.0, 100.0 / 255.0, 139.0 / 255.0]));
+    for name in ["", "Gray", "ghost white", "ghost-white", "ghost_white", "aqua", "transparent", "é", "gray01"] {
+        assert_eq!(x11_color_rgb(name), None, "{name}");
+    }
+    assert_eq!(x11_color_rgb(&"a".repeat(65)), None);
+}
+
+#[test]
 fn xpm3_decodes_palette_transparency_and_spaces_in_keys() {
     assert_eq!(detect(SAMPLE), Some(Format::Xpm));
     assert_eq!(from_extension("icon.XPM"), Some(Format::Xpm));

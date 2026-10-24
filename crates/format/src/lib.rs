@@ -29,6 +29,7 @@ pub mod atomic;
 pub mod autosave;
 mod convert;
 mod finite;
+mod import_conversion;
 pub mod manifest;
 mod migrate;
 pub mod read;
@@ -160,6 +161,14 @@ pub fn load_from_bytes(bytes: &[u8]) -> Result<Document> {
 pub fn load_from_bytes_with(bytes: &[u8], opts: &LoadOptions) -> Result<Document> {
     let src = store::ZipSource::new(bytes)?;
     store::load(&src, opts)
+}
+
+/// Load while reporting the tile/blob bytes already counted by the native loader.
+/// Nested-document consumers can share a byte allowance across embedded bundles, rather than
+/// granting the full per-bundle allowance at every nesting level. This is not process RSS.
+pub fn load_from_bytes_measured(bytes: &[u8], opts: &LoadOptions) -> Result<(Document, u64)> {
+    let src = store::ZipSource::new(bytes)?;
+    store::load_measured(&src, opts)
 }
 
 /// Load a bundle from a path: a directory bundle or a ZIP file.

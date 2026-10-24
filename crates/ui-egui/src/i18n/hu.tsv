@@ -4335,3 +4335,37 @@ cameraRaw	Yellow	Sárga
 	Grayscale Ramp	Szürkeárnyalatos sáv
 	Current Colors	Aktuális színek
 	Make Ramp Web Safe	Sáv korlátozása webes színekre
+
+# Historical import conversion report
+	Import Conversion Report	Importálási átalakítási jelentés
+	Import-time outcomes. Editing uses native PhotoCraft rules.	Az importáláskor kapott eredmények. A szerkesztés a PhotoCraft natív szabályait követi.
+	A newer report format is retained. Its details cannot be displayed.	Egy újabb formátumú jelentés megőrzésre került. A részletei nem jeleníthetők meg.
+	No conversion report was recorded.	Nem készült átalakítási jelentés.
+	No entries on this page.	Ezen az oldalon nincsenek bejegyzések.
+	Layer mask	Rétegmaszk
+	Source item	Forráselem
+	{first}–{last} of {total}	{first}–{last} / {total}
+	Native equivalent	Natív megfelelő
+	Native approximation	Natív közelítés
+	Retained, not applied	Megőrizve, nincs alkalmazva
+	Nonessential data skipped	Nem alapvető adatok kihagyva
+	Unknown outcome	Ismeretlen eredmény
+	Native rules	Natív szabályok
+	Native capability limit	A natív képességek korlátja
+	Conversion not implemented	Az átalakítás nincs megvalósítva
+	Resource unavailable	Az erőforrás nem érhető el
+	Invalid optional data	Érvénytelen opcionális adatok
+	Retention limit	Megőrzési korlát
+	Precision conversion	Pontosságátalakítás
+	Unknown reason	Ismeretlen ok
+	Native layer {id} (removed; historical reference)	Natív réteg {id} (eltávolítva; korábbi hivatkozás)
+	Native layer: {name}	Natív réteg: {name}
+
+# Native filter parameter labels
+	Alpha Percentile	Alfa-percentilis
+	Alpha Weighted	Alfával súlyozott
+	Color Percentile	Színpercentilis
+	Connectivity	Szomszédság
+	Disc	Kör alakú környezet
+	Each	Csatornánként
+	Value	Érték

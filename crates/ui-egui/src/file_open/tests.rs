@@ -23,7 +23,9 @@ fn app_with(answers: Vec<Option<FileDialogAnswer>>) -> (PhotocraftApp, Written) 
                 return Err("not an image".into());
             }
             let warnings = if name.contains("warn") { vec!["Adjustment layer \"Curves 1\" was flattened".to_string()] } else { Vec::new() };
-            Ok((Document::new(name, Size::new(4, 4), ColorMode::Rgb, SampleType::U8), warnings))
+            let mut result = crate::test_import_result(Document::new(name, Size::new(4, 4), ColorMode::Rgb, SampleType::U8), warnings);
+            result.source_read_only = photocraft_io::affinity::is_affinity(bytes);
+            Ok(result)
         })),
         export: Some(Box::new(|_doc: &Document, path: &str, _s: &crate::ExportSettings| {
             let warnings = if path.ends_with(".png") { vec!["Layers were flattened".to_string()] } else { Vec::new() };
@@ -983,11 +985,12 @@ fn opening_type_in_a_missing_font_warns() {
     let already = warning.clone();
     let services = Services {
         import: Some(Box::new(move |name: &str, _bytes: &[u8], _opts: &photocraft_io::ImportOptions| {
-            Ok(match name {
+            let (document, warnings) = match name {
                 "installed.psd" => (installed.clone(), Vec::new()),
                 "warned.psd" => (with_missing.clone(), vec![already.clone()]),
                 _ => (with_missing.clone(), Vec::new()),
-            })
+            };
+            Ok(crate::test_import_result(document, warnings))
         })),
         ..Default::default()
     };

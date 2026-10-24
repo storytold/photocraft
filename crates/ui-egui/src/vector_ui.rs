@@ -2764,8 +2764,9 @@ mod tests {
                 assert!(app.session.set_active(0));
                 match action {
                     "open" => {
-                        app.services.import =
-                            Some(Box::new(|name, _, _| Ok((Document::new(name, Size::new(4, 4), ColorMode::Rgb, SampleType::U8), Vec::new()))));
+                        app.services.import = Some(Box::new(|name, _, _| {
+                            Ok(crate::test_import_result(Document::new(name, Size::new(4, 4), ColorMode::Rgb, SampleType::U8), Vec::new()))
+                        }));
                         app.open_file("synthetic.png", &[]).unwrap();
                     }
                     "closeOther" => {

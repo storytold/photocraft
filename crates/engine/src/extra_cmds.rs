@@ -263,23 +263,21 @@ fn equalize(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// Filter › Blur › Average: the selection (or layer) filled with its mean colour.
+fn has_average_target(s: &Session) -> std::result::Result<(), String> {
+    if matches!(&active_layer(s)?.content, LayerContent::Smart(_)) { crate::filters::has_filterable_layer(s) } else { has_pixels(s) }
+}
 fn average(s: &mut Session, p: &Value) -> Result<Value> {
+    if matches!(&active_layer(s).map_err(EngineError::Other)?.content, LayerContent::Smart(_)) {
+        return crate::filters::run_filter(s, "filter.blur.average", p);
+    }
     map_pixels(s, "Average", p, |_, px, cover| {
-        let (mut sum, mut wsum, mut asum, mut n) = ([0f64; 3], 0f64, 0f64, 0f64);
+        let mut mean = photocraft_algo::average::Mean::default();
         for (p, &k) in px.iter().zip(cover) {
-            let w = (p[3] * k) as f64;
-            for c in 0..3 {
-                sum[c] += p[c] as f64 * w;
-            }
-            wsum += w;
-            asum += (p[3] * k) as f64;
-            n += k as f64;
+            mean.push(*p, k);
         }
-        if wsum <= 0.0 {
-            return;
+        if let Some(avg) = mean.rgba() {
+            px.fill(avg);
         }
-        let avg = [(sum[0] / wsum) as f32, (sum[1] / wsum) as f32, (sum[2] / wsum) as f32, (asum / n.max(1e-9)) as f32];
-        px.fill(avg);
     })
 }
 
@@ -1022,7 +1020,7 @@ pub fn specs() -> Vec<CommandSpec> {
             has_layer,
             show_only
         ),
-        spec!("filter.blur.average", "Average", &["Filter", "Blur"], None, "{}", has_pixels, average),
+        spec!("filter.blur.average", "Average", &["Filter", "Blur"], None, "{}", has_average_target, average),
     ]
 }
 
@@ -1530,6 +1528,36 @@ mod tests {
         }
     }
 
+    #[test]
+    fn native_average_smart_filter_matches_raster_undo_and_persistence() {
+        for depth in [8, 16, 32] {
+            let mut raster = session(depth);
+            paint_square(&mut raster, Rect::new(0, 0, 20, 30), [1., 0., 0., 0.5]);
+            paint_square(&mut raster, Rect::new(20, 0, 40, 30), [0., 0., 1., 1.]);
+            let mut smart = session(depth);
+            paint_square(&mut smart, Rect::new(0, 0, 20, 30), [1., 0., 0., 0.5]);
+            paint_square(&mut smart, Rect::new(20, 0, 40, 30), [0., 0., 1., 1.]);
+            smart.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+            let before = doc(&smart).clone();
+            smart.execute("filter.blur.average", json!({})).unwrap();
+            raster.execute("filter.blur.average", json!({})).unwrap();
+            let LayerContent::Smart(object) = &active(&smart).content else { panic!("ordinary native Smart") };
+            assert_eq!(object.smart_filters[0].command, "filter.blur.average");
+            let expected = active(&raster).surface().unwrap().read_region(doc(&raster).bounds());
+            assert_eq!(object.cache.as_ref().unwrap().read_region(doc(&smart).bounds()), expected);
+            let bytes = photocraft_format::save_to_bytes(doc(&smart), &Default::default()).unwrap();
+            let mut reopened = photocraft_format::load_from_bytes(&bytes).unwrap();
+            let id = active(&smart).id;
+            if let LayerContent::Smart(object) = &mut reopened.layer_mut(id).unwrap().content {
+                object.cache = None;
+            }
+            Session::new().prepare_imported_document(&mut reopened, &crate::jobs::JobCtx::new()).unwrap();
+            let LayerContent::Smart(object) = &reopened.layer(id).unwrap().content else { panic!() };
+            assert_eq!(object.cache.as_ref().unwrap().read_region(reopened.bounds()), expected);
+            smart.execute("edit.undo", json!({})).unwrap();
+            assert_eq!(doc(&smart), &before);
+        }
+    }
     #[test]
     fn average_and_clouds() {
         let mut s = session(8);

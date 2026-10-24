@@ -18,10 +18,10 @@ mod recovery_tests;
 /// Photoshop brushes (.abr), gradients (.grd), layer styles (.asl), swatches (.aco, .act, .ase) and keyboard shortcut sets
 /// (.kys), which go to the preset libraries and Edit › Keyboard Shortcuts.
 const OPEN_EXTS: &[&str] = &[
-    "pcraft", "pdn", "ora", "xcf", "xcfgz", "gz", "kra", "krz", "psd", "psb", "psdt", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "tga", "ico",
-    "qoi", "exr", "hdr", "pbm", "pgm", "ppm", "pam", "pfm", "pcx", "dds", "xpm", "fits", "fit", "fts", "dpx", "cin", "dcm", "dicom", "dc3", "iff", "lbm",
-    "ilbm", "heic", "heif", "hif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf", "abr", "grd", "asl", "svg", "svgz", "aco", "act",
-    "ase", "kys", "af", "afdesign", "afphoto", "afpub",
+    "pcraft", "pdn", "ora", "xcf", "xcfgz", "xcfbz2", "xcfxz", "bz2", "xz", "gz", "kra", "krz", "psd", "psb", "psdt", "png", "jpg", "jpeg", "tif", "tiff",
+    "webp", "gif", "bmp", "tga", "ico", "qoi", "exr", "hdr", "pbm", "pgm", "ppm", "pam", "pfm", "pcx", "dds", "xpm", "fits", "fit", "fts", "dpx", "cin", "dcm",
+    "dicom", "dc3", "iff", "lbm", "ilbm", "heic", "heif", "hif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf", "abr", "grd", "asl",
+    "svg", "svgz", "aco", "act", "ase", "kys", "af", "afdesign", "afphoto", "afpub",
 ];
 const SVG_EXTS: &[&str] = &["svg", "svgz"];
 
@@ -44,7 +44,7 @@ const OPEN_FILTERS: &[(&str, &[&str])] = &[
     ("Photoshop", &["psd", "psb", "psdt"]),
     ("Affinity", &["af", "afdesign", "afphoto", "afpub"]),
     ("Krita", &["kra", "krz"]),
-    ("GIMP", &["xcf", "xcfgz", "gz"]),
+    ("GIMP", &["xcf", "xcfgz", "xcfbz2", "xcfxz", "gz", "bz2", "xz"]),
     ("OpenRaster", &["ora"]),
     ("Paint.NET", &["pdn"]),
     ("SVG", SVG_EXTS),
@@ -580,6 +580,10 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
     let automation_write = automation.clone().map(|workspace| {
         Box::new(move |path: &str, bytes: &[u8]| workspace.write(path, bytes).map_err(|error| error.to_string())) as photocraft_ui_egui::AutomationWriteFn
     });
+    let automation_same_file = automation.clone().map(|workspace| {
+        Box::new(move |source: &str, target: &str| workspace.is_import_source(source, target).map_err(|error| error.to_string()))
+            as photocraft_ui_egui::AutomationSameFileFn
+    });
     let automation_open_pcraft = automation.clone().map(|workspace| {
         Box::new(move |path: &str| {
             let name = Path::new(path).file_name().and_then(|name| name.to_str()).unwrap_or(path).to_string();
@@ -601,9 +605,7 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
     });
     Services {
         import: Some(Box::new(|name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions| {
-            crate::crash_guard::guard("Open", || {
-                photocraft_io::import_with_options(name, bytes, opts).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())
-            })
+            crate::crash_guard::guard("Open", || photocraft_io::import_with_options(name, bytes, opts).map_err(|e| e.to_string()))
         })),
         export: Some(Box::new(|doc: &Document, path: &str, settings: &photocraft_ui_egui::ExportSettings| {
             let opts = export_options(settings);
@@ -620,6 +622,7 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
         same_file: Some(Box::new(|a: &str, b: &str| same_entry(Path::new(a), Path::new(b), same_file))),
         automation_read,
         automation_write,
+        automation_same_file,
         automation_open_pcraft,
         automation_save,
         automation_command,

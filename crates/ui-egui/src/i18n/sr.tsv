@@ -4493,3 +4493,37 @@ shape	Appearance	Izgled
 	Grayscale Ramp	Skala nijansi sive
 	Current Colors	Trenutne boje
 	Make Ramp Web Safe	Učini skalu bezbednom za veb
+
+# Historical import conversion report
+	Import Conversion Report	Извештај о конверзији при увозу
+	Import-time outcomes. Editing uses native PhotoCraft rules.	Резултати у тренутку увоза. Уређивање прати изворна правила програма PhotoCraft.
+	A newer report format is retained. Its details cannot be displayed.	Сачуван је извештај у новијем формату. Његови детаљи не могу да се прикажу.
+	No conversion report was recorded.	Није забележен извештај о конверзији.
+	No entries on this page.	На овој страници нема ставки.
+	Layer mask	Маска слоја
+	Source item	Изворна ставка
+	{first}–{last} of {total}	{first}–{last} од {total}
+	Native equivalent	Изворни еквивалент
+	Native approximation	Изворна апроксимација
+	Retained, not applied	Сачувано, није примењено
+	Nonessential data skipped	Небитни подаци су прескочени
+	Unknown outcome	Непознат резултат
+	Native rules	Изворна правила
+	Native capability limit	Ограничење изворних могућности
+	Conversion not implemented	Конверзија није реализована
+	Resource unavailable	Ресурс није доступан
+	Invalid optional data	Неисправни опциони подаци
+	Retention limit	Ограничење чувања
+	Precision conversion	Конверзија прецизности
+	Unknown reason	Непознат разлог
+	Native layer {id} (removed; historical reference)	Изворни слој {id} (уклоњен; историјска референца)
+	Native layer: {name}	Изворни слој: {name}
+
+# Native filter parameter labels
+	Alpha Percentile	Alfa percentil
+	Alpha Weighted	Ponderisano alfom
+	Color Percentile	Percentil boje
+	Connectivity	Povezanost
+	Disc	Kružno susedstvo
+	Each	Svaki kanal
+	Value	Vrednost

@@ -4180,3 +4180,37 @@ curves	Smooth	Vloeiend maken
 	Grayscale Ramp	Grijswaardenbalk
 	Current Colors	Huidige kleuren
 	Make Ramp Web Safe	Balk beperken tot webkleuren
+
+# Historical import conversion report
+	Import Conversion Report	Rapport over importconversie
+	Import-time outcomes. Editing uses native PhotoCraft rules.	Resultaten op het moment van importeren. Bewerken volgt de eigen regels van PhotoCraft.
+	A newer report format is retained. Its details cannot be displayed.	Een rapport in een nieuwer formaat is bewaard. De details kunnen niet worden weergegeven.
+	No conversion report was recorded.	Er is geen conversierapport vastgelegd.
+	No entries on this page.	Geen vermeldingen op deze pagina.
+	Layer mask	Laagmasker
+	Source item	Bronitem
+	{first}–{last} of {total}	{first}–{last} van {total}
+	Native equivalent	Eigen equivalent
+	Native approximation	Eigen benadering
+	Retained, not applied	Bewaard, niet toegepast
+	Nonessential data skipped	Niet-essentiële gegevens overgeslagen
+	Unknown outcome	Onbekend resultaat
+	Native rules	Eigen regels
+	Native capability limit	Beperking van eigen functies
+	Conversion not implemented	Conversie niet geïmplementeerd
+	Resource unavailable	Bron niet beschikbaar
+	Invalid optional data	Ongeldige optionele gegevens
+	Retention limit	Bewaarlimiet
+	Precision conversion	Precisieconversie
+	Unknown reason	Onbekende reden
+	Native layer {id} (removed; historical reference)	Eigen laag {id} (verwijderd; historische verwijzing)
+	Native layer: {name}	Eigen laag: {name}
+
+# Native filter parameter labels
+	Alpha Percentile	Alfapercentiel
+	Alpha Weighted	Alfagewogen
+	Color Percentile	Kleurpercentiel
+	Connectivity	Connectiviteit
+	Disc	Cirkelvormige omgeving
+	Each	Elk kanaal
+	Value	Waarde

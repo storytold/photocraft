@@ -535,3 +535,47 @@ cameraRaw	Yellow	पीला
 	Missing delete command	हटाने का कमांड नहीं मिला
 	Invalid delete command	हटाने का कमांड अमान्य है
 	Layer deleted, but confirmation preference could not be saved: {error}	लेयर हटा दी गई, लेकिन पुष्टि की प्राथमिकता सहेजी नहीं जा सकी: {error}
+
+# Historical import conversion report
+	Import Conversion Report	आयात रूपांतरण रिपोर्ट
+	Import-time outcomes. Editing uses native PhotoCraft rules.	आयात के समय के परिणाम। संपादन में PhotoCraft के मूल नियम लागू होते हैं।
+	A newer report format is retained. Its details cannot be displayed.	नए प्रारूप की रिपोर्ट सुरक्षित रखी गई है। उसका विवरण प्रदर्शित नहीं किया जा सकता।
+	No conversion report was recorded.	कोई रूपांतरण रिपोर्ट दर्ज नहीं की गई।
+	No entries on this page.	इस पृष्ठ पर कोई प्रविष्टि नहीं है।
+	Layer mask	परत मास्क
+	Next	अगला
+	Previous	पिछला
+	Source item	स्रोत आइटम
+	{first}–{last} of {total}	कुल {total} में से {first}–{last}
+	Native equivalent	मूल समकक्ष
+	Native approximation	मूल अनुमानित रूप
+	Retained, not applied	सुरक्षित रखा, लागू नहीं किया
+	Nonessential data skipped	गैरज़रूरी डेटा छोड़ा गया
+	Unknown outcome	अज्ञात परिणाम
+	Native rules	मूल नियम
+	Native capability limit	मूल क्षमताओं की सीमा
+	Conversion not implemented	रूपांतरण लागू नहीं किया गया है
+	Resource unavailable	संसाधन उपलब्ध नहीं है
+	Invalid optional data	अमान्य वैकल्पिक डेटा
+	Retention limit	संग्रह सीमा
+	Precision conversion	परिशुद्धता रूपांतरण
+	Unknown reason	अज्ञात कारण
+	Native layer {id} (removed; historical reference)	मूल परत {id} (हटाई गई; ऐतिहासिक संदर्भ)
+	Native layer: {name}	मूल परत: {name}
+
+# Native filter parameter labels
+	Alpha Percentile	अल्फ़ा प्रतिशतक
+	Alpha Weighted	अल्फ़ा से भारित
+	Color Percentile	रंग प्रतिशतक
+	Connectivity	संयोजकता
+	Disc	वृत्ताकार पड़ोस
+	Each	प्रत्येक चैनल
+	Value	मान
+	Square	वर्ग
+	Diamond	समचतुर्भुज
+	Gaussian	गॉसियन
+	Repeat	दोहराएँ
+	Wrap	लपेटें
+	Black	काला
+	White	सफ़ेद
+	Transparent	पारदर्शी

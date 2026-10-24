@@ -83,3 +83,6 @@ pub(crate) mod test_support {
         Invoke { code, stdout: String::from_utf8(stdout).unwrap(), stderr: String::from_utf8(stderr).unwrap() }
     }
 }
+
+#[cfg(test)]
+mod historical_xcf_tests;

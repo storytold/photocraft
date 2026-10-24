@@ -374,6 +374,58 @@ fn prefix_follows_an_edit_up_the_stack_and_stays_exact() {
     }
 }
 
+#[test]
+fn prefix_repeated_mid_stack_paste_and_undo_keep_a_shared_batch_boundary() {
+    let Some(mut g) = gpu() else { return };
+    let mut uncached = Compositor::new(&g.device);
+    uncached.set_composite_cache_budget(0);
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        let mut doc = Document::new("Paste boundaries", Size::new(300, 180), ColorMode::Rgb, depth);
+        let fmt = doc.pixel_format();
+        doc.layers.push(noise_layer("Background", fmt, doc.bounds(), 71, 0.8));
+        for seed in [17, 29] {
+            let mut styled = noise_layer("Styled lower panel", fmt, Rect::new(20, 20, 120, 90), seed, 0.5);
+            styled.effects.items = vec![Effect::default_drop_shadow(), Effect::Stroke(stroke(3.0, StrokePosition::Outside, FxPaint::Color(Color::BLACK)))];
+            doc.layers.push(styled);
+        }
+        // Twenty plain passes end with two passes that cannot be batched together
+        // (their output aliases their first input). An insertion makes three,
+        // removing the former end boundary from run_starts without changing its
+        // raw plan checkpoint tuple.
+        for seed in 0..19 {
+            doc.layers.push(noise_layer("Pasted pixels", fmt, doc.bounds(), 101 + seed, 0.2));
+        }
+        let mut insertion = doc.layers.len();
+        let mut upper = noise_layer("Styled upper panel", fmt, Rect::new(130, 70, 230, 140), 59, 0.3);
+        upper.effects.items = vec![Effect::default_drop_shadow()];
+        doc.layers.push(upper);
+        doc.layers.push(Layer::new("Upper adjustment", LayerContent::Adjustment(Adjustment::Invert)));
+        let mut exact = |doc: &Document, label: &str| {
+            let (actual, stats) = photocraft_gpu::render_to_vec_stats(&mut g.comp, &g.device, &g.queue, doc, doc.bounds()).unwrap();
+            let expected = render_to_vec(&mut uncached, &g.device, &g.queue, doc, doc.bounds()).unwrap();
+            assert_eq!(actual, expected, "{depth:?}: {label} cached/uncached native output");
+            let cpu = photocraft_compose::render(doc, doc.bounds());
+            let (difference, pixel) = worst_diff(&cpu.px, &actual);
+            assert!(difference <= TOL, "{depth:?}: {label} CPU/native GPU premultiplied difference {difference} at pixel{pixel}");
+            stats
+        };
+        exact(&doc, "initial nineteen plain passes");
+        // The final first-paste fixture grows nineteen to twenty passes. Its
+        // captured tail must survive the first repeat's next insertion too.
+        doc.layers.insert(insertion, doc.layers[insertion - 1].duplicate());
+        exact(&doc, "first paste to twenty plain passes");
+        insertion += 1;
+        for sample in 0..3 {
+            doc.layers.insert(insertion, doc.layers[insertion - 1].duplicate());
+            let pasted = exact(&doc, "paste");
+            assert!(pasted.prefix_hits > 0, "{depth:?} sample{sample}: repeated paste lost the shared lower boundary: {pasted:?}");
+            doc.layers.remove(insertion);
+            let undone = exact(&doc, "undo");
+            assert!(undone.prefix_hits > 0, "{depth:?} sample{sample}: undo should reuse unchanged lower pixels: {undone:?}");
+        }
+    }
+}
+
 /// A small refresh above the cache moves only the chunk it renders, which then holds just that
 /// rectangle; the other chunks keep serving their lower checkpoint, and a full render afterwards
 /// resumes each chunk from its own (#5286). Every render matches an uncached compositor exactly.
@@ -1169,6 +1221,38 @@ fn duplicates_copy_their_source_texture() {
     };
     d.layers.push(dup3);
     check(&mut g, &d, "duplicate missing a tile");
+}
+
+#[test]
+fn sparse_cropped_donors_preserve_copy_on_write_pixels_at_each_depth() {
+    let Some(mut g) = gpu() else { return };
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        let fmt = PixelFormat::new(ColorMode::Rgb, depth, true);
+        let mut d = Document::new("Sparse donors", Size::new(159, 128), ColorMode::Rgb, depth);
+        let mut source = noise_layer("source", fmt, Rect::new(5, 7, 151, 111), 391, 0.25);
+        let mut sparse = photocraft_raster::Surface::new(fmt);
+        sparse.put_tiles(source.surface().unwrap().tiles().filter(|(coord, _)| !(coord.tx == 1 && coord.ty == 0)).map(|(coord, tile)| (*coord, tile.clone())));
+        *source.surface_mut().unwrap() = sparse;
+        d.layers.push(source);
+        check(&mut g, &d, "sparse source");
+        let mut copy = d.layers[0].duplicate();
+        copy.blend = BlendMode::Difference;
+        d.layers.push(copy);
+        let stats = diff_rect(&mut g, &d, d.bounds(), "sparse fully shared donor").unwrap();
+        assert_eq!(stats.tiles_uploaded, 0, "{depth:?}: {stats:?}");
+        assert!(stats.tiles_shared > 0, "{depth:?}: {stats:?}");
+        // Filling an originally absent tile must override the copied donor hole;
+        // a simultaneous source COW edit must not leak into the duplicate.
+        d.layers[1].surface_mut().unwrap().fill_rect(Rect::new(70, 20, 78, 28), &[0.9, 0.1, 0.3, 0.8]);
+        d.layers[0].surface_mut().unwrap().fill_rect(Rect::new(10, 75, 18, 83), &[0.2, 0.8, 0.4, 0.6]);
+        check(&mut g, &d, "sparse donor independent edits");
+        // Undo removes that resident; a fresh layer can still use the source,
+        // including when the requested rectangle crops the page and tile edges.
+        d.layers.pop();
+        check(&mut g, &d, "sparse duplicate removed");
+        d.layers.push(d.layers[0].duplicate());
+        diff_rect(&mut g, &d, Rect::new(31, 19, 139, 100), "fresh sparse cropped duplicate").unwrap();
+    }
 }
 
 /// #2422: a mask whose default pixel changes without touching its tiles (Invert on a sparse mask)
@@ -2249,6 +2333,45 @@ fn as_text(src: Layer) -> Layer {
 /// Held by tests that change the process-wide text gamma, and by tests with type layers that
 /// run long enough to see such a change.
 static TEXT_GAMMA: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[test]
+fn prefix_invalidates_when_text_gamma_changes_without_document_edits() {
+    let _gamma = TEXT_GAMMA.lock().unwrap_or_else(|e| e.into_inner());
+    struct RestoreGamma(f32);
+    impl Drop for RestoreGamma {
+        fn drop(&mut self) {
+            photocraft_compose::psblend::set_text_gamma(self.0);
+        }
+    }
+    let _restore = RestoreGamma(photocraft_compose::psblend::text_gamma());
+    let Some(mut g) = gpu() else { return };
+    let mut uncached = Compositor::new(&g.device);
+    uncached.set_composite_cache_budget(0);
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        let mut doc = Document::new("Text gamma context", Size::new(64, 48), ColorMode::Rgb, depth);
+        doc.layers.push(noise_layer("Backdrop", doc.pixel_format(), doc.bounds(), 1, 0.3));
+        doc.layers.push(as_text(noise_layer("Text", doc.pixel_format(), Rect::new(4, 3, 60, 45), 21, 0.0)));
+        doc.layers.push(Layer::new("Above cached text", LayerContent::Adjustment(Adjustment::Invert)));
+        let unchanged = doc.clone();
+        for gamma in [photocraft_compose::psblend::TEXT_GAMMA, 1.8, 1.0, photocraft_compose::psblend::TEXT_GAMMA] {
+            photocraft_compose::psblend::set_text_gamma(gamma);
+            for repeated in [false, true] {
+                let (actual, stats) = photocraft_gpu::render_to_vec_stats(&mut g.comp, &g.device, &g.queue, &doc, doc.bounds()).unwrap();
+                let expected = render_to_vec(&mut uncached, &g.device, &g.queue, &doc, doc.bounds()).unwrap();
+                assert!(actual == expected, "{depth:?} gamma{gamma}: cached pixels differ from zero-budget rendering");
+                let cpu = photocraft_compose::render(&doc, doc.bounds());
+                let (difference, pixel) = worst_diff(&cpu.px, &actual);
+                assert!(difference <= TOL, "{depth:?} gamma{gamma}: CPU difference {difference} at pixel{pixel}");
+                if repeated {
+                    assert!(stats.prefix_hits > 0, "unchanged gamma should retain useful text prefixes: {stats:?}");
+                } else {
+                    assert_eq!(stats.prefix_hits, 0, "changed render context must discard prior text pixels");
+                }
+                assert_eq!(doc, unchanged);
+            }
+        }
+    }
+}
 
 #[test]
 fn type_layers_blend_with_text_gamma() {

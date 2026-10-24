@@ -8,6 +8,15 @@
 use crate::{PhotocraftApp, notices};
 use photocraft_engine::file_cmds::{is_template, untitled_name};
 
+/// Consume the native import's one-time path selection after installing its view.
+pub(crate) fn apply_initial_path(app: &mut PhotocraftApp) {
+    let selected =
+        app.session.active_mut().and_then(|st| st.initial_path_selection.take().and_then(|index| st.doc.paths.get(index).map(|path| path.name.clone())));
+    if let Some(name) = selected {
+        app.ui.selected_path = Some(name);
+    }
+}
+
 /// A request from the operating system, delivered by the platform shell through
 /// [`Services::os_events`](crate::Services::os_events).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -108,6 +117,11 @@ impl PhotocraftApp {
     /// Record that the active document was just opened from `path`: File › Save writes back to it
     /// (unless it's a template or derivative preview) and it goes to the top of Open Recent.
     pub(crate) fn opened_from(&mut self, path: &str) {
+        if let Some(st) = self.session.active_mut()
+            && st.source_read_only
+        {
+            st.protected_import_source = Some(path.to_string());
+        }
         if !is_template(path)
             && let Some(st) = self.session.active_mut()
             && !st.source_read_only
@@ -189,7 +203,12 @@ impl PhotocraftApp {
     pub(crate) fn show_if_open(&mut self, path: &str) -> bool {
         let canon = canonical(path);
         let same = |p: &str| same_file(p, path, canon.as_deref());
-        if let Some(i) = self.session.documents().iter().position(|d| d.path.as_deref().is_some_and(same)) {
+        if let Some(i) = self
+            .session
+            .documents()
+            .iter()
+            .position(|d| d.path.as_deref().is_some_and(same) || (d.source_read_only && d.protected_import_source.as_deref().is_some_and(same)))
+        {
             self.session.set_active(i);
             self.jobs.focus = None;
         } else if let Some(o) = self.jobs.opens.iter().find(|o| o.path.as_deref().is_some_and(|p| !is_template(p) && same(p))) {

@@ -45,6 +45,14 @@ fn has_raster(s: &Session) -> Enabled {
     }
 }
 
+fn has_matte_target(s: &Session) -> Enabled {
+    if matches!(active_layer(s)?.content, LayerContent::Raster(_) | LayerContent::Smart(_)) {
+        Ok(())
+    } else {
+        Err("the active layer has no editable native pixels".into())
+    }
+}
+
 fn has_raster_with_mask(s: &Session) -> Enabled {
     has_raster(s)?;
     if active_layer(s)?.mask.is_some() { Ok(()) } else { Err("the layer has no layer mask".into()) }
@@ -304,14 +312,44 @@ fn matting_defringe(s: &mut Session, p: &Value) -> Result<Value> {
     edit_rgba(s, "Defringe", 1, |px, r| defringe(px, r.width() as usize, r.height() as usize, width))
 }
 
+/// Existing native Remove Black/White Matte equation, shared by ordinary edits and Smart replay.
+fn remove_matte_pixel(q: &mut [f32; 4], white: bool) {
+    photocraft_algo::matting::remove_matte_pixel(q, white);
+}
+
+/// Native Remove Black Matte delegates to the shared ordinary native Surface operation.
+pub(crate) fn remove_black_matte_surface_in(src: &Surface, bounds: Rect, ctl: &photocraft_raster::Interrupt) -> Result<Surface> {
+    photocraft_algo::matting::remove_black_matte_with(src, bounds, ctl).map_err(|error| match error {
+        photocraft_algo::matting::Error::Cancelled => EngineError::Cancelled,
+        other => EngineError::Other(other.to_string()),
+    })
+}
+
 /// Remove Black / White Matte: un-premultiply colours that were composited over black or white.
 fn remove_matte(s: &mut Session, white: bool) -> Result<Value> {
+    if !white && matches!(active_layer(s).map(|layer| &layer.content), Ok(LayerContent::Smart(_))) {
+        let id = layer_param(s, &Value::Null)?;
+        return s.edit("Remove Black Matte", |doc, _| {
+            crate::commands::check_pixels_unlocked(doc, id)?;
+            let selection = doc.selection.clone();
+            crate::smart_cmds::add_smart_filter(
+                doc,
+                id,
+                photocraft_doc::SmartFilter {
+                    command: "layer.matting.removeBlackMatte".into(),
+                    params: json!({}),
+                    blend: BlendMode::Normal,
+                    opacity: 1.,
+                    visible: true,
+                },
+                selection.as_ref(),
+            )?;
+            Ok(Value::Null)
+        });
+    }
     edit_rgba(s, if white { "Remove White Matte" } else { "Remove Black Matte" }, 0, |px, _| {
-        for q in px.iter_mut().filter(|q| q[3] > 0.0 && q[3] < 1.0) {
-            let a = q[3];
-            for v in &mut q[..3] {
-                *v = if white { (*v - (1.0 - a)) / a } else { *v / a }.clamp(0.0, 1.0);
-            }
+        for q in px {
+            remove_matte_pixel(q, white);
         }
     })
 }
@@ -955,7 +993,7 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         spec!("layer.maskAllObjects", "Mask All Objects", ["Layer"], r##"{"layer":id?}"##, has_layer, mask_all_objects),
         spec!("layer.matting.defringe", "Defringe…", ["Layer", "Matting"], r##"{"width":1..200=1}"##, has_raster, matting_defringe),
-        spec!("layer.matting.removeBlackMatte", "Remove Black Matte", ["Layer", "Matting"], "{}", has_raster, |s, _| remove_matte(s, false)),
+        spec!("layer.matting.removeBlackMatte", "Remove Black Matte", ["Layer", "Matting"], "{}", has_matte_target, |s, _| remove_matte(s, false)),
         spec!("layer.matting.removeWhiteMatte", "Remove White Matte", ["Layer", "Matting"], "{}", has_raster, |s, _| remove_matte(s, true)),
         spec!(
             "layer.matting.colorDecontaminate",
@@ -1040,3 +1078,108 @@ pub fn specs() -> Vec<CommandSpec> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod native_matte_tests {
+    use super::*;
+    use photocraft_color::{PixelFormat, SampleType};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn native_matte_checked_rows_keep_all_depths_models_alpha_and_cancel_atomically() {
+        for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab] {
+            for sample in SampleType::ALL {
+                let fmt = PixelFormat { mode, sample, alpha: true };
+                let mut surface = Surface::new(fmt);
+                let mut encoded = [0.; 8];
+                let count = from_rgba_into(&fmt, [0.2, 0.1, 0.05, 0.5], &mut encoded);
+                surface.fill_rect(Rect::new(0, 0, 3, 3), &encoded[..count]);
+                let source = surface.clone();
+                let out = remove_black_matte_surface_in(&surface, Rect::new(0, 0, 3, 3), &photocraft_raster::Interrupt::NONE).unwrap();
+                let mut rgba = to_rgba(&fmt, &source.pixel(1, 1));
+                remove_matte_pixel(&mut rgba, false);
+                let count = from_rgba_into(&fmt, rgba, &mut encoded);
+                let mut expected = Surface::new(fmt);
+                expected.fill_rect(Rect::new(0, 0, 1, 1), &encoded[..count]);
+                assert_eq!(out.pixel(1, 1), expected.pixel(0, 0), "{mode:?} {sample:?}");
+                assert_eq!(surface, source);
+                let checks = AtomicUsize::new(0);
+                let cancel = || checks.fetch_add(1, Ordering::Relaxed) > 1;
+                assert!(remove_black_matte_surface_in(&surface, Rect::new(0, 0, 3, 3), &photocraft_raster::Interrupt::new(&cancel, &|_| {})).is_err());
+                assert_eq!(surface, source);
+            }
+        }
+    }
+
+    #[test]
+    fn smart_remove_black_matte_refuses_direct_and_inherited_pixel_locks_atomically() {
+        for inherited in [false, true] {
+            for all in [false, true] {
+                let mut session = Session::new();
+                session.execute("file.new", json!({"width":2,"height":2,"depth":32})).unwrap();
+                session.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+                let id = session.active().unwrap().active_layer.unwrap();
+                session
+                    .edit("locked fixture", |doc, _| {
+                        let layer = doc.layers.remove(0);
+                        if inherited {
+                            let mut group = Layer::group("locked parent", vec![layer]);
+                            if all {
+                                group.locks.all = true;
+                            } else {
+                                group.locks.pixels = true;
+                            }
+                            doc.layers.push(group);
+                        } else {
+                            doc.layers.push(layer);
+                            let locks = &mut doc.layer_mut(id).unwrap().locks;
+                            if all {
+                                locks.all = true;
+                            } else {
+                                locks.pixels = true;
+                            }
+                        }
+                        Ok(())
+                    })
+                    .unwrap();
+                let before = session.active().unwrap().doc.clone();
+                let history = session.active().unwrap().history.past_len();
+                let active = session.active().unwrap().active_layer;
+                assert!(session.execute("layer.matting.removeBlackMatte", json!({})).is_err());
+                assert!(std::sync::Arc::ptr_eq(&before, &session.active().unwrap().doc));
+                assert_eq!(*before, *session.active().unwrap().doc);
+                assert_eq!(session.active().unwrap().history.past_len(), history);
+                assert_eq!(session.active().unwrap().active_layer, active);
+            }
+        }
+    }
+    #[test]
+    fn existing_native_remove_black_matte_is_editable_smart_filter_with_undo_and_reopen() {
+        let mut session = Session::new();
+        session.execute("file.new", json!({"width":3,"height":3,"depth":32})).unwrap();
+        let id = session.active().unwrap().active_layer.unwrap();
+        session
+            .edit("test pixels", |doc, _| {
+                doc.layer_mut(id).unwrap().surface_mut().unwrap().fill_rect(Rect::new(0, 0, 3, 3), &[0.2, 0.1, 0.05, 0.5]);
+                Ok(())
+            })
+            .unwrap();
+        session.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        let before = session.active().unwrap().doc.clone();
+        session.execute("layer.matting.removeBlackMatte", json!({})).unwrap();
+        let changed = session.active().unwrap().doc.clone();
+        let LayerContent::Smart(sm) = &changed.layers[0].content else { panic!("native editable contents") };
+        assert_eq!(sm.smart_filters.last().unwrap().command, "layer.matting.removeBlackMatte");
+        let pixels = crate::smart_cmds::render(&changed, sm).unwrap().unwrap();
+        assert!((pixels.pixel(1, 1)[0] - 0.4).abs() < 0.01);
+        assert!((pixels.pixel(1, 1)[3] - 0.5).abs() < 0.001);
+        session.undo();
+        assert_eq!(*session.active().unwrap().doc, *before);
+        session.redo();
+        assert_eq!(*session.active().unwrap().doc, *changed);
+        let saved = photocraft_format::save_to_bytes(&changed, &Default::default()).unwrap();
+        let reopened = photocraft_format::load_from_bytes(&saved).unwrap();
+        let LayerContent::Smart(sm) = &reopened.layers[0].content else { panic!() };
+        assert_eq!(pixels.pixel(1, 1), crate::smart_cmds::render(&reopened, sm).unwrap().unwrap().pixel(1, 1));
+    }
+}

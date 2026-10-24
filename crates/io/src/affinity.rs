@@ -49,7 +49,7 @@ pub(crate) fn import(name: &str, bytes: &[u8]) -> Result<ImportResult, IoError> 
             let mut document = b.doc;
             crate::text_import::prepare(&mut document, None);
             // Save never writes back over the Affinity file.
-            Ok(ImportResult { document, warnings, source_read_only: true, preview_only: false })
+            Ok(ImportResult { initial_view: None, document, warnings, source_read_only: true, preview_only: false })
         }
         Err(native) => preview(name, bytes, &native),
     }

@@ -2,8 +2,7 @@
 //! Copy/Cut, Merge Visible, Auto Tone/Contrast/Color, Toggle Last State and Transform Again.
 
 use photocraft_color::{ColorMode, PixelFormat};
-use photocraft_doc::adjust::LevelsChannel;
-use photocraft_doc::{Adjustment, Document, Layer, LayerContent, LayerId};
+use photocraft_doc::{Document, Layer, LayerContent, LayerId};
 use photocraft_geom::Rect;
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
@@ -614,98 +613,13 @@ fn merge_visible(s: &mut Session) -> Result<Value> {
     Ok(Value::Null)
 }
 
-/// Histogram of a pixel layer (8-bit bins per channel: R, G, B) inside the selection.
-fn histograms(surf: &Surface, area: Rect) -> [[u64; 256]; 3] {
-    let mut h = [[0u64; 256]; 3];
-    let step = ((area.width() as u64 * area.height() as u64) / 4_000_000).max(1) as usize; // sample big images
-    let mut row = vec![[0u8; 4]; area.width() as usize];
-    for y in (area.y0..area.y1).step_by(step.isqrt().max(1)) {
-        surf.read_rgba8_into(Rect::new(area.x0, y, area.x1, y + 1), &mut row);
-        for p in row.iter().step_by(step.isqrt().max(1)) {
-            if p[3] == 0 {
-                continue;
-            }
-            for c in 0..3 {
-                h[c][p[c] as usize] += 1;
-            }
-        }
-    }
-    h
-}
-
-/// Black and white points with `clip` (fraction) clipped at each end.
-fn clip_points(h: &[u64; 256], clip: f64) -> (f32, f32) {
-    let total: u64 = h.iter().sum();
-    if total == 0 {
-        return (0.0, 1.0);
-    }
-    let lim = (total as f64 * clip) as u64;
-    let (mut acc, mut lo) = (0u64, 0usize);
-    while lo < 254 && acc + h[lo] <= lim {
-        acc += h[lo];
-        lo += 1;
-    }
-    let (mut acc, mut hi) = (0u64, 255usize);
-    while hi > lo + 1 && acc + h[hi] <= lim {
-        acc += h[hi];
-        hi -= 1;
-    }
-    (lo as f32 / 255.0, hi as f32 / 255.0)
-}
-
-fn median(h: &[u64; 256]) -> f32 {
-    let total: u64 = h.iter().sum();
-    let mut acc = 0;
-    for (i, v) in h.iter().enumerate() {
-        acc += v;
-        if acc * 2 >= total {
-            return i as f32 / 255.0;
-        }
-    }
-    0.5
-}
-
 /// Image › Auto Tone / Auto Contrast / Auto Color (0.1% clipping, Photoshop's defaults).
 fn auto_adjust(s: &mut Session, kind: &str) -> Result<Value> {
     let id = active_id(s)?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let surf = d.doc.layer(id).and_then(Layer::surface).ok_or(EngineError::Other("the active layer has no pixels".into()))?;
     let area = d.doc.selection.as_ref().map_or(d.doc.bounds(), |m| m.content_bounds()).intersect(&d.doc.bounds());
-    let h = histograms(surf, area);
-    let clip = 0.001;
-    let mut per = [LevelsChannel::default(), LevelsChannel::default(), LevelsChannel::default()];
-    match kind {
-        "contrast" => {
-            // Same points for all channels (preserves colour), from the combined histogram.
-            let mut all = [0u64; 256];
-            for c in &h {
-                for (a, v) in all.iter_mut().zip(c) {
-                    *a += v;
-                }
-            }
-            let (lo, hi) = clip_points(&all, clip);
-            for p in &mut per {
-                (p.in_black, p.in_white) = (lo, hi);
-            }
-        }
-        _ => {
-            for (c, p) in per.iter_mut().enumerate() {
-                (p.in_black, p.in_white) = clip_points(&h[c], clip);
-            }
-            if kind == "color" {
-                // Neutralise midtones: move each channel's median onto the average median.
-                let meds: Vec<f32> = (0..3).map(|c| median(&h[c])).collect();
-                let target = meds.iter().sum::<f32>() / 3.0;
-                for (c, p) in per.iter_mut().enumerate() {
-                    let t = ((meds[c] - p.in_black) / (p.in_white - p.in_black).max(1e-3)).clamp(0.02, 0.98);
-                    let want = ((target - p.in_black) / (p.in_white - p.in_black).max(1e-3)).clamp(0.02, 0.98);
-                    // out = t^(1/g) = want  →  g = ln t / ln want
-                    p.gamma = (t.ln() / want.ln()).clamp(0.1, 9.99);
-                }
-            }
-        }
-    }
-    let adj = Adjustment::Levels { master: LevelsChannel::default(), per_channel: per, space: Default::default(), black: LevelsChannel::default() };
+    let adj = crate::import_native_actions::adjustment(surf, area, kind, &crate::jobs::JobCtx::new())?;
     let label = match kind {
         "contrast" => "Auto Contrast",
         "color" => "Auto Color",

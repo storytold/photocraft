@@ -4037,3 +4037,39 @@ curves	Smooth	Wygładź
 	Grayscale Ramp	Pasek skali szarości
 	Current Colors	Bieżące kolory
 	Make Ramp Web Safe	Ogranicz pasek do kolorów internetowych
+
+# Historical import conversion report
+	Import Conversion Report	Raport konwersji przy imporcie
+	Import-time outcomes. Editing uses native PhotoCraft rules.	Wyniki z chwili importu. Edycja korzysta z natywnych reguł PhotoCraft.
+	A newer report format is retained. Its details cannot be displayed.	Zachowano raport w nowszym formacie. Nie można wyświetlić jego szczegółów.
+	No conversion report was recorded.	Nie zapisano raportu konwersji.
+	No entries on this page.	Brak wpisów na tej stronie.
+	Layer mask	Maska warstwy
+	Next	Dalej
+	Previous	Wstecz
+	Source item	Element źródłowy
+	{first}–{last} of {total}	{first}–{last} z {total}
+	Native equivalent	Natywny odpowiednik
+	Native approximation	Natywne przybliżenie
+	Retained, not applied	Zachowano, nie zastosowano
+	Nonessential data skipped	Pominięto nieistotne dane
+	Unknown outcome	Nieznany wynik
+	Native rules	Natywne reguły
+	Native capability limit	Ograniczenie natywnych funkcji
+	Conversion not implemented	Konwersja niezaimplementowana
+	Resource unavailable	Zasób niedostępny
+	Invalid optional data	Nieprawidłowe dane opcjonalne
+	Retention limit	Limit przechowywania
+	Precision conversion	Konwersja precyzji
+	Unknown reason	Nieznany powód
+	Native layer {id} (removed; historical reference)	Natywna warstwa {id} (usunięta; odwołanie historyczne)
+	Native layer: {name}	Natywna warstwa: {name}
+
+# Native filter parameter labels
+	Alpha Percentile	Percentyl alfa
+	Alpha Weighted	Ważone alfą
+	Color Percentile	Percentyl koloru
+	Connectivity	Spójność
+	Disc	Sąsiedztwo kołowe
+	Each	Każdy kanał
+	Value	Wartość

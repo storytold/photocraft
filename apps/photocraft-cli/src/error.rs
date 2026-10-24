@@ -7,6 +7,8 @@ use crate::actions::ActionsError;
 /// Why a subcommand failed: printed as `error: {e}`, exit 1.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum CliError {
+    #[error("the output is the import-only source; choose another native or export destination")]
+    ImportOnlySource,
     #[error(transparent)]
     Automation(#[from] AutomationError),
     #[error(transparent)]

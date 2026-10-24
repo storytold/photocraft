@@ -17,7 +17,7 @@ use std::time::Instant;
 use photocraft_color::{BlendMode, Color, ColorMode, SampleType};
 use photocraft_doc::{Document, Layer, Size};
 use photocraft_geom::Rect;
-use photocraft_gpu::{Compositor, DeviceHealth, GpuTiming, timing};
+use photocraft_gpu::{Compositor, DeviceHealth, GpuTiming, Stats, timing};
 
 /// Pixels in `r`, as the compositor counts them.
 fn area(r: Rect) -> u64 {
@@ -92,8 +92,13 @@ fn document(size: Size) -> Document {
 
 /// Render `region` and return (submit ms, waited-for wall ms, the measurement).
 fn measure(device: &wgpu::Device, queue: &wgpu::Queue, comp: &mut Compositor, doc: &Document, region: Rect) -> (f64, f64, Option<GpuTiming>) {
+    let (submit_ms, wall_ms, timing, _) = measure_with_stats(device, queue, comp, doc, region);
+    (submit_ms, wall_ms, timing)
+}
+
+fn measure_with_stats(device: &wgpu::Device, queue: &wgpu::Queue, comp: &mut Compositor, doc: &Document, region: Rect) -> (f64, f64, Option<GpuTiming>, Stats) {
     let t0 = Instant::now();
-    comp.render(device, queue, doc, region, |_, _| {}).expect("the document composites on the GPU");
+    let stats = comp.render(device, queue, doc, region, |_, _| {}).expect("the document composites on the GPU");
     let submit_ms = t0.elapsed().as_secs_f64() * 1000.0;
     let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
     let wall_ms = t0.elapsed().as_secs_f64() * 1000.0;
@@ -106,7 +111,7 @@ fn measure(device: &wgpu::Device, queue: &wgpu::Queue, comp: &mut Compositor, do
         }
         let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
     }
-    (submit_ms, wall_ms, timing)
+    (submit_ms, wall_ms, timing, stats)
 }
 
 #[test]
@@ -189,26 +194,18 @@ fn a_refresh_that_submits_several_times_is_one_measurement() {
     let full = Rect::from_xywh(0, 0, size.width, size.height);
 
     let _ = measure(&device, &queue, &mut comp, &doc, full);
-    let (submit_ms, wall_ms, timing) = measure(&device, &queue, &mut comp, &doc, full);
+    let (submit_ms, wall_ms, timing, stats) = measure_with_stats(&device, &queue, &mut comp, &doc, full);
     let t = timing.expect("a batched refresh is measured like any other");
     eprintln!("batched: {} command buffers, gpu {:.1} ms, submit {submit_ms:.1} ms, waited wall {wall_ms:.1} ms", t.spans, t.ms);
     assert_eq!(t.px, area(full));
-    if t.spans < 2 {
-        eprintln!("SKIP the sum: this refresh still fit one command buffer");
-        return;
-    }
+    assert!(stats.flushes >= 1, "the constrained workload must submit intermediate command buffers");
+    assert_eq!(u64::from(t.spans), stats.flushes as u64 + 1, "every intermediate submit and the final submit must contribute a span");
+    assert!(t.ms.is_finite() && t.ms > 0.0, "a batched hardware refresh must report finite positive execution time");
     assert!(t.ms <= wall_ms * 1.25, "summed gpu time {:.1} ms exceeds the whole waited-for refresh {wall_ms:.1} ms", t.ms);
-    // What this bound excludes is summing only the last command buffer. A correct sum measures
-    // ~85 % of the waited-for GPU time here; the flush thresholds split on accumulated work, so
-    // no single buffer of the several carries much over half of it, and timing only the last
-    // would land near 40 %. 0.6 sits between the two with room on both sides for a machine
-    // whose split is less even than this one's.
-    assert!(
-        t.ms >= (wall_ms - submit_ms) * 0.6,
-        "summed gpu time {:.1} ms is far below the {:.1} ms the refresh waited: is only the last command buffer timed?",
-        t.ms,
-        wall_ms - submit_ms
-    );
+    // Queue-level uploads precede our timestamped command buffers, and the final waited tail
+    // also includes driver scheduling and writeback. It is not a lower bound on their summed
+    // execution time. Exact aggregation of nonuniform spans, excluding inter-submit gaps, is
+    // pinned separately by timing::tests::mapped_nonuniform_spans_sum_through_collect_and_take.
 }
 
 #[test]

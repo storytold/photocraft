@@ -31,6 +31,7 @@ pub mod color_to_alpha_cmds;
 pub mod commands;
 pub mod comps_cmds;
 pub mod contour_lib_cmds;
+pub mod coverage_cmds;
 mod crop_fill;
 pub mod cutout_cmds;
 pub mod display_color;
@@ -57,12 +58,16 @@ pub mod gallery_cmds;
 pub mod gradient_fill_cmds;
 pub mod group_view_cmds;
 pub mod guide_layout;
+pub mod hdr_filter;
 pub mod hidden_target;
 pub mod history_cmds;
 pub mod history_menu_cmds;
 pub mod history_select_cmds;
 pub mod history_source_cmds;
 pub mod image_cmds;
+mod import_native_actions;
+pub mod import_prepare;
+pub mod import_report_cmds;
 pub mod inspect;
 pub mod installed_profiles;
 pub mod jobs;
@@ -212,8 +217,10 @@ pub struct DocState {
     /// Anchor of ⇧-click range selection (the last plainly or ⌘-clicked layer).
     pub layer_anchor: Option<LayerId>,
     pub path: Option<String>,
-    /// An Affinity document (or its preview) must not acquire the native source as its Save path.
+    /// An import-only document must not acquire its source as its Save path.
     pub source_read_only: bool,
+    /// Runtime-only writeback protection, never native document data or a resource permission.
+    pub protected_import_source: Option<String>,
     /// Increments on every change; UIs re-render when it moves.
     pub revision: u64,
     pub saved_revision: u64,
@@ -244,6 +251,9 @@ pub struct DocState {
     /// pixel coordinates. Per-document view state: discarded when the document closes, never saved
     /// to `.pcraft` or PSD, and not a history step.
     pub color_samplers: Vec<[f64; 2]>,
+    /// One-time Paths panel handoff from an import; the shell consumes it on installation.
+    /// Never serialized or reconstructed from historical conversion metadata.
+    pub initial_path_selection: Option<usize>,
     /// History panel snapshots, oldest first (`history.newSnapshot`, #2966). Kept for the
     /// session only, as in Photoshop: not history states, and not saved with the document.
     pub snapshots: Vec<history_cmds::Snapshot>,
@@ -281,6 +291,7 @@ impl DocState {
             layer_anchor: active_layer,
             path,
             source_read_only: false,
+            protected_import_source: None,
             revision: 1,
             saved_revision: 1,
             pcraft_cache: Default::default(),
@@ -294,6 +305,7 @@ impl DocState {
             show_only: None,
             floating: None,
             color_samplers: Vec::new(),
+            initial_path_selection: None,
             snapshots: Vec::new(),
             next_snapshot: 1,
             source_snapshot: None,
@@ -548,7 +560,7 @@ pub struct Session {
     /// Documents a background open decoded but held back until the user answers the profile
     /// prompt ([`ColorState::open_question`](color_cmds::ColorState::open_question)): `(id,
     /// document, source read-only)`. The shell takes them with [`Session::take_held_open`].
-    held_opens: Vec<(u64, Document, bool)>,
+    held_opens: Vec<(u64, Document, bool, Option<photocraft_io::NativeInitialView>)>,
     next_held_open: u64,
 }
 
@@ -644,18 +656,23 @@ impl Session {
     }
 
     /// Holds a decoded document back from opening (see `held_opens`); returns its id.
-    pub(crate) fn hold_open(&mut self, doc: Document, source_read_only: bool) -> u64 {
+    pub(crate) fn hold_open(&mut self, doc: Document, source_read_only: bool, initial_view: Option<photocraft_io::NativeInitialView>) -> u64 {
         self.next_held_open = self.next_held_open.wrapping_add(1);
-        self.held_opens.push((self.next_held_open, doc, source_read_only));
+        self.held_opens.push((self.next_held_open, doc, source_read_only, initial_view));
         self.next_held_open
     }
 
     /// Takes a document a background open held back for the profile prompt: the document and
     /// whether its source is read-only. `None` when there is no such document (already taken).
     pub fn take_held_open(&mut self, id: u64) -> Option<(Document, bool)> {
-        let i = self.held_opens.iter().position(|(h, _, _)| *h == id)?;
-        let (_, doc, read_only) = self.held_opens.remove(i);
-        Some((doc, read_only))
+        self.take_held_open_with_view(id).map(|(doc, read_only, _)| (doc, read_only))
+    }
+
+    /// Take a pending open with its validated, one-time native view handoff.
+    pub fn take_held_open_with_view(&mut self, id: u64) -> Option<(Document, bool, Option<photocraft_io::NativeInitialView>)> {
+        let i = self.held_opens.iter().position(|(h, _, _, _)| *h == id)?;
+        let (_, doc, read_only, view) = self.held_opens.remove(i);
+        Some((doc, read_only, view))
     }
 
     pub fn close(&mut self, index: usize) -> Option<DocState> {
