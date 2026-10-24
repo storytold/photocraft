@@ -762,6 +762,9 @@ pub struct PhotocraftApp {
     /// A live painting stroke started on the press (`canvas_view`): the drag egui recognises later,
     /// or the click, continues or ends it rather than starting another.
     press_stroke: bool,
+    /// A `ui.pointer` press reached the tool and is not released yet, so its moves and release
+    /// still go to the tool under a dialog opened since, as egui keeps a canvas drag (`control`).
+    pub(crate) control_press: bool,
     /// Position and pen pressure at the last stroke's endpoint: ⇧-click interpolates from them (#178, #2827).
     last_stroke_end: Option<(DocId, [f64; 3])>,
     /// Control+Alt-drag brush resize in progress (`brush_resize`, #231).
@@ -1054,6 +1057,7 @@ impl PhotocraftApp {
             held_erase: false,
             defer_live_stroke: false,
             press_stroke: false,
+            control_press: false,
             last_stroke_end: None,
             brush_resize: None,
             quick_pick: false,
