@@ -196,7 +196,8 @@ fn shape_paint_hex_input_keeps_partial_text_and_preserves_alpha() {
     for label in ["Fill color", "Stroke color"] {
         let mut app = app("rgb", 32);
         let original = [0.123456, 0.345678, 0.567891, 0.372819];
-        app.run("tools.setColors", json!({"foreground": original, "background": original})).unwrap();
+        app.ui.tool_options.shape_fill_color = original;
+        app.ui.tool_options.shape_stroke_color = original;
         let mut h = harness(app, false);
         h.get_by_label(label).click();
         h.run_steps(3);
@@ -209,23 +210,24 @@ fn shape_paint_hex_input_keeps_partial_text_and_preserves_alpha() {
             h.run_steps(1);
         }
         assert_eq!(h.get_by_label("#").value().as_deref(), Some("12AB"));
-        assert_eq!(h.state().session.tools.foreground, original);
-        assert_eq!(h.state().session.tools.background, original);
+        assert_eq!(h.state().ui.tool_options.shape_fill_color, original);
+        assert_eq!(h.state().ui.tool_options.shape_stroke_color, original);
         for ch in "EF".chars() {
             h.event(Event::Text(ch.to_string()));
             h.run_steps(1);
         }
         let want = [18.0 / 255.0, 171.0 / 255.0, 239.0 / 255.0, original[3]];
-        let tools = &h.state().session.tools;
-        assert_eq!(if label == "Fill color" { tools.foreground } else { tools.background }, want);
-        assert_eq!(if label == "Fill color" { tools.background } else { tools.foreground }, original);
+        let o = &h.state().ui.tool_options;
+        assert_eq!(if label == "Fill color" { o.shape_fill_color } else { o.shape_stroke_color }, want);
+        assert_eq!(if label == "Fill color" { o.shape_stroke_color } else { o.shape_fill_color }, original);
+        assert_eq!(h.state().session.tools.foreground, [0.0, 0.0, 0.0, 1.0], "the foreground is left alone");
         // An invalid/multi-byte value leaves the selected paint untouched.
         h.key_press_modifiers(Modifiers::COMMAND, Key::A);
         h.run_steps(1);
         h.event(Event::Text("颜色".into()));
         h.run_steps(2);
-        let tools = &h.state().session.tools;
-        assert_eq!(if label == "Fill color" { tools.foreground } else { tools.background }, want);
+        let o = &h.state().ui.tool_options;
+        assert_eq!(if label == "Fill color" { o.shape_fill_color } else { o.shape_stroke_color }, want);
         h.key_press(Key::Escape);
         h.run_steps(2);
         finish_shape(h.state_mut(), Tool::Rectangle, [20.0, 20.0], [100.0, 80.0], Modifiers::NONE);
@@ -239,7 +241,8 @@ fn shape_paint_hex_input_keeps_partial_text_and_preserves_alpha() {
 fn a_pasted_hex_colour_updates_the_selected_shape_and_undoes_once() {
     for label in ["Fill color", "Stroke color"] {
         let mut app = app("rgb", 32);
-        app.run("tools.setColors", json!({"foreground": [0.2, 0.3, 0.4, 0.6], "background": [0.5, 0.6, 0.7, 0.8]})).unwrap();
+        app.ui.tool_options.shape_fill_color = [0.2, 0.3, 0.4, 0.6];
+        app.ui.tool_options.shape_stroke_color = [0.5, 0.6, 0.7, 0.8];
         app.ui.tool_options.stroke_width = 3.0;
         finish_shape(&mut app, Tool::Rectangle, [20.0, 20.0], [100.0, 80.0], Modifiers::NONE);
         let original = shape(&app).clone();
@@ -290,8 +293,9 @@ fn picking_tool_colours_enables_paint_and_reaches_the_next_shape() {
     }
     assert!(h.state().ui.tool_options.shape_fill);
     assert_eq!(h.state().ui.tool_options.stroke_width, 3.0);
-    assert_eq!(h.state().session.tools.foreground, [0.91, 0.17, 0.32, 1.0]);
-    assert_eq!(h.state().session.tools.background, [0.12, 0.68, 0.93, 1.0]);
+    assert_eq!(h.state().ui.tool_options.shape_fill_color, [0.91, 0.17, 0.32, 1.0]);
+    assert_eq!(h.state().ui.tool_options.shape_stroke_color, [0.12, 0.68, 0.93, 1.0]);
+    assert_eq!((h.state().session.tools.foreground, h.state().session.tools.background), ([0.0, 0.0, 0.0, 1.0], [1.0, 1.0, 1.0, 1.0]));
     finish_shape(h.state_mut(), Tool::Rectangle, [20.0, 20.0], [100.0, 80.0], Modifiers::NONE);
     assert_eq!(shape(h.state()).fill, Some(solid_paint([0.91, 0.17, 0.32, 1.0])));
     assert_eq!(shape(h.state()).stroke.as_ref().unwrap().paint, solid_paint([0.12, 0.68, 0.93, 1.0]));
@@ -485,7 +489,8 @@ fn options_bar_fill_swatch_recolours_the_shape_just_drawn() {
     h.run_steps(2);
     let edited = shape(h.state()).clone();
     assert_ne!(edited.fill, original.fill, "the Fill swatch recoloured the shape");
-    assert_eq!(edited.fill.as_ref().and_then(color_of), Some(h.state().session.tools.foreground), "and the next shape's fill");
+    assert_eq!(edited.fill.as_ref().and_then(color_of), Some(h.state().ui.tool_options.shape_fill_color), "and the next shape's fill");
+    assert_eq!(h.state().session.tools.foreground, [1.0, 0.0, 0.0, 1.0], "the foreground is left alone");
     assert_eq!(edited.stroke, original.stroke, "the stroke is untouched");
     assert_eq!(h.state().session.active().unwrap().history.past_len(), history + 1);
     h.state_mut().run("edit.undo", json!({})).unwrap();
@@ -512,4 +517,22 @@ fn arrow_down_at_zero_width_keeps_a_strokeless_shape_strokeless() {
         h.run_steps(3);
         assert_eq!(shape(h.state()).stroke.as_ref().map(|s| s.width), Some(1.0), "Properties={properties}");
     }
+}
+
+/// #6695: the shape tools' Fill and Stroke colours are their own, as in Photoshop: picking one
+/// leaves the foreground and background alone, and a new foreground leaves the tool's fill alone.
+#[test]
+fn shape_tool_paint_is_independent_of_foreground_and_background() {
+    let mut app = app("rgb", 8);
+    app.run("tools.setColors", json!({"foreground": "#204060", "background": "#c0d0e0"})).unwrap();
+    let fill = [0.75, 0.25, 0.5, 1.0];
+    let stroke = [0.125, 0.875, 0.375, 1.0];
+    set_tool_paint(&mut app, false, PaintChange::Color(fill)).unwrap();
+    set_tool_paint(&mut app, true, PaintChange::Color(stroke)).unwrap();
+    let colors = |app: &PhotocraftApp| (app.session.tools.foreground, app.session.tools.background);
+    assert_eq!(colors(&app), ([32.0 / 255.0, 64.0 / 255.0, 96.0 / 255.0, 1.0], [192.0 / 255.0, 208.0 / 255.0, 224.0 / 255.0, 1.0]));
+    app.run("tools.setColors", json!({"foreground": "#a0b0c0", "background": "#102030"})).unwrap();
+    finish_shape(&mut app, Tool::Rectangle, [20.0, 20.0], [100.0, 80.0], Modifiers::NONE);
+    assert_eq!(shape(&app).fill, Some(solid_paint(fill)), "a new foreground leaves the tool fill alone");
+    assert_eq!(shape(&app).stroke.as_ref().unwrap().paint, solid_paint(stroke));
 }

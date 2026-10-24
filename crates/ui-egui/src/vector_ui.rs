@@ -82,7 +82,7 @@ fn stroke_param(app: &PhotocraftApp) -> Value {
     }
     let mut p = o.shape_stroke.params();
     p["width"] = json!(o.stroke_width);
-    p["color"] = json!(app.session.tools.background);
+    p["color"] = json!(o.shape_stroke_color);
     p
 }
 
@@ -154,7 +154,8 @@ pub fn finish_shape(app: &mut PhotocraftApp, tool: Tool, start: [f64; 2], end: [
 }
 
 fn fill_param(app: &PhotocraftApp) -> Value {
-    if app.ui.tool_options.shape_fill { json!(app.session.tools.foreground) } else { Value::Null }
+    let o = &app.ui.tool_options;
+    if o.shape_fill { json!(o.shape_fill_color) } else { Value::Null }
 }
 
 /// Create a shape layer from `shape.create` geometry with the options bar's fill and stroke: the
@@ -179,8 +180,8 @@ fn shape_preview(app: &PhotocraftApp, tool: Tool, start: [f64; 2], end: [f64; 2]
     };
     Some(photocraft_doc::ShapeLayer {
         path,
-        fill: o.shape_fill.then(|| solid_paint(app.session.tools.foreground)),
-        stroke: (o.stroke_width > 0.0).then(|| o.shape_stroke.stroke(o.stroke_width, solid_paint(app.session.tools.background))),
+        fill: o.shape_fill.then(|| solid_paint(o.shape_fill_color)),
+        stroke: (o.stroke_width > 0.0).then(|| o.shape_stroke.stroke(o.stroke_width, solid_paint(o.shape_stroke_color))),
         ..Default::default()
     })
 }
@@ -3157,7 +3158,8 @@ mod tests {
         use egui::accesskit::Role;
         use egui_kittest::kittest::Queryable;
         let mut app = app();
-        app.run("tools.setColors", json!({"foreground": "#ff0000", "background": "#0000ff"})).unwrap();
+        app.ui.tool_options.shape_fill_color = [1.0, 0.0, 0.0, 1.0];
+        app.ui.tool_options.shape_stroke_color = [0.0, 0.0, 1.0, 1.0];
         finish_shape(&mut app, Tool::Rectangle, [20.0, 20.0], [120.0, 100.0], Default::default());
         let shape = |app: &PhotocraftApp| {
             let st = app.session.active().unwrap();
@@ -3221,7 +3223,8 @@ mod tests {
         use egui::accesskit::Role;
         use egui_kittest::kittest::Queryable;
         let mut app = app();
-        app.run("tools.setColors", json!({"foreground": "#ff0000", "background": "#0000ff"})).unwrap();
+        app.ui.tool_options.shape_fill_color = [1.0, 0.0, 0.0, 1.0];
+        app.ui.tool_options.shape_stroke_color = [0.0, 0.0, 1.0, 1.0];
         finish_shape(&mut app, Tool::Rectangle, [20.0, 20.0], [120.0, 100.0], Default::default());
         let shape = |app: &PhotocraftApp| {
             let st = app.session.active().unwrap();

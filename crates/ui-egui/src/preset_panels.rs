@@ -996,10 +996,10 @@ pub fn shapes_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
 }
 
+/// The tool's fill as an RGBA array, alpha included, as the Shape tool sends it (`vector_ui`).
 fn shape_fill(app: &PhotocraftApp) -> Value {
-    let f = app.session.tools.foreground;
-    let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
-    if app.ui.tool_options.shape_fill { json!(format!("#{:02x}{:02x}{:02x}", q(f[0]), q(f[1]), q(f[2]))) } else { Value::Null }
+    let o = &app.ui.tool_options;
+    if o.shape_fill { json!(o.shape_fill_color) } else { Value::Null }
 }
 
 /// Options-bar shape picker for the Custom Shape tool.
@@ -1463,6 +1463,20 @@ mod tests {
         select_tool_preset(&mut app, &name);
         assert!(app.ui.tool_options.sample_all.blur);
         assert!(app.ui.tool_options.sample_all.magic_wand, "the Magic Wand's Sample All Layers is not Blur's");
+    }
+
+    /// #9176 review: a shape placed from the Shapes panel takes the tool's fill with its alpha,
+    /// as one drawn with the Shape tool does.
+    #[test]
+    fn a_shapes_panel_preset_keeps_the_tool_fill_alpha() {
+        let (mut app, _) = app();
+        app.ui.tool_options.shape_fill = true;
+        app.ui.tool_options.shape_fill_color = [1.0, 0.0, 0.0, 0.5];
+        let fill = shape_fill(&app);
+        app.run("shape.presets.place", json!({"preset": "Heart", "rect": [10, 10, 30, 20], "fill": fill})).unwrap();
+        let d = app.session.active().unwrap();
+        let photocraft_doc::LayerContent::Shape(sh) = &d.doc.layer(d.active_layer.unwrap()).unwrap().content else { panic!("a shape layer") };
+        assert_eq!(sh.fill, Some(photocraft_doc::Fill::Solid(photocraft_doc::Color::rgba(1.0, 0.0, 0.0, 0.5))));
     }
 
     #[test]

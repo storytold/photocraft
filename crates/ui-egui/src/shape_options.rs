@@ -39,7 +39,7 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
     let o = &mut app.ui.tool_options;
     let target = selected_shape(&app.session);
     // Fill and Stroke edit the selected shape layer too (#3347), and still set the next shape's.
-    let (fg, bg) = (app.session.tools.foreground, app.session.tools.background);
+    let (fg, bg) = (o.shape_fill_color, o.shape_stroke_color);
     let (mut has_fill, fill, stroke) = match &target {
         Some(s) => (s.fill.is_some(), s.fill.clone(), s.stroke.clone()),
         None => (o.shape_fill, o.shape_fill.then(|| solid(fg)), (o.stroke_width > 0.0).then(|| o.shape_stroke.stroke(o.stroke_width, solid(bg)))),
@@ -159,9 +159,15 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
 }
 
 /// Tool-bar paint changes affect the next shape; Properties edits the selected shape instead.
+/// The tool keeps its own colours: the foreground and background colours are left alone (#6695).
 pub(crate) fn set_tool_paint(app: &mut PhotocraftApp, stroke: bool, change: PaintChange) -> Result<(), String> {
     if let PaintChange::Color(color) = change {
-        app.run("tools.setColors", if stroke { json!({"background": color}) } else { json!({"foreground": color}) })?;
+        let o = &mut app.ui.tool_options;
+        if stroke {
+            o.shape_stroke_color = color;
+        } else {
+            o.shape_fill_color = color;
+        }
     }
     if stroke {
         app.ui.tool_options.stroke_width = if change == PaintChange::None { 0.0 } else { enabled_stroke_width(app.ui.tool_options.stroke_width) };

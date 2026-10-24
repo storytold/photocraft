@@ -211,7 +211,7 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
         Tool::CurvaturePen => reset!(vector_mode),
         Tool::FreeformPen => reset!(vector_mode, curve_fit),
         Tool::Rectangle | Tool::EllipseShape | Tool::Triangle | Tool::Polygon | Tool::Line | Tool::CustomShape => {
-            reset!(vector_mode, shape_fill, stroke_width, shape_stroke, corner_radius, polygon_sides, line_weight)
+            reset!(vector_mode, shape_fill, shape_fill_color, stroke_width, shape_stroke_color, shape_stroke, corner_radius, polygon_sides, line_weight)
         }
         Tool::ColorSampler
         | Tool::Ruler
