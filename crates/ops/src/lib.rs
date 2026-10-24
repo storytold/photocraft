@@ -402,10 +402,10 @@ impl History {
     /// beyond it unseen (#4530). The most recent state is still always kept.
     pub fn trim_with(&mut self, current: &Document, pinned: &[&Document]) -> usize {
         // While Clear History can be undone, the cleared states are what history holds: the
-        // oldest of them go first, as the list's would.
-        let (undo, redo) = match &mut self.cleared {
-            Some(c) => (&mut c.undo, &c.redo),
-            None => (&mut self.undo, &self.redo),
+        // oldest of them go first, as the list's would. The source set before it stays pinned.
+        let (undo, redo, brush_source) = match &mut self.cleared {
+            Some(c) => (&mut c.undo, &c.redo, c.brush_source),
+            None => (&mut self.undo, &self.redo, self.brush_source),
         };
         if self.max_bytes == 0 || undo.len() <= 1 {
             return 0;
@@ -439,7 +439,7 @@ impl History {
         }
         // The History Brush's source is kept whatever its age, so its own tiles come first; the
         // newest states then fill what remains of the budget (the most recent one always).
-        let source = self.brush_source.and_then(|id| undo.iter().position(|s| s.id == id));
+        let source = brush_source.and_then(|id| undo.iter().position(|s| s.id == id));
         if let Some(state) = source.and_then(|i| undo.get(i)) {
             total = total.saturating_add(tile_bytes(&state.doc, &mut seen));
         }
@@ -681,6 +681,31 @@ mod tests {
         assert_eq!(h.row_doc(0, &cur).unwrap().name, "b");
         cur = h.undo(cur).unwrap().0;
         assert_eq!((h.brush_source(), h.row_doc(1, &cur).unwrap().name.as_str()), (Some(1), "a"));
+    }
+
+    /// The byte budget keeps the source set before Clear History among the cleared states, so
+    /// Undo Clear History brings it back as the History Brush's source.
+    #[test]
+    fn byte_budget_keeps_the_brush_source_of_the_cleared_states() {
+        let mut h = History::new(50);
+        let mut cur = Arc::new(base());
+        for i in 0..5 {
+            edit(&mut h, &mut cur, &format!("paint {i}"), |d| {
+                let id = d.layers[0].id;
+                d.layer_mut(id).unwrap().surface_mut().unwrap().write_pixel(1, 1, &[i as f32 / 8.0, 0.0, 0.0, 1.0]);
+            });
+        }
+        assert!(h.set_brush_source(1));
+        let source = h.state(1).unwrap();
+        assert!(h.clear_states());
+        h.max_bytes = 1;
+        assert_eq!(h.trim(&cur), 3);
+        assert_counter(&h, &cur);
+        assert!(h.is_cleared() && h.past_len() == 0, "the list stays cleared");
+        cur = h.undo(cur).unwrap().0;
+        assert_eq!(h.entries(), ["paint 0", "paint 3", "paint 4"], "the source is kept with the last step");
+        assert_eq!(h.brush_source(), Some(0));
+        assert!(Arc::ptr_eq(&h.row_doc(0, &cur).unwrap(), &source), "the History Brush paints from the same state");
     }
 
     #[test]
