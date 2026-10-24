@@ -108,7 +108,7 @@ Artwork shown in the screenshots (all public domain, via Wikimedia Commons; deta
 
 ## Test data (not committed, not shipped)
 
-`corpus/` is gitignored and no test fixtures are committed to the repository.
+`corpus/` is gitignored and no other test fixtures are committed to the repository.
 `cargo xtask corpus --all` fetches every corpus at the pinned commits in `xtask/src/corpus_pins.rs`
 and verifies each file against the sha256 lists in `xtask/*.sha256`, with the upstream licence
 next to the files:
@@ -117,6 +117,7 @@ next to the files:
 |---|---|---|---|---|
 | `corpus/photoshop/` (256 PSDs) | Photoshop oracle corpus: smart filters, layer-style effects, type, adjustments in every mode and depth | PhotoCraft contributors (authored with Adobe Photoshop 2026 by a script) | [https://github.com/storytold/photocraft-corpus](https://github.com/storytold/photocraft-corpus) (`photoshop/`, with its generator and README) | MIT OR Apache-2.0 |
 | `corpus/gimp/` (28 files, 251 KB) | GIMP XCF oracles: 40×30 procedural layers written by GIMP 3.2.6 through the corpus generator `tools/gimp-xcf/xcf_fixtures.py`, each with GIMP's merged rendering as a PNG | PhotoCraft contributors (authored with GIMP 3.2.6 by a script) | [https://github.com/storytold/photocraft-corpus](https://github.com/storytold/photocraft-corpus) (`gimp/`, with its generator and README) | MIT OR Apache-2.0 |
+| `corpus/jxl/` (13 files, 7 KB) | JPEG XL oracles: 12×9 procedural images encoded with libjxl's `cjxl` 0.7 by the corpus generator `tools/jxl-fixtures/jxl_fixtures.py`, plus the source JPEG of two of them | PhotoCraft contributors (encoded with libjxl's `cjxl` by a script) | [https://github.com/storytold/photocraft-corpus](https://github.com/storytold/photocraft-corpus) (`jxl/`, with its generator and README) | MIT OR Apache-2.0 |
 | `corpus/psd-tools/` (309 files) | psd-tools test set | Kota Yamaguchi and contributors | [psd-tools `tests/psd_files`](https://github.com/psd-tools/psd-tools/tree/main/tests/psd_files) | MIT, Copyright (c) 2019 Kota Yamaguchi |
 | `corpus/psd/` (170 files) | Small selection of the psd-tools and ag-psd test files | Kota Yamaguchi; Agamnentzar | psd-tools (above) and [ag-psd `test/`](https://github.com/Agamnentzar/ag-psd/tree/master/test) | MIT (both) |
 | `corpus/heif/` (9 files, 0.1 MB) | HEIC/HEIF test files: `heic-rs/` checkerboards, RGB strips and a grid-tiled photo with EXIF and XMP (synthetic pixels encoded by macOS `sips`, each `.ref.png` Apple's decode); `pillow-heif/` the 10-bit RGBA `RGBA_10__29x100.heif` and its source `RGBA_16__29x100.png` | Thomas Braun (heic-rs); Pillow-Heif contributors | [heic-rs `tests/fixtures`](https://github.com/tbraun96/heic-rs/tree/main/tests/fixtures), [pillow-heif `tests/images`](https://github.com/bigcat88/pillow_heif/tree/master/tests/images) | MIT OR Apache-2.0 (heic-rs); BSD-3-Clause (pillow-heif) |

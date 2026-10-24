@@ -27,17 +27,17 @@ commands:
                   one per optional web feature)
   test            workspace tests (cargo nextest when installed, else cargo test), then doctests
   ci              the CI gate: fmt --check, clippy -D warnings, layers, scorecard --check, tests
-                  (nextest --profile ci), panic_hunt, doctests and wasm, with --locked --features heif
+                  (nextest --profile ci), panic_hunt, doctests and wasm, with --locked --features heif,jxl
                   (stops at first failure), then the i18n-coverage report
-  corpus [--all | --pngsuite | --psd | --psd-tools | --pixls | --atn | --photoshop | --gimp] [--local] [--update-manifest]
+  corpus [--all | --pngsuite | --psd | --psd-tools | --pixls | --atn | --photoshop | --gimp | --jxl] [--local] [--update-manifest]
                   show where test corpora live and their pins (xtask/src/corpus_pins.rs), or fetch
                   them into corpus/ (pinned commits, sha256-verified; --all = every corpus but pixls,
-                  --photoshop/--gimp --local copy from ../photocraft-corpus or $PHOTOCRAFT_CORPUS_REPO)
+                  --photoshop/--gimp/--jxl --local copy from ../photocraft-corpus or $PHOTOCRAFT_CORPUS_REPO)
   test-corpus [-p <crate>]... [--changed] [--pixls] [--local] [-- <test args>]
                   fetch every corpus, then cargo test --release --features corpus on the corpus
                   crates; --changed runs only if psd/io/codecs/compose/gpu/text/format/raw changed;
                   --pixls (or -p raw) also fetches corpus/pixls and runs the raw corpus tests;
-                  --local takes corpus/photoshop and corpus/gimp from the photocraft-corpus authoring clone
+                  --local takes corpus/photoshop, corpus/gimp and corpus/jxl from the photocraft-corpus authoring clone
   stats [--exact] count tests and lines per crate (--exact: ask the test harness via `-- --list`)
   parity          Photoshop menu parity; rewrites docs/parity-checklist.md
   i18n-coverage   report UI translation coverage and the missing strings per registered language
@@ -216,9 +216,9 @@ fn cmd_test() -> Result<(), String> {
     run(c, &format!("cargo {tool} {}", TEST_TARGETS.join(" ")))
 }
 
-/// What the CI gate adds to every build: `--locked`, and the optional photocraft-heif crate that
-/// official builds open HEIC photos with.
-const GATE_ARGS: [&str; 4] = ["--workspace", "--locked", "--features", "heif"];
+/// What the CI gate adds to every build: `--locked`, and the optional photocraft-heif and photocraft-jxl crates
+/// that official builds open HEIC photos and JPEG XL images with.
+const GATE_ARGS: [&str; 4] = ["--workspace", "--locked", "--features", "heif,jxl"];
 
 /// The gate's tests. nextest's `ci` profile stops at the first failure and terminates hung tests
 /// (.config/nextest.toml). `panic_hunt` runs only the engine's `#[ignore]`d panic hunt (AGENTS.md
@@ -233,7 +233,18 @@ fn cmd_gate_tests(panic_hunt: bool) -> Result<(), String> {
     } else if panic_hunt {
         // `-- --ignored` across the workspace would run every ignored test, not only the hunt. The
         // engine has no `heif` feature of its own; it reaches the decoder through photocraft-io.
-        c.args(["test", "-p", "photocraft-engine", "--locked", "--features", "photocraft-io/heif", "--test", "panic_hunt", "--", "--ignored"]);
+        c.args([
+            "test",
+            "-p",
+            "photocraft-engine",
+            "--locked",
+            "--features",
+            "photocraft-io/heif,photocraft-io/jxl",
+            "--test",
+            "panic_hunt",
+            "--",
+            "--ignored",
+        ]);
     } else {
         eprintln!("note: cargo-nextest is not installed, running cargo test (cargo install cargo-nextest --locked)");
         c.arg("test").args(GATE_ARGS).args(&TEST_TARGETS[1..]);
@@ -271,7 +282,7 @@ fn cmd_ci() -> Result<(), String> {
             Box::new(|| {
                 let mut c = cargo();
                 c.arg("clippy").args(GATE_ARGS).args(["--all-targets", "--keep-going", "--", "-D", "warnings"]);
-                run(c, "cargo clippy --workspace --locked --features heif --all-targets --keep-going -- -D warnings")
+                run(c, "cargo clippy --workspace --locked --features heif,jxl --all-targets --keep-going -- -D warnings")
             }),
         ),
         ("layers", Box::new(cmd_layers)),
@@ -283,7 +294,7 @@ fn cmd_ci() -> Result<(), String> {
             Box::new(|| {
                 let mut c = cargo();
                 c.arg("test").args(GATE_ARGS).arg("--doc");
-                run(c, "cargo test --workspace --locked --features heif --doc")
+                run(c, "cargo test --workspace --locked --features heif,jxl --doc")
             }),
         ),
         ("wasm", Box::new(cmd_wasm)),

@@ -17,6 +17,10 @@ avif = ["image/avif"]
 # distributors choose it at build time; official builds and CI enable it (`--features heif` on the
 # apps). Without it HEIF files are still recognised and opening one is a clear "unsupported" error.
 heif = ["dep:photocraft-heif"]
+# JPEG XL decode via the optional photocraft-jxl crate (jxl-oxide, pure Rust). Off by default like
+# `heif`; official builds and CI enable it (`--features jxl` on the apps). Without it `.jxl` files
+# are still recognised and opening one is a clear "unsupported" error.
+jxl = ["dep:photocraft-jxl"]
 
 [dependencies]
 thiserror.workspace = true
@@ -32,6 +36,7 @@ zune-jpeg = "0.5"
 zune-core = "0.5"
 jpeg-encoder = "0.6"
 photocraft-heif = { path = "../heif", optional = true }
+photocraft-jxl = { path = "../jxl", optional = true }
 
 # Orientation is applied a band of rows per task on native; wasm stays single-threaded.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
