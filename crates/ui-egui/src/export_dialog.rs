@@ -90,7 +90,14 @@ fn remember(app: &mut PhotocraftApp, f: &Map<String, Value>) {
 }
 
 pub fn open(app: &mut PhotocraftApp) -> Result<u64, String> {
-    let st = app.session.active().ok_or("no document")?;
+    let size = app.session.active().ok_or("no document")?.doc.size;
+    open_sized(app, size.width, size.height)
+}
+
+/// The dialog with its size fields fitted to a `src_w` × `src_h` source: the document, or the
+/// layer Layer › Export As exports. Fitting the document first would replace a remembered pixel
+/// size the document can't take with the percent, even when the layer can take it.
+fn open_sized(app: &mut PhotocraftApp, src_w: u32, src_h: u32) -> Result<u64, String> {
     let mut f = Map::new();
     f.insert("__export".into(), json!(true));
     f.insert("__label".into(), json!("Export As"));
@@ -106,42 +113,54 @@ pub fn open(app: &mut PhotocraftApp) -> Result<u64, String> {
     f.insert("lockAspect".into(), json!(true));
     f.insert("profile".into(), json!("document"));
     f.insert("embedProfile".into(), json!(true));
-    f.insert("width".into(), json!(st.doc.size.width));
-    f.insert("height".into(), json!(st.doc.size.height));
-    f.insert("__w".into(), json!(st.doc.size.width));
-    f.insert("__h".into(), json!(st.doc.size.height));
+    f.insert("width".into(), json!(src_w));
+    f.insert("height".into(), json!(src_h));
+    f.insert("__w".into(), json!(src_w));
+    f.insert("__h".into(), json!(src_h));
     seed_remembered(app, &mut f);
-    let explicit = s(&f, "sizing") == "pixels" && f.contains_key("width") && f.contains_key("height");
-    if !explicit && let Ok(size) = resize_from_scale(f64::from(st.doc.size.width), f64::from(st.doc.size.height), n(&f, "scale", 100.0)) {
+    fit_size(&mut f, f64::from(src_w), f64::from(src_h));
+    Ok(app.ui.open_dialog(DialogKind::Command, f))
+}
+
+/// The size fields for exporting a `src_w` × `src_h` source. A remembered percent scales it.
+/// Remembered exact pixels with Constrain proportions keep their width and take the height from
+/// this source, as ticking the checkbox does: the last export's proportions would stretch an
+/// image of another shape (#8738). Unlinked, the exact pixels are the size the user asked for.
+/// A linked width this source can't reach within the Scale field's 1..=1000 % falls back to the
+/// remembered percent.
+fn fit_size(f: &mut Map<String, Value>, src_w: f64, src_h: f64) {
+    if s(f, "sizing") == "pixels" && f.contains_key("width") && f.contains_key("height") {
+        if !f.get("lockAspect").and_then(Value::as_bool).unwrap_or(true) {
+            return;
+        }
+        if let Ok(size) = resize_from_side(src_w, src_h, n(f, "width", src_w.max(1.0)), n(f, "height", src_h.max(1.0)), true, true)
+            && (1.0..=1000.0).contains(&size.scale)
+        {
+            write_size(f, size, "pixels");
+            return;
+        }
+    }
+    if let Ok(size) = resize_from_scale(src_w, src_h, n(f, "scale", 100.0)) {
         f.insert("width".into(), json!(size.width));
         f.insert("height".into(), json!(size.height));
-        if (n(&f, "scale", 100.0) - size.scale).abs() > 1e-9 {
+        if (n(f, "scale", 100.0) - size.scale).abs() > 1e-9 {
             f.insert("scale".into(), json!(size.scale));
         }
         f.insert("sizing".into(), json!("scale"));
     }
-    Ok(app.ui.open_dialog(DialogKind::Command, f))
 }
 
 /// Layer › Export As…: the same dialog for just the active layer (trimmed to its pixels).
 pub fn open_layer(app: &mut PhotocraftApp, layer: photocraft_doc::LayerId) -> Result<u64, String> {
     let st = app.session.active().ok_or("no document")?;
     let ldoc = photocraft_engine::layer_menu_cmds::layer_document(&st.doc, layer).map_err(|e| e.to_string())?;
-    let id = open(app)?;
+    // The size fields follow the layer's trimmed size, so the dialog shows and edits the size
+    // the layer exports at.
+    let id = open_sized(app, ldoc.size.width, ldoc.size.height)?;
     if let Some(d) = app.ui.dialogs.iter_mut().find(|d| d.id == id) {
         let f = &mut d.fields;
         f.insert("__layer".into(), json!(layer.0));
         f.insert("__label".into(), json!(crate::i18n::fmt(crate::i18n::t("Export As: {name}"), &[("name", &ldoc.name)])));
-        f.insert("__w".into(), json!(ldoc.size.width));
-        f.insert("__h".into(), json!(ldoc.size.height));
-        // `open` seeded width and height from the document; in scale mode they follow the layer's
-        // trimmed size, so the dialog shows and edits the size the layer exports at. Exact pixels
-        // (sizing "pixels") are a size the user asked for, so those stay.
-        if s(f, "sizing") != "pixels"
-            && let Ok(size) = resize_from_scale(f64::from(ldoc.size.width), f64::from(ldoc.size.height), n(f, "scale", 100.0))
-        {
-            write_size(f, size, "scale");
-        }
     }
     Ok(id)
 }
@@ -342,17 +361,18 @@ pub(crate) fn resize_from_scale(src_w: f64, src_h: f64, scale: f64) -> Result<Ex
     Ok(ExportSize { width, height, scale })
 }
 
-/// An edited side. With `lock`, the other side keeps the source aspect; otherwise it stays.
+/// An edited side. With `lock`, the other side keeps the source aspect, never below 1 px (as
+/// [`scaled_size`]); otherwise it stays.
 pub(crate) fn resize_from_side(src_w: f64, src_h: f64, width: f64, height: f64, lock: bool, edited_width: bool) -> Result<ExportSize, String> {
     let src_w = src_w.max(1.0);
     let src_h = src_h.max(1.0);
     let (width, height) = if edited_width {
         let width = finite_px(width)?;
-        let height = if lock { finite_px(src_h * width / src_w)? } else { finite_px(height)? };
+        let height = if lock { finite_px((src_h * width / src_w).max(1.0))? } else { finite_px(height)? };
         (width, height)
     } else {
         let height = finite_px(height)?;
-        let width = if lock { finite_px(src_w * height / src_h)? } else { finite_px(width)? };
+        let width = if lock { finite_px((src_w * height / src_h).max(1.0))? } else { finite_px(width)? };
         (width, height)
     };
     let scale = if edited_width { width / src_w * 100.0 } else { height / src_h * 100.0 };
@@ -1196,8 +1216,9 @@ mod tests {
     }
 
     /// Layer › Export As opens with the layer's trimmed size, not the document's: `open` seeds the
-    /// size fields from the document, and the layer replaces them in scale mode. A remembered
-    /// percent scales the layer; remembered exact pixels stay the size the user asked for.
+    /// size fields to the document, and the layer refits them. A remembered percent scales the
+    /// layer; remembered exact pixels stay the size the user asked for, in the layer's proportions
+    /// when they are linked.
     #[test]
     fn layer_export_as_opens_with_the_layer_size() {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
@@ -1216,10 +1237,107 @@ mod tests {
         let f = &app.ui.dialog_mut(id).unwrap().fields;
         assert_eq!((f["width"].as_f64(), f["height"].as_f64()), (Some(5.0), Some(3.0)));
 
-        app.session.prefs.edit(|p| p.dialogs.insert(COMMAND.into(), json!({"sizing": "pixels", "width": 120, "height": 80})));
+        app.session.prefs.edit(|p| p.dialogs.insert(COMMAND.into(), json!({"sizing": "pixels", "width": 120, "height": 80, "lockAspect": false})));
         let id = open_layer(&mut app, layer).unwrap();
         let f = &app.ui.dialog_mut(id).unwrap().fields;
         assert_eq!((f["width"].as_f64(), f["height"].as_f64()), (Some(120.0), Some(80.0)));
+
+        // With Constrain proportions the remembered width stays and the height follows the layer.
+        app.session.prefs.edit(|p| p.dialogs.insert(COMMAND.into(), json!({"sizing": "pixels", "width": 50, "height": 80, "lockAspect": true})));
+        let id = open_layer(&mut app, layer).unwrap();
+        let f = &app.ui.dialog_mut(id).unwrap().fields;
+        assert_eq!((f["width"].as_f64(), f["height"].as_f64()), (Some(50.0), Some(30.0)));
+        assert_eq!(f["sizing"], "pixels");
+    }
+
+    /// #8738: a pixel size remembered from a landscape export, with Constrain proportions on,
+    /// keeps its width and takes the height from the portrait image being exported, as ticking
+    /// the checkbox does; unlinked, both sides are the exact size asked for. A recorded action
+    /// step is not the remembered size: it replays with exactly the pixels it was recorded with.
+    #[test]
+    fn a_remembered_pixel_size_keeps_this_images_proportions() {
+        let sizes = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let log = sizes.clone();
+        let services = crate::Services {
+            export: Some(Box::new(move |doc, _, _| {
+                log.borrow_mut().push((doc.size.width, doc.size.height));
+                Ok((Vec::new(), Vec::new()))
+            })),
+            write: Some(Box::new(|_, _| Ok(()))),
+            ..Default::default()
+        };
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        app.run("file.new", json!({"width": 30, "height": 40})).unwrap();
+        let landscape = json!({"sizing": "pixels", "width": 20, "height": 15, "scale": 50, "lockAspect": true});
+        app.session.prefs.edit(|p| p.dialogs.insert(COMMAND.into(), landscape.clone()));
+        let id = open(&mut app).unwrap();
+        let f = &app.ui.dialog_mut(id).unwrap().fields;
+        assert_eq!((f["width"].as_f64(), f["height"].as_f64()), (Some(20.0), Some(27.0)));
+        assert_eq!(f["sizing"], "pixels");
+        assert!((f["scale"].as_f64().unwrap() - 200.0 / 3.0).abs() < 1e-9, "{}", f["scale"]);
+
+        let mut unlinked = landscape.clone();
+        unlinked["lockAspect"] = json!(false);
+        app.session.prefs.edit(|p| p.dialogs.insert(COMMAND.into(), unlinked));
+        let id = open(&mut app).unwrap();
+        let f = &app.ui.dialog_mut(id).unwrap().fields;
+        assert_eq!((f["width"].as_f64(), f["height"].as_f64()), (Some(20.0), Some(15.0)));
+
+        app.session.prefs.edit(|p| p.dialogs.insert(COMMAND.into(), landscape.clone()));
+        let mut step = landscape;
+        step["path"] = json!("/x.png");
+        step["format"] = json!("png");
+        replay(&mut app, &step).unwrap();
+        assert_eq!(*sizes.borrow(), [(20, 15)]);
+    }
+
+    /// A remembered linked width this image can't take within the Scale field's 1..=1000 %
+    /// (2000 px from a 4000 px photo, on a 100 px image) falls back to the remembered percent.
+    #[test]
+    fn a_remembered_pixel_size_out_of_scale_falls_back_to_the_percent() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 100, "height": 100})).unwrap();
+        app.session
+            .prefs
+            .edit(|p| p.dialogs.insert(COMMAND.into(), json!({"sizing": "pixels", "width": 2000, "height": 1500, "scale": 50, "lockAspect": true})));
+        let id = open(&mut app).unwrap();
+        let f = &app.ui.dialog_mut(id).unwrap().fields;
+        assert_eq!((f["width"].as_f64(), f["height"].as_f64()), (Some(50.0), Some(50.0)));
+        assert_eq!((f["sizing"].as_str(), f["scale"].as_f64()), (Some("scale"), Some(50.0)));
+    }
+
+    /// A remembered linked width whose height rounds below one pixel keeps its width: the height
+    /// is one pixel, as the Scale field gives at the same 10 %, and not the remembered percent.
+    #[test]
+    fn a_remembered_pixel_width_keeps_a_one_pixel_height() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 1000, "height": 1})).unwrap();
+        app.session.prefs.edit(|p| p.dialogs.insert(COMMAND.into(), json!({"sizing": "pixels", "width": 100, "height": 75, "scale": 100, "lockAspect": true})));
+        let id = open(&mut app).unwrap();
+        let f = &app.ui.dialog_mut(id).unwrap().fields;
+        assert_eq!((f["width"].as_f64(), f["height"].as_f64()), (Some(100.0), Some(1.0)));
+        assert_eq!(f["sizing"], "pixels");
+        // The same for an edited height on a 1 × 1000 image.
+        let size = resize_from_side(1.0, 1000.0, 1.0, 100.0, true, false).unwrap();
+        assert_eq!((size.width, size.height), (1.0, 100.0));
+    }
+
+    /// Layer › Export As fits the remembered size to the layer, not to the document: a remembered
+    /// linked width the tall document can't take (800 px wide is 320 000 px high) still fits the
+    /// 100 × 10 layer at 800 × 80.
+    #[test]
+    fn a_layer_export_fits_the_remembered_size_to_the_layer() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 100, "height": 40000})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.run("select.rect", json!({"x": 0, "y": 0, "width": 100, "height": 10})).unwrap();
+        app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+        let layer = app.session.active().unwrap().active_layer.unwrap();
+        app.session.prefs.edit(|p| p.dialogs.insert(COMMAND.into(), json!({"sizing": "pixels", "width": 800, "height": 600, "scale": 50, "lockAspect": true})));
+        let id = open_layer(&mut app, layer).unwrap();
+        let f = &app.ui.dialog_mut(id).unwrap().fields;
+        assert_eq!((f["width"].as_f64(), f["height"].as_f64()), (Some(800.0), Some(80.0)));
+        assert_eq!(f["sizing"], "pixels");
     }
 
     /// Only the dialog's own settings are remembered: not the destination, the document size or
