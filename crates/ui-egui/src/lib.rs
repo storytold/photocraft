@@ -3128,7 +3128,14 @@ impl PhotocraftApp {
             return;
         }
         let (Some(set), Some(clip)) = (self.services.clipboard_set_image.as_mut(), self.session.clipboard.as_ref()) else { return };
-        let b = clip.bounds;
+        // Keep the engine's tight bounds for Photoshop-compatible internal paste,
+        // but preserve the selection frame when exporting pixels to other apps (#2598).
+        let b = self
+            .session
+            .active()
+            .and_then(|d| d.doc.selection.as_ref().map(|selection| selection.content_bounds().intersect(&d.doc.bounds())))
+            .filter(|frame| !frame.is_empty())
+            .unwrap_or(clip.bounds);
         if b.is_empty() {
             return;
         }
