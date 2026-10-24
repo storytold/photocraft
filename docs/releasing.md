@@ -28,7 +28,25 @@ are required: publishing a newer stable GitHub Release makes it discoverable.
 
 ## Cutting a release
 
-1. **Bump the version** on `main`. The only place it lives is `[workspace.package] version`
+1. **Refresh contributor credits on the latest `main`, before bumping the version.**
+   With a clean checkout and the official craftrules checkout available, run:
+
+   ```sh
+   python3 ../../craftrules/scripts/contributors.py .
+   python3 ../../craftrules/scripts/contributors.py --check .
+   ```
+
+   The first command regenerates and verifies; `--check` verifies `people.toml` only,
+   not snapshot freshness. Review the generated `contributors/contributors.json`: its
+   `repo` must identify PhotoCraft, `head` must identify the `main` commit just used,
+   and the contributor records and totals must match the generator's report. Commit
+   the original generated output through normal review before updating `release`.
+   Do not hand-edit statistics or other people's names or consent entries. See
+   [contributor refresh requirements](contributors.md#refreshing-maintainers).
+   If the official generator is unavailable, ask a maintainer to refresh; do not
+   substitute another generator. If more development lands before release, refresh
+   again on that new `main`.
+2. **Bump the version** on `main`. The only place it lives is `[workspace.package] version`
    in the root `Cargo.toml`:
 
    ```sh
@@ -37,19 +55,19 @@ are required: publishing a newer stable GitHub Release makes it discoverable.
    ```
 
    Commit the change (`Cargo.toml` + `Cargo.lock`) through the normal review flow.
-2. **Merge `main` into `release`** (or fast-forward it) and push. The workflow starts by itself.
-3. **Wait for the draft.** After about 30 to 45 minutes (notarization is the slow part), the
+3. **Merge `main` into `release`** (or fast-forward it) and push. The workflow starts by itself.
+4. **Wait for the draft.** After about 30 to 45 minutes (notarization is the slow part), the
    Releases page has a draft `PhotoCraft v0.2.0`, tagged `v0.2.0` on the pushed commit, with
    every artifact and `SHA256SUMS.txt`. The notes are generated from the merged PRs.
-4. **Check it.** Download an installer or two and look at the job summaries. Any
+5. **Check it.** Download an installer or two and look at the job summaries. Any
    `::warning::` there means a signing secret was missing and that artifact is unsigned.
-5. **Add the scorecard deltas** to the draft's notes: what moved in
+6. **Add the scorecard deltas** to the draft's notes: what moved in
    [`docs/scorecard.md`](scorecard.md) since the previous release. Compare the summary table
    and the performance table of both tags (`git diff v<previous> v<this> -- docs/scorecard.md`)
    and list each area's done / partial / missing change, the scenarios that newly meet their
    budget or got slower, corpus floors raised, and the change in settings that do nothing.
    Quote numbers with the baseline's machine and load average.
-6. **Publish** the draft in the GitHub UI. Publishing creates the `v0.2.0` tag. Versions with a
+7. **Publish** the draft in the GitHub UI. Publishing creates the `v0.2.0` tag. Versions with a
    pre-release suffix (`-rc.1`) are marked as pre-releases.
 
 Pushing to `release` again before you publish rebuilds the same draft and replaces its assets.
@@ -60,6 +78,37 @@ After the draft is published, the workflow refuses to touch that version again, 
 it with `cargo xtask version set` before building, so the binaries report it too. The run still
 needs the `release` environment, which only the `release` branch can use, so pick that branch
 in the dialog.
+
+## Inspecting snapshot freshness without a build
+
+After committing the refresh and version bump, before updating `release`, run:
+
+```sh
+python3 scripts/check_contributor_snapshot.py
+python3 -m unittest discover -s scripts -p 'test_contributor_snapshot.py'
+```
+
+This optional, read-only diagnostic reads the committed snapshot, not uncommitted
+edits. It requires Python 3.11+ and complete Git history. It checks the snapshot's
+schema/repository and commit ancestry, then examines every intervening commit rather
+than using an age or commit-count threshold. Snapshot-only commits and empty commits
+are allowed. Version-only changes to the root workspace version and corresponding
+local-package lockfile versions are allowed; dependency upgrades are not. Other
+changes, even if later reverted, require another refresh. A merge with extra content
+may conservatively require a refresh on the merged `main`.
+
+Exit status 0 means no uncovered change was detected under those allowances; 1
+means refresh or investigate the reported error. It does not reproduce the private
+generator, verify names/consent, or prove the numerical statistics correct. The
+refresh/version commits themselves are intentionally outside the counted snapshot.
+
+This tool is **not a release gate**: `release.yml` and its shared workflow are unchanged.
+A maintainer must validate the policy against the official generator and release
+history before wiring it into a blocking preflight. The same diagnostic can inspect
+any committed release candidate (`--revision <commit>`), including the source of a
+manual run. A manual `version` override is applied later by the shared workflow and
+is not a new Git commit, so it does not change this history check. No signing secrets
+or release environment are needed, and this command does not dispatch a workflow.
 
 ## What gets built
 
