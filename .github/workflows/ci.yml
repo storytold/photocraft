@@ -125,7 +125,7 @@ jobs:
         libgtk-3-dev
       # The tests build with the optional craft-fonts input (crates/text/build.rs), so the
       # Japanese font tests that skip without it run. Same commit as release.yml.
-      craft-fonts-ref: abb83316d96aa59c1cf64784289e378fe9fa5695
+      craft-fonts-ref: a71c20e30af613287c504f7e685ca8fad77752bc
       # Cargo.toml's dev profile already keeps line tables only.
       dev-debug: ""
       env: |
