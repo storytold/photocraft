@@ -115,3 +115,21 @@ fn save_a_copy_to_a_bmp_writes_the_document_as_it_was_asked() {
     h.run_steps(3);
     assert_eq!(writes.borrow().as_slice(), &[("copy.bmp".to_string(), serde_json::to_vec(&before).unwrap())]);
 }
+
+/// #9175 review: Save As decides whether the BMP is a copy when BMP Options is answered, so a
+/// layer added while the prompt is open keeps the document unsaved rather than marking a flat BMP
+/// as its saved state.
+#[test]
+fn save_as_to_a_bmp_rechecks_the_copy_when_answered() {
+    let (mut h, writes) = bmp_app("unused.bmp");
+    h.state_mut().save_as(Some("flat.bmp".into())).unwrap();
+    h.run_steps(2);
+    assert_eq!(h.state().bmp_options.as_ref().map(|p| p.copy), Some(false), "one raster layer: a real save");
+    h.state_mut().run("layer.new.layer", json!({})).unwrap();
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert_eq!(writes.borrow().len(), 1, "the BMP is still written");
+    let st = h.state().session.active().unwrap();
+    assert!(st.is_dirty(), "the new layer isn't in the BMP, so the document stays unsaved");
+    assert_eq!(st.path, None, "and keeps no BMP as its file");
+}

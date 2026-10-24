@@ -100,8 +100,11 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             }
             return;
         }
+        // The document may have changed while the prompt was open (a layer added to a flat one):
+        // whether this BMP is only a copy is decided now, as it would be without the prompt.
+        let copy = app.with_document(p.doc, |app| app.saves_copy(&p.path, None)).unwrap_or(p.copy);
         let settings = ExportSettings { bmp_bits: Some(p.bits), ..app.save_settings() };
-        app.write_answered_save(ctx, p.doc, p.path, &settings, p.copy, (p.record, step));
+        app.write_answered_save(ctx, p.doc, p.path, &settings, copy, (p.record, step));
     } else if cancel {
         app.bmp_options = None;
         app.ui.status = tl!("Save cancelled").into();
