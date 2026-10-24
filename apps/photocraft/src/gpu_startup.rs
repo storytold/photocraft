@@ -39,6 +39,11 @@ pub const INTEL: u32 = 0x8086;
 pub const QUALCOMM: u32 = 0x5143;
 /// Qualcomm's vendor id as DXGI (DX12) reports it: "QCOM".
 pub const QUALCOMM_DXGI: u32 = 0x4D4F_4351;
+
+/// PCI vendor ids whose Windows GL driver draws a black window (VMware's SVGA3D, #5191, #1788):
+/// their GL ranks below a software adapter, while hardware GL stays above WARP.
+const BROKEN_WINDOWS_GL: [u32; 1] = [0x15ad];
+
 /// Largest marker read (a marker is a few hundred bytes).
 const MARKER_MAX: u64 = 64 << 10;
 
@@ -276,10 +281,14 @@ pub struct Candidate {
 /// preference) or software adapters first for `cpu`; then backends, with DX12 before Vulkan for
 /// Intel and Qualcomm on Windows ([`dx12_first_on_windows`]). For `cpu`, any GL adapter comes
 /// before Vulkan, which is only the fallback for presenting the window (see [`backends`]). On
-/// Windows GL comes after every other adapter, WARP included: GL there (VMware's SVGA3D, GL-only
-/// old GPUs) drew a black window (#5191, #1788).
+/// Windows GL ranks after every hardware adapter, but before a software one (WARP): only the
+/// known-broken virtual GL drivers (VMware's SVGA3D, #5191, #1788) rank below WARP, because they
+/// drew a black window. Demoting hardware GL too (0.10.0-0.12.0) pinned every GL-only machine --
+/// no Vulkan, no DX12 driver -- to WARP's software rendering, which lagged badly on low-end CPUs.
 fn rank(a: &Candidate, backend: GpuBackend, os: Os) -> (u8, u8, u8) {
-    let fallback = u8::from((backend == GpuBackend::Cpu && a.backend == wgpu::Backend::Vulkan) || (os == Os::Windows && a.backend == wgpu::Backend::Gl));
+    let broken_gl =
+        os == Os::Windows && a.backend == wgpu::Backend::Gl && BROKEN_WINDOWS_GL.contains(&a.vendor);
+    let fallback = u8::from((backend == GpuBackend::Cpu && a.backend == wgpu::Backend::Vulkan) || broken_gl);
     let ty = match a.device_type {
         wgpu::DeviceType::DiscreteGpu => 0,
         wgpu::DeviceType::IntegratedGpu => 1,
@@ -903,14 +912,20 @@ mod tests {
     }
 
     /// #5191, #1788: a Windows VM offers VMware's SVGA3D over GL (`Other`) and WARP (`Cpu`, DX12).
-    /// GL drew a black window; WARP works. GL stays the last resort.
+    /// GL there drew a black window, so VMware's GL stays the last resort. Hardware GL, though,
+    /// must beat WARP: 0.10.0-0.12.0 demoted every Windows GL adapter, which pinned GL-only
+    /// machines (no Vulkan, no DX12 driver) to WARP's software rendering, and that lagged badly.
     #[test]
-    fn windows_auto_prefers_warp_over_gl() {
+    fn windows_prefers_hardware_gl_over_warp_but_not_broken_virtual_gl() {
         use wgpu::{Backend as B, DeviceType as T};
         let svga_gl = cand(0x15ad, T::Other, B::Gl);
         let warp = cand(0x1414, T::Cpu, B::Dx12);
+        // VMware's broken GL still loses to WARP.
         assert_eq!(pick(&[svga_gl, warp], Auto, Os::Windows), Some(1));
-        assert_eq!(pick(&[cand(INTEL, T::IntegratedGpu, B::Gl), warp], Auto, Os::Windows), Some(1));
+        // Hardware GL (NVIDIA 0x10de, a GL-only GPU with no Vulkan/DX12 driver; and Intel's) wins.
+        assert_eq!(pick(&[cand(0x10de, T::Other, B::Gl), warp], Auto, Os::Windows), Some(0));
+        assert_eq!(pick(&[cand(INTEL, T::IntegratedGpu, B::Gl), warp], Auto, Os::Windows), Some(0));
+        // GL alone is still picked when there is nothing else.
         assert_eq!(pick(&[svga_gl], Auto, Os::Windows), Some(0));
         // Elsewhere GL keeps its rank.
         assert_eq!(pick(&[svga_gl, warp], Auto, Os::Other), Some(0));
