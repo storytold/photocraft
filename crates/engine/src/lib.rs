@@ -51,6 +51,7 @@ pub mod filters;
 pub mod filters_ext;
 pub mod float_cmds;
 mod frame_cmds;
+pub mod frequency_separation_cmds;
 pub mod fx_view_cmds;
 pub mod fx_visibility_cmds;
 pub mod gallery_cmds;
