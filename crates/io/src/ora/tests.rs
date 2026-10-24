@@ -353,6 +353,22 @@ fn krita_soft_light_ids_map_to_photoshop_soft_light() {
 }
 
 #[test]
+fn soft_light_exports_as_svg_soft_light() {
+    // The W3C id, not krita:soft_light_svg (which import also accepts): other applications read it.
+    let mut d = doc(SampleType::U8);
+    let mut soft = block("Soft", PixelFormat::RGBA8, 0, 0, 10, 10, 5);
+    soft.blend = BlendMode::SoftLight;
+    d.layers.push(soft);
+    let out = export(&d).unwrap();
+    let xml = String::from_utf8(ZipReader::new(&out.bytes).unwrap().read_by_name("stack.xml", 1 << 20).unwrap()).unwrap();
+    assert!(xml.contains("name=\"Soft\"") && xml.contains("composite-op=\"svg:soft-light\""), "{xml}");
+    assert!(!xml.contains("soft_light"), "{xml}");
+    let (back, exported, imported) = round_trip(&d);
+    assert!(back.layers.iter().any(|l| l.name == "Soft" && l.blend == BlendMode::SoftLight));
+    assert!(!exported.iter().chain(&imported).any(|w| w.to_lowercase().contains("soft")), "{exported:?} {imported:?}");
+}
+
+#[test]
 fn preserves_surrounding_whitespace_in_layer_and_group_names() {
     let xml = r#"<image w="2" h="2"><stack>
       <stack name=" Folder "><layer name=" Pixel " src="a.png"/></stack>
