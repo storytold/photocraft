@@ -4464,6 +4464,8 @@ shape	Appearance	Izgled
 	Not rendered: this adjustment ({key}) is kept as imported.	Није приказано: ово прилагођавање ({key}) је задржано онако како је увезено.
 # Print preview image (#8236)
 	Print preview image	Print preview image
+	Open as Deep…	Otvori kao Deep…
+	Filter for deep layers	Filter za Deep slojeve
 # PhotoCraft release checks.
 	Check for Updates…	Proveri ažuriranja…
 	PhotoCraft Updates	Ažuriranja za PhotoCraft

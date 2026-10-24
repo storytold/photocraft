@@ -3896,6 +3896,8 @@ curves	Smooth	Làm mượt
 	Not rendered: this adjustment ({key}) is kept as imported.	Không được kết xuất: điều chỉnh này ({key}) được giữ nguyên như khi nhập.
 # Print preview image (#8236)
 	Print preview image	Print preview image
+	Open as Deep…	Mở dạng Deep…
+	Filter for deep layers	Lọc theo lớp Deep
 # Color panel menu: modes, copy commands and colour ramps (#6000)
 	Hue Cube	Khối sắc màu
 	Brightness Cube	Khối độ sáng

@@ -4319,6 +4319,8 @@ cameraRaw	Yellow	Sárga
 	Not rendered: this adjustment ({key}) is kept as imported.	Nem jelenik meg: ez a korrekció ({key}) importált állapotában marad.
 # Print preview image (#8236)
 	Print preview image	Print preview image
+	Open as Deep…	Megnyitás Deepként…
+	Filter for deep layers	Szűrő Deep rétegekre
 # Color panel menu: modes, copy commands and colour ramps (#6000)
 	Hue Cube	Színárnyalat-kocka
 	Brightness Cube	Fényerő-kocka

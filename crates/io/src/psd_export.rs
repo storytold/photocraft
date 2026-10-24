@@ -669,6 +669,8 @@ impl Ex {
                 }
             }
             LayerContent::Fill(f) => fill_rule(&mut raw, &mut regenerated, f),
+            // Deep layers carry no PSD-specific blocks; their pixels go through `emit`.
+            LayerContent::Deep(_) => {}
             LayerContent::Shape(sh) => {
                 if let Some(f) = &sh.fill {
                     fill_rule(&mut raw, &mut regenerated, f);
@@ -1186,6 +1188,18 @@ impl Ex {
                     };
                     let r = self.record(l, extra, unmixed.as_ref().or(sm.cache.as_ref()));
                     self.records.push(r);
+                }
+                // No PSD deep representation: the layer's depth-composited pixels are written,
+                // like Photoshop does when it opens a deep file it cannot keep deep.
+                LayerContent::Deep(d) => {
+                    self.warnings.push(format!("layer \"{}\": deep layer written as its composited pixels (PSD has no deep data)", l.name));
+                    match photocraft_compose::deep::flat_surface(d, self.fmt) {
+                        Ok(px) => {
+                            let r = self.record(l, extra, Some(&px));
+                            self.records.push(r);
+                        }
+                        Err(e) => self.warnings.push(format!("layer \"{}\": {e}; skipped", l.name)),
+                    }
                 }
             }
             if !tick() {

@@ -142,6 +142,8 @@ opt-level = "z"
 opt-level = "z"
 [profile.wasm-release.package.naga]
 opt-level = "z"
+[profile.wasm-release.package.photocraft-ops]
+opt-level = "z"
 
 # The browser UI toolkit favors size to stay within the WebAssembly upload budget.
 [profile.wasm-release.package.egui]
