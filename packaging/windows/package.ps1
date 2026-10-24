@@ -168,7 +168,18 @@ if ($env:CRAFT_FONTS_DIR) {
 Copy-Item (Join-Path $PSScriptRoot 'portable.txt') $Portable
 $Zip = Join-Path $Dist "photocraft-$Version-windows-$Arch-portable.zip"
 Remove-Item -Force $Zip -ErrorAction SilentlyContinue
-Compress-Archive -Path $Portable -DestinationPath $Zip
+# The archive holds the files themselves. `-Path <folder>` puts the folder *in* the archive, so
+# photocraft.exe came out one level down and portable mode needs portable.txt beside the exe
+# wherever it is extracted (#7699); `<folder>\*` archives the contents, as windows7.ps1 does in
+# VectorCraft. Checked below, since nothing else reads the layout back.
+Compress-Archive -Path (Join-Path $Portable '*') -DestinationPath $Zip
+$Check = Join-Path $TargetDir 'windows-package\portable-zip-check'
+Remove-Item -Recurse -Force $Check -ErrorAction SilentlyContinue
+Expand-Archive -Path $Zip -DestinationPath $Check -Force
+foreach ($f in 'photocraft.exe', 'photocraft-cli.exe', 'portable.txt') {
+  if (-not (Test-Path (Join-Path $Check $f))) { throw "the portable zip has no $f at its root: $Zip" }
+}
+Remove-Item -Recurse -Force $Check -ErrorAction SilentlyContinue
 
 # Smoke-test the CLI when this machine can run it. An ARM64 build made on an x64 runner can't run
 # here; .github/workflows/windows-arm64.yml installs and runs it on ARM64 instead.
