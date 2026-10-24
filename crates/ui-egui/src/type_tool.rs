@@ -1828,16 +1828,26 @@ pub(crate) fn family_picker_in(
         let ql = q.to_lowercase();
         // The recent group stays as it was when the menu opened: each arrow step applies (and so
         // records) a family, and moving it to the top would send the next step back up.
+        let opening = ui.data(|d| d.get_temp::<Vec<String>>(recents_id).is_none());
         let open_recents: Vec<String> = ui.data_mut(|d| d.get_temp_mut_or_insert_with(recents_id, || recents.to_vec()).clone());
         let (rows, n_recent) = font_menu_rows(families, labels, &ql, &open_recents);
         // A recent family is listed twice. The current family's row is the one the last arrow
-        // selected while it still shows that family, else its alphabetical copy, so the arrows
-        // step through the alphabet as on the closed field.
+        // selected while it still shows that family, else its first copy: as in Photoshop, the
+        // one in the recent group when it has one (#9160), and the arrows walk on from there.
         let mut selected = ui
             .data(|d| d.get_temp::<usize>(row_id))
             .filter(|&i| rows.get(i).is_some_and(|(f, _)| *f == current))
-            .or_else(|| rows.iter().skip(n_recent).position(|(f, _)| *f == current).map(|i| i + n_recent))
             .or_else(|| rows.iter().position(|(f, _)| *f == current));
+        // The menu opens on the current family, as Photoshop's does: at the top of the list when
+        // it is a recent one, else its row at the top of the view. Kept until a laid-out pass
+        // (the popup's first pass only measures).
+        let reveal_id = search_id.with("reveal");
+        if opening {
+            ui.data_mut(|d| d.insert_temp(reveal_id, true));
+        }
+        let reveal = (ui.data(|d| d.get_temp::<bool>(reveal_id)).unwrap_or(false) && !ui.is_sizing_pass())
+            .then(|| selected.map(|i| if i < n_recent { 0 } else { i }))
+            .flatten();
         let mut stepped = None;
         if down || up {
             let next = match selected {
@@ -1886,6 +1896,11 @@ pub(crate) fn family_picker_in(
                 let response = ui.add_sized([330.0, row_h], button);
                 if stepped == Some(i) {
                     response.scroll_to_me(Some(egui::Align::Center));
+                } else if reveal == Some(i) {
+                    // Jump, not glide: the menu opens with its current family in view. Arrow
+                    // steps above keep the animation.
+                    response.scroll_to_me_animation(Some(egui::Align::Min), egui::style::ScrollAnimation::none());
+                    ui.data_mut(|d| d.remove::<bool>(reveal_id));
                 }
                 if let Some((size, _)) = preview
                     && ui.is_rect_visible(response.rect)
@@ -1925,6 +1940,7 @@ pub(crate) fn family_picker_in(
             d.remove::<bool>(focus_id);
             d.remove::<Vec<String>>(recents_id);
             d.remove::<usize>(row_id);
+            d.remove::<bool>(search_id.with("reveal"));
         });
     }
     let hovered_font = response.inner.unwrap_or_default();

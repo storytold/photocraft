@@ -768,27 +768,61 @@ fn open_menu_arrows_walk_on_through_recent_fonts() {
 }
 
 /// Opened on a family that is also a recent one (the usual case: every pick records it), the
-/// arrows start from its alphabetical place, and only that row is marked.
+/// menu marks its copy in the recent group, as Photoshop's does (#9160), and only that row; the
+/// arrows walk on from there through the list as shown (Photoshop: ↓ goes to the next recent
+/// family).
 #[test]
-fn open_menu_on_a_recent_font_steps_through_the_alphabet() {
+fn open_menu_on_a_recent_font_marks_its_recent_row() {
     use egui_kittest::kittest::NodeT;
-    for (key, want) in [(Key::ArrowDown, "Family 06"), (Key::ArrowUp, "Family 04")] {
-        let mut h = harness_with_recents(FontPreview::Off, vec!["Family 05".into(), "Family 09".into()]);
-        h.state_mut().current = "Family 05".into();
-        h.run();
-        open(&mut h);
-        let marked = |h: &Harness<'static, State>, label: &str| {
-            h.query_all_by_label(label).filter(|n| n.accesskit_node().toggled() == Some(egui::accesskit::Toggled::True)).count()
-        };
-        assert_eq!(marked(&h, "Family 05"), 1, "one row marked");
-        h.key_press(key);
-        h.run();
-        assert_eq!(h.state().current, want);
-        h.key_press(Key::ArrowDown);
-        h.key_press(Key::ArrowUp);
-        h.run();
-        assert_eq!(h.state().current, want, "and walks on from there");
-    }
+    let mut h = harness_with_recents(FontPreview::Off, vec!["Family 05".into(), "Family 09".into()]);
+    h.state_mut().current = "Family 05".into();
+    h.run();
+    open(&mut h);
+    let marked = |h: &Harness<'static, State>, label: &str| -> Vec<f32> {
+        h.query_all_by_label(label).filter(|n| n.accesskit_node().toggled() == Some(egui::accesskit::Toggled::True)).map(|n| n.rect().top()).collect()
+    };
+    let tops = |h: &Harness<'static, State>, label: &str| -> Vec<f32> {
+        let mut t: Vec<f32> = h.query_all_by_label(label).map(|n| n.rect().top()).collect();
+        t.sort_by(f32::total_cmp);
+        t
+    };
+    assert_eq!(marked(&h, "Family 05"), [tops(&h, "Family 05")[0]], "the upper (recent) copy alone is marked");
+    h.key_press(Key::ArrowDown);
+    h.run();
+    assert_eq!(h.state().current, "Family 09", "↓ walks on to the next recent family");
+    h.key_press(Key::ArrowUp);
+    h.run();
+    assert_eq!(h.state().current, "Family 05", "and ↑ back");
+}
+
+/// #9160: the menu opens showing the current family, as Photoshop's does: a family deep in the
+/// list is scrolled to the top of the view, not left wherever the list happens to start.
+#[test]
+fn open_menu_shows_the_current_family() {
+    let mut h = harness_with_recents(FontPreview::Off, vec!["Zeta Sans".into()]);
+    h.state_mut().current = "Family 40".into();
+    h.run();
+    open(&mut h);
+    h.run();
+    let popup = popup_rect(&h).expect("the menu is open");
+    let row = h.query_all_by_label("Family 40").next().expect("its row").rect();
+    assert!(popup.contains_rect(row), "Family 40 is in view: {row:?} in {popup:?}");
+}
+
+/// The current family is in view the frame the menu opens, with the app's scroll animation on:
+/// the reveal jumps, where an animated scroll left the row outside the popup for a while.
+/// The harness turns animations off, so this turns a slow one back on.
+#[test]
+fn open_menu_shows_the_current_family_without_animating() {
+    let mut h = harness_with_recents(FontPreview::Off, Vec::new());
+    h.ctx.all_styles_mut(|s| s.scroll_animation = egui::style::ScrollAnimation::duration(10.0));
+    h.state_mut().current = "Family 40".into();
+    h.run();
+    h.query_all_by_role(Role::ComboBox).next().unwrap().click();
+    h.run_steps(4);
+    let popup = popup_rect(&h).expect("the menu is open");
+    let row = h.query_all_by_label("Family 40").next().expect("its row").rect();
+    assert!(popup.contains_rect(row), "Family 40 is in view: {row:?} in {popup:?}");
 }
 
 /// The same through the real options bar, where the pick itself records the recent family.
