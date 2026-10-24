@@ -191,6 +191,7 @@ pub mod rasterize_prompt;
 pub mod replace_prompt;
 pub mod retouch_ui;
 mod rgb_histogram;
+pub mod histogram_panel;
 pub mod rotate_view;
 pub mod rulers;
 pub mod screen_picker;
@@ -682,9 +683,6 @@ pub struct Services {
     pub quit: Option<QuitFn>,
 }
 
-/// A document histogram being computed off the UI thread: (document, revision, receiver of
-/// (document, compute ms, histograms)).
-pub(crate) type HistJob = (DocId, u64, std::sync::mpsc::Receiver<(DocId, f64, std::sync::Arc<tone::Histograms>)>);
 
 /// The Info panel's cached sample: pixel x, y, document revision and Eyedropper Sample Size.
 type InfoSampleKey = (i32, i32, u64, u32);
@@ -871,10 +869,14 @@ pub struct PhotocraftApp {
     pub(crate) paused_playbacks: actions::PausedPlaybacks,
     /// Levels/Curves histogram cache: (document, adjustment layer, revision it is valid for).
     pub(crate) tone_hist: Option<(DocId, photocraft_doc::LayerId, u64, std::sync::Arc<tone::Histograms>)>,
-    /// Histogram panel cache: (document, revision, computed at ms, histograms).
-    pub(crate) doc_hist: Option<(DocId, u64, f64, std::sync::Arc<tone::Histograms>)>,
-    /// The document histogram being computed on a worker thread: (document, revision, receiver).
-    pub(crate) hist_job: Option<HistJob>,
+    /// Histogram panel: the document's histogram (`histogram_panel`).
+    pub(crate) doc_hist: Option<histogram_panel::PanelHist>,
+    /// Histogram panel: the histogram of the adjustment previewing on the canvas.
+    pub(crate) doc_hist_preview: Option<histogram_panel::PanelHist>,
+    /// The panel histogram being computed on a worker thread.
+    pub(crate) hist_job: Option<histogram_panel::HistJob>,
+    /// The (document, revision) an Uncached Refresh asked to count at cache level 1.
+    pub(crate) hist_uncached: Option<(DocId, u64)>,
     /// Free Transform preview (document without the moving pixels + their texture).
     pub(crate) transform_preview: Option<transform_tool::TransformPreview>,
     /// Move-tool ⇧/⌥ drag state (move_mods).
@@ -1143,7 +1145,9 @@ impl PhotocraftApp {
             pending_after_prompt: None,
             tone_hist: None,
             doc_hist: None,
+            doc_hist_preview: None,
             hist_job: None,
+            hist_uncached: None,
             gpu: None,
             window_device: None,
             window_lost: false,
@@ -1178,6 +1182,7 @@ impl PhotocraftApp {
         // Saved preferences are in place before the first frame; recovery starts in upkeep.
         prefs_ui::load(&mut app);
         layers_panel_ui::restore_options(&mut app);
+        histogram_panel::restore_options(&mut app);
         // After the saved preferences, which say whether the set was already offered.
         kys_import::offer_import(&mut app);
         notices::wayland_file_drop_guidance(&mut app);

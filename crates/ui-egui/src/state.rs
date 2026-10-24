@@ -1554,6 +1554,12 @@ pub struct UiState {
     /// Which chip the Color panel edits, and how it shows the colour.
     #[serde(default)]
     pub color_panel: ColorPanelState,
+    /// Histogram panel options: view, channel, statistics, colours, source.
+    #[serde(default)]
+    pub histogram_panel: crate::histogram_panel::HistogramPanelState,
+    /// The tonal range dragged across the Histogram panel's graph (its statistics), `[from, to]`.
+    #[serde(default, skip_deserializing)]
+    pub histogram_range: Option<[u8; 2]>,
     /// Brush Settings: selected section (0 = Brush Tip Shape) and tab (0 settings, 1 Brushes).
     #[serde(default)]
     pub brush_section: usize,
@@ -1667,6 +1673,8 @@ impl Default for UiState {
             shell: Default::default(),
             layer_filter: Vec::new(),
             layers_panel_options: LayersPanelOptions::default(),
+            histogram_panel: Default::default(),
+            histogram_range: None,
             layers_panel_dialog: None,
             layer_filter_by: Default::default(),
             layer_filter_name: String::new(),

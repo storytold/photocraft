@@ -133,7 +133,7 @@ pub enum Outcome {
 /// field's value is validated before the first one is applied, so a typo, an unknown field, a
 /// bad value or a bad nested key can't reply with success while nothing — or only half of it —
 /// changed (#412).
-pub const UI_SET_FIELDS: [&str; 39] = [
+pub const UI_SET_FIELDS: [&str; 42] = [
     "updatesOpen",
     "tool",
     "strokeTrace",
@@ -173,6 +173,9 @@ pub const UI_SET_FIELDS: [&str; 39] = [
     "camTransformOnDrop",
     "tileGrid",
     "layerFilter",
+    "histogramPanel",
+    "histogramRange",
+    "histogramRefresh",
 ];
 
 /// Most clicks one `ui.click` may queue (#982). Each click is a press and a release that the app
@@ -580,6 +583,14 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 if crop_shield.as_ref().is_some_and(|s| !(0.0..=100.0).contains(&s.opacity)) {
                     return Err("cropShield.opacity must be 0..100".into());
                 }
+                // The Histogram panel: its options, the dragged tonal range ([from, to] levels or
+                // null) and Uncached Refresh.
+                let histogram_panel = merged_object(&app.ui.histogram_panel, p.get("histogramPanel"), "histogramPanel")?;
+                let histogram_range = match p.get("histogramRange") {
+                    Some(v) => Some(serde_json::from_value::<Option<[u8; 2]>>(v.clone()).map_err(|_| "histogramRange must be [from, to] levels 0..255, or null".to_string())?),
+                    None => None,
+                };
+                let histogram_refresh = bool_field(p, "histogramRefresh")?;
                 let panels = merged_object(&app.ui.panels, p.get("panels"), "panels")?;
                 let mask_target = bool_field(p, "maskTarget")?;
                 let updates_open = bool_field(p, "updatesOpen")?;
@@ -724,6 +735,16 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 }
                 if let Some(f) = layer_filter {
                     crate::layer_filter_ui::apply(&mut app.ui, f);
+                }
+                if let Some(h) = histogram_panel {
+                    app.ui.histogram_panel = h;
+                    crate::histogram_panel::persist_options(app);
+                }
+                if let Some(r) = histogram_range {
+                    app.ui.histogram_range = r;
+                }
+                if histogram_refresh == Some(true) {
+                    crate::histogram_panel::uncached_refresh(app);
                 }
                 if let Some(k) = crop_overlay {
                     app.ui.tool_options.crop_overlay = k;
@@ -1410,6 +1431,7 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
         "brush": {"size": app.session.tools.brush.size, "hardness": app.session.tools.brush.hardness, "opacity": app.session.tools.brush.opacity},
         "distort": app.distort.describe(),
         "jobs": crate::jobs_ui::inspect(app),
+        "histogram": crate::histogram_panel::inspect(app),
         "cameraRaw": app.camera_raw.as_ref().map(|d| d.describe(&app.ui.camera_raw_scope, &app.ui.camera_raw_preview)),
     })
 }

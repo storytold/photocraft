@@ -549,7 +549,11 @@ pub struct Performance {
     pub memory_usage_mb: u32,
     /// Undo steps kept per document (History panel states).
     pub history_states: u32,
-    /// Display cache levels (mip levels kept for zoomed-out views).
+    /// Cache Levels, 1–8: the highest cache level the Histogram panel counts a large document at
+    /// (level n counts a proxy 2^(n-1) times smaller; 1 counts every pixel). Lower is more
+    /// accurate, higher faster. The panel picks the level from the document's size up to this;
+    /// the web build, which counts on the UI thread, reduces documents from a quarter of the size
+    /// the desktop does. Uncached Refresh always counts at level 1.
     pub cache_levels: u32,
     /// Side of the GPU canvas texture tiles, in pixels (applies at next launch).
     pub cache_tile_size: u32,
@@ -1119,7 +1123,6 @@ pub const HIDDEN_UNTIL_IMPLEMENTED: &[&str] = &[
     "general.colorPicker",
     "workspace.autoShowHiddenPanels",
     "workspace.enableFloatingDocumentWindowDocking",
-    "performance.cacheLevels",
     "performance.effectCacheMb",
     "performance.legacyCompositing",
     "scratchDisks.disks",

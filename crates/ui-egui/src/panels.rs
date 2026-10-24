@@ -1851,7 +1851,7 @@ pub(crate) fn dock_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, group: crate
         (Group::Properties, _) => adjustments_grid(app, ui),
         (Group::Character, tab) => crate::type_tool::character_panel(app, ui, tab == 1),
         (Group::Navigator, 0) => navigator(app, ui),
-        (Group::Navigator, 1) => crate::tone::histogram_panel(app, ui),
+        (Group::Navigator, 1) => crate::histogram_panel::show(app, ui),
         (Group::Navigator, _) => info_panel(app, ui),
         (Group::History, 0) => history(app, ui),
         (Group::History, 1) => crate::actions::panel(app, ui),
@@ -1863,6 +1863,31 @@ pub(crate) fn dock_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, group: crate
     }
 }
 
+/// The active document's pixel under the pointer, if the pointer is over the image.
+pub(crate) fn hover_pixel(app: &PhotocraftApp) -> Option<(i32, i32)> {
+    let size = app.session.active()?.doc.size;
+    app.hover_doc
+        .map(|p| (p[0].floor() as i32, p[1].floor() as i32))
+        .filter(|(x, y)| *x >= 0 && *y >= 0 && *x < size.width as i32 && *y < size.height as i32)
+}
+
+/// The colour the Info panel reads at document pixel `(x, y)`, straight RGBA 0..1: averaged over
+/// the Eyedropper's Sample Size, as in Photoshop (#1649), and cached per pixel and revision.
+pub(crate) fn pointer_sample(app: &mut PhotocraftApp, (x, y): (i32, i32)) -> Option<[f32; 4]> {
+    let rev = app.session.active()?.revision;
+    let sample_size = app.ui.tool_options.eyedropper_size;
+    if let Some(((cx, cy, cr, cs), v)) = app.info_sample
+        && (cx, cy, cr, cs) == (x, y, rev, sample_size)
+    {
+        return Some(v);
+    }
+    let params = json!({"x": f64::from(x) + 0.5, "y": f64::from(y) + 0.5, "size": sample_size});
+    let v: Vec<f32> = serde_json::from_value(app.session.execute("document.sampleColor", params).ok()?).ok()?;
+    let v = [*v.first()?, *v.get(1)?, *v.get(2)?, *v.get(3)?];
+    app.info_sample = Some(((x, y, rev, sample_size), v));
+    Some(v)
+}
+
 /// Photoshop's Info panel: colour under the pointer (RGB and CMYK), position, selection size.
 fn info_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
@@ -1870,7 +1895,7 @@ fn info_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         empty(ui, tl!("No document"));
         return;
     };
-    let (rev, size, origin) = (st.revision, st.doc.size, st.doc.ruler_origin);
+    let (size, origin) = (st.doc.size, st.doc.ruler_origin);
     let cmyk_space = photocraft_compose::cmyk_space(&st.doc);
     // Positions and sizes in the ruler unit (Preferences › Units & Rulers).
     let units = app.session.prefs().units_and_rulers.clone();
@@ -1879,10 +1904,7 @@ fn info_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let units_y = app.session.prefs().units_and_rulers.clone();
     let fy = move |px: f64| units_y.format(px, dpi, size.height as f64);
     let sel = st.doc.selection.as_ref().map(photocraft_compose::bounds::content_bounds);
-    let pos = app
-        .hover_doc
-        .map(|p| (p[0].floor() as i32, p[1].floor() as i32))
-        .filter(|(x, y)| *x >= 0 && *y >= 0 && *x < size.width as i32 && *y < size.height as i32);
+    let pos = hover_pixel(app);
     // While a guide is dragged (#5728), the Info panel shows its position in one axis only, even
     // when the pointer is outside the canvas (ruler drags do not update `hover_doc` there).
     let (guide_x, guide_y) = match app.guide_drag {
@@ -1890,20 +1912,7 @@ fn info_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         Some(d) => (None, Some(d.pos)),
         None => (None, None),
     };
-    // The readout averages the Eyedropper's Sample Size, as in Photoshop (#1649).
-    let sample_size = app.ui.tool_options.eyedropper_size;
-    let rgba = pos.and_then(|(x, y)| {
-        if let Some(((cx, cy, cr, cs), v)) = app.info_sample
-            && (cx, cy, cr, cs) == (x, y, rev, sample_size)
-        {
-            return Some(v);
-        }
-        let params = json!({"x": f64::from(x) + 0.5, "y": f64::from(y) + 0.5, "size": sample_size});
-        let v: Vec<f32> = serde_json::from_value(app.session.execute("document.sampleColor", params).ok()?).ok()?;
-        let v = [*v.first()?, *v.get(1)?, *v.get(2)?, *v.get(3)?];
-        app.info_sample = Some(((x, y, rev, sample_size), v));
-        Some(v)
-    });
+    let rgba = pos.and_then(|p| pointer_sample(app, p));
     let mono = theme::mono(11.5);
     let row = |ui: &mut egui::Ui, k: &str, v: String| {
         ui.horizontal(|ui| {
