@@ -448,6 +448,75 @@ fn length(params: &Value, key: &str, k: u32) -> f64 {
 /// The preview of the Select and Mask dialog for `doc`: the proxy reduced by `k`, shown in the
 /// requested view. `None` when the refinement fails or is cancelled.
 pub fn preview_document(doc: &Document, active: Option<LayerId>, params: &Value, k: u32, cancel: Option<&photocraft_engine::jobs::JobCtx>) -> Option<Document> {
+    preview_document_in(doc, None, active, params, k, cancel)
+}
+
+/// [`preview_document`] for a session's document snapshot: a change of the view alone (mode,
+/// opacity) reuses the last refinement of the same snapshot and settings rather than refine again,
+/// which is nearly all of a preview's time.
+pub fn preview_document_cached(
+    doc: &Arc<Document>,
+    active: Option<LayerId>,
+    params: &Value,
+    k: u32,
+    cancel: Option<&photocraft_engine::jobs::JobCtx>,
+) -> Option<Document> {
+    preview_document_in(doc, Some(doc), active, params, k, cancel)
+}
+
+/// The last refinement: of which snapshot (held weakly, so a cache hit is always that very
+/// document), under which settings (the params without the view, the layer, the factor).
+struct Refined {
+    doc: std::sync::Weak<Document>,
+    key: u64,
+    selection: Option<Surface>,
+}
+
+static REFINED: std::sync::Mutex<Option<Refined>> = std::sync::Mutex::new(None);
+
+fn refine_key(params: &Value, active: Option<LayerId>, k: u32) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut p = params.clone();
+    if let Some(o) = p.as_object_mut() {
+        o.remove("__view");
+    }
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (p.to_string(), active.map(|l| l.0), k).hash(&mut h);
+    h.finish()
+}
+
+/// [`refine`], from the cache when `snapshot` is the document last refined with these settings.
+fn refine_cached(
+    proxy: &Document,
+    snapshot: Option<&Arc<Document>>,
+    active: Option<LayerId>,
+    params: &Value,
+    k: u32,
+    cancel: Option<&photocraft_engine::jobs::JobCtx>,
+) -> Option<Option<Surface>> {
+    // Only a snapshot someone else holds can come back (a session's document): a one-off's fresh
+    // `Arc` would just evict the session's entry.
+    let Some(snapshot) = snapshot.filter(|s| Arc::strong_count(s) > 1) else { return refine(proxy, active, params, k, cancel) };
+    let key = refine_key(params, active, k);
+    {
+        let last = REFINED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(r) = last.as_ref().filter(|r| r.key == key && r.doc.upgrade().is_some_and(|d| Arc::ptr_eq(&d, snapshot))) {
+            return Some(r.selection.clone());
+        }
+    }
+    let selection = refine(proxy, active, params, k, cancel)?;
+    *REFINED.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Refined { doc: Arc::downgrade(snapshot), key, selection: selection.clone() });
+    Some(selection)
+}
+
+fn preview_document_in(
+    doc: &Document,
+    snapshot: Option<&Arc<Document>>,
+    active: Option<LayerId>,
+    params: &Value,
+    k: u32,
+    cancel: Option<&photocraft_engine::jobs::JobCtx>,
+) -> Option<Document> {
     let view = View::of(params);
     let k = k.max(1);
     let mut proxy = crate::proxy::proxy_document(doc, k);
@@ -461,14 +530,22 @@ pub fn preview_document(doc: &Document, active: Option<LayerId>, params: &Value,
     } else if view.show_original {
         Coverage::read(original.as_ref(), canvas)
     } else {
-        Coverage::read(refine(&proxy, active, params, k, cancel)?.as_ref(), canvas)
+        Coverage::read(refine_cached(&proxy, snapshot, active, params, k, cancel)?.as_ref(), canvas)
     };
     show(&mut proxy, active, &view, &coverage);
     Some(proxy)
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Refinements run on this thread, for the cache's tests.
+    static REFINES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// `select.refineEdge` on the proxy, its output forced to the selection: the refined coverage.
 fn refine(proxy: &Document, active: Option<LayerId>, params: &Value, k: u32, cancel: Option<&photocraft_engine::jobs::JobCtx>) -> Option<Option<Surface>> {
+    #[cfg(test)]
+    REFINES.with(|n| n.set(n.get() + 1));
     let mut s = photocraft_engine::Session::new();
     s.set_inline_job_ctx(cancel.cloned());
     s.add_document(proxy.clone(), None);
@@ -625,6 +702,41 @@ mod tests {
             // The refined selection rides along for the canvas's marching ants.
             assert!(shown.selection.as_ref().is_some_and(|s| s.pixel(5, 10)[0] > 0.99 && s.pixel(35, 10)[0] < 0.01), "{mode:?}");
         }
+    }
+
+    /// A change of the view alone reuses the refinement of the same snapshot and settings, and
+    /// shows exactly what refining again would; other settings or another snapshot refine again.
+    #[test]
+    fn view_changes_reuse_the_refinement() {
+        let _guard = photocraft_testkit::gpu_lock();
+        let mut doc = half_selected();
+        // Texture for the edge detection to find.
+        doc.layers[0].surface_mut().unwrap().fill_rect(Rect::new(14, 0, 26, 20), &[0.2, 0.3, 0.9, 1.0]);
+        let doc = Arc::new(doc);
+        let _session = doc.clone();
+        let active = doc.layers.first().map(|l| l.id);
+        let refines = || REFINES.with(std::cell::Cell::get);
+        let params = |mode: Mode, radius: f64| json!({"radius": radius, "smooth": 2, "__view": {"mode": mode.id(), "opacity": 0.5, "showEdge": false, "showOriginal": false}});
+        let mut cached_refines = 0;
+        for (i, mode) in Mode::ALL.into_iter().enumerate() {
+            let before = refines();
+            let cached = preview_document_cached(&doc, active, &params(mode, 4.0), 1, None).unwrap();
+            cached_refines += refines() - before;
+            assert_eq!(cached_refines, 1, "{mode:?}: only the first view refines (view {i})");
+            let fresh = preview_document(&doc, active, &params(mode, 4.0), 1, None).unwrap();
+            let (a, b) = (photocraft_compose::flatten(&cached), photocraft_compose::flatten(&fresh));
+            assert_eq!(a.px, b.px, "{mode:?}: the cached refinement shows what refining again does");
+            assert_eq!(cached.selection.as_ref().map(|s| s.read_region(doc.bounds())), fresh.selection.as_ref().map(|s| s.read_region(doc.bounds())));
+        }
+        let n = refines();
+        preview_document_cached(&doc, active, &params(Mode::OnBlack, 8.0), 1, None).unwrap();
+        assert_eq!(refines(), n + 1, "another radius refines");
+        preview_document_cached(&doc, active, &params(Mode::OnBlack, 8.0), 2, None).unwrap();
+        assert_eq!(refines(), n + 2, "another factor refines");
+        let other = Arc::new((*doc).clone());
+        let _held = other.clone();
+        preview_document_cached(&other, active, &params(Mode::OnBlack, 8.0), 2, None).unwrap();
+        assert_eq!(refines(), n + 3, "another snapshot refines, whatever it holds");
     }
 
     #[test]
