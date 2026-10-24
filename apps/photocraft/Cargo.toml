@@ -27,6 +27,8 @@ photocraft-io = { workspace = true }
 photocraft-format = { workspace = true }
 photocraft-automation = { workspace = true }
 photocraft-ui-egui = { workspace = true }
+# Plug-in presets file format (the app stores one file per plug-in; see plugin_presets.rs).
+photocraft-plugins = { workspace = true }
 # Pen tablet pressure/tilt on macOS and X11 (the workspace's one isolated unsafe helper crate).
 photocraft-tablet = { workspace = true }
 eframe = { workspace = true, features = ["wgpu", "accesskit", "wayland", "x11", "persistence"] }

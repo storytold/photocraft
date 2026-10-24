@@ -42,6 +42,12 @@ pub enum Kind {
     /// A `"#rrggbb"` colour (`color`, or `color=#rrggbb` with a default), picked with a swatch.
     /// Without a default the param stays unset until a colour is picked.
     Color(Option<[f32; 3]>),
+    /// A point `[x, y]` in percent of the canvas (`point=[x,y]`, a plug-in `point` param): two
+    /// fields in the dialog and a handle dragged on the canvas (`plugin_points`).
+    Point([f32; 2]),
+    /// A direction in degrees, 0-360 (`angle=45`, a plug-in `angle` param): 0 points right and the
+    /// angle grows clockwise on screen. A dial with a number field beside it.
+    Angle(f32),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -114,6 +120,11 @@ pub fn parse_spec(spec: &str) -> Vec<Param> {
             Kind::Color(crate::color_picker_ui::parse_hex(default))
         } else if v == "doc" {
             Kind::Document
+        } else if let Some(d) = v.strip_prefix("angle") {
+            let d = d.trim_start_matches('=').trim().parse::<f64>().ok().and_then(photocraft_plugins::wrap_angle).unwrap_or(0.0);
+            Kind::Angle(d as f32)
+        } else if let Some(d) = v.strip_prefix("point") {
+            Kind::Point(parse_point(d.trim_start_matches('=')))
         } else if v == "json" || v.starts_with("layer id") || v.starts_with('[') || v.starts_with('{') || v.trim_end_matches('?') == "index|name" {
             // `index|name`: a reference (an alpha channel…) the dialog sets through another control.
             Kind::Json
@@ -134,6 +145,23 @@ pub fn parse_spec(spec: &str) -> Vec<Param> {
         out.push(Param { key, kind });
     }
     out
+}
+
+/// `[x,y]` of a `point=[x,y]` default; the canvas centre when it is missing or malformed.
+fn parse_point(s: &str) -> [f32; 2] {
+    let nums: Vec<f32> = s.trim().trim_start_matches('[').trim_end_matches(']').split(',').filter_map(|n| n.trim().parse().ok()).collect();
+    match nums.as_slice() {
+        [x, y] if x.is_finite() && y.is_finite() => [x.clamp(0.0, 100.0), y.clamp(0.0, 100.0)],
+        _ => [50.0, 50.0],
+    }
+}
+
+/// The parameter spec a dialog's fields follow: its own (`__spec`, plug-ins) or its command's.
+pub(crate) fn spec_of(f: &Map<String, Value>) -> Option<String> {
+    match f.get("__spec").and_then(Value::as_str) {
+        Some(s) => Some(s.to_string()),
+        None => photocraft_engine::commands::find(f.get("__command").and_then(Value::as_str)?).map(|c| c.params.to_string()),
+    }
 }
 
 /// The number a range bound starts with, ignoring a unit or marker after it: `5000 px?` → 5000,
@@ -385,6 +413,8 @@ fn default_value(app: &PhotocraftApp, command: &str, p: &Param) -> Option<Value>
             json!(crate::color_picker_ui::hex([fg[0], fg[1], fg[2]]))
         }
         Kind::Color(None) => return None,
+        Kind::Point(p) => json!(p),
+        Kind::Angle(a) => json!(a),
         // Colour inputs come from the current swatches, so the proxy preview matches the result.
         Kind::Json if p.key == "foreground" => json!(app.session.tools.foreground),
         Kind::Json if p.key == "background" => json!(app.session.tools.background),
@@ -576,6 +606,8 @@ pub fn open_with_spec(app: &mut PhotocraftApp, command: &str, label: &str, spec:
             Kind::Bool(default) => json!(default),
             Kind::Int { default } => json!(default),
             Kind::Color(Some(rgb)) => json!(crate::color_picker_ui::hex(*rgb)),
+            Kind::Point(p) => json!(p),
+            Kind::Angle(a) => json!(a),
             _ => continue,
         };
         fields.insert(p.key, v);
@@ -781,17 +813,35 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let t = Tokens::get(ui.ctx());
     let cmd = f.get("__command").and_then(Value::as_str).unwrap_or_default().to_string();
     // Plug-in dialogs carry their own spec (from the plug-in's manifest).
-    let spec = match f.get("__spec").and_then(Value::as_str) {
-        Some(s) => s.to_string(),
-        None => match photocraft_engine::commands::find(&cmd) {
-            Some(c) => c.params.to_string(),
-            None => return,
-        },
-    };
+    let Some(spec) = spec_of(f) else { return };
     if crate::select_mask_view::owns(f) {
         crate::select_mask_view::controls(ui, f);
     }
-    for p in parse_spec(&spec) {
+    // Plug-in params with a `group`: ungrouped ones first, always visible, then a row of tabs and
+    // only the selected tab's params.
+    let (tabs, group_of) = tabs_of(f);
+    let mut params = parse_spec(&spec);
+    params.sort_by_key(|p| group_of.contains_key(&p.key));
+    let mut selected = selected_tab(f, &tabs);
+    let mut tab_row = !tabs.is_empty();
+    for p in params {
+        if let Some(group) = group_of.get(&p.key) {
+            if std::mem::take(&mut tab_row) {
+                ui.add_space(4.0);
+                ui.horizontal_wrapped(|ui| {
+                    for name in &tabs {
+                        if crate::widgets::pill_tab(ui, name, *name == selected).clicked() {
+                            selected.clone_from(name);
+                        }
+                    }
+                });
+                f.insert(TAB.into(), json!(selected));
+                ui.add_space(6.0);
+            }
+            if *group != selected {
+                continue;
+            }
+        }
         if zoom_center::owns(&cmd, f) && matches!(p.key.as_str(), "centerX" | "centerY") {
             if p.key == "centerX" {
                 zoom_center::row(ui, f);
@@ -961,6 +1011,21 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
                 let bytes = rgb.map(q);
                 let name = label(&p.key);
+                if cmd == "plugin.run" {
+                    // Plug-in colours: egui's popup picker edits the field continuously, so the live
+                    // preview follows the colour as it changes (the modal Color Picker sets it on OK).
+                    let mut edit = bytes;
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(&name).color(t.text_dim));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            crate::widgets::color_edit_button_srgb(ui, &mut edit).on_hover_text(&name);
+                            ui.label(egui::RichText::new(crate::color_picker_ui::hex(rgb)).color(t.text_dim).monospace());
+                        });
+                    });
+                    let picked = if edit == bytes { rgb } else { edit.map(|b| f32::from(b) / 255.0) };
+                    f.insert(p.key.clone(), json!(crate::color_picker_ui::hex(picked)));
+                    continue;
+                }
                 let mut clicked = false;
                 let eyedropper = cmd == REPLACE_COLOR && p.key == "color";
                 ui.horizontal(|ui| {
@@ -986,6 +1051,27 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                     }
                     crate::color_picker_ui::request_field(f, &p.key, &crate::color_picker_ui::title_for(&name));
                 }
+            }
+            Kind::Point(default) => {
+                // The same value the canvas handle drags (`plugin_points`), so the two stay in sync.
+                let [mut x, mut y] = crate::plugin_points::value(f, &p.key).unwrap_or(default);
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(label(&p.key)).color(t.text_dim));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        crate::widgets::value_field(ui, &mut y, 0.0..=100.0, "%", 64.0);
+                        ui.label(egui::RichText::new("Y").color(t.text_dim));
+                        crate::widgets::value_field(ui, &mut x, 0.0..=100.0, "%", 64.0);
+                        ui.label(egui::RichText::new("X").color(t.text_dim));
+                    });
+                });
+                // Clamp only: rounding here would quietly change presets and defaults every frame.
+                f.insert(p.key, json!([x.clamp(0.0, 100.0), y.clamp(0.0, 100.0)]));
+            }
+            Kind::Angle(default) => {
+                let mut deg = f.get(&p.key).and_then(Value::as_f64).and_then(photocraft_plugins::wrap_angle).map_or(default, |a| a as f32);
+                angle_dial_row(ui, &label(&p.key), &mut deg);
+                let deg = photocraft_plugins::wrap_angle(f64::from(deg)).unwrap_or(0.0);
+                f.insert(p.key, json!(deg));
             }
             Kind::Int { default } => {
                 let mut v = f.get(&p.key).and_then(Value::as_f64).unwrap_or(default as f64) as f32;
@@ -1024,6 +1110,82 @@ fn random_seed(entropy: u64, current: i64) -> i64 {
     let h = std::collections::hash_map::RandomState::new().hash_one(entropy);
     let seed = (h % 30_001) as i64;
     if seed == current { (seed + 1) % 30_001 } else { seed }
+}
+
+/// Diameter of the angle dial, in points.
+const DIAL: f32 = 64.0;
+
+/// The angle a pointer at `rel` (relative to the dial's centre, screen coordinates: y down) sets:
+/// whole degrees in 0..360, 0 pointing right (east) and growing clockwise on screen, so due south
+/// is 90 and due north 270. `None` too close to the centre to have a direction.
+pub fn dial_angle(rel: egui::Vec2) -> Option<f32> {
+    (rel.length_sq() > 1.0).then(|| rel.y.atan2(rel.x).to_degrees().round().rem_euclid(360.0))
+}
+
+/// A plug-in `angle` row: the label, a dial (drag anywhere on it to point the handle at the
+/// pointer; arrow keys step it by a degree when it has focus) and a number field kept in sync.
+/// Typed values outside 0-360 wrap when the caller stores them.
+fn angle_dial_row(ui: &mut egui::Ui, name: &str, deg: &mut f32) {
+    let t = Tokens::get(ui.ctx());
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(name).color(t.text_dim));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            crate::widgets::value_field(ui, deg, -36000.0..=36000.0, "°", 64.0);
+            let (rect, mut dial) = ui.allocate_exact_size(egui::vec2(DIAL, DIAL), egui::Sense::click_and_drag());
+            dial.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Slider, ui.is_enabled(), name));
+            let c = rect.center();
+            if (dial.clicked() || dial.dragged())
+                && let Some(a) = dial.interact_pointer_pos().and_then(|pos| dial_angle(pos - c))
+            {
+                *deg = a;
+                dial.mark_changed();
+            }
+            if dial.has_focus() {
+                let step = ui.input(|i| {
+                    i.num_presses(egui::Key::ArrowRight) as f32 + i.num_presses(egui::Key::ArrowDown) as f32
+                        - i.num_presses(egui::Key::ArrowLeft) as f32
+                        - i.num_presses(egui::Key::ArrowUp) as f32
+                });
+                if step != 0.0 {
+                    *deg = (deg.round() + step).rem_euclid(360.0);
+                    dial.mark_changed();
+                }
+            }
+            let painter = ui.painter();
+            let radius = DIAL / 2.0 - 5.0;
+            painter.circle(c, radius, t.field, egui::Stroke::new(1.0, t.field_border));
+            let r = deg.to_radians();
+            // Clockwise on screen: y grows downwards.
+            let handle = c + egui::vec2(r.cos(), r.sin()) * radius;
+            painter.line_segment([c, handle], egui::Stroke::new(2.0, t.accent));
+            painter.circle_filled(c, 2.0, t.text_dim);
+            painter.circle(handle, 4.0, egui::Color32::WHITE, egui::Stroke::new(1.0, t.accent));
+            if dial.has_focus() {
+                painter.circle_stroke(c, radius + 3.0, egui::Stroke::new(1.0, t.accent));
+            }
+            let _ = dial.on_hover_text(tl!("Drag to set the direction"));
+        });
+    });
+}
+
+/// The selected tab of a plug-in dialog with grouped params.
+const TAB: &str = "__tab";
+
+/// A plug-in dialog's tabs (`__tabs`, in order) and each grouped param's tab (`__groupOf`).
+fn tabs_of(f: &Map<String, Value>) -> (Vec<String>, std::collections::HashMap<String, String>) {
+    let tabs = f.get("__tabs").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
+    let group_of = f
+        .get("__groupOf")
+        .and_then(Value::as_object)
+        .map(|o| o.iter().filter_map(|(k, v)| v.as_str().map(|g| (k.clone(), g.to_string()))).collect())
+        .unwrap_or_default();
+    (tabs, group_of)
+}
+
+/// The dialog's selected tab: `__tab` when it names one of `tabs`, else the first.
+fn selected_tab(f: &Map<String, Value>, tabs: &[String]) -> String {
+    let chosen = f.get(TAB).and_then(Value::as_str).filter(|t| tabs.iter().any(|n| n == t));
+    chosen.or(tabs.first().map(String::as_str)).unwrap_or_default().to_string()
 }
 
 /// User-facing params (strip the dialog's private `__` keys).
@@ -2866,5 +3028,136 @@ mod tests {
         let px = |x: i32| doc.layers[0].surface().unwrap().read_region(photocraft_geom::Rect::new(x, 5, x + 1, 6));
         assert!(px(2)[1] > 0.5, "near the point: shifted to green {:?}", px(2));
         assert!(px(38)[0] > 0.9 && px(38)[1] < 0.1, "far away: still red {:?}", px(38));
+    }
+
+    #[test]
+    fn point_params_open_with_their_defaults_and_pass_through_unchanged() {
+        let spec = r#"{"start":point=[12,12.5],"end":point=[88,62],"bad":point=[1],"amount":0..100=50}"#;
+        let kinds: Vec<Kind> = parse_spec(spec).into_iter().map(|p| p.kind).collect();
+        assert_eq!(
+            kinds,
+            [Kind::Point([12.0, 12.5]), Kind::Point([88.0, 62.0]), Kind::Point([50.0, 50.0]), Kind::Range { min: 0.0, max: 100.0, default: 50.0 }]
+        );
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        let mut fixed = Map::new();
+        fixed.insert("id".into(), json!("org.example.bolt"));
+        open_with_spec(&mut app, "plugin.run", "Bolt", spec, fixed);
+        let fields = &mut app.ui.dialogs.last_mut().unwrap().fields;
+        assert_eq!(fields["start"], json!([12.0, 12.5]));
+        fields.insert("end".into(), json!([33.25, 70.0]));
+        let params = params_of(fields);
+        assert_eq!(params["start"], json!([12.0, 12.5]));
+        assert_eq!(params["end"], json!([33.25, 70.0]), "a point value reaches the command unchanged");
+        assert_eq!(params["id"], json!("org.example.bolt"));
+    }
+
+    #[test]
+    fn plugin_color_params_open_with_their_defaults_and_pass_through_unchanged() {
+        let m = photocraft_plugins::Manifest::parse(
+            br##"{"id":"org.example.bolt","name":"Bolt","kind":"filter",
+                "params":{"inner":{"type":"color","default":"#CFEAFF"},"outer":{"type":"color","default":"#5a8cff"}}}"##,
+        )
+        .unwrap();
+        let spec = m.params_notation();
+        let kinds: Vec<Kind> = parse_spec(&spec).into_iter().map(|p| p.kind).collect();
+        assert_eq!(kinds, [Kind::Color(crate::color_picker_ui::parse_hex("#cfeaff")), Kind::Color(crate::color_picker_ui::parse_hex("#5a8cff"))]);
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        let mut fixed = Map::new();
+        fixed.insert("id".into(), json!("org.example.bolt"));
+        open_with_spec(&mut app, "plugin.run", "Bolt", &spec, fixed);
+        let fields = &mut app.ui.dialogs.last_mut().unwrap().fields;
+        assert_eq!((&fields["inner"], &fields["outer"]), (&json!("#cfeaff"), &json!("#5a8cff")));
+        // A colour the picker set survives drawing the dialog and reaches the plug-in unchanged.
+        fields.insert("inner".into(), json!("#ff8800"));
+        let ctx = egui::Context::default();
+        ctx.run_ui(Default::default(), |ui| body(ui, fields)).textures_delta.clear();
+        let params = params_of(fields);
+        assert_eq!(params["inner"], json!("#ff8800"));
+        assert_eq!(params["outer"], json!("#5a8cff"));
+        let resolved = m.resolve_params(&params).unwrap();
+        assert_eq!((&resolved["inner"], &resolved["outer"]), (&json!("#ff8800"), &json!("#5a8cff")));
+    }
+
+    #[test]
+    fn plugin_tabs_default_to_the_first_and_keep_every_tabs_values() {
+        let m = photocraft_plugins::Manifest::parse(
+            br##"{"id":"org.example.bolt","name":"Bolt","kind":"filter","params":{
+                "effect":{"type":"choice","options":["a","b"]},
+                "glow":{"type":"number","min":0,"max":1,"default":0.5,"group":"Glow"},
+                "start":{"type":"point","default":[12,12],"group":"Bolt"},
+                "inner":{"type":"color","default":"#ffffff","group":"Colour"}}}"##,
+        )
+        .unwrap();
+        let mut fixed = Map::new();
+        fixed.insert("id".into(), json!("org.example.bolt"));
+        fixed.insert("__tabs".into(), json!(m.tabs()));
+        fixed.insert("__groupOf".into(), json!({"glow": "Glow", "start": "Bolt", "inner": "Colour"}));
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        open_with_spec(&mut app, "plugin.run", "Bolt", &m.params_notation(), fixed);
+        let fields = &mut app.ui.dialogs.last_mut().unwrap().fields;
+        let (tabs, group_of) = tabs_of(fields);
+        assert_eq!(tabs, ["Glow", "Bolt", "Colour"]);
+        assert_eq!(group_of.get("effect"), None, "ungrouped: always visible");
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts(&ctx);
+        ctx.run_ui(Default::default(), |ui| body(ui, fields)).textures_delta.clear();
+        assert_eq!(fields[TAB], json!("Glow"), "the first tab is selected");
+        // Another tab: the hidden tabs' values still reach the plug-in (and the live preview).
+        fields.insert(TAB.into(), json!("Colour"));
+        fields.insert("start".into(), json!([40.0, 60.0]));
+        ctx.run_ui(Default::default(), |ui| body(ui, fields)).textures_delta.clear();
+        assert_eq!(fields[TAB], json!("Colour"));
+        let params = params_of(fields);
+        assert_eq!(
+            (&params["effect"], &params["glow"], &params["start"], &params["inner"]),
+            (&json!("a"), &json!(0.5), &json!([40.0, 60.0]), &json!("#ffffff"))
+        );
+        assert!(params.get("__tab").is_none() && params.get("__tabs").is_none());
+        // A stale or unknown tab falls back to the first.
+        fields.insert(TAB.into(), json!("Gone"));
+        assert_eq!(selected_tab(fields, &tabs), "Glow");
+    }
+
+    #[test]
+    fn plugin_dial_points_east_at_0_and_turns_clockwise() {
+        assert_eq!(dial_angle(egui::vec2(20.0, 0.0)), Some(0.0), "due east");
+        assert_eq!(dial_angle(egui::vec2(0.0, 20.0)), Some(90.0), "due south: clockwise on screen");
+        assert_eq!(dial_angle(egui::vec2(-20.0, 0.0)), Some(180.0), "due west");
+        assert_eq!(dial_angle(egui::vec2(0.0, -20.0)), Some(270.0), "due north");
+        assert_eq!(dial_angle(egui::vec2(20.0, -0.1)), Some(0.0), "just above east rounds to 0, not 360");
+        assert_eq!(dial_angle(egui::vec2(0.2, 0.2)), None, "the centre has no direction");
+    }
+
+    #[test]
+    fn plugin_angle_params_open_with_their_defaults_wrap_and_pass_through() {
+        let m = photocraft_plugins::Manifest::parse(
+            br#"{"id":"org.example.bolt","name":"Bolt","kind":"filter",
+                "params":{"direction":{"type":"angle","default":45,"group":"Bolt"},"tilt":{"type":"angle"}}}"#,
+        )
+        .unwrap();
+        let spec = m.params_notation();
+        let kinds: Vec<Kind> = parse_spec(&spec).into_iter().map(|p| p.kind).collect();
+        assert_eq!(kinds, [Kind::Angle(45.0), Kind::Angle(0.0)]);
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        let mut fixed = Map::new();
+        fixed.insert("id".into(), json!("org.example.bolt"));
+        open_with_spec(&mut app, "plugin.run", "Bolt", &spec, fixed);
+        let fields = &mut app.ui.dialogs.last_mut().unwrap().fields;
+        assert_eq!((&fields["direction"], &fields["tilt"]), (&json!(45.0), &json!(0.0)));
+        let ctx = egui::Context::default();
+        let draw = |fields: &mut Map<String, Value>| ctx.run_ui(Default::default(), |ui| body(ui, fields)).textures_delta.clear();
+        // A value the dial or field set survives drawing and reaches the plug-in unchanged.
+        fields.insert("direction".into(), json!(137.5));
+        draw(fields);
+        let params = params_of(fields);
+        assert_eq!((&params["direction"], &params["tilt"]), (&json!(137.5), &json!(0.0)));
+        let resolved = m.resolve_params(&params).unwrap();
+        assert_eq!(resolved["direction"], json!(137.5));
+        // Out-of-range values from the dialog wrap into 0-360.
+        for (given, want) in [(370.0, 10.0), (-90.0, 270.0), (360.0, 360.0)] {
+            fields.insert("direction".into(), json!(given));
+            draw(fields);
+            assert_eq!(fields["direction"], json!(want), "{given}");
+        }
     }
 }

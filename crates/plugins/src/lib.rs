@@ -22,11 +22,12 @@
 
 mod apply;
 pub mod manifest;
+pub mod presets;
 pub mod registry;
 mod runtime;
 
 pub use apply::format_code;
-pub use manifest::{Area, Kind, Manifest, ParamSpec, Unit};
+pub use manifest::{Area, Guide, Kind, Manifest, ParamSpec, Unit, clamp_point, normalize_color, wrap_angle};
 pub use runtime::{ABI_VERSION, Limits, Plugin};
 
 /// A plug-in error. Every way a module can misbehave ends here, never in a panic.

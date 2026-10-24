@@ -176,6 +176,8 @@ pub mod pattern_preview;
 pub mod perspective_crop_ui;
 pub mod perspective_ui;
 pub mod pixel_grid;
+pub mod plugin_points;
+pub mod plugin_presets_ui;
 pub mod plugin_ui;
 pub mod point_curve;
 pub mod prefs_ui;
@@ -512,6 +514,10 @@ pub type Inbox = std::sync::Arc<std::sync::Mutex<Vec<(String, Vec<u8>)>>>;
 pub type LoadTextFn = Box<dyn FnMut() -> Option<String>>;
 /// Persist the preferences text.
 pub type SaveTextFn = Box<dyn FnMut(&str) -> Result<(), String>>;
+/// A plug-in's saved presets, by plug-in id (empty when there are none or the file is unusable).
+pub type LoadPluginPresetsFn = fn(&str) -> photocraft_plugins::presets::Presets;
+/// Replace a plug-in's saved presets, by plug-in id.
+pub type SavePluginPresetsFn = fn(&str, &photocraft_plugins::presets::Presets) -> Result<(), String>;
 /// Platform appearance when egui cannot detect it (for example, Wayland without a theme event).
 pub type SystemThemeFn = Box<dyn Fn(&egui::Context) -> Option<egui::Theme>>;
 /// Autosave a document snapshot for crash recovery: (snapshot, revision, original path).
@@ -628,6 +634,11 @@ pub struct Services {
     pub save_prefs: Option<SaveTextFn>,
     /// Photoshop's live keyboard shortcut set, imported once at first launch (`kys_import`).
     pub photoshop_shortcuts: Option<PhotoshopShortcutsFn>,
+    /// Named presets for plug-in dialogs, one store per plug-in id (desktop: one JSON file per
+    /// plug-in in the settings folder). The plug-in never sees these; without them, plug-in
+    /// dialogs show no Presets row.
+    pub load_plugin_presets: Option<LoadPluginPresetsFn>,
+    pub save_plugin_presets: Option<SavePluginPresetsFn>,
     pub system_theme: Option<SystemThemeFn>,
     /// The native window is connected directly to a Wayland compositor.
     pub is_wayland: bool,

@@ -1701,6 +1701,11 @@ pub(crate) fn ensure_texture_in_view(
         (st.revision, st.last_damage.map(|r| if r.is_empty() { r } else { r.inflate(effect_reach(&st.doc.layers)) }), st.doc.id)
     };
     let (mut doc, mut preview_key) = display_doc(app, idx);
+    if preview_key == 0
+        && let Some(shown) = cpu_filter_preview(app, idx, ctx)
+    {
+        (doc, preview_key) = shown;
+    }
     // A flipped view draws a GPU machine's canvas through here: an adjustment dialog's preview of
     // a large document (taken by the GPU path) would cost a full-size CPU composite per change.
     if crate::adjust_preview::shown_key(app) == Some(preview_key)
@@ -2193,6 +2198,27 @@ pub(crate) fn filter_preview_factor(app: &PhotocraftApp, doc: &Document, cmd: &s
     // A smart filter edit re-renders the whole stack: every stage constrains the factor.
     let k = crate::filter_dialog::smart_preview_factor(doc, cmd, params, crate::proxy::preview_factor(doc, crate::proxy::reduced_previews(app)));
     if cfg!(target_arch = "wasm32") { k } else { crate::proxy::view_factor(k, app.current_zoom()) }
+}
+
+/// The CPU canvas (no GPU canvas, e.g. a window on a software rasterizer): an open filter dialog's
+/// live preview as the document to show, and its texture key. Only the GPU path asked for the
+/// preview, so on the CPU canvas a filter showed nothing until OK. A reduced (proxy) preview is
+/// stretched over the image like the GPU path's; one that changes the canvas size is not shown.
+fn cpu_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &egui::Context) -> Option<(std::sync::Arc<Document>, u64)> {
+    if app.gpu.is_some() {
+        return None;
+    }
+    let (k, _, size) = ensure_filter_preview(app, idx, ctx)?;
+    let st = app.session.documents().get(idx)?;
+    if size != [st.doc.size.width.div_ceil(k), st.doc.size.height.div_ceil(k)] {
+        return None;
+    }
+    let p = app.filter_preview.as_ref()?;
+    let doc = p.result.clone()?;
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    format!("{:?}", p.key).hash(&mut h);
+    Some((doc, h.finish() | 1 << 42))
 }
 
 /// Live preview for an open filter dialog: run the filter on the proxy and upload it. With
@@ -4060,6 +4086,9 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         {
             let d = xf.to_doc(p);
             crate::adjust_dialog::add_point_at(app, &ctx, d[0], d[1], mods.shift);
+        } else if primary && !middle && crate::plugin_points::active(app, idx) {
+            // A plug-in's `point` params: handles clicked or dragged on the image.
+            crate::plugin_points::interact(app, &ctx, &xf, size, rect, idx);
         } else if primary
             && !middle
             && let Some(p) = crate::dialogs::free_pointer_over(&ctx, rect).filter(|p| img_rect.contains(*p))
@@ -4070,6 +4099,9 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                 .map(|q| xf.to_doc(q));
             crate::color_range_ui::canvas_eyedropper(app, &ctx, p, press);
         }
+    }
+    if primary {
+        crate::plugin_points::draw(app, &painter, &xf, size, idx);
     }
     // The selected Hand yields to an open Free Transform box in this (primary) window: the box
     // owns the pointer, so the tool behind it cannot steal the resize drag (#2302). The held Hand
@@ -10022,6 +10054,35 @@ mod rotation_preview_isolation_tests {
         app.ui.dialogs.last_mut().unwrap().fields.insert("__preview".into(), json!(false));
         assert!(ensure_filter_preview(&mut app, 0, &egui::Context::default()).is_none(), "disabling Preview must hide the preview");
         assert_eq!([app.session.active().unwrap().doc.size.width, app.session.active().unwrap().doc.size.height], [96, 48]);
+    }
+
+    /// The CPU canvas (no GPU canvas: a window on a software rasterizer) shows a plug-in filter's
+    /// live preview too. Only the GPU path asked for it, so the canvas showed nothing until OK.
+    #[test]
+    fn cpu_canvas_shows_a_plugin_filters_live_preview() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../plugins/tests/fixtures/invert.wasm");
+        app.run("plugin.install", json!({"path": path})).unwrap();
+        app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+        assert!(app.gpu.is_none());
+        let ctx = egui::Context::default();
+        let id = app.session.active().unwrap().doc.id;
+        let shown = |app: &mut PhotocraftApp| {
+            ensure_texture(app, &ctx, 0, None).expect("canvas texture");
+            app.canvases[&cache_key(id, None)].tex_preview_key
+        };
+        let plain = shown(&mut app);
+        let mut fixed = serde_json::Map::new();
+        fixed.insert("id".into(), json!("org.photocraft.example.invert"));
+        let dialog = crate::filter_dialog::open_with_spec(&mut app, "plugin.run", "Invert", r#"{"start":point=[10,10]}"#, fixed);
+        let before = app.session.active().unwrap().doc.layers[0].surface().unwrap().pixel(1, 1);
+        let (doc, _) = cpu_filter_preview(&mut app, 0, &ctx).expect("the CPU canvas shows the preview");
+        let px = doc.layers[0].surface().unwrap().pixel(1, 1);
+        assert!((px[0] - (1.0 - before[0])).abs() < 1e-6, "the plug-in ran for the preview");
+        assert_ne!(shown(&mut app), plain, "the canvas texture is the preview");
+        assert_eq!(app.session.active().unwrap().doc.layers[0].surface().unwrap().pixel(1, 1), before, "the document is untouched");
+        crate::dialogs::cancel(&mut app, dialog).unwrap();
+        assert_eq!(shown(&mut app), plain, "Cancel shows the document again");
     }
 
     /// A dialog operates on the active document and cannot render a preview into a

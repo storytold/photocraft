@@ -4665,6 +4665,7 @@ dependencies = [
  "photocraft-format",
  "photocraft-geom",
  "photocraft-io",
+ "photocraft-plugins",
  "photocraft-raster",
  "photocraft-tablet",
  "photocraft-ui-egui",

@@ -689,6 +689,9 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
         load_prefs: Some(Box::new(|| std::fs::read_to_string(prefs_file()?).ok())),
         photoshop_shortcuts: Some(Box::new(|| crate::photoshop_settings::live_keyboard_shortcuts(&|k| std::env::var_os(k)))),
         save_prefs: Some(Box::new(|text: &str| write_atomic(&prefs_file().ok_or("no config directory")?, text.as_bytes()))),
+        // Plug-in presets: one file per plug-in id under `<config dir>/plugins/`.
+        load_plugin_presets: Some(crate::plugin_presets::load),
+        save_plugin_presets: Some(crate::plugin_presets::save),
         system_theme: crate::appearance::service(),
         append_text: Some(Box::new(|path: &str, text: &str| {
             use std::io::Write;
