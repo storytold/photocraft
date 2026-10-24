@@ -721,7 +721,23 @@ impl Ex {
                 let masked = l.vector_mask.is_some();
                 raw.retain(|(k, _)| !(RASTER_STALE_KEYS.contains(&k) || adjust_map::ADJUSTMENT_KEYS.contains(&k) || k == b"CgEd" || (k == b"vstk" && masked)));
             }
-            LayerContent::Group(_) => {}
+            // A Frame's stroke (`vstk`), kept byte-identical while it still decodes to the model.
+            LayerContent::Group(g) => {
+                let pos = raw.iter().position(|(k, _)| k == b"vstk");
+                let old = pos.and_then(|i| raw.get(i)).and_then(|(_, d)| crate::vector_map::parse_vstk(d, self.dpi));
+                // One we can't decode stays as it was unless the model has a stroke to write.
+                let stale = match &old {
+                    Some(v) => v.stroke != g.frame_stroke,
+                    None => g.frame_stroke.is_some(),
+                };
+                if stale {
+                    let data = crate::vector_map::vstk_bytes(g.frame_stroke.as_ref(), old.is_none_or(|v| v.fill_enabled), self.dpi);
+                    match pos.and_then(|i| raw.get_mut(i)) {
+                        Some(e) => e.1 = data,
+                        None => raw.push((*b"vstk", data)),
+                    }
+                }
+            }
         }
         // Effects reference point: written from the field (in place, keeping block order).
         match l.effects.reference {
