@@ -1546,7 +1546,44 @@ fn detect_video_memory(vendor: u32, device: u32) -> Option<u64> {
 
 #[cfg(target_os = "linux")]
 fn detect_video_memory(vendor: u32, device: u32) -> Option<u64> {
-    drm_video_memory(std::path::Path::new("/sys/class/drm"), vendor, device)
+    drm_video_memory(std::path::Path::new("/sys/class/drm"), vendor, device).or_else(|| nvidia_video_memory(vendor, device))
+}
+
+/// PCI vendor id of NVIDIA, whose proprietary Linux driver writes none of amdgpu's
+/// `mem_info_vram_total` sysfs files (a card of its own still reads as [`None`] above): without
+/// this, a discrete NVIDIA card was charged for the document's pixels like an integrated one,
+/// `memory_budget` shrank to Memory Usage minus them, and a many-layer document whose pages then
+/// missed that budget redrew whole-document edits on the CPU every time (P60/P61 on an NVIDIA
+/// Linux box: 1.5 s where the fix's own benchmark measures tens of milliseconds elsewhere).
+#[cfg(any(target_os = "linux", test))]
+const NVIDIA_VENDOR: u32 = 0x10de;
+
+/// NVIDIA's own memory size on Linux, from `nvidia-smi` (installed with the driver that put this
+/// adapter there in the first place): absent, slow to answer or odd output all read as `None`,
+/// never a hang or a panic.
+#[cfg(target_os = "linux")]
+fn nvidia_video_memory(vendor: u32, device: u32) -> Option<u64> {
+    if vendor != NVIDIA_VENDOR {
+        return None;
+    }
+    let out = std::process::Command::new("nvidia-smi").args(["--query-gpu=pci.device_id,memory.total", "--format=csv,noheader,nounits"]).output().ok()?;
+    out.status.success().then(|| parse_nvidia_smi(&String::from_utf8_lossy(&out.stdout), vendor, device)).flatten()
+}
+
+/// `nvidia-smi --query-gpu=pci.device_id,memory.total --format=csv,noheader,nounits`'s own
+/// format: one `0xDDDDVVVV, size-in-MiB` line per card (device id the high half, vendor id the
+/// low, as `lspci -n` and wgpu's own ids read them). The matching line's size, in bytes; `None`
+/// when no line names this `vendor`/`device`, or the output isn't shaped like that at all.
+#[cfg(any(target_os = "linux", test))]
+fn parse_nvidia_smi(output: &str, vendor: u32, device: u32) -> Option<u64> {
+    output.lines().find_map(|line| {
+        let (id, mb) = line.split_once(',')?;
+        let id = u32::from_str_radix(id.trim().trim_start_matches("0x").trim_start_matches("0X"), 16).ok()?;
+        if id & 0xffff != vendor || id >> 16 != device {
+            return None;
+        }
+        mb.trim().parse::<u64>().ok()?.checked_mul(1 << 20)
+    })
 }
 
 /// amdgpu's VRAM size (`<card>/device/mem_info_vram_total`, bytes) of the card under `drm` (the
@@ -2841,6 +2878,35 @@ mod tests {
         assert_eq!(drm_video_memory(&drm, 0xdead, 0xbeef), None, "no such card");
         assert_eq!(drm_video_memory(&drm.join("missing"), 0x1002, 0x73bf), None, "no drm folder");
         std::fs::remove_dir_all(&drm).unwrap();
+    }
+
+    /// #P60/P61: amdgpu's sysfs files have no NVIDIA equivalent, so a discrete NVIDIA card's own
+    /// memory comes from `nvidia-smi`'s CSV instead (real output: `0x2C0510DE, 16303`, device id
+    /// the high half of the hex, vendor the low). A second card, an upper-case `0X` prefix, extra
+    /// spaces, a non-matching id, a missing comma, a non-numeric size, empty output and a size
+    /// that would overflow all give nothing rather than the wrong (or a panicking) answer.
+    #[test]
+    fn parses_nvidia_smis_own_report_of_the_cards_memory() {
+        let two = "0x2C0510DE, 16303\n0x061C10DE, 24576\n";
+        assert_eq!(parse_nvidia_smi(two, NVIDIA_VENDOR, 0x2c05), Some(16303 << 20));
+        assert_eq!(parse_nvidia_smi(two, NVIDIA_VENDOR, 0x061c), Some(24576 << 20));
+        assert_eq!(parse_nvidia_smi("0X2C0510DE,   16303  \n", NVIDIA_VENDOR, 0x2c05), Some(16303 << 20), "upper-case prefix, loose spacing");
+        assert_eq!(parse_nvidia_smi(two, NVIDIA_VENDOR, 0xdead), None, "no such device id");
+        assert_eq!(parse_nvidia_smi(two, 0x1002, 0x2c05), None, "no such vendor id");
+        assert_eq!(parse_nvidia_smi("not csv at all", NVIDIA_VENDOR, 0x2c05), None);
+        assert_eq!(parse_nvidia_smi("0x2C0510DE 16303\n", NVIDIA_VENDOR, 0x2c05), None, "no comma");
+        assert_eq!(parse_nvidia_smi("0x2C0510DE, lots\n", NVIDIA_VENDOR, 0x2c05), None, "not a number");
+        assert_eq!(parse_nvidia_smi("", NVIDIA_VENDOR, 0x2c05), None, "empty output");
+        assert_eq!(parse_nvidia_smi(&format!("0x2C0510DE, {}\n", u64::MAX), NVIDIA_VENDOR, 0x2c05), None, "would overflow");
+    }
+
+    /// Only a discrete NVIDIA adapter asks `nvidia-smi`: nothing else spawns a process whose
+    /// answer it would then ignore anyway (`nvidia_video_memory` gates on the vendor id first).
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn nvidia_video_memory_only_asks_for_an_nvidia_vendor_id() {
+        assert_eq!(nvidia_video_memory(0x1002, 0x73bf), None, "an AMD id never runs nvidia-smi");
+        assert_eq!(nvidia_video_memory(0x8086, 0x9a49), None, "an Intel id never runs nvidia-smi");
     }
 
     /// Windows used to report no RAM at all, so the budget assumed 16 GB on every machine.
