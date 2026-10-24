@@ -93,11 +93,19 @@ pub struct ListLayout {
     /// the bottom (or, with only the tip and the name on, in the stroke's cell). Replaces the
     /// list/grid choice in the picker.
     pub cards: bool,
+    /// The list takes all of `max_height` however few rows it shows (a dock panel's list, down
+    /// to its footer); off, it shrinks to its rows.
+    pub fill: bool,
 }
 
-/// The Brushes tab's list.
-pub const PANEL_LIST: ListLayout = ListLayout { id: "brush-presets", max_height: 400.0, cell: 52.0, indent: 20.0, cards: false };
+/// The Brushes tab's list. [`show`] sets its height.
+pub const PANEL_LIST: ListLayout = ListLayout { id: "brush-presets", max_height: 400.0, cell: 52.0, indent: 20.0, cards: false, fill: false };
+/// In a dock panel the Brushes tab's list never gets shorter than this; a shorter panel scrolls
+/// as a whole.
+const MIN_LIST_H: f32 = 120.0;
 
+/// The list in a window that takes its contents' size (Brush Settings' Brushes tab), where there
+/// is no panel height to fill.
 fn responsive_list_layout(ui: &egui::Ui) -> ListLayout {
     let height = ui.available_height().clamp(180.0, 640.0);
     ListLayout { max_height: height, ..PANEL_LIST }
@@ -347,10 +355,38 @@ pub(crate) fn grid_cell_width(cell: f32, scale: f32) -> f32 {
     cell * if scale.is_finite() { scale.clamp(*PREVIEW_SCALE_RANGE.start(), *PREVIEW_SCALE_RANGE.end()) } else { 1.0 }
 }
 
-fn list_row(ui: &mut egui::Ui, p: &BrushPreset, current: bool, presets: &[BrushPreset], indent: f32, scale: f32, acts: &mut Vec<Action>) {
+/// The narrowest a list row gets at preview scale 1 before rows share the width in columns: a
+/// smaller preview makes it narrower, so more columns fit (Photoshop's list view). The standard
+/// and larger previews keep one row per line.
+const LIST_ROW_W: f32 = 300.0;
+
+/// The list's columns in a list `width` points wide, `indent` past its left edge, at preview
+/// `scale`: how many [`LIST_ROW_W`]-wide rows fit side by side (one at least, and only one below
+/// a smaller preview), and the width each gets of the room past the indent.
+pub(crate) fn list_columns(width: f32, indent: f32, scale: f32) -> (f32, usize) {
+    let (_, fit) = grid_columns(width, LIST_ROW_W * list_row_height(scale) / 44.0, indent, GRID_GAP);
+    let cols = if scale < 1.0 { fit } else { 1 };
+    let room = if width.is_finite() { (width - indent).max(0.0) } else { 0.0 };
+    (((room - GRID_GAP * (cols - 1) as f32) / cols as f32).floor(), cols)
+}
+
+/// A list row `width` points wide; `columns`: it shares its line with others, so a preset
+/// dropped on it lands before or after it by the pointer's side, as in the grid.
+#[allow(clippy::too_many_arguments)]
+fn list_row(
+    ui: &mut egui::Ui,
+    p: &BrushPreset,
+    current: bool,
+    presets: &[BrushPreset],
+    width: f32,
+    indent: f32,
+    scale: f32,
+    columns: bool,
+    acts: &mut Vec<Action>,
+) {
     let t = Tokens::get(ui.ctx());
     let k = list_row_height(scale) / 44.0;
-    let (full, resp) = ui.allocate_exact_size(vec2(ui.available_width(), list_row_height(scale)), Sense::click_and_drag());
+    let (full, resp) = ui.allocate_exact_size(vec2(width, list_row_height(scale)), Sense::click_and_drag());
     // Rows inside nested folders are indented; the whole width stays the drop target.
     let r = egui::Rect::from_min_max(full.min + vec2(indent.min(full.width() / 2.0), 0.0), full.max);
     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, current, &p.name));
@@ -376,12 +412,13 @@ fn list_row(ui: &mut egui::Ui, p: &BrushPreset, current: bool, presets: &[BrushP
     );
     // The stroke preview gives up width so a narrow list (the picker) still shows the name; its
     // texture slot carries the width, so lists of different widths don't re-render each other's.
-    let w = (r.width() - (cell.right() - r.left()) - STROKE_NAME_ROOM).clamp(60.0, 170.0).round();
+    // Small previews let it shrink further, for the name in a narrow column.
+    let w = (r.width() - (cell.right() - r.left()) - STROKE_NAME_ROOM).clamp(60.0 * k, 170.0).round();
     let stroke = brush_preview::stroke_texture(ui.ctx(), &format!("brushes-stroke-{w}:{}", p.name), pb, w as u32, 36, t.text);
     let sr = egui::Rect::from_min_size(pos2(cell.right() + 8.0, r.top() + 4.0 * k), vec2(w, 36.0 * k));
     ui.painter().image(stroke.id(), sr, full_uv(), Color32::WHITE);
     crate::layer_row_ui::label(ui.painter(), sr.right() + 12.0, r.center().y, r.right() - 4.0, &p.name, egui::FontId::proportional(12.0), t.text_dim);
-    preset_interactions(ui, &resp, r, p, presets, false, acts);
+    preset_interactions(ui, &resp, r, p, presets, columns, acts);
 }
 
 /// The gap between grid cells, across and down.
@@ -834,8 +871,19 @@ fn draw_nodes(ui: &mut egui::Ui, d: &Draw, nodes: &[Node], depth: usize, acts: &
                 }
             });
         } else {
-            for p in run.iter() {
-                list_row(ui, p, d.current.is_some_and(|n| p.name.eq_ignore_ascii_case(n)), d.presets, indent, d.scale, acts);
+            // Rows share the width in columns at small previews, in reading order; the first
+            // column keeps the folder indent inside its row, so the indent stays a drop target.
+            let (col_w, cols) = list_columns(ui.available_width(), indent, d.scale);
+            for line in run.chunks(cols) {
+                // Not `horizontal`: its minimum height would pad the smallest rows.
+                let size = vec2(ui.available_width(), list_row_height(d.scale));
+                ui.allocate_ui_with_layout(size, egui::Layout::left_to_right(egui::Align::Min), |ui| {
+                    ui.spacing_mut().item_spacing.x = GRID_GAP;
+                    for (i, p) in line.iter().enumerate() {
+                        let pad = if i == 0 { indent } else { 0.0 };
+                        list_row(ui, p, d.current.is_some_and(|n| p.name.eq_ignore_ascii_case(n)), d.presets, col_w + pad, pad, d.scale, cols > 1, acts);
+                    }
+                });
             }
         }
         run.clear();
@@ -905,7 +953,7 @@ pub fn preset_list(ui: &mut egui::Ui, presets: &[BrushPreset], current: Option<&
     let grid = st.view == BrushesView::Grid;
     let show = (st.show_name, st.show_stroke, st.show_tip);
     let collapsed = &st.collapsed;
-    egui::ScrollArea::vertical().id_salt(layout.id).max_height(layout.max_height).auto_shrink([false, true]).show(ui, |ui| {
+    egui::ScrollArea::vertical().id_salt(layout.id).max_height(layout.max_height).auto_shrink([false, !layout.fill]).show(ui, |ui| {
         // A preset, group or folder dragged to the list's top or bottom edge (or past it) scrolls
         // the list, as the Layers panel's rows do, so it can be dropped on rows out of view (#5741).
         let dragging = egui::DragAndDrop::has_payload_of_type::<BrushDrag>(ui.ctx()) && ui.input(|i| i.pointer.primary_down());
@@ -983,8 +1031,9 @@ pub fn preset_list(ui: &mut egui::Ui, presets: &[BrushPreset], current: Option<&
     view_actions(st, acts)
 }
 
-/// The Brushes tab.
-pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+/// The Brushes tab. `fill`: it has a panel's height to fill (a dock panel); off in a window that
+/// takes its contents' size.
+pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, fill: bool) {
     let t = Tokens::get(ui.ctx());
     let inner_w = ui.available_width().max(180.0);
     // Size of the current brush (Photoshop's Brushes panel slider).
@@ -1040,7 +1089,15 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         });
     });
     ui.add_space(6.0);
-    let acts = preset_list(ui, &app.session.tools.presets, app.session.tools.current_preset.as_deref(), &mut app.ui.brushes_panel, responsive_list_layout(ui));
+    // In a panel the list fills it down to the footer, which sits at the bottom: its spaces, line
+    // and button row. A short panel keeps a few rows and scrolls as a whole.
+    let footer = 4.0 + 1.0 + ui.spacing().item_spacing.y + 4.0 + 24.0;
+    let layout = if fill {
+        ListLayout { max_height: (ui.available_height() - ui.spacing().item_spacing.y - footer).max(MIN_LIST_H), fill: true, ..PANEL_LIST }
+    } else {
+        responsive_list_layout(ui)
+    };
+    let acts = preset_list(ui, &app.session.tools.presets, app.session.tools.current_preset.as_deref(), &mut app.ui.brushes_panel, layout);
     apply(app, acts);
     ui.add_space(4.0);
     widgets::hairline(ui);

@@ -1859,7 +1859,7 @@ pub(crate) fn dock_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, group: crate
         (Group::Layers, 0) => layers(app, ui),
         (Group::Layers, 1) => channels(app, ui),
         (Group::Layers, _) => crate::vector_ui::paths_panel(app, ui),
-        (Group::Brushes, _) => crate::brushes_tab::show(app, ui),
+        (Group::Brushes, _) => crate::brushes_tab::show(app, ui, true),
     }
 }
 

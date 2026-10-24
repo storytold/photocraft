@@ -435,3 +435,68 @@ fn preview_scale_is_clamped_to_its_range() {
     assert_eq!(grid_cell_width(52.0, 0.0), 26.0);
     assert_eq!(grid_cell_width(52.0, f32::INFINITY), 52.0);
 }
+
+#[test]
+fn list_rows_flow_into_columns_only_at_small_previews() {
+    // The standard size and larger keep one column, however wide the panel.
+    for (w, scale) in [(280.0, 1.0), (560.0, 1.0), (1200.0, 1.0), (1200.0, 2.0)] {
+        assert_eq!(list_columns(w, 0.0, scale), (w, 1), "{w} at {scale}");
+    }
+    // Small previews share the width; each column takes its share of the room past the indent.
+    assert_eq!(list_columns(400.0, 0.0, 0.6), (198.0, 2));
+    assert_eq!(list_columns(700.0, 16.0, 0.5).1, 4);
+    for w in [0.0, -5.0, f32::NAN, f32::INFINITY] {
+        let (col_w, cols) = list_columns(w, 0.0, 0.5);
+        assert!(cols >= 1 && col_w.is_finite() && col_w >= 0.0, "{w}: {col_w} {cols}");
+    }
+}
+
+/// A Brushes panel taking a tall dock: the list fills it, the footer at its bottom (the
+/// list used to stop at 640 pt and leave the rest empty).
+#[test]
+fn the_brushes_list_fills_a_tall_panel() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.ui.docking = Some(serde_json::from_value(json!({"floating":[],"root":{"Tabs":{"panels":["brushes"],"active":0}}})).unwrap());
+    app.ui.brushes_panel.view = BrushesView::List;
+    let footer = format!("{} presets", app.session.tools.presets.len());
+    let mut h = Harness::builder().with_size(vec2(1200.0, 1400.0)).build_eframe(move |cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, crate::theme::ThemeKind::ALL[0]);
+        app
+    });
+    h.run_steps(6);
+    let bottom = h.get_by_label(&footer).rect().bottom();
+    assert!(bottom > 1400.0 - 60.0, "the footer sits at the panel's bottom: {bottom}");
+}
+
+/// Rows sharing a line in columns: a preset dropped on another's right half lands after it, by
+/// the pointer's side as in the grid (a list compared heights, so it landed before).
+#[test]
+fn a_brush_dropped_on_a_rows_right_half_lands_after_it_in_columns() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.run("window.panel.float", json!({"panel": "brushes", "x": 20, "y": 20, "width": 420, "height": 760})).unwrap();
+    app.ui.brushes_panel.view = BrushesView::List;
+    app.ui.brushes_panel.scale = 0.6;
+    let names: Vec<String> = app.session.tools.presets.iter().take(3).map(|p| p.name.clone()).collect();
+    let mut h = Harness::builder().with_size(vec2(1200.0, 900.0)).build_eframe(move |cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, crate::theme::ThemeKind::ALL[0]);
+        app
+    });
+    h.run_steps(4);
+    let rect = |h: &Harness<'_, PhotocraftApp>, n: &str| h.get_by_role_and_label(Role::Button, n).rect();
+    let (first, second, third) = (rect(&h, &names[0]), rect(&h, &names[1]), rect(&h, &names[2]));
+    assert!((first.top() - second.top()).abs() < 0.5 && third.top() > first.bottom(), "two columns: {first:?} {second:?} {third:?}");
+    // Onto the third's upper right quarter.
+    let target = egui::pos2(third.right() - 8.0, third.top() + 3.0);
+    h.hover_at(first.center());
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: first.center(), button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+    h.run_steps(1);
+    for p in [first.center() + vec2(0.0, 12.0), target] {
+        h.event(egui::Event::PointerMoved(p));
+        h.run_steps(2);
+    }
+    h.event(egui::Event::PointerButton { pos: target, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+    h.run_steps(2);
+    let order: Vec<&str> = h.state().session.tools.presets.iter().take(3).map(|p| p.name.as_str()).collect();
+    assert_eq!(order, [names[1].as_str(), names[2].as_str(), names[0].as_str()]);
+}
