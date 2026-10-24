@@ -1,10 +1,8 @@
-//! Native UI-language preferences, queried once without subprocesses or registry parsing.
+//! Platform UI-language preferences, queried once without subprocesses or registry parsing.
 
 use super::{Lang, lang_from_tag};
 
-#[cfg(not(target_arch = "wasm32"))]
 const MAX_SYSTEM_TAGS: usize = 64;
-#[cfg(not(target_arch = "wasm32"))]
 const MAX_SYSTEM_TAG_BYTES: usize = 128;
 
 /// Resolve Auto against the current registry. Cache the OS's tags, rather than a language,
@@ -26,7 +24,6 @@ fn resolve(tags: &[String]) -> Lang {
     tags.iter().find_map(|tag| lang_from_tag(tag)).unwrap_or(Lang::EN)
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn bounded_tags(tags: impl IntoIterator<Item = String>) -> Vec<String> {
     tags.into_iter()
         .take(MAX_SYSTEM_TAGS)
@@ -52,9 +49,17 @@ fn detect_system_tags() -> Vec<String> {
     std::panic::catch_unwind(|| bounded_tags(sys_locale::get_locales())).unwrap_or_default()
 }
 
+#[cfg(any(test, target_arch = "wasm32"))]
+fn browser_tags(preferred: impl IntoIterator<Item = String>, fallback: Option<String>) -> Vec<String> {
+    let tags = bounded_tags(preferred);
+    if tags.is_empty() { bounded_tags(fallback) } else { tags }
+}
+
 #[cfg(all(not(test), target_arch = "wasm32"))]
 fn detect_system_tags() -> Vec<String> {
-    Vec::new()
+    let Some(window) = web_sys::window() else { return Vec::new() };
+    let navigator = window.navigator();
+    browser_tags(navigator.languages().iter().filter_map(|tag| tag.as_string()), navigator.language())
 }
 
 #[cfg(test)]
@@ -79,6 +84,34 @@ pub(super) fn with_system_tags<R>(tags: &[&str], run: impl FnOnce() -> R) -> R {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn browser_preferences_select_auto_language_in_order() {
+        for (preferred, expected) in [
+            (vec!["it-IT"], "it"),
+            (vec!["sv-SE", "it-IT", "de-DE"], "it"),
+            (vec!["en-US", "it-IT"], "en"),
+            (vec!["zh-Hant-HK", "zh-CN"], "zh-hant"),
+            (vec!["unsupported"], "en"),
+        ] {
+            let tags = browser_tags(preferred.into_iter().map(String::from), Some("fr-FR".into()));
+            let tags: Vec<&str> = tags.iter().map(String::as_str).collect();
+            with_system_tags(&tags, || {
+                assert_eq!(Lang::from_pref("auto").code(), expected);
+                assert_eq!(Lang::from_pref("de").code(), "de", "explicit preferences override the browser");
+            });
+        }
+    }
+
+    #[test]
+    fn browser_preferences_fall_back_when_the_list_is_empty_or_invalid() {
+        assert_eq!(browser_tags(Vec::new(), Some("  it-IT  ".into())), ["it-IT"]);
+        assert_eq!(browser_tags(["".into(), "bad\0tag".into(), "x".repeat(129)], Some("tr-TR".into())), ["tr-TR"]);
+        assert!(browser_tags(Vec::new(), None).is_empty());
+        assert!(browser_tags(Vec::new(), Some("".into())).is_empty());
+        assert_eq!(browser_tags(["en-US".into()], Some("it-IT".into())), ["en-US"]);
+        assert_eq!(browser_tags(std::iter::repeat_n("it-IT".into(), 100), None).len(), MAX_SYSTEM_TAGS);
+    }
 
     #[test]
     fn system_preferences_are_negotiated_in_order() {
