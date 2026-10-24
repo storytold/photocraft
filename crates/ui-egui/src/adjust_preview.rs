@@ -43,6 +43,7 @@ use photocraft_geom::Rect;
 use serde_json::Value;
 
 use crate::PhotocraftApp;
+use crate::preview_session::{PreviewSession, hash};
 
 /// Id of the temporary preview layer. Fixed so the GPU compositor keeps its mask (the selection)
 /// resident from one change to the next. Never reaches a committed document.
@@ -50,9 +51,9 @@ pub const PREVIEW_LAYER: LayerId = LayerId(u64::MAX - 77);
 
 /// Tag of the preview keys handed to the canvas (`canvas::display_doc`).
 const TAG: u64 = 1 << 59;
-/// Bits of a preview key that identify the session (document state + target); below them the
-/// settings hash.
-const SESSION_SHIFT: u32 = 40;
+/// Bits of a preview key that identify the session (document state + target), between the
+/// settings hash (bits 0..40) and [`TAG`].
+const SESSION_BITS: u32 = 19;
 
 /// Why `target` in `doc` can't preview as a clipped adjustment layer, or None when it can.
 pub fn unsupported(doc: &Document, target: LayerId) -> Option<&'static str> {
@@ -147,13 +148,11 @@ pub fn region(doc: &Document, target: LayerId) -> Rect {
 
 /// Per-dialog preview state on the app.
 pub struct AdjustPreview {
-    doc: DocId,
-    revision: u64,
-    /// Session part of the keys (document, revision, target, channel target).
-    session: u64,
+    /// The session (document, revision, target, channel target), its region and what the canvas
+    /// composited of it.
+    s: PreviewSession,
     /// The session's [`base_document`], or None when it previews on the CPU proxy.
     base: Option<Arc<Document>>,
-    region: Rect,
     /// Hash of the kind, settings and Preview checkbox (0: no dialog).
     hash: u64,
     /// Whether the layer path handles these settings (false: CPU proxy preview).
@@ -166,9 +165,6 @@ pub struct AdjustPreview {
     settings: (String, Value),
     /// Reduced-resolution copy for zoomed-out views (see [`gpu_proxy`]).
     proxy: Option<GpuProxy>,
-    /// The main canvas texture shows preview `key` only within this rect (the view when it was
-    /// composited, see [`switch_damage`]); elsewhere in the region it is older.
-    covered: Option<(u64, Rect)>,
 }
 
 /// A [`base_document`] scaled down by `k` for zoomed-out GPU previews, with its own document and
@@ -194,11 +190,6 @@ fn dialog(app: &PhotocraftApp) -> Option<(String, Value, bool)> {
     Some((kind, crate::filter_dialog::params_of(&d.fields), preview))
 }
 
-/// FNV-1a over `parts`, never 0.
-fn hash(parts: &[&[u8]]) -> u64 {
-    parts.iter().flat_map(|p| p.iter()).fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3)) | 1
-}
-
 /// Whether the layer path can draw `doc` cheaply on this app's canvas.
 fn cheap(app: &PhotocraftApp, doc: &Document) -> bool {
     match &app.gpu {
@@ -215,8 +206,11 @@ fn update(app: &mut PhotocraftApp, idx: usize) -> Option<&AdjustPreview> {
     let Some((kind, params, preview)) = dialog(app) else {
         // Keep a closed dialog's session for the canvas's switch back (see `switch_region`) but
         // never show it.
+        // Nor its proxy: a filter dialog's GPU preview draws into the same proxy texture (both
+        // are `proxy_base` documents), so a reopened adjustment would take its stale `drawn`
+        // hash for the texture's contents.
         if let Some(p) = app.adjust_preview.as_mut() {
-            (p.hash, p.layer_path, p.shown) = (0, false, None);
+            (p.hash, p.layer_path, p.shown, p.proxy) = (0, false, None, None);
         }
         return None;
     };
@@ -230,32 +224,28 @@ fn update(app: &mut PhotocraftApp, idx: usize) -> Option<&AdjustPreview> {
     let session = hash(&[&doc_id.0.to_le_bytes(), &revision.to_le_bytes(), &target.0.to_le_bytes(), &[u8::from(channel_target)]]);
     let h = hash(&[kind.as_bytes(), params.to_string().as_bytes(), &[u8::from(preview)]]);
     if let Some(p) = &app.adjust_preview
-        && (p.doc, p.session, p.hash) == (doc_id, session, h)
+        && (p.s.doc, p.s.session, p.hash) == (doc_id, session, h)
     {
         return app.adjust_preview.as_ref();
     }
-    if app.adjust_preview.as_ref().is_none_or(|p| (p.doc, p.session) != (doc_id, session)) {
+    if app.adjust_preview.as_ref().is_none_or(|p| (p.s.doc, p.s.session) != (doc_id, session)) {
         let doc = st.doc.clone();
         let base = if channel_target { None } else { base_document(&doc, target).ok().filter(|b| cheap(app, b)).map(Arc::new) };
         let region = if base.is_some() { region(&doc, target) } else { Rect::EMPTY };
         app.adjust_preview = Some(AdjustPreview {
-            doc: doc_id,
-            revision,
-            session,
+            s: PreviewSession::new(TAG, SESSION_BITS, doc_id, revision, session, region),
             base,
-            region,
             hash: 0,
             layer_path: false,
             shown: None,
             changed_ms: crate::gpu_canvas::now_ms(),
             settings: (String::new(), Value::Null),
             proxy: None,
-            covered: None,
         });
     }
     let p = app.adjust_preview.as_mut()?;
     let built = p.base.as_ref().and_then(|b| with_settings(b, &kind, &params).ok());
-    let key = TAG | ((session & 0x7_ffff) << SESSION_SHIFT) | (h & ((1 << SESSION_SHIFT) - 1));
+    let key = p.s.key(h);
     p.layer_path = built.is_some();
     p.shown = built.filter(|_| preview).map(|d| (Arc::new(d), key));
     p.hash = h;
@@ -280,13 +270,7 @@ pub fn on_layer(app: &mut PhotocraftApp, idx: usize) -> bool {
 /// key `from` to `to` (raw keys, display transform removed): both must be this dialog's previews
 /// or the committed document (0). None means "everything".
 pub fn switch_region(app: &PhotocraftApp, doc: DocId, revision: u64, from: u64, to: u64) -> Option<Rect> {
-    let p = app.adjust_preview.as_ref()?;
-    if p.doc != doc || p.revision != revision {
-        return None;
-    }
-    let prefix = TAG | ((p.session & 0x7_ffff) << SESSION_SHIFT);
-    let ours = |k: u64| k == 0 || k >> SESSION_SHIFT == prefix >> SESSION_SHIFT;
-    (ours(from) && ours(to) && (from != 0 || to != 0)).then_some(p.region)
+    app.adjust_preview.as_ref()?.s.switch_region(doc, revision, from, to)
 }
 
 /// The key of the preview currently shown, if any.
@@ -298,30 +282,16 @@ pub fn shown_key(app: &PhotocraftApp) -> Option<u64> {
 /// what the view shows (`visible`, document pixels), remembering it so [`uncovered`] catches up
 /// as the view moves; back to the committed document (key 0), the whole region.
 pub fn switch_damage(app: &mut PhotocraftApp, to: u64, region: Rect, visible: Rect) -> Rect {
-    let Some(p) = app.adjust_preview.as_mut() else { return region };
-    if to == 0 {
-        p.covered = None;
-        return region;
+    match app.adjust_preview.as_mut() {
+        Some(p) => p.s.switch_damage(to, region, visible),
+        None => region,
     }
-    let shown = region.intersect(&visible);
-    p.covered = Some((to, shown));
-    shown
 }
 
 /// Where the main canvas texture (showing preview `key`) is out of date within `visible`: the
 /// region's visible part when the view moved past what was composited. Marks it covered.
 pub fn uncovered(app: &mut PhotocraftApp, doc: DocId, key: u64, visible: Rect) -> Option<Rect> {
-    let p = app.adjust_preview.as_mut().filter(|p| p.doc == doc)?;
-    let (k, cov) = p.covered?;
-    if k != key {
-        return None;
-    }
-    let want = p.region.intersect(&visible);
-    if want.is_empty() || cov.contains_rect(&want) {
-        return None;
-    }
-    p.covered = Some((k, want));
-    Some(want)
+    app.adjust_preview.as_mut()?.s.uncovered(doc, key, visible)
 }
 
 /// True while the preview's settings changed within the last `ms` milliseconds (secondary views
@@ -368,6 +338,11 @@ pub fn proxy_base(base: &Document, k: u32) -> Document {
     d.id = photocraft_doc::DocId(base.id.0 ^ PROXY_DOC_BIT);
     flip_ids(&mut d.layers);
     d
+}
+
+/// The id a [`proxy_base`] gives layer `id`.
+pub fn proxy_layer(id: LayerId) -> LayerId {
+    LayerId(id.0 ^ PROXY_LAYER_BIT)
 }
 
 /// [`with_settings`] for a [`proxy_base`].
@@ -417,7 +392,7 @@ pub fn gpu_proxy(app: &mut PhotocraftApp, idx: usize, zoom: f32) -> Option<Proxy
         g.shown = Some((h, Arc::new(d)));
     }
     let doc = g.shown.as_ref()?.1.clone();
-    let r = p.region;
+    let r = p.s.region;
     let kk = k as i32;
     let scaled = Rect::new(r.x0.div_euclid(kk), r.y0.div_euclid(kk), r.x1.div_euclid(kk) + 1, r.y1.div_euclid(kk) + 1).intersect(&doc.bounds());
     let damage = g.drawn.map(|_| scaled);
@@ -436,10 +411,10 @@ pub fn proxy_drawn(app: &mut PhotocraftApp, frame: &ProxyFrame) {
 pub(crate) fn retain_documents(app: &mut PhotocraftApp) {
     // Native reopen can reuse the ID and revision; neither the old base document nor its
     // coverage and upload markers may survive after that document leaves the session.
-    if app.adjust_preview.as_ref().is_some_and(|p| !app.session.documents().iter().any(|st| st.doc.id == p.doc)) {
+    if app.adjust_preview.as_ref().is_some_and(|p| !app.session.documents().iter().any(|st| st.doc.id == p.s.doc)) {
         app.adjust_preview = None;
     }
-    if app.live_adjust_preview.as_ref().is_some_and(|p| !app.session.documents().iter().any(|st| st.doc.id == p.doc)) {
+    if app.live_adjust_preview.as_ref().is_some_and(|p| !app.session.documents().iter().any(|st| st.doc.id == p.s.doc)) {
         app.live_adjust_preview = None;
     }
 }
@@ -464,22 +439,14 @@ pub fn gpu_keys(app: &PhotocraftApp) -> Option<u64> {
 /// Tag of the Properties-panel live-adjust preview keys. Distinct from [`TAG`], so a key is
 /// never mistaken for the dialog's.
 pub const LIVE_TAG: u64 = 1 << 58;
-/// Bits of a live-adjust key that identify the session (document, revision, layer); below them
-/// the settings hash. The session occupies bits 40..58, under [`LIVE_TAG`].
-const LIVE_SESSION_SHIFT: u32 = 40;
-/// Mask of the session part of a live-adjust key (18 bits).
-const LIVE_SESSION_MASK: u64 = (1 << 18) - 1;
+/// Bits of a live-adjust key that identify the session (document, revision, layer), between the
+/// settings hash (bits 0..40) and [`LIVE_TAG`].
+const LIVE_SESSION_BITS: u32 = 18;
 
 /// One Properties-panel drag: which layer of which document revision, the area its adjustment
 /// can change, and what the canvas has composited of it so far.
 pub struct LiveAdjust {
-    doc: DocId,
-    revision: u64,
-    session: u64,
-    region: Rect,
-    /// The main canvas texture shows preview `key` only within this rect; elsewhere in the
-    /// region it is older (see [`live_uncovered`]).
-    covered: Option<(u64, Rect)>,
+    s: PreviewSession,
 }
 
 /// The area an adjustment layer can change: the whole document.
@@ -503,53 +470,34 @@ fn live_region(doc: &Document, layer: LayerId) -> Rect {
 /// measuring its region) when the document, revision or layer changes.
 pub fn live_key(app: &mut PhotocraftApp, doc: &Document, revision: u64, layer: LayerId, params: &Value) -> u64 {
     let session = hash(&[&doc.id.0.to_le_bytes(), &revision.to_le_bytes(), &layer.0.to_le_bytes()]);
-    if app.live_adjust_preview.as_ref().is_none_or(|p| p.session != session) {
-        app.live_adjust_preview = Some(LiveAdjust { doc: doc.id, revision, session, region: live_region(doc, layer), covered: None });
+    if app.live_adjust_preview.as_ref().is_none_or(|p| p.s.session != session) {
+        let s = PreviewSession::new(LIVE_TAG, LIVE_SESSION_BITS, doc.id, revision, session, live_region(doc, layer));
+        app.live_adjust_preview = Some(LiveAdjust { s });
     }
     let h = hash(&[params.to_string().as_bytes()]);
-    LIVE_TAG | ((session & LIVE_SESSION_MASK) << LIVE_SESSION_SHIFT) | (h & ((1 << LIVE_SESSION_SHIFT) - 1))
+    app.live_adjust_preview.as_ref().map_or(0, |p| p.s.key(h))
 }
 
 /// The canvas area to recomposite when document `doc` (at `revision`) switches between two of
 /// this drag's previews, or between one and the committed document (0).
 pub fn live_switch_region(app: &PhotocraftApp, doc: DocId, revision: u64, from: u64, to: u64) -> Option<Rect> {
-    let p = app.live_adjust_preview.as_ref()?;
-    if p.doc != doc || p.revision != revision {
-        return None;
-    }
-    let prefix = LIVE_TAG | ((p.session & LIVE_SESSION_MASK) << LIVE_SESSION_SHIFT);
-    let ours = |k: u64| k == 0 || k >> LIVE_SESSION_SHIFT == prefix >> LIVE_SESSION_SHIFT;
-    (ours(from) && ours(to) && (from != 0 || to != 0)).then_some(p.region)
+    app.live_adjust_preview.as_ref()?.s.switch_region(doc, revision, from, to)
 }
 
 /// The part of a switch's region to composite now: to a preview, only what the view shows,
 /// remembered so [`live_uncovered`] catches up as the view moves; back to the committed
 /// document (key 0), the whole region.
 pub fn live_switch_damage(app: &mut PhotocraftApp, to: u64, region: Rect, visible: Rect) -> Rect {
-    let Some(p) = app.live_adjust_preview.as_mut() else { return region };
-    if to == 0 {
-        p.covered = None;
-        return region;
+    match app.live_adjust_preview.as_mut() {
+        Some(p) => p.s.switch_damage(to, region, visible),
+        None => region,
     }
-    let shown = region.intersect(&visible);
-    p.covered = Some((to, shown));
-    shown
 }
 
 /// Where the main canvas texture (showing preview `key`) is out of date within `visible`: the
 /// region's visible part when the view moved past what was composited. Marks it covered.
 pub fn live_uncovered(app: &mut PhotocraftApp, doc: DocId, key: u64, visible: Rect) -> Option<Rect> {
-    let p = app.live_adjust_preview.as_mut().filter(|p| p.doc == doc)?;
-    let (k, cov) = p.covered?;
-    if k != key {
-        return None;
-    }
-    let want = p.region.intersect(&visible);
-    if want.is_empty() || cov.contains_rect(&want) {
-        return None;
-    }
-    p.covered = Some((k, want));
-    Some(want)
+    app.live_adjust_preview.as_mut()?.s.uncovered(doc, key, visible)
 }
 
 #[cfg(test)]

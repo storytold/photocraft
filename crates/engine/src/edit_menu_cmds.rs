@@ -374,7 +374,7 @@ fn can_caf(s: &Session) -> std::result::Result<(), String> {
 }
 
 /// Mask surface (gray) of an alpha channel by index or name.
-pub(crate) fn channel_mask<'a>(doc: &'a Document, v: &Value) -> Option<&'a Surface> {
+pub fn channel_mask<'a>(doc: &'a Document, v: &Value) -> Option<&'a Surface> {
     match v {
         Value::Number(n) => doc.channels.get(n.as_u64()? as usize).map(|c| &c.surface),
         Value::String(name) => doc.channels.iter().find(|c| c.name == *name).map(|c| &c.surface),

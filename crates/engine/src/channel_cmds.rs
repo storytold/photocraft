@@ -16,7 +16,7 @@ use photocraft_algo::selection::{self as sel, SelectionMode};
 use photocraft_color::{BlendMode, Color, ColorMode, PixelFormat, blend::blend_channel};
 use photocraft_doc::{AlphaChannel, ColorIndicates, Document, Layer, LayerContent, LayerId};
 use photocraft_geom::{Rect, TileCoord};
-use photocraft_raster::{Surface, from_rgba, to_rgba};
+use photocraft_raster::{Surface, from_rgba, from_rgba_into, to_rgba};
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -396,13 +396,21 @@ fn native_pixels(doc: &Document, layer: Option<LayerId>) -> Result<(Vec<f32>, us
             }
             let raw = s.read_region(r);
             let sf = s.format();
-            Ok((raw.chunks_exact(sf.channels()).flat_map(|p| from_rgba(&fmt, to_rgba(&sf, p))).collect(), n))
+            Ok((native_of(&fmt, raw.chunks_exact(sf.channels()).map(|p| to_rgba(&sf, p))), n))
         }
-        None => {
-            let buf = photocraft_compose::render(doc, r);
-            Ok((buf.px.iter().flat_map(|p| from_rgba(&fmt, *p)).collect(), n))
-        }
+        None => Ok((native_of(&fmt, photocraft_compose::render(doc, r).px.into_iter()), n)),
     }
+}
+
+/// RGBA pixels in `fmt`'s channels, into one buffer: converting each pixel to a `Vec` of its own
+/// took 5 s over a 36 MP canvas (Apply Image's merged source, #5772).
+fn native_of(fmt: &photocraft_color::PixelFormat, px: impl ExactSizeIterator<Item = [f32; 4]>) -> Vec<f32> {
+    let n = fmt.channels();
+    let mut out = vec![0.0f32; px.len().saturating_mul(n)];
+    for (p, o) in px.zip(out.chunks_exact_mut(n)) {
+        from_rgba_into(fmt, p, o);
+    }
+    out
 }
 
 /// `"layer"` param of a source: a layer id, a layer name (the topmost of that name, as a loaded
@@ -569,7 +577,7 @@ impl Blending {
 
 /// A source spec from `p[key]`, or from flat `<prefix>Document` / `<prefix>Layer` /
 /// `<prefix>Channel` / `<prefix>Invert` keys (what the generic dialog form sends).
-pub(crate) fn source_spec(p: &Value, key: &str, prefix: &str) -> Option<Value> {
+pub fn source_spec(p: &Value, key: &str, prefix: &str) -> Option<Value> {
     if let Some(v) = p.get(key) {
         return Some(v.clone());
     }
@@ -1683,19 +1691,64 @@ fn merge(s: &mut Session, p: &Value) -> Result<Value> {
 // ---------------------------------------------------------------------------------------------
 // Apply Image / Calculations
 
-fn apply_image(s: &mut Session, p: &Value) -> Result<Value> {
-    let cmd = "image.applyImage";
-    let blending = Blending::parse(p).map_err(|e| bad(cmd, e))?;
+/// Apply Image's settings from its params: the blending, the opacity (a fraction) and Preserve
+/// Transparency. Shared with the GPU preview.
+pub fn apply_image_settings(p: &Value) -> Result<(Blending, f32, bool)> {
+    let blending = Blending::parse(p).map_err(|e| bad("image.applyImage", e))?;
     let opacity = p.get("opacity").and_then(Value::as_f64).unwrap_or(100.0).clamp(0.0, 100.0) as f32 / 100.0;
     let preserve = p.get("preserveTransparency").and_then(Value::as_bool).unwrap_or(false);
+    Ok((blending, opacity, preserve))
+}
+
+/// Apply Image's source planes and weight ([`apply_image_planes`]).
+pub type ApplyPlanes = (Vec<Vec<f32>>, Option<Vec<f32>>);
+
+/// Apply Image's inputs over the active document's canvas (row-major): the source planes (one per
+/// colour channel of a composite, else one), and the weight the result is applied with besides
+/// the opacity, the mask times the selection (`None` for neither). Shared with the GPU preview.
+pub fn apply_image_planes(s: &Session, p: &Value) -> Result<ApplyPlanes> {
+    let cmd = "image.applyImage";
     let src_spec = source_spec(p, "source", "source").unwrap_or_else(|| json!({}));
     let src = source(s, &src_spec, cmd, false)?;
     let mask = mask_plane(s, p, cmd)?;
+    let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
+    let selection = doc.selection.as_ref().map(|m| sel::mask_from_surface(Some(m), doc.bounds()));
+    let weight = match (mask, selection) {
+        (Some(m), Some(sl)) => Some(m.iter().zip(&sl).map(|(a, b)| a * b).collect()),
+        (m, sl) => m.or(sl),
+    };
+    Ok((src, weight))
+}
+
+/// Apply Image on one pixel `px` of a layer (`colors` colour channels, then alpha when `alpha`):
+/// `top(c)` is the source for colour channel `c`, `w` the opacity times the weight. Painted over
+/// the layer like a brush: the blend only acts where the layer has pixels (where it is
+/// transparent the source shows as is), and the alpha grows by source-over, so applying to an
+/// empty layer copies the source in any mode. Shared with the GPU preview, which ports it.
+pub fn apply_image_pixel(blending: Blending, preserve: bool, px: &mut [f32], colors: usize, alpha: bool, top: impl Fn(usize) -> f32, w: f32) {
+    let base_a = if alpha { px.get(colors).copied().unwrap_or(1.0).clamp(0.0, 1.0) } else { 1.0 };
+    let w = if preserve { w * base_a } else { w };
+    if w <= 0.0 {
+        return;
+    }
+    let out_a = if preserve { base_a } else { w + base_a * (1.0 - w) };
+    for (c, b) in px.iter_mut().take(colors).enumerate() {
+        let top = top(c);
+        let blended = top + (blending.apply(*b, top) - top) * base_a;
+        *b = if preserve { *b + (blended - *b) * w } else { (w * blended + base_a * (1.0 - w) * *b) / out_a };
+    }
+    if alpha && let Some(a) = px.get_mut(colors) {
+        *a = out_a;
+    }
+}
+
+fn apply_image(s: &mut Session, p: &Value) -> Result<Value> {
+    let (blending, opacity, preserve) = apply_image_settings(p)?;
+    let (src, weight) = apply_image_planes(s, p)?;
     let layer = s.active().and_then(|d| d.active_layer);
     s.edit("Apply Image", |doc, _| {
         let area = doc.bounds();
-        let selection = doc.selection.as_ref().map(|m| sel::mask_from_surface(Some(m), area));
-        let weight = |i: usize| opacity * mask.as_ref().map_or(1.0, |m| m[i]) * selection.as_ref().map_or(1.0, |m| m[i]);
+        let weight = |i: usize| opacity * weight.as_ref().map_or(1.0, |m| m[i]);
         let mask_target = target_of(p) == Target::Mask;
         if is_channel_target(p) || mask_target {
             // A grayscale target gets the luminosity of a colour source (one plane).
@@ -1727,26 +1780,7 @@ fn apply_image(s: &mut Session, p: &Value) -> Result<Value> {
         let colors = sf.mode.color_channels();
         let mut v = surf.read_region(area);
         for (i, px) in v.chunks_exact_mut(n).enumerate() {
-            let base_a = if sf.alpha { px[colors].clamp(0.0, 1.0) } else { 1.0 };
-            let mut w = weight(i);
-            if preserve {
-                w *= base_a;
-            }
-            if w <= 0.0 {
-                continue;
-            }
-            // Painted over the layer like a brush: the blend only acts where the layer has
-            // pixels (where it is transparent the source shows as is), and the alpha grows by
-            // source-over, so applying to an empty layer copies the source in any mode.
-            let out_a = if preserve { base_a } else { w + base_a * (1.0 - w) };
-            for (c, b) in px[..colors].iter_mut().enumerate() {
-                let top = src.get(c).unwrap_or(&src[0])[i];
-                let blended = top + (blending.apply(*b, top) - top) * base_a;
-                *b = if preserve { *b + (blended - *b) * w } else { (w * blended + base_a * (1.0 - w) * *b) / out_a };
-            }
-            if sf.alpha {
-                px[colors] = out_a;
-            }
+            apply_image_pixel(blending, preserve, px, colors, sf.alpha, |c| src.get(c).unwrap_or(&src[0])[i], weight(i));
         }
         surf.write_region(area, &v);
         surf.prune();

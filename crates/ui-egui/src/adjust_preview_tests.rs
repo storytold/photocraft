@@ -346,8 +346,9 @@ fn a_live_adjust_drag_damages_only_the_visible_part_of_its_layer() {
     let k2 = live_key(&mut app, &doc, 7, target, &json!({"gamma": 1.4}));
     assert_ne!(k1, k2, "a different setting is a different key");
     assert_eq!(k1 & LIVE_TAG, LIVE_TAG, "keys carry the live tag");
-    assert_eq!(k1 >> LIVE_SESSION_SHIFT, k2 >> LIVE_SESSION_SHIFT, "the same drag is one session");
-    assert_ne!(k1 >> LIVE_SESSION_SHIFT, TAG >> LIVE_SESSION_SHIFT, "never the dialog's tag");
+    // Keys hold the session above bit 40 (`preview_session`).
+    assert_eq!(k1 >> 40, k2 >> 40, "the same drag is one session");
+    assert_ne!(k1 >> 40, TAG >> 40, "never the dialog's tag");
 
     // Between two of the drag's previews, and between one and the committed document.
     let region = live_switch_region(&app, id, 7, k1, k2).expect("same session");
@@ -389,4 +390,38 @@ fn a_reveal_all_mask_does_not_empty_the_damage_region() {
     let region = live_switch_region(&app, id, 3, k1, k2).expect("same session");
     assert_eq!(region, bounds, "the whole document, not the mask's empty content");
     assert!(!live_switch_damage(&mut app, k2, region, bounds).is_empty(), "something is composited");
+}
+
+/// Closing the dialog drops its zoomed-out proxy too: a filter dialog's GPU preview draws into the
+/// same proxy texture, so a reopened adjustment with the same settings must draw it again rather
+/// than take the old `drawn` hash for what the texture holds.
+#[test]
+fn a_closed_dialog_drops_its_gpu_proxy() {
+    let _guard = photocraft_testkit::gpu_lock();
+    let rs = match std::panic::catch_unwind(|| egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), Default::default())) {
+        Ok(rs) => rs,
+        Err(error) => {
+            // A run that asks for the GPU tests fails rather than skipping them.
+            if std::env::var_os("PHOTOCRAFT_REQUIRE_GPU_TESTS").is_some() {
+                std::panic::resume_unwind(error);
+            }
+            eprintln!("skipping: no GPU adapter");
+            return;
+        }
+    };
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.set_wgpu(rs);
+    app.run("file.new", json!({"width": 2600, "height": 2000})).unwrap();
+    app.run("edit.fill", json!({"color": "#3366cc"})).unwrap();
+    let open = |app: &mut PhotocraftApp| crate::adjust_dialog::open(app, "image.adjustments.levels").unwrap();
+    let id = open(&mut app);
+    let frame = gpu_proxy(&mut app, 0, 0.25).expect("a zoomed-out preview");
+    assert!(frame.stale, "drawn the first time");
+    proxy_drawn(&mut app, &frame);
+    assert!(!gpu_proxy(&mut app, 0, 0.25).unwrap().stale, "then kept");
+    crate::dialogs::cancel(&mut app, id).unwrap();
+    assert!(gpu_proxy(&mut app, 0, 0.25).is_none(), "closed");
+    assert!(app.adjust_preview.as_ref().is_none_or(|p| p.proxy.is_none()), "its proxy went with it");
+    open(&mut app);
+    assert!(gpu_proxy(&mut app, 0, 0.25).expect("reopened").stale, "the same settings draw again");
 }

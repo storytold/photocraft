@@ -71,6 +71,7 @@ pub mod seam;
 pub mod segment;
 pub mod selection;
 mod selection_blur;
+pub mod separable;
 mod shape_blur;
 mod sharpen;
 pub mod stack;
