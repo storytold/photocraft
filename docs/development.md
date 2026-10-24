@@ -449,6 +449,8 @@ cargo run --release -p photocraft-ui-egui --example perf_scenarios -- \
 That writes the row's own report and stops there: it does **not** evaluate the budget, so read
 `p50_ms`/`p95_ms`/`max_ms` out of the JSON yourself. Use `cargo xtask perf --bench <name>` when you
 want the verdict, the merged `results.json`/`summary.md` and the regression check.
+Every `--bench` name must match a `[[bench]]` name in `perf/budgets.toml`; an unknown name
+is rejected before any benchmark runs or any report or baseline is written.
 
 Read the sample count before quoting a percentile. `--reps` defaults to 7 in `--quick` and 15
 otherwise, it is per bench, and some rows cap it themselves (the `#211` algorithm rows use

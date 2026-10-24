@@ -670,6 +670,11 @@ pub fn run(root: &Path, rest: &[&str]) -> Result<(), String> {
     let o = parse_opts(rest)?;
     let text = std::fs::read_to_string(root.join(BUDGETS)).map_err(|e| format!("read {BUDGETS}: {e}"))?;
     let budgets = parse_budgets(&text)?;
+    for name in &o.benches {
+        if !budgets.bench.iter().any(|b| &b.name == name) {
+            return Err(format!("perf: unknown bench `{name}` (see {BUDGETS})"));
+        }
+    }
     let mode = if o.quick { "quick" } else { "full" };
     let threshold = o.threshold.unwrap_or(budgets.settings.regression_pct);
     let target = target_dir()?;
@@ -1116,6 +1121,26 @@ not_measurable = "needs a frame harness"
         assert!(t.contains("**Not measurable yet**"));
         assert!(t.contains("| P3 | zoom | ≤ 16 ms per frame | needs a frame harness |  |"));
         assert_eq!(counts(&evaluate(&b, &reports, None, 15.0, true)), (1, 1, 0, 1), "the row the bench lacks counts as failing");
+    }
+
+    #[test]
+    fn unknown_bench_is_rejected_before_updating_the_baseline() {
+        let root = std::env::temp_dir().join(format!("photocraft-perf-unknown-bench-{}", std::process::id()));
+        std::fs::create_dir(&root).unwrap();
+        std::fs::create_dir(root.join("perf")).unwrap();
+        std::fs::write(root.join(BUDGETS), "[[bench]]\nname = \"known\"\npackage = \"unused\"\nrequires = \"missing.rs\"\n").unwrap();
+        let baseline = "{\"schema\":1,\"sentinel\":true}";
+        std::fs::write(root.join(BASELINE), baseline).unwrap();
+        let results = [
+            run(&root, &["--bench", "unknown", "--reuse", "--update-baseline"]),
+            run(&root, &["--bench", "known", "--bench", "unknown", "--quick", "--reuse", "--update-baseline"]),
+        ];
+        let after = std::fs::read_to_string(root.join(BASELINE)).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+        for result in results {
+            assert_eq!(result, Err(format!("perf: unknown bench `unknown` (see {BUDGETS})")));
+        }
+        assert_eq!(after, baseline, "an unknown bench must not update the baseline");
     }
 
     #[test]
