@@ -2696,7 +2696,7 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         spec!("prefs.reset", "Reset Preferences", [], None, r##"{"path":"section|section.key"?=everything}"##, prefs_reset, false),
         // Photoshop: ⌘K opens Preferences › General (⌘, is Layer › Hide Layers).
-        section!("edit.preferences.general", "General…", Some("Cmd+K")),
+        section!("edit.preferences.general", "General…", Some(crate::shell_commands::SETTINGS_SHORTCUT)),
         section!("edit.preferences.interface", "Interface…"),
         section!("edit.preferences.workspace", "Workspace…"),
         section!("edit.preferences.tools", "Tools…"),

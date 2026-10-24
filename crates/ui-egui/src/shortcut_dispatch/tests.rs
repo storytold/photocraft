@@ -267,7 +267,9 @@ fn common_shortcuts_work_after_clicking_panels() {
         assert_ne!(h.state().ui.panels.layers, layers, "{place:?}: F7 toggles Layers");
         press(&mut h, "F7");
         // Dialogs: Image Size (⌥⌘I, shown in the menu but unbound before #127) and Levels (⌘L).
-        for (sc, what) in [("Cmd+Alt+I", "Image Size"), ("Cmd+Alt+C", "Canvas Size"), ("Cmd+L", "Levels"), ("Cmd+M", "Curves")] {
+        for (sc, what) in
+            [("Cmd+Alt+I", "Image Size"), ("Cmd+Alt+C", "Canvas Size"), ("Cmd+L", "Levels"), (photocraft_engine::shell_commands::CURVES_SHORTCUT, "Curves")]
+        {
             press(&mut h, sc);
             assert_eq!(h.state().ui.dialogs.len(), 1, "{place:?}: {sc} opens {what}");
             h.state_mut().ui.dialogs.clear();

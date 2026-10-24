@@ -30,11 +30,12 @@ fn active(app: &PhotocraftApp) -> &photocraft_doc::Layer {
 }
 
 #[test]
-fn command_comma_toggles_the_layers_visibility() {
+fn hide_layers_shortcut_toggles_visibility_without_taking_mac_settings() {
     let mut app = app();
-    press(&mut app, Key::Comma, Modifiers::COMMAND);
+    let mods = if cfg!(target_os = "macos") { Modifiers::COMMAND | Modifiers::CTRL } else { Modifiers::COMMAND };
+    press(&mut app, Key::Comma, mods);
     assert!(!active(&app).visible);
-    press(&mut app, Key::Comma, Modifiers::COMMAND);
+    press(&mut app, Key::Comma, mods);
     assert!(active(&app).visible);
 }
 

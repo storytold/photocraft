@@ -5,6 +5,12 @@
 //! list, conflicts, `.kys` import and export all work without the UI (the UI is a layer on
 //! top). The app's tests keep these tables equal to its own.
 
+/// Mac defaults leave system actions on their usual Command shortcuts.
+pub const SETTINGS_SHORTCUT: &str = if cfg!(target_os = "macos") { "Cmd+," } else { "Cmd+K" };
+pub const EXTRAS_SHORTCUT: &str = if cfg!(target_os = "macos") { "Ctrl+Cmd+H" } else { "Cmd+H" };
+pub const CURVES_SHORTCUT: &str = if cfg!(target_os = "macos") { "Ctrl+Cmd+M" } else { "Cmd+M" };
+pub const HIDE_LAYERS_SHORTCUT: &str = if cfg!(target_os = "macos") { "Ctrl+Cmd+," } else { "Cmd+," };
+
 /// Shell commands: id, label, menu path, default shortcut.
 pub const SHELL_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.symmetryTransform", "Transform Symmetry", &[], None),
@@ -36,7 +42,7 @@ pub const SHELL_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("view.show.guides", "Guides", &["View", "Show"], Some("Cmd+;")),
     ("view.snap", "Snap", &["View"], Some("Cmd+Shift+;")),
     ("view.lockGuides", "Lock Guides", &["View"], Some("Cmd+Alt+;")),
-    ("view.extras", "Extras", &["View"], Some("Cmd+H")),
+    ("view.extras", "Extras", &["View"], Some(EXTRAS_SHORTCUT)),
     ("view.show.targetPath", "Target Path", &["View", "Show"], Some("Cmd+Shift+H")),
     ("view.screenMode.cycle", "Cycle Screen Mode", &[], Some("F")),
     // Photoshop's interface brightness shortcuts: step through the four Pro themes.

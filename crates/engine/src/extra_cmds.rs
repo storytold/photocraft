@@ -998,7 +998,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "layer.hideLayers",
             "Hide Layers",
             &["Layer"],
-            Some("Cmd+,"),
+            Some(crate::shell_commands::HIDE_LAYERS_SHORTCUT),
             r##"{"layer":id?} (shows them instead when every targeted layer is already hidden, so ⌘, toggles)"##,
             has_layer,
             hide_or_show

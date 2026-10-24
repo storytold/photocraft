@@ -63,6 +63,7 @@ pub fn pretty(s: &str) -> String {
         .into_iter()
         .map(|p| match (p, mac) {
             ("Cmd", true) => "⌘".to_string(),
+            ("Ctrl", true) => "⌃".to_string(),
             ("Cmd", false) => "Ctrl".to_string(),
             ("Shift", true) => "⇧".to_string(),
             ("Alt", true) => "⌥".to_string(),
@@ -1000,6 +1001,7 @@ mod tests {
         let mac = cfg!(target_os = "macos");
         assert_eq!(pretty("Cmd+Shift+N"), if mac { "⌘⇧N" } else { "Ctrl+Shift+N" });
         // Lone keys and inline-hint combos.
+        assert_eq!(pretty("Ctrl+Cmd+H"), if mac { "⌃⌘H" } else { "Ctrl+Ctrl+H" });
         assert_eq!(pretty("Alt"), if mac { "⌥" } else { "Alt" });
         assert_eq!(pretty("Shift+Alt"), if mac { "⇧⌥" } else { "Shift+Alt" });
         assert_eq!(pretty("Enter"), if mac { "↩" } else { "Enter" });
