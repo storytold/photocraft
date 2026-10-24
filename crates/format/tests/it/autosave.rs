@@ -28,6 +28,35 @@ fn autosave_then_recover() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// Autosaves are unsaved documents: on Unix the folders the autosaver makes are owner-only, and a
+/// recovery folder that already exists keeps its mode.
+#[cfg(unix)]
+#[test]
+fn the_autosaver_makes_owner_only_folders() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+    let base = temp_dir("recovery-modes");
+    let doc = Arc::new(rich_doc(ColorMode::Rgb, SampleType::U8));
+    // A recovery folder that doesn't exist yet is made with the first autosave, owner-only like
+    // its bundle.
+    let new = base.join("new");
+    let saver = Autosaver::new(&new, "doc-1");
+    saver.request(doc.clone(), 1, None, SaveOptions::default());
+    saver.flush().expect("a save ran").unwrap();
+    assert_eq!(mode(&new), 0o700);
+    assert_eq!(mode(&new.join("doc-1.pcraft")), 0o700);
+    // A folder that already exists keeps its mode; the bundle made inside it is owner-only.
+    let old = base.join("old");
+    std::fs::create_dir_all(&old).unwrap();
+    std::fs::set_permissions(&old, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let saver = Autosaver::new(&old, "doc-1");
+    saver.request(doc, 1, None, SaveOptions::default());
+    saver.flush().expect("a save ran").unwrap();
+    assert_eq!(mode(&old), 0o755);
+    assert_eq!(mode(&old.join("doc-1.pcraft")), 0o700);
+    std::fs::remove_dir_all(base).unwrap();
+}
+
 /// A queued snapshot can fail later; callers must observe and retry that revision.
 #[test]
 fn background_save_outcomes_report_failure_then_recovery() {

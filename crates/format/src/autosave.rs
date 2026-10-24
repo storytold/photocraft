@@ -157,6 +157,18 @@ impl Drop for Autosaver {
     }
 }
 
+/// Create bundle folder `dir`, and the recovery folder when it is missing. On Unix every folder
+/// made here is owner-only (`0o700`): autosaves are unsaved documents, and with the default mode
+/// other accounts on the machine could read them. A recovery folder that already exists keeps its
+/// mode.
+fn create_owner_only(dir: &Path) -> std::io::Result<()> {
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    builder.create(dir)
+}
+
 fn worker(rx: Receiver<Job>, bundle: PathBuf, sidecar: PathBuf, last: Arc<Mutex<Option<Result<SaveStats>>>>, completed: CompletedWrites) {
     let mut writer = PcraftWriter::new();
     while let Ok(mut job) = rx.recv() {
@@ -165,7 +177,7 @@ fn worker(rx: Receiver<Job>, bundle: PathBuf, sidecar: PathBuf, last: Arc<Mutex<
             job = newer;
         }
         let r = (|| {
-            std::fs::create_dir_all(&bundle)?;
+            create_owner_only(&bundle)?;
             let stats = writer.save_dir(&job.snapshot, &bundle, &job.opts)?;
             write_sidecar(&sidecar, &serde_json::to_vec_pretty(&job.info)?)?;
             Ok(stats)
