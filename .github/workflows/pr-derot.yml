@@ -1,0 +1,138 @@
+# Keeps open pull requests from rotting.
+#
+# PhotoCraft receives PRs faster than they can be reviewed, and main moves
+# quickly (often dozens of merges a day). A PR that sits for two days picks up
+# a merge conflict, and a conflicted PR costs far more to review than a clean
+# one: the reviewer now has to reason about someone else's rebase as well as the
+# change itself. That is the single largest source of waste in this queue.
+#
+# Updating a branch that is merely *behind* is mechanical and needs no judgement,
+# so a scheduled job does it. Every six hours this walks the open PRs and rebases
+# the ones GitHub can rebase on its own (`gh pr update-branch`, the same merge
+# the "Update branch" button performs). PRs with genuine conflicts fail, which is
+# the point: the job reports them, and that list is the real work queue.
+#
+# Nothing here merges, approves or closes. It only keeps branches current.
+#
+# `update-branch` needs push access to the head branch, so it silently fails for
+# PRs from forks that did not tick "Allow edits by maintainers". Those are
+# reported as skipped, not as errors: the author has to rebase them.
+
+name: PR de-rot
+
+on:
+  schedule:
+    # Four times a day. Often enough that a PR is rarely more than a few hours
+    # behind, sparse enough to stay well inside the API rate limit.
+    - cron: "23 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: "Maximum number of PRs to update in this run"
+        type: string
+        default: "60"
+      dry_run:
+        description: "Report what would be updated without touching any branch"
+        type: boolean
+        default: false
+
+# No checkout of repository code: this job only talks to the API.
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  # One de-rot run at a time. Two concurrent runs would race to update the same
+  # branch and both report success.
+  group: pr-derot
+  cancel-in-progress: false
+
+jobs:
+  update-branches:
+    name: Rebase branches that are behind
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Update behind branches
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          LIMIT: ${{ inputs.limit || '60' }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -uo pipefail
+
+          # mergeStateStatus is GitHub's GraphQL verdict:
+          #   DIRTY    - real conflicts          -> needs a human
+          #   UNSTABLE - mergeable, checks red   -> may also be behind; try anyway
+          #   BEHIND   - out of date, no conflict-> update-branch works
+          #   CLEAN    - already current         -> nothing to do
+          # Measured on this repo: BEHIND is almost never reported (out-of-date
+          # PRs come back UNSTABLE instead because their checks are stale too),
+          # so the filter takes every non-CLEAN, non-DRAFT PR and lets
+          # update-branch decide. It is a no-op when there is nothing to merge.
+          #
+          # 300 is the API ceiling for one page and PRs come back newest-first,
+          # so a backlog beyond that loses the oldest PRs, not the freshest.
+          # `no-derot` is an escape hatch for branches that must not be touched.
+          gh pr list --repo "$REPO" --state open --limit 300 \
+            --json number,title,mergeStateStatus,isDraft,additions,labels \
+            > prs.json
+
+          # Smallest diffs first: a two-file PR usually rebases cleanly, and
+          # landing it often removes the conflict from a larger PR behind it.
+          # `additions` stands in for size, which the API does not expose here.
+          jq -r --argjson limit "$LIMIT" '
+            [ .[]
+              | select(.mergeStateStatus != "CLEAN")
+              | select(.isDraft | not)
+              | select([.labels[]?.name] | index("no-derot") | not) ]
+            | sort_by(.additions // 0)
+            | .[:$limit][]
+            | .number
+          ' prs.json > targets.txt
+
+          echo "Behind or conflicting: $(wc -l < targets.txt) (capped at $LIMIT)"
+
+          ok=0; current=0; conflicted=0; skipped=0
+          while read -r n; do
+            [ -n "$n" ] || continue
+            if [ "${DRY_RUN:-false}" = "true" ]; then
+              echo "would update #$n"
+              skipped=$((skipped + 1))
+              continue
+            fi
+            # `update-branch` pushes a merge commit onto the contributor's branch.
+            # Failure is expected and normal for fork PRs without maintainer
+            # edits, so it is recorded rather than failing the job.
+            if out=$(gh pr update-branch "$n" --repo "$REPO" 2>&1); then
+              echo "updated   #$n"
+              ok=$((ok + 1))
+            elif grep -qiE 'already up to date|nothing to merge' <<<"$out"; then
+              # Not an error: GitHub refuses an update that would change nothing.
+              current=$((current + 1))
+            elif grep -qiE 'conflict|not mergeable' <<<"$out"; then
+              echo "conflict  #$n"
+              conflicted=$((conflicted + 1))
+            else
+              echo "skip      #$n -- ${out//$'\n'/ }"
+              skipped=$((skipped + 1))
+            fi
+            # Gentle pacing: keeps a 300-PR sweep inside the secondary rate limit.
+            sleep 1
+          done < targets.txt
+
+          {
+            echo "## PR de-rot"
+            echo
+            echo "| | |"
+            echo "|---|---:|"
+            echo "| Rebased onto main | $ok |"
+            echo "| Already current | $current |"
+            echo "| Real conflicts (need a human) | $conflicted |"
+            echo "| Skipped (no permission, or dry run) | $skipped |"
+            echo
+            echo "The conflicted ones are the queue that actually needs review;"
+            echo "everything else is now current and can be merged as-is once CI"
+            echo "is green."
+          } >> "$GITHUB_STEP_SUMMARY"
