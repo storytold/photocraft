@@ -193,3 +193,81 @@ fn tab_and_paste_in_one_frame_filter_only_the_receiving_numeric_field() {
     assert!(h.state().1.is_empty());
     assert_bounded(&h);
 }
+
+fn wheel_at_caret(h: &mut Harness<'_, Fields>, caret: usize) {
+    use egui::text::{CCursor, CCursorRange};
+    let id = h.ctx.memory(|m| m.focused()).expect("focused number");
+    let mut state = egui::TextEdit::load_state(&h.ctx, id).expect("numeric edit state");
+    state.cursor.set_char_range(Some(CCursorRange::one(CCursor::new(caret))));
+    state.store(&h.ctx, id);
+    let rect = h.query_by_role(Role::TextInput).or_else(|| h.query_by_role(Role::SpinButton)).expect("numeric editor").rect();
+    h.hover_at(rect.center());
+    h.event(Event::MouseWheel { unit: egui::MouseWheelUnit::Line, delta: egui::vec2(0.0, 1.0), phase: egui::TouchPhase::Move, modifiers: Modifiers::NONE });
+    h.run();
+}
+
+#[test]
+fn caret_wheel_uses_active_precision_and_rejects_invalid_text() {
+    let mut h = focused();
+    select_all(&mut h);
+    h.event(Event::Paste("123.45".into()));
+    h.run();
+    assert_eq!(numeric_text(&h), "123.45", "editing retains more precision than the one-decimal formatter");
+    wheel_at_caret(&mut h, 6);
+    assert!((h.state().0 - 123.46).abs() < 0.0001, "hundredths follow the actual caret text");
+    wheel_at_caret(&mut h, 6);
+    assert!((h.state().0 - 123.47).abs() < 0.0001, "repeated wheel steps retain editing precision");
+    for text in ["invalid", "12mm", "1.2.3", "12+3"] {
+        select_all(&mut h);
+        h.event(Event::Paste(text.into()));
+        h.run();
+        let before = h.state().0;
+        wheel_at_caret(&mut h, text.len());
+        assert_eq!(h.state().0, before, "{text} must not step a formatted fallback");
+    }
+}
+
+#[test]
+fn focused_fractional_caret_wheel_does_not_scroll_the_parent() {
+    use egui::text::{CCursor, CCursorRange};
+    for focus in [false, true] {
+        let mut h = Harness::builder().with_size(egui::vec2(260.0, 120.0)).build_ui_state(
+            |ui, (value, offset): &mut (f32, f32)| {
+                *offset = egui::ScrollArea::vertical()
+                    .max_height(90.0)
+                    .show(ui, |ui| {
+                        super::value_field(ui, value, 0.0..=1000.0, "", 100.0);
+                        ui.add_space(500.0);
+                    })
+                    .state
+                    .offset
+                    .y;
+            },
+            (100.0, 0.0),
+        );
+        h.run();
+        let rect = h.get_by_role(Role::SpinButton).rect();
+        if focus {
+            h.get_by_role(Role::SpinButton).click();
+            h.run();
+            let id = h.ctx.memory(|m| m.focused()).expect("focused number");
+            let mut state = egui::TextEdit::load_state(&h.ctx, id).expect("numeric edit state");
+            state.cursor.set_char_range(Some(CCursorRange::one(CCursor::new(2))));
+            state.store(&h.ctx, id);
+        }
+        h.hover_at(rect.center());
+        h.event(Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            delta: egui::vec2(0.0, -0.25),
+            phase: egui::TouchPhase::Move,
+            modifiers: Modifiers::NONE,
+        });
+        h.run();
+        assert_eq!(h.state().0, 100.0, "a fractional notch must wait for a whole step");
+        if focus {
+            assert_eq!(h.state().1, 0.0, "focused fractional input belongs to the field");
+        } else {
+            assert!(h.state().1 > 0.0, "unfocused fields preserve parent scrolling");
+        }
+    }
+}

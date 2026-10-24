@@ -930,6 +930,25 @@ pub fn focus_first_field(ctx: &egui::Context, on: bool) {
 
 const NUMERIC_INPUT_LIMIT: usize = 128;
 
+/// The decimal place immediately to the left of the insertion caret. A caret after the
+/// second digit in 123.45 selects tens; a caret after the first fractional digit selects tenths.
+/// Keep the sign out of the count, and cap exponents for extreme but valid field values.
+fn wheel_step_at_caret(display: &str, caret: usize) -> Option<f64> {
+    let start = usize::from(display.starts_with('-'));
+    let digits = display.get(start..)?;
+    if digits.is_empty()
+        || !digits.bytes().all(|b| b.is_ascii_digit() || b == b'.')
+        || digits.bytes().filter(|b| *b == b'.').count() > 1
+        || !digits.bytes().any(|b| b.is_ascii_digit())
+    {
+        return None;
+    }
+    let dot = display.find('.').unwrap_or(display.len());
+    let caret = caret.clamp(start + 1, display.len());
+    let power = if caret <= dot { dot.saturating_sub(caret).min(8) as i32 } else { -(caret.saturating_sub(dot).saturating_sub(1).clamp(1, 8) as i32) };
+    Some(10_f64.powi(power))
+}
+
 /// The number in a [`value_field`]. A typed number applies as it's typed; arithmetic waits for
 /// Enter, Tab or click-away, because per keystroke `5/2` would land first and a caller that
 /// rounds it would cut `5/2*2` short. `changed()` means a new value, not just a keystroke.
@@ -974,6 +993,11 @@ fn number_edit(
     let math = ui.memory(|m| m.has_focus(id)) && ui.data(|d| d.get_temp(held)).unwrap_or(false);
     ui.data_mut(|d| d.insert_temp(held, math));
     let before = *value;
+    let edit_text_id = id.with("wheel-edit-text");
+    let newly_focused = ui.ctx().read_response(id).is_none_or(|response| response.gained_focus());
+    let cached_text =
+        ui.data(|d| d.get_temp::<(String, f32)>(edit_text_id)).filter(|(_, value)| editing && *value == before && !newly_focused).map(|(text, _)| text);
+    let edited_text = std::cell::Cell::new(None);
     let speed = if fine { 0.01 } else { 0.5 };
     let wrapping = wrap_drag && crate::scrub_wrap::active(ui);
     let wrapped_drag = wrapping && ui.input(|i| i.pointer.primary_down());
@@ -985,18 +1009,28 @@ fn number_edit(
             .clamp_existing_to_range(false)
             // A warp is an absolute-position jump. The scoped scrub below removes that jump.
             .speed(if wrapped_drag { 0.0 } else { speed })
-            .custom_formatter(move |v, _| match decimals {
-                Some(d) => fmt_num_prec(v, d),
-                None if fine => fmt_num2(v),
-                None => fmt_num(v),
+            .custom_formatter(|v, _| {
+                if v == f64::from(before)
+                    && let Some(text) = &cached_text
+                {
+                    return text.clone();
+                }
+                match decimals {
+                    Some(d) => fmt_num_prec(v, d),
+                    None if fine => fmt_num2(v),
+                    None => fmt_num(v),
+                }
             })
             .update_while_editing(!math)
             // Focus is read when parsing, not above: Tab hands it on inside `ui.add`.
-            .custom_parser(move |s| {
+            .custom_parser(|s| {
                 // Short events can accumulate: reject before either parser normalizes the text.
                 if s.chars().nth(NUMERIC_INPUT_LIMIT).is_some() {
+                    edited_text.set(Some(String::new()));
                     return None;
                 }
+                // DragValue keeps its active text private, including invalid and extra-precision input.
+                edited_text.set(Some(s.to_owned()));
                 let v = parse_num_in(s, units);
                 if ctx.memory(|m| m.has_focus(id)) && plain(s).is_none() {
                     // Still typing arithmetic: hold it, and stop applying keystrokes once it parses.
@@ -1008,6 +1042,40 @@ fn number_edit(
     );
     if wrap_drag {
         crate::scrub_wrap::update(ui, &resp, value, before, range.clone(), speed, wrapping);
+    }
+    if resp.has_focus() {
+        let mut active_text = edited_text.into_inner().or(cached_text.filter(|_| *value == before)).unwrap_or_else(|| match decimals {
+            Some(d) => fmt_num_prec(f64::from(*value), d),
+            None if fine => fmt_num2(f64::from(*value)),
+            None => fmt_num(f64::from(*value)),
+        });
+        // Wheel over a *focused* number changes the place under its insertion caret, instead of
+        // using one fixed step. Unfocused fields still let their containing panel scroll.
+        if resp.hovered() && !math && !resp.dragged() {
+            let caret = egui::TextEdit::load_state(ui.ctx(), id)
+                .and_then(|state| state.cursor.char_range())
+                .filter(|range| range.primary.index == range.secondary.index)
+                .map(|range| usize::from(range.primary.index));
+            if let Some(place) = caret.and_then(|at| wheel_step_at_caret(&active_text, at)) {
+                let notches = wheel_notches_of(ui, id.with("digit-wheel"), true, 1.0);
+                // Fractional notches belong to this field too, before they accumulate into a step.
+                ui.input_mut(|i| i.smooth_scroll_delta = Vec2::ZERO);
+                let next = f64::from(*value) + f64::from(notches) * place;
+                let (min, max) = (f64::from(*range.start()), f64::from(*range.end()));
+                if notches != 0.0 && next.is_finite() && min.is_finite() && max.is_finite() && min <= max {
+                    let next = next.clamp(min, max) as f32;
+                    if next != *value {
+                        *value = next;
+                        let precision = active_text.split_once('.').map_or(0, |(_, digits)| digits.len().min(8));
+                        active_text = format!("{next:.precision$}");
+                        resp.mark_changed();
+                    }
+                }
+            }
+        }
+        ui.data_mut(|d| d.insert_temp(edit_text_id, (active_text, *value)));
+    } else {
+        ui.data_mut(|d| d.remove::<(String, f32)>(edit_text_id));
     }
     let (lo, hi) = (*range.start(), *range.end());
     // `f32::clamp` panics on a reversed or NaN range, which `DragValue::range` accepts.
@@ -2383,6 +2451,59 @@ mod tests {
         h.get_by_role(egui::accesskit::Role::SpinButton).click();
         h.run();
         h
+    }
+
+    #[test]
+    fn wheel_step_uses_the_caret_decimal_place() {
+        use super::wheel_step_at_caret as place;
+        assert_eq!(place("123.45", 0), Some(100.0));
+        assert_eq!(place("123.45", 1), Some(100.0));
+        assert_eq!(place("123.45", 2), Some(10.0));
+        assert_eq!(place("123.45", 3), Some(1.0));
+        assert_eq!(place("123.45", 5), Some(0.1));
+        assert_eq!(place("123.45", 6), Some(0.01));
+        assert_eq!(place("-123.45", 2), Some(100.0));
+        assert_eq!(place("-123.45", 6), Some(0.1));
+        assert_eq!(place("9", 1), Some(1.0));
+        assert_eq!(place("0.25", 3), Some(0.1));
+        assert_eq!(place("0.25", 4), Some(0.01));
+        assert_eq!(place("", 0), None);
+        assert_eq!(place("12+3", 2), None);
+        assert_eq!(place("12mm", 2), None);
+        assert_eq!(place("1.2.3", 4), None);
+    }
+
+    #[test]
+    fn wheel_over_focused_field_changes_selected_decimal_place() {
+        use egui::{
+            Modifiers, MouseWheelUnit, TouchPhase,
+            text::{CCursor, CCursorRange},
+            vec2,
+        };
+        use egui_kittest::{Harness, kittest::Queryable};
+        let mut h = Harness::builder().with_size(vec2(260.0, 120.0)).build_ui_state(
+            |ui, value: &mut f32| {
+                super::value_field(ui, value, 0.0..=1000.0, "", 100.0);
+            },
+            123.45,
+        );
+        h.run();
+        let rect = h.get_by_role(egui::accesskit::Role::SpinButton).rect();
+        // A hovered but unfocused number must not steal wheel events from its parent.
+        h.hover_at(rect.center());
+        h.event(egui::Event::MouseWheel { unit: MouseWheelUnit::Line, delta: vec2(0.0, 1.0), phase: TouchPhase::Move, modifiers: Modifiers::NONE });
+        h.run();
+        assert_eq!(*h.state(), 123.45);
+        h.get_by_role(egui::accesskit::Role::SpinButton).click();
+        h.run();
+        let id = h.ctx.memory(|m| m.focused()).expect("numeric input gains focus");
+        let mut state = egui::TextEdit::load_state(&h.ctx, id).expect("numeric edit state");
+        state.cursor.set_char_range(Some(CCursorRange::one(CCursor::new(2))));
+        state.store(&h.ctx, id);
+        h.hover_at(rect.center());
+        h.event(egui::Event::MouseWheel { unit: MouseWheelUnit::Line, delta: vec2(0.0, 1.0), phase: TouchPhase::Move, modifiers: Modifiers::NONE });
+        h.run();
+        assert_eq!(*h.state(), 133.45);
     }
 
     /// The number's slot (and its focus outline) is centred in the box (#5150).
