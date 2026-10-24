@@ -127,6 +127,50 @@ fn active_smart(s: &Session) -> SmartObject {
     }
 }
 
+#[test]
+fn gaussian_blur_keeps_an_opaque_scaled_smart_object_opaque_to_its_edges() {
+    for (w, h) in [(128, 96), (192, 144), (256, 192)] {
+        opaque_blur_at_scale(w, h);
+    }
+}
+
+/// One opaque source fitted to the 64×48 canvas (1/2, 1/3 and 1/4 scale), blurred on
+/// re-render: the footprint must stay opaque at every edge and corner (#6244's review
+/// found the one-third case leaking).
+fn opaque_blur_at_scale(w: usize, h: usize) {
+    let px = vec![255u8; w * h * 4];
+    let img = photocraft_codecs::Image::from_u8(w as u32, h as u32, photocraft_codecs::ChannelLayout::Rgba, px).unwrap();
+    let bytes = photocraft_codecs::encode(&img, photocraft_codecs::Format::Png, &Default::default()).unwrap();
+    for depth in DEPTHS {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 64, "height": 48, "depth": depth})).unwrap();
+        crate::file_cmds::place_bytes(&mut s, "solid.png", bytes.clone(), None, &json!({})).unwrap();
+        let sm = active_smart(&s);
+        let initial = sm.cache.as_ref().expect("placing creates the initial render");
+        for (x, y) in [(0, 0), (63, 0), (0, 47), (63, 47)] {
+            assert!(initial.sample_channel(x, y, 3) >= 0.999, "{depth}-bit initial alpha at ({x},{y})");
+        }
+        let (name, source) = source_bytes(&s.active().unwrap().doc.metadata, &sm.source).unwrap();
+        let placed = place(&name, &source, s.active().unwrap().doc.pixel_format(), &sm).unwrap();
+        let corners = [(0, 0), (63, 0), (0, 47), (63, 47)];
+        for (x, y) in corners {
+            assert!(placed.sample_channel(x, y, 3) >= 0.999, "{w}x{h} {depth}-bit placed alpha at ({x},{y}) = {}", placed.sample_channel(x, y, 3));
+        }
+        let mut sm = sm;
+        sm.smart_filters.push(SmartFilter {
+            command: "filter.blur.gaussianBlur".into(),
+            params: json!({"radius": 10.0}),
+            blend: BlendMode::Normal,
+            opacity: 1.0,
+            visible: true,
+        });
+        let after = apply_smart_filters(&placed, &sm, s.active().unwrap().doc.bounds()).expect("filters apply");
+        for (x, y) in corners {
+            assert!(after.sample_channel(x, y, 3) >= 0.999, "{w}x{h} source {depth}-bit blurred alpha at ({x},{y}) = {}", after.sample_channel(x, y, 3));
+        }
+    }
+}
+
 fn convert(s: &mut Session) -> u64 {
     s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap()["layer"].as_u64().unwrap()
 }

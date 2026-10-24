@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 
-use photocraft_algo::resample::{Resample, resize_surface, translate_surface};
+use photocraft_algo::resample::{Resample, resize_surface_in_canvas, translate_surface};
 use photocraft_color::{ColorMode, PixelFormat};
 use photocraft_doc::{Affine, Document, Layer, LayerContent, LayerId, SmartObject, SmartSource};
 use photocraft_geom::Rect;
@@ -757,7 +757,8 @@ pub fn place_bytes(s: &mut Session, name: &str, bytes: Vec<u8>, linked: Option<S
     let (dx, dy) = ((center.0 - w * scale / 2.0).round(), (center.1 - h * scale / 2.0).round());
     let mut px = flattened_checked(&src, fmt, "file.place")?;
     if (scale - 1.0).abs() > 1e-9 {
-        px = resize_surface(&px, scale, scale, Resample::Bicubic);
+        let source_bounds = px.content_bounds();
+        px = resize_surface_in_canvas(&px, scale, scale, Resample::Bicubic, source_bounds);
     }
     let px = translate_surface(&px, dx as i32, dy as i32);
     // Preferences ▸ General ▸ Always Create Smart Objects When Placing (on by default): off, an

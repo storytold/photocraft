@@ -465,7 +465,36 @@ fn place(name: &str, bytes: &[u8], fmt: PixelFormat, sm: &SmartObject) -> Result
     // Through the warp (source space) and the transform in one pass; whole-pixel moves are exact.
     Ok(match &sm.perspective {
         Some(p) => photocraft_algo::warp::place_source_projective(&img.surface, img.bounds, &Homography(*p), sm.warp.as_ref())?,
-        None => photocraft_algo::warp::place_source(&img.surface, img.bounds, &sm.transform, sm.warp.as_ref())?,
+        None => {
+            // A placement fitted to whole pixels (192 px at one third = 64) maps its source
+            // corners to float error of the integer destination; the warp's prefilter round
+            // trip (`ceil`, then the compensated homography) opens a phantom column of
+            // default pixels past the true edge, inside `content_bounds`, which a smart
+            // filter then spreads as an artificial transparent edge (#6244). Corners this
+            // close to the grid are on it: warp onto exactly that rectangle.
+            let [a, b, c, d, e, f] = sm.transform.m;
+            if sm.warp.is_none() && b == 0.0 && c == 0.0 {
+                let (w, h) = (img.bounds.width() as f64, img.bounds.height() as f64);
+                let corners = [(e, f), (a * w + e, f), (a * w + e, d * h + f), (e, d * h + f)];
+                let snap = |v: f64| (v - v.round()).abs() <= 1e-9 * v.abs().max(1.0);
+                if corners.iter().all(|(x, y)| snap(*x) && snap(*y)) {
+                    let (x0, y0, x1, y1) = (corners[0].0.round() as i32, corners[0].1.round() as i32, corners[1].0.round() as i32, corners[2].1.round() as i32);
+                    let clip = photocraft_geom::Rect::new(x0, y0, x1, y1);
+                    if !clip.is_empty() {
+                        let h = photocraft_algo::transform::Homography([a, c, e, b, d, f, 0.0, 0.0, 1.0]);
+                        return photocraft_algo::transform::warp_surface_clipped(
+                            &img.surface,
+                            img.bounds,
+                            &h,
+                            photocraft_algo::transform::Interp::Bicubic,
+                            clip,
+                        )
+                        .map_err(std::convert::Into::into);
+                    }
+                }
+            }
+            photocraft_algo::warp::place_source(&img.surface, img.bounds, &sm.transform, sm.warp.as_ref())?
+        }
     })
 }
 
