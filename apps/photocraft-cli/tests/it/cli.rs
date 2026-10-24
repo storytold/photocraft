@@ -265,7 +265,9 @@ fn info_and_convert_report_decode_warnings() {
     let cases = [
         ("whole.jpg", &jpeg[..], None, None),
         ("half.jpg", &jpeg[..jpeg.len() / 2], Some("JPEG data ends early (the file is truncated or damaged); part of the image is missing"), None),
-        ("anim.gif", &gif[..], Some("only the first of 3 frames was imported"), Some("written as an 8-bit palette PNG (2 colours)")),
+        // An animated GIF opens with every frame as a layer, so nothing is left out to warn about; converting it
+        // flattens its frame layers to the frame it shows.
+        ("anim.gif", &gif[..], None, Some("3 layer(s) flattened; layers, masks and blend modes are not kept")),
     ];
     for (name, bytes, warning, export) in cases {
         let file = d.join(name);

@@ -369,6 +369,8 @@ pub fn web_document(doc: &Document, p: &Value, st: &WebSettings) -> Result<(Docu
 #[derive(Clone, Debug)]
 pub struct Optimized {
     pub bytes: Vec<u8>,
+    /// The indexed frame itself, for an animated GIF to collect (set only by [`optimize_frame`]; `bytes` is then empty).
+    pub gif_frame: Option<photocraft_codecs::web::GifFrame>,
     pub ext: &'static str,
     pub width: u32,
     pub height: u32,
@@ -437,6 +439,28 @@ pub fn optimize(
     dpi: f32,
     preview: bool,
 ) -> Result<Optimized> {
+    optimize_with(px, bw, rect, st, icc, exif, xmp, dpi, preview, false)
+}
+
+/// One GIF frame of an animation: quantised as [`optimize`] would, but left as indices for the encoder
+/// that writes them all, not encoded as a file of its own.
+fn optimize_frame(px: &[[f32; 4]], bw: usize, rect: Rect, st: &WebSettings) -> Result<Optimized> {
+    optimize_with(px, bw, rect, st, None, None, None, 72.0, false, true)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn optimize_with(
+    px: &[[f32; 4]],
+    bw: usize,
+    rect: Rect,
+    st: &WebSettings,
+    icc: Option<&[u8]>,
+    exif: Option<&[u8]>,
+    xmp: Option<&str>,
+    dpi: f32,
+    preview: bool,
+    raw_gif_frame: bool,
+) -> Result<Optimized> {
     if bw == 0 || rect.x0 < 0 || rect.y0 < 0 || rect.is_empty() || rect.x1 as usize > bw || (rect.y1 as usize).checked_mul(bw).is_none_or(|end| end > px.len())
     {
         return Err(other("slice is outside the pixel buffer"));
@@ -457,6 +481,7 @@ pub fn optimize(
     let mut color_table = Vec::new();
     let mut transparent_index = None;
     let mut indices = Vec::new();
+    let mut gif_frame = None;
     let (bytes, colors) = match st.format {
         WebFormat::Png24 => {
             let alpha = st.transparency && region().any(|p| p[3] < 1.0);
@@ -583,7 +608,10 @@ pub fn optimize(
                     .collect();
             }
             let tt = t.map(|v| v as u8);
-            let bytes = if st.format == WebFormat::Gif {
+            let bytes = if raw_gif_frame {
+                gif_frame = Some(photocraft_codecs::web::GifFrame { indices: idx.clone(), palette: pal.clone(), transparent: tt, delay_cs: 0 });
+                Vec::new()
+            } else if st.format == WebFormat::Gif {
                 photocraft_codecs::web::encode_gif_indexed(ww, hh, &idx, &pal, tt, st.interlaced).map_err(e)?
             } else {
                 photocraft_codecs::encode_png_indexed(ww, hh, &idx, &pal, tt, None, None).map_err(e)?
@@ -594,7 +622,45 @@ pub fn optimize(
             (bytes, Some(pal.len()))
         }
     };
-    Ok(Optimized { bytes, ext: st.format.ext(), width: ww, height: hh, colors, color_table, transparent_index, indices, preview: look })
+    Ok(Optimized { bytes, gif_frame, ext: st.format.ext(), width: ww, height: hh, colors, color_table, transparent_index, indices, preview: look })
+}
+
+/// Whether Save for Web writes `doc` as an animated GIF: a GIF of a document with a frame animation of
+/// more than one frame.
+fn animates(doc: &Document, st: &WebSettings) -> bool {
+    st.format == WebFormat::Gif && doc.frame_animation.as_ref().is_some_and(|a| a.frames.len() > 1)
+}
+
+/// `piece` of every frame of `doc`'s frame animation as one animated GIF, each frame quantised with the
+/// export's own settings (colours, dither, transparency) and held for its own delay.
+fn animated_gif(doc: &Document, piece: Rect, st: &WebSettings) -> Result<Optimized> {
+    let a = doc.frame_animation.as_ref().ok_or_else(|| other("the document has no frame animation"))?;
+    // Every frame is flattened from the whole canvas, however small the slice kept of it.
+    let canvas = doc.bounds();
+    photocraft_io::gif_anim::check_size_in(
+        piece.width() as usize,
+        piece.height() as usize,
+        a.frames.len(),
+        (canvas.width() as usize, canvas.height() as usize),
+    )
+    .map_err(other)?;
+    let bw = doc.size.width as usize;
+    let mut frames = Vec::with_capacity(a.frames.len());
+    let mut first: Option<Optimized> = None;
+    for (i, f) in a.frames.iter().enumerate() {
+        let mut d = doc.clone();
+        a.apply(i, &mut d.layers);
+        let buf = photocraft_compose::flatten(&d);
+        let mut o = optimize_frame(&buf.px, bw, piece, st)?;
+        if let Some(mut frame) = o.gif_frame.take() {
+            frame.delay_cs = photocraft_io::gif_anim::delay_cs(f.delay_ms);
+            frames.push(frame);
+        }
+        first.get_or_insert(o);
+    }
+    let mut o = first.ok_or_else(|| other("the animation has no frames"))?;
+    o.bytes = photocraft_codecs::web::encode_gif_animated_loops(o.width, o.height, &frames, photocraft_io::gif_anim::loops(a.loops)).map_err(other)?;
+    Ok(o)
 }
 
 /// Nearest palette entry through a lazily filled 6-bit-per-channel inverse colour map: each
@@ -927,12 +993,22 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
     // Estimate only (the dialog's annotations): the whole image, or each chosen slice.
     if single.is_none() && dir.is_none() {
         let o = optimize(&buf.px, bw, wdoc.bounds(), &st, icc, exif, xmp.as_deref(), dpi, false)?;
+        let mut bytes = o.bytes.len();
+        if animates(&wdoc, &st) {
+            // The dialog asks on every change: the shown frame's size times the frames stands in for the file.
+            let frames = wdoc.frame_animation.as_ref().map_or(1, |a| a.frames.len());
+            bytes = bytes.saturating_mul(frames);
+        }
         return Ok(
-            json!({"format": o.ext, "bytes": o.bytes.len(), "width": o.width, "height": o.height, "colors": o.colors, "colorTable": o.color_table.iter().map(|c| rgb_hex(*c)).collect::<Vec<_>>(), "transparentIndex": o.transparent_index}),
+            json!({"format": o.ext, "bytes": bytes, "width": o.width, "height": o.height, "colors": o.colors, "colorTable": o.color_table.iter().map(|c| rgb_hex(*c)).collect::<Vec<_>>(), "transparentIndex": o.transparent_index}),
         );
     }
     if let Some(path) = single.filter(|_| dir.is_none() && (all.len() == 1 || p.get("slices").is_none())) {
-        let o = optimize(&buf.px, bw, wdoc.bounds(), &st, icc, exif, xmp.as_deref(), dpi, false)?;
+        let o = if animates(&wdoc, &st) {
+            animated_gif(&wdoc, wdoc.bounds(), &st)?
+        } else {
+            optimize(&buf.px, bw, wdoc.bounds(), &st, icc, exif, xmp.as_deref(), dpi, false)?
+        };
         write(path, &o.bytes)?;
         remember_web_settings(s, cmd, &last_web);
         s.file_menu.last_web = Some(last_web);
@@ -983,7 +1059,7 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
             cells.push((piece, bg, text));
             continue;
         }
-        let o = optimize(&buf.px, bw, piece, &st, icc, exif, xmp.as_deref(), dpi, false)?;
+        let o = if animates(&wdoc, &st) { animated_gif(&wdoc, piece, &st)? } else { optimize(&buf.px, bw, piece, &st, icc, exif, xmp.as_deref(), dpi, false)? };
         let name = unique(&slice_file(&r.name), o.ext);
         let rel = if images.is_empty() { name.clone() } else { format!("{images}/{name}") };
         let out = join(&dir, &rel);

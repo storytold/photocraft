@@ -47,6 +47,7 @@ pub mod doc_path;
 pub mod effects_map;
 pub mod exr_parts;
 mod flat;
+pub mod gif_anim;
 mod gradient_bake;
 pub mod guides_map;
 pub use gradient_bake::{Method as GradientMethod, bake as bake_gradient};
@@ -83,8 +84,8 @@ use photocraft_psd::{PsdError, PsdFile};
 
 pub use adjust_map::ADJUSTMENT_KEYS;
 pub use flat::{
-    DEFAULT_LOSSY_WEBP_QUALITY, apply_file_encoding, document_to_image, file_encoding, import_gif_frames, import_tiff_page, import_webp_frames,
-    tga_alpha_channel_to_transparency, tga_default_bits,
+    DEFAULT_LOSSY_WEBP_QUALITY, MAX_GIF_LAYER_FRAMES, apply_file_encoding, document_to_image, file_encoding, import_gif_frames, import_tiff_page,
+    import_webp_frames, tga_alpha_channel_to_transparency, tga_default_bits,
 };
 pub use psd_export::{PsdExportOptions, document_to_psd, document_to_psd_with};
 pub use psd_import::{psd_to_document, psd_to_document_with};
@@ -533,6 +534,14 @@ fn export_stages(doc: &Document, name_or_ext: &str, opts: &ExportOptions, ctl: &
     if ext == "pdf" {
         return pdf::export(doc);
     }
+    // A document with a frame animation of more than one frame saves as an animated GIF, each frame with its
+    // own delay; a single frame (a new animation has one) is a still, as Save for Web writes it.
+    if ext == "gif"
+        && doc.frame_animation.as_ref().is_some_and(|a| a.frames.len() > 1)
+        && let Some(bytes) = gif_anim::export(doc, ctl)?
+    {
+        return Ok(ExportResult { bytes, warnings: Vec::new() });
+    }
     if ext == photocraft_format::EXTENSION {
         let doc = named_for_file(doc, name_or_ext);
         let thumbnail = Some(photocraft_compose::thumbnail(doc.as_ref(), 256));
@@ -561,6 +570,11 @@ fn export_stages(doc: &Document, name_or_ext: &str, opts: &ExportOptions, ctl: &
         ctl.check().map_err(|_| IoError::Cancelled)?;
         if !doc.metadata.text.is_empty() {
             warnings.push("free-form text metadata is not supported by PSD/PSB; it will be dropped".into());
+        }
+        if doc.frame_animation.as_ref().is_some_and(|a| a.frames.len() > 1) {
+            warnings.push(
+                "the frame animation is not saved in a PSD/PSB (the layers are, as the selected frame shows them); save a .pcraft or a GIF to keep it".into(),
+            );
         }
         warnings.extend(tiff_layers::strip_foreign_order_blocks(&mut file));
         if opts.image_previews {

@@ -152,6 +152,7 @@ pub fn encode_gif_indexed(
 
 /// One frame of an animated GIF: palette indices, its (local) palette, an optional transparent
 /// index, and the on-screen delay in centiseconds.
+#[derive(Clone, Debug)]
 pub struct GifFrame {
     pub indices: Vec<u8>,
     pub palette: Vec<[u8; 3]>,
@@ -159,9 +160,36 @@ pub struct GifFrame {
     pub delay_cs: u16,
 }
 
+/// How many times an animated GIF plays.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GifLoops {
+    /// Plays through once: no looping extension.
+    Once,
+    Forever,
+    /// Plays this many times in all (two or more; the file stores the repeats after the first).
+    Times(u16),
+}
+
 /// Encode an animated GIF (GIF89a). Each frame carries its own local colour table; `loop_forever`
 /// adds the NETSCAPE2.0 looping extension.
 pub fn encode_gif_animated(width: u32, height: u32, frames: &[GifFrame], loop_forever: bool) -> Result<Vec<u8>, CodecError> {
+    encode_gif_animated_loops(width, height, frames, if loop_forever { GifLoops::Forever } else { GifLoops::Once })
+}
+
+/// [`encode_gif_animated`] with a play count.
+pub fn encode_gif_animated_loops(width: u32, height: u32, frames: &[GifFrame], loops: GifLoops) -> Result<Vec<u8>, CodecError> {
+    encode_gif_animated_stepped(width, height, frames, loops, &mut |_, _| true)?.ok_or_else(|| gif_err("the encoder stopped without being asked to"))
+}
+
+/// [`encode_gif_animated_loops`] that calls `step(done, total)` after each frame is written and stops
+/// when it returns false, giving `None`: compressing a long animation takes a while.
+pub fn encode_gif_animated_stepped(
+    width: u32,
+    height: u32,
+    frames: &[GifFrame],
+    loops: GifLoops,
+    step: &mut dyn FnMut(usize, usize) -> bool,
+) -> Result<Option<Vec<u8>>, CodecError> {
     let (w, h) = (width as usize, height as usize);
     if width == 0 || height == 0 || width > 65535 || height > 65535 {
         return Err(gif_err("GIF size must be 1..=65535"));
@@ -175,20 +203,29 @@ pub fn encode_gif_animated(width: u32, height: u32, frames: &[GifFrame], loop_fo
     out.push(0x70); // no global colour table, 8-bit colour resolution
     out.push(0); // background colour index
     out.push(0); // pixel aspect ratio
-    if loop_forever {
+    let repeats = match loops {
+        GifLoops::Once => None,
+        GifLoops::Forever => Some(0u16), // loop count 0 = forever
+        GifLoops::Times(n) => Some(n.max(2) - 1),
+    };
+    if let Some(repeats) = repeats {
         out.extend([0x21, 0xFF, 0x0B]);
         out.extend_from_slice(b"NETSCAPE2.0");
-        out.extend([0x03, 0x01, 0x00, 0x00, 0x00]); // loop count 0 = forever
+        out.extend([0x03, 0x01]);
+        out.extend(repeats.to_le_bytes());
+        out.push(0x00);
     }
-    for f in frames {
-        if f.palette.is_empty() || f.palette.len() > 256 || f.indices.len() != w * h || f.indices.iter().any(|&i| usize::from(i) >= f.palette.len()) {
+    for (i, f) in frames.iter().enumerate() {
+        if f.palette.is_empty() || f.palette.len() > 256 || f.indices.len() != w * h || f.indices.iter().any(|&idx| usize::from(idx) >= f.palette.len()) {
             return Err(gif_err("every frame's palette must have 1..=256 entries covering its indices"));
         }
         let bits = (1..=8u8).find(|b| (1usize << b) >= f.palette.len()).unwrap_or(8);
         // Graphic Control Extension: delay and optional transparency. Every frame covers the whole
-        // image, so an opaque one is left in place (disposal 1), while one with a transparent index
-        // is cleared afterwards (disposal 2): otherwise the frames before it show through.
-        let packed = if f.transparent.is_some() { 0x09 } else { 0x04 };
+        // image, so one is normally left in place (disposal 1). A frame with a transparent index, and
+        // the frame before one, are cleared afterwards (disposal 2): otherwise what was drawn before
+        // shows through the holes.
+        let clears = f.transparent.is_some() || frames.get(i + 1).is_some_and(|next| next.transparent.is_some());
+        let packed = (if clears { 2 << 2 } else { 1 << 2 }) | u8::from(f.transparent.is_some());
         out.extend([0x21, 0xF9, 0x04, packed]);
         out.extend(f.delay_cs.to_le_bytes());
         out.push(f.transparent.unwrap_or(0));
@@ -209,9 +246,12 @@ pub fn encode_gif_animated(width: u32, height: u32, frames: &[GifFrame], loop_fo
             out.extend_from_slice(chunk);
         }
         out.push(0);
+        if !step(i + 1, frames.len()) {
+            return Ok(None);
+        }
     }
     out.push(0x3B);
-    Ok(out)
+    Ok(Some(out))
 }
 
 fn put_multibyte(out: &mut Vec<u8>, v: u32) {
@@ -514,6 +554,16 @@ mod anim_tests {
         assert_eq!(packed(&clear), 0x09, "disposal 2 with the transparency flag");
         let px = crate::decode(&clear).unwrap().to_rgba8();
         assert_eq!((px[3], &px[4..8]), (0, &[255, 0, 0, 255][..]), "index 0 transparent, index 1 red");
+    }
+
+    #[test]
+    fn an_opaque_frame_before_a_transparent_one_is_cleared_too() {
+        let frame = |transparent| GifFrame { indices: vec![0, 1, 1, 1], palette: vec![[0, 0, 0], [255, 0, 0]], transparent, delay_cs: 4 };
+        let g = encode_gif_animated(2, 2, &[frame(None), frame(Some(0)), frame(None), frame(None)], false).unwrap();
+        let packed: Vec<u8> = g.windows(4).filter(|w| w[..3] == [0x21, 0xF9, 0x04]).map(|w| w[3]).collect();
+        // Opaque then transparent: cleared (the holes must not show it); transparent: cleared;
+        // opaque then opaque: left in place; the last frame has nothing after it.
+        assert_eq!(packed, [0x08, 0x09, 0x04, 0x04]);
     }
 
     #[test]

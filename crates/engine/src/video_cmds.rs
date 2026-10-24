@@ -481,6 +481,27 @@ pub fn render_video_with(
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let mut base = (*st.doc).clone();
     store(&mut base);
+    // A frame animation of more than one frame renders as one animated GIF with each frame's own delay and the
+    // loop count; the one frame a new animation has leaves the timeline to render, as a still save does.
+    if format.eq_ignore_ascii_case("gif")
+        && let Some(a) = base.frame_animation.as_ref().filter(|a| a.frames.len() > 1)
+    {
+        let n = a.frames.len();
+        let stem = base.name.rsplit_once('.').map_or(base.name.as_str(), |(a, _)| a).to_string();
+        // Progress and cancellation reach the export between frames and while it compresses, so Esc stops
+        // a long render; the last frame is reported once the file is written.
+        let bytes = photocraft_io::gif_anim::export_stepped(&base, &mut |done, total| progress(done.min(total.saturating_sub(1)), total))
+            .map_err(|e| match e {
+                photocraft_io::IoError::Cancelled => EngineError::Other("render cancelled".into()),
+                e => EngineError::Other(e.to_string()),
+            })?
+            .ok_or_else(|| EngineError::Other("the document has no frame animation".into()))?;
+        let name = format!("{stem}.gif");
+        write(&name, &bytes)?;
+        // The final report follows encoding and writing, so `n` of `n` means the file exists.
+        progress(n, n);
+        return Ok(json!({"frames": n, "file": format!("{dir}/{name}")}));
+    }
     let frames = base.timeline.as_ref().map_or(1, |t| t.duration).max(1);
     // Loaded timelines bypass the duration validation used by timeline.create/setProps.
     if frames > crate::timeline_cmds::MAX_DURATION {
@@ -557,20 +578,8 @@ pub fn render_video_with(
 /// One animated GIF frame from straight RGBA pixels, as Save for Web's GIF does (#3061): pixels
 /// under 50 % opacity get the frame's transparent index, the rest are drawn opaque, and the
 /// palette is built from the visible pixels with one entry kept for transparency.
-fn gif_frame(mut px: Vec<[f32; 4]>, w: usize, delay_cs: u16) -> Result<photocraft_codecs::web::GifFrame> {
-    use photocraft_algo::quantize::{self, Dither, Forced, PaletteKind};
-    let transparent = px.iter().any(|p| p[3] < 0.5);
-    let visible: Vec<[f32; 4]> = px.iter().filter(|p| p[3] >= 0.5).map(|p| [p[0], p[1], p[2], 1.0]).collect();
-    // A fully transparent frame still needs a palette.
-    let src = if visible.is_empty() { &px } else { &visible };
-    let mut pal = quantize::build_palette(src, PaletteKind::Adaptive, if transparent { 255 } else { 256 }, Forced::None).map_err(EngineError::Other)?;
-    let t = transparent.then(|| {
-        pal.truncate(255);
-        pal.push(pal.first().copied().unwrap_or([0, 0, 0]));
-        pal.len() - 1
-    });
-    let indices = quantize::quantize(&mut px, w, &pal, Dither::None, 1.0, t);
-    Ok(photocraft_codecs::web::GifFrame { indices, palette: pal, transparent: t.map(|i| i as u8), delay_cs })
+fn gif_frame(px: Vec<[f32; 4]>, w: usize, delay_cs: u16) -> Result<photocraft_codecs::web::GifFrame> {
+    photocraft_io::gif_anim::quantized_frame(px, w, delay_cs).map_err(|e| EngineError::Other(e.to_string()))
 }
 
 macro_rules! spec {

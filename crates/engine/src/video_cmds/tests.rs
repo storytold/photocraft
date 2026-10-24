@@ -117,6 +117,23 @@ fn render_video_to_animated_gif() {
 }
 
 #[test]
+fn a_one_frame_animation_does_not_replace_the_timeline_in_a_gif_render() {
+    let dir = tmpdir("gifmixsrc");
+    write_png(&format!("{dir}/a.png"), 10, 8, "#ff0000");
+    write_png(&format!("{dir}/b.png"), 10, 8, "#00ff00");
+    write_png(&format!("{dir}/c.png"), 10, 8, "#0000ff");
+    let mut s = session();
+    s.execute("layer.videoLayers.newVideoLayerFromFile", json!({"path": dir})).unwrap();
+    // Creating a frame animation makes one frame: the three-frame timeline is still what renders.
+    s.execute("animation.create", json!({})).unwrap();
+    let out = tmpdir("gifmixout");
+    let r = s.execute("file.export.renderVideo", json!({"dir": out, "format": "gif"})).unwrap();
+    assert_eq!(r["frames"], 3);
+    let gif = std::fs::read(r["file"].as_str().unwrap()).unwrap();
+    assert_eq!(gif.iter().filter(|&&b| b == 0x2C).count(), 3);
+}
+
+#[test]
 fn animated_gif_keeps_transparency() {
     // #3061: a transparent document rendered as an animated GIF came out opaque black.
     let mut s = Session::new();

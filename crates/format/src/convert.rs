@@ -257,6 +257,7 @@ pub(crate) fn doc_m(d: &Document, sink: &mut dyn Sink) -> DocM {
         duotone: d.duotone.clone(),
         variables: d.variables.clone(),
         timeline: d.timeline.clone(),
+        frame_animation: d.frame_animation.clone(),
         file_encoding: d.file_encoding,
         layer_comps: d.layer_comps.iter().map(|c| comp_m(c, sink)).collect(),
         last_applied_comp: d.last_applied_comp,
@@ -574,7 +575,7 @@ impl Loader<'_> {
             max_ids(&m.layers, 0, &mut max)?;
             self.preserve_ids = reserve_ids_through(max);
         }
-        let layers = m.layers.iter().map(|l| self.layer(l, 0)).collect::<Result<Vec<_>>>()?;
+        let mut layers = m.layers.iter().map(|l| self.layer(l, 0)).collect::<Result<Vec<_>>>()?;
         let mut channels = Vec::with_capacity(m.channels.len());
         for c in &m.channels {
             channels.push(self.channel(c)?);
@@ -632,6 +633,22 @@ impl Loader<'_> {
                 vd.layer = self.id_map.get(&vd.layer.0).copied().unwrap_or(LayerId(u64::MAX - vd.layer.0.min(u64::MAX / 2)));
             }
         }
+        // Frames name the layers hidden in them: they follow their layers through id remapping, and an
+        // id with no layer (one deleted before the save) is dropped, so a layer made later can't be
+        // handed it and start out hidden.
+        let mut frame_animation = m.frame_animation.clone();
+        // A stored animation is untrusted: no frames, too many, or a frame past the end must not reach the UI.
+        if let Some(a) = &mut frame_animation {
+            a.clamp();
+            if self.preserve_ids {
+                let live = photocraft_doc::layer_ids(&layers);
+                a.remap_layers(|l| live.contains(&l).then_some(l));
+            } else {
+                a.remap_layers(|l| self.id_map.get(&l.0).copied());
+            }
+            // The layers show the selected frame, whatever the manifest's layers say.
+            a.apply(a.current, &mut layers);
+        }
         let id = if self.preserve_ids { DocId(m.id) } else { DocId::fresh() };
         Ok(Document {
             id,
@@ -658,6 +675,7 @@ impl Loader<'_> {
             duotone: m.duotone.clone(),
             variables,
             timeline: m.timeline.clone(),
+            frame_animation,
             file_encoding: m.file_encoding,
             layer_comps,
             last_applied_comp: m.last_applied_comp,
