@@ -917,6 +917,11 @@ impl Session {
         crate::automate_cmds::after_command(self, id);
         self.sync_preset_store();
         if !journal {
+            // Moving between frames is no step of its own, but an action that edits one frame has to
+            // go back to it when played, so recording keeps where the selection landed.
+            if self.actions.recording.is_some() {
+                crate::animation_cmds::record_navigation(self, id);
+            }
             return;
         }
         if let Some(from) = nested_from.filter(|_| crate::actions_cmds::replayable(id)) {
