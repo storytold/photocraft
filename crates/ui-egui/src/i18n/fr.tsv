@@ -673,6 +673,9 @@
 	Standard Screen Mode	Mode d'écran standard
 	Full Screen Mode With Menu Bar	Mode plein écran avec barre de menus
 	Full Screen Mode	Mode plein écran
+	Drawing Mode	Mode dessin
+	Left Handed	Gaucher
+	Finger Draws on Canvas (off: the finger only pans)	Dessiner au doigt sur la toile (désactivé : le doigt déplace uniquement)
 	Cycle Screen Mode	Changer de mode d'écran
 	Show	Afficher
 	Extras	Extras

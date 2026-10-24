@@ -444,6 +444,15 @@ impl Tool {
     }
 }
 
+/// The drawing mode's open side sheets. Not persisted: they are momentary views.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct DrawingModeUi {
+    #[serde(default)]
+    pub layers: bool,
+    #[serde(default)]
+    pub color: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Panels {
     pub layers: bool,
@@ -1526,6 +1535,9 @@ pub struct UiState {
     #[serde(default)]
     pub view: crate::view_cmds::ViewOptions,
     pub panels: Panels,
+    /// Tablet drawing mode's transient sheets (layers/color). The mode itself is a preference.
+    #[serde(default)]
+    pub drawing: DrawingModeUi,
     /// Views per open document (index-aligned with the session's documents).
     pub views: Vec<View>,
     pub dialogs: Vec<Dialog>,
@@ -1678,6 +1690,7 @@ impl Default for UiState {
             corner_radius: None,
             selected_path: None,
             panels: Panels::default(),
+            drawing: DrawingModeUi::default(),
             views: Vec::new(),
             dialogs: Vec::new(),
             windows: Vec::new(),

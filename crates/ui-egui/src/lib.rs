@@ -88,6 +88,7 @@ pub mod disk_change_prompt;
 pub mod distort_ui;
 pub mod doc_props_ui;
 pub mod dock;
+pub mod drawing_mode;
 pub mod duplicate_layer_ui;
 pub mod edit_history;
 pub mod egui_fonts;
@@ -2447,12 +2448,13 @@ impl eframe::App for PhotocraftApp {
         // The OS title bar (and the taskbar / Alt-Tab entry) follows the active file; with the
         // system title bar this is where the document name lives, as the in-app title is hidden.
         panels::sync_window_title(self, &ctx);
-        let chrome = !self.ui.view.hides_chrome();
+        let drawing = self.session.prefs().interface.drawing_mode;
+        let chrome = !self.ui.view.hides_chrome() && !drawing;
         if chrome {
             self.ui.panels.full_screen_chrome = false;
         }
         // In Full Screen Mode, Tab shows the menu bar, options bar, toolbar and dock (#6760).
-        let tabbed_in = !chrome && self.ui.panels.full_screen_chrome;
+        let tabbed_in = !drawing && !chrome && self.ui.panels.full_screen_chrome;
         if (chrome || tabbed_in) && self.ui.panels.menu_bar {
             panels::title_bar(self, ui);
         }
@@ -2469,10 +2471,13 @@ impl eframe::App for PhotocraftApp {
             panels::right_dock(self, ui);
         }
         let t = theme::Tokens::get(&ctx);
-        let backdrop = if chrome { prefs_ui::pasteboard_color(self).unwrap_or(t.canvas) } else { egui::Color32::BLACK };
+        let backdrop = if chrome || drawing { prefs_ui::pasteboard_color(self).unwrap_or(t.canvas) } else { egui::Color32::BLACK };
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(backdrop)).show(ui, |ui| {
             canvas::document_area(self, ui);
         });
+        if drawing {
+            drawing_mode::show(self, &ctx);
+        }
         panels::properties_window(self, &ctx);
         brush_panel::window(self, &ctx);
         preset_panels::windows(self, &ctx);

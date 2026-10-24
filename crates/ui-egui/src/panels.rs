@@ -676,17 +676,25 @@ pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     // (Preferences), then search (Edit › Search), and narrows the switcher
                     // (Window › Workspace) before anything runs over.
                     let room = ui.available_width();
-                    let icons_shown: u8 = if room >= WORKSPACE_MIN + 2.0 * ICON_SLOT {
+                    // The tablet drawing-mode button is always present in the full interface;
+                    // search and appearance give up their slots first when the title bar narrows.
+                    let room_after_drawing = (room - ICON_SLOT - 6.0).max(0.0);
+                    let icons_shown: u8 = if room_after_drawing >= WORKSPACE_MIN + 2.0 * ICON_SLOT {
                         2
-                    } else if room >= WORKSPACE_MIN + ICON_SLOT {
+                    } else if room_after_drawing >= WORKSPACE_MIN + ICON_SLOT {
                         1
                     } else {
                         0
                     };
-                    let ws_width = (room - f32::from(icons_shown) * ICON_SLOT - 6.0).clamp(WORKSPACE_MIN, 130.0);
-                    if room >= WORKSPACE_MIN && widgets::dropdown(ui, "workspace", &mut ws, &opts, ws_width) {
+                    let ws_width = (room_after_drawing - f32::from(icons_shown) * ICON_SLOT - 6.0).clamp(WORKSPACE_MIN, 130.0);
+                    if room_after_drawing >= WORKSPACE_MIN && widgets::dropdown(ui, "workspace", &mut ws, &opts, ws_width) {
                         app.ui.workspace = ws;
                         crate::menus::apply_workspace(app);
+                    }
+                    if icons::button(ui, "brush", 28.0, false, tl!("Drawing Mode")).clicked()
+                        && let Err(error) = crate::menus::invoke(app, ui.ctx(), "view.drawingMode", serde_json::json!({}))
+                    {
+                        app.ui.status = error;
                     }
                     if icons_shown >= 1
                         && icons::button(ui, "search", 28.0, app.ui.palette_open, &crate::shortcuts::tip_label(app, "Search commands", "edit.search")).clicked()

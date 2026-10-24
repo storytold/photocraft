@@ -663,6 +663,9 @@
 	Standard Screen Mode	Standaardschermmodus
 	Full Screen Mode With Menu Bar	Volledig scherm met menubalk
 	Full Screen Mode	Volledig scherm
+	Drawing Mode	Tekenmodus
+	Left Handed	Linkshandig
+	Finger Draws on Canvas (off: the finger only pans)	Met vinger op canvas tekenen (uit: vinger verplaatst alleen)
 	Cycle Screen Mode	Schermmodi doorlopen
 	Show	Tonen
 	Extras	Extra's

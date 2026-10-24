@@ -647,6 +647,9 @@
 	Standard Screen Mode	Standart Ekran Modu
 	Full Screen Mode With Menu Bar	Menü Çubuklu Tam Ekran Modu
 	Full Screen Mode	Tam Ekran Modu
+	Drawing Mode	Çizim Modu
+	Left Handed	Solak
+	Finger Draws on Canvas (off: the finger only pans)	Parmakla tuvale çiz (kapalıyken parmak yalnızca kaydırır)
 	Cycle Screen Mode	Ekran Modları Arasında Geç
 	Show	Göster
 	Extras	Ekstralar

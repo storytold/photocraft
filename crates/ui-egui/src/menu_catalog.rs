@@ -659,6 +659,7 @@ pub static CATALOG: &[(&[&str], &str, Option<&str>, &str)] = &[
     (&["View", "Screen Mode"], "Standard Screen Mode", None, "view.screenMode.standard"),
     (&["View", "Screen Mode"], "Full Screen Mode With Menu Bar", None, "view.screenMode.fullScreenWithMenuBar"),
     (&["View", "Screen Mode"], "Full Screen Mode", None, "view.screenMode.fullScreen"),
+    (&["View"], "Drawing Mode", None, "view.drawingMode"),
     (&["View"], "---", None, "---"),
     (&["View"], "Extras", Some("Cmd+H"), "view.extras"),
     (&["View", "Show"], "Layer Edges", None, "view.show.layerEdges"),

@@ -465,6 +465,9 @@
 	Standard Screen Mode	Стандартный режим экрана
 	Full Screen Mode With Menu Bar	Весь экран с панелью меню
 	Full Screen Mode	Весь экран
+	Drawing Mode	Режим рисования
+	Left Handed	Левша
+	Finger Draws on Canvas (off: the finger only pans)	Рисование пальцем на холсте (выкл.: палец только перемещает холст)
 	Extras	Вспомогательные элементы
 	Show	Показать
 	Rulers	Линейки

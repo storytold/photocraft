@@ -689,6 +689,9 @@
 	Standard Screen Mode	标准屏幕模式
 	Full Screen Mode With Menu Bar	带菜单栏的全屏模式
 	Full Screen Mode	全屏模式
+	Drawing Mode	绘画模式
+	Left Handed	左手模式
+	Finger Draws on Canvas (off: the finger only pans)	手指在画布上绘制（关闭时手指仅移动画布）
 	Cycle Screen Mode	循环切换屏幕模式
 	Show	显示
 	Extras	辅助内容
