@@ -261,6 +261,9 @@ pub(crate) fn close_box(ui: &mut egui::Ui, rect: egui::Rect) -> bool {
 }
 
 pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    if crate::guide_edit::sync(app) {
+        ctx.request_repaint();
+    }
     crate::layer_style::color_picker::prune(app);
     crate::type_panels_ui::color_picker::prune(app);
     crate::edit_history::track_dialogs(app, ctx);
@@ -674,6 +677,9 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             }
         }
     }
+    if crate::guide_edit::sync(app) {
+        ctx.request_repaint();
+    }
     ctx.data_mut(|m| m.insert_temp(egui::Id::new(RECTS), shown));
 }
 
@@ -922,6 +928,7 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
 /// Cancel a dialog and its dependent Layer Style picker, without applying edits.
 pub fn cancel(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
     let closed = app.ui.close_dialog(id).ok_or_else(|| format!("no dialog {id}"))?;
+    crate::guide_edit::cancel(app, id);
     crate::actions::stopped(app, &closed.fields);
     if crate::guide_layout_ui::owns(&closed.fields) {
         app.ui.dialogs.retain(|child| child.fields.get("__dialog").and_then(Value::as_u64) != Some(id));

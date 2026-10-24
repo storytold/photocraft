@@ -57,7 +57,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Git dependencies come from storytold
+      - name: Git dependencies use approved sources
         run: |
           set -euo pipefail
           test -f Cargo.lock || { echo "Cargo.lock is missing"; exit 1; }
@@ -81,11 +81,17 @@ jobs:
           python3 - <<'PY'
           import sys, tomllib
           lock = tomllib.load(open("Cargo.lock", "rb"))
+          # One reviewed external component: package name, version, repository AND commit.
+          # Every future dependency revision still needs an explicit review here.
+          edit_session = ("edit-session", "0.1.0-alpha.1",
+                          "git+https://github.com/PerchAnton/edit-session?rev=28620b8264660ea84a182110cf5894da90281c42"
+                          "#28620b8264660ea84a182110cf5894da90281c42")
           bad = sorted({p["source"] for p in lock.get("package", [])
                         if p.get("source", "").startswith("git+")
-                        and not p["source"].startswith("git+https://github.com/storytold/")})
+                        and not p["source"].startswith("git+https://github.com/storytold/")
+                        and (p["name"], p["version"], p["source"]) != edit_session})
           if bad:
-              print("Git dependencies outside github.com/storytold:", *bad, sep="\n")
+              print("Unapproved Git dependencies:", *bad, sep="\n")
               sys.exit(1)
           PY
       - id: pick

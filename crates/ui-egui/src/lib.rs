@@ -112,6 +112,7 @@ pub mod gallery_ui;
 pub mod gpu_canvas;
 pub mod gpu_status;
 pub mod gradient_ui;
+mod guide_edit;
 pub mod guide_layout_ui;
 pub mod guide_select;
 pub mod history_menu_ui;
@@ -845,6 +846,7 @@ pub struct PhotocraftApp {
     pub(crate) proxy_uploaded: Option<(DocId, u64)>,
     /// Selection outline cache: (doc, revision, segments).
     /// Live filter preview (proxy document with the filter applied).
+    pub(crate) guide_edit: Option<guide_edit::Draft>,
     pub(crate) filter_preview: Option<filter_dialog::FilterPreview>,
     pub(crate) smart_filter_targets: smart_filter_dialog::Targets,
     #[cfg(not(target_arch = "wasm32"))]
@@ -1094,6 +1096,7 @@ impl PhotocraftApp {
             proxy: None,
             proxy_uploaded: None,
             outline_cache: None,
+            guide_edit: None,
             filter_preview: None,
             smart_filter_targets: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]

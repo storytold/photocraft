@@ -10,6 +10,7 @@ license = "MIT OR Apache-2.0"
 rust-version = "1.95"
 
 [workspace.dependencies]
+edit-session = { git = "https://github.com/PerchAnton/edit-session", rev = "28620b8264660ea84a182110cf5894da90281c42" }
 craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "5c874d51eeb3de70e735c8ce87a59a7dedd47675", features = ["serde"] }
 # internal
 photocraft-geom = { path = "crates/geom" }

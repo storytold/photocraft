@@ -1677,6 +1677,11 @@ dependencies = [
 ]
 
 [[package]]
+name = "edit-session"
+version = "0.1.0-alpha.1"
+source = "git+https://github.com/PerchAnton/edit-session?rev=28620b8264660ea84a182110cf5894da90281c42#28620b8264660ea84a182110cf5894da90281c42"
+
+[[package]]
 name = "eframe"
 version = "0.36.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5156,6 +5161,7 @@ dependencies = [
  "base64 0.22.1",
  "craft-print",
  "craft-ui",
+ "edit-session",
  "eframe",
  "egui",
  "egui_extras",

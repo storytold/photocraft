@@ -142,3 +142,90 @@ fn the_last_position_reopens_in_whatever_the_ruler_unit_is_now() {
         crate::dialogs::cancel(&mut app, d).unwrap();
     }
 }
+
+// These regressions exercise the ordinary dialog handlers, not a separate model.
+fn edit_fixture() -> (PhotocraftApp, u64) {
+    let (mut app, _) = app("pixels");
+    app.run("view.newGuide", json!({"orientation": "vertical", "position": 10})).unwrap();
+    app.run("view.newGuide", json!({"orientation": "vertical", "position": 20})).unwrap();
+    crate::guide_select::select(&mut app, true, 0);
+    let id = open_edit(&mut app).unwrap();
+    set(&mut app, id, "vertical", "30 px");
+    (app, id)
+}
+
+#[test]
+fn draft_cannot_edit_a_guide_in_another_document() {
+    let (mut app, id) = edit_fixture();
+    app.run("file.new", json!({"width": 400, "height": 200})).unwrap();
+    app.run("view.newGuide", json!({"orientation": "vertical", "position": 10})).unwrap();
+    let history = app.session.active().unwrap().history.past_len();
+    assert!(crate::dialogs::confirm(&mut app, id).is_err());
+    assert_eq!(guides(&app).1, vec![10.0]);
+    assert_eq!(app.session.active().unwrap().history.past_len(), history);
+}
+
+#[test]
+fn draft_cannot_edit_the_guide_that_reused_a_deleted_index() {
+    let (mut app, id) = edit_fixture();
+    app.run("view.deleteGuide", json!({"orientation": "vertical", "index": 0})).unwrap();
+    let history = app.session.active().unwrap().history.past_len();
+    assert!(crate::dialogs::confirm(&mut app, id).is_err());
+    assert_eq!(guides(&app).1, vec![20.0]);
+    assert_eq!(app.session.active().unwrap().history.past_len(), history);
+}
+
+#[test]
+fn draft_unchanged_confirmation_preserves_redo() {
+    let (mut app, id) = edit_fixture();
+    crate::dialogs::cancel(&mut app, id).unwrap();
+    app.run("view.moveGuide", json!({"orientation": "vertical", "index": 0, "position": 15})).unwrap();
+    assert!(app.session.undo());
+    crate::guide_select::select(&mut app, true, 0);
+    let id = open_edit(&mut app).unwrap();
+    let history = app.session.active().unwrap().history.past_len();
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    assert_eq!(app.session.active().unwrap().history.past_len(), history);
+    assert!(app.session.active().unwrap().history.can_redo());
+}
+
+#[test]
+fn draft_preview_is_isolated_and_invalid_text_keeps_the_last_good_preview() {
+    let (mut app, id) = edit_fixture();
+    crate::guide_edit::sync(&mut app);
+    let shown = |app: &PhotocraftApp| edit_preview(app, &app.session.active().unwrap().doc).unwrap().vertical.clone();
+    assert_eq!(shown(&app), vec![30.0, 20.0]);
+    assert_eq!(guides(&app).1, vec![10.0, 20.0]);
+    assert_eq!(app.session.active().unwrap().history.past_len(), 2);
+    set(&mut app, id, "vertical", "far");
+    crate::guide_edit::sync(&mut app);
+    assert_eq!(shown(&app), vec![30.0, 20.0]);
+    assert!(crate::dialogs::confirm(&mut app, id).is_err());
+    let id = app.ui.dialogs.last().unwrap().id;
+    assert!(app.ui.dialog_mut(id).unwrap().fields.contains_key("__error"));
+    set(&mut app, id, "vertical", "40 px");
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    assert_eq!(guides(&app).1, vec![40.0, 20.0]);
+    assert_eq!(app.session.active().unwrap().history.past_len(), 3);
+    assert_eq!(app.session.journal.iter().filter(|(cmd, _)| cmd == "view.editGuide").count(), 1);
+    assert!(crate::dialogs::confirm(&mut app, id).is_err());
+}
+
+#[test]
+fn draft_reopening_retires_the_previous_dialog() {
+    let (mut app, first) = edit_fixture();
+    let second = open_edit(&mut app).unwrap();
+    assert!(crate::dialogs::confirm(&mut app, first).is_err());
+    crate::dialogs::cancel(&mut app, second).unwrap();
+    assert!(app.guide_edit.is_none());
+    assert_eq!(guides(&app).1, vec![10.0, 20.0]);
+}
+
+#[test]
+fn draft_cannot_commit_after_guides_are_locked() {
+    let (mut app, id) = edit_fixture();
+    app.ui.extras.lock_guides = true;
+    assert!(crate::dialogs::confirm(&mut app, id).is_err());
+    assert_eq!(guides(&app).1, vec![10.0, 20.0]);
+    assert!(app.guide_edit.is_none());
+}
