@@ -405,6 +405,31 @@ fn curves_pencil_drag_draws_the_map_and_confirm_applies_it() {
     assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1);
 }
 
+/// #9220: Smooth is an icon button in the row with the point and pencil buttons, as in
+/// Photoshop; enabled while drawing with the pencil, it smooths the drawn map.
+#[test]
+fn curves_smooth_is_an_icon_beside_the_pencil_and_smooths_the_map() {
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app_with_image());
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    let id = open(h.state_mut(), "image.adjustments.curves").unwrap();
+    h.run_steps(4);
+    let smooth = |h: &Harness<'_, PhotocraftApp>| h.get_by_role_and_label(egui::accesskit::Role::Button, "Smooth the curve values").rect();
+    let pencil = h.get_by_role_and_label(egui::accesskit::Role::Button, "Draw to modify the curve").rect();
+    let s = smooth(&h);
+    assert!((s.center().y - pencil.center().y).abs() < 1.0 && s.left() > pencil.right(), "in the pencil's row: {s:?} {pencil:?}");
+    assert!((s.width() - pencil.width()).abs() < 1.0 && (s.height() - pencil.height()).abs() < 1.0, "an icon button like the pencil's: {s:?}");
+    let jagged: Vec<f64> = (0..256).map(|k| if (k / 8) % 2 == 0 { 40.0 } else { 220.0 }).collect();
+    let fields = &mut h.state_mut().ui.dialog_mut(id).unwrap().fields;
+    fields.insert("pencil".into(), json!(true));
+    fields.insert("points".into(), json!(jagged));
+    h.run_steps(3);
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Smooth the curve values").click();
+    h.run_steps(3);
+    let map: Vec<f64> = h.state().ui.dialogs[0].fields["points"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect();
+    let steepest = |m: &[f64]| m.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0, f64::max);
+    assert!(steepest(&map) < steepest(&jagged) / 2.0, "Smooth turned the 180-level jumps into slopes: {}", steepest(&map));
+}
+
 #[test]
 fn curves_pointer_drag_previews_until_confirm_and_cancel_preserves_document() {
     for confirm in [false, true] {
