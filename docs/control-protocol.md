@@ -475,6 +475,24 @@ The MCP server has the same batching as the `command_batch` tool (`{steps:[{id, 
 in headless and bridge mode. A step with `wait: false` returns `{job, pending}` at once, as `command_run`
 does; later steps that edit the same document fail with a message naming the job until it ends.
 
+## In the browser: `window.photocraft`
+
+The web build has no TCP server (a page can't listen on a socket), so it offers the same methods to the
+page itself, as promises on `window.photocraft` (`apps/photocraft-web/src/api.rs`), like VectorCraft's
+`window.vectorcraft` and FilmCraft's `window.filmcraft`. An agent driving PhotoCraft in a browser tab, or
+a host app showing it in an `<iframe>`, uses the commands it would send to the desktop app:
+
+| Call | |
+|---|---|
+| `photocraft.request(method, params)` | any control method of this document → its `result` |
+| `photocraft.execute(command, params)` | `engine.execute` |
+| `photocraft.commands()` / `photocraft.inspect()` | `engine.commands` / `ui.inspect` |
+| `photocraft.screenshot(params)` | `ui.screenshot` (no `path`: the PNG comes back inline) |
+| `photocraft.openFile(name, bytes)` | opens the bytes the way a dropped file opens (returns `true` once queued) |
+
+Errors reject with an `Error` carrying the method's message. Requests run on the UI's next frame, so a
+hidden tab (whose frames the browser pauses) answers when it is shown again.
+
 ## Transport limits
 
 The desktop and headless TCP listeners currently enforce:
