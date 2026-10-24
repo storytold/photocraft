@@ -38,6 +38,9 @@ pub enum WebFormat {
     Png24,
     Jpeg,
     Wbmp,
+    /// WebP, lossy (our VP8 encoder) or lossless. Not in Photoshop's legacy dialog, but the
+    /// format people prepare web images in now (#2415, #6391).
+    Webp,
 }
 
 impl WebFormat {
@@ -48,6 +51,7 @@ impl WebFormat {
             "png24" | "png-24" | "png" | "png32" => WebFormat::Png24,
             "jpeg" | "jpg" => WebFormat::Jpeg,
             "wbmp" => WebFormat::Wbmp,
+            "webp" => WebFormat::Webp,
             _ => return None,
         })
     }
@@ -57,6 +61,7 @@ impl WebFormat {
             WebFormat::Png8 | WebFormat::Png24 => "png",
             WebFormat::Jpeg => "jpg",
             WebFormat::Wbmp => "wbmp",
+            WebFormat::Webp => "webp",
         }
     }
     pub fn indexed(self) -> bool {
@@ -96,8 +101,10 @@ pub struct WebSettings {
     /// Web Snap: palette entries within this distance (0..=1 of the channel range) snap to the
     /// web-safe cube.
     pub web_snap: f32,
-    /// JPEG quality 0..=100.
+    /// JPEG and lossy WebP quality 0..=100.
     pub quality: u8,
+    /// WebP: lossless instead of lossy at `quality`.
+    pub lossless: bool,
     pub progressive: bool,
     pub optimized: bool,
     pub embed_icc: bool,
@@ -120,6 +127,7 @@ impl Default for WebSettings {
             interlaced: false,
             web_snap: 0.0,
             quality: 60,
+            lossless: false,
             progressive: false,
             optimized: true,
             embed_icc: false,
@@ -151,7 +159,7 @@ impl WebSettings {
         }
         let s = |k: &str| p.get(k).and_then(Value::as_str);
         if let Some(f) = s("format") {
-            st.format = WebFormat::from_id(f).ok_or_else(|| bad(cmd, format!("unknown format `{f}` (gif|png8|png24|jpeg|wbmp)")))?;
+            st.format = WebFormat::from_id(f).ok_or_else(|| bad(cmd, format!("unknown format `{f}` (gif|png8|png24|jpeg|wbmp|webp)")))?;
         }
         if let Some(k) = s("palette") {
             st.palette = match k {
@@ -176,7 +184,13 @@ impl WebSettings {
         if let Some(a) = p.get("ditherAmount").and_then(Value::as_f64) {
             st.dither_amount = (a as f32 / 100.0).clamp(0.0, 1.0);
         }
-        if let Some(b) = p.get("transparency").and_then(Value::as_bool) {
+        // An on/off option given as anything but true or false is an error, not its default.
+        let flag = |k: &str| match p.get(k) {
+            None | Some(Value::Null) => Ok(None),
+            Some(Value::Bool(b)) => Ok(Some(*b)),
+            Some(_) => Err(bad(cmd, format!("`{k}` must be true or false"))),
+        };
+        if let Some(b) = flag("transparency")? {
             st.transparency = b;
         }
         match s("matte") {
@@ -187,11 +201,12 @@ impl WebSettings {
         for (k, slot) in [
             ("interlaced", &mut st.interlaced),
             ("progressive", &mut st.progressive),
+            ("lossless", &mut st.lossless),
             ("optimized", &mut st.optimized),
             ("embedIcc", &mut st.embed_icc),
             ("convertToSrgb", &mut st.convert_to_srgb),
         ] {
-            if let Some(b) = p.get(k).and_then(Value::as_bool) {
+            if let Some(b) = flag(k)? {
                 *slot = b;
             }
         }
@@ -245,6 +260,7 @@ impl WebSettings {
             WebFormat::Png24 => "png24",
             WebFormat::Jpeg => "jpeg",
             WebFormat::Wbmp => "wbmp",
+            WebFormat::Webp => "webp",
         };
         let palette = match self.palette {
             PaletteKind::Exact => "exact",
@@ -270,7 +286,7 @@ impl WebSettings {
             WebMetadata::All => "all",
         };
         let matte = self.matte.map_or("none".to_string(), |c| format!("#{:02x}{:02x}{:02x}", to8(c[0]), to8(c[1]), to8(c[2])));
-        let mut p = json!({"format": format, "palette": palette, "colors": self.colors, "dither": dither, "ditherAmount": (self.dither_amount * 100.0).round(), "transparency": self.transparency, "matte": matte, "interlaced": self.interlaced, "webSnap": (self.web_snap * 100.0).round(), "quality": self.quality, "progressive": self.progressive, "optimized": self.optimized, "embedIcc": self.embed_icc, "metadata": metadata, "convertToSrgb": self.convert_to_srgb});
+        let mut p = json!({"format": format, "palette": palette, "colors": self.colors, "dither": dither, "ditherAmount": (self.dither_amount * 100.0).round(), "transparency": self.transparency, "matte": matte, "interlaced": self.interlaced, "webSnap": (self.web_snap * 100.0).round(), "quality": self.quality, "lossless": self.lossless, "progressive": self.progressive, "optimized": self.optimized, "embedIcc": self.embed_icc, "metadata": metadata, "convertToSrgb": self.convert_to_srgb});
         if let Some(table) = &self.color_table {
             p["colorTable"] = json!(table.iter().map(|c| rgb_hex(*c)).collect::<Vec<_>>());
         }
@@ -457,21 +473,34 @@ pub fn optimize(
     let mut color_table = Vec::new();
     let mut transparent_index = None;
     let mut indices = Vec::new();
+    // True colour (PNG-24, WebP): straight RGBA when transparency is on and a pixel is
+    // translucent, else RGB over the matte.
+    let true_color = || {
+        let alpha = st.transparency && region().any(|p| p[3] < 1.0);
+        let k = if alpha { 4 } else { 3 };
+        let mut data = Vec::with_capacity(w * h * k);
+        for p in region() {
+            let q = if alpha { *p } else { over(p) };
+            data.extend_from_slice(&[to8(q[0]), to8(q[1]), to8(q[2]), to8(q[3])][..k]);
+        }
+        let layout = if alpha { photocraft_codecs::ChannelLayout::Rgba } else { photocraft_codecs::ChannelLayout::Rgb };
+        (data, layout)
+    };
+    let rgba = |data: &[u8], layout: photocraft_codecs::ChannelLayout| -> Vec<u8> {
+        if layout == photocraft_codecs::ChannelLayout::Rgba {
+            data.to_vec()
+        } else {
+            data.as_chunks::<3>().0.iter().flat_map(|c| [c[0], c[1], c[2], 255]).collect()
+        }
+    };
+    let meta = || photocraft_codecs::Metadata { dpi: Some((dpi, dpi)), xmp: xmp.map(str::to_string), ..Default::default() };
     let (bytes, colors) = match st.format {
         WebFormat::Png24 => {
-            let alpha = st.transparency && region().any(|p| p[3] < 1.0);
-            let k = if alpha { 4 } else { 3 };
-            let mut data = Vec::with_capacity(w * h * k);
-            for p in region() {
-                let q = if alpha { *p } else { over(p) };
-                data.extend_from_slice(&[to8(q[0]), to8(q[1]), to8(q[2]), to8(q[3])][..k]);
-            }
+            let (data, layout) = true_color();
             if preview {
-                look = if alpha { data.clone() } else { data.as_chunks::<3>().0.iter().flat_map(|c| [c[0], c[1], c[2], 255]).collect() };
+                look = rgba(&data, layout);
             }
-            let layout = if alpha { photocraft_codecs::ChannelLayout::Rgba } else { photocraft_codecs::ChannelLayout::Rgb };
-            let meta = photocraft_codecs::Metadata { dpi: Some((dpi, dpi)), xmp: xmp.map(str::to_string), ..Default::default() };
-            let img = photocraft_codecs::Image::from_u8(ww, hh, layout, data).map_err(e)?.with_icc(icc.map(<[u8]>::to_vec)).with_meta(meta);
+            let img = photocraft_codecs::Image::from_u8(ww, hh, layout, data).map_err(e)?.with_icc(icc.map(<[u8]>::to_vec)).with_meta(meta());
             let opts = photocraft_codecs::EncodeOptions {
                 png_interlaced: st.interlaced,
                 embed_icc: icc.is_some(),
@@ -479,6 +508,27 @@ pub fn optimize(
                 ..Default::default()
             };
             (photocraft_codecs::encode(&img, photocraft_codecs::Format::Png, &opts).map_err(e)?, None)
+        }
+        WebFormat::Webp => {
+            let (data, layout) = true_color();
+            let icc = icc.filter(|_| st.embed_icc);
+            let img = photocraft_codecs::Image::from_u8(ww, hh, layout, data).map_err(e)?.with_icc(icc.map(<[u8]>::to_vec)).with_meta(meta());
+            let opts = photocraft_codecs::EncodeOptions {
+                webp_lossless: st.lossless,
+                webp_quality: st.quality.min(100),
+                embed_icc: icc.is_some(),
+                embed_metadata: xmp.is_some(),
+                ..Default::default()
+            };
+            let bytes = photocraft_codecs::encode(&img, photocraft_codecs::Format::WebP, &opts).map_err(e)?;
+            if preview {
+                // Lossless shows the source; lossy shows the compression artefacts.
+                look = match (!st.lossless).then(|| photocraft_codecs::decode(&bytes).ok()).flatten() {
+                    Some(img) => img.convert(photocraft_codecs::ChannelLayout::Rgba, photocraft_codecs::SampleType::U8).data().to_vec(),
+                    None => rgba(img.data(), layout),
+                };
+            }
+            (bytes, None)
         }
         WebFormat::Jpeg => {
             let mut rgb = Vec::with_capacity(w * h * 3);
@@ -891,10 +941,11 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
     if let Some(authorize) = s.authorize {
         authorize(cmd, p)?;
     }
+    // Settings are checked first, so a refused export leaves a floating selection where it is.
+    let st = WebSettings::from_params(p, cmd)?;
     // Direct platform calls must export the moved selection as it appears on the canvas,
     // just as Session::execute does before dispatching the native command.
     crate::float_cmds::before_command(s, cmd)?;
-    let st = WebSettings::from_params(p, cmd)?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let doc = d.doc.clone();
     let (wdoc, sx, sy) = web_document(&doc, p, &st)?;
@@ -1567,7 +1618,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Save for Web (Legacy)…",
             &["File", "Export"],
             Some("Cmd+Alt+Shift+S"),
-            r##"{"preset":"GIF 128 Dithered|JPEG High|PNG-24|…"?,"format":"gif|png8|png24|jpeg|wbmp"="png24","palette":"perceptual|selective|adaptive|restrictive|exact|systemMac|systemWindows|uniform"="selective","colors":2..256=256,"colorTable":["#rrggbb",…]? (fixed opaque source palette, 1–256 entries; 255 with transparency),"colorTableEdits":{"0":"#rrggbb",…}? (replace entries after indexing; requires colorTable),"dither":"none|diffusion|pattern|noise"="diffusion","ditherAmount":0..100=88,"transparency":bool=true,"matte":"#rrggbb|none"="none" (a preset's own: white; formats without transparency go over white),"interlaced":bool=false,"webSnap":0..100=0,"quality":0..100=60,"progressive":bool=false,"optimized":bool=true,"embedIcc":bool=false,"metadata":"none|copyright|copyrightAndContact|allExceptCameraInfo|all"="copyright" (EXIF only with all),"convertToSrgb":bool=true,"width"|"height"|"percent"? (image size),"resample":"bicubic|bilinear|nearest"?,"path":file? (whole image),"dir":folder? (one file per slice in images/),"imagesFolder":relative-folder?="images","html":bool=false,"trustedSliceHtml":bool=false (only for trusted documents; emit raw no-image cell HTML),"slices":"all|user"="all","numbers":[n]?} → no path/dir: {bytes,width,height,colors,colorTable,transparentIndex} estimate; else {files, html, bytes, warnings}"##,
+            r##"{"preset":"GIF 128 Dithered|JPEG High|PNG-24|…"?,"format":"gif|png8|png24|jpeg|wbmp|webp"="png24","palette":"perceptual|selective|adaptive|restrictive|exact|systemMac|systemWindows|uniform"="selective","colors":2..256=256,"colorTable":["#rrggbb",…]? (fixed opaque source palette, 1–256 entries; 255 with transparency),"colorTableEdits":{"0":"#rrggbb",…}? (replace entries after indexing; requires colorTable),"dither":"none|diffusion|pattern|noise"="diffusion","ditherAmount":0..100=88,"transparency":bool=true,"matte":"#rrggbb|none"="none" (a preset's own: white; formats without transparency go over white),"interlaced":bool=false,"webSnap":0..100=0,"quality":0..100=60 (JPEG, lossy WebP),"lossless":bool=false (WebP),"progressive":bool=false,"optimized":bool=true,"embedIcc":bool=false,"metadata":"none|copyright|copyrightAndContact|allExceptCameraInfo|all"="copyright" (EXIF only with all),"convertToSrgb":bool=true,"width"|"height"|"percent"? (image size),"resample":"bicubic|bilinear|nearest"?,"path":file? (whole image),"dir":folder? (one file per slice in images/),"imagesFolder":relative-folder?="images","html":bool=false,"trustedSliceHtml":bool=false (only for trusted documents; emit raw no-image cell HTML),"slices":"all|user"="all","numbers":[n]?} → no path/dir: {bytes,width,height,colors,colorTable,transparentIndex} estimate; else {files, html, bytes, warnings}"##,
             has_doc,
             save_for_web
         ),
