@@ -38,6 +38,11 @@ rayon = { workspace = true }
 [target.'cfg(target_os = "macos")'.dependencies]
 parley = { version = "0.11", default-features = false, features = ["std", "complex-scripts", "system"] }
 
+[dev-dependencies]
+# Exercise the build-time manifest reader without making hashing a runtime dependency.
+sha2 = "0.10"
+
 [build-dependencies]
+sha2 = "0.10"
 # Deflates the bundled fonts (build.rs); `flate2` above inflates them.
 flate2 = { workspace = true }
