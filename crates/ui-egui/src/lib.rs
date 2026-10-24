@@ -514,6 +514,10 @@ pub type LoadTextFn = Box<dyn FnMut() -> Option<String>>;
 pub type SaveTextFn = Box<dyn FnMut(&str) -> Result<(), String>>;
 /// Platform appearance when egui cannot detect it (for example, Wayland without a theme event).
 pub type SystemThemeFn = Box<dyn Fn(&egui::Context) -> Option<egui::Theme>>;
+/// Whether the operating system animates its interface (Windows "Animation effects", macOS
+/// "Reduce motion", the desktop's setting on Linux and the BSDs, `prefers-reduced-motion` in a
+/// browser): `Some(false)` when the user turned animations off there, `None` when it can't tell.
+pub type SystemAnimationsFn = Box<dyn Fn(&egui::Context) -> Option<bool>>;
 /// Autosave a document snapshot for crash recovery: (snapshot, revision, original path).
 pub type AutosaveFn = Box<dyn FnMut(&std::sync::Arc<Document>, u64, Option<&str>) -> Result<(), String>>;
 /// Poll successful or failed background writes: (document id, revision, result).
@@ -629,6 +633,10 @@ pub struct Services {
     /// Photoshop's live keyboard shortcut set, imported once at first launch (`kys_import`).
     pub photoshop_shortcuts: Option<PhotoshopShortcutsFn>,
     pub system_theme: Option<SystemThemeFn>,
+    /// The system's animation setting, for Preferences › Interface › Animation Effects › Use
+    /// System Setting. Read every frame while that is the choice, so it must be cheap; without
+    /// it (or without an answer) animations stay on.
+    pub system_animations: Option<SystemAnimationsFn>,
     /// The native window is connected directly to a Wayland compositor.
     pub is_wayland: bool,
     /// On Wayland, the shell command that starts this install under XWayland, where native file
@@ -2312,6 +2320,11 @@ impl eframe::App for PhotocraftApp {
         self.issue_screenshots(ctx);
         prefs_ui::tick(self, ctx);
         updates_ui::tick(self, ctx);
+        // Animation Effects off: no wheel glide in the main window's panels and lists. Before
+        // anything reads this frame's scroll (see `wheel_nav::unsmooth`).
+        if self.prefs_rt.animations_off {
+            wheel_nav::unsmooth(ctx);
+        }
         monitor_status::poll_frame(self, ctx, frame);
         // Control requests and persisted preferences can change the language in this frame.
         i18n::sync_context(ctx, &self.session.prefs().interface.language);

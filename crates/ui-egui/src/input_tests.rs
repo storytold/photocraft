@@ -489,6 +489,107 @@ fn the_wheel_reaches_12800_percent_and_stops_dead_there() {
     assert!((d2[0] - d0[0]).abs() < 0.02 && (d2[1] - d0[1]).abs() < 0.02, "{d0:?} -> {d2:?}");
 }
 
+/// The zoom [`notch_pan`] pans at: 800 %.
+const NOTCH_PAN_ZOOM: f32 = 8.0;
+
+/// How far one wheel notch moves the view at [`NOTCH_PAN_ZOOM`], in document pixels: egui's
+/// points per notch (`line_scroll_speed`) over the zoom.
+fn notch_pan_distance(h: &Harness<'static, PhotocraftApp>) -> f32 {
+    h.ctx.options(|o| o.input_options.line_scroll_speed) / NOTCH_PAN_ZOOM
+}
+
+/// One wheel notch (with `modifiers` held) over the canvas at 800 %: the view's centre before it,
+/// on the frame the notch arrives, and once any glide has settled.
+fn notch_pan(h: &mut Harness<'static, PhotocraftApp>, modifiers: Modifiers) -> ([f32; 2], [f32; 2], [f32; 2]) {
+    {
+        let v = &mut h.state_mut().ui.views[0];
+        (v.zoom, v.center, v.fit_pending) = (NOTCH_PAN_ZOOM, [200.0, 150.0], false);
+    }
+    h.run_steps(4);
+    h.hover_at(h.state().last_canvas_rect.center());
+    h.run_steps(2);
+    let before = h.state().ui.views[0].center;
+    wheel(h, -1.0, modifiers);
+    h.run_steps(1);
+    let on_arrival = h.state().ui.views[0].center;
+    h.run_steps(40);
+    (before, on_arrival, h.state().ui.views[0].center)
+}
+
+/// Preferences › Interface › Animation Effects (#3273): on, a wheel notch glides the canvas to
+/// its new place over the frames that follow; off, it is there on the frame the notch arrives.
+#[test]
+fn animation_effects_off_pans_a_wheel_notch_at_once() {
+    for (choice, at_once) in [("on", false), ("off", true)] {
+        let mut h = app_window();
+        h.state_mut().run("prefs.set", json!({"path": "interface.animationEffects", "value": choice})).unwrap();
+        let (c0, c1, c2) = notch_pan(&mut h, Modifiers::NONE);
+        let notch = notch_pan_distance(&h);
+        assert!((c2[1] - c0[1] - notch).abs() < 0.01 && c2[0] == c0[0], "{choice}: one notch is {notch} px at 800%: {c0:?} -> {c2:?}");
+        assert_eq!(c1 == c2, at_once, "{choice}: {c0:?} -> {c1:?} -> {c2:?}");
+    }
+}
+
+/// A canvas in another OS window (Window › Arrange › New Window) reads that window's own input,
+/// which `wheel_nav::unsmooth` never sees: it runs on the main window's input only. So the
+/// canvas's own wheel read must not glide with Animation Effects off either (#5721), ⇧ or
+/// ⌘/Ctrl + wheel must still pan sideways, and a trackpad gesture must keep its direction.
+#[test]
+fn animation_effects_off_stops_the_canvas_glide_without_unsmooth() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
+    app.sync_views();
+    let mut h = Harness::builder().with_size(vec2(1200.0, 800.0)).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            let ctx = ui.ctx().clone();
+            // Fonts set up after the first frame only apply from the next one.
+            if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                return;
+            }
+            // What `PhotocraftApp::logic` does for a frame, without `unsmooth`.
+            crate::prefs_ui::tick(app, &ctx);
+            egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h.run_steps(4);
+    h.state_mut().run("prefs.set", json!({"path": "interface.animationEffects", "value": "off"})).unwrap();
+    h.run_steps(1);
+    assert!(h.state().prefs_rt.animations_off);
+    let ctrl = Modifiers { ctrl: true, command: true, ..Modifiers::NONE };
+    for (modifiers, axis) in [(Modifiers::NONE, 1), (Modifiers::SHIFT, 0), (ctrl, 0)] {
+        let (c0, c1, c2) = notch_pan(&mut h, modifiers);
+        let moved = [c2[0] - c0[0], c2[1] - c0[1]];
+        let notch = notch_pan_distance(&h);
+        assert!((moved[axis] - notch).abs() < 0.01 && moved[1 - axis] == 0.0, "{modifiers:?}: one notch is {notch} px at 800%: {moved:?}");
+        assert_eq!(c1, c2, "{modifiers:?}: there on the frame the notch arrives: {c0:?} -> {c1:?} -> {c2:?}");
+    }
+
+    // A trackpad gesture keeps the direction it began with, as egui does: begun with ⇧ held, it
+    // still pans sideways after ⇧ is let go.
+    {
+        let v = &mut h.state_mut().ui.views[0];
+        (v.zoom, v.center, v.fit_pending) = (NOTCH_PAN_ZOOM, [200.0, 150.0], false);
+    }
+    h.run_steps(4);
+    let before = h.state().ui.views[0].center;
+    let swipe = |phase, dy: f32, modifiers| egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: vec2(0.0, dy), phase, modifiers };
+    for (phase, dy, modifiers) in [
+        (egui::TouchPhase::Start, 0.0, Modifiers::SHIFT),
+        (egui::TouchPhase::Move, -8.0, Modifiers::SHIFT),
+        (egui::TouchPhase::Move, -16.0, Modifiers::NONE),
+        (egui::TouchPhase::End, 0.0, Modifiers::NONE),
+    ] {
+        h.event_modifiers(swipe(phase, dy, modifiers), modifiers);
+        h.run_steps(1);
+    }
+    h.run_steps(4);
+    let after = h.state().ui.views[0].center;
+    let moved = [after[0] - before[0], after[1] - before[1]];
+    assert!((moved[0] - 24.0 / NOTCH_PAN_ZOOM).abs() < 0.01 && moved[1] == 0.0, "24 points sideways for the whole gesture: {moved:?}");
+}
+
 #[test]
 fn alt_scroll_zooms_in_steps_around_the_pointer() {
     let mut h = harness();

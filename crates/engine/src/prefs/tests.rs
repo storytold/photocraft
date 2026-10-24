@@ -85,6 +85,46 @@ fn appearance_defaults_and_legacy_theme_migrate() {
     }
 }
 
+/// Interface › Animation Effects: the system's setting by default, validated like any choice, and
+/// the Enable Animations checkbox it replaced still means what it was saved as.
+#[test]
+fn animation_effects_default_to_the_system_and_keep_a_saved_off() {
+    assert_eq!(Preferences::default().interface.animation_effects, AnimationEffects::System);
+    assert_eq!(choices("interface.animationEffects"), Some(AnimationEffects::NAMES));
+    assert_eq!(AnimationEffects::NAMES, ["system", "on", "off"]);
+    let mut s = Session::new();
+    for (value, effects) in [("off", AnimationEffects::Off), ("on", AnimationEffects::On), ("system", AnimationEffects::System)] {
+        s.execute("prefs.set", json!({"path": "interface.animationEffects", "value": value})).unwrap();
+        assert_eq!(s.prefs().interface.animation_effects, effects);
+        assert_eq!(s.execute("prefs.get", json!({"path": "interface.animationEffects"})).unwrap(), json!(value));
+        let mut restarted = Session::new();
+        restarted.load_prefs_json(&s.prefs_to_json()).unwrap();
+        assert_eq!(restarted.prefs().interface.animation_effects, effects, "{value} survives a restart");
+    }
+    // A value that is no choice is an error and changes nothing.
+    s.execute("prefs.set", json!({"path": "interface.animationEffects", "value": "off"})).unwrap();
+    for bad in [json!("sometimes"), json!("Off"), json!(""), json!(true), json!(0), json!(null), json!(["off"]), json!({})] {
+        assert!(s.execute("prefs.set", json!({"path": "interface.animationEffects", "value": bad})).is_err(), "{bad}");
+        assert_eq!(s.prefs().interface.animation_effects, AnimationEffects::Off);
+    }
+    s.execute("prefs.reset", json!({"path": "interface.animationEffects"})).unwrap();
+    assert_eq!(s.prefs().interface.animation_effects, AnimationEffects::System);
+    // The checkbox was on by default: a saved "off" stays off, "on" now follows the system, and
+    // a choice made since wins over the old key left in the file.
+    for (saved, effects) in [
+        (json!({"enableAnimations": false}), AnimationEffects::Off),
+        (json!({"enableAnimations": true}), AnimationEffects::System),
+        (json!({"enableAnimations": false, "animationEffects": "on"}), AnimationEffects::On),
+        (json!({"enableAnimations": "nope"}), AnimationEffects::System),
+        (json!({}), AnimationEffects::System),
+    ] {
+        let mut old = Session::new();
+        old.load_prefs_json(&json!({"interface": saved}).to_string()).unwrap();
+        assert_eq!(old.prefs().interface.animation_effects, effects, "{saved}");
+    }
+    assert!(s.execute("prefs.set", json!({"path": "interface.enableAnimations", "value": false})).is_err(), "the old path is gone");
+}
+
 #[test]
 fn legacy_theme_migration_preserves_saved_theme_slots() {
     for (legacy, slot, saved) in [("proMedium", "darkTheme", "solarizedDark"), ("studioLight", "lightTheme", "adwaita")] {

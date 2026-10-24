@@ -3516,7 +3516,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                 app.session.prefs().enhanced_controls.zoom_with_trackpad_pinch,
                 wheel_owner,
                 hover_here,
-                app.session.prefs().interface.enable_animations,
+                !app.prefs_rt.animations_off,
                 app.session.prefs().enhanced_controls.touch_gestures,
             )
             .is_some());
@@ -3858,7 +3858,8 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     let bars_id = egui::Id::new(("pc-canvas-bars-hover", idx));
     let over_bars = ctx.data(|d| d.get_temp::<bool>(bars_id)).unwrap_or(false);
     let nav_hovered = response.hovered() || free_hover || over_bars;
-    // Interface › Enable Animations off: the wheel moves the canvas without a glide (#5721).
+    // Interface › Animation Effects off: the wheel moves the canvas without a glide, in every
+    // window (#5721).
     // Enhanced Controls › Enable Gestures off: two fingers on a touch screen neither zoom nor
     // turn the view (#204); the mouse and trackpad are unaffected.
     let touch_gestures = app.session.prefs().enhanced_controls.touch_gestures;
@@ -3868,7 +3869,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         app.session.prefs().enhanced_controls.zoom_with_trackpad_pinch,
         wheel_owner,
         nav_hovered,
-        app.session.prefs().interface.enable_animations,
+        !app.prefs_rt.animations_off,
         touch_gestures,
     );
     if nav_hovered {

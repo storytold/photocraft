@@ -447,6 +447,12 @@ fn services(inbox: Inbox, place_inbox: Inbox, cursor_pos: photocraft_ui_egui::Cu
         // Preferences live in the browser's localStorage.
         load_prefs: Some(Box::new(|| local_storage()?.get_item(PREFS_KEY).ok().flatten())),
         save_prefs: Some(Box::new(|text: &str| local_storage().ok_or("no localStorage")?.set_item(PREFS_KEY, text).map_err(|e| format!("{e:?}")))),
+        // Animation Effects › Use System Setting: the browser passes on the system's setting. One
+        // live query, so `matches` follows a change.
+        system_animations: Some({
+            let reduce = web_sys::window().and_then(|w| w.match_media("(prefers-reduced-motion: reduce)").ok().flatten());
+            Box::new(move |_| reduce.as_ref().map(|query| !query.matches()))
+        }),
         ..Default::default()
     }
 }
