@@ -390,6 +390,19 @@ fn run_recorded(s: &mut Session, action: &Action, from: usize) -> (u64, Option<V
             ran += 1;
             continue;
         }
+        // Inside a Batch run a recorded save marks the result, and the steps Batch drops are
+        // skipped, as at the top of the batched action.
+        match crate::file_cmds::batch_handles_step(s, id) {
+            Ok(true) => {
+                ran += 1;
+                continue;
+            }
+            Ok(false) => {}
+            Err(e) => {
+                failed = Some(json!({"step": i, "id": id, "error": e.to_string()}));
+                break;
+            }
+        }
         match s.execute(id, params.clone()) {
             Ok(value) => {
                 if let Some(error) = nested_failure(id, &value) {

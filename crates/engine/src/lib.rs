@@ -545,6 +545,9 @@ pub struct Session {
     /// A finished live stroke offered to the `paint.stroke` / `paint.pencil` that commits it
     /// ([`Session::offer_live_stroke`]).
     pub(crate) live_commit: Option<brush_cmds::LiveCommit>,
+    /// Set while Batch runs an action on this scratch session, so steps inside played actions are
+    /// handled as at its top: saves mark the result ([`file_cmds::batch_handles_step`]).
+    pub(crate) batch: Option<file_cmds::BatchRun>,
     /// Documents a background open decoded but held back until the user answers the profile
     /// prompt ([`ColorState::open_question`](color_cmds::ColorState::open_question)): `(id,
     /// document, source read-only)`. The shell takes them with [`Session::take_held_open`].

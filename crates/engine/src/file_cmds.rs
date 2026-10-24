@@ -1439,6 +1439,30 @@ pub(crate) fn batch_keeps_step(id: &str) -> bool {
     (batch_save_point(id) || !crate::actions_cmds::shell_save_command(id)) && !crate::actions_cmds::shell_view_command(id)
 }
 
+/// What a Batch run has marked so far: the document as the last recorded save found it.
+#[derive(Default)]
+pub(crate) struct BatchRun {
+    saved: Option<Arc<Document>>,
+}
+
+/// Inside a Batch run, a step is handled as at the top of the action, also inside an action the
+/// run plays: a recorded save marks the result, taking the active document as the save finds it,
+/// and the steps Batch drops (view steps, other shell-only saves, Quick Export) are skipped.
+/// `false` outside Batch and for a step that runs.
+pub(crate) fn batch_handles_step(s: &mut Session, id: &str) -> Result<bool> {
+    if s.batch.is_none() {
+        return Ok(false);
+    }
+    if batch_save_point(id) {
+        let doc = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
+        if let Some(run) = s.batch.as_mut() {
+            run.saved = Some(doc);
+        }
+        return Ok(true);
+    }
+    Ok(!batch_keeps_step(id) || id == "file.export.quickExport")
+}
+
 fn batch(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.automate.batch";
     let mut steps =
@@ -1499,10 +1523,9 @@ fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         let result = (|| {
             // The document as the last recorded save found it, written once the action has run so a
             // failing step still writes nothing.
-            let mut saved: Option<Arc<Document>> = None;
+            scratch.batch = Some(BatchRun::default());
             for (id, params) in &steps {
-                if batch_save_point(id) {
-                    saved = Some(scratch.active().ok_or(EngineError::NoDocument)?.doc.clone());
+                if batch_handles_step(scratch, id)? {
                     continue;
                 }
                 let r = scratch.execute(id, params.clone())?;
@@ -1511,6 +1534,7 @@ fn batch(s: &mut Session, p: &Value) -> Result<Value> {
                     return Err(EngineError::Other(error));
                 }
             }
+            let saved = scratch.batch.take().and_then(|run| run.saved);
             // While the saved document is still open the steps after the save reach the result too
             // (#3058), so it is saved after the action as usual. Closed after its save, or with another
             // document left active, it is written as the save found it.

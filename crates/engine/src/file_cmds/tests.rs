@@ -1890,3 +1890,79 @@ fn sanitize_keeps_windows_device_names_off_the_disk() {
         assert_eq!(sanitize(name), name);
     }
 }
+
+/// Runs Batch on `red` with an action that plays `Finish`, whose steps are `finish`.
+fn batch_playing_finish(red: &str, out: &str, finish: Value) -> Value {
+    let called = json!([{"name": "Finish", "steps": finish}]);
+    let steps = json!([["actions.play", {"action": "Finish"}]]);
+    Session::new().execute("file.automate.batch", json!({"input": [red], "output": out, "format": "png", "steps": steps, "calledActions": called})).unwrap()
+}
+
+/// The pixel at (1, 1) of `out/red.png`.
+fn batch_pixel(out: &str) -> [f32; 4] {
+    let saved = photocraft_io::import("red.png", &std::fs::read(join(out, "red.png")).unwrap()).unwrap().document;
+    photocraft_compose::render(&saved, Rect::new(1, 1, 2, 2)).px[0]
+}
+
+/// A save step inside an action that Batch plays marks the result as a top-level one does; it
+/// used to fail the file as an unknown command.
+#[test]
+fn batch_takes_the_result_at_a_save_inside_a_played_action() {
+    let dir = tmp("batch-nested-save");
+    let red = png(&dir, "red.png", 8, 8, "#ff0000");
+    let out = join(&dir, "out");
+    let r = batch_playing_finish(&red, &out, json!([["image.adjustments.invert", {}], ["file.saveAs", {}], ["file.close", {}]]));
+    assert_eq!(r["errors"], json!([]), "{r}");
+    assert_eq!(batch_pixel(&out), [0.0, 1.0, 1.0, 1.0], "the inverted red");
+}
+
+/// A nested Save a Copy marks the result too, and its recorded path is never written: it used to
+/// write that file for every input, outside the destination folder. Played outside Batch, the
+/// same action still writes it.
+#[test]
+fn batch_never_writes_the_recorded_path_of_a_nested_save_a_copy() {
+    let dir = tmp("batch-nested-copy");
+    let red = png(&dir, "red.png", 8, 8, "#ff0000");
+    let out = join(&dir, "out");
+    let elsewhere = join(&dir, "elsewhere.png");
+    let finish = |path: &str| json!([["image.adjustments.invert", {}], ["file.saveACopy", {"path": path}], ["file.close", {}]]);
+    let r = batch_playing_finish(&red, &out, finish(&elsewhere));
+    assert!(!std::path::Path::new(&elsewhere).exists(), "{r}");
+    assert_eq!(r["errors"], json!([]), "{r}");
+    assert_eq!(batch_pixel(&out), [0.0, 1.0, 1.0, 1.0]);
+
+    let played = join(&dir, "played.png");
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let steps: Vec<(String, Value)> = serde_json::from_value(finish(&played)).unwrap();
+    s.actions.list.push(crate::actions_cmds::Action::new("Finish", steps));
+    let r = s.execute("actions.play", json!({"action": "Finish"})).unwrap();
+    assert!(r.get("failed").is_none(), "{r}");
+    assert!(std::path::Path::new(&played).exists(), "outside Batch the Save a Copy runs");
+}
+
+/// The steps Batch drops at the top of an action are dropped inside a played action too: a nested
+/// Fit on Screen, what an .atn View menu step imports as, failed the file as an unknown command.
+#[test]
+fn batch_skips_view_steps_inside_a_played_action() {
+    let dir = tmp("batch-nested-view");
+    let red = png(&dir, "red.png", 8, 8, "#ff0000");
+    let out = join(&dir, "out");
+    let r = batch_playing_finish(&red, &out, json!([["view.fitOnScreen", {}], ["image.adjustments.invert", {}]]));
+    assert_eq!(r["errors"], json!([]), "{r}");
+    assert_eq!(batch_pixel(&out), [0.0, 1.0, 1.0, 1.0]);
+}
+
+/// A nested Quick Export is dropped like a top-level one: it wrote its recorded path for every
+/// input, outside the destination folder.
+#[test]
+fn batch_skips_quick_export_inside_a_played_action() {
+    let dir = tmp("batch-nested-quick");
+    let red = png(&dir, "red.png", 8, 8, "#ff0000");
+    let out = join(&dir, "out");
+    let quick = join(&dir, "quick-export.png");
+    let r = batch_playing_finish(&red, &out, json!([["image.adjustments.invert", {}], ["file.export.quickExport", {"path": quick}]]));
+    assert!(!std::path::Path::new(&quick).exists(), "{r}");
+    assert_eq!(r["errors"], json!([]), "{r}");
+    assert_eq!(batch_pixel(&out), [0.0, 1.0, 1.0, 1.0]);
+}
