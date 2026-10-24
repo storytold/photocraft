@@ -15,7 +15,7 @@ use photocraft_color::ColorMode;
 use photocraft_doc::Document;
 use photocraft_psd::resources::ids;
 use photocraft_psd::tiff::{ByteOrder, ImageSourceData, resources_from_bytes, resources_to_bytes};
-use photocraft_psd::{ColorMode as PsdMode, Compression, Header, ImageData, ImageResource, ResolutionInfo};
+use photocraft_psd::{ColorMode as PsdMode, Compression, Header, ImageData, ImageResource, PsdFile, ResolutionInfo};
 
 use crate::flat::{csample, encode_image, image_to_document, layout_for, single_layer, try_buffer};
 use crate::psd_export::PsdExportOptions;
@@ -234,7 +234,7 @@ pub(crate) fn export_layered(doc: &Document, opts: &ExportOptions, ctl: &photocr
     ctl.check().map_err(|_| IoError::Cancelled)?;
     warnings.extend(w);
     let order = if codecs::tiff_writes_little_endian() { ByteOrder::Little } else { ByteOrder::Big };
-    let (layers, w) = match ImageSourceData::from_psd(&file).to_bytes(order) {
+    let (layers, w) = match tiff_source(&file).to_bytes(order) {
         Err(photocraft_psd::PsdError::LimitExceeded(_)) if !force_psb => {
             let psb_opts = PsdExportOptions { force_psb: true, ..psd_opts };
             let (psb, w) = crate::with_span(ctl, 0.0, TIFF_MODEL_DONE, |ctl| crate::psd_export::document_to_psd_interruptible(doc, &psb_opts, ctl));
@@ -242,7 +242,7 @@ pub(crate) fn export_layered(doc: &Document, opts: &ExportOptions, ctl: &photocr
             warnings.extend(w);
             warnings.push("layer data exceeds 4 GB; written with PSB-sized lengths, which some readers do not open".into());
             file = psb;
-            ImageSourceData::from_psd(&file).to_bytes(order)?
+            tiff_source(&file).to_bytes(order)?
         }
         r => r?,
     };
@@ -314,6 +314,20 @@ pub fn strip_foreign_order_blocks(file: &mut photocraft_psd::PsdFile) -> Vec<Str
     }
     strip(&mut file.global_blocks, "document");
     warnings
+}
+
+/// The global layer mask Photoshop writes when none is set (big-endian, as [`ImageSourceData`]
+/// holds it): overlay colour space 0, colour (65535, 0, 0, 0), opacity 50, kind 128 and a filler.
+const PHOTOSHOP_GLOBAL_MASK: [u8; 14] = [0, 0, 0xff, 0xff, 0, 0, 0, 0, 0, 0, 0, 50, 128, 0];
+
+/// The PSD model's layer data for tag 37724. An empty `LMsk` block is fine in a PSD, but
+/// Photoshop rejects it in a TIFF and opens only the composite (#9095), so it gets Photoshop's own.
+fn tiff_source(file: &PsdFile) -> ImageSourceData {
+    let mut d = ImageSourceData::from_psd(file);
+    if let Some(m) = d.global_layer_mask.as_mut().filter(|m| m.data.is_empty()) {
+        m.data = PHOTOSHOP_GLOBAL_MASK.to_vec();
+    }
+    d
 }
 
 #[cfg(test)]

@@ -399,3 +399,17 @@ fn layered_tiff_nested_past_the_cap_is_rejected() {
     let r = import("hundred.tif", &tiff_nested(100)).unwrap();
     assert_eq!(r.document.max_group_depth(), 100);
 }
+
+#[test]
+fn layered_tiff_writes_photoshops_global_layer_mask() {
+    // #9095: Photoshop reads only the composite of a layered TIFF whose `LMsk` block is empty
+    // ("There was a problem reading the layer data"); it writes 14 bytes there itself: overlay
+    // colour space 0, colour (65535, 0, 0, 0), opacity 50, kind 128, one filler byte.
+    for depth in [SampleType::U8, SampleType::U16] {
+        let d = gen_doc(ColorMode::Rgb, depth, Features::PIXELS);
+        let (_, layers) = tags(&tiff(&d, true).bytes);
+        let (isd, _) = ImageSourceData::from_bytes(&layers.expect("layer data")).expect("parse layer data");
+        let mask = isd.global_layer_mask.expect("LMsk block");
+        assert_eq!(mask.data, [0, 0, 0xff, 0xff, 0, 0, 0, 0, 0, 0, 0, 50, 128, 0], "{depth:?}");
+    }
+}
