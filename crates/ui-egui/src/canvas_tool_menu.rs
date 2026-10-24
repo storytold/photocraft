@@ -878,6 +878,10 @@ fn pen_dialog(app: &mut PhotocraftApp, command: &str, label: &str, name: &str) {
     } else {
         fields.insert("name".into(), json!(name));
     }
+    if command == "path.toSelection" {
+        // OK deselects and hides the path, as ⌘↩ does (#6079).
+        fields.insert("__deselectPath".into(), json!(true));
+    }
     if command == "path.fill" {
         let fg = app.session.tools.foreground;
         let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
@@ -1718,6 +1722,16 @@ mod tests {
         crate::dialogs::confirm(h.state_mut(), dialog).unwrap();
         assert!(h.state().session.active().unwrap().doc.selection.is_some());
         assert_eq!(h.state().session.journal.last().map(|(id, _)| id.as_str()), Some("path.toSelection"));
+        // Like ⌘↩, it deselects and hides the work path, which stays in the document (#6079).
+        assert_eq!(h.state().ui.selected_path, None);
+        assert!(h.state().session.active().unwrap().doc.work_path.is_some());
+        assert!(!crate::vector_ui::work_path_shown(h.state()));
+        // The hidden work path is no longer the active path: a second right-click offers no path
+        // commands, so Delete Path can't remove it unseen.
+        right_click(&mut h, center, Modifiers::NONE);
+        assert!(h.state().ui.canvas_tool_menu.as_ref().is_some_and(|m| m.tool == Tool::Pen && !m.has_path && m.path_name.is_none()));
+        choose(h.state_mut(), &ctx, "path.delete");
+        assert!(h.state().session.active().unwrap().doc.work_path.is_some(), "the hidden work path survives Delete Path");
     }
 
     #[test]
@@ -1757,8 +1771,12 @@ mod tests {
         crate::dialogs::confirm(&mut app, dialog).unwrap();
         let st = app.session.active().unwrap();
         assert!(st.doc.work_path.is_some() && st.doc.selection.is_some());
-        // The active (Work) path again, with no pen path in progress.
+        // That hid the Work Path (#6079): it is not the active path until it is selected in the
+        // Paths panel again, and then it is, with no pen path in progress.
         app.run("select.deselect", json!({})).unwrap();
+        assert!(make_selection(&mut app).is_err(), "the hidden Work Path is not the active path");
+        assert!(app.ui.dialogs.is_empty());
+        app.ui.selected_path = Some("work".into());
         make_selection(&mut app).unwrap();
         let dialog = app.ui.dialogs.last().map(|d| d.id).unwrap();
         crate::dialogs::confirm(&mut app, dialog).unwrap();
