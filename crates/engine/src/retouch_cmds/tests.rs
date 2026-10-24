@@ -484,6 +484,28 @@ fn blur_reduces_local_variance_and_sharpen_increases_it() {
 }
 
 #[test]
+fn blur_scales_with_brush_size_and_diffuses_pixels_visibly() {
+    for depth in [8u64, 16] {
+        let run = |size: u32| {
+            let mut s = session(120, 40, depth, "rgb");
+            paint_layer(&mut s, |x, _| if x < 60 { [0.0, 0.0, 0.0, 1.0] } else { [1.0, 1.0, 1.0, 1.0] });
+            s.execute("paint.blur", json!({"points": [[60, 20]], "size": size, "hardness": 100, "strength": 100})).unwrap();
+            (0..120).map(|x| rgba(&s, x, 20)[0]).collect::<Vec<_>>()
+        };
+        let p20 = run(20);
+        let p60 = run(60);
+        // Size 20 (sigma = 3.0, radius 10, footprint [50, 70]) leaves x=45 and x=75 untouched.
+        assert_eq!(p20[45], 0.0, "size 20 footprint does not reach x=45");
+        assert_eq!(p20[75], 1.0, "size 20 footprint does not reach x=75");
+        // Size 60 (sigma = 9.0, radius 30, footprint [30, 90]) diffuses light and dark across a wider band.
+        assert!(p60[45] > 0.0, "size 60 diffuses light past x=45: {}", p60[45]);
+        assert!(p60[75] < 1.0, "size 60 diffuses dark past x=75: {}", p60[75]);
+        // Near the step edge (x=55), size 60 diffuses more than size 20 due to larger sigma.
+        assert!(p60[55] > p20[55], "larger sigma diffuses deeper near edge: p60={} p20={}", p60[55], p20[55]);
+    }
+}
+
+#[test]
 fn smudge_moves_colour_along_the_stroke() {
     for depth in DEPTHS {
         let mut s = session(100, 30, depth, "rgb");

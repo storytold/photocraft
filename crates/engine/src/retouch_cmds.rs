@@ -1016,12 +1016,9 @@ impl DabTool {
             }
             "paint.blur" | "paint.sharpen" => {
                 let sharpen = cmd == "paint.sharpen";
-                let tool = Self::Focus {
-                    sharpen,
-                    strength: num(p, "strength", 50.0).clamp(1.0, 100.0) / 100.0,
-                    protect: flag(p, "protectDetail", true),
-                    sigma: (stroke.brush.size * 0.03).clamp(1.0, 4.0),
-                };
+                let sigma = if sharpen { (stroke.brush.size * 0.03).clamp(1.0, 4.0) } else { (stroke.brush.size * 0.15).clamp(1.0, 64.0) };
+                let tool =
+                    Self::Focus { sharpen, strength: num(p, "strength", 50.0).clamp(1.0, 100.0) / 100.0, protect: flag(p, "protectDetail", true), sigma };
                 (tool, if sharpen { "Sharpen Tool" } else { "Blur Tool" })
             }
             "paint.smudge" => {
