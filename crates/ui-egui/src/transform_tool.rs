@@ -187,6 +187,26 @@ fn corners(r: [f64; 4]) -> [[f64; 2]; 4] {
     [[r[0], r[1]], [r[2], r[1]], [r[2], r[3]], [r[0], r[3]]]
 }
 
+/// The transform choices supported by the options bar, using its remembered choice or the general default.
+pub(crate) fn default_interpolation(app: &PhotocraftApp) -> &'static str {
+    use photocraft_engine::prefs::Interpolation;
+    match app.ui.tool_options.transform_interpolation.unwrap_or(app.session.prefs().general.image_interpolation) {
+        Interpolation::Nearest => "nearest",
+        Interpolation::Bilinear => "bilinear",
+        _ => "bicubic",
+    }
+}
+
+fn interpolation_preference(interpolation: &str) -> Option<photocraft_engine::prefs::Interpolation> {
+    use photocraft_engine::prefs::Interpolation;
+    match interpolation {
+        "nearest" => Some(Interpolation::Nearest),
+        "bilinear" => Some(Interpolation::Bilinear),
+        "bicubic" => Some(Interpolation::Bicubic),
+        _ => None,
+    }
+}
+
 /// Start Free Transform on the active layer (or its selected pixels), or on the targeted unlinked
 /// layer mask, alpha channel or Quick Mask.
 pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> {
@@ -270,7 +290,7 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
         rect,
         quad: corners(rect),
         pivot: [(rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0],
-        interpolation: "bicubic".into(),
+        interpolation: default_interpolation(app).into(),
         warp: None,
         selection: false,
         target: None,
@@ -371,7 +391,7 @@ pub(crate) fn begin_content_aware(
         rect,
         quad: corners(rect),
         pivot: [(rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0],
-        interpolation: "bicubic".into(),
+        interpolation: default_interpolation(app).into(),
         warp: None,
         selection: false,
         target: None,
@@ -496,7 +516,7 @@ fn begin_lone(
         rect,
         quad: corners(rect),
         pivot: [(rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0],
-        interpolation: "bicubic".into(),
+        interpolation: default_interpolation(app).into(),
         warp: None,
         selection: false,
         target: Some(target),
@@ -549,7 +569,7 @@ fn begin_path(app: &mut PhotocraftApp, ctx: &egui::Context, params: serde_json::
         rect,
         quad: corners(rect),
         pivot: [(rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0],
-        interpolation: "bicubic".into(),
+        interpolation: default_interpolation(app).into(),
         warp: None,
         selection: false,
         target: None,
@@ -634,7 +654,7 @@ pub fn begin_selection(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(
         rect,
         quad: corners(rect),
         pivot: [(rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0],
-        interpolation: "bilinear".into(),
+        interpolation: default_interpolation(app).into(),
         warp: None,
         selection: true,
         target: None,
@@ -2922,9 +2942,11 @@ fn transform_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: &TransformSes
     let mut interp = t.interpolation.clone();
     let opts = [("bicubic".to_string(), tl!("Bicubic")), ("bilinear".to_string(), tl!("Bilinear")), ("nearest".to_string(), tl!("Nearest Neighbor"))];
     if crate::widgets::dropdown(ui, "transform-interp", &mut interp, &opts, 130.0)
+        && let Some(preference) = interpolation_preference(&interp)
         && let Some(s) = app.ui.transform.as_mut()
     {
         s.interpolation = interp;
+        app.ui.tool_options.transform_interpolation = Some(preference);
     }
 }
 
@@ -3407,6 +3429,47 @@ mod tests {
         h.get_by_label("Cancel transform").click();
         h.run_steps(2);
         assert!(h.state().ui.transform.is_none());
+    }
+
+    #[test]
+    fn interpolation_selection_is_reused_for_the_next_transform() {
+        use egui::accesskit::Role;
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        let app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+        let mut h = Harness::builder().with_size(vec2(2400.0, 360.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    ui.horizontal_centered(|ui| options_bar(app, ui));
+                }
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
+        let ctx = h.ctx.clone();
+        begin(h.state_mut(), &ctx).unwrap();
+        h.run_steps(6);
+        assert!(h.state().ui.transform.is_some(), "transform stays open while the bar renders");
+
+        h.get_by_role(Role::ComboBox).click();
+        h.run();
+        assert!(h.state().ui.transform.is_some(), "opening interpolation dropdown keeps the transform open");
+        h.key_press(egui::Key::ArrowDown);
+        h.run();
+        assert!(h.state().ui.transform.is_some(), "first interpolation step keeps the transform open");
+        h.key_press(egui::Key::ArrowDown);
+        h.run();
+        assert!(h.state().ui.transform.is_some(), "second interpolation step keeps the transform open");
+        assert_eq!(h.state().ui.transform.as_ref().unwrap().interpolation, "nearest");
+        assert_eq!(h.state().ui.tool_options.transform_interpolation, Some(photocraft_engine::prefs::Interpolation::Nearest));
+        assert_eq!(h.state().session.prefs().general.image_interpolation, photocraft_engine::prefs::Interpolation::BicubicAutomatic);
+
+        let transform = h.state_mut().ui.transform.as_mut().unwrap();
+        transform.quad = transform.quad.map(|[x, y]| [x + 1.0, y]);
+        commit(h.state_mut());
+        assert!(h.state().ui.transform.is_none());
+        begin(h.state_mut(), &ctx).unwrap();
+        assert_eq!(h.state().ui.transform.as_ref().unwrap().interpolation, "nearest");
     }
 
     #[test]
