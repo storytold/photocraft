@@ -259,6 +259,33 @@ fn main() {
             ms(t)
         });
     }
+    // What a filter dialog's live preview costs after its command at k 1 (#5772): publishing it
+    // (display conversion and texels of the full composite, before the texture upload) and the
+    // preview window's texture, which since phase 0 reuses the worker's composite.
+    {
+        let st = s.active().expect("doc");
+        let p = photocraft_ui_egui::filter_dialog::preview_document(&st.doc, st.active_layer, "filter.blur.gaussianBlur", &json!({"radius": 40.0}), 1)
+            .expect("preview");
+        let flat = photocraft_compose::flatten(&p);
+        let display = s.color.canvas_display_for(&p, None).ok();
+        b.time("filter preview publish, k 1 (display + texels)", |_| {
+            let t = Instant::now();
+            let texture = match &display {
+                Some(d) => d.texture_buffer(&flat),
+                None => std::borrow::Cow::Borrowed(&flat),
+            };
+            std::hint::black_box(photocraft_ui_egui::gpu_canvas::texels(wgpu::TextureFormat::Rgba8Unorm, &texture.px).expect("the canvas format"));
+            ms(t)
+        });
+        b.time("filter preview window texture, k 1", |_| {
+            let t = Instant::now();
+            std::hint::black_box(photocraft_ui_egui::canvas::display_image(display.as_deref(), &flat));
+            ms(t)
+        });
+        let t = Instant::now();
+        std::hint::black_box(photocraft_compose::flatten(&p));
+        println!("  (the flatten the window no longer repeats: {:.1} ms)", ms(t));
+    }
     // Image › Adjustments dialog preview, per settings change (#77). Before: the command re-run
     // on a downsampled proxy (plus its flatten for upload). After: the document with a temporary
     // clipped adjustment layer, recomposited over the target's area by the canvas compositor.

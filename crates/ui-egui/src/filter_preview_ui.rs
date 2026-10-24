@@ -42,11 +42,12 @@ pub(crate) fn window(app: &PhotocraftApp, dialog: u64, ui: &mut egui::Ui, f: &mu
     // the dialog keeps a stacked dialog from showing another's preview; the Preview checkbox still
     // decides whether the filtered result (rather than the original) is shown.
     let preview_on = f.get("__preview").and_then(Value::as_bool) == Some(true);
-    let filtered: Option<(FilterPreviewKey, std::sync::Arc<Document>)> = app.filter_preview.as_ref().and_then(|p| {
+    type Flat = Option<std::sync::Arc<photocraft_compose::Buffer>>;
+    let filtered: Option<(FilterPreviewKey, std::sync::Arc<Document>, Flat)> = app.filter_preview.as_ref().and_then(|p| {
         // An edited smart filter previews as `layer.smartFilter.setParams` (#6324).
         let previewed = crate::smart_ui::preview_command(f, &cmd);
         (preview_on && p.key.dialog == dialog && p.key.doc == doc_id && p.key.command == previewed)
-            .then(|| p.result.clone().map(|r| (p.key.clone(), r)))
+            .then(|| p.result.clone().map(|r| (p.key.clone(), r, p.flat.clone())))
             .flatten()
     });
     // The proxy factor the preview runs at (the filtered key's when it exists, else the request's).
@@ -55,7 +56,7 @@ pub(crate) fn window(app: &PhotocraftApp, dialog: u64, ui: &mut egui::Ui, f: &mu
     // uncapped factor built a proxy the canvas never asked for, then rebuilt it (a full-size copy
     // and upload on the UI thread at 100 %) the moment the first result arrived, shifting this
     // window's 100 % mapping and pan clamp for a frame.
-    let base_k = filtered.as_ref().map(|(k, _)| k.k).unwrap_or_else(|| {
+    let base_k = filtered.as_ref().map(|(k, ..)| k.k).unwrap_or_else(|| {
         let params = app.with_mask_target(&cmd, crate::filter_dialog::params_of(f));
         crate::canvas::filter_preview_factor(app, &st.doc, &cmd, &params)
     });
@@ -74,15 +75,15 @@ pub(crate) fn window(app: &PhotocraftApp, dialog: u64, ui: &mut egui::Ui, f: &mu
     let orig_key = TexKey::Original(doc_id, revision, base_k);
     if cache.original.as_ref().map(|c| &c.key) != Some(&orig_key) {
         let proxy = crate::proxy::proxy_document(&st.doc, base_k);
-        let tex = upload(ui.ctx(), app, "filter-preview-original", &proxy);
+        let tex = upload(ui.ctx(), app, "filter-preview-original", &proxy, None);
         cache.original = Some(CachedTex { key: orig_key, tex, size: [proxy.size.width, proxy.size.height] });
     }
     // Filtered proxy: rebuilt whenever the worker publishes a new result.
     match &filtered {
-        Some((key, filtered_doc)) => {
+        Some((key, filtered_doc, flat)) => {
             let fkey = TexKey::Filtered(key.clone());
             if cache.filtered.as_ref().map(|c| &c.key) != Some(&fkey) {
-                let tex = upload(ui.ctx(), app, "filter-preview-filtered", filtered_doc);
+                let tex = upload(ui.ctx(), app, "filter-preview-filtered", filtered_doc, flat.as_deref());
                 cache.filtered = Some(CachedTex { key: fkey, tex, size: [filtered_doc.size.width, filtered_doc.size.height] });
             }
         }
@@ -226,8 +227,9 @@ fn document_size(proxy: [u32; 2], k: u32) -> Vec2 {
     if doc.x.is_finite() && doc.y.is_finite() && doc.x > 0.0 && doc.y > 0.0 { doc } else { vec2(proxy[0] as f32, proxy[1] as f32) }
 }
 
-/// A composite as monitor pixels, matching the canvas (`canvas::display_image`).
-fn upload(ctx: &egui::Context, app: &PhotocraftApp, name: &str, doc: &Document) -> egui::TextureHandle {
+/// A composite as monitor pixels, matching the canvas (`canvas::display_image`). `flat` is `doc`
+/// already flattened (the filter worker's composite), used instead of flattening it again.
+fn upload(ctx: &egui::Context, app: &PhotocraftApp, name: &str, doc: &Document, flat: Option<&photocraft_compose::Buffer>) -> egui::TextureHandle {
     // Reduce only the display texture when a full-resolution result exceeds the device limit.
     // The cached document and the window's document-pixel zoom coordinates stay at full size.
     let factor = texture_factor(doc.size.width, doc.size.height, ctx.input(|i| i.max_texture_side));
@@ -239,9 +241,14 @@ fn upload(ctx: &egui::Context, app: &PhotocraftApp, name: &str, doc: &Document) 
         let image = egui::ColorImage::new([width as usize, height as usize], pixels);
         return ctx.load_texture(name, image, egui::TextureOptions::LINEAR);
     }
-    let buf = if factor == 1 { photocraft_compose::flatten(doc) } else { photocraft_compose::render_reduced(doc, width, height) };
     let (display, _) = crate::canvas::canvas_display(app, doc, None);
-    let img = crate::canvas::display_image(display.as_deref(), &buf);
+    let img = match flat.filter(|f| factor == 1 && f.rect == doc.bounds()) {
+        Some(flat) => crate::canvas::display_image(display.as_deref(), flat),
+        None => {
+            let buf = if factor == 1 { photocraft_compose::flatten(doc) } else { photocraft_compose::render_reduced(doc, width, height) };
+            crate::canvas::display_image(display.as_deref(), &buf)
+        }
+    };
     ctx.load_texture(name, img, egui::TextureOptions::LINEAR)
 }
 
@@ -296,7 +303,7 @@ mod tests {
                     .unwrap();
             }
             let doc = &app.session.active().unwrap().doc;
-            let texture = upload(&ctx, &app, "full-resolution-preview", doc);
+            let texture = upload(&ctx, &app, "full-resolution-preview", doc, None);
             let mut delta = ctx.tex_manager().write().take_delta();
             let egui::ImageData::Color(image) = &delta.set.get(&texture.id()).unwrap()[0].image;
             let pixels = image.pixels.clone();
@@ -337,7 +344,7 @@ mod tests {
                 )
                 .unwrap();
                 let ctx = egui::Context::default();
-                let texture = upload(&ctx, &app, "alpha-preview", &preview);
+                let texture = upload(&ctx, &app, "alpha-preview", &preview, None);
                 let mut delta = ctx.tex_manager().write().take_delta();
                 let egui::ImageData::Color(image) = &delta.set.get(&texture.id()).unwrap()[0].image;
                 let pixels = image.pixels.clone();
@@ -378,6 +385,37 @@ mod tests {
         output.textures_delta.clear();
         assert_ne!(before, after, "press-and-hold must not reuse the old channel");
         assert!(pixels.unwrap().iter().all(|p| *p == Color32::BLACK));
+    }
+
+    /// #5772: the worker flattens each preview once for the canvas, and the window shows that
+    /// composite rather than flattening the result a second time on the UI thread.
+    #[test]
+    fn the_window_shows_the_workers_composite_without_flattening_again() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.background_jobs = false;
+        app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+        crate::filter_dialog::open(&mut app, "filter.stylize.solarize").unwrap();
+        crate::canvas::ensure_filter_preview(&mut app, 0, &egui::Context::default()).expect("a preview");
+        let preview = app.filter_preview.as_ref().unwrap();
+        let (result, flat) = (preview.result.clone().unwrap(), preview.flat.clone().expect("the worker's composite is kept"));
+        assert_eq!(*flat, photocraft_compose::flatten(&result), "the kept composite is the result's");
+
+        let pixels = |flat: Option<&photocraft_compose::Buffer>| {
+            let ctx = egui::Context::default();
+            let texture = upload(&ctx, &app, "filtered", &result, flat);
+            let mut delta = ctx.tex_manager().write().take_delta();
+            let egui::ImageData::Color(image) = &delta.set.get(&texture.id()).unwrap()[0].image;
+            let pixels = image.pixels.clone();
+            delta.clear();
+            pixels
+        };
+        assert_eq!(pixels(Some(&flat)), pixels(None), "the same texture as flattening again");
+        // A stand-in composite proves the window uses the one it is given...
+        let marker = photocraft_compose::Buffer { rect: result.bounds(), px: vec![[1.0, 0.0, 0.0, 1.0]; 64 * 48] };
+        assert!(pixels(Some(&marker)).iter().all(|p| *p == Color32::RED));
+        // ...but never one that doesn't cover the result (it flattens instead).
+        let partial = photocraft_compose::Buffer { rect: photocraft_geom::Rect::new(0, 0, 8, 8), px: vec![[1.0, 0.0, 0.0, 1.0]; 64] };
+        assert_eq!(pixels(Some(&partial)), pixels(None));
     }
 
     #[test]

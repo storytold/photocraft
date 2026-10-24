@@ -433,7 +433,7 @@ impl GpuCanvas {
     pub fn upload_buffer_full(&self, doc: u64, buf: &photocraft_compose::Buffer, depth: photocraft_doc::SampleType) {
         let size = [buf.rect.width(), buf.rect.height()];
         let format = self.format_for(depth, size);
-        self.upload_full_as(doc, size, format, &texels(format, &buf.px));
+        self.upload_full_as(doc, size, format, &canvas_texels(format, &buf.px));
     }
 
     /// Upload a CPU composite of a sub-rectangle (in document pixels, `buf.rect`).
@@ -443,7 +443,7 @@ impl GpuCanvas {
         if r.x0 < 0 || r.y0 < 0 {
             return false;
         }
-        self.upload_rect(doc, [r.x0 as u32, r.y0 as u32], [r.width(), r.height()], &texels(format, &buf.px))
+        self.upload_rect(doc, [r.x0 as u32, r.y0 as u32], [r.width(), r.height()], &canvas_texels(format, &buf.px))
     }
 
     /// Composite `region` of `doc` with the wgpu compositor straight into its display texture
@@ -893,7 +893,7 @@ pub fn display_texels(
     display: Option<&photocraft_engine::display_color::CanvasDisplay>,
     buf: &photocraft_compose::Buffer,
 ) -> Vec<u8> {
-    texels(format, &texture_buffer(display, buf).px)
+    canvas_texels(format, &texture_buffer(display, buf).px)
 }
 
 /// What a [`GpuCanvas::refresh`] did.
@@ -1263,8 +1263,20 @@ fn texel_bytes(format: wgpu::TextureFormat) -> u64 {
     if format == FORMAT_HIGH { 8 } else { 4 }
 }
 
-/// Straight-alpha f32 RGBA → premultiplied texels of `format`.
-fn texels(format: wgpu::TextureFormat, px: &[[f32; 4]]) -> Vec<u8> {
+/// Straight-alpha f32 RGBA → premultiplied texels of `format` (public for `interactive_bench`):
+/// one of the canvas's two formats, RGBA8 or RGBA16F. `None` for any other format, whose texels
+/// these wouldn't be.
+pub fn texels(format: wgpu::TextureFormat, px: &[[f32; 4]]) -> Option<Vec<u8>> {
+    if format != FORMAT && format != FORMAT_HIGH {
+        return None;
+    }
+    let mut out = Vec::new();
+    texels_into(format, px, &mut out);
+    Some(out)
+}
+
+/// [`texels`] for the canvas's own textures, whose format is always one of the two.
+fn canvas_texels(format: wgpu::TextureFormat, px: &[[f32; 4]]) -> Vec<u8> {
     let mut out = Vec::new();
     texels_into(format, px, &mut out);
     out
@@ -2948,6 +2960,18 @@ mod tests {
             naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::empty())
                 .validate(&module)
                 .unwrap_or_else(|e| panic!("{name}: {e:?}"));
+        }
+    }
+
+    /// The public `texels` serves the canvas's two formats only: another format's texels would
+    /// have the wrong layout and length (#8848).
+    #[test]
+    fn texels_refuse_formats_the_canvas_does_not_use() {
+        let px = [[1.0, 0.5, 0.0, 0.5]];
+        assert_eq!(texels(FORMAT, &px), Some(vec![128, 64, 0, 128]));
+        assert_eq!(texels(FORMAT_HIGH, &px).map(|t| t.len()), Some(8));
+        for other in [wgpu::TextureFormat::Bgra8Unorm, wgpu::TextureFormat::Rgba32Float, wgpu::TextureFormat::Rgba8UnormSrgb] {
+            assert_eq!(texels(other, &px), None, "{other:?}");
         }
     }
 }
