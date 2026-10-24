@@ -32,6 +32,7 @@ mod distort;
 mod distort2;
 pub mod erase;
 pub mod exif;
+pub mod face_liquify;
 pub mod faces;
 pub mod features;
 mod fxutil;
