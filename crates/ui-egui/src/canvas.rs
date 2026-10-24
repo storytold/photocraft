@@ -1920,6 +1920,13 @@ pub(crate) fn damage_since(app: &PhotocraftApp, idx: usize, seen: (u64, u64), no
     {
         return Some(if r.is_empty() { r } else { r.inflate(effect_reach(&st.doc.layers)) });
     }
+    // Between Vanishing Point stamp previews (and the document): the areas the strokes painted.
+    if seen.0 == now.0
+        && let Some(st) = app.session.documents().get(idx)
+        && let Some(r) = crate::vp_ui::damage(app, st.doc.id, now.0, seen.1 ^ display_key, now.1)
+    {
+        return Some(if r.is_empty() { r } else { r.inflate(effect_reach(&st.doc.layers)) });
+    }
     // Between hovered blend modes (and the document): where the layer's blending shows.
     if seen.0 == now.0
         && let Some(st) = app.session.documents().get(idx)
