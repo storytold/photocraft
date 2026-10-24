@@ -151,6 +151,14 @@ impl MacMenu {
                         Standard::Zoom => PredefinedMenuItem::maximize(Some(photocraft_ui_egui::i18n::t("Zoom"))),
                         Standard::BringAllToFront => PredefinedMenuItem::bring_all_to_front(None),
                         Standard::CloseWindow => PredefinedMenuItem::close_window(None),
+                        // While a file dialog is open (#7632): nil-target `undo:`, `cut:`,
+                        // `paste:`… with ⌘Z, ⌘X, ⌘V…, which reach the panel's text field.
+                        Standard::Undo => PredefinedMenuItem::undo(Some(photocraft_ui_egui::i18n::t("Undo"))),
+                        Standard::Redo => PredefinedMenuItem::redo(Some(photocraft_ui_egui::i18n::t("Redo"))),
+                        Standard::Cut => PredefinedMenuItem::cut(Some(photocraft_ui_egui::i18n::t("Cut"))),
+                        Standard::Copy => PredefinedMenuItem::copy(Some(photocraft_ui_egui::i18n::t("Copy"))),
+                        Standard::Paste => PredefinedMenuItem::paste(Some(photocraft_ui_egui::i18n::t("Paste"))),
+                        Standard::SelectAll => PredefinedMenuItem::select_all(Some(photocraft_ui_egui::i18n::t("Select All"))),
                     };
                     let _ = sub.append(&p);
                 }

@@ -14,8 +14,12 @@ mod mac_menu;
 
 #[cfg(target_os = "macos")]
 fn main() {
-    use objc2::MainThreadMarker;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
     use objc2::rc::Retained;
+    use objc2::runtime::Sel;
+    use objc2::{MainThreadMarker, sel};
     use objc2_app_kit::{NSApplication, NSEvent, NSEventMask, NSEventModifierFlags, NSEventSubtype, NSEventType, NSMenu};
     use objc2_foundation::{NSPoint, NSString};
     use photocraft_ui_egui::PhotocraftApp;
@@ -201,6 +205,57 @@ fn main() {
     assert_eq!(app.session.active_index(), Some(0), "choosing the first row brought it forward");
     let window = submenu(&main_menu(), "Window");
     assert!(checked(&window, rows[0]) && !checked(&window, rows[1]), "the check moved in place");
+
+    // #7632: under the Save panel, Edit › Undo, Redo, Cut, Copy, Paste and Select › All are
+    // AppKit's own items (nil target, the standard selectors, the standard keys), so ⌘V goes to
+    // the panel's name field and never reaches egui; every other row is greyed. Cancelling the
+    // panel brings PhotoCraft's items back, with nothing pressed or clicked.
+    let held: Rc<RefCell<Vec<photocraft_ui_egui::FileDialogReply>>> = Rc::default();
+    let open = held.clone();
+    app.services.file_dialog = Some(Box::new(move |_request, _parent, reply| open.borrow_mut().push(reply)));
+    photocraft_ui_egui::menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).expect("Save As asks for a name");
+    assert!(app.file_dialog_open());
+    frame(&mut app, egui::RawInput::default());
+    app.poll_file_dialog(&ctx, None);
+    assert_eq!(held.borrow().len(), 1, "the panel is up");
+    let standard = |menu: &NSMenu, title: &str, action: Sel, key: &str, mask: NSEventModifierFlags| {
+        let it = menu.itemAtIndex(index(menu, title)).unwrap_or_else(|| panic!("{title}"));
+        assert_eq!(it.action(), Some(action), "{title} is AppKit's own item");
+        assert!(it.target().is_none(), "{title} goes to the first responder");
+        assert_eq!((it.keyEquivalent().to_string(), it.keyEquivalentModifierMask()), (key.to_string(), mask), "{title}'s key");
+        assert!(it.isEnabled(), "{title} stays live for the panel");
+    };
+    let edit = submenu(&main_menu(), "Edit");
+    standard(&edit, "Undo", sel!(undo:), "z", NSEventModifierFlags::Command);
+    standard(&edit, "Redo", sel!(redo:), "z", NSEventModifierFlags::Command | NSEventModifierFlags::Shift);
+    standard(&edit, "Cut", sel!(cut:), "x", NSEventModifierFlags::Command);
+    standard(&edit, "Copy", sel!(copy:), "c", NSEventModifierFlags::Command);
+    standard(&edit, "Paste", sel!(paste:), "v", NSEventModifierFlags::Command);
+    standard(&submenu(&main_menu(), "Select"), "Select All", sel!(selectAll:), "a", NSEventModifierFlags::Command);
+    let view = submenu(&main_menu(), "View");
+    assert!(!view.itemAtIndex(index(&view, "Rulers")).expect("Rulers").isEnabled(), "the other rows are greyed under the panel");
+    // ⌘V is the panel's now: nothing reaches egui.
+    let _earlier = photocraft_ui_egui::shortcut_dispatch::take_log(&ctx);
+    let press = dequeue(&key_down("v", 9, NSEventModifierFlags::Command));
+    main_menu().performKeyEquivalent(&press);
+    let mut raw = egui::RawInput::default();
+    if let Some(m) = app.services.native_menu.as_mut() {
+        m.raw_input(&mut raw);
+    }
+    assert!(raw.events.is_empty(), "⌘V under the panel is not PhotoCraft's: {:?}", raw.events);
+    frame(&mut app, raw);
+    assert!(photocraft_ui_egui::shortcut_dispatch::take_log(&ctx).is_empty(), "no command ran under the panel");
+
+    held.borrow_mut().pop().expect("the panel's reply").send(None);
+    app.poll_file_dialog(&ctx, None);
+    assert!(!app.file_dialog_open());
+    frame(&mut app, egui::RawInput::default());
+    let edit = submenu(&main_menu(), "Edit");
+    let paste = edit.itemAtIndex(index(&edit, "Paste")).expect("Paste");
+    assert!(paste.target().is_some(), "Edit › Paste is PhotoCraft's again, with the panel gone");
+    assert_eq!(paste.keyEquivalent().to_string(), "v");
+    let view = submenu(&main_menu(), "View");
+    assert!(view.itemAtIndex(index(&view, "Rulers")).expect("Rulers").isEnabled(), "the rows are live again");
 
     println!("mac_menu_appkit: ok");
 }

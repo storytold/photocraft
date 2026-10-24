@@ -18,6 +18,13 @@
 //! [`NativeMenu::raw_input`] feeds it to egui as the key press it was: the shortcut runs through
 //! [`crate::shortcuts::handle`] exactly as without a native menu. A click is [`Event::Click`] and
 //! runs the command like an in-window menu click.
+//!
+//! **A file dialog owns the menu bar.** The platform's Open and Save panels are modal to the window
+//! (Photoshop greys its menus under them), and their text fields get ⌘Z, ⌘X, ⌘C, ⌘V and ⌘A from the
+//! Edit menu: AppKit only pastes in a text field through a `paste:` menu item. PhotoCraft's own
+//! items took those keys first and handed them to egui, which the panel's name field never saw
+//! (#7632). So while a file dialog is open every row is disabled and Undo, Redo, Cut, Copy, Paste
+//! and Select All are AppKit's standard items ([`under_file_dialog`]), which act on the panel.
 
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -101,6 +108,52 @@ pub enum Standard {
     Zoom,
     BringAllToFront,
     CloseWindow,
+    /// The text-editing items (`undo:`, `redo:`, `cut:`, `copy:`, `paste:`, `selectAll:` to the
+    /// first responder), shown only while a file dialog is open: see [`under_file_dialog`].
+    Undo,
+    Redo,
+    Cut,
+    Copy,
+    Paste,
+    SelectAll,
+}
+
+/// PhotoCraft's commands whose keys a file dialog's text field needs, and the standard item that
+/// stands in for each while the dialog is open.
+const PANEL_EDITING: [(&str, Standard); 6] = [
+    ("edit.undo", Standard::Undo),
+    ("edit.redo", Standard::Redo),
+    ("edit.cut", Standard::Cut),
+    ("edit.copy", Standard::Copy),
+    ("edit.paste", Standard::Paste),
+    ("select.all", Standard::SelectAll),
+];
+
+/// The menu bar while a platform file dialog is open, which is modal to the window and has the
+/// keyboard. Every row is greyed, as Photoshop's are under its panels: the command rows already
+/// are (`menus::modal_allows`, which also drops a click that raced this), and so here are the
+/// layout's own (Hide, Minimize, Language), so no key equivalent runs anything under the panel.
+/// Edit › Undo, Redo, Cut, Copy, Paste and Select › All become AppKit's standard items, in place:
+/// their actions go to the first responder, the panel's text field, so ⌘V pastes the clipboard
+/// into the file name (#7632), where PhotoCraft's own items took the key equivalent first and
+/// handed it to egui, which the panel never sees. The swap is a structure change: the backend
+/// rebuilds the menu when the dialog opens and again when it closes.
+pub fn under_file_dialog(bar: &mut MenuBar) {
+    fn walk(nodes: &mut [Node]) {
+        for n in nodes {
+            match n {
+                Node::Item(it) => match PANEL_EDITING.iter().find(|(id, _)| *id == it.id) {
+                    Some((_, standard)) => *n = Node::Standard(*standard),
+                    None => it.enabled = false,
+                },
+                Node::Submenu { children, .. } => walk(children),
+                Node::Separator | Node::Standard(_) => {}
+            }
+        }
+    }
+    for m in &mut bar.menus {
+        walk(&mut m.children);
+    }
 }
 
 /// Hide PhotoCraft: a custom item (the predefined one always takes ⌘H, which is View › Extras).
@@ -721,7 +774,11 @@ pub fn sync(app: &mut PhotocraftApp, ctx: &egui::Context) {
     for it in &mut items {
         it.enabled &= crate::menus::modal_allows(app, &it.id);
     }
-    let layout = photocraft_layout(&items, lang, &app.session.prefs().interface.language);
+    let mut layout = photocraft_layout(&items, lang, &app.session.prefs().interface.language);
+    // After the layout: it greys the layout's own rows (Hide, Minimize, Language) as well.
+    if app.file_dialog_open() {
+        under_file_dialog(&mut layout.bar);
+    }
     let Some(menu) = app.services.native_menu.as_mut() else { return };
     if !menu.logged {
         for c in &layout.clashes {
@@ -760,7 +817,8 @@ pub(crate) fn state_hash(app: &PhotocraftApp, input: Option<u64>) -> u64 {
     }
     let ui = &app.ui;
     (&ui.recent_files, &ui.workspace, ui.palette_open, ui.transform.is_some(), ui.text_edit.is_some(), ui.dialogs.len()).hash(&mut h);
-    (app.discard.is_some(), app.camera_raw.is_some()).hash(&mut h);
+    // A file dialog closes without egui input: the rows must come back all the same.
+    (app.discard.is_some(), app.camera_raw.is_some(), app.file_dialog_open()).hash(&mut h);
     serde_json::to_string(&(&ui.panels, &ui.extras, &ui.view, ui.theme, ui.tool)).unwrap_or_default().hash(&mut h);
     s.prefs().interface.language.hash(&mut h);
     h.finish()
@@ -1119,6 +1177,105 @@ mod tests {
         app.ui.dialogs.clear();
         frame(&ctx, egui::RawInput::default(), |ui| sync(&mut app, ui.ctx()));
         assert!(synced.borrow().last().unwrap().find("image.imageRotation.90cw").unwrap().enabled);
+    }
+
+    /// A file dialog service whose dialogs stay open until the test answers them.
+    fn held_dialogs(app: &mut PhotocraftApp) -> std::rc::Rc<std::cell::RefCell<Vec<crate::file_dialog::FileDialogReply>>> {
+        let held = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let open = held.clone();
+        app.services.file_dialog = Some(Box::new(move |_request, _parent, reply| open.borrow_mut().push(reply)));
+        held
+    }
+
+    fn menu_ids(bar: &MenuBar, title: &str) -> Vec<String> {
+        ids(&bar.menus.iter().find(|m| m.title == title).unwrap_or_else(|| panic!("a {title} menu")).children)
+    }
+
+    /// #7632: ⌘V in the Save panel's file name field ran Edit › Paste's key equivalent (which the
+    /// panel ignores) instead of pasting. While a file dialog is open the menu bar is the panel's:
+    /// Undo, Redo, Cut, Copy, Paste and Select All are AppKit's own items, whose actions reach the
+    /// panel's text field, every other row is greyed, and a click that arrives anyway runs
+    /// nothing. The rows come back when the dialog closes, which happens without egui input.
+    #[test]
+    fn a_file_dialog_gives_the_menu_bars_editing_keys_to_the_panel() {
+        let synced = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut app = app(true);
+        let held = held_dialogs(&mut app);
+        let ctx = egui::Context::default();
+        app.services.native_menu = Some(NativeMenu::new(Box::new(Fake { synced: synced.clone(), events: Vec::new() })));
+        frame(&ctx, egui::RawInput::default(), |ui| sync(&mut app, ui.ctx()));
+        let before = synced.borrow().last().cloned().unwrap();
+        assert!(before.find("edit.paste").is_some() && before.find("select.all").unwrap().enabled && before.find("view.zoomIn").unwrap().enabled);
+
+        app.pick_save("Untitled-1.png", |_, _| Ok(serde_json::Value::Null)).unwrap();
+        assert!(app.file_dialog_open());
+        // The frame that asked rebuilds the menu, then shows the panel.
+        frame(&ctx, egui::RawInput::default(), |ui| {
+            sync(&mut app, ui.ctx());
+            app.poll_file_dialog(ui.ctx(), None);
+        });
+        assert_eq!(held.borrow().len(), 1, "the panel is up");
+        let under = synced.borrow().last().cloned().unwrap();
+        assert_ne!(structure_key(&under), structure_key(&before), "a structure change: the backend rebuilds the menu");
+        let edit = menu_ids(&under, "Edit");
+        for standard in ["<Undo>", "<Redo>", "<Cut>", "<Copy>", "<Paste>"] {
+            assert!(edit.contains(&standard.to_string()), "{standard} in Edit: {edit:?}");
+        }
+        assert!(menu_ids(&under, "Select").contains(&"<SelectAll>".to_string()));
+        for id in PANEL_EDITING.map(|(id, _)| id) {
+            assert!(under.find(id).is_none(), "{id} gave its key to the standard item");
+        }
+        let enabled: Vec<&str> = under.items().iter().filter(|it| it.enabled).map(|it| it.id.as_str()).collect();
+        assert!(enabled.is_empty(), "every other row is greyed under the panel, like view navigation under a dialog: {enabled:?}");
+
+        // A click that raced the rebuild runs nothing under the panel.
+        let zoom = app.ui.views[0].zoom;
+        app.services.native_menu = Some(NativeMenu::new(Box::new(Fake { synced: synced.clone(), events: vec![Event::Click("view.zoomIn".into())] })));
+        let mut raw = egui::RawInput::default();
+        app.services.native_menu.as_mut().unwrap().raw_input(&mut raw);
+        frame(&ctx, raw, |ui| {
+            run(&mut app, ui.ctx());
+            sync(&mut app, ui.ctx());
+        });
+        assert_eq!(app.ui.views[0].zoom, zoom, "Zoom In didn't run under the panel");
+
+        // Cancel: the rows come back in the frame the answer arrives, with no key or click.
+        held.borrow_mut().pop().unwrap().send(None);
+        frame(&ctx, egui::RawInput::default(), |ui| {
+            app.poll_file_dialog(ui.ctx(), None);
+            sync(&mut app, ui.ctx());
+        });
+        assert!(!app.file_dialog_open());
+        let after = synced.borrow().last().cloned().unwrap();
+        assert_eq!(structure_key(&after), structure_key(&before), "PhotoCraft's own items are back");
+        assert!(
+            after.find("edit.paste").is_some() && after.find("select.all").unwrap().enabled && after.find("view.zoomIn").unwrap().enabled,
+            "the rows are live again"
+        );
+    }
+
+    /// The standard items stand exactly where PhotoCraft's were, so the Edit menu keeps its
+    /// shape under the panel; the other rows only lose their enabled state.
+    #[test]
+    fn under_a_file_dialog_the_standard_items_stand_in_place_for_photocrafts_own() {
+        let mut l = layout(true);
+        let before: Vec<(String, Vec<String>)> = l.bar.menus.iter().map(|m| (m.title.clone(), ids(&m.children))).collect();
+        assert!(l.bar.find("app.language.auto").unwrap().enabled && l.bar.find("view.zoomIn").unwrap().enabled);
+        under_file_dialog(&mut l.bar);
+        assert!(l.bar.items().iter().all(|it| !it.enabled), "every row left is greyed, the layout's own included");
+        let after: Vec<(String, Vec<String>)> = l.bar.menus.iter().map(|m| (m.title.clone(), ids(&m.children))).collect();
+        let swapped: Vec<(String, String)> = before
+            .iter()
+            .zip(&after)
+            .flat_map(|((_, a), (_, b))| {
+                assert_eq!(a.len(), b.len());
+                a.iter().zip(b).filter(|(x, y)| x != y).map(|(x, y)| (x.clone(), y.clone()))
+            })
+            .collect();
+        let expected: Vec<(String, String)> = PANEL_EDITING.map(|(id, s)| (id.to_string(), format!("<{s:?}>"))).to_vec();
+        assert_eq!(swapped, expected);
+        assert!(l.bar.find("edit.paste").is_none() && l.bar.find("select.all").is_none());
+        assert_eq!(l.bar.find("edit.copyMerged").unwrap().shortcut.as_deref(), Some("Cmd+Shift+C"), "the other items keep their keys");
     }
 
     /// Edit > Cut uses the type editor's selection, like the clipboard Cut event (#1355).

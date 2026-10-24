@@ -2006,6 +2006,35 @@ mod tests {
         assert!(app.session.active().unwrap().revision > revision);
     }
 
+    /// A pending platform file dialog is modal for the menus on every platform, view navigation
+    /// included (#7632): `ui.menu.invoke` is refused until the dialog is answered.
+    #[test]
+    fn menu_invoke_is_refused_while_a_file_dialog_is_pending() {
+        let held: std::rc::Rc<std::cell::RefCell<Vec<crate::file_dialog::FileDialogReply>>> = Default::default();
+        let open = held.clone();
+        let services = crate::Services { file_dialog: Some(Box::new(move |_request, _parent, reply| open.borrow_mut().push(reply))), ..Default::default() };
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        let ctx = egui::Context::default();
+        app.run("file.new", json!({"width": 40, "height": 30})).unwrap();
+        let zoom = app.ui.views[0].zoom;
+
+        let asked = call(&mut app, &ctx, "ui.menu.invoke", json!({"id": "file.saveAs"}));
+        assert_eq!(asked["result"]["fileDialog"], "save", "{asked}");
+        app.poll_file_dialog(&ctx, None);
+        assert_eq!(held.borrow().len(), 1, "the dialog is up");
+        assert!(!crate::menus::modal_allows(&app, "view.zoomIn"), "unlike an in-window dialog, a file dialog greys view navigation too");
+        let blocked = call(&mut app, &ctx, "ui.menu.invoke", json!({"id": "view.zoomIn"}));
+        assert_eq!(blocked["ok"], false, "{blocked}");
+        assert_eq!(app.ui.views[0].zoom, zoom);
+
+        held.borrow_mut().pop().unwrap().send(None);
+        app.poll_file_dialog(&ctx, None);
+        assert!(!app.file_dialog_open());
+        let zoomed = call(&mut app, &ctx, "ui.menu.invoke", json!({"id": "view.zoomIn"}));
+        assert_eq!(zoomed["ok"], true, "{zoomed}");
+        assert!(app.ui.views[0].zoom > zoom);
+    }
+
     #[test]
     fn ui_set_rejects_unknown_fields_before_changing_anything() {
         use crate::theme::ThemeKind;
