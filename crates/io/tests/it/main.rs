@@ -48,6 +48,7 @@ mod psd_background;
 mod psd_block_alignment;
 mod psd_block_layout;
 mod psd_damaged_merged;
+mod psd_effect_blend_keys;
 mod psd_empty_channels;
 mod psd_font_identity;
 mod psd_kerning;

@@ -69,9 +69,15 @@ const BLEND_LONG_NAMES: [(BlendMode, &str); 17] = [
     (BlendMode::Luminosity, "luminosity"),
 ];
 
-/// A blend-mode enum from either its four-character code or its long string ID.
+/// A blend-mode enum from its four-character code, its long string ID or, as Photoshop also
+/// writes in effect `Md  ` values (`vLit`, `lddg`, `lbrn`), the layer-record blend key.
 pub(crate) fn blend_from_id(v: &[u8]) -> Option<BlendMode> {
-    BLEND_NAMES.iter().chain(&BLEND_LONG_NAMES).find(|(_, n)| n.as_bytes() == v).map(|(m, _)| *m)
+    BLEND_NAMES
+        .iter()
+        .chain(&BLEND_LONG_NAMES)
+        .find(|(_, n)| n.as_bytes() == v)
+        .map(|(m, _)| *m)
+        .or_else(|| <[u8; 4]>::try_from(v).ok().and_then(BlendMode::from_psd_key))
 }
 
 fn blend_of(d: &Descriptor, key: &str, default: BlendMode) -> BlendMode {
@@ -840,6 +846,37 @@ mod tests {
         for (_, n) in BLEND_NAMES {
             assert!(s.insert(n));
         }
+    }
+
+    #[test]
+    fn layer_record_blend_keys_parse() {
+        // Photoshop 2026 writes some effect modes as the layer-record key (`BlnM` `vLit`,
+        // `lddg`) rather than the descriptor ID (#8567); they used to import as Normal.
+        let key = |v: &[u8; 4]| Value::Enumerated { type_id: Id::new("BlnM"), value: Id::new(std::str::from_utf8(v).unwrap()) };
+        let d = Descriptor::new("null")
+            .with("masterFXSwitch", Value::Boolean(true))
+            .with("DrSh", Value::Descriptor(Descriptor::new("DrSh").with("enab", Value::Boolean(true)).with("Md  ", key(b"lbrn"))))
+            .with("ebbl", Value::Descriptor(Descriptor::new("ebbl").with("hglM", key(b"lddg")).with("sdwM", key(b"lLit"))))
+            .with("SoFi", Value::Descriptor(Descriptor::new("SoFi").with("Md  ", key(b"vLit"))));
+        let mut data = 0u32.to_be_bytes().to_vec();
+        data.extend(VersionedDescriptor { version: 16, descriptor: d }.to_bytes());
+        let (_, fx) = parse_lfx2(&data).unwrap();
+        let modes: Vec<BlendMode> = fx
+            .iter()
+            .flat_map(|e| match e {
+                Effect::DropShadow(s) => vec![s.common.blend],
+                Effect::BevelEmboss(b) => vec![b.highlight.blend, b.shadow.blend],
+                Effect::ColorOverlay { common, .. } => vec![common.blend],
+                _ => vec![],
+            })
+            .collect();
+        assert_eq!(modes, vec![BlendMode::LinearBurn, BlendMode::LinearDodge, BlendMode::LinearLight, BlendMode::VividLight]);
+        // Every layer key reads as its own mode: none collides with another mode's descriptor ID.
+        for m in std::iter::once(BlendMode::PassThrough).chain(BlendMode::LAYER_MODES) {
+            assert_eq!(blend_from_id(&m.psd_key()), Some(m), "{}", String::from_utf8_lossy(&m.psd_key()));
+        }
+        assert_eq!(blend_from_id(b"zzzz"), None);
+        assert_eq!(blend_from_id(b"vLi"), None);
     }
 
     #[test]
