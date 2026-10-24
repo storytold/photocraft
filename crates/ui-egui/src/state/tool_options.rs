@@ -99,10 +99,13 @@ pub struct ToolOptions {
     /// Shape tools: "shape" (a shape layer) or "path" (the work path), as Photoshop's tool mode
     /// (#9453). Shape by default, where the Pen's own mode defaults to Path.
     pub shape_mode: String,
-    /// Shape tools: fill with the foreground colour, stroke width (0 = none), rectangle corner
-    /// radius, polygon sides, line weight.
+    /// Shape tools: fill on/off and colour, stroke width (0 = none) and colour, rectangle corner
+    /// radius, polygon sides, line weight. The colours are the tool's own, independent of the
+    /// foreground and background colours, as in Photoshop.
     pub shape_fill: bool,
+    pub shape_fill_color: [f32; 4],
     pub stroke_width: f32,
+    pub shape_stroke_color: [f32; 4],
     #[serde(default)]
     pub shape_stroke: crate::shape_stroke_ui::StrokeOptions,
     /// Shape tools: the gradient the next shape's fill / stroke takes (the swatches' Gradient
@@ -473,7 +476,9 @@ impl Default for ToolOptions {
             pen_path_op: default_pen_path_op(),
             shape_mode: "shape".into(),
             shape_fill: true,
+            shape_fill_color: [0.0, 0.0, 0.0, 1.0],
             stroke_width: 0.0,
+            shape_stroke_color: [1.0, 1.0, 1.0, 1.0],
             shape_stroke: Default::default(),
             shape_fill_gradient: None,
             shape_stroke_gradient: None,

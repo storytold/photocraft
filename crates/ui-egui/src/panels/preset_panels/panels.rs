@@ -329,7 +329,7 @@ pub fn shapes_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 }
 
 fn shape_fill(app: &PhotocraftApp) -> Value {
-    let f = app.session.tools.foreground;
+    let f = app.ui.tool_options.shape_fill_color;
     let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
     if app.ui.tool_options.shape_fill { json!(format!("#{:02x}{:02x}{:02x}", q(f[0]), q(f[1]), q(f[2]))) } else { Value::Null }
 }

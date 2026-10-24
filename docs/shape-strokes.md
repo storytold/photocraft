@@ -1,8 +1,9 @@
 # Shape stroke options
 
 Updated 2026-10-27: Photoshop's Fill/Stroke popover (paint types, Recently Used Colors, swatch
-folders, full Color Picker). 2026-10-15: retain stroke paint and options when width reaches zero
-(#6191).
+folders, full Color Picker). 2026-10-24: the tool's Fill and Stroke colours are its own,
+independent of the foreground and background colours (#6695). 2026-10-15: retain stroke paint and
+options when width reaches zero (#6191).
 
 PhotoCraft's Shape tool options bar has a Stroke Options button beside the existing width
 and colour controls. It sets defaults for new Rectangle, Ellipse, Triangle, Polygon, Line
@@ -18,9 +19,10 @@ Gradient tab (see Paint below); Pattern is shown but off until shapes render pat
 Color Picker button opens the full Color Picker dialog (HSB, RGB, Lab, CMYK, hex, eyedropper),
 titled Color Picker (Fill Color) or (Stroke Color), with a live canvas preview; OK is one undo
 step and also turns No Color or a gradient into that solid colour. Choosing a colour preserves
-its alpha; No Color removes the corresponding paint. Tool-bar fill uses
-the foreground colour and stroke uses the background colour, as before. Choosing a stroke
-colour or style deliberately enables a 3 px stroke when no stroke is present. The style button
+its alpha; No Color removes the corresponding paint. As in Photoshop, the tool keeps its own
+Fill and Stroke colours (black and white by default): choosing one leaves the foreground and
+background colours alone, and changing those leaves the tool's paint alone (#6695). Choosing a
+stroke colour or style deliberately enables a 3 px stroke when no stroke is present. The style button
 remains available with no stroke, but opening or dismissing it alone does not enable one.
 Properties edits the selected shape; the options bar continues to set defaults for new shapes.
 
