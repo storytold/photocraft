@@ -1275,7 +1275,39 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                 selection_mode_buttons(app, ui);
                                 widgets::vline(ui, 22.0);
                                 opt_label(ui, tl!("Tolerance"));
-                                widgets::value_field(ui, &mut app.ui.tool_options.tolerance, 0.0..=255.0, "", 58.0);
+                                let tolerance = widgets::value_field(
+                                    ui,
+                                    &mut app.ui.tool_options.tolerance,
+                                    0.0..=255.0,
+                                    "",
+                                    58.0,
+                                );
+                                if tolerance.drag_stopped()
+                                    && let Some(last) = app.last_magic_wand.clone()
+                                    && app.session.active().is_some_and(|doc| {
+                                        doc.doc.id == last.doc_id
+                                            && doc.revision == last.revision
+                                            && doc.view_revision == last.view_revision
+                                            && doc.active_layer == last.active_layer
+                                    })
+                                    && app.ui.tool_options.tolerance != last.tolerance
+                                {
+                                    let options = app.ui.tool_options.clone();
+                                    if app
+                                        .run_magic_wand_with_baseline(
+                                            json!({"x": last.point[0], "y": last.point[1], "tolerance": options.tolerance, "contiguous": options.contiguous, "antiAlias": options.anti_alias, "sampleAllLayers": options.sample_all.magic_wand, "mode": last.mode}),
+                                            last.selection_baseline,
+                                        )
+                                        .is_ok()
+                                        && let Some(current) = app.last_magic_wand.as_mut()
+                                        && let Some(doc) = app.session.active()
+                                    {
+                                        current.tolerance = options.tolerance;
+                                        current.revision = doc.revision;
+                                        current.view_revision = doc.view_revision;
+                                        current.active_layer = doc.active_layer;
+                                    }
+                                }
                                 widgets::checkbox(ui, &mut app.ui.tool_options.anti_alias, tl!("Anti-alias"));
                                 widgets::checkbox(ui, &mut app.ui.tool_options.contiguous, tl!("Contiguous"));
                                 widgets::checkbox(ui, &mut app.ui.tool_options.sample_all.magic_wand, tl!("Sample All Layers"));

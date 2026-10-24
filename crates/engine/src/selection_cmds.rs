@@ -128,8 +128,9 @@ fn magic_wand(s: &mut Session, p: &Value) -> Result<Value> {
     let region = sel::wand_region(&img, area, (x, y), f(p, "tolerance", 32.0), b(p, "contiguous", true), b(p, "antiAlias", true));
     drop(img);
     let m = mode(p);
+    let baseline = s.magic_wand_selection_baseline.clone().unwrap_or_else(|| s.active().and_then(|st| st.doc.selection.clone()));
     let selected = s.edit("Magic Wand", |doc, _| {
-        doc.selection = sel::combine_region(doc.selection.as_ref(), region.as_ref(), m);
+        doc.selection = sel::combine_region(baseline.as_ref(), region.as_ref(), m);
         Ok(doc.selection.is_some())
     })?;
     Ok(json!({ "selected": selected }))
@@ -933,6 +934,45 @@ mod tests {
         assert_eq!(coverage(&s, 10, 10), 0.0);
         s.execute("select.magicWand", json!({"x": 7, "y": 7, "contiguous": false, "antiAlias": false})).unwrap();
         assert_eq!(coverage(&s, 30, 10), 1.0);
+    }
+
+    #[test]
+    fn magic_wand_tolerance_refresh_recombines_with_original_selection_and_keeps_undo() {
+        let mut s = session();
+        s.execute("select.rect", json!({"x": 25, "y": 5, "width": 10, "height": 10})).unwrap();
+        let baseline = s.active().unwrap().doc.selection.clone();
+
+        s.execute("select.magicWand", json!({"x": 10, "y": 10, "tolerance": 0, "antiAlias": false, "mode": "add"})).unwrap();
+        assert_eq!(coverage(&s, 10, 10), 1.0, "the wand region was added to the existing selection");
+        assert_eq!(coverage(&s, 20, 10), 0.0, "the initial result does not cover the gap");
+
+        s.execute_magic_wand_with_selection_baseline(json!({"x": 10, "y": 10, "tolerance": 255, "antiAlias": false, "mode": "add"}), baseline.clone()).unwrap();
+        assert_eq!(coverage(&s, 20, 10), 1.0, "higher tolerance expands the recomputed result");
+
+        s.execute_magic_wand_with_selection_baseline(json!({"x": 10, "y": 10, "tolerance": 0, "antiAlias": false, "mode": "add"}), baseline).unwrap();
+        assert_eq!(coverage(&s, 10, 10), 1.0);
+        assert_eq!(coverage(&s, 30, 10), 1.0, "the original selection remains selected");
+        assert_eq!(coverage(&s, 20, 10), 0.0, "lower tolerance shrinks back to the original wand result");
+
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(coverage(&s, 20, 10), 1.0, "undo restores the previously displayed tolerance result");
+    }
+
+    #[test]
+    fn magic_wand_subtract_tolerance_refresh_can_restore_baseline_pixels() {
+        let mut s = session();
+        s.execute("select.rect", json!({"x": 25, "y": 5, "width": 10, "height": 10})).unwrap();
+        let baseline = s.active().unwrap().doc.selection.clone();
+        let params = |tolerance| json!({"x": 10, "y": 10, "tolerance": tolerance, "antiAlias": false, "mode": "subtract"});
+
+        s.execute("select.magicWand", params(0)).unwrap();
+        assert_eq!(coverage(&s, 30, 10), 1.0, "the low-tolerance wand region does not overlap the prior selection");
+
+        s.execute_magic_wand_with_selection_baseline(params(255), baseline.clone()).unwrap();
+        assert_eq!(coverage(&s, 30, 10), 0.0, "the broad subtract removes the prior selection");
+
+        s.execute_magic_wand_with_selection_baseline(params(0), baseline).unwrap();
+        assert_eq!(coverage(&s, 30, 10), 1.0, "reducing tolerance restores baseline pixels outside the smaller wand region");
     }
 
     #[test]

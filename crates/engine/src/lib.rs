@@ -475,6 +475,10 @@ pub struct Session {
     pub journal: Vec<(String, Value)>,
     /// Coalescing key of the command being executed.
     coalesce_request: Option<String>,
+    /// Temporary selection input used by the UI when recomputing a Magic Wand drag. The
+    /// command still edits from the current document state (so undo restores the displayed
+    /// result), but combines its new region with the selection from before the original click.
+    magic_wand_selection_baseline: Option<Option<photocraft_raster::Surface>>,
     /// Pixels copied with Edit › Copy / Cut (shared by all documents, like Photoshop).
     pub clipboard: Option<edit_cmds::Clip>,
     /// Layer › Layer Style › Copy Layer Style: the effects and the Blending Options
@@ -695,6 +699,18 @@ impl Session {
             // Not reached: inline dispatch never starts a job. Waiting is still correct.
             jobs::Started::Job(j) => self.wait_job(j),
         }
+    }
+
+    /// Re-run Magic Wand against the selection that existed before its original click.
+    ///
+    /// This is used by the UI's tolerance slider so Add, Subtract and Intersect recompute from
+    /// a stable baseline while the command's history step still starts from the currently shown
+    /// selection. The baseline is scoped to this call and is not serialized or journaled.
+    pub fn execute_magic_wand_with_selection_baseline(&mut self, params: Value, baseline: Option<photocraft_raster::Surface>) -> Result<Value> {
+        let previous = self.magic_wand_selection_baseline.replace(baseline);
+        let result = self.execute("select.magicWand", params);
+        self.magic_wand_selection_baseline = previous;
+        result
     }
 
     /// Offer a finished live stroke to the next command: a `paint.stroke` / `paint.pencil` whose
