@@ -1,7 +1,7 @@
 //! Synthetic Fujifilm RAF files: every sample storage, X-Trans and Bayer
 //! layouts, metadata, and the unsupported variants.
 
-use photocraft_raw::testgen::{RafPacking, RafSpec, XTRANS, mosaic_cfa, scene};
+use photocraft_raw::testgen::{RafPacking, RafSpec, XTRANS, fuji_compressed_is, mosaic_cfa, scene};
 use photocraft_raw::*;
 
 const RGGB: [u8; 4] = [0, 1, 1, 2];
@@ -21,7 +21,7 @@ fn xtrans(packing: RafPacking, bits: u32) -> RafSpec {
 #[test]
 fn every_storage_decodes_exactly() {
     for (packing, bits) in [(RafPacking::U16 { le: true }, 14), (RafPacking::U16 { le: false }, 16), (RafPacking::Lsb12, 12), (RafPacking::Words14, 14)] {
-        let spec = xtrans(packing, bits);
+        let spec = xtrans(packing.clone(), bits);
         let b = spec.build();
         assert_eq!(identify(&b), Some(RawFormat::Raf));
         let s = decode(&b, &Limits::default()).unwrap_or_else(|e| panic!("{packing:?}: {e}"));
@@ -88,7 +88,7 @@ fn bayer_layouts() {
         for (packing, bits) in [(RafPacking::Lsb12, 12), (RafPacking::Words14, 14), (RafPacking::U16 { le: true }, 14)] {
             let white = ((1u32 << bits) - 1) as u16;
             let data = mosaic_cfa(&scene(w, h), w, &cfa, 2, 64, white);
-            let spec = RafSpec { bits, packing, black: vec![64, 64, 64, 64], ..RafSpec::new(w, h, data, cfa.to_vec()) };
+            let spec = RafSpec { bits, packing: packing.clone(), black: vec![64, 64, 64, 64], ..RafSpec::new(w, h, data, cfa.to_vec()) };
             let s = decode(&spec.build(), &Limits::default()).unwrap();
             assert_eq!(s.data, spec.data);
             assert_eq!(s.cfa.as_ref().unwrap().phase(0, 0), cfa, "{packing:?}");
@@ -100,7 +100,12 @@ fn bayer_layouts() {
 
 #[test]
 fn unsupported_variants_report_and_keep_the_preview() {
-    let mut spec = xtrans(RafPacking::Compressed, 14);
+    // A compressed stream at a depth the format does not define: reported, and
+    // the camera's preview kept as the fallback.
+    let mut stream = b"IS\x01\x10\x0d".to_vec();
+    stream.resize(16, 0);
+    let mut spec = xtrans(RafPacking::Compressed { stream }, 14);
+    spec.bits = 13;
     let b = spec.build();
     match decode(&b, &Limits::default()) {
         Err(RawError::Unsupported(m)) => assert!(m.contains("compressed"), "{m}"),
@@ -114,6 +119,69 @@ fn unsupported_variants_report_and_keep_the_preview() {
     match decode(&spec.build(), &Limits::default()) {
         Err(RawError::Unsupported(m)) => assert!(m.contains("FinePix"), "{m}"),
         other => panic!("expected unsupported, got {other:?}"),
+    }
+}
+
+/// A compressed 780×`groups*6` RAF (two 768-column stripes) whose stream encodes
+/// constant zeros, lossless (`quantizers` none) or lossy.
+fn compressed_spec(xtrans: bool, bits: u32, groups: usize, quantizers: Option<&[u8]>) -> RafSpec {
+    let stream = fuji_compressed_is(bits, xtrans, groups, quantizers);
+    let cfa: Vec<u8> = if xtrans { XTRANS.to_vec() } else { RGGB.to_vec() };
+    let mut spec = RafSpec::new(780, groups * 6, vec![0; 780 * groups * 6], cfa);
+    spec.bits = bits;
+    spec.packing = RafPacking::Compressed { stream };
+    spec.mode = if quantizers.is_none() { 2 } else { 3 };
+    spec
+}
+
+#[test]
+fn compressed_lossless_and_lossy_decode_exactly() {
+    for bits in [12u32, 14, 16] {
+        for xtrans in [false, true] {
+            for q in [None, Some([2u8, 0, 5].as_slice())] {
+                let spec = compressed_spec(xtrans, bits, 3, q);
+                let s = decode(&spec.build(), &Limits::default()).unwrap_or_else(|e| panic!("{bits} xtrans={xtrans} {q:?}: {e}"));
+                assert_eq!((s.width, s.height), (780, 18));
+                assert_eq!(s.data, vec![0; 780 * 18]);
+                let c = s.cfa.as_ref().unwrap();
+                assert_eq!((c.width, c.height), if xtrans { (6, 6) } else { (2, 2) });
+                assert_eq!(s.format, RawFormat::Raf);
+            }
+        }
+    }
+}
+
+#[test]
+fn compressed_develops() {
+    let spec = compressed_spec(true, 14, 3, None);
+    let d = develop(&spec.build(), &DevelopOptions::default()).unwrap();
+    assert_eq!((d.width, d.height), (780, 18));
+}
+
+#[test]
+fn compressed_mode_mismatch_is_malformed() {
+    // A lossless stream the container declares as lossy: refused, not guessed.
+    let mut spec = compressed_spec(false, 14, 3, None);
+    spec.mode = 3;
+    let e = decode(&spec.build(), &Limits::default()).unwrap_err();
+    assert!(matches!(&e, RawError::Malformed(m) if m.contains("disagrees")), "{e:?}");
+}
+
+#[test]
+fn corrupt_compressed_never_panics() {
+    let mut s = 0x00C0_FFEEu64;
+    let mut next = || {
+        s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        s >> 33
+    };
+    let base = compressed_spec(true, 14, 3, Some(&[0, 2, 0])).build();
+    for _ in 0..200 {
+        let mut c = base.clone();
+        for _ in 0..1 + next() % 8 {
+            let at = next() as usize % c.len();
+            c[at] = next() as u8;
+        }
+        let _ = decode(&c, &Limits::default());
     }
 }
 

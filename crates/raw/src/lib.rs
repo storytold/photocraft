@@ -33,8 +33,10 @@
 //! lossless-JPEG TIFF/EP raws (NEF, ARW, PEF… when not vendor-compressed),
 //! Nikon compressed NEF (lossless and lossy), Sony compressed ARW (cRAW),
 //! Panasonic RW2 (RawFormat 5 packed and RawFormat 3/4 vendor-compressed),
-//! uncompressed Olympus ORF and uncompressed Fujifilm RAF (Bayer and
-//! X-Trans). Everything else reports [`RawError::Unsupported`].
+//! uncompressed Olympus ORF, uncompressed Fujifilm RAF (Bayer and
+//! X-Trans), and Fujifilm compressed RAF (lossless and lossy, Bayer and
+//! X-Trans; see [`crate::rafc`]). Everything else reports
+//! [`RawError::Unsupported`].
 //!
 //! The crate is standalone (no workspace dependencies), does no I/O, builds for
 //! `wasm32-unknown-unknown` and never panics on hostile input: sizes are
@@ -60,6 +62,7 @@ mod orf;
 mod par;
 mod preview;
 mod raf;
+mod rafc;
 mod rw2;
 mod saturation;
 mod sensor;

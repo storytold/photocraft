@@ -1379,7 +1379,7 @@ pub fn orf(width: usize, height: usize, data: &[u16]) -> Vec<u8> {
 // ---------------------------------------------------------------- Fujifilm RAF
 
 /// How a synthetic RAF stores its samples (see `raf.rs`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RafPacking {
     /// 16-bit containers; little-endian (`II`) or big-endian (`MM`) CFA TIFF.
     U16 { le: bool },
@@ -1387,8 +1387,9 @@ pub enum RafPacking {
     Lsb12,
     /// 14-bit, most significant bit first in little-endian 32-bit words.
     Words14,
-    /// A short `IS…` strip standing in for Fujifilm's compressed data.
-    Compressed,
+    /// Fujifilm's compressed strip: the given `IS…` stream (see
+    /// [`fuji_compressed_is`]).
+    Compressed { stream: Vec<u8> },
 }
 
 /// The X-Trans repeat at the data origin, as observed (row major, 0 = R, 1 = G, 2 = B).
@@ -1422,6 +1423,9 @@ pub struct RafSpec {
     pub orientation: u16,
     /// `false` writes an early-FinePix-style file without the CFA TIFF.
     pub cfa_tiff: bool,
+    /// The header's declared compression at byte 108 (2 lossless, 3 lossy);
+    /// 0 leaves the field zero.
+    pub mode: u32,
 }
 
 impl RafSpec {
@@ -1439,13 +1443,14 @@ impl RafSpec {
             exposure_bias: None,
             orientation: 1,
             cfa_tiff: true,
+            mode: 0,
         }
     }
 
     /// The samples as stored.
     fn strip(&self) -> Vec<u8> {
-        match self.packing {
-            RafPacking::U16 { le } => self.data.iter().flat_map(|v| if le { v.to_le_bytes() } else { v.to_be_bytes() }).collect(),
+        match &self.packing {
+            RafPacking::U16 { le } => self.data.iter().flat_map(|v| if *le { v.to_le_bytes() } else { v.to_be_bytes() }).collect(),
             RafPacking::Lsb12 => {
                 let (mut out, mut acc, mut n) = (Vec::new(), 0u64, 0u32);
                 for &v in &self.data {
@@ -1478,11 +1483,7 @@ impl RafSpec {
                 logical.resize(logical.len().next_multiple_of(4), 0);
                 logical.chunks(4).flat_map(|w| w.iter().rev().copied().collect::<Vec<u8>>()).collect()
             }
-            RafPacking::Compressed => {
-                let mut v = b"IS\x01\x00".to_vec();
-                v.resize(self.width * self.height / 2, 0x5A);
-                v
-            }
+            RafPacking::Compressed { stream } => stream.clone(),
         }
     }
 
@@ -1607,11 +1608,78 @@ impl RafSpec {
         for (at, v) in [(84, p_at), (88, preview.len()), (92, m_at), (96, meta.len()), (100, c_at), (104, region.len())] {
             b[at..at + 4].copy_from_slice(&(v as u32).to_be_bytes());
         }
+        if self.mode != 0 {
+            b[108..112].copy_from_slice(&self.mode.to_be_bytes());
+        }
         b.extend_from_slice(&preview);
         b.extend_from_slice(&meta);
         b.extend_from_slice(&region);
         b
     }
+}
+
+/// Encodes `groups` six-row groups of constant-zero sensor rows as Fujifilm's
+/// striped entropy stream (two 768-column stripes in a 780-column frame): one
+/// "1" bit (no unary prefix) plus `k` zero bits per sample, mirroring the
+/// decoder's state adaptation, so a decode yields all zeros — no camera media
+/// or real encoder involved. `quantizers` (one byte per group) writes the
+/// lossy variant.
+pub fn fuji_compressed_is(bits: u32, xtrans: bool, groups: usize, quantizers: Option<&[u8]>) -> Vec<u8> {
+    let mut main = [[(1u32 << (bits - 6), 1u32); 2]; 3];
+    let mut fine = main;
+    let mut previous = None;
+    let mut stream: Vec<bool> = Vec::new();
+    for group in 0..groups {
+        let q = quantizers.map_or(0, |q| q[group]);
+        if previous != Some(q) {
+            main = [[(1u32 << (bits - 6), 1u32); 2]; 3];
+            previous = Some(q);
+        }
+        for pair in 0..6 {
+            let width = if xtrans { 512 } else { 384 };
+            for even in (0usize..width + 8).step_by(2) {
+                for (parity, column) in [(0, Some(even)), (1, even.checked_sub(7))] {
+                    let Some(column) = column.filter(|&x| x < width) else { continue };
+                    for colour in 0..2 {
+                        if xtrans && (crate::rafc::MASKS[pair][colour] >> (column % 4)) & 1 == 0 {
+                            continue;
+                        }
+                        let (sum, count) = &mut if q == 0 { &mut main } else { &mut fine }[pair % 3][parity];
+                        let k = 32 - (sum.saturating_sub(1) / *count).leading_zeros();
+                        stream.push(true);
+                        stream.extend(std::iter::repeat_n(false, k as usize));
+                        if *count == 64 {
+                            *sum /= 2;
+                            *count /= 2;
+                        }
+                        *count += 1;
+                    }
+                }
+            }
+        }
+    }
+    let stream: Vec<u8> = stream.chunks(8).map(|chunk| chunk.iter().enumerate().fold(0u8, |b, (i, bit)| b | (u8::from(*bit) << (7 - i)))).collect();
+    let count = 2usize;
+    let mut out = b"IS".to_vec();
+    out.extend_from_slice(&[u8::from(quantizers.is_none()), if xtrans { 16 } else { 0 }, bits as u8]);
+    for v in [groups as u16 * 6, (count * 768) as u16, 780, 768] {
+        out.extend_from_slice(&v.to_be_bytes());
+    }
+    out.push(count as u8);
+    out.extend_from_slice(&(groups as u16).to_be_bytes());
+    for _ in 0..count {
+        out.extend_from_slice(&(stream.len() as u32).to_be_bytes());
+    }
+    out.resize(32, 0);
+    if let Some(q) = quantizers {
+        for _ in 0..count {
+            out.extend_from_slice(q);
+            out.resize(out.len() + q.len().div_ceil(16) * 16 - q.len(), 0);
+        }
+    }
+    out.extend_from_slice(&stream);
+    out.extend_from_slice(&stream);
+    out
 }
 
 /// Mosaics linear RGB through any CFA repeat (`cfa`: `cfa_w` colours per
