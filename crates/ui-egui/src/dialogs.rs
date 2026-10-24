@@ -1320,6 +1320,7 @@ pub mod discard_ui;
 pub mod disk_change_prompt;
 pub mod distort_ui;
 pub mod dont_show_again;
+pub mod dpx_options_ui;
 pub mod duplicate_layer_ui;
 pub mod edit_history;
 pub mod equalize_ui;
