@@ -1077,17 +1077,20 @@ fn build() -> Vec<CommandSpec> {
             "Gradient…",
             ["Layer", "New Fill Layer"],
             None,
-            r##"{"from":"#rrggbb","to":"#rrggbb","angle":deg=90,"style":"linear|radial|angle|reflected|diamond","reverse":bool,"path":"work"|saved path name|{…path}? (the active path: becomes the vector mask; else the selection is the layer mask)}"##,
+            r##"{"from":"#rrggbb"=foreground,"to":"#rrggbb"? (none: Foreground to Transparent),"angle":deg=90,"style":"linear|radial|angle|reflected|diamond","reverse":bool,"path":"work"|saved path name|{…path}? (the active path: becomes the vector mask; else the selection is the layer mask)}"##,
             has_doc,
             |s, p| {
                 let a = color_param("layer.newFillLayer.gradient", p, "from", s.tools.foreground)?;
-                let b = color_param("layer.newFillLayer.gradient", p, "to", s.tools.background)?;
+                // Without a `to`, Photoshop's default Foreground to Transparent (#8708): the
+                // `from` colour at both ends, fading out through the transparency stops.
+                let to_transparent = p.get("to").is_none_or(Value::is_null);
+                let b = if to_transparent { a } else { color_param("layer.newFillLayer.gradient", p, "to", s.tools.background)? };
                 let angle = crate::gradient_fill_cmds::angle_param("layer.newFillLayer.gradient", p, 90.0)?;
                 let style = crate::layer_style::gradient_style(p.get("style").and_then(Value::as_str).unwrap_or("linear"));
                 let reverse = p.get("reverse").and_then(Value::as_bool).unwrap_or(false);
                 let default_mask = layer_panel_option(s, "useDefaultMasksOnFillLayers", true);
                 let id = s.edit("New Gradient Fill Layer", |doc, active| {
-                    let fill = Fill::gradient(
+                    let mut fill = Fill::gradient(
                         vec![(0.0, Color::rgba(a[0], a[1], a[2], a[3])), (1.0, Color::rgba(b[0], b[1], b[2], b[3]))],
                         angle,
                         1.0,
@@ -1095,6 +1098,9 @@ fn build() -> Vec<CommandSpec> {
                         reverse,
                     )
                     .in_mode(doc.mode);
+                    if to_transparent && let Fill::Gradient { opacity_stops, .. } = &mut fill {
+                        *opacity_stops = vec![(0.0, 1.0), (1.0, 0.0)];
+                    }
                     let mut l = Layer::new(doc.next_layer_name("Gradient Fill"), LayerContent::Fill(fill));
                     mask_new_layer(doc, &mut l, p, "layer.newFillLayer.gradient", default_mask)?;
                     let id = doc.insert_above(*active, l);

@@ -386,3 +386,22 @@ fn stop_rejects_huge_indices_without_panicking() {
     assert_eq!(midpoints, vec![0.25]);
     assert_eq!(s.active().unwrap().history.past_len(), h + 1);
 }
+
+#[test]
+fn new_gradient_fill_layer_defaults_to_foreground_to_transparent() {
+    // #8708: Photoshop's Layer › New Fill Layer › Gradient… starts from Foreground to
+    // Transparent: the foreground at both ends, its opacity 100% to 0%. A `to` colour keeps a
+    // two-colour gradient.
+    let mut s = session(8, "transparent");
+    s.tools.foreground = [0.2, 0.4, 0.6, 1.0];
+    s.tools.background = [1.0, 1.0, 1.0, 1.0];
+    s.execute("layer.newFillLayer.gradient", json!({})).unwrap();
+    let Fill::Gradient { stops, opacity_stops, .. } = active_fill(&s) else { panic!("not a gradient") };
+    let fg = Color::rgba(0.2, 0.4, 0.6, 1.0);
+    assert_eq!(stops, vec![(0.0, fg), (1.0, fg)]);
+    assert_eq!(opacity_stops, vec![(0.0, 1.0), (1.0, 0.0)]);
+    s.execute("layer.newFillLayer.gradient", json!({"to": "#ff0000"})).unwrap();
+    let Fill::Gradient { stops, opacity_stops, .. } = active_fill(&s) else { panic!("not a gradient") };
+    assert_eq!(stops[1].1, Color::rgba(1.0, 0.0, 0.0, 1.0));
+    assert!(opacity_stops.is_empty());
+}
