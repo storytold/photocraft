@@ -388,8 +388,8 @@ fn resolve_symlink(path: &Path) -> io::Result<PathBuf> {
 pub fn temp_name(file: &str) -> String {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    // Keep the name short: a long file name plus the suffix must stay under NAME_MAX.
-    let stem: String = file.chars().take(64).collect();
+    // Bound UTF-8 bytes, not characters, so the name plus the suffix stays under NAME_MAX.
+    let stem = file.get(..file.floor_char_boundary(64)).unwrap_or_default();
     format!(".{stem}.{}-{n}.pcsave.tmp", std::process::id())
 }
 
