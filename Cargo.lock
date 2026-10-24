@@ -4884,14 +4884,17 @@ dependencies = [
 name = "photocraft-gpu"
 version = "0.15.1"
 dependencies = [
+ "bytemuck",
  "half",
  "log",
+ "photocraft-algo",
  "photocraft-cms",
  "photocraft-color",
  "photocraft-compose",
  "photocraft-doc",
  "photocraft-geom",
  "photocraft-raster",
+ "photocraft-testkit",
  "photocraft-vector",
  "pollster 1.0.1",
  "rayon",
