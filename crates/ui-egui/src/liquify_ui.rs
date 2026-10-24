@@ -9,8 +9,8 @@
 //! OK runs `filter.liquify` with the same strokes and gets the same field.
 
 use egui::{Align2, Color32, FontId, Pos2, Rect as ERect, Sense, Stroke, TextureHandle, pos2, vec2};
-use photocraft_algo::liquify::{LiquifyField, LiquifyStroke, LiquifyTool, ProxyImage, auto_cell};
-use photocraft_doc::{DocId, Document, LayerId};
+use photocraft_algo::liquify::{LiquifyField, LiquifyStroke, LiquifyTool, PreviewBlend, ProxyImage, auto_cell};
+use photocraft_doc::{DocId, Document, LayerContent, LayerId, LayerMask};
 use photocraft_geom::Rect;
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
@@ -168,6 +168,9 @@ pub struct LiquifyDialog {
     lasso: Option<(bool, Vec<[f64; 2]>)>,
     proxy: ProxyImage,
     source: Surface,
+    selection: Option<(Surface, LayerMask)>,
+    proxy_blend: Vec<PreviewBlend>,
+    view_blend: Vec<PreviewBlend>,
     out: Vec<[u8; 4]>,
     tex: Option<TextureHandle>,
     /// Proxy pixels to re-render and upload (x0, y0, x1, y1).
@@ -369,7 +372,7 @@ impl LiquifyDialog {
     /// Re-renders the dirty proxy pixels into `out` (the texture upload happens in `show`).
     fn render_dirty(&mut self) {
         if let Some(r) = self.dirty {
-            self.proxy.render(&self.field, r, &mut self.out);
+            self.proxy.render_blended(&self.field, r, &mut self.out, &self.proxy_blend);
         }
     }
 
@@ -410,6 +413,12 @@ impl LiquifyDialog {
                 return;
             }
             self.view_out.resize(len, [0; 4]);
+            if !try_view_blend(self.selection.as_ref(), bounds, &mut self.view_blend) {
+                self.view_bounds = None;
+                self.view_tex = None;
+                self.view_dirty = None;
+                return;
+            }
             self.view_bounds = Some(bounds);
             self.view_tex = None;
             self.view_dirty = Some(bounds);
@@ -419,7 +428,15 @@ impl LiquifyDialog {
             return;
         }
         let started = crate::gpu_canvas::now_ms();
-        let rendered = ProxyImage::render_full_resolution(&self.source, &self.field, bounds, dirty, &mut self.view_out, &mut self.view_source_scratch);
+        let rendered = ProxyImage::render_full_resolution_blended(
+            &self.source,
+            &self.field,
+            bounds,
+            dirty,
+            &mut self.view_out,
+            &mut self.view_source_scratch,
+            &self.view_blend,
+        );
         if !rendered {
             self.view_bounds = None;
             self.view_tex = None;
@@ -458,7 +475,7 @@ impl LiquifyDialog {
         let (w, h) = (self.proxy.w, self.proxy.h);
         match (&mut self.tex, self.dirty.take()) {
             (None, _) => {
-                self.proxy.render(&self.field, [0, 0, w, h], &mut self.out);
+                self.proxy.render_blended(&self.field, [0, 0, w, h], &mut self.out, &self.proxy_blend);
                 let img = egui::ColorImage::new([w, h], self.out.iter().map(|p| Color32::from_rgba_premultiplied(p[0], p[1], p[2], p[3])).collect());
                 self.tex = Some(ctx.load_texture("liquify-proxy", img, egui::TextureOptions::LINEAR));
             }
@@ -487,6 +504,68 @@ impl LiquifyDialog {
             }
         }
     }
+}
+
+/// Cache original pixels and average coverage at the same resolution as the preview.
+/// Full-resolution selection mixing for a zoomed crop. Reserve before reading pixels and reuse
+/// the previous blend allocation, so rebuilding never keeps two crop-sized blends plus a proxy.
+fn try_view_blend(selection: Option<&(Surface, LayerMask)>, bounds: Rect, out: &mut Vec<PreviewBlend>) -> bool {
+    out.clear();
+    let Some((source, mask)) = selection else { return true };
+    if bounds.is_empty() {
+        return false;
+    }
+    let (width, height) = (bounds.width() as usize, bounds.height() as usize);
+    let Some(len) = width.checked_mul(height).filter(|n| *n <= MAX_VIEW_PREVIEW_PIXELS) else { return false };
+    if out.try_reserve(len).is_err() {
+        return false;
+    }
+    let mut row = Vec::new();
+    if row.try_reserve(width).is_err() {
+        return false;
+    }
+    row.resize(width, [0.0; 4]);
+    for y in bounds.y0..bounds.y1 {
+        source.read_rgba_into(Rect::new(bounds.x0, y, bounds.x1, y + 1), &mut row);
+        for (x, pixel) in row.iter().enumerate() {
+            let alpha = if source.format().alpha { pixel[3] } else { 1.0 };
+            out.push(PreviewBlend { original: [pixel[0] * alpha, pixel[1] * alpha, pixel[2] * alpha, alpha], coverage: mask.value(bounds.x0 + x as i32, y) });
+        }
+    }
+    true
+}
+
+fn preview_blend(selection: Option<&(Surface, LayerMask)>, bounds: Rect, max_side: usize) -> Vec<PreviewBlend> {
+    let Some((original, mask)) = selection else { return Vec::new() };
+    let original = ProxyImage::new(original, bounds, max_side);
+    let (width, scale) = (original.w, original.scale as i32);
+    let mut coverage = Vec::new();
+    let mut row_height = 0;
+    // Read one downsampling strip, not an additional whole RGBA mask proxy. The same box
+    // footprint as the colour proxy preserves fractional selection coverage at fit zoom.
+    original
+        .px
+        .into_iter()
+        .enumerate()
+        .map(|(i, original)| {
+            let (x, y) = (i % width, i / width);
+            if x == 0 {
+                let y0 = bounds.y0 + y as i32 * scale;
+                let y1 = (y0 + scale).min(bounds.y1);
+                row_height = (y1 - y0) as usize;
+                mask.values_into(Rect::new(bounds.x0, y0, bounds.x0 + width as i32 * scale, y1), &mut coverage);
+            }
+            let row_width = width * scale as usize;
+            let mut sum = 0.0;
+            for dy in 0..row_height {
+                for dx in 0..scale as usize {
+                    sum += coverage.get(dy * row_width + x * scale as usize + dx).copied().unwrap_or(0.0);
+                }
+            }
+            let count = row_height * scale as usize;
+            PreviewBlend { original, coverage: if count > 0 { sum / count as f32 } else { 0.0 } }
+        })
+        .collect()
 }
 
 /// Opens the dialog on the active layer.
@@ -520,15 +599,44 @@ fn open_on(
     app: &mut PhotocraftApp,
     ctx: &egui::Context,
     layer: LayerId,
-    surf: Surface,
+    mut surf: Surface,
     strokes: Vec<LiquifyStroke>,
     cell: f64,
     smart_filter: Option<usize>,
 ) -> Result<(), String> {
     let st = app.session.active().ok_or("no document")?;
     let canvas = st.doc.bounds();
+    let selection_mask = || st.doc.selection.as_ref().map(|s| LayerMask { surface: s.clone(), enabled: true, linked: true, density: 1.0, feather: 0.0 });
+    let mut selection = smart_filter.is_none().then(selection_mask).flatten().map(|mask| (surf.clone(), mask));
+    if smart_filter.is_none()
+        && let Some(LayerContent::Smart(sm)) = st.doc.layer(layer).map(|l| &l.content)
+    {
+        // The stored cache already includes the stack mask. Warp the unmasked stack instead,
+        // then mix with the original placed pixels, as the engine does when committing.
+        if let Some(unmasked) = photocraft_engine::smart_cmds::render_below_filter(&st.doc, sm, sm.smart_filters.len()).map_err(|e| e.to_string())? {
+            if sm.filters_enabled {
+                surf = unmasked;
+                selection = match sm.filter_mask.clone().or_else(selection_mask) {
+                    Some(mask) => {
+                        let original = photocraft_engine::smart_cmds::render_below_filter(&st.doc, sm, 0)
+                            .map_err(|e| e.to_string())?
+                            .ok_or("smart object source became unavailable")?;
+                        Some((original, mask))
+                    }
+                    None => None,
+                };
+            } else {
+                // A new filter is recorded but remains invisible while the stack is disabled.
+                selection = Some((
+                    surf.clone(),
+                    LayerMask { surface: Surface::new(photocraft_doc::PixelFormat::GRAY8), enabled: true, linked: true, density: 1.0, feather: 0.0 },
+                ));
+            }
+        }
+    }
     let name = st.doc.layer(layer).map(|l| l.name.clone()).unwrap_or_default();
     let proxy = ProxyImage::new(&surf, canvas, PROXY_SIDE);
+    let proxy_blend = preview_blend(selection.as_ref(), canvas, PROXY_SIDE);
     let out = vec![[0u8; 4]; proxy.w * proxy.h];
     let center = [f64::from(canvas.x0 + canvas.x1) / 2.0, f64::from(canvas.y0 + canvas.y1) / 2.0];
     let mut d = LiquifyDialog {
@@ -544,6 +652,9 @@ fn open_on(
         lasso: None,
         proxy,
         source: surf,
+        selection,
+        proxy_blend,
+        view_blend: Vec::new(),
         out,
         tex: None,
         dirty: None,
@@ -1263,6 +1374,221 @@ mod tests {
     use super::*;
 
     #[test]
+    fn selection_preview_matches_unchanged_commit_5989() {
+        let ctx = egui::Context::default();
+        let mut app = app_with_layer();
+        app.session
+            .edit("select left", |doc, _| {
+                let mut selection = Surface::new(photocraft_doc::PixelFormat::GRAY8);
+                selection.fill_rect(Rect::new(0, 0, 30, 80), &[1.0]);
+                doc.selection = Some(selection);
+                Ok(())
+            })
+            .unwrap();
+        open(&mut app, &ctx).unwrap();
+        let (layer, before, preview_before) = {
+            let d = app.distort.liquify.as_ref().unwrap();
+            (d.layer, d.source.read_region(d.canvas), d.out.clone())
+        };
+        control(&mut app, &json!({"tool": "forwardWarp", "size": 24})).unwrap();
+        for ev in [ToolEvent::Down { x: 80.0, y: 40.0, pressure: 1.0 }, ToolEvent::Move { x: 90.0, y: 40.0, pressure: 1.0 }, ToolEvent::Up { x: 90.0, y: 40.0 }]
+        {
+            pointer(&mut app, ev, egui::Modifiers::NONE);
+        }
+        let preview_changed = app.distort.liquify.as_ref().unwrap().out != preview_before;
+        commit(&mut app).unwrap();
+        let doc = &app.session.active().unwrap().doc;
+        let after = doc.layer(layer).unwrap().surface().unwrap().read_region(doc.bounds());
+        assert_eq!(before, after, "unselected stroke must not change committed pixels");
+        assert!(!preview_changed, "Liquify preview changes unselected pixels although commit preserves them");
+    }
+
+    #[test]
+    fn zoomed_selection_preview_matches_unchanged_commit_5989() {
+        let ctx = egui::Context::default();
+        let mut app = app_with_layer();
+        app.session
+            .edit("select left", |doc, _| {
+                let mut selection = Surface::new(photocraft_doc::PixelFormat::GRAY8);
+                selection.fill_rect(Rect::new(0, 0, 30, 80), &[1.0]);
+                doc.selection = Some(selection);
+                Ok(())
+            })
+            .unwrap();
+        open(&mut app, &ctx).unwrap();
+        let area = ERect::from_min_size(pos2(0.0, 0.0), vec2(60.0, 40.0));
+        let (layer, before, preview_before) = {
+            let d = app.distort.liquify.as_mut().unwrap();
+            d.zoom = 2.0;
+            d.center = [85.0, 40.0];
+            d.update_view_preview(&ctx, area);
+            assert_eq!(d.view_bounds, Some(Rect::new(70, 30, 100, 50)));
+            (d.layer, d.source.read_region(d.canvas), d.view_out.clone())
+        };
+        control(&mut app, &json!({"tool": "forwardWarp", "size": 24})).unwrap();
+        for ev in [ToolEvent::Down { x: 80.0, y: 40.0, pressure: 1.0 }, ToolEvent::Move { x: 90.0, y: 40.0, pressure: 1.0 }, ToolEvent::Up { x: 90.0, y: 40.0 }]
+        {
+            pointer(&mut app, ev, egui::Modifiers::NONE);
+        }
+        let preview_changed = {
+            let d = app.distort.liquify.as_mut().unwrap();
+            d.update_view_preview(&ctx, area);
+            d.view_out != preview_before
+        };
+        commit(&mut app).unwrap();
+        let doc = &app.session.active().unwrap().doc;
+        let after = doc.layer(layer).unwrap().surface().unwrap().read_region(doc.bounds());
+        assert_eq!(before, after, "unselected stroke must not change committed pixels");
+        assert!(!preview_changed, "Zoomed Liquify preview changes unselected pixels although commit preserves them");
+    }
+
+    #[test]
+    fn smart_selection_preview_follows_existing_mask_and_stack_enablement_5989() {
+        for mode in 0..4 {
+            let ctx = egui::Context::default();
+            let mut app = app_with_layer();
+            app.session.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+            app.session
+                .edit("mask setup", |doc, active| {
+                    let mut left = Surface::new(photocraft_doc::PixelFormat::GRAY8);
+                    left.fill_rect(Rect::new(0, 0, 30, 80), &[1.0]);
+                    let mut right = Surface::new(photocraft_doc::PixelFormat::GRAY8);
+                    right.fill_rect(Rect::new(60, 0, 120, 80), &[1.0]);
+                    doc.selection = Some(if mode == 1 || mode == 2 { right } else { left.clone() });
+                    if let LayerContent::Smart(sm) = &mut doc.layer_mut(active.unwrap()).unwrap().content {
+                        if mode == 1 || mode == 3 {
+                            sm.filter_mask = Some(LayerMask { surface: left, enabled: mode != 3, linked: true, density: 1.0, feather: 0.0 });
+                        }
+                        sm.filters_enabled = mode != 2;
+                    }
+                    Ok(())
+                })
+                .unwrap();
+            let (_, before, _) = crate::distort_ui::active_pixels(&app).unwrap();
+            open(&mut app, &ctx).unwrap();
+            let preview_before = app.distort.liquify.as_ref().unwrap().out.clone();
+            control(&mut app, &json!({"tool": "forwardWarp", "size": 24})).unwrap();
+            for ev in
+                [ToolEvent::Down { x: 80.0, y: 40.0, pressure: 1.0 }, ToolEvent::Move { x: 90.0, y: 40.0, pressure: 1.0 }, ToolEvent::Up { x: 90.0, y: 40.0 }]
+            {
+                pointer(&mut app, ev, egui::Modifiers::NONE);
+            }
+            let preview_after = app.distort.liquify.as_ref().unwrap().out.clone();
+            assert_eq!(preview_after != preview_before, mode == 3, "preview mode {mode}");
+            control(&mut app, &json!({"undo": true})).unwrap();
+            assert_eq!(app.distort.liquify.as_ref().unwrap().out, preview_before, "undo mode {mode}");
+            control(&mut app, &json!({"redo": true})).unwrap();
+            assert_eq!(app.distort.liquify.as_ref().unwrap().out, preview_after, "redo mode {mode}");
+            commit(&mut app).unwrap();
+            let (_, after, _) = crate::distort_ui::active_pixels(&app).unwrap();
+            let canvas = app.session.active().unwrap().doc.bounds();
+            assert_eq!(before.read_region(canvas) != after.read_region(canvas), mode == 3, "commit mode {mode}");
+        }
+    }
+
+    #[test]
+    fn feathered_translucent_selection_preview_matches_commit_5989() {
+        for depth in [8, 16, 32] {
+            let ctx = egui::Context::default();
+            let mut app = app_with_layer_at_depth(depth);
+            app.session
+                .edit("smooth translucent pixels", |doc, active| {
+                    let s = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+                    for y in 0..80 {
+                        for x in 0..120 {
+                            s.write_pixel(x, y, &[x as f32 / 120.0, y as f32 / 80.0, 0.3, 0.5]);
+                        }
+                    }
+                    Ok(())
+                })
+                .unwrap();
+            app.session.execute("select.rect", json!({"x": 0, "y": 0, "width": 65, "height": 80})).unwrap();
+            app.session.execute("select.modify.feather", json!({"radius": 4})).unwrap();
+            let selection = app.session.active().unwrap().doc.selection.as_ref().unwrap();
+            let coverage = |x| {
+                let mut pixel = [0.0];
+                selection.read_pixel(x, 40, &mut pixel);
+                pixel[0]
+            };
+            let edge = coverage(64);
+            assert!(edge > 0.0 && edge < 1.0, "actual feathered edge: {edge}");
+            assert!(coverage(50) > edge);
+            assert!(coverage(80) < edge);
+            open(&mut app, &ctx).unwrap();
+            let before = app.distort.liquify.as_ref().unwrap().out.clone();
+            control(&mut app, &json!({"tool": "forwardWarp", "size": 24})).unwrap();
+            for ev in
+                [ToolEvent::Down { x: 60.0, y: 40.0, pressure: 1.0 }, ToolEvent::Move { x: 70.0, y: 40.0, pressure: 1.0 }, ToolEvent::Up { x: 70.0, y: 40.0 }]
+            {
+                pointer(&mut app, ev, egui::Modifiers::NONE);
+            }
+            let preview = app.distort.liquify.as_ref().unwrap().out.clone();
+            assert_ne!(before, preview, "fractional selection must still show the warp");
+            commit(&mut app).unwrap();
+            let (_, committed, _) = crate::distort_ui::active_pixels(&app).unwrap();
+            let expected = ProxyImage::new(&committed, Rect::new(0, 0, 120, 80), PROXY_SIDE);
+            for (p, expected) in preview.iter().zip(expected.px) {
+                for c in 0..4 {
+                    let expected = (expected[c].clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+                    // Commit uses bicubic sampling and the layer depth; the preview is bilinear RGBA8.
+                    assert!(p[c].abs_diff(expected) <= 2, "preview {p:?}, committed channel {c}: {expected}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn preview_mask_downsampling_preserves_partial_coverage_and_density_5989() {
+        let bounds = Rect::new(0, 0, 4, 2);
+        let mut original = Surface::new(photocraft_doc::PixelFormat::RGBA8);
+        original.fill_rect(bounds, &[1.0, 0.0, 0.0, 0.5]);
+        let mut surface = Surface::new(photocraft_doc::PixelFormat::GRAY8);
+        surface.fill_rect(Rect::new(0, 0, 1, 2), &[1.0]);
+        let mut selected = (original, LayerMask { surface, enabled: true, linked: true, density: 1.0, feather: 0.0 });
+        let blend = preview_blend(Some(&selected), bounds, 2);
+        assert_eq!(blend.len(), 2);
+        assert_eq!(blend[0].coverage, 0.5);
+        assert_eq!(blend[1].coverage, 0.0);
+        assert_eq!(blend[0].original[0], blend[0].original[3], "red remains premultiplied");
+        selected.1.density = 0.5;
+        let blend = preview_blend(Some(&selected), bounds, 2);
+        assert_eq!(blend[0].coverage, 0.75);
+        assert_eq!(blend[1].coverage, 0.5);
+        selected.1.enabled = false;
+        assert!(preview_blend(Some(&selected), bounds, 2).iter().all(|p| p.coverage == 1.0));
+        assert!(preview_blend(None, bounds, 2).is_empty());
+    }
+
+    #[test]
+    fn zoomed_blend_reuses_storage_and_matches_full_resolution_reference() {
+        let bounds = Rect::new(-3, 5, 7, 9);
+        let mut original = Surface::new(photocraft_doc::PixelFormat::RGBA8);
+        original.fill_rect(bounds, &[0.8, 0.4, 0.2, 0.5]);
+        let mut surface = Surface::new(photocraft_doc::PixelFormat::GRAY8);
+        surface.fill_rect(Rect::new(-3, 5, 2, 9), &[1.0]);
+        let mut selected = (original, LayerMask { surface, enabled: true, linked: true, density: 0.5, feather: 0.0 });
+        let mut out = Vec::new();
+        for enabled in [true, false] {
+            selected.1.enabled = enabled;
+            assert!(try_view_blend(Some(&selected), bounds, &mut out));
+            let expected = preview_blend(Some(&selected), bounds, usize::MAX);
+            assert_eq!(out.len(), 40);
+            for (got, want) in out.iter().zip(expected) {
+                assert_eq!(got.original, want.original);
+                assert_eq!(got.coverage, want.coverage);
+            }
+        }
+        let allocation = out.as_ptr();
+        assert!(try_view_blend(Some(&selected), Rect::new(-2, 6, 4, 8), &mut out));
+        assert_eq!(out.len(), 12);
+        assert_eq!(out.as_ptr(), allocation, "panning reuses the crop blend allocation");
+        assert!(!try_view_blend(Some(&selected), Rect::new(0, 0, i32::MAX, i32::MAX), &mut out));
+        assert!(out.is_empty(), "refused crops leave no stale blend entries");
+        assert!(try_view_blend(None, bounds, &mut out));
+        assert!(out.is_empty(), "no selection uses the unblended renderer");
+    }
+
+    #[test]
     fn the_brush_outline_follows_the_pointer_except_while_resizing() {
         let (hover, anchor) = (pos2(30.0, 40.0), pos2(10.0, 20.0));
         assert_eq!(brush_circle_at(None, Some(hover)), Some(hover));
@@ -1284,8 +1610,12 @@ mod tests {
     }
 
     fn app_with_layer() -> PhotocraftApp {
+        app_with_layer_at_depth(8)
+    }
+
+    fn app_with_layer_at_depth(depth: u32) -> PhotocraftApp {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
-        app.session.execute("file.new", json!({"width": 120, "height": 80, "depth": 8})).unwrap();
+        app.session.execute("file.new", json!({"width": 120, "height": 80, "depth": depth})).unwrap();
         app.session.execute("layer.new.layer", json!({})).unwrap();
         app.session
             .edit("paint", |doc, active| {
