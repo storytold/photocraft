@@ -362,6 +362,41 @@ fn show_transformation_values_off_hides_the_free_transform_readout() {
     }
 }
 
+/// #8675: the Move tool's ΔX/ΔY readout (#5727) is drawn like the other drags', with
+/// Preferences › Tools › Show Transformation Values on, and hidden when it is off.
+#[test]
+fn show_transformation_values_off_hides_the_move_drag_readout() {
+    for shown in [false, true] {
+        let mut h = harness(Tool::Move);
+        let app = h.state_mut();
+        app.ui.extras.snap = false;
+        app.ui.view.show.smart_guides = false;
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.run("select.rect", json!({"x": 40, "y": 40, "width": 20, "height": 20})).unwrap();
+        app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+        app.run("select.deselect", json!({})).unwrap();
+        app.run("prefs.set", json!({"path": "tools.showTransformationValues", "value": shown})).unwrap();
+        h.run_steps(2);
+        // With Auto-Select (on by default) the press must land on the layer's pixels, or an empty
+        // spot would start the layer marquee instead of a move.
+        press_at(&mut h, 50.0, 50.0, Modifiers::NONE);
+        move_to(&mut h, 70.0, 44.0);
+        let labels = h.query_by_label("ΔX:").is_some() && h.query_by_label("ΔY:").is_some();
+        assert_eq!(labels, shown, "shown: {shown}");
+        if shown {
+            assert!(h.query_all_by_label_contains(" px").count() == 2, "ΔX and ΔY show whole pixels");
+        }
+        release_at(&mut h, 70.0, 44.0, Modifiers::NONE);
+        let st = h.state().session.active().unwrap();
+        let moved = st.doc.layer(*st.selected_layers().first().unwrap()).unwrap().surface().unwrap().content_bounds();
+        assert_eq!(moved, Rect::new(60, 34, 80, 54), "the drag moved the layer +20, −6");
+        assert!(
+            st.doc.layer(*st.selected_layers().first().unwrap()).unwrap().surface().unwrap().sample_channel(70, 44, 0) > 0.99,
+            "a moved pixel sits at (70, 44)"
+        );
+    }
+}
+
 #[test]
 fn alt_draws_from_the_centre_and_shift_alt_a_centred_circle() {
     let mut h = harness(Tool::RectMarquee);
