@@ -50,3 +50,21 @@ General bugs without a security impact should use the project's normal issue and
 ## Current limitations
 
 TCP control connections require a 256-bit bearer token before method dispatch and enforce request-line, active-connection, and batch-step limits. Authentication does not provide per-client or per-tool capabilities, so an authenticated client still receives the exposed control surface. Remote filesystem methods use separately configured read and write workspace roots, and engine commands that still use ambient filesystem paths are denied at the automation boundary. Automation can change individual safe preferences, but whole-preferences updates and filesystem-bearing preference sections are refused; applying the Preferences dialog through automation is also refused. JSON-depth, render, document-memory, command-duration, client-identity, encryption, and audit controls are not yet implemented. See the [security documentation](book/src/security/overview.md) for the source-backed status and hardening roadmap.
+
+## Repository security scorecard
+
+The [OpenSSF Scorecard workflow](.github/workflows/scorecard.yml) scans the upstream
+`main` branch every Monday at 06:23 UTC, and when its workflow changes. It publishes
+the repository's security-practice results to the
+[Scorecard viewer](https://scorecard.dev/viewer/?uri=github.com/storytold/photocraft),
+GitHub code scanning, and a seven-day `scorecard-sarif` Actions artifact. The first
+published result becomes available after the workflow is merged and runs upstream.
+Forks and pull requests do not run this publishing job.
+
+The workflow uses the default read-only repository token for analysis; only the
+analysis job can request an OIDC identity and upload security results. It does not
+need a personal access token. GitHub repository rules are readable with this token;
+classic branch-protection settings may be unavailable, so an incomplete check is
+not evidence that a protection is absent. Review individual findings and the run
+logs before interpreting the score. Scorecard measures repository practices; it
+does not replace vulnerability reports, code review, or application testing.
