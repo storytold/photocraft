@@ -128,17 +128,20 @@ pub fn disabled(app: &crate::PhotocraftApp, id: &str) -> bool {
     }
     // Editable type can be scaled, rotated and skewed but not distorted (#2630): Photoshop greys
     // Distort and Perspective until the type is rasterized, and the split warps (Warp on type
-    // offers only the warp styles, #3004). A targeted unlinked mask or channel of the type layer
-    // is pixels, and can be.
-    if matches!(
-        id,
-        "edit.transform.distort"
-            | "edit.transform.perspective"
-            | "edit.transform.splitWarpCrosswise"
-            | "edit.transform.splitWarpHorizontally"
-            | "edit.transform.splitWarpVertically"
-            | "edit.transform.removeWarpSplit"
-    ) && active.is_some_and(|l| matches!(l.content, LayerContent::Text(_)))
+    // offers only the warp styles, #3004). Preferences › Type › Free Transforms on Type (off by
+    // default; beyond Photoshop, engine `type_distort.rs`) keeps them on the live type. A targeted
+    // unlinked mask or channel of the type layer is pixels, and can be.
+    if !app.session.prefs().type_.free_transforms_on_type
+        && matches!(
+            id,
+            "edit.transform.distort"
+                | "edit.transform.perspective"
+                | "edit.transform.splitWarpCrosswise"
+                | "edit.transform.splitWarpHorizontally"
+                | "edit.transform.splitWarpVertically"
+                | "edit.transform.removeWarpSplit"
+        )
+        && active.is_some_and(|l| matches!(l.content, LayerContent::Text(_)))
         && photocraft_engine::transform_cmds::lone_target(&st.doc, st.active_layer, &serde_json::json!({ "target": crate::canvas::paint_target(app) }))
             .is_ok_and(|t| t.is_none())
     {

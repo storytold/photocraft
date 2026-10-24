@@ -1978,6 +1978,7 @@
 	Memory usage mb	メモリ使用量 (MB)
 	Low resolution previews	低解像度プレビュー
 	Missing glyph protection	字形欠落の保護
+	Free transforms on type	文字への自由変形
 	Modern	モダン
 	Nearest neighbor	ニアレストネイバー
 	Never	しない

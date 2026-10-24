@@ -1650,6 +1650,10 @@ pub(crate) fn psd_size_exceeds_limit(doc: &Document) -> bool {
 
 /// [`document_to_psd_with`] for a document embedded `depth` smart objects deep.
 fn document_to_psd_nested(doc: &Document, opts: &PsdExportOptions, depth: u32, ctl: &Interrupt) -> (PsdFile, Vec<String>) {
+    // Type with a free warp or distort is written as a Smart Object holding the type.
+    let mut type_warnings = Vec::new();
+    let smart_type = crate::type_smart::with_smart_type(doc, &mut type_warnings);
+    let doc = smart_type.as_ref().unwrap_or(doc);
     if doc.mode == ColorMode::Multichannel {
         return crate::multichannel_map::document_to_psd(doc, opts.force_psb);
     }
@@ -1693,6 +1697,7 @@ fn document_to_psd_nested(doc: &Document, opts: &PsdExportOptions, depth: u32, c
         patterns: doc.patterns.clone(),
         background: psd_background(doc),
     };
+    ex.warnings.extend(type_warnings);
     if big && !opts.force_psb {
         ex.warnings.push("document exceeds 30000 px; written as PSB".into());
     } else if size_exceeds_limit && !opts.force_psb {

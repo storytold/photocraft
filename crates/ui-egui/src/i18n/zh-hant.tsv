@@ -1991,6 +1991,7 @@
 	Memory usage mb	記憶體使用量 (MB)
 	Low resolution previews	低解析度預覽
 	Missing glyph protection	缺少字符保護
+	Free transforms on type	文字上的自由變形
 	Modern	現代
 	Nearest neighbor	最接近像素
 	Never	永不

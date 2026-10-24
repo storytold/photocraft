@@ -1965,6 +1965,7 @@
 	Memory usage mb	메모리 사용량(MB)
 	Low resolution previews	저해상도 미리 보기
 	Missing glyph protection	누락된 글리프 보호
+	Free transforms on type	문자에 자유 변형
 	Modern	현대적
 	Nearest neighbor	최근접 이웃
 	Never	안 함

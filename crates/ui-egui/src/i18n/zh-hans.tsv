@@ -2019,6 +2019,7 @@
 	Memory usage mb	内存使用量 (MB)
 	Low resolution previews	低分辨率预览
 	Missing glyph protection	缺失字形保护
+	Free transforms on type	文字上的自由变换
 	Modern	现代
 	Nearest neighbor	邻近
 	Never	从不

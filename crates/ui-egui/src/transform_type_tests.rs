@@ -4,6 +4,8 @@
 
 use serde_json::json;
 
+use photocraft_doc::LayerContent;
+
 use crate::PhotocraftApp;
 use crate::state::Tool;
 
@@ -115,5 +117,45 @@ fn distort_and_perspective_corner_drags_scale_editable_type() {
         assert_eq!(app.ui.status, "", "{mods:?}");
         let st = app.session.active().unwrap();
         assert!(matches!(st.doc.layer(st.active_layer.unwrap()).unwrap().content, photocraft_doc::LayerContent::Text(_)), "still editable type");
+    }
+}
+
+/// Beyond Photoshop, opt-in (Preferences › Type › Free Transforms on Type, #3321): Distort and
+/// Perspective stay available on editable type. The default is the greyed rule above.
+#[test]
+fn opted_in_type_layers_offer_distort_and_perspective() {
+    let mut app = app();
+    assert!(!app.session.prefs().type_.free_transforms_on_type, "off by default");
+    assert!(!crate::menus::is_enabled(&app, "edit.transform.distort"));
+    app.run("prefs.set", json!({"path": "type.freeTransformsOnType", "value": true})).unwrap();
+    for id in ["edit.transform.distort", "edit.transform.perspective", "edit.transform.splitWarpCrosswise"] {
+        assert!(crate::menus::is_enabled(&app, id), "{id}");
+    }
+}
+
+/// Opted in, ⌘-drag (distort) and ⌘⌥⇧-drag (perspective) of a corner on editable type distort the
+/// box: it leaves the parallelogram and the commit keeps the type live.
+#[test]
+fn opted_in_corner_drags_distort_editable_type() {
+    use crate::canvas::ToolEvent;
+    let ctx = egui::Context::default();
+    let cmd = egui::Modifiers::COMMAND;
+    for mods in [cmd, cmd | egui::Modifiers::ALT | egui::Modifiers::SHIFT] {
+        let mut app = app();
+        app.run("prefs.set", json!({"path": "type.freeTransformsOnType", "value": true})).unwrap();
+        crate::menus::invoke(&mut app, &ctx, "edit.freeTransform", json!({})).unwrap();
+        let q0 = app.ui.transform.as_ref().unwrap().quad;
+        let [x, y] = q0[1];
+        crate::transform_tool::pointer(&mut app, ToolEvent::Down { x, y, pressure: 1.0 }, mods);
+        crate::transform_tool::pointer(&mut app, ToolEvent::Move { x: x + 15.0, y: y - 10.0, pressure: 1.0 }, mods);
+        crate::transform_tool::pointer(&mut app, ToolEvent::Up { x: x + 15.0, y: y - 10.0 }, mods);
+        let q = app.ui.transform.as_ref().unwrap().quad;
+        let skew = (0..2).map(|k| (q[0][k] + q[2][k] - q[1][k] - q[3][k]).abs()).fold(0.0, f64::max);
+        assert!(skew > 1.0, "the box is distorted, not a parallelogram ({mods:?}): {q:?}");
+        crate::transform_tool::commit(&mut app);
+        assert!(!app.ui.status_error, "{mods:?}: {}", app.ui.status);
+        let st = app.session.active().unwrap();
+        let LayerContent::Text(t) = &st.doc.layer(st.active_layer.unwrap()).unwrap().content else { panic!("still editable type") };
+        assert_eq!(t.distortions.len(), 1, "{mods:?}");
     }
 }

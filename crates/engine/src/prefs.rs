@@ -845,6 +845,10 @@ pub struct TypePrefs {
     pub font_preview: FontPreview,
     pub fill_new_type_layers_with_placeholder: bool,
     pub recent_fonts: u32,
+    /// Beyond Photoshop, off by default: keep free mesh warps, split warps, Distort and Perspective
+    /// on live type (`type_distort.rs`). Off, type behaves as in Photoshop: only the Warp Text
+    /// styles apply, and Distort and Perspective need rasterized type.
+    pub free_transforms_on_type: bool,
 }
 
 impl Default for TypePrefs {
@@ -858,6 +862,7 @@ impl Default for TypePrefs {
             font_preview: FontPreview::Medium,
             fill_new_type_layers_with_placeholder: true,
             recent_fonts: 10,
+            free_transforms_on_type: false,
         }
     }
 }
