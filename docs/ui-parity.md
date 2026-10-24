@@ -239,13 +239,16 @@ Paragraph; the rest open as in-app floating windows.
 | Smart filter rows: click selects, drag onto another smart object moves, ⌥-drag copies, drag onto Delete removes; with a row selected, the Delete button and the ⌫/Delete key remove that filter, not the smart object | done | `smart_ui.rs`, `layer.smartFilter.transfer` (#4271), `smart_ui::keys` (#4751) |
 | Layers panel: Clip Thumbnails to Layer Bounds (panel menu, `interface.clipThumbnailsToLayerBounds`) | done (2026-10-12) | `layer_thumb_bounds_tests.rs`; #4281. Thumbnail size and the Panel Options dialog to come |
 | Smart filter rows: drag up or down the stack to reorder (a line marks the drop; the bottom filter is applied first) | done | `smart_ui.rs` `reorder_drop`, `layer.smartFilter.move` |
+| Paragraph panel: Roman Hanging Punctuation checkbox (trailing marks hang past the box edge, a centered line ending in an ellipsis keeps its centering); the Paragraph Styles editor carries the attribute too | partial (2026-10-24) | Differs: left and justified box lines keep their trailing marks inside the margin, and the line breaker still counts the marks, so a box can wrap a mark-glued word whole instead of letting the mark hang from the line above (UAX #14 LB13 has no break before `, . : ; …`): leaving the hanging run out of the break measure and the justify path is the next step. Photoshop's list is in (period/comma/quote/apostrophe/hyphen 100%, colon/semicolon/ellipsis/dash 50%, `!` and `?` not in the list); RTL lines, vertical type and area type lines don't hang (vertical is Burasagari's field); marks drop optical kerning and decorations when stepped back onto the line above (`type_tool.rs` type_sections, `type_panels_ui.rs`, `text/layout.rs`, `io/tests/psd_style_sheets.rs` `hanging_punctuation_comes_from_the_paragraph_sheet`) |
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-24 | minor | Roman Hanging Punctuation follow-up review: Photoshop's hang list with weights (period/comma/quote/apostrophe/hyphen 100%, colon/semicolon/ellipsis/dash 50%, `!` and `?` out), a forced break keeps its marks-only row, the kerning style in the merge-back reads the mapped byte, the box slack no longer scales the trimmed advance twice, area type keeps its rows; left/justified trim is still open |
 | 2026-10-22 | minor | Crop default mode: a drag inside an upright box snaps the frame's edges and centre to the document, layers, guides and grid, as a Classic Mode frame's move does (#8580); no percentage changed |
 | 2026-10-21 | minor | Adjustment clipping moved above Properties editors to remain visible in compact docks (#5231); scope, undo/redo and 8/16/32-bit pixel regressions; readiness estimate unchanged |
+| 2026-10-21 | minor | Paragraph panel: Roman Hanging Punctuation done — layout hang + merge-back, panel checkbox, PSD `/Hanging` round trip |
 | 2026-10-19 | minor | A guide being moved or dragged out of a ruler shows an `X:` / `Y:` position readout beside the pointer, from the zero point in the ruler unit (#7680) |
 | 2026-10-17 | minor | The wheel steps value fields: a focused field takes it wherever the pointer is (the canvas and panels don't scroll), an unfocused one only a gesture that starts over it (#5473, #4061); no percentage changed |
 | 2026-10-17 | minor | Object Finder foreground/background discrimination (#6548) |

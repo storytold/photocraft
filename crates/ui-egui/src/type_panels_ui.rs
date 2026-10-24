@@ -445,6 +445,7 @@ fn options_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, paragraph: bool, s
                 (tl!("Indent Right"), "end_indent_pt", "pt"),
                 (tl!("Space Before"), "space_before_pt", "pt"),
                 (tl!("Space After"), "space_after_pt", "pt"),
+                (tl!("Roman Hanging Punctuation"), "hanging", "bool"),
                 // Hyphenate is stored and round-trips to PSD, but layout never hyphenates (#6710).
             ];
             for &(label, key, kind) in rows {

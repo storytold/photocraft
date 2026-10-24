@@ -64,7 +64,9 @@ impl Group {
         match self {
             Group::Color => 190.0,
             Group::Properties => 250.0,
-            Group::Character => 270.0,
+            // Roman Hanging Punctuation added a bottom row to the Paragraph tab, so the
+            // group grows by one row to keep its content unscrolled.
+            Group::Character => 306.0,
             Group::Navigator => 210.0,
             Group::History => 200.0,
             Group::Layers => 320.0,

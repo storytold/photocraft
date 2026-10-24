@@ -2217,6 +2217,26 @@ mod multi_layer_formatting {
         assert_eq!(shown(&h, "Swash"), Some(Toggled::True), "shown at the selection start");
     }
 
+    /// The Paragraph panel's Roman Hanging Punctuation checkbox: off by default, toggles the
+    /// paragraph style on the selected type layers (or the layer being typed in).
+    #[test]
+    fn character_panel_hanging_checkbox_toggles_the_paragraph_style() {
+        use egui::accesskit::Toggled;
+        use egui_kittest::kittest::NodeT;
+        let (app, ids) = fixture();
+        let mut h = controls(app, true);
+        let hanging = |h: &Harness<'static, PhotocraftApp>, id: &LayerId| text(h.state(), *id).paragraphs[0].style.hanging;
+        assert_eq!(h.get_by_label("Roman Hanging Punctuation").accesskit_node().toggled(), Some(Toggled::False), "off by default");
+        h.get_by_label("Roman Hanging Punctuation").click();
+        h.run();
+        for id in &ids[..2] {
+            assert!(hanging(&h, id), "the selected layers get the flag");
+        }
+        assert!(!hanging(&h, &ids[2]), "an unselected layer is untouched");
+        h.run();
+        assert_eq!(h.get_by_label("Roman Hanging Punctuation").accesskit_node().toggled(), Some(Toggled::True), "the checkbox shows the flag on");
+    }
+
     /// Type › Anti-Alias and Type › Orientation check the edited (else selected) layer's value.
     #[test]
     fn type_menu_checks_the_current_anti_alias_and_orientation() {

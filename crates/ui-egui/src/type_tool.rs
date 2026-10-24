@@ -2988,6 +2988,14 @@ fn type_sections(app: &mut PhotocraftApp, ui: &mut egui::Ui, character: bool, pa
                 apply(app, ui.ctx(), json!({"spaceAfter": v / u}));
             }
         });
+        // Roman Hanging Punctuation: trailing marks hang past the box edge and don't steer the
+        // alignment (Photoshop keeps this checkbox at the bottom of the Paragraph panel).
+        row(ui, &mut |ui| {
+            let mut hanging = para.hanging;
+            if ui.checkbox(&mut hanging, tl!("Roman Hanging Punctuation")).changed() {
+                apply(app, ui.ctx(), json!({"hanging": hanging}));
+            }
+        });
         // Hyphenate is stored (⌥⇧⌘H / PSD AutoHyphenate) but layout never breaks words (#6710).
         ui.add_space(ROW_GAP);
     }

@@ -192,6 +192,11 @@ pub struct ParagraphStyle {
     pub auto_leading: f32,
     pub direction: TextDirection,
     pub hyphenate: bool,
+    /// Roman Hanging Punctuation (Photoshop's Paragraph panel): trailing punctuation
+    /// (`, . : ; ! ? …` and their fullwidth twins) may step past the box's right edge without
+    /// counting toward the line's width, so a centered line ending in an ellipsis stays
+    /// centered and a period the box can't hold hangs instead of wrapping.
+    pub hanging: bool,
     /// Applied paragraph style (id in [`crate::TextStyles`]); `None` = Basic Paragraph.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub style_sheet: Option<u32>,
@@ -209,6 +214,7 @@ impl Default for ParagraphStyle {
             auto_leading: 1.2,
             direction: TextDirection::Auto,
             hyphenate: false,
+            hanging: false,
             style_sheet: None,
         }
     }

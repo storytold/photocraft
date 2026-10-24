@@ -530,6 +530,9 @@ cameraRaw	Yellow	पीला
 	Delete {count} layers? {names}	{count} लेयर हटाएँ? {names}
 	Delete layer?	लेयर हटाएँ?
 	Don't show again	दोबारा न दिखाएँ
+
+# Paragraph panel
+	Roman Hanging Punctuation	रोमन हैंगिंग विराम चिह्न
 	The document is closed	दस्तावेज़ बंद है
 	The document or selected layers changed. Please request deletion again.	दस्तावेज़ या चुनी हुई लेयर बदल गई हैं। कृपया हटाने का अनुरोध फिर से करें।
 	Missing delete command	हटाने का कमांड नहीं मिला
