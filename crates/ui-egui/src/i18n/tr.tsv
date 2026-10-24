@@ -710,6 +710,7 @@
 	Reset All Tools	Tüm Araçları Sıfırla
 	Reset all tools to their default settings?	Tüm araçlar varsayılan ayarlarına sıfırlansın mı?
 	Lock Workspace	Çalışma Alanını Kilitle
+	Open Panels Floating	Panelleri kayan olarak aç
 	Theme	Tema
 	Pro Theme	Pro Tema
 	Pro Medium Gray Theme	Pro Orta Gri Tema
@@ -4073,6 +4074,12 @@ cameraData	Lens	Lens
 	Increase Brush Size	Fırça boyutunu büyüt
 	Decrease Brush Hardness	Fırça sertliğini azalt
 	Increase Brush Hardness	Fırça sertliğini artır
+	Move to Separate Window	Ayrı Pencereye Taşı
+	Return to PhotoCraft Window	PhotoCraft Penceresine Geri Döndür
+	Dock Panel Group	Panel Grubunu Yerleştir
+	Dock to Icon Bar	Simge Çubuğuna Yerleştir
+	Remove from Icon Bar	Simge Çubuğundan Kaldır
+	Move Icon	Simgeyi Taşı
 	Demosaic	Demozaikleme
 	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Kameranın renk filtresi mozaiğinin nasıl doldurulduğu. Dosya açılırken uygulanır; önizleme dosyanın açıldığı yöntemi gösterir.
 	AHD (adaptive homogeneity)	AHD (uyarlamalı homojenlik)

@@ -35,11 +35,12 @@ pub struct ShellUi {
     pub dialog: Option<(String, Map<String, Value>)>,
 }
 
-const IDS: [&str; 7] = [
+const IDS: [&str; 8] = [
     "window.panel.modifierKeys",
     "window.workspace.newWorkspace",
     "window.workspace.deleteWorkspace",
     "window.workspace.lockWorkspace",
+    "window.workspace.openPanelsFloating",
     "window.workspace.select",
     "view.pixelAspectRatio.custom",
     "view.show.showExtrasOptions",
@@ -86,6 +87,7 @@ pub fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
         i if i.starts_with(SAVED) => Some(saved_name(app, i).is_some_and(|n| n == app.ui.workspace)),
         "window.panel.modifierKeys" => Some(app.ui.shell.modifier_keys),
         "window.workspace.lockWorkspace" => Some(app.session.prefs().workspace_locked),
+        "window.workspace.openPanelsFloating" => Some(!app.session.prefs().window_panels_docked),
         "view.pixelAspectRatio.custom" => Some(app.ui.view.pixel_aspect.starts_with("custom:")),
         _ => None,
     }
@@ -162,6 +164,14 @@ pub fn menu(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<
             app.session.prefs.edit(|p| p.workspace_locked = on);
             Ok(json!({"locked": on}))
         }
+        "window.workspace.openPanelsFloating" => match params.get("on") {
+            Some(value) if !value.is_boolean() => Err("on must be a boolean".into()),
+            on => {
+                let on = on.and_then(Value::as_bool).unwrap_or(app.session.prefs().window_panels_docked);
+                app.session.prefs.edit(|p| p.window_panels_docked = !on);
+                Ok(json!({"floating": on}))
+            }
+        },
         "window.workspace.newWorkspace" if no_params(params) => {
             open(app, "newWorkspace", json!({"name": "", "keyboardShortcuts": false, "menus": false, "toolbar": false}))
         }
@@ -210,7 +220,7 @@ fn new_workspace(app: &mut PhotocraftApp, p: &Value) -> Result<Value, String> {
         return Err(format!("\"{name}\" is a built-in workspace"));
     }
     let prefs = app.session.prefs().clone();
-    let mut ws = json!({"panels": app.ui.panels, "dockTabs": app.ui.dock_tabs, "dock": app.ui.dock, "timelineOpen": app.ui.timeline.open, "docking": app.ui.docking, "dockingHidden": app.ui.docking_hidden, "dockingCollapsed": app.ui.docking_collapsed});
+    let mut ws = json!({"panels": app.ui.panels, "dockTabs": app.ui.dock_tabs, "dock": app.ui.dock, "timelineOpen": app.ui.timeline.open, "docking": app.ui.docking, "dockingHidden": app.ui.docking_hidden, "dockingWindows": app.ui.docking_windows, "railPanels": app.ui.rail_panels, "railGroups": app.ui.rail_groups, "dockingCollapsed": app.ui.docking_collapsed});
     // The icon rail and menu bar flags belong to an embedding app's session, not to a saved
     // layout: a workspace never brings back a window without its menus.
     if let Some(panels) = ws.get_mut("panels").and_then(Value::as_object_mut) {
@@ -659,7 +669,9 @@ mod tests {
         let motion = items.iter().position(|i| i.id == "window.workspace.motion").unwrap();
         let saved: Vec<(&str, Option<bool>, bool)> = items[motion + 1..].iter().take(2).map(|i| (i.label.as_str(), i.checked, i.enabled)).collect();
         assert_eq!(saved, [("Comp", Some(true), true), ("Retouch", Some(false), true)]);
-        assert!(items.iter().filter(|i| !i.id.starts_with(SAVED)).all(|i| i.checked != Some(true) || i.id == "window.workspace.lockWorkspace"));
+        // Besides the current saved workspace, only the menu's two settings can be checked.
+        let settings = ["window.workspace.lockWorkspace", "window.workspace.openPanelsFloating"];
+        assert!(items.iter().filter(|i| !i.id.starts_with(SAVED)).all(|i| i.checked != Some(true) || settings.contains(&i.id.as_str())));
         assert!(crate::menus::is_live(&format!("{SAVED}1")));
         // Switch to a preset, then back through the menu item.
         crate::menus::invoke(&mut app, &ctx, "window.workspace.painting", json!({})).unwrap();

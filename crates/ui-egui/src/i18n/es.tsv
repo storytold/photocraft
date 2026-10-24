@@ -749,6 +749,7 @@
 	Reset All Tools	Restablecer todas las herramientas
 	Reset all tools to their default settings?	¿Restablecer todas las herramientas a sus valores predeterminados?
 	Lock Workspace	Bloquear espacio de trabajo
+	Open Panels Floating	Abrir paneles flotantes
 	Theme	Tema
 	Pro Theme	Tema Pro
 	Pro Medium Gray Theme	Tema Pro (gris medio)
@@ -4306,6 +4307,12 @@ navigator	Zoom	Zoom
 	Increase Brush Size	Aumentar tamaño del pincel
 	Decrease Brush Hardness	Reducir dureza del pincel
 	Increase Brush Hardness	Aumentar dureza del pincel
+	Move to Separate Window	Mover a una ventana independiente
+	Return to PhotoCraft Window	Volver a la ventana de PhotoCraft
+	Dock Panel Group	Acoplar grupo de paneles
+	Dock to Icon Bar	Acoplar a la barra de iconos
+	Remove from Icon Bar	Quitar de la barra de iconos
+	Move Icon	Mover icono
 	Demosaic	Demosaico
 	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Cómo se completa el mosaico del filtro de color de la cámara. Se aplica al abrir el archivo; la vista previa muestra el método con el que se abrió.
 	AHD (adaptive homogeneity)	AHD (homogeneidad adaptativa)

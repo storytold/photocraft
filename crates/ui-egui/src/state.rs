@@ -1542,6 +1542,22 @@ pub struct UiState {
     pub docking: Option<craft_ui::docking::Layout<String>>,
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub docking_hidden: std::collections::BTreeMap<String, craft_ui::docking::Location<String>>,
+    /// Floating groups shown as their own OS windows, by member panel: the window's screen rect
+    /// in points once known (`None` places it over the app window). Kept while the panel is closed
+    /// so reopening it brings the window back; dropped when the panel docks.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub docking_windows: std::collections::BTreeMap<String, Option<[f32; 4]>>,
+    /// Panels docked to the icon bar beside the dock, top to bottom: each is an icon that opens
+    /// the panel in a flyout, like Photoshop's panels collapsed to icons.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rail_panels: Vec<String>,
+    /// The order of the icon bar's built-in group buttons, as rearranged by dragging (empty: the
+    /// default order). Groups missing from it keep their default place after the listed ones.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rail_groups: Vec<crate::dock::Group>,
+    /// The icon-bar panel whose flyout is open.
+    #[serde(skip)]
+    pub rail_open: Option<String>,
     /// Invalidates in-flight gestures when a workspace is replaced.
     #[serde(skip)]
     pub docking_generation: u64,
@@ -1688,6 +1704,10 @@ impl Default for UiState {
             dock: Default::default(),
             docking: None,
             docking_hidden: Default::default(),
+            docking_windows: Default::default(),
+            rail_panels: Vec::new(),
+            rail_groups: Vec::new(),
+            rail_open: None,
             docking_generation: 0,
             docking_collapsed: Vec::new(),
             docking_reveal: None,

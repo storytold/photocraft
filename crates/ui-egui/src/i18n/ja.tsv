@@ -746,6 +746,7 @@
 	Reset All Tools	すべてのツールをリセット
 	Reset all tools to their default settings?	すべてのツールを初期設定に戻しますか？
 	Lock Workspace	ワークスペースをロック
+	Open Panels Floating	パネルをフローティングで開く
 	Theme	テーマ
 	Pro Theme	プロテーマ
 	Pro Medium Gray Theme	プロ (中間グレー) テーマ
@@ -4022,6 +4023,12 @@ curves	Smooth	スムーズ
 	Increase Brush Size	ブラシサイズを大きく
 	Decrease Brush Hardness	ブラシの硬さを下げる
 	Increase Brush Hardness	ブラシの硬さを上げる
+	Move to Separate Window	別ウィンドウに移動
+	Return to PhotoCraft Window	PhotoCraft ウィンドウに戻す
+	Dock Panel Group	パネルグループをドッキング
+	Dock to Icon Bar	アイコンバーにドッキング
+	Remove from Icon Bar	アイコンバーから削除
+	Move Icon	アイコンを移動
 	Demosaic	デモザイク
 	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	カメラのカラーフィルター配列をどのように補間するか。ファイルを開くときに適用されます。プレビューは開いたときの方式で表示されます。
 	AHD (adaptive homogeneity)	AHD（適応的均質性）

@@ -729,6 +729,7 @@
 	Reset All Tools	Reset Semua Alat
 	Reset all tools to their default settings?	Reset semua alat ke pengaturan bawaannya?
 	Lock Workspace	Kunci Ruang Kerja
+	Open Panels Floating	Buka Panel Mengambang
 	Theme	Tema
 	Pro Theme	Tema Pro
 	Pro Medium Gray Theme	Tema Pro Abu-abu Sedang
@@ -3358,6 +3359,12 @@ curves	Smooth	Haluskan
 	Increase Brush Size	Perbesar ukuran kuas
 	Decrease Brush Hardness	Kurangi kekerasan kuas
 	Increase Brush Hardness	Tambah kekerasan kuas
+	Move to Separate Window	Pindahkan ke Jendela Terpisah
+	Return to PhotoCraft Window	Kembalikan ke Jendela PhotoCraft
+	Dock Panel Group	Tambatkan Grup Panel
+	Dock to Icon Bar	Tambatkan ke Bilah Ikon
+	Remove from Icon Bar	Hapus dari Bilah Ikon
+	Move Icon	Pindahkan Ikon
 	Demosaic	Demosaik
 	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Cara mosaik filter warna kamera diisi. Diterapkan saat berkas dibuka; pratinjau menampilkan metode yang dipakai saat dibuka.
 	AHD (adaptive homogeneity)	AHD (homogenitas adaptif)

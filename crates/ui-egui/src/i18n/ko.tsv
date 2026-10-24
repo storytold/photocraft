@@ -722,6 +722,7 @@
 	Reset All Tools	모든 도구 초기화
 	Reset all tools to their default settings?	모든 도구를 기본 설정으로 초기화하시겠습니까?
 	Lock Workspace	작업 영역 잠금
+	Open Panels Floating	패널을 떠 있는 창으로 열기
 	Theme	테마
 	Pro Theme	프로 테마
 	Pro Medium Gray Theme	프로 중간 회색 테마
@@ -3552,6 +3553,12 @@ curves	Smooth	매끄럽게
 	Increase Brush Size	브러시 크기 늘리기
 	Decrease Brush Hardness	브러시 경도 줄이기
 	Increase Brush Hardness	브러시 경도 늘리기
+	Move to Separate Window	별도 창으로 이동
+	Return to PhotoCraft Window	PhotoCraft 창으로 되돌리기
+	Dock Panel Group	패널 그룹 고정
+	Dock to Icon Bar	아이콘 막대에 고정
+	Remove from Icon Bar	아이콘 막대에서 제거
+	Move Icon	아이콘 이동
 	Demosaic	디모자이크
 	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	카메라 컬러 필터 모자이크를 채우는 방법입니다. 파일을 열 때 적용되며, 미리 보기는 파일을 연 방식으로 표시됩니다.
 	AHD (adaptive homogeneity)	AHD (적응형 균질성)

@@ -221,6 +221,8 @@ fn two_up_and_stacked_cells_keep_their_existing_boundaries() {
 #[test]
 fn window_panels_select_dock_tabs() {
     let (mut app, ctx) = app_with(1);
+    // The dock-tab path: with Open Panels Floating on, a hidden panel would float instead.
+    app.session.prefs.edit(|p| p.window_panels_docked = true);
     menu(&mut app, &ctx, "window.panel.info", json!({})).unwrap();
     assert!(app.ui.panels.navigator && app.ui.dock_tabs.navigator == 2);
     assert_eq!(checked(&app, "window.panel.info"), Some(true));

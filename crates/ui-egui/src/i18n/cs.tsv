@@ -752,6 +752,7 @@
 	Reset All Tools	Obnovit všechny nástroje
 	Reset all tools to their default settings?	Obnovit výchozí nastavení všech nástrojů?
 	Lock Workspace	Zamknout pracovní prostor
+	Open Panels Floating	Otevírat panely jako plovoucí
 	Theme	Motiv
 	Pro Theme	Motiv Pro
 	Pro Medium Gray Theme	Motiv Pro (středně šedý)
@@ -3957,6 +3958,12 @@ navigator	Zoom	Zvětšení
 	Increase Brush Size	Zvětšit velikost štětce
 	Decrease Brush Hardness	Snížit tvrdost štětce
 	Increase Brush Hardness	Zvýšit tvrdost štětce
+	Move to Separate Window	Přesunout do samostatného okna
+	Return to PhotoCraft Window	Vrátit do okna PhotoCraft
+	Dock Panel Group	Ukotvit skupinu panelů
+	Dock to Icon Bar	Ukotvit na lištu ikon
+	Remove from Icon Bar	Odebrat z lišty ikon
+	Move Icon	Přesunout ikonu
 	Demosaic	Demozaikování
 	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Jak se doplňuje mozaika barevného filtru fotoaparátu. Použije se při otevření souboru; náhled ukazuje metodu, se kterou byl otevřen.
 	AHD (adaptive homogeneity)	AHD (adaptivní homogenita)

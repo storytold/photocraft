@@ -743,6 +743,7 @@
 	Reset All Tools	Ripristina tutti gli strumenti
 	Reset all tools to their default settings?	Ripristinare tutti gli strumenti alle impostazioni predefinite?
 	Lock Workspace	Blocca area di lavoro
+	Open Panels Floating	Apri pannelli mobili
 	Theme	Tema
 	Pro Theme	Tema Pro
 	Pro Medium Gray Theme	Tema Pro grigio medio
@@ -4466,6 +4467,12 @@ shape	Appearance	Aspetto
 	{path}: the path is not valid Unicode; save under another name.	{path}: il percorso non è Unicode valido; salva con un altro nome.
 	{name} was changed by another app after it was opened or saved here.	{name} è stato modificato da un'altra app dopo essere stato aperto o salvato qui.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Sostituiscilo con questo documento, oppure annulla e usa File › Salva con nome per tenerli entrambi.
+	Move to Separate Window	Sposta in una finestra separata
+	Return to PhotoCraft Window	Torna nella finestra di PhotoCraft
+	Dock Panel Group	Ancora gruppo di pannelli
+	Dock to Icon Bar	Ancora alla barra delle icone
+	Remove from Icon Bar	Rimuovi dalla barra delle icone
+	Move Icon	Sposta icona
 	Demosaic	Demosaicizzazione
 	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Come viene completato il mosaico del filtro colore della fotocamera. Si applica all'apertura del file; l'anteprima mostra il metodo con cui è stato aperto.
 	AHD (adaptive homogeneity)	AHD (omogeneità adattiva)

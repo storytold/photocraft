@@ -1479,6 +1479,7 @@
 	Reset All Tools	Скинути всі інструменти
 	Reset all tools to their default settings?	Скинути всі інструменти до налаштувань за замовчуванням?
 	Lock Workspace	Заблокувати робочий простір
+	Open Panels Floating	Відкривати панелі плаваючими
 	Photography	Фотографія
 	Graphic and web	Графіка та веб
 	Painting	Малювання
@@ -4060,6 +4061,12 @@ curves	Smooth	Згладити
 	This shape layer must be rasterized before proceeding. It will no longer be editable as a shape. Rasterize the shape?	Щоб продовжити, потрібно растеризувати цей шар фігури. Після цього його більше не можна буде редагувати як фігуру. Растеризувати фігуру?
 	This Smart Object must be rasterized before proceeding. Its contents will no longer be editable. Rasterize the Smart Object?	Щоб продовжити, потрібно растеризувати цей смартоб’єкт. Після цього його вміст більше не можна буде редагувати. Растеризувати смартоб’єкт?
 	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	Щоб продовжити, потрібно растеризувати цей шар заливки. Після цього його заливку більше не можна буде редагувати. Растеризувати шар?
+	Move to Separate Window	Перемістити в окреме вікно
+	Return to PhotoCraft Window	Повернути у вікно PhotoCraft
+	Dock Panel Group	Закріпити групу панелей
+	Dock to Icon Bar	Закріпити на панелі значків
+	Remove from Icon Bar	Прибрати з панелі значків
+	Move Icon	Перемістити значок
 	Demosaic	Демозаїк
 	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Як відновлюється мозаїка кольорового фільтра камери. Застосовується під час відкриття файлу; попередній перегляд показує метод, з яким файл було відкрито.
 	AHD (adaptive homogeneity)	AHD (адаптивна однорідність)
