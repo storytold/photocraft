@@ -352,20 +352,78 @@ pub fn marquee_corners(o: &crate::state::ToolOptions, d: &Drag, end: [f64; 2]) -
 /// and readout) exactly as the release commits it, on whole pixel edges as in Photoshop. `None`
 /// while the gesture is still a click (it never left the press point by more than a few screen
 /// pixels at `zoom`, points per document pixel) or the rectangle has no area: a release then
-/// deselects. A one-pixel row or column is a selection (#2391). With the Fixed Size style a
-/// click places the selection, as in Photoshop.
-pub(crate) fn marquee_preview_px(o: &crate::state::ToolOptions, d: &Drag, zoom: f32) -> Option<[f64; 4]> {
+/// deselects. A one-pixel row or column is a selection (#2391). With Fixed Size, a click places the selection.
+pub(crate) fn marquee_preview_px(app: &PhotocraftApp, d: &Drag) -> Option<[f64; 4]> {
+    let o = &app.ui.tool_options;
+    let zoom = app.point_zoom();
     let fixed = o.marquee_style == "fixedSize";
     if !matches!(d.tool, Tool::RectMarquee | Tool::EllipseMarquee) || (!fixed && crate::shape_dialog::is_click(d.start, &d.points, zoom)) {
         return None;
     }
     let last = d.points.last().map_or(d.start, |p| [p[0], p[1]]);
-    let (a, b) = marquee_corners(o, d, last);
+    let (a, b) = if o.marquee_style == "fixedRatio" && o.marquee_width > 0.0 && o.marquee_height > 0.0 {
+        let size = app.session.active()?.doc.size;
+        bounded_ratio_corners(
+            d.start,
+            last,
+            [f64::from(size.width), f64::from(size.height)],
+            [f64::from(o.marquee_width), f64::from(o.marquee_height)],
+            d.marquee_mods().1,
+        )
+    } else {
+        marquee_corners(o, d, last)
+    };
     let mut r = if fixed { fixed_size_px(a, b, o.marquee_width, o.marquee_height) } else { marquee_px(a, b) };
     if marquee_is_square(o, d) {
         r = square_px(r, d.start, last);
+        if o.marquee_style == "fixedRatio" {
+            let size = app.session.active()?.doc.size;
+            let limits = [f64::from(size.width), f64::from(size.height)];
+            // A snapped square may be one pixel larger than the short canvas side. Shifting
+            // cannot fit that span: shorten its dragged edges before moving it inside.
+            let side = (r[2] - r[0]).min(limits[0]).min(limits[1]);
+            for axis in 0..2 {
+                let excess = (r[axis + 2] - r[axis]) - side;
+                if last[axis] < d.start[axis] {
+                    r[axis] += excess;
+                } else {
+                    r[axis + 2] -= excess;
+                }
+            }
+            // Pixel snapping can grow a centred square by one pixel. Move it back inside
+            // without clipping a side and losing the equal width and height.
+            for (axis, limit) in limits.into_iter().enumerate() {
+                let offset = (-r[axis]).max(0.0) - (r[axis + 2] - limit).max(0.0);
+                r[axis] += offset;
+                r[axis + 2] += offset;
+            }
+        }
     }
     (r[2] > r[0] && r[3] > r[1]).then_some(r)
+}
+
+/// Fit both axes together before rasterization: clipping a completed marquee separately on
+/// each axis changes its fixed ratio when a gesture starts or ends outside the image (#6192).
+fn bounded_ratio_corners(start: [f64; 2], end: [f64; 2], size: [f64; 2], ratio: [f64; 2], centred: bool) -> ([f64; 2], [f64; 2]) {
+    let start = [start[0].clamp(0.0, size[0]), start[1].clamp(0.0, size[1])];
+    let delta = [end[0] - start[0], end[1] - start[1]];
+    let direction = delta.map(|v| if v < 0.0 { -1.0 } else { 1.0 });
+    let mut scale = (delta[0].abs() / ratio[0]).max(delta[1].abs() / ratio[1]);
+    for axis in 0..2 {
+        let room = if centred {
+            start[axis].min(size[axis] - start[axis])
+        } else if direction[axis] < 0.0 {
+            start[axis]
+        } else {
+            size[axis] - start[axis]
+        };
+        scale = scale.min(room / ratio[axis]);
+    }
+    let extent = [direction[0] * scale * ratio[0], direction[1] * scale * ratio[1]];
+    // Roundoff at an exact boundary must not become an extra pixel when floor/ceil is applied.
+    let bound = |p: [f64; 2]| [p[0].clamp(0.0, size[0]), p[1].clamp(0.0, size[1])];
+    let end = bound([start[0] + extent[0], start[1] + extent[1]]);
+    if centred { (bound([start[0] - extent[0], start[1] - extent[1]]), end) } else { (start, end) }
 }
 
 /// The pixel rectangle `[x0, y0, x1, y1]` a marquee between two corners selects.
@@ -5568,7 +5626,7 @@ fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &View
         return;
     }
     let last = d.points.last().map(|p| [p[0], p[1]]).unwrap_or(d.start);
-    let marquee = marquee_preview_px(&app.ui.tool_options, d, app.point_zoom());
+    let marquee = marquee_preview_px(app, d);
     if let Some(r) = marquee {
         draw_marquee_readout(app, painter.ctx(), xf.to_screen(last[0] as f32, last[1] as f32), size_readout(app, r));
     }
@@ -6562,7 +6620,7 @@ pub(crate) fn finish_gesture(app: &mut PhotocraftApp, d: Drag) {
         Tool::Brush | Tool::Pencil | Tool::Eraser => commit_brush_stroke(app, &d),
         Tool::RectMarquee | Tool::EllipseMarquee => {
             // Exactly what the drag showed (`marquee_preview_px`); a click deselects.
-            let Some([x0, y0, x1, y1]) = marquee_preview_px(&app.ui.tool_options, &d, app.point_zoom()) else {
+            let Some([x0, y0, x1, y1]) = marquee_preview_px(app, &d) else {
                 if app.session.is_enabled("select.deselect") {
                     let _ = app.run("select.deselect", json!({}));
                 }
@@ -10178,6 +10236,30 @@ mod zoom_animation_tests {
 #[cfg(test)]
 #[path = "canvas_display_memo_tests.rs"]
 mod display_memo_tests;
+
+#[cfg(test)]
+mod fixed_ratio_bounds_tests {
+    use super::bounded_ratio_corners;
+
+    #[test]
+    fn ratio_geometry_fits_edges_and_centred_drags() {
+        for ratio in [[16.0, 9.0], [9.0, 16.0], [1.0, 1.0], [52.548122687311576, 9.0]] {
+            for start in [[-40.0, -30.0], [440.0, 330.0], [200.0, 150.0], [20.25, 30.5], [54.80250739935912, 100.0]] {
+                for end in [[500.0, 400.0], [-100.0, -100.0], [300.0, 50.0]] {
+                    for centred in [false, true] {
+                        let (a, b) = bounded_ratio_corners(start, end, [400.0, 300.0], ratio, centred);
+                        for point in [a, b] {
+                            assert!(point[0] >= 0.0 && point[0] <= 400.0, "{point:?}");
+                            assert!(point[1] >= 0.0 && point[1] <= 300.0, "{point:?}");
+                        }
+                        let error = ((b[0] - a[0]).abs() * ratio[1] - (b[1] - a[1]).abs() * ratio[0]).abs();
+                        assert!(error < 1e-8, "{a:?} -> {b:?} at {ratio:?}");
+                    }
+                }
+            }
+        }
+    }
+}
 
 #[cfg(test)]
 #[path = "canvas_cpu_background_tests.rs"]
