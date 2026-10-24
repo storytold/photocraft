@@ -469,6 +469,10 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
             crate::liquify_ui::keys(app, ctx);
         }
     }
+    // The Filter Gallery's preview takes the zoom keys from the canvas behind it.
+    if app.distort.gallery.is_some() && !ctx.text_edit_focused() {
+        crate::gallery_ui::keys(app, ctx);
+    }
     // The Content-Aware Fill workspace likewise.
     if app.distort.caf.is_some() && !ctx.text_edit_focused() {
         crate::caf_ui::keys(app, ctx);

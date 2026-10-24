@@ -80,6 +80,8 @@ pub struct GalleryDialog {
     background: [f32; 4],
     /// Screen px per document px (0 = fit) and the view centre (document px).
     pub zoom: f32,
+    /// The zoom Fit in View showed last (1 before the first frame).
+    fit: f32,
     center: [f32; 2],
     tex: Option<TextureHandle>,
     /// The key of the preview in `tex` and the document rect it covers.
@@ -365,6 +367,7 @@ fn open_on(
         foreground: colours[0],
         background: colours[1],
         zoom: 0.0,
+        fit: 1.0,
         center: [(canvas.x0 + canvas.x1) as f32 / 2.0, (canvas.y0 + canvas.y1) as f32 / 2.0],
         tex: None,
         shown: None,
@@ -437,9 +440,9 @@ pub fn control(app: &mut PhotocraftApp, ui: &Value) -> Result<Value, String> {
     d.history.settle(&d.effects, false);
     match ui.get("zoom") {
         Some(Value::String(s)) if s == "fit" => d.zoom = 0.0,
-        // The gallery's own preview zoom, not the canvas (`zoom_levels` doesn't apply): its − / +
-        // buttons and menu stop at 400 %, an agent may set up to 3200 %.
-        Some(v) if v.is_number() => d.zoom = (v.as_f64().unwrap_or(1.0) as f32).clamp(0.01, 32.0),
+        // The gallery's own preview zoom, not the canvas: its menu stops at 400 %, the − / +
+        // buttons, ⌘+ and an agent go up to 3200 %.
+        Some(v) if v.is_number() => d.zoom = (v.as_f64().unwrap_or(1.0) as f32).clamp(ZOOM_MIN, ZOOM_MAX),
         _ => {}
     }
     Ok(d.describe())
@@ -462,12 +465,39 @@ impl Drop for PreviewJob {
     }
 }
 
+/// The preview's zoom range (1 = 100 %), as Liquify's.
+const ZOOM_MIN: f32 = 0.01;
+const ZOOM_MAX: f32 = 32.0;
+
+/// Zoom In (`dir` > 0) or Zoom Out along the canvas's ladder, as Liquify's preview does (#7210),
+/// from the zoom on screen: Fit in View steps from the zoom it fits at, so zooming in from a
+/// large image's Fit never shrinks it, and zooming out from a Fit below [`ZOOM_MIN`] stays at Fit.
+fn step_zoom(d: &GalleryDialog, dir: i32) -> f32 {
+    let on_screen = if d.zoom > 0.0 { d.zoom } else { d.fit };
+    let next = crate::zoom_levels::step_in_range(on_screen, dir, ZOOM_MIN, ZOOM_MAX);
+    if d.zoom <= 0.0 && dir < 0 && next >= d.fit { 0.0 } else { next }
+}
+
+/// ⌘+ / ⌘− / ⌘0 / ⌘1 (or their overrides) zoom the preview like its − / + buttons, Fit in View
+/// and 100 %, not the canvas behind the dialog.
+pub fn keys(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    let nav = if app.distort.gallery.is_some() { crate::shortcuts::nav_shortcut(app, ctx) } else { None };
+    let (Some(d), Some(id)) = (app.distort.gallery.as_mut(), nav) else { return };
+    d.zoom = match id {
+        "view.zoomIn" => step_zoom(d, 1),
+        "view.zoomOut" => step_zoom(d, -1),
+        "view.fitOnScreen" => 0.0,
+        _ => 1.0,
+    };
+}
+
 /// The preview's zoom (screen px per document px), the visible document rect and the factor the
 /// texture is reduced by. Fit in View also recentres the view.
 fn view(d: &mut GalleryDialog, area: ERect) -> (f32, Rect, u32) {
     let (cw, ch) = (d.canvas.width().max(1) as f32, d.canvas.height().max(1) as f32);
     let zoom = if d.zoom > 0.0 { d.zoom } else { ((area.width() - 24.0) / cw).min((area.height() - 24.0) / ch).clamp(0.005, 1.0) };
     if d.zoom <= 0.0 {
+        d.fit = zoom;
         d.center = [d.canvas.x0 as f32 + cw / 2.0, d.canvas.y0 as f32 + ch / 2.0];
     }
     let (hw, hh) = (area.width() / zoom / 2.0, area.height() / zoom / 2.0);
@@ -643,16 +673,21 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         // ---- Zoom bar ----
         painter.rect_filled(zoom_bar, 0.0, t.dock);
         let mut zb = ui.new_child(egui::UiBuilder::new().max_rect(zoom_bar.shrink2(vec2(10.0, 3.0))).layout(egui::Layout::left_to_right(egui::Align::Center)));
-        let steps = [0.0f32, 0.125, 0.25, 0.5, 1.0, 2.0, 4.0];
         if crate::icons::button(&mut zb, "minus", 22.0, false, tl!("Zoom out")).clicked() {
-            d.zoom = steps.iter().rev().copied().find(|&s| s > 0.0 && s < d.zoom.max(0.0) - 1e-3).unwrap_or(0.0);
+            d.zoom = step_zoom(d, -1);
         }
         if crate::icons::button(&mut zb, "plus", 22.0, false, tl!("Zoom in")).clicked() {
-            d.zoom = steps.iter().copied().find(|&s| s > d.zoom + 1e-3).unwrap_or(4.0);
+            d.zoom = step_zoom(d, 1);
         }
         let mut z = d.zoom;
-        let opts: Vec<(f32, &str)> =
+        let mut opts: Vec<(f32, &str)> =
             vec![(0.0, tl!("Fit in View")), (0.125, "12.5%"), (0.25, "25%"), (0.5, "50%"), (1.0, "100%"), (2.0, "200%"), (4.0, "400%")];
+        // A zoom off the menu (stepped to 300 %, say) shows as itself, not as "—".
+        let off_menu = format!("{:.0}%", z * 100.0);
+        if !opts.iter().any(|(v, _)| *v == z) {
+            let at = opts.iter().position(|(v, _)| *v > z).unwrap_or(opts.len());
+            opts.insert(at, (z, &off_menu));
+        }
         if widgets::dropdown(&mut zb, "gallery-zoom", &mut z, &opts, 110.0) {
             d.zoom = z;
         }
@@ -877,6 +912,67 @@ mod tests {
             .unwrap();
         app.sync_views();
         app
+    }
+
+    /// ⌘+ / ⌘− step the preview along the canvas's zoom ladder as Liquify's do, from the zoom Fit
+    /// in View shows; ⌘0 fits it and ⌘1 is 100 %, through the canvas's own shortcuts; the canvas
+    /// behind keeps its zoom.
+    #[test]
+    fn zoom_shortcuts_zoom_the_preview_not_the_canvas() {
+        let ctx = egui::Context::default();
+        PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::ALL[0]);
+        // Large enough that Fit in View is well under 100 % in a 1000 × 700 window.
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.session.execute("file.new", json!({"width": 3000, "height": 2000})).unwrap();
+        app.sync_views();
+        open(&mut app).unwrap();
+        let canvas_zoom = app.ui.views.first().map(|v| v.zoom);
+        let mut run = |key: Option<egui::Key>| {
+            let events = key
+                .map(|key| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND })
+                .into_iter()
+                .collect();
+            let screen = ERect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 700.0));
+            let raw = egui::RawInput { screen_rect: Some(screen), events, ..Default::default() };
+            let mut out = ctx.run_ui(raw, |ui| {
+                crate::shortcuts::handle(&mut app, ui.ctx());
+                show(&mut app, ui.ctx());
+            });
+            out.textures_delta.clear();
+            let d = app.distort.gallery.as_ref().unwrap();
+            (d.zoom, d.fit)
+        };
+        let (zoom, fit) = run(None);
+        assert_eq!(zoom, 0.0, "opens at Fit in View");
+        assert!(fit > 0.0 && fit < 0.5, "fits a 3000 px image well under 100 %: {fit}");
+        let step = |z, dir| crate::zoom_levels::step_in_range(z, dir, ZOOM_MIN, ZOOM_MAX);
+        let (zoom, _) = run(Some(egui::Key::Equals));
+        assert_eq!(zoom, step(fit, 1), "⌘= steps up from the fitted zoom, not from the menu's first entry");
+        assert!(zoom > fit);
+        assert_eq!(run(Some(egui::Key::Plus)).0, step(step(fit, 1), 1), "⌘+ typed as Plus too");
+        assert_eq!(run(Some(egui::Key::Num0)).0, 0.0, "Fit in View");
+        assert!(run(Some(egui::Key::Minus)).0 < fit, "⌘− steps down from the fitted zoom");
+        assert_eq!(run(Some(egui::Key::Num1)).0, 1.0);
+        assert_eq!(run(Some(egui::Key::Equals)).0, 2.0);
+        assert_eq!(run(Some(egui::Key::Equals)).0, 3.0, "past the menu's steps, on the canvas's ladder");
+        assert_eq!(run(Some(egui::Key::Minus)).0, 2.0);
+        assert!(app.distort.gallery.is_some(), "the dialog stays open");
+        assert_eq!(app.ui.views.first().map(|v| v.zoom), canvas_zoom, "the canvas behind keeps its zoom");
+    }
+
+    /// A huge image can fit below the 1 % minimum: Zoom Out keeps Fit in View rather than
+    /// enlarging it to 1 %, and Zoom In still steps up from there.
+    #[test]
+    fn zoom_out_from_a_fit_below_the_minimum_stays_at_fit() {
+        let mut app = app();
+        open(&mut app).unwrap();
+        let d = app.distort.gallery.as_mut().unwrap();
+        d.zoom = 0.0;
+        d.fit = 0.005;
+        assert_eq!(step_zoom(d, -1), 0.0, "no smaller zoom than Fit: stays at Fit in View");
+        assert!(step_zoom(d, 1) > d.fit);
+        d.fit = 0.05;
+        assert!(step_zoom(d, -1) > 0.0 && step_zoom(d, -1) < 0.05, "a Fit above the minimum still steps down");
     }
 
     #[test]
