@@ -1320,7 +1320,7 @@ fn choice_label(v: &str) -> String {
         "exr" => "EXR".into(),
         "cm" => "Centimeters".into(),
         "mm" => "Millimeters".into(),
-        "75" | "80" | "85" | "90" | "95" | "100" | "125" | "150" | "175" | "200" | "250" | "300" => format!("{v}%"),
+        "75" | "80" | "85" | "90" | "95" | "100" | "105" | "110" | "115" | "120" | "125" | "150" | "175" | "200" | "250" | "300" => format!("{v}%"),
         "8" => "8 Bits/Channel".into(),
         "16" => "16 Bits/Channel".into(),
         "postScript" => "PostScript (72 points/inch)".into(),
@@ -3575,13 +3575,52 @@ mod tests {
             step(vec2(2560.0, 1440.0), 1.75, 1.75);
             step(vec2(3840.0, 2160.0), 1.0, 1.0);
         }
-        for (pref, expected) in [("200", 2.0), ("125", 1.25), ("150", 1.5), ("100", 1.0), ("95", 0.95), ("90", 0.9), ("85", 0.85), ("80", 0.8), ("auto", 1.5)] {
+        for (pref, expected) in [
+            ("200", 2.0),
+            ("125", 1.25),
+            ("150", 1.5),
+            ("100", 1.0),
+            ("105", 1.05),
+            ("110", 1.1),
+            ("115", 1.15),
+            ("120", 1.2),
+            ("95", 0.95),
+            ("90", 0.9),
+            ("85", 0.85),
+            ("80", 0.8),
+            ("auto", 1.5),
+        ] {
             app.run("prefs.set", json!({"values": {"interface.uiScale": pref}})).unwrap();
             let mut input = egui::RawInput::default();
             input.viewports.get_mut(&egui::ViewportId::ROOT).unwrap().native_pixels_per_point = Some(1.5);
             ctx.run_ui(input.clone(), |ui| tick(&mut app, ui.ctx())).textures_delta.clear();
             ctx.run_ui(input, |ui| tick(&mut app, ui.ctx())).textures_delta.clear();
             assert!((ctx.pixels_per_point() - expected).abs() < 1e-4);
+        }
+    }
+
+    #[test]
+    fn intermediate_ui_scale_choices_can_be_applied_from_preferences() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let (mut app, store) = app_with_store();
+        app.run("prefs.set", json!({"path": "interface.uiScale", "value": "100"})).unwrap();
+        open_preferences(&mut app, "interface");
+        let mut h = Harness::builder().with_size(vec2(1400.0, 1100.0)).build_eframe(move |cc| {
+            PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+            app
+        });
+        h.run_steps(4);
+        let mut current = "100%";
+        for (label, value) in [("105%", "105"), ("110%", "110"), ("115%", "115"), ("120%", "120")] {
+            h.get_by_value(current).click();
+            h.run_steps(2);
+            h.get_by_label(label).click();
+            h.run_steps(2);
+            h.get_by_label("Apply").click();
+            h.run_steps(4);
+            assert_eq!(h.state().session.prefs().interface.ui_scale.name(), value);
+            assert_eq!(stored(&store)["interface"]["uiScale"], value);
+            current = label;
         }
     }
 
