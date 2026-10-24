@@ -171,9 +171,7 @@ fn composite(doc: &Document, opaque: bool) -> Vec<[f32; 4]> {
 
 /// Replace the document's layers by one 8-bit layer holding `px` in `mode`'s storage format.
 fn single_layer(doc: &mut Document, active: &mut Option<LayerId>, mode: ColorMode, px: &[[f32; 4]], name: &str, background: bool) {
-    doc.mode = mode;
-    doc.depth = SampleType::U8;
-    let fmt = doc.pixel_format();
+    let fmt = storage_format(mode);
     // Reuse one format-sized pixel buffer instead of allocating a Vec for every pixel.
     let mut pixel = vec![0.0; fmt.channels()];
     let mut data = Vec::new();
@@ -181,14 +179,28 @@ fn single_layer(doc: &mut Document, active: &mut Option<LayerId>, mode: ColorMod
         photocraft_raster::from_rgba_into(&fmt, *q, &mut pixel);
         data.extend_from_slice(&pixel);
     }
-    let mut l = Layer::raster(name, fmt);
+    let mut surf = Surface::new(fmt);
+    surf.write_region(doc.bounds(), &data);
+    single_layer_surface(doc, active, mode, surf, name, background);
+}
+
+/// The pixel format of an 8-bit document in `mode`.
+fn storage_format(mode: ColorMode) -> PixelFormat {
+    Document::pixel_format_for(mode, SampleType::U8)
+}
+
+/// [`single_layer`] with the layer's pixels already in a surface of [`storage_format`]`(mode)`.
+fn single_layer_surface(doc: &mut Document, active: &mut Option<LayerId>, mode: ColorMode, pixels: Surface, name: &str, background: bool) {
+    doc.mode = mode;
+    doc.depth = SampleType::U8;
+    let mut l = Layer::raster(name, doc.pixel_format());
     if background {
         l.locks.transparency = true;
         l.locks.position = true;
     }
     // A new raster layer always has pixels.
     if let Some(surf) = l.surface_mut() {
-        surf.write_region(doc.bounds(), &data);
+        *surf = pixels;
     }
     *active = Some(l.id);
     doc.layers = vec![l];
@@ -396,9 +408,9 @@ fn color_table(s: &mut Session, p: &Value) -> Result<Value> {
 /// Bitmap's Output resolution range (ppi): what a new document may have.
 const BITMAP_RESOLUTION: std::ops::RangeInclusive<f64> = 1.0..=crate::document_preset_cmds::MAX_RESOLUTION;
 
-/// Bytes per pixel of the Bitmap conversion's full-canvas working buffers at their peak (see
-/// `bitmap`), on top of the document itself.
-const BITMAP_WORK_BYTES_PER_PX: u64 = 40;
+/// Bytes per pixel the Bitmap conversion holds besides the document: its 8-bit gray + alpha
+/// result. The composite is converted in bands of [`photocraft_compose::BAND_PIXELS`] (#8477).
+const BITMAP_WORK_BYTES_PER_PX: u64 = 2;
 
 /// Bitmap's Custom Pattern: a pattern's threshold map (see
 /// [`quantize::custom_pattern_thresholds`]) with its width and height.
@@ -443,12 +455,9 @@ fn bitmap(s: &mut Session, p: &Value) -> Result<Value> {
         };
         (side(ow)?, side(oh)?)
     };
-    if (nw, nh) != (ow, oh) {
-        // Besides the resampled document, the conversion holds an RGBA f32 composite (16 B/px; 32
-        // while it is laid over white), the gray plane (4) and the RGBA f32 output (16) at the new
-        // size: budget them all before allocating, not just the resample.
-        crate::image_cmds::check_working_budget(CMD, &d.doc, nw, nh, BITMAP_WORK_BYTES_PER_PX, ", or a lower Output resolution")?;
-    }
+    // Besides the (resampled) document, the conversion holds its result at the new size: budget
+    // both before allocating.
+    crate::image_cmds::check_working_budget(CMD, &d.doc, nw, nh, BITMAP_WORK_BYTES_PER_PX, ", or a lower Output resolution")?;
     let dpi = output as f32;
     let mut custom = None;
     let method = match str_or(p, "method", "diffusion") {
@@ -484,15 +493,33 @@ fn bitmap(s: &mut Session, p: &Value) -> Result<Value> {
             crate::image_cmds::resample_doc(doc, nw, nh, photocraft_algo::resample::Resample::Bicubic);
         }
         doc.resolution_dpi = dpi;
-        let px = composite(doc, true);
-        let mut gray: Vec<f32> = px.iter().map(|q| photocraft_color::convert::rgb_to_gray([q[0], q[1], q[2]])).collect();
         let w = doc.size.width as usize;
-        match &custom {
-            Some((map, mw, mh)) => quantize::to_bitmap_custom(&mut gray, w, map, *mw, *mh),
-            None => quantize::to_bitmap(&mut gray, w, method),
-        }
-        let out: Vec<[f32; 4]> = gray.iter().map(|g| [*g, *g, *g, 1.0]).collect();
-        single_layer(doc, active, ColorMode::Bitmap, &out, "Background", true);
+        let mut strips = match &custom {
+            Some((map, mw, mh)) => quantize::BitmapStrips::custom(w, map, *mw, *mh),
+            None => quantize::BitmapStrips::new(w, method),
+        };
+        // Band by band, top to bottom: a full-canvas f32 composite of a 30000 px square image is
+        // 14 GB, and allocating it (and its copies) aborted the app (#8477).
+        let fmt = storage_format(ColorMode::Bitmap);
+        let n = fmt.channels();
+        let mut out = Surface::new(fmt);
+        let (mut gray, mut data) = (Vec::new(), Vec::new());
+        let _ = photocraft_compose::render_bands(doc, doc.bounds(), 0, |band| -> std::result::Result<(), std::convert::Infallible> {
+            gray.clear();
+            gray.extend(band.px.iter().map(|q| {
+                // Over white, as the flattened image.
+                let a = q[3];
+                photocraft_color::convert::rgb_to_gray([q[0] * a + (1.0 - a), q[1] * a + (1.0 - a), q[2] * a + (1.0 - a)])
+            }));
+            strips.convert(&mut gray);
+            data.resize(gray.len() * n, 0.0);
+            for (g, px) in gray.iter().zip(data.chunks_exact_mut(n)) {
+                photocraft_raster::from_rgba_into(&fmt, [*g, *g, *g, 1.0], px);
+            }
+            out.write_region(band.rect, &data);
+            Ok(())
+        });
+        single_layer_surface(doc, active, ColorMode::Bitmap, out, "Background", true);
         Ok(())
     })?;
     let size = s.active().ok_or(EngineError::NoDocument)?.doc.size;
