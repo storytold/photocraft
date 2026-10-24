@@ -21,6 +21,10 @@ pub const SPEED_SPACING_MS: f64 = 8.0;
 
 /// Longest pixel-grid segment (in pixels) before falling back to distance spacing.
 const MAX_GRID_STEPS: f64 = 1e7;
+/// Cells filled in between two pixel steps that are not neighbours (a bend between segments). The
+/// gap there is a cell or two; a longer one comes from a segment that fell back to distance
+/// spacing, and is left alone.
+const MAX_GRID_BRIDGE: f64 = 4.0;
 
 /// Densest speed spacing, in pixels between dabs (a slow, long stroke never floods the buffer).
 const MIN_SPEED_STEP: f64 = 0.5;
@@ -242,6 +246,8 @@ pub struct PathWalker {
     /// Pixel-grid stepping for small aliased tips: the dab-centre offset inside a pixel (see
     /// [`PathWalker::pixel_grid`]).
     grid: Option<f64>,
+    /// The last pixel step in pixel-grid mode.
+    grid_last: Option<StrokePoint>,
 }
 
 impl PathWalker {
@@ -258,6 +264,7 @@ impl PathWalker {
             speed: None,
             speed_acc: 0.0,
             grid: None,
+            grid_last: None,
         }
     }
 
@@ -285,6 +292,7 @@ impl PathWalker {
         let (dm, dn) = (pm - am, pn - an);
         let n = (m1 - m0).abs();
         if !(n.is_finite() && dn.is_finite()) || n > MAX_GRID_STEPS || dm == 0.0 {
+            self.grid_last = None;
             return false;
         }
         let dir = (m1 - m0).signum();
@@ -296,7 +304,7 @@ impl PathWalker {
             let mut q = lerp_pt(a, p, t.clamp(0.0, 1.0));
             let cn = grid_cell(an + dn * t, offset);
             (q.x, q.y) = if steep { (cn, c) } else { (c, cn) };
-            self.emit(q, out);
+            self.emit_grid(q, offset, out);
         }
         true
     }
@@ -306,6 +314,29 @@ impl PathWalker {
     pub fn speed_spacing(mut self, interval_ms: f64) -> Self {
         self.speed = Some(interval_ms.max(0.1));
         self
+    }
+
+    /// A pixel step. Each segment steps from its own columns (or rows), so at a bend its first step
+    /// can land two cells from the previous segment's last one: the cells between are filled in, as
+    /// a pixel line, so the stroke stays 8-connected (#9003). Only pixel steps are bridged: speed
+    /// spacing and airbrush build-up leave their gaps on purpose.
+    fn emit_grid(&mut self, point: StrokePoint, offset: f64, out: &mut impl FnMut(StepInput)) {
+        if let Some(last) = self.grid_last {
+            let (lx, ly) = (grid_cell(last.x, offset), grid_cell(last.y, offset));
+            let (dx, dy) = (grid_cell(point.x, offset) - lx, grid_cell(point.y, offset) - ly);
+            let n = dx.abs().max(dy.abs()).round();
+            if n > 1.0 && n <= MAX_GRID_BRIDGE {
+                for i in 1..n as u32 {
+                    let f = f64::from(i) / n;
+                    // Pressure, tilt and time run on across the filled-in cells too.
+                    let mut q = lerp_pt(&last, &point, f);
+                    (q.x, q.y) = (grid_cell(lx + dx * f, offset), grid_cell(ly + dy * f, offset));
+                    self.emit(q, out);
+                }
+            }
+        }
+        self.grid_last = Some(point);
+        self.emit(point, out);
     }
 
     fn emit(&mut self, point: StrokePoint, out: &mut impl FnMut(StepInput)) {
@@ -330,7 +361,10 @@ impl PathWalker {
             }
         }
         if let Some(f) = self.pending_first.take() {
-            self.emit(f, out);
+            match self.grid {
+                Some(offset) => self.emit_grid(f, offset, out),
+                None => self.emit(f, out),
+            }
         }
         if len > 1e-9 {
             // Speed spacing needs the segment's duration; without timestamps (a straight ⇧-click
@@ -353,6 +387,8 @@ impl PathWalker {
                     }
                 }
                 Some(iv) => {
+                    // The stroke moves on without pixel steps: a later pixel segment starts afresh.
+                    self.grid_last = None;
                     self.speed_acc += dt;
                     let max_n = (len / MIN_SPEED_STEP).ceil().max(1.0) as usize;
                     let mut n = 0;
@@ -856,5 +892,67 @@ mod walker_budget_tests {
         let before = steps.get();
         walker.push(StrokePoint::new(end + 0.8, 0.0, 1.0), &one, &mut count);
         assert_eq!(steps.get(), before + 1);
+    }
+}
+
+#[cfg(test)]
+mod grid_bridge_tests {
+    use super::*;
+
+    fn walk(mut walker: PathWalker, pts: &[StrokePoint]) -> Vec<StrokePoint> {
+        let mut steps = Vec::new();
+        let mut out = |s: StepInput| steps.push(s.point);
+        for p in pts {
+            walker.push(*p, &|_: &StrokePoint| 1.0, &mut out);
+        }
+        walker.finish(&mut out);
+        steps
+    }
+
+    fn at(x: f64, y: f64, time: f64) -> StrokePoint {
+        StrokePoint { time, ..StrokePoint::new(x, y, 1.0) }
+    }
+
+    /// #9059 review: only the pixel steps are bridged. Speed spacing (Spacing off) and airbrush
+    /// build-up leave out dabs on purpose, and pixel-grid mode must not put them back.
+    #[test]
+    fn pixel_grid_bridges_only_its_own_steps() {
+        // Fast enough that speed-spaced steps land 3 px apart.
+        let fast = [at(0.0, 0.0, 0.0), at(30.0, 0.0, 80.0), at(30.0, 30.0, 160.0)];
+        let speed = walk(PathWalker::new(None).speed_spacing(SPEED_SPACING_MS), &fast);
+        let speed_grid = walk(PathWalker::new(None).speed_spacing(SPEED_SPACING_MS).pixel_grid(0.5), &fast);
+        assert_eq!(speed_grid.len(), speed.len(), "speed spacing keeps its gaps");
+        // Three airbrush steps on top of the pixel steps, and nothing else.
+        let seg = [at(0.0, 0.0, 0.0), at(10.0, 0.0, 30.0)];
+        let grid = walk(PathWalker::new(None).pixel_grid(0.5), &seg);
+        let airbrush = walk(PathWalker::new(Some(10.0)).pixel_grid(0.5), &seg);
+        assert_eq!(airbrush.len(), grid.len() + 3, "airbrush adds only its own steps");
+    }
+
+    /// #9059 review: a speed-spaced segment moves the stroke on without pixel steps, so a pixel
+    /// segment after it starts afresh instead of bridging from the cell before it.
+    #[test]
+    fn a_pixel_segment_after_speed_spacing_does_not_step_back() {
+        let pts = [at(0.5, 0.5, 0.0), at(2.5, 0.5, 8.0), at(4.5, 0.5, 8.0)];
+        let steps = walk(PathWalker::new(None).speed_spacing(SPEED_SPACING_MS).pixel_grid(0.5), &pts);
+        let xs: Vec<f64> = steps.iter().map(|p| p.x).collect();
+        assert!(xs.windows(2).all(|w| w[1] > w[0]), "forward only, each cell once: {xs:?}");
+        assert!(steps.windows(2).all(|w| w[1].time >= w[0].time), "time runs on: {steps:?}");
+    }
+
+    /// #9059 review: a cell filled in at a bend takes the pressure and time between its two
+    /// neighbours, not the later one's, so pressure dynamics change across it.
+    #[test]
+    fn a_bridged_cell_blends_its_neighbours_dynamics() {
+        // Shallow, then steep: the steep segment's first step lands two cells from the last one.
+        let bend = [(0.3, 0.6), (10.6, 3.0), (13.0, 14.0)];
+        let pts: Vec<_> = bend.iter().enumerate().map(|(i, &(x, y))| StrokePoint { pressure: 0.5 * i as f32, ..at(x, y, 100.0 * i as f64) }).collect();
+        let steps = walk(PathWalker::new(None).pixel_grid(0.5), &pts);
+        let cell = |p: &StrokePoint| (grid_cell(p.x, 0.5), grid_cell(p.y, 0.5));
+        for w in steps.windows(2) {
+            let ((ax, ay), (bx, by)) = (cell(&w[0]), cell(&w[1]));
+            assert!((bx - ax).abs() <= 1.0 && (by - ay).abs() <= 1.0, "8-connected: {:?} then {:?}", w[0], w[1]);
+            assert!(w[1].time > w[0].time && w[1].pressure > w[0].pressure, "dynamics run on: {:?} then {:?}", w[0], w[1]);
+        }
     }
 }

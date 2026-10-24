@@ -246,6 +246,42 @@ fn pencil_1px_line_is_the_same_whichever_way_and_however_smoothed() {
     assert_eq!(sampled, pixels((1.5, 1.5), (20.5, 9.5), 0.0));
 }
 
+#[test]
+fn pencil_1px_curve_has_no_holes() {
+    // #9003: a curve drawn with the 1 px Pencil broke where it bent. Each segment steps from its
+    // own column, so a pixel could be skipped between the end of one segment and the next.
+    let b = BrushSettings { aliased: true, hardness: 1.0, size: 1.0, ..brush() };
+    let curves: [Vec<StrokePoint>; 3] = [
+        (0..70).map(|i| StrokePoint::new(6.0 + 0.75 * f64::from(i), 24.0 + 13.0 * (f64::from(i) / 7.0).sin(), 1.0)).collect(),
+        (0..60).map(|i| StrokePoint::new(30.0 + 20.0 * (f64::from(i) / 9.5).cos(), 24.0 + 14.0 * (f64::from(i) / 9.5).sin(), 1.0)).collect(),
+        vec![
+            StrokePoint::new(4.3, 30.6, 1.0),
+            StrokePoint::new(9.8, 8.2, 1.0),
+            StrokePoint::new(15.1, 30.9, 1.0),
+            StrokePoint::new(27.6, 12.4, 1.0),
+            StrokePoint::new(33.2, 31.7, 1.0),
+        ],
+    ];
+    for (k, pts) in curves.iter().enumerate() {
+        let s = paint(&b, pts, 64, 48);
+        let painted: std::collections::BTreeSet<(i32, i32)> =
+            (0..48).flat_map(|y| (0..64).map(move |x| (x, y))).filter(|&(x, y)| s.rgba(x, y)[3] > 0.0).collect();
+        let Some(&start) = painted.iter().next() else { panic!("curve {k}: nothing painted") };
+        let mut seen = std::collections::BTreeSet::from([start]);
+        let mut todo = vec![start];
+        while let Some((x, y)) = todo.pop() {
+            for (dx, dy) in [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)] {
+                let q = (x + dx, y + dy);
+                if painted.contains(&q) && seen.insert(q) {
+                    todo.push(q);
+                }
+            }
+        }
+        let holes: Vec<_> = painted.difference(&seen).collect();
+        assert!(holes.is_empty(), "curve {k}: the stroke breaks before {holes:?}");
+    }
+}
+
 // ---------- spacing ----------
 
 #[test]
