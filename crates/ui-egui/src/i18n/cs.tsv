@@ -4166,3 +4166,8 @@ cameraRaw	Dehaze	Odstranění oparu
 	Grayscale Ramp	Přechod stupňů šedi
 	Current Colors	Aktuální barvy
 	Make Ramp Web Safe	Omezit pruh na webové barvy
+
+# Hue Curves (#6241)
+	Hue Curves	Křivky odstínu
+	Hue Curves…	Křivky odstínu…
+	Curve:	Křivka:

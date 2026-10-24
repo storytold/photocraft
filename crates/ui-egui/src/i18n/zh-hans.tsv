@@ -3089,3 +3089,8 @@ curves	Smooth	平滑
 	Exported {path}	已导出 {path}
 	Exported {n} files	已导出 {n} 个文件
 	Driver: {driver}	驱动程序：{driver}
+
+# Hue Curves (#6241)
+	Hue Curves	色相曲线
+	Hue Curves…	色相曲线…
+	Curve:	曲线：

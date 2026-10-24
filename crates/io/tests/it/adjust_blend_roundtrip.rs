@@ -123,6 +123,8 @@ fn adjustments() -> Vec<(Adjustment, bool)> {
             | Adjustment::GradientMap { .. }
             | Adjustment::SelectiveColor { .. }
             | Adjustment::Unsupported { .. } => {}
+            // PhotoCraft's own: becomes a Color Lookup (`hue_curves_save_as_the_color_lookup_they_render_as`).
+            Adjustment::HueCurves { .. } => {}
         }
     }
     all
@@ -276,5 +278,30 @@ fn every_blend_mode_round_trips() {
         let (back, _, _) = export_import(&d);
         assert_docs_eq(&d, &back);
         assert_composite_eq(&d, &back, mode.label());
+    }
+}
+
+/// Photoshop has no Hue Curves (#6241): the layers are saved as the Color Lookup they render as,
+/// with a warning, and composite the same once reopened.
+#[test]
+fn hue_curves_save_as_the_color_lookup_they_render_as() {
+    let adj = Adjustment::HueCurves {
+        hue: [(0.0, 20.0), (60.0, 0.0), (120.0, 0.0), (180.0, -10.0), (240.0, 0.0), (300.0, 0.0)].map(|(input, output)| CurvePoint { input, output }).to_vec(),
+        saturation: vec![CurvePoint { input: 120.0, output: 0.7 }, CurvePoint { input: 300.0, output: 1.0 }],
+        luminance: vec![CurvePoint { input: 240.0, output: -20.0 }, CurvePoint { input: 60.0, output: 0.0 }],
+    };
+    for depth in [SampleType::U8, SampleType::U16] {
+        let d = adjustment_doc(&adj, depth);
+        let (back, warnings, _) = export_import(&d);
+        assert_eq!(warnings.iter().filter(|w| w.contains("Hue Curves") && w.contains("Color Lookup")).count(), 3, "{warnings:?}");
+        for (x, y) in d.layers.iter().zip(&back.layers) {
+            if let LayerContent::Adjustment(_) = x.content {
+                assert!(matches!(&y.content, LayerContent::Adjustment(Adjustment::ColorLookup { name, .. }) if name == "Hue Curves"), "{}", y.name);
+                assert_eq!((x.blend, x.opacity, x.clipped, x.mask.is_some()), (y.blend, y.opacity, y.clipped, y.mask.is_some()), "{}", x.name);
+            }
+        }
+        let (a, b) = (photocraft_compose::flatten(&d), photocraft_compose::flatten(&back));
+        let m = max_diff(&a.px, &b.px);
+        assert!(m <= 3.0 / 255.0, "{depth:?}: composite differs by {} levels", m * 255.0);
     }
 }

@@ -4037,3 +4037,8 @@ curves	Smooth	Wygładź
 	Grayscale Ramp	Pasek skali szarości
 	Current Colors	Bieżące kolory
 	Make Ramp Web Safe	Ogranicz pasek do kolorów internetowych
+
+# Hue Curves (#6241)
+	Hue Curves	Krzywe odcienia
+	Hue Curves…	Krzywe odcienia…
+	Curve:	Krzywa:

@@ -1414,6 +1414,11 @@ fn build() -> Vec<CommandSpec> {
             "Color Lookup…",
             r##"{"lut":"none|warm|cool|tealOrange|bleachBypass|fadedFilm|dayForNight|monoContrast|crossProcess"="none","file":text,"interpolation":"trilinear|tetrahedral"="trilinear","dither":bool=false,"data":json} (file: .cube/.3dl/.look path; data: file text + "fileName")"##,
         ),
+        (
+            "hueCurves",
+            "Hue Curves…",
+            r##"{"hue":json,"saturation":json,"luminance":json} (PhotoCraft's Hue vs Hue / Saturation / Luminance curves, no Photoshop equivalent; each curve [[hue 0..360, value], …], at most 32 points, periodic through 360° with smooth transitions, [] neutral: hue = hue shift -180..180°, saturation = factor 0..2 (1 unchanged), luminance = lightness change -100..100 %; anchor neighbouring hues at the neutral value to keep an edit local, e.g. {"hue":[[0,30],[60,0],[120,0],[180,0],[240,0],[300,0]]} turns reds orange and leaves the other hues; saved to PSD as a Color Lookup layer)"##,
+        ),
     ];
     for &(kind, label, params) in ADJ {
         let layer_id: &'static str = Box::leak(format!("layer.newAdjustmentLayer.{kind}").into_boxed_str());
@@ -1644,6 +1649,7 @@ pub fn adjustment_kind(a: &Adjustment) -> &'static str {
         Adjustment::SelectiveColor { .. } => "selectiveColor",
         Adjustment::ColorLookup { .. } => "colorLookup",
         Adjustment::Unsupported { .. } => "unsupported",
+        Adjustment::HueCurves { .. } => "hueCurves",
         _ => "invert",
     }
 }

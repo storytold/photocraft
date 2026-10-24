@@ -4350,3 +4350,8 @@ layerLabel	No Color	Sem cor
 	Grayscale Ramp	Rampa de tons de cinza
 	Current Colors	Cores atuais
 	Make Ramp Web Safe	Tornar rampa segura para a Web
+
+# Hue Curves (#6241)
+	Hue Curves	Curvas de matiz
+	Hue Curves…	Curvas de matiz…
+	Curve:	Curva:

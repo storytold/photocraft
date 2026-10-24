@@ -831,6 +831,8 @@ pub fn write(adj: &Adjustment) -> Vec<([u8; 4], Vec<u8>)> {
             }
             return vec![(*b"mixr", v)];
         }
+        // Photoshop has no Hue Curves: saved as a Color Lookup that approximates it.
+        Adjustment::HueCurves { .. } => return photocraft_compose::hue_curves::as_lookup(adj).map(|l| write(&l)).unwrap_or_default(),
         Adjustment::Unsupported { psd_key, raw } => {
             let k = psd_key.as_bytes();
             if k.len() == 4 {

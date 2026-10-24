@@ -3,7 +3,7 @@ use photocraft_color::{BlendMode, Color, PixelFormat, SampleType};
 use photocraft_doc::Size;
 use serde_json::json;
 
-const KINDS: [&str; 13] = crate::adjust_editors::KINDS;
+const KINDS: [&str; 14] = crate::adjust_editors::KINDS;
 
 /// Settings that move every kind well away from neutral.
 pub(crate) fn sample(kind: &str) -> Value {
@@ -21,6 +21,7 @@ pub(crate) fn sample(kind: &str) -> Value {
         "posterize" => json!({"levels": 3}),
         "threshold" => json!({"level": 90}),
         "gradientMap" => json!({"stops": [[0, "#200040"], [1, "#ffd080"]]}),
+        "hueCurves" => json!({"hue": [[0, 40], [120, -30], [240, 0]], "saturation": [[60, 1.6], [200, 0.3]], "luminance": [[300, 30]]}),
         _ => json!({}),
     }
 }

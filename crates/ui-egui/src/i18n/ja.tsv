@@ -4099,3 +4099,8 @@ curves	Smooth	スムーズ
 	Grayscale Ramp	グレースケールランプ
 	Current Colors	現在のカラー
 	Make Ramp Web Safe	ランプを Web セーフにする
+
+# Hue Curves (#6241)
+	Hue Curves	色相カーブ
+	Hue Curves…	色相カーブ…
+	Curve:	カーブ:

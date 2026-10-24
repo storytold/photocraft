@@ -4149,3 +4149,8 @@ cameraData	Lens	Lens
 	Grayscale Ramp	Gri Tonlama Şeridi
 	Current Colors	Geçerli Renkler
 	Make Ramp Web Safe	Şeridi Web Renkleriyle Sınırla
+
+# Hue Curves (#6241)
+	Hue Curves	Renk Tonu Eğrileri
+	Hue Curves…	Renk Tonu Eğrileri…
+	Curve:	Eğri:

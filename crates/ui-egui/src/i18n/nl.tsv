@@ -4180,3 +4180,8 @@ curves	Smooth	Vloeiend maken
 	Grayscale Ramp	Grijswaardenbalk
 	Current Colors	Huidige kleuren
 	Make Ramp Web Safe	Balk beperken tot webkleuren
+
+# Hue Curves (#6241)
+	Hue Curves	Kleurtooncurven
+	Hue Curves…	Kleurtooncurven…
+	Curve:	Curve:

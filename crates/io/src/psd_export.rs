@@ -656,6 +656,12 @@ impl Ex {
                     if w.is_empty() {
                         self.warnings.push(format!("layer \"{}\": {} adjustment is not yet written to PSD", l.name, a.label()));
                     }
+                    if matches!(a, photocraft_doc::Adjustment::HueCurves { .. }) {
+                        self.warnings.push(format!(
+                            "layer \"{}\": Hue Curves has no PSD equivalent and was saved as a Color Lookup that approximates it (narrow hue edits can be softened); save as .pcraft to keep the curves editable",
+                            l.name
+                        ));
+                    }
                     // Photoshop's `clrL` descriptor has no interpolation setting, so the
                     // reopened layer renders trilinear.
                     if matches!(a, photocraft_doc::Adjustment::ColorLookup { tetrahedral: true, .. }) {

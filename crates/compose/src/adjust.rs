@@ -260,6 +260,23 @@ fn apply_depth_mode(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, dept
                 p[..3].copy_from_slice(&o);
             }
         }
+        Adjustment::HueCurves { hue, saturation, luminance } => {
+            if crate::hue_curves::is_identity(hue, saturation, luminance) {
+                return;
+            }
+            // Hue/Saturation's range edits with the curves as their tables (the GPU's kernel too),
+            // looked up at the pixel's original hue. Hues the curves leave alone stay as they are.
+            let t = crate::hue_curves::tables(hue, saturation, luminance);
+            map_rgb(buf, |c| {
+                let h0 = rgb_to_hsl(c).0;
+                let (dh, ds, dl) = (lut(&t[0], h0), lut(&t[1], h0), lut(&t[2], h0));
+                if dh == 0.0 && ds == 0.0 && dl == 0.0 {
+                    return c;
+                }
+                // At 32 bits unclipped, as Hue/Saturation and the GPU kernel (bright colours stay colours).
+                range_lightness(hue_saturation_in(c, dh, ds.clamp(-1.0, 1.0), 0.0, false, depth), dl)
+            })
+        }
         // Not evaluated: identity (still round-trips through PSD).
         Adjustment::ColorLookup { .. } | Adjustment::Unsupported { .. } => {}
     }

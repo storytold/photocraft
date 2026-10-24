@@ -3913,3 +3913,8 @@ curves	Smooth	Làm mượt
 	Grayscale Ramp	Dải thang xám
 	Current Colors	Màu hiện tại
 	Make Ramp Web Safe	Giới hạn dải màu ở màu web
+
+# Hue Curves (#6241)
+	Hue Curves	Đường cong tông màu
+	Hue Curves…	Đường cong tông màu…
+	Curve:	Đường cong:

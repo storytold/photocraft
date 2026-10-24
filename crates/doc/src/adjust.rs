@@ -172,6 +172,14 @@ impl HueRange {
     }
 }
 
+/// The neutral value of each Hue Curves curve (hue shift, saturation factor, luminance change).
+pub const HUE_CURVE_NEUTRAL: [f32; 3] = [0.0, 1.0, 0.0];
+
+/// Whether a Hue Curves curve leaves every hue alone: no points, or every point at `neutral`.
+pub fn is_neutral_hue_curve(points: &[CurvePoint], neutral: f32) -> bool {
+    points.iter().all(|p| !p.output.is_finite() || p.output == neutral)
+}
+
 fn default_hue_ranges() -> [HueRange; 6] {
     HueRange::defaults()
 }
@@ -281,6 +289,21 @@ pub enum Adjustment {
         relative: bool,
         adjustments: [[f32; 4]; 9],
     },
+    /// Hue Curves (PhotoCraft's own; Photoshop has none): three curves over the pixel's original
+    /// hue, like DaVinci Resolve's Hue vs Hue / Sat / Lum curves or Lightroom's Point Color. Each
+    /// point's `input` is a hue in degrees (wraps at 360), its `output` the curve's value there:
+    /// `hue` a hue shift in degrees (-180..=180, 0 unchanged), `saturation` a saturation factor
+    /// (0..=2, 1 unchanged) and `luminance` a lightness change in percent (-100..=100, towards the
+    /// pixel's brightest or darkest channel like Hue/Saturation's range Lightness). The curves are
+    /// periodic: they run smoothly through 360° back to 0°. An empty curve is neutral.
+    HueCurves {
+        #[serde(default)]
+        hue: Vec<CurvePoint>,
+        #[serde(default)]
+        saturation: Vec<CurvePoint>,
+        #[serde(default)]
+        luminance: Vec<CurvePoint>,
+    },
     /// A PSD adjustment we can't evaluate yet; preserved raw for round-trip, shared between
     /// document snapshots (#4535).
     Unsupported {
@@ -308,6 +331,7 @@ impl Adjustment {
             Adjustment::Threshold { .. } => "Threshold",
             Adjustment::GradientMap { .. } => "Gradient Map",
             Adjustment::SelectiveColor { .. } => "Selective Color",
+            Adjustment::HueCurves { .. } => "Hue Curves",
             Adjustment::Unsupported { .. } => "Adjustment",
         }
     }

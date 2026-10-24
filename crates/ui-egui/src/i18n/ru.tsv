@@ -4623,3 +4623,8 @@ shape	Appearance	Оформление
 	Grayscale Ramp	Шкала градаций серого
 	Current Colors	Текущие цвета
 	Make Ramp Web Safe	Сделать шкалу безопасной для web
+
+# Hue Curves (#6241)
+	Hue Curves	Кривые цветового тона
+	Hue Curves…	Кривые цветового тона…
+	Curve:	Кривая:

@@ -4462,3 +4462,8 @@ shape	Appearance	Apparence
 	Grayscale Ramp	Barre de niveaux de gris
 	Current Colors	Couleurs actuelles
 	Make Ramp Web Safe	Limiter la barre aux couleurs Web
+
+# Hue Curves (#6241)
+	Hue Curves	Courbes de teinte
+	Hue Curves…	Courbes de teinte…
+	Curve:	Courbe :

@@ -11,7 +11,7 @@ use serde_json::json;
 
 use crate::PhotocraftApp;
 
-const ALL_KINDS: [&str; 16] = [
+const ALL_KINDS: [&str; 17] = [
     "brightnessContrast",
     "levels",
     "curves",
@@ -28,6 +28,7 @@ const ALL_KINDS: [&str; 16] = [
     "gradientMap",
     "selectiveColor",
     "colorLookup",
+    "hueCurves",
 ];
 
 fn app_harness(kind: &str, mode: &str, depth: u32) -> Harness<'static, PhotocraftApp> {
@@ -124,6 +125,11 @@ fn every_adjustment_layer_edits_through_properties() {
             match kind {
                 "curves" => {
                     let g = curves_graph(&h, id);
+                    drag(&mut h, g.center(), g.center() + vec2(0.0, -40.0));
+                }
+                "hueCurves" => {
+                    // The cyan anchor (180°) sits in the middle of the graph.
+                    let g = h.ctx.data(|d| d.get_temp::<Rect>(egui::Id::new(("adjust-layer", id.0)).with("hue-curves-graph"))).expect("hue curves graph drawn");
                     drag(&mut h, g.center(), g.center() + vec2(0.0, -40.0));
                 }
                 "levels" => {

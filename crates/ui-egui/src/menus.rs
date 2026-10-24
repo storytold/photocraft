@@ -944,6 +944,8 @@ const PLACE_AFTER: &[(&str, &str)] = &[
     ("filter.render.relight", "filter.render.lightingEffects"),
     ("view.resetView", "view.flipHorizontal"),
     ("filter.other.colorToAlpha", "filter.other.offset"),
+    ("image.adjustments.hueCurves", "image.adjustments.hueSaturation"),
+    ("layer.newAdjustmentLayer.hueCurves", "layer.newAdjustmentLayer.hueSaturation"),
 ];
 
 pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {

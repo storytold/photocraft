@@ -23,8 +23,12 @@ use crate::theme::Tokens;
 use crate::tone::{self, HistSource, Histograms};
 use crate::widgets::{self, hue_color};
 
+/// Hue Curves: Curves' point editor over the hue circle.
+#[path = "hue_curves_editor.rs"]
+mod hue_curves_editor;
+
 /// Kinds edited here (Selective Color and Color Lookup have their own editors; Invert has none).
-pub const KINDS: [&str; 13] = [
+pub const KINDS: [&str; 14] = [
     "brightnessContrast",
     "levels",
     "curves",
@@ -38,6 +42,7 @@ pub const KINDS: [&str; 13] = [
     "posterize",
     "threshold",
     "gradientMap",
+    "hueCurves",
 ];
 
 pub fn has_editor(kind: &str) -> bool {
@@ -134,6 +139,7 @@ pub fn editor(ui: &mut egui::Ui, kind: &str, v: &mut Value, cx: &EditorCx) -> Ed
         "posterize" => sliders(ui, v, &[("levels", "Levels", 2.0, 255.0, 4.0, "", None)]),
         "threshold" => threshold(ui, v, cx),
         "gradientMap" => gradient_map(ui, v, cx),
+        "hueCurves" => hue_curves_editor::editor(ui, v, cx),
         _ => Edit::default(),
     }
 }
@@ -896,9 +902,9 @@ fn move_hue_range_handle(bounds: [f32; 4], k: usize, deg: f32) -> [f32; 4] {
     b
 }
 
-/// The spectrum bar after the adjustment (what each hue becomes), sampled at `n` hues.
-fn adjusted_spectrum(v: &Value, n: usize) -> Vec<Color32> {
-    let adj = photocraft_engine::commands::adjustment_from_params("hueSaturation", v);
+/// The spectrum bar after the `kind` adjustment (what each hue becomes), sampled at `n` hues.
+fn adjusted_spectrum(kind: &str, v: &Value, n: usize) -> Vec<Color32> {
+    let adj = photocraft_engine::commands::adjustment_from_params(kind, v);
     let rect = photocraft_geom::Rect::new(0, 0, n as i32, 1);
     let px = (0..n)
         .map(|i| {
@@ -1007,7 +1013,7 @@ fn hue_saturation(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     let p = ui.painter_at(bars.expand(4.0));
     let input: Vec<Color32> = (0..=36).map(|i| hue_color(i as f32 * 10.0)).collect();
     spectrum_bar(&p, top, &input);
-    spectrum_bar(&p, bottom, &adjusted_spectrum(v, 37));
+    spectrum_bar(&p, bottom, &adjusted_spectrum("hueSaturation", v, 37));
     if range > 0 {
         let key = HUE_RANGES[range - 1];
         let neutral = photocraft_doc::adjust::HueRange::neutral(range - 1).bounds;

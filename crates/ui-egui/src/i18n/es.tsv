@@ -4382,3 +4382,8 @@ navigator	Zoom	Zoom
 	Grayscale Ramp	Rampa de escala de grises
 	Current Colors	Colores actuales
 	Make Ramp Web Safe	Hacer rampa segura para web
+
+# Hue Curves (#6241)
+	Hue Curves	Curvas de tono
+	Hue Curves…	Curvas de tono…
+	Curve:	Curva:

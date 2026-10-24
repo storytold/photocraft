@@ -84,7 +84,9 @@ fn keeps_gray(adj: &Adjustment) -> bool {
         | Adjustment::Exposure { .. }
         | Adjustment::Posterize { .. }
         | Adjustment::Threshold { .. }
-        | Adjustment::Invert => true,
+        | Adjustment::Invert
+        // Greys have no hue to shift and no saturation to scale.
+        | Adjustment::HueCurves { .. } => true,
         Adjustment::HueSaturation { colorize, .. } => !colorize,
         _ => false,
     }

@@ -205,6 +205,7 @@ pub fn from_params(kind: &str, p: &Value, base: Option<&Adjustment>, mode: Color
         }
         "selectiveColor" => crate::adjust_cmds::selective_from_params(p, base.filter(|b| matches!(b, Adjustment::SelectiveColor { .. })))?,
         "colorLookup" => crate::adjust_cmds::lookup_from_params(p, base.filter(|b| matches!(b, Adjustment::ColorLookup { .. })))?,
+        "hueCurves" => crate::hue_curves_params::from_params(p, base)?,
         other => return Err(bad("adjustment", format!("unknown adjustment kind `{other}`"))),
     })
 }
@@ -286,6 +287,7 @@ pub fn to_params(adj: &Adjustment) -> Value {
         Adjustment::ColorLookup { tetrahedral, dither, .. } => {
             json!({"interpolation": if *tetrahedral { "tetrahedral" } else { "trilinear" }, "dither": dither})
         }
+        Adjustment::HueCurves { hue, saturation, luminance } => crate::hue_curves_params::to_params(hue, saturation, luminance),
     }
 }
 

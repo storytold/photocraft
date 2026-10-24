@@ -1802,8 +1802,14 @@ pub fn adjustment_program(adj: &Adjustment, transfer: Transfer, depth: photocraf
             p[0] = [n as f32, if *tetrahedral { 1.0 } else { 0.0 }, if *dither { 1.0 } else { 0.0 }, 0.0];
             (16, p, Some(rows))
         }
+        // Hue/Saturation's range edits with neutral master settings, the curves as the
+        // hue-indexed rows (compose::hue_curves::tables).
+        Adjustment::HueCurves { hue, saturation, luminance } if !photocraft_compose::hue_curves::is_identity(hue, saturation, luminance) => {
+            p[1][0] = 1.0;
+            (8, p, Some(photocraft_compose::hue_curves::tables(hue, saturation, luminance).iter().map(|t| to_row(t)).collect()))
+        }
         // Identity on the CPU too (not evaluated there).
-        Adjustment::ColorLookup { .. } | Adjustment::Unsupported { .. } => (0, p, None),
+        Adjustment::HueCurves { .. } | Adjustment::ColorLookup { .. } | Adjustment::Unsupported { .. } => (0, p, None),
     }
 }
 

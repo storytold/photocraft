@@ -4130,3 +4130,8 @@ curves	Smooth	Згладити
 	Grayscale Ramp	Шкала градацій сірого
 	Current Colors	Поточні кольори
 	Make Ramp Web Safe	Зробити шкалу безпечною для вебу
+
+# Hue Curves (#6241)
+	Hue Curves	Криві тону
+	Hue Curves…	Криві тону…
+	Curve:	Крива:
