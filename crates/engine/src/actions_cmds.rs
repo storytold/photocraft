@@ -127,7 +127,9 @@ pub fn replayable(id: &str) -> bool {
     // Again and Again on a Copy journal their concrete steps (`edit.transform`, after
     // `layer.duplicate` for the copy) and record those: the wrappers look up the last transform in
     // the journal, so they fail where no transform ran yet, e.g. an action played in a new session.
-    id == "actions.play"
+    // A Conditional is recorded with its predicate, not the branch it happened to play (or none),
+    // so playback evaluates the condition again on the current document (#7198, #7238).
+    matches!(id, "actions.play" | "actions.conditional")
         || (!id.starts_with("actions.")
             // Browse executes its steps through Session::execute, so those concrete
             // commands are already journaled. Recording the wrapper as well replays
