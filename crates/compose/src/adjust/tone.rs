@@ -169,6 +169,8 @@ struct Brightness {
 const BRIGHTNESS_KNEE: f32 = 0.5;
 
 impl Brightness {
+    /// Precomputes the capped slider's slope, knee and white-endpoint parameters.
+    /// Selects a monotone power roll-off when the Hermite slopes risk overshoot.
     fn new(brightness: f32) -> Self {
         let b = brightness.abs().min(150.0);
         let s = (b / 110.0).exp2();

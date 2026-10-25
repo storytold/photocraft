@@ -27,6 +27,8 @@ struct Gpu {
 /// Simulated texture limit (pages and chunks of 256 px).
 const PAGED_LIMIT: u32 = 256;
 
+/// Compares HDR adjustments with the CPU reference through whole and paged textures.
+/// Neutral modern Brightness/Contrast must retain above-white F32 values.
 #[test]
 fn hdr_adjustments_preserve_range_and_cpu_parity() {
     let Some(mut g) = gpu() else { return };
@@ -228,6 +230,8 @@ fn check(g: &mut Gpu, doc: &Document, what: &str) {
     diff_rect(g, doc, doc.bounds(), what).unwrap_or_else(|e| panic!("{e}"));
 }
 
+/// Compares clipped modern Brightness/Contrast ramps with the CPU at U8, U16 and F32
+/// depths, including partial alpha, through both whole and paged GPU textures.
 #[test]
 fn modern_brightness_contrast_clipped_ramp() {
     let Some(mut g) = gpu() else { return };
