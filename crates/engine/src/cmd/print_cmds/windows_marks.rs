@@ -1,6 +1,6 @@
 //! App-owned print-mark composition in points from the sheet's top-left.
-use super::{MARK_GAP, MARK_LEN, Marks, corner_crop_segments};
 use craft_print::rgb::{Primitive, Shape};
+use photocraft_io::pdf::{MARK_GAP, MARK_LEN, Marks, corner_crop_segments};
 
 pub(super) fn primitives(marks: Marks, (x, y, w, h): (f64, f64, f64, f64)) -> Vec<Primitive> {
     let mut out = Vec::with_capacity(24);

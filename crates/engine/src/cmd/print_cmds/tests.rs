@@ -1462,20 +1462,6 @@ fn bad_bleed_is_an_error_not_a_panic() {
 }
 
 #[test]
-fn print_strings_keep_winansi_accents_and_punctuation() {
-    assert_eq!(pdf_string("Café – résumé"), r"(Caf\351 \226 r\351sum\351)");
-    assert_eq!(pdf_string("€ ‘quote’ “double” • Œœ Šš Žž Ÿ"), r"(\200 \221quote\222 \223double\224 \225 \214\234 \212\232 \216\236 \237)");
-    assert_eq!(pdf_string("é7"), r"(\3517)", "octal escapes must have three digits before a digit");
-}
-
-#[test]
-fn print_strings_keep_pdf_delimiters_safe_and_fallback_bounded() {
-    assert_eq!(pdf_string(r"a(b)\c"), r"(a\(b\)\\c)");
-    assert_eq!(pdf_string("\n\r\t\0\u{7f}\u{81}中😀"), "(????????)");
-    assert_eq!(pdf_string(""), "()");
-}
-
-#[test]
 fn printed_pdf_uses_winansi_for_labels_and_descriptions() {
     let mut page = page_of(3, vec![255; 6], false);
     page.label = Some("Café – résumé.psd".into());

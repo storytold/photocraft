@@ -34,6 +34,27 @@ pub struct Marks {
     pub corner_crop: bool,
     pub center_crop: bool,
     pub registration: bool,
+    /// Photoshop's Functions › Bleed, in points: corner crop marks sit this far inside the image
+    /// edge, so the trim cuts through the image and leaves no paper-white sliver. 0 = on the edge.
+    pub bleed: f64,
+}
+
+/// Gap between the image edge and a crop mark, and the mark's length (pt).
+pub const MARK_GAP: f64 = 6.0;
+pub const MARK_LEN: f64 = 18.0;
+
+/// Corner crop marks around `(x, y, w, h)` as eight `(from, to)` segments, a horizontal then a
+/// vertical one per corner. Each starts `MARK_GAP` outside the image (so it never prints on it)
+/// and lies on the trim line, `bleed` inside the edge. The inset is symmetric, so this holds for
+/// both bottom-up (PDF) and top-down (Windows) coordinates.
+pub fn corner_crop_segments(bleed: f64, (x, y, w, h): (f64, f64, f64, f64)) -> [((f64, f64), (f64, f64)); 8] {
+    let mut out = [((0.0, 0.0), (0.0, 0.0)); 8];
+    for (i, (cx, cy, dx, dy)) in [(x, y, -1.0, -1.0), (x + w, y, 1.0, -1.0), (x, y + h, -1.0, 1.0), (x + w, y + h, 1.0, 1.0)].into_iter().enumerate() {
+        let (tx, ty) = (cx - dx * bleed, cy - dy * bleed);
+        out[2 * i] = ((cx + dx * MARK_GAP, ty), (cx + dx * (MARK_GAP + MARK_LEN), ty));
+        out[2 * i + 1] = ((tx, cy + dy * MARK_GAP), (tx, cy + dy * (MARK_GAP + MARK_LEN)));
+    }
+    out
 }
 
 /// One page: paper (pt), image box (pt, origin bottom-left), marks and texts.
@@ -44,18 +65,56 @@ pub struct PrintPage {
     pub marks: Marks,
     pub description: Option<String>,
     pub label: Option<String>,
+    /// Photoshop's Functions › Emulsion Down: the whole page mirrored left to right, for transfer
+    /// printing (sublimation, iron-on, DTF, film read from the back).
+    pub emulsion_down: bool,
 }
 
-pub(super) fn pdf_string(s: &str) -> String {
+// ISO 32000-1, Annex D.2: the standard Helvetica font below uses WinAnsiEncoding,
+// not UTF-8. Escape non-ASCII bytes as three octal digits so the content stays ASCII
+// and a following digit cannot become part of the escape. Other scripts still need
+// an embedded font; retain the existing '?' fallback for unsupported characters.
+fn pdf_string(s: &str) -> String {
     let mut o = String::from("(");
     for c in s.chars() {
-        match c {
-            '(' | ')' | '\\' => {
+        let byte = match c {
+            '\u{20}'..='\u{7e}' | '\u{a0}'..='\u{ff}' => c as u8,
+            '€' => 0x80,
+            '‚' => 0x82,
+            'ƒ' => 0x83,
+            '„' => 0x84,
+            '…' => 0x85,
+            '†' => 0x86,
+            '‡' => 0x87,
+            'ˆ' => 0x88,
+            '‰' => 0x89,
+            'Š' => 0x8a,
+            '‹' => 0x8b,
+            'Œ' => 0x8c,
+            'Ž' => 0x8e,
+            '‘' => 0x91,
+            '’' => 0x92,
+            '“' => 0x93,
+            '”' => 0x94,
+            '•' => 0x95,
+            '–' => 0x96,
+            '—' => 0x97,
+            '˜' => 0x98,
+            '™' => 0x99,
+            'š' => 0x9a,
+            '›' => 0x9b,
+            'œ' => 0x9c,
+            'ž' => 0x9e,
+            'Ÿ' => 0x9f,
+            _ => b'?',
+        };
+        match byte {
+            b'(' | b')' | b'\\' => {
                 o.push('\\');
-                o.push(c);
+                o.push(char::from(byte));
             }
-            c if c.is_ascii() && !c.is_ascii_control() => o.push(c),
-            _ => o.push('?'),
+            0x80..=0xff => o.push_str(&format!("\\{byte:03o}")),
+            _ => o.push(char::from(byte)),
         }
     }
     o.push(')');
@@ -74,12 +133,11 @@ fn deflate(data: &[u8]) -> Vec<u8> {
 /// Vector marks around `(x, y, w, h)`.
 fn marks_ops(m: Marks, (x, y, w, h): (f64, f64, f64, f64)) -> String {
     let mut s = String::from("q 0 G 0.3 w\n");
-    let (gap, len) = (6.0, 18.0);
+    let (gap, len) = (MARK_GAP, MARK_LEN);
     let line = |s: &mut String, x0: f64, y0: f64, x1: f64, y1: f64| s.push_str(&format!("{x0:.2} {y0:.2} m {x1:.2} {y1:.2} l S\n"));
     if m.corner_crop {
-        for (cx, cy, dx, dy) in [(x, y, -1.0, -1.0), (x + w, y, 1.0, -1.0), (x, y + h, -1.0, 1.0), (x + w, y + h, 1.0, 1.0)] {
-            line(&mut s, cx + dx * gap, cy, cx + dx * (gap + len), cy);
-            line(&mut s, cx, cy + dy * gap, cx, cy + dy * (gap + len));
+        for ((x0, y0), (x1, y1)) in corner_crop_segments(m.bleed, (x, y, w, h)) {
+            line(&mut s, x0, y0, x1, y1);
         }
     }
     if m.center_crop {
@@ -109,34 +167,18 @@ fn marks_ops(m: Marks, (x, y, w, h): (f64, f64, f64, f64)) -> String {
 
 /// A one-page PDF.
 pub fn print_pdf(page: &PrintPage) -> Vec<u8> {
-    print_pdf_with_vectors(page, "", &selection::SelectionFont::default())
+    print_pdf_with_vectors(page, "", None)
 }
 
-fn print_pdf_with_vectors(page: &PrintPage, vectors: &str, selection_font: &selection::SelectionFont) -> Vec<u8> {
-    let mut out: Vec<u8> = b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n".to_vec();
-    let mut offsets: Vec<usize> = Vec::new();
-    let mut obj = |out: &mut Vec<u8>, body: &[u8]| {
-        offsets.push(out.len());
-        out.extend_from_slice(format!("{} 0 obj\n", offsets.len()).as_bytes());
-        out.extend_from_slice(body);
-        out.extend_from_slice(b"\nendobj\n");
-    };
-    let img = &page.image;
+fn content_stream(page: &PrintPage, vectors: &str) -> String {
     let (pw, ph) = page.paper;
     let (x, y, w, h) = page.rect;
-    let selection_base = if img.icc.is_some() { 8 } else { 7 };
-    // 1 catalog, 2 pages, 3 page, 4 contents, 5 image, 6 font, 7 ICC (optional).
-    obj(&mut out, b"<< /Type /Catalog /Pages 2 0 R >>");
-    obj(&mut out, b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
-    obj(
-        &mut out,
-        format!(
-            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {pw:.2} {ph:.2}] /Resources << /XObject << /Im0 5 0 R >> /Font << /F1 6 0 R /FSelect {selection_base} 0 R >> >> /Contents 4 0 R >>"
-        )
-        .as_bytes(),
-    );
     // An explicit white page, so every viewer (and rasteriser) shows paper, not transparency.
-    let mut content = format!("q 1 g 0 0 {pw:.2} {ph:.2} re f Q\nq {w:.3} 0 0 {h:.3} {x:.3} {y:.3} cm /Im0 Do Q\n");
+    let mut content = format!("q 1 g 0 0 {pw:.2} {ph:.2} re f Q\n");
+    if page.emulsion_down {
+        content.push_str(&format!("q -1 0 0 1 {pw:.2} 0 cm\n"));
+    }
+    content.push_str(&format!("q {w:.3} 0 0 {h:.3} {x:.3} {y:.3} cm /Im0 Do Q\n"));
     content.push_str(vectors);
     content.push_str(&marks_ops(page.marks, page.rect));
     let any_marks = page.marks.corner_crop || page.marks.center_crop || page.marks.registration;
@@ -147,7 +189,36 @@ fn print_pdf_with_vectors(page: &PrintPage, vectors: &str, selection_font: &sele
     if let Some(d) = page.description.as_deref().filter(|d| !d.is_empty()) {
         content.push_str(&format!("BT /F1 8 Tf 0 g {:.2} {:.2} Td {} Tj ET\n", x, y - pad - 8.0, pdf_string(d)));
     }
-    let c = deflate(content.as_bytes());
+    if page.emulsion_down {
+        content.push_str("Q\n");
+    }
+    content
+}
+
+fn print_pdf_with_vectors(page: &PrintPage, vectors: &str, selection_font: Option<&selection::SelectionFont>) -> Vec<u8> {
+    let mut out: Vec<u8> = b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n".to_vec();
+    let mut offsets: Vec<usize> = Vec::new();
+    let mut obj = |out: &mut Vec<u8>, body: &[u8]| {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", offsets.len()).as_bytes());
+        out.extend_from_slice(body);
+        out.extend_from_slice(b"\nendobj\n");
+    };
+    let img = &page.image;
+    let (pw, ph) = page.paper;
+    let selection_base = if img.icc.is_some() { 8 } else { 7 };
+    let selection_resource = selection_font.map_or_else(String::new, |_| format!(" /FSelect {selection_base} 0 R"));
+    // 1 catalog, 2 pages, 3 page, 4 contents, 5 image, 6 font, 7 ICC (optional).
+    obj(&mut out, b"<< /Type /Catalog /Pages 2 0 R >>");
+    obj(&mut out, b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+    obj(
+        &mut out,
+        format!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {pw:.2} {ph:.2}] /Resources << /XObject << /Im0 5 0 R >> /Font << /F1 6 0 R{selection_resource} >> >> /Contents 4 0 R >>"
+        )
+        .as_bytes(),
+    );
+    let c = deflate(content_stream(page, vectors).as_bytes());
     let mut body = format!("<< /Length {} /Filter /FlateDecode >>\nstream\n", c.len()).into_bytes();
     body.extend_from_slice(&c);
     body.extend_from_slice(b"\nendstream");
@@ -177,7 +248,7 @@ fn print_pdf_with_vectors(page: &PrintPage, vectors: &str, selection_font: &sele
         body.extend_from_slice(b"\nendstream");
         obj(&mut out, &body);
     }
-    for body in selection_font.objects(selection_base) {
+    for body in selection_font.map_or_else(Vec::new, |font| font.objects(selection_base)) {
         obj(&mut out, &body);
     }
     let xref = out.len();
@@ -304,7 +375,7 @@ pub fn export(doc: &Document) -> std::result::Result<ExportResult, IoError> {
     let image = PrintImage { width: doc.size.width, height: doc.size.height, channels: device, data, icc: doc.icc_profile.as_ref().map(|p| p.to_vec()) };
     let dpi = f64::from(doc.resolution_dpi.max(1.0));
     let (pw, ph) = (f64::from(doc.size.width) * 72.0 / dpi, f64::from(doc.size.height) * 72.0 / dpi);
-    let page = PrintPage { paper: (pw, ph), image, rect: (0.0, 0.0, pw, ph), marks: Marks::default(), description: None, label: None };
+    let page = PrintPage { paper: (pw, ph), image, rect: (0.0, 0.0, pw, ph), marks: Marks::default(), description: None, label: None, emulsion_down: false };
     let mut warnings = vec!["PDF was saved flattened: layers, masks-as-editable and transparency are not preserved (#3401)".into()];
     if !doc.metadata.text.is_empty() {
         warnings.push("free-form text metadata is not supported by PDF; it will be dropped".into());
@@ -315,7 +386,7 @@ pub fn export(doc: &Document) -> std::result::Result<ExportResult, IoError> {
         vectors.push_str(ops);
     }
     vectors.push_str("Q\n");
-    Ok(ExportResult { bytes: print_pdf_with_vectors(&page, &vectors, &selection_font), warnings })
+    Ok(ExportResult { bytes: print_pdf_with_vectors(&page, &vectors, Some(&selection_font)), warnings })
 }
 
 #[cfg(test)]
