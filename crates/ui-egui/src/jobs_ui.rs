@@ -163,6 +163,8 @@ pub struct JobsUi {
     pub(crate) waiters: Vec<(JobId, Sender<ControlResponse>)>,
     /// Background opens, in tab order.
     pub opens: Vec<OpenTab>,
+    /// The preview document each opening raw shows meanwhile (see [`show_previews`]).
+    pub(crate) previews: Vec<(JobId, DocId)>,
     /// Sets of files opened together that still have members opening (see [`OpenOrder`]).
     pub(crate) batches: Vec<OpenBatch>,
     /// The id of the next set.
@@ -365,6 +367,7 @@ fn close_after_saves(app: &mut PhotocraftApp, ctx: &egui::Context) {
 /// Per frame: apply finished jobs and react to them; keep frames coming while jobs run; Esc
 /// cancels the job in view.
 pub fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    show_previews(app);
     for e in app.session.poll_jobs() {
         on_event(app, ctx, e);
     }
@@ -494,14 +497,22 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
     if e.command == OPEN_JOB {
         let Some(i) = app.jobs.opens.iter().position(|o| o.job == e.id) else { return };
         let tab = app.jobs.opens.remove(i);
+        let preview = app.jobs.previews.iter().position(|(j, _)| *j == e.id).map(|p| app.jobs.previews.remove(p).1);
         match e.outcome {
             JobOutcome::Done(v) => {
+                if let Some(old) = preview {
+                    replace_preview(app, old, &v);
+                }
                 if let Err(err) = finish_open_tab(app, &tab, &v) {
                     app.open_failed(&tab.name, &err);
                 }
             }
-            JobOutcome::Failed(err) => app.open_failed(&tab.name, &err),
+            JobOutcome::Failed(err) => {
+                close_preview(app, preview);
+                app.open_failed(&tab.name, &err)
+            }
             JobOutcome::Cancelled => {
+                close_preview(app, preview);
                 app.ui.status = crate::i18n::fmt(tl!("Cancelled opening {name}"), &[("name", &tab.name)]);
                 app.ui.status_error = false;
             }
@@ -541,6 +552,84 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
             app.ui.status = crate::i18n::fmt(tl!("Cancelled {label}"), &[("label", &e.label)]);
             app.ui.status_error = false;
         }
+    }
+}
+
+/// The previews (the camera's JPEG, the half-size develop) the raw opens in the background have
+/// made so far, as documents in the opening tab's place: the first becomes a tab that the open job
+/// locks (no edits; closing it cancels the open), later ones take its place. The full document
+/// replaces the last when the job lands ([`replace_preview`]).
+fn show_previews(app: &mut PhotocraftApp) {
+    for job in app.jobs.opens.iter().map(|o| o.job).collect::<Vec<_>>() {
+        // Only the newest: an older one that was not drawn yet is stale.
+        let Some(r) = app.session.take_published::<photocraft_io::ImportResult>(job).pop() else { continue };
+        let before = app.session.active_index();
+        let watching = app.jobs.focus == Some(job);
+        let (index, _) = app.session.open_document(r.document, None);
+        let Some(new) = app.session.documents().get(index).map(|st| st.doc.id) else { continue };
+        match app.jobs.previews.iter().position(|(j, _)| *j == job) {
+            Some(p) => {
+                let old = app.jobs.previews[p].1;
+                app.jobs.previews[p].1 = new;
+                swap_in_place(app, Some(job), old, new);
+            }
+            None => {
+                app.jobs.previews.push((job, new));
+                app.session.set_job_lock(job, Some(new));
+                if watching {
+                    app.jobs.focus = None;
+                } else if let Some(b) = before {
+                    app.session.set_active(b);
+                }
+            }
+        }
+        app.sync_views();
+    }
+}
+
+/// Puts document `new` (already open) at the tab position of `old`, keeps `old`'s view (zoom,
+/// scroll) and closes `old`. The opening `job`, if any, locks `new` afterwards.
+fn swap_in_place(app: &mut PhotocraftApp, job: Option<JobId>, old: DocId, new: DocId) {
+    let pos = |app: &PhotocraftApp, id: DocId| app.session.documents().iter().position(|st| st.doc.id == id);
+    // The lock must not follow `old` into its close (that would cancel the open) nor refuse the move.
+    if let Some(j) = job {
+        app.session.set_job_lock(j, None);
+    }
+    if let (Some(o), Some(n)) = (pos(app, old), pos(app, new)) {
+        let was_active = app.session.active_index() == Some(o);
+        let _ = app.session.execute("document.move", json!({"document": n, "to": o}));
+        for id in app.view_docs.iter_mut().filter(|id| **id == old) {
+            *id = new;
+        }
+        if let Some(i) = pos(app, old) {
+            app.session.close(i);
+        }
+        if let (true, Some(i)) = (was_active, pos(app, new)) {
+            app.session.set_active(i);
+        }
+    }
+    if let Some(j) = job {
+        app.session.set_job_lock(j, Some(new));
+    }
+}
+
+/// The open job landed with `v`: the full document takes the preview's tab.
+fn replace_preview(app: &mut PhotocraftApp, old: DocId, v: &Value) {
+    let full = v.get("docId").and_then(Value::as_u64).map(DocId);
+    match full.filter(|id| app.session.documents().iter().any(|st| st.doc.id == *id)) {
+        Some(full) if !crate::open_prompt::waiting(app) => {
+            swap_in_place(app, None, old, full);
+            app.sync_views();
+        }
+        _ => close_preview(app, Some(old)),
+    }
+}
+
+/// Closes an opening raw's preview document, if it has one and it is still open.
+fn close_preview(app: &mut PhotocraftApp, preview: Option<DocId>) {
+    if let Some(i) = preview.and_then(|id| app.session.documents().iter().position(|st| st.doc.id == id)) {
+        app.session.close(i);
+        app.sync_views();
     }
 }
 
@@ -856,7 +945,12 @@ pub fn open_card(app: &mut PhotocraftApp, ui: &mut egui::Ui, job: JobId) {
 
 /// Open tabs for the tab strips: (job, title, progress).
 pub fn open_tabs(app: &PhotocraftApp) -> Vec<(JobId, String, f32)> {
-    app.jobs.opens.iter().map(|o| (o.job, o.name.clone(), app.session.job(o.job).map_or(0.0, |j| j.progress))).collect()
+    app.jobs
+        .opens
+        .iter()
+        .filter(|o| !app.jobs.previews.iter().any(|(j, _)| *j == o.job))
+        .map(|o| (o.job, o.name.clone(), app.session.job(o.job).map_or(0.0, |j| j.progress)))
+        .collect()
 }
 
 /// Draw one opening tab's progress underline inside tab rect `r`.
@@ -886,3 +980,7 @@ pub fn bytes(b: &[u8]) -> OpenSource {
 #[cfg(test)]
 #[path = "jobs_ui_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "progressive_open_tests.rs"]
+mod progressive_open_tests;
