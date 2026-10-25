@@ -33,6 +33,8 @@ jobs:
           components: rustfmt, clippy
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
+        with:
+          cache-on-failure: true
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Test RAW development
