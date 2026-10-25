@@ -611,6 +611,21 @@ fn esc_leaves_full_screen_modes_unless_something_else_owns_it() {
 }
 
 #[test]
+fn data_sets_as_files_opens_its_dialog_from_the_menu() {
+    let (mut app, ctx) = app_with(1);
+    // Render Video asks for a folder instead (file_dialog tests).
+    let id = "file.export.dataSetsAsFiles";
+    let opened = menu(&mut app, &ctx, id, json!({})).unwrap();
+    let d = opened["dialog"].as_u64().expect("menu item should open a dialog");
+    assert_eq!(app.ui.dialog_mut(d).unwrap().fields["__command"], id);
+    app.ui.close_dialog(d);
+    // Batch with no action reveals the Actions panel so the user can record one.
+    app.ui.panels.history = false;
+    assert!(menu(&mut app, &ctx, "file.automate.batch", json!({})).is_err());
+    assert!(app.ui.panels.history && app.ui.dock_tabs.history == 1);
+}
+
+#[test]
 fn creating_a_selection_restores_hidden_extras() {
     let mut hidden = Vec::new();
     for (command, params) in [

@@ -1442,8 +1442,15 @@ pub(crate) fn batch_keeps_step(id: &str) -> bool {
 
 fn batch(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.automate.batch";
-    let mut steps =
-        parse_steps(p.get("steps").or_else(|| p.get("action")).ok_or_else(|| EngineError::BadParams { cmd: cmd.into(), msg: "missing \"steps\"".into() })?)?;
+    let mut steps = if p.get("action").is_some()
+        && (p.get("steps").is_none() || p.get("__actionStepsFor").is_some_and(|orig| orig != &p["action"]))
+        && !p["action"].is_array()
+    {
+        let idx = crate::actions_cmds::resolve(&s.actions.list, p, cmd)?;
+        s.actions.list[idx].enabled_steps().map(|(_, (id, params))| (id.clone(), params.clone())).collect()
+    } else {
+        parse_steps(p.get("steps").or_else(|| p.get("action")).ok_or_else(|| EngineError::BadParams { cmd: cmd.into(), msg: "missing \"steps\"".into() })?)?
+    };
     // Each result goes to the destination folder, which overrides the action's recorded Save /
     // Save As steps: they only mark the result.
     steps.retain(|(id, _)| batch_keeps_step(id) && id != "file.export.quickExport");

@@ -19,13 +19,7 @@ fn no_params(p: &Value) -> bool {
 }
 
 fn default_dir(app: &PhotocraftApp) -> String {
-    app.session.active().and_then(|d| d.path.as_deref()).and_then(|p| p.rfind(['/', '\\']).map(|i| p[..i].to_string())).unwrap_or_else(|| ".".into())
-}
-
-/// A packaged macOS app does not start in a useful writable working directory. A saved
-/// document keeps its own folder; otherwise prefer the user's Documents folder.
-fn droplet_default_dir(app: &PhotocraftApp) -> String {
-    let dir = default_dir(app);
+    let dir = app.session.active().and_then(|d| d.path.as_deref()).and_then(|p| p.rfind(['/', '\\']).map(|i| p[..i].to_string())).unwrap_or_else(|| ".".into());
     if dir != "." {
         return dir;
     }
@@ -36,6 +30,12 @@ fn droplet_default_dir(app: &PhotocraftApp) -> String {
         return if documents.is_dir() { documents } else { home }.to_string_lossy().into_owned();
     }
     dir
+}
+
+/// A packaged macOS app does not start in a useful writable working directory. A saved
+/// document keeps its own folder; otherwise prefer the user's Documents folder.
+fn droplet_default_dir(app: &PhotocraftApp) -> String {
+    default_dir(app)
 }
 
 fn doc_stem(app: &PhotocraftApp) -> String {
@@ -91,16 +91,18 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &V
         "file.automate.createDroplet" => {
             let dir = droplet_default_dir(app);
             let Some(action) = crate::actions::selected_action(app) else {
+                crate::actions::reveal_panel(app);
                 return Some(Err("record an action in the Actions panel first".into()));
             };
             let steps = crate::actions::action_steps(action);
             let name = action.name.clone();
+            let action_names: Vec<String> = app.session.actions.list.iter().map(|a| a.name.clone()).collect();
             form(
                 app,
                 id,
                 tl!("Create Droplet"),
-                json!({"path": format!("{dir}/{name}.pcdroplet"), "name": name, "steps": steps, "output": format!("{dir}/droplet-output"), "format": "same"}),
-                json!({"format": ["same", "png", "jpg", "psd", "tiff"]}),
+                json!({"path": format!("{dir}/{name}.pcdroplet"), "name": name, "action": name, "__actionStepsFor": name, "steps": steps, "output": format!("{dir}/droplet-output"), "format": "same"}),
+                json!({"action": action_names, "format": ["same", "png", "jpg", "psd", "tiff"]}),
             )
         }
         "file.scripts.statistics" => json!({"dialog": crate::stack_dialog::open_statistics(app)}),

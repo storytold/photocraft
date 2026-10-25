@@ -611,6 +611,12 @@ fn wraps(id: &str) -> bool {
             | "file.export.layerCompsToFiles"
             | "file.export.artboardsToFiles"
             | "file.export.artboardsToPdf"
+            | "file.export.dataSetsAsFiles"
+            | "file.import.variableDataSets"
+            | "layer.videoLayers.newVideoLayerFromFile"
+            | "layer.videoLayers.replaceFootage"
+            | "layer.videoLayers.interpretFootage"
+            | "edit.presets.migratePresets"
             | "layer.new.artboard"
             | "file.export.colorLookupTables"
             | "view.newGuideLayout"
@@ -620,9 +626,6 @@ fn wraps(id: &str) -> bool {
             | "image.calculations"
             | "select.saveSelection"
             | "select.loadSelection"
-            | "layer.videoLayers.newVideoLayerFromFile"
-            | "layer.videoLayers.replaceFootage"
-            | "layer.videoLayers.interpretFootage"
     )
 }
 
@@ -1218,9 +1221,19 @@ fn camera_data(ui: &mut egui::Ui, f: &Map<String, Value>) {
     });
 }
 
-/// Folder the batch dialogs start from: next to the active document, else the working directory.
+/// Folder the batch dialogs start from: next to the active document, else Documents on macOS or the working directory.
 fn default_dir(app: &PhotocraftApp) -> String {
-    app.session.active().and_then(|d| d.path.as_deref()).and_then(|p| p.rfind(['/', '\\']).map(|i| p[..i].to_string())).unwrap_or_else(|| ".".into())
+    let dir = app.session.active().and_then(|d| d.path.as_deref()).and_then(|p| p.rfind(['/', '\\']).map(|i| p[..i].to_string())).unwrap_or_else(|| ".".into());
+    if dir != "." {
+        return dir;
+    }
+    #[cfg(target_os = "macos")]
+    if let Some(home) = std::env::var_os("HOME") {
+        let home = std::path::PathBuf::from(home);
+        let documents = home.join("Documents");
+        return if documents.is_dir() { documents } else { home }.to_string_lossy().into_owned();
+    }
+    dir
 }
 
 fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Value) -> Option<Result<Value, String>> {
@@ -1398,6 +1411,25 @@ fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Value)
             let stem = name.rsplit_once('.').map_or(name.as_str(), |(a, _)| a).to_string();
             dialog(app, json!({"path": format!("{dir}/{stem}.pdf"), "quality": 10}), json!({}))
         }
+        "file.export.dataSetsAsFiles" => {
+            let _ = doc?;
+            dialog(
+                app,
+                json!({"dir": dir, "format": "png", "naming": "{name}"}),
+                json!({"format": ["png", "jpg", "psd", "tiff", "webp", "bmp"]}),
+            )
+        }
+        "file.import.variableDataSets" => {
+            let _ = doc?;
+            Some(app.pick_file_bytes_filtered(&["csv", "txt", "tsv"], |app, name, _bytes| {
+                app.run("file.import.variableDataSets", json!({"path": name}))
+            }))
+        }
+        "edit.presets.migratePresets" => {
+            Some(app.pick_file_bytes_filtered(&["json"], |app, name, _bytes| {
+                app.run("edit.presets.migratePresets", json!({"path": name}))
+            }))
+        }
         "layer.new.artboard" => {
             let (w, h, _) = doc?;
             let presets: Vec<&str> = std::iter::once("").chain(photocraft_engine::artboard_cmds::PRESETS.iter().map(|p| p.0)).collect();
@@ -1447,14 +1479,16 @@ fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Value)
         ),
         "file.automate.batch" => {
             let Some(action) = crate::actions::selected_action(app) else {
+                crate::actions::reveal_panel(app);
                 return Some(Err("record an action in the Actions panel first".into()));
             };
             let steps = crate::actions::action_steps(action);
             let name = action.name.clone();
+            let action_names: Vec<String> = app.session.actions.list.iter().map(|a| a.name.clone()).collect();
             dialog(
                 app,
-                json!({"action": name, "steps": steps, "input": dir, "includeSubfolders": false, "__labels": subfolders_label(), "output": format!("{dir}/batch"), "format": "same", "quality": null, "__batchQuality": 8, "naming": "", "startingSerial": 1}),
-                json!({"format": ["same", "png", "jpg", "psd", "tiff", "webp"]}),
+                json!({"action": name, "__actionStepsFor": name, "steps": steps, "input": dir, "includeSubfolders": false, "__labels": subfolders_label(), "output": format!("{dir}/batch"), "format": "same", "quality": null, "__batchQuality": 8, "naming": "", "startingSerial": 1}),
+                json!({"action": action_names, "format": ["same", "png", "jpg", "psd", "tiff", "webp"]}),
             )
         }
         // Channel workflow dialogs (see channels_panel.rs for the channel references).
