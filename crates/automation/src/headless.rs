@@ -253,34 +253,65 @@ impl Headless {
         })
     }
 
-    /// Save (`.pcraft` or any export format by extension). With no path,
-    /// saves to the document's own path.
-    pub fn save(&mut self, index: Option<usize>, path: Option<&Path>, format: Option<&str>, opts: &ExportOptions) -> Result<Value, AutomationError> {
+    /// Save (`.pcraft` or any export format by extension). With no path, writes the document
+    /// back to its own file in its own format (PSD, PSB, OpenRaster, .pcraft, TIFF, JPEG, PNG,
+    /// WebP); flattening layers into a flat file needs `flatten`, which stands in for the
+    /// desktop's confirmation.
+    pub fn save(
+        &mut self,
+        index: Option<usize>,
+        path: Option<&Path>,
+        format: Option<&str>,
+        opts: &ExportOptions,
+        flatten: bool,
+    ) -> Result<Value, AutomationError> {
         let i = self.doc_index(index)?;
         let (stored_path, doc) = {
             let state = &self.session.documents()[i];
             (state.path.clone(), state.doc.clone())
         };
+        let mut opts = opts.clone();
+        let mut own_file = false;
         let target: PathBuf = match (path, stored_path.as_deref()) {
             (Some(p), _) => p.to_path_buf(),
-            // Like the desktop's File › Save: without a new path, only a layered file is written
-            // back, in its own format; a flattened or converted copy never replaces it (#416).
+            // Like the desktop's File › Save: without a new path, the document's own file is
+            // written back in its own format; a converted copy never replaces it (#416).
             (None, Some(p)) => {
                 let own = file_cmds::extension(p);
                 let written = format.map(|f| f.trim_start_matches('.').to_ascii_lowercase()).or_else(|| own.clone());
-                if !file_cmds::holds_at(&doc, p) || written != own {
-                    let lost = file_cmds::losses_at(&doc, p);
-                    let why = if lost.is_empty() { String::new() } else { format!(" (it can't keep: {})", lost.join("; ")) };
-                    return Err(AutomationError::BadRequest(format!(
-                        "pass `path`: without one, only a PSD, PSB, .pcraft or OpenRaster file that holds the whole document is written back, in its own format, so `{p}` was left unchanged{why}"
-                    )));
+                let kind = file_cmds::in_place_save(p).filter(|_| written == own);
+                // A TIFF keeps layers beyond a lone locked Background; a JPEG, PNG or WebP keeps
+                // only a plain raster, the desktop's test (`in_place_plan`).
+                let layers = file_cmds::tiff_would_write_layers(&doc);
+                let flattens = file_cmds::plain_raster(&doc).is_none();
+                match kind {
+                    None => {
+                        return Err(AutomationError::BadRequest(format!(
+                            "pass `path`: without one, only the document's own file is written back, in its own format (PSD, PSB, .pcraft, OpenRaster, TIFF, JPEG, PNG, WebP), so `{p}` was left unchanged"
+                        )));
+                    }
+                    Some(file_cmds::InPlaceSave::Layered) if !file_cmds::holds_at(&doc, p) => {
+                        let lost = file_cmds::losses_at(&doc, p);
+                        let why = if lost.is_empty() { String::new() } else { format!(" (it can't keep: {})", lost.join("; ")) };
+                        return Err(AutomationError::BadRequest(format!("pass `path`: `{p}` can't hold the whole document, so it was left unchanged{why}")));
+                    }
+                    Some(file_cmds::InPlaceSave::Flat) if flattens && !flatten => {
+                        return Err(AutomationError::BadRequest(format!(
+                            "saving `{p}` flattens the document's layers into it: pass `flatten: true` to confirm, or `path` to save elsewhere"
+                        )));
+                    }
+                    // A TIFF keeps its layers, as the desktop's Save Layers in TIFF default does.
+                    Some(file_cmds::InPlaceSave::Tiff) => opts.tiff_layers = layers && !flatten,
+                    Some(_) => {}
                 }
+                own_file = true;
                 PathBuf::from(p)
             }
             (None, None) => {
                 return Err(AutomationError::BadRequest("document has no path; pass `path`".into()));
             }
         };
+        let opts = &opts;
         let target_text = target.to_str().ok_or_else(|| AutomationError::BadRequest("automation paths must be valid UTF-8".into()))?;
         let mut warnings = match &self.filesystem {
             Filesystem::Denied => return Err(AutomationError::BadRequest("automation filesystem access is not granted: write authority is absent".into())),
@@ -298,14 +329,14 @@ impl Headless {
             }
         };
         warnings.extend(photocraft_engine::type_extra_cmds::missing_font_warnings(&doc));
-        // A layered document save (PSD, PSB, OpenRaster or .pcraft) that holds the whole document is a
-        // full write, not a flattened copy: record the current revision as saved so the session
-        // stops reporting `dirty`, and make the file the document's path. A flat export (PNG,
-        // JPEG, …), or an OpenRaster file that drops part of it, is a copy and leaves both alone
-        // (#1547, #3806).
+        // A layered document save (PSD, PSB, OpenRaster or .pcraft) that holds the whole document,
+        // or a write back to the document's own file, is a full write, not a copy: record the
+        // current revision as saved so the session stops reporting `dirty`, and make the file the
+        // document's path. A flat export (PNG, JPEG, …), or an OpenRaster file that drops part of
+        // it, is a copy and leaves both alone (#1547, #3806).
         let ext =
             format.map(|f| f.trim_start_matches('.').to_ascii_lowercase()).or_else(|| target.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()));
-        if ext.as_deref().is_some_and(|e| file_cmds::holds(&doc, e)) {
+        if own_file || ext.as_deref().is_some_and(|e| file_cmds::holds(&doc, e)) {
             // Saving by index must not retarget the next automation command.
             self.on_doc(Some(i), |this| {
                 if let Some(st) = this.session.active_mut() {

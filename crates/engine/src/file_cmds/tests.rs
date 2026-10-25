@@ -1409,6 +1409,23 @@ fn openraster_holds_a_document_only_when_it_drops_nothing() {
 }
 
 #[test]
+fn every_writable_opened_format_saves_in_place() {
+    for path in ["a.psd", "a.PSB", "a.pcraft", "a.ora"] {
+        assert_eq!(in_place_save(path), Some(InPlaceSave::Layered), "{path}");
+    }
+    for path in ["a.tif", r"C:\w\A.TIFF"] {
+        assert_eq!(in_place_save(path), Some(InPlaceSave::Tiff), "{path}");
+    }
+    for path in ["a.jpg", "a.JPEG", "a.jpe", "dir/a.png", "a.webp"] {
+        assert_eq!(in_place_save(path), Some(InPlaceSave::Flat), "{path}");
+    }
+    // Read-only or lossy-to-surprise formats, no extension, odd names: Save As.
+    for path in ["a.cr2", "a.heic", "a.gif", "a.pdn", "a.psdt", "a", ".png", "a.", "", "my.png/a"] {
+        assert_eq!(in_place_save(path), None, "{path}");
+    }
+}
+
+#[test]
 fn templates_open_untitled_without_their_path() {
     assert!(is_template("dir/card.PSDT") && !is_template("card.psd") && !is_template("psdt"));
     let dir = tmp("template");

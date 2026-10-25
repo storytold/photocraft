@@ -111,7 +111,7 @@ pub(crate) fn run_cmds(a: &RunArgs, out: &mut dyn Write, err: &mut dyn Write) ->
         h.session.active().map(|st| missing_font_warnings(&st.doc)).unwrap_or_default().into_iter().filter(|w| reported_fonts.insert(w.clone())).collect();
     warn_all(err, &remaining);
     if let Some(o) = a.out.as_deref() {
-        let r = h.save(None, Some(o), a.export.format.as_deref(), &opts)?;
+        let r = h.save(None, Some(o), a.export.format.as_deref(), &opts, false)?;
         let ws: Vec<String> = serde_json::from_value(r["warnings"].clone()).unwrap_or_default();
         let ws: Vec<String> = ws.into_iter().filter(|w| reported_fonts.insert(w.clone())).collect();
         warn_all(err, &ws);

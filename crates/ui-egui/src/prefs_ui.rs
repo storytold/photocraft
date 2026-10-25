@@ -1314,6 +1314,7 @@ fn humanize(key: &str) -> String {
         .replace("Mb", "(MB)")
         .replace("Exif", "EXIF")
         .replace("Hud", "HUD")
+        .replace(" tiff", " TIFF")
         .replace("Lut ", "LUT ")
 }
 
@@ -2793,6 +2794,8 @@ mod tests {
         assert!(export_field_visible(&obj, "webpQuality"));
         assert_eq!(humanize("webpLossless"), "Lossless");
         assert_eq!(humanize("webpQuality"), "Quality");
+        assert_eq!(humanize("saveLayersInTiff"), "Save layers in TIFF");
+        assert_eq!(humanize("askBeforeSavingLayeredTiff"), "Ask before saving layered TIFF");
         obj.insert("quickExportFormat".into(), json!("exr"));
         for key in ["jpegQuality", "webpLossless", "webpQuality", "convertToSrgb", "metadata"] {
             assert!(!export_field_visible(&obj, key), "EXR must not offer ignored web settings: {key}");

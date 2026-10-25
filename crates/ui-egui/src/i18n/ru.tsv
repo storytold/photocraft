@@ -2311,7 +2311,7 @@
 	Animated zoom	Анимированное масштабирование
 	Apply auto tone	Применять автотон
 	Ask	Спрашивать
-	Ask before saving layered tiff	Спрашивать перед сохранением многослойного TIFF
+	Ask before saving layered TIFF	Спрашивать перед сохранением многослойного TIFF
 	Autosave	Автосохранение
 	Autosave minutes	Интервал автосохранения (мин)
 	Beep when done	Звуковой сигнал по завершении
@@ -3861,6 +3861,11 @@ curves	Smooth	Сгладить
 
 # Graphics Adapter preference (#1885)
 	GPU adapter	Адаптер GPU
+	Save layers in TIFF	Сохранять слои в TIFF
+	Save Flattened?	Сохранить сведённым?
+	Flatten and Save	Свести и сохранить
+	Use Save As to keep the layers in a PSD or TIFF.	Чтобы сохранить слои, используйте «Сохранить как» с форматом PSD или TIFF.
+	“{name}” is a {format} file, which can't keep layers. Saving flattens the image in the file; the layers stay in this window until you close it.	«{name}» — файл {format}, в котором нельзя хранить слои. При сохранении изображение в файле будет сведено; слои останутся в этом окне, пока вы его не закроете.
 
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Импортировать стили…

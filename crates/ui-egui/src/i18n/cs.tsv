@@ -1903,7 +1903,7 @@
 	Animated zoom	Animované zvětšování
 	Apply auto tone	Použít automatický tón
 	Ask	Zeptat se
-	Ask before saving layered tiff	Ptát se před uložením TIFF s vrstvami
+	Ask before saving layered TIFF	Ptát se před uložením TIFF s vrstvami
 	Auto collapse icon panels	Automaticky sbalit panely ikon
 	Auto show hidden panels	Automaticky zobrazit skryté panely
 	Auto show home screen	Automaticky zobrazit úvodní obrazovku
@@ -4125,6 +4125,11 @@ cameraRaw	Dehaze	Odstranění oparu
 
 # Graphics Adapter preference (#1885)
 	GPU adapter	Adaptér GPU
+	Save layers in TIFF	Ukládat vrstvy v TIFF
+	Save Flattened?	Uložit sloučené?
+	Flatten and Save	Sloučit a uložit
+	Use Save As to keep the layers in a PSD or TIFF.	Chcete-li vrstvy zachovat, použijte Uložit jako a formát PSD nebo TIFF.
+	“{name}” is a {format} file, which can't keep layers. Saving flattens the image in the file; the layers stay in this window until you close it.	„{name}“ je soubor {format}, který neumí uchovat vrstvy. Uložením se obraz v souboru sloučí; vrstvy zůstanou v tomto okně, dokud ho nezavřete.
 
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Importovat styly…
