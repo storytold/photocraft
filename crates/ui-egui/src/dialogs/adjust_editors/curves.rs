@@ -274,8 +274,9 @@ pub(super) fn curves(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     let t = Tokens::get(ui.ctx());
     let space = space_of(v);
     let chans = tone_channels(space, cx.gray);
-    // The Preset menu (#9221): PhotoCraft's own curves for common looks, Custom once edited.
-    let mut e = if space == ToneSpace::Rgb && cx.isolated_curve.is_none() { curves_preset_row(ui, v, cx) } else { Edit::default() };
+    // The Preset menu (#9221): PhotoCraft's own curves for common looks, Custom once edited. A
+    // grayscale document has it whatever channel keys its settings still hold.
+    let mut e = if (cx.gray || space == ToneSpace::Rgb) && cx.isolated_curve.is_none() { curves_preset_row(ui, v, cx) } else { Edit::default() };
     let state_id = cx.mem.with("curves");
     let mut st: CurveUi = ui.data(|d| d.get_temp(state_id)).unwrap_or_default();
     let isolated = cx.isolated_curve.as_ref();

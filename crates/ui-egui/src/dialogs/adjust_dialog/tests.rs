@@ -431,6 +431,25 @@ fn curves_preset_menu_loads_a_preset_and_reads_custom_after_an_edit() {
     crate::dialogs::confirm(h.state_mut(), id).unwrap();
 }
 
+/// CodeRabbit on #9234: a grayscale document's Curves shows the Preset menu even when its
+/// settings still hold another mode's channel keys (a CMYK `cyan`, a Lab `a`).
+#[test]
+fn grayscale_curves_shows_presets_with_stale_channel_keys() {
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app_with_image());
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h.state_mut().run("image.mode.grayscale", json!({})).unwrap();
+    let id = open(h.state_mut(), "image.adjustments.curves").unwrap();
+    for key in ["cyan", "a"] {
+        h.state_mut().ui.dialog_mut(id).unwrap().fields.insert(key.into(), json!([[0.0, 0.0], [255.0, 255.0]]));
+        h.run_steps(4);
+        let menus: Vec<String> =
+            h.query_all_by_role(egui::accesskit::Role::ComboBox).filter_map(|n| n.accesskit_node().value().map(|v| v.to_string())).collect();
+        assert!(menus.iter().any(|v| v == "Default"), "with `{key}`: the Preset menu, at Default (menus: {menus:?})");
+        h.state_mut().ui.dialog_mut(id).unwrap().fields.remove(key);
+    }
+    crate::dialogs::cancel(h.state_mut(), id).unwrap();
+}
+
 #[test]
 fn curves_pointer_drag_previews_until_confirm_and_cancel_preserves_document() {
     for confirm in [false, true] {
