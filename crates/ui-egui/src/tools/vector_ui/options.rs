@@ -114,9 +114,9 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
     let opts = [("shape".to_string(), tl!("Shape")), ("path".to_string(), tl!("Path"))];
     crate::widgets::dropdown(ui, "shape-mode", tl!("Mode"), &mut app.ui.tool_options.shape_mode, &opts, 80.0);
     crate::widgets::vline(ui, 22.0);
-    if !draws_path(&app.ui.tool_options) {
-        crate::shape_options::options_bar(app, ui, tool);
-    }
+    // Path mode hides Fill and Stroke (an outline has no paint); the tool's geometry stays.
+    let paint = !draws_path(&app.ui.tool_options);
+    crate::shape_options::options_bar(app, ui, tool, paint);
     true
 }
 
