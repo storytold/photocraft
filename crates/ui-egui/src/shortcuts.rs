@@ -558,9 +558,11 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // Backspace/Delete. Once the last anchor is removed, regular Undo works again.
     if app.ui.pen.as_ref().is_some_and(|pen| !pen.knots.is_empty()) {
         let mods = ctx.input(|i| i.modifiers);
-        let command_undo = effective_shortcut(app, "edit.undo", default_shortcut("edit.undo").as_deref())
-            .and_then(|shortcut| parse(&shortcut))
-            .is_some_and(|shortcut| consume(ctx, &shortcut));
+        // Not while a Free Transform or Crop box owns Undo: Edit › Undo below steps the box.
+        let command_undo = !crate::vector_ui::box_steps(app, "edit.undo")
+            && effective_shortcut(app, "edit.undo", default_shortcut("edit.undo").as_deref())
+                .and_then(|shortcut| parse(&shortcut))
+                .is_some_and(|shortcut| consume(ctx, &shortcut));
         let remove = !mods.command
             && !mods.ctrl
             && !mods.shift
