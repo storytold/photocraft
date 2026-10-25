@@ -54,6 +54,8 @@ const PHOTOSHOP: [(f32, f32, [u8; 256]); 3] = [
     ),
 ];
 
+/// Matches all 256 RGB/8 gray-ramp samples to the measured Photoshop settings,
+/// including the issue's brightness 75 / contrast -17 rounding regression.
 #[test]
 fn modern_brightness_contrast_matches_photoshop_ramps_exactly() {
     for (brightness, contrast, expected) in PHOTOSHOP {
@@ -65,6 +67,8 @@ fn modern_brightness_contrast_matches_photoshop_ramps_exactly() {
     }
 }
 
+/// A neutral modern adjustment must preserve negative and above-white F32 samples
+/// and alpha exactly, rather than clipping through the lookup table's 0..1 domain.
 #[test]
 fn neutral_modern_brightness_contrast_preserves_float_range() {
     use photocraft_color::SampleType;
@@ -79,6 +83,8 @@ fn neutral_modern_brightness_contrast_preserves_float_range() {
     assert_eq!(buffer, before);
 }
 
+/// Checks the measured RGB/8 result for a partially transparent pixel while
+/// preserving its alpha and leaving a fully transparent pixel's hidden RGB intact.
 #[test]
 fn modern_brightness_contrast_preserves_alpha_and_transparent_rgb() {
     let source = [[64.0 / 255.0, 33.0 / 255.0, 0.0, 0.4], [0.2, 0.3, 0.4, 0.0]];
@@ -105,6 +111,8 @@ const PHOTOSHOP16: [(f32, f32, [u16; 17]); 11] = [
     (75.0, -17.0, [0, 7250, 14158, 20726, 26954, 32841, 38341, 43369, 47873, 51835, 55247, 58119, 60473, 62347, 63781, 64825, 65535]),
 ];
 
+/// Compares RGB/16 ramps to Photoshop within two internal 1/32768 steps,
+/// guarding against byte quantization without claiming exact RGB/16 parity.
 #[test]
 fn modern_brightness_contrast_retains_16_bit_precision() {
     use photocraft_color::SampleType;
@@ -124,6 +132,8 @@ fn modern_brightness_contrast_retains_16_bit_precision() {
     }
 }
 
+/// Checks LUT monotonicity and exact black/white endpoints across slider extremes.
+/// Non-finite slider inputs must leave the directly evaluated samples unchanged.
 #[test]
 fn modern_brightness_contrast_curves_are_monotone_and_pin_endpoints() {
     for brightness in [-150.0, -125.0, -75.0, 0.0, 75.0, 125.0, 150.0] {
@@ -140,6 +150,8 @@ fn modern_brightness_contrast_curves_are_monotone_and_pin_endpoints() {
     }
 }
 
+/// Matches a clipped adjustment's rendered RGB/8 ramp to the Photoshop reference,
+/// exercising document compositing in addition to direct buffer adjustment.
 #[test]
 fn clipped_brightness_contrast_render_matches_photoshop() {
     use photocraft_color::{ColorMode, PixelFormat, SampleType};
