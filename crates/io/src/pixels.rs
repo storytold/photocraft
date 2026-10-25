@@ -47,7 +47,7 @@ pub fn interleave(planes: &[Option<&[u8]>], fill: &[Vec<u8>], n: usize, s: Sampl
         return out;
     }
     let bs = bands(n);
-    let step = bs.first().map_or(n, |b| b.len()) * row;
+    let step = bs.first().map_or(n, ExactSizeIterator::len) * row;
     par_map(bs.into_iter().zip(out.chunks_mut(step)).collect(), |(band, part)| {
         for (c, plane) in planes.iter().enumerate() {
             let src = plane.and_then(|p| p.get(band.start * bps..)).unwrap_or_default();

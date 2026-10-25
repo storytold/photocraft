@@ -647,7 +647,7 @@ pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
             // Keep the canonical English default in state; only the TextEdit shows a translation.
             let raw = get_s(f, "name", "Untitled-1");
             let mut name = if raw == "Untitled-1" { tl!("Untitled-1").to_string() } else { raw };
-            let r = ui.add(egui::TextEdit::singleline(&mut name).desired_width(250.0).font(egui::FontId::proportional(15.0)));
+            let r = ui.add(egui::TextEdit::singleline(&mut name).desired_width(250.0).font(egui::FontId::proportional(15.0))).accessible_name(tl!("Name"));
             if r.changed() {
                 f.insert("name".into(), json!(name));
             }
@@ -669,11 +669,12 @@ pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
             small_label(ui, tl!("Width"));
             ui.horizontal(|ui| {
                 let mut w = shown_size(f, "width", 1920.0, &unit, ppi);
-                if widgets::value_field_units(ui, &mut w, 0.0..=300_000.0, 110.0, widgets::unit_decimals(&unit), units).changed() {
+                if widgets::value_field_units(ui, &mut w, 0.0..=300_000.0, 110.0, widgets::unit_decimals(&unit), units).accessible_name(tl!("Width")).changed()
+                {
                     set_size(f, "width", w, &unit, ppi);
                 }
                 let opts: Vec<(String, &str)> = UNITS.iter().map(|u| (u.0.to_string(), u.1)).collect();
-                if widgets::dropdown(ui, "nd-unit", &mut unit, &opts, 120.0) {
+                if widgets::dropdown(ui, "nd-unit", tl!("Units"), &mut unit, &opts, 120.0) {
                     f.insert("__unit".into(), json!(unit));
                     f.remove("__savedPreset");
                 }
@@ -681,7 +682,8 @@ pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
             small_label(ui, tl!("Height"));
             ui.horizontal(|ui| {
                 let mut h = shown_size(f, "height", 1080.0, &unit, ppi);
-                if widgets::value_field_units(ui, &mut h, 0.0..=300_000.0, 110.0, widgets::unit_decimals(&unit), units).changed() {
+                if widgets::value_field_units(ui, &mut h, 0.0..=300_000.0, 110.0, widgets::unit_decimals(&unit), units).accessible_name(tl!("Height")).changed()
+                {
                     set_size(f, "height", h, &unit, ppi);
                 }
                 ui.add_space(6.0);
@@ -699,17 +701,28 @@ pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
                     }
                 }
             });
+            // Under Orientation, as in Photoshop: the document starts as one artboard (#9086).
+            let mut artboard = f.get("artboard").and_then(Value::as_bool).unwrap_or(false);
+            if widgets::checkbox(ui, &mut artboard, tl!("Artboards")).changed() {
+                f.insert("artboard".into(), json!(artboard));
+            }
             ui.add_space(4.0);
             small_label(ui, tl!("Resolution"));
             ui.horizontal(|ui| {
                 let per_cm = get_s(f, "__resUnit", "in") == "cm";
                 let mut r = if per_cm { ppi / 2.54 } else { ppi };
-                if widgets::value_field(ui, &mut r, 1.0..=30_000.0, "", 110.0).changed() {
+                if widgets::value_field(ui, &mut r, 1.0..=30_000.0, "", 110.0).accessible_name(tl!("Resolution")).changed() {
                     set_resolution(f, if per_cm { r * 2.54 } else { r });
                 }
                 let mut ru = get_s(f, "__resUnit", "in");
-                if widgets::dropdown(ui, "nd-resunit", &mut ru, &[("in".to_string(), tl!("Pixels/Inch")), ("cm".to_string(), tl!("Pixels/Centimeter"))], 120.0)
-                {
+                if widgets::dropdown(
+                    ui,
+                    "nd-resunit",
+                    tl!("Resolution"),
+                    &mut ru,
+                    &[("in".to_string(), tl!("Pixels/Inch")), ("cm".to_string(), tl!("Pixels/Centimeter"))],
+                    120.0,
+                ) {
                     f.insert("__resUnit".into(), json!(ru));
                     f.remove("__savedPreset");
                 }
@@ -721,6 +734,7 @@ pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
                 if widgets::dropdown(
                     ui,
                     "nd-mode",
+                    tl!("Color Mode"),
                     &mut mode,
                     &[
                         ("gray".to_string(), tl!("Grayscale")),
@@ -737,7 +751,7 @@ pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
                 }
                 let mut depth = f.get("depth").and_then(Value::as_u64).unwrap_or(8);
                 let depth_options: Vec<(u64, &str, &str)> = DEPTH_OPTIONS.iter().map(|(bits, label, tooltip)| (*bits, *label, *tooltip)).collect();
-                if widgets::dropdown_with_tooltips(ui, "nd-depth", &mut depth, &depth_options, 120.0) {
+                if widgets::dropdown_with_tooltips(ui, "nd-depth", tl!("Depth"), &mut depth, &depth_options, 120.0) {
                     f.insert("depth".into(), json!(depth));
                     f.remove("__savedPreset");
                 }
@@ -759,7 +773,7 @@ pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
                     f.remove("profile");
                 }
                 let shown: Vec<(String, &str)> = opts.iter().map(|(v, l)| (v.clone(), l.as_str())).collect();
-                if widgets::dropdown(ui, "nd-profile", &mut profile, &shown, 240.0) {
+                if widgets::dropdown(ui, "nd-profile", tl!("Color Profile"), &mut profile, &shown, 240.0) {
                     if profile == "working" {
                         f.remove("profile");
                     } else {
@@ -783,7 +797,7 @@ pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
             let shown = background_rgb(app, f);
             let mut pick = false;
             ui.horizontal(|ui| {
-                if widgets::dropdown(ui, "nd-bg", &mut bg, &opts, 240.0 - SWATCH - 6.0) {
+                if widgets::dropdown(ui, "nd-bg", tl!("Background"), &mut bg, &opts, 240.0 - SWATCH - 6.0) {
                     if bg == CUSTOM {
                         // Custom… opens the Color Picker on the colour shown so far.
                         pick = true;
@@ -810,7 +824,7 @@ pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
                 }
                 ui.painter().rect_stroke(r, 2.0, Stroke::new(1.0, Tokens::get(ui.ctx()).field_border), StrokeKind::Inside);
                 let resp = resp.on_hover_text(tl!("Custom background color")).on_hover_cursor(egui::CursorIcon::PointingHand);
-                resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Custom background color")));
+                resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Custom background color")));
                 if resp.clicked() {
                     pick = true;
                     f.remove("__savedPreset");
@@ -879,6 +893,21 @@ mod tests {
         assert!(s.execute("file.new", command_params(&f)).is_ok());
         apply_saved_preset(&mut f, &s.presets.documents[1]);
         assert_eq!(f["profile"], "coated-cmyk");
+    }
+
+    /// #9086: the Artboards checkbox's field reaches `file.new`, which starts the document as one
+    /// artboard; the dialog's own `__` keys don't.
+    #[test]
+    fn the_artboards_box_creates_an_artboard_document() {
+        let mut s = photocraft_engine::Session::new();
+        let mut f = Map::new();
+        for (k, v) in [("width", json!(64)), ("height", json!(48)), ("artboard", json!(true)), ("__orientation", json!("landscape"))] {
+            f.insert(k.into(), v);
+        }
+        s.execute("file.new", command_params(&f)).unwrap();
+        let doc = &s.active().unwrap().doc;
+        assert_eq!(doc.artboards().len(), 1);
+        assert_eq!(doc.artboards()[0].2.rect, doc.bounds());
     }
 
     #[test]

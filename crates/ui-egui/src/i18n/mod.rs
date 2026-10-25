@@ -409,7 +409,7 @@ pub fn language_scope(lang: Lang) -> impl Drop {
 pub fn sync_context(ctx: &egui::Context, language: &str) {
     let lang = Lang::from_pref(language);
     set_current(lang);
-    let id = egui::Id::new("photocraft-ui-language");
+    let id = egui::Id::unique("photocraft-ui-language");
     let changed = ctx.data(|data| data.get_temp::<Lang>(id) != Some(lang));
     if changed {
         ctx.data_mut(|data| data.insert_temp(id, lang));

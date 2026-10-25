@@ -126,10 +126,17 @@ pub fn read_entry(file: &mut impl std::io::Read, len: u64, max: usize, path: &st
 /// The saver checks the same bound, so every bundle it writes loads again.
 const MAX_MANIFEST_DEPTH: usize = 3 * (convert::MAX_GROUP_DEPTH + 1) + 64;
 
-/// Rejects JSON nested deeper than [`MAX_MANIFEST_DEPTH`] with a linear scan (no recursion), so
-/// parsing with serde_json's recursion limit disabled can't exhaust the stack on hostile input.
+/// Most JSON items (arrays and objects opened, plus elements and members after a comma) a
+/// manifest may hold. Parsing builds a `serde_json::Value` tree of tens of bytes per item, so
+/// `[0,0,…]` costs about 16× its size in memory; a typical manifest spends 20 bytes or more per
+/// item, so this still admits manifests of about 80 MiB.
+const MAX_MANIFEST_ITEMS: usize = 4 << 20;
+
+/// Rejects JSON nested deeper than [`MAX_MANIFEST_DEPTH`] or holding more than
+/// [`MAX_MANIFEST_ITEMS`] items with a linear scan (no recursion), so parsing with serde_json's
+/// recursion limit disabled can't exhaust the stack, nor tiny values the memory, on hostile input.
 fn check_manifest_depth(json: &[u8]) -> Result<()> {
-    let (mut depth, mut in_str, mut escaped) = (0usize, false, false);
+    let (mut depth, mut items, mut in_str, mut escaped) = (0usize, 0usize, false, false);
     for &b in json {
         if in_str {
             match b {
@@ -150,6 +157,12 @@ fn check_manifest_depth(json: &[u8]) -> Result<()> {
             }
             b']' | b'}' => depth = depth.saturating_sub(1),
             _ => {}
+        }
+        if matches!(b, b'[' | b'{' | b',') {
+            items += 1;
+            if items > MAX_MANIFEST_ITEMS {
+                return Err(FormatError::LimitExceeded(format!("manifest JSON holds more than {MAX_MANIFEST_ITEMS} values")));
+            }
         }
     }
     Ok(())

@@ -563,7 +563,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     crate::widgets::vline(ui, 22.0);
     ui.label(tl!("Grid Size:"));
     let mut g = s.grid_size as f32;
-    if crate::widgets::value_field(ui, &mut g, 2.0..=2000.0, "px", 56.0).changed() {
+    if crate::widgets::value_field(ui, &mut g, 2.0..=2000.0, "px", 56.0).accessible_name(tl!("Grid Size:")).changed() {
         s.grid_size = f64::from(g);
     }
     if s.clip.is_some() {
@@ -572,7 +572,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         if s.paste {
             ui.label(tl!("Width:"));
             let mut w = (s.paste_width * 100.0) as f32;
-            if crate::widgets::value_field(ui, &mut w, 1.0..=1000.0, "%", 56.0).changed() {
+            if crate::widgets::value_field(ui, &mut w, 1.0..=1000.0, "%", 56.0).accessible_name(tl!("Width:")).changed() {
                 s.paste_width = f64::from(w) / 100.0;
             }
         }

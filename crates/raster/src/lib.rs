@@ -245,6 +245,56 @@ fn convert_tiles(tiles: &mut [(TileCoord, Arc<Tile>)], r: Rect, data: &[f32], w:
     }
 }
 
+fn decode_tile_row_rgba(fmt: &PixelFormat, t: &Tile, base: usize, dst: &mut [[f32; 4]], row: &mut Vec<f32>) {
+    let n = fmt.channels();
+    match (fmt.mode, fmt.sample, fmt.alpha) {
+        (ColorMode::Rgb, SampleType::U8, true) => {
+            let src = &t.data[base..base + dst.len() * 4];
+            for (d, s) in dst.iter_mut().zip(src.as_chunks::<4>().0) {
+                *d = [s[0] as f32 / 255.0, s[1] as f32 / 255.0, s[2] as f32 / 255.0, s[3] as f32 / 255.0];
+            }
+        }
+        (ColorMode::Grayscale, SampleType::U8, true) => {
+            let src = &t.data[base..base + dst.len() * 2];
+            for (d, s) in dst.iter_mut().zip(src.as_chunks::<2>().0) {
+                let g = s[0] as f32 / 255.0;
+                *d = [g, g, g, s[1] as f32 / 255.0];
+            }
+        }
+        (ColorMode::Cmyk, SampleType::U8, _) => {
+            // Identical ink bytes share the exact ICC result; alpha is independent.
+            let mut previous: Option<([u8; 4], [f32; 3])> = None;
+            let src = &t.data[base..base + dst.len() * n];
+            for (d, s) in dst.iter_mut().zip(src.chunks_exact(n)) {
+                let ink = [s[0], s[1], s[2], s[3]];
+                let rgb = match previous {
+                    Some((key, rgb)) if key == ink => rgb,
+                    _ => {
+                        let rgb = photocraft_color::convert::cmyk_to_rgb(ink.map(|v| v as f32 / 255.0));
+                        previous = Some((ink, rgb));
+                        rgb
+                    }
+                };
+                *d = [rgb[0], rgb[1], rgb[2], s.get(4).map_or(1.0, |v| *v as f32 / 255.0)];
+            }
+        }
+        _ => {
+            // The row's samples in one pass, then its colour model resolved once:
+            // RGB and grey take their channels as `to_rgba` does, other models go
+            // through it.
+            row.resize(dst.len() * n, 0.0);
+            read_samples(&t.data, fmt.sample, base, row);
+            let a = |s: &[f32], i: usize| if fmt.alpha { s[i] } else { 1.0 };
+            let pixels = dst.iter_mut().zip(row.chunks_exact(n));
+            match fmt.mode {
+                ColorMode::Rgb => pixels.for_each(|(d, s)| *d = [s[0], s[1], s[2], a(s, 3)]),
+                ColorMode::Grayscale | ColorMode::Bitmap | ColorMode::Duotone => pixels.for_each(|(d, s)| *d = [s[0], s[0], s[0], a(s, 1)]),
+                _ => pixels.for_each(|(d, s)| *d = to_rgba(fmt, s)),
+            }
+        }
+    }
+}
+
 impl Surface {
     /// Reads a region into a newly allocated buffer, returning an error instead of aborting if
     /// the requested pixel buffer cannot be represented or reserved.
@@ -577,52 +627,7 @@ impl Surface {
                     continue;
                 };
                 let base = (((y - tc.ty * TILE_SIZE) as usize) * TILE_SIZE as usize + (tr.x0 - tc.tx * TILE_SIZE) as usize) * n;
-                match (fmt.mode, fmt.sample, fmt.alpha) {
-                    (ColorMode::Rgb, SampleType::U8, true) => {
-                        let src = &t.data[base..base + dst.len() * 4];
-                        for (d, s) in dst.iter_mut().zip(src.as_chunks::<4>().0) {
-                            *d = [s[0] as f32 / 255.0, s[1] as f32 / 255.0, s[2] as f32 / 255.0, s[3] as f32 / 255.0];
-                        }
-                    }
-                    (ColorMode::Grayscale, SampleType::U8, true) => {
-                        let src = &t.data[base..base + dst.len() * 2];
-                        for (d, s) in dst.iter_mut().zip(src.as_chunks::<2>().0) {
-                            let g = s[0] as f32 / 255.0;
-                            *d = [g, g, g, s[1] as f32 / 255.0];
-                        }
-                    }
-                    (ColorMode::Cmyk, SampleType::U8, _) => {
-                        // Identical ink bytes share the exact ICC result; alpha is independent.
-                        let mut previous: Option<([u8; 4], [f32; 3])> = None;
-                        let src = &t.data[base..base + dst.len() * n];
-                        for (d, s) in dst.iter_mut().zip(src.chunks_exact(n)) {
-                            let ink = [s[0], s[1], s[2], s[3]];
-                            let rgb = match previous {
-                                Some((key, rgb)) if key == ink => rgb,
-                                _ => {
-                                    let rgb = photocraft_color::convert::cmyk_to_rgb(ink.map(|v| v as f32 / 255.0));
-                                    previous = Some((ink, rgb));
-                                    rgb
-                                }
-                            };
-                            *d = [rgb[0], rgb[1], rgb[2], s.get(4).map_or(1.0, |v| *v as f32 / 255.0)];
-                        }
-                    }
-                    _ => {
-                        // The row's samples in one pass, then its colour model resolved once:
-                        // RGB and grey take their channels as `to_rgba` does, other models go
-                        // through it.
-                        row.resize(dst.len() * n, 0.0);
-                        read_samples(&t.data, fmt.sample, base, &mut row);
-                        let a = |s: &[f32], i: usize| if fmt.alpha { s[i] } else { 1.0 };
-                        let pixels = dst.iter_mut().zip(row.chunks_exact(n));
-                        match fmt.mode {
-                            ColorMode::Rgb => pixels.for_each(|(d, s)| *d = [s[0], s[1], s[2], a(s, 3)]),
-                            ColorMode::Grayscale | ColorMode::Bitmap | ColorMode::Duotone => pixels.for_each(|(d, s)| *d = [s[0], s[0], s[0], a(s, 1)]),
-                            _ => pixels.for_each(|(d, s)| *d = to_rgba(&fmt, s)),
-                        }
-                    }
-                }
+                decode_tile_row_rgba(&fmt, t, base, dst, &mut row);
             }
         }
     }
@@ -999,9 +1004,12 @@ impl Surface {
             // A target that got only default pixels isn't stored, as `prune` would drop it. Checked
             // after the copy, a row at a time: a tile with content stops at its first such row.
             let finished = tile.data.chunks(default_row.len()).any(|row| row != default_row).then(|| Arc::new(tile));
-            if let Some(k) = memo_key {
-                built.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(k, finished.clone());
-            }
+            // Workers that missed the memo at the same time each built a copy: all of them take
+            // the one stored first, so the targets share it however many threads raced.
+            let finished = match memo_key {
+                Some(k) => built.lock().unwrap_or_else(std::sync::PoisonError::into_inner).entry(k).or_insert(finished).clone(),
+                None => finished,
+            };
             finished.map(|t| (dc, t))
         };
         #[cfg(not(target_arch = "wasm32"))]
@@ -1869,8 +1877,9 @@ mod tests {
         let moved = s.translated(7, 5, s.content_bounds());
         let distinct: std::collections::HashSet<_> = moved.tiles().map(|(_, t)| Arc::as_ptr(t)).collect();
         // The 15 × 15 interior tiles read the same four source tiles at the same offset, so they are
-        // one tile; only the 64 border tiles (cut by the content's edge) are built one by one.
-        assert!(moved.tile_count() == 289 && distinct.len() <= 64 + 5, "{} tiles, {} distinct", moved.tile_count(), distinct.len());
+        // one tile, however many threads build them; only the 64 border tiles (cut by the
+        // content's edge) are built one by one.
+        assert!(moved.tile_count() == 289 && distinct.len() == 64 + 1, "{} tiles, {} distinct", moved.tile_count(), distinct.len());
         let all = Rect::new(-50, -50, 16 * TILE_SIZE + 50, 16 * TILE_SIZE + 50);
         assert_eq!(moved.read_region(all), s.read_region(all.translate(-7, -5)));
     }

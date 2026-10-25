@@ -1006,7 +1006,7 @@ pub fn draw_turn_cursor(ctx: &egui::Context, p: egui::Pos2, toward: egui::Vec2) 
     }
     let u = toward / len;
     let tokens = crate::theme::Tokens::get(ctx);
-    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("crop-turn-cursor")));
+    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("crop-turn-cursor")));
     const R: f32 = 12.0;
     const HALF: f32 = 0.75;
     let c = p + u * R;

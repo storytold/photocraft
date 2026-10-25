@@ -190,9 +190,10 @@ fn check(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, label: &str, 
     value
 }
 
-fn number(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, count: bool) {
+fn number(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, name: &str, count: bool) {
     let mut value = f.get(key).and_then(Value::as_f64).unwrap_or(0.0) as f32;
     if widgets::value_field(ui, &mut value, (if count { 1.0 } else { 0.0 })..=if count { 1000.0 } else { 300_000.0 }, if count { "" } else { "px" }, 68.0)
+        .accessible_name(tl!(name))
         .changed()
         // A disabled field still clamps its value into range (a zero count to 1); writing that
         // back would switch the axis on through its `positive` fallback (#5625).
@@ -202,14 +203,16 @@ fn number(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, count: bool)
     }
 }
 
-fn optional(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str) {
+fn optional(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, label: egui::Id) {
     let mut value = match f.get(key) {
         Some(Value::String(s)) => s.clone(),
         Some(v) if v.is_number() => v.to_string(),
         _ => String::new(),
     };
     let t = Tokens::get(ui.ctx());
-    let response = ui.add(egui::TextEdit::singleline(&mut value).id_salt(key).desired_width(60.0).font(crate::theme::mono(12.0)).background_color(t.field));
+    let response = ui
+        .add(egui::TextEdit::singleline(&mut value).id_salt(key).desired_width(60.0).font(crate::theme::mono(12.0)).background_color(t.field))
+        .labelled_by(label);
     if ui.is_enabled() {
         crate::field_tab::register(ui.ctx(), response.id);
     }
@@ -242,13 +245,13 @@ fn axis(ui: &mut egui::Ui, f: &mut Map<String, Value>, rows: bool) {
         ui.add_enabled_ui(enabled, |ui| {
             egui::Grid::new(count).spacing([8.0, 6.0]).show(ui, |ui| {
                 ui.label(tl!("Number"));
-                number(ui, f, count, true);
+                number(ui, f, count, "Number", true);
                 ui.end_row();
-                ui.label(size_label);
-                optional(ui, f, size);
+                let size_label_resp = ui.label(size_label);
+                optional(ui, f, size, size_label_resp.id);
                 ui.end_row();
                 ui.label(tl!("Spacing"));
-                number(ui, f, gap, false);
+                number(ui, f, gap, "Spacing", false);
                 ui.end_row();
             });
         });
@@ -263,6 +266,7 @@ fn main_fields(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value
         if widgets::dropdown(
             ui,
             "guide-preset",
+            tl!("Preset:"),
             &mut preset,
             &[("custom".into(), "Custom"), ("five".into(), "5 Columns, 3 Rows"), ("eight".into(), "8 Columns"), ("twelve".into(), "12 Columns")],
             222.0,
@@ -301,7 +305,7 @@ fn main_fields(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value
         if !photocraft_engine::guide_layout::selected_artboards(&app.session).is_empty() {
             options.push(("selectedArtboards".into(), "Selected Artboards"));
         }
-        if widgets::dropdown(ui, "guide-target", &mut target, &options, 222.0) {
+        if widgets::dropdown(ui, "guide-target", tl!("Target"), &mut target, &options, 222.0) {
             f.insert("target".into(), json!(target));
         }
         ui.end_row();
@@ -313,7 +317,7 @@ fn main_fields(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value
             ui.label(tl!("Color:"));
             let mut color = f.get("color").and_then(Value::as_str).unwrap_or("#4affff").to_string();
             let colors = color_options(&color);
-            if widgets::dropdown(ui, "guide-color", &mut color, &colors, 174.0) {
+            if widgets::dropdown(ui, "guide-color", tl!("Color"), &mut color, &colors, 174.0) {
                 f.insert("color".into(), json!(color));
             }
             let shown = rgb(&color).unwrap_or(Tokens::get(ui.ctx()).accent);
@@ -339,7 +343,7 @@ fn main_fields(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value
                     ui.vertical(|ui| {
                         ui.label(label);
                         let mut n = value.as_f64().unwrap_or(0.0) as f32;
-                        if widgets::value_field(ui, &mut n, 0.0..=300_000.0, "px", 64.0).changed() {
+                        if widgets::value_field(ui, &mut n, 0.0..=300_000.0, "px", 64.0).accessible_name(label).changed() {
                             *value = json!(n);
                         }
                     });

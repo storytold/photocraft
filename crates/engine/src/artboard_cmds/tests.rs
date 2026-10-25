@@ -661,3 +661,32 @@ fn add_beside_duplicate_honors_panel_copy_name_preference() {
         assert_eq!(doc(&s), &before);
     }
 }
+
+/// #9086: File › New with Artboards makes one board over the canvas, its background the chosen
+/// one, holding an empty Layer 1, and no Background layer.
+#[test]
+fn new_document_with_an_artboard() {
+    for (background, want) in [
+        ("white", ArtboardBackground::White),
+        ("black", ArtboardBackground::Black),
+        ("transparent", ArtboardBackground::Transparent),
+        ("#336699", ArtboardBackground::Custom(Color::rgba(0x33 as f32 / 255.0, 0x66 as f32 / 255.0, 0x99 as f32 / 255.0, 1.0))),
+    ] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 120, "height": 90, "background": background, "artboard": true})).unwrap();
+        let d = doc(&s);
+        assert_eq!(d.layers.len(), 1, "{background}: only the board");
+        let boards = d.artboards();
+        let [(_, _, board)] = boards.as_slice() else { panic!("{background}: one artboard, got {}", boards.len()) };
+        assert_eq!(board.rect, d.bounds());
+        assert_eq!(board.background, want, "{background}");
+        let LayerContent::Group(g) = &d.layers[0].content else { panic!("not a group") };
+        assert_eq!(g.children.iter().map(|l| l.name.as_str()).collect::<Vec<_>>(), ["Layer 1"]);
+        assert!(!d.layers.iter().any(|l| d.is_background(l.id)), "{background}: no Background layer");
+    }
+    // Without the option nothing changes; a non-boolean is refused.
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 20, "height": 10, "artboard": false})).unwrap();
+    assert!(doc(&s).artboards().is_empty());
+    assert!(s.execute("file.new", json!({"artboard": "yes"})).is_err());
+}

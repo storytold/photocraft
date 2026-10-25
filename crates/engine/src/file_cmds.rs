@@ -229,7 +229,8 @@ pub(crate) fn stem(path: &str) -> String {
 
 /// Whether `a` and `b` name the same file: the same text, or, when both exist, the same file on
 /// disk (a hard link, a different case on a case-insensitive volume, `./` or `..` in one of them).
-pub fn same_file(a: &str, b: &str) -> bool {
+pub fn same_file(a: impl AsRef<std::path::Path>, b: impl AsRef<std::path::Path>) -> bool {
+    let (a, b) = (a.as_ref(), b.as_ref());
     if a == b {
         return true;
     }

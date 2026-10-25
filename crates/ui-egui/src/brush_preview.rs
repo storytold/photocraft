@@ -220,7 +220,7 @@ fn upload(ctx: &egui::Context, name: &str, w: u32, h: u32, rgba: &[u8]) -> egui:
 }
 
 fn cache_id() -> egui::Id {
-    egui::Id::new("brush-preview-cache")
+    egui::Id::unique("brush-preview-cache")
 }
 
 /// Run `f` on the context's preview cache. The cache is taken out of egui's memory while `f` runs,

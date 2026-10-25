@@ -34,7 +34,9 @@ fn selected_shape(session: &photocraft_engine::Session) -> Option<SelectedShape>
 pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) {
     let t = Tokens::get(ui.ctx());
     let lbl = |ui: &mut egui::Ui, s: &str| {
-        ui.label(egui::RichText::new(s).color(t.text_dim).size(12.0));
+        let label = ui.label(egui::RichText::new(s).color(t.text_dim).size(12.0));
+        // The caption scrubs and names the control drawn right after it.
+        crate::widgets::scrub_option_label(ui, &label);
     };
     let o = &mut app.ui.tool_options;
     let target = selected_shape(&app.session);
@@ -47,19 +49,19 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
     let mut width = stroke.as_ref().map_or(0.0, |s| s.width);
     let stroke_enabled = stroke.as_ref().is_some_and(|s| s.width > 0.0);
     let style = stroke.as_ref().map_or_else(|| o.shape_stroke.clone(), crate::shape_stroke_ui::StrokeOptions::from);
-    let gesture_key = ui.id().with("shape-options-paint-gesture");
+    let gesture_key = ui.scope_id().with("shape-options-paint-gesture");
     let gesture = paint_gesture(ui, gesture_key);
     let key = |k: &str| target.as_ref().map(|s| format!("shape-options-{:?}-{}-{k}:{}:{gesture}", s.doc, s.layer.0, gesture_key.value()));
     let mut edit: Option<Value> = None;
     lbl(ui, tl!("Fill:"));
-    if crate::widgets::checkbox(ui, &mut has_fill, "").changed() {
+    if crate::widgets::checkbox(ui, &mut has_fill, tl!("Fill")).changed() {
         o.shape_fill = has_fill;
         edit = Some(json!({"fill": if has_fill { json!(fg) } else { Value::Null }}));
     }
     let fill_color = swatch(ui, fill.as_ref(), fg, tl!("Fill color"));
     lbl(ui, tl!("Stroke:"));
     let stroke_color = swatch(ui, stroke.as_ref().map(|s| &s.paint), bg, tl!("Stroke color"));
-    if crate::widgets::value_field(ui, &mut width, 0.0..=288.0, "px", 58.0).changed() {
+    if crate::widgets::value_field(ui, &mut width, 0.0..=288.0, "px", 58.0).accessible_name(tl!("Stroke:")).changed() {
         o.stroke_width = width;
         // A 0 px "change" (an arrow step clamped at the minimum) must not add a stroke.
         if stroke.is_some() || width > 0.0 {

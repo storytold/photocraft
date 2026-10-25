@@ -45,6 +45,7 @@ fn reported_menus_stay_above_the_panel_when_the_window_position_is_unknown() {
                     break;
                 }
                 h.event(egui::Event::MouseWheel {
+                    source: egui::MouseWheelSource::Unknown,
                     unit: egui::MouseWheelUnit::Point,
                     delta: egui::vec2(0.0, -60.0),
                     modifiers: egui::Modifiers::NONE,
@@ -164,6 +165,7 @@ fn the_mouse_wheel_scrolls_a_long_menu() {
                 break;
             }
             h.event(egui::Event::MouseWheel {
+                source: egui::MouseWheelSource::Unknown,
                 unit: egui::MouseWheelUnit::Point,
                 delta: egui::vec2(0.0, -60.0),
                 modifiers: egui::Modifiers::NONE,
@@ -271,9 +273,9 @@ fn left_and_right_switch_menus_and_shortcuts_wait_while_one_is_open() {
 fn help_search_keeps_the_arrows_and_space_that_edit_it() {
     let mut h = harness((1280.0, 720.0, 1.0));
     open(&mut h, "Help");
-    let field = egui::Id::new("help-menu-search").with("field");
+    let field = egui::Id::unique("help-menu-search").with("field");
     assert_eq!(h.ctx.memory(|m| m.focused()), Some(field), "the search field has the keyboard");
-    let text = |h: &Harness<'static, PhotocraftApp>| h.ctx.data(|d| d.get_temp::<String>(egui::Id::new("help-menu-search"))).unwrap_or_default();
+    let text = |h: &Harness<'static, PhotocraftApp>| h.ctx.data(|d| d.get_temp::<String>(egui::Id::unique("help-menu-search"))).unwrap_or_default();
     let typing = |h: &mut Harness<'static, PhotocraftApp>, s: &str| {
         h.event(egui::Event::Text(s.to_string()));
         h.run_steps(3);
@@ -411,6 +413,7 @@ fn a_short_window_still_scrolls_the_file_menu_to_its_last_row() {
             break;
         }
         h.event(egui::Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
             unit: egui::MouseWheelUnit::Point,
             delta: egui::vec2(0.0, -60.0),
             modifiers: egui::Modifiers::NONE,
@@ -565,6 +568,7 @@ fn menus_stay_above_the_taskbar_and_scroll_to_their_last_row() {
             h.hover_at(view.center());
             for _ in 0..60 {
                 h.event(egui::Event::MouseWheel {
+                    source: egui::MouseWheelSource::Unknown,
                     unit: egui::MouseWheelUnit::Point,
                     delta: egui::vec2(0.0, 120.0),
                     modifiers: egui::Modifiers::NONE,
@@ -725,6 +729,37 @@ fn press_drag_release_reaches_other_menus_and_submenus() {
     let proofing = crate::menus::menu_items(h.state()).into_iter().find(|i| i.id == "view.proofColors").and_then(|i| i.checked);
     assert_eq!(proofing, Some(true), "releasing on Working CMYK ran it");
     assert!(Nav::current(&h.ctx).rows.first().is_none_or(|r| r.is_empty()), "and closed the menus");
+}
+
+/// Press-and-hold a menu title and drag through the items: the highlight follows the
+/// pointer the whole way, down and back up, without lagging or dropping (#8887).
+#[test]
+fn press_drag_highlight_follows_the_pointer() {
+    use egui::{Modifiers, PointerButton};
+    let mut h = harness((1280.0, 720.0, 1.0));
+    let title = h.get_by_label("View").rect().center();
+    h.event(egui::Event::PointerMoved(title));
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: title, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+    let rows = Nav::current(&h.ctx).rows.first().cloned().unwrap_or_default();
+    assert!(rows.len() > 4, "the View menu has rows to drag through");
+    // Drag down through the first rows, one at a time, still holding the button.
+    for i in 1..=4 {
+        let row = rows.get(i).expect("row exists");
+        h.event(egui::Event::PointerMoved(row.rect.center()));
+        h.run_steps(1);
+        assert_eq!(Nav::current(&h.ctx).highlighted(0), Some(i), "holding and dragging onto row {i} highlights it");
+    }
+    // Back up the way a user overshooting and correcting does.
+    for i in (1..=3).rev() {
+        let row = rows.get(i).unwrap();
+        h.event(egui::Event::PointerMoved(row.rect.center()));
+        h.run_steps(1);
+        assert_eq!(Nav::current(&h.ctx).highlighted(0), Some(i), "dragging back up to row {i} highlights it");
+    }
+    h.event(egui::Event::PointerButton { pos: rows.get(1).unwrap().rect.center(), button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(2);
 }
 
 /// A menu bar whose frames are `dt` seconds apart, as with a real pointer sending moves.
@@ -901,6 +936,7 @@ fn a_scrolled_menu_reopens_and_stays_open_with_a_hidden_submenu_row_under_its_ti
         h.hover_at(egui::pos2(view.center().x, view.bottom() - 2.0));
         let wheel = |h: &mut Harness<'static, PhotocraftApp>, dy: f32| {
             h.event(egui::Event::MouseWheel {
+                source: egui::MouseWheelSource::Unknown,
                 unit: egui::MouseWheelUnit::Point,
                 delta: egui::vec2(0.0, dy),
                 modifiers: Modifiers::NONE,
