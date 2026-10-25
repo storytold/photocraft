@@ -247,9 +247,17 @@ pub(super) fn hue_saturation(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) ->
             zone = if which.is_none() { hue_range_zone(b, deg_of(pos.x)).map(|z| (z, b, pos.x)) } else { None };
         }
         // The release frame applies its position too: a move and a release that land in one frame
-        // would otherwise commit the bounds from before the move.
-        let live = bresp.is_pointer_button_down_on() || ui.input(|i| i.pointer.primary_released());
-        if live && let (Some((z, start, x0)), Some(pos)) = (zone, ui.input(|i| i.pointer.interact_pos())) {
+        // would otherwise commit the bounds from before the move. It ends where the button let go,
+        // not where the pointer went after that in the same frame.
+        let released_at = ui.input(|i| {
+            i.events.iter().find_map(|e| match e {
+                egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, .. } => Some(*pos),
+                _ => None,
+            })
+        });
+        let live = bresp.is_pointer_button_down_on() || released_at.is_some();
+        let drag_pos = released_at.or_else(|| ui.input(|i| i.pointer.interact_pos()));
+        if live && let (Some((z, start, x0)), Some(pos)) = (zone, drag_pos) {
             let before = b;
             b = move_hue_range_zone(start, z, (pos.x - x0) / w * 360.0);
             if b != before {
@@ -262,7 +270,7 @@ pub(super) fn hue_saturation(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) ->
             e.commit = true;
         }
         ui.data_mut(|d| d.insert_temp(zone_id, zone));
-        if live && let (Some(k), Some(pos)) = (which, ui.input(|i| i.pointer.interact_pos())) {
+        if live && let (Some(k), Some(pos)) = (which, drag_pos) {
             let k = k as usize;
             let deg = deg_of(pos.x);
             let before = b;

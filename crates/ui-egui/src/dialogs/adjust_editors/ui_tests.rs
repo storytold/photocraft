@@ -987,4 +987,21 @@ fn a_zone_drag_released_in_the_frame_it_moves_still_moves() {
         other => panic!("{other:?}"),
     };
     assert!((after[3] - (b[3] + 20.0)).abs() <= 1.0 && after[..3] == b[..3], "the right handle moved 20°: {b:?} → {after:?}");
+    // A release followed by more movement in one frame ends where the button let go.
+    let b = after;
+    let (from, to) = (Pos2::new(x((b[1] + b[2]) / 2.0), y), Pos2::new(x((b[1] + b[2]) / 2.0 + 10.0), y));
+    h.hover_at(from);
+    h.run_steps(1);
+    h.drag_at(from);
+    h.run_steps(1);
+    let events = &mut h.input_mut().events;
+    events.push(egui::Event::PointerMoved(to));
+    events.push(egui::Event::PointerButton { pos: to, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+    events.push(egui::Event::PointerMoved(Pos2::new(x(b[3] + 60.0), y)));
+    h.run_steps(3);
+    let last = match layer(&h).1 {
+        Adjustment::HueSaturation { ranges, .. } => ranges[2].bounds,
+        other => panic!("{other:?}"),
+    };
+    assert!(last.iter().zip(&b).all(|(l, b)| (l - (b + 10.0)).abs() <= 1.0), "moved 10° to the release, not past it: {b:?} → {last:?}");
 }
