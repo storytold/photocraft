@@ -118,7 +118,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
             ui.label(tl!("Choose Stack Mode:"));
             let mut mode = f.get("mode").and_then(Value::as_str).unwrap_or("median").to_string();
             let options: Vec<_> = photocraft_doc::StackMode::ALL.iter().map(|m| (m.id().to_string(), m.label())).collect();
-            if widgets::dropdown(ui, "statistics-stack-mode", &mut mode, &options, 180.0) {
+            if widgets::dropdown(ui, "statistics-stack-mode", tl!("Mode"), &mut mode, &options, 180.0) {
                 f.insert("mode".into(), json!(mode));
             }
         });
@@ -130,7 +130,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
         ui.label(tl!("Use:"));
         let mut mode = usize::from(folder_mode(f));
         let options = [(0, tl!("Files")), (1, tl!("Folder"))];
-        if widgets::dropdown(ui, "load-stack-use", &mut mode, &options, 120.0) {
+        if widgets::dropdown(ui, "load-stack-use", tl!("Use"), &mut mode, &options, 120.0) {
             f.insert("use".into(), json!(if mode == 1 { "folder" } else { "files" }));
             f.remove("selected");
         }

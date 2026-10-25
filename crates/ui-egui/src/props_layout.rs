@@ -70,14 +70,14 @@ pub fn header(ui: &mut egui::Ui, layer: &Layer) {
         ui.painter().galley(pos2(r.right() - kind_w - 2.0, r.center().y - kind_g.size().y / 2.0), kind_g, t.text_faint);
     }
     let name = layer.name.clone();
-    resp.widget_info(move || egui::WidgetInfo::labeled(egui::WidgetType::Label, true, format!("{name} — {kind}")));
+    resp.widget_info(move || egui::WidgetInfo::labeled(egui::Role::Label, true, format!("{name} — {kind}")));
 }
 
 /// A collapsible section: a separator, then a chevron + title row. Returns whether it's open.
 /// Every Properties section uses this, so headers look and behave alike.
 pub fn section(ui: &mut egui::Ui, id: &str, title: &str) -> bool {
     let t = Tokens::get(ui.ctx());
-    let key = egui::Id::new(("props-section", id));
+    let key = egui::Id::unique(("props-section", id));
     let mut open = ui.data(|d| d.get_temp::<bool>(key)).unwrap_or(true);
     ui.add_space(theme::ROW_GAP);
     widgets::hairline(ui);
@@ -98,7 +98,7 @@ pub fn section(ui: &mut egui::Ui, id: &str, title: &str) -> bool {
         ui.data_mut(|d| d.insert_temp(key, open));
     }
     let label = title.to_string();
-    resp.widget_info(move || egui::WidgetInfo::selected(egui::WidgetType::CollapsingHeader, true, open, &label));
+    resp.widget_info(move || egui::WidgetInfo::selected(egui::Role::DisclosureTriangle, true, open, &label));
     record(ui.ctx(), title, r);
     if open {
         ui.add_space(theme::ROW_GAP / 2.0);
@@ -109,13 +109,16 @@ pub fn section(ui: &mut egui::Ui, id: &str, title: &str) -> bool {
 /// Section headers drawn this pass, top to bottom (title, rect), for tests and `ui.inspect`.
 pub fn sections_drawn(ctx: &egui::Context) -> Vec<(String, Rect)> {
     let pass = ctx.cumulative_pass_nr();
-    ctx.data(|d| d.get_temp::<(u64, Vec<(String, Rect)>)>(egui::Id::new("props-sections"))).filter(|(p, _)| *p + 1 >= pass).map(|(_, v)| v).unwrap_or_default()
+    ctx.data(|d| d.get_temp::<(u64, Vec<(String, Rect)>)>(egui::Id::unique("props-sections")))
+        .filter(|(p, _)| *p + 1 >= pass)
+        .map(|(_, v)| v)
+        .unwrap_or_default()
 }
 
 fn record(ctx: &egui::Context, title: &str, r: Rect) {
     let pass = ctx.cumulative_pass_nr();
     ctx.data_mut(|d| {
-        let e = d.get_temp_mut_or_default::<(u64, Vec<(String, Rect)>)>(egui::Id::new("props-sections"));
+        let e = d.get_temp_mut_or_default::<(u64, Vec<(String, Rect)>)>(egui::Id::unique("props-sections"));
         if e.0 != pass {
             *e = (pass, Vec::new());
         }
@@ -176,7 +179,7 @@ pub fn quick_actions_ui(app: &PhotocraftApp, ui: &mut egui::Ui, content: &LayerC
             ui.spacing_mut().item_spacing.x = COL_GAP;
             for (label, id) in row {
                 let resp = widgets::secondary_button(ui, label, w);
-                resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, *label));
+                resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, *label));
                 if resp.clicked() {
                     out = Some(*id);
                 }

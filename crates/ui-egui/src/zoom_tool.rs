@@ -28,7 +28,7 @@ struct ZoomDrag {
 }
 
 fn id() -> egui::Id {
-    egui::Id::new("pc-zoom-tool-drag")
+    egui::Id::unique("pc-zoom-tool-drag")
 }
 
 /// The scrubby zoom for a horizontal drag of `dx` points from a press at zoom `zoom0`, on a
@@ -419,6 +419,7 @@ mod tests {
                     unit: egui::MouseWheelUnit::Line,
                     delta: vec2(0.0, 1.0),
                     phase: egui::TouchPhase::Move,
+                    source: egui::MouseWheelSource::Unknown,
                     modifiers: egui::Modifiers { alt: gesture == 1, ..Default::default() },
                 }),
                 _ => {

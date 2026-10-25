@@ -413,7 +413,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         let o = &mut app.ui.tool_options;
         crate::panels::opt_label(ui, tl!("Style"));
         let styles = [("normal".to_string(), tl!("Normal")), ("fixedRatio".to_string(), tl!("Fixed Ratio")), ("fixedSize".to_string(), tl!("Fixed Size"))];
-        if crate::widgets::dropdown(ui, "slice-style", &mut o.slice_style, &styles, 96.0) {
+        if crate::widgets::dropdown(ui, "slice-style", tl!("Style"), &mut o.slice_style, &styles, 96.0) {
             (o.slice_width, o.slice_height) = if o.slice_style == "fixedSize" { (64.0, 64.0) } else { (1.0, 1.0) };
         }
         let fixed_size = o.slice_style == "fixedSize";

@@ -1068,6 +1068,7 @@ pub fn commit_child(s: &mut Session, index: usize) -> Result<bool> {
     let bytes = Arc::new(encode_source(&child)?);
     let prev = s.active;
     s.active = Some(parent);
+    s.note_active_change();
     let r = s.edit("Edit Contents", |doc, _| {
         let ids = instances(doc, link.contents_id);
         if ids.is_empty() {
@@ -1087,6 +1088,7 @@ pub fn commit_child(s: &mut Session, index: usize) -> Result<bool> {
         Ok(())
     });
     s.active = prev;
+    s.note_active_change();
     r?;
     if let Some(st) = s.docs.get_mut(index) {
         st.saved_revision = st.revision;

@@ -1306,7 +1306,9 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
     }
     let t = Tokens::get(ui.ctx());
     let lbl = |ui: &mut egui::Ui, s: &str| {
-        ui.label(egui::RichText::new(s).color(t.text_dim).size(12.0));
+        let label = ui.label(egui::RichText::new(s).color(t.text_dim).size(12.0));
+        // The caption scrubs and names the control drawn right after it.
+        crate::widgets::scrub_option_label(ui, &label);
     };
     let o = &mut app.ui.tool_options;
     let target = selected_shape(&app.session);
@@ -1336,10 +1338,10 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
     }
     if matches!(tool, Tool::Pen | Tool::FreeformPen | Tool::CurvaturePen) {
         let opts = [("path".to_string(), tl!("Path")), ("shape".to_string(), tl!("Shape"))];
-        crate::widgets::dropdown(ui, "pen-mode", &mut o.vector_mode, &opts, 80.0);
+        crate::widgets::dropdown(ui, "pen-mode", tl!("Mode"), &mut o.vector_mode, &opts, 80.0);
         crate::widgets::vline(ui, 22.0);
         if o.vector_mode == "shape" {
-            crate::widgets::value_field(ui, &mut o.stroke_width, 0.0..=288.0, "px", 58.0);
+            crate::widgets::value_field(ui, &mut o.stroke_width, 0.0..=288.0, "px", 58.0).accessible_name(tl!("Stroke:"));
             if let Some(change) =
                 crate::shape_stroke_ui::button(ui, "pen-stroke", &o.shape_stroke, &mut app.ui.stroke_editor, false, true, None, o.stroke_width > 0.0)
             {
@@ -1390,7 +1392,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         return true;
     }
     let mut mode = "shape".to_string();
-    crate::widgets::dropdown(ui, "shape-mode", &mut mode, &[("shape".to_string(), tl!("Shape"))], 80.0);
+    crate::widgets::dropdown(ui, "shape-mode", tl!("Mode"), &mut mode, &[("shape".to_string(), tl!("Shape"))], 80.0);
     crate::widgets::vline(ui, 22.0);
     crate::shape_options::options_bar(app, ui, tool);
     true
@@ -1457,7 +1459,7 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
     let mut edit: Option<Value> = None;
     let doc_id = app.session.active().map(|st| st.doc.id);
     let key = |k: &str| format!("shape-{doc_id:?}-{}-{k}", id.0);
-    let gesture_key = ui.id().with(key("paint-gesture"));
+    let gesture_key = ui.scope_id().with(key("paint-gesture"));
     let gesture = paint_gesture(ui, gesture_key);
     let coalesce = |field: &str| format!("{}:{}:{gesture}", key(field), gesture_key.value());
     // The shared collapsible section headers (#155).
@@ -1482,7 +1484,7 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
                 edit = Some(json!({"stroke": stroke, "coalesce": coalesce("stroke")}));
             }
             let mut w = sh.stroke.as_ref().map_or(0.0, |s| s.width);
-            if crate::widgets::value_field(ui, &mut w, 0.0..=288.0, "px", 60.0).changed() && (sh.stroke.is_some() || w > 0.0) {
+            if crate::widgets::value_field(ui, &mut w, 0.0..=288.0, "px", 60.0).accessible_name(tl!("Stroke:")).changed() && (sh.stroke.is_some() || w > 0.0) {
                 edit = Some(json!({"stroke": {"width": w}, "coalesce": coalesce("stroke-w")}));
             }
         });
@@ -1510,7 +1512,7 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
     {
         let num = |ui: &mut egui::Ui, label: &str, v: &mut f32, range: std::ops::RangeInclusive<f32>, unit: &str| -> bool {
             ui.label(egui::RichText::new(tl!(&label)).color(t.text_dim).size(12.0));
-            crate::widgets::value_field(ui, v, range, unit, 64.0).changed()
+            crate::widgets::value_field(ui, v, range, unit, 64.0).accessible_name(tl!(&label)).changed()
         };
         match live {
             photocraft_doc::vector::LiveShape::Rect { rect, .. }
@@ -1654,7 +1656,7 @@ pub fn path_rows(doc: &Document, active: Option<photocraft_doc::LayerId>) -> Vec
 }
 
 fn footer_id() -> egui::Id {
-    egui::Id::new("paths-footer")
+    egui::Id::unique("paths-footer")
 }
 
 /// A Paths panel row being dragged, for a drop on the trash (#6553): its name and the command
@@ -1667,7 +1669,7 @@ struct PathDrag {
 }
 
 fn path_drag_key() -> egui::Id {
-    egui::Id::new("paths-drag")
+    egui::Id::unique("paths-drag")
 }
 
 fn ctx_data_footer(ctx: &egui::Context, r: Rect) {
@@ -1702,7 +1704,7 @@ struct PathRename {
 }
 
 fn rename_id(doc: &Document) -> egui::Id {
-    egui::Id::new(("path-rename", doc.id.0))
+    egui::Id::unique(("path-rename", doc.id.0))
 }
 
 /// Commands offered by a Paths row's context menu. The row's path is passed explicitly so a
@@ -1799,7 +1801,7 @@ pub fn paths_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     ui.ctx().data_mut(|d| d.insert_temp(path_drag_key(), PathDrag { name, cmd, params }));
                 }
                 // Rows are painted: name them for screen readers and UI tests.
-                resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::SelectableLabel, true, name));
+                resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, name));
                 let sel = app.ui.selected_path.as_deref() == Some(key.as_str());
                 if sel {
                     ui.painter().rect_filled(r, 0.0, t.row_selected);
@@ -1820,7 +1822,8 @@ pub fn paths_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 if let Some(mut edit) = renaming {
                     let field = Rect::from_min_max(pos2(r.left() + 43.0, r.center().y - 11.0), pos2(r.right() - 8.0, r.center().y + 11.0));
                     let id = rename_id.with("field");
-                    let te = ui.put(field, egui::TextEdit::singleline(&mut edit.text).id(id).font(egui::FontId::proportional(12.0)));
+                    let te =
+                        ui.put(field, egui::TextEdit::singleline(&mut edit.text).id(id).font(egui::FontId::proportional(12.0))).accessible_name(tl!("Name"));
                     let (enter, esc) = ui.input(|i| (i.key_pressed(egui::Key::Enter), i.key_pressed(egui::Key::Escape)));
                     if !edit.focused {
                         te.request_focus();
@@ -1901,7 +1904,7 @@ pub fn paths_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             // adjustment layers then take the selection as their mask instead (#1419).
             let rest = ui.available_rect_before_wrap();
             let rest = rest.intersect(Rect::from_min_size(rest.min, vec2(rest.width(), rest.height().min(4000.0))));
-            if rest.is_positive() && ui.interact(rest, ui.id().with("paths-empty"), Sense::click()).clicked() {
+            if rest.is_positive() && ui.interact(rest, ui.scope_id().with("paths-empty"), Sense::click()).clicked() {
                 app.ui.selected_path = None;
             }
         },

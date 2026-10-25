@@ -72,12 +72,12 @@ pub fn neutral_label(mode: BlendMode) -> String {
 pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let label_width = 64.0;
     let row_label = |ui: &mut egui::Ui, text: &str| {
-        ui.allocate_ui_with_layout(egui::vec2(label_width, 22.0), egui::Layout::right_to_left(egui::Align::Center), |ui| ui.label(text));
+        ui.allocate_ui_with_layout(egui::vec2(label_width, 22.0), egui::Layout::right_to_left(egui::Align::Center), |ui| ui.label(text)).inner
     };
     ui.horizontal(|ui| {
-        row_label(ui, tl!("Name:"));
+        let name_label = row_label(ui, tl!("Name:"));
         let mut name = f.get("name").and_then(Value::as_str).unwrap_or("").to_string();
-        let field = ui.add(egui::TextEdit::singleline(&mut name).desired_width(260.0));
+        let field = ui.add(egui::TextEdit::singleline(&mut name).desired_width(260.0)).labelled_by(name_label.id);
         if field.changed() {
             f.insert("name".into(), json!(name));
         }
@@ -99,7 +99,7 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         row_label(ui, tl!("Color:"));
         let mut color = f.get("color").and_then(Value::as_str).and_then(LabelColor::from_id).unwrap_or_default();
         let options: Vec<(LabelColor, &str)> = LabelColor::ALL.into_iter().map(|c| (c, crate::layer_menu_ui::color_name(c))).collect();
-        if crate::widgets::dropdown(ui, "new-layer-color", &mut color, &options, 140.0) {
+        if crate::widgets::dropdown(ui, "new-layer-color", tl!("Color"), &mut color, &options, 140.0) {
             f.insert("color".into(), json!(color.id()));
         }
     });
@@ -107,13 +107,13 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     ui.horizontal(|ui| {
         row_label(ui, tl!("Mode:"));
         let options: Vec<(BlendMode, &str)> = BlendMode::LAYER_MODES.into_iter().map(|m| (m, m.label())).collect();
-        if crate::widgets::dropdown(ui, "new-layer-mode", &mut m, &options, 140.0) {
+        if crate::widgets::dropdown(ui, "new-layer-mode", tl!("Mode"), &mut m, &options, 140.0) {
             f.insert("mode".into(), json!(m.label()));
         }
         ui.add_space(8.0);
         ui.label(tl!("Opacity:"));
         let mut o = f.get("opacity").and_then(Value::as_f64).unwrap_or(100.0) as f32;
-        if crate::widgets::value_field(ui, &mut o, 0.0..=100.0, "%", 64.0).changed() {
+        if crate::widgets::value_field(ui, &mut o, 0.0..=100.0, "%", 64.0).accessible_name(tl!("Opacity:")).changed() {
             f.insert("opacity".into(), json!(o.clamp(0.0, 100.0)));
         }
     });

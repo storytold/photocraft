@@ -986,6 +986,12 @@ fn save_preserves_the_kind_of_unsupported_atn_events() {
         round_trip.actions[0].items.iter().map(|item| item.event.clone()).collect::<Vec<_>>(),
         [AtnEvent::Name(b"make".to_vec()), AtnEvent::Code(*b"Qwer")]
     );
+
+    // Legacy steps may omit eventKind, but an explicitly malformed value must not be treated
+    // as if it were absent.
+    assert!(export_item(PHOTOSHOP_STEP, &json!({"event": "make", "eventKind": null}), "S").is_none());
+    assert!(export_item(PHOTOSHOP_STEP, &json!({"event": "make", "eventKind": 4}), "S").is_none());
+    assert_eq!(export_item(PHOTOSHOP_STEP, &json!({"event": "make"}), "S").unwrap().event, AtnEvent::Code(*b"make"));
 }
 
 /// #6745: the events of a Photoshop 2026 retouching set (ID-photo background swap, whitening,

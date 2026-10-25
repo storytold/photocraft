@@ -123,7 +123,7 @@ pub(crate) fn rings(ctx: &egui::Context, brush: &BrushSettings, full: bool) -> O
     if matches!(brush.tip, TipShape::Round) && brush.angle == 0.0 && brush.roundness >= 1.0 {
         return None;
     }
-    let id = egui::Id::new("photocraft-tip-outline");
+    let id = egui::Id::unique("photocraft-tip-outline");
     if let Some(c) = ctx.data(|d| d.get_temp::<Cached>(id))
         && c.key.matches(brush, full)
     {

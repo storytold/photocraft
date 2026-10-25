@@ -818,23 +818,25 @@ fn dehaze(px: &mut [[f32; 4]], w: usize, h: usize, amount: f32) {
         *s = s.map(|v| v / c.max(1.0));
     }
     let r = (sw.max(sh) / 60).max(2);
-    let min_filter = |v: &[f32]| -> Vec<f32> {
+    // The minimum (or, with `f32::max`, maximum) over each (2r + 1)² window.
+    let rank_filter = |v: &[f32], start: f32, pick: fn(f32, f32) -> f32| -> Vec<f32> {
         let mut a = vec![0.0f32; sw * sh];
         for y in 0..sh {
             for x in 0..sw {
                 let (x0, x1) = (x.saturating_sub(r), (x + r).min(sw - 1));
-                a[y * sw + x] = (x0..=x1).map(|xx| v[y * sw + xx]).fold(f32::MAX, f32::min);
+                a[y * sw + x] = (x0..=x1).map(|xx| v[y * sw + xx]).fold(start, pick);
             }
         }
         let mut b = vec![0.0f32; sw * sh];
         for y in 0..sh {
             for x in 0..sw {
                 let (y0, y1) = (y.saturating_sub(r), (y + r).min(sh - 1));
-                b[y * sw + x] = (y0..=y1).map(|yy| a[yy * sw + x]).fold(f32::MAX, f32::min);
+                b[y * sw + x] = (y0..=y1).map(|yy| a[yy * sw + x]).fold(start, pick);
             }
         }
         b
     };
+    let min_filter = |v: &[f32]| rank_filter(v, f32::MAX, f32::min);
     let dark = min_filter(&small.iter().map(|c| c[0].min(c[1]).min(c[2])).collect::<Vec<_>>());
     // Atmospheric light: mean colour of the brightest 0.1 % of the dark channel.
     let mut idx: Vec<usize> = (0..sw * sh).collect();
@@ -848,7 +850,15 @@ fn dehaze(px: &mut [[f32; 4]], w: usize, h: usize, amount: f32) {
     }
     let air = air.map(|v| v.max(0.2));
     let norm_dark = min_filter(&small.iter().map(|c| (c[0] / air[0]).min(c[1] / air[1]).min(c[2] / air[2])).collect::<Vec<_>>());
-    let t_raw: Vec<f32> = norm_dark.iter().map(|d| 1.0 - 0.95 * d).collect();
+    // Opened (a maximum filter of the same radius after the minimum): the minimum grows every
+    // dark object by `r`, so sky beside a dark building took its dark channel, counted as
+    // haze-free and kept a bright halo (#9273). Opening shrinks dark regions back to their
+    // outline and is still a lower bound of the dark channel over the window. It raises the dark
+    // channel on average, so the 0.95 weight is scaled to keep the slider's overall strength.
+    let opened = rank_filter(&norm_dark, f32::MIN, f32::max);
+    let mean = |v: &[f32]| v.iter().sum::<f32>() / v.len().max(1) as f32;
+    let weight = 0.95 * mean(&norm_dark) / mean(&opened).max(1e-6);
+    let t_raw: Vec<f32> = opened.iter().map(|d| 1.0 - weight * d).collect();
     let guide: Vec<f32> = small.iter().map(|c| luma(*c)).collect();
     let t = guided(&guide, &t_raw, sw, sh, r * 2, 1e-3);
     let ks = k as f32;
@@ -984,6 +994,37 @@ fn vignette(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #9273: Dehaze clears the haze evenly over a sky, right up to a dark building, instead of
+    /// leaving a bright halo of uncorrected haze around it. Synthetic scene: a clear sky and a
+    /// dark tower, hazed with `I = J·t + A·(1 − t)`.
+    #[test]
+    fn dehaze_leaves_no_halo_beside_dark_objects() {
+        let (w, h) = (600usize, 400usize);
+        let tower = |x: usize, y: usize| (250..350).contains(&x) && y >= 120;
+        let (t, air) = (0.55f32, [0.9f32, 0.9, 0.9]);
+        let mut px: Vec<[f32; 4]> = (0..w * h)
+            .map(|i| {
+                let (x, y) = (i % w, i / w);
+                let j = if tower(x, y) { [0.06, 0.06, 0.07] } else { [0.35 + 0.1 * y as f32 / h as f32, 0.5, 0.8] };
+                let c: [f32; 3] = std::array::from_fn(|k| j[k] * t + air[k] * (1.0 - t));
+                [c[0], c[1], c[2], 1.0]
+            })
+            .collect();
+        dehaze(&mut px, w, h, 1.0);
+        let sky = |xs: std::ops::Range<usize>| {
+            let v: Vec<f32> =
+                (150..390).flat_map(|y| xs.clone().map(move |x| (x, y))).map(|(x, y)| luma([px[y * w + x][0], px[y * w + x][1], px[y * w + x][2]])).collect();
+            v.iter().sum::<f32>() / v.len() as f32
+        };
+        // Sky 1–8 px from the tower against open sky: the haze left beside it, in 8-bit levels.
+        let halo = (sky(242..250) - sky(20..80)) * 255.0;
+        // 6.4 levels before the dark channel was opened, under 1 after.
+        assert!(halo < 3.0, "a {halo:.1}-level halo beside the tower");
+        // The open sky is still cleared: darker than the hazy input.
+        let hazy = luma(std::array::from_fn(|k| [0.4, 0.5, 0.8][k] * t + air[k] * (1.0 - t)));
+        assert!(sky(20..80) < hazy - 0.02, "{} vs hazy {hazy}", sky(20..80));
+    }
 
     #[test]
     fn new_curves_are_validated_but_saved_curves_still_load_and_render() {

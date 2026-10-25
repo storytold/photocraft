@@ -147,3 +147,29 @@ fn a_swatch_and_the_color_picker_go_through_it() {
     assert_eq!(app.session.tools.foreground, [0.0, 0.0, 1.0, 1.0]);
     assert!(shapes.iter().all(|id| same(&app, *id)), "the picker recoloured the shapes");
 }
+
+/// #9238: a swatch recolours the selected type layers and shape fills whatever the tool, as in
+/// Photoshop (measured with the Move and Brush tools); the Color panel with the same tools only
+/// sets the foreground (`other_tools_only_change_the_foreground`).
+#[test]
+fn a_swatch_recolours_selected_type_and_shapes_with_any_tool() {
+    for tool in [Tool::Move, Tool::Brush, Tool::RectMarquee, Tool::Type, Tool::Rectangle] {
+        let (mut app, texts, shapes) = app(tool);
+        let n = steps(&app);
+        let names = app.run("swatches.list", json!({})).unwrap();
+        let (name, hex) = names["groups"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .flat_map(|g| g["swatches"].as_array().cloned().unwrap_or_default())
+            .find(|w| w["hex"].as_str().is_some_and(|h| h != "#000000"))
+            .and_then(|w| Some((w["name"].as_str()?.to_string(), w["hex"].as_str()?.to_string())))
+            .expect("a default swatch");
+        crate::swatches_ui::use_swatch(&mut app, &name, false);
+        let f = app.session.tools.foreground;
+        let same = |c: [f32; 3]| (0..3).all(|i| (c[i] - f[i]).abs() < 2e-3);
+        assert!(texts.iter().all(|id| same(text_rgb(&app, *id))), "{tool:?}: the swatch {hex} recoloured the type layers");
+        assert!(shapes.iter().all(|id| fill_rgb(&app, *id).is_some_and(same)), "{tool:?}: and the shape fills");
+        assert_eq!(steps(&app), n + 1, "{tool:?}: one history step");
+    }
+}
