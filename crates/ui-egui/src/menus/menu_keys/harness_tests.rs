@@ -412,6 +412,34 @@ fn a_command_shortcut_closes_an_open_menu_and_runs() {
     assert!(h.query_by_label_contains("Undo").is_none(), "Edit's rows are gone");
 }
 
+/// #9314 review: Help opens with its search field focused, and a command shortcut that isn't a
+/// text-editing key (⌘D) still closes the menu and runs; ⌘A stays the field's and keeps it open.
+#[test]
+fn a_command_shortcut_runs_from_the_help_search_field() {
+    let mut h = Harness::builder().with_size(egui::vec2(1280.0, 800.0)).with_max_steps(64).build_eframe(|cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        let mut app = app();
+        app.services.native_menu = None;
+        app
+    });
+    h.run_steps(4);
+    h.state_mut().run("select.all", json!({})).unwrap();
+    h.state_mut().run("select.deselect", json!({})).unwrap();
+    h.get_by_label("Help").click();
+    h.run_steps(4);
+    let field = egui::Id::new("help-menu-search").with("field");
+    assert!(is_open(&h.ctx) && h.ctx.memory(|m| m.focused()) == Some(field), "Help is open with its field focused");
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.run_steps(3);
+    assert!(is_open(&h.ctx), "⌘A edits the field and keeps Help open");
+    assert!(h.state().session.active().unwrap().doc.selection.is_none(), "⌘A didn't select the canvas");
+    h.state_mut().run("select.all", json!({})).unwrap();
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::D);
+    h.run_steps(3);
+    assert!(!is_open(&h.ctx), "⌘D closes Help");
+    assert!(h.state().session.active().unwrap().doc.selection.is_none(), "and deselects");
+}
+
 /// Checked, unchecked and plain rows (and submenu headers) start their label at the same x, in
 /// any script: the checkmark column has a fixed width instead of padding characters (#5705).
 #[test]

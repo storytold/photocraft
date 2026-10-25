@@ -83,13 +83,24 @@ pub fn leave_for_shortcut(ctx: &egui::Context) -> bool {
 
 /// A command shortcut (⌘1, ⌘D, F7…) pressed while a menu or a dropdown list is open closes it,
 /// so the shortcut runs in the same press, as with Photoshop's menus (#9065). Keys the menu or
-/// list uses (arrows, ↩, Esc, letters) keep driving it, and so does a field in it that has the
-/// keyboard (Help › Search: ⌘V pastes there). True when one was closed.
+/// list uses (arrows, ↩, Esc, letters) keep driving it, and a field in it that has the keyboard
+/// (Help › Search, focused whenever Help opens) keeps its editing keys (⌘A, ⌘V…); any other
+/// shortcut also takes the focus from the field so it isn't held back as typing. True when one
+/// was closed.
 pub fn close_for_shortcut(ctx: &egui::Context) -> bool {
     let menu = crate::menu_nav::is_open(ctx);
     let list = crate::widgets::dropdown_list_open(ctx);
-    if !(menu || list) || ctx.text_edit_focused() || !command_key_pressed(ctx) {
+    let typing = ctx.text_edit_focused();
+    let shortcut = ctx.input(|i| {
+        i.events.iter().any(
+            |e| matches!(e, Event::Key { key, pressed: true, modifiers, .. } if is_command_key(*key, *modifiers) && !(typing && is_text_editing_key(*key))),
+        )
+    });
+    if !(menu || list) || !shortcut {
         return false;
+    }
+    if typing && let Some(id) = ctx.memory(|m| m.focused()) {
+        ctx.memory_mut(|m| m.surrender_focus(id));
     }
     if menu {
         crate::menu_nav::close(ctx);
@@ -118,6 +129,28 @@ fn is_command_key(key: Key, mods: Modifiers) -> bool {
     }
     let function_key = key != Key::F10 && key.name().strip_prefix('F').is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
     mods.command || mods.ctrl || mods.mac_cmd || function_key
+}
+
+/// A key a focused text field uses with ⌘ / Ctrl: select all, copy, cut, paste, undo and redo,
+/// and caret movement and deletion by word or line.
+fn is_text_editing_key(key: Key) -> bool {
+    matches!(
+        key,
+        Key::A
+            | Key::C
+            | Key::X
+            | Key::V
+            | Key::Z
+            | Key::Y
+            | Key::ArrowLeft
+            | Key::ArrowRight
+            | Key::ArrowUp
+            | Key::ArrowDown
+            | Key::Home
+            | Key::End
+            | Key::Backspace
+            | Key::Delete
+    )
 }
 
 /// The mnemonic a key press stands for: the letter or digit of a plain key.
