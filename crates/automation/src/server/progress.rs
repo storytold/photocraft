@@ -251,12 +251,15 @@ impl PhotocraftMcp {
     }
 }
 
-/// Cancel bridged `job` (`id`) for a cancelled wait, before answering, so the next call already
-/// sees the document unchanged.
+/// Cancel bridged `job` (`id`) before answering a cancelled wait. Failed calls leave the guard
+/// armed for one best-effort cleanup attempt on drop.
 async fn bridge_cancel(client: &BridgeClient, guard: &mut Abandon, job: u64, id: &str) -> AutomationError {
     let cancel = client.call("jobs.cancel", json!({"job": job})).await;
-    // Disarm only now: dropped during the call, the guard still sends the cancel.
-    guard.job = None;
+    // A failed or abandoned call keeps the guard armed for one cleanup attempt on drop.
+    // Only an acknowledged cancellation proves that cleanup is no longer needed.
+    if cancel.is_ok() {
+        guard.job = None;
+    }
     cancel_answer(job, id, cancel)
 }
 

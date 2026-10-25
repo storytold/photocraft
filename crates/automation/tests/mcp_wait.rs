@@ -174,6 +174,8 @@ struct FakeApp {
     runs: Duration,
     /// Close the connection instead of answering the start (its reply is lost).
     lose_start: bool,
+    /// Lose the first cancellation request before applying it; a later request can succeed.
+    lose_cancel: bool,
     /// How long to hold each `jobs.list` reply (an app slow to answer).
     hold_polls: Duration,
     started: Option<Instant>,
@@ -183,7 +185,15 @@ struct FakeApp {
 
 impl FakeApp {
     async fn serve(runs: Duration, lose_start: bool) -> (String, Arc<Mutex<FakeApp>>) {
-        let app = Arc::new(Mutex::new(FakeApp { runs, lose_start, hold_polls: Duration::ZERO, started: None, cancelled: false, log: Vec::new() }));
+        let app = Arc::new(Mutex::new(FakeApp {
+            runs,
+            lose_start,
+            lose_cancel: false,
+            hold_polls: Duration::ZERO,
+            started: None,
+            cancelled: false,
+            log: Vec::new(),
+        }));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap().to_string();
         let shared = app.clone();
@@ -239,6 +249,10 @@ impl FakeApp {
                 return Some((json!({"jobs": [job]}), self.hold_polls));
             }
             "jobs.cancel" => {
+                if self.lose_cancel {
+                    self.lose_cancel = false;
+                    return None;
+                }
                 self.cancelled = true;
                 json!({"cancelled": 1})
             }
@@ -303,6 +317,26 @@ async fn cancelling_a_bridged_wait_cancels_the_apps_job() {
     }
     assert_eq!(FakeApp::sent(&app, "jobs.cancel"), [json!({"job": 7})]);
     assert_eq!(FakeApp::sent(&app, "engine.execute").len(), 1, "the edit is sent once");
+    wire.finish().await;
+}
+
+/// A failed cancellation keeps the drop guard armed, so its cleanup can reach the app.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failed_bridge_cancel_keeps_cleanup_armed() {
+    let (addr, app) = FakeApp::serve(Duration::from_secs(600), false).await;
+    app.lock().unwrap().lose_cancel = true;
+    let mut wire = Wire::start(bridged(&addr)).await;
+    wire.call(5, "command_run", BLUR(), Some("blur")).await;
+    wire.first_progress(5, "blur", 1.0).await;
+    wire.cancel(5).await;
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !app.lock().unwrap().cancelled {
+        assert!(Instant::now() < deadline, "the failed jobs.cancel disabled cleanup and left the job running");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(FakeApp::sent(&app, "jobs.cancel"), [json!({"job": 7}), json!({"job": 7})]);
+    assert_eq!(FakeApp::sent(&app, "engine.execute").len(), 1, "the edit is never resent");
     wire.finish().await;
 }
 
