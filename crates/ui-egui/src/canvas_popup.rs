@@ -33,7 +33,7 @@ mod tests {
     #[test]
     fn opening_frame_survives_layout_retries_and_later_presses_close() {
         let ctx = Context::default();
-        let id = Id::new("menu");
+        let id = Id::unique("menu");
         let rect = Rect::from_min_size(pos2(6.0, 6.0), vec2(100.0, 100.0));
         for _ in 0..3 {
             let mut passes = 0;
@@ -66,8 +66,8 @@ mod tests {
     #[test]
     fn opening_one_menu_does_not_protect_another() {
         let ctx = Context::default();
-        let first = Id::new("first");
-        let second = Id::new("second");
+        let first = Id::unique("first");
+        let second = Id::unique("second");
         let rect = Rect::from_min_size(pos2(6.0, 6.0), vec2(100.0, 100.0));
         ctx.run_ui(RawInput::default(), |ui| mark_open(ui.ctx(), first)).drop_without_applying_deltas();
         ctx.run_ui(outside_press(), |ui| {

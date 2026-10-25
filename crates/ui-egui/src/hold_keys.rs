@@ -230,7 +230,7 @@ pub fn repositions(t: Tool) -> bool {
 }
 
 fn latch_id() -> egui::Id {
-    egui::Id::new("pc-temporary-tool")
+    egui::Id::unique("pc-temporary-tool")
 }
 
 /// The temporary tool for this canvas frame: the held one, except while a selection is being

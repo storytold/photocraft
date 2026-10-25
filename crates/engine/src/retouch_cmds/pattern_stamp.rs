@@ -119,7 +119,7 @@ pub fn live_impressionist(s: &Session, p: &Value) -> Result<super::LiveDab> {
     }
     let (stroke, id) = (st.stroke.clone(), st.id);
     let doc = (*s.active().ok_or(crate::EngineError::NoDocument)?.doc).clone();
-    super::LiveDab::with_effect_on(doc, CMD, p, stroke, id, 0, true, |pre| st.impressionist_effect(pre.format()))?.with_tail_preview()
+    super::LiveDab::with_effect_on(doc, CMD, p, stroke, id, 0, |pre| st.impressionist_effect(pre.format()))?.with_tail_preview()
 }
 
 /// The pattern under destination `rect` in `fmt` (native channels): what an aligned stroke paints

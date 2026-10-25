@@ -91,6 +91,23 @@ pub(crate) fn surface_image(surf: &Surface, r: Rect, max_side: usize) -> ColorIm
     ColorImage::new([tw, th], px)
 }
 
+/// The menu id of the open full-window workspace (Liquify, Content-Aware Fill, Filter Gallery,
+/// Adaptive Wide Angle). These are modal: other menu commands wait for OK or Cancel
+/// (`menus::modal_allows`).
+pub(crate) fn modal_workspace(app: &PhotocraftApp) -> Option<&'static str> {
+    if app.distort.liquify.is_some() {
+        Some("filter.liquify")
+    } else if app.distort.caf.is_some() {
+        Some("edit.contentAwareFill")
+    } else if app.distort.gallery.is_some() {
+        Some("filter.filterGallery")
+    } else if app.wide_angle.is_some() {
+        Some(photocraft_engine::lens_cmds::WIDE)
+    } else {
+        None
+    }
+}
+
 fn active_doc(app: &PhotocraftApp) -> Option<DocId> {
     app.session.active().map(|st| st.doc.id)
 }

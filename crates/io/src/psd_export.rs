@@ -169,8 +169,9 @@ struct SmartOut {
     prune_ok: bool,
     /// Files to embed.
     add: Vec<crate::linked::LinkedFile>,
-    /// Sources converted so far, by contents identity and bytes (`Err` = can't be embedded).
-    converted: std::collections::HashMap<(SmartContentsId, [u8; 32]), Result<Source, String>>,
+    /// Sources converted so far, by contents identity, bytes and whether they were read from a
+    /// link (`Err` = can't be embedded).
+    converted: std::collections::HashMap<(SmartContentsId, [u8; 32], bool), Result<Source, String>>,
     /// Each placed layer has its own id, even when it duplicates an imported layer.
     placed_used: std::collections::HashSet<String>,
     /// Original instances reserve their imported placement regardless of layer order.
@@ -1005,13 +1006,14 @@ impl Ex {
                     let file = crate::doc_path::resolve(path, self.document.as_deref()).map_err(|e| format!("the linked file {path} is not opened: {e}"))?;
                     let bytes = std::fs::read(file).map_err(|e| format!("the linked file {path} can't be read: {e}"))?;
                     let name = path.rsplit(['/', '\\']).next().unwrap_or(path).to_string();
+                    let source = self.embed(sm.contents_id, &name, &bytes, true)?;
                     self.warnings.push(format!("the linked smart object {name} was embedded (PSD export keeps no external links)"));
-                    self.embed(sm.contents_id, &name, &bytes)
+                    Ok(source)
                 }
                 #[cfg(target_arch = "wasm32")]
                 Err(format!("the linked file {path} can't be read here"))
             }
-            SmartSource::Embedded { file_name, bytes } => self.embed(sm.contents_id, file_name, bytes),
+            SmartSource::Embedded { file_name, bytes } => self.embed(sm.contents_id, file_name, bytes, false),
         }
     }
 
@@ -1056,17 +1058,19 @@ impl Ex {
 
     /// Adds `bytes` as an embedded file (converted to PSB when it is a `.pcraft` bundle), once
     /// per contents identity and bytes. Equal bytes in independent objects stay independent.
-    fn embed(&mut self, contents_id: SmartContentsId, file_name: &str, bytes: &[u8]) -> Result<Source, String> {
-        let key = (contents_id, *blake3::hash(bytes).as_bytes());
+    /// `linked`: the bytes were read from a path the document names, so only a file PhotoCraft
+    /// can open is embedded (a link to a text or settings file is written as pixels instead).
+    fn embed(&mut self, contents_id: SmartContentsId, file_name: &str, bytes: &[u8], linked: bool) -> Result<Source, String> {
+        let key = (contents_id, *blake3::hash(bytes).as_bytes(), linked);
         if let Some(r) = self.smart.converted.get(&key) {
             return r.clone();
         }
-        let r = self.convert_source(contents_id, file_name, bytes);
+        let r = self.convert_source(contents_id, file_name, bytes, linked);
         self.smart.converted.insert(key, r.clone());
         r
     }
 
-    fn convert_source(&mut self, contents_id: SmartContentsId, file_name: &str, bytes: &[u8]) -> Result<Source, String> {
+    fn convert_source(&mut self, contents_id: SmartContentsId, file_name: &str, bytes: &[u8], linked: bool) -> Result<Source, String> {
         let (name, data, size, dpi, nested) = if photocraft_format::is_pcraft(bytes) {
             if self.smart.depth >= MAX_NESTING {
                 return Err(format!("smart objects nest more than {MAX_NESTING} deep"));
@@ -1084,9 +1088,13 @@ impl Ex {
             let size = (f64::from(doc.size.width), f64::from(doc.size.height));
             (format!("{stem}.psb"), data, size, f64::from(doc.resolution_dpi), Some(doc))
         } else {
-            // Formats we can't decode (vector PDF/AI…) are still embedded; their size comes from the layer.
-            let (size, dpi) =
-                crate::linked::source_geometry(file_name, bytes, &photocraft_raster::Interrupt::NONE).unwrap_or(((0.0, 0.0), f64::from(self.dpi)));
+            // Embedded formats we can't decode (vector PDF/AI…) are kept; their size comes from the
+            // layer. A linked file we can't decode is not embedded.
+            let (size, dpi) = match crate::linked::source_geometry(file_name, bytes, &photocraft_raster::Interrupt::NONE) {
+                Ok(geometry) => geometry,
+                Err(e) if linked => return Err(format!("the linked file {file_name} is not an image PhotoCraft can open: {e}")),
+                Err(_) => ((0.0, 0.0), f64::from(self.dpi)),
+            };
             (file_name.to_string(), bytes.to_vec(), size, dpi, None)
         };
         let uuid = contents_uuid(contents_id, &data);

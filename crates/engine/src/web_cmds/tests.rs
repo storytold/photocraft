@@ -513,13 +513,13 @@ fn same_file_sees_through_other_names_for_one_file() {
     std::fs::write(&a, b"a").unwrap();
     std::fs::write(&c, b"c").unwrap();
     assert!(crate::file_cmds::same_file(&a, &a));
-    assert!(crate::file_cmds::same_file(&a, &format!("{dir}/./a.png")));
+    assert!(crate::file_cmds::same_file(&a, format!("{dir}/./a.png")));
     assert!(!crate::file_cmds::same_file(&a, &c));
     assert!(!crate::file_cmds::same_file(&a, &b), "a missing file is not the same file");
     std::fs::hard_link(&a, &b).unwrap();
     assert!(crate::file_cmds::same_file(&a, &b), "a hard link is the same file");
     #[cfg(windows)]
-    assert!(crate::file_cmds::same_file(&a, &format!("{dir}/A.PNG")), "NTFS names ignore case");
+    assert!(crate::file_cmds::same_file(&a, format!("{dir}/A.PNG")), "NTFS names ignore case");
 }
 
 #[test]

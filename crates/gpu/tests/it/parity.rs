@@ -2915,6 +2915,59 @@ fn layer_pages_are_admitted_under_a_zero_budget_and_stay_on_the_gpu() {
     check(&mut g, &d, "after zero-budget renders");
 }
 
+/// A layer page texture the device has no memory for (#6563): the compositor drops the pages
+/// this cell doesn't use and tries again, then submits, waits and runs the cell once more, and
+/// only then ends this refresh on the CPU. The device stays healthy and the next refresh is back
+/// on the GPU. The test hook makes the next `n` page textures fail as out of memory.
+#[test]
+fn a_layer_page_out_of_memory_retries_then_ends_only_that_refresh_on_the_cpu() {
+    let Some(mut g) = gpu() else { return };
+    let mut d = base_doc(600, 500);
+    d.layers.push(noise_layer("mid", PixelFormat::RGBA8, Rect::new(-20, 10, 590, 480), 71, 0.0));
+    let mut top = noise_layer("top", PixelFormat::RGBA8, Rect::new(30, -15, 620, 510), 72, 0.2);
+    top.blend = BlendMode::Multiply;
+    d.layers.push(top);
+    g.paged.set_composite_cache_budget(0);
+    let cpu = photocraft_compose::flatten(&d);
+    let encode = |g: &mut Gpu, d: &Document| {
+        let mut encoder = g.device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        g.paged.encode(&g.device, &g.queue, &mut encoder, d, d.bounds(), &mut |_, _| {})
+    };
+    let render = |g: &mut Gpu, d: &Document| photocraft_gpu::render_to_vec_stats(&mut g.paged, &g.device, &g.queue, d, d.bounds());
+    let matches = |out: &[[f32; 4]], what: &str| {
+        let worst = worst_diff(&cpu.px, out);
+        assert!(worst.0 <= TOL, "{what}: max diff {:.2}/255 at {}", worst.0 * 255.0, worst.1);
+    };
+    // Every case starts with no pages, so the first page texture is the one that fails.
+    let fresh = |g: &mut Gpu, d: &Document, n: u32| {
+        g.paged.forget_doc(d.id);
+        g.paged.fail_layer_allocs(n);
+    };
+
+    // One failure: the second try right away succeeds (`encode` can't submit, so this is the
+    // only retry it has).
+    fresh(&mut g, &d, 1);
+    encode(&mut g, &d).unwrap_or_else(|e| panic!("one failed page texture is retried at once: {}", e.0));
+    // Two: both tries fail, and `encode` gives the refresh to the CPU.
+    fresh(&mut g, &d, 2);
+    let e = encode(&mut g, &d).expect_err("encode can't submit to free memory");
+    assert_eq!(e.0, photocraft_gpu::OVER_BUDGET);
+    assert!(g.paged.fault().is_none(), "out of memory for a page doesn't lose the device");
+    // `render` submits, waits and runs the cell once more, which then succeeds.
+    fresh(&mut g, &d, 2);
+    let (out, s) = render(&mut g, &d).unwrap_or_else(|e| panic!("render retries after submitting: {}", e.0));
+    assert!(s.flushes > 0, "{s:?}");
+    matches(&out, "after the submit-and-retry");
+    // Four: the retry after the submit fails as well, so this refresh goes to the CPU...
+    fresh(&mut g, &d, 4);
+    let e = render(&mut g, &d).expect_err("every try failed");
+    assert_eq!(e.0, photocraft_gpu::OVER_BUDGET);
+    assert!(g.paged.fault().is_none(), "out of memory for a page doesn't lose the device");
+    // ...and the next one is back on the GPU.
+    let (out, _) = render(&mut g, &d).unwrap_or_else(|e| panic!("the refresh after an out-of-memory one is on the GPU: {}", e.0));
+    matches(&out, "the refresh after the CPU one");
+}
+
 #[test]
 fn the_focused_view_stays_resident_after_a_full_refresh() {
     let _gamma = TEXT_GAMMA.lock().unwrap_or_else(|e| e.into_inner());

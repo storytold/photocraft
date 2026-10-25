@@ -141,27 +141,29 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
     opts.extend(photocraft_engine::artboard_cmds::PRESETS.iter().map(|(n, _, _)| (n.to_string(), *n)));
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(tl!("Size")).color(t.text_dim).size(12.0));
-        if crate::widgets::dropdown(ui, &key("preset"), &mut preset, &opts, 150.0) && !preset.is_empty() {
+        if crate::widgets::dropdown(ui, &key("preset"), tl!("Preset"), &mut preset, &opts, 150.0) && !preset.is_empty() {
             edit = Some(json!({"layer": layer.id.0, "preset": preset}));
         }
     });
-    let num = |ui: &mut egui::Ui, label: &str, v: &mut f32, range: std::ops::RangeInclusive<f32>| -> bool {
+    // The visible label and the accessible name differ for X and Y ("X" alone does not say
+    // position), so the name comes from the call site.
+    let num = |ui: &mut egui::Ui, label: &str, name: &str, v: &mut f32, range: std::ops::RangeInclusive<f32>| -> bool {
         ui.label(egui::RichText::new(tl!(&label)).color(t.text_dim).size(12.0));
-        crate::widgets::value_field(ui, v, range, "px", 64.0).changed()
+        crate::widgets::value_field(ui, v, range, "px", 64.0).accessible_name(tl!(name)).changed()
     };
     let r = a.rect;
     ui.horizontal(|ui| {
         let (mut w, mut h) = (r.width() as f32, r.height() as f32);
-        let cw = num(ui, "W", &mut w, 1.0..=300_000.0);
-        let ch = num(ui, "H", &mut h, 1.0..=300_000.0);
+        let cw = num(ui, "W", "Width", &mut w, 1.0..=300_000.0);
+        let ch = num(ui, "H", "Height", &mut h, 1.0..=300_000.0);
         if cw || ch {
             edit = Some(json!({"layer": layer.id.0, "width": w.round(), "height": h.round(), "coalesce": key("wh")}));
         }
     });
     ui.horizontal(|ui| {
         let (mut x, mut y) = (r.x0 as f32, r.y0 as f32);
-        let cx = num(ui, "X", &mut x, -300_000.0..=300_000.0);
-        let cy = num(ui, "Y", &mut y, -300_000.0..=300_000.0);
+        let cx = num(ui, "X", "X", &mut x, -300_000.0..=300_000.0);
+        let cy = num(ui, "Y", "Y", &mut y, -300_000.0..=300_000.0);
         if cx || cy {
             edit = Some(json!({"layer": layer.id.0, "x": x.round(), "y": y.round(), "coalesce": key("xy")}));
         }
@@ -178,7 +180,7 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
             ("transparent".to_string(), tl!("Transparent")),
             ("custom".to_string(), tl!("Other…")),
         ];
-        if crate::widgets::dropdown(ui, &key("bg"), &mut bg, &opts, 120.0) {
+        if crate::widgets::dropdown(ui, &key("bg"), tl!("Background"), &mut bg, &opts, 120.0) {
             let mut params = json!({"layer": layer.id.0, "background": bg});
             if bg == "custom" {
                 let hex = match a.background {

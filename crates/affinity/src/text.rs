@@ -106,6 +106,24 @@ fn int(v: &Value) -> Option<i64> {
     }
 }
 
+/// Longest font name kept; real PostScript and family names are far shorter.
+const MAX_FONT_NAME: usize = 256;
+
+/// A font name for one run. Runs repeat the same shared string, so its copies are charged
+/// against a document-wide byte budget; an overlong name or an exhausted budget leaves it empty.
+fn font_name(r: &mut Reader, font: Option<ObjId>, tag: &[u8; 4]) -> String {
+    let name = font.and_then(|f| r.s.str(f, tag)).unwrap_or_default();
+    if name.len() > MAX_FONT_NAME {
+        r.warn("font names longer than 256 bytes (left empty)");
+        return String::new();
+    }
+    if !r.charge_font_name(name.len()) {
+        r.warn("font names beyond the document metadata budget (left empty)");
+        return String::new();
+    }
+    name.to_string()
+}
+
 fn run_attrs(r: &mut Reader, attrs: ObjId, text: String, world: Affine) -> TextRun {
     let s = r.s;
     let doubles = s.field(attrs, b"Doub");
@@ -125,11 +143,12 @@ fn run_attrs(r: &mut Reader, attrs: ObjId, text: String, world: Affine) -> TextR
         r.warn("horizontally scaled text");
     }
     let font = s.obj(attrs, b"DFnt");
-    let get = |tag: &[u8; 4]| font.and_then(|f| s.str(f, tag)).unwrap_or_default().to_string();
+    let postscript = font_name(r, font, b"Post");
+    let family = font_name(r, font, b"Famy");
     TextRun {
         text,
-        postscript: get(b"Post"),
-        family: get(b"Famy"),
+        postscript,
+        family,
         weight: font.and_then(|f| s.int(f, b"Wegt")).unwrap_or(400),
         italic: font.and_then(|f| s.bool(f, b"Ital")).unwrap_or(false),
         size,

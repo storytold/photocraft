@@ -289,8 +289,8 @@ pub(crate) fn color_choices(app: &crate::PhotocraftApp, ui: &mut egui::Ui, l: &L
 fn color_button(ui: &mut egui::Ui, color: LabelColor, checked: bool) -> egui::Response {
     use egui::{Atom, Rect, Stroke, StrokeKind, vec2};
     let t = crate::theme::Tokens::get(ui.ctx());
-    let check_id = ui.id().with(("label-check", color.id()));
-    let swatch_id = ui.id().with(("label-swatch", color.id()));
+    let check_id = egui::IdSalt::new(("label-check", color.id()));
+    let swatch_id = egui::IdSalt::new(("label-swatch", color.id()));
     let name = color_name(color);
     let button = egui::Button::new((Atom::custom(check_id, vec2(14.0, 16.0)), Atom::custom(swatch_id, vec2(16.0, 16.0)), name, Atom::grow())).atom_ui(ui);
     if checked && let Some(rect) = button.rect(check_id) {
@@ -309,7 +309,7 @@ fn color_button(ui: &mut egui::Ui, color: LabelColor, checked: bool) -> egui::Re
             p.line_segment([r.right_top(), r.left_bottom()], stroke);
         }
     }
-    button.response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), checked, name));
+    button.response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), checked, name));
     button.response
 }
 
@@ -553,7 +553,7 @@ mod tests {
         let ctx = egui::Context::default();
         crate::PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::ALL[0]);
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 300.0));
-        let id = egui::Id::new("layer-menu-probe");
+        let id = egui::Id::unique("layer-menu-probe");
         let mut content = 0.0;
         for _ in 0..4 {
             let input = egui::RawInput { screen_rect: Some(screen), ..Default::default() };

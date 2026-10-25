@@ -429,16 +429,16 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
             let Some(id) = s("command").or(s("id")) else { return err("missing `command`") };
             let params = p.get("params").cloned().unwrap_or(json!({}));
             // A control-channel menu click must respect the same modal gate as the native menu.
-            // Camera Raw's documented `ui` requests operate its already-open dialog rather
-            // than click a menu. Only that continuation may pass its own modal gate.
-            // engine.execute is deliberately not subject to the UI's menu-click semantics.
-            let camera_raw_continuation = id == "filter.cameraRaw"
-                && app.camera_raw.is_some()
+            // The documented `ui` requests of Camera Raw and the full-window workspaces operate
+            // the already-open one rather than click a menu. Only that continuation may pass its
+            // own modal gate. engine.execute is deliberately not subject to the UI's menu-click semantics.
+            let open_modal = if app.camera_raw.is_some() { Some("filter.cameraRaw") } else { crate::distort_ui::modal_workspace(app) };
+            let continuation = open_modal == Some(id)
                 && params.as_object().is_some_and(|fields| fields.len() == 1 && fields.get("ui").is_some_and(Value::is_object))
                 && app.ui.dialogs.is_empty()
                 && app.discard.is_none()
                 && !crate::crop_ui::blocks(app, id);
-            if req.method == "ui.menu.invoke" && !camera_raw_continuation && !crate::menus::modal_allows(app, id) {
+            if req.method == "ui.menu.invoke" && !continuation && !crate::menus::modal_allows(app, id) {
                 return err("menu command is unavailable while a modal dialog is open");
             }
             if let Some(authorize) = app.services.automation_command.as_ref()
@@ -473,7 +473,14 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 None => err("`job` must be a job id"),
             }
         }
-        "ui.menu.list" => ok(serde_json::to_value(crate::menus::menu_items(app)).unwrap_or_default()),
+        "ui.menu.list" => {
+            // Report the same enablement the native menu shows, so a listed item is invokable.
+            let mut items = crate::menus::menu_items(app);
+            for item in &mut items {
+                item.enabled &= crate::menus::modal_allows(app, &item.id);
+            }
+            ok(serde_json::to_value(items).unwrap_or_default())
+        }
         "ui.inspect" => ok(inspect(app, ctx)),
         "ui.set" => {
             if let Some(field) = p.as_object().and_then(|o| o.keys().find(|k| !UI_SET_FIELDS.contains(&k.as_str()))) {
@@ -1301,8 +1308,9 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
             if focus.unwrap_or(true) {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             }
-            // The capture itself is issued by `PhotocraftApp::issue_screenshots` once open/close
-            // animations (modals, popups) have settled.
+            // The capture itself is admitted by `PhotocraftApp::drain_control` (budget and
+            // geometry) and issued from a later `App::ui` pass once open/close animations
+            // (modals, popups) have settled (see `screenshot.rs`).
             let token = app.ui.alloc_id();
             ctx.request_repaint();
             Outcome::Screenshot { token, path }
@@ -1440,8 +1448,15 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
 pub fn save_screenshot(app: &mut PhotocraftApp, image: &egui::ColorImage, path: Option<&str>) -> Value {
     let [w, h] = image.size;
     let rgba: Vec<u8> = image.pixels.iter().flat_map(|c| c.to_array()).collect();
+    save_screenshot_rgba(app, w, h, &rgba, path)
+}
+
+/// Encode already-flattened RGBA pixels. The capture lifecycle uses this after dropping the
+/// retained [`egui::ColorImage`], so the encoder's input copy and the retained image do not
+/// overlap in memory (see `PhotocraftApp::finish_captures`).
+pub fn save_screenshot_rgba(app: &mut PhotocraftApp, w: usize, h: usize, rgba: &[u8], path: Option<&str>) -> Value {
     let png = match app.services.encode_png.as_ref() {
-        Some(enc) => enc(w as u32, h as u32, &rgba),
+        Some(enc) => enc(w as u32, h as u32, rgba),
         None => Err("no PNG encoder configured".into()),
     };
     let Some(path) = path else {
@@ -1595,6 +1610,57 @@ mod tests {
         app.services.automation_command = None;
         assert_eq!(call(&mut app, &ctx, "ui.menu.invoke", cancel)["ok"], true);
         assert!(app.camera_raw.is_none());
+    }
+
+    #[test]
+    fn full_window_workspaces_are_modal_for_menu_invocations() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        app.run("file.new", json!({"width":32,"height":32})).unwrap();
+        app.run("file.new", json!({"width":32,"height":32})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.run("edit.fill", json!({"color":"#808080"})).unwrap();
+        app.run("select.rect", json!({"x":8,"y":8,"width":8,"height":8})).unwrap();
+        for workspace in ["filter.liquify", "edit.contentAwareFill", "filter.filterGallery", "filter.adaptiveWideAngle"] {
+            let opened = call(&mut app, &ctx, "ui.menu.invoke", json!({"id":workspace}));
+            assert_eq!(opened["ok"], true, "{workspace}: {opened}");
+            assert_eq!(crate::distort_ui::modal_workspace(&app), Some(workspace));
+            let doc = app.session.active().unwrap().doc.id;
+            for request in [
+                json!({"id":"window.document.0"}),
+                json!({"id":"select.all"}),
+                json!({"id":"view.zoomIn"}),
+                json!({"id":"filter.cameraRaw"}),
+                json!({"id":workspace,"params":{"ui":null}}),
+            ] {
+                let blocked = call(&mut app, &ctx, "ui.menu.invoke", request.clone());
+                assert_eq!(blocked["ok"], false, "{workspace}: {request} → {blocked}");
+                assert!(!crate::menus::modal_allows(&app, request["id"].as_str().unwrap()), "{workspace}: native menu greys {request}");
+            }
+            let listed = call(&mut app, &ctx, "ui.menu.list", json!({}));
+            let enabled = |id: &str| listed["result"].as_array().unwrap().iter().find(|it| it["id"] == id).map(|it| it["enabled"].clone());
+            assert_eq!(enabled("select.all"), Some(json!(false)), "{workspace}: ui.menu.list greys what invoke refuses");
+            assert_eq!(crate::distort_ui::modal_workspace(&app), Some(workspace), "{workspace} stays open with its work");
+            assert_eq!(app.session.active().unwrap().doc.id, doc);
+            // An open dialog still takes precedence over the workspace's own requests.
+            app.ui.open_dialog(DialogKind::About, Default::default());
+            let cancel = json!({"id":workspace,"params":{"ui":{"cancel":true}}});
+            assert_eq!(call(&mut app, &ctx, "ui.menu.invoke", cancel.clone())["ok"], false);
+            app.ui.dialogs.clear();
+            let cancelled = call(&mut app, &ctx, "ui.menu.invoke", cancel);
+            assert_eq!(cancelled["ok"], true, "{workspace}: {cancelled}");
+            assert_eq!(crate::distort_ui::modal_workspace(&app), None);
+            assert!(crate::menus::modal_allows(&app, "select.all"), "{workspace}: menus are free again");
+            let listed = call(&mut app, &ctx, "ui.menu.list", json!({}));
+            assert!(
+                listed["result"].as_array().unwrap().iter().any(|it| it["id"] == "select.all" && it["enabled"] == true),
+                "{workspace}: listed as enabled again"
+            );
+        }
+        // engine.execute stays programmatic: it is not a menu click.
+        assert_eq!(call(&mut app, &ctx, "ui.menu.invoke", json!({"id":"filter.liquify"}))["ok"], true);
+        let executed = call(&mut app, &ctx, "engine.execute", json!({"command":"select.all"}));
+        assert_eq!(executed["ok"], true, "{executed}");
     }
 
     #[test]

@@ -391,6 +391,10 @@ fn write_pattern(p: &PsdPattern, out: &mut Vec<u8>) -> Result<()> {
     out.extend_from_slice(&(p.height as u16).to_be_bytes());
     out.extend_from_slice(&(p.width as u16).to_be_bytes());
     let units: Vec<u16> = p.name.encode_utf16().chain(std::iter::once(0)).collect();
+    // The reader refuses longer names (see `read_pattern`).
+    if units.len() > 65_536 {
+        return Err(PsdError::LimitExceeded("pattern name length"));
+    }
     out.extend_from_slice(&(units.len() as u32).to_be_bytes());
     for u in units {
         out.extend_from_slice(&u.to_be_bytes());
@@ -533,6 +537,9 @@ pub fn block_key(depth: u16) -> [u8; 4] {
     }
 }
 
+/// The most patterns a `.pat` file may hold: more are refused on read and on write.
+pub const MAX_PAT_PATTERNS: usize = 100_000;
+
 /// Parses a `.pat` pattern file.
 pub fn parse_pat_file(data: &[u8]) -> Result<Vec<PsdPattern>> {
     let mut r = Rd { b: data, p: 0 };
@@ -541,10 +548,13 @@ pub fn parse_pat_file(data: &[u8]) -> Result<Vec<PsdPattern>> {
         return Err(PsdError::InvalidSignature { expected: "8BPT", found: [sig[0], sig[1], sig[2], sig[3]] });
     }
     let _version = r.u16()?;
-    let count = r.u32()?;
+    let count = r.u32()? as usize;
+    if count > MAX_PAT_PATTERNS {
+        return Err(PsdError::LimitExceeded("pattern count"));
+    }
     let mut out = Vec::new();
     let mut budget = PatternBudget::default();
-    for _ in 0..count.min(100_000) {
+    for _ in 0..count {
         out.push(read_pattern(&mut r, &mut budget)?);
     }
     Ok(out)
@@ -552,6 +562,9 @@ pub fn parse_pat_file(data: &[u8]) -> Result<Vec<PsdPattern>> {
 
 /// Writes a `.pat` pattern file.
 pub fn write_pat_file(patterns: &[PsdPattern]) -> Result<Vec<u8>> {
+    if patterns.len() > MAX_PAT_PATTERNS {
+        return Err(PsdError::LimitExceeded("pattern count"));
+    }
     let mut out = b"8BPT".to_vec();
     out.extend_from_slice(&1u16.to_be_bytes());
     out.extend_from_slice(&(patterns.len() as u32).to_be_bytes());
@@ -580,6 +593,28 @@ mod tests {
             channels: vec![plane(1), plane(2), plane(3)],
             alpha: alpha.then(|| plane(9)),
         }
+    }
+
+    /// #9318 review: a name the reader refuses (more than 65,536 UTF-16 units with its NUL) is
+    /// refused on write, so a saved library can't become a file that loads nothing.
+    #[test]
+    fn a_name_the_reader_refuses_is_refused_on_write() {
+        let long = PsdPattern { name: "a".repeat(65_536), ..pat(8, false) };
+        assert!(matches!(write_pat_file(&[long]), Err(PsdError::LimitExceeded(_))));
+        let longest = PsdPattern { name: "a".repeat(65_535), ..pat(8, false) };
+        assert_eq!(parse_pat_file(&write_pat_file(std::slice::from_ref(&longest)).unwrap()).unwrap(), [longest]);
+    }
+
+    /// #9318 review: more patterns than a `.pat` holds are refused on write, and a file claiming
+    /// more is refused on read rather than silently cut to the first 100,000.
+    #[test]
+    fn more_patterns_than_a_pat_file_holds_are_refused() {
+        let many = vec![pat(8, false); MAX_PAT_PATTERNS + 1];
+        assert!(matches!(write_pat_file(&many), Err(PsdError::LimitExceeded(_))));
+        let mut header = b"8BPT".to_vec();
+        header.extend_from_slice(&1u16.to_be_bytes());
+        header.extend_from_slice(&(MAX_PAT_PATTERNS as u32 + 1).to_be_bytes());
+        assert!(matches!(parse_pat_file(&header), Err(PsdError::LimitExceeded(_))));
     }
 
     #[test]

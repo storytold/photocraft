@@ -3089,3 +3089,13 @@ curves	Smooth	平滑
 	Exported {path}	已导出 {path}
 	Exported {n} files	已导出 {n} 个文件
 	Driver: {driver}	驱动程序：{driver}
+
+# Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
+	Aspect Ratio	长宽比
+	Category	类别
+	Color Table	颜色表
+	Gamma	伽马
+	Interpolation	插值
+	Profile	配置文件
+	Target	目标
+	Units	单位

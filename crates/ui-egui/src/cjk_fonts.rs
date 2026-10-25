@@ -50,6 +50,9 @@ pub struct Sources {
     pub covers: fn(&[u8], char) -> Option<u32>,
     /// Embedded fonts tried before `files` for a script (craft-fonts' Japanese fonts).
     pub embedded: fn(CjkScript) -> Vec<&'static CraftFont>,
+    /// Register every craft-fonts face up front, so a headless frame can shape CJK and other
+    /// scripts before the lazy loader gets a second pass (tests panic on a missing glyph).
+    pub eager_craft_fonts: bool,
 }
 
 /// craft-fonts' Japanese fonts for the Japanese script, UI face first (empty without craft-fonts).
@@ -76,6 +79,7 @@ impl Sources {
             scripts: scripts::system_candidates,
             covers: scripts::covering_face,
             embedded: craft_embedded,
+            eager_craft_fonts: true,
         }
     }
     #[cfg(target_arch = "wasm32")]
@@ -87,6 +91,8 @@ impl Sources {
             scripts: |_| Vec::new(),
             covers: scripts::covering_face,
             embedded: craft_embedded,
+            // The web build embeds no craft fonts; keep its font stack as it was.
+            eager_craft_fonts: false,
         }
     }
 }
@@ -351,11 +357,11 @@ fn baseline_offset(face: (f32, f32, f32), primary: (f32, f32, f32)) -> f32 {
 /// Registers `name` at the lowest priority in every font family.
 fn add_to_all_families(ctx: &egui::Context, name: String, mut data: FontData) {
     // Align to Inter, the primary of every UI family; JetBrains Mono differs by under 0.005em.
-    let primary = ctx.fonts(|f| f.definitions().font_data.get("Inter").and_then(|p| vertical_metrics(&p.font, p.index)));
-    if let (Some(face), Some(primary)) = (vertical_metrics(&data.font, data.index), primary) {
+    let primary = ctx.fonts(|f| f.definitions().font_data.get("Inter").and_then(|p| vertical_metrics(p.bytes(), p.index)));
+    if let (Some(face), Some(primary)) = (vertical_metrics(data.bytes(), data.index), primary) {
         data.tweak.y_offset_factor = baseline_offset(face, primary);
     }
-    if let Some(weight) = regular_weight(&data.font, data.index) {
+    if let Some(weight) = regular_weight(data.bytes(), data.index) {
         data.tweak.coords = egui::epaint::text::VariationCoords::new([(b"wght", weight)]);
     }
     let mut families: Vec<FontFamily> = ctx.fonts(|f| f.definitions().families.keys().cloned().collect());
@@ -571,6 +577,7 @@ mod tests {
             scripts: |_| Vec::new(),
             covers: scripts::covering_face,
             embedded: no_embedded,
+            eager_craft_fonts: false,
         }
     }
 
@@ -607,6 +614,7 @@ mod tests {
                 scripts: |_| Vec::new(),
                 covers: scripts::covering_face,
                 embedded: no_embedded,
+                eager_craft_fonts: false,
             });
             fb.order = Some(cjk::script_order(Some(loc)));
             assert!(fb.next_font(CjkChar::Han).is_none());
@@ -728,6 +736,7 @@ mod tests {
             },
             covers: scripts::covering_face,
             embedded: no_embedded,
+            eager_craft_fonts: false,
         }
     }
 
@@ -859,7 +868,15 @@ mod tests {
 
     /// No system fonts at all: craft-fonts alone draws Japanese.
     fn craft_only(locale: fn() -> Option<String>) -> Sources {
-        Sources { locale, files: |_| vec![], last_resort: Vec::new, scripts: |_| Vec::new(), covers: scripts::covering_face, embedded: craft_embedded }
+        Sources {
+            locale,
+            files: |_| vec![],
+            last_resort: Vec::new,
+            scripts: |_| Vec::new(),
+            covers: scripts::covering_face,
+            embedded: craft_embedded,
+            eager_craft_fonts: false,
+        }
     }
 
     #[test]
@@ -876,7 +893,7 @@ mod tests {
             assert!(render(&ctx, "レイヤー 1"), "tofu in kana");
             let fonts = ctx.fonts(|f| f.definitions().clone());
             let name = format!("{FONT_PREFIX}-0");
-            assert!(fonts.font_data.get(&name).is_some_and(|d| std::ptr::eq(d.font.as_ref().as_ptr(), ui_font.bytes.as_ptr())), "BIZ UDPGothic Regular first");
+            assert!(fonts.font_data.get(&name).is_some_and(|d| std::ptr::eq(d.bytes().as_ptr(), ui_font.bytes.as_ptr())), "BIZ UDPGothic Regular first");
             for (fam, stack) in &fonts.families {
                 assert_eq!(stack.last(), Some(&name), "{fam:?}: appended last so Latin keeps Inter");
                 assert!(stack.first().is_some_and(|f| f != &name), "{fam:?}");
@@ -898,6 +915,7 @@ mod tests {
                 scripts: |_| Vec::new(),
                 covers: scripts::covering_face,
                 embedded: no_embedded,
+                eager_craft_fonts: false,
             },
         );
         assert!(render(&ctx, "Layer 1 – café"));

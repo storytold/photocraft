@@ -1048,13 +1048,16 @@ mod tests {
     fn workspace_psd_saves_embed_no_file_a_linked_smart_object_names() {
         use photocraft_engine::doc::{LayerContent, SmartSource};
 
-        const MARKER: &[u8] = b"PHOTOCRAFT-LINKED-0001";
-        let has_marker = |bytes: &[u8]| bytes.windows(MARKER.len()).any(|w| w == MARKER);
+        // An image PhotoCraft can open (other linked files are never embedded): an embedded copy
+        // carries these exact bytes, while pixels written for the layer don't.
+        let image = photocraft_codecs::Image::from_u8(8, 8, photocraft_codecs::ChannelLayout::Rgb, (0..192u8).collect()).unwrap();
+        let marker = photocraft_codecs::encode(&image, photocraft_codecs::Format::Png, &Default::default()).unwrap();
+        let has_marker = |bytes: &[u8]| bytes.windows(marker.len()).any(|w| w == marker.as_slice());
         let base = std::env::temp_dir().join(format!("pc-psd-linked-embed-{}", std::process::id()));
         let root = base.join("workspace");
         std::fs::create_dir_all(&root).unwrap();
-        let outside = base.join("outside.txt");
-        std::fs::write(&outside, MARKER).unwrap();
+        let outside = base.join("outside.png");
+        std::fs::write(&outside, &marker).unwrap();
         // A document whose smart object names a file outside the roots as its source.
         let mut session = photocraft_engine::Session::new();
         session.execute("file.new", json!({"width": 8, "height": 8, "background": "white"})).unwrap();

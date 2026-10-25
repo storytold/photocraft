@@ -86,6 +86,28 @@ fn deleting_the_vector_mask_prunes_its_thumbnail() {
     assert!(!h.state().thumbs.contains_key(&key));
 }
 
+// Regression test for #119: the Layers panel's thumbnail textures of a deleted layer, and of
+// every layer of a closed document, were kept for the rest of the session.
+#[test]
+fn deleting_a_layer_or_closing_its_document_releases_the_thumbnails() {
+    let (s, masked, shape) = session();
+    let mut h = harness(s, 0, 1.0, 290.0);
+    let layer_key = |id: u64| (photocraft_doc::LayerId(id), crate::mask_thumbs_ui::THUMB_LAYER);
+    assert!(h.state().thumbs.contains_key(&layer_key(masked)) && h.state().thumbs.contains_key(&layer_key(shape)), "both rows drew a thumbnail");
+    let before = h.state().thumbs.len();
+
+    h.state_mut().run("layer.delete", json!({"layer": shape})).unwrap();
+    h.run_steps(3);
+    assert!(!h.state().thumbs.contains_key(&layer_key(shape)), "the deleted layer's thumbnail is released");
+    assert!(h.state().thumbs.contains_key(&layer_key(masked)), "the other layer keeps its thumbnail");
+    assert!(h.state().thumbs.len() < before);
+
+    h.state_mut().run("file.close", json!({})).unwrap();
+    h.run_steps(3);
+    assert!(h.state().session.documents().is_empty());
+    assert!(h.state().thumbs.is_empty(), "no thumbnails outlive their document: {:?}", h.state().thumbs.keys().collect::<Vec<_>>());
+}
+
 #[test]
 fn footer_trash_deletes_only_the_targeted_mask_linked_or_unlinked() {
     for linked in [true, false] {

@@ -30,15 +30,15 @@ struct Gesture {
 }
 
 fn gesture_id() -> Id {
-    Id::new("pc-field-wheel-gesture")
+    Id::unique("pc-field-wheel-gesture")
 }
 
 fn focused_id() -> Id {
-    Id::new("pc-field-wheel-focused")
+    Id::unique("pc-field-wheel-focused")
 }
 
 fn taken_id() -> Id {
-    Id::new("pc-field-wheel-taken")
+    Id::unique("pc-field-wheel-taken")
 }
 
 /// A wheel event a field takes: plain or Shift, not the view's Alt or Ctrl/Cmd zoom, nor a plain
@@ -167,11 +167,12 @@ mod tests {
             |ui, s: &mut State| {
                 super::begin_frame(ui.ctx());
                 let out = egui::ScrollArea::both().max_height(100.0).max_width(200.0).show(ui, |ui| {
-                    ui.add_enabled_ui(s.2, |ui| crate::widgets::value_field(ui, &mut s.0, 0.0..=1000.0, "px", 90.0));
+                    ui.add_enabled_ui(s.2, |ui| crate::widgets::value_field(ui, &mut s.0, 0.0..=1000.0, "px", 90.0).accessible_name("Size"));
                     ui.allocate_space(vec2(1000.0, 1000.0));
                 });
-                s.1 = out.state.offset.y;
-                s.3 = out.state.offset.x;
+                let offset = out.state.clamped_offset();
+                s.1 = offset.y;
+                s.3 = offset.x;
             },
             (value, 0.0, true, 0.0),
         );
@@ -187,7 +188,13 @@ mod tests {
     fn wheel(h: &mut Harness<'static, State>, at: Pos2, lines: f32, modifiers: Modifiers) {
         h.hover_at(at);
         h.run_steps(1);
-        h.event(egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Line, delta: vec2(0.0, lines), phase: egui::TouchPhase::Move, modifiers });
+        h.event(egui::Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
+            unit: egui::MouseWheelUnit::Line,
+            delta: vec2(0.0, lines),
+            phase: egui::TouchPhase::Move,
+            modifiers,
+        });
         h.run_steps(4);
     }
 
@@ -225,8 +232,13 @@ mod tests {
         let below = field(&h).center() + vec2(0.0, 40.0);
         h.hover_at(below);
         h.run_steps(1);
-        let down =
-            || egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Line, delta: vec2(0.0, -1.0), phase: egui::TouchPhase::Move, modifiers: Modifiers::NONE };
+        let down = || egui::Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
+            unit: egui::MouseWheelUnit::Line,
+            delta: vec2(0.0, -1.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: Modifiers::NONE,
+        };
         h.event(down());
         h.run_steps(1);
         // Still the same gesture as the pointer reaches a field.
@@ -251,7 +263,13 @@ mod tests {
                 let at = field(&h).center();
                 h.hover_at(at);
                 h.run_steps(1);
-                h.event(egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Line, delta: vec2(1.0, 0.0), phase: egui::TouchPhase::Move, modifiers: m });
+                h.event(egui::Event::MouseWheel {
+                    source: egui::MouseWheelSource::Unknown,
+                    unit: egui::MouseWheelUnit::Line,
+                    delta: vec2(1.0, 0.0),
+                    phase: egui::TouchPhase::Move,
+                    modifiers: m,
+                });
                 h.run_steps(4);
                 assert_eq!(h.state().0, want, "focus {focus}, {m:?}");
             }
@@ -265,7 +283,13 @@ mod tests {
         let mut h = harness(100.0);
         h.hover_at(field(&h).center());
         h.run_steps(1);
-        let ev = |phase, y| egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Line, delta: vec2(0.0, y), phase, modifiers: Modifiers::NONE };
+        let ev = |phase, y| egui::Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
+            unit: egui::MouseWheelUnit::Line,
+            delta: vec2(0.0, y),
+            phase,
+            modifiers: Modifiers::NONE,
+        };
         h.event(ev(egui::TouchPhase::Start, 0.0));
         h.run_steps(1);
         h.event(ev(egui::TouchPhase::Move, 2.0));
@@ -281,7 +305,13 @@ mod tests {
         let mut h = harness(100.0);
         h.hover_at(field(&h).center());
         h.run_steps(1);
-        let ev = |phase, x| egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Line, delta: vec2(x, 0.0), phase, modifiers: Modifiers::NONE };
+        let ev = |phase, x| egui::Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
+            unit: egui::MouseWheelUnit::Line,
+            delta: vec2(x, 0.0),
+            phase,
+            modifiers: Modifiers::NONE,
+        };
         h.event(ev(egui::TouchPhase::Start, 0.0));
         h.run_steps(1);
         h.event(ev(egui::TouchPhase::Move, -2.0));
@@ -298,7 +328,7 @@ mod tests {
         let mut h = harness_stepping(100.0, 1.0 / 30.0);
         h.hover_at(field(&h).center());
         h.run_steps(1);
-        let ev = |phase, unit, d| egui::Event::MouseWheel { unit, delta: d, phase, modifiers: Modifiers::NONE };
+        let ev = |phase, unit, d| egui::Event::MouseWheel { source: egui::MouseWheelSource::Unknown, unit, delta: d, phase, modifiers: Modifiers::NONE };
         h.event(ev(egui::TouchPhase::Start, egui::MouseWheelUnit::Point, vec2(0.0, 0.0)));
         h.run_steps(1);
         // A short swipe, so the field stays in view.
@@ -321,8 +351,13 @@ mod tests {
         h.hover_at(field(&h).center());
         h.run_steps(1);
         // Up, so the panel (already at the top) doesn't move the field.
-        let up =
-            || egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Line, delta: vec2(0.0, 1.0), phase: egui::TouchPhase::Move, modifiers: Modifiers::NONE };
+        let up = || egui::Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
+            unit: egui::MouseWheelUnit::Line,
+            delta: vec2(0.0, 1.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: Modifiers::NONE,
+        };
         h.event(up());
         h.run_steps(1);
         assert_eq!(h.state().0, 101.0);
@@ -369,7 +404,7 @@ mod tests {
         use egui::MouseWheelUnit::{Line, Point};
         let ctx = egui::Context::default();
         let mut out = ctx.run_ui(Default::default(), |ui| {
-            let id = egui::Id::new("acc");
+            let id = egui::Id::unique("acc");
             for d in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
                 for unit in [Line, Point] {
                     assert_eq!(crate::widgets::count_notches(ui, id, &[(unit, vec2(0.0, d), false)], 10.0), 0.0, "{d} {unit:?}");

@@ -264,3 +264,14 @@ sync_github_name = false
 
 [people.drunkeninja42]
 real_name = "Kushagra Sharma"
+
+[people.softwaregames1]
+sync_github_name = true
+
+[people.VoiceLessQ]
+display_name = "VoiceLessQ"
+sync_github_name = false
+
+[people.erenova]
+display_name = "Erenova"
+sync_github_name = false

@@ -183,7 +183,7 @@ pub fn controls(ui: &mut egui::Ui, fields: &mut Map<String, Value>) {
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(tl!("View")).color(t.text_dim));
         let options: Vec<(Mode, &str)> = Mode::ALL.iter().map(|m| (*m, m.label())).collect();
-        crate::widgets::dropdown(ui, "select-mask-view", &mut current, &options, 170.0);
+        crate::widgets::dropdown(ui, "select-mask-view", tl!("View"), &mut current, &options, 170.0);
     });
     fields.insert("__view".into(), json!(current.id()));
     if current.default_opacity().is_some() {
@@ -214,7 +214,7 @@ fn brush_controls(ui: &mut egui::Ui, fields: &mut Map<String, Value>) {
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(tl!("Mode")).color(t.text_dim));
             let options = [(false, tl!("Expand Detection Area")), (true, tl!("Restore Original Edge"))];
-            crate::widgets::dropdown(ui, "select-mask-brush-mode", &mut subtract, &options, 170.0);
+            crate::widgets::dropdown(ui, "select-mask-brush-mode", tl!("Mode"), &mut subtract, &options, 170.0);
         });
         fields.insert("__brushMode".into(), json!(if subtract { "subtract" } else { "add" }));
         let mut size = brush_size(fields);

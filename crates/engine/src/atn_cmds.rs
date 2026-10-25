@@ -3948,9 +3948,9 @@ pub struct Skipped {
 fn export_item(id: &str, params: &Value, set: &str) -> Option<AtnItem> {
     if id == PHOTOSHOP_STEP {
         let event = jstr(params, "event")?;
-        let event = match jstr(params, "eventKind") {
-            Some("code") => AtnEvent::Code(event.as_bytes().try_into().ok()?),
-            Some("name") => AtnEvent::name(event),
+        let event = match params.get("eventKind") {
+            Some(Value::String(kind)) if kind == "code" => AtnEvent::Code(event.as_bytes().try_into().ok()?),
+            Some(Value::String(kind)) if kind == "name" => AtnEvent::name(event),
             Some(_) => return None,
             // Older PhotoCraft action data did not retain the event kind. Keep its previous
             // best-effort export behavior for compatibility.
