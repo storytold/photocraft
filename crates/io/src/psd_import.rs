@@ -724,7 +724,7 @@ fn be_to_ne_plane(plane: &[u8], s: SampleType, n: usize) -> Vec<u8> {
     interleave(&[Some(plane)], &[zero_sample(s)], n, s, &[false])
 }
 
-fn unicode_names(data: &[u8]) -> Vec<String> {
+pub(crate) fn unicode_names(data: &[u8]) -> Vec<String> {
     let mut out = Vec::new();
     let mut at = 0;
     while at + 4 <= data.len() {
@@ -1213,6 +1213,14 @@ pub(crate) fn psd_to_document_decoded_integrity(
             crate::channel_map::apply_display_info(&r.data, true, skip, &mut doc.channels);
         } else if let Some(r) = file.resource(crate::channel_map::DISPLAY_INFO_OLD) {
             crate::channel_map::apply_display_info(&r.data, false, skip, &mut doc.channels);
+        }
+        for channel in &mut doc.channels {
+            if channel.spot.is_some() {
+                let mut bytes = channel.surface.to_interleaved(canvas);
+                crate::channel_map::invert_spot_samples(&mut bytes, depth);
+                channel.surface.write_interleaved(canvas, &bytes);
+                channel.surface.prune();
+            }
         }
         // Saved in Quick Mask mode: that channel becomes the document's Quick Mask again.
         if let Some(r) = file.resource(crate::channel_map::QUICK_MASK_INFO)

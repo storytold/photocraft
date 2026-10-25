@@ -579,7 +579,9 @@ fn export_stages(doc: &Document, name_or_ext: &str, opts: &ExportOptions, ctl: &
         return Ok(ExportResult { bytes, warnings });
     }
     let format = photocraft_codecs::from_extension(&ext).ok_or_else(|| IoError::UnknownFormat(name_or_ext.to_string()))?;
-    if format == photocraft_codecs::Format::Tiff && opts.tiff_layers && tiff_layers::would_write_layers(doc) {
+    if format == photocraft_codecs::Format::Tiff
+        && ((opts.tiff_layers && tiff_layers::would_write_layers(doc)) || doc.channels.iter().any(|c| c.spot.is_some()))
+    {
         return tiff_layers::export_layered(doc, opts, ctl);
     }
     flat::export_flat_with(doc, format, opts, ctl)

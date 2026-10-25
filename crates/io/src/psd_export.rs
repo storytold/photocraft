@@ -1824,7 +1824,10 @@ fn document_to_psd_nested(doc: &Document, opts: &PsdExportOptions, depth: u32, c
     };
     for a in &extra {
         let s = if a.surface.format() != ex.mask_fmt { a.surface.convert(ex.mask_fmt) } else { a.surface.clone() };
-        let bytes = s.to_interleaved(canvas);
+        let mut bytes = s.to_interleaved(canvas);
+        if a.spot.is_some() {
+            crate::channel_map::invert_spot_samples(&mut bytes, sample);
+        }
         planes.extend(deinterleave(&bytes, 1, sample, &[false]).remove(0));
     }
     let channels = (cc + usize::from(has_alpha) + extra.len()) as u16;
