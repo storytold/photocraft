@@ -33,6 +33,7 @@ fn hdr_adjustments_preserve_range_and_cpu_parity() {
     let identity = vec![CurvePoint { input: 0.0, output: 0.0 }, CurvePoint { input: 1.0, output: 1.0 }];
     let channel = LevelsChannel { in_black: 0.25, in_white: 0.75, gamma: 2.0, out_black: -0.1, out_white: 1.5 };
     for adj in [
+        Adjustment::BrightnessContrast { brightness: 0.0, contrast: 0.0, legacy: false },
         Adjustment::Exposure { exposure: 0.0, offset: 0.0, gamma: 1.0 },
         Adjustment::Exposure { exposure: 1.0, offset: 0.1, gamma: 1.3 },
         Adjustment::Exposure { exposure: 0.8, offset: -0.02, gamma: 1.2 },
@@ -225,6 +226,28 @@ fn diff_rect(g: &mut Gpu, doc: &Document, rect: Rect, what: &str) -> Result<phot
 
 fn check(g: &mut Gpu, doc: &Document, what: &str) {
     diff_rect(g, doc, doc.bounds(), what).unwrap_or_else(|e| panic!("{e}"));
+}
+
+#[test]
+fn modern_brightness_contrast_clipped_ramp() {
+    let Some(mut g) = gpu() else { return };
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        for brightness in [-150.0, -75.0, 0.0, 75.0, 150.0] {
+            let mut doc = Document::new("brightness ramp", Size::new(256, 2), ColorMode::Rgb, depth);
+            let mut surface = photocraft_raster::Surface::new(doc.pixel_format());
+            for x in 0..256 {
+                let value = x as f32 / 255.0;
+                for y in 0..2 {
+                    surface.write_pixel(x, y, &[value, 1.0 - value, 0.25, if y == 0 { 1.0 } else { 0.4 }]);
+                }
+            }
+            doc.layers.push(Layer::new("base", LayerContent::Raster(surface)));
+            let mut adj = Layer::new("brightness", LayerContent::Adjustment(Adjustment::BrightnessContrast { brightness, contrast: -17.0, legacy: false }));
+            adj.clipped = true;
+            doc.layers.push(adj);
+            check(&mut g, &doc, &format!("modern B/C {depth:?} brightness={brightness}"));
+        }
+    }
 }
 
 /// Growing a layer's tile footprint keeps the old texels in the overlap (`keep_overlap`)
