@@ -500,6 +500,33 @@ fn shape_drag_creates_layers_with_modifiers() {
     assert_eq!(app.session.active().unwrap().doc.layers.len(), 4);
 }
 
+/// #9453: in Path mode a Shape-tool drag adds its outline to the work path, one subpath per
+/// drag, and makes no layer, as Photoshop's Path tool mode does. Shape stays the default.
+#[test]
+fn path_mode_shape_drags_add_to_the_work_path() {
+    let mut app = app();
+    assert_eq!(app.ui.tool_options.shape_mode, "shape", "Shape by default, as in Photoshop");
+    let layers = app.session.active().unwrap().doc.layers.len();
+    app.ui.tool_options.shape_mode = "path".into();
+    finish_shape(&mut app, Tool::EllipseShape, [20.0, 20.0], [70.0, 50.0], egui::Modifiers::NONE);
+    let doc = &app.session.active().unwrap().doc;
+    assert_eq!(doc.layers.len(), layers, "no layer");
+    let work = doc.work_path.as_ref().expect("a work path");
+    assert_eq!(work.subpaths.len(), 1);
+    assert!(work.subpaths[0].closed);
+    let b = work.control_bounds().unwrap();
+    assert!((b.0 - 20.0).abs() < 0.5 && (b.1 - 20.0).abs() < 0.5 && (b.2 - 70.0).abs() < 0.5 && (b.3 - 50.0).abs() < 0.5, "{b:?}");
+    assert_eq!(app.ui.selected_path.as_deref(), Some("work"));
+    finish_shape(&mut app, Tool::Rectangle, [100.0, 100.0], [140.0, 130.0], egui::Modifiers::NONE);
+    let doc = &app.session.active().unwrap().doc;
+    assert_eq!(doc.work_path.as_ref().unwrap().subpaths.len(), 2, "a second drag adds a subpath");
+    assert_eq!(doc.layers.len(), layers);
+    // Back in Shape mode a drag makes a shape layer again.
+    app.ui.tool_options.shape_mode = "shape".into();
+    finish_shape(&mut app, Tool::Rectangle, [10.0, 150.0], [60.0, 180.0], egui::Modifiers::NONE);
+    assert_eq!(app.session.active().unwrap().doc.layers.len(), layers + 1);
+}
+
 #[test]
 fn shift_pressed_during_a_shape_drag_constrains_it() {
     // #668: ⇧ only counted when held at the press; Photoshop constrains when it is pressed
