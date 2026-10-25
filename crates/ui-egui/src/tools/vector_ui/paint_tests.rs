@@ -840,3 +840,29 @@ fn path_mode_keeps_the_geometry_options_and_hides_paint() {
         }
     }
 }
+
+/// CodeRabbit on #9456: in Path mode the Radius field sets the next outline's radius only; it
+/// must not edit a shape layer that happens to be active.
+#[test]
+fn path_mode_radius_leaves_the_active_shape_layer_alone() {
+    let mut app = app("rgb", 8);
+    app.run("shape.create", json!({"kind": "rect", "rect": [20, 20, 60, 40], "radii": 10})).unwrap();
+    let radii = |app: &PhotocraftApp| match &shape(app).live {
+        Some(photocraft_doc::LiveShape::Rect { radii, .. }) => *radii,
+        other => panic!("expected a live rectangle, got {other:?}"),
+    };
+    assert_eq!(radii(&app), [10.0; 4]);
+    app.ui.tool_options.corner_radius = 3.0;
+    app.ui.tool_options.shape_mode = "path".into();
+    let history = app.session.active().unwrap().history.past_len();
+    let mut h = harness(app, false);
+    h.get_all_by_role(egui::accesskit::Role::SpinButton).next().expect("the radius").click();
+    h.run();
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.event(Event::Text("20".into()));
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert_eq!(h.state().ui.tool_options.corner_radius, 20.0, "the next outline's radius");
+    assert_eq!(radii(h.state()), [10.0; 4], "the shape layer keeps its radius");
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), history, "no edit");
+}
