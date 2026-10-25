@@ -1141,10 +1141,10 @@ fn undoing_back_to_the_saved_step_clears_dirty() {
 fn purge_histories_on_a_dirty_document_does_not_reuse_the_saved_id() {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    // Save the opened state (id 0). A save after an extra edit lands on id 1
+    // and hides the reuse: undo then returns to id 0, which was never the save.
+    s.active_mut().unwrap().saved_to("a.psd".into());
     s.execute("layer.new.layer", json!({})).unwrap();
-    s.active_mut().unwrap().saved_to("crop.psd".into());
-    s.execute("layer.new.layer", json!({})).unwrap();
-    assert!(s.active().unwrap().is_dirty());
     s.execute("edit.purge.histories", json!({})).unwrap();
     s.execute("layer.new.layer", json!({})).unwrap();
     assert!(s.undo());

@@ -385,6 +385,30 @@ fn filters_follow_transforms() {
 }
 
 #[test]
+fn undo_after_save_contents_still_commits_on_close() {
+    let mut s = session(8);
+    paint(&mut s);
+    let _id = convert(&mut s);
+    let before = flat(&s);
+    let r = s.execute("layer.smartObjects.editContents", json!({})).unwrap();
+    let child = r["document"].as_u64().unwrap() as usize;
+    s.edit("paint", |doc, _| {
+        let l = &mut doc.layers[0];
+        let b = Rect::new(0, 0, 46, 33);
+        l.surface_mut().unwrap().fill_rect(b, &[1.0, 0.0, 0.0, 1.0]);
+        Ok(())
+    })
+    .unwrap();
+    s.execute("layer.smartObjects.saveContents", json!({})).unwrap();
+    assert!(!s.active().unwrap().is_dirty());
+    assert!(s.undo(), "undo the paint inside the contents document");
+    assert!(s.active().unwrap().is_dirty(), "undo past Save Contents is unsaved");
+    s.execute("file.close", json!({})).unwrap();
+    s.set_active(0);
+    assert_eq!(flat(&s), before, "closing the undone contents document writes that state back");
+}
+
+#[test]
 fn edit_contents_updates_the_parent() {
     let mut s = session(8);
     paint(&mut s);

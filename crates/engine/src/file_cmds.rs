@@ -144,6 +144,13 @@ impl crate::DocState {
             Arc::make_mut(&mut self.doc).name = name;
         }
         self.path = Some(path);
+        self.mark_saved();
+    }
+
+    /// Mark the current history step as the saved one. Sites that only assigned
+    /// `saved_revision` left `saved_history_id` on an older step, so a later undo
+    /// could look clean and skip writing Edit Contents back to the parent.
+    pub fn mark_saved(&mut self) {
         self.saved_revision = self.revision;
         self.saved_history_id = self.history.current_id();
     }
@@ -439,8 +446,7 @@ fn revert(s: &mut Session) -> Result<Value> {
         Ok(())
     })?;
     let st = s.active_mut().ok_or(EngineError::NoDocument)?;
-    st.saved_revision = st.revision;
-    st.saved_history_id = st.history.current_id();
+    st.mark_saved();
     Ok(json!({"path": path, "layers": st.doc.layers.len()}))
 }
 

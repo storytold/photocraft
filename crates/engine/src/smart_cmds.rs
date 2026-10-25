@@ -925,7 +925,7 @@ pub fn commit_child(s: &mut Session, index: usize) -> Result<bool> {
     s.active = prev;
     r?;
     if let Some(st) = s.docs.get_mut(index) {
-        st.saved_revision = st.revision;
+        st.mark_saved();
     }
     Ok(true)
 }

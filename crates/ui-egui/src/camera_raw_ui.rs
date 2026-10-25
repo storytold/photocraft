@@ -427,7 +427,7 @@ fn mark_unmodified(app: &mut PhotocraftApp, index: usize) {
     let active = app.session.active_index();
     app.session.set_active(index);
     if let Some(st) = app.session.active_mut() {
-        st.saved_revision = st.revision;
+        st.mark_saved();
     }
     if let Some(i) = active {
         app.session.set_active(i);
