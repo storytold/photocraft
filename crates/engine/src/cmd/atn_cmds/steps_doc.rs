@@ -1,8 +1,5 @@
 use super::convert::clip_name;
-use super::descriptors::{
-    PCT, PT, PX, Target, ang, class, color_desc, color_hex, desc, enm, get_bool, get_enum, get_num, get_obj, get_ref, get_text, jbool, jnum, jstr, long,
-    path_text, path_value, pct, px, target, target_ref, text, trimmed,
-};
+use super::descriptors::{PCT, PT, PX, Target, ang, class, color_desc, color_hex, desc, enm, get_enum, get_num, get_ref, jbool, jnum, jstr, long, path_text, path_value, pct, px, target, target_ref, text, trimmed};
 use super::fields::{Mapped, none, step, steps};
 use super::tables::{ALIGN, EXTENSION, INTENT, INTERPOLATION, MODES, PROFILES, PURGE, SAVE_FORMATS, lookup, lookup_back};
 use super::{D, Descriptor, Id, Map, ReferenceItem, STOP_MESSAGE, UnicodeString, Value, json};
@@ -14,7 +11,7 @@ pub(super) fn place_from(d: &Descriptor) -> Mapped {
     if let Some(w) = get_num(d, "Wdth") {
         p["scale"] = json!(w);
     }
-    step(if get_bool(d, "Lnkd") == Some(true) { "file.placeLinked" } else { "file.placeEmbedded" }, p)
+    step(if d.get_bool("Lnkd") == Some(true) { "file.placeLinked" } else { "file.placeEmbedded" }, p)
 }
 
 pub(super) fn place_to(id: &str, p: &Value) -> Option<Descriptor> {
@@ -64,13 +61,13 @@ pub(super) fn save_from(d: &Descriptor) -> Mapped {
     }
     // A Save As needs a format descriptor to check the destination against: without one (or
     // with a format that isn't a descriptor) the step is kept.
-    let Some(format) = get_obj(d, "As  ") else { return unsupported };
+    let Some(format) = d.get_object("As  ") else { return unsupported };
     let Some(path) = d.get("In  ").and_then(path_text) else { return unsupported };
     let class = trimmed(&format.class_id);
-    if get_bool(d, "DIDr") == Some(true) {
+    if d.get_bool("DIDr") == Some(true) {
         // `In` is the folder alone. Save a Copy has no folder step: it stays kept.
         let Some(ext) = SAVE_FORMATS.iter().find(|(c, _)| *c == class).and_then(|(_, exts)| exts.first()) else { return unsupported };
-        if get_bool(d, "Cpy ") == Some(true) {
+        if d.get_bool("Cpy ") == Some(true) {
             return unsupported;
         }
         return step("file.saveAs", json!({"folder": path, "extension": ext}));
@@ -80,7 +77,7 @@ pub(super) fn save_from(d: &Descriptor) -> Mapped {
     if !exts.contains(&ext.as_str()) {
         return unsupported;
     }
-    step(if get_bool(d, "Cpy ") == Some(true) { "file.saveACopy" } else { "file.saveAs" }, json!({"path": path}))
+    step(if d.get_bool("Cpy ") == Some(true) { "file.saveACopy" } else { "file.saveAs" }, json!({"path": path}))
 }
 
 pub(super) fn save_to(id: &str, p: &Value) -> Option<Descriptor> {
@@ -165,10 +162,10 @@ const WEB_FORMATS: &[(&str, &str)] = &[("PN24", "png24"), ("PN8", "png8"), ("JPE
 /// `export` (Save for Web): needs the destination path (`In`), as the command writes a file.
 pub(super) fn export_from(d: &Descriptor) -> Mapped {
     let unsupported = Mapped::Unsupported { harmless: false };
-    let Some(u) = get_obj(d, "Usng") else { return unsupported };
+    let Some(u) = d.get_object("Usng") else { return unsupported };
     let Some(path) = d.get("In  ").and_then(path_text) else { return unsupported };
     // "Save in directory": `In` is only the folder, and each document saves under its own name.
-    let mut p = if get_bool(u, "DIDr") == Some(true) { json!({"folder": path}) } else { json!({"path": path}) };
+    let mut p = if u.get_bool("DIDr") == Some(true) { json!({"folder": path}) } else { json!({"path": path}) };
     if let Some(f) = get_enum(u, "Fmt ") {
         match lookup(WEB_FORMATS, &f) {
             Some(f) => p["format"] = json!(f),
@@ -176,7 +173,7 @@ pub(super) fn export_from(d: &Descriptor) -> Mapped {
         }
     }
     for (key, param) in [("Intr", "interlaced"), ("Trns", "transparency"), ("EICC", "embedIcc"), ("Prgr", "progressive"), ("Optm", "optimized")] {
-        if let Some(b) = get_bool(u, key) {
+        if let Some(b) = u.get_bool(key) {
             p[param] = json!(b);
         }
     }
@@ -185,7 +182,7 @@ pub(super) fn export_from(d: &Descriptor) -> Mapped {
             p[param] = json!(v);
         }
     }
-    if get_bool(u, "Mtt ") == Some(false) {
+    if u.get_bool("Mtt ") == Some(false) {
         p["matte"] = json!("none");
     } else if let (Some(r), Some(g), Some(b)) = (get_num(u, "MttR"), get_num(u, "MttG"), get_num(u, "MttB")) {
         p["matte"] =
@@ -344,7 +341,7 @@ pub(super) fn canvas_size_from(d: &Descriptor) -> Mapped {
         }
         p.insert("units".into(), "percent".into());
     }
-    if let Some(r) = get_bool(d, "Rltv") {
+    if let Some(r) = d.get_bool("Rltv") {
         p.insert("relative".into(), r.into());
     }
     let v = get_enum(d, "Vrtc").unwrap_or_else(|| "Cntr".into());
@@ -368,7 +365,7 @@ pub(super) fn canvas_size_from(d: &Descriptor) -> Mapped {
             Some(c) => {
                 p.insert("extensionColor".into(), c.into());
             }
-            None if c == "Clr" || c == "Othr" => match get_obj(d, "canvasExtensionColor").and_then(color_hex) {
+            None if c == "Clr" || c == "Othr" => match d.get_object("canvasExtensionColor").and_then(color_hex) {
                 Some(hex) => {
                     p.insert("extensionColor".into(), hex.into());
                 }
@@ -474,8 +471,8 @@ pub(super) fn image_size_from(d: &Descriptor) -> Mapped {
         if d.get("Rslt").is_some()
             || !matches!(d.get("Intr"), Some(D::Enumerated { type_id, .. }) if type_id.is("Intp"))
             || !matches!(d.get("CnsP"), None | Some(D::Boolean(_)))
-            || (get_bool(d, "CnsP") == Some(false) && (p.contains_key("width") != p.contains_key("height")))
-            || (get_bool(d, "CnsP") == Some(true) && p.contains_key("width") && p.contains_key("height"))
+            || (d.get_bool("CnsP") == Some(false) && (p.contains_key("width") != p.contains_key("height")))
+            || (d.get_bool("CnsP") == Some(true) && p.contains_key("width") && p.contains_key("height"))
         {
             return Mapped::Unsupported { harmless: false };
         }
@@ -591,7 +588,7 @@ pub(super) fn image_size_to(_: &str, p: &Value) -> Option<Descriptor> {
 
 pub(super) fn crop_from(d: &Descriptor) -> Mapped {
     let mut p = Map::new();
-    if let Some(t) = get_obj(d, "To  ") {
+    if let Some(t) = d.get_object("To  ") {
         // Pixels only, like Canvas Size: a side in percent or points needs the document's size
         // or resolution and must not be played as pixels.
         let side = |k: &str| match t.get(k) {
@@ -609,7 +606,7 @@ pub(super) fn crop_from(d: &Descriptor) -> Mapped {
     if let Some(a) = get_num(d, "Angl") {
         p.insert("angle".into(), a.into());
     }
-    if let Some(del) = get_bool(d, "Dlt ") {
+    if let Some(del) = d.get_bool("Dlt ") {
         p.insert("deleteCroppedPixels".into(), del.into());
     }
     step("image.crop", Value::Object(p))
@@ -635,7 +632,7 @@ pub(super) fn crop_to(_: &str, p: &Value) -> Option<Descriptor> {
 }
 
 pub(super) fn stop_from(d: &Descriptor) -> Mapped {
-    step(STOP_MESSAGE, json!({"message": get_text(d, "Msge").unwrap_or_default(), "allowContinue": get_bool(d, "Cntn").unwrap_or(false)}))
+    step(STOP_MESSAGE, json!({"message": d.get_text("Msge").unwrap_or_default(), "allowContinue": d.get_bool("Cntn").unwrap_or(false)}))
 }
 
 pub(super) fn stop_to(_: &str, p: &Value) -> Option<Descriptor> {
@@ -668,7 +665,7 @@ pub(super) fn paste_from(d: &Descriptor) -> Mapped {
             return step("edit.paste", json!({"as": mode}));
         }
     }
-    none(if get_bool(d, "inPlace") == Some(true) { "edit.pasteSpecial.pasteInPlace" } else { "edit.paste" })
+    none(if d.get_bool("inPlace") == Some(true) { "edit.pasteSpecial.pasteInPlace" } else { "edit.paste" })
 }
 
 pub(super) fn paste_to(id: &str, p: &Value) -> Option<Descriptor> {
@@ -695,7 +692,7 @@ pub(super) fn paste_to(id: &str, p: &Value) -> Option<Descriptor> {
 }
 
 pub(super) fn merge_visible_from(d: &Descriptor) -> Mapped {
-    none(if get_bool(d, "Dplc") == Some(true) { "layer.stampVisible" } else { "layer.mergeVisible" })
+    none(if d.get_bool("Dplc") == Some(true) { "layer.stampVisible" } else { "layer.mergeVisible" })
 }
 
 pub(super) fn merge_visible_to(id: &str, _: &Value) -> Option<Descriptor> {
@@ -704,7 +701,7 @@ pub(super) fn merge_visible_to(id: &str, _: &Value) -> Option<Descriptor> {
 
 pub(super) fn align_from(d: &Descriptor) -> Mapped {
     match get_enum(d, "Usng").and_then(|u| lookup(ALIGN, &u)) {
-        Some(a) => step(&format!("layer.align.{a}"), if get_bool(d, "alignToCanvas") == Some(true) { json!({"to": "canvas"}) } else { json!({}) }),
+        Some(a) => step(&format!("layer.align.{a}"), if d.get_bool("alignToCanvas") == Some(true) { json!({"to": "canvas"}) } else { json!({}) }),
         None => Mapped::Unsupported { harmless: false },
     }
 }
@@ -739,7 +736,7 @@ pub(super) fn reset_to(_: &str, _: &Value) -> Option<Descriptor> {
 /// Resolve an assigned or converted profile, preserving a supported rendering intent.
 /// Import represented RGB targets and strict profile flags; keep other destination modes intact.
 pub(super) fn profile_from(d: &Descriptor, id: &str) -> Mapped {
-    let name = get_text(d, "T   ").or_else(|| get_text(d, "profile"));
+    let name = d.get_text("T   ").or_else(|| d.get_text("profile"));
     let Some(profile) = name.as_deref().and_then(|n| lookup(PROFILES, n)) else { return Mapped::Unsupported { harmless: false } };
     let mut p = json!({"profile": profile});
     if id == "edit.convertToProfile" {
@@ -760,7 +757,7 @@ pub(super) fn profile_from(d: &Descriptor, id: &str) -> Mapped {
             let Some(i) = get_enum(d, "Inte").and_then(|i| lookup(INTENT, &i)) else { return Mapped::Unsupported { harmless: false } };
             p["intent"] = json!(i);
         }
-        if let Some(b) = get_bool(d, "MpBl") {
+        if let Some(b) = d.get_bool("MpBl") {
             p["bpc"] = json!(b);
         }
     }

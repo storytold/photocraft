@@ -124,13 +124,6 @@ fn enumv(t: &str, v: &str) -> D {
     D::Enumerated { type_id: Id::new(t), value: Id::new(v) }
 }
 
-fn enum_value(d: &Descriptor, key: &str) -> Option<String> {
-    match d.get(key) {
-        Some(D::Enumerated { value, .. }) => Some(String::from_utf8_lossy(value.as_bytes()).into_owned()),
-        _ => None,
-    }
-}
-
 fn dnum(v: Option<&D>) -> Option<f64> {
     match v {
         Some(D::Double(x)) if x.is_finite() => Some(*x),

@@ -7,7 +7,7 @@ use photocraft_algo::transform::{WARP_REACH, convex_quad};
 use photocraft_io::smart_map::{MAX_PERSPECTIVE_WARP_PLANES as MAX_PLANES, perspective_warp_geometry, perspective_warp_indexed_geometry};
 
 use super::convert::normalise;
-use super::descriptors::{desc, enm, get_obj, get_ref, layer_ref, layer_target, px, ref_class};
+use super::descriptors::{desc, enm, get_ref, layer_ref, layer_target, px, ref_class};
 use super::events::pixel_target;
 use super::fields::{Mapped, step};
 use super::{D, Descriptor, ReferenceItem, Value, json};
@@ -32,7 +32,7 @@ fn rect_valid([left, top, right, bottom]: [f64; 4]) -> bool {
 }
 
 fn reference_rect(d: &Descriptor) -> Option<[f64; 4]> {
-    let r = get_obj(d, "referenceRect")?;
+    let r = d.get_object("referenceRect")?;
     if !r.class_id.is("Rctn") || !exact_keys(r, &["Top ", "Left", "Btom", "Rght"]) {
         return None;
     }

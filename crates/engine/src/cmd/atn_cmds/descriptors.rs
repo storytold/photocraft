@@ -27,17 +27,6 @@ pub(super) fn boolean(v: &D) -> Option<bool> {
     }
 }
 
-pub(super) fn get_bool(d: &Descriptor, k: &str) -> Option<bool> {
-    d.get(k).and_then(boolean)
-}
-
-pub(super) fn get_text(d: &Descriptor, k: &str) -> Option<String> {
-    match d.get(k) {
-        Some(D::Text(t)) => Some(t.to_string_lossy()),
-        _ => None,
-    }
-}
-
 /// An enumerated value's id, trailing spaces removed (`Ordn.Trgt` → `"Trgt"`).
 pub(super) fn enumerated(v: &D) -> Option<String> {
     match v {
@@ -48,13 +37,6 @@ pub(super) fn enumerated(v: &D) -> Option<String> {
 
 pub(super) fn get_enum(d: &Descriptor, k: &str) -> Option<String> {
     d.get(k).and_then(enumerated)
-}
-
-pub(super) fn get_obj<'a>(d: &'a Descriptor, k: &str) -> Option<&'a Descriptor> {
-    match d.get(k) {
-        Some(D::Descriptor(o) | D::GlobalObject(o)) => Some(o),
-        _ => None,
-    }
 }
 
 pub(super) fn get_list<'a>(d: &'a Descriptor, k: &str) -> Option<&'a [D]> {

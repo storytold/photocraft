@@ -1,6 +1,6 @@
 //! Embedded 3D LUT steps retain their recorded metadata and the original LUT bytes.
 
-use super::descriptors::{enm, get_bool, get_text, jstr, text};
+use super::descriptors::{enm, jstr, text};
 use super::fields::{Mapped, step};
 use super::{D, Descriptor, Value, json};
 
@@ -46,7 +46,7 @@ fn read(d: &Descriptor) -> Option<(&[u8], &'static str, String, bool)> {
     if !lut.domain_is_default() {
         return None;
     }
-    Some((bytes, format, get_text(d, "LUT3DFileName")?, get_bool(d, "Dthr")?))
+    Some((bytes, format, d.get_text("LUT3DFileName")?, d.get_bool("Dthr")?))
 }
 
 /// Carry the original bytes into native playback without following the recorded source path.

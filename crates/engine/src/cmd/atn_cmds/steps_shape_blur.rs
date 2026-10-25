@@ -1,6 +1,6 @@
 //! Recorded custom shapes select an installed asset by its opaque ID, never by a guessed name.
 
-use super::descriptors::{PX, desc, get_text, px, text};
+use super::descriptors::{PX, desc, px, text};
 use super::fields::{Mapped, step};
 use super::{D, Descriptor, Value, json};
 
@@ -15,7 +15,7 @@ pub(super) fn from(d: &Descriptor) -> Mapped {
         if !shape.class_id.is("customShape") {
             return None;
         }
-        let mut p = json!({"radius": value, "shapeName": get_text(shape, "Nm  ")?, "shapeId": get_text(shape, "Idnt")?});
+        let mut p = json!({"radius": value, "shapeName": shape.get_text("Nm  ")?, "shapeId": shape.get_text("Idnt")?});
         if let Some(origin) = d.get("keyOriginType") {
             let D::Integer(9) = origin else { return None };
             p["shapeOriginType"] = json!(9);

@@ -1321,7 +1321,7 @@ fn stroke_writes_the_defaults_it_leaves_out() {
     assert_eq!(get_enum(&d, "Lctn").as_deref(), Some("Cntr"), "{d:?}");
     assert_eq!(get_num(&d, "Opct"), Some(100.0));
     assert_eq!(get_enum(&d, "Md  ").as_deref(), Some("Nrml"));
-    assert!(get_bool(&d, "PrsT") == Some(false), "{d:?}");
+    assert!(d.get_bool("PrsT") == Some(false), "{d:?}");
     // An explicit mode is kept, and the step imports back to the same stroke.
     let p = json!({"width": 3, "location": "outside", "mode": "Multiply", "opacity": 40, "color": "#000000", "preserveTransparency": true});
     let d = exported(p.clone());
@@ -2415,7 +2415,7 @@ fn black_white_adjustment_layer_saves_as_photoshops_class_and_old_class_still_im
     let saved = photocraft_paint::tile::b64_decode(r["data"].as_str().unwrap()).unwrap();
     let file = atn::parse(&saved).unwrap();
     let make = file.actions[0].items[0].descriptor.as_ref().unwrap();
-    let kind = get_obj(make, "Usng").and_then(|u| get_obj(u, "Type")).unwrap();
+    let kind = make.get_object("Usng").and_then(|u| u.get_object("Type")).unwrap();
     assert_eq!(trimmed(&kind.class_id), "BanW");
     let mut t = Session::new();
     let r = t.execute("actions.load", json!({"data": b64(&saved)})).unwrap();
@@ -3139,7 +3139,7 @@ fn apply_image_dialog_channel_names_survive_a_strict_export() {
     }
     // A named channel is written as Photoshop records it: a `Chnl` name reference.
     let item = export_item("image.applyImage", &dialog("Alpha 1"), "S").unwrap();
-    let with = get_obj(item.descriptor.as_ref().unwrap(), "With").unwrap();
+    let with = item.descriptor.as_ref().unwrap().get_object("With").unwrap();
     let r = get_ref(with, "T   ").unwrap();
     assert!(matches!(&r[0], ReferenceItem::Name { class, name } if class.class_id.is("Chnl") && name.to_string_lossy() == "Alpha 1"));
 }
@@ -3170,13 +3170,13 @@ fn apply_image_numeric_source_selectors_are_refused() {
 fn defaults_photoshop_plays_differently_are_written() {
     let exported = |id: &str, p: Value| export_item(id, &p, "S").and_then(|i| i.descriptor).unwrap_or_else(|| panic!("{id} does not export"));
     let bucket = exported("paint.bucket", json!({"x": 1, "y": 2}));
-    assert_eq!((get_num(&bucket, "Tlrn"), get_bool(&bucket, "AntA")), (Some(32.0), Some(true)));
+    assert_eq!((get_num(&bucket, "Tlrn"), bucket.get_bool("AntA")), (Some(32.0), Some(true)));
     let canvas = exported("image.canvasSize", json!({"width": 10, "height": 10}));
     assert_eq!((get_enum(&canvas, "Hrzn").as_deref(), get_enum(&canvas, "Vrtc").as_deref()), (Some("Cntr"), Some("Cntr")));
     let apply = exported("image.applyImage", json!({}));
-    assert_eq!(get_obj(&apply, "With").and_then(|w| get_enum(w, "Clcl")).as_deref(), Some("Mltp"));
+    assert_eq!(apply.get_object("With").and_then(|w| get_enum(w, "Clcl")).as_deref(), Some("Mltp"));
     let balance = exported("image.adjustments.colorBalance", json!({"midtones": [10, 0, 0]}));
-    assert_eq!(get_bool(&balance, "PrsL"), Some(true));
+    assert_eq!(balance.get_bool("PrsL"), Some(true));
     assert_eq!(get_list(&balance, "ShdL").map(<[D]>::len), Some(3));
 }
 
@@ -3230,7 +3230,7 @@ fn lab_lightness_channel_is_written_and_read_as_photoshop_names_it() {
     let curves = exported("image.adjustments.curves", json!({"lightness": [[0, 10], [255, 245]]}));
     assert_eq!(entry_codes(&curves), ["Lght"]);
     let apply = exported("image.applyImage", json!({"sourceLayer": "merged", "sourceChannel": "Lightness"}));
-    let source = get_ref(get_obj(&apply, "With").unwrap(), "T   ").unwrap();
+    let source = get_ref(apply.get_object("With").unwrap(), "T   ").unwrap();
     assert!(matches!(&source[0], ReferenceItem::Enumerated { value, .. } if trimmed(value) == "Lght"), "{source:?}");
 
     // What Photoshop records, and what PhotoCraft wrote before, both read as Lightness.
@@ -3338,9 +3338,9 @@ fn vibrance_adjustment_layer_steps_save_with_the_string_class() {
     let items = &file.actions[0].items;
     assert_eq!(items.len(), 4);
     for pair in items.chunks(2) {
-        let t = get_obj(pair[0].descriptor.as_ref().unwrap(), "T   ").unwrap();
+        let t = (pair[0].descriptor.as_ref().unwrap()).get_object("T   ").unwrap();
         assert!(t.class_id.is("vibrance"), "Set class {:?}", t.class_id);
-        let ty = get_obj(pair[1].descriptor.as_ref().unwrap(), "Usng").and_then(|u| get_obj(u, "Type")).unwrap();
+        let ty = (pair[1].descriptor.as_ref().unwrap()).get_object("Usng").and_then(|u| u.get_object("Type")).unwrap();
         assert!(ty.class_id.is("vibrance"), "Make class {:?}", ty.class_id);
     }
     let mut reloaded = Session::new();
@@ -4025,11 +4025,11 @@ fn saves_round_trip_through_photoshop_events() {
     let items = &file.actions[0].items;
     assert!(items.iter().all(|i| i.event.id() == "save"));
     let first = items[0].descriptor.as_ref().unwrap();
-    assert_eq!(get_obj(first, "As  ").map(|f| trimmed(&f.class_id)).as_deref(), Some("Pht3"));
+    assert_eq!(first.get_object("As  ").map(|f| trimmed(&f.class_id)).as_deref(), Some("Pht3"));
     assert_eq!(first.get("In  ").and_then(path_text).as_deref(), Some("/out/result.psd"));
-    assert_eq!(get_bool(items[1].descriptor.as_ref().unwrap(), "Cpy "), Some(true));
+    assert_eq!((items[1].descriptor.as_ref().unwrap()).get_bool("Cpy "), Some(true));
     // Photoshop's own WebP class, not the plug-in's: Photoshop 2026 rejects `Google WebPShop`.
-    assert_eq!(get_obj(items[1].descriptor.as_ref().unwrap(), "As  ").map(|f| trimmed(&f.class_id)).as_deref(), Some("WebPFormat"));
+    assert_eq!((items[1].descriptor.as_ref().unwrap()).get_object("As  ").map(|f| trimmed(&f.class_id)).as_deref(), Some("WebPFormat"));
     assert_eq!(import(&bytes).unwrap().actions[0].steps, steps);
 
     // A Save As PhotoCraft can't express in Photoshop's terms is skipped, never exported as a
@@ -4171,7 +4171,7 @@ fn gallery_effect_integers_outside_the_settings_range_are_refused() {
 fn gallery_neon_glow_without_a_colour_saves_the_colour_it_plays_with() {
     let item = export_item("filter.gallery.neonGlow", &json!({"glowSize": 5}), "S").expect("refused");
     let d = item.descriptor.unwrap();
-    let c = get_obj(&d, "Clr ").expect("no colour");
+    let c = d.get_object("Clr ").expect("no colour");
     assert_eq!(trimmed(&c.class_id), "RGBC");
     let neon = photocraft_algo::GalleryEffect::new(photocraft_algo::GalleryFilter::NeonGlow).color;
     for (key, v) in [("Rd  ", neon[0]), ("Grn ", neon[1]), ("Bl  ", neon[2])] {
@@ -4209,7 +4209,7 @@ fn gallery_neon_glow_without_a_colour_loads_photoshops_blue() {
     assert_eq!(id, "filter.gallery.neonGlow");
     assert_eq!(p, json!({"glowSize": 5, "glowBrightness": 15, "glowColor": "#0000ff"}));
     let d = export_item(&id, &p, "S").expect("refused").descriptor.unwrap();
-    let c = get_obj(&d, "Clr ").expect("no colour");
+    let c = d.get_object("Clr ").expect("no colour");
     assert_eq!(trimmed(&c.class_id), "RGBC");
     assert_eq!([get_num(c, "Rd  "), get_num(c, "Grn "), get_num(c, "Bl  ")], [Some(0.0), Some(0.0), Some(255.0)]);
     let event = AtnEvent::Code(*b"GEfc");
@@ -4813,7 +4813,7 @@ fn mapped_show_only_round_trip_and_toggle() {
     assert_eq!(loaded.actions[0].steps, vec![("layer.showOnly".into(), json!({"layer": "Solo"}))]);
     let (bytes, _) = export("Eyes", &[&loaded.actions[0]], &[], false).unwrap();
     let saved = atn::parse(&bytes).unwrap();
-    assert_eq!(get_bool(saved.actions[0].items[0].descriptor.as_ref().unwrap(), "TglO"), Some(true));
+    assert_eq!((saved.actions[0].items[0].descriptor.as_ref().unwrap()).get_bool("TglO"), Some(true));
     assert_eq!(import(&bytes).unwrap().actions[0].steps, loaded.actions[0].steps);
     let mut s = Session::new();
     s.execute("file.new", json!({"width":4,"height":4})).unwrap();
@@ -6650,8 +6650,8 @@ fn edited_gradient_fill_set_writes_a_fresh_descriptor() {
     s.execute("actions.load", json!({"data": b64(&atn::write(&one_action(vec![gradient_set(recorded_gradient([50, 25, 70]))])).unwrap())})).unwrap();
     s.actions.list[0].steps[0].1["midpoints"] = json!([0.4, 0.6]);
     let (_, d) = saved_first(&mut s);
-    let t = get_obj(d.as_ref().unwrap(), "T   ").unwrap();
-    let clrs = get_list(get_obj(t, "Grad").unwrap(), "Clrs").unwrap();
+    let t = d.as_ref().unwrap().get_object("T   ").unwrap();
+    let clrs = get_list(t.get_object("Grad").unwrap(), "Clrs").unwrap();
     let mids: Vec<f64> = clrs.iter().map(|c| if let D::Descriptor(c) = c { get_num(c, "Mdpn").unwrap() } else { panic!() }).collect();
     assert_eq!(mids, vec![50.0, 40.0, 60.0]);
     // Its own import is the edited params.
@@ -6673,7 +6673,7 @@ fn gradient_fill_make_imports_plays_and_saves_back_unchanged() {
     assert_eq!(s.actions.list[0].steps[0].0, "layer.newFillLayer.gradient");
     let (event, d) = saved_first(&mut s);
     assert_eq!(event, AtnEvent::Code(*b"Mk  "));
-    assert_eq!(get_obj(get_obj(d.as_ref().unwrap(), "Usng").unwrap(), "Type"), Some(&recorded));
+    assert_eq!(d.as_ref().unwrap().get_object("Usng").unwrap().get_object("Type"), Some(&recorded));
     for depth in [8, 16] {
         s.execute("file.new", json!({"width": 16, "height": 12, "depth": depth})).unwrap();
         let played = s.execute("actions.play", json!({"action": "A"})).unwrap();
@@ -6731,7 +6731,7 @@ fn gradient_fills_the_command_cannot_play_stay_photoshop_steps() {
     }
     let base = recorded_gradient([50, 50, 50]);
     let with_grad = |f: &dyn Fn(Descriptor) -> Descriptor| {
-        let g = get_obj(&base, "Grad").unwrap().clone();
+        let g = base.get_object("Grad").unwrap().clone();
         replaced(base.clone(), "Grad", D::Descriptor(f(g)))
     };
     let trns_mid = desc("TrnS").with("Opct", pct(100.0)).with("Lctn", D::Integer(0)).with("Mdpn", D::Integer(30));
@@ -6820,7 +6820,7 @@ fn blend_if_imports_and_plays() {
         assert_eq!(b[1], json!({"channel": 1, "thisLayer": [20, 40, 255, 255], "underlying": [0, 0, 255, 255]}), "{b}");
         // It saves back as the same `Blnd`.
         let (_, d) = saved_first(&mut s);
-        assert_eq!(get_obj(d.as_ref().unwrap(), "T   ").unwrap().get("Blnd"), Some(&blnd));
+        assert_eq!(d.as_ref().unwrap().get_object("T   ").unwrap().get("Blnd"), Some(&blnd));
     }
 }
 
@@ -6842,7 +6842,7 @@ fn blend_if_with_the_dialog_options_is_one_step_and_a_rename_splits() {
     assert_eq!(info["blend"], json!("Multiply"), "{info}");
     assert_eq!(info["blendIf"][0]["thisLayer"], json!([0, 0, 128, 255]), "{info}");
     let (_, d) = saved_first(&mut s);
-    assert_eq!(get_obj(d.as_ref().unwrap(), "T   "), Some(&dialog));
+    assert_eq!(d.as_ref().unwrap().get_object("T   "), Some(&dialog));
     // With a rename the Set is not the dialog's: the name and opacity go through setProps.
     let mut s = blend_layers(8);
     s.execute("actions.load", json!({"data": b64(&atn::write(&one_action(vec![layer_set(desc("Lyr ").with("Nm  ", text("Renamed")).with("Opct", pct(40.0)).with("Blnd", blnd))])).unwrap())}))
@@ -6873,7 +6873,7 @@ fn blend_if_with_the_recorded_effects_scale_saves_back_unchanged() {
     assert!((info["opacity"].as_f64().unwrap() - 0.8).abs() < 1e-3, "{info}");
     assert_eq!(info["blendIf"][0]["thisLayer"], json!([10, 20, 200, 230]), "{info}");
     let (_, d) = saved_first(&mut s);
-    assert_eq!(get_obj(d.as_ref().unwrap(), "T   "), Some(&dialog));
+    assert_eq!(d.as_ref().unwrap().get_object("T   "), Some(&dialog));
     // A `Lefx` with an effect in it is not the scale alone: the step is not the dialog's.
     let with_fx = desc("Lyr ").with("Blnd", blnd).with("Lefx", D::Descriptor(desc("Lefx").with("Scl ", pct(100.0)).with("DrSh", D::Descriptor(desc("DrSh")))));
     let imp = import(&atn::write(&one_action(vec![layer_set(with_fx)])).unwrap()).unwrap();

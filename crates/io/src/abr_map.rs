@@ -106,7 +106,7 @@ pub fn map_file_with(f: &AbrFile, group: &str, ctl: &photocraft_raster::Interrup
     } else {
         for (i, d) in f.presets.iter().enumerate() {
             step(i)?;
-            let name = text(d, "Nm  ").filter(|n| !n.trim().is_empty()).map(|n| n.trim().to_string()).unwrap_or_else(|| format!("Brush {}", i + 1));
+            let name = d.get_text("Nm  ").filter(|n| !n.trim().is_empty()).map(|n| n.trim().to_string()).unwrap_or_else(|| format!("Brush {}", i + 1));
             match m.preset(d) {
                 // The file's folders nest inside `group`, as Photoshop nests them inside a folder
                 // named after the imported file.
@@ -134,42 +134,11 @@ fn get<'a>(d: &'a Descriptor, k: &str) -> Option<&'a Value> {
     d.get(k)
 }
 fn num(d: &Descriptor, k: &str) -> Option<f64> {
-    match get(d, k)? {
-        Value::Double(v) => Some(*v),
-        Value::UnitFloat { value, .. } => Some(*value),
-        Value::Integer(v) => Some(f64::from(*v)),
-        Value::LargeInteger(v) => Some(*v as f64),
-        _ => None,
-    }
-    .filter(|v| v.is_finite())
+    d.get_number(k).filter(|v| v.is_finite())
 }
 /// A percentage as a 0..1 fraction.
 fn pct(d: &Descriptor, k: &str) -> Option<f32> {
     num(d, k).map(|v| (v / 100.0) as f32)
-}
-fn boolean(d: &Descriptor, k: &str) -> Option<bool> {
-    match get(d, k)? {
-        Value::Boolean(b) => Some(*b),
-        _ => None,
-    }
-}
-fn text(d: &Descriptor, k: &str) -> Option<String> {
-    match get(d, k)? {
-        Value::Text(t) => Some(t.to_string_lossy()),
-        _ => None,
-    }
-}
-fn obj<'a>(d: &'a Descriptor, k: &str) -> Option<&'a Descriptor> {
-    match get(d, k)? {
-        Value::Descriptor(o) | Value::GlobalObject(o) => Some(o),
-        _ => None,
-    }
-}
-fn enum_value(d: &Descriptor, k: &str) -> Option<String> {
-    match get(d, k)? {
-        Value::Enumerated { value, .. } => Some(String::from_utf8_lossy(value.as_bytes()).to_string()),
-        _ => None,
-    }
 }
 
 fn mask_mode(code: Option<String>) -> Option<MaskMode> {
@@ -309,15 +278,15 @@ impl Mapper<'_> {
         if !sampled {
             return Some((TipShape::Round, None));
         }
-        let id = text(t, "sampledData").unwrap_or_default();
+        let id = t.get_text("sampledData").unwrap_or_default();
         let s = self.file.samples.iter().find(|s| s.id == id).or_else(|| self.file.samples.first().filter(|_| self.file.samples.len() == 1))?;
         let (tip, size) = self.tip(s);
         Some((tip, Some(size)))
     }
 
     fn pattern(&mut self, t: &Descriptor) -> Pattern {
-        let id = text(t, "Idnt").unwrap_or_default();
-        let name = text(t, "Nm  ").unwrap_or_default();
+        let id = t.get_text("Idnt").unwrap_or_default();
+        let name = t.get_text("Nm  ").unwrap_or_default();
         let found =
             self.file.patterns.iter().find(|p| !id.is_empty() && p.id == id).or_else(|| self.file.patterns.iter().find(|p| !name.is_empty() && p.name == name));
         match found.and_then(pattern_tile) {
@@ -344,7 +313,7 @@ impl Mapper<'_> {
         m.load = load.unwrap_or(m.load).clamp(0.0, 1.0);
         m.mix = mix.unwrap_or(m.mix).clamp(0.0, 1.0);
         m.flow = pct(to, "flow").unwrap_or(m.flow).clamp(0.0, 1.0);
-        if let Some(v) = ["sampleMerged", "useAllLayers", "sampleAllLayers", "Mrgd"].iter().find_map(|k| boolean(to, k)) {
+        if let Some(v) = ["sampleMerged", "useAllLayers", "sampleAllLayers", "Mrgd"].iter().find_map(|k| to.get_bool(k)) {
             m.sample_all_layers = v;
         }
     }
@@ -357,7 +326,7 @@ impl Mapper<'_> {
             }
         }
         let mut b = BrushSettings { pressure_size: false, spacing: 0.25, ..Default::default() };
-        if let Some(t) = obj(d, "Brsh") {
+        if let Some(t) = d.get_object("Brsh") {
             let (tip, sampled_size) = self.tip_shape(t)?;
             b.tip = tip;
             b.size = num(t, "Dmtr").map(|v| v as f32).or(sampled_size).unwrap_or(b.size).clamp(1.0, 5000.0);
@@ -368,60 +337,60 @@ impl Mapper<'_> {
             b.roundness = pct(t, "Rndn").unwrap_or(1.0).clamp(0.01, 1.0);
             // `Intr` off = the Spacing checkbox is off: the pointer's speed sets the spacing.
             b.spacing = pct(t, "Spcn").unwrap_or(0.25).clamp(0.01, 10.0);
-            b.spacing_enabled = boolean(t, "Intr") != Some(false);
-            b.flip_x = boolean(t, "flipX").unwrap_or(false);
-            b.flip_y = boolean(t, "flipY").unwrap_or(false);
+            b.spacing_enabled = t.get_bool("Intr") != Some(false);
+            b.flip_x = t.get_bool("flipX").unwrap_or(false);
+            b.flip_y = t.get_bool("flipY").unwrap_or(false);
         }
         // Shape Dynamics.
-        if boolean(d, "useTipDynamics") == Some(true) {
-            let mut size = self.dynamic(obj(d, "szVr"));
+        if d.get_bool("useTipDynamics") == Some(true) {
+            let mut size = self.dynamic(d.get_object("szVr"));
             size.minimum = pct(d, "minimumDiameter").unwrap_or(size.minimum).clamp(0.0, 1.0);
-            let mut roundness = self.dynamic(obj(d, "roundnessDynamics"));
+            let mut roundness = self.dynamic(d.get_object("roundnessDynamics"));
             roundness.minimum = pct(d, "minimumRoundness").unwrap_or(roundness.minimum).clamp(0.0, 1.0);
             b.shape_dynamics = ShapeDynamics {
                 enabled: true,
                 size,
-                angle: self.dynamic(obj(d, "angleDynamics")),
+                angle: self.dynamic(d.get_object("angleDynamics")),
                 roundness,
-                flip_x_jitter: boolean(d, "flipX").unwrap_or(false),
-                flip_y_jitter: boolean(d, "flipY").unwrap_or(false),
+                flip_x_jitter: d.get_bool("flipX").unwrap_or(false),
+                flip_y_jitter: d.get_bool("flipY").unwrap_or(false),
                 tilt_scale: pct(d, "tiltScale").unwrap_or(0.0).clamp(0.0, 2.0),
-                brush_projection: boolean(d, "brushProjection").unwrap_or(false),
+                brush_projection: d.get_bool("brushProjection").unwrap_or(false),
             };
         }
         // Scattering.
-        if boolean(d, "useScatter") == Some(true) {
+        if d.get_bool("useScatter") == Some(true) {
             b.scattering.enabled = true;
-            b.scattering.scatter = self.dynamic(obj(d, "scatterDynamics"));
-            b.scattering.both_axes = boolean(d, "bothAxes").unwrap_or(false);
+            b.scattering.scatter = self.dynamic(d.get_object("scatterDynamics"));
+            b.scattering.both_axes = d.get_bool("bothAxes").unwrap_or(false);
             b.scattering.count = num(d, "Cnt ").map_or(1, |v| v.clamp(1.0, 16.0) as u32);
-            b.scattering.count_jitter = self.dynamic(obj(d, "countDynamics"));
+            b.scattering.count_jitter = self.dynamic(d.get_object("countDynamics"));
         }
         // Texture.
-        if boolean(d, "useTexture") == Some(true) {
+        if d.get_bool("useTexture") == Some(true) {
             let t = &mut b.texture;
             t.enabled = true;
-            t.each_tip = boolean(d, "TxtC").unwrap_or(false);
-            t.invert = boolean(d, "InvT").unwrap_or(false);
+            t.each_tip = d.get_bool("TxtC").unwrap_or(false);
+            t.invert = d.get_bool("InvT").unwrap_or(false);
             t.scale = pct(d, "textureScale").unwrap_or(1.0).clamp(0.01, 10.0);
             t.brightness = (num(d, "textureBrightness").unwrap_or(0.0) / 150.0).clamp(-1.0, 1.0) as f32;
             // Photoshop's -50..100 onto the model's -1..1 (negative and positive scale apart).
             let c = num(d, "textureContrast").unwrap_or(0.0);
             t.contrast = (if c < 0.0 { c / 50.0 } else { c / 100.0 }).clamp(-1.0, 1.0) as f32;
-            t.mode = mask_mode(enum_value(d, "textureBlendMode")).unwrap_or(MaskMode::Multiply);
+            t.mode = mask_mode(d.get_enum("textureBlendMode")).unwrap_or(MaskMode::Multiply);
             t.depth = pct(d, "textureDepth").unwrap_or(1.0).clamp(0.0, 1.0);
-            let mut dj = self.dynamic(obj(d, "textureDepthDynamics"));
+            let mut dj = self.dynamic(d.get_object("textureDepthDynamics"));
             dj.minimum = pct(d, "minimumDepth").unwrap_or(dj.minimum).clamp(0.0, 1.0);
             t.depth_jitter = dj;
-            if let Some(p) = obj(d, "Txtr") {
+            if let Some(p) = d.get_object("Txtr") {
                 b.texture.pattern = self.pattern(p);
             }
         }
-        b.protect_texture = boolean(d, "protectTexture").unwrap_or(false);
+        b.protect_texture = d.get_bool("protectTexture").unwrap_or(false);
         // Dual Brush.
-        if let Some(db) = obj(d, "dualBrush").filter(|db| boolean(db, "useDualBrush") == Some(true)) {
+        if let Some(db) = d.get_object("dualBrush").filter(|db| db.get_bool("useDualBrush") == Some(true)) {
             let mut dual = DualBrush { enabled: true, ..Default::default() };
-            if let Some(t) = obj(db, "Brsh") {
+            if let Some(t) = db.get_object("Brsh") {
                 match self.tip_shape(t) {
                     Some((tip, sampled_size)) => {
                         dual.tip = tip;
@@ -436,84 +405,84 @@ impl Mapper<'_> {
                 dual.angle = num(t, "Angl").unwrap_or(0.0) as f32;
                 dual.spacing = pct(t, "Spcn").unwrap_or(dual.spacing).clamp(0.01, 10.0);
             }
-            dual.mode = mask_mode(enum_value(db, "BlnM")).unwrap_or(MaskMode::Multiply);
-            dual.flip = boolean(db, "Flip").unwrap_or(false);
+            dual.mode = mask_mode(db.get_enum("BlnM")).unwrap_or(MaskMode::Multiply);
+            dual.flip = db.get_bool("Flip").unwrap_or(false);
             // The dual tip's own spacing (`Brsh › Spcn`) is what Photoshop's Dual Brush panel
             // shows. The `Spcn` beside it on the `dualBrush` object reads 100 % in Photoshop CC
             // presets whatever the panel says (#4809), so it only stands in for a tip without one.
-            if obj(db, "Brsh").and_then(|t| pct(t, "Spcn")).is_none()
+            if db.get_object("Brsh").and_then(|t| pct(t, "Spcn")).is_none()
                 && let Some(v) = pct(db, "Spcn")
             {
                 dual.spacing = v.clamp(0.01, 10.0);
             }
-            dual.scatter = self.dynamic(obj(db, "scatterDynamics")).jitter;
-            dual.both_axes = boolean(db, "bothAxes").unwrap_or(false);
+            dual.scatter = self.dynamic(db.get_object("scatterDynamics")).jitter;
+            dual.both_axes = db.get_bool("bothAxes").unwrap_or(false);
             dual.count = num(db, "Cnt ").map_or(1, |v| v.clamp(1.0, 16.0) as u32);
             b.dual_brush = dual;
         }
         // Color Dynamics.
-        if boolean(d, "useColorDynamics") == Some(true) {
+        if d.get_bool("useColorDynamics") == Some(true) {
             let c = &mut b.color_dynamics;
             c.enabled = true;
-            c.per_tip = boolean(d, "colorDynamicsPerTip").unwrap_or(true);
+            c.per_tip = d.get_bool("colorDynamicsPerTip").unwrap_or(true);
             c.hue_jitter = pct(d, "H   ").unwrap_or(0.0).clamp(0.0, 1.0);
             c.saturation_jitter = pct(d, "Strt").unwrap_or(0.0).clamp(0.0, 1.0);
             c.brightness_jitter = pct(d, "Brgh").unwrap_or(0.0).clamp(0.0, 1.0);
             c.purity = pct(d, "purity").unwrap_or(0.0).clamp(-1.0, 1.0);
-            let fg = self.dynamic(obj(d, "clVr"));
+            let fg = self.dynamic(d.get_object("clVr"));
             b.color_dynamics.fg_bg = fg;
         }
         // Transfer.
-        if boolean(d, "usePaintDynamics") == Some(true) {
+        if d.get_bool("usePaintDynamics") == Some(true) {
             b.transfer = Transfer {
                 enabled: true,
-                opacity: self.dynamic(obj(d, "opVr")),
-                flow: self.dynamic(obj(d, "prVr")),
-                wetness: self.dynamic(obj(d, "wtVr")),
-                mix: self.dynamic(obj(d, "mxVr")),
+                opacity: self.dynamic(d.get_object("opVr")),
+                flow: self.dynamic(d.get_object("prVr")),
+                wetness: self.dynamic(d.get_object("wtVr")),
+                mix: self.dynamic(d.get_object("mxVr")),
             };
         }
         // Brush Pose (Photoshop's tilt is ±100 %; ours is ±90°).
-        if boolean(d, "useBrushPose") == Some(true) {
+        if d.get_bool("useBrushPose") == Some(true) {
             b.pose = Pose {
                 enabled: true,
                 tilt_x: (num(d, "brushPoseTiltX").unwrap_or(0.0) * 0.9).clamp(-90.0, 90.0) as f32,
                 tilt_y: (num(d, "brushPoseTiltY").unwrap_or(0.0) * 0.9).clamp(-90.0, 90.0) as f32,
                 rotation: num(d, "brushPoseAngle").unwrap_or(0.0).rem_euclid(360.0) as f32,
                 pressure: pct(d, "brushPosePressure").unwrap_or(1.0).clamp(0.0, 1.0),
-                override_tilt_x: boolean(d, "overridePoseTiltX").unwrap_or(false),
-                override_tilt_y: boolean(d, "overridePoseTiltY").unwrap_or(false),
-                override_rotation: boolean(d, "overridePoseAngle").unwrap_or(false),
-                override_pressure: boolean(d, "overridePosePressure").unwrap_or(false),
+                override_tilt_x: d.get_bool("overridePoseTiltX").unwrap_or(false),
+                override_tilt_y: d.get_bool("overridePoseTiltY").unwrap_or(false),
+                override_rotation: d.get_bool("overridePoseAngle").unwrap_or(false),
+                override_pressure: d.get_bool("overridePosePressure").unwrap_or(false),
             };
         }
-        b.noise = boolean(d, "Nose").unwrap_or(false);
-        b.wet_edges = boolean(d, "Wtdg").unwrap_or(false);
-        b.build_up = boolean(d, "Rpt ").unwrap_or(false);
+        b.noise = d.get_bool("Nose").unwrap_or(false);
+        b.wet_edges = d.get_bool("Wtdg").unwrap_or(false);
+        b.build_up = d.get_bool("Rpt ").unwrap_or(false);
         // Tool options captured with the preset ("Include tool settings").
-        if let Some(to) = obj(d, "toolOptions") {
+        if let Some(to) = d.get_object("toolOptions") {
             if let Some(v) = pct(to, "Opct") {
                 b.opacity = v.clamp(0.0, 1.0);
             }
             if let Some(v) = pct(to, "flow") {
                 b.flow = v.clamp(0.0, 1.0);
             }
-            b.pressure_size = boolean(to, "usePressureOverridesSize").unwrap_or(false);
-            b.pressure_opacity = boolean(to, "usePressureOverridesOpacity").unwrap_or(false);
-            b.smoothing.enabled = boolean(to, "smoothing").unwrap_or(true);
+            b.pressure_size = to.get_bool("usePressureOverridesSize").unwrap_or(false);
+            b.pressure_opacity = to.get_bool("usePressureOverridesOpacity").unwrap_or(false);
+            b.smoothing.enabled = to.get_bool("smoothing").unwrap_or(true);
             if let Some(v) = pct(to, "smoothingValue") {
                 b.smoothing.amount = v.clamp(0.0, 1.0);
             }
-            if let Some(v) = boolean(to, "smoothingRadiusMode") {
+            if let Some(v) = to.get_bool("smoothingRadiusMode") {
                 b.smoothing.pulled_string = v;
             }
-            if let Some(v) = boolean(to, "smoothingCatchup") {
+            if let Some(v) = to.get_bool("smoothingCatchup") {
                 b.smoothing.catch_up = v;
             }
-            if let Some(v) = boolean(to, "smoothingCatchupAtEnd") {
+            if let Some(v) = to.get_bool("smoothingCatchupAtEnd") {
                 b.smoothing.catch_up_on_end = v;
             }
-            if let Some(v) = boolean(to, "smoothingZoomCompensation") {
+            if let Some(v) = to.get_bool("smoothingZoomCompensation") {
                 b.smoothing.adjust_for_zoom = v;
             }
             self.mixer_options(to, &mut b.mixer);
@@ -526,7 +495,7 @@ impl Mapper<'_> {
 }
 
 fn mask_blend_is_set(to: &Descriptor) -> bool {
-    enum_value(to, "Md  ").is_some_and(|m| m != "Nrml")
+    to.get_enum("Md  ").is_some_and(|m| m != "Nrml")
 }
 
 /// Box-downsample a `w × h` plane so neither side exceeds `max`.
