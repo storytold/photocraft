@@ -798,14 +798,44 @@ pub fn levels_eyedropper(base: &Value, picker: CurvesEyedropper, sample: [f32; 3
     Ok(adjustment)
 }
 
-/// The eyedropper of adjustment `kind` ("levels" or "curves"): [`levels_eyedropper`] or
-/// [`curves_eyedropper`].
+/// The eyedropper of adjustment `kind` ("levels", "curves" or "exposure"): [`levels_eyedropper`],
+/// [`curves_eyedropper`] or [`exposure_eyedropper`].
 pub fn adjustment_eyedropper(kind: &str, base: &Value, picker: CurvesEyedropper, sample: [f32; 3], mode: ColorMode) -> Result<Adjustment> {
     match kind {
         "levels" => levels_eyedropper(base, picker, sample, mode),
         "curves" => curves_eyedropper(base, picker, sample, mode),
-        _ => Err(bad(EYEDROPPER, "`eyedropper` applies to Levels and Curves only")),
+        "exposure" => exposure_eyedropper(base, picker, sample, mode),
+        _ => Err(bad(EYEDROPPER, "`eyedropper` applies to Levels, Curves and Exposure only")),
     }
+}
+
+/// Exposure's Set Black/Gray/White Point eyedroppers (#9266), as Photoshop 2025 sets them (measured
+/// on 8-bit gray patches): the sample's value `v` (its luma, as stored) goes to black through the
+/// Offset (`offset = -v · 2^exposure`), to 18 % gray or to white through the Exposure
+/// (`exposure = log2((0.18 − offset) / v)`, `log2((1 − offset) / v)`). Gamma is left alone.
+pub fn exposure_eyedropper(base: &Value, picker: CurvesEyedropper, sample: [f32; 3], mode: ColorMode) -> Result<Adjustment> {
+    const CMD: &str = "exposure eyedropper";
+    check_eyedropper(CMD, picker, sample, mode)?;
+    let mut adjustment = from_params("exposure", base, None, mode)?;
+    let Adjustment::Exposure { exposure, offset, .. } = &mut adjustment else {
+        return Err(bad(CMD, "expected an Exposure adjustment"));
+    };
+    let sample = sample.map(|v| v.clamp(0.0, 1.0));
+    let v = if mode == ColorMode::Grayscale { (sample[0] + sample[1] + sample[2]) / 3.0 } else { rgb_luma(sample) };
+    let target = match picker {
+        CurvesEyedropper::Black => {
+            *offset = (-v * exposure.exp2()).clamp(-0.5, 0.5);
+            return Ok(adjustment);
+        }
+        CurvesEyedropper::NeutralGray => 0.18,
+        CurvesEyedropper::White => 1.0,
+    };
+    if v < 1.0 / 4096.0 {
+        return Err(bad(CMD, "the sample is black: no exposure brings it up"));
+    }
+    let stops = ((target - *offset).max(1e-6) / v).log2();
+    *exposure = if stops.is_finite() { stops.clamp(-20.0, 20.0) } else { *exposure };
+    Ok(adjustment)
 }
 
 /// Resolve a merged-composite colour sample into the black, luma-preserving neutral-gray or white target.
@@ -884,7 +914,8 @@ pub fn layer_eyedropper(s: &crate::Session, layer: photocraft_doc::LayerId, p: &
     let (kind, adj) = match &l.content {
         photocraft_doc::LayerContent::Adjustment(adj @ Adjustment::Curves { .. }) => ("curves", adj),
         photocraft_doc::LayerContent::Adjustment(adj @ Adjustment::Levels { .. }) => ("levels", adj),
-        _ => return Err(bad(EYEDROPPER, "`eyedropper` applies to Levels and Curves adjustment layers only")),
+        photocraft_doc::LayerContent::Adjustment(adj @ Adjustment::Exposure { .. }) => ("exposure", adj),
+        _ => return Err(bad(EYEDROPPER, "`eyedropper` applies to Levels, Curves and Exposure adjustment layers only")),
     };
     let mut rest = p.clone();
     if let Some(o) = rest.as_object_mut() {
