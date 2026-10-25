@@ -51,11 +51,15 @@ fn to_js(v: &Value) -> JsValue {
     js_sys::JSON::parse(&v.to_string()).unwrap_or(JsValue::NULL)
 }
 
-fn from_js(v: &JsValue) -> Value {
+/// The params a page passed: `{}` for none (`undefined` or `null`), else their JSON. Params that
+/// have no JSON (a cyclic object, a function, a throwing `toJSON`) are an error, never `{}`: a
+/// command run without its params would act with its defaults.
+fn from_js(v: &JsValue) -> Result<Value, String> {
     if v.is_undefined() || v.is_null() {
-        return json!({});
+        return Ok(json!({}));
     }
-    js_sys::JSON::stringify(v).ok().and_then(|s| s.as_string()).and_then(|s| serde_json::from_str(&s).ok()).unwrap_or(json!({}))
+    let text = js_sys::JSON::stringify(v).ok().and_then(|s| s.as_string()).ok_or("params are not JSON (a cyclic object or a function?)")?;
+    serde_json::from_str(&text).map_err(|e| format!("params are not JSON: {e}"))
 }
 
 /// Settle the promises of answered requests (called every frame).
@@ -80,7 +84,11 @@ pub fn poll_replies() {
     });
 }
 
-fn request(method: &str, params: Value) -> js_sys::Promise {
+fn request(method: &str, params: Result<Value, String>) -> js_sys::Promise {
+    let params = match params {
+        Ok(params) => params,
+        Err(e) => return js_sys::Promise::reject(&js_sys::Error::new(&format!("{method}: {e}"))),
+    };
     let method = method.to_string();
     let p = js_sys::Promise::new(&mut |resolve, reject| {
         let (req, rx) = ControlRequest::new(method.clone(), params.clone());
@@ -111,12 +119,12 @@ pub fn install() -> Result<(), JsValue> {
         &obj,
         "execute",
         Closure::<dyn Fn(String, JsValue) -> js_sys::Promise>::new(|command: String, params: JsValue| {
-            request("engine.execute", json!({"command": command, "params": from_js(&params)}))
+            request("engine.execute", from_js(&params).map(|params| json!({"command": command, "params": params})))
         })
         .into_js_value(),
     )?;
-    set_fn(&obj, "commands", Closure::<dyn Fn() -> js_sys::Promise>::new(|| request("engine.commands", json!({}))).into_js_value())?;
-    set_fn(&obj, "inspect", Closure::<dyn Fn() -> js_sys::Promise>::new(|| request("ui.inspect", json!({}))).into_js_value())?;
+    set_fn(&obj, "commands", Closure::<dyn Fn() -> js_sys::Promise>::new(|| request("engine.commands", Ok(json!({})))).into_js_value())?;
+    set_fn(&obj, "inspect", Closure::<dyn Fn() -> js_sys::Promise>::new(|| request("ui.inspect", Ok(json!({})))).into_js_value())?;
     set_fn(
         &obj,
         "screenshot",
