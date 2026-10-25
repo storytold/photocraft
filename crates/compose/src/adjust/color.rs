@@ -418,7 +418,7 @@ fn hsv_hue(c: [f32; 3], mx: f32, mn: f32) -> f32 {
     h * 60.0
 }
 
-pub(super) fn gradient(stops: &[(f32, [f32; 3])], t: f32) -> [f32; 3] {
+pub(crate) fn gradient(stops: &[(f32, [f32; 3])], t: f32) -> [f32; 3] {
     match stops {
         [] => [t; 3],
         [s] => s.1,

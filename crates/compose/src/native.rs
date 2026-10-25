@@ -30,7 +30,7 @@ const INKS: usize = 4;
 /// Whether the compositor would only blend `layer` Normally at its opacity through its layer mask:
 /// no clipping, vector mask, feathered mask, effects, excluded channels, Blend If or advanced
 /// blending.
-fn simple(layer: &Layer) -> bool {
+pub(crate) fn simple(layer: &Layer) -> bool {
     layer.blend == BlendMode::Normal
         && !layer.clipped
         && !crate::masks::has_feather(layer)

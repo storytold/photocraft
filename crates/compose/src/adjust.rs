@@ -21,7 +21,7 @@ pub use channels::{
     lab_stored_op, stored_channel_adjustment, stored_channels, threshold_white,
 };
 use channels::{apply_lab, legacy_brightness_contrast, legacy_brightness_contrast_hdr};
-use color::gradient;
+pub(crate) use color::gradient;
 pub use color::{
     BalanceCurve, VIBRANCE_BOOST, VIBRANCE_GREY, bayer4, black_white_gray, color_balance_channel, colorize_saturation, hdr_saturation_factor, hsl_to_rgb,
     hue_range_tables, hue_saturation, hue_saturation_in, lut3d_sample, photo_filter_matrix, range_lightness, rgb_to_hsl, selective_color,

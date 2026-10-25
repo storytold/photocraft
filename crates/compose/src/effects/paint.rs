@@ -184,28 +184,9 @@ impl PreparedGradient {
     }
 
     fn sample(&self, t: f32) -> [f32; 4] {
-        let color = sample_stops(&self.color, t);
-        let alpha = if self.opacity.is_empty() { 1.0 } else { sample_stops(&self.opacity, t)[0] };
+        let color = crate::adjust::gradient(&self.color, t);
+        let alpha = if self.opacity.is_empty() { 1.0 } else { crate::adjust::gradient(&self.opacity, t)[0] };
         [color[0], color[1], color[2], alpha]
-    }
-}
-
-fn sample_stops(stops: &[(f32, [f32; 3])], t: f32) -> [f32; 3] {
-    match stops {
-        [] => [t; 3],
-        [s] => s.1,
-        _ => {
-            if t <= stops[0].0 {
-                return stops[0].1;
-            }
-            for w in stops.windows(2) {
-                if t <= w[1].0 {
-                    let k = if w[1].0 > w[0].0 { (t - w[0].0) / (w[1].0 - w[0].0) } else { 0.0 };
-                    return std::array::from_fn(|i| w[0].1[i] + (w[1].1[i] - w[0].1[i]) * k);
-                }
-            }
-            stops[stops.len() - 1].1
-        }
     }
 }
 

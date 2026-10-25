@@ -1,5 +1,5 @@
 use super::types::Unsupported;
-use super::{Adjustment, BlendMode, Fill, Gradient, Layer, LayerContent, Pattern, StrokePosition, ToneSpace, Transfer, adjust, lut3d_len};
+use super::{Adjustment, BlendMode, Fill, Gradient, Layer, LayerContent, Pattern, ToneSpace, Transfer, adjust, lut3d_len};
 
 /// Paint source of an effect.
 pub(super) enum Paint<'a> {
@@ -27,15 +27,6 @@ pub(super) fn placement(anchor: (f64, f64), link: bool, phase: (f32, f32), scale
     let inv_scale = if s.is_finite() && s > 1e-3 { 1.0 / s } else { 1.0 };
     let a = f64::from(angle).to_radians();
     Placement { origin, cs: (a.cos(), a.sin()), inv_scale }
-}
-
-/// (inside width, outside width) of a stroke.
-pub fn stroke_widths(st: &photocraft_doc::StrokeFx) -> (f32, f32) {
-    match st.position {
-        StrokePosition::Outside => (0.0, st.size),
-        StrokePosition::Inside => (st.size, 0.0),
-        StrokePosition::Center => (st.size / 2.0, st.size / 2.0),
-    }
 }
 
 pub(super) fn style_index(s: photocraft_doc::GradientStyle) -> f32 {
