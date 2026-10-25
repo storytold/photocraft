@@ -913,6 +913,29 @@ fn row_values_round_to_their_own_decimals() {
     assert!(row_value(f32::NAN, -20.0, 20.0, Some(u32::MAX)).is_nan(), "no panic on odd input");
 }
 
+/// #9267 review: the armed Hue/Saturation picker follows the range Properties shows before the
+/// canvas reads it, so a press right after switching to Master (or another range) never samples
+/// with the old one, even from a floating Properties window drawn after the canvas.
+#[test]
+fn hue_saturation_picker_follows_the_shown_range_before_canvas_input() {
+    let mut h = app_harness("hueSaturation", "rgb", 8);
+    let (id, _) = layer(&h);
+    let mem = crate::adjust_editors::layer_mem(id);
+    h.ctx.data_mut(|d| d.insert_temp(mem.with("hs-range"), 1usize));
+    h.run_steps(3);
+    h.get_by_label("Sample a color range").click();
+    h.run_steps(2);
+    assert!(crate::layer_picker::armed(h.state()).is_some(), "armed on Reds");
+    let ctx = h.ctx.clone();
+    // The selector writes the new range after the eyedroppers drew this frame.
+    h.ctx.data_mut(|d| d.insert_temp(mem.with("hs-range"), 3usize));
+    crate::layer_picker::prune(h.state_mut(), &ctx);
+    assert_eq!(h.state().ui.layer_picker.as_ref().and_then(|p| p.range.as_deref()), Some("greens"), "retargeted");
+    h.ctx.data_mut(|d| d.insert_temp(mem.with("hs-range"), 0usize));
+    crate::layer_picker::prune(h.state_mut(), &ctx);
+    assert!(h.state().ui.layer_picker.is_none(), "disarmed on Master");
+}
+
 /// #9247: the Properties panel of a Hue/Saturation layer has Photoshop's three colour range
 /// eyedroppers, off on Master. With Sample armed on Reds, a click on the image centres the range
 /// on that pixel's hue, one history step; a gray pixel is refused.

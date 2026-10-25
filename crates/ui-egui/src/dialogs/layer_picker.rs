@@ -56,7 +56,15 @@ pub fn armed(app: &PhotocraftApp) -> Option<(LayerId, &str)> {
 }
 
 /// Drops a picker that no longer applies, so returning to its tool or layer doesn't re-arm it.
-pub fn prune(app: &mut PhotocraftApp) {
+/// A Hue/Saturation picker first takes the range Properties shows now: the selector writes it
+/// after the eyedroppers drew, and a floating Properties window draws after the canvas.
+pub fn prune(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    let hue = app.ui.layer_picker.as_ref().map(|p| LayerId(p.layer)).filter(|&l| {
+        app.session.active().and_then(|s| s.doc.layer(l)).is_some_and(|l| matches!(l.content, LayerContent::Adjustment(Adjustment::HueSaturation { .. })))
+    });
+    if let (Some(layer), Some(p)) = (hue, app.ui.layer_picker.as_mut()) {
+        p.range = crate::adjust_dialog::hue_range_shown(ctx, crate::adjust_editors::layer_mem(layer)).map(str::to_string);
+    }
     if app.ui.layer_picker.is_some() && armed(app).is_none() {
         app.ui.layer_picker = None;
     }
