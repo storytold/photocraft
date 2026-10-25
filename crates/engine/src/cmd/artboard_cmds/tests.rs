@@ -1105,3 +1105,27 @@ fn a_layers_array_sets_every_listed_boards_background_in_one_step() {
     assert!(s.execute("layer.artboard.set", json!({"layers": [a.0]})).is_err());
     assert_eq!(s.active().unwrap().history.entries().len(), n);
 }
+
+#[test]
+fn new_layers_made_with_an_artboard_selected_go_inside_it() {
+    // Photoshop 26.2: with an artboard itself selected, New Layer, fill layers and adjustment
+    // layers land on top of that board's contents.
+    let mut s = session(8);
+    s.execute("layer.new.artboard", json!({"x": 0, "y": 0, "width": 50, "height": 50, "name": "Board A"})).unwrap();
+    let b = s.execute("layer.new.artboard", json!({"x": 60, "y": 0, "width": 40, "height": 50, "name": "Board B"})).unwrap();
+    let board = LayerId(b["layer"].as_u64().unwrap());
+    let made = [
+        ("layer.new.layer", json!({})),
+        ("layer.newFillLayer.solidColor", json!({"color": "#c82828"})),
+        ("layer.newFillLayer.gradient", json!({})),
+        ("gradient.fill.create", json!({"from": [0, 0], "to": [100, 0]})),
+        ("layer.newAdjustmentLayer.invert", json!({})),
+    ];
+    for (cmd, p) in made {
+        s.execute("layer.select", json!({"name": "Board B"})).unwrap();
+        let id = LayerId(s.execute(cmd, p).unwrap()["layer"].as_u64().unwrap());
+        let kids = doc(&s).layer(board).and_then(Layer::children).unwrap();
+        assert_eq!(kids.last().map(|l| l.id), Some(id), "{cmd} lands on top of the selected board's contents");
+    }
+    assert_eq!(doc(&s).layer(board).and_then(Layer::children).map(<[Layer]>::len), Some(5));
+}
