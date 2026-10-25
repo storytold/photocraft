@@ -678,5 +678,16 @@ pub fn render_shape(shape: &ShapeLayer, format: PixelFormat, clip: Rect) -> Surf
     CompiledShape::new(shape, DEFAULT_TOLERANCE, clip).render(format, clip)
 }
 
+/// The shape's fill coverage over `rect` (row-major, `0..=1`): its path's coverage with the
+/// shape's density and feather applied, as [`render_shape`] gives the fill's alpha. `canvas`
+/// frames a feather's blur; a `rect` reaching past it is blurred with it, so a caller completing
+/// a surface that is clipped at the canvas gets the ramp continuing outside instead of the
+/// fill's far value there. Beyond the blurred area samples take that far value — an inverted
+/// path, which fills outside its subpaths, therefore reads as filled past the canvas.
+pub fn fill_coverage(shape: &ShapeLayer, rect: Rect, canvas: Rect) -> Vec<f32> {
+    let area = fill_rasterizer(&shape.path, DEFAULT_TOLERANCE);
+    FillCoverage::new(shape, &area, canvas.union(&rect)).render(rect)
+}
+
 #[cfg(test)]
 mod tests;

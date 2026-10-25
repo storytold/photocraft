@@ -1263,16 +1263,9 @@ fn inverted_zero_fill_shape_does_not_stroke_the_canvas_border() {
     // the path (the cut-out), not the canvas boundary, or a parent OuterBevel highlights the
     // canvas perimeter.
     use photocraft_doc::{Bevel, BevelStyle, BevelTechnique, Contour, Effect, FxCommon, FxPaint, StrokeFx, StrokePosition};
-    let path = photocraft_doc::vector::Path {
-        inverted: true,
-        subpaths: vec![photocraft_doc::vector::Subpath::polygon(&[(40.0, 40.0), (160.0, 40.0), (160.0, 160.0), (40.0, 160.0)])],
-        ..Default::default()
-    };
     for density in [1.0f32, 0.0, 0.5] {
         let mut d = Document::with_background("t", Size::new(200, 200), ColorMode::Rgb, SampleType::U8, Color::BLACK);
-        let mut sh = photocraft_doc::vector::ShapeLayer { path: path.clone(), fill: Some(Fill::Solid(Color::BLACK)), density, ..Default::default() };
-        sh.cache = Some(photocraft_vector::render_shape(&sh, PixelFormat::RGBA8, Rect::new(0, 0, 200, 200)));
-        let mut shape = Layer::new("shape", LayerContent::Shape(sh));
+        let mut shape = Layer::new("shape", LayerContent::Shape(inverted_shape(density, 0.0)));
         shape.fill_opacity = 0.0;
         shape.effects.items = vec![Effect::Stroke(StrokeFx {
             common: FxCommon::new(BlendMode::Normal, 1.0),
@@ -1306,6 +1299,112 @@ fn inverted_zero_fill_shape_does_not_stroke_the_canvas_border() {
         for (x, y) in [(100, 195), (195, 195), (5, 195), (195, 100)] {
             assert!(close4(px(&d, x, y), [0.0, 0.0, 0.0, 1.0]), "density {density}: ({x}, {y}) = {:?}", px(&d, x, y));
         }
+    }
+}
+
+/// An inverted 40..160 cut-out of a 200×200 canvas, filled black, rendered into its cache.
+fn inverted_shape(density: f32, feather: f32) -> photocraft_doc::vector::ShapeLayer {
+    let path = photocraft_doc::vector::Path {
+        inverted: true,
+        subpaths: vec![photocraft_doc::vector::Subpath::polygon(&[(40.0, 40.0), (160.0, 40.0), (160.0, 160.0), (40.0, 160.0)])],
+        ..Default::default()
+    };
+    let mut sh = photocraft_doc::vector::ShapeLayer { path, fill: Some(Fill::Solid(Color::BLACK)), density, feather, ..Default::default() };
+    sh.cache = Some(photocraft_vector::render_shape(&sh, PixelFormat::RGBA8, Rect::new(0, 0, 200, 200)));
+    sh
+}
+
+#[test]
+fn inverted_shape_outside_stroke_follows_the_path_not_the_border() {
+    // The same #9048 layer without the parent bevel: the Outside stroke must stay on the
+    // cut-out (the only edge of an inverted shape's fill) and never reach the canvas border.
+    for density in [1.0f32, 0.0, 0.5] {
+        let mut d = Document::with_background("t", Size::new(200, 200), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+        let mut shape = Layer::new("shape", LayerContent::Shape(inverted_shape(density, 0.0)));
+        shape.fill_opacity = 0.0;
+        shape.effects.items = vec![Effect::Stroke(StrokeFx {
+            common: FxCommon::new(BlendMode::Normal, 1.0),
+            size: 16.0,
+            position: StrokePosition::Outside,
+            paint: FxPaint::Color(Color::BLACK),
+            overprint: false,
+        })];
+        d.layers.push(shape);
+        // The canvas border: the fill reaches it, so a stroke there is a false edge.
+        for (x, y) in [(5, 5), (100, 195), (195, 100), (195, 195)] {
+            assert!(close4(px(&d, x, y), [1.0; 4]), "density {density}: border ({x}, {y}) = {:?}", px(&d, x, y));
+        }
+        if density < 1.0 {
+            // A density below 100 % fills the cut-out too (0 % fills everywhere), so there is
+            // no edge left to stroke.
+            assert!(close4(px(&d, 152, 100), [1.0; 4]), "density {density}: {:?}", px(&d, 152, 100));
+            continue;
+        }
+        // The stroke itself, 8 px inside the cut-out's edge; the cut-out keeps the backdrop.
+        for (x, y) in [(152, 100), (100, 152), (48, 100), (100, 48)] {
+            assert!(close4(px(&d, x, y), [0.0, 0.0, 0.0, 1.0]), "density {density}: stroke at ({x}, {y}) = {:?}", px(&d, x, y));
+        }
+        assert!(close4(px(&d, 100, 100), [1.0; 4]), "density {density}: cut-out interior = {:?}", px(&d, 100, 100));
+    }
+}
+
+#[test]
+fn inverted_shape_effect_shape_reaches_past_the_canvas() {
+    // #9048: the effect shape (which the stroke and bevel solvers see) is the fill's coverage,
+    // not the clipped surface: outside the canvas it must continue with the fill's own density
+    // and feather instead of dropping to 0 at the canvas boundary.
+    let region = Rect::new(-16, -16, 216, 216);
+    let at = |v: &[f32], x: i32, y: i32| v[((y + 16) * 232 + (x + 16)) as usize];
+    for (density, feather) in [(1.0f32, 0.0f32), (0.0, 0.0), (0.5, 0.0), (1.0, 6.0), (0.4, 3.0)] {
+        let d = doc_white(200, 200);
+        let l = Layer::new("shape", LayerContent::Shape(inverted_shape(density, feather)));
+        let v = layer_shape(&d, &l, region);
+        // The cut-out sits well inside the canvas: everywhere outside it — the margin included —
+        // is the fill, whatever its density or feather.
+        for (x, y) in [(-16, -16), (-1, 100), (100, -1), (200, 100), (100, 200)] {
+            assert!((at(&v, x, y) - 1.0).abs() < 1e-3, "density {density} feather {feather}: ({x}, {y}) = {}", at(&v, x, y));
+        }
+        // Continuous with the surface's own value just inside the canvas.
+        for x in 0..200 {
+            let inside = at(&v, x, 0);
+            assert!((inside - at(&v, x, -1)).abs() < 1e-3, "density {density} feather {feather}: x {x} edge");
+        }
+    }
+    // A cut-out that reaches past the canvas: the margin is the fill's coverage there too, so
+    // only the density decides (the old hard path coverage ignored it).
+    for (density, want) in [(1.0f32, 0.0f32), (0.5, 0.5), (0.0, 1.0)] {
+        let d = doc_white(200, 200);
+        let path = photocraft_doc::vector::Path {
+            inverted: true,
+            subpaths: vec![photocraft_doc::vector::Subpath::polygon(&[(-20.0, -20.0), (100.0, -20.0), (100.0, 100.0), (-20.0, 100.0)])],
+            ..Default::default()
+        };
+        let mut sh = photocraft_doc::vector::ShapeLayer { path, fill: Some(Fill::Solid(Color::BLACK)), density, ..Default::default() };
+        sh.cache = Some(photocraft_vector::render_shape(&sh, PixelFormat::RGBA8, Rect::new(0, 0, 200, 200)));
+        let l = Layer::new("shape", LayerContent::Shape(sh));
+        let v = layer_shape(&d, &l, region);
+        let got = at(&v, -8, -8);
+        assert!((got - want).abs() < 1e-3, "density {density}: (-8, -8) = {got}, want {want}");
+    }
+    // A feather whose ramp crosses the canvas border: outside, the margin continues the ramp —
+    // neither the clipped path's hard coverage (0) nor the fill's far value (1), which would
+    // both put an alpha step on the canvas border.
+    let d = doc_white(200, 200);
+    let path = photocraft_doc::vector::Path {
+        inverted: true,
+        subpaths: vec![photocraft_doc::vector::Subpath::polygon(&[(-10.0, -30.0), (120.0, -30.0), (120.0, 120.0), (-10.0, 120.0)])],
+        ..Default::default()
+    };
+    let mut sh = photocraft_doc::vector::ShapeLayer { path, fill: Some(Fill::Solid(Color::BLACK)), feather: 8.0, ..Default::default() };
+    sh.cache = Some(photocraft_vector::render_shape(&sh, PixelFormat::RGBA8, Rect::new(0, 0, 200, 200)));
+    let l = Layer::new("shape", LayerContent::Shape(sh));
+    let v = layer_shape(&d, &l, region);
+    let ramp = at(&v, -16, 100);
+    assert!(ramp > 0.5 && ramp < 0.9, "(-16, 100) = {ramp}: the feather's ramp continues outside");
+    for y in 40..90 {
+        assert!((at(&v, -1, y) - at(&v, 0, y)).abs() < 0.25, "y {y}: {} vs {} at the canvas border", at(&v, -1, y), at(&v, 0, y));
+        let step = (at(&v, -16, y) - at(&v, -1, y)).abs() / 15.0;
+        assert!(step < 0.12, "y {y}: the margin is not a smooth ramp");
     }
 }
 

@@ -2039,9 +2039,9 @@ pub(crate) fn composite_with_effects_prepared(
     let shape = if shapeless {
         maps.crop(&maps.shape, big, 0.0)
     } else if vector_shape {
-        // The effect shape, not just the fill's alpha: an inverted shape reaches past the
-        // canvas (see `effect_shape`), and its outside stroke must not treat the canvas
-        // boundary as the shape's edge (#9048).
+        // A vector shape's effect shape, not just its clipped content alpha: it carries a filled
+        // inverted path's out-of-canvas margin (see `effect_shape`), so an Outside stroke does not
+        // treat the canvas boundary as the shape's edge (#9048).
         let o = maps.crop(&maps.shape, big, 0.0);
         Map { w, h, v: o.v.iter().zip(&content.px).enumerate().map(|(i, (o, p))| o.max(union(i, p[3]))).collect() }
     } else {

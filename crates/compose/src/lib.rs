@@ -1183,26 +1183,25 @@ fn effect_shape(layer: &Layer, rect: Rect, cx: &Ctx) -> Vec<f32> {
     }
     let Some(path) = effect_outline(layer).filter(|_| n > 0) else {
         let mut out = render_content(layer, rect, cx).map(|b| b.px.iter().map(|p| p[3]).collect()).unwrap_or_else(|| vec![0.0; n]);
-        // An inverted shape's surface is clipped to the canvas, while its path continues
-        // outside it: fill the out-of-canvas margin from the path so an Outside stroke does
-        // not treat the canvas boundary as a shape edge (#9048).
+        // An inverted shape's fill reaches the canvas edge but its surface is clipped there,
+        // while its path continues outside it: complete the margin from the fill's own coverage
+        // so an Outside stroke does not treat the canvas boundary as a shape edge (#9048).
         if let LayerContent::Shape(sh) = &layer.content
             && sh.fill.is_some()
             && sh.path.inverted
             && !sh.path.is_empty()
             && !cx.canvas.contains_rect(&rect)
         {
-            let cov = photocraft_vector::path_coverage(&sh.path, rect);
+            // `photocraft-vector`'s coverage, so a density or a feather reads past the canvas
+            // exactly as it does inside it (including a feather's ramp crossing the border).
+            let cov = photocraft_vector::fill_coverage(sh, rect, cx.canvas);
             let mv = mask_vals(layer, rect, cx);
             let w = rect.width() as usize;
-            let density = if sh.density.is_finite() { sh.density.clamp(0.0, 1.0) } else { 1.0 };
             for y in rect.y0..rect.y1 {
                 for x in rect.x0..rect.x1 {
                     if !cx.canvas.contains(x, y) {
                         let i = (y - rect.y0) as usize * w + (x - rect.x0) as usize;
-                        // The shape's fill coverage with density (photocraft-vector's
-                        // `1 - density × (1 - coverage)`): density 0 fills everywhere.
-                        out[i] = (1.0 - density * (1.0 - cov[i])) * mask_k(&mv, i);
+                        out[i] = cov.get(i).copied().unwrap_or(0.0) * mask_k(&mv, i);
                     }
                 }
             }

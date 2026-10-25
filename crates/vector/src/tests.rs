@@ -614,3 +614,32 @@ fn gradient_stops_are_found_by_bisection_and_agree_with_a_scan() {
     }
     assert!(started.elapsed().as_secs() < 5, "{:?}", started.elapsed());
 }
+
+#[test]
+fn fill_coverage_is_the_rendered_fill_alpha_past_the_canvas_too() {
+    // `fill_coverage` is `render_shape`'s fill alpha, with the shape's density and feather
+    // applied — and past the canvas it is the fill's own value (an inverted path fills there),
+    // not a clipped edge.
+    let canvas = Rect::new(0, 0, 40, 40);
+    let square = shapes::rect(10.0, 10.0, 30.0, 30.0);
+    for (path, inverted) in [(square.clone(), false), (Path { inverted: true, ..square }, true)] {
+        for (density, feather) in [(1.0f32, 0.0f32), (0.0, 0.0), (0.5, 0.0), (1.0, 4.0), (0.6, 2.0)] {
+            let sh = ShapeLayer { path: path.clone(), fill: Some(Fill::Solid(Color::BLACK)), density, feather, ..Default::default() };
+            let cov = fill_coverage(&sh, canvas, canvas);
+            let s = render_shape(&sh, PixelFormat::RGBA8, canvas);
+            for y in 0..40 {
+                for x in 0..40 {
+                    let a = photocraft_raster::to_rgba(&s.format(), &s.pixel(x, y))[3];
+                    let c = cov[y as usize * 40 + x as usize];
+                    assert!((c - a).abs() <= 1.0 / 255.0, "inverted {inverted} density {density} feather {feather}: ({x}, {y}) {c} vs {a}");
+                }
+            }
+            // Past the canvas: the fill as the path defines it there (an inverted path's
+            // coverage is 1, a normal path's 0), with its density applied.
+            let want = if inverted { 1.0 } else { 1.0 - density };
+            for v in fill_coverage(&sh, Rect::new(60, 60, 68, 68), canvas) {
+                assert!((v - want).abs() < 1e-6, "inverted {inverted} density {density} feather {feather}: {v} past the canvas");
+            }
+        }
+    }
+}
