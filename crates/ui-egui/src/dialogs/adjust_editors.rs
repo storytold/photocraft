@@ -45,7 +45,7 @@ use gradient_map::gradient_map;
 pub use gradient_map::{gradient_presets, is_gray, swatches};
 use hue_saturation::hue_saturation;
 #[cfg(test)]
-use hue_saturation::{lightness_track, move_hue_range_handle, saturation_track};
+use hue_saturation::{hue_range_zone, lightness_track, move_hue_range_handle, move_hue_range_zone, saturation_track};
 use levels::levels;
 pub use levels::{auto_levels, gamma_from_pos, gamma_pos};
 pub use session::{layer_editor, layer_mem, properties_coalesce, properties_reset, session_start};
@@ -257,6 +257,29 @@ mod tests {
         let stops = [Color32::BLACK, Color32::RED];
         assert_eq!(track_stops(&cx(true), &stops), Some(&stops[..]));
         assert_eq!(track_stops(&cx(false), &stops), None);
+    }
+
+    /// #9252: Photoshop 2025's zone drags on a colour range (measured on Reds): the fully-on span
+    /// moves all four handles, each fade its own two; a side stops at the other and the range
+    /// never passes a turn.
+    #[test]
+    fn hue_range_zones_move_their_handles() {
+        let reds = [-45.0, -15.0, 15.0, 45.0];
+        assert_eq!(hue_range_zone(reds, 345.0 - 15.0), Some(0));
+        assert_eq!(hue_range_zone(reds, 0.0), Some(1));
+        assert_eq!(hue_range_zone(reds, 30.0), Some(2));
+        assert_eq!(hue_range_zone(reds, 180.0), None);
+        let centre = move_hue_range_zone(reds, 1, 37.0);
+        assert_eq!(centre, [-8.0, 22.0, 52.0, 82.0], "all four, as Photoshop's 315/345…15\\45 → 352/21…52\\81");
+        let left = move_hue_range_zone(centre, 0, -19.0);
+        assert_eq!(left, [-27.0, 3.0, 52.0, 82.0], "the left two only");
+        let right = move_hue_range_zone(left, 2, 19.0);
+        assert_eq!(right, [-27.0, 3.0, 71.0, 101.0], "the right two only");
+        assert_eq!(move_hue_range_zone(reds, 0, 100.0), [-15.0, 15.0, 15.0, 45.0], "the left side stops at the right");
+        assert_eq!(move_hue_range_zone(reds, 2, -100.0), [-45.0, -15.0, -15.0, 15.0], "and the right at the left");
+        let wide = move_hue_range_zone(reds, 2, 500.0);
+        assert!(wide[3] - wide[0] <= 359.0 + 1e-3, "{wide:?}");
+        assert_eq!(move_hue_range_zone(reds, 1, f32::NAN), reds);
     }
 
     #[test]

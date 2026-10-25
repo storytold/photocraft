@@ -912,3 +912,32 @@ fn row_values_round_to_their_own_decimals() {
     assert!((row_value(1.234, 0.01, 9.99, None) - 1.23).abs() < 1e-6, "small ranges keep two decimals");
     assert!(row_value(f32::NAN, -20.0, 20.0, Some(u32::MAX)).is_nan(), "no panic on odd input");
 }
+
+/// #9252: in a Hue/Saturation layer's Properties, dragging the zones between the range handles
+/// moves them as Photoshop does: the fully-on span all four, a fade its own two; one history step
+/// per drag.
+#[test]
+fn hue_saturation_range_zones_drag_their_handles() {
+    let mut h = app_harness("hueSaturation", "rgb", 8);
+    let (id, _) = layer(&h);
+    let mem = crate::adjust_editors::layer_mem(id);
+    h.ctx.data_mut(|d| d.insert_temp(mem.with("hs-range"), 3usize)); // Greens: 75/105…135\165
+    h.run_steps(3);
+    let bars: Rect = h.ctx.data(|d| d.get_temp(mem.with("hs-range-bars"))).expect("the range bars");
+    let x = |deg: f32| bars.left() + deg / 360.0 * bars.width();
+    let y = bars.center().y;
+    let greens = |h: &Harness<'_, PhotocraftApp>| match layer(h).1 {
+        Adjustment::HueSaturation { ranges, .. } => ranges[2].bounds,
+        other => panic!("{other:?}"),
+    };
+    let steps = h.state().session.active().unwrap().history.past_len();
+    drag(&mut h, Pos2::new(x(120.0), y), Pos2::new(x(156.0), y));
+    let b = greens(&h);
+    assert!((b[0] - 111.0).abs() <= 1.0 && (b[3] - 201.0).abs() <= 1.0 && (b[1] - b[0] - 30.0).abs() < 0.5, "all four moved ~36°: {b:?}");
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1, "one step");
+    let before = greens(&h);
+    drag(&mut h, Pos2::new(x((before[0] + before[1]) / 2.0), y), Pos2::new(x((before[0] + before[1]) / 2.0 - 18.0), y));
+    let b = greens(&h);
+    assert!((b[0] - (before[0] - 18.0)).abs() <= 1.0 && (b[1] - (before[1] - 18.0)).abs() <= 1.0, "left two moved: {before:?} → {b:?}");
+    assert_eq!([b[2], b[3]], [before[2], before[3]], "right two stay");
+}
