@@ -9,6 +9,9 @@
 //! - **Custom meshes** ([`BezierMesh`]): a grid of bicubic Bezier patches. The default is one
 //!   patch (a 4×4 control grid); split warps add patch rows/columns by exact de Casteljau
 //!   subdivision, so splitting never changes the shape.
+//! - **Cylinder** ([`WarpStyle::Cylinder`], Transform Warp only): seven `warpValues` that
+//!   Photoshop turns into a 4 × 1 patch mesh wrapping the contents round a cylinder; see
+//!   [`cylinder_mesh`].
 //!
 //! Pure geometry: resampling lives in `photocraft-algo::warp`.
 
@@ -38,6 +41,10 @@ pub enum WarpStyle {
     Inflate,
     Squeeze,
     Twist,
+    /// Edit › Transform › Warp's Cylinder (`warpCylinder`): not one of the fifteen bend presets
+    /// (Warp Text doesn't have it), it takes seven values instead of a bend; see
+    /// [`Warp::cylinder`].
+    Cylinder,
 }
 
 impl WarpStyle {
@@ -60,7 +67,8 @@ impl WarpStyle {
         WarpStyle::Twist,
     ];
 
-    /// Every style (none, custom, presets).
+    /// The styles the Warp menus list: none, custom and the presets. [`WarpStyle::Cylinder`] is
+    /// read from PSDs and taken by commands, but has no editor yet.
     pub fn all() -> impl Iterator<Item = WarpStyle> {
         [WarpStyle::None, WarpStyle::Custom].into_iter().chain(Self::PRESETS)
     }
@@ -85,6 +93,7 @@ impl WarpStyle {
             WarpStyle::Inflate => "warpInflate",
             WarpStyle::Squeeze => "warpSqueeze",
             WarpStyle::Twist => "warpTwist",
+            WarpStyle::Cylinder => "warpCylinder",
         }
     }
 
@@ -109,6 +118,7 @@ impl WarpStyle {
             "Fisheye" => "fisheye",
             "Inflate" => "inflate",
             "Squeeze" => "squeeze",
+            "Cylinder" => "cylinder",
             _ => "twist",
         }
     }
@@ -133,17 +143,19 @@ impl WarpStyle {
             WarpStyle::Inflate => "Inflate",
             WarpStyle::Squeeze => "Squeeze",
             WarpStyle::Twist => "Twist",
+            WarpStyle::Cylinder => "Cylinder",
         }
     }
 
     /// Parses a short id, a PSD name or a label (case-insensitive, spaces ignored).
     pub fn parse(s: &str) -> Option<WarpStyle> {
         let k: String = s.chars().filter(|c| !c.is_whitespace()).collect::<String>().to_ascii_lowercase();
-        Self::all().find(|w| w.id().to_ascii_lowercase() == k || w.psd_name().to_ascii_lowercase() == k)
+        Self::all().chain([WarpStyle::Cylinder]).find(|w| w.id().to_ascii_lowercase() == k || w.psd_name().to_ascii_lowercase() == k)
     }
 
+    /// One of the fifteen bend presets ([`Self::PRESETS`]).
     pub fn is_preset(self) -> bool {
-        !matches!(self, WarpStyle::None | WarpStyle::Custom)
+        Self::PRESETS.contains(&self)
     }
 }
 
@@ -357,7 +369,7 @@ fn preset_grid(style: WarpStyle, b: f64, hd: f64, vd: f64, vertical: bool, aspec
                 g[2][2][1] -= a;
             }
         }
-        WarpStyle::None | WarpStyle::Custom => {}
+        WarpStyle::None | WarpStyle::Custom | WarpStyle::Cylinder => {}
     }
     // Vertical distortion: the top and bottom rows scale about their end points' midpoint (by
     // 1 ∓ vd) and the middle rows follow by the blend of those two moves.
@@ -411,6 +423,101 @@ fn split_cubic(p: [[f64; 2]; 4], t: f64) -> [[f64; 2]; 7] {
     let f = lerp(d, e, t);
     [p[0], a, d, f, e, c, p[3]]
 }
+
+/// Photoshop's Cylinder warp as a Bezier mesh in the `warp` descriptor's value space (the space
+/// of its `bounds`), from the seven `warpValues` `v` of a horizontal cylinder with no
+/// perspective. Like a custom warp's mesh, its control-point box is what the placement quad
+/// frames. `None` unless there are seven finite values with the right silhouette right of the
+/// left one.
+///
+/// The model was measured against Photoshop 2026's renders of a UV grid (issue #4112: within
+/// 0.3 px vertically and 1.2 px horizontally at the 99th percentile), not taken from Adobe's code:
+/// - `v[0]`, `v[2]`: the left and right silhouettes. Half axis `a = (v[2] − v[0]) / 2`.
+/// - `v[3]`, `v[1]`: the top and bottom edges at the silhouettes (the centre lines of the upper
+///   and lower ellipses); `v[4]`, `v[5]`: those ellipses' depth in units of `a`.
+/// - `v[6]` (0..1): how far the contents wrap round. The outer `uL` of the contents on each side
+///   is on the back of the cylinder and collapses onto the silhouette: 1/6 at 0, 0.006 at 1.
+///
+/// Four patches across (`us = [0, uL, 0.5, 1 − uL, 1]`: back, front left, front right, back) and
+/// one down; control rows are linear between the top and bottom edge.
+pub fn cylinder_mesh(v: &[f64]) -> Option<BezierMesh> {
+    let v: [f64; 7] = v.try_into().ok()?;
+    if !v.iter().all(|x| x.is_finite()) || v[2] <= v[0] {
+        return None;
+    }
+    let a = (v[2] - v[0]) / 2.0;
+    let cx = (v[0] + v[2]) / 2.0;
+    let [ul, kx, ky, my] = cylinder_shape(v[6]);
+    let s = [-1.0, -1.0, -1.0, -1.0, -1.0, -kx, 0.0, kx, 1.0, 1.0, 1.0, 1.0, 1.0];
+    let e = [0.0, 0.0, 0.0, 0.0, ky, my, 1.0, my, ky, 0.0, 0.0, 0.0, 0.0];
+    let mut points = Vec::with_capacity(13 * 4);
+    for r in 0..4 {
+        let t = f64::from(r) / 3.0;
+        for (sk, ek) in s.iter().zip(e) {
+            let (top, bottom) = (v[3] + v[4] * a * ek, v[1] + v[5] * a * ek);
+            points.push([cx + a * sk, top + (bottom - top) * t]);
+        }
+    }
+    let mesh = BezierMesh { us: vec![0.0, ul, 0.5, 1.0 - ul, 1.0], vs: vec![0.0, 1.0], points };
+    mesh.is_valid().then_some(mesh)
+}
+
+/// `[uL, kx, ky, my]` for a cylinder's wrap `g` (`warpValues[6]`, clamped to 0..1): the share of
+/// the contents on the back on each side, then the front patches' inner x control point (in
+/// units of the half axis) and their ellipse factors. Linear between the measured rows.
+fn cylinder_shape(g: f64) -> [f64; 4] {
+    let n = CYLINDER_SHAPE.len() - 1;
+    let x = if g.is_finite() { g.clamp(0.0, 1.0) * n as f64 } else { 0.0 };
+    let i = (x.floor() as usize).min(n - 1);
+    let (a, b, t) = (CYLINDER_SHAPE[i], CYLINDER_SHAPE[i + 1], x - i as f64);
+    std::array::from_fn(|k| a[k] + (b[k] - a[k]) * t)
+}
+
+/// [`cylinder_shape`]'s rows for `g` = 0, 0.025 … 1, measured from Photoshop's renders (#4112):
+/// no closed form was found.
+const CYLINDER_SHAPE: [[f64; 4]; 41] = [
+    [0.166169, 0.655404, 0.382374, 1.003104],
+    [0.157304, 0.650228, 0.388326, 1.002685],
+    [0.148438, 0.645374, 0.394211, 1.007918],
+    [0.140060, 0.639652, 0.401415, 1.006938],
+    [0.131885, 0.634064, 0.408465, 1.006069],
+    [0.123875, 0.628845, 0.414586, 1.005743],
+    [0.116162, 0.623565, 0.421033, 1.005233],
+    [0.108674, 0.618563, 0.426905, 1.004990],
+    [0.101198, 0.614439, 0.431943, 1.010787],
+    [0.094322, 0.609611, 0.437749, 1.010560],
+    [0.087757, 0.604929, 0.443406, 1.010361],
+    [0.081514, 0.600390, 0.448907, 1.010190],
+    [0.075599, 0.596012, 0.454288, 1.010019],
+    [0.069994, 0.591836, 0.459420, 1.009888],
+    [0.064709, 0.587844, 0.464361, 1.009768],
+    [0.059740, 0.584026, 0.469109, 1.009669],
+    [0.055072, 0.580427, 0.473609, 1.009588],
+    [0.050712, 0.576990, 0.477904, 1.009528],
+    [0.046635, 0.573760, 0.481968, 1.009477],
+    [0.042824, 0.570758, 0.485764, 1.009440],
+    [0.039295, 0.567910, 0.489377, 1.009411],
+    [0.036023, 0.565229, 0.492800, 1.009382],
+    [0.032681, 0.563478, 0.495519, 1.015285],
+    [0.029877, 0.561152, 0.498513, 1.015270],
+    [0.027282, 0.559012, 0.501313, 1.015245],
+    [0.024894, 0.557004, 0.503913, 1.015241],
+    [0.022693, 0.555163, 0.506331, 1.015225],
+    [0.020668, 0.553463, 0.508575, 1.015213],
+    [0.018816, 0.551877, 0.510651, 1.015217],
+    [0.017106, 0.550434, 0.512556, 1.015214],
+    [0.015542, 0.549100, 0.514319, 1.015213],
+    [0.014115, 0.547868, 0.515936, 1.015223],
+    [0.012806, 0.546743, 0.517432, 1.015223],
+    [0.011600, 0.545730, 0.518775, 1.015228],
+    [0.010506, 0.544788, 0.520034, 1.015230],
+    [0.009510, 0.543920, 0.521179, 1.015238],
+    [0.008600, 0.543134, 0.522224, 1.015244],
+    [0.007763, 0.542420, 0.523173, 1.015251],
+    [0.007006, 0.541757, 0.524065, 1.015252],
+    [0.006315, 0.541164, 0.524867, 1.015252],
+    [0.005686, 0.540608, 0.525602, 1.015261],
+];
 
 /// Inverse of the Bernstein interpolation matrix at t = 0, 1/3, 2/3, 1 (rows: control point,
 /// columns: sample). Exact rational values.
@@ -474,38 +581,50 @@ impl BezierMesh {
 
     /// Control points per row.
     pub fn nx(&self) -> usize {
-        3 * (self.us.len() - 1) + 1
+        3usize.saturating_mul(self.us.len().saturating_sub(1)).saturating_add(1)
     }
     /// Control point rows.
     pub fn ny(&self) -> usize {
-        3 * (self.vs.len() - 1) + 1
+        3usize.saturating_mul(self.vs.len().saturating_sub(1)).saturating_add(1)
     }
     pub fn point(&self, i: usize, j: usize) -> [f64; 2] {
-        self.points[j * self.nx() + i]
+        self.points.get(j.saturating_mul(self.nx()).saturating_add(i)).copied().unwrap_or([0.0; 2])
     }
 
     /// Checks the invariants (knots and point count); malformed data from files is rejected.
     pub fn is_valid(&self) -> bool {
-        let knots_ok = |k: &[f64]| k.len() >= 2 && k[0] == 0.0 && k[k.len() - 1] == 1.0 && k.windows(2).all(|w| w[1] > w[0]);
-        knots_ok(&self.us)
-            && knots_ok(&self.vs)
-            && self.points.len() == self.nx() * self.ny()
-            && self.points.iter().all(|p| p[0].is_finite() && p[1].is_finite())
+        let knots_ok = |k: &[f64]| (2..=65).contains(&k.len()) && k[0] == 0.0 && k[k.len() - 1] == 1.0 && k.windows(2).all(|w| w[1] > w[0]);
+        if !knots_ok(&self.us) || !knots_ok(&self.vs) {
+            return false;
+        }
+        let Some(nx) = (self.us.len() - 1).checked_mul(3).and_then(|v| v.checked_add(1)) else {
+            return false;
+        };
+        let Some(ny) = (self.vs.len() - 1).checked_mul(3).and_then(|v| v.checked_add(1)) else {
+            return false;
+        };
+        let Some(expected) = nx.checked_mul(ny) else {
+            return false;
+        };
+        self.points.len() == expected && self.points.iter().all(|p| p[0].is_finite() && p[1].is_finite())
     }
 
     fn locate(knots: &[f64], s: f64) -> (usize, f64) {
-        let n = knots.len() - 1;
-        let s = s.clamp(0.0, 1.0);
-        let mut i = 0;
-        while i + 1 < n && s > knots[i + 1] {
-            i += 1;
+        if knots.len() < 2 {
+            return (0, 0.0);
         }
+        let n = knots.len() - 1;
+        let s = if s.is_finite() { s.clamp(0.0, 1.0) } else { 0.0 };
+        let i = knots[1..n].partition_point(|&k| k < s);
         let w = knots[i + 1] - knots[i];
         (i, if w > 0.0 { (s - knots[i]) / w } else { 0.0 })
     }
 
     /// Evaluates the surface at normalised `(s, t)`.
     pub fn eval(&self, s: f64, t: f64) -> [f64; 2] {
+        if self.us.len() < 2 || self.vs.len() < 2 {
+            return [0.0; 2];
+        }
         let (pi, a) = Self::locate(&self.us, s);
         let (pj, b) = Self::locate(&self.vs, t);
         let (ba, bb) = (bernstein(a), bernstein(b));
@@ -513,7 +632,10 @@ impl BezierMesh {
         let mut out = [0.0; 2];
         for (j, wb) in bb.iter().enumerate() {
             for (i, wa) in ba.iter().enumerate() {
-                let p = self.points[(3 * pj + j) * nx + 3 * pi + i];
+                let idx = (3 * pj + j).saturating_mul(nx).saturating_add(3 * pi + i);
+                let Some(&p) = self.points.get(idx) else {
+                    return [0.0; 2];
+                };
                 let k = wa * wb;
                 out[0] += p[0] * k;
                 out[1] += p[1] * k;
@@ -917,15 +1039,18 @@ pub struct Warp {
     pub vertical: bool,
     /// The source box `[x0, y0, x1, y1]` the warp is defined over.
     pub bounds: [f64; 4],
-    /// Control mesh for [`WarpStyle::Custom`] (output coordinates).
+    /// Control mesh for [`WarpStyle::Custom`] and [`WarpStyle::Cylinder`] (output coordinates).
     #[serde(default)]
     pub mesh: Option<BezierMesh>,
+    /// A cylinder's seven `warpValues` (see [`Warp::cylinder`]); empty for other styles.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub values: Vec<f64>,
 }
 
 impl Warp {
     /// No warp over `bounds`.
     pub fn none(bounds: [f64; 4]) -> Warp {
-        Warp { style: WarpStyle::None, bend: 0.0, h_distort: 0.0, v_distort: 0.0, vertical: false, bounds, mesh: None }
+        Warp { style: WarpStyle::None, bend: 0.0, h_distort: 0.0, v_distort: 0.0, vertical: false, bounds, mesh: None, values: Vec::new() }
     }
 
     /// A preset style.
@@ -938,6 +1063,13 @@ impl Warp {
         Warp { style: WarpStyle::Custom, mesh: Some(mesh), ..Warp::none(bounds) }
     }
 
+    /// A horizontal Cylinder warp over `bounds` from its seven `warpValues` (see
+    /// [`cylinder_mesh`]). `None` when they don't describe one.
+    pub fn cylinder(values: &[f64], bounds: [f64; 4]) -> Option<Warp> {
+        let mesh = cylinder_mesh(values)?;
+        Some(Warp { style: WarpStyle::Cylinder, mesh: Some(mesh), values: values.to_vec(), ..Warp::none(bounds) })
+    }
+
     fn style_warp(&self) -> Option<StyleWarp> {
         StyleWarp::new(self.style, self.bend, self.h_distort, self.v_distort, self.vertical, self.bounds)
     }
@@ -946,11 +1078,32 @@ impl Warp {
     pub fn is_identity(&self) -> bool {
         match self.style {
             WarpStyle::None => true,
-            WarpStyle::Custom => match &self.mesh {
+            WarpStyle::Custom | WarpStyle::Cylinder => match &self.mesh {
                 None => true,
                 Some(m) => {
-                    let id = BezierMesh::fit(&|s, t| self.box_point(s, t), m.us.clone(), m.vs.clone());
-                    m.points.iter().zip(&id.points).all(|(a, b)| (a[0] - b[0]).abs() < 1e-9 && (a[1] - b[1]).abs() < 1e-9)
+                    if !m.is_valid() {
+                        return false;
+                    }
+                    let nx = m.nx();
+                    let (pc, pr) = (m.us.len() - 1, m.vs.len() - 1);
+                    for pj in 0..pr {
+                        for j in 0..4 {
+                            let v = m.vs[pj] + (m.vs[pj + 1] - m.vs[pj]) * j as f64 / 3.0;
+                            for pi in 0..pc {
+                                for i in 0..4 {
+                                    let u = m.us[pi] + (m.us[pi + 1] - m.us[pi]) * i as f64 / 3.0;
+                                    let expected = self.box_point(u, v);
+                                    let actual = m.points[(3 * pj + j) * nx + 3 * pi + i];
+                                    // Relative to the magnitude so the fit's rounding at large origins isn't rejected.
+                                    let tol = |e: f64| (1e-9 * e.abs().max(1.0)).min(1e-6);
+                                    if (actual[0] - expected[0]).abs() >= tol(expected[0]) || (actual[1] - expected[1]).abs() >= tol(expected[1]) {
+                                        return false;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    true
                 }
             },
             _ => self.style_warp().is_none(),
@@ -966,7 +1119,7 @@ impl Warp {
     pub fn map(&self, x: f64, y: f64) -> (f64, f64) {
         match self.style {
             WarpStyle::None => (x, y),
-            WarpStyle::Custom => match &self.mesh {
+            WarpStyle::Custom | WarpStyle::Cylinder => match &self.mesh {
                 Some(m) => {
                     let b = self.bounds;
                     let (w, h) = (b[2] - b[0], b[3] - b[1]);
@@ -986,9 +1139,9 @@ impl Warp {
     }
 
     /// The warp as a control mesh (a preset is its own Bezier patch split into `cols × rows`;
-    /// custom warps return their own mesh).
+    /// custom and cylinder warps return their own mesh).
     pub fn to_mesh(&self, cols: usize, rows: usize) -> BezierMesh {
-        if let (WarpStyle::Custom, Some(m)) = (self.style, &self.mesh) {
+        if let (WarpStyle::Custom | WarpStyle::Cylinder, Some(m)) = (self.style, &self.mesh) {
             return m.clone();
         }
         let (cols, rows) = (cols.clamp(1, 64), rows.clamp(1, 64));
@@ -1383,5 +1536,128 @@ mod tests {
         assert!(close(t.map(50.0, 50.0), (55.0, 48.0), 1e-9));
         let ob = Warp::none(B).output_bounds();
         assert!((ob[0] - 10.0).abs() < 1e-9 && (ob[3] - 70.0).abs() < 1e-9);
+    }
+
+    /// A cylinder over a 1000 × 1000 source like #4112's: silhouettes at x 100 and 900, edges at
+    /// y 200 (top) and 800 (bottom), ellipses 0.3 deep, half wrapped round.
+    const CYL: [f64; 7] = [100.0, 800.0, 900.0, 200.0, 0.3, 0.3, 0.5];
+
+    #[test]
+    fn cylinder_style_is_read_and_named_but_not_a_bend_preset() {
+        for s in ["cylinder", "warpCylinder", "Cylinder"] {
+            assert_eq!(WarpStyle::parse(s), Some(WarpStyle::Cylinder), "{s}");
+        }
+        assert_eq!(WarpStyle::Cylinder.psd_name(), "warpCylinder");
+        assert_eq!(WarpStyle::Cylinder.id(), "cylinder");
+        assert!(!WarpStyle::Cylinder.is_preset());
+        assert!(StyleWarp::new(WarpStyle::Cylinder, 50.0, 0.0, 0.0, false, B).is_none());
+        // The Warp menus list what they can edit.
+        assert!(WarpStyle::all().all(|s| s != WarpStyle::Cylinder));
+        assert_eq!(WarpStyle::all().filter(|s| s.is_preset()).count(), 15);
+    }
+
+    #[test]
+    fn cylinder_values_that_describe_no_cylinder_are_refused() {
+        assert!(cylinder_mesh(&CYL[..6]).is_none(), "six values");
+        assert!(cylinder_mesh(&[CYL.as_slice(), &[0.0]].concat()).is_none(), "eight values");
+        for i in 0..7 {
+            for bad in [f64::NAN, f64::INFINITY] {
+                let mut v = CYL;
+                v[i] = bad;
+                assert!(cylinder_mesh(&v).is_none(), "value {i} = {bad}");
+            }
+        }
+        let mut v = CYL;
+        v[2] = v[0];
+        assert!(Warp::cylinder(&v, [0.0, 0.0, 1000.0, 1000.0]).is_none(), "no width");
+        v[2] = 50.0;
+        assert!(Warp::cylinder(&v, [0.0, 0.0, 1000.0, 1000.0]).is_none(), "right silhouette left of the left one");
+    }
+
+    #[test]
+    fn cylinder_wraps_the_contents_between_its_silhouettes() {
+        let w = Warp::cylinder(&CYL, [0.0, 0.0, 1000.0, 1000.0]).unwrap();
+        assert_eq!(w.style, WarpStyle::Cylinder);
+        assert_eq!(w.values, CYL);
+        assert!(!w.is_identity());
+        let m = w.mesh.as_ref().unwrap();
+        assert_eq!((m.nx(), m.ny()), (13, 4));
+        let [ul, ..] = cylinder_shape(0.5);
+        assert!((m.us[1] - ul).abs() < 1e-12 && (m.us[3] - (1.0 - ul)).abs() < 1e-12);
+        // The middle of the contents is at the front: centred, on the ellipses' near side.
+        assert!(close(w.map(500.0, 0.0), (500.0, 200.0 + 0.3 * 400.0), 1e-9));
+        assert!(close(w.map(500.0, 1000.0), (500.0, 800.0 + 0.3 * 400.0), 1e-9));
+        // What wraps round the back lies on the silhouettes, at the edges' ends.
+        for x in [0.0, ul * 500.0, ul * 1000.0] {
+            assert!(close(w.map(x, 0.0), (100.0, 200.0), 1e-9), "{x}");
+            assert!(close(w.map(1000.0 - x, 1000.0), (900.0, 800.0), 1e-9), "{x}");
+        }
+        // Across the front x only grows, and the two halves mirror each other.
+        let mut last = f64::MIN;
+        for i in 0..=200 {
+            let x = 1000.0 * (ul + (1.0 - 2.0 * ul) * f64::from(i) / 200.0);
+            let (px, py) = w.map(x, 400.0);
+            assert!(px >= last - 1e-9, "x {x}");
+            last = px;
+            let (qx, qy) = w.map(1000.0 - x, 400.0);
+            assert!(close((px - 500.0, py), (500.0 - qx, qy), 1e-9), "x {x}");
+        }
+        // Every point stays inside the control-point box the placement frames.
+        let cb = m.control_bounds();
+        let ob = w.output_bounds();
+        assert!(ob[0] >= cb[0] - 1e-9 && ob[1] >= cb[1] - 1e-9 && ob[2] <= cb[2] + 1e-9 && ob[3] <= cb[3] + 1e-9);
+        assert!((cb[0] - 100.0).abs() < 1e-9 && (cb[2] - 900.0).abs() < 1e-9);
+        // The box's bottom is the lower ellipse's deepest control point (`my` > 1).
+        assert!((cb[3] - (800.0 + 0.3 * 400.0 * cylinder_shape(0.5)[3])).abs() < 1e-9);
+        assert_eq!(w.to_mesh(4, 4), *m, "a cylinder is its own mesh");
+    }
+
+    #[test]
+    fn cylinder_shape_follows_the_measured_rows() {
+        assert_eq!(cylinder_shape(0.0), CYLINDER_SHAPE[0]);
+        assert_eq!(cylinder_shape(1.0), CYLINDER_SHAPE[40]);
+        assert_eq!(cylinder_shape(-3.0), CYLINDER_SHAPE[0]);
+        assert_eq!(cylinder_shape(7.0), CYLINDER_SHAPE[40]);
+        assert_eq!(cylinder_shape(f64::NAN), CYLINDER_SHAPE[0]);
+        let mid = cylinder_shape(0.0125);
+        for k in 0..4 {
+            assert!((mid[k] - (CYLINDER_SHAPE[0][k] + CYLINDER_SHAPE[1][k]) / 2.0).abs() < 1e-12);
+        }
+        // The more it wraps, the less of the contents is on the back.
+        assert!(CYLINDER_SHAPE.windows(2).all(|r| r[1][0] < r[0][0]));
+    }
+
+    #[test]
+    fn is_identity_rejects_malformed_custom_mesh_without_allocating() {
+        let us: Vec<f64> = (0..=1000).map(|i| i as f64 / 1000.0).collect();
+        let vs: Vec<f64> = (0..=1000).map(|i| i as f64 / 1000.0).collect();
+        let malformed = BezierMesh { us, vs, points: Vec::new() };
+        assert!(!malformed.is_valid());
+        let w = Warp::custom(malformed.clone(), B);
+        assert!(!w.is_identity());
+        assert_eq!(malformed.eval(0.5, 0.5), [0.0, 0.0]);
+    }
+
+    #[test]
+    fn locate_binary_search_matches_linear_scan() {
+        let knots = [0.0, 0.1, 0.25, 0.5, 0.85, 1.0];
+        let linear = |s: f64| {
+            let n = knots.len() - 1;
+            let s = if s.is_finite() { s.clamp(0.0, 1.0) } else { 0.0 };
+            let mut i = 0;
+            while i + 1 < n && s > knots[i + 1] {
+                i += 1;
+            }
+            let w = knots[i + 1] - knots[i];
+            (i, if w > 0.0 { (s - knots[i]) / w } else { 0.0 })
+        };
+        for k in -10..=110 {
+            let s = k as f64 / 100.0;
+            assert_eq!(BezierMesh::locate(&knots, s), linear(s), "s={s}");
+        }
+        for &s in &knots {
+            assert_eq!(BezierMesh::locate(&knots, s), linear(s), "knot={s}");
+        }
+        assert_eq!(BezierMesh::locate(&knots, f64::NAN), linear(f64::NAN));
     }
 }

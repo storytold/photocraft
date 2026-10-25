@@ -771,7 +771,7 @@ fn file_info_translations_survive_undo_and_psd_round_trip() {
     for depth in [8, 16, 32] {
         let mut s = session(8, 8, depth);
         s.edit("Set metadata", |doc, _| {
-            doc.metadata.xmp = Some(MULTILINGUAL_XMP.to_string());
+            doc.metadata.xmp = Some(MULTILINGUAL_XMP.into());
             Ok(())
         })
         .unwrap();
@@ -781,7 +781,7 @@ fn file_info_translations_survive_undo_and_psd_round_trip() {
         assert!(s.undo());
         assert_eq!(doc(&s).metadata.xmp.as_deref(), Some(MULTILINGUAL_XMP));
         assert!(s.redo());
-        assert_eq!(doc(&s).metadata.xmp.as_deref(), Some(edited.as_str()));
+        assert_eq!(doc(&s).metadata.xmp.as_deref(), Some(&*edited));
         let (bytes, _) = encode(doc(&s), "x.psd", None).unwrap();
         let back = photocraft_io::import("x.psd", &bytes).unwrap().document;
         assert_translations_kept(back.metadata.xmp.as_deref().unwrap());
@@ -1081,6 +1081,69 @@ fn flatten_all_layer_effects_keeps_a_pattern_overlay() {
 }
 
 #[test]
+fn layers_to_files_reports_skipped_layers_without_changing_files() {
+    for depth in [8, 16, 32] {
+        let dir = tmp(&format!("skipped-layers-{depth}"));
+        let mut s = session(4, 4, depth);
+        let adjustment = s.execute("layer.newAdjustmentLayer.levels", json!({})).unwrap()["layer"].clone();
+        s.execute("layer.setProps", json!({"name": "Levels/α"})).unwrap();
+        let hidden = s.execute("layer.new.layer", json!({"name": "Levels/α"})).unwrap()["layer"].clone();
+        s.execute("layer.setProps", json!({"visible": false})).unwrap();
+        let before = s.active().unwrap().doc.clone();
+        let result = s.execute("file.export.layersToFiles", json!({"dir": dir, "prefix": "doc"})).unwrap();
+        assert_eq!(
+            result["skipped"],
+            json!([
+                {"layer": hidden, "name": "Levels/α", "reason": "hidden by visibleOnly"},
+                {"layer": adjustment, "name": "Levels/α", "reason": "adjustment layer has no pixels of its own"}
+            ])
+        );
+        assert_eq!(result["files"], json!([join(&dir, "doc_0001_Background.png")]));
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        assert_eq!(s.active().unwrap().doc.layers.len(), before.layers.len());
+        assert!(!s.active().unwrap().doc.layer(LayerId(hidden.as_u64().unwrap())).unwrap().visible);
+        let all = s.execute("file.export.layersToFiles", json!({"dir": dir, "prefix": "all", "visibleOnly": false})).unwrap();
+        assert_eq!(
+            all["skipped"],
+            json!([
+                {"layer": adjustment, "name": "Levels/α", "reason": "adjustment layer has no pixels of its own"}
+            ])
+        );
+        assert_eq!(all["files"], json!([join(&dir, "all_0000_Levels_α.png"), join(&dir, "all_0002_Background.png")]));
+    }
+}
+
+#[test]
+fn layers_to_files_reports_groups_as_exports_and_failures_as_errors() {
+    let mut s = session(4, 4, 8);
+    s.execute("layer.newAdjustmentLayer.levels", json!({})).unwrap();
+    s.execute("layer.new.groupFromLayers", json!({"name": "Pack"})).unwrap();
+    let params = json!({"prefix": "doc"});
+    let mut names = Vec::new();
+    let report = export_layers_report_with(&s, &params, |name, bytes| {
+        assert!(!bytes.is_empty());
+        names.push(name.to_string());
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(names, vec!["doc_0000_Pack.png", "doc_0001_Background.png"]);
+    assert_eq!(report.files, names);
+    assert!(report.skipped.is_empty(), "a group's adjustment is not an omitted top-level layer");
+    assert_eq!(export_layers_with(&s, &params, |_, _| Ok(())).unwrap(), names, "legacy Rust helper remains compatible");
+    assert!(export_layers_report_with(&s, &params, |_, _| Err(EngineError::Other("disk full".into()))).unwrap_err().to_string().contains("disk full"));
+    assert!(export_layers_report_with(&s, &json!({"format": "not-a-format"}), |_, _| panic!("must not write")).is_err());
+    assert!(export_layers_report_with(&Session::new(), &params, |_, _| panic!("must not write")).is_err());
+    s.edit("Empty", |doc, _| {
+        doc.layers.clear();
+        Ok(())
+    })
+    .unwrap();
+    let empty = export_layers_report_with(&s, &params, |_, _| panic!("must not write")).unwrap();
+    assert!(empty.files.is_empty());
+    assert!(empty.skipped.is_empty());
+}
+
+#[test]
 fn layers_to_files_writes_each_visible_layer() {
     let dir = tmp("layers");
     let mut s = session(12, 12, 8);
@@ -1240,6 +1303,50 @@ fn exported_selected_cube_round_trips_through_lookup_importer() {
     assert!(parsed.data[parsed.data.len() - 3..].iter().all(|v| *v < 0.001));
     s.execute("layer.newAdjustmentLayer.colorLookup", json!({"file": path})).unwrap();
     assert_eq!(s.active().unwrap().doc.layers.len(), 3);
+}
+
+/// #4984: New Guide Layout takes lengths with units as typed in Photoshop's dialog, at the
+/// document's resolution; percent is of the target's width or height, by axis.
+#[test]
+fn guide_layouts_take_units() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 1200, "height": 600, "resolution": 300})).unwrap();
+    let close = |a: &[f64], b: &[f64]| a.len() == b.len() && a.iter().zip(b).all(|(x, y)| (x - y).abs() < 0.01);
+    // 1 cm at 300 ppi is 118.11 px; 0.25 in is 75 px.
+    s.execute("view.newGuideLayout", json!({"columns": 2, "gutter": "1 cm", "margin": "0.25in"})).unwrap();
+    let g = &doc(&s).guides;
+    let col = (1050.0 - 118.110_236) / 2.0;
+    assert!(close(&g.vertical, &[75.0, 1125.0, 75.0 + col, 75.0 + col + 118.110_236]), "{:?}", g.vertical);
+    assert!(close(&g.horizontal, &[75.0, 525.0]), "{:?}", g.horizontal);
+    // Percent of the width for columns, of the height for rows and top/bottom margins; points
+    // follow Units & Rulers (72 per inch: 36 pt is 150 px, centred like the columns).
+    s.execute(
+        "view.newGuideLayout",
+        json!({"columns": 1, "width": "25%", "centerColumns": true, "rows": 1, "height": "36 pt", "margin": ["10%", 0, "10%", 0], "clearExisting": true}),
+    )
+    .unwrap();
+    let g = &doc(&s).guides;
+    assert!(close(&g.vertical, &[0.0, 1200.0, 450.0, 750.0]), "{:?}", g.vertical);
+    assert!(close(&g.horizontal, &[60.0, 540.0, 225.0, 375.0]), "{:?}", g.horizontal);
+    // With selected artboards, percent is of each board, not of the document.
+    s.execute("layer.new.artboard", json!({"rect": [200, 100, 140, 40]})).unwrap();
+    s.execute(
+        "view.newGuideLayout",
+        json!({"columns": 1, "width": "50%", "centerColumns": true, "rows": 1, "height": "50%", "target": "selectedArtboards", "clearExisting": true}),
+    )
+    .unwrap();
+    let g = &doc(&s).guides;
+    // Clear Existing removes guides inside the board only; those outside it stay.
+    assert!(close(&g.vertical, &[0.0, 1200.0, 450.0, 750.0, 235.0, 305.0]), "{:?}", g.vertical);
+    assert!(close(&g.horizontal, &[60.0, 540.0, 225.0, 375.0, 110.0, 130.0]), "{:?}", g.horizontal);
+    for bad in [
+        json!({"columns": 2, "gutter": "1 furlong"}),
+        json!({"columns": 2, "gutter": "-1 cm"}),
+        json!({"columns": 2, "margin": [0, "x", 0, 0]}),
+        json!({"columns": 2, "gutter": true}),
+    ] {
+        assert!(s.execute("view.newGuideLayout", bad.clone()).is_err(), "{bad}");
+    }
 }
 
 #[test]
@@ -1414,6 +1521,18 @@ fn reveal_in_finder_reveals_the_documents_saved_path() {
     let r = s.execute("file.revealInFinder", json!({"document": 0, "dryRun": true})).unwrap();
     assert_eq!(r["program"], json!(program));
     assert_eq!(r["args"], json!(args));
+}
+
+#[cfg(windows)]
+#[test]
+fn reveal_in_finder_on_windows_passes_the_clicked_tabs_saved_path() {
+    let mut s = session(8, 8, 8);
+    s.active_mut().unwrap().path = Some("C:/项目 图片/海报 🖼.png".into());
+    s.execute("file.new", json!({"width": 8, "height": 8, "name": "other"})).unwrap();
+
+    let r = s.execute("file.revealInFinder", json!({"document": 0, "dryRun": true})).unwrap();
+    assert_eq!(r["program"], "explorer");
+    assert_eq!(r["args"], json!(["/select,", r"C:\项目 图片\海报 🖼.png"]));
 }
 
 /// "Include All Subfolders" (AUTO-219-5, #3753): Batch and Image Processor take the images in

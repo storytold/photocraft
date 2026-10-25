@@ -77,6 +77,12 @@ pub fn apply_with(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer) {
 /// unrounded). Integer depths work on whole levels like Photoshop's (see [`levels_q`] and
 /// `adjustment_quantum`), 32-bit documents get its float Levels (see [`levels_float`]).
 pub fn apply_depth(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, depth: Option<SampleType>) {
+    apply_depth_mode(adj, buf, transfer, depth, ColorMode::Rgb);
+}
+
+/// [`apply_depth`] in a document of colour `mode` (which decides whether float curves extend,
+/// see [`float_tone_extrapolates`]).
+fn apply_depth_mode(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, depth: Option<SampleType>, mode: ColorMode) {
     match adj {
         Adjustment::Invert => map_rgb(buf, |c| [1.0 - c[0], 1.0 - c[1], 1.0 - c[2]]),
         Adjustment::Threshold { level } => map_rgb(buf, |c| [if threshold_white(c, *level, depth) { 1.0 } else { 0.0 }; 3]),
@@ -143,7 +149,7 @@ pub fn apply_depth(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, depth
                 return;
             }
             let luts = tone_luts_depth(adj, depth);
-            apply_tone(buf, *space, &luts, identity);
+            apply_tone(buf, *space, &luts, identity, float_tone_extrapolates(adj, depth, mode));
         }
         Adjustment::HueSaturation { hue, saturation, lightness, colorize, ranges } => {
             let table = (!*colorize && ranges.iter().any(|r| !r.is_neutral())).then(|| hue_range_tables(ranges));
@@ -198,8 +204,11 @@ pub fn apply_depth(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, depth
         }
         Adjustment::BlackWhite { weights, tint } => {
             let hdr = depth == Some(SampleType::F32);
+            // 32-bit greys keep their superwhites: Photoshop 27.11 maps negatives to 0 and caps
+            // neutrals at 16, but leaves 2.0 at 2.0 (#8537).
+            let hi = if hdr { 16.0 } else { 1.0 };
             map_rgb(buf, |c| {
-                let g = black_white_gray(c, weights);
+                let g = black_white_gray(c, weights).clamp(0.0, hi);
                 match tint {
                     // Photoshop tints like the Color blend mode: the tint's hue and saturation at
                     // the grey's luminosity (SetLum + ClipColor), measured in Photoshop 27.11. In
@@ -335,7 +344,7 @@ pub fn apply_in(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, depth: O
             });
         }
     } else {
-        apply_depth(adj, buf, transfer, depth);
+        apply_depth_mode(adj, buf, transfer, depth, mode);
     }
 }
 
@@ -563,8 +572,8 @@ fn apply_lab(adj: &Adjustment, buf: &mut Buffer, depth: Option<SampleType>) {
     }
 }
 
-/// Float RGB curve channels with no edit must preserve samples outside the LUT domain.
-/// Edited curves retain the existing spline/LUT behaviour until HDR extrapolation has an oracle.
+/// Float RGB curve channels with no edit must preserve samples outside the LUT domain; edited
+/// ones extend past it (see [`float_tone_extrapolates`]).
 pub fn float_tone_identity(adj: &Adjustment, depth: Option<SampleType>) -> [bool; 3] {
     match adj {
         Adjustment::Curves { master, per_channel, space: ToneSpace::Rgb, .. } if depth == Some(SampleType::F32) => {
@@ -574,9 +583,18 @@ pub fn float_tone_identity(adj: &Adjustment, depth: Option<SampleType>) -> [bool
     }
 }
 
-pub(crate) fn apply_tone(buf: &mut Buffer, space: ToneSpace, luts: &[Vec<f32>; 4], identity: [bool; 3]) {
+/// Whether an edited Curves adjustment continues past 0..1 instead of clipping: in a 32-bit RGB
+/// document Photoshop extends each curve beyond its end points along the slope of its end
+/// segments (#7157: `[[0,0],[255,128]]` maps -0.5 to -0.250980407 and 2 to 1.003921628). Only
+/// in RGB documents: the curve's space is not the document's, and other modes keep the table.
+pub fn float_tone_extrapolates(adj: &Adjustment, depth: Option<SampleType>, mode: ColorMode) -> bool {
+    matches!(adj, Adjustment::Curves { space: ToneSpace::Rgb, .. }) && depth == Some(SampleType::F32) && mode == ColorMode::Rgb
+}
+
+pub(crate) fn apply_tone(buf: &mut Buffer, space: ToneSpace, luts: &[Vec<f32>; 4], identity: [bool; 3], extrapolate: bool) {
+    let sample = if extrapolate { lut_extended } else { lut };
     match space {
-        ToneSpace::Rgb => map_rgb(buf, |c| std::array::from_fn(|i| if identity[i] { c[i] } else { lut(&luts[i], c[i]) })),
+        ToneSpace::Rgb => map_rgb(buf, |c| std::array::from_fn(|i| if identity[i] { c[i] } else { sample(&luts[i], c[i]) })),
         ToneSpace::Cmyk | ToneSpace::Lab => map_rgb(buf, |c| tone_in_space(space, luts, c)),
     }
 }
@@ -744,7 +762,8 @@ pub fn range_lightness(c: [f32; 3], l: f32) -> [f32; 3] {
 /// Black & White grey value. Each colour is the sum of a grey part (its smallest channel), a
 /// secondary-colour part (yellow, cyan or magenta: middle − smallest) and a primary part (red,
 /// green or blue: largest − middle); the sliders (percent, Photoshop defaults 40 60 40 60 20 80 for
-/// reds, yellows, greens, cyans, blues, magentas) weight the two colour parts.
+/// reds, yellows, greens, cyans, blues, magentas) weight the two colour parts. Unclipped: the
+/// document's depth decides the range.
 pub fn black_white_gray(c: [f32; 3], weights: &[f32; 6]) -> f32 {
     let (r, g, b) = (c[0], c[1], c[2]);
     let (max, min) = (r.max(g).max(b), r.min(g).min(b));
@@ -764,7 +783,7 @@ pub fn black_white_gray(c: [f32; 3], weights: &[f32; 6]) -> f32 {
     } else {
         5 // red + blue = magenta
     };
-    (min + (mid - min) * weights[secondary] / 100.0 + (max - mid) * weights[primary] / 100.0).clamp(0.0, 1.0)
+    min + (mid - min) * weights[secondary] / 100.0 + (max - mid) * weights[primary] / 100.0
 }
 
 /// Ordered-dither offset in -0.5..0.5 (4×4 Bayer matrix) for document pixel (x, y).
@@ -990,6 +1009,24 @@ fn lut(table: &[f32], v: f32) -> f32 {
     let j = (i + 1).min(table.len() - 1);
     let f = x - i as f32;
     table[i] * (1.0 - f) + table[j] * f
+}
+
+/// Table steps the end slopes of [`lut_extended`] are measured over: one step's difference near
+/// 0.5 carries f32 rounding (2e-4 of the slope), while 16 steps are still only 0.4 % of the domain.
+pub const TONE_SLOPE_SPAN: usize = 16;
+
+/// [`lut`] continued past 0..1 along the slope of the table's end segments, as Photoshop applies
+/// a curve to float samples ([`float_tone_extrapolates`]). Inside the domain it is [`lut`];
+/// non-finite samples stay with it too, so an infinite one can't become NaN on a flat end.
+#[inline]
+fn lut_extended(table: &[f32], v: f32) -> f32 {
+    let n = table.len();
+    if !v.is_finite() || (0.0..=1.0).contains(&v) || n < 2 {
+        return lut(table, v);
+    }
+    let k = TONE_SLOPE_SPAN.min(n - 1);
+    let per_unit = (n - 1) as f32 / k as f32;
+    if v < 0.0 { table[0] + v * (table[k] - table[0]) * per_unit } else { table[n - 1] + (v - 1.0) * (table[n - 1] - table[n - 1 - k]) * per_unit }
 }
 
 /// Photo Filter's linear-light RGB matrix. Photoshop multiplies the pixel's D50 XYZ, relative to
@@ -1299,6 +1336,11 @@ pub fn levels_gamma(u: f32, g: f32) -> f32 {
         return u.powf(c);
     }
     let b = (a * u1 - u1.powf(c)) / u1.powf(q);
+    // Just above gamma 1 the toe shrinks to nothing: u1^q underflows to 0 while u1 doesn't, and
+    // the power curve is the toe's limit there (otherwise b = inf and black turns NaN).
+    if !b.is_finite() {
+        return u.powf(c);
+    }
     a * u - b * u.powf(q)
 }
 
@@ -2195,6 +2237,22 @@ mod tone_tests {
         let mut w = d;
         w[0] = 100.0;
         assert!(black_white_gray([1.0, 0.0, 0.0], &w) > black_white_gray([1.0, 0.0, 0.0], &d));
+    }
+
+    /// #8537: 32-bit superwhites stay above 1 (Photoshop 27.11: 2.0 stays 2.0, neutrals cap at
+    /// 16, negatives go to 0); 8-bit still clips at 1.
+    #[test]
+    fn black_white_keeps_32_bit_superwhites() {
+        let adj = Adjustment::BlackWhite { weights: [40.0, 60.0, 40.0, 60.0, 20.0, 80.0], tint: None };
+        let run = |depth, c: f32| {
+            let mut b = Buffer { rect: Rect::new(0, 0, 1, 1), px: vec![[c, c, c, 1.0]] };
+            apply_depth(&adj, &mut b, Transfer::Srgb, Some(depth));
+            b.px[0][0]
+        };
+        assert_eq!(run(SampleType::F32, 2.0), 2.0);
+        assert_eq!(run(SampleType::F32, 20.0), 16.0);
+        assert_eq!(run(SampleType::F32, -0.5), 0.0);
+        assert_eq!(run(SampleType::U8, 2.0), 1.0);
     }
 
     /// Photoshop 27.11, measured: Black & White (default weights) with Tint over greys. The tint

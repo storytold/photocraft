@@ -92,6 +92,43 @@ fn close_ring() -> Vec<Vec2> {
     (0..16).map(|i| (i as f32 / 16.0 * std::f32::consts::TAU, vec2(9.0, 9.0))).map(|(a, c)| c + vec2(a.cos(), a.sin()) * 3.5).collect()
 }
 
+/// Closed outline of an I-beam, centred on the hotspot.
+fn i_beam() -> Vec<Vec2> {
+    [(-3.0, -8.0), (3.0, -8.0), (3.0, -7.0), (0.5, -7.0), (0.5, 7.0), (3.0, 7.0), (3.0, 8.0), (-3.0, 8.0), (-3.0, 7.0), (-0.5, 7.0), (-0.5, -7.0), (-3.0, -7.0)]
+        .into_iter()
+        .map(|(x, y)| vec2(x, y))
+        .collect()
+}
+
+/// A dot (a tiny closed square) at `c`.
+fn dot(c: Vec2) -> Vec<Vec2> {
+    vec![c + vec2(-0.75, -0.75), c + vec2(0.75, -0.75), c + vec2(0.75, 0.75), c + vec2(-0.75, 0.75)]
+}
+
+/// Photoshop's area-type pointer (#218): the I-beam inside a dotted ellipse.
+pub(crate) fn area_type_rings() -> Vec<Vec<Vec2>> {
+    let mut rings = vec![i_beam()];
+    rings.extend((0..12).map(|i| i as f32 / 12.0 * std::f32::consts::TAU).map(|a| dot(vec2(a.cos() * 8.0, a.sin() * 10.5))));
+    rings
+}
+
+/// Photoshop's type-on-a-path pointer (#218): the I-beam crossed by a dotted wave.
+pub(crate) fn path_type_rings() -> Vec<Vec<Vec2>> {
+    let mut rings = vec![i_beam()];
+    rings.extend((0..9).map(|i| -10.0 + i as f32 * 2.5).map(|x| dot(vec2(x, 4.0 + (x * 0.4).sin() * 2.0))));
+    rings
+}
+
+/// The Type tool over the inside of a closed path: a click starts area type there.
+pub(crate) fn area_type(painter: &Painter, at: Pos2) -> CursorIcon {
+    outline(painter, at, area_type_rings(), false)
+}
+
+/// The Type tool over a path's outline: a click starts type on the path there.
+pub(crate) fn path_type(painter: &Painter, at: Pos2) -> CursorIcon {
+    outline(painter, at, path_type_rings(), false)
+}
+
 /// Can this pass show an OS cursor bitmap? eframe's immediate viewports and its web integration
 /// don't upload cursor images; every desktop root viewport does (winit custom cursors). Wayland at
 /// any scale but 1 doesn't either: winit sizes the bitmap there with a `wp_viewport` destination
@@ -105,12 +142,12 @@ fn native(ctx: &egui::Context) -> bool {
 
 /// Mark this window as a Wayland surface (or not), for [`native`]; the shell calls it every pass.
 pub(crate) fn set_wayland(ctx: &egui::Context, wayland: bool) {
-    ctx.data_mut(|d| d.insert_temp(egui::Id::new("photocraft-cursor-wayland"), wayland));
+    ctx.data_mut(|d| d.insert_temp(egui::Id::unique("photocraft-cursor-wayland"), wayland));
 }
 
 /// A Wayland window whose scale is not 1, where winit's cursor bitmaps are unreliable.
 fn scaled_wayland(ctx: &egui::Context) -> bool {
-    let wayland = cfg!(target_os = "linux") && ctx.data(|d| d.get_temp::<bool>(egui::Id::new("photocraft-cursor-wayland"))).unwrap_or(false);
+    let wayland = cfg!(target_os = "linux") && ctx.data(|d| d.get_temp::<bool>(egui::Id::unique("photocraft-cursor-wayland"))).unwrap_or(false);
     wayland && ctx.native_pixels_per_point().unwrap_or_else(|| ctx.pixels_per_point() / ctx.zoom_factor()) != 1.0
 }
 
@@ -222,7 +259,7 @@ fn show(painter: &Painter, at: Pos2, shape: Shape) -> CursorIcon {
 }
 
 fn cached_image(ctx: &egui::Context, shape: &Shape, scale: f32) -> Option<CustomCursorImage> {
-    let id = egui::Id::new("photocraft-tool-cursor");
+    let id = egui::Id::unique("photocraft-tool-cursor");
     if let Some(cached) = ctx.data(|d| d.get_temp::<Cached>(id))
         && cached.shape == *shape
         && cached.scale == scale

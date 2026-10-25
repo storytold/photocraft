@@ -306,33 +306,51 @@ fn path_value(text: &str) -> D {
 /// Photoshop's `BlnM` enumeration ↔ PhotoCraft's blend mode labels.
 const BLEND_MODES: &[(&str, &str)] = &[
     ("Nrml", "Normal"),
+    ("normal", "Normal"),
     ("Dslv", "Dissolve"),
+    ("dissolve", "Dissolve"),
     ("Drkn", "Darken"),
+    ("darken", "Darken"),
     ("Mltp", "Multiply"),
+    ("multiply", "Multiply"),
     ("CBrn", "Color Burn"),
+    ("colorBurn", "Color Burn"),
     ("linearBurn", "Linear Burn"),
     ("darkerColor", "Darker Color"),
     ("Lghn", "Lighten"),
+    ("lighten", "Lighten"),
     ("Scrn", "Screen"),
+    ("screen", "Screen"),
     ("CDdg", "Color Dodge"),
+    ("colorDodge", "Color Dodge"),
     ("linearDodge", "Linear Dodge (Add)"),
     ("lighterColor", "Lighter Color"),
     ("Ovrl", "Overlay"),
+    ("overlay", "Overlay"),
     ("SftL", "Soft Light"),
+    ("softLight", "Soft Light"),
     ("HrdL", "Hard Light"),
+    ("hardLight", "Hard Light"),
     ("vividLight", "Vivid Light"),
     ("linearLight", "Linear Light"),
     ("pinLight", "Pin Light"),
     ("hardMix", "Hard Mix"),
     ("Dfrn", "Difference"),
+    ("difference", "Difference"),
     ("Xclu", "Exclusion"),
+    ("exclusion", "Exclusion"),
     ("blendSubtraction", "Subtract"),
     ("blendDivide", "Divide"),
     ("H", "Hue"),
+    ("hue", "Hue"),
     ("Strt", "Saturation"),
+    ("saturation", "Saturation"),
     ("Clr", "Color"),
+    ("color", "Color"),
     ("Lmns", "Luminosity"),
+    ("luminosity", "Luminosity"),
     ("PsTh", "Pass Through"),
+    ("passThrough", "Pass Through"),
 ];
 
 fn blend_label(ps: &str) -> Option<&'static str> {
@@ -377,13 +395,11 @@ fn channel_key(d: &Descriptor) -> Option<Option<&'static str>> {
     })
 }
 
+/// A Levels or Curves entry's channel: `Chnl.Cmps` for the composite, as Photoshop records it.
+/// Photoshop silently skips a Set whose composite is `Ordn.Trgt` (#8543).
 fn channel_ref(key: Option<&str>) -> D {
     let value = key.and_then(|k| lookup_back(CHANNELS, k));
-    D::Reference(vec![ReferenceItem::Enumerated {
-        class: class("Chnl"),
-        type_id: code(if value.is_some() { "Chnl" } else { "Ordn" }),
-        value: code(value.unwrap_or("Trgt")),
-    }])
+    D::Reference(vec![ReferenceItem::Enumerated { class: class("Chnl"), type_id: code("Chnl"), value: code(value.unwrap_or("Cmps")) }])
 }
 
 // ------------------------------------------------------------------ field tables
@@ -766,46 +782,32 @@ fn selective_from(d: &Descriptor) -> Option<Value> {
 }
 
 fn selective_to(p: &Value) -> Option<Descriptor> {
-    // Each range, as the command reads it (`adjust_cmds::selective_from_params`): the array form
-    // `"reds": [c, m, y, k]` first, then the scalar form, which names one range in `"colors"` and
-    // gives the channels it changes. Writing only the arrays dropped the scalar form's values, and
-    // the step exported as an adjustment that changes nothing (#7672).
-    let mut rows: Vec<Option<[f64; 4]>> = vec![None; SELECTIVE_RANGES.len()];
-    for (row, (_, name)) in rows.iter_mut().zip(SELECTIVE_RANGES) {
-        if let Some(a) = p.get(*name).and_then(Value::as_array) {
-            let v = |i: usize| a.get(i).and_then(Value::as_f64).unwrap_or(0.0);
-            *row = Some([v(0), v(1), v(2), v(3)]);
-        }
-    }
-    if let Some(named) = jstr(p, "colors") {
-        let i = SELECTIVE_RANGES.iter().position(|(_, name)| *name == named)?;
-        let row = rows.get_mut(i)?;
-        let mut v = row.unwrap_or([0.0; 4]);
-        for (slot, key) in v.iter_mut().zip(["cyan", "magenta", "yellow", "black"]) {
-            // A channel that is given but is not a number is an error in the command
-            // (`adjust_cmds::selective_from_params`), so a step carrying one cannot be written
-            // either: ignoring it would export a different adjustment than the one recorded.
-            // `null` counts as absent there, and so here.
-            match p.get(key) {
-                None | Some(Value::Null) => {}
-                Some(_) => *slot = jnum(p, key)?,
-            }
-        }
-        *row = Some(v);
-    }
+    // Match command execution: scalar components override only the selected range, `relative`
+    // takes precedence over `method`, and invalid values must not become a different edit.
+    let photocraft_doc::Adjustment::SelectiveColor { relative, adjustments } = crate::adjust_cmds::selective_from_params(p, None).ok()? else {
+        return None;
+    };
     let mut list = Vec::new();
-    for (row, (ps, _)) in rows.iter().zip(SELECTIVE_RANGES) {
-        if let Some(v) = row {
+    for (name, row) in crate::adjust_cmds::RANGES.into_iter().zip(adjustments) {
+        if p.get(name).is_some_and(|v| !v.is_null()) || jstr(p, "colors") == Some(name) {
+            let ps = lookup_back(SELECTIVE_RANGES, name)?;
+            let [cyan, magenta, yellow, black] = row.map(f64::from);
             list.push(D::Descriptor(
-                desc("ClrC").with("Clrs", enm("Clrs", ps)).with("Cyn ", pct(v[0])).with("Mgnt", pct(v[1])).with("Yllw", pct(v[2])).with("Blck", pct(v[3])),
+                desc("ClrC")
+                    .with("Clrs", enm("Clrs", ps))
+                    .with("Cyn ", pct(cyan))
+                    .with("Mgnt", pct(magenta))
+                    .with("Yllw", pct(yellow))
+                    .with("Blck", pct(black)),
             ));
         }
     }
-    let mut d = desc("SlcC").with("presetKind", enm("presetKindType", "presetKindCustom"));
-    if let Some(m) = jstr(p, "method") {
-        d = d.with("Mthd", enm("CrcM", if m == "absolute" { "Absl" } else { "Rltv" }));
-    }
-    Some(d.with("ClrC", D::List(list)))
+    Some(
+        desc("SlcC")
+            .with("presetKind", enm("presetKindType", "presetKindCustom"))
+            .with("Mthd", enm("CrcM", if relative { "Rltv" } else { "Absl" }))
+            .with("ClrC", D::List(list)),
+    )
 }
 
 /// Gradient Map: the gradient's colour stops at 0..4096 → `stops: [[0..1, "#rrggbb"], …]`.
@@ -892,14 +894,23 @@ const ADJUSTMENTS: &[Adjustment] = &[
     adj_fields!("Vbrn", "vibrance", &[F("vibrance", "vibrance", Kind::Long), F("Strt", "saturation", Kind::Long)]),
     adj_fields!("Exps", "exposure", &[F("Exps", "exposure", Kind::Dbl), F("Ofst", "offset", Kind::Dbl), F("gammaCorrection", "gamma", Kind::Dbl)]),
     Adjustment { class: "PhtF", suffix: "photoFilter", from: |d| fields_from(d, PHOTO_FILTER_FIELDS).map(Value::Object), to: photo_filter_to },
-    adj_fields!("BlnW", "blackWhite", BW),
+    adj_fields!("BanW", "blackWhite", BW),
     Adjustment { class: "ChnM", suffix: "channelMixer", from: channel_mixer_from, to: channel_mixer_to },
     Adjustment { class: "SlcC", suffix: "selectiveColor", from: selective_from, to: selective_to },
     Adjustment { class: "GdMp", suffix: "gradientMap", from: gradient_map_from, to: gradient_map_to },
 ];
 
+/// Adjustment classes PhotoCraft once exported, with the class Photoshop uses. Measured in
+/// Photoshop (#8481): a Make whose Black & White type is `BlnW` fails ("the command Make is not
+/// currently available"), `BanW` runs. Import keeps accepting them so actions saved before still
+/// load; export never writes them.
+const LEGACY_CLASSES: &[(&str, &str)] = &[("BlnW", "BanW")];
+
+/// The adjustment with Photoshop class `c`, or the one an old PhotoCraft class stands for.
 fn adjustment_by_class(c: &str) -> Option<&'static Adjustment> {
-    ADJUSTMENTS.iter().find(|a| a.class.trim_end() == c.trim_end())
+    let c = c.trim_end();
+    let c = LEGACY_CLASSES.iter().find(|(old, _)| *old == c).map_or(c, |(_, class)| class);
+    ADJUSTMENTS.iter().find(|a| a.class.trim_end() == c)
 }
 
 const PHOTO_FILTER_FIELDS: &[F] = &[F("Clr ", "color", Kind::Color), F("Dnst", "density", Kind::Long), F("PrsL", "preserveLuminosity", Kind::Bool)];
@@ -1661,7 +1672,37 @@ fn set_to(id: &str, p: &Value) -> Option<Descriptor> {
         "layer.setAdjustment" => {
             // The adjustment kind isn't in the params: Photoshop needs it, so only steps that
             // name one (`kind`) export.
-            let a = adjustment_by_suffix(jstr(p, "kind")?)?;
+            let kind = jstr(p, "kind")?;
+            // `layer.setAdjustment` changes only the settings it names. Color Balance and
+            // Hue/Saturation descriptors carry every setting, filling absent ones with defaults,
+            // so a partial edit would replay as one that also resets the rest (#8531).
+            // Present and of the shape the writer reads: anything else it would write as 0.
+            let number = |p: &Value, k: &str| p.get(k).and_then(Value::as_f64).is_some_and(f64::is_finite);
+            let numbers = |p: &Value, keys: &[&str]| keys.iter().all(|k| number(p, k));
+            let flag = |k: &str| p.get(k).is_some_and(Value::is_boolean);
+            let triplet =
+                |k: &str| p.get(k).and_then(Value::as_array).is_some_and(|a| a.len() == 3 && a.iter().all(|v| v.as_f64().is_some_and(f64::is_finite)));
+            let complete = match kind {
+                "colorBalance" => ["shadows", "midtones", "highlights"].iter().all(|k| triplet(k)) && flag("preserveLuminosity"),
+                // Every colour range written carries its own hue, saturation and lightness too.
+                "hueSaturation" => {
+                    flag("colorize")
+                        && numbers(p, &["hue", "saturation", "lightness"])
+                        && HUE_RANGES.iter().filter_map(|r| p.get(*r).filter(|v| !v.is_null())).all(|r| {
+                            // Bounds, when given, are the four whole numbers `hue_entry` writes (as integers);
+                            // otherwise it drops or rounds them.
+                            let bounds = r.get("range").filter(|v| !v.is_null()).is_none_or(|v| {
+                                v.as_array().is_some_and(|a| a.len() == 4 && a.iter().all(|b| b.as_f64().is_some_and(|b| b.is_finite() && b.fract() == 0.0)))
+                            });
+                            r.is_object() && numbers(r, &["hue", "saturation", "lightness"]) && bounds
+                        })
+                }
+                _ => true,
+            };
+            if !complete {
+                return None;
+            }
+            let a = adjustment_by_suffix(kind)?;
             desc("null").with("null", target_ref("AdjL")).with("T   ", D::Descriptor((a.to)(p)?))
         }
         _ => return None,
@@ -1840,6 +1881,63 @@ fn open_to(_: &str, p: &Value) -> Option<Descriptor> {
     Some(desc("null").with("null", path_value(jstr(p, "path")?)))
 }
 
+/// Save As format classes (`As`) and the extensions PhotoCraft saves them under. The first
+/// extension of a class is the one exported, and the first class of an extension is the one
+/// written back. `WebPFormat` is Photoshop's built-in WebP (checked against Photoshop 2026); the
+/// Google classes come from the older WebPShop plug-in and are only read.
+const SAVE_FORMATS: &[(&str, &[&str])] = &[
+    ("Pht3", &["psd"]),
+    ("PNGF", &["png"]),
+    ("JPEG", &["jpg", "jpeg"]),
+    ("TIFF", &["tif", "tiff"]),
+    ("BMPF", &["bmp"]),
+    ("WebPFormat", &["webp"]),
+    ("Google WebPShop", &["webp"]),
+    ("Google WebP", &["webp"]),
+];
+
+fn path_extension(path: &str) -> Option<String> {
+    let name = path.rsplit(['/', '\\']).next()?;
+    let (stem, ext) = name.rsplit_once('.')?;
+    (!stem.is_empty() && !ext.is_empty()).then(|| ext.to_ascii_lowercase())
+}
+
+/// `save`: a plain Save, or a Save As (`As` format, `In` destination, `Cpy` As a Copy).
+/// Only a destination that is a file of the recorded format imports: a folder (#5430), a missing
+/// or unknown format or a mismatched extension stays a kept Photoshop step, so playback stops
+/// before writing rather than saving over the played file (#7102).
+fn save_from(d: &Descriptor) -> Mapped {
+    let unsupported = Mapped::Unsupported { harmless: false };
+    if d.get("As  ").is_none() && d.get("In  ").is_none() {
+        return step("file.save", json!({}));
+    }
+    // A Save As needs a format descriptor to check the destination against: without one (or
+    // with a format that isn't a descriptor) the step is kept.
+    let Some(format) = get_obj(d, "As  ") else { return unsupported };
+    let Some(path) = d.get("In  ").and_then(path_text) else { return unsupported };
+    if get_bool(d, "DIDr") == Some(true) {
+        return unsupported;
+    }
+    let Some(ext) = path_extension(&path) else { return unsupported };
+    let class = trimmed(&format.class_id);
+    let Some((_, exts)) = SAVE_FORMATS.iter().find(|(c, _)| *c == class) else { return unsupported };
+    if !exts.contains(&ext.as_str()) {
+        return unsupported;
+    }
+    step(if get_bool(d, "Cpy ") == Some(true) { "file.saveACopy" } else { "file.saveAs" }, json!({"path": path}))
+}
+
+fn save_to(id: &str, p: &Value) -> Option<Descriptor> {
+    if id == "file.save" {
+        return Some(desc("null"));
+    }
+    let path = jstr(p, "path")?;
+    let ext = path_extension(path)?;
+    let (class, _) = SAVE_FORMATS.iter().find(|(_, exts)| exts.contains(&ext.as_str()))?;
+    let d = desc("null").with("As  ", D::Descriptor(desc(class))).with("In  ", path_value(path));
+    Some(if id == "file.saveACopy" { d.with("Cpy ", D::Boolean(true)) } else { d })
+}
+
 /// Photoshop's four-character condition codes that differ from the string ids.
 const CONDITION_CODES: &[(&str, &str)] = &[("Lyrs", "hasLayers")];
 
@@ -1851,7 +1949,8 @@ fn conditional_from(d: &Descriptor) -> Mapped {
         return Mapped::Unsupported { harmless: false };
     }
     let branch = |key: &str| match get_ref(d, key).map(target) {
-        Some(Target::Name(n)) => Some(n),
+        // Clipped like the stored action names, so the load-time rename map finds it.
+        Some(Target::Name(n)) => Some(clip_name(&n)),
         _ => None,
     };
     step("actions.conditional", json!({"if": condition, "then": branch("then"), "else": branch("else")}))
@@ -1921,7 +2020,15 @@ fn transform_from(d: &Descriptor) -> Mapped {
     let whole_pixels = ["dx", "dy"].iter().all(|k| p.get(*k).and_then(Value::as_f64).is_none_or(|v| v.fract() == 0.0));
     let geometry_only = p.keys().all(|k| k == "dx" || k == "dy") && whole_pixels;
     // The resampling applies to a selection as much as to a layer (#7515).
-    let interpolation = get_enum(d, "Intr").and_then(|i| lookup(INTERPOLATION, &i)).filter(|i| matches!(*i, "bicubic" | "bilinear" | "nearest"));
+    // Photoshop's bicubic variants are kept (the transforms render them as Bicubic, and they export
+    // back unchanged); Automatic and Preserve Details become the nearest bicubic choice. Dropping
+    // them fell back to the command's default, bilinear for a selection (#8697).
+    let interpolation = get_enum(d, "Intr").and_then(|i| lookup(INTERPOLATION, &i)).and_then(|i| match i {
+        "bicubic" | "bilinear" | "nearest" | "bicubicSharper" | "bicubicSmoother" | "bicubicAutomatic" => Some(i),
+        "automatic" => Some("bicubicAutomatic"),
+        "preserveDetails" => Some("bicubic"),
+        _ => None,
+    });
     match (ref_class(r).as_deref(), target(r)) {
         (Some("Chnl"), Target::Property(prop)) if prop == "fsel" => {
             if let Some(i) = interpolation {
@@ -2017,6 +2124,10 @@ fn apply_image_from(d: &Descriptor) -> Mapped {
                 let Some(channel) = lookup(SOURCE_CHANNELS, &v).or_else(|| lookup(CHANNELS, &v)) else { return unsupported };
                 source.insert("channel".into(), channel.into());
             }
+            // A named (alpha) channel.
+            ReferenceItem::Name { class, name } if class.class_id.is("Chnl") => {
+                source.insert("channel".into(), name.to_string_lossy().into());
+            }
             ReferenceItem::Name { class, name } if class.class_id.is("Lyr ") => {
                 source.insert("layer".into(), name.to_string_lossy().into());
             }
@@ -2047,6 +2158,26 @@ fn apply_image_from(d: &Descriptor) -> Mapped {
     step("image.applyImage", p)
 }
 
+/// Apply Image's source channel as a `Chnl` reference item. The dialog sends Channels-panel names
+/// ("RGB", "Red", "Alpha 1"), which the command reads case-insensitively: the composite names map to
+/// the composite, colour names to their enumeration, and any other name to a named (alpha) channel,
+/// as Photoshop records it.
+fn apply_image_channel(channel: &str) -> Option<ReferenceItem> {
+    let l = channel.to_ascii_lowercase();
+    let key = match l.as_str() {
+        "rgb" | "cmyk" | "lab" | "merged" => "composite",
+        "layermask" => "mask",
+        // Sources the command knows by keyword but Photoshop has no channel for.
+        "quickmask" | "quick mask" | "vectormask" | "vector mask" => return None,
+        other => other,
+    };
+    Some(match lookup_back(SOURCE_CHANNELS, key).or_else(|| lookup_back(CHANNELS, key)) {
+        Some(chan) => ReferenceItem::Enumerated { class: class("Chnl"), type_id: code("Chnl"), value: code(chan) },
+        None if !channel.trim().is_empty() => ReferenceItem::Name { class: class("Chnl"), name: UnicodeString::new_nul(channel) },
+        None => return None,
+    })
+}
+
 fn apply_image_to(_: &str, p: &Value) -> Option<Descriptor> {
     // The optional blending mask has no descriptor mapping: refuse it rather than drop it,
     // which would widen the edit to the whole layer.
@@ -2057,10 +2188,19 @@ fn apply_image_to(_: &str, p: &Value) -> Option<Descriptor> {
     if mask_channel.is_some_and(|c| !(c.is_null() || c == "none" || c == "")) {
         return None;
     }
-    let source = p.get("source").cloned().unwrap_or(json!({}));
-    let channel = jstr(&source, "channel").unwrap_or("composite");
-    let chan = lookup_back(SOURCE_CHANNELS, channel).or_else(|| lookup_back(CHANNELS, channel))?;
-    let mut items = vec![ReferenceItem::Enumerated { class: class("Chnl"), type_id: code("Chnl"), value: code(chan) }];
+    // The Apply Image dialog sends flat `sourceLayer`/`sourceChannel`/`sourceInvert` fields; read
+    // them as the command does, or the export would quietly reset them to the merged composite.
+    let source = crate::channel_cmds::source_spec(p, "source", "source").unwrap_or(json!({}));
+    // A source from another open document has no event form here: skip the step, don't rewrite it.
+    if source.get("document").is_some_and(|d| !d.is_null()) {
+        return None;
+    }
+    // A layer id or channel index has no name to record: refuse it rather than write the composite.
+    let not_name = |k: &str| source.get(k).is_some_and(|v| !(v.is_null() || v.is_string()));
+    if !source.is_object() || not_name("layer") || not_name("channel") {
+        return None;
+    }
+    let mut items = vec![apply_image_channel(jstr(&source, "channel").unwrap_or("composite"))?];
     match jstr(&source, "layer") {
         Some("merged") | None => items.push(ReferenceItem::Enumerated { class: class("Lyr "), type_id: code("Ordn"), value: code("Mrgd") }),
         Some(name) => items.push(ReferenceItem::Name { class: class("Lyr "), name: UnicodeString::new_nul(name) }),
@@ -2329,7 +2469,7 @@ fn apply_comp_to(_: &str, p: &Value) -> Option<Descriptor> {
 
 fn play_from(d: &Descriptor) -> Mapped {
     match get_ref(d, "null").map(target) {
-        Some(Target::Name(n)) => step("actions.play", json!({"action": n})),
+        Some(Target::Name(n)) => step("actions.play", json!({"action": clip_name(&n)})),
         _ => Mapped::Unsupported { harmless: false },
     }
 }
@@ -3037,13 +3177,14 @@ macro_rules! adjustment_event {
 
 const RIPPLE_SIZE: &[(&str, &str)] = &[("Sml", "small"), ("Mdm", "medium"), ("Lrg", "large")];
 
-/// Whether a Select and Mask step carries Refine Edge Brush strokes, which no descriptor holds.
+/// Whether a Select and Mask step carries Refine Edge Brush strokes or the workspace's tool
+/// edits (Quick Selection, Brush, Lasso…), which no descriptor holds.
 fn has_refine_strokes(p: &Value) -> bool {
-    p.get("refineStrokes").is_some_and(|v| !v.is_null() && v.as_array().is_none_or(|a| !a.is_empty()))
+    p.get("refineStrokes").is_some_and(|v| !v.is_null() && v.as_array().is_none_or(|a| !a.is_empty())) || crate::select_mask_edits::has_edits(p)
 }
 
-/// Select and Mask to Photoshop. The descriptor has no field for the Refine Edge Brush, so a
-/// step with `refineStrokes` can't be exported faithfully. One with `sampleAllLayers` is not
+/// Select and Mask to Photoshop. The descriptor has no field for the Refine Edge Brush or the
+/// workspace's tools, so a step with `refineStrokes` or `edits` can't be exported faithfully. One with `sampleAllLayers` is not
 /// exported here either: it exports as `smartBrushWorkspace`.
 fn refine_edge_to(_: &str, p: &Value) -> Option<Descriptor> {
     if !pixel_target(p) || p.get("sampleAllLayers").is_some() || has_refine_strokes(p) {
@@ -3356,7 +3497,7 @@ const EVENTS: &[Event] = &[
     adjustment_event!("Exps", "Exps", "exposure", "Exposure"),
     // Photoshop runs Photo Filter by name only: `PhtF` is the class, not an event (#8301).
     adjustment_event!("", "PhtF", "photoFilter", "Photo Filter"),
-    adjustment_event!("", "BlnW", "blackAndWhite", "Black & White", "image.adjustments.blackWhite"),
+    adjustment_event!("", "BanW", "blackAndWhite", "Black & White", "image.adjustments.blackWhite"),
     adjustment_event!("ChnM", "ChnM", "channelMixer", "Channel Mixer"),
     adjustment_event!("GdMp", "GdMp", "gradientMapEvent", "Gradient Map", "image.adjustments.gradientMap"),
     adjustment_event!("SlcC", "SlcC", "selectiveColor", "Selective Color"),
@@ -3657,7 +3798,7 @@ const EVENTS: &[Event] = &[
     Event { code: "Plc ", name: "placeEvent", label: "Place", ids: &["file.placeEmbedded", "file.placeLinked"], from: place_from, to: place_to },
     Event { code: "Opn ", name: "open", label: "Open", ids: &["file.openAs"], from: open_from, to: open_to },
     Event { code: "", name: "conditional", label: "If", ids: &["actions.conditional"], from: conditional_from, to: conditional_to },
-    ev!("save", "save", "Save", "file.save", &[]),
+    Event { code: "save", name: "save", label: "Save", ids: &["file.save", "file.saveAs", "file.saveACopy"], from: save_from, to: save_to },
     ev!("Rvrt", "revert", "Revert", "file.revert", &[]),
     Event { code: "Ply ", name: "play", label: "Play", ids: &["actions.play"], from: play_from, to: play_to },
     Event { code: "", name: "applyComp", label: "Apply Layer Comp", ids: &["layerComp.apply"], from: apply_comp_from, to: apply_comp_to },
@@ -3711,7 +3852,11 @@ pub struct Imported {
 
 fn photoshop_step(item: &AtnItem) -> (String, Value) {
     let descriptor = item.descriptor.as_ref().map(|d| photocraft_paint::tile::b64_encode(&d.to_bytes()));
-    (PHOTOSHOP_STEP.into(), json!({"event": item.event.id(), "name": item.label(), "descriptor": descriptor}))
+    let event_kind = match &item.event {
+        AtnEvent::Code(_) => "code",
+        AtnEvent::Name(_) => "name",
+    };
+    (PHOTOSHOP_STEP.into(), json!({"event": item.event.id(), "eventKind": event_kind, "name": item.label(), "descriptor": descriptor}))
 }
 
 /// Integral floats become integers (`2.0` → `2`), as the commands' own docs and recordings
@@ -3733,10 +3878,18 @@ fn normalise(v: &mut Value) {
     }
 }
 
+/// Longest action or set name kept (Photoshop's own limit is 255). A file's names are lengths it
+/// chooses, and each is copied into every action and every unsupported-step diagnostic.
+const MAX_NAME_CHARS: usize = 1024;
+
+fn clip_name(s: &str) -> String {
+    s.chars().take(MAX_NAME_CHARS).collect()
+}
+
 fn convert_action(a: &AtnAction, set: &str, unsupported: &mut Vec<Unsupported>) -> Action {
-    let name = a.name.to_string_lossy();
+    let name = clip_name(&a.name.to_string_lossy());
     let mut action = Action::new(name.clone(), Vec::new());
-    action.set = Some(set.to_string());
+    action.set = Some(clip_name(set));
     for (i, item) in a.items.iter().enumerate() {
         let mapped = match (event_for(&item.event), &item.descriptor) {
             (Some(e), Some(d)) => (e.from)(d),
@@ -3770,7 +3923,7 @@ fn convert_action(a: &AtnAction, set: &str, unsupported: &mut Vec<Unsupported>) 
 pub fn import(bytes: &[u8]) -> std::result::Result<Imported, String> {
     let file = atn::parse(bytes).map_err(|e| e.to_string())?;
     let set = file.name.to_string_lossy();
-    let set = if set.trim().is_empty() { DEFAULT_SET.to_string() } else { set };
+    let set = if set.trim().is_empty() { DEFAULT_SET.to_string() } else { clip_name(&set) };
     let mut out = Imported { set: set.clone(), warnings: file.warnings.clone(), ..Default::default() };
     for a in &file.actions {
         let action = convert_action(a, &set, &mut out.unsupported);
@@ -3795,9 +3948,16 @@ pub struct Skipped {
 fn export_item(id: &str, params: &Value, set: &str) -> Option<AtnItem> {
     if id == PHOTOSHOP_STEP {
         let event = jstr(params, "event")?;
-        let event = match event.as_bytes() {
-            [a, b, c, d] => AtnEvent::Code([*a, *b, *c, *d]),
-            _ => AtnEvent::name(event),
+        let event = match params.get("eventKind") {
+            Some(Value::String(kind)) if kind == "code" => AtnEvent::Code(event.as_bytes().try_into().ok()?),
+            Some(Value::String(kind)) if kind == "name" => AtnEvent::name(event),
+            Some(_) => return None,
+            // Older PhotoCraft action data did not retain the event kind. Keep its previous
+            // best-effort export behavior for compatibility.
+            None => match event.as_bytes() {
+                [a, b, c, d] => AtnEvent::Code([*a, *b, *c, *d]),
+                _ => AtnEvent::name(event),
+            },
         };
         let descriptor = match jstr(params, "descriptor") {
             Some(b64) => Some(Descriptor::from_bytes(&photocraft_paint::tile::b64_decode(b64)?).ok()?),

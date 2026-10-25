@@ -1,5 +1,7 @@
 //! Pointer, keyboard, colour precision and history regressions for shape appearance controls.
 use super::*;
+use crate::shape_options::set_tool_paint;
+use crate::shape_paint_ui::color_of;
 use egui::{Event, Key, Modifiers, PointerButton};
 use egui_kittest::{Harness, kittest::Queryable};
 use photocraft_doc::ShapeLayer;
@@ -488,4 +490,26 @@ fn options_bar_fill_swatch_recolours_the_shape_just_drawn() {
     assert_eq!(h.state().session.active().unwrap().history.past_len(), history + 1);
     h.state_mut().run("edit.undo", json!({})).unwrap();
     assert_eq!(shape(h.state()).fill, original.fill);
+}
+
+/// An arrow-key step at 0 px on a strokeless shape must not add an invisible stroke.
+#[test]
+fn arrow_down_at_zero_width_keeps_a_strokeless_shape_strokeless() {
+    for properties in [true, false] {
+        let mut app = app("rgb", 8);
+        app.run("shape.create", json!({"rect": [20, 20, 80, 60], "fill": "#336699", "stroke": null})).unwrap();
+        assert!(shape(&app).stroke.is_none());
+        let history = app.session.active().unwrap().history.past_len();
+        let mut h = harness(app, properties);
+        h.get_all_by_role(egui::accesskit::Role::SpinButton).next().expect("the stroke width").click();
+        h.run();
+        h.key_press(Key::ArrowDown);
+        h.run_steps(3);
+        assert!(shape(h.state()).stroke.is_none(), "Properties={properties}: Down at 0 px added a stroke");
+        assert_eq!(h.state().session.active().unwrap().history.past_len(), history, "Properties={properties}: no history step");
+        // The field has the keys: Up still enables a 1 px stroke.
+        h.key_press(Key::ArrowUp);
+        h.run_steps(3);
+        assert_eq!(shape(h.state()).stroke.as_ref().map(|s| s.width), Some(1.0), "Properties={properties}");
+    }
 }

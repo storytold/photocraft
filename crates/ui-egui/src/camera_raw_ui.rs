@@ -26,6 +26,10 @@ use crate::theme::Tokens;
 use crate::widgets;
 
 const PROXY_SIDE: usize = 900;
+/// Smallest run of proxy pixels one rayon task takes in the per-pixel passes: below it the
+/// split costs more than the work.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) const PARALLEL_MIN_PIXELS: usize = 16 * 1024;
 const PANEL_W: f32 = 330.0;
 const BANDS: [&str; 8] = ["Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "Purple", "Magenta"];
 
@@ -292,11 +296,19 @@ impl ProxyJob {
         }
         photocraft_algo::camera_raw::develop(&mut px, pw, ph, &p, self.float);
         if let Some(mask) = &self.selection {
-            for ((out, original), coverage) in px.iter_mut().zip(self.proxy.iter()).zip(mask.iter()) {
+            let blend = |(out, (original, coverage)): (&mut [f32; 4], (&[f32; 4], &f32))| {
                 for (out, original) in out.iter_mut().zip(original) {
                     *out = *original + (*out - *original) * coverage;
                 }
+            };
+            // Each pixel is independent, so bands of the proxy blend in parallel (#211, P36).
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                use rayon::prelude::*;
+                px.par_iter_mut().zip(self.proxy.par_iter().zip(mask.par_iter())).with_min_len(PARALLEL_MIN_PIXELS).for_each(blend);
             }
+            #[cfg(target_arch = "wasm32")]
+            px.iter_mut().zip(self.proxy.iter().zip(mask.iter())).for_each(blend);
         }
         let histogram_start = crate::gpu_canvas::now_ms();
         let histogram = RgbHistogram::from_rgba(&px);
@@ -1107,7 +1119,7 @@ fn demosaic_row(ui: &mut egui::Ui, m: &mut photocraft_io::raw::Demosaic) {
             (Demosaic::Mhc, "Malvar–He–Cutler", "Gradient-corrected interpolation: sharp and fast, with some colour fringing on fine detail."),
             (Demosaic::Bilinear, "Bilinear", "The fastest and the softest, with colour fringing on fine detail."),
         ];
-        widgets::dropdown_with_tooltips(ui, "camera-raw-demosaic", m, &options, 180.0);
+        widgets::dropdown_with_tooltips(ui, "camera-raw-demosaic", tl!("Demosaic"), m, &options, 180.0);
     });
     ui.add_space(4.0);
 }
@@ -1214,7 +1226,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // Camera Raw is modal, as in Photoshop: the main window is dimmed and takes no input while it
     // is open (in a separate window, or drawn over it where there are no extra windows).
     let main = ctx.content_rect();
-    egui::Area::new(egui::Id::new("camera-raw-modal")).order(egui::Order::Foreground).fixed_pos(main.min).show(ctx, |ui| {
+    egui::Area::new(egui::Id::unique("camera-raw-modal")).order(egui::Order::Foreground).fixed_pos(main.min).show(ctx, |ui| {
         let (r, _) = ui.allocate_exact_size(main.size(), Sense::click_and_drag());
         ui.painter().rect_filled(r, 0.0, Tokens::get(ui.ctx()).scrim);
     });
@@ -1250,7 +1262,7 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
     let screen = ctx.content_rect();
     let current_display = app.session.active().and_then(|st| app.session.color.canvas_display(&st.doc).ok());
     let mut action: Option<&str> = None;
-    egui::Area::new(egui::Id::new("camera-raw-dialog")).order(egui::Order::Foreground).fixed_pos(screen.min).show(ctx, |ui| {
+    egui::Area::new(egui::Id::unique("camera-raw-dialog")).order(egui::Order::Foreground).fixed_pos(screen.min).show(ctx, |ui| {
         let Some(d) = app.camera_raw.as_mut() else { return };
         history_keys(d, ctx);
         let pointer = ctx.input(|i| i.pointer.primary_down());
@@ -1365,6 +1377,7 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
                 if widgets::dropdown(
                     ui,
                     "cr-vig-style",
+                    tl!("Vignetting"),
                     &mut style,
                     &[
                         ("highlightPriority".to_string(), tl!("Highlight Priority")),
@@ -1398,7 +1411,7 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
                     for (i, source) in ["Hue", "Saturation", "Luminance"].iter().enumerate() {
                         let name = crate::i18n::tr_ctx(crate::i18n::current(), "cameraRaw", source);
                         let response = widgets::pill_tab(ui, name, d.mixer_tab == i);
-                        response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, ui.is_enabled(), d.mixer_tab == i, name));
+                        response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), d.mixer_tab == i, name));
                         if response.clicked() {
                             d.mixer_tab = i;
                         }

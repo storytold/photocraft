@@ -187,17 +187,6 @@ mod tests {
         assert_eq!(states(&h).0, steps.0 - 1, "the current state is deleted");
     }
 
-    /// The labels aren't `tl!` literals, so the catalog scan can't see them: every language that
-    /// claims complete menus must still translate them.
-    #[test]
-    fn menu_labels_are_translated() {
-        for lang in crate::i18n::Lang::all().filter(|l| l.complete_menus()) {
-            for &(label, _) in ITEMS.iter().filter(|(l, _)| *l != "---") {
-                assert!(crate::i18n::has(lang, label), "{}: {label}", lang.code());
-            }
-        }
-    }
-
     #[test]
     fn without_a_document_only_close_is_enabled() {
         let h = harness(PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default()));

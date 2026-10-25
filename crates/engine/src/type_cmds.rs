@@ -540,14 +540,37 @@ pub fn style_paragraphs(t: &mut TextLayer, a: usize, b: usize, f: &dyn Fn(&mut P
 /// Replaces bytes `a..b` with `new`, keeping styles: replacing a selection keeps the style of its
 /// first character (as Photoshop does, so retyping a smaller second line stays small); inserting
 /// at a caret takes the style of the character before it (or after it at the start).
+/// The part of `old` that differs from `new`: its byte range in `old` and the text that replaces
+/// it, after the longest common prefix and then the longest common suffix that doesn't overlap it
+/// (both on character boundaries).
+fn changed_span<'a>(old: &str, new: &'a str) -> (usize, usize, &'a str) {
+    let prefix = old.char_indices().zip(new.chars()).find(|((_, a), b)| a != b).map_or_else(|| old.len().min(new.len()), |((i, _), _)| i);
+    let (old_rest, new_rest) = (&old[prefix..], &new[prefix..]);
+    let suffix: usize = old_rest.chars().rev().zip(new_rest.chars().rev()).take_while(|(a, b)| a == b).map(|(a, _)| a.len_utf8()).sum();
+    (prefix, old.len() - suffix, &new[prefix..new.len() - suffix])
+}
+
 pub fn replace_text(t: &mut TextLayer, a: usize, b: usize, new: &str) {
     fn adjust<S: Clone + PartialEq>(runs: Vec<(usize, S)>, a: usize, b: usize, ins: usize, trailing_paragraph: bool) -> Vec<(usize, S)> {
         let mut out: Vec<(usize, S)> = Vec::new();
         let mut at = 0;
+        // Paragraph runs only: the non-empty paragraph that starts exactly at an insertion point.
+        let starts_here = || {
+            let mut s = 0;
+            runs.iter().position(|r| {
+                let here = s == a && r.0 > 0;
+                s += r.0;
+                here
+            })
+        };
         let host = if trailing_paragraph && a == b && runs.last().is_some_and(|r| r.0 == 0) && a == runs.iter().map(|r| r.0).sum::<usize>() {
             // Inserted text belongs to a styled final empty paragraph, not to
             // the preceding paragraph whose break ends at this byte offset.
             runs.len() - 1
+        } else if let Some(next) = (trailing_paragraph && a == b && a > 0).then(starts_here).flatten() {
+            // Text inserted at the start of a paragraph belongs to that paragraph, not to the one
+            // whose break ends there (#8489).
+            next
         } else {
             runs.iter()
                 .scan(0, |acc, r| {
@@ -965,8 +988,11 @@ pub fn specs() -> Vec<CommandSpec> {
                         });
                     }
                     if let Some(v) = p.get("text").and_then(Value::as_str) {
-                        let n = t.text.len();
-                        replace_text(t, 0, n, v);
+                        // Replace only what changed, so the unchanged text keeps its character and
+                        // paragraph styles (#8489) instead of the whole text taking the first one.
+                        let v = norm_text(v);
+                        let (a, b, new) = changed_span(&t.text, &v);
+                        replace_text(t, a, b, new);
                     }
                     if let Some(r) = p.get("replace") {
                         let a = byte_at(&t.text, r.get("start").and_then(Value::as_u64).unwrap_or(0) as usize);
@@ -1674,6 +1700,66 @@ mod tests {
             at += r.len;
         }
         out
+    }
+
+    /// #8489: `type.edit {"text"}` changes only what differs, so the rest keeps its styles: an
+    /// added character takes the style beside it, and a change inside one run stays in it.
+    #[test]
+    fn edit_text_keeps_the_styles_of_unchanged_text() {
+        // (characters, colour) per run.
+        fn runs(s: &Session, id: u64) -> Vec<(usize, [u8; 4])> {
+            let t = text_layer(s, id);
+            let mut at = 0;
+            t.char_runs()
+                .into_iter()
+                .map(|r| {
+                    let n = t.text[at..at + r.len].chars().count();
+                    at += r.len;
+                    (n, r.style.color.to_rgba8())
+                })
+                .collect()
+        }
+        let (dark, purple) = ([0x1b, 0x1f, 0x4b, 255], [0x5a, 0x3d, 0xf0, 255]);
+        let mut s = session();
+        let id = s.execute("type.create", json!({"x": 20, "y": 50, "text": "Craft Suite in Workshop", "size": 40, "color": "#1b1f4b"})).unwrap()["layer"]
+            .as_u64()
+            .unwrap();
+        s.execute("type.setStyle", json!({"layer": id, "range": [15, 23], "color": "#5a3df0"})).unwrap();
+        assert_eq!(runs(&s, id), [(15, dark), (8, purple)]);
+        s.execute("type.edit", json!({"layer": id, "text": "Craft Suite in Workshop!"})).unwrap();
+        assert_eq!(runs(&s, id), [(15, dark), (9, purple)], "the added character joins the last run");
+        s.execute("type.edit", json!({"layer": id, "text": "Craft Suite in Worksh\u{f6}p!"})).unwrap();
+        assert_eq!(runs(&s, id), [(15, dark), (9, purple)], "a change inside a run stays in it");
+        s.execute("type.edit", json!({"layer": id, "text": "Kraft Suite in Worksh\u{f6}p!"})).unwrap();
+        assert_eq!(runs(&s, id), [(15, dark), (9, purple)]);
+        // Replacing everything leaves one style, as before.
+        s.execute("type.edit", json!({"layer": id, "text": "Hello"})).unwrap();
+        assert_eq!(text_layer(&s, id).text, "Hello");
+        assert_eq!(runs(&s, id).iter().map(|r| r.0).sum::<usize>(), 5);
+        s.execute("type.edit", json!({"layer": id, "text": ""})).unwrap();
+        assert_eq!(text_layer(&s, id).text, "");
+
+        // Text inserted at the start of a paragraph joins that paragraph, which keeps its style.
+        let id = s
+            .execute(
+                "type.create",
+                json!({"x": 20, "y": 50, "text": "a
+b", "size": 20}),
+            )
+            .unwrap()["layer"]
+            .as_u64()
+            .unwrap();
+        s.execute("type.setStyle", json!({"layer": id, "range": [2, 3], "align": "right"})).unwrap();
+        s.execute(
+            "type.edit",
+            json!({"layer": id, "text": "a
+Xb"}),
+        )
+        .unwrap();
+        let paragraphs: Vec<(usize, photocraft_doc::text::TextAlign)> =
+            text_layer(&s, id).paragraph_runs().into_iter().map(|r| (r.len, r.style.align)).collect();
+        assert_eq!(paragraphs.first().map(|p| p.0), Some(2), "{paragraphs:?}");
+        assert_eq!(paragraphs.get(1).copied(), Some((2, photocraft_doc::text::TextAlign::Right)), "{paragraphs:?}");
     }
 
     /// #206: `type.edit {"kerning"}` over a range takes a number (manual, 1/1000 em) or a mode.

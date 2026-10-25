@@ -355,7 +355,7 @@ pub(crate) fn adjust_as_filter(kind: &str, p: &Value, surf: &Surface) -> Option<
     } else {
         let mode = surf.format().mode;
         let adj = crate::adjust_params::from_params(kind, p, None, mode).ok()?;
-        crate::pixels::adjust_surface(&mut out, &adj, None, mode);
+        crate::pixels::adjust_surface(&mut out, &adj, None, mode).ok()?;
     }
     out.prune();
     Some(out)

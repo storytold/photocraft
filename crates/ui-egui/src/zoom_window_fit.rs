@@ -99,7 +99,7 @@ pub fn wrapped_center(view: &View, layout: &Layout) -> Option<[f32; 2]> {
 
 /// Where the zoom a window was last wrapped for (or first seen at) is kept between frames.
 fn last_zoom_id(window: u64) -> Id {
-    Id::new(("pc-zoom-resizes-windows", window))
+    Id::unique(("pc-zoom-resizes-windows", window))
 }
 
 /// The inner size floating window `window` should take this frame, if any: when `on` (the

@@ -259,15 +259,8 @@ pub(crate) fn read_plane(t: &Tiff, ifd: &Ifd, limits: &Limits, layout: JpegLayou
     // pixels. Each tile is charged individually below, but file-controlled padding and repeated
     // source ranges can make the *cumulative* retained samples far exceed both the input and the
     // useful image. Reject that up front: the sum of padded tile samples (two bytes each) must
-    // fit the allocation budget.
-    let mut total_tile_samples: u64 = 0;
-    for s in &segments {
-        let tile = (s.w as u64).saturating_mul(s.h as u64).saturating_mul(samples as u64);
-        total_tile_samples = total_tile_samples.saturating_add(tile);
-    }
-    if total_tile_samples.saturating_mul(2) > limits.max_alloc {
-        return Err(RawError::LimitExceeded(format!("{} bytes of retained raw tiles exceed {}", total_tile_samples.saturating_mul(2), limits.max_alloc)));
-    }
+    // fit the allocation budget (checked per segment, #4959).
+    retained_segment_bytes(&segments, samples, limits)?;
     let le = t.le;
     let tiled = t.tag_uint(ifd, tag::TILE_WIDTH).is_some();
     let decoded: Vec<Result<Vec<u16>>> = par::map(segments.len(), |i| {
@@ -306,31 +299,8 @@ pub(crate) fn read_plane(t: &Tiff, ifd: &Ifd, limits: &Limits, layout: JpegLayou
                 Ok(v)
             }
             34892 => lossy_jpeg(src, s, rows, samples, bits, tiled, limits),
-            // Compression 7 (lossless JPEG): the frame the entropy stream declares is capped
-            // by the budget, not only by the segment, and the `Quads` scatter buffer below
-            // comes out of the same budget. `max_alloc` counts bytes, a sample is two.
-            _ => {
-                let need = s.w * rows * samples;
-                let scatter = if layout == JpegLayout::Quads && samples == 1 { s.w.saturating_mul(s.h).saturating_mul(2) as u64 } else { 0 };
-                let budget = usize::try_from(limits.max_alloc.saturating_sub(scatter) / 2).unwrap_or(usize::MAX);
-                let geom = s.w.saturating_mul(s.h).saturating_mul(samples).saturating_mul(4);
-                let (f, v) = ljpeg::decode(src, geom.min(budget))?;
-                if v.len() < need {
-                    return Err(RawError::malformed("lossless JPEG tile is smaller than its tile"));
-                }
-                if layout == JpegLayout::Quads && samples == 1 && f.components == 4 && f.width * 2 == s.w && f.height * 2 == s.h {
-                    let mut tile = vec![0u16; s.w * s.h];
-                    for (i, q) in v.as_chunks::<4>().0.iter().enumerate() {
-                        let at = 2 * (i / f.width) * s.w + 2 * (i % f.width);
-                        tile[at] = q[0];
-                        tile[at + 1] = q[1];
-                        tile[at + s.w] = q[2];
-                        tile[at + s.w + 1] = q[3];
-                    }
-                    return Ok(tile);
-                }
-                Ok(v)
-            }
+            // Compression 7 (lossless JPEG).
+            _ => lossless_jpeg(src, s, rows, samples, layout, limits),
         }
     });
     let mut data = vec![0u16; width * height * samples];
@@ -345,6 +315,29 @@ pub(crate) fn read_plane(t: &Tiff, ifd: &Ifd, limits: &Limits, layout: JpegLayou
         }
     }
     Ok(Plane { width, height, samples, bits, data })
+}
+
+/// Bytes of decoded samples the segments hold at once.
+///
+/// Each segment is charged against `limits` on its own just before it decodes, but every decoded
+/// tile is retained until the scatter at the end of [`read_plane`], so what is alive at once is
+/// their sum (plus the output plane the scatter fills), not the largest of them. A segment's geometry is declared independently of the image, so a
+/// file can carry many segments that are each admissible and together are not (#4959). For a
+/// well-formed file the segments tile the image, so their sum is about its own size, which
+/// `limits.check` has already bounded.
+fn retained_segment_bytes(segments: &[Segment], samples: usize, limits: &Limits) -> Result<u64> {
+    let mut total: u64 = 0;
+    for s in segments {
+        let bytes = (s.w as u64)
+            .checked_mul(s.h as u64)
+            .and_then(|px| px.checked_mul(samples as u64 * 2))
+            .ok_or_else(|| RawError::LimitExceeded("a raw segment is too large to decode".into()))?;
+        total = total.saturating_add(bytes);
+        if total > limits.max_alloc {
+            return Err(RawError::LimitExceeded(format!("{total} bytes of decoded segments exceed {}", limits.max_alloc)));
+        }
+    }
+    Ok(total)
 }
 
 pub(crate) fn segments(t: &Tiff, ifd: &Ifd, width: usize, height: usize) -> Result<Vec<Segment>> {
@@ -388,6 +381,37 @@ pub(crate) fn segments(t: &Tiff, ifd: &Ifd, width: usize, height: usize) -> Resu
         }
     }
     Ok(out)
+}
+
+/// Decodes one compression-7 (lossless JPEG) segment to the segment's own samples.
+///
+/// The frame the entropy stream declares is capped by the budget, not only by the segment, and
+/// the `Quads` scatter buffer comes out of the same budget. `max_alloc` counts bytes, a sample is two.
+fn lossless_jpeg(src: &[u8], s: &Segment, rows: usize, samples: usize, layout: JpegLayout, limits: &Limits) -> Result<Vec<u16>> {
+    let need = s.w * rows * samples;
+    let scatter = if layout == JpegLayout::Quads && samples == 1 { s.w.saturating_mul(s.h).saturating_mul(2) as u64 } else { 0 };
+    let budget = usize::try_from(limits.max_alloc.saturating_sub(scatter) / 2).unwrap_or(usize::MAX);
+    let geom = s.w.saturating_mul(s.h).saturating_mul(samples).saturating_mul(4);
+    let (f, mut v) = ljpeg::decode(src, geom.min(budget))?;
+    if v.len() < need {
+        return Err(RawError::malformed("lossless JPEG tile is smaller than its tile"));
+    }
+    if layout == JpegLayout::Quads && samples == 1 && f.components == 4 && f.width * 2 == s.w && f.height * 2 == s.h {
+        let mut tile = vec![0u16; s.w * s.h];
+        for (i, q) in v.as_chunks::<4>().0.iter().enumerate() {
+            let at = 2 * (i / f.width) * s.w + 2 * (i % f.width);
+            tile[at] = q[0];
+            tile[at + 1] = q[1];
+            tile[at + s.w] = q[2];
+            tile[at + s.w + 1] = q[3];
+        }
+        return Ok(tile);
+    }
+    // The frame may declare up to four times the segment's samples; the scatter reads only the
+    // segment's own rows, and the frame is retained until then, so keep just those (#4959).
+    v.truncate(need);
+    v.shrink_to_fit();
+    Ok(v)
 }
 
 /// Decodes one segment of a lossy DNG (Adobe DNG compression 34892): a complete baseline-DCT
@@ -492,6 +516,63 @@ fn unpack(src: &[u8], w: usize, rows: usize, samples: usize, bits: u32, le: bool
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #4959: a decoded segment is retained until the scatter, so the segments are charged
+    /// together. Each of these is far inside the budget on its own; their sum is not.
+    #[test]
+    fn segments_are_charged_together_rather_than_one_at_a_time() {
+        let limits = Limits { max_alloc: 8 << 20, ..Limits::default() };
+        // 1024 x 512 samples, two bytes each: one mebibyte a tile.
+        let tile = |i: usize| Segment { x: 0, y: i * 512, w: 1024, h: 512, offset: 0, len: 0 };
+        let eight: Vec<Segment> = (0..8).map(tile).collect();
+        assert_eq!(retained_segment_bytes(&eight, 1, &limits).unwrap(), 8 << 20, "the budget is spent exactly");
+
+        let nine: Vec<Segment> = (0..9).map(tile).collect();
+        assert!(matches!(retained_segment_bytes(&nine, 1, &limits), Err(RawError::LimitExceeded(_))), "one tile over");
+        assert!(retained_segment_bytes(&eight, 3, &limits).is_err(), "more samples a pixel cost proportionally more");
+
+        // A segment whose own geometry overflows is refused rather than wrapping to a small sum.
+        let huge = [Segment { x: 0, y: 0, w: usize::MAX, h: usize::MAX, offset: 0, len: 0 }];
+        assert!(matches!(retained_segment_bytes(&huge, 1, &limits), Err(RawError::LimitExceeded(_))));
+
+        // A normal tiled frame is unaffected: 6000 x 4000 in 512-pixel tiles, padding included.
+        let normal: Vec<Segment> = (0..12 * 8).map(|i| Segment { x: (i % 12) * 512, y: (i / 12) * 512, w: 512, h: 512, offset: 0, len: 0 }).collect();
+        assert!(retained_segment_bytes(&normal, 1, &Limits::default()).is_ok());
+    }
+
+    /// #4959 end to end: the sum is charged in `read_plane`, not only by the helper. An 18x18
+    /// CFA in four padded 16x16 lossless-JPEG tiles: the image (648 B) and each tile (512 B) fit
+    /// a 1500 B budget, the four retained tiles (2048 B) do not.
+    #[test]
+    fn decode_charges_the_retained_tiles_together() {
+        use crate::testgen::{DngSpec, DngStorage, mosaic, scene};
+        let mut d = DngSpec::cfa(18, 18, mosaic(&scene(18, 18), 18, [0, 1, 1, 2], 64, 4000));
+        d.bits = 12;
+        d.white = 4000;
+        d.black = vec![64];
+        d.storage = DngStorage::Lj92Tiles { width: 16, height: 16 };
+        let b = d.build();
+        let tight = Limits { max_alloc: 1500, ..Limits::default() };
+        assert!(matches!(crate::decode(&b, &tight), Err(RawError::LimitExceeded(_))));
+        let exact = Limits { max_alloc: 2048, ..Limits::default() };
+        assert!(crate::decode(&b, &exact).is_ok(), "the padded tiles exactly at the budget still decode");
+    }
+
+    /// #4959: a lossless-JPEG frame may declare up to four times its segment's samples. The
+    /// segment is charged for its own size only, so it must keep only that until the scatter.
+    #[test]
+    fn lossless_jpeg_keeps_only_the_segment() {
+        let frame: Vec<u16> = (0..64 * 64).map(|i| (i % 4096) as u16).collect();
+        let src = crate::testgen::lj92_encode(&frame, 64, 64, 1, 12, 1, None);
+        let s = Segment { x: 0, y: 0, w: 32, h: 32, offset: 0, len: src.len() };
+        let v = lossless_jpeg(&src, &s, 32, 1, JpegLayout::Flat, &Limits::default()).unwrap();
+        assert_eq!(v.len(), 32 * 32, "only the segment's samples are retained");
+        assert!(v.capacity() < 64 * 64, "the frame's spare capacity is released");
+        assert_eq!(v[..32], frame[..32], "the first row is the frame's first row");
+        // An edge strip keeps only the rows inside the image.
+        let v = lossless_jpeg(&src, &s, 20, 1, JpegLayout::Flat, &Limits::default()).unwrap();
+        assert_eq!(v.len(), 32 * 20);
+    }
 
     #[test]
     fn bayer_patterns() {

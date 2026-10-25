@@ -431,7 +431,7 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) -> Option<bool> {
             // Under the colour field, not in the action column: the dialog must still fit a
             // 760 x 480 window.
             ui.add_space(4.0);
-            if let Some(rgb) = crate::screen_picker::button(ui, ui.id().with("screen-color")) {
+            if let Some(rgb) = crate::screen_picker::button(ui, ui.scope_id().with("screen-color")) {
                 set_rgb(f, rgb, Keep::Nothing);
             }
         });
@@ -484,7 +484,7 @@ fn color_field(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     // Photoshop updates the colour on the press itself, not only when the button is released
     // (#6937): `is_pointer_button_down_on` is true from the press frame onwards (it covers
     // dragging too), while `clicked` fires on release and `dragged` only after a move.
-    if let Some(p) = resp.interact_pointer_pos().filter(|_| resp.is_pointer_button_down_on() || resp.clicked()) {
+    if let Some(p) = widgets::pick_pos(&resp) {
         let (x, y) = (((p.x - field.left()) / field.width()).clamp(0.0, 1.0), ((p.y - field.top()) / field.height()).clamp(0.0, 1.0));
         let c = field_color(&mode, fz, x, y);
         let keep = match mode.as_str() {
@@ -503,7 +503,7 @@ fn color_field(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         let tri = vec![pos2(x, sy), pos2(x - 6.0 * dir, sy - 4.0), pos2(x - 6.0 * dir, sy + 4.0)];
         ui.painter().add(egui::Shape::convex_polygon(tri, t.text, Stroke::NONE));
     }
-    if let Some(p) = sresp.interact_pointer_pos().filter(|_| sresp.is_pointer_button_down_on() || sresp.clicked()) {
+    if let Some(p) = widgets::pick_pos(&sresp) {
         let z = 1.0 - ((p.y - strip.top()) / strip.height()).clamp(0.0, 1.0);
         let h = match mode.as_str() {
             "h" => Some([z * 360.0, hsv[1], hsv[2]]),
@@ -536,8 +536,8 @@ fn swatches(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let cur = Rect::from_min_size(sw.min + vec2(0.0, 32.0), vec2(56.0, 32.0));
     p.rect_filled(cur, 0.0, c32(orig));
     p.rect_stroke(sw, 0.0, Stroke::new(1.0, t.field_border), StrokeKind::Outside);
-    let click_cur = ui.interact(cur, ui.id().with("cp-current"), Sense::click());
-    click_cur.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), tl!("Click to restore the current colour")));
+    let click_cur = ui.interact(cur, ui.scope_id().with("cp-current"), Sense::click());
+    click_cur.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tl!("Click to restore the current colour")));
     if click_cur.on_hover_text(tl!("Click to restore the current colour")).clicked() {
         set_rgb(f, orig, Keep::Nothing);
     }
@@ -558,8 +558,8 @@ fn swatches(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         }
         p.rect_filled(chip, 0.0, c32(near));
         p.rect_stroke(chip, 0.0, Stroke::new(1.0, t.text_dim), StrokeKind::Outside);
-        let resp = ui.interact(icon.union(chip), ui.id().with(("cp-warning", slot as i32)), Sense::click());
-        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), tip));
+        let resp = ui.interact(icon.union(chip), ui.scope_id().with(("cp-warning", slot as i32)), Sense::click());
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tip));
         if resp.on_hover_text(tip).clicked() {
             set_rgb(f, near, Keep::Nothing);
         }
@@ -567,7 +567,7 @@ fn swatches(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
 }
 
 /// ⚠: a filled triangle with an exclamation mark cut out of it.
-fn warning_triangle(p: &egui::Painter, r: Rect, ink: Color32, cut: Color32) {
+pub(crate) fn warning_triangle(p: &egui::Painter, r: Rect, ink: Color32, cut: Color32) {
     let tri = vec![pos2(r.center().x, r.top()), pos2(r.right(), r.bottom()), pos2(r.left(), r.bottom())];
     p.add(egui::Shape::convex_polygon(tri, ink, Stroke::NONE));
     let x = r.center().x;
@@ -576,7 +576,7 @@ fn warning_triangle(p: &egui::Painter, r: Rect, ink: Color32, cut: Color32) {
 }
 
 /// A cube seen corner-on: a hexagon with three edges meeting in the middle.
-fn web_cube(p: &egui::Painter, r: Rect, ink: Color32) {
+pub(crate) fn web_cube(p: &egui::Painter, r: Rect, ink: Color32) {
     let (c, rad) = (r.center(), r.width() / 2.0);
     let corner = |k: f32| {
         let a = std::f32::consts::FRAC_PI_3 * k - std::f32::consts::FRAC_PI_2;
@@ -598,7 +598,7 @@ fn radio(ui: &mut egui::Ui, on: bool, label: &str) -> bool {
     if on {
         ui.painter().circle_filled(r.center(), 3.0, t.accent);
     }
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, ui.is_enabled(), on, label));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, ui.is_enabled(), on, label));
     resp.clicked()
 }
 
@@ -623,7 +623,7 @@ fn fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, mode: &str, now: &Compo
                     }
                     ui.label(egui::RichText::new(tl!(&label)).color(t.text_dim));
                     let mut v = vals[i].round();
-                    if widgets::value_field(ui, &mut v, ranges[i].clone(), "", VALUE_W).changed() {
+                    if widgets::value_field(ui, &mut v, ranges[i].clone(), "", VALUE_W).accessible_name(tl!(&label)).changed() {
                         let (mut h, mut c) = (hsv, rgb);
                         if i < 3 {
                             h[i] = if i == 0 { v } else { v / 100.0 };
@@ -647,7 +647,7 @@ fn fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, mode: &str, now: &Compo
                 ui.label(egui::RichText::new("#").color(t.text_dim));
                 // While the field has focus it shows what is being typed, not the colour: rebuilding it from
                 // the colour every frame would throw away every keystroke until six valid digits were in.
-                let id = ui.id().with("cp-hex");
+                let id = ui.scope_id().with("cp-hex");
                 crate::field_tab::register(ui.ctx(), id);
                 if !f.contains_key("__focused") {
                     f.insert("__focused".into(), json!(true));
@@ -668,7 +668,7 @@ fn fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, mode: &str, now: &Compo
                         _ => shown.trim_start_matches('#').to_ascii_uppercase(),
                     },
                 };
-                let r = crate::widgets::text_field_ex(ui, id, &mut h, "", 64.0, true, Some(6));
+                let r = crate::widgets::text_field_ex(ui, id, &mut h, "", 64.0, true, Some(6)).accessible_name(tl!("Color"));
                 if let Some(c) = pasted {
                     edit = Some((c, Keep::Nothing));
                 }
@@ -695,7 +695,7 @@ fn fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, mode: &str, now: &Compo
                 }
                 ui.label(egui::RichText::new(tl!(&label)).color(t.text_dim));
                 let mut x = v.round();
-                if widgets::value_field(ui, &mut x, range, "", VALUE_W).changed() {
+                if widgets::value_field(ui, &mut x, range, "", VALUE_W).accessible_name(tl!(&label)).changed() {
                     let mut l = lab;
                     l[i] = x;
                     edit = Some((photocraft_color::convert::lab_to_srgb(l).map(|c| c.clamp(0.0, 1.0)), Keep::Lab(l)));
@@ -709,7 +709,7 @@ fn fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, mode: &str, now: &Compo
                 ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
                 ui.label(egui::RichText::new(tl!(&label)).color(t.text_dim));
                 let mut x = (cmyk[i] * 100.0).round();
-                if widgets::value_field(ui, &mut x, 0.0..=100.0, "", VALUE_W).changed() {
+                if widgets::value_field(ui, &mut x, 0.0..=100.0, "", VALUE_W).accessible_name(tl!(&label)).changed() {
                     let mut k = cmyk;
                     k[i] = x / 100.0;
                     edit = Some((photocraft_color::convert::cmyk_to_rgb(k).map(|c| c.clamp(0.0, 1.0)), Keep::Cmyk(k)));
@@ -803,8 +803,7 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
     }
     let r = app.run("tools.setColors", params)?;
     if target == "foreground" {
-        crate::type_tool::foreground_changed(app);
-        crate::shape_fill_ui::foreground_changed(app, None);
+        crate::apply_color::foreground_changed(app, None);
     }
     Ok(r)
 }
@@ -862,6 +861,95 @@ mod tests {
 
     fn color(h: &Harness<'static, Map<String, Value>>) -> String {
         h.state().get("color").and_then(Value::as_str).unwrap().to_string()
+    }
+
+    /// Press at `at` and hold, with no release and no time passing, then run one frame.
+    fn press<S>(h: &mut Harness<'static, S>, at: egui::Pos2) {
+        press_button(h, at, egui::PointerButton::Primary, true);
+    }
+
+    fn press_button<S>(h: &mut Harness<'static, S>, at: egui::Pos2, button: egui::PointerButton, pressed: bool) {
+        h.event(egui::Event::PointerMoved(at));
+        h.event(egui::Event::PointerButton { pos: at, button, pressed, modifiers: egui::Modifiers::NONE });
+        h.run_steps(1);
+    }
+
+    /// #7793: the field and the slider pick on the frame the button goes down, not after the
+    /// pointer has travelled past egui's click threshold or been held for a while, and follow
+    /// moves of a few points.
+    #[test]
+    fn field_and_slider_pick_on_press_and_follow_small_moves() {
+        let mut f = Map::new();
+        f.insert("color".into(), json!("#336699"));
+        let mut h = Harness::builder().with_size(vec2(400.0, 300.0)).build_ui_state(
+            |ui, f: &mut Map<String, Value>| {
+                ui.horizontal(|ui| {
+                    let o = ui.cursor().min;
+                    let gap = ui.spacing().item_spacing.x;
+                    ui.data_mut(|d| d.insert_temp(egui::Id::unique("test-origin"), (o, gap)));
+                    color_field(ui, f);
+                });
+            },
+            f,
+        );
+        h.run_steps(2);
+        let (o, gap) = h.ctx.data(|d| d.get_temp::<(egui::Pos2, f32)>(egui::Id::unique("test-origin"))).unwrap();
+        // Field: saturation across, brightness down (hue mode).
+        let at = o + vec2(FIELD * 0.5, FIELD * 0.5);
+        press(&mut h, at);
+        let picked = color(&h);
+        assert_ne!(picked, "#336699", "the press itself picks");
+        let hsv = rgb_to_hsb(parse_hex(&picked).unwrap());
+        assert!((hsv[1] - 0.5).abs() < 0.02 && (hsv[2] - 0.5).abs() < 0.02, "{picked} {hsv:?}");
+        // A 3-point nudge (under the 6-point click threshold) moves the pick.
+        h.event(egui::Event::PointerMoved(at + vec2(3.0, 0.0)));
+        h.run_steps(1);
+        assert_ne!(color(&h), picked, "a small drag adjusts the pick");
+        h.event(egui::Event::PointerButton {
+            pos: at + vec2(3.0, 0.0),
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.run_steps(2);
+        // Hue slider: a press near the bottom picks a hue near 0 at once.
+        let before = color(&h);
+        press(&mut h, o + vec2(FIELD + gap + 9.0, FIELD * 0.95));
+        assert_ne!(color(&h), before, "the slider picks on press");
+        let hue = rgb_to_hsb(parse_hex(&color(&h)).unwrap())[0];
+        assert!(hue < 30.0 || hue > 330.0, "hue {hue}");
+    }
+
+    /// Only the primary button picks: a right or middle press (and its release) on the field or
+    /// the slider leaves the colour alone.
+    #[test]
+    fn field_and_slider_ignore_secondary_and_middle_presses() {
+        let mut f = Map::new();
+        f.insert("color".into(), json!("#336699"));
+        let mut h = Harness::builder().with_size(vec2(400.0, 300.0)).build_ui_state(
+            |ui, f: &mut Map<String, Value>| {
+                ui.horizontal(|ui| {
+                    let o = ui.cursor().min;
+                    let gap = ui.spacing().item_spacing.x;
+                    ui.data_mut(|d| d.insert_temp(egui::Id::unique("test-origin"), (o, gap)));
+                    color_field(ui, f);
+                });
+            },
+            f,
+        );
+        h.run_steps(2);
+        let (o, gap) = h.ctx.data(|d| d.get_temp::<(egui::Pos2, f32)>(egui::Id::unique("test-origin"))).unwrap();
+        for at in [o + vec2(FIELD * 0.5, FIELD * 0.5), o + vec2(FIELD + gap + 9.0, FIELD * 0.95)] {
+            for button in [egui::PointerButton::Secondary, egui::PointerButton::Middle] {
+                press_button(&mut h, at, button, true);
+                assert_eq!(color(&h), "#336699", "{button:?} press at {at:?}");
+                h.event(egui::Event::PointerMoved(at + vec2(3.0, 0.0)));
+                h.run_steps(1);
+                press_button(&mut h, at + vec2(3.0, 0.0), button, false);
+                h.run_steps(1);
+                assert_eq!(color(&h), "#336699", "{button:?} drag and release at {at:?}");
+            }
+        }
     }
 
     #[test]
@@ -1027,7 +1115,7 @@ mod tests {
         h.run_steps(4);
         let id = open(h.state_mut(), "foreground");
         h.run_steps(6);
-        let rect = h.ctx.memory(|m| m.area_rect(egui::Id::new(("dialog", id)))).expect("the picker window");
+        let rect = h.ctx.memory(|m| m.area_rect(egui::Id::unique(("dialog", id)))).expect("the picker window");
         assert!(rect.width() <= 534.0 && rect.height() <= 376.0, "Color Picker window {} x {} points, Photoshop's 534 x 376", rect.width(), rect.height());
         // Everything still shows: the three actions and all 13 component fields.
         for label in ["OK", "Cancel", "Add to Swatches", "Only Web Colors"] {

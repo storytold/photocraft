@@ -1,7 +1,7 @@
 //! Photoshop and Paint.NET blend modes (scalar reference implementation).
 //!
 //! Formulas follow the public PDF / ISO 32000-2 and W3C Compositing definitions,
-//! with Photoshop's variants where they differ (Soft Light, Hard Mix, Darker/Lighter Color,
+//! with Photoshop's variants where they differ (Hard Mix, Darker/Lighter Color,
 //! Linear Burn/Dodge, Vivid/Linear/Pin Light, Subtract, Divide). This is the CPU reference
 //! that the GPU kernels must match.
 
@@ -323,10 +323,19 @@ fn hard_light(cb: f32, cs: f32) -> f32 {
     }
 }
 
-/// Photoshop's Soft Light (differs from the W3C/PDF definition in the upper half).
+/// Photoshop's Soft Light: the W3C/PDF curve. In the upper half (`cs > 0.5`) the backdrop moves
+/// towards `D(cb)`, which is `sqrt(cb)` above a quarter and the cubic `((16·cb − 12)·cb + 4)·cb`
+/// below it; with `sqrt` throughout, dark backdrops came out up to 20 levels too light (#8804,
+/// measured on psd-tools `blend-modes/rgb-blend-modes.psd`).
 #[inline]
 fn soft_light_ps(cb: f32, cs: f32) -> f32 {
-    if cs <= 0.5 { 2.0 * cb * cs + cb * cb * (1.0 - 2.0 * cs) } else { 2.0 * cb * (1.0 - cs) + cb.max(0.0).sqrt() * (2.0 * cs - 1.0) }
+    if cs <= 0.5 {
+        2.0 * cb * cs + cb * cb * (1.0 - 2.0 * cs)
+    } else {
+        let b = cb.max(0.0);
+        let d = if b <= 0.25 { ((16.0 * b - 12.0) * b + 4.0) * b } else { b.sqrt() };
+        2.0 * cb * (1.0 - cs) + d * (2.0 * cs - 1.0)
+    }
 }
 
 // ---- non-separable helpers (W3C Compositing Level 1) ----
@@ -570,6 +579,37 @@ mod tests {
         assert!(close(blend_channel(BlendMode::PinLight, 0.1, 0.9), 0.8));
         assert!(close(blend_channel(BlendMode::HardMix, 0.6, 0.4), 1.0));
         assert!(close(blend_channel(BlendMode::HardMix, 0.6, 0.3), 0.0));
+    }
+
+    /// #8804: Photoshop's Soft Light over a dark backdrop (cb ≤ 0.25, cs > 0.5) follows the W3C
+    /// curve `D(cb) = ((16·cb − 12)·cb + 4)·cb`, not `sqrt(cb)`. Measured on psd-tools
+    /// `blend-modes/rgb-blend-modes.psd` (Photoshop's merged image), in 8-bit levels:
+    /// (backdrop, source, Photoshop).
+    #[test]
+    fn soft_light_follows_photoshop_over_dark_backdrops() {
+        for (cb, cs, ps) in [(4u8, 247u8, 11.0f32), (6, 254, 19.0), (9, 252, 25.0), (10, 237, 32.0), (14, 253, 46.0)] {
+            let got = blend_channel(BlendMode::SoftLight, f32::from(cb) / 255.0, f32::from(cs) / 255.0) * 255.0;
+            assert!((got - ps).abs() <= 7.0, "cb {cb} cs {cs}: {got} vs Photoshop {ps}");
+        }
+    }
+
+    #[test]
+    fn soft_light_is_the_w3c_formula() {
+        let d = |cb: f32| if cb <= 0.25 { ((16.0 * cb - 12.0) * cb + 4.0) * cb } else { cb.sqrt() };
+        let w3c = |cb: f32, cs: f32| if cs <= 0.5 { cb - (1.0 - 2.0 * cs) * cb * (1.0 - cb) } else { cb + (2.0 * cs - 1.0) * (d(cb) - cb) };
+        for b in (0..=255u8).step_by(3) {
+            for s in (0..=255u8).step_by(5) {
+                let (cb, cs) = (f32::from(b) / 255.0, f32::from(s) / 255.0);
+                let got = blend_channel(BlendMode::SoftLight, cb, cs);
+                assert!((got - w3c(cb, cs)).abs() < 1e-5, "cb {b} cs {s}: {got} vs {}", w3c(cb, cs));
+            }
+        }
+        // Continuous where the two halves of D meet (both give 0.5 at cb = 0.25).
+        let below = blend_channel(BlendMode::SoftLight, 0.25, 1.0);
+        let above = blend_channel(BlendMode::SoftLight, 0.25 + 1e-6, 1.0);
+        assert!(close(below, 0.5) && (above - below).abs() < 1e-4, "{below} {above}");
+        // A negative backdrop (32-bit documents) counts as black under a light source, as before.
+        assert!(close(blend_channel(BlendMode::SoftLight, -0.1, 1.0), 0.0));
     }
 
     #[test]

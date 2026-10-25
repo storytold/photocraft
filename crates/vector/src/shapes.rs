@@ -142,7 +142,7 @@ pub fn fillet(prev: [f64; 2], v: [f64; 2], next: [f64; 2], r: f64) -> Option<Fil
     let (u2, l2) = unit(v, next)?;
     let cos = (u1[0] * u2[0] + u1[1] * u2[1]).clamp(-1.0, 1.0);
     let half = cos.acos() / 2.0;
-    if half < 1e-6 || half > std::f64::consts::FRAC_PI_2 - 1e-6 {
+    if !(1e-6..=std::f64::consts::FRAC_PI_2 - 1e-6).contains(&half) {
         return None;
     }
     let r = r.min(l1.min(l2) / 2.0 * half.tan());

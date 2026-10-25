@@ -44,6 +44,14 @@ fn selected_pixel_layers(s: &Session) -> Vec<LayerId> {
     st.selected_layers().into_iter().filter(|id| st.doc.layer(*id).is_some_and(|l| matches!(l.content, LayerContent::Raster(_)))).collect()
 }
 
+/// Whether a lock keeps the layer `id` from being moved or warped: lock all, position or pixels.
+/// The Background's own position lock doesn't count: like Free Transform, Auto-Align turns the
+/// Background into a normal layer when it has to move it (Photoshop).
+fn pinned(doc: &Document, id: LayerId) -> bool {
+    let l = doc.effective_locks(id);
+    l.all || l.pixels || (l.position && !doc.is_background(id))
+}
+
 fn two_layers(s: &Session) -> std::result::Result<(), String> {
     s.active().ok_or("no document open")?;
     if selected_pixel_layers(s).len() < 2 { Err("select two or more pixel layers in the Layers panel".into()) } else { Ok(()) }
@@ -63,7 +71,8 @@ fn auto_align(s: &mut Session, p: &Value) -> Result<Value> {
     let reference = match p.get("reference").and_then(Value::as_u64) {
         Some(r) if ids.contains(&LayerId(r)) => LayerId(r),
         Some(r) => return Err(bad(cmd, format!("reference {r} is not a selected pixel layer"))),
-        None => ids[0],
+        // As in Photoshop, a locked layer stays put: it becomes the reference (#7080).
+        None => ids.iter().copied().find(|id| pinned(&doc, *id)).unwrap_or(ids[0]),
     };
     let ref_idx = ids.iter().position(|i| *i == reference).unwrap_or(0);
     let area = doc.bounds();
@@ -100,6 +109,9 @@ fn auto_align(s: &mut Session, p: &Value) -> Result<Value> {
     if moves.is_empty() {
         return Err(EngineError::Other("Auto-Align couldn't find enough matching detail between the layers".into()));
     }
+    if let Some(l) = moves.iter().find(|&&i| pinned(&doc, ids[i])).and_then(|&i| doc.layer(ids[i])) {
+        return Err(EngineError::Other(format!("Auto-Align can't move the locked layer \"{}\"", l.name)));
+    }
     let warped: Vec<(LayerId, Surface, Option<Surface>)> = moves
         .iter()
         .map(|&i| {
@@ -122,6 +134,8 @@ fn auto_align(s: &mut Session, p: &Value) -> Result<Value> {
         .collect::<Result<_>>()?;
     s.edit("Auto-Align Layers", |doc, _| {
         for (id, px, mask) in &warped {
+            // Photoshop turns the Background into a normal layer before moving it.
+            crate::extra_cmds::background_to_layer(doc, *id);
             let l = doc.layer_mut(*id).ok_or(EngineError::NoLayer(*id))?;
             if let Some(surf) = l.surface_mut() {
                 *surf = px.clone();
@@ -331,7 +345,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "edit.autoAlignLayers",
             "Auto-Align Layers…",
-            r##"{"projection":"auto|perspective|cylindrical|spherical|collage|reposition","reference":layer id?=bottom selected layer,"geometricCorrection":bool=false,"interpolation":"bicubic|bilinear|nearest","registration":"auto|features|intensity"}"##,
+            r##"{"projection":"auto|perspective|cylindrical|spherical|collage|reposition","reference":layer id?=the locked selected layer, else the bottom selected layer,"geometricCorrection":bool=false,"interpolation":"bicubic|bilinear|nearest","registration":"auto|features|intensity"}"##,
             auto_align
         ),
         spec!(
@@ -350,8 +364,15 @@ mod tests {
     /// Deterministic texture written into a layer at offset (dx, dy).
     fn texture_layer(s: &mut Session, name: &str, dx: i32, dy: i32) -> LayerId {
         s.execute("layer.new.layer", json!({"name": name})).unwrap();
-        s.edit("tex", |doc, active| {
-            let surf = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+        let id = s.active().unwrap().active_layer.unwrap();
+        paint_texture(s, id, dx, dy);
+        id
+    }
+
+    /// Writes the deterministic texture into layer `id` at offset (dx, dy).
+    fn paint_texture(s: &mut Session, id: LayerId, dx: i32, dy: i32) {
+        s.edit("tex", |doc, _| {
+            let surf = doc.layer_mut(id).unwrap().surface_mut().unwrap();
             let mut seed = 99u64;
             let mut rnd = || {
                 seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
@@ -367,7 +388,6 @@ mod tests {
             Ok(())
         })
         .unwrap();
-        s.active().unwrap().active_layer.unwrap()
     }
 
     fn select(s: &mut Session, ids: &[LayerId]) {
@@ -409,6 +429,86 @@ mod tests {
         assert!((m[2] + 6.0).abs() < 1.0 && (m[5] + 5.0).abs() < 1.0, "{r}");
         assert!(s.execute("edit.autoAlignLayers", json!({"projection": "sideways"})).is_err());
         assert!(s.execute("edit.autoAlignLayers", json!({"reference": u64::MAX})).is_err());
+    }
+
+    /// As in Photoshop, a locked layer stays where it is: it becomes the reference and the
+    /// others move onto it (#7080).
+    #[test]
+    fn auto_align_keeps_a_locked_layer_as_the_reference() {
+        for lock in ["all", "position", "pixels"] {
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width": 300, "height": 240, "background": "transparent"})).unwrap();
+            let a = texture_layer(&mut s, "A", 20, 20);
+            let b = texture_layer(&mut s, "B", 31, 13);
+            s.edit("lock", |doc, _| {
+                doc.layer_mut(b).unwrap().locks.set(lock, true);
+                Ok(())
+            })
+            .unwrap();
+            select(&mut s, &[a, b]);
+            let r = s.execute("edit.autoAlignLayers", json!({"projection": "reposition"})).unwrap();
+            assert_eq!(r["reference"], b.0, "{lock}: {r}");
+            let doc = &s.active().unwrap().doc;
+            let bb = doc.layer(b).unwrap().surface().unwrap().content_bounds();
+            assert_eq!((bb.x0, bb.y0), (31, 13), "{lock}: the locked layer stays put");
+            let ab = doc.layer(a).unwrap().surface().unwrap().content_bounds();
+            assert!((ab.x0 - 31).abs() <= 1 && (ab.y0 - 13).abs() <= 1, "{lock}: {ab:?} {r}");
+            // An explicit reference that would move the locked layer is refused.
+            s.undo();
+            assert!(s.execute("edit.autoAlignLayers", json!({"projection": "reposition", "reference": a.0})).is_err());
+            // Two locked layers: nothing may move.
+            s.edit("lock", |doc, _| {
+                doc.layer_mut(a).unwrap().locks.set(lock, true);
+                Ok(())
+            })
+            .unwrap();
+            assert!(s.execute("edit.autoAlignLayers", json!({"projection": "reposition"})).is_err());
+            let bb = s.active().unwrap().doc.layer(a).unwrap().surface().unwrap().content_bounds();
+            assert_eq!((bb.x0, bb.y0), (20, 20));
+        }
+    }
+
+    /// The Background doesn't block Auto-Align: when a projection reprojects every layer
+    /// (Cylindrical, Spherical, or Auto choosing one), or another layer is the reference, it
+    /// becomes a normal layer ("Layer 0") and moves, as in Photoshop and as Free Transform does.
+    #[test]
+    fn auto_align_moves_the_background_as_a_normal_layer() {
+        let setup = || {
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width": 300, "height": 240, "background": "white"})).unwrap();
+            let bg = s.active().unwrap().doc.background().unwrap().id;
+            paint_texture(&mut s, bg, 20, 20);
+            let b = texture_layer(&mut s, "B", 31, 13);
+            select(&mut s, &[bg, b]);
+            (s, bg, b)
+        };
+        for projection in ["cylindrical", "spherical", "auto"] {
+            let (mut s, bg, b) = setup();
+            let r = s.execute("edit.autoAlignLayers", json!({"projection": projection})).unwrap_or_else(|e| panic!("{projection}: {e}"));
+            let doc = &s.active().unwrap().doc;
+            let moved = r["aligned"].as_array().unwrap().iter().any(|a| a["layer"] == bg.0);
+            assert_eq!(moved, projection != "auto" || r["layout"] != "perspective", "{projection}: {r}");
+            assert_eq!(doc.is_background(bg), !moved, "{projection}: a moved Background is a normal layer: {r}");
+            if moved {
+                assert_eq!(doc.layer(bg).unwrap().name, "Layer 0", "{projection}");
+            }
+            assert!(doc.layer(b).is_some(), "{projection}");
+            s.undo();
+            assert!(s.active().unwrap().doc.is_background(bg), "{projection}: undo restores the Background");
+        }
+        // Planar, with the other layer as the reference: the Background moves onto it.
+        let (mut s, bg, b) = setup();
+        s.execute("edit.autoAlignLayers", json!({"projection": "reposition", "reference": b.0})).unwrap();
+        let doc = &s.active().unwrap().doc;
+        assert!(!doc.is_background(bg));
+        // Default reference: the Background (bottom) stays put and stays the Background.
+        let (mut s, bg, b) = setup();
+        let r = s.execute("edit.autoAlignLayers", json!({"projection": "reposition"})).unwrap();
+        assert_eq!(r["reference"], bg.0, "{r}");
+        let doc = &s.active().unwrap().doc;
+        assert!(doc.is_background(bg));
+        let bb = doc.layer(b).unwrap().surface().unwrap().content_bounds();
+        assert!((bb.x0 - 20).abs() <= 1 && (bb.y0 - 20).abs() <= 1, "{bb:?} {r}");
     }
 
     /// The moving layer's mask is warped as a mask: one grey channel whose outside keeps its

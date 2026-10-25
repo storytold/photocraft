@@ -590,7 +590,8 @@ pub fn resolve_profile(spec: &str, doc: Option<&Document>, mode: Option<ColorMod
     }
     let lower = spec.to_ascii_lowercase();
     if lower.ends_with(".icc") || lower.ends_with(".icm") || spec.contains('/') || spec.contains('\\') {
-        let bytes = std::fs::read(spec).map_err(|e| EngineError::Other(format!("cannot read profile `{spec}`: {e}")))?;
+        // Regular files only: a device or FIFO path would be read until it ends, which it never does.
+        let bytes = crate::file_cmds::read_file(spec).map_err(|e| EngineError::Other(format!("cannot read profile `{spec}`: {e}")))?;
         return Profile::parse(&bytes).map(Arc::new).map_err(cms_err);
     }
     let ids: Vec<&str> = Builtin::ALL.iter().map(|b| b.id()).collect();
@@ -715,7 +716,12 @@ fn convert_layer_colors(l: &mut Layer, cc: &mut dyn FnMut(&mut Color)) {
             Effect::OuterGlow(g) | Effect::InnerGlow(g) => paint_colors(&mut g.paint, cc),
             Effect::Stroke(s) => paint_colors(&mut s.paint, cc),
             Effect::ColorOverlay { color, .. } => cc(color),
-            Effect::GradientOverlay { gradient, .. } => gradient.stops.iter_mut().for_each(|s| cc(&mut s.1)),
+            Effect::GradientOverlay { gradient, interpolation, .. } => {
+                gradient.stops.iter_mut().for_each(|s| cc(&mut s.1));
+                if let Some(source) = interpolation {
+                    source.stops.iter_mut().for_each(|s| cc(&mut s.1));
+                }
+            }
             Effect::Satin(s) => cc(&mut s.color),
             Effect::BevelEmboss(b) => {
                 cc(&mut b.highlight_color);

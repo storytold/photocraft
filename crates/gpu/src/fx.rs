@@ -664,7 +664,23 @@ pub(crate) fn shape_key(layer: &Layer, canvas: Rect) -> u64 {
         LayerContent::Shape(sh) => {
             std::mem::discriminant(&layer.content).hash(&mut h);
             if photocraft_compose::effect_outline(layer).is_some() {
-                format!("{:?}", sh.path).hash(&mut h);
+                // The cached maps live in region-local coordinates. Preserve their identity
+                // under translation so sync_fx can verify coverage and reuse them after a move.
+                let mut outline =
+                    sh.path.control_bounds().map_or_else(|| sh.path.clone(), |(x, y, _, _)| sh.path.transform(&photocraft_geom::Affine::translate(-x, -y)));
+                // Integer translation can perturb fractional f64 coordinates in the low bits.
+                // Quantize only the fingerprint (1/65536 px); rendering keeps the original path,
+                // and sync_fx still requires exact coverage equality before reusing moved maps.
+                for subpath in &mut outline.subpaths {
+                    for knot in &mut subpath.knots {
+                        for point in [&mut knot.anchor, &mut knot.in_ctrl, &mut knot.out_ctrl] {
+                            // Adding zero also canonicalizes negative zero in Debug output.
+                            point.x = (point.x * 65536.0).round() / 65536.0 + 0.0;
+                            point.y = (point.y * 65536.0).round() / 65536.0 + 0.0;
+                        }
+                    }
+                }
+                format!("{outline:?}").hash(&mut h);
             }
         }
         other => std::mem::discriminant(other).hash(&mut h),
@@ -745,6 +761,42 @@ mod tests {
     use super::*;
     use photocraft_color::BlendMode;
     use photocraft_doc::FxCommon;
+
+    /// Filled-shape identity survives integer moves, including fractional anchors and handles.
+    #[test]
+    fn filled_shape_key_preserves_translation_but_detects_deformation() {
+        use photocraft_doc::{Fill, Path, ShapeLayer, Subpath};
+        let mut layer = Layer::new(
+            "shape",
+            LayerContent::Shape(ShapeLayer {
+                path: Path::new(vec![Subpath::polygon(&[(20.0, 20.0), (70.0, 20.0), (70.0, 60.0), (20.0, 60.0)])]),
+                fill: Some(Fill::Solid(photocraft_color::Color::WHITE)),
+                ..Default::default()
+            }),
+        );
+        let canvas = Rect::new(0, 0, 200, 200);
+        let before = shape_key(&layer, canvas);
+        let LayerContent::Shape(shape) = &mut layer.content else { unreachable!() };
+        shape.path = shape.path.transform(&photocraft_geom::Affine::translate(13.0, 7.0));
+        assert_eq!(before, shape_key(&layer, canvas));
+        let LayerContent::Shape(shape) = &mut layer.content else { unreachable!() };
+        shape.path.subpaths[0].knots[1].anchor.x += 3.0;
+        assert_ne!(before, shape_key(&layer, canvas));
+
+        let LayerContent::Shape(shape) = &mut layer.content else { unreachable!() };
+        shape.path = Path::new(vec![Subpath::polygon(&[(0.1, 0.2), (0.3, 0.2), (0.3, 1.7), (0.1, 1.7)])]);
+        shape.path.subpaths[0].knots[1].out_ctrl = photocraft_geom::Point::new(0.45, 0.65);
+        let original = shape.path.clone();
+        let before = shape_key(&layer, canvas);
+        for (dx, dy) in [(1.0, 1.0), (-13.0, 7.0), (100_000.0, -100_000.0)] {
+            let LayerContent::Shape(shape) = &mut layer.content else { unreachable!() };
+            shape.path = original.transform(&photocraft_geom::Affine::translate(dx, dy));
+            assert_eq!(before, shape_key(&layer, canvas), "fractional path translated by {dx}, {dy}");
+        }
+        let LayerContent::Shape(shape) = &mut layer.content else { unreachable!() };
+        shape.path.subpaths[0].knots[1].out_ctrl.x += 0.01;
+        assert_ne!(before, shape_key(&layer, canvas), "a handle deformation invalidates the key");
+    }
 
     #[test]
     fn programs_key_on_geometry_not_colour() {

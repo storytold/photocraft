@@ -736,8 +736,10 @@ fn theme_switch_keeps_the_selected_color_group_panel() {
             h.state_mut().set_theme(&ctx, theme);
             h.run_steps(4);
             assert_eq!(Group::Color.tabs(is_pro(theme)).get(h.state().ui.dock_tabs.color), Some(name), "{theme:?}");
-            if *name == "Color" && !is_pro(theme) {
-                assert!(h.query_by_label("Hue").is_some(), "{theme:?}: Color picker missing");
+            if *name == "Color" {
+                // The spectrum field's hex readout, the same in every theme (#6000).
+                assert!(h.query_by_label("#").is_some(), "{theme:?}: Color field missing");
+                assert!(h.query_all_by_label("Hue").next().is_none(), "{theme:?}: no HSB sliders");
             }
             h.state_mut().set_theme(&ctx, ThemeKind::Pro);
             h.run_steps(4);
@@ -1241,6 +1243,23 @@ fn brush_settings_window_is_closed_on_restart_but_can_be_reopened() {
     let mut workspace = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     apply(&mut workspace, &saved);
     assert!(workspace.ui.panels.brush_settings, "switching workspaces still restores their saved layout");
+}
+
+/// The saved `docking` value is the app's own serialization of `craft_ui::docking::Layout`. A
+/// value from an older/foreign docking schema that no longer deserializes is dropped (the
+/// legacy layout is rebuilt); the rest of the workspace still applies, and nothing panics.
+/// Panel widths still migrate separately through `panels::migrate_panel_state`, but a split/tab
+/// arrangement from such a schema may reset. No 0.36 sample was available to prove the actual
+/// transition.
+#[test]
+fn an_unreadable_docking_layout_is_dropped_and_the_rest_applies() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let mut saved = snapshot(&app);
+    saved["docking"] = json!({"root": "not-a-dock-node"});
+    saved["timelineOpen"] = json!(true);
+    apply(&mut app, &saved);
+    assert!(app.ui.docking.is_none(), "the unreadable docking value is dropped");
+    assert!(app.ui.timeline.open, "the rest of the layout still applies");
 }
 
 /// Layers panel options live in the preferences on their own (like Photoshop's Panel Options),

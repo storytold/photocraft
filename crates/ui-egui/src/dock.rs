@@ -453,13 +453,13 @@ pub fn last_rects(ctx: &egui::Context) -> Vec<(Group, Rect)> {
 }
 
 fn rects_id() -> egui::Id {
-    egui::Id::new("dock-group-rects")
+    egui::Id::unique("dock-group-rects")
 }
 
 /// The group expanded from its collapsed tab strip (see [`show`]), if any: with Preferences ▸
 /// Workspace ▸ Auto-Collapse Iconic Panels on, the first click outside it collapses it again.
 fn peek_id() -> egui::Id {
-    egui::Id::new("dock-peek")
+    egui::Id::unique("dock-peek")
 }
 
 fn auto_collapse_peek(app: &mut PhotocraftApp, ctx: &egui::Context) {
@@ -496,7 +496,7 @@ pub fn last_strips(ctx: &egui::Context) -> Vec<StripRects> {
 }
 
 fn strips_id() -> egui::Id {
-    egui::Id::new("dock-strip-rects")
+    egui::Id::unique("dock-strip-rects")
 }
 
 /// Draw the `shown` groups (any order; the layout decides) filling `ui`. `body` draws one
@@ -626,6 +626,10 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, shown: &[Group], mut bod
                 crate::layer_row_ui::panel_menu(app, ui);
                 ui.separator();
             }
+            if tabs.get(sel) == Some(&"Color") {
+                crate::color_panel_ui::panel_menu(app, ui);
+                ui.separator();
+            }
             if tabs.get(sel) == Some(&"Swatches") {
                 crate::swatches_ui::panel_menu(app, ui);
                 ui.separator();
@@ -673,7 +677,7 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, shown: &[Group], mut bod
         // Splitter in the gap below this group: resizes it, pushing the neighbouring groups.
         if i + 1 < rects.len() && !collapsed && rects.iter().skip(i + 1).any(|(n, _)| !app.ui.dock.is_collapsed(*n)) {
             let gap = Rect::from_min_size(pos2(rect.left(), rect.bottom()), vec2(rect.width(), GAP)).expand2(vec2(0.0, 2.0));
-            let sresp = ui.interact(gap, ui.id().with(("dock-splitter", g.key())), Sense::drag());
+            let sresp = ui.interact(gap, ui.scope_id().with(("dock-splitter", g.key())), Sense::drag());
             if sresp.hovered() || sresp.dragged() {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
                 ui.painter().line_segment([gap.left_center(), gap.right_center()], Stroke::new(2.0, t.accent.gamma_multiply(0.7)));
@@ -851,6 +855,12 @@ pub fn restore(app: &mut PhotocraftApp) {
 /// Apply the `panels`, `dockTabs`, `dock` and `timelineOpen` parts of a saved layout
 /// (a workspace or `panelLayout`). Missing or invalid dock parts are left alone; old
 /// layouts without Timeline visibility restore it closed.
+///
+/// `craft_ui::docking::DockArea` keeps only transient drag/focus data in `ctx.data`; the
+/// split/tab arrangement is the app's own `craft_ui::docking::Layout` JSON stored here. If a
+/// layout saved by a different craft-ui revision no longer deserializes, it is dropped and the
+/// legacy layout is rebuilt (the split/tab arrangement resets). Panel widths are a separate
+/// `egui::PanelState` migration and still carry over.
 pub fn apply(app: &mut PhotocraftApp, v: &Value) {
     app.ui.docking_collapsed = v.get("dockingCollapsed").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
     app.ui.docking_reveal = None;

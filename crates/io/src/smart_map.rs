@@ -146,11 +146,12 @@ struct Known {
     command: &'static str,
 }
 
+/// A four-character PSD code as the big-endian integer Photoshop stores it as.
 const fn code(c: &[u8; 4]) -> i32 {
     i32::from_be_bytes(*c)
 }
 
-const KNOWN: [Known; 45] = [
+const KNOWN: [Known; 53] = [
     Known { class: "GsnB", filter_id: code(b"GsnB"), name: "Gaussian Blur...", command: "filter.blur.gaussianBlur" },
     Known { class: "boxblur", filter_id: 840, name: "Box Blur...", command: "filter.blur.boxBlur" },
     Known { class: "MtnB", filter_id: code(b"MtnB"), name: "Motion Blur...", command: "filter.blur.motionBlur" },
@@ -198,6 +199,17 @@ const KNOWN: [Known; 45] = [
     // Smart Sharpen has a numeric filterID and a stringID class, like Box Blur.
     Known { class: SMART_SHARPEN, filter_id: 1131, name: "Smart Sharpen...", command: "filter.sharpen.smartSharpen" },
     Known { class: "DstS", filter_id: code(b"DstS"), name: "Dust & Scratches...", command: "filter.noise.dustAndScratches" },
+    // Distort (Photoshop 27, `corpus`-style check: one smart object per filter saved from Photoshop
+    // and read back). Shear isn't mapped yet: its curve lives on Photoshop's own grid.
+    Known { class: "Pnch", filter_id: code(b"Pnch"), name: "Pinch...", command: "filter.distort.pinch" },
+    Known { class: "Plr ", filter_id: code(b"Plr "), name: "Polar Coordinates...", command: "filter.distort.polarCoordinates" },
+    Known { class: "Rple", filter_id: code(b"Rple"), name: "Ripple...", command: "filter.distort.ripple" },
+    Known { class: "Sphr", filter_id: code(b"Sphr"), name: "Spherize...", command: "filter.distort.spherize" },
+    Known { class: "Twrl", filter_id: code(b"Twrl"), name: "Twirl...", command: "filter.distort.twirl" },
+    Known { class: "Wave", filter_id: code(b"Wave"), name: "Wave...", command: "filter.distort.wave" },
+    Known { class: "ZgZg", filter_id: code(b"ZgZg"), name: "ZigZag...", command: "filter.distort.zigZag" },
+    // Image › Adjustments › Invert on a smart object: no settings, so no `Fltr` (`hasoptions` false).
+    Known { class: "Invr", filter_id: code(b"Invr"), name: "Invert", command: "image.adjustments.invert" },
     Known { class: "LnsF", filter_id: code(b"LnsF"), name: "Lens Flare...", command: "filter.render.lensFlare" },
     // These three also read the item's foreground and background colours (`coloured_params`).
     Known { class: "Fbrs", filter_id: code(b"Fbrs"), name: "Fibers...", command: "filter.render.fibers" },
@@ -262,6 +274,15 @@ fn smart_sharpen_params(f: &Descriptor) -> Option<J> {
     Some(J::Object(out))
 }
 
+/// Photoshop enum codes ↔ PhotoCraft parameter values, per filter setting.
+const RIPPLE_SIZE: [(&[u8; 4], &str); 3] = [(b"Sml ", "small"), (b"Mdm ", "medium"), (b"Lrg ", "large")];
+const SPHERIZE_MODE: [(&[u8; 4], &str); 3] = [(b"Nrml", "normal"), (b"HrzO", "horizontalOnly"), (b"VrtO", "verticalOnly")];
+const POLAR_MODE: [(&[u8; 4], &str); 2] = [(b"RctP", "rectangularToPolar"), (b"PlrR", "polarToRectangular")];
+const ZIGZAG_STYLE: [(&[u8; 4], &str); 3] = [(b"PndR", "pondRipples"), (b"OtFr", "outFromCenter"), (b"ArnC", "aroundCenter")];
+const WAVE_TYPE: [(&[u8; 4], &str); 3] = [(b"WvSn", "sine"), (b"WvTr", "triangle"), (b"WvSq", "square")];
+const UNDEFINED_AREAS: [(&[u8; 4], &str); 2] = [(b"WrpA", "wrap"), (b"RptE", "repeat")];
+
+/// The PSD filter record that PhotoCraft's `command` is written as, if it has one.
 fn known_by_command(command: &str) -> Option<&'static Known> {
     KNOWN.iter().find(|k| k.command == command)
 }
@@ -295,10 +316,12 @@ fn color_halftone_params(f: &Descriptor) -> Option<J> {
     Some(json!({"maxRadius": radius, "channel1": angle("Ang1")?, "channel2": angle("Ang2")?, "channel3": angle("Ang3")?, "channel4": angle("Ang4")?}))
 }
 
+/// A numeric descriptor item as a finite number; `None` when it is absent, not a number, or not finite.
 fn px(d: &Descriptor, key: &str) -> Option<f64> {
     num(d.get(key)).filter(|v| v.is_finite())
 }
 
+/// An integer descriptor item; `None` when it is absent or of another type.
 fn int(d: &Descriptor, key: &str) -> Option<i32> {
     match d.get(key)? {
         Value::Integer(i) => Some(*i),
@@ -547,15 +570,49 @@ fn custom_params(f: &Descriptor) -> Option<J> {
     Some(json!({"kernel": kernel?, "scale": scale, "offset": offset}))
 }
 
+/// The settings of Photoshop's Wave, as it writes them (and we write them back).
+const WAVE_KEYS: [&str; 10] = ["Wvtp", "NmbG", "WLMn", "WLMx", "AmMn", "AmMx", "SclH", "SclV", "UndA", "RndS"];
+
 /// Our command and parameters for a known Photoshop filter; `None` when the filter (or one of its
 /// settings) is not modelled. `item` is the whole `filterFX` entry (Pointillize reads its `BckC`,
 /// Tiles its colours).
 fn known_params(class: &str, f: Option<&Descriptor>, item: &Descriptor) -> Option<(&'static str, J)> {
     let k = KNOWN.iter().find(|k| k.class == class)?;
     let params = match (class, f) {
-        ("adaptCorrect", None) => json!({}),
+        ("adaptCorrect" | "Invr", None) => json!({}),
         (c, None) if NO_OPTIONS.contains(&c) => json!({}),
         (_, None) => return None,
+        // Exactly the settings Photoshop writes (and we write back); an extra or repeated one keeps
+        // the filter verbatim rather than lose it on save.
+        ("Pnch", Some(f)) if exact_keys(f, &["Amnt"]) => json!({"amount": int(f, "Amnt")?}),
+        ("Twrl", Some(f)) if exact_keys(f, &["Angl"]) => json!({"angle": int(f, "Angl")?}),
+        ("Rple", Some(f)) if exact_keys(f, &["Amnt", "RplS"]) => json!({"amount": int(f, "Amnt")?, "size": enum_name(f, "RplS", "RplS", &RIPPLE_SIZE)?}),
+        ("Sphr", Some(f)) if exact_keys(f, &["Amnt", "SphM"]) => json!({"amount": int(f, "Amnt")?, "mode": enum_name(f, "SphM", "SphM", &SPHERIZE_MODE)?}),
+        ("Plr ", Some(f)) if exact_keys(f, &["Cnvr"]) => json!({"mode": enum_name(f, "Cnvr", "Cnvr", &POLAR_MODE)?}),
+        ("ZgZg", Some(f)) if exact_keys(f, &["Amnt", "NmbR", "ZZTy"]) => {
+            json!({"amount": int(f, "Amnt")?, "ridges": int(f, "NmbR")?, "style": enum_name(f, "ZZTy", "ZZTy", &ZIGZAG_STYLE)?})
+        }
+        ("Wave", Some(f)) if exact_keys(f, &WAVE_KEYS) => {
+            // PhotoCraft's Wave has no Scale: a scaled wave stays verbatim rather than lose it. The
+            // same for more generators than the renderer models, which would draw fewer than
+            // Photoshop did (and than the file asks for, once its cached pixels are re-rendered).
+            let generators = int(f, "NmbG")?;
+            let modelled = u32::try_from(generators).is_ok_and(|g| (1..=photocraft_algo::MAX_WAVE_GENERATORS).contains(&g));
+            if int(f, "SclH")? != 100 || int(f, "SclV")? != 100 || !modelled {
+                return None;
+            }
+            json!({
+                "type": enum_name(f, "Wvtp", "Wvtp", &WAVE_TYPE)?,
+                "generators": generators,
+                "wavelengthMin": int(f, "WLMn")?,
+                "wavelengthMax": int(f, "WLMx")?,
+                "amplitudeMin": int(f, "AmMn")?,
+                "amplitudeMax": int(f, "AmMx")?,
+                "undefinedAreas": enum_name(f, "UndA", "UndA", &UNDEFINED_AREAS)?,
+                // `RndS` is a signed long; the seed is its bit pattern.
+                "seed": (int(f, "RndS")? as u32),
+            })
+        }
         ("GsnB" | "boxblur" | "Mdn " | "HghP" | "Mxm " | "Mnm ", Some(f)) => json!({"radius": px(f, "Rds ")?}),
         ("MtnB", Some(f)) => json!({"angle": int(f, "Angl")?, "distance": px(f, "Dstn")?}),
         ("UnsM", Some(f)) => json!({"amount": px(f, "Amnt")?, "radius": px(f, "Rds ")?, "threshold": int(f, "Thsh")?}),
@@ -1120,6 +1177,37 @@ fn fltr_for(k: &Known, p: &J) -> Result<Option<Descriptor>, String> {
         // No settings to write; any parameter keys an old record carries have no effect on the
         // filter either, so nothing is lost.
         c if NO_OPTIONS.contains(&c) => return Ok(None),
+        // Keys and order as Photoshop writes them.
+        "Pnch" => d.with("Amnt", pi(p, "amount", 50.0)),
+        "Twrl" => d.with("Angl", pi(p, "angle", 50.0)),
+        "Rple" => d.with("Amnt", pi(p, "amount", 100.0)).with("RplS", enum_param(p, "size", "medium", "RplS", &RIPPLE_SIZE)?),
+        "Sphr" => d.with("Amnt", pi(p, "amount", 100.0)).with("SphM", enum_param(p, "mode", "normal", "SphM", &SPHERIZE_MODE)?),
+        "Plr " => d.with("Cnvr", enum_param(p, "mode", "rectangularToPolar", "Cnvr", &POLAR_MODE)?),
+        "ZgZg" => {
+            d.with("Amnt", pi(p, "amount", 10.0)).with("NmbR", pi(p, "ridges", 5.0)).with("ZZTy", enum_param(p, "style", "pondRipples", "ZZTy", &ZIGZAG_STYLE)?)
+        }
+        "Wave" => {
+            // The seed the renderer draws with (engine `filters::seed`): a u32, else a legacy signed
+            // or fractional seed, rounded and saturated, as its bit pattern.
+            let seed = match p.get("seed").and_then(J::as_u64).and_then(|s| u32::try_from(s).ok()) {
+                Some(s) => Value::Integer(s as i32),
+                None => pi(p, "seed", 0.0),
+            };
+            // The renderer draws at most MAX_WAVE_GENERATORS: write what PhotoCraft rendered, so
+            // Photoshop doesn't draw more generators than the user saw.
+            let generators = pf(p, "generators", 5.0).round().clamp(1.0, f64::from(photocraft_algo::MAX_WAVE_GENERATORS)) as i32;
+            d.with("Wvtp", enum_param(p, "type", "sine", "Wvtp", &WAVE_TYPE)?)
+                .with("NmbG", Value::Integer(generators))
+                .with("WLMn", pi(p, "wavelengthMin", 10.0))
+                .with("WLMx", pi(p, "wavelengthMax", 120.0))
+                .with("AmMn", pi(p, "amplitudeMin", 5.0))
+                .with("AmMx", pi(p, "amplitudeMax", 35.0))
+                .with("SclH", Value::Integer(100))
+                .with("SclV", Value::Integer(100))
+                .with("UndA", enum_param(p, "undefinedAreas", "wrap", "UndA", &UNDEFINED_AREAS)?)
+                .with("RndS", seed)
+        }
+        "Invr" => return Ok(None),
         _ => return Err("not a recognized filter".into()),
     }))
 }
@@ -1248,8 +1336,8 @@ pub struct PlacedSpec<'a> {
 
 /// Where the frame corners land (top-left, top-right, bottom-right, bottom-left), as x, y pairs.
 /// The frame is [`crate::blocks::placed_frame`] of `warp`, the warp the block stores, for an
-/// affine placement (the inverse of `parse_smart`), the source rect for a projective one (as
-/// `parse_smart_perspective` reads it).
+/// affine placement (the inverse of `parse_smart`), [`crate::blocks::perspective_frame`] of it
+/// for a projective one (as `parse_smart_perspective` reads it).
 fn quad_points(s: &PlacedSpec<'_>, warp: Option<&Warp>) -> [f64; 8] {
     let (w, h) = s.size;
     let [a, b, c, d, e, f] = s.transform.m;
@@ -1257,7 +1345,7 @@ fn quad_points(s: &PlacedSpec<'_>, warp: Option<&Warp>) -> [f64; 8] {
         Some(p) => photocraft_algo::transform::Homography(*p).apply(x, y),
         None => (a * x + c * y + e, b * x + d * y + f),
     };
-    let [x0, y0, x1, y1] = if s.perspective.is_some() { [0.0, 0.0, w, h] } else { crate::blocks::placed_frame(warp, w, h) };
+    let [x0, y0, x1, y1] = if s.perspective.is_some() { crate::blocks::perspective_frame(warp, w, h) } else { crate::blocks::placed_frame(warp, w, h) };
     let mut out = [0.0; 8];
     for (i, (x, y)) in [(x0, y0), (x1, y0), (x1, y1), (x0, y1)].into_iter().enumerate() {
         (out[2 * i], out[2 * i + 1]) = map(x, y);
@@ -1308,10 +1396,10 @@ fn warp_head(class: &str, w: &Warp) -> Descriptor {
         .with("Left", Value::Double(x0))
         .with("Btom", Value::Double(y1))
         .with("Rght", Value::Double(x1));
-    Descriptor::new(class)
-        .with("warpStyle", enumv("warpStyle", w.style.psd_name()))
-        .with("warpValue", Value::Double(w.bend))
-        .with("warpPerspective", Value::Double(w.h_distort))
+    let d = Descriptor::new(class).with("warpStyle", enumv("warpStyle", w.style.psd_name())).with("warpValue", Value::Double(w.bend));
+    // A cylinder is stored as its seven `warpValues` (#4112).
+    let d = if w.style == WarpStyle::Cylinder { d.with("warpValues", Value::List(w.values.iter().copied().map(Value::Double).collect())) } else { d };
+    d.with("warpPerspective", Value::Double(w.h_distort))
         .with("warpPerspectiveOther", Value::Double(w.v_distort))
         .with("warpRotate", enumv("Ornt", if w.vertical { "Vrtc" } else { "Hrzn" }))
         .with("bounds", Value::Descriptor(bounds))
@@ -1329,7 +1417,8 @@ fn mesh_points(m: &BezierMesh) -> Value {
 
 /// The `warp` descriptor (also the `PlLd` warp). A split warp is written as no warp: `SoLd`
 /// keeps it in `quiltWarp` ([`quilt_desc`]), next to this `warpNone`, as Photoshop does. A
-/// custom warp without a usable mesh is written as no warp, with a message.
+/// custom warp without a usable mesh is written as no warp, with a message. A cylinder is
+/// written as its seven `warpValues`.
 fn warp_desc(w: Option<&Warp>, size: (f64, f64), warnings: &mut Vec<String>) -> Value {
     let none = Warp::none([0.0, 0.0, size.0, size.1]);
     let mut w = w.unwrap_or(&none).clone();
@@ -1731,8 +1820,27 @@ mod tests {
             sf("image.adjustments.levels", json!({"inBlack": 20, "inWhite": 220, "gamma": 1.4, "red": {"inBlack": 0, "inWhite": 255, "gamma": 0.8}})),
             sf("image.adjustments.curves", json!({"points": [[0.0, 0.0], [64.0, 40.0], [255.0, 255.0]], "blue": [[0.0, 20.0], [255.0, 235.0]]})),
             sf("image.adjustments.shadowsHighlights", json!({})),
+            sf("filter.sharpen.sharpen", json!({})),
+            // Photoshop stores Dust & Scratches' radius in whole pixels (a `long`).
+            sf("filter.noise.dustAndScratches", json!({"radius": 4, "threshold": 12})),
+            sf(
+                "image.adjustments.hueSaturation",
+                json!({"colorize": false, "hue": 10, "saturation": -20, "lightness": 5, "reds": {"hue": 5, "saturation": 0, "lightness": -3, "range": [315, 345, 15, 45]}}),
+            ),
             // A pencil-drawn curve: 256 output levels (`Mpng`).
             sf("image.adjustments.curves", json!({"pencil": true, "points": (0..256).rev().collect::<Vec<i32>>()})),
+            sf("filter.distort.pinch", json!({"amount": -28})),
+            sf("filter.distort.polarCoordinates", json!({"mode": "rectangularToPolar"})),
+            sf("filter.distort.ripple", json!({"amount": 250, "size": "small"})),
+            sf("filter.distort.spherize", json!({"amount": 60, "mode": "verticalOnly"})),
+            sf("filter.distort.twirl", json!({"angle": -355})),
+            sf(
+                "filter.distort.wave",
+                json!({"type": "square", "generators": 3, "wavelengthMin": 20, "wavelengthMax": 90, "amplitudeMin": 4, "amplitudeMax": 30,
+                       "undefinedAreas": "repeat", "seed": 4_000_000_000u32}),
+            ),
+            sf("filter.distort.zigZag", json!({"amount": 30, "ridges": 7, "style": "aroundCenter"})),
+            sf("image.adjustments.invert", json!({})),
         ];
         for mut f in filters.into_iter().chain(wind_extrude_tiles_settings()) {
             f.blend = BlendMode::Overlay;
@@ -2097,6 +2205,48 @@ mod tests {
             .with("hasoptions", Value::Boolean(true))
             .with("FrgC", rgbc(fg))
             .with("BckC", rgbc(bg))
+            .with("Fltr", Value::Descriptor(fltr))
+            .with("filterID", Value::Integer(id))
+    }
+
+    /// The `Fltr` descriptors Photoshop 27 wrote for these filters (one smart object each, saved as
+    /// PSD and read back), with the settings PhotoCraft reads from them.
+    const PHOTOSHOP_FLTR: [(&str, &str, &str); 6] = [
+        ("filter.distort.pinch", r#"{"amount":-28}"#, "0000000600500069006e00630068000000000000506e63680000000100000000416d6e746c6f6e67ffffffe4"),
+        ("filter.distort.twirl", r#"{"angle":-355}"#, "000000060054007700690072006c0000000000005477726c0000000100000000416e676c6c6f6e67fffffe9d"),
+        (
+            "filter.distort.ripple",
+            r#"{"amount":-273,"size":"large"}"#,
+            "000000070052006900700070006c006500000000000052706c650000000200000000416d6e746c6f6e67fffffeef0000000052706c53656e756d0000000052706c53000000004c726720",
+        ),
+        (
+            "filter.distort.spherize",
+            r#"{"amount":-1,"mode":"horizontalOnly"}"#,
+            "00000009005300700068006500720069007a0065000000000000537068720000000200000000416d6e746c6f6e67ffffffff000000005370684d656e756d000000005370684d0000000048727a4f",
+        ),
+        (
+            "filter.distort.polarCoordinates",
+            r#"{"mode":"polarToRectangular"}"#,
+            "000000120050006f006c0061007200200043006f006f007200640069006e0061007400650073000000000000506c72200000000100000000436e7672656e756d00000000436e767200000000506c7252",
+        ),
+        (
+            "filter.distort.zigZag",
+            r#"{"amount":-42,"ridges":11,"style":"pondRipples"}"#,
+            "00000007005a00690067005a006100670000000000005a675a670000000300000000416d6e746c6f6e67ffffffd6000000004e6d62526c6f6e670000000b000000005a5a5479656e756d000000005a5a547900000000506e6452",
+        ),
+    ];
+
+    /// Photoshop's Wave with Scale 100% / 28%: PhotoCraft's Wave has no Scale.
+    const PHOTOSHOP_WAVE: &str = "000000050057006100760065000000000000576176650000000a0000000057767470656e756d00000000577674700000000057765472000000004e6d62476c6f6e670000014c00000000574c4d6e6c6f6e67000000d500000000574c4d786c6f6e67000000d600000000416d4d6e6c6f6e67000000f000000000416d4d786c6f6e67000000f10000000053636c486c6f6e67000000640000000053636c566c6f6e670000001c00000000556e6441656e756d00000000556e6441000000005772704100000000526e64536c6f6e670013624a";
+
+    /// A `filterFX` list item as Photoshop writes it (enabled, Normal at 100%, with options), wrapping the `Fltr` descriptor `fltr`.
+    fn photoshop_fltr_item(fltr: Descriptor) -> Descriptor {
+        let id = code(fltr.class_id.as_bytes().try_into().unwrap());
+        Descriptor::new("filterFX")
+            .with("Nm  ", Value::Text(UnicodeString::new_nul("from Photoshop")))
+            .with("blendOptions", Value::Descriptor(Descriptor::new("blendOptions").with("Opct", unit(b"#Prc", 100.0)).with("Md  ", enumv("BlnM", "normal"))))
+            .with("enab", Value::Boolean(true))
+            .with("hasoptions", Value::Boolean(true))
             .with("Fltr", Value::Descriptor(fltr))
             .with("filterID", Value::Integer(id))
     }
@@ -2580,17 +2730,233 @@ mod tests {
         assert_eq!(filter_from_item(&bare).command, UNSUPPORTED_FILTER);
     }
 
+    /// Distort smart filters from a Photoshop file open as their PhotoCraft filters, and the ones
+    /// PhotoCraft writes carry the same settings, keys and order as Photoshop's.
+    #[test]
+    fn photoshop_distort_filters_read_and_write_like_photoshop() {
+        for (command, params, hex) in PHOTOSHOP_FLTR {
+            let ps = Descriptor::from_bytes(&from_hex(hex).unwrap()).unwrap();
+            let f = filter_from_item(&photoshop_fltr_item(ps.clone()));
+            let want: J = serde_json::from_str(params).unwrap();
+            assert_eq!((f.command.as_str(), &f.params), (command, &want), "{command}");
+            let ours = match item_for_filter(&f).unwrap().get("Fltr") {
+                Some(Value::Descriptor(d)) => d.clone(),
+                other => panic!("{command}: no Fltr ({other:?})"),
+            };
+            assert_eq!((&ours.class_id, &ours.items), (&ps.class_id, &ps.items), "{command}: same keys, values and order");
+        }
+        // A scaled wave can't be modelled, so it stays Photoshop's, unchanged.
+        let wave = Descriptor::from_bytes(&from_hex(PHOTOSHOP_WAVE).unwrap()).unwrap();
+        let item = photoshop_fltr_item(wave);
+        let f = filter_from_item(&item);
+        assert_eq!(f.command, UNSUPPORTED_FILTER);
+        assert_eq!(item_for_filter(&f).unwrap().get("Fltr"), item.get("Fltr"));
+        // Unscaled, but with 332 generators (the renderer draws 64 at most), it stays Photoshop's too.
+        let mut unscaled = match item.get("Fltr") {
+            Some(Value::Descriptor(d)) => d.clone(),
+            other => panic!("wave: no Fltr ({other:?})"),
+        };
+        set(&mut unscaled, "SclV", Value::Integer(100));
+        let item = photoshop_fltr_item(unscaled);
+        let f = filter_from_item(&item);
+        assert_eq!(f.command, UNSUPPORTED_FILTER);
+        assert_eq!(item_for_filter(&f).unwrap().get("Fltr"), item.get("Fltr"));
+
+        // An extra or repeated setting PhotoCraft doesn't model keeps the filter Photoshop's, unchanged.
+        let mut fltrs: Vec<Descriptor> = PHOTOSHOP_FLTR.iter().map(|(_, _, hex)| Descriptor::from_bytes(&from_hex(hex).unwrap()).unwrap()).collect();
+        let mut wave = unscaled_wave();
+        set(&mut wave, "NmbG", Value::Integer(5));
+        assert_eq!(filter_from_item(&photoshop_fltr_item(wave.clone())).command, "filter.distort.wave", "the plain wave maps");
+        fltrs.push(wave);
+        for ps in fltrs {
+            let name = String::from_utf8_lossy(ps.class_id.as_bytes()).into_owned();
+            let mut repeated = ps.clone();
+            repeated.items.push(ps.items[0].clone());
+            for odd in [ps.clone().with("Xtra", Value::Integer(7)), repeated] {
+                let item = photoshop_fltr_item(odd);
+                let f = filter_from_item(&item);
+                assert_eq!(f.command, UNSUPPORTED_FILTER, "{name}");
+                assert_eq!(item_for_filter(&f).unwrap().get("Fltr"), item.get("Fltr"), "{name}: written back unchanged");
+            }
+        }
+    }
+
+    /// Photoshop's Wave ([`PHOTOSHOP_WAVE`]) at 100% scale both ways.
+    fn unscaled_wave() -> Descriptor {
+        let mut wave = Descriptor::from_bytes(&from_hex(PHOTOSHOP_WAVE).unwrap()).unwrap();
+        set(&mut wave, "SclV", Value::Integer(100));
+        wave
+    }
+
+    /// An unscaled Wave opens as PhotoCraft's Wave (Triangle, the other settings as stored) up to
+    /// the generators the renderer models; one more and it stays Photoshop's, unchanged.
+    #[test]
+    fn wave_maps_up_to_the_generators_the_renderer_models() {
+        let max = i32::try_from(photocraft_algo::MAX_WAVE_GENERATORS).unwrap();
+        assert_eq!(max, 64);
+        let mut wave = Descriptor::from_bytes(&from_hex(PHOTOSHOP_WAVE).unwrap()).unwrap();
+        set(&mut wave, "SclV", Value::Integer(100));
+        for (generators, mapped) in [(1, true), (max, true), (max + 1, false), (999, false), (0, false), (-1, false)] {
+            set(&mut wave, "NmbG", Value::Integer(generators));
+            let item = photoshop_fltr_item(wave.clone());
+            let f = filter_from_item(&item);
+            if mapped {
+                assert_eq!(
+                    (f.command.as_str(), &f.params),
+                    (
+                        "filter.distort.wave",
+                        &json!({"type": "triangle", "generators": generators, "wavelengthMin": 213, "wavelengthMax": 214, "amplitudeMin": 240,
+                                "amplitudeMax": 241, "undefinedAreas": "wrap", "seed": 1270346})
+                    ),
+                    "{generators} generators"
+                );
+                match item_for_filter(&f).unwrap().get("Fltr") {
+                    Some(Value::Descriptor(ours)) => assert_eq!((&ours.class_id, &ours.items), (&wave.class_id, &wave.items), "{generators} generators"),
+                    other => panic!("wave: no Fltr ({other:?})"),
+                }
+            } else {
+                assert_eq!(f.command, UNSUPPORTED_FILTER, "{generators} generators");
+                assert_eq!(item_for_filter(&f).unwrap().get("Fltr"), item.get("Fltr"), "{generators} generators");
+            }
+        }
+    }
+
+    /// PhotoCraft draws at most `MAX_WAVE_GENERATORS` generators, so a Wave edited past that exports
+    /// the 64 it rendered, and a count below 1 exports 1, instead of Photoshop drawing more.
+    #[test]
+    fn wave_export_writes_only_the_generators_the_renderer_draws() {
+        let max = i32::try_from(photocraft_algo::MAX_WAVE_GENERATORS).unwrap();
+        for (stored, written) in [(100, max), (999, max), (max + 1, max), (max, max), (5, 5), (1, 1), (0, 1), (-3, 1)] {
+            let wave = sf(
+                "filter.distort.wave",
+                json!({"type": "sine", "generators": stored, "wavelengthMin": 20, "wavelengthMax": 90, "amplitudeMin": 4, "amplitudeMax": 30}),
+            );
+            let fltr = match item_for_filter(&wave).unwrap().get("Fltr") {
+                Some(Value::Descriptor(d)) => d.clone(),
+                other => panic!("wave: no Fltr ({other:?})"),
+            };
+            assert_eq!(int(&fltr, "NmbG"), Some(written), "{stored} generators");
+        }
+    }
+
+    /// `RndS` is the seed the renderer draws with, also for a legacy signed or fractional seed
+    /// (stored as is by `layer.smartFilter.setParams`), not 0.
+    #[test]
+    fn wave_export_writes_the_seed_the_renderer_draws() {
+        for (stored, written) in [
+            (json!(77), 77),
+            (json!(4_000_000_000u32), -294_967_296),
+            (json!(-1), -1),
+            (json!(7.4), 7),
+            (json!(-2.6), -3),
+            (json!(1e12), i32::MAX),
+            (json!("x"), 0),
+        ] {
+            let wave = sf("filter.distort.wave", json!({"generators": 3, "seed": stored}));
+            let fltr = match item_for_filter(&wave).unwrap().get("Fltr") {
+                Some(Value::Descriptor(d)) => d.clone(),
+                other => panic!("wave: no Fltr ({other:?})"),
+            };
+            assert_eq!(int(&fltr, "RndS"), Some(written), "seed {stored}");
+            // And it reads back as that bit pattern.
+            assert_eq!(known_params("Wave", Some(&fltr), &Descriptor::new("filterFX")).unwrap().1["seed"], json!(written as u32), "seed {stored}");
+        }
+    }
+
+    /// Invert on a smart object: Photoshop stores no `Fltr`, `hasoptions` false and its filter id.
+    #[test]
+    fn invert_smart_filter_reads_and_writes_like_photoshop() {
+        let item = Descriptor::new("filterFX")
+            .with("Nm  ", Value::Text(UnicodeString::new_nul("Invert")))
+            .with("blendOptions", Value::Descriptor(Descriptor::new("blendOptions").with("Opct", unit(b"#Prc", 100.0)).with("Md  ", enumv("BlnM", "normal"))))
+            .with("enab", Value::Boolean(true))
+            .with("hasoptions", Value::Boolean(false))
+            .with("FrgC", rgbc(255.0))
+            .with("BckC", rgbc(0.0))
+            .with("filterID", Value::Integer(code(b"Invr")));
+        let f = filter_from_item(&item);
+        assert_eq!((f.command.as_str(), &f.params), ("image.adjustments.invert", &json!({})));
+        let back = item_for_filter(&f).unwrap();
+        assert_eq!(back.get("Fltr"), None);
+        assert_eq!(back.get("hasoptions"), Some(&Value::Boolean(false)));
+        assert_eq!(back.get("filterID"), Some(&Value::Integer(code(b"Invr"))));
+        assert_eq!(back.get("Nm  "), Some(&Value::Text(UnicodeString::new_nul("Invert"))));
+    }
+
+    /// A filter PhotoCraft doesn't model, or a known one with settings it doesn't, is kept verbatim; only its visibility and blend change.
+    #[test]
+    fn photoshop_sharpen_without_fltr_imports_as_sharpen() {
+        // #6267: Photoshop's Sharpen item holds only its name, blending and `filterID`.
+        let item = Descriptor::new("filterFX")
+            .with("Nm  ", Value::Text(UnicodeString::new_nul("Sharpen")))
+            .with("blendOptions", Value::Descriptor(Descriptor::new("blendOptions").with("Opct", unit(b"#Prc", 100.0)).with("Md  ", enumv("BlnM", "normal"))))
+            .with("enab", Value::Boolean(true))
+            .with("hasoptions", Value::Boolean(false))
+            .with("filterID", Value::Integer(1_399_353_968));
+        let f = filter_from_item(&item);
+        assert_eq!((f.command.as_str(), &f.params), ("filter.sharpen.sharpen", &json!({})));
+        // Hue/Saturation with an unnumbered range and Dust & Scratches with a missing setting fail
+        // cleanly instead of panicking.
+        let bad = SmartFilter {
+            command: "image.adjustments.hueSaturation".into(),
+            params: json!({"reds": {"range": [1, "x", 3, 4]}}),
+            blend: BlendMode::Normal,
+            opacity: 1.0,
+            visible: true,
+        };
+        assert!(item_for_filter(&bad).is_err());
+        let dust = Descriptor::new("filterFX")
+            .with("Fltr", Value::Descriptor(Descriptor::new("DstS").with("Rds ", Value::Integer(3))))
+            .with("filterID", Value::Integer(code(b"DstS")));
+        assert_eq!(filter_from_item(&dust).command, UNSUPPORTED_FILTER);
+    }
+
+    #[test]
+    fn hue_saturation_ranges_are_not_lost() {
+        let hue_sat = |params: J| item_for_filter(&sf("image.adjustments.hueSaturation", params));
+        // A range that is not an object is an error, not a silently dropped setting.
+        assert!(hue_sat(json!({"reds": 5})).is_err());
+        assert!(hue_sat(json!({"reds": null})).is_ok());
+        // Colorize's 25% default is the master saturation's only: a range's stays 0.
+        let d = hue_sat(json!({"colorize": true, "reds": {"hue": 5}})).unwrap();
+        let adjs = adjustment_list(get_desc(&d, "Fltr").unwrap()).unwrap();
+        let saturations: Vec<_> = adjs.iter().map(|a| int(a, "Strt")).collect();
+        assert_eq!(saturations, [Some(25), Some(0)]);
+        // A repeated range (or master) would overwrite the first: the filter is kept verbatim.
+        let entry = |range: Option<i32>| {
+            let e = Descriptor::new("Hst2").with("H   ", Value::Integer(0)).with("Strt", Value::Integer(0)).with("Lght", Value::Integer(0));
+            let Some(r) = range else { return Value::Descriptor(e) };
+            let e = ["BgnR", "BgnS", "EndS", "EndR"].iter().fold(e.with("LclR", Value::Integer(r)), |e, k| e.with(k, Value::Integer(10)));
+            Value::Descriptor(e)
+        };
+        for adjs in [vec![entry(None), entry(Some(1)), entry(Some(1))], vec![entry(None), entry(None)]] {
+            let fltr = Descriptor::new("HStr").with("Clrz", Value::Boolean(false)).with("Adjs", Value::List(adjs));
+            let item = Descriptor::new("filterFX")
+                .with("Nm  ", Value::Text(UnicodeString::new_nul("Hue/Saturation...")))
+                .with(
+                    "blendOptions",
+                    Value::Descriptor(Descriptor::new("blendOptions").with("Opct", unit(b"#Prc", 100.0)).with("Md  ", enumv("BlnM", "normal"))),
+                )
+                .with("enab", Value::Boolean(true))
+                .with("Fltr", Value::Descriptor(fltr))
+                .with("filterID", Value::Integer(code(b"HStr")));
+            let f = filter_from_item(&item);
+            assert_eq!(f.command, UNSUPPORTED_FILTER);
+            assert_eq!(item_for_filter(&f).unwrap(), item);
+        }
+    }
+
     #[test]
     fn unknown_filters_keep_their_descriptor() {
         let item = Descriptor::new("filterFX")
-            .with("Nm  ", Value::Text(UnicodeString::new_nul("Twirl...")))
+            .with("Nm  ", Value::Text(UnicodeString::new_nul("Shear...")))
             .with("blendOptions", Value::Descriptor(Descriptor::new("blendOptions").with("Opct", unit(b"#Prc", 100.0)).with("Md  ", enumv("BlnM", "normal"))))
             .with("enab", Value::Boolean(true))
-            .with("Fltr", Value::Descriptor(Descriptor::new("Twrl").with("Angl", Value::Integer(50))))
-            .with("filterID", Value::Integer(code(b"Twrl")));
+            .with("Fltr", Value::Descriptor(Descriptor::new("Shr ").with("UndA", enumv("UndA", "WrpA"))))
+            .with("filterID", Value::Integer(code(b"Shr ")));
         let f = filter_from_item(&item);
         assert_eq!(f.command, UNSUPPORTED_FILTER);
-        assert_eq!(f.params["name"], "Twirl...");
+        assert_eq!(f.params["name"], "Shear...");
         assert_eq!(item_for_filter(&f).unwrap(), item);
         // Hidden and re-blended: only those keys change.
         let mut g = f.clone();
@@ -3093,11 +3459,13 @@ mod tests {
         }
     }
 
+    /// Filters with no PSD equivalent are skipped with a warning each, and the writable ones around them still export.
     #[test]
     fn unwritable_filters_are_reported_not_fatal() {
         let stack = FilterStack {
             filters: vec![
-                sf("filter.distort.twirl", json!({"angle": 50})),
+                // Shear's curve isn't mapped to Photoshop's grid yet.
+                sf("filter.distort.shear", json!({"amount": 40})),
                 sf("filter.blur.gaussianBlur", json!({"radius": 2.0})),
                 sf(UNSUPPORTED_FILTER, json!({"psd": "zz"})),
                 sf("image.adjustments.levels", json!({"cyan": {"gamma": 2.0}})),
@@ -3504,6 +3872,53 @@ mod tests {
         assert_eq!(p.transform, transform);
         // The imported quad reads as unmoved, so the template's `Trnf` is kept as stored.
         assert!(!quad_moved(&p.descriptor, &spec, spec.warp));
+    }
+
+    /// #4112: a regenerated `SoLd` (after Replace Contents, a move…) writes a cylinder back as
+    /// `warpCylinder` and its seven values, not as no warp, and frames its control-point box with
+    /// the quad, affine or projective, so import places it where it was.
+    #[test]
+    fn cylinder_warp_round_trips_through_sold() {
+        let v = [100.0, 800.0, 900.0, 200.0, 0.3, 0.3, 0.5];
+        let warp = Warp::cylinder(&v, [0.0, 0.0, 1000.0, 1000.0]).unwrap();
+        let transform = Affine { m: [0.5, 0.0, 0.0, 0.5, 40.0, 30.0] };
+        let mut spec =
+            PlacedSpec { idnt: "i", placed: "p", transform, perspective: None, size: (1000.0, 1000.0), dpi: 72.0, warp: Some(&warp), filter_fx: None };
+        let mut warnings = Vec::new();
+        let sold = sold_bytes(None, &spec, &mut warnings);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let p = parse_sold(&sold).expect("parses");
+        let Some(Value::Descriptor(w)) = p.descriptor.get("warp") else { panic!("no warp") };
+        assert_eq!(crate::blocks::enum_of(w, "warpStyle"), Some(b"warpCylinder".as_slice()));
+        let Some(Value::List(values)) = w.get("warpValues") else { panic!("no warpValues") };
+        assert_eq!(values.iter().filter_map(|x| num(Some(x))).collect::<Vec<_>>(), v);
+        assert!(w.get("customEnvelopeWarp").is_none());
+        assert_eq!(crate::blocks::parse_placed_warp(b"SoLd", &sold), Some(warp.clone()));
+        for (a, b) in p.transform.m.iter().zip(transform.m) {
+            assert!((a - b).abs() < 1e-9, "{:?}", p.transform);
+        }
+        // The quad is the image of the control-point box, not of the source rect.
+        let cb = warp.mesh.as_ref().unwrap().control_bounds();
+        let Some(Value::List(q)) = p.descriptor.get("Trnf") else { panic!("no Trnf") };
+        let q: Vec<f64> = q.iter().filter_map(|x| num(Some(x))).collect();
+        let want = [cb[0], cb[1], cb[2], cb[1], cb[2], cb[3], cb[0], cb[3]].map(|c| 0.5 * c);
+        for (i, (a, b)) in q.iter().zip(want).enumerate() {
+            let shift = if i % 2 == 0 { 40.0 } else { 30.0 };
+            assert!((a - (b + shift)).abs() < 1e-9, "corner {i}: {q:?}");
+        }
+        assert!(!quad_moved(&p.descriptor, &spec, spec.warp));
+        // A projective placement comes back as the same map.
+        let h = photocraft_algo::transform::Homography::rect_to_quad(cb, [[10.0, 20.0], [410.0, 60.0], [400.0, 480.0], [30.0, 520.0]]).unwrap();
+        spec.perspective = Some(h.0);
+        let sold = sold_bytes(None, &spec, &mut warnings);
+        let back = crate::blocks::parse_smart_perspective(b"SoLd", &sold).expect("projective");
+        let n = |m: [f64; 9]| m.map(|x| x / m[8]);
+        for (a, b) in n(back).iter().zip(n(h.0)) {
+            assert!((a - b).abs() < 1e-9 * (1.0 + b.abs()), "{back:?} vs {:?}", h.0);
+        }
+        let plld = plld_bytes(&spec, &mut warnings);
+        assert_eq!(crate::blocks::parse_plld_warp(&plld), crate::blocks::PlldWarp::Warp(warp));
+        assert!(warnings.is_empty(), "{warnings:?}");
     }
 
     #[test]

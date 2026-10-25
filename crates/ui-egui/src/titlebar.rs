@@ -54,7 +54,7 @@ pub enum CaptionFamily {
 /// The title bar's unused gap, saved by `panels::title_bar` for drags that begin while a modal
 /// backdrop is on top of the normal title-bar widgets.
 pub(crate) fn modal_drag_area_id() -> Id {
-    Id::new(MODAL_DRAG_AREA)
+    Id::unique(MODAL_DRAG_AREA)
 }
 
 /// Restore window dragging over the title bar's empty gap after a modal has blocked the normal
@@ -65,7 +65,7 @@ pub(crate) fn modal_drag_overlay(ctx: &egui::Context) {
     if !area.is_positive() || egui::Popup::is_any_open(ctx) || !crate::dialogs::titlebar_drag_area_is_clear(ctx, area) {
         return;
     }
-    egui::Area::new(Id::new("titlebar-modal-drag-overlay")).order(Order::Tooltip).fixed_pos(area.min).movable(false).sense(Sense::hover()).show(ctx, |ui| {
+    egui::Area::new(Id::unique("titlebar-modal-drag-overlay")).order(Order::Tooltip).fixed_pos(area.min).movable(false).sense(Sense::hover()).show(ctx, |ui| {
         let response = ui.allocate_rect(area, Sense::click_and_drag());
         if response.drag_started_by(PointerButton::Primary) {
             start_os_move(ctx);
@@ -241,7 +241,7 @@ fn layout(s: &CaptionStyle, bar: Rect, left: f32, right: f32) -> Vec<(Caption, R
 
 /// Caption button ids (stable, so tests and agents can find them).
 fn caption_id(c: Caption) -> Id {
-    Id::new(("titlebar-caption", c as u8))
+    Id::unique(("titlebar-caption", c as u8))
 }
 
 fn maximized(ctx: &egui::Context) -> bool {
@@ -290,7 +290,7 @@ pub fn caption_buttons(app: &mut PhotocraftApp, ui: &mut Ui, bar: Rect) {
             Caption::Maximize => tl!("Maximize"),
             Caption::Close => tl!("Close"),
         };
-        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tip));
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tip));
         if resp.on_hover_text(tip).clicked() {
             clicked = Some(c);
         }
@@ -427,7 +427,7 @@ fn paint_round(ui: &Ui, t: &Tokens, s: &CaptionStyle, c: Caption, maximized: boo
 /// `icon` from the theme at `px` device pixels, uploaded once per theme and size; `None` (also
 /// remembered) when the theme lacks it or it doesn't render.
 fn theme_icon(ctx: &egui::Context, icons: &CaptionIcons, icon: CaptionIcon, px: u32) -> Option<egui::TextureHandle> {
-    let id = Id::new(("caption-icon", &icons.theme, icon, px));
+    let id = Id::unique(("caption-icon", &icons.theme, icon, px));
     if let Some(cached) = ctx.data(|d| d.get_temp::<Option<egui::TextureHandle>>(id)) {
         return cached;
     }
@@ -465,7 +465,7 @@ fn zones(w: Rect) -> [(Rect, ResizeDirection, CursorIcon); 8] {
 }
 
 fn resize_handed_off_id() -> Id {
-    Id::new("titlebar-resize-handed-off")
+    Id::unique("titlebar-resize-handed-off")
 }
 
 /// An OS resize or move started at `pass`; `released` is the pass whose input ended the press
@@ -533,10 +533,10 @@ pub fn resize_zones(ui: &mut Ui) {
         return;
     }
     let w = ctx.content_rect();
-    let layer = LayerId::new(Order::Foreground, Id::new("titlebar-resize"));
+    let layer = LayerId::new(Order::Foreground, Id::unique("titlebar-resize"));
     let zui = ui.new_child(egui::UiBuilder::new().layer_id(layer).max_rect(w));
     for (i, (r, dir, cursor)) in zones(w).into_iter().enumerate() {
-        let resp = zui.interact(r, Id::new(("titlebar-resize", i)), Sense::drag()).on_hover_cursor(cursor);
+        let resp = zui.interact(r, Id::unique(("titlebar-resize", i)), Sense::drag()).on_hover_cursor(cursor);
         if resp.drag_started_by(PointerButton::Primary) {
             ctx.send_viewport_cmd(ViewportCommand::BeginResize(dir));
             hand_off(&ctx);
@@ -604,7 +604,7 @@ mod tests {
             let mut out = self.ctx.run_ui(input, |ui| {
                 crate::panels::title_bar(app, ui);
                 if modal {
-                    egui::Modal::new(Id::new("titlebar-drag-test-modal")).backdrop_color(Color32::TRANSPARENT).show(ui.ctx(), |ui| {
+                    egui::Modal::new(Id::unique("titlebar-drag-test-modal")).backdrop_color(Color32::TRANSPARENT).show(ui.ctx(), |ui| {
                         ui.label("Modal dialog");
                     });
                     modal_drag_overlay(ui.ctx());
@@ -729,6 +729,25 @@ mod tests {
         assert!(cmds.iter().any(|c| matches!(c, ViewportCommand::Close)), "{cmds:?}");
     }
 
+    /// After the window's GPU device is lost, the prompt asking about unsaved work could never be
+    /// drawn: the close button quits instead of opening it (see `discard_ui::intercept`).
+    #[test]
+    fn close_quits_without_a_prompt_once_the_window_device_is_lost() {
+        let mut w = Win::new(1100.0);
+        w.app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+        w.app.run("layer.new.layer", json!({})).unwrap();
+        w.frame(vec![]);
+        let close = w.caption(Caption::Close).center();
+        let asks = w.click(close);
+        assert!(!asks.iter().any(|c| matches!(c, ViewportCommand::Close)), "a window that can draw asks first: {asks:?}");
+        assert!(w.app.discard.is_some());
+        w.app.discard = None;
+        w.app.window_lost = true;
+        let quits = w.click(close);
+        assert!(quits.iter().any(|c| matches!(c, ViewportCommand::Close)), "{quits:?}");
+        assert!(w.app.discard.is_none(), "no prompt opened");
+    }
+
     #[test]
     fn minimize_and_maximize_follow_the_window_state() {
         let mut w = Win::new(1100.0);
@@ -800,7 +819,7 @@ mod tests {
         w.frame_with_modal(vec![], true);
         let area = w.ctx.data(|d| d.get_temp::<Rect>(modal_drag_area_id())).unwrap_or(Rect::NOTHING);
         assert!(area.contains(pos2(980.0, 16.0)), "the probe point must be in the gap: {area:?}");
-        w.ctx.data_mut(|d| d.insert_temp(Id::new("pc-dialog-rects"), vec![area]));
+        w.ctx.data_mut(|d| d.insert_temp(Id::unique("pc-dialog-rects"), vec![area]));
         let cmds = w.gesture_with_modal(&[area.center(), area.center() + vec2(12.0, 4.0)], true);
         assert!(!cmds.iter().any(|c| matches!(c, ViewportCommand::StartDrag)), "{cmds:?}");
     }

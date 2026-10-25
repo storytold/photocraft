@@ -11,6 +11,7 @@ use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
 use crate::canvas::ViewXform;
+use crate::shape_paint_ui::{PaintChange, swatch};
 use crate::state::{Tool, ToolOptions};
 use crate::theme::Tokens;
 
@@ -1305,7 +1306,9 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
     }
     let t = Tokens::get(ui.ctx());
     let lbl = |ui: &mut egui::Ui, s: &str| {
-        ui.label(egui::RichText::new(s).color(t.text_dim).size(12.0));
+        let label = ui.label(egui::RichText::new(s).color(t.text_dim).size(12.0));
+        // The caption scrubs and names the control drawn right after it.
+        crate::widgets::scrub_option_label(ui, &label);
     };
     let o = &mut app.ui.tool_options;
     let target = selected_shape(&app.session);
@@ -1335,10 +1338,10 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
     }
     if matches!(tool, Tool::Pen | Tool::FreeformPen | Tool::CurvaturePen) {
         let opts = [("path".to_string(), tl!("Path")), ("shape".to_string(), tl!("Shape"))];
-        crate::widgets::dropdown(ui, "pen-mode", &mut o.vector_mode, &opts, 80.0);
+        crate::widgets::dropdown(ui, "pen-mode", tl!("Mode"), &mut o.vector_mode, &opts, 80.0);
         crate::widgets::vline(ui, 22.0);
         if o.vector_mode == "shape" {
-            crate::widgets::value_field(ui, &mut o.stroke_width, 0.0..=288.0, "px", 58.0);
+            crate::widgets::value_field(ui, &mut o.stroke_width, 0.0..=288.0, "px", 58.0).accessible_name(tl!("Stroke:"));
             if let Some(change) =
                 crate::shape_stroke_ui::button(ui, "pen-stroke", &o.shape_stroke, &mut app.ui.stroke_editor, false, true, None, o.stroke_width > 0.0)
             {
@@ -1389,142 +1392,17 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         return true;
     }
     let mut mode = "shape".to_string();
-    crate::widgets::dropdown(ui, "shape-mode", &mut mode, &[("shape".to_string(), tl!("Shape"))], 80.0);
+    crate::widgets::dropdown(ui, "shape-mode", tl!("Mode"), &mut mode, &[("shape".to_string(), tl!("Shape"))], 80.0);
     crate::widgets::vline(ui, 22.0);
-    // Fill and Stroke edit the selected shape layer too (#3347), and still set the next shape's.
-    let (fg, bg) = (app.session.tools.foreground, app.session.tools.background);
-    let (mut has_fill, fill, stroke) = match &target {
-        Some(s) => (s.fill.is_some(), s.fill.clone(), s.stroke.clone()),
-        None => (o.shape_fill, o.shape_fill.then(|| solid_paint(fg)), (o.stroke_width > 0.0).then(|| o.shape_stroke.stroke(o.stroke_width, solid_paint(bg)))),
-    };
-    let mut width = stroke.as_ref().map_or(0.0, |s| s.width);
-    let stroke_enabled = stroke.as_ref().is_some_and(|s| s.width > 0.0);
-    let style = stroke.as_ref().map_or_else(|| o.shape_stroke.clone(), crate::shape_stroke_ui::StrokeOptions::from);
-    let gesture_key = ui.id().with("shape-options-paint-gesture");
-    let gesture = paint_gesture(ui, gesture_key);
-    let key = |k: &str| target.as_ref().map(|s| format!("shape-options-{:?}-{}-{k}:{}:{gesture}", s.doc, s.layer.0, gesture_key.value()));
-    let mut edit: Option<Value> = None;
-    lbl(ui, tl!("Fill:"));
-    if crate::widgets::checkbox(ui, &mut has_fill, "").changed() {
-        o.shape_fill = has_fill;
-        edit = Some(json!({"fill": if has_fill { json!(fg) } else { Value::Null }}));
-    }
-    let fill_color = swatch(ui, fill.as_ref(), fg, tl!("Fill color"));
-    lbl(ui, tl!("Stroke:"));
-    let stroke_color = swatch(ui, stroke.as_ref().map(|s| &s.paint), bg, tl!("Stroke color"));
-    if crate::widgets::value_field(ui, &mut width, 0.0..=288.0, "px", 58.0).changed() {
-        o.stroke_width = width;
-        let mut p = json!({"width": width});
-        if stroke.is_none() {
-            p["color"] = json!(bg);
-        }
-        edit = Some(json!({"stroke": p, "coalesce": key("stroke-w")}));
-    }
-    let preview = target.as_ref().filter(|s| s.stroke.is_some()).map(|s| (s.doc, s.layer));
-    if let Some(change) =
-        crate::shape_stroke_ui::button(ui, "tool-stroke", &style, &mut app.ui.stroke_editor, true, tool != Tool::EllipseShape, preview, stroke_enabled)
-    {
-        let mut p = change.options.params();
-        if !stroke_enabled {
-            p["width"] = json!(3.0);
-        }
-        if stroke.is_none() {
-            p["color"] = json!(bg);
-        }
-        edit = Some(json!({"stroke": p, "coalesce": change.coalesce}));
-        o.shape_stroke = change.options;
-        o.stroke_width = enabled_stroke_width(o.stroke_width);
-    }
-    match tool {
-        Tool::Rectangle => {
-            crate::widgets::vline(ui, 22.0);
-            lbl(ui, tl!("Radius:"));
-            let mut r = match target.as_ref().and_then(|s| s.live.as_ref()) {
-                Some(photocraft_doc::LiveShape::Rect { radii, .. }) => radii[0] as f32,
-                _ => o.corner_radius,
-            };
-            if crate::widgets::value_field(ui, &mut r, 0.0..=10000.0, "px", 62.0).changed() {
-                o.corner_radius = r;
-                let rf = r as f64;
-                edit = Some(json!({"radii": [rf, rf, rf, rf], "coalesce": key("radius")}));
-            }
-        }
-        Tool::Polygon => {
-            crate::widgets::vline(ui, 22.0);
-            lbl(ui, tl!("Sides:"));
-            let mut s = o.polygon_sides as f32;
-            if crate::widgets::value_field(ui, &mut s, 3.0..=100.0, "", 48.0).changed() {
-                o.polygon_sides = s.round().clamp(3.0, 100.0) as u32;
-            }
-        }
-        Tool::Line => {
-            crate::widgets::vline(ui, 22.0);
-            lbl(ui, tl!("Weight:"));
-            crate::widgets::value_field(ui, &mut o.line_weight, 1.0..=1000.0, "px", 58.0);
-        }
-        Tool::CustomShape => {
-            crate::widgets::vline(ui, 22.0);
-            crate::preset_panels::shape_picker(app, ui);
-        }
-        _ if matches!(tool, Tool::PathSelection | Tool::DirectSelection) => {
-            if let Some(photocraft_doc::LiveShape::Rect { radii, .. }) = target.as_ref().and_then(|s| s.live.as_ref()) {
-                crate::widgets::vline(ui, 22.0);
-                lbl(ui, tl!("Radius:"));
-                let mut r = radii[0] as f32;
-                if crate::widgets::value_field(ui, &mut r, 0.0..=10000.0, "px", 62.0).changed() {
-                    o.corner_radius = r;
-                    let rf = r as f64;
-                    edit = Some(json!({"radii": [rf, rf, rf, rf], "coalesce": key("radius")}));
-                }
-            }
-        }
-        _ => {}
-    }
-    for (is_stroke, change) in [(false, fill_color), (true, stroke_color)] {
-        let Some(change) = change else { continue };
-        if let Err(e) = set_tool_paint(app, is_stroke, change) {
-            app.ui.status = e;
-            app.ui.status_error = true;
-        }
-        edit = Some(match (is_stroke, change) {
-            (false, PaintChange::None) => json!({"fill": null}),
-            (false, PaintChange::Color(color)) => json!({"fill": color, "coalesce": key("fill")}),
-            (true, PaintChange::None) => json!({"stroke": null}),
-            (true, PaintChange::Color(color)) => json!({"stroke": {"color": color, "width": enabled_stroke_width(width)}, "coalesce": key("stroke")}),
-        });
-    }
-    if let (Some(mut p), Some(s)) = (edit, &target) {
-        p["layer"] = json!(s.layer.0);
-        if let Err(e) = app.run("shape.edit", p) {
-            app.ui.status = e;
-            app.ui.status_error = true;
-        }
-        if !ui.input(|i| i.pointer.any_down()) {
-            ui.data_mut(|d| {
-                let gesture = d.get_temp_mut_or_default::<(u64, u64)>(gesture_key);
-                gesture.0 = gesture.0.wrapping_add(1);
-            });
-        }
-    }
+    crate::shape_options::options_bar(app, ui, tool);
     true
 }
 
-/// The shape layer the options bar edits.
-struct SelectedShape {
-    doc: photocraft_doc::DocId,
-    layer: photocraft_doc::LayerId,
-    fill: Option<photocraft_doc::Fill>,
-    stroke: Option<photocraft_doc::ShapeStroke>,
-    live: Option<photocraft_doc::LiveShape>,
-}
-
-fn selected_shape(session: &photocraft_engine::Session) -> Option<SelectedShape> {
+/// Whether the active layer supplies the selected-shape options.
+fn selected_shape(session: &photocraft_engine::Session) -> Option<photocraft_doc::LayerId> {
     let st = session.active()?;
     let layer = st.active_layer?;
-    match &st.doc.layer(layer)?.content {
-        LayerContent::Shape(sh) => Some(SelectedShape { doc: st.doc.id, layer, fill: sh.fill.clone(), stroke: sh.stroke.clone(), live: sh.live.clone() }),
-        _ => None,
-    }
+    matches!(st.doc.layer(layer)?.content, LayerContent::Shape(_)).then_some(layer)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1534,177 +1412,8 @@ fn solid_paint(c: [f32; 4]) -> photocraft_doc::Fill {
     photocraft_doc::Fill::Solid(photocraft_doc::Color::rgba(c[0], c[1], c[2], c[3]))
 }
 
-fn color_of(f: &photocraft_doc::Fill) -> Option<[f32; 4]> {
-    match f {
-        photocraft_doc::Fill::Solid(c) => {
-            let [r, g, b] = c.to_rgb();
-            Some([r, g, b, c.alpha])
-        }
-        _ => None,
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum PaintChange {
-    Color([f32; 4]),
-    None,
-}
-
-fn enabled_stroke_width(width: f32) -> f32 {
+pub(crate) fn enabled_stroke_width(width: f32) -> f32 {
     if width.is_finite() && width > 0.0 { width } else { 3.0 }
-}
-
-/// Tool-bar paint changes affect the next shape; Properties edits the selected shape instead.
-fn set_tool_paint(app: &mut PhotocraftApp, stroke: bool, change: PaintChange) -> Result<(), String> {
-    if let PaintChange::Color(color) = change {
-        app.run("tools.setColors", if stroke { json!({"background": color}) } else { json!({"foreground": color}) })?;
-    }
-    if stroke {
-        app.ui.tool_options.stroke_width = if change == PaintChange::None { 0.0 } else { enabled_stroke_width(app.ui.tool_options.stroke_width) };
-    } else {
-        app.ui.tool_options.shape_fill = change != PaintChange::None;
-    }
-    Ok(())
-}
-
-fn rgba32(c: [f32; 4]) -> Color32 {
-    let b = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
-    Color32::from_rgba_unmultiplied(b(c[0]), b(c[1]), b(c[2]), b(c[3]))
-}
-
-fn picker_color(c: [f32; 4]) -> egui::ecolor::Hsva {
-    let linear = egui::ecolor::linear_from_gamma;
-    let display = c.map(|v| if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 });
-    egui::ecolor::Hsva::from_rgba_unmultiplied(linear(display[0]), linear(display[1]), linear(display[2]), display[3])
-}
-
-fn picker_rgba(hsva: egui::ecolor::Hsva) -> [f32; 4] {
-    let [r, g, b, a] = hsva.to_rgba_unmultiplied();
-    let gamma = egui::ecolor::gamma_from_linear;
-    [gamma(r), gamma(g), gamma(b), a]
-}
-
-/// The shared compact picker keeps the float RGB paint and its alpha. Color32 is only display
-/// data: opening the picker must never quantize an existing high-depth colour or enable paint.
-fn swatch(ui: &mut egui::Ui, fill: Option<&photocraft_doc::Fill>, fallback: [f32; 4], tip: &str) -> Option<PaintChange> {
-    let t = Tokens::get(ui.ctx());
-    let (r, resp) = ui.allocate_exact_size(vec2(30.0, 22.0), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ColorButton, ui.is_enabled(), tip));
-    let current = fill.and_then(color_of);
-    crate::widgets::checker(ui.painter(), r.shrink(1.0), 4.0);
-    match (current, fill) {
-        (Some(c), _) => {
-            ui.painter().rect_filled(r.shrink(1.0), t.radius_sm, rgba32(c));
-        }
-        (None, Some(photocraft_doc::Fill::Gradient { stops, .. })) if !stops.is_empty() => {
-            // Gradient fills preview as a left-to-right ramp through their stops.
-            let rgb = |c: &photocraft_doc::Color| {
-                let v = c.to_rgba8();
-                Color32::from_rgba_unmultiplied(v[0], v[1], v[2], v[3])
-            };
-            let mut mesh = egui::Mesh::default();
-            let mut ramp: Vec<(f32, Color32)> = stops.iter().map(|(p, c)| (p.clamp(0.0, 1.0), rgb(c))).collect();
-            ramp.insert(0, (0.0, ramp[0].1));
-            ramp.push((1.0, ramp[ramp.len() - 1].1));
-            for (i, (p, c)) in ramp.iter().enumerate() {
-                let x = r.left() + r.width() * p;
-                mesh.colored_vertex(egui::pos2(x, r.top()), *c);
-                mesh.colored_vertex(egui::pos2(x, r.bottom()), *c);
-                if i > 0 {
-                    let k = (i as u32) * 2;
-                    mesh.add_triangle(k - 2, k - 1, k);
-                    mesh.add_triangle(k - 1, k, k + 1);
-                }
-            }
-            ui.painter().add(mesh);
-        }
-        (None, Some(_)) => {}
-        (None, None) => {
-            ui.painter().rect_filled(r.shrink(1.0), t.radius_sm, t.field);
-            ui.painter().line_segment([r.shrink(3.0).left_bottom(), r.shrink(3.0).right_top()], Stroke::new(1.5, t.danger));
-        }
-    };
-    let border = if resp.has_focus() {
-        t.accent
-    } else if resp.hovered() {
-        t.text_dim
-    } else {
-        t.field_border
-    };
-    ui.painter().rect_stroke(r, t.radius_sm, Stroke::new(1.0, border), egui::StrokeKind::Inside);
-    let resp = resp.on_hover_text(tip);
-    let screen_id = resp.id.with("screen-color");
-    let original = current.unwrap_or(fallback);
-    let sampled = |rgb: [f32; 3]| PaintChange::Color([rgb[0], rgb[1], rgb[2], original[3]]);
-    let mut out = crate::screen_picker::take(ui.ctx(), screen_id).map(sampled);
-    let cache = resp.id.with("shape-paint-hsva");
-    let mut hsva = ui
-        .data(|d| d.get_temp::<([f32; 4], egui::ecolor::Hsva)>(cache))
-        .filter(|(previous, _)| *previous == original)
-        .map_or_else(|| picker_color(original), |(_, hsva)| hsva);
-    if let Some(PaintChange::Color(color)) = out {
-        hsva = picker_color(color);
-    }
-    crate::widgets::swatch_popup(&resp).show(|ui| {
-        ui.horizontal(|ui| {
-            if ui.selectable_label(fill.is_none(), tl!("No Color")).clicked() && fill.is_some() {
-                out = Some(PaintChange::None);
-            }
-            if ui.selectable_label(current.is_some(), tl!("Solid")).clicked() && current.is_none() {
-                out = Some(PaintChange::Color(original));
-            }
-        });
-        ui.separator();
-        let before = picker_rgba(hsva);
-        if egui::color_picker::color_picker_hsva_2d(ui, &mut hsva, egui::color_picker::Alpha::OnlyBlend) {
-            let color = picker_rgba(hsva);
-            // egui's HSV gamma/linear round trip can move a float by an ulp without input.
-            if color.iter().zip(before).any(|(a, b)| (a - b).abs() > 0.000001) {
-                out = Some(PaintChange::Color(color));
-            }
-        }
-        ui.horizontal(|ui| {
-            let label = ui.label(egui::RichText::new("#").color(t.text_dim));
-            let id = resp.id.with("shape-paint-hex");
-            let selected = match out {
-                Some(PaintChange::Color(color)) => color,
-                _ => original,
-            };
-            // Keep incomplete typing across frames; deriving the field from the colour each
-            // frame would discard every keystroke until all six digits were present.
-            let mut text = ui
-                .data(|d| d.get_temp::<([f32; 4], String)>(id))
-                .filter(|(previous, _)| *previous == selected)
-                .map_or_else(|| hex(selected).trim_start_matches('#').to_ascii_uppercase(), |(_, text)| text);
-            let response = crate::widgets::text_field(ui, id, &mut text, "RRGGBB", 90.0, true).labelled_by(label.id);
-            if response.changed()
-                && let Some(rgb) = crate::color_picker_ui::parse_hex(&text)
-            {
-                let color = [rgb[0], rgb[1], rgb[2], selected[3]];
-                out = Some(PaintChange::Color(color));
-                hsva = picker_color(color);
-            }
-            if response.has_focus() {
-                let color = match out {
-                    Some(PaintChange::Color(color)) => color,
-                    _ => selected,
-                };
-                ui.data_mut(|d| d.insert_temp(id, (color, text)));
-            } else {
-                ui.data_mut(|d| d.remove::<([f32; 4], String)>(id));
-            }
-        });
-        if let Some(rgb) = crate::screen_picker::button(ui, screen_id) {
-            out = Some(sampled(rgb));
-            hsva = picker_color([rgb[0], rgb[1], rgb[2], original[3]]);
-        }
-    });
-    let cached_color = match out {
-        Some(PaintChange::Color(color)) => color,
-        _ => original,
-    };
-    ui.data_mut(|d| d.insert_temp(cache, (cached_color, hsva)));
-    out
 }
 
 /// One corner of the live rectangle, preserving the other three radii.
@@ -1719,7 +1428,7 @@ fn corner_radii_patch(radii: [f64; 4], corner: usize, radius: f32) -> Value {
 
 /// Follow the existing brush/mask continuous-edit convention: one history state per press or
 /// keyboard edit, with every value tick of a held-pointer gesture sharing its key.
-fn paint_gesture(ui: &egui::Ui, key: egui::Id) -> u64 {
+pub(crate) fn paint_gesture(ui: &egui::Ui, key: egui::Id) -> u64 {
     let pass = ui.ctx().cumulative_pass_nr();
     let pressed = ui.input(|i| i.pointer.any_pressed());
     ui.data_mut(|d| {
@@ -1750,7 +1459,7 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
     let mut edit: Option<Value> = None;
     let doc_id = app.session.active().map(|st| st.doc.id);
     let key = |k: &str| format!("shape-{doc_id:?}-{}-{k}", id.0);
-    let gesture_key = ui.id().with(key("paint-gesture"));
+    let gesture_key = ui.scope_id().with(key("paint-gesture"));
     let gesture = paint_gesture(ui, gesture_key);
     let coalesce = |field: &str| format!("{}:{}:{gesture}", key(field), gesture_key.value());
     // The shared collapsible section headers (#155).
@@ -1775,7 +1484,7 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
                 edit = Some(json!({"stroke": stroke, "coalesce": coalesce("stroke")}));
             }
             let mut w = sh.stroke.as_ref().map_or(0.0, |s| s.width);
-            if crate::widgets::value_field(ui, &mut w, 0.0..=288.0, "px", 60.0).changed() {
+            if crate::widgets::value_field(ui, &mut w, 0.0..=288.0, "px", 60.0).accessible_name(tl!("Stroke:")).changed() && (sh.stroke.is_some() || w > 0.0) {
                 edit = Some(json!({"stroke": {"width": w}, "coalesce": coalesce("stroke-w")}));
             }
         });
@@ -1803,7 +1512,7 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
     {
         let num = |ui: &mut egui::Ui, label: &str, v: &mut f32, range: std::ops::RangeInclusive<f32>, unit: &str| -> bool {
             ui.label(egui::RichText::new(tl!(&label)).color(t.text_dim).size(12.0));
-            crate::widgets::value_field(ui, v, range, unit, 64.0).changed()
+            crate::widgets::value_field(ui, v, range, unit, 64.0).accessible_name(tl!(&label)).changed()
         };
         match live {
             photocraft_doc::vector::LiveShape::Rect { rect, .. }
@@ -1947,7 +1656,7 @@ pub fn path_rows(doc: &Document, active: Option<photocraft_doc::LayerId>) -> Vec
 }
 
 fn footer_id() -> egui::Id {
-    egui::Id::new("paths-footer")
+    egui::Id::unique("paths-footer")
 }
 
 /// A Paths panel row being dragged, for a drop on the trash (#6553): its name and the command
@@ -1960,7 +1669,7 @@ struct PathDrag {
 }
 
 fn path_drag_key() -> egui::Id {
-    egui::Id::new("paths-drag")
+    egui::Id::unique("paths-drag")
 }
 
 fn ctx_data_footer(ctx: &egui::Context, r: Rect) {
@@ -1995,7 +1704,7 @@ struct PathRename {
 }
 
 fn rename_id(doc: &Document) -> egui::Id {
-    egui::Id::new(("path-rename", doc.id.0))
+    egui::Id::unique(("path-rename", doc.id.0))
 }
 
 /// Commands offered by a Paths row's context menu. The row's path is passed explicitly so a
@@ -2092,7 +1801,7 @@ pub fn paths_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     ui.ctx().data_mut(|d| d.insert_temp(path_drag_key(), PathDrag { name, cmd, params }));
                 }
                 // Rows are painted: name them for screen readers and UI tests.
-                resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::SelectableLabel, true, name));
+                resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, name));
                 let sel = app.ui.selected_path.as_deref() == Some(key.as_str());
                 if sel {
                     ui.painter().rect_filled(r, 0.0, t.row_selected);
@@ -2113,7 +1822,8 @@ pub fn paths_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 if let Some(mut edit) = renaming {
                     let field = Rect::from_min_max(pos2(r.left() + 43.0, r.center().y - 11.0), pos2(r.right() - 8.0, r.center().y + 11.0));
                     let id = rename_id.with("field");
-                    let te = ui.put(field, egui::TextEdit::singleline(&mut edit.text).id(id).font(egui::FontId::proportional(12.0)));
+                    let te =
+                        ui.put(field, egui::TextEdit::singleline(&mut edit.text).id(id).font(egui::FontId::proportional(12.0))).accessible_name(tl!("Name"));
                     let (enter, esc) = ui.input(|i| (i.key_pressed(egui::Key::Enter), i.key_pressed(egui::Key::Escape)));
                     if !edit.focused {
                         te.request_focus();
@@ -2194,7 +1904,7 @@ pub fn paths_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             // adjustment layers then take the selection as their mask instead (#1419).
             let rest = ui.available_rect_before_wrap();
             let rest = rest.intersect(Rect::from_min_size(rest.min, vec2(rest.width(), rest.height().min(4000.0))));
-            if rest.is_positive() && ui.interact(rest, ui.id().with("paths-empty"), Sense::click()).clicked() {
+            if rest.is_positive() && ui.interact(rest, ui.scope_id().with("paths-empty"), Sense::click()).clicked() {
                 app.ui.selected_path = None;
             }
         },

@@ -3,7 +3,7 @@
 //! menu (Rename, Delete, Move to), and the footer (size · New Group · New Swatch · Delete).
 //!
 //! As in Photoshop, clicking a swatch sets the foreground colour (and recolours selected type or
-//! fills the selected shape layer);
+//! fills the selected shape layers with a shape, Pen or path selection tool);
 //! Alt- or Ctrl/Cmd-clicking sets the background colour; double-clicking renames it. The
 //! panel menu (the group's "…" button) adds New Swatch, New Group, Import/Replace (`.aco`,
 //! `.act`, `.ase`), Export (`.aco`) and Export for Exchange (`.ase`) and Reset. Every action is a
@@ -31,7 +31,7 @@ fn c32(c: [f32; 3]) -> Color32 {
 /// Display colours of every swatch, rebuilt when the library or the working spaces change.
 fn colors(app: &PhotocraftApp, ctx: &egui::Context) -> Arc<Vec<Vec<Color32>>> {
     let c = &app.session.color.settings;
-    let key = egui::Id::new(("swatch-colors", app.session.presets.rev, &c.working_rgb, &c.working_cmyk, &c.working_gray));
+    let key = egui::Id::unique(("swatch-colors", app.session.presets.rev, &c.working_rgb, &c.working_cmyk, &c.working_gray));
     if let Some(v) = ctx.data(|d| d.get_temp::<Arc<Vec<Vec<Color32>>>>(key)) {
         return v;
     }
@@ -39,10 +39,10 @@ fn colors(app: &PhotocraftApp, ctx: &egui::Context) -> Arc<Vec<Vec<Color32>>> {
     let v: Arc<Vec<Vec<Color32>>> = Arc::new(app.session.presets.swatches.iter().map(|g| g.items.iter().map(|s| c32(conv.rgb(&s.color))).collect()).collect());
     ctx.data_mut(|d| {
         // Only the newest table is kept.
-        if let Some(old) = d.get_temp::<egui::Id>(egui::Id::new("swatch-colors-key")) {
+        if let Some(old) = d.get_temp::<egui::Id>(egui::Id::unique("swatch-colors-key")) {
             d.remove::<Arc<Vec<Vec<Color32>>>>(old);
         }
-        d.insert_temp(egui::Id::new("swatch-colors-key"), key);
+        d.insert_temp(egui::Id::unique("swatch-colors-key"), key);
         d.insert_temp(key, v.clone());
     });
     v
@@ -52,10 +52,9 @@ fn colors(app: &PhotocraftApp, ctx: &egui::Context) -> Arc<Vec<Vec<Color32>>> {
 pub fn use_swatch(app: &mut PhotocraftApp, name: &str, background: bool) {
     let target = if background { "background" } else { "foreground" };
     if run(app, "swatches.use", json!({"swatch": name, "target": target})).is_some() && !background {
-        // Clicking a swatch while characters are selected recolours them (#364), and with a
-        // shape layer selected fills the shape (#5568).
-        crate::type_tool::foreground_changed(app);
-        crate::shape_fill_ui::foreground_changed(app, None);
+        // Clicking a swatch recolours the selected characters (#364), or the selected type and
+        // shape layers whatever the tool, as in Photoshop (#9238).
+        crate::apply_color::swatch_picked(app);
     }
 }
 
@@ -293,7 +292,7 @@ mod tests {
         assert_eq!((r["format"].as_str(), r["count"].as_u64()), (Some("act"), Some(256)));
     }
 
-    /// #5568: clicking a swatch with a shape layer selected fills the shape with it, one undo
+    /// #5568: clicking a swatch with a shape tool and a shape layer selected fills the shape with it, one undo
     /// step each, a gradient fill included.
     #[test]
     fn swatch_click_fills_the_selected_shape() {
@@ -301,6 +300,7 @@ mod tests {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.session.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
         let id = LayerId(app.run("shape.create", json!({"rect": [8, 8, 40, 30], "fill": {"gradient": {}}})).unwrap()["layer"].as_u64().unwrap());
+        app.ui.tool = crate::state::Tool::Rectangle;
         let fill = |app: &PhotocraftApp| match &app.session.active().unwrap().doc.layer(id).unwrap().content {
             LayerContent::Shape(sh) => sh.fill.clone(),
             _ => panic!("not a shape layer"),

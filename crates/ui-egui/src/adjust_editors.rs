@@ -309,9 +309,9 @@ fn channel_picker_opts(ui: &mut egui::Ui, id: egui::Id, opts: &[(usize, &str)], 
         let width = if opts.len() == 1 { 160.0 } else { 110.0 };
         let key = format!("{id:?}-ch");
         if translate {
-            widgets::dropdown(ui, &key, &mut ch, opts, width);
+            widgets::dropdown(ui, &key, text, &mut ch, opts, width);
         } else {
-            widgets::dropdown_literal(ui, &key, &mut ch, opts, width);
+            widgets::dropdown_literal(ui, &key, text, &mut ch, opts, width);
         }
     });
     ui.data_mut(|d| d.insert_temp(id, ch));
@@ -356,6 +356,27 @@ fn gradient_bar(p: &egui::Painter, r: Rect, from: Color32, to: Color32, vertical
 
 const CURVE_HANDLE_SIZE: f32 = 7.0;
 const CURVE_GRAPH_PADDING: f32 = 5.0;
+
+/// The room left on screen for the Curves dialog's other rows (title, channel and mode, Input and
+/// Output, eyedroppers, buttons) when its graph is as tall as it can be.
+const CURVES_CHROME: f32 = 360.0;
+/// The smallest and the default largest side of the Curves graph: 300 points was the fixed
+/// size until #8984.
+const CURVE_SIDE: (f32, f32) = (120.0, 300.0);
+
+/// The Curves graph's side (#8984): the width it is given, in the Properties panel and in the
+/// resizable dialog, and no taller than the window leaves room for beside the other rows.
+fn curve_side(ui: &egui::Ui) -> f32 {
+    let tallest = curve_side_max(ui.ctx());
+    let width = ui.available_width();
+    if width.is_finite() { width.clamp(CURVE_SIDE.0, tallest) } else { CURVE_SIDE.1 }
+}
+
+/// The largest the Curves graph gets in this window: as tall as the window leaves room for beside
+/// the dialog's other rows, and never under the old 300 points. The Curves dialog is no wider.
+pub(crate) fn curve_side_max(ctx: &egui::Context) -> f32 {
+    (ctx.content_rect().height() - CURVES_CHROME).max(CURVE_SIDE.1)
+}
 
 fn curve_graph(full: Rect, side: f32) -> Rect {
     let base = Rect::from_min_size(full.min + vec2(14.0, 0.0), vec2(side - 14.0, side - 14.0));
@@ -461,7 +482,7 @@ fn curves(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     let pencil = v.get("pencil").and_then(Value::as_bool).unwrap_or(false);
     let mut pts = read_curve(v, key);
     let mut map = read_map(v, key);
-    let side = ui.available_width().clamp(120.0, 300.0);
+    let side = curve_side(ui);
     ui.add_space(4.0);
     let (full, resp) = ui.allocate_exact_size(vec2(side, side + 14.0), Sense::click_and_drag());
     let graph = curve_graph(full, side);
@@ -572,9 +593,9 @@ fn curves(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
         let i = st.gesture.selected.filter(|i| *i < pts.len() && !pencil);
         let (mut vi, mut vo) = i.map_or((0.0, 0.0), |i| (pts[i][0], pts[i][1]));
         label(ui, tl!("Input:"));
-        let ri = ui.add_enabled_ui(i.is_some(), |ui| widgets::value_field(ui, &mut vi, 0.0..=255.0, "", 52.0)).inner;
+        let ri = ui.add_enabled_ui(i.is_some(), |ui| widgets::value_field(ui, &mut vi, 0.0..=255.0, "", 52.0).accessible_name(tl!("Input:"))).inner;
         label(ui, tl!("Output:"));
-        let ro = ui.add_enabled_ui(i.is_some(), |ui| widgets::value_field(ui, &mut vo, 0.0..=255.0, "", 52.0)).inner;
+        let ro = ui.add_enabled_ui(i.is_some(), |ui| widgets::value_field(ui, &mut vo, 0.0..=255.0, "", 52.0).accessible_name(tl!("Output:"))).inner;
         if let Some(i) = i
             && (ri.changed() || ro.changed())
             && curve_edit::move_to(&mut pts, i, [vi, vo])
@@ -747,11 +768,11 @@ fn levels(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
         let fw = ((w - 16.0) / 3.0).min(70.0);
         let (mut nb, mut ng, mut nw) = (l[0], l[1], l[2]);
         let gap = ((w - 3.0 * fw) / 2.0 - 12.0).max(0.0);
-        let r0 = widgets::value_field(ui, &mut nb, 0.0..=253.0, "", fw);
+        let r0 = widgets::value_field(ui, &mut nb, 0.0..=253.0, "", fw).accessible_name(tl!("Black"));
         ui.add_space(gap);
-        let r1 = widgets::value_field(ui, &mut ng, 0.01..=9.99, "", fw);
+        let r1 = widgets::value_field(ui, &mut ng, 0.01..=9.99, "", fw).accessible_name(tl!("Gamma"));
         ui.add_space(gap);
-        let r2 = widgets::value_field(ui, &mut nw, 2.0..=255.0, "", fw);
+        let r2 = widgets::value_field(ui, &mut nw, 2.0..=255.0, "", fw).accessible_name(tl!("White"));
         if r0.changed() {
             l[0] = nb.round().min(l[2] - 2.0);
         }
@@ -801,9 +822,9 @@ fn levels(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     ui.horizontal(|ui| {
         let fw = ((w - 16.0) / 3.0).min(70.0);
         let (mut a, mut c) = (l[3], l[4]);
-        let ra = widgets::value_field(ui, &mut a, 0.0..=255.0, "", fw);
+        let ra = widgets::value_field(ui, &mut a, 0.0..=255.0, "", fw).accessible_name(tl!("Black"));
         ui.add_space((w - 2.0 * fw - 16.0).max(0.0));
-        let rc = widgets::value_field(ui, &mut c, 0.0..=255.0, "", fw);
+        let rc = widgets::value_field(ui, &mut c, 0.0..=255.0, "", fw).accessible_name(tl!("White"));
         if ra.changed() {
             l[3] = a.round();
         }
@@ -909,7 +930,7 @@ fn hue_saturation(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     }
     ui.horizontal(|ui| {
         let opts: Vec<(usize, &str)> = std::iter::once((0, tl!("Master"))).chain(RANGE_LABELS.iter().enumerate().map(|(i, l)| (i + 1, *l))).collect();
-        ui.add_enabled_ui(!colorize, |ui| widgets::dropdown(ui, &format!("{range_id:?}"), &mut range, &opts, 120.0));
+        ui.add_enabled_ui(!colorize, |ui| widgets::dropdown(ui, &format!("{range_id:?}"), tl!("Range"), &mut range, &opts, 120.0));
     });
     ui.data_mut(|d| d.insert_temp(range_id, range));
     let mut e = Edit::default();
@@ -979,8 +1000,10 @@ fn hue_saturation(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     }
     // Spectrum bars: input hues above, adjusted below; the selected range's sliders between.
     ui.add_space(6.0);
-    let w = ui.available_width().min(300.0);
+    // As wide as the sliders above, whatever the panel's width (#9242).
+    let w = ui.available_width();
     let (bars, bresp) = ui.allocate_exact_size(vec2(w, 40.0), Sense::click_and_drag());
+    ui.data_mut(|d| d.insert_temp(cx.mem.with("hs-bars"), bars));
     let top = Rect::from_min_size(bars.min, vec2(w, 10.0));
     let bottom = Rect::from_min_size(pos2(bars.left(), bars.bottom() - 10.0), vec2(w, 10.0));
     let p = ui.painter_at(bars.expand(4.0));
@@ -1168,7 +1191,7 @@ fn photo_filter(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
         if preset.is_none() {
             opts.insert(0, ("custom".into(), "Custom"));
         }
-        let changed = ui.add_enabled_ui(!use_color, |ui| widgets::dropdown(ui, &format!("{mode_id:?}-filter"), &mut sel, &opts, 170.0)).inner;
+        let changed = ui.add_enabled_ui(!use_color, |ui| widgets::dropdown(ui, &format!("{mode_id:?}-filter"), tl!("Filter:"), &mut sel, &opts, 170.0)).inner;
         if changed && let Some(f) = PHOTO_FILTERS.iter().find(|f| f.0 == sel) {
             c = f.2.map(|x| f32::from(x) / 255.0);
             v["color"] = json!(adjust_params::hex(c));
@@ -1209,7 +1232,7 @@ fn channel_mixer(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     }
     ui.horizontal(|ui| {
         label(ui, tl!("Output Channel:"));
-        widgets::dropdown(ui, &format!("{out_id:?}"), &mut out, outs, 110.0);
+        widgets::dropdown(ui, &format!("{out_id:?}"), tl!("Output Channel:"), &mut out, outs, 110.0);
     });
     ui.data_mut(|d| d.insert_temp(out_id, out));
     let key = if mono { "gray" } else { ["red", "green", "blue"][out] };
@@ -1318,7 +1341,7 @@ fn gradient_map_strip(ui: &mut egui::Ui, stops: &mut Vec<Stop>, cx: &EditorCx, s
     let mut edit = Edit::default();
     let w = ui.available_width().min(300.0);
     let (outer, resp) = ui.allocate_exact_size(vec2(w, 44.0), Sense::click_and_drag());
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), tl!("Gradient stops")));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tl!("Gradient stops")));
     let bar = Rect::from_min_max(outer.min + vec2(8.0, 2.0), pos2(outer.right() - 8.0, outer.top() + 26.0));
     let x_of = |loc: f32| bar.left() + loc * bar.width();
     let loc_of = |x: f32| ((x - bar.left()) / bar.width().max(1.0)).clamp(0.0, 1.0);
@@ -1437,6 +1460,7 @@ fn gradient_map(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
                 }
             });
         press.after(&combo.response);
+        let _ = combo.response.accessible_name(tl!("Preset:"));
         if let Some(p) = picked {
             stops = p;
             selected = 0;
@@ -1465,7 +1489,7 @@ fn gradient_map(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
         ui.horizontal(|ui| {
             label(ui, tl!("Location:"));
             let mut loc = s.0 * 100.0;
-            let rl = widgets::value_field(ui, &mut loc, 0.0..=100.0, "%", 70.0);
+            let rl = widgets::value_field(ui, &mut loc, 0.0..=100.0, "%", 70.0).accessible_name(tl!("Location:"));
             if rl.changed() {
                 location = Some(loc / 100.0);
                 changed = true;
@@ -1530,7 +1554,7 @@ pub fn swatches(app: &PhotocraftApp) -> [[f32; 3]; 2] {
 
 /// Root of an adjustment layer's Properties editor view state in egui memory.
 pub fn layer_mem(id: LayerId) -> egui::Id {
-    egui::Id::new(("adjust-layer", id.0))
+    egui::Id::unique(("adjust-layer", id.0))
 }
 
 /// Kinds whose Properties edits follow Photoshop's history and Reset (measured for Color Balance,

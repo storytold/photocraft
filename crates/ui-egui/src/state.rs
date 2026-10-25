@@ -732,6 +732,14 @@ pub struct ToolOptions {
     /// picked by right-clicking them); the size itself stays in pixels (#7910).
     #[serde(default = "default_marquee_unit")]
     pub marquee_unit: String,
+    /// Slice tool options bar: the same Styles as the marquee's, with the ratio or the size in px
+    /// (#8360).
+    #[serde(default = "default_marquee_style")]
+    pub slice_style: String,
+    #[serde(default = "one")]
+    pub slice_width: f32,
+    #[serde(default = "one")]
+    pub slice_height: f32,
     /// Move tool: Auto-Select (with "layer" or "group" target) and Show Transform Controls.
     /// Auto-Select is on with the "group" target by default, as in current Photoshop;
     /// ⌘/Ctrl-click inverts it.
@@ -1003,6 +1011,9 @@ impl Default for ToolOptions {
             marquee_width: 1.0,
             marquee_height: 1.0,
             marquee_unit: default_marquee_unit(),
+            slice_style: default_marquee_style(),
+            slice_width: 1.0,
+            slice_height: 1.0,
             move_auto_select: true,
             move_target: default_move_target(),
             move_show_transform: false,
@@ -1246,27 +1257,106 @@ pub struct DockTabs {
     pub brushes: usize,
 }
 
-/// Sliders under the Color panel's field: hue/saturation/brightness or red/green/blue (#7172).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum ColorPanelSliderMode {
-    #[default]
-    Hsb,
-    Rgb,
-}
-
 /// Color panel state.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(rename_all = "camelCase", default)]
 pub struct ColorPanelState {
     /// The panel edits the background colour (its chip was clicked), not the foreground.
     pub background: bool,
-    /// Color Picker › Only Web Colors, kept across opens like Photoshop (#4995).
-    #[serde(default)]
+    /// Color Picker › Only Web Colors, kept across opens like Photoshop (#4995). `web_only` is
+    /// its name before the camelCase rename (#6000).
+    #[serde(default, alias = "web_only")]
     pub web_only: bool,
-    /// HSB or RGB sliders under the colour field (#7172).
-    #[serde(default)]
-    pub slider_mode: ColorPanelSliderMode,
+    /// What the panel shows, picked from its panel menu as in Photoshop (#6000).
+    pub mode: ColorPanelMode,
+    /// The colour ramp under the sliders.
+    pub ramp: ColorRamp,
+    /// Make Ramp Web Safe: the ramp shows (and picks) web colours only.
+    pub web_safe_ramp: bool,
+}
+
+/// The Color panel's display, Photoshop's panel menu choices in its order. Hue Cube is
+/// Photoshop's default; the theme never changes it (#6000).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ColorPanelMode {
+    #[default]
+    HueCube,
+    BrightnessCube,
+    ColorWheel,
+    GrayscaleSlider,
+    RgbSliders,
+    HsbSliders,
+    CmykSliders,
+    LabSliders,
+    WebColorSliders,
+}
+
+impl ColorPanelMode {
+    /// Every mode, in Photoshop's panel menu order.
+    pub const ALL: [ColorPanelMode; 9] = [
+        ColorPanelMode::HueCube,
+        ColorPanelMode::BrightnessCube,
+        ColorPanelMode::ColorWheel,
+        ColorPanelMode::GrayscaleSlider,
+        ColorPanelMode::RgbSliders,
+        ColorPanelMode::HsbSliders,
+        ColorPanelMode::CmykSliders,
+        ColorPanelMode::LabSliders,
+        ColorPanelMode::WebColorSliders,
+    ];
+
+    /// The panel menu item.
+    pub fn label(self) -> &'static str {
+        match self {
+            ColorPanelMode::HueCube => "Hue Cube",
+            ColorPanelMode::BrightnessCube => "Brightness Cube",
+            ColorPanelMode::ColorWheel => "Color Wheel",
+            ColorPanelMode::GrayscaleSlider => "Grayscale Slider",
+            ColorPanelMode::RgbSliders => "RGB Sliders",
+            ColorPanelMode::HsbSliders => "HSB Sliders",
+            ColorPanelMode::CmykSliders => "CMYK Sliders",
+            ColorPanelMode::LabSliders => "Lab Sliders",
+            ColorPanelMode::WebColorSliders => "Web Color Sliders",
+        }
+    }
+
+    /// The slider modes, which show the colour ramp under their sliders.
+    pub fn is_sliders(self) -> bool {
+        !matches!(self, ColorPanelMode::HueCube | ColorPanelMode::BrightnessCube | ColorPanelMode::ColorWheel)
+    }
+}
+
+/// The Color panel's colour ramp, from its panel menu (or Shift-click on the ramp to cycle).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ColorRamp {
+    #[default]
+    RgbSpectrum,
+    CmykSpectrum,
+    GrayscaleRamp,
+    CurrentColors,
+}
+
+impl ColorRamp {
+    /// Every ramp, in Photoshop's panel menu order (also the Shift-click cycle).
+    pub const ALL: [ColorRamp; 4] = [ColorRamp::RgbSpectrum, ColorRamp::CmykSpectrum, ColorRamp::GrayscaleRamp, ColorRamp::CurrentColors];
+
+    /// The panel menu item.
+    pub fn label(self) -> &'static str {
+        match self {
+            ColorRamp::RgbSpectrum => "RGB Spectrum",
+            ColorRamp::CmykSpectrum => "CMYK Spectrum",
+            ColorRamp::GrayscaleRamp => "Grayscale Ramp",
+            ColorRamp::CurrentColors => "Current Colors",
+        }
+    }
+
+    /// The next ramp in the Shift-click cycle.
+    pub fn next(self) -> ColorRamp {
+        let i = ColorRamp::ALL.iter().position(|r| *r == self).unwrap_or(0);
+        ColorRamp::ALL.get(i + 1).copied().unwrap_or(ColorRamp::RgbSpectrum)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1411,6 +1501,10 @@ pub struct UiState {
     /// Preset panels (Gradients, Patterns, Styles, Shapes, Tool Presets, Clone Source).
     #[serde(default)]
     pub presets_ui: crate::preset_panels::PresetUi,
+    /// Save for Web: the preview tab last chosen (`original`, `optimized`, `2up`, `4up`), which the
+    /// dialog reopens on (#9174).
+    #[serde(default)]
+    pub web_view: Option<String>,
     /// Character/Paragraph Styles, Glyphs and Check Spelling (see `type_panels_ui`).
     #[serde(default)]
     pub type_panels: crate::type_panels_ui::TypePanelsUi,
@@ -1461,7 +1555,7 @@ pub struct UiState {
     /// One-frame focus/raise request from an explicit panel reveal.
     #[serde(skip)]
     pub docking_reveal: Option<String>,
-    /// Which chip the Color panel edits.
+    /// Which chip the Color panel edits, and how it shows the colour.
     #[serde(default)]
     pub color_panel: ColorPanelState,
     /// Brush Settings: selected section (0 = Brush Tip Shape) and tab (0 settings, 1 Brushes).
@@ -1510,6 +1604,9 @@ pub struct UiState {
     /// Non-blocking notices (import/export warnings, files that couldn't open), newest last.
     #[serde(default)]
     pub notices: Vec<crate::notices::Notice>,
+    /// Non-modal release-check window; readable and controllable through `ui.inspect`/`ui.set`.
+    #[serde(default)]
+    pub updates_open: bool,
     /// Pending GPU fallback warning, visible to automation.
     #[serde(default)]
     pub gpu_fallback_notice: Option<String>,
@@ -1565,6 +1662,7 @@ impl Default for UiState {
             actions: Default::default(),
             layer_comp_selected: None,
             presets_ui: Default::default(),
+            web_view: None,
             type_panels: Default::default(),
             analysis: Default::default(),
             timeline: Default::default(),
@@ -1615,6 +1713,7 @@ impl Default for UiState {
             status: String::new(),
             status_error: false,
             notices: Vec::new(),
+            updates_open: false,
             gpu_fallback_notice: None,
             kys_offer: None,
             slow_refresh_noticed: Vec::new(),

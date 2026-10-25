@@ -336,6 +336,9 @@ fn can_reselect(s: &Session) -> std::result::Result<(), String> {
     reselect_target(s).map(|_| ()).ok_or_else(|| "there is no selection to restore".into())
 }
 
+/// Edit › Paste Special › Paste Into (or Outside): the clipboard centred on the selection, not
+/// clamped to the canvas, as a new layer masked to the selection (or its inverse), or into the
+/// targeted mask or channel. One history step.
 fn paste_into(s: &mut Session, p: &Value, outside: bool) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let selection = d.doc.selection.clone().ok_or(EngineError::Other("Paste Into needs a selection".into()))?;
@@ -353,7 +356,8 @@ fn paste_into(s: &mut Session, p: &Value, outside: bool) -> Result<Value> {
         selection
     };
     let label = if outside { "Paste Outside" } else { "Paste Into" };
-    let mut params = json!({"center": [(b.x0 + b.x1) as f64 / 2.0, (b.y0 + b.y1) as f64 / 2.0]});
+    // Centred on the selection, even where that runs off the canvas (not clamped like a paste).
+    let mut params = json!({"center": [(b.x0 + b.x1) as f64 / 2.0, (b.y0 + b.y1) as f64 / 2.0], "clampToCanvas": false});
     if let Some(c) = p.get("center") {
         params["center"] = c.clone();
     }
@@ -365,6 +369,13 @@ fn paste_into(s: &mut Session, p: &Value, outside: bool) -> Result<Value> {
         // A targeted mask or channel (#1035): the paste goes into it, only where `limit` allows.
         params["target"] = p.get("target").cloned().unwrap_or_default();
         return crate::edit_cmds::paste_to_target(s, &params, false, Some(&limit), label);
+    }
+    // The pasted layer lands beside the active one, inside its group, and a Lock-All group refuses
+    // its layer mask: refuse before pasting rather than leave an unmasked paste behind.
+    let d = s.active().ok_or(EngineError::NoDocument)?;
+    let group = d.active_layer.and_then(|a| d.doc.path_of(a)).and_then(|p| d.doc.layer_at(p.split_last()?.1).map(|g| g.id));
+    if let Some(g) = group {
+        crate::commands::check_all_unlocked(&d.doc, g)?;
     }
     let key = step_key(s, "pasteInto");
     params["coalesce"] = json!(key);
@@ -389,7 +400,38 @@ fn paste_into(s: &mut Session, p: &Value, outside: bool) -> Result<Value> {
 /// The canvas grown to every layer's pixels: Image › Reveal All's new canvas, and what the Crop
 /// tool shows while a frame is edited.
 pub fn reveal_all_bounds(doc: &Document) -> Rect {
-    doc.walk().into_iter().filter_map(|(_, _, l)| l.surface().map(|s| s.content_bounds())).fold(doc.bounds(), |a, b| a.union(&b))
+    let canvas = doc.bounds();
+    doc.walk().into_iter().filter_map(|(_, _, l)| l.surface().map(|s| visible_bounds(s, canvas))).fold(canvas, |a, b| a.union(&b))
+}
+
+/// Bounds of `s`'s pixels outside `canvas` with alpha > 0, as Photoshop's layer bounds (#9379):
+/// the Eraser only clears alpha, so an erased pixel keeps its colour bytes and `content_bounds`
+/// counts it. Pixels inside `canvas` can't grow the result and aren't read.
+fn visible_bounds(s: &photocraft_raster::Surface, canvas: Rect) -> Rect {
+    use rayon::prelude::*;
+    let fmt = s.format();
+    if !fmt.alpha || s.default_pixel().last().is_none_or(|a| *a > 0.0) {
+        return s.content_bounds();
+    }
+    let (n, bpp, side) = (fmt.channels(), fmt.bytes_per_pixel(), photocraft_geom::TILE_SIZE);
+    let tiles: Vec<_> = s.tiles().filter(|(c, _)| !canvas.contains_rect(&c.rect())).collect();
+    let tile_bounds = |o: Rect, bytes: &[u8]| {
+        let mut out = Rect::EMPTY;
+        for (ly, row) in bytes.chunks_exact(bpp * side as usize).enumerate() {
+            let y = o.y0.saturating_add(ly as i32);
+            let on_canvas = (canvas.y0..canvas.y1).contains(&y);
+            let visible = |lx: &i32| {
+                let x = o.x0.saturating_add(*lx);
+                !(on_canvas && (canvas.x0..canvas.x1).contains(&x))
+                    && row.get(*lx as usize * bpp..).is_some_and(|px| photocraft_color::read_sample(px, fmt.sample, n - 1) > 0.0)
+            };
+            let Some(first) = (0..side).find(visible) else { continue };
+            let last = (first..side).rfind(visible).unwrap_or(first);
+            out = out.union(&Rect::new(o.x0.saturating_add(first), y, o.x0.saturating_add(last).saturating_add(1), y.saturating_add(1)));
+        }
+        out
+    };
+    tiles.par_iter().map(|(c, t)| tile_bounds(c.rect(), t.bytes())).reduce(|| Rect::EMPTY, |a, b| a.union(&b))
 }
 
 // ---------- layers ----------
@@ -1747,6 +1789,28 @@ mod tests {
         assert_eq!(history.past_len(), steps + 1, "one step");
         assert_eq!(history.entries().last().map(String::as_str), Some("Reveal All"), "named as in Photoshop, not Crop");
         assert_eq!(s.execute("image.revealAll", json!({})).unwrap()["changed"], false);
+    }
+
+    #[test]
+    fn reveal_all_skips_erased_pixels() {
+        // #9379: the Eraser only clears alpha, so erased pixels keep their colour bytes; Reveal
+        // All grew the canvas to them although nothing there is visible.
+        // No Background: its off-canvas pixels are opaque and would be revealed anyway.
+        for depth in [8, 16, 32] {
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width": 40, "height": 30, "depth": depth, "background": "transparent"})).unwrap();
+            paint_square(&mut s, Rect::new(0, 0, 40, 30), [1.0, 0.0, 0.0, 1.0]);
+            let erase = json!({"points": [[32, -10], [32, 40]], "size": 28, "erase": true, "brush": {"hardness": 1.0}});
+            s.execute("paint.stroke", erase).unwrap();
+            assert_eq!(pixel(&s, 30, 15)[3], 0.0, "{depth}: erased");
+            s.execute("image.canvasSize", json!({"width": 20, "height": 30, "anchor": "topLeft"})).unwrap();
+            assert_eq!(s.execute("image.revealAll", json!({})).unwrap()["changed"], false, "{depth}");
+            assert_eq!((doc(&s).size.width, doc(&s).size.height), (20, 30), "{depth}");
+            // A pixel that is only partly erased is still there to reveal.
+            paint_square(&mut s, Rect::new(25, 5, 26, 6), [0.0, 0.0, 1.0, 0.5]);
+            assert_eq!(s.execute("image.revealAll", json!({})).unwrap()["changed"], true, "{depth}");
+            assert_eq!((doc(&s).size.width, doc(&s).size.height), (26, 30), "{depth}");
+        }
     }
 
     #[test]

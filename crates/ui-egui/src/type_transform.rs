@@ -97,8 +97,13 @@ pub(crate) fn frame(app: &mut PhotocraftApp) -> Option<TransformSession> {
     if !aff.m.iter().all(|v| v.is_finite()) || aff.inverse().is_none() {
         return None;
     }
-    let rect = match shape {
-        TextShape::Box { x, y, width, height } => [x, y, x + width, y + height].map(f64::from),
+    let area = match &shape {
+        TextShape::Area { path } => photocraft_text::area::path_bounds(path),
+        _ => None,
+    };
+    let rect = match (shape, area) {
+        (TextShape::Box { x, y, width, height }, _) => [x, y, x + width, y + height].map(f64::from),
+        (_, Some((x0, y0, x1, y1))) => [x0, y0, x1, y1],
         _ => {
             let mut r = layout.bounds().unwrap_or([0.0, -size * layout.px_per_pt, 1.0, 0.0]).map(f64::from);
             // Empty lines still have a caret and can be moved/scaled, without inventing glyphs.
@@ -418,7 +423,7 @@ pub(crate) fn draw_box(painter: &egui::Painter, xf: &ViewXform, t: &TransformSes
 
 pub(crate) fn rotation_cursor(ctx: &egui::Context, p: Pos2) {
     let tokens = crate::theme::Tokens::get(ctx);
-    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("type-rotate-cursor")));
+    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("type-rotate-cursor")));
     let first = -std::f32::consts::FRAC_PI_4;
     let last = std::f32::consts::PI + std::f32::consts::FRAC_PI_4;
     let points: Vec<Pos2> = (0..=24)
@@ -464,7 +469,7 @@ pub(crate) fn cursor(app: &mut PhotocraftApp, ctx: &egui::Context, xf: &ViewXfor
         Some(Hit::Edge(_)) => {
             // Original arrowhead indicator, above the canvas, without a proprietary cursor asset.
             let tokens = crate::theme::Tokens::get(ctx);
-            let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("type-skew-cursor")));
+            let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("type-skew-cursor")));
             painter.add(egui::Shape::convex_polygon(vec![p, p + vec2(14.0, 6.0), p + vec2(6.0, 14.0)], tokens.accent_text, Stroke::new(1.0, tokens.shadow)));
             CursorIcon::None
         }

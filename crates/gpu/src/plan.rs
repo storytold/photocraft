@@ -361,7 +361,14 @@ struct Planner<'a> {
     cx: DocCtx<'a>,
     fx: Vec<FxLayer<'a>>,
     checkpoints: Vec<Checkpoint>,
+    /// Layers planned so far, counting a layer each time it is planned (a clipped pass-through
+    /// group is planned twice).
+    visits: usize,
 }
+
+/// Most layer plannings one document may take: a pass-through group with clipped layers is
+/// planned twice, so groups nested in one another double the work at every level.
+const MAX_PLAN_VISITS: usize = 100_000;
 
 /// Coverage source of an effect paint (`kind` in `fs_fxpaint`); flags refine it.
 #[derive(Clone, Copy)]
@@ -455,7 +462,7 @@ pub const SHAPE_MAP: usize = usize::MAX;
 
 impl<'a> Planner<'a> {
     fn new(cx: DocCtx<'a>) -> Self {
-        Planner { passes: Vec::new(), free: Vec::new(), refs: Vec::new(), cx, fx: Vec::new(), checkpoints: Vec::new() }
+        Planner { passes: Vec::new(), free: Vec::new(), refs: Vec::new(), cx, fx: Vec::new(), checkpoints: Vec::new(), visits: 0 }
     }
 
     fn finish(self, root: Slot) -> Plan<'a> {
@@ -607,6 +614,10 @@ impl<'a> Planner<'a> {
 
     /// composite_layer, honouring the layer's channel restrictions.
     fn layer(&mut self, layer: &'a Layer, clipped: &'a [Layer], backdrop: Slot) -> Result<Slot, Unsupported> {
+        self.visits += 1;
+        if self.visits > MAX_PLAN_VISITS {
+            return Err(Unsupported("too many nested layers to plan for the GPU (composited on the CPU)".into()));
+        }
         self.check_advanced(layer, clipped)?;
         self.restricted(layer, backdrop, |s, b| s.layer_any(layer, clipped, b))
     }
@@ -1016,7 +1027,7 @@ impl<'a> Planner<'a> {
         }
         let mut p = Pass::new(Kernel::Adjust, 0);
         p.a = Some(src);
-        let (kind, params, lut) = adjustment_program(adj, self.cx.transfer, self.cx.depth);
+        let (kind, params, lut) = adjustment_program(adj, self.cx.transfer, self.cx.depth, self.cx.mode);
         p.adjust_kind = kind;
         p.params = params;
         p.lut = lut;
@@ -1645,7 +1656,7 @@ fn transfer_exponent(t: Transfer) -> f32 {
 }
 
 /// Adjustment → (kernel kind, parameters, LUT rows). Kinds are the `switch` in `adjust()`.
-pub fn adjustment_program(adj: &Adjustment, transfer: Transfer, depth: photocraft_color::SampleType) -> Program {
+pub fn adjustment_program(adj: &Adjustment, transfer: Transfer, depth: photocraft_color::SampleType, mode: photocraft_color::ColorMode) -> Program {
     let mut p = [[0.0f32; 4]; 4];
     match adj {
         Adjustment::Invert => (1, p, None),
@@ -1700,6 +1711,8 @@ pub fn adjustment_program(adj: &Adjustment, transfer: Transfer, depth: photocraf
             for (v, identity) in p[0].iter_mut().zip(adjust::float_tone_identity(adj, Some(depth))) {
                 *v = if identity { 1.0 } else { 0.0 };
             }
+            // p0.w: continue the curve past 0..1 (32-bit RGB Curves, #7157).
+            p[0][3] = if adjust::float_tone_extrapolates(adj, Some(depth), mode) { 1.0 } else { 0.0 };
             (7, p, Some(adjust::tone_luts_depth(adj, Some(depth)).iter().take(3).map(|t| to_row(t)).collect()))
         }
         Adjustment::HueSaturation { hue, saturation, lightness, colorize, ranges } => {
@@ -1877,6 +1890,23 @@ mod tests {
     use photocraft_geom::Size;
 
     #[test]
+    fn nested_pass_through_groups_with_clipped_layers_are_not_planned_exponentially() {
+        let mut layers = vec![Layer::raster("leaf", photocraft_color::PixelFormat::RGBA8)];
+        for _ in 0..30 {
+            let group = Layer::group("g", layers);
+            let mut clipped = Layer::raster("c", photocraft_color::PixelFormat::RGBA8);
+            clipped.clipped = true;
+            layers = vec![group, clipped];
+        }
+        let mut doc = Document::new("nest", Size::new(8, 8), ColorMode::Rgb, SampleType::U8);
+        doc.layers = layers;
+        let started = std::time::Instant::now();
+        let Err(error) = plan(&doc) else { panic!("2^30 plannings must be refused") };
+        assert!(error.0.contains("too many nested layers"), "{}", error.0);
+        assert!(started.elapsed().as_secs() < 10, "{:?}", started.elapsed());
+    }
+
+    #[test]
     fn stops_closer_than_one_lut_step_stay_on_the_cpu() {
         assert!(check_gradient_stops(&[(0.4999_f32, ()), (0.5, ())]).is_err());
         assert!(check_gradient_stops(&[(0.0_f32, ()), (1.0, ())]).is_ok());
@@ -1968,7 +1998,7 @@ mod tests {
     fn color_lookup_with_an_overflowing_stored_size_uploads_no_table() {
         for size in [1 << 22, u32::MAX] {
             let a = Adjustment::ColorLookup { name: "x".into(), lut: Some(std::sync::Arc::new(vec![0.5; 24])), size, tetrahedral: false, dither: false };
-            let (kind, _, rows) = adjustment_program(&a, Transfer::Srgb, SampleType::U8);
+            let (kind, _, rows) = adjustment_program(&a, Transfer::Srgb, SampleType::U8, photocraft_color::ColorMode::Rgb);
             assert_eq!((kind, rows.is_none()), (0, true), "size {size}");
         }
     }

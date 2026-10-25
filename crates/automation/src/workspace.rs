@@ -398,12 +398,13 @@ fn command_uses_ambient_path(id: &str, params: &Value) -> bool {
         | "gradient.presets.importGrd"
         | "plugin.install"
         | "swatches.import"
+        | "style.presets.importAsl"
         | "layer.layerStyle.contours.load" => {
             // `data` wins over `path` in these commands; any `path` without it reads the filesystem.
             params.get("data").is_none() && params.get("path").is_some()
         }
         // With a `path` the file is written there; without one the bytes come back as `data`.
-        "actions.save" | "swatches.export" | "layer.layerStyle.contours.save" => params.get("path").is_some(),
+        "actions.save" | "swatches.export" | "style.presets.exportAsl" | "layer.layerStyle.contours.save" => params.get("path").is_some(),
         // Shortcut sets: a .kys read or written by path, or a Summarize page written by path.
         "edit.keyboardShortcuts" => {
             params.get("path").is_some() || ["importKys", "exportKys", "summarize"].iter().any(|k| params.get(*k).and_then(|v| v.get("path")).is_some())
@@ -805,6 +806,21 @@ mod tests {
         assert!(authorize_desktop_engine_step("file.saveACopy", &serde_json::json!({})).is_err());
     }
 
+    // Regression test for #3763: `edit.installedProfiles` scans the OS and user ICC folders but
+    // takes no path parameter, so automation let it through until it was listed as ambient.
+    #[test]
+    fn installed_profiles_listing_is_refused_for_automation() {
+        for params in [serde_json::json!({}), serde_json::json!({"class": "output", "colorSpace": "cmyk"})] {
+            assert!(authorize_engine_command("edit.installedProfiles", &params).is_err(), "authorize_engine_command allowed it with {params}");
+            assert!(authorize_desktop_engine_command("edit.installedProfiles", &params).is_err(), "authorize_desktop_engine_command allowed it with {params}");
+            assert!(authorize_engine_step("edit.installedProfiles", &params).is_err(), "authorize_engine_step allowed it with {params}");
+        }
+        // The sandboxed session refuses it before the engine scans any folder.
+        let mut headless = crate::Headless::new();
+        let refused = headless.command_run("edit.installedProfiles", serde_json::json!({})).unwrap_err();
+        assert!(refused.to_string().contains("ambient filesystem paths"), "{refused}");
+    }
+
     #[test]
     fn apply_data_set_is_judged_by_the_values_it_applies() {
         let mut headless = crate::Headless::new();
@@ -845,6 +861,9 @@ mod tests {
             ("swatches.export", serde_json::json!({"path": "/outside/set.ase"})),
             ("actions.load", serde_json::json!({"path": "/outside/set.atn"})),
             ("actions.save", serde_json::json!({"path": "/outside/set.atn"})),
+            ("style.presets.importAsl", serde_json::json!({"path": "/outside/set.asl"})),
+            ("style.presets.exportAsl", serde_json::json!({"path": "/outside/set.asl"})),
+            ("style.presets.exportAsl", serde_json::json!({"path": 5})),
             ("layer.layerStyle.contours.load", serde_json::json!({"path": "/outside/set.shc"})),
             ("layer.layerStyle.contours.save", serde_json::json!({"path": "/outside/set.shc"})),
         ] {
@@ -859,6 +878,8 @@ mod tests {
             ("swatches.export", serde_json::json!({"format": "ase"})),
             ("actions.load", serde_json::json!({"data": "QUJD"})),
             ("actions.save", serde_json::json!({"set": "S"})),
+            ("style.presets.importAsl", serde_json::json!({"data": "QUJD"})),
+            ("style.presets.exportAsl", serde_json::json!({"group": "Basics"})),
             ("layer.layerStyle.contours.load", serde_json::json!({"data": "QUJD"})),
             ("layer.layerStyle.contours.save", serde_json::json!({"names": ["a"]})),
         ] {
@@ -947,6 +968,7 @@ mod tests {
                 | "path.rename"
                 | "path.stroke"
                 | "type.attachToPath"
+                | "type.fillPath"
                 | "type.detachFromPath"
                 | "select.toWorkPath"
                 | "layer.vectorMask.add"
@@ -993,6 +1015,8 @@ mod tests {
             ("gradient.presets.importGrd", serde_json::json!({"path": "/outside/set.grd"})),
             ("plugin.install", serde_json::json!({"path": "/outside/plugin.wasm"})),
             ("plugin.reload", serde_json::json!({"path": "/outside/plugins"})),
+            ("style.presets.importAsl", serde_json::json!({"path": "/outside/set.asl"})),
+            ("style.presets.exportAsl", serde_json::json!({"path": "/outside/set.asl"})),
             ("prefs.set", serde_json::json!({"path": "historyLog.filePath", "value": "/outside/log"})),
             ("prefs.set", serde_json::json!({"values": {"interface.language": "fr", "historyLog.filePath": "/outside/log"}})),
         ] {

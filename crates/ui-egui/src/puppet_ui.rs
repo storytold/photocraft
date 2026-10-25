@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use egui::{Color32, Stroke, TextureHandle, pos2, vec2};
 use photocraft_algo::puppet::{ITERATIONS, PuppetDensity, PuppetMesh, PuppetMode, PuppetPin, PuppetSolver, PuppetWarp, build_mesh};
-use photocraft_doc::{Document, LayerId};
+use photocraft_doc::{DocId, Document, LayerId};
 use photocraft_geom::Rect;
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
@@ -23,6 +23,8 @@ use crate::canvas::{ToolEvent, ViewXform};
 
 pub struct PuppetSession {
     pub key: u64,
+    /// Document this session belongs to (#5115).
+    pub document: DocId,
     pub layer: LayerId,
     /// Command to commit with (`edit.puppetWarp` or `layer.smartObjects.puppetWarp`).
     command: String,
@@ -98,6 +100,7 @@ impl PuppetSession {
 
     pub fn describe(&self) -> Value {
         json!({
+            "document": self.document.0,
             "layer": self.layer.0,
             "pins": self.warp.pins,
             "mode": self.warp.mode,
@@ -202,6 +205,7 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context, command: &str) -> Res
     let texture = ctx.load_texture(format!("puppet-{key}"), img, egui::TextureOptions::LINEAR);
     let mut s = PuppetSession {
         key,
+        document: st.doc.id,
         layer,
         command: command.to_string(),
         surface,
@@ -400,6 +404,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     crate::widgets::dropdown(
         ui,
         "puppet-mode",
+        tl!("Mode:"),
         &mut s.warp.mode,
         &[(PuppetMode::Rigid, tl!("Rigid")), (PuppetMode::Normal, tl!("Normal")), (PuppetMode::Distort, tl!("Distort"))],
         90.0,
@@ -410,6 +415,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     crate::widgets::dropdown(
         ui,
         "puppet-density",
+        tl!("Density:"),
         &mut s.warp.density,
         &[(PuppetDensity::Fewer, tl!("Fewer Points")), (PuppetDensity::Normal, tl!("Normal")), (PuppetDensity::More, tl!("More Points"))],
         110.0,
@@ -418,7 +424,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     ui.label(tl!("Expansion:"));
     let expansion = s.warp.expansion;
     let mut e = s.warp.expansion as f32;
-    if crate::widgets::value_field(ui, &mut e, -50.0..=100.0, "px", 56.0).changed() {
+    if crate::widgets::value_field(ui, &mut e, -50.0..=100.0, "px", 56.0).accessible_name(tl!("Expansion:")).changed() {
         s.warp.expansion = f64::from(e);
         remesh = true;
     }
@@ -437,14 +443,14 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         ui.label(tl!("Rotate:"));
         let mut fixed = s.warp.pins[i].rotate.is_some();
         let was = fixed;
-        crate::widgets::dropdown(ui, "puppet-rotate", &mut fixed, &[(false, tl!("Auto")), (true, tl!("Fixed"))], 70.0);
+        crate::widgets::dropdown(ui, "puppet-rotate", tl!("Rotation"), &mut fixed, &[(false, tl!("Auto")), (true, tl!("Fixed"))], 70.0);
         if fixed != was {
             s.warp.pins[i].rotate = fixed.then_some(0.0);
             rebind = true;
         }
         if let Some(r) = s.warp.pins[i].rotate {
             let mut a = r as f32;
-            if crate::widgets::value_field(ui, &mut a, -360.0..=360.0, "°", 52.0).changed() {
+            if crate::widgets::value_field(ui, &mut a, -360.0..=360.0, "°", 52.0).accessible_name(tl!("Rotation")).changed() {
                 s.warp.pins[i].rotate = Some(f64::from(a));
                 resolve = true;
             }
@@ -760,10 +766,13 @@ mod tests {
         crate::distort_ui::drop_foreign(&mut app);
         assert!(app.distort.puppet.is_some());
         app.session.execute("file.new", json!({"width": 32, "height": 32, "depth": 8})).unwrap();
-        assert!(crate::distort_ui::display_doc(&app, 1).is_some());
+        let active = app.session.active_index().unwrap();
+        // The session stays until drop_foreign; the preview must not follow this document (#5115).
+        assert!(app.distort.puppet.is_some());
+        assert!(crate::distort_ui::display_doc(&app, active).is_none());
         crate::distort_ui::drop_foreign(&mut app);
         assert!(app.distort.puppet.is_none());
-        assert!(crate::distort_ui::display_doc(&app, 1).is_none());
+        assert!(crate::distort_ui::display_doc(&app, active).is_none());
         // Closing the document it was started on drops it too.
         assert!(app.session.set_active(0));
         crate::distort_ui::menu(&mut app, &ctx, "edit.puppetWarp", &json!({})).unwrap().unwrap();

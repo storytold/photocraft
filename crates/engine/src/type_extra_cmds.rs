@@ -45,7 +45,7 @@ fn has_point_text(s: &Session) -> std::result::Result<(), String> {
     match active_text(s)?.shape {
         TextShape::Point => Ok(()),
         TextShape::Box { .. } => Err("the type layer is already paragraph text".into()),
-        TextShape::Path { .. } => Err("detach the type layer from its path first".into()),
+        TextShape::Path { .. } | TextShape::Area { .. } => Err("release the type layer from its path first".into()),
     }
 }
 
@@ -54,6 +54,7 @@ fn has_box_text(s: &Session) -> std::result::Result<(), String> {
         TextShape::Box { .. } => Ok(()),
         TextShape::Point => Err("the type layer is already point text".into()),
         TextShape::Path { .. } => Err("the type layer is path text".into()),
+        TextShape::Area { .. } => Err("the type layer is area type; release it from its path first".into()),
     }
 }
 
@@ -71,7 +72,7 @@ fn has_defaults(s: &Session) -> std::result::Result<(), String> {
 
 /// Edits a type layer as one history step and re-renders it. `f` gets the document's resolution
 /// (dpi).
-fn with_text<R>(s: &mut Session, p: &Value, label: &str, f: impl FnOnce(&mut TextLayer, f32) -> Result<R>) -> Result<R> {
+pub(crate) fn with_text<R>(s: &mut Session, p: &Value, label: &str, f: impl FnOnce(&mut TextLayer, f32) -> Result<R>) -> Result<R> {
     let id = layer_param(s, p)?;
     check_text_unlocked(&s.active().ok_or(EngineError::NoDocument)?.doc, id)?;
     s.edit(label, |doc, _| {
@@ -416,7 +417,7 @@ fn attach_to_path(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn is_path_text(s: &Session) -> std::result::Result<(), String> {
     match active_text(s)?.shape {
-        TextShape::Path { .. } => Ok(()),
+        TextShape::Path { .. } | TextShape::Area { .. } => Ok(()),
         _ => Err("the type layer is not on a path".into()),
     }
 }
@@ -424,13 +425,21 @@ fn is_path_text(s: &Session) -> std::result::Result<(), String> {
 fn detach_from_path(s: &mut Session, p: &Value) -> Result<Value> {
     let id = layer_param(s, p)?;
     with_text(s, p, "Release Type from Path", |t, _| {
-        if !matches!(t.shape, TextShape::Path { .. }) {
-            return Err(EngineError::Other("the type layer is not on a path".into()));
+        match &t.shape {
+            TextShape::Path { .. } => {
+                // Point text starts where the type started on the path.
+                let origin = photocraft_text::warp::Warp::on_path(&t.shape).map_or((0.0, 0.0), |w| w.apply(0.0, 0.0));
+                t.shape = TextShape::Point;
+                t.transform = then_translate(&t.transform, origin.0, origin.1);
+            }
+            // Area type keeps wrapping, in a text box over the path's bounds.
+            TextShape::Area { path } => {
+                let (x0, y0, x1, y1) = photocraft_text::area::path_bounds(path)
+                    .ok_or_else(|| EngineError::Other("the area type's path is empty or has coordinates that aren't finite".into()))?;
+                t.shape = TextShape::Box { x: x0 as f32, y: y0 as f32, width: ((x1 - x0) as f32).max(1.0), height: ((y1 - y0) as f32).max(1.0) };
+            }
+            _ => return Err(EngineError::Other("the type layer is not on a path".into())),
         }
-        // Point text starts where the type started on the path.
-        let origin = photocraft_text::warp::Warp::on_path(&t.shape).map_or((0.0, 0.0), |w| w.apply(0.0, 0.0));
-        t.shape = TextShape::Point;
-        t.transform = then_translate(&t.transform, origin.0, origin.1);
         Ok(())
     })?;
     Ok(json!({"layer": id.0}))

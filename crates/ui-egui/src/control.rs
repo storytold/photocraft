@@ -133,7 +133,8 @@ pub enum Outcome {
 /// field's value is validated before the first one is applied, so a typo, an unknown field, a
 /// bad value or a bad nested key can't reply with success while nothing — or only half of it —
 /// changed (#412).
-pub const UI_SET_FIELDS: [&str; 38] = [
+pub const UI_SET_FIELDS: [&str; 39] = [
+    "updatesOpen",
     "tool",
     "strokeTrace",
     "panels",
@@ -245,7 +246,7 @@ fn merged_object<T: serde::Serialize + serde::de::DeserializeOwned>(current: &T,
     serde_json::from_value(cur).map(Some).map_err(|e| format!("{field}: {e}"))
 }
 
-/// A `ui.set` object field applied by whole-value replacement (e.g. `dock`, `colorPanel`):
+/// A `ui.set` object field applied by whole-value replacement (e.g. `dock`):
 /// unknown nested keys are rejected like [`merged_object`] does, but the value replaces the
 /// state instead of merging into it.
 fn whole_object<T: serde::Serialize + serde::de::DeserializeOwned>(current: &T, v: Option<&Value>, field: &str) -> std::result::Result<Option<T>, String> {
@@ -427,16 +428,16 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
             let Some(id) = s("command").or(s("id")) else { return err("missing `command`") };
             let params = p.get("params").cloned().unwrap_or(json!({}));
             // A control-channel menu click must respect the same modal gate as the native menu.
-            // Camera Raw's documented `ui` requests operate its already-open dialog rather
-            // than click a menu. Only that continuation may pass its own modal gate.
-            // engine.execute is deliberately not subject to the UI's menu-click semantics.
-            let camera_raw_continuation = id == "filter.cameraRaw"
-                && app.camera_raw.is_some()
+            // The documented `ui` requests of Camera Raw and the full-window workspaces operate
+            // the already-open one rather than click a menu. Only that continuation may pass its
+            // own modal gate. engine.execute is deliberately not subject to the UI's menu-click semantics.
+            let open_modal = if app.camera_raw.is_some() { Some("filter.cameraRaw") } else { crate::distort_ui::modal_workspace(app) };
+            let continuation = open_modal == Some(id)
                 && params.as_object().is_some_and(|fields| fields.len() == 1 && fields.get("ui").is_some_and(Value::is_object))
                 && app.ui.dialogs.is_empty()
                 && app.discard.is_none()
                 && !crate::crop_ui::blocks(app, id);
-            if req.method == "ui.menu.invoke" && !camera_raw_continuation && !crate::menus::modal_allows(app, id) {
+            if req.method == "ui.menu.invoke" && !continuation && !crate::menus::modal_allows(app, id) {
                 return err("menu command is unavailable while a modal dialog is open");
             }
             if let Some(authorize) = app.services.automation_command.as_ref()
@@ -471,7 +472,14 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 None => err("`job` must be a job id"),
             }
         }
-        "ui.menu.list" => ok(serde_json::to_value(crate::menus::menu_items(app)).unwrap_or_default()),
+        "ui.menu.list" => {
+            // Report the same enablement the native menu shows, so a listed item is invokable.
+            let mut items = crate::menus::menu_items(app);
+            for item in &mut items {
+                item.enabled &= crate::menus::modal_allows(app, &item.id);
+            }
+            ok(serde_json::to_value(items).unwrap_or_default())
+        }
         "ui.inspect" => ok(inspect(app, ctx)),
         "ui.set" => {
             if let Some(field) = p.as_object().and_then(|o| o.keys().find(|k| !UI_SET_FIELDS.contains(&k.as_str()))) {
@@ -581,12 +589,13 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 }
                 let panels = merged_object(&app.ui.panels, p.get("panels"), "panels")?;
                 let mask_target = bool_field(p, "maskTarget")?;
+                let updates_open = bool_field(p, "updatesOpen")?;
                 let vector_mask_target = bool_field(p, "vectorMaskTarget")?;
                 let selection_mode = uint_field(p, "selectionMode")?;
                 let dock_tabs = merged_object(&app.ui.dock_tabs, p.get("dockTabs"), "dockTabs")?;
                 let dock = whole_object(&app.ui.dock, p.get("dock"), "dock")?;
                 // Which chip the Color panel edits.
-                let color_panel = whole_object(&app.ui.color_panel, p.get("colorPanel"), "colorPanel")?;
+                let color_panel = merged_object(&app.ui.color_panel, p.get("colorPanel"), "colorPanel")?;
                 let dock_width = f32_field(p, "dockWidth")?;
                 let zoom = f32_field(p, "zoom")?;
                 let rotation = f32_field(p, "rotation")?;
@@ -747,6 +756,9 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                     app.ui.vector_mask_target &= !m;
                     app.sync_mask_targets();
                 }
+                if let Some(open) = updates_open {
+                    app.ui.updates_open = open;
+                }
                 if let Some(m) = vector_mask_target {
                     app.ui.vector_mask_target = m;
                     app.ui.mask_target &= !m;
@@ -902,6 +914,9 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
             };
             let mut fields = if kind == DialogKind::NewDocument { app.new_document_fields() } else { Default::default() };
             if let Some(f) = p.get("fields").and_then(Value::as_object) {
+                if let Some(marker) = f.keys().find(|k| crate::dialogs::is_route_marker(k)) {
+                    return err(format!("`{marker}` is set only by the dialog it belongs to"));
+                }
                 fields.extend(f.clone());
             }
             ok(json!({"dialog": app.ui.open_dialog(kind, fields)}))
@@ -955,6 +970,13 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
             let (Some(id), Some(field)) = (u("dialog"), s("field")) else { return err("need `dialog` and `field`") };
             let value = p.get("value").cloned().unwrap_or(Value::Null);
             match app.ui.dialog_mut(id) {
+                // A continuation belongs to the dialog that paused it, even when another
+                // action has a valid token. Replacing it would resume or cancel that action.
+                Some(_) if field == crate::actions::RESUME => err("the paused action token is read-only"),
+                // A marker picks the handler OK runs: a dialog keeps the ones it was opened with.
+                Some(d) if !d.fields.contains_key(field) && crate::dialogs::is_route_marker(field) => {
+                    err(format!("`{field}` is set only by the dialog it belongs to"))
+                }
                 Some(d) => {
                     d.fields.insert(field.to_string(), value);
                     ok(Value::Null)
@@ -1263,8 +1285,9 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
             if focus.unwrap_or(true) {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             }
-            // The capture itself is issued by `PhotocraftApp::issue_screenshots` once open/close
-            // animations (modals, popups) have settled.
+            // The capture itself is admitted by `PhotocraftApp::drain_control` (budget and
+            // geometry) and issued from a later `App::ui` pass once open/close animations
+            // (modals, popups) have settled (see `screenshot.rs`).
             let token = app.ui.alloc_id();
             ctx.request_repaint();
             Outcome::Screenshot { token, path }
@@ -1384,6 +1407,8 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
         "status": app.ui.status,
         "statusError": app.ui.status_error,
         "notices": app.ui.notices,
+        "updatesOpen": app.ui.updates_open,
+        "updates": {"supported": app.session.updates.check.is_some(), "currentVersion": photocraft_engine::build_info::VERSION, "result": app.session.updates.status},
         "gpuFallbackNotice": app.ui.gpu_fallback_notice,
         "kysOffer": app.ui.kys_offer,
         "frame": app.frame,
@@ -1400,8 +1425,15 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
 pub fn save_screenshot(app: &mut PhotocraftApp, image: &egui::ColorImage, path: Option<&str>) -> Value {
     let [w, h] = image.size;
     let rgba: Vec<u8> = image.pixels.iter().flat_map(|c| c.to_array()).collect();
+    save_screenshot_rgba(app, w, h, &rgba, path)
+}
+
+/// Encode already-flattened RGBA pixels. The capture lifecycle uses this after dropping the
+/// retained [`egui::ColorImage`], so the encoder's input copy and the retained image do not
+/// overlap in memory (see `PhotocraftApp::finish_captures`).
+pub fn save_screenshot_rgba(app: &mut PhotocraftApp, w: usize, h: usize, rgba: &[u8], path: Option<&str>) -> Value {
     let png = match app.services.encode_png.as_ref() {
-        Some(enc) => enc(w as u32, h as u32, &rgba),
+        Some(enc) => enc(w as u32, h as u32, rgba),
         None => Err("no PNG encoder configured".into()),
     };
     let Some(path) = path else {
@@ -1555,6 +1587,57 @@ mod tests {
         app.services.automation_command = None;
         assert_eq!(call(&mut app, &ctx, "ui.menu.invoke", cancel)["ok"], true);
         assert!(app.camera_raw.is_none());
+    }
+
+    #[test]
+    fn full_window_workspaces_are_modal_for_menu_invocations() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        app.run("file.new", json!({"width":32,"height":32})).unwrap();
+        app.run("file.new", json!({"width":32,"height":32})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.run("edit.fill", json!({"color":"#808080"})).unwrap();
+        app.run("select.rect", json!({"x":8,"y":8,"width":8,"height":8})).unwrap();
+        for workspace in ["filter.liquify", "edit.contentAwareFill", "filter.filterGallery", "filter.adaptiveWideAngle"] {
+            let opened = call(&mut app, &ctx, "ui.menu.invoke", json!({"id":workspace}));
+            assert_eq!(opened["ok"], true, "{workspace}: {opened}");
+            assert_eq!(crate::distort_ui::modal_workspace(&app), Some(workspace));
+            let doc = app.session.active().unwrap().doc.id;
+            for request in [
+                json!({"id":"window.document.0"}),
+                json!({"id":"select.all"}),
+                json!({"id":"view.zoomIn"}),
+                json!({"id":"filter.cameraRaw"}),
+                json!({"id":workspace,"params":{"ui":null}}),
+            ] {
+                let blocked = call(&mut app, &ctx, "ui.menu.invoke", request.clone());
+                assert_eq!(blocked["ok"], false, "{workspace}: {request} → {blocked}");
+                assert!(!crate::menus::modal_allows(&app, request["id"].as_str().unwrap()), "{workspace}: native menu greys {request}");
+            }
+            let listed = call(&mut app, &ctx, "ui.menu.list", json!({}));
+            let enabled = |id: &str| listed["result"].as_array().unwrap().iter().find(|it| it["id"] == id).map(|it| it["enabled"].clone());
+            assert_eq!(enabled("select.all"), Some(json!(false)), "{workspace}: ui.menu.list greys what invoke refuses");
+            assert_eq!(crate::distort_ui::modal_workspace(&app), Some(workspace), "{workspace} stays open with its work");
+            assert_eq!(app.session.active().unwrap().doc.id, doc);
+            // An open dialog still takes precedence over the workspace's own requests.
+            app.ui.open_dialog(DialogKind::About, Default::default());
+            let cancel = json!({"id":workspace,"params":{"ui":{"cancel":true}}});
+            assert_eq!(call(&mut app, &ctx, "ui.menu.invoke", cancel.clone())["ok"], false);
+            app.ui.dialogs.clear();
+            let cancelled = call(&mut app, &ctx, "ui.menu.invoke", cancel);
+            assert_eq!(cancelled["ok"], true, "{workspace}: {cancelled}");
+            assert_eq!(crate::distort_ui::modal_workspace(&app), None);
+            assert!(crate::menus::modal_allows(&app, "select.all"), "{workspace}: menus are free again");
+            let listed = call(&mut app, &ctx, "ui.menu.list", json!({}));
+            assert!(
+                listed["result"].as_array().unwrap().iter().any(|it| it["id"] == "select.all" && it["enabled"] == true),
+                "{workspace}: listed as enabled again"
+            );
+        }
+        // engine.execute stays programmatic: it is not a menu click.
+        assert_eq!(call(&mut app, &ctx, "ui.menu.invoke", json!({"id":"filter.liquify"}))["ok"], true);
+        let executed = call(&mut app, &ctx, "engine.execute", json!({"command":"select.all"}));
+        assert_eq!(executed["ok"], true, "{executed}");
     }
 
     #[test]
@@ -2338,17 +2421,17 @@ mod tests {
     }
 
     #[test]
-    fn ui_set_color_panel_slider_mode() {
-        use crate::state::ColorPanelSliderMode;
+    fn ui_set_color_panel_mode() {
+        use crate::state::ColorPanelMode;
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         let ctx = egui::Context::default();
-        assert_eq!(app.ui.color_panel.slider_mode, ColorPanelSliderMode::Hsb);
-        assert_eq!(call(&mut app, &ctx, "ui.set", json!({"colorPanel": {"slider_mode": "rgb"}}))["ok"], true);
-        assert_eq!(app.ui.color_panel.slider_mode, ColorPanelSliderMode::Rgb);
-        assert_eq!(call(&mut app, &ctx, "ui.set", json!({"colorPanel": {"slider_mode": "hsb"}}))["ok"], true);
-        assert_eq!(app.ui.color_panel.slider_mode, ColorPanelSliderMode::Hsb);
-        assert_eq!(call(&mut app, &ctx, "ui.set", json!({"colorPanel": {"slider_mode": "cmyk"}}))["ok"], false);
-        assert_eq!(app.ui.color_panel.slider_mode, ColorPanelSliderMode::Hsb);
+        assert_eq!(app.ui.color_panel.mode, ColorPanelMode::HueCube);
+        assert_eq!(call(&mut app, &ctx, "ui.set", json!({"colorPanel": {"mode": "rgbSliders"}}))["ok"], true);
+        assert_eq!(app.ui.color_panel.mode, ColorPanelMode::RgbSliders);
+        assert_eq!(call(&mut app, &ctx, "ui.set", json!({"colorPanel": {"mode": "hsbSliders"}}))["ok"], true);
+        assert_eq!(app.ui.color_panel.mode, ColorPanelMode::HsbSliders);
+        assert_eq!(call(&mut app, &ctx, "ui.set", json!({"colorPanel": {"mode": "nope"}}))["ok"], false);
+        assert_eq!(app.ui.color_panel.mode, ColorPanelMode::HsbSliders);
     }
 
     #[test]
@@ -2659,6 +2742,77 @@ mod tests {
         } else {
             Ok(())
         }
+    }
+
+    /// An app whose automation gates refuse file commands, with a document open, and the paths
+    /// its writer was asked to write.
+    fn gated_app_recording_writes() -> (PhotocraftApp, egui::Context, std::rc::Rc<std::cell::RefCell<Vec<String>>>, u64) {
+        let written: std::rc::Rc<std::cell::RefCell<Vec<String>>> = std::rc::Rc::default();
+        let w = written.clone();
+        let services = crate::Services {
+            automation_authorize: Some(deny_ambient_file),
+            automation_command: Some(Box::new(|id, params| deny_ambient_file(id, params).map_err(|e| e.to_string()))),
+            export: Some(Box::new(|_: &photocraft_doc::Document, _: &str, _: &crate::ExportSettings| Ok((b"out".to_vec(), Vec::new())))),
+            write: Some(Box::new(move |path: &str, _: &[u8]| {
+                w.borrow_mut().push(path.to_string());
+                Ok(())
+            })),
+            ..Default::default()
+        };
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        app.background_jobs = false;
+        app.session.execute("file.new", json!({"width": 4, "height": 4})).unwrap();
+        let doc = app.session.active().unwrap().doc.id.0;
+        (app, egui::Context::default(), written, doc)
+    }
+
+    fn outside_target() -> String {
+        std::env::temp_dir().join("outside").join("x.png").to_string_lossy().into_owned()
+    }
+
+    /// `ui.dialog.set` and `ui.dialog.open` never add a marker that picks a dialog's OK handler:
+    /// a View › Zoom In dialog can't be made to confirm as the disk-change prompt's save.
+    #[test]
+    fn automation_cannot_add_a_marker_that_reroutes_a_dialog() {
+        let (mut app, ctx, written, doc) = gated_app_recording_writes();
+        let target = outside_target();
+        let r = call(&mut app, &ctx, "ui.dialog.open", json!({"kind": "command", "command": "view.zoomIn"}));
+        let dialog = r["result"]["dialog"].clone();
+        for (field, value) in [("document", json!(doc)), ("path", json!(target)), ("flat", json!(false))] {
+            let r = call(&mut app, &ctx, "ui.dialog.set", json!({"dialog": dialog, "field": field, "value": value}));
+            assert!(r.get("error").is_none(), "{r}");
+        }
+        let injected = call(&mut app, &ctx, "ui.dialog.set", json!({"dialog": dialog, "field": "__diskChanged", "value": true}));
+        let replace = call(&mut app, &ctx, "ui.dialog.set", json!({"dialog": dialog, "field": "__replaceSaved", "value": true}));
+        assert!(replace["error"].as_str().is_some_and(|e| e.contains("set only by the dialog")), "{replace}");
+        call(&mut app, &ctx, "ui.dialog.confirm", json!({"dialog": dialog}));
+        assert!(written.borrow().is_empty(), "nothing is written: {:?}", written.borrow());
+        assert!(injected["error"].as_str().is_some_and(|e| e.contains("set only by the dialog")), "{injected}");
+        let r = call(&mut app, &ctx, "ui.dialog.open", json!({"kind": "about", "fields": {"__export": true}}));
+        assert!(r["error"].as_str().is_some_and(|e| e.contains("set only by the dialog")), "{r}");
+    }
+
+    /// A handler that writes files itself (the disk-change prompt's save) is judged as the file
+    /// command it stands for, through a control request or synthetic input alike.
+    #[test]
+    fn automation_confirming_a_file_writing_dialog_is_judged_as_its_file_command() {
+        let (mut app, ctx, written, doc) = gated_app_recording_writes();
+        let target = outside_target();
+        // A real disk-change prompt keeps its own fields settable, but its save is a file command.
+        let fields = json!({"__diskChanged": true, "__label": "Save", "message": "", "document": doc, "path": target, "flat": false});
+        let prompt = app.ui.open_dialog(DialogKind::Command, fields.as_object().cloned().unwrap());
+        let r = call(&mut app, &ctx, "ui.dialog.set", json!({"dialog": prompt, "field": "__diskChanged", "value": true}));
+        assert!(r.get("error").is_none(), "{r}");
+        let r = call(&mut app, &ctx, "ui.dialog.confirm", json!({"dialog": prompt}));
+        assert!(written.borrow().is_empty(), "nothing is written: {:?}", written.borrow());
+        assert!(r["error"].as_str().is_some_and(|e| e.contains("file.save")), "{r}");
+        // Synthetic input (Enter or OK) reaches the same handler without the control pre-check.
+        let synthetic = app.ui.open_dialog(DialogKind::Command, fields.as_object().cloned().unwrap());
+        app.automation_input = true;
+        let r = crate::dialogs::confirm(&mut app, synthetic);
+        app.automation_input = false;
+        assert!(written.borrow().is_empty(), "nothing is written: {:?}", written.borrow());
+        assert!(r.is_err_and(|e| e.contains("file.save")));
     }
 
     #[test]

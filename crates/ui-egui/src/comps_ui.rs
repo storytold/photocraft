@@ -36,7 +36,7 @@ struct RenameComp {
 fn rename_field(ui: &mut egui::Ui, id: egui::Id, rect: Rect) -> Option<String> {
     let mut r = ui.data(|d| d.get_temp::<RenameComp>(id))?;
     ui.data_mut(|d| d.remove::<RenameComp>(id));
-    let te = ui.put(rect, egui::TextEdit::singleline(&mut r.text).id(id).font(egui::FontId::proportional(12.0)));
+    let te = ui.put(rect, egui::TextEdit::singleline(&mut r.text).id(id).font(egui::FontId::proportional(12.0))).accessible_name(tl!("Name"));
     if !r.focused {
         te.request_focus();
         // Like Photoshop, the whole name starts selected so typing replaces it.
@@ -126,7 +126,7 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         }
         for (index, c) in doc.layer_comps.iter().enumerate() {
             let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), row_h), Sense::click_and_drag());
-            resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected == Some(c.id), &c.name));
+            resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected == Some(c.id), &c.name));
             resp.dnd_set_drag_payload(DragComp { document: doc.id, comp: c.id });
             if let Some(source) = resp.dnd_hover_payload::<DragComp>()
                 && source.document == doc.id
@@ -213,7 +213,7 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             let name = ui.painter().layout(c.name.clone(), egui::FontId::proportional(12.0), t.text, galley_w);
             let name_rect = Rect::from_min_size(pos2(name_x, rect.center().y - name.size().y / 2.0), name.size());
             // Comp ids restart in every document, so the pending name is keyed by the document too.
-            let rename_id = egui::Id::new(("comp-rename", doc.id.0, c.id));
+            let rename_id = egui::Id::unique(("comp-rename", doc.id.0, c.id));
             if ui.data(|d| d.get_temp::<RenameComp>(rename_id)).is_some() {
                 let field = Rect::from_min_max(pos2(name_x - 3.0, rect.top() + 3.0), pos2((x + 10.0).max(name_x + 60.0), rect.bottom() - 3.0));
                 if let Some(text) = rename_field(ui, rename_id, field) {

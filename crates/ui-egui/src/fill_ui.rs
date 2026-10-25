@@ -155,7 +155,7 @@ pub fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) 
     ui.horizontal(|ui| {
         label(ui, tl!("Contents:"));
         let opts: Vec<(String, &str)> = CONTENTS.iter().map(|(k, l)| (k.to_string(), *l)).collect();
-        if crate::widgets::dropdown(ui, "fill-contents", &mut contents, &opts, 170.0) {
+        if crate::widgets::dropdown(ui, "fill-contents", tl!("Contents:"), &mut contents, &opts, 170.0) {
             f.insert("contents".into(), json!(contents));
             // Choosing Color… opens the Color Picker, as in Photoshop.
             if contents == "color" {

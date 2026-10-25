@@ -182,6 +182,17 @@ pub fn color_from_desc(d: &Descriptor) -> Option<Color> {
             Color::rgb(g("Rd  ")? / 255.0, g("Grn ")? / 255.0, g("Bl  ")? / 255.0)
         }
     })
+    .map(|c| with_pc_alpha(c, d))
+}
+
+/// PSD colour descriptors have no alpha. PhotoCraft writes `pcAl` (0..1) so shape fill
+/// opacity round-trips (#6180). Photoshop ignores the key.
+fn with_pc_alpha(mut c: Color, d: &Descriptor) -> Color {
+    // A hostile file's NaN or infinity would survive the clamp: keep the colour opaque instead.
+    if let Some(a) = num(d.get("pcAl")).filter(|a| a.is_finite()) {
+        c.alpha = (a as f32).clamp(0.0, 1.0);
+    }
+    c
 }
 
 /// [`Color`] → descriptor in its own model.
@@ -202,6 +213,13 @@ pub fn color_to_desc(c: &Color) -> Descriptor {
             Descriptor::new("RGBC").with("Rd  ", d(rgb[0] * 255.0)).with("Grn ", d(rgb[1] * 255.0)).with("Bl  ", d(rgb[2] * 255.0))
         }
     }
+}
+
+/// Solid shape fills have no other alpha slot. Write `pcAl` only here so gradient stops
+/// keep using `Trns` alone (#6180).
+fn color_to_desc_with_pc_alpha(c: &Color) -> Descriptor {
+    let desc = color_to_desc(c);
+    if c.alpha.is_finite() && (c.alpha - 1.0).abs() > 1e-6 { desc.with("pcAl", Value::Double(f64::from(c.alpha.clamp(0.0, 1.0)))) } else { desc }
 }
 
 pub(crate) fn get_desc<'a>(d: &'a Descriptor, key: &str) -> Option<&'a Descriptor> {
@@ -499,7 +517,7 @@ pub fn write_fill(f: &Fill) -> ([u8; 4], Vec<u8>) {
 /// A fill as (block key, descriptor with class `null`).
 pub fn fill_to_desc(f: &Fill) -> ([u8; 4], Descriptor) {
     match f {
-        Fill::Solid(c) => (*b"SoCo", Descriptor::new("null").with("Clr ", Value::Descriptor(color_to_desc(c)))),
+        Fill::Solid(c) => (*b"SoCo", Descriptor::new("null").with("Clr ", Value::Descriptor(color_to_desc_with_pc_alpha(c)))),
         Fill::Gradient { stops, angle, scale, style, reverse, opacity_stops, midpoints, offset, dither, align } => {
             let prc = |v: f32| Value::UnitFloat { unit: *b"#Prc", value: f64::from(v * 100.0) };
             let mut d = Descriptor::new("null")
@@ -568,9 +586,10 @@ pub(crate) fn with_pattern_placement(mut d: Descriptor, angle: f32, link: bool, 
 
 /// The warp of a placed layer (`SoLd`/`SoLE` `quiltWarp` or `warp` descriptor): style, bend,
 /// distortions, axis, bounds and, for `warpCustom`, the `customEnvelopeWarp` mesh: one 4 × 4
-/// patch, or the multi-patch grid Photoshop's split warp writes as `quiltWarp`. Read-only: the
-/// raw block is what gets written back. `None` when absent or `warpNone` with no mesh. A `PlLd`
-/// record keeps its warp elsewhere: see [`parse_plld_warp`].
+/// patch, or the multi-patch grid Photoshop's split warp writes as `quiltWarp`; for
+/// `warpCylinder` its seven `warpValues`. Read-only: the raw block is what gets written back.
+/// `None` when absent or `warpNone` with no mesh. A `PlLd` record keeps its warp elsewhere: see
+/// [`parse_plld_warp`].
 pub fn parse_placed_warp(key: &[u8; 4], data: &[u8]) -> Option<photocraft_geom::warp::Warp> {
     if key != b"SoLd" && key != b"SoLE" {
         return None;
@@ -583,7 +602,8 @@ pub fn parse_placed_warp(key: &[u8; 4], data: &[u8]) -> Option<photocraft_geom::
 /// A `warp` or `quiltWarp` descriptor (the `SoLd` key, or the whole descriptor after a `PlLd`
 /// record's corners) as a warp: `Some(None)` for no warp (`warpNone`, or a warp that moves
 /// nothing), `None` when it can't be read (an unknown style, missing bounds, a mesh that is
-/// neither one 4 × 4 patch nor a consistent quilt grid).
+/// neither one 4 × 4 patch nor a consistent quilt grid, a cylinder that isn't a horizontal one
+/// without perspective, the only kind measured).
 pub(crate) fn warp_of(w: &Descriptor) -> Option<Option<photocraft_geom::warp::Warp>> {
     use photocraft_geom::warp::{BezierMesh, Warp, WarpStyle};
     let style = enum_of(w, "warpStyle").and_then(|v| WarpStyle::parse(&String::from_utf8_lossy(v)))?;
@@ -597,6 +617,17 @@ pub(crate) fn warp_of(w: &Descriptor) -> Option<Option<photocraft_geom::warp::Wa
     warp.h_distort = num(w.get("warpPerspective")).unwrap_or(0.0);
     warp.v_distort = num(w.get("warpPerspectiveOther")).unwrap_or(0.0);
     warp.vertical = enum_of(w, "warpRotate") == Some(b"Vrtc");
+    if style == WarpStyle::Cylinder {
+        if warp.vertical || warp.h_distort != 0.0 || warp.v_distort != 0.0 {
+            return None;
+        }
+        let values: Vec<f64> = match w.get("warpValues")? {
+            Value::List(l) => l.iter().map(|v| num(Some(v))).collect::<Option<_>>()?,
+            Value::UnitFloats { values, .. } => values.clone(),
+            _ => return None,
+        };
+        return Some(Some(Warp::cylinder(&values, bounds)?));
+    }
     if style == WarpStyle::Custom {
         let env = get_desc(w, "customEnvelopeWarp")?;
         let Some(Value::ObjectArray(arr)) = env.get("meshPoints") else { return None };
@@ -702,18 +733,30 @@ pub(crate) fn parse_prefix_versioned(data: &[u8]) -> Option<Descriptor> {
 }
 
 /// The source-space box Photoshop maps onto a placed layer's `Trnf` quad: the bounding box of a
-/// custom warp's control points (one patch or a split grid), which may spill past the source,
-/// else the source rect `0..w × 0..h`. Mapping the source rect instead counts the overhang twice
-/// and stretches the placement. A degenerate or non-finite box falls back to the source rect.
+/// custom warp's control points (one patch or a split grid) or of a cylinder's mesh (#4112),
+/// which may spill past the source, else the source rect `0..w × 0..h`. Mapping the source rect
+/// instead counts the overhang twice and stretches the placement. A degenerate or non-finite box
+/// falls back to the source rect.
 pub(crate) fn placed_frame(warp: Option<&photocraft_geom::warp::Warp>, w: f64, h: f64) -> [f64; 4] {
+    use photocraft_geom::warp::WarpStyle;
     let rect = [0.0, 0.0, w, h];
-    let Some(m) = warp.filter(|wp| wp.style == photocraft_geom::warp::WarpStyle::Custom).and_then(|wp| wp.mesh.as_ref()).filter(|m| m.is_valid()) else {
+    let Some(m) = warp.filter(|wp| matches!(wp.style, WarpStyle::Custom | WarpStyle::Cylinder)).and_then(|wp| wp.mesh.as_ref()).filter(|m| m.is_valid()) else {
         return rect;
     };
     let inf = f64::INFINITY;
     let b = m.points.iter().fold([inf, inf, -inf, -inf], |b, [x, y]| [b[0].min(*x), b[1].min(*y), b[2].max(*x), b[3].max(*y)]);
     let ok = b.iter().all(|v| v.is_finite()) && b[2] - b[0] > 1e-9 && b[3] - b[1] > 1e-9;
     if ok { b } else { rect }
+}
+
+/// The source-space box a projective (Distort / Perspective) placement maps onto its corners: a
+/// cylinder's control-point box, as for an affine placement (#4112), else the source rect. A
+/// custom warp keeps the source rect here: there is no Photoshop reference for that combination.
+pub(crate) fn perspective_frame(warp: Option<&photocraft_geom::warp::Warp>, w: f64, h: f64) -> [f64; 4] {
+    match warp {
+        Some(wp) if wp.style == photocraft_geom::warp::WarpStyle::Cylinder => placed_frame(warp, w, h),
+        _ => [0.0, 0.0, w, h],
+    }
 }
 
 /// Smart object identifier and transform from `SoLd`/`SoLE` (best effort). A `PlLd` block
@@ -753,17 +796,17 @@ pub fn corners_affine(p: &[f64; 8], frame: [f64; 4]) -> Option<Affine> {
 
 /// The transform and (Distort/Perspective) projective placement of a `PlLd` record's corners `p`
 /// for a source of `size` warped by `warp`: the inverse of [`crate::smart_map::plld_bytes`]'s
-/// quad. As for `SoLd`'s `Trnf` (#3677), affine corners frame a single-patch custom warp's
+/// quad. As for `SoLd`'s `Trnf` (#3677), affine corners frame a custom warp's or a cylinder's
 /// control-point box (which may spill past the source), else the source rect; projective corners
-/// frame the source rect, as `parse_smart_perspective` reads them. `PlLd` stores no source size:
-/// without the source file (`None`) the layer is taken as placed at 100 %, the edge lengths being
-/// its size (a custom warp's box needs no size); position and rotation stay right, only Replace
-/// Contents and re-renders depend on the scale. Import and export (which keeps an unedited record
-/// verbatim) both place a `PlLd` layer with this.
+/// frame [`perspective_frame`], as `parse_smart_perspective` reads them. `PlLd` stores no source
+/// size: without the source file (`None`) the layer is taken as placed at 100 %, the edge lengths
+/// being its size (a custom warp's box needs no size); position and rotation stay right, only
+/// Replace Contents and re-renders depend on the scale. Import and export (which keeps an unedited
+/// record verbatim) both place a `PlLd` layer with this.
 pub fn plld_transform(p: &[f64; 8], size: Option<(f64, f64)>, warp: Option<&photocraft_geom::warp::Warp>) -> (Affine, Option<[f64; 9]>) {
     let (w, h) = size.unwrap_or_else(|| ((p[2] - p[0]).hypot(p[3] - p[1]), (p[6] - p[0]).hypot(p[7] - p[1])));
-    let perspective = corners_perspective([[p[0], p[1]], [p[2], p[3]], [p[4], p[5]], [p[6], p[7]]], (w, h));
-    let frame = if perspective.is_some() { [0.0, 0.0, w, h] } else { placed_frame(warp, w, h) };
+    let perspective = corners_perspective_in([[p[0], p[1]], [p[2], p[3]], [p[4], p[5]], [p[6], p[7]]], perspective_frame(warp, w, h));
+    let frame = if perspective.is_some() { perspective_frame(warp, w, h) } else { placed_frame(warp, w, h) };
     (corners_affine(p, frame).unwrap_or(Affine::IDENTITY), perspective)
 }
 
@@ -838,18 +881,27 @@ pub fn parse_smart_perspective(key: &[u8; 4], data: &[u8]) -> Option<[f64; 9]> {
         (p.len() == 8 && p.iter().all(|v| v.is_finite())).then(|| [[p[0], p[1]], [p[2], p[3]], [p[4], p[5]], [p[6], p[7]]])
     };
     let q = quad("nonAffineTransform").or_else(|| quad("Trnf"))?;
-    corners_perspective(q, (w, h))
+    // The warp `parse_placed_warp` reads: a split warp's `quiltWarp` comes first.
+    let warp = get_desc(&d, "quiltWarp").or_else(|| get_desc(&d, "warp")).and_then(warp_of).flatten();
+    corners_perspective_in(q, perspective_frame(warp.as_ref(), w, h))
 }
 
 /// The projective placement of a `w` × `h` source onto corners `q` that aren't a parallelogram;
 /// `None` for affine corners (see [`corners_affine`]) or an empty size.
 pub fn corners_perspective(q: [[f64; 2]; 4], (w, h): (f64, f64)) -> Option<[f64; 9]> {
+    corners_perspective_in(q, [0.0, 0.0, w, h])
+}
+
+/// [`corners_perspective`] for the source-space box `frame` (left, top, right, bottom; see
+/// [`perspective_frame`]).
+pub(crate) fn corners_perspective_in(q: [[f64; 2]; 4], frame: [f64; 4]) -> Option<[f64; 9]> {
     // A parallelogram (top-left + bottom-right = top-right + bottom-left) is affine.
     let tol = 1e-6 * (1.0 + q.iter().flatten().fold(0.0f64, |m, v| m.max(v.abs())));
-    if (0..2).all(|i| (q[0][i] + q[2][i] - q[1][i] - q[3][i]).abs() <= tol) || w <= 0.0 || h <= 0.0 {
+    let ok = frame.iter().all(|v| v.is_finite()) && frame[2] > frame[0] && frame[3] > frame[1];
+    if (0..2).all(|i| (q[0][i] + q[2][i] - q[1][i] - q[3][i]).abs() <= tol) || !ok {
         return None;
     }
-    photocraft_algo::transform::Homography::rect_to_quad([0.0, 0.0, w, h], q).map(|m| m.0)
+    photocraft_algo::transform::Homography::rect_to_quad(frame, q).map(|m| m.0)
 }
 
 /// `masterFXSwitch` from an `lfx2` block (defaults to `true`).
@@ -989,6 +1041,55 @@ mod tests {
         assert!(close(c.to_rgb(), [1.0, 0.0, 0.0]), "{:?}", c.to_rgb());
         // Missing components are rejected, not defaulted.
         assert!(super::color_from_desc(&Descriptor::new("HSBC").with("Strt", Value::Double(50.0))).is_none());
+    }
+
+    #[test]
+    fn color_descriptor_keeps_photocraft_alpha() {
+        use photocraft_color::Color;
+        use photocraft_doc::Fill;
+        let c = Color::rgba(0.2, 0.4, 0.6, 0.25);
+        let (k, d) = super::fill_to_desc(&Fill::Solid(c));
+        let Fill::Solid(back) = super::fill_from_desc(&k, &d).unwrap() else { panic!("solid") };
+        assert!((back.alpha - 0.25).abs() < 1e-5);
+        assert!((back.to_rgb()[0] - 0.2).abs() < 1e-3);
+        let (k, d) = super::fill_to_desc(&Fill::Solid(Color::rgb(1.0, 0.0, 0.0)));
+        let Fill::Solid(opaque) = super::fill_from_desc(&k, &d).unwrap() else { panic!("solid") };
+        assert!((opaque.alpha - 1.0).abs() < 1e-6);
+        assert!(super::color_to_desc(&c).get("pcAl").is_none(), "generic colour descriptors have no pcAl");
+    }
+
+    #[test]
+    fn non_finite_photocraft_alpha_is_ignored() {
+        use photocraft_color::Color;
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let d = super::color_to_desc(&Color::rgb(0.2, 0.4, 0.6)).with("pcAl", Value::Double(bad));
+            let c = super::color_from_desc(&d).unwrap();
+            assert_eq!(c.alpha, 1.0, "pcAl {bad}");
+        }
+        let d = super::color_to_desc(&Color::rgb(0.2, 0.4, 0.6)).with("pcAl", Value::Double(0.5));
+        assert!((super::color_from_desc(&d).unwrap().alpha - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn gradient_stop_alpha_round_trips_once() {
+        use photocraft_color::Color;
+        use photocraft_doc::Fill;
+        let fill = Fill::Gradient {
+            stops: vec![(0.0, Color::rgba(1.0, 0.0, 0.0, 0.5)), (1.0, Color::WHITE)],
+            angle: 90.0,
+            scale: 1.0,
+            style: photocraft_doc::GradientStyle::Linear,
+            reverse: false,
+            opacity_stops: vec![],
+            midpoints: vec![],
+            offset: (0.0, 0.0),
+            dither: false,
+            align: true,
+        };
+        let (k, d) = super::fill_to_desc(&fill);
+        let Fill::Gradient { stops, opacity_stops, .. } = super::fill_from_desc(&k, &d).unwrap() else { panic!("grad") };
+        assert!((stops[0].1.alpha - 1.0).abs() < 1e-4, "colour alpha lives in Trns, not the stop colour");
+        assert!(opacity_stops.iter().any(|(_, a)| (*a - 0.5).abs() < 1e-3), "{opacity_stops:?}");
     }
 
     #[test]
@@ -1515,6 +1616,143 @@ mod more_tests {
         warp.mesh = Some(photocraft_geom::warp::BezierMesh { us: vec![0.0, 1.0], vs: vec![0.0, 1.0], points: vec![[f64::NAN, 1.0]; 16] });
         assert_eq!(placed_frame(Some(&warp), 50.0, 25.0), [0.0, 0.0, 50.0, 25.0]);
         assert_eq!(placed_frame(None, 50.0, 25.0), [0.0, 0.0, 50.0, 25.0]);
+    }
+
+    /// A `SoLd` placed on `quad` (`Trnf` and `nonAffineTransform`) for a 1000 × 1000 source,
+    /// warped by `warp`.
+    fn sold_placed(quad: [f64; 8], warp: Descriptor) -> Vec<u8> {
+        let list = Value::List(quad.iter().map(|v| Value::Double(*v)).collect());
+        let d = Descriptor::new("null")
+            .with("Trnf", list.clone())
+            .with("nonAffineTransform", list)
+            .with("Sz  ", Value::Descriptor(Descriptor::new("Pnt ").with("Wdth", Value::Double(1000.0)).with("Hght", Value::Double(1000.0))))
+            .with("warp", Value::Descriptor(warp));
+        let mut data = b"soLD".to_vec();
+        data.extend_from_slice(&4u32.to_be_bytes());
+        data.extend(VersionedDescriptor::new(d).to_bytes());
+        data
+    }
+
+    /// A `warpCylinder` descriptor as #4112 describes it: horizontal, no perspective, seven
+    /// `warpValues` in the space of `bounds`.
+    fn cylinder_desc(values: Value) -> Descriptor {
+        let e = |t: &str, v: &str| Value::Enumerated { type_id: Id::new(t), value: Id::new(v) };
+        let bounds = Descriptor::new("classFloatRect")
+            .with("Top ", Value::Double(0.0))
+            .with("Left", Value::Double(0.0))
+            .with("Btom", Value::Double(1000.0))
+            .with("Rght", Value::Double(1000.0));
+        Descriptor::new("warp")
+            .with("warpStyle", e("warpStyle", "warpCylinder"))
+            .with("warpValue", Value::Double(0.0))
+            .with("warpValues", values)
+            .with("warpPerspective", Value::Double(0.0))
+            .with("warpPerspectiveOther", Value::Double(0.0))
+            .with("warpRotate", e("Ornt", "Hrzn"))
+            .with("bounds", Value::Descriptor(bounds))
+    }
+
+    const CYL: [f64; 7] = [100.0, 800.0, 900.0, 200.0, 0.3, 0.3, 0.5];
+
+    fn doubles(v: &[f64]) -> Value {
+        Value::List(v.iter().map(|x| Value::Double(*x)).collect())
+    }
+
+    /// A projective placement is framed by the warp `parse_placed_warp` imports: an unreadable
+    /// `quiltWarp` next to a cylinder under `warp` imports no warp, so the source rect is framed.
+    #[test]
+    fn perspective_frame_follows_the_warp_parse_placed_warp_reads() {
+        let quad = [10.0, 20.0, 410.0, 60.0, 400.0, 480.0, 30.0, 520.0];
+        let list = Value::List(quad.iter().map(|v| Value::Double(*v)).collect());
+        let unreadable =
+            Descriptor::new("quiltWarp").with("warpStyle", Value::Enumerated { type_id: Id::new("warpStyle"), value: Id::new("warpSomethingNew") });
+        let d = Descriptor::new("null")
+            .with("Trnf", list.clone())
+            .with("nonAffineTransform", list)
+            .with("Sz  ", Value::Descriptor(Descriptor::new("Pnt ").with("Wdth", Value::Double(1000.0)).with("Hght", Value::Double(1000.0))))
+            .with("quiltWarp", Value::Descriptor(unreadable))
+            .with("warp", Value::Descriptor(cylinder_desc(doubles(&CYL))));
+        let mut data = b"soLD".to_vec();
+        data.extend_from_slice(&4u32.to_be_bytes());
+        data.extend(VersionedDescriptor::new(d).to_bytes());
+        assert_eq!(parse_placed_warp(b"SoLd", &data), None);
+        let h = photocraft_algo::transform::Homography(parse_smart_perspective(b"SoLd", &data).expect("projective"));
+        let (px, py) = h.apply(1000.0, 1000.0);
+        assert!((px - 400.0).abs() < 1e-6 && (py - 480.0).abs() < 1e-6, "{px},{py}");
+    }
+    /// #4112: a `warpCylinder` placed layer comes in as the cylinder its seven values describe,
+    /// instead of no warp (which re-rendered the contents flat).
+    #[test]
+    fn placed_cylinder_warp_is_read() {
+        use photocraft_geom::warp::{Warp, WarpStyle};
+        let quad = [0.0, 0.0, 800.0, 0.0, 800.0, 800.0, 0.0, 800.0];
+        let want = Warp::cylinder(&CYL, [0.0, 0.0, 1000.0, 1000.0]).unwrap();
+        let w = parse_placed_warp(b"SoLd", &sold_placed(quad, cylinder_desc(doubles(&CYL)))).expect("a cylinder");
+        assert_eq!(w, want);
+        assert_eq!(w.style, WarpStyle::Cylinder);
+        // Values written as one unit-float list read the same.
+        let floats = Value::UnitFloats { unit: *b"#Pxl", values: CYL.to_vec() };
+        assert_eq!(parse_placed_warp(b"SoLE", &sold_placed(quad, cylinder_desc(floats))), Some(want));
+    }
+
+    /// Cylinders nobody has measured (vertical, with perspective) and broken values stay
+    /// unreadable, as every cylinder was before: the layer keeps the pixels Photoshop stored.
+    #[test]
+    fn placed_cylinder_warps_that_cant_be_read() {
+        let quad = [0.0, 0.0, 800.0, 0.0, 800.0, 800.0, 0.0, 800.0];
+        let read = |d: Descriptor| parse_placed_warp(b"SoLd", &sold_placed(quad, d));
+        let e = |t: &str, v: &str| Value::Enumerated { type_id: Id::new(t), value: Id::new(v) };
+        let with = |key: &str, v: Value| {
+            let mut d = cylinder_desc(doubles(&CYL));
+            d.items.iter_mut().filter(|(k, _)| k.is(key)).for_each(|(_, old)| *old = v.clone());
+            d
+        };
+        assert!(read(with("warpRotate", e("Ornt", "Vrtc"))).is_none(), "vertical");
+        assert!(read(with("warpPerspective", Value::Double(20.0))).is_none(), "perspective");
+        assert!(read(with("warpPerspectiveOther", Value::Double(-5.0))).is_none(), "the other perspective");
+        assert!(read(cylinder_desc(doubles(&CYL[..6]))).is_none(), "six values");
+        assert!(read(cylinder_desc(Value::List(vec![Value::Text(UnicodeString::new_nul("x")); 7]))).is_none(), "not numbers");
+        assert!(read(cylinder_desc(Value::Double(1.0))).is_none(), "one number");
+        let mut flipped = CYL;
+        flipped.swap(0, 2);
+        assert!(read(cylinder_desc(doubles(&flipped))).is_none(), "silhouettes swapped");
+        let mut no_values = cylinder_desc(doubles(&CYL));
+        no_values.items.retain(|(k, _)| !k.is("warpValues"));
+        assert!(read(no_values).is_none(), "no warpValues");
+    }
+
+    /// Like a custom warp's (#3677), a cylinder's control-point box is what the placement quad
+    /// frames, for affine corners and for projective ones (`nonAffineTransform`).
+    #[test]
+    fn placed_cylinder_quad_frames_its_control_box() {
+        use photocraft_geom::warp::Warp;
+        let cb = Warp::cylinder(&CYL, [0.0, 0.0, 1000.0, 1000.0]).unwrap().mesh.unwrap().control_bounds();
+        // Affine: the box lands on the quad.
+        let quad = [10.0, 20.0, 410.0, 20.0, 410.0, 520.0, 10.0, 520.0];
+        let (_, a) = parse_smart(b"SoLd", &sold_placed(quad, cylinder_desc(doubles(&CYL))));
+        let [m0, m1, m2, m3, m4, m5] = a.m;
+        let map = |x: f64, y: f64| (m0 * x + m2 * y + m4, m1 * x + m3 * y + m5);
+        for ((x, y), (qx, qy)) in
+            [(cb[0], cb[1]), (cb[2], cb[1]), (cb[2], cb[3]), (cb[0], cb[3])].into_iter().zip(quad.as_chunks::<2>().0.iter().map(|p| (p[0], p[1])))
+        {
+            let (px, py) = map(x, y);
+            assert!((px - qx).abs() < 1e-9 && (py - qy).abs() < 1e-9, "{x},{y} → {px},{py}, not {qx},{qy}");
+        }
+        assert!(parse_smart_perspective(b"SoLd", &sold_placed(quad, cylinder_desc(doubles(&CYL)))).is_none(), "affine");
+        // Projective: the same box lands on the four corners.
+        let quad = [10.0, 20.0, 410.0, 60.0, 400.0, 480.0, 30.0, 520.0];
+        let h = photocraft_algo::transform::Homography(parse_smart_perspective(b"SoLd", &sold_placed(quad, cylinder_desc(doubles(&CYL)))).expect("projective"));
+        for ((x, y), (qx, qy)) in
+            [(cb[0], cb[1]), (cb[2], cb[1]), (cb[2], cb[3]), (cb[0], cb[3])].into_iter().zip(quad.as_chunks::<2>().0.iter().map(|p| (p[0], p[1])))
+        {
+            let (px, py) = h.apply(x, y);
+            assert!((px - qx).abs() < 1e-6 && (py - qy).abs() < 1e-6, "{x},{y} → {px},{py}, not {qx},{qy}");
+        }
+        // Without a warp a projective quad still frames the source rect.
+        let none = Descriptor::new("warp").with("warpStyle", Value::Enumerated { type_id: Id::new("warpStyle"), value: Id::new("warpNone") });
+        let h = photocraft_algo::transform::Homography(parse_smart_perspective(b"SoLd", &sold_placed(quad, none)).expect("projective"));
+        let (px, py) = h.apply(1000.0, 1000.0);
+        assert!((px - 400.0).abs() < 1e-6 && (py - 480.0).abs() < 1e-6);
     }
 
     #[test]

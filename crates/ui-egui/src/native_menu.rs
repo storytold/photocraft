@@ -760,7 +760,7 @@ pub(crate) fn state_hash(app: &PhotocraftApp, input: Option<u64>) -> u64 {
     }
     let ui = &app.ui;
     (&ui.recent_files, &ui.workspace, ui.palette_open, ui.transform.is_some(), ui.text_edit.is_some(), ui.dialogs.len()).hash(&mut h);
-    (app.discard.is_some(), app.camera_raw.is_some()).hash(&mut h);
+    (app.discard.is_some(), app.camera_raw.is_some(), crate::distort_ui::modal_workspace(app)).hash(&mut h);
     serde_json::to_string(&(&ui.panels, &ui.extras, &ui.view, ui.theme, ui.tool)).unwrap_or_default().hash(&mut h);
     s.prefs().interface.language.hash(&mut h);
     h.finish()
@@ -1257,5 +1257,18 @@ mod tests {
         for (i, title) in crate::menus::TOP_MENUS.iter().enumerate() {
             assert_eq!(native[i] + 1, in_window[i], "{title}: {} in-window, {} with the Mac menu bar", in_window[i], native[i]);
         }
+    }
+
+    #[test]
+    fn opening_or_closing_a_workspace_without_input_rebuilds_the_menus() {
+        let mut app = app(true);
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.run("edit.fill", json!({"color": "#808080"})).unwrap();
+        let closed = state_hash(&app, None);
+        crate::gallery_ui::open(&mut app).unwrap();
+        let open = state_hash(&app, None);
+        assert_ne!(open, closed, "the menus grey out when an agent opens Filter Gallery");
+        app.distort.gallery = None;
+        assert_eq!(state_hash(&app, None), closed, "and come back when it is cancelled");
     }
 }

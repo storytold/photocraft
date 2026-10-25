@@ -3,6 +3,59 @@ use photocraft_psd::atn::{AtnAction, AtnEvent, AtnFile, AtnItem};
 use photocraft_psd::descriptor::{Descriptor, Id, ReferenceItem, UnicodeString, Value as D};
 use serde_json::json;
 
+#[test]
+fn blend_modes_accept_photoshop_string_ids_and_export_canonical_char_ids() {
+    for (string_id, char_id, label) in [
+        ("normal", "Nrml", "Normal"),
+        ("dissolve", "Dslv", "Dissolve"),
+        ("darken", "Drkn", "Darken"),
+        ("multiply", "Mltp", "Multiply"),
+        ("colorBurn", "CBrn", "Color Burn"),
+        ("lighten", "Lghn", "Lighten"),
+        ("screen", "Scrn", "Screen"),
+        ("colorDodge", "CDdg", "Color Dodge"),
+        ("overlay", "Ovrl", "Overlay"),
+        ("softLight", "SftL", "Soft Light"),
+        ("hardLight", "HrdL", "Hard Light"),
+        ("difference", "Dfrn", "Difference"),
+        ("exclusion", "Xclu", "Exclusion"),
+        ("hue", "H", "Hue"),
+        ("saturation", "Strt", "Saturation"),
+        ("color", "Clr", "Color"),
+        ("luminosity", "Lmns", "Luminosity"),
+        ("passThrough", "PsTh", "Pass Through"),
+    ] {
+        assert_eq!(blend_label(string_id), Some(label), "{string_id}");
+        assert_eq!(blend_ps(label), Some(char_id), "{label} remains serialized canonically");
+    }
+}
+
+/// #8454: a Set and a Make layer step whose blend mode is stored as a Photoshop stringID import
+/// with that mode (a Set was unsupported, a Make silently fell back to Normal).
+#[test]
+fn layer_steps_with_string_id_blend_modes_import_with_their_mode() {
+    let set = desc("null").with("null", target_ref("Lyr ")).with("T   ", D::Descriptor(desc("Lyr ").with("Md  ", enm("BlnM", "softLight"))));
+    let make = desc("null").with("null", class_ref("Lyr ")).with("Usng", D::Descriptor(desc("Lyr ").with("Md  ", enm("BlnM", "luminosity"))));
+    let file = AtnFile {
+        name: UnicodeString::new_nul("Blend"),
+        expanded: false,
+        actions: vec![AtnAction {
+            name: UnicodeString::new_nul("A"),
+            items: vec![item("setd", "Set", Some(set)), item("Mk  ", "Make", Some(make))],
+            ..Default::default()
+        }],
+        warnings: vec![],
+    };
+    let imp = import(&atn::write(&file).unwrap()).unwrap();
+    assert!(imp.unsupported.is_empty(), "{:?}", imp.unsupported.iter().map(|u| &u.event).collect::<Vec<_>>());
+    let steps = &imp.actions[0].steps;
+    assert_eq!(steps.len(), 2);
+    assert_eq!(steps[0].0, "layer.setProps");
+    assert_eq!(steps[0].1["blend"], json!("Soft Light"));
+    assert_eq!(steps[1].0, "layer.new.layer");
+    assert_eq!(steps[1].1["mode"], json!("Luminosity"));
+}
+
 fn item(event: &str, label: &str, d: Option<Descriptor>) -> AtnItem {
     let event = match event.as_bytes() {
         [a, b, c, dd] => AtnEvent::Code([*a, *b, *c, *dd]),
@@ -260,6 +313,25 @@ fn load_renames_each_play_target_once() {
     let r = s.execute("actions.load", json!({"data": b64(&bytes), "replace": false})).unwrap();
     assert_eq!(r["actions"], json!(["A 2"]));
     assert_eq!(s.actions.list[1].steps[0].1, json!({"action": "A"}), "B still plays the A it had");
+}
+
+/// A name over the 1,024-character limit is clipped for the action and for the steps that call it,
+/// so a rename still finds its Play target.
+#[test]
+fn load_renames_play_targets_longer_than_the_name_limit() {
+    let mut s = Session::new();
+    let long = "x".repeat(2000);
+    let clipped = "x".repeat(1024);
+    let mut mine = Action::new(clipped.clone(), vec![]);
+    mine.set = Some("Mine".into());
+    s.actions.list.push(mine);
+    let a = Action::new(long.clone(), vec![]);
+    let caller = Action::new("Caller", vec![("actions.play".into(), json!({"action": long}))]);
+    let (bytes, _) = export("File", &[&a, &caller], &[], false).unwrap();
+    s.execute("actions.load", json!({"data": b64(&bytes)})).unwrap();
+    let renamed = format!("{clipped} 2");
+    let caller = s.actions.list.iter().find(|a| a.name == "Caller").unwrap();
+    assert_eq!(caller.steps[0].1["action"], renamed.as_str());
 }
 
 #[test]
@@ -552,6 +624,8 @@ fn every_mapped_command_exports_and_imports_back() {
         ("file.placeEmbedded", json!({"path": "/tmp/logo.png", "scale": 50})),
         ("file.placeLinked", json!({"path": "/tmp/logo.png"})),
         ("file.openAs", json!({"path": "/tmp/a.psd"})),
+        ("file.saveAs", json!({"path": "/tmp/out/a.png"})),
+        ("file.saveACopy", json!({"path": "/tmp/out/a.tif"})),
         ("actions.conditional", json!({"if": "hasLayers", "then": "FS8-Layers", "else": "FS8-No-Layers", "set": "S"})),
         ("actions.conditional", json!({"if": "landscape", "then": "Wide", "else": null, "set": "S"})),
         ("tools.setColors", json!({"foreground": "#102030"})),
@@ -884,6 +958,40 @@ fn unsupported_shapes_become_photoshop_steps_not_errors() {
     assert_eq!(ids, [PHOTOSHOP_STEP, PHOTOSHOP_STEP, PHOTOSHOP_STEP, PHOTOSHOP_STEP, "filter.blur.gaussianBlur", PHOTOSHOP_STEP]);
     assert_eq!(imp.unsupported.len(), 5);
     assert!(imp.actions[0].disabled.is_empty(), "steps with a document effect stay on so playback reports them");
+}
+
+/// #8482: four-byte string events must not become `long` event codes when retained and saved.
+#[test]
+fn save_preserves_the_kind_of_unsupported_atn_events() {
+    let source = AtnFile {
+        name: UnicodeString::new_nul("S"),
+        expanded: false,
+        actions: vec![AtnAction {
+            name: UnicodeString::new_nul("A"),
+            items: vec![
+                AtnItem { event: AtnEvent::Name(b"make".to_vec()), dictionary: b"Make".to_vec(), ..Default::default() },
+                AtnItem { event: AtnEvent::Code(*b"Qwer"), dictionary: b"Unknown code".to_vec(), ..Default::default() },
+            ],
+            ..Default::default()
+        }],
+        warnings: vec![],
+    };
+    let mut session = Session::new();
+    session.execute("actions.load", json!({"data": b64(&atn::write(&source).unwrap())})).unwrap();
+    let saved = session.execute("actions.save", json!({"set": "S"})).unwrap();
+    let bytes = photocraft_paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap();
+    let round_trip = atn::parse(&bytes).unwrap();
+
+    assert_eq!(
+        round_trip.actions[0].items.iter().map(|item| item.event.clone()).collect::<Vec<_>>(),
+        [AtnEvent::Name(b"make".to_vec()), AtnEvent::Code(*b"Qwer")]
+    );
+
+    // Legacy steps may omit eventKind, but an explicitly malformed value must not be treated
+    // as if it were absent.
+    assert!(export_item(PHOTOSHOP_STEP, &json!({"event": "make", "eventKind": null}), "S").is_none());
+    assert!(export_item(PHOTOSHOP_STEP, &json!({"event": "make", "eventKind": 4}), "S").is_none());
+    assert_eq!(export_item(PHOTOSHOP_STEP, &json!({"event": "make"}), "S").unwrap().event, AtnEvent::Code(*b"make"));
 }
 
 /// #6745: the events of a Photoshop 2026 retouching set (ID-photo background swap, whitening,
@@ -1777,6 +1885,42 @@ fn photo_filter_saves_under_the_name_photoshop_runs() {
     }
 }
 
+/// A Black & White adjustment layer saves with Photoshop's `BanW` class (#8481): measured in
+/// Photoshop, a Make whose type is `BlnW` is refused. Photoshop's own `BanW` Make loads, and so
+/// does the `BlnW` one PhotoCraft wrote before.
+#[test]
+fn black_white_adjustment_layer_saves_as_photoshops_class_and_old_class_still_imports() {
+    let id = "layer.newAdjustmentLayer.blackWhite";
+    let params = json!({"reds": 17, "yellows": 83, "greens": -12, "cyans": 107, "blues": 51, "magentas": 133, "tint": true, "tintColor": "#c08040"});
+    let mut s = Session::new();
+    s.actions.list.push(Action::new("BW", vec![(id.into(), params.clone())]));
+    let r = s.execute("actions.save", json!({"action": "BW"})).unwrap();
+    assert_eq!(r["skipped"], json!([]));
+    let saved = photocraft_paint::tile::b64_decode(r["data"].as_str().unwrap()).unwrap();
+    let file = atn::parse(&saved).unwrap();
+    let make = file.actions[0].items[0].descriptor.as_ref().unwrap();
+    let kind = get_obj(make, "Usng").and_then(|u| get_obj(u, "Type")).unwrap();
+    assert_eq!(trimmed(&kind.class_id), "BanW");
+    let mut t = Session::new();
+    let r = t.execute("actions.load", json!({"data": b64(&saved)})).unwrap();
+    assert_eq!(r["unsupported"], json!([]), "{r}");
+    assert_eq!(t.actions.list[0].steps, vec![(id.to_string(), params)]);
+
+    // Photoshop's minimal Make (no settings) and an old PhotoCraft Make with a setting both load,
+    // the setting kept; near misses stay Photoshop steps.
+    let make = |class: &str| {
+        let kind = if class == "BlnW" { desc(class).with("Rd  ", long(17.0)) } else { desc(class) };
+        let using = desc("AdjL").with("Type", D::Descriptor(kind));
+        item("Mk  ", "Make", Some(desc("null").with("null", class_ref("AdjL")).with("Usng", D::Descriptor(using))))
+    };
+    let data = set_of("S", vec![("A", ["BanW", "BlnW", "BANW", "BlnWx"].into_iter().map(make).collect())]);
+    let mut t = Session::new();
+    let r = t.execute("actions.load", json!({"data": data})).unwrap();
+    let steps: Vec<&str> = t.actions.list[0].steps.iter().map(|(id, _)| id.as_str()).collect();
+    assert_eq!(steps, [id, id, PHOTOSHOP_STEP, PHOTOSHOP_STEP], "{r}");
+    assert_eq!(t.actions.list[0].steps[1].1["reds"], 17, "{r}");
+}
+
 /// Smart Blur's quality uses Photoshop's `SmBQ` codes (`SBQL`/`SBQM`/`SBQH`): measured in
 /// Photoshop, the old `Hgh `/`Mdm `/`Low ` play back as its fallback quality. Old codes still read.
 #[test]
@@ -2053,6 +2197,77 @@ fn options_the_descriptors_cannot_carry_refuse_strict_export() {
     }
 }
 
+/// #8697: Photoshop's other transform interpolation modes survive import: its bicubic variants
+/// are kept (they render as Bicubic and export back unchanged), Automatic becomes Bicubic
+/// Automatic and Preserve Details Bicubic; before, they fell back to the command's default.
+#[test]
+fn photoshop_transform_interpolation_modes_survive_import() {
+    let one = |id: &str, p: Value| Action { name: "Probe".into(), steps: vec![(id.into(), p)], ..Default::default() };
+    for id in ["select.transformSelection", "edit.transform"] {
+        for (mode, imported) in [
+            ("bicubicSharper", "bicubicSharper"),
+            ("bicubicSmoother", "bicubicSmoother"),
+            ("bicubicAutomatic", "bicubicAutomatic"),
+            ("automatic", "bicubicAutomatic"),
+            ("preserveDetails", "bicubic"),
+        ] {
+            let (bytes, _) = export("Audit8", &[&one(id, json!({"scaleX": 140, "interpolation": mode}))], &[], false).unwrap();
+            let steps = import(&bytes).unwrap().actions[0].steps.clone();
+            let got = steps.first().and_then(|(_, p)| p.get("interpolation")).and_then(Value::as_str).map(str::to_owned);
+            assert_eq!(got.as_deref(), Some(imported), "{id} {mode}: {steps:?}");
+        }
+    }
+}
+
+/// #8531: a partial `layer.setAdjustment` of Color Balance or Hue/Saturation can't be written
+/// (their descriptors carry every setting, filling absent ones with defaults), so strict export
+/// refuses it instead of replaying an edit that also resets the rest. Complete ones still export.
+#[test]
+fn partial_color_balance_and_hue_saturation_edits_refuse_strict_export() {
+    let one = |p: Value| Action { name: "Probe".into(), steps: vec![("layer.setAdjustment".into(), p)], ..Default::default() };
+    for p in [
+        json!({"kind": "colorBalance", "shadows": [32, -24, 16]}),
+        json!({"kind": "colorBalance", "preserveLuminosity": true}),
+        json!({"kind": "hueSaturation", "hue": 20}),
+        json!({"kind": "hueSaturation", "reds": {"hue": 10}}),
+    ] {
+        let err = export("Audit8", &[&one(p.clone())], &[], false).unwrap_err();
+        assert!(err.contains("`layer.setAdjustment`"), "{p}: {err}");
+        let (_, skipped) = export("Audit8", &[&one(p.clone())], &[], true).unwrap();
+        assert_eq!(skipped, vec![Skipped { action: "Probe".into(), step: 0, id: "layer.setAdjustment".into() }], "{p}");
+    }
+    let full = json!({"kind": "colorBalance", "shadows": [32, -24, 16], "midtones": [-17, 27, -31], "highlights": [11, -19, 23], "preserveLuminosity": false});
+    let (bytes, _) = export("Audit8", &[&one(full)], &[], false).unwrap();
+    let steps = import(&bytes).unwrap().actions[0].steps.clone();
+    let (id, p) = steps.first().unwrap();
+    assert_eq!(id, "layer.setAdjustment");
+    assert_eq!(p.get("midtones"), Some(&json!([-17, 27, -31])), "{p}");
+    assert_eq!(p.get("preserveLuminosity"), Some(&json!(false)), "{p}");
+    let hue = json!({"kind": "hueSaturation", "colorize": false, "hue": 20, "saturation": -5, "lightness": 0});
+    assert!(export("Audit8", &[&one(hue)], &[], false).is_ok());
+    // A colour range written without all of its own settings would reset the rest too.
+    let range = json!({"kind": "hueSaturation", "colorize": false, "hue": 0, "saturation": 0, "lightness": 0, "reds": {"hue": 10}});
+    assert!(export("Audit8", &[&one(range)], &[], false).is_err());
+    let range =
+        json!({"kind": "hueSaturation", "colorize": false, "hue": 0, "saturation": 0, "lightness": 0, "reds": {"hue": 10, "saturation": 5, "lightness": -5}});
+    assert!(export("Audit8", &[&one(range)], &[], false).is_ok());
+    let bounded = json!({"kind": "hueSaturation", "colorize": false, "hue": 0, "saturation": 0, "lightness": 0, "reds": {"hue": 10, "saturation": 5, "lightness": -5, "range": [315, 345, 15, 45]}});
+    assert!(export("Audit8", &[&one(bounded)], &[], false).is_ok());
+    // Values of the wrong shape would be written as 0: refused too.
+    for bad in [
+        json!({"kind": "colorBalance", "shadows": "invalid", "midtones": [0, 0, 0], "highlights": [0, 0, 0], "preserveLuminosity": true}),
+        json!({"kind": "colorBalance", "shadows": [1, 2], "midtones": [0, 0, 0], "highlights": [0, 0, 0], "preserveLuminosity": true}),
+        json!({"kind": "colorBalance", "shadows": [0, 0, 0], "midtones": [0, 0, 0], "highlights": [0, 0, 0], "preserveLuminosity": "yes"}),
+        json!({"kind": "hueSaturation", "colorize": false, "hue": "20", "saturation": 0, "lightness": 0}),
+        json!({"kind": "hueSaturation", "colorize": false, "hue": 0, "saturation": 0, "lightness": 0, "reds": 5}),
+        json!({"kind": "hueSaturation", "colorize": false, "hue": 0, "saturation": 0, "lightness": 0, "reds": {"hue": 1, "saturation": 0, "lightness": 0, "range": [0, 20, 40]}}),
+        json!({"kind": "hueSaturation", "colorize": false, "hue": 0, "saturation": 0, "lightness": 0, "reds": {"hue": 1, "saturation": 0, "lightness": 0, "range": "invalid"}}),
+        json!({"kind": "hueSaturation", "colorize": false, "hue": 0, "saturation": 0, "lightness": 0, "reds": {"hue": 1, "saturation": 0, "lightness": 0, "range": [315, 345.5, 15, 45]}}),
+    ] {
+        assert!(export("Audit8", &[&one(bad.clone())], &[], false).is_err(), "{bad}");
+    }
+}
+
 /// Photoshop's Close has no document target: a Close of a specific document must not be
 /// exported as a plain Close, which would close the active document on playback.
 #[test]
@@ -2316,6 +2531,75 @@ fn function_keys_keep_shift_and_command() {
     assert_eq!(super::function_key_name(7, false, false), "F7");
 }
 
+/// The Apply Image dialog's flat source fields keep their meaning through a strict `.atn` export
+/// (#7197): they used to come back as the merged composite.
+#[test]
+fn apply_image_flat_source_fields_survive_a_strict_export() {
+    let flat = json!({"sourceLayer": "Pixels", "sourceChannel": "green", "sourceInvert": true, "blending": "normal", "opacity": 75});
+    let item = export_item("image.applyImage", &flat, "S").expect("the flat form exports");
+    let event = event_for(&item.event).expect("a known event");
+    let Mapped::Steps(steps) = (event.from)(item.descriptor.as_ref().unwrap()) else { panic!("does not import back") };
+    assert_eq!(steps.len(), 1);
+    assert_eq!(steps[0].1["source"], json!({"layer": "Pixels", "channel": "green", "invert": true}));
+    // The nested form is unchanged, and the "merged" layer of a flat form stays merged.
+    let merged = json!({"sourceLayer": "merged", "sourceChannel": "red"});
+    let item = export_item("image.applyImage", &merged, "S").expect("exports");
+    let Mapped::Steps(steps) = (event.from)(item.descriptor.as_ref().unwrap()) else { panic!("does not import back") };
+    assert_eq!(steps[0].1["source"], json!({"layer": "merged", "channel": "red"}));
+    // A source in another document cannot be written: the step is skipped, not rewritten.
+    assert!(export_item("image.applyImage", &json!({"source": {"document": "Other", "channel": "red"}}), "S").is_none());
+    assert!(export_item("image.applyImage", &json!({"sourceDocument": "Other"}), "S").is_none());
+}
+
+/// What the Apply Image dialog records survives a strict `.atn` export and comes back: its source
+/// channel is a Channels-panel name ("RGB", "Red", "Alpha 1"), not a lowercase key.
+#[test]
+fn apply_image_dialog_channel_names_survive_a_strict_export() {
+    let dialog = |channel: &str| json!({"sourceLayer": "merged", "sourceChannel": channel, "sourceInvert": false, "blending": "multiply", "opacity": 100.0, "scale": 1.0, "offset": 0, "preserveTransparency": false, "maskChannel": "none"});
+    for (channel, back) in [
+        ("RGB", "composite"),
+        ("CMYK", "composite"),
+        ("Lab", "composite"),
+        ("Red", "red"),
+        ("Gray", "gray"),
+        ("Alpha 1", "Alpha 1"),
+        ("transparency", "transparency"),
+    ] {
+        let a = Action::new("A", vec![("image.applyImage".into(), dialog(channel))]);
+        let (bytes, skipped) = export("S", &[&a], &[], false).unwrap_or_else(|e| panic!("{channel}: {e}"));
+        assert!(skipped.is_empty(), "{channel}");
+        let file = atn::parse(&bytes).unwrap();
+        assert_eq!(file.actions[0].items[0].event.id(), "AppI");
+        let back_file = import(&bytes).unwrap();
+        assert!(back_file.unsupported.is_empty(), "{channel}");
+        let p = &back_file.actions[0].steps[0].1;
+        assert_eq!(p["source"], json!({"layer": "merged", "channel": back, "invert": false}), "{channel}");
+    }
+    // A named channel is written as Photoshop records it: a `Chnl` name reference.
+    let item = export_item("image.applyImage", &dialog("Alpha 1"), "S").unwrap();
+    let with = get_obj(item.descriptor.as_ref().unwrap(), "With").unwrap();
+    let r = get_ref(with, "T   ").unwrap();
+    assert!(matches!(&r[0], ReferenceItem::Name { class, name } if class.class_id.is("Chnl") && name.to_string_lossy() == "Alpha 1"));
+}
+
+/// A numeric layer or channel selector has no name to record: the step is refused, not exported as
+/// the merged composite.
+#[test]
+fn apply_image_numeric_source_selectors_are_refused() {
+    for p in [
+        json!({"sourceLayer": 3}),
+        json!({"sourceChannel": 2}),
+        json!({"source": {"channel": 2}}),
+        json!({"source": {"layer": 7, "channel": "red"}}),
+        json!({"source": "red"}),
+        json!({"sourceChannel": "quickMask"}),
+    ] {
+        assert!(export_item("image.applyImage", &p, "S").is_none(), "{p}");
+    }
+    let a = Action::new("A", vec![("image.applyImage".into(), json!({"sourceLayer": 3}))]);
+    assert!(export("S", &[&a], &[], false).is_err());
+}
+
 /// A param a PhotoCraft step leaves out exports as PhotoCraft's default wherever Photoshop plays
 /// the missing key differently (checked against Photoshop): Canvas Size anchors top left,
 /// Apply Image blends Normal, Color Balance turns preserve luminosity off, and a Paint Bucket
@@ -2332,6 +2616,32 @@ fn defaults_photoshop_plays_differently_are_written() {
     let balance = exported("image.adjustments.colorBalance", json!({"midtones": [10, 0, 0]}));
     assert_eq!(get_bool(&balance, "PrsL"), Some(true));
     assert_eq!(get_list(&balance, "ShdL").map(<[D]>::len), Some(3));
+}
+
+/// Photoshop records the composite of a Levels or Curves entry as `Chnl.Cmps` and silently skips
+/// a Set that names it `Ordn.Trgt` (#8543). A colour channel keeps its own code.
+#[test]
+fn levels_and_curves_name_the_composite_channel_as_photoshop_records_it() {
+    let exported = |id: &str, p: Value| export_item(id, &p, "S").and_then(|i| i.descriptor).unwrap_or_else(|| panic!("{id} does not export"));
+    let channels = |d: &Descriptor| -> Vec<(String, String)> {
+        get_list(d, "Adjs")
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|e| match e {
+                D::Descriptor(e) => match get_ref(e, "Chnl")?.first()? {
+                    ReferenceItem::Enumerated { type_id, value, .. } => Some((trimmed(type_id), trimmed(value))),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect()
+    };
+    let composite = ("Chnl".to_string(), "Cmps".to_string());
+    let red = ("Chnl".to_string(), "Rd".to_string());
+    let levels = exported("image.adjustments.levels", json!({"inBlack": 31, "red": {"inBlack": 2}}));
+    assert_eq!(channels(&levels), vec![composite.clone(), red.clone()]);
+    let curves = exported("image.adjustments.curves", json!({"points": [[0, 0], [128, 140], [255, 255]], "red": [[0, 10], [255, 245]]}));
+    assert_eq!(channels(&curves), vec![composite, red]);
 }
 
 /// Photoshop sets one colour per step: a step that sets both doesn't export rather than drop one.
@@ -2463,6 +2773,23 @@ fn refine_edge_with_brush_strokes_is_not_exported_without_them() {
         assert!(skipped.is_empty());
         let imported = import(&bytes).unwrap();
         assert_eq!(imported.actions[0].steps, vec![("select.refineEdge".to_string(), json!({"radius": 1}))]);
+    }
+}
+
+/// Nor does it hold the workspace's tool edits (Quick Selection, Brush, Lasso…), with or without
+/// Sample All Layers, so a step with them is reported instead of exported without them.
+#[test]
+fn refine_edge_with_workspace_edits_is_not_exported_without_them() {
+    let edit = json!({"tool": "quick", "points": [[5, 4]], "size": 4});
+    for params in [json!({"radius": 1, "edits": [edit]}), json!({"radius": 1, "sampleAllLayers": true, "edits": [{"tool": "invert"}]})] {
+        let edited = Action { name: "Probe".into(), steps: vec![("select.refineEdge".into(), params.clone())], ..Default::default() };
+        assert!(export("Audit", &[&edited], &[], false).is_err(), "{params}");
+        let (_, skipped) = export("Audit", &[&edited], &[], true).unwrap();
+        assert_eq!(skipped, vec![Skipped { action: "Probe".into(), step: 0, id: "select.refineEdge".into() }]);
+    }
+    for params in [json!({"radius": 1, "edits": []}), json!({"radius": 1, "edits": null})] {
+        let plain = Action { name: "Plain".into(), steps: vec![("select.refineEdge".into(), params)], ..Default::default() };
+        assert!(export("Audit", &[&plain], &[], false).is_ok());
     }
 }
 
@@ -2684,4 +3011,117 @@ fn hue_saturation_uses_photoshops_hue_key() {
     let mut p = back.actions[0].steps[0].1.clone();
     normalise(&mut p);
     assert_eq!(p["hue"], json!(30), "{p}");
+}
+
+fn one_action(items: Vec<AtnItem>) -> AtnFile {
+    AtnFile {
+        name: UnicodeString::new_nul("Saves"),
+        expanded: false,
+        actions: vec![AtnAction { name: UnicodeString::new_nul("A"), items, ..Default::default() }],
+        warnings: vec![],
+    }
+}
+
+fn save_as(format: &str, path: &str) -> Descriptor {
+    desc("null").with("As  ", D::Descriptor(desc(format))).with("In  ", path_value(path)).with("DocI", long(53.0))
+}
+
+#[test]
+fn save_as_to_a_file_imports_with_its_destination() {
+    let file = one_action(vec![
+        item("save", "Save", Some(save_as("PNGF", "/out/result.png"))),
+        item("save", "Save", Some(save_as("Google WebPShop", "C:\\out\\result.webp").with("Cpy ", D::Boolean(true)))),
+        item("save", "Save", Some(save_as("JPEG", "/out/result.jpeg"))),
+        item("save", "Save", Some(save_as("WebPFormat", "/out/result.webp"))),
+        item("save", "Save", None),
+        item("save", "Save", Some(desc("null").with("DocI", long(53.0)))),
+    ]);
+    let imp = import(&atn::write(&file).unwrap()).unwrap();
+    assert_eq!(
+        imp.actions[0].steps,
+        [
+            ("file.saveAs".to_string(), json!({"path": "/out/result.png"})),
+            ("file.saveACopy".to_string(), json!({"path": "C:\\out\\result.webp"})),
+            ("file.saveAs".to_string(), json!({"path": "/out/result.jpeg"})),
+            ("file.saveAs".to_string(), json!({"path": "/out/result.webp"})),
+            ("file.save".to_string(), json!({})),
+            ("file.save".to_string(), json!({})),
+        ]
+    );
+    assert!(imp.unsupported.is_empty());
+}
+
+#[test]
+fn save_as_that_cannot_be_mapped_stops_playback_instead_of_saving_over_the_file() {
+    // Before #7102 each of these imported as a plain File › Save, which overwrote the file the
+    // action was played on.
+    let file = one_action(vec![
+        item("save", "Save", Some(save_as("PNGF", "/out/folder"))),
+        item("save", "Save", Some(save_as("PNGF", "/out/v1.png").with("DIDr", D::Boolean(true)))),
+        item("save", "Save", Some(save_as("PNGF", "/out/result.webp"))),
+        item("save", "Save", Some(save_as("GIFf", "/out/result.gif"))),
+        item("save", "Save", Some(desc("null").with("As  ", D::Descriptor(desc("PNGF"))))),
+        // A format that isn't a descriptor, with and without a destination.
+        item("save", "Save", Some(desc("null").with("As  ", long(1.0)))),
+        item("save", "Save", Some(desc("null").with("As  ", long(1.0)).with("In  ", path_value("/out/result.png")))),
+        // A destination with no format at all.
+        item("save", "Save", Some(desc("null").with("In  ", path_value("/out/result.png")))),
+    ]);
+    let imp = import(&atn::write(&file).unwrap()).unwrap();
+    let ids: Vec<&str> = imp.actions[0].steps.iter().map(|(id, _)| id.as_str()).collect();
+    assert_eq!(ids, [PHOTOSHOP_STEP; 8]);
+    assert!(imp.actions[0].disabled.is_empty(), "kept saves stay on, so playback stops on them");
+    // The kept steps are written back byte for byte.
+    let a = &imp.actions[0];
+    let (bytes, skipped) = export("Saves", &[a], &[], false).unwrap();
+    assert!(skipped.is_empty());
+    let back = atn::parse(&bytes).unwrap();
+    for (out, orig) in back.actions[0].items.iter().zip(&file.actions[0].items) {
+        assert_eq!(out.descriptor, orig.descriptor);
+    }
+}
+
+#[test]
+fn saves_round_trip_through_photoshop_events() {
+    let steps = vec![
+        ("file.saveAs".to_string(), json!({"path": "/out/result.psd"})),
+        ("file.saveACopy".to_string(), json!({"path": "/out/copy.webp"})),
+        ("file.save".to_string(), json!({})),
+    ];
+    let a = Action::new("A", steps.clone());
+    let (bytes, skipped) = export("Saves", &[&a], &[], false).unwrap();
+    assert!(skipped.is_empty());
+    let file = atn::parse(&bytes).unwrap();
+    let items = &file.actions[0].items;
+    assert!(items.iter().all(|i| i.event.id() == "save"));
+    let first = items[0].descriptor.as_ref().unwrap();
+    assert_eq!(get_obj(first, "As  ").map(|f| trimmed(&f.class_id)).as_deref(), Some("Pht3"));
+    assert_eq!(first.get("In  ").and_then(path_text).as_deref(), Some("/out/result.psd"));
+    assert_eq!(get_bool(items[1].descriptor.as_ref().unwrap(), "Cpy "), Some(true));
+    // Photoshop's own WebP class, not the plug-in's: Photoshop 2026 rejects `Google WebPShop`.
+    assert_eq!(get_obj(items[1].descriptor.as_ref().unwrap(), "As  ").map(|f| trimmed(&f.class_id)).as_deref(), Some("WebPFormat"));
+    assert_eq!(import(&bytes).unwrap().actions[0].steps, steps);
+
+    // A Save As PhotoCraft can't express in Photoshop's terms is skipped, never exported as a
+    // plain Save.
+    let odd = Action::new("B", vec![("file.saveAs".to_string(), json!({"path": "/out/result.xcf"}))]);
+    assert!(export("Saves", &[&odd], &[], false).is_err());
+}
+
+#[test]
+fn long_names_are_clipped_instead_of_copied_into_every_diagnostic() {
+    let long = "N".repeat(5000);
+    let unknown = |n: usize| (0..n).map(|_| item("zzzz", "Mystery", None)).collect::<Vec<_>>();
+    let file = AtnFile {
+        name: UnicodeString::new_nul(&long),
+        expanded: false,
+        actions: vec![AtnAction { name: UnicodeString::new_nul(&long), items: unknown(50), ..Default::default() }],
+        warnings: vec![],
+    };
+    let imp = import(&atn::write(&file).unwrap()).unwrap();
+    assert_eq!(imp.set.chars().count(), MAX_NAME_CHARS);
+    assert_eq!(imp.actions[0].name.chars().count(), MAX_NAME_CHARS);
+    assert_eq!(imp.actions[0].set.as_deref().map(|s| s.chars().count()), Some(MAX_NAME_CHARS));
+    assert_eq!(imp.unsupported.len(), 50);
+    assert!(imp.unsupported.iter().all(|u| u.action.chars().count() == MAX_NAME_CHARS));
 }

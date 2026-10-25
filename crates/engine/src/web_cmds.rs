@@ -1024,6 +1024,8 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
 
 // ---------- Export Preferences / Quick Export ----------
 
+/// File › Export › Export Preferences…: sets the given `export.*` preferences through `prefs.set`
+/// (validated like any other preference) and returns the whole section.
 fn export_preferences(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.export.exportPreferences";
     let mut values = serde_json::Map::new();
@@ -1401,6 +1403,10 @@ fn asset_output_path(dir: &str, relative: &str) -> Result<(String, String)> {
 /// same file, the one higher in the Layers panel keeps it and the other is reported in `errors`.
 /// Names are compared ignoring case, as `Logo.png` and `logo.png` are one file on Windows and
 /// macOS.
+///
+/// A layer is trimmed to its visible pixels; an artboard keeps its whole board, transparent edges
+/// included, as File › Export › Artboards to Files writes it (Photoshop's Generator exports an
+/// artboard asset at the board's bounds).
 pub fn generate_assets(doc: &Document, dir: &str) -> (Vec<String>, Vec<Value>) {
     let dpi = f64::from(doc.resolution_dpi.max(1.0));
     let mut defaults: Option<Vec<AssetDefault>> = None;
@@ -1433,7 +1439,13 @@ pub fn generate_assets(doc: &Document, dir: &str) -> (Vec<String>, Vec<Value>) {
                 if written.contains(&key) {
                     return Err(other(format!("{rel}: another layer already writes this file; rename one of the layers")));
                 }
-                let mut one = crate::layer_menu_cmds::layer_document(doc, *id)?;
+                let mut one = match crate::artboard_cmds::artboard_document(doc, *id)? {
+                    // Like Photoshop's Generator, a board with nothing on it is refused rather
+                    // than written as a blank file.
+                    Some(board) if !has_pixels(&board) => return Err(other("the layer is empty")),
+                    Some(board) => board,
+                    None => crate::layer_menu_cmds::layer_document(doc, *id)?,
+                };
                 one.metadata = Default::default();
                 let (w0, h0) = (f64::from(one.size.width), f64::from(one.size.height));
                 // The layer's own size spec wins; default variants scale on top of it.
@@ -1479,6 +1491,11 @@ pub fn generate_assets(doc: &Document, dir: &str) -> (Vec<String>, Vec<Value>) {
     (files, errors)
 }
 
+/// Whether any pixel of `doc` is not fully transparent.
+fn has_pixels(doc: &Document) -> bool {
+    photocraft_compose::render(doc, doc.bounds()).px.iter().any(|q| q[3] > 0.0)
+}
+
 /// `<document folder>/<document name>-assets`.
 pub fn assets_dir(doc_path: &str) -> String {
     let p = std::path::Path::new(doc_path);
@@ -1486,6 +1503,8 @@ pub fn assets_dir(doc_path: &str) -> String {
     join(&dir, &format!("{}-assets", stem(doc_path)))
 }
 
+/// File › Generate › Image Assets: toggles generation for the active document (or sets it with
+/// `on`) and, when it is on and the output folder is known, writes the assets now.
 fn image_assets(s: &mut Session, p: &Value) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let id: DocId = d.doc.id;
@@ -1515,7 +1534,7 @@ fn image_assets(s: &mut Session, p: &Value) -> Result<Value> {
 /// After a save: regenerate the document's image assets when Generate › Image Assets is on.
 pub fn on_saved(s: &Session, index: usize) -> Option<Value> {
     let d = s.documents().get(index)?;
-    if !s.file_menu.image_assets.contains(&d.doc.id) || cfg!(target_arch = "wasm32") {
+    if !s.file_menu.image_assets.contains(&d.doc.id) || !s.prefs().plug_ins.generator_enabled || cfg!(target_arch = "wasm32") {
         return None;
     }
     let dir = assets_dir(d.path.as_deref()?);
@@ -1531,6 +1550,16 @@ pub fn specs() -> Vec<CommandSpec> {
     }
     fn has_doc(s: &Session) -> std::result::Result<(), String> {
         s.active().map(|_| ()).ok_or_else(|| "no document open".into())
+    }
+
+    /// Generate ▸ Image Assets needs Preferences ▸ Plug-ins ▸ Generator enabled, as in
+    /// Photoshop (where "Enable Generator" is unchecked until turned on).
+    fn generator_enabled(s: &Session) -> std::result::Result<(), String> {
+        has_doc(s)?;
+        if !s.prefs().plug_ins.generator_enabled {
+            return Err("Enable Generator in Preferences ▸ Plug-ins".into());
+        }
+        Ok(())
     }
     vec![
         spec!(
@@ -1566,7 +1595,7 @@ pub fn specs() -> Vec<CommandSpec> {
             &["File", "Generate"],
             None,
             r##"{"on":bool? (default: toggle),"dir":folder? (default <document>-assets next to the file)} → {enabled, files, errors}; layers named like "foo.png", "200% foo@2x.png", "48x48 icons/a.png8", "photo.jpg80%" are exported, now and after each save"##,
-            has_doc,
+            generator_enabled,
             image_assets
         ),
     ]

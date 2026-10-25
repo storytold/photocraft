@@ -816,6 +816,7 @@
 	Split Warp Vertically	ワープを垂直方向に分割
 	Statistics…	統計情報…
 	Refine Strokes	調整ストローク
+	Edits	編集
 @plural	{n} item|{n} items	{n} 件
 	Auto	自動
 
@@ -2212,6 +2213,11 @@
 	No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.	選択範囲を作成するパスがありません。ペンツールで描くか、パスパネルでパスを選択してください。
 	Cancel opening	開くのをキャンセル
 	Cancelled opening {name}	{name} を開くのをキャンセルしました
+	Damaged Photoshop document	破損した Photoshop ドキュメント
+	The document “{name}” may be damaged.	ドキュメント「{name}」は破損している可能性があります。
+	Some layers, pixels or masks could not be read. Do you want to continue opening it?	一部のレイヤー、ピクセル、またはマスクを読み込めませんでした。開く処理を続行しますか？
+	If you continue, saving over the original may permanently discard unreadable data. Save a copy to keep the original.	続行した場合、元のファイルに上書き保存すると、読み込めなかったデータが完全に失われる可能性があります。元のファイルを残すには、コピーを保存してください。
+	Continue	続行
 	The document “{name}” does not have an embedded {mode} profile.	ドキュメント「{name}」には埋め込み {mode} プロファイルがありません。
 	The document “{name}” has an embedded color profile that does not match the current {mode} working space.	ドキュメント「{name}」の埋め込みカラープロファイルは、現在の {mode} 作業用スペースと一致しません。
 	Working: {working}	作業用スペース: {working}
@@ -3912,6 +3918,19 @@ curves	Smooth	スムーズ
 	Reset All Locked Settings	ロックされた設定をすべて初期化
 	Copy Texture to Other Tools	テクスチャを他のツールにコピー
 	ICO is limited to 256 × 256 pixels	ICO は 256 × 256 ピクセルまでです
+# PhotoCraft release checks.
+	Check for Updates…	アップデートを確認…
+	PhotoCraft Updates	PhotoCraft のアップデート
+	Checking for updates…	アップデートを確認中…
+	Open the release page to choose an installer for your system.	リリースページでお使いのシステム用のインストーラーを選択してください。
+	Open Download Page	ダウンロードページを開く
+	PhotoCraft is up to date.	PhotoCraft は最新です。
+	Could not check for updates.	アップデートを確認できませんでした。
+	Updates have not been checked yet.	まだアップデートを確認していません。
+	Check Again	再確認
+	Automatically Check for Updates	アップデートを自動的に確認
+	Installed version: {version}	インストール済みのバージョン: {version}
+	PhotoCraft {version} is available.	PhotoCraft {version} が利用可能です。
 # History panel › History Brush source (#2966)
 	Paints from the History panel's source state	ヒストリーパネルのソース状態からペイントします
 	Sets the source for the history brush	ヒストリーブラシのソースを設定します
@@ -4040,6 +4059,14 @@ curves	Smooth	スムーズ
 
 # Graphics Adapter preference (#1885)
 	GPU adapter	GPU アダプター
+
+# Styles panel: Import / Export Styles (.asl)
+	Import Styles…	スタイルを読み込み…
+	Export Selected Styles…	選択したスタイルを書き出し…
+	Export Styles…	スタイルを書き出し…
+	{file} is not a style library (.asl)	{file} はスタイルライブラリ (.asl) ではありません
+@plural	Imported {n} style from {file}|Imported {n} styles from {file}	{file} からスタイル {n} 個を読み込みました
+@plural	Exported {n} style to {file}|Exported {n} styles to {file}	{file} にスタイル {n} 個を書き出しました
 # Actions: a step dialog holds a suspended recording (#7365)
 	Confirm or cancel the open action step dialog first	先に開いているアクションのステップのダイアログを確定またはキャンセルしてください
 	Pro Medium Gray	プロ(中間グレー)
@@ -4048,14 +4075,27 @@ curves	Smooth	スムーズ
 	Pro Light Gray	プロ(ライトグレー)
 	Pro Light	プロ(ライト)
 	Resize Windows to Fit	ウィンドウサイズを合わせる
-
 	EXR	EXR
-
 # Paragraph direction (TYPE-218-2)
 	Automatic paragraph direction	段落の方向を自動判別
 	Left-to-right paragraph direction	左から右への段落方向
 	Right-to-left paragraph direction	右から左への段落方向
 	Not rendered: this adjustment ({key}) is kept as imported.	レンダリングされません: この調整（{key}）はインポートされたまま保持されます。
-
 # Print preview image (#8236)
 	Print preview image	Print preview image
+# Color panel menu: modes, copy commands and colour ramps (#6000)
+	Hue Cube	色相キューブ
+	Brightness Cube	明るさキューブ
+	Color Wheel	カラーホイール
+	RGB Sliders	RGB スライダー
+	HSB Sliders	HSB スライダー
+	CMYK Sliders	CMYK スライダー
+	Lab Sliders	Lab スライダー
+	Web Color Sliders	Web カラースライダー
+	Copy Color as HTML	カラーを HTML としてコピー
+	Copy Color's Hex Code	カラーの 16 進コードをコピー
+	RGB Spectrum	RGB スペクトル
+	CMYK Spectrum	CMYK スペクトル
+	Grayscale Ramp	グレースケールランプ
+	Current Colors	現在のカラー
+	Make Ramp Web Safe	ランプを Web セーフにする

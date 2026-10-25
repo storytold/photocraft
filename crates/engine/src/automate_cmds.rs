@@ -119,12 +119,27 @@ fn check_known(steps: &[(String, Value)], cmd: &str) -> Result<()> {
     }
 }
 
+/// Scripts nested in scripts, and steps one top-level script (with everything it calls) may run:
+/// a script can name others, so a graph that calls each of the previous ones twice is exponential.
+const MAX_SCRIPT_DEPTH: u8 = 16;
+pub(crate) const MAX_SCRIPT_STEPS: u64 = crate::actions_cmds::MAX_PLAYBACK_STEPS;
+
+/// A script run from a script reports its own failure inside an `Ok`; it stops the caller too.
+fn nested_script_failure(id: &str, r: &Value) -> Option<String> {
+    (id == "file.scripts.browse" && r.get("ok") == Some(&Value::Bool(false))).then(|| "a script it runs failed".to_string())
+}
+
 fn run_steps(s: &mut Session, steps: &[(String, Value)]) -> Vec<Value> {
     let mut results = Vec::new();
     for (id, params) in steps {
+        s.actions.script_steps = s.actions.script_steps.saturating_add(1);
+        if s.actions.script_steps > MAX_SCRIPT_STEPS {
+            results.push(json!({"command": id, "error": format!("the script ran more than {MAX_SCRIPT_STEPS} steps in all (scripts calling scripts)")}));
+            break;
+        }
         match s.execute(id, params.clone()) {
             // A called action reports a failed step inside an `Ok`; it stops the script too.
-            Ok(r) => match crate::actions_cmds::nested_failure(id, &r) {
+            Ok(r) => match crate::actions_cmds::nested_failure(id, &r).or_else(|| nested_script_failure(id, &r)) {
                 Some(error) => {
                     results.push(json!({"command": id, "result": r, "error": error}));
                     break;
@@ -156,7 +171,15 @@ fn browse(s: &mut Session, p: &Value) -> Result<Value> {
         _ => return Err(bad(cmd, "give \"path\" (a script file), \"script\" (its text) or \"steps\"")),
     };
     check_known(&steps, cmd)?;
+    if s.actions.script_depth >= MAX_SCRIPT_DEPTH {
+        return Err(bad(cmd, format!("scripts are nested more than {MAX_SCRIPT_DEPTH} deep")));
+    }
+    if s.actions.script_depth == 0 {
+        s.actions.script_steps = 0;
+    }
+    s.actions.script_depth += 1;
     let results = run_steps(s, &steps);
+    s.actions.script_depth -= 1;
     let ok = results.iter().all(|r| r.get("error").is_none());
     Ok(json!({"steps": steps.len(), "ok": ok, "results": results}))
 }
@@ -358,7 +381,9 @@ fn write_shim(droplet: &str) -> Result<String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755));
+        // The shim only has to run as the user who created it; 0o755 would also let every other
+        // local account read and execute it.
+        let _ = std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o700));
     }
     Ok(shim)
 }

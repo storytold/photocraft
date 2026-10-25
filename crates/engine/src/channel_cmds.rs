@@ -569,7 +569,7 @@ impl Blending {
 
 /// A source spec from `p[key]`, or from flat `<prefix>Document` / `<prefix>Layer` /
 /// `<prefix>Channel` / `<prefix>Invert` keys (what the generic dialog form sends).
-fn source_spec(p: &Value, key: &str, prefix: &str) -> Option<Value> {
+pub(crate) fn source_spec(p: &Value, key: &str, prefix: &str) -> Option<Value> {
     if let Some(v) = p.get(key) {
         return Some(v.clone());
     }

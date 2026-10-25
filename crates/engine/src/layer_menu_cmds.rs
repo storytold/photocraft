@@ -204,6 +204,7 @@ fn hide_selection(s: &mut Session, p: &Value) -> Result<Value> {
         mask.surface.write_region(bounds, &v);
         mask.surface.prune();
         for id in ids {
+            crate::commands::check_all_unlocked(doc, id)?;
             crate::extra_cmds::background_to_layer_for_mask(doc, id);
             doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?.mask = Some(mask.clone());
         }
@@ -219,6 +220,7 @@ fn mask_all_objects(s: &mut Session, p: &Value) -> Result<Value> {
     let id = layer_param(s, p)?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let doc = d.doc.clone();
+    crate::commands::check_all_unlocked(&doc, id)?;
     let layer = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
     let region: Option<Region> = match layer.surface() {
         Some(surf) if matches!(layer.content, LayerContent::Raster(_)) => {
@@ -421,7 +423,8 @@ fn reveal_command_on(os: &str, path: &str) -> Result<(&'static str, Vec<String>)
         // Explorer splits `/select,` arguments at commas and reads quotes itself, so such a path
         // would select something else.
         "windows" if path.contains([',', '"']) => Err(other(format!("{path} can't be shown in Explorer: its path contains a comma or a quotation mark"))),
-        "windows" => Ok(("explorer", vec![format!("/select,{path}")])),
+        // Keep the switch outside the path's quotes: Explorer parses its own command line.
+        "windows" => Ok(("explorer", vec!["/select,".into(), path.replace('/', "\\")])),
         _ => {
             let parent = std::path::Path::new(path).parent().map_or_else(|| ".".to_string(), |p| p.to_string_lossy().into_owned());
             Ok(("xdg-open", vec![parent]))

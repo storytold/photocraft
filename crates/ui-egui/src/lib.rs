@@ -24,6 +24,7 @@ mod alt_grab;
 pub mod analysis_ui;
 pub mod anchor_tools;
 mod ants;
+pub mod apply_color;
 pub mod artboard_tool;
 pub mod artboard_ui;
 pub(crate) mod background_redraw;
@@ -59,6 +60,7 @@ pub mod channels_panel;
 pub mod chrome_ui;
 pub mod cjk_fonts;
 pub mod clip_line_ui;
+pub mod color_panel_ui;
 pub mod color_picker_ui;
 pub mod color_range_ui;
 pub mod color_table_ui;
@@ -192,12 +194,15 @@ mod rgb_histogram;
 pub mod rotate_view;
 pub mod rulers;
 pub mod screen_picker;
+pub mod screenshot;
 pub mod scrollbars;
 mod scrub_wrap;
 pub mod select_mask_view;
 pub mod served_fonts;
 pub mod shape_dialog;
 pub(crate) mod shape_fill_ui;
+mod shape_options;
+mod shape_paint_ui;
 pub mod shape_stroke_ui;
 pub mod shortcut_dispatch;
 pub mod shortcuts;
@@ -243,6 +248,7 @@ mod type_font_preview;
 pub mod type_panels_ui;
 pub mod type_tool;
 mod type_transform;
+pub mod updates_ui;
 mod variables_ui;
 pub mod vector_ui;
 pub mod view_cmds;
@@ -369,6 +375,9 @@ pub struct ExportSettings {
     pub document_path: Option<std::path::PathBuf>,
     /// Native save cache owned by the open document; exports without one remain one-shot.
     pub pcraft_cache: Option<photocraft_io::PcraftExportCache>,
+    /// Read and embed the files linked smart objects name ([`photocraft_io::ExportOptions::read_linked_files`]).
+    /// Off for automation saves, which are granted only their target.
+    pub read_linked_files: bool,
 }
 
 impl Default for ExportSettings {
@@ -388,6 +397,7 @@ impl Default for ExportSettings {
             embed_metadata: true,
             document_path: None,
             pcraft_cache: None,
+            read_linked_files: true,
         }
     }
 }
@@ -415,6 +425,7 @@ impl ExportSettings {
         opts.psd_maximize_compatibility = self.psd_maximize_compatibility;
         opts.document_path = self.document_path.clone();
         opts.pcraft_cache = self.pcraft_cache.clone();
+        opts.read_linked_files = self.read_linked_files;
         opts
     }
 }
@@ -597,6 +608,8 @@ pub struct Services {
     /// Preferences ▸ General ▸ Beep When Done: the platform's default beep, played when a
     /// background job finishes successfully. `None` in the web build (and in tests).
     pub beep: Option<fn()>,
+    /// Starts a background check for published releases (desktop, outside Flatpak).
+    pub check_updates: Option<photocraft_engine::updates_cmds::CheckFn>,
     /// Files delivered asynchronously (web drag-and-drop): drained every frame and opened as
     /// documents.
     pub inbox: Option<Inbox>,
@@ -711,6 +724,9 @@ pub struct PhotocraftApp {
     /// A live stroke just committed with its own pixels: the canvas caches that showed it
     /// refresh only what it drew after the step they showed (`canvas::damage_since`).
     committed_stroke: Option<canvas::CommittedStroke>,
+    /// Whether the last retouching stroke's commit took the pixels its live stroke drew
+    /// (`"fromLive"`) instead of rendering the stroke again (`retouch_ui::finish_stroke`).
+    pub(crate) retouch_from_live: bool,
     /// Footprint trail of a retouching drag (see `stroke_trail`).
     trail: Option<stroke_trail::Trail>,
     /// Remove tool strokes waiting to be applied together (Remove after each stroke off), the
@@ -768,9 +784,11 @@ pub struct PhotocraftApp {
     /// The first digit of a two-digit opacity typed on the number keys (`opacity_keys`, #352).
     pub(crate) opacity_keys: opacity_keys::Pending,
     control_rx: Option<Receiver<ControlRequest>>,
-    pending_screenshots: Vec<(u64, Option<String>, Sender<ControlResponse>)>,
-    /// Screenshots not yet requested from the viewport: (token, earliest time in ms, frames seen).
-    queued_screenshots: Vec<(u64, f64, u32)>,
+    /// `ui.screenshot` requests: bounded admission, a weak-slot callback per issuance, monotonic
+    /// deadlines and a capture-time geometry epoch (see `screenshot.rs`).
+    captures: screenshot::Captures,
+    /// The custom Type tool's IME owner/generation/receipt tracker (`type_tool::sync_ime`).
+    pub(crate) type_ime: type_tool::ImeState,
     /// Control replies waiting for queued synthetic input to be processed.
     input_waiters: Vec<Sender<ControlResponse>>,
     /// Live (uncommitted) adjustment edit shown on canvas while a slider is dragged.
@@ -847,10 +865,27 @@ pub struct PhotocraftApp {
     pub(crate) live_adjust_preview: Option<adjust_preview::LiveAdjust>,
     /// Synthetic input events queued by automation (`ui.click`, `ui.key`, …), injected next frame.
     pub(crate) synthetic: Vec<egui::Event>,
+    /// The one synthetic batch currently being delivered.
+    ///
+    /// eframe preserves input appended by `raw_input_hook` across hidden (`update_logic_only`)
+    /// ticks, so draining another step every hidden tick would deliver several host iterations
+    /// as one burst. At most one batch is ever in flight; the next step waits for a pass.
+    synthetic_batch: Option<Vec<egui::Event>>,
+    /// A pass consumed the batch but returned before handling input (fonts not ready): put the
+    /// same events back on the next hook so the step is not lost. Cleared as soon as they are
+    /// re-appended, so two hidden ticks cannot deliver the same step twice.
+    synthetic_reinject: bool,
+    /// Document/focus identity the batch was created for. A batch queued against one document is
+    /// cancelled, not replayed, after the active document (including a switch away and back) or
+    /// the focus changes; an edit in the same document does not cancel it.
+    synthetic_snapshot: Option<SyntheticTarget>,
     /// True only while a frame is processing synthetic automation input. It
     /// makes shortcut- and dialog-triggered commands pass the same policy as
     /// direct control calls.
     pub(crate) automation_input: bool,
+    /// Action playbacks paused at a step dialog, by the token in that dialog's fields
+    /// ([`actions::RESUME`]): what to play next and the automation gate it paused under.
+    pub(crate) paused_playbacks: actions::PausedPlaybacks,
     /// Levels/Curves histogram cache: (document, adjustment layer, revision it is valid for).
     pub(crate) tone_hist: Option<(DocId, photocraft_doc::LayerId, u64, std::sync::Arc<tone::Histograms>)>,
     /// Histogram panel cache: (document, revision, computed at ms, histograms).
@@ -947,6 +982,8 @@ pub struct PhotocraftApp {
     gpu_render_state: Option<eframe::egui_wgpu::RenderState>,
     /// Why the GPU canvas was dropped (see `gpu_status::fall_back`).
     gpu_fault: Option<photocraft_gpu::Fault>,
+    /// Out-of-memory errors this session after which the GPU canvas was rebuilt by itself (#6564).
+    gpu_oom_retries: u32,
     /// Run once the first frames have rendered (see [`Self::on_started`]).
     started: Option<gpu_status::StartedHook>,
     /// Frame and canvas-upload timings (exposed via `ui.inspect`).
@@ -955,6 +992,7 @@ pub struct PhotocraftApp {
     pub stroke_trace: stroke_trace::StrokeTrace,
     /// Preferences, autosave and snapping runtime state (see `prefs_ui`, `snap_ui`).
     pub(crate) prefs_rt: prefs_ui::Runtime,
+    pub(crate) updates_rt: updates_ui::Runtime,
     /// Close, Revert or Exit parked behind the unsaved-changes prompt (see `discard_ui`).
     pub(crate) discard: Option<discard_ui::Prompt>,
     /// The Open or Save dialog in progress, and the action waiting on it (see `file_dialog`).
@@ -997,8 +1035,29 @@ pub struct PhotocraftApp {
     live_tokens: theme::live::LiveTokens,
 }
 
+/// The state a synthetic input batch was queued for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SyntheticTarget {
+    document: Option<screenshot::DocumentId>,
+    focus: Option<egui::Id>,
+}
+
+impl SyntheticTarget {
+    /// The document must be the same one in the same activation (a switch away and back is a
+    /// change); its revision is attribution only, so an edit does not cancel a queued step.
+    fn matches(self, other: Self) -> bool {
+        self.focus == other.focus
+            && match (self.document, other.document) {
+                (Some(a), Some(b)) => a.same_activation(b),
+                (None, None) => true,
+                _ => false,
+            }
+    }
+}
+
 impl PhotocraftApp {
-    pub fn new(session: Session, services: Services) -> Self {
+    pub fn new(mut session: Session, mut services: Services) -> Self {
+        session.updates.check = services.check_updates.take();
         let mut app = Self {
             session,
             ui: UiState::default(),
@@ -1016,6 +1075,7 @@ impl PhotocraftApp {
             tool_override: None,
             live_stroke: None,
             committed_stroke: None,
+            retouch_from_live: false,
             trail: None,
             remove_pending: Vec::new(),
             remove_pending_target: None,
@@ -1043,8 +1103,8 @@ impl PhotocraftApp {
             caps_lock: false,
             opacity_keys: None,
             control_rx: None,
-            pending_screenshots: Vec::new(),
-            queued_screenshots: Vec::new(),
+            captures: screenshot::Captures::default(),
+            type_ime: type_tool::ImeState::default(),
             input_waiters: Vec::new(),
             live_adjust: None,
             frame: 0,
@@ -1081,7 +1141,11 @@ impl PhotocraftApp {
             adjust_preview: None,
             live_adjust_preview: None,
             synthetic: Vec::new(),
+            synthetic_batch: None,
+            synthetic_reinject: false,
+            synthetic_snapshot: None,
             automation_input: false,
+            paused_playbacks: Default::default(),
             channel_thumbs: None,
             channel_views: HashMap::new(),
             type_layout: None,
@@ -1126,10 +1190,12 @@ impl PhotocraftApp {
             window_recovery_retry: None,
             gpu_render_state: None,
             gpu_fault: None,
+            gpu_oom_retries: 0,
             started: None,
             perf: Default::default(),
             stroke_trace: stroke_trace::StrokeTrace::from_env(),
             prefs_rt: Default::default(),
+            updates_rt: Default::default(),
             discard: None,
             file_dialog: None,
             tiff_options: None,
@@ -1477,6 +1543,7 @@ impl PhotocraftApp {
         // ... and to the document it was started on.
         crate::canvas::polygon_cancel_stale(self);
         crate::crop_ui::cancel_stale(self);
+        crate::distort_ui::cancel_stale(self);
         crate::perspective_crop_ui::cancel_stale(self);
         // A pen path under construction belongs to the document it was started on too.
         vector_ui::cancel_stale(self);
@@ -1602,7 +1669,15 @@ impl PhotocraftApp {
         }
         let import = self.services.import.as_ref().ok_or("no importer configured")?;
         let opts = photocraft_engine::jobs::import_options(self.session.prefs());
-        let (mut doc, warnings) = import(name, bytes, &opts)?;
+        let (mut doc, warnings, damaged) = if photocraft_io::is_psd(bytes) {
+            // Read PSD damage as structured information in the same decode, not by
+            // retrying an error or matching the text of a compatibility warning.
+            let (r, damaged) = photocraft_io::import_for_open(name, bytes, &opts).map_err(|e| e.to_string())?;
+            (r.document, r.warnings, damaged)
+        } else {
+            let (doc, warnings) = import(name, bytes, &opts)?;
+            (doc, warnings, false)
+        };
         // Preferences › Raw Defaults › Resolution, as the engine's open applies it.
         photocraft_engine::file_cmds::raw_defaults(&self.session, &warnings, &mut doc);
         // Edit › Color Settings policies apply on open; Ask When Opening holds the file back
@@ -1618,6 +1693,7 @@ impl PhotocraftApp {
             open_prompt::Held {
                 doc,
                 read_only: photocraft_io::affinity::is_affinity(bytes),
+                damage_pending: damaged,
                 name: name.to_string(),
                 path: path.map(str::to_string),
                 warnings: warnings.clone(),
@@ -2119,11 +2195,14 @@ impl PhotocraftApp {
             )?
         };
         let reply = |path: &str, warnings: &[String]| json!({"path": path, "warnings": warnings});
+        // Only the target is granted: a linked smart object's stored path is document data, so
+        // PSD export writes that layer as pixels instead of embedding the file.
+        let settings = ExportSettings { read_linked_files: false, ..choices.apply(self.save_settings()) };
         // #2017: the File › Save worker path, so the encode doesn't block the frame loop.
         if self.background_jobs
             && let Some(save) = self.services.automation_save.clone()
         {
-            return match jobs_ui::start_save(self, target.clone(), choices.apply(self.save_settings()), false, save, true)? {
+            return match jobs_ui::start_save(self, target.clone(), settings, false, save, true)? {
                 Some((path, warnings)) => Ok(reply(&path, &warnings)),
                 None => {
                     let job = self.jobs.last_started;
@@ -2133,7 +2212,6 @@ impl PhotocraftApp {
         }
         let state = self.session.active().ok_or("no document")?;
         let (doc, revision) = (state.doc.id, state.revision);
-        let settings = choices.apply(self.save_settings());
         let export = self.services.export.as_ref().ok_or("no exporter configured")?;
         let (bytes, warnings) = export(&state.doc, &target, &settings)?;
         let write = self.services.automation_write.as_mut().ok_or("automation write authority is not configured")?;
@@ -2157,10 +2235,13 @@ impl PhotocraftApp {
                 control::Outcome::AfterInput => self.input_waiters.push(reply),
                 control::Outcome::AfterJob(job) => self.jobs.waiters.push((job, reply)),
                 control::Outcome::Screenshot { token, path } => {
-                    // Wait out egui's fade animations (~83 ms) and a few rendered frames first.
-                    let settle = ctx.global_style().animation_time as f64 * 2000.0 + 60.0;
-                    self.queued_screenshots.push((token, gpu_canvas::now_ms() + settle, 0));
-                    self.pending_screenshots.push((token, path, reply));
+                    // Admission is budgeted here, after this pass's completed captures were
+                    // drained, so a just-finished request never causes a false rejection.
+                    let settle = screenshot::settle_ms(ctx.global_style().animation_time);
+                    let document = self.document_identity();
+                    if let Err((reply, e)) = self.captures.admit(token, path, reply, document, settle, screenshot::now()) {
+                        let _ = reply.send(serde_json::json!({"ok": false, "error": e}));
+                    }
                 }
             }
             // `ui.set` may have changed the edit target: the next request sees its colours.
@@ -2169,41 +2250,67 @@ impl PhotocraftApp {
         self.control_rx = Some(rx);
     }
 
-    fn issue_screenshots(&mut self, ctx: &egui::Context) {
-        let now = gpu_canvas::now_ms();
-        self.queued_screenshots.retain_mut(|(token, at, frames)| {
-            *frames += 1;
-            if now >= *at && *frames >= 3 {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::new(*token)));
-                false
-            } else {
-                true
-            }
-        });
+    /// The active document's identity at admission: a queued capture never applies to another
+    /// document. Includes the revision so a saved image is attributable to a known state.
+    fn document_identity(&self) -> Option<screenshot::DocumentId> {
+        self.session.active().map(|st| screenshot::DocumentId { document: st.doc.id.0, revision: st.revision, generation: self.session.active_generation() })
     }
 
-    fn collect_screenshots(&mut self, ctx: &egui::Context) {
-        if self.pending_screenshots.is_empty() {
+    /// Issue due screenshot requests. UI phase only: settling counts real layout passes, and the
+    /// geometry epoch is that of the pass the image will be rendered from.
+    fn issue_captures(&mut self, ctx: &egui::Context) {
+        // A discarded pass (popup sizing, `request_discard`) will be re-run: capture only a pass
+        // whose UI state will actually be present.
+        if ctx.will_discard() {
             return;
         }
-        let events: Vec<_> = ctx.input(|i| {
-            i.raw
-                .events
-                .iter()
-                .filter_map(|e| match e {
-                    egui::Event::Screenshot { user_data, image, .. } => {
-                        let token = user_data.data.as_ref().and_then(|d| d.downcast_ref::<u64>()).copied()?;
-                        Some((token, image.clone()))
+        let now = screenshot::now();
+        let doc = self.document_identity();
+        let finished = self.captures.issue(ctx, now, doc, |callback| screenshot::send_command(ctx, callback));
+        self.finish_captures(finished);
+    }
+
+    /// Collect callbacks and expire requests. Logic phase; the image is encoded and written here,
+    /// on the UI thread, never inside the callback.
+    fn drain_captures(&mut self, ctx: &egui::Context) {
+        let now = screenshot::now();
+        let doc = self.document_identity();
+        // begin_pass supplies the new RawInput before App::logic; run_logic refreshes native
+        // viewport metadata too. Observe it before any completed callback can be delivered.
+        let current = screenshot::CaptureGeometry::current(ctx, doc);
+        self.captures.note_geometry(current);
+        let observed = self.captures.last_geometry();
+        let finished = self.captures.drain(now, observed, doc);
+        self.finish_captures(finished);
+    }
+
+    fn finish_captures(&mut self, finished: Vec<screenshot::Finished>) {
+        for f in finished {
+            let reply = match f.result {
+                Ok(image) => {
+                    let [w, h] = image.size;
+                    // The encoder takes RGBA bytes; its copy is bounded by the same per-image
+                    // reservation as the retained image, and the image itself is released first.
+                    match w.checked_mul(h).and_then(|n| n.checked_mul(4)) {
+                        Some(bytes) if bytes <= screenshot::MAX_IMAGE_BYTES => {
+                            let rgba: Vec<u8> = image.pixels.iter().flat_map(|c| c.to_array()).collect();
+                            drop(image);
+                            control::save_screenshot_rgba(self, w, h, &rgba, f.path.as_deref())
+                        }
+                        _ => serde_json::json!({
+                            "ok": false,
+                            "error": format!(
+                                "screenshot {} failed: the image exceeds the {} MiB encode budget",
+                                f.token,
+                                screenshot::MAX_IMAGE_BYTES / (1 << 20)
+                            ),
+                        }),
                     }
-                    _ => None,
-                })
-                .collect()
-        });
-        for (token, image) in events {
-            if let Some(i) = self.pending_screenshots.iter().position(|(t, _, _)| *t == token) {
-                let (_, path, reply) = self.pending_screenshots.remove(i);
-                let r = control::save_screenshot(self, &image, path.as_deref());
-                let _ = reply.send(r);
+                }
+                Err(e) => serde_json::json!({"ok": false, "error": e}),
+            };
+            if let Some(tx) = f.reply {
+                let _ = tx.send(reply);
             }
         }
     }
@@ -2223,14 +2330,26 @@ impl PhotocraftApp {
     }
 }
 
-impl eframe::App for PhotocraftApp {
-    fn on_exit(&mut self) {
-        if let Err(err) = tool_memory::save_on_exit(self) {
-            log::warn!("Preferences: could not save the final tool selection: {err}");
-        }
+impl PhotocraftApp {
+    /// Install the callback-mode markers in an app creator, before the first `run_ui` on this
+    /// Context (and again through [`Self::setup_context`] when a host replaces its Context).
+    /// Installing while a pass is already running cannot mark that pass; it only arms the next.
+    pub fn install_type_reset_hooks(ctx: &egui::Context) {
+        type_tool::install_reset_hooks(ctx);
     }
 
-    fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+    /// The host's UI tail, after all panels and any shell-side model/focus mutations.
+    pub fn finish_type_reset_pass(&mut self, ctx: &egui::Context) {
+        type_tool::finish_reset_pass(self, ctx);
+    }
+
+    /// The host's logic tail; full UI passes leave availability to their later UI tail.
+    pub fn finish_type_reset_logic(&mut self, ctx: &egui::Context) {
+        type_tool::finish_reset_logic(self, ctx);
+    }
+
+    /// Shared logic body. A wrapping host owns the final reset tail after its own work.
+    pub fn logic_frame(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         self.cap_frame_rate();
         i18n::set_current(i18n::Lang::from_pref(&self.session.prefs().interface.language));
         // Caps Lock state read from the OS once per frame (see `Services::caps_lock`): the canvas
@@ -2257,6 +2376,9 @@ impl eframe::App for PhotocraftApp {
         if self.live_tokens.poll(ctx, self.ui.theme) {
             self.checker = None;
         }
+        // Finish or expire outstanding captures first, so a new request admitted in this pass
+        // sees their released budget.
+        self.drain_captures(ctx);
         self.drain_control(ctx);
         native_menu::run(self, ctx);
         // Switching tools commits, also between the Type and Type Mask tools.
@@ -2270,9 +2392,8 @@ impl eframe::App for PhotocraftApp {
         }
         transform_tool::end_if_left(self);
         shape_stroke_ui::sync_editor(self, ctx);
-        self.collect_screenshots(ctx);
-        self.issue_screenshots(ctx);
         prefs_ui::tick(self, ctx);
+        updates_ui::tick(self, ctx);
         monitor_status::poll_frame(self, ctx, frame);
         // Control requests and persisted preferences can change the language in this frame.
         i18n::sync_context(ctx, &self.session.prefs().interface.language);
@@ -2287,7 +2408,13 @@ impl eframe::App for PhotocraftApp {
             jobs_ui::tick(self, ctx);
             #[cfg(not(target_arch = "wasm32"))]
             filter_preview_worker::discard_closed(self);
-            shortcuts::handle(self, ctx);
+            if type_tool::in_ui_pass(ctx) {
+                if self.fonts_ready {
+                    shortcuts::handle(self, ctx);
+                } else {
+                    type_tool::controls_only(self, ctx);
+                }
+            }
         }
         let arrived: Vec<(String, Vec<u8>)> =
             self.services.inbox.as_ref().map(|q| std::mem::take(&mut *q.lock().unwrap_or_else(|e| e.into_inner()))).unwrap_or_default();
@@ -2318,53 +2445,55 @@ impl eframe::App for PhotocraftApp {
         self.place_next_dropped(ctx);
         // The control transport wakes the UI on arrival (ctx.request_repaint); only poll while a
         // screenshot is pending. (Polling every 50 ms here made idle apps render at 20 fps.)
-        if !self.pending_screenshots.is_empty() {
+        if self.captures.any_pending() {
             ctx.request_repaint_after(std::time::Duration::from_millis(16));
+        }
+        // A hidden host runs no UI pass: a queued (or re-queued) capture asks for one. An issued
+        // capture's own `Screenshot` command forces its paint; asking again would spin a hidden
+        // window while a slow readback is in flight. Synthetic input queued during hidden ticks
+        // needs the same wake: its events sit in eframe's preserved input until a UI pass.
+        if self.captures.any_unissued() || self.synthetic_batch.is_some() || !self.synthetic.is_empty() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaintWhileHidden);
         }
         self.poll_file_dialog(ctx, Some(frame));
     }
 
-    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
-        let frame_start = gpu_canvas::now_ms();
-        // An undecorated window gets its caption back when the toolkit changes its flags
-        // (maximize, restore, …): take it off again before the frame is laid out (#2246).
-        if let Some(window_frame) = self.services.window_frame.as_mut() {
-            window_frame();
-        }
-        // Native menu key equivalents become the key presses they were (see `native_menu`).
-        if let Some(menu) = self.services.native_menu.as_mut() {
-            menu.raw_input(raw_input);
-        }
-        shortcuts::clipboard_keys(ctx, ctx.text_edit_focused() || self.ui.text_edit.is_some(), raw_input);
-        // Windows precision touchpads and some Linux Wayland compositors send pinches
-        // as fractional Ctrl + wheel rather than a native Zoom event (#4566).
-        // Leave Ctrl+whole-notch mouse scrolling alone, and honour the pinch preference.
-        if cfg!(any(target_os = "windows", target_os = "linux")) && self.session.prefs().enhanced_controls.zoom_with_trackpad_pinch {
-            wheel_nav::fold_legacy_pinch(ctx, raw_input);
-        }
-        raw_input.events.extend(self.take_synthetic_step());
-        self.control_click.normalize(&mut raw_input.events, cfg!(target_os = "macos"));
-        // A pen held still is no touch screen's press-and-hold right click (stylus.rs).
-        let pen_down = self.stylus.pen_contacts.observe(&raw_input.events);
-        stylus::pen_hold_is_no_right_click(ctx, pen_down);
-        if self.custom_titlebar {
-            titlebar::release_after_os_resize(ctx, raw_input);
-        }
-        if self.stroke_trace.enabled() {
-            // The OS's moves and the control channel's (injected just above).
-            let moves = raw_input.events.iter().filter(|e| matches!(e, egui::Event::PointerMoved(_))).count();
-            self.stroke_trace.begin_frame(frame_start, moves);
-        }
-    }
-
-    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+    /// Shared UI body. A wrapping host must call `finish_type_reset_pass` after return,
+    /// including when this body returns early without drawing an editor.
+    pub fn ui_frame(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        // One control owner even when this callback cannot draw the custom editor.
+        if !self.fonts_ready
+            || !self.ui.dialogs.is_empty()
+            || screen_picker::busy(&ctx)
+            || self.ui.text_edit.is_none()
+            || ctx.text_edit_focused()
+            || ctx.egui_wants_keyboard_input()
+        {
+            type_tool::controls_only(self, &ctx);
+        }
+        // 0.36 saved panel sizes under `Id::unique(name)`; 0.37 reads parent-scoped keys. Data-only,
+        // so it runs even before fonts are ready; the old keys stay for a 0.36 rollback.
+        panels::migrate_panel_state(&ctx);
+        // A real UI pass, not a hidden `run_logic` tick: record the capture geometry (the
+        // document identity included) and count one settling pass. `run_logic` leaves these
+        // input values stale; only this real UI phase counts toward settling.
+        let geometry = screenshot::CaptureGeometry::current(&ctx, self.document_identity());
+        self.captures.note_geometry(geometry);
+        self.captures.note_pass();
+        // A real UI pass consumes the one in-flight synthetic batch (see `inject_synthetic`).
+        self.begin_synthetic_pass(&ctx);
         self.hover_layer = None;
         i18n::set_current(i18n::Lang::from_pref(&self.session.prefs().interface.language));
         // Fonts registered via set_fonts only take effect next frame; named families would panic now.
         if !self.fonts_ready {
+            // egui consumed this pass's input without PhotoCraft handling it: keep the synthetic
+            // batch for the next pass instead of losing the step.
+            self.defer_synthetic_pass();
             ctx.request_repaint();
             self.automation_input = false;
+            // No editor was drawn this pass: end its IME context rather than keep a stale owner.
+            type_tool::sync_ime(self, &ctx);
             return;
         }
         let t0 = gpu_canvas::now_ms();
@@ -2388,14 +2517,17 @@ impl eframe::App for PhotocraftApp {
         // View › Screen Mode › Full Screen Mode: only the image, on black (F or Esc returns).
         screen_picker::show(&ctx);
         if screen_picker::busy(&ctx) && screen_picker::showing(&ctx) {
-            egui::Modal::new(egui::Id::new("screen-color-wait")).show(&ctx, |ui| {
+            egui::Modal::new(egui::Id::unique("screen-color-wait")).show(&ctx, |ui| {
                 ui.spinner();
                 ui.label(tl!("Pick a screen pixel or press Esc to cancel"));
                 if ui.button(tl!("Cancel")).clicked() {
                     screen_picker::cancel(&ctx);
                 }
             });
+            // This pass handled its input (the modal above ran): deliver the synthetic batch.
+            self.finish_synthetic_pass();
             self.automation_input = false;
+            type_tool::sync_ime(self, &ctx);
             gpu_status::check_window(self, &ctx);
             return;
         }
@@ -2455,6 +2587,7 @@ impl eframe::App for PhotocraftApp {
         wide_angle_ui::show(self, &ctx);
         canvas::extra_windows(self, &ctx);
         notices::show(self, &ctx);
+        updates_ui::show(self, &ctx);
         gpu_status::show_fallback(self, &ctx);
         kys_import::show_offer(self, &ctx);
         if self.titlebar_modal_drag(chrome) {
@@ -2477,12 +2610,15 @@ impl eframe::App for PhotocraftApp {
         tool_memory::persist(self, &ctx);
         // So are View › Extras, Show and Snap To (#3762).
         view_cmds::persist(self, &ctx);
+        // Remember the 0.37 panel sizes so a later 0.36 rollback's newer old-key values win on
+        // the next upgrade (see `panels::migrate_panel_state`).
+        panels::remember_panel_state(&ctx);
         self.automation_input = false;
         shape_stroke_ui::finish_frame(self, &ctx);
         native_menu::sync(self, &ctx);
         if screen_picker::busy(&ctx) {
             // Block input without a backdrop: the worker may still be capturing the screen.
-            egui::Modal::new(egui::Id::new("screen-color-wait")).frame(egui::Frame::NONE).backdrop_color(egui::Color32::TRANSPARENT).show(&ctx, |_| {});
+            egui::Modal::new(egui::Id::unique("screen-color-wait")).frame(egui::Frame::NONE).backdrop_color(egui::Color32::TRANSPARENT).show(&ctx, |_| {});
             ctx.set_cursor_icon(egui::CursorIcon::Wait);
         }
         let ui_ms = gpu_canvas::now_ms() - t0;
@@ -2507,9 +2643,14 @@ impl eframe::App for PhotocraftApp {
                 if info.present.is_empty() { gpu } else { format!("{gpu}, {}", info.present) }
             });
         }
+        // This pass handled its input: the in-flight synthetic batch is delivered once and the
+        // next step may be injected on the next frame.
+        self.finish_synthetic_pass();
         // Synthetic input is injected one press/release step per frame: keep frames coming until
         // the queue is empty, then release control replies waiting on it.
-        if !self.synthetic.is_empty() {
+        // Only a pass that reached the end of the UI and delivered the in-flight batch counts as
+        // settled input; an early-returning pass keeps the batch (and the waiting replies).
+        if !self.synthetic.is_empty() || self.synthetic_batch.is_some() {
             ctx.request_repaint();
         } else if !self.input_waiters.is_empty() {
             for w in self.input_waiters.drain(..) {
@@ -2521,8 +2662,82 @@ impl eframe::App for PhotocraftApp {
         jobs_ui::keep_polling(self, &ctx);
         // Menus and buttons in this frame may have asked for a file dialog.
         self.poll_file_dialog(&ctx, Some(frame));
+        // The Type tool's IME descriptor is the last writer of this pass: every panel and the
+        // canvas have finished mutating the model, and an absent/focus-moved editor ends here.
+        type_tool::sync_ime(self, &ctx);
+        // Issue any due `ui.screenshot` now that this pass's state is settled: a queued request
+        // that has waited its passes and animation delay captures exactly this frame.
+        self.issue_captures(&ctx);
         // Last, after everything drawn this frame: a lost window device can't draw it (#3438).
         gpu_status::check_window(self, &ctx);
+    }
+}
+
+impl eframe::App for PhotocraftApp {
+    fn on_exit(&mut self) {
+        if let Err(err) = tool_memory::save_on_exit(self) {
+            log::warn!("Preferences: could not save the final tool selection: {err}");
+        }
+        // Release a pending screenshot's image budget and answer its control request; the
+        // callback is inert afterwards (it holds only a weak slot).
+        let finished = self.captures.cancel_all("the application is closing");
+        self.finish_captures(finished);
+    }
+
+    fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        self.logic_frame(ctx, frame);
+        self.finish_type_reset_logic(ctx);
+    }
+
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        let frame_start = gpu_canvas::now_ms();
+        // An undecorated window gets its caption back when the toolkit changes its flags
+        // (maximize, restore, …): take it off again before the frame is laid out (#2246).
+        if let Some(window_frame) = self.services.window_frame.as_mut() {
+            window_frame();
+        }
+        // Native menu key equivalents become the key presses they were (see `native_menu`).
+        if let Some(menu) = self.services.native_menu.as_mut() {
+            menu.raw_input(raw_input);
+        }
+        shortcuts::clipboard_keys(ctx, ctx.text_edit_focused() || self.ui.text_edit.is_some(), raw_input);
+        // Windows precision touchpads and some Linux Wayland compositors send pinches
+        // as fractional Ctrl + wheel rather than a native Zoom event (#4566).
+        // Leave Ctrl+whole-notch mouse scrolling alone, and honour the pinch preference.
+        if cfg!(any(target_os = "windows", target_os = "linux")) && self.session.prefs().enhanced_controls.zoom_with_trackpad_pinch {
+            wheel_nav::fold_legacy_pinch(ctx, raw_input);
+        }
+        self.inject_synthetic(ctx, raw_input);
+        // After the control channel's own events (`ui.type`) join the OS's, before any widget.
+        widgets::cap_text_events(&mut raw_input.events);
+        self.control_click.normalize(&mut raw_input.events, cfg!(target_os = "macos"));
+        // A pen held still is no touch screen's press-and-hold right click (stylus.rs).
+        let pen_down = self.stylus.pen_contacts.observe(&raw_input.events);
+        stylus::pen_hold_is_no_right_click(ctx, pen_down);
+        if self.custom_titlebar {
+            titlebar::release_after_os_resize(ctx, raw_input);
+        }
+        if self.stroke_trace.enabled() {
+            // The OS's moves and the control channel's (injected just above).
+            let moves = raw_input.events.iter().filter(|e| matches!(e, egui::Event::PointerMoved(_))).count();
+            self.stroke_trace.begin_frame(frame_start, moves);
+        }
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        self.ui_frame(ui, frame);
+        self.finish_type_reset_pass(ui.ctx());
+    }
+}
+
+/// Remove one contiguous run equal to `batch` from `events` (eframe's preserved synthetic
+/// input). A no-op when the run is not present.
+fn remove_event_run(events: &mut Vec<egui::Event>, batch: &[egui::Event]) {
+    if batch.is_empty() || batch.len() > events.len() {
+        return;
+    }
+    if let Some(pos) = events.windows(batch.len()).position(|w| w == batch) {
+        events.drain(pos..pos + batch.len());
     }
 }
 
@@ -2818,6 +3033,99 @@ fn thumb_image(frame: photocraft_geom::Rect, side: usize, mut f: impl FnMut(i32,
 }
 
 impl PhotocraftApp {
+    /// The document/focus identity the in-flight synthetic batch was queued for.
+    fn synthetic_target(&self, ctx: &egui::Context) -> SyntheticTarget {
+        SyntheticTarget { document: self.document_identity(), focus: ctx.memory(|m| m.focused()) }
+    }
+
+    fn synthetic_target_matches(&self, ctx: &egui::Context) -> bool {
+        self.synthetic_snapshot.is_some_and(|queued| queued.matches(self.synthetic_target(ctx)))
+    }
+
+    /// Put at most one queued synthetic batch into this pass's input.
+    ///
+    /// The batch is appended once and tracked; `begin_pass` consumes it. While it is in flight no
+    /// further step is drained, so hidden logic ticks cannot accumulate several batches into one
+    /// pass. A document or focus change observed here is before eframe consumes the events, so the
+    /// batch is dropped and its waiting control replies fail instead of landing somewhere else.
+    /// If a pass consumed it but PhotoCraft returned before handling input (fonts not ready), the
+    /// same batch is appended again on the next hook, exactly once.
+    fn inject_synthetic(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        if self.synthetic_batch.is_some() {
+            if !self.synthetic_target_matches(ctx) {
+                // eframe may already carry the batch in its preserved input: withdraw exactly
+                // those events before the host consumes them, then fail the waiting replies.
+                if let Some(batch) = self.synthetic_batch.as_ref() {
+                    remove_event_run(&mut raw_input.events, batch);
+                }
+                self.cancel_synthetic("the active document or focus changed while the input was queued");
+                return;
+            }
+            if self.synthetic_reinject {
+                if let Some(batch) = self.synthetic_batch.clone() {
+                    raw_input.events.extend(batch);
+                }
+                self.synthetic_reinject = false;
+                self.automation_input = true;
+            }
+            return;
+        }
+        if self.synthetic.is_empty() {
+            return;
+        }
+        let events = self.take_synthetic_step();
+        if events.is_empty() {
+            return;
+        }
+        self.synthetic_snapshot = Some(self.synthetic_target(ctx));
+        raw_input.events.extend(events.iter().cloned());
+        self.synthetic_batch = Some(events);
+    }
+
+    /// A pass begins with the in-flight batch. The events are already in this pass's input, so a
+    /// target change detected now cannot withdraw them: deliver them (never half-apply) and keep
+    /// `automation_input` set so the commands they trigger still go through the automation policy.
+    /// `inject_synthetic` performs the withdrawable check, before the host consumes the events.
+    /// Called at the start of `App::ui` only (a hidden `run_logic` tick consumes no input).
+    fn begin_synthetic_pass(&mut self, ctx: &egui::Context) {
+        if self.synthetic_batch.is_none() {
+            return;
+        }
+        if !self.synthetic_target_matches(ctx) {
+            log::warn!("synthetic input: the document or focus changed inside the pass; delivering it as automation input");
+        }
+        self.automation_input = true;
+    }
+
+    /// One full UI pass handled the in-flight batch: deliver it once and let the next step in.
+    fn finish_synthetic_pass(&mut self) {
+        let _ = self.synthetic_batch.take();
+        self.synthetic_snapshot = None;
+        self.synthetic_reinject = false;
+    }
+
+    /// The pass returned before the input handling (fonts not ready): keep the batch and have the
+    /// next hook append it again exactly once, because egui already consumed the events.
+    fn defer_synthetic_pass(&mut self) {
+        if self.synthetic_batch.is_some() {
+            self.synthetic_reinject = true;
+        }
+    }
+
+    /// Drop the in-flight batch and fail the replies waiting on it.
+    fn cancel_synthetic(&mut self, reason: &str) {
+        let pending = self.synthetic_batch.take().is_some() || !self.synthetic.is_empty();
+        self.synthetic.clear();
+        self.synthetic_snapshot = None;
+        self.synthetic_reinject = false;
+        self.automation_input = false;
+        if pending || !self.input_waiters.is_empty() {
+            for w in self.input_waiters.drain(..) {
+                let _ = w.send(serde_json::json!({"ok": false, "error": format!("input cancelled: {reason}")}));
+            }
+        }
+    }
+
     /// Next step of queued synthetic input (automation): events up to and including the first
     /// release, so egui sees press and release in separate frames. Hosts that don't call
     /// `raw_input_hook` (offscreen harnesses) feed these to their input themselves.
@@ -2834,9 +3142,12 @@ impl PhotocraftApp {
         events
     }
 
-    /// Install fonts, image loaders and the theme. Call from the app creator when possible so the
-    /// very first frame renders; otherwise `logic` does it and the first frame is skipped.
+    /// Install fonts, image loaders and the theme. Call from the app creator (and again for a
+    /// replacement Context) before the first `run_ui` so the very first frame renders and the
+    /// Type reset begin/end pass markers exist; otherwise `logic` does it and the first frame is
+    /// skipped, with the begin-pass marker necessarily starting on the following pass.
     pub fn setup_context(ctx: &egui::Context, kind: theme::ThemeKind) {
+        Self::install_type_reset_hooks(ctx);
         ctx.add_plugin(tool_cursor::CursorLifecycle);
         ctx.add_plugin(single_line_drag::SingleLineDrag::default());
         theme::install_fonts(ctx);
@@ -3165,13 +3476,19 @@ impl PhotocraftApp {
         let r = photocraft_geom::Rect::new(0, 0, w as i32, h as i32);
         let mut surface = photocraft_raster::Surface::from_interleaved(photocraft_color::PixelFormat::RGBA8, r, &bytes);
         surface.prune();
-        self.session.clipboard = Some(photocraft_engine::edit_cmds::Clip { surface, bounds: r, layers: None, resolution: None });
+        self.session.clipboard = Some(photocraft_engine::edit_cmds::Clip { surface, bounds: r, layers: None, resolution: None, source: None });
         self.os_clip_sig = Some(sig);
         self.clip_external = true;
         self.clip_unmirrored = false;
         Ok(true)
     }
 }
+
+#[cfg(test)]
+mod lifecycle_tests;
+
+#[cfg(test)]
+mod screenshot_tests;
 
 #[cfg(test)]
 mod navigator_gpu_tests;
@@ -3203,6 +3520,8 @@ mod live_retouch_tests;
 #[cfg(test)]
 mod pencil_tests;
 #[cfg(test)]
+mod tool_options_theme_tests;
+#[cfg(test)]
 mod tool_shortcut_tests;
 
 #[cfg(test)]
@@ -3224,6 +3543,8 @@ mod transform_undo_tests;
 mod transform_type_tests;
 
 #[cfg(test)]
+mod psd_open_tests;
+#[cfg(test)]
 mod save_identity_tests;
 
 #[cfg(test)]
@@ -3232,6 +3553,8 @@ mod move_auto_select_tests;
 #[cfg(test)]
 mod new_group_button_tests;
 
+#[cfg(test)]
+mod color_panel_tests;
 #[cfg(test)]
 mod color_tab_theme_tests;
 
@@ -3590,10 +3913,11 @@ mod clipboard_tests {
         app
     }
 
+    /// Paste is enabled from the clipboard service alone (no read); the explicit paste imports
+    /// the OS image, once, and centres it in the view like Photoshop does for foreign clipboard
+    /// content.
     #[test]
     fn external_clipboard_enables_and_centres_paste() {
-        // Paste is enabled from the clipboard service alone (no read); the explicit paste imports
-        // the OS image, once, and centres it like Photoshop does for foreign clipboard content.
         let (os, reads) = (OsClip::default(), Arc::default());
         let mut app = app_with_os_clipboard(&os, &reads);
         *os.lock().unwrap() = Some((4, 4, [255u8, 0, 0, 255].repeat(16)));
@@ -3601,8 +3925,9 @@ mod clipboard_tests {
         assert!(crate::menus::is_enabled(&app, "edit.paste"));
         assert!(crate::menus::is_enabled(&app, "edit.pasteSpecial.pasteInPlace"));
         assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 0, "enablement never reads the clipboard");
+        app.ui.views[0].center = [40.0, 20.0];
         let r = crate::menus::invoke(&mut app, &egui::Context::default(), "edit.paste", serde_json::json!({})).unwrap();
-        assert_ne!(r["offset"], serde_json::json!([0, 0]), "external image is centred: {r}");
+        assert_eq!(r["offset"], serde_json::json!([38, 18]), "external image is centred in the view: {r}");
         assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 1, "one read per explicit paste");
         // Without a clipboard service Paste greys until something is copied in the app.
         let mut plain = PhotocraftApp::new(Session::new(), Services::default());

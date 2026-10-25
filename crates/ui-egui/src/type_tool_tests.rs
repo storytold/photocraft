@@ -10,7 +10,7 @@ use photocraft_doc::{LayerContent, LayerId, TextLayer};
 use photocraft_geom::{Affine, Point};
 use serde_json::json;
 
-use super::{layout, text_layer};
+use super::{PathClick, layout, path_target, text_layer};
 use crate::PhotocraftApp;
 use crate::canvas::ViewXform;
 
@@ -32,9 +32,10 @@ fn focused_font_search_does_not_type_into_the_canvas_layer() {
     });
     let mut h = Harness::builder().build_ui_state(
         |ui, app: &mut PhotocraftApp| {
-            let search_id = egui::Id::new("font-search-regression");
+            let search_id = egui::Id::unique("font-search-regression");
             let mut query = ui.data(|d| d.get_temp::<String>(search_id)).unwrap_or_default();
-            ui.add(egui::TextEdit::singleline(&mut query).id(search_id)).request_focus();
+            // Match the production font-search field: its hint is the field's accessible name.
+            ui.add(egui::TextEdit::singleline(&mut query).id(search_id).hint_text("Search fonts")).request_focus();
             ui.data_mut(|d| d.insert_temp(search_id, query));
             super::handle_keys(app, ui.ctx());
         },
@@ -43,7 +44,7 @@ fn focused_font_search_does_not_type_into_the_canvas_layer() {
     h.run_steps(2);
     h.event(egui::Event::Text("Ins".into()));
     h.run();
-    assert_eq!(h.ctx.data(|d| d.get_temp::<String>(egui::Id::new("font-search-regression"))).as_deref(), Some("Ins"));
+    assert_eq!(h.ctx.data(|d| d.get_temp::<String>(egui::Id::unique("font-search-regression"))).as_deref(), Some("Ins"));
     assert_eq!(super::current_text(h.state_mut(), LayerId(id)).as_deref(), Some("Sample"));
 }
 
@@ -65,7 +66,7 @@ fn numeric_type_fields_have_localized_accessible_names() {
     );
     PhotocraftApp::setup_context(&h.ctx, Default::default());
     h.run_steps(4);
-    h.get_by_role_and_label(egui::accesskit::Role::SpinButton, "Tamanho da fonte").click();
+    h.get_by_role_and_label(egui::accesskit::Role::SpinButton, crate::i18n::tr(pt, "Font size")).click();
     h.run();
     h.key_press_modifiers(Modifiers::COMMAND, egui::Key::A);
     h.event(egui::Event::Text("36".into()));
@@ -703,7 +704,7 @@ fn options_harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
 
 /// Drags the options bar's "T" icon `dx` points to the right with `mods` held.
 fn scrub_size_icon(h: &mut Harness<'static, PhotocraftApp>, dx: f32, mods: Modifiers) {
-    let icon = h.get_by_label("Font size").rect().center();
+    let icon = h.get_by_role_and_label(egui::accesskit::Role::Label, "Font size").rect().center();
     h.hover_at(icon);
     h.run_steps(1);
     press(h, icon, true);
@@ -773,8 +774,8 @@ fn options_bar_t_icon_scrub_stops_at_the_size_limits() {
 
 /// Rests the pointer on the widget named `label` past the tooltip delay; true when its tooltip
 /// (a second node with the same name) shows.
-fn tooltip_shows(h: &mut Harness<'static, PhotocraftApp>, label: &str) -> bool {
-    let at = h.get_by_label(label).rect().center();
+fn tooltip_shows(h: &mut Harness<'static, PhotocraftApp>, role: egui::accesskit::Role, label: &str) -> bool {
+    let at = h.get_by_role_and_label(role, label).rect().center();
     h.hover_at(at);
     h.run_steps(8);
     h.query_all_by_label(label).count() == 2
@@ -787,10 +788,10 @@ fn options_bar_t_icon_shows_its_tooltip() {
     let mut app = new_app();
     app.run("type.create", json!({"text": "Hello", "size": 20, "x": 300, "y": 420})).unwrap();
     let mut h = options_harness(app);
-    assert!(tooltip_shows(&mut h, "Set the text color"), "the probe sees an ordinary tooltip");
+    assert!(tooltip_shows(&mut h, egui::accesskit::Role::Button, "Set the text color"), "the probe sees an ordinary tooltip");
     h.hover_at(egui::pos2(890.0, 55.0));
     h.run_steps(4);
-    assert!(tooltip_shows(&mut h, "Font size"), "hovering the \"T\" icon shows \"Font size\"");
+    assert!(tooltip_shows(&mut h, egui::accesskit::Role::Label, "Font size"), "hovering the \"T\" icon shows \"Font size\"");
 }
 
 /// A point inside glyph `i` of vertical type: `f` of the way down its advance, right of the
@@ -967,6 +968,33 @@ fn tab_while_typing_inserts_a_tab() {
     assert_eq!(selection(&h), (2, 2));
     assert!(h.state().ui.text_edit.is_some(), "still editing");
     assert_eq!(h.state().ui.panels.dock, panels, "the panels stay as they were");
+}
+
+/// #8889: separate Tab presses must keep inserting text with the menu bar and panels present.
+#[test]
+fn repeated_tabs_while_typing_keep_keyboard_focus_on_the_canvas() {
+    let mut app = new_app();
+    let id = LayerId(app.run("type.create", json!({"text": "HOHO", "size": 60, "x": 300, "y": 420})).unwrap()["layer"].as_u64().unwrap());
+    let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).with_max_steps(32).build_eframe(move |cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        app
+    });
+    h.run_steps(4);
+    let p = glyph(&mut h, id, 1, 0.2);
+    click(&mut h, p);
+    assert_eq!(selection(&h), (1, 1));
+    let panels = h.state().ui.panels.dock;
+    for (expected, caret) in [("H\tOHO", 2), ("H\t\tOHO", 3), ("H\t\t\tOHO", 4)] {
+        h.key_press(egui::Key::Tab);
+        h.run_steps(2);
+        assert_eq!(text(h.state(), id).text, expected);
+        assert_eq!(selection(&h), (caret, caret));
+        assert!(h.state().ui.text_edit.is_some(), "still editing");
+        assert_eq!(h.state().ui.panels.dock, panels, "the panels stay as they were");
+    }
+    h.event(egui::Event::Text("typed".into()));
+    h.run_steps(2);
+    assert_eq!(text(h.state(), id).text, "H\t\t\ttypedOHO");
 }
 
 #[test]
@@ -1558,18 +1586,23 @@ fn temporary_type_transform_preserves_paragraph_resize_pivot_ime_and_shortcuts()
     h.key_press_modifiers(Modifiers::COMMAND, egui::Key::A);
     h.run_steps(2);
     assert_eq!(selection(&h), (0, after.text.chars().count()));
-    h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: "候補".into(), active_range_chars: None }));
-    h.run_steps(2);
     let f = crate::type_transform::frame(h.state_mut()).unwrap();
     let a = f.quad[2];
     tool_event(h.state_mut(), ToolEvent::Down { x: a[0], y: a[1], pressure: 1.0 }, type_command());
     tool_event(h.state_mut(), ToolEvent::Up { x: a[0] + 20.0, y: a[1] + 10.0 }, type_command());
+    // Complete the application edit before starting this composition: a completed transform
+    // changes the document revision and must cancel an older composition through the reset guard.
+    h.run_steps(2);
+    h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: "候補".into(), active_range_chars: None }));
+    h.run_steps(2);
     assert_eq!(h.state().ui.text_edit.as_ref().unwrap().preedit, Some((0, 2)));
     let f = crate::type_transform::frame(h.state_mut()).unwrap();
     let a = f.quad[2];
     tool_event(h.state_mut(), ToolEvent::Down { x: a[0], y: a[1], pressure: 1.0 }, type_command());
     tool_event(h.state_mut(), ToolEvent::Move { x: a[0] + 15.0, y: a[1] + 10.0, pressure: 1.0 }, type_command());
     let composed_transform = crate::type_transform::current_transform(h.state(), id).unwrap();
+    // A pending transform has not changed the revision yet. Keep the real raw-input route so
+    // the accepted commit must finish that transform before replacing its current preedit.
     h.event(egui::Event::Ime(egui::ImeEvent::Commit("確定".into())));
     h.run_steps(2);
     assert_eq!(text(h.state(), id).text, "確定");
@@ -1887,7 +1920,10 @@ mod multi_layer_formatting {
     }
 
     fn controls(app: PhotocraftApp, properties: bool) -> Harness<'static, PhotocraftApp> {
-        let mut h = Harness::builder().with_size(vec2(1100.0, 800.0)).build_ui_state(
+        // The lazily populated font popup introduces widgets in successive passes. egui 0.37
+        // styles each new widget on its following pass; keep a bounded settle assertion while
+        // allowing those additional passes (the loaded menu requires six under parallel tests).
+        let mut h = Harness::builder().with_size(vec2(1100.0, 800.0)).with_max_steps(8).build_ui_state(
             move |ui, app| {
                 if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                     if properties {
@@ -2053,8 +2089,9 @@ mod multi_layer_formatting {
         PhotocraftApp::setup_context(&h.ctx, Default::default());
         h.run_steps(4);
         h.get_all_by_role(Role::ComboBox).next().unwrap().click();
-        h.run();
-        h.run();
+        // The font menu's search caret repaints every pass; step a bounded number of times.
+        h.run_steps(2);
+        h.run_steps(2);
     }
 
     #[test]
@@ -2274,7 +2311,8 @@ mod multi_layer_formatting {
             );
             PhotocraftApp::setup_context(&h.ctx, Default::default());
             h.run_steps(4);
-            assert!(h.query_by_label("Bend").is_some(), "the actual Warp form is visible");
+            h.get_by_role_and_label(egui::accesskit::Role::SpinButton, "Bend");
+            assert!(h.query_all_by_label("Bend").count() >= 1, "the actual Warp form is visible");
             for label in ["Layer", "Layers", "Range", "Coalesce"] {
                 assert!(h.query_by_label(label).is_none(), "target metadata must not become a form field: {label}");
             }
@@ -2787,6 +2825,227 @@ fn justify_buttons_are_greyed_on_point_text() {
     PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
     h.run_steps(4);
     assert!(h.get_by_label("Justify all").accesskit_node().is_disabled(), "one of the formatted layers is point text");
+}
+
+fn ellipse_layer(app: &mut PhotocraftApp) -> u64 {
+    app.run("shape.create", json!({"kind": "ellipse", "rect": [200, 200, 400, 300], "fill": "#dddddd"})).unwrap()["layer"].as_u64().unwrap()
+}
+
+fn click_at(app: &mut PhotocraftApp, x: f64, y: f64) {
+    use crate::canvas::{ToolEvent, tool_event};
+    tool_event(app, ToolEvent::Down { x, y, pressure: 1.0 }, Modifiers::NONE);
+    tool_event(app, ToolEvent::Up { x, y }, Modifiers::NONE);
+}
+
+#[test]
+fn clicking_inside_a_shape_starts_area_type_in_one_step() {
+    use photocraft_doc::text::TextShape;
+    let mut app = new_app();
+    let shape = ellipse_layer(&mut app);
+    assert!(matches!(path_target(&app, 400.0, 350.0), Some(PathClick::Area { shape: Some(s) }) if s == shape));
+    let before = app.session.active().unwrap().history.entries().len();
+    click_at(&mut app, 400.0, 350.0);
+    let id = LayerId(app.ui.text_edit.as_ref().expect("editing").layer);
+    let st = app.session.active().unwrap();
+    assert!(matches!(text_layer(&st.doc, id).unwrap().shape, TextShape::Area { .. }));
+    assert_eq!(st.history.entries().len(), before + 1, "create + fill is one step");
+    super::commit(&mut app);
+    app.run("edit.undo", json!({})).unwrap();
+    assert!(app.session.active().unwrap().doc.layer(id).is_none());
+}
+
+#[test]
+fn clicking_on_a_path_outline_starts_type_on_the_path_where_clicked() {
+    use photocraft_doc::text::TextShape;
+    let mut app = new_app();
+    ellipse_layer(&mut app);
+    // The ellipse's bottom point (400, 500); its perimeter is about 1105 px.
+    let Some(PathClick::OnPath { start, .. }) = path_target(&app, 400.0, 500.0) else { panic!("on the outline") };
+    assert!((0.0..1110.0).contains(&start), "{start}");
+    // A point a quarter of the way further round is about 276 px further along (mod the perimeter).
+    let Some(PathClick::OnPath { start: right, .. }) = path_target(&app, 600.0, 350.0) else { panic!("on the outline") };
+    let d = (right - start).rem_euclid(1105.0);
+    assert!((d - 276.0).abs() < 15.0 || (d - 829.0).abs() < 15.0, "{start} → {right}");
+    let before = app.session.active().unwrap().history.entries().len();
+    click_at(&mut app, 400.0, 500.0);
+    let id = LayerId(app.ui.text_edit.as_ref().unwrap().layer);
+    assert_eq!(app.session.active().unwrap().history.entries().len(), before + 1, "create + attach is one step");
+    assert!(
+        matches!(text_layer(&app.session.active().unwrap().doc, id).unwrap().shape, TextShape::Path { start: s, .. } if (f64::from(s) - start).abs() < 0.01)
+    );
+}
+
+/// The path pointer shows what the release would do: kept while a press on a path is held or
+/// barely moves (the release still makes path type there), none once a text box is dragged out
+/// over a path (the release makes a box) or while a type edit is open (a click commits).
+#[test]
+fn the_path_pointer_is_off_while_dragging_a_text_box_or_editing() {
+    use crate::canvas::{ToolEvent, tool_event};
+    let mut app = new_app();
+    ellipse_layer(&mut app);
+    assert!(matches!(super::hover_path_target(&mut app, 400.0, 350.0, false), Some(PathClick::Area { .. })), "a hover inside the shape");
+    // Press and hold on the shape, then a flat drag: still a click on release.
+    tool_event(&mut app, ToolEvent::Down { x: 400.0, y: 350.0, pressure: 1.0 }, Modifiers::NONE);
+    assert!(app.drag.is_some(), "the press starts a drag");
+    assert!(matches!(super::hover_path_target(&mut app, 400.0, 350.0, false), Some(PathClick::Area { .. })), "press and hold");
+    tool_event(&mut app, ToolEvent::Move { x: 1200.0, y: 351.0, pressure: 1.0 }, Modifiers::NONE);
+    assert!(matches!(super::hover_path_target(&mut app, 1200.0, 351.0, false), Some(PathClick::Area { .. })), "a flat drag");
+    tool_event(&mut app, ToolEvent::Up { x: 1200.0, y: 351.0 }, Modifiers::NONE);
+    let id = LayerId(app.ui.text_edit.as_ref().expect("editing").layer);
+    assert!(
+        matches!(text_layer(&app.session.active().unwrap().doc, id).unwrap().shape, photocraft_doc::text::TextShape::Area { .. }),
+        "the release made area type"
+    );
+    let mut app = new_app();
+    ellipse_layer(&mut app);
+    tool_event(&mut app, ToolEvent::Down { x: 300.0, y: 300.0, pressure: 1.0 }, Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Move { x: 400.0, y: 350.0, pressure: 1.0 }, Modifiers::NONE);
+    assert!(app.drag.is_some(), "dragging out a box from inside the shape");
+    assert!(super::hover_path_target(&mut app, 400.0, 350.0, false).is_none(), "the drag makes a box, not area type");
+    tool_event(&mut app, ToolEvent::Up { x: 400.0, y: 350.0 }, Modifiers::NONE);
+    assert!(app.ui.text_edit.is_some(), "the box is being edited");
+    assert!(super::hover_path_target(&mut app, 400.0, 350.0, false).is_none(), "a click now commits");
+}
+
+#[test]
+fn click_outside_paths_still_makes_point_text() {
+    use photocraft_doc::text::TextShape;
+    let mut app = new_app();
+    ellipse_layer(&mut app);
+    assert!(path_target(&app, 1200.0, 700.0).is_none());
+    click_at(&mut app, 1200.0, 700.0);
+    let id = LayerId(app.ui.text_edit.as_ref().unwrap().layer);
+    assert_eq!(text_layer(&app.session.active().unwrap().doc, id).unwrap().shape, TextShape::Point);
+    // A drag inside the shape still makes a text box, as in Photoshop.
+    let mut app = new_app();
+    ellipse_layer(&mut app);
+    use crate::canvas::{ToolEvent, tool_event};
+    tool_event(&mut app, ToolEvent::Down { x: 300.0, y: 300.0, pressure: 1.0 }, Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Move { x: 450.0, y: 400.0, pressure: 1.0 }, Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Up { x: 450.0, y: 400.0 }, Modifiers::NONE);
+    let id = LayerId(app.ui.text_edit.as_ref().unwrap().layer);
+    assert!(matches!(text_layer(&app.session.active().unwrap().doc, id).unwrap().shape, TextShape::Box { .. }));
+}
+
+#[test]
+fn type_mask_tools_ignore_paths() {
+    let mut app = new_app();
+    ellipse_layer(&mut app);
+    app.ui.tool = crate::state::Tool::HorizontalTypeMask;
+    click_at(&mut app, 400.0, 350.0);
+    let id = LayerId(app.ui.text_edit.as_ref().unwrap().layer);
+    assert_eq!(text_layer(&app.session.active().unwrap().doc, id).unwrap().shape, photocraft_doc::text::TextShape::Point);
+}
+
+#[test]
+fn a_one_anchor_work_path_is_not_a_path_target() {
+    // `type.attachToPath` needs a segment, so the pointer must not promise type on this path.
+    let mut app = new_app();
+    std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).work_path =
+        Some(photocraft_doc::Path::new(vec![photocraft_doc::Subpath::polyline(&[(500.0, 400.0)])]));
+    assert!(path_target(&app, 500.0, 400.0).is_none());
+    click_at(&mut app, 500.0, 400.0);
+    let id = LayerId(app.ui.text_edit.as_ref().unwrap().layer);
+    assert_eq!(text_layer(&app.session.active().unwrap().doc, id).unwrap().shape, photocraft_doc::text::TextShape::Point);
+}
+
+#[test]
+fn over_existing_type_on_a_shape_the_pointer_is_the_plain_i_beam_and_a_click_edits_it() {
+    let mut app = new_app();
+    let text = app.run("type.create", json!({"text": "Hello", "x": 330, "y": 370, "size": 36})).unwrap()["layer"].as_u64().unwrap();
+    let shape = ellipse_layer(&mut app); // the shape layer is active, so its path is the target
+    let layers = app.session.active().unwrap().doc.walk().len();
+    let mut h = harness(1.0, app);
+    let on_text = glyph(&mut h, LayerId(text), 1, 0.5);
+    let [dx, dy] = xf(h.state()).to_doc(on_text);
+    assert!(matches!(path_target(h.state(), dx, dy), Some(PathClick::Area { shape: Some(s) }) if s == shape), "the text sits inside the shape");
+    h.hover_at(on_text);
+    h.run_steps(2);
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Text, "a click here edits the type, so the plain I-beam");
+    // Inside the shape but away from the type: the area-type pointer (drawn, not the OS I-beam).
+    let inside = xf(h.state()).to_screen(400.0, 250.0);
+    h.hover_at(inside);
+    h.run_steps(2);
+    assert_ne!(h.output().platform_output.cursor_icon, egui::CursorIcon::Text, "area-type pointer inside the shape");
+    click(&mut h, on_text);
+    let app = h.state();
+    assert_eq!(app.ui.text_edit.as_ref().expect("editing").layer, text, "the click edits the existing layer");
+    assert_eq!(app.session.active().unwrap().doc.walk().len(), layers, "no new layer");
+    assert_eq!(text_layer(&app.session.active().unwrap().doc, LayerId(text)).unwrap().shape, photocraft_doc::text::TextShape::Point);
+}
+
+#[test]
+fn paths_with_too_many_anchors_are_not_hover_targets() {
+    // The hover hit-tests every segment each frame, so huge paths are skipped (click and pointer alike).
+    let ring = |n: usize| -> Vec<(f64, f64)> {
+        (0..n).map(|i| i as f64 / n as f64 * std::f64::consts::TAU).map(|a| (500.0 + 200.0 * a.cos(), 400.0 + 200.0 * a.sin())).collect()
+    };
+    let mut app = new_app();
+    std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).work_path =
+        Some(photocraft_doc::Path::new(vec![photocraft_doc::Subpath::polygon(&ring(4000))]));
+    app.ui.selected_path = Some("work".into());
+    assert!(matches!(path_target(&app, 500.0, 400.0), Some(PathClick::Area { shape: None })));
+    std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).work_path =
+        Some(photocraft_doc::Path::new(vec![photocraft_doc::Subpath::polygon(&ring(5000))]));
+    assert!(path_target(&app, 500.0, 400.0).is_none());
+}
+
+#[test]
+fn hidden_target_path_is_not_a_click_target() {
+    // View › Show › Target Path off hides the path, so a click there makes plain point text.
+    let mut app = new_app();
+    std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).work_path =
+        Some(photocraft_doc::Path::new(vec![photocraft_doc::Subpath::polygon(&[(300.0, 300.0), (700.0, 300.0), (700.0, 500.0), (300.0, 500.0)])]));
+    app.ui.selected_path = Some("work".into());
+    assert!(matches!(path_target(&app, 500.0, 400.0), Some(PathClick::Area { shape: None })));
+    app.ui.view.show.target_path = false;
+    assert!(path_target(&app, 500.0, 400.0).is_none(), "Target Path off");
+    app.ui.view.show.target_path = true;
+    app.ui.view.extras = false;
+    assert!(path_target(&app, 500.0, 400.0).is_none(), "Extras off");
+}
+
+#[test]
+fn an_unselected_work_path_is_not_an_area_target() {
+    // The canvas draws a Work Path only while it is selected in Paths (or a path tool is active,
+    // #6551). One left unselected, as after Ctrl-click Load as Selection, is invisible with the
+    // Type tool, so a click inside it is plain point text; its outline still takes type on a
+    // path, as before area type (#5180).
+    let mut app = new_app();
+    std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).work_path =
+        Some(photocraft_doc::Path::new(vec![photocraft_doc::Subpath::polygon(&[(300.0, 300.0), (700.0, 300.0), (700.0, 500.0), (300.0, 500.0)])]));
+    app.ui.selected_path = None;
+    assert!(path_target(&app, 500.0, 400.0).is_none(), "inside a hidden work path");
+    assert!(matches!(path_target(&app, 500.0, 301.0), Some(PathClick::OnPath { shape: None, .. })));
+    click_at(&mut app, 500.0, 400.0);
+    let id = LayerId(app.ui.text_edit.as_ref().expect("editing").layer);
+    assert_eq!(text_layer(&app.session.active().unwrap().doc, id).unwrap().shape, photocraft_doc::text::TextShape::Point);
+    app.ui.selected_path = Some("work".into());
+    assert!(matches!(path_target(&app, 500.0, 400.0), Some(PathClick::Area { shape: None })));
+}
+
+/// Area type is paragraph text too: the justify buttons work on it (#7713 greys them on point text).
+#[test]
+fn justify_buttons_work_on_area_type() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut app = new_app();
+    app.run("type.create", json!({"text": "one two three four five six", "size": 24, "x": 300, "y": 420})).unwrap();
+    std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).work_path =
+        Some(photocraft_doc::Path::new(vec![photocraft_doc::Subpath::polygon(&[(300.0, 300.0), (600.0, 300.0), (600.0, 500.0), (300.0, 500.0)])]));
+    app.run("type.fillPath", json!({})).unwrap();
+    let mut h = Harness::builder().with_size(vec2(320.0, 700.0)).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                crate::type_tool::character_panel(app, ui, true);
+            }
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h.run_steps(4);
+    for tip in ["Justify last left", "Justify last centered", "Justify last right", "Justify all"] {
+        assert!(!h.get_by_label(tip).accesskit_node().is_disabled(), "{tip} on area type");
+    }
 }
 
 /// The paragraph box's document rect: its text-space origin through the layer transform, then

@@ -15,13 +15,13 @@ use std::sync::Arc;
 mod recovery_tests;
 
 /// Everything File › Open reads: PhotoCraft, Photoshop, OpenRaster, Krita and Affinity documents, flat images, and
-/// Photoshop brushes (.abr), gradients (.grd), swatches (.aco, .act, .ase) and keyboard shortcut sets
+/// Photoshop brushes (.abr), gradients (.grd), layer styles (.asl), swatches (.aco, .act, .ase) and keyboard shortcut sets
 /// (.kys), which go to the preset libraries and Edit › Keyboard Shortcuts.
 const OPEN_EXTS: &[&str] = &[
     "pcraft", "pdn", "ora", "xcf", "xcfgz", "gz", "kra", "krz", "psd", "psb", "psdt", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "tga", "ico",
     "qoi", "exr", "hdr", "pbm", "pgm", "ppm", "pam", "pfm", "pcx", "dds", "xpm", "fits", "fit", "fts", "dpx", "cin", "dcm", "dicom", "dc3", "iff", "lbm",
-    "ilbm", "heic", "heif", "hif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf", "abr", "grd", "svg", "svgz", "aco", "act", "ase",
-    "kys", "af", "afdesign", "afphoto", "afpub",
+    "ilbm", "heic", "heif", "hif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf", "abr", "grd", "asl", "svg", "svgz", "aco", "act",
+    "ase", "kys", "af", "afdesign", "afphoto", "afpub",
 ];
 const SVG_EXTS: &[&str] = &["svg", "svgz"];
 
@@ -71,6 +71,7 @@ const OPEN_FILTERS: &[(&str, &[&str])] = &[
     ("Camera Raw", &["dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf"]),
     ("Brushes", &["abr"]),
     ("Gradients", &["grd"]),
+    ("Styles", &["asl"]),
     ("Swatches", &["aco", "act", "ase"]),
     ("Keyboard Shortcuts", &["kys"]),
 ];
@@ -104,6 +105,7 @@ const SAVE_FILTERS: &[(&str, &[&str])] = &[
     // Game and 3D textures; DDS Options asks for the compression and mipmaps (#1327).
     ("DDS", &["dds"]),
     ("Cineon", &["cin"]),
+    ("Amiga IFF", &["iff"]),
 ];
 
 /// Non-document files the shell saves (Swatches panel exports): offered alone, so the dialog
@@ -560,6 +562,12 @@ fn shell_word(s: &str) -> String {
     if s.bytes().all(|b| b.is_ascii_alphanumeric() || b"/._-+:,@".contains(&b)) { s.to_string() } else { format!("'{}'", s.replace('\'', r"'\''")) }
 }
 
+/// The release-check transport, or `None` inside Flatpak: the sandbox has no network (see the
+/// manifest's finish-args) and `flatpak update` owns updates there.
+fn update_transport(flatpak_id: Option<&std::ffi::OsStr>) -> Option<photocraft_engine::updates_cmds::CheckFn> {
+    flatpak_id.is_none().then(crate::updates::service)
+}
+
 pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) -> Services {
     let clip: Rc<RefCell<Option<arboard::Clipboard>>> = Rc::default();
     let clip_unreadable: Rc<Cell<bool>> = Rc::default();
@@ -624,6 +632,7 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
         inbox: None,
         open_url: Some(Box::new(|url: &str| open::that(url).map_err(|e| e.to_string()))),
         beep: Some(platform_beep),
+        check_updates: update_transport(std::env::var_os("FLATPAK_ID").as_deref()),
         clipboard_set_image: Some({
             let clip = clip.clone();
             guarded_clipboard_set(move |w: u32, h: u32, px: &[u8]| {
@@ -901,6 +910,12 @@ mod tests {
             open_filters().into_iter().find(|(name, _)| *name == "Photoshop").map(|(_, exts)| exts),
             Some(vec!["psd".to_string(), "psb".to_string(), "psdt".to_string()])
         );
+    }
+
+    #[test]
+    fn flatpak_builds_have_no_update_transport() {
+        assert!(update_transport(Some(std::ffi::OsStr::new("ai.storyteller.photocraft"))).is_none());
+        assert!(update_transport(None).is_some());
     }
 
     #[test]

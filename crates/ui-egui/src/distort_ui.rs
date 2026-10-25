@@ -10,7 +10,7 @@
 use std::sync::Arc;
 
 use egui::{Color32, ColorImage};
-use photocraft_doc::{Document, LayerContent, LayerId};
+use photocraft_doc::{DocId, Document, LayerContent, LayerId};
 use photocraft_geom::Rect;
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
@@ -91,15 +91,67 @@ pub(crate) fn surface_image(surf: &Surface, r: Rect, max_side: usize) -> ColorIm
     ColorImage::new([tw, th], px)
 }
 
+/// The menu id of the open full-window workspace (Liquify, Content-Aware Fill, Filter Gallery,
+/// Adaptive Wide Angle). These are modal: other menu commands wait for OK or Cancel
+/// (`menus::modal_allows`).
+pub(crate) fn modal_workspace(app: &PhotocraftApp) -> Option<&'static str> {
+    if app.distort.liquify.is_some() {
+        Some("filter.liquify")
+    } else if app.distort.caf.is_some() {
+        Some("edit.contentAwareFill")
+    } else if app.distort.gallery.is_some() {
+        Some("filter.filterGallery")
+    } else if app.wide_angle.is_some() {
+        Some(photocraft_engine::lens_cmds::WIDE)
+    } else {
+        None
+    }
+}
+
+fn active_doc(app: &PhotocraftApp) -> Option<DocId> {
+    app.session.active().map(|st| st.doc.id)
+}
+
+fn on_doc(app: &PhotocraftApp, document: DocId) -> bool {
+    active_doc(app) == Some(document)
+}
+
+/// Drops Liquify / Puppet / Perspective Warp / Vanishing Point / Filter Gallery when the
+/// document they were opened on is no longer active, so they cannot steal undo, block layer
+/// delete, or draw another document's pixels (#5115).
+pub fn cancel_stale(app: &mut PhotocraftApp) {
+    let active = active_doc(app);
+    if app.distort.liquify.as_ref().is_some_and(|d| Some(d.document) != active) {
+        crate::liquify_ui::cancel(app);
+    }
+    if app.distort.puppet.as_ref().is_some_and(|p| Some(p.document) != active) {
+        app.distort.puppet = None;
+    }
+    if app.distort.perspective.as_ref().is_some_and(|p| Some(p.document) != active) {
+        app.distort.perspective = None;
+    }
+    if app.distort.vanishing.as_ref().is_some_and(|v| Some(v.document) != active) {
+        app.distort.vanishing = None;
+    }
+    if app.distort.gallery.as_ref().is_some_and(|g| Some(g.document) != active) {
+        app.distort.gallery = None;
+    }
+}
+
 /// The document shown on the canvas while Puppet or Perspective Warp previews a layer.
 pub fn display_doc(app: &PhotocraftApp, idx: usize) -> Option<(Arc<Document>, u64)> {
     if app.session.active_index() != Some(idx) {
         return None;
     }
-    if let Some(p) = &app.distort.puppet {
+    let id = app.session.documents().get(idx).map(|st| st.doc.id)?;
+    if let Some(p) = &app.distort.puppet
+        && p.document == id
+    {
         return Some((p.preview_doc.clone(), (1 << 42) + p.key));
     }
-    if let Some(p) = &app.distort.perspective {
+    if let Some(p) = &app.distort.perspective
+        && p.document == id
+    {
         return Some((p.preview_doc.clone(), (1 << 42) + p.key));
     }
     None
@@ -137,23 +189,24 @@ pub fn menu(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Val
 
 /// Pointer events (document coordinates) while a mode is active. True when consumed.
 pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) -> bool {
+    cancel_stale(app);
     if app.distort.caf.is_some() {
         crate::caf_ui::pointer(app, ev, mods);
         return true;
     }
-    if app.distort.liquify.is_some() {
+    if app.distort.liquify.as_ref().is_some_and(|d| on_doc(app, d.document)) {
         crate::liquify_ui::pointer(app, ev, mods);
         return true;
     }
-    if app.distort.puppet.is_some() {
+    if app.distort.puppet.as_ref().is_some_and(|p| on_doc(app, p.document)) {
         crate::puppet_ui::pointer(app, ev, mods);
         return true;
     }
-    if app.distort.perspective.is_some() {
+    if app.distort.perspective.as_ref().is_some_and(|p| on_doc(app, p.document)) {
         crate::perspective_ui::pointer(app, ev, mods);
         return true;
     }
-    if app.distort.vanishing.is_some() {
+    if app.distort.vanishing.as_ref().is_some_and(|v| on_doc(app, v.document)) {
         crate::vp_ui::pointer(app, ev, mods);
         return true;
     }
@@ -164,6 +217,7 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
 /// of the rest of the app should be skipped.
 pub fn keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     use egui::{Key, Modifiers};
+    cancel_stale(app);
     let enter = |ctx: &egui::Context| ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter));
     let esc = |ctx: &egui::Context| ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape));
     if app.distort.gallery.is_some() {
@@ -245,19 +299,26 @@ pub fn draw_content(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
 
 /// Canvas overlay for the on-canvas modes: pins, planes and meshes over the guides.
 pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform) {
-    if let Some(p) = &app.distort.puppet {
+    if let Some(p) = &app.distort.puppet
+        && on_doc(app, p.document)
+    {
         crate::puppet_ui::draw(p, painter, xf);
     }
-    if let Some(p) = &app.distort.perspective {
+    if let Some(p) = &app.distort.perspective
+        && on_doc(app, p.document)
+    {
         crate::perspective_ui::draw(p, painter, xf);
     }
-    if let Some(v) = &app.distort.vanishing {
+    if let Some(v) = &app.distort.vanishing
+        && on_doc(app, v.document)
+    {
         crate::vp_ui::draw(v, painter, xf);
     }
 }
 
 /// Options bar for the on-canvas modes. True when drawn.
 pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> bool {
+    cancel_stale(app);
     if app.distort.puppet.is_some() {
         crate::puppet_ui::options_bar(app, ui);
         return true;
@@ -295,6 +356,7 @@ pub fn drop_foreign(app: &mut PhotocraftApp) {
 
 /// Full-window dialogs (Liquify, Content-Aware Fill, Filter Gallery).
 pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    cancel_stale(app);
     drop_foreign(app);
     if app.distort.caf.is_some() {
         crate::caf_ui::show(app, ctx);
@@ -311,4 +373,94 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
 pub(crate) fn tolerance(app: &PhotocraftApp) -> f64 {
     let z = app.point_zoom().max(0.01);
     8.0 / f64::from(z)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use photocraft_geom::Rect;
+    use serde_json::json;
+
+    fn paint_bar(app: &mut PhotocraftApp) {
+        app.session
+            .edit("paint", |doc, active| {
+                doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().fill_rect(Rect::new(20, 30, 80, 50), &[1.0, 0.0, 0.0, 1.0]);
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    /// #5115: Puppet Warp is per-document. Switching tabs drops the session so Ctrl+Z and
+    /// layer delete apply to the new document, and the warp mesh does not leak onto it.
+    #[test]
+    fn switching_documents_drops_puppet_and_restores_undo_and_delete() {
+        let ctx = egui::Context::default();
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.session.execute("file.new", json!({"width": 100, "height": 80, "depth": 8})).unwrap();
+        app.session.execute("layer.new.layer", json!({})).unwrap();
+        paint_bar(&mut app);
+        app.sync_views();
+        menu(&mut app, &ctx, "edit.puppetWarp", &json!({})).unwrap().unwrap();
+        pointer(&mut app, ToolEvent::Down { x: 50.0, y: 40.0, pressure: 1.0 }, egui::Modifiers::NONE);
+        pointer(&mut app, ToolEvent::Up { x: 50.0, y: 40.0 }, egui::Modifiers::NONE);
+        assert!(app.distort.puppet.is_some());
+        let first = app.session.active().unwrap().doc.id;
+        app.session.execute("file.new", json!({"width": 60, "height": 40, "depth": 8})).unwrap();
+        app.session.execute("layer.new.layer", json!({})).unwrap();
+        app.sync_views();
+        assert!(app.distort.puppet.is_none(), "puppet does not follow the new document");
+        assert!(display_doc(&app, app.session.active_index().unwrap()).is_none());
+        let layers_before = app.session.active().unwrap().doc.layers.len();
+        app.session.execute("layer.delete", json!({})).unwrap();
+        assert_eq!(app.session.active().unwrap().doc.layers.len(), layers_before - 1);
+        assert!(app.session.set_active(0));
+        app.sync_views();
+        assert_eq!(app.session.active().unwrap().doc.id, first);
+        let past = app.session.active().unwrap().history.past_len();
+        app.session.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(app.session.active().unwrap().history.past_len(), past - 1);
+    }
+
+    #[test]
+    fn committed_puppet_is_one_undo_step_and_the_layer_stays_deletable() {
+        let ctx = egui::Context::default();
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.session.execute("file.new", json!({"width": 100, "height": 80, "depth": 8})).unwrap();
+        app.session.execute("layer.new.layer", json!({})).unwrap();
+        paint_bar(&mut app);
+        app.sync_views();
+        menu(&mut app, &ctx, "edit.puppetWarp", &json!({})).unwrap().unwrap();
+        pointer(&mut app, ToolEvent::Down { x: 25.0, y: 40.0, pressure: 1.0 }, egui::Modifiers::NONE);
+        pointer(&mut app, ToolEvent::Up { x: 25.0, y: 40.0 }, egui::Modifiers::NONE);
+        pointer(&mut app, ToolEvent::Down { x: 75.0, y: 40.0, pressure: 1.0 }, egui::Modifiers::NONE);
+        pointer(&mut app, ToolEvent::Move { x: 75.0, y: 30.0, pressure: 1.0 }, egui::Modifiers::NONE);
+        pointer(&mut app, ToolEvent::Up { x: 75.0, y: 20.0 }, egui::Modifiers::NONE);
+        let before = app.session.active().unwrap().history.past_len();
+        crate::puppet_ui::commit(&mut app);
+        assert!(app.distort.puppet.is_none());
+        assert_eq!(app.session.active().unwrap().history.past_len(), before + 1);
+        app.session.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(app.session.active().unwrap().history.past_len(), before);
+        let layers = app.session.active().unwrap().doc.layers.len();
+        app.session.execute("layer.delete", json!({})).unwrap();
+        assert_eq!(app.session.active().unwrap().doc.layers.len(), layers - 1);
+    }
+
+    #[test]
+    fn switching_documents_drops_liquify() {
+        let ctx = egui::Context::default();
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.session.execute("file.new", json!({"width": 100, "height": 80, "depth": 8})).unwrap();
+        app.session.execute("layer.new.layer", json!({})).unwrap();
+        paint_bar(&mut app);
+        crate::liquify_ui::open(&mut app, &ctx).unwrap();
+        assert!(app.distort.liquify.is_some());
+        app.session.execute("file.new", json!({"width": 40, "height": 40, "depth": 8})).unwrap();
+        app.session.execute("layer.new.layer", json!({})).unwrap();
+        app.sync_views();
+        assert!(app.distort.liquify.is_none());
+        let past = app.session.active().unwrap().history.past_len();
+        app.session.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(app.session.active().unwrap().history.past_len(), past - 1);
+    }
 }

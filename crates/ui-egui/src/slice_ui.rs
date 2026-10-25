@@ -110,6 +110,44 @@ fn rect_from(a: [f64; 2], b: [f64; 2]) -> photocraft_geom::Rect {
     photocraft_geom::Rect::new(x0, y0, x1, y1)
 }
 
+/// The new slice drawn from `start` to `cur` under the Slice tool's Style (Normal, Fixed Ratio,
+/// Fixed Size), as the marquee's (#8360). A fixed style is placed on the pixel the press is in.
+/// Fixed Size has exactly its pixels. Fixed Ratio's longer side follows the drag to within a pixel
+/// and the shorter side takes the ratio from it, as close as whole pixels allow: rounding each edge of
+/// a fractional drag apart would make 2 : 1 into 5 × 3, and keeping to whole multiples of the
+/// ratio would grow a 1366 : 768 slice in steps of 683 px.
+fn new_rect(app: &PhotocraftApp, start: [f64; 2], cur: [f64; 2]) -> photocraft_geom::Rect {
+    let o = &app.ui.tool_options;
+    let (w, h) = (f64::from(o.slice_width), f64::from(o.slice_height));
+    let size = match o.slice_style.as_str() {
+        "fixedSize" => [w.round().max(1.0), h.round().max(1.0)],
+        "fixedRatio" if w > 0.0 && h > 0.0 => {
+            let end = crate::chrome_ui::marquee_end("fixedRatio", w, h, false, start, cur);
+            let k = (end[0] - start[0]).abs() / w;
+            // A drag shorter than half a pixel is a click: no size.
+            let follow = |long: f64, short: f64| {
+                let l = (k * long).round();
+                [l, if l > 0.0 { (l * short / long).round().max(1.0) } else { 0.0 }]
+            };
+            if w >= h {
+                follow(w, h)
+            } else {
+                let [l, s] = follow(h, w);
+                [s, l]
+            }
+        }
+        _ => return rect_from(start, crate::chrome_ui::marquee_end(&o.slice_style, w, h, false, start, cur)),
+    };
+    // The drag's extent and direction are from the press itself; only the slice is placed on the
+    // pixel the press is in.
+    let sign = |d: f64| if d < 0.0 { -1.0 } else { 1.0 };
+    // A slice drawn left or up grows from the far side of that pixel, so it holds the pixel: the
+    // edges a Normal slice gets from the same press (`rect_from`), also on a pixel's edge.
+    let dir = [sign(cur[0] - start[0]), sign(cur[1] - start[1])];
+    let corner = [0, 1].map(|i| if dir[i] < 0.0 { start[i].ceil() } else { start[i].floor() });
+    rect_from(corner, [corner[0] + dir[0] * size[0], corner[1] + dir[1] * size[1]])
+}
+
 /// Pointer input for the two slice tools. Returns true when the event was theirs.
 pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, _mods: egui::Modifiers) -> bool {
     let tool = app.ui.tool;
@@ -156,8 +194,11 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, _mods: egui::Modifiers) -
         },
         ToolEvent::Up { x, y } => match app.ui.slices.drag.take() {
             Some(SliceDrag::New { start, .. }) => {
-                let r = rect_from(start, [x, y]);
-                if r.width() >= 1 && r.height() >= 1 && (r.width() > 2 || r.height() > 2) {
+                let r = new_rect(app, start, [x, y]);
+                // A drag of a pixel or two is a click, which selects; a Fixed Size slice is made
+                // by a click, at any size.
+                let fixed_size = app.ui.tool_options.slice_style == "fixedSize";
+                if r.width() >= 1 && r.height() >= 1 && (fixed_size || r.width() > 2 || r.height() > 2) {
                     if let Ok(v) = app.run("slice.new", json!({"rect": [r.x0, r.y0, r.width(), r.height()]})) {
                         app.ui.slices.selected = v.get("number").and_then(Value::as_u64).map(|n| n as usize);
                     }
@@ -263,7 +304,7 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
     }
     match &app.ui.slices.drag {
         Some(SliceDrag::New { start, cur }) => {
-            let sr = to_screen(rect_from(*start, *cur));
+            let sr = to_screen(new_rect(app, *start, *cur));
             painter.rect_stroke(sr, 0.0, Stroke::new(1.0, Color32::WHITE), egui::StrokeKind::Middle);
             let pts = [sr.left_top(), sr.right_top(), sr.right_bottom(), sr.left_bottom(), sr.left_top()];
             painter.add(egui::Shape::dashed_line(&pts, Stroke::new(1.0, color), 4.0, 4.0));
@@ -368,7 +409,33 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
     let locked = app.session.file_menu.slices_locked;
     let t = crate::theme::Tokens::get(ui.ctx());
     if tool == Tool::Slice {
-        ui.label(egui::RichText::new(tl!("Style: Normal")).color(t.text_dim));
+        // Style, Width and Height, as the marquee's (#8360).
+        let o = &mut app.ui.tool_options;
+        crate::panels::opt_label(ui, tl!("Style"));
+        let styles = [("normal".to_string(), tl!("Normal")), ("fixedRatio".to_string(), tl!("Fixed Ratio")), ("fixedSize".to_string(), tl!("Fixed Size"))];
+        if crate::widgets::dropdown(ui, "slice-style", tl!("Style"), &mut o.slice_style, &styles, 96.0) {
+            (o.slice_width, o.slice_height) = if o.slice_style == "fixedSize" { (64.0, 64.0) } else { (1.0, 1.0) };
+        }
+        let fixed_size = o.slice_style == "fixedSize";
+        let range = crate::tool_memory::style_range(&o.slice_style);
+        // Fixed Size shows whole pixels, the size the slice gets (`new_rect` rounds the same way),
+        // however the value was typed, stepped or scrubbed.
+        let field = |ui: &mut egui::Ui, v: &mut f32| {
+            if fixed_size {
+                crate::widgets::value_field_prec(ui, v, range.clone(), "px", 62.0, 0)
+            } else {
+                crate::widgets::value_field(ui, v, range.clone(), "", 62.0)
+            }
+        };
+        ui.add_enabled_ui(o.slice_style != "normal", |ui| {
+            crate::panels::opt_label(ui, tl!("Width"));
+            field(ui, &mut o.slice_width);
+            if crate::icons::button(ui, "arrow-left-right", 22.0, false, tl!("Swaps height and width")).clicked() {
+                std::mem::swap(&mut o.slice_width, &mut o.slice_height);
+            }
+            crate::panels::opt_label(ui, tl!("Height"));
+            field(ui, &mut o.slice_height);
+        });
         crate::widgets::vline(ui, 22.0);
         if ui.add_enabled_ui(has_doc && !locked, |ui| crate::widgets::secondary_button(ui, tl!("Slices From Guides"), 0.0)).inner.clicked() {
             let _ = app.run("slice.fromGuides", json!({}));
@@ -474,6 +541,138 @@ mod tests {
         pointer(&mut app, ToolEvent::Down { x: 20.0, y: 20.0, pressure: 1.0 }, m);
         pointer(&mut app, ToolEvent::Up { x: 20.0, y: 20.0 }, m);
         assert!(app.ui.slices.selected.is_some());
+    }
+
+    /// #8360: the Slice tool's Style, as the marquee's. Fixed Ratio keeps the drag's larger extent
+    /// and gives the other the ratio; Fixed Size draws a slice of that size where the drag starts,
+    /// towards the drag, also on a plain click.
+    #[test]
+    fn slice_style_fixes_the_ratio_or_the_size() {
+        let mut app = app();
+        app.ui.tool = Tool::Slice;
+        let m = egui::Modifiers::NONE;
+        let draw = |app: &mut PhotocraftApp, a: [f64; 2], b: [f64; 2]| {
+            pointer(app, ToolEvent::Down { x: a[0], y: a[1], pressure: 1.0 }, m);
+            pointer(app, ToolEvent::Move { x: b[0], y: b[1], pressure: 1.0 }, m);
+            pointer(app, ToolEvent::Up { x: b[0], y: b[1] }, m);
+            app.session.active().unwrap().doc.slices.list.last().unwrap().rect
+        };
+        let o = &mut app.ui.tool_options;
+        (o.slice_style, o.slice_width, o.slice_height) = ("fixedRatio".into(), 2.0, 1.0);
+        assert_eq!(draw(&mut app, [10.0, 10.0], [30.0, 40.0]), photocraft_geom::Rect::new(10, 10, 70, 40));
+        let o = &mut app.ui.tool_options;
+        (o.slice_style, o.slice_width, o.slice_height) = ("fixedSize".into(), 24.0, 16.0);
+        assert_eq!(draw(&mut app, [5.0, 5.0], [5.0, 5.0]), photocraft_geom::Rect::new(5, 5, 29, 21), "a click");
+        assert_eq!(draw(&mut app, [90.0, 70.0], [80.0, 60.0]), photocraft_geom::Rect::new(66, 54, 90, 70), "up and to the left");
+        // The preview while dragging shows the same rectangle the slice gets.
+        pointer(&mut app, ToolEvent::Down { x: 40.0, y: 40.0, pressure: 1.0 }, m);
+        pointer(&mut app, ToolEvent::Move { x: 41.0, y: 41.0, pressure: 1.0 }, m);
+        let Some(SliceDrag::New { start, cur }) = app.ui.slices.drag.clone() else { panic!("drawing a slice") };
+        assert_eq!(new_rect(&app, start, cur), photocraft_geom::Rect::new(40, 40, 64, 56));
+        pointer(&mut app, ToolEvent::Up { x: 41.0, y: 41.0 }, m);
+        // A press inside a pixel starts the slice on that pixel, still 24 x 16 pixels.
+        assert_eq!(draw(&mut app, [10.25, 30.75], [12.5, 31.5]), photocraft_geom::Rect::new(10, 30, 34, 46), "a press inside a pixel");
+        assert_eq!(
+            draw(&mut app, [70.5, 70.5], [60.25, 60.25]),
+            photocraft_geom::Rect::new(47, 55, 71, 71),
+            "and towards the upper left, holding the pressed pixel"
+        );
+        // A short drag up and to the left inside the pressed pixel goes up and to the left.
+        assert_eq!(draw(&mut app, [50.75, 50.75], [50.25, 50.25]), photocraft_geom::Rect::new(27, 35, 51, 51), "up-left within the pixel");
+        // A Fixed Size that isn't whole pixels (from a settings file) is rounded, not grown a pixel.
+        let o = &mut app.ui.tool_options;
+        (o.slice_width, o.slice_height) = (1.5, 2.4);
+        assert_eq!(draw(&mut app, [5.5, 5.5], [5.5, 5.5]), photocraft_geom::Rect::new(5, 5, 7, 7), "1.5 x 2.4 is 2 x 2");
+        // A size of a pixel or two is made too, not taken for a click that selects.
+        let o = &mut app.ui.tool_options;
+        (o.slice_width, o.slice_height) = (1.0, 2.0);
+        assert_eq!(draw(&mut app, [3.0, 3.0], [3.0, 3.0]), photocraft_geom::Rect::new(3, 3, 4, 5), "a 1 x 2 slice");
+    }
+
+    /// #8360: Fixed Ratio's longer side follows a fractional drag to the pixel and the shorter takes
+    /// the ratio from it, as close as whole pixels allow.
+    #[test]
+    fn fixed_ratio_slices_keep_their_ratio_from_a_fractional_drag() {
+        let mut app = app();
+        app.ui.tool = Tool::Slice;
+        let m = egui::Modifiers::NONE;
+        let mut draw = |w: f32, h: f32, a: [f64; 2], b: [f64; 2]| {
+            let o = &mut app.ui.tool_options;
+            (o.slice_style, o.slice_width, o.slice_height) = ("fixedRatio".into(), w, h);
+            pointer(&mut app, ToolEvent::Down { x: a[0], y: a[1], pressure: 1.0 }, m);
+            pointer(&mut app, ToolEvent::Up { x: b[0], y: b[1] }, m);
+            let r = app.session.active().unwrap().doc.slices.list.last().unwrap().rect;
+            (r.x0, r.y0, r.width(), r.height())
+        };
+        assert_eq!(draw(2.0, 1.0, [10.5, 10.5], [14.5, 11.0]), (10, 10, 4, 2), "not 5 x 2");
+        assert_eq!(draw(2.0, 1.0, [10.5, 10.5], [31.3, 13.0]), (10, 10, 21, 11), "a 20.8 px drag: 21 px, and half of it as near as pixels allow");
+        assert_eq!(draw(16.0, 9.0, [0.5, 0.5], [40.3, 10.0]), (0, 0, 40, 23), "a 39.8 px drag");
+        assert_eq!(draw(1366.0, 768.0, [0.0, 0.0], [40.0, 1.0]), (0, 0, 40, 22), "not in steps of 683 px");
+        assert_eq!(draw(9.0, 16.0, [0.0, 0.0], [1.0, 32.2]), (0, 0, 18, 32), "the longer side is the height");
+        assert_eq!(draw(4.0, 2.0, [60.7, 60.7], [50.2, 58.0]), (50, 55, 11, 6), "towards the upper left, holding the pressed pixel");
+        assert_eq!(draw(1.5, 1.0, [0.0, 40.0], [30.0, 41.0]), (0, 40, 30, 20), "a fractional ratio");
+        // A click inside a pixel doesn't move the pointer: it selects, as with Normal, and makes no
+        // slice (the drag is measured from the press, not from the pixel's corner).
+        let n = app.session.active().unwrap().doc.slices.list.len();
+        let o = &mut app.ui.tool_options;
+        (o.slice_width, o.slice_height) = (4.0, 1.0);
+        pointer(&mut app, ToolEvent::Down { x: 10.75, y: 10.75, pressure: 1.0 }, m);
+        pointer(&mut app, ToolEvent::Up { x: 10.75, y: 10.75 }, m);
+        assert_eq!(app.session.active().unwrap().doc.slices.list.len(), n, "a click makes no slice");
+    }
+
+    /// #8360: remembered Slice tool options are checked when loaded: an unknown Style is Normal
+    /// again, and Fixed Size is whole pixels.
+    #[test]
+    fn remembered_slice_options_are_checked() {
+        let mut o = crate::state::ToolOptions::default();
+        (o.slice_style, o.slice_width, o.slice_height) = ("fixedsize".into(), 0.5, 2.0);
+        crate::tool_memory::sanitize(&mut o);
+        assert_eq!(o.slice_style, "normal");
+        (o.slice_style, o.slice_width, o.slice_height) = ("fixedSize".into(), 1.5, 63.6);
+        crate::tool_memory::sanitize(&mut o);
+        assert_eq!((o.slice_width, o.slice_height), (2.0, 64.0));
+    }
+
+    /// #8360: the options bar's Style picks Fixed Size, which starts at 64 × 64 px, and the slice
+    /// drawn next has that size.
+    #[test]
+    fn options_bar_picks_the_slice_style() {
+        use egui::accesskit::Role;
+        use egui_kittest::Harness;
+        use egui_kittest::kittest::{NodeT, Queryable};
+
+        let mut app = app();
+        app.sync_views();
+        app.ui.tool = Tool::Slice;
+        let mut h = Harness::builder().with_size(vec2(1400.0, 200.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    crate::panels::options_bar(app, ui);
+                }
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Pro);
+        h.run_steps(4);
+        let fields = |h: &Harness<'static, PhotocraftApp>| {
+            h.query_all_by_role(Role::SpinButton)
+                .filter(|n| !n.accesskit_node().is_disabled())
+                .filter_map(|n| n.accesskit_node().numeric_value())
+                .collect::<Vec<_>>()
+        };
+        assert!(fields(&h).is_empty(), "Normal has no Width or Height to set");
+        h.get_all_by_role(Role::ComboBox).find(|n| n.accesskit_node().value().as_deref() == Some("Normal")).unwrap().click();
+        h.run_steps(3);
+        h.get_by_label("Fixed Size").click();
+        h.run_steps(4);
+        let o = &h.state().ui.tool_options;
+        assert_eq!((o.slice_style.as_str(), o.slice_width, o.slice_height), ("fixedSize", 64.0, 64.0));
+        assert_eq!(fields(&h), [64.0, 64.0]);
+        let (app, m) = (h.state_mut(), egui::Modifiers::NONE);
+        pointer(app, ToolEvent::Down { x: 10.0, y: 10.0, pressure: 1.0 }, m);
+        pointer(app, ToolEvent::Up { x: 10.0, y: 10.0 }, m);
+        assert_eq!(app.session.active().unwrap().doc.slices.list[0].rect, photocraft_geom::Rect::new(10, 10, 74, 74));
     }
 
     #[test]

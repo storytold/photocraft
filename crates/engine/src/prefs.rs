@@ -227,6 +227,8 @@ pub struct General {
     pub zoom_resizes_windows: bool,
     pub use_legacy_free_transform: bool,
     pub auto_show_home_screen: bool,
+    /// Desktop: check published stable releases once in the background at launch.
+    pub automatically_check_updates: bool,
 }
 
 impl Default for General {
@@ -243,6 +245,7 @@ impl Default for General {
             zoom_resizes_windows: false,
             use_legacy_free_transform: false,
             auto_show_home_screen: true,
+            automatically_check_updates: true,
         }
     }
 }
@@ -1124,7 +1127,6 @@ pub const HIDDEN_UNTIL_IMPLEMENTED: &[&str] = &[
     "unitsAndRulers.gutter",
     "plugIns.showExtensionPanels",
     "plugIns.allowScriptsToConnect",
-    "plugIns.generatorEnabled",
     "type.textEngine",
     "enhancedControls.scrubbySliderAcceleration",
     "rawDefaults.colorSpace",
@@ -1715,6 +1717,10 @@ impl PrefsStore {
     }
 }
 
+/// The preferences file format written by [`Session::prefs_value`]. 2: Use Shift Key for Tool
+/// Switch stored as chosen (before, a stored `false` was the old default; see `load_prefs_json`).
+pub const PREFS_VERSION: u64 = 2;
+
 /// A saved preference [`Session::load_prefs_json`] couldn't read (a wrong type, an unknown
 /// choice) and left at its default.
 #[derive(Clone, Debug, PartialEq)]
@@ -1850,7 +1856,7 @@ impl Session {
         let mut v = self.prefs().to_json();
         if let Value::Object(m) = &mut v {
             m.insert("colorSettings".into(), serde_json::to_value(&self.color.settings).unwrap_or(Value::Null));
-            m.insert("version".into(), json!(1));
+            m.insert("version".into(), json!(PREFS_VERSION));
             m.insert("presets".into(), self.presets.to_json(self));
         }
         v
@@ -1865,6 +1871,16 @@ impl Session {
         let mut v: Value = serde_json::from_str(s).map_err(|e| format!("preferences: {e}"))?;
         if !v.is_object() {
             return Err("preferences: expected a JSON object".into());
+        }
+        // Files before version 2 hold Use Shift Key for Tool Switch off because that was the
+        // default when they were written: every key is saved, chosen or not. Like Photoshop it is
+        // on by default now (#3528), so those files take the new default (#5647: a tool letter
+        // pressed again kept cycling its group). A choice made since is saved as version 2.
+        if v.get("version").and_then(Value::as_u64).unwrap_or(0) < 2
+            && let Some(tools) = v.get_mut("tools").and_then(Value::as_object_mut)
+            && tools.get("useShiftKeyForToolSwitch") == Some(&json!(false))
+        {
+            tools.remove("useShiftKeyForToolSwitch");
         }
         // Saved preferences before appearance modes had one concrete theme. Preserve its
         // appearance instead of silently switching established users to Auto.
@@ -1913,7 +1929,11 @@ impl Session {
     /// Batches defer colour validation until their complete candidate is staged. Returns
     /// whether colour settings were touched, including whole-section/root-object updates.
     fn set_pref(&mut self, path: &str, value: Value, validate_color: bool) -> std::result::Result<bool, String> {
-        if let Some(rest) = path.strip_prefix("colorSettings") {
+        // The section itself or a path inside it: `colorSettingsworkingRgb`, `colorSettings.` and
+        // `colorSettings..workingRgb` are none, and the authorization policy doesn't treat them as one.
+        if let Some(rest) =
+            path.strip_prefix("colorSettings").filter(|r| r.is_empty() || r.strip_prefix('.').is_some_and(|c| c.split('.').all(|part| !part.is_empty())))
+        {
             let mut cur = serde_json::to_value(&self.color.settings).map_err(|e| e.to_string())?;
             let rest = rest.trim_start_matches('.');
             if rest.is_empty() {
@@ -2719,3 +2739,19 @@ pub fn specs() -> Vec<CommandSpec> {
 #[cfg(test)]
 #[path = "prefs/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod color_settings_path_tests {
+    use crate::Session;
+    use serde_json::json;
+
+    #[test]
+    fn a_path_that_only_starts_with_color_settings_is_not_in_that_section() {
+        let mut s = Session::new();
+        let before = s.color.settings.clone();
+        for path in ["colorSettingsworkingRgb", "colorSettings.", "colorSettings..workingRgb"] {
+            assert!(s.execute("prefs.set", json!({"path": path, "value": "/dev/zero"})).is_err(), "{path}");
+        }
+        assert_eq!(s.color.settings, before);
+    }
+}

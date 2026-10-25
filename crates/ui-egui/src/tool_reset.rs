@@ -206,6 +206,7 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
         Tool::Smudge => reset!(strength, finger_painting),
         Tool::Dodge | Tool::Burn => reset!(tone_range, exposure, protect_tones),
         Tool::Sponge => reset!(sponge_mode, vibrance),
+        Tool::Slice => reset!(slice_style, slice_width, slice_height),
         Tool::Pen => reset!(vector_mode, pen_auto_add_delete),
         Tool::CurvaturePen => reset!(vector_mode),
         Tool::FreeformPen => reset!(vector_mode, curve_fit),
@@ -222,7 +223,6 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
         | Tool::HistoryBrush
         | Tool::PathSelection
         | Tool::DirectSelection
-        | Tool::Slice
         | Tool::SliceSelect
         | Tool::AddAnchorPoint
         | Tool::DeleteAnchorPoint

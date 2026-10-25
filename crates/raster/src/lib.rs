@@ -476,30 +476,37 @@ impl Surface {
 
     /// Channel `c` at `(x0 + i·step, y)` for `i in 0..out.len()`, looking each tile up once per run
     /// (much faster than per-sample [`Surface::sample_channel`] for strided scans).
+    /// Steps below 1 read consecutive pixels; positions beyond `i32::MAX` read the default pixel.
     pub fn sample_row_strided(&self, y: i32, x0: i32, step: i32, c: usize, out: &mut [f32]) {
-        let step = step.max(1);
+        let step = i64::from(step.max(1));
         let dp = read_sample(&self.default_pixel, self.format.sample, c);
         let n = self.format.channels();
         let ty = y.div_euclid(TILE_SIZE);
         let ly = y.rem_euclid(TILE_SIZE) as usize;
         let mut i = 0;
+        let mut x = i64::from(x0);
         while i < out.len() {
-            let x = x0 + i as i32 * step;
-            let tx = x.div_euclid(TILE_SIZE);
+            if x > i64::from(i32::MAX) {
+                out[i..].fill(dp);
+                break;
+            }
+            let tx = x.div_euclid(i64::from(TILE_SIZE));
             // Samples that fall in this tile.
-            let tile_end = (tx + 1) * TILE_SIZE;
+            let tile_end = (tx + 1) * i64::from(TILE_SIZE);
             let count = (((tile_end - x) + step - 1) / step).max(1) as usize;
-            let end = (i + count).min(out.len());
-            match self.tiles.get(&TileCoord { tx, ty }) {
+            let count = count.min(out.len() - i);
+            let end = i + count;
+            match self.tiles.get(&TileCoord { tx: tx as i32, ty }) {
                 None => out[i..end].fill(dp),
                 Some(t) => {
                     for (k, o) in out[i..end].iter_mut().enumerate() {
-                        let lx = (x + k as i32 * step - tx * TILE_SIZE) as usize;
+                        let lx = (x + k as i64 * step - tx * i64::from(TILE_SIZE)) as usize;
                         *o = read_sample(&t.data, self.format.sample, (ly * TILE_SIZE as usize + lx) * n + c);
                     }
                 }
             }
             i = end;
+            x += count as i64 * step;
         }
     }
 
@@ -725,7 +732,9 @@ impl Surface {
     /// Fallible counterpart to [`Surface::take_tiles`]. Reserves the complete result and any
     /// default tile before removing a tile, so a reservation failure leaves the surface intact.
     pub fn try_take_tiles(&mut self, r: Rect) -> Result<Vec<(TileCoord, Arc<Tile>)>, AllocationError> {
-        let count = r.tiles().count();
+        // Counted in u64 and checked before narrowing: on 32-bit targets the grid of a sparse
+        // surface's bounds can pass `usize` (and visiting it to count it takes just as long).
+        let count = usize::try_from(r.tile_count()).map_err(|_| AllocationError::SizeOverflow)?;
         let bytes = count.checked_mul(std::mem::size_of::<(TileCoord, Arc<Tile>)>()).ok_or(AllocationError::SizeOverflow)?;
         let mut out = Vec::new();
         out.try_reserve_exact(count).map_err(|_| AllocationError::NotEnoughMemory { bytes })?;
@@ -883,6 +892,10 @@ impl Surface {
 
         // One tile row of the default pixel, to compare a finished tile with a row at a time.
         let default_row = self.default_pixel.repeat(TILE_SIZE.unsigned_abs() as usize);
+        // Target tiles rebuilt from the same source tiles at the same offset are the same tile:
+        // a bundle can point thousands of tile references at one payload, and a move would
+        // otherwise copy it into a separate buffer for each.
+        let built: std::sync::Mutex<std::collections::HashMap<Vec<usize>, Option<Arc<Tile>>>> = Default::default();
         let build_target = |dc: TileCoord| -> Option<(TileCoord, Arc<Tile>)> {
             let dr = dc.rect();
             let sr = dr.translate(dx.saturating_neg(), dy.saturating_neg());
@@ -896,6 +909,14 @@ impl Surface {
             if covered && let Some(shared) = uniform.window(self, sr) {
                 // A tile of only the default pixel is left out, as `prune` would.
                 return (shared.data.get(..bpp) != Some(&*self.default_pixel)).then_some((dc, shared));
+            }
+            // The identities of the source tiles under a covered window (the offset is the same
+            // for every target of this call).
+            let memo_key: Option<Vec<usize>> = covered.then(|| sr.tiles().map(|sc| self.tiles.get(&sc).map_or(0, |t| Arc::as_ptr(t) as usize)).collect());
+            if let Some(k) = &memo_key
+                && let Some(hit) = built.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(k)
+            {
+                return hit.clone().map(|t| (dc, t));
             }
 
             let mut tile = Tile { data: vec![0u8; (TILE_SIZE * TILE_SIZE) as usize * bpp].into_boxed_slice() };
@@ -977,7 +998,14 @@ impl Surface {
             }
             // A target that got only default pixels isn't stored, as `prune` would drop it. Checked
             // after the copy, a row at a time: a tile with content stops at its first such row.
-            tile.data.chunks(default_row.len()).any(|row| row != default_row).then(|| (dc, Arc::new(tile)))
+            let finished = tile.data.chunks(default_row.len()).any(|row| row != default_row).then(|| Arc::new(tile));
+            // Workers that missed the memo at the same time each built a copy: all of them take
+            // the one stored first, so the targets share it however many threads raced.
+            let finished = match memo_key {
+                Some(k) => built.lock().unwrap_or_else(std::sync::PoisonError::into_inner).entry(k).or_insert(finished).clone(),
+                None => finished,
+            };
+            finished.map(|t| (dc, t))
         };
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -1091,7 +1119,8 @@ impl Surface {
 
     /// Composite-friendly RGBA read (converts from the surface's model).
     pub fn rgba(&self, x: i32, y: i32) -> [f32; 4] {
-        let p = self.pixel(x, y);
+        let mut p = [0.0f32; 5];
+        self.read_pixel(x, y, &mut p);
         to_rgba(&self.format, &p)
     }
 }
@@ -1828,6 +1857,37 @@ mod tests {
         let _ = s.translated(i32::MIN + 1, 3, all);
     }
 
+    /// Many references to one payload, moved off the tile grid: the rebuilt tiles that read the
+    /// same source tiles at the same offset are one tile, not a copy each.
+    #[test]
+    fn translated_shares_tiles_rebuilt_from_shared_sources() {
+        let fmt = PixelFormat::RGBA8;
+        let mut one = Surface::new(fmt);
+        let r = Rect::new(0, 0, TILE_SIZE, TILE_SIZE);
+        let px: Vec<f32> = (0..r.width() * r.height()).flat_map(|i| [(i % 251) as f32 / 255.0, (i % 7) as f32 / 7.0, 0.5, 1.0]).collect();
+        one.write_region(r, &px);
+        let payload = Arc::clone(one.tile(TileCoord::new(0, 0)).unwrap());
+        let mut s = Surface::new(fmt);
+        s.put_tiles((0..16).flat_map(|ty| (0..16).map(move |tx| TileCoord::new(tx, ty))).map(|c| (c, Arc::clone(&payload))));
+        let moved = s.translated(7, 5, s.content_bounds());
+        let distinct: std::collections::HashSet<_> = moved.tiles().map(|(_, t)| Arc::as_ptr(t)).collect();
+        // The 15 × 15 interior tiles read the same four source tiles at the same offset, so they are
+        // one tile, however many threads build them; only the 64 border tiles (cut by the
+        // content's edge) are built one by one.
+        assert!(moved.tile_count() == 289 && distinct.len() == 64 + 1, "{} tiles, {} distinct", moved.tile_count(), distinct.len());
+        let all = Rect::new(-50, -50, 16 * TILE_SIZE + 50, 16 * TILE_SIZE + 50);
+        assert_eq!(moved.read_region(all), s.read_region(all.translate(-7, -5)));
+    }
+
+    #[test]
+    fn a_surface_bounds_tile_count_is_counted_not_walked() {
+        let mut s = Surface::new(PixelFormat::RGBA8);
+        let far = Rect::new(0, 0, i32::MAX, i32::MAX);
+        assert_eq!(far.tile_count(), u64::from(i32::MAX as u32 / TILE_SIZE as u32 + 1).pow(2));
+        // Not allocated: 2^46 entries is far past any reservation.
+        assert!(s.try_take_tiles(far).is_err());
+    }
+
     #[test]
     fn translated_stores_no_tiles_of_only_the_default_pixel() {
         let only_default = |t: &Surface| {
@@ -1890,6 +1950,40 @@ mod tests {
             let got = snapshot.pixel(x, y);
             for (g, e) in got.iter().zip(&expect) {
                 prop_assert!((g - e).abs() <= 1.0 / 255.0);
+            }
+        }
+    }
+
+    #[test]
+    fn strided_row_sampling_handles_extreme_coordinates_and_steps() {
+        for sample in SampleType::ALL {
+            let mut s = Surface::with_default(PixelFormat::new(ColorMode::Grayscale, sample, false), &[0.25]);
+            for (x, value) in [(i32::MIN, 0.1), (-1, 0.3), (0, 0.4), (i32::MAX - 1, 0.6), (i32::MAX, 0.9)] {
+                s.write_pixel(x, 0, &[value]);
+            }
+            for y in [0, 256] {
+                for (x0, step, len) in [(i32::MAX, 1, 1), (i32::MIN, i32::MAX, 3), (0, i32::MAX, 2), (i32::MAX - 1, 1, 2), (i32::MAX, i32::MAX, 0)] {
+                    let mut out = vec![0.0; len];
+                    s.sample_row_strided(y, x0, step, 0, &mut out);
+                    for (i, &got) in out.iter().enumerate() {
+                        let x = i32::try_from(i64::from(x0) + i as i64 * i64::from(step)).unwrap();
+                        assert_eq!(got, s.sample_channel(x, y, 0), "{sample:?} y={y} x0={x0} step={step} i={i}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn strided_row_sampling_uses_default_past_coordinate_range() {
+        for sample in SampleType::ALL {
+            let mut s = Surface::with_default(PixelFormat::new(ColorMode::Grayscale, sample, false), &[0.25]);
+            s.write_pixel(i32::MAX, 0, &[0.75]);
+            s.write_pixel(i32::MIN, 0, &[1.0]);
+            for step in [1, i32::MAX] {
+                let mut out = [0.0; 4];
+                s.sample_row_strided(0, i32::MAX, step, 0, &mut out);
+                assert_eq!(out, [s.sample_channel(i32::MAX, 0, 0), s.default_pixel()[0], s.default_pixel()[0], s.default_pixel()[0]]);
             }
         }
     }

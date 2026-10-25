@@ -336,6 +336,7 @@
 	Current & Below	Текущий и ниже
 	Current Layer	Текущий слой
 	Refine Strokes	Штрихи уточнения
+	Edits	Правки
 
 # Filter
 	Last Filter	Последний фильтр
@@ -2499,6 +2500,11 @@
 	No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.	Нет контура для создания выделения: нарисуйте его инструментом «Перо» или выберите на панели «Контуры».
 	Cancel opening	Отменить открытие
 	Cancelled opening {name}	Открытие {name} отменено
+	Damaged Photoshop document	Повреждённый документ Photoshop
+	The document “{name}” may be damaged.	Документ «{name}», возможно, повреждён.
+	Some layers, pixels or masks could not be read. Do you want to continue opening it?	Не удалось прочитать некоторые слои, пикселы или маски. Продолжить открытие?
+	If you continue, saving over the original may permanently discard unreadable data. Save a copy to keep the original.	Если продолжить, сохранение поверх оригинала может безвозвратно удалить нечитаемые данные. Чтобы сохранить оригинал, сохраните копию.
+	Continue	Продолжить
 	The document “{name}” does not have an embedded {mode} profile.	В документе «{name}» нет встроенного профиля {mode}.
 	The document “{name}” has an embedded color profile that does not match the current {mode} working space.	Встроенный цветовой профиль документа «{name}» не совпадает с текущим рабочим пространством {mode}.
 	Working: {working}	Рабочее пространство: {working}
@@ -3217,6 +3223,19 @@ curves	Smooth	Сгладить
 	Shadow Mode	Режим теней
 	Shadow Color	Цвет теней
 	Shadow Opacity	Непрозрачность теней
+# PhotoCraft release checks.
+	Check for Updates…	Проверить обновления…
+	PhotoCraft Updates	Обновления PhotoCraft
+	Checking for updates…	Проверка обновлений…
+	Open the release page to choose an installer for your system.	Откройте страницу выпуска и выберите установщик для своей системы.
+	Open Download Page	Открыть страницу загрузки
+	PhotoCraft is up to date.	Установлена последняя версия PhotoCraft.
+	Could not check for updates.	Не удалось проверить обновления.
+	Updates have not been checked yet.	Обновления ещё не проверялись.
+	Check Again	Проверить снова
+	Automatically Check for Updates	Автоматически проверять обновления
+	Installed version: {version}	Установленная версия: {version}
+	PhotoCraft {version} is available.	Доступна версия PhotoCraft {version}.
 # Embedded Profile Mismatch: profile names beside the choices, Remember this choice
 	Use the embedded profile ({profile})	Использовать встроенный профиль ({profile})
 	Convert to the working space ({profile})	Преобразовать в рабочее пространство ({profile})
@@ -3492,7 +3511,6 @@ curves	Smooth	Сгладить
 	Conform	Подогнать
 	Constraints	Ограничения
 	Content-Aware Fill needs a selection on a pixel layer	Заливка с учётом содержимого требует выделенной области на пиксельном слое
-	Continue	Продолжить
 	Contrasty	Контрастный
 	Convert	Преобразовать
 	Convert to Alpha Channel	Преобразовать в альфа-канал
@@ -3843,6 +3861,14 @@ curves	Smooth	Сгладить
 
 # Graphics Adapter preference (#1885)
 	GPU adapter	Адаптер GPU
+
+# Styles panel: Import / Export Styles (.asl)
+	Import Styles…	Импортировать стили…
+	Export Selected Styles…	Экспортировать выбранные стили…
+	Export Styles…	Экспортировать стили…
+	{file} is not a style library (.asl)	{file} не является библиотекой стилей (.asl)
+@plural	Imported {n} style from {file}|Imported {n} styles from {file}	Импортирован {n} стиль из {file}|Импортировано {n} стиля из {file}|Импортировано {n} стилей из {file}
+@plural	Exported {n} style to {file}|Exported {n} styles to {file}	Экспортирован {n} стиль в {file}|Экспортировано {n} стиля в {file}|Экспортировано {n} стилей в {file}
 # Actions: a step dialog holds a suspended recording (#7365)
 	Confirm or cancel the open action step dialog first	Сначала подтвердите или отмените открытый диалог шага операции
 	Pro Medium Gray	Средне-серая Pro
@@ -3851,7 +3877,6 @@ curves	Smooth	Сгладить
 	Pro Light Gray	Светло-серая Pro
 	Pro Light	Светлая Pro
 	Resize Windows to Fit	Подгонять размер окон
-
 	EXR	EXR
 	Increase Brush Size	Увеличить размер кисти
 	Increase Type Size	Увеличить размер текста
@@ -4529,8 +4554,6 @@ curves	Smooth	Сгладить
 	↑↓ navigate   ↵ run   esc close	↑↓ навигация   ↵ выполнить   esc закрыть
 	✓ Color Indicates Masked Areas	✓ Цветом обозначены маскированные области
 	✓ Color Indicates Selected Areas	✓ Цветом обозначены выделенные области
-
-
 # Dynamic command-id, plural, and contextual labels (fourth pass).
 @id	edit.clear	Очистить
 @id	edit.purge.undo	Данные отмены
@@ -4577,12 +4600,26 @@ layers	Fill	Заливка
 layers	Fill:	Заливка:
 navigator	Zoom	Масштаб
 shape	Appearance	Оформление
-
 # Paragraph direction (TYPE-218-2)
 	Automatic paragraph direction	Автоматическое направление абзаца
 	Left-to-right paragraph direction	Направление абзаца слева направо
 	Right-to-left paragraph direction	Направление абзаца справа налево
 	Not rendered: this adjustment ({key}) is kept as imported.	Не отображается: эта коррекция ({key}) сохранена как при импорте.
-
 # Print preview image (#8236)
 	Print preview image	Print preview image
+# Color panel menu: modes, copy commands and colour ramps (#6000)
+	Hue Cube	Куб цветового тона
+	Brightness Cube	Куб яркости
+	Color Wheel	Цветовой круг
+	RGB Sliders	Ползунки RGB
+	HSB Sliders	Ползунки HSB
+	CMYK Sliders	Ползунки CMYK
+	Lab Sliders	Ползунки Lab
+	Web Color Sliders	Ползунки web-цветов
+	Copy Color as HTML	Копировать цвет как HTML
+	Copy Color's Hex Code	Копировать шестнадцатеричный код цвета
+	RGB Spectrum	Спектр RGB
+	CMYK Spectrum	Спектр CMYK
+	Grayscale Ramp	Шкала градаций серого
+	Current Colors	Текущие цвета
+	Make Ramp Web Safe	Сделать шкалу безопасной для web

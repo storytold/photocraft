@@ -219,7 +219,7 @@ pub fn controls(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
             nav.zoom = Some((nav.zoom.unwrap_or(effective) * 1.25).min(32.0));
         }
         let mut percent = nav.zoom.unwrap_or(effective) * 100.0;
-        if ui.add(egui::DragValue::new(&mut percent).range(0.01..=3200.0).suffix("%").speed(10.0)).changed() {
+        if ui.add(egui::DragValue::new(&mut percent).range(0.01..=3200.0).suffix("%").speed(10.0)).accessible_name(tl!("Zoom")).changed() {
             nav.zoom = Some(percent / 100.0);
         }
         if ui.small_button(tl!("100%")).clicked() {
@@ -292,7 +292,7 @@ mod tests {
 
     #[test]
     fn palette_picker_reuses_indices_and_updates_preview_pixels() {
-        let key = egui::Id::new("test-web-preview");
+        let key = egui::Id::unique("test-web-preview");
         let p = json!({"format": "gif", "colorTable": ["#ff0000", "#0000ff"], "dither": "none"});
         let mut h = egui_kittest::Harness::builder().build_ui_state(
             move |ui, state: &mut (Value, Vec<u8>)| {

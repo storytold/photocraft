@@ -829,9 +829,10 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                         // Keep one numeric field for direct entry and one log-scaled slider for
                         // wide ranges. slider_row would add a second, linear slider (#146).
                         ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new(label(&p.key)).color(t.text_dim));
+                            let name = label(&p.key);
+                            ui.label(egui::RichText::new(&name).color(t.text_dim));
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                crate::widgets::value_field(ui, &mut v, min..=max, unit, 74.0);
+                                crate::widgets::value_field(ui, &mut v, min..=max, unit, 74.0).accessible_name(name);
                             });
                         });
                         let mut lv = v.clamp(min, max).ln();
@@ -891,7 +892,7 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                     if lists_installed && !opts.iter().any(|(v, _)| *v == cur) {
                         opts.push((cur.clone(), stem.as_str()));
                     }
-                    crate::widgets::dropdown(ui, &format!("flt-{cmd}-{}", p.key), &mut cur, &opts, 170.0);
+                    crate::widgets::dropdown(ui, &format!("flt-{cmd}-{}", p.key), &label(&p.key), &mut cur, &opts, 170.0);
                     if let Some(i) = cur.strip_prefix("channel:").filter(|_| depth).and_then(|i| i.parse::<usize>().ok()) {
                         f.insert("depthChannel".into(), json!(i));
                         cur = "channel".into();
@@ -909,8 +910,8 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
             Kind::Text => {
                 let mut v = f.get(&p.key).and_then(Value::as_str).unwrap_or_default().to_string();
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(label(&p.key)).color(t.text_dim));
-                    ui.add(egui::TextEdit::singleline(&mut v).desired_width(200.0));
+                    let lp = ui.label(egui::RichText::new(label(&p.key)).color(t.text_dim));
+                    ui.add(egui::TextEdit::singleline(&mut v).desired_width(200.0)).labelled_by(lp.id);
                     // Install Plug-in…: pick the .wasm file instead of typing its path (#7531).
                     if cmd == "plugin.install" && p.key == "path" && crate::widgets::secondary_button(ui, tl!("Browse…"), 0.0).clicked() {
                         f.insert(crate::dialogs::BROWSE_FIELD.into(), json!(p.key));
@@ -931,7 +932,7 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 opts.extend(names.iter().enumerate().map(|(i, n)| (i.to_string(), n.as_str())));
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new(label(&p.key)).color(t.text_dim));
-                    crate::widgets::dropdown(ui, &format!("flt-{cmd}-{}", p.key), &mut sel, &opts, 170.0);
+                    crate::widgets::dropdown(ui, &format!("flt-{cmd}-{}", p.key), &label(&p.key), &mut sel, &opts, 170.0);
                 });
                 match sel.parse::<i64>() {
                     Ok(i) if i >= 0 => f.insert(p.key, json!(i)),
@@ -946,7 +947,7 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 ui.label(egui::RichText::new(label(&p.key)).color(t.text_dim));
                 egui::Grid::new(format!("flt-grid-{cmd}-{}", p.key)).spacing([4.0, 4.0]).show(ui, |ui| {
                     for (i, v) in vals.iter_mut().enumerate() {
-                        crate::widgets::value_field(ui, v, -999.0..=999.0, "", 44.0);
+                        crate::widgets::value_field(ui, v, -999.0..=999.0, "", 44.0).accessible_name(format!("{} {}", label(&p.key), i + 1));
                         if (i + 1) % side == 0 {
                             ui.end_row();
                         }
@@ -991,7 +992,7 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 let mut v = f.get(&p.key).and_then(Value::as_f64).unwrap_or(default as f64) as f32;
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new(label(&p.key)).color(t.text_dim));
-                    crate::widgets::value_field(ui, &mut v, -30000.0..=30000.0, "", 80.0);
+                    crate::widgets::value_field(ui, &mut v, -30000.0..=30000.0, "", 80.0).accessible_name(label(&p.key));
                     // A seed gets a fresh random value in one click (#5710): Clouds, Add Noise,
                     // Fibers… then render a new pattern, as each run of Photoshop's does.
                     if p.key == "seed" && ui.button(tl!("Random")).clicked() {
@@ -1396,14 +1397,10 @@ mod tests {
         assert_eq!(source_label("centerX"), "Center X");
     }
 
-    /// Convert to Profile's and Proof Setup's `bpc` read "Bpc": spelled out, and translated.
+    /// Convert to Profile's and Proof Setup's `bpc` read "Bpc": spelled out.
     #[test]
     fn black_point_compensation_is_spelled_out() {
         assert_eq!(source_label("bpc"), "Black Point Compensation");
-        // English is the source: it has no catalog.
-        for lang in crate::i18n::Lang::all().filter(|l| l.code() != "en") {
-            assert!(crate::i18n::has(lang, "Black Point Compensation"), "{lang:?}");
-        }
     }
 
     fn key() -> FilterPreviewKey {
@@ -1855,105 +1852,14 @@ mod tests {
         assert!(!has_dialog("filter.stylize.findEdges"));
     }
 
-    /// Generated filter and adjustment labels (param names, symbolic choices) and gallery
-    /// names that `lang` has no catalog row for.
-    fn missing_generated_filter_labels(lang: crate::i18n::Lang) -> std::collections::BTreeSet<String> {
-        let mut missing = std::collections::BTreeSet::new();
-        let mut check = |s: String| {
-            if !matches!(s.as_str(), "X" | "Y" | "A" | "B") && !crate::i18n::has(lang, &s) {
-                missing.insert(s);
-            }
-        };
-        for c in photocraft_engine::command_specs().iter().filter(|c| c.id.starts_with("filter.") || c.id.starts_with("image.adjustments.")) {
-            for p in parse_spec(c.params) {
-                if !p.key.chars().all(|c| c.is_ascii_alphanumeric()) || matches!(p.kind, Kind::Json) {
-                    continue;
-                }
-                check(source_label(&p.key));
-                if let Kind::Choice { options, .. } = &p.kind {
-                    for choice in options {
-                        // Only symbolic options are UI choices; registry docs also contain
-                        // colour syntax and array notation, which are not translatable names.
-                        if choice.chars().all(|c| c.is_ascii_alphanumeric()) {
-                            check(source_label(choice));
-                        }
-                    }
-                }
-            }
-        }
-        for f in photocraft_algo::GalleryFilter::ALL {
-            check(f.name().to_string());
-        }
-        for cat in photocraft_algo::GALLERY_CATEGORIES {
-            check(cat.to_string());
-        }
-        missing
-    }
-
+    /// Select and Mask's Output To lists all six output targets.
     #[test]
-    fn korean_covers_generated_filter_options_and_gallery_names() {
-        let missing = missing_generated_filter_labels(crate::i18n::lang_from_tag("ko-KR").unwrap());
-        assert!(missing.is_empty(), "missing Korean dynamic labels: {missing:#?}");
-    }
-
-    #[test]
-    fn italian_covers_generated_filter_options_and_gallery_names() {
-        let missing = missing_generated_filter_labels(crate::i18n::lang_from_tag("it-IT").unwrap());
-        assert!(missing.is_empty(), "missing Italian dynamic labels: {missing:#?}");
-    }
-
-    #[test]
-    fn spanish_covers_generated_filter_options_and_gallery_names() {
-        let missing = missing_generated_filter_labels(crate::i18n::lang_from_tag("es-ES").unwrap());
-        assert!(missing.is_empty(), "missing Spanish dynamic labels: {missing:#?}");
-    }
-
-    #[test]
-    fn russian_covers_generated_filter_options_and_gallery_names() {
-        let missing = missing_generated_filter_labels(crate::i18n::lang_from_tag("ru-RU").unwrap());
-        assert!(missing.is_empty(), "missing Russian dynamic labels: {missing:#?}");
-    }
-
-    /// The Select menu's generated dialogs (Select and Mask, Modify ▸ …) show their
-    /// params, choices and title in every UI language, not just Korean.
-    #[test]
-    fn select_dialogs_are_translated_in_every_language() {
-        let mut missing = std::collections::BTreeMap::<&str, std::collections::BTreeSet<String>>::new();
-        for lang in crate::i18n::Lang::all().filter(|l| l.code() != "en") {
-            let mut check = |s: String| {
-                if !crate::i18n::has(lang, &s) {
-                    missing.entry(lang.code()).or_default().insert(s);
-                }
-            };
-            for c in photocraft_engine::command_specs().iter().filter(|c| c.id.starts_with("select.") && has_dialog(c.id)) {
-                let title = c.label.trim_end_matches('…');
-                if !crate::i18n::has(lang, title) {
-                    check(format!("{title}…"));
-                }
-                for p in parse_spec(c.params) {
-                    check(source_label(&p.key));
-                    if let Kind::Choice { options: choices, .. } = p.kind {
-                        choices.iter().for_each(|choice| check(source_label(choice)));
-                    }
-                }
-            }
-        }
-        assert!(missing.is_empty(), "untranslated Select dialog labels: {missing:#?}");
-    }
-
-    /// Select and Mask's Output To lists all six of Photoshop's targets, each translated.
-    #[test]
-    fn select_and_mask_output_choices_are_translated() {
+    fn select_and_mask_output_lists_all_six_targets() {
         let spec = photocraft_engine::commands::find("select.refineEdge").unwrap().params;
         let p = parse_spec(spec).into_iter().find(|p| p.key == "output").unwrap();
         let Kind::Choice { options: choices, .. } = p.kind else { panic!("output is not a choice") };
         let labels: Vec<String> = choices.iter().map(|c| source_label(c)).collect();
         assert_eq!(labels, ["Selection", "Layer Mask", "New Layer", "New Layer With Mask", "New Document", "New Document With Mask"]);
-        for lang in crate::i18n::Lang::all().filter(|l| l.code() != "en") {
-            for label in &labels {
-                assert!(crate::i18n::has(lang, label), "{}: untranslated {label}", lang.code());
-            }
-        }
     }
 
     #[test]

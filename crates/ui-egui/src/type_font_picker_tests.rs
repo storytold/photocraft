@@ -73,7 +73,7 @@ fn hovering_a_font_row_sets_preview_and_leaving_clears_it() {
     assert!(popup.contains(row), "row {row:?} is outside popup {popup:?}");
     h.hover_at(row);
     h.run_steps(2);
-    let hover_id = egui::Id::new("type-font-hover");
+    let hover_id = egui::Id::unique("type-font-hover");
     assert_eq!(h.ctx.input(|i| i.pointer.interact_pos()), Some(row));
     assert!(popup_rect(&h).is_some(), "popup closes while moving pointer to the row");
     assert_eq!(
@@ -132,6 +132,7 @@ fn the_search_field_stays_put_while_the_list_scrolls() {
     h.hover_at(h.get_by_label("Family 05").rect().center());
     for _ in 0..6 {
         h.event(egui::Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
             unit: egui::MouseWheelUnit::Line,
             delta: vec2(0.0, -3.0),
             phase: egui::TouchPhase::Move,
@@ -446,7 +447,8 @@ fn font_cycle_in_options_bar_edits_the_layer_and_can_be_undone() {
     crate::PhotocraftApp::setup_context(&h.ctx, Default::default());
     h.run_steps(4);
     h.query_all_by_role(Role::ComboBox).next().unwrap().click();
-    h.run();
+    // The font search field's caret blinks every pass, so settle with bounded steps instead.
+    h.run_steps(2);
     h.get_by_role(Role::TextInput).type_text("JetBrains");
     h.key_press(Key::ArrowDown);
     h.run();
@@ -480,7 +482,7 @@ fn hovering_a_font_does_not_pollute_history_and_clears_on_close() {
 
     // Simulate hovering a font directly via the preview module
     let ctx = egui::Context::default();
-    ctx.data_mut(|d| d.insert_temp(egui::Id::new("type-font-hover"), "JetBrains Mono".to_string()));
+    ctx.data_mut(|d| d.insert_temp(egui::Id::unique("type-font-hover"), "JetBrains Mono".to_string()));
     crate::type_font_preview::follow_hover(&mut app, &ctx);
 
     // Verify a preview document is generated
@@ -665,6 +667,9 @@ fn localized_font_names_label_the_menu_but_pick_the_family() {
         },
         state,
     );
+    // The localized menu lists Japanese names, so install the app's bundled theme fonts
+    // (including the craft-fonts Japanese faces) before the first pass shapes text.
+    crate::theme::install_fonts(&h.ctx);
     // Show Font Names in English on: no localized labels.
     crate::type_tool::sync_font_names(&h.ctx, true);
     let labels: HashMap<String, String> = [("MS Gothic".to_string(), "ＭＳ ゴシック".to_string())].into();
@@ -814,7 +819,8 @@ fn options_bar_menu_arrows_walk_on_while_recording_recent_fonts() {
     let mut seen = vec![h.state().ui.tool_options.type_font.clone()];
     for _ in 0..4 {
         h.key_press(Key::ArrowDown);
-        h.run();
+        // The open font menu repaints for its caret, so step a bounded number of times.
+        h.run_steps(2);
         seen.push(h.state().ui.tool_options.type_font.clone());
     }
     let mut once = seen.clone();
@@ -831,7 +837,13 @@ fn wheel_over_the_closed_font_button_steps_through_the_families() {
     h.hover_at(button);
     h.run();
     let wheel = |h: &mut Harness<'static, State>, y: f32| {
-        h.event(egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Line, delta: vec2(0.0, y), phase: egui::TouchPhase::Move, modifiers: Modifiers::NONE });
+        h.event(egui::Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
+            unit: egui::MouseWheelUnit::Line,
+            delta: vec2(0.0, y),
+            phase: egui::TouchPhase::Move,
+            modifiers: Modifiers::NONE,
+        });
         h.run();
     };
     wheel(&mut h, -2.0);
@@ -850,7 +862,13 @@ fn wheel_over_the_closed_button_keeps_a_stable_order_with_recents() {
     h.hover_at(button);
     h.run();
     let wheel = |h: &mut Harness<'static, State>, y: f32| {
-        h.event(egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Line, delta: vec2(0.0, y), phase: egui::TouchPhase::Move, modifiers: Modifiers::NONE });
+        h.event(egui::Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
+            unit: egui::MouseWheelUnit::Line,
+            delta: vec2(0.0, y),
+            phase: egui::TouchPhase::Move,
+            modifiers: Modifiers::NONE,
+        });
         h.run();
     };
     wheel(&mut h, -1.0);

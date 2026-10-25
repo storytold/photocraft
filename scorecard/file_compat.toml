@@ -17,7 +17,7 @@ id = "FILE-215-2"
 target = "Smart Filters survive PSD save and re-open (filterFX descriptor read and written)"
 status = "partial"
 issue = 215
-note = "smart_map.rs: 41 filters plus Hue/Saturation, Perspective Warp, Filter Gallery (Chrome) and a verified Camera Raw subset mapped both ways, others kept verbatim, mask in FEid; io tests/it/smart_corpus.rs. PhotoCraft-only filters (Twirl, Liquify…) and unmapped Camera Raw settings are left out of filterFX with a warning"
+note = "smart_map.rs: 49 filters plus Hue/Saturation, Perspective Warp, Filter Gallery (Chrome) and a verified Camera Raw subset mapped both ways, others kept verbatim, mask in FEid; io tests/it/smart_corpus.rs. PhotoCraft-only filters (Twirl, Liquify…) and unmapped Camera Raw settings are left out of filterFX with a warning"
 
 [[item]]
 id = "FILE-215-3"

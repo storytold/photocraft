@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use egui::{Color32, Pos2, Stroke, TextureHandle, pos2};
 use photocraft_algo::perspective::{PerspectiveMap, Plane, Straighten, linked_corners, plane_point, straighten};
-use photocraft_doc::{Document, LayerId};
+use photocraft_doc::{DocId, Document, LayerId};
 use photocraft_geom::Rect;
 use serde_json::{Value, json};
 
@@ -39,6 +39,8 @@ enum Drag {
 
 pub struct PerspSession {
     pub key: u64,
+    /// Document this session belongs to (#5115).
+    pub document: DocId,
     pub layer: LayerId,
     command: String,
     bounds: Rect,
@@ -56,7 +58,7 @@ const GRID: usize = 40;
 
 impl PerspSession {
     pub fn describe(&self) -> Value {
-        json!({"layer": self.layer.0, "mode": self.mode, "planes": self.planes})
+        json!({"document": self.document.0, "layer": self.layer.0, "mode": self.mode, "planes": self.planes})
     }
 
     fn update_grid(&mut self) {
@@ -134,6 +136,7 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context, command: &str) -> Res
     let texture = ctx.load_texture(format!("persp-{key}"), crate::distort_ui::surface_image(&surface, bounds, 2048), egui::TextureOptions::LINEAR);
     let mut s = PerspSession {
         key,
+        document: st.doc.id,
         layer,
         command: command.to_string(),
         bounds,

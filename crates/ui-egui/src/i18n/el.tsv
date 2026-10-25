@@ -1597,6 +1597,7 @@
 	Reset Alignment	Επαναφορά στοίχισης
 	Centre the gradient (offset 0, 0)	Κεντράρισμα διαβάθμισης (μετατόπιση 0, 0)
 	Refine Strokes	Πινελιές βελτίωσης
+	Edits	Επεξεργασίες
 # Gradient Editor window, opened from the options bar's gradient swatch.
 	Gradient Editor	Επεξεργασία διαβάθμισης
 	Gradient picker	Επιλογή διαβάθμισης
@@ -1626,6 +1627,10 @@
 	No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.	Δεν υπάρχει διαδρομή για δημιουργία επιλογής: σχεδιάστε μία με το εργαλείο Πένα (Pen Tool) ή επιλέξτε μία στο πλαίσιο Διαδρομές.
 	Cancel opening	Ακύρωση ανοίγματος
 	Cancelled opening {name}	Ακυρώθηκε το άνοιγμα του {name}
+	Damaged Photoshop document	Κατεστραμμένο έγγραφο Photoshop
+	The document “{name}” may be damaged.	Το έγγραφο «{name}» μπορεί να είναι κατεστραμμένο.
+	Some layers, pixels or masks could not be read. Do you want to continue opening it?	Δεν ήταν δυνατή η ανάγνωση ορισμένων επιπέδων, εικονοστοιχείων ή μασκών. Θέλετε να συνεχίσετε το άνοιγμα;
+	If you continue, saving over the original may permanently discard unreadable data. Save a copy to keep the original.	Αν συνεχίσετε, η αποθήκευση πάνω στο πρωτότυπο μπορεί να απορρίψει οριστικά τα μη αναγνώσιμα δεδομένα. Αποθηκεύστε ένα αντίγραφο για να διατηρήσετε το πρωτότυπο.
 	The document “{name}” does not have an embedded {mode} profile.	Το έγγραφο «{name}» δεν έχει ενσωματωμένο προφίλ {mode}.
 	The document “{name}” has an embedded color profile that does not match the current {mode} working space.	Το έγγραφο «{name}» έχει ενσωματωμένο χρωματικό προφίλ που δεν ταιριάζει με τον τρέχοντα χώρο εργασίας {mode}.
 	Working: {working}	Χώρος εργασίας: {working}
@@ -3932,6 +3937,19 @@ curves	Smooth	Εξομάλυνση
 	Sent to {printer}	Στάλθηκε στον {printer}
 	set in Print Settings…	ορίζεται στις ρυθμίσεις εκτύπωσης…
 	ICO is limited to 256 × 256 pixels	Το ICO περιορίζεται σε 256 × 256 εικονοστοιχεία
+# PhotoCraft release checks.
+	Check for Updates…	Έλεγχος ενημερώσεων…
+	PhotoCraft Updates	Ενημερώσεις PhotoCraft
+	Checking for updates…	Έλεγχος για ενημερώσεις…
+	Open the release page to choose an installer for your system.	Ανοίξτε τη σελίδα της έκδοσης για να επιλέξετε πρόγραμμα εγκατάστασης για το σύστημά σας.
+	Open Download Page	Άνοιγμα σελίδας λήψης
+	PhotoCraft is up to date.	Το PhotoCraft είναι ενημερωμένο.
+	Could not check for updates.	Δεν ήταν δυνατός ο έλεγχος ενημερώσεων.
+	Updates have not been checked yet.	Δεν έχει γίνει ακόμη έλεγχος ενημερώσεων.
+	Check Again	Νέος έλεγχος
+	Automatically Check for Updates	Αυτόματος έλεγχος ενημερώσεων
+	Installed version: {version}	Εγκατεστημένη έκδοση: {version}
+	PhotoCraft {version} is available.	Το PhotoCraft {version} είναι διαθέσιμο.
 # History panel › History Brush source (#2966)
 	Paints from the History panel's source state	Βάφει από την κατάσταση πηγής του πίνακα Ιστορικό
 	Sets the source for the history brush	Ορίζει την πηγή για το πινέλο ιστορικού
@@ -4062,6 +4080,14 @@ curves	Smooth	Εξομάλυνση
 
 # Graphics Adapter preference (#1885)
 	GPU adapter	Προσαρμογέας GPU
+
+# Styles panel: Import / Export Styles (.asl)
+	Import Styles…	Εισαγωγή στιλ…
+	Export Selected Styles…	Εξαγωγή επιλεγμένων στιλ…
+	Export Styles…	Εξαγωγή στιλ…
+	{file} is not a style library (.asl)	Το {file} δεν είναι βιβλιοθήκη στιλ (.asl)
+@plural	Imported {n} style from {file}|Imported {n} styles from {file}	Εισήχθη {n} στιλ από το {file}|Εισήχθησαν {n} στιλ από το {file}
+@plural	Exported {n} style to {file}|Exported {n} styles to {file}	Εξήχθη {n} στιλ στο {file}|Εξήχθησαν {n} στιλ στο {file}
 # Actions: a step dialog holds a suspended recording (#7365)
 	Confirm or cancel the open action step dialog first	Επιβεβαιώστε ή ακυρώστε πρώτα το ανοιχτό παράθυρο βήματος της ενέργειας
 	Pro Medium Gray	Pro μεσαίου γκρι
@@ -4070,14 +4096,30 @@ curves	Smooth	Εξομάλυνση
 	Pro Light Gray	Pro ανοιχτού γκρι
 	Pro Light	Φωτεινό Pro
 	Resize Windows to Fit	Προσαρμογή μεγέθους παραθύρων
-
 	EXR	EXR
-
 # Paragraph direction (TYPE-218-2)
 	Automatic paragraph direction	Αυτόματη κατεύθυνση παραγράφου
 	Left-to-right paragraph direction	Κατεύθυνση παραγράφου από αριστερά προς τα δεξιά
 	Right-to-left paragraph direction	Κατεύθυνση παραγράφου από δεξιά προς τα αριστερά
 	Not rendered: this adjustment ({key}) is kept as imported.	Δεν αποδίδεται: αυτή η προσαρμογή ({key}) διατηρείται όπως εισήχθη.
-
 # Print preview image (#8236)
 	Print preview image	Print preview image
+# Color panel menu: modes, copy commands and colour ramps (#6000)
+	Hue Cube	Κύβος απόχρωσης
+	Brightness Cube	Κύβος φωτεινότητας
+	Color Wheel	Χρωματικός τροχός
+	RGB Sliders	Ρυθμιστικά RGB
+	HSB Sliders	Ρυθμιστικά HSB
+	CMYK Sliders	Ρυθμιστικά CMYK
+	Lab Sliders	Ρυθμιστικά Lab
+	Web Color Sliders	Ρυθμιστικά χρωμάτων ιστού
+	Copy Color as HTML	Αντιγραφή χρώματος ως HTML
+	Copy Color's Hex Code	Αντιγραφή δεκαεξαδικού κωδικού χρώματος
+	RGB Spectrum	Φάσμα RGB
+	CMYK Spectrum	Φάσμα CMYK
+	Grayscale Ramp	Διαβάθμιση του γκρι
+	Current Colors	Τρέχοντα χρώματα
+	Make Ramp Web Safe	Μόνο χρώματα ιστού στη διαβάθμιση
+
+# Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
+	Target	Στόχος

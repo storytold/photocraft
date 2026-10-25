@@ -513,13 +513,13 @@ fn same_file_sees_through_other_names_for_one_file() {
     std::fs::write(&a, b"a").unwrap();
     std::fs::write(&c, b"c").unwrap();
     assert!(crate::file_cmds::same_file(&a, &a));
-    assert!(crate::file_cmds::same_file(&a, &format!("{dir}/./a.png")));
+    assert!(crate::file_cmds::same_file(&a, format!("{dir}/./a.png")));
     assert!(!crate::file_cmds::same_file(&a, &c));
     assert!(!crate::file_cmds::same_file(&a, &b), "a missing file is not the same file");
     std::fs::hard_link(&a, &b).unwrap();
     assert!(crate::file_cmds::same_file(&a, &b), "a hard link is the same file");
     #[cfg(windows)]
-    assert!(crate::file_cmds::same_file(&a, &format!("{dir}/A.PNG")), "NTFS names ignore case");
+    assert!(crate::file_cmds::same_file(&a, format!("{dir}/A.PNG")), "NTFS names ignore case");
 }
 
 #[test]
@@ -611,9 +611,34 @@ fn generator_naming_grammar() {
 }
 
 #[test]
+fn image_assets_needs_the_generator_preference() {
+    let dir = tmp("generator_pref");
+    let mut s = session(8);
+    let id = s.active().unwrap().active_layer.unwrap();
+    s.execute("layer.renameLayer", json!({"layer": id.0, "name": "logo.png"})).unwrap();
+    assert!(!s.prefs().plug_ins.generator_enabled, "off by default, as in Photoshop");
+    assert!(!s.is_enabled("file.generate.imageAssets"), "unavailable until it is enabled");
+    assert!(s.execute("file.generate.imageAssets", json!({"dir": dir})).is_err());
+
+    s.execute("prefs.set", json!({"path": "plugIns.generatorEnabled", "value": true})).unwrap();
+    assert!(s.is_enabled("file.generate.imageAssets"));
+    assert_eq!(s.execute("file.generate.imageAssets", json!({"dir": dir})).unwrap()["enabled"], true);
+    s.active_mut().unwrap().path = Some(format!("{dir}/doc.psd"));
+    assert!(crate::automate_cmds::document_saved(&mut s, 0).is_some(), "assets are written on save");
+
+    // Turning it off again takes the menu item away and stops the export, even for a document
+    // left switched on.
+    s.execute("prefs.set", json!({"path": "plugIns.generatorEnabled", "value": false})).unwrap();
+    assert!(!s.is_enabled("file.generate.imageAssets"));
+    assert!(crate::automate_cmds::document_saved(&mut s, 0).is_none(), "no assets while Generator is off");
+}
+
+#[test]
 fn image_assets_are_generated_now_and_on_save() {
     let dir = tmp("assets");
     let mut s = session(8);
+    // Preferences ▸ Plug-ins ▸ Generator enabled: the feature is opt-in.
+    s.execute("prefs.set", json!({"path": "plugIns.generatorEnabled", "value": true})).unwrap();
     let id = s.active().unwrap().active_layer.unwrap();
     s.execute("layer.renameLayer", json!({"layer": id.0, "name": "logo.png, 50% small/logo.gif, logo.jpg80%"})).unwrap();
     let r = s.execute("file.generate.imageAssets", json!({"dir": dir})).unwrap();
@@ -643,6 +668,74 @@ fn image_assets_are_generated_now_and_on_save() {
     assert!(errors.is_empty(), "{errors:?}");
     assert_eq!(files.iter().map(|p| std::path::PathBuf::from(p.as_str())).collect::<Vec<_>>(), vec![std::path::Path::new(&dir).join("icon@2x.png")]);
     assert_eq!(decode(&files[0]).dimensions(), (128, 80));
+}
+
+/// Photoshop's Generator exports an artboard named like an asset at the board's size, transparent
+/// edges included (generator-assets renderer: the canvas bounds are the artboard's), with no
+/// preference. Layers inside the board are still trimmed to their pixels.
+#[test]
+fn image_assets_keep_full_artboards() {
+    let dir = tmp("asset-artboards");
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 64, "height": 48, "name": "boards.psd", "background": "transparent"})).unwrap();
+    s.edit("board", |doc, _| {
+        let fmt = doc.pixel_format();
+        let mut logo = Layer::raster("logo.png", fmt);
+        logo.surface_mut().unwrap().fill_rect(Rect::new(12, 10, 20, 16), &photocraft_raster::from_rgba(&fmt, [1.0, 0.0, 0.0, 1.0]));
+        let board =
+            photocraft_doc::Artboard { rect: Rect::new(4, 6, 44, 36), background: photocraft_doc::ArtboardBackground::Transparent, preset: String::new() };
+        let group = photocraft_doc::Group { children: vec![logo], expanded: true, artboard: Some(board) };
+        doc.layers = vec![Layer::new("board.png", LayerContent::Group(group))];
+        Ok(())
+    })
+    .unwrap();
+
+    s.execute("prefs.set", json!({"path": "plugIns.generatorEnabled", "value": true})).unwrap();
+    let r = s.execute("file.generate.imageAssets", json!({"on": true, "dir": dir})).unwrap();
+    assert!(r["errors"].as_array().unwrap().is_empty(), "{r}");
+    let board = decode(&format!("{dir}/board.png"));
+    assert_eq!(board.dimensions(), (40, 30), "the whole board, not its trimmed pixels");
+    let px = board.to_rgba8();
+    let at = |x: usize, y: usize| &px[(y * 40 + x) * 4..(y * 40 + x) * 4 + 4];
+    assert_eq!(at(0, 0)[3], 0, "the board's empty corner stays transparent");
+    assert_eq!(at(39, 29)[3], 0);
+    // The logo keeps its place on the board: document (12, 10) is board (8, 4).
+    assert!(at(8, 4)[0] > 250 && at(8, 4)[3] == 255, "{:?}", at(8, 4));
+    assert_eq!(at(7, 4)[3], 0);
+    assert_eq!(decode(&format!("{dir}/logo.png")).dimensions(), (8, 6), "a layer on the board is still trimmed");
+}
+
+/// An artboard asset with nothing on the board (empty, or its contents all outside it) is
+/// refused like an empty layer, not written as a blank board: Photoshop's Generator refuses a
+/// zero-bounds pixmap before it pads to the board.
+#[test]
+fn image_assets_refuse_empty_artboards() {
+    let dir = tmp("asset-empty-artboards");
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 64, "height": 48, "name": "boards.psd", "background": "transparent"})).unwrap();
+    s.edit("boards", |doc, _| {
+        let fmt = doc.pixel_format();
+        let mut outside = Layer::raster("outside", fmt);
+        outside.surface_mut().unwrap().fill_rect(Rect::new(50, 40, 60, 46), &photocraft_raster::from_rgba(&fmt, [1.0, 0.0, 0.0, 1.0]));
+        let board = |x0| photocraft_doc::Artboard {
+            rect: Rect::new(x0, 0, x0 + 20, 20),
+            background: photocraft_doc::ArtboardBackground::Transparent,
+            preset: String::new(),
+        };
+        let empty = photocraft_doc::Group { children: vec![], expanded: true, artboard: Some(board(0)) };
+        let off = photocraft_doc::Group { children: vec![outside], expanded: true, artboard: Some(board(24)) };
+        doc.layers = vec![Layer::new("empty.png", LayerContent::Group(empty)), Layer::new("off.png", LayerContent::Group(off))];
+        Ok(())
+    })
+    .unwrap();
+    s.execute("prefs.set", json!({"path": "plugIns.generatorEnabled", "value": true})).unwrap();
+    let r = s.execute("file.generate.imageAssets", json!({"on": true, "dir": dir})).unwrap();
+    assert_eq!(r["files"], json!([]), "{r}");
+    let errors = r["errors"].as_array().unwrap();
+    assert_eq!(errors.len(), 2, "{r}");
+    assert!(errors.iter().all(|e| e["error"].as_str().unwrap().contains("the layer is empty")), "{r}");
+    assert!(!std::path::Path::new(&format!("{dir}/empty.png")).exists());
+    assert!(!std::path::Path::new(&format!("{dir}/off.png")).exists());
 }
 
 /// #6614: two layers, or two default variants, naming one file never overwrite each other: the

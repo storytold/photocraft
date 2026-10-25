@@ -1582,6 +1582,11 @@ cameraRaw	Shadows	Vùng tối
 	Esc to cancel	Esc để hủy
 	Cancel opening	Hủy mở tệp
 	Cancelled opening {name}	Đã hủy mở {name}
+	Damaged Photoshop document	Tài liệu Photoshop bị hỏng
+	The document “{name}” may be damaged.	Tài liệu “{name}” có thể đã bị hỏng.
+	Some layers, pixels or masks could not be read. Do you want to continue opening it?	Không thể đọc một số lớp, pixel hoặc mặt nạ. Bạn có muốn tiếp tục mở không?
+	If you continue, saving over the original may permanently discard unreadable data. Save a copy to keep the original.	Nếu tiếp tục, việc lưu đè lên bản gốc có thể loại bỏ vĩnh viễn dữ liệu không đọc được. Hãy lưu một bản sao để giữ bản gốc.
+	Continue	Tiếp tục
 	The document “{name}” does not have an embedded {mode} profile.	Tài liệu “{name}” không có hồ sơ {mode} nhúng.
 	The document “{name}” has an embedded color profile that does not match the current {mode} working space.	Tài liệu “{name}” có hồ sơ màu nhúng không khớp với không gian làm việc {mode} hiện tại.
 	Working: {working}	Không gian làm việc: {working}
@@ -3591,6 +3596,7 @@ cameraData	Lens	Ống kính
 	Decontaminate	Khử nhiễm màu
 	Refine Edge	Tinh chỉnh cạnh
 	Refine Strokes	Tinh chỉnh nét
+	Edits	Chỉnh sửa
 	New Document With Mask	Tài liệu mới có mặt nạ
 	New Layer With Mask	Lớp mới có mặt nạ
 	Convert Point Tool	Công cụ Chuyển đổi điểm
@@ -3696,6 +3702,18 @@ curves	Smooth	Làm mượt
 	Sent to {printer}	Đã gửi tới {printer}
 	set in Print Settings…	đặt trong thiết lập in…
 	ICO is limited to 256 × 256 pixels	ICO giới hạn ở 256 × 256 pixel
+	Check for Updates…	Kiểm tra bản cập nhật…
+	PhotoCraft Updates	Bản cập nhật PhotoCraft
+	Checking for updates…	Đang kiểm tra bản cập nhật…
+	Open the release page to choose an installer for your system.	Mở trang phát hành để chọn bộ cài đặt cho hệ thống của bạn.
+	Open Download Page	Mở trang tải xuống
+	PhotoCraft is up to date.	PhotoCraft đã được cập nhật.
+	Could not check for updates.	Không thể kiểm tra bản cập nhật.
+	Updates have not been checked yet.	Chưa kiểm tra bản cập nhật.
+	Check Again	Kiểm tra lại
+	Automatically Check for Updates	Tự động kiểm tra bản cập nhật
+	Installed version: {version}	Phiên bản đã cài: {version}
+	PhotoCraft {version} is available.	PhotoCraft {version} đã có sẵn.
 # History panel › History Brush source (#2966)
 	Paints from the History panel's source state	Vẽ từ trạng thái nguồn của bảng Lịch sử
 	Sets the source for the history brush	Đặt nguồn cho cọ lịch sử
@@ -3854,6 +3872,14 @@ curves	Smooth	Làm mượt
 
 # Graphics Adapter preference (#1885)
 	GPU adapter	Bộ điều hợp GPU
+
+# Styles panel: Import / Export Styles (.asl)
+	Import Styles…	Nhập kiểu…
+	Export Selected Styles…	Xuất các kiểu đã chọn…
+	Export Styles…	Xuất kiểu…
+	{file} is not a style library (.asl)	{file} không phải là thư viện kiểu (.asl)
+@plural	Imported {n} style from {file}|Imported {n} styles from {file}	Đã nhập {n} kiểu từ {file}
+@plural	Exported {n} style to {file}|Exported {n} styles to {file}	Đã xuất {n} kiểu sang {file}
 # Actions: a step dialog holds a suspended recording (#7365)
 	Confirm or cancel the open action step dialog first	Hãy xác nhận hoặc hủy hộp thoại bước hành động đang mở trước
 	Pro Medium Gray	Pro xám vừa
@@ -3862,14 +3888,31 @@ curves	Smooth	Làm mượt
 	Pro Light Gray	Pro xám nhạt
 	Pro Light	Pro sáng
 	Resize Windows to Fit	Đổi cỡ cửa sổ cho vừa ảnh
-
 	EXR	EXR
-
 # Paragraph direction (TYPE-218-2)
 	Automatic paragraph direction	Hướng đoạn văn tự động
 	Left-to-right paragraph direction	Hướng đoạn văn từ trái sang phải
 	Right-to-left paragraph direction	Hướng đoạn văn từ phải sang trái
 	Not rendered: this adjustment ({key}) is kept as imported.	Không được kết xuất: điều chỉnh này ({key}) được giữ nguyên như khi nhập.
-
 # Print preview image (#8236)
 	Print preview image	Print preview image
+# Color panel menu: modes, copy commands and colour ramps (#6000)
+	Hue Cube	Khối sắc màu
+	Brightness Cube	Khối độ sáng
+	Color Wheel	Bánh xe màu
+	Grayscale Slider	Thanh trượt thang xám
+	RGB Sliders	Thanh trượt RGB
+	HSB Sliders	Thanh trượt HSB
+	CMYK Sliders	Thanh trượt CMYK
+	Lab Sliders	Thanh trượt Lab
+	Web Color Sliders	Thanh trượt màu web
+	Copy Color as HTML	Sao chép màu dạng HTML
+	Copy Color's Hex Code	Sao chép mã hex của màu
+	RGB Spectrum	Phổ RGB
+	CMYK Spectrum	Phổ CMYK
+	Grayscale Ramp	Dải thang xám
+	Current Colors	Màu hiện tại
+	Make Ramp Web Safe	Giới hạn dải màu ở màu web
+
+# Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
+	Aspect Ratio	Tỷ lệ khung hình

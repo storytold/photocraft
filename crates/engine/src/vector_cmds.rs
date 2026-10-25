@@ -506,7 +506,8 @@ pub(crate) fn shift_shape(doc: &Document, sh: &mut ShapeLayer, dx: f64, dy: f64)
     let canvas = doc.bounds();
     let inside = sh.cache.as_ref().is_some_and(|c| {
         let b = photocraft_compose::bounds::content_bounds(c);
-        b.is_empty() || (b.x0 > canvas.x0 && b.y0 > canvas.y0 && b.x1 < canvas.x1 && b.y1 < canvas.y1)
+        // An empty cache can be an off-canvas shape moving back into view.
+        !b.is_empty() && b.x0 > canvas.x0 && b.y0 > canvas.y0 && b.x1 < canvas.x1 && b.y1 < canvas.y1
     });
     let stroke_pad = sh.stroke.as_ref().filter(|s| s.opacity > 0.0).map_or(0.0, |s| f64::from(s.width.ceil()));
     let stays_inside = sh.path.control_bounds().is_some_and(|(x0, y0, x1, y1)| {

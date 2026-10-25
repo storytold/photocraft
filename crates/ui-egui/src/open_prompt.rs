@@ -1,8 +1,9 @@
-//! Ask When Opening (Edit › Color Settings): a file whose embedded profile doesn't match the
-//! working space (or that has none) is held back while a prompt asks what to do, as Photoshop
-//! does: one prompt at a time, naming its file, before that file opens. OK applies the answer to
-//! that file and opens it, then asks about the next; Cancel opens neither it nor the files still
-//! to come. Files that finish reading while a prompt is up wait their turn, so they open in order.
+//! Interactive opening confirmations: damaged PSD data and Color Settings questions.
+//! A decoded file is held back while its standard, agent-accessible dialog asks what to do.
+//! Damage confirmation comes first; Continue admits the file normally once any profile question
+//! is answered, with no persistent save restriction. Cancelling damage discards just that file;
+//! cancelling a profile question retains its existing behaviour of cancelling the whole queue.
+//! Files that finish reading while a prompt is up wait their turn.
 
 use std::sync::Arc;
 
@@ -13,12 +14,18 @@ use crate::PhotocraftApp;
 
 /// The field that marks a prompt as this module's.
 const FIELD: &str = "__heldOpen";
+/// A regular dialog: agents see it in `ui.inspect` and answer through
+/// `ui.dialog.confirm` / `ui.dialog.cancel`, just like the profile prompt.
+const DAMAGE_FIELD: &str = "__psdDamagedOpen";
 
 /// A file read and decoded, waiting to open.
 pub struct Held {
     pub doc: Document,
     /// The source is read-only (an Affinity file): Save doesn't write back to it.
     pub read_only: bool,
+    /// Ask whether to continue before adding a damaged PSD or showing its profile prompt.
+    /// Discarded after the answer: it does not become a document or save restriction.
+    pub damage_pending: bool,
     pub name: String,
     pub path: Option<String>,
     pub warnings: Vec<String>,
@@ -48,6 +55,12 @@ pub fn arrive(app: &mut PhotocraftApp, held: Held) {
 /// Opens queued files in order until one needs its prompt, which is shown if it isn't yet.
 fn advance(app: &mut PhotocraftApp) {
     while let Some(front) = app.held_opens.front() {
+        if front.damage_pending {
+            if !app.ui.dialogs.iter().any(|d| owns_damage(&d.fields)) {
+                show_damage(app);
+            }
+            return;
+        }
         if front.question.is_some() {
             if !app.ui.dialogs.iter().any(|d| d.fields.contains_key(FIELD)) {
                 show(app);
@@ -112,6 +125,9 @@ pub fn owns(fields: &serde_json::Map<String, Value>) -> bool {
 /// The prompt's answer: `Some(action)` (OK) opens the first queued file with it and moves on to
 /// the next; `None` (Cancel) drops every queued file and stops the reads still running.
 pub fn answer(app: &mut PhotocraftApp, action: Option<&str>) -> Result<Value, String> {
+    if app.held_opens.front().is_some_and(|h| h.damage_pending) {
+        return Err("answer the damaged PSD confirmation first".into());
+    }
     let Some(action) = action else {
         let dropped = app.held_opens.len();
         let name = app.held_opens.front().map(|h| h.name.clone()).unwrap_or_default();
@@ -134,6 +150,9 @@ pub fn answer(app: &mut PhotocraftApp, action: Option<&str>) -> Result<Value, St
 /// already waiting with a mismatch in the same mode were asked before that and get the same
 /// answer; any other question still asks.
 pub fn answer_remembering(app: &mut PhotocraftApp, action: &str) -> Result<Value, String> {
+    if app.held_opens.front().is_some_and(|h| h.damage_pending) {
+        return Err("answer the damaged PSD confirmation first".into());
+    }
     let Some(key) = app.held_opens.front().and_then(|h| policy_key(h.doc.mode)) else { return answer(app, Some(action)) };
     let policy = match action {
         "convert" => "convert",
@@ -141,7 +160,9 @@ pub fn answer_remembering(app: &mut PhotocraftApp, action: &str) -> Result<Value
         _ => "preserve",
     };
     app.run("edit.colorSettings", json!({key: policy, "askOnMismatch": false}))?;
-    let same = |h: &Held| policy_key(h.doc.mode) == Some(key) && h.question.as_ref().is_some_and(|q| q.get("missing").and_then(Value::as_bool) != Some(true));
+    let same = |h: &Held| {
+        !h.damage_pending && policy_key(h.doc.mode) == Some(key) && h.question.as_ref().is_some_and(|q| q.get("missing").and_then(Value::as_bool) != Some(true))
+    };
     let Some(held) = app.held_opens.pop_front() else { return Err("no file is waiting to open".into()) };
     let r = open(app, held, Some(action));
     while app.held_opens.front().is_some_and(same) {
@@ -154,10 +175,70 @@ pub fn answer_remembering(app: &mut PhotocraftApp, action: &str) -> Result<Value
     r
 }
 
+/// Whether the fields belong to the damage confirmation (not the profile prompt).
+pub(crate) fn owns_damage(fields: &serde_json::Map<String, Value>) -> bool {
+    fields.contains_key(DAMAGE_FIELD)
+}
+
+/// Shows the standard agent-visible confirmation for the first damaged PSD
+/// waiting in the open queue, including its decoding warnings.
+fn show_damage(app: &mut PhotocraftApp) {
+    let Some(front) = app.held_opens.front().filter(|h| h.damage_pending) else { return };
+    let message = format!(
+        "{}\n\n{}\n\n{}",
+        crate::i18n::fmt(tl!("The document “{name}” may be damaged."), &[("name", &front.name)]),
+        tl!("Some layers, pixels or masks could not be read. Do you want to continue opening it?"),
+        tl!("If you continue, saving over the original may permanently discard unreadable data. Save a copy to keep the original."),
+    );
+    let fields = [
+        (DAMAGE_FIELD.into(), json!(true)),
+        ("__label".into(), json!("Damaged Photoshop document")),
+        ("name".into(), json!(front.name)),
+        ("message".into(), json!(message)),
+        ("warnings".into(), json!(front.warnings)),
+    ]
+    .into_iter()
+    .collect();
+    app.ui.open_dialog(crate::state::DialogKind::Command, fields);
+}
+
+/// Body of the standard modal; the same fields are visible to automation.
+pub(crate) fn damage_body(ui: &mut egui::Ui, fields: &serde_json::Map<String, Value>) {
+    ui.label(fields.get("message").and_then(Value::as_str).unwrap_or_default());
+    if let Some(warnings) = fields.get("warnings").and_then(Value::as_array) {
+        egui::ScrollArea::vertical().max_height(140.0).show(ui, |ui| {
+            for warning in warnings.iter().filter_map(Value::as_str) {
+                ui.label(warning);
+            }
+        });
+    }
+}
+
+/// Continue or discard this file only, then move the queue forward. Accepting does not
+/// mark the document read-only: Save, Export, scripts and web downloads work normally.
+pub(crate) fn answer_damage(app: &mut PhotocraftApp, accept: bool) -> Result<Value, String> {
+    let Some(front) = app.held_opens.front_mut().filter(|h| h.damage_pending) else {
+        return Err("no damaged PSD is waiting for confirmation".into());
+    };
+    let name = front.name.clone();
+    if accept {
+        front.damage_pending = false;
+    } else {
+        app.held_opens.pop_front();
+        app.ui.status = crate::i18n::fmt(tl!("Cancelled opening {name}"), &[("name", &name)]);
+        app.ui.status_error = false;
+    }
+    advance(app);
+    Ok(json!({"name": name, "continued": accept}))
+}
+
 /// Opens a queued file, applying `action` (the prompt's answer) or else the Color Settings
 /// policy, then does what any open does afterwards.
 fn open(app: &mut PhotocraftApp, held: Held, action: Option<&str>) -> Result<Value, String> {
-    let Held { mut doc, read_only, name, path, warnings, bytes, slot, question, policy_applied } = held;
+    if held.damage_pending {
+        return Err("damaged PSD cannot be opened before confirmation".into());
+    }
+    let Held { mut doc, read_only, damage_pending: _, name, path, warnings, bytes, slot, question, policy_applied } = held;
     let index = if question.is_some() || policy_applied {
         if let Some(action) = action
             && let Err(e) = app.session.color.resolve_open(&mut doc, action)

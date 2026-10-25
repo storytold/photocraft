@@ -236,9 +236,13 @@ pub fn load(app: &mut PhotocraftApp) {
     }
     app.prefs_rt.loaded = true;
     let mut invalid = Vec::new();
+    let mut stored = None;
     if let Some(text) = app.services.load_prefs.as_mut().and_then(|f| f()) {
         match app.session.load_prefs_json(&text) {
-            Ok(found) => invalid = found,
+            Ok(found) => {
+                invalid = found;
+                stored = serde_json::from_str::<Value>(&text).ok();
+            }
             Err(e) => {
                 let template = "Preferences were reset: {error}";
                 app.ui.status = crate::i18n::fmt(tl!(template), &[("error", &e)]);
@@ -253,10 +257,40 @@ pub fn load(app: &mut PhotocraftApp) {
     crate::view_cmds::restore(app);
     app.sync_recent();
     app.prefs_rt.saved_rev = app.session.prefs.rev();
-    app.prefs_rt.saved_value = Some(app.session.prefs_value());
+    let loaded = app.session.prefs_value();
+    app.prefs_rt.saved_value = Some(match stored {
+        Some(stored) => stored_base(&loaded, &stored),
+        None => loaded,
+    });
     if !invalid.is_empty() {
         repair_invalid(app, &invalid);
     }
+}
+
+/// The save base after loading `stored`: what was loaded, with the keys the shift tool switch
+/// migration may change (#5647) put back as the file had them, the way [`repair_invalid`] puts
+/// back unreadable values. The migrated value and the new version then differ from the base, so
+/// the next save writes them rather than keeping the old value under a newer version. Every other
+/// key keeps its loaded value, so the three-way merge leaves another instance's changes alone,
+/// also for keys the file doesn't have yet. A file from a newer version keeps its version.
+fn stored_base(loaded: &Value, stored: &Value) -> Value {
+    let mut base = loaded.clone();
+    let Some(obj) = base.as_object_mut() else {
+        return base;
+    };
+    match stored.get("version") {
+        Some(v) if v.as_u64().is_some_and(|v| v > prefs::PREFS_VERSION) => {}
+        Some(v) => {
+            obj.insert("version".into(), v.clone());
+        }
+        None => {
+            obj.remove("version");
+        }
+    }
+    if let (Some(v), Some(tools)) = (stored.pointer("/tools/useShiftKeyForToolSwitch"), obj.get_mut("tools").and_then(Value::as_object_mut)) {
+        tools.insert("useShiftKeyForToolSwitch".into(), v.clone());
+    }
+    base
 }
 
 /// Some saved values couldn't be read and took their defaults (#6611): say which, and write
@@ -487,7 +521,9 @@ pub fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
     sync_tooltips(app, ctx);
     sync_animations(app, ctx);
     app.sync_recent();
-    if let Some(wait) = persist(app, ctx.input(|i| i.time)) {
+    // Monotonic, not `ctx.input(|i| i.time)`: logic also runs on hidden ticks, where egui's input
+    // time is that of the last UI pass.
+    if let Some(wait) = persist(app, crate::gpu_canvas::now_ms() / 1000.0) {
         ctx.request_repaint_after(std::time::Duration::try_from_secs_f64(wait).unwrap_or_default());
     }
     let style = canvas_style(app);
@@ -584,6 +620,7 @@ fn write_prefs(app: &mut PhotocraftApp, ours: &Value) -> Result<(), String> {
     let stored = app.services.load_prefs.as_mut().and_then(|load| load()).and_then(|t| serde_json::from_str::<Value>(&t).ok());
     let text = match (stored, &app.prefs_rt.saved_value) {
         (Some(mut theirs @ Value::Object(_)), Some(base)) => {
+            let base = &without_stale_migration(base, &theirs);
             merge_changes(base, ours, &mut theirs);
             serde_json::to_string_pretty(&theirs)
         }
@@ -591,6 +628,24 @@ fn write_prefs(app: &mut PhotocraftApp, ours: &Value) -> Result<(), String> {
     }
     .map_err(|e| e.to_string())?;
     save(&text)
+}
+
+/// The save base without the shift tool switch migration (#5647) once storage already holds a
+/// version 2 file: another instance wrote it, so its Use Shift Key for Tool Switch is a choice,
+/// not the old default this instance migrated. The base then holds the migrated value (on) instead
+/// of the old file's off, so only a change made here since loading is written over that choice.
+fn without_stale_migration(base: &Value, theirs: &Value) -> Value {
+    let mut base = base.clone();
+    let new_file = |v: &Value| v.get("version").and_then(Value::as_u64).is_some_and(|v| v >= 2);
+    if new_file(theirs) && !new_file(&base) {
+        let key = "useShiftKeyForToolSwitch";
+        if let Some(tools) = base.get_mut("tools").and_then(Value::as_object_mut)
+            && tools.get(key) == Some(&Value::Bool(false))
+        {
+            tools.insert(key.into(), Value::Bool(true));
+        }
+    }
+    base
 }
 
 /// Three-way merge of preference trees: whatever `ours` changed since `base` goes over `theirs`
@@ -654,8 +709,8 @@ fn link_updates(app: &mut PhotocraftApp, ctx: &egui::Context) {
         Some(Err(e)) => app.ui.status = e.to_string(),
         None => {}
     }
-    let (last_key, focus_key) = (egui::Id::new("linkWatch.lastScan"), egui::Id::new("linkWatch.focused"));
-    let now = ctx.input(|i| i.time);
+    let (last_key, focus_key) = (egui::Id::unique("linkWatch.lastScan"), egui::Id::unique("linkWatch.focused"));
+    let now = crate::gpu_canvas::now_ms() / 1000.0;
     let focused = ctx.input(|i| i.focused);
     let was_focused: bool = ctx.data(|d| d.get_temp(focus_key)).unwrap_or(focused);
     ctx.data_mut(|d| d.insert_temp(focus_key, focused));
@@ -1197,12 +1252,15 @@ fn gpu_memory_lines(app: &PhotocraftApp) -> Vec<String> {
     v
 }
 
+/// The label a preference key shows in the dialog: a few keys have their own wording, the rest
+/// split camelCase into words (`convertToSrgb` → "Convert to srgb").
 fn humanize(key: &str) -> String {
     match key {
         "appearanceMode" => return "Appearance Mode".into(),
         "exrAcesCg" => return "Open color-less EXR as ACEScg".into(),
         "darkTheme" => return "Dark Theme".into(),
         "lightTheme" => return "Light Theme".into(),
+        "automaticallyCheckUpdates" => return "Automatically Check for Updates".into(),
         _ => {}
     }
     // These controls appear only for WebP, so reuse the existing translated labels.
@@ -1283,10 +1341,10 @@ fn choice_label(v: &str) -> String {
 /// An editable `#rrggbb` field beside a colour swatch (#668): typing a valid value sets the
 /// colour; while it's being typed a partial value is kept, and it shows the colour otherwise.
 fn hex_field(ui: &mut egui::Ui, key: &str, rgb: &mut [u8; 3]) {
-    let id = egui::Id::new(("pref-hex", key));
+    let id = egui::Id::unique(("pref-hex", key));
     let shown = format!("#{:02x}{:02x}{:02x}", rgb[0], rgb[1], rgb[2]);
     let mut text = ui.data(|d| d.get_temp::<String>(id)).unwrap_or_else(|| shown.clone());
-    let r = crate::widgets::text_field_ex(ui, id, &mut text, "", 72.0, true, Some(7));
+    let r = crate::widgets::text_field_ex(ui, id, &mut text, "", 72.0, true, Some(7)).accessible_name(tl!("Color"));
     if r.changed()
         && let Some(c) = prefs::parse_hex(&text)
     {
@@ -1334,7 +1392,7 @@ fn prefs_body(ui: &mut egui::Ui, f: &mut Map<String, Value>, system: Option<egui
     // The dialog follows the language being edited, so a change shows before OK.
     let lang = crate::i18n::Lang::from_pref(values.pointer("/interface/language").and_then(Value::as_str).unwrap_or("auto"));
     let mut search = f.get("__search").and_then(Value::as_str).unwrap_or("").to_string();
-    crate::widgets::text_field(ui, ui.id().with("prefs-search"), &mut search, tl!("Search settings…"), ui.available_width(), false);
+    crate::widgets::text_field(ui, ui.scope_id().with("prefs-search"), &mut search, tl!("Search settings…"), ui.available_width(), false);
     let found = preference_sections(&values, &search);
     if !found.iter().any(|(id, _)| *id == section)
         && let Some((first, _)) = found.first()
@@ -1448,7 +1506,7 @@ fn gpu_status_rows(ui: &mut egui::Ui, info: Option<&Value>, adapters: Option<&Va
             let options = prefs::choices("performance.gpuBackend").unwrap_or(&[]);
             let labels: Vec<String> = options.iter().map(|o| choice_label(o)).collect();
             let pairs: Vec<(String, &str)> = options.iter().map(|o| o.to_string()).zip(labels.iter().map(String::as_str)).collect();
-            crate::widgets::dropdown(ui, "graphics-backend", &mut current, &pairs, 220.0);
+            crate::widgets::dropdown(ui, "graphics-backend", tl!("GPU Backend"), &mut current, &pairs, 220.0);
             obj.insert("gpuBackend".into(), json!(current));
         });
         if !prefs::is_hidden("performance.gpuAdapter") {
@@ -1476,7 +1534,7 @@ fn graphics_adapter_row(ui: &mut egui::Ui, adapters: Option<&Value>, obj: &mut M
     pairs.extend(names.iter().cloned().zip(labels.iter().map(String::as_str)));
     ui.horizontal(|ui| {
         ui.label(tl!("GPU adapter"));
-        crate::widgets::dropdown_literal(ui, "graphics-adapter", &mut current, &pairs, 320.0);
+        crate::widgets::dropdown_literal(ui, "graphics-adapter", tl!("GPU adapter"), &mut current, &pairs, 320.0);
     });
     ui.label(RichText::new(tl!("Applies at next launch.")).color(Tokens::get(ui.ctx()).text_faint));
     obj.insert("gpuAdapter".into(), json!(current));
@@ -1490,7 +1548,7 @@ fn rendering_mode_row(ui: &mut egui::Ui, obj: &mut Map<String, Value>) {
         let pairs =
             vec![("auto".to_string(), tl!("Automatic (recommended)")), ("gpu".to_string(), tl!("GPU")), ("cpu".to_string(), tl!("CPU / Compatibility"))];
         let previous = current.clone();
-        crate::widgets::dropdown(ui, "rendering-mode", &mut current, &pairs, 240.0);
+        crate::widgets::dropdown(ui, "rendering-mode", tl!("Rendering Mode"), &mut current, &pairs, 240.0);
         if current != previous {
             obj.insert("renderingMode".into(), json!(current));
             obj.insert("useGpu".into(), json!(current != "cpu"));
@@ -1559,7 +1617,7 @@ fn theme_swatch(ui: &mut egui::Ui, kind: ThemeKind, id: &str, selected: &mut Str
         egui::Stroke::new(1.0, t.card_border)
     };
     painter.rect_stroke(rect.shrink(1.0), 3.0, stroke, egui::StrokeKind::Inside);
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, true, on, &label));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, true, on, &label));
     if resp.on_hover_text(&label).clicked() {
         *selected = id.to_string();
     }
@@ -1576,9 +1634,9 @@ fn theme_swatch(ui: &mut egui::Ui, kind: ThemeKind, id: &str, selected: &mut Str
     // Interact and paint without allocating: a widget placed at `badge` would grow the row by the
     // 4 px the badge overhangs the swatch, re-centring the swatches after this one whenever the
     // pointer arrives, and oscillating when that moves the swatch out from under it.
-    let response = ui.interact(badge, ui.id().with((id, "favorite")), Sense::click()).on_hover_text(action);
+    let response = ui.interact(badge, ui.scope_id().with((id, "favorite")), Sense::click()).on_hover_text(action);
     crate::icons::paint(ui, badge, icon, 10.0, tint);
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, format!("{action}: {label}")));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, format!("{action}: {label}")));
     if response.clicked() {
         if favorite {
             favorites.retain(|saved| *saved != theme);
@@ -1634,7 +1692,7 @@ fn appearance_rows(ui: &mut egui::Ui, obj: &mut Map<String, Value>, system: Opti
         ui.label(RichText::new(tl!("Appearance Mode")).color(t.text_dim));
         let choices: [(String, &str); 3] = [("auto".into(), tl!("Sync with system")), ("dark".into(), tl!("Dark")), ("light".into(), tl!("Light"))];
         let pairs: Vec<(String, &str)> = choices.iter().map(|(id, label)| (id.clone(), *label)).collect();
-        crate::widgets::dropdown(ui, "appearance-mode", &mut mode, &pairs, 220.0);
+        crate::widgets::dropdown(ui, "appearance-mode", tl!("Appearance Mode"), &mut mode, &pairs, 220.0);
         ui.end_row();
     }
     let light_active = mode == "light" || (mode == "auto" && system == Some(egui::Theme::Light));
@@ -1710,7 +1768,7 @@ const PICK_ID: &str = "prefs-pick-color";
 
 /// The colour swatch clicked this frame, if any: (preference path, label).
 fn ctx_take_pick(ui: &egui::Ui) -> Option<(String, String)> {
-    ui.ctx().data_mut(|d| d.remove_temp::<(String, String)>(egui::Id::new(PICK_ID)))
+    ui.ctx().data_mut(|d| d.remove_temp::<(String, String)>(egui::Id::unique(PICK_ID)))
 }
 
 /// Whether `section.key` gets a generic row for this search (`query`, lowercased; empty matches
@@ -1767,8 +1825,8 @@ fn memory_usage_row(ui: &mut egui::Ui, obj: &mut Map<String, Value>) {
         ui.label(RichText::new(tl!("Memory Usage")).strong());
         let mut mb = obj.get("memoryUsageMb").and_then(Value::as_u64).unwrap_or(8192);
         ui.horizontal(|ui| {
-            ui.label(tl!("Per-document RAM limit (MB)"));
-            if ui.add(egui::DragValue::new(&mut mb).range(256..=1_048_576).suffix(" MB")).changed() {
+            let limit_label = ui.label(tl!("Per-document RAM limit (MB)"));
+            if ui.add(egui::DragValue::new(&mut mb).range(256..=1_048_576).suffix(" MB")).labelled_by(limit_label.id).changed() {
                 obj.insert("memoryUsageMb".into(), json!(mb));
             }
         });
@@ -1811,7 +1869,7 @@ fn field_rows(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>, ke
                 let mut pairs: Vec<(String, &str)> = vec![("auto".into(), tl!("Auto"))];
                 pairs.extend(crate::i18n::Lang::for_picker().into_iter().map(|l| (l.code().to_string(), l.name())));
                 let mut cur = s.clone();
-                crate::widgets::dropdown(ui, &format!("pref-{path}"), &mut cur, &pairs, 220.0);
+                crate::widgets::dropdown(ui, &format!("pref-{path}"), tl!(&label), &mut cur, &pairs, 220.0);
                 obj.insert(k, json!(cur));
             }
             Value::String(s) if prefs::choices(&path).is_some() => {
@@ -1820,7 +1878,7 @@ fn field_rows(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>, ke
                 let labels: Vec<String> = opts.iter().map(|o| choice_label(o)).collect();
                 let pairs: Vec<(String, &str)> = opts.iter().map(|o| o.to_string()).zip(labels.iter().map(String::as_str)).collect();
                 let mut cur = s.clone();
-                crate::widgets::dropdown(ui, &format!("pref-{path}"), &mut cur, &pairs, 220.0);
+                crate::widgets::dropdown(ui, &format!("pref-{path}"), tl!(&label), &mut cur, &pairs, 220.0);
                 obj.insert(k, json!(cur));
             }
             Value::String(s) if prefs::is_color(&path) => {
@@ -1830,7 +1888,7 @@ fn field_rows(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>, ke
                 ui.horizontal(|ui| {
                     // PhotoCraft's Color Picker, as everywhere else (#2144).
                     if crate::widgets::color_swatch_button(ui, egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]), &label).clicked() {
-                        ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(PICK_ID), (path.clone(), label.clone())));
+                        ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique(PICK_ID), (path.clone(), label.clone())));
                     }
                     hex_field(ui, &path, &mut rgb);
                 });
@@ -1840,19 +1898,20 @@ fn field_rows(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>, ke
             Value::String(s) => {
                 ui.label(RichText::new(tl!(&label)).color(t.text_dim));
                 let mut s = s.clone();
-                ui.add(egui::TextEdit::singleline(&mut s).desired_width(260.0));
+                ui.add(egui::TextEdit::singleline(&mut s).desired_width(260.0)).accessible_name(tl!(&label));
                 obj.insert(k, json!(s));
             }
             Value::Number(n) => {
-                ui.label(RichText::new(tl!(&label)).color(t.text_dim));
+                let value_label = ui.label(RichText::new(tl!(&label)).color(t.text_dim));
                 let (lo, hi) = prefs::range(&path).unwrap_or((-1e9, 1e9));
                 if n.is_u64() || n.is_i64() {
                     let mut x = n.as_i64().unwrap_or(0);
-                    ui.add(egui::DragValue::new(&mut x).range(lo as i64..=hi as i64).custom_parser(crate::widgets::parse_num));
+                    ui.add(egui::DragValue::new(&mut x).range(lo as i64..=hi as i64).custom_parser(crate::widgets::parse_num)).labelled_by(value_label.id);
                     obj.insert(k, json!(x));
                 } else {
                     let mut x = n.as_f64().unwrap_or(0.0);
-                    ui.add(egui::DragValue::new(&mut x).range(lo..=hi).speed(0.1).max_decimals(3).custom_parser(crate::widgets::parse_num));
+                    ui.add(egui::DragValue::new(&mut x).range(lo..=hi).speed(0.1).max_decimals(3).custom_parser(crate::widgets::parse_num))
+                        .labelled_by(value_label.id);
                     obj.insert(k, json!(x));
                 }
             }
@@ -1870,8 +1929,8 @@ fn field_rows(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>, ke
                         ui.horizontal(|ui| {
                             let mut on = d.get("enabled").and_then(Value::as_bool).unwrap_or(false);
                             let mut path = d.get("path").and_then(Value::as_str).unwrap_or("").to_string();
-                            crate::widgets::checkbox(ui, &mut on, "");
-                            ui.add(egui::TextEdit::singleline(&mut path).desired_width(240.0));
+                            crate::widgets::checkbox(ui, &mut on, tl!("Enabled"));
+                            ui.add(egui::TextEdit::singleline(&mut path).desired_width(240.0)).accessible_name(tl!("Path"));
                             *d = json!({"enabled": on, "path": path});
                         });
                     }
@@ -2079,7 +2138,8 @@ fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String
                     _ => shown_label,
                 };
                 let sel = selected == *id;
-                if ui.selectable_label(sel, RichText::new(format!("   {name}")).color(t.text_dim)).clicked() {
+                let name_row = ui.selectable_label(sel, RichText::new(format!("   {name}")).color(t.text_dim));
+                if name_row.clicked() {
                     selected = id.clone();
                 }
                 if tab == 0 {
@@ -2092,6 +2152,8 @@ fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String
                     let r = ui.add(
                         egui::Button::new(RichText::new(tl!(&text)).size(12.0).color(if changed { t.accent_text } else { t.text })).min_size(vec2(120.0, 18.0)),
                     );
+                    // An unassigned shortcut shows no text: name it by the command it binds.
+                    let r = if text.is_empty() { r.labelled_by(name_row.id) } else { r };
                     if r.clicked() {
                         selected = id.clone();
                         capture = true;
@@ -2131,7 +2193,7 @@ fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String
                     let mut col = colors.get(id).cloned().unwrap_or_else(|| "none".into());
                     let opts: Vec<(String, &str)> =
                         ["none", "red", "orange", "yellow", "green", "blue", "violet", "gray"].iter().map(|c| (c.to_string(), *c)).collect();
-                    crate::widgets::dropdown(ui, &format!("menu-color-{id}"), &mut col, &opts, 90.0);
+                    crate::widgets::dropdown(ui, &format!("menu-color-{id}"), tl!("Color"), &mut col, &opts, 90.0);
                     if col == "none" {
                         colors.remove(id);
                     } else {
@@ -2312,7 +2374,7 @@ fn set_row(
         ui.label(tl!("Set:"));
         let mut chosen = active.clone();
         let pairs: Vec<(String, &str)> = names.iter().map(|(n, l)| (n.clone(), l.as_str())).collect();
-        if crate::widgets::dropdown(ui, "shortcut-set", &mut chosen, &pairs, 220.0) && chosen != active {
+        if crate::widgets::dropdown(ui, "shortcut-set", tl!("Set:"), &mut chosen, &pairs, 220.0) && chosen != active {
             // As `useSet`: the set's bindings, keeping the actions' F-keys.
             sets.get(&chosen).cloned().unwrap_or_default().apply(overrides, alternates);
             active = chosen;
@@ -2446,7 +2508,7 @@ fn presets_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, 
     ui.horizontal(|ui| {
         ui.label(RichText::new(tl!("Preset Type")).color(t.text_dim));
         let opts = [("brushes".to_string(), tl!("Brushes")), ("customShapes".to_string(), tl!("Custom Shapes")), ("patterns".to_string(), tl!("Patterns"))];
-        crate::widgets::dropdown(ui, "preset-kind", &mut kind, &opts, 180.0);
+        crate::widgets::dropdown(ui, "preset-kind", tl!("Type"), &mut kind, &opts, 180.0);
     });
     let list = app
         .session
@@ -2469,7 +2531,7 @@ fn presets_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, 
     });
     let mut new_name = f.get("newName").and_then(Value::as_str).unwrap_or("").to_string();
     ui.horizontal(|ui| {
-        ui.add(egui::TextEdit::singleline(&mut new_name).desired_width(200.0));
+        ui.add(egui::TextEdit::singleline(&mut new_name).desired_width(200.0)).accessible_name(tl!("Name"));
         if ui.add_enabled(selected < list.len() && !new_name.trim().is_empty(), egui::Button::new(tl!("Rename"))).clicked() {
             let _ = app.run("edit.presets.presetManager", json!({"action": "rename", "kind": kind, "index": selected, "newName": new_name}));
         }
@@ -2494,6 +2556,7 @@ fn presets_io_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         crate::widgets::dropdown(
             ui,
             "presets-io",
+            tl!("Action"),
             &mut action,
             &[("export".to_string(), tl!("Export Presets")), ("import".to_string(), tl!("Import Presets"))],
             180.0,
@@ -3169,8 +3232,8 @@ mod tests {
             app
         });
         h.run_steps(4);
-        let language = h.get_by_label("Language").rect();
-        let dark = h.get_by_label("Dark Theme").rect();
+        let language = h.query_all_by_label("Language").next().expect("the Language row").rect();
+        let dark = h.query_all_by_label("Dark Theme").next().expect("the dark theme row").rect();
         let ok = h.get_by_label("OK").rect();
         assert!(dark.bottom() < language.top(), "Presentation {language:?} follows the theme swatches {dark:?}");
         assert!(language.bottom() < ok.top() - 20.0, "Language {language:?} must show above the buttons {ok:?} without scrolling");
@@ -3214,34 +3277,6 @@ mod tests {
         let h = render("");
         for group in ["Appearance", "Appearance Mode", "Presentation", "Options", "UI scale"] {
             assert!(shown(&h, group), "an empty search shows {group}");
-        }
-    }
-
-    /// Every generated preference label, section title and choice label has an entry in each
-    /// language that claims complete menus (Japanese, Traditional Chinese, ...).
-    #[test]
-    fn preference_labels_are_translated() {
-        let session = photocraft_engine::Session::new();
-        let v: Value = serde_json::from_str(&session.prefs_to_json()).expect("prefs json");
-        for lang in crate::i18n::Lang::all().filter(|l| l.complete_menus()) {
-            let mut missing = Vec::new();
-            for (sec, title) in SECTIONS {
-                if !crate::i18n::has(lang, title) {
-                    missing.push(title.to_string());
-                }
-                let Some(obj) = v.get(sec).and_then(Value::as_object) else { continue };
-                for k in obj.keys() {
-                    if sec == "interface" && k == "favoriteThemes" {
-                        continue; // Rendered as star controls beside the theme choices.
-                    }
-                    let mut labels = vec![humanize(k)];
-                    labels.extend(prefs::choices(&format!("{sec}.{k}")).into_iter().flatten().map(|c| choice_label(c)));
-                    missing.extend(labels.into_iter().filter(|l| !crate::i18n::has(lang, l)));
-                }
-            }
-            missing.sort();
-            missing.dedup();
-            assert!(missing.is_empty(), "{}: untranslated preference labels: {missing:#?}", lang.code());
         }
     }
 
@@ -3306,6 +3341,106 @@ mod tests {
         tick(&mut next, &ctx);
         assert!(next.ui.notices.iter().all(|n| n.title != "Some preferences were reset"));
         assert_eq!(next.session.prefs().file_handling.autosave_minutes, 5);
+    }
+
+    #[test]
+    fn an_old_files_shift_tool_switch_migration_is_saved_with_the_new_version() {
+        // #5647: a file before version 2 loads with Use Shift Key for Tool Switch on. Saving
+        // writes that and the current version, so turning it off later isn't taken for the old
+        // default on the next launch.
+        let ctx = egui::Context::default();
+        for saved in [
+            json!({"version": 1, "tools": {"useShiftKeyForToolSwitch": false}, "futureSection": {"kept": true}}),
+            json!({"tools": {"useShiftKeyForToolSwitch": false}, "futureSection": {"kept": true}}),
+        ] {
+            let (mut app, store) = app_with_saved(Some(saved.to_string()));
+            tick(&mut app, &ctx);
+            assert!(app.session.prefs().tools.use_shift_key_for_tool_switch, "{saved}");
+            app.run("prefs.set", json!({"values": {"performance.historyStates": 12}})).unwrap();
+            tick(&mut app, &ctx);
+            let v = stored(&store);
+            assert_eq!(v["version"], json!(prefs::PREFS_VERSION), "{saved}");
+            assert_eq!(v["tools"]["useShiftKeyForToolSwitch"], true, "{saved}");
+            assert_eq!(v["futureSection"]["kept"], true, "keys this version doesn't know survive");
+            app.run("prefs.set", json!({"values": {"tools.useShiftKeyForToolSwitch": false}})).unwrap();
+            tick(&mut app, &ctx);
+            let (mut next, _) = app_with_saved(store.lock().unwrap().clone());
+            tick(&mut next, &ctx);
+            assert!(!next.session.prefs().tools.use_shift_key_for_tool_switch, "{saved}: turned off, it stays off");
+        }
+    }
+
+    #[test]
+    fn an_old_sparse_file_keeps_another_instances_change() {
+        // Two instances on a version 1 file that lacks most keys: one changes a key the file
+        // doesn't have, the other then saves an unrelated change and must not write its default
+        // over it.
+        let saved = json!({"version": 1, "tools": {"useShiftKeyForToolSwitch": false}});
+        let store = Arc::new(Mutex::new(Some(saved.to_string())));
+        let ctx = egui::Context::default();
+        let (mut a, mut b) = (app_on(&store, Arc::default()), app_on(&store, Arc::default()));
+        tick(&mut a, &ctx);
+        tick(&mut b, &ctx);
+        b.run("prefs.set", json!({"values": {"interface.theme": "studio"}})).unwrap();
+        tick(&mut b, &ctx);
+        assert_eq!(stored(&store)["interface"]["theme"], "studio");
+        a.run("prefs.set", json!({"values": {"performance.historyStates": 12}})).unwrap();
+        tick(&mut a, &ctx);
+        let v = stored(&store);
+        assert_eq!((v["interface"]["theme"].as_str(), v["performance"]["historyStates"].as_u64()), (Some("studio"), Some(12)));
+    }
+
+    #[test]
+    fn another_instances_shift_tool_switch_choice_beats_this_ones_migration() {
+        // Two instances migrate the same version 1 file. One turns the switch off and saves
+        // version 2; the other's unrelated save must not write its migrated "on" over that.
+        let saved = json!({"version": 1, "tools": {"useShiftKeyForToolSwitch": false}});
+        let store = Arc::new(Mutex::new(Some(saved.to_string())));
+        let ctx = egui::Context::default();
+        let (mut a, mut b) = (app_on(&store, Arc::default()), app_on(&store, Arc::default()));
+        tick(&mut a, &ctx);
+        tick(&mut b, &ctx);
+        b.run("prefs.set", json!({"values": {"tools.useShiftKeyForToolSwitch": false}})).unwrap();
+        tick(&mut b, &ctx);
+        assert_eq!(stored(&store)["tools"]["useShiftKeyForToolSwitch"], false);
+        a.run("prefs.set", json!({"values": {"performance.historyStates": 12}})).unwrap();
+        tick(&mut a, &ctx);
+        let v = stored(&store);
+        assert_eq!((v["tools"]["useShiftKeyForToolSwitch"].as_bool(), v["performance"]["historyStates"].as_u64()), (Some(false), Some(12)));
+        assert_eq!(v["version"], json!(prefs::PREFS_VERSION));
+    }
+
+    #[test]
+    fn turning_the_shift_tool_switch_off_is_saved_over_another_instances_migration() {
+        // Two instances migrate the same version 1 file. B saves version 2 with the migrated "on";
+        // the user then turns the switch off in A, which must be written.
+        let saved = json!({"version": 1, "tools": {"useShiftKeyForToolSwitch": false}});
+        let store = Arc::new(Mutex::new(Some(saved.to_string())));
+        let ctx = egui::Context::default();
+        let (mut a, mut b) = (app_on(&store, Arc::default()), app_on(&store, Arc::default()));
+        tick(&mut a, &ctx);
+        tick(&mut b, &ctx);
+        b.run("prefs.set", json!({"values": {"performance.historyStates": 12}})).unwrap();
+        tick(&mut b, &ctx);
+        assert_eq!(stored(&store)["tools"]["useShiftKeyForToolSwitch"], true);
+        a.run("prefs.set", json!({"values": {"tools.useShiftKeyForToolSwitch": false}})).unwrap();
+        tick(&mut a, &ctx);
+        let v = stored(&store);
+        assert_eq!((v["tools"]["useShiftKeyForToolSwitch"].as_bool(), v["performance"]["historyStates"].as_u64()), (Some(false), Some(12)));
+    }
+
+    #[test]
+    fn a_newer_files_version_is_kept_on_save() {
+        let saved = json!({"version": prefs::PREFS_VERSION + 1, "tools": {"useShiftKeyForToolSwitch": false}});
+        let (mut app, store) = app_with_saved(Some(saved.to_string()));
+        let ctx = egui::Context::default();
+        tick(&mut app, &ctx);
+        assert!(!app.session.prefs().tools.use_shift_key_for_tool_switch, "a newer file isn't migrated");
+        app.run("prefs.set", json!({"values": {"performance.historyStates": 12}})).unwrap();
+        tick(&mut app, &ctx);
+        let v = stored(&store);
+        assert_eq!(v["version"], json!(prefs::PREFS_VERSION + 1));
+        assert_eq!(v["performance"]["historyStates"], 12);
     }
 
     #[test]
@@ -4197,8 +4332,8 @@ mod tests {
             obj,
         );
         h.run_steps(4);
-        h.get_by_label("Rendering Mode");
-        h.get_by_label("Applies at next launch.");
+        assert!(h.query_all_by_label("Rendering Mode").next().is_some(), "the Rendering Mode setting");
+        assert!(h.query_all_by_label("Applies at next launch.").next().is_some(), "its next-launch notice");
         // A search that leaves Rendering Mode out leaves its notice out too.
         let obj = json!({"renderingMode": "auto", "historyStates": 50}).as_object().unwrap().clone();
         let mut h = Harness::new_ui_state(

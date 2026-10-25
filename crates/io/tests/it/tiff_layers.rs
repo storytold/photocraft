@@ -333,21 +333,28 @@ fn damaged_layer_data_opens_flattened() {
     let r2 = import("x.tif", &bad).unwrap();
     assert_eq!(r2.document.layers.len(), 1);
     assert!(r2.warnings.iter().any(|w| w.contains("could not be read")), "{:?}", r2.warnings);
-    // Every truncation and a sweep of bit flips through the whole file: never a panic.
-    for cut in (0..r.bytes.len()).step_by(11) {
+    // Truncations and bit flips through the whole file: never a panic. A run takes a quarter of
+    // them, a different quarter each day.
+    let sweep = photocraft_testkit::Sweep::new(4);
+    let mut case = 0;
+    let mut runs = || {
+        case += 1;
+        sweep.includes(case)
+    };
+    for cut in (0..r.bytes.len()).step_by(11).filter(|_| runs()) {
         let _ = import("x.tif", &r.bytes[..cut]);
     }
-    for i in (0..r.bytes.len()).step_by(29) {
+    for i in (0..r.bytes.len()).step_by(29).filter(|_| runs()) {
         let mut b = r.bytes.clone();
         b[i] ^= 0x5a;
         let _ = import("x.tif", &b);
     }
     for name in ["layered-le-8bit.tif", "layered-be-16bit.tif"] {
         let Some(bytes) = fixture(name) else { continue };
-        for cut in (0..bytes.len()).step_by(7) {
+        for cut in (0..bytes.len()).step_by(7).filter(|_| runs()) {
             let _ = import(name, &bytes[..cut]);
         }
-        for i in (0..bytes.len()).step_by(5) {
+        for i in (0..bytes.len()).step_by(5).filter(|_| runs()) {
             let mut b = bytes.clone();
             b[i] ^= 0xff;
             let _ = import(name, &b);

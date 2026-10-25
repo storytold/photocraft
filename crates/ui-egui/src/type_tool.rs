@@ -5,8 +5,10 @@
 //! Offsets in [`TextEdit`] are character indices (the engine's unit); the layout works in bytes.
 
 use std::collections::HashMap;
+use std::ops::Range;
 use std::sync::{Arc, PoisonError};
 
+use egui::ime_context::{CommittedText, ImeContextTracker, ImeMutationStamp, ImeObservation, ImeTarget};
 use egui::{Color32, Pos2, Stroke};
 use photocraft_doc::{Document, LayerContent, LayerId, TextLayer};
 use photocraft_geom::{Affine, Point};
@@ -18,6 +20,705 @@ use crate::canvas::ViewXform;
 use crate::state::{BoxResize, TextEdit};
 
 pub const PLACEHOLDER: &str = "Lorem Ipsum";
+
+/// Per-editor IME owner/generation bookkeeping for the custom Type tool.
+///
+/// The tracker is shared by every viewport and keeps the context generation alive when this
+/// editor is replaced. The overlay records the pass's canvas mapping and the pass end recomputes
+/// the final geometry from the observed model, so an event-free or discarded pass never replays
+/// stale text.
+#[derive(Debug, Default)]
+pub(crate) struct ImeState {
+    tracker: ImeContextTracker,
+    frame: Option<ImeFrame>,
+    /// The canvas mapping of the current pass, so the final descriptor geometry is recomputed
+    /// from the observed model rather than from an earlier point in the pass.
+    view: Option<ImeView>,
+    /// The last descriptor identity the platform actually received (a discarded pass did not
+    /// receive it, so its transition must still be reported by the final pass).
+    emitted: Option<ImeEmitted>,
+    /// Ask the platform to cancel the native composition (owner/session transition or a stale
+    /// pre-edit). Stays set until a non-discarded descriptor carries it.
+    interrupt: bool,
+    /// Incoming composition provenance survives idle/discarded passes and an empty preedit.
+    /// A stale owner stays fenced until the exact host reset completion arrives.
+    incoming: Option<IncomingComposition>,
+    /// The composition text was invalidated; this pass must report `Unavailable` rather than
+    /// presenting the orphaned composition as committed text.
+    stale: bool,
+    /// The exact composition written into the layer, used to check the stored range before any
+    /// replacement, deletion, underline or surrounding-text report.
+    preedit: Option<ImePreedit>,
+    /// A local fence is released only by its exact host completion, never by terminal text.
+    resets: HashMap<egui::ViewportId, ResetPhase>,
+    context: Option<egui::Context>,
+    needs_request: bool,
+    /// One exclusive event owner per actual UI pass; logic-only ticks never replay input.
+    raw_pass: HashMap<egui::ViewportId, u64>,
+    custom_pass: HashMap<egui::ViewportId, (u64, Option<ResetContext>)>,
+    last_custom: HashMap<egui::ViewportId, ResetContext>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ResetContext(egui::Id, u64, egui::IMEPurpose);
+
+impl From<&egui::output::IMEOutput> for ResetContext {
+    fn from(ime: &egui::output::IMEOutput) -> Self {
+        Self(ime.owner, ime.context_generation, ime.purpose)
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ResetPhase {
+    NeedsRequest,
+    Awaiting { id: egui::ImeResetId, destination: IncomingSelection, context: Option<ResetContext> },
+    Suspended,
+    AllocationFailed { destination: IncomingSelection, context: Option<ResetContext> },
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ImeFrame {
+    viewport: egui::ViewportId,
+    frame_nr: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ImeEmitted {
+    target: ImeTarget,
+    generation: u64,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ImeView {
+    viewport: egui::ViewportId,
+    pass_nr: u64,
+    xf: ViewXform,
+}
+
+/// The composition text and the edit session that wrote it. A range that still lies inside the
+/// text is not enough: an application edit can shift it onto committed characters.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ImePreedit {
+    layer: u64,
+    session: String,
+    text: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct IncomingSelection {
+    target: ImeTarget,
+    caret: usize,
+    anchor: usize,
+    revision: u64,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum IncomingComposition {
+    Active(IncomingSelection),
+    TerminalPending(IncomingSelection),
+    Stale,
+}
+
+/// A bounded committed snapshot captured from the type layer.
+///
+/// The snapshot owns at most `MAX_IME_SURROUNDING_TEXT_BYTES`; the layer's whole text is only
+/// borrowed while it is built. The current pre-edit lives in the layer so it lays out like
+/// typed text, and is removed from this value rather than reported as committed text.
+struct ImeCommitted {
+    snapshot: egui::output::IMESurroundingText,
+}
+
+impl ImeCommitted {
+    fn stamp(&self) -> ImeMutationStamp {
+        ImeMutationStamp::from_surrounding_text(self.snapshot.clone())
+    }
+}
+
+impl ImeState {
+    /// Remember the frame used by this pass's accepted IME receipts.
+    fn begin_frame(&mut self, ctx: &egui::Context) {
+        let viewport = ctx.viewport_id();
+        self.frame = Some(ImeFrame { viewport, frame_nr: ctx.cumulative_frame_nr_for(viewport) });
+    }
+
+    /// Record the canvas mapping of this pass. `sync_ime` recomputes both rectangles from the
+    /// model after every panel has run.
+    fn note_view(&mut self, viewport: egui::ViewportId, pass_nr: u64, xf: &ViewXform) {
+        self.view = Some(ImeView { viewport, pass_nr, xf: *xf });
+    }
+
+    /// Request the native composition reset; incoming ownership is tracked separately.
+    fn request_interrupt(&mut self) {
+        self.interrupt = true;
+        if self.incoming.is_some() || !self.resets.is_empty() {
+            self.needs_request = true;
+            // Context-less commands must retire every old id synchronously.
+            for phase in self.resets.values_mut() {
+                *phase = ResetPhase::NeedsRequest;
+            }
+        }
+    }
+
+    /// Forget a composition whose range no longer describes the recorded text.
+    fn invalidate_preedit(&mut self) {
+        self.preedit = None;
+        self.stale = true;
+        self.incoming = Some(IncomingComposition::Stale);
+        self.request_interrupt();
+    }
+
+    fn note_preedit(&mut self, ed: &TextEdit, text: &str) {
+        self.preedit = Some(ImePreedit { layer: ed.layer, session: ed.session.clone(), text: text.to_owned() });
+    }
+
+    fn clear_preedit(&mut self) {
+        self.preedit = None;
+    }
+}
+
+/// The immutable owner of the Type tool's IME context.
+///
+/// The document, layer and viewport identify the target; the edit session is the replacement
+/// epoch, so committing and editing the same layer again cannot reuse the old generation.
+fn ime_target(app: &PhotocraftApp, ed: &TextEdit, viewport: egui::ViewportId) -> Option<ImeTarget> {
+    let document = ed.document.or_else(|| active_doc_id(app))?;
+    // A Type Mask session is a distinct owner: its hidden working layer can have the same id as
+    // a regular type layer in another tool session. The session epoch replaces the context when
+    // an owner is recreated.
+    let owner = egui::Id::unique(("photocraft-type-ime", document, ed.layer, ed.mask, viewport.0.value()));
+    let epoch = egui::Id::unique(("photocraft-type-ime-session", &ed.session)).value().max(1);
+    Some(ImeTarget::new(owner, epoch))
+}
+
+fn incoming_selection(app: &PhotocraftApp, viewport: egui::ViewportId) -> Option<IncomingSelection> {
+    let ed = app.ui.text_edit.as_ref()?;
+    Some(IncomingSelection { target: ime_target(app, ed, viewport)?, caret: ed.caret, anchor: ed.anchor, revision: app.session.active()?.revision })
+}
+
+/// Settle the already-visible preview where it was typed, never replay it at a moved caret.
+fn interrupt_incoming(app: &mut PhotocraftApp) {
+    if !matches!(app.type_ime.incoming, Some(IncomingComposition::Active(_) | IncomingComposition::TerminalPending(_))) {
+        return;
+    }
+    app.type_ime.incoming = Some(IncomingComposition::Stale);
+    if let Some(ed) = &mut app.ui.text_edit {
+        ed.preedit = None;
+    }
+    app.type_ime.clear_preedit();
+    app.type_ime.request_interrupt();
+}
+
+fn interrupt_action(app: &mut PhotocraftApp, viewport: egui::ViewportId) {
+    let guarded = reset_guarded(app, viewport);
+    interrupt_incoming(app);
+    if guarded {
+        app.type_ime.request_interrupt();
+    }
+}
+
+fn sync_incoming(app: &mut PhotocraftApp, viewport: egui::ViewportId) {
+    let destination = incoming_selection(app, viewport);
+    if app.type_ime.resets.get(&viewport).is_some_and(|phase| match phase {
+        ResetPhase::Awaiting { destination: old, .. } | ResetPhase::AllocationFailed { destination: old, .. } => Some(*old) != destination,
+        _ => false,
+    }) {
+        app.type_ime.request_interrupt();
+    }
+    let expected = match app.type_ime.incoming {
+        Some(IncomingComposition::Active(expected) | IncomingComposition::TerminalPending(expected)) => expected,
+        _ => return,
+    };
+    let lost_preview = matches!(app.type_ime.incoming, Some(IncomingComposition::Active(_))) && app.ui.text_edit.as_ref().is_none_or(|ed| ed.preedit.is_none());
+    if incoming_selection(app, viewport) != Some(expected) || lost_preview {
+        // An external edit can move an in-bounds preview range onto committed characters.
+        // Validate it before interruption clears the metadata needed to detect that mismatch.
+        // A valid preview still settles normally; never inspect another document's layer here.
+        if let Some(ed) = app.ui.text_edit.clone()
+            && ed.preedit.is_some()
+            && ime_target(app, &ed, viewport) == Some(expected.target)
+            && let Some(active) = app.session.active_index()
+            && edit_home(app, &ed) == Some(active)
+            && let Some(text) = current_text(app, LayerId(ed.layer))
+            && reconcile_preedit(app, &ed, &text)
+        {
+            return;
+        }
+        interrupt_incoming(app);
+    }
+}
+
+/// Accepted IME mutations update provenance without canceling their own Delete→Commit chain.
+fn remember_incoming(app: &mut PhotocraftApp, preedit_empty: Option<bool>) {
+    let viewport = app.type_ime.frame.map_or(egui::ViewportId::ROOT, |frame| frame.viewport);
+    let Some(expected) = incoming_selection(app, viewport) else { return };
+    let next = match (preedit_empty, app.type_ime.incoming) {
+        (Some(false), _) | (None, Some(IncomingComposition::Active(_))) => IncomingComposition::Active(expected),
+        (Some(true), _) | (None, Some(IncomingComposition::TerminalPending(_))) => IncomingComposition::TerminalPending(expected),
+        _ => return,
+    };
+    app.type_ime.incoming = Some(next);
+}
+
+/// A host may recreate its Context while retaining the application. Old pass counters and
+/// output keys are not evidence of publication in that new Context.
+fn bind_reset_context(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    // `on_begin_pass` callbacks registered during this pass cannot mark the pass already
+    // running. Reinstall here so a replacement Context is ready for its next pass, and rely on
+    // the host's creator/`setup_context` having installed before the very first `run_ui`.
+    install_reset_hooks(ctx);
+    if app.type_ime.context.as_ref().is_some_and(|previous| previous != ctx) {
+        interrupt_incoming(app);
+        for phase in app.type_ime.resets.values_mut() {
+            *phase = ResetPhase::Suspended;
+        }
+        app.type_ime.needs_request = false;
+        app.type_ime.raw_pass.clear();
+        app.type_ime.custom_pass.clear();
+        app.type_ime.last_custom.clear();
+        app.type_ime.view = None;
+        app.type_ime.frame = None;
+        app.type_ime.tracker.observe(ctx.viewport_id(), None);
+    }
+    app.type_ime.context = Some(ctx.clone());
+}
+
+fn ui_mode_id(viewport: egui::ViewportId) -> egui::Id {
+    egui::Id::unique(("photocraft-type-reset-ui", viewport))
+}
+
+/// Install before the first UI pass on every Context, including a replacement. These callbacks
+/// retain neither the app nor its Context. Calling this from inside a running pass only affects
+/// subsequent passes: egui's begin-pass callback list is already being iterated.
+pub(crate) fn install_reset_hooks(ctx: &egui::Context) {
+    let installed = egui::Id::unique("photocraft-type-reset-hooks");
+    if ctx.data(|data| data.get_temp::<bool>(installed)).unwrap_or(false) {
+        return;
+    }
+    ctx.data_mut(|data| data.insert_temp(installed, true));
+    ctx.on_begin_pass(
+        "photocraft type reset UI mode",
+        Arc::new(|ui| {
+            let key = ui_mode_id(ui.ctx().viewport_id());
+            ui.ctx().data_mut(|data| data.insert_temp(key, true));
+        }),
+    );
+    ctx.on_end_pass(
+        "photocraft type reset UI mode end",
+        Arc::new(|ui| {
+            let key = ui_mode_id(ui.ctx().viewport_id());
+            ui.ctx().data_mut(|data| data.insert_temp(key, false));
+        }),
+    );
+}
+
+pub(crate) fn in_ui_pass(ctx: &egui::Context) -> bool {
+    let key = ui_mode_id(ctx.viewport_id());
+    ctx.data(|data| data.get_temp::<bool>(key)).unwrap_or(false)
+}
+
+fn reset_guarded(app: &PhotocraftApp, viewport: egui::ViewportId) -> bool {
+    app.type_ime.needs_request || app.type_ime.resets.contains_key(&viewport) || matches!(app.type_ime.incoming, Some(IncomingComposition::Stale))
+}
+
+fn reset_route_eligible(app: &PhotocraftApp, ctx: &egui::Context) -> bool {
+    // The actual app draws only after `logic_frame` marks fonts ready; `ui_frame` early-returns
+    // on the first frame. Direct handler tests that have not run the first logic frame use the
+    // pre-styled app state and are not an actual UI route.
+    (app.fonts_ready || !app.styled)
+        && app.ui.text_edit.is_some()
+        && app.ui.dialogs.is_empty()
+        && !crate::screen_picker::busy(ctx)
+        && ctx.input(|i| i.focused)
+        && !ctx.text_edit_focused()
+        && !ctx.egui_wants_keyboard_input()
+}
+
+/// Whether this input can be attributed to a visible custom descriptor right now. Completion
+/// arrives before the final descriptor exists, so use the last canvas mapping and the current
+/// model: requiring this pass's final output here would deadlock the ordered suffix.
+fn reset_geometry_available(app: &mut PhotocraftApp, viewport: egui::ViewportId) -> bool {
+    let Some(ed) = app.ui.text_edit.clone() else { return false };
+    let Some(view) = app.type_ime.view.filter(|view| view.viewport == viewport) else { return false };
+    ime_geometry(app, &ed, view.xf).is_some()
+}
+
+fn suspend_reset(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    let viewport = ctx.viewport_id();
+    if reset_guarded(app, viewport) {
+        app.type_ime.resets.insert(viewport, ResetPhase::Suspended);
+        app.type_ime.needs_request = false;
+    }
+    app.type_ime.last_custom.remove(&viewport);
+}
+
+fn allocate_reset(app: &mut PhotocraftApp, ctx: &egui::Context, destination: IncomingSelection, context: Option<ResetContext>) {
+    let viewport = ctx.viewport_id();
+    let phase = match ctx.request_ime_reset(viewport) {
+        Some(id) => ResetPhase::Awaiting { id, destination, context },
+        None => ResetPhase::AllocationFailed { destination, context },
+    };
+    app.type_ime.resets.insert(viewport, phase);
+    app.type_ime.needs_request = false;
+}
+
+/// Reconcile before the next raw element, not merely at descriptor publication.
+fn prepare_reset(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    let viewport = ctx.viewport_id();
+    sync_incoming(app, viewport);
+    if app.type_ime.needs_request {
+        app.type_ime.resets.insert(viewport, ResetPhase::NeedsRequest);
+        app.type_ime.needs_request = false;
+    }
+    // Allocation belongs to the true UI tail: a stock field drawn later in this pass
+    // must never inherit a speculative custom-editor reset request.
+}
+
+fn complete_reset(app: &mut PhotocraftApp, ctx: &egui::Context, request_id: egui::ImeResetId) {
+    let viewport = ctx.viewport_id();
+    let Some(ResetPhase::Awaiting { id, destination, context }) = app.type_ime.resets.get(&viewport).copied() else { return };
+    if request_id != id
+        || request_id.viewport_id() != viewport
+        || !reset_route_eligible(app, ctx)
+        || incoming_selection(app, viewport) != Some(destination)
+        || context != app.type_ime.last_custom.get(&viewport).copied()
+    {
+        return;
+    }
+    if !reset_geometry_available(app, viewport) {
+        // Retire the old id and keep the following preedit blocked before it can reach the
+        // editor. The UI tail may still rearm once this pass produces real custom output.
+        suspend_reset(app, ctx);
+        return;
+    }
+    app.type_ime.resets.remove(&viewport);
+    app.type_ime.incoming = None;
+    app.type_ime.preedit = None;
+    app.type_ime.stale = false;
+    app.type_ime.interrupt = false;
+    if let Some(ed) = app.ui.text_edit.as_mut() {
+        ed.preedit = None;
+    }
+}
+
+fn claim_raw_pass(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
+    let viewport = ctx.viewport_id();
+    let pass = ctx.cumulative_pass_nr_for(viewport);
+    app.type_ime.raw_pass.insert(viewport, pass) != Some(pass)
+}
+
+/// The exclusive route when no custom editor may mutate. Do not consume stock text/keys.
+pub(crate) fn controls_only(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    bind_reset_context(app, ctx);
+    if !claim_raw_pass(app, ctx) {
+        return;
+    }
+    if !reset_route_eligible(app, ctx) {
+        interrupt_incoming(app);
+    }
+    suspend_reset(app, ctx); // Retire an old id before visiting even the first marker.
+    for event in ctx.input(|i| i.events.clone()) {
+        if let egui::Event::ImeResetCompleted { request_id } = event {
+            complete_reset(app, ctx, request_id);
+        }
+    }
+}
+
+/// True outer UI tail, including discarded/early-return passes and host-side mutations.
+pub(crate) fn finish_reset_pass(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    bind_reset_context(app, ctx);
+    let viewport = ctx.viewport_id();
+    if app.type_ime.raw_pass.get(&viewport).copied() != Some(ctx.cumulative_pass_nr_for(viewport)) {
+        controls_only(app, ctx);
+    }
+    sync_incoming(app, viewport);
+    let produced = app.type_ime.custom_pass.get(&viewport).copied().filter(|(pass, _)| *pass == ctx.cumulative_pass_nr_for(viewport)).and_then(|(_, key)| key);
+    let actual = ctx.output(|o| o.ime.as_ref().map(ResetContext::from));
+    let Some(context) = produced.filter(|key| Some(*key) == actual && reset_route_eligible(app, ctx)) else {
+        suspend_reset(app, ctx);
+        return;
+    };
+    // Never allocate a request for output egui will throw away. Keep any existing guard and its
+    // queued R1 blocked; the final pass either publishes this context and reuses it or retires
+    // the old id through the ineligible branch above.
+    if ctx.will_discard() {
+        return;
+    }
+    app.type_ime.last_custom.insert(viewport, context);
+    if !reset_guarded(app, viewport) {
+        return;
+    }
+    let Some(destination) = incoming_selection(app, viewport) else {
+        suspend_reset(app, ctx);
+        return;
+    };
+    let unchanged = app.type_ime.resets.get(&viewport).is_some_and(|phase| match phase {
+        ResetPhase::Awaiting { destination: old, context: old_context, .. } | ResetPhase::AllocationFailed { destination: old, context: old_context } => {
+            *old == destination && *old_context == Some(context) && !app.type_ime.needs_request
+        }
+        _ => false,
+    });
+    if !unchanged {
+        allocate_reset(app, ctx, destination, Some(context));
+    }
+}
+
+pub(crate) fn finish_reset_logic(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    bind_reset_context(app, ctx);
+    if !in_ui_pass(ctx) {
+        sync_incoming(app, ctx.viewport_id());
+        suspend_reset(app, ctx);
+    }
+}
+
+/// UTF-8 byte offsets of the caret, anchor and pre-edit, found in one traversal.
+///
+/// The pre-edit is in characters in [`TextEdit`]; surround-text offsets are UTF-8 bytes. A range
+/// that runs past the text is an explicit unavailable state, not a reason to report the
+/// composition as committed.
+struct ImeOffsets {
+    cursor: usize,
+    anchor: usize,
+    preedit: Option<Range<usize>>,
+}
+
+fn ime_offsets(text: &str, ed: &TextEdit) -> Option<ImeOffsets> {
+    let (start, end) = match ed.preedit {
+        Some((start, len)) => (start, start.checked_add(len)?),
+        None => (0, 0),
+    };
+    let wanted = [ed.caret, ed.anchor, start, end];
+    let mut bytes = [usize::MAX; 4];
+    let mut chars = 0usize;
+    for (index, (byte, _)) in text.char_indices().enumerate() {
+        for (slot, want) in bytes.iter_mut().zip(wanted) {
+            if *slot == usize::MAX && want == index {
+                *slot = byte;
+            }
+        }
+        chars = index.saturating_add(1);
+    }
+    // An index at (or past) the end clamps to the end, as before; a pre-edit past the end is a
+    // stale composition and makes the surrounding text unavailable.
+    for (slot, (index, want)) in bytes.iter_mut().zip(wanted.into_iter().enumerate()) {
+        if *slot == usize::MAX {
+            // The caret and anchor clamp after undo/redo; a pre-edit beyond the text is stale.
+            if index >= 2 && want > chars {
+                return None;
+            }
+            *slot = text.len();
+        }
+    }
+    let preedit = match ed.preedit {
+        Some(_) if end > chars => return None,
+        Some(_) => Some(bytes[2]..bytes[3]),
+        None => None,
+    };
+    Some(ImeOffsets { cursor: bytes[0], anchor: bytes[1], preedit })
+}
+
+/// Whether the stored character range still contains exactly the composition that wrote it.
+fn ime_preedit_is_current(app: &PhotocraftApp, text: &str, ed: &TextEdit, offsets: &ImeOffsets) -> bool {
+    match (ed.preedit, offsets.preedit.as_ref()) {
+        (None, _) => true,
+        (Some(_), Some(range)) => {
+            app.type_ime.preedit.as_ref().is_some_and(|p| p.layer == ed.layer && p.session == ed.session && text.get(range.clone()) == Some(p.text.as_str()))
+        }
+        (Some(_), None) => false,
+    }
+}
+
+/// Check the stored pre-edit against the live text, invalidating it (and the native composition)
+/// when an application edit moved or replaced it. Returns true when it was stale.
+fn reconcile_preedit(app: &mut PhotocraftApp, ed: &TextEdit, text: &str) -> bool {
+    if ed.preedit.is_none() {
+        return false;
+    }
+    let current = ime_offsets(text, ed).is_some_and(|offset| ime_preedit_is_current(app, text, ed, &offset));
+    if current {
+        return false;
+    }
+    app.type_ime.invalidate_preedit();
+    if let Some(e) = app.ui.text_edit.as_mut() {
+        e.preedit = None;
+    }
+    true
+}
+
+/// A borrowed observation for the tracker. It copies only the bounded window.
+fn committed_text<'a>(app: &PhotocraftApp, text: &'a str, ed: &TextEdit) -> Option<CommittedText<'a>> {
+    let offsets = ime_offsets(text, ed)?;
+    if !ime_preedit_is_current(app, text, ed, &offsets) {
+        return None;
+    }
+    let committed = CommittedText::new(text, offsets.cursor, offsets.anchor);
+    Some(match offsets.preedit {
+        Some(preedit) => committed.with_preedit(preedit),
+        None => committed,
+    })
+}
+
+/// The bounded committed snapshot of the edited layer, or `None` when it cannot be exposed.
+fn ime_committed(app: &PhotocraftApp, ed: &TextEdit) -> Option<ImeCommitted> {
+    let text = text_layer(&app.session.active()?.doc, LayerId(ed.layer))?.text.as_str();
+    let offsets = ime_offsets(text, ed)?;
+    if !ime_preedit_is_current(app, text, ed, &offsets) {
+        return None;
+    }
+    Some(ImeCommitted { snapshot: egui::output::IMESurroundingText::from_text(text, offsets.cursor, offsets.anchor, offsets.preedit) })
+}
+
+/// Report an accepted IME commit/deletion. Call only after the engine accepted the mutation and
+/// from the snapshots immediately around it.
+fn note_ime_apply(app: &mut PhotocraftApp, ed: &TextEdit, before: &ImeCommitted, after: &ImeCommitted) -> bool {
+    let Some(frame) = app.type_ime.frame else { return false };
+    let Some(target) = ime_target(app, ed, frame.viewport) else { return false };
+    app.type_ime.tracker.note_input_method_apply(frame.viewport, frame.frame_nr, target, before.stamp(), after.stamp())
+}
+
+/// Report an application-origin edit (typing, paste, cut, deletion, undo or a toolbar action).
+fn note_ime_application_change(app: &mut PhotocraftApp, ed: &TextEdit) -> bool {
+    let Some(frame) = app.type_ime.frame else { return false };
+    let Some(target) = ime_target(app, ed, frame.viewport) else { return false };
+    app.type_ime.tracker.note_application_change(frame.viewport, frame.frame_nr, target)
+}
+
+/// Snapshot after the engine mutation and describe the current pass.
+///
+/// Run once per UI pass, after the editor has drawn its caret, so the descriptor reflects this
+/// pass's final model state. With no visible focused editor the context is ended; a moved focus
+/// therefore cannot leave the previous owner's surrounding text latched.
+pub(crate) fn sync_ime(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    bind_reset_context(app, ctx);
+    let viewport = ctx.viewport_id();
+    let frame_nr = ctx.cumulative_frame_nr_for(viewport);
+    let pass_nr = ctx.cumulative_pass_nr_for(viewport);
+    app.type_ime.custom_pass.insert(viewport, (pass_nr, None));
+    sync_incoming(app, viewport);
+    let Some(mut ed) = app.ui.text_edit.clone() else {
+        app.type_ime.view = None;
+        app.type_ime.tracker.observe(viewport, None);
+        return;
+    };
+    // An application edit (control channel, undo, a menu command) can move the stored composition
+    // range onto committed characters. Check the actual composition text before reporting it.
+    if ed.preedit.is_some()
+        && let Some(text) = current_text(app, LayerId(ed.layer))
+        && reconcile_preedit(app, &ed, &text)
+        && let Some(current) = app.ui.text_edit.clone()
+    {
+        ed = current;
+    }
+    let view = app.type_ime.view.filter(|view| view.viewport == viewport && view.pass_nr == pass_nr);
+    let visible = view.is_some() && app.session.active_index().is_some() && edit_home(app, &ed) == app.session.active_index();
+    let focused = visible && reset_route_eligible(app, ctx);
+    if !focused {
+        interrupt_incoming(app);
+        if let Some(current) = &app.ui.text_edit {
+            ed = current.clone();
+        }
+    }
+    let Some(target) = ime_target(app, &ed, viewport) else {
+        app.type_ime.tracker.observe(viewport, None);
+        return;
+    };
+    // The platform only resets the native composition from `should_interrupt_composition`; on
+    // X11, macOS, Windows and the web a changed owner/generation alone leaves it alive. Latch the
+    // last *delivered* target so a discarded pass does not lose the transition.
+    if app.type_ime.emitted.is_some_and(|last| last.target != target) {
+        app.type_ime.interrupt = true;
+    }
+    // Final geometry from this pass's model and canvas mapping: a later panel can move the caret
+    // after the overlay drew it, and `rect` is the edited layer's extent, not the caret.
+    let geometry = if focused { view.and_then(|view| ime_geometry(app, &ed, view.xf)) } else { None };
+    // Borrow the layer's logical text for this observation; only the bounded window is copied.
+    let committed = if focused && !app.type_ime.stale {
+        app.session.active().and_then(|state| text_layer(&state.doc, LayerId(ed.layer))).and_then(|layer| committed_text(app, &layer.text, &ed))
+    } else {
+        None
+    };
+    let observation = ImeObservation::new(frame_nr, pass_nr, target).focused(focused).purpose(egui::IMEPurpose::Normal).committed(committed);
+    let update = app.type_ime.tracker.observe(viewport, Some(observation));
+    // A generation change (focus/refocus, a pass gap, purpose or replacement) also needs the
+    // native reset; the tracker reports it only after observing.
+    let mut interrupt = app.type_ime.interrupt;
+    if let Some(update) = &update
+        && app.type_ime.emitted.is_some_and(|last| last.target != target || last.generation != update.context_generation)
+    {
+        app.type_ime.interrupt = true;
+        interrupt = true;
+    }
+    let mut sent = false;
+    let mut sent_generation = None;
+    if let (Some(update), Some((rect, cursor_rect))) = (update, geometry) {
+        let generation = update.context_generation;
+        // Owner and generation accompany even an Unavailable payload. The cause comes from the
+        // tracker's accepted-receipt chain, never from the event that happened to be last.
+        ctx.output_mut(|out| {
+            out.ime = Some(egui::output::IMEOutput {
+                owner: update.owner,
+                context_generation: update.context_generation,
+                purpose: update.purpose,
+                rect,
+                cursor_rect,
+                should_interrupt_composition: interrupt,
+                change_cause: update.change_cause,
+                surrounding_text: update.surrounding_text,
+                reset_request: None,
+            });
+        });
+        let key = ctx.output(|out| out.ime.as_ref().map(ResetContext::from));
+        app.type_ime.custom_pass.insert(viewport, (pass_nr, key));
+        sent = true;
+        sent_generation = Some(generation);
+    }
+    if sent && !ctx.will_discard() {
+        if let Some(generation) = sent_generation {
+            app.type_ime.emitted = Some(ImeEmitted { target, generation });
+        }
+        app.type_ime.interrupt = false;
+        app.type_ime.stale = false;
+    }
+}
+
+/// The final caret and layer rectangles for an IME descriptor, in screen points.
+fn ime_geometry(app: &mut PhotocraftApp, ed: &TextEdit, xf: ViewXform) -> Option<(egui::Rect, egui::Rect)> {
+    let id = LayerId(ed.layer);
+    let (l, aff, text) = layout(app, id)?;
+    let shape = app.session.active().and_then(|s| text_layer(&s.doc, id).map(|t| t.shape.clone()));
+    let bend = shape.as_ref().and_then(photocraft_text::warp::Warp::on_path);
+    let scr_t = |x: f32, y: f32| -> Pos2 {
+        let p = aff.apply(Point::new(f64::from(x), f64::from(y)));
+        xf.to_screen(p.x as f32, p.y as f32)
+    };
+    let scr = |x: f32, y: f32| -> Pos2 {
+        let (x, y) = l.to_text(x, y);
+        match &bend {
+            Some(w) => {
+                let (x, y) = w.apply(f64::from(x), f64::from(y));
+                scr_t(x as f32, y as f32)
+            }
+            None => scr_t(x, y),
+        }
+    };
+    let (x, top, bot) = l.caret(byte_of(&text, ed.caret));
+    let (x, top, bot) = if l.lines.is_empty() { (0.0, -(12.0 * l.px_per_pt.max(1.0)), 3.0) } else { (x, top, bot) };
+    let cursor = egui::Rect::from_two_pos(scr(x, top), scr(x, bot)).expand(1.0);
+    let doc_bounds =
+        app.session.active().and_then(|s| text_layer(&s.doc, id)).and_then(|t| t.cache.as_ref()).map(|c| c.content_bounds()).filter(|r| !r.is_empty());
+    let rect = doc_bounds.map(|r| xf.doc_rect(r)).or_else(|| {
+        l.bounds().map(|b| {
+            let corners = [scr_t(b[0], b[1]), scr_t(b[2], b[1]), scr_t(b[2], b[3]), scr_t(b[0], b[3])];
+            let mut min = corners[0];
+            let mut max = corners[0];
+            for p in corners {
+                min = min.min(p);
+                max = max.max(p);
+            }
+            egui::Rect::from_min_max(min, max)
+        })
+    });
+    Some((rect.unwrap_or(cursor).expand(1.0), cursor))
+}
 
 fn text_layer(doc: &Document, id: LayerId) -> Option<&TextLayer> {
     match &doc.layer(id)?.content {
@@ -32,17 +733,18 @@ fn byte_of(text: &str, ci: usize) -> usize {
 
 /// Layout of a type layer (cached per document revision) and its text → document transform.
 pub fn layout(app: &mut PhotocraftApp, id: LayerId) -> Option<(Arc<TextLayout>, Affine, String)> {
+    let dragged = crate::type_transform::current_transform(app, id);
+    // Borrows the document in place (no clone): the canvas hover hit-tests type every frame.
     let st = app.session.active()?;
-    let (doc, rev) = (st.doc.clone(), st.revision);
-    let t = text_layer(&doc, id)?;
-    let transform = crate::type_transform::current_transform(app, id).unwrap_or(t.transform);
-    let key = (doc.id.0, rev, id.0);
+    let t = text_layer(&st.doc, id)?;
+    let transform = dragged.unwrap_or(t.transform);
+    let key = (st.doc.id.0, st.revision, id.0);
     if let Some((k, l)) = &app.type_layout
         && *k == key
     {
         return Some((l.clone(), transform, t.text.clone()));
     }
-    let l = Arc::new(photocraft_text::shared().lock().ok()?.layout(t, doc.resolution_dpi));
+    let l = Arc::new(photocraft_text::shared().lock().ok()?.layout(t, st.doc.resolution_dpi));
     app.type_layout = Some((key, l.clone()));
     Some((l, transform, t.text.clone()))
 }
@@ -53,29 +755,35 @@ fn to_text(aff: &Affine, x: f64, y: f64) -> (f32, f32) {
 }
 
 /// Topmost shown type layer (it and every group around it visible, #4320) whose laid-out text
-/// contains the document point.
+/// contains the document point. The press and the canvas hover (`hover_path_target`) share it, so
+/// the pointer never promises a path click that the press would turn into editing this layer.
 pub(crate) fn hit_layer(app: &mut PhotocraftApp, x: f64, y: f64) -> Option<LayerId> {
-    let doc = app.session.active()?.doc.clone();
     let slop = 6.0 / app.point_zoom().max(0.01);
     // A Type Mask session's text is a hidden layer; it is still the text being edited.
     let editing = app.ui.text_edit.as_ref().filter(|ed| ed.mask).map(|ed| LayerId(ed.layer));
-    let mut ids: Vec<LayerId> = doc
-        .walk()
-        .into_iter()
-        .filter(|(path, _, l)| matches!(l.content, LayerContent::Text(_)) && (editing == Some(l.id) || doc.shown_at(path)))
-        .map(|(_, _, l)| l.id)
-        .collect();
+    let mut ids: Vec<LayerId> = {
+        let doc = &app.session.active()?.doc;
+        doc.walk()
+            .into_iter()
+            .filter(|(path, _, l)| matches!(l.content, LayerContent::Text(_)) && (editing == Some(l.id) || doc.shown_at(path)))
+            .map(|(_, _, l)| l.id)
+            .collect()
+    };
     ids.reverse(); // walk() is bottom-up; hit the topmost first
     ids.into_iter().find(|id| {
         // The pixels shown count too: a PSD's type keeps Photoshop's rendering until edited,
         // which can sit off our layout when fonts are substituted (#123).
-        let shown = text_layer(&doc, *id).and_then(|t| t.cache.as_ref()).map(|c| c.content_bounds()).is_some_and(|r| {
+        let shown = app.session.active().and_then(|st| text_layer(&st.doc, *id)).and_then(|t| t.cache.as_ref()).map(|c| c.content_bounds()).is_some_and(|r| {
             let s = f64::from(slop);
             !r.is_empty() && x >= f64::from(r.x0) - s && x <= f64::from(r.x1) + s && y >= f64::from(r.y0) - s && y <= f64::from(r.y1) + s
         });
-        let Some((l, aff, _)) = layout(app, *id) else { return shown };
+        // The hover calls this every frame: skip the layout when the pixels already answer.
+        if shown {
+            return true;
+        }
+        let Some((l, aff, _)) = layout(app, *id) else { return false };
         let (tx, ty) = to_text(&aff, x, y);
-        shown || photocraft_text::text_point_inside(&l, tx, ty, slop)
+        photocraft_text::text_point_inside(&l, tx, ty, slop)
     })
 }
 
@@ -126,9 +834,20 @@ pub fn edit_active(app: &mut PhotocraftApp) -> Result<(), String> {
             resize: None,
             preedit: None,
         });
-    } else if let Some(ed) = app.ui.text_edit.as_mut() {
-        ed.anchor = 0;
-        ed.caret = n;
+    } else {
+        let mut cancelled = false;
+        if let Some(ed) = app.ui.text_edit.as_mut() {
+            ed.anchor = 0;
+            ed.caret = n;
+            // Re-entering the same session moves the caret away from the composition: cancel it
+            // rather than reusing a range that no longer describes the text.
+            cancelled = ed.preedit.take().is_some();
+        }
+        if cancelled {
+            app.type_ime.clear_preedit();
+            interrupt_incoming(app);
+            app.type_ime.request_interrupt();
+        }
     }
     let vertical = app.session.active().and_then(|st| text_layer(&st.doc, id)).is_some_and(|t| t.orientation == photocraft_doc::text::Orientation::Vertical);
     app.ui.text_edit_return_tool = None;
@@ -373,6 +1092,109 @@ pub fn pointer_move(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifie
     }
 }
 
+/// What a Type tool click on a path does, like Photoshop: inside a closed path, area type;
+/// on a path's outline, type on the path from that point.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum PathClick {
+    Area { shape: Option<u64> },
+    OnPath { shape: Option<u64>, subpath: usize, start: f64 },
+}
+
+/// Arc length (px) along `sub` from its first anchor to segment `seg` at curve parameter `t`.
+fn arc_length_to(sub: &photocraft_doc::Subpath, seg: usize, t: f64) -> f64 {
+    const PIECES: usize = 32;
+    let eval = photocraft_vector::edit::eval;
+    let length = |s: &[Point; 4], upto: f64| {
+        (1..=PIECES)
+            .fold((0.0, eval(s, 0.0)), |(len, prev), j| {
+                let q = eval(s, upto * j as f64 / PIECES as f64);
+                (len + (q.x - prev.x).hypot(q.y - prev.y), q)
+            })
+            .0
+    };
+    let segs = sub.segments();
+    let whole: f64 = segs.iter().take(seg).map(|s| length(s, 1.0)).sum();
+    whole + segs.get(seg).map_or(0.0, |s| length(s, t.clamp(0.0, 1.0)))
+}
+
+/// The path a Type tool click at document `(x, y)` would use: on the outline (within 6 screen px)
+/// of the active shape layer's path, else of the work path, type on that path; inside a closed
+/// one, area type. The work path's inside counts only while the canvas draws it (selected in the
+/// Paths panel, #6551): a hidden Work Path left after Load as Selection must not turn a plain
+/// click into area type. None while View › Show › Target Path (or Extras) hides paths.
+pub(crate) fn path_target(app: &PhotocraftApp, x: f64, y: f64) -> Option<PathClick> {
+    use photocraft_vector::edit::{Hit, hit};
+    if !app.ui.view.shows(app.ui.view.show.target_path) {
+        return None;
+    }
+    let shape_path = crate::vector_ui::active_shape_path(app);
+    let work = app.session.active().and_then(|s| s.doc.work_path.clone());
+    let work_shown = app.ui.selected_path.as_deref() == Some("work");
+    // The canvas hover runs this every frame and `hit` samples every segment, so a path with more
+    // anchors than this is not a click target (the click and the pointer agree: plain point
+    // text). 4096 anchors is far beyond hand-drawn paths and shapes yet keeps a frame cheap, and
+    // it is the most `type.fillPath` accepts, so every area click target can be filled.
+    const MAX_TARGET_KNOTS: usize = photocraft_text::area::MAX_AREA_KNOTS;
+    let small = |path: &photocraft_doc::vector::Path| path.subpaths.iter().map(|s| s.knots.len()).fold(0usize, usize::saturating_add) <= MAX_TARGET_KNOTS;
+    let tol = 6.0 / app.point_zoom().max(0.01) as f64;
+    // Only the horizontal Type tool starts type on a path: vertical type on a path is not laid
+    // out yet.
+    let vertical = app.ui.tool.is_vertical_type();
+    let outline = |path: &photocraft_doc::vector::Path, shape: Option<u64>| {
+        let on_path = |sp: usize, k: usize, t: f64| {
+            // Type on a path needs a segment to run along (`type.attachToPath` rejects one anchor).
+            let sub = path.subpaths.get(sp).filter(|s| !vertical && s.knots.len() >= 2)?;
+            Some(PathClick::OnPath { shape, subpath: sp, start: arc_length_to(sub, k, t) })
+        };
+        match hit(path, Point::new(x, y), tol, &[]) {
+            Some(Hit::Segment([sp, k], t)) => on_path(sp, k, t),
+            Some(Hit::Anchor([sp, k])) => on_path(sp, k, 0.0),
+            _ => None,
+        }
+    };
+    let inside = |path: &photocraft_doc::vector::Path| photocraft_text::area::AreaShape::new(path, false).is_some_and(|a| a.contains(x as f32, y as f32));
+    if let Some((id, p)) = shape_path.as_ref().filter(|(_, p)| small(p)) {
+        if let Some(c) = outline(p, Some(*id)) {
+            return Some(c);
+        }
+        if inside(p) {
+            return Some(PathClick::Area { shape: Some(*id) });
+        }
+    }
+    let w = work.as_ref().filter(|w| small(w))?;
+    if let Some(c) = outline(w, None) {
+        return Some(c);
+    }
+    (work_shown && inside(w)).then_some(PathClick::Area { shape: None })
+}
+
+/// What the Type tool's pointer over document `(x, y)` shows (#218): the path click a press there
+/// would make, unless the press edits the type layer under it instead (`pointer_down`: an
+/// unshifted press on shown type), where Photoshop keeps the plain I-beam. The type hit is only
+/// tested over a path, so a hover elsewhere lays out nothing. Nothing while a type edit is open
+/// (a click then commits rather than starting new type). While the button is held it is what the
+/// release makes (`pointer_up`): nothing once the drag is a text box, else the path click at the
+/// press.
+pub(crate) fn hover_path_target(app: &mut PhotocraftApp, x: f64, y: f64, shift: bool) -> Option<PathClick> {
+    if app.ui.text_edit.is_some() {
+        return None;
+    }
+    if let Some(start) = app.drag.as_ref().map(|d| d.start) {
+        // The press already passed over editing type (`pointer_down`), so no type hit test.
+        return if makes_box(app, start, [x, y]) { None } else { path_target(app, start[0], start[1]) };
+    }
+    let target = path_target(app, x, y)?;
+    (shift || hit_layer(app, x, y).is_none()).then_some(target)
+}
+
+/// Whether a press at `start` released at `end` drags out a paragraph box rather than clicking
+/// (at least 4 screen pixels both ways).
+fn makes_box(app: &PhotocraftApp, start: [f64; 2], end: [f64; 2]) -> bool {
+    let (w, h) = ((end[0] - start[0]).abs(), (end[1] - start[1]).abs());
+    let min = 4.0 / app.point_zoom().max(0.01) as f64;
+    w >= min && h >= min
+}
+
 /// Pointer up. `rect` is the dragged box (document px) when no edit session consumed the press.
 pub fn pointer_up(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
     if let Some(e) = app.ui.text_edit.as_mut() {
@@ -385,6 +1207,9 @@ pub fn pointer_up(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
     let min = 4.0 / app.point_zoom().max(0.01) as f64;
     let o = app.ui.tool_options.clone();
     let mask = app.ui.tool.is_type_mask();
+    // A click (not a drag) with the Type tool on a path: area type inside a closed path, type
+    // on the path on its outline. The Type Mask tools ignore paths.
+    let target = if !mask && !makes_box(app, start, end) { path_target(app, start[0], start[1]) } else { None };
     // Preferences ▸ Type: "Fill new type layers with placeholder text" (on by default). The Type
     // Mask tools start empty, as Photoshop's do.
     let text = if !mask && app.session.prefs().type_.fill_new_type_layers_with_placeholder { PLACEHOLDER } else { "" };
@@ -397,23 +1222,25 @@ pub fn pointer_up(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
         p["x"] = json!(start[0].round());
         p["y"] = json!(start[1].round());
     }
-    // A click on a shown path starts type on that path, from the point clicked (Photoshop).
-    let on_path = if p.get("box").is_none() { path_at(app, start[0], start[1]) } else { None };
     let key = session_key(app);
     p["coalesce"] = json!(key);
     if let Ok(v) = app.run("type.create", p)
         && let Some(id) = v.get("layer").and_then(serde_json::Value::as_u64)
     {
+        // A failed follow-up leaves point text; say why instead of passing over it.
+        let follow_up = match &target {
+            Some(PathClick::Area { shape }) => app.run("type.fillPath", json!({"layer": id, "shape": shape, "coalesce": key})),
+            Some(PathClick::OnPath { shape, subpath, start }) => {
+                app.run("type.attachToPath", json!({"layer": id, "shape": shape, "subpath": subpath, "start": start, "coalesce": key}))
+            }
+            None => Ok(serde_json::Value::Null),
+        };
+        if let Err(e) = follow_up {
+            app.ui.status = e;
+            app.ui.status_error = true;
+        }
         if o.type_aa != "sharp" {
             let _ = app.run("type.edit", json!({"layer": id, "antialias": o.type_aa, "coalesce": key}));
-        }
-        if let Some(mut q) = on_path {
-            q["layer"] = json!(id);
-            q["at"] = json!([start[0], start[1]]);
-            q["coalesce"] = json!(key);
-            if let Err(e) = app.run("type.attachToPath", q) {
-                app.ui.status = e;
-            }
         }
         // A Type Mask's text is a hidden working layer: the canvas shows the mask overlay
         // instead, and committing turns it into the selection.
@@ -439,53 +1266,6 @@ pub fn pointer_up(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
     }
 }
 
-/// The shown path a Type tool click at document point (`x`, `y`) puts type on, as
-/// `type.attachToPath` params naming it (`shape`, `subpath`): the active shape layer's path, else
-/// the work path, within a few screen pixels, as in Photoshop. Only the horizontal Type tool
-/// starts path type for now; vertical type on a path is not laid out yet.
-pub(crate) fn path_at(app: &PhotocraftApp, x: f64, y: f64) -> Option<serde_json::Value> {
-    if app.ui.tool != crate::state::Tool::Type || app.ui.text_edit.is_some() || !app.ui.view.shows(app.ui.view.show.target_path) {
-        return None;
-    }
-    let tol = f64::from(6.0 / app.point_zoom().max(0.01));
-    let hit = |p: &photocraft_doc::vector::Path| {
-        let s = match photocraft_vector::edit::hit(p, Point::new(x, y), tol, &[])? {
-            photocraft_vector::edit::Hit::Anchor([s, _]) | photocraft_vector::edit::Hit::Segment([s, _], _) => s,
-            photocraft_vector::edit::Hit::Handle(..) => return None,
-        };
-        p.subpaths.get(s).filter(|sp| sp.knots.len() >= 2).map(|_| s)
-    };
-    if let Some((id, p)) = crate::vector_ui::active_shape_path(app)
-        && let Some(s) = hit(&p)
-    {
-        return Some(json!({"shape": id, "subpath": s}));
-    }
-    let work = app.session.active()?.doc.work_path.as_ref()?;
-    hit(work).map(|s| json!({"subpath": s}))
-}
-
-/// The Type tool's pointer over a path it can follow: Photoshop's I-beam crossed by a dotted
-/// wavy line, drawn on the canvas.
-pub(crate) fn path_cursor(painter: &egui::Painter, at: Pos2) -> egui::CursorIcon {
-    let beam = |c: Color32, w: f32| {
-        let s = Stroke::new(w, c);
-        painter.line_segment([at + egui::vec2(0.0, -8.0), at + egui::vec2(0.0, 8.0)], s);
-        for dy in [-8.0, 8.0] {
-            painter.line_segment([at + egui::vec2(-3.0, dy), at + egui::vec2(3.0, dy)], s);
-        }
-    };
-    beam(Color32::WHITE, 3.0);
-    beam(Color32::BLACK, 1.0);
-    // The wave: short dashes along a sine through the beam's lower half.
-    let wave = |t: f32| at + egui::vec2(-9.0 + 18.0 * t, 5.0 - 3.0 * t + 2.0 * (t * std::f32::consts::TAU * 1.5).sin());
-    for i in (0..12).step_by(2) {
-        let (a, b) = (wave(i as f32 / 12.0), wave((i + 1) as f32 / 12.0));
-        painter.line_segment([a, b], Stroke::new(3.0, Color32::WHITE));
-        painter.line_segment([a, b], Stroke::new(1.0, Color32::BLACK));
-    }
-    egui::CursorIcon::None
-}
-
 fn session_key(app: &mut PhotocraftApp) -> String {
     format!("type-{}", app.ui.alloc_id())
 }
@@ -496,6 +1276,11 @@ fn active_doc_id(app: &PhotocraftApp) -> Option<u64> {
 
 fn current_text(app: &PhotocraftApp, id: LayerId) -> Option<String> {
     Some(text_layer(&app.session.active()?.doc, id)?.text.clone())
+}
+
+/// Character count without cloning the layer's text.
+fn text_char_count(app: &PhotocraftApp, id: LayerId) -> Option<usize> {
+    Some(text_layer(&app.session.active()?.doc, id)?.text.chars().count())
 }
 
 /// The selected characters, clamped after undo/redo may have shortened the text.
@@ -549,11 +1334,23 @@ fn insert(app: &mut PhotocraftApp, s: &str) {
         return;
     }
     crate::type_transform::finish(app);
-    if app.run("type.edit", json!({"layer": ed.layer, "replace": {"start": a, "end": b, "text": s}, "coalesce": ed.session})).is_ok()
-        && let Some(e) = app.ui.text_edit.as_mut()
-    {
-        e.caret = a + s.chars().count();
-        e.anchor = e.caret;
+    let applied = app.run("type.edit", json!({"layer": ed.layer, "replace": {"start": a, "end": b, "text": s}, "coalesce": ed.session})).is_ok();
+    if applied {
+        let mut cancelled = false;
+        if let Some(e) = app.ui.text_edit.as_mut() {
+            e.caret = a + s.chars().count();
+            e.anchor = e.caret;
+            // An application edit invalidates a live composition: its recorded range no longer
+            // describes the text, and its pending native commit must not be applied here.
+            cancelled = e.preedit.take().is_some();
+        }
+        if cancelled {
+            app.type_ime.clear_preedit();
+            interrupt_incoming(app);
+            app.type_ime.request_interrupt();
+        }
+        // Ordinary typing, paste, cut and deletion are application-origin, never IME receipts.
+        note_ime_application_change(app, &ed);
     }
 }
 
@@ -750,8 +1547,20 @@ pub(crate) fn toggle_hyphenate(app: &mut PhotocraftApp) {
 /// typed text) and replaced by every update; `commit` makes the result final.
 fn ime_update(app: &mut PhotocraftApp, s: &str, commit: bool) {
     let Some(ed) = app.ui.text_edit.clone() else { return };
-    let Some(text) = current_text(app, LayerId(ed.layer)) else { return };
-    let n = text.chars().count();
+    // Validate the composition only while one exists: a plain preedit/commit otherwise needs no
+    // copy of the whole layer.
+    let n = if ed.preedit.is_some() {
+        let Some(text) = current_text(app, LayerId(ed.layer)) else { return };
+        // A composition range that no longer holds the recorded composition belongs to an edit
+        // that was replaced under it: never use it to delete or replace text.
+        if reconcile_preedit(app, &ed, &text) {
+            return;
+        }
+        text.chars().count()
+    } else {
+        let Some(n) = text_char_count(app, LayerId(ed.layer)) else { return };
+        n
+    };
     let s = s.replace("\r\n", "\n").replace('\r', "\n");
     // An empty preedit or commit while nothing is being composed changes nothing. Wayland input
     // methods send one on every state change (the caret rectangle moving as a selection grows),
@@ -767,17 +1576,124 @@ fn ime_update(app: &mut PhotocraftApp, s: &str, commit: bool) {
         if let Some(e) = app.ui.text_edit.as_mut() {
             e.preedit = None;
         }
+        app.type_ime.clear_preedit();
         return;
     }
+    // Capture the committed text *before* the engine runs. The pre-edit is excluded from this
+    // and from the after snapshot; only an accepted commit earns an IME receipt.
+    let before = if commit { ime_committed(app, &ed) } else { None };
     let len = s.chars().count();
     crate::type_transform::finish(app);
-    if app.run("type.edit", json!({"layer": ed.layer, "replace": {"start": start, "end": end, "text": s}, "coalesce": ed.session})).is_ok()
-        && let Some(e) = app.ui.text_edit.as_mut()
-    {
-        e.caret = start + len;
-        e.anchor = e.caret;
-        e.preedit = if commit || len == 0 { None } else { Some((start, len)) };
+    if app.run("type.edit", json!({"layer": ed.layer, "replace": {"start": start, "end": end, "text": s}, "coalesce": ed.session})).is_err() {
+        return;
     }
+    let mut after_ed = ed.clone();
+    after_ed.caret = start + len;
+    after_ed.anchor = after_ed.caret;
+    after_ed.preedit = if commit || len == 0 { None } else { Some((start, len)) };
+    if let Some(e) = app.ui.text_edit.as_mut() {
+        *e = after_ed.clone();
+    }
+    if after_ed.preedit.is_some() {
+        app.type_ime.note_preedit(&after_ed, &s);
+    } else {
+        app.type_ime.clear_preedit();
+    }
+    if commit {
+        app.type_ime.incoming = None;
+    } else {
+        remember_incoming(app, Some(s.is_empty()));
+    }
+    if commit
+        && let Some(before) = before
+        && let Some(after) = ime_committed(app, &after_ed)
+    {
+        // A no-op commit (equal snapshots) is rejected by the tracker rather than fabricated.
+        note_ime_apply(app, &after_ed, &before, &after);
+    }
+}
+
+/// The active range for an IME delete-surrounding batch: the pre-edit when composing, otherwise
+/// the sorted selection. Returns `(start, end, length)` in character indices.
+fn ime_active_range(app: &PhotocraftApp, ed: &TextEdit) -> Option<(usize, usize, usize)> {
+    let n = text_char_count(app, LayerId(ed.layer))?;
+    if let Some((start, len)) = ed.preedit {
+        let end = start.checked_add(len)?;
+        return (end <= n).then_some((start, end, n));
+    }
+    let a = ed.caret.min(n);
+    let b = ed.anchor.min(n);
+    Some((a.min(b), a.max(b), n))
+}
+
+/// Delete characters around the selection/pre-edit, as one coalesced type edit.
+fn ime_delete_chars(app: &mut PhotocraftApp, before_chars: usize, after_chars: usize) -> bool {
+    let Some(ed) = app.ui.text_edit.clone() else { return false };
+    if ed.preedit.is_some() {
+        let Some(text) = current_text(app, LayerId(ed.layer)) else { return false };
+        if reconcile_preedit(app, &ed, &text) {
+            return false;
+        }
+    }
+    let Some((start, end, n)) = ime_active_range(app, &ed) else { return false };
+    let from = start.saturating_sub(before_chars);
+    let to = end.saturating_add(after_chars).min(n);
+    ime_delete_around(app, ed, from, start, end, to)
+}
+
+/// `DeleteSurroundingBytes` counts UTF-8 bytes from the active range's edges. A byte count that
+/// ends inside a character leaves that character, as the stock TextEdit does.
+fn ime_delete_bytes(app: &mut PhotocraftApp, before_bytes: usize, after_bytes: usize) -> bool {
+    let Some(ed) = app.ui.text_edit.clone() else { return false };
+    let Some(text) = current_text(app, LayerId(ed.layer)) else { return false };
+    if reconcile_preedit(app, &ed, &text) {
+        return false;
+    }
+    let Some((start, end, n)) = ime_active_range(app, &ed) else { return false };
+    let start_byte = byte_of(&text, start);
+    let end_byte = byte_of(&text, end);
+    let from_byte = start_byte.saturating_sub(before_bytes);
+    let before_chars = text.get(..start_byte).map_or(0, |before| before.char_indices().rev().take_while(|(index, _)| *index >= from_byte).count());
+    let after_chars =
+        text.get(end_byte..).map_or(0, |after| after.char_indices().take_while(|(index, character)| index + character.len_utf8() <= after_bytes).count());
+    let from = start.saturating_sub(before_chars);
+    let to = end.saturating_add(after_chars).min(n);
+    ime_delete_around(app, ed, from, start, end, to)
+}
+
+/// Apply one accepted IME deletion and record its receipt from the snapshots around it.
+///
+/// The active selection/pre-edit itself stays; only the requested runs before `start` and after
+/// `end` are removed. They are two engine mutations with the same coalescing key (one history
+/// step), and one receipt covers the whole batch.
+fn ime_delete_around(app: &mut PhotocraftApp, ed: TextEdit, from: usize, start: usize, end: usize, to: usize) -> bool {
+    if from >= start && end >= to {
+        return false;
+    }
+    let before = ime_committed(app, &ed);
+    crate::type_transform::finish(app);
+    // Delete the trailing run first so the leading run's character indices stay valid.
+    if end < to && app.run("type.edit", json!({"layer": ed.layer, "replace": {"start": end, "end": to, "text": ""}, "coalesce": ed.session})).is_err() {
+        return false;
+    }
+    if from < start && app.run("type.edit", json!({"layer": ed.layer, "replace": {"start": from, "end": start, "text": ""}, "coalesce": ed.session})).is_err() {
+        return false;
+    }
+    let shift = start - from;
+    let mut after_ed = ed.clone();
+    after_ed.caret = ed.caret.saturating_sub(shift);
+    after_ed.anchor = ed.anchor.saturating_sub(shift);
+    if let Some((preedit_start, preedit_len)) = ed.preedit {
+        after_ed.preedit = Some((preedit_start.saturating_sub(shift), preedit_len));
+    }
+    if let Some(e) = app.ui.text_edit.as_mut() {
+        *e = after_ed.clone();
+    }
+    if let (Some(before), Some(after)) = (before, ime_committed(app, &after_ed)) {
+        note_ime_apply(app, &after_ed, &before, &after);
+    }
+    remember_incoming(app, None);
+    true
 }
 
 /// Character index of the previous / next word boundary (shared with `type.navigate`).
@@ -913,27 +1829,50 @@ fn line_edge(app: &mut PhotocraftApp, id: LayerId, caret: usize, end: bool) -> u
 /// Keyboard input while editing. Returns true when a type edit session is active (single-key
 /// tool shortcuts must then be skipped). Handled events are removed from the frame's input.
 pub fn handle_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
+    bind_reset_context(app, ctx);
+    // A receipt is only valid for the frame that produced it; never reuse last frame's.
+    app.type_ime.frame = None;
     end_if_left(app);
+    sync_incoming(app, ctx.viewport_id());
+    if !ctx.input(|i| i.focused) || ctx.text_edit_focused() || ctx.egui_wants_keyboard_input() {
+        interrupt_incoming(app);
+    }
     crate::type_transform::cancel_stale(app);
     if !ctx.input(|i| i.focused) {
         crate::type_transform::cancel_drag(app);
     }
-    let Some(ed) = app.ui.text_edit.clone() else { return false };
+    let Some(ed) = app.ui.text_edit.clone() else {
+        controls_only(app, ctx);
+        return false;
+    };
     // The font picker (and other focused fields) owns keyboard input while it is open.
-    if ctx.text_edit_focused() || ctx.egui_wants_keyboard_input() {
+    if !reset_route_eligible(app, ctx) {
+        controls_only(app, ctx);
         return true;
     }
     let id = LayerId(ed.layer);
-    let Some(text) = current_text(app, id) else {
+    let Some(n) = text_char_count(app, id) else {
         app.ui.text_edit = None;
         app.ui.text_edit_return_tool = None;
+        app.type_ime.clear_preedit();
+        controls_only(app, ctx);
         return false;
     };
     // Undo/redo can shorten the text under us.
-    let n = text.chars().count();
     if let Some(e) = app.ui.text_edit.as_mut() {
         e.caret = e.caret.min(n);
         e.anchor = e.anchor.min(n);
+    }
+    if !claim_raw_pass(app, ctx) {
+        return true;
+    }
+    app.type_ime.begin_frame(ctx);
+    prepare_reset(app, ctx);
+    // A target swap (session replacement, Type Mask, another layer) is known from the last
+    // descriptor the platform received. Cancel the native composition before any event in this
+    // pass can be applied to the new target.
+    if ime_target(app, &ed, ctx.viewport_id()).is_some_and(|target| app.type_ime.emitted.is_some_and(|last| last.target != target)) {
+        app.type_ime.interrupt = true;
     }
     let time = ctx.input(|i| i.time);
     let elapsed = (time - app.ui.caret_blink_time).max(0.0);
@@ -943,11 +1882,42 @@ pub fn handle_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     let events = ctx.input(|i| i.events.clone());
     let vertical_flow = is_vertical(app, id);
     let mut handled = vec![false; events.len()];
+    let mut primary_down = events
+        .iter()
+        .find_map(|event| match event {
+            egui::Event::PointerButton { button: egui::PointerButton::Primary, pressed, .. } => Some(!pressed),
+            _ => None,
+        })
+        .unwrap_or_else(|| ctx.input(|input| input.pointer.primary_down()));
+    let mut custom_mutations = true;
+    let mut deferred_custom = false;
     for (k, ev) in events.iter().enumerate() {
-        let Some(ed) = app.ui.text_edit.clone() else { break };
+        if custom_mutations && !reset_route_eligible(app, ctx) {
+            custom_mutations = false;
+            suspend_reset(app, ctx);
+        }
+        if !custom_mutations {
+            if let egui::Event::ImeResetCompleted { request_id } = ev {
+                complete_reset(app, ctx, *request_id);
+                if let Some(slot) = handled.get_mut(k) {
+                    *slot = true;
+                }
+            } else if deferred_custom
+                && matches!(ev, egui::Event::Text(_) | egui::Event::Paste(_) | egui::Event::Cut | egui::Event::Ime(_))
+                && let Some(slot) = handled.get_mut(k)
+            {
+                *slot = true;
+            }
+            continue;
+        }
+        prepare_reset(app, ctx);
+        let Some(ed) = app.ui.text_edit.clone() else { continue };
         let (a, b) = (ed.caret.min(ed.anchor), ed.caret.max(ed.anchor));
-        let text = current_text(app, id).unwrap_or_default();
-        let n = text.chars().count();
+        // Only key handling needs the text (word/line edges); pointer, clipboard and IME events
+        // do not clone the whole layer.
+        let is_key = matches!(ev, egui::Event::Key { .. });
+        let text = if is_key { current_text(app, id).unwrap_or_default() } else { String::new() };
+        let n = if is_key { text.chars().count() } else { 0 };
         let set = |app: &mut PhotocraftApp, caret: usize, extend: bool| {
             if let Some(e) = app.ui.text_edit.as_mut() {
                 e.caret = caret.min(n);
@@ -960,11 +1930,51 @@ pub fn handle_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
         match ev {
             egui::Event::Text(s) => insert_typed(app, s),
             egui::Event::Paste(s) => insert(app, s),
-            // A bare line break from the IME is the Enter key, which the key arm handles.
-            egui::Event::Ime(egui::ImeEvent::Preedit { text: s, .. } | egui::ImeEvent::Commit(s)) if s == "\n" || s == "\r" => handled[k] = false,
-            egui::Event::Ime(egui::ImeEvent::Preedit { text, .. }) => ime_update(app, text, false),
-            egui::Event::Ime(egui::ImeEvent::Commit(s)) => ime_update(app, s, true),
-            egui::Event::Ime(_) => {}
+            egui::Event::ImeResetCompleted { request_id } => complete_reset(app, ctx, *request_id),
+            egui::Event::Ime(ime_event) => {
+                // Untagged terminal payload cannot acknowledge a host reset. Only the exact
+                // current completion arm above may open admission for the following element.
+                if reset_guarded(app, ctx.viewport_id()) {
+                    continue;
+                } else {
+                    match ime_event {
+                        // A bare line break from the IME is the Enter key, which the key arm handles.
+                        egui::ImeEvent::Preedit { text: s, .. } | egui::ImeEvent::Commit(s) if s == "\n" || s == "\r" => handled[k] = false,
+                        egui::ImeEvent::Preedit { text, .. } => ime_update(app, text, false),
+                        egui::ImeEvent::Commit(s) => {
+                            ime_update(app, s, true);
+                            app.type_ime.incoming = None;
+                        }
+                        egui::ImeEvent::DeleteSurrounding { before_chars, after_chars } => {
+                            ime_delete_chars(app, *before_chars, *after_chars);
+                        }
+                        egui::ImeEvent::DeleteSurroundingBytes { before_bytes, after_bytes } => {
+                            ime_delete_bytes(app, *before_bytes, *after_bytes);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            egui::Event::PointerButton { button: egui::PointerButton::Primary, pressed, .. } => {
+                primary_down = *pressed;
+                if *pressed {
+                    // The canvas destination handler runs after this pass; never apply a
+                    // same-batch Text/Paste/Cut/IME suffix at the old caret just because no
+                    // composition or reset guard existed yet.
+                    interrupt_action(app, ctx.viewport_id());
+                    custom_mutations = false;
+                    deferred_custom = true;
+                    suspend_reset(app, ctx);
+                }
+                handled[k] = false;
+            }
+            egui::Event::PointerMoved(_) if primary_down => {
+                interrupt_action(app, ctx.viewport_id());
+                custom_mutations = false;
+                deferred_custom = true;
+                suspend_reset(app, ctx);
+                handled[k] = false;
+            }
             egui::Event::Copy => {
                 copy_selection(app, ctx);
             }
@@ -1058,7 +2068,12 @@ pub fn handle_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
                     Key::Enter if m.command => commit_with(app, *m),
                     Key::Enter => insert(app, "\n"),
                     // Photoshop types a tab character; layout advances it to the next tab stop.
-                    Key::Tab if !m.command && !m.alt && !m.shift => insert(app, "\t"),
+                    Key::Tab if !m.command && !m.alt && !m.shift => {
+                        // egui queues focus navigation before this handler runs; consuming the
+                        // key alone would let the menu bar take focus after the first tab (#8889).
+                        ctx.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
+                        insert(app, "\t");
+                    }
                     Key::Escape if crate::type_transform::active(app) => crate::type_transform::cancel_drag(app),
                     // The Type Mask tools: Escape always cancels, leaving the selection as it was.
                     Key::Escape if ed.mask => cancel(app),
@@ -1082,6 +2097,12 @@ pub fn handle_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
                         if *key == Key::Z {
                             crate::type_transform::cancel_drag(app);
                         }
+                        if reset_guarded(app, ctx.viewport_id()) || app.type_ime.incoming.is_some() {
+                            interrupt_action(app, ctx.viewport_id());
+                            custom_mutations = false;
+                            deferred_custom = true;
+                            suspend_reset(app, ctx);
+                        }
                         handled[k] = false;
                     }
                     _ => {}
@@ -1091,6 +2112,7 @@ pub fn handle_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
             _ => handled[k] = false,
         }
     }
+    prepare_reset(app, ctx);
     if handled.iter().any(|h| *h) {
         app.ui.caret_blink_time = ctx.input(|i| i.time);
         let mut k = 0;
@@ -1134,6 +2156,7 @@ pub fn commit_with(app: &mut PhotocraftApp, mods: egui::Modifiers) {
             crate::type_transform::reset(app);
             app.ui.text_edit = None;
             app.ui.text_edit_return_tool = None;
+            app.type_ime.clear_preedit();
         }
     }
 }
@@ -1153,6 +2176,7 @@ fn commit_here(app: &mut PhotocraftApp, mods: egui::Modifiers) {
     }
     crate::type_transform::reset(app);
     let Some(ed) = app.ui.text_edit.take() else { return };
+    app.type_ime.clear_preedit();
     if let Some(tool) = app.ui.text_edit_return_tool.take()
         && app.ui.tool.is_type()
     {
@@ -1246,15 +2270,10 @@ pub fn draw_overlay(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &ViewX
         let n = if bend.is_some() { ((x1 - x0) / 4.0).ceil().clamp(1.0, 512.0) as usize } else { 1 };
         (0..=n).map(|i| scr(x0 + (x1 - x0) * i as f32 / n as f32, y)).collect()
     };
-    // Tell the OS where the caret is: this is what enables the IME and places its candidate window.
-    {
-        let (x, top, bot) = l.caret(byte_of(&text, ed.caret));
-        let (x, top, bot) = if l.lines.is_empty() { (0.0, -(12.0 * l.px_per_pt.max(1.0)), 3.0) } else { (x, top, bot) };
-        let r = egui::Rect::from_two_pos(scr(x, top), scr(x, bot)).expand(1.0);
-        painter.ctx().output_mut(|o| {
-            o.ime = Some(egui::output::IMEOutput { purpose: egui::IMEPurpose::Normal, rect: r, cursor_rect: r, should_interrupt_composition: false });
-        });
-    }
+    // The IME descriptor is emitted once at pass end by `sync_ime`, from this pass's canvas
+    // mapping and the model as it stands after every panel has run.
+    let pass_nr = painter.ctx().cumulative_pass_nr_for(painter.ctx().viewport_id());
+    app.type_ime.note_view(painter.ctx().viewport_id(), pass_nr, xf);
     // Frame: paragraph text shows its box with handles; point text an underline per line.
     let mods = crate::workspace_ui::sticky_mods(app, painter.ctx().input(|i| i.modifiers));
     let has_transform = crate::type_transform::draw(app, painter, xf, mods);
@@ -1272,6 +2291,17 @@ pub fn draw_overlay(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &ViewX
                 }
             }
         }
+        // Area type: the outline of the shape it wraps inside.
+        Some(photocraft_doc::text::TextShape::Area { path }) => {
+            if !has_transform {
+                for poly in photocraft_vector::flatten::flatten_path(&path, 0.5) {
+                    let pts: Vec<Pos2> = poly.pts.iter().map(|&(x, y)| scr_t(x as f32, y as f32)).collect();
+                    if pts.len() >= 2 {
+                        painter.add(egui::Shape::closed_line(pts, frame));
+                    }
+                }
+            }
+        }
         _ => {
             for ln in &l.lines {
                 // Horizontal: just under the baseline; vertical: the column's centre line.
@@ -1280,9 +2310,12 @@ pub fn draw_overlay(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &ViewX
             }
         }
     }
-    // Uncommitted IME text is underlined.
-    if let Some((ps, pl)) = ed.preedit {
-        let (a, b) = (byte_of(&text, ps), byte_of(&text, ps + pl));
+    // Uncommitted IME text is underlined, but only while the stored range still holds exactly
+    // the composition: an application edit may have shifted it onto committed characters.
+    if let Some(offsets) = ime_offsets(&text, &ed)
+        && ime_preedit_is_current(app, &text, &ed, &offsets)
+        && let Some((a, b)) = offsets.preedit.map(|range| (range.start, range.end))
+    {
         for (li, ln) in l.lines.iter().enumerate() {
             let xs: Vec<(f32, f32)> =
                 l.clusters.iter().filter(|c| c.line == li && c.range.start >= a && c.range.end <= b).map(|c| (c.x, c.x + c.advance)).collect();
@@ -1380,7 +2413,7 @@ fn draw_mask_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXfor
     // The text's box: a texture of the tint where there is no glyph, cached per revision.
     let ctx = painter.ctx();
     let key = (st.doc.id.0, st.revision, id.0);
-    let cache = egui::Id::new("pc-type-mask-overlay");
+    let cache = egui::Id::unique("pc-type-mask-overlay");
     let tex = ctx.data(|d| d.get_temp::<((u64, u64, u64), egui::TextureHandle)>(cache)).filter(|(k, _)| *k == key).map(|(_, t)| t);
     let tex = tex.unwrap_or_else(|| {
         let max = (ctx.input(|i| i.max_texture_side) as u32).clamp(256, 4096);
@@ -1433,7 +2466,7 @@ pub fn families() -> Arc<Vec<String>> {
 
 /// Where [`sync_font_names`] leaves the font menus' localized labels for this frame.
 fn font_labels_id() -> egui::Id {
-    egui::Id::new("photocraft-font-menu-localized-names")
+    egui::Id::unique("photocraft-font-menu-localized-names")
 }
 
 /// Preferences ▸ Type ▸ Show Font Names in English: when off, font menus list a family that has a
@@ -1606,9 +2639,10 @@ fn axis_sliders(app: &mut PhotocraftApp, ui: &mut egui::Ui, c: &photocraft_doc::
         let mut changed = false;
         ui.push_id(("type-axis", &axis.0), |ui| {
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(axis_label(&axis.0)).color(t.text_dim));
+                let axis_name = axis_label(&axis.0);
+                ui.label(egui::RichText::new(&axis_name).color(t.text_dim));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    changed |= crate::widgets::value_field(ui, &mut v, min..=max, "", 74.0).changed();
+                    changed |= crate::widgets::value_field(ui, &mut v, min..=max, "", 74.0).accessible_name(axis_name).changed();
                 });
             });
             changed |= crate::widgets::slider(ui, &mut v, min..=max, None).changed();
@@ -1660,7 +2694,7 @@ pub(crate) fn fonts_ready(ui: &mut egui::Ui, width: f32) -> bool {
         return true;
     }
     let label = tl!("Loading fonts…").to_string();
-    ui.add_enabled_ui(false, |ui| crate::widgets::dropdown(ui, "fonts-loading", &mut label.clone(), &[(label.clone(), label.as_str())], width));
+    ui.add_enabled_ui(false, |ui| crate::widgets::dropdown(ui, "fonts-loading", tl!("Font"), &mut label.clone(), &[(label.clone(), label.as_str())], width));
     ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
     false
 }
@@ -1700,7 +2734,7 @@ pub(crate) fn family_picker_in(
     let mut changed = false;
     // A font picked from the open menu (click or Enter): the field keeps the focus afterwards.
     let mut picked = false;
-    let search_id = ui.id().with(("font-search", salt));
+    let search_id = ui.scope_id().with(("font-search", salt));
     let focus_id = search_id.with("focus");
     let recents_id = search_id.with("recents");
     let row_id = search_id.with("row");
@@ -1718,7 +2752,7 @@ pub(crate) fn family_picker_in(
         // picking a font closes it explicitly below.
         .close_behavior(if matches!(close, egui::PopupCloseBehavior::IgnoreClicks) { close } else { egui::PopupCloseBehavior::CloseOnClickOutside });
 
-    let response = combo.show_ui(ui, |ui| {
+    let mut response = combo.show_ui(ui, |ui| {
         let height_id = search_id.with("height");
         // Each opening focuses the search, including a reopen on the very next pass. Keep
         // asking through the invisible sizing pass, until the field receives focus.
@@ -1796,8 +2830,10 @@ pub(crate) fn family_picker_in(
                 // family is listed twice.
                 let mut button = egui::Button::selectable(selected == Some(i), label).truncate().stroke(egui::Stroke::NONE);
                 if let Some((size, [_, h])) = preview {
-                    button = button
-                        .right_text(egui::Atom::custom(ui.id().with(("font-sample", f)), egui::vec2(crate::font_preview::slot_width(ui.ctx(), f, size), h)));
+                    button = button.right_text(egui::Atom::custom(
+                        egui::IdSalt::new(("font-sample", f)),
+                        egui::vec2(crate::font_preview::slot_width(ui.ctx(), f, size), h),
+                    ));
                 }
                 let response = ui.add_sized([330.0, row_h], button);
                 if stepped == Some(i) {
@@ -1835,6 +2871,7 @@ pub(crate) fn family_picker_in(
         }
         if accept { None } else { hovered }
     });
+    response.response = response.response.accessible_name(tl!("Font"));
     press.after(&response.response);
     if !egui::ComboBox::is_open(ui.ctx(), response.response.id) {
         ui.data_mut(|d| {
@@ -1902,7 +2939,7 @@ pub(crate) fn family_picker_in(
     }
 
     if salt == "type-font" {
-        let hover_id = egui::Id::new("type-font-hover");
+        let hover_id = egui::Id::unique("type-font-hover");
         if let Some(f) = hovered_font {
             ui.ctx().data_mut(|d| d.insert_temp(hover_id, f));
         } else if egui::ComboBox::is_open(ui.ctx(), response.response.id) {
@@ -2207,14 +3244,14 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         }
         let opts: Vec<(String, String)> = styles(&fam).into_iter().map(|s| (s.clone(), style_label(&s))).collect();
         let opts_ref: Vec<(String, &str)> = opts.iter().map(|(a, b)| (a.clone(), b.as_str())).collect();
-        if crate::widgets::dropdown(ui, "type-style", &mut style, &opts_ref, 110.0) {
+        if crate::widgets::dropdown(ui, "type-style", tl!("Style"), &mut style, &opts_ref, 110.0) {
             app.ui.tool_options.type_style = style.clone();
             apply(app, ui.ctx(), json!({"fontStyle": style}));
         }
     }
     let (r, icon) = ui.allocate_exact_size(egui::vec2(18.0, 22.0), egui::Sense::hover());
     crate::icons::paint(ui, r, "type", 13.0, t.icon);
-    icon.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, tl!("Font size")));
+    icon.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, tl!("Font size")));
     // Photoshop's "T" scrubs the size field beside it, like the Character panel's icons (#6437).
     crate::widgets::scrub_option_icon(ui, &icon, tl!("Font size"));
     let (unit, label) = type_unit(app);
@@ -2235,7 +3272,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         ("strong".to_string(), tl!("Strong")),
         ("smooth".to_string(), tl!("Smooth")),
     ];
-    if crate::widgets::dropdown(ui, "type-aa", &mut aa, &aa_opts, 80.0) {
+    if crate::widgets::dropdown(ui, "type-aa", tl!("Anti-aliasing method"), &mut aa, &aa_opts, 80.0) {
         app.ui.tool_options.type_aa = aa.clone();
         if let Some(params) = formatting_params(app) {
             let _ = app.run(&format!("type.antiAlias.{aa}"), params);
@@ -2276,7 +3313,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     ui.painter().rect_filled(rect, 2.0, Color32::from_rgb(q(c[0]), q(c[1]), q(c[2])));
     ui.painter().rect_stroke(rect, 2.0, Stroke::new(1.0, t.field_border), egui::StrokeKind::Outside);
     let resp = resp.on_hover_text(tl!("Set the text color"));
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Set the text color")));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Set the text color")));
     if resp.clicked() {
         open_color_picker(app, [c[0], c[1], c[2]]);
     }
@@ -2378,7 +3415,7 @@ fn kerning_field(ui: &mut egui::Ui, shown: &str, width: f32) -> Option<serde_jso
     let mut out = None;
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
-        let resp = ui.add(egui::TextEdit::singleline(&mut buf).desired_width((width - 40.0).max(24.0)).id(id.with("edit")));
+        let resp = ui.add(egui::TextEdit::singleline(&mut buf).desired_width((width - 40.0).max(24.0)).id(id.with("edit"))).accessible_name(tl!("Kerning"));
         if resp.has_focus() {
             ui.data_mut(|d| d.insert_temp(id, buf.clone()));
         } else {
@@ -2404,6 +3441,7 @@ fn kerning_field(ui: &mut egui::Ui, shown: &str, width: f32) -> Option<serde_jso
                 }
             });
         press.after(&combo.response);
+        let _ = combo.response.accessible_name(tl!("Kerning"));
     });
     out
 }
@@ -2424,6 +3462,7 @@ fn icon_label(ui: &mut egui::Ui, icon: &str, tip: &str) {
     let t = crate::theme::Tokens::get(ui.ctx());
     let (r, resp) = ui.allocate_exact_size(egui::vec2(crate::props_layout::LABEL_W, 22.0), egui::Sense::hover());
     crate::icons::paint(ui, r, icon, 12.0, t.text_dim);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, ui.is_enabled(), tl!(tip)));
     // Photoshop's Character panel icons scrub the field beside them.
     crate::widgets::scrub_label(ui, &resp.on_hover_text(tl!(tip)));
 }
@@ -2437,6 +3476,7 @@ fn num_field(ui: &mut egui::Ui, label: &str, tip: &str, v: f32, range: std::ops:
         ui.spacing_mut().item_spacing.x = 4.0;
         let (r, resp) = ui.allocate_exact_size(egui::vec2(22.0, 22.0), egui::Sense::hover());
         ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, label, crate::theme::semibold(10.0), t.text_dim);
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, ui.is_enabled(), tl!(tip)));
         crate::widgets::scrub_label(ui, &resp.on_hover_text(tl!(tip)));
         let response = crate::widgets::value_field(ui, &mut v, range, unit, width);
         response.widget_info(|| {
@@ -2510,7 +3550,7 @@ fn direction_button(ui: &mut egui::Ui, d: photocraft_doc::text::TextDirection, s
     let tint = crate::icons::button_chrome(ui, r, selected, resp.hovered());
     direction_glyph(ui.painter(), egui::Rect::from_center_size(r.center(), egui::vec2(14.0, 16.0)), d, tint);
     let tip = tip.to_string();
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, selected, &tip));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, &tip));
     resp.on_hover_text(tip)
 }
 
@@ -2542,7 +3582,7 @@ fn toggle_cell(ui: &mut egui::Ui, w: f32, on: bool, tip: &str, paint: impl FnOnc
         },
     );
     let tip = tip.to_string();
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, on, &tip));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, enabled, on, &tip));
     resp.on_hover_text(tl!(&tip)).clicked()
 }
 
@@ -2707,7 +3747,7 @@ fn type_sections(app: &mut PhotocraftApp, ui: &mut egui::Ui, character: bool, pa
             let mut style = selected_style(&c);
             let opts: Vec<(String, String)> = styles(&fam).into_iter().map(|s| (s.clone(), style_label(&s))).collect();
             let opts_ref: Vec<(String, &str)> = opts.iter().map(|(a, b)| (a.clone(), b.as_str())).collect();
-            if crate::widgets::dropdown(ui, "props-type-style", &mut style, &opts_ref, full) {
+            if crate::widgets::dropdown(ui, "props-type-style", tl!("Style"), &mut style, &opts_ref, full) {
                 apply(app, ui.ctx(), json!({"fontStyle": style}));
             }
         });
@@ -2764,7 +3804,7 @@ fn type_sections(app: &mut PhotocraftApp, ui: &mut egui::Ui, character: bool, pa
                 ui.painter().rect_filled(rect, t.radius_sm, Color32::from_rgb(q(rgb[0]), q(rgb[1]), q(rgb[2])));
                 ui.painter().rect_stroke(rect, t.radius_sm, Stroke::new(1.0, t.field_border), egui::StrokeKind::Inside);
                 let resp = resp.on_hover_text(tl!("Text color"));
-                resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Text color")));
+                resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Text color")));
                 if resp.clicked() {
                     open_color_picker(app, rgb);
                 }
@@ -2840,8 +3880,8 @@ fn type_sections(app: &mut PhotocraftApp, ui: &mut egui::Ui, character: bool, pa
             ("justifyAll", tl!("Justify all"), A::JustifyAll),
         ];
         let cw = cell_width(full, items.len());
-        // Justification needs a paragraph box: on point text Photoshop greys the four justify
-        // buttons (#7713).
+        // Justification needs a paragraph box or area type: on point text Photoshop greys the four
+        // justify buttons (#7713).
         // The panel formats the layer being typed in, else every selected type layer.
         let point = match formatting_params(app) {
             Some(p) => p.get("layers").and_then(serde_json::Value::as_array).map_or_else(
@@ -2851,7 +3891,10 @@ fn type_sections(app: &mut PhotocraftApp, ui: &mut egui::Ui, character: bool, pa
             None => Vec::new(),
         }
         .into_iter()
-        .any(|layer| box_shape(app, LayerId(layer)).is_none());
+        .any(|layer| {
+            let shape = app.session.active().and_then(|s| text_layer(&s.doc, LayerId(layer)).map(|t| t.shape.clone()));
+            !matches!(shape, Some(photocraft_doc::text::TextShape::Box { .. } | photocraft_doc::text::TextShape::Area { .. }))
+        });
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
             for (key, tip, a) in items {
@@ -2944,7 +3987,7 @@ fn type_options(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 .into_iter()
                 .filter_map(|k| photocraft_engine::commands::find(&format!("type.antiAlias.{k}")).map(|c| (k.to_string(), c.label)))
                 .collect();
-            if crate::widgets::dropdown(ui, "props-type-aa", &mut cur, &opts, dd_w) {
+            if crate::widgets::dropdown(ui, "props-type-aa", tl!("Anti-aliasing method"), &mut cur, &opts, dd_w) {
                 run = Some(format!("type.antiAlias.{cur}"));
             }
         });
@@ -2982,6 +4025,7 @@ fn type_options(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 pub fn cancel(app: &mut PhotocraftApp) {
     crate::type_transform::reset(app);
     let Some(ed) = app.ui.text_edit.take() else { return };
+    app.type_ime.clear_preedit();
     if let Some(tool) = app.ui.text_edit_return_tool.take()
         && app.ui.tool.is_type()
     {
@@ -3185,8 +4229,8 @@ mod tests {
                 Ok(())
             })
             .unwrap();
-        assert!(path_at(&app, 200.0, 101.0).is_some());
-        assert!(path_at(&app, 200.0, 160.0).is_none(), "off the path");
+        assert!(matches!(path_target(&app, 200.0, 101.0), Some(PathClick::OnPath { .. })));
+        assert!(path_target(&app, 200.0, 160.0).is_none(), "off the path");
         let before = app.session.active().unwrap().history.entries().len();
         assert!(!pointer_down(&mut app, 200.0, 101.0, egui::Modifiers::NONE));
         pointer_up(&mut app, [200.0, 101.0], [200.0, 101.0]);
@@ -3200,7 +4244,7 @@ mod tests {
         commit(&mut app);
         // With the vertical tool a click does not start path type.
         app.ui.tool = crate::state::Tool::VerticalType;
-        assert!(path_at(&app, 200.0, 101.0).is_none());
+        assert!(!matches!(path_target(&app, 200.0, 101.0), Some(PathClick::OnPath { .. })));
         app.ui.tool = crate::state::Tool::Type;
         pointer_up(&mut app, [200.0, 160.0], [200.0, 160.0]);
         let id = LayerId(app.ui.text_edit.as_ref().unwrap().layer);
@@ -3350,10 +4394,12 @@ mod tests {
         ime_update(&mut app, "", false);
         assert_eq!(layer_text(&app), "日本語");
         assert_eq!(app.ui.text_edit.as_ref().unwrap().preedit, None);
-        // A stale preedit range (text shortened by undo) must not panic.
+        // A stale preedit range (text shortened by undo) must not replace committed text; the
+        // composition is invalidated and its pending commit is dropped.
         app.ui.text_edit.as_mut().unwrap().preedit = Some((10, 5));
         ime_update(&mut app, "x", true);
-        assert_eq!(layer_text(&app), "日本語x");
+        assert_eq!(layer_text(&app), "日本語");
+        assert_eq!(app.ui.text_edit.as_ref().unwrap().preedit, None);
     }
 
     #[test]
@@ -3463,3 +4509,1350 @@ mod tests {
 #[cfg(test)]
 #[path = "type_commit_tests.rs"]
 mod commit_tests;
+
+#[cfg(test)]
+mod ime_tests {
+    use super::*;
+    use egui::output::{IMEOutput, ImeChangeCause};
+
+    fn context() -> egui::Context {
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts(&ctx);
+        install_reset_hooks(&ctx);
+        ctx
+    }
+
+    fn app() -> PhotocraftApp {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.session.execute("file.new", json!({"width": 400, "height": 200})).unwrap();
+        app.sync_views();
+        app.ui.tool = crate::state::Tool::Type;
+        pointer_up(&mut app, [50.0, 100.0], [50.0, 100.0]);
+        insert(&mut app, "abc");
+        app
+    }
+
+    fn run(app: &mut PhotocraftApp, ctx: &egui::Context, events: Vec<egui::Event>) -> Option<IMEOutput> {
+        let raw = egui::RawInput { focused: true, events, ..Default::default() };
+        let mut out = ctx.run_ui(raw, |ui| {
+            let rect = egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(400.0, 300.0));
+            let xf = ViewXform { rect, zoom: 1.0, center: [100.0, 100.0], flip: false, rotation: 0.0, aspect: 1.0 };
+            handle_keys(app, ui.ctx());
+            draw_overlay(app, ui.painter(), &xf);
+            sync_ime(app, ui.ctx());
+            finish_reset_pass(app, ui.ctx());
+        });
+        out.textures_delta.clear(); // This protocol harness does not paint.
+        out.platform_output.ime
+    }
+
+    fn layer_text(app: &PhotocraftApp) -> String {
+        let ed = app.ui.text_edit.as_ref().expect("editing");
+        current_text(app, LayerId(ed.layer)).expect("text layer")
+    }
+
+    fn completed(request_id: egui::ImeResetId) -> egui::Event {
+        egui::Event::ImeResetCompleted { request_id }
+    }
+
+    fn payload(ime: &IMEOutput) -> &egui::output::IMESurroundingTextPayload {
+        ime.surrounding_text.available().expect("a bounded committed snapshot")
+    }
+
+    fn preedit(text: &str) -> egui::Event {
+        egui::Event::Ime(egui::ImeEvent::Preedit { text: text.to_owned(), active_range_chars: None })
+    }
+
+    #[test]
+    fn successive_ime_commits_are_input_method_and_keep_directional_offsets() {
+        let ctx = context();
+        let mut app = app();
+        let baseline = run(&mut app, &ctx, Vec::new()).expect("a focused editor descriptor");
+        assert_eq!(payload(&baseline).text, "abc");
+        assert_eq!(baseline.change_cause, ImeChangeCause::Other);
+
+        // The pre-edit is laid out in the layer but is not committed surrounding text.
+        let composing = run(&mut app, &ctx, vec![preedit("に")]).expect("descriptor while composing");
+        assert_eq!(payload(&composing).text, "abc");
+        assert_eq!((payload(&composing).cursor, payload(&composing).anchor), (3, 3));
+
+        let first = run(&mut app, &ctx, vec![egui::Event::Ime(egui::ImeEvent::Commit("日本".into()))]).expect("commit descriptor");
+        assert_eq!(first.change_cause, ImeChangeCause::InputMethod);
+        assert_eq!(payload(&first).text, "abc日本");
+
+        let composing = run(&mut app, &ctx, vec![preedit("ご")]).expect("second composition");
+        assert_eq!(payload(&composing).text, "abc日本");
+        let second = run(&mut app, &ctx, vec![egui::Event::Ime(egui::ImeEvent::Commit("語".into()))]).expect("second commit");
+        assert_eq!(second.change_cause, ImeChangeCause::InputMethod);
+        assert_eq!(payload(&second).text, "abc日本語");
+        assert_eq!(payload(&second).cursor, payload(&second).text.len());
+    }
+
+    #[test]
+    fn reversed_selection_keeps_its_direction_in_byte_offsets() {
+        let ctx = context();
+        let mut app = app();
+        if let Some(ed) = app.ui.text_edit.as_mut() {
+            ed.caret = 1;
+            ed.anchor = 3;
+        }
+        let selected = run(&mut app, &ctx, Vec::new()).expect("descriptor");
+        assert_eq!(payload(&selected).text, "abc");
+        assert_eq!((payload(&selected).cursor, payload(&selected).anchor), (1, 3));
+    }
+
+    #[test]
+    fn mixed_application_and_ime_edits_in_one_frame_are_other() {
+        let ctx = context();
+        let mut app = app();
+        run(&mut app, &ctx, Vec::new());
+
+        // An IME commit followed by ordinary typing in the same pass: the application change
+        // dominates even though the commit itself was accepted.
+        let mixed = run(&mut app, &ctx, vec![egui::Event::Ime(egui::ImeEvent::Commit("い".into())), egui::Event::Text("x".into())]).expect("mixed descriptor");
+        assert_eq!(payload(&mixed).text, "abcいx");
+        assert_eq!(mixed.change_cause, ImeChangeCause::Other);
+
+        // The observed mixed state is the next baseline, so a later clean IME commit is once
+        // again an InputMethod change.
+        let next = run(&mut app, &ctx, vec![egui::Event::Ime(egui::ImeEvent::Commit("う".into()))]).expect("next commit");
+        assert_eq!(next.change_cause, ImeChangeCause::InputMethod);
+        assert_eq!(payload(&next).text, "abcいxう");
+
+        // Application text before the commit in the same frame must also prevent InputMethod.
+        let mut app = self::app();
+        run(&mut app, &ctx, Vec::new());
+        let mixed = run(&mut app, &ctx, vec![egui::Event::Text("x".into()), egui::Event::Ime(egui::ImeEvent::Commit("い".into()))]).expect("mixed descriptor");
+        assert_eq!(mixed.change_cause, ImeChangeCause::Other);
+        assert_eq!(payload(&mixed).text, "abcxい");
+    }
+
+    #[test]
+    fn replaced_layer_or_session_bumps_generation_without_changing_owner() {
+        let ctx = context();
+        let mut app = app();
+        let first = run(&mut app, &ctx, Vec::new()).expect("descriptor");
+        let owner = first.owner;
+        let generation = first.context_generation;
+
+        // Same document and layer id, a new edit session: the replacement epoch changes, so the
+        // stale generation cannot be reused by a native IME bridge.
+        app.ui.text_edit.as_mut().unwrap().session = "type-replaced".into();
+        let replaced = run(&mut app, &ctx, Vec::new()).expect("replaced descriptor");
+        assert_eq!(replaced.owner, owner, "the layer identity is immutable");
+        assert_ne!(replaced.context_generation, generation);
+        assert_eq!(replaced.change_cause, ImeChangeCause::Other);
+
+        // Ending the editor ends the context; no descriptor is emitted for an absent owner.
+        app.ui.text_edit = None;
+        assert!(run(&mut app, &ctx, Vec::new()).is_none());
+    }
+
+    #[test]
+    fn unavailable_editor_state_still_carries_owner_and_generation() {
+        let ctx = context();
+        let mut app = app();
+        // A stale composition range cannot be mapped onto the layer: do not silently publish
+        // the composition as committed text.
+        app.ui.text_edit.as_mut().unwrap().preedit = Some((10, 5));
+        let unavailable = run(&mut app, &ctx, Vec::new()).expect("descriptor with an owner");
+        assert!(unavailable.surrounding_text.available().is_none());
+        assert!(unavailable.context_generation > 0);
+        assert_eq!(unavailable.purpose, egui::IMEPurpose::Normal);
+    }
+
+    #[test]
+    fn delete_surrounding_bytes_with_preedit_excludes_the_composition() {
+        let ctx = context();
+        let mut app = app();
+        run(&mut app, &ctx, Vec::new());
+        run(&mut app, &ctx, vec![preedit("x")]);
+        assert_eq!(layer_text(&app), "abcx");
+        assert_eq!(app.ui.text_edit.as_ref().unwrap().preedit, Some((3, 1)));
+
+        // `c` is the byte immediately before the pre-edit; deleting it must not delete or
+        // report the composing `x`.
+        let deleted = run(&mut app, &ctx, vec![egui::Event::Ime(egui::ImeEvent::DeleteSurroundingBytes { before_bytes: 1, after_bytes: 0 })])
+            .expect("deletion descriptor");
+        assert_eq!(deleted.change_cause, ImeChangeCause::InputMethod);
+        assert_eq!(payload(&deleted).text, "ab");
+        assert_eq!((payload(&deleted).cursor, payload(&deleted).anchor), (2, 2));
+        assert_eq!(layer_text(&app), "abx");
+        assert_eq!(app.ui.text_edit.as_ref().unwrap().preedit, Some((2, 1)));
+    }
+
+    #[test]
+    fn external_edit_invalidates_the_preedit_and_rejects_its_late_commit() {
+        for bytes in [false, true] {
+            for split in [false, true] {
+                for discard in [false, true] {
+                    let ctx = context();
+                    let mut app = app();
+                    run(&mut app, &ctx, Vec::new());
+                    // Compose in the middle of committed text, so an application edit before it
+                    // moves a still-in-range (but wrong) character range.
+                    insert(&mut app, "def");
+                    if let Some(ed) = app.ui.text_edit.as_mut() {
+                        ed.caret = 3;
+                        ed.anchor = 3;
+                    }
+                    let composing = run(&mut app, &ctx, vec![preedit("に")]).expect("composing descriptor");
+                    assert_eq!(layer_text(&app), "abcにdef");
+                    assert_eq!(payload(&composing).text, "abcdef", "the preview is not committed text");
+                    let layer = app.ui.text_edit.as_ref().unwrap().layer;
+                    let session = app.ui.text_edit.as_ref().unwrap().session.clone();
+                    // The control channel edits the same layer without passing through `insert`.
+                    app.run("type.edit", json!({"layer": layer, "replace": {"start": 0, "end": 1, "text": ""}, "coalesce": session})).unwrap();
+                    assert_eq!(layer_text(&app), "bcにdef");
+                    let revision = app.session.active().unwrap().revision;
+                    let history = app.session.active().unwrap().history.entries();
+                    let selection = app.ui.text_edit.as_ref().map(|ed| (ed.anchor, ed.caret));
+                    let unchanged = |app: &PhotocraftApp| {
+                        assert_eq!(layer_text(app), "bcにdef");
+                        assert_eq!(app.session.active().unwrap().revision, revision);
+                        assert_eq!(app.session.active().unwrap().history.entries(), history);
+                        assert_eq!(app.ui.text_edit.as_ref().map(|ed| (ed.anchor, ed.caret)), selection);
+                    };
+
+                    // The old range (3,1) now covers `d`: report unavailable, cancel the
+                    // composition and do not present `d` as the composition. A discarded pass
+                    // must retain both latches until a descriptor is actually delivered.
+                    let invalidated = if discard {
+                        ctx.options_mut(|o| o.max_passes = std::num::NonZeroUsize::new(4).expect("four passes"));
+                        let mut passes = Vec::new();
+                        let mut out = ctx.run_ui(egui::RawInput { focused: true, ..Default::default() }, |ui| {
+                            handle_keys(&mut app, ui.ctx());
+                            let rect = egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(400.0, 300.0));
+                            let xf = ViewXform { rect, zoom: 1.0, center: [100.0, 100.0], flip: false, rotation: 0.0, aspect: 1.0 };
+                            draw_overlay(&mut app, ui.painter(), &xf);
+                            if passes.is_empty() {
+                                ui.ctx().request_discard("invalidated preedit descriptor regression");
+                            }
+                            let discarded = ui.ctx().will_discard();
+                            let before = (app.type_ime.stale, app.type_ime.interrupt);
+                            sync_ime(&mut app, ui.ctx());
+                            finish_reset_pass(&mut app, ui.ctx());
+                            let unavailable = ui.ctx().output(|out| out.ime.as_ref().expect("pass descriptor").surrounding_text.available().is_none());
+                            passes.push((discarded, before, (app.type_ime.stale, app.type_ime.interrupt), unavailable));
+                        });
+                        out.textures_delta.clear();
+                        assert_eq!(passes.first(), Some(&(true, (true, true), (true, true), true)), "discard cannot consume invalidation");
+                        assert_eq!(passes.last(), Some(&(false, (true, true), (false, false), true)), "the accepted pass delivers it once");
+                        out.platform_output.ime.expect("descriptor")
+                    } else {
+                        run(&mut app, &ctx, Vec::new()).expect("descriptor")
+                    };
+                    assert!(invalidated.surrounding_text.available().is_none());
+                    assert!(invalidated.should_interrupt_composition);
+                    assert_eq!(
+                        (invalidated.owner, invalidated.context_generation, invalidated.purpose),
+                        (composing.owner, composing.context_generation, composing.purpose)
+                    );
+                    assert_eq!(invalidated.change_cause, ImeChangeCause::Other);
+                    assert_eq!(app.ui.text_edit.as_ref().unwrap().preedit, None);
+                    assert!(app.type_ime.preedit.is_none());
+                    unchanged(&app);
+
+                    let recovered = run(&mut app, &ctx, Vec::new()).expect("idle descriptor");
+                    assert_eq!(payload(&recovered).text, "bcにdef");
+                    assert_eq!((payload(&recovered).cursor, payload(&recovered).anchor), (6, 6));
+                    assert!(!recovered.should_interrupt_composition, "a delivered reset is not replayed");
+                    assert!(matches!(app.type_ime.incoming, Some(IncomingComposition::Stale)), "idle availability does not accept an old terminal");
+                    unchanged(&app);
+
+                    // The pending deletion and commit belonged to the cancelled composition:
+                    // neither combined nor split delivery may replace `d` or grow undo history.
+                    let mut events = vec![terminal_delete(bytes)];
+                    if split {
+                        run(&mut app, &ctx, events).expect("rejected deletion descriptor");
+                        unchanged(&app);
+                        for _ in 0..3 {
+                            run(&mut app, &ctx, Vec::new());
+                        }
+                        assert!(matches!(app.type_ime.incoming, Some(IncomingComposition::Stale)));
+                        events = Vec::new();
+                    }
+                    events.push(egui::Event::Ime(egui::ImeEvent::Commit("に".into())));
+                    let late = run(&mut app, &ctx, events).expect("descriptor");
+                    assert_eq!(layer_text(&app), "bcにdef");
+                    assert_eq!(late.change_cause, ImeChangeCause::Other);
+                    assert_eq!(payload(&late).text, "bcにdef");
+                    unchanged(&app);
+                    assert!(matches!(app.type_ime.incoming, Some(IncomingComposition::Stale)), "terminal input cannot acknowledge cancellation");
+
+                    let fresh = run(&mut app, &ctx, vec![completed(invalidated.reset_request.expect("reset request")), preedit("Q")])
+                        .expect("fresh preview descriptor");
+                    assert_eq!(layer_text(&app), "bcにdQef");
+                    assert_eq!(payload(&fresh).text, "bcにdef", "fresh preview is excluded from committed text");
+                    assert!(!fresh.should_interrupt_composition);
+                    let committed = run(&mut app, &ctx, vec![egui::Event::Ime(egui::ImeEvent::Commit("Q".into()))]).expect("fresh commit descriptor");
+                    assert_eq!(layer_text(&app), "bcにdQef");
+                    assert_eq!(payload(&committed).text, "bcにdQef");
+                    assert_eq!(committed.change_cause, ImeChangeCause::InputMethod);
+                    let direct = run(&mut app, &ctx, vec![egui::Event::Ime(egui::ImeEvent::Commit("R".into()))]).expect("direct commit descriptor");
+                    assert_eq!(layer_text(&app), "bcにdQRef");
+                    assert_eq!(payload(&direct).text, "bcにdQRef");
+                    assert_eq!(direct.change_cause, ImeChangeCause::InputMethod);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn target_change_interrupts_and_rejects_the_late_commit() {
+        let ctx = context();
+        let mut app = app();
+        run(&mut app, &ctx, Vec::new());
+        run(&mut app, &ctx, vec![preedit("に")]);
+        assert_eq!(layer_text(&app), "abcに");
+
+        let created = app.run("type.create", json!({"text": "two", "x": 150, "y": 60})).unwrap();
+        let second = created.get("layer").and_then(serde_json::Value::as_u64).expect("new layer");
+        app.session.select_layer(LayerId(second)).expect("select the second type layer");
+        app.ui.text_edit = Some(TextEdit {
+            layer: second,
+            document: active_doc_id(&app),
+            caret: 3,
+            anchor: 3,
+            session: "type-second".into(),
+            created: false,
+            mask: false,
+            dragging: false,
+            resize: None,
+            preedit: None,
+        });
+        // The platform only cancels composition on this flag (X11, macOS, Windows and the web).
+        let switched = run(&mut app, &ctx, Vec::new()).expect("transition descriptor");
+        assert!(switched.should_interrupt_composition);
+
+        let late = run(&mut app, &ctx, vec![egui::Event::Ime(egui::ImeEvent::Commit("日本".into()))]).expect("descriptor");
+        assert_eq!(current_text(&app, LayerId(second)).unwrap(), "two");
+        assert_eq!(late.change_cause, ImeChangeCause::Other);
+        run(&mut app, &ctx, vec![completed(switched.reset_request.expect("replacement layer reset")), preedit("が")]);
+        assert_eq!(layer_text(&app), "twoが");
+    }
+
+    #[test]
+    fn type_mask_session_has_a_distinct_owner() {
+        let ctx = context();
+        let mut app = app();
+        let normal = run(&mut app, &ctx, Vec::new()).expect("descriptor");
+        app.ui.text_edit.as_mut().unwrap().mask = true;
+        let masked = run(&mut app, &ctx, Vec::new()).expect("mask descriptor");
+        assert_ne!(masked.owner, normal.owner, "the Type Mask session is its own owner");
+        assert_ne!(masked.context_generation, normal.context_generation);
+    }
+
+    #[test]
+    fn reentering_the_same_session_cancels_the_preedit() {
+        let ctx = context();
+        let mut app = app();
+        run(&mut app, &ctx, vec![preedit("に")]);
+        assert_eq!(app.ui.text_edit.as_ref().unwrap().preedit, Some((3, 1)));
+        edit_active(&mut app).unwrap();
+        assert_eq!(app.ui.text_edit.as_ref().unwrap().preedit, None);
+        assert!(app.type_ime.interrupt, "the native composition is cancelled");
+        assert!(app.type_ime.preedit.is_none());
+    }
+
+    #[test]
+    fn a_discarded_transition_pass_still_interrupts_the_next_descriptor() {
+        let ctx = context();
+        ctx.options_mut(|o| o.max_passes = std::num::NonZeroUsize::new(4).expect("four passes"));
+        let mut app = app();
+        run(&mut app, &ctx, Vec::new()).expect("baseline descriptor");
+        app.ui.text_edit.as_mut().unwrap().session = "type-discarded".into();
+        let mut passes = Vec::new();
+        let mut out = ctx.run_ui(egui::RawInput { focused: true, ..Default::default() }, |ui| {
+            handle_keys(&mut app, ui.ctx());
+            let rect = egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(400.0, 300.0));
+            let xf = ViewXform { rect, zoom: 1.0, center: [100.0, 100.0], flip: false, rotation: 0.0, aspect: 1.0 };
+            draw_overlay(&mut app, ui.painter(), &xf);
+            if passes.is_empty() {
+                ui.ctx().request_discard("IME transition regression");
+            }
+            let discarded = ui.ctx().will_discard();
+            let pending_before = app.type_ime.interrupt;
+            sync_ime(&mut app, ui.ctx());
+            finish_reset_pass(&mut app, ui.ctx());
+            passes.push((discarded, pending_before, app.type_ime.interrupt));
+        });
+        out.textures_delta.clear();
+        assert_eq!(passes.first(), Some(&(true, true, true)), "discard retains the interrupt latch");
+        assert_eq!(passes.last(), Some(&(false, true, false)), "the accepted pass delivers it once");
+        assert!(out.platform_output.ime.expect("final descriptor").should_interrupt_composition);
+        let next = run(&mut app, &ctx, Vec::new()).expect("next descriptor");
+        assert!(!next.should_interrupt_composition, "a delivered interrupt is not replayed");
+    }
+
+    #[test]
+    fn delete_surrounding_characters_is_one_undo_step() {
+        let ctx = context();
+        let mut app = app();
+        commit(&mut app);
+        edit_active(&mut app).unwrap();
+        if let Some(ed) = app.ui.text_edit.as_mut() {
+            ed.caret = 3;
+            ed.anchor = 3;
+        }
+        run(&mut app, &ctx, Vec::new()).expect("baseline descriptor");
+        let deleted =
+            run(&mut app, &ctx, vec![egui::Event::Ime(egui::ImeEvent::DeleteSurrounding { before_chars: 1, after_chars: 0 })]).expect("deletion descriptor");
+        assert_eq!(deleted.change_cause, ImeChangeCause::InputMethod);
+        assert_eq!(layer_text(&app), "ab");
+        app.run("edit.undo", json!({})).unwrap();
+        assert_eq!(layer_text(&app), "abc", "the delete and its session coalesce into one step");
+    }
+
+    #[test]
+    fn an_empty_point_text_reports_an_available_empty_snapshot() {
+        let ctx = context();
+        let mut app = app();
+        if let Some(ed) = app.ui.text_edit.as_mut() {
+            ed.anchor = 0;
+            ed.caret = 3;
+        }
+        insert(&mut app, "");
+        assert_eq!(layer_text(&app), "");
+        let empty = run(&mut app, &ctx, Vec::new()).expect("descriptor");
+        let available = payload(&empty);
+        assert_eq!(available.text, "");
+        assert_eq!((available.cursor, available.anchor), (0, 0));
+    }
+
+    #[test]
+    fn a_long_line_reports_a_bounded_snapshot() {
+        let ctx = context();
+        let mut app = app();
+        if let Some(ed) = app.ui.text_edit.as_mut() {
+            ed.anchor = 0;
+            ed.caret = 3;
+        }
+        insert(&mut app, &"a".repeat(4500));
+        let long = run(&mut app, &ctx, Vec::new()).expect("descriptor");
+        let available = payload(&long);
+        assert!(available.text.len() <= egui::output::MAX_IME_SURROUNDING_TEXT_BYTES);
+        assert!(available.text.is_char_boundary(available.cursor));
+        assert!(available.text.is_char_boundary(available.anchor));
+    }
+
+    #[test]
+    fn the_real_app_logic_and_ui_publish_the_descriptor() {
+        use eframe::App as _;
+        let ctx = context();
+        let mut app = app();
+        let mut frame = eframe::Frame::_new_kittest();
+        let mut descriptors = Vec::new();
+        // The first pass registers fonts; the next passes run the real logic → ui orchestration
+        // (where `handle_keys` and the final `sync_ime` live).
+        for _ in 0..3 {
+            let raw =
+                egui::RawInput { focused: true, screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(1200.0, 800.0))), ..Default::default() };
+            let mut out = ctx.run_ui(raw, |ui| {
+                app.logic(ui.ctx(), &mut frame);
+                app.ui(ui, &mut frame);
+            });
+            out.textures_delta.clear(); // No renderer consumes this harness output.
+            descriptors.push(out.platform_output.ime);
+        }
+        let ime = descriptors.iter().flatten().last().expect("a descriptor from App::ui");
+        assert!(ime.surrounding_text.available().is_some());
+        assert!(ime.context_generation > 0);
+    }
+
+    fn terminal_delete(bytes: bool) -> egui::Event {
+        egui::Event::Ime(if bytes {
+            egui::ImeEvent::DeleteSurroundingBytes { before_bytes: 1, after_bytes: 0 }
+        } else {
+            egui::ImeEvent::DeleteSurrounding { before_chars: 1, after_chars: 0 }
+        })
+    }
+
+    fn raw_key(key: egui::Key, command: bool, shift: bool) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: Some(key),
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers {
+                command,
+                ctrl: command && !cfg!(target_os = "macos"),
+                mac_cmd: command && cfg!(target_os = "macos"),
+                shift,
+                ..Default::default()
+            },
+        }
+    }
+
+    #[test]
+    fn stale_owner_terminal_survives_idle_and_split_delete_commit_but_fresh_input_works() {
+        for empty in [false, true] {
+            for bytes in [false, true] {
+                let ctx = context();
+                let mut app = app();
+                run(&mut app, &ctx, vec![]);
+                run(&mut app, &ctx, vec![preedit("P")]);
+                if empty {
+                    run(&mut app, &ctx, vec![preedit("")]);
+                }
+                let old_layer = app.ui.text_edit.as_ref().unwrap().layer;
+                let created = app.run("type.create", json!({"text": "two", "x": 150, "y": 60})).unwrap();
+                let second = created["layer"].as_u64().unwrap();
+                app.session.select_layer(LayerId(second)).unwrap();
+                edit_active(&mut app).unwrap();
+                let transition = run(&mut app, &ctx, vec![]).unwrap();
+                assert!(transition.should_interrupt_composition);
+                for _ in 0..5 {
+                    run(&mut app, &ctx, vec![]);
+                }
+                let revision = app.session.active().unwrap().revision;
+                let undo = app.session.active().unwrap().history.entries().len();
+                let before = layer_text(&app);
+                run(&mut app, &ctx, vec![terminal_delete(bytes)]);
+                for _ in 0..3 {
+                    run(&mut app, &ctx, vec![]);
+                }
+                run(&mut app, &ctx, vec![egui::Event::Ime(egui::ImeEvent::Commit("X".into()))]);
+                assert_eq!(layer_text(&app), before, "an old split terminal cannot edit a replacement owner");
+                assert_eq!(app.session.active().unwrap().revision, revision);
+                assert_eq!(app.session.active().unwrap().history.entries().len(), undo);
+                assert_eq!(current_text(&app, LayerId(old_layer)).unwrap(), if empty { "abc" } else { "abcP" });
+                let selection = app.ui.text_edit.as_ref().unwrap().clone();
+                let (a, b) = (selection.anchor.min(selection.caret), selection.anchor.max(selection.caret));
+                let expected = before.chars().take(a).chain("Q".chars()).chain(before.chars().skip(b)).collect::<String>();
+                run(
+                    &mut app,
+                    &ctx,
+                    vec![completed(transition.reset_request.expect("reset request")), preedit("Q"), egui::Event::Ime(egui::ImeEvent::Commit("Q".into()))],
+                );
+                assert_eq!(layer_text(&app), expected, "the exact completion permits fresh input");
+                run(&mut app, &ctx, vec![egui::Event::Ime(egui::ImeEvent::Commit("R".into()))]);
+                assert!(layer_text(&app).contains("QR"), "a later direct commit remains valid");
+                app.run("edit.undo", json!({})).unwrap();
+                assert_eq!(current_text(&app, LayerId(second)).unwrap(), before, "the new session is undoable");
+            }
+        }
+    }
+
+    #[test]
+    fn raw_application_selection_changes_reject_old_terminal_input_and_allow_later_fresh_input() {
+        for empty in [false, true] {
+            for bytes in [false, true] {
+                for (key, command, shift) in [(egui::Key::A, true, false), (egui::Key::ArrowLeft, false, false), (egui::Key::Home, false, true)] {
+                    let ctx = context();
+                    let mut app = app();
+                    run(&mut app, &ctx, vec![]);
+                    run(&mut app, &ctx, vec![preedit("P")]);
+                    if empty {
+                        run(&mut app, &ctx, vec![preedit("")]);
+                    }
+                    let before = layer_text(&app);
+                    let revision = app.session.active().unwrap().revision;
+                    let transition = run(&mut app, &ctx, vec![raw_key(key, command, shift)]).expect("selection reset");
+                    let selected = app.ui.text_edit.as_ref().unwrap().clone();
+                    assert!(
+                        (selected.anchor, selected.caret) != (before.chars().count(), before.chars().count()),
+                        "actual raw selection key changed the caret"
+                    );
+                    for _ in 0..3 {
+                        run(&mut app, &ctx, vec![]);
+                    }
+                    let undo = app.session.active().unwrap().history.entries().len();
+                    run(&mut app, &ctx, vec![terminal_delete(bytes), egui::Event::Ime(egui::ImeEvent::Commit("X".into()))]);
+                    assert_eq!(layer_text(&app), before);
+                    assert_eq!(app.session.active().unwrap().revision, revision);
+                    assert_eq!(app.session.active().unwrap().history.entries().len(), undo);
+                    assert_eq!(app.ui.text_edit.as_ref().map(|e| (e.anchor, e.caret)), Some((selected.anchor, selected.caret)));
+                    let (a, b) = (selected.anchor.min(selected.caret), selected.anchor.max(selected.caret));
+                    let expected = before.chars().take(a).chain("Q".chars()).chain(before.chars().skip(b)).collect::<String>();
+                    // The completion opens admission at its exact position in the batch.
+                    run(
+                        &mut app,
+                        &ctx,
+                        vec![completed(transition.reset_request.expect("reset request")), preedit("Q"), egui::Event::Ime(egui::ImeEvent::Commit("Q".into()))],
+                    );
+                    assert_eq!(layer_text(&app), expected);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn uninterrupted_live_and_empty_preedit_delete_commit_and_direct_commit_stay_valid() {
+        for empty in [false, true] {
+            for bytes in [false, true] {
+                let ctx = context();
+                let mut app = app();
+                run(&mut app, &ctx, vec![]);
+                run(&mut app, &ctx, vec![preedit("P")]);
+                if empty {
+                    run(&mut app, &ctx, vec![preedit("")]);
+                }
+                run(&mut app, &ctx, vec![terminal_delete(bytes)]);
+                for _ in 0..3 {
+                    run(&mut app, &ctx, vec![]);
+                }
+                run(&mut app, &ctx, vec![egui::Event::Ime(egui::ImeEvent::Commit("X".into()))]);
+                assert_eq!(layer_text(&app), "abX", "accepted deletion refreshes its composing caret");
+            }
+        }
+        let ctx = context();
+        let mut app = app();
+        run(&mut app, &ctx, vec![]);
+        run(&mut app, &ctx, vec![raw_key(egui::Key::A, true, false), egui::Event::Ime(egui::ImeEvent::Commit("D".into()))]);
+        assert_eq!(layer_text(&app), "D", "without known preedit the direct commit replaces the selection");
+    }
+
+    fn actual_app_frame(app: &mut PhotocraftApp, ctx: &egui::Context, events: Vec<egui::Event>) -> egui::FullOutput {
+        use eframe::App as _;
+        let mut frame = eframe::Frame::_new_kittest();
+        let mut raw =
+            egui::RawInput { focused: true, events, screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(1200.0, 800.0))), ..Default::default() };
+        app.raw_input_hook(ctx, &mut raw);
+        let mut output = ctx.run_ui(raw, |ui| {
+            app.logic(ui.ctx(), &mut frame);
+            app.ui(ui, &mut frame);
+        });
+        output.textures_delta.clear();
+        output
+    }
+
+    #[test]
+    fn the_real_app_pointer_interruption_rejects_idle_delayed_terminal_then_accepts_fresh_input() {
+        for empty in [false, true] {
+            for bytes in [false, true] {
+                let ctx = context();
+                let mut app = app();
+                for _ in 0..4 {
+                    actual_app_frame(&mut app, &ctx, vec![]);
+                }
+                app.ui.text_edit.as_mut().unwrap().caret = 1;
+                app.ui.text_edit.as_mut().unwrap().anchor = 1;
+                let point = actual_app_frame(&mut app, &ctx, vec![]).platform_output.ime.expect("real caret1 descriptor").cursor_rect.center();
+                app.ui.text_edit.as_mut().unwrap().caret = 3;
+                app.ui.text_edit.as_mut().unwrap().anchor = 3;
+                actual_app_frame(&mut app, &ctx, vec![]);
+                actual_app_frame(&mut app, &ctx, vec![preedit("P")]);
+                if empty {
+                    actual_app_frame(&mut app, &ctx, vec![preedit("")]);
+                }
+                let before = layer_text(&app);
+                let button = |pressed| egui::Event::PointerButton { pos: point, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+                let press =
+                    actual_app_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(point), button(true)]).platform_output.ime.expect("press descriptor");
+                let release = actual_app_frame(&mut app, &ctx, vec![button(false)]).platform_output.ime.expect("release descriptor");
+                let request = release.reset_request.or(press.reset_request).expect("pointer reset");
+                assert_eq!(app.ui.text_edit.as_ref().unwrap().caret, 1, "actual canvas pointer moved the caret");
+                for _ in 0..4 {
+                    actual_app_frame(&mut app, &ctx, vec![]);
+                }
+                let revision = app.session.active().unwrap().revision;
+                actual_app_frame(&mut app, &ctx, vec![terminal_delete(bytes), egui::Event::Ime(egui::ImeEvent::Commit("X".into()))]);
+                assert_eq!(layer_text(&app), before);
+                assert_eq!(app.session.active().unwrap().revision, revision);
+                actual_app_frame(&mut app, &ctx, vec![completed(request), preedit("Q"), egui::Event::Ime(egui::ImeEvent::Commit("Q".into()))]);
+                let expected = before.chars().take(1).chain("Q".chars()).chain(before.chars().skip(1)).collect::<String>();
+                assert_eq!(layer_text(&app), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn only_a_matching_completion_allows_a_new_composition_in_the_same_raw_batch() {
+        for bytes in [false, true] {
+            let ctx = context();
+            let mut app = app();
+            run(&mut app, &ctx, vec![]);
+            run(&mut app, &ctx, vec![preedit("P")]);
+            let transition = run(&mut app, &ctx, vec![raw_key(egui::Key::A, true, false)]).expect("selection reset");
+            run(
+                &mut app,
+                &ctx,
+                vec![
+                    terminal_delete(bytes),
+                    egui::Event::Ime(egui::ImeEvent::Commit("old".into())),
+                    completed(transition.reset_request.expect("reset request")),
+                    preedit("Q"),
+                    egui::Event::Ime(egui::ImeEvent::Commit("Q".into())),
+                ],
+            );
+            assert_eq!(layer_text(&app), "Q", "the old terminal is rejected before the completion opens admission");
+        }
+    }
+
+    #[test]
+    fn an_actual_same_batch_selection_requires_completion_before_the_new_live_preedit() {
+        for empty in [false, true] {
+            for bytes in [false, true] {
+                for terminal in [false, true] {
+                    let ctx = context();
+                    let mut app = app();
+                    for _ in 0..4 {
+                        actual_app_frame(&mut app, &ctx, vec![]);
+                    }
+                    actual_app_frame(&mut app, &ctx, vec![preedit("P")]);
+                    if empty {
+                        actual_app_frame(&mut app, &ctx, vec![preedit("")]);
+                    }
+                    let before = layer_text(&app);
+                    let revision = app.session.active().unwrap().revision;
+                    let mut events = vec![raw_key(egui::Key::A, true, false), terminal_delete(bytes)];
+                    if terminal {
+                        events.push(egui::Event::Ime(egui::ImeEvent::Commit("old".into())));
+                    }
+                    events.push(preedit("Q"));
+                    let out = actual_app_frame(&mut app, &ctx, events);
+                    assert_eq!(layer_text(&app), before, "all unacknowledged payloads remain stale, even after Commit");
+                    assert_eq!(app.session.active().unwrap().revision, revision);
+                    assert!(matches!(app.type_ime.incoming, Some(IncomingComposition::Stale)));
+                    let selected = app.ui.text_edit.as_ref().unwrap();
+                    assert_eq!((selected.anchor, selected.caret), (0, before.chars().count()), "the actual selection key ran");
+                    let request = out.platform_output.ime.expect("interrupted descriptor").reset_request.expect("reset request");
+                    actual_app_frame(&mut app, &ctx, vec![completed(request), preedit("Q")]);
+                    assert_eq!(layer_text(&app), "Q", "only the new preedit replaced the selected text");
+                    assert_eq!(app.session.active().unwrap().revision, revision + 1, "neither old deletion nor old commit mutated the document");
+                    let editing = app.ui.text_edit.as_ref().unwrap();
+                    assert_eq!((editing.anchor, editing.caret, editing.preedit), (1, 1, Some((0, 1))));
+                    assert!(matches!(app.type_ime.incoming, Some(IncomingComposition::Active(_))));
+                    // Keep Q live across a real idle pass before its separately delivered commit.
+                    let idle = actual_app_frame(&mut app, &ctx, vec![]);
+                    assert!(!idle.platform_output.ime.expect("the live preview keeps its descriptor").should_interrupt_composition);
+                    actual_app_frame(&mut app, &ctx, vec![egui::Event::Ime(egui::ImeEvent::Commit("Q".into()))]);
+                    assert_eq!(layer_text(&app), "Q");
+                    assert!(app.ui.text_edit.as_ref().unwrap().preedit.is_none());
+                    assert!(app.type_ime.incoming.is_none());
+                }
+            }
+        }
+    }
+
+    fn pending(app: &PhotocraftApp) -> Option<egui::ImeResetId> {
+        match app.type_ime.resets.get(&egui::ViewportId::ROOT) {
+            Some(ResetPhase::Awaiting { id, .. }) => Some(*id),
+            _ => None,
+        }
+    }
+
+    fn interrupt_with_selection(app: &mut PhotocraftApp, ctx: &egui::Context) -> egui::ImeResetId {
+        run(app, ctx, vec![preedit("P")]);
+        run(app, ctx, vec![raw_key(egui::Key::A, true, false)]).expect("custom output").reset_request.expect("published reset")
+    }
+
+    #[test]
+    fn newest_published_request_alone_opens_the_ordered_suffix() {
+        let ctx = context();
+        let mut app = app();
+        let first = interrupt_with_selection(&mut app, &ctx);
+        let second = run(&mut app, &ctx, vec![raw_key(egui::Key::ArrowLeft, false, false), completed(first), preedit("old")])
+            .expect("moved selection")
+            .reset_request
+            .expect("replacement request");
+        assert_ne!(first, second);
+        let before = layer_text(&app);
+        let revision = app.session.active().unwrap().revision;
+        let history = app.session.active().unwrap().history.entries().len();
+        run(&mut app, &ctx, vec![terminal_delete(true), completed(first), egui::Event::Ime(egui::ImeEvent::Commit("old".into()))]);
+        assert_eq!(layer_text(&app), before);
+        assert_eq!(app.session.active().unwrap().revision, revision);
+        assert_eq!(app.session.active().unwrap().history.entries().len(), history);
+        assert_eq!(pending(&app), Some(second));
+        let selection = app.ui.text_edit.as_ref().map(|e| (e.anchor, e.caret));
+        run(&mut app, &ctx, vec![completed(second), completed(second)]);
+        assert_eq!(layer_text(&app), before, "controls alone never edit text");
+        assert_eq!(app.ui.text_edit.as_ref().map(|e| (e.anchor, e.caret)), selection);
+        assert_eq!(app.session.active().unwrap().revision, revision);
+        assert_eq!(app.session.active().unwrap().history.entries().len(), history);
+        assert_eq!(pending(&app), None);
+        run(&mut app, &ctx, vec![preedit("が"), egui::Event::Ime(egui::ImeEvent::Commit("が".into()))]);
+        assert!(layer_text(&app).starts_with("が"));
+    }
+
+    #[test]
+    fn foreign_viewport_and_context_completions_cannot_release_root() {
+        let ctx = context();
+        let mut app = app();
+        let root = interrupt_with_selection(&mut app, &ctx);
+        let other = context();
+        let viewport = egui::ViewportId::from_hash_of("photo-reset-foreign");
+        let foreign_input = || {
+            let rect = egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(400.0, 300.0));
+            let mut raw = egui::RawInput { viewport_id: viewport, screen_rect: Some(rect), focused: true, ..Default::default() };
+            raw.viewports.insert(
+                viewport,
+                egui::ViewportInfo { inner_rect: Some(rect), native_pixels_per_point: Some(1.0), minimized: Some(false), ..Default::default() },
+            );
+            raw
+        };
+        let mut text = String::new();
+        let mut output = other.run_ui(foreign_input(), |ui| {
+            ui.add(egui::TextEdit::singleline(&mut text)).request_focus();
+            let _ = ui.ctx().request_ime_reset(viewport);
+        });
+        output.textures_delta.clear();
+        // Draw once more if egui has not yet reported the newly focused stock editor.
+        if output.platform_output.ime.is_none() {
+            output = other.run_ui(foreign_input(), |ui| {
+                ui.add(egui::TextEdit::singleline(&mut text));
+            });
+            output.textures_delta.clear();
+        }
+        let foreign = output.platform_output.ime.expect("foreign stock output").reset_request.expect("foreign published request");
+        assert_ne!(foreign.viewport_id(), root.viewport_id());
+        let before = layer_text(&app);
+        run(&mut app, &ctx, vec![completed(foreign), preedit("bad"), completed(root), preedit("が")]);
+        assert_eq!(layer_text(&app), "が", "foreign marker cannot open admission before the root marker");
+        assert_ne!(layer_text(&app), before);
+    }
+
+    #[test]
+    fn standalone_logic_suspends_once_without_replaying_input_and_return_rearms_once() {
+        use eframe::App as _;
+        let ctx = context();
+        let mut app = app();
+        for _ in 0..4 {
+            actual_app_frame(&mut app, &ctx, vec![]);
+        }
+        actual_app_frame(&mut app, &ctx, vec![preedit("P")]);
+        let first = actual_app_frame(&mut app, &ctx, vec![raw_key(egui::Key::A, true, false)])
+            .platform_output
+            .ime
+            .expect("custom output")
+            .reset_request
+            .expect("first request");
+        let before = layer_text(&app);
+        for _ in 0..3 {
+            let mut frame = eframe::Frame::_new_kittest();
+            let _ = ctx.run_logic(&egui::RawInput { focused: true, ..Default::default() }, |ctx| app.logic(ctx, &mut frame));
+            assert_eq!(layer_text(&app), before, "hidden logic does not replay the previous raw selection batch");
+            assert_eq!(pending(&app), None);
+            assert!(matches!(app.type_ime.resets.get(&egui::ViewportId::ROOT), Some(ResetPhase::Suspended)));
+        }
+        let second = actual_app_frame(&mut app, &ctx, vec![completed(first), preedit("bad")])
+            .platform_output
+            .ime
+            .expect("returned custom output")
+            .reset_request
+            .expect("fresh request after hidden logic");
+        assert_ne!(first, second);
+        assert_eq!(layer_text(&app), before);
+        for _ in 0..3 {
+            let idle = actual_app_frame(&mut app, &ctx, vec![]).platform_output.ime.expect("idle custom output");
+            assert_eq!(idle.reset_request, None, "logic inside a full UI pass cannot suspend and rearm the stable guard");
+            assert_eq!(pending(&app), Some(second));
+        }
+        actual_app_frame(&mut app, &ctx, vec![completed(second), preedit("が"), egui::Event::Ime(egui::ImeEvent::Commit("が".into()))]);
+        assert_eq!(layer_text(&app), "が");
+    }
+
+    #[test]
+    fn standalone_logic_does_not_guard_an_uninterrupted_terminal_pending_composition() {
+        use eframe::App as _;
+        let ctx = context();
+        let mut app = app();
+        for _ in 0..4 {
+            actual_app_frame(&mut app, &ctx, vec![]);
+        }
+        actual_app_frame(&mut app, &ctx, vec![preedit("P"), preedit("")]);
+        let mut frame = eframe::Frame::_new_kittest();
+        let _ = ctx.run_logic(&egui::RawInput { focused: true, ..Default::default() }, |ctx| app.logic(ctx, &mut frame));
+        assert!(app.type_ime.resets.is_empty());
+        assert!(matches!(app.type_ime.incoming, Some(IncomingComposition::TerminalPending(_))));
+        actual_app_frame(&mut app, &ctx, vec![terminal_delete(false), egui::Event::Ime(egui::ImeEvent::Commit("X".into()))]);
+        assert_eq!(layer_text(&app), "abX");
+    }
+
+    #[test]
+    fn fonts_not_ready_and_no_editor_early_returns_retire_the_old_request() {
+        use eframe::App as _;
+        for no_editor in [false, true] {
+            let ctx = context();
+            let mut app = app();
+            for _ in 0..4 {
+                actual_app_frame(&mut app, &ctx, vec![]);
+            }
+            actual_app_frame(&mut app, &ctx, vec![preedit("P")]);
+            let first = actual_app_frame(&mut app, &ctx, vec![raw_key(egui::Key::A, true, false)])
+                .platform_output
+                .ime
+                .expect("custom output")
+                .reset_request
+                .expect("first request");
+            let editor = app.ui.text_edit.clone();
+            let before = layer_text(&app);
+            let mut frame = eframe::Frame::_new_kittest();
+            let mut output = ctx.run_ui(egui::RawInput { focused: true, events: vec![completed(first), preedit("bad")], ..Default::default() }, |ui| {
+                if no_editor {
+                    app.ui.text_edit = None;
+                } else {
+                    app.fonts_ready = false;
+                }
+                app.ui(ui, &mut frame);
+            });
+            output.textures_delta.clear();
+            assert!(output.platform_output.ime.is_none());
+            assert_eq!(pending(&app), None);
+            app.ui.text_edit = editor;
+            app.fonts_ready = true;
+            let second = actual_app_frame(&mut app, &ctx, vec![completed(first), preedit("bad")])
+                .platform_output
+                .ime
+                .expect("same editor returned")
+                .reset_request
+                .expect("rearmed request");
+            assert_ne!(first, second);
+            assert_eq!(layer_text(&app), before);
+            actual_app_frame(&mut app, &ctx, vec![completed(second), preedit("が")]);
+            assert_eq!(layer_text(&app), "が");
+        }
+    }
+
+    #[test]
+    fn pointer_deferred_suffix_cannot_edit_the_old_caret_or_complete_its_old_request() {
+        let ctx = context();
+        let mut app = app();
+        for _ in 0..4 {
+            actual_app_frame(&mut app, &ctx, vec![]);
+        }
+        app.ui.text_edit.as_mut().unwrap().caret = 1;
+        app.ui.text_edit.as_mut().unwrap().anchor = 1;
+        let point = actual_app_frame(&mut app, &ctx, vec![]).platform_output.ime.expect("caret geometry").cursor_rect.center();
+        app.ui.text_edit.as_mut().unwrap().caret = 3;
+        app.ui.text_edit.as_mut().unwrap().anchor = 3;
+        actual_app_frame(&mut app, &ctx, vec![preedit("P")]);
+        let first = actual_app_frame(&mut app, &ctx, vec![raw_key(egui::Key::A, true, false)])
+            .platform_output
+            .ime
+            .expect("selection output")
+            .reset_request
+            .expect("first request");
+        let before = layer_text(&app);
+        let revision = app.session.active().unwrap().revision;
+        let event = |pressed| egui::Event::PointerButton { pos: point, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+        let out = actual_app_frame(
+            &mut app,
+            &ctx,
+            vec![
+                egui::Event::PointerMoved(point),
+                event(true),
+                completed(first),
+                egui::Event::Text("bad".into()),
+                egui::Event::Paste("bad".into()),
+                egui::Event::Cut,
+                preedit("bad"),
+            ],
+        );
+        let first_after_pointer = out.platform_output.ime.expect("pointer output").reset_request;
+        let out = actual_app_frame(&mut app, &ctx, vec![event(false)]);
+        let second = out.platform_output.ime.expect("release output").reset_request.or(first_after_pointer).expect("actual pointer destination reset");
+        assert_ne!(first, second);
+        assert_eq!(layer_text(&app), before);
+        assert_eq!(app.session.active().unwrap().revision, revision);
+        assert_eq!(app.ui.text_edit.as_ref().unwrap().caret, 1);
+        actual_app_frame(&mut app, &ctx, vec![completed(second), preedit("が")]);
+        assert!(layer_text(&app).contains("が"));
+    }
+
+    #[test]
+    fn completion_without_current_geometry_is_suspended_before_the_following_preedit() {
+        let ctx = context();
+        let mut app = app();
+        let first = interrupt_with_selection(&mut app, &ctx);
+        let before = layer_text(&app);
+        // No canvas view for this input batch: the completion cannot be attributed to a visible
+        // custom descriptor yet. This is the pre-descriptor check, not a wait on final output.
+        app.type_ime.view = None;
+        let output = run(&mut app, &ctx, vec![completed(first), preedit("bad")]).expect("custom output");
+        let second = output.reset_request.expect("the final custom output rearms");
+        assert_ne!(first, second);
+        assert_eq!(layer_text(&app), before, "the preedit after a geometry-less completion stays blocked");
+        assert!(matches!(app.type_ime.resets.get(&egui::ViewportId::ROOT), Some(ResetPhase::Awaiting { id, .. }) if *id == second));
+        run(&mut app, &ctx, vec![completed(second), preedit("が")]);
+        assert_eq!(layer_text(&app), "が");
+    }
+
+    #[test]
+    fn pointer_press_without_a_guard_defers_the_same_batch_custom_suffix() {
+        let ctx = context();
+        let mut app = app();
+        let before = layer_text(&app);
+        let revision = app.session.active().unwrap().revision;
+        let selection = app.ui.text_edit.as_ref().map(|ed| (ed.anchor, ed.caret));
+        let press =
+            egui::Event::PointerButton { pos: Pos2::new(20.0, 20.0), button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() };
+        let output = run(
+            &mut app,
+            &ctx,
+            vec![
+                egui::Event::PointerMoved(Pos2::new(20.0, 20.0)),
+                press,
+                egui::Event::Text("bad".into()),
+                egui::Event::Paste("bad".into()),
+                egui::Event::Cut,
+                preedit("bad"),
+            ],
+        )
+        .expect("descriptor");
+        assert_eq!(layer_text(&app), before, "the deferred canvas handler never lets a suffix edit the old caret");
+        assert_eq!(app.session.active().unwrap().revision, revision);
+        assert_eq!(app.ui.text_edit.as_ref().map(|ed| (ed.anchor, ed.caret)), selection);
+        assert_eq!(output.reset_request, None, "no prior guard means no speculative reset yet");
+    }
+
+    #[test]
+    fn synchronous_select_all_accepts_fresh_text_but_still_blocks_stale_ime() {
+        let ctx = context();
+        // With no guard, the synchronously selected destination is a real destination: Text is
+        // an application edit, not an old IME suffix.
+        let mut app = app();
+        run(&mut app, &ctx, vec![raw_key(egui::Key::A, true, false), egui::Event::Text("x".into())]);
+        assert_eq!(layer_text(&app), "x");
+
+        // The same holds when Cmd+A interrupted a known composition: Text is still fresh input.
+        let mut app = self::app();
+        run(&mut app, &ctx, vec![preedit("P")]);
+        let out = run(&mut app, &ctx, vec![raw_key(egui::Key::A, true, false), egui::Event::Text("x".into())]).expect("custom output");
+        assert_eq!(layer_text(&app), "x");
+        assert!(out.reset_request.is_some(), "the stale composition still needs its ordered reset");
+
+        // An IME payload in that same batch is not fresh Text: it remains blocked until its
+        // replacement request is actually completed.
+        let mut app = self::app();
+        run(&mut app, &ctx, vec![preedit("P")]);
+        let before = layer_text(&app);
+        let out = run(&mut app, &ctx, vec![raw_key(egui::Key::A, true, false), preedit("bad")]).expect("custom output");
+        assert_eq!(layer_text(&app), before);
+        let request = out.reset_request.expect("selection reset request");
+        run(&mut app, &ctx, vec![completed(request), preedit("が")]);
+        assert_eq!(layer_text(&app), "が");
+    }
+
+    struct ResetHarness {
+        app: PhotocraftApp,
+        stock: bool,
+        picker_button: bool,
+        search: String,
+        search_input: Option<egui::Id>,
+        search_focused: bool,
+        search_height: Option<f32>,
+    }
+
+    fn reset_harness(app: PhotocraftApp) -> egui_kittest::Harness<'static, ResetHarness> {
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(1200.0, 800.0))
+            .with_context_setup(|ctx| {
+                install_reset_hooks(ctx);
+                crate::theme::install_fonts(ctx);
+            })
+            .build_ui_state(
+                |ui, state: &mut ResetHarness| {
+                    let mut frame = eframe::Frame::_new_kittest();
+                    state.app.logic_frame(ui.ctx(), &mut frame);
+                    state.app.ui_frame(ui, &mut frame);
+                    if state.stock {
+                        egui::Window::new("Reset font fixture").show(ui.ctx(), |ui| {
+                            let button = ui.make_persistent_id(egui::IdSalt::new("reset-font"));
+                            egui::Popup::open_id(ui.ctx(), button.with("popup"));
+                            let mut current = "Family 00".to_owned();
+                            family_picker_in(
+                                ui,
+                                "reset-font",
+                                &mut current,
+                                170.0,
+                                &["Family 00".into(), "Family 01".into()],
+                                photocraft_engine::prefs::FontPreview::Medium,
+                                &[],
+                            );
+                            let search = ui.scope_id().with(("font-search", "reset-font"));
+                            state.search = ui.data(|d| d.get_temp::<String>(search)).unwrap_or_default();
+                            let input = search.with("input");
+                            state.search_input = Some(input);
+                            state.search_focused = ui.memory(|m| m.has_focus(input));
+                            state.search_height = ui.data(|d| d.get_temp::<f32>(search.with("height")));
+                        });
+                    }
+                    if state.picker_button {
+                        egui::Window::new("Reset screen fixture").show(ui.ctx(), |ui| {
+                            crate::screen_picker::button(ui, egui::Id::unique("reset-screen"));
+                        });
+                    }
+                    state.app.finish_type_reset_pass(ui.ctx());
+                },
+                ResetHarness { app, stock: false, picker_button: false, search: String::new(), search_input: None, search_focused: false, search_height: None },
+            );
+        h.run_steps(4);
+        h
+    }
+
+    fn harness_request(h: &egui_kittest::Harness<'_, ResetHarness>) -> egui::ImeResetId {
+        h.output().platform_output.ime.as_ref().expect("actual harness output").reset_request.expect("published harness reset")
+    }
+
+    #[test]
+    fn actual_font_search_owns_stock_input_without_a_speculative_custom_request() {
+        let mut h = reset_harness(app());
+        h.event(preedit("P"));
+        h.step();
+        h.event(raw_key(egui::Key::A, true, false));
+        h.step();
+        let first = harness_request(&h);
+        let before = layer_text(&h.state().app);
+        let custom_owner = h.output().platform_output.ime.as_ref().unwrap().owner;
+        h.state_mut().stock = true;
+        h.run_steps(3);
+        let stock_owner = h.output().platform_output.ime.as_ref().expect("real font search descriptor").owner;
+        assert_ne!(stock_owner, custom_owner);
+        let search_input = h.state().search_input.expect("font search field id");
+        assert!(h.state().search_focused, "the real font search field, not another stock field, owns focus");
+        assert_eq!(h.ctx.memory(|m| m.focused()), Some(search_input), "the stock IME owner is the focused font search input");
+        assert!(
+            h.state().search_height.is_some_and(|height| height > 0.0 && height <= FONT_MENU_HEIGHT),
+            "the real font list measured within its bounded popup height"
+        );
+        h.input_mut().events = vec![completed(first), egui::Event::Text("Family".into())];
+        h.step();
+        assert_eq!(h.state().search, "Family", "the actual font picker keeps its text event");
+        assert_eq!(layer_text(&h.state().app), before);
+        assert_eq!(pending(&h.state().app), None);
+        let stock = h.output().platform_output.ime.as_ref().expect("stock output survives finalization");
+        assert_eq!(stock.owner, stock_owner);
+        assert_eq!(stock.reset_request, None, "an already-ineligible route cannot allocate a custom request");
+        h.state_mut().stock = false;
+        egui::Popup::close_all(&h.ctx);
+        h.ctx.memory_mut(|m| m.stop_text_input());
+        h.input_mut().events = vec![completed(first), preedit("bad")];
+        h.step();
+        let second = harness_request(&h);
+        assert_ne!(first, second);
+        assert_eq!(layer_text(&h.state().app), before);
+        h.step();
+        assert_eq!(h.output().platform_output.ime.as_ref().unwrap().reset_request, None);
+        h.input_mut().events = vec![completed(second), preedit("が")];
+        h.step();
+        assert_eq!(layer_text(&h.state().app), "が");
+    }
+
+    type ImmediateViewportRecord = (egui::ViewportId, egui::ViewportId, Option<egui::Vec2>, Option<bool>);
+
+    fn record_immediate_viewports() -> Arc<std::sync::Mutex<Vec<ImmediateViewportRecord>>> {
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = seen.clone();
+        egui::Context::set_immediate_viewport_renderer(move |ctx, immediate| {
+            let ids = immediate.ids;
+            if let Ok(mut seen) = recorded.lock() {
+                seen.push((ids.this, ids.parent, immediate.builder.inner_size, immediate.builder.visible));
+            }
+            let mut callback = immediate.viewport_ui_cb;
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    viewport_id: ids.this,
+                    viewports: std::iter::once((ids.this, egui::ViewportInfo::default())).collect(),
+                    screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(2.0, 2.0))),
+                    ..Default::default()
+                },
+                |ui| callback(ui),
+            );
+            output.textures_delta.clear();
+        });
+        seen
+    }
+
+    #[test]
+    fn actual_screen_picker_modal_retires_the_type_fence_and_return_rearms_it() {
+        use egui_kittest::kittest::Queryable as _;
+        let mut app = app();
+        app.services.screen_pick = Some(Box::new(|_| {
+            let (sender, receiver) = std::sync::mpsc::channel();
+            sender
+                .send(Ok(crate::screen_picker::Capture::Images(vec![crate::screen_picker::ScreenImage {
+                    monitor: None,
+                    position: Pos2::ZERO,
+                    size: egui::vec2(2.0, 2.0),
+                    width: 2,
+                    height: 2,
+                    rgba: vec![0; 16],
+                    profile: None,
+                }])))
+                .unwrap();
+            crate::screen_picker::Pending { receiver, cancelled: Arc::new(std::sync::atomic::AtomicBool::new(false)) }
+        }));
+        let mut h = reset_harness(app);
+        h.event(preedit("P"));
+        h.step();
+        h.event(raw_key(egui::Key::A, true, false));
+        h.step();
+        let first = harness_request(&h);
+        let before = layer_text(&h.state().app);
+        let immediate = record_immediate_viewports();
+        h.ctx.set_embed_viewports(false);
+        h.state_mut().picker_button = true;
+        h.run_steps(2);
+        h.get_by_label("Pick screen color").click();
+        h.run_steps(3);
+        assert!(crate::screen_picker::busy(&h.ctx));
+        assert!(crate::screen_picker::showing(&h.ctx), "the actual UI takes its screen-picker modal early return");
+        let seen = immediate.lock().expect("recorded viewports");
+        assert!(!seen.is_empty(), "the native immediate-viewport renderer received the picker");
+        assert!(
+            seen.iter().all(|(child, parent, size, visible)| *child != egui::ViewportId::ROOT
+                && *parent == egui::ViewportId::ROOT
+                && *size == Some(egui::vec2(2.0, 2.0))
+                && *visible == Some(false)),
+            "each picker viewport is a hidden 2x2 child of the root"
+        );
+        drop(seen);
+        h.input_mut().events = vec![completed(first), preedit("bad")];
+        h.step();
+        assert!(h.output().platform_output.ime.is_none());
+        assert_eq!(pending(&h.state().app), None);
+        assert_eq!(layer_text(&h.state().app), before);
+        crate::screen_picker::cancel(&h.ctx);
+        h.state_mut().picker_button = false;
+        h.ctx.memory_mut(|m| m.stop_text_input());
+        h.input_mut().events = vec![completed(first), preedit("bad")];
+        h.step();
+        let second = harness_request(&h);
+        assert_ne!(first, second);
+        assert_eq!(layer_text(&h.state().app), before);
+        h.input_mut().events = vec![completed(second), preedit("が")];
+        h.step();
+        assert_eq!(layer_text(&h.state().app), "が");
+    }
+
+    #[test]
+    fn a_discarded_custom_output_allocates_no_new_id_and_final_absence_retires_then_rearms() {
+        let ctx = context();
+        ctx.options_mut(|o| o.max_passes = std::num::NonZeroUsize::new(4).unwrap());
+        let mut app = app();
+        // A prior queued R1 is deliberately present: the discard must preserve it, not allocate
+        // a speculative replacement for output egui will throw away.
+        let first = interrupt_with_selection(&mut app, &ctx);
+        let mut passes = 0;
+        let mut discarded_pending = None;
+        let mut output = ctx.run_ui(egui::RawInput { focused: true, ..Default::default() }, |ui| {
+            handle_keys(&mut app, ui.ctx());
+            if passes == 0 {
+                let xf = ViewXform {
+                    rect: egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(400.0, 300.0)),
+                    zoom: 1.0,
+                    center: [100.0, 100.0],
+                    flip: false,
+                    rotation: 0.0,
+                    aspect: 1.0,
+                };
+                draw_overlay(&mut app, ui.painter(), &xf);
+                ui.ctx().request_discard("reset custom output disappears on final pass");
+            }
+            sync_ime(&mut app, ui.ctx());
+            finish_reset_pass(&mut app, ui.ctx());
+            if passes == 0 {
+                discarded_pending = pending(&app);
+            }
+            passes += 1;
+        });
+        output.textures_delta.clear();
+        assert!(passes > 1);
+        assert!(output.platform_output.ime.is_none());
+        assert_eq!(discarded_pending, Some(first), "discard keeps the queued R1 and allocates no NEW id");
+        assert_eq!(pending(&app), None, "the final ineligible pass retires the prior R1");
+        let before = layer_text(&app);
+        let returned = run(&mut app, &ctx, vec![completed(first), preedit("bad")]).expect("same model returns");
+        let second = returned.reset_request.expect("new published request");
+        assert_ne!(first, second);
+        assert_eq!(layer_text(&app), before);
+        run(&mut app, &ctx, vec![completed(second), preedit("が")]);
+        assert_eq!(layer_text(&app), "が");
+    }
+
+    #[test]
+    fn a_recreated_context_installed_before_run_ui_rejects_the_old_completion_and_rearms() {
+        use eframe::App as _;
+        let old = context();
+        let mut app = app();
+        for _ in 0..4 {
+            actual_app_frame(&mut app, &old, vec![]);
+        }
+        let first = interrupt_with_selection(&mut app, &old);
+        let before = layer_text(&app);
+        // The host replaces its Context and must run the same supported setup before `run_ui`;
+        // a begin-pass hook registered later could not mark the first pass.
+        let next = egui::Context::default();
+        PhotocraftApp::setup_context(&next, app.ui.theme);
+        let mut frame = eframe::Frame::_new_kittest();
+        let mut saw_ui_pass = false;
+        let mut output = next.run_ui(
+            egui::RawInput {
+                focused: true,
+                events: vec![completed(first), preedit("bad")],
+                screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(1200.0, 800.0))),
+                ..Default::default()
+            },
+            |ui| {
+                app.logic(ui.ctx(), &mut frame);
+                saw_ui_pass = in_ui_pass(ui.ctx());
+                app.ui(ui, &mut frame);
+            },
+        );
+        output.textures_delta.clear();
+        assert!(saw_ui_pass, "the supported creator setup marks the first replacement Context pass");
+        let second = output.platform_output.ime.expect("replacement Context custom output").reset_request.expect("replacement Context request");
+        assert_ne!(first, second);
+        assert_eq!(layer_text(&app), before);
+        run(&mut app, &next, vec![completed(second), preedit("が")]);
+        assert_eq!(layer_text(&app), "が");
+    }
+
+    #[test]
+    fn type_mask_and_same_owner_session_replacement_supersede_the_full_request() {
+        for mask in [false, true] {
+            let ctx = context();
+            let mut app = app();
+            let first = interrupt_with_selection(&mut app, &ctx);
+            let original = run(&mut app, &ctx, vec![]).expect("original context");
+            if mask {
+                app.ui.text_edit.as_mut().unwrap().mask = true;
+            } else {
+                app.ui.text_edit.as_mut().unwrap().session = "replacement-reset-session".into();
+            }
+            let before = layer_text(&app);
+            let changed = run(&mut app, &ctx, vec![completed(first), preedit("bad")]).expect("replacement output");
+            let second = changed.reset_request.expect("replacement request");
+            assert_ne!(first, second);
+            if mask {
+                assert_ne!(changed.owner, original.owner);
+            } else {
+                assert_eq!(changed.owner, original.owner);
+            }
+            assert_ne!(changed.context_generation, original.context_generation);
+            assert_eq!(layer_text(&app), before);
+            run(&mut app, &ctx, vec![completed(first), terminal_delete(false), egui::Event::Ime(egui::ImeEvent::Commit("bad".into()))]);
+            assert_eq!(layer_text(&app), before);
+            run(&mut app, &ctx, vec![completed(second), preedit("が")]);
+            assert_eq!(layer_text(&app), "が");
+        }
+    }
+
+    #[test]
+    fn document_replacement_cannot_reuse_the_previous_documents_reset() {
+        let ctx = context();
+        let mut app = app();
+        let first = interrupt_with_selection(&mut app, &ctx);
+        let old_document = active_doc_id(&app);
+        app.run("file.new", json!({"width": 400, "height": 200})).unwrap();
+        app.sync_views();
+        // The host runs this before handling input: a new active document ends the old edit in
+        // its own document, so the next canvas click starts an editor for the new one.
+        end_if_left(&mut app);
+        assert!(app.ui.text_edit.is_none(), "the new document starts without the previous edit target");
+        app.ui.tool = crate::state::Tool::Type;
+        pointer_up(&mut app, [50.0, 100.0], [50.0, 100.0]);
+        insert(&mut app, "new");
+        assert_ne!(active_doc_id(&app), old_document);
+        let before = layer_text(&app);
+        let changed = run(&mut app, &ctx, vec![completed(first), preedit("bad")]).expect("new document output");
+        let second = changed.reset_request.expect("new document reset");
+        assert_ne!(first, second);
+        assert_eq!(layer_text(&app), before);
+        run(&mut app, &ctx, vec![completed(second), preedit("が")]);
+        assert!(layer_text(&app).contains("が"));
+    }
+}

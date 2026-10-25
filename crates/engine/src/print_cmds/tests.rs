@@ -463,6 +463,72 @@ fn package_copies_links_and_relinks() {
     );
 }
 
+/// Links whose names collide get distinct copies, even when a renamed copy's name is already
+/// another link's name (`b/2-x.png` copied before the third `x.png` would be renamed to it).
+#[test]
+fn package_never_overwrites_one_link_copy_with_another() {
+    let dir = tmp("package-collide");
+    let mut s = session("rgb", 8);
+    let mut links = Vec::new();
+    for (sub, name, colour) in [("a", "x.png", "#ff0000"), ("b", "2-x.png", "#00ff00"), ("c", "x.png", "#0000ff")] {
+        std::fs::create_dir_all(format!("{dir}/{sub}")).unwrap();
+        let link = format!("{dir}/{sub}/{name}");
+        let mut src = Session::new();
+        src.execute("file.new", json!({"width": 4, "height": 4, "background": colour})).unwrap();
+        crate::file_cmds::save_doc(&src.active().unwrap().doc, &link, None).unwrap();
+        s.execute("file.placeLinked", json!({"path": link})).unwrap();
+        links.push(std::fs::read(&link).unwrap());
+    }
+    let r = s.execute("file.package", json!({"dir": format!("{dir}/pkg")})).unwrap();
+    let copies: Vec<&str> = r["links"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
+    assert_eq!(copies.len(), 3);
+    let unique: std::collections::HashSet<&&str> = copies.iter().collect();
+    assert_eq!(unique.len(), 3, "{copies:?}");
+    for (copy, bytes) in copies.iter().zip(&links) {
+        assert_eq!(&std::fs::read(copy).unwrap(), bytes, "{copy}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A second package into the same folder copies its links beside the first one's, never over them.
+#[test]
+fn package_keeps_files_already_in_links() {
+    let dir = tmp("package-again");
+    let link = format!("{dir}/art.png");
+    let mut src = Session::new();
+    src.execute("file.new", json!({"width": 4, "height": 4, "background": "#ff0000"})).unwrap();
+    crate::file_cmds::save_doc(&src.active().unwrap().doc, &link, None).unwrap();
+    let mut s = session("rgb", 8);
+    s.execute("file.placeLinked", json!({"path": link})).unwrap();
+    let first = s.execute("file.package", json!({"dir": format!("{dir}/pkg")})).unwrap();
+    let first = first["links"][0].as_str().unwrap().to_string();
+    let kept = std::fs::read(&first).unwrap();
+    let second = s.execute("file.package", json!({"dir": format!("{dir}/pkg")})).unwrap();
+    let second = second["links"][0].as_str().unwrap();
+    assert_ne!(second, first);
+    assert!(second.ends_with("Links/0-art.png"), "{second}");
+    assert_eq!(std::fs::read(&first).unwrap(), kept);
+    assert_eq!(std::fs::read(second).unwrap(), kept);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A missing link placed twice is reported once.
+#[test]
+fn package_lists_a_missing_link_once() {
+    let dir = tmp("package-missing-once");
+    let link = format!("{dir}/gone.png");
+    let mut src = Session::new();
+    src.execute("file.new", json!({"width": 4, "height": 4})).unwrap();
+    crate::file_cmds::save_doc(&src.active().unwrap().doc, &link, None).unwrap();
+    let mut s = session("rgb", 8);
+    s.execute("file.placeLinked", json!({"path": link})).unwrap();
+    s.execute("file.placeLinked", json!({"path": link})).unwrap();
+    std::fs::remove_file(&link).unwrap();
+    let r = s.execute("file.package", json!({"dir": format!("{dir}/pkg")})).unwrap();
+    assert_eq!(r["missing"], json!([link]));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn paths_export_as_illustrator_postscript() {
     let mut s = session("rgb", 8);

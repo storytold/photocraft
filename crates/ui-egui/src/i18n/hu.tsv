@@ -48,6 +48,8 @@
 @plural	{n} step|{n} steps	{n} lépés
 @plural	{warning} (+{n} more brush preset warning)|{warning} (+{n} more brush preset warnings)	{warning} (+{n} további figyelmeztetés az ecset-előbeállításokról)
 @plural	{what} with {n} warning|{what} with {n} warnings	{what} ({n} figyelmeztetés)
+@plural	Imported {n} style from {file}|Imported {n} styles from {file}	{n} stílus importálva. Forrás: {file}
+@plural	Exported {n} style to {file}|Exported {n} styles to {file}	{n} stílus exportálva. Cél: {file}
 @id	file.close	Bezárás
 @id	layer.layerMask.apply	Alkalmazás
 @id	edit.clear	Kiürítés
@@ -1635,6 +1637,7 @@ fontWeight	Thin	Hajszálvékony
 	Refine	Finomítás
 	Refine Edge Brush (R)	Élfinomító ecset (R)
 	Refine Strokes	Finomító ecsetvonások
+	Edits	Szerkesztések
 	Reflect	Visszaverődés
 	Reflected	Tükrözött
 	Rename Channel…	Csatorna átnevezése…
@@ -2501,6 +2504,10 @@ navigator	Zoom	Nagyítás mértéke
 	Camera Raw Filter ({layer})	Camera Raw szűrő ({layer})
 	Camera Raw isn't open	A Camera Raw nincs megnyitva
 	Cancelled opening {name}	Megnyitás megszakítva: {name}
+	Damaged Photoshop document	Sérült Photoshop-dokumentum
+	The document “{name}” may be damaged.	A(z) „{name}” dokumentum sérült lehet.
+	Some layers, pixels or masks could not be read. Do you want to continue opening it?	Egyes rétegeket, képpontokat vagy maszkokat nem sikerült beolvasni. Folytatod a megnyitást?
+	If you continue, saving over the original may permanently discard unreadable data. Save a copy to keep the original.	Ha folytatod, az eredeti felülírása véglegesen elvetheti az olvashatatlan adatokat. Az eredeti megtartásához ments másolatot.
 	The document “{name}” does not have an embedded {mode} profile.	Nincs beágyazott profil ({mode}) ebben a dokumentumban: „{name}”
 	The document “{name}” has an embedded color profile that does not match the current {mode} working space.	A dokumentum beágyazott színprofilja nem egyezik az aktuális munkaszíntérrel ({mode}): „{name}”
 	Working: {working}	Munkaszíntér: {working}
@@ -4134,6 +4141,18 @@ cameraRaw	Yellow	Sárga
 	Shadow Mode	Árnyék módja
 	Shadow Color	Árnyék színe
 	Shadow Opacity	Árnyék fedettsége
+	Check for Updates…	Frissítések keresése…
+	PhotoCraft Updates	PhotoCraft-frissítések
+	Checking for updates…	Frissítések keresése…
+	Open the release page to choose an installer for your system.	Nyissa meg a kiadás oldalát, és válassza ki a rendszerének megfelelő telepítőt.
+	Open Download Page	Letöltési oldal megnyitása
+	PhotoCraft is up to date.	A PhotoCraft naprakész.
+	Could not check for updates.	Nem sikerült ellenőrizni a frissítéseket.
+	Updates have not been checked yet.	A frissítések még nem lettek ellenőrizve.
+	Check Again	Újraellenőrzés
+	Automatically Check for Updates	Frissítések automatikus keresése
+	Installed version: {version}	Telepített verzió: {version}
+	PhotoCraft {version} is available.	Elérhető a PhotoCraft {version}.
 # Embedded Profile Mismatch: profile names beside the choices, Remember this choice
 	Use the embedded profile ({profile})	A beágyazott profil használata ({profile})
 	Convert to the working space ({profile})	Átalakítás a munkaszíntérbe ({profile})
@@ -4278,6 +4297,12 @@ cameraRaw	Yellow	Sárga
 
 # Graphics Adapter preference (#1885)
 	GPU adapter	GPU-adapter
+
+# Styles panel: Import / Export Styles (.asl)
+	Import Styles…	Stílusok importálása…
+	Export Selected Styles…	Kijelölt stílusok exportálása…
+	Export Styles…	Stílusok exportálása…
+	{file} is not a style library (.asl)	{file} nem stíluskönyvtár (.asl)
 # Actions: a step dialog holds a suspended recording (#7365)
 	Confirm or cancel the open action step dialog first	Előbb hagyd jóvá vagy vond vissza a művelet lépésének nyitott párbeszédablakát
 	Pro Medium Gray	Pro középszürke
@@ -4286,14 +4311,27 @@ cameraRaw	Yellow	Sárga
 	Pro Light Gray	Pro világosszürke
 	Pro Light	Pro világos
 	Resize Windows to Fit	Ablakok átméretezése a képhez
-
 	EXR	EXR
-
 # Paragraph direction (TYPE-218-2)
 	Automatic paragraph direction	Automatikus bekezdésirány
 	Left-to-right paragraph direction	Balról jobbra irányuló bekezdés
 	Right-to-left paragraph direction	Jobbról balra irányuló bekezdés
 	Not rendered: this adjustment ({key}) is kept as imported.	Nem jelenik meg: ez a korrekció ({key}) importált állapotában marad.
-
 # Print preview image (#8236)
 	Print preview image	Print preview image
+# Color panel menu: modes, copy commands and colour ramps (#6000)
+	Hue Cube	Színárnyalat-kocka
+	Brightness Cube	Fényerő-kocka
+	Color Wheel	Színkör
+	RGB Sliders	RGB-csúszkák
+	HSB Sliders	HSB-csúszkák
+	CMYK Sliders	CMYK-csúszkák
+	Lab Sliders	Lab-csúszkák
+	Web Color Sliders	Webes színek csúszkái
+	Copy Color as HTML	Szín másolása HTML-ként
+	Copy Color's Hex Code	Szín hexadecimális kódjának másolása
+	RGB Spectrum	RGB-spektrum
+	CMYK Spectrum	CMYK-spektrum
+	Grayscale Ramp	Szürkeárnyalatos sáv
+	Current Colors	Aktuális színek
+	Make Ramp Web Safe	Sáv korlátozása webes színekre

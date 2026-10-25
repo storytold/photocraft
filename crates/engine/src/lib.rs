@@ -108,6 +108,7 @@ pub mod retouch_cmds;
 pub mod sample_cmds;
 pub mod sampler_cmds;
 pub mod select_extra_cmds;
+pub mod select_mask_edits;
 pub mod selection_cmds;
 pub mod shell_commands;
 pub mod shortcut_sets;
@@ -117,17 +118,20 @@ pub mod smartselect_cmds;
 pub mod snap;
 pub mod solid_fill_cmds;
 pub mod stamp_cmds;
+pub mod style_asl_cmds;
 pub mod swatch_cmds;
 pub mod symmetry_cmds;
 mod timeline_cmds;
 pub mod transform_cmds;
 mod trap_cmds;
+pub mod type_area_cmds;
 pub mod type_caret_cmds;
 pub mod type_cmds;
 pub mod type_extra_cmds;
 pub mod type_mask_cmds;
 pub mod type_spell_cmds;
 pub mod type_styles_cmds;
+pub mod updates_cmds;
 mod variables_cmds;
 pub use variables_cmds::{export_data_sets_with, import_data_sets_text};
 pub mod vector_cmds;
@@ -466,6 +470,12 @@ pub const PRECHECKED: &[&str] = &["layer.new.layer", "layer.new.group", "layer.n
 pub struct Session {
     docs: Vec<DocState>,
     active: Option<usize>,
+    /// Monotonic counter, bumped whenever a different document becomes active (including a
+    /// switch away and back inside one pass). UI work that must not cross documents (control
+    /// screenshots, automation input) binds to it.
+    active_generation: u64,
+    /// The document id [`Self::active_generation`] was last bumped for.
+    active_doc_for_generation: Option<photocraft_doc::DocId>,
     pub tools: ToolState,
     /// Log of executed commands (for action recording and debugging).
     pub journal: Vec<(String, Value)>,
@@ -491,6 +501,8 @@ pub struct Session {
     color_restrict: Option<usize>,
     /// Edit › Preferences, keyboard shortcuts, menu and toolbar customisation (see `prefs`).
     pub prefs: prefs::PrefsStore,
+    /// Release checks use an injected platform transport; no network I/O in the engine.
+    pub updates: updates_cmds::Updates,
     /// Edit menu state: Fade source, custom shape library (see `edit_menu_cmds`).
     pub edit_state: edit_menu_cmds::EditState,
     /// The pattern library (Window › Patterns; see `pattern.*`).
@@ -575,9 +587,25 @@ impl Session {
     pub fn active_mut(&mut self) -> Option<&mut DocState> {
         self.active.and_then(|i| self.docs.get_mut(i))
     }
+    /// Monotonic active-document generation. It changes when a different document becomes
+    /// active, including a switch away and back between two observations; equal values therefore
+    /// mean the document was not switched in between.
+    pub fn active_generation(&self) -> u64 {
+        self.active_generation
+    }
+    /// Bump [`Self::active_generation`] when the active document id changed. Call after every
+    /// assignment to `self.active`.
+    pub(crate) fn note_active_change(&mut self) {
+        let id = self.active().map(|st| st.doc.id);
+        if id != self.active_doc_for_generation {
+            self.active_doc_for_generation = id;
+            self.active_generation = self.active_generation.wrapping_add(1);
+        }
+    }
     pub fn set_active(&mut self, index: usize) -> bool {
         if index < self.docs.len() {
             self.active = Some(index);
+            self.note_active_change();
             self.sync_tools_mask_target();
             true
         } else {
@@ -617,6 +645,7 @@ impl Session {
         let active = self.active().map(|d| d.doc.id);
         let to = move_item(&mut self.docs, from, to)?;
         self.active = active.and_then(|id| self.docs.iter().position(|d| d.doc.id == id));
+        self.note_active_change();
         Some(to)
     }
 
@@ -634,6 +663,7 @@ impl Session {
         self.docs.push(st);
         let i = self.docs.len() - 1;
         self.active = Some(i);
+        self.note_active_change();
         i
     }
 
@@ -672,6 +702,7 @@ impl Session {
                 _ => index.min(self.docs.len() - 1),
             })
         };
+        self.note_active_change();
         Some(d)
     }
 
@@ -704,6 +735,17 @@ impl Session {
     /// `paint.cloneStamp` / `paint.historyBrush` it was drawn for. Refused for the Healing Brush
     /// (it blends on release) and when the brush, layer or clone source changed during the stroke.
     pub fn offer_live_retouch(&mut self, live: retouch_cmds::LiveRetouch) -> Result<()> {
+        let commit = live.into_commit(self)?;
+        self.live_commit = Some(commit);
+        Ok(())
+    }
+
+    /// [`Self::offer_live_stroke`] for a live Dodge, Burn, Sponge, Blur, Sharpen or Smudge stroke,
+    /// taken by the command it was drawn for: the stroke's finishing dabs are run first. Refused
+    /// when the brush, tool options or layer changed during the stroke.
+    pub fn offer_live_dab(&mut self, live: retouch_cmds::LiveDab) -> Result<()> {
+        // A refused offer withdraws the previous one too.
+        self.live_commit = None;
         let commit = live.into_commit(self)?;
         self.live_commit = Some(commit);
         Ok(())

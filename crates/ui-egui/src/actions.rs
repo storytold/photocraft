@@ -98,7 +98,7 @@ pub(crate) fn play(app: &mut PhotocraftApp, params: &Value) -> Result<Value, Str
     play_owned(app, params, None)
 }
 
-/// `suspended` is the recording a paused part of the same call took (`RECORD`); it comes
+/// `suspended` is the recording a paused part of the same call took ([`PausedPlayback::record`]); it comes
 /// back, with that named call journaled, only when the whole call ends.
 fn play_owned(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>) -> Result<Value, String> {
     let (action, from) = match actions_cmds::playback_plan(&app.session, params) {
@@ -129,41 +129,46 @@ fn play_owned(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>)
             failed = Some(json!({"step": i, "id": id, "error": format!("action playback exceeded the {}-step limit", actions_cmds::MAX_PLAYBACK_STEPS)}));
             break;
         }
+        // The gate judges the step before its dialog opens: a denied step neither runs nor
+        // pauses.
+        if let Some(auth) = app.session.authorize
+            && let Err(e) = auth(id, p)
+        {
+            failed = Some(json!({"step": i, "id": id, "error": e.to_string()}));
+            break;
+        }
         // The dialog toggle: show the step's dialog with its recorded values and continue
         // from the next step when it is confirmed (`resume`). Agents play headlessly.
         if action.dialogs.contains(&i) && !app.automation_input && (crate::filter_dialog::has_dialog(id) || crate::adjust_dialog::has_dialog(id)) {
             let label = label_of(id);
             let dialog = crate::dialogs::open_command_dialog(app, id, &label);
+            let token = app.paused_playbacks.pause(action.name.clone(), i + 1, app.session.authorize);
             if let Some(d) = app.ui.dialog_mut(dialog) {
                 if let Some(o) = p.as_object() {
-                    d.fields.extend(o.iter().map(|(k, v)| (k.clone(), v.clone())));
+                    // `__` keys are the dialog's own markers (`params_of` drops them), not step values.
+                    d.fields.extend(o.iter().filter(|(k, _)| !k.starts_with("__")).map(|(k, v)| (k.clone(), v.clone())));
                 }
-                d.fields.insert(RESUME.into(), json!({"action": action.name, "from": i + 1}));
+                d.fields.insert(RESUME.into(), json!(token));
             }
             paused = Some(json!({"step": i, "id": id, "dialog": dialog}));
             break;
         }
         let target = app.session.active().map(|d| d.doc.id);
-        let result = (|| {
-            if let Some(auth) = app.session.authorize {
-                auth(id, p).map_err(|e| e.to_string())?;
-            }
-            if id == "actions.play" {
-                play(app, p)
-            } else if actions_cmds::shell_save_command(id) {
-                // Write synchronously, so the next step doesn't meet a document locked by a
-                // background save.
-                let background = std::mem::replace(&mut app.background_jobs, false);
-                let r = app.replay_save(id, p);
-                app.background_jobs = background;
-                r
-            } else if actions_cmds::shell_view_command(id) {
-                app.sync_views();
-                app.run(id, p.clone())
-            } else {
-                app.session.execute(id, p.clone()).map_err(|e| e.to_string())
-            }
-        })();
+        let result = if id == "actions.play" {
+            play(app, p)
+        } else if actions_cmds::shell_save_command(id) {
+            // Write synchronously, so the next step doesn't meet a document locked by a
+            // background save.
+            let background = std::mem::replace(&mut app.background_jobs, false);
+            let r = app.replay_save(id, p);
+            app.background_jobs = background;
+            r
+        } else if actions_cmds::shell_view_command(id) {
+            app.sync_views();
+            app.run(id, p.clone())
+        } else {
+            app.session.execute(id, p.clone()).map_err(|e| e.to_string())
+        };
         match result {
             Ok(value) => {
                 if let Some(error) = actions_cmds::nested_failure(id, &value).or_else(|| actions_cmds::save_target_closed(&app.session, id, target)) {
@@ -186,13 +191,14 @@ fn play_owned(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>)
     actions_cmds::finish_playback(&mut app.session, None, &action, from);
     match paused.as_ref().and_then(|p| p.get("dialog")).and_then(Value::as_u64).and_then(|d| app.ui.dialog_mut(d)) {
         // Paused for a dialog: the call goes on after it, so recording stays suspended.
-        Some(d) if failed.is_none() => match (owner, d.fields.get_mut(RESUME)) {
-            (Some(owner), Some(Value::Object(r))) => {
-                r.insert(RECORD.into(), owner);
+        Some(d) if failed.is_none() => {
+            let entry = d.fields.get(RESUME).and_then(Value::as_u64).and_then(|t| app.paused_playbacks.paused.get_mut(&t));
+            match (owner, entry) {
+                (Some(owner), Some(p)) => p.record = Some(owner),
+                // No continuation to carry the recording: the call ends here.
+                (owner, _) => restore_recording(app, owner.as_ref()),
             }
-            // No continuation to carry the recording: the call ends here.
-            (owner, _) => restore_recording(app, owner.as_ref()),
-        },
+        }
         _ => restore_recording(app, owner.as_ref()),
     }
     Ok(match (failed, paused) {
@@ -448,9 +454,9 @@ fn insert_stop_dialog(app: &mut PhotocraftApp) -> Result<Value, String> {
 }
 
 pub fn insert_stop_body(ui: &mut egui::Ui, fields: &mut serde_json::Map<String, Value>) {
-    ui.label(tl!("Message:"));
+    let message_label = ui.label(tl!("Message:"));
     let mut message = fields.get("message").and_then(Value::as_str).unwrap_or_default().to_string();
-    ui.add(egui::TextEdit::multiline(&mut message).desired_rows(4).desired_width(320.0));
+    ui.add(egui::TextEdit::multiline(&mut message).desired_rows(4).desired_width(320.0)).labelled_by(message_label.id);
     fields.insert("message".into(), json!(message));
     ui.add_space(6.0);
     let mut allow = fields.get("allowContinue").and_then(Value::as_bool).unwrap_or(false);
@@ -478,15 +484,8 @@ pub fn insert_stop_confirm(app: &mut PhotocraftApp, fields: &serde_json::Map<Str
     Ok(r)
 }
 
-/// The key a paused playback leaves in its dialog's fields: `{action, from}`.
+/// The key a paused playback leaves in its dialog's fields: the token of its [`PausedPlayback`].
 pub const RESUME: &str = "__resumeAction";
-
-/// The recording a paused call suspended, kept in its `RESUME` entry:
-/// `{index, into, action, from}` (`into` is the name of the action being recorded).
-/// A step dialog only closes through `dialogs::confirm` (OK, `↩`, automation) or
-/// `dialogs::cancel` (Cancel, Esc, the close box, automation), which end the call through
-/// `resume`, `abandoned` or `stopped`, so the recording comes back exactly once.
-const RECORD: &str = "record";
 
 /// Resume the recording a paused call suspended and journal that call, once.
 fn restore_recording(app: &mut PhotocraftApp, owner: Option<&Value>) {
@@ -511,9 +510,9 @@ fn restore_recording(app: &mut PhotocraftApp, owner: Option<&Value>) {
     }
 }
 
-/// Whether a step dialog holds a suspended recording.
+/// Whether a paused playback holds a suspended recording.
 fn suspended(app: &PhotocraftApp) -> bool {
-    app.ui.dialogs.iter().any(|d| d.fields.get(RESUME).and_then(|r| r.get(RECORD)).is_some())
+    app.paused_playbacks.paused.values().any(|p| p.record.is_some())
 }
 
 /// While a step dialog holds a suspended recording, refuse what would lose its call: a new
@@ -529,13 +528,58 @@ pub(crate) fn suspended_guard(app: &PhotocraftApp, id: &str) -> Result<(), Strin
 
 /// A step dialog's command failed: the action ends there.
 pub fn abandoned(app: &mut PhotocraftApp, fields: &serde_json::Map<String, Value>) {
-    restore_recording(app, fields.get(RESUME).and_then(|r| r.get(RECORD)));
+    let record = fields.get(RESUME).and_then(|t| app.paused_playbacks.take(t)).and_then(|p| p.record);
+    restore_recording(app, record.as_ref());
+}
+
+/// The automation gate a session installs ([`photocraft_engine::Session::authorize`]).
+type Gate = fn(&str, &Value) -> photocraft_engine::Result<()>;
+
+/// A playback paused at a step dialog: the action and step it continues from, and the gate it
+/// was playing under (`None` for one a person started).
+#[derive(Clone, Debug)]
+pub(crate) struct PausedPlayback {
+    action: String,
+    from: usize,
+    gate: Option<Gate>,
+    /// The recording the paused call suspended: `{index, into, action, from}` (`into` is the
+    /// name of the action being recorded). A step dialog only closes through
+    /// `dialogs::confirm` (OK, `↩`, automation) or `dialogs::cancel` (Cancel, Esc, the close
+    /// box, automation), which end the call through `resume`, `abandoned` or `stopped`, so the
+    /// recording comes back exactly once.
+    record: Option<Value>,
+}
+
+/// The paused playbacks, by the token their dialog carries. The dialog's fields hold only the
+/// token; what plays next, and under which gate, is kept here.
+#[derive(Debug, Default)]
+pub(crate) struct PausedPlaybacks {
+    last: u64,
+    paused: std::collections::HashMap<u64, PausedPlayback>,
+}
+
+impl PausedPlaybacks {
+    fn pause(&mut self, action: String, from: usize, gate: Option<Gate>) -> u64 {
+        self.last = self.last.wrapping_add(1);
+        self.paused.insert(self.last, PausedPlayback { action, from, gate, record: None });
+        self.last
+    }
+
+    fn take(&mut self, token: &Value) -> Option<PausedPlayback> {
+        token.as_u64().and_then(|token| self.paused.remove(&token))
+    }
 }
 
 /// A step dialog confirmed: continue the action after it (`dialogs::confirm` calls this).
+///
+/// The remaining steps run under the gate the playback paused with, however the dialog was
+/// confirmed: a control request, synthetic Enter or OK, or a click.
 pub fn resume(app: &mut PhotocraftApp, fields: &serde_json::Map<String, Value>) -> Result<(), String> {
-    let Some(r) = fields.get(RESUME) else { return Ok(()) };
-    let owner = r.get(RECORD).cloned();
+    let Some(token) = fields.get(RESUME) else { return Ok(()) };
+    let Some(paused) = app.paused_playbacks.take(token) else {
+        return Err("this dialog doesn't belong to a paused action".into());
+    };
+    let owner = paused.record.clone();
     // The dialog's command may run as a background job; the next step needs its result.
     if let Some(doc) = app.session.active().map(|d| d.doc.id)
         && let Some(job) = app.session.job_on(doc)
@@ -547,8 +591,12 @@ pub fn resume(app: &mut PhotocraftApp, fields: &serde_json::Map<String, Value>) 
         app.ui.status_error = true;
         return Err(e.to_string());
     }
-    let params = json!({"action": r.get("action").cloned().unwrap_or(Value::Null), "from": r.get("from").cloned().unwrap_or(Value::Null)});
-    match play_owned(app, &params, owner) {
+    let params = json!({"action": paused.action, "from": paused.from});
+    let saved = app.session.authorize;
+    app.session.authorize = paused.gate.or(saved);
+    let played = play_owned(app, &params, owner);
+    app.session.authorize = saved;
+    match played {
         Ok(v) => {
             report_play(app, &v);
             Ok(())
@@ -712,8 +760,8 @@ fn delete_selection(app: &mut PhotocraftApp) {
 /// returns the new name to commit; Escape cancels and keeps the old name.
 fn rename_field(app: &mut PhotocraftApp, ui: &mut egui::Ui, index: usize, rect: Rect) -> Option<String> {
     let mut r = app.ui.actions.renaming.take().filter(|r| r.index == index)?;
-    let id = egui::Id::new(("action-rename-field", index));
-    let te = ui.put(rect, egui::TextEdit::singleline(&mut r.text).id(id).font(egui::FontId::proportional(12.0)));
+    let id = egui::Id::unique(("action-rename-field", index));
+    let te = ui.put(rect, egui::TextEdit::singleline(&mut r.text).id(id).font(egui::FontId::proportional(12.0))).accessible_name(tl!("Name"));
     if !r.focused {
         te.request_focus();
         // Like Photoshop, the whole name starts selected so typing replaces it.
@@ -853,7 +901,7 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 shown_set = Some(set);
                 let collapsed = app.ui.actions.collapsed_sets.iter().any(|c| c == set);
                 let (hr, hresp) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::click());
-                hresp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, !collapsed, set));
+                hresp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, !collapsed, set));
                 if hresp.hovered() {
                     ui.painter().rect_filled(hr, 0.0, t.hover.gamma_multiply(0.5));
                 }
@@ -896,7 +944,7 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             }
             let button_mode = app.ui.actions.button_mode;
             let sel = app.ui.actions.selected == Some(i) && app.ui.actions.selected_step.is_none();
-            resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, sel, name));
+            resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, sel, name));
             if button_mode {
                 ui.painter().rect_filled(rect, 3.0, button_fill(swatch, &t));
             } else if sel {
@@ -1019,7 +1067,7 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     }
                     let label = step_label(id, params);
                     let selected = app.ui.actions.selected == Some(i) && app.ui.actions.selected_step == Some(step);
-                    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected, &label));
+                    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, &label));
                     if selected {
                         ui.painter().rect_filled(r, 0.0, t.row_selected);
                     } else if response.hovered() {
@@ -1034,22 +1082,22 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     // Photoshop's check column: unchecked steps are skipped by playback, Batch and droplets.
                     let check = ui.interact(
                         Rect::from_center_size(pos2(x0 + 30.0, r.center().y), vec2(16.0, 16.0)),
-                        ui.id().with(("action-step-check", i, step)),
+                        ui.scope_id().with(("action-step-check", i, step)),
                         Sense::click(),
                     );
-                    check.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, on, format!("{}: {label}", tl!("Include in playback"))));
+                    check.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, on, format!("{}: {label}", tl!("Include in playback"))));
                     paint_check(ui, check.rect, on, &t);
                     // Photoshop's dialog column: playback shows the step's dialog, seeded with its
                     // recorded values, and continues when it is confirmed.
                     let with_dialog = dialogs.contains(&step);
                     let dialog = ui.interact(
                         Rect::from_center_size(pos2(x0 + 46.0, r.center().y), vec2(16.0, 16.0)),
-                        ui.id().with(("action-step-dialog", i, step)),
+                        ui.scope_id().with(("action-step-dialog", i, step)),
                         Sense::click(),
                     );
                     // A toggle button, not a check box, so the check column stays the only CheckBox role.
                     dialog.widget_info(|| {
-                        egui::WidgetInfo::selected(egui::WidgetType::Button, true, with_dialog, format!("{}: {label}", tl!("Show dialog during playback")))
+                        egui::WidgetInfo::selected(egui::Role::Button, true, with_dialog, format!("{}: {label}", tl!("Show dialog during playback")))
                     });
                     crate::icons::paint(ui, dialog.rect, "message-square", 11.0, if with_dialog { t.icon } else { t.text_faint.gamma_multiply(0.45) });
                     let dialog = dialog.on_hover_text(tl!("Show dialog during playback"));
@@ -1108,7 +1156,7 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             begin_recording(app, true);
         }
         let play = crate::icons::button(ui, "play", 24.0, false, tl!("Play selection"));
-        play.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Play selection")));
+        play.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Play selection")));
         if play.clicked() {
             play_idx = playback_selection(app);
         }
@@ -1118,14 +1166,14 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         let can_delete = app.ui.actions.selected.is_some() && (!recording_now || app.ui.actions.selected_step.is_some());
         ui.add_enabled_ui(can_delete, |ui| {
             let response = crate::icons::button(ui, "trash", 24.0, false, tl!("Delete"));
-            response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, can_delete, tl!("Delete")));
+            response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, can_delete, tl!("Delete")));
             if response.clicked() {
                 delete_selection(app);
             }
         });
         let mode_label = if app.ui.actions.button_mode { tl!("Button Mode On") } else { tl!("Button Mode") };
         let mode_button = ui.add_enabled(!recording_now, egui::Button::new(mode_label).small()).on_hover_text(tl!("Button Mode"));
-        mode_button.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, !recording_now, mode_label));
+        mode_button.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, !recording_now, mode_label));
         if mode_button.clicked() {
             app.ui.actions.button_mode = !app.ui.actions.button_mode;
         }
@@ -1687,6 +1735,74 @@ mod tests {
         assert!(!b_changed && !a_changed);
     }
 
+    /// Loads a Photoshop set holding Invert + a Save As into `dest` and plays it on a PSD.
+    /// Returns the played result, whether the PSD changed on disk and the files in `out`.
+    fn play_imported_save_as(dest: &str) -> (Value, bool, Vec<String>) {
+        use photocraft_psd::atn::{AtnAction, AtnEvent, AtnFile, AtnItem};
+        use photocraft_psd::descriptor::{Descriptor, UnicodeString, Value as D};
+        let dir = std::env::temp_dir().join(format!("photocraft-atn-save-as-{}-{}", dest.len(), std::process::id()));
+        let out = dir.join("out");
+        std::fs::create_dir_all(&out).unwrap();
+        let src = dir.join("src.psd").to_string_lossy().into_owned();
+        let path = |text: &str| {
+            let units: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+            let mut b = b"txtu".to_vec();
+            b.extend_from_slice(&((12 + units.len() * 2) as u32).to_le_bytes());
+            b.extend_from_slice(&(units.len() as u32).to_le_bytes());
+            units.iter().for_each(|u| b.extend_from_slice(&u.to_le_bytes()));
+            D::Path(b)
+        };
+        let save = Descriptor::new("null")
+            .with("As  ", D::Descriptor(Descriptor::new("PNGF")))
+            .with("In  ", path(&out.join(dest).to_string_lossy()))
+            .with("DocI", D::Integer(53));
+        let item = |code: &[u8; 4], label: &str, d: Option<Descriptor>| AtnItem {
+            event: AtnEvent::Code(*code),
+            dictionary: label.into(),
+            descriptor: d,
+            ..Default::default()
+        };
+        let set = AtnFile {
+            name: UnicodeString::new_nul("Export"),
+            actions: vec![AtnAction {
+                name: UnicodeString::new_nul("Invert and save"),
+                items: vec![item(b"Invr", "Invert", None), item(b"save", "Save", Some(save))],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let mut app = disk_app(vec![]);
+        app.run("file.new", json!({"width": 16, "height": 16})).unwrap();
+        app.save_as(Some(src.clone())).unwrap();
+        let before = std::fs::read(&src).unwrap();
+        app.run("actions.load", json!({"data": photocraft_engine::paint::tile::b64_encode(&photocraft_psd::atn::write(&set).unwrap())})).unwrap();
+        app.open_path(&src).unwrap();
+        let played = app.run("actions.play", json!({"action": 0})).unwrap();
+        let mut written: Vec<String> = std::fs::read_dir(&out).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        written.sort();
+        let r = (played, std::fs::read(&src).unwrap() != before, written);
+        let _ = std::fs::remove_dir_all(&dir);
+        r
+    }
+
+    #[test]
+    fn imported_save_as_writes_the_recorded_file_not_the_played_one() {
+        // #7102: the Save As imported as File › Save, which wrote over src.psd.
+        let (played, src_changed, written) = play_imported_save_as("result.png");
+        assert!(played.get("failed").is_none(), "{played}");
+        assert!(!src_changed, "the Save As wrote over the file the action was played on");
+        assert_eq!(written, ["result.png"]);
+    }
+
+    #[test]
+    fn imported_save_as_into_a_folder_stops_before_writing() {
+        // A folder destination isn't mapped yet (#5430): playback stops on it, nothing is saved.
+        let (played, src_changed, written) = play_imported_save_as("folder");
+        assert!(played.get("failed").is_some(), "{played}");
+        assert!(!src_changed);
+        assert!(written.is_empty(), "{written:?}");
+    }
+
     #[test]
     fn set_folders_group_actions_and_collapse() {
         use egui_kittest::{Harness, kittest::Queryable};
@@ -1821,7 +1937,7 @@ mod tests {
         let id = v["paused"]["dialog"].as_u64().unwrap();
         let d = app.ui.dialog_mut(id).unwrap();
         assert_eq!(d.fields["radius"], 3, "the dialog opens on the recorded values");
-        assert_eq!(d.fields[RESUME], json!({"action": "Blur", "from": 2}));
+        assert!(d.fields[RESUME].is_u64(), "the dialog carries only the pause's token: {}", d.fields[RESUME]);
         assert!(app.session.active().unwrap().doc.selection.is_none(), "nothing after the dialog ran yet");
         report_play(&mut app, &v);
         assert!(app.ui.status.contains("dialog"), "{}", app.ui.status);
@@ -1940,6 +2056,18 @@ mod tests {
     }
 
     #[test]
+    fn an_abandoned_step_dialog_leaves_no_paused_playback() {
+        let mut app = recording_with_dialog_child();
+        let id = pause_child(&mut app);
+        app.ui.dialog_mut(id).unwrap().fields.insert("radius".into(), json!("not a radius"));
+        assert!(crate::dialogs::confirm(&mut app, id).is_err(), "the dialog command fails");
+        assert!(app.paused_playbacks.paused.is_empty(), "the failed dialog ends its pause");
+        app.run("actions.stop", json!({})).unwrap();
+        assert_eq!(app.session.actions.list[1].steps, child_call(), "the call is recorded once");
+        app.run("actions.record", json!({"name": "Next"})).unwrap();
+    }
+
+    #[test]
     fn a_failing_resumed_playback_ends_the_recorded_call_once() {
         let mut app = recording_with_dialog_child();
         let id = pause_child(&mut app);
@@ -1980,6 +2108,178 @@ mod tests {
         let app = h.state_mut();
         app.run("actions.stop", json!({})).unwrap();
         assert_eq!(app.session.actions.list[1].steps, child_call());
+    }
+
+    #[test]
+    fn a_step_dialog_keeps_its_continuation_token() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.background_jobs = false;
+        app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+        for (name, steps) in [
+            ("First", vec![("filter.blur.gaussianBlur".into(), json!({"radius": 1}))]),
+            ("Second", vec![("filter.blur.gaussianBlur".into(), json!({"radius": 1})), ("select.all".into(), json!({}))]),
+        ] {
+            let mut action = Action::new(name, steps);
+            action.dialogs.insert(0);
+            app.session.actions.list.push(action);
+        }
+        let first = play(&mut app, &json!({"action": "First"})).unwrap()["paused"]["dialog"].as_u64().unwrap();
+        let second = play(&mut app, &json!({"action": "Second"})).unwrap()["paused"]["dialog"].as_u64().unwrap();
+        let first_token = app.ui.dialog_mut(first).unwrap().fields[RESUME].clone();
+        let second_token = app.ui.dialog_mut(second).unwrap().fields[RESUME].clone();
+        for token in [second_token.clone(), Value::Null, json!("invalid"), json!({"action": "Second", "from": 1})] {
+            let (request, _) = crate::control::ControlRequest::new("ui.dialog.set", json!({"dialog": first, "field": RESUME, "value": token}));
+            let response = crate::control::handle(&mut app, &egui::Context::default(), &request);
+            assert!(matches!(response, crate::control::Outcome::Done(ref v) if v["error"].as_str().is_some_and(|e| e.contains("read-only"))));
+            assert_eq!(app.ui.dialog_mut(first).unwrap().fields[RESUME], first_token);
+            assert_eq!(app.ui.dialog_mut(second).unwrap().fields[RESUME], second_token);
+            assert_eq!(app.paused_playbacks.paused.len(), 2);
+        }
+        crate::dialogs::confirm(&mut app, first).unwrap();
+        assert!(app.session.active().unwrap().doc.selection.is_none(), "First must not run Second's remaining step");
+        crate::dialogs::confirm(&mut app, second).unwrap();
+        assert!(app.session.active().unwrap().doc.selection.is_some());
+        assert!(app.paused_playbacks.paused.is_empty());
+    }
+
+    fn recording_with_displace_child() -> PhotocraftApp {
+        let mut app = recording_with_dialog_child();
+        app.background_jobs = false;
+        app.session.actions.list[0].steps[0] = ("filter.distort.displace".into(), json!({}));
+        app
+    }
+
+    fn assert_displace_call_finished(app: &mut PhotocraftApp, suffix_count: usize) {
+        assert!(!app.file_dialog_open());
+        assert!(app.ui.dialogs.is_empty());
+        assert!(app.paused_playbacks.paused.is_empty());
+        assert!(app.session.actions.recording.is_some());
+        assert_eq!(suffixes(app), suffix_count);
+        app.run("actions.stop", json!({})).unwrap();
+        assert_eq!(app.session.actions.list[1].steps, child_call(), "record the child call exactly once");
+        app.run("actions.record", json!({"name": "Next"})).unwrap();
+    }
+
+    #[test]
+    fn a_displace_step_restores_recording_when_the_map_picker_fails_or_is_cancelled() {
+        use crate::file_dialog::FileDialogAnswer;
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing.png").to_string_lossy().into_owned();
+        for answer in [
+            None,
+            Some(FileDialogAnswer::Unavailable("no picker available".into())),
+            Some(FileDialogAnswer::Paths(Vec::new())),
+            Some(FileDialogAnswer::Contents("map.png".into(), Vec::new())),
+            Some(FileDialogAnswer::Paths(vec![missing])),
+        ] {
+            let mut app = recording_with_displace_child();
+            let (show, _) = crate::file_dialog::fake(vec![answer]);
+            app.services.file_dialog = Some(show);
+            let id = pause_child(&mut app);
+            crate::dialogs::confirm(&mut app, id).unwrap();
+            assert!(app.file_dialog_open());
+            assert!(app.session.actions.recording.is_none());
+            app.poll_file_dialog(&egui::Context::default(), None);
+            assert_displace_call_finished(&mut app, 0);
+        }
+    }
+
+    #[test]
+    fn a_displace_step_restores_recording_when_the_map_picker_cannot_start() {
+        let mut app = recording_with_displace_child();
+        let id = pause_child(&mut app);
+        assert!(crate::dialogs::confirm(&mut app, id).is_err());
+        assert_displace_call_finished(&mut app, 0);
+    }
+
+    #[test]
+    fn a_displace_step_resumes_and_records_its_call_once_after_choosing_a_map() {
+        let mut app = recording_with_displace_child();
+        let dir = tempfile::tempdir().unwrap();
+        let map = dir.path().join("map.png");
+        let bytes = photocraft_io::export(&app.session.active().unwrap().doc, "png", &Default::default()).unwrap().bytes;
+        std::fs::write(&map, bytes).unwrap();
+        let (show, _) = crate::file_dialog::fake(vec![Some(crate::file_dialog::FileDialogAnswer::Paths(vec![map.to_string_lossy().into_owned()]))]);
+        app.services.file_dialog = Some(show);
+        let id = pause_child(&mut app);
+        crate::dialogs::confirm(&mut app, id).unwrap();
+        app.poll_file_dialog(&egui::Context::default(), None);
+        assert_displace_call_finished(&mut app, 1);
+    }
+
+    #[test]
+    fn a_step_dialog_takes_only_the_steps_values() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 16, "height": 16})).unwrap();
+        let mut a = Action::new("Blur", vec![("filter.blur.gaussianBlur".into(), json!({"radius": 2, "__command": "select.all", "__label": "Other"}))]);
+        a.dialogs.insert(0);
+        app.session.actions.list.push(a);
+        let v = play(&mut app, &json!({"action": "Blur"})).unwrap();
+        let d = app.ui.dialog_mut(v["paused"]["dialog"].as_u64().unwrap()).unwrap();
+        assert_eq!(d.fields["radius"], 2);
+        assert_eq!(d.fields["__command"], "filter.blur.gaussianBlur");
+        assert_ne!(d.fields["__label"], "Other");
+    }
+
+    fn deny_blur(id: &str, _: &Value) -> photocraft_engine::Result<()> {
+        if id == "filter.blur.gaussianBlur" { Err(photocraft_engine::EngineError::Other("blur denied".into())) } else { Ok(()) }
+    }
+
+    #[test]
+    fn a_step_the_gate_denies_opens_no_dialog() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 16, "height": 16})).unwrap();
+        let mut a = Action::new("Blur", vec![("filter.blur.gaussianBlur".into(), json!({"radius": 1}))]);
+        a.dialogs.insert(0);
+        app.session.actions.list.push(a);
+        app.session.authorize = Some(deny_blur);
+        let v = play(&mut app, &json!({"action": "Blur"})).unwrap();
+        app.session.authorize = None;
+        assert!(v["failed"]["error"].as_str().is_some_and(|e| e.contains("blur denied")), "{v}");
+        assert!(app.ui.dialogs.is_empty(), "no step dialog opened");
+        assert!(app.paused_playbacks.paused.is_empty());
+    }
+
+    fn deny_select_all(id: &str, _: &Value) -> photocraft_engine::Result<()> {
+        if id == "select.all" { Err(photocraft_engine::EngineError::Other("select.all denied".into())) } else { Ok(()) }
+    }
+
+    /// An action an automation client plays (`control::handle` installs the gate, then removes
+    /// it) pauses at a step dialog; confirming the dialog later, here with synthetic Enter or
+    /// OK, runs the remaining steps under the same gate.
+    #[test]
+    fn a_paused_playback_keeps_its_automation_gate_when_the_dialog_is_confirmed() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 16, "height": 16})).unwrap();
+        let mut a = Action::new("Seeded", vec![("filter.blur.gaussianBlur".into(), json!({"radius": 1})), ("select.all".into(), json!({}))]);
+        a.dialogs.insert(0);
+        app.session.actions.list.push(a);
+        app.session.authorize = Some(deny_select_all);
+        let v = play(&mut app, &json!({"action": "Seeded"})).unwrap();
+        app.session.authorize = None;
+        let id = v["paused"]["dialog"].as_u64().unwrap();
+        app.automation_input = true;
+        let _ = crate::dialogs::confirm(&mut app, id);
+        app.automation_input = false;
+        assert!(app.session.active().unwrap().doc.selection.is_none(), "the denied step did not run");
+        assert!(app.ui.status.contains("select.all denied"), "{}", app.ui.status);
+    }
+
+    /// The dialog names only its pause: changing its fields can't resume another action.
+    #[test]
+    fn a_step_dialog_resumes_only_the_playback_that_paused_it() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 16, "height": 16})).unwrap();
+        let mut a = Action::new("Blur", vec![("filter.blur.gaussianBlur".into(), json!({"radius": 1}))]);
+        a.dialogs.insert(0);
+        app.session.actions.list.push(a);
+        app.session.actions.list.push(Action::new("Seeded", vec![("select.all".into(), json!({}))]));
+        let v = play(&mut app, &json!({"action": "Blur"})).unwrap();
+        let id = v["paused"]["dialog"].as_u64().unwrap();
+        app.ui.dialog_mut(id).unwrap().fields.insert(RESUME.into(), json!({"action": "Seeded", "from": 0}));
+        let r = crate::dialogs::confirm(&mut app, id);
+        assert!(app.session.active().unwrap().doc.selection.is_none(), "the other action did not play");
+        assert!(r.is_err_and(|e| e.contains("paused action")));
     }
 
     #[test]

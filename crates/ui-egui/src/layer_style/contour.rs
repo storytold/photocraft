@@ -330,7 +330,7 @@ pub(super) fn editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Str
     };
     let t = Tokens::get(ui.ctx());
     let ctx = ui.ctx().clone();
-    let mem = egui::Id::new(("contour-editor", effect.as_str(), key.as_str()));
+    let mem = egui::Id::unique(("contour-editor", effect.as_str(), key.as_str()));
     let mut st: PointCurveState = ctx.data(|d| d.get_temp(mem)).unwrap_or_default();
     let (mut pts, mut corners) = levels_of(&c);
     let mut close: Option<bool> = None;
@@ -350,7 +350,7 @@ pub(super) fn editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Str
                     ui.label(RichText::new(tl!("Preset:")).color(t.text_dim));
                     let mut cur = name_of(&c).to_string();
                     let opts: Vec<(String, &str)> = CONTOURS.iter().map(|(n, _)| (n.to_string(), *n)).collect();
-                    if widgets::dropdown(ui, "contour-editor-preset", &mut cur, &opts, 190.0) {
+                    if widgets::dropdown(ui, "contour-editor-preset", tl!("Preset"), &mut cur, &opts, 190.0) {
                         preset = Some(cur);
                     }
                 });
@@ -405,7 +405,7 @@ pub(super) fn editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Str
                 if let Some(name) = naming.as_mut() {
                     ui.horizontal(|ui| {
                         ui.label(RichText::new(tl!("Name:")).color(t.text_dim));
-                        let r = widgets::text_field(ui, mem.with("name-field"), name, "", 150.0, false);
+                        let r = widgets::text_field(ui, mem.with("name-field"), name, "", 150.0, false).accessible_name(tl!("Name:"));
                         r.request_focus();
                         if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                             commit_name = true;
@@ -420,9 +420,11 @@ pub(super) fn editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Str
                 ui.horizontal(|ui| {
                     let (mut vi, mut vo) = sel.and_then(|i| pts.get(i)).map_or((0.0, 0.0), |q| ((q[0] / 2.55).round(), (q[1] / 2.55).round()));
                     ui.label(RichText::new(tl!("Input:")).color(t.text_dim));
-                    let ri = ui.add_enabled_ui(sel.is_some(), |ui| widgets::value_field(ui, &mut vi, 0.0..=100.0, "%", 52.0)).inner;
+                    let ri =
+                        ui.add_enabled_ui(sel.is_some(), |ui| widgets::value_field(ui, &mut vi, 0.0..=100.0, "%", 52.0).accessible_name(tl!("Input:"))).inner;
                     ui.label(RichText::new(tl!("Output:")).color(t.text_dim));
-                    let ro = ui.add_enabled_ui(sel.is_some(), |ui| widgets::value_field(ui, &mut vo, 0.0..=100.0, "%", 52.0)).inner;
+                    let ro =
+                        ui.add_enabled_ui(sel.is_some(), |ui| widgets::value_field(ui, &mut vo, 0.0..=100.0, "%", 52.0).accessible_name(tl!("Output:"))).inner;
                     if let Some(i) = sel
                         && (ri.changed() || ro.changed())
                     {
@@ -573,7 +575,7 @@ mod library_tests {
         let st = app.session.active().unwrap();
         let mut fields = crate::layer_style::initial_fields(st.doc.layer(st.active_layer.unwrap()).unwrap(), None, 120.0);
         open_editor(&mut fields, "fx1", "contour");
-        let naming = egui::Id::new(("contour-editor", "fx1", "contour")).with("naming");
+        let naming = egui::Id::unique(("contour-editor", "fx1", "contour")).with("naming");
         ctx.data_mut(|d| d.insert_temp(naming, "Unfinished".to_string()));
         ctx.run_ui(Default::default(), |ui| editor(&mut app, ui, &mut fields)).textures_delta.clear();
         let input = egui::RawInput {

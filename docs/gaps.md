@@ -1,6 +1,6 @@
 # Where PhotoCraft falls short of Photoshop
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-22 · **Change:** minor (G8: paragraph direction buttons in the Paragraph panel and options bar, TYPE-218-2 partial; G1: 32-bit Hue/Saturation and Colorize as Photoshop does them, Photoshop-oracle floor 190/258, #5781; G11: compound layer properties export as separate Photoshop Set events, rename last, #8304; G11: Batch and droplets take the result at the action's Save step, so actions ending in Save As and Close work; G11: `.atn` steps that switch to another open document import, play and save back, #7103; G14: the Nikon D4 white level follows the sample depth, so 12-bit D4 NEFs no longer open 2.6 stops dark, #5978; G14: a Nikon NEF's Adobe RGB preview is read as Adobe RGB (maker-note ColorSpace 0x001E), #5987; Apply Layer Comp action mapping, #7101; G10: JPEG Options dialog landed, FILE-215-19 partial (no Matte, progressive Scans or size preview); G10: Cineon write; G10: DPX read and write, #1049, Cineon and Amiga IFF read; Classical Object Finder improvement; learned segmentation remains open; G4: named, stateful section locks and visible keyboard focus in Brush Settings; G4: independent Brush Pose tilt-axis overrides, #3825 partial; G4: Transfer Mixer-only controls, #3825 partial; G9: Preferences › File Handling › Save in Background takes effect, #6207, 24 of 169 preferences do nothing; G7: Content-Aware Move previews every selection the command takes, coarse then exact, TOOL-213-4 done, #6680; G4: Pattern Stamp and Background Eraser draw live, TOOL-213-7; G9: Animated Zoom pref read: holding the Zoom tool zooms continuously, #6210, prefs that do nothing 25 of 166; G2: a cancelled 24 MP Gaussian Blur job stops in at most 44 ms, P25 under its 200 ms budget in local runs, baseline not re-run, #6205; G1: generated large-file fixtures, a 4.38 GB PSB opens on Windows through io, FILE-216-2 done, #5107; G9: fill and adjustment layers copy and paste whole, #2344; G1: smart filter masks show on PSD open, Photoshop-oracle floor 188/258; G10: DPX read and write, #1049, Cineon read; G1: CMYK Hue/Saturation and Color Balance keep the black ink; G1: CMYK Posterize on the stored values, psd-tools oracle floor 242/309; G1: CMYK adjustment layers composite on the document's inks, Photoshop-oracle floor 165/258; G1: CMYK Brightness/Contrast on the inks, CMYK Threshold's luma; G1: modern Brightness/Contrast's brightness curve matches Photoshop, Photoshop-oracle floor 151/258; G1: Lab documents composite on their stored L, a, b, Photoshop-oracle floor 152/258; G1: Levels on whole levels at every step, Photoshop-oracle floor 146/258, psd-tools 238/309; G1: 32-bit Brightness/Contrast legacy, Channel Mixer, Photo Filter and Black & White tint unclipped as in Photoshop, Photoshop-oracle floor 149/258; G1: mask feathers blur with their exact variance, psd-tools oracle floor 240/309; G1: Threshold splits on Photoshop's luminosity, psd-tools oracle floor 241/309; G1: pass-through clipping base with an adjustment renders isolated, psd-tools oracle floor 240/309; G1: 16-bit Posterize as Photoshop bins it, psd-tools oracle floor 241/309; G1: Gradient Map driven by the W3C luminosity, Photoshop-oracle floor 147/258; G7: Field Blur's on-canvas pins, #3373; G4: Hue Jitter amount track, #3825 partial; G4: minimum field interaction, #3825 partial; G1: CMYK Invert, Posterize and Threshold on the inks, 16-bit Lab Invert; Photoshop-oracle floor 145/258; G11: `.atn` import maps 112 events: Select and Mask, Filter Gallery Spatter, Ripple, Crystallize, Pattern Fill layers, mask targeting, Step Backward, nudges in points, Bitmap mode; G5: Free Transform H/V skew fields; G9: toolbar tool shortcut editing; refreshed against main: G2, G5, G7, G9, G10, G13, G14, G17 items that landed; G10: DPX read and write, #1049; G4: checkbox-only Brush Settings rows; G11: Load/Save Actions `.atn` landed, AUTO-219-2 partial; G5: hold-a-key spring-loaded tools landed, #2672; G1: #2465 fixed; stale missing-tool rows corrected: Color Replacement, Red Eye and Add/Delete Anchor Point are live tools, so only Art History Brush is missing; no estimate changed) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-23 · **Change:** minor (G10: Amiga IFF write; G11: a recorded Save As imports with its format and file (`file.saveAs`, `file.saveACopy` for As a Copy) instead of as a plain Save that wrote over the played file, #7102; folder destinations stop playback until #5430; adjustment clipping stays visible in compact Properties, #5231; G9: Color panel modes, ramp and copy commands, the same in every theme, UI-217-17, #6000; G17: Help › Check for Updates and an opt-out check once per launch, DIST-220-1 partial, #5485; G10: `.asl` style libraries landed, #1051; G8: area type (TYPE-218-10); G1: smart objects keep Photoshop's Cylinder warp, #4112; G8: paragraph direction buttons in the Paragraph panel and options bar, TYPE-218-2 partial; G1: 32-bit Hue/Saturation and Colorize as Photoshop does them, Photoshop-oracle floor 190/258, #5781; G11: compound layer properties export as separate Photoshop Set events, rename last, #8304; G11: Batch and droplets take the result at the action's Save step, so actions ending in Save As and Close work; G11: `.atn` steps that switch to another open document import, play and save back, #7103; G14: the Nikon D4 white level follows the sample depth, so 12-bit D4 NEFs no longer open 2.6 stops dark, #5978; G14: a Nikon NEF's Adobe RGB preview is read as Adobe RGB (maker-note ColorSpace 0x001E), #5987; Apply Layer Comp action mapping, #7101; G10: JPEG Options dialog landed, FILE-215-19 partial (no Matte, progressive Scans or size preview); G10: Cineon write; G10: DPX read and write, #1049, Cineon and Amiga IFF read; Classical Object Finder improvement; learned segmentation remains open; G4: named, stateful section locks and visible keyboard focus in Brush Settings; G4: independent Brush Pose tilt-axis overrides, #3825 partial; G4: Transfer Mixer-only controls, #3825 partial; G9: Preferences › File Handling › Save in Background takes effect, #6207, 24 of 169 preferences do nothing; G7: Content-Aware Move previews every selection the command takes, coarse then exact, TOOL-213-4 done, #6680; G4: Pattern Stamp and Background Eraser draw live, TOOL-213-7; G9: Animated Zoom pref read: holding the Zoom tool zooms continuously, #6210, prefs that do nothing 25 of 166; G2: a cancelled 24 MP Gaussian Blur job stops in at most 44 ms, P25 under its 200 ms budget in local runs, baseline not re-run, #6205; G1: generated large-file fixtures, a 4.38 GB PSB opens on Windows through io, FILE-216-2 done, #5107; G9: fill and adjustment layers copy and paste whole, #2344; G1: smart filter masks show on PSD open, Photoshop-oracle floor 188/258; G10: DPX read and write, #1049, Cineon read; G1: CMYK Hue/Saturation and Color Balance keep the black ink; G1: CMYK Posterize on the stored values, psd-tools oracle floor 242/309; G1: CMYK adjustment layers composite on the document's inks, Photoshop-oracle floor 165/258; G1: CMYK Brightness/Contrast on the inks, CMYK Threshold's luma; G1: modern Brightness/Contrast's brightness curve matches Photoshop, Photoshop-oracle floor 151/258; G1: Lab documents composite on their stored L, a, b, Photoshop-oracle floor 152/258; G1: Levels on whole levels at every step, Photoshop-oracle floor 146/258, psd-tools 238/309; G1: 32-bit Brightness/Contrast legacy, Channel Mixer, Photo Filter and Black & White tint unclipped as in Photoshop, Photoshop-oracle floor 149/258; G1: mask feathers blur with their exact variance, psd-tools oracle floor 240/309; G1: Threshold splits on Photoshop's luminosity, psd-tools oracle floor 241/309; G1: pass-through clipping base with an adjustment renders isolated, psd-tools oracle floor 240/309; G1: 16-bit Posterize as Photoshop bins it, psd-tools oracle floor 241/309; G1: Gradient Map driven by the W3C luminosity, Photoshop-oracle floor 147/258; G7: Field Blur's on-canvas pins, #3373; G4: Hue Jitter amount track, #3825 partial; G4: minimum field interaction, #3825 partial; G1: CMYK Invert, Posterize and Threshold on the inks, 16-bit Lab Invert; Photoshop-oracle floor 145/258; G11: `.atn` import maps 112 events: Select and Mask, Filter Gallery Spatter, Ripple, Crystallize, Pattern Fill layers, mask targeting, Step Backward, nudges in points, Bitmap mode; G5: Free Transform H/V skew fields; G9: toolbar tool shortcut editing; refreshed against main: G2, G5, G7, G9, G10, G13, G14, G17 items that landed; G10: DPX read and write, #1049; G4: checkbox-only Brush Settings rows; G11: Load/Save Actions `.atn` landed, AUTO-219-2 partial; G5: hold-a-key spring-loaded tools landed, #2672; G1: #2465 fixed; stale missing-tool rows corrected: Color Replacement, Red Eye and Add/Delete Anchor Point are live tools, so only Art History Brush is missing; no estimate changed) · **Target:** Adobe Photoshop 2026
 
 Every known shortfall against Photoshop 2026 (27.11.0), one entry each, ranked by user impact
 on the way to beta. This is the work list agents pick from: take the highest-ranked entry that
@@ -53,7 +53,9 @@ what an agent can't finish alone.
   opening in Photoshop" (#2469), a CS2-era smart object unavailable (#2465, fixed 2026-10-12), PSB smart object
   blank (#1764), perspective placed layers flattened (#579, fixed by #426), PSB > 4 GB fails on Windows (#375; a generated 4.38 GB PSB opens, saves and re-opens
   through io on Windows, io tests/it/large_files.rs, 2026-10-13).
-  No test opens our exports in a third-party editor (FILE-216-4).
+  No test opens our exports in a third-party editor (FILE-216-4). Mockups whose smart object
+  uses Transform Warp's Cylinder re-rendered flat after Replace Contents (#4112, fixed 2026-10-14;
+  vertical cylinders and ones with perspective are still unread).
 - **Impact:** PSD is the format professionals exchange. Beta requires it to be reliable.
 - **Estimate:** 150–250 h. **Human:** opening exports in Photoshop on the owner's Mac (or a
   scripted check there) is the only real oracle.
@@ -89,12 +91,13 @@ what an agent can't finish alone.
   direction buttons landed 2026-10-22), complex-script fallback fonts and golden tests
   (TYPE-218-3), OpenType Numerals and Stylistic Sets submenus
   (TYPE-218-5; the Character panel buttons landed 2026-10-11, #3752), text free transform
-  (#2630). Done since the re-measure: manual and optical kerning with PSD round trip
+  (#2630), area type in PSD (TYPE-218-10). Done since the re-measure: manual and optical kerning with PSD round trip
   (TYPE-218-6, #206), variable-font axes (TYPE-218-4, #2985), Warp on live type without a
   rasterize prompt, as in Photoshop (TYPE-218-9, #3004), and the live Warp Text preview that opens
   with the layer's warp (TYPE-218-7, #2689).
-- **Evidence:** scorecard Type: 5 done, 4 partial, 0 missing. 2026-10-11: 2/3/4/5 clicks select
-  word, line, paragraph and all text, with tests (TYPE-218-8, #3493). The Type tool froze the app for
+- **Evidence:** scorecard Type: 5 done, 5 partial, 0 missing. 2026-10-11: 2/3/4/5 clicks select
+  word, line, paragraph and all text, with tests (TYPE-218-8, #3493). 2026-10-15: area type, type
+  inside a closed path or shape, with holes (TYPE-218-10). The Type tool froze the app for
   60 s on one macOS machine (#2518).
 - **Estimate:** 120–200 h.
 
@@ -127,6 +130,11 @@ what an agent can't finish alone.
   play and save back in the same shape, so actions that copy from one open document and paste into
   another no longer stop at the switch (#7103). An offset past the first or last open document is
   refused, not wrapped.
+- **Done 2026-10-17:** a recorded Save As imports with its format and destination file
+  (`file.saveAs`, or `file.saveACopy` for As a Copy) instead of as a plain Save, which wrote
+  over the file the action was played on (#7102). A folder destination, an unmapped format or a
+  mismatched extension stays a kept Photoshop step, so playback stops before writing; folder
+  saves wait for #5430.
 - **Done 2026-10-12:** Load/Save Actions `.atn` in the panel menu, `batch --actions set.atn`
   and `actions.load`/`actions.save`; 112 Photoshop events map to commands both ways (Transform,
   Apply Image, Save for Web, smart-object edits, Gradient Map, Quick Mask, polygon selections,
@@ -249,6 +257,7 @@ what an agent can't finish alone.
 - **Estimate:** 60–110 h.
 
 ### G9. Panels, preferences and workspace
+- **Progress (2026-10-21):** adjustment clipping is reachable above the Properties editor in a compact dock (#5231), with all-theme layout coverage and 8/16/32-bit scope and undo/redo tests. The normal adjustment-layer scope and remaining estimate stay unchanged.
 - **Progress (2026-10-15):** Preferences › General › Animated Zoom takes effect: a held Zoom
   tool press zooms continuously about the press point, ⌥ out (#6210, `ui-egui/src/zoom_hold.rs`).
 - **Progress (2026-10-14, #5556):** Character and Paragraph controls stay available without
@@ -256,10 +265,12 @@ what an agent can't finish alone.
   selected text keeps its current command and undo scope. Other panel gaps remain open.
 - **Progress (2026-10-12):** toolbar tool shortcuts can be reassigned, removed and reset (#4086),
   with saved bindings, matching toolbar hints and regression coverage (`ui-egui/src/tool_shortcuts.rs`).
+- **Progress (2026-10-15):** the Color panel has Photoshop's panel-menu modes (Hue Cube, Brightness
+  Cube, Color Wheel, Grayscale/RGB/HSB/CMYK/Lab/Web Color sliders), its colour ramp and copy
+  commands, the same in every theme (UI-217-17, #2569, #6000; `ui-egui/src/color_panel_ui.rs`).
 - **Missing:** 24 of 171 preferences do nothing (scorecard prefs audit, 2026-10-15: Save in
   Background now takes effect, #6207); panel groups can't
-  float or tear off into OS windows (UI-217-5, #1828, #1213, #2305); Color panel lacks wheel and
-  slider modes (UI-217-17, #2569); more themes (UI-217-11, #2661); a single pixel layer
+  float or tear off into OS windows (UI-217-5, #1828, #1213, #2305); more themes (UI-217-11, #2661); a single pixel layer
   copies without its mask and styles (UI-217-23; fill and adjustment layers copy whole, #2344); tool-specific context menus beyond brushes, selections and Pen
   ([context-menu-parity.md](context-menu-parity.md)); Libraries, Comments, Contextual Task Bar
   panels.
@@ -293,16 +304,16 @@ what an agent can't finish alone.
 - **Missing:** JPEG Options' Matte, progressive Scans and size preview (FILE-215-19 partial), Photoshop PDF read and its vector/text/multi-page
   write (FILE-215-10, #2541; a single flattened page now saves via Save As / Save a Copy / CLI,
   2026-10-11, #3401), AVIF read (#463) and default-build AVIF write, JPEG XL, JPEG 2000 (#1047),
-  DICOM, EPS/DCS, Pixar, IFF write (read landed), WBMP, MPO/JPS, PICT, Scitex CT, Photoshop
-  Raw; layered TIFF extra alpha channels (FILE-215-7); spot plates (FILE-215-17); .atn, .asl,
-  .shc, .csh presets (FILE-215-15); C2PA (#1050).
+  DICOM, EPS/DCS, Pixar, WBMP, MPO/JPS, PICT, Scitex CT, Photoshop
+  Raw; layered TIFF extra alpha channels (FILE-215-7); spot plates (FILE-215-17); .atn,
+  .shc, .csh presets (.asl landed 2026-10-20) (FILE-215-15); C2PA (#1050).
 - **Detail:** [`file-format-parity.md`](file-format-parity.md).
 - **Progress (2026-10-15):** Cineon (`.cin`) 10-bit gray/RGB frames open and save (Save As
   `.cin`), sharing the DPX header/packing (`crates/codecs/src/codecs/dpx.rs`); a Cineon frame saved
   back keeps its code values.
-- **Progress (2026-10-13):** Amiga IFF/ILBM (`FORM ... ILBM`/`PBM `) 1–8-plane paletted bitmaps
-  open read-only, stored or ByteRun1-compressed (`crates/codecs/src/codecs/iff.rs`); writing is
-  still open.
+- **Progress (2026-10-23):** Amiga IFF/ILBM (`FORM ... ILBM`/`PBM `) 1–8-plane paletted and
+  24-plane RGB bitmaps open, stored or ByteRun1-compressed (`crates/codecs/src/codecs/iff.rs`);
+  Save As `.iff` writes a 24-plane ILBM with a 1-bit mask plane for alpha.
 - **Estimate:** 120–220 h.
 
 ## Hardware gaps
@@ -336,8 +347,9 @@ what an agent can't finish alone.
 ## Platform gaps
 
 ### G17. Platforms and distribution
-- **Missing:** Windows code signing (material not obtained), in-app update check (DIST-220-1,
-  #2650, #2375), in-app bug report (DIST-220-3), Flathub (#173),
+- **Missing:** Windows code signing (material not obtained), a periodic recheck for the in-app
+  update check (DIST-220-1 partial: Help › Check for Updates and an opt-out check once per
+  launch, #5485), in-app bug report (DIST-220-3), Flathub (#173),
   starting without a GPU adapter (#2519, #2412), Windows 7 (#2310, out of scope), Intel Macs with
   OpenCore (#1859).
 - **Estimate:** 30–60 h. **Human:** signing certificates.
@@ -346,24 +358,32 @@ what an agent can't finish alone.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-23 | minor | G10: Amiga IFF write landed (24-plane ILBM, Save As `.iff`) and 24-plane ILBMs open |
+| 2026-10-22 | minor | G17: Help › Check for Updates and an opt-out check once per launch (#5485), DIST-220-1 partial; estimate unchanged |
 | 2026-10-22 | minor | G1: 32-bit Hue/Saturation unclipped with Photoshop's saturation factor, bright colours keep their hue, Colorize's saturation scaled by 1 − \|Lightness\|; photoshop rgb32 hue-saturation and hue-saturation-colorize pass; Photoshop-oracle floor 188 → 190 of 258 (#5781) |
+| 2026-10-21 | minor | G9: adjustment clipping remains visible in compact Properties (#5231); no readiness percentage or estimate changed |
 | 2026-10-21 | minor | #8304: compound layer properties export as separate Set events, rename last; independent Photoshop replay pending; percentages and estimates unchanged |
 | 2026-10-21 | minor | G11: Batch and droplets take the result at the action's recorded Save / Save As step (Photoshop's "Override Action 'Save As' Commands"); estimate unchanged |
 | 2026-10-22 | minor | G8: Auto / Left-to-right / Right-to-left paragraph direction buttons in the Paragraph panel, Properties and the Type options bar (#6793); TYPE-218-2 partial (the visual RTL caret is still missing, and PSD doesn't store the direction yet) |
 | 2026-10-19 | minor | G10: JPEG Options dialog landed (FILE-215-19 partial: no Matte, progressive Scans or size preview); no readiness percentage or estimate changed |
 | 2026-10-19 | minor | G11: `.atn` steps that select another open document by offset import as `document.activate {"offset"}`, play and save back (#7103); estimate unchanged |
+| 2026-10-19 | minor | G11: a recorded Save As imports with its format and file (`file.saveAs`, `file.saveACopy` for As a Copy) instead of as a plain Save that wrote over the played file, #7102; folder destinations stop playback until #5430 |
 | 2026-10-18 | minor | G13: Russian gained the 1,229 dynamic UI labels other catalogs already had (filter and adjustment parameters, Camera Raw, lighting, History/Layers/paths menus, metadata, System Info, status templates, dialogs); engine messages and native review remain open |
 | 2026-10-17 | minor | Classical Object Finder improvement; learned segmentation remains open |
 | 2026-10-15 | minor | G10: Cineon write landed (10-bit log gray/RGB, Save As `.cin`) |
 | 2026-10-14 | minor | G1: 32-bit Hue/Saturation unclipped (slider on whole levels) and Colorize's saturation scaled by 1 − \|Lightness\|; photoshop rgb32 hue-saturation and hue-saturation-colorize pass |
 | 2026-10-14 | minor | G1: Lab adjustment layers' results are whole samples (native Lab path); photoshop lab8 curves passes |
+| 2026-10-19 | minor | G9: Color panel modes, ramp and copy commands from its panel menu, the same in every theme (UI-217-17 done, #6000) |
 | 2026-10-15 | minor | G1 / #5972 A1: render only provably constant-RGB `GdFl` noise fills; variable noise synthesis remains open |
+| 2026-10-20 | minor | G10: `.asl` layer style library import and export landed (#1051) |
 | 2026-10-18 | minor | G9: with no selection, Copy takes fill and adjustment layers whole and Paste recreates them (#2344); UI-217-23 stays partial (a single pixel layer copies its pixels only); estimate unchanged |
 | 2026-10-17 | minor | G11: `.atn` Apply Layer Comp imports, plays and exports by comp name (#7101); other reference forms remain unsupported |
 | 2026-10-15 | minor | G2: a cancelled 24 MP Gaussian Blur job stops within 44 ms max (P25, budget 200 ms; was about 400 ms; local runs, baseline not re-run), the uncancelled job on a locked-transparency layer about 40% faster; #6205 |
 | 2026-10-15 | minor | G9: Animated Zoom preference takes effect (hold the Zoom tool to zoom continuously, #6210); prefs that do nothing 25 of 166; no estimate changed |
 | 2026-10-16 | minor | G7: Content-Aware Move's live preview covers every selection the command takes (over 256 × 256: a coarse result solved scaled down, then the exact one); TOOL-213-4 done (#6680) |
 | 2026-10-15 | minor | G9: Save in Background off saves in the foreground under a modal progress dialog (#6207); preferences that do nothing 25 → 24 of 169 |
+| 2026-10-14 | minor | G1: PSD smart objects keep Transform Warp's Cylinder through Replace Contents, Relink, Edit Contents and re-saves (#4112) |
+| 2026-10-15 | minor | G8: area type: Type tool click inside a closed path or shape wraps text inside it (TYPE-218-10); Type tool click on a path's outline (TYPE-218-1); Type scorecard 5 done, 4 partial, 1 missing |
 | 2026-10-14 | minor | G14: the Nikon D4 profile's white level follows the sample depth, so 12-bit D4 NEFs no longer open 2.6 stops dark (#5978); gap remains open |
 | 2026-10-14 | minor | G4: independent Brush Pose X/Y overrides across UI/import/painting/commands (#3825 partial); legacy combined input retained; no readiness percentage or estimate changed |
 | 2026-10-14 | minor | G4: existing Brush Settings section locks expose accessible names/state and visible keyboard focus (#3477 workflow); no readiness percentage or estimate changed |

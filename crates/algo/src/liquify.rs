@@ -191,6 +191,9 @@ struct StrokeCursor {
 /// 125,000); smaller ones are not worth the hand-off.
 const PARALLEL_DAB_NODES: usize = 16_384;
 
+/// Bound completed output buffers independently of the document's size.
+const RENDER_BATCH_TILES: usize = 64;
+
 /// Distance between dabs along a stroke for brush radius `r`: a twentieth of the radius, so a
 /// drag is many small pushes and its edge stays smooth.
 fn dab_spacing(r: f64) -> f64 {
@@ -209,11 +212,20 @@ pub fn auto_cell(bounds: Rect) -> f64 {
     if bounds.size().area() <= 4_200_000 { 2.0 } else { 4.0 }
 }
 
+/// Most nodes of a field's displacement grid (12 bytes each with the freeze mask): 192 MB.
+const MAX_FIELD_NODES: usize = 1 << 24;
+
 impl LiquifyField {
     pub fn new(bounds: Rect, cell: f64) -> Self {
-        let cell = cell.clamp(1.0, 64.0);
-        let w = (f64::from(bounds.width()) / cell).ceil() as usize + 2;
-        let h = (f64::from(bounds.height()) / cell).ceil() as usize + 2;
+        let mut cell = cell.clamp(1.0, 64.0);
+        let nodes = |cell: f64| ((f64::from(bounds.width()) / cell).ceil() as usize + 2, (f64::from(bounds.height()) / cell).ceil() as usize + 2);
+        let (mut w, mut h) = nodes(cell);
+        // The extent is the document canvas, which a file declares: past the node budget the
+        // field gets coarser (it is interpolated anyway) instead of asking for gigabytes.
+        while w.saturating_mul(h) > MAX_FIELD_NODES {
+            cell *= 2.0;
+            (w, h) = nodes(cell);
+        }
         LiquifyField { bounds, cell, w, h, d: vec![[0.0; 2]; w * h], freeze: vec![0.0; w * h], cursor: None }
     }
 
@@ -584,14 +596,11 @@ impl LiquifyField {
     }
 
     /// Catmull-Rom (bicubic) displacement at grid coordinates.
-    fn sample_cubic(&self, gx: f64, gy: f64, wx: &[f64; 4], wy: &[f64; 4]) -> [f64; 2] {
-        let (ix, iy) = (gx.floor() as isize, gy.floor() as isize);
+    fn sample_cubic(&self, xs: &[(usize, f64); 4], ys: &[(usize, f64); 4]) -> [f64; 2] {
         let mut acc = [0.0f64; 2];
-        for (jj, wyj) in wy.iter().enumerate() {
-            let y = (iy - 1 + jj as isize).clamp(0, self.h as isize - 1) as usize;
+        for &(y, wyj) in ys {
             let row = &self.d[y * self.w..(y + 1) * self.w];
-            for (ii, wxi) in wx.iter().enumerate() {
-                let x = (ix - 1 + ii as isize).clamp(0, self.w as isize - 1) as usize;
+            for &(x, wxi) in xs {
                 let k = wxi * wyj;
                 acc[0] += f64::from(row[x][0]) * k;
                 acc[1] += f64::from(row[x][1]) * k;
@@ -651,6 +660,13 @@ fn catmull_rom(t: f64) -> [f64; 4] {
     [-0.5 * t3 + t2 - 0.5 * t, 1.5 * t3 - 2.5 * t2 + 1.0, -1.5 * t3 + 2.0 * t2 + 0.5 * t, 0.5 * t3 - 0.5 * t2]
 }
 
+/// A field axis's clamped nodes and weights, reusable across a tile's rows or columns.
+fn cubic_taps(g: f64, len: usize) -> [(usize, f64); 4] {
+    let i = g.floor() as isize;
+    let weights = catmull_rom(g - g.floor());
+    std::array::from_fn(|k| ((i - 1 + k as isize).clamp(0, len as isize - 1) as usize, weights[k]))
+}
+
 /// Resamples `src` through the field: inside `field.bounds` each pixel shows the source at
 /// `p + d(p)` (bicubic field, bicubic premultiplied source, edge pixels repeat past the field
 /// bounds); everything outside the bounds is kept. Same format as `src`.
@@ -671,19 +687,24 @@ pub fn apply_liquify(src: &Surface, field: &LiquifyField) -> Surface {
     let work = |t: &Rect| -> Option<(Rect, Vec<f32>)> {
         let w = t.width() as usize;
         let h = t.height() as usize;
-        // Field per pixel (bicubic), rows share their y weights.
+        // Field per pixel (bicubic), with axis taps shared across rows and columns.
         let mut disp = vec![[0.0f64; 2]; w * h];
         let (mut fx0, mut fy0, mut fx1, mut fy1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
         let mut moved = false;
+        let columns: Vec<_> = (0..w)
+            .map(|x| {
+                let px = f64::from(t.x0) + x as f64 + 0.5;
+                let gx = (px - f64::from(b.x0) - 0.5) / field.cell;
+                (px, cubic_taps(gx, field.w))
+            })
+            .collect();
         for y in 0..h {
             let py = f64::from(t.y0) + y as f64 + 0.5;
             let gy = (py - f64::from(b.y0) - 0.5) / field.cell;
-            let wy = catmull_rom(gy - gy.floor());
-            for x in 0..w {
-                let px = f64::from(t.x0) + x as f64 + 0.5;
-                let gx = (px - f64::from(b.x0) - 0.5) / field.cell;
-                let wx = catmull_rom(gx - gx.floor());
-                let mut d = field.sample_cubic(gx, gy, &wx, &wy);
+            let ys = cubic_taps(gy, field.h);
+            for (x, (px, xs)) in columns.iter().enumerate() {
+                let px = *px;
+                let mut d = field.sample_cubic(xs, &ys);
                 if has_freeze {
                     let mask = f64::from(field.freeze_at(px, py)).clamp(0.0, 1.0);
                     if mask > 0.0 {
@@ -765,15 +786,10 @@ pub fn apply_liquify(src: &Surface, field: &LiquifyField) -> Surface {
         }
         Some((*t, outp))
     };
-    #[cfg(not(target_arch = "wasm32"))]
-    let done: Vec<(Rect, Vec<f32>)> = {
-        use rayon::prelude::*;
-        tiles.par_iter().filter_map(work).collect()
-    };
-    #[cfg(target_arch = "wasm32")]
-    let done: Vec<(Rect, Vec<f32>)> = tiles.iter().filter_map(work).collect();
-    for (r, v) in done {
-        out.write_region(r, &v);
+    for batch in tiles.chunks(RENDER_BATCH_TILES) {
+        for (r, v) in par::map(batch.len(), true, |i| batch.get(i).and_then(work)).into_iter().flatten() {
+            out.write_region(r, &v);
+        }
     }
     if alpha {
         out.prune();
@@ -1123,6 +1139,15 @@ mod tests {
     }
 
     #[test]
+    fn a_huge_canvas_gets_a_coarser_field_not_a_huge_one() {
+        // 400000² px at 2 px per node is 4·10¹⁰ nodes.
+        let f = LiquifyField::new(Rect::new(0, 0, 400_000, 400_000), 2.0);
+        assert!(f.w * f.h <= MAX_FIELD_NODES && f.d.len() == f.w * f.h && f.freeze.len() == f.d.len());
+        assert!(f.cell > 64.0);
+        assert_eq!(LiquifyField::new(Rect::new(0, 0, 100, 100), 2.0).cell, 2.0);
+    }
+
+    #[test]
     fn a_stroke_interrupted_by_a_jump_restarts_its_spacing() {
         // A segment that does not start where the last one ended begins a new run of dabs there.
         let s = LiquifyStroke::new(LiquifyTool::ForwardWarp, 20.0);
@@ -1297,6 +1322,44 @@ mod tests {
             }
             assert!(rim > 20, "{rim} rim nodes");
             assert!(f.sample(48.0, 32.0)[0] < -0.9 * drag, "density {density}: the centre follows the brush");
+        }
+    }
+
+    #[test]
+    fn a_wide_integer_translation_keeps_channels_and_tile_edges_at_every_format() {
+        let b = Rect::new(13, -1, 13 + 70 * 256, 1);
+        let w = b.width() as usize;
+        for mode in [ColorMode::Grayscale, ColorMode::Rgb, ColorMode::Cmyk] {
+            for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+                let format = PixelFormat::new(mode, depth, true);
+                let n = format.channels();
+                let mut data = Vec::new();
+                for i in 0..w * 2 {
+                    let alpha = if i % 13 == 0 { 0.0 } else { 0.5 };
+                    for c in 0..mode.color_channels() {
+                        data.push(if alpha == 0.0 { 0.0 } else { ((i * 19 + c * 43) % 251 + 2) as f32 / 255.0 });
+                    }
+                    data.push(alpha);
+                }
+                let mut source = Surface::new(format);
+                source.write_region(b, &data);
+                source.write_pixel(b.x0 - 1, b.y0 - 1, &vec![0.75; n]);
+                let before = source.read_region(b);
+                let mut field = LiquifyField::new(b, 2.5);
+                field.d.fill([-1.0, 0.0]);
+                let output = apply_liquify(&source, &field);
+                let after = output.read_region(b);
+                let tolerance = if depth == SampleType::F32 { 4.0 * f32::EPSILON } else { 0.0 };
+                for (original, moved) in before.chunks_exact(w * n).zip(after.chunks_exact(w * n)) {
+                    for (x, pixel) in moved.chunks_exact(n).enumerate() {
+                        let offset = x.saturating_sub(1) * n;
+                        for (actual, expected) in pixel.iter().zip(&original[offset..offset + n]) {
+                            assert!((actual - expected).abs() <= tolerance, "{mode:?}/{depth:?} at column {x}");
+                        }
+                    }
+                }
+                assert_eq!(output.pixel(b.x0 - 1, b.y0 - 1), source.pixel(b.x0 - 1, b.y0 - 1));
+            }
         }
     }
 

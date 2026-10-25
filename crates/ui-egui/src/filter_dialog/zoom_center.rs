@@ -39,7 +39,7 @@ pub(super) fn row(ui: &mut Ui, fields: &mut Map<String, Value>) {
         });
         // Paint after both sliders so their edits move the marker in this very frame.
         paint(ui, rect, plot, center, amount, response.has_focus());
-        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Slider, ui.is_enabled(), tl!("Center")));
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Slider, ui.is_enabled(), tl!("Center")));
         response.on_hover_cursor(egui::CursorIcon::Crosshair);
     });
     for (key, value) in [("centerX", center.x), ("centerY", center.y)] {

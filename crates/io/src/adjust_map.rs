@@ -29,7 +29,7 @@ fn bef32(d: &[u8], at: usize) -> Option<f32> {
 }
 
 fn unsupported(key: &[u8; 4], data: &[u8]) -> Adjustment {
-    Adjustment::Unsupported { psd_key: String::from_utf8_lossy(key).into_owned(), raw: data.to_vec() }
+    Adjustment::Unsupported { psd_key: String::from_utf8_lossy(key).into_owned(), raw: data.into() }
 }
 
 fn levels_rec(d: &[u8], at: usize) -> Option<LevelsChannel> {
@@ -139,6 +139,19 @@ pub fn label(key: &[u8; 4]) -> &'static str {
     }
 }
 
+/// Keys of a Brightness/Contrast `CgEd` descriptor: the ones [`write`] emits plus Photoshop's
+/// preset bookkeeping.
+const BRIT_CGED_KEYS: [&str; 9] = ["Vrsn", "Brgh", "Cntr", "means", "Lab ", "useLegacy", "Auto", "presetKind", "presetFileName"];
+
+/// Whether a `brit` layer's `CgEd` descriptor holds settings Brightness/Contrast has no place
+/// for. Photoshop 2026's Light adjustment (Exposure, Contrast, Highlights, Shadows, Whites,
+/// Blacks) is stored under the `brit` key; read as Brightness/Contrast it kept only Contrast and
+/// lost the rest without a word (#6542), so such a layer stays [`Adjustment::Unsupported`].
+pub fn is_extended_brit(cged: Option<&[u8]>) -> bool {
+    cged.and_then(|c| VersionedDescriptor::parse_prefix(c).ok())
+        .is_some_and(|(v, _)| v.descriptor.items.iter().any(|(k, _)| !BRIT_CGED_KEYS.iter().any(|n| k.is(n))))
+}
+
 /// Why [`parse`] keeps a block as [`Adjustment::Unsupported`], when there is more to say than
 /// "it could not be read" (so far: Color Lookup).
 pub fn unreadable_reason(key: &[u8; 4], data: &[u8]) -> Option<String> {
@@ -204,6 +217,8 @@ fn parse_any(key: &[u8; 4], data: &[u8], cged: Option<&[u8]>) -> Adjustment {
         b"nvrt" => Some(Adjustment::Invert),
         b"thrs" => be16(data, 0).map(|v| Adjustment::Threshold { level: f32::from(v) / 255.0 }),
         b"post" => be16(data, 0).map(|v| Adjustment::Posterize { levels: u32::from(v) }),
+        // Kept raw (with its `CgEd`, which the PSD writer keeps while the layer is unchanged).
+        b"brit" if is_extended_brit(cged) => None,
         b"brit" => {
             let modern = cged.and_then(|c| VersionedDescriptor::parse_prefix(c).ok()).and_then(|(v, _)| {
                 let d = v.descriptor;
@@ -450,6 +465,12 @@ fn read_lookup(d: &[u8]) -> Result<Adjustment, String> {
         _ => ("x.cube", "CUBE"),
     };
     let lut = photocraft_cms::lutfile::parse(ext, bytes).map_err(|e| format!("its {format} LUT can't be read ({e})"))?;
+    if !lut.domain_is_default() {
+        return Err(format!(
+            "its LUT has a non-default input domain (DOMAIN_MIN {:?}, DOMAIN_MAX {:?}), which is not supported yet",
+            lut.domain_min, lut.domain_max
+        ));
+    }
     let name = desc_text(&desc, "LUT3DFileName").or_else(|| desc_text(&desc, "NM  ")).unwrap_or_default();
     Ok(Adjustment::ColorLookup {
         name,
@@ -813,7 +834,7 @@ pub fn write(adj: &Adjustment) -> Vec<([u8; 4], Vec<u8>)> {
         Adjustment::Unsupported { psd_key, raw } => {
             let k = psd_key.as_bytes();
             if k.len() == 4 {
-                return vec![([k[0], k[1], k[2], k[3]], raw.clone())];
+                return vec![([k[0], k[1], k[2], k[3]], raw.to_vec())];
             }
         }
     }
@@ -1032,7 +1053,7 @@ mod tests {
         let inkl = Adjustment::Levels { master: lc(0, 255), per_channel: [lc(0, 255), lc(5, 250), lc(0, 255)], space: ToneSpace::Cmyk, black: lc(30, 255) };
         let b = write(&inkl);
         assert_eq!(parse(&b[0].0, &b[0].1, None, Channels::Cmyk), inkl);
-        rt(Adjustment::Unsupported { psd_key: "selc".into(), raw: vec![1, 2, 3] });
+        rt(Adjustment::Unsupported { psd_key: "selc".into(), raw: vec![1, 2, 3].into() });
         rt(Adjustment::GradientMap { stops: vec![(0.0, [0.0, 0.0, 0.0]), (0.5, [1.0, 0.0, 0.0]), (1.0, [1.0, 1.0, 1.0])], reverse: true, dither: false });
         rt(Adjustment::GradientMap { stops: vec![(0.0, [0.0, 0.0, 0.0]), (1.0, [1.0, 1.0, 1.0])], reverse: false, dither: true });
         rt(Adjustment::SelectiveColor { relative: true, adjustments: std::array::from_fn(|r| [r as f32 * 10.0 - 40.0, 5.0, -100.0, 100.0]) });
@@ -1110,6 +1131,46 @@ mod tests {
         assert_eq!(label(b"clrL"), "Color Lookup");
         assert!(matches!(parse(b"clrL", &[0, 1, 9], None, Channels::Rgb), Adjustment::Unsupported { .. }));
         assert!(matches!(parse(b"selc", &[0, 1, 0, 0], None, Channels::Rgb), Adjustment::Unsupported { .. }));
+    }
+
+    fn cube_lookup_block(cube: &[u8]) -> Vec<u8> {
+        let en = |t: &str, val: &str| Value::Enumerated { type_id: photocraft_psd::descriptor::Id::new(t), value: photocraft_psd::descriptor::Id::new(val) };
+        let desc = Descriptor::new("null")
+            .with("LUTFormat", en("LUTFormatType", "LUTFormatCUBE"))
+            .with("LUT3DFileName", Value::Text(photocraft_psd::descriptor::UnicodeString::new_nul("domain.cube")))
+            .with("LUT3DFileData", Value::RawData(cube.to_vec()));
+        let mut block = vec![0, 1];
+        block.extend(VersionedDescriptor::new(desc).to_bytes());
+        block
+    }
+
+    fn identity_cube(domain: &str) -> Vec<u8> {
+        format!("{domain}LUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n").into_bytes()
+    }
+
+    #[test]
+    fn color_lookup_custom_domains_are_kept_unsupported() {
+        let domains = ["DOMAIN_MIN 0 0 0\nDOMAIN_MAX 0.5 0.5 0.5\n", "DOMAIN_MIN 0 0.25 0\nDOMAIN_MAX 1 0.75 1\n", "LUT_3D_INPUT_RANGE 0 0.5\n"];
+        for domain in domains {
+            let raw = cube_lookup_block(&identity_cube(domain));
+            let Adjustment::Unsupported { psd_key, raw: kept } = parse(b"clrL", &raw, None, Channels::Rgb) else {
+                panic!("custom LUT domain was applied instead of kept unsupported: {domain}")
+            };
+            assert_eq!(psd_key, "clrL");
+            assert_eq!(*kept, *raw);
+            let reason = unreadable_reason(b"clrL", &raw).expect("custom domain has an explanation");
+            assert!(reason.contains("DOMAIN_MIN") && reason.contains("DOMAIN_MAX"), "{reason}");
+            assert!(reason.to_ascii_lowercase().contains("not supported"), "{reason}");
+        }
+    }
+
+    #[test]
+    fn color_lookup_default_domains_stay_supported() {
+        for domain in ["", "DOMAIN_MIN 0 0 0\nDOMAIN_MAX 1 1 1\n"] {
+            let raw = cube_lookup_block(&identity_cube(domain));
+            assert!(matches!(parse(b"clrL", &raw, None, Channels::Rgb), Adjustment::ColorLookup { size: 2, .. }));
+            assert_eq!(unreadable_reason(b"clrL", &raw), None);
+        }
     }
 
     #[test]
@@ -1346,7 +1407,7 @@ mod tests {
             assert_eq!(*t, photocraft_cms::lutfile::LutFile::identity(2).data);
         }
         // Every kind except a malformed Unsupported key has an encoding.
-        assert!(write(&Adjustment::Unsupported { psd_key: "abc".into(), raw: vec![] }).is_empty());
+        assert!(write(&Adjustment::Unsupported { psd_key: "abc".into(), raw: Vec::new().into() }).is_empty());
     }
 
     #[test]

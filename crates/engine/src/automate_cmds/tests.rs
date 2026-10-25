@@ -484,3 +484,46 @@ fn load_files_into_stack_aligns_before_the_smart_object() {
     s.execute("file.scripts.loadFilesIntoStack", json!({"paths": [files[0].clone()], "align": true})).unwrap();
     assert_eq!(s.active().unwrap().doc.layers.len(), 1);
 }
+
+/// A script file of `lines` (one `file.scripts.browse` call per entry) in `dir`.
+fn script_calling(dir: &str, name: &str, callees: &[String]) -> String {
+    let path = format!("{dir}/{name}.txt");
+    let body: String = callees.iter().map(|c| format!("file.scripts.browse {}\n", json!({"path": c}))).collect();
+    std::fs::write(&path, body).unwrap();
+    path
+}
+
+#[test]
+fn scripts_calling_scripts_share_one_step_budget() {
+    let dir = tmp("fanout");
+    // Eight levels, each calling the one below six times: 6^8 (1.7 million) calls of the leaf.
+    let mut below = script_calling(&dir, "leaf", &[]);
+    std::fs::write(&below, "select.deselect {}\n").unwrap();
+    for level in 0..8 {
+        below = script_calling(&dir, &format!("level{level}"), &vec![below; 6]);
+    }
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let started = std::time::Instant::now();
+    let r = s.execute("file.scripts.browse", json!({"path": below})).unwrap();
+    assert_eq!(r["ok"], false, "the budget stops the run: {r}");
+    assert!(started.elapsed().as_secs() < 60, "{:?}", started.elapsed());
+    // The budget restarts with the next top-level script.
+    s.execute("file.scripts.browse", json!({"script": "select.deselect {}"})).unwrap();
+}
+
+#[test]
+fn scripts_nested_deeper_than_the_limit_fail() {
+    let dir = tmp("deep");
+    let mut below = script_calling(&dir, "leaf", &[]);
+    std::fs::write(&below, "select.deselect {}\n").unwrap();
+    for level in 0..20 {
+        below = script_calling(&dir, &format!("level{level}"), &[below]);
+    }
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let r = s.execute("file.scripts.browse", json!({"path": below})).unwrap();
+    assert_eq!(r["ok"], false, "{r}");
+    assert!(r.to_string().contains("nested more than"), "{r}");
+    assert_eq!(s.actions.script_depth, 0, "the depth is released");
+}

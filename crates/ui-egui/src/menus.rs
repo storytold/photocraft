@@ -7,10 +7,11 @@ use crate::state::DialogKind;
 
 /// Shared gate for native menu clicks and control-channel `ui.menu.invoke`.
 /// Dialogs and unsaved-changes prompts block edits, but allow the four view-navigation
-/// commands also usable through shortcuts. Camera Raw blocks menu commands entirely, and a pending
-/// crop blocks the commands Photoshop greys during one (`crop_ui::blocks`).
+/// commands also usable through shortcuts. Camera Raw and the full-window workspaces
+/// (`distort_ui::modal_workspace`) block menu commands entirely, and a pending crop blocks the
+/// commands Photoshop greys during one (`crop_ui::blocks`).
 pub(crate) fn modal_allows(app: &PhotocraftApp, id: &str) -> bool {
-    if app.camera_raw.is_some() || crate::crop_ui::blocks(app, id) {
+    if app.camera_raw.is_some() || crate::distort_ui::modal_workspace(app).is_some() || crate::crop_ui::blocks(app, id) {
         return false;
     }
     (app.ui.dialogs.is_empty() && app.ui.layers_panel_dialog.is_none() && app.discard.is_none()) || crate::shortcuts::NAV_COMMANDS.contains(&id)
@@ -89,6 +90,9 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
     if let Some(tool) = crate::tool_shortcuts::tool(id) {
         crate::tool_memory::select(app, tool);
         return Ok(json!({"tool": tool}));
+    }
+    if id == "help.checkForUpdates" {
+        return crate::updates_ui::check(app, ctx, params);
     }
     if id == "ui.symmetryTransform" {
         return crate::symmetry_ui::begin(app).map(|_| Value::Null);
@@ -546,6 +550,10 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
             };
             *slot = !*slot;
             let on = *slot;
+            if id == "view.show.grid" && on {
+                // Like the other Show items, enabling Grid also restores hidden Extras.
+                app.ui.view.extras = true;
+            }
             if id == "view.rulers" {
                 crate::prefs_ui::remember_rulers(app, on);
             }
@@ -1075,7 +1083,13 @@ pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
             items.insert(after + 1 + k, it);
         }
     }
-    // Help: the link items, a separator, then System Info and About.
+    // Keep the update command with the links, ahead of System Info and About.
+    if let Some(at) = items.iter().position(|i| i.id == "help.checkForUpdates") {
+        let update = items.remove(at);
+        let before = items.iter().position(|i| i.id == "help.systemInfo" || i.id == "help.about").unwrap_or(items.len());
+        items.insert(before, update);
+    }
+    // Help: the link items and update check, a separator, then System Info and About.
     if let Some(at) = items.iter().position(|i| i.id == "help.systemInfo" || i.id == "help.about") {
         items.insert(
             at,
@@ -1289,8 +1303,19 @@ pub fn menu_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> f32 {
     }
     if let Some(id) = clicked {
         let ctx = ui.ctx().clone();
-        let id = alt_click(id, ctx.input(|i| i.modifiers.alt));
-        if let Err(e) = invoke(app, &ctx, &id, json!({})) {
+        let alt = ctx.input(|i| i.modifiers.alt);
+        // ⌥ while choosing an Image › Adjustments item opens it at its last settings (#8900).
+        let r = if alt && crate::adjust_dialog::has_dialog(&id) {
+            let opened = crate::adjust_dialog::open_last(app, &id).map(|_| Value::Null).ok_or_else(|| "no document".to_string());
+            // Edit › Search's recents, as `invoke` notes a plain click.
+            if opened.is_ok() {
+                crate::palette::note_recent(&ctx, &id);
+            }
+            opened
+        } else {
+            invoke(app, &ctx, &alt_click(id, alt), json!({}))
+        };
+        if let Err(e) = r {
             app.ui.status = e;
             app.ui.status_error = true;
         }
@@ -1299,7 +1324,7 @@ pub fn menu_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> f32 {
 }
 
 fn press_gesture_id() -> egui::Id {
-    egui::Id::new("menu-press-gesture")
+    egui::Id::unique("menu-press-gesture")
 }
 
 /// A menu title's open/close command this frame, the press opens a closed menu (and
@@ -1407,7 +1432,7 @@ pub fn search_items<'a>(items: &'a [MenuItem], query: &str, lang: crate::i18n::L
 fn help_search(ui: &mut egui::Ui, items: &[MenuItem], opening: bool, clicked: &mut Option<String>, nav: &mut crate::menu_nav::Nav) {
     let ctx = ui.ctx().clone();
     let lang = crate::i18n::current();
-    let text_id = egui::Id::new("help-menu-search");
+    let text_id = egui::Id::unique("help-menu-search");
     let pass_id = text_id.with("pass");
     // A fresh opening of the Help menu starts empty, with the field focused.
     let pass = ctx.cumulative_pass_nr();
@@ -1576,7 +1601,7 @@ fn submenu_row<R>(ui: &mut egui::Ui, title: egui::WidgetText, content: impl FnOn
     if open {
         ui.style_mut().visuals.widgets.inactive = ui.style().visuals.widgets.open;
     }
-    let response = ui.add(egui::Button::new(title).right_text(SubMenuButton::RIGHT_ARROW));
+    let response = ui.add(egui::Button::new(title).right_text(SubMenuButton::arrow_atom(None)));
     ui.style_mut().visuals.widgets.inactive = inactive;
     // The rect egui tests the pointer against (`SubMenu::show`), against the part that can be seen.
     let reach = response.rect.expand2(ui.spacing().item_spacing / 2.0);
@@ -1645,6 +1670,27 @@ pub fn apply_workspace(app: &mut PhotocraftApp) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn showing_grid_restores_hidden_extras() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        let ctx = egui::Context::default();
+        app.ui.extras.grid = false;
+        app.ui.view.extras = false;
+
+        assert_eq!(invoke(&mut app, &ctx, "view.show.grid", json!({})).unwrap(), json!(true));
+        assert_eq!(checked(&app, "view.show.grid"), Some(true));
+        assert!(app.ui.view.extras, "showing Grid must make the overlay visible when Extras was hidden");
+
+        assert_eq!(invoke(&mut app, &ctx, "view.show.grid", json!({})).unwrap(), json!(false));
+        assert!(!app.ui.extras.grid);
+        assert!(app.ui.view.extras);
+
+        app.ui.extras.grid = true;
+        app.ui.view.extras = false;
+        assert_eq!(invoke(&mut app, &ctx, "view.show.grid", json!({})).unwrap(), json!(false));
+        assert!(!app.ui.view.extras, "hiding Grid must leave hidden Extras alone");
+    }
 
     #[test]
     fn sync_with_system_menu_keeps_saved_slots_and_its_checkmark_across_palettes() {
@@ -1794,12 +1840,15 @@ mod tests {
                 egui::CentralPanel::default().show(ui, |ui| {
                     let (rect, _) = ui.allocate_exact_size(egui::vec2(80.0, 24.0), egui::Sense::hover());
                     let shifted = rect.translate(egui::vec2(p.x - rect.center().x, p.y - rect.center().y));
-                    let response = ui.interact(shifted, egui::Id::new("menu-title-test"), egui::Sense::hover());
+                    let response = ui.interact(shifted, egui::Id::unique("menu-title-test"), egui::Sense::hover());
                     title = Some(response);
                 });
-                egui::Area::new(egui::Id::new("overlapping-popup-test")).order(egui::Order::Foreground).fixed_pos(p - egui::vec2(10.0, 10.0)).show(ctx, |ui| {
-                    ui.allocate_space(egui::vec2(20.0, 20.0));
-                });
+                egui::Area::new(egui::Id::unique("overlapping-popup-test")).order(egui::Order::Foreground).fixed_pos(p - egui::vec2(10.0, 10.0)).show(
+                    ctx,
+                    |ui| {
+                        ui.allocate_space(egui::vec2(20.0, 20.0));
+                    },
+                );
                 let response = title.as_ref().unwrap();
                 reaches = pointer_reaches_title(ctx, response, p);
             });
@@ -1923,7 +1972,7 @@ mod tests {
         let items = menu_items(&app);
         let Some(fr) = crate::i18n::Lang::from_code("fr") else { return };
         let ids = |q: &str| search_items(&items, q, fr).iter().map(|i| i.id.clone()).collect::<Vec<_>>();
-        assert!(!ids("calque").is_empty(), "French menu name");
+        assert!(!ids(&crate::i18n::tr(fr, "Layer").to_lowercase()).is_empty(), "French menu name");
         assert!(ids("distort").contains(&"edit.transform.distort".to_string()), "English still matches");
         assert!(ids("zzzzqqq").is_empty());
     }
@@ -1965,7 +2014,7 @@ mod tests {
                 h.run_steps(3);
             };
             let open = |h: &Harness<'_, PhotocraftApp>| h.query_by_label_contains("About PhotoCraft").is_some();
-            let field_id = egui::Id::new("help-menu-search").with("field");
+            let field_id = egui::Id::unique("help-menu-search").with("field");
             let help = h.get_by_label("Help").rect().center();
             click(&mut h, help);
             assert!(open(&h), "Help opened ({what})");
@@ -2017,7 +2066,7 @@ mod tests {
         }
         h.run_steps(3);
         assert!(h.query_by_label_contains("About PhotoCraft").is_some(), "typing keeps Help open");
-        let query: String = h.ctx.data(|d| d.get_temp(egui::Id::new("help-menu-search"))).unwrap_or_default();
+        let query: String = h.ctx.data(|d| d.get_temp(egui::Id::unique("help-menu-search"))).unwrap_or_default();
         assert_eq!(query, "DeSelect all", "every letter reached the field");
         assert!(h.state().ui.dialogs.is_empty(), "no menu command ran: {:?}", h.state().ui.dialogs);
     }
@@ -2098,6 +2147,7 @@ mod tests {
         let before = item.rect().top();
         harness.hover_at(item.rect().center());
         harness.event(egui::Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
             unit: egui::MouseWheelUnit::Point,
             delta: egui::vec2(0.0, -80.0),
             phase: egui::TouchPhase::Move,
@@ -2252,7 +2302,7 @@ mod quick_export_label_tests {
             assert_eq!(quick[0].label, format!("Quick Export as {shown_format}"));
             let id = crate::i18n::Lang::from_code("id").unwrap();
             let localized = translated_menu_label(id, quick[0]);
-            assert_eq!(localized, format!("Ekspor Cepat ke {shown_format}"));
+            assert_eq!(localized, crate::i18n::tr_id(id, "file.export.quickExportAsPng", "Quick Export as PNG").replace("PNG", shown_format));
             let layer = items.iter().find(|i| i.id == "layer.quickExportAsPng").unwrap();
             assert_eq!(layer.label, "Quick Export as PNG", "layer export always creates PNG");
         }
@@ -2290,12 +2340,7 @@ mod reveal_label_tests {
         let shortcuts = crate::prefs_ui::shortcut_items(&app);
         assert!(shortcuts.iter().any(|(i, label, _, _)| i == id && label == reveal_label()), "the shortcut list shows the menu label");
         let de = crate::i18n::Lang::from_code("de").unwrap();
-        let expected = match reveal_label() {
-            "Reveal in Finder" => "Im Finder anzeigen",
-            "Show in Explorer" => "Im Explorer anzeigen",
-            _ => "Im Ordner anzeigen",
-        };
-        assert_eq!(translated_menu_label(de, reveal[0]), expected);
+        assert_eq!(translated_menu_label(de, reveal[0]), crate::i18n::tr(de, reveal_label()));
         // The menu catalogue (and docs/parity-checklist.md) keeps Photoshop's macOS name.
         assert!(crate::menu_catalog::CATALOG.iter().any(|(_, label, _, i)| *i == id && *label == "Reveal in Finder"));
     }
@@ -2371,7 +2416,7 @@ mod window_documents_tests {
         let bar = crate::native_menu::photocraft_layout(&items, de, "de").bar;
         assert_eq!(bar.find("window.document.0").map(|i| i.label.as_str()), Some("Layers"));
         let panel = items.iter().find(|i| i.path == ["Window"] && i.label == "Layers").unwrap();
-        assert_eq!(bar.find(&panel.id).map(|i| i.label.as_str()), Some("Ebenen"), "Window › Layers is still translated");
+        assert_eq!(bar.find(&panel.id).map(|i| i.label.clone()), Some(translated_menu_label(de, panel)), "Window › Layers is still translated");
     }
 
     /// The rows go through the control channel's `ui.menu.invoke`, like a click.

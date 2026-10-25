@@ -669,3 +669,14 @@ fn fps_from_delays_picks_most_common_and_breaks_ties_by_first_seen() {
     many.push(20);
     assert_eq!(fps_from_delays(&many), Some(50.0));
 }
+
+#[test]
+fn render_video_names_frames_after_the_leaf_of_the_document_name() {
+    assert_eq!(safe_stem("clip.mov"), "clip");
+    assert_eq!(safe_stem("../../outside/clip.png"), "clip");
+    assert_eq!(safe_stem("C:\\Users\\x\\clip.v2.gif"), "clip.v2");
+    for hostile in ["..", "../..", "", "/", "a/..", ".hidden."] {
+        let stem = safe_stem(hostile);
+        assert!(!stem.contains(['/', '\\']) && !stem.is_empty() && stem.chars().any(|c| c != '.'), "{hostile:?} -> {stem:?}");
+    }
+}

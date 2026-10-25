@@ -819,6 +819,7 @@
 	Split Warp Vertically	Dividir deformación verticalmente
 	Statistics…	Estadísticas…
 	Refine Strokes	Trazos de perfeccionamiento
+	Edits	Ediciones
 @plural	{n} item|{n} items	{n} elemento|{n} elementos
 	Auto	Automático
 
@@ -2218,6 +2219,10 @@
 	No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.	No hay ningún trazado para crear una selección: dibuje uno con la herramienta Pluma o seleccione uno en el panel Trazados.
 	Cancel opening	Cancelar apertura
 	Cancelled opening {name}	Se canceló la apertura de {name}
+	Damaged Photoshop document	Documento de Photoshop dañado
+	The document “{name}” may be damaged.	Es posible que el documento «{name}» esté dañado.
+	Some layers, pixels or masks could not be read. Do you want to continue opening it?	No se pudieron leer algunas capas, píxeles o máscaras. ¿Desea seguir abriéndolo?
+	If you continue, saving over the original may permanently discard unreadable data. Save a copy to keep the original.	Si continúa, guardar sobre el original puede descartar de forma permanente los datos ilegibles. Guarde una copia para conservar el original.
 	The document “{name}” does not have an embedded {mode} profile.	El documento «{name}» no tiene un perfil {mode} incrustado.
 	The document “{name}” has an embedded color profile that does not match the current {mode} working space.	El documento «{name}» tiene un perfil de color incrustado que no coincide con el espacio de trabajo {mode} actual.
 	Working: {working}	Espacio de trabajo: {working}
@@ -4195,6 +4200,19 @@ navigator	Zoom	Zoom
 	Sent to {printer}	Enviado a {printer}
 	set in Print Settings…	se establece en Ajustes de impresión…
 	ICO is limited to 256 × 256 pixels	ICO está limitado a 256 × 256 píxeles
+# PhotoCraft release checks.
+	Check for Updates…	Buscar actualizaciones…
+	PhotoCraft Updates	Actualizaciones de PhotoCraft
+	Checking for updates…	Buscando actualizaciones…
+	Open the release page to choose an installer for your system.	Abra la página de la versión para elegir un instalador para su sistema.
+	Open Download Page	Abrir página de descarga
+	PhotoCraft is up to date.	PhotoCraft está actualizado.
+	Could not check for updates.	No se pudieron buscar actualizaciones.
+	Updates have not been checked yet.	Aún no se han buscado actualizaciones.
+	Check Again	Comprobar de nuevo
+	Automatically Check for Updates	Buscar actualizaciones automáticamente
+	Installed version: {version}	Versión instalada: {version}
+	PhotoCraft {version} is available.	PhotoCraft {version} está disponible.
 # History panel › History Brush source (#2966)
 	Paints from the History panel's source state	Pinta a partir del estado de origen del panel Historia
 	Sets the source for the history brush	Establece el origen del pincel de historia
@@ -4324,6 +4342,14 @@ navigator	Zoom	Zoom
 
 # Graphics Adapter preference (#1885)
 	GPU adapter	Adaptador de GPU
+
+# Styles panel: Import / Export Styles (.asl)
+	Import Styles…	Importar estilos…
+	Export Selected Styles…	Exportar estilos seleccionados…
+	Export Styles…	Exportar estilos…
+	{file} is not a style library (.asl)	{file} no es una biblioteca de estilos (.asl)
+@plural	Imported {n} style from {file}|Imported {n} styles from {file}	Se importó {n} estilo de {file}|Se importaron {n} estilos de {file}
+@plural	Exported {n} style to {file}|Exported {n} styles to {file}	Se exportó {n} estilo a {file}|Se exportaron {n} estilos a {file}
 # Actions: a step dialog holds a suspended recording (#7365)
 	Confirm or cancel the open action step dialog first	Confirme o cancele primero el cuadro de diálogo abierto del paso de la acción
 	Pro Medium Gray	Pro (gris medio)
@@ -4332,14 +4358,27 @@ navigator	Zoom	Zoom
 	Pro Light Gray	Pro (gris claro)
 	Pro Light	Pro (claro)
 	Resize Windows to Fit	Redimensionar ventanas para ajustar
-
 	EXR	EXR
-
 # Paragraph direction (TYPE-218-2)
 	Automatic paragraph direction	Dirección de párrafo automática
 	Left-to-right paragraph direction	Dirección de párrafo de izquierda a derecha
 	Right-to-left paragraph direction	Dirección de párrafo de derecha a izquierda
 	Not rendered: this adjustment ({key}) is kept as imported.	No se renderiza: este ajuste ({key}) se conserva tal como se importó.
-
 # Print preview image (#8236)
 	Print preview image	Print preview image
+# Color panel menu: modes, copy commands and colour ramps (#6000)
+	Hue Cube	Cubo de tono
+	Brightness Cube	Cubo de brillo
+	Color Wheel	Rueda de color
+	RGB Sliders	Reguladores RGB
+	HSB Sliders	Reguladores HSB
+	CMYK Sliders	Reguladores CMYK
+	Lab Sliders	Reguladores Lab
+	Web Color Sliders	Reguladores de colores web
+	Copy Color as HTML	Copiar color como HTML
+	Copy Color's Hex Code	Copiar código hexadecimal del color
+	RGB Spectrum	Espectro RGB
+	CMYK Spectrum	Espectro CMYK
+	Grayscale Ramp	Rampa de escala de grises
+	Current Colors	Colores actuales
+	Make Ramp Web Safe	Hacer rampa segura para web

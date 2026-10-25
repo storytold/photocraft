@@ -10,6 +10,8 @@
 //! - `session.list`, `doc.open {path}`, `doc.new {…file.new params}`,
 //!   `doc.place {path, scale?, fit?, center?, index?}` (#2810: the read root is the scope,
 //!   the counterpart of the refused ambient `file.placeEmbedded`),
+//!   `doc.replaceSmartObject {path, layer?, index?}` (#8061: the same scope for
+//!   `layer.smartObjects.replaceContents`),
 //!   `doc.exportLayers {dir, format?, prefix?, visibleOnly?, quality?, index?}`,
 //!   `doc.exportDataSets {dir, format?, dataSets?, naming?, index?}`,
 //!   `doc.importDataSets {path, delimiter?, index?}` (#3216: the same treatment for the export
@@ -22,7 +24,9 @@
 use std::io::{BufRead, Write};
 use std::net::TcpListener;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
 use base64::Engine as _;
 use serde_json::{Value, json};
@@ -43,6 +47,7 @@ pub const METHODS: &[&str] = &[
     "session.list",
     "doc.open",
     "doc.place",
+    "doc.replaceSmartObject",
     "doc.new",
     "doc.save",
     "doc.exportLayers",
@@ -107,6 +112,13 @@ impl Headless {
                 opts.remove("path");
                 opts.remove("index");
                 self.place(index_of(&p)?, path, &Value::Object(opts))
+            }
+            "doc.replaceSmartObject" => {
+                let path = str_of(&p, "path").ok_or_else(|| bad("doc.replaceSmartObject needs `path`"))?;
+                let mut opts = p.as_object().cloned().unwrap_or_default();
+                opts.remove("path");
+                opts.remove("index");
+                self.replace_smart_object(index_of(&p)?, path, &Value::Object(opts))
             }
             "doc.new" => self.command_run("file.new", p),
             "doc.save" => {
@@ -315,32 +327,67 @@ fn serve_tcp_connection(h: &Mutex<Headless>, stream: std::net::TcpStream, token:
     }
 }
 
+/// Headless TCP daemons with no clients should eventually release their listening port (#3682).
+const TCP_IDLE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+
 /// Serve authenticated JSON lines on a loopback TCP address with one shared session.
-/// Refuses non-loopback addresses and caps active connections and request bytes.
+/// Refuses non-loopback addresses, caps connections and request bytes, and closes the listener
+/// after an idle period with no connections. Active clients are never evicted by this timer.
 pub fn serve_tcp(addr: &str, h: Arc<Mutex<Headless>>, token: String, ready: impl FnOnce(std::net::SocketAddr)) -> Result<(), AutomationError> {
+    serve_tcp_until_idle(addr, h, token, ready, TCP_IDLE_TIMEOUT)
+}
+
+fn serve_tcp_until_idle(
+    addr: &str,
+    h: Arc<Mutex<Headless>>,
+    token: String,
+    ready: impl FnOnce(std::net::SocketAddr),
+    idle: Duration,
+) -> Result<(), AutomationError> {
     let listener = TcpListener::bind(addr).map_err(|e| AutomationError::Io(format!("bind {addr}: {e}")))?;
     let local = listener.local_addr().map_err(|e| AutomationError::Io(e.to_string()))?;
     if !local.ip().is_loopback() {
         return Err(bad(format!("{addr} is not a loopback address")));
     }
+    listener.set_nonblocking(true).map_err(|e| AutomationError::Io(e.to_string()))?;
     ready(local);
     let limiter = ConnectionLimiter::new(MAX_CONNECTIONS);
     let token = Arc::new(token);
-    for stream in listener.incoming() {
-        let Ok(mut stream) = stream else { continue };
-        let Some(permit) = limiter.try_acquire() else {
-            let _ = configure_stream(&stream);
-            let _ = writeln!(stream, "{}", json!({"id": null, "ok": false, "error": "connection limit reached"}));
-            continue;
-        };
-        let h = h.clone();
-        let token = Arc::clone(&token);
-        std::thread::spawn(move || {
-            let _permit = permit;
-            let _ = serve_tcp_connection(&h, stream, &token, AUTH_DEADLINE);
-        });
+    let active = Arc::new(AtomicUsize::new(0));
+    let mut last_active = Instant::now();
+    loop {
+        match listener.accept() {
+            Ok((mut stream, _)) => {
+                last_active = Instant::now();
+                let Some(permit) = limiter.try_acquire() else {
+                    let _ = configure_stream(&stream);
+                    let _ = writeln!(stream, "{}", json!({"id": null, "ok": false, "error": "connection limit reached"}));
+                    continue;
+                };
+                // The listener is nonblocking; individual requests still use blocking socket I/O.
+                let _ = stream.set_nonblocking(false);
+                let h = h.clone();
+                let token = Arc::clone(&token);
+                let active = Arc::clone(&active);
+                active.fetch_add(1, Ordering::AcqRel);
+                std::thread::spawn(move || {
+                    let _permit = permit;
+                    let _ = serve_tcp_connection(&h, stream, &token, AUTH_DEADLINE);
+                    active.fetch_sub(1, Ordering::AcqRel);
+                });
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                if active.load(Ordering::Acquire) != 0 {
+                    last_active = Instant::now();
+                } else if last_active.elapsed() >= idle {
+                    return Ok(());
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Err(e) if matches!(e.kind(), std::io::ErrorKind::Interrupted | std::io::ErrorKind::ConnectionAborted) => {}
+            Err(e) => return Err(AutomationError::Io(e.to_string())),
+        }
     }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -725,6 +772,129 @@ mod tests {
     }
 
     #[test]
+    fn doc_replace_smart_object_reads_through_the_read_root_and_never_outside_it() {
+        let base = std::env::temp_dir().join(format!("pc-doc-replace-so-{}", std::process::id()));
+        let root = base.join("workspace");
+        let outside = base.join("outside");
+        for dir in [&root, &outside] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        let png = |w: u32, h: u32, v: u8| {
+            let img = photocraft_codecs::Image::from_u8(w, h, photocraft_codecs::ChannelLayout::Rgb, vec![v; (w * h * 3) as usize]).unwrap();
+            photocraft_codecs::encode(&img, photocraft_codecs::Format::Png, &Default::default()).unwrap()
+        };
+        std::fs::write(root.join("logo.png"), png(8, 6, 42)).unwrap();
+        std::fs::write(root.join("red.png"), png(8, 6, 200)).unwrap();
+        std::fs::write(outside.join("red.png"), png(8, 6, 200)).unwrap();
+        let absolute = outside.join("red.png").to_string_lossy().into_owned();
+
+        let mut h = Headless::with_workspace(crate::AuthorizedWorkspace::new(Some(&root), Some(&root)).unwrap());
+        h.handle("doc.new", json!({"width": 40, "height": 30})).unwrap();
+        let layer = h.handle("doc.place", json!({"path": "logo.png"})).unwrap()["layer"].clone();
+        // The smart object's file name and the composite at its centre: what Replace Contents changes.
+        let contents = |h: &mut Headless| {
+            let inspected = h.handle("doc.inspect", json!({})).unwrap();
+            let layers = inspected["layers"].as_array().unwrap();
+            let so = layers.iter().find(|l| l["id"] == layer).unwrap_or_else(|| panic!("{inspected}"));
+            let name = so["smartSource"]["fileName"].as_str().unwrap_or_default().to_owned();
+            let rendered = h.handle("doc.render", json!({"maxSide": 0})).unwrap();
+            let png = base64::engine::general_purpose::STANDARD.decode(rendered["base64"].as_str().unwrap()).unwrap();
+            let img = photocraft_codecs::decode(&png).unwrap();
+            let (w, ht) = img.dimensions();
+            let data = img.as_u8().unwrap();
+            let channels = data.len() / (w * ht) as usize;
+            (name, data[((ht / 2 * w + w / 2) as usize) * channels])
+        };
+        assert_eq!(contents(&mut h), ("logo.png".to_owned(), 42), "the placed contents");
+        let replaced = h.handle("doc.replaceSmartObject", json!({"path": "red.png", "layer": layer})).unwrap();
+        assert_eq!(replaced["layer"], layer, "{replaced}");
+        assert_eq!(contents(&mut h), ("red.png".to_owned(), 200), "the contents were replaced");
+        h.handle("engine.execute", json!({"command": "edit.undo"})).unwrap();
+        assert_eq!(contents(&mut h), ("logo.png".to_owned(), 42), "one undo step restores the old contents");
+        h.handle("engine.execute", json!({"command": "edit.redo"})).unwrap();
+        assert_eq!(contents(&mut h), ("red.png".to_owned(), 200), "redo replaces them again");
+        // Outside the read root, a bad layer, a missing path or a file that is no image: refused, nothing changed.
+        for (params, reason) in [
+            (json!({"path": "../outside/red.png"}), "parent traversal"),
+            (json!({"path": absolute}), "must be inside the automation root"),
+            (json!({"path": "logo.png", "layer": 999_999}), "no such layer"),
+            (json!({}), "needs `path`"),
+        ] {
+            let refused = h.handle("doc.replaceSmartObject", params).unwrap_err().to_string();
+            assert!(refused.contains(reason), "{refused}");
+            assert_eq!(contents(&mut h), ("red.png".to_owned(), 200), "nothing changed: {refused}");
+        }
+        std::fs::write(root.join("junk.png"), b"not an image").unwrap();
+        assert!(h.handle("doc.replaceSmartObject", json!({"path": "junk.png", "layer": layer})).is_err());
+        assert_eq!(contents(&mut h), ("red.png".to_owned(), 200), "a file that is no image changes nothing");
+        // The ambient command keeps its refusal.
+        let ambient = h.handle("engine.execute", json!({"command": "layer.smartObjects.replaceContents", "params": {"path": "red.png"}}));
+        assert!(ambient.unwrap_err().to_string().contains("ambient filesystem paths"));
+        // Trusted local keeps the ambient command.
+        let mut t = Headless::trusted_local();
+        t.handle("doc.new", json!({"width": 40, "height": 30})).unwrap();
+        let tl = t.handle("doc.place", json!({"path": root.join("logo.png").to_string_lossy()})).unwrap()["layer"].clone();
+        let trusted = t.handle("doc.replaceSmartObject", json!({"path": root.join("red.png").to_string_lossy(), "layer": tl})).unwrap();
+        assert_eq!(trusted["layer"], tl, "{trusted}");
+        drop(t);
+        drop(h);
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn doc_export_layers_reports_skips_in_workspace_and_trusted_sessions() {
+        for trusted in [false, true] {
+            let base = std::env::temp_dir().join(format!("pc-export-skips-{}-{trusted}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&base);
+            std::fs::create_dir_all(&base).unwrap();
+            let mut h =
+                if trusted { Headless::trusted_local() } else { Headless::with_workspace(crate::AuthorizedWorkspace::new(Some(&base), Some(&base)).unwrap()) };
+            h.handle("doc.new", json!({"width": 4, "height": 4, "background": "white", "name": "card"})).unwrap();
+            let adjustment = h.handle("engine.execute", json!({"command": "layer.newAdjustmentLayer.levels"})).unwrap()["layer"].clone();
+            h.handle("engine.execute", json!({"command": "layer.setProps", "params": {"name": "Levels"}})).unwrap();
+            let hidden = h.handle("engine.execute", json!({"command": "layer.new.layer", "params": {"name": "Hidden"}})).unwrap()["layer"].clone();
+            h.handle("engine.execute", json!({"command": "layer.setProps", "params": {"visible": false}})).unwrap();
+            // Exercise the actual JSON-lines serve envelope, not only direct dispatch.
+            let h = Mutex::new(h);
+            let out_dir = base.join("out").to_string_lossy().into_owned();
+            let request = json!({"id": 8491, "method": "doc.exportLayers", "params": {"dir": out_dir}}).to_string() + "\n";
+            let mut output = Vec::new();
+            serve_lines(&h, request.as_bytes(), &mut output).unwrap();
+            let reply: Value = serde_json::from_slice(&output).unwrap();
+            assert_eq!(reply["id"], 8491);
+            assert_eq!(reply["ok"], true, "{reply}");
+            assert_eq!(reply["result"]["files"], json!([format!("{out_dir}/card_0001_Background.png")]));
+            if !trusted {
+                assert_eq!(reply["result"]["count"], 1);
+            }
+            assert_eq!(
+                reply["result"]["skipped"],
+                json!([
+                    {"layer": hidden, "name": "Hidden", "reason": "hidden by visibleOnly"},
+                    {"layer": adjustment, "name": "Levels", "reason": "adjustment layer has no pixels of its own"}
+                ])
+            );
+            assert_eq!(std::fs::read_dir(base.join("out")).unwrap().count(), 1);
+            let mut h = h.into_inner().unwrap();
+            let all_dir = base.join("all").to_string_lossy().into_owned();
+            let all = h.export_layers(None, &all_dir, &json!({"visibleOnly": false})).unwrap();
+            assert_eq!(all["files"].as_array().unwrap().len(), 2);
+            assert_eq!(all["skipped"].as_array().unwrap().len(), 1);
+            // Workspace no-overwrite errors still fail and remove only newly created files.
+            if !trusted {
+                let collision = base.join("collision");
+                std::fs::create_dir_all(&collision).unwrap();
+                std::fs::write(collision.join("card_0002_Background.png"), b"keep").unwrap();
+                assert!(h.export_layers(None, &collision.to_string_lossy(), &json!({"visibleOnly": false})).is_err());
+                assert_eq!(std::fs::read_dir(&collision).unwrap().count(), 1);
+                assert_eq!(std::fs::read(collision.join("card_0002_Background.png")).unwrap(), b"keep");
+            }
+            drop(h);
+            std::fs::remove_dir_all(base).unwrap();
+        }
+    }
+
+    #[test]
     fn doc_export_layers_writes_only_beneath_the_write_root() {
         let base = std::env::temp_dir().join(format!("pc-doc-export-layers-{}", std::process::id()));
         let root = base.join("workspace");
@@ -800,7 +970,7 @@ mod tests {
     }
 
     #[test]
-    fn indexed_place_and_data_set_methods_keep_the_active_document() {
+    fn indexed_place_replace_and_data_set_methods_keep_the_active_document() {
         let base = std::env::temp_dir().join(format!("pc-doc-index-active-{}", std::process::id()));
         let root = base.join("workspace");
         std::fs::create_dir_all(&root).unwrap();
@@ -817,6 +987,9 @@ mod tests {
 
         let steps = [
             ("doc.place", json!({"path": "logo.png", "index": 1}), true),
+            // Document 1's active layer is now the placed Smart Object.
+            ("doc.replaceSmartObject", json!({"path": "logo.png", "index": 1}), true),
+            ("doc.replaceSmartObject", json!({"path": "missing.png", "index": 1}), false),
             ("doc.importDataSets", json!({"path": "sets.csv", "index": 1}), true),
             ("doc.exportLayers", json!({"dir": "layers", "index": 1}), true),
             ("doc.exportDataSets", json!({"dir": "sets", "index": 1}), true),
@@ -831,6 +1004,145 @@ mod tests {
         assert_eq!(h.session.documents()[0].doc.layer_count(), 1, "nothing was placed into the active document");
         assert_eq!(h.session.documents()[1].doc.layer_count(), 2, "the placed layer is in document 1");
         assert_eq!(std::fs::read_dir(root.join("sets")).unwrap().count(), 2, "document 1's data sets were exported");
+        // Release directory capabilities before cleanup on Windows.
+        drop(h);
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn doc_export_data_sets_judges_pixel_replacement_paths_like_apply() {
+        let base = std::env::temp_dir().join(format!("pc-doc-data-set-pixels-{}", std::process::id()));
+        let root = base.join("workspace");
+        std::fs::create_dir_all(&root).unwrap();
+        let red = photocraft_codecs::Image::from_u8(4, 4, photocraft_codecs::ChannelLayout::Rgb, [255, 0, 0].repeat(16)).unwrap();
+        let photo = base.join("photo.png");
+        std::fs::write(&photo, photocraft_codecs::encode(&red, photocraft_codecs::Format::Png, &Default::default()).unwrap()).unwrap();
+        let mut h = Headless::with_workspace(crate::AuthorizedWorkspace::new(Some(&root), Some(&root)).unwrap());
+        h.handle("doc.new", json!({"width": 8, "height": 8, "background": "white", "name": "card"})).unwrap();
+        let layer = h.handle("engine.execute", json!({"command": "layer.new.layer", "params": {}})).unwrap()["layer"].clone();
+        h.handle(
+            "engine.execute",
+            json!({"command": "image.variables.define", "params": {"defs": [{"name": "photo", "layer": layer, "type": "pixelReplacement"}]}}),
+        )
+        .unwrap();
+        // Storing the path is allowed; reading it is what the gate judges.
+        h.handle(
+            "engine.execute",
+            json!({"command": "image.variables.dataSets", "params": {"dataSets": [
+                {"name": "swap", "values": [{"variable": "photo", "kind": "pixels", "value": photo.to_string_lossy()}]},
+            ]}}),
+        )
+        .unwrap();
+        let applied = h.handle("engine.execute", json!({"command": "image.applyDataSet", "params": {"name": "swap"}})).unwrap_err().to_string();
+        assert!(applied.contains("ambient filesystem paths"), "{applied}");
+        let sets = root.join("sets");
+        let exported = h.handle("doc.exportDataSets", json!({"dir": sets.to_string_lossy(), "format": "png"})).unwrap_err().to_string();
+        assert!(exported.contains("ambient filesystem paths"), "{exported}");
+        assert_eq!(std::fs::read_dir(&sets).map_or(0, Iterator::count), 0, "nothing of the refused batch is written");
+        // Release directory capabilities before cleanup on Windows.
+        drop(h);
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn workspace_psd_saves_embed_no_file_a_linked_smart_object_names() {
+        use photocraft_engine::doc::{LayerContent, SmartSource};
+
+        // An image PhotoCraft can open (other linked files are never embedded): an embedded copy
+        // carries these exact bytes, while pixels written for the layer don't.
+        let image = photocraft_codecs::Image::from_u8(8, 8, photocraft_codecs::ChannelLayout::Rgb, (0..192u8).collect()).unwrap();
+        let marker = photocraft_codecs::encode(&image, photocraft_codecs::Format::Png, &Default::default()).unwrap();
+        let has_marker = |bytes: &[u8]| bytes.windows(marker.len()).any(|w| w == marker.as_slice());
+        let base = std::env::temp_dir().join(format!("pc-psd-linked-embed-{}", std::process::id()));
+        let root = base.join("workspace");
+        std::fs::create_dir_all(&root).unwrap();
+        let outside = base.join("outside.png");
+        std::fs::write(&outside, &marker).unwrap();
+        // A document whose smart object names a file outside the roots as its source.
+        let mut session = photocraft_engine::Session::new();
+        session.execute("file.new", json!({"width": 8, "height": 8, "background": "white"})).unwrap();
+        session.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        let state = session.active_mut().unwrap();
+        let LayerContent::Smart(smart) = &mut std::sync::Arc::make_mut(&mut state.doc).layers[0].content else { panic!("smart object") };
+        smart.source = SmartSource::Linked { path: outside.to_string_lossy().into_owned() };
+        std::fs::write(root.join("in.pcraft"), photocraft_engine::smart_cmds::encode_source(&state.doc).unwrap()).unwrap();
+        // A trusted export embeds the linked file, as before.
+        assert!(has_marker(&photocraft_io::export(&state.doc, "psd", &Default::default()).unwrap().bytes));
+
+        let mut h = Headless::with_workspace(crate::AuthorizedWorkspace::new(Some(&root), Some(&root)).unwrap());
+        h.handle("doc.open", json!({"path": "in.pcraft"})).unwrap();
+        let saved = h.handle("doc.save", json!({"path": "out.psd"})).unwrap();
+        let warnings = saved["warnings"].to_string();
+        assert!(warnings.contains("written as pixels"), "{warnings}");
+        assert!(!has_marker(&std::fs::read(root.join("out.psd")).unwrap()), "the linked file outside the roots is not embedded");
+        // Release directory capabilities before cleanup on Windows.
+        drop(h);
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn allowed_filters_do_not_rerender_a_smart_object_from_its_linked_file() {
+        use photocraft_engine::doc::{LayerContent, SmartSource};
+
+        let base = std::env::temp_dir().join(format!("pc-linked-rerender-{}", std::process::id()));
+        let root = base.join("workspace");
+        std::fs::create_dir_all(&root).unwrap();
+        let red = photocraft_codecs::Image::from_u8(8, 8, photocraft_codecs::ChannelLayout::Rgb, [255, 0, 0].repeat(64)).unwrap();
+        let outside = base.join("red.png");
+        std::fs::write(&outside, photocraft_codecs::encode(&red, photocraft_codecs::Format::Png, &Default::default()).unwrap()).unwrap();
+        // A document whose white smart object names a file outside the roots as its source.
+        let mut session = photocraft_engine::Session::new();
+        session.execute("file.new", json!({"width": 8, "height": 8, "background": "white"})).unwrap();
+        session.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        let state = session.active_mut().unwrap();
+        let LayerContent::Smart(smart) = &mut std::sync::Arc::make_mut(&mut state.doc).layers[0].content else { panic!("smart object") };
+        smart.source = SmartSource::Linked { path: outside.to_string_lossy().into_owned() };
+        std::fs::write(root.join("p.pcraft"), photocraft_engine::smart_cmds::encode_source(&state.doc).unwrap()).unwrap();
+
+        let mut h = Headless::with_workspace(crate::AuthorizedWorkspace::new(Some(&root), Some(&root)).unwrap());
+        h.handle("doc.open", json!({"path": "p.pcraft"})).unwrap();
+        h.handle("engine.execute", json!({"command": "filter.blur.gaussianBlur", "params": {"radius": 0.5}})).unwrap();
+        let doc = &h.session.active().unwrap().doc;
+        let LayerContent::Smart(smart) = &doc.layers[0].content else { panic!("smart object") };
+        assert_eq!(smart.smart_filters.len(), 1, "the filter is still recorded");
+        assert_eq!(smart.cache.as_ref().unwrap().rgba(4, 4), [1.0, 1.0, 1.0, 1.0], "the linked file outside the roots is not read");
+        // Release directory capabilities before cleanup on Windows.
+        drop(h);
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn workspace_layer_exports_keep_linked_smart_objects_as_pixels() {
+        use photocraft_engine::doc::{LayerContent, SmartSource};
+
+        const MARKER: &[u8] = b"PHOTOCRAFT-LINKED-0002";
+        let has_marker = |bytes: &[u8]| bytes.windows(MARKER.len()).any(|w| w == MARKER);
+        let base = std::env::temp_dir().join(format!("pc-export-layers-linked-{}", std::process::id()));
+        let root = base.join("workspace");
+        std::fs::create_dir_all(&root).unwrap();
+        let outside = base.join("outside.txt");
+        std::fs::write(&outside, MARKER).unwrap();
+        // A document whose smart object names a file outside the roots as its source.
+        let mut session = photocraft_engine::Session::new();
+        session.execute("file.new", json!({"width": 8, "height": 8, "background": "white"})).unwrap();
+        session.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        let state = session.active_mut().unwrap();
+        let LayerContent::Smart(smart) = &mut std::sync::Arc::make_mut(&mut state.doc).layers[0].content else { panic!("smart object") };
+        smart.source = SmartSource::Linked { path: outside.to_string_lossy().into_owned() };
+        std::fs::write(root.join("in.pcraft"), photocraft_engine::smart_cmds::encode_source(&state.doc).unwrap()).unwrap();
+
+        let mut h = Headless::with_workspace(crate::AuthorizedWorkspace::new(Some(&root), Some(&root)).unwrap());
+        h.handle("doc.open", json!({"path": "in.pcraft"})).unwrap();
+        let out = root.join("layers");
+        for format in ["psd", "psb"] {
+            let exported = h.handle("doc.exportLayers", json!({"dir": out.to_string_lossy(), "format": format})).unwrap();
+            assert_eq!(exported["count"], 1, "{exported}");
+        }
+        let files: Vec<_> = std::fs::read_dir(&out).unwrap().map(|e| e.unwrap().path()).collect();
+        assert_eq!(files.len(), 2, "{files:?}");
+        for file in files {
+            assert!(!has_marker(&std::fs::read(&file).unwrap()), "{} embeds no file outside the roots", file.display());
+        }
         // Release directory capabilities before cleanup on Windows.
         drop(h);
         std::fs::remove_dir_all(base).unwrap();
@@ -872,6 +1184,38 @@ mod tests {
         assert!(h.session.documents().is_empty(), "later edit must not execute after the quota is exhausted");
         assert!(crate::budgets::json_bytes(&result).is_ok());
         assert!(h.handle("methods", Value::Null).is_ok());
+    }
+
+    #[test]
+    fn idle_tcp_daemon_releases_its_port_but_keeps_active_clients() {
+        use std::io::BufReader;
+        const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let h = Arc::new(Mutex::new(Headless::new()));
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let result = serve_tcp_until_idle("127.0.0.1:0", h, TOKEN.to_owned(), move |addr| ready_tx.send(addr).unwrap(), Duration::from_millis(200));
+            done_tx.send(result).unwrap();
+        });
+        let addr = ready_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let mut client = std::net::TcpStream::connect(addr).unwrap();
+        client.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        let mut reader = BufReader::new(client.try_clone().unwrap());
+        writeln!(client, r#"{{"id":"auth","method":"auth","params":{{"token":"{TOKEN}"}}}}"#).unwrap();
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        let auth: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(auth["result"]["authenticated"], true);
+        // The port stays owned well past the idle limit while a client is connected.
+        assert!(
+            matches!(done_rx.recv_timeout(Duration::from_millis(450)), Err(std::sync::mpsc::RecvTimeoutError::Timeout)),
+            "daemon exited with a live client"
+        );
+        drop(reader);
+        drop(client);
+        assert!(done_rx.recv_timeout(Duration::from_secs(3)).unwrap().is_ok(), "idle daemon did not exit cleanly");
+        server.join().unwrap();
+        assert!(TcpListener::bind(addr).is_ok(), "idle listener still owns its port");
     }
 
     #[test]

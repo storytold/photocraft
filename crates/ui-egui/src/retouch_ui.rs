@@ -160,7 +160,9 @@ pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], m
     p["points"] = pts;
     // The layer mask, an alpha channel or the Quick Mask when targeted, as the Brush paints.
     p["target"] = crate::canvas::paint_target(app);
-    match app.run(cmd, p) {
+    let result = app.run(cmd, p);
+    app.retouch_from_live = matches!(&result, Ok(r) if r.get("fromLive").and_then(Value::as_bool) == Some(true));
+    match result {
         Ok(r) if matches!(tool, Tool::Healing | Tool::CloneStamp) => {
             // Aligned: keep the offset for later strokes; non-aligned: every stroke restarts at the source.
             app.ui.clone_offset = r.get("offset").and_then(|v| serde_json::from_value(v.clone()).ok()).filter(|_| o.clone_aligned);
@@ -462,7 +464,9 @@ pub fn draw_source_marker(app: &PhotocraftApp, painter: &egui::Painter, xf: &Vie
 
 fn opt(ui: &mut egui::Ui, text: &str) {
     let t = Tokens::get(ui.ctx());
-    ui.label(egui::RichText::new(tl!(&text)).color(t.text_dim).size(12.0));
+    let label = ui.label(egui::RichText::new(tl!(&text)).color(t.text_dim).size(12.0));
+    // The caption scrubs and names the field or dropdown drawn right after it.
+    crate::widgets::scrub_option_label(ui, &label);
 }
 
 fn pct(ui: &mut egui::Ui, label: &str, v: &mut f32) {
@@ -515,7 +519,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             opt(ui, tl!("Patch:"));
             let kinds = [("normal".to_string(), tl!("Normal")), ("contentAware".to_string(), tl!("Content-Aware"))];
             let mut kind = if o.patch_content_aware { "contentAware" } else { "normal" }.to_string();
-            crate::widgets::dropdown(ui, "patch-kind", &mut kind, &kinds, 120.0);
+            crate::widgets::dropdown(ui, "patch-kind", tl!("Type"), &mut kind, &kinds, 120.0);
             o.patch_content_aware = kind == "contentAware";
             if o.patch_content_aware {
                 opt(ui, tl!("Structure:"));
@@ -537,7 +541,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         Tool::ContentAwareMove => {
             opt(ui, tl!("Mode:"));
             let modes = [("move".to_string(), tl!("Move")), ("extend".to_string(), tl!("Extend"))];
-            crate::widgets::dropdown(ui, "cam-mode", &mut o.cam_mode, &modes, 90.0);
+            crate::widgets::dropdown(ui, "cam-mode", tl!("Mode"), &mut o.cam_mode, &modes, 90.0);
             opt(ui, tl!("Structure:"));
             crate::widgets::value_field(ui, &mut o.cam_structure, 1.0..=7.0, "", 40.0);
             opt(ui, tl!("Color:"));
@@ -549,12 +553,12 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                 // The box on the dropped patch: ✓ computes the move, ⊘ drops it (as ↩ / Esc).
                 let tip = crate::i18n::fmt(tl!("Commit transform ({key})"), &[("key", &crate::shortcuts::pretty("Enter"))]);
                 let commit = crate::icons::button(ui, "check", 26.0, false, &tip);
-                commit.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Commit transform"));
+                commit.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Commit transform"));
                 if commit.clicked() {
                     crate::cam_transform::commit(app);
                 }
                 let cancel = crate::icons::button(ui, "ban", 26.0, false, tl!("Cancel transform (Esc)"));
-                cancel.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Cancel transform"));
+                cancel.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Cancel transform"));
                 if cancel.clicked() {
                     crate::cam_transform::cancel(app);
                 }
@@ -573,7 +577,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                 ("currentAndBelow".to_string(), tl!("Current & Below")),
                 ("all".to_string(), tl!("All Layers")),
             ];
-            crate::widgets::dropdown(ui, "clone-sample", &mut o.clone_sample, &opts, 130.0);
+            crate::widgets::dropdown(ui, "clone-sample", tl!("Source"), &mut o.clone_sample, &opts, 130.0);
             if app.ui.clone_source.is_none() {
                 crate::widgets::vline(ui, 22.0);
                 opt(ui, &crate::i18n::fmt(tl!("{key}-click to set the source"), &[("key", &crate::shortcuts::pretty("Alt"))]));
@@ -582,14 +586,14 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         Tool::Dodge | Tool::Burn => {
             opt(ui, tl!("Range:"));
             let opts = [("shadows".to_string(), tl!("Shadows")), ("midtones".to_string(), tl!("Midtones")), ("highlights".to_string(), tl!("Highlights"))];
-            crate::widgets::dropdown(ui, "tone-range", &mut o.tone_range, &opts, 100.0);
+            crate::widgets::dropdown(ui, "tone-range", tl!("Range"), &mut o.tone_range, &opts, 100.0);
             pct(ui, tl!("Exposure:"), &mut o.exposure);
             crate::widgets::checkbox(ui, &mut o.protect_tones, tl!("Protect Tones"));
         }
         Tool::Sponge => {
             opt(ui, tl!("Mode:"));
             let opts = [("desaturate".to_string(), tl!("Desaturate")), ("saturate".to_string(), tl!("Saturate"))];
-            crate::widgets::dropdown(ui, "sponge-mode", &mut o.sponge_mode, &opts, 110.0);
+            crate::widgets::dropdown(ui, "sponge-mode", tl!("Mode"), &mut o.sponge_mode, &opts, 110.0);
             crate::widgets::checkbox(ui, &mut o.vibrance, tl!("Vibrance"));
         }
         Tool::Blur | Tool::Sharpen | Tool::Smudge => {
@@ -613,7 +617,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                 ("color".to_string(), tl!("Color")),
                 ("luminosity".to_string(), tl!("Luminosity")),
             ];
-            crate::widgets::dropdown(ui, "color-replacement-mode", &mut o.cr_mode, &modes, 100.0);
+            crate::widgets::dropdown(ui, "color-replacement-mode", tl!("Mode"), &mut o.cr_mode, &modes, 100.0);
             crate::widgets::vline(ui, 22.0);
             ui.spacing_mut().item_spacing.x = 2.0;
             for (k, icon, tip) in [
@@ -633,7 +637,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                 ("contiguous".to_string(), tl!("Contiguous")),
                 ("findEdges".to_string(), tl!("Find Edges")),
             ];
-            crate::widgets::dropdown(ui, "color-replacement-limits", &mut o.cr_limits, &limits, 110.0);
+            crate::widgets::dropdown(ui, "color-replacement-limits", tl!("Limits:"), &mut o.cr_limits, &limits, 110.0);
             opt(ui, tl!("Tolerance:"));
             crate::widgets::value_field(ui, &mut o.cr_tolerance, 0.0..=100.0, "%", 62.0);
             crate::widgets::checkbox(ui, &mut o.cr_anti_alias, tl!("Anti-alias"));
@@ -685,7 +689,7 @@ fn pattern_stamp_options(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         ui.label(egui::RichText::new(tl!("No patterns")).color(Tokens::get(ui.ctx()).text_faint));
         false
     } else {
-        crate::widgets::dropdown(ui, "pattern-stamp-pat", &mut pat, &opts_ref, 140.0)
+        crate::widgets::dropdown(ui, "pattern-stamp-pat", tl!("Pattern"), &mut pat, &opts_ref, 140.0)
     };
     opt(ui, tl!("Scale"));
     crate::widgets::value_field(ui, &mut o.pattern_stamp_scale, 1.0..=1000.0, "%", 58.0);

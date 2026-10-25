@@ -225,6 +225,10 @@ fn clipboard_press(e: &egui::Event, mods: Modifiers, is_windows: bool) -> Option
         egui::Event::Cut if is_windows && mods.shift && !mods.command => Some((Key::Delete, mods)),
         egui::Event::Cut => Some((Key::X, held)),
         egui::Event::Paste(_) => Some((Key::V, held)),
+        // egui 0.37 emits this when the clipboard holds an image and no text. Treat it as the
+        // paste shortcut; the command reads the OS clipboard once through the existing import
+        // path, never a second time from this event.
+        egui::Event::PasteImage(_) => Some((Key::V, held)),
         _ => None,
     }
 }
@@ -235,7 +239,7 @@ fn clipboard_press(e: &egui::Event, mods: Modifiers, is_windows: bool) -> Option
 /// empty selection behind, which must not take ⌘C from the document. Read once a frame, from the
 /// frame before.
 fn label_text_selected(ctx: &egui::Context) -> bool {
-    let id = egui::Id::new("pc-label-text-selected");
+    let id = egui::Id::unique("pc-label-text-selected");
     let any = ctx.plugin_opt::<egui::text_selection::LabelSelectionState>().is_some_and(|p| p.lock().has_selection());
     let (selects, pressed) = ctx.input(|i| {
         let p = &i.pointer;
@@ -323,11 +327,11 @@ pub fn clipboard_keys(ctx: &egui::Context, typing: bool, raw: &mut egui::RawInpu
         });
         return;
     }
-    let seen = egui::Id::new("pc-paste-key-seen");
+    let seen = egui::Id::unique("pc-paste-key-seen");
     // A V press without ⌘ that reached us (the Move tool's key): its release is not a paste.
-    let plain_v = egui::Id::new("pc-plain-v-down");
+    let plain_v = egui::Id::unique("pc-plain-v-down");
     // ⌘ was held since the last key press without it: a swallowed ⌘V can be under way.
-    let command_lately = egui::Id::new("pc-paste-command-lately");
+    let command_lately = egui::Id::unique("pc-paste-command-lately");
     // The modifiers held at each event: last frame's, updated as the events report changes.
     let mut mods = ctx.input(|i| i.modifiers);
     if mods.command {
@@ -459,6 +463,7 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // Liquify is a full-window custom dialog with focusable sliders. egui can therefore claim
     // keyboard input before the distortion-mode handler below runs. Give Liquify's local
     // shortcuts first refusal (Undo, brush size, tool keys), but never steal keys from text edits.
+    crate::distort_ui::cancel_stale(app);
     if app.distort.liquify.is_some() {
         // Undo and redo still apply while a numeric field (Size, Pressure, …) has focus.
         // Other Liquify keys must not steal characters from that field (#4027).
@@ -467,6 +472,10 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
         } else {
             crate::liquify_ui::keys(app, ctx);
         }
+    }
+    // The Filter Gallery's preview takes the zoom keys from the canvas behind it.
+    if app.distort.gallery.is_some() && !ctx.text_edit_focused() {
+        crate::gallery_ui::keys(app, ctx);
     }
     // The Content-Aware Fill workspace likewise.
     if app.distort.caf.is_some() && !ctx.text_edit_focused() {
@@ -716,7 +725,7 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
         || app.save_options_open()
         || app.distort.gallery.is_some()
         || ctx.any_popup_open()
-        || ctx.data(|d| d.get_temp::<(egui::Id, egui::Rect)>(egui::Id::new("tool-flyout")).is_some());
+        || ctx.data(|d| d.get_temp::<(egui::Id, egui::Rect)>(egui::Id::unique("tool-flyout")).is_some());
     // Both full screen modes (with and without the menu bar) return to Standard, as in Photoshop
     // (#4116), through the menu command so the window and the Screen Mode check follow.
     if !esc_taken && app.ui.view.screen_mode != "standard" && pressed(Key::Escape) {
@@ -1181,6 +1190,10 @@ mod tests {
         assert_eq!(clipboard_press(&egui::Event::Cut, shift, false), Some((Key::X, Modifiers::COMMAND)));
         // Shift+Insert pastes on Windows.
         assert_eq!(clipboard_press(&egui::Event::Paste("x".into()), shift, true), Some((Key::V, Modifiers::COMMAND)));
+        // egui 0.37's image-only clipboard paste is the same ⌘V press; the command reads the
+        // clipboard itself, once, through the existing import path.
+        let image = std::sync::Arc::new(egui::ColorImage::filled([1, 1], egui::Color32::BLACK));
+        assert_eq!(clipboard_press(&egui::Event::PasteImage(image), shift, true), Some((Key::V, Modifiers::COMMAND)));
         // Through the raw-input hook on this platform; a text field keeps its Cut.
         let ctx = egui::Context::default();
         let cut = || egui::RawInput { events: vec![egui::Event::ModifiersChanged(shift), egui::Event::Cut], ..Default::default() };

@@ -25,6 +25,7 @@ base64 = "0.22"
 schemars = "1"
 getrandom = { workspace = true }
 cap-std = "4"
+clap = { workspace = true }
 
 [dev-dependencies]
 # Synthetic camera raws (#7789).

@@ -198,7 +198,7 @@ documented in the header of `ja.tsv`). Command ids, menu paths used for logic, t
 the CLI and MCP always use the English ids and labels.
 
 Languages shipped (`complete_menus` marks a catalog that covers every menu string and `tl!` literal;
-the tests enforce it):
+`cargo xtask i18n-coverage` lists what each catalog lacks):
 
 - English (`en`), the source language.
 - Japanese (`ja`), complete.
@@ -225,15 +225,16 @@ the tests enforce it):
 - To add a language: add `<code>.tsv` and one row in `i18n::LANGUAGES` (code, native name, catalog,
   plural rule). The dropdown, locale matching and the catalog tests (well-formed, no duplicates,
   placeholders and ellipses agree, command ids exist) pick it up. Set `complete_menus` once every
-  menu string is translated; a test then enforces it. A language with more plural forms lists them
+  menu string is translated. A language with more plural forms lists them
   all in `@plural` entries (Russian: `one|few|many`); the row's plural rule picks the form.
 - Translations are clean-room: written from the meaning of the English text in ordinary vocabulary,
   never from another product's localisation resources.
 
 Localised so far: menus, the command palette, dialogs and panels (literals wrapped in `tl!("…")`;
 widgets such as `checkbox`, `slider_row`, `dropdown` and the buttons translate their labels
-themselves). A test fails when a `tl!` literal, a menu string, a blend mode name, brush section name or a generated
-preference label has no entry in a language marked `complete_menus`. Not translated: status-bar
+themselves). A string with no entry in a catalog shows in English; `cargo xtask i18n-coverage`
+lists the missing strings per language, and `cargo xtask ci` prints that list without failing.
+Not translated: status-bar
 messages and errors (they stay English, also for agents), names that are user data (layers, styles,
 documents), strings assembled with `format!` that were not converted to `fmt`/`trn`. Not done yet:
 right-to-left layout inside panels and dialogs (the shell mirrors, `direction.rs`),
@@ -245,7 +246,7 @@ Simplified Chinese. Its contextual `cameraRaw` entries distinguish tonal regions
 colour-band names and font-weight Light. The title uses a `{layer}` placeholder; user layer
 names and the universal RGB/Lab channel symbols stay unchanged. Collapse IDs use English
 source keys, so switching languages preserves open sections. Mixer tabs wrap within the
-panel width. Catalog coverage and actual shell language-switch tests enforce these rules.
+panel width. Shell language-switch tests check that the panel draws in the selected language.
 
 Native CJK font fallback follows the selected UI script and resets its cache when switching
 languages; font delivery on the web remains separate work.

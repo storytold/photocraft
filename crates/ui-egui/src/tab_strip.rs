@@ -66,7 +66,7 @@ pub fn overflow_button(ui: &mut Ui, id: egui::Id, r: Rect, tip: &str, labels: &[
         paint_ui.painter().rect_filled(r.shrink2(vec2(1.0, 3.0)), t.radius_sm, t.hover.gamma_multiply(0.6));
     }
     crate::icons::paint(&paint_ui, r, "chevrons-right", 12.0, if resp.hovered() { t.text } else { t.text_dim });
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), tip));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tip));
     let resp = resp.on_hover_text(tip);
     egui::Popup::menu(&resp).show(|ui| {
         ui.set_min_width(140.0);
@@ -330,8 +330,16 @@ mod tests {
             let area = Rect::from_min_size(pos2(20.0, 20.0), vec2(width, 26.0));
             let mut selected = 3;
             let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-                let out =
-                    pro_tabs(ui, ui.id().with("tiny-tabs"), area, area.right(), &["Color", "Swatches", "Gradients", "Patterns"], &mut selected, false, false);
+                let out = pro_tabs(
+                    ui,
+                    ui.scope_id().with("tiny-tabs"),
+                    area,
+                    area.right(),
+                    &["Color", "Swatches", "Gradients", "Patterns"],
+                    &mut selected,
+                    false,
+                    false,
+                );
                 assert!(out.tabs.iter().any(|(i, _)| *i == 3));
                 for (_, rect) in &out.tabs {
                     assert!(rect.left() >= area.left() && rect.right() <= area.right() + 0.001, "{width}: {rect:?}");
@@ -360,7 +368,7 @@ mod tests {
                     let mut picked = None;
                     let input = egui::RawInput { events: vec![egui::Event::PointerMoved(rect.center())], ..Default::default() };
                     let mut output = ctx.run_ui(input, |ui| {
-                        overflow_button(ui, ui.id().with("tiny-overflow"), rect, "More panels", &["Layers"], &[0], None, &mut picked);
+                        overflow_button(ui, ui.scope_id().with("tiny-overflow"), rect, "More panels", &["Layers"], &[0], None, &mut picked);
                     });
                     output.textures_delta.clear();
                     let mut icons = 0;

@@ -18,7 +18,9 @@
 //! `.pat` file is `8BPT`, version u16 (1), count u32, then the patterns without length prefixes.
 //! Photoshop writes the channel count as 24 and only marks the real channels as written; like
 //! ag-psd (MIT) we take the first written arrays as the colour channels and the next one as
-//! transparency.
+//! transparency. Photoshop stores a pattern's transparency in the last (sheet mask) array and
+//! leaves the user mask unwritten (psd-tools multichannel-pattern-fill.psd, Photoshop CC 2019); a
+//! file with transparency in the user mask array is refused by Photoshop (#8054).
 
 use crate::compression::{Compression, MAX_DECODED_BYTES, PlaneLayout, decode_planes, encode_planes};
 use crate::error::{PsdError, Result};
@@ -54,6 +56,12 @@ impl PatternBudget {
     pub fn with_decoded_limit(decoded: u64) -> Self {
         let d = Self::default();
         PatternBudget { decoded_left: d.decoded_left.min(decoded), padded_left: d.padded_left.min(decoded) }
+    }
+
+    /// Cap both decoded and padded bytes to the amount still available to a containing file.
+    pub fn cap_decoded_to(&mut self, decoded: u64) {
+        self.decoded_left = self.decoded_left.min(decoded);
+        self.padded_left = self.padded_left.min(decoded);
     }
 
     /// Decoded bytes still available.
@@ -137,7 +145,15 @@ impl<'a> Rd<'a> {
     }
 }
 
-fn read_pattern(r: &mut Rd, budget: &mut PatternBudget) -> Result<PsdPattern> {
+/// A pattern's mode, name, id and palette, up to its virtual memory array list.
+struct PatternHeader {
+    mode: u32,
+    name: String,
+    id: String,
+    palette: Option<Vec<u8>>,
+}
+
+fn read_header(r: &mut Rd) -> Result<PatternHeader> {
     let version = r.u32()?;
     if version != 1 {
         return Err(PsdError::invalid(format!("pattern version {version}")));
@@ -163,12 +179,22 @@ fn read_pattern(r: &mut Rd, budget: &mut PatternBudget) -> Result<PsdPattern> {
     } else {
         None
     };
+    Ok(PatternHeader { mode, name, id, palette })
+}
+
+/// The body of a pattern's virtual memory array list (after its version and length).
+fn read_vma_body<'a>(r: &mut Rd<'a>) -> Result<&'a [u8]> {
     let vver = r.u32()?;
     if vver != 3 {
         return Err(PsdError::invalid(format!("virtual memory array list version {vver}")));
     }
     let len = r.u32()? as usize;
-    let body = r.take(len)?;
+    r.take(len)
+}
+
+fn read_pattern(r: &mut Rd, budget: &mut PatternBudget) -> Result<PsdPattern> {
+    let PatternHeader { mode, name, id, palette } = read_header(r)?;
+    let body = read_vma_body(r)?;
     let mut v = Rd { b: body, p: 0 };
     let [top, left, bottom, right] = v.rect()?;
     let w = right.checked_sub(left).ok_or(PsdError::LimitExceeded("pattern width overflow"))?;
@@ -365,6 +391,10 @@ fn write_pattern(p: &PsdPattern, out: &mut Vec<u8>) -> Result<()> {
     out.extend_from_slice(&(p.height as u16).to_be_bytes());
     out.extend_from_slice(&(p.width as u16).to_be_bytes());
     let units: Vec<u16> = p.name.encode_utf16().chain(std::iter::once(0)).collect();
+    // The reader refuses longer names (see `read_pattern`).
+    if units.len() > 65_536 {
+        return Err(PsdError::LimitExceeded("pattern name length"));
+    }
     out.extend_from_slice(&(units.len() as u32).to_be_bytes());
     for u in units {
         out.extend_from_slice(&u.to_be_bytes());
@@ -407,12 +437,12 @@ fn write_pattern(p: &PsdPattern, out: &mut Vec<u8>) -> Result<()> {
     for _ in nc..SLOTS as usize {
         body.extend_from_slice(&0u32.to_be_bytes());
     }
-    // User mask slot: transparency; sheet mask slot: unused.
+    // User mask slot: unused; sheet mask slot: transparency, where Photoshop keeps it (#8054).
+    body.extend_from_slice(&0u32.to_be_bytes());
     match &p.alpha {
         Some(a) => array(a, &mut body)?,
         None => body.extend_from_slice(&0u32.to_be_bytes()),
     }
-    body.extend_from_slice(&0u32.to_be_bytes());
     out.extend_from_slice(&3u32.to_be_bytes());
     out.extend_from_slice(&(body.len() as u32).to_be_bytes());
     out.extend_from_slice(&body);
@@ -425,9 +455,8 @@ pub fn parse_pattern_block(data: &[u8]) -> Result<Vec<PsdPattern>> {
 }
 
 /// [`parse_pattern_block`] charging `budget`, so several blocks of one document share one limit.
-/// The budget is charged only for patterns that are returned.
+/// Charges are monotonic even when a later record in the block fails.
 pub fn parse_pattern_block_with(data: &[u8], budget: &mut PatternBudget) -> Result<Vec<PsdPattern>> {
-    let mut left = budget.clone();
     let mut r = Rd { b: data, p: 0 };
     let mut out = Vec::new();
     while r.p + 4 <= data.len() {
@@ -436,12 +465,53 @@ pub fn parse_pattern_block_with(data: &[u8], budget: &mut PatternBudget) -> Resu
             break;
         }
         let body = r.take(len)?;
-        out.push(read_pattern(&mut Rd { b: body, p: 0 }, &mut left)?);
+        out.push(read_pattern(&mut Rd { b: body, p: 0 }, budget)?);
         let pad = (4 - len % 4) % 4;
         r.p = (r.p + pad).min(data.len());
     }
-    *budget = left;
     Ok(out)
+}
+
+/// Whether `Patt` / `Pat2` / `Pat3` block data keeps a pattern's transparency in the user mask
+/// array, as PhotoCraft wrote it before #8054. Photoshop refuses such a file, so a save must
+/// rewrite the block rather than keep it. Unreadable data counts as `false`.
+pub fn block_has_user_mask(data: &[u8]) -> bool {
+    let mut r = Rd { b: data, p: 0 };
+    while r.p + 4 <= data.len() {
+        let Ok(len) = r.u32() else { return false };
+        if len == 0 {
+            break;
+        }
+        let Ok(body) = r.take(len as usize) else { return false };
+        if pattern_has_user_mask(&mut Rd { b: body, p: 0 }).unwrap_or(false) {
+            return true;
+        }
+        let pad = (4 - len as usize % 4) % 4;
+        r.p = (r.p + pad).min(data.len());
+    }
+    false
+}
+
+fn pattern_has_user_mask(r: &mut Rd) -> Result<bool> {
+    read_header(r)?;
+    let mut v = Rd { b: read_vma_body(r)?, p: 0 };
+    v.rect()?;
+    let count = v.u32()?;
+    // Every array takes at least 4 bytes, so the body bounds this loop whatever `count` says.
+    for i in 0..count.saturating_add(2) {
+        if v.p >= v.b.len() {
+            break;
+        }
+        if v.u32()? == 0 {
+            continue;
+        }
+        let alen = v.u32()? as usize;
+        if i == count && alen != 0 {
+            return Ok(true);
+        }
+        v.take(alen)?;
+    }
+    Ok(false)
 }
 
 /// Serializes patterns as `Patt` / `Pat2` / `Pat3` block data.
@@ -467,6 +537,9 @@ pub fn block_key(depth: u16) -> [u8; 4] {
     }
 }
 
+/// The most patterns a `.pat` file may hold: more are refused on read and on write.
+pub const MAX_PAT_PATTERNS: usize = 100_000;
+
 /// Parses a `.pat` pattern file.
 pub fn parse_pat_file(data: &[u8]) -> Result<Vec<PsdPattern>> {
     let mut r = Rd { b: data, p: 0 };
@@ -475,10 +548,13 @@ pub fn parse_pat_file(data: &[u8]) -> Result<Vec<PsdPattern>> {
         return Err(PsdError::InvalidSignature { expected: "8BPT", found: [sig[0], sig[1], sig[2], sig[3]] });
     }
     let _version = r.u16()?;
-    let count = r.u32()?;
+    let count = r.u32()? as usize;
+    if count > MAX_PAT_PATTERNS {
+        return Err(PsdError::LimitExceeded("pattern count"));
+    }
     let mut out = Vec::new();
     let mut budget = PatternBudget::default();
-    for _ in 0..count.min(100_000) {
+    for _ in 0..count {
         out.push(read_pattern(&mut r, &mut budget)?);
     }
     Ok(out)
@@ -486,6 +562,9 @@ pub fn parse_pat_file(data: &[u8]) -> Result<Vec<PsdPattern>> {
 
 /// Writes a `.pat` pattern file.
 pub fn write_pat_file(patterns: &[PsdPattern]) -> Result<Vec<u8>> {
+    if patterns.len() > MAX_PAT_PATTERNS {
+        return Err(PsdError::LimitExceeded("pattern count"));
+    }
     let mut out = b"8BPT".to_vec();
     out.extend_from_slice(&1u16.to_be_bytes());
     out.extend_from_slice(&(patterns.len() as u32).to_be_bytes());
@@ -516,6 +595,28 @@ mod tests {
         }
     }
 
+    /// #9318 review: a name the reader refuses (more than 65,536 UTF-16 units with its NUL) is
+    /// refused on write, so a saved library can't become a file that loads nothing.
+    #[test]
+    fn a_name_the_reader_refuses_is_refused_on_write() {
+        let long = PsdPattern { name: "a".repeat(65_536), ..pat(8, false) };
+        assert!(matches!(write_pat_file(&[long]), Err(PsdError::LimitExceeded(_))));
+        let longest = PsdPattern { name: "a".repeat(65_535), ..pat(8, false) };
+        assert_eq!(parse_pat_file(&write_pat_file(std::slice::from_ref(&longest)).unwrap()).unwrap(), [longest]);
+    }
+
+    /// #9318 review: more patterns than a `.pat` holds are refused on write, and a file claiming
+    /// more is refused on read rather than silently cut to the first 100,000.
+    #[test]
+    fn more_patterns_than_a_pat_file_holds_are_refused() {
+        let many = vec![pat(8, false); MAX_PAT_PATTERNS + 1];
+        assert!(matches!(write_pat_file(&many), Err(PsdError::LimitExceeded(_))));
+        let mut header = b"8BPT".to_vec();
+        header.extend_from_slice(&1u16.to_be_bytes());
+        header.extend_from_slice(&(MAX_PAT_PATTERNS as u32 + 1).to_be_bytes());
+        assert!(matches!(parse_pat_file(&header), Err(PsdError::LimitExceeded(_))));
+    }
+
     #[test]
     fn block_and_pat_file_round_trip_at_every_depth() {
         for depth in [8, 16, 32] {
@@ -529,6 +630,47 @@ mod tests {
                 // Re-serialising is byte-stable.
                 assert_eq!(write_pattern_block(&parse_pattern_block(&blk).unwrap()).unwrap(), blk);
             }
+        }
+    }
+
+    /// Offsets of the virtual memory arrays of a one-pattern block (each at its "written" flag),
+    /// with whether each is written, and the end of the array list.
+    fn vma_slots(block: &[u8], p: &PsdPattern) -> (Vec<(usize, bool)>, usize) {
+        let rect = pattern_vma_rect_offset(4, p);
+        let end = rect + u32::from_be_bytes(block[rect - 4..rect].try_into().unwrap()) as usize;
+        let (mut at, mut slots) = (rect + 20, Vec::new());
+        while at < end {
+            let written = u32::from_be_bytes(block[at..at + 4].try_into().unwrap()) != 0;
+            slots.push((at, written));
+            at += 4;
+            if written {
+                at += 4 + u32::from_be_bytes(block[at..at + 4].try_into().unwrap()) as usize;
+            }
+        }
+        (slots, end)
+    }
+
+    #[test]
+    fn transparency_goes_in_the_sheet_mask_array_like_photoshop() {
+        // #8054: transparency in the user mask array (slot 24) made Photoshop refuse the file;
+        // Photoshop keeps it in the sheet mask array (slot 25).
+        for depth in [8, 16, 32] {
+            let p = pat(depth, true);
+            let mut block = write_pattern_block(std::slice::from_ref(&p)).unwrap();
+            let (slots, end) = vma_slots(&block, &p);
+            let written: Vec<usize> = slots.iter().enumerate().filter(|(_, s)| s.1).map(|(i, _)| i).collect();
+            assert_eq!((slots.len(), written), (26, vec![0, 1, 2, 25]), "{depth}-bit");
+            assert!(!block_has_user_mask(&block));
+            // The layout older PhotoCraft builds wrote still opens, and is detected.
+            block[slots[24].0..end].rotate_left(4);
+            let (slots, _) = vma_slots(&block, &p);
+            assert!(slots[24].1 && !slots[25].1);
+            assert!(block_has_user_mask(&block));
+            assert_eq!(parse_pattern_block(&block).unwrap(), vec![p]);
+        }
+        assert!(!block_has_user_mask(&write_pattern_block(&[pat(8, false)]).unwrap()));
+        for junk in [&[][..], &[0, 0, 0, 9, 1], &[0xff; 64]] {
+            assert!(!block_has_user_mask(junk));
         }
     }
 
@@ -730,6 +872,18 @@ mod tests {
     }
 
     #[test]
+    fn failed_pattern_block_keeps_partial_charge_for_the_next_block() {
+        let one = padded_gray_block(100);
+        let mut malformed = one.clone();
+        malformed.extend_from_slice(&100u32.to_be_bytes());
+        let mut budget = PatternBudget::with_decoded_limit(15_000);
+        assert!(parse_pattern_block_with(&malformed, &mut budget).is_err());
+        assert_eq!(budget.decoded_left(), 5_000);
+        assert!(parse_pattern_block_with(&one, &mut budget).is_err());
+        assert_eq!(budget.decoded_left(), 5_000);
+    }
+
+    #[test]
     fn padding_budget_is_shared_by_every_pattern_of_a_parse() {
         // Each pattern pads 100x100 = 10000 bytes; a 15000-byte budget fits one, not two. Before
         // the fix each pattern got a fresh allowance, so N tiny patterns committed N times the cap.
@@ -741,8 +895,9 @@ mod tests {
         let two = [one.clone(), one.clone()].concat();
         let mut budget = PatternBudget::with_decoded_limit(15_000);
         assert!(matches!(parse_pattern_block_with(&two, &mut budget), Err(PsdError::LimitExceeded(_))));
-        // A failed parse keeps nothing, so it charges nothing.
-        assert_eq!(budget.decoded_left(), 15_000);
+        // Charges are monotonic: the first pattern's 10000 bytes stay charged even when the second
+        // record fails.
+        assert_eq!(budget.decoded_left(), 5_000);
 
         // Two blocks of one document share a budget too.
         let mut budget = PatternBudget::with_decoded_limit(15_000);

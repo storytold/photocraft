@@ -799,6 +799,7 @@
 	Split Warp Vertically	Bagi Warp Vertikal
 	Statistics…	Statistik…
 	Refine Strokes	Goresan penyempurnaan
+	Edits	Suntingan
 # Counted status and panel messages
 @plural	Exported {n} swatch to {file}|Exported {n} swatches to {file}	{n} swatch diekspor ke {file}
 @plural	Imported {n} swatch from {file}|Imported {n} swatches from {file}	{n} swatch diimpor dari {file}
@@ -2186,6 +2187,11 @@
 	No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.	Tidak ada path untuk dibuat seleksi: gambar dengan alat Pen atau pilih salah satu di panel Path.
 	Cancel opening	Batalkan pembukaan
 	Cancelled opening {name}	Pembukaan {name} dibatalkan
+	Damaged Photoshop document	Dokumen Photoshop rusak
+	The document “{name}” may be damaged.	Dokumen “{name}” mungkin rusak.
+	Some layers, pixels or masks could not be read. Do you want to continue opening it?	Beberapa layer, piksel, atau mask tidak dapat dibaca. Lanjutkan membukanya?
+	If you continue, saving over the original may permanently discard unreadable data. Save a copy to keep the original.	Jika Anda melanjutkan, menyimpan di atas file asli dapat membuang data yang tidak terbaca secara permanen. Simpan salinan untuk mempertahankan file asli.
+	Continue	Lanjutkan
 	The document “{name}” does not have an embedded {mode} profile.	Dokumen “{name}” tidak memiliki profil {mode} tertanam.
 	The document “{name}” has an embedded color profile that does not match the current {mode} working space.	Dokumen “{name}” memiliki profil warna tertanam yang tidak cocok dengan working space {mode} saat ini.
 	Working: {working}	Working space: {working}
@@ -3244,6 +3250,19 @@ curves	Smooth	Haluskan
 	Sent to {printer}	Dikirim ke {printer}
 	set in Print Settings…	diatur di Pengaturan Cetak…
 	ICO is limited to 256 × 256 pixels	ICO dibatasi hingga 256 × 256 piksel
+# PhotoCraft release checks.
+	Check for Updates…	Periksa Pembaruan…
+	PhotoCraft Updates	Pembaruan PhotoCraft
+	Checking for updates…	Memeriksa pembaruan…
+	Open the release page to choose an installer for your system.	Buka halaman rilis untuk memilih penginstal bagi sistem Anda.
+	Open Download Page	Buka Halaman Unduhan
+	PhotoCraft is up to date.	PhotoCraft sudah versi terbaru.
+	Could not check for updates.	Tidak dapat memeriksa pembaruan.
+	Updates have not been checked yet.	Pembaruan belum diperiksa.
+	Check Again	Periksa Lagi
+	Automatically Check for Updates	Periksa Pembaruan Secara Otomatis
+	Installed version: {version}	Versi terpasang: {version}
+	PhotoCraft {version} is available.	PhotoCraft {version} tersedia.
 # History panel › History Brush source (#2966)
 	Paints from the History panel's source state	Melukis dari status sumber panel Riwayat
 	Sets the source for the history brush	Menetapkan sumber untuk kuas riwayat
@@ -3376,6 +3395,14 @@ curves	Smooth	Haluskan
 
 # Graphics Adapter preference (#1885)
 	GPU adapter	Adaptor GPU
+
+# Styles panel: Import / Export Styles (.asl)
+	Import Styles…	Impor Gaya…
+	Export Selected Styles…	Ekspor Gaya Terpilih…
+	Export Styles…	Ekspor Gaya…
+	{file} is not a style library (.asl)	{file} bukan pustaka gaya (.asl)
+@plural	Imported {n} style from {file}|Imported {n} styles from {file}	{n} gaya diimpor dari {file}
+@plural	Exported {n} style to {file}|Exported {n} styles to {file}	{n} gaya diekspor ke {file}
 # Actions: a step dialog holds a suspended recording (#7365)
 	Confirm or cancel the open action step dialog first	Konfirmasi atau batalkan dulu dialog langkah tindakan yang terbuka
 	Pro Medium Gray	Pro Abu-abu Sedang
@@ -3384,14 +3411,33 @@ curves	Smooth	Haluskan
 	Pro Light Gray	Pro Abu-abu Terang
 	Pro Light	Pro Terang
 	Resize Windows to Fit	Ubah ukuran jendela agar pas
-
 	EXR	EXR
-
 # Paragraph direction (TYPE-218-2)
 	Automatic paragraph direction	Arah paragraf otomatis
 	Left-to-right paragraph direction	Arah paragraf kiri ke kanan
 	Right-to-left paragraph direction	Arah paragraf kanan ke kiri
 	Not rendered: this adjustment ({key}) is kept as imported.	Tidak dirender: penyesuaian ini ({key}) disimpan seperti saat diimpor.
-
 # Print preview image (#8236)
 	Print preview image	Print preview image
+# Color panel menu: modes, copy commands and colour ramps (#6000)
+	Hue Cube	Kubus Hue
+	Brightness Cube	Kubus Kecerahan
+	Color Wheel	Roda Warna
+	RGB Sliders	Slider RGB
+	HSB Sliders	Slider HSB
+	CMYK Sliders	Slider CMYK
+	Lab Sliders	Slider Lab
+	Web Color Sliders	Slider Warna Web
+	Copy Color as HTML	Salin Warna sebagai HTML
+	Copy Color's Hex Code	Salin Kode Hex Warna
+	RGB Spectrum	Spektrum RGB
+	CMYK Spectrum	Spektrum CMYK
+	Grayscale Ramp	Gradasi Grayscale
+	Current Colors	Warna Saat Ini
+	Make Ramp Web Safe	Jadikan Gradasi Aman untuk Web
+
+# Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
+	Color Table	Tabel Warna
+	Gamma	Gamma
+	Profile	Profil
+	Target	Target
