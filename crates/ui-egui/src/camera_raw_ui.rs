@@ -647,6 +647,10 @@ fn change_balance(app: &mut PhotocraftApp, balance: RawWhiteBalance) -> Result<V
             photocraft_engine::jobs::OpenSource::Path(p) => {
                 std::sync::Arc::new(std::fs::read(p).map_err(|e| photocraft_engine::EngineError::Other(e.to_string()))?)
             }
+            #[cfg(target_arch = "wasm32")]
+            photocraft_engine::jobs::OpenSource::Path(_) => {
+                return Err(photocraft_engine::EngineError::Other("RAW file paths are unavailable in the browser; open the file as bytes".into()));
+            }
         };
         let tuning = photocraft_io::raw::RawTuning { white_balance: balance, demosaic, ..Default::default() };
         photocraft_io::raw::import_raw_tuned(&name, &bytes, &tuning).map_err(|e| photocraft_engine::EngineError::Other(e.to_string()))

@@ -35,6 +35,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         with:
           cache-on-failure: true
+          cache-workspace-crates: true
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Test RAW development
@@ -64,7 +65,13 @@ jobs:
           New-Item -ItemType Directory -Force PhotoCraft-Bilanciamento/PhotoCraftData | Out-Null
           Copy-Item target/release/photocraft.exe PhotoCraft-Bilanciamento/PhotoCraft.exe
           Copy-Item docs/custom-white-balance.md PhotoCraft-Bilanciamento/LEGGIMI.md
-          Copy-Item LICENSE-MIT, LICENSE-APACHE, NOTICE PhotoCraft-Bilanciamento/
+          Copy-Item LICENSE-MIT, LICENSE-APACHE, NOTICE, ATTRIBUTION.md PhotoCraft-Bilanciamento/
+          Get-ChildItem assets, crates -Recurse -File | Where-Object { $_.Name -match '^(LICENSE|OFL)' } | ForEach-Object {
+            $relative = [System.IO.Path]::GetRelativePath((Get-Location).Path, $_.FullName)
+            $destination = Join-Path 'PhotoCraft-Bilanciamento' $relative
+            New-Item -ItemType Directory -Force (Split-Path $destination) | Out-Null
+            Copy-Item $_.FullName $destination
+          }
           Set-Content -Encoding utf8 PhotoCraft-Bilanciamento/PhotoCraftData/portable.txt 'Impostazioni della versione di prova.'
           git rev-parse HEAD | Set-Content PhotoCraft-Bilanciamento/COMMIT.txt
       - name: Upload Windows app
