@@ -93,7 +93,7 @@ pub fn close_for_shortcut(ctx: &egui::Context) -> bool {
     let typing = ctx.text_edit_focused();
     let shortcut = ctx.input(|i| {
         i.events.iter().any(
-            |e| matches!(e, Event::Key { key, pressed: true, modifiers, .. } if is_command_key(*key, *modifiers) && !(typing && is_text_editing_key(*key))),
+            |e| matches!(e, Event::Key { key, pressed: true, modifiers, .. } if is_command_key(*key, *modifiers) && !(typing && is_text_editing_key(*key, *modifiers))),
         )
     });
     if !(menu || list) || !shortcut {
@@ -132,9 +132,11 @@ fn is_command_key(key: Key, mods: Modifiers) -> bool {
 }
 
 /// A key a focused text field uses with ⌘ / Ctrl: select all, copy, cut, paste, undo and redo,
-/// and caret movement and deletion by word or line.
-fn is_text_editing_key(key: Key) -> bool {
-    matches!(
+/// and caret movement and deletion by word or line. On macOS, Control (not ⌘) also gives egui's
+/// Emacs keys to the field (Control+W deletes a word, Control+E goes to the end of the line);
+/// where Ctrl is the command key (Windows, Linux) Ctrl+W, Ctrl+K… stay Photoshop's shortcuts.
+fn is_text_editing_key(key: Key, mods: Modifiers) -> bool {
+    let editing = matches!(
         key,
         Key::A
             | Key::C
@@ -150,7 +152,9 @@ fn is_text_editing_key(key: Key) -> bool {
             | Key::End
             | Key::Backspace
             | Key::Delete
-    )
+    );
+    let emacs = mods.ctrl && !mods.command && matches!(key, Key::H | Key::K | Key::U | Key::W | Key::P | Key::N | Key::B | Key::F | Key::E);
+    editing || emacs
 }
 
 /// The mnemonic a key press stands for: the letter or digit of a plain key.
@@ -508,6 +512,21 @@ impl Keys {
 
 #[cfg(test)]
 mod tests {
+    /// #9314 review: macOS's Control editing keys stay the field's; a Ctrl that is the command
+    /// key (Windows, Linux: Close, Preferences…) does not.
+    #[test]
+    fn control_editing_keys_are_text_keys_only_where_ctrl_is_not_the_command_key() {
+        use egui::{Key, Modifiers};
+        let mac_control = Modifiers { ctrl: true, ..Default::default() };
+        let windows_ctrl = Modifiers { ctrl: true, command: true, ..Default::default() };
+        for k in [Key::W, Key::H, Key::K, Key::U, Key::E] {
+            assert!(super::is_text_editing_key(k, mac_control), "{k:?}");
+            assert!(!super::is_text_editing_key(k, windows_ctrl), "{k:?}");
+        }
+        assert!(super::is_text_editing_key(Key::V, windows_ctrl) && super::is_text_editing_key(Key::V, Modifiers::COMMAND));
+        assert!(!super::is_text_editing_key(Key::Num1, Modifiers::COMMAND));
+    }
+
     use super::*;
 
     #[test]

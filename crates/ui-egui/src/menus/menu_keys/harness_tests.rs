@@ -433,6 +433,13 @@ fn a_command_shortcut_runs_from_the_help_search_field() {
     h.run_steps(3);
     assert!(is_open(&h.ctx), "⌘A edits the field and keeps Help open");
     assert!(h.state().session.active().unwrap().doc.selection.is_none(), "⌘A didn't select the canvas");
+    // macOS's Control (not ⌘) editing keys, which egui gives the field: Ctrl+W deletes a word.
+    let control = egui::Modifiers { ctrl: true, ..Default::default() };
+    for k in [egui::Key::W, egui::Key::H, egui::Key::K, egui::Key::U, egui::Key::E] {
+        h.key_press_modifiers(control, k);
+        h.run_steps(3);
+        assert!(is_open(&h.ctx), "Control+{k:?} edits the field and keeps Help open");
+    }
     h.state_mut().run("select.all", json!({})).unwrap();
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::D);
     h.run_steps(3);
