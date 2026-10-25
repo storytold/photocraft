@@ -17,6 +17,27 @@ use crate::tone::{self, HistSource};
 const PREFIX: &str = "image.adjustments.";
 const CURVE_PICKER: &str = "__curvePicker";
 const CURVE_PICKER_BASE: &str = "__curvePickerBase";
+/// Hue/Saturation: the colour range (`"reds"` … `"magentas"`) its armed eyedropper edits.
+const HUE_PICKER_RANGE: &str = "__huePickerRange";
+
+/// Hue/Saturation's eyedroppers (#9247): `(id, picker, tooltip, badge)`.
+pub(crate) const HUE_PICKERS: [(&str, photocraft_engine::adjust_params::HueEyedropper, &str, &str); 3] = [
+    ("sample", photocraft_engine::adjust_params::HueEyedropper::Sample, "Sample a color range", ""),
+    ("add", photocraft_engine::adjust_params::HueEyedropper::Add, "Add to sample", "+"),
+    ("subtract", photocraft_engine::adjust_params::HueEyedropper::Subtract, "Subtract from sample", "−"),
+];
+
+pub(crate) fn hue_picker(value: Option<&Value>) -> Option<photocraft_engine::adjust_params::HueEyedropper> {
+    let id = value.and_then(Value::as_str)?;
+    HUE_PICKERS.iter().find(|(k, ..)| *k == id).map(|(_, p, ..)| *p)
+}
+
+/// The colour range (`"reds"` …) of the Hue/Saturation editor whose state lives under `mem`, or
+/// `None` on Master (where Photoshop's eyedroppers are off).
+pub(crate) fn hue_range_shown(ctx: &egui::Context, mem: egui::Id) -> Option<&'static str> {
+    let range: usize = ctx.data(|d| d.get_temp(mem.with("hs-range"))).unwrap_or(0);
+    range.checked_sub(1).and_then(|i| photocraft_engine::adjust_params::HUE_RANGES.get(i)).copied()
+}
 
 fn picker(value: Option<&Value>) -> Option<photocraft_engine::adjust_params::CurvesEyedropper> {
     use photocraft_engine::adjust_params::CurvesEyedropper;
@@ -36,20 +57,56 @@ pub(crate) fn picker_supported(mode: photocraft_doc::ColorMode, eyedropper: phot
 /// The kind of an adjustment dialog with Set Black/Neutral Gray/White Point eyedroppers (Levels,
 /// Curves), if `fields` are one.
 fn picker_kind(fields: &Map<String, Value>) -> Option<&str> {
-    fields.get("__adjust").and_then(Value::as_str).filter(|k| matches!(*k, "levels" | "curves"))
+    fields.get("__adjust").and_then(Value::as_str).filter(|k| matches!(*k, "levels" | "curves" | "hueSaturation"))
 }
 
-/// Whether the top modal has a supported Levels or Curves eyedropper armed.
+/// Whether the top modal has a supported Levels, Curves or Hue/Saturation eyedropper armed.
 pub fn picker_armed(app: &PhotocraftApp) -> bool {
     let Some(dialog) = app.ui.dialogs.last().filter(|d| picker_kind(&d.fields).is_some()) else { return false };
+    if picker_kind(&dialog.fields) == Some("hueSaturation") {
+        let ranged = dialog.fields.get(HUE_PICKER_RANGE).and_then(Value::as_str).is_some();
+        return ranged && hue_picker(dialog.fields.get(CURVE_PICKER)).is_some() && app.session.active().is_some_and(|s| !adjust_editors::is_gray(s.doc.mode));
+    }
     let Some(eyedropper) = picker(dialog.fields.get(CURVE_PICKER)) else { return false };
     app.session.active().is_some_and(|s| picker_supported(s.doc.mode, eyedropper))
+}
+
+/// Hue/Saturation's eyedropper at document point (x, y): the dialog's colour range moves to, out
+/// to or in from the pixel's hue, starting from the current settings (the eyedroppers build on
+/// each other, as in Photoshop).
+fn sample_hue_at(app: &mut PhotocraftApp, x: f64, y: f64) -> bool {
+    let Some((id, op, range, base)) = app.ui.dialogs.last().and_then(|dialog| {
+        let op = hue_picker(dialog.fields.get(CURVE_PICKER))?;
+        let range = dialog.fields.get(HUE_PICKER_RANGE).and_then(Value::as_str)?;
+        let range = photocraft_engine::adjust_params::HUE_RANGES.iter().position(|k| *k == range)?;
+        Some((dialog.id, op, range, crate::filter_dialog::params_of(&dialog.fields)))
+    }) else {
+        return true;
+    };
+    let Some(mode) = app.session.active().map(|s| s.doc.mode) else { return true };
+    let Some(sample) = crate::canvas::composite_color(app, x, y) else { return true };
+    let params = match photocraft_engine::adjust_params::hue_saturation_eyedropper(&base, range, op, sample, mode) {
+        Ok(adjustment) => photocraft_engine::adjust_params::to_params(&adjustment),
+        Err(error) => {
+            app.ui.status = error.to_string();
+            return true;
+        }
+    };
+    let Some(dialog) = app.ui.dialog_mut(id) else { return true };
+    if let Value::Object(params) = params {
+        dialog.fields.retain(|key, _| key.starts_with("__"));
+        dialog.fields.extend(params);
+    }
+    true
 }
 
 /// Sample the committed merged document through the regular canvas sampler and update only the
 /// open Levels or Curves dialog. Returns true when an armed picker consumed the pointer event,
 /// even if the point was outside the image or transparent.
 pub fn sample_at(app: &mut PhotocraftApp, x: f64, y: f64) -> bool {
+    if app.ui.dialogs.last().and_then(|d| picker_kind(&d.fields)) == Some("hueSaturation") {
+        return picker_armed(app) && sample_hue_at(app, x, y);
+    }
     let Some((id, kind, eyedropper, base)) = app.ui.dialogs.last().and_then(|dialog| {
         let kind = picker_kind(&dialog.fields)?.to_string();
         let eyedropper = picker(dialog.fields.get(CURVE_PICKER))?;
@@ -181,6 +238,45 @@ pub(crate) fn picker_button(ui: &mut egui::Ui, selected: bool, enabled: bool, to
     ui.painter().circle_stroke(response.rect.right_bottom() - egui::vec2(5.5, 5.5), 3.5, egui::Stroke::new(1.0, tokens.field_border));
     response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, enabled, selected, tooltip));
     response
+}
+
+/// A Hue/Saturation eyedropper button: the pipette with its `badge` ("+", "−" or none).
+pub(crate) fn hue_picker_button(ui: &mut egui::Ui, selected: bool, enabled: bool, tooltip: &str, badge: &str) -> egui::Response {
+    let response = ui.add_enabled_ui(enabled, |ui| crate::icons::button(ui, "pipette", 28.0, selected, tooltip)).inner;
+    if !badge.is_empty() {
+        let tokens = crate::theme::Tokens::get(ui.ctx());
+        let color = if enabled { tokens.text } else { tokens.text_faint };
+        ui.painter().text(response.rect.right_bottom() - egui::vec2(5.0, 6.0), egui::Align2::CENTER_CENTER, badge, egui::FontId::proportional(12.0), color);
+    }
+    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, selected, tooltip));
+    response
+}
+
+/// Hue/Saturation's three eyedroppers in the dialog, on while a colour range is shown (`range`).
+fn hue_picker_controls(ui: &mut egui::Ui, fields: &mut Map<String, Value>, mode: photocraft_doc::ColorMode, range: Option<&str>) {
+    let colorize = fields.get("colorize").and_then(Value::as_bool).unwrap_or(false);
+    let enabled = range.is_some() && !colorize && !adjust_editors::is_gray(mode);
+    let current = hue_picker(fields.get(CURVE_PICKER)).filter(|_| enabled);
+    let mut chosen = None;
+    ui.horizontal(|ui| {
+        for (id, op, label, badge) in HUE_PICKERS {
+            if hue_picker_button(ui, current == Some(op), enabled, tl!(label), badge).clicked() {
+                chosen = Some(id);
+            }
+        }
+    });
+    match (enabled, range) {
+        (true, Some(r)) => {
+            if let Some(id) = chosen {
+                fields.insert(CURVE_PICKER.into(), json!(id));
+            }
+            fields.insert(HUE_PICKER_RANGE.into(), json!(r));
+        }
+        _ => {
+            fields.remove(CURVE_PICKER);
+            fields.remove(HUE_PICKER_RANGE);
+        }
+    }
 }
 
 fn picker_controls(ui: &mut egui::Ui, fields: &mut Map<String, Value>, mode: photocraft_doc::ColorMode) {
@@ -331,6 +427,11 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String,
     let mode = curve_mode(app, &kind);
     if matches!(kind.as_str(), "levels" | "curves") {
         picker_controls(ui, fields, mode);
+        ui.add_space(4.0);
+    }
+    if kind == "hueSaturation" {
+        let range = hue_range_shown(ui.ctx(), dialog_mem(&kind));
+        hue_picker_controls(ui, fields, mode, range);
         ui.add_space(4.0);
     }
     let mut values = crate::filter_dialog::params_of(fields);

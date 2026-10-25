@@ -912,3 +912,42 @@ fn row_values_round_to_their_own_decimals() {
     assert!((row_value(1.234, 0.01, 9.99, None) - 1.23).abs() < 1e-6, "small ranges keep two decimals");
     assert!(row_value(f32::NAN, -20.0, 20.0, Some(u32::MAX)).is_nan(), "no panic on odd input");
 }
+
+/// #9247: the Properties panel of a Hue/Saturation layer has Photoshop's three colour range
+/// eyedroppers, off on Master. With Sample armed on Reds, a click on the image centres the range
+/// on that pixel's hue, one history step; a gray pixel is refused.
+#[test]
+fn hue_saturation_properties_eyedroppers_sample_a_range() {
+    use egui_kittest::kittest::NodeT;
+    let mut h = app_harness("hueSaturation", "rgb", 8);
+    let (id, _) = layer(&h);
+    let disabled = |h: &Harness<'_, PhotocraftApp>, label: &str| h.get_by_label(label).accesskit_node().is_disabled();
+    for label in ["Sample a color range", "Add to sample", "Subtract from sample"] {
+        assert!(disabled(&h, label), "{label}: off on Master");
+    }
+    h.ctx.data_mut(|d| d.insert_temp(crate::adjust_editors::layer_mem(id).with("hs-range"), 1usize));
+    h.run_steps(3);
+    assert!(!disabled(&h, "Sample a color range"), "on with Reds shown");
+    let steps = h.state().session.active().unwrap().history.past_len();
+    h.get_by_label("Sample a color range").click();
+    h.run_steps(2);
+    assert!(crate::layer_picker::armed(h.state()).is_some(), "armed");
+    // The left half is #6a3020, a hue of 13°: Reds become 13° ± 15°, fading over 30°.
+    let at = doc_on_screen(&h, 10.0, 10.0);
+    click(&mut h, at);
+    let reds = |h: &Harness<'_, PhotocraftApp>| match layer(h).1 {
+        Adjustment::HueSaturation { ranges, .. } => ranges[0].bounds,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(reds(&h), [-32.0, -2.0, 28.0, 58.0]);
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1, "one history step");
+    // The right half is white: no hue, refused with a status message, nothing changes.
+    let before = reds(&h);
+    let at = doc_on_screen(&h, 80.0, 10.0);
+    click(&mut h, at);
+    assert_eq!(reds(&h), before);
+    assert!(h.state().ui.status.contains("gray"), "{}", h.state().ui.status);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert!(h.state().ui.layer_picker.is_none(), "Esc disarms");
+}

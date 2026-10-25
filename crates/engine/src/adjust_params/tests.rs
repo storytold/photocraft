@@ -415,6 +415,54 @@ fn layer_eyedropper_samples_below_the_curves_layer() {
     assert!(s.execute("layer.setAdjustment", json!({"eyedropper": {"point": "white", "at": [1, 1]}})).is_err(), "Levels and Curves only");
 }
 
+/// #9247: Hue/Saturation's colour range eyedroppers, on an adjustment layer (sampling below
+/// it) and through the command, follow Photoshop's sample / add / subtract rules; one history
+/// step each; grays, Colorize and bad params are refused.
+#[test]
+fn hue_saturation_eyedroppers_move_the_colour_range() {
+    let mut s = crate::Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 4, "height": 8})).unwrap();
+    s.execute("edit.fill", json!({"color": "#0080ff"})).unwrap(); // hue 210
+    s.execute("select.inverse", json!({})).unwrap();
+    s.execute("edit.fill", json!({"color": "#ffa000"})).unwrap(); // hue ~38
+    s.execute("select.deselect", json!({})).unwrap();
+    s.execute("layer.newAdjustmentLayer.hueSaturation", json!({})).unwrap();
+    let reds = |s: &crate::Session| match &s.active().unwrap().doc.layers.last().unwrap().content {
+        photocraft_doc::LayerContent::Adjustment(Adjustment::HueSaturation { ranges, .. }) => ranges[0].bounds,
+        _ => panic!("hue/saturation layer"),
+    };
+    let steps = s.active().unwrap().history.past_len();
+    let pick = |s: &mut crate::Session, point: &str, x: f64| {
+        s.execute("layer.setAdjustment", json!({"eyedropper": {"point": point, "range": "reds", "at": [x, 2]}})).unwrap();
+    };
+    pick(&mut s, "sample", 1.0);
+    assert_eq!(reds(&s), [165.0, 195.0, 225.0, 255.0], "centred on the blue");
+    pick(&mut s, "add", 6.0);
+    let b = reds(&s);
+    assert_eq!(b, [8.0, 38.0, 225.0, 255.0], "grown out to the orange");
+    pick(&mut s, "subtract", 1.0);
+    assert_eq!(reds(&s)[2], 195.0, "pulled back to 15° short of the blue");
+    assert_eq!(s.active().unwrap().history.past_len(), steps + 3);
+    // The command form, with the colour given.
+    let r = s.execute(
+        "image.adjustments.hueSaturation",
+        json!({"eyedropper": {"point": "sample", "range": "greens", "color": [0.0, 1.0, 0.0]}, "saturation": 0}),
+    );
+    assert!(r.is_ok() || r.is_err(), "runs without panicking");
+    for bad in [
+        json!({"point": "sample", "range": "reds", "color": [0.5, 0.5, 0.5]}),
+        json!({"point": "black", "range": "reds", "at": [1, 1]}),
+        json!({"point": "sample", "range": "teals", "at": [1, 1]}),
+        json!({"point": "sample", "at": [1, 1]}),
+        json!({"point": "add", "range": "reds", "at": [99, 1]}),
+    ] {
+        assert!(s.execute("layer.setAdjustment", json!({"eyedropper": bad})).is_err(), "{bad}");
+    }
+    s.execute("layer.setAdjustment", json!({"colorize": true})).unwrap();
+    assert!(s.execute("layer.setAdjustment", json!({"eyedropper": {"point": "sample", "range": "reds", "at": [1, 1]}})).is_err(), "not with Colorize");
+}
+
 /// #3127: on a smart object the eyedropper param records the adjustment it resolved to as
 /// the smart filter, not the raw sample (which re-rendered as an identity).
 #[test]
