@@ -31,11 +31,16 @@ fn harness_with(preview: FontPreview) -> Harness<'static, State> {
 }
 
 fn harness_with_recents(preview: FontPreview, recents: Vec<String>) -> Harness<'static, State> {
+    harness_scaled(preview, recents, 1.0)
+}
+
+/// A harness at a display scale: `pixels_per_point`.
+fn harness_scaled(preview: FontPreview, recents: Vec<String>, pixels_per_point: f32) -> Harness<'static, State> {
     // Enough families that the unfiltered menu hits its maximum height and scrolls.
     let mut families: Vec<String> = (0..60).map(|i| format!("Family {i:02}")).collect();
     families.push("Zeta Sans".into());
     let state = State { current: "Family 00".into(), families, button: egui::Id::NULL, popup: egui::Id::NULL, preview, recents };
-    let mut h = Harness::builder().with_size(vec2(600.0, 900.0)).with_max_steps(SETTLE_STEPS).build_ui_state(
+    let mut h = Harness::builder().with_size(vec2(600.0, 900.0)).with_pixels_per_point(pixels_per_point).with_max_steps(SETTLE_STEPS).build_ui_state(
         |ui, s: &mut State| {
             s.button = ui.make_persistent_id(egui::IdSalt::new("type-font"));
             s.popup = s.button.with("popup");
@@ -93,6 +98,32 @@ fn hovering_a_font_row_sets_preview_and_leaving_clears_it() {
     h.hover_at(search);
     h.run();
     assert!(h.ctx.data(|d| d.get_temp::<String>(hover_id)).is_none());
+}
+
+/// #9290: at a fractional display scale the open menu keeps its width from frame to frame (it
+/// grew by a pixel every frame), and its rows are as wide as at scale 1.
+#[test]
+fn open_menu_keeps_its_width_at_a_fractional_display_scale() {
+    let row_width = |h: &Harness<'static, State>| h.get_by_label("Family 02").rect().width();
+    let mut reference = harness();
+    crate::PhotocraftApp::setup_context(&reference.ctx, crate::theme::ThemeKind::ALL[0]);
+    reference.run();
+    open(&mut reference);
+    reference.run();
+    let expected_row = row_width(&reference);
+
+    let mut h = harness_scaled(FontPreview::Medium, Vec::new(), 1.2);
+    crate::PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h.run();
+    open(&mut h);
+    h.run();
+    let mut widths = Vec::new();
+    for _ in 0..8 {
+        widths.push(popup_rect(&h).expect("font menu open").width());
+        h.run();
+    }
+    assert!(widths.iter().all(|w| (w - widths[0]).abs() < 0.01), "menu widths at scale 1.2, frame by frame: {widths:?}");
+    assert!((row_width(&h) - expected_row).abs() < 0.01, "row width {} at scale 1.2, {expected_row} at scale 1", row_width(&h));
 }
 
 /// #7406: hovering a font highlights its row without moving anything: the other rows keep
