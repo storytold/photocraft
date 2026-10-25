@@ -854,7 +854,7 @@ fn build() -> Vec<CommandSpec> {
             "Adjustment Properties",
             [],
             None,
-            r##"{"layer":id?, …params of that adjustment kind} (Levels, Curves: "eyedropper":{"point":"black|gray|white","at":[x,y],"size":1..101=1} or {"point",…,"color":[r,g,b] 0..1} = the Properties panel's Set Black/Neutral Gray/White Point, sampling the image below the layer, RGB and Grayscale (no gray) only; Hue/Saturation: "eyedropper":{"point":"sample|add|subtract","range":"reds…magentas","at":[x,y],"size":1..101=1} or {"point",…,"color":[r,g,b] 0..1} = its colour range eyedroppers)"##,
+            r##"{"layer":id?, …params of that adjustment kind} (Levels, Curves: "eyedropper":{"point":"black|gray|white","at":[x,y],"size":1..101=1} or {"point",…,"color":[r,g,b] 0..1} = the Properties panel's Set Black/Neutral Gray/White Point, sampling the image below the layer, RGB and Grayscale (no gray) only; Hue/Saturation: "eyedropper":{"point":"sample|add|subtract","range":"reds…magentas","at":[x,y],"size":1..101=1} or {"point",…,"color":[r,g,b] 0..1} = its colour range eyedroppers; not with Colorize on, in Grayscale, Duotone or Bitmap documents, or for a gray sample (RGB spread below 1/255))"##,
             has_layer,
             |s, p| {
                 let id = layer_param(s, p)?;
@@ -1113,7 +1113,7 @@ fn build() -> Vec<CommandSpec> {
         (
             "hueSaturation",
             "Hue/Saturation…",
-            r##"{"hue":-180..180=0,"saturation":-100..100=0,"lightness":-100..100=0,"colorize":bool=false,"reds":json,"yellows":json,"greens":json,"cyans":json,"blues":json,"magentas":json,"eyedropper":json} (per range {"hue","saturation","lightness","range":[4 hue degrees]}; colorize: hue 0..360, saturation 0..100; eyedropper = the colour range eyedroppers {"point":"sample|add|subtract","range":"reds|yellows|greens|cyans|blues|magentas","at":[x,y],"size":1..101=1} or {…,"color":[r,g,b] 0..1}: sample centres the range on the colour's hue, add grows it out to it, subtract shrinks it to 15° past it; not with colorize or in Grayscale)"##,
+            r##"{"hue":-180..180=0,"saturation":-100..100=0,"lightness":-100..100=0,"colorize":bool=false,"reds":json,"yellows":json,"greens":json,"cyans":json,"blues":json,"magentas":json,"eyedropper":json} (per range {"hue","saturation","lightness","range":[4 hue degrees]}; colorize: hue 0..360, saturation 0..100; eyedropper = the colour range eyedroppers {"point":"sample|add|subtract","range":"reds|yellows|greens|cyans|blues|magentas","at":[x,y],"size":1..101=1} or {…,"color":[r,g,b] 0..1}: sample centres the range on the colour's hue, add grows it out to it, subtract shrinks it to 15° past it; not with Colorize on, in Grayscale, Duotone or Bitmap documents, or for a gray sample (RGB spread below 1/255))"##,
         ),
         (
             "colorBalance",
