@@ -149,3 +149,36 @@ fn expanded_properties_replay_like_direct_edits_at_every_depth() {
         }
     }
 }
+
+/// A layers array must never become an active-layer Set, for single or compound properties.
+#[test]
+fn multiple_layer_targets_are_rejected_instead_of_exporting_the_active_layer() {
+    for depth in [8, 16, 32] {
+        for mut params in [json!({"opacity": 0.5}), json!({"opacity": 0.5, "blend": "Multiply"})] {
+            let mut session = Session::new();
+            session.execute("file.new", json!({"width": 2, "height": 2, "depth": depth})).unwrap();
+            let a = session.execute("layer.new.layer", json!({"name": "First"})).unwrap()["layer"].as_u64().unwrap();
+            let b = session.execute("layer.new.layer", json!({"name": "Second"})).unwrap()["layer"].as_u64().unwrap();
+            let other = session.execute("layer.new.layer", json!({"name": "Other"})).unwrap()["layer"].as_u64().unwrap();
+            params["layers"] = json!([a, b]);
+            session.execute("layer.setProps", params.clone()).unwrap();
+            let doc = &session.active().unwrap().doc;
+            for id in [a, b] {
+                assert_eq!(doc.layer(photocraft_doc::LayerId(id)).unwrap().opacity, 0.5);
+            }
+            assert_eq!(doc.layer(photocraft_doc::LayerId(other)).unwrap().opacity, 1.0);
+            let action = Action::new("Multiple", vec![("layer.setProps".into(), params), ("select.inverse".into(), json!({}))]);
+            let error = export("Set", &[&action], &[], false).unwrap_err();
+            assert!(error.contains("step 1"), "{error}");
+            let (bytes, skipped) = export("Set", &[&action], &[], true).unwrap();
+            assert_eq!(skipped, [Skipped { action: "Multiple".into(), step: 0, id: "layer.setProps".into() }]);
+            let file = atn::parse(&bytes).unwrap();
+            assert_eq!(file.actions[0].items.len(), 1, "skip the complete source step");
+            assert_eq!(file.actions[0].items[0].event.id(), "Invs");
+        }
+    }
+    for target in [json!([]), json!("invalid"), json!([1, "invalid"])] {
+        assert!(export_item("layer.setProps", &json!({"layers": target, "opacity": 0.5}), "Set").is_none());
+    }
+    assert!(export_item("layer.setProps", &json!({"layers": null, "opacity": 0.5}), "Set").is_some(), "null retains single-layer semantics");
+}
