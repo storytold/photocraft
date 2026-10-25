@@ -212,6 +212,8 @@ pub enum GraySurface {
     Alpha(usize),
     /// The Quick Mask.
     QuickMask,
+    /// The active smart object's filter mask (FILE-215-3).
+    FilterMask,
 }
 
 /// Isolated Curves channel for the active document, matching [`inject_target`].
@@ -246,6 +248,7 @@ pub fn isolated_curve_channel_for(st: &DocState, layers_panel_mask: bool) -> Opt
             Some(IsolatedCurveChannel { name: "Quick Mask".into(), key: "", hist: 0, tint: false, translate: true, gray: Some(GraySurface::QuickMask) })
         }
         ChannelTarget::LayerMask => layer_mask_curve_channel(st),
+        ChannelTarget::Composite if crate::mask_view_cmds::current(st).is_some_and(|v| v.filter) => filter_mask_curve_channel(st),
         ChannelTarget::Composite if crate::mask_view_cmds::current(st).is_some() || layers_panel_mask => layer_mask_curve_channel(st),
         _ => None,
     }
@@ -256,6 +259,15 @@ fn layer_mask_curve_channel(st: &DocState) -> Option<IsolatedCurveChannel> {
     layer.mask.as_ref()?;
     let name = format!("{} Mask", layer.name);
     Some(IsolatedCurveChannel { name, key: "", hist: 0, tint: false, translate: false, gray: Some(GraySurface::LayerMask) })
+}
+
+/// The Curves target when the active smart object's filter mask is targeted (its thumbnail on the
+/// Smart Filters row, FILE-215-3): a gray plane, though the mask may not exist until the first edit.
+pub fn filter_mask_curve_channel(st: &DocState) -> Option<IsolatedCurveChannel> {
+    let layer = st.active_layer.and_then(|id| st.doc.layer(id))?;
+    crate::smart_cmds::filter_mask_paintable(layer).ok()?;
+    let name = format!("{} Filter Mask", layer.name);
+    Some(IsolatedCurveChannel { name, key: "", hist: 0, tint: false, translate: false, gray: Some(GraySurface::FilterMask) })
 }
 
 fn edit_mode(doc: &Document) -> ColorMode {
@@ -698,8 +710,11 @@ fn edits_mask(id: &str) -> bool {
 /// layer needs a mask. None when another precondition applies.
 pub(crate) fn mask_target_enabled(s: &Session, id: &str, p: &Value) -> Option<std::result::Result<(), String>> {
     match target_of(p) {
-        // Every pixel command that follows the target paints, fills or filters the filter mask.
-        Target::FilterMask if routed(id) => Some(crate::active_layer_of(s).and_then(crate::smart_cmds::filter_mask_paintable)),
+        // The commands that paint, fill, filter or adjust the filter mask need a smart object with
+        // smart filters, not a pixel layer. Paste keeps its own check (something to paste).
+        Target::FilterMask if follows_filter_mask(id) && !PASTE_IDS.contains(&id) => {
+            Some(crate::active_layer_of(s).and_then(crate::smart_cmds::filter_mask_paintable))
+        }
         Target::Mask if edits_mask(id) => {
             Some(crate::active_layer_of(s).and_then(|l| if l.mask.is_some() { Ok(()) } else { Err("the active layer has no layer mask".into()) }))
         }
@@ -715,15 +730,67 @@ pub fn follows_target(id: &str) -> bool {
     routed(id) || id == "select.float" || id == "layer.translate"
 }
 
+/// Whether command `id` edits a smart object's targeted filter mask (`"target":"filterMask"`):
+/// every routed command but those that act on the smart object itself while its filter mask is
+/// targeted (Edit › Transform, Apply Image, Convert for Smart Filters, Last Filter, Liquify, the
+/// lens filters and Vanishing Point, which add a smart filter, the render filters that make a new
+/// layer, and Desaturate), so neither the shell nor the engine sends those the filter mask.
+pub fn follows_filter_mask(id: &str) -> bool {
+    routed(id)
+        && !id.starts_with("edit.transform.")
+        && !matches!(
+            id,
+            "image.applyImage"
+                | "image.adjustments.desaturate"
+                | "filter.vanishingPoint"
+                | "filter.render.flame"
+                | "filter.render.tree"
+                | "filter.render.pictureFrame"
+                | "filter.convertForSmartFilters"
+                | "filter.lastFilter"
+                | crate::distort_cmds::LIQUIFY
+                | crate::lens_cmds::LENS
+                | crate::lens_cmds::WIDE
+                | crate::lens_cmds::RAW
+        )
+}
+
+/// The paint and retouch tools that follow the targeted channel or mask.
+const PAINT_IDS: &[&str] = &[
+    "paint.stroke",
+    "paint.pencil",
+    "paint.bucket",
+    "paint.gradient",
+    "paint.mixerBrush",
+    "paint.cloneStamp",
+    "paint.patternStamp",
+    "paint.healingBrush",
+    "paint.spotHealing",
+    "paint.dodge",
+    "paint.burn",
+    "paint.sponge",
+    "paint.blur",
+    "paint.sharpen",
+    "paint.smudge",
+    "paint.historyBrush",
+    "paint.redEye",
+    "paint.remove",
+];
+
+/// Pasting into a targeted mask or channel (#1035).
+const PASTE_IDS: &[&str] = &["edit.paste", "edit.pasteSpecial.pasteInPlace", "edit.pasteSpecial.pasteInto", "edit.pasteSpecial.pasteOutside"];
+
 /// Commands whose target follows the Channels panel.
 pub(crate) fn routed(id: &str) -> bool {
     id.starts_with("filter.")
         || id == "plugin.run"
         || id.starts_with("image.adjustments.")
-        || matches!(id, "paint.stroke" | "paint.pencil" | "paint.bucket" | "paint.gradient" | "paint.mixerBrush" | "edit.fill" | "image.applyImage")
+        || matches!(id, "edit.fill" | "image.applyImage")
         || crate::fill_key_cmds::IDS.contains(&id)
+        || PAINT_IDS.contains(&id)
         // Pasting into a targeted mask or channel (#1035); Copy takes a targeted mask (#2928).
-        || matches!(id, "edit.copy" | "edit.paste" | "edit.pasteSpecial.pasteInPlace" | "edit.pasteSpecial.pasteInto" | "edit.pasteSpecial.pasteOutside")
+        || id == "edit.copy"
+        || PASTE_IDS.contains(&id)
         // Edit › Transform › Rotate/Flip turn a targeted mask or channel (#2835).
         || matches!(
             id,
@@ -732,22 +799,6 @@ pub(crate) fn routed(id: &str) -> bool {
                 | "edit.transform.rotate90Ccw"
                 | "edit.transform.flipHorizontal"
                 | "edit.transform.flipVertical"
-        )
-        || matches!(
-            id,
-            "paint.cloneStamp"
-                | "paint.patternStamp"
-                | "paint.healingBrush"
-                | "paint.spotHealing"
-                | "paint.dodge"
-                | "paint.burn"
-                | "paint.sponge"
-                | "paint.blur"
-                | "paint.sharpen"
-                | "paint.smudge"
-                | "paint.historyBrush"
-                | "paint.redEye"
-                | "paint.remove"
         )
 }
 
@@ -762,7 +813,13 @@ pub(crate) fn inject_target(s: &Session, id: &str, params: Value) -> Value {
         ChannelTarget::Composite if st.doc.quick_mask.is_some() => json!("quickMask"),
         ChannelTarget::LayerMask => json!("mask"),
         // Viewing the active layer's mask (⌥-click): pixel commands edit the mask.
-        ChannelTarget::Composite if crate::mask_view_cmds::current(st).is_some_and(|v| v.filter) => json!("filterMask"),
+        // A shown filter mask takes only the commands that edit it; the rest act on the smart object.
+        ChannelTarget::Composite if crate::mask_view_cmds::current(st).is_some_and(|v| v.filter) => {
+            if !follows_filter_mask(id) {
+                return params;
+            }
+            json!("filterMask")
+        }
         ChannelTarget::Composite if crate::mask_view_cmds::current(st).is_some() => json!("mask"),
         _ => return params,
     };
@@ -775,10 +832,11 @@ pub(crate) fn inject_target(s: &Session, id: &str, params: Value) -> Value {
     }
 }
 
-/// The smart object whose filter mask a command with `params` edits (`"target":"filterMask"`):
-/// its `"layer"` param, else the active layer.
-pub(crate) fn filter_mask_layer(s: &Session, params: &Value) -> Option<LayerId> {
-    if target_of(params) != Target::FilterMask {
+/// The smart object whose filter mask command `id` with `params` edits (`"target":"filterMask"`):
+/// its `"layer"` param, else the active layer. None for a command that doesn't edit the filter
+/// mask, so moving the smart object doesn't re-render its filters.
+pub(crate) fn filter_mask_layer(s: &Session, id: &str, params: &Value) -> Option<LayerId> {
+    if target_of(params) != Target::FilterMask || !follows_filter_mask(id) {
         return None;
     }
     params.get("layer").and_then(Value::as_u64).map(LayerId).or_else(|| s.active()?.active_layer)

@@ -2599,8 +2599,9 @@ impl PhotocraftApp {
         if !photocraft_engine::channel_cmds::follows_target(id) || params.get("target").is_some() {
             return params;
         }
-        // A filter mask is painted, filled and filtered in place; it doesn't float.
-        let target = if self.filter_mask_targeted() && id != "select.float" {
+        // A filter mask is painted, filled and filtered in place; it doesn't float or move, and
+        // Edit › Transform, Apply Image and the dialog filters act on the smart object.
+        let target = if self.filter_mask_targeted() && photocraft_engine::channel_cmds::follows_filter_mask(id) {
             "filterMask"
         } else if self.layer_mask_targeted() {
             "mask"
@@ -2644,8 +2645,23 @@ impl PhotocraftApp {
         colors_off && !alpha_on
     }
 
-    /// Explicitly targeting a filter mask ends any conflicting mask view.
+    /// Targeting the pixels, the layer mask or the vector mask ends a shown filter mask (⌥-click
+    /// on its thumbnail): while it shows, [`Self::sync_mask_targets`] keeps the filter mask
+    /// targeted, so strokes would keep landing there.
+    pub(crate) fn end_filter_mask_view(&mut self) {
+        let Some(v) = self.session.active().and_then(photocraft_engine::mask_view_cmds::current).filter(|v| v.filter) else { return };
+        let off = serde_json::json!({"layer": v.layer.0, "mode": "off", "mask": "filter"});
+        if let Err(err) = self.session.execute(photocraft_engine::mask_view_cmds::ID, off) {
+            log::warn!("could not end the filter mask view: {err}");
+        }
+    }
+
+    /// Explicitly targeting a filter mask ends any conflicting mask view; untargeting it ends its
+    /// own view too.
     pub(crate) fn select_filter_mask_target(&mut self, layer: Option<u64>) {
+        if layer.is_none() {
+            self.end_filter_mask_view();
+        }
         if layer.is_some() {
             if let Some(st) = self.session.active_mut() {
                 if st.channel_view.layer_mask.is_some_and(|v| !v.filter || Some(v.layer.0) != layer) {

@@ -585,8 +585,20 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 let mask_target = bool_field(p, "maskTarget")?;
                 let updates_open = bool_field(p, "updatesOpen")?;
                 let vector_mask_target = bool_field(p, "vectorMaskTarget")?;
-                // Target the active smart object's filter mask (FILE-215-3).
+                // Target the active smart object's filter mask (FILE-215-3): it needs smart filters.
                 let filter_mask_target = bool_field(p, "filterMaskTarget")?;
+                if filter_mask_target == Some(true) {
+                    let st = app.session.active().ok_or("filterMaskTarget needs an open document")?;
+                    let l = st.active_layer.and_then(|id| st.doc.layer(id)).ok_or("filterMaskTarget needs an active layer")?;
+                    if !matches!(&l.content, photocraft_doc::LayerContent::Smart(sm) if !sm.smart_filters.is_empty()) {
+                        return Err("filterMaskTarget needs an active smart object with smart filters".into());
+                    }
+                    use photocraft_engine::channel_cmds::ChannelTarget;
+                    let composite = matches!(st.channel_view.target, ChannelTarget::Composite | ChannelTarget::LayerMask | ChannelTarget::VectorMask);
+                    if !composite || st.doc.quick_mask.is_some() {
+                        return Err("filterMaskTarget can't be set while a single channel or Quick Mask is targeted".into());
+                    }
+                }
                 let selection_mode = uint_field(p, "selectionMode")?;
                 let dock_tabs = merged_object(&app.ui.dock_tabs, p.get("dockTabs"), "dockTabs")?;
                 let dock = whole_object(&app.ui.dock, p.get("dock"), "dock")?;
@@ -747,6 +759,8 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                     app.ui.panels = v;
                 }
                 if let Some(m) = mask_target {
+                    app.end_filter_mask_view();
+                    app.ui.filter_mask_target = None;
                     app.ui.mask_target = m;
                     app.ui.properties_layer = None;
                     app.ui.vector_mask_target &= !m;
@@ -756,6 +770,8 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                     app.ui.updates_open = open;
                 }
                 if let Some(m) = vector_mask_target {
+                    app.end_filter_mask_view();
+                    app.ui.filter_mask_target = None;
                     app.ui.vector_mask_target = m;
                     app.ui.mask_target &= !m;
                     app.sync_mask_targets();
@@ -3334,5 +3350,72 @@ mod tests {
         assert_eq!(plain, egui::Modifiers::default(), "{plain:?}");
         let shift_alt = key_modifiers(&mut app, &ctx, json!({"key":"N","shift":true,"alt":true}));
         assert!(shift_alt.shift && shift_alt.alt && !shift_alt.command && !shift_alt.ctrl, "{shift_alt:?}");
+    }
+
+    /// FILE-215-3: `filterMaskTarget` on a layer without a filter mask is refused before anything
+    /// changes, so the layer mask stays targeted.
+    #[test]
+    fn ui_set_filter_mask_target_needs_a_smart_object_with_filters() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.run("edit.fill", json!({"contents": "color", "color": "#ff0000"})).unwrap();
+        app.run("layer.layerMask.revealAll", json!({})).unwrap();
+        assert_eq!(call(&mut app, &ctx, "ui.set", json!({"maskTarget": true}))["ok"], true);
+        let bad = call(&mut app, &ctx, "ui.set", json!({"filterMaskTarget": true}));
+        assert_eq!(bad["ok"], false, "{bad}");
+        assert!(app.ui.mask_target, "the layer mask stays targeted");
+        assert_eq!(app.ui.filter_mask_target, None);
+        // A smart object with smart filters takes it.
+        app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        app.run("filter.blur.gaussianBlur", json!({"radius": 2})).unwrap();
+        // Not while a single colour channel is targeted: nothing would end up targeted.
+        app.session.active_mut().unwrap().channel_view.target = photocraft_engine::channel_cmds::ChannelTarget::Color(0);
+        assert_eq!(call(&mut app, &ctx, "ui.set", json!({"filterMaskTarget": true}))["ok"], false);
+        app.session.active_mut().unwrap().channel_view.target = photocraft_engine::channel_cmds::ChannelTarget::Composite;
+        assert_eq!(call(&mut app, &ctx, "ui.set", json!({"filterMaskTarget": true}))["ok"], true);
+        assert!(app.filter_mask_targeted());
+        // Untargeting it ends its view, which would otherwise keep it targeted.
+        app.run("paint.stroke", json!({"points": [[4, 4]], "size": 4, "hardness": 1, "color": "#000000", "target": "filterMask"})).unwrap();
+        app.run("view.layerMask", json!({"mode": "gray", "mask": "filter"})).unwrap();
+        assert_eq!(call(&mut app, &ctx, "ui.set", json!({"filterMaskTarget": false}))["ok"], true);
+        assert!(!app.filter_mask_targeted());
+        assert!(photocraft_engine::mask_view_cmds::current(app.session.active().unwrap()).is_none());
+        // Targeting the pixels untargets it too.
+        assert_eq!(call(&mut app, &ctx, "ui.set", json!({"filterMaskTarget": true}))["ok"], true);
+        assert_eq!(call(&mut app, &ctx, "ui.set", json!({"maskTarget": false}))["ok"], true);
+        assert!(!app.filter_mask_targeted());
+        assert_eq!(crate::canvas::paint_target(&app), json!("pixels"));
+    }
+
+    /// FILE-215-3: with the filter mask shown (⌥-click its thumbnail), targeting the layer mask
+    /// ends that view, and the brush paints the layer mask.
+    #[test]
+    fn ui_set_mask_target_ends_a_filter_mask_view() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.run("edit.fill", json!({"contents": "color", "color": "#ff0000"})).unwrap();
+        app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        app.run("filter.blur.gaussianBlur", json!({"radius": 2})).unwrap();
+        app.run("layer.layerMask.revealAll", json!({})).unwrap();
+        app.run("paint.stroke", json!({"points": [[4, 4]], "size": 4, "hardness": 1, "color": "#000000", "target": "filterMask"})).unwrap();
+        app.run("view.layerMask", json!({"mode": "gray", "mask": "filter"})).unwrap();
+        app.sync_mask_targets();
+        assert!(app.filter_mask_targeted());
+        assert_eq!(call(&mut app, &ctx, "ui.set", json!({"maskTarget": true}))["ok"], true);
+        assert!(photocraft_engine::mask_view_cmds::current(app.session.active().unwrap()).is_none(), "the filter mask view ends");
+        assert!(app.layer_mask_targeted());
+        assert!(!app.filter_mask_targeted());
+        assert_eq!(crate::canvas::paint_target(&app), json!("mask"));
+        let target = crate::canvas::paint_target(&app);
+        app.run("paint.stroke", json!({"points": [[20, 20]], "size": 4, "hardness": 1, "color": "#000000", "target": target})).unwrap();
+        let st = app.session.active().unwrap();
+        let l = st.doc.layer(st.active_layer.unwrap()).unwrap();
+        assert_eq!(l.mask.as_ref().unwrap().value(20, 20), 0.0, "the stroke went into the layer mask");
+        let photocraft_doc::LayerContent::Smart(sm) = &l.content else { panic!("smart object") };
+        assert_eq!(sm.filter_mask.as_ref().unwrap().value(20, 20), 1.0, "not into the filter mask");
     }
 }

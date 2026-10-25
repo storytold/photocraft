@@ -801,4 +801,44 @@ mod tests {
         assert_eq!(smart(&app, doc).smart_filters.len(), 1);
         assert!(photocraft_compose::flatten(&shown).px == photocraft_compose::flatten(doc).px, "OK gives what the preview showed");
     }
+
+    /// FILE-215-3: with the filter mask targeted, Move and Edit › Transform act on the smart object
+    /// (no filter-mask target, so a move doesn't re-render the filters), and painting and filters
+    /// still edit the filter mask.
+    #[test]
+    fn only_filter_mask_edits_carry_the_filter_mask_target() {
+        let mut app = PhotocraftApp::new(Session::new(), Services::default());
+        app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.run("edit.fill", json!({"contents": "color", "color": "#ff0000"})).unwrap();
+        app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        app.run("filter.blur.gaussianBlur", json!({"radius": 2})).unwrap();
+        let id = app.session.active().unwrap().active_layer.unwrap();
+        app.select_filter_mask_target(Some(id.0));
+        assert!(app.filter_mask_targeted());
+        for cmd in [
+            "layer.translate",
+            "select.float",
+            "edit.transform.rotate180",
+            "filter.convertForSmartFilters",
+            "image.applyImage",
+            "filter.liquify",
+            "filter.lastFilter",
+            "image.adjustments.desaturate",
+            "filter.render.flame",
+        ] {
+            assert!(app.with_mask_target(cmd, json!({"dx": 1})).get("target").is_none(), "{cmd}");
+        }
+        for cmd in [
+            "paint.stroke",
+            "filter.blur.gaussianBlur",
+            "edit.fill",
+            "edit.paste",
+            "image.adjustments.invert",
+            "image.adjustments.equalize",
+            "filter.blur.average",
+        ] {
+            assert_eq!(app.with_mask_target(cmd, json!({}))["target"], "filterMask", "{cmd}");
+        }
+    }
 }

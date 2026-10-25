@@ -820,7 +820,7 @@ impl Session {
         let expand_new_fx = crate::commands::layer_panel_option(self, "expandNewEffects", true);
         self.coalesce_request = params.get("coalesce").and_then(Value::as_str).map(str::to_string);
         self.color_restrict = crate::channel_cmds::color_restriction(self, id, &run_params);
-        self.filter_mask_layer = crate::channel_cmds::filter_mask_layer(self, &run_params);
+        self.filter_mask_layer = crate::channel_cmds::filter_mask_layer(self, id, &run_params);
         self.jobs.spawn = background;
         // Commands this one runs on its own behalf journal after this mark (#3067).
         let nested_from = self.journal.len();

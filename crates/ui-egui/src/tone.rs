@@ -56,6 +56,7 @@ fn tag(source: HistSource, space: ToneSpace) -> u64 {
             photocraft_engine::channel_cmds::GraySurface::LayerMask => (3, layer.0),
             photocraft_engine::channel_cmds::GraySurface::Alpha(i) => (4, i as u64),
             photocraft_engine::channel_cmds::GraySurface::QuickMask => (5, layer.0),
+            photocraft_engine::channel_cmds::GraySurface::FilterMask => (6, layer.0),
         },
     };
     let s = match space {
@@ -96,6 +97,9 @@ pub fn compute_histograms(doc: &Document, source: HistSource, space: ToneSpace) 
                 photocraft_engine::channel_cmds::GraySurface::LayerMask => doc.layer(layer).and_then(|l| l.mask.as_ref()).map(|m| &m.surface),
                 photocraft_engine::channel_cmds::GraySurface::Alpha(i) => doc.channels.get(i).map(|c| &c.surface),
                 photocraft_engine::channel_cmds::GraySurface::QuickMask => doc.quick_mask.as_ref().map(|c| &c.surface),
+                photocraft_engine::channel_cmds::GraySurface::FilterMask => {
+                    doc.layer(layer).and_then(|l| photocraft_engine::mask_view_cmds::viewed_mask(l, true)).map(|m| &m.surface)
+                }
             };
             if let Some(s) = surf
                 && let Some(bin) = h.first_mut()
