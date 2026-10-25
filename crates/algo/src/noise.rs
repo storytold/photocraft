@@ -18,6 +18,17 @@ pub(crate) fn hash01(x: i32, y: i32, c: u32, seed: u32) -> f32 {
     (h >> 8) as f32 / (1u32 << 24) as f32
 }
 
+/// Smooth value noise in [0, 1).
+pub(crate) fn value_noise(x: f32, y: f32, seed: u32) -> f32 {
+    let (ix, iy) = (x.floor() as i32, y.floor() as i32);
+    let (tx, ty) = (x - ix as f32, y - iy as f32);
+    let (sx, sy) = (tx * tx * (3.0 - 2.0 * tx), ty * ty * (3.0 - 2.0 * ty));
+    let h = |a: i32, b: i32| hash01(a, b, 0, seed);
+    let top = h(ix, iy) + (h(ix + 1, iy) - h(ix, iy)) * sx;
+    let bot = h(ix, iy + 1) + (h(ix + 1, iy + 1) - h(ix, iy + 1)) * sx;
+    top + (bot - top) * sy
+}
+
 /// Amount 100 % spans ±50 % of the range (uniform); Gaussian uses the same
 /// amount as ~2σ.
 #[allow(clippy::too_many_arguments)]

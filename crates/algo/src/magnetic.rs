@@ -21,6 +21,8 @@ use std::f32::consts::{PI, SQRT_2};
 
 use photocraft_geom::Rect;
 
+use crate::content_aware::seg_dist2;
+
 /// Side of the cached pixel blocks (px).
 const BLOCK: i32 = 128;
 /// Blocks kept before the cache starts over (128² RGBA8 is 64 KiB, so at most 64 MiB).
@@ -407,7 +409,7 @@ fn corridor(area: Rect, guide: &[[f64; 2]], rad: f64) -> Vec<f32> {
         let r = Rect::new(lo(a[0], b[0]), lo(a[1], b[1]), hi(a[0], b[0]), hi(a[1], b[1])).intersect(&area);
         for y in r.y0..r.y1 {
             for x in r.x0..r.x1 {
-                let d2 = dist2_segment([x as f64 + 0.5, y as f64 + 0.5], a, b);
+                let d2 = seg_dist2([x as f64 + 0.5, y as f64 + 0.5], a, b);
                 if d2 <= r2
                     && let Some(v) = near.get_mut((y - area.y0) as usize * w + (x - area.x0) as usize)
                 {
@@ -564,7 +566,7 @@ pub fn simplify(p: &[[f64; 2]], tol: f64) -> Vec<[f64; 2]> {
         let (Some(&pa), Some(&pb)) = (p.get(a), p.get(b)) else { continue };
         let mut far = (0.0, a);
         for (k, q) in p.iter().enumerate().take(b).skip(a + 1) {
-            let d2 = dist2_segment(*q, pa, pb);
+            let d2 = seg_dist2(*q, pa, pb);
             if d2 > far.0 {
                 far = (d2, k);
             }
@@ -587,14 +589,6 @@ pub fn length(p: &[[f64; 2]]) -> f64 {
 
 fn dist(a: [f64; 2], b: [f64; 2]) -> f64 {
     (a[0] - b[0]).hypot(a[1] - b[1])
-}
-
-fn dist2_segment(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
-    let (vx, vy) = (b[0] - a[0], b[1] - a[1]);
-    let l2 = vx * vx + vy * vy;
-    let t = if l2 > 0.0 { (((p[0] - a[0]) * vx + (p[1] - a[1]) * vy) / l2).clamp(0.0, 1.0) } else { 0.0 };
-    let (dx, dy) = (p[0] - (a[0] + t * vx), p[1] - (a[1] + t * vy));
-    dx * dx + dy * dy
 }
 
 #[cfg(test)]
