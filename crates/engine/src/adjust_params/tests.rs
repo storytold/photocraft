@@ -444,12 +444,6 @@ fn hue_saturation_eyedroppers_move_the_colour_range() {
     pick(&mut s, "subtract", 1.0);
     assert_eq!(reds(&s)[2], 195.0, "pulled back to 15° short of the blue");
     assert_eq!(s.active().unwrap().history.past_len(), steps + 3);
-    // The command form, with the colour given.
-    let r = s.execute(
-        "image.adjustments.hueSaturation",
-        json!({"eyedropper": {"point": "sample", "range": "greens", "color": [0.0, 1.0, 0.0]}, "saturation": 0}),
-    );
-    assert!(r.is_ok() || r.is_err(), "runs without panicking");
     for bad in [
         json!({"point": "sample", "range": "reds", "color": [0.5, 0.5, 0.5]}),
         json!({"point": "black", "range": "reds", "at": [1, 1]}),
@@ -536,6 +530,40 @@ fn hue_range_sliders_stay_ordered() {
 }
 
 /// A colourful 16×16 document (`mode`, `depth`) for command tests.
+/// #9267 review: the destructive command with a given colour moves the range before applying.
+/// Sampling the green swatch into Reds and desaturating Reds grays the green and leaves the red.
+#[test]
+fn hue_saturation_command_eyedropper_moves_the_range_it_applies() {
+    let mut s = colourful("rgb", 8);
+    let before = pixels(&s);
+    let green = [60.0 / 255.0, 140.0 / 255.0, 80.0 / 255.0];
+    s.execute("image.adjustments.hueSaturation", json!({"eyedropper": {"point": "sample", "range": "reds", "color": green}, "reds": {"saturation": -100}}))
+        .unwrap();
+    let after = pixels(&s);
+    assert_eq!(after[0], before[0], "the red swatch is outside the moved Reds range");
+    assert_ne!(after[1], before[1], "the green swatch is desaturated");
+    let g = &after[1];
+    assert!((g[0] - g[1]).abs() < 0.02 && (g[1] - g[2]).abs() < 0.02, "now a gray: {g:?}");
+}
+
+/// #9267 review: a gray-storage document (Grayscale, Duotone, Bitmap) has no hue ranges, and a
+/// sample that isn't finite is refused as Levels and Curves refuse it, not read as 0.
+#[test]
+fn hue_saturation_eyedropper_refuses_gray_modes_and_non_finite_samples() {
+    let pick = |sample: [f32; 3], mode| hue_saturation_eyedropper(&json!({}), 0, HueEyedropper::Sample, sample, mode);
+    assert!(pick([1.0, 0.0, 0.0], ColorMode::Rgb).is_ok());
+    for mode in [ColorMode::Grayscale, ColorMode::Duotone, ColorMode::Bitmap] {
+        assert!(pick([1.0, 0.0, 0.0], mode).is_err(), "{mode:?}");
+    }
+    for sample in [[f32::INFINITY, 1.0, 0.0], [f32::NAN, 0.0, 1.0], [0.0, f32::NEG_INFINITY, 1.0]] {
+        let e = pick(sample, ColorMode::Rgb).unwrap_err().to_string();
+        assert!(e.contains("finite"), "{sample:?}: {e}");
+    }
+    let mut s = colourful("rgb", 8);
+    let r = s.execute("image.adjustments.hueSaturation", json!({"eyedropper": {"point": "sample", "range": "reds", "color": [1e300, 1.0, 0.0]}}));
+    assert!(r.is_err(), "1e300 is inf as f32, not 0");
+}
+
 fn colourful(mode: &str, depth: u32) -> crate::Session {
     let mut s = crate::Session::new();
     s.execute("file.new", json!({"width": 16, "height": 16, "mode": mode, "depth": depth})).unwrap();
