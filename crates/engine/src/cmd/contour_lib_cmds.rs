@@ -21,7 +21,7 @@ pub const MAX_USER_CONTOURS: usize = 1000;
 /// Longest contour name kept, in characters.
 pub const MAX_NAME: usize = 255;
 
-fn name_of(c: &Contour) -> &str {
+pub fn name_of(c: &Contour) -> &str {
     match c {
         Contour::Linear => "Linear",
         Contour::Custom { name, .. } => name,

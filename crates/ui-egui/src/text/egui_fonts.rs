@@ -10,6 +10,7 @@
 use std::sync::{Arc, LazyLock};
 
 use egui::{FontData, FontDefinitions, FontFamily, FontTweak};
+use photocraft_text::fonts::inflate_font;
 
 /// A font deflated by build.rs.
 macro_rules! deflated {
@@ -18,24 +19,11 @@ macro_rules! deflated {
     };
 }
 
-static HACK: LazyLock<Vec<u8>> = LazyLock::new(|| inflate(deflated!("Hack-Regular")));
-static EGUI_ICONS: LazyLock<Vec<u8>> = LazyLock::new(|| inflate(deflated!("egui-icons")));
-static NOTO_EMOJI: LazyLock<Vec<u8>> = LazyLock::new(|| inflate(deflated!("NotoEmoji-Regular")));
-static UBUNTU_LIGHT: LazyLock<Vec<u8>> = LazyLock::new(|| inflate(deflated!("Ubuntu-Light")));
-static EMOJI_ICON: LazyLock<Vec<u8>> = LazyLock::new(|| inflate(deflated!("emoji-icon-font")));
-
-/// Inflated fonts are bounded (the largest is 0.42 MB), so corrupt data can't exhaust memory.
-const MAX_FONT_BYTES: u64 = 16 << 20;
-
-/// Inflate a font. Data that doesn't inflate gives empty bytes (the font is left out), never a panic.
-fn inflate(deflated: &[u8]) -> Vec<u8> {
-    use std::io::Read as _;
-    let mut out = Vec::new();
-    match flate2::read::DeflateDecoder::new(deflated).take(MAX_FONT_BYTES + 1).read_to_end(&mut out) {
-        Ok(_) if out.len() as u64 <= MAX_FONT_BYTES => out,
-        _ => Vec::new(),
-    }
-}
+static HACK: LazyLock<Vec<u8>> = LazyLock::new(|| inflate_font(deflated!("Hack-Regular")));
+static EGUI_ICONS: LazyLock<Vec<u8>> = LazyLock::new(|| inflate_font(deflated!("egui-icons")));
+static NOTO_EMOJI: LazyLock<Vec<u8>> = LazyLock::new(|| inflate_font(deflated!("NotoEmoji-Regular")));
+static UBUNTU_LIGHT: LazyLock<Vec<u8>> = LazyLock::new(|| inflate_font(deflated!("Ubuntu-Light")));
+static EMOJI_ICON: LazyLock<Vec<u8>> = LazyLock::new(|| inflate_font(deflated!("emoji-icon-font")));
 
 /// `FontDefinitions::default()` with egui's default fonts, whether or not egui was built with
 /// `default_fonts`: the same faces, tweaks and family order.
@@ -115,7 +103,7 @@ mod tests {
 
     #[test]
     fn corrupt_font_data_is_left_out_not_a_panic() {
-        assert!(inflate(b"not deflate data").is_empty());
-        assert!(inflate(&[]).is_empty());
+        assert!(inflate_font(b"not deflate data").is_empty());
+        assert!(inflate_font(&[]).is_empty());
     }
 }
