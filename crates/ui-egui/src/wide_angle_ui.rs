@@ -261,7 +261,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let screen = ctx.content_rect();
     let mut action: Option<&str> = None;
     let shift = ctx.input(|i| i.modifiers.shift);
-    egui::Area::new(egui::Id::new("awa-dialog")).order(egui::Order::Foreground).fixed_pos(screen.min).show(ctx, |ui| {
+    egui::Area::new(egui::Id::unique("awa-dialog")).order(egui::Order::Foreground).fixed_pos(screen.min).show(ctx, |ui| {
         let Some(d) = app.wide_angle.as_mut() else { return };
         d.history.settle(&d.params, ctx.input(|i| i.pointer.any_down()));
         if d.dirty {
@@ -284,7 +284,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         let (fx, fy) = (d.frame.x0 as f64, d.frame.y0 as f64);
         let to_screen = |p: [f64; 2]| pos2(img_r.left() + ((p[0] - fx) * k) as f32 * s, img_r.top() + ((p[1] - fy) * k) as f32 * s);
         let to_doc = |q: Pos2| [fx + ((q.x - img_r.left()) / s) as f64 / k, fy + ((q.y - img_r.top()) / s) as f64 / k];
-        let resp = ui.interact(img_r, ui.id().with("awa-image"), Sense::click_and_drag());
+        let resp = ui.interact(img_r, ui.scope_id().with("awa-image"), Sense::click_and_drag());
         if let Some(p) = resp.interact_pointer_pos() {
             if resp.drag_started() {
                 d.drag = Some((to_doc(p), to_doc(p)));
@@ -369,6 +369,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             if widgets::dropdown(
                 ui,
                 "awa-model",
+                tl!("Correction"),
                 &mut model,
                 &[
                     (WideModel::Auto, tl!("Auto")),
@@ -406,6 +407,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     if widgets::dropdown(
                         ui,
                         &format!("awa-o-{i}"),
+                        tl!("Orientation"),
                         &mut o,
                         &[(Orientation::Free, tl!("Free")), (Orientation::Horizontal, tl!("Horizontal")), (Orientation::Vertical, tl!("Vertical"))],
                         120.0,

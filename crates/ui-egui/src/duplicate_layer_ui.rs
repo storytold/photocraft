@@ -48,21 +48,21 @@ pub fn body(app: &PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String, Val
     egui::Grid::new("duplicate-layer").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
         if let Some(name) = fields.get("name").and_then(Value::as_str) {
             let mut name = name.to_string();
-            ui.label(tl!("Name:"));
-            ui.add(egui::TextEdit::singleline(&mut name).desired_width(260.0));
+            let name_label = ui.label(tl!("Name:"));
+            ui.add(egui::TextEdit::singleline(&mut name).desired_width(260.0)).labelled_by(name_label.id);
             fields.insert("name".into(), json!(name));
             ui.end_row();
         }
         ui.label(egui::RichText::new(tl!("Destination")).font(crate::theme::semibold(13.0)));
         ui.end_row();
         ui.label(tl!("Document"));
-        crate::widgets::dropdown(ui, "duplicate-layer-document", &mut destination, &options, 260.0);
+        crate::widgets::dropdown(ui, "duplicate-layer-document", tl!("Document"), &mut destination, &options, 260.0);
         ui.end_row();
         // Photoshop's document-`Name` is only there when the destination is a new document.
         if destination == "new" {
             let mut doc_name = fields.get("documentName").and_then(Value::as_str).unwrap_or("").to_string();
-            ui.label(tl!("Name:"));
-            ui.add(egui::TextEdit::singleline(&mut doc_name).desired_width(260.0));
+            let name_label = ui.label(tl!("Name:"));
+            ui.add(egui::TextEdit::singleline(&mut doc_name).desired_width(260.0)).labelled_by(name_label.id);
             fields.insert("documentName".into(), json!(doc_name));
             ui.end_row();
         }

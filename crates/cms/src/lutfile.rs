@@ -90,13 +90,26 @@ impl LutFile {
 /// Parses a LUT, picking the format from `file_name`'s extension (falls back to sniffing).
 pub fn parse(file_name: &str, bytes: &[u8]) -> Result<LutFile, LutError> {
     let lower = file_name.to_ascii_lowercase();
-    let text = String::from_utf8_lossy(bytes);
+    let text = decode_text(bytes);
     if lower.ends_with(".3dl") {
         parse_3dl(&text)
     } else if lower.ends_with(".look") || text.trim_start().starts_with('<') {
         parse_look(&text)
     } else {
         parse_cube(&text)
+    }
+}
+
+/// UTF-16 with a byte-order mark (Photoshop loads such `.look` files, #9118), else UTF-8.
+fn decode_text(bytes: &[u8]) -> std::borrow::Cow<'_, str> {
+    let utf16 = |rest: &[u8], from: fn([u8; 2]) -> u16| {
+        let units: Vec<u16> = rest.as_chunks::<2>().0.iter().map(|&c| from(c)).collect();
+        String::from_utf16_lossy(&units).into()
+    };
+    match bytes {
+        [0xFF, 0xFE, rest @ ..] => utf16(rest, u16::from_le_bytes),
+        [0xFE, 0xFF, rest @ ..] => utf16(rest, u16::from_be_bytes),
+        _ => String::from_utf8_lossy(bytes),
     }
 }
 
@@ -494,6 +507,17 @@ DOMAIN_MAX 0.5 1 1
         let hex: String = id.data.iter().flat_map(|v| v.to_le_bytes()).map(|b| format!("{b:02X}")).collect();
         let xml = format!("<?xml version=\"1.0\"?><look><LUT><size>\"2\"</size><data>\"{hex}\"</data></LUT></look>");
         assert_eq!(parse("a.look", xml.as_bytes()).unwrap().data, id.data);
+    }
+
+    #[test]
+    fn look_reads_utf16_with_either_byte_order() {
+        let id = LutFile::identity(2);
+        let hex: String = id.data.iter().flat_map(|v| v.to_le_bytes()).map(|b| format!("{b:02X}")).collect();
+        let xml = format!("<?xml version=\"1.0\" encoding=\"UTF-16\"?><look><LUT><size>\"2\"</size><data>\"{hex}\"</data></LUT></look>");
+        let le: Vec<u8> = [0xFF, 0xFE].into_iter().chain(xml.encode_utf16().flat_map(u16::to_le_bytes)).collect();
+        let be: Vec<u8> = [0xFE, 0xFF].into_iter().chain(xml.encode_utf16().flat_map(u16::to_be_bytes)).collect();
+        assert_eq!(parse("a.look", &le).unwrap().data, id.data);
+        assert_eq!(parse("a.look", &be).unwrap().data, id.data);
     }
 
     #[test]

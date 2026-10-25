@@ -154,6 +154,7 @@ fn scrolling_away_survives_a_change_that_adds_no_state() {
     h.event(egui::Event::PointerMoved(view.center()));
     for _ in 0..3 {
         h.event(egui::Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
             unit: egui::MouseWheelUnit::Line,
             delta: vec2(0.0, 3.0),
             phase: egui::TouchPhase::Move,
@@ -184,6 +185,7 @@ fn clicking_a_snapshot_keeps_it_in_view() {
     h.event(egui::Event::PointerMoved(view.center()));
     for _ in 0..10 {
         h.event(egui::Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
             unit: egui::MouseWheelUnit::Line,
             delta: vec2(0.0, 5.0),
             phase: egui::TouchPhase::Move,
@@ -210,6 +212,7 @@ fn a_new_state_at_the_history_limit_still_scrolls_into_view() {
     h.event(egui::Event::PointerMoved(view.center()));
     for _ in 0..3 {
         h.event(egui::Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
             unit: egui::MouseWheelUnit::Line,
             delta: vec2(0.0, 3.0),
             phase: egui::TouchPhase::Move,

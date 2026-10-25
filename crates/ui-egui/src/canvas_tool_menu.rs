@@ -937,7 +937,7 @@ fn choose_pen(app: &mut PhotocraftApp, ctx: &Context, menu: &CanvasToolMenu, com
 }
 
 fn menu_id() -> egui::Id {
-    egui::Id::new("canvas-selection-menu")
+    egui::Id::unique("canvas-selection-menu")
 }
 
 pub fn show(app: &mut PhotocraftApp, ctx: &Context) {

@@ -990,15 +990,15 @@ fn device_limits_for(backend: wgpu::Backend, supported: wgpu::Limits) -> wgpu::L
     wgpu::Limits { max_texture_dimension_2d: supported.max_texture_dimension_2d, max_buffer_size: supported.max_buffer_size, ..base }
 }
 
-/// Milliseconds since first call (monotonic). Always 0 on wasm, where `std::time` is unavailable.
+/// Milliseconds since the process (or page) started, from a monotonic clock.
+///
+/// `web_time::Instant` is `std::time::Instant` natively and `performance.now()` on wasm, so frame
+/// caps, autosave intervals, preference retry backoff, stroke traces and screenshot deadlines all
+/// measure durations the same way on both. The old wasm value was a constant 0, which made every
+/// interval comparison (`now >= deadline`) permanently false on the web.
 pub fn now_ms() -> f64 {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
-        START.get_or_init(std::time::Instant::now).elapsed().as_secs_f64() * 1000.0
-    }
-    #[cfg(target_arch = "wasm32")]
-    0.0
+    static START: std::sync::OnceLock<web_time::Instant> = std::sync::OnceLock::new();
+    START.get_or_init(web_time::Instant::now).elapsed().as_secs_f64() * 1000.0
 }
 
 /// UI-thread timings (CPU side), exponentially smoothed.

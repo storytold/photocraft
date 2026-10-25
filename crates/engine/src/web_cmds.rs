@@ -1491,12 +1491,12 @@ pub fn generate_assets(doc: &Document, dir: &str) -> (Vec<String>, Vec<Value>) {
     (files, errors)
 }
 
-/// `<document folder>/<document name>-assets`.
 /// Whether any pixel of `doc` is not fully transparent.
 fn has_pixels(doc: &Document) -> bool {
     photocraft_compose::render(doc, doc.bounds()).px.iter().any(|q| q[3] > 0.0)
 }
 
+/// `<document folder>/<document name>-assets`.
 pub fn assets_dir(doc_path: &str) -> String {
     let p = std::path::Path::new(doc_path);
     let dir = p.parent().map(|d| d.to_string_lossy().into_owned()).unwrap_or_default();

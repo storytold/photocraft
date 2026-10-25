@@ -470,6 +470,12 @@ pub const PRECHECKED: &[&str] = &["layer.new.layer", "layer.new.group", "layer.n
 pub struct Session {
     docs: Vec<DocState>,
     active: Option<usize>,
+    /// Monotonic counter, bumped whenever a different document becomes active (including a
+    /// switch away and back inside one pass). UI work that must not cross documents (control
+    /// screenshots, automation input) binds to it.
+    active_generation: u64,
+    /// The document id [`Self::active_generation`] was last bumped for.
+    active_doc_for_generation: Option<photocraft_doc::DocId>,
     pub tools: ToolState,
     /// Log of executed commands (for action recording and debugging).
     pub journal: Vec<(String, Value)>,
@@ -581,9 +587,25 @@ impl Session {
     pub fn active_mut(&mut self) -> Option<&mut DocState> {
         self.active.and_then(|i| self.docs.get_mut(i))
     }
+    /// Monotonic active-document generation. It changes when a different document becomes
+    /// active, including a switch away and back between two observations; equal values therefore
+    /// mean the document was not switched in between.
+    pub fn active_generation(&self) -> u64 {
+        self.active_generation
+    }
+    /// Bump [`Self::active_generation`] when the active document id changed. Call after every
+    /// assignment to `self.active`.
+    pub(crate) fn note_active_change(&mut self) {
+        let id = self.active().map(|st| st.doc.id);
+        if id != self.active_doc_for_generation {
+            self.active_doc_for_generation = id;
+            self.active_generation = self.active_generation.wrapping_add(1);
+        }
+    }
     pub fn set_active(&mut self, index: usize) -> bool {
         if index < self.docs.len() {
             self.active = Some(index);
+            self.note_active_change();
             self.sync_tools_mask_target();
             true
         } else {
@@ -623,6 +645,7 @@ impl Session {
         let active = self.active().map(|d| d.doc.id);
         let to = move_item(&mut self.docs, from, to)?;
         self.active = active.and_then(|id| self.docs.iter().position(|d| d.doc.id == id));
+        self.note_active_change();
         Some(to)
     }
 
@@ -640,6 +663,7 @@ impl Session {
         self.docs.push(st);
         let i = self.docs.len() - 1;
         self.active = Some(i);
+        self.note_active_change();
         i
     }
 
@@ -678,6 +702,7 @@ impl Session {
                 _ => index.min(self.docs.len() - 1),
             })
         };
+        self.note_active_change();
         Some(d)
     }
 

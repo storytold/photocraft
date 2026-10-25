@@ -85,6 +85,7 @@ fn alt_with_a_wheel_scroll_or_a_lost_focus_is_no_tap() {
     h.run_steps(2);
     h.event_modifiers(
         egui::Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
             unit: egui::MouseWheelUnit::Line,
             delta: egui::vec2(0.0, -1.0),
             phase: egui::TouchPhase::Move,
@@ -123,6 +124,7 @@ fn a_held_alt_repeating_after_the_wheel_is_no_tap() {
     h.run_steps(2);
     h.event_modifiers(
         egui::Event::MouseWheel {
+            source: egui::MouseWheelSource::Wheel,
             unit: egui::MouseWheelUnit::Line,
             delta: egui::vec2(0.0, 1.0),
             modifiers: egui::Modifiers::ALT,

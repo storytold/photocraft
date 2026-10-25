@@ -110,7 +110,7 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     if let Some(mut name) = f.get("name").and_then(Value::as_str).map(str::to_string) {
         ui.horizontal(|ui| {
             label(ui, tl!("Name:"));
-            if ui.add(egui::TextEdit::singleline(&mut name).desired_width(200.0)).changed() {
+            if ui.add(egui::TextEdit::singleline(&mut name).desired_width(200.0)).accessible_name(tl!("Name")).changed() {
                 f.insert("name".into(), json!(name));
             }
         });
@@ -143,9 +143,10 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
             crate::color_picker_ui::request(f, &crate::color_picker_ui::title_for(what));
         }
         ui.add_space(12.0);
-        ui.label(if spot { tl!("Solidity:") } else { tl!("Opacity:") });
+        let caption = if spot { tl!("Solidity:") } else { tl!("Opacity:") };
+        ui.label(caption);
         let mut pct = f.get("opacity").and_then(Value::as_f64).unwrap_or(50.0) as f32;
-        if crate::widgets::value_field(ui, &mut pct, 0.0..=100.0, "%", 64.0).changed() {
+        if crate::widgets::value_field(ui, &mut pct, 0.0..=100.0, "%", 64.0).accessible_name(caption).changed() {
             f.insert("opacity".into(), json!(pct.round()));
         }
     });
@@ -163,7 +164,7 @@ fn mask_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         ui.add_space(12.0);
         ui.label(tl!("Opacity:"));
         let mut pct = f.get("opacity").and_then(Value::as_f64).unwrap_or(50.0) as f32;
-        if crate::widgets::value_field(ui, &mut pct, 0.0..=100.0, "%", 64.0).changed() {
+        if crate::widgets::value_field(ui, &mut pct, 0.0..=100.0, "%", 64.0).accessible_name(tl!("Opacity:")).changed() {
             f.insert("opacity".into(), json!(pct.round()));
         }
     });
@@ -228,7 +229,7 @@ pub fn new_spot_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let mut name = f.get("name").and_then(Value::as_str).unwrap_or_default().to_string();
     ui.horizontal(|ui| {
         label(ui, tl!("Name:"));
-        if ui.add(egui::TextEdit::singleline(&mut name).desired_width(200.0)).changed() {
+        if ui.add(egui::TextEdit::singleline(&mut name).desired_width(200.0)).accessible_name(tl!("Name")).changed() {
             f.insert("name".into(), json!(name));
         }
     });
@@ -244,7 +245,7 @@ pub fn new_spot_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         ui.add_space(12.0);
         ui.label(tl!("Solidity:"));
         let mut pct = f.get("solidity").and_then(Value::as_f64).unwrap_or(0.0) as f32;
-        if crate::widgets::value_field(ui, &mut pct, 0.0..=100.0, "%", 64.0).changed() {
+        if crate::widgets::value_field(ui, &mut pct, 0.0..=100.0, "%", 64.0).accessible_name(tl!("Solidity:")).changed() {
             f.insert("solidity".into(), json!(pct.round()));
         }
     });
