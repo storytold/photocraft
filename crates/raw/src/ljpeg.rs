@@ -534,7 +534,7 @@ pub(crate) fn decode(data: &[u8], max_samples: usize) -> Result<(Frame, Vec<u16>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testgen::lj92_encode;
+    use crate::testgen::{lj92_encode, lj92_encode_tables};
 
     /// Deterministic pseudo-random samples with some structure (smooth + noise).
     fn samples(n: usize, precision: u8, seed: u64) -> Vec<u16> {
@@ -575,6 +575,41 @@ mod tests {
             let j = lj92_encode(&v, w, h, 2, 16, 1, Some(rows));
             let (_, out) = decode(&j, usize::MAX).unwrap();
             assert_eq!(out, v, "restart every {rows} rows");
+        }
+    }
+
+    /// Real CR2 frames declare one DHT per component. Each case gives the components
+    /// different tables (or a mixed sharing), so decoding with the wrong table for a
+    /// component, or one table for all, corrupts the output.
+    #[test]
+    fn roundtrip_with_one_huffman_table_per_component() {
+        let (w, h) = (13, 7);
+        for table_of in [&[0u8, 1][..], &[1, 0], &[0, 1, 2, 3], &[0, 1, 0, 1], &[0, 0, 1, 1], &[3, 2, 1, 0]] {
+            let comps = table_of.len();
+            for predictor in [1u8, 4, 7] {
+                for restart_rows in [None, Some(2)] {
+                    let v = samples(w * h * comps, 14, u64::from(predictor) * 7 + comps as u64);
+                    let j = lj92_encode_tables(&v, w, h, table_of, 14, predictor, restart_rows);
+                    let (f, out) = decode(&j, usize::MAX).unwrap();
+                    assert_eq!(f, Frame { precision: 14, width: w, height: h, components: comps });
+                    assert_eq!(out, v, "tables={table_of:?} pred={predictor} restart={restart_rows:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn roundtrip_per_component_tables_with_16_bit_extremes() {
+        let (w, h) = (16, 9);
+        for table_of in [&[0u8, 1][..], &[0, 1, 0, 1]] {
+            let comps = table_of.len();
+            // Alternating 0 / 65535 forces the 16-bit and 32768 difference categories.
+            let v: Vec<u16> = (0..w * h * comps).map(|i| if (i / 3) % 2 == 0 { 0 } else { 65535 }).collect();
+            for (predictor, restart_rows) in [(1u8, Some(1)), (1, Some(4)), (6, Some(2)), (6, None)] {
+                let j = lj92_encode_tables(&v, w, h, table_of, 16, predictor, restart_rows);
+                let (_, out) = decode(&j, usize::MAX).unwrap();
+                assert_eq!(out, v, "tables={table_of:?} pred={predictor} restart={restart_rows:?}");
+            }
         }
     }
 
