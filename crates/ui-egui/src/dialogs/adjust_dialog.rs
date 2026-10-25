@@ -65,7 +65,12 @@ pub fn picker_armed(app: &PhotocraftApp) -> bool {
     let Some(dialog) = app.ui.dialogs.last().filter(|d| picker_kind(&d.fields).is_some()) else { return false };
     if picker_kind(&dialog.fields) == Some("hueSaturation") {
         let ranged = dialog.fields.get(HUE_PICKER_RANGE).and_then(Value::as_str).is_some();
-        return ranged && hue_picker(dialog.fields.get(CURVE_PICKER)).is_some() && app.session.active().is_some_and(|s| !adjust_editors::is_gray(s.doc.mode));
+        // The colour ranges don't apply under Colorize (the engine refuses the sample).
+        let colorize = dialog.fields.get("colorize").and_then(Value::as_bool).unwrap_or(false);
+        return !colorize
+            && ranged
+            && hue_picker(dialog.fields.get(CURVE_PICKER)).is_some()
+            && app.session.active().is_some_and(|s| !adjust_editors::is_gray(s.doc.mode));
     }
     let Some(eyedropper) = picker(dialog.fields.get(CURVE_PICKER)) else { return false };
     app.session.active().is_some_and(|s| picker_supported(s.doc.mode, eyedropper))
