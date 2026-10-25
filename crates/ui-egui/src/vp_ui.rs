@@ -20,7 +20,7 @@ use egui::{Color32, Pos2, Stroke, TextureHandle, pos2};
 use photocraft_algo::transform::Homography;
 use photocraft_algo::vanishing::{Edge, PlaneCheck, Scene, VpPlane, clone_dabs_from, clone_source};
 use photocraft_doc::{DocId, Document, Layer, LayerContent, LayerId};
-use photocraft_engine::vp_cmds::{CloneSpec, MAX_CLONE_DABS, MAX_CLONE_STROKES, VP, copy_changed, visible_image};
+use photocraft_engine::vp_cmds::{CloneSpec, MAX_CLONE_DABS, MAX_CLONE_STROKES, VP, copy_changed, over, paste_onto, visible_image};
 use photocraft_geom::Rect;
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
@@ -92,9 +92,13 @@ enum Drag {
 
 /// The clone strokes painted onto the target layer, shown on the canvas while stamping.
 struct StampPreview {
-    /// The session's `rev` and New Layer it was painted with (either changing repaints it).
+    /// The session's `rev`, New Layer and paste it was painted with (any changing repaints it).
     rev: u64,
     new_layer: bool,
+    /// The paste (plane, top-left, width) baked in under the strokes, as OK pastes before it clones.
+    paste: Option<(usize, [f64; 2], f64)>,
+    /// The paste landed in `out` (it can fail, or miss the plane).
+    baked: bool,
     /// On a new layer: the visible image the strokes sample, with the strokes so far.
     work: Option<Surface>,
     /// The sampled image before the current stroke, retained across frame batches.
@@ -111,6 +115,9 @@ struct StampPreview {
 
 /// The clipboard image shown pasted onto the plane.
 struct Clip {
+    /// The clipboard pixels and their content bounds, which the preview pastes like OK does.
+    surface: Surface,
+    rect: Rect,
     texture: TextureHandle,
     width: f64,
     height: f64,
@@ -249,6 +256,28 @@ impl VpSession {
             return None;
         }
         self.selected.filter(|i| *i < self.planes.len()).or_else(|| (!self.planes.is_empty()).then_some(0))
+    }
+
+    /// What OK pastes: the plane, the top-left and the width.
+    fn paste_key(&self) -> Option<(usize, [f64; 2], f64)> {
+        self.paste_plane().map(|i| (i, self.paste_at, self.paste_width))
+    }
+
+    /// The stamp preview is current and already shows the paste under the strokes.
+    fn preview_has_paste(&self) -> bool {
+        self.preview.as_ref().is_some_and(|p| p.baked && p.rev == self.rev && p.paste == self.paste_key())
+    }
+
+    /// The paste is dragged while the stamp preview holds it in its old place.
+    fn moving_baked_paste(&self) -> bool {
+        matches!(self.drag, Some(Drag::Paste { .. })) && self.preview.as_ref().is_some_and(|p| p.baked)
+    }
+
+    /// [`draw_content`] draws the paste overlay: not when the stamp preview shows the paste, and
+    /// not while a plane drag freezes that preview (as it freezes the strokes) until release.
+    fn paste_overlay(&self) -> bool {
+        let frozen = matches!(self.drag, Some(Drag::Corner { .. } | Drag::Edge { .. } | Drag::Torn { .. })) && self.preview.as_ref().is_some_and(|p| p.baked);
+        !self.preview_has_paste() && !frozen
     }
 
     /// Size of the pasted image in plane coordinates (the engine keeps its metric aspect).
@@ -493,17 +522,46 @@ impl VpSession {
             self.preview = None;
             return had;
         }
-        let Some(sc) = self.scene() else { return false };
-        let stale = self.preview.as_ref().is_none_or(|p| p.rev != self.rev || p.new_layer != self.new_layer);
+        let Some(sc) = self.scene() else {
+            // No planes left: nothing to show the strokes on.
+            return self.preview.take().is_some();
+        };
+        let paste = self.paste_key();
+        let canvas = self.canvas;
+        let stale = self.preview.as_ref().is_none_or(|p| p.rev != self.rev || p.new_layer != self.new_layer || p.paste != paste);
         let mut area = Rect::EMPTY;
+        let mut baked = false;
         if stale {
             let Some(layer) = self.base.layer(self.layer).and_then(Layer::surface) else { return false };
-            let (out, work) = if self.new_layer { (Surface::new(layer.format()), Some(visible_image(&self.base))) } else { (layer.clone(), None) };
+            let mut out = if self.new_layer { Surface::new(layer.format()) } else { layer.clone() };
+            // OK pastes first and the strokes then paint over (and sample) the pasted pixels.
+            if let (Some((i, at, width)), Some(c)) = (paste, self.clip.as_ref())
+                && self.planes.get(i).is_some_and(|p| p.check(self.center()) != PlaneCheck::Invalid)
+                && let Ok(r) = paste_onto(&sc, &mut out, i, &c.surface, c.rect, at, width)
+            {
+                area = r.intersect(&canvas);
+                baked = !r.is_empty();
+            }
+            let work = self.new_layer.then(|| {
+                let mut w = visible_image(&self.base);
+                over(&mut w, &out);
+                w
+            });
             // The old preview's area changes back too.
             let keys = self.preview.take().map(|p| p.keys).unwrap_or_default();
-            area = keys.iter().fold(Rect::EMPTY, |a, k| union(a, k.1));
-            self.preview =
-                Some(StampPreview { rev: self.rev, new_layer: self.new_layer, work, source: None, out, done: (0, 0), keys, shown: self.base.clone() });
+            area = keys.iter().fold(area, |a, k| union(a, k.1));
+            self.preview = Some(StampPreview {
+                rev: self.rev,
+                new_layer: self.new_layer,
+                paste,
+                baked,
+                work,
+                source: None,
+                out,
+                done: (0, 0),
+                keys,
+                shown: self.base.clone(),
+            });
         }
         let Some(pv) = self.preview.as_mut() else { return false };
         let (from_stroke, from_point) = pv.done;
@@ -522,10 +580,12 @@ impl VpSession {
                 Some(work) => {
                     let before = work.clone();
                     let (_, a) = clone_dabs_from(&sc, work, source, c.source, *anchor, points, c.size, hard, opacity);
+                    // As OK does: only the canvas (the dabs' boxes can span far off it).
+                    let a = a.intersect(&canvas);
                     copy_changed(&mut pv.out, &before, work, a);
                     a
                 }
-                None => clone_dabs_from(&sc, &mut pv.out, source, c.source, *anchor, points, c.size, hard, opacity).1,
+                None => clone_dabs_from(&sc, &mut pv.out, source, c.source, *anchor, points, c.size, hard, opacity).1.intersect(&canvas),
             };
             area = union(area, changed);
         }
@@ -546,9 +606,14 @@ impl VpSession {
         true
     }
 
-    /// The document with the strokes painted, and its preview key.
+    /// The document with the strokes painted, and its preview key. Not while the paste is
+    /// dragged out of its baked-in place: the overlay follows the pointer instead, and the
+    /// strokes repaint over it on release.
     pub(crate) fn shown(&self) -> Option<(Arc<Document>, u64)> {
         let p = self.preview.as_ref()?;
+        if self.moving_baked_paste() {
+            return None;
+        }
         Some((p.shown.clone(), PREVIEW_KEY + p.keys.last()?.0))
     }
 
@@ -707,6 +772,8 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
     let clip = app.session.clipboard.as_ref().and_then(|c| {
         let r = c.surface.content_bounds();
         (!r.is_empty()).then(|| Clip {
+            surface: c.surface.clone(),
+            rect: r,
             texture: ctx.load_texture(format!("vp-paste-{key}"), crate::distort_ui::surface_image(&c.surface, r, 1024), egui::TextureOptions::LINEAR),
             width: f64::from(r.width()),
             height: f64::from(r.height()),
@@ -896,7 +963,7 @@ fn parse_planes(v: &Value) -> Result<(Vec<VpPlane>, Vec<Option<Torn>>), String> 
 /// changed, once no plane is being dragged).
 pub(crate) fn sync_preview(app: &mut PhotocraftApp) {
     let Some(s) = app.distort.vanishing.as_mut() else { return };
-    if matches!(s.drag, Some(Drag::Corner { .. } | Drag::Edge { .. } | Drag::Torn { .. })) {
+    if matches!(s.drag, Some(Drag::Corner { .. } | Drag::Edge { .. } | Drag::Torn { .. } | Drag::Paste { .. })) {
         return;
     }
     let ui = &mut app.ui;
@@ -967,10 +1034,12 @@ pub fn escape(app: &mut PhotocraftApp) {
 }
 
 /// The paste on its plane: image content, drawn under the grid and guides like the document so a
-/// guide stays visible across it (#7781). The planes and their grids are [`draw`].
+/// guide stays visible across it (#7781). The planes and their grids are [`draw`]. A current
+/// stamp preview already shows the paste under its strokes.
 pub fn draw_content(s: &VpSession, painter: &egui::Painter, xf: &ViewXform) {
     let scr = |p: [f64; 2]| xf.to_screen(p[0] as f32, p[1] as f32);
-    if let Some(i) = s.paste_plane()
+    if s.paste_overlay()
+        && let Some(i) = s.paste_plane()
         && s.planes.get(i).is_some_and(|p| p.check(s.center()) != PlaneCheck::Invalid)
         && let (Some((h, lu, lv)), Some(c)) = (s.frame(i), s.clip.as_ref())
         && let Some(ext) = s.paste_extent(lu, lv)
@@ -1183,6 +1252,8 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if let Some(s) = app.distort.vanishing.as_mut() {
         s.settle(ui.input(|i| i.pointer.any_down()));
     }
+    // A paste Width or Paste change shows in this frame's canvas, the paste under the strokes.
+    sync_preview(app);
 }
 
 #[cfg(test)]
@@ -1374,5 +1445,130 @@ mod tests {
             commit(&mut app).unwrap();
             assert_eq!(photocraft_compose::flatten(&app.session.active().unwrap().doc).px, expected, "newLayer={new_layer}");
         }
+    }
+
+    /// A red square on the clipboard (copied from the layer's top-left corner).
+    fn copy_red_square(app: &mut PhotocraftApp) {
+        app.session.execute("select.rect", json!({"x": 0, "y": 0, "width": 40, "height": 40})).unwrap();
+        app.session.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+        app.session.execute("edit.copy", json!({})).unwrap();
+        app.session.execute("select.deselect", json!({})).unwrap();
+    }
+
+    #[test]
+    fn stamp_preview_paints_over_the_paste_like_ok() {
+        for new_layer in [false, true] {
+            let (ctx, mut app) = app_with_layer();
+            copy_red_square(&mut app);
+            crate::distort_ui::menu(&mut app, &ctx, VP, &json!({})).unwrap().unwrap();
+            control(&mut app, &json!({"planes": [{"corners": [[10, 10], [230, 10], [230, 150], [10, 150]]}], "newLayer": new_layer})).unwrap();
+            let s = app.distort.vanishing.as_ref().unwrap();
+            assert!(s.paste && s.paste_plane() == Some(0), "the clipboard pastes by default");
+            // The paste covers x 65..175 from y 45 down. One stroke clones it onto the base
+            // layer, the other paints across its right edge.
+            control(
+                &mut app,
+                &json!({"clone": [
+                    {"source": [100, 60], "points": [[40, 120], [48, 120], [56, 120]], "size": 16, "hardness": 80},
+                    {"source": [40, 130], "points": [[150, 60], [170, 60], [190, 60]], "size": 16, "hardness": 80},
+                ]}),
+            )
+            .unwrap();
+            let s = app.distort.vanishing.as_ref().unwrap();
+            assert!(s.preview_has_paste(), "the preview shows the paste, so the overlay isn't drawn over the strokes");
+            let (shown, _) = s.shown().unwrap();
+            let expected = photocraft_compose::flatten(&shown).px;
+            commit(&mut app).unwrap();
+            assert_eq!(photocraft_compose::flatten(&app.session.active().unwrap().doc).px, expected, "newLayer={new_layer}");
+        }
+    }
+
+    #[test]
+    fn moving_the_paste_repaints_the_stamp_preview() {
+        let (ctx, mut app) = app_with_layer();
+        copy_red_square(&mut app);
+        crate::distort_ui::menu(&mut app, &ctx, VP, &json!({})).unwrap().unwrap();
+        control(&mut app, &json!({"planes": [{"corners": [[10, 10], [230, 10], [230, 150], [10, 150]]}]})).unwrap();
+        control(&mut app, &json!({"clone": [{"source": [200, 130], "points": [[30, 130]], "size": 8}]})).unwrap();
+        let red = |app: &PhotocraftApp, x: i32, y: i32| {
+            let (shown, _) = app.distort.vanishing.as_ref().unwrap().shown().unwrap();
+            let l = app.session.active().unwrap().active_layer.unwrap();
+            shown.layer(l).unwrap().surface().unwrap().rgba(x, y)[0]
+        };
+        assert!(red(&app, 100, 60) > 0.9);
+        control(&mut app, &json!({"pasteAt": [0.0, 0.5]})).unwrap();
+        assert!(red(&app, 100, 60) < 0.5, "the paste left its old place");
+        assert!(red(&app, 30, 100) > 0.9, "and shows at the new one");
+        control(&mut app, &json!({"paste": false})).unwrap();
+        assert!(red(&app, 30, 100) < 0.5, "paste off: gone from the preview");
+        assert!(!app.distort.vanishing.as_ref().unwrap().preview_has_paste());
+    }
+
+    #[test]
+    fn dragging_the_paste_shows_it_once() {
+        let (ctx, mut app) = app_with_layer();
+        copy_red_square(&mut app);
+        crate::distort_ui::menu(&mut app, &ctx, VP, &json!({})).unwrap().unwrap();
+        control(&mut app, &json!({"planes": [{"corners": [[10, 10], [230, 10], [230, 150], [10, 150]]}], "tool": "edit"})).unwrap();
+        control(&mut app, &json!({"clone": [{"source": [200, 130], "points": [[30, 130]], "size": 8}]})).unwrap();
+        let layer = app.session.active().unwrap().active_layer.unwrap();
+        let red = |app: &PhotocraftApp, x: i32, y: i32| {
+            let (shown, _) = crate::distort_ui::display_doc(app, 0)?;
+            Some(shown.layer(layer).unwrap().surface().unwrap().rgba(x, y)[0])
+        };
+        assert!(red(&app, 100, 60).unwrap() > 0.9, "the paste is in the preview");
+        let ev = |app: &mut PhotocraftApp, e: ToolEvent| crate::distort_ui::pointer(app, e, egui::Modifiers::NONE);
+        ev(&mut app, ToolEvent::Down { x: 100.0, y: 60.0, pressure: 1.0 });
+        ev(&mut app, ToolEvent::Move { x: 60.0, y: 100.0, pressure: 1.0 });
+        // Mid-drag: no copy left behind at the old place, only the overlay at the pointer.
+        assert!(red(&app, 100, 60).is_none_or(|r| r < 0.5), "{:?}", red(&app, 100, 60));
+        assert!(app.distort.vanishing.as_ref().unwrap().paste_overlay(), "the overlay draws the moving paste");
+        ev(&mut app, ToolEvent::Up { x: 60.0, y: 100.0 });
+        assert!(red(&app, 100, 60).unwrap() < 0.5);
+        assert!(red(&app, 60, 100).unwrap() > 0.9, "released: the preview pastes at the new place");
+        assert!(!app.distort.vanishing.as_ref().unwrap().paste_overlay());
+        // A plane corner drag freezes the preview, paste included, until release: one copy.
+        ev(&mut app, ToolEvent::Down { x: 230.0, y: 150.0, pressure: 1.0 });
+        ev(&mut app, ToolEvent::Move { x: 236.0, y: 156.0, pressure: 1.0 });
+        let s = app.distort.vanishing.as_ref().unwrap();
+        assert!(matches!(s.drag, Some(Drag::Corner { .. })));
+        assert!(red(&app, 60, 100).unwrap() > 0.9 && !s.paste_overlay(), "frozen preview, no overlay on top");
+        ev(&mut app, ToolEvent::Up { x: 236.0, y: 156.0 });
+        let s = app.distort.vanishing.as_ref().unwrap();
+        assert!(s.preview_has_paste() && !s.paste_overlay());
+    }
+
+    #[test]
+    fn new_layer_stamp_preview_stays_on_the_canvas() {
+        let (ctx, mut app) = app_with_layer();
+        // A red stripe where the first dab samples, so cloning it changes pixels.
+        app.session.execute("select.rect", json!({"x": 130, "y": 70, "width": 20, "height": 20})).unwrap();
+        app.session.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+        app.session.execute("select.deselect", json!({})).unwrap();
+        crate::distort_ui::menu(&mut app, &ctx, VP, &json!({})).unwrap().unwrap();
+        control(&mut app, &json!({"planes": [{"corners": [[10, 10], [230, 10], [230, 150], [10, 150]]}], "newLayer": true})).unwrap();
+        // The second dab lies left of the canvas and samples the canvas 100 px to its right.
+        control(&mut app, &json!({"clone": [{"source": [140, 80], "points": [[40, 80], [-30, 80]], "size": 16}]})).unwrap();
+        let s = app.distort.vanishing.as_ref().unwrap();
+        let out = s.preview.as_ref().unwrap().out.content_bounds();
+        assert!(!out.is_empty() && s.canvas.contains_rect(&out), "{out:?}");
+        let st = app.session.active().unwrap();
+        let area = damage(&app, st.doc.id, st.revision, 0, s.shown().unwrap().1).unwrap();
+        assert!(s.canvas.contains_rect(&area), "{area:?}");
+    }
+
+    #[test]
+    fn deleting_the_last_plane_drops_the_stamp_preview() {
+        let (ctx, mut app) = app_with_layer();
+        crate::distort_ui::menu(&mut app, &ctx, VP, &json!({})).unwrap().unwrap();
+        control(&mut app, &json!({"planes": [{"corners": [[70, 60], [170, 60], [220, 150], [20, 150]]}]})).unwrap();
+        control(&mut app, &json!({"clone": [{"source": [120, 139], "points": [[118, 100], [126, 100]], "size": 12}]})).unwrap();
+        assert!(crate::distort_ui::display_doc(&app, 0).is_some());
+        let s = app.distort.vanishing.as_mut().unwrap();
+        s.selected = Some(0);
+        s.delete_selected();
+        sync_preview(&mut app);
+        assert!(app.distort.vanishing.as_ref().unwrap().planes.is_empty());
+        assert!(crate::distort_ui::display_doc(&app, 0).is_none(), "no strokes shown without a plane");
     }
 }

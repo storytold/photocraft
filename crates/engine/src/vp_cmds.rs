@@ -137,15 +137,17 @@ pub fn clone_specs(p: &Value) -> Result<Vec<CloneSpec>> {
 }
 
 /// Paints clone stroke `c` on `surf`, or, with `work` (the image it samples), on `work` and copies
-/// the pixels it changed to `surf`. Returns the dabs painted.
-pub fn clone_into(sc: &Scene, surf: &mut Surface, work: Option<&mut Surface>, c: &CloneSpec) -> usize {
+/// the pixels it changed inside `canvas` to `surf`. Returns the dabs painted.
+pub fn clone_into(sc: &Scene, surf: &mut Surface, work: Option<&mut Surface>, c: &CloneSpec, canvas: Rect) -> usize {
     let Some(first) = c.points.first() else { return 0 };
     let Some(work) = work else {
         return clone_dabs(sc, surf, c.source, *first, &c.points, c.size, c.hardness, c.opacity as f32).0;
     };
     let before = work.clone();
     let (dabs, area) = clone_dabs(sc, work, c.source, *first, &c.points, c.size, c.hardness, c.opacity as f32);
-    copy_changed(surf, &before, work, area);
+    // The dabs' boxes can span far off the canvas (points up to 1e7 px apart): reading their
+    // union back would allocate without bound.
+    copy_changed(surf, &before, work, area.intersect(&canvas));
     dabs
 }
 
@@ -178,8 +180,16 @@ fn has_layer(s: &Session) -> std::result::Result<(), String> {
     }
 }
 
+/// Pastes `src` (content in `rect`) onto plane `plane` of `sc` over `surf`, as the command's
+/// `"paste"` does. Returns the area the paste covers.
+pub fn paste_onto(sc: &Scene, surf: &mut Surface, plane: usize, src: &Surface, rect: Rect, at: [f64; 2], width: f64) -> Result<Rect> {
+    let Some(out) = paste(sc, plane, src, rect, at, width)? else { return Ok(Rect::EMPTY) };
+    over(surf, &out);
+    Ok(out.content_bounds())
+}
+
 /// Composites `top` over `dst` (premultiplied source-over), same format.
-fn over(dst: &mut Surface, top: &Surface) {
+pub fn over(dst: &mut Surface, top: &Surface) {
     let b = top.content_bounds();
     if b.is_empty() {
         return;
@@ -249,9 +259,7 @@ fn vanishing_point(s: &mut Session, p: &Value) -> Result<Value> {
         }
         let surf = l.surface_mut().ok_or_else(|| EngineError::Other("Vanishing Point needs a pixel layer".into()))?;
         for (plane, src, rect, at, width) in &pastes {
-            if let Some(out) = paste(&sc, *plane, src, *rect, *at, *width)? {
-                over(surf, &out);
-            }
+            paste_onto(&sc, surf, *plane, src, *rect, *at, *width)?;
         }
         // A new layer samples the visible image (merged with what's been pasted) and takes only
         // the pixels the strokes change; otherwise the strokes paint the layer itself.
@@ -260,7 +268,7 @@ fn vanishing_point(s: &mut Session, p: &Value) -> Result<Value> {
             w
         });
         for c in &clones {
-            dabs += clone_into(&sc, surf, work.as_mut(), c);
+            dabs += clone_into(&sc, surf, work.as_mut(), c, canvas);
         }
         surf.prune();
         Ok(id)
@@ -392,5 +400,30 @@ mod tests {
             .unwrap();
         assert_eq!(r["planes"].as_array().unwrap().len(), 2);
         assert!(r["dabs"].as_u64().unwrap() >= 1, "{r}");
+    }
+
+    #[test]
+    fn new_layer_clone_stays_on_the_canvas() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 200, "height": 200})).unwrap();
+        s.execute("layer.new.layer", json!({})).unwrap();
+        s.execute("edit.fill", json!({"color": "#40c040"})).unwrap();
+        // A red stripe where the first dab samples, so cloning it changes pixels.
+        s.edit("stripe", |doc, active| {
+            doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().fill_rect(Rect::new(140, 80, 160, 120), &[1.0, 0.0, 0.0, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+        let planes = json!([{"corners": [[0, 0], [200, 0], [200, 200], [0, 200]]}]);
+        // The second dab lies left of the canvas and samples the canvas 50 px to its right; the
+        // third is far off it (its box joined with the first's once asked for petabytes).
+        for points in [json!([[100, 100], [-30, 100]]), json!([[100, 100], [-30, 100], [9_000_000, 9_000_000]])] {
+            let r = s.execute(VP, json!({"planes": planes, "newLayer": true, "clone": [{"source": [150, 100], "points": points, "size": 20}]})).unwrap();
+            let l = s.active().unwrap().doc.layer(LayerId(r["layer"].as_u64().unwrap())).unwrap().surface().unwrap();
+            let b = l.content_bounds();
+            assert!(!b.is_empty() && Rect::new(0, 0, 200, 200).contains_rect(&b), "{b:?}");
+            assert!(l.rgba(100, 100)[0] > 0.9, "{:?}", l.rgba(100, 100));
+            s.undo();
+        }
     }
 }
