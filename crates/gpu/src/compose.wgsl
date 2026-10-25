@@ -170,61 +170,66 @@ fn vivid_light_generic(cb: f32, cs: f32) -> f32 {
 // WebGPU compiler rejects it, which left the web app without a GPU compositor.
 const F32_MAX: f32 = 0x1.fffffep+127f;
 
+// One exit, not a return per case: FXC (D3D12) mis-analyses an early return inside a case of a
+// switch it inlines and rejects the function with X3507 ("not all control paths return a value"),
+// which leaves the whole compositor without a pipeline and the app on the CPU renderer.
 fn blend_channel(mode: i32, cb: f32, cs: f32) -> f32 {
     // Linear Dodge / Divide clip at 1 at integer depths, at f32::MAX in 32-bit documents.
     let hi = select(1.0, F32_MAX, (op.flags & F_HDR) != 0u);
+    var r = cs;
     switch mode {
-        case 3: { return min(cb, cs); }                         // Darken
-        case 4: { return cb * cs; }                             // Multiply
-        case 5: { return color_burn(cb, cs); }                  // ColorBurn
-        case 6: { return max(cb + cs - 1.0, 0.0); }             // LinearBurn
-        case 8: { return max(cb, cs); }                         // Lighten
-        case 9: { return cb + cs - cb * cs; }                   // Screen
-        case 10: { return color_dodge(cb, cs); }                // ColorDodge
-        case 11: { return min(cb + cs, hi); }                   // LinearDodge
-        case 13: { return hard_light(cs, cb); }                 // Overlay
-        case 14: { return soft_light_ps(cb, cs); }              // SoftLight
-        case 15: { return hard_light(cb, cs); }                 // HardLight
-        case 16: { return vivid_light_ps(cb, cs); }             // VividLight (Photoshop)
-        case 17: { return clamp(cb + 2.0 * cs - 1.0, 0.0, 1.0); } // LinearLight
-        case 18: {                                              // PinLight
-            if (cs <= 0.5) { return min(cb, 2.0 * cs); }
-            return max(cb, 2.0 * cs - 1.0);
+        case 3: { r = min(cb, cs); }                         // Darken
+        case 4: { r = cb * cs; }                             // Multiply
+        case 5: { r = color_burn(cb, cs); }                  // ColorBurn
+        case 6: { r = max(cb + cs - 1.0, 0.0); }             // LinearBurn
+        case 8: { r = max(cb, cs); }                         // Lighten
+        case 9: { r = cb + cs - cb * cs; }                   // Screen
+        case 10: { r = color_dodge(cb, cs); }                // ColorDodge
+        case 11: { r = min(cb + cs, hi); }                   // LinearDodge
+        case 13: { r = hard_light(cs, cb); }                 // Overlay
+        case 14: { r = soft_light_ps(cb, cs); }              // SoftLight
+        case 15: { r = hard_light(cb, cs); }                 // HardLight
+        case 16: { r = vivid_light_ps(cb, cs); }             // VividLight (Photoshop)
+        case 17: { r = clamp(cb + 2.0 * cs - 1.0, 0.0, 1.0); } // LinearLight
+        case 18: {                                           // PinLight
+            if (cs <= 0.5) { r = min(cb, 2.0 * cs); }
+            else { r = max(cb, 2.0 * cs - 1.0); }
         }
-        case 19: {                                              // HardMix (Photoshop)
-            return select(0.0, 1.0, vivid_light_generic(cb, cs) >= 0.5 - 1e-6);
+        case 19: {                                           // HardMix (Photoshop)
+            r = select(0.0, 1.0, vivid_light_generic(cb, cs) >= 0.5 - 1e-6);
         }
-        case 20: { return abs(cb - cs); }                       // Difference
-        case 21: { return cb + cs - 2.0 * cb * cs; }            // Exclusion
-        case 22: { return max(cb - cs, 0.0); }                  // Subtract
-        case 23: {                                              // Divide
-            if (cs <= 0.0) { return select(1.0, 0.0, cb <= 0.0); }
-            return min(cb / cs, hi);
+        case 20: { r = abs(cb - cs); }                       // Difference
+        case 21: { r = cb + cs - 2.0 * cb * cs; }            // Exclusion
+        case 22: { r = max(cb - cs, 0.0); }                  // Subtract
+        case 23: {                                           // Divide
+            if (cs <= 0.0) { r = select(1.0, 0.0, cb <= 0.0); }
+            else { r = min(cb / cs, hi); }
         }
-        case 28: {                                             // Reflect
-            if (cs >= 1.0) { return 1.0; }
-            return min(cb * cb / (1.0 - cs), 1.0);
+        case 28: {                                           // Reflect
+            if (cs >= 1.0) { r = 1.0; }
+            else { r = min(cb * cb / (1.0 - cs), 1.0); }
         }
-        case 29: {                                             // Glow
-            if (cb >= 1.0) { return 1.0; }
-            return min(cs * cs / (1.0 - cb), 1.0);
+        case 29: {                                           // Glow
+            if (cb >= 1.0) { r = 1.0; }
+            else { r = min(cs * cs / (1.0 - cb), 1.0); }
         }
-        case 30: { return 1.0 - abs(1.0 - cb - cs); }            // Negation
-        case 31: {                                             // XOR (8-bit channel operation)
+        case 30: { r = 1.0 - abs(1.0 - cb - cs); }            // Negation
+        case 31: {                                           // XOR (8-bit channel operation)
             let b = u32(floor(clamp(cb, 0.0, 1.0) * 255.0 + 0.5));
             let s = u32(floor(clamp(cs, 0.0, 1.0) * 255.0 + 0.5));
-            return f32(b ^ s) / 255.0;
+            r = f32(b ^ s) / 255.0;
         }
-        case 32: {                                             // Paint.NET Color Burn
-            if (cs <= 0.0) { return 0.0; }
-            return max(1.0 - (1.0 - cb) / cs, 0.0);
+        case 32: {                                           // Paint.NET Color Burn
+            if (cs <= 0.0) { r = 0.0; }
+            else { r = max(1.0 - (1.0 - cb) / cs, 0.0); }
         }
-        case 33: {                                             // Paint.NET Color Dodge
-            if (cs >= 1.0) { return 1.0; }
-            return min(cb / (1.0 - cs), 1.0);
+        case 33: {                                           // Paint.NET Color Dodge
+            if (cs >= 1.0) { r = 1.0; }
+            else { r = min(cb / (1.0 - cs), 1.0); }
         }
-        default: { return cs; }                                 // Normal, Dissolve, PassThrough
+        default: { r = cs; }                                 // Normal, Dissolve, PassThrough
     }
+    return r;
 }
 
 fn lum(c: vec3<f32>) -> f32 { return 0.3 * c.r + 0.59 * c.g + 0.11 * c.b; }
@@ -291,7 +296,8 @@ fn composite(mode: i32, b: vec4<f32>, s: vec4<f32>, opacity: f32) -> vec4<f32> {
 // `psblend::text_encode` / `text_decode`: linear light raised to 1 / gamma.
 fn text_enc(c: vec3<f32>, g: f32) -> vec3<f32> {
     let l = vec3(srgb_to_linear(max(c.r, 0.0)), srgb_to_linear(max(c.g, 0.0)), srgb_to_linear(max(c.b, 0.0)));
-    return pow(l, vec3(1.0 / g));
+    // The base is never negative, but FXC (D3D12) can't see that and warns (X3571).
+    return pow(max(l, vec3(0.0)), vec3(1.0 / g));
 }
 fn text_dec(v: vec3<f32>, g: f32) -> vec3<f32> {
     let l = pow(max(v, vec3(0.0)), vec3(g));
@@ -373,7 +379,8 @@ fn composite_normal_fill(b: vec4<f32>, s: vec4<f32>, opacity: f32, fill: f32) ->
 // photocraft_color::convert::{srgb_to_lab, lab_to_srgb} (D50, Bradford to sRGB).
 const D50: vec3<f32> = vec3(0.96422, 1.0, 0.82521);
 fn lab_f(t: f32) -> f32 {
-    if (t > 0.008856452) { return pow(t, 1.0 / 3.0); }   // (6/29)^3
+    // The base is positive on this branch, but FXC (D3D12) can't see that and warns (X3571).
+    if (t > 0.008856452) { return pow(max(t, 0.0), 1.0 / 3.0); }   // (6/29)^3
     return t / 0.12841855 + 0.13793103;                    // 3 (6/29)^2, 4/29
 }
 fn lab_finv(t: f32) -> f32 {
@@ -413,7 +420,8 @@ fn dissolve_noise(d: vec2<i32>) -> f32 {
 
 fn srgb_to_linear(v: f32) -> f32 {
     if (v <= 0.04045) { return v / 12.92; }
-    return pow((v + 0.055) / 1.055, 2.4);
+    // The base is positive on this branch, but FXC (D3D12) can't see that and warns (X3571).
+    return pow(max((v + 0.055) / 1.055, 0.0), 2.4);
 }
 fn linear_to_srgb(v: f32) -> f32 {
     if (v <= 0.0031308) { return v * 12.92; }
@@ -453,8 +461,10 @@ fn vibrance_lin(c: vec3<f32>, v: f32, b0: vec4<f32>, b1: vec3<f32>) -> vec3<f32>
         if (h <= 30.0) { w = 1.0; }
         else if (h < 45.0) { w = (45.0 - h) / 15.0; }
         else if (h >= 300.0) { w = (h - 300.0) / 60.0; }
-        let a = v * (1.0 - w) + 0.64 * pow(v, 1.6) * w;
-        let boost = (b0.x * a + b0.y * a * a) * pow(t, b0.z) * pow(1.0 - t, b0.w)
+        // The bases are never negative (v >= 0 here, t in 0..1), but FXC (D3D12) can't see that and
+        // warns (X3571).
+        let a = v * (1.0 - w) + 0.64 * pow(max(v, 0.0), 1.6) * w;
+        let boost = (b0.x * a + b0.y * a * a) * pow(max(t, 0.0), b0.z) * pow(max(1.0 - t, 0.0), b0.w)
             * exp((b1.x + b1.y * a + b1.z * (1.0 - t)) * max(1.0 - mx, 0.0));
         t2 = min(t * (1.0 + boost), 1.0);
         v2 = mx + v / 4.0 * shape;
@@ -635,14 +645,18 @@ fn tone_channel(row: i32, v: f32, identity: f32, extrapolate: f32) -> f32 {
     return lut(row, v);
 }
 
+// One exit, not a return per case: FXC (D3D12) mis-analyses an early return inside a case of a
+// switch it inlines and rejects the function with X3507 ("not all control paths return a value"),
+// which leaves the whole compositor without a pipeline and the app on the CPU renderer.
 fn adjust(c: vec3<f32>) -> vec3<f32> {
     let hdr = (op.flags & F_HDR) != 0u;
     let p0 = op.p0;
     let p1 = op.p1;
     let p2 = op.p2;
     let p3 = op.p3;
+    var r = c;
     switch op.kind {
-        case 1: { return 1.0 - c; }                                            // Invert
+        case 1: { r = 1.0 - c; }                                            // Invert
         case 2: {                                                              // Threshold (compose::adjust::threshold_white)
             // p0.x = 8-bit level; p0.y = 1: 8-bit levels, 2: 16-bit samples against p0.z, 0: float.
             // Sums of 30 R + 59 G + 11 B over whole samples are exact in f32.
@@ -653,20 +667,20 @@ fn adjust(c: vec3<f32>) -> vec3<f32> {
                 let s = 30.0 * v.r + 59.0 * v.g + 11.0 * v.b;
                 white = select(s >= 100.0 * p0.z, s > 100.0 * p0.x - 50.0, p0.y < 1.5);
             }
-            return vec3(select(0.0, 1.0, white));
+            r = vec3(select(0.0, 1.0, white));
         }
         case 3: {                                                              // Posterize (p0.x levels; p0.y = 1: 16-bit)
-            if p0.y > 0.5 { return vec3(posterize16(c.r, p0.x), posterize16(c.g, p0.x), posterize16(c.b, p0.x)); }
-            return vec3(posterize(c.r, p0.x), posterize(c.g, p0.x), posterize(c.b, p0.x));
+            if p0.y > 0.5 { r = vec3(posterize16(c.r, p0.x), posterize16(c.g, p0.x), posterize16(c.b, p0.x)); }
+            else { r = vec3(posterize(c.r, p0.x), posterize(c.g, p0.x), posterize(c.b, p0.x)); }
         }
         case 4: {                                                              // B/C legacy: brightness before (p0.x) or after (p0.w) contrast around the pivot (p0.z); 32-bit unclipped
             let v = (c + p0.x - p0.z) * p0.y + p0.z + p0.w;
-            if (hdr) { return v; }
-            return clamp(v, vec3(0.0), vec3(1.0));
+            if (hdr) { r = v; }
+            else { r = clamp(v, vec3(0.0), vec3(1.0)); }
         }
-        case 6: { return vec3(exposure(c.r, p0), exposure(c.g, p0), exposure(c.b, p0)); }  // Exposure
-        case 7: { return vec3(tone_channel(0, c.r, p0.x, p0.w), tone_channel(1, c.g, p0.y, p0.w), tone_channel(2, c.b, p0.z, p0.w)); } // Levels / Curves / modern Brightness/Contrast (compose::adjust::modern_lut)
-        case 17: { return vec3(levels_float(0, levels_float(1, c.r)), levels_float(0, levels_float(2, c.g)), levels_float(0, levels_float(3, c.b))); }
+        case 6: { r = vec3(exposure(c.r, p0), exposure(c.g, p0), exposure(c.b, p0)); }  // Exposure
+        case 7: { r = vec3(tone_channel(0, c.r, p0.x, p0.w), tone_channel(1, c.g, p0.y, p0.w), tone_channel(2, c.b, p0.z, p0.w)); } // Levels / Curves / modern Brightness/Contrast (compose::adjust::modern_lut)
+        case 17: { r = vec3(levels_float(0, levels_float(1, c.r)), levels_float(0, levels_float(2, c.g)), levels_float(0, levels_float(3, c.b))); }
         case 8: {                                                              // Hue/Saturation
             let hsl = rgb_to_hsl(c);
             var hh: f32;
@@ -686,45 +700,46 @@ fn adjust(c: vec3<f32>) -> vec3<f32> {
                 // compose::adjust::hue_saturation: Colorize at the lightened / darkened lightness.
                 var ll = hsl.z * (1.0 + light);
                 if (light > 0.0) { ll = hsl.z + (1.0 - hsl.z) * light; }
-                return hsl_to_rgb(rem_euclid(p0.x, 360.0) / 360.0, min(abs(sat), 1.0), ll);
-            }
-            // Lightness first, then hue and saturation of the result.
-            var lc = c * (1.0 + light);
-            if (light > 0.0) { lc = c + (1.0 - c) * light; }
-            let lh = rgb_to_hsl(lc);
-            hh = rem_euclid(lh.x + (p0.x + dh) / 360.0, 1.0);
-            var rgb: vec3<f32>;
-            if (hdr) {
-                // 32-bit: the chroma scaled around the lightness, unclipped, by Photoshop's factor
-                // in whole numbers (compose::adjust::hue_saturation_in, hdr_saturation_factor).
-                var k: f32;
-                if (sat <= 0.0) {
-                    k = 1.0 - floor(-sat * 256.0 + 1e-4) / 256.0;
-                } else {
-                    let steps = min(u32(floor(sat * 254.0 + 1e-4)), 254u);
-                    k = f32(min(65280u / (255u - steps), 32767u)) / 256.0;
-                }
-                let d = (max(max(lc.r, lc.g), lc.b) - min(min(lc.r, lc.g), lc.b)) * k;
-                let lo = lh.z - d / 2.0;
-                let hi = lh.z + d / 2.0;
-                rgb = vec3(hue_ch(lo, hi, hh + 1.0 / 3.0), hue_ch(lo, hi, hh), hue_ch(lo, hi, hh - 1.0 / 3.0));
+                r = hsl_to_rgb(rem_euclid(p0.x, 360.0) / 360.0, min(abs(sat), 1.0), ll);
             } else {
-                // Raising saturation divides by 1 - s; lowering it multiplies by 1 + s.
-                if (sat > 0.0) {
-                    ss = clamp(lh.y / max(1.0 - sat, 1.0 / 512.0), 0.0, 1.0);
+                // Lightness first, then hue and saturation of the result.
+                var lc = c * (1.0 + light);
+                if (light > 0.0) { lc = c + (1.0 - c) * light; }
+                let lh = rgb_to_hsl(lc);
+                hh = rem_euclid(lh.x + (p0.x + dh) / 360.0, 1.0);
+                var rgb: vec3<f32>;
+                if (hdr) {
+                    // 32-bit: the chroma scaled around the lightness, unclipped, by Photoshop's factor
+                    // in whole numbers (compose::adjust::hue_saturation_in, hdr_saturation_factor).
+                    var k: f32;
+                    if (sat <= 0.0) {
+                        k = 1.0 - floor(-sat * 256.0 + 1e-4) / 256.0;
+                    } else {
+                        let steps = min(u32(floor(sat * 254.0 + 1e-4)), 254u);
+                        k = f32(min(65280u / (255u - steps), 32767u)) / 256.0;
+                    }
+                    let d = (max(max(lc.r, lc.g), lc.b) - min(min(lc.r, lc.g), lc.b)) * k;
+                    let lo = lh.z - d / 2.0;
+                    let hi = lh.z + d / 2.0;
+                    rgb = vec3(hue_ch(lo, hi, hh + 1.0 / 3.0), hue_ch(lo, hi, hh), hue_ch(lo, hi, hh - 1.0 / 3.0));
                 } else {
-                    ss = clamp(lh.y * (1.0 + sat), 0.0, 1.0);
+                    // Raising saturation divides by 1 - s; lowering it multiplies by 1 + s.
+                    if (sat > 0.0) {
+                        ss = clamp(lh.y / max(1.0 - sat, 1.0 / 512.0), 0.0, 1.0);
+                    } else {
+                        ss = clamp(lh.y * (1.0 + sat), 0.0, 1.0);
+                    }
+                    rgb = hsl_to_rgb(hh, ss, lh.z);
                 }
-                rgb = hsl_to_rgb(hh, ss, lh.z);
+                // compose::adjust::range_lightness: towards the brightest channel when raised, the darkest when lowered.
+                let rl = clamp(dl, -1.0, 1.0);
+                if (rl > 0.0) {
+                    rgb = rgb + (vec3(max(rgb.r, max(rgb.g, rgb.b))) - rgb) * rl;
+                } else if (rl < 0.0) {
+                    rgb = rgb + (vec3(min(rgb.r, min(rgb.g, rgb.b))) - rgb) * -rl;
+                }
+                r = rgb;
             }
-            // compose::adjust::range_lightness: towards the brightest channel when raised, the darkest when lowered.
-            let rl = clamp(dl, -1.0, 1.0);
-            if (rl > 0.0) {
-                rgb = rgb + (vec3(max(rgb.r, max(rgb.g, rgb.b))) - rgb) * rl;
-            } else if (rl < 0.0) {
-                rgb = rgb + (vec3(min(rgb.r, min(rgb.g, rgb.b))) - rgb) * -rl;
-            }
-            return rgb;
         }
         case 9: {                                                              // Vibrance
             // compose::adjust::vibrance_px: linear light (transfer p0.z), Vibrance (p0.x, boost
@@ -736,24 +751,26 @@ fn adjust(c: vec3<f32>) -> vec3<f32> {
                 l = clamp(vec3(g) + (1.0 + p0.y) * (l - vec3(g)), vec3(0.0), vec3(p0.w));
             }
             l = clamp(l, vec3(0.0), vec3(p0.w));
-            return vec3(t_encode(l.r, p0.z), t_encode(l.g, p0.z), t_encode(l.b, p0.z));
+            r = vec3(t_encode(l.r, p0.z), t_encode(l.g, p0.z), t_encode(l.b, p0.z));
         }
         case 10: {                                                             // Channel mixer (32-bit unclipped)
             let lo = select(0.0, -F32_MAX, hdr);
             let hi = select(1.0, F32_MAX, hdr);
-            let r = clamp(dot(p0.xyz, c) + p0.w, lo, hi);
-            if (p3.x > 0.5) { return vec3(r); }
-            return vec3(r, clamp(dot(p1.xyz, c) + p1.w, lo, hi), clamp(dot(p2.xyz, c) + p2.w, lo, hi));
+            let mix0 = clamp(dot(p0.xyz, c) + p0.w, lo, hi);
+            if (p3.x > 0.5) { r = vec3(mix0); }
+            else { r = vec3(mix0, clamp(dot(p1.xyz, c) + p1.w, lo, hi), clamp(dot(p2.xyz, c) + p2.w, lo, hi)); }
         }
         case 11: {                                                             // Photo filter
             // compose::adjust::photo_filter_matrix (rows p0..p2) in linear light, then SetLum.
             // 32-bit samples are linear already and stay unclipped.
-            if (hdr) { return vec3(dot(p0.xyz, c), dot(p1.xyz, c), dot(p2.xyz, c)); }
-            let g = p3.y;
-            let lin = vec3(t_decode(c.r, g), t_decode(c.g, g), t_decode(c.b, g));
-            var f = vec3(t_encode(dot(p0.xyz, lin), g), t_encode(dot(p1.xyz, lin), g), t_encode(dot(p2.xyz, lin), g));
-            if (p3.x > 0.5) { f = set_lum(f, lum(c), 1.0); }
-            return clamp(f, vec3(0.0), vec3(1.0));
+            if (hdr) { r = vec3(dot(p0.xyz, c), dot(p1.xyz, c), dot(p2.xyz, c)); }
+            else {
+                let g = p3.y;
+                let lin = vec3(t_decode(c.r, g), t_decode(c.g, g), t_decode(c.b, g));
+                var f = vec3(t_encode(dot(p0.xyz, lin), g), t_encode(dot(p1.xyz, lin), g), t_encode(dot(p2.xyz, lin), g));
+                if (p3.x > 0.5) { f = set_lum(f, lum(c), 1.0); }
+                r = clamp(f, vec3(0.0), vec3(1.0));
+            }
         }
         case 12: {                                                             // Black & White
             // compose::adjust::black_white_gray: grey + secondary + primary parts, weighted.
@@ -768,26 +785,28 @@ fn adjust(c: vec3<f32>) -> vec3<f32> {
             // 32-bit: superwhites stay, up to Photoshop's 16
             let g = clamp(mn + (mid - mn) * w[secondary] / 100.0 + (mx - mid) * w[primary] / 100.0, 0.0, select(1.0, 16.0, hdr));
             if (p1.z > 0.5) {
-                if (hdr) { return set_lum(p2.rgb, g, F32_MAX); }                // 32-bit: nothing clips at 1
-                return clamp(set_lum(p2.rgb, g, 1.0), vec3(0.0), vec3(1.0));   // Color blend of the tint
+                if (hdr) { r = set_lum(p2.rgb, g, F32_MAX); }                    // 32-bit: nothing clips at 1
+                else { r = clamp(set_lum(p2.rgb, g, 1.0), vec3(0.0), vec3(1.0)); } // Color blend of the tint
+            } else {
+                r = vec3(g);
             }
-            return vec3(g);
         }
         case 13: {                                                             // Gradient map (driven by the W3C luminosity)
             var t = lum(c);
             if (p0.x > 0.5) { t = 1.0 - t; }
             var o = vec3(lut(0, t), lut(1, t), lut(2, t));
             if (p0.y > 0.5) { o = clamp(o + bayer4(adj_px) / 255.0, vec3(0.0), vec3(1.0)); }
-            return o;
+            r = o;
         }
-        case 15: { return selective_color(c, p0.x > 0.5); }                       // Selective color
+        case 15: { r = selective_color(c, p0.x > 0.5); }                       // Selective color
         case 16: {                                                             // Color lookup (3D LUT)
             var o = color_lookup(c, i32(p0.x), p0.y > 0.5);
             if (p0.z > 0.5) { o = clamp(o + bayer4(adj_px) / 255.0, vec3(0.0), vec3(1.0)); }
-            return o;
+            r = o;
         }
-        default: { return c; }
+        default: { r = c; }
     }
+    return r;
 }
 
 // ---- fills ----------------------------------------------------------------------------------
