@@ -128,6 +128,10 @@ fn apply_depth_mode(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, dept
             }
         }
         Adjustment::BrightnessContrast { brightness, contrast, .. } => {
+            // A neutral adjustment must preserve negative and above-white float samples.
+            if *brightness == 0.0 && *contrast == 0.0 {
+                return;
+            }
             // Modern (CS3+) Brightness/Contrast, reverse-engineered from Photoshop ground truth.
             // Unlike the legacy linear scale, both are smooth curves that pin pure black and white
             // (see `modern_brightness` and `modern_contrast`), applied brightness then contrast

@@ -141,17 +141,11 @@ fn lut_extended(table: &[f32], v: f32) -> f32 {
     if v < 0.0 { table[0] + v * (table[k] - table[0]) * per_unit } else { table[n - 1] + (v - 1.0) * (table[n - 1] - table[n - 1 - k]) * per_unit }
 }
 
-/// Modern Brightness curve (one channel, `brightness` in [-150, 150]); pins pure black and white,
-/// and `b = 0` is the identity. Raised, it is a line of slope `s = 1.375^(b/50)` from the origin
-/// up to a knee at output 126/255, then a cubic Hermite to (1, 1) whose end slope is
-/// `1 / (1 + 0.084 b)`; past about +110, where no such cubic stays below white, the roll-off is
-/// `1 - (1 - y0)(1 - u)^α` instead (continuous slope `α` at the knee, flat at white). Lowered, it
-/// is the inverse of the curve raised by as much.
-///
-/// Fit to every Photoshop measurement we have, all within about a level and a half: its ±50
-/// samples (`modern_brightness_matches_photoshop`), the photoshop corpus's brightness-contrast.psd
-/// (+25 with contrast +30) and psd-tools' brightnesscontrast_rgb.psd, whose masked layers give
-/// +23, -31 and -95 (+150 within 6 levels there, where every curve family tried bottoms out).
+/// Modern Brightness curve, fitted to Photoshop 26.11.6 RGB/8 and RGB/16 ramps.
+/// Raised: a line of slope `2^(b/110)` up to output 0.5, then a Hermite roll-off to white
+/// with endpoint slope `max(0.1, 1/(12s-11))`. Lowered: the inverse of the raised curve.
+/// Very high positive brightness uses a monotone power roll-off instead of an overshooting
+/// cubic; that fallback remains an approximation of Photoshop's highlight curve.
 pub fn modern_brightness(v: f32, brightness: f32) -> f32 {
     if brightness == 0.0 || !brightness.is_finite() {
         return v;
@@ -172,13 +166,13 @@ struct Brightness {
 }
 
 /// Output level of the Brightness curve's knee.
-const BRIGHTNESS_KNEE: f32 = 126.0 / 255.0;
+const BRIGHTNESS_KNEE: f32 = 0.5;
 
 impl Brightness {
     fn new(brightness: f32) -> Self {
-        let b = brightness.abs();
-        let s = 1.375f32.powf(b / 50.0);
-        let e = 1.0 / (1.0 + 0.084 * b);
+        let b = brightness.abs().min(150.0);
+        let s = (b / 110.0).exp2();
+        let e = (1.0 / (12.0 * s - 11.0)).max(0.1);
         let x0 = (BRIGHTNESS_KNEE / s).min(1.0);
         let secant = (1.0 - BRIGHTNESS_KNEE) / (1.0 - x0).max(1e-6);
         let (alpha, beta) = (s / secant, e / secant);
@@ -243,6 +237,10 @@ pub fn modern_lut(brightness: f32, contrast: f32) -> Vec<f32> {
         (0..LUT_SIZE)
             .map(|k| {
                 let y = step(k, LUT_SIZE);
+                // Raised highlights can round to white before the final sample.
+                if k == 0 || k + 1 == LUT_SIZE {
+                    return y;
+                }
                 while j + 2 < fine && ys.get(j + 1).is_some_and(|&n| n < y) {
                     j += 1;
                 }
@@ -255,19 +253,16 @@ pub fn modern_lut(brightness: f32, contrast: f32) -> Vec<f32> {
     bright.into_iter().map(|b| modern_contrast(b, contrast).clamp(0.0, 1.0)).collect()
 }
 
-/// Modern Contrast curve (one channel, `contrast` in [-50, 100]). A symmetric cubic-Hermite S-curve
-/// pivoting at 0.5: endpoint slope `1 - c/128`, centre slope `1 + c/128`. Near-exact vs Photoshop
-/// (≤0.5/255). `c = 0` is the identity; pins 0, 0.5 and 1.
+/// Modern Contrast: two symmetric quadratic segments, pinned at black, middle gray and white.
+/// Photoshop 26.11.6 high-precision ramps give `k = 0.0076c`; `c/128` drifts across byte thresholds.
 pub fn modern_contrast(v: f32, contrast: f32) -> f32 {
-    if contrast == 0.0 {
+    if contrast == 0.0 || !contrast.is_finite() {
         return v;
     }
-    let k = contrast / 128.0;
-    let (end, mid) = (1.0 - k, 1.0 + k);
-    // Cubic Hermite on [0, 0.5]: pinned (0,0) slope `end`, (0.5,0.5) slope `mid`. `t` in [0,1].
-    let half = |t: f32| end * 0.5 * (t * t * t - 2.0 * t * t + t) + (-2.0 * t * t * t + 3.0 * t * t) * 0.5 + mid * 0.5 * (t * t * t - t * t);
+    let k = contrast.clamp(-50.0, 100.0) * 0.0076;
+    let half = |x: f32| x + k * (2.0 * x * x - x);
     let v = v.clamp(0.0, 1.0);
-    if v <= 0.5 { half(v / 0.5) } else { 1.0 - half((1.0 - v) / 0.5) }
+    if v <= 0.5 { half(v) } else { 1.0 - half(1.0 - v) }
 }
 
 /// Photoshop posterize: `n` equal input bins over 0..=255, output levels
