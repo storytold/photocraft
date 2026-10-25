@@ -444,6 +444,12 @@ fn hue_saturation_eyedroppers_move_the_colour_range() {
     pick(&mut s, "subtract", 1.0);
     assert_eq!(reds(&s)[2], 195.0, "pulled back to 15° short of the blue");
     assert_eq!(s.active().unwrap().history.past_len(), steps + 3);
+    // As documented for `layer.setAdjustment`: an explicit `color`, and `size` around `at`.
+    s.execute("layer.setAdjustment", json!({"eyedropper": {"point": "sample", "range": "reds", "color": [0.0, 0.5, 1.0]}})).unwrap();
+    assert_eq!(reds(&s), [165.0, 195.0, 225.0, 255.0], "the colour's hue, 210°");
+    pick(&mut s, "add", 6.0);
+    s.execute("layer.setAdjustment", json!({"eyedropper": {"point": "sample", "range": "reds", "at": [1, 2], "size": 3}})).unwrap();
+    assert_eq!(reds(&s), [165.0, 195.0, 225.0, 255.0], "a 3 × 3 sample of the blue");
     for bad in [
         json!({"point": "sample", "range": "reds", "color": [0.5, 0.5, 0.5]}),
         json!({"point": "black", "range": "reds", "at": [1, 1]}),
