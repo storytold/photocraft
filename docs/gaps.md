@@ -319,8 +319,11 @@ what an agent can't finish alone.
 ## Hardware gaps
 
 ### G12. Pen tablets and display hardware
+- **Progress (2026-10-19):** Linux XInput2 processes only the slave copy of each raw event; Abs
+  Wheel barrel rotation on Xwayland; emulated pointer motion no longer clears pen pressure.
 - **Missing:** tilt and rotation on Windows (pressure only, via WM_POINTER; no WinTab); native
-  Wayland tablet-v2 (#79; the pen does not click on GNOME 50, #2622, KDE #2297); eraser end on
+  Wayland tablet-v2 (#79; the pen does not click on GNOME 50, #2622, KDE #2297 — pen input on
+  Xwayland still needs pointer clicks to reach the window); eraser end on
   flipped Wacom pens (#2285); HDR/EDR output (Photoshop has "Precise Color Management for HDR
   Display"); monitor profile detection off macOS and live profile changes; Touch Bar (macOS
   Intel only, low value); 3D mice.

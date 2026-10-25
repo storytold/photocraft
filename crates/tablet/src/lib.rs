@@ -12,9 +12,10 @@
 //!   allow `unsafe` (craftrules never-crash: an isolated, tested helper crate with `SAFETY:`
 //!   comments on every block).
 //! - **Linux X11** ([`x11::spawn`]): a second, pure-Rust X connection (x11rb) selects XInput2
-//!   raw events on the root window and maps the tablet device's valuators ("Abs Pressure",
-//!   "Abs Tilt X/Y", "Abs Rotary Z") to samples. Raw events reach every client that asks, also
-//!   while winit holds the pointer grab of a drag. No `unsafe`.
+//!   raw events on the root window, keeps only the slave copy of each delivery (`deviceid ==
+//!   sourceid`), and maps valuators ("Abs Pressure", "Abs Tilt X/Y", "Abs Rotary Z", Xwayland
+//!   "Abs Wheel" rotation) to samples. Raw events reach every client that asks, also while winit
+//!   holds the pointer grab of a drag. No `unsafe`.
 //! - **Wayland**: not covered. The `zwp_tablet_v2` protocol has to be bound on winit's own
 //!   `wl_display` connection (the tablet events name winit's `wl_surface`), which needs
 //!   `unsafe` foreign-display interop, and binding it makes compositors stop emulating the
