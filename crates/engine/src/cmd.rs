@@ -854,7 +854,7 @@ fn build() -> Vec<CommandSpec> {
             "Adjustment Properties",
             [],
             None,
-            r##"{"layer":id?, …params of that adjustment kind} (Levels, Curves: "eyedropper":{"point":"black|gray|white","at":[x,y],"size":1..101=1} or {"point",…,"color":[r,g,b] 0..1} = the Properties panel's Set Black/Neutral Gray/White Point, sampling the image below the layer, RGB and Grayscale (no gray) only; Hue/Saturation: "eyedropper":{"point":"sample|add|subtract","range":"reds…magentas","at":[x,y]} = its colour range eyedroppers)"##,
+            r##"{"layer":id?, …params of that adjustment kind} (Levels, Curves: "eyedropper":{"point":"black|gray|white","at":[x,y],"size":1..101=1} or {"point",…,"color":[r,g,b] 0..1} = the Properties panel's Set Black/Neutral Gray/White Point, sampling the image below the layer, RGB and Grayscale (no gray) only; Hue/Saturation: "eyedropper":{"point":"sample|add|subtract","range":"reds…magentas","at":[x,y],"size":1..101=1} or {"point",…,"color":[r,g,b] 0..1} = its colour range eyedroppers)"##,
             has_layer,
             |s, p| {
                 let id = layer_param(s, p)?;
