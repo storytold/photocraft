@@ -74,9 +74,9 @@ pub struct RawTuning {
     pub dehaze: f32,
 }
 
-/// Illuminant presets use published CIE standard illuminant xy coordinates, rather than
-/// Adobe profiles or arbitrary offsets on the relative temperature slider. They are not an
-/// emulation of Adobe's camera-specific rendering. F2 is the cool-white fluorescent preset.
+/// Presets prefer the camera's own fixed white-balance coefficients when supported.
+/// Otherwise they use published CIE illuminant xy coordinates. They are not an emulation
+/// of Adobe's rendering. F2 is the fallback cool-white fluorescent preset.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum RawWhiteBalance {
     #[default]
@@ -121,6 +121,20 @@ impl RawWhiteBalance {
             Self::Fluorescent => WhiteBalance::Illuminant([0.37208, 0.37529]),            // F2
         }
     }
+
+    fn choice_from_file(self, bytes: &[u8]) -> WhiteBalance {
+        use photocraft_raw::CameraWhiteBalance as Camera;
+        let preset = match self {
+            Self::Daylight => Camera::Daylight,
+            Self::Cloudy => Camera::Cloudy,
+            Self::Shade => Camera::Shade,
+            Self::Tungsten => Camera::Tungsten,
+            Self::Fluorescent => Camera::Fluorescent,
+            Self::Flash => Camera::Flash,
+            Self::AsShot | Self::Auto => return self.choice(),
+        };
+        photocraft_raw::camera_white_balance(bytes, preset).map(WhiteBalance::Multipliers).unwrap_or_else(|| self.choice())
+    }
 }
 
 /// Develops a raw file with `tuning` applied at the raw stage: Exposure as develop exposure,
@@ -149,7 +163,7 @@ pub fn import_raw_tuned(name: &str, bytes: &[u8], tuning: &RawTuning) -> Result<
     let camera_look = default_look(bytes, &sensor);
     let mut opts = DevelopOptions { limits: limits(), exposure, demosaic: tuning.demosaic, tone, camera_look, ..Default::default() };
     let (base_wb, balance_warnings) = if tuning.white_balance != RawWhiteBalance::AsShot {
-        let (m, warnings) = photocraft_raw::white_balance_multipliers(&sensor, tuning.white_balance.choice()).map_err(IoError::Raw)?;
+        let (m, warnings) = photocraft_raw::white_balance_multipliers(&sensor, tuning.white_balance.choice_from_file(bytes)).map_err(IoError::Raw)?;
         (Some(m), warnings)
     } else {
         (sensor.camera_wb, Vec::new())
@@ -371,6 +385,38 @@ mod tests {
         }
         assert_eq!(RawWhiteBalance::default(), RawWhiteBalance::AsShot);
         assert!(RawWhiteBalance::from_id("Adobe Color").is_none());
+    }
+
+    #[test]
+    fn camera_presets_take_precedence_without_changing_auto_or_missing_metadata() {
+        use photocraft_raw::testgen::{TiffBuilder, Val};
+        let mut words = vec![0u16; 168];
+        words[0] = 14;
+        let presets = [
+            (RawWhiteBalance::Daylight, 133),
+            (RawWhiteBalance::Shade, 138),
+            (RawWhiteBalance::Cloudy, 143),
+            (RawWhiteBalance::Tungsten, 148),
+            (RawWhiteBalance::Fluorescent, 153),
+            (RawWhiteBalance::Flash, 163),
+        ];
+        for (i, (_, offset)) in presets.iter().enumerate() {
+            words[*offset..*offset + 5].copy_from_slice(&[1800 + i as u16 * 100, 1024, 1024, 1500, 5000]);
+        }
+        let mut t = TiffBuilder::default();
+        let main = t.ifd(vec![]);
+        let mn = t.ifd(vec![(0x4001, Val::Short(words))]);
+        let exif = t.ifd(vec![(0x927c, Val::IfdBytes(mn))]);
+        t.ifds[main] = vec![(0x8769, Val::Ifds(vec![exif]))];
+        t.cr2_raw_ifd = Some(t.ifd(vec![]));
+        t.chain = vec![main];
+        let bytes = t.build();
+        for (i, (preset, _)) in presets.iter().enumerate() {
+            assert_eq!(preset.choice_from_file(&bytes), WhiteBalance::Multipliers([(1800.0 + i as f64 * 100.0) / 1024.0, 1.0, 1500.0 / 1024.0]));
+            assert_eq!(preset.choice_from_file(&[]), preset.choice());
+        }
+        assert_eq!(RawWhiteBalance::Auto.choice_from_file(&bytes), WhiteBalance::Auto);
+        assert_eq!(RawWhiteBalance::AsShot.choice_from_file(&bytes), WhiteBalance::AsShot);
     }
 
     #[test]

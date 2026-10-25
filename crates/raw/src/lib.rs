@@ -43,6 +43,7 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod camera_wb;
 mod cameras;
 mod color;
 mod cr2;
@@ -71,6 +72,7 @@ mod tone;
 #[cfg(feature = "testgen")]
 pub mod testgen;
 
+pub use crate::camera_wb::{CameraWhiteBalance, camera_white_balance};
 pub use crate::color::{Calibration, ColorInfo, Mat3};
 pub use crate::demosaic::Demosaic;
 pub use crate::develop::{DevelopOptions, Developed, RawInfo, WhiteBalance, develop_sensor, white_balance_multipliers};

@@ -14,8 +14,9 @@ Come scattato, Automatico, Luce diurna, Nuvolo, Ombreggiatura, Tungsteno, Fluore
 ## Limiti della prima versione
 
 - È una build personalizzata di prova, senza firma digitale del produttore.
-- Sono preset di PhotoCraft, basati su illuminanti CIE. Non usano il motore Adobe e non garantiscono una resa identica a Photoshop.
-- Quando manca la calibrazione della fotocamera, i preset di illuminazione sono approssimativi. Questo vale anche per i CR2 attualmente decodificati da PhotoCraft. Il programma mostra un avviso.
+- I preset usano i coefficienti della fotocamera quando disponibili e supportati; altrimenti usano illuminanti CIE. Non usano il motore Adobe e non garantiscono una resa identica a Photoshop.
+- I CR2 con Canon ColorData versione 14 (inclusa EOS 2000D) usano i coefficienti Canon incorporati per luce diurna, nuvolo, ombra, tungsteno, fluorescente e flash. Non è una calibrazione cromatica completa e i valori Canon possono differire dai preset Adobe.
+- Negli altri RAW, quando manca la calibrazione della fotocamera, i preset di illuminazione restano approssimativi e il programma mostra un avviso.
 - La temperatura resta una regolazione relativa da −100 a +100; non è un valore in Kelvin.
 - I profili Adobe Colori, Ritratto e Paesaggio non sono inclusi.
 - Il menu richiede l'apertura del RAW originale: non appare nel filtro su un JPEG o su un livello già sviluppato.
@@ -40,7 +41,14 @@ Gli illuminanti sono D55 (luce diurna e flash), D65 (nuvolo), D75 (ombra), A (tu
 e F2 (fluorescente), con coordinate CIE 1931 a 2°. Coordinate di riferimento:
 https://www.colour-science.org/api/0.3.1/html/_modules/colour/colorimetry/dataset/illuminants/chromaticity_coordinates.html
 
-La calibrazione presente nel RAW viene usata tramite `ColorInfo::xy_to_neutral`.
+Prima dei valori CIE vengono cercati i coefficienti RGGB incorporati nel CR2:
+`camera_white_balance`, Canon ColorData8 versione 14, con conversione delle due
+componenti verdi nella loro media. Layout da documentazione pubblica:
+https://exiftool.org/TagNames/Canon.html#ColorData8
+Le altre versioni, i dati troncati e i coefficienti non validi usano il fallback.
+Automatico resta una stima dell'immagine, non il valore Auto memorizzato dalla fotocamera.
+
+Nel fallback la calibrazione presente nel RAW viene usata tramite `ColorInfo::xy_to_neutral`.
 In sua assenza viene dichiarato il modello approssimativo a primarie sRGB.
 Automatico usa la stima grey-world già presente nel decoder.
 

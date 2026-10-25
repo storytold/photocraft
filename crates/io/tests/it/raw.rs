@@ -46,6 +46,57 @@ fn cr2_opens() {
     assert_eq!(r.document.depth, SampleType::U16);
 }
 
+#[test]
+fn canon_fixed_balance_uses_camera_gains_before_relative_sliders() {
+    use photocraft_io::raw::{RawTuning, RawWhiteBalance, import_raw_tuned};
+    use photocraft_raw::{DevelopOptions, WhiteBalance, decode, develop_sensor};
+    let (w, h) = (48, 32);
+    let mut bytes = Cr2Spec {
+        width: w,
+        height: h,
+        data: mosaic(&scene(w, h), w, [0, 1, 1, 2], 0, 12000),
+        precision: 14,
+        components: 2,
+        slices: vec![24, 24],
+        borders: None,
+        wb_rggb: Some([2048, 1024, 1024, 1536]),
+        orientation: 1,
+        model_id: None,
+    }
+    .build();
+    // Locate the synthetic file's ColorData entry, then populate a version-14
+    // table. No real photograph or proprietary profile is a test fixture.
+    let u16_at = |b: &[u8], at| u16::from_le_bytes([b[at], b[at + 1]]);
+    let u32_at = |b: &[u8], at| u32::from_le_bytes([b[at], b[at + 1], b[at + 2], b[at + 3]]) as usize;
+    let value = |b: &[u8], ifd, tag| {
+        let entry = (0..usize::from(u16_at(b, ifd))).map(|i| ifd + 2 + i * 12).find(|&at| u16_at(b, at) == tag).unwrap();
+        u32_at(b, entry + 8)
+    };
+    let main = u32_at(&bytes, 4);
+    let exif = value(&bytes, main, 34665);
+    let mn = value(&bytes, exif, 37500);
+    let data = value(&bytes, mn, 0x4001);
+    for (offset, words) in [(0, vec![14]), (63, vec![2048, 1024, 1024, 1536]), (133, vec![2304, 1024, 1024, 1792, 5200])] {
+        for (i, word) in words.into_iter().enumerate() {
+            bytes[data + (offset + i) * 2..data + (offset + i) * 2 + 2].copy_from_slice(&u16::to_le_bytes(word));
+        }
+    }
+    let sensor = decode(&bytes, &Default::default()).unwrap();
+    for (temperature, tint) in [(0.0, 0.0), (20.0, -15.0)] {
+        let tuning = RawTuning { white_balance: RawWhiteBalance::Daylight, temperature, tint, ..Default::default() };
+        let (got, applied) = import_raw_tuned("camera.cr2", &bytes, &tuning).unwrap();
+        assert!(applied);
+        assert!(!got.warnings.iter().any(|w| w.contains("illuminant white balance is approximate")));
+        let g = photocraft_algo::camera_raw::white_balance_gains(temperature, tint).map(f64::from);
+        let expected =
+            develop_sensor(&sensor, &DevelopOptions { white_balance: WhiteBalance::Multipliers([2.25 * g[0], g[1], 1.75 * g[2]]), ..Default::default() })
+                .unwrap();
+        let pixels = photocraft_io::document_to_image(&got.document, &mut Vec::new()).unwrap();
+        let expected: Vec<_> = expected.rgb.iter().flat_map(|v| v.to_ne_bytes()).collect();
+        assert_eq!(pixels.data(), expected);
+    }
+}
+
 /// #6957: a developed raw keeps the raw's EXIF (camera, exposure), so File Info shows its Camera
 /// Data. The raw's Orientation is left out: the developed image is already upright.
 #[test]
