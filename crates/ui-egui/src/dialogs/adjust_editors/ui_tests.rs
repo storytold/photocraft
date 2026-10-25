@@ -941,3 +941,50 @@ fn hue_saturation_range_zones_drag_their_handles() {
     assert!((b[0] - (before[0] - 18.0)).abs() <= 1.0 && (b[1] - (before[1] - 18.0)).abs() <= 1.0, "left two moved: {before:?} → {b:?}");
     assert_eq!([b[2], b[3]], [before[2], before[3]], "right two stay");
 }
+
+/// CodeRabbit on #9272: a move and release that land in the same frame still move the zone; the
+/// release frame applies its position before the drag commits.
+#[test]
+fn a_zone_drag_released_in_the_frame_it_moves_still_moves() {
+    let mut h = app_harness("hueSaturation", "rgb", 8);
+    let (id, _) = layer(&h);
+    let mem = crate::adjust_editors::layer_mem(id);
+    h.ctx.data_mut(|d| d.insert_temp(mem.with("hs-range"), 3usize)); // Greens: 75/105…135\165
+    h.run_steps(3);
+    let bars: Rect = h.ctx.data(|d| d.get_temp(mem.with("hs-range-bars"))).expect("the range bars");
+    let x = |deg: f32| bars.left() + deg / 360.0 * bars.width();
+    let y = bars.center().y;
+    let steps = h.state().session.active().unwrap().history.past_len();
+    let (from, to) = (Pos2::new(x(120.0), y), Pos2::new(x(156.0), y));
+    h.hover_at(from);
+    h.run_steps(1);
+    h.drag_at(from);
+    h.run_steps(1);
+    // One frame: the pointer moves and lets go (the harness's queued events take a frame each,
+    // so both go straight into the next frame's input).
+    let events = &mut h.input_mut().events;
+    events.push(egui::Event::PointerMoved(to));
+    events.push(egui::Event::PointerButton { pos: to, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+    h.run_steps(3);
+    let b = match layer(&h).1 {
+        Adjustment::HueSaturation { ranges, .. } => ranges[2].bounds,
+        other => panic!("{other:?}"),
+    };
+    assert!((b[0] - 111.0).abs() <= 1.0 && (b[3] - 201.0).abs() <= 1.0, "all four moved ~36°: {b:?}");
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1, "one step");
+    // A handle released in the frame it moves lands there too.
+    let (from, to) = (Pos2::new(x(b[3]), y), Pos2::new(x(b[3] + 20.0), y));
+    h.hover_at(from);
+    h.run_steps(1);
+    h.drag_at(from);
+    h.run_steps(1);
+    let events = &mut h.input_mut().events;
+    events.push(egui::Event::PointerMoved(to));
+    events.push(egui::Event::PointerButton { pos: to, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+    h.run_steps(3);
+    let after = match layer(&h).1 {
+        Adjustment::HueSaturation { ranges, .. } => ranges[2].bounds,
+        other => panic!("{other:?}"),
+    };
+    assert!((after[3] - (b[3] + 20.0)).abs() <= 1.0 && after[..3] == b[..3], "the right handle moved 20°: {b:?} → {after:?}");
+}
