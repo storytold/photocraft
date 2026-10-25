@@ -120,9 +120,12 @@ impl Group {
     }
 
     /// Tabs that lay out their own scrolling list and footer, or size themselves to the group
-    /// (the Navigator's preview grows with it, as in Photoshop: #2726).
+    /// (the Navigator's preview grows with it, as in Photoshop: #2726). Channels and Paths are
+    /// Layers' siblings and do the same: wrapped in the dock's scroll area as well, the two nested
+    /// areas shared the wheel, and where the outer content overflowed by one physical pixel (at
+    /// 125 % scaling for some window heights) the footer and list moved a pixel as you scrolled (#6238).
     pub fn scrolls_itself(self, tab: usize) -> bool {
-        matches!((self, tab), (Group::Layers, 0) | (Group::History, 0) | (Group::History, 1) | (Group::Navigator, 0))
+        matches!((self, tab), (Group::Layers, 0..=2) | (Group::History, 0) | (Group::History, 1) | (Group::Navigator, 0))
     }
 
     pub(crate) fn tab_mut(self, tabs: &mut DockTabs) -> &mut usize {
@@ -417,6 +420,24 @@ pub fn rail_click(app: &mut PhotocraftApp, g: Group, docked: bool) {
     }
 }
 
+/// A tab strip's Close: hide `tab` of `g`, and the group with its last tab. When the selected
+/// tab closes, the next one on the strip (or the previous one, for the last) is selected.
+pub(crate) fn close_tab(app: &mut PhotocraftApp, g: Group, tab: usize, pro: bool) {
+    let shown_before = app.ui.dock.visible_tabs(g, pro);
+    app.ui.dock.hide_tab(g, tab, pro);
+    let remaining = app.ui.dock.visible_tabs(g, pro);
+    if remaining.is_empty() {
+        *g.shown_mut(&mut app.ui.panels) = false;
+    } else if *g.tab_mut(&mut app.ui.dock_tabs) == tab {
+        // Prefer the next tab on the strip, or the previous one when closing the last.
+        let at = shown_before.iter().position(|(i, _)| *i == tab).unwrap_or(0);
+        let next = shown_before.iter().skip(at + 1).find(|x| remaining.contains(x)).or_else(|| remaining.last());
+        if let Some(&(next, _)) = next {
+            *g.tab_mut(&mut app.ui.dock_tabs) = next;
+        }
+    }
+}
+
 /// Per-group interactions collected while drawing, applied afterwards.
 enum Action {
     ToggleCollapse(Group),
@@ -521,10 +542,7 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, shown: &[Group], mut bod
                 ui.set_min_height(inner);
                 body(app, ui, g, tab);
             } else {
-                // The pro Color field stretches to the group's height instead of a fixed 120 pt.
-                if t.pro && g == Group::Color && tab == 0 {
-                    ui.data_mut(|d| d.insert_temp(crate::panels::color_field_fill_id(), inner));
-                }
+                crate::panels::offer_color_field_fill(ui, t.pro, g, tab);
                 // No scroll fade: it darkens real colours, swatches and previews at the edge
                 // (#2726); the scroll bar already shows there is more.
                 ui.spacing_mut().scroll.fade.strength = 0.0;
@@ -608,8 +626,16 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, shown: &[Group], mut bod
                 crate::layer_row_ui::panel_menu(app, ui);
                 ui.separator();
             }
+            if tabs.get(sel) == Some(&"Color") {
+                crate::color_panel_ui::panel_menu(app, ui);
+                ui.separator();
+            }
             if tabs.get(sel) == Some(&"Swatches") {
                 crate::swatches_ui::panel_menu(app, ui);
+                ui.separator();
+            }
+            if tabs.get(sel) == Some(&"History") {
+                crate::history_menu_ui::panel_menu(app, ui);
                 ui.separator();
             }
             if tabs.get(sel) == Some(&"Brush Settings") {
@@ -637,6 +663,12 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, shown: &[Group], mut bod
                 ui.close();
             }
             ui.separator();
+            if ui.button(tl!("Close")).clicked() {
+                if let Some(&tab) = indices.get(sel) {
+                    actions.push(Action::CloseTab(g, tab));
+                }
+                ui.close();
+            }
             if ui.button(tl!("Close Tab Group")).clicked() {
                 actions.push(Action::Close(g));
                 ui.close();
@@ -693,21 +725,7 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, shown: &[Group], mut bod
                 app.ui.dock.set_collapsed(g, on);
             }
             Action::Close(g) => *g.shown_mut(&mut app.ui.panels) = false,
-            Action::CloseTab(g, tab) => {
-                let shown_before = app.ui.dock.visible_tabs(g, t.pro);
-                app.ui.dock.hide_tab(g, tab, t.pro);
-                let remaining = app.ui.dock.visible_tabs(g, t.pro);
-                if remaining.is_empty() {
-                    *g.shown_mut(&mut app.ui.panels) = false;
-                } else if *g.tab_mut(&mut app.ui.dock_tabs) == tab {
-                    // Prefer the next tab on the strip, or the previous one when closing the last.
-                    let at = shown_before.iter().position(|(i, _)| *i == tab).unwrap_or(0);
-                    let next = shown_before.iter().skip(at + 1).find(|x| remaining.contains(x)).or_else(|| remaining.last());
-                    if let Some(&(next, _)) = next {
-                        *g.tab_mut(&mut app.ui.dock_tabs) = next;
-                    }
-                }
-            }
+            Action::CloseTab(g, tab) => close_tab(app, g, tab, t.pro),
             Action::MoveTab(g, tab, before) => app.ui.dock.move_tab(g, tab, before, t.pro),
             Action::Move(g, before) => {
                 if before != Some(g) {

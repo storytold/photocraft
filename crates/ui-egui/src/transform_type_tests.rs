@@ -52,6 +52,7 @@ fn type_layers_offer_free_transform_but_not_distort_or_perspective() {
         pasteboard: false,
         anchor: None,
         text: false,
+        type_layer: false,
         guide: false,
         spelling: None,
     };

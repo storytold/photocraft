@@ -369,14 +369,14 @@ pub(crate) fn apply(px: &mut [[f32; 4]], width: usize, w: f32, b: f32, enc: Enco
             if per_channel {
                 for c in 0..3 {
                     let over = (lin[c] - 1.0).max(0.0);
-                    q[c] = enc.encode(super::srgb_decode(grey(super::srgb_encode(lin[c].min(1.0)))) + over);
+                    q[c] = enc.encode(super::srgb_to_linear(grey(super::linear_to_srgb(lin[c].min(1.0)))) + over);
                 }
             } else {
                 let y = super::luma_linear(lin).max(0.0);
                 if y <= 1e-7 {
                     continue;
                 }
-                let y2 = super::srgb_decode(grey(super::srgb_encode(y.min(1.0)))) + (y - 1.0).max(0.0);
+                let y2 = super::srgb_to_linear(grey(super::linear_to_srgb(y.min(1.0)))) + (y - 1.0).max(0.0);
                 let k = y2 / y;
                 for c in 0..3 {
                     q[c] = enc.encode(lin[c] * k);

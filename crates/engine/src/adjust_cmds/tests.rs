@@ -479,6 +479,26 @@ fn adjustment_smart_filters_take_a_selection_as_their_mask() {
     assert_eq!(at(&now, 40, 16), at(&original, 40, 16), "outside the mask the composite is unchanged");
 }
 
+/// #5655: as for `filter.*` smart filters, a pixel or full lock refuses an adjustment smart
+/// filter, leaving the layer and the history as they were.
+#[test]
+fn locked_smart_objects_refuse_adjustment_smart_filters() {
+    let adjustments =
+        [("image.adjustments.invert", json!({})), ("image.adjustments.shadowsHighlights", json!({"shadowAmount": 100, "blackClip": 0, "whiteClip": 0}))];
+    for lock in [json!({"all": true}), json!({"pixels": true})] {
+        for (cmd, p) in &adjustments {
+            let mut s = smart_session();
+            s.execute("layer.lockLayers", lock.clone()).unwrap();
+            let (steps, flat) = (s.active().unwrap().history.past_len(), flatten(&s));
+            let r = s.execute(cmd, p.clone());
+            assert!(r.is_err(), "{cmd} added a smart filter to a smart object locked with {lock}: {r:?}");
+            assert!(smart_filters_of(&s).is_empty(), "{cmd} {lock}: nothing recorded");
+            assert_eq!(s.active().unwrap().history.past_len(), steps, "{cmd} {lock}: no history step");
+            assert_eq!(flatten(&s), flat, "{cmd} {lock}: pixels untouched");
+        }
+    }
+}
+
 /// A wrong-typed value errors before anything is recorded (never a panic), and the adjustments
 /// that can't re-render from a source (Replace Color, Match Color) stay off a smart object.
 #[test]
@@ -710,4 +730,24 @@ fn invert_turns_the_black_of_quick_mask_and_alpha_channels_white() {
             );
         }
     }
+}
+
+/// #6558: a LUT folder lists its LUT files by name, case-insensitively, and nothing else.
+#[test]
+fn folder_luts_lists_lut_files_by_name() {
+    let dir = tempfile::tempdir().unwrap();
+    for f in ["b.cube", "A.3DL", "c.look", "notes.txt", ".hidden.cube", "noext"] {
+        std::fs::write(dir.path().join(f), "LUT_3D_SIZE 2\n").unwrap();
+    }
+    std::fs::create_dir(dir.path().join("sub.cube")).unwrap();
+    // Too large to be a LUT (sparse, so cheap to make).
+    std::fs::File::create(dir.path().join("huge.cube")).unwrap().set_len(MAX_FOLDER_LUT_BYTES + 1).unwrap();
+    // A symlink to a LUT is listed: shared LUT libraries are often linked in.
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(dir.path().join("b.cube"), dir.path().join("linked.cube")).unwrap();
+    let want: Vec<_> = ["A.3DL", "b.cube", "c.look"].into_iter().chain(cfg!(unix).then_some("linked.cube")).collect();
+    let names: Vec<_> = folder_luts(dir.path().to_str().unwrap()).into_iter().map(|(name, _)| name).collect();
+    assert_eq!(names, want);
+    assert!(folder_luts("").is_empty());
+    assert!(folder_luts(dir.path().join("missing").to_str().unwrap()).is_empty());
 }

@@ -6,20 +6,15 @@
 
 use photocraft_color::{BlendMode, PixelFormat};
 use photocraft_compose::pattern::{Placement, Tile, render};
-use photocraft_doc::Pattern;
+use photocraft_doc::{LayerId, Pattern};
 use photocraft_geom::Rect;
-use photocraft_paint::retouch::{Footprint, Region, apply_coverage, apply_dab_stroke, over_native, stroke_coverage};
+use photocraft_paint::retouch::{Footprint, Region, apply_coverage, apply_dab_stroke, over_native};
 use photocraft_paint::{Stroke, StrokePoint};
 use photocraft_raster::{Surface, from_rgba_into, to_rgba};
 use serde_json::{Value, json};
 
-use super::{bad, blend_param, damage_json, flag, has_pixel_layer, parse_brush};
+use super::{bad, blend_param, damage_json, flag, has_pixel_layer, parse_brush, reject_huge_stroke};
 use crate::{Result, Session};
-
-/// A single stroke's accumulated coverage must stay at or under this many pixels (8192², so a
-/// stroke corner to corner across a 24–36 MP canvas fits). Larger footprints return an error
-/// instead of allocating.
-const MAX_STROKE_PIXELS: u64 = 67_108_864;
 
 const STREAM_PHASE_X: u64 = 101;
 const STREAM_PHASE_Y: u64 = 102;
@@ -29,51 +24,108 @@ pub(super) fn enabled(s: &Session) -> std::result::Result<(), String> {
     if crate::pattern_cmds::resolve(s, "").is_none() { Err("no pattern selected".into()) } else { Ok(()) }
 }
 
+/// A parsed `paint.patternStamp`: shared by the command and its live preview, so both paint the
+/// same stroke (seeded the same way) with the same tile and placement.
+pub(super) struct Setup {
+    pub(super) stroke: Stroke,
+    pub(super) id: Option<LayerId>,
+    pub(super) mode: BlendMode,
+    aligned: bool,
+    pub(super) impressionist: bool,
+    pat: Pattern,
+    pub(super) tile: std::sync::Arc<Tile>,
+    phase: (f32, f32),
+    scale: f32,
+    angle: f32,
+    seed: u64,
+}
+
+impl Setup {
+    pub(super) fn parse(s: &Session, p: &Value) -> Result<Self> {
+        const CMD: &str = "paint.patternStamp";
+        let (mut stroke, id) = parse_brush(s, p, CMD)?;
+        let mode = blend_param(p, CMD)?;
+        let aligned = flag(p, "aligned", true);
+        let impressionist = flag(p, "impressionist", false);
+        let pat = crate::pattern_cmds::resolve_param(s, CMD, p)?;
+        if pat.is_empty() {
+            return Err(bad(CMD, "the pattern is empty"));
+        }
+        let scale = stamp_scale(p, CMD)?;
+        let angle = stamp_angle(p, CMD)?;
+        let Some(first) = stroke.points.first() else {
+            return Err(bad(CMD, "`points` is empty"));
+        };
+        let phase = stamp_phase(p, CMD, aligned, first)?;
+        let tile = std::sync::Arc::new(Tile::new(&pat).ok_or_else(|| bad(CMD, "the pattern is empty or too large to paint"))?);
+        reject_huge_stroke(CMD, &stroke)?;
+        let seed = p.get("seed").and_then(Value::as_u64).unwrap_or_else(|| {
+            let bytes = p.get("points").map(std::string::ToString::to_string).unwrap_or_default();
+            photocraft_paint::rng::seed_from_bytes(bytes.as_bytes())
+        });
+        stroke.brush.seed = seed;
+        Ok(Self { stroke, id, mode, aligned, impressionist, pat, tile, phase, scale, angle, seed })
+    }
+
+    /// Where the pattern sits (aligned strokes; Impressionist jitters it per dab).
+    pub(super) fn placement(&self) -> Placement {
+        placement(self.phase, self.scale, self.angle)
+    }
+
+    /// One Impressionist dab's edit of a working copy in `fmt`.
+    fn impressionist_effect(&self, fmt: PixelFormat) -> super::DabEffect {
+        let (tile, phase, scale, angle, seed, mode) = (self.tile.clone(), self.phase, self.scale, self.angle, self.seed, self.mode);
+        let (tw, th) = (self.pat.width as f32 * scale, self.pat.height as f32 * scale);
+        Box::new(move |work, fp| stamp_dab(work, &fmt, &tile, fp, phase, scale, angle, seed, tw, th, mode))
+    }
+}
+
 pub(super) fn run(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "paint.patternStamp";
-    let (mut stroke, id) = parse_brush(s, p, CMD)?;
-    let mode = blend_param(p, CMD)?;
-    let aligned = flag(p, "aligned", true);
-    let impressionist = flag(p, "impressionist", false);
-    let pat = crate::pattern_cmds::resolve_param(s, CMD, p)?;
-    if pat.is_empty() {
-        return Err(bad(CMD, "the pattern is empty"));
-    }
-    let scale = stamp_scale(p, CMD)?;
-    let angle = stamp_angle(p, CMD)?;
-    let Some(first) = stroke.points.first() else {
-        return Err(bad(CMD, "`points` is empty"));
-    };
-    let phase = stamp_phase(p, CMD, aligned, first)?;
-    let tile = Tile::new(&pat).ok_or_else(|| bad(CMD, "the pattern is empty or too large to paint"))?;
-    reject_huge_stroke(CMD, &stroke)?;
-
-    let seed = p.get("seed").and_then(Value::as_u64).unwrap_or_else(|| {
-        let bytes = p.get("points").map(std::string::ToString::to_string).unwrap_or_default();
-        photocraft_paint::rng::seed_from_bytes(bytes.as_bytes())
-    });
-    stroke.brush.seed = seed;
-
+    let st = Setup::parse(s, p)?;
     let dmg = s.edit("Pattern Stamp", |doc, _| {
-        crate::pattern_cmds::ensure_in_doc(doc, &pat);
+        crate::pattern_cmds::ensure_in_doc(doc, &st.pat);
         let pre = doc.clone();
-        let (surf, lock) = crate::channel_cmds::target_surface(doc, id, p)?;
+        let (surf, lock) = crate::channel_cmds::target_surface(doc, st.id, p)?;
         let sel = pre.selection.as_ref();
-        if impressionist {
-            paint_impressionist(surf, &stroke, sel, lock, &tile, &pat, phase, scale, angle, seed, mode)
+        if st.impressionist {
+            // Halo is the dab footprint only: Impressionist jitters phase, it does not blur.
+            let effect = st.impressionist_effect(surf.format());
+            Ok(apply_dab_stroke(surf, &st.stroke, sel, lock, 0, effect))
         } else {
-            paint_aligned(surf, &stroke, sel, lock, &tile, phase, scale, angle, mode, CMD)
+            paint_aligned(surf, &st.stroke, sel, lock, &st.tile, st.placement(), st.mode, CMD)
         }
     })?;
-    if let Some(st) = s.active_mut() {
-        st.last_damage = Some(dmg);
+    if let Some(state) = s.active_mut() {
+        state.last_damage = Some(dmg);
     }
     Ok(json!({
         "damage": damage_json(dmg),
-        "phase": [phase.0, phase.1],
-        "aligned": aligned,
-        "pattern": pat.id,
+        "phase": [st.phase.0, st.phase.1],
+        "aligned": st.aligned,
+        "pattern": st.pat.id,
     }))
+}
+
+/// A Pattern Stamp stroke with Impressionist on, shown while it is drawn: the same jittered dabs,
+/// laid one by one as the commit lays them (`apply_dab_stroke`), so the preview at the last point
+/// is the committed result. Aligned strokes are live through [`super::LiveRetouch`].
+pub fn live_impressionist(s: &Session, p: &Value) -> Result<super::LiveDab> {
+    const CMD: &str = "paint.patternStamp";
+    has_pixel_layer(s).map_err(crate::EngineError::Other)?;
+    let st = Setup::parse(s, p)?;
+    if !st.impressionist {
+        return Err(bad(CMD, "only Impressionist strokes are laid dab by dab; aligned strokes preview through LiveRetouch"));
+    }
+    let (stroke, id) = (st.stroke.clone(), st.id);
+    let doc = (*s.active().ok_or(crate::EngineError::NoDocument)?.doc).clone();
+    super::LiveDab::with_effect_on(doc, CMD, p, stroke, id, 0, |pre| st.impressionist_effect(pre.format()))?.with_tail_preview()
+}
+
+/// The pattern under destination `rect` in `fmt` (native channels): what an aligned stroke paints
+/// through its coverage.
+pub(super) fn paint_region(tile: &Tile, place: &Placement, fmt: &PixelFormat, rect: Rect) -> Region {
+    rgba_to_region(fmt, rect, &render(tile, place, rect))
 }
 
 fn stamp_scale(p: &Value, cmd: &str) -> Result<f32> {
@@ -123,45 +175,6 @@ fn stamp_phase(p: &Value, cmd: &str, aligned: bool, first: &StrokePoint) -> Resu
     }
 }
 
-fn reject_huge_stroke(cmd: &str, stroke: &Stroke) -> Result<()> {
-    let pad = f64::from(stroke.brush.size.max(1.0)).mul_add(0.5, 4.0);
-    let mut min_x = f64::INFINITY;
-    let mut min_y = f64::INFINITY;
-    let mut max_x = f64::NEG_INFINITY;
-    let mut max_y = f64::NEG_INFINITY;
-    for q in &stroke.points {
-        min_x = min_x.min(q.x);
-        min_y = min_y.min(q.y);
-        max_x = max_x.max(q.x);
-        max_y = max_y.max(q.y);
-    }
-    if !min_x.is_finite() || !min_y.is_finite() || !max_x.is_finite() || !max_y.is_finite() {
-        return Err(bad(cmd, "point coordinates must be finite"));
-    }
-    let w = (max_x - min_x + pad * 2.0).ceil().max(1.0);
-    let h = (max_y - min_y + pad * 2.0).ceil().max(1.0);
-    if !w.is_finite() || !h.is_finite() || w > 1.0e9 || h > 1.0e9 {
-        return Err(bad(cmd, format!("stroke too large (at most {MAX_STROKE_PIXELS} px)")));
-    }
-    let area = (w as u64).saturating_mul(h as u64);
-    if area > MAX_STROKE_PIXELS {
-        return Err(bad(cmd, format!("stroke too large ({w:.0}×{h:.0} px, at most {MAX_STROKE_PIXELS})")));
-    }
-    Ok(())
-}
-
-fn reject_bounds(cmd: &str, bounds: Rect) -> Result<()> {
-    if bounds.is_empty() {
-        return Ok(());
-    }
-    let (w, h) = (u64::from(bounds.width()), u64::from(bounds.height()));
-    let area = w.saturating_mul(h);
-    if area > MAX_STROKE_PIXELS {
-        return Err(bad(cmd, format!("stroke too large ({w}×{h} px, at most {MAX_STROKE_PIXELS})")));
-    }
-    Ok(())
-}
-
 fn placement(phase: (f32, f32), scale: f32, angle: f32) -> Placement {
     Placement::new(Rect::EMPTY, false, phase, scale, angle)
 }
@@ -188,44 +201,16 @@ fn paint_aligned(
     sel: Option<&Surface>,
     lock: bool,
     tile: &Tile,
-    phase: (f32, f32),
-    scale: f32,
-    angle: f32,
+    place: Placement,
     mode: BlendMode,
     cmd: &str,
 ) -> Result<Rect> {
-    let (bounds, cov) = stroke_coverage(stroke);
-    reject_bounds(cmd, bounds)?;
+    let (bounds, cov) = super::coverage(cmd, stroke)?;
     if bounds.is_empty() {
         return Ok(Rect::EMPTY);
     }
-    let place = placement(phase, scale, angle);
-    let rgba = render(tile, &place, bounds);
-    let paint = rgba_to_region(&surf.format(), bounds, &rgba);
+    let paint = paint_region(tile, &place, &surf.format(), bounds);
     Ok(apply_coverage(surf, bounds, &cov, stroke.brush.opacity, sel, lock, &paint, mode))
-}
-
-#[allow(clippy::too_many_arguments)]
-fn paint_impressionist(
-    surf: &mut Surface,
-    stroke: &Stroke,
-    sel: Option<&Surface>,
-    lock: bool,
-    tile: &Tile,
-    pat: &Pattern,
-    phase: (f32, f32),
-    scale: f32,
-    angle: f32,
-    seed: u64,
-    mode: BlendMode,
-) -> Result<Rect> {
-    let fmt = surf.format();
-    let tw = pat.width as f32 * scale;
-    let th = pat.height as f32 * scale;
-    // Halo is the dab footprint only: Impressionist jitters phase, it does not blur.
-    Ok(apply_dab_stroke(surf, stroke, sel, lock, 0, |work, fp| {
-        stamp_dab(work, &fmt, tile, fp, phase, scale, angle, seed, tw, th, mode);
-    }))
 }
 
 fn footprint_cov(fp: &Footprint, x: i32, y: i32) -> f32 {
@@ -303,9 +288,9 @@ mod tests {
 
     #[test]
     fn a_diagonal_across_a_24_mp_canvas_is_not_too_large() {
-        assert!(reject_huge_stroke("t", &stroke(&[(0.0, 0.0), (6015.0, 3999.0)], 100.0)).is_ok());
-        assert!(reject_bounds("t", Rect::from_xywh(-60, -60, 6136, 4120)).is_ok());
+        let across = stroke(&[(0.0, 0.0), (6015.0, 3999.0)], 100.0);
+        assert!(reject_huge_stroke("t", &across).is_ok());
+        assert!(super::super::coverage("t", &across).is_ok(), "the rendered extent fits too");
         assert!(reject_huge_stroke("t", &stroke(&[(0.0, 0.0), (9000.0, 9000.0)], 100.0)).is_err());
-        assert!(reject_bounds("t", Rect::from_xywh(0, 0, 9000, 9000)).is_err());
     }
 }

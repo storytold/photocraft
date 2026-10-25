@@ -21,6 +21,8 @@ fn realistic() -> photocraft_engine::Session {
     s.execute("file.new", json!({"width": 240, "height": 160})).unwrap();
     s.execute("layer.new.layer", json!({"name": "in-group"})).unwrap();
     s.execute("layer.groupLayers", json!({"name": "group"})).unwrap();
+    // Group Layers creates collapsed groups (#5571); the walk below expects it open.
+    s.execute("layer.setExpanded", json!({"all": true, "expanded": true})).unwrap();
     s.execute("type.create", json!({"x": 20, "y": 60, "text": "Hello"})).unwrap();
     let paint = s.execute("layer.new.layer", json!({"name": "paint"})).unwrap()["layer"].as_u64().unwrap();
     s.execute("select.rect", json!({"x": 20, "y": 20, "width": 80, "height": 60})).unwrap();
@@ -308,9 +310,11 @@ fn a_disabled_shortcut_says_why() {
 #[test]
 fn a_disabled_shortcut_uses_the_command_id_translation() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
-    crate::i18n::with_language(crate::i18n::Lang::from_code("cs").unwrap(), || {
+    let cs = crate::i18n::Lang::from_code("cs").unwrap();
+    crate::i18n::with_language(cs, || {
         super::dispatch(&mut app, &egui::Context::default(), "select.all");
-        assert!(app.ui.status.starts_with("Vybrat vše není k dispozici:"), "{}", app.ui.status);
+        let shown = crate::i18n::tr_id(cs, "select.all", &super::label("select.all")).to_string();
+        assert!(app.ui.status.contains(&shown), "{}", app.ui.status);
         assert!(app.ui.status_error);
     });
 }
@@ -354,6 +358,24 @@ fn alternate_keys_run_their_command() {
     });
     press(&mut h, "F4");
     assert!(take_log(&h.ctx).is_empty());
+}
+
+/// Ctrl+F4 closes the document beside Ctrl+W, as in Photoshop on Windows, through the same
+/// guarded Close: unsaved changes still get the save prompt.
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn ctrl_f4_closes_the_document() {
+    let mut h = harness();
+    put_focus(&mut h, Place::Canvas);
+    press(&mut h, "Cmd+F4");
+    assert!(matches!(take_log(&h.ctx).as_slice(), [(id, Outcome::Ran)] if id == "file.close"));
+    assert!(h.state().discard.is_some(), "unsaved changes ask first");
+    assert_eq!(h.state().session.documents().len(), 1);
+    h.state_mut().discard = None;
+    let st = h.state_mut().session.active_mut().unwrap();
+    st.saved_revision = st.revision;
+    press(&mut h, "Cmd+F4");
+    assert!(h.state().session.documents().is_empty(), "a saved document closes");
 }
 
 /// #352: ⌥[ ⌥] ⌥, ⌥. and ⇧⌥[ walk the Layers panel's rows from the keyboard.
@@ -803,4 +825,138 @@ fn type_size_keys_follow_key_position_and_the_typed_selection() {
     positional(&mut h, egui::Key::Semicolon, egui::Key::Comma);
     assert_eq!(logged(&h), ["type.decreaseSize"]);
     assert_eq!(sizes(&h), [(2, base), (3, base + 2.0)], "only the selected \"He\" shrinks");
+}
+
+/// AZERTY: `;` sits on the US comma key and `,` on the US M key. Plain `,` / `;` bindings (brush
+/// hardness) must match the character typed, not the key's position, or `;` fires `,`'s command.
+#[test]
+fn plain_comma_and_semicolon_bindings_follow_the_typed_character_on_azerty() {
+    let mut h = harness();
+    h.state_mut().session.edit_prefs(|p| {
+        p.shortcuts.insert("tools.decreaseBrushHardness".into(), ",".into());
+        p.shortcuts.insert("tools.increaseBrushHardness".into(), ";".into());
+    });
+    let tap = |h: &mut Harness<'_, PhotocraftApp>, key, physical| {
+        h.event(egui::Event::Key { key, physical_key: Some(physical), pressed: true, repeat: false, modifiers: Modifiers::NONE });
+        h.event(egui::Event::Key { key, physical_key: Some(physical), pressed: false, repeat: false, modifiers: Modifiers::NONE });
+        h.run_steps(2);
+    };
+    tap(&mut h, egui::Key::Semicolon, egui::Key::Comma);
+    assert_eq!(logged(&h), ["tools.increaseBrushHardness"]);
+    tap(&mut h, egui::Key::Comma, egui::Key::M);
+    assert_eq!(logged(&h), ["tools.decreaseBrushHardness"]);
+}
+
+/// #8900: ⌥ added to an adjustment's shortcut opens its dialog with the settings last confirmed
+/// there (Photoshop's ⌥⌘L for Levels, ⌥⌘M for Curves); the plain shortcut still opens at the
+/// defaults, Cancel remembers nothing, each adjustment remembers its own, and a key assigned to
+/// another command in Edit › Keyboard Shortcuts stays that command's.
+#[test]
+fn alt_adjustment_shortcut_reopens_the_last_confirmed_settings() {
+    use photocraft_doc::ColorMode;
+    use photocraft_engine::adjust_params::{default_for, from_params, to_params};
+    let mut h = harness();
+    put_focus(&mut h, Place::Canvas);
+    let top = |h: &Harness<'_, PhotocraftApp>| h.state().ui.dialogs.last().map(|d| (d.id, d.fields.clone())).expect("a dialog");
+    let set = |h: &mut Harness<'_, PhotocraftApp>, id: u64, values: serde_json::Value| {
+        let d = h.state_mut().ui.dialog_mut(id).unwrap();
+        d.fields.extend(values.as_object().unwrap().clone());
+        h.run_steps(2);
+    };
+    let levels = to_params(&from_params("levels", &json!({"inBlack": 30, "gamma": 1.3}), None, ColorMode::Rgb).unwrap());
+    let level_defaults = to_params(&default_for("levels", ColorMode::Rgb).unwrap());
+    assert_ne!(levels["inBlack"], level_defaults["inBlack"]);
+
+    press(&mut h, "Cmd+L");
+    let (id, _) = top(&h);
+    set(&mut h, id, json!({"inBlack": 30, "gamma": 1.3}));
+    crate::dialogs::confirm(h.state_mut(), id).unwrap();
+    h.run_steps(2);
+
+    press(&mut h, "Cmd+L");
+    let (id, fields) = top(&h);
+    assert_eq!((&fields["inBlack"], &fields["gamma"]), (&level_defaults["inBlack"], &level_defaults["gamma"]), "⌘L opens at the defaults");
+    crate::dialogs::cancel(h.state_mut(), id).unwrap();
+    h.run_steps(2);
+
+    press(&mut h, "Cmd+Alt+L");
+    assert_eq!(logged(&h), ["image.adjustments.levels", "image.adjustments.levels", "image.adjustments.levels"]);
+    let (id, fields) = top(&h);
+    assert_eq!((&fields["inBlack"], &fields["gamma"]), (&levels["inBlack"], &levels["gamma"]), "⌥⌘L opens at the last OK'd settings");
+    set(&mut h, id, json!({"inBlack": 50}));
+    crate::dialogs::cancel(h.state_mut(), id).unwrap();
+    h.run_steps(2);
+    press(&mut h, "Cmd+Alt+L");
+    let (id, fields) = top(&h);
+    assert_eq!(fields["inBlack"], levels["inBlack"], "Cancel remembers nothing");
+    crate::dialogs::cancel(h.state_mut(), id).unwrap();
+    h.run_steps(2);
+
+    // Curves has nothing of its own yet: its defaults, not Levels' settings.
+    let curve_defaults = to_params(&default_for("curves", ColorMode::Rgb).unwrap());
+    press(&mut h, "Cmd+Alt+M");
+    let (id, fields) = top(&h);
+    assert_eq!(fields["__adjust"], json!("curves"));
+    assert_eq!(fields["points"], curve_defaults["points"], "⌥⌘M with no Curves confirmed yet");
+    let curve = json!({"points": [[0, 0], [100, 150], [255, 255]]});
+    set(&mut h, id, curve.clone());
+    crate::dialogs::confirm(h.state_mut(), id).unwrap();
+    h.run_steps(2);
+    press(&mut h, "Cmd+Alt+M");
+    let (id, fields) = top(&h);
+    let curves = to_params(&from_params("curves", &curve, None, ColorMode::Rgb).unwrap());
+    assert_eq!(fields["points"], curves["points"], "⌥⌘M opens at the last OK'd curve");
+    crate::dialogs::cancel(h.state_mut(), id).unwrap();
+    h.run_steps(2);
+    take_log(&h.ctx);
+
+    h.state_mut().session.edit_prefs(|p| {
+        p.shortcuts.insert("image.adjustments.desaturate".into(), "Cmd+Alt+L".into());
+    });
+    press(&mut h, "Cmd+Alt+L");
+    assert_eq!(logged(&h), ["image.adjustments.desaturate"], "a key assigned to another command is that command's");
+    assert!(h.state().ui.dialogs.is_empty());
+}
+
+/// #8900: in Photoshop ⌥ held while choosing an Image › Adjustments item opens it at its last
+/// settings too; a plain click still opens it at the defaults.
+#[test]
+fn alt_choosing_an_adjustment_from_the_menu_reopens_the_last_settings() {
+    use photocraft_doc::ColorMode;
+    use photocraft_engine::adjust_params::{default_for, from_params, to_params};
+    let mut h = harness();
+    h.state_mut().session.edit_prefs(|p| {
+        p.dialogs.insert("image.adjustments.levels".into(), json!({"inBlack": 30, "gamma": 1.3}));
+    });
+    let levels = to_params(&from_params("levels", &json!({"inBlack": 30, "gamma": 1.3}), None, ColorMode::Rgb).unwrap());
+    let defaults = to_params(&default_for("levels", ColorMode::Rgb).unwrap());
+    let choose = |h: &mut Harness<'_, PhotocraftApp>, m: Modifiers| {
+        h.get_by_label("Image").click();
+        h.run_steps(3);
+        // The Image menu's row, not the Adjustments panel's tab in the dock on the right.
+        let adjustments = h.get_all_by_label_contains("Adjustments").map(|n| n.rect()).min_by(|a, b| a.left().total_cmp(&b.left())).unwrap().center();
+        h.hover_at(adjustments);
+        h.run_steps(30);
+        let at = h.get_by_label_contains("Levels…").rect().center();
+        h.hover_at(at);
+        h.run_steps(2);
+        h.event(egui::Event::ModifiersChanged(m));
+        h.event(egui::Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: m });
+        h.run_steps(1);
+        h.event(egui::Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: m });
+        h.run_steps(1);
+        h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+        h.run_steps(3);
+        let d = h.state().ui.dialogs.last().expect("Levels opened").clone();
+        assert_eq!(d.fields["__adjust"], json!("levels"));
+        crate::dialogs::cancel(h.state_mut(), d.id).unwrap();
+        h.run_steps(2);
+        (d.fields["inBlack"].clone(), d.fields["gamma"].clone())
+    };
+    assert_eq!(choose(&mut h, Modifiers::NONE), (defaults["inBlack"].clone(), defaults["gamma"].clone()), "a click opens at the defaults");
+    assert_eq!(choose(&mut h, Modifiers::ALT), (levels["inBlack"].clone(), levels["gamma"].clone()), "⌥-click opens at the last settings");
+    // The plain click noted Levels already: put another command in front of it first.
+    crate::palette::note_recent(&h.ctx, "file.new");
+    choose(&mut h, Modifiers::ALT);
+    assert_eq!(crate::palette::recent_ids(&h.ctx).first().map(String::as_str), Some("image.adjustments.levels"), "Edit › Search's most recent");
 }

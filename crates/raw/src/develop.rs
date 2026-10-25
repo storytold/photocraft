@@ -460,12 +460,11 @@ fn gain_row(s: &Sensor, y: usize, x0: usize, w: usize, k: usize) -> Option<Vec<f
         if k < m.plane || k >= m.plane.saturating_add(m.planes) || ay < m.top || ay >= m.bottom || !(ay - m.top).is_multiple_of(m.row_pitch) {
             continue;
         }
-        let row = m.row(rv, k - m.plane);
         let o = out.get_or_insert_with(|| vec![1.0; w]);
         for (i, f) in o.iter_mut().enumerate() {
             let x = x0 + i;
             if x >= a.x && m.covers(x - a.x, ay) {
-                *f *= m.at(&row, ((x - a.x) as f64 + 0.5) / a.width as f64);
+                *f *= m.at_rv(rv, k - m.plane, ((x - a.x) as f64 + 0.5) / a.width as f64);
             }
         }
     }
@@ -535,7 +534,8 @@ pub(crate) fn tone(curve: &[[f32; 2]], v: f32) -> f32 {
     }
     let i = curve.partition_point(|p| p[0] <= v).clamp(1, curve.len() - 1);
     let ([x0, y0], [x1, y1]) = (curve[i - 1], curve[i]);
-    let f = (v.log2() - x0.log2()) / (x1.log2() - x0.log2());
+    // Logarithmic between knots; linear from a knot at black, where log₂ has no value.
+    let f = if x0 > 0.0 { (v.log2() - x0.log2()) / (x1.log2() - x0.log2()) } else { (v - x0) / (x1 - x0) };
     y0 + (y1 - y0) * f
 }
 

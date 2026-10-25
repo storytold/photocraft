@@ -82,7 +82,7 @@ pub(crate) fn open(app: &mut PhotocraftApp, kind: Kind, id: u32) -> Result<u64, 
     }
     // Style colors use encoded RGB, just like the existing compact style picker.
     let t = Target { document: st.doc.id, revision: st.revision, kind, id, color: color_picker_ui::hex(rgb) };
-    let mut fields = color_picker_ui::initial_fields("dialog", "Color Picker (Text Color)", rgb);
+    let mut fields = color_picker_ui::fields_with_web(app, "dialog", "Color Picker (Text Color)", rgb);
     fields.insert(TARGET.into(), serde_json::to_value(t).map_err(|e| e.to_string())?);
     let panels = &mut app.ui.type_panels;
     panels.styles = true;

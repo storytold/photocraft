@@ -203,6 +203,11 @@ impl B {
         self.fields.push((kind, reach_for(width)));
         In::Field(kind)
     }
+    /// A chiselled bevel's inside and outside fields, always asked for together ([`bevel_fields`]
+    /// computes them as one).
+    fn bevel_fields(&mut self, width: f32) -> [In; 2] {
+        [FieldKind::BevelInside, FieldKind::BevelOutside].map(|k| self.field(k, width))
+    }
     /// `Map::shifted` by whole pixels (`invert`: of `1 - a`); identity shifts of the plain map
     /// are skipped.
     fn shift(&mut self, src: In, dx: f32, dy: f32, outside: f32, invert: bool) -> In {
@@ -374,8 +379,7 @@ pub(crate) fn program_with(e: &Effect, light: &GlobalLight, vector_shape: bool, 
             let mut h = if bv.technique == BevelTechnique::Smooth {
                 b.conv(In::Shape, photocraft_compose::effects::tent_kernel(g.width))
             } else {
-                let din = b.field(FieldKind::BevelInside, size);
-                let dout = b.field(FieldKind::BevelOutside, size);
+                let [din, dout] = b.bevel_fields(size);
                 let soft = g.chisel_soft > 0.0;
                 let h = b.push(stage(Kernel::MBevelH, Some(din), Some(dout), [paint(g.paint), size, f32::from(u8::from(soft)), 0.0], 0));
                 // As `effects::bevel_height`: only emboss styles blur a Chisel Soft ramp.
@@ -542,20 +546,51 @@ fn threaded_inside(kind: FieldKind) -> bool {
 /// fields run on all threads inside `distance_field`, from one window. That is also the window the CPU
 /// compositor computes them from, so a rebuilt field is exactly the one it gives.
 fn field_banded(kind: FieldKind, reach: i32, shape: &[f32], region: Rect, out: Rect, halo: i32) -> Vec<f32> {
-    if threaded_inside(kind) {
-        let win = out.inflate(halo).intersect(&region);
-        if win.is_empty() {
-            return Vec::new();
-        }
-        let f = photocraft_compose::effects::distance_field(kind, crop(shape, region, win), win.width() as usize, win.height() as usize, reach as f32);
-        return if win == out { f } else { crop(&f, win, out) };
-    }
-    let parts = par_map(bands(out, BAND.max(halo)), |band| {
-        let win = band.inflate(halo).intersect(&region);
-        let f = photocraft_compose::effects::distance_field(kind, crop(shape, region, win), win.width() as usize, win.height() as usize, reach as f32);
-        crop(&f, win, band)
+    let [f] = fields_in_windows(threaded_inside(kind), shape, region, out, halo, |s, w, h| {
+        [photocraft_compose::effects::distance_field(kind, s, w, h, reach as f32)]
     });
-    parts.concat()
+    f
+}
+
+/// [`field`] of both bevel fields over the same `out`, `[BevelInside, BevelOutside]`, with the
+/// sharp edges of each window found once (the two kinds have the same radius and threading).
+pub(crate) fn bevel_fields(reach: i32, shape: &[f32], region: Rect, out: Rect) -> [Vec<f32>; 2] {
+    let kind = FieldKind::BevelInside;
+    fields_in_windows(threaded_inside(kind), shape, region, out, field_radius(kind, reach) + 1, |s, w, h| {
+        photocraft_compose::effects::bevel_distance_fields(s, w, h, reach as f32)
+    })
+}
+
+/// The fields `compute` gives for a `w × h` window of the region-sized `shape`, over `out` (inside
+/// `region`), each window grown by `halo`: `out` as one window when `whole` (the field spreads over
+/// threads itself), else bands of it in parallel.
+fn fields_in_windows<const N: usize>(
+    whole: bool,
+    shape: &[f32],
+    region: Rect,
+    out: Rect,
+    halo: i32,
+    compute: impl Fn(Vec<f32>, usize, usize) -> [Vec<f32>; N] + Sync + Send,
+) -> [Vec<f32>; N] {
+    let part = |r: Rect| -> [Vec<f32>; N] {
+        let win = r.inflate(halo).intersect(&region);
+        if win.is_empty() {
+            return std::array::from_fn(|_| Vec::new());
+        }
+        let f = compute(crop(shape, region, win), win.width() as usize, win.height() as usize);
+        if win == r { f } else { f.map(|f| crop(&f, win, r)) }
+    };
+    if whole {
+        return part(out);
+    }
+    let parts = par_map(bands(out, BAND.max(halo)), part);
+    std::array::from_fn(|k| {
+        let mut f = Vec::with_capacity(parts.iter().map(|p| p[k].len()).sum());
+        for p in &parts {
+            f.extend_from_slice(&p[k]);
+        }
+        f
+    })
 }
 
 /// The layer's shape (`compose::layer_shape`) over `r`, in parallel bands.
@@ -629,7 +664,23 @@ pub(crate) fn shape_key(layer: &Layer, canvas: Rect) -> u64 {
         LayerContent::Shape(sh) => {
             std::mem::discriminant(&layer.content).hash(&mut h);
             if photocraft_compose::effect_outline(layer).is_some() {
-                format!("{:?}", sh.path).hash(&mut h);
+                // The cached maps live in region-local coordinates. Preserve their identity
+                // under translation so sync_fx can verify coverage and reuse them after a move.
+                let mut outline =
+                    sh.path.control_bounds().map_or_else(|| sh.path.clone(), |(x, y, _, _)| sh.path.transform(&photocraft_geom::Affine::translate(-x, -y)));
+                // Integer translation can perturb fractional f64 coordinates in the low bits.
+                // Quantize only the fingerprint (1/65536 px); rendering keeps the original path,
+                // and sync_fx still requires exact coverage equality before reusing moved maps.
+                for subpath in &mut outline.subpaths {
+                    for knot in &mut subpath.knots {
+                        for point in [&mut knot.anchor, &mut knot.in_ctrl, &mut knot.out_ctrl] {
+                            // Adding zero also canonicalizes negative zero in Debug output.
+                            point.x = (point.x * 65536.0).round() / 65536.0 + 0.0;
+                            point.y = (point.y * 65536.0).round() / 65536.0 + 0.0;
+                        }
+                    }
+                }
+                format!("{outline:?}").hash(&mut h);
             }
         }
         other => std::mem::discriminant(other).hash(&mut h),
@@ -682,6 +733,8 @@ pub(crate) fn group_key(layer: &Layer, light: &GlobalLight, pin: &mut dyn FnMut(
             surface_fp(&m.surface, h, pin);
         }
         format!("{:?}{:?}", l.vector_mask, l.effects).hash(h);
+        l.blend_if.hash(h);
+        l.advanced.hash(h);
         h.write_u8(0xfe);
     }
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -695,6 +748,7 @@ pub(crate) fn group_key(layer: &Layer, light: &GlobalLight, pin: &mut dyn FnMut(
                 (m.enabled, m.density.to_bits(), m.feather.to_bits()).hash(&mut h);
                 surface_fp(&m.surface, &mut h, pin);
             }
+            format!("{:?}", layer.vector_mask).hash(&mut h);
         }
         _ => walk(layer, &mut h, pin),
     }
@@ -708,6 +762,42 @@ mod tests {
     use photocraft_color::BlendMode;
     use photocraft_doc::FxCommon;
 
+    /// Filled-shape identity survives integer moves, including fractional anchors and handles.
+    #[test]
+    fn filled_shape_key_preserves_translation_but_detects_deformation() {
+        use photocraft_doc::{Fill, Path, ShapeLayer, Subpath};
+        let mut layer = Layer::new(
+            "shape",
+            LayerContent::Shape(ShapeLayer {
+                path: Path::new(vec![Subpath::polygon(&[(20.0, 20.0), (70.0, 20.0), (70.0, 60.0), (20.0, 60.0)])]),
+                fill: Some(Fill::Solid(photocraft_color::Color::WHITE)),
+                ..Default::default()
+            }),
+        );
+        let canvas = Rect::new(0, 0, 200, 200);
+        let before = shape_key(&layer, canvas);
+        let LayerContent::Shape(shape) = &mut layer.content else { unreachable!() };
+        shape.path = shape.path.transform(&photocraft_geom::Affine::translate(13.0, 7.0));
+        assert_eq!(before, shape_key(&layer, canvas));
+        let LayerContent::Shape(shape) = &mut layer.content else { unreachable!() };
+        shape.path.subpaths[0].knots[1].anchor.x += 3.0;
+        assert_ne!(before, shape_key(&layer, canvas));
+
+        let LayerContent::Shape(shape) = &mut layer.content else { unreachable!() };
+        shape.path = Path::new(vec![Subpath::polygon(&[(0.1, 0.2), (0.3, 0.2), (0.3, 1.7), (0.1, 1.7)])]);
+        shape.path.subpaths[0].knots[1].out_ctrl = photocraft_geom::Point::new(0.45, 0.65);
+        let original = shape.path.clone();
+        let before = shape_key(&layer, canvas);
+        for (dx, dy) in [(1.0, 1.0), (-13.0, 7.0), (100_000.0, -100_000.0)] {
+            let LayerContent::Shape(shape) = &mut layer.content else { unreachable!() };
+            shape.path = original.transform(&photocraft_geom::Affine::translate(dx, dy));
+            assert_eq!(before, shape_key(&layer, canvas), "fractional path translated by {dx}, {dy}");
+        }
+        let LayerContent::Shape(shape) = &mut layer.content else { unreachable!() };
+        shape.path.subpaths[0].knots[1].out_ctrl.x += 0.01;
+        assert_ne!(before, shape_key(&layer, canvas), "a handle deformation invalidates the key");
+    }
+
     #[test]
     fn programs_key_on_geometry_not_colour() {
         let light = GlobalLight::default();
@@ -719,6 +809,36 @@ mod tests {
         assert_eq!(a.key, b.key);
         s.size += 1.0;
         assert_ne!(a.key, program(&Effect::DropShadow(s), &light, false).key);
+    }
+
+    /// A styled group's effect shape follows its own vector mask and its children's Blend If and
+    /// Advanced Blending, so the cached shape must be rebuilt when any of them changes.
+    #[test]
+    fn group_key_follows_vector_mask_blend_if_and_advanced() {
+        use photocraft_doc::{BlendRange, Knockout, Path, PixelFormat, Subpath, VectorMask};
+        let light = GlobalLight::default();
+        let group = Layer::group("g", vec![Layer::raster("child", PixelFormat::RGBA8)]);
+        let base = group_key(&group, &light, &mut |_| {});
+
+        let mask = |x: f64| VectorMask::new(Path::new(vec![Subpath::polygon(&[(x, 0.0), (x + 10.0, 0.0), (x + 10.0, 10.0)])]));
+        let mut masked = group.clone();
+        masked.vector_mask = Some(mask(0.0));
+        let with_mask = group_key(&masked, &light, &mut |_| {});
+        assert_ne!(base, with_mask, "adding the group's vector mask");
+        masked.vector_mask = Some(mask(5.0));
+        assert_ne!(with_mask, group_key(&masked, &light, &mut |_| {}), "moving the group's vector mask");
+
+        fn child_mut(g: &mut Layer) -> &mut Layer {
+            let LayerContent::Group(gr) = &mut g.content else { unreachable!() };
+            &mut gr.children[0]
+        }
+        let mut blend_if = group.clone();
+        child_mut(&mut blend_if).blend_if.ranges = vec![[BlendRange { black: [128, 128], white: [255, 255] }, BlendRange::FULL]];
+        assert_ne!(base, group_key(&blend_if, &light, &mut |_| {}), "a child's Blend If");
+
+        let mut advanced = group.clone();
+        child_mut(&mut advanced).advanced.knockout = Knockout::Deep;
+        assert_ne!(base, group_key(&advanced, &light, &mut |_| {}), "a child's Advanced Blending");
     }
 
     #[test]
@@ -842,6 +962,40 @@ mod tests {
         assert!(too_small_noticed, "a 2 row halo went unnoticed, so this test guards nothing");
     }
 
+    /// Both bevel fields from one window (sharp edges found once) are bit for bit the fields
+    /// computed one at a time, over the whole region and over a part of it.
+    #[test]
+    fn paired_bevel_fields_equal_the_fields_one_at_a_time() {
+        let region = Rect::new(-20, -10, 300, 290);
+        let (w, h) = (region.width() as usize, region.height() as usize);
+        let mut shape = vec![0.0f32; w * h];
+        for y in 0..h {
+            for x in 0..w {
+                let (fx, fy) = (x as f32 - 150.0, y as f32 - 140.0);
+                let r = (fx * fx + fy * fy).sqrt() + 8.0 * (fy * 0.07).sin() * (fx * 0.05).cos();
+                shape[y * w + x] = (90.0 - r).clamp(0.0, 1.0) * if (x / 13 + y / 17) % 5 == 0 { 0.6 } else { 1.0 };
+            }
+        }
+        let bits = |v: &[f32]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+        for reach in [3, 9, 40] {
+            for out in [region, Rect::new(40, 30, 170, 120), Rect::new(-20, 200, 300, 290)] {
+                let [inside, outside] = bevel_fields(reach, &shape, region, out);
+                assert_eq!(bits(&inside), bits(&field(FieldKind::BevelInside, reach, &shape, region, out)), "inside, reach {reach}, {out:?}");
+                assert_eq!(bits(&outside), bits(&field(FieldKind::BevelOutside, reach, &shape, region, out)), "outside, reach {reach}, {out:?}");
+                // The banded path (wasm) pairs them per band the same way.
+                let halo = field_radius(FieldKind::BevelInside, reach) + 1;
+                let banded =
+                    fields_in_windows(false, &shape, region, out, halo, |s, w, h| photocraft_compose::effects::bevel_distance_fields(s, w, h, reach as f32));
+                for (k, kind) in [FieldKind::BevelInside, FieldKind::BevelOutside].into_iter().enumerate() {
+                    let [one] = fields_in_windows(false, &shape, region, out, halo, |s, w, h| {
+                        [photocraft_compose::effects::distance_field(kind, s, w, h, reach as f32)]
+                    });
+                    assert_eq!(bits(&banded[k]), bits(&one), "banded {kind:?}, reach {reach}, {out:?}");
+                }
+            }
+        }
+    }
+
     /// #3646: a stroke's outer edge is the fitted 5 × 5 chamfer while it is narrow and the exact
     /// Euclidean transform once it is wide — the chamfer's octagon facets a wide stroke. The GPU
     /// builds it from the field its width picks (`stroke_outside_exact`), while the spread of drop
@@ -852,8 +1006,9 @@ mod tests {
         use photocraft_color::{BlendMode, Color};
         use photocraft_doc::{FxCommon, FxPaint, StrokeFx, StrokePosition};
         let light = GlobalLight::default();
-        let stroke =
-            |size, position| Effect::Stroke(StrokeFx { common: FxCommon::new(BlendMode::Normal, 1.0), size, position, paint: FxPaint::Color(Color::BLACK) });
+        let stroke = |size, position| {
+            Effect::Stroke(StrokeFx { common: FxCommon::new(BlendMode::Normal, 1.0), size, position, paint: FxPaint::Color(Color::BLACK), overprint: false })
+        };
         // Narrow (< STROKE_CHAMFER_MAX): the chamfer, exactly as before #3646.
         let narrow = program(&stroke(6.0, StrokePosition::Outside), &light, false);
         assert!(narrow.fields.iter().any(|(k, _)| *k == FieldKind::StrokeOutside), "a narrow raster outside stroke keeps the chamfer: {:?}", narrow.fields);

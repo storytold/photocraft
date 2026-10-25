@@ -92,7 +92,7 @@ pub(crate) fn open(app: &mut PhotocraftApp, parent: u64, effect: &str, field: &s
     let t = Target { parent, document: st.doc.id, layer, effect: effect.into(), field: field.into(), color: color.clone(), source };
     validate(app, &t)?;
     let rgb = color_picker_ui::parse_hex(&color).ok_or("invalid effect color")?;
-    let mut fields = color_picker_ui::initial_fields("dialog", "Color Picker (Layer Style Color)", rgb);
+    let mut fields = color_picker_ui::fields_with_web(app, "dialog", "Color Picker (Layer Style Color)", rgb);
     fields.insert(TARGET.into(), serde_json::to_value(t).map_err(|e| e.to_string())?);
     Ok(app.ui.open_dialog(DialogKind::Command, fields))
 }

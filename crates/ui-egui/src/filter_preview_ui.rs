@@ -43,12 +43,21 @@ pub(crate) fn window(app: &PhotocraftApp, dialog: u64, ui: &mut egui::Ui, f: &mu
     // decides whether the filtered result (rather than the original) is shown.
     let preview_on = f.get("__preview").and_then(Value::as_bool) == Some(true);
     let filtered: Option<(FilterPreviewKey, std::sync::Arc<Document>)> = app.filter_preview.as_ref().and_then(|p| {
-        (preview_on && p.key.dialog == dialog && p.key.doc == doc_id && p.key.command == cmd).then(|| p.result.clone().map(|r| (p.key.clone(), r))).flatten()
+        // An edited smart filter previews as `layer.smartFilter.setParams` (#6324).
+        let previewed = crate::smart_ui::preview_command(f, &cmd);
+        (preview_on && p.key.dialog == dialog && p.key.doc == doc_id && p.key.command == previewed)
+            .then(|| p.result.clone().map(|r| (p.key.clone(), r)))
+            .flatten()
     });
     // The proxy factor the preview runs at (the filtered key's when it exists, else the request's).
+    // The fallback must be the factor the canvas will ask for, not the document's own: since #6326
+    // the canvas caps it with the view's zoom, and a window that sized its textures from the
+    // uncapped factor built a proxy the canvas never asked for, then rebuilt it (a full-size copy
+    // and upload on the UI thread at 100 %) the moment the first result arrived, shifting this
+    // window's 100 % mapping and pan clamp for a frame.
     let base_k = filtered.as_ref().map(|(k, _)| k.k).unwrap_or_else(|| {
         let params = app.with_mask_target(&cmd, crate::filter_dialog::params_of(f));
-        crate::filter_dialog::preview_factor(&cmd, &params, crate::proxy::preview_factor(&st.doc, crate::proxy::reduced_previews(app)))
+        crate::canvas::filter_preview_factor(app, &st.doc, &cmd, &params)
     });
 
     let t = Tokens::get(ui.ctx());
@@ -225,7 +234,7 @@ fn upload(ctx: &egui::Context, app: &PhotocraftApp, name: &str, doc: &Document) 
     let (width, height) = (doc.size.width.div_ceil(factor), doc.size.height.div_ceil(factor));
     if let Some(st) = app.session.active()
         && let Some(pixels) =
-            crate::channel_view::render(doc, &st.channel_view, doc.bounds(), factor, app.session.prefs().interface.show_channels_in_color, st.active_layer)
+            crate::channel_view::render(doc, &st.channel_view, doc.bounds(), factor, crate::channel_view::Look::of(&app.session), st.active_layer)
     {
         let image = egui::ColorImage::new([width as usize, height as usize], pixels);
         return ctx.load_texture(name, image, egui::TextureOptions::LINEAR);
@@ -237,7 +246,7 @@ fn upload(ctx: &egui::Context, app: &PhotocraftApp, name: &str, doc: &Document) 
 }
 
 /// The reduction that fits a `w`×`h` image inside a `max_side` texture (1: it already fits).
-fn texture_factor(w: u32, h: u32, max_side: usize) -> u32 {
+pub(crate) fn texture_factor(w: u32, h: u32, max_side: usize) -> u32 {
     let max_side = u32::try_from(max_side).unwrap_or(u32::MAX).max(1);
     w.max(h).div_ceil(max_side).max(1)
 }
@@ -324,6 +333,7 @@ mod tests {
                     None,
                     ChannelTarget::Alpha(0),
                     &[],
+                    &Default::default(),
                 )
                 .unwrap();
                 let ctx = egui::Context::default();
@@ -332,7 +342,9 @@ mod tests {
                 let egui::ImageData::Color(image) = &delta.set.get(&texture.id()).unwrap()[0].image;
                 let pixels = image.pixels.clone();
                 delta.clear();
-                let expected = crate::channel_view::render(&preview, &st.channel_view, preview.bounds(), 1, false, st.active_layer).unwrap();
+                let expected =
+                    crate::channel_view::render(&preview, &st.channel_view, preview.bounds(), 1, crate::channel_view::Look::default(), st.active_layer)
+                        .unwrap();
                 assert_eq!(pixels, expected, "depth {depth}, factor {k}");
                 assert_ne!(pixels[0], pixels[pixels.len() - 1], "the alpha edge is visible, not the white RGB layer");
                 assert!(pixels.iter().any(|p| p.r() > 0 && p.r() < 255), "the blurred edge is visible");

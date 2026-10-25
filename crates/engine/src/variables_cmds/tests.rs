@@ -137,6 +137,38 @@ fn csv_import_and_apply() {
 }
 
 #[test]
+fn csv_import_ignores_utf8_bom() {
+    let dir = tmp("csv-bom");
+    let csv = format!("{dir}/sets.csv");
+
+    // BOM before the `DataSet` name column: sets keep their names.
+    let (mut s, _p, badge, title) = session();
+    s.execute(
+        "image.variables.define",
+        json!({"defs": [
+            {"name": "showBadge", "layer": badge.0, "type": "visibility"},
+            {"name": "headline", "layer": title.0, "type": "textReplacement"},
+        ]}),
+    )
+    .unwrap();
+    std::fs::write(&csv, "\u{feff}DataSet,showBadge,headline\nrow-on,true,On Sale\n").unwrap();
+    let r = s.execute("file.import.variableDataSets", json!({"path": csv})).unwrap();
+    assert_eq!(r["imported"], 1);
+    s.execute("image.applyDataSet", json!({"name": "row-on"})).unwrap();
+    assert!(doc(&s).layer(badge).unwrap().visible);
+    assert_eq!(text_of(&s, title), "On Sale");
+
+    // BOM before a variable column (no name column): the variable is still imported.
+    let (mut s, _p, badge, title) = session();
+    s.execute("image.variables.define", json!({"defs": [{"name": "headline", "layer": title.0, "type": "textReplacement"}]})).unwrap();
+    let _ = badge;
+    let r = import_data_sets_text(&mut s, "\u{feff}headline\nHello\n", &json!({})).unwrap();
+    assert_eq!(r["imported"], 1);
+    s.execute("image.applyDataSet", json!({"index": 0})).unwrap();
+    assert_eq!(text_of(&s, title), "Hello");
+}
+
+#[test]
 fn csv_fields_preserve_unicode_and_quoting() {
     for (line, delimiter, expected) in [
         ("Café,Привет,日本語,👩‍🎨,e\u{301}", b',', vec!["Café", "Привет", "日本語", "👩‍🎨", "e\u{301}"]),
@@ -387,6 +419,39 @@ fn export_data_sets_rejects_collisions_before_writing() {
         assert_eq!(after.history.can_redo(), redo);
         std::fs::remove_dir_all(dir).unwrap();
     }
+}
+
+#[test]
+fn export_data_sets_keeps_document_derived_names_inside_the_folder() {
+    // A document name is not a path: `{document}` must not climb out of `dir` or into a subfolder,
+    // and a data set named after a Windows device gets the `_` every other exporter gives it.
+    let root = tempfile::tempdir().unwrap();
+    let root = root.path().to_string_lossy().into_owned();
+    let dir = format!("{root}/out");
+    let mut s = visibility_export_session(&["nul", "b"]);
+    s.execute("image.duplicate", json!({"name": "../esc/aped.psd"})).unwrap();
+    let r = s.execute("file.export.dataSetsAsFiles", json!({"dir": dir, "naming": "{document}_{index}"})).unwrap();
+    assert_eq!(r["files"], json!([format!("{dir}/.._esc_aped_001.png"), format!("{dir}/.._esc_aped_002.png")]));
+    let r = s.execute("file.export.dataSetsAsFiles", json!({"dir": dir, "dataSets": ["nul"]})).unwrap();
+    assert_eq!(r["files"], json!([format!("{dir}/nul_.png")]));
+    // `...` has the stem `..`: before a folder in the caller's template it would climb out too.
+    s.execute("image.duplicate", json!({"name": "..."})).unwrap();
+    let r = s.execute("file.export.dataSetsAsFiles", json!({"dir": dir, "dataSets": ["b"], "naming": "{document}/{name}"})).unwrap();
+    assert_eq!(r["files"], json!([format!("{dir}/_/b.png")]));
+    // `.` has an empty stem: `{document}` alone would be a nameless `.png`.
+    s.execute("image.duplicate", json!({"name": "."})).unwrap();
+    let r = s.execute("file.export.dataSetsAsFiles", json!({"dir": dir, "dataSets": ["b"], "naming": "{document}"})).unwrap();
+    assert_eq!(r["files"], json!([format!("{dir}/_.png")]));
+    // A folder the template makes from a device-named document gets the `_` as well.
+    s.execute("image.duplicate", json!({"name": "nul.psd"})).unwrap();
+    let r = s.execute("file.export.dataSetsAsFiles", json!({"dir": dir, "dataSets": ["b"], "naming": "{document}/{name}"})).unwrap();
+    assert_eq!(r["files"], json!([format!("{dir}/nul_/b.png")]));
+    let mut written: Vec<String> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    written.sort();
+    assert_eq!(written, [".._esc_aped_001.png", ".._esc_aped_002.png", "_", "_.png", "nul_", "nul_.png"]);
+    assert!(std::path::Path::new(&format!("{dir}/nul_/b.png")).is_file());
+    assert!(!std::path::Path::new(&format!("{root}/esc")).exists());
+    assert!(!std::path::Path::new(&format!("{root}/b.png")).exists());
 }
 
 #[test]

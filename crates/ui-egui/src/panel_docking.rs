@@ -447,7 +447,7 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> bool {
     let output = if layout.root.is_some() {
         let mut panel = egui::Panel::right("shared-panel-dock")
             .default_size(if t.pro { 290.0 } else { 300.0 })
-            .size_range(crate::panels::DOCK_WIDTH)
+            .size_range(crate::panels::dock_width_range(ui.ctx().content_rect().width()))
             .resizable(!locked)
             .frame(egui::Frame::NONE.fill(t.card));
         if let Some(width) = requested_width {
@@ -547,6 +547,7 @@ fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: &str) {
     if group.scrolls_itself(tab) {
         crate::panels::dock_body(app, ui, *group, tab);
     } else {
+        crate::panels::offer_color_field_fill(ui, pro, *group, tab);
         egui::ScrollArea::vertical()
             .id_salt(("shared-panel-body", id))
             .auto_shrink([false, false])
@@ -854,11 +855,19 @@ fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, panel: &str) {
             crate::swatches_ui::panel_menu(app, ui);
             ui.separator();
         }
+        "color" => {
+            crate::color_panel_ui::panel_menu(app, ui);
+            ui.separator();
+        }
+        "history" => {
+            crate::history_menu_ui::panel_menu(app, ui);
+            ui.separator();
+        }
         "brushSettings" | "brush_settings" => {
             crate::brush_panel::panel_menu(app, ui);
             ui.separator();
         }
-        "actions" => {
+        "actions" | "Actions" => {
             crate::actions::panel_menu(app, ui);
             ui.separator();
         }

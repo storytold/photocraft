@@ -92,6 +92,43 @@ fn close_ring() -> Vec<Vec2> {
     (0..16).map(|i| (i as f32 / 16.0 * std::f32::consts::TAU, vec2(9.0, 9.0))).map(|(a, c)| c + vec2(a.cos(), a.sin()) * 3.5).collect()
 }
 
+/// Closed outline of an I-beam, centred on the hotspot.
+fn i_beam() -> Vec<Vec2> {
+    [(-3.0, -8.0), (3.0, -8.0), (3.0, -7.0), (0.5, -7.0), (0.5, 7.0), (3.0, 7.0), (3.0, 8.0), (-3.0, 8.0), (-3.0, 7.0), (-0.5, 7.0), (-0.5, -7.0), (-3.0, -7.0)]
+        .into_iter()
+        .map(|(x, y)| vec2(x, y))
+        .collect()
+}
+
+/// A dot (a tiny closed square) at `c`.
+fn dot(c: Vec2) -> Vec<Vec2> {
+    vec![c + vec2(-0.75, -0.75), c + vec2(0.75, -0.75), c + vec2(0.75, 0.75), c + vec2(-0.75, 0.75)]
+}
+
+/// Photoshop's area-type pointer (#218): the I-beam inside a dotted ellipse.
+pub(crate) fn area_type_rings() -> Vec<Vec<Vec2>> {
+    let mut rings = vec![i_beam()];
+    rings.extend((0..12).map(|i| i as f32 / 12.0 * std::f32::consts::TAU).map(|a| dot(vec2(a.cos() * 8.0, a.sin() * 10.5))));
+    rings
+}
+
+/// Photoshop's type-on-a-path pointer (#218): the I-beam crossed by a dotted wave.
+pub(crate) fn path_type_rings() -> Vec<Vec<Vec2>> {
+    let mut rings = vec![i_beam()];
+    rings.extend((0..9).map(|i| -10.0 + i as f32 * 2.5).map(|x| dot(vec2(x, 4.0 + (x * 0.4).sin() * 2.0))));
+    rings
+}
+
+/// The Type tool over the inside of a closed path: a click starts area type there.
+pub(crate) fn area_type(painter: &Painter, at: Pos2) -> CursorIcon {
+    outline(painter, at, area_type_rings(), false)
+}
+
+/// The Type tool over a path's outline: a click starts type on the path there.
+pub(crate) fn path_type(painter: &Painter, at: Pos2) -> CursorIcon {
+    outline(painter, at, path_type_rings(), false)
+}
+
 /// Can this pass show an OS cursor bitmap? eframe's immediate viewports and its web integration
 /// don't upload cursor images; every desktop root viewport does (winit custom cursors). Wayland at
 /// any scale but 1 doesn't either: winit sizes the bitmap there with a `wp_viewport` destination
@@ -127,7 +164,34 @@ pub(crate) fn native_scale(ctx: &egui::Context) -> f32 {
 /// and Warp splits), the type box, Content-Aware Move's box, the Artboard tool and guides pick
 /// their arrows here.
 pub(crate) fn resize(d: [f64; 2], xf: &ViewXform) -> CursorIcon {
-    let s = xf.map_vec(vec2(d[0] as f32, d[1] as f32));
+    resize_on_screen(xf.map_vec(vec2(d[0] as f32, d[1] as f32)))
+}
+
+/// The resize arrow for corner `i` of a box's `quad` (corners in order round the box), as the view
+/// shows it: along the corner's bisector, so an upright box's corners always show a diagonal arrow,
+/// as in Photoshop, however wide or tall the box is. Aiming from the opposite corner instead gave a
+/// box wider than about 2.4:1 the horizontal arrow at its corners (and a tall one the vertical).
+pub(crate) fn corner_resize(quad: &[[f64; 2]; 4], i: usize, xf: &ViewXform) -> CursorIcon {
+    let at = quad[i % 4];
+    let edge = |k: usize| {
+        let to = quad[k % 4];
+        let v = xf.map_vec(vec2((at[0] - to[0]) as f32, (at[1] - to[1]) as f32));
+        let l = v.length();
+        (l.is_finite() && l > 1e-6).then(|| v / l)
+    };
+    let bisector = edge(i + 1).zip(edge(i + 3)).map(|(a, b)| a + b).filter(|s| s.length() > 1e-3);
+    match bisector {
+        Some(s) => resize_on_screen(s),
+        // A collapsed or folded corner has no bisector: aim away from the opposite corner.
+        None => {
+            let opposite = quad[(i + 2) % 4];
+            resize([at[0] - opposite[0], at[1] - opposite[1]], xf)
+        }
+    }
+}
+
+/// The nearest of the four resize arrows to screen direction `s`.
+fn resize_on_screen(s: Vec2) -> CursorIcon {
     let angle = f64::from(s.y).atan2(f64::from(s.x)).rem_euclid(std::f64::consts::PI);
     match (angle / std::f64::consts::FRAC_PI_4).round() as u8 % 4 {
         0 => CursorIcon::ResizeHorizontal,
@@ -150,6 +214,12 @@ fn hand_with(ctx: &egui::Context, closed: bool, bitmap: bool) -> CursorIcon {
         return CursorIcon::None;
     }
     if closed { CursorIcon::Grabbing } else { CursorIcon::Grab }
+}
+
+/// The bitmap [`hand`] hands Windows, for tests that check the Hand's pointer on every platform.
+#[cfg(test)]
+pub(crate) fn hand_bitmap(ctx: &egui::Context, closed: bool) -> Option<CustomCursorImage> {
+    rasterize(&Shape::Hand { closed }, native_scale(ctx))
 }
 
 /// The Zoom tool's pointer: a magnifier with a plus, or a minus when it zooms `out`. winit maps

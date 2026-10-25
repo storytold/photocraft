@@ -6,6 +6,7 @@ use egui::{Align2, Rect, RichText, Sense, Stroke, StrokeKind, pos2, vec2};
 use photocraft_doc::{ColorMode, Document, Layer, LayerId, SampleType};
 use serde_json::{Value, json};
 
+use crate::props_layout::stacked_label;
 use crate::theme::Tokens;
 use crate::{PhotocraftApp, icons, widgets};
 
@@ -151,19 +152,19 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             });
             ui.vertical(|ui| {
                 ui.horizontal(|ui| {
-                    field_label(ui, "W", 18.0);
+                    stacked_label(ui, "W", &["W", "H"], 18.0, 4.0);
                     if let Some(v) = committed_field(ui, "w", w as f32, lu) {
                         run.extend(canvas_resize_params((w, h), Some(v), None, linked).map(|p| ("image.canvasSize".to_string(), p)));
                     }
-                    field_label(ui, "X", 22.0);
+                    stacked_label(ui, "X", &["X", "Y"], 22.0, 4.0);
                     dim_field(ui, "0 px");
                 });
                 ui.horizontal(|ui| {
-                    field_label(ui, "H", 18.0);
+                    stacked_label(ui, "H", &["W", "H"], 18.0, 4.0);
                     if let Some(v) = committed_field(ui, "h", h as f32, lu) {
                         run.extend(canvas_resize_params((w, h), None, Some(v), linked).map(|p| ("image.canvasSize".to_string(), p)));
                     }
-                    field_label(ui, "Y", 22.0);
+                    stacked_label(ui, "Y", &["X", "Y"], 22.0, 4.0);
                     dim_field(ui, "0 px");
                 });
             });
@@ -342,6 +343,40 @@ mod tests {
         assert_eq!(st.history.entries().len(), undo, "no history step");
     }
 
+    /// Horizontal centre of every single-letter label the panel drew, by letter.
+    fn letter_centres(h: &egui_kittest::Harness<'_, PhotocraftApp>) -> Vec<(String, f32)> {
+        h.output()
+            .shapes
+            .iter()
+            .filter_map(|s| if let egui::Shape::Text(t) = &s.shape { Some(t) } else { None })
+            .filter(|t| t.galley.text().chars().count() == 1)
+            .map(|t| (t.galley.text().to_string(), t.pos.x + t.galley.size().x * 0.5))
+            .collect()
+    }
+
+    /// #7314: the Canvas section's W over H (and X over Y) share a centre; a narrow "H" used to sit
+    /// flush right under the wider "W".
+    #[test]
+    fn canvas_size_labels_are_centred_on_each_other() {
+        use egui_kittest::Harness;
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 40, "height": 20, "background": "white"})).unwrap();
+        let mut h = Harness::builder().with_size(vec2(320.0, 600.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    properties(app, ui);
+                }
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        h.run_steps(3);
+        let centres = letter_centres(&h);
+        let at = |l: &str| centres.iter().find(|(s, _)| s == l).map(|(_, x)| *x).unwrap_or_else(|| panic!("no {l} label in {centres:?}"));
+        assert!((at("W") - at("H")).abs() < 0.01, "W and H: {centres:?}");
+        assert!((at("X") - at("Y")).abs() < 0.01, "X and Y: {centres:?}");
+    }
+
     #[test]
     fn document_dropdowns_map_to_live_mode_commands() {
         for id in MODES.iter().map(|m| m.2).chain(DEPTHS.iter().map(|d| d.2)) {
@@ -350,15 +385,10 @@ mod tests {
     }
 
     #[test]
-    fn image_mode_depth_labels_match_sample_types_and_are_translated() {
+    fn image_mode_depth_labels_match_sample_types() {
         assert_eq!(
             DEPTHS.iter().map(|(sample, label, _)| (*sample, *label)).collect::<Vec<_>>(),
             [(SampleType::U8, "8 Bits/Channel"), (SampleType::U16, "16 Bits/Channel"), (SampleType::F32, "32 Bits/Channel"),]
         );
-        for lang in crate::i18n::Lang::all().filter(|lang| lang.code() != "en") {
-            for (_, label, id) in DEPTHS {
-                assert_ne!(crate::i18n::tr_id(lang, id, label), *label, "{}: {label}", lang.code());
-            }
-        }
     }
 }

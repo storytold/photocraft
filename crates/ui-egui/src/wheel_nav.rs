@@ -8,6 +8,9 @@
 //! - A trackpad pinch zooms around the pointer, unless Preferences › Enhanced Controls ›
 //!   Zoom with Trackpad Pinch is off (then a pinch does nothing, and Windows' Ctrl + wheel
 //!   fractions scroll sideways like the wheel, because the fold below is skipped).
+//! - A two-finger pinch on a touch screen zooms the same way, unless Preferences › Enhanced
+//!   Controls › Enable Gestures is off (#204): then the fingers leave the view alone, and a
+//!   trackpad pinch still zooms ([`pinch_factor`]).
 //!
 //! [`configure`] makes egui fold ⌘/Ctrl + wheel into a sideways scroll as it does ⇧ + wheel, so
 //! only a real pinch (egui's `Event::Zoom`, or a touch screen) reaches `zoom_delta`. macOS and
@@ -20,10 +23,11 @@
 //! The target behaviour is exact ×1.1 steps, one per notch, with no easing in between
 //! (measured frame by frame on a screen recording). egui smooths a wheel notch over several
 //! frames, so zooming reads the wheel events themselves and ignores that smoothed tail; panning
-//! keeps the smoothed delta. The Alt state is taken from the wheel events and kept until the next
-//! wheel event: releasing Alt while the tail is still settling must not turn it into a pan.
+//! keeps the smoothed delta. The Alt state is taken from the wheel events (and the Alt key's own
+//! press and release, `wheel_events`) and kept until the next wheel event: releasing Alt while
+//! the tail is still settling must not turn it into a pan.
 
-use egui::{Context, Event, Id, Modifiers, MouseWheelUnit, RawInput, Vec2};
+use egui::{Context, Event, Id, InputState, Key, Modifiers, MouseWheelUnit, RawInput, Vec2};
 
 /// Zoom factor of one wheel notch: every step is exactly ×1.1.
 pub const NOTCH: f32 = 1.1;
@@ -198,34 +202,23 @@ const SNAP_IDLE_TIMEOUT: f64 = 0.5;
 /// accumulator per viewport. `hovered` gates accumulation: only the viewport receiving
 /// navigation may add raw input to the snap residual.
 pub fn read(ctx: &Context, zoom_with_wheel: bool, pinch_zooms: bool, owner: Id, hovered: bool) -> Option<Wheel> {
-    read_with(ctx, zoom_with_wheel, pinch_zooms, owner, hovered, true)
+    read_with(ctx, zoom_with_wheel, pinch_zooms, owner, hovered, true, true)
 }
 
 /// [`read`], choosing how a plain wheel scroll pans: `smooth` glides it over a few frames (egui's
 /// smoothed delta); off, as with Interface › Enable Animations off, the view moves the whole notch
 /// in the frame the wheel turns and stops there (#5721), as scroll areas already do.
-pub fn read_with(ctx: &Context, zoom_with_wheel: bool, pinch_zooms: bool, owner: Id, hovered: bool, smooth: bool) -> Option<Wheel> {
+/// `touch_gestures` is Preferences › Enhanced Controls › Enable Gestures: off, a touch screen's
+/// two-finger pinch doesn't zoom ([`pinch_factor`]).
+pub fn read_with(ctx: &Context, zoom_with_wheel: bool, pinch_zooms: bool, owner: Id, hovered: bool, smooth: bool, touch_gestures: bool) -> Option<Wheel> {
     let notch = ctx.options(|o| o.input_options.line_scroll_speed);
 
     // --- Modifier tracking (always runs for all callers) ---
     let (scroll, zoom_delta, latest_alt, latest_shift, wheel, page) = ctx.input(|i| {
-        let latest_alt = i.events.iter().rev().find_map(|e| match e {
-            Event::MouseWheel { modifiers, .. } => Some(modifiers.alt && !modifiers.command && !modifiers.ctrl),
-            _ => None,
-        });
-        let latest_shift = i.events.iter().rev().find_map(|e| match e {
-            Event::MouseWheel { modifiers, .. } => Some(modifiers.shift && !modifiers.command && !modifiers.ctrl),
-            _ => None,
-        });
-        let wheel: Vec<(MouseWheelUnit, Vec2, Modifiers)> = i
-            .events
-            .iter()
-            .filter_map(|e| match e {
-                Event::MouseWheel { unit, delta, modifiers, .. } => Some((*unit, *delta, *modifiers)),
-                _ => None,
-            })
-            .collect();
-        (i.smooth_scroll_delta, i.zoom_delta(), latest_alt, latest_shift, wheel, i.content_rect().height())
+        let wheel = wheel_events(i);
+        let latest_alt = wheel.last().map(|(_, _, m)| m.alt && !m.command && !m.ctrl);
+        let latest_shift = wheel.last().map(|(_, _, m)| m.shift && !m.command && !m.ctrl);
+        (i.smooth_scroll_delta, pinch_factor(i, touch_gestures), latest_alt, latest_shift, wheel, i.content_rect().height())
     });
     let alt = match latest_alt {
         Some(a) => {
@@ -329,6 +322,55 @@ pub fn read_with(ctx: &Context, zoom_with_wheel: bool, pinch_zooms: bool, owner:
     }
 }
 
+fn is_alt_key(key: Key) -> bool {
+    matches!(key, Key::AltLeft | Key::AltRight)
+}
+
+/// This frame's wheel events, in order, with ⌥/Alt added to their modifiers while an Alt key is
+/// down (#8049). The modifiers a wheel event carries are the windowing layer's modifier state,
+/// which on Windows can miss a held Alt (the wheel then scrolled until another modifier was
+/// tapped), while the Alt key's own press and release still arrive; the menu bar follows those
+/// too (`menu_keys`). Alt is down from its press until its release, starting from whether it
+/// was down before this frame's first Alt key event (egui's `keys_down` when there is none).
+fn wheel_events(i: &InputState) -> Vec<(MouseWheelUnit, Vec2, Modifiers)> {
+    let first_alt_key = i.events.iter().find_map(|e| match e {
+        // A repeat means the key was already down; a release means it was down until then.
+        Event::Key { key, pressed, repeat, .. } if is_alt_key(*key) => Some(!*pressed || *repeat),
+        _ => None,
+    });
+    let mut alt_key = first_alt_key.unwrap_or_else(|| i.key_down(Key::AltLeft) || i.key_down(Key::AltRight));
+    let mut wheel = Vec::new();
+    for e in &i.events {
+        match e {
+            Event::Key { key, pressed, .. } if is_alt_key(*key) => alt_key = *pressed,
+            Event::MouseWheel { unit, delta, modifiers, .. } => {
+                let modifiers = Modifiers { alt: modifiers.alt || alt_key, ..*modifiers };
+                wheel.push((*unit, *delta, modifiers));
+            }
+            _ => {}
+        }
+    }
+    wheel
+}
+
+/// This frame's pinch zoom factor (1 = none). While two fingers are down on a touch screen, egui's
+/// `zoom_delta` reports their pinch in place of the trackpad's `Event::Zoom`. With Preferences ›
+/// Enhanced Controls › Enable Gestures off (`touch_gestures` false) the fingers are ignored and only
+/// the trackpad's own pinch events count (Windows' Ctrl + wheel pinch included: [`fold_legacy_pinch`]
+/// has already turned it into `Event::Zoom`).
+pub fn pinch_factor(i: &InputState, touch_gestures: bool) -> f32 {
+    if touch_gestures || i.multi_touch().is_none() {
+        return i.zoom_delta();
+    }
+    i.events
+        .iter()
+        .filter_map(|e| match e {
+            Event::Zoom(f) if f.is_finite() && *f > 0.0 => Some(*f),
+            _ => None,
+        })
+        .product()
+}
+
 #[cfg(test)]
 mod tests {
     use egui::TouchPhase;
@@ -393,7 +435,7 @@ mod tests {
                     let raw = RawInput { time: Some(f64::from(n) / 60.0), predicted_dt: 1.0 / 60.0, events, ..Default::default() };
                     let mut pan = Vec2::ZERO;
                     let mut out = ctx.run_ui(raw, |ui| {
-                        if let Some(Wheel::Pan(d)) = read_with(ui.ctx(), false, true, owner, true, smooth) {
+                        if let Some(Wheel::Pan(d)) = read_with(ui.ctx(), false, true, owner, true, smooth, true) {
                             pan = d;
                         }
                     });
@@ -921,5 +963,63 @@ mod tests {
         assert_eq!(snaps, 1, "Line-unit notch produces 1 step");
         let (_, _, snaps) = gesture(vec![vec![wheel(Vec2::new(0.0, -1.0), Modifiers::SHIFT)]], true, false);
         assert_eq!(snaps, -1, "Line-unit notch down produces −1 step");
+    }
+
+    /// Two fingers on a touch screen: down 20 points apart, spread to 40 (a ×2 pinch), lifted.
+    fn touch_pinch_frames() -> Vec<Vec<Event>> {
+        let touch = |id: u64, phase: TouchPhase, x: f32| Event::Touch {
+            device_id: egui::TouchDeviceId(1),
+            id: egui::TouchId(id),
+            phase,
+            pos: egui::pos2(x, 50.0),
+            force: None,
+        };
+        vec![
+            // egui only starts a multi-touch gesture once it knows where the pointer is.
+            vec![Event::PointerMoved(egui::pos2(40.0, 50.0))],
+            vec![touch(1, TouchPhase::Start, 40.0), touch(2, TouchPhase::Start, 60.0)],
+            vec![touch(1, TouchPhase::Move, 30.0), touch(2, TouchPhase::Move, 70.0)],
+            vec![touch(1, TouchPhase::End, 30.0), touch(2, TouchPhase::End, 70.0)],
+        ]
+    }
+
+    /// The total zoom [`read_with`] reports over `frames`, Enable Gestures set to `touch_gestures`.
+    fn touch_zoom(frames: Vec<Vec<Event>>, touch_gestures: bool) -> f32 {
+        let owner = Id::new("test-touch");
+        let ctx = Context::default();
+        configure(&ctx);
+        let mut zoom = 1.0;
+        for (n, events) in (0u32..).zip(frames) {
+            let raw = RawInput { time: Some(f64::from(n) / 60.0), predicted_dt: 1.0 / 60.0, events, ..Default::default() };
+            let mut out = ctx.run_ui(raw, |ui| {
+                if let Some(Wheel::Zoom(f)) = read_with(ui.ctx(), false, true, owner, true, true, touch_gestures) {
+                    zoom *= f;
+                }
+            });
+            out.textures_delta.clear();
+        }
+        zoom
+    }
+
+    /// Preferences › Enhanced Controls › Enable Gestures (#204): on (the default) a two-finger
+    /// pinch on a touch screen zooms; off, it leaves the view alone.
+    #[test]
+    fn enable_gestures_switches_touch_screen_pinch_zoom() {
+        let on = touch_zoom(touch_pinch_frames(), true);
+        assert!((on - 2.0).abs() < 1e-4, "on: the fingers zoom ×2: {on}");
+        let off = touch_zoom(touch_pinch_frames(), false);
+        assert_eq!(off, 1.0, "off: the fingers don't zoom");
+    }
+
+    /// Enable Gestures off only silences the touch screen: a trackpad pinch still zooms, also in a
+    /// frame where two fingers rest on the screen (egui's `zoom_delta` would report theirs instead).
+    #[test]
+    fn enable_gestures_off_keeps_the_trackpad_pinch() {
+        let zoom = touch_zoom(vec![vec![Event::Zoom(1.25)]], false);
+        assert!((zoom - 1.25).abs() < 1e-4, "no fingers down: {zoom}");
+        let mut frames = touch_pinch_frames();
+        frames[2] = vec![Event::Zoom(1.25)];
+        let zoom = touch_zoom(frames, false);
+        assert!((zoom - 1.25).abs() < 1e-4, "fingers resting: {zoom}");
     }
 }

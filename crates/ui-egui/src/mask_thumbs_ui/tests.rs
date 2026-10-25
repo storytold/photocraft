@@ -86,6 +86,28 @@ fn deleting_the_vector_mask_prunes_its_thumbnail() {
     assert!(!h.state().thumbs.contains_key(&key));
 }
 
+// Regression test for #119: the Layers panel's thumbnail textures of a deleted layer, and of
+// every layer of a closed document, were kept for the rest of the session.
+#[test]
+fn deleting_a_layer_or_closing_its_document_releases_the_thumbnails() {
+    let (s, masked, shape) = session();
+    let mut h = harness(s, 0, 1.0, 290.0);
+    let layer_key = |id: u64| (photocraft_doc::LayerId(id), crate::mask_thumbs_ui::THUMB_LAYER);
+    assert!(h.state().thumbs.contains_key(&layer_key(masked)) && h.state().thumbs.contains_key(&layer_key(shape)), "both rows drew a thumbnail");
+    let before = h.state().thumbs.len();
+
+    h.state_mut().run("layer.delete", json!({"layer": shape})).unwrap();
+    h.run_steps(3);
+    assert!(!h.state().thumbs.contains_key(&layer_key(shape)), "the deleted layer's thumbnail is released");
+    assert!(h.state().thumbs.contains_key(&layer_key(masked)), "the other layer keeps its thumbnail");
+    assert!(h.state().thumbs.len() < before);
+
+    h.state_mut().run("file.close", json!({})).unwrap();
+    h.run_steps(3);
+    assert!(h.state().session.documents().is_empty());
+    assert!(h.state().thumbs.is_empty(), "no thumbnails outlive their document: {:?}", h.state().thumbs.keys().collect::<Vec<_>>());
+}
+
 #[test]
 fn footer_trash_deletes_only_the_targeted_mask_linked_or_unlinked() {
     for linked in [true, false] {
@@ -212,6 +234,36 @@ fn dragging_a_layer_row_to_trash_still_deletes_the_layer_with_a_mask_targeted() 
     h.event(egui::Event::PointerButton { pos: to, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
     h.run_steps(3);
     assert!(h.state().session.active().unwrap().doc.layer(photocraft_doc::LayerId(masked)).is_none());
+}
+
+/// With the thumbnail size set to None no mask thumbnail is drawn, so a drag from where one used
+/// to be moves the layer (the row) rather than a mask that is no longer on screen.
+#[test]
+fn thumbnails_off_forget_the_mask_rects_and_drag_the_layer() {
+    let (s, masked, _) = session();
+    let mut h = harness(s, 0, 1.0, 290.0);
+    let stale = recorded(&h.ctx, masked).unwrap().0.into_iter().find(|(k, _)| *k == MaskKind::Pixel).unwrap().1;
+    click_with(&mut h, stale.center(), Modifiers::NONE);
+    h.state_mut().ui.layers_panel_options.thumbnail_size = crate::state::LayerThumbnailSize::None;
+    h.run_steps(3);
+    assert!(recorded(&h.ctx, masked).is_none(), "no mask thumbnails are recorded while they are off");
+
+    let row = crate::layer_row_ui::recorded(&h.ctx).into_iter().find(|r| r.layer == masked).unwrap().row;
+    let from = pos2(stale.center().x, row.center().y);
+    assert!(row.contains(from), "the old thumbnail position is still on the row");
+    let to = h.get_by_label("Delete Layer Mask").rect().center();
+    h.hover_at(from);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: from, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    for k in 1..=8 {
+        h.event(egui::Event::PointerMoved(from + (to - from) * (k as f32 / 8.0)));
+        h.run_steps(1);
+    }
+    h.event(egui::Event::PointerButton { pos: to, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(3);
+    assert!(!h.state().ui.dialogs.iter().any(|d| crate::mask_trash_prompt::owns(&d.fields)), "no mask prompt: the mask was not dragged");
+    assert!(h.state().session.active().unwrap().doc.layer(photocraft_doc::LayerId(masked)).is_none(), "the layer went to the trash");
 }
 
 /// #3113: dragging the layer mask's thumbnail onto the Trash asks "Apply mask to layer before
@@ -451,7 +503,8 @@ fn mask_view(h: &Harness<'_, PhotocraftApp>) -> serde_json::Value {
 
 fn canvas_px(h: &Harness<'_, PhotocraftApp>) -> Option<Vec<egui::Color32>> {
     let st = h.state().session.active().unwrap();
-    crate::channel_view::render(&st.doc, &st.channel_view, photocraft_geom::Rect::new(0, 0, 200, 100), 1, false, st.active_layer)
+    let look = crate::channel_view::Look::of(&h.state().session);
+    crate::channel_view::render(&st.doc, &st.channel_view, photocraft_geom::Rect::new(0, 0, 200, 100), 1, look, st.active_layer)
 }
 
 fn near(a: Rect, b: Rect) -> bool {
@@ -621,6 +674,9 @@ fn backslash_toggles_the_rubylith() {
     assert_eq!(crate::canvas::paint_target(h.state()), json!("mask"), "painting paints the mask");
     let px = canvas_px(&h).unwrap();
     assert_eq!(px[50 * 200 + 50], egui::Color32::from_rgba_premultiplied(128, 0, 0, 128), "50% red over hidden areas");
+    // Layer Mask Display Options: opaque green over what the mask hides instead.
+    h.state_mut().run("channel.options", json!({"channel": "mask", "color": "#00ff00", "opacity": 100})).unwrap();
+    assert_eq!(canvas_px(&h).unwrap()[50 * 200 + 50], egui::Color32::from_rgb(0, 255, 0));
     h.key_press(egui::Key::Backslash);
     h.run_steps(2);
     assert_eq!(mask_view(&h), serde_json::Value::Null, "\\ again hides it");

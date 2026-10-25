@@ -42,6 +42,82 @@ fn row(h: &Harness<'_, PhotocraftApp>, id: LayerId) -> crate::layer_row_ui::RowR
 }
 
 #[test]
+fn new_solid_color_from_menu_cancel_keeps_document_and_history_unchanged() {
+    let (mut h, _) = harness(1.0);
+    let ctx = h.ctx.clone();
+    let app = h.state_mut();
+    let before = app.session.active().unwrap().doc.clone();
+    let active = app.session.active().unwrap().active_layer;
+    let steps = app.session.active().unwrap().history.entries().len();
+
+    let opened = crate::menus::invoke(app, &ctx, "layer.newFillLayer.solidColor", json!({})).unwrap();
+    assert!(opened.get("layer").is_none(), "no layer exists until OK");
+    let dialog = opened["dialog"].as_u64().unwrap();
+    let picker = app.ui.dialogs.last().unwrap();
+    assert_eq!(picker.id, dialog);
+    assert!(owns_new(&picker.fields), "new Solid Color fill opens the shared Color Picker");
+    assert_eq!(picker.fields["__params"]["document"], before.id.0);
+    assert!(Arc::ptr_eq(&before, &app.session.active().unwrap().doc));
+    assert_eq!(app.session.active().unwrap().history.entries().len(), steps);
+
+    app.ui.dialog_mut(dialog).unwrap().fields.insert("color".into(), json!("#ff8800"));
+    crate::dialogs::cancel(app, dialog).unwrap();
+    assert!(app.ui.dialogs.iter().all(|d| d.id != dialog));
+    assert!(Arc::ptr_eq(&before, &app.session.active().unwrap().doc), "Cancel must not create or delete a layer");
+    assert_eq!(app.session.active().unwrap().active_layer, active);
+    assert_eq!(app.session.active().unwrap().history.entries().len(), steps, "Cancel must not record a history entry");
+}
+
+#[test]
+fn new_solid_color_from_menu_ok_creates_one_layer_with_chosen_or_default_color() {
+    let (mut h, _) = harness(1.0);
+    let ctx = h.ctx.clone();
+    let app = h.state_mut();
+    let steps = app.session.active().unwrap().history.entries().len();
+
+    // OK with the initial foreground colour still creates the fill layer.
+    let first = crate::menus::invoke(app, &ctx, "layer.newFillLayer.solidColor", json!({})).unwrap();
+    let created = crate::dialogs::confirm(app, first["dialog"].as_u64().unwrap()).unwrap();
+    let id = LayerId(created["layer"].as_u64().unwrap());
+    assert!(matches!(app.session.active().unwrap().doc.layer(id).unwrap().content, LayerContent::Fill(Fill::Solid(_))));
+    assert_eq!(app.session.active().unwrap().history.entries().len(), steps + 1);
+
+    let second = crate::menus::invoke(app, &ctx, "layer.newFillLayer.solidColor", json!({})).unwrap();
+    let dialog = second["dialog"].as_u64().unwrap();
+    app.ui.dialog_mut(dialog).unwrap().fields.insert("color".into(), json!("#ff8800"));
+    let created = crate::dialogs::confirm(app, dialog).unwrap();
+    let id = LayerId(created["layer"].as_u64().unwrap());
+    let LayerContent::Fill(Fill::Solid(color)) = app.session.active().unwrap().doc.layer(id).unwrap().content else {
+        panic!("expected the newly created Solid Color fill");
+    };
+    assert_eq!(color.to_rgba8()[..3], [255, 136, 0]);
+    assert_eq!(app.session.active().unwrap().active_layer, Some(id));
+    assert_eq!(app.session.active().unwrap().history.entries().len(), steps + 2);
+
+    let dialogs = app.ui.dialogs.len();
+    let explicit = crate::menus::invoke(app, &ctx, "layer.newFillLayer.solidColor", json!({"color": "#123456"})).unwrap();
+    assert!(explicit["layer"].as_u64().is_some());
+    assert!(explicit.get("dialog").is_none());
+    assert_eq!(app.ui.dialogs.len(), dialogs, "parameterised creation stays non-interactive");
+    assert_eq!(app.session.active().unwrap().history.entries().len(), steps + 3);
+}
+
+#[test]
+fn new_solid_color_picker_rejects_a_different_active_document() {
+    let (mut h, _) = harness(1.0);
+    let ctx = h.ctx.clone();
+    let app = h.state_mut();
+    let dialog = crate::menus::invoke(app, &ctx, "layer.newFillLayer.solidColor", json!({})).unwrap()["dialog"].as_u64().unwrap();
+    app.ui.dialog_mut(dialog).unwrap().fields.insert("color".into(), json!("#ff8800"));
+    app.run("file.new", json!({"width": 4, "height": 4})).unwrap();
+    let before = app.session.active().unwrap().doc.clone();
+    let steps = app.session.active().unwrap().history.entries().len();
+    assert!(crate::dialogs::confirm(app, dialog).is_err());
+    assert!(Arc::ptr_eq(&before, &app.session.active().unwrap().doc));
+    assert_eq!(app.session.active().unwrap().history.entries().len(), steps);
+}
+
+#[test]
 fn only_the_colour_thumbnail_opens_the_solid_fill_picker() {
     for ppp in [1.0, 2.0] {
         let (mut h, id) = harness(ppp);

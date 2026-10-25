@@ -1,6 +1,6 @@
 //! Non-destructive layer-mask controls (pixel and vector), shared by docked and floating Properties.
 
-use photocraft_doc::Layer;
+use photocraft_doc::{Layer, LayerContent};
 use serde_json::json;
 
 use crate::props_layout::COL_GAP;
@@ -49,6 +49,23 @@ pub fn vector_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Lay
     });
 }
 
+/// A shape layer's path is its vector mask (Photoshop's Properties › Masks): its Density and
+/// Feather soften the fill through `layer.vectorMask.edit`, the shape staying editable.
+pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
+    let LayerContent::Shape(sh) = &layer.content else { return };
+    if layer.vector_mask.is_some() {
+        return;
+    }
+    let Some(document) = app.session.active().map(|s| s.doc.id.0) else { return };
+    ui.push_id((document, layer.id, "shape-mask-properties"), |ui| {
+        if !crate::props_layout::section(ui, "shape-mask", "Vector Mask") {
+            return;
+        }
+        let (density, feather) = (sh.density, sh.feather);
+        sliders(app, ui, layer.id.0, document, "layer.vectorMask.edit", "shape-mask", density, feather);
+    });
+}
+
 /// Density (%) and Feather (px) sliders writing one undoable edit per drag: the value lives on the
 /// mask, not in its pixels. `command` is the mask's edit command and `prefix` keys its coalescing.
 #[allow(clippy::too_many_arguments)]
@@ -66,8 +83,12 @@ fn sliders(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: u64, document: u64
         }
         g.0
     });
-    for (field, label, mut value, max, unit) in [("density", tl!("Density"), density * 100.0, 100.0, "%"), ("feather", tl!("Feather"), feather, 1000.0, "px")] {
-        let response = widgets::slider_row(ui, label, &mut value, 0.0..=max, unit, None);
+    // Feather's track is curved like Photoshop's, so a few px can be dragged to (#6545).
+    for (field, label, mut value, max, unit, curve) in
+        [("density", tl!("Density"), density * 100.0, 100.0, "%", None), ("feather", tl!("Feather"), feather, 1000.0, "px", Some(3.0))]
+    {
+        let gestures = widgets::RowGestures { curve, ..Default::default() };
+        let response = widgets::slider_row_with(ui, label, &mut value, 0.0..=max, unit, None, gestures);
         response.widget_info(|| egui::WidgetInfo::slider(ui.is_enabled(), f64::from(value), label));
         if response.changed() {
             let mut params = json!({"document": document, "layer": layer,

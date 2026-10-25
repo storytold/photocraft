@@ -36,6 +36,10 @@ pub use photocraft_gpu::{DeviceHealth, Fault};
 
 /// Default tile side; documents up to this size (and the device limit) use a single texture.
 pub const DEFAULT_TILE: u32 = 8192;
+/// Mip levels no larger than this on either side are redrawn whole on every edit rather than
+/// just their damage (see [`mip_damage`], #6418). Every corrupted level measured was at most
+/// 64 px; this leaves a factor of two.
+const WHOLE_MIP_SIDE: u32 = 128;
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 /// Canvas texture format of high-bit documents (see [`GpuCanvas::format_for`]).
 const FORMAT_HIGH: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
@@ -75,7 +79,7 @@ pub struct ViewParams {
     /// Distinguishes views painted in the same frame (main canvas, extra windows).
     pub view_key: u64,
     /// Display transform: 0 none, 1 the document's display LUT (document → monitor profile,
-    /// Proof Colors), 2 LUT plus the gamut warning (see [`GpuCanvas::set_display_lut`]).
+    /// Proof Colors), 2 LUT plus the gamut warning, 3 matrix/shaper (see [`GpuCanvas::set_display_lut`]).
     pub display: u8,
     /// The display the view is on (its LUT is per document and display, #569; 0 = unknown).
     pub output: u32,
@@ -295,6 +299,15 @@ impl GpuCanvas {
         }
     }
 
+    /// Take any GPU measurement that has landed since the last call, without compositing
+    /// anything. [`Compositor::render`] carries measurements out in its stats, but a refresh is
+    /// the only thing that collects them, so the last refresh before the app goes idle would
+    /// never be reported. The frame loop calls this so it is.
+    pub fn take_gpu_timing(&self) -> Option<photocraft_gpu::GpuTiming> {
+        let mut r = self.rs.renderer.write();
+        r.callback_resources.get_mut::<Resources>()?.compositor.as_mut()?.take_gpu_timing()
+    }
+
     /// GPU bytes the wgpu compositor holds: resident layer pages and caches (effect maps and
     /// lower-stack chunks). Keep the scorecard's memory measurements inclusive of reuse.
     pub fn compositor_bytes(&self) -> Option<(u64, usize)> {
@@ -313,7 +326,8 @@ impl GpuCanvas {
         if let Some(b) = budget {
             comp.set_memory_budget(b);
         }
-        let fit = LayerFit { doc: doc.id.0, needed: comp.working_set(doc, doc.bounds()), budget: comp.resident_budget() };
+        let needed = comp.working_set(doc, doc.bounds());
+        let fit = LayerFit { doc: doc.id.0, needed, budget: comp.fit_layers(needed, true) };
         res.layer_fit = Some(fit);
         Some(fit)
     }
@@ -472,6 +486,8 @@ impl GpuCanvas {
             },
         };
         comp.set_health(self.health.clone());
+        // Measured, not waited for: the timestamps come back a frame or two later.
+        comp.measure_gpu_time(device, queue);
         if let Some(b) = res.compositor_budget {
             comp.set_memory_budget(b);
         }
@@ -494,7 +510,8 @@ impl GpuCanvas {
         // as hiding a big layer (#4024); small edits in the view stay on the GPU.
         let large = region.width() as u64 * region.height() as u64 >= DEFER_PX;
         if region == doc.bounds() || large {
-            let fit = LayerFit { doc: doc.id.0, needed: comp.working_set(doc, region), budget: comp.resident_budget() };
+            let needed = comp.working_set(doc, region);
+            let fit = LayerFit { doc: doc.id.0, needed, budget: comp.fit_layers(needed, region == doc.bounds()) };
             res.layer_fit = Some(fit);
             if !fit.fits() {
                 res.compositor = Some(comp);
@@ -636,8 +653,10 @@ impl GpuCanvas {
             Ok(stats) => {
                 out.kind = if damage.is_some() { "gpu-rect" } else { "gpu-full" };
                 out.px = region.width() as u64 * region.height() as u64;
+                // Encoding and submitting only: the GPU is still running this work.
                 out.composite_ms = now_ms() - t0;
                 out.uploads = stats.tiles_uploaded as u64;
+                out.gpu = stats.gpu_time;
                 return out;
             }
             Err(e) => out.fallback = Some(e.0),
@@ -781,10 +800,23 @@ impl GpuCanvas {
                     log::warn!("set_display_lut: {} bytes for a {size}³ LUT; ignored", bytes.len());
                     return;
                 }
-                let bg = lut_bind_group(device, queue, &res.lut_bgl, size, bytes);
+                let bg = lut_bind_group(device, queue, &res.lut_bgl, size, bytes, None);
                 res.luts.insert((doc, output), bg);
             }
         }
+    }
+
+    /// Set a separately sampled curve/matrix/curve display transform. CMS validates this
+    /// representation and provides bounded tables; no profile interpretation lives in the UI.
+    pub fn set_display_matrix_shaper(&self, doc: u64, output: u32, shaper: &photocraft_cms::GpuMatrixShaper) {
+        if !self.health.is_ok() {
+            return;
+        }
+        let mut renderer = self.rs.renderer.write();
+        let Some(res) = renderer.callback_resources.get_mut::<Resources>() else { return };
+        let bg = lut_bind_group(&self.rs.device, &self.rs.queue, &res.lut_bgl, 2, &identity_lut_bytes(), Some(shaper));
+        res.display_lut_signatures.remove(&(doc, output));
+        res.luts.insert((doc, output), bg);
     }
 
     /// Read back level 0 of document `key`'s canvas texture: its format, size and the stored
@@ -876,13 +908,21 @@ pub struct Refresh {
     pub upload_ms: f64,
     /// Layer tiles the wgpu compositor uploaded.
     pub uploads: u64,
+    /// How long the GPU spent executing a recent wgpu composite, once its timestamps came back
+    /// (a frame or two after that refresh, so usually an earlier one than this). It carries its
+    /// own pixel count and is never this refresh's unless they match. `None` when the device has
+    /// no timestamp queries, on the CPU compositor, and on wasm: no number at all is reported
+    /// rather than `composite_ms`, which measures encoding and submitting, not executing. It
+    /// leaves out layer-tile uploads (`uploads` above counts them), so a first refresh of a
+    /// document under-reports by more than the few per cent of a warm one.
+    pub gpu: Option<photocraft_gpu::GpuTiming>,
     /// Why the wgpu compositor wasn't used.
     pub fallback: Option<String>,
 }
 
-/// How the app creates its wgpu device: egui's defaults, except that the texture and buffer size
-/// limits are the adapter's own rather than egui's 8192 px cap, so large documents stay on the
-/// GPU compositor.
+/// How the app creates its wgpu device: egui's defaults clamped to the adapter's supported limits,
+/// with the adapter's own texture and buffer sizes rather than egui's 8192 px cap, so large
+/// documents stay on the GPU compositor.
 pub fn wgpu_setup() -> egui_wgpu::WgpuSetup {
     let mut setup = egui_wgpu::WgpuSetup::without_display_handle();
     use_adapter_limits(&mut setup);
@@ -891,7 +931,8 @@ pub fn wgpu_setup() -> egui_wgpu::WgpuSetup {
 
 /// Make `setup` request the adapter's own texture and buffer size limits instead of egui's
 /// default 8192 px cap (which sent every document wider or taller than 8192 px to the CPU
-/// compositor). Everything else (features, the WebGL2 base limits on GL) stays egui's default.
+/// compositor). Other limits use egui's defaults (WebGL2's on GL), clamped to adapter support;
+/// features stay egui's default.
 pub fn use_adapter_limits(setup: &mut egui_wgpu::WgpuSetup) {
     use_adapter_limits_with(setup, |_| {});
 }
@@ -902,16 +943,51 @@ pub fn use_adapter_limits_with(setup: &mut egui_wgpu::WgpuSetup, on_adapter: imp
     if let egui_wgpu::WgpuSetup::CreateNew(create) = setup {
         create.device_descriptor = std::sync::Arc::new(move |adapter| {
             on_adapter(adapter);
-            wgpu::DeviceDescriptor { label: Some("photocraft wgpu device"), required_limits: device_limits(adapter), ..Default::default() }
+            device_descriptor(adapter)
         });
     }
 }
 
-/// egui's base limits (WebGL2's on GL) with the adapter's maximum texture and buffer sizes.
+/// How the app asks for its device: egui's defaults, the adapter's texture and buffer size
+/// limits ([`device_limits`]), and timestamp queries where the adapter has them, so the canvas
+/// can report how long the GPU actually spends compositing ([`photocraft_gpu::GpuTimer`]).
+/// A bench or test that builds its own device should use this rather than [`device_limits`]
+/// alone, or it measures a device the app never creates. (`bevel_bench`, `fx_bench` and
+/// `interactive_bench` still call [`device_limits`] directly and so report no GPU time.)
+pub fn device_descriptor(adapter: &wgpu::Adapter) -> wgpu::DeviceDescriptor<'static> {
+    wgpu::DeviceDescriptor {
+        label: Some("photocraft wgpu device"),
+        required_limits: device_limits(adapter),
+        required_features: timing_features(adapter),
+        ..Default::default()
+    }
+}
+
+/// The timestamp-query features when the adapter supports all of them, else none: asking for a
+/// feature an adapter lacks fails device creation, and a canvas without GPU timing is far better
+/// than no canvas.
+///
+/// `PHOTOCRAFT_NO_GPU_TIMING` suppresses the request as well as the timer
+/// ([`photocraft_gpu::Compositor::measure_gpu_time`]), so the variable also rescues a driver
+/// that advertises the features and then fails or misbehaves on device creation — not only one
+/// whose timestamps come back wrong.
+pub fn timing_features(adapter: &wgpu::Adapter) -> wgpu::Features {
+    let want = photocraft_gpu::timing::FEATURES;
+    if std::env::var_os("PHOTOCRAFT_NO_GPU_TIMING").is_some() {
+        return wgpu::Features::empty();
+    }
+    if adapter.features().contains(want) { want } else { wgpu::Features::empty() }
+}
+
+/// egui's base limits (WebGL2's on GL), clamped to adapter support, with its maximum texture and buffer sizes.
 pub fn device_limits(adapter: &wgpu::Adapter) -> wgpu::Limits {
-    let base = if adapter.get_info().backend == wgpu::Backend::Gl { wgpu::Limits::downlevel_webgl2_defaults() } else { wgpu::Limits::default() };
-    let a = adapter.limits();
-    wgpu::Limits { max_texture_dimension_2d: a.max_texture_dimension_2d, max_buffer_size: a.max_buffer_size, ..base }
+    device_limits_for(adapter.get_info().backend, adapter.limits())
+}
+
+fn device_limits_for(backend: wgpu::Backend, supported: wgpu::Limits) -> wgpu::Limits {
+    let base = if backend == wgpu::Backend::Gl { wgpu::Limits::downlevel_webgl2_defaults() } else { wgpu::Limits::default() };
+    let base = base.or_worse_values_from(&supported);
+    wgpu::Limits { max_texture_dimension_2d: supported.max_texture_dimension_2d, max_buffer_size: supported.max_buffer_size, ..base }
 }
 
 /// Milliseconds since first call (monotonic). Always 0 on wasm, where `std::time` is unavailable.
@@ -933,7 +1009,9 @@ pub struct Perf {
     pub ui_ms: f64,
     /// Worst UI frame of the last ~second (ms).
     pub ui_max_ms: f64,
-    /// Last canvas refresh: CPU composite (ms).
+    /// Last canvas refresh, CPU side (ms): the CPU composite on the CPU path, and on the GPU
+    /// path the cost of *encoding and submitting* the composite — not of running it, which is
+    /// `gpu_ms`.
     pub composite_ms: f64,
     /// Last canvas refresh: conversion + upload (ms).
     pub upload_ms: f64,
@@ -945,6 +1023,16 @@ pub struct Perf {
     pub gpu: bool,
     /// Layer tiles uploaded by the last GPU composite.
     pub gpu_uploads: u64,
+    /// How long the GPU spent executing a recent composite (ms), from timestamp queries read
+    /// back after the fact. `None` on the CPU compositor, on a device without timestamp queries
+    /// and on wasm — there is then no honest number to report, and `composite_ms` is not one.
+    /// Excludes layer-tile uploads and end-of-batch work (see `photocraft_gpu::timing`), so it
+    /// is a few per cent under the GPU's full share of a warm refresh and further under a cold
+    /// one.
+    pub gpu_ms: Option<f64>,
+    /// Pixels of the refresh `gpu_ms` measured, which is a frame or two behind
+    /// `last_refresh_px` and may be a different size.
+    pub gpu_ms_px: u64,
     /// Why the last refresh fell back to the CPU compositor (None = GPU composited).
     pub gpu_fallback: Option<String>,
     /// Adapter, backend, driver and fallback state (Help › System Info).
@@ -989,6 +1077,9 @@ pub struct GpuInfo {
     pub video_memory_mb: Option<u64>,
     /// `performance.gpuBackend` at launch.
     pub preference: String,
+    /// Every graphics adapter the window could have used, by name (Preferences › Performance ›
+    /// Graphics Adapter lists them). Empty in hosts that don't set it.
+    pub adapters: Vec<String>,
     /// The backend startup chose ("auto", "dx12", "cpu", …, or "env" for `WGPU_BACKEND`).
     pub selected: String,
     /// Why startup didn't use the preference as is (previous start crashed, `--safe-gpu`,
@@ -1004,6 +1095,17 @@ pub struct GpuInfo {
 }
 
 impl GpuInfo {
+    /// Record the adapters the instance found, without duplicates (one GPU shows up once per backend).
+    pub fn set_available(&mut self, adapters: &[wgpu::Adapter]) {
+        self.adapters.clear();
+        for a in adapters {
+            let name = a.get_info().name;
+            if !name.is_empty() && !self.adapters.contains(&name) {
+                self.adapters.push(name);
+            }
+        }
+    }
+
     /// Fill the adapter fields from `info`.
     pub fn set_adapter(&mut self, info: &wgpu::AdapterInfo) {
         self.adapter = info.name.clone();
@@ -1036,6 +1138,14 @@ impl GpuInfo {
                 let template = "Driver: {driver}";
                 crate::i18n::fmt(tl!(template), &[("driver", &or(&self.driver, "unknown"))])
             },
+        ];
+        // The card's own memory caps the GPU budgets, so it explains a huge canvas falling back
+        // to the CPU. Only discrete cards report one (integrated GPUs share system memory).
+        if let Some(mb) = self.video_memory_mb {
+            let template = "Graphics memory: {size}";
+            v.push(crate::i18n::fmt(tl!(template), &[("size", &crate::chrome_ui::fmt_bytes(mb.saturating_mul(1 << 20)))]));
+        }
+        v.extend([
             {
                 let template = "GPU backend preference: {backend}";
                 crate::i18n::fmt(tl!(template), &[("backend", &or(&self.preference, "auto"))])
@@ -1059,7 +1169,7 @@ impl GpuInfo {
                 };
                 crate::i18n::fmt(tl!(template), &[("renderer", tl!(renderer))])
             },
-        ];
+        ]);
         if let Some(f) = &self.fallback {
             v.push({
                 let template = "Fallback: {reason}";
@@ -1097,9 +1207,27 @@ impl Perf {
         self.upload_ms = upload_ms;
         if !kind.starts_with("gpu") {
             self.gpu_uploads = 0;
+            // The CPU compositor did this one: there is no GPU time, and the last GPU
+            // refresh's would be read as this refresh's.
+            self.gpu_ms = None;
+            self.gpu_ms_px = 0;
         } else {
             self.gpu_fallback = None;
         }
+    }
+
+    /// Record a canvas refresh and any GPU measurement that came back with it.
+    pub fn record_refresh(&mut self, r: &Refresh) {
+        self.record(r.kind, r.px, r.composite_ms, r.upload_ms);
+        if let Some(t) = r.gpu {
+            self.record_gpu(t);
+        }
+    }
+
+    /// Record a GPU composite measurement that came back (see [`photocraft_gpu::GpuTiming`]).
+    pub fn record_gpu(&mut self, t: photocraft_gpu::GpuTiming) {
+        self.gpu_ms = Some(t.ms);
+        self.gpu_ms_px = t.px;
     }
     pub fn span(&mut self, name: &'static str, ms: f64) {
         self.spans.insert(name, (ms * 100.0).round() / 100.0);
@@ -1261,8 +1389,9 @@ impl LayerFit {
 /// Floor of the compositor's memory budget: enough for a viewport's pages of a dozen layers.
 pub const MIN_GPU_BUDGET: u64 = 512 << 20;
 
-/// Why a full refresh whose layer pages don't fit [`memory_budget`] goes to the CPU compositor.
-pub const OVER_BUDGET: &str = "layers exceed the GPU memory budget; full refresh on the CPU";
+/// Why a full refresh whose layer pages don't fit [`memory_budget`] (or GPU memory) goes to the
+/// CPU compositor.
+pub const OVER_BUDGET: &str = photocraft_gpu::OVER_BUDGET;
 
 /// GPU memory the wgpu compositor may hold for layer pages and effect maps.
 ///
@@ -1504,8 +1633,16 @@ impl Default for CanvasStyle {
     }
 }
 
-/// A `size`³ RGBA8 3D texture bound for the canvas shader.
-fn lut_bind_group(device: &wgpu::Device, queue: &wgpu::Queue, bgl: &wgpu::BindGroupLayout, size: u32, bytes: &[u8]) -> wgpu::BindGroup {
+/// A display transform: either the existing 3D LUT or separate full-float shapers and
+/// matrix. Pack curves into short rows to stay within WebGL2's texture-size limits.
+fn lut_bind_group(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    bgl: &wgpu::BindGroupLayout,
+    size: u32,
+    bytes: &[u8],
+    shaper: Option<&photocraft_cms::GpuMatrixShaper>,
+) -> wgpu::BindGroup {
     let extent = wgpu::Extent3d { width: size, height: size, depth_or_array_layers: size };
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("pc_display_lut"),
@@ -1524,10 +1661,48 @@ fn lut_bind_group(device: &wgpu::Device, queue: &wgpu::Queue, bgl: &wgpu::BindGr
         extent,
     );
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let (width, height, curves, matrix) = if let Some(s) = shaper {
+        let width = 1024usize;
+        let count = s.input_table().len() + s.output_table().len();
+        let height = count.div_ceil(width);
+        let mut curves = Vec::with_capacity(width * height * 16);
+        for value in s.input_table().iter().chain(s.output_table()).flatten() {
+            curves.extend_from_slice(&value.to_le_bytes());
+        }
+        curves.resize(width * height * 16, 0);
+        (width as u32, height as u32, curves, s.matrix_rows())
+    } else {
+        (1, 1, vec![0; 16], [[0.0; 4]; 3])
+    };
+    let extent = wgpu::Extent3d { width, height, depth_or_array_layers: 1 };
+    let curves_texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("pc_display_shapers"),
+        size: extent,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        // textureLoad + explicit interpolation needs no optional float-filtering feature.
+        format: wgpu::TextureFormat::Rgba32Float,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo { texture: &curves_texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+        &curves,
+        wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(width * 16), rows_per_image: Some(height) },
+        extent,
+    );
+    let curves_view = curves_texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let matrix_bytes: Vec<u8> = matrix.iter().flatten().flat_map(|v| v.to_le_bytes()).collect();
+    let matrix_buffer = init_buffer(device, "pc_display_matrix", &matrix_bytes, wgpu::BufferUsages::UNIFORM);
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("pc_display_lut"),
         layout: bgl,
-        entries: &[wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) }],
+        entries: &[
+            wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
+            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&curves_view) },
+            wgpu::BindGroupEntry { binding: 2, resource: matrix_buffer.as_entire_binding() },
+        ],
     })
 }
 
@@ -1640,7 +1815,20 @@ impl Resources {
             },
             count: None,
         };
-        let lut_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some("pc_display_lut"), entries: &[lut_entry] });
+        let curves_entry = wgpu::BindGroupLayoutEntry {
+            binding: 1,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Texture {
+                multisampled: false,
+                sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                view_dimension: wgpu::TextureViewDimension::D2,
+            },
+            count: None,
+        };
+        let lut_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("pc_display_lut"),
+            entries: &[lut_entry, curves_entry, uniform_entry(2, 48, wgpu::ShaderStages::FRAGMENT)],
+        });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("pc_canvas"),
             bind_group_layouts: &[Some(&view_bgl), Some(&tile_bgl), Some(&lut_bgl)],
@@ -1711,7 +1899,7 @@ impl Resources {
         });
         let encode_pipeline = pipeline(device, "pc_encode", &encode_layout, &encode_module, ("vs", "fs"), FORMAT, None);
         let encode_pipeline_high = high.then(|| pipeline(device, "pc_encode_16f", &encode_layout, &encode_module, ("vs", "fs"), FORMAT_HIGH, None));
-        let identity_lut = lut_bind_group(device, queue, &lut_bgl, 2, &identity_lut_bytes());
+        let identity_lut = lut_bind_group(device, queue, &lut_bgl, 2, &identity_lut_bytes(), None);
         Self {
             lut_bgl,
             luts: HashMap::new(),
@@ -1760,6 +1948,20 @@ fn mip_count(w: u32, h: u32) -> u32 {
     32 - w.max(h).max(1).leading_zeros()
 }
 
+/// The rect (x0, y0, x1, y1) of a `lw`×`lh` mip level to redraw when `prev` changed in the level
+/// above: that damage halved and padded by one texel for odd-size rounding, or the whole level
+/// when it is at most [`WHOLE_MIP_SIDE`] on either side. On AMD's Vulkan driver a pass that draws
+/// only part of a level of 64 px or less corrupts texels outside its scissor, at the level's
+/// top-left (#6418: RX 6900 XT, driver 26.8.1; DX12 on the same card is fine). Such a level costs
+/// next to nothing to redraw, so this holds for every adapter; the levels after it are smaller
+/// still, so the rest of the chain is redrawn whole too.
+fn mip_damage([x0, y0, x1, y1]: [u32; 4], lw: u32, lh: u32) -> [u32; 4] {
+    if lw.max(lh) <= WHOLE_MIP_SIDE {
+        return [0, 0, lw, lh];
+    }
+    [(x0 / 2).saturating_sub(1), (y0 / 2).saturating_sub(1), (x1.div_ceil(2) + 1).min(lw), (y1.div_ceil(2) + 1).min(lh)]
+}
+
 /// A buffer holding `contents`, like `DeviceExt::create_buffer_init` but without its panic when
 /// the device was lost (an invalid buffer has no mapped range): the buffer is then just invalid.
 fn init_buffer(device: &wgpu::Device, label: &str, contents: &[u8], usage: wgpu::BufferUsages) -> wgpu::Buffer {
@@ -1776,11 +1978,34 @@ fn init_buffer(device: &wgpu::Device, label: &str, contents: &[u8], usage: wgpu:
 
 impl DocTextures {
     /// The texture set for a `size` canvas, or `None` (nothing created) when it doesn't fit
-    /// the canvas budget.
+    /// the canvas budget or the GPU's memory. A set the GPU can't hold (a 3 GP canvas is 16 GB
+    /// of textures, #4017) lowers the budget below it, so that canvas and larger ones are drawn
+    /// on the CPU canvas instead of the out-of-memory error disabling the GPU for the session.
     fn new(device: &wgpu::Device, res: &Resources, size: [u32; 2], tile: u32, format: wgpu::TextureFormat) -> Option<Self> {
-        if canvas_texture_bytes(size, tile, texel_bytes(format)) > res.canvas_budget.load(Ordering::Relaxed) {
+        let bytes = canvas_texture_bytes(size, tile, texel_bytes(format));
+        if bytes > res.canvas_budget.load(Ordering::Relaxed) {
             return None;
         }
+        let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let memory = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+        let set = Self::create(device, res, size, tile, format);
+        // Native wgpu reports these synchronously; where they arrive later (WebGPU) none is seen.
+        let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+        let mut error = None;
+        for pop in [memory.pop(), validation.pop()] {
+            if let std::task::Poll::Ready(Some(e)) = std::pin::pin!(pop).poll(&mut cx) {
+                error.get_or_insert(e);
+            }
+        }
+        if let Some(e) = error {
+            log::warn!("{} MB of canvas textures failed ({e}); larger canvases are drawn on the CPU", bytes >> 20);
+            res.canvas_budget.fetch_min(bytes.saturating_sub(1), Ordering::Relaxed);
+            return None;
+        }
+        Some(set)
+    }
+
+    fn create(device: &wgpu::Device, res: &Resources, size: [u32; 2], tile: u32, format: wgpu::TextureFormat) -> Self {
         let mut tiles = Vec::new();
         for ty in (0..size[1]).step_by(tile as usize) {
             for tx in (0..size[0]).step_by(tile as usize) {
@@ -1815,7 +2040,7 @@ impl DocTextures {
                 tiles.push(Tile { rect: [tx, ty, w, h], texture, levels, bind_group, _uniform: uniform });
             }
         }
-        Some(Self { size, format, tiles })
+        Self { size, format, tiles }
     }
 
     /// Write `size` pixels at document `origin` from `texels` (in the texture format, row stride
@@ -1857,9 +2082,7 @@ impl DocTextures {
             (x0, y0, x1, y1) = (x0 - tx, y0 - ty, x1 - tx, y1 - ty);
             for level in 1..t.levels.len() {
                 let (lw, lh) = ((tw >> level).max(1), (th >> level).max(1));
-                // Damage at this level, padded by one texel for odd-size rounding.
-                (x0, y0) = ((x0 / 2).saturating_sub(1), (y0 / 2).saturating_sub(1));
-                (x1, y1) = ((x1.div_ceil(2) + 1).min(lw), (y1.div_ceil(2) + 1).min(lh));
+                [x0, y0, x1, y1] = mip_damage([x0, y0, x1, y1], lw, lh);
                 let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("pc_mip"),
                     layout: &res.mip_bgl,
@@ -2133,7 +2356,7 @@ struct View {
     a: vec4<f32>, // screen_w, screen_h, scale (device px per doc px), pixels_per_point
     b: vec4<f32>, // doc origin x, y (device px), doc w, h (doc px)
     c: vec4<f32>, // filter mode, lod, grid alpha, checker square (device px)
-    d: vec4<f32>, // pattern preview offset x, y (doc px), display (0 none, 1 LUT, 2 LUT + gamut), output linear
+    d: vec4<f32>, // pattern preview offset x, y (doc px), display (0 none, 1 LUT, 2 LUT + gamut, 3 matrix/shaper), output linear
     e: vec4<f32>, // checker light rgb, gamut warning opacity
     f: vec4<f32>, // checker dark rgb, 32-bit preview gain (2^exposure; 0 = off)
     g: vec4<f32>, // gamut warning rgb, 32-bit preview 1 / gamma
@@ -2146,6 +2369,36 @@ struct Tile { r: vec4<f32> }; // x, y, w, h in doc px
 @group(1) @binding(0) var tex: texture_2d<f32>;
 @group(1) @binding(1) var<uniform> tile: Tile;
 @group(2) @binding(0) var lut: texture_3d<f32>;
+@group(2) @binding(1) var display_curves: texture_2d<f32>;
+struct DisplayMatrix { r: vec4<f32>, g: vec4<f32>, b: vec4<f32> };
+@group(2) @binding(2) var<uniform> display_matrix: DisplayMatrix;
+
+fn curve_entry(index: u32) -> vec3<f32> {
+    let width = textureDimensions(display_curves).x;
+    return textureLoad(display_curves, vec2<i32>(i32(index % width), i32(index / width)), 0).rgb;
+}
+
+fn display_curve(c: vec3<f32>, offset: u32, intervals: f32) -> vec3<f32> {
+    let p = clamp(c, vec3(0.0), vec3(1.0)) * intervals;
+    let lo = vec3<u32>(floor(p));
+    let hi = min(lo + vec3(1u), vec3(u32(intervals)));
+    let f = fract(p);
+    return vec3(
+        mix(curve_entry(offset + lo.r).r, curve_entry(offset + hi.r).r, f.r),
+        mix(curve_entry(offset + lo.g).g, curve_entry(offset + hi.g).g, f.g),
+        mix(curve_entry(offset + lo.b).b, curve_entry(offset + hi.b).b, f.b)
+    );
+}
+
+fn matrix_display(c: vec3<f32>) -> vec3<f32> {
+    // Layout matches cms::GpuMatrixShaper: 4097 input entries, then 4096 inverse-curve
+    // entries indexed by the fourth root. This preserves near-black precision without
+    // interpolating across clipped corners of a coarse RGB cube.
+    let v = vec4(display_curve(c, 0u, 4096.0), 1.0);
+    let linear = vec3(dot(display_matrix.r, v), dot(display_matrix.g, v), dot(display_matrix.b, v));
+    let u = sqrt(sqrt(clamp(linear, vec3(0.0), vec3(1.0))));
+    return display_curve(u, 4097u, 4095.0);
+}
 
 struct VOut { @builtin(position) pos: vec4<f32> };
 
@@ -2290,10 +2543,15 @@ fn fs_tile(in: VOut) -> @location(0) vec4<f32> {
     if (view.d.z > 0.5 && col.a > 0.0) {
         // Colour management, Proof Colors, Gamut Warning: the document's display LUT (alpha flags
         // out-of-gamut colours).
-        let n = f32(textureDimensions(lut).x);
         let c = clamp(col.rgb / col.a, vec3(0.0), vec3(1.0));
-        let l = textureSampleLevel(lut, samp, (c * (n - 1.0) + 0.5) / n, 0.0);
-        let shown = select(l.rgb, mix(l.rgb, view.g.xyz, view.e.w), view.d.z > 1.5 && l.a > 0.5);
+        var shown: vec3<f32>;
+        if (view.d.z > 2.5) {
+            shown = matrix_display(c);
+        } else {
+            let n = f32(textureDimensions(lut).x);
+            let l = textureSampleLevel(lut, samp, (c * (n - 1.0) + 0.5) / n, 0.0);
+            shown = select(l.rgb, mix(l.rgb, view.g.xyz, view.e.w), view.d.z > 1.5 && l.a > 0.5);
+        }
         col = vec4(shown * col.a, col.a);
     }
     var rgb = col.rgb + checker(d) * (1.0 - col.a);
@@ -2375,6 +2633,94 @@ mod mip_tests;
 mod tests {
     use super::*;
 
+    /// A GPU measurement arrives a frame or two after its refresh, so most GPU refreshes carry
+    /// none; the last one reported must stand until a newer one lands. A CPU refresh is
+    /// different: there is no GPU time at all then, and keeping the old number would show it as
+    /// this refresh's. Runs anywhere — the GPU timing tests need hardware and CI has none.
+    #[test]
+    fn a_gpu_measurement_stands_until_replaced_and_a_cpu_refresh_clears_it() {
+        let timing = |ms, px| photocraft_gpu::GpuTiming { ms, px, spans: 1 };
+        let refresh = |kind, gpu| Refresh { kind, gpu, ..Default::default() };
+        let mut perf = Perf::default();
+        assert_eq!(perf.gpu_ms, None, "nothing is reported before a measurement");
+
+        perf.record_refresh(&refresh("gpu-full", Some(timing(83.9, 24_000_000))));
+        assert_eq!((perf.gpu_ms, perf.gpu_ms_px), (Some(83.9), 24_000_000));
+
+        // The common case: a GPU refresh whose own measurement has not come back yet.
+        perf.record_refresh(&refresh("gpu-rect", None));
+        assert_eq!((perf.gpu_ms, perf.gpu_ms_px), (Some(83.9), 24_000_000), "the last measurement stands");
+
+        perf.record_refresh(&refresh("gpu-rect", Some(timing(11.2, 1_098_640))));
+        assert_eq!((perf.gpu_ms, perf.gpu_ms_px), (Some(11.2), 1_098_640), "a newer measurement replaces it");
+
+        // The CPU compositor did this one: the GPU number belongs to no refresh on screen.
+        perf.record_refresh(&refresh("full", None));
+        assert_eq!((perf.gpu_ms, perf.gpu_ms_px), (None, 0), "a CPU refresh clears it rather than showing a stale one");
+
+        // And it comes back on the next GPU refresh that carries one.
+        perf.record_refresh(&refresh("gpu-full", Some(timing(42.0, 6_000_000))));
+        assert_eq!((perf.gpu_ms, perf.gpu_ms_px), (Some(42.0), 6_000_000));
+    }
+
+    #[test]
+    fn device_limits_support_v3d_shader_variable_limit() {
+        let supported = wgpu::Limits { max_texture_dimension_2d: 7680, max_inter_stage_shader_variables: 15, ..wgpu::Limits::default() };
+        let requested = device_limits_for(wgpu::Backend::Vulkan, supported.clone());
+        assert_eq!(requested.max_inter_stage_shader_variables, 15);
+        assert!(requested.check_limits(&supported));
+        assert_eq!(requested.max_texture_dimension_2d, 7680);
+        assert_eq!(requested.max_buffer_size, supported.max_buffer_size);
+    }
+
+    #[test]
+    fn device_limits_support_weaker_gl_adapters() {
+        let supported = wgpu::Limits {
+            max_texture_dimension_2d: 1024,
+            max_texture_dimension_3d: 128,
+            max_bind_groups: 2,
+            max_buffer_size: 128 << 20,
+            ..wgpu::Limits::downlevel_webgl2_defaults()
+        };
+        let requested = device_limits_for(wgpu::Backend::Gl, supported.clone());
+        assert!(requested.check_limits(&supported));
+        assert_eq!(requested, supported);
+    }
+
+    #[test]
+    fn device_limits_preserve_backend_defaults_on_capable_adapters() {
+        let supported = wgpu::Limits {
+            max_texture_dimension_2d: 16_384,
+            max_buffer_size: 1 << 30,
+            max_bind_groups: 8,
+            max_inter_stage_shader_variables: 32,
+            min_uniform_buffer_offset_alignment: 64,
+            min_storage_buffer_offset_alignment: 64,
+            ..wgpu::Limits::default()
+        };
+        for (backend, base) in [
+            (wgpu::Backend::Vulkan, wgpu::Limits::default()),
+            (wgpu::Backend::Dx12, wgpu::Limits::default()),
+            (wgpu::Backend::Metal, wgpu::Limits::default()),
+            (wgpu::Backend::Gl, wgpu::Limits::downlevel_webgl2_defaults()),
+        ] {
+            let requested = device_limits_for(backend, supported.clone());
+            assert!(requested.check_limits(&supported));
+            assert_eq!(requested, wgpu::Limits { max_texture_dimension_2d: 16_384, max_buffer_size: 1 << 30, ..base }, "{backend:?}");
+        }
+    }
+
+    #[test]
+    fn device_limits_support_larger_minimum_alignments() {
+        let supported = wgpu::Limits { min_uniform_buffer_offset_alignment: 512, min_storage_buffer_offset_alignment: 1024, ..wgpu::Limits::default() };
+        for backend in [wgpu::Backend::Vulkan, wgpu::Backend::Gl] {
+            let requested = device_limits_for(backend, supported.clone());
+            assert!(requested.check_limits(&supported));
+            assert_eq!(requested.min_uniform_buffer_offset_alignment, 512);
+            assert_eq!(requested.min_storage_buffer_offset_alignment, 1024);
+        }
+    }
+
     /// The scratch-texture workaround is for Intel's DX12 drivers (#892); other DX12 adapters
     /// render straight into the level like every other backend (#4515).
     #[test]
@@ -2390,6 +2736,17 @@ mod tests {
         assert!(separate_mip_targets(Dx12, nvidia, Some("1")));
         assert!(!separate_mip_targets(Dx12, intel, Some(" 0 ")));
         assert!(separate_mip_targets(Dx12, intel, Some("yes")));
+    }
+
+    /// #6418: levels of at most WHOLE_MIP_SIDE are redrawn whole; larger ones keep the damage.
+    #[test]
+    fn small_mip_levels_are_redrawn_whole() {
+        // A 3 × 3 dab at (800, 500) of a 1791 × 1083 tile, at mip 1 (895 × 541): halved and padded.
+        assert_eq!(mip_damage([800, 500, 803, 503], 895, 541), [399, 249, 403, 253]);
+        // At most 128 px on either side: the whole level, wherever the damage is.
+        assert_eq!(mip_damage([100, 60, 102, 63], 111, 67), [0, 0, 111, 67]);
+        assert_eq!(mip_damage([0, 0, 1, 1], 128, 2), [0, 0, 128, 2]);
+        assert_eq!(mip_damage([0, 0, 1, 1], 129, 2), [0, 0, 2, 2]);
     }
 
     #[test]
@@ -2444,6 +2801,19 @@ mod tests {
             assert_eq!(detect_video_memory(d.VendorId, d.DeviceId), Some(first.DedicatedVideoMemory as u64));
         }
         assert_eq!(detect_video_memory(0xdead, 0xbeef), None, "no such adapter");
+    }
+
+    /// System Info names the card's own memory, after the driver, when the card reports one; an
+    /// integrated GPU or an unknown card shows no such line.
+    #[test]
+    fn system_info_shows_the_cards_memory() {
+        let info = GpuInfo { adapter: "Card".into(), driver: "Driver 1".into(), video_memory_mb: Some(8192), ..Default::default() };
+        let lines = info.lines();
+        assert_eq!(lines.get(2).map(String::as_str), Some("Driver: Driver 1"));
+        assert_eq!(lines.get(3).map(String::as_str), Some("Graphics memory: 8.0G"));
+        let none = GpuInfo { video_memory_mb: None, ..info }.lines();
+        assert!(none.iter().all(|l| !l.starts_with("Graphics memory")), "{none:?}");
+        assert_eq!(none.len() + 1, lines.len());
     }
 
     /// The Linux reader finds the card by its PCI ids in a `/sys/class/drm`-shaped folder and reads

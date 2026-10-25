@@ -3,7 +3,7 @@
 
 use photocraft_color::{ColorMode, PixelFormat};
 use photocraft_doc::adjust::LevelsChannel;
-use photocraft_doc::{Adjustment, Document, Layer, LayerContent, LayerId};
+use photocraft_doc::{Adjustment, DocId, Document, Layer, LayerContent, LayerId};
 use photocraft_geom::Rect;
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
@@ -31,19 +31,21 @@ pub struct Clip {
     /// The source document's resolution (ppi): File › New from the clipboard takes it, as
     /// Photoshop's Clipboard preset does. None for an image from another app.
     pub resolution: Option<f32>,
+    /// The document the pixels were copied from: Paste keeps them in place only there, and
+    /// centres them in any other (#8945). None for an image from another app.
+    pub source: Option<DocId>,
 }
 
 /// Photoshop's layer-based copy (CC 2018 on): with no selection, Copy takes the active layer
 /// whole when it is a smart object (#2428), a type or shape layer, or a group (its whole subtree)
-/// (#2670), so Paste recreates it instead of its pixels. Pixel layers still copy their pixels;
-/// several selected layers are [`multi_copy_ids`].
+/// (#2670), so Paste recreates it instead of its pixels. Fill and adjustment layers have no
+/// pixels of their own, so they are taken whole too rather than refused (#2344). Pixel layers
+/// still copy their pixels; several selected layers are [`multi_copy_ids`].
 fn takes_whole(d: &crate::DocState, id: LayerId) -> bool {
     d.doc.selection.is_none()
         && d.selected_layers().len() <= 1
         && crate::layer_copy_cmds::layered(d.doc.mode)
-        && d.doc
-            .layer(id)
-            .is_some_and(|l| matches!(l.content, LayerContent::Smart(_) | LayerContent::Text(_) | LayerContent::Shape(_) | LayerContent::Group(_)))
+        && d.doc.layer(id).is_some_and(|l| !matches!(l.content, LayerContent::Raster(_)))
 }
 
 /// A scratch document in the source's colour, to hold copied layers.
@@ -196,7 +198,7 @@ fn lift(src: &Surface, sel: Option<&Surface>, canvas: Rect) -> Result<Clip> {
     };
     let mut out = Surface::new(with_alpha);
     if area.is_empty() {
-        return Ok(Clip { surface: out, bounds: Rect::EMPTY, layers: None, resolution: None });
+        return Ok(Clip { surface: out, bounds: Rect::EMPTY, layers: None, resolution: None, source: None });
     }
     // Only the selected area is read: converting the whole layer (a 24 MP Background gaining
     // alpha) cost about a second per Layer via Copy (#668).
@@ -218,7 +220,7 @@ fn lift(src: &Surface, sel: Option<&Surface>, canvas: Rect) -> Result<Clip> {
     out.put_tiles(shared);
     out.prune();
     let bounds = out.content_bounds();
-    Ok(Clip { surface: out, bounds, layers: None, resolution: None })
+    Ok(Clip { surface: out, bounds, layers: None, resolution: None, source: None })
 }
 
 /// [`lift`] over one rectangle: `src`'s pixels with alpha (`n` channels), the selection
@@ -280,13 +282,18 @@ fn copy(s: &mut Session, merged: bool) -> Result<Value> {
         }
         match (d.doc.layer(id).and_then(Layer::surface).filter(|_| several.is_empty()), &layers) {
             (Some(surf), _) => Clip { layers, ..lift(surf, d.doc.selection.as_ref(), canvas)? },
-            // A group has no pixels of its own: the clipboard pixels are what it shows.
+            // A group or fill layer has no pixels of its own: the clipboard pixels are what it
+            // shows. Adjustment layers show nothing by themselves, so their clip spans the canvas
+            // they apply to: Paste places them as a full-canvas layer, and the UI still mirrors
+            // the clip to the OS clipboard (an empty clip would let a stale OS image replace it).
             (None, Some(copies)) => {
                 let mut shown = (**copies).clone();
                 for l in &mut shown.layers {
                     l.visible = true;
                 }
-                Clip { layers, ..lift(&merged_surface(&shown), None, canvas)? }
+                let clip = lift(&merged_surface(&shown), None, canvas)?;
+                let bounds = if clip.bounds.is_empty() { canvas } else { clip.bounds };
+                Clip { layers, bounds, ..clip }
             }
             (None, None) => return Err(EngineError::Other("the active layer has no pixels".into())),
         }
@@ -295,7 +302,7 @@ fn copy(s: &mut Session, merged: bool) -> Result<Value> {
         return Err(EngineError::Other("Could not copy: the selected area is empty".into()));
     }
     let b = clip.bounds;
-    let clip = Clip { resolution: Some(d.doc.resolution_dpi), ..clip };
+    let clip = Clip { resolution: Some(d.doc.resolution_dpi), source: Some(d.doc.id), ..clip };
     s.clipboard = Some(clip);
     Ok(json!({"bounds": [b.x0, b.y0, b.width(), b.height()]}))
 }
@@ -338,8 +345,8 @@ fn copy_mask(s: &mut Session) -> Result<Value> {
         return Err(EngineError::Other("Could not copy: the selected area is empty".into()));
     }
     let b = bounds;
-    let resolution = Some(d.doc.resolution_dpi);
-    s.clipboard = Some(Clip { surface, bounds: b, layers: None, resolution });
+    let (resolution, source) = (Some(d.doc.resolution_dpi), Some(d.doc.id));
+    s.clipboard = Some(Clip { surface, bounds: b, layers: None, resolution, source });
     Ok(json!({"bounds": [b.x0, b.y0, b.width(), b.height()], "target": "mask"}))
 }
 
@@ -383,14 +390,13 @@ fn paste(s: &mut Session, p: &Value, in_place: bool) -> Result<Value> {
     }
     let canvas = d.doc.bounds();
     let fmt = d.doc.pixel_format();
-    let (dx, dy) = paste_offset(&clip, canvas, p, in_place);
+    let (dx, dy) = paste_offset(&clip, d.doc.id, canvas, p, in_place);
     if let Some(layers) = clip.layers.as_deref().filter(|_| crate::layer_copy_cmds::layered(d.doc.mode)) {
         return paste_layers(s, layers, dx, dy);
     }
     let moved = shifted(&clip.surface, dx, dy);
     let target = PixelFormat::new(fmt.mode, fmt.sample, true);
     let surf = if moved.format() == target { moved } else { moved.convert(target) };
-    let before = d.doc.clone();
     let id = s.edit("Paste", |doc, active| {
         let mut l = Layer::raster(doc.next_layer_name("Layer"), target);
         *crate::pixels_mut(&mut l)? = surf;
@@ -399,8 +405,7 @@ fn paste(s: &mut Session, p: &Value, in_place: bool) -> Result<Value> {
         doc.selection = None;
         Ok(id)
     })?;
-    // Only where the pasted pixels land needs recompositing, not the whole document (#2901).
-    crate::layer_multi_cmds::note_insert(s, &before);
+    // `edit` reports only where the pasted pixels land as damage, not the whole document (#2901).
     Ok(json!({"layer": id.0, "offset": [dx, dy]}))
 }
 
@@ -414,7 +419,7 @@ fn paste_layers(s: &mut Session, layers: &Document, dx: i32, dy: i32) -> Result<
         *l = l.duplicate();
     }
     crate::layer_copy_cmds::adapt_copies(s, &mut copies, &d.doc)?;
-    crate::layer_copy_cmds::translate_copies(&mut copies, dx, dy);
+    crate::layer_copy_cmds::translate_copies(&mut copies, &d.doc, dx, dy);
     let patterns: Vec<_> = copies.patterns.iter().filter(|pat| !d.doc.patterns.iter().any(|q| q.id == pat.id)).cloned().collect();
     // A copied smart object may name a PSD-embedded linked file; land its `lnk` block too (#3584).
     let mut linked = Vec::new();
@@ -448,15 +453,36 @@ fn paste_layers(s: &mut Session, layers: &Document, dx: i32, dy: i32) -> Result<
 
 /// How far a paste moves the clipboard pixels: not at all in place (or when they lie on the
 /// canvas and no `center` is given), else onto `center` (the view centre from the UI) or the
-/// canvas centre.
-pub(crate) fn paste_offset(clip: &Clip, canvas: Rect, p: &Value, in_place: bool) -> (i32, i32) {
-    if in_place || (clip.bounds.intersect(&canvas) == clip.bounds && p.get("center").is_none()) {
+/// canvas centre, then kept on the canvas as Photoshop keeps it: pixels that fit stay wholly
+/// inside, larger ones start at the canvas's top-left corner (#6759). `"clampToCanvas": false`
+/// skips that, for Paste Into / Outside, which centre on the selection.
+pub(crate) fn paste_offset(clip: &Clip, doc: DocId, canvas: Rect, p: &Value, in_place: bool) -> (i32, i32) {
+    let home = clip.source == Some(doc);
+    if in_place || (home && clip.bounds.intersect(&canvas) == clip.bounds && p.get("center").is_none()) {
         return (0, 0);
     }
     let c = p.get("center").and_then(Value::as_array).filter(|a| a.len() >= 2).map(|a| (a[0].as_f64().unwrap_or(0.0), a[1].as_f64().unwrap_or(0.0)));
-    let (cx, cy) = c.unwrap_or(((canvas.x0 + canvas.x1) as f64 / 2.0, (canvas.y0 + canvas.y1) as f64 / 2.0));
+    let (cx, cy) = c.unwrap_or((mid(canvas.x0, canvas.x1), mid(canvas.y0, canvas.y1)));
     let b = clip.bounds;
-    ((cx - (b.x0 + b.x1) as f64 / 2.0).round() as i32, (cy - (b.y0 + b.y1) as f64 / 2.0).round() as i32)
+    let (dx, dy) = ((cx - mid(b.x0, b.x1)).round(), (cy - mid(b.y0, b.y1)).round());
+    if p.get("clampToCanvas").and_then(Value::as_bool) == Some(false) || b.is_empty() {
+        return (dx as i32, dy as i32);
+    }
+    (clamp_shift(dx, b.x0, b.x1, canvas.x0, canvas.x1), clamp_shift(dy, b.y0, b.y1, canvas.y0, canvas.y1))
+}
+
+/// The midpoint of `a..b`, each edge converted before adding so extreme coordinates can't overflow.
+fn mid(a: i32, b: i32) -> f64 {
+    (f64::from(a) + f64::from(b)) / 2.0
+}
+
+/// Shift `d` of the span `b0..b1` along one axis, changed as little as needed to keep the span
+/// inside `c0..c1` when it fits; a span longer than the canvas starts at `c0`.
+fn clamp_shift(d: f64, b0: i32, b1: i32, c0: i32, c1: i32) -> i32 {
+    let (b0, b1, c0, c1) = (i64::from(b0), i64::from(b1), i64::from(c0), i64::from(c1));
+    // `as` saturates a NaN or out-of-range shift, then the clamp brings it into range.
+    let start = if b1 - b0 <= c1 - c0 { b0.saturating_add(d as i64).clamp(c0, c1 - (b1 - b0)) } else { c0 };
+    i32::try_from(start - b0).unwrap_or(if start > b0 { i32::MAX } else { i32::MIN })
 }
 
 pub(crate) fn shifted(surface: &Surface, dx: i32, dy: i32) -> Surface {
@@ -473,7 +499,7 @@ pub(crate) fn paste_to_target(s: &mut Session, p: &Value, in_place: bool, limit:
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let canvas = d.doc.bounds();
     let layer = d.active_layer;
-    let (dx, dy) = paste_offset(&clip, canvas, p, in_place);
+    let (dx, dy) = paste_offset(&clip, d.doc.id, canvas, p, in_place);
     let src = shifted(&clip.surface, dx, dy);
     let area = src.content_bounds().intersect(&canvas);
     s.edit(label, |doc, _| {
@@ -693,7 +719,7 @@ fn auto_adjust(s: &mut Session, kind: &str) -> Result<Value> {
         let sel = doc.selection.clone();
         let mode = doc.mode;
         let surf = crate::commands::paint_surface(doc, id, &Value::Null)?;
-        crate::pixels::adjust_surface(surf, &adj, sel.as_ref(), mode);
+        crate::pixels::adjust_surface(surf, &adj, sel.as_ref(), mode).map_err(EngineError::Other)?;
         Ok(())
     })?;
     Ok(Value::Null)
@@ -992,7 +1018,7 @@ pub fn specs() -> Vec<CommandSpec> {
             &["Edit"],
             Some("Cmd+V"),
             concat!(
-                r#"{"center":[x,y]? (view centre; default keeps the position when it overlaps the canvas),"#,
+                r#"{"center":[x,y]? (view centre; default keeps the position when it overlaps the canvas),"clampToCanvas":bool=true (keep the paste on the canvas, or at its top-left when larger),"#,
                 paste_target!(),
                 "} (with no document open: a new document from the clipboard)"
             ),
@@ -1099,12 +1125,49 @@ mod tests {
         let mut s = Session::new();
         let mut surface = Surface::new(PixelFormat::RGBA8);
         surface.write_pixel(i32::MIN, 0, &[1.0, 0.0, 0.0, 1.0]);
-        s.clipboard = Some(Clip { surface, bounds: Rect::from_xywh(i32::MIN, 0, 1, 1), layers: None, resolution: None });
+        s.clipboard = Some(Clip { surface, bounds: Rect::from_xywh(i32::MIN, 0, 1, 1), layers: None, resolution: None, source: None });
         let result = new_from_clipboard(&mut s);
         assert!(result.unwrap_err().to_string().contains("clipboard origin"));
         assert!(s.execute("file.newFromClipboard", json!({})).is_err());
         assert!(s.documents().is_empty());
         assert_eq!(s.clipboard.as_ref().unwrap().surface.rgba(i32::MIN, 0), [1.0, 0.0, 0.0, 1.0]);
+    }
+
+    /// #8945: pixels copied in one document land in place when pasted back into it, and centred
+    /// in another, even where their old position would fit (Photoshop's Paste).
+    #[test]
+    fn paste_centres_pixels_from_another_document() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 40, "height": 30, "background": "white"})).unwrap();
+        s.execute("select.all", json!({})).unwrap();
+        s.execute("edit.copy", json!({})).unwrap();
+        let r = s.execute("edit.paste", json!({})).unwrap();
+        assert_eq!(r["offset"], json!([0, 0]), "back into its own document: in place");
+        s.execute("file.new", json!({"width": 100, "height": 80, "background": "white"})).unwrap();
+        let r = s.execute("edit.paste", json!({})).unwrap();
+        assert_eq!(r["offset"], json!([30, 25]), "into another document: centred");
+        // An image from another app has no source document: centred too.
+        s.clipboard = s.clipboard.take().map(|c| Clip { source: None, ..c });
+        let r = s.execute("edit.paste", json!({})).unwrap();
+        assert_eq!(r["offset"], json!([30, 25]));
+        // Paste in Place still keeps the position.
+        let r = s.execute("edit.pasteSpecial.pasteInPlace", json!({})).unwrap();
+        assert_eq!(r["offset"], json!([0, 0]));
+    }
+
+    #[test]
+    fn paste_centers_clipboard_bounds_near_coordinate_limits() {
+        for origin in [i32::MAX - 512, i32::MIN + 512] {
+            let clip =
+                Clip { surface: Surface::new(PixelFormat::RGBA8), bounds: Rect::from_xywh(origin, origin, 2, 2), layers: None, resolution: None, source: None };
+            let (dx, dy) = paste_offset(&clip, DocId(1), Rect::new(0, 0, 20, 20), &json!({}), false);
+            assert_eq!(i64::from(origin) + i64::from(dx), 9);
+            assert_eq!(i64::from(origin) + i64::from(dy), 9);
+            let clip = Clip { bounds: Rect::new(0, 0, 2, 2), ..clip };
+            let (dx, dy) = paste_offset(&clip, DocId(1), Rect::from_xywh(origin, origin, 20, 20), &json!({}), false);
+            assert_eq!(dx, origin + 9);
+            assert_eq!(dy, origin + 9);
+        }
     }
 
     #[test]
@@ -1270,6 +1333,79 @@ mod tests {
         s.execute("edit.paste", json!({"center": [70, 70]})).unwrap();
         assert_eq!(active_bounds(&s), Rect::new(60, 60, 80, 80));
         assert_eq!(s.active().unwrap().doc.layers.len(), 4);
+    }
+
+    /// A `w`×`h` document with an opaque `cw`×`ch` image from another app on the clipboard.
+    fn external_clip_session(w: i32, h: i32, cw: i32, ch: i32) -> Session {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": w, "height": h})).unwrap();
+        let mut surface = Surface::new(PixelFormat::RGBA8);
+        surface.fill_rect(Rect::new(0, 0, cw, ch), &[1.0, 0.0, 0.0, 1.0]);
+        s.clipboard = Some(Clip { surface, bounds: Rect::new(0, 0, cw, ch), layers: None, resolution: None, source: None });
+        s
+    }
+
+    /// #6759: wherever the view is centred, a paste that fits the canvas stays wholly on it.
+    #[test]
+    fn paste_that_fits_stays_on_the_canvas() {
+        for (w, h, center, want) in [
+            (60, 100, [40.0, 45.0], Rect::new(0, 0, 60, 100)),
+            (60, 100, [-500.0, 900.0], Rect::new(0, 0, 60, 100)),
+            (100, 100, [10.0, 80.0], Rect::new(0, 0, 60, 100)),
+            (100, 100, [95.0, 50.0], Rect::new(40, 0, 100, 100)),
+            (100, 120, [50.0, 60.0], Rect::new(20, 10, 80, 110)),
+        ] {
+            let mut s = external_clip_session(w, h, 60, 100);
+            s.execute("edit.paste", json!({ "center": center })).unwrap();
+            assert_eq!(active_bounds(&s), want, "{w}x{h} canvas, view centre {center:?}");
+        }
+    }
+
+    /// #6759: a paste larger than the canvas starts at its top-left corner, wherever the view is.
+    #[test]
+    fn paste_larger_than_the_canvas_starts_at_its_top_left() {
+        for center in [[0.0, 0.0], [25.0, 20.0], [1000.0, 1000.0], [-1000.0, 30.0]] {
+            let mut s = external_clip_session(50, 40, 60, 100);
+            s.execute("edit.paste", json!({ "center": center })).unwrap();
+            assert_eq!(active_bounds(&s), Rect::new(0, 0, 60, 100), "view centre {center:?}");
+        }
+        // Wider but not taller: at the left edge, and wholly inside vertically.
+        for (center, want) in
+            [([500.0, 500.0], Rect::new(0, 100, 60, 200)), ([-500.0, -500.0], Rect::new(0, 0, 60, 100)), ([25.0, 120.0], Rect::new(0, 70, 60, 170))]
+        {
+            let mut s = external_clip_session(50, 200, 60, 100);
+            s.execute("edit.paste", json!({ "center": center })).unwrap();
+            assert_eq!(active_bounds(&s), want, "view centre {center:?}");
+        }
+    }
+
+    /// Paste Into centres on the selection even where that runs off the canvas.
+    #[test]
+    fn paste_into_is_not_clamped_to_the_canvas() {
+        let mut s = session();
+        s.execute("select.rect", json!({"x": 10, "y": 10, "width": 40, "height": 20})).unwrap();
+        s.execute("edit.copy", json!({})).unwrap();
+        s.execute("select.rect", json!({"x": 90, "y": 90, "width": 10, "height": 10})).unwrap();
+        s.execute("edit.pasteSpecial.pasteInto", json!({})).unwrap();
+        assert_eq!(active_bounds(&s), Rect::new(75, 85, 115, 105));
+    }
+
+    /// The clamp never overflows or panics: NaN, infinite and `i32`-limit shifts saturate (Rule 9).
+    #[test]
+    fn paste_offset_clamp_survives_extreme_coordinates() {
+        assert_eq!(clamp_shift(f64::NAN, 0, 10, 0, 100), 0);
+        assert_eq!(clamp_shift(f64::INFINITY, 0, 10, 0, 100), 90);
+        assert_eq!(clamp_shift(f64::NEG_INFINITY, i32::MIN, i32::MAX, 0, 1), i32::MAX);
+        assert_eq!(clamp_shift(1e30, i32::MIN, i32::MIN + 1, i32::MAX - 1, i32::MAX), i32::MAX);
+        let clip = Clip {
+            surface: Surface::new(PixelFormat::RGBA8),
+            bounds: Rect::new(i32::MAX - 2, i32::MAX - 2, i32::MAX, i32::MAX),
+            layers: None,
+            resolution: None,
+            source: None,
+        };
+        let (dx, dy) = paste_offset(&clip, DocId(1), Rect::new(i32::MIN, i32::MIN, i32::MIN + 4, i32::MIN + 4), &json!({}), false);
+        assert_eq!((dx, dy), (i32::MIN, i32::MIN), "an unrepresentable shift saturates instead of wrapping");
     }
 
     #[test]
@@ -1454,12 +1590,12 @@ mod tests {
         assert!(s.clipboard.is_none(), "a refused copy leaves the clipboard alone");
         s.execute("layer.layerMask.revealAll", json!({})).unwrap();
         assert!(s.execute("edit.copy", json!({"target": "mask"})).is_ok());
-        // An adjustment layer has no pixels of its own: Copy is only enabled while its mask is
-        // targeted (#2928).
+        // An adjustment layer has no pixels of its own: Copy takes the layer whole (#2344), and
+        // its mask while that is targeted (#2928).
         s.execute("file.new", json!({"width": 20, "height": 20})).unwrap();
         let a = s.execute("layer.newAdjustmentLayer.levels", json!({})).unwrap()["layer"].as_u64().unwrap();
         s.execute("layer.select", json!({"layer": a})).unwrap();
-        assert!(!s.is_enabled("edit.copy"), "no pixels to copy");
+        assert!(s.is_enabled("edit.copy"), "the layer itself can be copied");
         s.execute("layer.layerMask.revealAll", json!({})).unwrap();
         assert!(s.is_enabled_with("edit.copy", &json!({"target": "mask"})), "the mask can be copied");
     }
@@ -1917,6 +2053,128 @@ mod tests {
     }
 
     #[test]
+    fn cross_document_group_paste_renders_shapes_on_destination_canvas() {
+        for (copy_to_document, depth) in [(false, 8), (true, 16)] {
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width":100,"height":100})).unwrap();
+            let mut ids = Vec::new();
+            for x in [10, 50] {
+                s.execute("shape.create", json!({"kind":"rect","rect":[x,20,20,30],"fill":"#ff0000"})).unwrap();
+                s.execute("layer.layerStyle.dropShadow", json!({"size":4,"distance":3})).unwrap();
+                ids.push(s.active().unwrap().active_layer.unwrap());
+            }
+            s.active_mut().unwrap().selected_layers = ids;
+            s.execute("layer.groupLayers", json!({})).unwrap();
+            s.execute("edit.copy", json!({})).unwrap();
+            s.execute("file.new", json!({"width":800,"height":600,"depth":depth})).unwrap();
+            if copy_to_document {
+                s.execute("layer.copyToDocument", json!({"source":0,"document":1,"center":true})).unwrap();
+            } else {
+                s.execute("edit.paste", json!({"center":[400,300]})).unwrap();
+            }
+            let st = s.active().unwrap();
+            let group = st.doc.layer(st.active_layer.unwrap()).unwrap();
+            assert!(!crate::transform_cmds::transform_bounds(&st.doc, group).is_empty());
+            assert_eq!(group.children().unwrap().len(), 2);
+            for child in group.children().unwrap() {
+                let LayerContent::Shape(shape) = &child.content else { panic!("shape") };
+                let cache = shape.cache.as_ref().unwrap();
+                assert_eq!(cache.format().sample, st.doc.depth);
+                assert!(!cache.content_bounds().is_empty(), "destination cache must not be clipped to source canvas");
+                assert!(cache.content_bounds().x0 > 100);
+                let fresh = photocraft_vector::render_shape(shape, st.doc.pixel_format(), st.doc.bounds());
+                assert_eq!(cache, &fresh);
+            }
+            let before = st.doc.clone();
+            s.execute("layer.translate", json!({"dx":10,"dy":10})).unwrap();
+            assert_ne!(s.active().unwrap().doc, before);
+            assert!(s.undo());
+            assert_eq!(s.active().unwrap().doc, before);
+        }
+    }
+
+    #[test]
+    fn paste_repairs_uncached_shapes_before_transform_and_effect_rendering() {
+        let mut s = session();
+        s.execute("shape.create", json!({"kind":"rect","rect":[10,10,40,20],"fill":"#ff0000"})).unwrap();
+        s.execute("layer.layerStyle.dropShadow", json!({"size":4,"distance":3})).unwrap();
+        s.execute("edit.copy", json!({})).unwrap();
+        let layers = s.clipboard.as_mut().unwrap().layers.as_mut().unwrap();
+        let LayerContent::Shape(sh) = &mut layers.layers[0].content else { panic!("shape") };
+        sh.cache = None;
+        s.execute("edit.pasteSpecial.pasteInPlace", json!({})).unwrap();
+        let st = s.active().unwrap();
+        let layer = st.doc.layer(st.active_layer.unwrap()).unwrap();
+        let LayerContent::Shape(sh) = &layer.content else { panic!("shape") };
+        assert!(sh.cache.is_some());
+        assert!(!crate::transform_cmds::transform_bounds(&st.doc, layer).is_empty());
+        let expected = photocraft_vector::render_shape(sh, st.doc.pixel_format(), st.doc.bounds());
+        assert_eq!(sh.cache.as_ref().unwrap(), &expected);
+        let rendered = photocraft_compose::render_layer_in(&st.doc, layer, st.doc.bounds());
+        let mut fresh_doc = (*st.doc).clone();
+        let snapshot = fresh_doc.clone();
+        if let LayerContent::Shape(shape) = &mut fresh_doc.layer_mut(layer.id).unwrap().content {
+            crate::vector_cmds::refresh_shape(&snapshot, shape);
+        }
+        let fresh = photocraft_compose::render_layer_in(&fresh_doc, fresh_doc.layer(layer.id).unwrap(), fresh_doc.bounds());
+        assert_eq!(rendered.px, fresh.px, "pasted effects match a freshly rebuilt shape");
+        assert!(s.undo());
+        assert!(s.redo());
+        let st = s.active().unwrap();
+        assert!(st.doc.layer(st.active_layer.unwrap()).unwrap().surface().is_some());
+    }
+
+    /// #2344: fill and adjustment layers have no pixels of their own, so with no selection Copy
+    /// takes them whole and Paste recreates them, in the same or another document, in one step.
+    #[test]
+    fn copy_paste_keeps_fill_and_adjustment_layers() {
+        for (depth, other) in [(8, 16), (16, 32), (32, 8)] {
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width": 60, "height": 40, "depth": depth})).unwrap();
+            s.execute("layer.newFillLayer.gradient", json!({"from": "#000000", "to": "#ffffff", "angle": 0})).unwrap();
+            let LayerContent::Fill(fill) = active_content(&s) else { panic!("a fill layer") };
+            let src = s.active().unwrap().active_layer.unwrap();
+            assert!(s.is_enabled("edit.copy"), "{depth}-bit: a fill layer can be copied");
+            assert_eq!(s.execute("edit.copy", json!({})).unwrap()["bounds"], json!([0, 0, 60, 40]), "{depth}-bit: what it shows");
+            let clip = s.clipboard.clone().unwrap();
+            assert!(clip.surface.rgba(59, 20)[0] > clip.surface.rgba(0, 20)[0], "{depth}-bit: the clip holds the gradient's pixels");
+            let steps = s.active().unwrap().history.past_len();
+            s.execute("edit.pasteSpecial.pasteInPlace", json!({})).unwrap();
+            assert_eq!(s.active().unwrap().history.past_len(), steps + 1, "{depth}-bit: one history step");
+            assert_eq!(active_content(&s), LayerContent::Fill(fill.clone()), "{depth}-bit: the paste is the same fill layer");
+            assert_ne!(s.active().unwrap().active_layer, Some(src), "{depth}-bit: a new layer");
+            s.undo();
+            assert_eq!(s.active().unwrap().active_layer, Some(src), "{depth}-bit: undo removes the paste");
+            s.redo();
+            assert!(matches!(active_content(&s), LayerContent::Fill(_)), "{depth}-bit: redo brings it back");
+
+            s.execute("layer.newAdjustmentLayer.levels", json!({})).unwrap();
+            let LayerContent::Adjustment(levels) = active_content(&s) else { panic!("an adjustment layer") };
+            assert_eq!(s.execute("edit.copy", json!({})).unwrap()["bounds"], json!([0, 0, 60, 40]), "{depth}-bit: it applies to the canvas");
+            s.execute("file.new", json!({"width": 30, "height": 30, "depth": other})).unwrap();
+            s.execute("edit.paste", json!({})).unwrap();
+            assert_eq!(active_content(&s), LayerContent::Adjustment(levels), "{depth}-bit: the same Levels layer in the {other}-bit document");
+            assert_eq!(s.active().unwrap().doc.layers.len(), 2, "{depth}-bit: pasted above the Background");
+        }
+    }
+
+    /// #2344: several adjustment layers, which show nothing alone, still copy and paste together.
+    #[test]
+    fn several_adjustment_layers_copy_together() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 40, "height": 40})).unwrap();
+        let a = s.execute("layer.newAdjustmentLayer.levels", json!({})).unwrap()["layer"].as_u64().unwrap();
+        let b = s.execute("layer.newAdjustmentLayer.levels", json!({})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("layer.select", json!({"layer": a})).unwrap();
+        s.execute("layer.select", json!({"layer": b, "mode": "toggle"})).unwrap();
+        assert_eq!(s.execute("edit.copy", json!({})).unwrap()["bounds"], json!([0, 0, 40, 40]));
+        s.execute("edit.pasteSpecial.pasteInPlace", json!({})).unwrap();
+        let d = &s.active().unwrap().doc;
+        assert_eq!(d.layers.len(), 5, "both are pasted");
+        assert!(d.layers[3..].iter().all(|l| matches!(l.content, LayerContent::Adjustment(_))));
+    }
+
+    #[test]
     fn merge_visible_keeps_hidden_layers() {
         let mut s = session();
         s.execute("layer.new.layer", json!({})).unwrap();
@@ -2241,13 +2499,13 @@ mod tests {
         };
         let mut out = Surface::new(with_alpha);
         if area.is_empty() {
-            return Clip { surface: out, bounds: Rect::EMPTY, layers: None, resolution: None };
+            return Clip { surface: out, bounds: Rect::EMPTY, layers: None, resolution: None, source: None };
         }
         let px = lift_region(src, sel, area, with_alpha.channels()).unwrap();
         out.try_write_region(area, &px).unwrap();
         out.prune();
         let bounds = out.content_bounds();
-        Clip { surface: out, bounds, layers: None, resolution: None }
+        Clip { surface: out, bounds, layers: None, resolution: None, source: None }
     }
 
     fn noise(fmt: PixelFormat, r: Rect, seed: u32) -> Surface {

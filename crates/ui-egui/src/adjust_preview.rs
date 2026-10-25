@@ -186,6 +186,9 @@ struct GpuProxy {
 /// The open adjustment dialog: (kind, params, Preview on).
 fn dialog(app: &PhotocraftApp) -> Option<(String, Value, bool)> {
     let d = app.ui.dialogs.iter().find(|d| crate::adjust_dialog::owns(&d.fields))?;
+    if d.fields.contains_key("__smartFilter") {
+        return None;
+    }
     let kind = d.fields.get("__adjust")?.as_str()?.to_string();
     let preview = d.fields.get("__preview").and_then(Value::as_bool).unwrap_or(true);
     Some((kind, crate::filter_dialog::params_of(&d.fields), preview))
@@ -436,12 +439,117 @@ pub(crate) fn retain_documents(app: &mut PhotocraftApp) {
     if app.adjust_preview.as_ref().is_some_and(|p| !app.session.documents().iter().any(|st| st.doc.id == p.doc)) {
         app.adjust_preview = None;
     }
+    if app.live_adjust_preview.as_ref().is_some_and(|p| !app.session.documents().iter().any(|st| st.doc.id == p.doc)) {
+        app.live_adjust_preview = None;
+    }
 }
 
 /// GPU texture keys the preview uses besides the documents' own (keep them alive).
 pub fn gpu_keys(app: &PhotocraftApp) -> Option<u64> {
     let p = app.adjust_preview.as_ref().filter(|p| p.hash != 0)?;
     p.proxy.as_ref().map(|g| g.base.id.0)
+}
+
+// ---------------------------------------------------------------------------------------------
+// The Properties panel's live adjustment-layer preview (`canvas::display_doc`'s `live_adjust`).
+//
+// Dragging a control there shows the document with that layer's adjustment replaced. Unlike the
+// dialog above it needs no temporary layer: the layer is already in the document. What it did
+// lack was a damage region, so every parameter value recomposited the whole document — on the
+// GPU canvas at 100 % zoom that is the full size, measured at about 7 ms per megapixel, which
+// made #5778 a latency regression (#6839). These give that path the same treatment the dialog
+// gets: a session-tagged key, the layer's area as the damage, and of that only what the view
+// shows, catching up as the view moves.
+
+/// Tag of the Properties-panel live-adjust preview keys. Distinct from [`TAG`], so a key is
+/// never mistaken for the dialog's.
+pub const LIVE_TAG: u64 = 1 << 58;
+/// Bits of a live-adjust key that identify the session (document, revision, layer); below them
+/// the settings hash. The session occupies bits 40..58, under [`LIVE_TAG`].
+const LIVE_SESSION_SHIFT: u32 = 40;
+/// Mask of the session part of a live-adjust key (18 bits).
+const LIVE_SESSION_MASK: u64 = (1 << 18) - 1;
+
+/// One Properties-panel drag: which layer of which document revision, the area its adjustment
+/// can change, and what the canvas has composited of it so far.
+pub struct LiveAdjust {
+    doc: DocId,
+    revision: u64,
+    session: u64,
+    region: Rect,
+    /// The main canvas texture shows preview `key` only within this rect; elsewhere in the
+    /// region it is older (see [`live_uncovered`]).
+    covered: Option<(u64, Rect)>,
+}
+
+/// The area an adjustment layer can change: the whole document.
+///
+/// It is deliberately not narrowed by the layer's mask. A mask's coverage can live entirely in
+/// its surface's *default pixel* with no tiles written — [`LayerMask::reveal_all`], which is what
+/// `layer.newAdjustmentLayer` gives every adjustment layer — and such a mask reports an empty
+/// `content_bounds()`. Intersecting with that emptied the region, so the damage was empty and the
+/// compositor drew nothing at all for the whole drag. A mask only bounds the effect when it hides
+/// outside its content (default pixel 0); that narrowing is worth little here, since the damage is
+/// clipped to the view anyway ([`live_switch_damage`]), and is not worth the risk of showing stale
+/// pixels. Too large only costs pixels; too small freezes the preview.
+fn live_region(doc: &Document, layer: LayerId) -> Rect {
+    if doc.layer(layer).is_none() {
+        return Rect::EMPTY;
+    }
+    doc.bounds()
+}
+
+/// The preview key for `params` on `layer` of `doc` at `revision`, starting a session (and
+/// measuring its region) when the document, revision or layer changes.
+pub fn live_key(app: &mut PhotocraftApp, doc: &Document, revision: u64, layer: LayerId, params: &Value) -> u64 {
+    let session = hash(&[&doc.id.0.to_le_bytes(), &revision.to_le_bytes(), &layer.0.to_le_bytes()]);
+    if app.live_adjust_preview.as_ref().is_none_or(|p| p.session != session) {
+        app.live_adjust_preview = Some(LiveAdjust { doc: doc.id, revision, session, region: live_region(doc, layer), covered: None });
+    }
+    let h = hash(&[params.to_string().as_bytes()]);
+    LIVE_TAG | ((session & LIVE_SESSION_MASK) << LIVE_SESSION_SHIFT) | (h & ((1 << LIVE_SESSION_SHIFT) - 1))
+}
+
+/// The canvas area to recomposite when document `doc` (at `revision`) switches between two of
+/// this drag's previews, or between one and the committed document (0).
+pub fn live_switch_region(app: &PhotocraftApp, doc: DocId, revision: u64, from: u64, to: u64) -> Option<Rect> {
+    let p = app.live_adjust_preview.as_ref()?;
+    if p.doc != doc || p.revision != revision {
+        return None;
+    }
+    let prefix = LIVE_TAG | ((p.session & LIVE_SESSION_MASK) << LIVE_SESSION_SHIFT);
+    let ours = |k: u64| k == 0 || k >> LIVE_SESSION_SHIFT == prefix >> LIVE_SESSION_SHIFT;
+    (ours(from) && ours(to) && (from != 0 || to != 0)).then_some(p.region)
+}
+
+/// The part of a switch's region to composite now: to a preview, only what the view shows,
+/// remembered so [`live_uncovered`] catches up as the view moves; back to the committed
+/// document (key 0), the whole region.
+pub fn live_switch_damage(app: &mut PhotocraftApp, to: u64, region: Rect, visible: Rect) -> Rect {
+    let Some(p) = app.live_adjust_preview.as_mut() else { return region };
+    if to == 0 {
+        p.covered = None;
+        return region;
+    }
+    let shown = region.intersect(&visible);
+    p.covered = Some((to, shown));
+    shown
+}
+
+/// Where the main canvas texture (showing preview `key`) is out of date within `visible`: the
+/// region's visible part when the view moved past what was composited. Marks it covered.
+pub fn live_uncovered(app: &mut PhotocraftApp, doc: DocId, key: u64, visible: Rect) -> Option<Rect> {
+    let p = app.live_adjust_preview.as_mut().filter(|p| p.doc == doc)?;
+    let (k, cov) = p.covered?;
+    if k != key {
+        return None;
+    }
+    let want = p.region.intersect(&visible);
+    if want.is_empty() || cov.contains_rect(&want) {
+        return None;
+    }
+    p.covered = Some((k, want));
+    Some(want)
 }
 
 #[cfg(test)]

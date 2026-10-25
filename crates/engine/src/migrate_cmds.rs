@@ -40,12 +40,14 @@ fn migrate(s: &mut Session, p: &Value) -> Result<Value> {
     let st = merge_groups(&mut ps.styles, groups(&v, "styles"));
     let sh = merge_groups(&mut ps.shapes, groups(&v, "shapes"));
     let pt = merge_groups(&mut ps.pattern_groups, groups(&v, "pattern_groups"));
-    // Tool presets are a flat list, matched by name.
+    // Tool presets are a flat list, matched by name. Read them like the launch loader does (entry by
+    // entry, checked names), and keep the library within its cap, so what we import survives a restart.
     let mut tp = 0usize;
-    if let Some(arr) = v.get("tool_presets").cloned()
-        && let Ok(incoming) = serde_json::from_value::<Vec<crate::presets::tools::ToolPreset>>(arr)
-    {
-        for t in incoming {
+    if let Some(arr) = v.get("tool_presets").cloned() {
+        for t in crate::presets::tools::load(arr) {
+            if ps.tool_presets.len() >= crate::presets::tools::MAX_PRESETS {
+                break;
+            }
             if !ps.tool_presets.iter().any(|e| e.name == t.name) {
                 ps.tool_presets.push(t);
                 tp += 1;
@@ -148,6 +150,46 @@ mod tests {
                 assert!(restored.prefs_value()["presets"][key].as_array().unwrap().contains(imported), "{key}, wrapped={wrapped}");
             }
         }
+        let _ = std::fs::remove_file(file);
+    }
+
+    #[test]
+    fn tool_presets_are_read_entry_by_entry_like_the_launch_loader() {
+        use crate::presets::tools::MAX_PRESETS;
+        let file = std::env::temp_dir().join(format!("pc-migrate-tools-{}.json", std::process::id()));
+        let migrate = |s: &mut Session, data: Value| {
+            std::fs::write(&file, serde_json::to_string(&data).unwrap()).unwrap();
+            s.execute("edit.presets.migratePresets", json!({"path": file.to_string_lossy()})).unwrap()
+        };
+        // A damaged entry no longer discards the good ones; blank and overlong names are skipped.
+        let mut s = Session::new();
+        let before = s.presets.tool_presets.len();
+        let r = migrate(
+            &mut s,
+            json!({"tool_presets": [
+                {"name": "4x6 print", "tool": "crop", "options": {}},
+                {"name": "old", "tool": null},
+                {"name": "  ", "tool": "crop"},
+                {"name": "x".repeat(300), "tool": "crop"},
+                {"name": "  Padded  ", "tool": "brush", "options": 5},
+            ]}),
+        );
+        assert_eq!(r["added"]["toolPresets"], 2);
+        assert_eq!(s.presets.tool_presets.len(), before + 2);
+        assert!(s.presets.tool_presets.iter().any(|t| t.name == "4x6 print"));
+        let padded = s.presets.tool_presets.iter().find(|t| t.name == "Padded").expect("trimmed name");
+        assert_eq!(padded.options, json!({}));
+        // What was imported survives the next launch.
+        let mut restored = Session::new();
+        restored.load_prefs_json(&s.prefs_to_json()).unwrap();
+        assert_eq!(restored.presets.tool_presets, s.presets.tool_presets);
+        // The library stays within MAX_PRESETS.
+        let mut s = Session::new();
+        let many: Vec<Value> = (0..MAX_PRESETS + 500).map(|i| json!({"name": format!("p{i}"), "tool": "brush"})).collect();
+        let before = s.presets.tool_presets.len();
+        let r = migrate(&mut s, json!({"tool_presets": many}));
+        assert_eq!(s.presets.tool_presets.len(), MAX_PRESETS);
+        assert_eq!(r["added"]["toolPresets"], MAX_PRESETS - before);
         let _ = std::fs::remove_file(file);
     }
 

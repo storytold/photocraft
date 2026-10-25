@@ -92,6 +92,18 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let rows_h = if fill { ui.available_height() - footer } else { f32::INFINITY };
     let mut mask_click = None;
     let mut drawn = Vec::new();
+    // An alpha or spot channel dragged over the rows reorders like Photoshop's (#9163): a line marks
+    // where it lands, above the colour channels it lands first, and colour channels don't move.
+    let dragged_alpha = ctx.data(|d| d.get_temp::<(Row, String)>(drag_id())).and_then(|(row, _)| match row {
+        Row::Alpha(i) => Some(i),
+        _ => None,
+    });
+    let pointer = ctx.input(|i| i.pointer.interact_pos());
+    let released = ctx.input(|i| i.pointer.any_released());
+    let alpha_count = doc.channels.len();
+    // The slot the dragged channel would take (0 = first alpha) and where its line goes.
+    let mut insertion: Option<(usize, f32)> = None;
+    let mut alphas_top: Option<f32> = None;
     egui::ScrollArea::vertical().max_height(rows_h).min_scrolled_height(if fill { rows_h } else { 0.0 }).auto_shrink([false, !fill]).show(ui, |ui| {
         for row in rows {
             let (name, thumb_idx, slot, visible, selected) = match row {
@@ -125,6 +137,20 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             };
             let row_h = if t.pro { 36.0 } else { 40.0 };
             let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), row_h), Sense::click_and_drag());
+            if let Row::Alpha(0) = row {
+                alphas_top = Some(rect.top());
+            }
+            if dragged_alpha.is_some()
+                && let Some(p) = pointer.filter(|p| rect.contains(*p))
+            {
+                insertion = match row {
+                    Row::Alpha(j) if p.y < rect.center().y => Some((j, rect.top())),
+                    Row::Alpha(j) => Some((j + 1, rect.bottom())),
+                    Row::QuickMask => Some((alpha_count, rect.top())),
+                    // Above the alpha channels: Photoshop puts it first among them.
+                    Row::Composite | Row::Color(_) | Row::LayerMask => Some((0, f32::NAN)),
+                };
+            }
             if resp.drag_started() {
                 ctx.data_mut(|d| d.insert_temp(drag_id(), (row, name.clone())));
             }
@@ -223,6 +249,10 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             if row == Row::QuickMask && resp.double_clicked() {
                 actions.push(("ui.channelOptions".into(), json!("quickMask")));
             }
+            // The layer mask's row: Layer Mask Display Options (the rubylith's colour, opacity).
+            if row == Row::LayerMask && resp.double_clicked() {
+                actions.push(("ui.channelOptions".into(), json!("mask")));
+            }
             if let Row::Alpha(i) = row {
                 if resp.double_clicked() && on_thumb {
                     actions.push(("ui.channelOptions".into(), json!(i)));
@@ -281,6 +311,7 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                             let enabled = masked.as_ref().and_then(|l| l.mask.as_ref()).is_none_or(|m| m.enabled);
                             item(ui, a, crate::layer_menu_ui::mask_toggle_label(enabled), "layer.layerMask.enabled", json!({}));
                             item(ui, a, "Delete Layer Mask", "layer.layerMask.delete", json!({}));
+                            item(ui, a, "Layer Mask Display Options…", "ui.channelOptions", json!("mask"));
                         }
                     }
                     ui.separator();
@@ -291,6 +322,18 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     item(ui, a, "Merge Channels…", "channel.merge", json!({}));
                 });
             });
+        }
+        if let (Some(from), Some((slot, y))) = (dragged_alpha, insertion) {
+            let y = if y.is_nan() { alphas_top.unwrap_or(y) } else { y };
+            if y.is_finite() {
+                let r = ui.min_rect();
+                ui.painter().hline(r.x_range(), y, Stroke::new(2.0, t.accent));
+            }
+            // `channel.move` takes the channel's final index: a slot below it is one less.
+            let to = if slot > from { slot - 1 } else { slot };
+            if released && to != from {
+                actions.push(("channel.move".into(), json!({ "channel": from, "to": to })));
+            }
         }
     });
     // A row being dragged: its name follows the pointer until it is dropped.
@@ -541,7 +584,8 @@ mod tests {
         let masked = s.execute("layer.new.layer", json!({"name": "Masked"})).unwrap()["layer"].as_u64().unwrap();
         s.execute("layer.layerMask.revealAll", json!({"layer": masked})).unwrap();
         s.execute("channel.new", json!({})).unwrap();
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 1000.0)).with_max_steps(64).build_eframe(move |cc| {
+        // 60 fps steps, so two clicks a frame apart count as a double-click.
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 1000.0)).with_step_dt(1.0 / 60.0).with_max_steps(64).build_eframe(move |cc| {
             PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
             PhotocraftApp::new(s, crate::Services::default())
         });
@@ -589,6 +633,39 @@ mod tests {
 
     fn alphas(h: &egui_kittest::Harness<'_, PhotocraftApp>) -> Vec<String> {
         h.state().session.active().unwrap().doc.channels.iter().map(|c| c.name.clone()).collect()
+    }
+
+    /// #9163: alpha channels reorder by dragging, as in Photoshop: a drop in a row's upper half
+    /// lands above it, over the colour channels it lands first among the alphas, colour channels
+    /// don't move, and each reorder is one history step.
+    #[test]
+    fn alpha_channels_reorder_by_dragging() {
+        let (mut h, _) = channels_harness();
+        h.state_mut().run("channel.new", json!({"name": "Alpha 2"})).unwrap();
+        h.state_mut().run("channel.new", json!({"name": "Alpha 3"})).unwrap();
+        h.run_steps(3);
+        assert_eq!(alphas(&h), ["Alpha 1", "Alpha 2", "Alpha 3"]);
+        let steps = h.state().session.active().unwrap().history.past_len();
+
+        let (from, onto) = (at(&h, "Alpha 3"), at(&h, "Alpha 1"));
+        drag(&mut h, from, onto - vec2(0.0, 8.0));
+        assert_eq!(alphas(&h), ["Alpha 3", "Alpha 1", "Alpha 2"]);
+        assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1, "one history step");
+
+        // The lower half of a row: below it.
+        let (from, onto) = (at(&h, "Alpha 3"), at(&h, "Alpha 1"));
+        drag(&mut h, from, onto + vec2(0.0, 8.0));
+        assert_eq!(alphas(&h), ["Alpha 1", "Alpha 3", "Alpha 2"]);
+
+        // Dropped on a colour channel: first among the alphas.
+        drag_to(&mut h, "Alpha 2", "Red");
+        assert_eq!(alphas(&h), ["Alpha 2", "Alpha 1", "Alpha 3"]);
+
+        // A colour channel dragged onto the alphas stays where it is.
+        let before = h.state().session.active().unwrap().history.past_len();
+        drag_to(&mut h, "Green", "Alpha 3");
+        assert_eq!(alphas(&h), ["Alpha 2", "Alpha 1", "Alpha 3"]);
+        assert_eq!(h.state().session.active().unwrap().history.past_len(), before);
     }
 
     /// #4689: as in Photoshop, a channel dropped on New is duplicated, on Delete deleted, and on
@@ -701,6 +778,33 @@ mod tests {
         assert_eq!(alphas(&h), ["Alpha 1"]);
         assert_eq!(h.state().session.active().unwrap().history.past_len(), steps, "nothing ran");
         assert!(h.ctx.data(|d| d.get_temp::<(Row, String)>(drag_id())).is_none(), "the drag ended");
+    }
+
+    /// Double-clicking the layer mask's row opens Layer Mask Display Options, as in Photoshop; OK
+    /// sets the rubylith's colour and opacity, a view setting rather than an undo step.
+    #[test]
+    fn double_clicking_the_layer_mask_row_opens_its_display_options() {
+        let (mut h, _) = channels_harness();
+        let steps = h.state().session.active().unwrap().history.past_len();
+        let p = at(&h, "Masked Mask");
+        h.hover_at(p);
+        h.run_steps(30);
+        for pressed in [true, false, true, false] {
+            h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+            h.step();
+        }
+        h.run_steps(3);
+        let d = h.state().ui.dialogs.last().expect("a dialog opens");
+        assert!(crate::channel_options_ui::owns(&d.fields), "{:?}", d.fields);
+        assert_eq!((d.fields["channel"].clone(), d.fields["color"].clone(), d.fields["opacity"].clone()), (json!("mask"), json!("#ff0000"), json!(50.0)));
+        let id = d.id;
+        let d = h.state_mut().ui.dialog_mut(id).unwrap();
+        d.fields.insert("color".into(), json!("#0000ff"));
+        d.fields.insert("opacity".into(), json!(80.0));
+        crate::dialogs::confirm(h.state_mut(), id).unwrap();
+        let o = &h.state().session.prefs().layer_mask_overlay;
+        assert_eq!((o.color.as_str(), o.opacity), ("#0000ff", 80.0));
+        assert_eq!(h.state().session.active().unwrap().history.past_len(), steps, "no history step");
     }
 
     /// The layer mask's row asks "Apply mask to layer before removing?", like its Layers thumbnail.

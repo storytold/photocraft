@@ -40,10 +40,12 @@ fn list_json(d: &Document) -> Value {
     json!({"notes": d.notes.iter().enumerate().map(|(i, n)| note_json(i, n)).collect::<Vec<_>>()})
 }
 
-fn color_of(p: &Value) -> Option<Color> {
-    p.get("color")?;
-    let c = crate::commands::color_param(p, "color", [1.0, 1.0, 0.51, 1.0]);
-    Some(Color::rgb(c[0], c[1], c[2]))
+fn color_of(cmd: &str, p: &Value) -> Result<Option<Color>> {
+    if p.get("color").is_none() {
+        return Ok(None);
+    }
+    let c = crate::commands::color_param(cmd, p, "color", [1.0, 1.0, 0.51, 1.0])?;
+    Ok(Some(Color::rgb(c[0], c[1], c[2])))
 }
 
 fn index_of(s: &Session, p: &Value, cmd: &str) -> Result<usize> {
@@ -68,7 +70,7 @@ fn add(s: &mut Session, p: &Value) -> Result<Value> {
         modified: pdf_date(),
         ..Default::default()
     };
-    if let Some(c) = color_of(p) {
+    if let Some(c) = color_of(CMD, p)? {
         n.color = c;
     }
     let i = s.edit("New Note", |d, _| {
@@ -90,7 +92,7 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(a) = p.get("author").and_then(Value::as_str) {
         n.author = a.to_string();
     }
-    if let Some(c) = color_of(p) {
+    if let Some(c) = color_of(CMD, p)? {
         n.color = c;
     }
     if let Some(o) = p.get("open").and_then(Value::as_bool) {
@@ -106,6 +108,9 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
         n.position = [nx, ny];
         // The popup travels with its icon.
         n.popup = [n.popup[0] + dx, n.popup[1] + dy, n.popup[2] + dx, n.popup[3] + dy];
+        if !n.popup.iter().all(|v| v.is_finite()) {
+            return Err(bad(CMD, "the move is too far: the note popup would leave the representable range"));
+        }
     }
     if n == d.notes[i] {
         return Ok(json!({"index": i, "note": note_json(i, &n), "changed": false}));
@@ -277,6 +282,19 @@ mod tests {
         s.execute("notes.delete", json!({"all": true})).unwrap();
         assert!(s.active().unwrap().doc.notes.is_empty());
         assert!(s.execute("notes.set", json!({"index": 0})).is_err());
+    }
+
+    #[test]
+    fn huge_move_is_rejected_and_document_stays_saveable() {
+        let mut s = session();
+        s.execute("notes.add", json!({"x": 1.7e308, "y": 0})).unwrap();
+        let before = s.active().unwrap().doc.notes[0].clone();
+        let past = s.active().unwrap().history.past_len();
+        assert!(s.execute("notes.set", json!({"index": 0, "x": -1.7e308})).is_err());
+        let a = s.active().unwrap();
+        assert_eq!(a.doc.notes[0], before);
+        assert_eq!(a.history.past_len(), past);
+        assert!(photocraft_format::save_to_bytes(&a.doc, &Default::default()).is_ok());
     }
 
     #[test]

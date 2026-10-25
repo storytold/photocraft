@@ -482,7 +482,7 @@ mod tests {
         bad(&mut s, "type.navigate", json!({"layer": id, "index": 9, "move": "end"}));
         bad(&mut s, "type.navigate", json!({"layer": id, "index": 0, "move": "lineNext", "x": "no"}));
         bad(&mut s, "type.navigate", json!({"layer": pixel, "index": 0, "move": "start"}));
-        assert!(matches!(s.execute("type.caret", json!({"layer": u64::MAX, "index": 0})), Err(EngineError::NoLayer(_))));
+        assert!(matches!(s.execute("type.caret", json!({"layer": u64::MAX, "index": 0})), Err(EngineError::UnknownLayer { .. })));
         // A point on the named layer but outside its text still returns a caret, marked outside.
         let far = s.execute("type.hitTest", json!({"layer": id, "x": 390, "y": 290})).unwrap();
         assert_eq!(far["inside"], false);

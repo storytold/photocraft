@@ -71,6 +71,14 @@ pub fn intercept(app: &mut PhotocraftApp, id: &str, params: &Value) -> bool {
     if docs.is_empty() {
         return false;
     }
+    // Once the window's GPU device is lost nothing can be drawn (`gpu_status::check_window`), so
+    // the prompt would never show. While saving for recovery keeps failing, quitting (the close
+    // button, File › Exit) must still go through rather than leave a blank window that can't be
+    // closed.
+    if id == EXIT && app.window_lost {
+        log::warn!("quitting a window that lost its GPU device before its unsaved work could be saved for recovery");
+        return false;
+    }
     let prompt = Prompt { id: id.to_string(), params: params.clone(), target, docs, focused: None };
     match &app.discard {
         None => ask(app, prompt),
@@ -157,6 +165,25 @@ fn advance(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if next.is_some() {
         return;
     }
+    // A save or close hook may have dirtied a document that was clean when the prompt opened (or
+    // made a new one): ask about those before the final close, which discards without checking.
+    if one_by_one && let Some(p) = app.discard.as_ref() {
+        let (id, target) = (p.id.clone(), p.target);
+        let rest: Vec<DocId> = app
+            .session
+            .documents()
+            .iter()
+            .filter(|d| d.is_dirty() && (matches!(reach(&id), Some(Reach::All)) || Some(d.doc.id) != target))
+            .map(|d| d.doc.id)
+            .collect();
+        if !rest.is_empty() {
+            show_tab(app, rest.first().copied());
+            if let Some(p) = app.discard.as_mut() {
+                p.docs = rest;
+            }
+            return;
+        }
+    }
     let Some(Prompt { id, mut params, target, .. }) = app.discard.take() else { return };
     if id == EXIT {
         app.allow_close = true;
@@ -195,7 +222,12 @@ fn save(app: &mut PhotocraftApp, ctx: &egui::Context, doc: DocId) -> bool {
     }
     match saved {
         // A Save Document script may have edited the document after it was written: still dirty.
-        Ok(_) => !app.save_options_open() && !app.saving() && index_of(app, doc).is_some_and(|i| !app.session.documents()[i].is_dirty()),
+        // A write the platform can't confirm (a web download) leaves it dirty too, and counts.
+        Ok(_) => {
+            !app.save_options_open()
+                && !app.saving()
+                && index_of(app, doc).is_some_and(|i| app.services.write_unconfirmed || !app.session.documents()[i].is_dirty())
+        }
         // Backing out of the file dialog is the user's choice, not an error.
         Err(e) if e == crate::file_dialog::CANCELLED => false,
         Err(e) => {
@@ -208,12 +240,12 @@ fn save(app: &mut PhotocraftApp, ctx: &egui::Context, doc: DocId) -> bool {
 
 /// A completed save may release the close prompt. Choosing a path only starts a layered TIFF
 /// save; TIFF Options calls this after the write, and `jobs_ui` when a background save ends.
-/// Copies and failed writes leave the doc dirty.
+/// Copies and failed writes leave the doc dirty; so does any write when it is unconfirmed.
 pub(crate) fn saved_document(app: &mut PhotocraftApp, ctx: &egui::Context, doc: DocId) {
     // Still the prompt that asked (quitting may have replaced it meanwhile).
     if !app.save_options_open()
         && app.discard.as_ref().and_then(|p| p.docs.first()) == Some(&doc)
-        && index_of(app, doc).is_some_and(|i| !app.session.documents()[i].is_dirty())
+        && index_of(app, doc).is_some_and(|i| app.services.write_unconfirmed || !app.session.documents()[i].is_dirty())
     {
         advance(app, ctx);
     }
@@ -495,6 +527,38 @@ mod tests {
         assert!(app.session.documents().is_empty());
     }
 
+    /// A document that became dirty while the prompt was up is asked about before the final close (#4954).
+    #[test]
+    fn a_document_dirtied_during_the_prompt_is_asked_about_before_the_final_close() {
+        for command in ["file.closeAll", EXIT] {
+            let mut app = app_with_docs(2);
+            let ctx = egui::Context::default();
+            make_dirty(&mut app, 0);
+            let late = doc_id(&app, 1);
+            crate::menus::invoke(&mut app, &ctx, command, json!({})).unwrap();
+            make_dirty(&mut app, 1);
+            advance(&mut app, &ctx);
+            assert_eq!(app.discard.as_ref().map(|p| p.docs.clone()), Some(vec![late]), "{command}: asks about the newly dirty document");
+            assert!(!app.allow_close, "{command}");
+            assert_eq!(app.session.documents().len(), 1, "{command}: it is not discarded unasked");
+            advance(&mut app, &ctx);
+            assert!(app.discard.is_none(), "{command}");
+        }
+        // Close Others asks about the others too, but still not about the document it keeps.
+        let mut app = app_with_docs(3);
+        let ctx = egui::Context::default();
+        make_dirty(&mut app, 0);
+        let (late, kept) = (doc_id(&app, 1), doc_id(&app, 2));
+        crate::menus::invoke(&mut app, &ctx, "file.closeOthers", json!({"document": 2})).unwrap();
+        make_dirty(&mut app, 1);
+        make_dirty(&mut app, 2);
+        advance(&mut app, &ctx);
+        assert_eq!(app.discard.as_ref().map(|p| p.docs.clone()), Some(vec![late]), "file.closeOthers: asks about the newly dirty other document");
+        advance(&mut app, &ctx);
+        assert!(app.discard.is_none());
+        assert_eq!(app.session.documents().iter().map(|d| d.doc.id).collect::<Vec<_>>(), [kept]);
+    }
+
     #[test]
     fn close_others_closes_each_answered_document_and_keeps_its_target() {
         let mut app = app_with_docs(3);
@@ -731,8 +795,11 @@ mod tests {
         assert_eq!(button_labels(false, &buttons), ["(Y)es", "(N)o", "(C)ancel"]);
         let german = crate::i18n::Lang::from_code("de").unwrap();
         crate::i18n::with_language(german, || {
-            assert_eq!(button_labels(false, &buttons), ["Ja (Y)", "Nein (N)", "Abbrechen (C)"]);
-            assert_eq!(button_labels(true, &buttons), ["Ja", "Nein", "Abbrechen"]);
+            let shown: Vec<&str> = buttons.iter().map(|(label, _)| crate::i18n::tr(german, label)).collect();
+            assert_eq!(button_labels(true, &buttons), shown);
+            let labels = button_labels(false, &buttons);
+            let appended: Vec<String> = shown.iter().zip(&buttons).map(|(text, (_, key))| format!("{text} ({})", key.map_or("", |k| k.name()))).collect();
+            assert!(labels.iter().all(|label| label.starts_with('(')) || labels == appended, "{labels:?}");
         });
     }
 
@@ -827,6 +894,53 @@ mod tests {
         assert!(h.state().session.documents().is_empty());
     }
 
+    /// Save on closing an untitled document, answered with `kept` while `kept.psd` exists: the
+    /// prompt waits for the question whether to replace it. Cancel brings the prompt back with
+    /// nothing written; Replace saves and closes the document.
+    #[test]
+    fn saving_from_the_prompt_waits_for_the_question_whether_to_replace() {
+        use crate::{FileDialogAnswer, FileDialogReply};
+        use egui_kittest::kittest::Queryable;
+        use std::{cell::RefCell, rc::Rc};
+        let written: Rc<RefCell<Vec<String>>> = Rc::default();
+        let (w, waiting): (_, Rc<RefCell<Option<FileDialogReply>>>) = (written.clone(), Rc::default());
+        let held = waiting.clone();
+        let mut app = app_with_docs(1);
+        make_dirty(&mut app, 0);
+        app.services.export = Some(Box::new(|_: &photocraft_doc::Document, _: &str, _: &crate::ExportSettings| Ok((b"out".to_vec(), Vec::new()))));
+        app.services.write = Some(Box::new(move |p: &str, _: &[u8]| {
+            w.borrow_mut().push(p.to_string());
+            Ok(())
+        }));
+        app.services.file_stamp = Some(Box::new(|p: &str| (p == "/pics/kept.psd").then_some(crate::FileStamp { len: 1, modified: None })));
+        app.services.file_dialog = Some(Box::new(move |_, _, reply| *held.borrow_mut() = Some(reply)));
+        let mut h = prompt_for(app, "file.close", egui::os::OperatingSystem::Windows);
+        let save = |h: &mut Prompted| {
+            h.key_press(Key::Y);
+            h.run_steps(3);
+            waiting.borrow_mut().take().expect("the save dialog is open").send(Some(FileDialogAnswer::SaveTo("/pics/kept".into())));
+            h.run_steps(2);
+            h.state().ui.dialogs.iter().find(|d| crate::replace_prompt::owns(&d.fields)).map(|d| d.id).expect("the save asks first")
+        };
+        let id = save(&mut h);
+        assert!(h.state().file_dialog_open());
+        assert!(h.query_by_label("(Y)es").is_none(), "the prompt waits behind the question");
+        assert!(written.borrow().is_empty());
+
+        crate::dialogs::cancel(h.state_mut(), id).unwrap();
+        h.run_steps(2);
+        assert!(written.borrow().is_empty(), "Cancel writes nothing");
+        assert_eq!(docs_left(&h), Some(1));
+        assert_eq!(focused(&h, &["(Y)es", "(N)o", "(C)ancel"]), Some("(Y)es"), "the prompt comes back");
+
+        let id = save(&mut h);
+        crate::dialogs::confirm(h.state_mut(), id).unwrap();
+        h.run_steps(2);
+        assert_eq!(*written.borrow(), ["/pics/kept.psd"]);
+        assert!(h.state().discard.is_none());
+        assert!(h.state().session.documents().is_empty());
+    }
+
     #[test]
     fn saving_from_the_prompt_waits_for_a_background_save_then_closes() {
         use egui_kittest::kittest::Queryable;
@@ -873,11 +987,41 @@ mod tests {
         assert!(h.state().session.documents().is_empty(), "closed once saved");
     }
 
+    /// #6414: on the web a save stays dirty (the download isn't confirmed), and answering Save
+    /// still closes the tab after one write.
+    #[test]
+    fn saving_from_the_prompt_closes_after_an_unconfirmed_write() {
+        use std::{cell::RefCell, rc::Rc};
+        let written: Rc<RefCell<Vec<String>>> = Rc::default();
+        let w = written.clone();
+        let mut app = app_with_docs(1);
+        make_dirty(&mut app, 0);
+        app.session.active_mut().unwrap().path = Some("/pics/kept.psd".into());
+        app.services.write_unconfirmed = true;
+        app.services.export = Some(Box::new(|_: &photocraft_doc::Document, _: &str, _: &crate::ExportSettings| Ok((b"out".to_vec(), Vec::new()))));
+        app.services.write = Some(Box::new(move |p: &str, _: &[u8]| {
+            w.borrow_mut().push(p.to_string());
+            Ok(())
+        }));
+        let mut h = prompt_for(app, "file.close", egui::os::OperatingSystem::Windows);
+        h.key_press(Key::Y);
+        h.run_steps(3);
+        assert_eq!(*written.borrow(), ["/pics/kept.psd"]);
+        assert!(h.state().discard.is_none());
+        assert!(h.state().session.documents().is_empty(), "closed after one write");
+    }
+
     #[path = "tiff_tests.rs"]
     mod tiff_tests;
 
     #[path = "targa_tests.rs"]
     mod targa_tests;
+
+    #[path = "dds_tests.rs"]
+    mod dds_tests;
+
+    #[path = "jpeg_tests.rs"]
+    mod jpeg_tests;
 
     /// One frame with the window's close button pressed; the commands the guard sent.
     fn window_close_commands(app: &mut PhotocraftApp) -> Vec<egui::ViewportCommand> {
@@ -904,6 +1048,41 @@ mod tests {
         make_dirty(&mut app, 0);
         assert!(press_window_close(&mut app));
         assert!(app.discard.is_some());
+    }
+
+    /// After the window's GPU device is lost nothing can be drawn, so a prompt could never be seen
+    /// or answered. While unsaved work can't be written for recovery (the save keeps retrying), the
+    /// close button must still quit, instead of opening a prompt that never shows.
+    #[test]
+    fn window_close_goes_through_once_the_window_device_is_lost() {
+        let mut app = app_with_docs(1);
+        make_dirty(&mut app, 0);
+        app.window_lost = true;
+        assert!(!press_window_close(&mut app), "the close isn't cancelled");
+        assert!(app.discard.is_none(), "no prompt opened");
+    }
+
+    /// The title bar's close button and File › Exit run `file.exit` through `menus::invoke`, which
+    /// parks it behind the prompt before any close request is made: once the window's device is
+    /// lost they must close instead.
+    #[test]
+    fn file_exit_quits_without_a_prompt_once_the_window_device_is_lost() {
+        let exit = |app: &mut PhotocraftApp| {
+            let mut out = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
+                let _ = crate::menus::invoke(app, ui.ctx(), EXIT, json!({}));
+            });
+            out.textures_delta.clear();
+            let commands = out.viewport_output.remove(&egui::ViewportId::ROOT).map(|o| o.commands).unwrap_or_default();
+            commands.iter().any(|c| matches!(c, egui::ViewportCommand::Close))
+        };
+        let mut app = app_with_docs(1);
+        make_dirty(&mut app, 0);
+        assert!(!exit(&mut app), "a window that can draw asks first");
+        assert!(app.discard.is_some());
+        app.discard = None;
+        app.window_lost = true;
+        assert!(exit(&mut app), "the window is asked to close");
+        assert!(app.discard.is_none(), "no prompt opened");
     }
 
     #[test]

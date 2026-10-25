@@ -197,3 +197,29 @@ fn options_tab_moves_from_hardness_to_opacity_without_a_caption_stop() {
     assert_eq!(h.state().session.tools.brush.hardness, 0.5);
     assert!((h.state().session.tools.brush.opacity - 0.99).abs() < 0.0001);
 }
+
+// Regression test for #3425: the options bar drew its own 1 px top and bottom separator inside
+// the panel, on top of the panel's own border, so the borders doubled (three lines, not one).
+#[test]
+fn options_bar_has_a_single_full_width_border() {
+    for kind in [crate::theme::ThemeKind::Studio, crate::theme::ThemeKind::Pro, crate::theme::ThemeKind::Classic] {
+        let mut h = harness();
+        PhotocraftApp::setup_context(&h.ctx, kind);
+        h.run_steps(4);
+        let separator = crate::theme::Tokens::get(&h.ctx).separator;
+        let borders: Vec<_> = h
+            .output()
+            .shapes
+            .iter()
+            .filter_map(|c| match &c.shape {
+                egui::Shape::LineSegment { points, stroke }
+                    if stroke.color == separator && (points[0].y - points[1].y).abs() < 0.01 && (points[1].x - points[0].x).abs() > 400.0 =>
+                {
+                    Some(*points)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(borders.len(), 1, "{kind:?}: the options bar has exactly one border, the panel's (its own would double it): {borders:?}");
+    }
+}

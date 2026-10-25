@@ -138,3 +138,37 @@ fn a_hovered_mode_previews_on_every_selected_layer() {
     hover(&mut app, &[top], Some(BlendMode::Multiply));
     assert_ne!(display_doc(&mut app, 0).unwrap().1, key);
 }
+
+#[test]
+fn blend_hover_disjoint_coverage_retains_views_without_hiding_gaps() {
+    let (s, top) = session();
+    let mut app = PhotocraftApp::new(s, crate::Services::default());
+    hover(&mut app, &[top], Some(BlendMode::Multiply));
+    let (_, key) = display_doc(&mut app, 0).unwrap();
+    let st = app.session.active().unwrap();
+    let (id, revision, region) = (st.doc.id, st.revision, st.doc.bounds());
+    let a = photocraft_geom::Rect::new(0, 0, 2, 2);
+    let b = photocraft_geom::Rect::new(4, 0, 6, 2);
+    assert_eq!(super::clip_damage(&mut app, id, revision, key, region, a), a);
+    assert_eq!(super::uncovered(&mut app, id, revision, key, b), Some(b));
+    assert_eq!(super::uncovered(&mut app, id, revision, key, a), None);
+    let gap = photocraft_geom::Rect::new(2, 0, 4, 2);
+    assert_eq!(super::uncovered(&mut app, id, revision, key, gap), Some(gap));
+    // Repeated distinct views have bounded bookkeeping, then the whole region is current.
+    let mut fell_back = false;
+    for x in (8..40).step_by(4) {
+        let visible = photocraft_geom::Rect::new(x, 0, x + 2, 2);
+        if super::uncovered(&mut app, id, revision, key, visible) == Some(region) {
+            fell_back = true;
+            break;
+        }
+    }
+    assert!(fell_back);
+    assert_eq!(super::uncovered(&mut app, id, revision, key, region), None);
+    hover(&mut app, &[top], Some(BlendMode::Screen));
+    let (_, next) = display_doc(&mut app, 0).unwrap();
+    assert_eq!(super::clip_damage(&mut app, id, revision, next, region, a), a);
+    assert_eq!(super::uncovered(&mut app, id, revision, next, b), Some(b));
+    hover(&mut app, &[top], None);
+    assert_eq!(super::clip_damage(&mut app, id, revision, 0, region, a), region);
+}

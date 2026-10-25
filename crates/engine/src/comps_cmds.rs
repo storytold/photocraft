@@ -208,6 +208,23 @@ fn apply_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     apply(s, id, "Apply Layer Comp")
 }
 
+/// How an action records Apply Layer Comp: by the comp's name, as Photoshop does. Comp ids are
+/// local to a document, so a recorded id would apply whichever comp of another document has it
+/// (#7181); by name the step finds that document's comp of the name, or stops with an error.
+/// The comp is the one just applied, so `{}` and `null` (the last applied) record its name too.
+pub(crate) fn recorded_apply(s: &Session, mut p: Value) -> Value {
+    let Some(d) = s.active() else { return p };
+    let Some(comp) = d.doc.last_applied_comp.and_then(|id| d.doc.comp(id)) else { return p };
+    // `null` params run as `{}` (the last applied comp), so they are recorded by name too.
+    if p.is_null() {
+        p = json!({});
+    }
+    if let Value::Object(m) = &mut p {
+        m.insert("comp".into(), json!(comp.name));
+    }
+    p
+}
+
 fn step(s: &mut Session, delta: i64) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let n = d.doc.layer_comps.len() as i64;
@@ -232,6 +249,27 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
         Ok(())
     })?;
     Ok(json!({"deleted": id}))
+}
+
+fn reorder(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "layerComp.reorder";
+    let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
+    let id = comp_param(doc, p, CMD)?;
+    let index = p
+        .get("index")
+        .and_then(Value::as_u64)
+        .and_then(|n| usize::try_from(n).ok())
+        .filter(|i| *i < doc.layer_comps.len())
+        .ok_or_else(|| bad(CMD, "index must name a position in the comp list"))?;
+    let from = index_of(doc, id);
+    if from != index {
+        s.edit("Reorder Layer Comp", |doc, _| {
+            let comp = doc.layer_comps.remove(from);
+            doc.layer_comps.insert(index, comp);
+            Ok(())
+        })?;
+    }
+    Ok(json!({"comp": id, "index": index}))
 }
 
 fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
@@ -427,6 +465,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("layerComp.previous", "Apply Previous Layer Comp", &[], "{}", has_comps, |s, _| step(s, -1)),
         spec!("layerComp.next", "Apply Next Layer Comp", &[], "{}", has_comps, |s, _| step(s, 1)),
         spec!("layerComp.delete", "Delete Layer Comp", &[], r##"{"comp":id|name?}"##, has_comps, delete),
+        spec!("layerComp.reorder", "Reorder Layer Comp", &[], r##"{"comp":id|name?,"index":integer (zero-based final position)}"##, has_comps, reorder),
         spec!("layerComp.duplicate", "Duplicate Layer Comp", &[], r##"{"comp":id|name?} → {comp}"##, has_comps, duplicate),
         spec!("layerComp.rename", "Rename Layer Comp", &[], r##"{"comp":id|name?,"name":str}"##, has_comps, rename),
         spec!("layerComp.setComment", "Layer Comp Comment", &[], r##"{"comp":id|name?,"comment":str}"##, has_comps, set_comment),

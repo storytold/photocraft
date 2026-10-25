@@ -80,7 +80,7 @@ pub(crate) fn paint_surface<'a>(doc: &'a mut Document, id: LayerId, p: &Value) -
     }
 }
 
-fn check_all_unlocked(doc: &Document, id: LayerId) -> Result<()> {
+pub(crate) fn check_all_unlocked(doc: &Document, id: LayerId) -> Result<()> {
     let locks = doc.effective_locks(id);
     let l = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
     if locks.all {
@@ -117,7 +117,10 @@ fn has_selection(s: &Session) -> std::result::Result<(), String> {
 fn turn(s: &mut Session, label: &str, t: crate::canvas_geom::Turn) -> Result<Value> {
     if let Some(d) = s.active() {
         let a = t.affine(f64::from(d.doc.size.width), f64::from(d.doc.size.height));
-        s.set_sampler_map(a);
+        // Sampler points are pixel indices, not pixel edges: map the pixel's centre, so the point
+        // lands on the same pixel `Turn::pixel_map` moves the pixels to (`w - 1 - x`).
+        let half = photocraft_geom::Affine::translate(0.5, 0.5);
+        s.set_canvas_map(a, half.then(&a).then(&photocraft_geom::Affine::translate(-0.5, -0.5)));
     }
     s.edit(label, |doc, _| {
         crate::canvas_geom::turn_canvas(doc, t);
@@ -229,21 +232,60 @@ pub(crate) fn u32_id_param(cmd: &str, p: &Value, key: &str) -> Result<Option<u32
     p.get(key).map(|v| u32_id(cmd, key, v)).transpose()
 }
 
-fn f32_or(p: &Value, key: &str, default: f32) -> f32 {
-    p.get(key).and_then(Value::as_f64).map(|v| v as f32).unwrap_or(default)
+/// JSON numbers may be finite f64 values but overflow when stored in a document's f32 field.
+pub(crate) fn finite_f32(cmd: &str, key: &str, value: f64) -> Result<f32> {
+    let narrowed = value as f32;
+    if narrowed.is_finite() { Ok(narrowed) } else { Err(bad(cmd, format!("`{key}` must fit a finite 32-bit number"))) }
 }
-pub(crate) fn color_param(p: &Value, key: &str, default: [f32; 4]) -> [f32; 4] {
-    match p.get(key) {
+
+/// Effect/type parameters contain nested colour arrays and snapshots as well as scalars.
+/// Validate before parsing or editing, including numbers hidden in an effect snapshot.
+pub(crate) fn check_f32_values(cmd: &str, value: &Value) -> Result<()> {
+    // Bound the call stack, without allocating a work list proportional to an input array.
+    fn check(cmd: &str, value: &Value, depth: usize) -> Result<()> {
+        if depth > 64 {
+            return Err(bad(cmd, "parameters nested deeper than 64 levels"));
+        }
+        match value {
+            Value::Number(n) => {
+                finite_f32(cmd, "number", n.as_f64().ok_or_else(|| bad(cmd, "invalid number"))?)?;
+            }
+            Value::Array(a) => {
+                for v in a {
+                    check(cmd, v, depth + 1)?;
+                }
+            }
+            Value::Object(o) => {
+                for v in o.values() {
+                    check(cmd, v, depth + 1)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+    check(cmd, value, 0)
+}
+
+pub(crate) fn color_param(cmd: &str, p: &Value, key: &str, default: [f32; 4]) -> Result<[f32; 4]> {
+    Ok(match p.get(key) {
         Some(Value::Array(a)) if a.len() >= 3 => {
-            let v: Vec<f32> = a.iter().map(|x| x.as_f64().unwrap_or(0.0) as f32).collect();
-            [v[0], v[1], v[2], v.get(3).copied().unwrap_or(1.0)]
+            let mut out = [0.0, 0.0, 0.0, 1.0];
+            for (slot, value) in out.iter_mut().zip(a) {
+                *slot = finite_f32(cmd, key, value.as_f64().unwrap_or(0.0))?;
+            }
+            out
         }
         Some(Value::String(s)) => parse_hex(s).unwrap_or(default),
         _ => default,
-    }
+    })
 }
 pub(crate) fn parse_hex(s: &str) -> Option<[f32; 4]> {
     let s = s.trim_start_matches('#');
+    // `from_str_radix` accepts a leading '+', so "+f" would read as 0x0f.
+    if !s.bytes().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
     let b = |i: usize| u8::from_str_radix(s.get(i..i + 2)?, 16).ok().map(|v| v as f32 / 255.0);
     match s.len() {
         6 => Some([b(0)?, b(2)?, b(4)?, 1.0]),
@@ -295,7 +337,8 @@ fn set_clipped(s: &mut Session, p: &Value, clip: bool) -> Result<Value> {
 
 /// The layer a command's `"layer"` param names: an id, or a name (the topmost layer of that
 /// name, as Photoshop's "select layer by name" action step finds it, so a loaded action replays
-/// in another document). `None` when the param is absent.
+/// in another document; a name that matches no layer exactly matches regardless of case, so
+/// `"background"` finds the Background). `None` when the param is absent.
 pub(crate) fn explicit_layer(s: &Session, p: &Value) -> Result<Option<LayerId>> {
     match p.get("layer") {
         Some(Value::Number(n)) => {
@@ -303,17 +346,39 @@ pub(crate) fn explicit_layer(s: &Session, p: &Value) -> Result<Option<LayerId>> 
         }
         Some(Value::String(name)) => {
             let d = s.active().ok_or(EngineError::NoDocument)?;
-            d.doc
-                .walk()
-                .into_iter()
-                .rev()
+            let layers = d.doc.walk();
+            let mut top_down = layers.iter().rev();
+            top_down
+                .clone()
                 .find(|(_, _, l)| l.name == *name)
+                .or_else(|| top_down.find(|(_, _, l)| l.name.to_lowercase() == name.to_lowercase()))
                 .map(|(_, _, l)| Some(l.id))
-                .ok_or_else(|| EngineError::Other(format!("no layer named \"{name}\"")))
+                .ok_or_else(|| EngineError::Other(format!("no layer named \"{name}\"; {}", layer_listing(&d.doc))))
         }
         Some(Value::Null) | None => Ok(None),
         Some(other) => Err(EngineError::Other(format!("`layer` must be an id or a name, not {other}"))),
     }
+}
+
+/// The layers of `doc` as a caller can name them, for an error about a layer that isn't there:
+/// `the document's layers are 2 "Background", 3 "Layer 1"` (top-down, at most 20).
+pub(crate) fn layer_listing(doc: &Document) -> String {
+    const MAX: usize = 20;
+    let layers = doc.walk();
+    if layers.is_empty() {
+        return "the document has no layers".into();
+    }
+    // Names are unbounded input: each one is cut at NAME characters so the error stays short.
+    const NAME: usize = 64;
+    let name = |n: &str| match n.char_indices().nth(NAME) {
+        Some((cut, _)) => format!("{}…", &n[..cut]),
+        None => n.to_string(),
+    };
+    let mut list: Vec<String> = layers.iter().rev().take(MAX).map(|(_, _, l)| format!("{} {:?}", l.id.0, name(&l.name))).collect();
+    if layers.len() > MAX {
+        list.push(format!("… {} more (see `document.inspect`)", layers.len() - MAX));
+    }
+    format!("the document's layers are {} (a `layer` param takes an id or a name)", list.join(", "))
 }
 
 /// The layer a command targets: [`explicit_layer`], else the active layer.
@@ -339,7 +404,7 @@ pub(crate) fn selection_mask(doc: &Document) -> Result<Option<LayerMask>> {
 /// New pixel masks use the document's depth, as PSD saves/imports do. Otherwise a later soft
 /// brush stroke quantizes differently depending on whether the document reopened as PSD or
 /// native. Converting a selection keeps its coverage and does not alter the selection itself.
-fn mask_at_depth(mut mask: LayerMask, depth: SampleType) -> Result<LayerMask> {
+pub(crate) fn mask_at_depth(mut mask: LayerMask, depth: SampleType) -> Result<LayerMask> {
     let format = mask.surface.format().with_sample(depth);
     if mask.surface.format() != format {
         mask.surface = mask.surface.try_convert(format)?;
@@ -347,12 +412,18 @@ fn mask_at_depth(mut mask: LayerMask, depth: SampleType) -> Result<LayerMask> {
     Ok(mask)
 }
 
+/// Options from the Layers Panel flyout live in preferences so headless/keyboard commands
+/// behave exactly like pointer-triggered commands. Old preferences preserve Photoshop defaults.
+pub(crate) fn layer_panel_option(s: &Session, key: &str, fallback: bool) -> bool {
+    s.prefs().dialogs.get("ui.layersPanelOptions").and_then(|v| v.get(key)).and_then(Value::as_bool).unwrap_or(fallback)
+}
+
 /// Mask a fill or adjustment layer being created, as Photoshop does: the path selected in the
 /// Paths panel (`"path"`: `"work"`, a saved path's name or a path object) becomes its vector
 /// mask, which makes a Solid Color fill a shape (#1419); without one, the selection becomes its
 /// layer mask ([`selection_mask`]); without either, a white mask reveals the whole layer (#1768).
 /// A path that isn't there is an error.
-pub(crate) fn mask_new_layer(doc: &Document, l: &mut Layer, p: &Value, cmd: &str) -> Result<()> {
+pub(crate) fn mask_new_layer(doc: &Document, l: &mut Layer, p: &Value, cmd: &str, default_mask: bool) -> Result<()> {
     let path = match p.get("path") {
         None | Some(Value::Null) => None,
         Some(Value::String(n)) if crate::vector_cmds::is_work(Some(n)) => Some(doc.work_path.clone().ok_or_else(|| bad(cmd, "no work path"))?),
@@ -363,7 +434,9 @@ pub(crate) fn mask_new_layer(doc: &Document, l: &mut Layer, p: &Value, cmd: &str
     };
     match path {
         Some(path) => l.vector_mask = Some(photocraft_doc::VectorMask::new(path)),
-        None => l.mask = Some(mask_at_depth(selection_mask(doc)?.unwrap_or_else(LayerMask::reveal_all), doc.depth)?),
+        None => {
+            l.mask = selection_mask(doc)?.or_else(|| default_mask.then(LayerMask::reveal_all)).map(|mask| mask_at_depth(mask, doc.depth)).transpose()?;
+        }
     }
     Ok(())
 }
@@ -372,12 +445,13 @@ pub(crate) fn mask_new_layer(doc: &Document, l: &mut Layer, p: &Value, cmd: &str
 pub(crate) const NEW_LAYER_PATH: &str =
     r##""path":"work"|saved path name|{…path}? (the active path: becomes the vector mask; else the selection is the layer mask, or white with no selection)"##;
 
+/// Add an adjustment layer above the active one; it takes the mask `mask_new_layer` builds from `p` (a path, the selection, or the default white mask).
 fn new_adjustment(s: &mut Session, adj: Adjustment, p: &Value, cmd: &str) -> Result<Value> {
     let label = format!("New {} Layer", adj.label());
     let name = adj.label().to_string();
     let id = s.edit(&label, |doc, active| {
         let mut l = Layer::new(doc.next_layer_name(&name), LayerContent::Adjustment(adj));
-        mask_new_layer(doc, &mut l, p, cmd)?;
+        mask_new_layer(doc, &mut l, p, cmd, true)?;
         let id = doc.insert_above(*active, l);
         *active = Some(id);
         Ok(id)
@@ -385,15 +459,17 @@ fn new_adjustment(s: &mut Session, adj: Adjustment, p: &Value, cmd: &str) -> Res
     Ok(json!({ "layer": id.0 }))
 }
 
+/// Apply `adj` in place to the targeted layer mask, the targeted alpha channel or Quick Mask, or else the active layer's pixels, as one history step named `label`.
 fn destructive_adjust(s: &mut Session, label: &str, adj: Adjustment, p: &Value) -> Result<Value> {
     if is_mask_target(p) {
         // The targeted layer mask (#780): ⌘I inverts it, as in Photoshop.
         let id = layer_param(s, &Value::Null)?;
         return s.edit(label, |doc, _| {
+            check_all_unlocked(doc, id)?;
             let sel = doc.selection.clone();
             let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
             let mask = l.mask.as_mut().ok_or_else(|| EngineError::Other("layer has no mask".into()))?;
-            pixels::adjust_mask(&mut mask.surface, &adj, sel.as_ref());
+            pixels::adjust_mask(&mut mask.surface, &adj, sel.as_ref()).map_err(EngineError::Other)?;
             Ok(Value::Null)
         });
     }
@@ -403,7 +479,7 @@ fn destructive_adjust(s: &mut Session, label: &str, adj: Adjustment, p: &Value) 
         return s.edit(label, |doc, _| {
             let sel = doc.selection.clone();
             if let Some(surf) = crate::channel_cmds::channel_surface_for_filter(doc, None, p)? {
-                pixels::adjust_mask(surf, &adj, sel.as_ref());
+                pixels::adjust_mask(surf, &adj, sel.as_ref()).map_err(EngineError::Other)?;
             }
             Ok(Value::Null)
         });
@@ -413,7 +489,7 @@ fn destructive_adjust(s: &mut Session, label: &str, adj: Adjustment, p: &Value) 
         let sel = doc.selection.clone();
         let mode = doc.mode;
         let surf = paint_surface(doc, id, &Value::Null)?;
-        pixels::adjust_surface(surf, &adj, sel.as_ref(), mode);
+        pixels::adjust_surface(surf, &adj, sel.as_ref(), mode).map_err(EngineError::Other)?;
         Ok(())
     })?;
     Ok(Value::Null)
@@ -467,7 +543,7 @@ fn build() -> Vec<CommandSpec> {
             "New…",
             ["File"],
             Some("Cmd+N"),
-            r##"{"width":1..300000=1920,"height":1..300000=1080 (pixel counts are rounded),"mode":"rgb|gray|grayscale|cmyk|lab"="rgb","depth":8|16|32=8,"background":"white|black|backgroundColor|transparent|#rrggbb"="white","backgroundColor":[r,g,b]? (0..1; defaults to toolbox colour),"resolution":1..30000=72 (ppi),"name":str}"##,
+            r##"{"width":1..300000=1920,"height":1..300000=1080 (pixel counts are rounded),"mode":"rgb|gray|grayscale|cmyk|lab"="rgb","depth":8|16|32=8,"background":"white|black|backgroundColor|transparent|#rrggbb"="white","backgroundColor":[r,g,b]? (0..1; defaults to toolbox colour),"resolution":1..30000=72 (ppi),"name":str,"artboard":bool=false (one artboard over the canvas, its background the chosen one, holding an empty Layer 1; no Background layer),"profile":"working"|built-in id|path to an .icc file="working" (the colour profile it is tagged with; it must suit the mode)}"##,
             always,
             |s, p| {
                 use crate::document_preset_cmds::{MAX_DIMENSION, MAX_RESOLUTION, background_color, color_mode, sample_type};
@@ -486,23 +562,41 @@ fn build() -> Vec<CommandSpec> {
                 let depth = sample_type(p.get("depth").and_then(Value::as_u64).unwrap_or(8)).unwrap_or(SampleType::U8);
                 let name = p.get("name").and_then(Value::as_str).unwrap_or("Untitled").to_string();
                 let res = p.get("resolution").and_then(Value::as_f64).unwrap_or(72.0).clamp(1.0, MAX_RESOLUTION) as f32;
-                let mut doc = match p.get("background").and_then(Value::as_str).unwrap_or("white") {
+                // The background colour; `None` for Transparent.
+                let background = match p.get("background").and_then(Value::as_str).unwrap_or("white") {
                     "backgroundColor" => {
                         let bgc = background_color(p, s.tools.background, "file.new")?;
-                        Document::with_background(name, Size::new(w, h), mode, depth, Color::rgba(bgc[0], bgc[1], bgc[2], 1.0))
+                        Some(Color::rgba(bgc[0], bgc[1], bgc[2], 1.0))
                     }
-                    "transparent" => {
-                        let mut d = Document::new(name, Size::new(w, h), mode, depth);
-                        d.layers.push(Layer::raster("Layer 1", d.pixel_format()));
-                        d
-                    }
-                    "black" => Document::with_background(name, Size::new(w, h), mode, depth, Color::BLACK),
+                    "transparent" => None,
+                    "black" => Some(Color::BLACK),
                     other => {
                         let c = parse_hex(other).unwrap_or([1.0; 4]);
-                        Document::with_background(name, Size::new(w, h), mode, depth, Color::rgba(c[0], c[1], c[2], c[3]))
+                        Some(Color::rgba(c[0], c[1], c[2], c[3]))
                     }
                 };
+                let mut doc = if p.get("artboard").and_then(Value::as_bool).unwrap_or(false) {
+                    crate::artboard_cmds::new_artboard_document(name, Size::new(w, h), mode, depth, background)
+                } else if let Some(c) = background {
+                    Document::with_background(name, Size::new(w, h), mode, depth, c)
+                } else {
+                    let mut d = Document::new(name, Size::new(w, h), mode, depth);
+                    d.layers.push(Layer::raster("Layer 1", d.pixel_format()));
+                    d
+                };
                 doc.resolution_dpi = res;
+                // Photoshop's New Document › Color Profile: tag the document with another profile
+                // than the working space (#321). Checked before the document opens.
+                if let Some(spec) = p.get("profile").and_then(Value::as_str).filter(|spec| !matches!(*spec, "working" | "none")) {
+                    let prof = s.color.resolve(spec, Some(&doc), None)?;
+                    if prof.color_space != crate::color_cmds::mode_space(doc.mode) {
+                        return Err(EngineError::BadParams {
+                            cmd: "file.new".into(),
+                            msg: format!("profile `{}` is {:?}; the document is {:?}", prof.description, prof.color_space, doc.mode),
+                        });
+                    }
+                    doc.icc_profile = Some(prof.to_bytes());
+                }
                 let i = s.add_document(doc, None);
                 Ok(json!({ "document": i }))
             }
@@ -520,7 +614,7 @@ fn build() -> Vec<CommandSpec> {
             "Fill…",
             ["Edit"],
             Some("Shift+F5"),
-            r##"{"contents":"foreground|background|color|contentAware|pattern|history|black|gray|white"="color","color":"#rrggbb|[r,g,b,a]"=foreground (contents=color),"pattern":id|name (contents=pattern),"scale":%=100,"angle":deg,"state":index? (contents=history; default the oldest state),"colorAdaptation":bool=true (contents=contentAware),"mode":"normal|multiply|…"="normal","opacity":0..100=100,"preserveTransparency":bool=false,"target":"pixels"|"mask"|"quickMask"|{"channel":i}?}"##,
+            r##"{"contents":"foreground|background|color|contentAware|pattern|history|black|gray|white"="color","color":"#rrggbb|[r,g,b,a]"=foreground (contents=color),"pattern":id|name (contents=pattern),"scale":%=100,"angle":deg,"state":row?,"snapshot":id? (contents=history: a History panel row as history.setSource, redo rows last, or a snapshot; default the History Brush source),"colorAdaptation":bool=true (contents=contentAware),"mode":"normal|multiply|…"="normal","opacity":0..100=100,"preserveTransparency":bool=false,"target":"pixels"|"mask"|"quickMask"|{"channel":i}?}"##,
             has_pixel_or_channel,
             crate::fill_cmds::fill
         ),
@@ -555,6 +649,10 @@ fn build() -> Vec<CommandSpec> {
             Ok(Value::Null)
         }),
         cmd!("select.deselect", "Deselect", ["Select"], Some("Cmd+D"), "{}", has_selection, |s, _| {
+            // Nothing selected: nothing to do and no history step, as in Photoshop (#6744).
+            if s.active().is_none_or(|d| d.doc.selection.is_none()) {
+                return Ok(Value::Null);
+            }
             s.edit("Deselect", |doc, _| {
                 doc.selection = None;
                 Ok(())
@@ -690,9 +788,9 @@ fn build() -> Vec<CommandSpec> {
                     return crate::layer_multi_cmds::duplicate_selected(s, in_place, "Duplicate Layers");
                 }
                 let id = layer_param(s, p)?;
-                let before = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
+                let add_copy = layer_panel_option(s, "addCopyToCopiedLayersAndGroups", true);
                 let nid = s.edit("Duplicate Layer", |doc, active| {
-                    let mut dup = layer_copy(doc, id)?;
+                    let mut dup = layer_copy(doc, id, add_copy)?;
                     if let Some(name) = &name {
                         dup.name.clone_from(name);
                     }
@@ -703,7 +801,6 @@ fn build() -> Vec<CommandSpec> {
                     *active = Some(nid);
                     Ok(nid)
                 })?;
-                crate::layer_multi_cmds::note_insert(s, &before);
                 Ok(json!({ "layer": nid.0 }))
             }
         ),
@@ -968,11 +1065,12 @@ fn build() -> Vec<CommandSpec> {
             r##"{"color":"#rrggbb"=foreground,"path":"work"|saved path name|{…path}? (the active path: becomes the vector mask, making a shape; else the selection is the layer mask)}"##,
             has_doc,
             |s, p| {
-                let c = color_param(p, "color", s.tools.foreground);
+                let c = color_param("layer.newFillLayer.solidColor", p, "color", s.tools.foreground)?;
+                let default_mask = layer_panel_option(s, "useDefaultMasksOnFillLayers", true);
                 let id = s.edit("New Color Fill Layer", |doc, active| {
                     let fill = Fill::Solid(Color::rgba(c[0], c[1], c[2], c[3])).in_mode(doc.mode);
                     let mut l = Layer::new(doc.next_layer_name("Color Fill"), LayerContent::Fill(fill));
-                    mask_new_layer(doc, &mut l, p, "layer.newFillLayer.solidColor")?;
+                    mask_new_layer(doc, &mut l, p, "layer.newFillLayer.solidColor", default_mask)?;
                     let id = doc.insert_above(*active, l);
                     *active = Some(id);
                     Ok(id)
@@ -988,11 +1086,12 @@ fn build() -> Vec<CommandSpec> {
             r##"{"from":"#rrggbb","to":"#rrggbb","angle":deg=90,"style":"linear|radial|angle|reflected|diamond","reverse":bool,"path":"work"|saved path name|{…path}? (the active path: becomes the vector mask; else the selection is the layer mask)}"##,
             has_doc,
             |s, p| {
-                let a = color_param(p, "from", s.tools.foreground);
-                let b = color_param(p, "to", s.tools.background);
-                let angle = f32_or(p, "angle", 90.0);
+                let a = color_param("layer.newFillLayer.gradient", p, "from", s.tools.foreground)?;
+                let b = color_param("layer.newFillLayer.gradient", p, "to", s.tools.background)?;
+                let angle = crate::gradient_fill_cmds::angle_param("layer.newFillLayer.gradient", p, 90.0)?;
                 let style = crate::layer_style::gradient_style(p.get("style").and_then(Value::as_str).unwrap_or("linear"));
                 let reverse = p.get("reverse").and_then(Value::as_bool).unwrap_or(false);
+                let default_mask = layer_panel_option(s, "useDefaultMasksOnFillLayers", true);
                 let id = s.edit("New Gradient Fill Layer", |doc, active| {
                     let fill = Fill::gradient(
                         vec![(0.0, Color::rgba(a[0], a[1], a[2], a[3])), (1.0, Color::rgba(b[0], b[1], b[2], b[3]))],
@@ -1003,7 +1102,7 @@ fn build() -> Vec<CommandSpec> {
                     )
                     .in_mode(doc.mode);
                     let mut l = Layer::new(doc.next_layer_name("Gradient Fill"), LayerContent::Fill(fill));
-                    mask_new_layer(doc, &mut l, p, "layer.newFillLayer.gradient")?;
+                    mask_new_layer(doc, &mut l, p, "layer.newFillLayer.gradient", default_mask)?;
                     let id = doc.insert_above(*active, l);
                     *active = Some(id);
                     Ok(id)
@@ -1047,7 +1146,7 @@ fn build() -> Vec<CommandSpec> {
             "Reorder Layer",
             [],
             None,
-            r##"{"layer":id?| "layers":[id,…]?, "target":id,"position":"above|below|into"="above","copy":bool=false} (layers: one undoable move, document order preserved; copy: place duplicates there and leave the layers, as ⌥-dragging a Layers panel row)"##,
+            r##"{"layer":id?| "layers":[id,…]?, "target":id|name,"targetOccurrence":n? (which of several layers named `target`, in document order),"position":"above|below|into"="above","copy":bool=false} (layers: one undoable move, document order preserved; copy: place duplicates there and leave the layers, as ⌥-dragging a Layers panel row; a recorded action keeps the target by name)"##,
             has_layer,
             crate::layer_multi_cmds::move_to
         ),
@@ -1056,7 +1155,7 @@ fn build() -> Vec<CommandSpec> {
             "Move Layer",
             [],
             None,
-            r##"{"layer":id?,"dx":i32,"dy":i32,"units":"px"|"pt"="px" (pt: points, whole pixels at the document's resolution),"target":"pixels"|"mask"="pixels"} (no layer: every selected layer; linked layers follow; target mask: a layer whose mask is unlinked moves that mask alone, a linked mask moves with the layer)"##,
+            r##"{"layer":id?,"dx":i32,"dy":i32,"units":"px"|"pt"="px" (pt: points, whole pixels at the document's resolution),"target":"pixels"|"mask"="pixels","selection":bool=false} (no layer: every selected layer; linked layers follow; target mask: a layer whose mask is unlinked moves that mask alone, a linked mask moves with the layer; selection: the selection moves too, in the same step)"##,
             has_layer,
             crate::layer_multi_cmds::translate
         ),
@@ -1120,8 +1219,10 @@ fn build() -> Vec<CommandSpec> {
                     }
                 };
                 let (fg_cmyk, bg_cmyk) = (cmyk("foregroundCmyk")?, cmyk("backgroundCmyk")?);
-                s.tools.foreground = color_param(p, "foreground", s.tools.foreground);
-                s.tools.background = color_param(p, "background", s.tools.background);
+                let foreground = color_param("tools.setColors", p, "foreground", s.tools.foreground)?;
+                let background = color_param("tools.setColors", p, "background", s.tools.background)?;
+                s.tools.foreground = foreground;
+                s.tools.background = background;
                 if let Some(k) = fg_cmyk {
                     let [r, g, b, _] = s.tools.foreground;
                     s.tools.remember_cmyk([r, g, b], k);
@@ -1182,12 +1283,33 @@ fn build() -> Vec<CommandSpec> {
             label: "Activate Document",
             menu: &[],
             shortcut: None,
-            params: r##"{"document":index}"##,
+            params: r##"{"document":index} or {"offset":int} (the open document that many tabs after the active one, before it when negative: a Photoshop action's switch to another document) → {document}"##,
             enabled: has_doc,
             run: |s, p| {
-                let i = p.get("document").and_then(Value::as_u64).ok_or_else(|| bad("document.activate", "missing `document`"))?;
-                let idx = usize::try_from(i).map_err(|_| bad("document.activate", "`document` out of range"))?;
-                if s.set_active(idx) { Ok(Value::Null) } else { Err(EngineError::Other(format!("no document at index {idx}"))) }
+                // A null key counts as omitted.
+                let given = |k: &str| p.get(k).filter(|v| !v.is_null());
+                let idx = match (given("document"), given("offset")) {
+                    (Some(_), Some(_)) => return Err(bad("document.activate", "give `document` or `offset`, not both")),
+                    (None, None) => return Err(bad("document.activate", "needs `document` (a tab index) or `offset`")),
+                    // Past the first or last tab is refused rather than wrapped, so an action that
+                    // copies from one document never silently pastes into the wrong one (#7103).
+                    (None, Some(o)) => {
+                        let o = o.as_i64().ok_or_else(|| bad("document.activate", "`offset` must be an integer"))?;
+                        let (active, len) = (s.active_index().ok_or(EngineError::NoDocument)?, s.documents().len());
+                        let target = i64::try_from(active).ok().and_then(|a| a.checked_add(o)).and_then(|i| usize::try_from(i).ok());
+                        let Some(i) = target.filter(|&i| i < len) else {
+                            let side = if o < 0 { "before" } else { "after" };
+                            let msg = format!("no document {} {side} the active one, which is {} of {len}", o.unsigned_abs(), active + 1);
+                            return Err(EngineError::Other(msg));
+                        };
+                        i
+                    }
+                    (Some(d), None) => {
+                        let i = d.as_u64().ok_or_else(|| bad("document.activate", "`document` must be a tab index"))?;
+                        usize::try_from(i).map_err(|_| bad("document.activate", "`document` out of range"))?
+                    }
+                };
+                if s.set_active(idx) { Ok(json!({"document": idx})) } else { Err(EngineError::Other(format!("no document at index {idx}"))) }
             },
             journal: false,
         },
@@ -1373,6 +1495,7 @@ fn build() -> Vec<CommandSpec> {
         });
     }
     v.extend(crate::layer_style::specs());
+    v.extend(crate::contour_lib_cmds::specs());
     v.extend(crate::layer_list_cmds::specs());
     v.extend(crate::filters::specs());
     v.extend(crate::filters_ext::specs());
@@ -1396,6 +1519,7 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::brush_preset_cmds::specs());
     v.extend(crate::eraser_cmds::specs());
     v.extend(crate::preset_import_cmds::specs());
+    v.extend(crate::style_asl_cmds::specs());
     v.extend(crate::atn_cmds::specs());
     v.extend(crate::actions_edit_cmds::specs());
     v.extend(crate::swatch_cmds::specs());
@@ -1412,6 +1536,7 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::file_cmds::specs());
     v.extend(crate::exr_cmds::specs());
     v.extend(crate::type_extra_cmds::specs());
+    v.extend(crate::type_area_cmds::specs());
     v.extend(crate::type_styles_cmds::specs());
     v.extend(crate::type_spell_cmds::specs());
     v.extend(crate::type_caret_cmds::specs());
@@ -1419,9 +1544,11 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::layer_multi_cmds::specs());
     v.extend(crate::layer_copy_cmds::specs());
     v.extend(crate::prefs::specs());
+    v.extend(crate::updates_cmds::specs());
     v.extend(crate::edit_menu_cmds::specs());
     v.extend(crate::fill_key_cmds::specs());
     v.extend(crate::sample_cmds::specs());
+    v.extend(crate::face_cmds::specs());
     v.extend(crate::sampler_cmds::specs());
     v.extend(crate::brush_key_cmds::specs());
     v.extend(crate::stamp_cmds::specs());
@@ -1433,6 +1560,7 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::adjust_cmds::specs());
     v.extend(crate::layer_menu_cmds::specs());
     v.extend(crate::layer_label_cmds::specs());
+    v.extend(crate::layer_xmp_cmds::specs());
     v.extend(crate::mode_cmds::specs());
     v.extend(crate::multichannel_cmds::specs());
     v.extend(crate::pattern_cmds::specs());
@@ -1443,6 +1571,8 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::analysis_cmds::specs());
     v.extend(crate::notes_cmds::specs());
     v.extend(crate::history_cmds::specs());
+    v.extend(crate::history_menu_cmds::specs());
+    v.extend(crate::history_source_cmds::specs());
     v.extend(crate::history_select_cmds::specs());
     v.extend(crate::proof_sim::specs());
     v.extend(crate::presets::specs());
@@ -1519,6 +1649,7 @@ pub fn adjustment_kind(a: &Adjustment) -> &'static str {
         Adjustment::GradientMap { .. } => "gradientMap",
         Adjustment::SelectiveColor { .. } => "selectiveColor",
         Adjustment::ColorLookup { .. } => "colorLookup",
+        Adjustment::Unsupported { .. } => "unsupported",
         _ => "invert",
     }
 }
@@ -1574,6 +1705,7 @@ fn set_mask_with(s: &mut Session, p: &Value, label: &str, mask: Option<LayerMask
     s.edit(label, |doc, _| {
         let mask = mask.clone().map(|mask| mask_at_depth(mask, doc.depth)).transpose()?;
         for id in &ids {
+            check_all_unlocked(doc, *id)?;
             if mask.is_some() {
                 crate::extra_cmds::background_to_layer_for_mask(doc, *id);
             }
@@ -1634,12 +1766,14 @@ pub(crate) fn translate_layer(doc: &Document, l: &mut Layer, dx: i32, dy: i32) {
 /// A copy of layer `id` as Layer › Duplicate Layer makes it, not yet in the document: a fresh id,
 /// "… copy" appended to the name, and a copy of the Background layer is an ordinary, unlocked
 /// layer (Photoshop).
-pub(crate) fn layer_copy(doc: &Document, id: LayerId) -> Result<Layer> {
+pub(crate) fn layer_copy(doc: &Document, id: LayerId, add_copy: bool) -> Result<Layer> {
     let src = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
     // A copy of the Background layer is an ordinary, unlocked layer (Photoshop).
     let from_background = doc.is_background(id);
     let mut dup = src.duplicate();
-    dup.name = doc.copy_name(&dup.name);
+    if add_copy {
+        dup.name = doc.copy_name(&dup.name);
+    }
     if from_background {
         dup.locks = Default::default();
     }
@@ -1718,5 +1852,20 @@ mod set_props_tests {
         }
         s.execute("layer.setProps", json!({"opacity": 0, "fill": 1})).unwrap();
         assert_eq!(layer(&s), (0.0, 1.0));
+    }
+}
+
+#[cfg(test)]
+mod parse_hex_tests {
+    use super::parse_hex;
+
+    #[test]
+    fn signs_and_other_non_hex_characters_are_rejected() {
+        for bad in ["#+f+f+f", "+f+f+f+f", "#-f0000", "#gg0000", "#0f0f+f"] {
+            assert_eq!(parse_hex(bad), None, "{bad:?} is not hex digits");
+        }
+        let g = 15.0 / 255.0;
+        assert_eq!(parse_hex("#0f0f0f"), Some([g, g, g, 1.0]));
+        assert_eq!(parse_hex("#0f0f0fff"), Some([g, g, g, 1.0]));
     }
 }

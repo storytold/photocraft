@@ -85,6 +85,34 @@ fn from_layers_and_group_then_compose_clips() {
     }
 }
 
+/// #7945: one layer selected inside an artboard aligns to that artboard, as in Photoshop, not to
+/// the canvas (which would move it out of the board). The board itself still aligns to the canvas.
+#[test]
+fn a_lone_layer_in_an_artboard_aligns_to_the_artboard() {
+    for depth in [8, 16, 32] {
+        let mut s = session(depth);
+        let red = add_square(&mut s, Rect::new(10, 10, 20, 20), [1.0, 0.0, 0.0, 1.0]);
+        let board = LayerId(s.execute("layer.new.artboardFromLayers", json!({})).unwrap()["layer"].as_u64().unwrap());
+        s.execute("layer.artboard.set", json!({"x": 140, "y": 20, "width": 40, "height": 50})).unwrap();
+        let bounds = |s: &Session, id: LayerId| crate::layer_multi_cmds::layer_bounds(doc(s).layer(id).unwrap()).unwrap();
+        assert_eq!(bounds(&s, red), Rect::new(140, 20, 150, 30), "{depth}");
+
+        s.execute("layer.select", json!({"layer": red.0})).unwrap();
+        s.execute("layer.align.rightEdges", json!({})).unwrap();
+        assert_eq!(bounds(&s, red), Rect::new(170, 20, 180, 30), "{depth}: to the board's right edge");
+        s.execute("layer.align.verticalCenters", json!({})).unwrap();
+        assert_eq!(bounds(&s, red), Rect::new(170, 40, 180, 50), "{depth}: to the board's centre");
+        // An explicit `to` still wins.
+        s.execute("layer.align.topEdges", json!({"to": "canvas"})).unwrap();
+        assert_eq!(bounds(&s, red).y0, 0, "{depth}");
+
+        // The artboard alone has no board around it: its contents align to the canvas.
+        s.execute("layer.select", json!({"layer": board.0})).unwrap();
+        s.execute("layer.align.leftEdges", json!({})).unwrap();
+        assert_eq!(bounds(&s, red).x0, 0, "{depth}");
+    }
+}
+
 #[test]
 fn clear_artboard_guides_only_inside() {
     let mut s = session(8);
@@ -329,6 +357,33 @@ fn export_rejects_a_board_too_far_from_the_origin() {
     let one = artboard_document(doc(&s), doc(&s).artboards()[0].0).unwrap().unwrap();
     assert_eq!((one.size.width, one.size.height), (50, 50));
     assert_eq!(one.artboards()[0].2.rect, Rect::new(0, 0, 50, 50));
+}
+
+/// Artboards to Files moves paths, notes, slices and Count/Ruler marks with the board, like its
+/// layers and guides, so they land on the same pixels in the exported file.
+#[test]
+fn artboard_export_moves_paths_notes_slices_and_marks_with_the_board() {
+    use photocraft_doc::{CountGroup, NamedPath, Note, Path, Slice, Subpath};
+    let mut s = session(8);
+    s.execute("layer.new.artboard", json!({"x": 200, "y": 100, "width": 50, "height": 50})).unwrap();
+    s.edit("marks", |d, _| {
+        d.paths.push(NamedPath { name: "P".into(), path: Path::new(vec![Subpath::polygon(&[(210.0, 110.0), (240.0, 110.0), (240.0, 140.0)])]), psd_raw: None });
+        d.work_path = Some(Path::new(vec![Subpath::polygon(&[(205.0, 105.0), (215.0, 105.0), (215.0, 115.0)])]));
+        d.notes.push(Note { position: [220.0, 120.0], popup: [220.0, 120.0, 260.0, 160.0], ..Default::default() });
+        d.slices.list.push(Slice { id: 1, rect: Rect::new(210, 110, 230, 130), ..Default::default() });
+        d.measurement.count_groups.push(CountGroup { points: vec![[225.0, 125.0]], ..Default::default() });
+        Ok(())
+    })
+    .unwrap();
+    let one = artboard_document(doc(&s), doc(&s).artboards()[0].0).unwrap().unwrap();
+    let k = &one.paths[0].path.subpaths[0].knots[0].anchor;
+    assert_eq!((k.x, k.y), (10.0, 10.0));
+    let w = &one.work_path.as_ref().unwrap().subpaths[0].knots[0].anchor;
+    assert_eq!((w.x, w.y), (5.0, 5.0));
+    assert_eq!(one.notes[0].position, [20.0, 20.0]);
+    assert_eq!(one.notes[0].popup, [20.0, 20.0, 60.0, 60.0]);
+    assert_eq!(one.slices.list[0].rect, Rect::new(10, 10, 30, 30));
+    assert_eq!(one.measurement.count_groups[0].points, vec![[25.0, 25.0]]);
 }
 
 /// #1531: a board 40×40 at (10, 10) holding a red square at (10..30)², the artboard active.
@@ -584,4 +639,54 @@ fn add_beside_places_a_board_on_each_side_and_alt_duplicates_contents() {
     assert_eq!(board_rect(&s, gid.0), Rect::new(10, 10, 50, 50));
     assert_eq!(doc(&s).size, before);
     assert!(s.execute("layer.artboard.addBeside", json!({"side": "diagonal"})).is_err());
+}
+
+/// Adding a duplicated artboard beside another appends "copy" to its name only while the Layers panel option is on.
+#[test]
+fn add_beside_duplicate_honors_panel_copy_name_preference() {
+    for add_copy in [false, true] {
+        let mut s = session(8);
+        let id = board_with_square(&mut s);
+        let name = doc(&s).layer(id).unwrap().name.clone();
+        s.edit_prefs(|prefs| {
+            prefs.dialogs.insert("ui.layersPanelOptions".into(), json!({"addCopyToCopiedLayersAndGroups": add_copy}));
+        });
+        let before = doc(&s).clone();
+        let result = s.execute("layer.artboard.addBeside", json!({"layer": id.0, "side": "bottom", "duplicate": true})).unwrap();
+        let copy = LayerId(result["layer"].as_u64().unwrap());
+        let expected = if add_copy { before.copy_name(&name) } else { name };
+        assert_eq!(doc(&s).layer(copy).unwrap().name, expected);
+        assert!(red_at(&s, 15, 155), "the copied artboard retains its contents");
+        s.undo();
+        assert_eq!(doc(&s), &before);
+    }
+}
+
+/// #9086: File › New with Artboards makes one board over the canvas, its background the chosen
+/// one, holding an empty Layer 1, and no Background layer.
+#[test]
+fn new_document_with_an_artboard() {
+    for (background, want) in [
+        ("white", ArtboardBackground::White),
+        ("black", ArtboardBackground::Black),
+        ("transparent", ArtboardBackground::Transparent),
+        ("#336699", ArtboardBackground::Custom(Color::rgba(0x33 as f32 / 255.0, 0x66 as f32 / 255.0, 0x99 as f32 / 255.0, 1.0))),
+    ] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 120, "height": 90, "background": background, "artboard": true})).unwrap();
+        let d = doc(&s);
+        assert_eq!(d.layers.len(), 1, "{background}: only the board");
+        let boards = d.artboards();
+        let [(_, _, board)] = boards.as_slice() else { panic!("{background}: one artboard, got {}", boards.len()) };
+        assert_eq!(board.rect, d.bounds());
+        assert_eq!(board.background, want, "{background}");
+        let LayerContent::Group(g) = &d.layers[0].content else { panic!("not a group") };
+        assert_eq!(g.children.iter().map(|l| l.name.as_str()).collect::<Vec<_>>(), ["Layer 1"]);
+        assert!(!d.layers.iter().any(|l| d.is_background(l.id)), "{background}: no Background layer");
+    }
+    // Without the option nothing changes; a non-boolean is refused.
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 20, "height": 10, "artboard": false})).unwrap();
+    assert!(doc(&s).artboards().is_empty());
+    assert!(s.execute("file.new", json!({"artboard": "yes"})).is_err());
 }

@@ -168,6 +168,19 @@ fn reserved_document_and_slice_names_export_with_portable_names() {
 }
 
 #[test]
+fn a_dotted_device_file_name_exports_without_the_device_stem() {
+    // `nul.v2_` would still be the NUL device on Windows; `nul_.v2` is a file.
+    let dir = tmp("reserved-dotted-name");
+    let mut s = session(8);
+    s.execute("slice.new", json!({"rect": [0, 0, 16, 16], "name": "logo"})).unwrap();
+    let path = format!("{dir}/nul.v2.png");
+    let result = s.execute("file.export.saveForWebLegacy", json!({"path": path, "slices": "all", "format": "png24", "html": true})).unwrap();
+    let html = result["html"].as_str().unwrap();
+    assert!(html.ends_with("/nul_.v2.html"), "{html}");
+    assert!(std::path::Path::new(html).is_file());
+}
+
+#[test]
 fn platform_writer_failure_stops_export_and_preserves_saved_settings() {
     let mut s = session(8);
     let saved = json!({"format": "png24", "path": "saved.png"});
@@ -437,6 +450,78 @@ fn export_preferences_drive_quick_export() {
     s.execute("prefs.reset", json!({"path": "export"})).unwrap();
 }
 
+/// #6599: with Location = Same Folder, a document opened from `photo.png` would be exported over
+/// `photo.png` itself. Without a `path` that is refused and the file is left alone; named
+/// explicitly (the save dialog's answer) it is written.
+#[test]
+fn quick_export_never_replaces_the_documents_own_file_unasked() {
+    let dir = tmp("quick_own_file");
+    let mut s = session(8);
+    s.execute("file.export.exportPreferences", json!({"quickExportLocation": "sameFolder", "quickExportFormat": "png"})).unwrap();
+    let own = format!("{dir}/photo.png");
+    std::fs::write(&own, b"original").unwrap();
+    s.active_mut().unwrap().path = Some(own.clone());
+    assert_eq!(quick_export_target(&s), Some(own.clone()));
+    assert!(quick_export_target_is_own_file(&s));
+    let e = s.execute("file.export.quickExport", json!({})).unwrap_err().to_string();
+    assert!(e.contains("own file"), "{e}");
+    assert_eq!(std::fs::read(&own).unwrap(), b"original", "the source is untouched");
+    s.execute("file.export.quickExport", json!({"path": own})).unwrap();
+    assert_eq!(decode(&own).dimensions(), (64, 48));
+    // Another format, or a PSD's earlier export beside it, is still written without asking.
+    s.execute("file.export.exportPreferences", json!({"quickExportFormat": "jpg"})).unwrap();
+    assert!(!quick_export_target_is_own_file(&s));
+    assert_eq!(s.execute("file.export.quickExport", json!({})).unwrap()["path"], json!(format!("{dir}/photo.jpg")));
+    s.execute("file.export.exportPreferences", json!({"quickExportFormat": "png"})).unwrap();
+    s.active_mut().unwrap().path = Some(format!("{dir}/photo.psd"));
+    assert!(!quick_export_target_is_own_file(&s));
+    assert_eq!(s.execute("file.export.quickExport", json!({})).unwrap()["path"], json!(own));
+    s.execute("prefs.reset", json!({"path": "export"})).unwrap();
+}
+
+/// #8519: Quick Export as PNG renamed to `photo.jpeg` in the save dialog wrote PNG bytes under a
+/// JPEG name, which upload checks refuse. A Quick Export extension picks the format; another
+/// image extension is refused; no extension keeps Export Preferences' format.
+#[test]
+fn quick_export_writes_the_format_its_path_names() {
+    let dir = tmp("quick_ext");
+    let mut s = session(8);
+    s.execute("file.export.exportPreferences", json!({"quickExportFormat": "png"})).unwrap();
+    for (name, format, magic) in [
+        ("a.jpeg", "jpg", &b"\xFF\xD8\xFF"[..]),
+        ("b.JPG", "jpg", b"\xFF\xD8\xFF"),
+        ("c.gif", "gif", b"GIF8"),
+        ("d.webp", "webp", b"RIFF"),
+        ("e", "png", b"\x89PNG"),
+    ] {
+        let path = format!("{dir}/{name}");
+        let r = s.execute("file.export.quickExport", json!({"path": path})).unwrap();
+        assert_eq!(r["format"], json!(format), "{name}");
+        assert!(std::fs::read(&path).unwrap().starts_with(magic), "{name} holds {format} data");
+    }
+    let tif = format!("{dir}/f.tif");
+    let e = s.execute("file.export.quickExport", json!({"path": tif})).unwrap_err().to_string();
+    assert!(e.contains("Export As"), "{e}");
+    assert!(!std::path::Path::new(&tif).exists());
+    s.execute("prefs.reset", json!({"path": "export"})).unwrap();
+}
+
+#[test]
+fn same_file_sees_through_other_names_for_one_file() {
+    let dir = tmp("same_file");
+    let (a, b, c) = (format!("{dir}/a.png"), format!("{dir}/b.png"), format!("{dir}/c.png"));
+    std::fs::write(&a, b"a").unwrap();
+    std::fs::write(&c, b"c").unwrap();
+    assert!(crate::file_cmds::same_file(&a, &a));
+    assert!(crate::file_cmds::same_file(&a, format!("{dir}/./a.png")));
+    assert!(!crate::file_cmds::same_file(&a, &c));
+    assert!(!crate::file_cmds::same_file(&a, &b), "a missing file is not the same file");
+    std::fs::hard_link(&a, &b).unwrap();
+    assert!(crate::file_cmds::same_file(&a, &b), "a hard link is the same file");
+    #[cfg(windows)]
+    assert!(crate::file_cmds::same_file(&a, format!("{dir}/A.PNG")), "NTFS names ignore case");
+}
+
 #[test]
 fn webp_export_preferences_select_lossless_or_lossy_output() {
     let dir = tmp("quick_webp_quality");
@@ -486,6 +571,20 @@ fn webp_export_preferences_select_lossless_or_lossy_output() {
 }
 
 #[test]
+fn generator_spaced_size_keeps_only_the_file_name() {
+    for (name, w, h, file) in [
+        ("2 x 2 2 icon.png", 2.0, 2.0, "2 icon.png"),
+        ("1in x 1in in.png", 72.0, 72.0, "in.png"),
+        ("2px x 1px x.png", 2.0, 1.0, "x.png"),
+        ("2in  x  1in   label name.png", 144.0, 72.0, "label name.png"),
+    ] {
+        let a = parse_asset_name(name, 72.0);
+        assert_eq!(a.len(), 1, "{name}");
+        assert_eq!((a[0].width, a[0].height, a[0].file.as_str()), (Some(w), Some(h), file), "{name}");
+    }
+}
+
+#[test]
 fn generator_naming_grammar() {
     let a = parse_asset_name("200% foo@2x.png, 48x48 icons/bar.png8 + photo.jpg8", 72.0);
     assert_eq!(a.len(), 3);
@@ -512,9 +611,34 @@ fn generator_naming_grammar() {
 }
 
 #[test]
+fn image_assets_needs_the_generator_preference() {
+    let dir = tmp("generator_pref");
+    let mut s = session(8);
+    let id = s.active().unwrap().active_layer.unwrap();
+    s.execute("layer.renameLayer", json!({"layer": id.0, "name": "logo.png"})).unwrap();
+    assert!(!s.prefs().plug_ins.generator_enabled, "off by default, as in Photoshop");
+    assert!(!s.is_enabled("file.generate.imageAssets"), "unavailable until it is enabled");
+    assert!(s.execute("file.generate.imageAssets", json!({"dir": dir})).is_err());
+
+    s.execute("prefs.set", json!({"path": "plugIns.generatorEnabled", "value": true})).unwrap();
+    assert!(s.is_enabled("file.generate.imageAssets"));
+    assert_eq!(s.execute("file.generate.imageAssets", json!({"dir": dir})).unwrap()["enabled"], true);
+    s.active_mut().unwrap().path = Some(format!("{dir}/doc.psd"));
+    assert!(crate::automate_cmds::document_saved(&mut s, 0).is_some(), "assets are written on save");
+
+    // Turning it off again takes the menu item away and stops the export, even for a document
+    // left switched on.
+    s.execute("prefs.set", json!({"path": "plugIns.generatorEnabled", "value": false})).unwrap();
+    assert!(!s.is_enabled("file.generate.imageAssets"));
+    assert!(crate::automate_cmds::document_saved(&mut s, 0).is_none(), "no assets while Generator is off");
+}
+
+#[test]
 fn image_assets_are_generated_now_and_on_save() {
     let dir = tmp("assets");
     let mut s = session(8);
+    // Preferences ▸ Plug-ins ▸ Generator enabled: the feature is opt-in.
+    s.execute("prefs.set", json!({"path": "plugIns.generatorEnabled", "value": true})).unwrap();
     let id = s.active().unwrap().active_layer.unwrap();
     s.execute("layer.renameLayer", json!({"layer": id.0, "name": "logo.png, 50% small/logo.gif, logo.jpg80%"})).unwrap();
     let r = s.execute("file.generate.imageAssets", json!({"dir": dir})).unwrap();
@@ -544,6 +668,115 @@ fn image_assets_are_generated_now_and_on_save() {
     assert!(errors.is_empty(), "{errors:?}");
     assert_eq!(files.iter().map(|p| std::path::PathBuf::from(p.as_str())).collect::<Vec<_>>(), vec![std::path::Path::new(&dir).join("icon@2x.png")]);
     assert_eq!(decode(&files[0]).dimensions(), (128, 80));
+}
+
+/// Photoshop's Generator exports an artboard named like an asset at the board's size, transparent
+/// edges included (generator-assets renderer: the canvas bounds are the artboard's), with no
+/// preference. Layers inside the board are still trimmed to their pixels.
+#[test]
+fn image_assets_keep_full_artboards() {
+    let dir = tmp("asset-artboards");
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 64, "height": 48, "name": "boards.psd", "background": "transparent"})).unwrap();
+    s.edit("board", |doc, _| {
+        let fmt = doc.pixel_format();
+        let mut logo = Layer::raster("logo.png", fmt);
+        logo.surface_mut().unwrap().fill_rect(Rect::new(12, 10, 20, 16), &photocraft_raster::from_rgba(&fmt, [1.0, 0.0, 0.0, 1.0]));
+        let board =
+            photocraft_doc::Artboard { rect: Rect::new(4, 6, 44, 36), background: photocraft_doc::ArtboardBackground::Transparent, preset: String::new() };
+        let group = photocraft_doc::Group { children: vec![logo], expanded: true, artboard: Some(board) };
+        doc.layers = vec![Layer::new("board.png", LayerContent::Group(group))];
+        Ok(())
+    })
+    .unwrap();
+
+    s.execute("prefs.set", json!({"path": "plugIns.generatorEnabled", "value": true})).unwrap();
+    let r = s.execute("file.generate.imageAssets", json!({"on": true, "dir": dir})).unwrap();
+    assert!(r["errors"].as_array().unwrap().is_empty(), "{r}");
+    let board = decode(&format!("{dir}/board.png"));
+    assert_eq!(board.dimensions(), (40, 30), "the whole board, not its trimmed pixels");
+    let px = board.to_rgba8();
+    let at = |x: usize, y: usize| &px[(y * 40 + x) * 4..(y * 40 + x) * 4 + 4];
+    assert_eq!(at(0, 0)[3], 0, "the board's empty corner stays transparent");
+    assert_eq!(at(39, 29)[3], 0);
+    // The logo keeps its place on the board: document (12, 10) is board (8, 4).
+    assert!(at(8, 4)[0] > 250 && at(8, 4)[3] == 255, "{:?}", at(8, 4));
+    assert_eq!(at(7, 4)[3], 0);
+    assert_eq!(decode(&format!("{dir}/logo.png")).dimensions(), (8, 6), "a layer on the board is still trimmed");
+}
+
+/// An artboard asset with nothing on the board (empty, or its contents all outside it) is
+/// refused like an empty layer, not written as a blank board: Photoshop's Generator refuses a
+/// zero-bounds pixmap before it pads to the board.
+#[test]
+fn image_assets_refuse_empty_artboards() {
+    let dir = tmp("asset-empty-artboards");
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 64, "height": 48, "name": "boards.psd", "background": "transparent"})).unwrap();
+    s.edit("boards", |doc, _| {
+        let fmt = doc.pixel_format();
+        let mut outside = Layer::raster("outside", fmt);
+        outside.surface_mut().unwrap().fill_rect(Rect::new(50, 40, 60, 46), &photocraft_raster::from_rgba(&fmt, [1.0, 0.0, 0.0, 1.0]));
+        let board = |x0| photocraft_doc::Artboard {
+            rect: Rect::new(x0, 0, x0 + 20, 20),
+            background: photocraft_doc::ArtboardBackground::Transparent,
+            preset: String::new(),
+        };
+        let empty = photocraft_doc::Group { children: vec![], expanded: true, artboard: Some(board(0)) };
+        let off = photocraft_doc::Group { children: vec![outside], expanded: true, artboard: Some(board(24)) };
+        doc.layers = vec![Layer::new("empty.png", LayerContent::Group(empty)), Layer::new("off.png", LayerContent::Group(off))];
+        Ok(())
+    })
+    .unwrap();
+    s.execute("prefs.set", json!({"path": "plugIns.generatorEnabled", "value": true})).unwrap();
+    let r = s.execute("file.generate.imageAssets", json!({"on": true, "dir": dir})).unwrap();
+    assert_eq!(r["files"], json!([]), "{r}");
+    let errors = r["errors"].as_array().unwrap();
+    assert_eq!(errors.len(), 2, "{r}");
+    assert!(errors.iter().all(|e| e["error"].as_str().unwrap().contains("the layer is empty")), "{r}");
+    assert!(!std::path::Path::new(&format!("{dir}/empty.png")).exists());
+    assert!(!std::path::Path::new(&format!("{dir}/off.png")).exists());
+}
+
+/// #6614: two layers, or two default variants, naming one file never overwrite each other: the
+/// layer higher in the Layers panel keeps the file, whatever the case of its name, and the
+/// others are reported.
+#[test]
+fn image_assets_never_write_one_file_twice() {
+    let dir = tmp("asset-collisions");
+    let mut s = session(8);
+    s.edit("paint", |doc, active| {
+        let fmt = doc.pixel_format();
+        let mut l = Layer::raster("Top", fmt);
+        l.surface_mut().unwrap().fill_rect(Rect::new(0, 0, 4, 4), &photocraft_raster::from_rgba(&fmt, [0.0, 0.0, 1.0, 1.0]));
+        let id = doc.insert_above(None, l);
+        *active = Some(id);
+        Ok(())
+    })
+    .unwrap();
+    let mut d = (*s.active().unwrap().doc).clone();
+    let id = |d: &photocraft_doc::Document, name: &str| d.walk().into_iter().find(|(_, _, l)| l.name == name).unwrap().2.id;
+    let (top, logo) = (id(&d, "Top"), id(&d, "Logo"));
+    d.layer_mut(top).unwrap().name = "Logo.PNG".into();
+    d.layer_mut(logo).unwrap().name = "logo.png, logo.png".into();
+    let (files, errors) = generate_assets(&d, &dir);
+    assert_eq!(files.iter().map(|p| std::path::PathBuf::from(p.as_str())).collect::<Vec<_>>(), vec![std::path::Path::new(&dir).join("Logo.png")]);
+    assert_eq!(decode(&files[0]).dimensions(), (4, 4), "the top layer keeps the file");
+    assert_eq!(errors.len(), 2, "{errors:?}");
+    assert!(errors.iter().all(|e| e["error"].as_str().unwrap().contains("another layer already writes this file")), "{errors:?}");
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1, "one file, not a second one under another case");
+
+    // Two default variants that land on one name: the first keeps it.
+    let dir = tmp("asset-variant-collisions");
+    d.layer_mut(top).unwrap().name = "icon.png".into();
+    d.layer_mut(logo).unwrap().name = "Logo".into();
+    d.layers
+        .push(Layer::new("default 50% + 200% + 200% @2x", LayerContent::Group(photocraft_doc::Group { children: vec![], expanded: false, artboard: None })));
+    let (files, errors) = generate_assets(&d, &dir);
+    let names: Vec<_> = files.iter().map(|p| std::path::Path::new(p).file_name().unwrap().to_string_lossy().into_owned()).collect();
+    assert_eq!(names, ["icon.png", "icon@2x.png"]);
+    assert_eq!(decode(&files[0]).dimensions(), (2, 2), "the 50% variant keeps icon.png");
+    assert_eq!(errors.len(), 1, "{errors:?}");
 }
 
 #[test]
@@ -635,7 +868,7 @@ fn previews_show_the_optimised_pixels() {
     let buf = photocraft_compose::flatten(&wd);
     for f in ["jpeg", "gif", "png8", "png24", "wbmp"] {
         let st = WebSettings::from_params(&json!({"format": f, "quality": 90, "transparency": false}), "x").unwrap();
-        let o = optimize(&buf.px, 64, wd.bounds(), &st, None, None, 72.0, true).unwrap();
+        let o = optimize(&buf.px, 64, wd.bounds(), &st, None, None, None, 72.0, true).unwrap();
         assert_eq!(o.preview.len(), 64 * 48 * 4, "{f}");
         // Red square centre stays red (WBMP: dark).
         let i = (16 * 64 + 16) * 4;
@@ -645,7 +878,7 @@ fn previews_show_the_optimised_pixels() {
         } else {
             assert!(px[0] > 200 && px[1] < 60 && px[2] < 60, "{f}: {px:?}");
         }
-        let none = optimize(&buf.px, 64, wd.bounds(), &st, None, None, 72.0, false).unwrap();
+        let none = optimize(&buf.px, 64, wd.bounds(), &st, None, None, None, 72.0, false).unwrap();
         assert!(none.preview.is_empty());
         assert_eq!(none.bytes, o.bytes);
     }
@@ -656,7 +889,7 @@ fn jpeg_preview_at_odd_sizes() {
     for (w, h, q) in [(640usize, 431usize, 90), (640, 430, 60), (333, 222, 30)] {
         let px: Vec<[f32; 4]> = (0..w * h).map(|i| [((i % w) as f32 / w as f32), 0.3, ((i / w) as f32 / h as f32), 1.0]).collect();
         let st = WebSettings::from_params(&json!({"format": "jpeg", "quality": q}), "x").unwrap();
-        let o = optimize(&px, w, Rect::new(0, 0, w as i32, h as i32), &st, None, None, 72.0, true).unwrap();
+        let o = optimize(&px, w, Rect::new(0, 0, w as i32, h as i32), &st, None, None, None, 72.0, true).unwrap();
         for &(x, y) in &[(10usize, 10usize), (w - 10, h / 2), (w / 2, h - 5)] {
             let i = (y * w + x) * 4;
             let want = [(x as f32 / w as f32 * 255.0) as i32, 76, (y as f32 / h as f32 * 255.0) as i32];
@@ -686,6 +919,21 @@ fn slices_with_the_same_name_get_distinct_files() {
 }
 
 #[test]
+fn overlapping_slices_export_each_pixel_once() {
+    // #7770: without HTML too, a slice covered by a later one is written as its visible pieces.
+    let dir = tmp("overlap_images");
+    let mut s = session(8);
+    s.execute("slice.new", json!({"rect": [0, 0, 40, 30], "name": "under"})).unwrap();
+    s.execute("slice.new", json!({"rect": [20, 15, 40, 30], "name": "over"})).unwrap();
+    let r = s.execute("file.export.saveForWebLegacy", json!({"format": "png24", "dir": dir, "slices": "user"})).unwrap();
+    let mut files: Vec<String> = r["files"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
+    let dims: Vec<(u32, u32)> = files.iter().map(|f| decode(f).dimensions()).collect();
+    files.iter_mut().for_each(|f| *f = f.rsplit('/').next().unwrap().to_string());
+    assert_eq!(files, ["under.png", "under-03.png", "over.png"]);
+    assert_eq!(dims, [(40, 15), (20, 15), (40, 30)]);
+}
+
+#[test]
 fn overlapping_slices_keep_the_later_slice_in_html() {
     // #909: the later slice is on top; the earlier one shows only where it isn't covered.
     let dir = tmp("overlap");
@@ -709,8 +957,209 @@ fn overlapping_slices_keep_the_later_slice_in_html() {
         })
         .sum();
     assert_eq!(area, 64 * 48);
-    assert!(files.iter().any(|f| f.ends_with("images/under_01.png")), "the covered slice is cut into pieces: {files:?}");
+    // As Photoshop names subslices: the first piece keeps the name, the others add their number.
+    let under = files.iter().find(|f| f.ends_with("images/under.png")).unwrap();
+    assert_eq!(decode(under).dimensions(), (40, 15), "the covered slice is cut into pieces: {files:?}");
+    assert!(files.iter().any(|f| f.ends_with("images/under-03.png")), "{files:?}");
 }
 
 #[path = "color_table_tests.rs"]
 mod color_table_tests;
+
+/// A little-endian camera EXIF: IFD0 with Make, Orientation 6, 300 ppi and pointers to an Exif
+/// IFD (DateTimeOriginal) and a GPS IFD (GPSLatitudeRef); IFD0 links to an IFD1 thumbnail.
+fn camera_exif() -> Vec<u8> {
+    let entry = |v: &mut Vec<u8>, tag: u16, ty: u16, count: u32, value: u32| {
+        v.extend_from_slice(&tag.to_le_bytes());
+        v.extend_from_slice(&ty.to_le_bytes());
+        v.extend_from_slice(&count.to_le_bytes());
+        v.extend_from_slice(&value.to_le_bytes());
+    };
+    let (ifd0, data0) = (8u32, 8 + 2 + 7 * 12 + 4);
+    let (make, xres, yres) = (data0, data0 + 10, data0 + 18);
+    let exif_ifd = data0 + 26;
+    let date = exif_ifd + 2 + 12 + 4;
+    let gps_ifd = date + 20;
+    let ifd1 = gps_ifd + 2 + 12 + 4;
+    let mut v = b"II*\0".to_vec();
+    v.extend_from_slice(&ifd0.to_le_bytes());
+    v.extend_from_slice(&7u16.to_le_bytes());
+    entry(&mut v, 0x010F, 2, 9, make);
+    entry(&mut v, 0x0112, 3, 1, 6);
+    entry(&mut v, 282, 5, 1, xres);
+    entry(&mut v, 283, 5, 1, yres);
+    entry(&mut v, 296, 3, 1, 2);
+    entry(&mut v, 0x8769, 4, 1, exif_ifd);
+    entry(&mut v, 0x8825, 4, 1, gps_ifd);
+    v.extend_from_slice(&ifd1.to_le_bytes());
+    v.extend_from_slice(b"TestMake\0\0");
+    for _ in 0..2 {
+        v.extend_from_slice(&300u32.to_le_bytes());
+        v.extend_from_slice(&1u32.to_le_bytes());
+    }
+    v.extend_from_slice(&1u16.to_le_bytes());
+    entry(&mut v, 0x9003, 2, 20, date);
+    v.extend_from_slice(&0u32.to_le_bytes());
+    v.extend_from_slice(b"2024:05:01 10:30:00\0");
+    v.extend_from_slice(&1u16.to_le_bytes());
+    entry(&mut v, 0x0001, 2, 2, u32::from_le_bytes(*b"N\0\0\0"));
+    v.extend_from_slice(&0u32.to_le_bytes());
+    v.extend_from_slice(&1u16.to_le_bytes());
+    entry(&mut v, 0x0103, 3, 1, 6);
+    v.extend_from_slice(&0u32.to_le_bytes());
+    assert_eq!(v.len(), ifd1 as usize + 18);
+    v
+}
+
+/// The payload (after `Exif\0\0`) of the file's EXIF APP1 segment, read from the markers.
+fn exif_app1(bytes: &[u8]) -> Option<Vec<u8>> {
+    let mut i = 2;
+    while i + 4 <= bytes.len() && bytes[i] == 0xFF && bytes[i + 1] != 0xDA {
+        let len = u16::from_be_bytes([bytes[i + 2], bytes[i + 3]]) as usize;
+        let body = &bytes[i + 4..i + 2 + len];
+        if bytes[i + 1] == 0xE1 && body.starts_with(b"Exif\0\0") {
+            return Some(body[6..].to_vec());
+        }
+        i += 2 + len;
+    }
+    None
+}
+
+/// IFD0's entries (tag → inline value) and its link to the next IFD, little-endian only.
+fn ifd0(tiff: &[u8]) -> (std::collections::HashMap<u16, u32>, u32) {
+    let u16_at = |o: usize| u16::from_le_bytes([tiff[o], tiff[o + 1]]);
+    let u32_at = |o: usize| u32::from_le_bytes([tiff[o], tiff[o + 1], tiff[o + 2], tiff[o + 3]]);
+    assert_eq!(&tiff[..4], b"II*\0");
+    let at = u32_at(4) as usize;
+    let n = u16_at(at) as usize;
+    let tags = (0..n)
+        .map(|k| {
+            let e = at + 2 + k * 12;
+            let value = if u16_at(e + 2) == 3 { u32::from(u16_at(e + 8)) } else { u32_at(e + 8) };
+            (u16_at(e), value)
+        })
+        .collect();
+    (tags, u32_at(at + 2 + n * 12))
+}
+
+fn photo_session(exif: Vec<u8>) -> Session {
+    let mut s = session(8);
+    s.execute("file.fileInfo", json!({"copyright": "© Example"})).unwrap();
+    s.edit("exif", |doc, _| {
+        doc.metadata.exif = Some(std::sync::Arc::new(exif));
+        Ok(())
+    })
+    .unwrap();
+    s
+}
+
+/// #7436: Save for Web's "All" writes the photo's EXIF, as Save a Copy does: upright
+/// (Orientation 1), without the source's thumbnail and at the exported resolution. Every other
+/// choice, "All Except Camera Info" included, leaves the camera data (and GPS) out.
+#[test]
+fn save_for_web_all_writes_the_photos_exif() {
+    let dir = tmp("exif");
+    let mut s = photo_session(camera_exif());
+    let export = |s: &mut Session, metadata: &str| {
+        let path = format!("{dir}/{metadata}.jpg");
+        let r = s.execute("file.export.saveForWebLegacy", json!({"format": "jpeg", "metadata": metadata, "path": path})).unwrap();
+        (std::fs::read(&path).unwrap(), r)
+    };
+    let (all, r) = export(&mut s, "all");
+    let exif = exif_app1(&all).expect("an EXIF APP1 segment");
+    let camera = photocraft_algo::exif::read(&exif);
+    assert_eq!(camera.make.as_deref(), Some("TestMake"));
+    assert_eq!(camera.date_taken.as_deref(), Some("2024:05:01 10:30:00"));
+    let (tags, next) = ifd0(&exif);
+    assert_eq!(tags.get(&0x0112), Some(&1), "the exported pixels are already upright");
+    assert!(tags.contains_key(&0x8825), "GPS kept");
+    assert_eq!(next, 0, "the source's thumbnail is not linked");
+    assert_eq!(photocraft_codecs::exif_resolution(&exif), Some((72.0, 72.0)), "the document's resolution, not the source's 300");
+    assert!(decode(&format!("{dir}/all.jpg")).meta.xmp.unwrap_or_default().contains("Example"));
+    for m in ["none", "copyright", "copyrightAndContact", "allExceptCameraInfo"] {
+        let (bytes, r) = export(&mut s, m);
+        assert_eq!(exif_app1(&bytes), None, "{m}");
+        assert_eq!(r["warnings"], json!([]), "{m}");
+    }
+    assert_eq!(r["warnings"], json!([]), "it fits");
+    let xmp = decode(&format!("{dir}/allExceptCameraInfo.jpg")).meta.xmp.unwrap_or_default();
+    assert!(xmp.contains("Example"), "all the XMP");
+    assert_eq!(WebSettings::from_params(&json!({"metadata": "allExceptCameraInfo"}), "x").unwrap().to_params()["metadata"], "allExceptCameraInfo");
+}
+
+#[test]
+fn quick_export_all_writes_the_photos_exif() {
+    let dir = tmp("quick_exif");
+    let mut s = photo_session(camera_exif());
+    let export = |s: &mut Session, metadata: &str| {
+        s.execute("file.export.exportPreferences", json!({"quickExportFormat": "jpg", "metadata": metadata})).unwrap();
+        let path = format!("{dir}/{metadata}.jpg");
+        let r = s.execute("file.export.quickExport", json!({"path": path})).unwrap();
+        (std::fs::read(&path).unwrap(), r)
+    };
+    let (all, r) = export(&mut s, "all");
+    assert_eq!(photocraft_algo::exif::read(&exif_app1(&all).expect("EXIF")).make.as_deref(), Some("TestMake"));
+    assert_eq!(r["warnings"], json!([]));
+    assert_eq!(exif_app1(&export(&mut s, "copyright").0), None);
+    assert_eq!(exif_app1(&export(&mut s, "none").0), None);
+    s.execute("prefs.reset", json!({"path": "export"})).unwrap();
+}
+
+/// EXIF too large for its one segment is left out and said so; a truncated one doesn't panic.
+#[test]
+fn web_exif_that_does_not_fit_is_reported_and_bad_exif_is_harmless() {
+    let dir = tmp("exif_bad");
+    let mut big = camera_exif();
+    big.resize(70_000, 0);
+    let mut s = photo_session(big);
+    let path = format!("{dir}/big.jpg");
+    let r = s.execute("file.export.saveForWebLegacy", json!({"format": "jpeg", "metadata": "all", "path": path})).unwrap();
+    assert_eq!(exif_app1(&std::fs::read(&path).unwrap()), None);
+    assert!(r["warnings"][0].as_str().is_some_and(|w| w.contains("EXIF (70000 bytes)")), "{r}");
+    s.execute("file.export.exportPreferences", json!({"quickExportFormat": "jpg", "metadata": "all"})).unwrap();
+    let r = s.execute("file.export.quickExport", json!({"path": format!("{dir}/quick.jpg")})).unwrap();
+    assert!(r["warnings"][0].as_str().is_some_and(|w| w.contains("EXIF")), "{r}");
+    s.execute("prefs.reset", json!({"path": "export"})).unwrap();
+
+    for cut in [3, 9, 40, 100] {
+        let mut s = photo_session(camera_exif()[..cut].to_vec());
+        let path = format!("{dir}/cut{cut}.jpg");
+        s.execute("file.export.saveForWebLegacy", json!({"format": "jpeg", "metadata": "all", "path": path})).unwrap();
+        assert_eq!(decode(&path).dimensions(), (64, 48));
+    }
+}
+
+#[test]
+fn quick_export_exr_preserves_linear_hdr_and_alpha() {
+    use photocraft_codecs::{ChannelLayout, Format, Image, SampleType};
+    let dir = tmp("quick_exr_hdr");
+    let samples = [-0.25, 2.0, 0.125, 1.0, 4.0, 0.25, 0.5, 0.5];
+    let image = Image::from_f32(2, 1, ChannelLayout::Rgba, &samples).unwrap();
+    let bytes = photocraft_codecs::encode(&image, Format::OpenExr, &Default::default()).unwrap();
+    let doc = photocraft_io::import("hdr.exr", &bytes).unwrap().document;
+    let mut s = Session::new();
+    s.add_document(doc, Some(format!("{dir}/source.psd")));
+    for convert in [true, false] {
+        s.execute("file.export.exportPreferences", json!({"quickExportFormat": "exr", "quickExportLocation": "sameFolder", "convertToSrgb": convert})).unwrap();
+        let result = s.execute("file.export.quickExport", json!({})).unwrap();
+        assert_eq!(result["format"], "exr");
+        let path = format!("{dir}/source.exr");
+        assert_eq!(result["path"], path);
+        assert_eq!(result["bytes"].as_u64(), Some(std::fs::metadata(&path).unwrap().len()));
+        let decoded = decode(&path);
+        assert_eq!(decoded.sample_type(), SampleType::F32);
+        let actual = decoded.convert(ChannelLayout::Rgba, SampleType::F32).to_f32_samples().unwrap();
+        for (got, expected) in actual.iter().zip(samples) {
+            assert!((got - expected).abs() < 0.0001, "EXR preserves scene values: {actual:?}");
+        }
+        assert_eq!(actual.len(), samples.len());
+    }
+    // The format preference must never silently overwrite the source EXR.
+    let own = format!("{dir}/source.exr");
+    s.active_mut().unwrap().path = Some(own.clone());
+    let before = std::fs::read(&own).unwrap();
+    assert!(s.execute("file.export.quickExport", json!({})).is_err());
+    assert_eq!(std::fs::read(&own).unwrap(), before);
+    s.execute("file.export.quickExport", json!({"path": format!("{dir}/explicit.exr")})).unwrap();
+    assert_eq!(decode(&format!("{dir}/explicit.exr")).dimensions(), (2, 1));
+}

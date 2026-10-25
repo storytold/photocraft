@@ -123,9 +123,11 @@ fn choices(id: &str) -> Option<&'static [(&'static str, &'static str)]> {
         "filter.distort.zigZag" => &[("style", "pondRipples|outFromCenter|aroundCenter")],
         "filter.render.lensFlare" => &[("lens", "zoom|prime35|prime105|moviePrime")],
         "filter.render.lightingEffects" => &[("lightType", "spot|point|infinite"), ("texture", "none|red|green|blue|alpha|luminance")],
-        "filter.blur.lensBlur" => {
-            &[("shape", "hexagon|triangle|square|pentagon|heptagon|octagon"), ("depthMap", "none|transparency|layerMask"), ("distribution", "uniform|gaussian")]
-        }
+        "filter.blur.lensBlur" => &[
+            ("shape", "hexagon|triangle|square|pentagon|heptagon|octagon"),
+            ("depthMap", "none|transparency|layerMask|channel"),
+            ("distribution", "uniform|gaussian"),
+        ],
         "filter.other.hsbHsl" => &[("inputMode", "rgb|hsb|hsl"), ("rowOrder", "hsb|hsl|rgb")],
         "filter.video.deInterlace" => &[("eliminate", "oddFields|evenFields"), ("createBy", "interpolation|duplication")],
         _ => return None,

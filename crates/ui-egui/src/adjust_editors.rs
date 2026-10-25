@@ -21,7 +21,7 @@ use serde_json::{Value, json};
 use crate::PhotocraftApp;
 use crate::theme::Tokens;
 use crate::tone::{self, HistSource, Histograms};
-use crate::widgets;
+use crate::widgets::{self, hue_color};
 
 /// Kinds edited here (Selective Color and Color Lookup have their own editors; Invert has none).
 pub const KINDS: [&str; 13] = [
@@ -216,7 +216,7 @@ fn sliders(ui: &mut egui::Ui, v: &mut Value, rows: &[SliderRow]) -> Edit {
     for &(key, text, min, max, default, unit, decimals) in rows {
         let mut x = num(v, key, default).clamp(min, max);
         // A double-click on the slider puts it back to its default (Photoshop).
-        let gestures = widgets::RowGestures { reset: Some(default), wheel_step: None };
+        let gestures = widgets::RowGestures { reset: Some(default), wheel_step: None, ..Default::default() };
         let r = widgets::slider_row_prec(ui, text, &mut x, min..=max, unit, None, gestures, decimals);
         if r.changed() {
             v[key] = json!(row_value(x, min, max, decimals));
@@ -357,12 +357,33 @@ fn gradient_bar(p: &egui::Painter, r: Rect, from: Color32, to: Color32, vertical
 const CURVE_HANDLE_SIZE: f32 = 7.0;
 const CURVE_GRAPH_PADDING: f32 = 5.0;
 
+/// The room left on screen for the Curves dialog's other rows (title, channel and mode, Input and
+/// Output, eyedroppers, buttons) when its graph is as tall as it can be.
+const CURVES_CHROME: f32 = 360.0;
+/// The smallest and the default largest side of the Curves graph: 300 points was the fixed
+/// size until #8984.
+const CURVE_SIDE: (f32, f32) = (120.0, 300.0);
+
+/// The Curves graph's side (#8984): the width it is given, in the Properties panel and in the
+/// resizable dialog, and no taller than the window leaves room for beside the other rows.
+fn curve_side(ui: &egui::Ui) -> f32 {
+    let tallest = curve_side_max(ui.ctx());
+    let width = ui.available_width();
+    if width.is_finite() { width.clamp(CURVE_SIDE.0, tallest) } else { CURVE_SIDE.1 }
+}
+
+/// The largest the Curves graph gets in this window: as tall as the window leaves room for beside
+/// the dialog's other rows, and never under the old 300 points. The Curves dialog is no wider.
+pub(crate) fn curve_side_max(ctx: &egui::Context) -> f32 {
+    (ctx.content_rect().height() - CURVES_CHROME).max(CURVE_SIDE.1)
+}
+
 fn curve_graph(full: Rect, side: f32) -> Rect {
     let base = Rect::from_min_size(full.min + vec2(14.0, 0.0), vec2(side - 14.0, side - 14.0));
     Rect::from_min_max(base.min + vec2(CURVE_GRAPH_PADDING, CURVE_GRAPH_PADDING), base.max - vec2(CURVE_GRAPH_PADDING, CURVE_GRAPH_PADDING))
 }
 
-fn read_curve(v: &Value, key: &str) -> Vec<[f32; 2]> {
+pub(crate) fn read_curve(v: &Value, key: &str) -> Vec<[f32; 2]> {
     let pts: Vec<[f32; 2]> = v
         .get(key)
         .and_then(Value::as_array)
@@ -461,7 +482,7 @@ fn curves(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     let pencil = v.get("pencil").and_then(Value::as_bool).unwrap_or(false);
     let mut pts = read_curve(v, key);
     let mut map = read_map(v, key);
-    let side = ui.available_width().clamp(120.0, 300.0);
+    let side = curve_side(ui);
     ui.add_space(4.0);
     let (full, resp) = ui.allocate_exact_size(vec2(side, side + 14.0), Sense::click_and_drag());
     let graph = curve_graph(full, side);
@@ -848,19 +869,15 @@ fn threshold(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
 
 const RANGE_LABELS: [&str; 6] = ["Reds", "Yellows", "Greens", "Cyans", "Blues", "Magentas"];
 
-fn hue_color(deg: f32) -> Color32 {
-    let rgb = egui::ecolor::Hsva::new(deg.rem_euclid(360.0) / 360.0, 1.0, 1.0, 1.0).to_srgb();
-    Color32::from_rgb(rgb[0], rgb[1], rgb[2])
-}
-
 /// The Saturation slider's track: grey to the hue at full saturation (UI-217-16).
 fn saturation_track(hue_deg: f32) -> [Color32; 2] {
     [Color32::from_gray(128), hue_color(hue_deg)]
 }
 
-/// The Lightness slider's track: black, the hue, white (UI-217-16).
-fn lightness_track(hue_deg: f32) -> [Color32; 3] {
-    [Color32::BLACK, hue_color(hue_deg), Color32::WHITE]
+/// The Lightness slider's track: black, mid grey, white, whatever the hue, as in Photoshop
+/// (UI-217-16, #6539).
+fn lightness_track() -> [Color32; 3] {
+    [Color32::BLACK, Color32::from_gray(128), Color32::WHITE]
 }
 
 fn move_hue_range_handle(bounds: [f32; 4], k: usize, deg: f32) -> [f32; 4] {
@@ -885,7 +902,7 @@ fn adjusted_spectrum(v: &Value, n: usize) -> Vec<Color32> {
     let rect = photocraft_geom::Rect::new(0, 0, n as i32, 1);
     let px = (0..n)
         .map(|i| {
-            let c = egui::ecolor::Hsva::new(i as f32 / (n - 1).max(1) as f32, 1.0, 1.0, 1.0).to_rgb();
+            let c = photocraft_color::convert::hsb_to_rgb([i as f32 / (n - 1).max(1) as f32 * 360.0, 1.0, 1.0]);
             [c[0], c[1], c[2], 1.0]
         })
         .collect();
@@ -926,7 +943,8 @@ fn hue_saturation(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
             v["hue"] = json!(h.round());
         }
         e.add(Edit::of(&r));
-        // The Saturation and Lightness tracks follow the current hue, as in Photoshop (UI-217-16).
+        // The Saturation track follows the current hue; the Lightness track is a fixed
+        // black-grey-white ramp, as in Photoshop (UI-217-16).
         let sat_track = saturation_track(h);
         let mut s = num(v, "saturation", 0.0).clamp(slo, 100.0);
         let r = widgets::slider_row(ui, tl!("Saturation"), &mut s, slo..=100.0, "%", track_stops(cx, &sat_track));
@@ -934,7 +952,7 @@ fn hue_saturation(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
             v["saturation"] = json!(s.round());
         }
         e.add(Edit::of(&r));
-        let light_track = lightness_track(h);
+        let light_track = lightness_track();
         let mut l = num(v, "lightness", 0.0).clamp(-100.0, 100.0);
         let r = widgets::slider_row(ui, tl!("Lightness"), &mut l, -100.0..=100.0, "%", track_stops(cx, &light_track));
         if r.changed() {
@@ -982,8 +1000,10 @@ fn hue_saturation(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     }
     // Spectrum bars: input hues above, adjusted below; the selected range's sliders between.
     ui.add_space(6.0);
-    let w = ui.available_width().min(300.0);
+    // As wide as the sliders above, whatever the panel's width (#9242).
+    let w = ui.available_width();
     let (bars, bresp) = ui.allocate_exact_size(vec2(w, 40.0), Sense::click_and_drag());
+    ui.data_mut(|d| d.insert_temp(cx.mem.with("hs-bars"), bars));
     let top = Rect::from_min_size(bars.min, vec2(w, 10.0));
     let bottom = Rect::from_min_size(pos2(bars.left(), bars.bottom() - 10.0), vec2(w, 10.0));
     let p = ui.painter_at(bars.expand(4.0));
@@ -1095,7 +1115,7 @@ fn color_balance(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     ];
     // Photoshop: a double-click on a slider zeroes it (this tone only); the dialog's sliders step
     // with the wheel; Up/Down step the fields; Shift makes those steps 10.
-    let gestures = widgets::RowGestures { reset: Some(0.0), wheel_step: cx.dialog.then_some(1.0) };
+    let gestures = widgets::RowGestures { reset: Some(0.0), wheel_step: cx.dialog.then_some(1.0), ..Default::default() };
     let mut changed = false;
     for (i, (text, a, b)) in rows.iter().enumerate() {
         let r = Edit::of(&widgets::slider_row_with(ui, text, &mut vals[i], -100.0..=100.0, "", Some(&[*a, *b]), gestures));
@@ -1681,12 +1701,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn saturation_and_lightness_tracks_follow_the_hue() {
-        // The S/L slider tracks recolour with the hue (UI-217-16).
+    fn saturation_track_follows_the_hue() {
+        // The Saturation slider track recolours with the hue (UI-217-16).
         assert_eq!(saturation_track(0.0), [Color32::from_gray(128), hue_color(0.0)]);
         assert_ne!(saturation_track(0.0)[1], saturation_track(120.0)[1]);
         assert_eq!(saturation_track(720.0)[1], saturation_track(0.0)[1], "hue wraps");
-        assert_eq!(lightness_track(200.0), [Color32::BLACK, hue_color(200.0), Color32::WHITE]);
+    }
+
+    #[test]
+    fn lightness_track_is_black_grey_white_whatever_the_hue() {
+        // Photoshop's Lightness track does not take the hue's colour (#6539).
+        assert_eq!(lightness_track(), [Color32::BLACK, Color32::from_gray(128), Color32::WHITE]);
+        let [_, mid, _] = lightness_track();
+        assert!(mid.r() == mid.g() && mid.g() == mid.b(), "the middle stop is neutral grey");
     }
 
     /// Preferences ▸ Interface ▸ Dynamic Color Sliders: off, the colour sliders get plain tracks.

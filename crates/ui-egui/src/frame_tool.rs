@@ -64,7 +64,9 @@ fn content_layer(app: &PhotocraftApp, r: [i64; 4]) -> Option<u64> {
 
 /// Pointer input for the Frame tool. Returns true when the event was its own.
 pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) -> bool {
-    if app.ui.tool != Tool::Frame {
+    // ⌘ is the Move tool (`hold_keys::cmd_moves`): a press with it held is not this tool's,
+    // so it drags a guide or the layer (#6288). A drag already under way keeps its events.
+    if app.ui.tool != Tool::Frame || (app.ui.frame_tool.drag.is_none() && crate::canvas::event_tool(app, mods) != Tool::Frame) {
         return false;
     }
     let (square, centred) = (mods.shift, mods.alt);

@@ -202,14 +202,50 @@ pub(crate) fn export_layered(doc: &Document, opts: &ExportOptions, ctl: &photocr
     let big = doc.size.width > 30_000 || doc.size.height > 30_000;
     // The PSD exporter renders the composite we need for the TIFF itself: unmatted (the TIFF
     // keeps straight alpha) and uncompressed (its planes are interleaved below).
-    let psd_opts =
-        PsdExportOptions { force_psb: opts.force_psb || big, merged_matte: false, merged_compression: Compression::Raw, maximize_compatibility: true };
-    let (file, w) = crate::with_span(ctl, 0.0, TIFF_MODEL_DONE, |ctl| crate::psd_export::document_to_psd_interruptible(doc, &psd_opts, ctl));
+    // Layer data is written PSD-style ("Adobe Photoshop Document Data Block", 4-byte lengths), as
+    // Photoshop writes it: Photoshop does not read the PSB-style header ("... Data V0002") in a
+    // TIFF and opens only the composite, as one locked Background. The exporter's size estimate
+    // counts layer planes uncompressed, so a document with many canvas-sized layers passes 2 GB
+    // while its real layer data is a small fraction of that; it is not used here. PSB-style data
+    // is written only past 30000 px, when asked for, or when a length really overflows 32 bits.
+    let force_psb = opts.force_psb || big;
+    let psd_opts = PsdExportOptions {
+        force_psb,
+        size_limit_psb: false,
+        merged_matte: false,
+        merged_compression: Compression::Raw,
+        maximize_compatibility: true,
+        document_path: opts.document_path.clone(),
+        read_linked_files: opts.read_linked_files,
+    };
+    // TIFF has no palette, bitmap or duotone layout: the PSD model of an Indexed Color, Bitmap
+    // or Duotone document is made in its pixel format (RGB or Grayscale), which the PSD exporter
+    // otherwise writes in the document's own mode.
+    let plain;
+    let doc = if matches!(doc.mode, ColorMode::Indexed | ColorMode::Bitmap | ColorMode::Duotone) {
+        plain = Document { mode: doc.pixel_format().mode, ..doc.clone() };
+        warnings.push(format!("{:?} document written as {:?}", doc.mode, plain.mode));
+        &plain
+    } else {
+        doc
+    };
+    let (mut file, w) = crate::with_span(ctl, 0.0, TIFF_MODEL_DONE, |ctl| crate::psd_export::document_to_psd_interruptible(doc, &psd_opts, ctl));
     // A cancelled conversion stops early with an incomplete model: never encode it.
     ctl.check().map_err(|_| IoError::Cancelled)?;
     warnings.extend(w);
     let order = if codecs::tiff_writes_little_endian() { ByteOrder::Little } else { ByteOrder::Big };
-    let (layers, w) = ImageSourceData::from_psd(&file).to_bytes(order)?;
+    let (layers, w) = match ImageSourceData::from_psd(&file).to_bytes(order) {
+        Err(photocraft_psd::PsdError::LimitExceeded(_)) if !force_psb => {
+            let psb_opts = PsdExportOptions { force_psb: true, ..psd_opts };
+            let (psb, w) = crate::with_span(ctl, 0.0, TIFF_MODEL_DONE, |ctl| crate::psd_export::document_to_psd_interruptible(doc, &psb_opts, ctl));
+            ctl.check().map_err(|_| IoError::Cancelled)?;
+            warnings.extend(w);
+            warnings.push("layer data exceeds 4 GB; written with PSB-sized lengths, which some readers do not open".into());
+            file = psb;
+            ImageSourceData::from_psd(&file).to_bytes(order)?
+        }
+        r => r?,
+    };
     ctl.check().map_err(|_| IoError::Cancelled)?;
     ctl.progress(TIFF_LAYERS_DONE);
     warnings.extend(w.into_iter().map(|w| format!("layer data: {w}")));
@@ -241,7 +277,7 @@ pub(crate) fn export_layered(doc: &Document, opts: &ExportOptions, ctl: &photocr
         // importer reads it back from there unchanged. A second copy in `meta.exif` (the codec's
         // Exif directory) would be read back in its place, rebuilt without the thumbnail and IFD0
         // orientation (#1545).
-        xmp: doc.metadata.xmp.clone().filter(|_| opts.xmp == crate::XmpEmbed::All),
+        xmp: doc.metadata.xmp.as_deref().map(str::to_owned).filter(|_| opts.xmp == crate::XmpEmbed::All),
         text: if opts.xmp == crate::XmpEmbed::All { doc.metadata.text.clone() } else { Vec::new() },
         dpi: Some((doc.resolution_dpi, doc.resolution_dpi)),
         photoshop_resources: Some(resources),
@@ -278,4 +314,55 @@ pub fn strip_foreign_order_blocks(file: &mut photocraft_psd::PsdFile) -> Vec<Str
     }
     strip(&mut file.global_blocks, "document");
     warnings
+}
+
+#[cfg(test)]
+mod tests {
+    use photocraft_doc::{Color, Document, Fill, FillCache, Layer, LayerContent};
+    use photocraft_raster::Surface;
+
+    use crate::{ExportOptions, export};
+
+    /// Hidden solid fills on a 2048² canvas: the PSD size estimate counts each one as a
+    /// canvas-sized plane (16 MiB at 8 bits), so 140 of them pass 2 GB, while their real pixels
+    /// (the cached rendering, pruned to nothing) take almost no space. A layered TIFF of such a
+    /// document must still carry PSD-style layer data: Photoshop does not read the PSB-style
+    /// header in a TIFF and opens only the composite, as one locked Background.
+    fn many_cheap_fills() -> Document {
+        let mut doc = Document::new("many fills", photocraft_geom::Size::new(2048, 2048), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
+        for i in 0..140 {
+            let fill = Fill::Solid(Color::rgb(0.5, 0.25, 0.75));
+            let mut l = Layer::new(format!("Fill {i}"), LayerContent::Fill(fill.clone()));
+            l.visible = false;
+            l.fill_cache = Some(FillCache { fill, surface: Surface::new(doc.pixel_format()) });
+            doc.layers.push(l);
+        }
+        doc
+    }
+
+    #[test]
+    fn layered_tiff_ignores_the_uncompressed_size_estimate() {
+        let doc = many_cheap_fills();
+        assert!(crate::psd_export::psd_size_exceeds_limit(&doc), "the fixture must pass the 2 GB estimate");
+
+        let r = export(&doc, "x.tif", &ExportOptions { tiff_layers: true, ..Default::default() }).unwrap();
+        let (_, layers) = photocraft_codecs::tiff_photoshop_tags(&r.bytes);
+        let layers = layers.unwrap();
+        assert!(layers.starts_with(photocraft_psd::tiff::SIGNATURE), "{:?}", String::from_utf8_lossy(&layers[..36.min(layers.len())]));
+        assert!(!r.warnings.iter().any(|w| w.contains("PSB")), "{:?}", r.warnings);
+        let back = crate::import("x.tif", &r.bytes).unwrap().document;
+        assert_eq!(back.layers.len(), doc.layers.len());
+
+        // A .psd save still switches to PSB on the estimate, as before.
+        let psd = export(&doc, "x.psd", &ExportOptions::default()).unwrap();
+        assert_eq!(psd.bytes.get(4..6), Some(&[0u8, 2][..]), "PSD saves keep the size-estimate switch");
+    }
+
+    #[test]
+    fn forcing_psb_still_writes_psb_style_layer_data() {
+        let doc = many_cheap_fills();
+        let r = export(&doc, "x.tif", &ExportOptions { tiff_layers: true, force_psb: true, ..Default::default() }).unwrap();
+        let (_, layers) = photocraft_codecs::tiff_photoshop_tags(&r.bytes);
+        assert!(layers.unwrap().starts_with(photocraft_psd::tiff::SIGNATURE_PSB));
+    }
 }

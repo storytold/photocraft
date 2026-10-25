@@ -1,11 +1,75 @@
 use super::*;
 use photocraft_doc::{Knot, NamedPath, Path, Subpath};
 
+/// Compares signed-offset layout with actual PDF image operators and whole-page mirroring
+/// across scale/fit/orientation cases, while checking the source document stays unchanged.
+#[test]
+fn negative_print_positions_match_pdf_without_changing_the_document() {
+    let dir = tmp("negative-position");
+    for (scale, fit, landscape, mirrored) in
+        [(100.0, false, false, false), (175.0, false, true, false), (50.0, true, false, false), (100.0, false, false, true)]
+    {
+        let mut s = session("rgb", 8);
+        let before = s.active().unwrap().doc.clone();
+        let revision = s.active().unwrap().revision;
+        let path = format!("{dir}/{scale}-{fit}-{landscape}-{mirrored}.pdf");
+        let p = json!({"paper": "a4", "center": false, "left": -0.5, "top": -0.25,
+            "scale": scale, "scaleToFit": fit, "orientation": if landscape {"landscape"} else {"portrait"},
+            "emulsionDown": mirrored, "output": path, "send": false, "dryRun": true});
+        let preview = layout(&before, &p, "file.print").unwrap();
+        let (x, y, w, h) = preview.rect;
+        assert_eq!(x, -36.0);
+        assert!((preview.paper.1 - y - h + 18.0).abs() < 1e-9);
+        assert!((w / h - 2.0).abs() < 1e-9);
+        if !fit {
+            assert!((w - 300.0 * scale / 100.0).abs() < 1e-9);
+        } else {
+            assert!((w - (preview.paper.0 - 36.0)).abs() < 1e-9);
+        }
+        let result = s.execute("file.print", p).unwrap();
+        assert_eq!(result["sent"], false);
+        assert_eq!(result["imageRect"], json!([x, y, w, h]));
+        let pdf = std::fs::read(path).unwrap();
+        let content = pdf_content(&pdf);
+        assert!(content.contains(&format!("q {w:.3} 0 0 {h:.3} {x:.3} {y:.3} cm /Im0 Do Q")));
+        assert_eq!(content.contains(&format!("q -1 0 0 1 {:.2} 0 cm", preview.paper.0)), mirrored);
+        let after = s.active().unwrap();
+        assert_eq!(after.revision, revision);
+        assert_eq!(after.doc.size, before.size);
+        assert_eq!(after.doc.resolution_dpi, before.resolution_dpi);
+        assert_eq!(photocraft_compose::thumbnail(&before, 32).pixels, photocraft_compose::thumbnail(&after.doc, 32).pixels);
+    }
+}
+
+/// Checks inclusive signed inch limits, malformed manual offsets and overflow-prone scale
+/// or paper inputs at the shared layout boundary, without invoking a printer.
+#[test]
+fn print_position_and_geometry_bounds_reject_malformed_inputs() {
+    let s = session("rgb", 8);
+    let doc = &s.active().unwrap().doc;
+    for key in ["top", "left"] {
+        for value in [json!(-10000.0), json!(10000.0), json!(-0.125)] {
+            let mut p = json!({"center": false});
+            p[key] = value;
+            assert!(layout(doc, &p, "file.print").is_ok());
+        }
+        for value in [json!(1e308), json!(-10001.0), json!("NaN"), Value::Null] {
+            let mut p = json!({"center": false});
+            p[key] = value;
+            assert!(layout(doc, &p, "file.print").is_err());
+        }
+    }
+    assert!(layout(doc, &json!({"scale": 1e308}), "file.print").is_err());
+    assert!(layout(doc, &json!({"paper": [1e308, 792]}), "file.print").is_err());
+}
+
 fn tmp(name: &str) -> String {
     let d = std::env::temp_dir().join(format!("photocraft-print-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
-    d.to_string_lossy().into_owned()
+    // Spelt the way command results spell paths, so an expectation built with `/` matches on
+    // Windows too. Win32 takes `/` as a separator, so the directory is still usable as one.
+    d.to_string_lossy().replace('\\', "/")
 }
 
 fn session(mode: &str, depth: u32) -> Session {
@@ -205,6 +269,79 @@ fn printer_commands_answer_without_a_document_and_reject_bad_settings() {
     assert!(s.execute("file.print", json!({"printer": "Anything", "printerSettings": "0102", "send": true})).is_err());
 }
 
+/// Synthetic driver settings: a DEVMODEW of `size` bytes plus `extra` private driver bytes, every
+/// byte a pattern so a stray write shows, with `dmFields` saying only the paper size is set.
+fn devmode(size: u16, extra: u16) -> Vec<u8> {
+    let mut b: Vec<u8> = (0..usize::from(size) + usize::from(extra)).map(|i| (i % 251) as u8).collect();
+    b[68..70].copy_from_slice(&size.to_le_bytes());
+    b[70..72].copy_from_slice(&extra.to_le_bytes());
+    b[72..76].copy_from_slice(&0x2u32.to_le_bytes()); // DM_PAPERSIZE
+    b
+}
+
+/// Photoshop's Layout buttons: driver settings turned to landscape or portrait set `dmOrientation`
+/// and its `dmFields` bit, and keep every other byte, the driver's private settings included.
+#[test]
+fn turned_settings_set_the_orientation_and_keep_the_rest() {
+    for (size, extra) in [(220u16, 0u16), (220, 48)] {
+        let before = devmode(size, extra);
+        let dm = craft_print::rgb::DevMode::from_bytes(before.clone()).unwrap();
+        for (landscape, orient) in [(true, 2i16), (false, 1i16)] {
+            let after = turned_settings(&dm, landscape).unwrap().as_bytes().to_vec();
+            assert_eq!(after.len(), before.len());
+            assert_eq!(i16::from_le_bytes([after[76], after[77]]), orient, "{size}+{extra} landscape={landscape}");
+            assert_eq!(u32::from_le_bytes([after[72], after[73], after[74], after[75]]), 0x3, "DM_ORIENTATION added, DM_PAPERSIZE kept");
+            for (i, (a, b)) in after.iter().zip(&before).enumerate() {
+                if !(72..76).contains(&i) && !(76..78).contains(&i) {
+                    assert_eq!(a, b, "byte {i} changed");
+                }
+            }
+        }
+    }
+}
+
+/// The driver's paper is turned only when it is the layout's paper the other way round (within
+/// the 2 pt a driver's paper may differ by): not for the same paper, another paper or a square one.
+#[test]
+fn only_the_same_paper_the_other_way_round_is_turned() {
+    let (a3, a3_wide) = ((842.29, 1191.14), (1190.55, 841.89));
+    assert!(turned_paper(a3, a3_wide), "portrait driver, landscape layout");
+    assert!(turned_paper((1191.14, 842.29), (841.89, 1190.55)), "landscape driver, portrait layout");
+    assert!(!turned_paper(a3, (841.89, 1190.55)), "same orientation");
+    assert!(!turned_paper((595.32, 841.92), a3_wide), "an A4 driver for an A3 layout");
+    assert!(!turned_paper((612.0, 612.0), (612.0, 612.0)), "square");
+}
+
+/// `file.print.page` takes an orientation and refuses any other value before asking a printer, so
+/// the error is the same with or without one.
+#[test]
+fn printer_page_refuses_an_unknown_orientation() {
+    let mut s = Session::new();
+    for bad in [json!("sideways"), json!(2), json!(true)] {
+        let e = s.execute("file.print.page", json!({"printer": "Anything", "orientation": bad})).unwrap_err().to_string();
+        assert!(e.contains("orientation"), "{bad}: {e}");
+    }
+}
+
+/// A real driver turns: Windows' "Microsoft Print to PDF" on its default (portrait) settings, for a
+/// landscape A4 layout, gets settings turned to landscape and a wide page; a portrait layout keeps
+/// the driver's own settings. Needs that printer, so it runs by hand:
+/// `cargo test -p photocraft-engine --lib a_portrait_driver -- --ignored`.
+#[cfg(windows)]
+#[test]
+#[ignore]
+fn a_portrait_driver_turns_for_a_landscape_layout() {
+    let printer = "Microsoft Print to PDF";
+    let defaults = craft_print::rgb::default_settings(printer).unwrap();
+    let a4 = craft_print::rgb::page(printer, Some(&defaults)).unwrap().paper;
+    let (settings, page) = settings_for_layout(printer, None, (a4.1, a4.0)).unwrap();
+    assert!(settings.is_some(), "turned settings come back");
+    assert!((page.paper.0 - a4.1).abs() <= 2.0 && (page.paper.1 - a4.0).abs() <= 2.0, "wide: {:?}", page.paper);
+    let (settings, page) = settings_for_layout(printer, None, a4).unwrap();
+    assert!(settings.is_none(), "nothing to turn");
+    assert!((page.paper.0 - a4.0).abs() <= 2.0, "{:?}", page.paper);
+}
+
 #[test]
 fn printer_profile_can_be_an_installed_icc_file() {
     let dir = tmp("icc");
@@ -222,6 +359,48 @@ fn printer_profile_can_be_an_installed_icc_file() {
     assert!(s.execute("file.print", json!({"dryRun": true, "colorHandling": "photocraftManages", "printerProfile": format!("{dir}/missing.icc")})).is_err());
     let _ = std::fs::remove_file(r["pdf"].as_str().unwrap());
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #7410: the settings of the last print survive a relaunch, as Photoshop's do. They are kept in
+/// the preferences (without the output, dry-run and send choices), and a new session with those
+/// preferences, before printing anything, repeats them with Print One Copy.
+#[test]
+fn the_last_print_settings_survive_a_relaunch() {
+    let mut s = session("rgb", 8);
+    assert!(last_print(&s).is_none());
+    s.execute("file.print", json!({"dryRun": true, "copies": 3, "paper": "a5", "scale": 50, "intent": "perceptual"})).unwrap();
+    let kept = s.prefs().dialogs.get(REMEMBERED).cloned().expect("kept in the preferences");
+    assert_eq!((&kept["paper"], &kept["scale"], &kept["intent"]), (&json!("a5"), &json!(50), &json!("perceptual")));
+    assert!(kept.get("dryRun").is_none() && kept.get("output").is_none() && kept.get("send").is_none(), "{kept}");
+    // A relaunch: a new session with these preferences, nothing printed in it yet.
+    let mut t = session("rgb", 8);
+    t.prefs.edit(|p| {
+        p.dialogs.insert(REMEMBERED.into(), kept.clone());
+    });
+    assert_eq!(last_print(&t), Some(kept));
+    let r = t.execute("file.printOneCopy", json!({"dryRun": true})).unwrap();
+    assert_eq!(r["copies"], 1);
+    assert_eq!(r["paper"], json!([419.53, 595.28]));
+    assert_eq!(r["scale"], 50.0);
+}
+
+/// #7410: a printer remembered from an earlier session that the print server no longer lists is
+/// dropped before Print One Copy repeats the settings (with its driver settings), so the default
+/// printer takes the job; a listed one (in any case) stays, and an empty list can't tell.
+#[test]
+fn a_vanished_remembered_printer_falls_back_to_the_default() {
+    let settings = || json!({"printer": "Office", "printerSettings": "00ff", "paper": "a5"});
+    let mut q = settings();
+    drop_vanished_printer(&mut q, &["Studio", "Lab"]);
+    assert_eq!(q, json!({"paper": "a5"}), "gone: the default printer takes it");
+    for listed in [&["Studio", "office"][..], &[][..]] {
+        let mut q = settings();
+        drop_vanished_printer(&mut q, listed);
+        assert_eq!(q, settings(), "{listed:?}");
+    }
+    let mut q = json!({"printer": "", "paper": "a5"});
+    drop_vanished_printer(&mut q, &["Studio"]);
+    assert_eq!(q, json!({"printer": "", "paper": "a5"}), "the default printer stays the default");
 }
 
 #[test]
@@ -254,7 +433,12 @@ fn package_copies_links_and_relinks() {
     let copied = format!("{dir}/pkg/Print Me/Links/art.png");
     assert_eq!(r["links"], json!([copied]));
     assert!(std::path::Path::new(&copied).is_file());
+    // Reported paths are `/`-spelt on every platform, not the native separator up to `dir` and
+    // `/` after it: a client hands them back to the control channel, which takes only `/`.
     let docp = r["document"].as_str().unwrap();
+    for p in [r["folder"].as_str().unwrap(), docp, r["links"][0].as_str().unwrap()] {
+        assert!(!p.contains('\\'), "{p}");
+    }
     assert!(docp.ends_with("Print Me/Print Me.pcraft"));
     let back = photocraft_io::import("Print Me.pcraft", &std::fs::read(docp).unwrap()).unwrap().document;
     let linked: Vec<String> = back
@@ -277,6 +461,72 @@ fn package_copies_links_and_relinks() {
             .iter()
             .any(|(_, _, l)| matches!(&l.content, LayerContent::Smart(so) if matches!(&so.source, SmartSource::Linked { path } if *path == link)))
     );
+}
+
+/// Links whose names collide get distinct copies, even when a renamed copy's name is already
+/// another link's name (`b/2-x.png` copied before the third `x.png` would be renamed to it).
+#[test]
+fn package_never_overwrites_one_link_copy_with_another() {
+    let dir = tmp("package-collide");
+    let mut s = session("rgb", 8);
+    let mut links = Vec::new();
+    for (sub, name, colour) in [("a", "x.png", "#ff0000"), ("b", "2-x.png", "#00ff00"), ("c", "x.png", "#0000ff")] {
+        std::fs::create_dir_all(format!("{dir}/{sub}")).unwrap();
+        let link = format!("{dir}/{sub}/{name}");
+        let mut src = Session::new();
+        src.execute("file.new", json!({"width": 4, "height": 4, "background": colour})).unwrap();
+        crate::file_cmds::save_doc(&src.active().unwrap().doc, &link, None).unwrap();
+        s.execute("file.placeLinked", json!({"path": link})).unwrap();
+        links.push(std::fs::read(&link).unwrap());
+    }
+    let r = s.execute("file.package", json!({"dir": format!("{dir}/pkg")})).unwrap();
+    let copies: Vec<&str> = r["links"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
+    assert_eq!(copies.len(), 3);
+    let unique: std::collections::HashSet<&&str> = copies.iter().collect();
+    assert_eq!(unique.len(), 3, "{copies:?}");
+    for (copy, bytes) in copies.iter().zip(&links) {
+        assert_eq!(&std::fs::read(copy).unwrap(), bytes, "{copy}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A second package into the same folder copies its links beside the first one's, never over them.
+#[test]
+fn package_keeps_files_already_in_links() {
+    let dir = tmp("package-again");
+    let link = format!("{dir}/art.png");
+    let mut src = Session::new();
+    src.execute("file.new", json!({"width": 4, "height": 4, "background": "#ff0000"})).unwrap();
+    crate::file_cmds::save_doc(&src.active().unwrap().doc, &link, None).unwrap();
+    let mut s = session("rgb", 8);
+    s.execute("file.placeLinked", json!({"path": link})).unwrap();
+    let first = s.execute("file.package", json!({"dir": format!("{dir}/pkg")})).unwrap();
+    let first = first["links"][0].as_str().unwrap().to_string();
+    let kept = std::fs::read(&first).unwrap();
+    let second = s.execute("file.package", json!({"dir": format!("{dir}/pkg")})).unwrap();
+    let second = second["links"][0].as_str().unwrap();
+    assert_ne!(second, first);
+    assert!(second.ends_with("Links/0-art.png"), "{second}");
+    assert_eq!(std::fs::read(&first).unwrap(), kept);
+    assert_eq!(std::fs::read(second).unwrap(), kept);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A missing link placed twice is reported once.
+#[test]
+fn package_lists_a_missing_link_once() {
+    let dir = tmp("package-missing-once");
+    let link = format!("{dir}/gone.png");
+    let mut src = Session::new();
+    src.execute("file.new", json!({"width": 4, "height": 4})).unwrap();
+    crate::file_cmds::save_doc(&src.active().unwrap().doc, &link, None).unwrap();
+    let mut s = session("rgb", 8);
+    s.execute("file.placeLinked", json!({"path": link})).unwrap();
+    s.execute("file.placeLinked", json!({"path": link})).unwrap();
+    std::fs::remove_file(&link).unwrap();
+    let r = s.execute("file.package", json!({"dir": format!("{dir}/pkg")})).unwrap();
+    assert_eq!(r["missing"], json!([link]));
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -360,7 +610,7 @@ fn spool_transport_streams_pdf_and_propagates_refusal() {
         let printed = &s.documents().iter().find(|st| st.doc.id == source).unwrap().doc;
         assert_eq!((printed.size.width, printed.size.height), (150, 300), "print hook ran on the source document");
         assert_eq!(out["sent"], true);
-        assert_eq!(out["spooler"], "request id is Office-42");
+        assert_eq!((out["spooler"].as_str(), out["backend"].as_str()), (Some("request id is Office-42"), Some("lp")));
         assert!(out["pdf"].is_null(), "spool-only printing leaves no diagnostic PDF");
         let pdf = std::fs::read(format!("{dir}/received.pdf")).unwrap();
         assert!(pdf.starts_with(b"%PDF-1.4"));
@@ -433,4 +683,546 @@ fn printers_lists_the_spooler_destinations_without_a_document() {
         Some(d) => assert!(list.iter().any(|p| p["name"] == d && p["default"] == true)),
         None => assert!(list.iter().all(|p| p["default"] == false)),
     }
+}
+
+/// Spooling tests run in a child process: `disable_printing` is process-wide and a test above
+/// sets it, and CI sets `PHOTOCRAFT_NO_PRINT` for the whole shell. True in the child, which runs
+/// the test body; the parent starts the child and checks that it passed.
+fn in_child(test: &str, envs: &[(&str, &str)]) -> bool {
+    const CHILD: &str = "PHOTOCRAFT_TEST_PRINT_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        return true;
+    }
+    let mut cmd = std::process::Command::new(std::env::current_exe().unwrap());
+    cmd.args(["--exact", test, "--nocapture"]).env(CHILD, "1").env_remove("PHOTOCRAFT_NO_PRINT");
+    for (k, v) in envs {
+        cmd.env(k, v);
+    }
+    // Bounded: a child stuck in a printer dialog or a driver must not hang the suite.
+    let mut child = cmd.stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn().unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break Some(status);
+        }
+        if std::time::Instant::now() > deadline {
+            let _ = child.kill();
+            break None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    let out = child.wait_with_output().unwrap();
+    assert!(
+        status.is_some_and(|s| s.success()),
+        "{}\nstdout: {}\nstderr: {}",
+        if status.is_none() { "the child did not finish within 120 s and was killed" } else { "the child failed" },
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    false
+}
+
+/// A spooler that keeps every job it gets.
+fn recording_spooler(preferred: bool, seen: &std::sync::Arc<std::sync::Mutex<Vec<PrintJob>>>) -> Spooler {
+    let seen = std::sync::Arc::clone(seen);
+    Spooler {
+        name: "test",
+        preferred,
+        run: std::sync::Arc::new(move |job: &PrintJob| {
+            seen.lock().unwrap().push(job.clone());
+            Ok("queued".into())
+        }),
+    }
+}
+
+#[test]
+fn a_preferred_app_spooler_takes_the_job() {
+    if !in_child("print_cmds::tests::a_preferred_app_spooler_takes_the_job", &[]) {
+        return;
+    }
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut s = session("rgb", 8);
+    s.print_spooler = Some(recording_spooler(true, &seen));
+    let r = s.execute("file.print", json!({"copies": 2, "paper": "a4", "orientation": "landscape"})).unwrap();
+    assert_eq!((r["sent"].as_bool(), r["backend"].as_str(), r["spooler"].as_str()), (Some(true), Some("test"), Some("queued")));
+    assert!(r["pdf"].is_null(), "{r}");
+    let jobs = seen.lock().unwrap();
+    let job = &jobs[0];
+    assert!(job.pdf.starts_with(b"%PDF-1.4"));
+    assert_eq!((job.copies, job.title.as_str(), job.printer.as_deref(), job.landscape), (2, "Print Me.psd", None, true));
+    assert!((job.paper.0 - 841.89).abs() < 0.01 && (job.paper.1 - 595.28).abs() < 0.01);
+    drop(jobs);
+    // A named print server asks for the IPP route, preferred spooler or not.
+    let e = s.execute("file.print", json!({"printServer": "127.0.0.1:1"})).unwrap_err().to_string();
+    assert!(e.contains("no print server at 127.0.0.1:1") || e.contains("not available on Windows"), "{e}");
+    assert_eq!(seen.lock().unwrap().len(), 1);
+    // "output" keeps the file and does not spool unless asked.
+    let out = format!("{}/out.pdf", tmp("output"));
+    let r = s.execute("file.print", json!({"output": out})).unwrap();
+    assert_eq!((r["sent"].as_bool(), r["pdf"].as_str()), (Some(false), Some(out.as_str())));
+    assert!(std::path::Path::new(&out).exists());
+}
+
+#[cfg(not(target_os = "windows"))]
+mod cups {
+    use super::*;
+    use photocraft_ipp::{
+        Attribute, OP_CUPS_GET_CLASSES, OP_CUPS_GET_DEFAULT, OP_CUPS_GET_PRINTERS, OP_PRINT_JOB, Printer, Request, TAG_JOB_GROUP, TAG_NAME, TAG_PRINTER_GROUP,
+    };
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::sync::mpsc;
+
+    fn printer(name: &str, is_default: bool) -> Printer {
+        Printer { name: name.into(), info: String::new(), state: 3, accepting_jobs: true, is_default, is_class: false }
+    }
+
+    #[test]
+    fn the_printer_is_the_requested_one_else_the_default_else_the_only_one() {
+        let two = [printer("Office", false), printer("Lab", true)];
+        assert_eq!(resolve_printer(None, Some("Lab"), &two).ok(), Some("Lab".into()));
+        assert_eq!(resolve_printer(Some("office"), Some("Lab"), &two).ok(), Some("Office".into()));
+        assert_eq!(resolve_printer(None, None, &two[..1]).ok(), Some("Office".into()));
+        match resolve_printer(None, None, &two) {
+            Err(SpoolError::Failed(e)) => assert!(e.contains("no default printer") && e.contains("Office, Lab"), "{e}"),
+            _ => panic!("several printers and no default must fail"),
+        }
+        match resolve_printer(Some("Nope"), Some("Lab"), &two) {
+            Err(SpoolError::Failed(e)) => assert!(e.contains("`Nope`") && e.contains("Office, Lab"), "{e}"),
+            _ => panic!("an unknown printer must fail"),
+        }
+        match resolve_printer(None, None, &[]) {
+            Err(SpoolError::NoRoute(e)) => assert!(e.contains("no printer is set up"), "{e}"),
+            _ => panic!("no printers is no route"),
+        }
+        // A printer asked for by name on a server without any is a failure, not a missing route.
+        match resolve_printer(Some("Office"), None, &[]) {
+            Err(SpoolError::Failed(e)) => assert!(e.contains("`Office`") && e.contains("none"), "{e}"),
+            _ => panic!("a named printer never falls through"),
+        }
+        // A stale default that the server no longer lists falls through to the only printer.
+        assert_eq!(resolve_printer(None, Some("Gone"), &two[..1]).ok(), Some("Office".into()));
+    }
+
+    /// What the fake received per request: op, attributes, document.
+    type Seen = (u16, Vec<Attribute>, Vec<u8>);
+
+    /// A fake CUPS on a TCP port: lists `printers` and `classes`, names `default`, accepts jobs
+    /// as id 42. Answers for as long as the test process lives.
+    fn fake_cups(printers: &'static [&'static str], classes: &'static [&'static str], default: Option<&'static str>) -> (String, mpsc::Receiver<Seen>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let server = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(stream) = stream else { break };
+                let mut reader = BufReader::new(stream);
+                let (mut first, mut line, mut len) = (String::new(), String::new(), 0usize);
+                loop {
+                    line.clear();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                    if first.is_empty() {
+                        first = line.clone();
+                    }
+                    if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                        len = v.trim().parse().unwrap();
+                    }
+                }
+                if first.is_empty() {
+                    continue; // a reachability probe
+                }
+                let mut body = vec![0u8; len];
+                reader.read_exact(&mut body).unwrap();
+                let (op, attrs, doc) = photocraft_ipp::parse_request(&body).unwrap();
+                let list = |names: &[&str]| {
+                    if names.is_empty() {
+                        return Request::new(0x0406, 1).end();
+                    }
+                    let mut r = Request::new(0, 1);
+                    for p in names {
+                        r.group(TAG_PRINTER_GROUP);
+                        r.attr(TAG_NAME, "printer-name", p.as_bytes());
+                    }
+                    r.end()
+                };
+                let reply = match op {
+                    OP_CUPS_GET_PRINTERS => list(printers),
+                    OP_CUPS_GET_CLASSES => list(classes),
+                    OP_CUPS_GET_DEFAULT => match default {
+                        Some(d) => {
+                            let mut r = Request::new(0, 1);
+                            r.group(TAG_PRINTER_GROUP);
+                            r.attr(TAG_NAME, "printer-name", d.as_bytes());
+                            r.end()
+                        }
+                        None => Request::new(0x0406, 1).end(),
+                    },
+                    OP_PRINT_JOB => {
+                        let mut r = Request::new(0, 1);
+                        r.group(TAG_JOB_GROUP);
+                        r.integer("job-id", 42);
+                        r.end()
+                    }
+                    _ => Request::new(0x0501, 1).end(),
+                };
+                let _ = tx.send((op, attrs, doc));
+                let mut out = reader.into_inner();
+                let _ = out.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/ipp\r\nContent-Length: {}\r\n\r\n", reply.len()).as_bytes());
+                let _ = out.write_all(&reply);
+                let _ = out.flush();
+            }
+        });
+        (server, rx)
+    }
+
+    #[test]
+    fn a_named_server_is_printed_to_over_ipp() {
+        if !in_child("print_cmds::tests::cups::a_named_server_is_printed_to_over_ipp", &[]) {
+            return;
+        }
+        let (server, rx) = fake_cups(&["Office"], &["Lab"], Some("Lab"));
+        let mut s = session("rgb", 8);
+        let r = s.execute("file.print", json!({"printServer": server, "copies": 3})).unwrap();
+        assert_eq!((r["sent"].as_bool(), r["backend"].as_str(), r["spooler"].as_str()), (Some(true), Some("ipp"), Some("job 42 on Lab")));
+        assert!(r["pdf"].is_null());
+        let job = std::iter::from_fn(|| rx.try_recv().ok()).find(|(op, _, _)| *op == OP_PRINT_JOB).expect("a Print-Job request");
+        let attr = |name: &str| job.1.iter().find(|a| a.name == name).unwrap_or_else(|| panic!("{name}"));
+        assert!(attr("printer-uri").text().ends_with("/classes/Lab"), "{}", attr("printer-uri").text());
+        assert_eq!(
+            (attr("copies").int(), attr("job-name").text().as_str(), attr("document-format").text().as_str()),
+            (Some(3), "Print Me.psd", "application/pdf")
+        );
+        assert!(job.2.starts_with(b"%PDF-1.4"));
+        // The requested printer, in any case; an unknown one names the choices.
+        let r = s.execute("file.print", json!({"printServer": server, "printer": "office"})).unwrap();
+        assert_eq!(r["spooler"], "job 42 on Office");
+        let job = std::iter::from_fn(|| rx.try_recv().ok()).filter(|(op, _, _)| *op == OP_PRINT_JOB).last().expect("the second Print-Job");
+        assert!(job.1.iter().any(|a| a.name == "printer-uri" && a.text().ends_with("/printers/Office")));
+        let e = s.execute("file.print", json!({"printServer": server, "printer": "Nope"})).unwrap_err().to_string();
+        assert!(e.contains("`Nope`") && e.contains("Office, Lab"), "{e}");
+        // Printers can be listed.
+        let r = s.execute("file.printers", json!({"printServer": server})).unwrap();
+        let names: Vec<&str> = r["printers"].as_array().unwrap().iter().map(|p| p["name"].as_str().unwrap()).collect();
+        assert_eq!((names, r["default"].as_str()), (vec!["Office", "Lab"], Some("Lab")));
+        assert_eq!(
+            (r["printers"][1]["default"].as_bool(), r["printers"][1]["class"].as_bool(), r["printers"][0]["class"].as_bool()),
+            (Some(true), Some(true), Some(false))
+        );
+    }
+
+    #[test]
+    fn without_a_printer_the_app_spooler_takes_over() {
+        if !in_child("print_cmds::tests::cups::without_a_printer_the_app_spooler_takes_over", &[]) {
+            return;
+        }
+        let (server, _rx) = fake_cups(&[], &[], None);
+        let mut s = session("gray", 8);
+        let e = s.execute("file.print", json!({"printServer": server})).unwrap_err().to_string();
+        assert!(e.contains("no printer is set up"), "{e}");
+        // Asking for a printer by name never falls through to another route.
+        let e = s.execute("file.print", json!({"printServer": server, "printer": "Office"})).unwrap_err().to_string();
+        assert!(e.contains("`Office`"), "{e}");
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        s.print_spooler = Some(recording_spooler(false, &seen));
+        let r = s.execute("file.print", json!({"printServer": server})).unwrap();
+        assert_eq!((r["backend"].as_str(), r["spooler"].as_str()), (Some("test"), Some("queued")));
+        assert_eq!(seen.lock().unwrap().len(), 1);
+        // An unreachable named server is a failure, not a missing route.
+        let e = s.execute("file.print", json!({"printServer": "127.0.0.1:1"})).unwrap_err().to_string();
+        assert!(e.contains("no print server at"), "{e}");
+        let r = s.execute("file.printers", json!({"printServer": "127.0.0.1:1"})).unwrap();
+        assert!(r["printers"].as_array().unwrap().is_empty() && r["note"].as_str().unwrap().contains("no print server"));
+    }
+
+    /// The Flatpak case: no `lp` on the path, so the job goes to the system's CUPS over IPP
+    /// (`CUPS_SERVER` names it here), and with no print server at all to the app's spooler.
+    /// Runs in a child process, since the path is process-wide.
+    #[test]
+    fn without_lp_the_job_goes_over_ipp_then_to_the_app_spooler() {
+        const CHILD: &str = "PHOTOCRAFT_TEST_PRINT_NO_LP";
+        if std::env::var_os(CHILD).is_some() {
+            let mut s = session("rgb", 8);
+            let r = s.execute("file.print", json!({"copies": 2})).unwrap();
+            assert_eq!((r["sent"].as_bool(), r["backend"].as_str(), r["spooler"].as_str()), (Some(true), Some("ipp"), Some("job 42 on Office")));
+            let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            s.print_spooler = Some(recording_spooler(false, &seen));
+            // The IPP route first, then the app's spooler only when there is no server.
+            let r = s.execute("file.print", json!({})).unwrap();
+            assert_eq!(r["backend"], "ipp");
+            assert!(seen.lock().unwrap().is_empty());
+            // (CUPS_SERVER is read per job; an unreachable one is no route.)
+            let r = s.execute("file.print", json!({"printServer": "127.0.0.1:1"})).unwrap_err().to_string();
+            assert!(r.contains("no print server at"), "{r}");
+            println!("child ok");
+            return;
+        }
+        let (server, rx) = fake_cups(&["Office"], &[], Some("Office"));
+        let no_lp = tempfile::tempdir().unwrap();
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "print_cmds::tests::cups::without_lp_the_job_goes_over_ipp_then_to_the_app_spooler", "--nocapture"])
+            .env(CHILD, "1")
+            .env("PATH", no_lp.path())
+            .env("CUPS_SERVER", &server)
+            .env_remove("PHOTOCRAFT_NO_PRINT")
+            .output()
+            .unwrap();
+        let (stdout, stderr) = (String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+        assert!(out.status.success() && stdout.contains("child ok"), "stdout: {stdout}\nstderr: {stderr}");
+        let jobs = std::iter::from_fn(|| rx.try_recv().ok()).filter(|(op, _, _)| *op == OP_PRINT_JOB).count();
+        assert_eq!(jobs, 2, "both prints reached the fake CUPS");
+    }
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn windows_pdf_component_is_detected_by_loading_its_dll() {
+    // #5884: a Windows image without a loadable Windows.Data.Pdf.dll reports an error instead of
+    // aborting at the delay-load stub.
+    let dir = tempfile::tempdir().unwrap();
+    let dll = windows_pdf_dll(dir.path());
+    assert!(!windows_pdf_loads(&dll));
+    // Present but not loadable counts as missing.
+    std::fs::create_dir(dir.path().join("System32")).unwrap();
+    std::fs::write(&dll, b"MZ").unwrap();
+    assert!(!windows_pdf_loads(&dll));
+    let root = std::env::var_os("SystemRoot").unwrap();
+    // The real DLL may be missing or unloadable on a stripped image; the check follows the loader.
+    let system = windows_pdf_dll(std::path::Path::new(&root));
+    assert_eq!(require_windows_pdf().is_ok(), windows_pdf_loads(&system));
+}
+
+#[cfg(not(target_os = "windows"))]
+#[test]
+fn the_windows_pdf_check_is_a_no_op_elsewhere() {
+    assert!(require_windows_pdf().is_ok());
+}
+
+/// A 500 × 1000 pt document (72 ppi) on A3 (841.89 × 1190.55 pt): its height sets the fit.
+fn a3_layout(extra: Value) -> Result<PrintLayout> {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 500, "height": 1000, "resolution": 72})).unwrap();
+    let mut p = json!({"paper": "a3", "scaleToFit": true});
+    if let (Some(p), Some(extra)) = (p.as_object_mut(), extra.as_object()) {
+        p.extend(extra.clone());
+    }
+    layout(&s.active().unwrap().doc, &p, "file.print")
+}
+
+#[test]
+fn scale_to_fit_fills_a_borderless_printable_area() {
+    let (pw, ph) = (841.89, 1190.55);
+    // Without a printable area, the fixed 18 pt margin stays (CUPS, PDF).
+    let l = a3_layout(json!({})).unwrap();
+    assert!((l.scale - (ph - 36.0) / 1000.0).abs() < 1e-9, "{l:?}");
+    // Borderless: the driver reports the whole sheet (#7782: a Canon PRO-1000 reports its A3 as
+    // 842.29 × 1191.14 pt), and the image reaches the paper's edges.
+    let l = a3_layout(json!({"printable": [0.0, 0.0, 842.29, 1191.14]})).unwrap();
+    assert!((l.scale - ph / 1000.0).abs() < 1e-9, "{l:?}");
+    let (x, y, w, h) = l.rect;
+    assert!(y.abs() < 1e-9 && (h - ph).abs() < 1e-9 && (x - (pw - w) / 2.0).abs() < 1e-9, "{l:?}");
+}
+
+#[test]
+fn scale_to_fit_stays_inside_an_uneven_printable_area() {
+    let (pw, ph) = (841.89, 1190.55);
+    // 17 pt left and right, 14 pt at the top, 48 pt at the bottom (from the top-left, as
+    // `file.print.page` reports it). The layout's rect has its origin at the bottom-left.
+    let l = a3_layout(json!({"printable": [17.0, 14.0, pw - 34.0, ph - 62.0]})).unwrap();
+    assert!((l.scale - (ph - 62.0) / 1000.0).abs() < 1e-9, "{l:?}");
+    let (x, y, w, h) = l.rect;
+    assert!((y - 48.0).abs() < 1e-9 && (y + h - (ph - 14.0)).abs() < 1e-9, "fills the printable height: {l:?}");
+    assert!((x - (pw - w) / 2.0).abs() < 1e-9, "centred between equal side margins: {l:?}");
+    // Crop and registration marks keep their 36 pt inset, inside the printable area.
+    let l = a3_layout(json!({"printable": [17.0, 14.0, pw - 34.0, ph - 62.0], "cornerCropMarks": true})).unwrap();
+    assert!((l.scale - (ph - 62.0 - 72.0) / 1000.0).abs() < 1e-9, "{l:?}");
+    assert!((l.rect.1 - 84.0).abs() < 1e-9, "{l:?}");
+    // Scale to fit off: the printable area changes nothing.
+    let l = a3_layout(json!({"printable": [17.0, 14.0, pw - 34.0, ph - 62.0], "scaleToFit": false})).unwrap();
+    assert_eq!(l, a3_layout(json!({"scaleToFit": false})).unwrap());
+}
+
+#[test]
+fn a_bad_printable_area_is_refused() {
+    let portrait = json!([0.0, 0.0, 842.29, 1191.14]);
+    for bad in [
+        json!([0, 0, 100]),
+        json!([0, 0, 0, 100]),
+        json!([0, 0, 100, -5]),
+        json!("whole"),
+        json!([2000, 0, 100, 100]),
+        json!([0, "oops", 0, 842.29, 1191.14]),
+        json!([0, 0, 842.29, null]),
+    ] {
+        assert!(a3_layout(json!({ "printable": bad })).is_err(), "{bad}");
+    }
+    // A portrait sheet's area on a landscape layout is another paper, not a rounding error.
+    assert!(a3_layout(json!({"printable": portrait, "orientation": "landscape"})).is_err());
+}
+
+#[test]
+fn emulsion_down_fits_the_mirrored_printable_area() {
+    let (pw, ph) = (841.89, 1190.55);
+    // 10 pt on the left, 40 pt on the right of the sheet as the driver sees it. The page is
+    // mirrored as it prints, so the image box (before mirroring) must fit the mirror image.
+    // A wide image, so the printable width sets the fit.
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 1000, "height": 500, "resolution": 72})).unwrap();
+    let p = json!({"paper": "a3", "scaleToFit": true, "printable": [10.0, 0.0, pw - 50.0, ph], "emulsionDown": true});
+    let l = layout(&s.active().unwrap().doc, &p, "file.print").unwrap();
+    let (x, _, w, _) = l.rect;
+    let printed = (pw - x - w, pw - x);
+    assert!(printed.0 >= 10.0 - 1e-9 && printed.1 <= pw - 40.0 + 1e-9, "printed at {printed:?}: {l:?}");
+}
+
+/// A native print fits only the driver's area: one the caller passed is dropped when the
+/// driver can't give one for this paper (no such paper here, or no driver at all).
+#[test]
+fn a_native_print_drops_a_printable_area_the_driver_did_not_give() {
+    let p = with_driver_printable(&json!({"paper": [500.0, 500.0], "printable": [0.0, 0.0, 100.0, 100.0], "scaleToFit": true}));
+    assert!(p.get("printable").is_none(), "{p}");
+    assert_eq!(p["paper"], json!([500.0, 500.0]));
+}
+
+#[test]
+fn a_print_uses_the_printable_area_but_does_not_remember_it() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 500, "height": 1000, "resolution": 72})).unwrap();
+    let r = s.execute("file.print", json!({"paper": "a3", "scaleToFit": true, "printable": [0.0, 0.0, 842.29, 1191.14], "dryRun": true})).unwrap();
+    assert!((r["scale"].as_f64().unwrap() - 119.055).abs() < 1e-6, "{r}");
+    // The next print (Print One Copy, or the dialog on another printer or to PDF) reads its own.
+    let last = last_print(&s).unwrap();
+    assert!(last.get("printable").is_none() && last["scaleToFit"] == true, "{last}");
+}
+
+#[test]
+fn a_rejected_printable_area_fails_the_print_and_changes_nothing() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 500, "height": 1000, "resolution": 72})).unwrap();
+    s.execute("file.print", json!({"paper": "a3", "scale": 50, "dryRun": true})).unwrap();
+    let before = (last_print(&s), s.prefs.get().dialogs.get(REMEMBERED).cloned(), s.active().unwrap().doc.clone());
+    for printable in [json!([2000, 0, 100, 100]), json!([0, "oops", 0, 842.29, 1191.14])] {
+        let r = s.execute("file.print", json!({"paper": "a3", "scaleToFit": true, "printable": printable, "dryRun": true}));
+        assert!(r.is_err(), "{printable}: {r:?}");
+    }
+    assert!(before == (last_print(&s), s.prefs.get().dialogs.get(REMEMBERED).cloned(), s.active().unwrap().doc.clone()));
+    // A print at a manual scale doesn't read the area, so a stale one doesn't fail it.
+    let r = s.execute("file.print", json!({"paper": "a3", "scale": 50, "printable": [0.0, 0.0, 842.29, 1191.14], "orientation": "landscape", "dryRun": true}));
+    assert!(r.is_ok(), "{r:?}");
+    // Marks need room only to fit: a small manual scale in a 60 pt-wide area prints.
+    let r = s.execute("file.print", json!({"paper": "a3", "scale": 5, "printable": [0, 0, 60, 1191.14], "cornerCropMarks": true, "dryRun": true}));
+    assert!(r.is_ok(), "{r:?}");
+    let r = s.execute("file.print", json!({"paper": "a3", "scaleToFit": true, "printable": [0, 0, 60, 1191.14], "cornerCropMarks": true, "dryRun": true}));
+    assert!(r.is_err(), "{r:?}");
+}
+
+#[test]
+fn package_of_a_document_named_after_a_windows_device_is_written() {
+    // On Windows a folder named `nul` is the NUL device: the save failed with "path not found".
+    let dir = tmp("package-device-name");
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 8, "name": "nul.psd"})).unwrap();
+    let r = s.execute("file.package", json!({"dir": format!("{dir}/pkg")})).unwrap();
+    assert_eq!(r["folder"].as_str().unwrap(), format!("{dir}/pkg/nul_"));
+    let document = r["document"].as_str().unwrap();
+    assert!(document.ends_with("pkg/nul_/nul_.pcraft"), "{document}");
+    assert!(std::path::Path::new(document).is_file());
+}
+
+/// A dry-run print to `name`.pdf with `extra` params; returns the result and the PDF content stream.
+fn print_with(s: &mut Session, dir: &str, name: &str, extra: Value) -> (Value, Vec<u8>) {
+    let mut p = json!({"output": format!("{dir}/{name}.pdf"), "dryRun": true, "paper": "a4", "center": false, "left": 1.0, "top": 1.0});
+    for (k, v) in extra.as_object().unwrap() {
+        p[k] = v.clone();
+    }
+    let r = s.execute("file.print", p).unwrap();
+    let pdf = std::fs::read(r["pdf"].as_str().unwrap()).unwrap();
+    (r, pdf)
+}
+
+#[test]
+fn zero_bleed_prints_exactly_as_before() {
+    let mut s = session("rgb", 8);
+    let dir = tmp("bleed-zero");
+    let (plain, a) = print_with(&mut s, &dir, "plain", json!({"cornerCropMarks": true}));
+    let (zero, b) = print_with(&mut s, &dir, "zero", json!({"cornerCropMarks": true, "bleed": 0.0}));
+    assert_eq!(a, b, "bleed 0 must not change a single byte");
+    assert_eq!(plain["bleed"], 0.0);
+    assert_eq!(zero["bleed"], 0.0);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn bleed_puts_corner_crop_marks_on_the_trim_line_outside_the_image() {
+    let mut s = session("rgb", 8);
+    let dir = tmp("bleed");
+    let (r, pdf) = print_with(&mut s, &dir, "bleed", json!({"cornerCropMarks": true, "centerCropMarks": true, "bleed": 0.125}));
+    assert_eq!(r["bleed"], 0.125);
+    let rect: Vec<f64> = r["imageRect"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect();
+    let (x, y, w, h) = (rect[0], rect[1], rect[2], rect[3]);
+    let c = pdf_content(&pdf);
+    // Bottom-left corner (PDF is bottom-up): the horizontal mark runs left from 6 pt outside the
+    // image, 9 pt (0.125 in) above the image's bottom edge; the vertical one 9 pt right of its left edge.
+    assert!(c.contains(&format!("{:.2} {:.2} m {:.2} {:.2} l S", x - 6.0, y + 9.0, x - 24.0, y + 9.0)), "{c}");
+    assert!(c.contains(&format!("{:.2} {:.2} m {:.2} {:.2} l S", x + 9.0, y - 6.0, x + 9.0, y - 24.0)), "{c}");
+    // Top-right corner, mirrored.
+    assert!(c.contains(&format!("{:.2} {:.2} m {:.2} {:.2} l S", x + w + 6.0, y + h - 9.0, x + w + 24.0, y + h - 9.0)), "{c}");
+    assert!(c.contains(&format!("{:.2} {:.2} m {:.2} {:.2} l S", x + w - 9.0, y + h + 6.0, x + w - 9.0, y + h + 24.0)), "{c}");
+    // Centre crop marks are on the midlines, which a symmetric bleed does not move.
+    assert!(c.contains(&format!("{:.2} {:.2} m {:.2} {:.2} l S", x + w / 2.0, y - 6.0, x + w / 2.0, y - 24.0)), "{c}");
+    // Print One Copy repeats the last print, bleed included.
+    let again = s.execute("file.printOneCopy", json!({"output": format!("{dir}/again.pdf"), "dryRun": true})).unwrap();
+    assert_eq!(again["bleed"], 0.125);
+    // The image box itself is unchanged: bleed moves marks, not pixels.
+    let (plain, _) = print_with(&mut s, &dir, "plain", json!({"cornerCropMarks": true}));
+    assert_eq!(plain["imageRect"], r["imageRect"]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn bleed_without_corner_crop_marks_changes_nothing() {
+    let mut s = session("rgb", 8);
+    let dir = tmp("bleed-nomarks");
+    let (_, a) = print_with(&mut s, &dir, "plain", json!({"registrationMarks": true}));
+    let (r, b) = print_with(&mut s, &dir, "bleed", json!({"registrationMarks": true, "bleed": 0.1}));
+    assert_eq!(a, b);
+    assert_eq!(r["bleed"], 0.0);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn bad_bleed_is_an_error_not_a_panic() {
+    let mut s = session("rgb", 8);
+    // The test document prints 300 × 150 pt, so 1.05 in (75.6 pt) leaves no trim box.
+    for bleed in [json!(-0.1), json!("0.1"), json!(true), json!([0.1]), json!(1.05), json!(1e308)] {
+        let r = s.execute("file.print", json!({"dryRun": true, "send": false, "output": "", "cornerCropMarks": true, "bleed": bleed}));
+        assert!(matches!(r, Err(EngineError::BadParams { .. })), "bleed {bleed}: {r:?}");
+    }
+}
+
+#[test]
+fn print_strings_keep_winansi_accents_and_punctuation() {
+    assert_eq!(pdf_string("Café – résumé"), r"(Caf\351 \226 r\351sum\351)");
+    assert_eq!(pdf_string("€ ‘quote’ “double” • Œœ Šš Žž Ÿ"), r"(\200 \221quote\222 \223double\224 \225 \214\234 \212\232 \216\236 \237)");
+    assert_eq!(pdf_string("é7"), r"(\3517)", "octal escapes must have three digits before a digit");
+}
+
+#[test]
+fn print_strings_keep_pdf_delimiters_safe_and_fallback_bounded() {
+    assert_eq!(pdf_string(r"a(b)\c"), r"(a\(b\)\\c)");
+    assert_eq!(pdf_string("\n\r\t\0\u{7f}\u{81}中😀"), "(????????)");
+    assert_eq!(pdf_string(""), "()");
+}
+
+#[test]
+fn printed_pdf_uses_winansi_for_labels_and_descriptions() {
+    let mut page = page_of(3, vec![255; 6], false);
+    page.label = Some("Café – résumé.psd".into());
+    page.description = Some("Price: €20 (proof)".into());
+    let pdf = print_pdf(&page);
+    assert!(String::from_utf8_lossy(&pdf).contains("/Encoding /WinAnsiEncoding"));
+    let content = pdf_content(&pdf);
+    assert!(content.contains(r"(Caf\351 \226 r\351sum\351.psd) Tj"), "{content}");
+    assert!(content.contains(r"(Price: \20020 \(proof\)) Tj"), "{content}");
+    assert!(content.is_ascii(), "encoded bytes are escaped, never UTF-8 text operands");
 }

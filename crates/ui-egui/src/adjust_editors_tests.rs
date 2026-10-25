@@ -206,6 +206,27 @@ fn curve_of(a: &Adjustment) -> Vec<[f32; 2]> {
     }
 }
 
+/// #8984: the Curves graph in Properties grows with the panel instead of stopping at 300
+/// points, stays square, and edits where it is clicked at its new size.
+#[test]
+fn curves_graph_grows_with_the_properties_panel() {
+    let mut h = app_harness("curves", "rgb", 8);
+    let (id, _) = layer(&h);
+    let narrow = curves_graph(&h, id);
+    assert!(narrow.width() < 300.0, "{narrow:?}");
+    crate::panels::request_dock_width(&h.ctx, 760.0);
+    h.run_steps(8);
+    let wide = curves_graph(&h, id);
+    // 760 points of panel, but the 900-point window leaves room for 540 beside the other rows.
+    assert!(wide.width() > narrow.width() + 250.0 && wide.height() <= 900.0 - 360.0, "{narrow:?} → {wide:?}");
+    assert!((wide.width() - wide.height()).abs() < 1.0, "square: {wide:?}");
+    // A point added at the graph's centre lands at 128, 128 of the curve.
+    click(&mut h, wide.center());
+    let c = curve_of(&layer(&h).1);
+    assert_eq!(c.len(), 3, "{c:?}");
+    assert!((c[1][0] - 127.5).abs() < 2.0 && (c[1][1] - 127.5).abs() < 2.0, "{c:?}");
+}
+
 /// Issue #43: pressing on a point selects it (no new point), Delete/Backspace and ⌘/Ctrl-click
 /// remove points, dragging off the graph removes one, endpoints stay.
 #[test]
@@ -784,6 +805,37 @@ fn editor_harness(kind: &'static str, params: serde_json::Value) -> Harness<'sta
     PhotocraftApp::setup_context(&h.ctx, Default::default());
     h.run_steps(4);
     h
+}
+
+/// #9242: the Hue/Saturation spectrum bars stretch with the panel, like the sliders above them.
+#[test]
+fn hue_saturation_bars_fill_the_panel_width() {
+    use crate::adjust_editors::{EditorCx, editor};
+    for width in [300.0, 600.0] {
+        let mut h = Harness::builder().with_size(vec2(width, 500.0)).build_ui_state(
+            |ui, values: &mut serde_json::Value| {
+                let cx = EditorCx {
+                    mem: egui::Id::new("hs"),
+                    hist: None,
+                    gray: false,
+                    swatches: [[0.0; 3], [1.0; 3]],
+                    gradients: Vec::new(),
+                    dialog: false,
+                    dynamic_color_sliders: true,
+                    isolated_curve: None,
+                };
+                let avail = ui.available_width();
+                editor(ui, "hueSaturation", values, &cx);
+                ui.data_mut(|d| d.insert_temp(egui::Id::new("hs-avail"), avail));
+            },
+            json!({}),
+        );
+        PhotocraftApp::setup_context(&h.ctx, Default::default());
+        h.run_steps(4);
+        let bars = h.ctx.data(|d| d.get_temp::<Rect>(egui::Id::new("hs").with("hs-bars"))).expect("bars drawn");
+        let avail = h.ctx.data(|d| d.get_temp::<f32>(egui::Id::new("hs-avail"))).unwrap();
+        assert!((bars.width() - avail).abs() < 0.5, "{width}: bars {} of {avail}", bars.width());
+    }
 }
 
 /// Types `text` into the `index`th number field and commits it with Enter.

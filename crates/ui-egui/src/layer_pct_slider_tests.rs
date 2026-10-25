@@ -163,3 +163,18 @@ fn dragging_opacity_and_fill_labels_scrubs_percentages_in_one_history_step() {
         assert!((value(&layer(&h)) - 1.0).abs() < 1e-6, "{name}: undo restores the original value");
     }
 }
+
+#[test]
+fn opacity_and_fill_stay_visible_but_disabled_with_no_layer_selected() {
+    let mut h = harness();
+    h.state_mut().session.execute("select.deselectLayers", json!({})).unwrap();
+    h.run_steps(4);
+    assert!(h.state().session.active().unwrap().active_layer.is_none());
+    for name in ["Opacity", "Fill"] {
+        let node = h
+            .query_all_by_role(Role::Button)
+            .find(|n| n.accesskit_node().label().as_deref() == Some(name))
+            .unwrap_or_else(|| panic!("{name}: the control disappeared with no layer selected"));
+        assert!(node.accesskit_node().is_disabled(), "{name}: should be greyed out");
+    }
+}

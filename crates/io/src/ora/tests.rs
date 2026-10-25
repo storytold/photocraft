@@ -327,9 +327,45 @@ fn reads_other_applications_stacks() {
     assert_eq!(get("Strange").blend, BlendMode::Normal);
     assert!(get("Lost").surface().unwrap().content_bounds().is_empty());
     let all = r.warnings.join("\n");
-    for needle in ["svg:dst-in", "<text>", "missing from the archive", "krita:hard mix", "svg:soft-light"] {
+    for needle in ["svg:dst-in", "<text>", "missing from the archive", "krita:hard mix"] {
         assert!(all.contains(needle), "{needle} not in {all}");
     }
+    // svg:soft-light is the W3C curve, which is Photoshop's Soft Light (#8804): no warning.
+    assert!(!all.contains("soft-light"), "{all}");
+}
+
+#[test]
+fn krita_soft_light_ids_map_to_photoshop_soft_light() {
+    // Krita's own soft_light keeps sqrt(cb) over dark backdrops, so it is the approximation;
+    // soft_light_svg is the W3C curve Photoshop uses (#8804).
+    assert_eq!(super::krita_blend("soft_light"), Some((BlendMode::SoftLight, true)));
+    assert_eq!(super::krita_blend("soft_light_svg"), Some((BlendMode::SoftLight, false)));
+    assert_eq!(super::krita_id(BlendMode::SoftLight), Some("soft_light_svg"));
+    let xml = r#"<image w="2" h="2"><stack>
+      <layer name="Own" src="a.png" composite-op="krita:soft_light"/>
+      <layer name="W3C" src="a.png" composite-op="krita:soft_light_svg"/>
+    </stack></image>"#;
+    let r = crate::import("soft.ora", &archive(xml, &[("a.png", solid_png(2, 2, [40, 40, 40, 255]))])).unwrap();
+    assert!(r.document.layers.iter().all(|l| l.blend == BlendMode::SoftLight));
+    let all = r.warnings.join("\n");
+    assert!(all.contains("krita:soft_light blend mode is approximated"), "{all}");
+    assert!(!all.contains("soft_light_svg"), "{all}");
+}
+
+#[test]
+fn soft_light_exports_as_svg_soft_light() {
+    // The W3C id, not krita:soft_light_svg (which import also accepts): other applications read it.
+    let mut d = doc(SampleType::U8);
+    let mut soft = block("Soft", PixelFormat::RGBA8, 0, 0, 10, 10, 5);
+    soft.blend = BlendMode::SoftLight;
+    d.layers.push(soft);
+    let out = export(&d).unwrap();
+    let xml = String::from_utf8(ZipReader::new(&out.bytes).unwrap().read_by_name("stack.xml", 1 << 20).unwrap()).unwrap();
+    assert!(xml.contains("name=\"Soft\"") && xml.contains("composite-op=\"svg:soft-light\""), "{xml}");
+    assert!(!xml.contains("soft_light"), "{xml}");
+    let (back, exported, imported) = round_trip(&d);
+    assert!(back.layers.iter().any(|l| l.name == "Soft" && l.blend == BlendMode::SoftLight));
+    assert!(!exported.iter().chain(&imported).any(|w| w.to_lowercase().contains("soft")), "{exported:?} {imported:?}");
 }
 
 #[test]
@@ -494,6 +530,9 @@ fn lossy_documents() -> Vec<(&'static str, Document)> {
         }),
         ("clipped", with(&|d| d.layers[1].clipped = true)),
         ("fill opacity", with(&|d| d.layers[0].fill_opacity = 0.5)),
+        ("pixel lock", with(&|d| d.layers[0].locks.pixels = true)),
+        // Not the bottom layer: with its transparency lock, `Base` would become the Background.
+        ("position lock", with(&|d| d.layers[1].locks.position = true)),
         ("float", doc(SampleType::F32)),
         ("profile", with(&|d| d.icc_profile = Some(photocraft_cms::Builtin::DisplayP3.profile().to_bytes()))),
         ("metadata", with(&|d| d.metadata.xmp = Some("<x/>".into()))),
@@ -520,6 +559,15 @@ fn plain_documents_lose_nothing() {
         d.icc_profile = Some(photocraft_cms::Builtin::Srgb.profile().to_bytes());
         assert_eq!(losses(&d), Vec::<String>::new(), "{depth:?} tagged sRGB");
         assert_eq!(export(&d).unwrap().warnings, Vec::<String>::new());
+        // OpenRaster's edit-locked and alpha-preserve hold Lock All and Lock Transparent Pixels.
+        d.layers[0].locks.all = true;
+        d.layers[1].locks.transparency = true;
+        assert_eq!(losses(&d), Vec::<String>::new(), "{depth:?} locked");
+        // A Background (every new document's bottom layer) loses nothing for its position lock.
+        d.layers[0].locks.all = false;
+        d.layers[0].locks.position = true;
+        assert!(d.background().is_some());
+        assert_eq!(losses(&d), Vec::<String>::new(), "{depth:?} Background");
     }
     let mut cmyk = doc(SampleType::U8);
     cmyk.mode = ColorMode::Cmyk;

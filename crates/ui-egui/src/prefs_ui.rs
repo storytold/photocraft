@@ -15,7 +15,7 @@ use photocraft_engine::jobs::{JobEvent, JobId, JobOutcome, Started};
 #[cfg(test)]
 use photocraft_engine::prefs::Theme;
 use photocraft_engine::prefs::{self, AppearanceMode, DarkTheme, LightTheme, SECTIONS, Theme as SavedTheme};
-use photocraft_engine::snap::{SnapLine, SnapTargets};
+use photocraft_engine::snap::{SnapLine, SnapOptions, SnapTargets};
 use serde_json::{Map, Value, json};
 
 use crate::PhotocraftApp;
@@ -43,7 +43,7 @@ pub struct Runtime {
     /// Snapping state of the drag in progress (see `snap_ui`).
     pub(crate) snap: Option<crate::snap_ui::ActiveSnap>,
     pub(crate) snap_lines: Vec<SnapLine>,
-    pub(crate) guide_targets: Option<((DocId, u64), SnapTargets)>,
+    pub(crate) guide_targets: Option<((DocId, u64, SnapOptions), SnapTargets)>,
     /// Checkerboard colours the cached CPU checker texture was built with.
     pub(crate) checker_key: Option<[[u8; 3]; 2]>,
     /// Style last sent to the GPU canvas.
@@ -53,6 +53,8 @@ pub struct Runtime {
     /// Tool options as last remembered in the preferences (see `tool_memory`).
     pub(crate) tool_options: Option<crate::state::ToolOptions>,
     pub(crate) selected_tool: Option<crate::state::Tool>,
+    /// The tool owning the session brush and the other tools' brushes, as last remembered.
+    pub(crate) tool_brushes: Option<crate::tool_memory::ToolBrushes>,
 }
 
 /// The GPU canvas colours from Preferences › Transparency & Gamut.
@@ -233,11 +235,19 @@ pub fn load(app: &mut PhotocraftApp) {
         return;
     }
     app.prefs_rt.loaded = true;
-    if let Some(text) = app.services.load_prefs.as_mut().and_then(|f| f())
-        && let Err(e) = app.session.load_prefs_json(&text)
-    {
-        let template = "Preferences were reset: {error}";
-        app.ui.status = crate::i18n::fmt(tl!(template), &[("error", &e)]);
+    let mut invalid = Vec::new();
+    let mut stored = None;
+    if let Some(text) = app.services.load_prefs.as_mut().and_then(|f| f()) {
+        match app.session.load_prefs_json(&text) {
+            Ok(found) => {
+                invalid = found;
+                stored = serde_json::from_str::<Value>(&text).ok();
+            }
+            Err(e) => {
+                let template = "Preferences were reset: {error}";
+                app.ui.status = crate::i18n::fmt(tl!(template), &[("error", &e)]);
+            }
+        }
     }
     crate::dock::restore(app);
     crate::brush_picker::restore(app);
@@ -247,7 +257,68 @@ pub fn load(app: &mut PhotocraftApp) {
     crate::view_cmds::restore(app);
     app.sync_recent();
     app.prefs_rt.saved_rev = app.session.prefs.rev();
-    app.prefs_rt.saved_value = Some(app.session.prefs_value());
+    let loaded = app.session.prefs_value();
+    app.prefs_rt.saved_value = Some(match stored {
+        Some(stored) => stored_base(&loaded, &stored),
+        None => loaded,
+    });
+    if !invalid.is_empty() {
+        repair_invalid(app, &invalid);
+    }
+}
+
+/// The save base after loading `stored`: what was loaded, with the keys the shift tool switch
+/// migration may change (#5647) put back as the file had them, the way [`repair_invalid`] puts
+/// back unreadable values. The migrated value and the new version then differ from the base, so
+/// the next save writes them rather than keeping the old value under a newer version. Every other
+/// key keeps its loaded value, so the three-way merge leaves another instance's changes alone,
+/// also for keys the file doesn't have yet. A file from a newer version keeps its version.
+fn stored_base(loaded: &Value, stored: &Value) -> Value {
+    let mut base = loaded.clone();
+    let Some(obj) = base.as_object_mut() else {
+        return base;
+    };
+    match stored.get("version") {
+        Some(v) if v.as_u64().is_some_and(|v| v > prefs::PREFS_VERSION) => {}
+        Some(v) => {
+            obj.insert("version".into(), v.clone());
+        }
+        None => {
+            obj.remove("version");
+        }
+    }
+    if let (Some(v), Some(tools)) = (stored.pointer("/tools/useShiftKeyForToolSwitch"), obj.get_mut("tools").and_then(Value::as_object_mut)) {
+        tools.insert("useShiftKeyForToolSwitch".into(), v.clone());
+    }
+    base
+}
+
+/// Some saved values couldn't be read and took their defaults (#6611): say which, and write
+/// the defaults over them on the next save so the next launch reads a clean file. The save
+/// base holds the unreadable values, so the three-way merge sees them as changed here and
+/// replaces (or removes) exactly those, keeping everything else in the stored file.
+fn repair_invalid(app: &mut PhotocraftApp, invalid: &[prefs::InvalidPref]) {
+    if let Some(base) = app.prefs_rt.saved_value.as_mut() {
+        for bad in invalid {
+            let Some((key, parent)) = bad.keys.split_last() else {
+                continue;
+            };
+            if let Some(obj) = parent.iter().try_fold(&mut *base, |cur, k| cur.get_mut(k.as_str())).and_then(Value::as_object_mut) {
+                obj.insert(key.clone(), bad.value.clone());
+            }
+        }
+    }
+    app.session.prefs.edit(|_| ());
+    let paths = invalid.iter().map(prefs::InvalidPref::path).collect::<Vec<_>>().join(", ");
+    let (title, line) = (
+        "Some preferences were reset",
+        "The preferences file held values PhotoCraft can't read for {paths}. Those settings are back to their defaults; the rest of your preferences loaded.",
+    );
+    // Notices keep their English source and are translated when drawn.
+    let id = crate::notices::post(app, title, vec![line.into()], false, None);
+    if let Some(notice) = app.ui.notices.iter_mut().find(|n| n.id == id) {
+        notice.args.push(("paths".into(), paths));
+    }
 }
 
 /// Discover recovery entries after construction, then decode one at a time without blocking
@@ -547,6 +618,7 @@ fn write_prefs(app: &mut PhotocraftApp, ours: &Value) -> Result<(), String> {
     let stored = app.services.load_prefs.as_mut().and_then(|load| load()).and_then(|t| serde_json::from_str::<Value>(&t).ok());
     let text = match (stored, &app.prefs_rt.saved_value) {
         (Some(mut theirs @ Value::Object(_)), Some(base)) => {
+            let base = &without_stale_migration(base, &theirs);
             merge_changes(base, ours, &mut theirs);
             serde_json::to_string_pretty(&theirs)
         }
@@ -554,6 +626,24 @@ fn write_prefs(app: &mut PhotocraftApp, ours: &Value) -> Result<(), String> {
     }
     .map_err(|e| e.to_string())?;
     save(&text)
+}
+
+/// The save base without the shift tool switch migration (#5647) once storage already holds a
+/// version 2 file: another instance wrote it, so its Use Shift Key for Tool Switch is a choice,
+/// not the old default this instance migrated. The base then holds the migrated value (on) instead
+/// of the old file's off, so only a change made here since loading is written over that choice.
+fn without_stale_migration(base: &Value, theirs: &Value) -> Value {
+    let mut base = base.clone();
+    let new_file = |v: &Value| v.get("version").and_then(Value::as_u64).is_some_and(|v| v >= 2);
+    if new_file(theirs) && !new_file(&base) {
+        let key = "useShiftKeyForToolSwitch";
+        if let Some(tools) = base.get_mut("tools").and_then(Value::as_object_mut)
+            && tools.get(key) == Some(&Value::Bool(false))
+        {
+            tools.insert(key.into(), Value::Bool(true));
+        }
+    }
+    base
 }
 
 /// Three-way merge of preference trees: whatever `ours` changed since `base` goes over `theirs`
@@ -859,6 +949,75 @@ pub fn is_modifier_key(key: egui::Key) -> bool {
     matches!(key, ShiftLeft | ShiftRight | ControlLeft | ControlRight | AltLeft | AltRight | SuperLeft | SuperRight)
 }
 
+/// Modifier bits a physical modifier-key press contributes when egui leaves them out of
+/// [`Modifiers`] on the key event (#7190).
+fn modifier_key_modifiers(key: egui::Key) -> egui::Modifiers {
+    use egui::Key::*;
+    match key {
+        ShiftLeft | ShiftRight => egui::Modifiers::SHIFT,
+        ControlLeft | ControlRight => egui::Modifiers::CTRL,
+        AltLeft | AltRight => egui::Modifiers::ALT,
+        SuperLeft | SuperRight => egui::Modifiers::COMMAND,
+        _ => egui::Modifiers::NONE,
+    }
+}
+
+fn capture_mods_field(v: Option<&Value>) -> egui::Modifiers {
+    let o = v.and_then(Value::as_object);
+    egui::Modifiers {
+        shift: o.and_then(|o| o.get("shift")).and_then(Value::as_bool).unwrap_or(false),
+        ctrl: o.and_then(|o| o.get("ctrl")).and_then(Value::as_bool).unwrap_or(false),
+        alt: o.and_then(|o| o.get("alt")).and_then(Value::as_bool).unwrap_or(false),
+        command: o.and_then(|o| o.get("command")).and_then(Value::as_bool).unwrap_or(false),
+        mac_cmd: o.and_then(|o| o.get("mac_cmd")).and_then(Value::as_bool).unwrap_or(false),
+    }
+}
+
+fn capture_mods_json(m: egui::Modifiers) -> Value {
+    json!({
+        "shift": m.shift,
+        "ctrl": m.ctrl,
+        "alt": m.alt,
+        "command": m.command,
+        "mac_cmd": m.mac_cmd,
+    })
+}
+
+/// While capture is active: refresh held modifiers (including across frames via dialog
+/// `captureMods`) and, if a non-modifier key was pressed this frame, return it with the
+/// modifiers held with it.
+///
+/// #7190 root cause: capture used to [`find_map`](Iterator::find_map) the first non-modifier
+/// [`Event::Key`] and pass only that event's `modifiers` into [`shortcut_text`]. On Linux and
+/// Windows, winit/egui often reports `ShiftLeft`/`ShiftRight` (and sometimes the letter key) with
+/// [`Modifiers::NONE`], and the modifier down and the letter down often land in separate UI
+/// frames. Shift was then missing from the stored binding (`F6` instead of `Shift+F6`). Like #292
+/// for `ControlLeft`, we walk the frame's events, OR in [`modifier_key_modifiers`] for modifier
+/// keys, and persist accumulated modifiers in `captureMods` until capture ends.
+pub(crate) fn capture_key_press(capture_mods: egui::Modifiers, i: &egui::InputState) -> (egui::Modifiers, Option<(egui::Key, egui::Modifiers)>) {
+    let mut mods = capture_mods | i.modifiers;
+    let mut pressed = None;
+    for e in &i.events {
+        if let egui::Event::ModifiersChanged(m) = e {
+            mods = *m;
+        }
+        if let egui::Event::Key { key, pressed: true, modifiers, .. } = e {
+            if is_modifier_key(*key) {
+                mods = *modifiers | modifier_key_modifiers(*key);
+                continue;
+            }
+            pressed = Some((*key, mods | *modifiers));
+            break;
+        }
+        if let egui::Event::Key { key, pressed: false, modifiers, .. } = e
+            && is_modifier_key(*key)
+        {
+            mods = *modifiers;
+        }
+    }
+    (mods, pressed)
+}
+
 // ------------------------------------------------------------------ menu routing
 
 /// Shell front ends for Edit-menu commands invoked without parameters (dialogs, pickers).
@@ -907,26 +1066,16 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &V
             }
             dialog(d)
         }
-        "edit.contentAwareFill" => {
-            if !app.session.is_enabled(id) {
-                return Some(Err("Content-Aware Fill needs a selection on a pixel layer".into()));
-            }
-            let d = crate::filter_dialog::open(app, id);
-            if let Some(dm) = d.and_then(|d| app.ui.dialog_mut(d)) {
-                dm.fields.insert("__preview".into(), json!(true));
-                for k in ["margin", "seed", "channel"] {
-                    dm.fields.remove(k);
-                }
-            }
-            dialog(d)
-        }
+        // Photoshop's Content-Aware Fill workspace (caf_ui); the engine command with params
+        // still runs directly.
+        "edit.contentAwareFill" => Some(crate::caf_ui::open(app).map(|_| json!({"contentAwareFill": app.distort.describe()["contentAwareFill"]}))),
         // Photoshop has no dialog: the menu opens the scale box (with params: the engine).
         crate::cas_transform::COMMAND => Some(crate::cas_transform::begin(app, ctx)),
         "edit.presets.presetManager" => {
             Some(Ok(json!({"dialog": open_kind(app, "presets", "Preset Manager", json!({"kind": "brushes", "selected": 0, "newName": ""}))})))
         }
         "edit.presets.exportImportPresets" => Some(Ok(
-            json!({"dialog": open_kind(app, "presetsIO", "Export/Import Presets", json!({"action": "export", "brushes": true, "customShapes": true}))}),
+            json!({"dialog": open_kind(app, "presetsIO", "Export/Import Presets", json!({"action": "export", "brushes": true, "customShapes": true, "tools": true}))}),
         )),
         _ => None,
     }
@@ -978,10 +1127,22 @@ pub fn apply(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
     Ok(result)
 }
 
-/// Max dialog width for our dialogs.
+/// The size Preferences opens at: room for the widest section and about 30 settings rows. The
+/// dialog's resize grip changes it, and its contents follow (#7420).
+pub const PREFERENCES_SIZE: egui::Vec2 = egui::vec2(1040.0, 800.0);
+
+/// The height of the settings area (section list and fields) when `available` is left below the
+/// search field: everything but the dialog's button row (`item_spacing` + 8 pt + the buttons) and
+/// a little slack, never less than a few rows.
+fn settings_height(available: f32, item_spacing: f32, button_height: f32) -> f32 {
+    (available - (item_spacing + 8.0 + button_height + 4.0)).max(160.0)
+}
+
+/// Max dialog width for our dialogs. Preferences fills the width it is given (`available`, its
+/// resizable area).
 pub fn width(fields: &Map<String, Value>, available: f32) -> Option<f32> {
     match fields.get("__prefsui").and_then(Value::as_str)? {
-        "prefs" => Some(available.clamp(380.0, 1040.0)),
+        "prefs" => Some(available.max(380.0)),
         "shortcuts" => Some(720.0),
         _ => Some(460.0),
     }
@@ -1056,6 +1217,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
             let mut info = app.perf.gpu_info.lines();
             info.extend(gpu_memory_lines(app));
             f.insert("__gpuInfo".into(), json!(info));
+            f.insert("__gpuAdapters".into(), json!(app.perf.gpu_info.adapters));
             let system = system_theme(app, ui.ctx());
             prefs_body(ui, f, system);
         }
@@ -1088,12 +1250,15 @@ fn gpu_memory_lines(app: &PhotocraftApp) -> Vec<String> {
     v
 }
 
+/// The label a preference key shows in the dialog: a few keys have their own wording, the rest
+/// split camelCase into words (`convertToSrgb` → "Convert to srgb").
 fn humanize(key: &str) -> String {
     match key {
         "appearanceMode" => return "Appearance Mode".into(),
         "exrAcesCg" => return "Open color-less EXR as ACEScg".into(),
         "darkTheme" => return "Dark Theme".into(),
         "lightTheme" => return "Light Theme".into(),
+        "automaticallyCheckUpdates" => return "Automatically Check for Updates".into(),
         _ => {}
     }
     // These controls appear only for WebP, so reuse the existing translated labels.
@@ -1119,6 +1284,10 @@ fn humanize(key: &str) -> String {
     }
     // Performance: presentation without vsync (#1343); like the other graphics settings, it
     // takes effect when the window next opens.
+    // File Handling: Photoshop's wording (#8080).
+    if key == "doNotAppendCopy" {
+        return "Do not append \"copy\" to filename when saving a copy".into();
+    }
     if key == "lowLatencyDrawing" {
         return "Low-Latency Drawing (vsync off, applies at next launch)".into();
     }
@@ -1137,11 +1306,18 @@ fn humanize(key: &str) -> String {
             s.push(ch);
         }
     }
-    s.replace("Psd", "PSD").replace("Gpu", "GPU").replace("Ui ", "UI ").replace("Mb", "(MB)").replace("Exif", "EXIF").replace("Hud", "HUD")
+    s.replace("Psd", "PSD")
+        .replace("Gpu", "GPU")
+        .replace("Ui ", "UI ")
+        .replace("Mb", "(MB)")
+        .replace("Exif", "EXIF")
+        .replace("Hud", "HUD")
+        .replace("Lut ", "LUT ")
 }
 
 fn choice_label(v: &str) -> String {
     match v {
+        "exr" => "EXR".into(),
         "cm" => "Centimeters".into(),
         "mm" => "Millimeters".into(),
         "75" | "80" | "85" | "90" | "95" | "100" | "125" | "150" | "175" | "200" | "250" | "300" => format!("{v}%"),
@@ -1153,6 +1329,8 @@ fn choice_label(v: &str) -> String {
         "dx12" => "DirectX 12".into(),
         "metal" => "Metal".into(),
         "gl" => "OpenGL".into(),
+        "ahd" => "AHD (adaptive homogeneity)".into(),
+        "mhc" => "Malvar–He–Cutler".into(),
         "cpu" => "CPU (no GPU acceleration)".into(),
         v => humanize(v),
     }
@@ -1256,7 +1434,10 @@ fn prefs_body(ui: &mut egui::Ui, f: &mut Map<String, Value>, system: Option<egui
                 }
             }
         });
-        let content_height = (ui.ctx().content_rect().height() - 240.0).clamp(240.0, 680.0);
+        // The settings fill the dialog's resizable area down to the button row (#7420). Sizing them
+        // from the window instead left a resized dialog with empty space and the buttons mid-way.
+        // The area grows to fit its content, so this must never ask for more than it was given.
+        let content_height = settings_height(ui.available_height(), ui.spacing().item_spacing.y, crate::widgets::button_height(ui.ctx()));
         crate::widgets::vline(ui, content_height);
         ui.vertical(|ui| {
             ui.set_width((ui.available_width() - 12.0).max(340.0));
@@ -1282,7 +1463,7 @@ fn prefs_body(ui: &mut egui::Ui, f: &mut Map<String, Value>, system: Option<egui
                         );
                     }
                     if section == "performance" {
-                        gpu_status_rows(ui, f.get("__gpuInfo"), obj);
+                        gpu_status_rows(ui, f.get("__gpuInfo"), f.get("__gpuAdapters"), obj);
                     }
                     ui.add_space(8.0);
                 }
@@ -1307,7 +1488,7 @@ fn prefs_body(ui: &mut egui::Ui, f: &mut Map<String, Value>, system: Option<egui
 
 /// Preferences › Performance: what the app renders with now, and a reset of the GPU backend
 /// (a crashed start may have moved it to a safer choice).
-fn gpu_status_rows(ui: &mut egui::Ui, info: Option<&Value>, obj: &mut Map<String, Value>) {
+fn gpu_status_rows(ui: &mut egui::Ui, info: Option<&Value>, adapters: Option<&Value>, obj: &mut Map<String, Value>) {
     let t = Tokens::get(ui.ctx());
     ui.add_space(10.0);
     ui.label(RichText::new(tl!("Graphics")).font(crate::theme::semibold(12.5)).color(t.text));
@@ -1326,7 +1507,35 @@ fn gpu_status_rows(ui: &mut egui::Ui, info: Option<&Value>, obj: &mut Map<String
             crate::widgets::dropdown(ui, "graphics-backend", &mut current, &pairs, 220.0);
             obj.insert("gpuBackend".into(), json!(current));
         });
+        if !prefs::is_hidden("performance.gpuAdapter") {
+            graphics_adapter_row(ui, adapters, obj);
+        }
     });
+}
+
+/// Preferences › Performance › Graphics Adapter: which GPU draws on a machine with several. The
+/// value is the adapter's name; empty is automatic. A saved adapter that isn't present now (an
+/// unplugged eGPU) stays listed, marked ⚠, so opening the dialog doesn't silently change the choice.
+fn graphics_adapter_row(ui: &mut egui::Ui, adapters: Option<&Value>, obj: &mut Map<String, Value>) {
+    let mut current = obj.get("gpuAdapter").and_then(Value::as_str).unwrap_or("").to_string();
+    let mut names: Vec<String> = adapters.and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect();
+    // A saved name fragment ("nvidia") isn't an adapter's full name but still selects one; only a
+    // value no listed adapter matches is marked.
+    let kept = !current.is_empty() && !names.contains(&current);
+    let missing = kept && !names.iter().any(|n| prefs::gpu_adapter_matches(n, &current));
+    if kept {
+        names.push(current.clone());
+    }
+    let automatic = tl!("Automatic");
+    let labels: Vec<String> = names.iter().map(|n| if missing && *n == current { format!("⚠ {n}") } else { n.clone() }).collect();
+    let mut pairs: Vec<(String, &str)> = vec![(String::new(), automatic)];
+    pairs.extend(names.iter().cloned().zip(labels.iter().map(String::as_str)));
+    ui.horizontal(|ui| {
+        ui.label(tl!("GPU adapter"));
+        crate::widgets::dropdown_literal(ui, "graphics-adapter", &mut current, &pairs, 320.0);
+    });
+    ui.label(RichText::new(tl!("Applies at next launch.")).color(Tokens::get(ui.ctx()).text_faint));
+    obj.insert("gpuAdapter".into(), json!(current));
 }
 
 /// One user-facing choice; legacy flags remain compatible with older settings.
@@ -1344,6 +1553,9 @@ fn rendering_mode_row(ui: &mut egui::Ui, obj: &mut Map<String, Value>) {
         }
     });
     ui.label(tl!("Automatic uses GPU acceleration when available and falls back to CPU rendering on errors."));
+    // Next to the setting, as for System Title Bar (#1677): the renderer is picked when the
+    // window opens, so a change otherwise looks like it did nothing (#7939).
+    ui.label(RichText::new(tl!("Applies at next launch.")).color(Tokens::get(ui.ctx()).text_dim));
     ui.add_space(8.0);
 }
 
@@ -1366,6 +1578,7 @@ fn has_visible_fields(values: &Value, section: &str) -> bool {
 fn export_field_visible(obj: &Map<String, Value>, key: &str) -> bool {
     let format = obj.get("quickExportFormat").and_then(Value::as_str).unwrap_or("png");
     match key {
+        "convertToSrgb" | "metadata" => format != "exr",
         "jpegQuality" => format == "jpg",
         "webpLossless" => format == "webp",
         "webpQuality" => format == "webp" && obj.get("webpLossless").and_then(Value::as_bool) != Some(true),
@@ -1416,8 +1629,11 @@ fn theme_swatch(ui: &mut egui::Ui, kind: ThemeKind, id: &str, selected: &mut Str
     ui.painter().circle(center, BADGE, t.card, egui::Stroke::new(1.0, t.card_border));
     let (icon, tint) = if favorite { ("star-filled", t.accent) } else { ("star", t.text_dim) };
     let action = if favorite { tl!("Remove from favorites") } else { tl!("Add to favorites") };
-    let star = egui::Button::image(crate::icons::image(icon, 10.0, tint)).frame(false);
-    let response = ui.put(badge, star).on_hover_text(action);
+    // Interact and paint without allocating: a widget placed at `badge` would grow the row by the
+    // 4 px the badge overhangs the swatch, re-centring the swatches after this one whenever the
+    // pointer arrives, and oscillating when that moves the swatch out from under it.
+    let response = ui.interact(badge, ui.id().with((id, "favorite")), Sense::click()).on_hover_text(action);
+    crate::icons::paint(ui, badge, icon, 10.0, tint);
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, format!("{action}: {label}")));
     if response.clicked() {
         if favorite {
@@ -1561,7 +1777,7 @@ fn field_visible(section: &str, obj: &Map<String, Value>, k: &str, query: &str) 
     let drawn_elsewhere = (section == "interface" && matches!(k, "theme" | "appearanceMode" | "darkTheme" | "lightTheme" | "favoriteThemes"))
         // View › Rulers (⌘R) sets it, as in Photoshop.
         || path == "unitsAndRulers.showRulers"
-        || (section == "performance" && matches!(k, "useGpu" | "gpuBackend" | "renderingMode"))
+        || (section == "performance" && matches!(k, "useGpu" | "gpuBackend" | "gpuAdapter" | "renderingMode" | "memoryUsageMb"))
         // The browser presents frames itself: Low-Latency Drawing does nothing there.
         || (cfg!(target_arch = "wasm32") && path == "performance.lowLatencyDrawing")
         || (section == "export" && !export_field_visible(obj, k))
@@ -1593,8 +1809,35 @@ fn section_fields(
     if section == "performance" && (query.is_empty() || preference_matches(section, "renderingMode", &query)) {
         rendering_mode_row(ui, obj);
     }
+    if section == "performance" && (query.is_empty() || preference_matches(section, "memoryUsageMb", &query)) {
+        memory_usage_row(ui, obj);
+    }
     keys.retain(|k| field_visible(section, obj, k, &query));
     egui::Grid::new(("prefs-grid", section)).num_columns(2).spacing([14.0, 7.0]).show(ui, |ui| field_rows(ui, section, obj, keys, lang));
+}
+
+/// Explain the per-document RAM limit separately from the graphics-memory preference.
+fn memory_usage_row(ui: &mut egui::Ui, obj: &mut Map<String, Value>) {
+    let t = Tokens::get(ui.ctx());
+    ui.group(|ui| {
+        ui.label(RichText::new(tl!("Memory Usage")).strong());
+        let mut mb = obj.get("memoryUsageMb").and_then(Value::as_u64).unwrap_or(8192);
+        ui.horizontal(|ui| {
+            ui.label(tl!("Per-document RAM limit (MB)"));
+            if ui.add(egui::DragValue::new(&mut mb).range(256..=1_048_576).suffix(" MB")).changed() {
+                obj.insert("memoryUsageMb".into(), json!(mb));
+            }
+        });
+        if let Some(ram) = crate::gpu_canvas::physical_memory().filter(|n| *n > 0) {
+            let installed = ram / (1 << 20);
+            let percent = mb as f64 * 100.0 / (ram as f64 / (1 << 20) as f64);
+            ui.label(crate::i18n::fmt(tl!("Installed RAM: {ram} MB; this limit: {percent}%"), &[("ram", &installed.to_string()), ("percent", &format!("{percent:.1}"))]));
+        }
+        ui.label(RichText::new(tl!("Limits each open document's pixels plus History. Oldest undo states are discarded when the limit is exceeded.")).color(t.text_dim));
+        ui.label(RichText::new(tl!("Applies immediately when saved. Memory is not reserved in advance.")).color(t.text_dim));
+        ui.label(RichText::new(tl!("With GPU Memory set to Automatic, this also limits the GPU layer budget. That budget is capped at one quarter of installed RAM and, when known, three eighths of the graphics card's memory, with a 512 MB minimum. Raising this limit beyond those caps does not increase the GPU budget.")).color(t.text_dim));
+    });
+    ui.add_space(8.0);
 }
 
 /// One grid row per setting in `keys` (already filtered by `field_visible`).
@@ -1622,7 +1865,7 @@ fn field_rows(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>, ke
             Value::String(s) if path == "interface.language" => {
                 ui.label(RichText::new(tl!(&label)).color(t.text_dim));
                 let mut pairs: Vec<(String, &str)> = vec![("auto".into(), tl!("Auto"))];
-                pairs.extend(crate::i18n::Lang::all().map(|l| (l.code().to_string(), l.name())));
+                pairs.extend(crate::i18n::Lang::for_picker().into_iter().map(|l| (l.code().to_string(), l.name())));
                 let mut cur = s.clone();
                 crate::widgets::dropdown(ui, &format!("pref-{path}"), &mut cur, &pairs, 220.0);
                 obj.insert(k, json!(cur));
@@ -1777,14 +2020,11 @@ fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String
         }
         p.alternates(id, main)
     };
+    let mut capture_mods = capture_mods_field(f.get("captureMods"));
     // Key capture for the selected command: its main key, or (Add Shortcut) one more key.
     if capture && tab == 0 && !selected.is_empty() {
-        let pressed = ui.input(|i| {
-            i.events.iter().find_map(|e| match e {
-                egui::Event::Key { key, pressed: true, modifiers, .. } if !is_modifier_key(*key) => Some((*key, *modifiers)),
-                _ => None,
-            })
-        });
+        let (next_mods, pressed) = ui.input(|i| capture_key_press(capture_mods, i));
+        capture_mods = next_mods;
         if let Some((key, m)) = pressed {
             ui.input_mut(|i| {
                 i.consume_key(m, key);
@@ -2064,6 +2304,11 @@ fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String
     f.insert("colors".into(), json!(colors));
     f.insert("selected".into(), json!(selected));
     f.insert("capture".into(), json!(capture));
+    if capture {
+        f.insert("captureMods".into(), capture_mods_json(capture_mods));
+    } else {
+        f.remove("captureMods");
+    }
     f.insert("message".into(), json!(message));
     f.insert("messageWarning".into(), json!(message_warning));
 }
@@ -2106,11 +2351,9 @@ fn set_row(
     if !active.is_empty() && !sets.contains_key(&active) {
         active.clear();
     }
-    let now = ShortcutSet { shortcuts: overrides.clone(), alternate_shortcuts: alternates.clone() };
-    let modified = match sets.get(&active) {
-        Some(s) => *s != now,
-        None => now != ShortcutSet::default(),
-    };
+    // The engine decides what a set holds and when it is modified (not the actions' F-keys).
+    let now = ShortcutSet::from_bindings(overrides, alternates);
+    let modified = shortcut_sets::differs(&sets, &active, overrides, alternates);
     let defaults = tl!("PhotoCraft Defaults").to_string();
     let shown = |name: &str| -> String {
         let base = if name.is_empty() { defaults.clone() } else { name.to_string() };
@@ -2126,9 +2369,8 @@ fn set_row(
         let mut chosen = active.clone();
         let pairs: Vec<(String, &str)> = names.iter().map(|(n, l)| (n.clone(), l.as_str())).collect();
         if crate::widgets::dropdown(ui, "shortcut-set", &mut chosen, &pairs, 220.0) && chosen != active {
-            let set = sets.get(&chosen).cloned().unwrap_or_default();
-            *overrides = set.shortcuts;
-            *alternates = set.alternate_shortcuts;
+            // As `useSet`: the set's bindings, keeping the actions' F-keys.
+            sets.get(&chosen).cloned().unwrap_or_default().apply(overrides, alternates);
             active = chosen;
             message.clear();
         }
@@ -2313,7 +2555,7 @@ fn presets_io_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
             180.0,
         );
     });
-    for (k, label) in [("brushes", tl!("Brushes")), ("customShapes", tl!("Custom Shapes"))] {
+    for (k, label) in [("brushes", tl!("Brushes")), ("customShapes", tl!("Custom Shapes")), ("tools", tl!("Tool Presets"))] {
         let mut on = f.get(k).and_then(Value::as_bool).unwrap_or(true);
         crate::widgets::checkbox(ui, &mut on, label);
         f.insert(k.into(), json!(on));
@@ -2437,7 +2679,7 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
         }
         "presets" => Ok(Value::Null),
         "presetsIO" => {
-            let kinds: Vec<&str> = ["brushes", "customShapes"].into_iter().filter(|k| f.get(*k).and_then(Value::as_bool).unwrap_or(true)).collect();
+            let kinds: Vec<&str> = ["brushes", "customShapes", "tools"].into_iter().filter(|k| f.get(*k).and_then(Value::as_bool).unwrap_or(true)).collect();
             if f.get("action").and_then(Value::as_str) == Some("import") {
                 app.pick_file_bytes(move |app, name, bytes| {
                     let text = String::from_utf8(bytes).map_err(|_| format!("{name} is not a preset file"))?;
@@ -2481,6 +2723,22 @@ mod shortcut_set_tests;
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn memory_usage_has_a_dedicated_explanation_and_keeps_its_value() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let values = json!({"memoryUsageMb":50000}).as_object().unwrap().clone();
+        assert!(!field_visible("performance", &values, "memoryUsageMb", ""));
+        let mut h = Harness::builder()
+            .with_size(vec2(680.0, 350.0))
+            .build_ui_state(|ui, values| section_fields(ui, "performance", values, &["memoryUsageMb".into()], crate::i18n::Lang::EN, None, ""), values);
+        h.run_steps(2);
+        h.get_by_label("Memory Usage");
+        h.get_by_label("Per-document RAM limit (MB)");
+        h.get_by_label("Limits each open document's pixels plus History. Oldest undo states are discarded when the limit is exceeded.");
+        h.get_by_label("Applies immediately when saved. Memory is not reserved in advance.");
+        assert_eq!(h.state()["memoryUsageMb"], 50000);
+    }
+
     #[test]
     fn colour_preferences_take_a_typed_hex_value() {
         // #668: the canvas colour (and every colour preference) showed its hex but couldn't take one.
@@ -2528,6 +2786,10 @@ mod tests {
         assert!(export_field_visible(&obj, "webpQuality"));
         assert_eq!(humanize("webpLossless"), "Lossless");
         assert_eq!(humanize("webpQuality"), "Quality");
+        obj.insert("quickExportFormat".into(), json!("exr"));
+        for key in ["jpegQuality", "webpLossless", "webpQuality", "convertToSrgb", "metadata"] {
+            assert!(!export_field_visible(&obj, key), "EXR must not offer ignored web settings: {key}");
+        }
     }
 
     #[test]
@@ -2568,14 +2830,29 @@ mod tests {
     }
 
     #[test]
-    fn preferences_dialog_width_follows_the_window() {
+    fn preferences_dialog_width_follows_its_resizable_area() {
         let prefs = serde_json::json!({"__prefsui": "prefs"});
         let prefs = prefs.as_object().unwrap();
         assert_eq!(super::width(prefs, 200.0), Some(380.0));
         assert_eq!(super::width(prefs, 800.0), Some(800.0));
-        assert_eq!(super::width(prefs, 3000.0), Some(1040.0));
+        // A dialog resized wider than it opens is filled, not left with empty space (#7420).
+        assert_eq!(super::width(prefs, 3000.0), Some(3000.0));
         let shortcuts = serde_json::json!({"__prefsui": "shortcuts"});
         assert_eq!(super::width(shortcuts.as_object().unwrap(), 3000.0), Some(720.0));
+    }
+
+    #[test]
+    fn preferences_settings_fill_the_dialog_down_to_the_buttons() {
+        // The settings area plus the button row (spacing, 8 pt gap, buttons) stays inside what the
+        // resizable area gives it, at any size: the area grows to fit its content, so asking for
+        // more would make the dialog grow every frame. The area follows the dialog's size (#7420).
+        for available in [300.0, 600.0, 1400.0] {
+            let h = super::settings_height(available, 4.0, 30.0);
+            assert!(h + 4.0 + 8.0 + 30.0 <= available, "{available}");
+            assert!(h + 4.0 + 8.0 + 30.0 + 8.0 >= available, "{available}");
+        }
+        assert_eq!(super::settings_height(1400.0, 4.0, 30.0) - super::settings_height(600.0, 4.0, 30.0), 800.0);
+        assert_eq!(super::settings_height(50.0, 4.0, 30.0), 160.0);
     }
     use super::*;
     use std::sync::{Arc, Mutex};
@@ -2914,6 +3191,27 @@ mod tests {
         assert_eq!(dark, vec![ThemeKind::Studio]);
     }
 
+    /// The favourite star badge overhangs its swatch; showing it on hover must not move the swatches
+    /// after it, or the row would shift under the pointer.
+    #[test]
+    fn theme_star_badge_on_hover_does_not_move_the_next_swatch() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let (mut app, _) = app_with_store();
+        open_preferences(&mut app, "interface");
+        let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).build_eframe(move |cc| {
+            PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+            app
+        });
+        h.run_steps(4);
+        let first = h.get_by_label("Classic").rect();
+        let next = h.get_by_label("Adwaita").rect();
+        h.hover_at(first.right_top() + vec2(-3.0, 3.0));
+        h.run_steps(3);
+        assert!(h.query_by_label("Add to favorites: Classic").is_some(), "the badge shows while the swatch is hovered");
+        assert_eq!(h.get_by_label("Classic").rect(), first);
+        assert_eq!(h.get_by_label("Adwaita").rect(), next);
+    }
+
     #[test]
     fn preferences_interface_shows_language_without_scrolling() {
         // #2532: in a small window the theme cards filled the page and Language sat out of view
@@ -2975,34 +3273,6 @@ mod tests {
         }
     }
 
-    /// Every generated preference label, section title and choice label has an entry in each
-    /// language that claims complete menus (Japanese, Traditional Chinese, ...).
-    #[test]
-    fn preference_labels_are_translated() {
-        let session = photocraft_engine::Session::new();
-        let v: Value = serde_json::from_str(&session.prefs_to_json()).expect("prefs json");
-        for lang in crate::i18n::Lang::all().filter(|l| l.complete_menus()) {
-            let mut missing = Vec::new();
-            for (sec, title) in SECTIONS {
-                if !crate::i18n::has(lang, title) {
-                    missing.push(title.to_string());
-                }
-                let Some(obj) = v.get(sec).and_then(Value::as_object) else { continue };
-                for k in obj.keys() {
-                    if sec == "interface" && k == "favoriteThemes" {
-                        continue; // Rendered as star controls beside the theme choices.
-                    }
-                    let mut labels = vec![humanize(k)];
-                    labels.extend(prefs::choices(&format!("{sec}.{k}")).into_iter().flatten().map(|c| choice_label(c)));
-                    missing.extend(labels.into_iter().filter(|l| !crate::i18n::has(lang, l)));
-                }
-            }
-            missing.sort();
-            missing.dedup();
-            assert!(missing.is_empty(), "{}: untranslated preference labels: {missing:#?}", lang.code());
-        }
-    }
-
     fn app_with_store() -> (PhotocraftApp, Arc<Mutex<Option<String>>>) {
         app_with_saved(None)
     }
@@ -3031,6 +3301,139 @@ mod tests {
 
     fn stored(store: &Arc<Mutex<Option<String>>>) -> Value {
         serde_json::from_str(store.lock().unwrap().as_deref().unwrap_or("null")).unwrap()
+    }
+
+    #[test]
+    fn a_wrongly_typed_value_resets_only_itself_and_is_repaired_on_disk() {
+        // #6611: one bad value used to reset every preference, on every launch.
+        let saved = json!({
+            "fileHandling": {"recentFileCount": "ten", "autosaveMinutes": 5},
+            "performance": {"historyStates": 12},
+            "shortcuts": {"edit.fill": "Cmd+Shift+F", "file.open": 7},
+            "futureSection": {"kept": true},
+        });
+        let (mut app, store) = app_with_saved(Some(saved.to_string()));
+        let ctx = egui::Context::default();
+        tick(&mut app, &ctx);
+        let p = app.session.prefs();
+        assert_eq!((p.file_handling.recent_file_count, p.file_handling.autosave_minutes, p.performance.history_states), (20, 5, 12));
+        assert!(!app.ui.status.contains("reset"), "{}", app.ui.status);
+        let notice = app.ui.notices.iter().find(|n| n.title == "Some preferences were reset").expect("a notice names the bad values");
+        let text = notice.text(&notice.lines[0]);
+        assert!(text.contains("fileHandling.recentFileCount, shortcuts.file.open"), "{text}");
+        // The file now holds the default in its place and keeps everything else.
+        let v = stored(&store);
+        assert_eq!(v["fileHandling"]["recentFileCount"], 20);
+        assert_eq!(v["fileHandling"]["autosaveMinutes"], 5);
+        assert_eq!(v["performance"]["historyStates"], 12);
+        assert_eq!(v["shortcuts"]["edit.fill"], "Cmd+Shift+F");
+        assert!(v["shortcuts"].get("file.open").is_none());
+        assert_eq!(v["futureSection"]["kept"], true, "keys this version doesn't know survive");
+        // So the next launch loads cleanly.
+        let (mut next, _) = app_with_saved(store.lock().unwrap().clone());
+        tick(&mut next, &ctx);
+        assert!(next.ui.notices.iter().all(|n| n.title != "Some preferences were reset"));
+        assert_eq!(next.session.prefs().file_handling.autosave_minutes, 5);
+    }
+
+    #[test]
+    fn an_old_files_shift_tool_switch_migration_is_saved_with_the_new_version() {
+        // #5647: a file before version 2 loads with Use Shift Key for Tool Switch on. Saving
+        // writes that and the current version, so turning it off later isn't taken for the old
+        // default on the next launch.
+        let ctx = egui::Context::default();
+        for saved in [
+            json!({"version": 1, "tools": {"useShiftKeyForToolSwitch": false}, "futureSection": {"kept": true}}),
+            json!({"tools": {"useShiftKeyForToolSwitch": false}, "futureSection": {"kept": true}}),
+        ] {
+            let (mut app, store) = app_with_saved(Some(saved.to_string()));
+            tick(&mut app, &ctx);
+            assert!(app.session.prefs().tools.use_shift_key_for_tool_switch, "{saved}");
+            app.run("prefs.set", json!({"values": {"performance.historyStates": 12}})).unwrap();
+            tick(&mut app, &ctx);
+            let v = stored(&store);
+            assert_eq!(v["version"], json!(prefs::PREFS_VERSION), "{saved}");
+            assert_eq!(v["tools"]["useShiftKeyForToolSwitch"], true, "{saved}");
+            assert_eq!(v["futureSection"]["kept"], true, "keys this version doesn't know survive");
+            app.run("prefs.set", json!({"values": {"tools.useShiftKeyForToolSwitch": false}})).unwrap();
+            tick(&mut app, &ctx);
+            let (mut next, _) = app_with_saved(store.lock().unwrap().clone());
+            tick(&mut next, &ctx);
+            assert!(!next.session.prefs().tools.use_shift_key_for_tool_switch, "{saved}: turned off, it stays off");
+        }
+    }
+
+    #[test]
+    fn an_old_sparse_file_keeps_another_instances_change() {
+        // Two instances on a version 1 file that lacks most keys: one changes a key the file
+        // doesn't have, the other then saves an unrelated change and must not write its default
+        // over it.
+        let saved = json!({"version": 1, "tools": {"useShiftKeyForToolSwitch": false}});
+        let store = Arc::new(Mutex::new(Some(saved.to_string())));
+        let ctx = egui::Context::default();
+        let (mut a, mut b) = (app_on(&store, Arc::default()), app_on(&store, Arc::default()));
+        tick(&mut a, &ctx);
+        tick(&mut b, &ctx);
+        b.run("prefs.set", json!({"values": {"interface.theme": "studio"}})).unwrap();
+        tick(&mut b, &ctx);
+        assert_eq!(stored(&store)["interface"]["theme"], "studio");
+        a.run("prefs.set", json!({"values": {"performance.historyStates": 12}})).unwrap();
+        tick(&mut a, &ctx);
+        let v = stored(&store);
+        assert_eq!((v["interface"]["theme"].as_str(), v["performance"]["historyStates"].as_u64()), (Some("studio"), Some(12)));
+    }
+
+    #[test]
+    fn another_instances_shift_tool_switch_choice_beats_this_ones_migration() {
+        // Two instances migrate the same version 1 file. One turns the switch off and saves
+        // version 2; the other's unrelated save must not write its migrated "on" over that.
+        let saved = json!({"version": 1, "tools": {"useShiftKeyForToolSwitch": false}});
+        let store = Arc::new(Mutex::new(Some(saved.to_string())));
+        let ctx = egui::Context::default();
+        let (mut a, mut b) = (app_on(&store, Arc::default()), app_on(&store, Arc::default()));
+        tick(&mut a, &ctx);
+        tick(&mut b, &ctx);
+        b.run("prefs.set", json!({"values": {"tools.useShiftKeyForToolSwitch": false}})).unwrap();
+        tick(&mut b, &ctx);
+        assert_eq!(stored(&store)["tools"]["useShiftKeyForToolSwitch"], false);
+        a.run("prefs.set", json!({"values": {"performance.historyStates": 12}})).unwrap();
+        tick(&mut a, &ctx);
+        let v = stored(&store);
+        assert_eq!((v["tools"]["useShiftKeyForToolSwitch"].as_bool(), v["performance"]["historyStates"].as_u64()), (Some(false), Some(12)));
+        assert_eq!(v["version"], json!(prefs::PREFS_VERSION));
+    }
+
+    #[test]
+    fn turning_the_shift_tool_switch_off_is_saved_over_another_instances_migration() {
+        // Two instances migrate the same version 1 file. B saves version 2 with the migrated "on";
+        // the user then turns the switch off in A, which must be written.
+        let saved = json!({"version": 1, "tools": {"useShiftKeyForToolSwitch": false}});
+        let store = Arc::new(Mutex::new(Some(saved.to_string())));
+        let ctx = egui::Context::default();
+        let (mut a, mut b) = (app_on(&store, Arc::default()), app_on(&store, Arc::default()));
+        tick(&mut a, &ctx);
+        tick(&mut b, &ctx);
+        b.run("prefs.set", json!({"values": {"performance.historyStates": 12}})).unwrap();
+        tick(&mut b, &ctx);
+        assert_eq!(stored(&store)["tools"]["useShiftKeyForToolSwitch"], true);
+        a.run("prefs.set", json!({"values": {"tools.useShiftKeyForToolSwitch": false}})).unwrap();
+        tick(&mut a, &ctx);
+        let v = stored(&store);
+        assert_eq!((v["tools"]["useShiftKeyForToolSwitch"].as_bool(), v["performance"]["historyStates"].as_u64()), (Some(false), Some(12)));
+    }
+
+    #[test]
+    fn a_newer_files_version_is_kept_on_save() {
+        let saved = json!({"version": prefs::PREFS_VERSION + 1, "tools": {"useShiftKeyForToolSwitch": false}});
+        let (mut app, store) = app_with_saved(Some(saved.to_string()));
+        let ctx = egui::Context::default();
+        tick(&mut app, &ctx);
+        assert!(!app.session.prefs().tools.use_shift_key_for_tool_switch, "a newer file isn't migrated");
+        app.run("prefs.set", json!({"values": {"performance.historyStates": 12}})).unwrap();
+        tick(&mut app, &ctx);
+        let v = stored(&store);
+        assert_eq!(v["version"], json!(prefs::PREFS_VERSION + 1));
+        assert_eq!(v["performance"]["historyStates"], 12);
     }
 
     #[test]
@@ -3397,6 +3800,196 @@ mod tests {
         }
     }
 
+    /// #6212: a remembered value its options-bar field could never hold is clamped to the
+    /// field's range (or takes the default) rather than reaching the tool.
+    #[test]
+    fn remembered_tool_options_are_clamped_to_their_fields() {
+        let ctx = egui::Context::default();
+        let hostile = json!({"toolOptions": {
+            "feather": 1e30, "tolerance": -5.0, "polygon_sides": 0, "eyedropper_size": 7,
+            "crop_overlay_orientation": 9, "fill_opacity": 0.0, "magnetic_width": 1e9,
+            "pattern_stamp_angle": -720.0, "marquee_width": 1e7, "shape_stroke": {"miter_limit": -1.0, "opacity": 5.0},
+        }});
+        let (mut app, _) = app_with_saved(Some(hostile.to_string()));
+        tick(&mut app, &ctx);
+        let o = &app.ui.tool_options;
+        let d = crate::state::ToolOptions::default();
+        assert_eq!((o.feather, o.tolerance, o.polygon_sides, o.eyedropper_size), (1000.0, 0.0, 3, d.eyedropper_size));
+        assert_eq!((o.crop_overlay_orientation, o.fill_opacity, o.magnetic_width), (d.crop_overlay_orientation, 1.0, 256.0));
+        assert_eq!((o.pattern_stamp_angle, o.marquee_width), (-180.0, 999.0));
+        assert_eq!(o.shape_stroke, d.shape_stroke, "an invalid stroke style takes the default");
+        // A good value is left alone, and in-range defaults never change (nothing to save).
+        let (mut app2, _) = app_with_saved(Some(json!({"toolOptions": {"feather": 12.5}}).to_string()));
+        tick(&mut app2, &ctx);
+        assert_eq!(app2.ui.tool_options, crate::state::ToolOptions { feather: 12.5, ..d.clone() });
+        let mut def = d.clone();
+        crate::tool_memory::sanitize(&mut def);
+        assert_eq!(def, d);
+    }
+
+    /// #6212: every painting tool keeps its own brush across a restart, and the session brush
+    /// comes back as the brush of the tool that had it.
+    #[test]
+    fn tool_brushes_survive_a_restart() {
+        use crate::state::Tool;
+        let (mut app, store) = app_with_store();
+        let ctx = egui::Context::default();
+        tick(&mut app, &ctx);
+        let set_size = |app: &mut PhotocraftApp, size: f32| {
+            app.session.tools.brush.size = size;
+            app.session.tools.brush.opacity = size / 100.0;
+            app.session.tools.brush_changed();
+        };
+        set_size(&mut app, 77.0);
+        app.ui.tool = Tool::Eraser;
+        crate::paint_mouse::sync_tool_brush(&mut app);
+        set_size(&mut app, 33.0);
+        app.ui.tool = Tool::CloneStamp;
+        crate::paint_mouse::sync_tool_brush(&mut app);
+        set_size(&mut app, 12.0);
+        app.ui.tool = Tool::Eraser;
+        crate::paint_mouse::sync_tool_brush(&mut app);
+        crate::last_brush::persist(&mut app, &ctx);
+        crate::tool_memory::persist(&mut app, &ctx);
+        tick(&mut app, &ctx);
+        let saved = stored(&store);
+        assert_eq!(saved["toolBrushes"]["owner"], json!("Eraser"));
+        assert_eq!(saved["toolBrushes"]["brushes"]["Brush"]["size"], json!(77.0));
+        assert_eq!(saved["toolBrushes"]["brushes"]["CloneStamp"]["size"], json!(12.0));
+        assert!(saved["toolBrushes"]["brushes"].get("Eraser").is_none(), "the owner's brush is the last brush");
+
+        let (mut app2, _) = app_with_saved(store.lock().unwrap().clone());
+        tick(&mut app2, &ctx);
+        assert_eq!((app2.ui.tool, app2.ui.brush_tool), (Tool::Eraser, Tool::Eraser));
+        assert_eq!(app2.session.tools.brush.size, 33.0, "the Eraser's brush is the session brush");
+        for (tool, size) in [(Tool::Brush, 77.0), (Tool::CloneStamp, 12.0), (Tool::Eraser, 33.0)] {
+            app2.ui.tool = tool;
+            crate::paint_mouse::sync_tool_brush(&mut app2);
+            assert_eq!(app2.session.tools.brush.size, size, "{tool:?}");
+            assert_eq!(app2.session.tools.brush.opacity, size / 100.0, "{tool:?}");
+        }
+    }
+
+    /// #6212: `toolBrushes.owner` names the tool whose brush `last_brush` holds. A brush that
+    /// can't be remembered yet (a sampled tip too big to embed) leaves `last_brush` at the old
+    /// owner's brush, so the old owner stays saved: the next launch gives that brush back to it,
+    /// not to the tool selected since.
+    #[test]
+    fn the_saved_brush_owner_follows_the_saved_last_brush() {
+        use crate::state::Tool;
+        use photocraft_engine::paint::{GrayTile, TipShape};
+        let (mut app, store) = app_with_store();
+        let ctx = egui::Context::default();
+        tick(&mut app, &ctx);
+        app.session.tools.brush.size = 77.0;
+        app.session.tools.brush_changed();
+        crate::last_brush::persist(&mut app, &ctx);
+        crate::tool_memory::persist(&mut app, &ctx);
+        // The Brush's tip becomes a big sampled one, then the Eraser takes over that brush.
+        app.session.tools.brush.tip = TipShape::Sampled(GrayTile::from_fn(400, 300, |x, y| ((x * y) % 7) as f32 / 7.0));
+        app.session.tools.brush_changed();
+        app.ui.tool = Tool::Eraser;
+        crate::paint_mouse::sync_tool_brush(&mut app);
+        crate::last_brush::persist(&mut app, &ctx);
+        crate::tool_memory::persist(&mut app, &ctx);
+        tick(&mut app, &ctx);
+        let saved = stored(&store);
+        assert_eq!(saved["lastBrush"]["brush"]["size"], json!(77.0), "the big tip is not remembered yet");
+        assert_ne!(saved["toolBrushes"]["owner"], json!("Eraser"), "{saved}");
+        let (mut app2, _) = app_with_saved(store.lock().unwrap().clone());
+        tick(&mut app2, &ctx);
+        assert_eq!(app2.ui.brush_tool, Tool::Brush, "the 77 px brush is the Brush's");
+        assert_eq!(app2.session.tools.brush.size, 77.0);
+
+        // Once the Eraser's brush is saved, the Eraser owns it in the preferences too.
+        app.session.tools.brush.tip = TipShape::Round;
+        app.session.tools.brush.size = 33.0;
+        app.session.tools.brush_changed();
+        crate::last_brush::persist(&mut app, &ctx);
+        crate::tool_memory::persist(&mut app, &ctx);
+        tick(&mut app, &ctx);
+        let saved = stored(&store);
+        assert_eq!(saved["toolBrushes"]["owner"], json!("Eraser"), "{saved}");
+        assert_eq!(saved["lastBrush"]["brush"]["size"], json!(33.0));
+    }
+
+    /// #6212: a damaged or hand-edited `toolBrushes` never panics: what reads back loads (clamped
+    /// to the options bar's ranges), the rest is skipped and those tools start from the brush.
+    #[test]
+    fn remembered_tool_brushes_survive_damage() {
+        use crate::state::Tool;
+        let ctx = egui::Context::default();
+        for bad in [json!("junk"), json!(42), json!({"owner": [1], "brushes": "x"}), json!({"brushes": {"Eraser": 5}})] {
+            let (mut app, _) = app_with_saved(Some(json!({"toolBrushes": bad}).to_string()));
+            tick(&mut app, &ctx);
+            assert_eq!(app.ui.brush_tool, Tool::Brush, "{bad}");
+            assert!(app.ui.tool_brushes.is_empty(), "{bad}");
+        }
+        let hostile = json!({"toolBrushes": {"owner": "Move", "brushes": {
+            "Eraser": {"size": 1e30}, "Bogus": {"size": 5.0}, "Move": {"size": 5.0},
+            "Smudge": {"size": -3.0, "opacity": 50.0, "flow": -2.0, "hardness": 1e30},
+            "Brush": {"size": 9.0},
+        }}});
+        let (mut app, _) = app_with_saved(Some(hostile.to_string()));
+        tick(&mut app, &ctx);
+        assert_eq!(app.ui.brush_tool, Tool::Brush, "the Move tool has no brush");
+        let tools: Vec<Tool> = app.ui.tool_brushes.iter().map(|(t, _)| *t).collect();
+        assert_eq!(tools, vec![Tool::Smudge], "too large, unknown, brushless and the owner's own are skipped");
+        let b = &app.ui.tool_brushes[0].1;
+        assert_eq!((b.size, b.opacity, b.flow, b.hardness), (1.0, 1.0, 0.0, 1.0));
+        // A whole preferences file that isn't JSON: defaults, no panic.
+        let (mut app, _) = app_with_saved(Some("{not json".into()));
+        tick(&mut app, &ctx);
+        assert!(app.ui.tool_brushes.is_empty());
+        assert_eq!(app.ui.tool_options, crate::state::ToolOptions::default());
+    }
+
+    /// #6212: Reset Tool forgets that tool's remembered options and brush; Reset All Tools
+    /// forgets every tool's.
+    #[test]
+    fn reset_tools_clear_the_remembered_options_and_brushes() {
+        use crate::state::Tool;
+        let (mut app, store) = app_with_store();
+        let ctx = egui::Context::default();
+        tick(&mut app, &ctx);
+        app.ui.tool_options.feather = 12.0;
+        app.ui.tool_options.strength = 80.0;
+        app.session.tools.brush.size = 77.0;
+        app.session.tools.brush_changed();
+        for tool in [Tool::Eraser, Tool::Smudge, Tool::Brush] {
+            app.ui.tool = tool;
+            crate::paint_mouse::sync_tool_brush(&mut app);
+        }
+        app.ui.tool = Tool::Smudge;
+        crate::paint_mouse::sync_tool_brush(&mut app);
+        crate::last_brush::persist(&mut app, &ctx);
+        crate::tool_memory::persist(&mut app, &ctx);
+        tick(&mut app, &ctx);
+        let saved = stored(&store);
+        assert_eq!(saved["toolOptions"]["strength"], json!(80.0));
+        assert!(saved["toolBrushes"]["brushes"].get("Eraser").is_some() && saved["toolBrushes"]["brushes"].get("Brush").is_some());
+
+        crate::menus::invoke(&mut app, &ctx, crate::tool_reset::RESET, json!({})).unwrap();
+        crate::last_brush::persist(&mut app, &ctx);
+        crate::tool_memory::persist(&mut app, &ctx);
+        tick(&mut app, &ctx);
+        let saved = stored(&store);
+        assert!(saved["toolOptions"].get("strength").is_none(), "the Smudge's Strength is forgotten");
+        assert_eq!(saved["toolOptions"]["feather"], json!(12.0), "the marquee's Feather is not the Smudge's");
+        assert!(saved["toolBrushes"]["brushes"].get("Eraser").is_some());
+
+        crate::menus::invoke(&mut app, &ctx, crate::tool_reset::RESET_ALL, json!({"confirmed": true})).unwrap();
+        crate::last_brush::persist(&mut app, &ctx);
+        crate::tool_memory::persist(&mut app, &ctx);
+        tick(&mut app, &ctx);
+        let saved = stored(&store);
+        assert!(saved["toolOptions"].is_null(), "{saved}");
+        assert!(saved["toolBrushes"]["brushes"].as_object().is_none_or(|m| m.is_empty()), "{saved}");
+        let (app2, _) = app_with_saved(store.lock().unwrap().clone());
+        assert_eq!(app2.ui.tool_options, crate::state::ToolOptions::default());
+        assert!(app2.ui.tool_brushes.is_empty());
+    }
+
     #[test]
     fn view_show_items_survive_a_restart() {
         let (mut app, store) = app_with_store();
@@ -3428,6 +4021,26 @@ mod tests {
             assert!(v.extras && v.show.pixel_grid && v.snap_to.layers, "{bad}");
             assert_eq!(v.show.mesh, bad.is_object());
         }
+    }
+
+    #[test]
+    fn view_snap_off_survives_a_restart() {
+        let (mut app, store) = app_with_store();
+        let ctx = egui::Context::default();
+        tick(&mut app, &ctx);
+        assert!(app.ui.extras.snap, "on by default");
+        crate::menus::invoke(&mut app, &ctx, "view.snap", json!({})).unwrap();
+        assert!(!app.ui.extras.snap);
+        crate::view_cmds::persist(&mut app, &ctx);
+        tick(&mut app, &ctx);
+        assert_eq!(stored(&store)["viewExtras"], json!({"snap": false}));
+        let saved = store.lock().unwrap().clone().unwrap();
+        let (mut app2, _) = app_with_saved(Some(saved));
+        tick(&mut app2, &ctx);
+        assert!(!app2.ui.extras.snap, "still off after a restart");
+        crate::menus::invoke(&mut app2, &ctx, "view.snap", json!({})).unwrap();
+        crate::view_cmds::persist(&mut app2, &ctx);
+        assert!(app2.session.prefs().view_extras.is_null());
     }
 
     #[test]
@@ -3486,16 +4099,21 @@ mod tests {
         assert!(!prefs::is_hidden("type.useEscToCommit"));
         assert!(!prefs::is_hidden("type.smartQuotes"));
         assert!(!prefs::is_hidden("type.showFontNamesInEnglish"));
-        // Rotate View with Trackpad and the pinch zoom are live; the other Enhanced Controls rows
-        // stay hidden.
+        // Rotate View with Trackpad, the pinch zoom and Enable Gestures are live; the other
+        // Enhanced Controls rows stay hidden.
         assert!(has_visible_fields(&values, "enhancedControls"));
         assert!(!prefs::is_hidden("enhancedControls.rotateViewWithTrackpad"));
         assert!(!prefs::is_hidden("enhancedControls.zoomWithTrackpadPinch"));
-        // Camera Raw Defaults shows only "Open in Camera Raw" so far.
+        assert!(!prefs::is_hidden("enhancedControls.touchGestures"));
+        assert!(prefs::is_hidden("enhancedControls.scrubbySliderAcceleration"));
+        // Camera Raw Defaults shows "Open in Camera Raw" and the demosaic method so far.
         assert!(has_visible_fields(&values, "rawDefaults"));
         assert!(!prefs::is_hidden("rawDefaults.openInCameraRaw"));
+        assert!(!prefs::is_hidden("rawDefaults.demosaic"));
         assert!(prefs::is_hidden("rawDefaults.applyAutoTone"));
         assert!(!prefs::is_hidden("general.autoShowHomeScreen"));
+        assert!(!prefs::is_hidden("general.animatedZoom"));
+        assert!(!prefs::is_hidden("general.zoomResizesWindows"));
         assert!(!prefs::is_hidden("interface.uiScale"));
         assert!(!prefs::is_hidden("interface.uiFontSize"));
         // Hidden values still round-trip through the dialog untouched.
@@ -3527,6 +4145,23 @@ mod tests {
         tick(&mut app2, &ctx);
         assert_eq!(app2.session.prefs().interface.theme, Theme::Classic);
         assert!(store2.lock().unwrap().as_ref().unwrap().contains("classic"));
+    }
+
+    #[test]
+    fn preset_export_dialog_offers_tool_presets() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        let opened = crate::menus::invoke(&mut app, &ctx, "edit.presets.exportImportPresets", json!({})).unwrap();
+        let fields = app.ui.dialog_mut(opened["dialog"].as_u64().unwrap()).unwrap().fields.clone();
+        assert_eq!(fields["tools"], true);
+        let mut h = Harness::builder().with_size(vec2(420.0, 260.0)).build_ui_state(presets_io_body, fields);
+        h.run_steps(2);
+        h.get_by_label("Tool Presets").click();
+        h.run_steps(2);
+        assert_eq!(h.state()["tools"], false);
+        assert_eq!(h.state()["brushes"], true);
+        assert_eq!(h.state()["customShapes"], true);
     }
 
     #[test]
@@ -3678,6 +4313,28 @@ mod tests {
         assert!(!h.state().session.prefs().interface.system_title_bar);
         assert_eq!(stored(&store)["interface"]["systemTitleBar"], false);
         assert!(h.state().custom_titlebar);
+    }
+
+    /// #7939: switching Rendering Mode waits for the next launch, and says so next to the setting.
+    #[test]
+    fn rendering_mode_explains_next_launch() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let obj = json!({"renderingMode": "auto", "historyStates": 50}).as_object().unwrap().clone();
+        let mut h = Harness::new_ui_state(
+            |ui, obj: &mut Map<String, Value>| section_fields(ui, "performance", obj, &[], crate::i18n::Lang::from_pref("en"), None, ""),
+            obj,
+        );
+        h.run_steps(4);
+        h.get_by_label("Rendering Mode");
+        h.get_by_label("Applies at next launch.");
+        // A search that leaves Rendering Mode out leaves its notice out too.
+        let obj = json!({"renderingMode": "auto", "historyStates": 50}).as_object().unwrap().clone();
+        let mut h = Harness::new_ui_state(
+            |ui, obj: &mut Map<String, Value>| section_fields(ui, "performance", obj, &[], crate::i18n::Lang::from_pref("en"), None, "history"),
+            obj,
+        );
+        h.run_steps(4);
+        assert!(h.query_by_label("Applies at next launch.").is_none());
     }
 
     #[test]
@@ -3985,9 +4642,11 @@ mod tests {
         assert!(note.starts_with("Monitor profile in use: sRGB") && note.contains("fallback"), "{note}");
         assert!(crate::menus::invoke(&mut app, &ctx, "edit.fade", json!({})).is_err());
         app.run("select.rect", json!({"x": 4, "y": 4, "width": 8, "height": 8})).unwrap();
-        let d = crate::menus::invoke(&mut app, &ctx, "edit.contentAwareFill", json!({})).unwrap()["dialog"].as_u64().unwrap();
-        assert_eq!(app.ui.dialogs.iter().find(|x| x.id == d).unwrap().fields["__preview"], true);
-        crate::dialogs::confirm(&mut app, d).unwrap();
+        // Content-Aware Fill opens its workspace (caf_ui); OK fills.
+        let r = crate::menus::invoke(&mut app, &ctx, "edit.contentAwareFill", json!({})).unwrap();
+        assert!(r["contentAwareFill"]["window"].is_array(), "{r}");
+        crate::caf_ui::commit(&mut app);
+        assert!(app.distort.caf.is_none());
         let r = crate::menus::invoke(&mut app, &ctx, "edit.contentAwareScale", json!({})).unwrap();
         assert_eq!(r["transform"]["rect"], json!([4.0, 4.0, 12.0, 12.0]));
         crate::transform_tool::cancel(&mut app);

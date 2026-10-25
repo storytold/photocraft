@@ -4,7 +4,7 @@ members = ["crates/*", "apps/*", "xtask"]
 default-members = ["crates/*", "apps/photocraft", "apps/photocraft-cli", "xtask"]
 
 [workspace.package]
-version = "0.9.0"
+version = "0.16.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 rust-version = "1.95"
@@ -36,12 +36,18 @@ photocraft-engine = { path = "crates/engine" }
 photocraft-ui-egui = { path = "crates/ui-egui" }
 photocraft-testkit = { path = "crates/testkit" }
 photocraft-tablet = { path = "crates/tablet" }
+photocraft-ipp = { path = "crates/ipp" }
 
 # external
 craft-print = { git = "https://github.com/storytold/craft-libs", rev = "3d37da389a3618ab9b76109da11416e9ca4ea719" }
+craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "82a24b006eefa036b43c09a67fb9a3fbd17ffe63" }
+craft-jpeg = { git = "https://github.com/storytold/craft-libs", rev = "6e7f28518dd1cb57e1624bdc269c3c14316b13ae" }
 thiserror = "2"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
+clap = { version = "4", features = ["derive", "env"] }
+clap_complete = "4.6.11"
+clap_mangen = { version = "0.3.3", features = ["env"] }
 arc-swap = "1"
 bytemuck = { version = "1", features = ["derive"] }
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
@@ -57,6 +63,8 @@ egui = { version = "0.36", default-features = false }
 egui_kittest = "0.36"
 rfd = "0.17"
 log = "0.4"
+# All date/time conversion goes through chrono (no hand-rolled calendar code beyond the 400-year range extension; AGENTS.md).
+chrono = { version = "0.4.45", default-features = false, features = ["std"] }
 rayon = "1"
 criterion = { version = "0.5", default-features = false }
 getrandom = "0.3"
@@ -68,15 +76,18 @@ unsafe_code = "forbid"
 dbg_macro = "warn"
 todo = "warn"
 
+# Dependencies carry no debug info: their frames in a backtrace lose file:line, and the target dir
+# and link times shrink. The test profile inherits both settings.
 [profile.dev.package."*"]
 opt-level = 2
+debug = false
 
 [profile.dev]
 opt-level = 1
 # Line tables keep file:line in panic backtraces but drop variable info, which roughly halves link
-# time and PDB size for the ~260 test binaries (#2204). CI sets the same through
-# CARGO_PROFILE_DEV_DEBUG (and no debuginfo at all for the Windows tests). To inspect locals in a
-# debugger, build with CARGO_PROFILE_DEV_DEBUG=true.
+# time and PDB size for the test binaries (#2204). CI's Windows legs build with no debuginfo at all
+# (CARGO_PROFILE_DEV_DEBUG=0). To inspect locals in a debugger, build with
+# CARGO_PROFILE_DEV_DEBUG=true.
 debug = "line-tables-only"
 
 # Test builds compile ui-egui without optimization: its library and unit tests were the biggest
@@ -134,6 +145,14 @@ opt-level = "z"
 [profile.wasm-release.package.usvg]
 opt-level = "z"
 [profile.wasm-release.package.naga]
+opt-level = "z"
+
+# The browser UI toolkit favors size to stay within the WebAssembly upload budget.
+[profile.wasm-release.package.egui]
+opt-level = "z"
+[profile.wasm-release.package.epaint]
+opt-level = "z"
+[profile.wasm-release.package.eframe]
 opt-level = "z"
 
 # Pixel processing keeps its speed-oriented optimization level, with two exceptions.

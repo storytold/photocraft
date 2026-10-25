@@ -4,7 +4,7 @@
 //! decreases it in a flipped view). Shift snaps to 15°. Reset View,
 //! Escape, a double-click, or the on-canvas compass put the angle back to 0. History is not
 //! recorded. Trackpad rotate is gated by Preferences › Enhanced Controls › Rotate View with
-//! Trackpad.
+//! Trackpad; a two-finger twist on a touch screen also needs Enable Gestures (#204).
 
 use egui::{Align2, Pos2, Rect, Stroke, pos2, vec2};
 use serde_json::{Value, json};
@@ -137,7 +137,9 @@ pub fn apply_trackpad(current: f32, enabled: bool, delta_rad: f32) -> Option<f32
 }
 
 /// This frame's trackpad rotation in degrees, if the preference is on and egui reported a delta.
-pub fn trackpad_delta(ctx: &egui::Context, enabled: bool) -> Option<f32> {
+/// The trackpad's own `Rotate` events always count; a touch screen's two-finger twist (egui's
+/// multi-touch rotation) only while `touch_gestures` (Enhanced Controls › Enable Gestures) is on.
+pub fn trackpad_delta(ctx: &egui::Context, enabled: bool, touch_gestures: bool) -> Option<f32> {
     if !enabled {
         return None;
     }
@@ -150,7 +152,13 @@ pub fn trackpad_delta(ctx: &egui::Context, enabled: bool) -> Option<f32> {
                 _ => None,
             })
             .sum();
-        if from_events != 0.0 { from_events } else { i.rotation_delta() }
+        if from_events != 0.0 {
+            from_events
+        } else if touch_gestures {
+            i.rotation_delta()
+        } else {
+            0.0
+        }
     });
     apply_trackpad(0.0, true, rad).filter(|_| rad != 0.0)
 }
@@ -324,13 +332,43 @@ mod tests {
         let mut disabled = None;
         let raw = egui::RawInput { events: vec![Event::Rotate(std::f32::consts::FRAC_PI_6)], ..Default::default() };
         let mut output = ctx.run_ui(raw, |ui| {
-            enabled = trackpad_delta(ui.ctx(), true);
-            disabled = trackpad_delta(ui.ctx(), false);
+            enabled = trackpad_delta(ui.ctx(), true, true);
+            disabled = trackpad_delta(ui.ctx(), false, true);
         });
         output.textures_delta.clear();
 
         assert!(enabled.is_some_and(|degrees| (degrees - 30.0).abs() < 1e-3), "{enabled:?}");
         assert_eq!(disabled, None);
+    }
+
+    /// Preferences › Enhanced Controls › Enable Gestures (#204): off, a two-finger twist on a
+    /// touch screen doesn't turn the view; the trackpad's `Rotate` event still does.
+    #[test]
+    fn enable_gestures_switches_touch_screen_rotation() {
+        use egui::TouchPhase::{Move, Start};
+        let touch = |id: u64, phase, pos| Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(id), phase, pos, force: None };
+        let twist = |touch_gestures: bool, extra: Vec<Event>| {
+            let ctx = egui::Context::default();
+            let frames = [
+                // egui only starts a multi-touch gesture once it knows where the pointer is.
+                vec![Event::PointerMoved(pos2(50.0, 50.0))],
+                vec![touch(1, Start, pos2(40.0, 50.0)), touch(2, Start, pos2(60.0, 50.0))],
+                // A quarter turn about the centre between the fingers.
+                [vec![touch(1, Move, pos2(50.0, 40.0)), touch(2, Move, pos2(50.0, 60.0))], extra].concat(),
+            ];
+            let mut last = None;
+            for (n, events) in (0u32..).zip(frames) {
+                let raw = egui::RawInput { time: Some(f64::from(n) / 60.0), events, ..Default::default() };
+                let mut out = ctx.run_ui(raw, |ui| last = trackpad_delta(ui.ctx(), true, touch_gestures));
+                out.textures_delta.clear();
+            }
+            last
+        };
+        let on = twist(true, Vec::new());
+        assert!(on.is_some_and(|d| (d.abs() - 90.0).abs() < 1e-3), "on: the fingers turn the view: {on:?}");
+        assert_eq!(twist(false, Vec::new()), None, "off: the fingers don't");
+        let trackpad = twist(false, vec![Event::Rotate(std::f32::consts::FRAC_PI_6)]);
+        assert!(trackpad.is_some_and(|d| (d - 30.0).abs() < 1e-3), "off: a trackpad rotate still turns: {trackpad:?}");
     }
 
     #[test]

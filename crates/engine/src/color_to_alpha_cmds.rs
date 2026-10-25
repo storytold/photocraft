@@ -34,7 +34,7 @@ fn unit(v: f32, default: f32) -> f32 {
 /// Algorithm parameters (lenient: out-of-range values are clamped, unreadable ones fall back to
 /// the defaults). [`run`] validates strictly before it gets here.
 pub(crate) fn params(p: &Value) -> FilterParams {
-    let c = crate::commands::color_param(p, "color", WHITE);
+    let c = crate::commands::color_param(ID, p, "color", WHITE).unwrap_or(WHITE);
     let num = |k: &str, d: f32| p.get(k).and_then(Value::as_f64).map_or(d, |v| unit(v as f32, d));
     FilterParams::ColorToAlpha {
         color: [unit(c[0], 1.0), unit(c[1], 1.0), unit(c[2], 1.0), 1.0],
@@ -64,10 +64,9 @@ fn validate(p: &Value) -> Result<()> {
         Some(Value::String(s)) => {
             crate::commands::parse_hex(s).ok_or_else(|| bad(format!("`color` must be \"#rrggbb\", not {s:?}")))?;
         }
+        Some(Value::Array(a)) if (3..=4).contains(&a.len()) && a.iter().all(|v| v.as_f64().is_some_and(|x| x.is_finite() && (0.0..=1.0).contains(&x))) => {}
         Some(Value::Array(a)) if (3..=4).contains(&a.len()) => {
-            if !a.iter().all(|v| v.as_f64().is_some_and(|x| x.is_finite() && (0.0..=1.0).contains(&x))) {
-                return Err(bad("`color` as an array must hold 3 or 4 numbers in 0..1"));
-            }
+            return Err(bad("`color` as an array must hold 3 or 4 numbers in 0..1"));
         }
         Some(_) => return Err(bad("`color` must be \"#rrggbb\" or [r, g, b] in 0..1")),
     }

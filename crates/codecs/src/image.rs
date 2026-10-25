@@ -321,18 +321,73 @@ pub struct ExrPartInfo {
 
 impl ExrPartInfo {
     /// How much this part looks like a colour image the plain [`Image`] decode can show:
-    /// 4 RGBA, 3 RGB, 2 YA, 1 any-single-channel, 0 anything else (e.g. `Z` beside `A`).
+    /// 4 RGBA, 3 RGB, 2 YA, 1 Y or any-single-channel, 0 anything else (e.g. `Z` beside `A`).
+    /// The colour and alpha channels must share a complete layer prefix. The highest-ranked
+    /// group wins; equal groups prefer unprefixed channels, then the first prefix alphabetically.
     /// The auto-pick takes the highest rank; ties go to the earlier part.
     pub fn color_rank(&self) -> u8 {
-        let has = |n: &str| self.channels.iter().any(|c| base_channel_name(&c.name) == n);
-        if has("R") && has("G") && has("B") {
-            return if has("A") { 4 } else { 3 };
-        }
-        if has("Y") {
-            return if has("A") { 2 } else { 1 };
-        }
-        u8::from(self.channels.len() == 1)
+        exr_color_channels(self.channels.iter().map(|c| c.name.as_str())).map_or(0, |(layout, _)| layout.channels() as u8)
     }
+}
+
+/// One selection policy for header ranking/probing and flat decoding: never synthesize
+/// RGB(A) or YA from separate layers. OpenEXR layers use the full prefix before the last
+/// dot, including nested layers; a leading or trailing dot alone does not name a layer.
+pub(crate) fn exr_color_channels<'a>(names: impl IntoIterator<Item = &'a str>) -> Option<(ChannelLayout, Vec<usize>)> {
+    #[derive(Default)]
+    struct Group {
+        r: Option<usize>,
+        g: Option<usize>,
+        b: Option<usize>,
+        a: Option<usize>,
+        y: Option<usize>,
+    }
+
+    // Sorted prefixes make rank ties deterministic independently of channel order, with
+    // the empty (unprefixed) group first. Unsupported channels cannot complete a group.
+    let mut groups = std::collections::BTreeMap::<&str, Group>::new();
+    let mut count = 0usize;
+    for (index, name) in names.into_iter().enumerate() {
+        count = count.saturating_add(1);
+        let (prefix, base) = name.rsplit_once('.').filter(|(prefix, base)| !prefix.is_empty() && !base.is_empty()).unwrap_or(("", name));
+        if !matches!(base, "R" | "G" | "B" | "A" | "Y") {
+            continue;
+        }
+        let group = groups.entry(prefix).or_default();
+        let component = match base {
+            "R" => &mut group.r,
+            "G" => &mut group.g,
+            "B" => &mut group.b,
+            "A" => &mut group.a,
+            "Y" => &mut group.y,
+            _ => continue,
+        };
+        component.get_or_insert(index);
+    }
+
+    let mut best = None;
+    let mut best_rank = 0;
+    for group in groups.values() {
+        let candidate = if let (Some(r), Some(g), Some(b)) = (group.r, group.g, group.b) {
+            match group.a {
+                Some(a) => (ChannelLayout::Rgba, vec![r, g, b, a]),
+                None => (ChannelLayout::Rgb, vec![r, g, b]),
+            }
+        } else if let Some(y) = group.y {
+            match group.a {
+                Some(a) => (ChannelLayout::GrayA, vec![y, a]),
+                None => (ChannelLayout::Gray, vec![y]),
+            }
+        } else {
+            continue;
+        };
+        let rank = candidate.0.channels();
+        if rank > best_rank {
+            best = Some(candidate);
+            best_rank = rank;
+        }
+    }
+    best.or_else(|| (count == 1).then(|| (ChannelLayout::Gray, vec![0])))
 }
 
 /// Strip an optional `layer.` prefix from a channel name (`diffuse.R` → `R`).
@@ -399,6 +454,9 @@ pub struct Image {
     data: Vec<u8>,
     /// Embedded ICC profile (must describe `layout`'s colour model).
     pub icc: Option<Vec<u8>>,
+    /// The file's CICP colour description (a HEIF `nclx`), when it has one. Only an image whose
+    /// `icc` is `None` relies on it.
+    pub cicp: Option<crate::cicp::Cicp>,
     pub meta: Metadata,
     /// What the decoder noticed about the file: empty for a complete, single image and for
     /// images built in memory. Encoders ignore it.
@@ -413,7 +471,7 @@ impl Image {
     /// A zero-filled image, or an error if the byte size overflows `usize`.
     pub fn new(width: u32, height: u32, layout: ChannelLayout, sample: SampleType) -> Result<Self, CodecError> {
         let len = byte_len(width, height, layout, sample).ok_or_else(|| CodecError::InvalidImage("image size overflows usize".into()))?;
-        Ok(Image { width, height, layout, sample, data: vec![0; len], icc: None, meta: Metadata::default(), warnings: Vec::new() })
+        Ok(Image { width, height, layout, sample, data: vec![0; len], icc: None, cicp: None, meta: Metadata::default(), warnings: Vec::new() })
     }
 
     /// Wrap raw interleaved, native-endian bytes.
@@ -422,7 +480,7 @@ impl Image {
         if data.len() != expected {
             return Err(CodecError::InvalidImage(format!("buffer has {} bytes, expected {expected} for {width}x{height} {layout:?} {sample:?}", data.len())));
         }
-        Ok(Image { width, height, layout, sample, data, icc: None, meta: Metadata::default(), warnings: Vec::new() })
+        Ok(Image { width, height, layout, sample, data, icc: None, cicp: None, meta: Metadata::default(), warnings: Vec::new() })
     }
 
     pub fn from_u8(width: u32, height: u32, layout: ChannelLayout, data: Vec<u8>) -> Result<Self, CodecError> {
@@ -591,6 +649,7 @@ impl Image {
             sample,
             data,
             icc: if layout.same_model(self.layout) { self.icc.clone() } else { None },
+            cicp: if layout.same_model(self.layout) { self.cicp } else { None },
             meta: self.meta.clone(),
             warnings: self.warnings.clone(),
         }

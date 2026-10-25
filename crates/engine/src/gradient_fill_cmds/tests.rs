@@ -27,7 +27,7 @@ fn create_makes_a_canvas_aligned_fill_layer_with_the_drag_as_handles() {
     let r = s
         .execute(
             CREATE,
-            json!({"from": [14, 16], "to": [34, 8], "style": "radial", "stops": [[0, "#ff0000"], [1, "#0000ff"]], "opacity": 50, "mode": "multiply"}),
+            json!({"from": [14, 16], "to": [200, -40], "style": "radial", "stops": [[0, "#ff0000"], [1, "#0000ff"]], "opacity": 50, "mode": "multiply"}),
         )
         .unwrap();
     assert_eq!(layer_count(&s), 2);
@@ -42,7 +42,7 @@ fn create_makes_a_canvas_aligned_fill_layer_with_the_drag_as_handles() {
     assert!(!align && dither);
     let g = s.execute(GET, json!({})).unwrap();
     let (from, to) = (g["from"].as_array().unwrap(), g["to"].as_array().unwrap());
-    for (v, want) in from.iter().chain(to).zip([14.0, 16.0, 34.0, 8.0]) {
+    for (v, want) in from.iter().chain(to).zip([14.0, 16.0, 200.0, -40.0]) {
         assert!((v.as_f64().unwrap() - want).abs() < 1e-3, "{g}");
     }
     // One undo step removes the layer.
@@ -225,11 +225,11 @@ fn stops_add_move_recolour_delete_and_midpoints() {
 #[test]
 fn preview_equals_the_committed_edit() {
     let mut s = session(8, "white");
-    s.execute(CREATE, json!({"from": [4, 4], "to": [40, 20], "style": "diamond"})).unwrap();
+    s.execute(CREATE, json!({"from": [4, 4], "to": [40, 20], "style": "radial"})).unwrap();
     let d = s.active().unwrap();
     let l = d.doc.layer(d.active_layer.unwrap()).unwrap().clone();
     let LayerContent::Fill(f) = &l.content else { panic!() };
-    let p = json!({"from": [10, 12], "to": [30, 2]});
+    let p = json!({"from": [10, 12], "to": [150, -80]});
     let preview = apply_set(&l, f, d.doc.bounds(), &p, [0.0; 4], [1.0; 4]).unwrap();
     s.execute(SET, p).unwrap();
     assert_eq!(active_fill(&s), preview);
@@ -316,12 +316,12 @@ fn commands_fail_gracefully() {
     s.execute(SET, json!({"scale": 1e30, "angle": 1e9, "offset": [1e4, -1e4]})).unwrap();
     let g = s.execute(GET, json!({})).unwrap();
     assert!(g["scale"].as_f64().unwrap().is_finite() && g["from"][0].as_f64().unwrap().is_finite());
-    // Scale stays within Photoshop's 10–150 %, also for a handle dragged far away.
-    assert!((g["scale"].as_f64().unwrap() - 150.0).abs() < 1e-3, "{g}");
+    // Fill layers use Photoshop's 1–1000 %, also for a handle dragged far away.
+    assert!((g["scale"].as_f64().unwrap() - 1000.0).abs() < 1e-3, "{g}");
     let g = s.execute(SET, json!({"from": [0, 0], "to": [1e6, 0]})).unwrap();
-    assert!((g["scale"].as_f64().unwrap() - 150.0).abs() < 1e-3, "{g}");
-    let g = s.execute(SET, json!({"scale": 1})).unwrap();
-    assert!((g["scale"].as_f64().unwrap() - 10.0).abs() < 1e-3, "{g}");
+    assert!((g["scale"].as_f64().unwrap() - 1000.0).abs() < 1e-3, "{g}");
+    let g = s.execute(SET, json!({"scale": 0.1})).unwrap();
+    assert!((g["scale"].as_f64().unwrap() - 1.0).abs() < 1e-3, "{g}");
 }
 
 /// Dragging one handle past the scale range stops it; the other handle stays put (#1243).
@@ -332,17 +332,19 @@ fn a_clamped_handle_drag_leaves_the_other_handle_alone() {
     for style in STYLES {
         for (from, to, short, short_start) in [([14.0, 16.0], [34.0, 16.0], [15.0, 16.0], [33.0, 16.0]), ([24.0, 6.0], [24.0, 26.0], [24.0, 7.0], [24.0, 25.0])]
         {
-            let mut s = session(8, "white");
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width": 480, "height": 320})).unwrap();
             s.execute(CREATE, json!({"from": from, "to": to, "style": style})).unwrap();
-            // End dragged almost onto the start: far below 10 %.
+            // End dragged almost onto the start: below 1 % on this larger canvas.
             let g = s.execute(SET, json!({"to": short})).unwrap();
-            assert!((g["scale"].as_f64().unwrap() - 10.0).abs() < 1e-3, "{style}: {g}");
+            assert!((g["scale"].as_f64().unwrap() - 1.0).abs() < 1e-3, "{style}: {g}");
             assert!(close(pt(&g, "from"), from), "{style}: start moved to {:?}", pt(&g, "from"));
             // The end stops on the line towards the pointer.
             let e = pt(&g, "to");
             assert!((e[0] - from[0]) * (short[0] - from[0]) >= 0.0 && (e[1] - from[1]) * (short[1] - from[1]) >= 0.0, "{style}: {e:?}");
             // And the same for the start handle.
-            let mut s = session(8, "white");
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width": 480, "height": 320})).unwrap();
             s.execute(CREATE, json!({"from": from, "to": to, "style": style})).unwrap();
             let g = s.execute(SET, json!({"from": short_start})).unwrap();
             assert!(close(pt(&g, "to"), to), "{style}: end moved: {g}");

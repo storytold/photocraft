@@ -17,6 +17,17 @@ pub const LABEL_GAP: f32 = 4.0;
 /// Horizontal gap between two label+field columns.
 pub const COL_GAP: f32 = 8.0;
 
+/// A one-letter field label ("W", "H", "X", "Y") in a `w`-wide column, ending `pad` before its field. The letters
+/// stacked in one column share a centre (#7314): the widest of `column` stays flush right, and the narrower ones
+/// are centred on it rather than pushed against its right edge.
+pub fn stacked_label(ui: &mut egui::Ui, s: &str, column: &[&str], w: f32, pad: f32) {
+    let t = Tokens::get(ui.ctx());
+    let font = egui::FontId::proportional(12.0);
+    let widest = column.iter().map(|c| ui.painter().layout_no_wrap((*c).to_owned(), font.clone(), t.text_dim).size().x).fold(0.0, f32::max);
+    let (r, _) = ui.allocate_exact_size(vec2(w, 22.0), Sense::hover());
+    ui.painter().text(pos2(r.right() - pad - widest / 2.0, r.center().y), egui::Align2::CENTER_CENTER, s, font, t.text_dim);
+}
+
 /// Icon for a layer kind (the same glyphs as the Layers panel's kind filter).
 pub fn kind_icon(content: &LayerContent) -> &'static str {
     match content {

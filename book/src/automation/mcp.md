@@ -5,6 +5,9 @@
 - **Headless:** an in-process `Headless` session owns the engine and performs file I/O.
 - **Bridge:** `BridgeClient` forwards tools to a desktop application started with `photocraft --control <port>`.
 
+For a source checkout, first [install the CLI on PATH and register the server](../../../docs/mcp.md#install-and-register).
+The installed binary survives `cargo clean`; a symlink into `target/release` does not.
+
 Start the headless server with:
 
 ```sh
@@ -16,6 +19,16 @@ Bridge to a running desktop application with the same private token file used by
 ```sh
 photocraft-cli mcp --bridge 127.0.0.1:7878 --control-token-file /private/path/control.token
 ```
+
+Use absolute root paths in MCP client configurations, since a relative root is resolved from the
+client's launch directory. In bridge mode the roots are configured on the desktop app, and root
+flags on `photocraft-cli mcp --bridge` are rejected. Explicit `--control-token` and
+`--control-token-file` flags require `--bridge` (or `PHOTOCRAFT_CONTROL_PORT`) and are mutually
+exclusive; bridge credentials can also come from `PHOTOCRAFT_CONTROL_TOKEN` or
+`PHOTOCRAFT_CONTROL_TOKEN_FILE`. Each launch option
+except `--help`/`-h` takes one non-empty value and cannot be repeated. Stray positional arguments,
+missing values and options for the wrong mode are usage errors (exit 2) reported on stderr before
+the server starts.
 
 Tools cover session/document operations, command discovery and execution, batching, and—when bridged—UI inspection and control. Tool schemas improve correctness but are not authorization boundaries.
 
