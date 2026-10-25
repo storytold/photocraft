@@ -532,7 +532,10 @@ impl VpSession {
         let mut area = Rect::EMPTY;
         let mut baked = false;
         if stale {
-            let Some(layer) = self.base.layer(self.layer).and_then(Layer::surface) else { return false };
+            let Some(layer) = self.base.layer(self.layer).and_then(Layer::surface) else {
+                // The layer is gone (or no longer pixels): nothing to show the strokes on.
+                return self.preview.take().is_some();
+            };
             let mut out = if self.new_layer { Surface::new(layer.format()) } else { layer.clone() };
             // OK pastes first and the strokes then paint over (and sample) the pasted pixels.
             if let (Some((i, at, width)), Some(c)) = (paste, self.clip.as_ref())
@@ -615,6 +618,31 @@ impl VpSession {
             return None;
         }
         Some((p.shown.clone(), PREVIEW_KEY + p.keys.last()?.0))
+    }
+
+    /// [`Self::shown`], only on the document at the revision the strokes were painted on.
+    pub(crate) fn shown_on(&self, doc: DocId, revision: u64) -> Option<(Arc<Document>, u64)> {
+        if self.document != doc || self.doc_revision != revision {
+            return None;
+        }
+        self.shown()
+    }
+
+    /// The document changed under the mode (a menu command, the Layers panel): paint the
+    /// strokes over it as it is now, as OK will.
+    fn rebase(&mut self, doc: &Arc<Document>, revision: u64) {
+        if doc.id != self.document || revision == self.doc_revision {
+            return;
+        }
+        if Arc::ptr_eq(doc, &self.base) {
+            // A view change (layer selection, channel view): the same pixels, keep the preview.
+            self.doc_revision = revision;
+            return;
+        }
+        self.base = doc.clone();
+        self.doc_revision = revision;
+        self.canvas = doc.bounds();
+        self.preview = None;
     }
 
     /// Image positions of the edge nodes of plane `i`.
@@ -827,7 +855,15 @@ pub fn commit(app: &mut PhotocraftApp) -> Result<Value, String> {
         app.ui.status = msg.into();
         return Err(msg.into());
     }
-    let params = s.params();
+    let mut params = s.params();
+    // The layer the mode was opened on, when another one was picked meanwhile (the mode isn't
+    // modal). Left out otherwise, so a recorded action stays portable.
+    if let Some(st) = app.session.active()
+        && st.active_layer != Some(s.layer)
+        && st.doc.layer(s.layer).is_some()
+    {
+        params["layer"] = json!(s.layer.0);
+    }
     let session = app.distort.vanishing.take();
     if params.get("paste").is_none() && params.get("clone").is_none() {
         return Ok(json!({"committed": false}));
@@ -963,6 +999,9 @@ fn parse_planes(v: &Value) -> Result<(Vec<VpPlane>, Vec<Option<Torn>>), String> 
 /// changed, once no plane is being dragged).
 pub(crate) fn sync_preview(app: &mut PhotocraftApp) {
     let Some(s) = app.distort.vanishing.as_mut() else { return };
+    if let Some(st) = app.session.active() {
+        s.rebase(&st.doc, st.revision);
+    }
     if matches!(s.drag, Some(Drag::Corner { .. } | Drag::Edge { .. } | Drag::Torn { .. } | Drag::Paste { .. })) {
         return;
     }
@@ -1570,5 +1609,106 @@ mod tests {
         sync_preview(&mut app);
         assert!(app.distort.vanishing.as_ref().unwrap().planes.is_empty());
         assert!(crate::distort_ui::display_doc(&app, 0).is_none(), "no strokes shown without a plane");
+    }
+
+    /// Opens the mode on the active layer of `app_with_layer` and stamps one stroke.
+    fn stamp_a_stroke(app: &mut PhotocraftApp, ctx: &egui::Context) {
+        crate::distort_ui::menu(app, ctx, VP, &json!({})).unwrap().unwrap();
+        control(app, &json!({"planes": [{"corners": [[10, 10], [230, 10], [230, 150], [10, 150]]}]})).unwrap();
+        control(app, &json!({"clone": [{"source": [60, 80], "points": [[120, 80], [126, 80]], "size": 12}]})).unwrap();
+    }
+
+    #[test]
+    fn stamp_preview_is_not_shown_on_another_document() {
+        let (ctx, mut app) = app_with_layer();
+        stamp_a_stroke(&mut app, &ctx);
+        assert!(crate::distort_ui::display_doc(&app, 0).is_some());
+        app.session.execute("file.new", json!({"width": 32, "height": 32, "depth": 8})).unwrap();
+        let active = app.session.active_index().unwrap();
+        // The session stays until drop_foreign; the preview must not follow this document (#5115).
+        assert!(app.distort.vanishing.is_some());
+        assert!(crate::distort_ui::display_doc(&app, active).is_none());
+    }
+
+    #[test]
+    fn ok_paints_the_layer_the_mode_was_opened_on() {
+        for new_layer in [false, true] {
+            let (ctx, mut app) = app_with_layer();
+            let layer = app.session.active().unwrap().active_layer.unwrap();
+            app.session
+                .edit("stripe", |doc, active| {
+                    doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().fill_rect(Rect::new(50, 70, 70, 90), &[1.0, 0.0, 0.0, 1.0]);
+                    Ok(())
+                })
+                .unwrap();
+            stamp_a_stroke(&mut app, &ctx);
+            app.distort.vanishing.as_mut().unwrap().new_layer = new_layer;
+            sync_preview(&mut app);
+            // Another layer is picked while the mode is open (it isn't modal).
+            app.session.execute("layer.new.layer", json!({"name": "other"})).unwrap();
+            let other = app.session.active().unwrap().active_layer.unwrap();
+            sync_preview(&mut app);
+            let expected = photocraft_compose::flatten(&crate::distort_ui::display_doc(&app, 0).unwrap().0).px;
+            commit(&mut app).unwrap();
+            let d = &app.session.active().unwrap().doc;
+            assert!(d.layer(other).unwrap().surface().unwrap().content_bounds().is_empty(), "newLayer={new_layer}");
+            if !new_layer {
+                assert!(d.layer(layer).unwrap().surface().unwrap().rgba(120, 80)[0] > 0.9, "the stroke lands on the session's layer");
+                // And it becomes active, so Fade and a colour-channel target follow it.
+                assert_eq!(app.session.active().unwrap().active_layer, Some(layer));
+            }
+            assert_eq!(photocraft_compose::flatten(d).px, expected, "newLayer={new_layer}");
+        }
+    }
+
+    #[test]
+    fn an_edit_under_the_mode_shows_on_the_canvas() {
+        let (ctx, mut app) = app_with_layer();
+        app.session
+            .edit("stripe", |doc, active| {
+                doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().fill_rect(Rect::new(50, 70, 70, 90), &[1.0, 0.0, 0.0, 1.0]);
+                Ok(())
+            })
+            .unwrap();
+        stamp_a_stroke(&mut app, &ctx);
+        let before = crate::distort_ui::display_doc(&app, 0).unwrap();
+        app.session
+            .edit("edit", |doc, active| {
+                doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().fill_rect(Rect::new(200, 20, 220, 40), &[0.0, 1.0, 0.0, 1.0]);
+                Ok(())
+            })
+            .unwrap();
+        // Not the stale preview, even before the mode catches up.
+        assert!(crate::distort_ui::display_doc(&app, 0).is_none_or(|(d, _)| !Arc::ptr_eq(&d, &before.0)));
+        // The canvas catches up before it draws: the strokes over the edit, no frame without them.
+        let (shown, key) = crate::canvas::display_doc(&mut app, 0);
+        assert_ne!(key, before.1);
+        let st = app.session.active().unwrap();
+        let layer = st.active_layer.unwrap();
+        let px = shown.layer(layer).unwrap().surface().unwrap();
+        assert!(px.rgba(210, 30)[1] > 0.9, "the edit shows: {:?}", px.rgba(210, 30));
+        assert!(px.rgba(120, 80) != st.doc.layer(layer).unwrap().surface().unwrap().rgba(120, 80), "and so does the stroke");
+        let expected = photocraft_compose::flatten(&shown).px;
+        commit(&mut app).unwrap();
+        assert_eq!(photocraft_compose::flatten(&app.session.active().unwrap().doc).px, expected);
+    }
+
+    #[test]
+    fn selecting_another_layer_keeps_the_stamp_preview() {
+        let (ctx, mut app) = app_with_layer();
+        let layer = app.session.active().unwrap().active_layer.unwrap();
+        app.session.execute("layer.new.layer", json!({"name": "other"})).unwrap();
+        app.session.execute("layer.select", json!({"layer": layer.0})).unwrap();
+        app.sync_views();
+        stamp_a_stroke(&mut app, &ctx);
+        let before = crate::canvas::display_doc(&mut app, 0);
+        let (doc, revision) = app.session.active().map(|st| (st.doc.clone(), st.revision)).unwrap();
+        app.session.execute("layer.select", json!({"layer": "other"})).unwrap();
+        let st = app.session.active().unwrap();
+        assert!(st.revision != revision && Arc::ptr_eq(&st.doc, &doc), "a selection change leaves the pixels alone");
+        // Same preview, same key: nothing to repaint or recomposite.
+        let after = crate::canvas::display_doc(&mut app, 0);
+        assert!(Arc::ptr_eq(&after.0, &before.0));
+        assert_eq!(after.1, before.1);
     }
 }

@@ -240,15 +240,26 @@ fn vanishing_point(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let clones = clone_specs(p)?;
     let new_layer = p.get("newLayer").and_then(Value::as_bool).unwrap_or(false);
+    // The layer the mode was opened on (the UI passes it: other layers can be picked meanwhile).
+    let layer = crate::commands::explicit_layer(s, p)?;
     let mut dabs = 0usize;
     let target = s.edit("Vanishing Point", |doc: &mut Document, active| {
+        if let Some(l) = layer
+            && doc.layer(l).is_none()
+        {
+            return Err(EngineError::NoLayer(l));
+        }
+        let on = layer.or(*active);
         let id = if new_layer {
             let l = Layer::raster(doc.next_layer_name("Vanishing Point"), doc.pixel_format());
-            let nid = doc.insert_above(*active, l);
+            let nid = doc.insert_above(on, l);
             *active = Some(nid);
             nid
         } else {
-            active.ok_or_else(|| EngineError::Other("no active layer".into()))?
+            // The painted layer becomes active, so Fade and a colour-channel target follow it.
+            let id = on.ok_or_else(|| EngineError::Other("no active layer".into()))?;
+            *active = Some(id);
+            id
         };
         // A new layer clones from the visible image; otherwise from the layer itself.
         let base: Option<Surface> = new_layer.then(|| visible_image(doc));
@@ -291,7 +302,7 @@ pub fn specs() -> Vec<CommandSpec> {
         label: "Vanishing Point…",
         menu: &["Filter"],
         shortcut: Some("Cmd+Alt+V"),
-        params: r##"{"planes":[{"corners":[[x,y]×4]} | {"from":plane,"edge":"top|right|bottom|left","angle":deg=90,"depth":1}],"focalLength":px=0,"paste":[{"plane":0,"layer":id? (else the clipboard),"at":[u,v]=[0.25,0.25],"width":0..1=0.5}],"clone":[{"source":[x,y],"points":[[x,y]],"size":px=40,"hardness":0..100=50,"opacity":0..100=100}],"newLayer":bool=false}"##,
+        params: r##"{"planes":[{"corners":[[x,y]×4]} | {"from":plane,"edge":"top|right|bottom|left","angle":deg=90,"depth":1}],"focalLength":px=0,"paste":[{"plane":0,"layer":id? (else the clipboard),"at":[u,v]=[0.25,0.25],"width":0..1=0.5}],"clone":[{"source":[x,y],"points":[[x,y]],"size":px=40,"hardness":0..100=50,"opacity":0..100=100}],"newLayer":bool=false,"layer":id|name? (else the active layer)}"##,
         enabled: has_layer,
         run: vanishing_point,
         journal: true,
@@ -425,5 +436,40 @@ mod tests {
             assert!(l.rgba(100, 100)[0] > 0.9, "{:?}", l.rgba(100, 100));
             s.undo();
         }
+    }
+
+    #[test]
+    fn layer_param_paints_that_layer_not_the_active_one() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 200, "height": 200})).unwrap();
+        s.execute("layer.new.layer", json!({"name": "floor"})).unwrap();
+        s.execute("edit.fill", json!({"color": "#40c040"})).unwrap();
+        s.edit("stripe", |doc, active| {
+            doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().fill_rect(Rect::new(140, 80, 160, 120), &[1.0, 0.0, 0.0, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+        let floor = s.active().unwrap().active_layer.unwrap();
+        s.execute("layer.new.layer", json!({"name": "other"})).unwrap();
+        let other = s.active().unwrap().active_layer.unwrap();
+        let planes = json!([{"corners": [[0, 0], [200, 0], [200, 200], [0, 200]]}]);
+        let clone = json!([{"source": [150, 100], "points": [[100, 100]], "size": 20}]);
+        let surf = |s: &Session, id| s.active().unwrap().doc.layer(id).unwrap().surface().unwrap().clone();
+        let r = s.execute(VP, json!({"planes": planes, "clone": clone, "layer": floor.0})).unwrap();
+        assert_eq!(r["layer"].as_u64(), Some(floor.0));
+        assert!(surf(&s, floor).rgba(100, 100)[0] > 0.9, "{:?}", surf(&s, floor).rgba(100, 100));
+        assert!(surf(&s, other).content_bounds().is_empty(), "the active layer stays untouched");
+        s.undo();
+        // A new layer goes right above the named layer.
+        let r = s.execute(VP, json!({"planes": planes, "clone": clone, "layer": floor.0, "newLayer": true})).unwrap();
+        let d = &s.active().unwrap().doc;
+        let ids: Vec<u64> = d.layers.iter().map(|l| l.id.0).collect();
+        let at = |id: u64| ids.iter().position(|&i| i == id).unwrap();
+        assert_eq!(at(r["layer"].as_u64().unwrap()), at(floor.0) + 1, "{ids:?}");
+        s.undo();
+        let before = s.active().unwrap().doc.clone();
+        assert!(s.execute(VP, json!({"planes": planes, "clone": clone, "layer": 999_999})).is_err());
+        assert!(s.execute(VP, json!({"planes": planes, "clone": clone, "layer": 999_999, "newLayer": true})).is_err());
+        assert!(std::sync::Arc::ptr_eq(&s.active().unwrap().doc, &before));
     }
 }

@@ -127,7 +127,7 @@ pub fn display_doc(app: &PhotocraftApp, idx: usize) -> Option<(Arc<Document>, u6
     if app.session.active_index() != Some(idx) {
         return None;
     }
-    let id = app.session.documents().get(idx).map(|st| st.doc.id)?;
+    let (id, revision) = app.session.documents().get(idx).map(|st| (st.doc.id, st.revision))?;
     if let Some(p) = &app.distort.puppet
         && p.document == id
     {
@@ -138,8 +138,8 @@ pub fn display_doc(app: &PhotocraftApp, idx: usize) -> Option<(Arc<Document>, u6
     {
         return Some((p.preview_doc.clone(), (1 << 42) + p.key));
     }
-    // Vanishing Point: the clone strokes painted so far.
-    app.distort.vanishing.as_ref().and_then(crate::vp_ui::VpSession::shown)
+    // Vanishing Point: the clone strokes painted so far, on the document as they were painted.
+    app.distort.vanishing.as_ref().and_then(|v| v.shown_on(id, revision))
 }
 
 /// Menu / control routing. `Some` when this module handles the invocation.
