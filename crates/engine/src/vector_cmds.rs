@@ -447,8 +447,9 @@ fn live_from_params(cmd: &str, kind: &str, p: &Value, prev: Option<&LiveShape>) 
                         None => fallback,
                     };
                     // Preserve scaled arrowhead dimensions when editing other properties.
-                    let preserved_scaled_size = p.get(key).is_none() && matches!(key, "arrowWidth" | "arrowLength") && value >= min;
-                    if !value.is_finite() || (!(min..=max).contains(&value) && !preserved_scaled_size) {
+                    let preserved_scaled_size = p.get(key).is_none() && matches!(key, "arrowWidth" | "arrowLength") && value.is_finite();
+                    let value = if preserved_scaled_size { value.max(min) } else { value };
+                    if !value.is_finite() || (!preserved_scaled_size && !(min..=max).contains(&value)) {
                         return Err(bad(cmd, format!("`{key}` must be within {min}..={max}")));
                     }
                     Ok(value)
