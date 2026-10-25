@@ -622,7 +622,7 @@ fn count_size_params(marker: f32, label: f32) -> Value {
     json!({"markerSize": whole(marker, 1.0, 10.0), "labelSize": whole(label, 8.0, 72.0)})
 }
 
-fn float_frame(t: &Tokens) -> egui::Frame {
+pub(crate) fn float_frame(t: &Tokens) -> egui::Frame {
     egui::Frame::NONE
         .fill(t.card)
         .stroke(Stroke::new(1.0, t.card_border))

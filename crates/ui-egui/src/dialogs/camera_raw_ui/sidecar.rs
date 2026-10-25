@@ -145,7 +145,7 @@ pub(super) fn load_settings(app: &mut PhotocraftApp) -> Result<Value, String> {
     })
 }
 
-pub(super) fn report_file_error(app: &mut PhotocraftApp, r: Result<Value, String>) {
+pub(crate) fn report_file_error(app: &mut PhotocraftApp, r: Result<Value, String>) {
     if let Err(e) = r
         && e != crate::file_dialog::CANCELLED
     {

@@ -11,6 +11,7 @@
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
+use crate::swatches_ui::source;
 
 /// Extensions handled here rather than by the document importer (`.aco`/`.act`/`.ase` swatches go to
 /// the Swatches panel through [`crate::swatches_ui::import_bytes`]).
@@ -72,16 +73,6 @@ pub(crate) fn import_gradients_dialog(app: &mut PhotocraftApp) {
         app.ui.status = error;
         app.ui.status_error = true;
     }
-}
-
-/// Command params for the file: a real path keeps the journal small; browser files arrive as bytes.
-fn source(name: &str, bytes: &[u8]) -> Value {
-    #[cfg(not(target_arch = "wasm32"))]
-    if std::path::Path::new(name).is_absolute() && std::path::Path::new(name).is_file() {
-        return json!({"path": name});
-    }
-    let _ = name;
-    json!({"data": photocraft_engine::paint::tile::b64_encode(bytes)})
 }
 
 /// Import a preset file; `None` when `name` isn't one.

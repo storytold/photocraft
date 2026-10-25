@@ -13,6 +13,7 @@ use photocraft_engine::actions_cmds::{self, Action};
 use crate::PhotocraftApp;
 use crate::file_dialog::{FileDialogAnswer, FileDialogRequest};
 use crate::icons;
+use crate::swatches_ui::source;
 use crate::theme::Tokens;
 
 /// Which row is selected and which rows are expanded. The action list itself is
@@ -690,17 +691,6 @@ fn step_label(id: &str, params: &Value) -> String {
     } else {
         label_of(id)
     }
-}
-
-/// Command params for a picked file: a real path keeps the journal small; browser files arrive
-/// as bytes.
-fn source(name: &str, bytes: &[u8]) -> Value {
-    #[cfg(not(target_arch = "wasm32"))]
-    if std::path::Path::new(name).is_absolute() && std::path::Path::new(name).is_file() {
-        return json!({"path": name});
-    }
-    let _ = name;
-    json!({"data": photocraft_engine::paint::tile::b64_encode(bytes)})
 }
 
 /// Load a `.atn` file's bytes into the Actions panel (the panel menu's Load Actions…).

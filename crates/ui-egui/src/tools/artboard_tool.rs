@@ -15,6 +15,7 @@ use serde_json::{Value, json};
 use crate::PhotocraftApp;
 use crate::canvas::{ToolEvent, ViewXform};
 use crate::crop_ui::{Hit, hit};
+use crate::eraser_ui::report;
 use crate::state::Tool;
 use crate::theme::Tokens;
 
@@ -161,13 +162,6 @@ fn preview(d: &ArtboardDrag) -> [i64; 4] {
         }
         ArtboardDrag::Resize { rect, hx, hy, start, cur, keep: true, .. } if hx != 0 && hy != 0 => resized_keep(rect, hx, hy, offset(start, cur)),
         ArtboardDrag::Resize { rect, hx, hy, start, cur, .. } => resized(rect, hx, hy, offset(start, cur)),
-    }
-}
-
-fn report(app: &mut PhotocraftApp, r: Result<Value, String>) {
-    if let Err(e) = r {
-        app.ui.status = e;
-        app.ui.status_error = true;
     }
 }
 
