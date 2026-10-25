@@ -18,7 +18,7 @@ fn median(values: &mut [f64]) -> f64 {
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Four pointer samples per 60 Hz frame, ~1000 px/s, over a 960 px stroke.
-    // Even the largest soft dab stays inside the document.
+    // Large soft tips also exercise pixels beyond the canvas edges.
     let points: Vec<_> = (0..=240).map(|i| StrokePoint::new(2500.0 + f64::from(i) * 4.0, 2000.0, 1.0)).collect();
     for depth in [8, 16, 32] {
         let mut s = Session::new();

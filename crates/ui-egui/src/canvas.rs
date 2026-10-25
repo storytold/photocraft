@@ -572,8 +572,8 @@ pub(crate) fn draw_readout<const N: usize>(ctx: &egui::Context, id: &str, cursor
 /// Healing Brush and History Brush composite their source.
 enum EngineStroke {
     Brush(Box<photocraft_engine::brush_cmds::LiveStroke>),
-    Retouch(photocraft_engine::retouch_cmds::LiveRetouch),
-    Dab(photocraft_engine::retouch_cmds::LiveDab),
+    Retouch(Box<photocraft_engine::retouch_cmds::LiveRetouch>),
+    Dab(Box<photocraft_engine::retouch_cmds::LiveDab>),
 }
 
 impl EngineStroke {
@@ -858,32 +858,32 @@ fn begin_live_stroke(app: &PhotocraftApp) -> Option<LiveStroke> {
         // The params `retouch_ui::finish_stroke` commits.
         let mut p = crate::retouch_ui::color_replacement_params(app);
         p["points"] = json!(d.points);
-        EngineStroke::Dab(photocraft_engine::brush_cmds::live_color_replacement(&app.session, &p).ok()?)
+        EngineStroke::Dab(Box::new(photocraft_engine::brush_cmds::live_color_replacement(&app.session, &p).ok()?))
     } else if let Some((cmd, mut p)) = crate::retouch_ui::dab_params(app, d.tool) {
         // The params `retouch_ui::finish_stroke` commits; Sample All Layers isn't previewed.
         p["points"] = json!(d.points);
         p["target"] = paint_target(app);
-        EngineStroke::Dab(photocraft_engine::retouch_cmds::LiveDab::begin(&app.session, cmd, &p).ok()?)
+        EngineStroke::Dab(Box::new(photocraft_engine::retouch_cmds::LiveDab::begin(&app.session, cmd, &p).ok()?))
     } else if d.tool == Tool::PatternStamp {
         // The params `retouch_ui::finish_stroke` commits.
         let mut p = crate::retouch_ui::pattern_stamp_params(app, &d.points);
         p["points"] = json!(d.points);
         p["target"] = paint_target(app);
         if app.ui.tool_options.pattern_stamp_impressionist {
-            EngineStroke::Dab(photocraft_engine::retouch_cmds::live_pattern_impressionist(&app.session, &p).ok()?)
+            EngineStroke::Dab(Box::new(photocraft_engine::retouch_cmds::live_pattern_impressionist(&app.session, &p).ok()?))
         } else {
-            EngineStroke::Retouch(photocraft_engine::retouch_cmds::LiveRetouch::begin(&app.session, "paint.patternStamp", &p).ok()?)
+            EngineStroke::Retouch(Box::new(photocraft_engine::retouch_cmds::LiveRetouch::begin(&app.session, "paint.patternStamp", &p).ok()?))
         }
     } else if d.tool == Tool::BackgroundEraser {
         // The params `eraser_ui::finish_stroke` commits (layer pixels only).
         let p = crate::eraser_ui::background_eraser_params(app, &d.points);
-        EngineStroke::Dab(photocraft_engine::eraser_cmds::live_background_eraser(&app.session, &p).ok()?)
+        EngineStroke::Dab(Box::new(photocraft_engine::eraser_cmds::live_background_eraser(&app.session, &p).ok()?))
     } else if let Some(cmd) = live_retouch_command(d.tool) {
         // The params `retouch_ui::finish_stroke` commits.
         let mut p = if d.tool == Tool::HistoryBrush { json!({}) } else { crate::retouch_ui::clone_params(app)? };
         p["points"] = json!(d.points);
         p["target"] = paint_target(app);
-        EngineStroke::Retouch(photocraft_engine::retouch_cmds::LiveRetouch::begin(&app.session, cmd, &p).ok()?)
+        EngineStroke::Retouch(Box::new(photocraft_engine::retouch_cmds::LiveRetouch::begin(&app.session, cmd, &p).ok()?))
     } else {
         let p = stroke_params(app, d, &app.stylus.stroke_points(&d.points));
         EngineStroke::Brush(Box::new(photocraft_engine::brush_cmds::LiveStroke::begin_with(&app.session, stroke_command(app, d.tool), &p).ok()?))
@@ -951,12 +951,12 @@ fn offer_live_retouch(app: &mut PhotocraftApp, d: &Drag) {
     match stroke {
         EngineStroke::Retouch(mut live) if !dab => {
             if rest.is_empty() || live.push(&rest).is_ok() {
-                let _ = app.session.offer_live_retouch(live);
+                let _ = app.session.offer_live_retouch(*live);
             }
         }
         EngineStroke::Dab(mut live) if dab => {
             if rest.is_empty() || live.push(&rest).is_ok() {
-                let _ = app.session.offer_live_dab(live);
+                let _ = app.session.offer_live_dab(*live);
             }
         }
         _ => {}

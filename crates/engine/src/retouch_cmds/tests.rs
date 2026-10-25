@@ -1936,13 +1936,13 @@ fn live_dab_batches_match_the_accumulating_renderer() {
                     }
                     let (bounds, expected) = render_new(&reference);
                     let actual = live.doc.layer(id).unwrap().surface().unwrap();
-                    assert_eq!(actual.read_region(bounds), expected, "{cmd} {depth} {case} batch={batch_index}");
+                    assert!(actual.read_region(bounds) == expected, "{cmd} {depth} {case} batch={batch_index}");
                 }
                 reference.finish();
                 let (bounds, expected) = render_new(&reference);
                 let commit = live.into_commit(&s).unwrap();
                 assert_eq!(commit.bounds, bounds, "{cmd} {depth} {case}: final damage");
-                assert_eq!(commit.surface.read_region(bounds), expected, "{cmd} {depth} {case}: finishing dabs");
+                assert!(commit.surface.read_region(bounds) == expected, "{cmd} {depth} {case}: finishing dabs");
             }
         }
     }
