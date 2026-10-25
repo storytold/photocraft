@@ -20,6 +20,9 @@ pub(crate) fn hash01(x: i32, y: i32, c: u32, seed: u32) -> f32 {
 
 /// Smooth value noise in [0, 1).
 pub(crate) fn value_noise(x: f32, y: f32, seed: u32) -> f32 {
+    const REACH: f32 = (1u32 << 30) as f32;
+    let bound = |v: f32| if v.is_finite() { v.clamp(-REACH, REACH) } else { 0.0 };
+    let (x, y) = (bound(x), bound(y));
     let (ix, iy) = (x.floor() as i32, y.floor() as i32);
     let (tx, ty) = (x - ix as f32, y - iy as f32);
     let (sx, sy) = (tx * tx * (3.0 - 2.0 * tx), ty * ty * (3.0 - 2.0 * ty));
@@ -287,6 +290,14 @@ mod tests {
                     assert_eq!(fast, bits(median_direct(&img, out, r, t)), "kind {kind} r {r} threshold {t:?}");
                 }
             }
+        }
+    }
+
+    #[test]
+    fn value_noise_stays_in_range_at_the_edge_of_the_lattice() {
+        for (x, y) in [(2_147_483_648.0, 0.5), (0.5, 2_147_483_648.0), (f32::MAX, f32::MAX), (f32::MIN, -1.0), (f32::NAN, f32::INFINITY), (-0.5, 3.25)] {
+            let v = value_noise(x, y, 7);
+            assert!((0.0..=1.0).contains(&v), "({x}, {y}) gave {v}");
         }
     }
 }
