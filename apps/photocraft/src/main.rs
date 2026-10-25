@@ -159,6 +159,15 @@ fn main() -> eframe::Result {
         return Ok(());
     }
 
+    // `--version --json` answers a launcher's feature probe without a window (see
+    // `launch_args::version_json`).
+    if launch_args::version_json(&std::env::args_os().skip(1).collect::<Vec<_>>()) {
+        use std::io::Write as _;
+        // Unlike `println!`, never panics when stdout is closed or a pipe.
+        let _ = writeln!(std::io::stdout().lock(), "{}", photocraft_ui_egui::control::capabilities());
+        return Ok(());
+    }
+
     // The system font scan can take seconds (minutes on some Macs): run it off the UI thread.
     photocraft_ui_egui::type_tool::warm_fonts();
     // `--help` and `--version` print to standard output and exit 0. A usage error (an unknown

@@ -139,6 +139,31 @@ pub fn tiff_would_write_layers(doc: &Document) -> bool {
     photocraft_io::tiff_layers::would_write_layers(doc)
 }
 
+/// The document's lone layer when it is a plain raster a flat file keeps: visible, at full
+/// opacity, in Normal mode, with no masks, effects or blending restrictions (#2234). File › Save
+/// and the automation saves both ask this before writing a JPEG, PNG or WebP back without
+/// flattening.
+pub fn plain_raster(doc: &Document) -> Option<&Layer> {
+    match doc.layers.as_slice() {
+        [layer]
+            if matches!(layer.content, photocraft_doc::LayerContent::Raster(_))
+                && layer.visible
+                && layer.opacity >= 1.0
+                && layer.fill_opacity >= 1.0
+                && layer.mask.is_none()
+                && layer.vector_mask.is_none()
+                && layer.effects.items.is_empty()
+                && layer.effects.psd_raw.is_none()
+                && matches!(layer.blend, photocraft_color::BlendMode::Normal | photocraft_color::BlendMode::PassThrough)
+                && photocraft_compose::channel_weights(layer, doc.mode).is_none()
+                && !photocraft_compose::blend_if_active(layer, doc.mode) =>
+        {
+            Some(layer)
+        }
+        _ => None,
+    }
+}
+
 pub(crate) fn file_name(path: &str) -> String {
     path.rsplit(['/', '\\']).next().unwrap_or(path).to_string()
 }
@@ -161,11 +186,38 @@ pub fn extension(path: &str) -> Option<String> {
     file_name(path).rsplit_once('.').filter(|(base, ext)| !base.is_empty() && !ext.is_empty()).map(|(_, ext)| ext.to_ascii_lowercase())
 }
 
-/// Whether a save without a new path may write back to `path` as far as its format goes: only
-/// layered files (PSD, PSB, OpenRaster, .pcraft). A flat file goes through Save As instead, so it
-/// is never flattened over the original. Whether this document fits is [`holds_at`].
+/// Whether `path` is a layered file (PSD, PSB, .pcraft, OpenRaster) a save writes back to with
+/// everything, as far as its format goes; whether this document fits is [`holds_at`]. Flat files
+/// can be written back too, after a flatten check: see [`in_place_save`].
 pub fn saves_in_place(path: &str) -> bool {
     extension(path).is_some_and(|ext| layered_extension(&ext))
+}
+
+/// How File › Save writes a document back to the file it was opened from (see
+/// [`in_place_save`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InPlaceSave {
+    /// A layered format (PSD, PSB, OpenRaster, .pcraft): written back with everything.
+    Layered,
+    /// TIFF: written back with Photoshop layer data while Preferences › File Handling › Save
+    /// Layers in TIFF is on, else flattened after a confirmation.
+    Tiff,
+    /// A flat format (JPEG, PNG, WebP): written back as is when the document is one plain raster
+    /// layer, else flattened after a confirmation, as Photoshop asks before flattening.
+    Flat,
+}
+
+/// How a save without a new path may write back to `path`, or `None` when it goes through Save
+/// As (no file, a read-only format such as a camera raw, or a format a save can't keep the
+/// image in without surprises, such as a paletted GIF). External editors (DAMs, scripts, an
+/// "Edit in" command) open a file and expect Save to write that same file.
+pub fn in_place_save(path: &str) -> Option<InPlaceSave> {
+    match extension(path)?.as_str() {
+        ext if layered_extension(ext) => Some(InPlaceSave::Layered),
+        "tif" | "tiff" => Some(InPlaceSave::Tiff),
+        "jpg" | "jpeg" | "jpe" | "png" | "webp" => Some(InPlaceSave::Flat),
+        _ => None,
+    }
 }
 
 /// Whether the lower-case extension `ext` names a layered document format (PSD, PSB, OpenRaster,

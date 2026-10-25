@@ -3,8 +3,9 @@
 
 use std::io::{BufReader, Write};
 use std::net::{TcpListener, TcpStream};
-use std::sync::Arc;
-use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use photocraft_automation::budgets::write_reply;
@@ -69,9 +70,12 @@ fn serve_with_auth_deadline(stream: TcpStream, token: &str, tx: Sender<ControlRe
     }
     let Ok(read) = stream.try_clone() else { return };
     let mut reader = BufReader::new(AuthDeadlineStream::new(read, auth_deadline));
-    let mut out = stream;
+    // Replies and pushed event lines share the socket; one line at a time.
+    let out = Arc::new(Mutex::new(stream));
     let mut line = String::new();
     let mut authenticated = false;
+    // Set once `events.subscribe` succeeded: stops the event forwarder when the connection ends.
+    let mut events: Option<Arc<AtomicBool>> = None;
     loop {
         match read_bounded_line(&mut reader, &mut line) {
             Ok(LineRead::Eof) | Err(_) => break,
@@ -81,8 +85,7 @@ fn serve_with_auth_deadline(stream: TcpStream, token: &str, tx: Sender<ControlRe
                     "ok": false,
                     "error": format!("request exceeds {MAX_REQUEST_BYTES} bytes"),
                 });
-                let _ = write_reply(&mut out, &reply);
-                let _ = out.flush();
+                let _ = send_line(&out, &reply);
                 break;
             }
             Ok(LineRead::Line) if line.trim().is_empty() => continue,
@@ -94,17 +97,18 @@ fn serve_with_auth_deadline(stream: TcpStream, token: &str, tx: Sender<ControlRe
             if ok && reader.get_mut().authenticated().is_err() {
                 break;
             }
-            if write_reply(&mut out, &reply).is_err() || out.flush().is_err() || !authenticated {
+            if send_line(&out, &reply).is_err() || !authenticated {
                 break;
             }
             continue;
         }
         if let Some(reply) = repeat_auth_reply(&line) {
-            if write_reply(&mut out, &reply).is_err() || out.flush().is_err() {
+            if send_line(&out, &reply).is_err() {
                 break;
             }
             continue;
         }
+        let mut subscription = None;
         let reply = match serde_json::from_str::<Value>(&line) {
             Ok(msg) => {
                 let id = msg.get("id").cloned().unwrap_or(Value::Null);
@@ -114,6 +118,18 @@ fn serve_with_auth_deadline(stream: TcpStream, token: &str, tx: Sender<ControlRe
                 let (mut req, rrx) = ControlRequest::new(method, params);
                 req.deadline = Some(deadline);
                 let dispatch = req.dispatch.clone();
+                if req.method == "events.subscribe" {
+                    if events.is_some() {
+                        let reply = json!({"id": id, "ok": false, "error": "this connection is already subscribed"});
+                        if send_line(&out, &reply).is_err() {
+                            break;
+                        }
+                        continue;
+                    }
+                    let (etx, erx) = channel::<Value>();
+                    req.events = Some(etx);
+                    subscription = Some(erx);
+                }
                 if tx.send(req).is_err() {
                     break;
                 }
@@ -127,11 +143,46 @@ fn serve_with_auth_deadline(stream: TcpStream, token: &str, tx: Sender<ControlRe
             }
             Err(e) => json!({"id": null, "ok": false, "error": format!("bad JSON: {e}")}),
         };
-        if write_reply(&mut out, &reply).is_err() {
+        let subscribed = reply.get("ok").and_then(Value::as_bool) == Some(true);
+        if send_line(&out, &reply).is_err() {
             break;
         }
-        if out.flush().is_err() {
-            break;
+        // Events start flowing only after the subscribe reply, so it always comes first.
+        if let Some(erx) = subscription.filter(|_| subscribed) {
+            let stop = Arc::new(AtomicBool::new(false));
+            events = Some(Arc::clone(&stop));
+            // An event subscriber may stay quiet for hours: no read timeout from now on.
+            if let Ok(guard) = out.lock() {
+                let _ = guard.set_read_timeout(None);
+            }
+            let out = Arc::clone(&out);
+            std::thread::spawn(move || forward_events(&erx, &out, &stop));
+        }
+    }
+    if let Some(stop) = events {
+        stop.store(true, Ordering::Relaxed);
+    }
+}
+
+/// Writes one JSON line, holding the socket for the whole line.
+fn send_line(out: &Mutex<TcpStream>, value: &Value) -> std::io::Result<()> {
+    let mut stream = out.lock().unwrap_or_else(PoisonError::into_inner);
+    write_reply(&mut *stream, value)?;
+    stream.flush()
+}
+
+/// Copies event lines from the UI to the socket until the connection ends (`stop`), the write
+/// fails (the client went away), or the UI drops the subscription.
+fn forward_events(rx: &Receiver<Value>, out: &Mutex<TcpStream>, stop: &AtomicBool) {
+    while !stop.load(Ordering::Relaxed) {
+        match rx.recv_timeout(Duration::from_millis(500)) {
+            Ok(event) => {
+                if send_line(out, &event).is_err() {
+                    return;
+                }
+            }
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => return,
         }
     }
 }
@@ -220,6 +271,54 @@ mod tests {
         let accepted: Value = serde_json::from_str(&line).unwrap();
         assert_eq!(accepted["id"], 3);
         assert_eq!(accepted["result"], "still serving");
+        drop(reader);
+        drop(stream);
+        handler.join().unwrap();
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn subscribed_connections_get_event_lines_after_the_reply_and_keep_serving() {
+        const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (tx, rx) = channel::<ControlRequest>();
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            serve(stream, TOKEN, tx, egui::Context::default());
+        });
+        let handler = std::thread::spawn(move || {
+            let sub = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            assert_eq!(sub.method, "events.subscribe");
+            let events = sub.events.clone().expect("the transport hands over an event sender");
+            sub.reply.send(json!({"ok": true, "result": {"events": ["document.saved"]}})).unwrap();
+            events.send(json!({"event": "document.saved", "params": {"path": "/a.tif", "format": "tif", "docId": 1}})).unwrap();
+            let next = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            assert_eq!(next.method, "app.capabilities");
+            assert!(next.events.is_none());
+            next.reply.send(json!({"ok": true, "result": {}})).unwrap();
+        });
+        let mut stream = TcpStream::connect(addr).unwrap();
+        stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut read = || {
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            serde_json::from_str::<Value>(&line).unwrap()
+        };
+        writeln!(stream, "{}", json!({"id": 1, "method": "auth", "params": {"token": TOKEN}})).unwrap();
+        assert_eq!(read()["ok"], true);
+        writeln!(stream, "{}", json!({"id": 2, "method": "events.subscribe"})).unwrap();
+        let reply = read();
+        assert_eq!((reply["id"].clone(), reply["ok"].clone()), (json!(2), json!(true)), "the reply comes before any event");
+        let event = read();
+        assert_eq!(event["event"], "document.saved");
+        assert!(event.get("id").is_none(), "events carry no id");
+        writeln!(stream, "{}", json!({"id": 3, "method": "events.subscribe"})).unwrap();
+        let again = read();
+        assert_eq!((again["id"].clone(), again["ok"].clone()), (json!(3), json!(false)), "one subscription per connection");
+        writeln!(stream, "{}", json!({"id": 4, "method": "app.capabilities"})).unwrap();
+        assert_eq!(read()["id"], 4);
         drop(reader);
         drop(stream);
         handler.join().unwrap();

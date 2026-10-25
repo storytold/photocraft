@@ -203,17 +203,20 @@ fn web_drops_onto_the_canvas_are_placed_from_their_bytes() {
 }
 
 #[test]
-fn pcraft_documents_save_in_place_but_flat_files_ask() {
+fn pcraft_documents_save_in_place_but_layers_ask_before_flattening_into_a_flat_file() {
     let (mut app, written) = app_with(vec![None]);
     let ctx = egui::Context::default();
     app.open_file("/pics/work.pcraft", b"x").unwrap();
     let r = menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap();
     assert_eq!(r["path"], "/pics/work.pcraft");
     assert_eq!(written.borrow().len(), 1);
-    // A PNG goes through Save As (cancelled here), not silently flattened over the original.
+    // A PNG holding layers asks before flattening them into the original (cancelled here).
     app.open_file("/pics/flat.png", b"x").unwrap();
-    assert_eq!(menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap(), json!({"fileDialog": "save"}));
-    answer(&mut app);
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    let r = menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap();
+    assert_eq!(r["prompt"], "flatten", "{r}");
+    crate::flatten_save_ui::answer(&mut app, &ctx, crate::flatten_save_ui::Answer::Cancel);
     assert_eq!(written.borrow().len(), 1);
     assert!(!app.ui.status_error);
 }

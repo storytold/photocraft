@@ -251,8 +251,13 @@ pub fn confirm(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let own = p.own_quality.filter(|&q| quality_from_percent(u32::from(q)) == p.quality);
     let choice = JpegChoice { quality: own.is_none().then_some(p.quality), format: p.format };
     let step = if p.record == "file.save" {
-        // A plain Save writes whichever file the action is played on (#3531), with the answer.
-        plain_save_step(Some(choice))
+        // A plain Save writes whichever file the action is played on (#3531), with the answer;
+        // one that flattened layers into its JPEG (already confirmed) replays the same way.
+        let mut step = plain_save_step(Some(choice));
+        if app.session.documents().iter().any(|d| d.doc.id == p.doc && crate::plain_raster(&d.doc).is_none()) {
+            step["flatten"] = true.into();
+        }
+        step
     } else {
         let mut step = serde_json::json!({"path": p.path});
         choice.record(&mut step);

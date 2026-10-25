@@ -92,7 +92,7 @@ pub(crate) fn batch(a: &BatchArgs, out: &mut dyn Write, err: &mut dyn Write) -> 
                     return Err(CliError::NestedFailure { id: id.clone(), message });
                 }
             }
-            let r = h.save(None, Some(&target), Some(&ext), &opts)?;
+            let r = h.save(None, Some(&target), Some(&ext), &opts, false)?;
             Ok(serde_json::from_value(r["warnings"].clone()).unwrap_or_default())
         })();
         match r {

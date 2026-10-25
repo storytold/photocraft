@@ -1659,7 +1659,7 @@
 	Always create smart objects when placing	Να δημιουργούνται πάντα έξυπνα αντικείμενα κατά την τοποθέτηση
 	Animated zoom	Κινούμενη μεγέθυνση
 	Apply auto tone	Εφαρμογή αυτόματης τονικής διόρθωσης
-	Ask before saving layered tiff	Ερώτηση πριν από την αποθήκευση TIFF με επίπεδα
+	Ask before saving layered TIFF	Ερώτηση πριν από την αποθήκευση TIFF με επίπεδα
 	Auto collapse icon panels	Αυτόματη σύμπτυξη πλαισίων εικονιδίων
 	Auto show hidden panels	Αυτόματη εμφάνιση κρυφών πλαισίων
 	Auto show home screen	Αυτόματη εμφάνιση αρχικής οθόνης
@@ -4080,6 +4080,11 @@ curves	Smooth	Εξομάλυνση
 
 # Graphics Adapter preference (#1885)
 	GPU adapter	Προσαρμογέας GPU
+	Save layers in TIFF	Αποθήκευση επιπέδων σε TIFF
+	Save Flattened?	Αποθήκευση ισοπεδωμένου;
+	Flatten and Save	Ισοπέδωση και αποθήκευση
+	Use Save As to keep the layers in a PSD or TIFF.	Χρησιμοποιήστε την Αποθήκευση ως για να διατηρήσετε τα επίπεδα σε PSD ή TIFF.
+	“{name}” is a {format} file, which can't keep layers. Saving flattens the image in the file; the layers stay in this window until you close it.	Το «{name}» είναι αρχείο {format}, το οποίο δεν μπορεί να διατηρήσει επίπεδα. Η αποθήκευση ισοπεδώνει την εικόνα στο αρχείο· τα επίπεδα παραμένουν σε αυτό το παράθυρο μέχρι να το κλείσετε.
 
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Εισαγωγή στιλ…

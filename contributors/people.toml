@@ -208,6 +208,11 @@ sync_github_name = true
 [people.ha1des]
 sync_github_name = true
 
+[people.emmertex]
+real_name = "Andrew Frahn"
+display_name = "Andrew Frahn (ku7)"
+sync_github_name = false
+
 [people.webdevtodayjason]
 display_name = "Jason Brashear"
 

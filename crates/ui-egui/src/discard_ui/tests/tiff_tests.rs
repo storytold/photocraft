@@ -11,7 +11,8 @@ fn tiff_prompt(command: &str) -> (Prompted, Writes, DocId, DocId) {
     let mut app = app_with_docs(2);
     make_dirty(&mut app, 0);
     let (saved, other) = (doc_id(&app, 0), doc_id(&app, 1));
-    app.session.active_mut().unwrap().path = Some("original.tif".into());
+    // A read-only source (HEIC): Save goes through Save As to a layered TIFF.
+    app.session.active_mut().unwrap().path = Some("original.heic".into());
     let writes: Writes = Rc::default();
     let written = writes.clone();
     app.services.file_dialog = Some(crate::file_dialog::fake(vec![Some(FileDialogAnswer::SaveTo("kept.tif".into()))]).0);
@@ -108,7 +109,7 @@ fn cancelling_failing_or_copying_a_tiff_keeps_the_original_unsaved() {
         assert!(h.query_by_label("(Y)es").is_some());
         let original = &h.state().session.documents()[0];
         assert!(original.is_dirty());
-        assert_eq!(original.path.as_deref(), Some("original.tif"));
+        assert_eq!(original.path.as_deref(), Some("original.heic"));
         if outcome == "copy" {
             assert_eq!(writes.borrow().as_slice(), &[("kept.tif".into(), serde_json::to_vec(&(saved, false)).unwrap())]);
         } else {

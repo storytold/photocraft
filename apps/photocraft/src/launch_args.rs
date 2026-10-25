@@ -120,6 +120,13 @@ impl fmt::Display for PerProcess {
     }
 }
 
+/// `photocraft --version --json`: print `app.capabilities` so a launcher can feature-detect
+/// without starting a window. Checked before clap, which stops at `--version`; builds without it
+/// print the plain version line for these arguments, so the probe is safe against every release.
+pub(crate) fn version_json(args: &[OsString]) -> bool {
+    matches!(args, [version, json, ..] if version == "--version" && json == "--json")
+}
+
 /// The files to open, as [`LaunchArgs::file_names`] sorts them.
 #[derive(Debug, PartialEq)]
 pub(crate) struct FileNames {
@@ -299,6 +306,15 @@ mod tests {
         let parsed = parse_args(&["--control-token-file", "/tmp/token", "--new-instance"]).unwrap();
         assert_eq!(parsed.auth.control_token_file.as_deref(), Some(std::path::Path::new("/tmp/token")));
         assert!(parsed.launch_options.is_empty() && !parsed.in_window_menus, "{:?}", parsed.launch_options);
+    }
+
+    #[test]
+    fn version_json_is_only_the_version_flag_then_json() {
+        let os = |v: &[&str]| v.iter().map(OsString::from).collect::<Vec<_>>();
+        assert!(version_json(&os(&["--version", "--json"])));
+        for other in [&[][..], &["--version"], &["--json", "--version"], &["photo.jpg", "--version", "--json"], &["--version", "--control"]] {
+            assert!(!version_json(&os(other)), "{other:?}");
+        }
     }
 
     #[test]

@@ -1859,7 +1859,7 @@
 	Animated zoom	Geanimeerd zoomen
 	Apply auto tone	Automatische tooncorrectie toepassen
 	Ask	Vragen
-	Ask before saving layered tiff	Vragen voor opslaan van gelaagde TIFF
+	Ask before saving layered TIFF	Vragen voor opslaan van gelaagde TIFF
 	Auto collapse icon panels	Pictogrampanelen automatisch samenvouwen
 	Auto show hidden panels	Verborgen panelen automatisch tonen
 	Auto show home screen	Startscherm automatisch tonen
@@ -4140,6 +4140,11 @@ curves	Smooth	Vloeiend maken
 
 # Graphics Adapter preference (#1885)
 	GPU adapter	GPU-adapter
+	Save layers in TIFF	Lagen opslaan in TIFF
+	Save Flattened?	Samengevoegd opslaan?
+	Flatten and Save	Samenvoegen en opslaan
+	Use Save As to keep the layers in a PSD or TIFF.	Gebruik Opslaan als om de lagen te behouden in een PSD of TIFF.
+	“{name}” is a {format} file, which can't keep layers. Saving flattens the image in the file; the layers stay in this window until you close it.	‘{name}’ is een {format}-bestand, dat geen lagen kan bevatten. Bij opslaan wordt de afbeelding in het bestand samengevoegd; de lagen blijven in dit venster tot u het sluit.
 
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Stijlen importeren…
