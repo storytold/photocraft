@@ -169,6 +169,54 @@ impl HueRange {
         self.hue == 0.0 && self.saturation == 0.0 && self.lightness == 0.0
     }
 
+    /// Photoshop's "Sample a color" eyedropper (#9247): the range takes its default extent (fully
+    /// on for 30°, fading over 30° each side) centred on hue `deg`.
+    pub fn sample_hue(&mut self, deg: f32) {
+        if deg.is_finite() {
+            self.bounds = Self::canonical_bounds([deg - 45.0, deg - 15.0, deg + 15.0, deg + 45.0]);
+        }
+    }
+
+    /// Photoshop's "Add to sample" eyedropper: the nearer end of the fully-on span moves out to
+    /// hue `deg` (the way round that grows it least); both fades keep their widths. A hue already
+    /// fully in the range changes nothing.
+    pub fn add_hue(&mut self, deg: f32) {
+        let [a, b, c, d] = Self::canonical_bounds(self.bounds);
+        if !deg.is_finite() {
+            return;
+        }
+        let (fade_in, fade_out) = (b - a, d - c);
+        let span = c - b;
+        let rel = (deg - b).rem_euclid(360.0);
+        if rel <= span {
+            return;
+        }
+        let up = rel - span;
+        let down = (b - deg).rem_euclid(360.0);
+        // Keep the whole range, fades included, within one turn.
+        let room = (359.0 - fade_in - fade_out - span).max(0.0);
+        let (b, c) = if up <= down { (b, c + up.min(room)) } else { (b - down.min(room), c) };
+        self.bounds = Self::canonical_bounds([b - fade_in, b, c, c + fade_out]);
+    }
+
+    /// Photoshop's "Subtract from sample" eyedropper: for a hue `deg` inside the fully-on span,
+    /// the nearer end of the span moves in to 15° past it (never past the other end); both fades
+    /// keep their widths. A hue outside the span changes nothing.
+    pub fn subtract_hue(&mut self, deg: f32) {
+        let [a, b, c, d] = Self::canonical_bounds(self.bounds);
+        if !deg.is_finite() {
+            return;
+        }
+        let (fade_in, fade_out) = (b - a, d - c);
+        let span = c - b;
+        let rel = (deg - b).rem_euclid(360.0);
+        if rel > span {
+            return;
+        }
+        let (b, c) = if rel <= span - rel { ((b + rel + 15.0).min(c), c) } else { (b, (b + rel - 15.0).max(b)) };
+        self.bounds = Self::canonical_bounds([b - fade_in, b, c, c + fade_out]);
+    }
+
     /// How much a pixel of hue `deg` (degrees) belongs to this range, 0..=1.
     pub fn weight(&self, deg: f32) -> f32 {
         let [a, b, c, d] = self.bounds;
@@ -351,6 +399,33 @@ impl Adjustment {
 
 #[cfg(test)]
 mod tests {
+
+    /// #9247: Photoshop 2025's Hue/Saturation eyedroppers, measured on its Reds range: sample a
+    /// 210° blue, add a 38° orange, subtract the blue, then subtract the orange.
+    #[test]
+    fn hue_range_eyedroppers_follow_photoshop() {
+        let mut r = super::HueRange::neutral(0);
+        r.sample_hue(210.0);
+        assert_eq!(r.bounds, [165.0, 195.0, 225.0, 255.0]);
+        r.add_hue(38.0);
+        assert_eq!(r.bounds, [8.0, 38.0, 225.0, 255.0], "grows the shorter way, fades kept");
+        r.subtract_hue(210.0);
+        assert_eq!(r.bounds, [8.0, 38.0, 195.0, 225.0], "the nearer (upper) end moves to 15° short");
+        r.subtract_hue(38.0);
+        assert_eq!(r.bounds, [23.0, 53.0, 195.0, 225.0], "the nearer (lower) end moves to 15° past");
+        // Already inside (add) or outside (subtract): no change; never wider than a turn.
+        let before = r.bounds;
+        r.add_hue(100.0);
+        r.subtract_hue(300.0);
+        assert_eq!(r.bounds, before);
+        for deg in [0.0, 90.0, 180.0, 270.0, 359.0, 120.0, 240.0] {
+            r.add_hue(deg);
+        }
+        assert!(r.bounds[3] - r.bounds[0] <= 359.0 + 1e-3, "{:?}", r.bounds);
+        r.sample_hue(f32::NAN);
+        r.add_hue(f32::INFINITY);
+        assert!(r.bounds.iter().all(|v| v.is_finite()));
+    }
     use super::*;
 
     #[test]
