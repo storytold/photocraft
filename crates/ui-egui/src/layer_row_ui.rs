@@ -190,7 +190,7 @@ pub fn indicators(
                 icons::paint(ui, Rect::from_center_size(r.center(), vec2(ICON_W, ICON_W)), "triangle-alert", 12.0, t.warning);
                 let key = unsupported.unwrap_or_default();
                 let tip = crate::i18n::fmt(tl!("Not rendered: this adjustment ({key}) is kept as imported."), &[("key", key)]);
-                ui.interact(r, ui.id().with(("row-unsupported", l.id.0)), Sense::hover()).on_hover_text(tip);
+                ui.interact(r, ui.scope_id().with(("row-unsupported", l.id.0)), Sense::hover()).on_hover_text(tip);
             }
             Indicator::Lock => icons::paint(ui, Rect::from_center_size(r.center(), vec2(ICON_W, ICON_W)), "lock", 12.0, t.text_faint),
             Indicator::Link => icons::paint(ui, Rect::from_center_size(r.center(), vec2(ICON_W, ICON_W)), "link-2", 12.0, t.text_faint),
@@ -207,10 +207,10 @@ pub fn indicators(
             Indicator::SmartFilters => {
                 let enabled = matches!(&l.content, photocraft_doc::LayerContent::Smart(sm) if sm.filters_enabled);
                 crate::smart_ui::paint_badge(painter, r.center(), if enabled { t.icon } else { t.text_faint });
-                ui.interact(r, ui.id().with(("smart-filters-badge", l.id.0)), Sense::hover()).on_hover_text(tl!("Smart Filters"));
+                ui.interact(r, ui.scope_id().with(("smart-filters-badge", l.id.0)), Sense::hover()).on_hover_text(tl!("Smart Filters"));
             }
             Indicator::FxTriangle => {
-                let resp = ui.interact(r, ui.id().with(("fx-disclosure", l.id.0)), Sense::click());
+                let resp = ui.interact(r, ui.scope_id().with(("fx-disclosure", l.id.0)), Sense::click());
                 paint_triangle(painter, r.center(), fx_open, if resp.hovered() { t.text } else { t.icon });
                 if resp.clicked() {
                     clicked = true;
@@ -228,7 +228,7 @@ pub fn indicators(
                     tl!("Show the layer's effects  ({key}-click: all layers)")
                 };
                 let resp = resp.on_hover_text(crate::i18n::fmt(tip, &[("key", &crate::shortcuts::pretty("Alt"))]));
-                resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, format!("{verb} effects {name}")));
+                resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, format!("{verb} effects {name}")));
             }
         }
     }
@@ -328,7 +328,7 @@ pub fn panel_menu(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui) {
 }
 
 fn rects_id() -> egui::Id {
-    egui::Id::new("layer-row-rects")
+    egui::Id::unique("layer-row-rects")
 }
 
 /// Start a frame's record (the Layers panel calls it before drawing its rows).
@@ -370,7 +370,7 @@ impl Rename {
 }
 
 fn rename_id() -> egui::Id {
-    egui::Id::new("layer-rename")
+    egui::Id::unique("layer-rename")
 }
 
 /// The rename in progress, if any.
@@ -419,7 +419,7 @@ pub fn end_rename(ctx: &egui::Context, commit: bool) -> Option<(String, Value)> 
 
 /// Where Tab or ⇧Tab sends a rename: the layer it left and whether the next one is above.
 fn next_rename_id() -> egui::Id {
-    egui::Id::new("layer-rename-next")
+    egui::Id::unique("layer-rename-next")
 }
 
 /// The rename that Tab (`up` false) or ⇧Tab (`up` true) just left on `layer`, for the Layers panel
@@ -434,8 +434,8 @@ pub fn take_next_rename(ctx: &egui::Context) -> Option<(u64, bool)> {
 pub fn rename_field(ui: &mut egui::Ui, layer: u64, rect: Rect) -> Option<(String, Value)> {
     let ctx = ui.ctx().clone();
     let mut r = rename(&ctx).filter(|r| r.layer == layer)?;
-    let id = egui::Id::new(("layer-rename-field", layer));
-    let te = ui.put(rect, egui::TextEdit::singleline(&mut r.text).id(id).font(FontId::proportional(12.5)));
+    let id = egui::Id::unique(("layer-rename-field", layer));
+    let te = ui.put(rect, egui::TextEdit::singleline(&mut r.text).id(id).font(FontId::proportional(12.5))).accessible_name(tl!("Name"));
     r.pass = ctx.cumulative_pass_nr();
     if !r.focused {
         te.request_focus();

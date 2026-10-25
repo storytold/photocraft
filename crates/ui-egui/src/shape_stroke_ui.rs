@@ -94,7 +94,7 @@ pub fn paint_shape_preview(painter: &egui::Painter, shape: &photocraft_doc::Shap
     if !clip.is_finite() || clip.is_negative() {
         return;
     }
-    let id = egui::Id::new("shape-drag-render");
+    let id = egui::Id::unique("shape-drag-render");
     let cached = painter.ctx().data(|d| d.get_temp::<DragCache>(id));
     let cache = cached.filter(|c| c.shape == *shape && c.clip == clip).or_else(|| {
         let scale = (2048.0 / clip.width().max(clip.height()).max(1.0)).min(1.0);
@@ -136,19 +136,19 @@ mod editor;
 pub use editor::{StrokeEditor, button};
 
 fn open_frame_id() -> egui::Id {
-    egui::Id::new("shape-stroke-open-frame")
+    egui::Id::unique("shape-stroke-open-frame")
 }
 
 pub(super) fn mark_rendered(ctx: &egui::Context, key: &str) {
     let pass = ctx.cumulative_pass_nr();
-    ctx.data_mut(|d| d.insert_temp(egui::Id::new(("shape-stroke-rendered", key)), pass));
+    ctx.data_mut(|d| d.insert_temp(egui::Id::unique(("shape-stroke-rendered", key)), pass));
 }
 
 /// A hidden options row or collapsed Appearance section no longer owns input.
 /// Called after all options bars and Properties windows have had a chance to draw.
 pub(crate) fn finish_frame(app: &mut crate::PhotocraftApp, ctx: &egui::Context) {
     let Some(e) = &app.ui.stroke_editor else { return };
-    let shown = ctx.data(|d| d.get_temp::<u64>(egui::Id::new(("shape-stroke-rendered", e.key.as_str()))));
+    let shown = ctx.data(|d| d.get_temp::<u64>(egui::Id::unique(("shape-stroke-rendered", e.key.as_str()))));
     if shown != Some(ctx.cumulative_pass_nr()) {
         editor::close_children(ctx, &e.key);
         app.ui.stroke_editor = None;
@@ -174,7 +174,7 @@ pub(crate) fn dismiss_from_canvas(app: &mut crate::PhotocraftApp, response: &egu
         ctx.request_repaint();
     }
     ctx.data_mut(|d| {
-        let state = d.get_temp_mut_or_default::<CanvasDismissal>(egui::Id::new("shape-stroke-canvas-dismissal"));
+        let state = d.get_temp_mut_or_default::<CanvasDismissal>(egui::Id::unique("shape-stroke-canvas-dismissal"));
         state.held |= dismiss;
         let consumed = state.held || state.consumed_frame == Some(frame);
         if consumed {

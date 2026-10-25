@@ -176,9 +176,10 @@ pub fn paint(app: &mut PhotocraftApp, painter: &Painter, xf: &ViewXform, idx: us
         cache.grid = Some(GridLines::build(&doc, revision, preview_key, cache_region(visible, doc.bounds())));
     }
     let Some(grid) = &cache.grid else { return };
+    let width = 1.0 / painter.ctx().pixels_per_point();
     for s in &grid.segs {
         let (a, b) = (xf.to_screen(s.from[0] as f32, s.from[1] as f32), xf.to_screen(s.to[0] as f32, s.to[1] as f32));
-        painter.line_segment([a, b], Stroke::new(1.0, s.color));
+        painter.line_segment([a, b], Stroke::new(width, s.color));
     }
 }
 

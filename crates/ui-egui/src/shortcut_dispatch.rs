@@ -22,11 +22,11 @@ pub enum Outcome {
 }
 
 fn log_id() -> egui::Id {
-    egui::Id::new("pc-shortcut-log")
+    egui::Id::unique("pc-shortcut-log")
 }
 
 fn dry_run_id() -> egui::Id {
-    egui::Id::new("pc-shortcut-dry-run")
+    egui::Id::unique("pc-shortcut-dry-run")
 }
 
 /// Tests: resolve and check shortcuts without running them (File › Exit, Open, browser links…).
@@ -128,7 +128,7 @@ pub enum Focus {
 
 /// Where [`claim_delete_keys`] keeps the id of the widget that owns ⌫ / Delete while focused.
 fn delete_owner_id() -> egui::Id {
-    egui::Id::new("shortcut_dispatch::delete_owner")
+    egui::Id::unique("shortcut_dispatch::delete_owner")
 }
 
 /// Called by a widget that has keyboard focus and uses ⌫ / Delete itself (the Curves graph):

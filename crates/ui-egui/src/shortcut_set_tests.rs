@@ -155,7 +155,13 @@ fn pick_set(h: &mut Harness<'_, PhotocraftApp>, label: &str) {
     h.run_steps(1);
     h.drop_at(at);
     h.run_steps(3);
-    let option = h.query_all_by_label(label).rfind(|n| n.accesskit_node().role() != egui::accesskit::Role::ComboBox);
+    // The list rows are buttons; the combo's own value and any plain text also carry the name.
+    // A shortcut key in the table below may be labelled "A" too, so take the row nearest the
+    // combo that just opened, not the last match in the whole dialog.
+    let option = h
+        .query_all_by_label(label)
+        .filter(|n| n.accesskit_node().role() == egui::accesskit::Role::Button)
+        .min_by(|a, b| a.rect().center().distance(at).total_cmp(&b.rect().center().distance(at)));
     option.expect("the set in the open list").click();
     h.run_steps(3);
 }

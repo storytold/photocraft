@@ -72,7 +72,7 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Laye
 fn sliders(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: u64, document: u64, command: &str, prefix: &str, density: f32, feather: f32) {
     // Like brush settings, track pointer presses even on frames without a value change.
     // slider_row also merges numeric scrubbing, whose drag flags are not in its Response.
-    let key = ui.id().with("gesture");
+    let key = ui.scope_id().with("gesture");
     let pass = ui.ctx().cumulative_pass_nr();
     let pressed = ui.input(|i| i.pointer.any_pressed());
     let gesture = ui.data_mut(|d| {

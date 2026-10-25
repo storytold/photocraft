@@ -404,7 +404,7 @@ fn dialog(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let title = title(&kind);
     let names: Vec<String> = app.session.prefs().workspaces.keys().cloned().collect();
     let mut result: Option<bool> = None;
-    egui::Window::new(title).id(egui::Id::new("shell-dialog")).collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0)).show(
+    egui::Window::new(title).id(egui::Id::unique("shell-dialog")).collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0)).show(
         ctx,
         |ui| {
             ui.label(RichText::new(tl!(&title)).color(t.text).size(13.0).strong());
@@ -414,7 +414,7 @@ fn dialog(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(tl!(&label)).color(t.text_dim).size(11.0));
                     let mut v = f.get(key).and_then(Value::as_str).unwrap_or("").to_string();
-                    if ui.add(egui::TextEdit::singleline(&mut v).desired_width(180.0)).changed() {
+                    if ui.add(egui::TextEdit::singleline(&mut v).desired_width(180.0)).accessible_name(tl!(label)).changed() {
                         f.insert(key.into(), json!(v));
                     }
                 });
@@ -429,7 +429,9 @@ fn dialog(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(tl!(&label)).color(t.text_dim).size(11.0));
                     let mut v = f.get(key).and_then(Value::as_f64).unwrap_or(0.0) as f32;
-                    if crate::widgets::slider(ui, &mut v, range.clone(), None).changed() | crate::widgets::value_field(ui, &mut v, range, "", 60.0).changed() {
+                    if crate::widgets::slider(ui, &mut v, range.clone(), None).changed()
+                        | crate::widgets::value_field(ui, &mut v, range, "", 60.0).accessible_name(tl!(&label)).changed()
+                    {
                         f.insert(key.into(), json!(v));
                     }
                 });
@@ -450,7 +452,7 @@ fn dialog(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 "deleteWorkspace" => {
                     let mut cur = f.get("name").and_then(Value::as_str).unwrap_or("").to_string();
                     let opts: Vec<(String, &str)> = names.iter().map(|n| (n.clone(), n.as_str())).collect();
-                    if !opts.is_empty() && crate::widgets::dropdown(ui, "ws-delete", &mut cur, &opts, 180.0) {
+                    if !opts.is_empty() && crate::widgets::dropdown(ui, "ws-delete", tl!("Workspace"), &mut cur, &opts, 180.0) {
                         f.insert("name".into(), json!(cur));
                     }
                 }
@@ -466,6 +468,7 @@ fn dialog(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     if crate::widgets::dropdown(
                         ui,
                         "p32-method",
+                        tl!("Mode"),
                         &mut m,
                         &[("exposureGamma".to_string(), tl!("Exposure and Gamma")), ("highlightCompression".to_string(), tl!("Highlight Compression"))],
                         180.0,
@@ -591,7 +594,7 @@ mod tests {
                 h.run_steps(4);
                 assert_eq!(h.state().ui.theme, theme, "the fixture renders the requested theme");
                 for name in ["title_bar", "rail"] {
-                    if egui::containers::panel::PanelState::load(&h.ctx, egui::Id::new(name)).is_some() {
+                    if egui::containers::panel::PanelState::load(&h.ctx, crate::panels::panel_state_id(&h.ctx, name)).is_some() {
                         failures.push(format!("{theme:?}, width={width}: {name} is drawn"));
                     }
                 }
@@ -772,13 +775,15 @@ mod tests {
                 crate::menus::invoke(h.state_mut(), &ctx, "view.thirtyTwoBitPreviewOptions", json!({})).unwrap();
                 h.run_steps(4);
                 let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
-                let first = h.ctx.memory(|m| m.area_rect(egui::Id::new("shell-dialog"))).unwrap();
+                let first = h.ctx.memory(|m| m.area_rect(egui::Id::unique("shell-dialog"))).unwrap();
                 h.run_steps(20);
-                let last = h.ctx.memory(|m| m.area_rect(egui::Id::new("shell-dialog"))).unwrap();
+                let last = h.ctx.memory(|m| m.area_rect(egui::Id::unique("shell-dialog"))).unwrap();
                 assert!(screen.contains_rect(last), "{theme:?} at {size:?}: dialog {last:?} must fit");
                 assert!((last.width() - first.width()).abs() < 1.0, "{theme:?}: width grew from {first:?} to {last:?}");
                 for label in ["Exposure:", "Gamma:", "OK", "Cancel"] {
-                    let rect = h.get_by_label(label).rect();
+                    // A slider row names its number and its slider with the caption; either is visible.
+                    let node = h.query_all_by_label(label).next().unwrap_or_else(|| panic!("{label} in the dialog"));
+                    let rect = node.rect();
                     assert!(last.contains_rect(rect) && screen.contains_rect(rect), "{label} must remain visible: {rect:?}");
                 }
             }

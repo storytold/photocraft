@@ -423,7 +423,7 @@ pub(crate) fn draw_box(painter: &egui::Painter, xf: &ViewXform, t: &TransformSes
 
 pub(crate) fn rotation_cursor(ctx: &egui::Context, p: Pos2) {
     let tokens = crate::theme::Tokens::get(ctx);
-    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("type-rotate-cursor")));
+    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("type-rotate-cursor")));
     let first = -std::f32::consts::FRAC_PI_4;
     let last = std::f32::consts::PI + std::f32::consts::FRAC_PI_4;
     let points: Vec<Pos2> = (0..=24)
@@ -469,7 +469,7 @@ pub(crate) fn cursor(app: &mut PhotocraftApp, ctx: &egui::Context, xf: &ViewXfor
         Some(Hit::Edge(_)) => {
             // Original arrowhead indicator, above the canvas, without a proprietary cursor asset.
             let tokens = crate::theme::Tokens::get(ctx);
-            let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("type-skew-cursor")));
+            let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("type-skew-cursor")));
             painter.add(egui::Shape::convex_polygon(vec![p, p + vec2(14.0, 6.0), p + vec2(6.0, 14.0)], tokens.accent_text, Stroke::new(1.0, tokens.shadow)));
             CursorIcon::None
         }

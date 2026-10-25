@@ -543,7 +543,7 @@ fn build() -> Vec<CommandSpec> {
             "New…",
             ["File"],
             Some("Cmd+N"),
-            r##"{"width":1..300000=1920,"height":1..300000=1080 (pixel counts are rounded),"mode":"rgb|gray|grayscale|cmyk|lab"="rgb","depth":8|16|32=8,"background":"white|black|backgroundColor|transparent|#rrggbb"="white","backgroundColor":[r,g,b]? (0..1; defaults to toolbox colour),"resolution":1..30000=72 (ppi),"name":str,"profile":"working"|built-in id|path to an .icc file="working" (the colour profile it is tagged with; it must suit the mode)}"##,
+            r##"{"width":1..300000=1920,"height":1..300000=1080 (pixel counts are rounded),"mode":"rgb|gray|grayscale|cmyk|lab"="rgb","depth":8|16|32=8,"background":"white|black|backgroundColor|transparent|#rrggbb"="white","backgroundColor":[r,g,b]? (0..1; defaults to toolbox colour),"resolution":1..30000=72 (ppi),"name":str,"artboard":bool=false (one artboard over the canvas, its background the chosen one, holding an empty Layer 1; no Background layer),"profile":"working"|built-in id|path to an .icc file="working" (the colour profile it is tagged with; it must suit the mode)}"##,
             always,
             |s, p| {
                 use crate::document_preset_cmds::{MAX_DIMENSION, MAX_RESOLUTION, background_color, color_mode, sample_type};
@@ -562,21 +562,27 @@ fn build() -> Vec<CommandSpec> {
                 let depth = sample_type(p.get("depth").and_then(Value::as_u64).unwrap_or(8)).unwrap_or(SampleType::U8);
                 let name = p.get("name").and_then(Value::as_str).unwrap_or("Untitled").to_string();
                 let res = p.get("resolution").and_then(Value::as_f64).unwrap_or(72.0).clamp(1.0, MAX_RESOLUTION) as f32;
-                let mut doc = match p.get("background").and_then(Value::as_str).unwrap_or("white") {
+                // The background colour; `None` for Transparent.
+                let background = match p.get("background").and_then(Value::as_str).unwrap_or("white") {
                     "backgroundColor" => {
                         let bgc = background_color(p, s.tools.background, "file.new")?;
-                        Document::with_background(name, Size::new(w, h), mode, depth, Color::rgba(bgc[0], bgc[1], bgc[2], 1.0))
+                        Some(Color::rgba(bgc[0], bgc[1], bgc[2], 1.0))
                     }
-                    "transparent" => {
-                        let mut d = Document::new(name, Size::new(w, h), mode, depth);
-                        d.layers.push(Layer::raster("Layer 1", d.pixel_format()));
-                        d
-                    }
-                    "black" => Document::with_background(name, Size::new(w, h), mode, depth, Color::BLACK),
+                    "transparent" => None,
+                    "black" => Some(Color::BLACK),
                     other => {
                         let c = parse_hex(other).unwrap_or([1.0; 4]);
-                        Document::with_background(name, Size::new(w, h), mode, depth, Color::rgba(c[0], c[1], c[2], c[3]))
+                        Some(Color::rgba(c[0], c[1], c[2], c[3]))
                     }
+                };
+                let mut doc = if p.get("artboard").and_then(Value::as_bool).unwrap_or(false) {
+                    crate::artboard_cmds::new_artboard_document(name, Size::new(w, h), mode, depth, background)
+                } else if let Some(c) = background {
+                    Document::with_background(name, Size::new(w, h), mode, depth, c)
+                } else {
+                    let mut d = Document::new(name, Size::new(w, h), mode, depth);
+                    d.layers.push(Layer::raster("Layer 1", d.pixel_format()));
+                    d
                 };
                 doc.resolution_dpi = res;
                 // Photoshop's New Document › Color Profile: tag the document with another profile

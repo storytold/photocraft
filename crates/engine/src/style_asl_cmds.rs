@@ -55,10 +55,7 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
     let mut pattern_ids = Vec::new();
     for pat in imp.patterns {
         pattern_ids.push(pat.id.clone());
-        match s.patterns.items.iter_mut().find(|q| q.id == pat.id) {
-            Some(q) => *q = pat,
-            None => s.patterns.items.push(pat),
-        }
+        s.patterns.upsert(pat);
     }
     let styles = &mut s.presets.styles;
     if replace {
@@ -239,6 +236,24 @@ mod tests {
         let f = s.active().unwrap().doc.layer(fresh).unwrap();
         assert_eq!(f.blend, l.blend);
         assert!((f.opacity - l.opacity).abs() < 1e-4);
+    }
+
+    /// #9318 review: an ASL that replaces a library pattern by id marks its pixels changed, so the
+    /// preset store writes the replacement (see `PatternLibrary::pixels_rev`).
+    #[test]
+    fn an_asl_pattern_replacement_bumps_pixels_rev() {
+        let mut s = session();
+        let mut pat = s.patterns.items[1].clone();
+        pat.id = "asl-replaced-pattern".into();
+        let asl = |p: &photocraft_doc::Pattern| {
+            let style = AslStyle { name: "Pat".into(), effects: vec![], blend: None, opacity: None, fill_opacity: None };
+            b64_encode(&asl_map::write_asl(&[style], std::slice::from_ref(p)).unwrap())
+        };
+        s.execute(IMPORT, json!({"data": asl(&pat), "group": "A"})).unwrap();
+        let rev = s.patterns.pixels_rev;
+        pat.surface = s.patterns.items[2].surface.clone();
+        s.execute(IMPORT, json!({"data": asl(&pat), "group": "B"})).unwrap();
+        assert!(s.patterns.pixels_rev > rev, "the same-id replacement is marked");
     }
 
     #[test]

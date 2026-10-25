@@ -254,7 +254,7 @@ pub fn contributors_ui(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 
 /// [`contributors_ui`] over a given list (tests pass their own).
 fn contributors_in(app: &mut PhotocraftApp, ui: &mut egui::Ui, contributors: &[Contributor], total_commits: u64) {
-    let id = egui::Id::new("credits_view");
+    let id = egui::Id::unique("credits_view");
     let mut v = ui.data_mut(|d| d.get_temp::<View>(id)).unwrap_or_default();
     ui.horizontal_wrapped(|ui| {
         ui.label(tl!("Show"));
@@ -276,6 +276,7 @@ fn contributors_in(app: &mut PhotocraftApp, ui: &mut egui::Ui, contributors: &[C
             }
         });
         press.after(&sort.response);
+        let _ = sort.response.accessible_name(tl!("Sort"));
         if ui.button(if v.ascending { "▲" } else { "▼" }).on_hover_text(tl!("Reverse the order")).clicked() {
             v.ascending = !v.ascending;
         }
@@ -453,7 +454,7 @@ fn cell(ui: &mut egui::Ui, numeric: bool, text: &str) {
 fn header_cell(ui: &mut egui::Ui, t: &crate::theme::Tokens, label: &str, numeric: bool, sort: Option<Option<bool>>) -> egui::Response {
     let rect = ui.max_rect();
     let resp = ui.allocate_rect(rect, if sort.is_some() { egui::Sense::click() } else { egui::Sense::hover() });
-    let kind = if sort.is_some() { egui::WidgetType::Button } else { egui::WidgetType::Label };
+    let kind = if sort.is_some() { egui::Role::Button } else { egui::Role::Label };
     resp.widget_info(|| egui::WidgetInfo::labeled(kind, true, label));
     let resp = if sort.is_some() { resp.on_hover_cursor(egui::CursorIcon::PointingHand) } else { resp };
     let current = sort.flatten();

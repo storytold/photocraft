@@ -40,7 +40,7 @@ fn harness(list: Vec<Contributor>, table: bool) -> Harness<'static> {
         if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("semibold".into()))) {
             return;
         }
-        let id = egui::Id::new("credits_view");
+        let id = egui::Id::unique("credits_view");
         if ui.data(|d| d.get_temp::<View>(id)).is_none() {
             ui.data_mut(|d| d.insert_temp(id, View { table, ..View::default() }));
         }
@@ -71,7 +71,7 @@ fn text_rect(h: &Harness<'_>, text: &str) -> Option<Rect> {
 }
 
 fn view(h: &Harness<'_>) -> View {
-    h.ctx.data(|d| d.get_temp::<View>(egui::Id::new("credits_view"))).unwrap_or_default()
+    h.ctx.data(|d| d.get_temp::<View>(egui::Id::unique("credits_view"))).unwrap_or_default()
 }
 
 #[test]
@@ -83,6 +83,7 @@ fn the_table_header_stays_put_while_the_rows_scroll() {
     h.event(egui::Event::PointerMoved(over));
     for _ in 0..6 {
         h.event(egui::Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
             unit: egui::MouseWheelUnit::Point,
             delta: vec2(0.0, -200.0),
             modifiers: egui::Modifiers::NONE,
@@ -210,7 +211,7 @@ fn about_window(tab: &str, table: bool) -> (f32, f32, f32) {
     let mut fields = serde_json::Map::new();
     fields.insert("tab".into(), serde_json::json!(tab));
     h.state_mut().ui.open_dialog(crate::state::DialogKind::About, fields);
-    h.ctx.data_mut(|d| d.insert_temp(egui::Id::new("credits_view"), View { table, ..View::default() }));
+    h.ctx.data_mut(|d| d.insert_temp(egui::Id::unique("credits_view"), View { table, ..View::default() }));
     h.run_steps(6);
     let ok = h.query_all_by_role(Role::Button).find(|n| n.accesskit_node().label().as_deref() == Some("OK")).map(|n| n.rect()).expect("the OK button");
     // The dialog's contents: everything between its title and the OK button.

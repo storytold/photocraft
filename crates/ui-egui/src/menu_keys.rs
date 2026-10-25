@@ -51,11 +51,11 @@ pub struct Keys {
 }
 
 fn keys_id() -> Id {
-    Id::new("pc-menu-bar-keys")
+    Id::unique("pc-menu-bar-keys")
 }
 
 fn focus_id() -> Id {
-    Id::new("pc-menu-bar-focus")
+    Id::unique("pc-menu-bar-focus")
 }
 
 /// Is the keyboard on the menu bar (no menu open yet)? The shortcuts leave the keys to it then,

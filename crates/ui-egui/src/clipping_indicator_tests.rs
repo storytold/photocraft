@@ -129,7 +129,13 @@ fn scroll_to_adjustment_control(h: &mut Harness<'_, PhotocraftApp>, label: &str)
         }
         // The label column stays clear of the Color Lookup picker, which consumes wheel input.
         h.hover_at(pos2(16.0, 80.0));
-        h.event(Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: vec2(0.0, -80.0), phase: egui::TouchPhase::Move, modifiers: Modifiers::NONE });
+        h.event(Event::MouseWheel {
+            source: egui::MouseWheelSource::Trackpad,
+            unit: egui::MouseWheelUnit::Point,
+            delta: vec2(0.0, -80.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: Modifiers::NONE,
+        });
         h.run_steps(4);
     }
     panic!("adjustment control {label:?} was not reachable in the compact viewport");
@@ -199,18 +205,17 @@ fn write_adjustment_scope_preview() {
     std::fs::create_dir_all(&output).unwrap();
     for theme in [crate::theme::ThemeKind::Pro, crate::theme::ThemeKind::Studio] {
         let mut h = adjustment_harness("Hue/Saturation", 8, theme, 2.0, true);
-        h.ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
+        // egui 0.37 completes screenshots through a one-shot callback.
+        let captured = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let slot = captured.clone();
+        h.ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::ScreenshotCallback::new(move |image| {
+            if let Ok(mut slot) = slot.lock() {
+                *slot = Some(image);
+            }
+        })));
         h.step();
         h.step();
-        let image = h
-            .ctx
-            .input(|input| {
-                input.events.iter().find_map(|event| match event {
-                    Event::Screenshot { image, .. } => Some(image.clone()),
-                    _ => None,
-                })
-            })
-            .unwrap();
+        let image = captured.lock().ok().and_then(|mut c| c.take()).expect("the kittest renderer completes the screenshot callback");
         let rgba = image.pixels.iter().flat_map(|pixel| pixel.to_array()).collect();
         let image = photocraft_codecs::Image::from_u8(image.size[0] as u32, image.size[1] as u32, photocraft_codecs::ChannelLayout::Rgba, rgba).unwrap();
         let png = photocraft_codecs::encode(&image, photocraft_codecs::Format::Png, &Default::default()).unwrap();
@@ -229,13 +234,17 @@ fn write_clipping_indicator_preview() {
             for scale in [1.0, 2.0] {
                 let mut h = harness(theme, width, scale, true);
                 alt_click_line(&mut h);
-                h.ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
+                // egui 0.37 completes screenshots through a one-shot callback.
+                let captured = std::sync::Arc::new(std::sync::Mutex::new(None));
+                let slot = captured.clone();
+                h.ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::ScreenshotCallback::new(move |image| {
+                    if let Ok(mut slot) = slot.lock() {
+                        *slot = Some(image);
+                    }
+                })));
                 h.step();
                 h.step();
-                let image = h
-                    .ctx
-                    .input(|input| input.events.iter().find_map(|event| if let Event::Screenshot { image, .. } = event { Some(image.clone()) } else { None }))
-                    .unwrap();
+                let image = captured.lock().ok().and_then(|mut c| c.take()).expect("the kittest renderer completes the screenshot callback");
                 let rgba = image.pixels.iter().flat_map(|pixel| pixel.to_array()).collect();
                 let image =
                     photocraft_codecs::Image::from_u8(image.size[0] as u32, image.size[1] as u32, photocraft_codecs::ChannelLayout::Rgba, rgba).unwrap();

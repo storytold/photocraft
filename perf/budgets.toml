@@ -359,7 +359,9 @@ issue = 211
 bench = "perf_scenarios"
 row = "Content-Aware Scale 24 MP to 90 % width"
 budget_ms = 3000
-enforce = false  # over budget in the 2026-10-05 baseline
+enforce = false  # 954 s in the 2026-10-05 baseline, which predates the seam-search proxies: the
+# carving core is 2.6 s at 24 MP RGBA (docs/seam-carving-performance.md). Flip once a
+# budgeted-class run shows the whole row under 3 s.
 
 [[scenario]]
 id = "P29"

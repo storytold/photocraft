@@ -94,12 +94,12 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> bool {
     widgets::vline(ui, 22.0);
     let tip = crate::i18n::fmt(tl!("Commit transform ({key})"), &[("key", &crate::shortcuts::pretty("Enter"))]);
     let commit_btn = icons::button(ui, "check", 26.0, false, &tip);
-    commit_btn.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Commit transform"));
+    commit_btn.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Commit transform"));
     if commit_btn.clicked() {
         commit(app);
     }
     let cancel = icons::button(ui, "ban", 26.0, false, tl!("Cancel transform (Esc)"));
-    cancel.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Cancel transform"));
+    cancel.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Cancel transform"));
     if cancel.clicked() {
         app.ui.symmetry_transform = None;
     }
@@ -149,7 +149,7 @@ pub fn track(app: &mut PhotocraftApp, ctx: &egui::Context) {
 
 /// Highlight the active mode without reserving a separate checkmark column.
 fn mode_button(ui: &mut egui::Ui, mode: SymmetryMode, checked: bool) -> egui::Response {
-    let icon = ui.id().with((mode.id(), "icon"));
+    let icon = egui::IdSalt::new((mode.id(), "icon"));
     let name = label(mode);
     let b = egui::Button::new((Atom::custom(icon, vec2(16.0, 16.0)), name, Atom::grow())).selected(checked).atom_ui(ui);
     let tint = Tokens::get(ui.ctx()).icon;
@@ -162,7 +162,7 @@ fn mode_button(ui: &mut egui::Ui, mode: SymmetryMode, checked: bool) -> egui::Re
         };
         icons::paint(ui, r, glyph, 14.0, tint);
     }
-    b.response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), checked, name));
+    b.response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), checked, name));
     b.response
 }
 pub fn menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
