@@ -5,17 +5,19 @@
 //! Loading applies only the settings the file holds, over the current ones, as Camera Raw's
 //! Load Settings does; settings PhotoCraft has no control for (lens corrections, calibration,
 //! geometry, defringe, …) are ignored and named in the report. Saving writes every supported
-//! control, so loading the file in Photoshop reproduces the dialog.
+//! control. Original PhotoCraft looks use a separate `pcraft:` namespace;
+//! Photoshop does not reproduce these looks when loading their XMP.
 //!
 //! White balance: a Camera Raw Filter on a rendered image uses the relative
 //! `IncrementalTemperature` / `IncrementalTint` (−100..=100), which are PhotoCraft's Temperature
 //! and Tint. The absolute `Temperature` (kelvin) / `Tint` of raw-file settings have no
 //! counterpart and are ignored.
 
-use photocraft_algo::camera_raw::{CameraRaw, validate_curve};
+use photocraft_algo::camera_raw::{CameraRaw, ColorProfile, validate_curve};
 
 /// The Camera Raw settings namespace.
 pub const CRS_NS: &str = "http://ns.adobe.com/camera-raw-settings/1.0/";
+const PHOTOCRAFT_NS: &str = "urn:photocraft:camera-raw:1.0";
 const RDF_NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 /// Largest settings file read; real ones are a few kilobytes.
 pub const MAX_XMP_BYTES: usize = 4 * 1024 * 1024;
@@ -224,6 +226,15 @@ pub fn load(params: &mut CameraRaw, bytes: &[u8]) -> Result<LoadReport, String> 
     let mut report = LoadReport::default();
     let mut found = false;
     for desc in doc.descendants().filter(|n| n.is_element() && n.tag_name().namespace() == Some(RDF_NS) && n.tag_name().name() == "Description") {
+        if let Some(value) = desc.attribute((PHOTOCRAFT_NS, "ColorProfile")) {
+            found = true;
+            if let Some(profile) = ColorProfile::from_id(value) {
+                next.profile = profile;
+                report.applied += 1;
+            } else {
+                report.ignored.push("PhotoCraft ColorProfile".into());
+            }
+        }
         for a in desc.attributes().filter(|a| a.namespace() == Some(CRS_NS)) {
             found = true;
             apply(&mut next, &mut report, a.name(), a.value());
@@ -272,6 +283,7 @@ pub fn save(params: &CameraRaw) -> String {
     let mut out = String::from(
         "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\" x:xmptk=\"PhotoCraft\">\n <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n  <rdf:Description rdf:about=\"\"\n    xmlns:crs=\"http://ns.adobe.com/camera-raw-settings/1.0/\"\n",
     );
+    out.push_str(&format!("    xmlns:pcraft=\"{PHOTOCRAFT_NS}\"\n   pcraft:ColorProfile=\"{}\"\n", p.profile.id()));
     out.push_str("   crs:Version=\"18.4\"\n   crs:ProcessVersion=\"15.4\"\n");
     out.push_str(&format!("   crs:WhiteBalance=\"{wb}\"\n"));
     for (name, field, lo, _) in SCALARS {
@@ -305,6 +317,22 @@ pub fn save(params: &CameraRaw) -> String {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn photocraft_profiles_round_trip_without_claiming_an_adobe_camera_profile() {
+        for profile in ColorProfile::ALL {
+            let original = CameraRaw { profile, exposure: 0.75, ..Default::default() };
+            let saved = save(&original);
+            assert!(!saved.contains("crs:CameraProfile="));
+            let mut loaded = CameraRaw::default();
+            load(&mut loaded, saved.as_bytes()).unwrap();
+            assert_eq!(loaded, original);
+        }
+        let mut params = CameraRaw { profile: ColorProfile::Portrait, ..Default::default() };
+        let xmp = br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:p="urn:photocraft:camera-raw:1.0" p:ColorProfile="unknown"/></rdf:RDF>"#;
+        assert_eq!(load(&mut params, xmp).unwrap().ignored, ["PhotoCraft ColorProfile"]);
+        assert_eq!(params.profile, ColorProfile::Portrait);
+    }
 
     /// A hand-written settings file laid out as Photoshop 26's Camera Raw Filter saves one (the
     /// field set and order follow Camera Raw 18; the values are synthetic), plus element-form

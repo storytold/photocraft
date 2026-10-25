@@ -40,6 +40,13 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Test RAW development
         run: cargo test --locked -p photocraft-raw --lib --tests
+      - name: Test PhotoCraft color profiles
+        run: cargo test --locked -p photocraft-algo --lib camera_raw
+      - name: Test Camera Raw engine and hostile commands
+        run: |
+          cargo test --locked -p photocraft-engine --lib camera_raw
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked -p photocraft-engine --test panic_hunt -- --ignored
       - name: Test RAW import and presets
         run: |
           cargo test --locked -p photocraft-io --lib
@@ -52,7 +59,7 @@ jobs:
           PHOTOCRAFT_BALANCE_SNAPSHOT_DIR: ${{ github.workspace }}/balance-preview
         run: cargo test --locked -p photocraft-ui-egui --test it raw_balance_menu_in_italian
       - name: Check changed crates with Clippy
-        run: cargo clippy --locked -p photocraft-raw -p photocraft-io -p photocraft-ui-egui --all-targets -- -D warnings
+        run: cargo clippy --locked -p photocraft-algo -p photocraft-raw -p photocraft-io -p photocraft-ui-egui --all-targets -- -D warnings
       - name: Check dependency layers
         run: cargo xtask layers
       - name: Check browser compatibility

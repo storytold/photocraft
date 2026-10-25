@@ -13,7 +13,7 @@
 //! settings files, see [`photocraft_io::camera_raw_xmp`]) through the file dialog.
 
 use egui::{Align2, Color32, FontId, Pos2, Rect as ERect, Sense, Stroke, TextureHandle, pos2, vec2};
-use photocraft_algo::camera_raw::{CameraRaw, Wheel, curve_lut};
+use photocraft_algo::camera_raw::{CameraRaw, ColorProfile, Wheel, curve_lut};
 use photocraft_algo::histogram::RgbHistogram;
 
 use crate::camera_raw_scope_ui::{MAX_SAMPLERS, ToneZone};
@@ -1475,6 +1475,23 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
             let p = &mut d.params;
             let alt = &mut d.scope.alt_tone;
             let (ts, tn) = (temp_stops(), tint_stops());
+            widgets::section_label(ui, tl!("Profile"));
+            let mut profile = p.profile.id().to_string();
+            let profiles = [
+                ("standard".into(), tl!("PhotoCraft Standard")),
+                ("color".into(), tl!("PhotoCraft Color")),
+                ("vivid".into(), tl!("PhotoCraft Vivid")),
+                ("landscape".into(), tl!("PhotoCraft Landscape")),
+                ("portrait".into(), tl!("PhotoCraft Portrait")),
+                ("monochrome".into(), tl!("PhotoCraft Monochrome")),
+            ];
+            if widgets::dropdown(ui, "cr-color-profile", &mut profile, &profiles, 260.0)
+                && let Some(selected) = ColorProfile::from_id(&profile)
+            {
+                p.profile = selected;
+                dirty = true;
+            }
+            ui.label(egui::RichText::new(tl!("Original PhotoCraft looks; not Adobe profiles")).small().color(t.text_faint));
             section(ui, "Light", true, |ui| {
                 tone_row(ui, &mut dirty, alt, ToneZone::Exposure, &mut p.exposure);
                 row(ui, &mut dirty, "Contrast", &mut p.contrast, -100.0..=100.0, None);
@@ -1774,6 +1791,25 @@ mod tests {
         panic!("the Camera Raw preview worker never finished");
     }
 
+    #[test]
+    fn camera_raw_profiles_preserve_sliders_support_undo_and_reject_unknown_values() {
+        let (mut app, ctx) = worker_app();
+        menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui":{"set":{"exposure":0.75,"tint":12}}})).unwrap().unwrap();
+        for profile in ColorProfile::ALL {
+            let out = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui":{"set":{"profile":profile.id()}}})).unwrap().unwrap();
+            assert_eq!(out["params"]["profile"], profile.id());
+            let p = &app.camera_raw.as_ref().unwrap().params;
+            assert_eq!((p.exposure, p.tint), (0.75, 12.0));
+        }
+        let kept = app.camera_raw.as_ref().unwrap().params.clone();
+        assert!(menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui":{"set":{"profile":"Adobe Color"}}})).unwrap().is_err());
+        assert_eq!(app.camera_raw.as_ref().unwrap().params, kept);
+        menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui":{"undo":true}})).unwrap().unwrap();
+        assert_eq!(app.camera_raw.as_ref().unwrap().params.profile, ColorProfile::Portrait);
+        menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui":{"redo":true}})).unwrap().unwrap();
+        assert_eq!(app.camera_raw.as_ref().unwrap().params, kept);
+    }
+
     /// The dialog's controls develop the proxy on a worker (#5964): the frame it shows is the one
     /// the UI thread would have developed, and settings changed while it runs are developed next.
     #[test]
@@ -2018,7 +2054,7 @@ mod tests {
         let raw = app.pending_raw_open.take().unwrap();
         open_raw(&mut app, &ctx, raw).unwrap();
         let original = app.camera_raw.as_ref().unwrap().proxy.clone();
-        menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui":{"set":{"contrast":12}}})).unwrap().unwrap();
+        menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui":{"set":{"contrast":12,"profile":"landscape"}}})).unwrap().unwrap();
         for preset in RawWhiteBalance::ALL {
             let result = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui":{"whiteBalance":preset.id()}})).unwrap().unwrap();
             assert!(result.get("pending").is_none());
@@ -2027,6 +2063,7 @@ mod tests {
             }
             let d = app.camera_raw.as_ref().unwrap();
             assert_eq!(d.params.contrast, 12.0);
+            assert_eq!(d.params.profile, ColorProfile::Landscape);
             assert_eq!(d.raw_open.as_ref().unwrap().balance, preset);
             assert_eq!(app.session.documents().len(), 1);
             if preset == RawWhiteBalance::Tungsten {

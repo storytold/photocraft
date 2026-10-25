@@ -1,4 +1,4 @@
-# PhotoCraft 0.16.0 — prova del bilanciamento del bianco
+# PhotoCraft 0.16.0 — bilanciamento del bianco e look colore
 
 Questa versione aggiunge, durante l'apertura di un RAW, il menu **Colore → Bilanciamento del bianco**:
 Come scattato, Automatico, Luce diurna, Nuvolo, Ombreggiatura, Tungsteno, Fluorescente e Flash.
@@ -55,3 +55,31 @@ Automatico usa la stima grey-world già presente nel decoder.
 Il controllo del dialogo accetta una richiesta autonoma:
 `{"ui":{"whiteBalance":"cloudy"}}`, con ID `asShot`, `auto`, `daylight`, `cloudy`, `shade`, `tungsten`, `fluorescent`, `flash`.
 Il valore corrente è esposto in `openingRaw.whiteBalance`.
+
+## Look colore PhotoCraft
+
+Sopra Luce, il menu **Profilo** offre sei look originali: **Standard, Colori,
+Intenso, Paesaggio, Ritratto, Monocromatico**. I nomi includono PhotoCraft.
+Standard conserva la resa precedente. Colori aggiunge contrasto e saturazione
+leggeri; Intenso li aumenta; Paesaggio enfatizza blu e verdi; Ritratto usa un
+contrasto più morbido e una saturazione contenuta; Monocromatico converte in
+bianco e nero. Sono trasformazioni artistiche indipendenti, non calibrazioni
+della fotocamera né copie o ricostruzioni esatte dei profili Adobe.
+
+La scelta si combina con i cursori senza sovrascriverli, supporta annulla/ripeti,
+resta selezionata cambiando bilanciamento del bianco ed è disponibile anche nel
+filtro Camera Raw sulle immagini già aperte. Per ripartire dalla resa precedente
+scegli Standard.
+
+Il profilo viene salvato nei documenti `.pcraft` e nelle impostazioni XMP di
+PhotoCraft tramite `pcraft:ColorProfile` nello spazio dei nomi
+`urn:photocraft:camera-raw:1.0`. Photoshop ignora questa estensione. I risultati
+applicati a un livello raster si salvano normalmente in PSD o nei formati immagine;
+un filtro avanzato con un look PhotoCraft non ha una mappatura Adobe verificata
+e l'esportazione PSD lo segnala. Per conservare l'editabilità usa `.pcraft`.
+
+Il controllo del dialogo accetta `{"ui":{"set":{"profile":"landscape"}}}`.
+Gli ID sono `standard`, `color`, `vivid`, `landscape`, `portrait`, `monochrome`.
+Il comando `filter.cameraRaw` accetta direttamente lo stesso campo `profile`.
+I PSD forniti sono riferimenti su una sola scena: non dimostrano una corrispondenza
+generale con i profili Adobe, in particolare sui toni della pelle.

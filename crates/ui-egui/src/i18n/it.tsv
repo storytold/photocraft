@@ -4550,3 +4550,12 @@ shape	Appearance	Aspetto
 	White-balance presets require an open RAW file	I preset richiedono un file RAW aperto
 	The original RAW file is unavailable	Il file RAW originale non è disponibile
 	Updating RAW white balance	Aggiornamento del bilanciamento del bianco RAW
+
+cameraRaw	PhotoCraft Standard	PhotoCraft Standard
+cameraRaw	PhotoCraft Color	PhotoCraft Colori
+cameraRaw	PhotoCraft Vivid	PhotoCraft Intenso
+cameraRaw	PhotoCraft Landscape	PhotoCraft Paesaggio
+cameraRaw	PhotoCraft Portrait	PhotoCraft Ritratto
+cameraRaw	PhotoCraft Monochrome	PhotoCraft Monocromatico
+cameraRaw	Original PhotoCraft looks; not Adobe profiles	Look originali PhotoCraft; diversi dai profili Adobe
+cameraRaw	Profile	Profilo

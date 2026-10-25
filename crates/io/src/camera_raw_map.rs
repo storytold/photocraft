@@ -345,6 +345,14 @@ pub(super) fn export_item(params: &J) -> Result<Descriptor, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn photocraft_looks_are_never_silently_exported_as_adobe_profiles() {
+        assert!(export_item(&json!({"profile":"standard"})).is_ok());
+        for profile in ["color", "vivid", "landscape", "portrait", "monochrome"] {
+            assert!(export_item(&json!({"profile":profile})).unwrap_err().contains("profile"));
+        }
+    }
     use crate::smart_map::{UNSUPPORTED_FILTER, filter_from_item, item_for_filter};
     use photocraft_color::BlendMode;
 

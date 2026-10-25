@@ -49,6 +49,22 @@ fn raw_balance_menu_in_italian() {
     if let Some(output) = &output {
         h.render().unwrap().save(std::path::Path::new(output).join("tungsteno-selezionato.png")).unwrap();
     }
+    h.get(egui_kittest::kittest::By::new().role(Role::ComboBox).value(tr("PhotoCraft Standard"))).click();
+    h.run_steps(16);
+    for label in ["PhotoCraft Standard", "PhotoCraft Color", "PhotoCraft Vivid", "PhotoCraft Landscape", "PhotoCraft Portrait", "PhotoCraft Monochrome"] {
+        assert!(h.query_all_by_label(tr(label)).next().is_some(), "missing profile {label}");
+    }
+    if let Some(output) = &output {
+        h.render().unwrap().save(std::path::Path::new(output).join("profili-italiano.png")).unwrap();
+    }
+    h.get_by_label(tr("PhotoCraft Monochrome")).click();
+    h.run_steps(16);
+    let state = control::inspect(h.state(), &ctx)["cameraRaw"].clone();
+    assert_eq!(state["params"]["profile"], "monochrome");
+    assert_eq!(state["openingRaw"]["whiteBalance"], "tungsten");
+    if let Some(output) = &output {
+        h.render().unwrap().save(std::path::Path::new(output).join("monocromatico-italiano.png")).unwrap();
+    }
 }
 
 #[test]
