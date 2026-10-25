@@ -993,3 +993,19 @@ fn a_refused_popover_swatch_is_not_a_recently_used_colour() {
         assert_eq!(recent, ["#00ff00"], "properties={properties}");
     }
 }
+
+/// CodeRabbit on #9456: Path mode hides Fill and Stroke (a path has no paint), but each tool's
+/// geometry stays in the options bar, as in Photoshop's Path tool mode.
+#[test]
+fn path_mode_keeps_the_geometry_options_and_hides_paint() {
+    for (tool, geometry) in [(Tool::Rectangle, "Radius:"), (Tool::Polygon, "Sides:"), (Tool::Line, "Weight:"), (Tool::CustomShape, "Shape:")] {
+        let mut app = app("rgb", 8);
+        app.ui.tool = tool;
+        app.ui.tool_options.shape_mode = "path".into();
+        let h = harness(app, false);
+        assert!(h.query_by_label(geometry).is_some(), "{tool:?}: {geometry} stays in Path mode");
+        for paint in ["Fill:", "Stroke:", "Fill color", "Stroke color", "Stroke Options"] {
+            assert!(h.query_by_label(paint).is_none(), "{tool:?}: {paint} is hidden in Path mode");
+        }
+    }
+}
