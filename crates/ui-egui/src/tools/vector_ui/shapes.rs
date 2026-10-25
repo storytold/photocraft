@@ -45,6 +45,34 @@ fn tool_paint_source(app: &PhotocraftApp, stroke: bool) -> (&Option<photocraft_d
     if stroke { (&o.shape_stroke_gradient, app.session.tools.background) } else { (&o.shape_fill_gradient, app.session.tools.foreground) }
 }
 
+/// A Line-tool drag snapped as Photoshop's Align Edges (on by default) does: the ends on whole
+/// pixels, and a horizontal or vertical line's sides on pixel edges, each side moved down to the
+/// edge at or before it (a 1 px line drawn at y 23 fills row 22, as in Photoshop), so a 1 px line
+/// fills one pixel row instead of half of two (#9486). Diagonal lines keep their exact sides.
+/// None when the ends meet.
+fn align_line_edges(a: [f64; 2], b: [f64; 2], weight: f64) -> Option<([f64; 2], [f64; 2], f64)> {
+    let (mut a, mut b) = (a.map(f64::round), b.map(f64::round));
+    if a == b {
+        return None;
+    }
+    let mut weight = weight;
+    // The axis across a horizontal (1) or vertical (0) line.
+    let across = if a[1] == b[1] {
+        Some(1)
+    } else if a[0] == b[0] {
+        Some(0)
+    } else {
+        None
+    };
+    if let Some(i) = across {
+        let (lo, hi) = ((a[i] - weight / 2.0).floor(), (a[i] + weight / 2.0).floor());
+        if hi - lo >= 1.0 {
+            (a[i], b[i], weight) = ((lo + hi) / 2.0, (lo + hi) / 2.0, hi - lo);
+        }
+    }
+    Some((a, b, weight))
+}
+
 /// Geometry of a Shape-tool drag as `shape.create` params, without fill and stroke (None when too
 /// small): ⇧ constrains proportions, ⌥ draws from the centre. Custom shapes give their box as a `rect`.
 pub(super) fn shape_geometry(o: &ToolOptions, tool: Tool, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) -> Option<Value> {
@@ -59,7 +87,8 @@ pub(super) fn shape_geometry(o: &ToolOptions, tool: Tool, start: [f64; 2], end: 
         if dx.hypot(dy) < 1.0 {
             return None;
         }
-        json!({"kind": "line", "from": start, "to": [start[0] + dx, start[1] + dy], "weight": o.line_weight.max(1.0),
+        let (from, to, weight) = align_line_edges(start, [start[0] + dx, start[1] + dy], f64::from(o.line_weight.max(1.0)))?;
+        json!({"kind": "line", "from": from, "to": to, "weight": weight,
             "arrowStart": o.arrow_start, "arrowEnd": o.arrow_end,
             "arrowWidth": o.arrow_width, "arrowLength": o.arrow_length,
             "arrowConcavity": o.arrow_concavity})
