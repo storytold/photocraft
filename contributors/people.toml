@@ -202,6 +202,9 @@ sync_github_name = true
 real_name = "Guillem Hermida"
 sync_github_name = true
 
+[people.fokas-hoa]
+display_name = "Tasos Fokas"
+
 [people.fjamesprice]
 sync_github_name = true
 
