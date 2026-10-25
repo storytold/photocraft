@@ -453,6 +453,40 @@ fn exposure_eyedroppers_match_photoshop() {
     assert!((e - 0.35052).abs() < 1e-3, "{e}");
 }
 
+fn exposure_of(a: Adjustment) -> (f32, f32) {
+    match a {
+        Adjustment::Exposure { exposure, offset, .. } => (exposure, offset),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// #9288 review: a 32-bit sample above 1 keeps its value, so White on 2.0 takes it down a stop
+/// to white (the compositor applies Exposure to float samples unclipped).
+#[test]
+fn exposure_white_point_keeps_hdr_samples() {
+    let (e, _) = exposure_of(exposure_eyedropper(&json!({}), CurvesEyedropper::White, [2.0; 3], ColorMode::Rgb).unwrap());
+    assert!((e + 1.0).abs() < 1e-4, "{e}");
+}
+
+/// #9288 review: a dim but nonzero sample within Exposure's ±20 stops is picked, not refused
+/// as black (a 16-bit 1/65535 needs ~16 stops to white).
+#[test]
+fn exposure_eyedropper_accepts_dim_samples_within_range() {
+    let (e, _) = exposure_of(exposure_eyedropper(&json!({}), CurvesEyedropper::White, [1.0 / 65535.0; 3], ColorMode::Rgb).unwrap());
+    assert!((e - 65535f32.log2()).abs() < 1e-3, "{e}");
+    assert!(exposure_eyedropper(&json!({}), CurvesEyedropper::White, [0.0; 3], ColorMode::Rgb).is_err(), "black stays refused");
+}
+
+/// #9288 review: an Offset already past the target leaves no exposure that reaches it, so the
+/// pick is refused rather than reported as a −20-stop success.
+#[test]
+fn exposure_gray_point_refuses_an_offset_past_the_target() {
+    let base = json!({"offset": 0.3});
+    assert!(exposure_eyedropper(&base, CurvesEyedropper::NeutralGray, [64.0 / 255.0; 3], ColorMode::Rgb).is_err());
+    let (e, o) = exposure_of(exposure_eyedropper(&base, CurvesEyedropper::White, [0.35; 3], ColorMode::Rgb).unwrap());
+    assert!(o == 0.3 && (e - 1.0).abs() < 1e-4, "white is still reachable: {e}");
+}
+
 /// #3127: on a smart object the eyedropper param records the adjustment it resolved to as
 /// the smart filter, not the raw sample (which re-rendered as an identity).
 #[test]
