@@ -1337,31 +1337,46 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap().to_string();
         let (cancels, mut cancelled) = tokio::sync::mpsc::unbounded_channel();
-        // A fake app whose job 3 never ends.
-        tokio::spawn(async move {
-            let (socket, _) = listener.accept().await.unwrap();
-            let (read, mut write) = socket.into_split();
-            let mut lines = tokio::io::BufReader::new(read).lines();
-            let (auth, _) = crate::security::authentication_reply(&lines.next_line().await.unwrap().unwrap(), TOKEN);
-            write.write_all(format!("{auth}\n").as_bytes()).await.unwrap();
-            while let Ok(Some(line)) = lines.next_line().await {
-                let request: Value = serde_json::from_str(&line).unwrap();
-                let result = match request["method"].as_str().unwrap() {
-                    "engine.execute" => json!({"job": 3, "pending": true}),
-                    "jobs.list" => json!({"jobs": [{"id": 3, "state": "running", "progress": 0.5, "message": ""}]}),
-                    _ => {
-                        cancels.send(request.clone()).unwrap();
-                        json!({"cancelled": 1})
+        let polled = Arc::new(tokio::sync::Notify::new());
+        let polling = polled.clone();
+        // A fake app whose job 3 never ends and whose poll never replies. Dropping the wait
+        // discards that connection, so the cancellation must arrive on a fresh one (#8130).
+        let app = tokio::spawn(async move {
+            loop {
+                let (socket, _) = listener.accept().await.unwrap();
+                let (read, mut write) = socket.into_split();
+                let mut lines = tokio::io::BufReader::new(read).lines();
+                let (auth, _) = crate::security::authentication_reply(&lines.next_line().await.unwrap().unwrap(), TOKEN);
+                write.write_all(format!("{auth}\n").as_bytes()).await.unwrap();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    let request: Value = serde_json::from_str(&line).unwrap();
+                    let result = match request["method"].as_str().unwrap() {
+                        "engine.execute" => json!({"job": 3, "pending": true}),
+                        "jobs.list" => {
+                            polling.notify_one();
+                            continue;
+                        }
+                        "jobs.cancel" => json!({"cancelled": 1}),
+                        method => panic!("unexpected method {method}"),
+                    };
+                    write.write_all(format!("{}\n", json!({"id": request["id"], "ok": true, "result": result})).as_bytes()).await.unwrap();
+                    if request["method"] == "jobs.cancel" {
+                        cancels.send(request).unwrap();
+                        return;
                     }
-                };
-                write.write_all(format!("{}\n", json!({"id": request["id"], "ok": true, "result": result})).as_bytes()).await.unwrap();
+                }
             }
         });
         let mcp = PhotocraftMcp::with_backend(Backend::Bridge(Arc::new(BridgeClient::new(addr, TOKEN).unwrap())));
-        let waited = mcp.run_command("filter.blur.gaussianBlur".into(), json!({"radius": 4}), true);
-        assert!(tokio::time::timeout(std::time::Duration::from_millis(200), waited).await.is_err(), "the job never ends");
+        let mut waited = Box::pin(mcp.run_command("filter.blur.gaussianBlur".into(), json!({"radius": 4}), true));
+        tokio::select! {
+            result = &mut waited => panic!("the running job answered before its wait was dropped: {result:?}"),
+            ready = tokio::time::timeout(std::time::Duration::from_secs(10), polled.notified()) => ready.expect("the app received the poll"),
+        }
+        drop(waited);
         let cancel = tokio::time::timeout(std::time::Duration::from_secs(10), cancelled.recv()).await.unwrap().unwrap();
         assert_eq!((&cancel["method"], &cancel["params"]), (&json!("jobs.cancel"), &json!({"job": 3})));
+        tokio::time::timeout(std::time::Duration::from_secs(10), app).await.unwrap().unwrap();
     }
 
     /// The MCP server applies finished jobs before every tool call too (#503).
