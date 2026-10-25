@@ -5,6 +5,46 @@ use photocraft_ui_egui::{PhotocraftApp, camera_raw_ui, control, i18n, theme::The
 use serde_json::json;
 
 #[test]
+fn raw_balance_menu_in_italian() {
+    use photocraft_raw::testgen::{DngSpec, mosaic, scene};
+    let _gpu = photocraft_testkit::gpu_lock();
+    let output = std::env::var_os("PHOTOCRAFT_BALANCE_SNAPSHOT_DIR");
+    let builder = Harness::builder().with_step_dt(1.0 / 60.0).with_size(vec2(1440.0, 1000.0));
+    let builder = if output.is_some() { builder.wgpu() } else { builder };
+    let mut h = builder.build_eframe(|cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, ThemeKind::Pro);
+        let services = photocraft_ui_egui::Services {
+            import: Some(Box::new(|name, bytes, opts| {
+                photocraft_io::import_with_options(name, bytes, opts).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())
+            })),
+            ..Default::default()
+        };
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        app.session.prefs.edit(|p| p.interface.language = "it".into());
+        let mut spec = DngSpec::cfa(48, 32, mosaic(&scene(48, 32), 48, [0, 1, 1, 2], 0, 30000));
+        spec.as_shot_neutral = Some([0.5, 1.0, 0.7]);
+        app.open_bytes("Prova bilanciamento.dng", &spec.build()).unwrap();
+        app
+    });
+    h.run_steps(8);
+    let tr = |s| i18n::tr_ctx(i18n::Lang::from_code("it").unwrap(), "cameraRaw", s);
+    h.get_by_role_and_label(Role::Button, tr("Light")).click();
+    h.run_steps(12);
+    h.get_by_role_and_label(Role::Button, tr("Color")).click();
+    h.run_steps(12);
+    assert!(h.query_by_label(tr("White Balance")).is_some());
+    h.get_by_label(tr("As Shot")).click();
+    h.run_steps(4);
+    for label in ["As Shot", "Auto", "Daylight", "Cloudy", "Shade", "Tungsten", "Fluorescent", "Flash"] {
+        assert!(h.query_all_by_label(tr(label)).next().is_some(), "missing preset {label}");
+    }
+    if let Some(output) = output {
+        std::fs::create_dir_all(&output).unwrap();
+        h.render().unwrap().save(std::path::Path::new(&output).join("bilanciamento-italiano.png")).unwrap();
+    }
+}
+
+#[test]
 fn all_seven_languages_render_camera_raw_and_switch_without_resetting_view_or_filter() {
     let _gpu = photocraft_testkit::gpu_lock();
     for lang in i18n::Lang::all() {

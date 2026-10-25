@@ -4537,3 +4537,17 @@ shape	Appearance	Aspetto
 	Grayscale Ramp	Barra scala di grigio
 	Current Colors	Colori correnti
 	Make Ramp Web Safe	Limita la barra ai colori web
+
+cameraRaw	White Balance	Bilanciamento del bianco
+cameraRaw	As Shot	Come scattato
+cameraRaw	Daylight	Luce diurna
+cameraRaw	Cloudy	Nuvolo
+cameraRaw	Shade	Ombreggiatura
+cameraRaw	Tungsten	Tungsteno
+cameraRaw	Fluorescent	Fluorescente
+cameraRaw	Flash	Flash
+cameraRaw	Illuminant presets are approximate without camera calibration	Senza calibrazione della fotocamera, i preset sono approssimativi
+cameraRaw	A RAW development is already running	Sviluppo RAW in corso
+cameraRaw	White-balance presets require an open RAW file	I preset richiedono un file RAW aperto
+cameraRaw	The original RAW file is unavailable	Il file RAW originale non è disponibile
+cameraRaw	Updating RAW white balance	Aggiornamento del bilanciamento del bianco RAW

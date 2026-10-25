@@ -19,6 +19,7 @@ use photocraft_algo::histogram::RgbHistogram;
 use crate::camera_raw_scope_ui::{MAX_SAMPLERS, ToneZone};
 use photocraft_doc::LayerId;
 use photocraft_geom::Rect;
+use photocraft_io::raw::RawWhiteBalance;
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
@@ -97,7 +98,8 @@ impl CameraRawDialog {
             Target::SmartFilter(index) => Some(index),
             Target::NewFilter | Target::OpenRaw => None,
         });
-        result["openingRaw"] = json!(self.raw_open.as_ref().map(|r| json!({"name": r.name, "path": r.path, "demosaic": r.demosaic.id()})));
+        result["openingRaw"] =
+            json!(self.raw_open.as_ref().map(|r| json!({"name": r.name, "path": r.path, "demosaic": r.demosaic.id(), "whiteBalance": r.balance.id()})));
         result["view"] = json!(navigation);
         result["sourceSize"] = json!([self.full_w, self.full_h]);
         result["previewPending"] = json!(self.render_pending());
@@ -346,6 +348,10 @@ pub struct RawOpen {
     pub developed_with: photocraft_io::raw::Demosaic,
     /// The method chosen in the dialog: Open re-develops when it differs from `developed_with`.
     pub demosaic: photocraft_io::raw::Demosaic,
+    /// Balance used to develop the current baseline. Changing it reopens the source RAW.
+    pub balance: RawWhiteBalance,
+    /// Sliders preserved when a balance change replaces the baseline document.
+    pub settings: Option<CameraRaw>,
 }
 
 /// Should an interactive open of `name` show the open-time Camera Raw dialog? `warnings` are
@@ -384,6 +390,8 @@ pub fn queue_open_dialog(
         bytes: bytes.map(|b| std::sync::Arc::new(b.to_vec())),
         developed_with: method,
         demosaic: method,
+        balance: RawWhiteBalance::AsShot,
+        settings: None,
     });
     Ok(())
 }
@@ -393,7 +401,7 @@ fn open_raw(app: &mut PhotocraftApp, ctx: &egui::Context, raw: RawOpen) -> Resul
     let index = document_index(app, raw.document).ok_or("the raw document was closed")?;
     app.session.set_active(index);
     let (layer, surf, _) = crate::distort_ui::active_pixels(app)?;
-    open_pixels(app, ctx, layer, surf, CameraRaw::default(), Coverage::None, Target::OpenRaw)?;
+    open_pixels(app, ctx, layer, surf, raw.settings.clone().unwrap_or_default(), Coverage::None, Target::OpenRaw)?;
     let curve = match (&raw.bytes, &raw.path) {
         (Some(b), _) => Some(photocraft_io::raw::tone_curve(b)),
         #[cfg(not(target_arch = "wasm32"))]
@@ -442,6 +450,8 @@ pub struct Redevelop {
     /// The job is the final Camera Raw step (`filter.cameraRaw`), not the re-develop: when it
     /// lands the document is marked unmodified.
     filter_step: bool,
+    /// A balance selection rebuilds the baseline and reopens the dialog, rather than finishing.
+    reopen_balance: bool,
 }
 
 /// The sliders a raw open applies while developing, before the tone curve (as Camera Raw does).
@@ -458,6 +468,7 @@ fn raw_stage(p: &CameraRaw) -> photocraft_io::raw::Tone {
 fn commit_open_raw(app: &mut PhotocraftApp, params: &CameraRaw, raw: &RawOpen) -> Result<Value, String> {
     let index = document_index(app, raw.document).ok_or("the raw document was closed")?;
     let tuning = photocraft_io::raw::RawTuning {
+        white_balance: raw.balance,
         temperature: params.temperature,
         tint: params.tint,
         exposure: params.exposure,
@@ -469,7 +480,7 @@ fn commit_open_raw(app: &mut PhotocraftApp, params: &CameraRaw, raw: &RawOpen) -
         dehaze: params.dehaze,
     };
     // The open itself: the default settings, developed with the method it was opened with.
-    let as_opened = photocraft_io::raw::RawTuning { demosaic: raw.developed_with, ..Default::default() };
+    let as_opened = photocraft_io::raw::RawTuning { white_balance: raw.balance, demosaic: raw.developed_with, ..Default::default() };
     // Without the file the raw-stage settings stay RGB adjustments, like the filter's.
     let source = match (&raw.bytes, &raw.path) {
         (Some(b), _) => Some(photocraft_engine::jobs::OpenSource::Bytes(b.clone())),
@@ -508,7 +519,7 @@ fn commit_open_raw(app: &mut PhotocraftApp, params: &CameraRaw, raw: &RawOpen) -
     match started {
         photocraft_engine::jobs::Started::Done(v) => finish_redevelop(app, params, raw, &v),
         photocraft_engine::jobs::Started::Job(job) => {
-            app.raw_redevelop = Some(Redevelop { job, params: params.clone(), raw: raw.clone(), filter_step: false });
+            app.raw_redevelop = Some(Redevelop { job, params: params.clone(), raw: raw.clone(), filter_step: false, reopen_balance: false });
             app.ui.status = label;
             app.ui.status_error = false;
             Ok(json!({"job": job.0, "pending": true}))
@@ -585,7 +596,8 @@ fn finish_open_raw(app: &mut PhotocraftApp, index: usize, rest: CameraRaw, redev
         if r.get("pending").and_then(Value::as_bool) == Some(true)
             && let (Some(job), Some(raw)) = (r.get("job").and_then(Value::as_u64), raw)
         {
-            app.raw_redevelop = Some(Redevelop { job: photocraft_engine::jobs::JobId(job), params: rest.clone(), raw: raw.clone(), filter_step: true });
+            app.raw_redevelop =
+                Some(Redevelop { job: photocraft_engine::jobs::JobId(job), params: rest.clone(), raw: raw.clone(), filter_step: true, reopen_balance: false });
         }
         result["filter"] = r;
     }
@@ -605,10 +617,102 @@ fn mark_unmodified(app: &mut PhotocraftApp, index: usize) {
     app.sync_views();
 }
 
+/// A preset is part of RAW development, not a relative RGB filter. Re-develop the original
+/// bytes on the normal job worker, then rebuild both the proxy and full-resolution preview
+/// from that same baseline. Failed/cancelled jobs leave the current dialog and image intact.
+fn change_balance(app: &mut PhotocraftApp, balance: RawWhiteBalance) -> Result<Value, String> {
+    if app.raw_redevelop.is_some() {
+        return Err(tl!("A RAW development is already running").into());
+    }
+    let d = app.camera_raw.as_ref().ok_or(tl!("Camera Raw isn't open"))?;
+    let mut raw = d.raw_open.clone().ok_or(tl!("White-balance presets require an open RAW file"))?;
+    if raw.balance == balance {
+        return Ok(json!({"whiteBalance": balance.id(), "changed": false}));
+    }
+    let params = d.params.clone();
+    let source = match (&raw.bytes, &raw.path) {
+        (Some(b), _) => photocraft_engine::jobs::OpenSource::Bytes(b.clone()),
+        #[cfg(not(target_arch = "wasm32"))]
+        (None, Some(p)) => photocraft_engine::jobs::OpenSource::Path(p.clone()),
+        _ => return Err(tl!("The original RAW file is unavailable").into()),
+    };
+    let (doc_id, name, demosaic) = (raw.document, raw.name.clone(), raw.developed_with);
+    let label = tl!("Updating RAW white balance").to_string();
+    raw.balance = balance;
+    let work = move |ctx: &photocraft_engine::jobs::JobCtx| -> photocraft_engine::Result<(photocraft_io::ImportResult, bool)> {
+        ctx.progress(0.0, "Reading");
+        let bytes = match source {
+            photocraft_engine::jobs::OpenSource::Bytes(b) => b,
+            #[cfg(not(target_arch = "wasm32"))]
+            photocraft_engine::jobs::OpenSource::Path(p) => {
+                std::sync::Arc::new(std::fs::read(p).map_err(|e| photocraft_engine::EngineError::Other(e.to_string()))?)
+            }
+        };
+        let tuning = photocraft_io::raw::RawTuning { white_balance: balance, demosaic, ..Default::default() };
+        photocraft_io::raw::import_raw_tuned(&name, &bytes, &tuning).map_err(|e| photocraft_engine::EngineError::Other(e.to_string()))
+    };
+    let apply = move |s: &mut photocraft_engine::Session, (r, wb)| replace_raw_document(s, doc_id, r, wb);
+    let started = if app.background_jobs {
+        app.session.start_job("cameraRaw.whiteBalance", json!({"whiteBalance": balance.id()}), &label, true, work, apply).map_err(|e| e.to_string())?
+    } else {
+        let v = work(&photocraft_engine::jobs::JobCtx::new()).and_then(|r| apply(&mut app.session, r)).map_err(|e| e.to_string())?;
+        photocraft_engine::jobs::Started::Done(v)
+    };
+    match started {
+        photocraft_engine::jobs::Started::Done(v) => {
+            finish_balance_change(app, raw, &params, &v)?;
+            Ok(json!({"whiteBalance": balance.id(), "changed": true}))
+        }
+        photocraft_engine::jobs::Started::Job(job) => {
+            app.raw_redevelop = Some(Redevelop { job, params, raw, filter_step: false, reopen_balance: true });
+            app.ui.status = label;
+            app.ui.status_error = false;
+            Ok(json!({"job": job.0, "pending": true}))
+        }
+    }
+}
+
+fn finish_balance_change(app: &mut PhotocraftApp, mut raw: RawOpen, _params: &CameraRaw, v: &Value) -> Result<(), String> {
+    let id = v.get("docId").and_then(Value::as_u64).map(photocraft_doc::DocId).ok_or("the re-develop returned no document identity")?;
+    document_index(app, id).ok_or("the re-developed document was closed")?;
+    for view in app.view_docs.iter_mut().filter(|id| **id == raw.document) {
+        *view = id;
+    }
+    let latest = app.camera_raw.as_ref().and_then(|d| d.raw_open.as_ref().filter(|r| r.document == raw.document).map(|_| d.params.clone()));
+    let Some(latest) = latest else {
+        if let Some(index) = document_index(app, id) {
+            app.session.close(index);
+        }
+        app.sync_views();
+        return Ok(());
+    };
+    raw.document = id;
+    raw.settings = Some(latest);
+    let warnings: Vec<String> =
+        v.get("warnings").and_then(Value::as_array).map(|a| a.iter().filter_map(|w| w.as_str().map(str::to_string)).collect()).unwrap_or_default();
+    crate::notices::io_warnings(app, &format!("Opened {}", raw.name), &warnings);
+    app.camera_raw = None;
+    app.pending_raw_open = Some(raw);
+    app.sync_views();
+    Ok(())
+}
+
 /// A finished background re-develop ([`REDEVELOP_JOB`]) or open-time Camera Raw step. `true`
 /// when the event was one of those (handled here).
 pub fn on_redevelop_event(app: &mut PhotocraftApp, e: &photocraft_engine::jobs::JobEvent) -> bool {
     let Some(pending) = app.raw_redevelop.take_if(|r| r.job == e.id) else { return false };
+    if pending.reopen_balance {
+        match &e.outcome {
+            photocraft_engine::jobs::JobOutcome::Done(v) => {
+                if let Err(err) = finish_balance_change(app, pending.raw, &pending.params, v) {
+                    crate::notices::error(app, err);
+                }
+            }
+            photocraft_engine::jobs::JobOutcome::Failed(err) => crate::notices::error(app, err.clone()),
+            photocraft_engine::jobs::JobOutcome::Cancelled => {}
+        }
+        return true;
+    }
     if pending.filter_step {
         if matches!(e.outcome, photocraft_engine::jobs::JobOutcome::Done(_))
             && let Some(index) = e.document.and_then(|id| document_index(app, id))
@@ -853,6 +957,15 @@ pub fn menu(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Val
     let Some(fields) = ui.as_object() else {
         return Some(Err("Camera Raw ui must be an object".into()));
     };
+    if let Some(value) = ui.get("whiteBalance") {
+        if fields.len() != 1 {
+            return Some(Err("whiteBalance must be sent on its own".into()));
+        }
+        return Some(match value.as_str().and_then(RawWhiteBalance::from_id) {
+            Some(balance) => change_balance(app, balance),
+            None => Err("unknown RAW white-balance preset".into()),
+        });
+    }
     for (key, value) in fields {
         match key.as_str() {
             "set" | "scope" | "view" | "demosaic" => {}
@@ -1078,6 +1191,9 @@ fn history_keys(d: &mut CameraRawDialog, ctx: &egui::Context) {
 }
 
 fn commit(app: &mut PhotocraftApp) -> Result<Value, String> {
+    if app.raw_redevelop.is_some() {
+        return Err(tl!("A RAW development is already running").into());
+    }
     let d = app.camera_raw.as_ref().ok_or(tl!("Camera Raw isn't open"))?;
     let result = match d.target {
         Target::NewFilter => {
@@ -1262,6 +1378,8 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
     let screen = ctx.content_rect();
     let current_display = app.session.active().and_then(|st| app.session.color.canvas_display(&st.doc).ok());
     let mut action: Option<&str> = None;
+    let mut balance_change = None;
+    let balance_busy = app.raw_redevelop.is_some();
     egui::Area::new(egui::Id::new("camera-raw-dialog")).order(egui::Order::Foreground).fixed_pos(screen.min).show(ctx, |ui| {
         let Some(d) = app.camera_raw.as_mut() else { return };
         history_keys(d, ctx);
@@ -1362,7 +1480,31 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
                 tone_row(ui, &mut dirty, alt, ToneZone::Blacks, &mut p.blacks);
             });
             section(ui, "Color", false, |ui| {
-                widgets::section_label(ui, tl!("White Balance: As Shot"));
+                if let Some(raw) = d.raw_open.as_ref() {
+                    widgets::section_label(ui, tl!("White Balance"));
+                    let mut selected = raw.balance.id().to_string();
+                    let options = [
+                        ("asShot".into(), tl!("As Shot")),
+                        ("auto".into(), tl!("Auto")),
+                        ("daylight".into(), tl!("Daylight")),
+                        ("cloudy".into(), tl!("Cloudy")),
+                        ("shade".into(), tl!("Shade")),
+                        ("tungsten".into(), tl!("Tungsten")),
+                        ("fluorescent".into(), tl!("Fluorescent")),
+                        ("flash".into(), tl!("Flash")),
+                    ];
+                    ui.add_enabled_ui(!balance_busy, |ui| {
+                        if widgets::dropdown(ui, "cr-white-balance", &mut selected, &options, 260.0) {
+                            balance_change = RawWhiteBalance::from_id(&selected);
+                        }
+                    });
+                    ui.label(egui::RichText::new(tl!("Illuminant presets are approximate without camera calibration")).small().color(t.text_faint));
+                    if balance_busy {
+                        ui.spinner();
+                    }
+                } else {
+                    widgets::section_label(ui, tl!("White Balance: As Shot"));
+                }
                 row(ui, &mut dirty, "Temperature", &mut p.temperature, -100.0..=100.0, Some(&ts));
                 row(ui, &mut dirty, "Tint", &mut p.tint, -100.0..=100.0, Some(&tn));
                 row(ui, &mut dirty, "Vibrance", &mut p.vibrance, -100.0..=100.0, None);
@@ -1495,6 +1637,12 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
             d.params = edited;
         }
     });
+    if let Some(balance) = balance_change {
+        if let Err(e) = change_balance(app, balance) {
+            crate::notices::error(app, e);
+        }
+        return;
+    }
     super::camera_raw_scope_ui::persist(app, ctx);
     if ctx.input(|i| i.key_pressed(egui::Key::Y))
         && let Some(d) = app.camera_raw.as_mut()
@@ -1859,6 +2007,90 @@ mod tests {
     }
 
     #[test]
+    fn raw_balance_presets_rebuild_the_preview_preserve_sliders_and_commit_the_selected_balance() {
+        let (mut app, bytes) = raw_app();
+        let ctx = egui::Context::default();
+        app.open_bytes("balance.dng", &bytes).unwrap();
+        let raw = app.pending_raw_open.take().unwrap();
+        open_raw(&mut app, &ctx, raw).unwrap();
+        let original = app.camera_raw.as_ref().unwrap().proxy.clone();
+        menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui":{"set":{"contrast":12}}})).unwrap().unwrap();
+        for preset in RawWhiteBalance::ALL {
+            let result = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui":{"whiteBalance":preset.id()}})).unwrap().unwrap();
+            assert!(result.get("pending").is_none());
+            if let Some(raw) = app.pending_raw_open.take() {
+                open_raw(&mut app, &ctx, raw).unwrap();
+            }
+            let d = app.camera_raw.as_ref().unwrap();
+            assert_eq!(d.params.contrast, 12.0);
+            assert_eq!(d.raw_open.as_ref().unwrap().balance, preset);
+            assert_eq!(app.session.documents().len(), 1);
+            if preset == RawWhiteBalance::Tungsten {
+                assert_ne!(d.proxy, original, "preset must change actual source pixels");
+            }
+        }
+        let before = app.camera_raw.as_ref().unwrap().params.clone();
+        assert!(menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui":{"whiteBalance":"unknown"}})).unwrap().is_err());
+        assert!(menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui":{"whiteBalance":"auto","commit":true}})).unwrap().is_err());
+        assert_eq!(app.camera_raw.as_ref().unwrap().params, before);
+        // Returning to As Shot restores the original baseline, with no cumulative RGB edits.
+        change_balance(&mut app, RawWhiteBalance::AsShot).unwrap();
+        let raw = app.pending_raw_open.take().unwrap();
+        open_raw(&mut app, &ctx, raw).unwrap();
+        assert_eq!(app.camera_raw.as_ref().unwrap().proxy, original);
+        change_balance(&mut app, RawWhiteBalance::Tungsten).unwrap();
+        let raw = app.pending_raw_open.take().unwrap();
+        open_raw(&mut app, &ctx, raw).unwrap();
+        let expected = app.session.active().unwrap().doc.clone();
+        app.camera_raw.as_mut().unwrap().params = CameraRaw::default();
+        let result = commit(&mut app).unwrap();
+        assert_eq!(result["redeveloped"], false, "the displayed baseline already has this preset");
+        assert!(std::sync::Arc::ptr_eq(&expected, &app.session.active().unwrap().doc));
+        open(&mut app, &ctx).unwrap();
+        assert!(change_balance(&mut app, RawWhiteBalance::Auto).is_err(), "RGB filters do not silently approximate RAW presets");
+    }
+
+    #[test]
+    fn raw_balance_background_job_keeps_edits_and_can_be_cancelled() {
+        let (mut app, bytes) = raw_app();
+        let ctx = egui::Context::default();
+        app.open_bytes("balance.dng", &bytes).unwrap();
+        let raw = app.pending_raw_open.take().unwrap();
+        open_raw(&mut app, &ctx, raw).unwrap();
+        app.background_jobs = true;
+        change_balance(&mut app, RawWhiteBalance::Cloudy).unwrap();
+        assert!(app.raw_redevelop.is_some());
+        assert!(change_balance(&mut app, RawWhiteBalance::Auto).is_err());
+        assert!(commit(&mut app).is_err());
+        // Sliders edited while a job runs must survive the reopened dialog.
+        app.camera_raw.as_mut().unwrap().params.exposure = 0.75;
+        for _ in 0..3000 {
+            crate::jobs_ui::tick(&mut app, &ctx);
+            if app.raw_redevelop.is_none() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(app.raw_redevelop.is_none());
+        let raw = app.pending_raw_open.take().unwrap();
+        open_raw(&mut app, &ctx, raw).unwrap();
+        assert_eq!(app.camera_raw.as_ref().unwrap().params.exposure, 0.75);
+        assert_eq!(app.camera_raw.as_ref().unwrap().raw_open.as_ref().unwrap().balance, RawWhiteBalance::Cloudy);
+        change_balance(&mut app, RawWhiteBalance::Shade).unwrap();
+        cancel(&mut app);
+        for _ in 0..3000 {
+            crate::jobs_ui::tick(&mut app, &ctx);
+            if app.raw_redevelop.is_none() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(app.raw_redevelop.is_none());
+        assert!(app.pending_raw_open.is_none() && app.camera_raw.is_none());
+        assert!(app.session.documents().is_empty(), "a cancelled opening must stay closed");
+    }
+
+    #[test]
     fn raw_opens_in_camera_raw_and_open_redevelops() {
         let (mut app, dng) = raw_app();
         let ctx = egui::Context::default();
@@ -2066,7 +2298,9 @@ mod tests {
                     path: None,
                     bytes: None,
                     developed_with: Default::default(),
-                    demosaic: Default::default()
+                    demosaic: Default::default(),
+                    balance: RawWhiteBalance::AsShot,
+                    settings: None,
                 }
             )
             .is_err()

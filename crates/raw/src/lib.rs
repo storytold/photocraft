@@ -73,7 +73,7 @@ pub mod testgen;
 
 pub use crate::color::{Calibration, ColorInfo, Mat3};
 pub use crate::demosaic::Demosaic;
-pub use crate::develop::{DevelopOptions, Developed, RawInfo, WhiteBalance, develop_sensor};
+pub use crate::develop::{DevelopOptions, Developed, RawInfo, WhiteBalance, develop_sensor, white_balance_multipliers};
 pub use crate::error::RawError;
 pub use crate::look::{CameraLook, LookRejected, PROXY_EDGE, Reference, ToneCurve, fit_look};
 pub use crate::opcodes::GainMap;

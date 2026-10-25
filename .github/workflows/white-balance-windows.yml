@@ -1,0 +1,82 @@
+name: PhotoCraft - bilanciamento del bianco Windows
+
+on:
+  push:
+    branches: [camera-raw-white-balance]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: white-balance-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_PROFILE_DEV_DEBUG: '0'
+  CARGO_PROFILE_TEST_DEBUG: '0'
+  PHOTOCRAFT_NO_PRINT: '1'
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: camera-raw-white-balance
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
+        with:
+          toolchain: 1.95.0
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Test RAW development
+        run: cargo test --locked -p photocraft-raw --lib --tests
+      - name: Test RAW import and presets
+        run: |
+          cargo test --locked -p photocraft-io --lib
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked -p photocraft-io --test it raw::
+      - name: Test Camera Raw dialog and background jobs
+        run: cargo test --locked -p photocraft-ui-egui --lib camera_raw
+      - name: Test Italian menu and capture preview
+        env:
+          PHOTOCRAFT_BALANCE_SNAPSHOT_DIR: balance-preview
+        run: cargo test --locked -p photocraft-ui-egui --test it raw_balance_menu_in_italian
+      - name: Check changed crates with Clippy
+        run: cargo clippy --locked -p photocraft-raw -p photocraft-io -p photocraft-ui-egui --all-targets -- -D warnings
+      - name: Check dependency layers
+        run: cargo xtask layers
+      - name: Check browser compatibility
+        run: cargo xtask wasm
+      - name: Build Windows app
+        run: cargo build --locked --release -p photocraft
+      - name: Prepare portable folder
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force PhotoCraft-Bilanciamento/PhotoCraftData | Out-Null
+          Copy-Item target/release/photocraft.exe PhotoCraft-Bilanciamento/PhotoCraft.exe
+          Copy-Item docs/custom-white-balance.md PhotoCraft-Bilanciamento/LEGGIMI.md
+          Copy-Item LICENSE-MIT, LICENSE-APACHE, NOTICE PhotoCraft-Bilanciamento/
+          Set-Content -Encoding utf8 PhotoCraft-Bilanciamento/PhotoCraftData/portable.txt 'Impostazioni della versione di prova.'
+          git rev-parse HEAD | Set-Content PhotoCraft-Bilanciamento/COMMIT.txt
+      - name: Upload Windows app
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: PhotoCraft-Bilanciamento-Windows-x64
+          path: PhotoCraft-Bilanciamento/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload preview
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: Anteprima-menu-italiano
+          path: balance-preview/*.png
+          if-no-files-found: ignore
+          retention-days: 14

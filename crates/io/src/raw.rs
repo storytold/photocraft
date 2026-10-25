@@ -53,6 +53,7 @@ fn upright_preview(raw: &[u8], jpeg: &[u8], limits: &photocraft_raw::Limits) -> 
 /// developed RGB pixels, and the demosaic method.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct RawTuning {
+    pub white_balance: RawWhiteBalance,
     /// −100…100, as `photocraft_algo::camera_raw::CameraRaw::temperature`.
     pub temperature: f32,
     /// −100…100, as `CameraRaw::tint`.
@@ -71,6 +72,55 @@ pub struct RawTuning {
     pub texture: f32,
     /// −100…100, as `CameraRaw::dehaze`.
     pub dehaze: f32,
+}
+
+/// Illuminant presets use published CIE standard illuminant xy coordinates, rather than
+/// Adobe profiles or arbitrary offsets on the relative temperature slider. They are not an
+/// emulation of Adobe's camera-specific rendering. F2 is the cool-white fluorescent preset.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RawWhiteBalance {
+    #[default]
+    AsShot,
+    Auto,
+    Daylight,
+    Cloudy,
+    Shade,
+    Tungsten,
+    Fluorescent,
+    Flash,
+}
+
+impl RawWhiteBalance {
+    pub const ALL: [Self; 8] = [Self::AsShot, Self::Auto, Self::Daylight, Self::Cloudy, Self::Shade, Self::Tungsten, Self::Fluorescent, Self::Flash];
+
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::AsShot => "asShot",
+            Self::Auto => "auto",
+            Self::Daylight => "daylight",
+            Self::Cloudy => "cloudy",
+            Self::Shade => "shade",
+            Self::Tungsten => "tungsten",
+            Self::Fluorescent => "fluorescent",
+            Self::Flash => "flash",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|v| v.id() == id)
+    }
+
+    fn choice(self) -> WhiteBalance {
+        match self {
+            Self::AsShot => WhiteBalance::AsShot,
+            Self::Auto => WhiteBalance::Auto,
+            Self::Daylight | Self::Flash => WhiteBalance::Illuminant([0.33242, 0.34743]), // D55
+            Self::Cloudy => WhiteBalance::Illuminant([0.31271, 0.32902]),                 // D65
+            Self::Shade => WhiteBalance::Illuminant([0.29902, 0.31485]),                  // D75
+            Self::Tungsten => WhiteBalance::Illuminant([0.44757, 0.40745]),               // A
+            Self::Fluorescent => WhiteBalance::Illuminant([0.37208, 0.37529]),            // F2
+        }
+    }
 }
 
 /// Develops a raw file with `tuning` applied at the raw stage: Exposure as develop exposure,
@@ -98,7 +148,13 @@ pub fn import_raw_tuned(name: &str, bytes: &[u8], tuning: &RawTuning) -> Result<
     // without colour calibration), so re-developing changes only what the sliders change.
     let camera_look = default_look(bytes, &sensor);
     let mut opts = DevelopOptions { limits: limits(), exposure, demosaic: tuning.demosaic, tone, camera_look, ..Default::default() };
-    let wb_applied = match sensor.camera_wb {
+    let (base_wb, balance_warnings) = if tuning.white_balance != RawWhiteBalance::AsShot {
+        let (m, warnings) = photocraft_raw::white_balance_multipliers(&sensor, tuning.white_balance.choice()).map_err(IoError::Raw)?;
+        (Some(m), warnings)
+    } else {
+        (sensor.camera_wb, Vec::new())
+    };
+    let wb_applied = match base_wb {
         Some(m) => {
             let g = wb_gains(tuning.temperature, tuning.tint);
             opts.white_balance = WhiteBalance::Multipliers([m[0] * g[0], m[1] * g[1], m[2] * g[2]]);
@@ -106,9 +162,10 @@ pub fn import_raw_tuned(name: &str, bytes: &[u8], tuning: &RawTuning) -> Result<
         }
         None => false,
     };
-    let dev = photocraft_raw::develop_sensor(&sensor, &opts).map_err(IoError::Raw)?;
+    let mut dev = photocraft_raw::develop_sensor(&sensor, &opts).map_err(IoError::Raw)?;
+    dev.warnings.extend(balance_warnings);
     let wb = if wb_applied {
-        format!("as-shot white balance, temperature {:+.0}, tint {:+.0}", tuning.temperature, tuning.tint)
+        format!("{} white balance, relative temperature {:+.0}, tint {:+.0}", tuning.white_balance.id(), tuning.temperature, tuning.tint)
     } else {
         "estimated white balance".into()
     };
@@ -302,6 +359,19 @@ pub fn import_raw_with(name: &str, bytes: &[u8], opts: &DevelopOptions) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn raw_balance_presets_have_stable_ids_and_physical_illuminants() {
+        for preset in RawWhiteBalance::ALL {
+            assert_eq!(RawWhiteBalance::from_id(preset.id()), Some(preset));
+            if let WhiteBalance::Illuminant(xy) = preset.choice() {
+                assert!(xy.iter().all(|v| v.is_finite() && *v > 0.0));
+                assert!(xy[0] + xy[1] < 1.0);
+            }
+        }
+        assert_eq!(RawWhiteBalance::default(), RawWhiteBalance::AsShot);
+        assert!(RawWhiteBalance::from_id("Adobe Color").is_none());
+    }
 
     #[test]
     fn the_developed_note_says_which_demosaic_method_was_used() {

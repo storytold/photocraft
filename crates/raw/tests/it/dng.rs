@@ -30,6 +30,40 @@ fn identifies_dng() {
 }
 
 #[test]
+fn illuminant_balance_uses_camera_calibration_and_validates_white_points() {
+    let bytes = DngSpec::cfa(16, 16, vec![5000; 256]).build();
+    let mut s = sensor(&bytes);
+    // A synthetic XYZ camera makes the expected neutral exactly XYZ / max(XYZ).
+    s.color.calibrations = vec![Calibration {
+        temperature: 6504.0,
+        color_matrix: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        forward_matrix: None,
+        camera_calibration: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+    }];
+    let xy = [0.44757, 0.40745];
+    let xyz = [xy[0] / xy[1], 1.0, (1.0 - xy[0] - xy[1]) / xy[1]];
+    let max = xyz.into_iter().fold(f64::MIN, f64::max);
+    let (gains, warnings) = white_balance_multipliers(&s, WhiteBalance::Illuminant(xy)).unwrap();
+    assert!(warnings.is_empty());
+    for (gain, expected) in gains.into_iter().zip(xyz.map(|v| max / v)) {
+        assert!((gain - expected).abs() < 1e-8);
+    }
+    let out = develop_sensor(&s, &DevelopOptions { white_balance: WhiteBalance::Illuminant(xy), ..Default::default() }).unwrap();
+    for (got, expected) in out.info.wb_multipliers.into_iter().zip(gains) {
+        assert!((got - expected).abs() < 1e-6);
+    }
+    for invalid in [[f64::NAN, 0.3], [f64::INFINITY, 0.3], [0.0, 0.3], [-0.1, 0.3], [0.8, 0.8]] {
+        assert!(white_balance_multipliers(&s, WhiteBalance::Illuminant(invalid)).is_err());
+    }
+    s.color.calibrations.clear();
+    let (fallback, warnings) = white_balance_multipliers(&s, WhiteBalance::Illuminant(xy)).unwrap();
+    assert!(warnings.iter().any(|w| w.contains("approximate")));
+    assert!(fallback[2] > fallback[0], "tungsten correction must boost blue relative to red");
+    s.data.clear();
+    assert!(white_balance_multipliers(&s, WhiteBalance::Auto).is_err());
+}
+
+#[test]
 fn storage_layouts_decode_exactly() {
     let (w, h) = (37, 23); // odd sizes exercise partial strips and edge tiles
     let cases: Vec<(&str, u16, DngStorage, bool)> = vec![
