@@ -45,7 +45,7 @@ use gradient_map::gradient_map;
 pub use gradient_map::{gradient_presets, is_gray, swatches};
 use hue_saturation::hue_saturation;
 #[cfg(test)]
-use hue_saturation::{hue_range_zone, lightness_track, move_hue_range_handle, move_hue_range_zone, saturation_track};
+use hue_saturation::{hue_range_handle_at, hue_range_zone, lightness_track, move_hue_range_handle, move_hue_range_zone, saturation_track};
 use levels::levels;
 pub use levels::{auto_levels, gamma_from_pos, gamma_pos};
 pub use session::{layer_editor, layer_mem, properties_coalesce, properties_reset, session_start};
@@ -262,6 +262,23 @@ mod tests {
     /// #9252: Photoshop 2025's zone drags on a colour range (measured on Reds): the fully-on span
     /// moves all four handles, each fade its own two; a side stops at the other and the range
     /// never passes a turn.
+    /// #9272 review: at the narrowest Properties panel (a 230-point bar) a 30° zone is ~19 points
+    /// wide; a press in its middle grabs the zone, not a handle, while each handle stays grabbable.
+    #[test]
+    fn hue_range_zones_stay_selectable_on_a_narrow_bar() {
+        let w = 230.0;
+        let xs = [75.0f32, 105.0, 135.0, 165.0].map(|d| d / 360.0 * w);
+        for (a, z) in [(0, 1), (1, 2), (2, 3)] {
+            assert_eq!(hue_range_handle_at(xs, (xs[a] + xs[z]) / 2.0), None, "the middle of zone {a}..{z} is the zone's");
+        }
+        for (k, x) in xs.iter().enumerate() {
+            assert_eq!(hue_range_handle_at(xs, *x + 1.0), Some(k as u8), "handle {k}");
+        }
+        assert_eq!(hue_range_handle_at(xs, xs[0] - 9.0), Some(0), "the full reach outside the range");
+        let stacked = [50.0, 50.0, 80.0, 120.0];
+        assert!(hue_range_handle_at(stacked, 51.0).is_some(), "coinciding handles stay grabbable");
+    }
+
     #[test]
     fn hue_range_zones_move_their_handles() {
         let reds = [-45.0, -15.0, 15.0, 45.0];
