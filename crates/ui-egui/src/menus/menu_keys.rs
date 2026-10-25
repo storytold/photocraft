@@ -67,14 +67,10 @@ pub fn is_focused(ctx: &egui::Context) -> bool {
 
 /// A command shortcut pressed while the keyboard is on the bar with no menu open (⌘D, ⌘⇧I, F7…)
 /// takes it off the bar, so the shortcut runs in the same press, as a native menu bar does
-/// (#6573). Keys the bar uses (arrows, ↩, Esc, letters, Alt+letter, F10) keep driving it, and
-/// an open menu still swallows shortcuts. True when the bar was left.
+/// (#6573). Keys the bar uses (arrows, ↩, Esc, letters, Alt+letter, F10) keep driving it; an
+/// open menu is closed by [`close_for_shortcut`]. True when the bar was left.
 pub fn leave_for_shortcut(ctx: &egui::Context) -> bool {
-    if !is_focused(ctx) || crate::menu_nav::is_open(ctx) {
-        return false;
-    }
-    let shortcut = ctx.input(|i| i.events.iter().any(|e| matches!(e, Event::Key { key, pressed: true, modifiers, .. } if is_command_key(*key, *modifiers))));
-    if !shortcut {
+    if !is_focused(ctx) || crate::menu_nav::is_open(ctx) || !command_key_pressed(ctx) {
         return false;
     }
     let mut keys = Keys::load(ctx);
@@ -83,6 +79,31 @@ pub fn leave_for_shortcut(ctx: &egui::Context) -> bool {
     keys.store(ctx);
     ctx.request_repaint();
     true
+}
+
+/// A command shortcut (⌘1, ⌘D, F7…) pressed while a menu or a dropdown list is open closes it,
+/// so the shortcut runs in the same press, as with Photoshop's menus (#9065). Keys the menu or
+/// list uses (arrows, ↩, Esc, letters) keep driving it, and so does a field in it that has the
+/// keyboard (Help › Search: ⌘V pastes there). True when one was closed.
+pub fn close_for_shortcut(ctx: &egui::Context) -> bool {
+    let menu = crate::menu_nav::is_open(ctx);
+    let list = crate::widgets::dropdown_list_open(ctx);
+    if !(menu || list) || ctx.text_edit_focused() || !command_key_pressed(ctx) {
+        return false;
+    }
+    if menu {
+        crate::menu_nav::close(ctx);
+    }
+    if list {
+        crate::widgets::close_dropdown_list(ctx);
+    }
+    ctx.request_repaint();
+    true
+}
+
+/// A command shortcut was pressed this frame ([`is_command_key`]).
+fn command_key_pressed(ctx: &egui::Context) -> bool {
+    ctx.input(|i| i.events.iter().any(|e| matches!(e, Event::Key { key, pressed: true, modifiers, .. } if is_command_key(*key, *modifiers))))
 }
 
 /// A key press that is a command shortcut rather than a key of the bar: ⌘ / Ctrl with a key

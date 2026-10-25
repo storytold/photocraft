@@ -388,6 +388,30 @@ fn a_command_shortcut_leaves_the_bar_and_runs() {
     assert!(!is_open(&h.ctx), "no menu opened");
 }
 
+/// A command shortcut pressed with a menu open closes the menu and runs, as with Photoshop's
+/// menus (#9065); the open menu's own keys (letters, arrows, Esc) still drive it.
+#[test]
+fn a_command_shortcut_closes_an_open_menu_and_runs() {
+    let mut h = Harness::builder().with_size(egui::vec2(1280.0, 720.0)).build_ui_state(
+        |ui, app| {
+            crate::shortcuts::handle(app, ui.ctx());
+            crate::menus::menu_bar(app, ui);
+        },
+        app(),
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h.run_steps(3);
+    h.state_mut().run("select.all", json!({})).unwrap();
+    h.get_by_label("Edit").click();
+    h.run_steps(4);
+    assert!(is_open(&h.ctx) && h.query_by_label_contains("Undo").is_some(), "Edit is open");
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::D);
+    h.run_steps(3);
+    assert!(h.state().session.active().unwrap().doc.selection.is_none(), "⌘D deselects with the menu open");
+    assert!(!is_open(&h.ctx), "and closes the menu");
+    assert!(h.query_by_label_contains("Undo").is_none(), "Edit's rows are gone");
+}
+
 /// Checked, unchecked and plain rows (and submenu headers) start their label at the same x, in
 /// any script: the checkmark column has a fixed width instead of padding characters (#5705).
 #[test]
