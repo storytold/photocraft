@@ -33,6 +33,12 @@ pub fn long_version() -> String {
     format_long(VERSION, short_sha(), build_date())
 }
 
+/// [`long_version`] worked out once, for a `&'static str` such as clap's `version`.
+pub fn long_version_static() -> &'static str {
+    static LONG: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    LONG.get_or_init(long_version)
+}
+
 fn format_long(version: &str, sha: Option<&str>, date: Option<&str>) -> String {
     match (sha, date) {
         (Some(s), Some(d)) => format!("{version} ({s}, {d})"),
@@ -58,6 +64,7 @@ mod tests {
     fn version_is_the_workspace_version() {
         assert!(!VERSION.is_empty());
         assert!(long_version().starts_with(VERSION));
+        assert_eq!(long_version_static(), long_version());
         if let Some(s) = short_sha() {
             assert!(s.len() <= 9);
         }

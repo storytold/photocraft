@@ -619,36 +619,41 @@ pub(crate) fn preview(ui: &mut egui::Ui, d: &mut CameraRawDialog, view: &mut Cam
     } else if mode != ClippingMode::None {
         if d.scope.overlay_key != Some(key) || d.scope.overlay_detail {
             d.scope.overlay_detail = false;
-            let colors = d
-                .pixels()
-                .iter()
-                .map(|p| {
-                    let (lo, hi) = clipping(*p);
-                    if p[3] <= 0.0 || !p.iter().all(|v| v.is_finite()) {
-                        return Color32::TRANSPARENT;
-                    }
-                    match mode {
-                        ClippingMode::ShadowChannels => t.histogram_color(7 ^ lo),
-                        ClippingMode::HighlightChannels => {
-                            if hi == 0 {
-                                t.histogram_background()
-                            } else {
-                                t.histogram_color(hi)
-                            }
+            let color = |p: &[f32; 4]| {
+                let (lo, hi) = clipping(*p);
+                if p[3] <= 0.0 || !p.iter().all(|v| v.is_finite()) {
+                    return Color32::TRANSPARENT;
+                }
+                match mode {
+                    ClippingMode::ShadowChannels => t.histogram_color(7 ^ lo),
+                    ClippingMode::HighlightChannels => {
+                        if hi == 0 {
+                            t.histogram_background()
+                        } else {
+                            t.histogram_color(hi)
                         }
-                        ClippingMode::Warnings(warnings) => {
-                            if warnings & 2 != 0 && hi != 0 {
-                                t.histogram_color(1)
-                            } else if warnings & 1 != 0 && lo != 0 {
-                                t.histogram_color(4)
-                            } else {
-                                Color32::TRANSPARENT
-                            }
-                        }
-                        ClippingMode::None => Color32::TRANSPARENT,
                     }
-                })
-                .collect();
+                    ClippingMode::Warnings(warnings) => {
+                        if warnings & 2 != 0 && hi != 0 {
+                            t.histogram_color(1)
+                        } else if warnings & 1 != 0 && lo != 0 {
+                            t.histogram_color(4)
+                        } else {
+                            Color32::TRANSPARENT
+                        }
+                    }
+                    ClippingMode::None => Color32::TRANSPARENT,
+                }
+            };
+            // Rebuilt for every new preview while a warning is on: one colour per proxy pixel,
+            // each independent, so it runs across cores (#211, P36).
+            #[cfg(not(target_arch = "wasm32"))]
+            let colors = {
+                use rayon::prelude::*;
+                d.pixels().par_iter().with_min_len(crate::camera_raw_ui::PARALLEL_MIN_PIXELS).map(color).collect()
+            };
+            #[cfg(target_arch = "wasm32")]
+            let colors = d.pixels().iter().map(color).collect();
             let image = egui::ColorImage::new([d.pw, d.ph], colors);
             match &mut d.scope.overlay_tex {
                 Some(t) => t.set(image, egui::TextureOptions::NEAREST),

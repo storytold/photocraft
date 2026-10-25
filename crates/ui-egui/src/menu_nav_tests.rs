@@ -727,6 +727,37 @@ fn press_drag_release_reaches_other_menus_and_submenus() {
     assert!(Nav::current(&h.ctx).rows.first().is_none_or(|r| r.is_empty()), "and closed the menus");
 }
 
+/// Press-and-hold a menu title and drag through the items: the highlight follows the
+/// pointer the whole way, down and back up, without lagging or dropping (#8887).
+#[test]
+fn press_drag_highlight_follows_the_pointer() {
+    use egui::{Modifiers, PointerButton};
+    let mut h = harness((1280.0, 720.0, 1.0));
+    let title = h.get_by_label("View").rect().center();
+    h.event(egui::Event::PointerMoved(title));
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: title, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+    let rows = Nav::current(&h.ctx).rows.first().cloned().unwrap_or_default();
+    assert!(rows.len() > 4, "the View menu has rows to drag through");
+    // Drag down through the first rows, one at a time, still holding the button.
+    for i in 1..=4 {
+        let row = rows.get(i).expect("row exists");
+        h.event(egui::Event::PointerMoved(row.rect.center()));
+        h.run_steps(1);
+        assert_eq!(Nav::current(&h.ctx).highlighted(0), Some(i), "holding and dragging onto row {i} highlights it");
+    }
+    // Back up the way a user overshooting and correcting does.
+    for i in (1..=3).rev() {
+        let row = rows.get(i).unwrap();
+        h.event(egui::Event::PointerMoved(row.rect.center()));
+        h.run_steps(1);
+        assert_eq!(Nav::current(&h.ctx).highlighted(0), Some(i), "dragging back up to row {i} highlights it");
+    }
+    h.event(egui::Event::PointerButton { pos: rows.get(1).unwrap().rect.center(), button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+}
+
 /// A menu bar whose frames are `dt` seconds apart, as with a real pointer sending moves.
 fn harness_dt(dt: f32) -> Harness<'static, PhotocraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1280.0, 720.0)).with_step_dt(dt).build_ui_state(

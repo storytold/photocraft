@@ -3,6 +3,74 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Photoshop-style Layers panel display preferences; part of serialized UI state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum LayerThumbnailSize {
+    None,
+    Small,
+    #[default]
+    Medium,
+    Large,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum LayerThumbnailContents {
+    LayerBounds,
+    #[default]
+    EntireDocument,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct LayersPanelOptions {
+    pub thumbnail_size: LayerThumbnailSize,
+    /// Thumbnail Contents in the Panel Options dialog. Not saved with these options: the dialog
+    /// shows and sets `interface.clipThumbnailsToLayerBounds` (Layer Bounds = clipped, #4281),
+    /// which the panel menu's Clip Thumbnails to Layer Bounds toggles too.
+    #[serde(skip)]
+    pub thumbnail_contents: LayerThumbnailContents,
+    pub show_filters: bool,
+    pub use_default_masks_on_fill_layers: bool,
+    pub expand_new_effects: bool,
+    pub add_copy_to_copied_layers_and_groups: bool,
+    pub preview_on_canvas_when_reordering_layers: bool,
+    pub show_layer_mask_badges: bool,
+}
+
+impl LayersPanelOptions {
+    /// Every option at the Photoshop default: Medium thumbnails, filters shown, new effects expanded, no mask badges.
+    pub fn defaults() -> Self {
+        Self {
+            thumbnail_size: LayerThumbnailSize::Medium,
+            thumbnail_contents: LayerThumbnailContents::EntireDocument,
+            show_filters: true,
+            use_default_masks_on_fill_layers: true,
+            expand_new_effects: true,
+            add_copy_to_copied_layers_and_groups: true,
+            preview_on_canvas_when_reordering_layers: true,
+            show_layer_mask_badges: false,
+        }
+    }
+}
+
+impl Default for LayersPanelOptions {
+    /// Same as [`LayersPanelOptions::defaults`], so serde fills missing fields with the Photoshop defaults.
+    fn default() -> Self {
+        Self::defaults()
+    }
+}
+
+/// Pending dialog data is transient: Cancel never changes persisted options.
+#[derive(Clone, Debug, PartialEq)]
+pub enum LayersPanelDialog {
+    PanelOptions(LayersPanelOptions),
+    NewLayer(String),
+    NewGroup(String),
+    LockLayers { transparency: bool, pixels: bool, position: bool, artboard: bool, all: bool },
+}
+
 /// Shared selection and capture for a point curve; document parameters remain with the host.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -404,6 +472,10 @@ pub struct Panels {
     /// What Tab hid (toolbar, options bar, dock), so a second Tab brings back just those.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hidden_by_tab: Option<[bool; 3]>,
+    /// Tab in Full Screen Mode shows the menu bar, toolbar, options bar and dock over the canvas
+    /// (#6760). Only a view of the moment: not saved, and the panels' own flags stay untouched.
+    #[serde(skip)]
+    pub full_screen_chrome: bool,
     /// The right dock's icon rail. An app that embeds PhotoCraft's UI can hide it for a simpler view.
     #[serde(default = "yes")]
     pub rail: bool,
@@ -435,6 +507,7 @@ impl Default for Panels {
             toolbar_double: false,
             dock: true,
             hidden_by_tab: None,
+            full_screen_chrome: false,
             rail: true,
             menu_bar: true,
             gradient_editor: false,
@@ -483,11 +556,53 @@ pub struct View {
     /// Canvas camera rotation in degrees, wrapped to (−180, 180]. Turns the view, not the pixels.
     #[serde(default)]
     pub rotation: f32,
+    /// Transient presentation state for a discrete zoom command; the target camera above remains
+    /// authoritative and this flag is never persisted.
+    #[serde(skip)]
+    pub(crate) zoom_animating: bool,
+    /// Optional document/screen anchor for a pointer-centred Zoom-tool transition.
+    #[serde(skip)]
+    pub(crate) zoom_anchor: Option<([f64; 2], [f32; 2])>,
+    #[serde(skip)]
+    pub(crate) display_camera: Option<(f32, [f32; 2])>,
+    #[serde(skip)]
+    pub(crate) zoom_transition: Option<ZoomTransition>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ZoomTransition {
+    pub from: (f32, [f32; 2]),
+    pub target: (f32, [f32; 2]),
+    pub started: f64,
+}
+
+impl View {
+    /// Start a discrete zoom only when Animated Zoom is enabled; otherwise discard the
+    /// presentation camera so the requested camera takes effect immediately.
+    pub(crate) fn request_zoom_animation(&mut self, enabled: bool) {
+        self.zoom_animating = enabled;
+        self.zoom_anchor = None;
+        if !enabled {
+            self.zoom_transition = None;
+            self.display_camera = Some((self.zoom, self.center));
+        }
+    }
 }
 
 impl Default for View {
     fn default() -> Self {
-        Self { zoom: 1.0, center: [0.0, 0.0], fit_pending: true, fill_pending: false, doc_size: [0, 0], rotation: 0.0 }
+        Self {
+            zoom: 1.0,
+            center: [0.0, 0.0],
+            fit_pending: true,
+            fill_pending: false,
+            doc_size: [0, 0],
+            rotation: 0.0,
+            zoom_animating: false,
+            zoom_anchor: None,
+            display_camera: None,
+            zoom_transition: None,
+        }
     }
 }
 
@@ -541,6 +656,14 @@ pub struct ToolOptions {
     pub type_size: f32,
     pub type_aa: String,
     pub type_align: String,
+    /// Character/Paragraph panel defaults beyond the options bar, in `type.setStyle`'s
+    /// parameter format. Kept as overrides so saved engine defaults still supply unset fields.
+    /// OpenType features and variable-font axes are merged per tag/axis.
+    #[serde(default)]
+    pub type_style_defaults: serde_json::Map<String, serde_json::Value>,
+    /// Type tool: paragraph direction of new type, "auto" (from the first strong character),
+    /// "ltr" or "rtl" (TYPE-218-2).
+    pub type_direction: String,
     /// Clone Stamp / Healing Brush.
     pub clone_aligned: bool,
     /// Pattern Stamp: lock the tile origin in document space across strokes.
@@ -605,6 +728,18 @@ pub struct ToolOptions {
     pub marquee_width: f32,
     #[serde(default = "one")]
     pub marquee_height: f32,
+    /// The unit Fixed Size's Width and Height show (a [`photocraft_engine::prefs::Unit`] name,
+    /// picked by right-clicking them); the size itself stays in pixels (#7910).
+    #[serde(default = "default_marquee_unit")]
+    pub marquee_unit: String,
+    /// Slice tool options bar: the same Styles as the marquee's, with the ratio or the size in px
+    /// (#8360).
+    #[serde(default = "default_marquee_style")]
+    pub slice_style: String,
+    #[serde(default = "one")]
+    pub slice_width: f32,
+    #[serde(default = "one")]
+    pub slice_height: f32,
     /// Move tool: Auto-Select (with "layer" or "group" target) and Show Transform Controls.
     /// Auto-Select is on with the "group" target by default, as in current Photoshop;
     /// ⌘/Ctrl-click inverts it.
@@ -738,6 +873,10 @@ fn default_marquee_style() -> String {
     "normal".into()
 }
 
+fn default_marquee_unit() -> String {
+    "pixels".into()
+}
+
 fn one() -> f32 {
     1.0
 }
@@ -833,6 +972,8 @@ impl Default for ToolOptions {
             type_size: 48.0,
             type_aa: "sharp".into(),
             type_align: "left".into(),
+            type_style_defaults: serde_json::Map::new(),
+            type_direction: "auto".into(),
             clone_aligned: true,
             pattern_stamp_aligned: true,
             pattern_stamp_impressionist: false,
@@ -869,6 +1010,10 @@ impl Default for ToolOptions {
             marquee_style: default_marquee_style(),
             marquee_width: 1.0,
             marquee_height: 1.0,
+            marquee_unit: default_marquee_unit(),
+            slice_style: default_marquee_style(),
+            slice_width: 1.0,
+            slice_height: 1.0,
             move_auto_select: true,
             move_target: default_move_target(),
             move_show_transform: false,
@@ -1016,10 +1161,25 @@ pub enum MadeLayer {
     Place,
 }
 
+/// A paragraph-box handle drag: the handle, and the box (text-space) and layer transform as
+/// they were at the press. Every move recomputes from this snapshot, so ⌥ pressed or released
+/// mid-drag mirrors about the centre the box started with — as if it had been held from the
+/// start.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BoxResize {
+    pub handle: u8,
+    pub shape: [f32; 4],
+    pub aff: photocraft_geom::Affine,
+}
+
 /// In-progress inline type editing (Type tool). Offsets are character indices.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TextEdit {
     pub layer: u64,
+    /// Id of the document being edited (layer ids can repeat across documents, e.g. one .pcraft
+    /// opened twice). `None`: the active document.
+    #[serde(default)]
+    pub document: Option<u64>,
     pub caret: usize,
     pub anchor: usize,
     /// History coalescing key: the whole editing session is one "Edit Type Layer" step.
@@ -1033,7 +1193,7 @@ pub struct TextEdit {
     pub dragging: bool,
     /// Paragraph-box handle being dragged (0-3 corners from top-left clockwise, 4-7 top/right/bottom/left edges).
     #[serde(skip)]
-    pub resize: Option<u8>,
+    pub resize: Option<BoxResize>,
     /// IME composition in progress: (start, length) in characters. The preedit text lives in the
     /// layer so it lays out like typed text; each IME update replaces it.
     #[serde(skip)]
@@ -1099,13 +1259,104 @@ pub struct DockTabs {
 
 /// Color panel state.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(rename_all = "camelCase", default)]
 pub struct ColorPanelState {
     /// The panel edits the background colour (its chip was clicked), not the foreground.
     pub background: bool,
-    /// Color Picker › Only Web Colors, kept across opens like Photoshop (#4995).
-    #[serde(default)]
+    /// Color Picker › Only Web Colors, kept across opens like Photoshop (#4995). `web_only` is
+    /// its name before the camelCase rename (#6000).
+    #[serde(default, alias = "web_only")]
     pub web_only: bool,
+    /// What the panel shows, picked from its panel menu as in Photoshop (#6000).
+    pub mode: ColorPanelMode,
+    /// The colour ramp under the sliders.
+    pub ramp: ColorRamp,
+    /// Make Ramp Web Safe: the ramp shows (and picks) web colours only.
+    pub web_safe_ramp: bool,
+}
+
+/// The Color panel's display, Photoshop's panel menu choices in its order. Hue Cube is
+/// Photoshop's default; the theme never changes it (#6000).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ColorPanelMode {
+    #[default]
+    HueCube,
+    BrightnessCube,
+    ColorWheel,
+    GrayscaleSlider,
+    RgbSliders,
+    HsbSliders,
+    CmykSliders,
+    LabSliders,
+    WebColorSliders,
+}
+
+impl ColorPanelMode {
+    /// Every mode, in Photoshop's panel menu order.
+    pub const ALL: [ColorPanelMode; 9] = [
+        ColorPanelMode::HueCube,
+        ColorPanelMode::BrightnessCube,
+        ColorPanelMode::ColorWheel,
+        ColorPanelMode::GrayscaleSlider,
+        ColorPanelMode::RgbSliders,
+        ColorPanelMode::HsbSliders,
+        ColorPanelMode::CmykSliders,
+        ColorPanelMode::LabSliders,
+        ColorPanelMode::WebColorSliders,
+    ];
+
+    /// The panel menu item.
+    pub fn label(self) -> &'static str {
+        match self {
+            ColorPanelMode::HueCube => "Hue Cube",
+            ColorPanelMode::BrightnessCube => "Brightness Cube",
+            ColorPanelMode::ColorWheel => "Color Wheel",
+            ColorPanelMode::GrayscaleSlider => "Grayscale Slider",
+            ColorPanelMode::RgbSliders => "RGB Sliders",
+            ColorPanelMode::HsbSliders => "HSB Sliders",
+            ColorPanelMode::CmykSliders => "CMYK Sliders",
+            ColorPanelMode::LabSliders => "Lab Sliders",
+            ColorPanelMode::WebColorSliders => "Web Color Sliders",
+        }
+    }
+
+    /// The slider modes, which show the colour ramp under their sliders.
+    pub fn is_sliders(self) -> bool {
+        !matches!(self, ColorPanelMode::HueCube | ColorPanelMode::BrightnessCube | ColorPanelMode::ColorWheel)
+    }
+}
+
+/// The Color panel's colour ramp, from its panel menu (or Shift-click on the ramp to cycle).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ColorRamp {
+    #[default]
+    RgbSpectrum,
+    CmykSpectrum,
+    GrayscaleRamp,
+    CurrentColors,
+}
+
+impl ColorRamp {
+    /// Every ramp, in Photoshop's panel menu order (also the Shift-click cycle).
+    pub const ALL: [ColorRamp; 4] = [ColorRamp::RgbSpectrum, ColorRamp::CmykSpectrum, ColorRamp::GrayscaleRamp, ColorRamp::CurrentColors];
+
+    /// The panel menu item.
+    pub fn label(self) -> &'static str {
+        match self {
+            ColorRamp::RgbSpectrum => "RGB Spectrum",
+            ColorRamp::CmykSpectrum => "CMYK Spectrum",
+            ColorRamp::GrayscaleRamp => "Grayscale Ramp",
+            ColorRamp::CurrentColors => "Current Colors",
+        }
+    }
+
+    /// The next ramp in the Shift-click cycle.
+    pub fn next(self) -> ColorRamp {
+        let i = ColorRamp::ALL.iter().position(|r| *r == self).unwrap_or(0);
+        ColorRamp::ALL.get(i + 1).copied().unwrap_or(ColorRamp::RgbSpectrum)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1122,6 +1373,10 @@ pub struct UiState {
     /// Recently opened file paths, most-recent first (File › Open Recent). Capped; de-duplicated.
     #[serde(default)]
     pub recent_files: Vec<String>,
+    /// Recently picked type families, most-recent first (the font menu's Recent group). Capped by
+    /// Preferences ▸ Type ▸ Recent Fonts; de-duplicated.
+    #[serde(default)]
+    pub recent_fonts: Vec<String>,
     /// Inline type editing session, if any.
     #[serde(default)]
     pub text_edit: Option<TextEdit>,
@@ -1205,6 +1460,9 @@ pub struct UiState {
     /// Pen path under construction.
     #[serde(default)]
     pub pen: Option<crate::vector_ui::PenPath>,
+    /// The document the pen path is drawn on; switching away commits it to that Work Path.
+    #[serde(default)]
+    pub pen_doc: Option<photocraft_doc::DocId>,
     #[serde(default)]
     pub stroke_editor: Option<crate::shape_stroke_ui::StrokeEditor>,
     /// Direct Selection tool: selected anchors and the drag in progress (#790).
@@ -1219,6 +1477,12 @@ pub struct UiState {
     /// Layers panel kind filter ("pixel", "adjustment", "type", "shape", "smart"); empty = all.
     #[serde(default)]
     pub layer_filter: Vec<String>,
+    /// Thumbnail dimensions, content cropping and filter-strip visibility.
+    #[serde(default)]
+    pub layers_panel_options: LayersPanelOptions,
+    /// Transient dialog; never restored with a workspace.
+    #[serde(skip)]
+    pub layers_panel_dialog: Option<LayersPanelDialog>,
     /// Layers panel filter type (#5048): kind (above), name or blend mode.
     #[serde(default)]
     pub layer_filter_by: crate::layer_filter_ui::FilterBy,
@@ -1237,6 +1501,10 @@ pub struct UiState {
     /// Preset panels (Gradients, Patterns, Styles, Shapes, Tool Presets, Clone Source).
     #[serde(default)]
     pub presets_ui: crate::preset_panels::PresetUi,
+    /// Save for Web: the preview tab last chosen (`original`, `optimized`, `2up`, `4up`), which the
+    /// dialog reopens on (#9174).
+    #[serde(default)]
+    pub web_view: Option<String>,
     /// Character/Paragraph Styles, Glyphs and Check Spelling (see `type_panels_ui`).
     #[serde(default)]
     pub type_panels: crate::type_panels_ui::TypePanelsUi,
@@ -1287,7 +1555,7 @@ pub struct UiState {
     /// One-frame focus/raise request from an explicit panel reveal.
     #[serde(skip)]
     pub docking_reveal: Option<String>,
-    /// Which chip the Color panel edits.
+    /// Which chip the Color panel edits, and how it shows the colour.
     #[serde(default)]
     pub color_panel: ColorPanelState,
     /// Brush Settings: selected section (0 = Brush Tip Shape) and tab (0 settings, 1 Brushes).
@@ -1336,6 +1604,9 @@ pub struct UiState {
     /// Non-blocking notices (import/export warnings, files that couldn't open), newest last.
     #[serde(default)]
     pub notices: Vec<crate::notices::Notice>,
+    /// Non-modal release-check window; readable and controllable through `ui.inspect`/`ui.set`.
+    #[serde(default)]
+    pub updates_open: bool,
     /// Pending GPU fallback warning, visible to automation.
     #[serde(default)]
     pub gpu_fallback_notice: Option<String>,
@@ -1361,6 +1632,7 @@ impl Default for UiState {
             group_tools: Vec::new(),
             spring: None,
             recent_files: Vec::new(),
+            recent_fonts: Vec::new(),
             text_edit: None,
             caret_blink_time: 0.0,
             text_edit_return_tool: None,
@@ -1390,6 +1662,7 @@ impl Default for UiState {
             actions: Default::default(),
             layer_comp_selected: None,
             presets_ui: Default::default(),
+            web_view: None,
             type_panels: Default::default(),
             analysis: Default::default(),
             timeline: Default::default(),
@@ -1398,10 +1671,13 @@ impl Default for UiState {
             artboard_tool: Default::default(),
             shell: Default::default(),
             layer_filter: Vec::new(),
+            layers_panel_options: LayersPanelOptions::default(),
+            layers_panel_dialog: None,
             layer_filter_by: Default::default(),
             layer_filter_name: String::new(),
             layer_filter_mode: default_layer_filter_mode(),
             pen: None,
+            pen_doc: None,
             stroke_editor: None,
             direct_selection: Default::default(),
             corner_radius: None,
@@ -1437,6 +1713,7 @@ impl Default for UiState {
             status: String::new(),
             status_error: false,
             notices: Vec::new(),
+            updates_open: false,
             gpu_fallback_notice: None,
             kys_offer: None,
             slow_refresh_noticed: Vec::new(),

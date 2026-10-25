@@ -239,7 +239,15 @@ pub fn dispatch_pressed(app: &mut PhotocraftApp, ctx: &egui::Context, focus: Foc
             let by_position = physical_key
                 .filter(|p| POSITIONAL.contains(p))
                 .and_then(|p| table.iter().find(|(_, sc)| sc.modifiers.command && sc.logical_key == p && key_matches(sc, p, *modifiers)));
-            by_position.or_else(|| table.iter().find(|(_, sc)| key_matches(sc, *key, *modifiers))).map(|(id, _)| (id.clone(), *key == Key::Tab))
+            let bound =
+                by_position.or_else(|| table.iter().find(|(_, sc)| key_matches(sc, *key, *modifiers))).map(|(id, _)| (id.clone(), *key == Key::Tab, false));
+            // Photoshop: ⌥ added to an adjustment's own key opens it at its last settings (⌥⌘L,
+            // ⌥⌘M, #8900), unless that key is bound to something else.
+            bound.or_else(|| {
+                let plain = egui::Modifiers { alt: false, ..*modifiers };
+                let last = modifiers.alt.then(|| table.iter().find(|(id, sc)| crate::adjust_dialog::has_dialog(id) && key_matches(sc, *key, plain))).flatten();
+                last.map(|(id, _)| (id.clone(), false, true))
+            })
         }
         _ => None,
     };
@@ -250,7 +258,7 @@ pub fn dispatch_pressed(app: &mut PhotocraftApp, ctx: &egui::Context, focus: Foc
             i.events.remove(at);
             Some(hit)
         });
-        let Some((id, tab)) = next else { break };
+        let Some((id, tab, last)) = next else { break };
         if tab {
             // egui already read this Tab as "focus the next widget" (Photoshop's Tab hides the
             // panels instead, #1313): the shortcut took it, so cancel that move.
@@ -258,7 +266,7 @@ pub fn dispatch_pressed(app: &mut PhotocraftApp, ctx: &egui::Context, focus: Foc
         }
         let id = clip_key_command(app, delete_key_command(app, id));
         let owner = key_owner(app, ctx);
-        dispatch(app, ctx, &id);
+        dispatch_as(app, ctx, &id, last);
         ran = true;
         if key_owner(app, ctx) != owner {
             break;
@@ -274,7 +282,7 @@ pub fn dispatch_pressed(app: &mut PhotocraftApp, ctx: &egui::Context, focus: Foc
 /// selection is filled with the background colour in the mask (Photoshop's Delete on a mask), and
 /// with no selection the mask itself is deleted, as Layer › Layer Mask › Delete, unless several
 /// layers are selected: then they are deleted.
-fn delete_key_command(app: &PhotocraftApp, id: String) -> String {
+pub(crate) fn delete_key_command(app: &PhotocraftApp, id: String) -> String {
     if id != "edit.clear" {
         return id;
     }
@@ -345,6 +353,11 @@ fn label(id: &str) -> String {
 
 /// Run a shortcut's command like its menu item (dialogs included), or say why it can't run.
 pub fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str) {
+    dispatch_as(app, ctx, id, false);
+}
+
+/// [`dispatch`]; with `last`, an adjustment dialog opens at its last confirmed settings.
+fn dispatch_as(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, last: bool) {
     let action = id.strip_prefix(crate::actions::SHORTCUT_PREFIX);
     let command_id = if action.is_some() { "actions.play" } else { id };
     let outcome = if !crate::menus::is_enabled(app, command_id) {
@@ -364,7 +377,11 @@ pub fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str) {
                 if v.get("failed").is_some_and(|f| f.is_object()) { Err(app.ui.status.clone()) } else { Ok(v) }
             })
         } else if crate::adjust_dialog::has_dialog(id) {
-            crate::adjust_dialog::open(app, id);
+            if last {
+                crate::adjust_dialog::open_last(app, id);
+            } else {
+                crate::adjust_dialog::open(app, id);
+            }
             Ok(serde_json::Value::Null)
         } else {
             crate::menus::invoke(app, ctx, id, json!({}))

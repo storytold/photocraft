@@ -223,8 +223,8 @@ fn pattern_texture(ctx: &egui::Context, pat: &photocraft_doc::Pattern) -> Textur
     cached_texture(ctx, ("pattern", pat.id.clone()), || {
         let (w, h) = (pat.width.max(1), pat.height.max(1));
         let fmt = pat.surface.format();
-        let px = pat.surface.read_region(photocraft_geom::Rect::new(0, 0, w as i32, h as i32));
-        let n = fmt.channels();
+        // Only the pixels the swatch shows are read: a pattern file can declare a padded source
+        // of any size, and reading it whole to pick 4096 of its pixels is gigabytes of floats.
         // Tiles smaller than the swatch repeat; larger ones are shown shrunk.
         const S: u32 = 64;
         let step = (w.max(h) as f32 / S as f32).max(1.0);
@@ -233,8 +233,8 @@ fn pattern_texture(ctx: &egui::Context, pat: &photocraft_doc::Pattern) -> Textur
             for x in 0..S {
                 let sx = ((x as f32 * step) as u32) % w;
                 let sy = ((y as f32 * step) as u32) % h;
-                let i = (sy * w + sx) as usize * n;
-                img.pixels[(y * S + x) as usize] = c32(photocraft_raster::to_rgba(&fmt, &px[i..i + n]));
+                let px = pat.surface.read_region(photocraft_geom::Rect::from_xywh(sx as i32, sy as i32, 1, 1));
+                img.pixels[(y * S + x) as usize] = c32(photocraft_raster::to_rgba(&fmt, &px));
             }
         }
         img
@@ -261,22 +261,34 @@ pub(crate) fn pattern_picker(app: &PhotocraftApp, ui: &mut egui::Ui, selected: &
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Patterns")));
     let mut picked = None;
     egui::Popup::menu(&resp).show(|ui| {
-        ui.set_max_width(6.0 * (SWATCH + 4.0));
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
-            for p in pats {
-                let (r, cell) = ui.allocate_exact_size(vec2(SWATCH, SWATCH), Sense::click());
-                ui.painter().image(pattern_texture(&ctx, p).id(), r, uv, Color32::WHITE);
-                let (w, c) = if p.id == selected { (2.0, t.accent) } else { (1.0, t.field_border) };
-                ui.painter().rect_stroke(r, 0.0, Stroke::new(w, c), egui::StrokeKind::Outside);
-                let cell = cell.on_hover_text(p.display_name());
-                cell.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, p.display_name()));
-                if cell.clicked() {
-                    picked = Some(p.id.clone());
-                    ui.close();
-                }
+        picked = pattern_grid(app, ui, selected);
+    });
+    picked
+}
+
+/// Library grid shared by the standalone picker and paint popups. Drawing it inline avoids
+/// replacing an already-open paint popup with a second memory-backed popup.
+pub(crate) fn pattern_grid(app: &PhotocraftApp, ui: &mut egui::Ui, selected: &str) -> Option<String> {
+    const SWATCH: f32 = 40.0;
+    let t = Tokens::get(ui.ctx());
+    let ctx = ui.ctx().clone();
+    let uv = Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0));
+    let mut picked = None;
+    ui.set_max_width(6.0 * (SWATCH + 4.0));
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
+        for p in &app.session.patterns.items {
+            let (r, cell) = ui.allocate_exact_size(vec2(SWATCH, SWATCH), Sense::click());
+            ui.painter().image(pattern_texture(&ctx, p).id(), r, uv, Color32::WHITE);
+            let (w, c) = if p.id == selected { (2.0, t.accent) } else { (1.0, t.field_border) };
+            ui.painter().rect_stroke(r, 0.0, Stroke::new(w, c), egui::StrokeKind::Outside);
+            let cell = cell.on_hover_text(p.display_name());
+            cell.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), p.display_name()));
+            if cell.clicked() {
+                picked = Some(p.id.clone());
+                ui.close();
             }
-        });
+        }
     });
     picked.filter(|id| id != selected)
 }
@@ -794,6 +806,14 @@ fn float_window(
                     if crate::icons::button(ui, "x", 20.0, false, tl!("Close")).clicked() {
                         close = true;
                     }
+                    if key == "styles" {
+                        let resp = crate::icons::button(ui, "ellipsis", 20.0, false, tl!("Panel menu"));
+                        egui::Popup::menu(&resp).show(|ui| {
+                            crate::widgets::style_spectrum_popup_menu(ui);
+                            ui.set_min_width(180.0);
+                            styles_menu(app, ui);
+                        });
+                    }
                 });
             });
             crate::widgets::hairline(ui);
@@ -866,6 +886,61 @@ pub fn styles_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             }
         }
     }
+}
+
+/// The Styles panel menu ("…"): Import Styles… / Export Selected Styles… / Export Styles…
+/// (Photoshop layer style libraries, `.asl`).
+fn styles_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    let any = app.session.presets.styles.iter().any(|g| !g.items.is_empty());
+    let selected = app.ui.presets_ui.selected.get("styles").cloned();
+    let mut act: Option<&str> = None;
+    if ui.button(tl!("Import Styles…")).clicked() {
+        act = Some("import");
+    }
+    if ui.add_enabled(selected.is_some(), egui::Button::new(tl!("Export Selected Styles…"))).clicked() {
+        act = Some("selected");
+    }
+    if ui.add_enabled(any, egui::Button::new(tl!("Export Styles…"))).clicked() {
+        act = Some("all");
+    }
+    let Some(a) = act else { return };
+    ui.close();
+    let r = match a {
+        "import" => app.pick_file_bytes_filtered(&["asl"], |app, name, bytes| match crate::preset_files_ui::open(app, &name, &bytes) {
+            Some(r) => r.map(|()| Value::Null),
+            None => Err(crate::i18n::fmt(tl!("{file} is not a style library (.asl)"), &[("file", &crate::file_open::display_name(&name))])),
+        }),
+        "selected" => match selected {
+            Some(name) => export_styles(app, json!({"styles": [name.clone()]}), &name),
+            None => Ok(Value::Null),
+        },
+        _ => export_styles(app, json!({}), "Styles"),
+    };
+    if let Err(e) = r
+        && e != "cancelled"
+    {
+        app.ui.status = e;
+        app.ui.status_error = true;
+    }
+}
+
+/// Builds the `.asl` through `style.presets.exportAsl`, then asks where to save it.
+fn export_styles(app: &mut PhotocraftApp, params: Value, suggested: &str) -> Result<Value, String> {
+    let r = app.run("style.presets.exportAsl", params)?;
+    let bytes = r["data"].as_str().and_then(photocraft_engine::paint::tile::b64_decode).ok_or("the export returned no data")?;
+    let n = r["count"].as_u64().unwrap_or(0);
+    let stem: String = suggested.chars().filter(|c| !matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|')).collect();
+    let stem = if stem.trim().is_empty() { "Styles".to_string() } else { stem.trim().to_string() };
+    app.pick_save(&format!("{stem}.asl"), move |app, path| {
+        let write = app.services.write.as_mut().ok_or("no writer configured")?;
+        write(&path, &bytes)?;
+        app.ui.status_error = false;
+        app.ui.status = crate::i18n::fmt(
+            &crate::i18n::trn(crate::i18n::current(), n, "Exported {n} style to {file}", "Exported {n} styles to {file}"),
+            &[("file", &crate::file_open::display_name(&path))],
+        );
+        Ok(json!({"path": path, "count": n}))
+    })
 }
 
 // ------------------------------------------------------------------ Shapes
@@ -1453,7 +1528,18 @@ mod tests {
     fn preset_drops_map_through_the_ruler_inset() {
         let (mut app, _) = app();
         app.last_canvas_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
-        app.ui.views[0] = crate::state::View { zoom: 2.0, center: [32.0, 24.0], fit_pending: false, fill_pending: false, doc_size: [64, 48], rotation: 0.0 };
+        app.ui.views[0] = crate::state::View {
+            zoom: 2.0,
+            center: [32.0, 24.0],
+            fit_pending: false,
+            fill_pending: false,
+            doc_size: [64, 48],
+            rotation: 0.0,
+            zoom_animating: false,
+            zoom_anchor: None,
+            display_camera: None,
+            zoom_transition: None,
+        };
         let p = egui::pos2(400.0, 300.0);
         let off = crate::canvas::doc_point_at(&app, p).unwrap();
         assert_eq!(off, [32.0, 24.0], "without rulers the widget rect is the whole mapping");

@@ -14,7 +14,7 @@
 //!   the page-only `blendIfChannel`; `channelNames`: the document's colour channels.
 
 use egui::{Color32, RichText, Sense, Stroke, StrokeKind, vec2};
-use photocraft_doc::effects::{FxPaint, GlowSource, StrokePosition};
+use photocraft_doc::effects::{FxPaint, GlowSource, GlowTechnique, StrokePosition};
 use photocraft_doc::{Effect, Layer};
 use serde_json::{Map, Value, json};
 
@@ -23,6 +23,8 @@ use crate::{PhotocraftApp, widgets};
 
 pub(crate) mod color_picker;
 mod contour;
+#[cfg(test)]
+mod gradient_method_tests;
 
 #[derive(Clone, Copy)]
 enum P {
@@ -30,6 +32,7 @@ enum P {
     Color,
     Blend,
     Choice(&'static [(&'static str, &'static str)]),
+    GradientMethod,
     Check,
     Angle,
     /// A pattern from the dialog's `patternList` field (`[[id, name], …]`).
@@ -89,6 +92,7 @@ fn spec(kind: &str) -> &'static [(&'static str, &'static str, P)] {
     const TECHNIQUE: &[(&str, &str)] = &[("smooth", "Smooth"), ("chiselHard", "Chisel Hard"), ("chiselSoft", "Chisel Soft")];
     const DIR: &[(&str, &str)] = &[("up", "Up"), ("down", "Down")];
     const SRC: &[(&str, &str)] = &[("edge", "Edge"), ("center", "Center")];
+    const GLOW_TECHNIQUE: &[(&str, &str)] = &[("softer", "Softer"), ("precise", "Precise")];
     const CONTOUR: P = P::Contour(Some("antiAlias"));
     match kind {
         "dropShadow" => &[
@@ -116,24 +120,28 @@ fn spec(kind: &str) -> &'static [(&'static str, &'static str, P)] {
             ("contour", "Contour", CONTOUR),
             ("noise", "Noise", P::Slider(0.0, 100.0, "%")),
         ],
+        // Photoshop's order (#6698): Technique before the spread or choke, Range after the contour.
         "outerGlow" => &[
             ("blend", "Blend Mode", P::Blend),
             ("opacity", "Opacity", P::Slider(0.0, 100.0, "%")),
             ("color", "Color", P::Color),
+            ("technique", "Technique", P::Choice(GLOW_TECHNIQUE)),
             ("spread", "Spread", P::Slider(0.0, 100.0, "%")),
             ("size", "Size", P::Slider(0.0, 250.0, "px")),
-            ("range", "Range", P::Slider(1.0, 100.0, "%")),
             ("contour", "Contour", CONTOUR),
+            ("range", "Range", P::Slider(1.0, 100.0, "%")),
             ("noise", "Noise", P::Slider(0.0, 100.0, "%")),
         ],
         "innerGlow" => &[
             ("blend", "Blend Mode", P::Blend),
             ("opacity", "Opacity", P::Slider(0.0, 100.0, "%")),
             ("color", "Color", P::Color),
+            ("technique", "Technique", P::Choice(GLOW_TECHNIQUE)),
             ("source", "Source", P::Choice(SRC)),
             ("choke", "Choke", P::Slider(0.0, 100.0, "%")),
             ("size", "Size", P::Slider(0.0, 250.0, "px")),
             ("contour", "Contour", CONTOUR),
+            ("range", "Range", P::Slider(1.0, 100.0, "%")),
             ("noise", "Noise", P::Slider(0.0, 100.0, "%")),
         ],
         "stroke" => &[
@@ -141,6 +149,7 @@ fn spec(kind: &str) -> &'static [(&'static str, &'static str, P)] {
             ("position", "Position", P::Choice(POS)),
             ("blend", "Blend Mode", P::Blend),
             ("opacity", "Opacity", P::Slider(0.0, 100.0, "%")),
+            ("overprint", "Overprint", P::Check),
             ("color", "Color", P::Color),
         ],
         "colorOverlay" => &[("blend", "Blend Mode", P::Blend), ("color", "Color", P::Color), ("opacity", "Opacity", P::Slider(0.0, 100.0, "%"))],
@@ -153,6 +162,7 @@ fn spec(kind: &str) -> &'static [(&'static str, &'static str, P)] {
             ("style", "Style", P::Choice(GSTYLE)),
             ("angle", "Angle", P::Angle),
             ("scale", "Scale", P::Slider(10.0, 150.0, "%")),
+            ("method", "Method", P::GradientMethod),
         ],
         "patternOverlay" => &[
             ("blend", "Blend Mode", P::Blend),
@@ -172,7 +182,13 @@ fn spec(kind: &str) -> &'static [(&'static str, &'static str, P)] {
             ("angle", "Angle", P::Angle),
             ("useGlobalLight", "Use Global Light", P::Check),
             ("altitude", "Altitude", P::Slider(0.0, 90.0, "°")),
-            ("glossContour", "Gloss Contour", P::Contour(None)),
+            ("glossContour", "Gloss Contour", P::Contour(Some("glossAntiAlias"))),
+            ("highlightBlend", "Highlight Mode", P::Blend),
+            ("highlightColor", "Highlight Color", P::Color),
+            ("highlightOpacity", "Highlight Opacity", P::Slider(0.0, 100.0, "%")),
+            ("shadowBlend", "Shadow Mode", P::Blend),
+            ("shadowColor", "Shadow Color", P::Color),
+            ("shadowOpacity", "Shadow Opacity", P::Slider(0.0, 100.0, "%")),
             // Bevel & Emboss › Contour element.
             ("contour", "Contour", P::Check),
             ("contourName", "", P::Contour(Some("contourAntiAlias"))),
@@ -243,6 +259,7 @@ fn values_of(e: &Effect, light: f32) -> Value {
             } else {
                 drop_keys(&mut v, &["color"]);
             }
+            set(&mut v, "technique", json!(if g.technique == GlowTechnique::Precise { "precise" } else { "softer" }));
             set(&mut v, if matches!(e, Effect::OuterGlow(_)) { "spread" } else { "choke" }, json!((g.spread * 100.0).round()));
             set(&mut v, "size", json!(g.size));
             set(&mut v, "range", json!((g.range * 100.0).round()));
@@ -266,6 +283,7 @@ fn values_of(e: &Effect, light: f32) -> Value {
                     _ => "outside",
                 }),
             );
+            set(&mut v, "overprint", json!(s.overprint));
             if let FxPaint::Color(c) = &s.paint {
                 set(&mut v, "color", json!(hex(c)));
             } else {
@@ -279,31 +297,36 @@ fn values_of(e: &Effect, light: f32) -> Value {
             set(&mut v, "opacity", json!((common.opacity * 100.0).round()));
             set(&mut v, "color", json!(hex(color)));
         }
-        Effect::GradientOverlay { common, gradient: g, .. } => {
+        Effect::GradientOverlay { common, gradient: g, interpolation, .. } => {
             set(&mut v, "blend", json!(common.blend.label()));
             set(&mut v, "opacity", json!((common.opacity * 100.0).round()));
-            // The From/To fields model a plain two-stop gradient; anything richer
-            // (more stops, transparency stops) is carried by the snapshot instead.
-            if g.stops.len() == 2 && g.opacity_stops.is_empty() {
-                set(&mut v, "from", json!(hex(&g.stops[0].1)));
-                set(&mut v, "to", json!(hex(&g.stops[1].1)));
-                set(&mut v, "reverse", json!(g.reverse));
-                set(
-                    &mut v,
-                    "style",
-                    json!(match g.style {
-                        photocraft_doc::effects::GradientStyle::Radial => "radial",
-                        photocraft_doc::effects::GradientStyle::Angle => "angle",
-                        photocraft_doc::effects::GradientStyle::Reflected => "reflected",
-                        photocraft_doc::effects::GradientStyle::Diamond => "diamond",
-                        photocraft_doc::effects::GradientStyle::Linear => "linear",
-                    }),
-                );
-                set(&mut v, "angle", json!(g.angle));
-                set(&mut v, "scale", json!((g.scale * 100.0).round()));
-            } else {
-                drop_keys(&mut v, &["from", "to", "reverse", "style", "angle", "scale"]);
+            let stops = interpolation.as_ref().map_or(&g.stops, |source| &source.stops);
+            if let Some(source) = interpolation {
+                set(&mut v, "method", json!(source.method));
+                set(&mut v, "smoothness", json!(source.smoothness));
             }
+            // Endpoint colours and geometry always load into the dialog. Recorded
+            // interpolation exposes the original source ends; a baked curve without a
+            // record (PSD import) keeps its interior stops in `fx`, and an edit only
+            // retints its ends until a method is chosen.
+            if let (Some(first), Some(last)) = (stops.first(), stops.last()) {
+                set(&mut v, "from", json!(hex(&first.1)));
+                set(&mut v, "to", json!(hex(&last.1)));
+            }
+            set(&mut v, "reverse", json!(g.reverse));
+            set(
+                &mut v,
+                "style",
+                json!(match g.style {
+                    photocraft_doc::effects::GradientStyle::Radial => "radial",
+                    photocraft_doc::effects::GradientStyle::Angle => "angle",
+                    photocraft_doc::effects::GradientStyle::Reflected => "reflected",
+                    photocraft_doc::effects::GradientStyle::Diamond => "diamond",
+                    photocraft_doc::effects::GradientStyle::Linear => "linear",
+                }),
+            );
+            set(&mut v, "angle", json!(g.angle));
+            set(&mut v, "scale", json!((g.scale * 100.0).round()));
         }
         Effect::PatternOverlay { common, name, id, scale, angle, link, phase } => {
             set(&mut v, "blend", json!(common.blend.label()));
@@ -355,6 +378,13 @@ fn values_of(e: &Effect, light: f32) -> Value {
             set(&mut v, "altitude", json!(b.altitude));
             set(&mut v, "direction", json!(if b.up { "up" } else { "down" }));
             set(&mut v, "glossContour", photocraft_engine::layer_style::contour_param(&b.gloss_contour));
+            set(&mut v, "glossAntiAlias", json!(b.gloss_anti_alias));
+            set(&mut v, "highlightBlend", json!(b.highlight.blend.label()));
+            set(&mut v, "highlightColor", json!(hex(&b.highlight_color)));
+            set(&mut v, "highlightOpacity", json!((b.highlight.opacity * 100.0).round()));
+            set(&mut v, "shadowBlend", json!(b.shadow.blend.label()));
+            set(&mut v, "shadowColor", json!(hex(&b.shadow_color)));
+            set(&mut v, "shadowOpacity", json!((b.shadow.opacity * 100.0).round()));
             set(&mut v, "contour", json!(b.contour.is_some()));
             if let Some(c) = &b.contour {
                 set(&mut v, "contourName", photocraft_engine::layer_style::contour_param(&c.contour));
@@ -636,7 +666,21 @@ fn apply(f: &Map<String, Value>, mut run: impl FnMut(&str, Value) -> Result<Valu
         let mut params = params;
         params["enabled"] = json!(on);
         let entry = match e.get("fx").filter(|fx| fx.is_object()) {
-            Some(fx) => json!({"kind": kind, "fx": fx, "params": params}),
+            Some(fx) => {
+                if kind == "bevelEmboss"
+                    && let Ok(original) = serde_json::from_value::<Effect>(fx.clone())
+                    && let Some(edits) = params.as_object_mut()
+                {
+                    let shown = values_of(&original, initial_light_angle.unwrap_or(120.0) as f32);
+                    // Unedited display values must not quantize imported shading in the snapshot.
+                    for key in ["highlightBlend", "highlightColor", "highlightOpacity", "shadowBlend", "shadowColor", "shadowOpacity"] {
+                        if edits.get(key) == shown.get(key) {
+                            edits.remove(key);
+                        }
+                    }
+                }
+                json!({"kind": kind, "fx": fx, "params": params})
+            }
             None => {
                 // A new instance: the page shows the factory defaults merged with
                 // the edits, and the engine builds from the full set.
@@ -716,6 +760,9 @@ fn apply_style_preset(app: &PhotocraftApp, f: &mut Map<String, Value>, name: &st
     if let Some(fo) = style.fill_opacity {
         set_param(f, BLENDING, "fillOpacity", json!((fo * 100.0).round()));
     }
+    if let Some(o) = style.opacity {
+        set_param(f, BLENDING, "opacity", json!((o * 100.0).round()));
+    }
 }
 
 /// Saves the dialog's pending state (enabled instances + blending page) as a style preset.
@@ -742,6 +789,7 @@ fn save_new_style(app: &mut PhotocraftApp, f: &Map<String, Value>) {
             "effects": entries,
             "blend": bo.get("blend").cloned().unwrap_or(Value::Null),
             "fillOpacity": bo.get("fillOpacity").cloned().unwrap_or(Value::Null),
+            "opacity": bo.get("opacity").cloned().unwrap_or(Value::Null),
         }),
     ) {
         app.ui.status = crate::i18n::fmt(tl!("Style {name} saved"), &[("name", v["name"].as_str().unwrap_or("Style"))]);
@@ -1019,6 +1067,44 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                             }
                         });
                     }
+                    P::GradientMethod => {
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(tl!("Method")).color(t.text_dim));
+                            let mut current = disp.get(key).and_then(Value::as_str).unwrap_or("custom").to_string();
+                            let mut options = vec![
+                                ("smooth".to_string(), "Smooth"),
+                                ("perceptual".to_string(), "Perceptual"),
+                                ("linear".to_string(), "Linear"),
+                                ("classic".to_string(), "Classic"),
+                            ];
+                            // Old/imported curves have no method record. Preserve them until
+                            // the user explicitly chooses an interpolation method.
+                            if photocraft_io::GradientMethod::from_name(&current).is_none() {
+                                current = "custom".into();
+                                options.insert(0, ("custom".into(), "Custom"));
+                            }
+                            if widgets::dropdown(ui, "fx-gradientOverlay-method", &mut current, &options, 150.0) {
+                                // The older dialog deliberately omits From/To for rich imported
+                                // curves. Once a method is chosen, show the real source ends.
+                                let snapshot = entry(f, &selected).and_then(|e| e.get("fx")).cloned();
+                                if let Some(Effect::GradientOverlay { gradient, interpolation, .. }) =
+                                    snapshot.and_then(|v| serde_json::from_value::<Effect>(v).ok())
+                                {
+                                    let stops = interpolation.as_ref().map_or(&gradient.stops, |source| &source.stops);
+                                    for (key, stop) in [("from", stops.first()), ("to", stops.last())] {
+                                        if entry(f, &selected).and_then(|e| e.get("params")).and_then(|p| p.get(key)).is_none()
+                                            && let Some(stop) = stop
+                                        {
+                                            set_param(f, &selected, key, json!(hex(&stop.1)));
+                                        }
+                                    }
+                                }
+                                let value = json!(current);
+                                disp[key] = value.clone();
+                                set_param(f, &selected, key, value);
+                            }
+                        });
+                    }
                     P::Pattern => {
                         let list: Vec<(String, String)> = f
                             .get("patternList")
@@ -1044,7 +1130,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                             }
                         });
                     }
-                    P::Contour(aa) => contour::row(ui, f, &selected, key, label, aa, &mut disp),
+                    P::Contour(aa) => contour::row(app, ui, f, &selected, key, label, aa, &mut disp),
                     P::Check => {
                         let mut b = disp.get(key).and_then(Value::as_bool).unwrap_or(false);
                         if widgets::checkbox(ui, &mut b, label).changed() {
@@ -1469,6 +1555,39 @@ mod tests {
         assert_eq!(rows, KINDS.len(), "one empty checkbox per effect row");
     }
 
+    // Regression test for #2209: Make Default and Reset to Default sat in a non-wrapping row, so
+    // translated labels wider than the page column (Russian) pushed one button over the other
+    // and out of the column instead of wrapping to a second row.
+    #[test]
+    fn default_buttons_wrap_inside_the_page_column_with_long_labels() {
+        use egui_kittest::kittest::Queryable;
+        let ru = crate::i18n::Lang::from_code("ru").unwrap();
+        crate::i18n::with_language(ru, || {
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
+            let l = Layer::raster("x", photocraft_doc::PixelFormat::RGBA8);
+            let fields = initial_fields(&l, Some("dropShadow"), 120.0);
+            let mut h = egui_kittest::Harness::builder().with_size(vec2(900.0, 700.0)).build_ui_state(
+                move |ui, app: &mut PhotocraftApp| {
+                    if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                        return;
+                    }
+                    let mut f = fields.clone();
+                    body(app, ui, &mut f);
+                },
+                app,
+            );
+            PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
+            h.run_steps(3);
+            let reset = h.get_by_role_and_label(egui::accesskit::Role::Button, crate::i18n::tr(ru, "Reset to Default")).rect();
+            let make = h.get_by_role_and_label(egui::accesskit::Role::Button, crate::i18n::tr(ru, "Make Default")).rect();
+            // Together they are wider than the page column: the second wraps to a row below
+            // instead of sharing the row and running left over the effect list.
+            assert!(make.top() >= reset.bottom(), "the buttons share one row: {make:?} {reset:?}");
+            assert_eq!(make.right(), reset.right(), "the wrapped row stays right-aligned");
+        });
+    }
+
     /// Double-clicking an effect row of a layer that isn't active selects that layer first, so
     /// the dialog holds its effects (and OK edits it), not the active layer's.
     #[test]
@@ -1615,6 +1734,26 @@ mod tests {
     }
 
     #[test]
+    fn baked_gradient_overlay_keeps_endpoint_colours_on_reopen() {
+        let mut s = session();
+        s.execute("layer.layerStyle.gradientOverlay", json!({"from": "#ff0000", "to": "#0000ff", "method": "classic"})).unwrap();
+        let st = s.active().unwrap();
+        let id = st.active_layer.unwrap();
+        let layer = st.doc.layer(id).unwrap();
+        let Effect::GradientOverlay { gradient, .. } = &layer.effects.items[0] else { panic!() };
+        assert!(gradient.stops.len() > 2, "classic bakes intermediate stops");
+        let f = initial_fields(layer, Some("gradientOverlay"), st.doc.global_light.angle);
+        let params = &effects_of(&f)[0]["params"];
+        assert_eq!(params["from"], json!("#ff0000"));
+        assert_eq!(params["to"], json!("#0000ff"));
+        apply(&f, |cmd, p| s.execute(cmd, p).map_err(|e| e.to_string())).unwrap();
+        let Effect::GradientOverlay { gradient, .. } = &s.active().unwrap().doc.layer(id).unwrap().effects.items[0] else { panic!() };
+        assert!(gradient.stops.len() > 2);
+        assert_eq!(gradient.stops.first().unwrap().1, photocraft_color::Color::rgb(1.0, 0.0, 0.0));
+        assert_eq!(gradient.stops.last().unwrap().1, photocraft_color::Color::rgb(0.0, 0.0, 1.0));
+    }
+
+    #[test]
     fn gradient_strokes_survive_the_dialog() {
         let mut s = session();
         s.execute("layer.layerStyle.stroke", json!({"size": 4, "from": "#ff0000", "to": "#0000ff"})).unwrap();
@@ -1632,6 +1771,40 @@ mod tests {
                 && g.stops[1].1 == photocraft_color::Color::rgb(0.0, 0.0, 1.0)),
             "the gradient is carried, not reset",
         );
+    }
+
+    #[test]
+    fn bevel_gloss_anti_alias_survives_the_dialog() {
+        let mut s = session();
+        s.execute("layer.layerStyle.bevelEmboss", json!({"glossContour": "Ring - Double", "glossAntiAlias": true})).unwrap();
+        let st = s.active().unwrap();
+        let id = st.active_layer.unwrap();
+        let mut f = initial_fields(st.doc.layer(id).unwrap(), None, st.doc.global_light.angle);
+        assert_eq!(effects_of(&f)[0]["params"]["glossAntiAlias"], json!(true));
+        // Editing another setting keeps the gloss contour's Anti-aliased.
+        set_param(&mut f, "fx1", "size", json!(12));
+        apply(&f, |cmd, p| s.execute(cmd, p).map_err(|e| e.to_string())).unwrap();
+        let st = s.active().unwrap();
+        let items = &st.doc.layer(id).unwrap().effects.items;
+        let Some(photocraft_doc::Effect::BevelEmboss(b)) = items.first() else { panic!("{items:?}") };
+        assert_eq!(b.size, 12.0);
+        assert!(b.gloss_anti_alias);
+    }
+
+    #[test]
+    fn stroke_overprint_survives_the_dialog() {
+        let mut s = session();
+        s.execute("layer.layerStyle.stroke", json!({"size": 3, "color": "#000000", "overprint": true})).unwrap();
+        let st = s.active().unwrap();
+        let id = st.active_layer.unwrap();
+        let mut f = initial_fields(st.doc.layer(id).unwrap(), None, st.doc.global_light.angle);
+        assert_eq!(effects_of(&f)[0]["params"]["overprint"], json!(true));
+        // Editing another setting keeps Overprint.
+        set_param(&mut f, "fx1", "size", json!(5));
+        apply(&f, |cmd, p| s.execute(cmd, p).map_err(|e| e.to_string())).unwrap();
+        let strokes = strokes_of(&s);
+        assert_eq!(strokes[0].size, 5.0);
+        assert!(strokes[0].overprint);
     }
 
     #[test]
@@ -1886,6 +2059,48 @@ mod tests {
         assert_eq!(source(&s), Some(GlowSource::Center), "OK keeps the source");
     }
 
+    /// #6698: Inner Glow lacked Photoshop's Technique and Range, Outer Glow its Technique. They
+    /// show in Photoshop's order, the dialog loads them, and OK keeps them.
+    #[test]
+    fn glows_show_and_keep_technique_and_range() {
+        let keys = |kind: &str| spec(kind).iter().map(|(k, _, _)| *k).collect::<Vec<_>>();
+        assert_eq!(keys("innerGlow"), ["blend", "opacity", "color", "technique", "source", "choke", "size", "contour", "range", "noise"]);
+        assert_eq!(keys("outerGlow"), ["blend", "opacity", "color", "technique", "spread", "size", "contour", "range", "noise"]);
+        let mut s = session();
+        s.execute("layer.layerStyle.innerGlow", json!({"technique": "precise", "range": 30})).unwrap();
+        s.execute("layer.layerStyle.outerGlow", json!({"technique": "precise"})).unwrap();
+        let glows = |s: &photocraft_engine::Session| {
+            let d = s.active().unwrap();
+            let id = d.active_layer.unwrap();
+            d.doc
+                .layer(id)
+                .unwrap()
+                .effects
+                .items
+                .iter()
+                .filter_map(|e| match e {
+                    Effect::InnerGlow(g) | Effect::OuterGlow(g) => Some((kind_of(e), g.technique, (g.range * 100.0).round())),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let expected = [("outerGlow", GlowTechnique::Precise, 50.0), ("innerGlow", GlowTechnique::Precise, 30.0)];
+        let mut have = glows(&s);
+        have.sort_by_key(|g| g.0);
+        let mut want = expected.to_vec();
+        want.sort_by_key(|g| g.0);
+        assert_eq!(have, want);
+        let st = s.active().unwrap();
+        let id = st.active_layer.unwrap();
+        let f = initial_fields(st.doc.layer(id).unwrap(), None, st.doc.global_light.angle);
+        let inner = effects_of(&f).iter().find(|e| e["kind"] == json!("innerGlow")).unwrap().clone();
+        assert_eq!((&inner["params"]["technique"], &inner["params"]["range"]), (&json!("precise"), &json!(30.0)), "the dialog shows them");
+        apply(&f, |cmd, p| s.execute(cmd, p).map_err(|e| e.to_string())).unwrap();
+        let mut have = glows(&s);
+        have.sort_by_key(|g| g.0);
+        assert_eq!(have, want, "OK keeps them");
+    }
+
     #[test]
     fn drop_shadow_angle_reaches_the_effect() {
         // #350: the Angle slider was dead — the dialog never sent `useGlobalLight`, so the engine
@@ -2068,6 +2283,73 @@ mod tests {
     }
 
     #[test]
+    fn unedited_bevel_shading_keeps_imported_precision() {
+        for size in [None, Some(12.0)] {
+            let mut s = session();
+            s.execute("layer.layerStyle.bevelEmboss", json!({})).unwrap();
+            s.edit("imported shading", |doc, active| {
+                let Effect::BevelEmboss(b) = &mut doc.layer_mut(active.unwrap()).unwrap().effects.items[0] else { panic!("bevel") };
+                b.highlight_color = photocraft_color::Color::rgb(0.12345, 0.45678, 0.78901);
+                b.shadow_color = photocraft_color::Color::rgb(0.98765, 0.54321, 0.13579);
+                b.highlight.opacity = 0.3525;
+                b.shadow.opacity = 0.6175;
+                Ok(())
+            })
+            .unwrap();
+            let st = s.active().unwrap();
+            let id = st.active_layer.unwrap();
+            let original = st.doc.layer(id).unwrap().effects.items[0].clone();
+            let mut fields = initial_fields(st.doc.layer(id).unwrap(), Some("bevelEmboss"), st.doc.global_light.angle);
+            if let Some(size) = size {
+                set_param(&mut fields, "fx1", "size", json!(size));
+            }
+            apply(&fields, |cmd, p| s.execute(cmd, p).map_err(|e| e.to_string())).unwrap();
+            let Effect::BevelEmboss(before) = original else { panic!("bevel") };
+            let Effect::BevelEmboss(after) = &s.active().unwrap().doc.layer(id).unwrap().effects.items[0] else { panic!("bevel") };
+            assert_eq!(after.highlight, before.highlight);
+            assert_eq!(after.shadow, before.shadow);
+            assert_eq!(after.highlight_color, before.highlight_color);
+            assert_eq!(after.shadow_color, before.shadow_color);
+            if let Some(size) = size {
+                assert_eq!(after.size, size, "the unrelated edit still applies");
+            }
+        }
+    }
+
+    #[test]
+    fn bevel_shading_round_trips_through_dialog_preview_and_confirm() {
+        let mut s = session();
+        s.execute(
+            "layer.layerStyle.bevelEmboss",
+            json!({
+                "highlightBlend": "Normal", "highlightColor": "#e08020", "highlightOpacity": 25,
+                "shadowBlend": "Multiply", "shadowColor": "#204080", "shadowOpacity": 40
+            }),
+        )
+        .unwrap();
+        let st = s.active().unwrap();
+        let id = st.active_layer.unwrap();
+        let mut fields = initial_fields(st.doc.layer(id).unwrap(), Some("bevelEmboss"), st.doc.global_light.angle);
+        let values = &entry(&fields, "fx1").unwrap()["params"];
+        assert_eq!(values["highlightColor"], "#e08020");
+        assert_eq!(values["highlightOpacity"], 25.0);
+        assert_eq!(values["shadowColor"], "#204080");
+        assert_eq!(values["shadowOpacity"], 40.0);
+
+        set_param(&mut fields, "fx1", "highlightBlend", json!("Screen"));
+        set_param(&mut fields, "fx1", "highlightOpacity", json!(80.0));
+        set_param(&mut fields, "fx1", "shadowColor", json!("#ff0000"));
+        assert!(preview_document(&st.doc, &s.patterns, &fields).is_ok());
+        apply(&fields, |cmd, p| s.execute(cmd, p).map_err(|e| e.to_string())).unwrap();
+        let effect = &s.active().unwrap().doc.layer(id).unwrap().effects.items[0];
+        let Effect::BevelEmboss(bevel) = effect else { panic!("expected bevel") };
+        assert_eq!(bevel.highlight.blend, photocraft_doc::BlendMode::Screen);
+        assert!((bevel.highlight.opacity - 0.8).abs() < 0.001);
+        assert_eq!(hex(&bevel.shadow_color), "#ff0000");
+        assert_eq!(hex(&bevel.highlight_color), "#e08020");
+    }
+
+    #[test]
     fn preview_off_shows_the_original_until_reenabled() {
         let mut s = session();
         s.execute("layer.layerStyle.colorOverlay", json!({"color": "#ff0000"})).unwrap();
@@ -2155,9 +2437,11 @@ mod tests {
         let id = app.session.active().unwrap().active_layer.unwrap();
         let mut f = initial_fields(app.session.active().unwrap().doc.layer(id).unwrap(), Some("stroke"), 120.0);
         set_param(&mut f, "fx1", "size", json!(9));
+        set_param(&mut f, BLENDING, "opacity", json!(40));
         save_new_style(&mut app, &f);
         let preset = app.session.presets.styles.iter().flat_map(|g| g.items.iter()).find(|st| st.name == "Style").expect("the preset is created");
         assert_eq!(preset.effects.len(), 1, "only the enabled instance is saved");
+        assert_eq!(preset.opacity, Some(0.4), "the pending opacity is saved, not the layer's");
         // A second layer gets the pending style back through the swatch path.
         app.run("layer.new.layer", json!({})).unwrap();
         let mut f2 = initial_fields(app.session.active().unwrap().doc.layer(app.session.active().unwrap().active_layer.unwrap()).unwrap(), None, 120.0);
@@ -2166,6 +2450,7 @@ mod tests {
         // Swatch clicks update the dialog fields only; document is untouched until confirm.
         assert_eq!(effects_of(&f2).len(), 1);
         assert_eq!(effects_of(&f2)[0]["params"]["size"], json!(9.0));
+        assert_eq!(f2["p:blendingOptions"]["opacity"], json!(40.0), "the swatch brings the style's opacity");
         // Confirming applies the style to the layer.
         confirm(&mut app, &f2).unwrap();
         let st = app.session.active().unwrap();

@@ -359,19 +359,18 @@ fn carve_width_proxy_height(w: usize, h: usize, ch: usize, img: &[f32], protect:
     });
 
     let seam_count = w - new_w;
-    let mut carver = Carver::new(w, proxy_h, ch, proxy, proxy_protect, true);
-    let mut removed = Vec::with_capacity(seam_count);
+    // Removing a seam shifts the panel left, so a panel column is not an original one. Tracking
+    // the original column per pixel costs a third buffer that every seam has to shift (24 MB a
+    // seam at 24 MP); counting the columns already taken from that row is exact and costs a
+    // binary search per removed column.
+    let mut carver = Carver::new(w, proxy_h, ch, proxy, proxy_protect, false);
+    let mut removed_by_row: Vec<Vec<usize>> = vec![Vec::new(); proxy_h];
+    let mut taken = 0usize;
     while carver.cw > new_w {
         ctl.check()?;
-        removed.push(carver.remove_seam());
-        ctl.progress(removed.len() as f32 / seam_count as f32);
-    }
-
-    let mut removed_by_row = Vec::with_capacity(proxy_h);
-    for proxy_y in 0..proxy_h {
-        let mut columns: Vec<usize> = removed.iter().map(|path| path[proxy_y]).collect();
-        columns.sort_unstable();
-        removed_by_row.push(columns);
+        record_removed(&mut removed_by_row, &carver.remove_seam());
+        taken += 1;
+        ctl.progress(taken as f32 / seam_count as f32);
     }
     let mut out = Vec::with_capacity(new_w * h * ch);
     let mut columns = vec![0; seam_count];
@@ -401,6 +400,32 @@ fn carve_width_proxy_height(w: usize, h: usize, ch: usize, img: &[f32], protect:
     }
     ctl.progress(1.0);
     Ok(out)
+}
+
+/// Add one seam, given in panel columns, to each row's sorted list of removed original columns.
+/// For the `i`-th column already taken from a row, `o - i` is the panel column it occupied, and
+/// that never decreases along the list, so the taken columns at or left of panel column `x` are a
+/// prefix found by binary search. `x` plus that prefix's length is the original column, and every
+/// removal the search passed is left of it, so it inserts where the search stopped. The rows are
+/// independent, so they update in parallel like the pixel shift.
+fn record_removed(removed_by_row: &mut [Vec<usize>], seam: &[usize]) {
+    // The entries are the original columns still taken from one row, sorted, so entry `i` is at
+    // least `i` and `o - i` cannot underflow.
+    let add = |(row, &x): (&mut Vec<usize>, &usize)| {
+        let (mut lo, mut hi) = (0, row.len());
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            if row[mid] - mid <= x { lo = mid + 1 } else { hi = mid }
+        }
+        row.insert(lo, x + lo);
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use rayon::prelude::*;
+        removed_by_row.par_iter_mut().zip(seam.par_iter()).for_each(add);
+    }
+    #[cfg(target_arch = "wasm32")]
+    removed_by_row.iter_mut().zip(seam.iter()).for_each(add);
 }
 
 /// Content-aware resize of `img` to `new_w × new_h` (width first, then height by transposing).
@@ -759,6 +784,33 @@ mod tests {
         let img = vec![0.5; w * h * ch];
         let cancelled = || true;
         assert_eq!(carve_width_with(w, h, ch, &img, None, 64, &Interrupt::cancel_only(&cancelled)), Err(Cancelled));
+    }
+
+    /// The proxy path counts each removed original column instead of shifting an index map, so a
+    /// tracking and a counting carver must agree: run both side by side down to one column and
+    /// check every row's list after every seam (tie-heavy noise gives rows different histories;
+    /// 1-4 channels, with and without protection).
+    #[test]
+    fn counted_removed_columns_match_the_tracked_map() {
+        let cases: [(usize, usize, usize, u32, bool); 5] =
+            [(37, 9, 1, 2, false), (40, 12, 2, 3, true), (53, 7, 3, 255, false), (29, 16, 4, 1000, true), (64, 5, 3, 2, true)];
+        for (i, &(w, h, ch, levels, prot)) in cases.iter().enumerate() {
+            let img = noise(w * h * ch, levels, 31 + i as u32);
+            let protect = prot.then(|| noise(w * h, 3, 77 + i as u32));
+            let mut tracked = Carver::new(w, h, ch, img.clone(), protect.clone(), true);
+            let mut counted = Carver::new(w, h, ch, img, protect, false);
+            let mut expected: Vec<Vec<usize>> = vec![Vec::new(); h];
+            let mut got: Vec<Vec<usize>> = vec![Vec::new(); h];
+            while tracked.cw > 1 {
+                let seam = tracked.remove_seam();
+                for (row, &x) in expected.iter_mut().zip(seam.iter()) {
+                    let at = row.partition_point(|&o| o < x);
+                    row.insert(at, x);
+                }
+                record_removed(&mut got, &counted.remove_seam());
+                assert_eq!(got, expected, "case {i} after {} seams", w - tracked.cw);
+            }
+        }
     }
 
     #[test]

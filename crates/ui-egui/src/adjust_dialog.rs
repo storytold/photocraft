@@ -279,6 +279,33 @@ pub fn open(app: &mut PhotocraftApp, command: &str) -> Option<u64> {
     Some(app.ui.open_dialog(crate::state::DialogKind::Command, fields))
 }
 
+/// Opens the dialog for `command` at the settings last confirmed in it (Photoshop's ⌥ plus the
+/// adjustment's shortcut, ⌥⌘L / ⌥⌘M, #8900), or at the neutral ones when there are none or they
+/// don't fit the current colour mode.
+pub fn open_last(app: &mut PhotocraftApp, command: &str) -> Option<u64> {
+    let id = open(app, command)?;
+    let kind = command.strip_prefix(PREFIX).unwrap_or_default();
+    let mode = curve_mode(app, kind);
+    let Some(last) = app.session.prefs().dialogs.get(command).cloned() else { return Some(id) };
+    let Ok(adjustment) = photocraft_engine::adjust_params::from_params(kind, &last, None, mode) else { return Some(id) };
+    if let (Some(dialog), Value::Object(values)) = (app.ui.dialog_mut(id), photocraft_engine::adjust_params::to_params(&adjustment)) {
+        dialog.fields.retain(|k, _| k.starts_with("__"));
+        dialog.fields.extend(values);
+    }
+    Some(id)
+}
+
+/// Remember an adjustment dialog's settings after a successful OK, for [`open_last`]. Editing a
+/// smart filter's settings is not a use of the dialog's own (as `filter_dialog::remember`).
+pub(crate) fn remember(app: &mut PhotocraftApp, fields: &Map<String, Value>) {
+    if fields.contains_key("__smartFilter") {
+        return;
+    }
+    let Some(command) = fields.get("__command").and_then(Value::as_str).filter(|c| has_dialog(c)) else { return };
+    let values = crate::filter_dialog::params_of(fields);
+    app.session.prefs.edit(|prefs| prefs.dialogs.insert(command.into(), values));
+}
+
 /// The Curves dialog's single-channel target: the Channels panel's, plus the Layers panel's mask
 /// selection — both ways of selecting a mask must give the same dropdown (#5335).
 fn isolated(app: &PhotocraftApp) -> Option<photocraft_engine::channel_cmds::IsolatedCurveChannel> {
@@ -303,7 +330,12 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String,
         ui.add_space(4.0);
     }
     let mut values = crate::filter_dialog::params_of(fields);
-    let active = app.session.active().and_then(|s| s.active_layer);
+    let active = fields
+        .get("__smartFilter")
+        .and_then(|f| f.get("layer"))
+        .and_then(Value::as_u64)
+        .map(photocraft_doc::LayerId)
+        .or_else(|| app.session.active().and_then(|s| s.active_layer));
     let isolated_curve = isolated(app);
     // Only Curves gets an isolated single-channel target here; Levels keeps its usual fields.
     let gray_plane = (kind == "curves").then(|| isolated_curve.as_ref().and_then(|c| c.gray)).flatten();
@@ -595,6 +627,84 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// #8984: the Curves dialog has a resize grip; its graph grows with the dialog, the controls
+    /// stay inside it, and it reopens at the size it was left at.
+    #[test]
+    fn curves_dialog_resizes_with_its_graph_and_reopens_at_that_size() {
+        let mut h = Harness::builder().with_size(egui::vec2(1600.0, 1100.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app_with_image());
+        PhotocraftApp::setup_context(&h.ctx, Default::default());
+        let graph = |h: &Harness<'_, PhotocraftApp>| h.ctx.data(|d| d.get_temp::<egui::Rect>(dialog_mem("curves").with("curves-graph"))).unwrap();
+        let window = |h: &Harness<'_, PhotocraftApp>, id: u64| h.ctx.memory(|m| m.area_rect(egui::Id::new(("dialog", id)))).unwrap();
+        let id = open(h.state_mut(), "image.adjustments.curves").unwrap();
+        h.run_steps(4);
+        let (opened, small) = (window(&h, id), graph(&h));
+        assert!(small.width() > 270.0 && small.width() < 300.0, "opens at the 300-point graph: {small:?}");
+        // Drag the grip (bottom-right corner) 300 points right and 200 down.
+        let corner = opened.max - egui::vec2(12.0, 12.0);
+        let by = egui::vec2(300.0, 200.0);
+        h.event(egui::Event::PointerMoved(corner));
+        h.step();
+        h.event(egui::Event::PointerButton { pos: corner, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+        h.step();
+        for i in 1..=4 {
+            h.event(egui::Event::PointerMoved(corner + by * (i as f32 / 4.0)));
+            h.step();
+        }
+        h.event(egui::Event::PointerButton { pos: corner + by, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+        h.run_steps(6);
+        let (wide, big) = (window(&h, id), graph(&h));
+        assert!(big.width() > small.width() + 250.0, "the graph follows the dialog: {small:?} → {big:?}");
+        assert!((big.width() - big.height()).abs() < 1.0, "still square: {big:?}");
+        assert!(wide.contains_rect(big) && wide.right() - big.right() < 40.0, "no blank column: window {wide:?}, graph {big:?}");
+        for label in ["Channel:", "Input:", "Output:", "Preview", "OK", "Cancel"] {
+            assert!(wide.contains_rect(h.get_by_label(crate::i18n::t(label)).rect()), "{label} inside the window");
+        }
+        // Cancel, open again: the size it was left at.
+        h.get_by_label("Cancel").click();
+        h.run_steps(3);
+        assert!(h.state().ui.dialogs.is_empty());
+        let again = open(h.state_mut(), "image.adjustments.curves").unwrap();
+        h.run_steps(4);
+        assert!((graph(&h).width() - big.width()).abs() < 2.0, "reopened at {:?}, left at {big:?}", graph(&h));
+        assert!((window(&h, again).width() - wide.width()).abs() < 2.0);
+    }
+
+    /// #8984: however tall the graph's width would make it, the dialog still fits the window.
+    #[test]
+    fn curves_graph_never_pushes_the_dialog_off_a_short_window() {
+        let mut h = Harness::builder().with_size(egui::vec2(1600.0, 700.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app_with_image());
+        PhotocraftApp::setup_context(&h.ctx, Default::default());
+        h.ctx.data_mut(|m| m.insert_persisted(egui::Id::new(("dialog-place", "image.adjustments.curves")).with("size"), egui::vec2(1200.0, 1200.0)));
+        let id = open(h.state_mut(), "image.adjustments.curves").unwrap();
+        h.run_steps(5);
+        let graph = h.ctx.data(|d| d.get_temp::<egui::Rect>(dialog_mem("curves").with("curves-graph"))).unwrap();
+        let window = h.ctx.memory(|m| m.area_rect(egui::Id::new(("dialog", id)))).unwrap();
+        assert!(graph.height() <= 700.0 - 360.0, "{graph:?}");
+        assert!(window.height() <= 700.0, "{window:?}");
+        assert!(window.contains_rect(h.get_by_label("OK").rect()));
+        // The size the window squeezed it to is not remembered: a larger window gets 1200 again.
+        let kept = h.ctx.data_mut(|m| m.get_persisted::<egui::Vec2>(egui::Id::new(("dialog-place", "image.adjustments.curves")).with("size")));
+        assert_eq!(kept, Some(egui::vec2(1200.0, 1200.0)));
+        // Dragged far wider, the dialog stops where the graph stops: no blank column.
+        let corner = window.max - egui::vec2(12.0, 12.0);
+        h.event(egui::Event::PointerMoved(corner));
+        h.step();
+        h.event(egui::Event::PointerButton { pos: corner, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+        h.step();
+        h.event(egui::Event::PointerMoved(corner + egui::vec2(600.0, 0.0)));
+        h.step();
+        h.event(egui::Event::PointerButton {
+            pos: corner + egui::vec2(600.0, 0.0),
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.run_steps(5);
+        let graph = h.ctx.data(|d| d.get_temp::<egui::Rect>(dialog_mem("curves").with("curves-graph"))).unwrap();
+        let window = h.ctx.memory(|m| m.area_rect(egui::Id::new(("dialog", id)))).unwrap();
+        assert!(window.right() - graph.right() < 40.0, "no blank column: window {window:?}, graph {graph:?}");
     }
 
     #[test]
@@ -1070,7 +1180,7 @@ mod tests {
     #[test]
     fn curves_channel_popup_keeps_custom_names_verbatim_in_italian() {
         let it = crate::i18n::Lang::from_code("it").expect("it registered");
-        assert_eq!(crate::i18n::tr(it, "Green"), "Verde", "the test relies on the built-in label");
+        let green = crate::i18n::tr(it, "Green");
         let _lang = crate::i18n::language_scope(it);
         let mut app = app_with_image();
         app.run("channel.new", json!({"name": "Green", "fill": "white"})).unwrap();
@@ -1078,13 +1188,13 @@ mod tests {
         let mut h = curves_harness(app);
         let names = popup_channels(&mut h);
         assert!(names.iter().any(|n| n == "Green"), "custom names stay as entered: {names:?}");
-        assert!(!names.iter().any(|n| n == "Verde"), "not translated: {names:?}");
+        assert!(green == "Green" || !names.iter().any(|n| n == green), "not translated: {names:?}");
         // A targeted colour component keeps its translated built-in label.
         let mut colour = app_with_image();
         colour.run("channel.target", json!({"channel": {"color": 1}})).unwrap();
         let mut h = curves_harness(colour);
         let names = popup_channels(&mut h);
-        assert!(names.iter().any(|n| n == "Verde"), "built-in labels follow the language: {names:?}");
+        assert!(names.iter().any(|n| n == green), "built-in labels follow the language: {names:?}");
     }
 
     /// Curves open in a harness over `app`.

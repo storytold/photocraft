@@ -85,7 +85,7 @@ pub(crate) fn blend_long_value(m: BlendMode) -> Value {
     Value::Enumerated { type_id: Id::new("BlnM"), value: Id::new(n) }
 }
 
-fn blend_value(m: BlendMode) -> Value {
+pub(crate) fn blend_value(m: BlendMode) -> Value {
     let n = BLEND_NAMES.iter().find(|(b, _)| *b == m).map_or("Nrml", |(_, n)| n);
     Value::Enumerated { type_id: Id::new("BlnM"), value: Id::new(n) }
 }
@@ -213,6 +213,7 @@ fn parse_stroke(d: &Descriptor) -> StrokeFx {
             _ => StrokePosition::Outside,
         },
         paint,
+        overprint: bool_of(d, "overprint"),
     }
 }
 
@@ -239,6 +240,7 @@ fn parse_bevel(d: &Descriptor) -> Bevel {
         altitude: f(d, "Lald", 30.0),
         use_global_light: !matches!(d.get("uglg"), Some(Value::Boolean(false))),
         gloss_contour: contour(d, "TrnS"),
+        gloss_anti_alias: bool_of(d, "antialiasGloss"),
         highlight: FxCommon { enabled: true, blend: blend_of(d, "hglM", BlendMode::Screen), opacity: pct(d, "hglO", 0.75) },
         highlight_color: get_desc(d, "hglC").and_then(color_from_desc).unwrap_or(Color::WHITE),
         shadow: FxCommon { enabled: true, blend: blend_of(d, "sdwM", BlendMode::Multiply), opacity: pct(d, "sdwO", 0.75) },
@@ -263,7 +265,9 @@ fn parse_one(key: &str, d: &Descriptor) -> Option<Effect> {
         "IrGl" => Effect::InnerGlow(parse_glow(d, true)),
         "FrFX" => Effect::Stroke(parse_stroke(d)),
         "SoFi" => Effect::ColorOverlay { common: common(d, BlendMode::Normal, 1.0), color: color(d, "Clr ") },
-        "GrFl" => Effect::GradientOverlay { common: common(d, BlendMode::Normal, 1.0), gradient: gradient_from(d), dither: bool_of(d, "Dthr") },
+        "GrFl" => {
+            Effect::GradientOverlay { common: common(d, BlendMode::Normal, 1.0), gradient: gradient_from(d), dither: bool_of(d, "Dthr"), interpolation: None }
+        }
         "patternFill" => {
             let (name, id) = pattern_ref(d);
             let (angle, link, phase) = pattern_placement(d);
@@ -301,7 +305,19 @@ const KINDS: [(&str, &str); 10] = [
 /// Parses `lfx2` block data: `(master switch, effects)`.
 pub fn parse_lfx2(data: &[u8]) -> Option<(bool, Vec<Effect>)> {
     let (vd, _) = VersionedDescriptor::parse_prefix(data.get(4..)?).ok()?;
-    let d = vd.descriptor;
+    Some(effects_from_descriptor(&vd.descriptor))
+}
+
+/// Keys of an effects descriptor (`lfx2`, a style library's `Lefx`) that
+/// [`effects_from_descriptor`] reads, or that carry no effect of their own.
+pub fn is_known_effects_key(key: &[u8]) -> bool {
+    KINDS.iter().any(|(single, multi)| single.as_bytes() == key || (!multi.is_empty() && multi.as_bytes() == key))
+        || matches!(key, b"masterFXSwitch" | b"Scl " | b"numModifyingFX")
+}
+
+/// The effects of an effects descriptor (the body of `lfx2`, a style library's `Lefx`):
+/// `(master switch, effects)`.
+pub fn effects_from_descriptor(d: &Descriptor) -> (bool, Vec<Effect>) {
     let master = !matches!(d.get("masterFXSwitch"), Some(Value::Boolean(false)));
     let mut out = Vec::new();
     for (single, multi) in KINDS {
@@ -317,7 +333,7 @@ pub fn parse_lfx2(data: &[u8]) -> Option<(bool, Vec<Effect>)> {
                 }
             }
             _ => {
-                if let Some(x) = get_desc(&d, single)
+                if let Some(x) = get_desc(d, single)
                     && let Some(e) = parse_one(single, x)
                 {
                     out.push(e);
@@ -325,7 +341,7 @@ pub fn parse_lfx2(data: &[u8]) -> Option<(bool, Vec<Effect>)> {
             }
         }
     }
-    Some((master, out))
+    (master, out)
 }
 
 fn unit(u: &[u8; 4], v: f32) -> Value {
@@ -404,7 +420,8 @@ fn write_one(e: &Effect) -> (&'static str, Descriptor) {
             };
             let mut d = with_common(Descriptor::new("FrFX"), &s.common)
                 .with("Styl", Value::Enumerated { type_id: Id::new("FStl"), value: Id::new(styl) })
-                .with("Sz  ", unit(b"#Pxl", s.size));
+                .with("Sz  ", unit(b"#Pxl", s.size))
+                .with("overprint", Value::Boolean(s.overprint));
             d = match &s.paint {
                 FxPaint::Color(c) => {
                     d.with("PntT", Value::Enumerated { type_id: Id::new("FrFl"), value: Id::new("SClr") }).with("Clr ", Value::Descriptor(color_to_desc(c)))
@@ -425,7 +442,7 @@ fn write_one(e: &Effect) -> (&'static str, Descriptor) {
             ("FrFX", d)
         }
         Effect::ColorOverlay { common: c, color } => ("SoFi", with_common(Descriptor::new("SoFi"), c).with("Clr ", Value::Descriptor(color_to_desc(color)))),
-        Effect::GradientOverlay { common: c, gradient, dither } => {
+        Effect::GradientOverlay { common: c, gradient, dither, .. } => {
             ("GrFl", gradient_keys(with_common(Descriptor::new("GrFl"), c), gradient).with("Dthr", Value::Boolean(*dither)))
         }
         Effect::PatternOverlay { common: c, name, id, scale, angle, link, phase } => (
@@ -482,6 +499,7 @@ fn write_one(e: &Effect) -> (&'static str, Descriptor) {
                 .with("blur", unit(b"#Pxl", b.size))
                 .with("bvlD", Value::Enumerated { type_id: Id::new("BESs"), value: Id::new(if b.up { "In  " } else { "Out " }) })
                 .with("TrnS", contour_value(&b.gloss_contour))
+                .with("antialiasGloss", Value::Boolean(b.gloss_anti_alias))
                 .with("Sftn", unit(b"#Pxl", b.soften));
             let d = match &b.contour {
                 Some(c) => d
@@ -511,6 +529,13 @@ fn write_one(e: &Effect) -> (&'static str, Descriptor) {
 
 /// Serializes effects as `lfx2` block data.
 pub fn write_lfx2(master: bool, items: &[Effect]) -> Vec<u8> {
+    let mut out = 0u32.to_be_bytes().to_vec();
+    out.extend(VersionedDescriptor::new(effects_descriptor(master, items)).to_bytes());
+    out
+}
+
+/// Effects as an effects descriptor (the body of `lfx2`, a style library's `Lefx`).
+pub fn effects_descriptor(master: bool, items: &[Effect]) -> Descriptor {
     let mut d = Descriptor::new("null").with("Scl ", unit(b"#Prc", 100.0)).with("masterFXSwitch", Value::Boolean(master));
     for (single, multi) in KINDS {
         let of_kind: Vec<Descriptor> = items.iter().map(write_one).filter(|(k, _)| *k == single).map(|(_, d)| d).collect();
@@ -522,9 +547,7 @@ pub fn write_lfx2(master: bool, items: &[Effect]) -> Vec<u8> {
             _ => d = d.with(single, Value::Descriptor(of_kind.into_iter().next().unwrap_or_default())),
         }
     }
-    let mut out = 0u32.to_be_bytes().to_vec();
-    out.extend(VersionedDescriptor::new(d).to_bytes());
-    out
+    d
 }
 
 fn fixed(v: u32) -> f32 {
@@ -680,15 +703,17 @@ mod tests {
                 size: 3.0,
                 position: StrokePosition::Inside,
                 paint: FxPaint::Color(Color::rgb(0.0, 1.0, 0.0)),
+                overprint: false,
             }),
             Effect::Stroke(StrokeFx {
                 common: FxCommon::new(BlendMode::Multiply, 0.5),
                 size: 6.0,
                 position: StrokePosition::Center,
                 paint: FxPaint::Gradient(g.clone()),
+                overprint: true,
             }),
             Effect::ColorOverlay { common: FxCommon::new(BlendMode::Overlay, 0.5), color: Color::rgb(0.0, 0.0, 1.0) },
-            Effect::GradientOverlay { common: FxCommon::new(BlendMode::Normal, 1.0), gradient: g, dither: true },
+            Effect::GradientOverlay { common: FxCommon::new(BlendMode::Normal, 1.0), gradient: g, dither: true, interpolation: None },
             Effect::PatternOverlay {
                 common: FxCommon::new(BlendMode::Normal, 1.0),
                 name: "Bubbles".into(),
@@ -720,6 +745,7 @@ mod tests {
                 altitude: 40.0,
                 use_global_light: false,
                 gloss_contour: Contour::Linear,
+                gloss_anti_alias: true,
                 highlight: FxCommon::new(BlendMode::Screen, 0.75),
                 highlight_color: Color::WHITE,
                 shadow: FxCommon::new(BlendMode::Multiply, 0.6),
@@ -736,6 +762,16 @@ mod tests {
         assert_eq!(write_lfx2(true, a), write_lfx2(true, b));
     }
 
+    /// `approx` compares re-serialized bytes, so a field the writer drops looks equal on both
+    /// sides: read the Gloss Contour's Anti-aliased back directly.
+    #[test]
+    fn bevel_gloss_anti_alias_is_written() {
+        let fx: Vec<Effect> = sample_effects().into_iter().filter(|e| matches!(e, Effect::BevelEmboss(_))).collect();
+        assert!(matches!(fx.as_slice(), [Effect::BevelEmboss(b)] if b.gloss_anti_alias));
+        let (_, back) = parse_lfx2(&write_lfx2(false, &fx)).unwrap();
+        assert!(matches!(back.as_slice(), [Effect::BevelEmboss(b)] if b.gloss_anti_alias), "{back:?}");
+    }
+
     #[test]
     fn lfx2_roundtrip_all_kinds() {
         let fx = sample_effects();
@@ -746,6 +782,29 @@ mod tests {
         // Kind order is canonical: shadows first ... strokes last.
         assert!(matches!(back[0], Effect::DropShadow(_)));
         assert!(matches!(back.last().unwrap(), Effect::Stroke(_)));
+    }
+
+    #[test]
+    fn stroke_overprint_is_read_and_written() {
+        for overprint in [false, true] {
+            let fx = [Effect::Stroke(StrokeFx {
+                common: FxCommon::new(BlendMode::Normal, 1.0),
+                size: 3.0,
+                position: StrokePosition::Outside,
+                paint: FxPaint::Color(Color::BLACK),
+                overprint,
+            })];
+            let (_, back) = parse_lfx2(&write_lfx2(false, &fx)).unwrap();
+            let [Effect::Stroke(s)] = back.as_slice() else { panic!("{back:?}") };
+            assert_eq!(s.overprint, overprint);
+        }
+        // A stroke without the key (other writers) has Overprint off.
+        let d = Descriptor::new("null").with("FrFX", Value::Descriptor(Descriptor::new("FrFX").with("enab", Value::Boolean(true))));
+        let mut data = 0u32.to_be_bytes().to_vec();
+        data.extend(VersionedDescriptor::new(d).to_bytes());
+        let (_, back) = parse_lfx2(&data).unwrap();
+        let [Effect::Stroke(s)] = back.as_slice() else { panic!("{back:?}") };
+        assert!(!s.overprint);
     }
 
     #[test]
@@ -808,6 +867,84 @@ mod tests {
         assert_eq!(modes, vec![BlendMode::LinearBurn, BlendMode::ColorDodge, BlendMode::ColorBurn, BlendMode::Hue]);
         for (m, n) in BLEND_LONG_NAMES {
             assert_eq!(blend_from_id(n.as_bytes()), Some(m));
+        }
+    }
+
+    /// A Gradient Overlay `lfx2` laid out as Photoshop writes it: one black colour, opacity
+    /// 100 → 0 % with the opacity midpoint `mid` (%), Smoothness `intr` (0..4096) and the method
+    /// enum `gs99` (Photoshop's key in layer effects; codes `Gcls`, `Lnr `, `Perc`).
+    fn overlay_lfx2(mid: i32, intr: f64, method: &str) -> Vec<u8> {
+        let black = || Descriptor::new("RGBC").with("Rd  ", Value::Double(0.0)).with("Grn ", Value::Double(0.0)).with("Bl  ", Value::Double(0.0));
+        let clr = |loc: i32| {
+            Value::Descriptor(
+                Descriptor::new("Clrt")
+                    .with("Clr ", Value::Descriptor(black()))
+                    .with("Type", Value::Enumerated { type_id: Id::new("Clry"), value: Id::new("UsrS") })
+                    .with("Lctn", Value::Integer(loc))
+                    .with("Mdpn", Value::Integer(50)),
+            )
+        };
+        let trn = |loc: i32, op: f32, mid: i32| {
+            Value::Descriptor(Descriptor::new("TrnS").with("Opct", unit(b"#Prc", op)).with("Lctn", Value::Integer(loc)).with("Mdpn", Value::Integer(mid)))
+        };
+        let grad = Descriptor::new("Grdn")
+            .with("GrdF", Value::Enumerated { type_id: Id::new("GrdF"), value: Id::new("CstS") })
+            .with("Intr", Value::Double(intr))
+            .with("Clrs", Value::List(vec![clr(0), clr(4096)]))
+            .with("Trns", Value::List(vec![trn(0, 100.0, 50), trn(4096, 0.0, mid)]));
+        let fx = Descriptor::new("GrFl")
+            .with("enab", Value::Boolean(true))
+            .with("Grad", Value::Descriptor(grad))
+            .with("Angl", unit(b"#Ang", 0.0))
+            .with("gs99", Value::Enumerated { type_id: Id::new("gradientInterpolationMethodType"), value: Id::new(method) });
+        let d = Descriptor::new("null").with("masterFXSwitch", Value::Boolean(true)).with("GrFl", Value::Descriptor(fx));
+        let mut data = 0u32.to_be_bytes().to_vec();
+        data.extend(VersionedDescriptor { version: 16, descriptor: d }.to_bytes());
+        data
+    }
+
+    fn overlay_opacity(data: &[u8]) -> Vec<(f32, f32)> {
+        let (_, fx) = parse_lfx2(data).unwrap();
+        let Some(Effect::GradientOverlay { gradient, .. }) = fx.first() else { panic!("overlay: {fx:?}") };
+        gradient.opacity_stops.clone()
+    }
+
+    fn opacity_at(o: &[(f32, f32)], t: f32) -> f32 {
+        let i = o.windows(2).position(|w| t >= w[0].0 && t <= w[1].0).unwrap();
+        o[i].1 + (o[i + 1].1 - o[i].1) * (t - o[i].0) / (o[i + 1].0 - o[i].0)
+    }
+
+    /// #1954: the overlay's transparency follows Smoothness, the opacity midpoints and the method
+    /// like a gradient fill layer's (Photoshop renders both identically; the values are its
+    /// composites at t = 0.25 and 0.5).
+    #[test]
+    fn gradient_overlay_opacity_follows_smoothness_midpoint_and_method() {
+        let at = |mid, intr, method: &str, t| opacity_at(&overlay_opacity(&overlay_lfx2(mid, intr, method)), t);
+        // Plain Classic stays the linear fade it is stored as.
+        assert_eq!(overlay_opacity(&overlay_lfx2(50, 0.0, "Gcls")), vec![(0.0, 1.0), (1.0, 0.0)]);
+        // Midpoint 25 %: half transparent a quarter of the way.
+        assert!((at(25, 0.0, "Gcls", 0.25) - 0.5).abs() < 0.01);
+        // Smoothness 100 % eases the ends (Photoshop: 0.796 at a quarter).
+        assert!((at(50, 4096.0, "Gcls", 0.25) - 0.796).abs() < 0.015);
+        // The method bends the transparency ramp too, not only the colours (Photoshop at the
+        // middle: 0.631 Linear, 0.255 Perceptual).
+        assert!((at(50, 0.0, "Lnr ", 0.5) - 0.631).abs() < 0.015);
+        assert!((at(50, 0.0, "Perc", 0.5) - 0.255).abs() < 0.015);
+        assert!((at(25, 4096.0, "Perc", 0.25) - 0.255).abs() < 0.015);
+    }
+
+    /// A regenerated `lfx2` carries the baked ramp as plain (Classic, Smoothness 0) stops, so it
+    /// reads back unchanged.
+    #[test]
+    fn baked_overlay_opacity_round_trips() {
+        let data = overlay_lfx2(25, 4096.0, "Perc");
+        let (master, fx) = parse_lfx2(&data).unwrap();
+        let a = overlay_opacity(&data);
+        let b = overlay_opacity(&write_lfx2(master, &fx));
+        assert!(a.len() > 2);
+        assert_eq!(a.len(), b.len());
+        for (x, y) in a.iter().zip(&b) {
+            assert!((x.0 - y.0).abs() < 1e-3 && (x.1 - y.1).abs() < 1e-4, "{x:?} vs {y:?}");
         }
     }
 

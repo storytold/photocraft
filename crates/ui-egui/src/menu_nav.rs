@@ -246,7 +246,11 @@ impl Nav {
     fn after_row(&mut self, level: usize, i: usize, lit: bool, r: &egui::Response) {
         let moved = r.ctx.input(|inp| inp.pointer.delta() != egui::Vec2::ZERO);
         let follow = self.follow == Some(level);
-        if (moved || follow) && r.hovered() && !lit {
+        // `hovered` is false while the primary button is held (egui attributes the pointer to
+        // the pressed widget), so a press-drag through the items never highlighted anything
+        // (#8887). `contains_pointer` keeps answering while a button is down.
+        let over = r.contains_pointer();
+        if (moved || follow) && over && !lit {
             if follow {
                 self.follow = None;
             }
