@@ -84,7 +84,7 @@ fn type_text(h: &mut Harness<'_, PhotocraftApp>, text: &str) {
 
 /// Is `layer`'s rename field on screen (drawn last frame)?
 fn field_shown(h: &Harness<'_, PhotocraftApp>, layer: u64) -> bool {
-    h.ctx.read_response(egui::Id::new(("layer-rename-field", layer))).is_some()
+    h.ctx.read_response(egui::Id::unique(("layer-rename-field", layer))).is_some()
 }
 
 /// A point on the canvas, away from every panel.

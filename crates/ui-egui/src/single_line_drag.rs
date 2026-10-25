@@ -118,7 +118,7 @@ mod tests {
     /// [`TEXT`].
     fn drag(field: Field, from: impl Fn(Rect, f32) -> Pos2, to: impl Fn(Rect, f32) -> Pos2) -> (usize, usize) {
         let ctx = ctx();
-        let id = Id::new("single-line-drag-test");
+        let id = Id::unique("single-line-drag-test");
         let rect = frame(&ctx, field, id, vec![]);
         frame(&ctx, field, id, vec![]);
         let text_w = text_width(&ctx);

@@ -431,7 +431,7 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) -> Option<bool> {
             // Under the colour field, not in the action column: the dialog must still fit a
             // 760 x 480 window.
             ui.add_space(4.0);
-            if let Some(rgb) = crate::screen_picker::button(ui, ui.id().with("screen-color")) {
+            if let Some(rgb) = crate::screen_picker::button(ui, ui.scope_id().with("screen-color")) {
                 set_rgb(f, rgb, Keep::Nothing);
             }
         });
@@ -536,8 +536,8 @@ fn swatches(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let cur = Rect::from_min_size(sw.min + vec2(0.0, 32.0), vec2(56.0, 32.0));
     p.rect_filled(cur, 0.0, c32(orig));
     p.rect_stroke(sw, 0.0, Stroke::new(1.0, t.field_border), StrokeKind::Outside);
-    let click_cur = ui.interact(cur, ui.id().with("cp-current"), Sense::click());
-    click_cur.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), tl!("Click to restore the current colour")));
+    let click_cur = ui.interact(cur, ui.scope_id().with("cp-current"), Sense::click());
+    click_cur.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tl!("Click to restore the current colour")));
     if click_cur.on_hover_text(tl!("Click to restore the current colour")).clicked() {
         set_rgb(f, orig, Keep::Nothing);
     }
@@ -558,8 +558,8 @@ fn swatches(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         }
         p.rect_filled(chip, 0.0, c32(near));
         p.rect_stroke(chip, 0.0, Stroke::new(1.0, t.text_dim), StrokeKind::Outside);
-        let resp = ui.interact(icon.union(chip), ui.id().with(("cp-warning", slot as i32)), Sense::click());
-        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), tip));
+        let resp = ui.interact(icon.union(chip), ui.scope_id().with(("cp-warning", slot as i32)), Sense::click());
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tip));
         if resp.on_hover_text(tip).clicked() {
             set_rgb(f, near, Keep::Nothing);
         }
@@ -598,7 +598,7 @@ fn radio(ui: &mut egui::Ui, on: bool, label: &str) -> bool {
     if on {
         ui.painter().circle_filled(r.center(), 3.0, t.accent);
     }
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, ui.is_enabled(), on, label));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, ui.is_enabled(), on, label));
     resp.clicked()
 }
 
@@ -623,7 +623,7 @@ fn fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, mode: &str, now: &Compo
                     }
                     ui.label(egui::RichText::new(tl!(&label)).color(t.text_dim));
                     let mut v = vals[i].round();
-                    if widgets::value_field(ui, &mut v, ranges[i].clone(), "", VALUE_W).changed() {
+                    if widgets::value_field(ui, &mut v, ranges[i].clone(), "", VALUE_W).accessible_name(tl!(&label)).changed() {
                         let (mut h, mut c) = (hsv, rgb);
                         if i < 3 {
                             h[i] = if i == 0 { v } else { v / 100.0 };
@@ -647,7 +647,7 @@ fn fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, mode: &str, now: &Compo
                 ui.label(egui::RichText::new("#").color(t.text_dim));
                 // While the field has focus it shows what is being typed, not the colour: rebuilding it from
                 // the colour every frame would throw away every keystroke until six valid digits were in.
-                let id = ui.id().with("cp-hex");
+                let id = ui.scope_id().with("cp-hex");
                 crate::field_tab::register(ui.ctx(), id);
                 if !f.contains_key("__focused") {
                     f.insert("__focused".into(), json!(true));
@@ -668,7 +668,7 @@ fn fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, mode: &str, now: &Compo
                         _ => shown.trim_start_matches('#').to_ascii_uppercase(),
                     },
                 };
-                let r = crate::widgets::text_field_ex(ui, id, &mut h, "", 64.0, true, Some(6));
+                let r = crate::widgets::text_field_ex(ui, id, &mut h, "", 64.0, true, Some(6)).accessible_name(tl!("Color"));
                 if let Some(c) = pasted {
                     edit = Some((c, Keep::Nothing));
                 }
@@ -695,7 +695,7 @@ fn fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, mode: &str, now: &Compo
                 }
                 ui.label(egui::RichText::new(tl!(&label)).color(t.text_dim));
                 let mut x = v.round();
-                if widgets::value_field(ui, &mut x, range, "", VALUE_W).changed() {
+                if widgets::value_field(ui, &mut x, range, "", VALUE_W).accessible_name(tl!(&label)).changed() {
                     let mut l = lab;
                     l[i] = x;
                     edit = Some((photocraft_color::convert::lab_to_srgb(l).map(|c| c.clamp(0.0, 1.0)), Keep::Lab(l)));
@@ -709,7 +709,7 @@ fn fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, mode: &str, now: &Compo
                 ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
                 ui.label(egui::RichText::new(tl!(&label)).color(t.text_dim));
                 let mut x = (cmyk[i] * 100.0).round();
-                if widgets::value_field(ui, &mut x, 0.0..=100.0, "", VALUE_W).changed() {
+                if widgets::value_field(ui, &mut x, 0.0..=100.0, "", VALUE_W).accessible_name(tl!(&label)).changed() {
                     let mut k = cmyk;
                     k[i] = x / 100.0;
                     edit = Some((photocraft_color::convert::cmyk_to_rgb(k).map(|c| c.clamp(0.0, 1.0)), Keep::Cmyk(k)));
@@ -886,14 +886,14 @@ mod tests {
                 ui.horizontal(|ui| {
                     let o = ui.cursor().min;
                     let gap = ui.spacing().item_spacing.x;
-                    ui.data_mut(|d| d.insert_temp(egui::Id::new("test-origin"), (o, gap)));
+                    ui.data_mut(|d| d.insert_temp(egui::Id::unique("test-origin"), (o, gap)));
                     color_field(ui, f);
                 });
             },
             f,
         );
         h.run_steps(2);
-        let (o, gap) = h.ctx.data(|d| d.get_temp::<(egui::Pos2, f32)>(egui::Id::new("test-origin"))).unwrap();
+        let (o, gap) = h.ctx.data(|d| d.get_temp::<(egui::Pos2, f32)>(egui::Id::unique("test-origin"))).unwrap();
         // Field: saturation across, brightness down (hue mode).
         let at = o + vec2(FIELD * 0.5, FIELD * 0.5);
         press(&mut h, at);
@@ -931,14 +931,14 @@ mod tests {
                 ui.horizontal(|ui| {
                     let o = ui.cursor().min;
                     let gap = ui.spacing().item_spacing.x;
-                    ui.data_mut(|d| d.insert_temp(egui::Id::new("test-origin"), (o, gap)));
+                    ui.data_mut(|d| d.insert_temp(egui::Id::unique("test-origin"), (o, gap)));
                     color_field(ui, f);
                 });
             },
             f,
         );
         h.run_steps(2);
-        let (o, gap) = h.ctx.data(|d| d.get_temp::<(egui::Pos2, f32)>(egui::Id::new("test-origin"))).unwrap();
+        let (o, gap) = h.ctx.data(|d| d.get_temp::<(egui::Pos2, f32)>(egui::Id::unique("test-origin"))).unwrap();
         for at in [o + vec2(FIELD * 0.5, FIELD * 0.5), o + vec2(FIELD + gap + 9.0, FIELD * 0.95)] {
             for button in [egui::PointerButton::Secondary, egui::PointerButton::Middle] {
                 press_button(&mut h, at, button, true);
@@ -1115,7 +1115,7 @@ mod tests {
         h.run_steps(4);
         let id = open(h.state_mut(), "foreground");
         h.run_steps(6);
-        let rect = h.ctx.memory(|m| m.area_rect(egui::Id::new(("dialog", id)))).expect("the picker window");
+        let rect = h.ctx.memory(|m| m.area_rect(egui::Id::unique(("dialog", id)))).expect("the picker window");
         assert!(rect.width() <= 534.0 && rect.height() <= 376.0, "Color Picker window {} x {} points, Photoshop's 534 x 376", rect.width(), rect.height());
         // Everything still shows: the three actions and all 13 component fields.
         for label in ["OK", "Cancel", "Add to Swatches", "Only Web Colors"] {

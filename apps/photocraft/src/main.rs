@@ -111,6 +111,9 @@ fn native_options(custom_titlebar: bool) -> eframe::NativeOptions {
             .with_titlebar_shown(false)
             .with_title_shown(false),
         centered: true,
+        // PhotoCraft owns its fallback fonts (`cjk_fonts`, craft-fonts): eframe's system-font
+        // provider would compete with it and make glyph choice machine-dependent (#8512).
+        system_font_fallback: false,
         // eframe saves native window geometry and egui panel/window sizes on exit.
         // Keep that state beside preferences, including config overrides and portable mode.
         persistence_path: services::config_dir().map(|dir| dir.join("ui.ron")),
@@ -147,6 +150,15 @@ fn main() -> eframe::Result {
     // First, so the panic hook and every start-up warning are recorded (`logging`).
     let logger = logging::install();
     crash_guard::install_hook();
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(done) = craft_update::self_update::finish(&craft_update::suite::PHOTOCRAFT, &std::env::args_os().skip(1).collect::<Vec<_>>()) {
+        if let Err(e) = done {
+            eprintln!("PhotoCraft update helper failed: {e}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
     // The system font scan can take seconds (minutes on some Macs): run it off the UI thread.
     photocraft_ui_egui::type_tool::warm_fonts();
     // `--help` and `--version` print to standard output and exit 0. A usage error (an unknown
@@ -411,6 +423,7 @@ fn main() -> eframe::Result {
             };
             #[cfg(not(target_os = "linux"))]
             let session = Session::new();
+            PhotocraftApp::install_type_reset_hooks(&cc.egui_ctx);
             let mut app = PhotocraftApp::new(session, services);
             app.min_frame_ms = uncapped.then_some(1000.0 / 240.0);
             app.integrated_titlebar = cfg!(target_os = "macos");
@@ -668,8 +681,99 @@ mod tests {
             egui::Panel::right("dock").default_size(290.0).show(ui, |ui| ui.set_min_width(ui.available_width()));
         });
         output.textures_delta.clear();
-        let panel = egui::containers::panel::PanelState::load(&restored, egui::Id::new("dock")).unwrap();
+        let panel = egui::containers::panel::PanelState::load(&restored, photocraft_ui_egui::panels::panel_state_id(&restored, "dock")).unwrap();
         assert_eq!(panel.size().x, 410.0);
+    }
+
+    /// A 0.36 `ui.ron` saved panel widths under `Id::new("dock")`; the first 0.37 launch copies
+    /// them to the parent-scoped key, leaves the old one for a rollback, and a later resize
+    /// survives two more restarts.
+    #[test]
+    fn saved_036_panel_widths_migrate_and_survive_two_restarts() {
+        #[derive(Default)]
+        struct Storage(std::collections::BTreeMap<String, String>);
+        impl eframe::Storage for Storage {
+            fn get_string(&self, key: &str) -> Option<String> {
+                self.0.get(key).cloned()
+            }
+            fn set_string(&mut self, key: &str, value: String) {
+                self.0.insert(key.into(), value);
+            }
+            fn remove_string(&mut self, key: &str) {
+                self.0.remove(key);
+            }
+            fn flush(&mut self) {}
+        }
+        let state = |width: f32| egui::containers::panel::PanelState { outer_rect: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 600.0)) };
+        let input = || egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0))), ..Default::default() };
+        let draw = |ctx: &egui::Context| {
+            let mut output = ctx.run_ui(input(), |ui| {
+                egui::Panel::right("dock").default_size(290.0).show(ui, |ui| ui.set_min_width(ui.available_width()));
+            });
+            output.textures_delta.clear();
+        };
+        let save = |ctx: &egui::Context| {
+            let mut storage = Storage::default();
+            ctx.memory(|memory| eframe::set_value(&mut storage, "egui", memory));
+            storage
+        };
+        let restore = |storage: &Storage| {
+            let ctx = egui::Context::default();
+            ctx.memory_mut(|memory| *memory = eframe::get_value(storage, "egui").expect("the saved memory"));
+            ctx
+        };
+
+        // The real 0.14/0.15 shape: the panel state under the old key inside the egui memory.
+        let ctx = egui::Context::default();
+        ctx.data_mut(|d| d.insert_persisted(egui::Id::unique("dock"), state(410.0)));
+        let storage = save(&ctx);
+
+        let first = restore(&storage);
+        photocraft_ui_egui::panels::migrate_panel_state(&first);
+        draw(&first);
+        let key = photocraft_ui_egui::panels::panel_state_id(&first, "dock");
+        assert_eq!(egui::containers::panel::PanelState::load(&first, key).map(|p| p.size().x), Some(410.0));
+        assert!(egui::containers::panel::PanelState::load(&first, egui::Id::unique("dock")).is_some(), "the 0.36 key is kept");
+        // Resize in 0.37: the new key wins from now on.
+        first.data_mut(|d| d.insert_persisted(key, state(500.0)));
+        let storage = save(&first);
+
+        for restart in 0..2 {
+            let next = restore(&storage);
+            photocraft_ui_egui::panels::migrate_panel_state(&next);
+            draw(&next);
+            let key = photocraft_ui_egui::panels::panel_state_id(&next, "dock");
+            let width = egui::containers::panel::PanelState::load(&next, key).map(|p| p.size().x).unwrap_or_default();
+            assert!((width - 500.0).abs() < 0.5, "restart {restart}: the old 410 key must not win (got {width})");
+        }
+    }
+
+    /// Schema-probe `ui.ron` shapes *reconstructed* from the documented 0.14/0.15/0.37 layouts,
+    /// not recorded machine saves: 0.14 and 0.15 both store the flat window entry, which the
+    /// first 0.37 launch rewrites; a 0.37 file is left alone. Keeping all three probes makes a
+    /// future change to any migration rule fail here first. They do not prove eframe's real
+    /// `Memory`/`PanelState` deserialization.
+    #[test]
+    fn the_ui_ron_schema_probe_fixtures_migrate() {
+        for (name, fixture) in [("0.14", include_str!("../tests/fixtures/ui-0.14.ron")), ("0.15", include_str!("../tests/fixtures/ui-0.15.ron"))] {
+            let text = super::ui_state::migrate_for_test(fixture).unwrap_or_else(|e| panic!("{name}: {e}")).unwrap_or_else(|| panic!("{name}: not rewritten"));
+            assert!(text.contains("normal_geometry"), "{name}: the flat window entry is gone: {text}");
+            assert!(!super::ui_state::saved_position_for_test(fixture), "{name}: a flat entry is not what 0.37 restores");
+        }
+        let old = include_str!("../tests/fixtures/ui-0.14.ron");
+        assert!(super::ui_state::migrate_for_test(old).expect("migratable").expect("rewritten").contains("x:1100.0"), "the 0.14 size is preserved");
+        let current = include_str!("../tests/fixtures/ui-0.15.ron");
+        assert!(
+            super::ui_state::migrate_for_test(current).expect("migratable").expect("rewritten").contains("maximized:true"),
+            "0.15 maximized state survives"
+        );
+        // Already 0.37-shaped: no rewrite, and (with no saved position) the window centres.
+        let current = include_str!("../tests/fixtures/ui-0.37.ron");
+        assert_eq!(super::ui_state::migrate_for_test(current), Ok(None));
+        assert!(!super::ui_state::saved_position_for_test(current));
+        // And a 0.37 file with a restorable outer position is a saved position.
+        let with_position = current.replace("outer_position_pixels:None", "outer_position_pixels:Some((x:2048.0,y:1228.0))");
+        assert!(super::ui_state::saved_position_for_test(&with_position));
     }
 
     #[test]

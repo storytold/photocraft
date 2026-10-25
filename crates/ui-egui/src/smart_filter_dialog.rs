@@ -149,7 +149,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String,
         ui.label(tl!("Mode"));
         let mut blend = fields.get("blend").and_then(Value::as_str).unwrap_or("Normal").to_string();
         let options: Vec<_> = BlendMode::LAYER_MODES.iter().map(|m| (m.label().to_string(), m.label())).collect();
-        if widgets::dropdown(ui, "smart-filter-blend", &mut blend, &options, 200.0) {
+        if widgets::dropdown(ui, "smart-filter-blend", tl!("Blend Mode"), &mut blend, &options, 200.0) {
             fields.insert("blend".into(), json!(blend));
         }
     });
@@ -193,7 +193,7 @@ fn viewport(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String,
         });
         return;
     };
-    let key = ui.id().with("smart-filter-view-image");
+    let key = ui.scope_id().with("smart-filter-view-image");
     let mut image = ui.ctx().data(|d| d.get_temp::<ViewImage>(key));
     if image.as_ref().is_none_or(|i| !Arc::ptr_eq(&i.doc, &doc)) {
         // Fixed thumbnail size and content identity: never composite a full surface per frame.

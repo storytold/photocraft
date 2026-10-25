@@ -4166,3 +4166,6 @@ cameraRaw	Dehaze	Odstranění oparu
 	Grayscale Ramp	Přechod stupňů šedi
 	Current Colors	Aktuální barvy
 	Make Ramp Web Safe	Omezit pruh na webové barvy
+
+# Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
+	Aspect Ratio	Poměr stran

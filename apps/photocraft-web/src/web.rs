@@ -80,6 +80,7 @@ pub fn start() {
                 canvas,
                 options,
                 Box::new(move |cc| {
+                    PhotocraftApp::install_type_reset_hooks(&cc.egui_ctx);
                     PhotocraftApp::setup_context(&cc.egui_ctx, ThemeKind::Pro);
                     let inbox: Inbox = Arc::default();
                     let place_inbox: Inbox = Arc::default();
@@ -328,6 +329,10 @@ impl eframe::App for WebShell {
         // A tap reaches eframe as Pointer Events and Touch Events: keep one press per tap, or the
         // twin press closes the menu the first one opened (#2095).
         photocraft_ui_egui::touch_twins::drop_twins(ctx, raw_input);
+        // The browser build has no TCP control server, so `inject_synthetic` finds an empty
+        // queue, but the clipboard key mapping (`Event::PasteImage`), legacy pinch, pen-hold and
+        // titlebar normalization live in the app hook and must run here too.
+        eframe::App::raw_input_hook(&mut self.app, ctx, raw_input);
     }
 
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
@@ -356,8 +361,9 @@ impl eframe::App for WebShell {
             });
         }
         self.serve_fonts(ctx);
-        self.app.logic(ctx, frame);
+        self.app.logic_frame(ctx, frame);
         self.save_presets(ctx);
+        self.app.finish_type_reset_logic(ctx);
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
@@ -384,8 +390,9 @@ impl eframe::App for WebShell {
                 });
             });
         }
-        self.app.ui(ui, frame);
+        self.app.ui_frame(ui, frame);
         self.save_presets(ui.ctx());
+        self.app.finish_type_reset_pass(ui.ctx());
     }
 }
 

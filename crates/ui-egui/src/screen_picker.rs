@@ -105,7 +105,7 @@ struct Runtime {
 }
 type Shared = Arc<Mutex<Runtime>>;
 fn runtime(ctx: &Context) -> Shared {
-    let id = Id::new("screen-color-picker-runtime");
+    let id = Id::unique("screen-color-picker-runtime");
     ctx.data_mut(|d| {
         if let Some(r) = d.get_temp::<Shared>(id) {
             return r;
@@ -127,7 +127,7 @@ pub fn take(ctx: &Context, id: Id) -> Option<[f32; 3]> {
 /// Same action for full dialogs and compact swatches. Cancellation returns no change.
 pub fn button(ui: &mut egui::Ui, id: Id) -> Option<[f32; 3]> {
     let r = runtime(ui.ctx());
-    let available = ui.ctx().data(|d| d.get_temp::<bool>(Id::new("screen-color-picker-available"))).unwrap_or(false);
+    let available = ui.ctx().data(|d| d.get_temp::<bool>(Id::unique("screen-color-picker-available"))).unwrap_or(false);
     let mut state = lock(&r);
     let result = if state.completed.as_ref().is_some_and(|(owner, _)| *owner == id) { state.completed.take().map(|(_, rgb)| rgb) } else { None };
     let busy = state.owner.is_some() || state.request.is_some();
@@ -142,7 +142,7 @@ fn target(app: &PhotocraftApp) -> Target {
 }
 /// Poll before shortcuts. A changed editing target invalidates a pending pick.
 pub fn tick(app: &mut PhotocraftApp, ctx: &Context) -> bool {
-    ctx.data_mut(|d| d.insert_temp(Id::new("screen-color-picker-available"), app.services.screen_pick.is_some()));
+    ctx.data_mut(|d| d.insert_temp(Id::unique("screen-color-picker-available"), app.services.screen_pick.is_some()));
     let r = runtime(ctx);
     let mut s = lock(&r);
     if s.completed.is_some() && s.target != Some(target(app)) {
@@ -308,7 +308,7 @@ pub fn show(ctx: &Context) {
             // Once per picker window (`show` runs every frame, so a local flag would resend it):
             // raise it, and take the keyboard so Esc reaches the picker: a window shown later
             // isn't always given focus by the OS, and the picker covers the screen (#4291).
-            let raised = Id::new(("screen-picker-raised", ui.ctx().viewport_id()));
+            let raised = Id::unique(("screen-picker-raised", ui.ctx().viewport_id()));
             if !ui.ctx().data_mut(|d| std::mem::replace(d.get_temp_mut_or_default::<bool>(raised), true)) {
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::WindowLevel(egui::WindowLevel::AlwaysOnTop));
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::Focus);
@@ -337,7 +337,7 @@ fn frame(ui: &mut egui::Ui, shared: &Shared, image: &ScreenImage, texture: &egui
     egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
         let rect = ui.max_rect();
         ui.painter().image(texture.id(), rect, Rect::from_min_max(Pos2::ZERO, egui::pos2(1.0, 1.0)), Color32::WHITE);
-        let response = ui.interact(rect, ui.id().with("screen-sample"), Sense::click_and_drag());
+        let response = ui.interact(rect, ui.scope_id().with("screen-sample"), Sense::click_and_drag());
         ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
         let released = response.clicked() || response.drag_stopped();
         let pixel = ui.ctx().pointer_latest_pos().and_then(|pos| Some((pos, image.at(rect, pos)?)));
@@ -537,7 +537,7 @@ mod tests {
         let stop = cancelled.clone();
         let mut receiver = Some(rx);
         app.services.screen_pick = Some(Box::new(move |_| Pending { receiver: receiver.take().unwrap(), cancelled: stop.clone() }));
-        let owner = Id::new("test-destination");
+        let owner = Id::unique("test-destination");
         lock(&runtime(ctx)).request = Some(owner);
         assert!(tick(app, ctx));
         (owner, tx, cancelled)
@@ -553,7 +553,7 @@ mod tests {
             let (_tx, rx) = std::sync::mpsc::channel();
             Pending { receiver: rx, cancelled: Arc::new(std::sync::atomic::AtomicBool::new(false)) }
         }));
-        let owner = Id::new("queued");
+        let owner = Id::unique("queued");
         lock(&runtime(&ctx)).request = Some(owner);
         cancel(&ctx);
         assert!(!tick(&mut app, &ctx));
@@ -590,7 +590,7 @@ mod tests {
         let (id, tx, _) = queued(&mut app, &ctx);
         tx.send(Ok(Capture::Color(Some([0.25, 0.5, 1.0])))).unwrap();
         assert!(!tick(&mut app, &ctx));
-        assert_eq!(take(&ctx, Id::new("different-widget")), None);
+        assert_eq!(take(&ctx, Id::unique("different-widget")), None);
         assert_eq!(take(&ctx, id), Some([0.25, 0.5, 1.0]));
         assert_eq!(take(&ctx, id), None);
     }

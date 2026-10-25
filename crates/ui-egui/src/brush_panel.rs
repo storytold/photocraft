@@ -192,7 +192,7 @@ fn gesture(ctx: &egui::Context) -> u64 {
     let frame = ctx.cumulative_pass_nr();
     let pressed = ctx.input(|i| i.pointer.any_pressed());
     ctx.data_mut(|d| {
-        let g = d.get_temp_mut_or_default::<(u64, u64)>(egui::Id::new(GESTURE));
+        let g = d.get_temp_mut_or_default::<(u64, u64)>(egui::Id::unique(GESTURE));
         if pressed && g.1 != frame {
             g.0 += 1;
             g.1 = frame;
@@ -207,7 +207,7 @@ fn gesture(ctx: &egui::Context) -> u64 {
 pub fn commit_gesture(app: &mut PhotocraftApp, ctx: &egui::Context, before: &BrushSettings, after: &BrushSettings) {
     let g = gesture(ctx);
     if send(app, before, after, Some(format!("brush-ui:{g}"))) && !ctx.input(|i| i.pointer.any_down()) {
-        ctx.data_mut(|d| d.get_temp_mut_or_default::<(u64, u64)>(egui::Id::new(GESTURE)).0 += 1);
+        ctx.data_mut(|d| d.get_temp_mut_or_default::<(u64, u64)>(egui::Id::unique(GESTURE)).0 += 1);
     }
 }
 
@@ -274,9 +274,9 @@ fn section_list(app: &mut PhotocraftApp, ui: &mut egui::Ui, b: &mut BrushSetting
             // Named for accessibility and for tests and agents that look sections up by name.
             if toggle_only {
                 let checked = section_flag(b, i).is_some_and(|flag| *flag);
-                resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, checked, tl!(*name)));
+                resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, checked, tl!(*name)));
             } else {
-                resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, sel, tl!(*name)));
+                resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, sel, tl!(*name)));
             }
             if sel {
                 ui.painter().rect_filled(r, t.radius_sm, t.accent_soft);
@@ -289,9 +289,9 @@ fn section_list(app: &mut PhotocraftApp, ui: &mut egui::Ui, b: &mut BrushSetting
                 // A checkbox-only row is one accessible checkbox across its whole width. A
                 // controls section keeps its separate enable box and selectable label.
                 let box_resp = (!toggle_only).then(|| {
-                    let resp = ui.interact(br, ui.id().with(("brush-sec-box", i)), Sense::click());
+                    let resp = ui.interact(br, ui.scope_id().with(("brush-sec-box", i)), Sense::click());
                     resp.widget_info(|| {
-                        egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, *flag, crate::i18n::fmt(tl!("Enable {name}"), &[("name", tl!(*name))]))
+                        egui::WidgetInfo::selected(egui::Role::CheckBox, true, *flag, crate::i18n::fmt(tl!("Enable {name}"), &[("name", tl!(*name))]))
                     });
                     resp
                 });
@@ -323,8 +323,8 @@ fn section_list(app: &mut PhotocraftApp, ui: &mut egui::Ui, b: &mut BrushSetting
             let mut lock_clicked = false;
             if let Some(lock) = section_lock(b, i) {
                 let lr = egui::Rect::from_center_size(egui::pos2(r.right() - 11.0, r.center().y), vec2(18.0, 18.0));
-                let lresp = ui.interact(lr, ui.id().with(("brush-sec-lock", i)), Sense::click());
-                lresp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), *lock, format!("{}: {}", tl!("Lock"), tl!(*name))));
+                let lresp = ui.interact(lr, ui.scope_id().with(("brush-sec-lock", i)), Sense::click());
+                lresp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), *lock, format!("{}: {}", tl!("Lock"), tl!(*name))));
                 // Like Photoshop: lock icons stay visible on every lockable section row.
                 let tint = if *lock { t.text } else { t.text_faint };
                 icons::paint(ui, lr, if *lock { "lock" } else { "lock-open" }, 12.0, tint);
@@ -402,7 +402,7 @@ fn settings_tab(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             let current = app.session.tools.current_preset.clone().filter(|n| app.session.tools.presets.iter().any(|p| p.name.eq_ignore_ascii_case(n)));
             let update =
                 ui.add_enabled_ui(current.is_some(), |ui| icons::button(ui, "check", 24.0, false, tl!("Update the current brush with these settings"))).inner;
-            update.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, current.is_some(), "Update the current brush with these settings"));
+            update.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, current.is_some(), "Update the current brush with these settings"));
             if update.clicked() {
                 run_or_status(app, "brush.presets.update", json!({ "brush": serde_json::to_value(&b).unwrap_or(Value::Null) }));
             }
@@ -511,7 +511,7 @@ pub fn window(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let canvas = app.last_canvas_rect;
     let mut open = true;
     egui::Window::new(tl!("Brush Settings"))
-        .id(egui::Id::new("brush-settings"))
+        .id(egui::Id::unique("brush-settings"))
         .title_bar(false)
         .resizable(false)
         .frame(frame)

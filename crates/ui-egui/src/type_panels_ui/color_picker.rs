@@ -137,7 +137,7 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
         app.text_style_preview = None;
         return None;
     }
-    let key = (egui::Id::new((t.document.0, t.revision, d.id, t.kind.paragraph(), t.id, &color)).value() & ((1 << 60) - 1)) | (1 << 60);
+    let key = (egui::Id::unique((t.document.0, t.revision, d.id, t.kind.paragraph(), t.id, &color)).value() & ((1 << 60) - 1)) | (1 << 60);
     if app.text_style_preview.as_ref().map(|p| p.key) != Some(key) {
         let shown = photocraft_engine::type_styles_cmds::preview_options(&st.doc, &json!({"id": t.id, "attrs": {"color": color}}), t.kind.paragraph())
             .map(Arc::new)

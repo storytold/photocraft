@@ -48,7 +48,7 @@ const RECENT_CAP: usize = 8;
 
 /// The id of the palette's recently-run list (egui temp data: session-scoped, like the query).
 fn recent_id() -> egui::Id {
-    egui::Id::new("palette-recent")
+    egui::Id::unique("palette-recent")
 }
 
 /// Remember `id` as the most recently run command: deduplicated, newest first, capped.
@@ -124,7 +124,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let t = Tokens::get(ctx);
     let screen = ctx.content_rect();
     // Scrim.
-    egui::Area::new(egui::Id::new("palette-scrim")).order(egui::Order::Foreground).fixed_pos(screen.min).show(ctx, |ui| {
+    egui::Area::new(egui::Id::unique("palette-scrim")).order(egui::Order::Foreground).fixed_pos(screen.min).show(ctx, |ui| {
         let r = ui.allocate_exact_size(screen.size(), Sense::click()).1;
         ui.painter().rect_filled(screen, 0.0, Color32::from_black_alpha(110));
         if r.clicked() {
@@ -133,7 +133,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     });
     let width = 560.0;
     let mut run: Option<String> = None;
-    egui::Area::new(egui::Id::new("palette"))
+    egui::Area::new(egui::Id::unique("palette"))
         .order(egui::Order::Tooltip)
         .pivot(Align2::CENTER_TOP)
         .fixed_pos(egui::pos2(screen.center().x, screen.top() + 110.0))
@@ -146,7 +146,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 .inner_margin(egui::Margin::same(10))
                 .show(ui, |ui| {
                     ui.set_width(width);
-                    let qid = egui::Id::new("palette-query");
+                    let qid = egui::Id::unique("palette-query");
                     let mut q: String = ui.data_mut(|d| d.get_temp(qid).unwrap_or_default());
                     ui.horizontal(|ui| {
                         let (r, _) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::hover());
@@ -190,7 +190,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     }
                     hits.sort_by(|a, b| b.0.cmp(&a.0).then(a.2.cmp(&b.2)));
                     hits.truncate(12);
-                    let sel_id = egui::Id::new("palette-sel");
+                    let sel_id = egui::Id::unique("palette-sel");
                     let mut sel: usize = ui.data_mut(|d| d.get_temp(sel_id).unwrap_or(0));
                     let (down, up, enter, esc) = ui.input(|i| {
                         (
@@ -247,7 +247,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         });
     if let Some(id) = run {
         app.ui.palette_open = false;
-        ctx.data_mut(|d| d.insert_temp(egui::Id::new("palette-query"), String::new()));
+        ctx.data_mut(|d| d.insert_temp(egui::Id::unique("palette-query"), String::new()));
         if let Some(tool) = id.strip_prefix("tool:") {
             if let Some(t) = crate::state::Tool::from_name(tool) {
                 app.ui.tool = t;

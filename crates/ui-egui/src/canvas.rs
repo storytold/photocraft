@@ -550,22 +550,27 @@ pub(crate) fn draw_readout<const N: usize>(ctx: &egui::Context, id: &str, cursor
     let labels = labels.map(|label| tl!(label));
     let (lw, vw) = (labels.map(width), values.each_ref().map(|v| width(v)));
     let (label_col, value_col) = (lw.iter().fold(0.0f32, |a, &b| a.max(b)), vw.iter().fold(0.0f32, |a, &b| a.max(b)));
-    egui::Area::new(egui::Id::new(id)).order(egui::Order::Tooltip).fixed_pos(cursor + vec2(16.0, 18.0)).interactable(false).constrain(true).show(ctx, |ui| {
-        egui::Frame::new().fill(t.card).stroke(Stroke::new(1.0, t.card_border)).corner_radius(t.radius_sm).inner_margin(egui::Margin::symmetric(7, 4)).show(
-            ui,
-            |ui| {
-                ui.spacing_mut().item_spacing = vec2(0.0, 1.0);
-                for (i, value) in values.into_iter().enumerate() {
-                    // Labels left, values right-aligned on one edge, sharing a baseline.
-                    ui.horizontal(|ui| {
-                        ui.add(egui::Label::new(egui::RichText::new(labels[i]).font(font.clone()).color(t.text_dim)).extend());
-                        ui.add_space(label_col - lw[i] + 12.0 + value_col - vw[i]);
-                        ui.add(egui::Label::new(egui::RichText::new(value).font(font.clone()).color(t.text)).extend());
-                    });
-                }
-            },
-        );
-    });
+    egui::Area::new(egui::Id::unique(id)).order(egui::Order::Tooltip).fixed_pos(cursor + vec2(16.0, 18.0)).interactable(false).constrain(true).show(
+        ctx,
+        |ui| {
+            egui::Frame::new()
+                .fill(t.card)
+                .stroke(Stroke::new(1.0, t.card_border))
+                .corner_radius(t.radius_sm)
+                .inner_margin(egui::Margin::symmetric(7, 4))
+                .show(ui, |ui| {
+                    ui.spacing_mut().item_spacing = vec2(0.0, 1.0);
+                    for (i, value) in values.into_iter().enumerate() {
+                        // Labels left, values right-aligned on one edge, sharing a baseline.
+                        ui.horizontal(|ui| {
+                            ui.add(egui::Label::new(egui::RichText::new(labels[i]).font(font.clone()).color(t.text_dim)).extend());
+                            ui.add_space(label_col - lw[i] + 12.0 + value_col - vw[i]);
+                            ui.add(egui::Label::new(egui::RichText::new(value).font(font.clone()).color(t.text)).extend());
+                        });
+                    }
+                });
+        },
+    );
 }
 
 /// The engine's live stroke of a tool: the Brush, Pencil and Eraser paint dabs; the Clone Stamp,
@@ -1578,7 +1583,7 @@ pub fn navigator_gpu_view(app: &PhotocraftApp, idx: usize, rect: Rect, ctx: &egu
         rotation: 0.0,
         shadow: false,
         pixel_grid: false,
-        view_key: egui::Id::new(("pc-navigator", ctx.viewport_id(), idx)).value(),
+        view_key: egui::Id::unique(("pc-navigator", ctx.viewport_id(), idx)).value(),
         offset: [0.0, 0.0],
         ..params
     })
@@ -1599,7 +1604,7 @@ pub fn navigator_waits_for_gpu(app: &PhotocraftApp, idx: usize, ctx: &egui::Cont
     if app.canvases.keys().any(|(d, _)| *d == id) {
         return false;
     }
-    let key = egui::Id::new(("navigator-waits", id.0));
+    let key = egui::Id::unique(("navigator-waits", id.0));
     let waited = ctx.data(|d| d.get_temp::<u32>(key)).unwrap_or(0);
     if waited >= NAVIGATOR_WAIT_FRAMES {
         return false;
@@ -2737,11 +2742,11 @@ fn tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
             let name_g = crate::tab_strip::elided(ui, &name, font.clone(), t.text, name_max);
             // The title was cut: the tooltip has the rest of it.
             let cut = name_g.size().x + 0.5 < natural_w - STUDIO_TAB_PAD + STUDIO_TAB_GAP - meta_g.size().x;
-            let resp = ui.interact(r, ui.id().with(("dtab", i)), Sense::click_and_drag());
+            let resp = ui.interact(r, ui.scope_id().with(("dtab", i)), Sense::click_and_drag());
             let saving = crate::jobs_ui::save_progress(app, st.doc.id);
             resp.widget_info(|| {
                 let label = saving.as_ref().map_or_else(|| st.doc.name.clone(), |s| format!("{} - {s}", st.doc.name));
-                egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, sel, label)
+                egui::WidgetInfo::selected(egui::Role::Button, true, sel, label)
             });
             doc_tabs.push((i, r));
             if sel {
@@ -2759,7 +2764,7 @@ fn tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
             ui.painter().galley_with_override_text_color(egui::pos2(r.left() + 10.0, ny), name_g.clone(), color);
             ui.painter().galley(egui::pos2(r.left() + 16.0 + name_g.size().x, r.center().y - meta_g.size().y / 2.0), meta_g, t.text_faint);
             let xr = Rect::from_center_size(egui::pos2(r.right() - 12.0, r.center().y), egui::vec2(16.0, 16.0));
-            let xresp = ui.interact(xr, ui.id().with(("dtabx", i)), Sense::click());
+            let xresp = ui.interact(xr, ui.scope_id().with(("dtabx", i)), Sense::click());
             if xresp.hovered() {
                 ui.painter().rect_filled(xr, 4.0, t.hover);
             }
@@ -2786,7 +2791,7 @@ fn tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
             let sel = app.jobs.focus == Some(*job);
             let meta_g = ui.painter().layout_no_wrap(format!("{:.0}%", frac * 100.0), meta_font.clone(), t.text_faint);
             let name_g = crate::tab_strip::elided(ui, name, font.clone(), t.text, (r.width() - STUDIO_TAB_PAD + STUDIO_TAB_GAP - meta_g.size().x).max(1.0));
-            let resp = ui.interact(r, ui.id().with(("dtabjob", job.0)), Sense::click());
+            let resp = ui.interact(r, ui.scope_id().with(("dtabjob", job.0)), Sense::click());
             if sel {
                 ui.painter().rect_filled(r, t.radius_sm, t.card);
                 ui.painter().rect_stroke(r, t.radius_sm, Stroke::new(1.0, t.card_border), egui::StrokeKind::Inside);
@@ -2798,7 +2803,7 @@ fn tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
             ui.painter().galley(egui::pos2(r.left() + 16.0 + name_g.size().x, r.center().y - meta_g.size().y / 2.0), meta_g, t.text_faint);
             crate::jobs_ui::tab_underline(ui, r, *frac, &t);
             let xr = Rect::from_center_size(egui::pos2(r.right() - 12.0, r.center().y), egui::vec2(16.0, 16.0));
-            let xresp = ui.interact(xr, ui.id().with(("dtabjobx", job.0)), Sense::click());
+            let xresp = ui.interact(xr, ui.scope_id().with(("dtabjobx", job.0)), Sense::click());
             if xresp.hovered() {
                 ui.painter().rect_filled(xr, 4.0, t.hover);
             }
@@ -2819,7 +2824,7 @@ fn tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
             // Like Photoshop's, the menu lists every open document, not only the hidden ones, and checks
             // the active one (#4487).
             let every: Vec<usize> = (0..labels.len()).collect();
-            crate::tab_strip::overflow_button(ui, ui.id().with("dtab-overflow"), r, tl!("More documents"), &labels, &every, Some(selected), &mut picked);
+            crate::tab_strip::overflow_button(ui, ui.scope_id().with("dtab-overflow"), r, tl!("More documents"), &labels, &every, Some(selected), &mut picked);
             match picked {
                 Some(i) if i < tab_count => activate = Some(i),
                 Some(i) => focus_open = opening.get(i - tab_count).map(|(job, _, _)| *job).or(focus_open),
@@ -2911,7 +2916,7 @@ fn tab_drag(ui: &egui::Ui, resp: &egui::Response, i: usize, r: Rect, strip: Rect
     {
         if torn_off(strip, p) {
             let ghost = Rect::from_min_size(p - egui::vec2(40.0, 12.0), egui::vec2(240.0, 160.0));
-            let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, ui.id().with("tab-tear-off")));
+            let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, ui.scope_id().with("tab-tear-off")));
             painter.rect_filled(ghost, t.radius_sm, t.accent.gamma_multiply(0.12));
             painter.rect_stroke(ghost, t.radius_sm, Stroke::new(1.5, t.accent), egui::StrokeKind::Inside);
         } else {
@@ -3082,7 +3087,7 @@ fn pro_tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
     for &(i, r) in placed.iter().filter(|(i, _)| *i < tab_count) {
         let Some(title) = titles.get(i) else { continue };
         let g = crate::tab_strip::elided(ui, title, font.clone(), t.text, (r.width() - DOC_TAB_PAD).max(1.0));
-        let resp = ui.interact(r, ui.id().with(("ptab", i)), Sense::click_and_drag());
+        let resp = ui.interact(r, ui.scope_id().with(("ptab", i)), Sense::click_and_drag());
         let sel = Some(i) == active;
         if sel {
             ui.painter().rect_filled(r, 0.0, t.chrome);
@@ -3095,10 +3100,10 @@ fn pro_tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
         }
         ui.painter().line_segment([r.right_top(), r.right_bottom()], Stroke::new(1.0, t.separator));
         let (xr, at) = pro_tab_layout(r, g.size().y, mac);
-        let xresp = ui.interact(xr, ui.id().with(("ptabx", i)), Sense::click());
+        let xresp = ui.interact(xr, ui.scope_id().with(("ptabx", i)), Sense::click());
         // Painted: name the tab and its × for accessibility (and so tests and agents can find them).
-        resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, sel, g.text()));
-        xresp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Close")));
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, sel, g.text()));
+        xresp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Close")));
         crate::icons::paint(ui, xr, "x", 10.0, if xresp.hovered() { t.text } else { t.text_faint });
         ui.painter().galley_with_override_text_color(at, g, if sel { t.text } else { t.text_faint });
         let cut = natural.get(i).copied().unwrap_or(0.0) > r.width() + 0.5;
@@ -3123,7 +3128,7 @@ fn pro_tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
         let Some((job, _, frac)) = opening.get(i - tab_count) else { continue };
         let Some(title) = titles.get(i) else { continue };
         let g = crate::tab_strip::elided(ui, title, font.clone(), t.text, (r.width() - DOC_TAB_PAD).max(1.0));
-        let resp = ui.interact(r, ui.id().with(("ptabjob", job.0)), Sense::click());
+        let resp = ui.interact(r, ui.scope_id().with(("ptabjob", job.0)), Sense::click());
         let sel = app.jobs.focus == Some(*job);
         if sel {
             ui.painter().rect_filled(r, 0.0, t.chrome);
@@ -3133,8 +3138,8 @@ fn pro_tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
         ui.painter().line_segment([r.right_top(), r.right_bottom()], Stroke::new(1.0, t.separator));
         crate::jobs_ui::tab_underline(ui, r, *frac, &t);
         let (xr, at) = pro_tab_layout(r, g.size().y, mac);
-        let xresp = ui.interact(xr, ui.id().with(("ptabjobx", job.0)), Sense::click());
-        xresp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Close")));
+        let xresp = ui.interact(xr, ui.scope_id().with(("ptabjobx", job.0)), Sense::click());
+        xresp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Close")));
         crate::icons::paint(ui, xr, "x", 10.0, if xresp.hovered() { t.text } else { t.text_faint });
         ui.painter().galley_with_override_text_color(at, g, if sel { t.text } else { t.text_faint });
         if xresp.on_hover_text(tl!("Cancel opening")).clicked() {
@@ -3152,7 +3157,7 @@ fn pro_tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
         // Like Photoshop's, the menu lists every open document, not only the hidden ones, and checks
         // the active one (#4487).
         let every: Vec<usize> = (0..labels.len()).collect();
-        crate::tab_strip::overflow_button(ui, ui.id().with("ptab-overflow"), r, tl!("More documents"), &labels, &every, Some(selected), &mut picked);
+        crate::tab_strip::overflow_button(ui, ui.scope_id().with("ptab-overflow"), r, tl!("More documents"), &labels, &every, Some(selected), &mut picked);
         match picked {
             Some(i) if i < tab_count => activate = Some(i),
             Some(i) => focus_open = opening.get(i - tab_count).map(|(job, _, _)| *job).or(focus_open),
@@ -3235,7 +3240,7 @@ fn dots(ctx: &egui::Context, t: &crate::theme::Tokens) -> Option<egui::TextureId
     if t.bevel || t.canvas_dot == t.canvas {
         return None;
     }
-    let key = egui::Id::new(("canvas-dots", format!("{:?}", t.kind)));
+    let key = egui::Id::unique(("canvas-dots", format!("{:?}", t.kind)));
     if let Some(tex) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(key)) {
         return Some(tex.id());
     }
@@ -3285,7 +3290,7 @@ pub fn mode_label(doc: &Document) -> &'static str {
 /// (#5367), and so does the Home screen's blank background. Registered before anything drawn over
 /// `area`, so the buttons and links there keep their own clicks; not a keyboard focus stop.
 fn open_on_double_click(app: &mut PhotocraftApp, ui: &egui::Ui, area: Rect) {
-    if app.session.documents().is_empty() && ui.interact(area, ui.id().with("empty-workspace"), Sense::CLICK).double_clicked() {
+    if app.session.documents().is_empty() && ui.interact(area, ui.scope_id().with("empty-workspace"), Sense::CLICK).double_clicked() {
         let _ = app.open_dialog_file();
     }
 }
@@ -3424,12 +3429,12 @@ fn home_recent(app: &mut PhotocraftApp, ui: &mut egui::Ui, recent: &[String]) {
             let fg = crate::tab_strip::elided(ui, &folder, egui::FontId::proportional(11.5), t.text_faint, folder_max);
             ui.painter().galley(egui::pos2(right - fg.size().x, row.center().y - fg.size().y / 2.0), fg, t.text_faint);
         }
-        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &name));
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &name));
         let resp = resp.on_hover_text(path).on_hover_cursor(egui::CursorIcon::PointingHand);
         if hovered {
             let x = ui.interact(close, resp.id.with("remove"), Sense::click());
             let label = crate::i18n::fmt(tl!("Remove {name} from Recent"), &[("name", &name)]);
-            x.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &label));
+            x.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
             let color = crate::icons::button_chrome(ui, close, false, x.hovered());
             crate::icons::paint(ui, close, "x", 12.0, color);
             if x.on_hover_text(tl!("Remove from Recent")).clicked() {
@@ -3541,7 +3546,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     // too, as in Photoshop (#6017).
     let rect = crate::rulers::content_rect(app, rect);
     // Both wheel reads share one owner so snap-zoom input is accumulated only once per frame.
-    let wheel_owner = ui.id().with(("canvas-wheel", idx));
+    let wheel_owner = ui.scope_id().with(("canvas-wheel", idx));
     // Direct navigation starts from the authoritative camera. This also means a click or drag
     // never maps through a camera that is still moving under the pointer.
     let (pointer_here, hover_here) = ctx.input(|i| {
@@ -3668,7 +3673,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                     !t.bevel && !t.pro && drop_shadow
                 },
                 pixel_grid: false,
-                view_key: egui::Id::new(("pc-canvas-proxy", ctx.viewport_id(), idx)).value(),
+                view_key: egui::Id::unique(("pc-canvas-proxy", ctx.viewport_id(), idx)).value(),
                 display: sync_display_lut(app, &shown, key, output),
                 output: output.unwrap_or(0),
                 hdr: hdr_preview(app, &doc),
@@ -3690,7 +3695,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                     !t.bevel && !t.pro && drop_shadow
                 },
                 pixel_grid,
-                view_key: egui::Id::new(("pc-canvas", ctx.viewport_id(), idx)).value(),
+                view_key: egui::Id::unique(("pc-canvas", ctx.viewport_id(), idx)).value(),
                 display: sync_display_lut(app, &doc, doc.id.0, output),
                 output: output.unwrap_or(0),
                 hdr: hdr_preview(app, &doc),
@@ -3706,8 +3711,11 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             app.navigator_gpu.remove(&doc.id);
             // A document too large for one full-resolution texture also gets the part in view at
             // the screen's resolution, drawn over the reduced whole (#7568).
-            let in_view =
-                InView { visible: visible_doc_rect(&xf), zoom: view.zoom, key: egui::Id::new(("pc-canvas-detail", ctx.viewport_id(), idx, primary)).value() };
+            let in_view = InView {
+                visible: visible_doc_rect(&xf),
+                zoom: view.zoom,
+                key: egui::Id::unique(("pc-canvas-detail", ctx.viewport_id(), idx, primary)).value(),
+            };
             let textures = ensure_texture_in_view(app, &ctx, idx, output, Some(in_view));
             let tex = textures.as_ref().map(|t| t.texture);
             // The area the image covers: a size-changing preview's own (Image › Rotation).
@@ -3920,7 +3928,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     }
     // Navigation (wheel_nav.rs): scroll pans (⇧ or ⌘/Ctrl sideways); pinch and ⌥-scroll zoom around the pointer.
     // The wheel also scrolls over the scrollbars drawn on top of the canvas (last frame's hover).
-    let bars_id = egui::Id::new(("pc-canvas-bars-hover", idx));
+    let bars_id = egui::Id::unique(("pc-canvas-bars-hover", idx));
     let over_bars = ctx.data(|d| d.get_temp::<bool>(bars_id)).unwrap_or(false);
     let nav_hovered = response.hovered() || free_hover || over_bars;
     // Interface › Enable Animations off: the wheel moves the canvas without a glide (#5721).
@@ -4143,7 +4151,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     let transform_owns_pointer = primary && app.ui.transform.is_some() && temporary.is_none() && !middle;
     let hand_pan = tool == Tool::Hand && !transform_owns_pointer;
     // Preferences › Tools › Enable Flick Panning: a Hand drag let go while moving glides on.
-    let flick_id = egui::Id::new(("pc-flick-pan", idx, primary, ctx.viewport_id()));
+    let flick_id = egui::Id::unique(("pc-flick-pan", idx, primary, ctx.viewport_id()));
     let flick_on = app.session.prefs().tools.enable_flick_panning;
     if let Some(d) = crate::flick_pan::frame(&ctx, flick_id, hand_pan && response.dragged() && !stroke_dismissal, response.drag_delta(), flick_on) {
         let d = xf.unmap_vec(d) / (view.zoom / ppp);
@@ -4186,7 +4194,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     } else if primary && !stroke_dismissal {
         let mods = ui.input(|i| i.modifiers);
         // An ⌥-click the window manager took never arrives; say so (alt_grab.rs).
-        crate::alt_grab::watch(app, &ctx, egui::Id::new(("pc-alt-grab", idx)), rect, tool, !under_dialog);
+        crate::alt_grab::watch(app, &ctx, egui::Id::unique(("pc-alt-grab", idx)), rect, tool, !under_dialog);
         // Tools follow the left button; the right one opens the Brush Preset picker or erases
         // (Preferences › Tools, `paint_mouse`).
         crate::paint_mouse::sync_tool_brush(app);
@@ -4200,7 +4208,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         // Type transforms keep Command; selections keep Add/Subtract if Shift/Alt is released.
         let capture_press = tool.is_type()
             || matches!(tool, Tool::RectMarquee | Tool::EllipseMarquee | Tool::SingleRowMarquee | Tool::SingleColumnMarquee | Tool::ObjectSelection);
-        let tool_press = egui::Id::new(("tool-pointer-press-modifiers", idx));
+        let tool_press = egui::Id::unique(("tool-pointer-press-modifiers", idx));
         if capture_press
             && let Some((p, press_mods)) = ui.input(|i| {
                 i.events.iter().find_map(|e| match e {
@@ -4911,7 +4919,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     let t0 = crate::gpu_canvas::now_ms();
     let before = view.center;
     let over_bars = app.ui.view.shows_scrollbars()
-        && crate::scrollbars::show(ui, rect, &mut view, flip, aspect, app.session.prefs().tools.overscroll, egui::Id::new(("pc-canvas", idx)));
+        && crate::scrollbars::show(ui, rect, &mut view, flip, aspect, app.session.prefs().tools.overscroll, egui::Id::unique(("pc-canvas", idx)));
     ctx.data_mut(|d| d.insert_temp(bars_id, over_bars));
     if view.center != before {
         ctx.request_repaint();
@@ -5006,7 +5014,7 @@ fn paint_gpu_view(painter: &egui::Painter, rect: Rect, params: crate::gpu_canvas
             offset: crate::pattern_preview::offset(c, params.doc_size),
             shadow: false,
             // Keyed by slot, not by tile index, so panning reuses the same few uniform buffers.
-            view_key: egui::Id::new((params.view_key, "pattern", k)).value(),
+            view_key: egui::Id::unique((params.view_key, "pattern", k)).value(),
             ..params
         };
         crate::gpu_canvas::GpuCanvas::paint(painter, rect, copy);
@@ -5310,7 +5318,7 @@ fn ring(outer: DRect, inner: DRect) -> Vec<DRect> {
 fn draw_beyond_canvas(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &ViewXform, idx: usize, output: Option<u32>) -> bool {
     let ctx = painter.ctx().clone();
     let Some((snapshot, id)) = app.session.documents().get(idx).map(|st| (std::sync::Arc::downgrade(&st.doc), st.doc.id)) else { return false };
-    let key = egui::Id::new(("crop-beyond-canvas", id.0, output));
+    let key = egui::Id::unique(("crop-beyond-canvas", id.0, output));
     let frame =
         app.ui.crop_rect.filter(|f| f.iter().all(|v| v.is_finite()) && app.session.active_index() == Some(idx) && crate::crop_ui::shows_beyond_canvas(app));
     let Some(f) = frame else {
@@ -8099,7 +8107,7 @@ mod tests {
         let revision = app.session.active().unwrap().revision;
         let mut output = ctx.run_ui(Default::default(), |ui| {
             let ctx = ui.ctx();
-            let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("clone-test")));
+            let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("clone-test")));
             draw_clone_preview(&mut app, &painter, &xf, [32.0, 32.0], None);
         });
         output.textures_delta.clear();
@@ -8119,7 +8127,7 @@ mod tests {
         let ordinary_key = app.clone_preview.as_ref().unwrap().key.clone();
         app.ui.view.pattern_preview = true;
         let mut periodic_output = ctx.run_ui(Default::default(), |ui| {
-            let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("clone-test")));
+            let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("clone-test")));
             draw_clone_preview(&mut app, &painter, &xf, [32.0, 32.0], None);
         });
         assert_ne!(app.clone_preview.as_ref().unwrap().key, ordinary_key, "toggling Pattern Preview invalidates source pixels");
@@ -8129,7 +8137,7 @@ mod tests {
         app.session.presets.clone.overlay.show = false;
         let mut output = ctx.run_ui(Default::default(), |ui| {
             let ctx = ui.ctx();
-            let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("clone-test")));
+            let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("clone-test")));
             draw_clone_preview(&mut app, &painter, &xf, [32.0, 32.0], None);
         });
         output.textures_delta.clear();
@@ -8173,7 +8181,7 @@ mod tests {
         let mut centre = |mode: &str| {
             app.run("cloneSource.overlay", json!({"blend": mode})).unwrap();
             let mut output = ctx.run_ui(Default::default(), |ui| {
-                let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("clone-test")));
+                let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("clone-test")));
                 draw_clone_preview(&mut app, &painter, &xf, [32.0, 32.0], None);
             });
             // The brush's 20 × 20 px square (the font atlas may upload too).
@@ -8204,7 +8212,7 @@ mod tests {
         let xf =
             ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(100.0, 100.0)), zoom: 1.0, center: [32.0, 32.0], flip: false, rotation: 0.0, aspect: 1.0 };
         let mut output = ctx.run_ui(Default::default(), |ui| {
-            let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("clone-test")));
+            let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("clone-test")));
             draw_clone_preview(&mut app, &painter, &xf, [32.0, 32.0], None);
         });
         let image = output

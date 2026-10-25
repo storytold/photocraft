@@ -12,15 +12,15 @@
 use egui::{Context, Id, Key, Modifiers};
 
 fn list_id() -> Id {
-    Id::new("pc-field-tab-order")
+    Id::unique("pc-field-tab-order")
 }
 
 fn collecting_id() -> Id {
-    Id::new("pc-field-tab-collecting")
+    Id::unique("pc-field-tab-collecting")
 }
 
 fn pending_id() -> Id {
-    Id::new("pc-field-tab-pending")
+    Id::unique("pc-field-tab-pending")
 }
 
 /// Give `id` the focus from the next frame on. Focusing a widget after it was laid out would

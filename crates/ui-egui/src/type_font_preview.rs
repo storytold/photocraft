@@ -29,8 +29,8 @@ pub struct TypeFontPreview {
 }
 
 pub(crate) fn follow_hover(app: &mut PhotocraftApp, ctx: &egui::Context) {
-    let hover_id = egui::Id::new("type-font-hover");
-    let since_id = egui::Id::new("type-font-hover-since");
+    let hover_id = egui::Id::unique("type-font-hover");
+    let since_id = egui::Id::unique("type-font-hover-since");
     let family = ctx.data_mut(|d| {
         let family = d.get_temp::<String>(hover_id);
         d.remove::<String>(hover_id);
@@ -170,7 +170,7 @@ mod tests {
     fn frame(app: &mut PhotocraftApp, ctx: &egui::Context, family: Option<&str>, time: f64) {
         let mut out = ctx.run_ui(egui::RawInput { time: Some(time), ..Default::default() }, |ui| {
             if let Some(f) = family {
-                ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("type-font-hover"), f.to_string()));
+                ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique("type-font-hover"), f.to_string()));
             }
             follow_hover(app, ui.ctx());
         });
