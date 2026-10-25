@@ -820,7 +820,8 @@ pub fn exposure_eyedropper(base: &Value, picker: CurvesEyedropper, sample: [f32;
     let Adjustment::Exposure { exposure, offset, .. } = &mut adjustment else {
         return Err(bad(CMD, "expected an Exposure adjustment"));
     };
-    let sample = sample.map(|v| v.clamp(0.0, 1.0));
+    // Not clamped to 1: a 32-bit sample keeps its HDR value, which Exposure maps unclipped.
+    let sample = sample.map(|v| v.max(0.0));
     let v = if mode == ColorMode::Grayscale { (sample[0] + sample[1] + sample[2]) / 3.0 } else { rgb_luma(sample) };
     let target = match picker {
         CurvesEyedropper::Black => {
@@ -830,10 +831,13 @@ pub fn exposure_eyedropper(base: &Value, picker: CurvesEyedropper, sample: [f32;
         CurvesEyedropper::NeutralGray => 0.18,
         CurvesEyedropper::White => 1.0,
     };
-    if v < 1.0 / 4096.0 {
+    if v <= 0.0 {
         return Err(bad(CMD, "the sample is black: no exposure brings it up"));
     }
-    let stops = ((target - *offset).max(1e-6) / v).log2();
+    if target - *offset <= 0.0 {
+        return Err(bad(CMD, "the Offset already lifts every sample past the target: no exposure brings it down"));
+    }
+    let stops = ((target - *offset) / v).log2();
     *exposure = if stops.is_finite() { stops.clamp(-20.0, 20.0) } else { *exposure };
     Ok(adjustment)
 }
