@@ -246,9 +246,10 @@ pub(super) fn hue_saturation(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) ->
             which = hue_range_handle_at(b.map(xof), pos.x, w);
             zone = if which.is_none() { hue_range_zone(b, deg_of(pos.x)).map(|z| (z, b, pos.x)) } else { None };
         }
-        if bresp.is_pointer_button_down_on()
-            && let (Some((z, start, x0)), Some(pos)) = (zone, ui.input(|i| i.pointer.interact_pos()))
-        {
+        // The release frame applies its position too: a move and a release that land in one frame
+        // would otherwise commit the bounds from before the move.
+        let live = bresp.is_pointer_button_down_on() || ui.input(|i| i.pointer.primary_released());
+        if live && let (Some((z, start, x0)), Some(pos)) = (zone, ui.input(|i| i.pointer.interact_pos())) {
             let before = b;
             b = move_hue_range_zone(start, z, (pos.x - x0) / w * 360.0);
             if b != before {
@@ -261,9 +262,7 @@ pub(super) fn hue_saturation(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) ->
             e.commit = true;
         }
         ui.data_mut(|d| d.insert_temp(zone_id, zone));
-        if bresp.is_pointer_button_down_on()
-            && let (Some(k), Some(pos)) = (which, ui.input(|i| i.pointer.interact_pos()))
-        {
+        if live && let (Some(k), Some(pos)) = (which, ui.input(|i| i.pointer.interact_pos())) {
             let k = k as usize;
             let deg = deg_of(pos.x);
             let before = b;
