@@ -990,8 +990,12 @@ fn hue_eyedropper_op(e: &Value) -> Result<(HueEyedropper, usize)> {
 /// Subtract shrinks it to 15° past it ([`photocraft_doc::adjust::HueRange`]). A gray has no hue.
 pub fn hue_saturation_eyedropper(base: &Value, range: usize, op: HueEyedropper, sample: [f32; 3], mode: ColorMode) -> Result<Adjustment> {
     const CMD: &str = "hue/saturation eyedropper";
-    if mode == ColorMode::Grayscale {
+    // Duotone and Bitmap store gray pixels too, which no hue range can reach.
+    if matches!(mode, ColorMode::Grayscale | ColorMode::Duotone | ColorMode::Bitmap) {
         return Err(bad(CMD, "Hue/Saturation's colour ranges need a colour document"));
+    }
+    if sample.iter().any(|v| !v.is_finite()) {
+        return Err(bad(CMD, "sample components must be finite"));
     }
     let mut adjustment = from_params("hueSaturation", base, None, mode)?;
     let Adjustment::HueSaturation { colorize, ranges, .. } = &mut adjustment else {
@@ -1000,7 +1004,7 @@ pub fn hue_saturation_eyedropper(base: &Value, range: usize, op: HueEyedropper, 
     if *colorize {
         return Err(bad(CMD, "the colour ranges don't apply while Colorize is on"));
     }
-    let [r, g, b] = sample.map(|v| if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 });
+    let [r, g, b] = sample.map(|v| v.clamp(0.0, 1.0));
     let (mx, mn) = (r.max(g).max(b), r.min(g).min(b));
     if mx - mn < 1.0 / 255.0 {
         return Err(bad(CMD, "the sampled colour is a gray: it has no hue"));
