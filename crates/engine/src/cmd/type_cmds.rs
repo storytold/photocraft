@@ -16,15 +16,11 @@ use photocraft_doc::text::{
 use photocraft_doc::{Affine, Document, Layer, LayerContent, LayerId, TextLayer};
 use serde_json::{Value, json};
 
-use crate::commands::CommandSpec;
+use crate::commands::{CommandSpec, layer_param};
 use crate::{EngineError, Result, Session};
 
 fn has_doc(s: &Session) -> std::result::Result<(), String> {
     s.active().map(|_| ()).ok_or_else(|| "no document open".into())
-}
-
-fn layer_id(s: &Session, p: &Value) -> Result<LayerId> {
-    crate::commands::layer_param(s, p)
 }
 
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
@@ -59,7 +55,7 @@ pub(crate) fn norm_text(s: &str) -> String {
     s.replace("\r\n", "\n").replace('\r', "\n")
 }
 
-fn byte_at(text: &str, ci: usize) -> usize {
+pub(crate) fn byte_at(text: &str, ci: usize) -> usize {
     text.char_indices().nth(ci).map_or(text.len(), |(b, _)| b)
 }
 
@@ -68,7 +64,7 @@ fn char_at(text: &str, bi: usize) -> usize {
 }
 
 /// `range: [start, end]` in characters → byte range (whole text when absent).
-fn range_param(text: &str, p: &Value) -> (usize, usize) {
+pub(crate) fn range_param(text: &str, p: &Value) -> (usize, usize) {
     match p.get("range").and_then(Value::as_array) {
         Some(r) if r.len() == 2 => {
             let a = r[0].as_u64().unwrap_or(0) as usize;
@@ -669,7 +665,7 @@ pub(crate) fn check_text_unlocked(doc: &Document, id: LayerId) -> Result<()> {
 /// `name`), which is applied in the same step; otherwise an auto-named layer follows its text.
 /// `f` gets the document's resolution (dpi).
 fn with_text_layer<R>(s: &mut Session, p: &Value, label: &str, f: impl FnOnce(&mut TextLayer, f32, &mut Option<String>) -> Result<R>) -> Result<R> {
-    let id = layer_id(s, p)?;
+    let id = layer_param(s, p)?;
     check_text_unlocked(&s.active().ok_or(EngineError::NoDocument)?.doc, id)?;
     let typed = typed_name(s, id);
     let mut named = None;
@@ -711,7 +707,7 @@ pub(crate) fn format_targets(s: &Session, p: &Value) -> Result<Vec<LayerId>> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let single = p.get("layer").is_some() || (p.get("range").is_some() && p.get("layers").is_none());
     let ids = if single {
-        vec![layer_id(s, p)?]
+        vec![layer_param(s, p)?]
     } else if let Some(value) = p.get("layers") {
         value
             .as_array()
@@ -835,7 +831,7 @@ pub fn layer_name(text: &str) -> String {
 }
 
 fn info(s: &Session, p: &Value) -> Result<Value> {
-    let id = layer_id(s, p)?;
+    let id = layer_param(s, p)?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let l = d.doc.layer(id).ok_or(EngineError::NoLayer(id))?;
     let LayerContent::Text(t) = &l.content else {
@@ -982,7 +978,7 @@ pub fn specs() -> Vec<CommandSpec> {
             enabled: has_doc,
             journal: true,
             run: |s, p| {
-                let id = layer_id(s, p)?;
+                let id = layer_param(s, p)?;
                 let name = p.get("name").and_then(Value::as_str).map(str::to_string);
                 check_kerning(p).map_err(|m| bad("type.edit", m))?;
                 check_size_tracking(p).map_err(|m| bad("type.edit", m))?;
@@ -1141,7 +1137,7 @@ pub fn specs() -> Vec<CommandSpec> {
             enabled: has_doc,
             journal: true,
             run: |s, p| {
-                let id = layer_id(s, p)?;
+                let id = layer_param(s, p)?;
                 s.edit("Rasterize Type", |doc, _| {
                     let (dpi, format) = (doc.resolution_dpi, doc.pixel_format());
                     let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
@@ -1196,7 +1192,7 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
-fn has_type_layer(s: &Session) -> std::result::Result<(), String> {
+pub(crate) fn has_type_layer(s: &Session) -> std::result::Result<(), String> {
     let st = s.active().ok_or("no document open")?;
     match st.active_layer.and_then(|id| st.doc.layer(id)) {
         Some(l) if matches!(l.content, LayerContent::Text(_)) => Ok(()),
@@ -1221,7 +1217,7 @@ fn size_key(id: &'static str, label: &'static str, shortcut: &'static str, run: 
 /// Grows or shrinks every character in the range by `by` points as the layer appears, so mixed
 /// sizes keep their differences and a scaled layer steps in the points its size field shows.
 fn step_size(s: &mut Session, p: &Value, up: bool, default_by: f32) -> Result<Value> {
-    let id = layer_id(s, p)?;
+    let id = layer_param(s, p)?;
     let by = f32p(p, "by").filter(|v| v.is_finite()).unwrap_or(default_by).abs().min(TYPE_SIZE_MAX_PT as f32);
     with_text_layer(s, p, "Change Type Size", |t, _, _| {
         let m = t.transform.m;

@@ -752,7 +752,7 @@ fn group_index(d: &Document, p: &Value) -> Option<usize> {
     (i < d.measurement.count_groups.len()).then_some(i)
 }
 
-fn color_of(cmd: &str, p: &Value, key: &str) -> Result<Option<Color>> {
+pub(crate) fn color_of(cmd: &str, p: &Value, key: &str) -> Result<Option<Color>> {
     if p.get(key).is_none() {
         return Ok(None);
     }

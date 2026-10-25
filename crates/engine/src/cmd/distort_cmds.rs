@@ -18,12 +18,12 @@ use photocraft_algo::puppet::{PuppetDensity, PuppetMode, PuppetPin, PuppetWarp, 
 use photocraft_algo::transform::Interp;
 use photocraft_algo::warp::{warp_mesh_gray, warp_mesh_surface};
 use photocraft_color::PixelFormat;
-use photocraft_doc::{Document, Layer, LayerContent, LayerId, Locks, SmartFilter};
+use photocraft_doc::{Document, Layer, LayerContent, Locks, SmartFilter};
 use photocraft_geom::Rect;
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
 
-use crate::commands::CommandSpec;
+use crate::commands::{CommandSpec, layer_param};
 use crate::photo_cmds::Stopwatch;
 use crate::{EngineError, Result, Session};
 
@@ -190,10 +190,6 @@ pub fn apply_to_surface(id: &str, params: &Value, surf: &Surface, canvas: Rect) 
 
 // ---------- commands ----------
 
-fn target(s: &Session, p: &Value) -> Result<LayerId> {
-    crate::commands::layer_param(s, p)
-}
-
 fn pixel_layer(s: &Session) -> std::result::Result<(), String> {
     let d = s.active().ok_or("no document open")?;
     let id = d.active_layer.ok_or("no active layer")?;
@@ -228,7 +224,7 @@ type MaskFn<'a> = Option<&'a dyn Fn(&Surface, Option<&Surface>) -> Result<Surfac
 type LayerFn<'a> = &'a dyn Fn(&Surface, Option<&Surface>, Rect) -> Result<Surface>;
 
 fn run_on_layer(s: &mut Session, cmd: &str, label: &str, p: &Value, moves: bool, f: LayerFn, mask: MaskFn) -> Result<Value> {
-    let id = target(s, p)?;
+    let id = layer_param(s, p)?;
     let colors = crate::color_channels::target(s, p)?.is_some();
     let mut params = p.clone();
     if let Value::Object(m) = &mut params {
@@ -270,7 +266,7 @@ fn run_on_layer(s: &mut Session, cmd: &str, label: &str, p: &Value, moves: bool,
 fn liquify(s: &mut Session, p: &Value) -> Result<Value> {
     let canvas = s.active().ok_or(EngineError::NoDocument)?.doc.bounds();
     let (strokes, cell) = liquify_params(LIQUIFY, p, canvas)?;
-    let id = target(s, p)?;
+    let id = layer_param(s, p)?;
     if strokes.is_empty() {
         return Ok(json!({"layer": id.0, "changed": false}));
     }
@@ -322,7 +318,7 @@ fn deform_selected(surf: &Surface, sel: Option<&Surface>, f: &dyn Fn(&Surface) -
 
 fn puppet(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
     let w = puppet_params(cmd, p)?;
-    let id = target(s, p)?;
+    let id = layer_param(s, p)?;
     let smart = matches!(s.active().and_then(|d| d.doc.layer(id)).map(|l| &l.content), Some(LayerContent::Smart(_)));
     if w.is_identity() && !smart {
         return Ok(json!({"layer": id.0, "changed": false}));
@@ -350,7 +346,7 @@ fn puppet(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
 
 fn perspective(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
     let planes = perspective_params(cmd, p)?;
-    let id = target(s, p)?;
+    let id = layer_param(s, p)?;
     let smart = matches!(s.active().and_then(|d| d.doc.layer(id)).map(|l| &l.content), Some(LayerContent::Smart(_)));
     if PerspectiveMap::is_identity(&planes) && !smart {
         return Ok(json!({"layer": id.0, "changed": false, "planes": planes}));

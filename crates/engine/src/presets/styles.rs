@@ -299,17 +299,9 @@ fn edit(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn reset(s: &mut Session, p: &Value) -> Result<Value> {
-    let mut b = builtin();
-    if p.get("append").and_then(Value::as_bool).unwrap_or(false) {
-        for g in &mut b {
-            g.name = super::gradients::unique_group(&s.presets.styles, &g.name);
-        }
-        s.presets.styles.extend(b);
-    } else {
-        s.presets.styles = b;
-    }
+    let r = super::gradients::reset_groups(&mut s.presets.styles, builtin(), p);
     s.presets_changed();
-    Ok(json!({"groups": s.presets.styles.len()}))
+    Ok(r)
 }
 
 /// Swatch for the Styles panel: the style on a rounded square, `size`² RGBA8 (straight alpha,
