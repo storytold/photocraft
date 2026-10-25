@@ -273,3 +273,65 @@ fn undo_in_a_resumed_draft_stops_at_the_paths_own_anchors() {
     assert!(app.ui.direct_selection.anchors.is_empty());
     assert_eq!(work_path(&app), before, "the path is as it was");
 }
+
+/// #9356: in Shape mode a Pen press on an endpoint of the selected shape layer's open path carries
+/// that path on, from either end, and the commit updates the same layer in one History step
+/// instead of making a new shape layer. Elsewhere the press starts a new shape as before.
+#[test]
+fn shape_mode_carries_on_the_selected_shapes_open_path() {
+    let mut app = app(Tool::Pen);
+    app.ui.tool_options.vector_mode = "shape".into();
+    let layers = |app: &PhotocraftApp| app.session.active().unwrap().doc.layers.len();
+    let shape = |app: &PhotocraftApp| {
+        let st = app.session.active().unwrap();
+        match &st.doc.layer(st.active_layer.unwrap()).unwrap().content {
+            LayerContent::Shape(sh) => {
+                sh.path.subpaths.iter().map(|s| s.knots.iter().map(|k| [k.anchor.x, k.anchor.y]).collect::<Vec<_>>()).collect::<Vec<_>>()
+            }
+            other => panic!("not a shape layer: {other:?}"),
+        }
+    };
+    let steps = |app: &PhotocraftApp| app.session.active().unwrap().history.past_len();
+    click(&mut app, 20.0, 20.0);
+    click(&mut app, 80.0, 20.0);
+    crate::vector_ui::pen_commit(&mut app, false);
+    let (n, before) = (layers(&app), steps(&app));
+    assert!(crate::vector_ui::continues_path_at(&app, Tool::Pen, 81.0, 21.0), "the continue pointer over the endpoint");
+    assert!(!crate::vector_ui::continues_path_at(&app, Tool::Pen, 50.0, 20.0), "not mid-segment");
+    click(&mut app, 80.0, 20.0);
+    click(&mut app, 80.0, 80.0);
+    crate::vector_ui::pen_commit(&mut app, false);
+    assert_eq!(layers(&app), n, "no new shape layer");
+    assert_eq!(steps(&app), before + 1, "one History step");
+    assert_eq!(shape(&app), [vec![[20.0, 20.0], [80.0, 20.0], [80.0, 80.0]]]);
+    // From the first anchor, reversed.
+    click(&mut app, 20.0, 20.0);
+    click(&mut app, 20.0, 80.0);
+    crate::vector_ui::pen_commit(&mut app, false);
+    assert_eq!(shape(&app), [vec![[80.0, 80.0], [80.0, 20.0], [20.0, 20.0], [20.0, 80.0]]]);
+    // Anywhere else: a new shape layer.
+    click(&mut app, 150.0, 150.0);
+    click(&mut app, 200.0, 150.0);
+    crate::vector_ui::pen_commit(&mut app, false);
+    assert_eq!(layers(&app), n + 1);
+}
+
+/// #9356: with a vector mask targeted, the Pen carries on the mask's open subpath in place.
+#[test]
+fn a_targeted_vector_mask_carries_on_its_open_path() {
+    let mut app = app(Tool::Pen);
+    let id = app.session.active().unwrap().active_layer.unwrap();
+    let open = json!({"subpaths": [{"closed": false, "knots": [{"anchor": [20.0, 20.0]}, {"anchor": [80.0, 20.0]}]}]});
+    app.run("layer.vectorMask.add", json!({"layer": id.0, "path": open})).unwrap();
+    app.ui.vector_mask_target = true;
+    let mask = |app: &PhotocraftApp| {
+        let st = app.session.active().unwrap();
+        let p = &st.doc.layer(id).unwrap().vector_mask.as_ref().unwrap().path;
+        p.subpaths.iter().map(|s| s.knots.len()).collect::<Vec<_>>()
+    };
+    assert_eq!(mask(&app), [2]);
+    click(&mut app, 80.0, 20.0);
+    click(&mut app, 80.0, 80.0);
+    crate::vector_ui::pen_commit(&mut app, false);
+    assert_eq!(mask(&app), [3], "the same subpath, extended");
+}

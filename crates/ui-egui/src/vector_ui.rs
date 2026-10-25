@@ -52,6 +52,10 @@ pub struct Resumed {
     pub path: String,
     pub index: usize,
     pub was: photocraft_doc::vector::Subpath,
+    /// The layer whose shape path (Shape mode) or targeted vector mask the subpath is in (#9356);
+    /// `None` for the Paths panel's path `path`.
+    #[serde(default)]
+    pub layer: Option<u64>,
 }
 
 impl PenPath {
@@ -235,6 +239,12 @@ pub fn closes_path_at(app: &PhotocraftApp, tool: Tool, x: f64, y: f64) -> bool {
         Tool::CurvaturePen => pen.curvature && pen.knots.len() >= 3 && curvature_hit(app, x, y) == Some(0),
         _ => false,
     }
+}
+
+/// Would a Pen click at `(x, y)` carry on an open path from its endpoint there (#6593)? The canvas
+/// shows Photoshop's continue-path pointer there (#9356), as the endpoints look like any anchor.
+pub fn continues_path_at(app: &PhotocraftApp, tool: Tool, x: f64, y: f64) -> bool {
+    tool == Tool::Pen && app.ui.pen.as_ref().is_none_or(|p| p.knots.is_empty()) && resume_at(app, x, y, 6.0 / app.point_zoom().max(0.01) as f64).is_some()
 }
 
 /// Pen press: close on the first anchor, reshape the last anchor's outgoing handle,
@@ -546,7 +556,12 @@ fn commit_path(app: &mut PhotocraftApp, pen: &PenPath, closed: bool) {
         return;
     }
     let path = pen_to_json(pen, closed);
-    let r = if app.ui.tool_options.vector_mode == "shape" {
+    let resumed = pen.resumes.as_ref().and_then(|r| app.session.active().and_then(|st| with_resumed_subpath(&st.doc, r, &path)).map(|p| (r, p)));
+    let r = if let Some((Resumed { layer: Some(id), .. }, p)) = &resumed {
+        // A shape layer's path or a vector mask carried on (#9356): the same layer, one step.
+        let shape = app.session.active().and_then(|st| st.doc.layer(photocraft_doc::LayerId(*id))).is_some_and(|l| matches!(l.content, LayerContent::Shape(_)));
+        app.run(if shape { "shape.edit" } else { "layer.vectorMask.edit" }, json!({"layer": id, "path": p}))
+    } else if app.ui.tool_options.vector_mode == "shape" {
         let fill = if closed { fill_param(app) } else { Value::Null };
         let stroke = if closed {
             stroke_param(app)
@@ -557,10 +572,9 @@ fn commit_path(app: &mut PhotocraftApp, pen: &PenPath, closed: bool) {
             stroke
         };
         app.run("shape.create", json!({"kind": "path", "path": path, "fill": fill, "stroke": stroke}))
-    } else if let Some((name, p)) =
-        pen.resumes.as_ref().and_then(|r| app.session.active().and_then(|st| with_resumed_subpath(&st.doc, r, &path)).map(|p| (r.path.clone(), p)))
-    {
+    } else if let Some((r, p)) = resumed {
         // The resumed subpath, carried on, takes its old place: one step, no second subpath.
+        let name = r.path.clone();
         app.run("path.set", json!({"name": name, "path": p})).inspect(|_| app.ui.selected_path = Some(name))
     } else if let Some((id, existing)) = targeted_vector_mask(app) {
         // A targeted vector mask takes the new subpath (#196), as in Photoshop.
@@ -576,7 +590,8 @@ fn commit_path(app: &mut PhotocraftApp, pen: &PenPath, closed: bool) {
         // A resumed draft whose subpath changed meanwhile joins the path it came from, as a new
         // subpath, even with nothing selected in the Paths panel.
         let exists = |n: &String| app.session.active().is_some_and(|st| path_exists(&st.doc, n));
-        let resumed_from = pen.resumes.as_ref().filter(|r| app.session.active().is_some_and(|st| st.doc.id.0 == r.doc)).map(|r| r.path.clone());
+        let resumed_from =
+            pen.resumes.as_ref().filter(|r| r.layer.is_none() && app.session.active().is_some_and(|st| st.doc.id.0 == r.doc)).map(|r| r.path.clone());
         let target = resumed_from.filter(exists).or_else(|| app.ui.selected_path.clone().filter(exists));
         let name = target.clone().unwrap_or_else(|| "work".into());
         let mut params = json!({"name": name, "path": path});
@@ -601,19 +616,44 @@ fn doc_path<'a>(doc: &'a Document, name: &str) -> Option<&'a Path> {
     if name == "work" { doc.work_path.as_ref() } else { doc.paths.iter().find(|p| p.name == name).map(|p| &p.path) }
 }
 
-/// The open subpath of the path a new Pen path would join (the one selected in the Paths panel,
-/// else the work path) that has its first or last anchor at `(x, y)`, as a Pen path to carry on
-/// drawing from there (#6593). Its knots run towards that anchor: reversed, handles swapped, when
-/// it is the first. Shape mode and a targeted vector mask take new paths, so they resume nothing.
-fn resume_at(app: &PhotocraftApp, x: f64, y: f64, tol: f64) -> Option<PenPath> {
-    if app.ui.tool_options.vector_mode == "shape" || targeted_vector_mask(app).is_some() {
-        return None;
+/// The path of `layer` that the Pen draws into: a shape layer's own path, else its vector mask.
+fn layer_path(doc: &Document, layer: u64) -> Option<&Path> {
+    let l = doc.layer(photocraft_doc::LayerId(layer))?;
+    match &l.content {
+        LayerContent::Shape(sh) => Some(&sh.path),
+        _ => l.vector_mask.as_ref().map(|m| &m.path),
     }
+}
+
+/// The path a resumed subpath is in, if it is still in `r`'s document.
+fn resumed_path<'a>(doc: &'a Document, r: &Resumed) -> Option<&'a Path> {
+    (doc.id.0 == r.doc).then_some(())?;
+    match r.layer {
+        Some(id) => layer_path(doc, id),
+        None => doc_path(doc, &r.path),
+    }
+}
+
+/// The open subpath of the path a new Pen path would go into that has its first or last anchor at
+/// `(x, y)`, as a Pen path to carry on drawing from there (#6593). That path is the selected shape
+/// layer's in Shape mode, the targeted vector mask's (#9356), else the one selected in the Paths
+/// panel or the work path. Its knots run towards that anchor: reversed, handles swapped, when it is
+/// the first.
+fn resume_at(app: &PhotocraftApp, x: f64, y: f64, tol: f64) -> Option<PenPath> {
     let st = app.session.active()?;
     let doc = st.doc.id.0;
-    let name = app.ui.selected_path.clone().filter(|n| path_exists(&st.doc, n)).unwrap_or_else(|| "work".into());
+    let (name, layer, path) = if app.ui.tool_options.vector_mode == "shape" {
+        let (id, _) = active_shape_path(app)?;
+        ("layer".to_string(), Some(id), layer_path(&st.doc, id)?)
+    } else if let Some((id, _)) = targeted_vector_mask(app) {
+        ("layer".to_string(), Some(id), layer_path(&st.doc, id)?)
+    } else {
+        let name = app.ui.selected_path.clone().filter(|n| path_exists(&st.doc, n)).unwrap_or_else(|| "work".into());
+        let path = doc_path(&st.doc, &name)?;
+        (name, None, path)
+    };
     let near = |k: &photocraft_doc::Knot| (k.anchor.x - x).hypot(k.anchor.y - y) < tol;
-    doc_path(&st.doc, &name)?.subpaths.iter().enumerate().filter(|(_, s)| !s.closed).find_map(|(i, s)| {
+    path.subpaths.iter().enumerate().filter(|(_, s)| !s.closed).find_map(|(i, s)| {
         let reversed = if s.knots.last().is_some_and(near) {
             false
         } else if s.knots.first().is_some_and(near) {
@@ -629,7 +669,7 @@ fn resume_at(app: &PhotocraftApp, x: f64, y: f64, tol: f64) -> Option<PenPath> {
             }
         }
         let unlinked = knots.iter().enumerate().filter(|(_, (_, smooth))| !smooth).map(|(i, _)| i).collect();
-        let resumes = Resumed { doc, path: name.clone(), index: i, was: s.clone() };
+        let resumes = Resumed { doc, path: name.clone(), index: i, was: s.clone(), layer };
         Some(PenPath { knots: knots.into_iter().map(|(k, _)| k).collect(), unlinked, resumes: Some(resumes), ..Default::default() })
     })
 }
@@ -638,7 +678,7 @@ fn resume_at(app: &PhotocraftApp, x: f64, y: f64, tol: f64) -> Option<PenPath> {
 /// anchors and closing, which keeps its other settings (its path operation). `None` when the
 /// subpath is no longer the one drawing resumed (another document, or the path changed).
 fn with_resumed_subpath(doc: &Document, r: &Resumed, drawn: &Value) -> Option<Value> {
-    let path = doc_path(doc, &r.path).filter(|_| doc.id.0 == r.doc)?;
+    let path = resumed_path(doc, r)?;
     if path.subpaths.get(r.index) != Some(&r.was) {
         return None;
     }

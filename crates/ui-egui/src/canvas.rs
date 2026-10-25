@@ -4843,6 +4843,15 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                 {
                     crate::tool_cursor::close_path(&painter, p)
                 }
+                // Over an endpoint of an open path, the continue-path pointer (#9356).
+                Tool::Pen
+                    if {
+                        let [x, y] = xf.to_doc(p);
+                        crate::vector_ui::continues_path_at(app, tool, x, y)
+                    } =>
+                {
+                    crate::tool_cursor::continue_path(&painter, p)
+                }
                 // The pen tools: their own icon with its nib on the point, or the crosshair for
                 // precise Other Cursors (#4639).
                 Tool::Pen | Tool::FreeformPen | Tool::CurvaturePen | Tool::AddAnchorPoint | Tool::DeleteAnchorPoint | Tool::ConvertPoint => {

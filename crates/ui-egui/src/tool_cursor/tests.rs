@@ -599,3 +599,16 @@ fn type_path_cursors_are_small_and_centred() {
         }
     }
 }
+
+/// #9356: the continue-path pointer is the centre cross with a slash below right.
+#[test]
+fn continue_path_bitmap_has_the_centre_cross_and_a_slash_beside_it() {
+    for scale in [1.0, 2.0] {
+        let image = rasterize(&Shape::Outline { rings: vec![continue_slash()].into(), centre: true }, scale).unwrap();
+        let [x, y] = image.hotspot;
+        let at = |dx: f32, dy: f32| alpha(&image, x + (dx * scale) as u16, y + (dy * scale) as u16);
+        assert!(at(0.0, 0.0) > 230, "the centre cross");
+        assert!(at(9.5, 9.5) > 0, "the slash");
+        assert_eq!(at(0.0, 9.0), 0, "apart from the cross");
+    }
+}
