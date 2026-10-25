@@ -333,11 +333,14 @@ pub struct ImportOptions {
     pub max_group_depth: usize,
     /// The demosaic method camera raws are developed with.
     pub demosaic: raw::Demosaic,
+    /// Keep a developed raw's sensor data for its open-time Camera Raw dialog
+    /// ([`raw::take_kept_decode`]) instead of decoding the file again there.
+    pub keep_raw: bool,
 }
 
 impl Default for ImportOptions {
     fn default() -> Self {
-        ImportOptions { max_group_depth: photocraft_doc::MAX_GROUP_DEPTH, demosaic: raw::Demosaic::default() }
+        ImportOptions { max_group_depth: photocraft_doc::MAX_GROUP_DEPTH, demosaic: raw::Demosaic::default(), keep_raw: false }
     }
 }
 
@@ -429,7 +432,7 @@ fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, o
         return pdn::import(name, bytes, ctl);
     }
     if raw::is_raw(bytes) {
-        return raw::import_raw_demosaic(name, bytes, opts.demosaic);
+        return if opts.keep_raw { raw::import_raw_demosaic_keeping(name, bytes, opts.demosaic) } else { raw::import_raw_demosaic(name, bytes, opts.demosaic) };
     }
     if is_svg_input(name, bytes) {
         return svg::import_svg_with_group_depth(name, bytes, opts.max_group_depth);

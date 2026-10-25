@@ -346,6 +346,9 @@ pub struct RawOpen {
     pub developed_with: photocraft_io::raw::Demosaic,
     /// The method chosen in the dialog: Open re-develops when it differs from `developed_with`.
     pub demosaic: photocraft_io::raw::Demosaic,
+    /// The file decoded once for the dialog's preview and for Open's re-develop (the sensor data
+    /// is 2 bytes per pixel): freed with the last copy of this, when the dialog closes.
+    pub decoded: Option<std::sync::Arc<photocraft_io::raw::RawDecode>>,
 }
 
 /// Should an interactive open of `name` show the open-time Camera Raw dialog? `warnings` are
@@ -368,7 +371,7 @@ pub fn queue_open_dialog(
     document: photocraft_doc::DocId,
     name: &str,
     path: Option<&str>,
-    bytes: Option<&[u8]>,
+    bytes: Option<&std::sync::Arc<Vec<u8>>>,
     warnings: &[String],
 ) -> Result<(), String> {
     if document_index(app, document).is_none() {
@@ -381,25 +384,31 @@ pub fn queue_open_dialog(
         document,
         name: name.to_string(),
         path: path.map(str::to_string),
-        bytes: bytes.map(|b| std::sync::Arc::new(b.to_vec())),
+        bytes: bytes.cloned(),
         developed_with: method,
         demosaic: method,
+        decoded: None,
     });
     Ok(())
 }
 
 /// Opens the queued open-time dialog on its document's (only) layer.
-fn open_raw(app: &mut PhotocraftApp, ctx: &egui::Context, raw: RawOpen) -> Result<(), String> {
+fn open_raw(app: &mut PhotocraftApp, ctx: &egui::Context, mut raw: RawOpen) -> Result<(), String> {
     let index = document_index(app, raw.document).ok_or("the raw document was closed")?;
     app.session.set_active(index);
     let (layer, surf, _) = crate::distort_ui::active_pixels(app)?;
     open_pixels(app, ctx, layer, surf, CameraRaw::default(), Coverage::None, Target::OpenRaw)?;
-    let curve = match (&raw.bytes, &raw.path) {
-        (Some(b), _) => Some(photocraft_io::raw::tone_curve(b)),
+    // The decode the open kept, else (a file opened before the dialog could keep it) one made now.
+    let file = match (&raw.bytes, &raw.path) {
+        (Some(b), _) => Some(std::borrow::Cow::Borrowed(b.as_slice())),
         #[cfg(not(target_arch = "wasm32"))]
-        (None, Some(p)) => std::fs::read(p).ok().map(|b| photocraft_io::raw::tone_curve(&b)),
+        (None, Some(p)) => std::fs::read(p).ok().map(std::borrow::Cow::Owned),
         _ => None,
     };
+    let decoded =
+        file.as_deref().and_then(|b| photocraft_io::raw::take_kept_decode(b).or_else(|| photocraft_io::raw::RawDecode::new(b).ok().map(std::sync::Arc::new)));
+    let curve = file.map(|_| decoded.as_ref().map(|d| d.tone_curve().to_vec()).unwrap_or_default());
+    raw.decoded = decoded;
     if let Some(d) = app.camera_raw.as_mut() {
         d.layer_name = raw.name.clone();
         // The full-size preview retones the whole frame with it, as Open will.
@@ -481,7 +490,7 @@ fn commit_open_raw(app: &mut PhotocraftApp, params: &CameraRaw, raw: &RawOpen) -
         return finish_open_raw(app, index, params.clone(), None, Some(raw));
     };
     app.session.set_active(index);
-    let (name, doc_id) = (raw.name.clone(), raw.document);
+    let (name, doc_id, decoded) = (raw.name.clone(), raw.document, raw.decoded.clone());
     let work = move |ctx: &photocraft_engine::jobs::JobCtx| -> photocraft_engine::Result<(photocraft_io::ImportResult, bool)> {
         ctx.progress(0.0, "Reading");
         let bytes = match source {
@@ -495,7 +504,11 @@ fn commit_open_raw(app: &mut PhotocraftApp, params: &CameraRaw, raw: &RawOpen) -
         };
         ctx.check()?;
         ctx.progress(0.05, "Developing");
-        photocraft_io::raw::import_raw_tuned(&name, &bytes, &tuning).map_err(|e| photocraft_engine::EngineError::Other(e.to_string()))
+        match &decoded {
+            Some(d) => photocraft_io::raw::import_raw_tuned_from(&name, &bytes, &tuning, d),
+            None => photocraft_io::raw::import_raw_tuned(&name, &bytes, &tuning),
+        }
+        .map_err(|e| photocraft_engine::EngineError::Other(e.to_string()))
     };
     let apply = move |s: &mut photocraft_engine::Session, (r, wb): (photocraft_io::ImportResult, bool)| replace_raw_document(s, doc_id, r, wb);
     let label = crate::i18n::fmt(tl!("Developing {name}"), &[("name", &raw.name)]);
@@ -1891,6 +1904,41 @@ mod tests {
         (0..32).flat_map(|y| (0..48).map(move |x| (x, y))).flat_map(|(x, y)| s.rgba(x, y)).collect()
     }
 
+    /// #9432: a raw open decodes the file once. The dialog's preview curve and Open's re-develop
+    /// reuse the open's sensor data and look, give the pixels of decoding again, and let go of
+    /// the sensor data when the dialog closes.
+    #[test]
+    fn a_raw_open_decodes_the_file_once_and_frees_it_with_the_dialog() {
+        use photocraft_io::raw::decodes_on_this_thread;
+        let ctx = egui::Context::default();
+        let develop = |reuse: bool, commit: bool| {
+            let (mut app, mut dng) = raw_app();
+            // Kept decodes are found by file contents: other tests open the same synthetic DNG.
+            dng.extend_from_slice(b"a_raw_open_decodes_the_file_once");
+            let before = decodes_on_this_thread();
+            app.open_bytes("IMG_0007.dng", &dng).unwrap();
+            let raw = app.pending_raw_open.take().unwrap();
+            open_raw(&mut app, &ctx, raw).unwrap();
+            let raw_open = app.camera_raw.as_mut().unwrap().raw_open.as_mut().unwrap();
+            let sensor = raw_open.decoded.as_ref().map(std::sync::Arc::downgrade).expect("the dialog holds the open's decode");
+            if !reuse {
+                raw_open.decoded = None;
+            }
+            assert!(sensor.upgrade().is_some() || !reuse);
+            let ui = if commit { json!({"set": {"exposure": 1.0, "temperature": 30}, "commit": true}) } else { json!({"cancel": true}) };
+            menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": ui})).unwrap().unwrap();
+            assert!(app.camera_raw.is_none());
+            assert!(sensor.upgrade().is_none(), "the sensor data is freed when the dialog is closed");
+            (decodes_on_this_thread() - before, if commit { pixels(&app) } else { Vec::new() })
+        };
+        let (decodes, reused) = develop(true, true);
+        assert_eq!(decodes, 1, "open, dialog and commit share one decode");
+        let (decodes, again) = develop(false, true);
+        assert_eq!(decodes, 2, "without the kept decode the commit decodes again");
+        assert_eq!(reused, again, "the same pixels either way");
+        assert_eq!(develop(true, false).0, 1, "Cancel decodes nothing more");
+    }
+
     #[test]
     fn the_demosaic_method_is_chosen_at_open() {
         let (mut app, dng) = raw_app();
@@ -1931,7 +1979,7 @@ mod tests {
         app.pending_raw_open.take();
         app.run("prefs.set", json!({"path": "rawDefaults.demosaic", "value": "ahd"})).unwrap();
         let document = app.session.active().unwrap().doc.id;
-        queue_open_dialog(&mut app, document, "IMG_0004.dng", None, Some(&dng), &warnings).unwrap();
+        queue_open_dialog(&mut app, document, "IMG_0004.dng", None, Some(&std::sync::Arc::new(dng.clone())), &warnings).unwrap();
         let raw = app.pending_raw_open.take().unwrap();
         use photocraft_io::raw::Demosaic;
         assert_eq!((raw.developed_with, raw.demosaic), (Demosaic::Bilinear, Demosaic::Bilinear));
@@ -2066,7 +2114,8 @@ mod tests {
                     path: None,
                     bytes: None,
                     developed_with: Default::default(),
-                    demosaic: Default::default()
+                    demosaic: Default::default(),
+                    decoded: None,
                 }
             )
             .is_err()
