@@ -668,18 +668,21 @@ fn edit(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn reset(s: &mut Session, p: &Value) -> Result<Value> {
-    let append = p.get("append").and_then(Value::as_bool).unwrap_or(false);
-    let mut b = builtin();
-    if append {
-        for g in &mut b {
-            g.name = unique_group(&s.presets.gradients, &g.name);
-        }
-        s.presets.gradients.extend(b);
-    } else {
-        s.presets.gradients = b;
-    }
+    let r = reset_groups(&mut s.presets.gradients, builtin(), p);
     s.presets_changed();
-    Ok(json!({"groups": s.presets.gradients.len()}))
+    Ok(r)
+}
+
+pub(crate) fn reset_groups<T>(groups: &mut Vec<Group<T>>, mut builtin: Vec<Group<T>>, p: &Value) -> Value {
+    if p.get("append").and_then(Value::as_bool).unwrap_or(false) {
+        for g in &mut builtin {
+            g.name = unique_group(groups, &g.name);
+        }
+        groups.extend(builtin);
+    } else {
+        *groups = builtin;
+    }
+    json!({"groups": groups.len()})
 }
 
 pub(crate) fn unique_group<T>(groups: &[Group<T>], base: &str) -> String {

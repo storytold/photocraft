@@ -27,18 +27,18 @@ fn has_children(l: &Layer) -> bool {
 }
 
 /// An optional boolean param: `None` when absent or null, an error when it is anything but true or false.
-fn opt_bool(p: &Value, key: &str) -> Result<Option<bool>> {
+pub(crate) fn opt_bool(cmd: &str, p: &Value, key: &str) -> Result<Option<bool>> {
     match p.get(key) {
         None | Some(Value::Null) => Ok(None),
-        Some(v) => v.as_bool().map(Some).ok_or_else(|| bad(format!("`{key}` must be true or false"))),
+        Some(v) => v.as_bool().map(Some).ok_or_else(|| EngineError::BadParams { cmd: cmd.into(), msg: format!("`{key}` must be true or false") }),
     }
 }
 
 /// `{"layer":id?,"expanded":bool?,"all":bool?}`: show or hide a layer's effects list (no
 /// `expanded`: toggle). With `all`, every layer with effects takes the new state (⌥-click).
 fn set_expanded(s: &mut Session, p: &Value) -> Result<Value> {
-    let want = opt_bool(p, "expanded")?;
-    let all = opt_bool(p, "all")?.unwrap_or(false);
+    let want = opt_bool(ID, p, "expanded")?;
+    let all = opt_bool(ID, p, "all")?.unwrap_or(false);
     let st = s.active_mut().ok_or(EngineError::NoDocument)?;
     let layer = match p.get("layer") {
         None | Some(Value::Null) if all => None,

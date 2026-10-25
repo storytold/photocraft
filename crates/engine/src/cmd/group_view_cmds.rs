@@ -10,6 +10,7 @@ use photocraft_doc::{Layer, LayerContent, LayerId};
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
+use crate::fx_view_cmds::opt_bool;
 use crate::{EngineError, Result, Session};
 
 const ID: &str = "layer.setExpanded";
@@ -21,13 +22,6 @@ fn bad(msg: impl Into<String>) -> EngineError {
 fn has_group(s: &Session) -> std::result::Result<(), String> {
     let d = s.active().ok_or("no document open")?;
     if d.doc.walk().iter().any(|(_, _, l)| l.is_group()) { Ok(()) } else { Err("the document has no layer groups".into()) }
-}
-
-fn opt_bool(p: &Value, key: &str) -> Result<Option<bool>> {
-    match p.get(key) {
-        None | Some(Value::Null) => Ok(None),
-        Some(v) => v.as_bool().map(Some).ok_or_else(|| bad(format!("`{key}` must be true or false"))),
-    }
 }
 
 fn set_all(layers: &mut [Layer], expanded: bool) -> usize {
@@ -45,8 +39,8 @@ fn set_all(layers: &mut [Layer], expanded: bool) -> usize {
 /// With `all`, every group in the document takes the new state (Photoshop's ⌥-click on a
 /// disclosure triangle); without a layer, `all` toggles from "any group open".
 fn set_expanded(s: &mut Session, p: &Value) -> Result<Value> {
-    let want = opt_bool(p, "expanded")?;
-    let all = opt_bool(p, "all")?.unwrap_or(false);
+    let want = opt_bool(ID, p, "expanded")?;
+    let all = opt_bool(ID, p, "all")?.unwrap_or(false);
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let layer = match p.get("layer") {
         None | Some(Value::Null) if all => None,

@@ -21,14 +21,6 @@ fn bad(m: &str) -> EngineError {
     EngineError::BadParams { cmd: CMD.into(), msg: m.into() }
 }
 
-fn has_text(s: &Session) -> std::result::Result<(), String> {
-    let d = s.active().ok_or("no document open")?;
-    match d.active_layer.and_then(|id| d.doc.layer(id)).map(|l| &l.content) {
-        Some(LayerContent::Text(_)) => Ok(()),
-        _ => Err("the active layer is not a type layer".into()),
-    }
-}
-
 /// The path area type fills, in document space: the work path (default) or a shape layer's
 /// path (`"shape":id`). Every closed subpath counts, with its path operation.
 fn area_source(doc: &Document, p: &Value) -> Result<Path> {
@@ -85,7 +77,7 @@ pub fn specs() -> Vec<CommandSpec> {
         menu: &[],
         shortcut: None,
         params: r##"{"layer":id? (default active Type layer),"shape":layerId? (a shape layer; default the work path)} → the text wraps inside the path's closed subpaths, holes included"##,
-        enabled: has_text,
+        enabled: crate::type_cmds::has_type_layer,
         journal: true,
         run: fill_path,
     }]
