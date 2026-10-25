@@ -174,7 +174,7 @@ pub fn filter_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui, doc: &Document, l
             if app.ui.filter_mask_target == Some(l.id.0) && app.filter_mask_targeted() {
                 crate::mask_thumbs_ui::paint_brackets(ui.painter(), sw, t.text);
             }
-            let sw_resp = ui.interact(sw.expand(2.0), ui.id().with(("sf-mask", l.id.0)), Sense::click());
+            let sw_resp = ui.interact(sw.expand(2.0), ui.scope_id().with(("sf-mask", l.id.0)), Sense::click());
             if sw_resp.clicked() {
                 actions.extend(filter_mask_click(l, sm, ui.input(|i| i.modifiers)));
             }
