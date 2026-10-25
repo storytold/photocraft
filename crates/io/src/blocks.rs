@@ -318,13 +318,16 @@ pub(crate) fn gradient_stops_editable(grad: &Descriptor, method: Option<&[u8]>) 
     raw
 }
 
-/// The exact, constant-RGB subset of Photoshop noise gradients. If every RGB component has the
-/// same minimum and maximum, the generated field is constant regardless of seed or roughness.
-/// Other models, transparency, and varying ranges are not approximated.
-fn constant_rgb_noise_color(grad: &Descriptor) -> Option<Color> {
-    if enum_of(grad, "GrdF")? != b"ClNs" || enum_of(grad, "ClrS")? != b"RGBC" || bool_of(grad, "ShTr") {
+/// The exact, constant-colour subset of Photoshop noise gradients. If every colour component
+/// has the same minimum and maximum, the generated field is constant regardless of seed or
+/// roughness. RGB, HSB and Lab convert through the same descriptor path as solid colours
+/// ([`color_from_desc`]), so a constant noise fill matches a solid fill with the same values;
+/// other models, transparency, and varying ranges are not approximated.
+fn constant_noise_color(grad: &Descriptor) -> Option<Color> {
+    if enum_of(grad, "GrdF")? != b"ClNs" || bool_of(grad, "ShTr") {
         return None;
     }
+    let space = enum_of(grad, "ClrS")?;
     let components = |key: &str| -> Option<[f32; 4]> {
         let Some(Value::List(values)) = grad.get(key) else { return None };
         if values.len() != 4 {
@@ -338,7 +341,17 @@ fn constant_rgb_noise_color(grad: &Descriptor) -> Option<Color> {
     if min.iter().zip(max).take(3).any(|(a, b)| !a.is_finite() || *a < 0.0 || *a > 100.0 || *a != b) {
         return None;
     }
-    Some(Color::rgb(min[0] / 100.0, min[1] / 100.0, min[2] / 100.0))
+    let d = |v: f32| Value::Double(f64::from(v));
+    match space {
+        b"RGBC" => Some(Color::rgb(min[0] / 100.0, min[1] / 100.0, min[2] / 100.0)),
+        // `HSBl`: hue a percentage of the circle, saturation and brightness percent.
+        b"HSBl" => color_from_desc(&Descriptor::new("HSBC").with("H   ", d(min[0] / 100.0 * 360.0)).with("Strt", d(min[1])).with("Brgh", d(min[2]))),
+        // `LbCl`: L percent of 100, a and b percent of the 0..255 byte range around 128.
+        b"LbCl" => color_from_desc(
+            &Descriptor::new("LbCl").with("Lmnc", d(min[0])).with("A   ", d(min[1] / 100.0 * 255.0 - 128.0)).with("B   ", d(min[2] / 100.0 * 255.0 - 128.0)),
+        ),
+        _ => None,
+    }
 }
 
 fn gradient_stops_raw(grad: &Descriptor) -> RawStops {
@@ -471,7 +484,7 @@ pub fn fill_from_desc(key: &[u8; 4], d: &Descriptor) -> Option<Fill> {
                 opacity_stops.clear();
             }
             if stops.is_empty() {
-                // A provably constant-RGB noise gradient renders one exact colour. Any other
+                // A provably constant noise gradient renders one exact colour. Any other
                 // noise gradient (variable ranges, transparency, other models) has no stops to
                 // read: keep the placeholder ramp rather than failing the whole fill — the
                 // layer stays a fill layer, Photoshop's own pixels ride along as `fill_cache`,
@@ -479,7 +492,7 @@ pub fn fill_from_desc(key: &[u8; 4], d: &Descriptor) -> Option<Fill> {
                 // here would import the layer as pixels and drop `GdFl` on save (#6272).
                 stops = gradient
                     .filter(|g| enum_of(g, "GrdF") == Some(b"ClNs"))
-                    .and_then(constant_rgb_noise_color)
+                    .and_then(constant_noise_color)
                     .map(|color| vec![(0.0, color), (1.0, color)])
                     .unwrap_or_else(|| vec![(0.0, Color::BLACK), (1.0, Color::WHITE)]);
             }
@@ -919,11 +932,11 @@ pub fn effects_enabled(lfx2: &[u8]) -> bool {
 mod tests {
     use super::*;
 
-    fn noise_gradient_fill(min: [i32; 4], max: [i32; 4], add_transparency: bool) -> Descriptor {
-        let values = |v: [i32; 4]| Value::List(v.into_iter().map(Value::Integer).collect());
+    fn noise_gradient_fill(space: &str, min: [f32; 4], max: [f32; 4], add_transparency: bool) -> Descriptor {
+        let values = |v: [f32; 4]| Value::List(v.into_iter().map(|v| Value::Double(f64::from(v))).collect());
         let gradient = Descriptor::new("Grdn")
             .with("GrdF", Value::Enumerated { type_id: Id::new("GrdF"), value: Id::new("ClNs") })
-            .with("ClrS", Value::Enumerated { type_id: Id::new("ClrS"), value: Id::new("RGBC") })
+            .with("ClrS", Value::Enumerated { type_id: Id::new("ClrS"), value: Id::new(space) })
             .with("ShTr", Value::Boolean(add_transparency))
             .with("VctC", Value::Boolean(true))
             .with("RndS", Value::Integer(9052369))
@@ -933,12 +946,55 @@ mod tests {
         Descriptor::new("null").with("Grad", Value::Descriptor(gradient))
     }
 
+    /// The `HSBC` descriptor a solid colour with these HSB values stores.
+    fn hsb_color(h: f32, s: f32, b: f32) -> Color {
+        let d = |v: f32| Value::Double(f64::from(v));
+        color_from_desc(&Descriptor::new("HSBC").with("H   ", d(h)).with("Strt", d(s)).with("Brgh", d(b))).unwrap()
+    }
+
+    /// The `LbCl` descriptor a solid colour with these Lab values stores.
+    fn lab_color(l: f32, a: f32, b: f32) -> Color {
+        let d = |v: f32| Value::Double(f64::from(v));
+        color_from_desc(&Descriptor::new("LbCl").with("Lmnc", d(l)).with("A   ", d(a)).with("B   ", d(b))).unwrap()
+    }
+
     #[test]
     fn constant_rgb_noise_fill_uses_its_exact_colour() {
         use photocraft_doc::Fill;
-        let fill = fill_from_desc(b"GdFl", &noise_gradient_fill([50, 25, 0, 0], [50, 25, 0, 100], false));
+        let fill = fill_from_desc(b"GdFl", &noise_gradient_fill("RGBC", [50.0, 25.0, 0.0, 0.0], [50.0, 25.0, 0.0, 100.0], false));
         let Some(Fill::Gradient { stops, .. }) = fill else { panic!("constant noise gradient") };
         assert_eq!(stops, vec![(0.0, Color::rgb(0.5, 0.25, 0.0)), (1.0, Color::rgb(0.5, 0.25, 0.0))]);
+    }
+
+    /// psd-tools `gradients/noise-gradient-rgb.psd` layer `hsb-noise`: Photoshop stores
+    /// H 8.33435 % of 360° = 30°, S 60.00061 %, B 79.99878 % and its pixels are 204/143/82,
+    /// plain HSV→RGB (204.0, 142.8, 81.6) rounded. The fill takes the same path as a solid
+    /// `HSBC` colour, so the constant noise and the equivalent solid render identically.
+    #[test]
+    fn constant_hsb_noise_fill_uses_its_exact_colour() {
+        use photocraft_doc::Fill;
+        let values = [8.33435, 60.00061, 79.99878, 100.0];
+        let fill = fill_from_desc(b"GdFl", &noise_gradient_fill("HSBl", values, values, false));
+        let Some(Fill::Gradient { stops, .. }) = fill else { panic!("constant HSB noise gradient") };
+        let expected = hsb_color(values[0] / 100.0 * 360.0, values[1], values[2]);
+        assert_eq!(stops, vec![(0.0, expected), (1.0, expected)]);
+        let rgb = expected.to_rgb();
+        assert_eq!(rgb.map(|c| (c * 255.0).round()), [204.0, 143.0, 82.0], "Photoshop's stored HSB pixels");
+    }
+
+    /// psd-tools `gradients/noise-gradient-lab.psd` layer `lab-noise`: Photoshop stores
+    /// L 60.00061 %, a/b 60.00061 % and its pixels are L 153, a 153, b 153 bytes — L 60,
+    /// a* +25, b* +25. The fill is the same Lab colour an equivalent solid `LbCl` produces.
+    #[test]
+    fn constant_lab_noise_fill_uses_its_exact_colour() {
+        use photocraft_doc::Fill;
+        let values = [60.00061, 60.00061, 60.00061, 100.0];
+        let fill = fill_from_desc(b"GdFl", &noise_gradient_fill("LbCl", values, values, false));
+        let Some(Fill::Gradient { stops, .. }) = fill else { panic!("constant Lab noise gradient") };
+        let expected = lab_color(values[0], values[1] / 100.0 * 255.0 - 128.0, values[2] / 100.0 * 255.0 - 128.0);
+        assert_eq!(stops, vec![(0.0, expected), (1.0, expected)]);
+        let bytes = [(expected.c[0] * 100.0).round(), (expected.c[1] * 255.0).round(), (expected.c[2] * 255.0).round()];
+        assert_eq!(bytes, [60.0, 153.0, 153.0], "Photoshop's stored Lab bytes");
     }
 
     #[test]
@@ -947,8 +1003,15 @@ mod tests {
         // Photoshop's default Noise gradient (min 0, max 100) and a transparent variant: no
         // exact colour is provable, but the fill must parse — the layer keeps its type, its
         // stored pixels (`fill_cache`) and its raw `GdFl` block. Only the uncached preview
-        // shows the placeholder ramp.
-        for descriptor in [noise_gradient_fill([0, 0, 0, 0], [100, 100, 100, 100], false), noise_gradient_fill([50, 25, 0, 0], [50, 25, 0, 100], true)] {
+        // shows the placeholder ramp. The same holds for HSB and Lab noise.
+        for descriptor in [
+            noise_gradient_fill("RGBC", [0.0, 0.0, 0.0, 0.0], [100.0, 100.0, 100.0, 100.0], false),
+            noise_gradient_fill("RGBC", [50.0, 25.0, 0.0, 0.0], [50.0, 25.0, 0.0, 100.0], true),
+            noise_gradient_fill("HSBl", [8.33435, 60.0, 80.0, 100.0], [30.0, 60.0, 80.0, 100.0], false),
+            noise_gradient_fill("HSBl", [8.33435, 60.0, 80.0, 100.0], [8.33435, 60.0, 80.0, 100.0], true),
+            noise_gradient_fill("LbCl", [60.0, 60.0, 60.0, 100.0], [70.0, 60.0, 60.0, 100.0], false),
+            noise_gradient_fill("LbCl", [60.0, 60.0, 60.0, 100.0], [60.0, 60.0, 60.0, 100.0], true),
+        ] {
             let Some(Fill::Gradient { stops, .. }) = fill_from_desc(b"GdFl", &descriptor) else { panic!("variable noise gradient must stay a fill layer") };
             assert_eq!(stops, vec![(0.0, Color::BLACK), (1.0, Color::WHITE)]);
         }
