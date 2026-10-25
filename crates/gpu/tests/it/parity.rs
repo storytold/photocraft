@@ -652,6 +652,86 @@ fn hue_ranges() -> [HueRange; 6] {
     r
 }
 
+/// The neutral-range RGB/8 GPU path reproduces eight Photoshop pixels from the issue source
+/// and matches the CPU compositor after the document's 8-bit quantization.
+#[test]
+fn rgb8_hue_saturation_matches_cpu_and_photoshop_samples() {
+    let Some(mut g) = gpu() else { return };
+    let samples = [
+        ([1, 34, 65], [109, 100, 46]),
+        ([1, 83, 133], [169, 136, 39]),
+        ([108, 159, 180], [202, 178, 130]),
+        ([74, 141, 183], [207, 180, 99]),
+        ([84, 138, 166], [192, 169, 110]),
+        ([12, 19, 25], [72, 70, 60]),
+        ([170, 184, 193], [207, 202, 185]),
+        ([143, 178, 198], [214, 199, 159]),
+    ];
+    let mut doc = Document::new("RGB8 hue saturation", Size::new(samples.len() as u32, 1), ColorMode::Rgb, SampleType::U8);
+    let mut raster = Layer::raster("source", PixelFormat::RGBA8);
+    let pixels: Vec<f32> = samples.iter().flat_map(|(rgb, _)| rgb.iter().map(|&v| v as f32 / 255.0).chain(std::iter::once(1.0))).collect();
+    raster.surface_mut().unwrap().write_region(doc.bounds(), &pixels);
+    doc.layers.push(raster);
+    doc.layers.push(Layer::new(
+        "Hue/Saturation",
+        LayerContent::Adjustment(Adjustment::HueSaturation { hue: -158.0, saturation: 20.0, lightness: 20.0, colorize: false, ranges: HueRange::defaults() }),
+    ));
+    let cpu = photocraft_compose::flatten(&doc);
+    let gpu = render_to_vec(&mut g.comp, &g.device, &g.queue, &doc, doc.bounds()).unwrap();
+    for (i, (_, expected)) in samples.iter().enumerate() {
+        let cpu_rgb: [u8; 3] = std::array::from_fn(|channel| (cpu.px[i][channel] * 255.0).round() as u8);
+        let gpu_rgb: [u8; 3] = std::array::from_fn(|channel| (gpu[i][channel] * 255.0).round() as u8);
+        assert_eq!(cpu_rgb, *expected, "CPU sample {i}");
+        assert_eq!(gpu_rgb, *expected, "GPU sample {i}");
+    }
+}
+
+/// Hue zero places yellow and cyan on Photoshop's descending sector edge for positive
+/// Saturation or Lightness, identically on the CPU and GPU.
+#[test]
+fn rgb8_hue_saturation_primary_ties_match_photoshop() {
+    let Some(mut g) = gpu() else { return };
+    for (saturation, lightness, expected) in [(20.0, 0.0, [[254, 255, 0], [0, 254, 255]]), (0.0, 20.0, [[254, 255, 51], [51, 254, 255]])] {
+        let mut doc = Document::new("RGB8 primary ties", Size::new(2, 1), ColorMode::Rgb, SampleType::U8);
+        let mut raster = Layer::raster("source", PixelFormat::RGBA8);
+        raster.surface_mut().unwrap().write_region(doc.bounds(), &[1.0, 1.0, 0.0, 1.0, 0.0, 1.0, 1.0, 1.0]);
+        doc.layers.push(raster);
+        doc.layers.push(Layer::new(
+            "Hue/Saturation",
+            LayerContent::Adjustment(Adjustment::HueSaturation { hue: 0.0, saturation, lightness, colorize: false, ranges: HueRange::defaults() }),
+        ));
+        let cpu = photocraft_compose::flatten(&doc);
+        let gpu = render_to_vec(&mut g.comp, &g.device, &g.queue, &doc, doc.bounds()).unwrap();
+        for (i, want) in expected.into_iter().enumerate() {
+            let cpu_rgb: [u8; 3] = std::array::from_fn(|channel| (cpu.px[i][channel] * 255.0).round() as u8);
+            let gpu_rgb: [u8; 3] = std::array::from_fn(|channel| (gpu[i][channel] * 255.0).round() as u8);
+            assert_eq!(cpu_rgb, want, "CPU s{saturation} l{lightness}, sample {i}");
+            assert_eq!(gpu_rgb, want, "GPU s{saturation} l{lightness}, sample {i}");
+        }
+    }
+}
+
+/// A positive hue uses the existing float shader path; the +40-degree red ramp pixel keeps
+/// the same one-level-closer green channel result as the CPU compositor.
+#[test]
+fn rgb8_positive_hue_keeps_existing_float_shader_path() {
+    let Some(mut g) = gpu() else { return };
+    let mut doc = Document::new("positive hue fallback", Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
+    let mut raster = Layer::raster("source", PixelFormat::RGBA8);
+    raster.surface_mut().unwrap().write_region(doc.bounds(), &[1.0, 1.0 / 255.0, 0.0, 1.0]);
+    doc.layers.push(raster);
+    doc.layers.push(Layer::new(
+        "Hue/Saturation",
+        LayerContent::Adjustment(Adjustment::HueSaturation { hue: 40.0, saturation: 20.0, lightness: 20.0, colorize: false, ranges: HueRange::defaults() }),
+    ));
+    let cpu = photocraft_compose::flatten(&doc);
+    let gpu = render_to_vec(&mut g.comp, &g.device, &g.queue, &doc, doc.bounds()).unwrap();
+    let cpu_rgb: [u8; 3] = std::array::from_fn(|channel| (cpu.px[0][channel] * 255.0).round() as u8);
+    let gpu_rgb: [u8; 3] = std::array::from_fn(|channel| (gpu[0][channel] * 255.0).round() as u8);
+    assert_eq!(cpu_rgb, [255, 188, 51]);
+    assert_eq!(gpu_rgb, cpu_rgb);
+}
+
 fn adjustments() -> Vec<Adjustment> {
     let lc = |a: f32, b: f32, g: f32| LevelsChannel { in_black: a, in_white: b, gamma: g, out_black: 0.05, out_white: 0.95 };
     let pts = |v: &[(f32, f32)]| v.iter().map(|&(input, output)| CurvePoint { input, output }).collect::<Vec<_>>();
