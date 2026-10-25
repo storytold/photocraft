@@ -53,6 +53,7 @@ mod psd_damaged_merged;
 mod psd_empty_channels;
 mod psd_font_identity;
 mod psd_frame_stroke;
+mod psd_gradient_fill_angle;
 mod psd_import_file;
 mod psd_kerning;
 mod psd_layer_block_length;
