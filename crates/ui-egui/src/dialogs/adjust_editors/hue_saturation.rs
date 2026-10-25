@@ -38,17 +38,18 @@ pub(super) fn move_hue_range_handle(bounds: [f32; 4], k: usize, deg: f32) -> [f3
     b
 }
 
-/// The range handle a press at `x` grabs, given the four handles' x positions: the nearest
-/// within 10 points, or within a third of the gap to the next handle on that side, so the middle
-/// third of a narrow zone still drags the zone (at least 3 points, for handles that coincide).
-pub(super) fn hue_range_handle_at(xs: [f32; 4], x: f32) -> Option<u8> {
+/// The range handle a press at `x` grabs, given the four handles' x positions on a bar `w` wide:
+/// the nearest within 10 points, or within a third of the gap to the next handle on that side, so
+/// the middle third of a narrow zone still drags the zone (at least 3 points, for handles that
+/// coincide). The bar is a hue circle: the next handle past an edge is the first from the other.
+pub(super) fn hue_range_handle_at(xs: [f32; 4], x: f32, w: f32) -> Option<u8> {
     let k = nearest(&xs, x)?;
-    let d = x - xs[k as usize];
+    let (xk, d) = (xs[k as usize], x - xs[k as usize]);
     let gap = xs
         .iter()
         .enumerate()
-        .filter(|&(j, &o)| j != k as usize && (o - xs[k as usize]) * d.signum() >= 0.0)
-        .map(|(_, &o)| (o - xs[k as usize]).abs())
+        .filter(|&(j, _)| j != k as usize)
+        .map(|(_, &o)| if d >= 0.0 { (o - xk).rem_euclid(w) } else { (xk - o).rem_euclid(w) })
         .fold(f32::INFINITY, f32::min);
     (d.abs() < (gap / 3.0).clamp(3.0, 10.0)).then_some(k)
 }
@@ -242,7 +243,7 @@ pub(super) fn hue_saturation(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) ->
             && ui.input(|i| i.pointer.primary_pressed())
             && let Some(pos) = ui.input(|i| i.pointer.press_origin())
         {
-            which = hue_range_handle_at(b.map(xof), pos.x);
+            which = hue_range_handle_at(b.map(xof), pos.x, w);
             zone = if which.is_none() { hue_range_zone(b, deg_of(pos.x)).map(|z| (z, b, pos.x)) } else { None };
         }
         if bresp.is_pointer_button_down_on()

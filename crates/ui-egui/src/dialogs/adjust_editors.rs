@@ -269,14 +269,21 @@ mod tests {
         let w = 230.0;
         let xs = [75.0f32, 105.0, 135.0, 165.0].map(|d| d / 360.0 * w);
         for (a, z) in [(0, 1), (1, 2), (2, 3)] {
-            assert_eq!(hue_range_handle_at(xs, (xs[a] + xs[z]) / 2.0), None, "the middle of zone {a}..{z} is the zone's");
+            assert_eq!(hue_range_handle_at(xs, (xs[a] + xs[z]) / 2.0, w), None, "the middle of zone {a}..{z} is the zone's");
         }
         for (k, x) in xs.iter().enumerate() {
-            assert_eq!(hue_range_handle_at(xs, *x + 1.0), Some(k as u8), "handle {k}");
+            assert_eq!(hue_range_handle_at(xs, *x + 1.0, w), Some(k as u8), "handle {k}");
         }
-        assert_eq!(hue_range_handle_at(xs, xs[0] - 9.0), Some(0), "the full reach outside the range");
+        assert_eq!(hue_range_handle_at(xs, xs[0] - 9.0, w), Some(0), "the full reach outside the range");
         let stacked = [50.0, 50.0, 80.0, 120.0];
-        assert!(hue_range_handle_at(stacked, 51.0).is_some(), "coinciding handles stay grabbable");
+        assert!(hue_range_handle_at(stacked, 51.0, w).is_some(), "coinciding handles stay grabbable");
+        // Reds (315/345…15\45): its fully-on zone crosses the seam, ~9.6 points from each edge.
+        let reds = [315.0f32, 345.0, 15.0, 45.0].map(|d| d / 360.0 * w);
+        for x in [w - 1.0, w - 3.0, 0.5, 2.5] {
+            assert_eq!(hue_range_handle_at(reds, x, w), None, "x {x}: Reds' fully-on zone across the seam");
+        }
+        assert_eq!(hue_range_handle_at(reds, reds[1] + 1.0, w), Some(1));
+        assert_eq!(hue_range_handle_at(reds, reds[2] - 1.0, w), Some(2));
     }
 
     #[test]
