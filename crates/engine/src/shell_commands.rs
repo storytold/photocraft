@@ -50,6 +50,7 @@ pub const SHELL_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("view.actualPixels", "100%", &["View"], Some("Cmd+1")),
     ("view.rotateView", "Rotate View", &[], None),
     ("view.resetView", "Reset View", &["View"], None),
+    ("view.drawingMode", "Drawing Mode", &["View"], None),
     ("window.newWindowForDocument", "New Window for Document", &["Window", "Arrange"], None),
     ("window.toggle.layers", "Layers", &["Window"], Some("F7")),
     ("window.toggle.history", "History", &["Window"], None),

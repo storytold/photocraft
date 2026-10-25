@@ -683,6 +683,9 @@
 	Standard Screen Mode	標準スクリーンモード
 	Full Screen Mode With Menu Bar	メニューバーありのフルスクリーンモード
 	Full Screen Mode	フルスクリーンモード
+	Drawing Mode	描画モード
+	Left Handed	左利き
+	Finger Draws on Canvas (off: the finger only pans)	指でキャンバスに描画（オフの場合、指は移動のみ）
 	Cycle Screen Mode	スクリーンモードを切り替え
 	Show	表示する項目
 	Extras	エクストラ

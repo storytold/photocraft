@@ -604,6 +604,9 @@
 	Fit Layer(s) on Screen	Vừa lớp trên màn hình
 	Fit on Screen	Vừa màn hình
 	Full Screen Mode	Toàn màn hình
+	Drawing Mode	Chế độ vẽ
+	Left Handed	Thuận tay trái
+	Finger Draws on Canvas (off: the finger only pans)	Vẽ trên canvas bằng ngón tay (tắt: ngón tay chỉ di chuyển)
 	Full Screen Mode With Menu Bar	Toàn màn hình có thanh menu
 	Gamut Warning	Cảnh báo ngoài gam màu
 	Grid	Lưới

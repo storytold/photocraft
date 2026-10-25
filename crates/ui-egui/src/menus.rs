@@ -100,6 +100,12 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
     if let Some(r) = crate::tool_reset::invoke(app, id, &params) {
         return r;
     }
+    if id == "view.drawingMode" {
+        let on = !app.session.prefs().interface.drawing_mode;
+        app.session.edit_prefs(|p| p.interface.drawing_mode = on);
+        crate::drawing_mode::reset_sheets(&mut app.ui.drawing);
+        return Ok(json!(on));
+    }
     // A filter on a type layer asks to rasterize it first (#4303).
     if let Some(r) = crate::rasterize_prompt::intercept_filter(app, id, &params) {
         return r;
@@ -745,6 +751,7 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
         }
         i if i.starts_with("window.toggle.") => true,
         "window.togglePanels" => true,
+        "view.drawingMode" => true,
         // With one document open the key stays quiet, as in Photoshop, rather than reporting why.
         "window.nextDocument" | "window.previousDocument" => app.session.active().is_some(),
         i if panel_alias(i).is_some() || workspace_name(i).is_some() => true,
@@ -813,6 +820,9 @@ fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
     }
     if let Some(c) = crate::type_panels_ui::checked(app, id) {
         return Some(c);
+    }
+    if id == "view.drawingMode" {
+        return Some(app.session.prefs().interface.drawing_mode);
     }
     if let Some(alias) = panel_alias(id) {
         return checked(app, alias);
@@ -1721,6 +1731,44 @@ mod tests {
         assert_eq!(app.session.prefs().interface.appearance_mode, AppearanceMode::Dark);
         assert_eq!(checked(&app, "window.theme.system"), Some(false));
         assert_eq!(checked(&app, "window.theme.studio"), Some(true));
+    }
+
+    #[test]
+    fn drawing_mode_command_toggles_the_saved_preference_and_menu_check() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        assert!(!app.session.prefs().interface.drawing_mode);
+        assert_eq!(checked(&app, "view.drawingMode"), Some(false));
+
+        // Drawing Mode only puts a shell over the canvas. The saved desktop layout and the
+        // command surface underneath must survive entering and leaving it unchanged.
+        let workspace = app.ui.workspace.clone();
+        let panels = app.ui.panels.clone();
+        let dock_tabs = app.ui.dock_tabs;
+        let layers_enabled = is_enabled(&app, "window.toggle.layers");
+
+        // The sheets are momentary: leaving the mode closes them, whichever way it was entered.
+        app.ui.drawing.layers = true;
+        app.ui.drawing.color = true;
+        invoke(&mut app, &ctx, "view.drawingMode", json!({})).unwrap();
+        assert!(app.session.prefs().interface.drawing_mode);
+        assert_eq!(checked(&app, "view.drawingMode"), Some(true));
+        assert!(!app.ui.drawing.layers);
+        assert!(!app.ui.drawing.color);
+        assert_eq!(app.ui.workspace, workspace);
+        assert_eq!(app.ui.panels, panels);
+        assert_eq!(app.ui.dock_tabs, dock_tabs);
+        assert_eq!(is_enabled(&app, "window.toggle.layers"), layers_enabled);
+
+        app.ui.drawing.layers = true;
+        invoke(&mut app, &ctx, "view.drawingMode", json!({})).unwrap();
+        assert!(!app.session.prefs().interface.drawing_mode);
+        assert_eq!(checked(&app, "view.drawingMode"), Some(false));
+        assert!(!app.ui.drawing.layers);
+        assert_eq!(app.ui.workspace, workspace);
+        assert_eq!(app.ui.panels, panels);
+        assert_eq!(app.ui.dock_tabs, dock_tabs);
+        assert_eq!(is_enabled(&app, "window.toggle.layers"), layers_enabled);
     }
 
     #[test]

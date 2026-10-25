@@ -272,6 +272,10 @@ pub struct Interface {
     /// Document border in standard screen mode.
     pub canvas_border: CanvasBorder,
     pub ui_scale: UiScale,
+    /// Tablet drawing mode: a canvas-first shell with a touch tool palette and quick bar.
+    pub drawing_mode: bool,
+    /// Left-handed drawing mode: the compact drawing palette moves to the right edge.
+    pub left_handed: bool,
     /// UI language: `auto` (follow the system) or a language code such as `en`, `ja`. The list of
     /// languages belongs to the shell (`ui-egui` i18n); an unknown code falls back to `auto`.
     /// Command ids and the control protocol stay English.
@@ -320,6 +324,8 @@ impl Default for Interface {
             show_home_recent_files: true,
             canvas_border: CanvasBorder::DropShadow,
             ui_scale: UiScale::Auto,
+            drawing_mode: false,
+            left_handed: false,
             language: "auto".into(),
             ui_font_size: UiFontSize::Small,
             show_channels_in_color: false,
@@ -393,6 +399,8 @@ pub struct Tools {
     pub right_click_with_painting_tools: RightClickPaint,
     /// Pen tablets: pressure, tilt and rotation reach the brush (off: a pen paints like a mouse).
     pub use_tablet_pressure: bool,
+    /// The finger draws on the canvas (off: the finger only pans; the stylus always draws).
+    pub finger_draws: bool,
     /// Pen pressure response: `[input, output]` control points in 0..1 that the pen's pressure
     /// passes through before it reaches any brush ([`PressureCurve`]). Linear by default.
     pub pressure_curve: Vec<[f32; 2]>,
@@ -420,6 +428,7 @@ impl Default for Tools {
             double_click_layer_mask_launches_select_and_mask: true,
             right_click_with_painting_tools: RightClickPaint::BrushPicker,
             use_tablet_pressure: true,
+            finger_draws: true,
             pressure_curve: vec![[0.0, 0.0], [1.0, 1.0]],
             bundle_nudges: true,
             nudge_bundle_pause_ms: 1000,

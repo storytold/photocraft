@@ -1284,6 +1284,10 @@ fn humanize(key: &str) -> String {
     if key == "nudgeBundlePauseMs" {
         return "Nudge Bundle Pause (ms)".into();
     }
+    // Tools: when off, the finger only pans the canvas and the stylus draws (Android S Pen).
+    if key == "fingerDraws" {
+        return "Finger Draws on Canvas (off: the finger only pans)".into();
+    }
     // Performance: presentation without vsync (#1343); like the other graphics settings, it
     // takes effect when the window next opens.
     // File Handling: Photoshop's wording (#8080).

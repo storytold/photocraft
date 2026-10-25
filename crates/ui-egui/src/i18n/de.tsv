@@ -678,6 +678,9 @@
 	Standard Screen Mode	Standard-Bildschirmmodus
 	Full Screen Mode With Menu Bar	Vollbildmodus mit Menüleiste
 	Full Screen Mode	Vollbildmodus
+	Drawing Mode	Zeichenmodus
+	Left Handed	Linkshändig
+	Finger Draws on Canvas (off: the finger only pans)	Mit dem Finger auf der Leinwand zeichnen (aus: der Finger verschiebt nur)
 	Cycle Screen Mode	Bildschirmmodus durchschalten
 	Show	Anzeigen
 	Extras	Extras

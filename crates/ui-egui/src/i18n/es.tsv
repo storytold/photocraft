@@ -459,6 +459,7 @@
 	Vertical Centers	Centros verticales
 	Bottom Edges	Bordes inferiores
 	Left Edges	Bordes izquierdos
+	Left Handed	Zurdo
 	Horizontal Centers	Centros horizontales
 	Right Edges	Bordes derechos
 	Distribute	Distribuir
@@ -1104,6 +1105,7 @@
 	Drag to move the active shape's path or the Work Path	Arrastre para mover el trazado de la forma activa o el trazado de trabajo
 	Click: select anchor · Drag: move anchor, handle or segment · {shift}-click: add · {alt}-click: whole subpath	Clic: seleccionar punto · Arrastrar: mover punto, manejador o segmento · {shift}-clic: añadir · {alt}-clic: subtrazado completo
 	Draw with the Pen tool (P) or make a work path from a selection.	Dibuje con la herramienta Pluma (P) o cree un trazado de trabajo a partir de una selección.
+	Drawing Mode	Modo de dibujo
 	Drop an image or PSD anywhere to open it.	Suelte una imagen o un PSD en cualquier lugar para abrirlo.
 	Native file drag-and-drop is unavailable	Arrastrar y soltar archivos de forma nativa no está disponible en Wayland
 	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or copy the image in your file manager and paste it with {paste}.	Arrastrar y soltar archivos de forma nativa aún no es compatible con Wayland. Use Archivo › Abrir, o copie la imagen en su gestor de archivos y péguela con {paste}.
@@ -1145,6 +1147,7 @@
 	Filter for type layers	Filtrar por capas de texto
 	Filter:	Filtro:
 	Finger Painting	Pintura con los dedos
+	Finger Draws on Canvas (off: the finger only pans)	El dedo dibuja en el lienzo (desactivado: el dedo solo desplaza)
 	Fisheye	Ojo de pez
 	Fit	Encajar
 	Fit Screen	Encajar en pantalla

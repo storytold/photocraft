@@ -659,6 +659,9 @@
 	Standard Screen Mode	표준 화면 모드
 	Full Screen Mode With Menu Bar	메뉴 막대가 있는 전체 화면 모드
 	Full Screen Mode	전체 화면 모드
+	Drawing Mode	그리기 모드
+	Left Handed	왼손잡이
+	Finger Draws on Canvas (off: the finger only pans)	손가락으로 캔버스에 그리기 (끄면 손가락은 이동만)
 	Cycle Screen Mode	화면 모드 순환
 	Show	표시
 	Extras	추가 표시

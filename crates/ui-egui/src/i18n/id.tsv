@@ -666,6 +666,9 @@
 	Standard Screen Mode	Mode Layar Standar
 	Full Screen Mode With Menu Bar	Mode Layar Penuh dengan Menu Bar
 	Full Screen Mode	Mode Layar Penuh
+	Drawing Mode	Mode Menggambar
+	Left Handed	Kidal
+	Finger Draws on Canvas (off: the finger only pans)	Menggambar di kanvas dengan jari (nonaktif: jari hanya menggeser)
 	Cycle Screen Mode	Ganti Mode Layar
 	Show	Tampilkan
 	Extras	Ekstra

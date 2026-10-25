@@ -657,6 +657,9 @@
 	Standard Screen Mode	Standardni režim ekrana
 	Full Screen Mode With Menu Bar	Režim celog ekrana sa trakom menija
 	Full Screen Mode	Režim celog ekrana
+	Drawing Mode	Režim crtanja
+	Left Handed	Levoruk
+	Finger Draws on Canvas (off: the finger only pans)	Crtanje prstom po platnu (isključeno: prst samo pomera platno)
 	Cycle Screen Mode	Smenjuj režime ekrana
 	Show	Prikaži
 	Extras	Dodatni elementi
