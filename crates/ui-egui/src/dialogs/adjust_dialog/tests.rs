@@ -440,11 +440,31 @@ fn grayscale_curves_shows_presets_with_stale_channel_keys() {
     h.state_mut().run("image.mode.grayscale", json!({})).unwrap();
     let id = open(h.state_mut(), "image.adjustments.curves").unwrap();
     for key in ["cyan", "a"] {
-        h.state_mut().ui.dialog_mut(id).unwrap().fields.insert(key.into(), json!([[0.0, 0.0], [255.0, 255.0]]));
+        let fields = &mut h.state_mut().ui.dialog_mut(id).unwrap().fields;
+        fields.insert("points".into(), json!([[0.0, 0.0], [255.0, 255.0]]));
+        fields.insert(key.into(), json!([[0.0, 0.0], [255.0, 255.0]]));
         h.run_steps(4);
         let menus: Vec<String> =
             h.query_all_by_role(egui::accesskit::Role::ComboBox).filter_map(|n| n.accesskit_node().value().map(|v| v.to_string())).collect();
         assert!(menus.iter().any(|v| v == "Default"), "with `{key}`: the Preset menu, at Default (menus: {menus:?})");
+        assert!(menus.iter().any(|v| v == "Gray"), "with `{key}`: the channel stays Gray (menus: {menus:?})");
+        // A drag on the graph edits the gray curve, `points`, and leaves the stale key alone.
+        h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("points".into(), json!([[0, 0], [128, 128], [255, 255]]));
+        h.run_steps(3);
+        let graph = h.ctx.data(|d| d.get_temp::<egui::Rect>(egui::Id::new(("adjust-dialog", "curves")).with("curves-graph"))).unwrap();
+        let a = egui::pos2(graph.left() + 128.0 / 255.0 * graph.width(), graph.bottom() - 128.0 / 255.0 * graph.height());
+        h.hover_at(a);
+        h.run_steps(1);
+        h.drag_at(a);
+        h.run_steps(1);
+        h.hover_at(a + egui::vec2(40.0, -32.0));
+        h.run_steps(1);
+        h.drop_at(a + egui::vec2(40.0, -32.0));
+        h.run_steps(3);
+        let fields = &h.state().ui.dialogs[0].fields;
+        let points = fields.get("points").unwrap_or_else(|| panic!("with `{key}`: the edit keeps `points`"));
+        assert!(points[1][0].as_f64().unwrap() > 150.0, "with `{key}`: the drag edited `points`: {points}");
+        assert_eq!(fields[key], json!([[0.0, 0.0], [255.0, 255.0]]), "with `{key}`: the stale key is untouched");
         h.state_mut().ui.dialog_mut(id).unwrap().fields.remove(key);
     }
     crate::dialogs::cancel(h.state_mut(), id).unwrap();
