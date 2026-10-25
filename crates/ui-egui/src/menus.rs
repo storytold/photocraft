@@ -233,35 +233,14 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
             app.ask_folder(|app, path| app.run("file.import.videoFramesToLayers", json!({"path": path})).map_err(|e| e.to_string()))
         }
         "file.save" => {
-            // Writes back only to a layered file that holds the whole document; anything else
-            // goes through Save As, so the original is never overwritten with less (#3806).
+            // Writes back to the file the document was opened from (asking before flattening
+            // layers into a JPEG, PNG, WebP or TIFF, and never overwriting a layered file with
+            // less than it holds, #3806); without one, Save As. `flatten: true` answers the
+            // flatten confirmation in advance.
             let choices = crate::FormatChoices::from_params(&params, id)?;
             match params.get("path").and_then(Value::as_str) {
                 Some(path) => app.save_as_with(Some(path.to_string()), choices),
-                None => {
-                    let own = app.session.active().and_then(|d| d.path.clone().map(|p| (photocraft_engine::file_cmds::holds_at(&d.doc, &p), p, d)));
-                    match own {
-                        Some((true, path, d)) => {
-                            // Another app changed the file since it was opened or saved: ask first (#6596).
-                            let doc = d.doc.id;
-                            crate::disk_change_prompt::intercept(app, doc, &path, false, crate::FormatChoices::default())
-                                .unwrap_or_else(|| app.save_in_place(path, crate::FormatChoices::default()))
-                        }
-                        Some((false, path, d)) if photocraft_engine::file_cmds::saves_in_place(&path) => {
-                            // Its own file is layered but can't hold what the document has now.
-                            let losses = photocraft_engine::file_cmds::losses_at(&d.doc, &path);
-                            let name = crate::file_open::display_name(&path);
-                            let title = crate::i18n::fmt(tl!("{name} can't keep everything in this document"), &[("name", name.as_str())]);
-                            let mut lines = losses;
-                            lines.push(tl!("Choose a format that keeps it, such as Photoshop (PSD), or save a copy.").to_string());
-                            crate::notices::post(app, title, lines, false, None);
-                            app.save_as_with(None, choices)
-                        }
-                        // A flat file asks for its name; confirming its own file records a
-                        // plain Save that writes the file an action is played on (#3531).
-                        _ => app.save_dialog_flow(None, choices, true),
-                    }
-                }
+                None => app.save(params.get("flatten").and_then(Value::as_bool).unwrap_or(false), choices),
             }
         }
         "file.exit" => {

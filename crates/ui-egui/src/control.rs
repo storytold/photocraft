@@ -30,6 +30,8 @@
 //! - `ui.focus`: bring the main window to the front
 //! - `app.open {path}` / `app.save {path}`: relative file I/O under the automation roots; reply with `warnings`
 //! - `app.quit`
+//! - `app.capabilities`: version and feature names for callers that feature-detect
+//! - `events.subscribe {events?}`: push `document.opened|saved|closed` lines on this connection
 //! - `jobs.list` / `jobs.cancel {job?}`: background jobs (#210) with progress; cancel one (or all).
 //!   `engine.execute`, `ui.menu.invoke` and `ui.dialog.confirm` wait for a command that runs as a
 //!   job unless `wait: false` (then the reply is `{job, pending: true}`)
@@ -76,12 +78,15 @@ pub struct ControlRequest {
     pub deadline: Option<std::time::Instant>,
     /// Shared with the transport, so that when it stops waiting it knows whether the command ran.
     pub dispatch: Dispatch,
+    /// `events.subscribe`: where the connection wants its event lines (see `doc_events`). The
+    /// transport sets it; a subscribe request without one is refused.
+    pub events: Option<Sender<Value>>,
 }
 
 impl ControlRequest {
     pub fn new(method: impl Into<String>, params: Value) -> (Self, std::sync::mpsc::Receiver<ControlResponse>) {
         let (tx, rx) = std::sync::mpsc::channel();
-        (Self { method: method.into(), params, reply: tx, deadline: None, dispatch: Dispatch::default() }, rx)
+        (Self { method: method.into(), params, reply: tx, deadline: None, dispatch: Dispatch::default(), events: None }, rx)
     }
 }
 
@@ -375,6 +380,8 @@ fn modifiers_from(p: &Value) -> egui::Modifiers {
 
 /// The `dialog` id of the shell's own dialog (`workspace_ui`) in `ui.inspect` and `ui.dialog.*`.
 const SHELL_DIALOG: &str = "shell";
+/// `ui.dialog.confirm` / `ui.dialog.cancel` target for File › Save's flatten confirmation.
+const FLATTEN_DIALOG: &str = "flattenSave";
 
 pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) -> Outcome {
     let saved = app.session.authorize;
@@ -934,6 +941,29 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 None => err("no shell dialog is open"),
             }
         }
+        // File › Save's flatten confirmation (`ui.inspect.flattenSave`): confirm = Flatten and
+        // Save, `{"saveAs": true}` = Save As…, cancel = Cancel.
+        "ui.dialog.confirm" | "ui.dialog.cancel" if s("dialog") == Some(FLATTEN_DIALOG) => {
+            if app.flatten_save.is_none() {
+                return err("no flatten prompt is open");
+            }
+            // Answering writes the document's own file, as `file.save` does.
+            if req.method == "ui.dialog.confirm"
+                && let Some(authorize) = app.services.automation_command.as_ref()
+                && let Err(error) = authorize("file.save", &json!({"flatten": true}))
+            {
+                return err(error);
+            }
+            let answer = if req.method == "ui.dialog.cancel" {
+                crate::flatten_save_ui::Answer::Cancel
+            } else if p.get("saveAs").and_then(Value::as_bool).unwrap_or(false) {
+                crate::flatten_save_ui::Answer::SaveAs
+            } else {
+                crate::flatten_save_ui::Answer::Flatten
+            };
+            crate::flatten_save_ui::answer(app, ctx, answer);
+            ok(json!({"status": app.ui.status, "error": app.ui.status_error}))
+        }
         "ui.dialog.confirm" if s("dialog") == Some(SHELL_DIALOG) => {
             let Some((kind, fields)) = app.ui.shell.dialog.clone() else { return err("no shell dialog is open") };
             if let Some((command, params)) = crate::workspace_ui::dialog_command(&kind, &fields)
@@ -1334,10 +1364,30 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
         "app.save" => match crate::FormatChoices::from_params(p, "app.save") {
             Ok(choices) => {
                 let path = s("path").map(str::to_string);
-                run_waiting(app, p.get("wait").and_then(Value::as_bool).unwrap_or(true), move |app| app.save_automation_with(path, choices))
+                let flatten = p.get("flatten").and_then(Value::as_bool).unwrap_or(false);
+                run_waiting(app, p.get("wait").and_then(Value::as_bool).unwrap_or(true), move |app| app.save_automation_with(path, flatten, choices))
             }
             Err(e) => err(e),
         },
+        "events.subscribe" => {
+            let Some(tx) = req.events.clone() else { return err("events.subscribe needs a connection that can receive events (the TCP control channel)") };
+            let events = match p.get("events") {
+                None | Some(Value::Null) => Vec::new(),
+                Some(Value::Array(a)) => match a.iter().map(|v| v.as_str().map(str::to_string)).collect::<Option<Vec<_>>>() {
+                    Some(names) => names,
+                    None => return err("`events` must be an array of event names"),
+                },
+                Some(_) => return err("`events` must be an array of event names"),
+            };
+            match app.doc_events.subscribe(tx, events) {
+                Ok(events) => {
+                    app.sync_doc_events();
+                    ok(json!({"events": events}))
+                }
+                Err(e) => err(e),
+            }
+        }
+        "app.capabilities" => ok(capabilities()),
         "app.quit" => {
             app.allow_close = true;
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -1346,6 +1396,23 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
         other => err(format!("unknown method `{other}`")),
     }
 }
+
+/// What this build supports, for callers that feature-detect (`app.capabilities`). Each entry
+/// in `features` names a behaviour a caller may rely on:
+/// - `saveInPlace`: Save writes back to an opened TIFF, JPEG, PNG or WebP (`flatten` confirms).
+/// - `events`: `events.subscribe` pushes the `events` listed.
+pub fn capabilities() -> Value {
+    json!({
+        "app": "photocraft",
+        "version": photocraft_engine::build_info::long_version(),
+        "protocol": 1,
+        "features": FEATURES,
+        "events": crate::doc_events::EVENTS,
+    })
+}
+
+/// `app.capabilities` → `features`.
+pub const FEATURES: &[&str] = &["saveInPlace", "events", "wait"];
 
 /// Snapshot of everything on screen, addressable by id.
 pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
@@ -1402,6 +1469,7 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
         "view": app.ui.view,
         "views": app.ui.views,
         "dialogs": dialogs,
+        "flattenSave": crate::flatten_save_ui::inspect(app),
         "windows": app.ui.windows,
         "theme": app.ui.theme,
         "status": app.ui.status,
@@ -2719,11 +2787,18 @@ mod tests {
         // A flat export is a copy: the document keeps its name and file (#2579).
         let st = app.session.active().unwrap();
         assert_eq!((st.doc.name.as_str(), st.path.as_deref()), ("warn.psd", Some("in/warn.psd")));
-        // Without `path`, only a layered file is written back, like File › Save (#416).
+        // Without `path`, the document's own file is written back, like File › Save (#416), but
+        // flattening layers into a JPEG needs `flatten: true`.
         call(&mut app, &ctx, "app.open", json!({"path": "in/flat.jpg"}));
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
         let r = call(&mut app, &ctx, "app.save", json!({}));
-        assert!(r["error"].as_str().unwrap().contains("pass `path`"), "{r}");
+        assert!(r["error"].as_str().unwrap().contains("flatten: true"), "{r}");
         assert_eq!(written.borrow().len(), 1, "nothing written over the JPEG");
+        let r = call(&mut app, &ctx, "app.save", json!({"flatten": true}));
+        assert_eq!(r["result"]["path"], "in/flat.jpg", "{r}");
+        assert_eq!(written.borrow().last().map(String::as_str), Some("in/flat.jpg"));
+        assert!(!app.session.active().unwrap().is_dirty(), "written back to its own file");
         call(&mut app, &ctx, "app.open", json!({"path": "in/layered.psd"}));
         let r = call(&mut app, &ctx, "app.save", json!({}));
         assert_eq!(r["result"]["path"], "in/layered.psd", "{r}");

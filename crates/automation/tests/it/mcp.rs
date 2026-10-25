@@ -580,25 +580,48 @@ async fn affinity_preview_warns_and_requires_a_new_save_path() {
     cleanup(&dir);
 }
 
-/// A save without `path` writes back only to a layered file in its own format (#416).
+/// A save without `path` writes the document back to its own file in its own format (#416),
+/// and never flattens layers into a flat file unless `flatten: true` confirms it.
 #[tokio::test(flavor = "multi_thread")]
-async fn save_without_path_never_flattens_over_the_opened_file() {
+async fn save_without_path_never_flattens_over_the_opened_file_unconfirmed() {
     let dir = tmp("save-in-place");
     let png = write_image(&dir, "seed.png", photocraft_codecs::Format::Png);
     let jpg = write_image(&dir, "seed.jpg", photocraft_codecs::Format::Jpeg);
     let client = connect(headless_in(&dir)).await;
     let refused = |r: &CallToolResult| r.is_error == Some(true) && text(r).contains("pass `path`");
+    let unconfirmed = |r: &CallToolResult| r.is_error == Some(true) && text(r).contains("flatten: true");
 
-    // A flat file, edited or not, is left unchanged.
+    // A flat file given layers is left unchanged until the flatten is confirmed.
     json_of(&call(&client, "doc_open", json!({"path": "seed.png"})).await);
     json_of(&call(&client, "command_run", json!({"id": "layer.newAdjustmentLayer.curves", "params": {"points": [[0, 0], [128, 170], [255, 255]]}})).await);
     let r = call(&client, "doc_save", json!({})).await;
-    assert!(refused(&r), "{}", text(&r));
+    assert!(unconfirmed(&r), "{}", text(&r));
     assert_eq!(std::fs::read(dir.join("seed.png")).unwrap(), png);
+    assert_eq!(json_of(&call(&client, "doc_save", json!({"flatten": true})).await)["path"], "seed.png");
+    let flattened = std::fs::read(dir.join("seed.png")).unwrap();
+    assert_ne!(flattened, png, "the curves are baked into the PNG");
+    assert_eq!(photocraft_codecs::detect(&flattened), Some(photocraft_codecs::Format::Png));
+    std::fs::write(dir.join("seed.png"), &png).unwrap();
+    // A plain image is written back in its own format without asking.
     json_of(&call(&client, "doc_open", json!({"path": "seed.jpg"})).await);
-    let r = call(&client, "doc_save", json!({})).await;
-    assert!(refused(&r), "{}", text(&r));
-    assert_eq!(std::fs::read(dir.join("seed.jpg")).unwrap(), jpg);
+    assert_eq!(json_of(&call(&client, "doc_save", json!({})).await)["path"], "seed.jpg");
+    assert_eq!(photocraft_codecs::detect(&std::fs::read(dir.join("seed.jpg")).unwrap()), Some(photocraft_codecs::Format::Jpeg));
+    std::fs::write(dir.join("seed.jpg"), &jpg).unwrap();
+
+    // The same test as the desktop: a lone layer with reduced opacity or a mask is not a plain
+    // image, so writing it back flattens and needs confirming.
+    for edit in [json!({"id": "layer.setProps", "params": {"opacity": 0.5}}), json!({"id": "layer.layerMask.revealAll", "params": {}})] {
+        json_of(&call(&client, "doc_open", json!({"path": "seed.png"})).await);
+        json_of(&call(&client, "command_run", edit.clone()).await);
+        let r = call(&client, "doc_save", json!({})).await;
+        assert!(unconfirmed(&r), "{edit}: {}", text(&r));
+        assert_eq!(std::fs::read(dir.join("seed.png")).unwrap(), png, "{edit}");
+    }
+    // A lone unlocked plain layer is still a plain image: written back without asking.
+    json_of(&call(&client, "doc_open", json!({"path": "seed.png"})).await);
+    json_of(&call(&client, "command_run", json!({"id": "layer.new.layerFromBackground", "params": {}})).await);
+    assert_eq!(json_of(&call(&client, "doc_save", json!({})).await)["path"], "seed.png");
+    std::fs::write(dir.join("seed.png"), &png).unwrap();
 
     // An explicit path, even the opened file's own, still writes and reports what was lost.
     let r = json_of(&call(&client, "doc_save", json!({"path": "seed.jpg"})).await);

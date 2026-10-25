@@ -1900,7 +1900,7 @@
 	Animated zoom	動畫縮放
 	Apply auto tone	套用自動色調
 	Ask	詢問
-	Ask before saving layered tiff	儲存多圖層 TIFF 前詢問
+	Ask before saving layered TIFF	儲存多圖層 TIFF 前詢問
 	Auto collapse icon panels	自動收合圖示面板
 	Auto show hidden panels	自動顯示隱藏的面板
 	Auto show home screen	自動顯示首頁畫面
@@ -3004,6 +3004,11 @@ curves	Smooth	平滑
 
 # Graphics Adapter preference (#1885)
 	GPU adapter	GPU 介面卡
+	Save layers in TIFF	在 TIFF 中儲存圖層
+	Save Flattened?	儲存為平面化影像？
+	Flatten and Save	平面化並儲存
+	Use Save As to keep the layers in a PSD or TIFF.	若要保留圖層，請使用「另存新檔」儲存為 PSD 或 TIFF。
+	“{name}” is a {format} file, which can't keep layers. Saving flattens the image in the file; the layers stay in this window until you close it.	「{name}」是 {format} 檔案，無法保留圖層。儲存時檔案中的影像會平面化；在關閉此視窗之前，圖層仍保留在視窗中。
 
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	匯入樣式…

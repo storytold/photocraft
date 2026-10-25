@@ -59,6 +59,11 @@ fn layered_flat_source_save_defaults_to_psd_without_overwriting_source() {
     for command in ["file.save", "file.saveAs"] {
         let (mut app, open, written) = jpeg_app(Some("/pics/My image.JPEG"), true);
         menus::invoke(&mut app, &ctx, command, json!({})).unwrap();
+        if command == "file.save" {
+            // Save first asks whether to flatten into the JPEG; Save As… is the way out.
+            assert!(app.flatten_save.is_some());
+            crate::flatten_save_ui::answer(&mut app, &ctx, crate::flatten_save_ui::Answer::SaveAs);
+        }
         app.poll_file_dialog(&ctx, None);
         assert!(
             matches!(open.borrow().as_slice(), [(FileDialogRequest::Save { suggested }, _)] if suggested == "/pics/My image.psd"),
@@ -168,17 +173,16 @@ fn layered_save_respects_explicit_jpeg_choices() {
     }
 }
 
-/// File › Save on a flat JPEG asks for its name; confirming its own file asks JPEG Options and,
-/// once answered, records a plain Save that writes the file an action is played on (#3531).
+/// File › Save on a flat JPEG writes back to it after JPEG Options and, once answered, records a
+/// plain Save that writes the file an action is played on (#3531).
 #[test]
 fn plain_save_of_a_flat_jpeg_asks_jpeg_options_and_records_a_plain_save() {
     let ctx = egui::Context::default();
     let (mut app, open, written) = jpeg_app(Some("/pics/photo.jpg"), false);
     app.run("actions.record", json!({})).unwrap();
+    // Save writes back to the opened JPEG: no Save dialog, only JPEG Options.
     menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap();
-    app.poll_file_dialog(&ctx, None);
-    answer(&open, Some(FileDialogAnswer::SaveTo("/pics/photo.jpg".into())));
-    app.poll_file_dialog(&ctx, None);
+    assert!(!app.file_dialog_open() && open.borrow().is_empty());
     assert_eq!(app.jpeg_options.as_ref().map(|p| (p.record, p.copy)), Some(("file.save", false)));
     assert!(written.borrow().is_empty());
     crate::jpeg_options_ui::confirm(&mut app, &ctx);
@@ -187,7 +191,7 @@ fn plain_save_of_a_flat_jpeg_asks_jpeg_options_and_records_a_plain_save() {
     assert_eq!(app.session.actions.list[0].steps, [("file.save".to_string(), json!({}))]);
 }
 
-/// A plain Save confirmed in the dialog keeps a changed JPEG Options answer in its recorded step,
+/// A plain Save keeps a changed JPEG Options answer in its recorded step,
 /// and playing it writes the active flat JPEG with that answer, without asking.
 #[test]
 fn plain_save_of_a_flat_jpeg_records_and_replays_a_changed_quality() {
@@ -200,10 +204,9 @@ fn plain_save_of_a_flat_jpeg_records_and_replays_a_changed_quality() {
         Ok((b"out".to_vec(), Vec::new()))
     }));
     app.run("actions.record", json!({})).unwrap();
+    // Save writes back to the opened JPEG: no Save dialog, only JPEG Options.
     menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap();
-    app.poll_file_dialog(&ctx, None);
-    answer(&open, Some(FileDialogAnswer::SaveTo("/pics/photo.jpg".into())));
-    app.poll_file_dialog(&ctx, None);
+    assert!(!app.file_dialog_open() && open.borrow().is_empty());
     let prompt = app.jpeg_options.as_mut().expect("JPEG Options");
     prompt.quality = 3;
     prompt.format = photocraft_codecs::JpegFormat::Progressive;
@@ -1278,7 +1281,7 @@ fn save_as_openraster_of_what_it_cannot_hold_is_a_copy() {
     assert_eq!(st.path.as_deref(), Some("/pics/art.psd"), "the document keeps its file");
     assert!(st.is_dirty());
     app.session.active_mut().unwrap().path = Some("/pics/art.ora".into());
-    let err = app.save_automation(None).unwrap_err();
+    let err = app.save_automation(None, false).unwrap_err();
     assert!(err.contains("OpenRaster"), "{err}");
     assert_eq!(written.borrow().len(), 1);
 }
@@ -1386,9 +1389,8 @@ fn save_asks_before_replacing_a_file_another_app_changed() {
 }
 
 #[test]
-fn save_of_a_flat_file_asks_after_the_dialog_when_another_app_changed_it() {
+fn save_of_a_flat_file_asks_first_when_another_app_changed_it() {
     let ctx = egui::Context::default();
-    // Lowercase: the Save dialog lowercases a typed extension by default.
     let path = "/pics/My image.jpg";
     let (mut app, open, written) = jpeg_app(None, false);
     let disk = on_disk(&mut app);
@@ -1396,10 +1398,10 @@ fn save_of_a_flat_file_asks_after_the_dialog_when_another_app_changed_it() {
     app.opened_from(path);
     app.run("image.adjustments.invert", json!({})).unwrap();
     changed_by_another_app(&disk, path);
+    // A plain image is written back to its own JPEG without a dialog, but not over a change
+    // another app made.
     menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap();
-    app.poll_file_dialog(&ctx, None);
-    answer(&open, Some(FileDialogAnswer::SaveTo(path.into())));
-    app.poll_file_dialog(&ctx, None);
+    assert!(!app.file_dialog_open() && open.borrow().is_empty());
     assert!(written.borrow().is_empty(), "the changed file is not replaced before the answer");
     let id = disk_prompt(&app).expect("Save asks first").id;
     crate::dialogs::confirm(&mut app, id).unwrap();

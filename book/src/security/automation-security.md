@@ -33,8 +33,10 @@ Automation is a privilege boundary because requests can cause filesystem access,
 - Engine commands are expected to reject invalid parameters without panicking.
 - Remote filesystem methods use separately granted read and write directory capabilities.
 - A save without a `path` (MCP `doc_save`, `serve` `doc.save`, the control channel's `app.save`)
-  writes back only to the document's own PSD, PSB or `.pcraft` file in its own format; any other
-  save needs an explicit `path`, so automation never flattens or converts over the file it opened.
+  writes back only to the document's own file in its own format (PSD, PSB, `.pcraft`,
+  OpenRaster, TIFF, JPEG, PNG or WebP); flattening layers into a flat file needs `flatten: true`,
+  and any other save needs an explicit `path`, so automation never converts over the file it
+  opened or flattens it unasked.
 - Automation paths must be relative beneath the applicable root. Absolute paths, parent
   traversal, alternate separators, Windows device names, malformed components, and link escapes
   are rejected before file effects.

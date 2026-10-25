@@ -1869,7 +1869,7 @@
 	Animated zoom	Zoom beranimasi
 	Apply auto tone	Terapkan auto tone
 	Ask	Tanya
-	Ask before saving layered tiff	Tanya sebelum menyimpan TIFF berlayer
+	Ask before saving layered TIFF	Tanya sebelum menyimpan TIFF berlayer
 	Auto collapse icon panels	Ciutkan otomatis panel ikon
 	Auto show hidden panels	Tampilkan otomatis panel tersembunyi
 	Auto show home screen	Tampilkan otomatis layar beranda
@@ -3395,6 +3395,11 @@ curves	Smooth	Haluskan
 
 # Graphics Adapter preference (#1885)
 	GPU adapter	Adaptor GPU
+	Save layers in TIFF	Simpan layer dalam TIFF
+	Save Flattened?	Simpan dalam bentuk datar?
+	Flatten and Save	Ratakan dan Simpan
+	Use Save As to keep the layers in a PSD or TIFF.	Gunakan Simpan Sebagai untuk mempertahankan layer dalam PSD atau TIFF.
+	“{name}” is a {format} file, which can't keep layers. Saving flattens the image in the file; the layers stay in this window until you close it.	“{name}” adalah file {format}, yang tidak dapat menyimpan layer. Menyimpan akan meratakan gambar di file; layer tetap ada di jendela ini sampai Anda menutupnya.
 
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Impor Gaya…

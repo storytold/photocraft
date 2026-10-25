@@ -108,7 +108,7 @@ fn accepted_psd_keeps_its_source_path_and_uses_the_normal_save_writer() {
         assert!(photocraft_io::import(path, &stored.borrow()).is_ok());
     }
     assert_ne!(*stored.borrow(), original, "ordinary Save can replace the source after consent");
-    assert!(app.save_automation(Some("automated-copy.psd".into())).is_ok());
+    assert!(app.save_automation(Some("automated-copy.psd".into()), false).is_ok());
 }
 
 /// Verifies browser-style downloads keep their existing unconfirmed-save semantics.

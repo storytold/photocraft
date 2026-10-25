@@ -86,11 +86,11 @@ fn failed_encode_or_write_keeps_the_previous_name_path_and_dirty_state() {
         app.services.write = Some(Box::new(|_, _| Err("disk full".into())));
         assert!(app.save_as(Some("after.psd".into())).is_err());
         assert_eq!(identity(&app), before);
-        assert!(app.save_automation(Some("after.psd".into())).is_ok());
+        assert!(app.save_automation(Some("after.psd".into()), false).is_ok());
         app.run("layer.new.layer", json!({})).unwrap();
         let before = identity(&app);
         app.services.automation_write = Some(Box::new(|_, _| Err("denied".into())));
-        assert!(app.save_automation(Some("another.psd".into())).is_err());
+        assert!(app.save_automation(Some("another.psd".into()), false).is_err());
         assert_eq!(identity(&app), before);
         app.services.export = Some(Box::new(|_, _, _| Err("cannot encode".into())));
         assert!(app.save_as(Some("after.psd".into())).is_err());
@@ -123,7 +123,7 @@ fn web_download_and_automation_saves_use_the_same_identity_completion() {
     app.save_as(None).unwrap();
     app.poll_file_dialog(&egui::Context::default(), None);
     assert_eq!(app.session.active().unwrap().doc.name, "Untitled-1.psd");
-    app.save_automation(Some("保存/agent save.psd".into())).unwrap();
+    app.save_automation(Some("保存/agent save.psd".into()), false).unwrap();
     assert_eq!(app.session.active().unwrap().doc.name, "agent save.psd");
 }
 
@@ -194,10 +194,10 @@ fn automation_flat_save_is_a_copy() {
     let mut app = app();
     let before = identity(&app);
     for flat in ["flat.png", "flat.jpg", "flat.tif"] {
-        app.save_automation(Some(flat.into())).unwrap();
+        app.save_automation(Some(flat.into()), false).unwrap();
         assert_eq!(identity(&app), before, "{flat}");
     }
-    app.save_automation(Some("layers.psd".into())).unwrap();
+    app.save_automation(Some("layers.psd".into()), false).unwrap();
     let st = app.session.active().unwrap();
     assert_eq!((st.doc.name.as_str(), st.path.as_deref()), ("layers.psd", Some("layers.psd")));
     assert_eq!(st.saved_revision, st.revision);
@@ -220,7 +220,7 @@ fn image_previews_preference_reaches_the_exporter() {
         seen.borrow_mut().clear();
         menus::invoke(&mut app, &ctx, "file.saveAs", json!({"path": format!("{value}.psd")})).unwrap();
         menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap();
-        app.save_automation(Some(format!("{value} agent.psd"))).unwrap();
+        app.save_automation(Some(format!("{value} agent.psd")), false).unwrap();
         assert_eq!(*seen.borrow(), [expect; 3], "{value}");
     }
 }
@@ -243,7 +243,7 @@ fn maximize_compatibility_preference_reaches_the_exporter() {
         seen.borrow_mut().clear();
         menus::invoke(&mut app, &ctx, "file.saveAs", json!({"path": format!("{value}.psd")})).unwrap();
         menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap();
-        app.save_automation(Some(format!("{value} agent.psd"))).unwrap();
+        app.save_automation(Some(format!("{value} agent.psd")), false).unwrap();
         assert_eq!(*seen.borrow(), [expect; 3], "{value}");
     }
 }

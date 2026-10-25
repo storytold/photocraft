@@ -1897,7 +1897,7 @@
 	Animated zoom	Animowane powiększanie
 	Apply auto tone	Zastosuj automatyczne tony
 	Ask	Pytaj
-	Ask before saving layered tiff	Pytaj przed zapisem wielowarstwowego TIFF
+	Ask before saving layered TIFF	Pytaj przed zapisem wielowarstwowego TIFF
 	Auto collapse icon panels	Automatycznie zwijaj panele ikon
 	Auto show hidden panels	Automatycznie pokazuj ukryte panele
 	Auto show home screen	Automatycznie pokazuj ekran startowy
@@ -3997,6 +3997,11 @@ curves	Smooth	Wygładź
 
 # Graphics Adapter preference (#1885)
 	GPU adapter	Karta GPU
+	Save layers in TIFF	Zapisuj warstwy w TIFF
+	Save Flattened?	Zapisać spłaszczony?
+	Flatten and Save	Spłaszcz i zapisz
+	Use Save As to keep the layers in a PSD or TIFF.	Użyj polecenia Zapisz jako, aby zachować warstwy w pliku PSD lub TIFF.
+	“{name}” is a {format} file, which can't keep layers. Saving flattens the image in the file; the layers stay in this window until you close it.	„{name}” to plik {format}, który nie może przechowywać warstw. Zapis spłaszczy obraz w pliku; warstwy pozostaną w tym oknie do jego zamknięcia.
 
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Importuj style…

@@ -406,13 +406,15 @@ fn digit_run(it: &mut std::iter::Peekable<std::str::Chars>) -> String {
     run
 }
 
+/// `p` made absolute against the working directory, as [`PhotocraftApp::open_paths`] records it
+/// (so a `--wait` list matches the opened documents' paths).
 #[cfg(not(target_arch = "wasm32"))]
-fn absolute(p: &str) -> String {
+pub fn absolute(p: &str) -> String {
     std::path::absolute(p).map(|a| a.to_string_lossy().to_string()).unwrap_or_else(|_| p.to_string())
 }
 
 #[cfg(target_arch = "wasm32")]
-fn absolute(p: &str) -> String {
+pub fn absolute(p: &str) -> String {
     p.to_string()
 }
 

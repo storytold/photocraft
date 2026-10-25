@@ -39,6 +39,11 @@ pub(crate) struct LaunchArgs {
     /// already running
     #[arg(long)]
     pub(crate) new_instance: bool,
+    /// Wait until every file named has been closed, for tools that launch an editor and wait for
+    /// it: exit status 0 when any of them was saved, 1 when all were closed unsaved. The window
+    /// closes by itself once they are closed and no other document is open
+    #[arg(long, requires = "files")]
+    pub(crate) wait: bool,
     /// How frames reach the display: fifo, autovsync or novsync (also immediate or mailbox).
     /// Without it, PHOTOCRAFT_PRESENT_MODE
     #[arg(long, value_name = "MODE", value_parser = present_mode)]
@@ -79,6 +84,8 @@ pub(crate) enum PerProcess {
     PresentMode,
     FrameLatency,
     StrokeTrace,
+    /// `--wait`: the caller blocks on this process.
+    Wait,
     /// PHOTOCRAFT_GPU_ADAPTER, when startup will act on it (`gpu_startup`). Not a flag.
     GpuAdapterEnv,
 }
@@ -87,8 +94,16 @@ impl PerProcess {
     /// The flags, in the order a log line lists them. A flag's variable asks for the same thing, so
     /// it counts too (#7242); the variables that aren't a flag's fallback are counted by
     /// `single_instance::env_launch_options`.
-    pub(crate) const FLAGS: [PerProcess; 7] =
-        [Self::AutomationReadRoot, Self::AutomationWriteRoot, Self::SafeGpu, Self::InWindowMenus, Self::PresentMode, Self::FrameLatency, Self::StrokeTrace];
+    pub(crate) const FLAGS: [PerProcess; 8] = [
+        Self::AutomationReadRoot,
+        Self::AutomationWriteRoot,
+        Self::SafeGpu,
+        Self::InWindowMenus,
+        Self::PresentMode,
+        Self::FrameLatency,
+        Self::StrokeTrace,
+        Self::Wait,
+    ];
 
     /// The flag's clap argument id.
     fn id(self) -> Option<&'static str> {
@@ -100,6 +115,7 @@ impl PerProcess {
             Self::PresentMode => "present_mode",
             Self::FrameLatency => "frame_latency",
             Self::StrokeTrace => "stroke_trace",
+            Self::Wait => "wait",
             Self::GpuAdapterEnv => return None,
         })
     }
@@ -115,9 +131,17 @@ impl fmt::Display for PerProcess {
             Self::PresentMode => "--present-mode",
             Self::FrameLatency => "--frame-latency",
             Self::StrokeTrace => "--stroke-trace",
+            Self::Wait => "--wait",
             Self::GpuAdapterEnv => "PHOTOCRAFT_GPU_ADAPTER",
         })
     }
+}
+
+/// `photocraft --version --json`: print `app.capabilities` so a launcher can feature-detect
+/// without starting a window. Checked before clap, which stops at `--version`; builds without it
+/// print the plain version line for these arguments, so the probe is safe against every release.
+pub(crate) fn version_json(args: &[OsString]) -> bool {
+    matches!(args, [version, json, ..] if version == "--version" && json == "--json")
 }
 
 /// The files to open, as [`LaunchArgs::file_names`] sorts them.
@@ -280,6 +304,7 @@ mod tests {
             "Mailbox",
             "--frame-latency",
             "1",
+            "--wait",
             "photo.psd",
         ])
         .unwrap();
@@ -288,7 +313,7 @@ mod tests {
         assert_eq!(parsed.auth.control_token_file, None);
         assert_eq!(parsed.automation.automation_read_root.as_deref(), Some(std::path::Path::new("/r")));
         assert_eq!(parsed.automation.automation_write_root.as_deref(), Some(std::path::Path::new("/w")));
-        assert!(parsed.safe_gpu && parsed.in_window_menus && parsed.new_instance);
+        assert!(parsed.safe_gpu && parsed.in_window_menus && parsed.new_instance && parsed.wait);
         assert_eq!(parsed.present_mode, Some(PresentMode::AutoNoVsync));
         assert_eq!(parsed.frame_latency, Some(1));
         assert_eq!(parsed.stroke_trace.as_deref(), Some("stderr"));
@@ -299,6 +324,22 @@ mod tests {
         let parsed = parse_args(&["--control-token-file", "/tmp/token", "--new-instance"]).unwrap();
         assert_eq!(parsed.auth.control_token_file.as_deref(), Some(std::path::Path::new("/tmp/token")));
         assert!(parsed.launch_options.is_empty() && !parsed.in_window_menus, "{:?}", parsed.launch_options);
+    }
+
+    #[test]
+    fn wait_needs_files() {
+        let e = parse_args(&["--wait"]).err().unwrap();
+        assert_eq!((e.kind(), e.exit_code()), (ErrorKind::MissingRequiredArgument, 2));
+        assert!(parse_args(&["--wait", "a.jpg", "b.tif"]).is_ok_and(|p| p.wait));
+    }
+
+    #[test]
+    fn version_json_is_only_the_version_flag_then_json() {
+        let os = |v: &[&str]| v.iter().map(OsString::from).collect::<Vec<_>>();
+        assert!(version_json(&os(&["--version", "--json"])));
+        for other in [&[][..], &["--version"], &["--json", "--version"], &["photo.jpg", "--version", "--json"], &["--version", "--control"]] {
+            assert!(!version_json(&os(other)), "{other:?}");
+        }
     }
 
     #[test]

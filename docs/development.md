@@ -51,6 +51,13 @@ Image code is slow at `opt-level 0`, so the workspace profile builds dependencie
 
 The dev profile builds PhotoCraft's crates with `debug = "line-tables-only"` and dependencies with no debug info: panic backtraces keep file and line in PhotoCraft code, and test binaries link about twice as fast. To inspect local variables in a debugger, build with `CARGO_PROFILE_DEV_DEBUG=true`.
 
+### External editor flags
+
+`photocraft --wait <file>…` blocks until those files are closed: exit status 0 if any was saved,
+1 if all were closed unsaved (git `core.editor`, a photo manager's "Edit in", scripts). With
+`events.subscribe` on the control channel and `app.capabilities` for feature detection, this is
+described in the book's [External editor integration](../book/src/automation/external-editor.md).
+
 ### Faster test loops
 
 Most of a `cargo test` run is linking test binaries and running them one after another. While iterating:

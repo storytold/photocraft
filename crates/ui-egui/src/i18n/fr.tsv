@@ -1859,7 +1859,7 @@
 	Animated zoom	Zoom animé
 	Apply auto tone	Appliquer la tonalité automatique
 	Ask	Demander
-	Ask before saving layered tiff	Demander avant d'enregistrer un TIFF avec calques
+	Ask before saving layered TIFF	Demander avant d'enregistrer un TIFF avec calques
 	Auto collapse icon panels	Réduire automatiquement les panneaux en icônes
 	Auto show hidden panels	Afficher automatiquement les panneaux masqués
 	Auto show home screen	Afficher automatiquement l'écran d'accueil
@@ -3392,6 +3392,11 @@ curves	Smooth	Lisser
 
 # Graphics Adapter preference (#1885)
 	GPU adapter	Adaptateur GPU
+	Save layers in TIFF	Enregistrer les calques dans le TIFF
+	Save Flattened?	Enregistrer aplati ?
+	Flatten and Save	Aplatir et enregistrer
+	Use Save As to keep the layers in a PSD or TIFF.	Utilisez Enregistrer sous pour conserver les calques dans un PSD ou un TIFF.
+	“{name}” is a {format} file, which can't keep layers. Saving flattens the image in the file; the layers stay in this window until you close it.	« {name} » est un fichier {format}, qui ne peut pas conserver de calques. L'enregistrement aplatit l'image dans le fichier ; les calques restent dans cette fenêtre jusqu'à sa fermeture.
 
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Importer des styles…

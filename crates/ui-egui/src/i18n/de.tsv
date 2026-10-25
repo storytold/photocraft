@@ -1877,7 +1877,7 @@
 	Animated zoom	Animierter Zoom
 	Apply auto tone	Automatische Tonwertkorrektur anwenden
 	Ask	Nachfragen
-	Ask before saving layered tiff	Vor dem Speichern von mehrschichtigen TIFFs nachfragen
+	Ask before saving layered TIFF	Vor dem Speichern von mehrschichtigen TIFFs nachfragen
 	Auto collapse icon panels	Symbol-Bedienfelder automatisch einklappen
 	Auto show hidden panels	Ausgeblendete Bedienfelder automatisch anzeigen
 	Auto show home screen	Startbildschirm automatisch anzeigen
@@ -3392,6 +3392,11 @@ curves	Smooth	Glätten
 
 # Graphics Adapter preference (#1885)
 	GPU adapter	GPU-Adapter
+	Save layers in TIFF	Ebenen in TIFF speichern
+	Save Flattened?	Auf eine Ebene reduziert speichern?
+	Flatten and Save	Reduzieren und speichern
+	Use Save As to keep the layers in a PSD or TIFF.	Mit „Speichern unter“ bleiben die Ebenen in einer PSD- oder TIFF-Datei erhalten.
+	“{name}” is a {format} file, which can't keep layers. Saving flattens the image in the file; the layers stay in this window until you close it.	„{name}“ ist eine {format}-Datei, die keine Ebenen enthalten kann. Beim Speichern wird das Bild in der Datei auf eine Ebene reduziert; die Ebenen bleiben in diesem Fenster, bis Sie es schließen.
 
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Stile importieren…

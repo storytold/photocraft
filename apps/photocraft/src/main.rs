@@ -12,6 +12,11 @@
 //! `presentation`); `--stroke-trace` times each brush stroke's frames (`PHOTOCRAFT_STROKE_TRACE`;
 //! `photocraft_ui_egui::stroke_trace`).
 //!
+//! `--wait` blocks until every file named on the command line has been closed, for tools that
+//! launch an editor and wait for it (git's `core.editor`, a photo manager's "Edit in", scripts):
+//! exit status 0 when any of them was saved at least once, 1 when all were closed unsaved. The
+//! window closes by itself once those files are closed and no other document is open.
+//!
 //! `--safe-gpu` starts with the CPU renderer (no GPU canvas; a software adapter for the window
 //! where the platform has one) for this launch, e.g. after a graphics driver crash. A start that
 //! crashes inside the driver also falls back by itself next time (see `gpu_startup`).
@@ -159,6 +164,15 @@ fn main() -> eframe::Result {
         return Ok(());
     }
 
+    // `--version --json` answers a launcher's feature probe without a window (see
+    // `launch_args::version_json`).
+    if launch_args::version_json(&std::env::args_os().skip(1).collect::<Vec<_>>()) {
+        use std::io::Write as _;
+        // Unlike `println!`, never panics when stdout is closed or a pipe.
+        let _ = writeln!(std::io::stdout().lock(), "{}", photocraft_ui_egui::control::capabilities());
+        return Ok(());
+    }
+
     // The system font scan can take seconds (minutes on some Macs): run it off the UI thread.
     photocraft_ui_egui::type_tool::warm_fonts();
     // `--help` and `--version` print to standard output and exit 0. A usage error (an unknown
@@ -172,6 +186,7 @@ fn main() -> eframe::Result {
         safe_gpu,
         in_window_menus,
         new_instance,
+        wait,
         present_mode,
         frame_latency,
         stroke_trace,
@@ -392,6 +407,9 @@ fn main() -> eframe::Result {
     log::info!("GPU startup: {:?} ({sentinel_ms:.2} ms)", plan);
     let retry_cpu = !safe_gpu && plan.backend != photocraft_engine::prefs::GpuBackend::Cpu;
     let keep_marker = gpu_startup::keep_marker_after_error(&plan, os);
+    // `--wait`: the outcome the waited files leave behind, read once the window closes.
+    let wait_outcome = wait.then(|| std::sync::Arc::new(std::sync::Mutex::new(photocraft_ui_egui::wait::WaitOutcome::default())));
+    let wait_in_app = wait_outcome.clone();
     let app_created = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let created_in_callback = app_created.clone();
     let started_sentinel = sentinel.clone();
@@ -568,6 +586,10 @@ fn main() -> eframe::Result {
             app.services.right_button_down = tablet::right_button_service();
             // Paths on the command line (Linux/Windows file associations, `photocraft a.psd`).
             app.open_paths(&files);
+            if let Some(outcome) = wait_in_app {
+                let paths = files.iter().map(|f| photocraft_ui_egui::file_open::absolute(f)).collect();
+                app.wait_for(paths, photocraft_ui_egui::wait::WaitNotify::Process(outcome));
+            }
             if !unreadable_paths.is_empty() {
                 use photocraft_ui_egui::i18n;
                 let line = i18n::t("{path}: the path is not valid Unicode; rename the file and open it again.");
@@ -624,10 +646,19 @@ fn main() -> eframe::Result {
                 .env("PHOTOCRAFT_GPU_STARTUP_FAILURE", &reason)
                 .spawn();
             match launched {
+                // `--wait` callers block on this process: pass the restarted one's status on.
+                Ok(mut child) if wait => std::process::exit(child.wait().ok().and_then(|s| s.code()).unwrap_or(1)),
                 Ok(_) => return Ok(()),
                 Err(error) => log::error!("could not start CPU compatibility mode: {error}"),
             }
         }
+    }
+    if let Some(outcome) = wait_outcome {
+        let code = outcome.lock().unwrap_or_else(std::sync::PoisonError::into_inner).exit_code();
+        if let Err(e) = &result {
+            log::error!("{e}");
+        }
+        std::process::exit(code);
     }
     result
 }

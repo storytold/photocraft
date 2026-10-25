@@ -1885,7 +1885,7 @@
 	Animated zoom	Zoom animato
 	Apply auto tone	Applica tono automatico
 	Ask	Chiedi
-	Ask before saving layered tiff	Chiedi prima di salvare TIFF con livelli
+	Ask before saving layered TIFF	Chiedi prima di salvare TIFF con livelli
 	Auto collapse icon panels	Comprimi automaticamente pannelli icone
 	Auto show hidden panels	Mostra automaticamente pannelli nascosti
 	Auto show home screen	Mostra automaticamente schermata home
@@ -4497,6 +4497,11 @@ shape	Appearance	Aspetto
 
 # Graphics Adapter preference (#1885)
 	GPU adapter	Adattatore GPU
+	Save layers in TIFF	Salva livelli in TIFF
+	Save Flattened?	Salvare unito?
+	Flatten and Save	Unisci e salva
+	Use Save As to keep the layers in a PSD or TIFF.	Usa Salva con nome per conservare i livelli in un PSD o TIFF.
+	“{name}” is a {format} file, which can't keep layers. Saving flattens the image in the file; the layers stay in this window until you close it.	«{name}» è un file {format}, che non può conservare i livelli. Il salvataggio unisce l'immagine nel file; i livelli restano in questa finestra finché non la chiudi.
 
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Importa stili…

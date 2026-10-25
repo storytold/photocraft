@@ -1853,7 +1853,7 @@
 	Animated zoom	Zoom animado
 	Apply auto tone	Aplicar tom automático
 	Ask	Perguntar
-	Ask before saving layered tiff	Perguntar antes de salvar TIFF em camadas
+	Ask before saving layered TIFF	Perguntar antes de salvar TIFF em camadas
 	Auto collapse icon panels	Recolher automaticamente painéis de ícones
 	Auto show hidden panels	Mostrar automaticamente painéis ocultos
 	Auto show home screen	Mostrar automaticamente a tela inicial
@@ -4170,6 +4170,11 @@ layerLabel	No Color	Sem cor
 
 # Graphics Adapter preference (#1885)
 	GPU adapter	Adaptador de GPU
+	Save layers in TIFF	Salvar camadas no TIFF
+	Save Flattened?	Salvar achatado?
+	Flatten and Save	Achatar e salvar
+	Use Save As to keep the layers in a PSD or TIFF.	Use Salvar como para manter as camadas em um PSD ou TIFF.
+	“{name}” is a {format} file, which can't keep layers. Saving flattens the image in the file; the layers stay in this window until you close it.	“{name}” é um arquivo {format}, que não pode manter camadas. Salvar achata a imagem no arquivo; as camadas continuam nesta janela até você fechá-la.
 
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Importar estilos…

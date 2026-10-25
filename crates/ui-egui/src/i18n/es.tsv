@@ -1891,7 +1891,7 @@
 	Animated zoom	Zoom animado
 	Apply auto tone	Aplicar el tono automático
 	Ask	Preguntar
-	Ask before saving layered tiff	Preguntar antes de guardar un TIFF con capas
+	Ask before saving layered TIFF	Preguntar antes de guardar un TIFF con capas
 	Auto collapse icon panels	Contraer automáticamente los paneles de iconos
 	Auto show hidden panels	Mostrar automáticamente los paneles ocultos
 	Auto show home screen	Mostrar automáticamente la pantalla de inicio
@@ -4342,6 +4342,11 @@ navigator	Zoom	Zoom
 
 # Graphics Adapter preference (#1885)
 	GPU adapter	Adaptador de GPU
+	Save layers in TIFF	Guardar capas en TIFF
+	Save Flattened?	¿Guardar acoplado?
+	Flatten and Save	Acoplar y guardar
+	Use Save As to keep the layers in a PSD or TIFF.	Use Guardar como para conservar las capas en un PSD o TIFF.
+	“{name}” is a {format} file, which can't keep layers. Saving flattens the image in the file; the layers stay in this window until you close it.	«{name}» es un archivo {format}, que no puede conservar capas. Al guardar, la imagen se acopla en el archivo; las capas siguen en esta ventana hasta que la cierre.
 
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Importar estilos…

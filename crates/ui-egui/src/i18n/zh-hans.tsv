@@ -1928,7 +1928,7 @@
 	Animated zoom	动画缩放
 	Apply auto tone	应用自动色调
 	Ask	询问
-	Ask before saving layered tiff	保存含图层的 TIFF 前询问
+	Ask before saving layered TIFF	保存含图层的 TIFF 前询问
 	Auto collapse icon panels	自动折叠图标面板
 	Auto show hidden panels	自动显示隐藏的面板
 	Auto show home screen	自动显示主屏幕
@@ -3040,6 +3040,11 @@ curves	Smooth	平滑
 
 # Graphics Adapter preference (#1885)
 	GPU adapter	GPU 适配器
+	Save layers in TIFF	在 TIFF 中存储图层
+	Save Flattened?	存储为拼合图像？
+	Flatten and Save	拼合并存储
+	Use Save As to keep the layers in a PSD or TIFF.	若要保留图层，请使用“存储为”保存为 PSD 或 TIFF。
+	“{name}” is a {format} file, which can't keep layers. Saving flattens the image in the file; the layers stay in this window until you close it.	“{name}”是 {format} 文件，无法保留图层。存储时文件中的图像将被拼合；在关闭此窗口之前，图层仍保留在窗口中。
 
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	导入样式…

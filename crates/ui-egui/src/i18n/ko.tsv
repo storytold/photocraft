@@ -1874,7 +1874,7 @@
 	Animated zoom	확대/축소 애니메이션
 	Apply auto tone	자동 톤 적용
 	Ask	묻기
-	Ask before saving layered tiff	레이어가 있는 TIFF 저장 전에 묻기
+	Ask before saving layered TIFF	레이어가 있는 TIFF 저장 전에 묻기
 	Auto collapse icon panels	아이콘 패널 자동 접기
 	Auto show hidden panels	숨겨진 패널 자동 표시
 	Auto show home screen	홈 화면 자동 표시
@@ -3590,6 +3590,11 @@ curves	Smooth	매끄럽게
 
 # Graphics Adapter preference (#1885)
 	GPU adapter	GPU 어댑터
+	Save layers in TIFF	TIFF에 레이어 저장
+	Save Flattened?	병합하여 저장하시겠습니까?
+	Flatten and Save	병합 후 저장
+	Use Save As to keep the layers in a PSD or TIFF.	레이어를 유지하려면 다른 이름으로 저장을 사용해 PSD 또는 TIFF로 저장하십시오.
+	“{name}” is a {format} file, which can't keep layers. Saving flattens the image in the file; the layers stay in this window until you close it.	“{name}”은(는) 레이어를 유지할 수 없는 {format} 파일입니다. 저장하면 파일의 이미지가 병합되며, 레이어는 이 창을 닫을 때까지 남아 있습니다.
 
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	스타일 가져오기…

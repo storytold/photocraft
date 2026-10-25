@@ -163,9 +163,9 @@ pub struct NewParams {
 #[serde(deny_unknown_fields)]
 pub struct SaveParams {
     /// Target beneath the configured automation write root: relative (forward slashes) or absolute.
-    /// The extension selects the format. Omit to write back to the document's own file, which
-    /// works only for a PSD, PSB or .pcraft file kept in its own format; any other save needs
-    /// `path`, so a flattened or converted copy never replaces the opened file.
+    /// The extension selects the format. Omit to write back to the document's own file in its own
+    /// format (PSD, PSB, .pcraft, OpenRaster, TIFF, JPEG, PNG, WebP); a converted copy never
+    /// replaces the opened file.
     #[serde(default)]
     pub path: Option<String>,
     /// Format override as an extension (pcraft, psd, png, jpg, tif, webp, exr, …).
@@ -191,6 +191,10 @@ pub struct SaveParams {
     /// DDS: also write the full mip chain, each level a box filter of the one above.
     #[serde(default, rename = "ddsMipmaps")]
     pub dds_mipmaps: bool,
+    /// Without `path`: confirm flattening the document's layers into its own JPEG, PNG, WebP or
+    /// TIFF file (a save that would flatten fails without it).
+    #[serde(default)]
+    pub flatten: bool,
     #[serde(default)]
     pub index: Option<usize>,
 }
@@ -784,7 +788,8 @@ impl PhotocraftMcp {
     }
 
     #[tool(description = "Save the document. `.pcraft` is the lossless native format (incremental); other extensions \
-        (psd, png, jpg, tif, webp, exr, …) export. Without `path` only a PSD, PSB or .pcraft document is written back to its own         file. Returns warnings about anything the format cannot hold.")]
+        (psd, png, jpg, tif, webp, exr, …) export. Without `path` the document is written back to its own file in its own format (PSD, PSB, \
+        .pcraft, OpenRaster, TIFF, JPEG, PNG, WebP); flattening layers into a flat file needs `flatten: true`. Returns warnings about anything the format cannot hold.")]
     async fn doc_save(&self, Parameters(p): Parameters<SaveParams>) -> Result<CallToolResult, McpError> {
         self.save_impl(p).await
     }
@@ -1081,8 +1086,10 @@ impl PhotocraftMcp {
                 return Ok(fail(format!("bridge mode saves with the app's current settings; `{}` need headless mode", unsupported.join("`, `"))));
             }
             let mut params = json!({});
-            if let Some(path) = p.path {
-                params["path"] = json!(path);
+            match p.path {
+                Some(path) => params["path"] = json!(path),
+                None if p.flatten => params["flatten"] = json!(true),
+                None => {}
             }
             if let Some(bits) = tga_bits {
                 params["tgaBits"] = json!(bits.bits());
@@ -1106,7 +1113,7 @@ impl PhotocraftMcp {
                     opts.encode.webp_lossless = false;
                 }
                 let path = p.path.map(PathBuf::from);
-                h.save(p.index, path.as_deref(), p.format.as_deref(), &opts)
+                h.save(p.index, path.as_deref(), p.format.as_deref(), &opts, p.flatten)
             })
             .await
         else {

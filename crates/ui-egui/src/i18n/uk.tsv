@@ -2282,7 +2282,7 @@
 	Animated zoom	Анімоване масштабування
 	Apply auto tone	Застосовувати автоматичну тонову корекцію
 	Ask	Запитувати
-	Ask before saving layered tiff	Запитувати перед збереженням багатошарового TIFF
+	Ask before saving layered TIFF	Запитувати перед збереженням багатошарового TIFF
 	Autosave	Автозбереження
 	Autosave minutes	Інтервал автозбереження, хв
 	Beep when done	Звуковий сигнал після завершення
@@ -4090,6 +4090,11 @@ curves	Smooth	Згладити
 
 # Graphics Adapter preference (#1885)
 	GPU adapter	Адаптер GPU
+	Save layers in TIFF	Зберігати шари в TIFF
+	Save Flattened?	Зберегти зведеним?
+	Flatten and Save	Звести й зберегти
+	Use Save As to keep the layers in a PSD or TIFF.	Щоб зберегти шари, скористайтеся «Зберегти як» у форматі PSD або TIFF.
+	“{name}” is a {format} file, which can't keep layers. Saving flattens the image in the file; the layers stay in this window until you close it.	«{name}» — файл {format}, який не може зберігати шари. Під час збереження зображення у файлі буде зведено; шари залишаться в цьому вікні, доки ви його не закриєте.
 
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Імпортувати стилі…

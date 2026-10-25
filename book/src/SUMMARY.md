@@ -29,6 +29,7 @@
 
 - [Overview](automation/overview.md)
 - [Command-line interface](automation/cli.md)
+- [External editor integration](automation/external-editor.md)
 - [Control protocol](automation/control-protocol.md)
 - [MCP](automation/mcp.md)
 - [Automation security model](automation/security-model.md)
