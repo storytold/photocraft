@@ -1258,6 +1258,58 @@ fn outside_stroke_width() {
 }
 
 #[test]
+fn inverted_zero_fill_shape_does_not_stroke_the_canvas_border() {
+    // #9048: an inverted shape's fill reaches the canvas edge. Its Outside stroke must follow
+    // the path (the cut-out), not the canvas boundary, or a parent OuterBevel highlights the
+    // canvas perimeter.
+    use photocraft_doc::{Bevel, BevelStyle, BevelTechnique, Contour, Effect, FxCommon, FxPaint, StrokeFx, StrokePosition};
+    let path = photocraft_doc::vector::Path {
+        inverted: true,
+        subpaths: vec![photocraft_doc::vector::Subpath::polygon(&[(40.0, 40.0), (160.0, 40.0), (160.0, 160.0), (40.0, 160.0)])],
+        ..Default::default()
+    };
+    for density in [1.0f32, 0.0, 0.5] {
+        let mut d = Document::with_background("t", Size::new(200, 200), ColorMode::Rgb, SampleType::U8, Color::BLACK);
+        let mut sh = photocraft_doc::vector::ShapeLayer { path: path.clone(), fill: Some(Fill::Solid(Color::BLACK)), density, ..Default::default() };
+        sh.cache = Some(photocraft_vector::render_shape(&sh, PixelFormat::RGBA8, Rect::new(0, 0, 200, 200)));
+        let mut shape = Layer::new("shape", LayerContent::Shape(sh));
+        shape.fill_opacity = 0.0;
+        shape.effects.items = vec![Effect::Stroke(StrokeFx {
+            common: FxCommon::new(BlendMode::Normal, 1.0),
+            size: 16.0,
+            position: StrokePosition::Outside,
+            paint: FxPaint::Color(Color::BLACK),
+            overprint: false,
+        })];
+        let mut group = Layer::group("Pinlines", vec![shape]);
+        group.effects.items = vec![Effect::BevelEmboss(Bevel {
+            enabled: true,
+            style: BevelStyle::OuterBevel,
+            technique: BevelTechnique::Smooth,
+            depth: 1.5,
+            up: true,
+            size: 16.0,
+            soften: 0.0,
+            angle: 58.0,
+            altitude: 25.0,
+            use_global_light: false,
+            gloss_contour: Contour::Linear,
+            gloss_anti_alias: false,
+            highlight: FxCommon::new(BlendMode::Screen, 0.75),
+            highlight_color: Color::WHITE,
+            shadow: FxCommon::new(BlendMode::Multiply, 0.75),
+            shadow_color: Color::BLACK,
+            contour: None,
+            texture: None,
+        })];
+        d.layers.push(group);
+        for (x, y) in [(100, 195), (195, 195), (5, 195), (195, 100)] {
+            assert!(close4(px(&d, x, y), [0.0, 0.0, 0.0, 1.0]), "density {density}: ({x}, {y}) = {:?}", px(&d, x, y));
+        }
+    }
+}
+
+#[test]
 fn outside_stroke_at_zero_fill_leaves_the_interior_clear() {
     // Fill 0 % + an Outside stroke is the classic "outline only" look: the stroke lies outside
     // the layer's pixels, so the interior shows the backdrop, not the stroke colour.

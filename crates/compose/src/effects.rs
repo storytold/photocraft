@@ -2035,9 +2035,13 @@ pub(crate) fn composite_with_effects_prepared(
     // Transparency Shapes Layer off: the shape is the whole layer (its masks, as the maps were
     // built), and the content's own transparency acts like fill opacity within it.
     let shapeless = !layer.advanced.transparency_shapes;
+    let vector_shape = matches!(layer.content, photocraft_doc::LayerContent::Shape(_));
     let shape = if shapeless {
         maps.crop(&maps.shape, big, 0.0)
-    } else if maps.outline {
+    } else if vector_shape {
+        // The effect shape, not just the fill's alpha: an inverted shape reaches past the
+        // canvas (see `effect_shape`), and its outside stroke must not treat the canvas
+        // boundary as the shape's edge (#9048).
         let o = maps.crop(&maps.shape, big, 0.0);
         Map { w, h, v: o.v.iter().zip(&content.px).enumerate().map(|(i, (o, p))| o.max(union(i, p[3]))).collect() }
     } else {
@@ -2060,7 +2064,6 @@ pub(crate) fn composite_with_effects_prepared(
         }
     }
     let items: Vec<&Effect> = layer.effects.items.iter().filter(|e| e.enabled()).collect();
-    let vector_shape = matches!(layer.content, photocraft_doc::LayerContent::Shape(_));
     // Multiple instances: the first listed is on top, so paint in reverse.
     let rev = || items.iter().copied().enumerate().rev();
 

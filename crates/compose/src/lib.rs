@@ -1182,7 +1182,32 @@ fn effect_shape(layer: &Layer, rect: Rect, cx: &Ctx) -> Vec<f32> {
         return mask_vals(layer, rect, cx).unwrap_or_else(|| vec![1.0; n]);
     }
     let Some(path) = effect_outline(layer).filter(|_| n > 0) else {
-        return render_content(layer, rect, cx).map(|b| b.px.iter().map(|p| p[3]).collect()).unwrap_or_else(|| vec![0.0; n]);
+        let mut out = render_content(layer, rect, cx).map(|b| b.px.iter().map(|p| p[3]).collect()).unwrap_or_else(|| vec![0.0; n]);
+        // An inverted shape's surface is clipped to the canvas, while its path continues
+        // outside it: fill the out-of-canvas margin from the path so an Outside stroke does
+        // not treat the canvas boundary as a shape edge (#9048).
+        if let LayerContent::Shape(sh) = &layer.content
+            && sh.fill.is_some()
+            && sh.path.inverted
+            && !sh.path.is_empty()
+            && !cx.canvas.contains_rect(&rect)
+        {
+            let cov = photocraft_vector::path_coverage(&sh.path, rect);
+            let mv = mask_vals(layer, rect, cx);
+            let w = rect.width() as usize;
+            let density = if sh.density.is_finite() { sh.density.clamp(0.0, 1.0) } else { 1.0 };
+            for y in rect.y0..rect.y1 {
+                for x in rect.x0..rect.x1 {
+                    if !cx.canvas.contains(x, y) {
+                        let i = (y - rect.y0) as usize * w + (x - rect.x0) as usize;
+                        // The shape's fill coverage with density (photocraft-vector's
+                        // `1 - density × (1 - coverage)`): density 0 fills everywhere.
+                        out[i] = (1.0 - density * (1.0 - cov[i])) * mask_k(&mv, i);
+                    }
+                }
+            }
+        }
+        return out;
     };
     // Unmasked: the masks scale the shape, they aren't the fill's transparency.
     let a: Vec<f32> = layer.surface().map(|s| surface_to_buffer(s, rect).px.iter().map(|p| p[3]).collect()).unwrap_or_else(|| vec![0.0; n]);
