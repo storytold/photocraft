@@ -1,8 +1,6 @@
 const DIFFUSE_MODE: &[(&str, &str)] = &[("Nrml", "normal"), ("DrkO", "darkenOnly"), ("LghO", "lightenOnly"), ("Anst", "anisotropic")];
 use super::adjustments::{adjustment_by_class, adjustment_steps, levels_from, levels_to, shadows_highlights_from, shadows_highlights_to};
-use super::descriptors::{
-    class, code, desc, get_bool, get_obj, get_ref, jbool, layer_ref, layer_target, path_text, path_value, ref_class, target_ref, trimmed,
-};
+use super::descriptors::{class, code, desc, get_ref, jbool, layer_ref, layer_target, path_text, path_value, ref_class, target_ref, trimmed};
 use super::fields::{F, Kind, Mapped, fields_from, fields_to, none, step};
 use super::steps_artboard::{artboard_edit_from, artboard_edit_to, artboard_from, artboard_to};
 use super::steps_channels::{match_color_from, match_color_to, merge_spot_from, merge_spot_to, split_from, split_to, trap_from, trap_to};
@@ -135,10 +133,10 @@ pub(super) fn pixel_target(p: &Value) -> bool {
 }
 
 fn levels_event_from(d: &Descriptor) -> Mapped {
-    if get_bool(d, "Auto") == Some(true) {
+    if d.get_bool("Auto") == Some(true) {
         return none("image.autoTone");
     }
-    if get_bool(d, "AuCo") == Some(true) {
+    if d.get_bool("AuCo") == Some(true) {
         return none("image.autoContrast");
     }
     match levels_from(d) {
@@ -210,8 +208,8 @@ fn spell_check_from(d: &Descriptor) -> Mapped {
         _ => false,
     };
     // Two keys, read by name: `null` and `Usng` in either order, each once.
-    let using = get_obj(d, "Usng").filter(|u| u.class_id.is("spellCheck") && u.items.len() == 1);
-    match (d.items.len(), get_ref(d, "null"), using.and_then(|u| get_bool(u, "checkAll"))) {
+    let using = d.get_object("Usng").filter(|u| u.class_id.is("spellCheck") && u.items.len() == 1);
+    match (d.items.len(), get_ref(d, "null"), using.and_then(|u| u.get_bool("checkAll"))) {
         (2, Some(r), Some(all)) if same_ref(r) => step("edit.checkSpelling", json!({"allLayers": all})),
         _ => Mapped::Unsupported { harmless: false },
     }

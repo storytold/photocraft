@@ -1,6 +1,6 @@
 //! Direct GrMp and RplC forms measured in #10603 (Group E).
 use super::adjustments::gradient_descriptor;
-use super::descriptors::{desc, enm, get_list, get_num, get_obj};
+use super::descriptors::{desc, enm, get_list, get_num};
 use super::events::pixel_target;
 use super::fields::{Mapped, step};
 use super::{D, Descriptor, Value, json};
@@ -25,13 +25,13 @@ fn triple(p: &Value) -> Option<[f64; 3]> {
 /// keys, duplicates, unsupported units/classes and lossy wire-type conversions.
 pub(super) fn gradient_from(d: &Descriptor) -> Mapped {
     let mapped = || {
-        let g = get_obj(d, "Grad")?;
+        let g = d.get_object("Grad")?;
         let D::Text(name) = g.get("Nm  ")? else { return None };
         let mut stops = Vec::new();
         let mut colors = Vec::new();
         for s in get_list(g, "Clrs").filter(|s| (2..=64).contains(&s.len()))? {
             let D::Descriptor(s) = s else { return None };
-            let c = get_obj(s, "Clr ")?;
+            let c = s.get_object("Clr ")?;
             let rgb = [get_num(c, "Rd  ")?, get_num(c, "Grn ")?, get_num(c, "Bl  ")?];
             colors.push(rgb);
             stops.push(json!([get_num(s, "Lctn")? / 4096.0, rgb.map(|v| v / 255.0)]));

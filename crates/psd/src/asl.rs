@@ -74,19 +74,12 @@ impl<'a> Rd<'a> {
     }
 }
 
-fn text(d: &Descriptor, key: &str) -> String {
-    match d.get(key) {
-        Some(Value::Text(t)) => t.to_string_lossy(),
-        _ => String::new(),
-    }
-}
-
 fn read_style(body: &[u8]) -> Result<AslStyle> {
     let (identity, used) = VersionedDescriptor::parse_prefix(body)?;
     let rest = body.get(used..).ok_or(PsdError::UnexpectedEof { offset: used, needed: 4 })?;
     let (style, _) = VersionedDescriptor::parse_prefix(rest)?;
     let id = &identity.descriptor;
-    Ok(AslStyle { name: text(id, "Nm  "), id: text(id, "Idnt"), style: style.descriptor })
+    Ok(AslStyle { name: id.get_text("Nm  ").unwrap_or_default(), id: id.get_text("Idnt").unwrap_or_default(), style: style.descriptor })
 }
 
 /// Parses an `.asl` style library.
