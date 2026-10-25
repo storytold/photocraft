@@ -1035,32 +1035,6 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                             widgets::vline(ui, 22.0);
                         }
 
-                        // Line tool: arrowhead options inspired by the feature request (#6408).
-                        // These are tool options only; drawing dispatches a single shape.create command.
-                        if tool == Tool::Line {
-                            ui.menu_button(tl!("Arrow"), |ui| {
-                                let o = &mut app.ui.tool_options;
-                                ui.set_min_width(170.0);
-                                ui.horizontal(|ui| {
-                                    ui.checkbox(&mut o.arrow_start, tl!("Start"));
-                                    ui.checkbox(&mut o.arrow_end, tl!("End"));
-                                });
-                                ui.separator();
-                                ui.horizontal(|ui| {
-                                    ui.label(tl!("Width"));
-                                    ui.add(egui::DragValue::new(&mut o.arrow_width).range(1.0..=4096.0).suffix(" px"));
-                                });
-                                ui.horizontal(|ui| {
-                                    ui.label(tl!("Length"));
-                                    ui.add(egui::DragValue::new(&mut o.arrow_length).range(1.0..=4096.0).suffix(" px"));
-                                });
-                                ui.horizontal(|ui| {
-                                    ui.label(tl!("Concavity"));
-                                    ui.add(egui::DragValue::new(&mut o.arrow_concavity).range(0.0..=100.0).suffix(" %"));
-                                });
-                            });
-                            widgets::vline(ui, 22.0);
-                        }
                         if crate::eraser_ui::options_bar(app, ui, tool)
                             || crate::retouch_ui::options_bar(app, ui, tool)
                             || crate::vector_ui::options_bar(app, ui, tool)

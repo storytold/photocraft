@@ -1401,6 +1401,35 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
     crate::widgets::dropdown(ui, "shape-mode", &mut mode, &[("shape".to_string(), tl!("Shape"))], 80.0);
     crate::widgets::vline(ui, 22.0);
     crate::shape_options::options_bar(app, ui, tool);
+
+    // Photoshop-style arrowhead settings at the right of Line options.
+    if tool == Tool::Line {
+        crate::widgets::vline(ui, 22.0);
+        ui.menu_image_button(crate::icons::image("settings", 18.0, t.icon), |ui| {
+            let o = &mut app.ui.tool_options;
+            ui.set_min_width(170.0);
+            ui.label(tl!("Arrowheads"));
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut o.arrow_start, tl!("Start"));
+                ui.checkbox(&mut o.arrow_end, tl!("End"));
+            });
+            ui.horizontal(|ui| {
+                ui.label(tl!("Width"));
+                ui.add(egui::DragValue::new(&mut o.arrow_width).range(1.0..=4096.0).suffix(" px"));
+            });
+            ui.horizontal(|ui| {
+                ui.label(tl!("Length"));
+                ui.add(egui::DragValue::new(&mut o.arrow_length).range(1.0..=4096.0).suffix(" px"));
+            });
+            ui.horizontal(|ui| {
+                ui.label(tl!("Concavity"));
+                ui.add(egui::DragValue::new(&mut o.arrow_concavity).range(0.0..=100.0).suffix(" %"));
+            });
+        })
+        .response
+        .on_hover_text(tl!("Arrowhead options"));
+    }
     true
 }
 
