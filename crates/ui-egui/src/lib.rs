@@ -200,6 +200,7 @@ mod scrub_wrap;
 pub mod select_mask_view;
 pub mod served_fonts;
 pub mod shape_dialog;
+mod shape_drag;
 pub(crate) mod shape_fill_ui;
 mod shape_options;
 mod shape_paint_ui;
@@ -738,6 +739,7 @@ pub struct PhotocraftApp {
     pub(crate) menu_cache: Option<menus::ItemCache>,
     /// Move tool drag shown live (`move_ui`).
     pub(crate) move_preview: Option<move_ui::MovePreview>,
+    pub(crate) shape_drag: shape_drag::State,
     /// Move tool › Show Highlight on Rollover: the last hover answer (`move_hover`).
     pub(crate) move_hover: Option<move_hover::Hover>,
     /// Smart Guides distances shown with ⌘ held over the canvas: the last answer (`move_distance`).
@@ -1082,6 +1084,7 @@ impl PhotocraftApp {
             remove_trail: None,
             menu_cache: None,
             move_preview: None,
+            shape_drag: Default::default(),
             move_hover: None,
             move_distance: None,
             object_finder: None,

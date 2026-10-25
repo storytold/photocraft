@@ -675,6 +675,11 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
             return;
         }
     }
+    if crate::shape_drag::owns(app) && app.drag.is_some() && ctx.input_mut(|i| i.consume_key(i.modifiers, Key::Escape)) {
+        crate::shape_drag::cancel(app);
+        ctx.request_repaint();
+        return;
+    }
     // Enter / Escape commit or cancel in-progress tool state (polygonal lasso, crop).
     if crate::lasso_ui::active(app) {
         let mods = ctx.input(|i| i.modifiers);

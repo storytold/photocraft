@@ -321,7 +321,8 @@ pub fn draw(app: &PhotocraftApp, painter: &egui::Painter, to_scr: &dyn Fn([f64; 
         }
         for i in 0..t.corners() {
             if let Some(w) = t.widget(radii, i, z) {
-                let p = to_scr(w);
+                let delta = crate::shape_drag::shown_offset(app, photocraft_doc::LayerId(t.layer));
+                let p = to_scr([w[0] + delta[0], w[1] + delta[1]]);
                 painter.circle(p, 5.0, Color32::WHITE, Stroke::new(1.5, accent));
                 painter.circle_filled(p, 2.5, accent);
             }

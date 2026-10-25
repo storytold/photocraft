@@ -924,6 +924,13 @@ pub(crate) fn delete_key_deletes_work_path(app: &PhotocraftApp) -> bool {
         && matches!(target_path(app), Some((PathTarget::Work, _)))
 }
 
+/// The active Shape layer eligible for a live Path Selection drag.
+pub(crate) fn shape_drag_target(app: &PhotocraftApp) -> Option<photocraft_doc::LayerId> {
+    let st = app.session.active()?;
+    let id = st.active_layer?;
+    matches!(st.doc.layer(id)?.content, LayerContent::Shape(_)).then_some(id)
+}
+
 /// The path Path Selection edits: the targeted vector mask, the active shape layer's path, else
 /// the work path.
 fn target_path(app: &PhotocraftApp) -> Option<(PathTarget, Path)> {
@@ -1210,7 +1217,7 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
             draw_path(p, anchors);
         }
         let st = app.session.active();
-        if let Some(l) = st.and_then(|s| s.active_layer.and_then(|id| s.doc.layer(id)))
+        if let Some(l) = st.and_then(|s| s.active_layer.and_then(|id| doc.layer(id)))
             && let LayerContent::Shape(sh) = &l.content
         {
             draw_path(&sh.path, anchors);

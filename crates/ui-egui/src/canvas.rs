@@ -1440,6 +1440,9 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> (std::sync::Ar
     if let Some(shown) = crate::gradient_ui::display_doc(app, idx) {
         return shown;
     }
+    if let Some(shown) = crate::shape_drag::display_doc(app, idx) {
+        return shown;
+    }
     // Move tool drag: the moving layers at the pointer.
     if let Some(shown) = crate::move_ui::display_doc(app, idx) {
         return shown;
@@ -1556,11 +1559,15 @@ pub(crate) type NavigatorCache = (std::sync::Weak<Document>, u64, u64, egui::Tex
 /// How long adjustment-dialog settings must stay unchanged before the navigator shows them.
 const NAVIGATOR_SETTLE_MS: f64 = 200.0;
 
-/// While a Move or Patch drag or a live paint stroke is under way, the navigator keeps its image
+/// While a Move, Patch or Shape drag or a live paint stroke is under way, the navigator keeps its image
 /// of document `idx` and catches up on release: each step of the drag is a new preview, and a
 /// thumbnail composite of the whole document per step makes painting lag on large images.
 fn navigator_waits_for_drag(app: &PhotocraftApp, idx: usize) -> bool {
-    crate::move_ui::showing(app) || crate::patch_preview::showing(app) || crate::cam_preview::showing(app) || live_stroke(app, idx).is_some()
+    crate::move_ui::showing(app)
+        || crate::patch_preview::showing(app)
+        || crate::cam_preview::showing(app)
+        || live_stroke(app, idx).is_some()
+        || (app.session.active_index() == Some(idx) && crate::shape_drag::active(app))
 }
 
 /// The Navigator panel's image of document `idx`. With the CPU canvas that is the canvas texture
@@ -3520,6 +3527,12 @@ fn hdr_preview(app: &PhotocraftApp, doc: &photocraft_doc::Document) -> Option<[f
 /// Draw one canvas view and handle its input. `primary` = main window (tools active).
 pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect: Rect, mut view: View, primary: bool) -> View {
     let ctx = ui.ctx().clone();
+    if primary {
+        crate::shape_drag::reconcile(app, ctx.input(|i| i.focused));
+    }
+    if crate::shape_drag::active(app) {
+        ctx.request_repaint();
+    }
     // The camera as the app holds it before this frame's input. The canvas works on its own copy
     // (`view`) and writes it back at the end; a tool that moves the camera itself meanwhile (the
     // Crop tool's default mode pans and turns the view with the image, `crop_mode`) must not be
@@ -3622,6 +3635,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     // is known; other tools keep their existing paint order and texture/outline snapshots.
     let crop_camera = primary && crate::crop_mode::moves_image(app);
     let paint_canvas = |app: &mut PhotocraftApp, ui: &egui::Ui, view: &View, xf: ViewXform| {
+        let shape_paint_clock = crate::shape_drag::trace_clock(app);
         let point_zoom = view.zoom / ppp;
         let drop_shadow = border == photocraft_engine::prefs::CanvasBorder::DropShadow;
         // Drop shadow, checkerboard, document image.
@@ -3914,9 +3928,19 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             }
         }
 
+        crate::shape_drag::trace_submit(app, shape_paint_clock);
         (beyond, layer_edges, edge_rect)
     };
-    let painted = if crop_camera { None } else { Some(paint_canvas(app, ui, &display_view, xf)) };
+    // Shape pixels and their overlay must consume this frame's pointer sample together.
+    let shape_frame = primary
+        && (crate::shape_drag::active(app)
+            || (ctx.input(|i| i.pointer.primary_down() || i.pointer.primary_released())
+                && crate::shape_drag::defer_canvas(
+                    app,
+                    ctx.input(|i| i.pointer.press_origin()).map(|p| xf.to_doc(p)),
+                    crate::workspace_ui::sticky_mods(app, ctx.input(|i| i.modifiers)),
+                )));
+    let painted = if crop_camera || shape_frame { None } else { Some(paint_canvas(app, ui, &display_view, xf)) };
     let img_rect = xf.doc_rect(doc.bounds());
 
     // Under an open dialog the canvas widget is inert, but the image still pans and zooms.
@@ -4632,7 +4656,8 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         crate::distort_ui::draw_overlay(app, &painter, &xf);
         crate::perspective_crop_ui::draw_overlay(app, &painter, &xf);
         crate::retouch_ui::draw_source_marker(app, &painter, &xf);
-        crate::vector_ui::draw_overlay(app, &painter, &xf, &doc);
+        let overlay_doc = if shape_frame { display_doc(app, idx).0 } else { doc.clone() };
+        crate::vector_ui::draw_overlay(app, &painter, &xf, &overlay_doc);
         crate::symmetry_ui::draw(app, &painter, &xf);
         crate::analysis_ui::draw_overlay(app, &painter, &xf);
         crate::gradient_ui::draw_overlay(app, &painter, &xf);
@@ -5489,6 +5514,9 @@ pub(crate) fn layer_edges_rect(app: &PhotocraftApp, idx: usize) -> Option<photoc
     }
     let st = app.session.documents().get(idx)?;
     let id = st.active_layer?;
+    if let Some(b) = crate::shape_drag::layer_edges(app, idx, id) {
+        return Some(b);
+    }
     let b = st.doc.layer(id)?.surface().map(photocraft_compose::bounds::content_bounds)?;
     if b.is_empty() {
         return None;
@@ -5882,6 +5910,7 @@ fn tool_move(app: &mut PhotocraftApp, x: f64, y: f64, pressure: f32, mods: egui:
     } else if tool == Tool::CurvaturePen {
         crate::vector_ui::curvature_move(app, x, y);
     }
+    let mut preview_at = [x, y];
     let zoom = app.point_zoom();
     if let Some(d) = app.drag.as_mut().filter(|d| d.reposition) {
         d.track(mods);
@@ -5894,6 +5923,7 @@ fn tool_move(app: &mut PhotocraftApp, x: f64, y: f64, pressure: f32, mods: egui:
         // ⇧: a selection-tool drag of the selection locks to multiples of 45° (#6231). The Move
         // tool's own drags were already locked by `move_mods::filter_event`.
         let [x, y] = crate::move_mods::selection_drag_to(d, [x, y], mods.shift && tool != Tool::Move);
+        preview_at = [x, y];
         let moved = d.points.last().is_none_or(|p| (p[0] - x).abs() + (p[1] - y).abs() > 0.25);
         // A held pen repeats its point now and then, so the stroke's time keeps advancing.
         let held = app.stylus.last_point_ms().is_some_and(|t| app.stylus.clock_ms - t >= HOLD_REPEAT_MS)
@@ -5903,10 +5933,14 @@ fn tool_move(app: &mut PhotocraftApp, x: f64, y: f64, pressure: f32, mods: egui:
             app.stylus.record_point();
         }
     }
+    crate::shape_drag::motion(app, preview_at);
 }
 
 /// Tool state machine. Shared by mouse input and automation.
 pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) {
+    if matches!(ev, ToolEvent::Down { .. }) {
+        crate::shape_drag::reset(app);
+    }
     // A press anywhere but on a guide deselects the selected guide (`guide_select`).
     if let ToolEvent::Down { x, y, .. } = ev
         && app.ui.selected_guide.is_some()
@@ -5975,6 +6009,7 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
     }
     // Move tool: ⇧ locks the axis, ⌥ duplicates (move_mods.rs).
     let ev = crate::move_mods::filter_event(app, ev, mods);
+    crate::shape_drag::trace_pointer(app, raw, ev);
     // A live shape's corner radius widgets (Path Selection, the shape tools, Move with its
     // transform controls). Unsnapped, as Free Transform's handles: snapping would pull the press
     // off a widget onto a nearby vertex or guide, and the shape tool would draw a new shape.
@@ -6285,6 +6320,7 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
             // ⌥ flips Dodge/Burn and Blur/Sharpen for this stroke.
             let tool = crate::retouch_ui::alt_flipped(tool, mods.alt);
             app.drag = Some(Drag { clear, ..Drag::new(tool, from.map_or([x, y], |p| [p[0], p[1]]), points, mods, erase) });
+            crate::shape_drag::begin(app);
             app.trail = None;
             app.stylus.begin_stroke();
             if from.is_some() {
@@ -6329,6 +6365,7 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
             // A Move-tool click (released where it was pressed) selects, it never moves: snapping
             // the release point would otherwise nudge the layer onto a nearby edge.
             if d.tool == Tool::Move && d.points.len() < 2 && matches!(raw, ToolEvent::Up { x, y } if [x, y] == d.start) {
+                crate::shape_drag::cancel(app);
                 app.move_preview = None;
                 crate::move_mods::finish(app);
                 if d.sel_move.is_some() {
@@ -6340,7 +6377,9 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
                 d.points.push([x, y, d.points.last().map_or(1.0, |p| p[2])]);
                 app.stylus.record_point();
             }
-            finish_gesture(app, d);
+            if !crate::shape_drag::finish(app, d.start, [x, y]) {
+                finish_gesture(app, d);
+            }
             crate::move_mods::finish(app);
         }
     }
@@ -10457,3 +10496,7 @@ mod lasso_preview_tests {
         assert_eq!((dashes, solid), (0, 1), "Magnetic Lasso: the traced border is solid");
     }
 }
+
+#[cfg(test)]
+#[path = "shape_frame_tests.rs"]
+mod shape_frame_tests;
