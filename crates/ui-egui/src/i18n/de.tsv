@@ -3433,3 +3433,12 @@ curves	Smooth	Glätten
 	Grayscale Ramp	Graustufenbalken
 	Current Colors	Aktuelle Farben
 	Make Ramp Web Safe	Farbbalken auf Webfarben beschränken
+
+# Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
+	Aspect Ratio	Seitenverhältnis
+	Category	Kategorie
+	Color Table	Farbtabelle
+	Gamma	Gamma
+	Interpolation	Interpolation
+	Target	Ziel
+	Units	Einheiten

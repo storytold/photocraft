@@ -206,7 +206,8 @@ pub fn fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: &TransformSession) 
     let Some(o) = t.content_aware.clone() else { return };
     let tk = crate::theme::Tokens::get(ui.ctx());
     let lbl = |ui: &mut egui::Ui, s: &str| {
-        ui.label(egui::RichText::new(s).color(tk.text_dim).size(12.0));
+        let label = ui.label(egui::RichText::new(s).color(tk.text_dim).size(12.0));
+        crate::widgets::scrub_option_label(ui, &label);
     };
     crate::transform_tool::position_size_fields(app, ui, t);
     crate::widgets::vline(ui, 22.0);
@@ -218,7 +219,7 @@ pub fn fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: &TransformSession) 
     let channels: Vec<String> = app.session.active().map(|st| st.doc.channels.iter().map(|c| c.name.clone()).collect()).unwrap_or_default();
     let mut options: Vec<(Option<String>, &str)> = vec![(None, tl!("None"))];
     options.extend(channels.iter().map(|n| (Some(n.clone()), n.as_str())));
-    crate::widgets::dropdown(ui, "content-aware-scale-protect", &mut next.protect, &options, 120.0);
+    crate::widgets::dropdown(ui, "content-aware-scale-protect", tl!("Protect:"), &mut next.protect, &options, 120.0);
     crate::widgets::checkbox(ui, &mut next.protect_skin_tones, tl!("Protect skin tones"));
     if next != o
         && let Some(s) = app.ui.transform.as_mut()

@@ -70,17 +70,19 @@ fn label(ui: &mut egui::Ui, text: &str) {
 
 /// A value stored in per-inch units, edited in per-inch or per-centimeter ones: `field` holds the
 /// per-inch value, `unit` the view's unit (`per_cm` when its value is per centimeter).
-fn per_unit_row(ui: &mut egui::Ui, f: &mut Map<String, Value>, field: &str, range: (f32, f32), default: f32, unit: &str, units: [(&str, &str); 2]) {
+// The explicit accessible name accompanies the existing numeric-field parameters.
+#[expect(clippy::too_many_arguments)]
+fn per_unit_row(ui: &mut egui::Ui, f: &mut Map<String, Value>, field: &str, name: &str, range: (f32, f32), default: f32, unit: &str, units: [(&str, &str); 2]) {
     let per_inch = num(f, field, default);
     let mut cur = text(f, unit, units[0].0);
     let per_cm = cur == units[1].0;
     let k = if per_cm { CM } else { 1.0 };
     let mut shown = per_inch / k;
-    if crate::widgets::value_field(ui, &mut shown, range.0 / k..=range.1 / k, "", 70.0).changed() {
+    if crate::widgets::value_field(ui, &mut shown, range.0 / k..=range.1 / k, "", 70.0).accessible_name(name).changed() {
         f.insert(field.into(), json!(((shown * k).clamp(range.0, range.1) * 1000.0).round() / 1000.0));
     }
     let opts: Vec<(String, &str)> = units.iter().map(|(id, l)| (id.to_string(), *l)).collect();
-    if crate::widgets::dropdown(ui, &format!("bitmap-{unit}"), &mut cur, &opts, 150.0) {
+    if crate::widgets::dropdown(ui, &format!("bitmap-{unit}"), tl!("Units"), &mut cur, &opts, 150.0) {
         f.insert(unit.into(), json!(cur));
     }
 }
@@ -102,7 +104,7 @@ pub(crate) fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, V
     ui.horizontal(|ui| {
         label(ui, tl!("Output:"));
         let input = num(f, "__inputResolution", 72.0);
-        per_unit_row(ui, f, "resolution", RESOLUTION, input, "__resUnit", res_units);
+        per_unit_row(ui, f, "resolution", tl!("Resolution"), RESOLUTION, input, "__resUnit", res_units);
     });
 
     ui.add_space(4.0);
@@ -112,7 +114,7 @@ pub(crate) fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, V
     ui.horizontal(|ui| {
         label(ui, tl!("Use:"));
         let opts: Vec<(String, &str)> = METHODS.iter().map(|(id, l)| (id.to_string(), tl!(l))).collect();
-        if crate::widgets::dropdown(ui, "bitmap-method", &mut method, &opts, 190.0) {
+        if crate::widgets::dropdown(ui, "bitmap-method", tl!("Method"), &mut method, &opts, 190.0) {
             f.insert("method".into(), json!(method));
         }
     });
@@ -135,12 +137,12 @@ pub(crate) fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, V
         crate::widgets::hairline(ui);
         ui.horizontal(|ui| {
             label(ui, tl!("Frequency:"));
-            per_unit_row(ui, f, "frequency", FREQUENCY, 53.0, "__freqUnit", [("lpi", tl!("Lines/Inch")), ("lpcm", tl!("Lines/Centimeter"))]);
+            per_unit_row(ui, f, "frequency", tl!("Frequency"), FREQUENCY, 53.0, "__freqUnit", [("lpi", tl!("Lines/Inch")), ("lpcm", tl!("Lines/Centimeter"))]);
         });
         ui.horizontal(|ui| {
             label(ui, tl!("Angle:"));
             let mut angle = num(f, "angle", 45.0);
-            if crate::widgets::value_field(ui, &mut angle, -180.0..=180.0, "°", 70.0).changed() {
+            if crate::widgets::value_field(ui, &mut angle, -180.0..=180.0, "°", 70.0).accessible_name(tl!("Angle:")).changed() {
                 f.insert("angle".into(), json!((angle.clamp(-180.0, 180.0) * 10.0).round() / 10.0));
             }
         });
@@ -148,7 +150,7 @@ pub(crate) fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, V
             label(ui, tl!("Shape:"));
             let mut shape = text(f, "shape", "round");
             let opts: Vec<(String, &str)> = SHAPES.iter().map(|(id, l)| (id.to_string(), tl!(l))).collect();
-            if crate::widgets::dropdown(ui, "bitmap-shape", &mut shape, &opts, 150.0) {
+            if crate::widgets::dropdown(ui, "bitmap-shape", tl!("Shape"), &mut shape, &opts, 150.0) {
                 f.insert("shape".into(), json!(shape));
             }
         });

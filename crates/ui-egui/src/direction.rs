@@ -68,12 +68,12 @@ fn parse_dir(value: &str) -> Option<Dir> {
 }
 
 /// A side panel on the reading-start side: left, or right in a right-to-left UI (the toolbox).
-pub fn start_panel(id: impl Into<egui::Id>) -> egui::Panel {
+pub fn start_panel(id: impl egui::AsIdSalt) -> egui::Panel {
     if is_rtl() { egui::Panel::right(id) } else { egui::Panel::left(id) }
 }
 
 /// A side panel on the reading-end side: right, or left in a right-to-left UI (the dock).
-pub fn end_panel(id: impl Into<egui::Id>) -> egui::Panel {
+pub fn end_panel(id: impl egui::AsIdSalt) -> egui::Panel {
     if is_rtl() { egui::Panel::left(id) } else { egui::Panel::right(id) }
 }
 

@@ -129,12 +129,12 @@ pub(crate) fn set_color(app: &mut PhotocraftApp, ctx: &egui::Context, background
 /// The key of the slider values last shown for `model`, kept while they still give the colour:
 /// a grey has no hue, and CMYK or Lab values don't survive an sRGB round trip (#3228).
 fn values_key(model: Model, background: bool) -> egui::Id {
-    egui::Id::new(("color-panel-values", model, background))
+    egui::Id::unique(("color-panel-values", model, background))
 }
 
 /// The key of the Hue Cube's remembered hue and saturation (see [`field_hsva`]).
 fn field_key(background: bool) -> egui::Id {
-    egui::Id::new(("color-field-hue", background))
+    egui::Id::unique(("color-field-hue", background))
 }
 
 /// Slider values for the colour the panel edits: the ones last shown while they still give it.
@@ -192,7 +192,7 @@ pub(crate) fn rgb32(c: [f32; 3]) -> Color32 {
 fn slider_rows(ui: &mut egui::Ui, model: Model, v: [f32; 4], background: bool, dynamic: bool) -> Option<[f32; 4]> {
     let t = Tokens::get(ui.ctx());
     // Dynamic Color Sliders off: the tracks keep the colours they had when a drag began.
-    let stops_key = egui::Id::new(("color-panel-stops", model, background));
+    let stops_key = egui::Id::unique(("color-panel-stops", model, background));
     let dragging = ui.input(|i| i.pointer.any_down());
     let stops_from = if dynamic || !dragging { v } else { ui.data(|d| d.get_temp::<[f32; 4]>(stops_key)).unwrap_or(v) };
     if !dragging {
@@ -215,7 +215,7 @@ fn slider_rows(ui: &mut egui::Ui, model: Model, v: [f32; 4], background: bool, d
             changed |= track(ui, tr, &resp, &mut x, lo, hi, &stops, model == Model::Web);
             resp.widget_info(|| egui::WidgetInfo::slider(ui.is_enabled(), f64::from(x), label));
             if model == Model::Web {
-                changed |= hex_pair(ui, ui.id().with(("web-field", i, background)), &mut x);
+                changed |= hex_pair(ui, ui.scope_id().with(("web-field", i, background)), &mut x);
             } else if widgets::value_field(ui, &mut x, lo..=hi, "", FIELD_W).changed() {
                 changed = true;
             }
@@ -366,8 +366,8 @@ fn alerts(app: &mut PhotocraftApp, ui: &mut egui::Ui, col: Rect, rgb: [f32; 3], 
         }
         ui.painter().rect_filled(chip, 0.0, rgb32(near));
         ui.painter().rect_stroke(chip, 0.0, Stroke::new(1.0, t.text_dim), StrokeKind::Outside);
-        let resp = ui.interact(icon.union(chip), ui.id().with(("color-panel-alert", slot)), Sense::click());
-        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), tip));
+        let resp = ui.interact(icon.union(chip), ui.scope_id().with(("color-panel-alert", slot)), Sense::click());
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tip));
         if resp.on_hover_text(tl!(tip)).clicked() {
             set_color(app, ui.ctx(), background, near);
         }
@@ -411,7 +411,7 @@ fn ramp_colors(ui: &egui::Ui, ramp: ColorRamp, web_safe: bool, fg: [f32; 3], bg:
         convert::active_cmyk_space().map(|s| Arc::as_ptr(&s) as usize).hash(&mut h);
     }
     let sig = h.finish();
-    let key = egui::Id::new("color-panel-ramp-cache");
+    let key = egui::Id::unique("color-panel-ramp-cache");
     if let Some((s, colors)) = ui.data(|d| d.get_temp::<(u64, Arc<Vec<Color32>>)>(key))
         && s == sig
     {
@@ -475,7 +475,7 @@ fn ramp(app: &mut PhotocraftApp, ui: &mut egui::Ui, height: f32) {
     let bar = Rect::from_min_max(all.min, pos2(all.right() - BOXES_W - 2.0, all.bottom()));
     let boxes = Rect::from_min_max(pos2(all.right() - BOXES_W, all.top()), all.max);
     let cp = app.ui.color_panel;
-    let ramp_id = ui.id().with("color-panel-ramp");
+    let ramp_id = ui.scope_id().with("color-panel-ramp");
     // A pick changes the foreground or background, so a drag keeps the Current Colors ends it began
     // with; otherwise the ramp would slide under the pointer and a held pick would drift.
     let ends_id = ramp_id.with("ends");
@@ -495,7 +495,7 @@ fn ramp(app: &mut PhotocraftApp, ui: &mut egui::Ui, height: f32) {
     ui.painter().rect_filled(black, 0.0, Color32::BLACK);
     ui.painter().rect_stroke(boxes, 0.0, Stroke::new(1.0, t.field_border), StrokeKind::Outside);
     let resp = ui.interact(bar, ramp_id, Sense::click_and_drag());
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, ui.is_enabled(), "Color Ramp"));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Unknown, ui.is_enabled(), "Color Ramp"));
     let mods = ui.input(|i| i.modifiers);
     let target = cp.background != mods.alt;
     if resp.clicked() && mods.shift {
@@ -520,8 +520,8 @@ fn ramp(app: &mut PhotocraftApp, ui: &mut egui::Ui, height: f32) {
         ramp_menu(app, ui);
     });
     for (r, c, name) in [(white, [1.0; 3], "White"), (black, [0.0; 3], "Black")] {
-        let b = ui.interact(r, ui.id().with(("color-panel-box", name)), Sense::click());
-        b.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), name));
+        let b = ui.interact(r, ui.scope_id().with(("color-panel-box", name)), Sense::click());
+        b.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), name));
         if b.clicked() {
             set_color(app, ui.ctx(), target, c);
         }
@@ -560,7 +560,7 @@ fn wheel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let w = ui.available_width();
     let side = fill.filter(|f| f.is_finite()).map_or(w.min(220.0), |f| (f - top_h - gaps).min(w)).max(80.0);
     let (area, resp) = ui.allocate_exact_size(vec2(w, side), Sense::click_and_drag());
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, ui.is_enabled(), "Color Wheel"));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Unknown, ui.is_enabled(), "Color Wheel"));
     let (center, inner, outer) = wheel_geometry(area);
     let ring_w = outer - inner;
     let (h, s, b) = (v[0] / 360.0, v[1] / 100.0, v[2] / 100.0);
@@ -570,7 +570,7 @@ fn wheel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // Which part a drag began on: the ring sets the hue, the triangle saturation and brightness.
     // The ring or the triangle, from where the press began (kept for frames without a press
     // origin), so a drag that leaves the ring keeps turning the hue.
-    let drag_key = ui.id().with("color-wheel-drag");
+    let drag_key = ui.scope_id().with("color-wheel-drag");
     if (resp.dragged() || resp.clicked())
         && let Some(p) = resp.interact_pointer_pos()
     {
@@ -616,8 +616,8 @@ fn wheel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     ui.painter().rect_stroke(add, 1.0, Stroke::new(1.0, t.text_dim), StrokeKind::Inside);
     ui.painter().line_segment([pos2(add.center().x, add.top() + 3.5), pos2(add.center().x, add.bottom() - 3.5)], Stroke::new(1.0, t.text_dim));
     ui.painter().line_segment([pos2(add.left() + 3.5, add.center().y), pos2(add.right() - 3.5, add.center().y)], Stroke::new(1.0, t.text_dim));
-    let add_resp = ui.interact(add, ui.id().with("color-wheel-add"), Sense::click());
-    add_resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), "Add to Swatches"));
+    let add_resp = ui.interact(add, ui.scope_id().with("color-wheel-add"), Sense::click());
+    add_resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), "Add to Swatches"));
     if add_resp.on_hover_text(tl!("Create new swatch")).clicked()
         && let Err(e) = app.run("swatches.add", json!({"color": hex(rgb)}))
     {

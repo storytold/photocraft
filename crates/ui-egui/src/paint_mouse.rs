@@ -358,7 +358,7 @@ mod tests {
         assert!(strokes(&h).is_empty());
         // The picker shows over the canvas at the pointer, moved up just enough to stay on screen.
         h.run_steps(2);
-        let shown = h.ctx.memory(|m| m.area_rect(egui::Id::new("canvas-brush-picker"))).expect("picker shown");
+        let shown = h.ctx.memory(|m| m.area_rect(egui::Id::unique("canvas-brush-picker"))).expect("picker shown");
         let screen = h.ctx.content_rect();
         assert!((shown.min.x - c.x).abs() < 1.0 && shown.min.y <= c.y + 1.0, "{shown:?}");
         assert!(screen.contains_rect(shown.shrink(0.5)) && shown.width() > 250.0 && shown.height() > 150.0, "{shown:?}");
@@ -449,11 +449,11 @@ mod tests {
         let c = h.state().last_canvas_rect.center();
         h.state_mut().ui.brush_picker = Some([c.x, c.y]);
         h.run_steps(2);
-        assert!(h.query_by_label("Hardness").is_some());
+        assert!(h.query_all_by_label("Hardness").next().is_some());
         let sampled = h.state().session.tools.presets.iter().find(|p| p.brush.tip != photocraft_engine::paint::TipShape::Round).map(|p| p.name.clone());
         h.state_mut().run("tools.setBrush", json!({ "preset": sampled.expect("a sampled preset") })).unwrap();
         h.run_steps(2);
-        assert!(h.query_by_label("Hardness").is_none());
+        assert!(h.query_all_by_label("Hardness").next().is_none());
         assert!(h.state().ui.brush_picker.is_some());
     }
 

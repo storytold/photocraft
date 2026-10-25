@@ -404,6 +404,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     crate::widgets::dropdown(
         ui,
         "puppet-mode",
+        tl!("Mode:"),
         &mut s.warp.mode,
         &[(PuppetMode::Rigid, tl!("Rigid")), (PuppetMode::Normal, tl!("Normal")), (PuppetMode::Distort, tl!("Distort"))],
         90.0,
@@ -414,6 +415,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     crate::widgets::dropdown(
         ui,
         "puppet-density",
+        tl!("Density:"),
         &mut s.warp.density,
         &[(PuppetDensity::Fewer, tl!("Fewer Points")), (PuppetDensity::Normal, tl!("Normal")), (PuppetDensity::More, tl!("More Points"))],
         110.0,
@@ -422,7 +424,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     ui.label(tl!("Expansion:"));
     let expansion = s.warp.expansion;
     let mut e = s.warp.expansion as f32;
-    if crate::widgets::value_field(ui, &mut e, -50.0..=100.0, "px", 56.0).changed() {
+    if crate::widgets::value_field(ui, &mut e, -50.0..=100.0, "px", 56.0).accessible_name(tl!("Expansion:")).changed() {
         s.warp.expansion = f64::from(e);
         remesh = true;
     }
@@ -441,14 +443,14 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         ui.label(tl!("Rotate:"));
         let mut fixed = s.warp.pins[i].rotate.is_some();
         let was = fixed;
-        crate::widgets::dropdown(ui, "puppet-rotate", &mut fixed, &[(false, tl!("Auto")), (true, tl!("Fixed"))], 70.0);
+        crate::widgets::dropdown(ui, "puppet-rotate", tl!("Rotation"), &mut fixed, &[(false, tl!("Auto")), (true, tl!("Fixed"))], 70.0);
         if fixed != was {
             s.warp.pins[i].rotate = fixed.then_some(0.0);
             rebind = true;
         }
         if let Some(r) = s.warp.pins[i].rotate {
             let mut a = r as f32;
-            if crate::widgets::value_field(ui, &mut a, -360.0..=360.0, "°", 52.0).changed() {
+            if crate::widgets::value_field(ui, &mut a, -360.0..=360.0, "°", 52.0).accessible_name(tl!("Rotation")).changed() {
                 s.warp.pins[i].rotate = Some(f64::from(a));
                 resolve = true;
             }

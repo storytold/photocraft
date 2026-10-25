@@ -337,7 +337,7 @@ fn channel_picker(ui: &mut egui::Ui, id: egui::Id, label: &str) -> usize {
         let t = Tokens::get(ui.ctx());
         ui.label(egui::RichText::new(tl!(&label)).color(t.text_dim).size(12.0));
         let opts: Vec<(usize, &str)> = CHANNELS.iter().enumerate().map(|(i, (_, l))| (i, *l)).collect();
-        crate::widgets::dropdown(ui, &format!("{id:?}-ch"), &mut ch, &opts, 110.0);
+        crate::widgets::dropdown(ui, &format!("{id:?}-ch"), tl!("Channel"), &mut ch, &opts, 110.0);
     });
     ui.data_mut(|d| d.insert_temp(id, ch));
     ch
@@ -420,7 +420,7 @@ pub fn histogram_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let Some((_, _, _, h)) = app.doc_hist.clone() else { return };
     // 1 when the statistics count every pixel; higher when a downsampled proxy stood in.
     let level = h.level.max(1);
-    let ch = channel_picker(ui, egui::Id::new("histogram-panel-ch"), "Channel:");
+    let ch = channel_picker(ui, egui::Id::unique("histogram-panel-ch"), "Channel:");
     let w = ui.available_width();
     let (r, _) = ui.allocate_exact_size(vec2(w, 100.0), Sense::hover());
     let p = ui.painter_at(r);
@@ -654,7 +654,7 @@ mod hist_async_tests {
         ctx.begin_pass(Default::default());
         let panel_ui = egui::Ui::new(
             ctx.clone(),
-            egui::Id::new("hist-test"),
+            egui::Id::unique("hist-test"),
             egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(300.0, 200.0))),
         );
         let mut panel_ui = panel_ui;
@@ -695,7 +695,7 @@ mod hist_async_tests {
         ctx.begin_pass(Default::default());
         let mut ui = egui::Ui::new(
             ctx.clone(),
-            egui::Id::new("hist-dead"),
+            egui::Id::unique("hist-dead"),
             egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(300.0, 200.0))),
         );
         histogram_panel(&mut app, &mut ui);

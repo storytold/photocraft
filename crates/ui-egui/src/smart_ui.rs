@@ -133,7 +133,7 @@ pub fn filter_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui, doc: &Document, l
             Some(i) => (filter_label(&sm.smart_filters[i]), sm.smart_filters[i].visible && sm.filters_enabled),
         };
         let eye = Rect::from_center_size(pos2(rect.left() + indent + if index.is_none() { 9.0 } else { 41.0 }, rect.center().y), vec2(18.0, 18.0));
-        let eye_resp = ui.interact(eye, ui.id().with(("sf-eye", l.id.0, index)), Sense::click());
+        let eye_resp = ui.interact(eye, ui.scope_id().with(("sf-eye", l.id.0, index)), Sense::click());
         let shown = match index {
             None => sm.filters_enabled,
             Some(i) => sm.smart_filters[i].visible,
@@ -141,7 +141,7 @@ pub fn filter_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui, doc: &Document, l
         if shown {
             icons::paint(ui, eye, "eye", 12.0, if on { t.icon } else { t.text_faint });
         }
-        eye_resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, shown, format!("{} {name}", tl!("Visibility"))));
+        eye_resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, shown, format!("{} {name}", tl!("Visibility"))));
         if eye_resp.clicked() {
             actions.push(match index {
                 None => ("layer.smartFilter.disableSmartFilters".into(), json!({"layer": l.id.0})),
@@ -186,11 +186,11 @@ pub fn filter_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui, doc: &Document, l
         // it does the same, but only the name carries the row's label and selected state.
         let name_resp = index.map(|i| {
             let name_rect = Rect::from_min_max(pos2(x.min(right), rect.top()), pos2(right, rect.bottom()));
-            ui.interact(name_rect, ui.id().with(("sf-name", l.id.0, i)), Sense::click_and_drag())
+            ui.interact(name_rect, ui.scope_id().with(("sf-name", l.id.0, i)), Sense::click_and_drag())
         });
         match &name_resp {
-            Some(r) => r.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected, &name)),
-            None => resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected, &name)),
+            Some(r) => r.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, &name)),
+            None => resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, &name)),
         }
         let hit = |f: fn(&egui::Response) -> bool| f(&resp) || name_resp.as_ref().is_some_and(f);
         if hit(egui::Response::drag_started) {
@@ -208,10 +208,10 @@ pub fn filter_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui, doc: &Document, l
             open_editor(app, ui.ctx(), l.id.0, sm, i);
         }
         if let (Some(i), Some(r)) = (index, blend) {
-            let blend_resp = ui.interact(r, ui.id().with(("sf-blend", l.id.0, i)), Sense::click());
+            let blend_resp = ui.interact(r, ui.scope_id().with(("sf-blend", l.id.0, i)), Sense::click());
             icons::paint(ui, r, "sliders-horizontal", 13.0, if blend_resp.hovered() { t.text } else { t.icon });
             let label = crate::i18n::fmt(tl!("Blending Options ({filter})"), &[("filter", &name)]);
-            blend_resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &label));
+            blend_resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
             if blend_resp.double_clicked()
                 && let Err(e) = crate::smart_filter_dialog::open(app, l.id, i)
             {
@@ -234,17 +234,17 @@ pub(crate) type FilterDrag = (u64, Option<usize>);
 
 /// Memory key of the smart filter row being dragged.
 pub(crate) fn drag_key() -> egui::Id {
-    egui::Id::new("smart-filter-drag")
+    egui::Id::unique("smart-filter-drag")
 }
 
 /// The selected smart filter row of a document.
 fn selected_key(doc: photocraft_doc::DocId) -> egui::Id {
-    egui::Id::new(("smart-filter-selected", doc))
+    egui::Id::unique(("smart-filter-selected", doc))
 }
 
 /// The pass in which the selected smart filter row of a document was last drawn.
 fn drawn_key(doc: photocraft_doc::DocId) -> egui::Id {
-    egui::Id::new(("smart-filter-selected-drawn", doc))
+    egui::Id::unique(("smart-filter-selected-drawn", doc))
 }
 
 /// The selected smart filter row, while its smart object is active, the filter still exists and

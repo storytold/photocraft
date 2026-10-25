@@ -1501,6 +1501,10 @@ pub struct UiState {
     /// Preset panels (Gradients, Patterns, Styles, Shapes, Tool Presets, Clone Source).
     #[serde(default)]
     pub presets_ui: crate::preset_panels::PresetUi,
+    /// Save for Web: the preview tab last chosen (`original`, `optimized`, `2up`, `4up`), which the
+    /// dialog reopens on (#9174).
+    #[serde(default)]
+    pub web_view: Option<String>,
     /// Character/Paragraph Styles, Glyphs and Check Spelling (see `type_panels_ui`).
     #[serde(default)]
     pub type_panels: crate::type_panels_ui::TypePanelsUi,
@@ -1658,6 +1662,7 @@ impl Default for UiState {
             actions: Default::default(),
             layer_comp_selected: None,
             presets_ui: Default::default(),
+            web_view: None,
             type_panels: Default::default(),
             analysis: Default::default(),
             timeline: Default::default(),

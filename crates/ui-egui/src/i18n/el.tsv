@@ -4120,3 +4120,6 @@ curves	Smooth	Εξομάλυνση
 	Grayscale Ramp	Διαβάθμιση του γκρι
 	Current Colors	Τρέχοντα χρώματα
 	Make Ramp Web Safe	Μόνο χρώματα ιστού στη διαβάθμιση
+
+# Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
+	Target	Στόχος

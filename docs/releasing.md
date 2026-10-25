@@ -180,7 +180,9 @@ goes in `CARGO_TARGET_<TRIPLE>_RUSTFLAGS`, so host build scripts aren't affected
   1. a `.pfx` file (`WINDOWS_CERTIFICATE`, `WINDOWS_CERTIFICATE_PASSWORD`), timestamped by
      DigiCert, or
   2. Azure Trusted Signing (`AZURE_*`): the script downloads the
-     `Microsoft.Trusted.Signing.Client` dlib and timestamps with Microsoft's server.
+     `Microsoft.Trusted.Signing.Client` dlib and timestamps with Microsoft's server. The package
+     is pinned to a version and SHA-256 at the top of `sign.ps1` and refused on a mismatch, so an
+     upgrade is a deliberate change to both.
 
   The script is the single place to change when the Windows signing setup changes.
 

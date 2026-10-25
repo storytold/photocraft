@@ -308,7 +308,7 @@ mod tests {
         assert!(h.state().brush_resize.is_some());
         assert!(h.state().session.tools.brush.size > size0, "dragging right grew the brush");
         assert!(h.state().session.tools.brush.hardness > 0.2, "dragging down hardened it");
-        assert!(h.ctx.memory(|m| m.area_rect(egui::Id::new("brush-resize-readout"))).is_some(), "the readout shows mid-drag");
+        assert!(h.ctx.memory(|m| m.area_rect(egui::Id::unique("brush-resize-readout"))).is_some(), "the readout shows mid-drag");
         assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::None, "the pointer hides");
         press(&mut h, c + vec2(60.0, 48.0), false);
         h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
@@ -370,7 +370,7 @@ mod tests {
             assert!(r.secondary);
             assert!(h.state().session.tools.brush.size > size0, "right grows the brush");
             assert!(h.state().session.tools.brush.hardness > 0.2, "down hardens it");
-            assert!(h.ctx.memory(|m| m.area_rect(egui::Id::new("brush-resize-readout"))).is_some(), "the readout shows");
+            assert!(h.ctx.memory(|m| m.area_rect(egui::Id::unique("brush-resize-readout"))).is_some(), "the readout shows");
             assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::None);
             button(&mut h, end, PointerButton::Secondary, false, Modifiers::ALT);
             h.event(egui::Event::ModifiersChanged(Modifiers::NONE));

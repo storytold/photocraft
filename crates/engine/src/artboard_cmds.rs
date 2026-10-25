@@ -233,6 +233,23 @@ fn next_artboard_name(doc: &Document) -> String {
     (1..=names.len() + 1).map(|n| format!("Artboard {n}")).find(|n| !names.contains(&n.as_str())).unwrap_or_else(|| "Artboard".into())
 }
 
+/// File › New with Artboards (#9086): one board over the whole canvas, its background the
+/// document's (white, black, a colour or transparent), holding an empty Layer 1. As in Photoshop,
+/// there is no Background layer.
+pub fn new_artboard_document(name: String, size: Size, mode: ColorMode, depth: SampleType, background: Option<Color>) -> Document {
+    let mut doc = Document::new(name, size, mode, depth);
+    let background = match background {
+        None => ArtboardBackground::Transparent,
+        Some(c) if c == Color::WHITE => ArtboardBackground::White,
+        Some(c) if c == Color::BLACK => ArtboardBackground::Black,
+        Some(c) => ArtboardBackground::Custom(c),
+    };
+    let mut board = Layer::group("Artboard 1", vec![Layer::raster("Layer 1", doc.pixel_format())]);
+    set_artboard(&mut board, Artboard { rect: doc.bounds(), background, preset: String::new() });
+    doc.layers.push(board);
+    doc
+}
+
 fn set_artboard(l: &mut Layer, a: Artboard) {
     if let LayerContent::Group(g) = &mut l.content {
         g.artboard = Some(a);

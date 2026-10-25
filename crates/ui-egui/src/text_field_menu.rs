@@ -98,7 +98,7 @@ impl State {
 
 /// The menu's area.
 pub fn menu_id() -> Id {
-    Id::new("text-field-menu")
+    Id::unique("text-field-menu")
 }
 
 /// Is the edit menu open, and on which text field?
@@ -297,7 +297,7 @@ mod tests {
         let ctx = h.ctx.clone();
         assert!(start_rename(&ctx, layer, "Alpha").is_none());
         h.run_steps(4);
-        (h, Id::new(("layer-rename-field", layer)))
+        (h, Id::unique(("layer-rename-field", layer)))
     }
 
     fn button(h: &mut Harness<'_, PhotocraftApp>, at: Pos2, button: PointerButton) {

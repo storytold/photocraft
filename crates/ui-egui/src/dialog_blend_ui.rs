@@ -27,14 +27,14 @@ pub fn body(ui: &mut egui::Ui, fields: &mut Map<String, Value>, prefix: &str) {
         label(ui, tl!("Mode:"));
         let mut mode = fields.get("mode").and_then(Value::as_str).unwrap_or("normal").to_string();
         let opts: Vec<(String, &str)> = photocraft_color::BlendMode::LAYER_MODES.iter().map(|m| (mode_key(*m), m.label())).collect();
-        if crate::widgets::dropdown(ui, &format!("{prefix}-mode"), &mut mode, &opts, 170.0) {
+        if crate::widgets::dropdown(ui, &format!("{prefix}-mode"), tl!("Blend Mode"), &mut mode, &opts, 170.0) {
             fields.insert("mode".into(), json!(mode));
         }
     });
     ui.horizontal(|ui| {
         label(ui, tl!("Opacity:"));
         let mut opacity = fields.get("opacity").and_then(Value::as_f64).unwrap_or(100.0) as f32;
-        if crate::widgets::value_field(ui, &mut opacity, 0.0..=100.0, "%", 70.0).changed() {
+        if crate::widgets::value_field(ui, &mut opacity, 0.0..=100.0, "%", 70.0).accessible_name(tl!("Opacity:")).changed() {
             fields.insert("opacity".into(), json!(opacity.round()));
         }
     });
