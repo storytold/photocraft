@@ -1365,6 +1365,7 @@ async fn convention_tool_hints_match_what_each_tool_does() {
         ("doc_export_data_sets", ADDS),
         ("doc_select", (false, false, true)),
         ("doc_save", EDITS),
+        ("doc_replace_smart_object", EDITS),
         ("doc_export", EDITS),
         ("doc_close", EDITS),
         ("doc_import_data_sets", EDITS),
