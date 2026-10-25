@@ -33,14 +33,21 @@ fn raw_balance_menu_in_italian() {
     h.get_by_role_and_label(Role::Button, tr("Color")).click();
     h.run_steps(12);
     assert!(h.query_by_label(tr("White Balance")).is_some());
-    h.get_by_label(tr("As Shot")).click();
-    h.run_steps(4);
+    h.get(egui_kittest::kittest::By::new().role(Role::ComboBox).value(tr("As Shot"))).click();
+    h.run_steps(16);
     for label in ["As Shot", "Auto", "Daylight", "Cloudy", "Shade", "Tungsten", "Fluorescent", "Flash"] {
         assert!(h.query_all_by_label(tr(label)).next().is_some(), "missing preset {label}");
     }
-    if let Some(output) = output {
-        std::fs::create_dir_all(&output).unwrap();
-        h.render().unwrap().save(std::path::Path::new(&output).join("bilanciamento-italiano.png")).unwrap();
+    if let Some(output) = &output {
+        std::fs::create_dir_all(output).unwrap();
+        h.render().unwrap().save(std::path::Path::new(output).join("bilanciamento-italiano.png")).unwrap();
+    }
+    h.get_by_label(tr("Tungsten")).click();
+    h.run_steps(16);
+    let ctx = h.ctx.clone();
+    assert_eq!(control::inspect(h.state(), &ctx)["cameraRaw"]["openingRaw"]["whiteBalance"], "tungsten");
+    if let Some(output) = &output {
+        h.render().unwrap().save(std::path::Path::new(output).join("tungsteno-selezionato.png")).unwrap();
     }
 }
 

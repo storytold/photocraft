@@ -950,12 +950,14 @@ fn offer_live_retouch(app: &mut PhotocraftApp, d: &Drag) {
     // A refused offer (the brush changed mid-stroke, say) leaves the commit to render the stroke.
     match stroke {
         EngineStroke::Retouch(mut live) if !dab => {
-            if rest.is_empty() || live.push(&rest).is_ok() {
+            let accepted = rest.is_empty() || live.push(&rest).is_ok();
+            if accepted {
                 let _ = app.session.offer_live_retouch(live);
             }
         }
         EngineStroke::Dab(mut live) if dab => {
-            if rest.is_empty() || live.push(&rest).is_ok() {
+            let accepted = rest.is_empty() || live.push(&rest).is_ok();
+            if accepted {
                 let _ = app.session.offer_live_dab(live);
             }
         }

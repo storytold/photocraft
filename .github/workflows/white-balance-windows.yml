@@ -48,7 +48,7 @@ jobs:
         run: cargo test --locked -p photocraft-ui-egui --lib camera_raw
       - name: Test Italian menu and capture preview
         env:
-          PHOTOCRAFT_BALANCE_SNAPSHOT_DIR: balance-preview
+          PHOTOCRAFT_BALANCE_SNAPSHOT_DIR: ${{ github.workspace }}/balance-preview
         run: cargo test --locked -p photocraft-ui-egui --test it raw_balance_menu_in_italian
       - name: Check changed crates with Clippy
         run: cargo clippy --locked -p photocraft-raw -p photocraft-io -p photocraft-ui-egui --all-targets -- -D warnings

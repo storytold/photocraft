@@ -917,7 +917,7 @@ mod tests {
         press(&mut h, o + vec2(FIELD + gap + 9.0, FIELD * 0.95));
         assert_ne!(color(&h), before, "the slider picks on press");
         let hue = rgb_to_hsb(parse_hex(&color(&h)).unwrap())[0];
-        assert!(hue < 30.0 || hue > 330.0, "hue {hue}");
+        assert!(!(30.0..=330.0).contains(&hue), "hue {hue}");
     }
 
     /// Only the primary button picks: a right or middle press (and its release) on the field or
