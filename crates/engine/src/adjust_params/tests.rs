@@ -415,6 +415,44 @@ fn layer_eyedropper_samples_below_the_curves_layer() {
     assert!(s.execute("layer.setAdjustment", json!({"eyedropper": {"point": "white", "at": [1, 1]}})).is_err(), "Levels and Curves only");
 }
 
+/// #9266: Exposure's eyedroppers give Photoshop 2025's values (measured on 8-bit gray patches
+/// 64 and 200): black on 64 → offset −0.2510, white on 200 → exposure +0.3505, gray on 64 →
+/// exposure −0.4796; on an adjustment layer they sample below it, one history step each.
+#[test]
+fn exposure_eyedroppers_match_photoshop() {
+    let g = |v: f32| [v / 255.0; 3];
+    let get = |a: Adjustment| match a {
+        Adjustment::Exposure { exposure, offset, .. } => (exposure, offset),
+        other => panic!("{other:?}"),
+    };
+    let base = json!({});
+    let (_, o) = get(exposure_eyedropper(&base, CurvesEyedropper::Black, g(64.0), ColorMode::Rgb).unwrap());
+    assert!((o + 0.25098).abs() < 1e-4, "{o}");
+    let (e, _) = get(exposure_eyedropper(&base, CurvesEyedropper::White, g(200.0), ColorMode::Rgb).unwrap());
+    assert!((e - 0.35052).abs() < 1e-4, "{e}");
+    let (e, _) = get(exposure_eyedropper(&base, CurvesEyedropper::NeutralGray, g(64.0), ColorMode::Rgb).unwrap());
+    assert!((e + 0.47956).abs() < 1e-4, "{e}");
+    // The other settings stay; black on a black sample brings nothing up; Grayscale has no gray.
+    let (e, o) = get(exposure_eyedropper(&json!({"exposure": 1.0, "gamma": 1.5}), CurvesEyedropper::Black, g(64.0), ColorMode::Rgb).unwrap());
+    assert!(e == 1.0 && (o + 0.50).abs() < 1e-4, "offset clamps at −0.5: {o}");
+    assert!(exposure_eyedropper(&base, CurvesEyedropper::White, [0.0; 3], ColorMode::Rgb).is_err());
+    assert!(exposure_eyedropper(&base, CurvesEyedropper::NeutralGray, g(64.0), ColorMode::Grayscale).is_err());
+    assert!(exposure_eyedropper(&base, CurvesEyedropper::White, [f32::NAN; 3], ColorMode::Rgb).is_err());
+    // On a layer, through `layer.setAdjustment`.
+    let mut s = crate::Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    s.execute("edit.fill", json!({"color": "#c8c8c8"})).unwrap();
+    s.execute("layer.newAdjustmentLayer.exposure", json!({})).unwrap();
+    let steps = s.active().unwrap().history.past_len();
+    s.execute("layer.setAdjustment", json!({"eyedropper": {"point": "white", "at": [2, 2]}})).unwrap();
+    assert_eq!(s.active().unwrap().history.past_len(), steps + 1);
+    let e = match &s.active().unwrap().doc.layers.last().unwrap().content {
+        photocraft_doc::LayerContent::Adjustment(Adjustment::Exposure { exposure, .. }) => *exposure,
+        other => panic!("{other:?}"),
+    };
+    assert!((e - 0.35052).abs() < 1e-3, "{e}");
+}
+
 /// #3127: on a smart object the eyedropper param records the adjustment it resolved to as
 /// the smart filter, not the raw sample (which re-rendered as an identity).
 #[test]
