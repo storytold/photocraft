@@ -744,7 +744,7 @@ pub fn dialog(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let t = Tokens::get(ctx);
     let mut cancel_it = false;
     // Photoshop doesn't dim the window behind its progress dialog either.
-    let modal = egui::Modal::new(egui::Id::new("job-progress")).backdrop_color(Color32::from_black_alpha(36)).show(ctx, |ui| {
+    let modal = egui::Modal::new(egui::Id::unique("job-progress")).backdrop_color(Color32::from_black_alpha(36)).show(ctx, |ui| {
         ui.set_width(360.0);
         ui.label(RichText::new(tl!(&j.label)).font(crate::theme::semibold(15.0)));
         ui.add_space(4.0);
@@ -789,7 +789,7 @@ pub struct OpenCardRects {
 }
 
 fn open_card_rects_id() -> egui::Id {
-    egui::Id::new("open-card-rects")
+    egui::Id::unique("open-card-rects")
 }
 
 /// The opening card's parts as drawn last frame, if it was shown.
@@ -813,7 +813,7 @@ pub fn open_card(app: &mut PhotocraftApp, ui: &mut egui::Ui, job: JobId) {
     ui.painter().rect_filled(area, 0.0, t.canvas);
     // Centre the card at the height its content needed last frame; the background is painted
     // once the rows are laid out, so a taller content (a long translation) still gets a card.
-    let height_id = egui::Id::new(("open-card-height", job));
+    let height_id = egui::Id::unique(("open-card-height", job));
     let height = ui.ctx().data(|d| d.get_temp::<f32>(height_id)).unwrap_or(OPEN_CARD_MIN_HEIGHT);
     let card = Rect::from_center_size(area.center(), vec2(OPEN_CARD_WIDTH, height));
     let fill = ui.painter().add(egui::Shape::Noop);

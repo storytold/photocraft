@@ -3045,3 +3045,13 @@ curves	Smooth	平滑
 	Grayscale Ramp	灰階色帶
 	Current Colors	目前色彩
 	Make Ramp Web Safe	讓色帶成為網頁安全色
+
+# Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
+	Aspect Ratio	外觀比例
+	Category	類別
+	Color Table	色彩表
+	Gamma	Gamma
+	Interpolation	內插
+	Profile	描述檔
+	Target	目標
+	Units	單位

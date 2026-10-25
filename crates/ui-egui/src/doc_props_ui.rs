@@ -70,7 +70,7 @@ pub fn canvas_resize_params(old: (u32, u32), new_w: Option<f32>, new_h: Option<f
 /// Collapsible section header with a chevron, Photoshop Properties style. Returns whether it is open.
 fn section(ui: &mut egui::Ui, id: &str, title: &str) -> bool {
     let t = Tokens::get(ui.ctx());
-    let key = egui::Id::new(("doc-props-section", id));
+    let key = egui::Id::unique(("doc-props-section", id));
     let mut open = ui.data(|d| d.get_temp::<bool>(key)).unwrap_or(true);
     let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::click());
     icons::paint(
@@ -96,12 +96,12 @@ fn field_label(ui: &mut egui::Ui, s: &str, w: f32) {
 }
 
 /// A number field that only reports a committed value (drag released, Enter, focus lost).
-fn committed_field(ui: &mut egui::Ui, id: &str, current: f32, u: crate::layer_props_ui::LenUnit) -> Option<f32> {
-    let key = egui::Id::new(("doc-props-field", id));
+fn committed_field(ui: &mut egui::Ui, id: &str, name: &str, current: f32, u: crate::layer_props_ui::LenUnit) -> Option<f32> {
+    let key = egui::Id::unique(("doc-props-field", id));
     // Shown in the ruler unit (cm when the rulers are in centimeters); 100% is the current size.
     let extent = f64::from(current);
     let mut v = ui.data(|d| d.get_temp::<f32>(key)).unwrap_or_else(|| u.shown(extent, extent));
-    let r = widgets::value_field(ui, &mut v, 0.0..=300_000.0, u.unit.suffix(), 74.0);
+    let r = widgets::value_field(ui, &mut v, 0.0..=300_000.0, u.unit.suffix(), 74.0).accessible_name(tl!(name));
     if r.dragged() || r.has_focus() {
         ui.data_mut(|d| d.insert_temp(key, v));
         return None;
@@ -140,7 +140,7 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     ui.add_space(2.0);
     let label_w = 44.0;
     if section(ui, "canvas", tl!("Canvas")) {
-        let link_key = egui::Id::new("doc-props-link");
+        let link_key = egui::Id::unique("doc-props-link");
         let linked = ui.data(|d| d.get_temp::<bool>(link_key)).unwrap_or(false);
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
@@ -153,7 +153,7 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             ui.vertical(|ui| {
                 ui.horizontal(|ui| {
                     stacked_label(ui, "W", &["W", "H"], 18.0, 4.0);
-                    if let Some(v) = committed_field(ui, "w", w as f32, lu) {
+                    if let Some(v) = committed_field(ui, "w", "Width", w as f32, lu) {
                         run.extend(canvas_resize_params((w, h), Some(v), None, linked).map(|p| ("image.canvasSize".to_string(), p)));
                     }
                     stacked_label(ui, "X", &["X", "Y"], 22.0, 4.0);
@@ -161,7 +161,7 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 });
                 ui.horizontal(|ui| {
                     stacked_label(ui, "H", &["W", "H"], 18.0, 4.0);
-                    if let Some(v) = committed_field(ui, "h", h as f32, lu) {
+                    if let Some(v) = committed_field(ui, "h", "Height", h as f32, lu) {
                         run.extend(canvas_resize_params((w, h), None, Some(v), linked).map(|p| ("image.canvasSize".to_string(), p)));
                     }
                     stacked_label(ui, "Y", &["X", "Y"], 22.0, 4.0);
@@ -190,7 +190,7 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             field_label(ui, tl!("Mode"), label_w);
             let mut m = mode;
             let opts: Vec<(ColorMode, &str)> = MODES.iter().map(|(m, l, _)| (*m, *l)).collect();
-            if widgets::dropdown(ui, "doc-props-mode", &mut m, &opts, 150.0)
+            if widgets::dropdown(ui, "doc-props-mode", tl!("Color Mode"), &mut m, &opts, 150.0)
                 && let Some((_, _, id)) = MODES.iter().find(|(x, _, _)| *x == m)
             {
                 run.push(((*id).to_string(), Value::Null));
@@ -201,7 +201,7 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             let mut d = depth;
             let opts: Vec<(SampleType, &str, &str)> =
                 DEPTHS.iter().map(|(d, l, _)| (*d, *l, if *d == SampleType::F32 { "Floating point" } else { "Integer" })).collect();
-            if widgets::dropdown_with_tooltips(ui, "doc-props-depth", &mut d, &opts, 150.0)
+            if widgets::dropdown_with_tooltips(ui, "doc-props-depth", tl!("Depth"), &mut d, &opts, 150.0)
                 && let Some((_, _, id)) = DEPTHS.iter().find(|(x, _, _)| *x == d)
             {
                 run.push(((*id).to_string(), Value::Null));
@@ -214,7 +214,7 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             // The canvas fill is only editable for documents without a Background layer.
             ui.add_enabled_ui(!has_bg, |ui| {
                 let mut f = 0u8;
-                widgets::dropdown(ui, "doc-props-fill", &mut f, &[(0u8, tl!("Background Color"))], 124.0);
+                widgets::dropdown(ui, "doc-props-fill", tl!("Background"), &mut f, &[(0u8, tl!("Background Color"))], 124.0);
             });
         });
         ui.add_space(4.0);
@@ -238,7 +238,7 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             ui.add_space(8.0);
             let mut unit = app.session.prefs().units_and_rulers.rulers.name().to_string();
             let opts: Vec<(String, &str)> = UNITS.iter().map(|(k, l)| (k.to_string(), *l)).collect();
-            if widgets::dropdown(ui, "doc-props-units", &mut unit, &opts, 96.0) {
+            if widgets::dropdown(ui, "doc-props-units", tl!("Units"), &mut unit, &opts, 96.0) {
                 run.push(("prefs.set".into(), json!({"path": "unitsAndRulers.rulers", "value": unit})));
             }
         });

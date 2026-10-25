@@ -889,7 +889,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                         ui.painter().rect_filled(rect, t.radius_sm, t.hover.gamma_multiply(0.5));
                     }
                     let cb = fx_checkbox_rect(rect);
-                    let cresp = ui.interact(cb, ui.id().with(("fxcb", kind, id)), Sense::click());
+                    let cresp = ui.interact(cb, ui.scope_id().with(("fxcb", kind, id)), Sense::click());
                     fx_checkbox(ui.painter(), cb, on, &t);
                     ui.painter().text(
                         rect.left_center() + vec2(28.0, 0.0),
@@ -902,7 +902,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                     if multi(kind) {
                         let btn = |ui: &egui::Ui, at: egui::Pos2, glyph: &str, tag: &str| {
                             let r = egui::Rect::from_center_size(at, vec2(18.0, 18.0));
-                            let hresp = ui.interact(r, ui.id().with(("fxbtn", tag, id)), Sense::click());
+                            let hresp = ui.interact(r, ui.scope_id().with(("fxbtn", tag, id)), Sense::click());
                             let col = if hresp.hovered() { t.accent } else { t.text_faint };
                             ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, glyph, egui::FontId::proportional(13.0), col);
                             hresp.clicked()
@@ -1048,7 +1048,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                             let mut cur = disp.get(key).and_then(Value::as_str).unwrap_or("Normal").to_string();
                             let opts: Vec<(String, &str)> =
                                 photocraft_color::BlendMode::LAYER_MODES.iter().map(|m| (m.label().to_string(), m.label())).collect();
-                            if widgets::dropdown(ui, &format!("fx-blend-{sel_kind}"), &mut cur, &opts, 150.0) {
+                            if widgets::dropdown(ui, &format!("fx-blend-{sel_kind}"), tl!("Blend Mode"), &mut cur, &opts, 150.0) {
                                 let value = json!(cur);
                                 disp[key] = value.clone();
                                 set_param(f, &selected, key, value);
@@ -1060,7 +1060,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                             ui.label(RichText::new(tl!(&label)).color(t.text_dim));
                             let mut cur = disp.get(key).and_then(Value::as_str).unwrap_or(options[0].0).to_string();
                             let opts: Vec<(String, &str)> = options.iter().map(|(v, l)| (v.to_string(), *l)).collect();
-                            if widgets::dropdown(ui, &format!("fx-{sel_kind}-{key}"), &mut cur, &opts, 150.0) {
+                            if widgets::dropdown(ui, &format!("fx-{sel_kind}-{key}"), tl!(&label), &mut cur, &opts, 150.0) {
                                 let value = json!(cur);
                                 disp[key] = value.clone();
                                 set_param(f, &selected, key, value);
@@ -1083,7 +1083,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                                 current = "custom".into();
                                 options.insert(0, ("custom".into(), "Custom"));
                             }
-                            if widgets::dropdown(ui, "fx-gradientOverlay-method", &mut current, &options, 150.0) {
+                            if widgets::dropdown(ui, "fx-gradientOverlay-method", tl!("Method"), &mut current, &options, 150.0) {
                                 // The older dialog deliberately omits From/To for rich imported
                                 // curves. Once a method is chosen, show the real source ends.
                                 let snapshot = entry(f, &selected).and_then(|e| e.get("fx")).cloned();
@@ -1121,7 +1121,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                                 .or_else(|| list.first().map(|l| l.0.clone()))
                                 .unwrap_or_default();
                             let opts: Vec<(String, &str)> = list.iter().map(|(id, n)| (id.clone(), n.as_str())).collect();
-                            if widgets::dropdown(ui, &format!("fx-{sel_kind}-{key}"), &mut cur, &opts, 180.0)
+                            if widgets::dropdown(ui, &format!("fx-{sel_kind}-{key}"), tl!(&label), &mut cur, &opts, 180.0)
                                 || disp.get(key).and_then(Value::as_str).is_none_or(str::is_empty)
                             {
                                 let value = json!(cur);
@@ -1249,7 +1249,7 @@ fn blending_page(ui: &mut egui::Ui, p: &mut Value, names: &[String]) {
         // Photoshop's modes, plus the layer's own Paint.NET mode when it has one (an imported .pdn).
         let own = photocraft_color::BlendMode::PAINT_NET_MODES.into_iter().find(|m| m.label() == cur);
         let opts: Vec<(String, &str)> = photocraft_color::BlendMode::LAYER_MODES.into_iter().chain(own).map(|m| (m.label().to_string(), m.label())).collect();
-        if widgets::dropdown(ui, "fx-blend-blendingOptions", &mut cur, &opts, 150.0) {
+        if widgets::dropdown(ui, "fx-blend-blendingOptions", tl!("Blend Mode"), &mut cur, &opts, 150.0) {
             p["blend"] = json!(cur);
         }
     });
@@ -1283,7 +1283,7 @@ fn blending_page(ui: &mut egui::Ui, p: &mut Value, names: &[String]) {
         ui.label(RichText::new(tl!("Knockout")).color(t.text_dim));
         let mut cur = p.get("knockout").and_then(Value::as_str).unwrap_or("none").to_string();
         let opts: Vec<(String, &str)> = KNOCKOUT.iter().map(|(v, l)| (v.to_string(), *l)).collect();
-        if widgets::dropdown(ui, "fx-blendingOptions-knockout", &mut cur, &opts, 150.0) {
+        if widgets::dropdown(ui, "fx-blendingOptions-knockout", tl!("Knockout"), &mut cur, &opts, 150.0) {
             p["knockout"] = json!(cur);
         }
     });
@@ -1316,7 +1316,7 @@ fn blending_page(ui: &mut egui::Ui, p: &mut Value, names: &[String]) {
         let labels: Vec<String> = (0..entries).map(label).collect();
         let opts: Vec<(usize, &str)> = labels.iter().enumerate().map(|(i, l)| (i, l.as_str())).collect();
         let mut cur = sel;
-        if widgets::dropdown(ui, "fx-blendingOptions-blendIf", &mut cur, &opts, 110.0) {
+        if widgets::dropdown(ui, "fx-blendingOptions-blendIf", tl!("Blend If:"), &mut cur, &opts, 110.0) {
             p["blendIfChannel"] = json!(cur);
         }
     });
@@ -1329,7 +1329,7 @@ fn blending_page(ui: &mut egui::Ui, p: &mut Value, names: &[String]) {
                 ui.label(RichText::new(format!("{}    {}", side(q[0], q[1]), side(q[2], q[3]))).color(t.text));
             });
         });
-        if blend_if_bar(ui, ui.id().with(("blendIf", key)), &mut q)
+        if blend_if_bar(ui, ui.scope_id().with(("blendIf", key)), &mut q)
             && let Some(e) = p.get_mut("blendIf").and_then(|a| a.get_mut(sel))
         {
             e[key] = json!(q);
@@ -1553,6 +1553,39 @@ mod tests {
         let column = boxes.iter().map(|r| r.min.x).fold(f32::INFINITY, f32::min);
         let rows = boxes.iter().filter(|r| (r.min.x - column).abs() < 0.5).count();
         assert_eq!(rows, KINDS.len(), "one empty checkbox per effect row");
+    }
+
+    // Regression test for #2209: Make Default and Reset to Default sat in a non-wrapping row, so
+    // translated labels wider than the page column (Russian) pushed one button over the other
+    // and out of the column instead of wrapping to a second row.
+    #[test]
+    fn default_buttons_wrap_inside_the_page_column_with_long_labels() {
+        use egui_kittest::kittest::Queryable;
+        let ru = crate::i18n::Lang::from_code("ru").unwrap();
+        crate::i18n::with_language(ru, || {
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
+            let l = Layer::raster("x", photocraft_doc::PixelFormat::RGBA8);
+            let fields = initial_fields(&l, Some("dropShadow"), 120.0);
+            let mut h = egui_kittest::Harness::builder().with_size(vec2(900.0, 700.0)).build_ui_state(
+                move |ui, app: &mut PhotocraftApp| {
+                    if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                        return;
+                    }
+                    let mut f = fields.clone();
+                    body(app, ui, &mut f);
+                },
+                app,
+            );
+            PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
+            h.run_steps(3);
+            let reset = h.get_by_role_and_label(egui::accesskit::Role::Button, crate::i18n::tr(ru, "Reset to Default")).rect();
+            let make = h.get_by_role_and_label(egui::accesskit::Role::Button, crate::i18n::tr(ru, "Make Default")).rect();
+            // Together they are wider than the page column: the second wraps to a row below
+            // instead of sharing the row and running left over the effect list.
+            assert!(make.top() >= reset.bottom(), "the buttons share one row: {make:?} {reset:?}");
+            assert_eq!(make.right(), reset.right(), "the wrapped row stays right-aligned");
+        });
     }
 
     /// Double-clicking an effect row of a layer that isn't active selects that layer first, so
@@ -2236,7 +2269,7 @@ mod tests {
             120.0_f32,
         );
         h.run();
-        let dial = h.query_all_by_label("Angle").last().unwrap();
+        let dial = h.get_by_role_and_label(egui::accesskit::Role::Slider, "Angle");
         let rect = dial.rect();
         for (delta, expected) in [(vec2(15.0, 0.0), 0.0), (vec2(0.0, -15.0), 90.0), (vec2(0.0, 15.0), -90.0)] {
             let pos = rect.center() + delta;

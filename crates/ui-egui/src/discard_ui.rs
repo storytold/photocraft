@@ -312,7 +312,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let labels = button_labels(mac, &buttons.iter().map(|b| (b.1, b.2)).collect::<Vec<_>>());
     let row: Vec<DialogButton> =
         buttons.iter().zip(&labels).map(|(b, label)| DialogButton::new(b.0, label, b.3).focus(focus && b.0 == ButtonRole::Default)).collect();
-    let modal = egui::Modal::new(egui::Id::new("discard-prompt")).show(ctx, |ui| {
+    let modal = egui::Modal::new(egui::Id::unique("discard-prompt")).show(ctx, |ui| {
         ui.set_max_width(420.0);
         ui.label(egui::RichText::new(tl!(&title)).font(crate::theme::semibold(15.0)));
         ui.add_space(4.0);

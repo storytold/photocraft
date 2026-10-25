@@ -196,7 +196,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let Some(p) = &mut app.jpeg_options else { return };
     let (mut ok, mut cancel) = (false, false);
     let (mut quality, mut format) = (p.quality, p.format);
-    let modal = egui::Modal::new(egui::Id::new("jpeg-options")).show(ctx, |ui| {
+    let modal = egui::Modal::new(egui::Id::unique("jpeg-options")).show(ctx, |ui| {
         ui.set_max_width(360.0);
         ui.label(egui::RichText::new(tl!("JPEG Options")).font(crate::theme::semibold(15.0)));
         ui.add_space(4.0);
@@ -204,18 +204,19 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         ui.add_space(8.0);
         crate::widgets::section_label(ui, tl!("Image Options"));
         ui.horizontal(|ui| {
-            ui.label(tl!("Quality"));
-            ui.add(egui::DragValue::new(&mut quality).range(0..=MAX_QUALITY).speed(0.1));
+            let quality_caption = ui.label(tl!("Quality"));
+            ui.add(egui::DragValue::new(&mut quality).range(0..=MAX_QUALITY).speed(0.1)).labelled_by(quality_caption.id);
             // Photoshop's presets: picking one sets the quality it starts at.
-            egui::ComboBox::from_id_salt("jpeg-quality-preset").selected_text(quality_label(quality)).show_ui(ui, |ui| {
+            let preset = egui::ComboBox::from_id_salt("jpeg-quality-preset").selected_text(quality_label(quality)).show_ui(ui, |ui| {
                 for q in [3, 5, 8, 10] {
                     if ui.selectable_label(quality_label(quality) == quality_label(q), quality_label(q)).clicked() {
                         quality = q;
                     }
                 }
             });
+            let _ = preset.response.accessible_name(tl!("Preset"));
         });
-        ui.add(egui::Slider::new(&mut quality, 0..=MAX_QUALITY).show_value(false));
+        ui.add(egui::Slider::new(&mut quality, 0..=MAX_QUALITY).show_value(false)).accessible_name(tl!("Quality"));
         ui.add_space(8.0);
         crate::widgets::section_label(ui, tl!("Format Options"));
         ui.radio_value(&mut format, JpegFormat::Baseline, tl!("Baseline (\"Standard\")"));

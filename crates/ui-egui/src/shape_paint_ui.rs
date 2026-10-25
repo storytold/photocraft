@@ -42,7 +42,7 @@ fn picker_rgba(hsva: egui::ecolor::Hsva) -> [f32; 4] {
 pub(crate) fn swatch(ui: &mut egui::Ui, fill: Option<&photocraft_doc::Fill>, fallback: [f32; 4], tip: &str) -> Option<PaintChange> {
     let t = Tokens::get(ui.ctx());
     let (r, resp) = ui.allocate_exact_size(vec2(30.0, 22.0), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ColorButton, ui.is_enabled(), tip));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ColorWell, ui.is_enabled(), tip));
     let current = fill.and_then(color_of);
     crate::widgets::checker(ui.painter(), r.shrink(1.0), 4.0);
     match (current, fill) {

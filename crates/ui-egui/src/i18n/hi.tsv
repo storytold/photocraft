@@ -535,3 +535,14 @@ cameraRaw	Yellow	पीला
 	Missing delete command	हटाने का कमांड नहीं मिला
 	Invalid delete command	हटाने का कमांड अमान्य है
 	Layer deleted, but confirmation preference could not be saved: {error}	लेयर हटा दी गई, लेकिन पुष्टि की प्राथमिकता सहेजी नहीं जा सकी: {error}
+
+# Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
+	Aspect Ratio	पहलू अनुपात
+	Category	श्रेणी
+	Color Table	रंग तालिका
+	Gamma	गामा
+	Interpolation	इंटरपोलेशन
+	Profile	प्रोफ़ाइल
+	Target	लक्ष्य
+	Units	इकाइयाँ
+	Demosaic	डिमोज़ेक

@@ -967,6 +967,7 @@ impl Session {
                     return Err(EngineError::Other(format!("`{label}`: the document changed while it ran; the result was discarded")));
                 }
                 self.active = Some(i);
+                self.note_active_change();
                 Some(i)
             }
             None => None,
@@ -1022,6 +1023,7 @@ impl Session {
         // This also restores the selection when the apply step returned an error.
         if target.is_some() && self.active == target {
             self.active = prev_active.filter(|i| *i < self.docs.len()).or(self.active);
+            self.note_active_change();
         }
         r
     }

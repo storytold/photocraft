@@ -1285,8 +1285,9 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
             if focus.unwrap_or(true) {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             }
-            // The capture itself is issued by `PhotocraftApp::issue_screenshots` once open/close
-            // animations (modals, popups) have settled.
+            // The capture itself is admitted by `PhotocraftApp::drain_control` (budget and
+            // geometry) and issued from a later `App::ui` pass once open/close animations
+            // (modals, popups) have settled (see `screenshot.rs`).
             let token = app.ui.alloc_id();
             ctx.request_repaint();
             Outcome::Screenshot { token, path }
@@ -1424,8 +1425,15 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
 pub fn save_screenshot(app: &mut PhotocraftApp, image: &egui::ColorImage, path: Option<&str>) -> Value {
     let [w, h] = image.size;
     let rgba: Vec<u8> = image.pixels.iter().flat_map(|c| c.to_array()).collect();
+    save_screenshot_rgba(app, w, h, &rgba, path)
+}
+
+/// Encode already-flattened RGBA pixels. The capture lifecycle uses this after dropping the
+/// retained [`egui::ColorImage`], so the encoder's input copy and the retained image do not
+/// overlap in memory (see `PhotocraftApp::finish_captures`).
+pub fn save_screenshot_rgba(app: &mut PhotocraftApp, w: usize, h: usize, rgba: &[u8], path: Option<&str>) -> Value {
     let png = match app.services.encode_png.as_ref() {
-        Some(enc) => enc(w as u32, h as u32, &rgba),
+        Some(enc) => enc(w as u32, h as u32, rgba),
         None => Err("no PNG encoder configured".into()),
     };
     let Some(path) = path else {
