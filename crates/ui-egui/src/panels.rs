@@ -1336,6 +1336,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                 });
                                 widgets::vline(ui, 22.0);
                                 select_and_mask_button(app, ui);
+                                crate::genai_ui::options_bar_button(app, ui);
                             }
                             Tool::Lasso | Tool::PolygonLasso | Tool::MagneticLasso => {
                                 selection_mode_buttons(app, ui);
@@ -1361,6 +1362,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                     widgets::vline(ui, 22.0);
                                 }
                                 select_and_mask_button(app, ui);
+                                crate::genai_ui::options_bar_button(app, ui);
                                 if crate::lasso_ui::active(app) || (app.ui.tool == Tool::PolygonLasso && !app.ui.polygon.is_empty()) {
                                     hint(
                                         ui,
@@ -1396,6 +1398,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                     crate::retouch_ui::report_smart_result(app, r, tl!("No subject found — try Object Selection or the Lasso"));
                                 }
                                 select_and_mask_button(app, ui);
+                                crate::genai_ui::options_bar_button(app, ui);
                             }
                             Tool::PaintBucket => {
                                 opt_label(ui, tl!("Fill"));

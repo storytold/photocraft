@@ -151,6 +151,10 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
     if let Some(r) = crate::plugin_ui::menu(app, id, &params) {
         return r;
     }
+    // Edit › Generative Fill asks for its prompt; Generative AI Settings.
+    if let Some(r) = crate::genai_ui::menu(app, id, &params) {
+        return r;
+    }
     if id == "window.panel.brushSettings" {
         app.ui.brush_tab = 0;
     }
@@ -1135,6 +1139,10 @@ pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
     }
     if !prefs.menus.hidden.is_empty() {
         items.retain(|i| !prefs.menus.is_hidden(&i.id));
+    }
+    // Edit › Generative Fill appears once a provider is set up (#41).
+    if !crate::genai_ui::menu_visible(app) {
+        items.retain(|i| i.id != photocraft_engine::genai_cmds::FILL);
     }
     if prefs.interface.show_menu_colors {
         for it in &mut items {
