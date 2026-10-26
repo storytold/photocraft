@@ -262,6 +262,7 @@ pub mod wheel_nav;
 pub mod wide_angle_ui;
 pub mod widgets;
 pub mod work_area;
+pub mod work_path_drag;
 pub mod workspace_ui;
 pub mod zoom_hold;
 pub mod zoom_levels;
@@ -1343,6 +1344,12 @@ impl PhotocraftApp {
                 self.ui.vector_mask_target = t == ChannelTarget::VectorMask;
             }
             self.sync_mask_targets();
+        }
+        if result.is_ok() {
+            if id == "layer.select" || id.starts_with("channel.target") || id == "path.delete" {
+                self.ui.shape_work_path_target = None;
+            }
+            work_path_drag::after_command(self, id);
         }
         result
     }
