@@ -36,6 +36,9 @@ building locally; the downloaded app is still subject to Windows application-con
 
 ## Build and run
 
+The [OCLP wgpu fork proposal](oclp-wgpu-fork.md) records the pinned Metal
+compiler workarounds, organization ownership proposal, and hardware checks.
+
 ```sh
 cargo run --release -p photocraft -- path/to/image.psd      # desktop app
 cargo run --release -p photocraft -- --control 7878 --control-token-file .private/control.token \
