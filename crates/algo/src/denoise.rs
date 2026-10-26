@@ -41,7 +41,7 @@ fn guide_moments(g: &[f32], w: usize, h: usize, r: usize) -> Vec<f32> {
 /// Self-guided luminance: mean(p) = mean(g), mean(g*p) = mean(g*g).
 fn guided_luma(g: &[f32], w: usize, h: usize, r: usize, eps: f32) -> Vec<f32> {
     let mut ab = guide_moments(g, w, h, r);
-    for pair in ab.chunks_exact_mut(2) {
+    for pair in ab.as_chunks_mut::<2>().0.iter_mut() {
         let mean = pair[0];
         let covariance = pair[1] - mean * mean;
         // Keep the original unclamped numerator, including roundoff below zero.
@@ -50,7 +50,7 @@ fn guided_luma(g: &[f32], w: usize, h: usize, r: usize, eps: f32) -> Vec<f32> {
         pair[1] = mean - a * mean;
     }
     box_blur_n(&mut ab, w, h, 2, r);
-    g.iter().zip(ab.chunks_exact(2)).map(|(&v, pair)| pair[0] * v + pair[1]).collect()
+    g.iter().zip(ab.as_chunks::<2>().0.iter()).map(|(&v, pair)| pair[0] * v + pair[1]).collect()
 }
 
 /// Chroma planes share the cleaned guide's mean and regularised variance.
@@ -58,7 +58,7 @@ fn guided_luma(g: &[f32], w: usize, h: usize, r: usize, eps: f32) -> Vec<f32> {
 /// ten filtered channels, versus twelve for two independent guided filters.
 fn guided_chroma(g: &[f32], planes: [&mut [f32]; 2], w: usize, h: usize, r: usize, eps: f32, amount: f32) {
     let mut stats = guide_moments(g, w, h, r);
-    for pair in stats.chunks_exact_mut(2) {
+    for pair in stats.as_chunks_mut::<2>().0.iter_mut() {
         pair[1] = (pair[1] - pair[0] * pair[0]).max(0.0) + eps;
     }
     for plane in planes {
@@ -67,14 +67,14 @@ fn guided_chroma(g: &[f32], planes: [&mut [f32]; 2], w: usize, h: usize, r: usiz
             ab.extend_from_slice(&[p, guide * p]);
         }
         box_blur_n(&mut ab, w, h, 2, r);
-        for (pair, guide) in ab.chunks_exact_mut(2).zip(stats.chunks_exact(2)) {
+        for (pair, guide) in ab.as_chunks_mut::<2>().0.iter_mut().zip(stats.as_chunks::<2>().0.iter()) {
             let mean = pair[0];
             let a = (pair[1] - guide[0] * mean) / guide[1];
             pair[0] = a;
             pair[1] = mean - a * guide[0];
         }
         box_blur_n(&mut ab, w, h, 2, r);
-        for ((v, &guide), pair) in plane.iter_mut().zip(g).zip(ab.chunks_exact(2)) {
+        for ((v, &guide), pair) in plane.iter_mut().zip(g).zip(ab.as_chunks::<2>().0.iter()) {
             let filtered = pair[0] * guide + pair[1];
             *v += (filtered - *v) * amount;
         }
