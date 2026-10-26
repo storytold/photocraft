@@ -193,15 +193,28 @@ pub fn from_params(kind: &str, p: &Value, base: Option<&Adjustment>, mode: Color
             Adjustment::ChannelMixer { matrix, monochrome }
         }
         "gradientMap" => {
-            let (stops0, rev0, dither0) = match base {
-                Some(Adjustment::GradientMap { stops, reverse, dither }) => (stops.clone(), *reverse, *dither),
-                _ => (vec![(0.0, [0.0; 3]), (1.0, [1.0; 3])], false, false),
+            let (stops0, rev0, dither0, source0) = match base {
+                Some(Adjustment::GradientMap { stops, reverse, dither, source }) => (stops.clone(), *reverse, *dither, source.clone()),
+                _ => (vec![(0.0, [0.0; 3]), (1.0, [1.0; 3])], false, false, None),
             };
-            let stops = match p.get("stops") {
-                None | Some(Value::Null) => stops0,
-                Some(v) => gradient_stops(&cmd, v)?,
+            // Photoshop's gradient (#8351): unchanged, it keeps the stops already baked from it
+            // (a Lab document's bake isn't reproduced from sRGB stops); changed, it is baked again.
+            // Plain `stops` (or `"source": null`) replace it.
+            let (stops, source) = match (p.get("source"), p.get("stops")) {
+                (Some(Value::Null), stops) => (stops.filter(|v| !v.is_null()).map_or(Ok(stops0), |v| gradient_stops(&cmd, v))?, None),
+                (Some(v), _) => {
+                    let same = source0.as_ref().is_some_and(|s0| source_params(s0) == *v);
+                    if same {
+                        (stops0, source0)
+                    } else {
+                        let src = gradient_source(&cmd, v)?;
+                        (photocraft_io::gradient_bake::bake_source(&src), Some(src))
+                    }
+                }
+                (None, None | Some(Value::Null)) => (stops0, source0),
+                (None, Some(v)) => (gradient_stops(&cmd, v)?, None),
             };
-            Adjustment::GradientMap { stops, reverse: r.boolean("reverse", rev0)?, dither: r.boolean("dither", dither0)? }
+            Adjustment::GradientMap { stops, reverse: r.boolean("reverse", rev0)?, dither: r.boolean("dither", dither0)?, source }
         }
         "selectiveColor" => crate::adjust_cmds::selective_from_params(p, base.filter(|b| matches!(b, Adjustment::SelectiveColor { .. })))?,
         "colorLookup" => crate::adjust_cmds::lookup_from_params(p, base.filter(|b| matches!(b, Adjustment::ColorLookup { .. })))?,
@@ -273,8 +286,12 @@ pub fn to_params(adj: &Adjustment) -> Value {
             }
             v
         }
-        Adjustment::GradientMap { stops, reverse, dither } => {
-            json!({"stops": stops.iter().map(|(t, c)| json!([t, hex(*c)])).collect::<Vec<_>>(), "reverse": reverse, "dither": dither})
+        Adjustment::GradientMap { stops, reverse, dither, source } => {
+            let mut v = json!({"stops": stops.iter().map(|(t, c)| json!([t, hex(*c)])).collect::<Vec<_>>(), "reverse": reverse, "dither": dither});
+            if let Some(src) = source {
+                v["source"] = source_params(src);
+            }
+            v
         }
         Adjustment::SelectiveColor { relative, adjustments } => {
             let mut v = json!({"method": if *relative { "relative" } else { "absolute" }});
@@ -1068,6 +1085,45 @@ fn gradient_stops(cmd: &str, v: &Value) -> Result<Vec<(f32, [f32; 3])>> {
     Ok(out)
 }
 
+/// A Gradient Map's Photoshop gradient as params: `{"stops": [[location, "#rrggbb"], …],
+/// "midpoints": [0.05..0.95 per segment], "smoothness": 0..1, "method": name}`.
+pub fn source_params(src: &photocraft_doc::adjust::GradientSource) -> Value {
+    json!({
+        "stops": src.stops.iter().map(|(t, c)| json!([t, hex(*c)])).collect::<Vec<_>>(),
+        "midpoints": src.midpoints,
+        "smoothness": src.smoothness,
+        "method": src.method,
+    })
+}
+
+/// [`source_params`] read back, checked: 2..=64 stops (sorted), one midpoint (0.05..0.95) per
+/// segment (default halfway), Smoothness 0..1 (default 0), a known method (default classic).
+fn gradient_source(cmd: &str, v: &Value) -> Result<photocraft_doc::adjust::GradientSource> {
+    let o = v.as_object().ok_or_else(|| bad(cmd, "`source` must be {stops, midpoints?, smoothness?, method?}"))?;
+    let stops = gradient_stops(cmd, o.get("stops").ok_or_else(|| bad(cmd, "`source.stops` is missing"))?)?;
+    let segments = stops.len() - 1;
+    let midpoints = match o.get("midpoints") {
+        None | Some(Value::Null) => vec![0.5; segments],
+        Some(Value::Array(a)) if a.len() == segments => a
+            .iter()
+            .map(|m| m.as_f64().filter(|m| m.is_finite() && (0.05..=0.95).contains(m)).map(|m| m as f32))
+            .collect::<Option<Vec<f32>>>()
+            .ok_or_else(|| bad(cmd, "`source.midpoints` must be numbers in 0.05..0.95"))?,
+        Some(_) => return Err(bad(cmd, format!("`source.midpoints` must hold {segments} numbers, one per segment"))),
+    };
+    let smoothness = match o.get("smoothness") {
+        None | Some(Value::Null) => 0.0,
+        Some(s) => s.as_f64().filter(|s| s.is_finite() && (0.0..=1.0).contains(s)).ok_or_else(|| bad(cmd, "`source.smoothness` must be 0..1"))? as f32,
+    };
+    let method = match o.get("method").and_then(Value::as_str) {
+        None => "classic".to_string(),
+        Some(m) => photocraft_io::gradient_bake::Method::from_name(m)
+            .map(|m| m.name().to_string())
+            .ok_or_else(|| bad(cmd, "`source.method` must be classic, perceptual, linear or smooth"))?,
+    };
+    Ok(photocraft_doc::adjust::GradientSource { stops, midpoints, smoothness, method })
+}
+
 /// Params with the private keys (`layer`, `coalesce`, `__kind`) removed.
 pub fn user_keys(p: &Value) -> Map<String, Value> {
     p.as_object()
@@ -1083,6 +1139,52 @@ pub fn user_keys(p: &Value) -> Map<String, Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #8351: a Gradient Map's Photoshop gradient goes through the params: kept (with the stops
+    /// already baked) while unchanged, baked again when edited, dropped by plain stops or null,
+    /// and refused when malformed.
+    #[test]
+    fn gradient_map_source_params() {
+        let src = json!({"stops": [[0, "#102030"], [1, "#ffcc33"]], "midpoints": [0.3], "smoothness": 0.8, "method": "perceptual"});
+        let a = from_params("gradientMap", &json!({"source": src}), None, ColorMode::Rgb).unwrap();
+        let Adjustment::GradientMap { stops, source: Some(kept), .. } = &a else { panic!("{a:?}") };
+        assert!(stops.len() > 2 && kept.stops.len() == 2 && kept.method == "perceptual");
+        // The params round trip, and an unchanged source keeps the stops as they were.
+        let p = to_params(&a);
+        assert_eq!(p["source"]["midpoints"], json!([0.30000001192092896]));
+        let mut same = a.clone();
+        if let Adjustment::GradientMap { stops, .. } = &mut same {
+            stops[1].1 = [0.5; 3];
+        }
+        let kept_stops = from_params("gradientMap", &json!({"source": to_params(&same)["source"], "reverse": true}), Some(&same), ColorMode::Rgb).unwrap();
+        assert!(matches!(&kept_stops, Adjustment::GradientMap { stops, reverse: true, .. } if stops[1].1 == [0.5; 3]), "not baked again");
+        // An edited source is baked again.
+        let mut edited = p["source"].clone();
+        edited["stops"][1][1] = json!("#00ff00");
+        let b = from_params("gradientMap", &json!({"source": edited}), Some(&a), ColorMode::Rgb).unwrap();
+        let Adjustment::GradientMap { stops: sb, source: Some(kb), .. } = &b else { panic!() };
+        assert_eq!(kb.stops[1].1, [0.0, 1.0, 0.0]);
+        assert_ne!(sb, stops);
+        // Plain stops or null drop it; untouched, it stays.
+        for p in [json!({"stops": [[0, "#000000"], [1, "#ffffff"]]}), json!({"source": null})] {
+            assert!(matches!(from_params("gradientMap", &p, Some(&a), ColorMode::Rgb).unwrap(), Adjustment::GradientMap { source: None, .. }), "{p}");
+        }
+        assert!(matches!(
+            from_params("gradientMap", &json!({"dither": true}), Some(&a), ColorMode::Rgb).unwrap(),
+            Adjustment::GradientMap { source: Some(_), .. }
+        ));
+        // Malformed sources are refused.
+        for bad in [
+            json!({"stops": [[0, "#000000"]]}),
+            json!({"stops": [[0, "#000000"], [1, "#ffffff"]], "midpoints": [0.5, 0.5]}),
+            json!({"stops": [[0, "#000000"], [1, "#ffffff"]], "midpoints": [2]}),
+            json!({"stops": [[0, "#000000"], [1, "#ffffff"]], "smoothness": 7}),
+            json!({"stops": [[0, "#000000"], [1, "#ffffff"]], "method": "wavy"}),
+            json!(3),
+        ] {
+            assert!(from_params("gradientMap", &json!({"source": bad}), None, ColorMode::Rgb).is_err(), "{bad}");
+        }
+    }
 
     const KINDS: [&str; 15] = [
         "invert",

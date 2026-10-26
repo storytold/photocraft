@@ -91,13 +91,14 @@ fn adjustments() -> Vec<(Adjustment, bool)> {
                 stops: vec![(0.0, [q16(6554), 0.0, q16(19661)]), (0.5, [1.0, 0.2, 0.0]), (1.0, [1.0, 1.0, 0.8])],
                 reverse: false,
                 dither: false,
+                source: None,
             },
             true,
         ),
-        (Adjustment::GradientMap { stops: vec![(0.0, [0.0, 0.0, 1.0]), (1.0, [1.0, 1.0, 0.0])], reverse: true, dither: false }, true),
+        (Adjustment::GradientMap { stops: vec![(0.0, [0.0, 0.0, 1.0]), (1.0, [1.0, 1.0, 0.0])], reverse: true, dither: false, source: None }, true),
         // Fewer than two stops: written as the equivalent two-stop gradient.
-        (Adjustment::GradientMap { stops: vec![], reverse: false, dither: false }, false),
-        (Adjustment::GradientMap { stops: vec![(0.4, [0.2, 0.6, 0.4])], reverse: false, dither: false }, false),
+        (Adjustment::GradientMap { stops: vec![], reverse: false, dither: false, source: None }, false),
+        (Adjustment::GradientMap { stops: vec![(0.4, [0.2, 0.6, 0.4])], reverse: false, dither: false, source: None }, false),
         (Adjustment::SelectiveColor { relative: true, adjustments: std::array::from_fn(|r| [r as f32 * 10.0 - 40.0, 5.0, -30.0, 20.0]) }, true),
         (Adjustment::SelectiveColor { relative: false, adjustments: std::array::from_fn(|r| [0.0, r as f32 * 5.0, 0.0, -10.0]) }, true),
         // A block this version cannot read (a truncated Selective Color) is kept verbatim.

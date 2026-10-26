@@ -1275,8 +1275,11 @@ fn channel_mixer(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
 
 type Stop = (f32, [f32; 3]);
 
+/// The stops the editor shows: Photoshop's own when the map keeps them (`source`, #8351), else
+/// the map's.
 fn read_stops(v: &Value) -> Vec<Stop> {
-    let mut s: Vec<Stop> = v
+    let held = v.get("source").filter(|s| s.is_object()).unwrap_or(v);
+    let mut s: Vec<Stop> = held
         .get("stops")
         .and_then(Value::as_array)
         .map(|a| {
@@ -1296,10 +1299,22 @@ fn read_stops(v: &Value) -> Vec<Stop> {
     s
 }
 
+/// Write the edited stops back: into Photoshop's gradient when the map keeps one (its midpoints
+/// follow the segments, a new one halfway; the engine bakes it again), else as the map's stops.
 fn write_stops(v: &mut Value, s: &[Stop]) {
     let mut s = s.to_vec();
     s.sort_by(|a, b| a.0.total_cmp(&b.0));
-    v["stops"] = json!(s.iter().map(|(t, c)| json!([round(*t, 0.001), adjust_params::hex(*c)])).collect::<Vec<_>>());
+    let stops = json!(s.iter().map(|(t, c)| json!([round(*t, 0.001), adjust_params::hex(*c)])).collect::<Vec<_>>());
+    match v.get_mut("source").filter(|src| src.is_object()) {
+        Some(src) => {
+            let segments = s.len().saturating_sub(1);
+            let mut mids: Vec<Value> = src.get("midpoints").and_then(Value::as_array).cloned().unwrap_or_default();
+            mids.resize(segments, json!(0.5));
+            src["midpoints"] = Value::Array(mids);
+            src["stops"] = stops;
+        }
+        None => v["stops"] = stops,
+    }
 }
 
 fn sample_stops(s: &[Stop], t: f32) -> [f32; 3] {
@@ -1465,6 +1480,10 @@ fn gradient_map(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
             stops = p;
             selected = 0;
             ui.data_mut(|d| d.remove::<MapStopDrag>(cx.mem.with("gm-stop-drag")));
+            // A preset replaces the gradient, Photoshop's settings with it.
+            if let Some(o) = v.as_object_mut() {
+                o.insert("source".into(), Value::Null);
+            }
             write_stops(v, &stops);
             e.add(Edit::discrete(true));
         }
@@ -1522,6 +1541,18 @@ fn gradient_map(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
         e.changed = true;
     }
     ui.data_mut(|d| d.insert_temp(selection, selected));
+    // The rest of Photoshop's gradient, kept as it came (#8351).
+    if let Some(src) = v.get("source").filter(|s| s.is_object()) {
+        let smooth = src.get("smoothness").and_then(Value::as_f64).unwrap_or(0.0) * 100.0;
+        let method = match src.get("method").and_then(Value::as_str).unwrap_or("classic") {
+            "perceptual" => tl!("Perceptual"),
+            "linear" => tl!("Linear"),
+            "smooth" => tl!("Smooth"),
+            _ => tl!("Classic"),
+        };
+        let line = crate::i18n::fmt(tl!("Smoothness {s}% · {method}"), &[("s", &format!("{smooth:.0}")), ("method", method)]);
+        ui.label(RichText::new(line).color(t.text_faint));
+    }
     ui.horizontal(|ui| {
         for (key, text) in [("reverse", tl!("Reverse")), ("dither", tl!("Dither"))] {
             let mut b = flag(v, key, false);
@@ -1733,6 +1764,29 @@ mod tests {
         let stops = [Color32::BLACK, Color32::RED];
         assert_eq!(track_stops(&cx(true), &stops), Some(&stops[..]));
         assert_eq!(track_stops(&cx(false), &stops), None);
+    }
+
+    /// #8351: a Gradient Map that keeps Photoshop's gradient shows and edits its stops, not the
+    /// dense baked ones; its midpoints follow added and removed stops.
+    #[test]
+    fn gradient_map_editor_edits_photoshops_stops() {
+        let baked: Vec<Value> = (0..=96).map(|k| json!([k as f64 / 96.0, "#808080"])).collect();
+        let mut v =
+            json!({"stops": baked, "source": {"stops": [[0, "#000000"], [1, "#ffffff"]], "midpoints": [0.3], "smoothness": 0.8, "method": "perceptual"}});
+        let stops = read_stops(&v);
+        assert_eq!(stops.len(), 2, "the editor shows Photoshop's two stops");
+        let mut three = stops.clone();
+        three.push((0.5, [1.0, 0.0, 0.0]));
+        write_stops(&mut v, &three);
+        assert_eq!(v["source"]["stops"].as_array().map(Vec::len), Some(3));
+        assert_eq!(v["source"]["midpoints"], json!([0.3, 0.5]), "the new segment starts halfway");
+        assert_eq!(v["stops"].as_array().map(Vec::len), Some(97), "the baked stops are the engine's to redo");
+        write_stops(&mut v, &stops);
+        assert_eq!(v["source"]["midpoints"], json!([0.3]));
+        // Without a source the map's own stops are edited.
+        let mut plain = json!({"stops": [[0, "#000000"], [1, "#ffffff"]]});
+        write_stops(&mut plain, &three);
+        assert_eq!(plain["stops"].as_array().map(Vec::len), Some(3));
     }
 
     #[test]

@@ -3514,7 +3514,7 @@ fn lab_documents_evaluate_invert_threshold_and_gradient_map_on_lab() {
         assert!(near(inv, want, 0.5), "{depth:?}: {inv:?}");
         let th = render(Adjustment::Threshold { level: 0.25 });
         assert!(near(th, [100.0, 0.0, 0.0], 0.5), "{depth:?}: L 30 is above level 64: {th:?}");
-        let gm = render(Adjustment::GradientMap { stops: vec![(0.0, [0.0; 3]), (1.0, [1.0; 3])], reverse: false, dither: false });
+        let gm = render(Adjustment::GradientMap { stops: vec![(0.0, [0.0; 3]), (1.0, [1.0; 3])], reverse: false, dither: false, source: None });
         let want = srgb_to_lab([0.3; 3]);
         assert!(near(gm, want, 1.0), "{depth:?}: L 30 → 30 % of the way: {gm:?} vs {want:?}");
     }
@@ -3722,7 +3722,7 @@ fn lab_documents_gradient_map_follows_lightness() {
     let grey = photocraft_color::convert::lab_to_srgb([l, 0.0, 0.0]);
     for depth in SampleType::ALL {
         for reverse in [false, true] {
-            let adj = Adjustment::GradientMap { stops: stops.clone(), reverse, dither: false };
+            let adj = Adjustment::GradientMap { stops: stops.clone(), reverse, dither: false, source: None };
             let a = lab_doc_adjusted(red, adj.clone(), depth);
             let b = lab_doc_adjusted(grey, adj.clone(), depth);
             near3(a, b, 1.0, &format!("{depth:?} reverse {reverse}"));
@@ -3733,7 +3733,7 @@ fn lab_documents_gradient_map_follows_lightness() {
     }
     // In RGB documents the map still follows RGB luminance: red and grey differ there.
     let mut buf = Buffer::filled(Rect::new(0, 0, 1, 1), [red[0], red[1], red[2], 1.0]);
-    let adj = Adjustment::GradientMap { stops, reverse: false, dither: false };
+    let adj = Adjustment::GradientMap { stops, reverse: false, dither: false, source: None };
     adjust::apply_in(&adj, &mut buf, adjust::Transfer::Srgb, None, ColorMode::Rgb);
     let mut grey_buf = Buffer::filled(Rect::new(0, 0, 1, 1), [grey[0], grey[1], grey[2], 1.0]);
     adjust::apply_in(&adj, &mut grey_buf, adjust::Transfer::Srgb, None, ColorMode::Rgb);
@@ -3935,7 +3935,7 @@ fn layers_that_read_other_pixels_are_composited_pixel_by_pixel() {
         assert_eq!(stats.composited, 300 * 300);
     }
     let mut d = base.clone();
-    d.layers.push(Layer::new("map", LayerContent::Adjustment(Adjustment::GradientMap { stops: vec![], reverse: false, dither: true })));
+    d.layers.push(Layer::new("map", LayerContent::Adjustment(Adjustment::GradientMap { stops: vec![], reverse: false, dither: true, source: None })));
     let mut stats = ReducedStats::default();
     render_reduced_with(&d, d.bounds(), 30, 30, None, 0, true, &mut stats);
     assert!(!stats.uniform);

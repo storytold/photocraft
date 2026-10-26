@@ -220,7 +220,7 @@ fn apply_depth_mode(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, dept
                 }
             })
         }
-        Adjustment::GradientMap { stops, reverse, dither } => {
+        Adjustment::GradientMap { stops, reverse, dither, .. } => {
             let (w, x0, y0) = (buf.rect.width().max(1) as usize, buf.rect.x0, buf.rect.y0);
             for (i, p) in buf.px.iter_mut().enumerate() {
                 if p[3] <= 0.0 {
@@ -552,7 +552,7 @@ fn apply_lab(adj: &Adjustment, buf: &mut Buffer, depth: Option<SampleType>) {
                 std::array::from_fn(|i| (c[i] + after[i] - before[i]).clamp(0.0, 1.0))
             })
         }
-        Adjustment::GradientMap { stops, reverse, dither } => {
+        Adjustment::GradientMap { stops, reverse, dither, .. } => {
             let (w, x0, y0) = (buf.rect.width().max(1) as usize, buf.rect.x0, buf.rect.y0);
             for (i, p) in buf.px.iter_mut().enumerate() {
                 if p[3] <= 0.0 {
@@ -2287,7 +2287,7 @@ mod tone_tests {
         let stops = vec![(0.0, [0.0; 3]), (1.0, [1.0; 3])];
         for (c, t) in [([0.0, 1.0, 0.0], 0.59), ([1.0, 0.0, 0.0], 0.3), ([0.0, 0.0, 1.0], 0.11), ([0.2, 0.6, 0.9], 0.513)] {
             let mut b = Buffer::filled(crate::Rect::new(0, 0, 1, 1), [c[0], c[1], c[2], 1.0]);
-            apply(&Adjustment::GradientMap { stops: stops.clone(), reverse: false, dither: false }, &mut b);
+            apply(&Adjustment::GradientMap { stops: stops.clone(), reverse: false, dither: false, source: None }, &mut b);
             assert!((b.px[0][0] - t).abs() < 1e-5, "{c:?}: {}", b.px[0][0]);
         }
     }
@@ -2297,8 +2297,8 @@ mod tone_tests {
         let stops = vec![(0.0, [0.0; 3]), (1.0, [1.0; 3])];
         let mut a = ramp();
         let mut b = ramp();
-        apply(&Adjustment::GradientMap { stops: stops.clone(), reverse: false, dither: false }, &mut a);
-        apply(&Adjustment::GradientMap { stops, reverse: false, dither: true }, &mut b);
+        apply(&Adjustment::GradientMap { stops: stops.clone(), reverse: false, dither: false, source: None }, &mut a);
+        apply(&Adjustment::GradientMap { stops, reverse: false, dither: true, source: None }, &mut b);
         assert!(a.px.iter().zip(&b.px).all(|(x, y)| (x[0] - y[0]).abs() <= 0.5 / 255.0 + 1e-6));
         assert!(a.px.iter().zip(&b.px).any(|(x, y)| x[0] != y[0]));
     }
@@ -2461,7 +2461,7 @@ mod tone_tests {
     fn lab_gradient_map_follows_l() {
         let stops = vec![(0.0, [1.0, 0.0, 0.0]), (1.0, [0.0, 0.0, 1.0])];
         for reverse in [false, true] {
-            let map = Adjustment::GradientMap { stops: stops.clone(), reverse, dither: false };
+            let map = Adjustment::GradientMap { stops: stops.clone(), reverse, dither: false, source: None };
             // A grey and a saturated colour with the same L map to the same colour.
             let grey = in_lab(&map, lab(60.0, 0.0, 0.0));
             let green = in_lab(&map, lab(60.0, -50.0, 40.0));
@@ -2489,7 +2489,7 @@ mod tone_tests {
         }
         // Transparent pixels are left alone and odd values never panic.
         let mut t = Buffer::filled(crate::Rect::new(0, 0, 2, 1), [f32::NAN, 2.0, -1.0, 0.0]);
-        for adj in lab_only.iter().chain([&Adjustment::GradientMap { stops: vec![], reverse: true, dither: true }]) {
+        for adj in lab_only.iter().chain([&Adjustment::GradientMap { stops: vec![], reverse: true, dither: true, source: None }]) {
             for mode in [ColorMode::Lab, ColorMode::Cmyk] {
                 apply_in(adj, &mut t, Transfer::Srgb, None, mode);
                 let mut odd = Buffer::filled(crate::Rect::new(0, 0, 1, 1), [f32::NAN, f32::INFINITY, -3.0, 1.0]);

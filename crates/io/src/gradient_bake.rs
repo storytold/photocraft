@@ -152,6 +152,41 @@ fn eval(stops: &[(f32, [f32; 3])], mids: &[f32], smooth: f32, t: f32, m: Method)
     })
 }
 
+impl Method {
+    /// Its name in a [`photocraft_doc::adjust::GradientSource`] and in commands.
+    pub fn name(self) -> &'static str {
+        match self {
+            Method::Classic => "classic",
+            Method::Perceptual => "perceptual",
+            Method::Linear => "linear",
+            Method::Smooth => "smooth",
+        }
+    }
+
+    /// Its four-character code in a PSD gradient (`None` for Classic, which older blocks imply).
+    pub(crate) fn code(self) -> Option<&'static [u8; 4]> {
+        match self {
+            Method::Classic => None,
+            Method::Perceptual => Some(b"Perc"),
+            Method::Linear => Some(b"Lnr "),
+            Method::Smooth => Some(b"Smoo"),
+        }
+    }
+}
+
+/// A Gradient Map's kept Photoshop gradient (#8351) baked into the dense linear sRGB stops the
+/// compositors render. Hostile values (from a file or a command) are clamped: locations and
+/// Smoothness to 0..1, midpoints to 0.05..0.95, a missing midpoint is the middle.
+pub fn bake_source(src: &photocraft_doc::adjust::GradientSource) -> Vec<(f32, [f32; 3])> {
+    let unit = |v: f32| if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 };
+    let mut stops: Vec<(f32, Color)> = src.stops.iter().map(|(t, c)| (unit(*t), Color::rgba(unit(c[0]), unit(c[1]), unit(c[2]), 1.0))).collect();
+    stops.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mids: Vec<f32> =
+        (0..stops.len().saturating_sub(1)).map(|k| src.midpoints.get(k).copied().filter(|m| m.is_finite()).map_or(0.5, |m| m.clamp(0.05, 0.95))).collect();
+    let method = Method::from_name(&src.method).unwrap_or(Method::Classic);
+    bake(stops, &mids, unit(src.smoothness), method).into_iter().map(|(t, c)| (t, c.to_rgb())).collect()
+}
+
 /// Dense linear stops reproducing Photoshop's interpolation. Returns the input unchanged when it
 /// already interpolates linearly in sRGB.
 pub fn bake(stops: Vec<(f32, Color)>, midpoints: &[f32], smoothness: f32, method: Method) -> Vec<(f32, Color)> {

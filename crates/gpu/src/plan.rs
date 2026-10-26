@@ -1765,7 +1765,7 @@ pub fn adjustment_program(adj: &Adjustment, transfer: Transfer, depth: photocraf
             }
             (12, p, None)
         }
-        Adjustment::GradientMap { stops, reverse, dither } => {
+        Adjustment::GradientMap { stops, reverse, dither, .. } => {
             p[0][0] = if *reverse { 1.0 } else { 0.0 };
             p[0][1] = if *dither { 1.0 } else { 0.0 };
             let s4: Vec<(f32, [f32; 4])> = stops.iter().map(|(t, c)| (*t, [c[0], c[1], c[2], 1.0])).collect();
@@ -1919,7 +1919,7 @@ mod tests {
             Adjustment::Posterize { levels: 4 },
             Adjustment::Threshold { level: 0.5 },
             Adjustment::BrightnessContrast { brightness: 10.0, contrast: 5.0, legacy: false },
-            Adjustment::GradientMap { stops: vec![(0.0, [0.0; 3]), (1.0, [1.0; 3])], reverse: false, dither: false },
+            Adjustment::GradientMap { stops: vec![(0.0, [0.0; 3]), (1.0, [1.0; 3])], reverse: false, dither: false, source: None },
         ];
         for adj in &lab_rules {
             assert!(!adjustment_on_gpu(adj, ColorMode::Lab), "{adj:?}");

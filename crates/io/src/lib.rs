@@ -47,7 +47,7 @@ pub mod doc_path;
 pub mod effects_map;
 pub mod exr_parts;
 mod flat;
-mod gradient_bake;
+pub mod gradient_bake;
 pub mod guides_map;
 pub use gradient_bake::{Method as GradientMethod, bake as bake_gradient};
 mod duotone_map;
