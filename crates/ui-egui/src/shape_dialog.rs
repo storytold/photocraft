@@ -65,6 +65,7 @@ pub fn open(app: &mut PhotocraftApp, tool: Tool, at: [f64; 2]) -> Option<u64> {
     let sides = o.polygon_sides.clamp(3, 100);
     let mut f = Map::new();
     f.insert(MARK.into(), json!(kind));
+    f.insert("__shapeMode".into(), json!(o.shape_mode));
     f.insert("__command".into(), json!("shape.create"));
     f.insert("__label".into(), json!(label));
     f.insert("__at".into(), json!([at[0].round(), at[1].round()]));
@@ -138,7 +139,8 @@ pub fn geometry(f: &Map<String, Value>) -> Result<Value, String> {
 
 /// OK: create the shape and remember the values for the next click.
 pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
-    let result = geometry(f).and_then(|g| crate::vector_ui::create_shape(app, g));
+    let path_mode = f.get("__shapeMode").and_then(Value::as_str) == Some("path");
+    let result = geometry(f).and_then(|g| crate::vector_ui::create_shape_in_mode(app, g, path_mode));
     match &result {
         Ok(_) => {
             if let Some(kind) = f.get(MARK).and_then(Value::as_str) {

@@ -178,10 +178,75 @@ fn fill_param(app: &PhotocraftApp) -> Value {
 
 /// Create a shape layer from `shape.create` geometry with the options bar's fill and stroke: the
 /// end of a drag, and the Create Rectangle / Ellipse / … dialogs (`shape_dialog`).
-pub fn create_shape(app: &mut PhotocraftApp, mut geometry: Value) -> Result<Value, String> {
+pub fn create_shape(app: &mut PhotocraftApp, geometry: Value) -> Result<Value, String> {
+    let path_mode = app.ui.tool_options.shape_mode == "path";
+    create_shape_in_mode(app, geometry, path_mode)
+}
+
+/// Capture mode for dialogs; reuse upstream geometry, including all four corner radii.
+pub(crate) fn create_shape_in_mode(app: &mut PhotocraftApp, mut geometry: Value, path_mode: bool) -> Result<Value, String> {
+    if path_mode && matches!(geometry.get("kind").and_then(Value::as_str), Some("rect" | "roundedRect" | "ellipse")) {
+        let _rect = geometry
+            .get("rect")
+            .and_then(|r| serde_json::from_value::<[f64; 4]>(r.clone()).ok())
+            .filter(|r| {
+                r.iter().all(|v| v.is_finite())
+                    && r[0].abs() <= 1_000_000.0
+                    && r[1].abs() <= 1_000_000.0
+                    && (1.0..=300_000.0).contains(&r[2])
+                    && (1.0..=300_000.0).contains(&r[3])
+            })
+            .ok_or("Path geometry needs a finite rectangle with positive, bounded dimensions.")?;
+        let path = photocraft_engine::vector_cmds::shape_path(&geometry).map_err(|e| e.to_string())?;
+        let first = app.session.active().and_then(|st| st.doc.work_path.as_ref()).map_or(0, |p| p.subpaths.len());
+        let result = app.run("path.set", json!({"name": "work", "path": photocraft_engine::vector_cmds::path_json(&path), "op": "combine"}))?;
+        app.ui.mask_target = false;
+        app.ui.vector_mask_target = false;
+        if let Some(st) = app.session.active_mut() {
+            st.channel_view.target = photocraft_engine::channel_cmds::ChannelTarget::Composite;
+        }
+        app.sync_mask_targets();
+        app.ui.selected_path = Some("work".into());
+        app.ui.shape_work_path_target = app.session.active().map(|st| (st.doc.id.0, st.active_layer.map(|id| id.0)));
+        app.ui.direct_selection = crate::direct_select::DirectSelection {
+            target: Some(crate::direct_select::PathRef::Work),
+            anchors: path.subpaths.iter().enumerate().flat_map(|(s, p)| (0..p.knots.len()).map(move |k| [first + s, k])).collect(),
+            ..Default::default()
+        };
+        app.ui.view.extras = true;
+        app.ui.view.show.target_path = true;
+        return Ok(result);
+    }
     geometry["fill"] = fill_param(app);
     geometry["stroke"] = stroke_param(app);
-    app.run("shape.create", geometry)
+    let result = app.run("shape.create", geometry)?;
+    app.ui.shape_work_path_target = None;
+    Ok(result)
+}
+
+pub(crate) fn shape_path_mode(o: &ToolOptions, tool: Tool) -> bool {
+    o.shape_mode == "path" && matches!(tool, Tool::Rectangle | Tool::EllipseShape)
+}
+
+pub(crate) fn shape_work_path_selected(app: &PhotocraftApp) -> bool {
+    app.ui.selected_path.as_deref() == Some("work")
+        && !app.ui.vector_mask_target
+        && app.session.active().is_some_and(|st| {
+            st.channel_view.target != photocraft_engine::channel_cmds::ChannelTarget::VectorMask
+                && st.doc.work_path.is_some()
+                && app.ui.shape_work_path_target == Some((st.doc.id.0, st.active_layer.map(|id| id.0)))
+        })
+}
+
+/// Explicit Work Path priority applies to a visible outline hit, not an unrelated Shape press.
+pub(crate) fn shape_work_path_hit(app: &PhotocraftApp, at: [f64; 2], tolerance: f64) -> bool {
+    shape_work_path_selected(app)
+        && app.ui.view.shows(app.ui.view.show.target_path)
+        && app
+            .session
+            .active()
+            .and_then(|st| st.doc.work_path.as_ref())
+            .is_some_and(|path| photocraft_vector::edit::hit(path, photocraft_geom::Point::new(at[0], at[1]), tolerance, &[]).is_some())
 }
 
 /// The preview and command both use the full float tool colours, including transparent paint.
@@ -198,8 +263,8 @@ fn shape_preview(app: &PhotocraftApp, tool: Tool, start: [f64; 2], end: [f64; 2]
     };
     Some(photocraft_doc::ShapeLayer {
         path,
-        fill: o.shape_fill.then(|| tool_paint(app, false)),
-        stroke: (o.stroke_width > 0.0).then(|| o.shape_stroke.stroke(o.stroke_width, tool_paint(app, true))),
+        fill: (!shape_path_mode(o, tool) && o.shape_fill).then(|| tool_paint(app, false)),
+        stroke: (!shape_path_mode(o, tool) && o.stroke_width > 0.0).then(|| o.shape_stroke.stroke(o.stroke_width, tool_paint(app, true))),
         ..Default::default()
     })
 }
@@ -946,6 +1011,9 @@ pub(crate) fn delete_key_deletes_work_path(app: &PhotocraftApp) -> bool {
 /// The path Path Selection edits: the targeted vector mask, the active shape layer's path, else
 /// the work path.
 fn target_path(app: &PhotocraftApp) -> Option<(PathTarget, Path)> {
+    if shape_work_path_selected(app) {
+        return app.session.active()?.doc.work_path.clone().map(|path| (PathTarget::Work, path));
+    }
     if let Some((id, p)) = targeted_vector_mask(app) {
         return Some((PathTarget::VectorMask(id), p));
     }
@@ -1051,7 +1119,9 @@ pub fn path_selection_finish(app: &mut PhotocraftApp, start: [f64; 2], end: [f64
     let tol = 6.0 / f64::from(app.point_zoom().max(0.01));
     if dx.abs() + dy.abs() < 0.5 {
         let Some(st) = app.session.active() else { return };
-        if let Some(id) = pick_shape_at(&st.doc, start, tol) {
+        if !shape_work_path_hit(app, start, tol)
+            && let Some(id) = pick_shape_at(&st.doc, start, tol)
+        {
             let _ = app.run("layer.select", json!({"layer": id.0}));
         }
         return;
@@ -1410,8 +1480,20 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         }
         return true;
     }
-    let mut mode = "shape".to_string();
-    crate::widgets::dropdown(ui, "shape-mode", tl!("Mode"), &mut mode, &[("shape".to_string(), tl!("Shape"))], 80.0);
+    if matches!(tool, Tool::Rectangle | Tool::EllipseShape) {
+        let opts = [("shape".to_string(), tl!("Shape")), ("path".to_string(), tl!("Path"))];
+        crate::widgets::dropdown(ui, "shape-mode", tl!("Mode"), &mut o.shape_mode, &opts, 80.0);
+        if shape_path_mode(o, tool) {
+            if tool == Tool::Rectangle {
+                lbl(ui, tl!("Radius:"));
+                crate::widgets::value_field(ui, &mut o.corner_radius, 0.0..=10000.0, "px", 62.0);
+            }
+            return true;
+        }
+    } else {
+        let mut mode = "shape".to_string();
+        crate::widgets::dropdown(ui, "shape-mode", tl!("Mode"), &mut mode, &[("shape".to_string(), tl!("Shape"))], 80.0);
+    }
     crate::widgets::vline(ui, 22.0);
     crate::shape_options::options_bar(app, ui, tool);
     true
@@ -3377,3 +3459,7 @@ mod pen_draw_tests;
 #[cfg(test)]
 #[path = "vector_paint_tests.rs"]
 mod paint_tests;
+
+#[cfg(test)]
+#[path = "shape_path_mode_tests.rs"]
+mod shape_path_mode_tests;
