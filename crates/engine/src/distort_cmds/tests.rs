@@ -473,3 +473,115 @@ fn unlocked_or_position_locked_smart_objects_take_distortions() {
         }
     }
 }
+
+#[test]
+fn face_aware_liquify_with_given_landmarks_one_step_undo_and_replay() {
+    // A "face" on the patterned block: eyes, nose and mouth corners.
+    let lm = json!([[25, 20], [45, 20], [35, 27], [29, 33], [41, 33]]);
+    let mut s = session(8);
+    let before = active_surface(&s);
+    let r = s.execute(LIQUIFY, json!({"faces": [{"landmarks": lm, "eyeSize": 0}]})).unwrap();
+    assert_eq!(r["changed"], false, "neutral sliders are a no-op");
+    let hist = s.active().unwrap().history.past_len();
+    let p = json!({"faces": [{"landmarks": lm, "eyeSize": 100, "smile": 60}]});
+    let r = s.execute(LIQUIFY, p.clone()).unwrap();
+    assert_eq!(r["changed"], true);
+    assert_eq!(r["faces"], json!([[[25.0, 20.0], [45.0, 20.0], [35.0, 27.0], [29.0, 33.0], [41.0, 33.0]]]));
+    assert_eq!(s.active().unwrap().history.past_len(), hist + 1, "one history step");
+    let after = active_surface(&s);
+    assert!(worst(&after, &before, Rect::new(20, 15, 30, 25)) > 0.2, "around the eye");
+    assert!(worst(&after, &before, Rect::new(0, 50, 80, 60)) == 0.0, "far from the face");
+    // The smart-filter path gives the same pixels.
+    let canvas = Rect::new(0, 0, 80, 60);
+    assert_eq!(apply_to_surface(LIQUIFY, &p, &before, canvas).unwrap(), after);
+    s.undo();
+    assert_eq!(active_surface(&s), before);
+}
+
+#[test]
+fn face_aware_liquify_refuses_bad_faces() {
+    let mut s = session(8);
+    let lm = json!([[25, 20], [45, 20], [35, 27], [29, 33], [41, 33]]);
+    let before = active_surface(&s);
+    let steps = s.active().unwrap().history.past_len();
+    let unchanged = |s: &Session, what: &str| {
+        assert_eq!(active_surface(s), before, "{what}: pixels changed");
+        assert_eq!(s.active().unwrap().history.past_len(), steps, "{what}: history step");
+    };
+    for bad in [
+        json!({"faces": {"smile": 10}}),
+        json!({"faces": [{"landmarks": lm, "smile": 150}]}),
+        json!({"faces": [{"landmarks": lm, "smiel": 10}]}),
+        json!({"faces": [{"landmarks": [[1, 2], [3, 4]], "smile": 10}]}),
+        json!({"faces": [{"landmarks": lm, "eyeSize": [10, "x"]}]}),
+        json!({"faces": [{"face": -1, "smile": 10}]}),
+    ] {
+        assert!(s.execute(LIQUIFY, bad.clone()).is_err(), "{bad}");
+        unchanged(&s, &bad.to_string());
+    }
+    // A face to detect that isn't there.
+    let e = s.execute(LIQUIFY, json!({"faces": [{"smile": 10}]})).unwrap_err();
+    assert!(e.to_string().contains("no face 0 (found 0)"), "{e}");
+    unchanged(&s, "no face 0");
+}
+
+#[test]
+fn neutral_faces_are_skipped_even_with_strokes() {
+    // A dialog that sends every face slot with neutral sliders plus a brush stroke: the neutral
+    // face must not start detection (none here, and none at all in the browser build).
+    let mut s = session(8);
+    let before = active_surface(&s);
+    let p = json!({
+        "faces": [{"face": 0, "smile": 0}, {"face": 3}],
+        "strokes": [{"tool": "forwardWarp", "size": 30, "points": [[20, 20], [50, 30]]}],
+    });
+    let r = s.execute(LIQUIFY, p.clone()).unwrap();
+    assert_eq!(r["changed"], true);
+    assert!(r.get("faces").is_none(), "{r}");
+    let after = active_surface(&s);
+    assert!(worst(&after, &before, Rect::new(10, 10, 60, 40)) > 0.1);
+    // The smart-filter replay skips them the same way.
+    assert_eq!(apply_to_surface(LIQUIFY, &p, &before, Rect::new(0, 0, 80, 60)).unwrap(), after);
+}
+
+#[test]
+fn a_smart_filter_stores_the_landmarks_it_used() {
+    // Detected faces are written into the stored params, so a replay does not detect again and
+    // cannot land on another face or none.
+    let p = json!({
+        "faces": [{"face": 1, "smile": 40}, {"eyeSize": 0}, {"landmarks": [[1, 2], [3, 4], [5, 6], [7, 8], [9, 10]], "smile": 5}],
+        "layer": 3,
+    });
+    let specs = liquify_faces(LIQUIFY, &p).unwrap();
+    let found: Vec<Landmarks> = vec![[[0.0; 2]; 5], [[10.0, 20.0], [30.0, 20.0], [20.0, 28.0], [14.0, 34.0], [26.0, 34.0]]];
+    let faces = resolve_faces(LIQUIFY, &specs, || Ok(found.clone())).unwrap();
+    assert_eq!(faces.len(), 2, "the neutral face is left out");
+    let stored = with_resolved_landmarks(&p, &specs, &faces);
+    assert_eq!(
+        stored,
+        json!({
+            "faces": [
+                {"landmarks": [[10.0, 20.0], [30.0, 20.0], [20.0, 28.0], [14.0, 34.0], [26.0, 34.0]], "smile": 40},
+                {"eyeSize": 0},
+                {"landmarks": [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0], [7.0, 8.0], [9.0, 10.0]], "smile": 5},
+            ],
+            "layer": 3,
+        })
+    );
+    // Replaying the stored params needs no detection.
+    let again = resolve_faces(LIQUIFY, &liquify_faces(LIQUIFY, &stored).unwrap(), || Err(EngineError::Other("detected again".into()))).unwrap();
+    assert_eq!(again, faces);
+    // Params without faces pass through.
+    assert_eq!(with_resolved_landmarks(&json!({"strokes": []}), &[], &[]), json!({"strokes": []}));
+}
+
+#[test]
+fn liquify_on_a_smart_object_keeps_given_landmarks_in_the_filter() {
+    let lm = json!([[25, 20], [45, 20], [35, 27], [29, 33], [41, 33]]);
+    let mut s = session(8);
+    s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    s.execute(LIQUIFY, json!({"faces": [{"landmarks": lm, "smile": 60}]})).unwrap();
+    let sm = smart(&s);
+    assert_eq!(sm.smart_filters.len(), 1);
+    assert_eq!(sm.smart_filters[0].params["faces"][0]["landmarks"], json!([[25.0, 20.0], [45.0, 20.0], [35.0, 27.0], [29.0, 33.0], [41.0, 33.0]]));
+}

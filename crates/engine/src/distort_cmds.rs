@@ -12,6 +12,7 @@
 
 use std::cell::RefCell;
 
+use photocraft_algo::face_liquify::{FaceSliders, Landmarks, apply_faces};
 use photocraft_algo::liquify::{LiquifyField, LiquifyStroke, apply_liquify, auto_cell};
 use photocraft_algo::perspective::{PerspectiveMap, Plane, Straighten, straighten};
 use photocraft_algo::puppet::{PuppetDensity, PuppetMode, PuppetPin, PuppetWarp, puppet_warp, puppet_warp_with_mask};
@@ -59,6 +60,104 @@ pub fn liquify_params(cmd: &str, p: &Value, canvas: Rect) -> Result<(Vec<Liquify
         }
     };
     Ok((strokes, cell))
+}
+
+/// One face of Face-Aware Liquify: its landmarks (or the index of a detected face) and its
+/// sliders.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FaceSpec {
+    pub index: usize,
+    pub landmarks: Option<Landmarks>,
+    pub sliders: FaceSliders,
+}
+
+/// Face-Aware Liquify params: `faces`, each `{"face": n?, "landmarks": [[x,y]×5]?, sliders…}`.
+pub fn liquify_faces(cmd: &str, p: &Value) -> Result<Vec<FaceSpec>> {
+    let Some(v) = p.get("faces") else { return Ok(Vec::new()) };
+    let list = v.as_array().ok_or_else(|| bad(cmd, "`faces` must be a list"))?;
+    let mut out = Vec::with_capacity(list.len().min(64));
+    for (i, f) in list.iter().enumerate() {
+        let mut o = f.as_object().cloned().ok_or_else(|| bad(cmd, "each face is an object of sliders"))?;
+        let index = match o.remove("face") {
+            None => i,
+            Some(v) => v.as_u64().and_then(|n| usize::try_from(n).ok()).ok_or_else(|| bad(cmd, "`face` is the index of a detected face"))?,
+        };
+        let landmarks = match o.remove("landmarks") {
+            None => None,
+            Some(v) => {
+                let lm: Landmarks = serde_json::from_value(v).map_err(|_| bad(cmd, "`landmarks` must be five [x, y] points (eyes, nose, mouth corners)"))?;
+                if lm.iter().flatten().any(|c| !c.is_finite()) {
+                    return Err(bad(cmd, "landmark coordinates must be finite"));
+                }
+                Some(lm)
+            }
+        };
+        let sliders: FaceSliders = serde_json::from_value(Value::Object(o)).map_err(|e| bad(cmd, format!("bad face sliders: {e}")))?;
+        sliders.validate().map_err(|e| bad(cmd, e))?;
+        out.push(FaceSpec { index, landmarks, sliders });
+    }
+    Ok(out)
+}
+
+/// The landmarks and sliders of each face that changes something: given ones as they are, the
+/// others from `detect` (called at most once). Faces with neutral sliders are left out, so they
+/// never start detection or fail on a face that isn't there.
+pub fn resolve_faces(cmd: &str, specs: &[FaceSpec], detect: impl FnOnce() -> Result<Vec<Landmarks>>) -> Result<Vec<(Landmarks, FaceSliders)>> {
+    let mut found: Option<Vec<Landmarks>> = None;
+    let mut detect = Some(detect);
+    let mut out = Vec::with_capacity(specs.len());
+    for f in specs.iter().filter(|f| !f.sliders.is_neutral()) {
+        let lm = match f.landmarks {
+            Some(lm) => lm,
+            None => {
+                if found.is_none() {
+                    found = Some(detect.take().map_or_else(|| Ok(Vec::new()), |d| d())?);
+                }
+                let faces = found.as_deref().unwrap_or_default();
+                *faces.get(f.index).ok_or_else(|| bad(cmd, format!("no face {} (found {})", f.index, faces.len())))?
+            }
+        };
+        out.push((lm, f.sliders));
+    }
+    Ok(out)
+}
+
+/// `p` with the landmarks `resolve_faces` used written into each face that changes something, so a
+/// smart filter replays the same warp without detecting again. `specs` is `liquify_faces(p)`, one
+/// per entry of `p["faces"]`; `faces` is what `resolve_faces` made of them.
+fn with_resolved_landmarks(p: &Value, specs: &[FaceSpec], faces: &[(Landmarks, FaceSliders)]) -> Value {
+    let mut out = p.clone();
+    let Some(list) = out.get_mut("faces").and_then(Value::as_array_mut) else { return out };
+    let mut resolved = faces.iter();
+    for (v, spec) in list.iter_mut().zip(specs) {
+        if spec.sliders.is_neutral() {
+            continue;
+        }
+        let (Some((lm, _)), Value::Object(o)) = (resolved.next(), v) else { break };
+        o.remove("face");
+        o.insert("landmarks".into(), json!(lm));
+    }
+    out
+}
+
+/// Landmarks of the faces in `surf` over `canvas`, best first.
+fn surface_faces(surf: &Surface, canvas: Rect) -> Result<Vec<Landmarks>> {
+    let (w, h) = (canvas.width() as usize, canvas.height() as usize);
+    let mut px = vec![[0.0f32; 4]; w * h];
+    surf.read_rgba_into(canvas, &mut px);
+    let faces = crate::face_cmds::detect(&px, w, h, crate::face_cmds::MIN_SCORE)?;
+    let (x0, y0) = (f64::from(canvas.x0), f64::from(canvas.y0));
+    Ok(faces.iter().map(|f| f.landmarks.map(|[x, y]| [f64::from(x) + x0, f64::from(y) + y0])).collect())
+}
+
+/// The Liquify field: the faces' sliders first, then the strokes in order.
+pub fn liquify_field(canvas: Rect, cell: f64, faces: &[(Landmarks, FaceSliders)], strokes: &[LiquifyStroke]) -> LiquifyField {
+    let mut field = LiquifyField::new(canvas, cell);
+    apply_faces(&mut field, faces);
+    for s in strokes {
+        field.apply_stroke(s);
+    }
+    field
 }
 
 /// Puppet Warp params.
@@ -148,8 +247,8 @@ fn mix_by_selection(old: &Surface, new: &Surface, sel: &Surface) -> Surface {
 }
 
 /// Liquifies a surface over `canvas` (the field's extent).
-pub fn liquify_surface(surf: &Surface, strokes: &[LiquifyStroke], cell: f64, canvas: Rect) -> Surface {
-    let field = LiquifyField::from_strokes(canvas, cell, strokes);
+pub fn liquify_surface(surf: &Surface, faces: &[(Landmarks, FaceSliders)], strokes: &[LiquifyStroke], cell: f64, canvas: Rect) -> Surface {
+    let field = liquify_field(canvas, cell, faces, strokes);
     apply_liquify(surf, &field)
 }
 
@@ -179,7 +278,8 @@ pub fn apply_to_surface(id: &str, params: &Value, surf: &Surface, canvas: Rect) 
     match id {
         LIQUIFY => {
             let (strokes, cell) = liquify_params(id, params, canvas).ok()?;
-            Some(liquify_surface(surf, &strokes, cell, canvas))
+            let faces = resolve_faces(id, &liquify_faces(id, params).ok()?, || surface_faces(surf, canvas)).ok()?;
+            Some(liquify_surface(surf, &faces, &strokes, cell, canvas))
         }
         // A stored warp too far to render leaves the smart object as it is (#1019).
         PUPPET | PUPPET_SMART => Some(puppet_surface(surf, &puppet_params(id, params).ok()?, interp(params)).unwrap_or_else(|| surf.clone())),
@@ -271,21 +371,29 @@ fn run_on_layer(s: &mut Session, cmd: &str, label: &str, p: &Value, moves: bool,
 fn liquify(s: &mut Session, p: &Value) -> Result<Value> {
     let canvas = s.active().ok_or(EngineError::NoDocument)?.doc.bounds();
     let (strokes, cell) = liquify_params(LIQUIFY, p, canvas)?;
+    let specs = liquify_faces(LIQUIFY, p)?;
     let id = target(s, p)?;
-    if strokes.is_empty() {
+    if strokes.is_empty() && specs.iter().all(|f| f.sliders.is_neutral()) {
         return Ok(json!({"layer": id.0, "changed": false}));
     }
     let t0 = Stopwatch::start();
-    let field = LiquifyField::from_strokes(canvas, cell, &strokes);
+    let faces = resolve_faces(LIQUIFY, &specs, || {
+        let d = s.active().ok_or(EngineError::NoDocument)?;
+        let found = crate::face_cmds::faces_in(&d.doc, Some(id), false, crate::face_cmds::MIN_SCORE)?;
+        Ok(found.iter().map(|f| f.landmarks.map(|[x, y]| [f64::from(x), f64::from(y)])).collect())
+    })?;
+    let field = liquify_field(canvas, cell, &faces, &strokes);
     let smart = matches!(s.active().and_then(|d| d.doc.layer(id)).map(|l| &l.content), Some(LayerContent::Smart(_)));
     if field.is_identity() && !smart {
         return Ok(json!({"layer": id.0, "changed": false}));
     }
+    // A smart filter stores the landmarks it was made with, not face indices to detect again.
+    let stored = with_resolved_landmarks(p, &specs, &faces);
     let r = run_on_layer(
         s,
         LIQUIFY,
         "Liquify",
-        p,
+        &stored,
         false,
         &|surf, sel, _| {
             let out = apply_liquify(surf, &field);
@@ -299,6 +407,9 @@ fn liquify(s: &mut Session, p: &Value) -> Result<Value> {
     let mut r = r;
     r["ms"] = json!(t0.ms());
     r["maxDisplacement"] = json!(field.max_displacement());
+    if !faces.is_empty() {
+        r["faces"] = json!(faces.iter().map(|(lm, _)| lm).collect::<Vec<_>>());
+    }
     Ok(r)
 }
 
@@ -381,7 +492,7 @@ fn perspective(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
 }
 
 pub fn specs() -> Vec<CommandSpec> {
-    const L: &str = r##"{"strokes":[{"tool":"forwardWarp|reconstruct|smooth|twirlCw|twirlCcw|pucker|bloat|pushLeft|freeze|thaw|lassoMask|reconstructAll","size":px=100,"density":0-100=50,"pressure":0-100=100,"rate":0-100=80,"points":[[x,y,pressure?]…],"amount":%? (reconstructAll; lassoMask: 1 freezes the polygon in points, 0 thaws it)}…],"meshSize":px? (field resolution, px per node; default 2, or 4 above 4 MP),"layer":id?} — strokes replay in order on a fresh field; a selection limits the effect; on a smart object it becomes a smart filter"##;
+    const L: &str = r##"{"strokes":[{"tool":"forwardWarp|reconstruct|smooth|twirlCw|twirlCcw|pucker|bloat|pushLeft|freeze|thaw|lassoMask|reconstructAll","size":px=100,"density":0-100=50,"pressure":0-100=100,"rate":0-100=80,"points":[[x,y,pressure?]…],"amount":%? (reconstructAll; lassoMask: 1 freezes the polygon in points, 0 thaws it)}…],"meshSize":px? (field resolution, px per node; default 2, or 4 above 4 MP),"faces":[{"face":n? (index of a detected face; default its place in the list),"landmarks":[[x,y]×5]? (eyes, nose, mouth corners, image left first; instead of detecting),"eyeSize","eyeHeight","eyeWidth","eyeTilt": -100..100 or [left,right],"eyeDistance","noseHeight","noseWidth","smile","upperLip","lowerLip","mouthWidth","mouthHeight","forehead","chinHeight","jawline","faceWidth": -100..100=0}…] (Face-Aware Liquify; applied before the strokes),"layer":id?} — strokes replay in order on a fresh field; a selection limits the effect; on a smart object it becomes a smart filter"##;
     const P: &str = r##"{"pins":[{"src":[x,y],"dst":[x,y],"rotate":deg?,"depth":n?}…],"mode":"rigid|normal|distort"="normal","density":"fewer|normal|more"="normal","expansion":px=2,"interpolation":"bicubic|bilinear|nearest","layer":id?} — mesh over the opaque region, as-rigid-as-possible; on a smart object it becomes a smart filter"##;
     const Q: &str = r##"{"planes":[{"src":[[x,y]×4],"dst":[[x,y]×4]}…] (corners clockwise from top-left; corners that coincide in src are linked),"straighten":"horizontal|vertical|auto"?,"interpolation":"bicubic|bilinear|nearest","layer":id?}"##;
     vec![
