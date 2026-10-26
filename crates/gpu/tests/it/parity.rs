@@ -1739,6 +1739,13 @@ fn effect_cases() -> Vec<(&'static str, Vec<Effect>)> {
             ],
         ),
         (
+            "outer bevel beneath a stroke",
+            vec![
+                Effect::BevelEmboss(bevel(BevelStyle::OuterBevel, true, 6.0, 2.0)),
+                Effect::Stroke(stroke(4.0, StrokePosition::Outside, FxPaint::Color(Color::rgb(0.2, 0.6, 0.2)))),
+            ],
+        ),
+        (
             "multiple instances",
             vec![
                 Effect::Stroke(stroke(2.0, StrokePosition::Outside, FxPaint::Color(Color::rgb(1.0, 1.0, 1.0)))),

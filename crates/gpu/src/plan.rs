@@ -1298,6 +1298,26 @@ impl<'a> Planner<'a> {
         // The shape's own alpha.
         let c = self.retain(content);
         l = init(self, l, Some(c), INIT_ALPHA, 1.0);
+        // An outer bevel lies beneath the strokes (compose::composite_with_effects_prepared).
+        for &(i, e) in &rev {
+            if let Effect::BevelEmboss(b) = e
+                && bevel_paint(b) == photocraft_compose::effects::BevelPaint::Outer
+            {
+                let k = 0;
+                w = self.paint(
+                    w,
+                    content,
+                    Cov::Map(map(i, k), 0.0),
+                    &Paint::Color(b.highlight_color.to_rgb()),
+                    b.highlight.blend,
+                    b.highlight.opacity,
+                    0,
+                    clip,
+                    sb,
+                );
+                w = self.paint(w, content, Cov::Map(map(i, k + 1), 0.0), &Paint::Color(b.shadow_color.to_rgb()), b.shadow.blend, b.shadow.opacity, 0, clip, sb);
+            }
+        }
         // Outside stroke parts lie beneath the layer and blend onto the exterior result with their
         // own mode; a higher stroke covers the ones below it (each takes its coverage × opacity
         // not yet taken above it, blended over the result as it was before the strokes).
@@ -1355,25 +1375,6 @@ impl<'a> Planner<'a> {
             p.c = cover;
             p.clip = Some(clip);
             w = self.emit(p);
-        }
-        for &(i, e) in &rev {
-            if let Effect::BevelEmboss(b) = e
-                && bevel_paint(b) == photocraft_compose::effects::BevelPaint::Outer
-            {
-                let k = 0;
-                w = self.paint(
-                    w,
-                    content,
-                    Cov::Map(map(i, k), 0.0),
-                    &Paint::Color(b.highlight_color.to_rgb()),
-                    b.highlight.blend,
-                    b.highlight.opacity,
-                    0,
-                    clip,
-                    sb,
-                );
-                w = self.paint(w, content, Cov::Map(map(i, k + 1), 0.0), &Paint::Color(b.shadow_color.to_rgb()), b.shadow.blend, b.shadow.opacity, 0, clip, sb);
-            }
         }
 
         let mode = if premerge || layer.blend == BlendMode::PassThrough { BlendMode::Normal } else { layer.blend };
