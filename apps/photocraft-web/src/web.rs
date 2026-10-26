@@ -49,6 +49,11 @@ type Served = Arc<Mutex<ServedFonts>>;
 
 pub fn start() {
     eframe::WebLogger::init(log::LevelFilter::Info).ok();
+    // `window.photocraft` (crate::api) is there from the start: until the app runs, its requests
+    // reject with "not running yet" and `openFile` returns false.
+    if let Err(e) = crate::api::install() {
+        log::error!("photocraft-web: couldn't install window.photocraft: {e:?}");
+    }
     wasm_bindgen_futures::spawn_local(async {
         let Some(document) = web_sys::window().and_then(|w| w.document()) else {
             log::error!("no document");
@@ -106,9 +111,6 @@ pub fn start() {
                     // `window.photocraft`: the page's control channel (crate::api).
                     let (control_tx, control_rx) = std::sync::mpsc::channel();
                     crate::api::connect(control_tx, inbox.clone(), cc.egui_ctx.clone());
-                    if let Err(e) = crate::api::install() {
-                        log::error!("photocraft-web: couldn't install window.photocraft: {e:?}");
-                    }
                     app = app.with_control(control_rx);
                     if !preset_warnings.is_empty() {
                         photocraft_ui_egui::notices::post(&mut app, i18n::t("Some brush presets could not be loaded"), preset_warnings, true, None);
