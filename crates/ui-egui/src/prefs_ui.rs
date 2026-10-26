@@ -1322,7 +1322,7 @@ fn choice_label(v: &str) -> String {
         "exr" => "EXR".into(),
         "cm" => "Centimeters".into(),
         "mm" => "Millimeters".into(),
-        "75" | "80" | "85" | "90" | "95" | "100" | "125" | "150" | "175" | "200" | "250" | "300" => format!("{v}%"),
+        "75" | "80" | "85" | "90" | "95" | "100" | "105" | "110" | "115" | "120" | "125" | "150" | "175" | "200" | "250" | "300" => format!("{v}%"),
         "8" => "8 Bits/Channel".into(),
         "16" => "16 Bits/Channel".into(),
         "postScript" => "PostScript (72 points/inch)".into(),
@@ -1842,6 +1842,17 @@ fn memory_usage_row(ui: &mut egui::Ui, obj: &mut Map<String, Value>) {
     ui.add_space(8.0);
 }
 
+/// Settings read only when the app starts, which say "Applies at next launch." under their row.
+fn read_at_launch(path: &str) -> bool {
+    match path {
+        // Only Windows and Linux draw their own title bar.
+        "interface.systemTitleBar" => cfg!(all(not(target_arch = "wasm32"), not(target_os = "macos"))),
+        // The desktop app decides on the control server before its window opens.
+        "integrations.allowAgentControl" | "integrations.controlPort" => cfg!(not(target_arch = "wasm32")),
+        _ => false,
+    }
+}
+
 /// One grid row per setting in `keys` (already filtered by `field_visible`).
 fn field_rows(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>, keys: Vec<String>, lang: crate::i18n::Lang) {
     let t = Tokens::get(ui.ctx());
@@ -1854,7 +1865,7 @@ fn field_rows(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>, ke
             Value::Bool(b) => {
                 ui.label("");
                 let mut b = *b;
-                if path == "interface.systemTitleBar" && cfg!(all(not(target_arch = "wasm32"), not(target_os = "macos"))) {
+                if read_at_launch(&path) {
                     ui.vertical(|ui| {
                         crate::widgets::checkbox(ui, &mut b, &label);
                         ui.label(RichText::new(tl!("Applies at next launch.")).color(t.text_dim));
@@ -1908,6 +1919,12 @@ fn field_rows(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>, ke
                     let mut x = n.as_i64().unwrap_or(0);
                     ui.add(egui::DragValue::new(&mut x).range(lo as i64..=hi as i64).custom_parser(crate::widgets::parse_num)).labelled_by(value_label.id);
                     obj.insert(k, json!(x));
+                    // A row of its own, so the label stays level with its field.
+                    if read_at_launch(&path) {
+                        ui.end_row();
+                        ui.label("");
+                        ui.label(RichText::new(tl!("Applies at next launch.")).color(t.text_dim));
+                    }
                 } else {
                     let mut x = n.as_f64().unwrap_or(0.0);
                     ui.add(egui::DragValue::new(&mut x).range(lo..=hi).speed(0.1).max_decimals(3).custom_parser(crate::widgets::parse_num))
@@ -3582,13 +3599,52 @@ mod tests {
             step(vec2(2560.0, 1440.0), 1.75, 1.75);
             step(vec2(3840.0, 2160.0), 1.0, 1.0);
         }
-        for (pref, expected) in [("200", 2.0), ("125", 1.25), ("150", 1.5), ("100", 1.0), ("95", 0.95), ("90", 0.9), ("85", 0.85), ("80", 0.8), ("auto", 1.5)] {
+        for (pref, expected) in [
+            ("200", 2.0),
+            ("125", 1.25),
+            ("150", 1.5),
+            ("100", 1.0),
+            ("105", 1.05),
+            ("110", 1.1),
+            ("115", 1.15),
+            ("120", 1.2),
+            ("95", 0.95),
+            ("90", 0.9),
+            ("85", 0.85),
+            ("80", 0.8),
+            ("auto", 1.5),
+        ] {
             app.run("prefs.set", json!({"values": {"interface.uiScale": pref}})).unwrap();
             let mut input = egui::RawInput::default();
             input.viewports.get_mut(&egui::ViewportId::ROOT).unwrap().native_pixels_per_point = Some(1.5);
             ctx.run_ui(input.clone(), |ui| tick(&mut app, ui.ctx())).textures_delta.clear();
             ctx.run_ui(input, |ui| tick(&mut app, ui.ctx())).textures_delta.clear();
             assert!((ctx.pixels_per_point() - expected).abs() < 1e-4);
+        }
+    }
+
+    #[test]
+    fn intermediate_ui_scale_choices_can_be_applied_from_preferences() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let (mut app, store) = app_with_store();
+        app.run("prefs.set", json!({"path": "interface.uiScale", "value": "100"})).unwrap();
+        open_preferences(&mut app, "interface");
+        let mut h = Harness::builder().with_size(vec2(1400.0, 1100.0)).build_eframe(move |cc| {
+            PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+            app
+        });
+        h.run_steps(4);
+        let mut current = "100%";
+        for (label, value) in [("105%", "105"), ("110%", "110"), ("115%", "115"), ("120%", "120")] {
+            h.get_by_value(current).click();
+            h.run_steps(2);
+            h.get_by_label(label).click();
+            h.run_steps(2);
+            h.get_by_label("Apply").click();
+            h.run_steps(4);
+            assert_eq!(h.state().session.prefs().interface.ui_scale.name(), value);
+            assert_eq!(stored(&store)["interface"]["uiScale"], value);
+            current = label;
         }
     }
 
@@ -4096,10 +4152,12 @@ mod tests {
         let values = prefs::Preferences::default().to_json();
         assert!(has_visible_fields(&values, "general"));
         assert!(has_visible_fields(&values, "fileHandling"));
-        // Every setting of these sections is still unimplemented.
-        for section in ["integrations", "scratchDisks"] {
-            assert!(!has_visible_fields(&values, section), "{section}");
-        }
+        // Every setting of this section is still unimplemented.
+        assert!(!has_visible_fields(&values, "scratchDisks"), "scratchDisks");
+        // Allow Agent Control and Control Port are read at launch (apps/photocraft main.rs).
+        assert!(has_visible_fields(&values, "integrations"));
+        assert!(!prefs::is_hidden("integrations.allowAgentControl"));
+        assert!(!prefs::is_hidden("integrations.controlPort"));
         // "Fill new type layers with placeholder text" and "Use Escape to Commit" are live; other Type rows stay hidden.
         assert!(has_visible_fields(&values, "type"));
         assert!(!prefs::is_hidden("type.fillNewTypeLayersWithPlaceholder"));
@@ -4113,11 +4171,12 @@ mod tests {
         assert!(!prefs::is_hidden("enhancedControls.zoomWithTrackpadPinch"));
         assert!(!prefs::is_hidden("enhancedControls.touchGestures"));
         assert!(prefs::is_hidden("enhancedControls.scrubbySliderAcceleration"));
-        // Camera Raw Defaults shows "Open in Camera Raw" and the demosaic method so far.
+        // Camera Raw Defaults are all live: the dialog's Open applies them (camera_raw_ui).
         assert!(has_visible_fields(&values, "rawDefaults"));
-        assert!(!prefs::is_hidden("rawDefaults.openInCameraRaw"));
-        assert!(!prefs::is_hidden("rawDefaults.demosaic"));
-        assert!(prefs::is_hidden("rawDefaults.applyAutoTone"));
+        for k in ["openInCameraRaw", "demosaic", "applyAutoTone", "colorSpace", "bitDepth", "resolution", "sharpenFor", "openAsSmartObject", "writeXmpSidecars"]
+        {
+            assert!(!prefs::is_hidden(&format!("rawDefaults.{k}")), "{k}");
+        }
         assert!(!prefs::is_hidden("general.autoShowHomeScreen"));
         assert!(!prefs::is_hidden("general.animatedZoom"));
         assert!(!prefs::is_hidden("general.zoomResizesWindows"));
@@ -4342,6 +4401,20 @@ mod tests {
         );
         h.run_steps(4);
         assert!(h.query_by_label("Applies at next launch.").is_none());
+    }
+
+    /// #4097: Allow Agent Control and Control Port are read when the app starts, and say so.
+    #[test]
+    fn integrations_explain_next_launch() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let obj = json!({"allowAgentControl": true, "controlPort": 0}).as_object().unwrap().clone();
+        let mut h = Harness::new_ui_state(
+            |ui, obj: &mut Map<String, Value>| section_fields(ui, "integrations", obj, &[], crate::i18n::Lang::from_pref("en"), None, ""),
+            obj,
+        );
+        h.run_steps(4);
+        h.get_by_label("Allow agent control");
+        assert_eq!(h.query_all_by_label("Applies at next launch.").count(), 2, "one notice under each row");
     }
 
     #[test]

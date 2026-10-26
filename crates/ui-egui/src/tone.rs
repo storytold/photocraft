@@ -1,32 +1,39 @@
 //! Histograms for the tone editors (Levels, Curves, Threshold) and the Histogram panel.
 //!
-//! The adjustment editors themselves live in `adjust_editors`; this module computes and caches
-//! the histograms they draw behind their controls, in the channels of the adjustment's space
-//! (RGB, CMYK ink brightness, Lab), and draws them.
+//! The adjustment editors themselves live in `adjust_editors` and the panel in `histogram_panel`;
+//! this module computes and caches the histograms they draw, in the channels of the adjustment's
+//! space (RGB, CMYK ink brightness, Lab), and draws them.
 
 use std::sync::Arc;
 
-use egui::{Color32, Rect, Sense, vec2};
+use egui::{Color32, Rect};
 use photocraft_doc::adjust::ToneSpace;
 use photocraft_doc::{Document, Layer, LayerId};
 
 use crate::PhotocraftApp;
 use crate::theme::Tokens;
 
-const CHANNELS: [(&str, &str); 4] = [("rgb", "RGB"), ("red", "Red"), ("green", "Green"), ("blue", "Blue")];
-
 static EMPTY: [u32; 256] = [0; 256];
 
-/// 256-bin histograms: the composite then one per channel of the space (RGB: luminosity, R, G, B;
-/// CMYK: composite, C, M, Y, K as channel brightness; Lab: L, a, b). `tag` identifies what they
-/// were computed from (see [`HistSource`]).
-#[derive(Clone, Debug, Default)]
+/// 256-bin histograms: the composite then one per channel of the space (RGB: the channel mean,
+/// R, G, B; CMYK: composite, C, M, Y, K as channel brightness; Lab: L, a, b). `tag` identifies
+/// what they were computed from (see [`HistSource`]).
+#[derive(Clone, Debug)]
 pub struct Histograms {
     pub tag: u64,
     pub ch: Vec<[u32; 256]>,
+    /// Luminosity of the composite (0.30 R + 0.59 G + 0.11 B), whatever the space;
+    /// empty for a gray plane's.
+    pub lum: [u32; 256],
     /// Photoshop's histogram cache level of a composite histogram: 1 when every document pixel
     /// was counted, `n` when a proxy 2^(n-1) times smaller stood in; 0 for a gray plane's.
     pub level: u32,
+}
+
+impl Default for Histograms {
+    fn default() -> Self {
+        Self { tag: 0, ch: Vec::new(), lum: [0; 256], level: 0 }
+    }
 }
 
 impl std::ops::Index<usize> for Histograms {
@@ -46,9 +53,18 @@ pub enum HistSource {
     /// The gray plane a Curves target edits: a layer mask, a saved channel or the Quick Mask.
     /// The dialog shows this plane's own levels, not the colour layers beneath (#5335).
     Channel { layer: LayerId, surface: photocraft_engine::channel_cmds::GraySurface },
+    /// A layer and everything beneath it, the layers above hidden (the Histogram panel's
+    /// Adjustment Composite: what an adjustment layer outputs).
+    UpTo(LayerId),
 }
 
-fn tag(source: HistSource, space: ToneSpace) -> u64 {
+/// The whole composited image (the Histogram panel's Entire Image).
+pub const IMAGE: HistSource = HistSource::BelowLayer(LayerId(u64::MAX));
+
+/// The highest histogram cache level: a proxy 2^7 = 128 times smaller.
+pub const MAX_CACHE_LEVEL: u32 = 8;
+
+pub(crate) fn tag(source: HistSource, space: ToneSpace) -> u64 {
     let (k, id) = match source {
         HistSource::BelowLayer(l) => (1u64, l.0),
         HistSource::Layer(l) => (2, l.0),
@@ -56,7 +72,9 @@ fn tag(source: HistSource, space: ToneSpace) -> u64 {
             photocraft_engine::channel_cmds::GraySurface::LayerMask => (3, layer.0),
             photocraft_engine::channel_cmds::GraySurface::Alpha(i) => (4, i as u64),
             photocraft_engine::channel_cmds::GraySurface::QuickMask => (5, layer.0),
+            photocraft_engine::channel_cmds::GraySurface::FilterMask => (6, layer.0),
         },
+        HistSource::UpTo(l) => (7, l.0),
     };
     let s = match space {
         ToneSpace::Rgb => 0u64,
@@ -77,9 +95,31 @@ fn isolate(layers: &mut [Layer], id: LayerId) -> bool {
     found
 }
 
-/// Histograms of `doc` as seen by `source`, in the channels of `space`.
+/// Hides every layer composited above `id` (later siblings, and the later siblings of each group
+/// holding it). Returns whether `id` is in `layers`.
+fn hide_above(layers: &mut [Layer], id: LayerId) -> bool {
+    let mut found = false;
+    for l in layers.iter_mut() {
+        if found {
+            l.visible = false;
+        } else if l.id == id || l.children_mut().is_some_and(|c| hide_above(c, id)) {
+            found = true;
+        }
+    }
+    found
+}
+
+/// Histograms of `doc` as seen by `source`, in the channels of `space`, at whatever cache level
+/// the document's size calls for (up to [`MAX_CACHE_LEVEL`]).
 pub fn compute_histograms(doc: &Document, source: HistSource, space: ToneSpace) -> Histograms {
+    compute_histograms_at(doc, source, space, MAX_CACHE_LEVEL)
+}
+
+/// [`compute_histograms`] at cache level `max_level` or below (Preferences › Performance › Cache
+/// Levels; 1 counts every pixel, the Histogram panel's Uncached Refresh).
+pub fn compute_histograms_at(doc: &Document, source: HistSource, space: ToneSpace, max_level: u32) -> Histograms {
     let mut level = 0;
+    let mut lum = [0u32; 256];
     let mut h = vec![
         [0u32; 256];
         match space {
@@ -96,6 +136,9 @@ pub fn compute_histograms(doc: &Document, source: HistSource, space: ToneSpace) 
                 photocraft_engine::channel_cmds::GraySurface::LayerMask => doc.layer(layer).and_then(|l| l.mask.as_ref()).map(|m| &m.surface),
                 photocraft_engine::channel_cmds::GraySurface::Alpha(i) => doc.channels.get(i).map(|c| &c.surface),
                 photocraft_engine::channel_cmds::GraySurface::QuickMask => doc.quick_mask.as_ref().map(|c| &c.surface),
+                photocraft_engine::channel_cmds::GraySurface::FilterMask => {
+                    doc.layer(layer).and_then(|l| photocraft_engine::mask_view_cmds::viewed_mask(l, true)).map(|m| &m.surface)
+                }
             };
             if let Some(s) = surf
                 && let Some(bin) = h.first_mut()
@@ -103,16 +146,45 @@ pub fn compute_histograms(doc: &Document, source: HistSource, space: ToneSpace) 
                 *bin = gray_bins(s, doc.bounds());
             }
         }
-        HistSource::BelowLayer(_) | HistSource::Layer(_) => {
-            level = composite_bins(doc, source, space, &mut h);
+        HistSource::BelowLayer(_) | HistSource::Layer(_) | HistSource::UpTo(_) => {
+            // Luminosity rides along as one more histogram after the space's channels.
+            h.push([0; 256]);
+            level = composite_bins(doc, source, space, max_level, &mut h);
+            if let Some(l) = h.pop() {
+                lum = l;
+            }
         }
     }
-    Histograms { tag: tag(source, space), ch: h, level }
+    Histograms { tag: tag(source, space), ch: h, lum, level }
 }
 
-/// Bins of the composited image below (`BelowLayer`) or of one layer alone (`Layer`), in `space`.
-/// Returns the cache level counted: 1 when every document pixel was counted, higher when a
-/// downsampled proxy stood in (like Photoshop's histogram cache levels).
+/// The largest document counted pixel by pixel at the automatic cache level. The web build counts
+/// on the UI thread (it has no worker threads), so it reduces documents a quarter that size.
+fn exact_limit() -> u64 {
+    if cfg!(target_arch = "wasm32") { photocraft_compose::PROXY_THUMBNAIL_PIXELS / 4 } else { photocraft_compose::PROXY_THUMBNAIL_PIXELS }
+}
+
+/// The cache level a histogram of `doc` is counted at: 1 (every pixel) up to the size a proxy
+/// would stand in for, else the level whose 2^(n-1) reduction leaves about 768 pixels on the
+/// longest side, at most `max_level` (clamped to 1..=[`MAX_CACHE_LEVEL`]).
+pub fn cache_level(doc: &Document, max_level: u32) -> u32 {
+    let longest = doc.size.width.max(doc.size.height);
+    let k = longest / 768;
+    let auto = if k >= 2 && doc.size.area() > exact_limit() && photocraft_compose::proxy::proxy_faithful(doc) { k.next_power_of_two().ilog2() + 1 } else { 1 };
+    auto.min(max_level.clamp(1, MAX_CACHE_LEVEL))
+}
+
+/// How many times smaller the proxy counted at `level` (> 1) is: about 768 pixels on the longest
+/// side (as at the automatic level), or 2^(level-1) when Cache Levels caps the level below that.
+fn proxy_factor(doc: &Document, level: u32) -> u32 {
+    let k = doc.size.width.max(doc.size.height) / 768;
+    k.min(1 << (level.clamp(1, MAX_CACHE_LEVEL) - 1)).max(1)
+}
+
+/// Bins of the composited image below (`BelowLayer`), up to (`UpTo`) or of one layer alone
+/// (`Layer`), in `space`, then luminosity in the last of `h`. Returns the cache level counted
+/// (see [`cache_level`]): 1 when every document pixel was counted, higher when a downsampled proxy
+/// stood in (like Photoshop's histogram cache levels).
 ///
 /// The pixels are counted as they are, never blended: an area-averaged thumbnail invented greys
 /// that aren't in the image wherever an edge fell inside one of its cells (#6538). Documents up to
@@ -120,7 +192,7 @@ pub fn compute_histograms(doc: &Document, source: HistSource, space: ToneSpace) 
 /// composited in bands and counted exactly, which costs what the thumbnail did (it reduced the
 /// same full composite). Larger ones count a nearest-neighbour proxy composite of about the old
 /// thumbnail's work: it only holds values the layers have.
-fn composite_bins(doc: &Document, source: HistSource, space: ToneSpace, h: &mut [[u32; 256]]) -> u32 {
+fn composite_bins(doc: &Document, source: HistSource, space: ToneSpace, max_level: u32, h: &mut [[u32; 256]]) -> u32 {
     let mut d = doc.clone();
     match source {
         HistSource::BelowLayer(hide) => {
@@ -131,15 +203,13 @@ fn composite_bins(doc: &Document, source: HistSource, space: ToneSpace, h: &mut 
         HistSource::Layer(id) => {
             isolate(&mut d.layers, id);
         }
+        HistSource::UpTo(id) => {
+            hide_above(&mut d.layers, id);
+        }
         HistSource::Channel { .. } => {}
     }
-    let longest = d.size.width.max(d.size.height);
-    let k = longest / 768;
-    let (d, level) = if k >= 2 && d.size.area() > photocraft_compose::PROXY_THUMBNAIL_PIXELS && photocraft_compose::proxy::proxy_faithful(&d) {
-        (photocraft_compose::proxy::proxy_document(&d, k), k.next_power_of_two().ilog2() + 1)
-    } else {
-        (d, 1)
-    };
+    let level = cache_level(&d, max_level);
+    let d = if level > 1 { photocraft_compose::proxy::proxy_document(&d, proxy_factor(&d, level)) } else { d };
     let _ = photocraft_compose::render_bands(&d, d.bounds(), 0, |band| -> Result<(), ()> {
         #[cfg(not(target_arch = "wasm32"))]
         let part = {
@@ -180,10 +250,18 @@ fn add_bins(mut a: Vec<[u32; 256]>, b: Vec<[u32; 256]>) -> Vec<[u32; 256]> {
     a
 }
 
-/// Counts straight-alpha composite pixels into `h` (one histogram per channel of `space`);
-/// transparent pixels are skipped.
+/// Luminosity weights (the Histogram panel's Luminosity channel).
+pub const LUMINOSITY: [f32; 3] = [0.30, 0.59, 0.11];
+
+/// Counts straight-alpha composite pixels into `h` (one histogram per channel of `space`, then
+/// luminosity when `h` has room for it); transparent pixels are skipped.
 fn count_pixels(px: &[[f32; 4]], space: ToneSpace, h: &mut [[u32; 256]]) {
     let bin = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as usize;
+    let lum_at = match space {
+        ToneSpace::Rgb => 4,
+        ToneSpace::Cmyk => 5,
+        ToneSpace::Lab => 3,
+    };
     let mut add = |c: usize, b: usize| {
         if let Some(n) = h.get_mut(c).and_then(|ch| ch.get_mut(b)) {
             *n = n.saturating_add(1);
@@ -194,6 +272,8 @@ fn count_pixels(px: &[[f32; 4]], space: ToneSpace, h: &mut [[u32; 256]]) {
         if p[3].is_nan() || p[3] <= 0.0 {
             continue;
         }
+        let rgb = [p[0], p[1], p[2]].map(|v| v.clamp(0.0, 1.0));
+        add(lum_at, bin(rgb.iter().zip(LUMINOSITY).map(|(v, w)| v * w).sum()));
         match space {
             ToneSpace::Rgb => {
                 let q = [p[0], p[1], p[2]].map(bin);
@@ -246,7 +326,7 @@ pub fn histograms(app: &mut PhotocraftApp, source: HistSource, space: ToneSpace)
     let (doc_id, rev) = (st.doc.id, st.revision);
     let want = tag(source, space);
     let layer = match source {
-        HistSource::BelowLayer(l) | HistSource::Layer(l) => l,
+        HistSource::BelowLayer(l) | HistSource::Layer(l) | HistSource::UpTo(l) => l,
         HistSource::Channel { layer, .. } => layer,
     };
     let pixels_kept = view_only(st);
@@ -268,7 +348,7 @@ pub fn histograms(app: &mut PhotocraftApp, source: HistSource, space: ToneSpace)
 
 /// Whether the latest revision changed no pixels (selecting a layer, say): cached histograms of
 /// the previous revision still hold (#125).
-fn view_only(st: &photocraft_engine::DocState) -> bool {
+pub(crate) fn view_only(st: &photocraft_engine::DocState) -> bool {
     st.last_damage.is_some_and(|r| r.is_empty())
 }
 
@@ -329,134 +409,6 @@ pub fn channel_color(name: &str, t: &Tokens) -> Color32 {
         "b" => Color32::from_rgb(200, 180, 60),
         _ => t.text,
     }
-}
-
-fn channel_picker(ui: &mut egui::Ui, id: egui::Id, label: &str) -> usize {
-    let mut ch: usize = ui.data(|d| d.get_temp(id)).unwrap_or(0);
-    ui.horizontal(|ui| {
-        let t = Tokens::get(ui.ctx());
-        ui.label(egui::RichText::new(tl!(&label)).color(t.text_dim).size(12.0));
-        let opts: Vec<(usize, &str)> = CHANNELS.iter().enumerate().map(|(i, (_, l))| (i, *l)).collect();
-        crate::widgets::dropdown(ui, &format!("{id:?}-ch"), tl!("Channel"), &mut ch, &opts, 110.0);
-    });
-    ui.data_mut(|d| d.insert_temp(id, ch));
-    ch
-}
-
-// ---------------------------------------------------------------------------------------------
-// Histogram panel
-
-/// Histogram panel (Window › Histogram): whole-image histogram with Photoshop's statistics.
-/// Recomputed at most every 250 ms while the document keeps changing (e.g. during painting).
-pub fn histogram_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    let t = Tokens::get(ui.ctx());
-    let Some(st) = app.session.active() else {
-        ui.label(egui::RichText::new(tl!("No document")).color(t.text_faint));
-        return;
-    };
-    let (doc_id, rev) = (st.doc.id, st.revision);
-    let now = crate::gpu_canvas::now_ms();
-    if view_only(st)
-        && let Some((d, r, _, _)) = app.doc_hist.as_mut()
-        && *d == doc_id
-        && *r + 1 == rev
-    {
-        *r = rev;
-    }
-    let stale = !matches!(&app.doc_hist, Some((d, r, _, _)) if *d == doc_id && *r == rev);
-    let due = app.doc_hist.as_ref().is_none_or(|(d, _, at, _)| *d != doc_id || now - at > 250.0);
-    if stale && due {
-        // Computed off the UI thread (doc clone + proxy + pixel counts cost tens of ms on
-        // large documents): the panel keeps showing the previous histogram with the existing
-        // "cached data" warning until the worker delivers.
-        let pending = app.hist_job.as_ref().is_some_and(|(d, r, _)| *d == doc_id && *r == rev);
-        if !pending {
-            let (tx, rx) = std::sync::mpsc::channel();
-            // No threads on the web (and a spawn can fail natively): compute inline then, and
-            // deliver through the same channel so one receive path lands both.
-            #[cfg(not(target_arch = "wasm32"))]
-            let spawned = {
-                let doc = st.doc.clone();
-                let tx = tx.clone();
-                let ctx = ui.ctx().clone();
-                std::thread::Builder::new()
-                    .name("histogram".into())
-                    .spawn(move || {
-                        let t0 = crate::gpu_canvas::now_ms();
-                        let h = Arc::new(compute_histograms(&doc, HistSource::BelowLayer(LayerId(u64::MAX)), ToneSpace::Rgb));
-                        let _ = tx.send((doc.id, crate::gpu_canvas::now_ms() - t0, h));
-                        ctx.request_repaint();
-                    })
-                    .is_ok()
-            };
-            #[cfg(target_arch = "wasm32")]
-            let spawned = false;
-            if !spawned {
-                let t0 = crate::gpu_canvas::now_ms();
-                let h = Arc::new(compute_histograms(&st.doc, HistSource::BelowLayer(LayerId(u64::MAX)), ToneSpace::Rgb));
-                let _ = tx.send((doc_id, crate::gpu_canvas::now_ms() - t0, h));
-            }
-            app.hist_job = Some((doc_id, rev, rx));
-        }
-    } else if stale {
-        ui.ctx().request_repaint_after(std::time::Duration::from_millis(260));
-    }
-    // A finished worker lands its histogram; the revision check keeps a stale result from
-    // overwriting a newer one. A worker that died without sending clears the job so the next
-    // frame schedules a new one.
-    if let Some((jd, jr, rx)) = &app.hist_job {
-        match rx.try_recv() {
-            Ok((_, ms, h)) => {
-                app.perf.span("histogram", ms);
-                if *jd == doc_id {
-                    app.doc_hist = Some((doc_id, *jr, crate::gpu_canvas::now_ms(), h));
-                }
-                app.hist_job = None;
-            }
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => app.hist_job = None,
-            Err(std::sync::mpsc::TryRecvError::Empty) => {}
-        }
-    }
-    let Some((_, _, _, h)) = app.doc_hist.clone() else { return };
-    // 1 when the statistics count every pixel; higher when a downsampled proxy stood in.
-    let level = h.level.max(1);
-    let ch = channel_picker(ui, egui::Id::unique("histogram-panel-ch"), "Channel:");
-    let w = ui.available_width();
-    let (r, _) = ui.allocate_exact_size(vec2(w, 100.0), Sense::hover());
-    let p = ui.painter_at(r);
-    p.rect_filled(r, 0.0, t.field);
-    let color = if ch == 0 { Color32::from_gray(if t.pro { 190 } else { 70 }) } else { channel_color(CHANNELS[ch.min(3)].0, &t) };
-    draw_histogram(&p, r, &h[ch], color);
-    if stale {
-        // Photoshop's "cached data" warning triangle while the histogram lags the image.
-        crate::icons::paint(ui, Rect::from_min_size(r.right_top() + vec2(-18.0, 2.0), vec2(16.0, 16.0)), "triangle-alert", 12.0, t.warning);
-    }
-    let hist = &h[ch];
-    let n: u64 = hist.iter().map(|v| *v as u64).sum();
-    if n == 0 {
-        return;
-    }
-    let mean = hist.iter().enumerate().map(|(i, v)| i as f64 * *v as f64).sum::<f64>() / n as f64;
-    let var = hist.iter().enumerate().map(|(i, v)| (i as f64 - mean).powi(2) * *v as f64).sum::<f64>() / n as f64;
-    let mut acc = 0u64;
-    let median = hist.iter().position(|v| {
-        acc += *v as u64;
-        acc * 2 >= n
-    });
-    ui.add_space(4.0);
-    egui::Grid::new("hist-stats").num_columns(2).spacing(vec2(12.0, 2.0)).show(ui, |ui| {
-        for (k, v) in [
-            (tl!("Mean:"), format!("{mean:.2}")),
-            (tl!("Std Dev:"), format!("{:.2}", var.sqrt())),
-            (tl!("Median:"), median.unwrap_or(0).to_string()),
-            (tl!("Pixels:"), n.to_string()),
-            (tl!("Cache Level:"), level.to_string()),
-        ] {
-            ui.label(egui::RichText::new(k).color(t.text_dim).size(11.5));
-            ui.label(egui::RichText::new(v).font(crate::theme::mono(11.5)).color(t.text));
-            ui.end_row();
-        }
-    });
 }
 
 #[cfg(test)]
@@ -523,6 +475,21 @@ mod tests {
             tag(HistSource::Channel { layer, surface: GraySurface::LayerMask }, ToneSpace::Rgb)
         );
         assert_ne!(tag(HistSource::Channel { layer, surface: GraySurface::LayerMask }, ToneSpace::Rgb), tag(HistSource::Layer(layer), ToneSpace::Rgb));
+        // Every source of one layer has its own tag (the filter mask and the Adjustment
+        // Composite once shared one).
+        let sources = [
+            HistSource::BelowLayer(layer),
+            HistSource::Layer(layer),
+            HistSource::UpTo(layer),
+            HistSource::Channel { layer, surface: GraySurface::LayerMask },
+            HistSource::Channel { layer, surface: GraySurface::QuickMask },
+            HistSource::Channel { layer, surface: GraySurface::FilterMask },
+        ];
+        for (i, a) in sources.iter().enumerate() {
+            for b in &sources[i + 1..] {
+                assert_ne!(tag(*a, ToneSpace::Rgb), tag(*b, ToneSpace::Rgb), "{a:?} and {b:?}");
+            }
+        }
     }
 
     /// #6574: bar heights scale linearly to the tallest bin. A 90/10 black/white
@@ -627,79 +594,5 @@ mod tests {
             assert!(stray.is_empty(), "channel {c}: invented values {stray:?}");
         }
         assert!((mean(&hist[0]) - 255.0 * 3999.0 / 6000.0).abs() < 1.0, "mean {}", mean(&hist[0]));
-    }
-}
-
-#[cfg(test)]
-mod hist_async_tests {
-    use super::*;
-    use crate::PhotocraftApp;
-    use serde_json::json;
-
-    /// The panel schedules the histogram on a worker and keeps showing the previous data
-    /// until it lands: right after the trigger the job exists (nothing computed in this
-    /// frame), the receiver delivers, and a stale result cannot overwrite a newer revision.
-    #[test]
-    fn panel_histogram_is_computed_off_the_ui_thread() {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-        let ctx = egui::Context::default();
-        let _ = &ctx;
-        app.run("file.new", json!({"width": 640, "height": 480})).unwrap();
-        let (doc_id, rev) = {
-            let st = app.session.active().unwrap();
-            (st.doc.id, st.revision)
-        };
-        // Drive one panel frame through a minimal egui pass.
-        let ctx = egui::Context::default();
-        ctx.begin_pass(Default::default());
-        let panel_ui = egui::Ui::new(
-            ctx.clone(),
-            egui::Id::unique("hist-test"),
-            egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(300.0, 200.0))),
-        );
-        let mut panel_ui = panel_ui;
-        histogram_panel(&mut app, &mut panel_ui);
-        // A fast worker (or the inline fallback) may already have landed the result this frame.
-        if let Some(job) = app.hist_job.take() {
-            assert_eq!(job.0, doc_id);
-            assert_eq!(job.1, rev);
-            // The worker delivers (its repaint request is a no-op outside a frame).
-            let (did, _, h) = job.2.recv().expect("the worker delivers the histogram");
-            assert_eq!(did, doc_id);
-            assert!(!h.ch.is_empty(), "the histogram has data");
-            // Delivering it for the revision it was computed from lands in the cache.
-            app.doc_hist = Some((doc_id, rev, crate::gpu_canvas::now_ms(), h.clone()));
-        }
-        assert_eq!(app.doc_hist.as_ref().map(|h| (h.0, h.1)), Some((doc_id, rev)));
-        // …and a newer revision keeps the old entry stale instead of being overwritten by it.
-        app.run("layer.new.layer", json!({})).unwrap();
-        let rev2 = app.session.active().unwrap().revision;
-        assert_ne!(rev, rev2);
-        assert_ne!(app.doc_hist.as_ref().unwrap().1, rev2, "stale after an edit");
-    }
-
-    /// A worker that died without sending (its sender dropped) clears the job, so the next
-    /// frame schedules a new one instead of waiting forever.
-    #[test]
-    fn a_dead_histogram_worker_clears_the_job() {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-        app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
-        let (doc_id, rev) = {
-            let st = app.session.active().unwrap();
-            (st.doc.id, st.revision)
-        };
-        let (tx, rx) = std::sync::mpsc::channel();
-        drop(tx);
-        app.hist_job = Some((doc_id, rev, rx));
-        let ctx = egui::Context::default();
-        ctx.begin_pass(Default::default());
-        let mut ui = egui::Ui::new(
-            ctx.clone(),
-            egui::Id::unique("hist-dead"),
-            egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(300.0, 200.0))),
-        );
-        histogram_panel(&mut app, &mut ui);
-        assert!(app.hist_job.is_none(), "a disconnected job is dropped");
-        assert!(app.doc_hist.is_none(), "nothing landed from the dead worker");
     }
 }
