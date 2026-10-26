@@ -12,6 +12,7 @@ use crate::tile::{GrayTile, Mips};
 // Active strokes may keep using evicted pyramids through their own Arcs.
 const MAX_BYTES: usize = 256 * 1024 * 1024;
 const MAX_ENTRIES: usize = 64;
+static CACHE: OnceLock<Mutex<MipCache>> = OnceLock::new();
 
 struct Entry {
     width: u32,
@@ -66,6 +67,11 @@ impl MipCache {
         self.entries.push_back(Entry { width: tip.width, height: tip.height, samples: Arc::downgrade(&tip.data), mips: Arc::clone(&mips), bytes });
         mips
     }
+
+    fn purge(&mut self) -> usize {
+        self.entries.clear();
+        std::mem::take(&mut self.bytes)
+    }
 }
 
 fn cached(cache: &Mutex<MipCache>, tip: &GrayTile) -> Arc<Mips> {
@@ -79,8 +85,18 @@ fn cached(cache: &Mutex<MipCache>, tip: &GrayTile) -> Arc<Mips> {
 }
 
 pub(crate) fn tip_mips(tip: &GrayTile) -> Arc<Mips> {
-    static CACHE: OnceLock<Mutex<MipCache>> = OnceLock::new();
     cached(CACHE.get_or_init(|| Mutex::new(MipCache::new(MAX_BYTES, MAX_ENTRIES))), tip)
+}
+
+/// Sample and mip buffer bytes retained by the prepared-tip cache, including weak-key storage.
+pub fn mip_cache_bytes() -> usize {
+    CACHE.get().map_or(0, |cache| cache.lock().unwrap_or_else(PoisonError::into_inner).bytes)
+}
+
+/// Release prepared-tip cache ownership and return its accounted buffer bytes. Active strokes
+/// keep their shared pyramids and continue painting unchanged; the next stroke can prepare anew.
+pub fn purge_mip_cache() -> usize {
+    CACHE.get().map_or(0, |cache| cache.lock().unwrap_or_else(PoisonError::into_inner).purge())
 }
 
 #[cfg(test)]
@@ -165,6 +181,19 @@ mod tests {
         let invalid = GrayTile { width: u32::MAX, height: u32::MAX, data: vec![1].into() };
         assert_eq!(cached(&cache, &invalid).levels, Mips::new(&invalid).levels);
         assert_eq!(cache.lock().unwrap().entries.len(), 1);
+    }
+
+    #[test]
+    fn purging_releases_retention_without_invalidating_an_active_stroke() {
+        let cache = Mutex::new(MipCache::new(MAX_BYTES, MAX_ENTRIES));
+        let tip = tip(8, 4);
+        let active = cached(&cache, &tip);
+        assert!(cache.lock().unwrap().purge() > 0);
+        assert_eq!(cache.lock().unwrap().bytes, 0);
+        assert!(cache.lock().unwrap().entries.is_empty());
+        let next = cached(&cache, &tip);
+        assert!(!Arc::ptr_eq(&active, &next));
+        assert_eq!(active.levels, next.levels);
     }
 
     #[cfg(not(target_arch = "wasm32"))]
