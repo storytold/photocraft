@@ -99,11 +99,17 @@ fn stat(v: &mut [f32], s: Stat, scratch: &mut EntropyScratch) -> f32 {
         Stat::Maximum => return v.iter().copied().fold(f32::MIN, f32::max),
         Stat::Range => return v.iter().copied().fold(f32::MIN, f32::max) - v.iter().copied().fold(f32::MAX, f32::min),
         Stat::Median => {
-            // `total_cmp` is a total order whose ties are bit-identical values, so an unstable
-            // sort gives exactly the stable sort's result.
-            v.sort_unstable_by(f32::total_cmp);
             let k = v.len();
-            return if k % 2 == 1 { v[k / 2] } else { (v[k / 2 - 1] + v[k / 2]) / 2.0 };
+            // Nonempty above, so k / 2 is in bounds. Selection puts the upper middle value in
+            // place in O(k); the lower partition need not be sorted. Use the same total order
+            // for its maximum to preserve signed zeros, infinities and NaNs.
+            let (lower, middle, _) = v.select_nth_unstable_by(k / 2, f32::total_cmp);
+            return if k % 2 == 1 {
+                *middle
+            } else {
+                // For even k >= 2 the lower partition contains the other middle value.
+                lower.iter().max_by(|a, b| a.total_cmp(b)).map_or(*middle, |lo| (*lo + *middle) / 2.0)
+            };
         }
         Stat::Entropy => {
             if v.len() < 2 {
@@ -266,6 +272,86 @@ mod tests {
     fn median_removes_outlier() {
         let layers = vec![px(0.5), px(0.5), px(1.0)];
         assert_eq!(combine(&layers, Stat::Median)[0][0], 0.5);
+    }
+
+    fn sorted_median(v: &mut [f32]) -> f32 {
+        v.sort_unstable_by(f32::total_cmp);
+        let k = v.len();
+        if k == 0 {
+            0.0
+        } else if k % 2 == 1 {
+            v[k / 2]
+        } else {
+            (v[k / 2 - 1] + v[k / 2]) / 2.0
+        }
+    }
+
+    fn assert_median_matches_sort(mut values: Vec<f32>) {
+        let expected = sorted_median(&mut values.clone());
+        let actual = stat(&mut values, Stat::Median, &mut EntropyScratch::new());
+        if expected.is_nan() {
+            // IEEE arithmetic does not specify which NaN payload an even median propagates.
+            assert!(actual.is_nan());
+        } else {
+            assert_eq!(actual.to_bits(), expected.to_bits(), "{values:?}");
+        }
+    }
+
+    #[test]
+    fn median_selection_matches_sort_for_varied_stack_sizes_and_orders() {
+        for len in 0..=257 {
+            let ascending: Vec<f32> = (0..len).map(|i| i as f32 / 16.0 - 8.0).collect();
+            assert_median_matches_sort(ascending.clone());
+            assert_median_matches_sort(ascending.into_iter().rev().collect());
+            assert_median_matches_sort(vec![0.25; len]);
+            assert_median_matches_sort((0..len).map(|i| ((i * 31) % 7) as f32 - 3.0).collect());
+            // Deterministic shuffled samples, including float bit patterns outside 0..=1.
+            let mut seed = 0x9e37_79b9u32;
+            assert_median_matches_sort(
+                (0..len)
+                    .map(|_| {
+                        seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                        f32::from_bits(seed)
+                    })
+                    .collect(),
+            );
+        }
+    }
+
+    #[test]
+    fn median_selection_preserves_total_float_order() {
+        let special = [f32::from_bits(0xffc0_0001), f32::NEG_INFINITY, -f32::MAX, -1.0, -0.0, 0.0, 1.0, f32::MAX, f32::INFINITY, f32::from_bits(0x7fc0_0001)];
+        for &a in &special {
+            // An odd median returns the selected NaN's bits without doing arithmetic.
+            assert_eq!(stat(&mut [a], Stat::Median, &mut EntropyScratch::new()).to_bits(), a.to_bits());
+            for &b in &special {
+                assert_median_matches_sort(vec![a, b]);
+                for &c in &special {
+                    let mut values = [a, b, c];
+                    let expected = sorted_median(&mut values.clone());
+                    assert_eq!(stat(&mut values, Stat::Median, &mut EntropyScratch::new()).to_bits(), expected.to_bits());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn deep_median_stack_uses_only_visible_samples_per_channel() {
+        for count in [32, 33, 128, 129] {
+            let layers: Vec<Vec<[f32; 4]>> = (0..count)
+                .map(|i| {
+                    let pixel = [((i * 31) % 137) as f32, -(i as f32), (i % 5) as f32, if i % 3 == 0 { 0.0 } else { 0.5 }];
+                    if i % 7 == 0 { vec![pixel] } else { vec![pixel, [0.0; 4]] }
+                })
+                .collect();
+            let actual = combine(&layers, Stat::Median);
+            for channel in 0..3 {
+                let mut samples: Vec<f32> = layers.iter().filter(|l| l[0][3] > 0.0).map(|l| l[0][channel]).collect();
+                assert_eq!(actual[0][channel].to_bits(), sorted_median(&mut samples).to_bits());
+            }
+            assert_eq!(actual[0][3], 0.5);
+            assert_eq!(actual[1], [0.0; 4]);
+        }
     }
 
     /// Five layers over six pixels (the last layer is short). Covers opaque, partly transparent,
