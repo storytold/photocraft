@@ -746,6 +746,14 @@ fn handle_keys(app: &mut PhotocraftApp, ctx: &egui::Context) {
             return;
         }
     }
+    if crate::work_path_drag::owns_drag(app)
+        && app.drag.as_ref().is_some_and(|d| d.tool == crate::state::Tool::PathSelection)
+        && ctx.input_mut(|i| i.consume_key(i.modifiers, Key::Escape))
+    {
+        crate::work_path_drag::cancel(app);
+        ctx.request_repaint();
+        return;
+    }
     // Enter / Escape commit or cancel in-progress tool state (polygonal lasso, crop).
     if crate::lasso_ui::active(app) {
         let mods = ctx.input(|i| i.modifiers);

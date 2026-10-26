@@ -633,6 +633,9 @@ fn no_params(p: &Value) -> bool {
 /// Run a View/Window/Type shell command, or front an engine command with its dialog. `None` when
 /// `id` isn't ours.
 pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Value) -> Option<Result<Value, String>> {
+    if crate::transform_tool::component_command_refused(app, id) {
+        return Some(Err(crate::transform_tool::COMPONENT_AFFINE_ONLY.into()));
+    }
     if wraps(id) {
         return front(app, ctx, id, params);
     }
@@ -1032,7 +1035,9 @@ pub fn reset_form(f: &mut Map<String, Value>) {
     if !f.contains_key("__form") {
         return;
     }
-    let Some(Value::Object(orig)) = f.get("__formOrig").cloned() else { return };
+    let Some(Value::Object(orig)) = f.get("__formOrig").cloned() else {
+        return;
+    };
     f.retain(|k, _| k.starts_with("__"));
     f.extend(orig);
 }
@@ -1203,7 +1208,9 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
 
 /// File Info's read-only Camera Data section (`__camera`, from the document's EXIF/XMP).
 fn camera_data(ui: &mut egui::Ui, f: &Map<String, Value>) {
-    let Some(camera) = f.get("__camera").and_then(Value::as_object).filter(|c| !c.is_empty()) else { return };
+    let Some(camera) = f.get("__camera").and_then(Value::as_object).filter(|c| !c.is_empty()) else {
+        return;
+    };
     ui.add_space(10.0);
     ui.label(egui::RichText::new(tl!("Camera Data")).font(crate::theme::semibold(13.0)));
     ui.add_space(4.0);

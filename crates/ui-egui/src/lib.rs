@@ -262,6 +262,7 @@ pub mod wheel_nav;
 pub mod wide_angle_ui;
 pub mod widgets;
 pub mod work_area;
+pub mod work_path_drag;
 pub mod workspace_ui;
 pub mod zoom_hold;
 pub mod zoom_levels;
@@ -1319,6 +1320,11 @@ impl PhotocraftApp {
 
     /// Run an engine command, reporting errors in the status bar.
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        let params = if id == "path.transform" && params.get("name").and_then(Value::as_str).is_none_or(|name| name == "work") {
+            work_path_drag::transform_params(self, params)?
+        } else {
+            params
+        };
         if let Some(result) = delete_layer_prompt::intercept(self, id, &params) {
             return result;
         }
@@ -1330,6 +1336,17 @@ impl PhotocraftApp {
         if gate.is_some() {
             self.session.authorize = gate;
         }
+        let transformed_component = if id == "path.transform" {
+            params
+                .get("subpaths")
+                .and_then(Value::as_array)
+                .filter(|a| a.len() == 1)
+                .and_then(|a| a.first())
+                .and_then(Value::as_u64)
+                .and_then(|i| usize::try_from(i).ok())
+        } else {
+            None
+        };
         let result = self.run_command(id, params);
         if gate.is_some() {
             self.session.authorize = None;
@@ -1343,6 +1360,15 @@ impl PhotocraftApp {
                 self.ui.vector_mask_target = t == ChannelTarget::VectorMask;
             }
             self.sync_mask_targets();
+        }
+        if result.is_ok() {
+            if id == "layer.select" || id.starts_with("channel.target") || id == "path.delete" {
+                self.ui.shape_work_path_target = None;
+            }
+            work_path_drag::after_command(self, id);
+            if let Some(index) = transformed_component {
+                work_path_drag::transformed(self, index);
+            }
         }
         result
     }
@@ -2148,7 +2174,9 @@ impl PhotocraftApp {
     /// Another app changed `doc`'s own file at `path` since the document was opened from it or
     /// last saved to it. A file that is gone, or one never stamped, counts as unchanged.
     pub(crate) fn changed_on_disk(&self, doc: photocraft_doc::DocId, path: &str) -> bool {
-        let Some((own, then)) = self.disk_stamps.get(&doc) else { return false };
+        let Some((own, then)) = self.disk_stamps.get(&doc) else {
+            return false;
+        };
         own == path && self.services.file_stamp.as_ref().and_then(|stamp| stamp(path)).is_some_and(|now| now != *then)
     }
 
@@ -2233,7 +2261,9 @@ impl PhotocraftApp {
     }
 
     fn drain_control(&mut self, ctx: &egui::Context) {
-        let Some(rx) = self.control_rx.take() else { return };
+        let Some(rx) = self.control_rx.take() else {
+            return;
+        };
         while let Ok(req) = rx.try_recv() {
             let reply = req.reply.clone();
             if req.deadline.is_some_and(|deadline| std::time::Instant::now() >= deadline) || !req.dispatch.start() {
@@ -2826,7 +2856,9 @@ impl PhotocraftApp {
     /// is an adjustment layer (no pixels of its own), or every colour channel is off and that mask
     /// is the picture. An alpha channel or Quick Mask wins, as the engine routes those itself.
     pub fn layer_mask_targeted(&self) -> bool {
-        let Some(st) = self.session.active() else { return false };
+        let Some(st) = self.session.active() else {
+            return false;
+        };
         let layer_mask = st.channel_view.target == photocraft_engine::channel_cmds::ChannelTarget::LayerMask;
         let composite = (st.channel_view.target == photocraft_engine::channel_cmds::ChannelTarget::Composite || layer_mask) && st.doc.quick_mask.is_none();
         let has_mask = st.active_layer.and_then(|id| st.doc.layer(id)).is_some_and(|l| l.mask.is_some());
@@ -3002,7 +3034,9 @@ impl PhotocraftApp {
         let frame = layer_thumb_frame(layer, canvas, clip);
         let mut px = [0.0f32; 8];
         let img = thumb_image(frame, 64, |x, y| {
-            let Some(s) = layer.surface() else { return [0.0; 4] };
+            let Some(s) = layer.surface() else {
+                return [0.0; 4];
+            };
             let n = s.channels();
             s.read_pixel(x, y, &mut px[..n]);
             photocraft_raster::to_rgba(&s.format(), &px[..n])
@@ -3491,7 +3525,9 @@ impl PhotocraftApp {
         if !self.session.prefs().general.export_clipboard {
             return;
         }
-        let (Some(set), Some(clip)) = (self.services.clipboard_set_image.as_mut(), self.session.clipboard.as_ref()) else { return };
+        let (Some(set), Some(clip)) = (self.services.clipboard_set_image.as_mut(), self.session.clipboard.as_ref()) else {
+            return;
+        };
         let b = clip.bounds;
         if b.is_empty() {
             return;
@@ -3534,7 +3570,9 @@ impl PhotocraftApp {
     /// it is dropped rather than pasted. Unexported internal copies survive unavailable or empty
     /// system clipboards.
     pub(crate) fn import_os_clipboard(&mut self) -> Result<bool, String> {
-        let Some(get) = self.services.clipboard_get_image.as_mut() else { return Ok(false) };
+        let Some(get) = self.services.clipboard_get_image.as_mut() else {
+            return Ok(false);
+        };
         // A read failure says nothing about the clipboard contents. Keep our editable copy and
         // its signature rather than treating the failure as an empty image.
         let image = match get() {

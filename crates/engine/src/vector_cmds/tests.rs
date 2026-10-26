@@ -1207,6 +1207,150 @@ fn combine_shapes_fails_gracefully() {
     assert_eq!(*doc(&s), before);
 }
 
+fn component_session() -> Session {
+    let mut s = session(256, 256, 8);
+    let mut path = vector::shapes::rect(10.0, 10.0, 30.0, 40.0);
+    path.subpaths.extend(vector::shapes::ellipse(100.0, 20.0, 80.0, 60.0).subpaths);
+    path.subpaths[1].op = PathOp::Subtract;
+    path.subpaths.push(Subpath::polyline(&[(200.0, 160.0), (240.0, 180.0)]));
+    s.execute("path.set", json!({"path": path_json(&path)})).unwrap();
+    s
+}
+
+fn component_params(s: &Session, mut params: Value) -> Value {
+    let st = s.active().unwrap();
+    params["name"] = json!("work");
+    params["subpaths"] = json!([1]);
+    params["document"] = json!(st.doc.id.0);
+    params["revision"] = json!(st.revision);
+    params
+}
+
+#[test]
+fn component_transform_moves_scales_rotates_only_selected_geometry_and_undoes_once() {
+    for params in [json!({"translateX": 15, "translateY": 7}), json!({"scaleX": 2, "scaleY": 0.5}), json!({"angle": 90})] {
+        let mut s = component_session();
+        let before = doc(&s).work_path.clone().unwrap();
+        let pixels = photocraft_compose::flatten(doc(&s));
+        let history = s.active().unwrap().history.past_len();
+        let request = component_params(&s, params.clone());
+        s.execute("path.transform", request).unwrap();
+        let after = doc(&s).work_path.clone().unwrap();
+        assert_eq!(after.subpaths[0], before.subpaths[0]);
+        assert_eq!(after.subpaths[2], before.subpaths[2]);
+        assert_eq!(after.subpaths[1].closed, before.subpaths[1].closed);
+        assert_eq!(after.subpaths[1].op, before.subpaths[1].op);
+        assert_eq!(after.fill_rule, before.fill_rule);
+        assert_eq!(after.inverted, before.inverted);
+        let expected = if params.get("angle").is_some() {
+            Affine::translate(-140.0, -50.0).then(&Affine::rotate(std::f64::consts::FRAC_PI_2)).then(&Affine::translate(140.0, 50.0))
+        } else if params.get("scaleX").is_some() {
+            Affine::translate(-140.0, -50.0).then(&Affine { m: [2.0, 0.0, 0.0, 0.5, 0.0, 0.0] }).then(&Affine::translate(140.0, 50.0))
+        } else {
+            Affine::translate(15.0, 7.0)
+        };
+        for (a, b) in after.subpaths[1].knots.iter().zip(&before.subpaths[1].knots) {
+            let b = b.transform(&expected);
+            for (a, b) in [(a.anchor, b.anchor), (a.in_ctrl, b.in_ctrl), (a.out_ctrl, b.out_ctrl)] {
+                assert!((a.x - b.x).hypot(a.y - b.y) < 1e-9);
+            }
+            assert_eq!(a.smooth, b.smooth);
+        }
+        assert_eq!(photocraft_compose::flatten(doc(&s)), pixels);
+        assert_eq!(s.active().unwrap().history.past_len(), history + 1);
+        s.undo();
+        assert_eq!(doc(&s).work_path.as_ref(), Some(&before));
+        s.redo();
+        assert_eq!(doc(&s).work_path.as_ref(), Some(&after));
+    }
+}
+
+#[test]
+fn component_transform_rejects_malformed_stale_or_advanced_requests_without_mutation() {
+    let mut s = component_session();
+    let valid = component_params(&s, json!({"translateX": 10}));
+    let mut bad = Vec::new();
+    for selector in [json!(null), json!([]), json!([1, 1]), json!([999]), json!([-1]), json!([1.0]), json!(["1"]), json!(true)] {
+        let mut p = valid.clone();
+        p["subpaths"] = selector;
+        bad.push(p);
+    }
+    for key in ["document", "revision"] {
+        let mut p = valid.clone();
+        p.as_object_mut().unwrap().remove(key);
+        bad.push(p);
+        let mut p = valid.clone();
+        p[key] = json!(999999);
+        bad.push(p);
+    }
+    for extra in [
+        json!({"quad": [[0,0],[1,0],[1,1],[0,1]]}),
+        json!({"style": "arc"}),
+        json!({"mesh": null}),
+        json!({"warp": null}),
+        json!({"matrix": [1,0,0.5,1,0,0]}),
+        json!({"matrix": [0,0,0,1,0,0]}),
+        json!({"layer": 1}),
+        json!({"name": null}),
+    ] {
+        let mut p = valid.clone();
+        p.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        bad.push(p);
+    }
+    for request in bad {
+        let before = s.active().unwrap().doc.clone();
+        let history = s.active().unwrap().history.past_len();
+        assert!(s.execute("path.transform", request.clone()).is_err(), "{request}");
+        assert_eq!(s.active().unwrap().doc, before);
+        assert_eq!(s.active().unwrap().history.past_len(), history);
+    }
+    // Replacement can keep an index valid; the revision still makes the old selector stale.
+    let replacement = path_json(doc(&s).work_path.as_ref().unwrap());
+    s.execute("path.set", json!({"path": replacement})).unwrap();
+    let before = s.active().unwrap().doc.clone();
+    assert!(s.execute("path.transform", valid.clone()).is_err());
+    assert_eq!(s.active().unwrap().doc, before);
+    s.execute("file.new", json!({"width": 256, "height": 256})).unwrap();
+    assert!(s.execute("path.transform", valid).is_err());
+}
+
+#[test]
+fn component_transform_omitted_selector_preserves_whole_path_and_saved_path_behaviour() {
+    let mut s = component_session();
+    let before = doc(&s).work_path.clone().unwrap();
+    s.execute("path.transform", json!({"translateX": 10})).unwrap();
+    assert_eq!(doc(&s).work_path.as_ref(), Some(&before.transform(&Affine::translate(10.0, 0.0))));
+    s.execute("path.set", json!({"name": "Saved", "path": path_json(&before)})).unwrap();
+    s.execute("path.transform", json!({"name": "Saved", "translateY": 7})).unwrap();
+    assert_eq!(doc(&s).paths[0].path, before.transform(&Affine::translate(0.0, 7.0)));
+    let mut request = component_params(&s, json!({"translateX": 1}));
+    request["name"] = json!("Saved");
+    assert!(s.execute("path.transform", request).is_err());
+}
+
+#[test]
+fn component_transform_pcraft_and_psd_roundtrips_preserve_geometry() {
+    let mut s = component_session();
+    let params = component_params(&s, json!({"translateX": 16, "translateY": 8}));
+    s.execute("path.transform", params).unwrap();
+    let expected = doc(&s).work_path.clone().unwrap();
+    let bytes = photocraft_format::save_to_bytes(doc(&s), &Default::default()).unwrap();
+    assert_eq!(photocraft_format::load_from_bytes(&bytes).unwrap().work_path, Some(expected.clone()));
+    let psd = photocraft_io::export(doc(&s), "component.psd", &Default::default()).unwrap();
+    let back = photocraft_io::import("component.psd", &psd.bytes).unwrap().document.work_path.unwrap();
+    assert_eq!(back.subpaths.len(), expected.subpaths.len());
+    for (a, b) in back.subpaths.iter().zip(&expected.subpaths) {
+        assert_eq!(a.closed, b.closed);
+        assert_eq!(a.op, b.op);
+        assert_eq!(a.knots.len(), b.knots.len());
+        for (a, b) in a.knots.iter().zip(&b.knots) {
+            for (a, b) in [(a.anchor, b.anchor), (a.in_ctrl, b.in_ctrl), (a.out_ctrl, b.out_ctrl)] {
+                assert!((a.x - b.x).hypot(a.y - b.y) < 0.0001);
+            }
+        }
+    }
+}
+
 #[test]
 fn triangles_and_polygons_take_a_corner_radius_kept_through_edits_and_scaling() {
     let mut s = session(200, 200, 8);
@@ -1237,4 +1381,25 @@ fn triangles_and_polygons_take_a_corner_radius_kept_through_edits_and_scaling() 
     s.execute("shape.edit", json!({"layer": id, "cornerRadius": 10})).unwrap();
     s.execute("shape.edit", json!({"layer": id, "transform": [0.5, 0, 0, 0.5, 0, 0]})).unwrap();
     assert!(matches!(live(&s), Some(LiveShape::Polygon { corner_radius, .. }) if (corner_radius - 5.0).abs() < 1e-9));
+}
+
+#[test]
+fn component_transform_degenerate_geometry_translates_and_zero_scale_fails_atomically() {
+    let mut s = component_session();
+    let mut path = doc(&s).work_path.clone().unwrap();
+    path.subpaths[1] = Subpath::polyline(&[(100.0, 100.0)]);
+    s.execute("path.set", json!({"path":path_json(&path)})).unwrap();
+    let original = doc(&s).work_path.clone().unwrap();
+    let history = s.active().unwrap().history.past_len();
+    let invalid = component_params(&s, json!({"scaleX":0}));
+    assert!(s.execute("path.transform", invalid).is_err());
+    assert_eq!(doc(&s).work_path.as_ref(), Some(&original));
+    assert_eq!(s.active().unwrap().history.past_len(), history);
+    let params = component_params(&s, json!({"translateX":3.25,"translateY":4.5}));
+    s.execute("path.transform", params).unwrap();
+    let after = doc(&s).work_path.clone().unwrap();
+    assert_eq!(after.subpaths[0], original.subpaths[0]);
+    assert_eq!(after.subpaths[2], original.subpaths[2]);
+    assert_eq!(after.subpaths[1].knots[0].anchor, Point::new(103.25, 104.5));
+    assert_eq!(s.active().unwrap().history.past_len(), history + 1);
 }

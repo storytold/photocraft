@@ -988,7 +988,9 @@ fn clipping_path_clear(s: &mut Session, _p: &Value) -> Result<Value> {
 /// The path `path.transform` edits: `layer`'s shape path or vector mask, else the work path or a
 /// saved path.
 fn transform_target(s: &Session, name: &str, layer: Option<LayerId>) -> Result<Path> {
-    let Some(id) = layer else { return resolve_path(s, Some(name)) };
+    let Some(id) = layer else {
+        return resolve_path(s, Some(name));
+    };
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let l = d.doc.layer(id).ok_or(EngineError::NoLayer(id))?;
     match &l.content {
@@ -1022,10 +1024,53 @@ enum PathMap {
     Warp(Box<photocraft_geom::warp::Warp>),
 }
 
+/// Component requests are Work-Path-only and revision-bound: a still-in-range index
+/// must not accidentally address replacement geometry after another document edit.
+fn transform_component(s: &Session, p: &Value, name: &str) -> Result<Option<usize>> {
+    const CMD: &str = "path.transform";
+    let Some(value) = p.get("subpaths") else {
+        return Ok(None);
+    };
+    if name != "work" || p.get("name").is_some_and(|value| value.as_str() != Some("work")) || p.get("layer").is_some() {
+        return Err(bad(CMD, "component transforms target only the Work Path"));
+    }
+    let list = value.as_array().filter(|list| list.len() == 1).ok_or_else(|| bad(CMD, "`subpaths` must contain exactly one component index"))?;
+    let index = list.first().and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok()).ok_or_else(|| bad(CMD, "invalid component index"))?;
+    let st = s.active().ok_or(EngineError::NoDocument)?;
+    if p.get("document").and_then(Value::as_u64) != Some(st.doc.id.0) || p.get("revision").and_then(Value::as_u64) != Some(st.revision) {
+        return Err(bad(CMD, "stale component target: pass the current `document` and `revision`"));
+    }
+    if st.doc.work_path.as_ref().and_then(|path| path.subpaths.get(index)).is_none() {
+        return Err(bad(CMD, "no such Work Path component"));
+    }
+    if ["quad", "warp", "style", "mesh", "rect"].iter().any(|key| p.get(*key).is_some()) {
+        return Err(bad(CMD, "components support only Move, Scale and Rotate"));
+    }
+    Ok(Some(index))
+}
+
+fn transform_geometry(s: &Session, name: &str, layer: Option<LayerId>, component: Option<usize>) -> Result<Path> {
+    let mut path = transform_target(s, name, layer)?;
+    if let Some(index) = component {
+        let subpath = path.subpaths.get(index).ok_or_else(|| bad("path.transform", "no such component"))?.clone();
+        path.subpaths = vec![subpath];
+    }
+    Ok(path)
+}
+
+/// Orthogonal matrix columns describe rotation and independent axis scales, not shear.
+fn component_affine(a: &Affine) -> bool {
+    let [xx, xy, yx, yy, _, _] = a.m;
+    let x = xx.hypot(xy);
+    let y = yx.hypot(yy);
+    x > 1e-12 && y > 1e-12 && (xx * yx + xy * yy).abs() <= 1e-8 * x * y
+}
+
 fn path_transform(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "path.transform";
     let name = p.get("name").and_then(Value::as_str).unwrap_or("work").to_owned();
     let layer_id = if name == "layer" { Some(layer_id(s, p)?) } else { None };
+    let component = transform_component(s, p, &name)?;
     // The box Distort, Perspective and Warp frame: `rect`, else the path's control bounds.
     let frame = |s: &Session| -> Result<[f64; 4]> {
         let r = match coords(p, "rect", 4)? {
@@ -1086,7 +1131,7 @@ fn path_transform(s: &mut Session, p: &Value) -> Result<Value> {
         let (sx, sy) = (number("scaleX", 1.0)?, number("scaleY", 1.0)?);
         let angle = number("angle", 0.0)?;
         // An explicit `layer` parameter determines both the transformed path and its pivot (#3062).
-        let path = transform_target(s, &name, layer_id)?;
+        let path = transform_geometry(s, &name, layer_id, component)?;
         let (x0, y0, x1, y1) = path.control_bounds().ok_or_else(|| bad(CMD, "path has no points to transform"))?;
         let (cx, cy) = ((x0 + x1) * 0.5, (y0 + y1) * 0.5);
         PathMap::Affine(
@@ -1096,6 +1141,9 @@ fn path_transform(s: &mut Session, p: &Value) -> Result<Value> {
                 .then(&Affine::translate(cx + tx, cy + ty)),
         )
     };
+    if component.is_some() && !matches!(&map, PathMap::Affine(a) if component_affine(a)) {
+        return Err(bad(CMD, "components support non-degenerate Move, Scale and Rotate only; no shear or advanced transforms"));
+    }
     let out = match &map {
         PathMap::Affine(a) => json!({ "name": name, "matrix": a.m }),
         PathMap::Projective(h) => json!({ "name": name, "homography": h.0 }),
@@ -1117,6 +1165,16 @@ fn path_transform(s: &mut Session, p: &Value) -> Result<Value> {
     }
     s.edit("Transform Path", |doc, _| {
         let path = path_mut(doc, &name, layer_id)?;
+        if let Some(index) = component {
+            let PathMap::Affine(a) = &map else {
+                return Err(bad(CMD, "unsupported component transform"));
+            };
+            let subpath = path.subpaths.get_mut(index).ok_or_else(|| bad(CMD, "no such component"))?;
+            for knot in &mut subpath.knots {
+                *knot = knot.transform(a);
+            }
+            return Ok(());
+        }
         *path = match &map {
             PathMap::Affine(a) => path.transform(a),
             PathMap::Projective(h) => map_path(path, Some(h), None)?,
@@ -1176,7 +1234,9 @@ fn path_to_selection(s: &mut Session, p: &Value) -> Result<Value> {
     let mode = match p.get("mode") {
         None => SelectionMode::Replace,
         Some(Value::String(v)) if matches!(v.as_str(), "replace" | "add" | "subtract" | "intersect") => SelectionMode::parse(v),
-        _ => return Err(bad("path.toSelection", "`mode` must be replace, add, subtract or intersect")),
+        _ => {
+            return Err(bad("path.toSelection", "`mode` must be replace, add, subtract or intersect"));
+        }
     };
     let area = s.active().ok_or(EngineError::NoDocument)?.doc.bounds();
     let mut mask = vector::fill_rasterizer(&path, vector::DEFAULT_TOLERANCE).render(area);
@@ -1869,7 +1929,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "path.transform",
             "Free Transform Path",
             [],
-            r##"{"name":str|"work"|"layer"="work","layer":id? (with layer target),"matrix":[a,b,c,d,e,f] | "quad":[[x,y]×4] (Distort/Perspective: where the frame's corners go, clockwise from top-left) | "style"|"mesh"|"warp":… (Warp, as edit.transform.warp) | "translateX":px?,"translateY":px?,"scaleX":factor?,"scaleY":factor?,"angle":degrees?,"rect":[x0,y0,x1,y1]? (the quad's or warp's frame; default = path control bounds)} (numeric transforms pivot on path bounds center)"##,
+            r##"{"name":str|"work"|"layer"="work","layer":id? (with layer target),"matrix":[a,b,c,d,e,f] | "quad":[[x,y]×4] (Distort/Perspective: where the frame's corners go, clockwise from top-left) | "style"|"mesh"|"warp":… (Warp, as edit.transform.warp) | "translateX":px?,"translateY":px?,"scaleX":factor?,"scaleY":factor?,"angle":degrees?,"rect":[x0,y0,x1,y1]? (the quad's or warp's frame; default = path control bounds)} (numeric transforms pivot on path bounds center). Optional `subpaths:[index]` is Work-Path-only, requires current `document`:id and `revision`:u64, uses component bounds/pivot, and permits non-degenerate Move/Scale/Rotate only (matrix or numeric params; no shear/quad/warp). Omit selector for legacy whole-path behaviour."##,
             has_doc,
             path_transform
         ),
