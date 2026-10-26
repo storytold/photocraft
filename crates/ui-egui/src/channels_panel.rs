@@ -468,7 +468,9 @@ fn item(ui: &mut egui::Ui, actions: &mut Vec<(String, Value)>, label: &str, cmd:
 /// Channel Options › Color Indicates.
 fn indicates_items(ui: &mut egui::Ui, actions: &mut Vec<(String, Value)>, channel: Value, current: ColorIndicates) {
     let masked = current == ColorIndicates::MaskedAreas;
-    let check = |on: bool, s: &str| if on { format!("✓ {s}") } else { s.to_string() };
+    // Translate before adding the ✓ prefix: only the bare labels are catalog keys, and `item`
+    // looks its label up again, which the missing-translation fallback passes through unchanged.
+    let check = |on: bool, s: &str| if on { format!("✓ {}", tl!(s)) } else { tl!(s).to_string() };
     item(ui, actions, &check(masked, "Color Indicates Masked Areas"), "channel.options", json!({ "channel": channel.clone(), "indicates": "masked" }));
     item(ui, actions, &check(!masked, "Color Indicates Selected Areas"), "channel.options", json!({ "channel": channel, "indicates": "selected" }));
 }
@@ -511,6 +513,36 @@ mod tests {
         assert_eq!(load_operation(m(true, false)), "add");
         assert_eq!(load_operation(m(false, true)), "subtract");
         assert_eq!(load_operation(m(true, true)), "intersect");
+    }
+
+    /// A context-menu button with the label `label` (the menu's buttons are accesskit buttons).
+    fn menu_has_button(h: &egui_kittest::Harness<'_, PhotocraftApp>, label: &str) -> bool {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::{NodeT, Queryable};
+        h.query_all_by_label(label).any(|n| n.accesskit_node().role() == Role::Button)
+    }
+
+    /// The context menu draws in the UI language: its labels reach `tl!` through the `item`
+    /// helper, so the i18n coverage tool cannot see them.
+    #[test]
+    fn context_menu_draws_in_the_selected_language() {
+        use egui::{Event, Modifiers, PointerButton};
+        let (mut h, _) = channels_harness();
+        h.state_mut().run("prefs.set", json!({"path": "interface.language", "value": "zh-hans"})).unwrap();
+        h.run_steps(2);
+        let row = at(&h, "Alpha 1");
+        h.hover_at(row);
+        h.run_steps(1);
+        h.event(Event::PointerButton { pos: row, button: PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE });
+        h.run_steps(1);
+        h.event(Event::PointerButton { pos: row, button: PointerButton::Secondary, pressed: false, modifiers: Modifiers::NONE });
+        h.run_steps(2);
+        for label in ["复制通道", "删除通道", "重命名通道…", "通道选项…", "新建通道…", "新建专色通道…", "分离通道", "合并通道…"]
+        {
+            assert!(menu_has_button(&h, label), "no menu item {label}");
+        }
+        // The current Color Indicates entry is checked over its translation.
+        assert!(menu_has_button(&h, "✓ 被蒙版区域"), "no checked indicates item");
     }
 
     #[test]

@@ -24,6 +24,29 @@
 	Spot Color	专色
 	Ink Characteristics	油墨特性
 
+# Channels panel context menu. Its labels reach tl! through the panel's item helper, so
+# cargo xtask i18n-coverage cannot see them; keep the keys aligned with channels_panel.rs.
+	Duplicate Channel	复制通道
+	Delete Channel	删除通道
+	Rename Channel…	重命名通道…
+	Channel Options…	通道选项…
+	Merge Spot Channel	合并专色通道
+	Convert to Alpha Channel	转换为 Alpha 通道
+	Exit Quick Mask	退出快速蒙版
+	Quick Mask Options…	快速蒙版选项…
+	New Channel…	新建通道…
+	New Spot Channel…	新建专色通道…
+	Split Channels	分离通道
+	Merge Channels…	合并通道…
+	Color Indicates Masked Areas	被蒙版区域
+	Color Indicates Selected Areas	所选区域
+
+# Paths panel context menu (same label indirection as the channels panel menu)
+	Fill Path	填充路径
+	Save Path	存储路径
+	Duplicate Path	复制路径
+	Delete Path	删除路径
+
 # Guide layout dialog
 
 # Custom print paper (#3820)
@@ -3134,3 +3157,33 @@ curves	Smooth	平滑
 	Profile	配置文件
 	Target	目标
 	Units	单位
+
+# Dialog titles whose __label bypasses the menu catalogue: looked up directly, or with a
+# trailing ellipsis appended (dialogs.rs display_title), so keys without one end in the file with one.
+	Duplicate Group…	复制组…
+	Image Statistics…	图像统计…
+	Export Paths to File…	将路径导出到文件…
+	PhotoCraft Print Settings…	PhotoCraft 打印设置…
+	Pattern Fill…	图案填充…
+	Divide Slice…	划分切片…
+	Make Work Path…	建立工作路径…
+	Color Picker (Custom Canvas Color)	拾色器（自定画布颜色）
+	Color Picker (Stop Color)	拾色器（色标颜色）
+
+# Histogram panel statistics and its cache warning (#9575-era additions, missing from the v0.16.0 catalog)
+	Calculating…	计算中…
+	Click to refresh histogram with uncached data	点击以不使用缓存数据刷新直方图
+	Count:	计数：
+	Level:	色阶：
+	Percentile:	百分位：
+	Show Statistics	显示统计
+	Uncached Refresh	不使用缓存刷新
+	Source:	源：
+
+# Channel views (Preferences > Interface) and the updates dialog
+	Show Channels in Color	以彩色显示通道
+	Release Notes	发行说明
+	Update and Restart	更新并重启
+
+# New Document dialog: create the document with artboards
+	Artboards	画板

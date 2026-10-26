@@ -581,6 +581,50 @@ mod tests {
     }
 
     #[test]
+    fn simplified_chinese_translates_helper_menu_and_dialog_labels() {
+        let zh = Lang::from_code("zh-hans").expect("zh-hans registered");
+        assert_eq!(tr(zh, "no such label"), "no such label");
+        // The Channels panel's context menu passes labels through a helper, so the i18n
+        // coverage tool cannot see them; these keys must stay aligned with channels_panel.rs.
+        for (source, expected) in [
+            ("Duplicate Channel", "复制通道"),
+            ("Delete Channel", "删除通道"),
+            ("Rename Channel…", "重命名通道…"),
+            ("Channel Options…", "通道选项…"),
+            ("Merge Spot Channel", "合并专色通道"),
+            ("Convert to Alpha Channel", "转换为 Alpha 通道"),
+            ("Exit Quick Mask", "退出快速蒙版"),
+            ("Quick Mask Options…", "快速蒙版选项…"),
+            ("New Channel…", "新建通道…"),
+            ("New Spot Channel…", "新建专色通道…"),
+            ("Split Channels", "分离通道"),
+            ("Merge Channels…", "合并通道…"),
+            ("Color Indicates Masked Areas", "被蒙版区域"),
+            ("Color Indicates Selected Areas", "所选区域"),
+            // The Paths panel's context menu (vector_ui.rs `path_context_actions`).
+            ("Fill Path", "填充路径"),
+            ("Save Path", "存储路径"),
+            ("Duplicate Path", "复制路径"),
+            ("Delete Path", "删除路径"),
+            // Dialog titles injected as `__label` and looked up by dialogs.rs `display_title`.
+            ("Duplicate Group…", "复制组…"),
+            ("Image Statistics…", "图像统计…"),
+            ("Package…", "打包…"),
+            ("Script Events Manager…", "脚本事件管理器…"),
+            ("Export Paths to File…", "将路径导出到文件…"),
+            ("Export/Import Presets…", "导出/导入预设…"),
+            ("PhotoCraft Print Settings…", "PhotoCraft 打印设置…"),
+            ("Pattern Fill…", "图案填充…"),
+            ("Divide Slice…", "划分切片…"),
+            ("Make Work Path…", "建立工作路径…"),
+            ("Color Picker (Custom Canvas Color)", "拾色器（自定画布颜色）"),
+            ("Color Picker (Stop Color)", "拾色器（色标颜色）"),
+        ] {
+            assert_eq!(tr(zh, source), expected, "{source}");
+        }
+    }
+
+    #[test]
     fn spanish_resolves_and_pluralises() {
         let es = Lang::from_code("es").expect("es registered");
         for tag in ["es", "es_ES.UTF-8", "es-MX", "es-419"] {

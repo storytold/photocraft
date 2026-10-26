@@ -2019,6 +2019,25 @@ pub fn paths_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 mod tests {
     use super::*;
 
+    /// The Paths panel's context-menu labels translate: they reach `tl!` through variables, so
+    /// the i18n coverage tool cannot see them, and a renamed label would fall back to English.
+    #[test]
+    fn path_context_menu_labels_translate() {
+        let zh = crate::i18n::Lang::from_code("zh-hans").expect("zh-hans registered");
+        let mut s = photocraft_engine::Session::new();
+        s.execute("file.new", json!({ "width": 8, "height": 8 })).unwrap();
+        let doc = s.active().unwrap().doc.clone();
+        for (entry, layer) in [
+            (PathEntry { name: "Work Path".into(), path: Path::default(), kind: PathRow::Work }, None),
+            (PathEntry { name: "Path 1".into(), path: Path::default(), kind: PathRow::Saved }, None),
+            (PathEntry { name: "Layer 1 Vector Mask".into(), path: Path::default(), kind: PathRow::Layer }, None),
+        ] {
+            for (label, _, _) in path_context_actions(&entry, &doc, layer) {
+                assert!(crate::i18n::has(zh, label), "{label} has no zh-hans translation");
+            }
+        }
+    }
+
     /// #4084: zoomed in, a curve's chords stay within a fraction of a pixel of the true curve
     /// (16 fixed chords showed corners), and a straight segment stays one chord.
     #[test]
