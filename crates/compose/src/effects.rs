@@ -2203,6 +2203,17 @@ pub(crate) fn composite_with_effects_prepared(
     for (p, a) in lay.px.iter_mut().zip(&shape.v) {
         p[3] *= a.min(1.0);
     }
+    // An outer bevel lies beneath the layer's strokes (Photoshop draws the strokes over it), so it
+    // is painted before them: a Normal outside stroke covers it instead of being shaded by it.
+    for (i, e) in rev() {
+        if let Effect::BevelEmboss(b) = e
+            && maps.bevel_paint[i] == BevelPaint::Outer
+        {
+            let (hi, sh) = (fx(i, 0), fx(i, 1));
+            paint_color(&mut work, &hi, rgb(&b.highlight_color), b.highlight.blend, b.highlight.opacity);
+            paint_color(&mut work, &sh, rgb(&b.shadow_color), b.shadow.blend, b.shadow.opacity);
+        }
+    }
     // Shape layers without a filled outline stroke their vector outline, estimated from local
     // coverage; every other layer strokes its shape. The width then picks the field.
     let vector_outline = vector_shape && !maps.outline;
@@ -2268,15 +2279,6 @@ pub(crate) fn composite_with_effects_prepared(
             if alpha > 0.0 {
                 *p = [(p[0] * p[3] * k + a[0]) / alpha, (p[1] * p[3] * k + a[1]) / alpha, (p[2] * p[3] * k + a[2]) / alpha, alpha.min(1.0)];
             }
-        }
-    }
-    for (i, e) in rev() {
-        if let Effect::BevelEmboss(b) = e
-            && maps.bevel_paint[i] == BevelPaint::Outer
-        {
-            let (hi, sh) = (fx(i, 0), fx(i, 1));
-            paint_color(&mut work, &hi, rgb(&b.highlight_color), b.highlight.blend, b.highlight.opacity);
-            paint_color(&mut work, &sh, rgb(&b.shadow_color), b.shadow.blend, b.shadow.opacity);
         }
     }
 

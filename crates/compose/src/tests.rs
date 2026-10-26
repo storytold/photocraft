@@ -1248,6 +1248,33 @@ fn stroke(size: f32, position: StrokePosition) -> Effect {
     })
 }
 
+/// The pixel at (`x`, 20) of a red square carrying `effects`, in a white document of `depth`.
+fn effects_px_at_depth(depth: SampleType, effects: Vec<Effect>, x: i32) -> [f32; 4] {
+    let mut d = Document::with_background("t", Size::new(40, 40), ColorMode::Rgb, depth, Color::WHITE);
+    let fmt = d.pixel_format();
+    let mut l = Layer::raster("sq", fmt);
+    l.surface_mut().unwrap().fill_rect(Rect::new(10, 10, 30, 30), &photocraft_raster::from_rgba(&fmt, [1.0, 0.0, 0.0, 1.0]));
+    l.effects.items = effects;
+    d.layers.push(l);
+    px(&d, x, 20)
+}
+
+#[test]
+fn outer_bevel_lies_beneath_an_outside_stroke() {
+    // An outer bevel shades the backdrop around the layer, and Photoshop draws the strokes over
+    // it: a Normal outside stroke keeps its own colour where the bevel's shading reaches.
+    use photocraft_doc::BevelStyle;
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        let bevel_only = vec![bevel_fx(BevelStyle::OuterBevel, 0.0)];
+        // The 5 px bevel is shaded on the side facing away from the light: the square's right
+        // edge is at x = 30, so x = 31 is 1 px out, inside both the bevel and the 4 px stroke.
+        let shaded = effects_px_at_depth(depth, bevel_only, 31);
+        assert!(shaded[0] < 0.9, "{depth:?}: the bevel shades the backdrop here: {shaded:?}");
+        let both = vec![bevel_fx(BevelStyle::OuterBevel, 0.0), stroke(4.0, StrokePosition::Outside)];
+        let under = effects_px_at_depth(depth, both, 31);
+        assert!(close4(under, [0.0, 0.0, 1.0, 1.0]), "{depth:?}: the stroke covers the bevel: {under:?}");
+    }
+}
 #[test]
 fn outside_stroke_width() {
     let d = fx_doc(vec![stroke(3.0, StrokePosition::Outside)]);
