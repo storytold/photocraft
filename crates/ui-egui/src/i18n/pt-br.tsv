@@ -4441,3 +4441,28 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Cor da parada
 	Shapes can't use patterns yet	Formas ainda não podem usar padrões
 	Edit Brush…	Editar pincel…
+# File › Automate › PDF Presentation (#6637)
+	Multi-Page Document	Documento de várias páginas
+	Output Options	Opções de saída
+# PDF Presentation: Presentation Options (#6637)
+	Presentation Options	Opções de apresentação
+	Advance Every	Avançar a cada
+	Seconds	segundos
+	Loop after Last Page	Repetir após a última página
+	Acrobat and Adobe Reader only	Somente Acrobat e Adobe Reader
+	Blinds Horizontal	Persianas horizontais
+	Blinds Vertical	Persianas verticais
+	Box In	Caixa para dentro
+	Box Out	Caixa para fora
+	Glitter Down	Brilho para baixo
+	Glitter Right	Brilho para a direita
+	Glitter Right-Down	Brilho para baixo à direita
+	Split Horizontal In	Dividir horizontal para dentro
+	Split Horizontal Out	Dividir horizontal para fora
+	Split Vertical In	Dividir vertical para dentro
+	Split Vertical Out	Dividir vertical para fora
+	Wipe Down	Revelar para baixo
+	Wipe Left	Revelar para a esquerda
+	Wipe Right	Revelar para a direita
+	Wipe Up	Revelar para cima
+	Uses the saved file: save {name} first to include its latest changes	Usa o arquivo salvo: salve {name} primeiro para incluir as últimas alterações
