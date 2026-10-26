@@ -4773,6 +4773,8 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             ui.ctx().set_cursor_icon(c);
         } else if let Some(c) = response.hover_pos().filter(|_| tool == Tool::Artboard).and_then(|p| crate::artboard_tool::cursor(app, &xf, xf.to_doc(p))) {
             ui.ctx().set_cursor_icon(c);
+        } else if let Some(c) = response.hover_pos().filter(|_| tool == Tool::Move).and_then(|p| crate::artboard_tool::move_tool_cursor(app, xf.to_doc(p))) {
+            ui.ctx().set_cursor_icon(c);
         } else if let Some((p, c)) = response.hover_pos().filter(|_| tool == Tool::Crop).and_then(|p| Some((p, crate::crop_ui::cursor(app, xf.to_doc(p))?))) {
             ui.ctx().set_cursor_icon(c);
             let d = xf.to_doc(p);
@@ -6053,6 +6055,11 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
         let _ = app.run("select.drop", json!({}));
     }
     let ev = crate::snap_ui::filter_event(app, ev, mods);
+    // The Move tool grabbing an artboard by its edge moves the board (artboard_tool.rs): before
+    // the transform controls and layer moves, which would otherwise take the drag.
+    if crate::artboard_tool::move_tool_pointer(app, ev, mods) {
+        return;
+    }
     // Free Transform picks the handle under the press where the user clicked: the snapped press
     // can land outside the corner's grab area and turn a corner drag into a move of the whole box.
     let transform_ev = if matches!(raw, ToolEvent::Down { .. }) { raw } else { ev };

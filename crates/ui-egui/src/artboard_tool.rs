@@ -110,6 +110,78 @@ fn plus_at(app: &PhotocraftApp, p: [f64; 2]) -> Option<(LayerId, &'static str)> 
     buttons.iter().find(|(_, c)| (p[0] - c[0]).hypot(p[1] - c[1]) <= r).map(|(side, _)| (id, *side))
 }
 
+/// `id` and every layer inside it: a board never snaps to itself or its own contents.
+fn board_and_contents(doc: &Document, id: LayerId) -> Vec<LayerId> {
+    let mut out = vec![id];
+    let mut stack: Vec<&Layer> = doc.layer(id).and_then(Layer::children).map(|c| c.iter().collect()).unwrap_or_default();
+    while let Some(l) = stack.pop() {
+        out.push(l.id);
+        stack.extend(l.children().into_iter().flatten());
+    }
+    out
+}
+
+/// What a press at `p` snaps (`snap_ui`): the dragged handle of the selected board, a board moved
+/// from inside (its edges and centre), or the corner of a new board; nothing on a "+" button.
+pub(crate) fn snap_gesture(app: &PhotocraftApp, p: [f64; 2]) -> Option<(crate::snap_ui::Gesture, Vec<LayerId>)> {
+    use crate::snap_ui::Gesture;
+    if plus_at(app, p).is_some() {
+        return None;
+    }
+    let doc = &app.session.active()?.doc;
+    if let Some((id, r, hx, hy)) = handle_at(app, p) {
+        let at = |h: i8, lo: i64, hi: i64| match h {
+            -1 => lo as f64,
+            1 => hi as f64,
+            _ => (lo as f64 + hi as f64) / 2.0,
+        };
+        let gesture = Gesture::Handle { point: [at(hx, r[0], r[2]), at(hy, r[1], r[3])], axes: [hx != 0, hy != 0] };
+        // Resizing leaves the contents in place: the edge snaps to them too, to fit the board to
+        // the artwork.
+        return Some((gesture, vec![id]));
+    }
+    if let Some((id, r)) = board_at(doc, p) {
+        return Some((Gesture::Move { rect: as_f64(r) }, board_and_contents(doc, id)));
+    }
+    Some((Gesture::Point, Vec::new()))
+}
+
+/// Screen points above a board's top edge that count as its name strip (the Move tool drags the
+/// board from there, as from its outline).
+const LABEL_PX: f64 = 18.0;
+
+/// The topmost board whose outline (or name strip just above it) is under `p`: what the Move tool
+/// drags as a board instead of the image inside it.
+fn board_edge_at(app: &PhotocraftApp, p: [f64; 2]) -> Option<(LayerId, [i64; 4])> {
+    let st = app.session.active()?;
+    let tol = tolerance(app);
+    let label = LABEL_PX / f64::from(app.point_zoom()).max(0.01);
+    st.doc.artboards().iter().rev().map(|b| (b.0, edges(b.2.rect))).find(|(_, r)| {
+        let r = as_f64(*r);
+        let near_x = p[0] >= r[0] - tol && p[0] <= r[2] + tol;
+        let near_y = p[1] >= r[1] - tol && p[1] <= r[3] + tol;
+        let on_edge =
+            (near_y && ((p[0] - r[0]).abs() <= tol || (p[0] - r[2]).abs() <= tol)) || (near_x && ((p[1] - r[1]).abs() <= tol || (p[1] - r[3]).abs() <= tol));
+        let on_label = p[0] >= r[0] && p[0] <= r[2] && p[1] < r[1] && p[1] >= r[1] - label;
+        on_edge || on_label
+    })
+}
+
+/// The Move tool over a board's outline or name strip: its move cursor.
+pub fn move_tool_cursor(app: &PhotocraftApp, p: [f64; 2]) -> Option<CursorIcon> {
+    (app.ui.tool == Tool::Move && app.ui.transform.is_none() && crate::rulers::guide_at(app, p[0], p[1]).is_none())
+        .then(|| board_edge_at(app, p))
+        .flatten()
+        .map(|_| CursorIcon::Move)
+}
+
+/// What a Move tool press at `p` snaps when it grabs a board by its edge (`snap_ui`).
+pub(crate) fn move_tool_snap(app: &PhotocraftApp, p: [f64; 2]) -> Option<(crate::snap_ui::Gesture, Vec<LayerId>)> {
+    move_tool_cursor(app, p)?;
+    let (id, r) = board_edge_at(app, p)?;
+    Some((crate::snap_ui::Gesture::Move { rect: as_f64(r) }, board_and_contents(&app.session.active()?.doc, id)))
+}
+
 /// The board drawn from `a` to `b`, edges on whole pixels.
 fn drawn(a: [f64; 2], b: [f64; 2]) -> [i64; 4] {
     [a[0].min(b[0]), a[1].min(b[1]), a[0].max(b[0]), a[1].max(b[1])].map(|v| v.round() as i64)
@@ -118,6 +190,17 @@ fn drawn(a: [f64; 2], b: [f64; 2]) -> [i64; 4] {
 /// `d` rounded to whole pixels.
 fn offset(start: [f64; 2], cur: [f64; 2]) -> [i64; 2] {
     [(cur[0] - start[0]).round() as i64, (cur[1] - start[1]).round() as i64]
+}
+
+/// How far a gesture's whole-pixel rounding moves its edges from the pointer, per axis.
+fn rounding(d: &ArtboardDrag) -> [f64; 2] {
+    match *d {
+        ArtboardDrag::New { cur, .. } => [cur[0].round() - cur[0], cur[1].round() - cur[1]],
+        ArtboardDrag::Move { start, cur, .. } | ArtboardDrag::Resize { start, cur, .. } => {
+            let o = offset(start, cur);
+            [o[0] as f64 - (cur[0] - start[0]), o[1] as f64 - (cur[1] - start[1])]
+        }
+    }
 }
 
 /// `r` with handle (`hx`, `hy`) dragged by `d`: an edge dragged past the opposite one flips the
@@ -180,6 +263,35 @@ fn follow(d: &mut ArtboardDrag, p: [f64; 2], mods: egui::Modifiers) {
     }
 }
 
+/// The Move tool drags a board by its outline or name strip, as Photoshop does; anywhere else it
+/// moves the layers as usual. Called before the Move tool's own handlers (its transform controls
+/// and layer moves would otherwise take the drag), right after snapping. Returns true when the
+/// event was a board drag's.
+pub fn move_tool_pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) -> bool {
+    if app.ui.tool != Tool::Move {
+        return false;
+    }
+    if let ToolEvent::Down { x, y, .. } = ev {
+        let Some((id, rect)) = (!mods.command && !mods.alt).then(|| move_tool_cursor(app, [x, y]).and_then(|_| board_edge_at(app, [x, y]))).flatten() else {
+            // A drag whose release never arrived (the pointer let go outside the window) mustn't
+            // take over this unrelated press.
+            app.ui.artboard_tool.drag = None;
+            return false;
+        };
+        if app.session.active().and_then(|st| st.active_layer) != Some(id) {
+            let r = app.run("layer.select", json!({"layer": id.0}));
+            report(app, r);
+        }
+        app.ui.artboard_tool.drag = Some(ArtboardDrag::Move { id, rect, start: [x, y], cur: [x, y] });
+        return true;
+    }
+    if !matches!(app.ui.artboard_tool.drag, Some(ArtboardDrag::Move { .. })) {
+        return false;
+    }
+    gesture(app, ev, mods);
+    true
+}
+
 /// Pointer input for the Artboard tool. Returns true when the event was its own.
 pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) -> bool {
     // ⌘ is the Move tool (`hold_keys::cmd_moves`): a press with it held is not this tool's,
@@ -187,7 +299,14 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
     if app.ui.tool != Tool::Artboard || (app.ui.artboard_tool.drag.is_none() && crate::canvas::event_tool(app, mods) != Tool::Artboard) {
         return false;
     }
-    let Some(doc) = app.session.active().map(|d| d.doc.clone()) else { return true };
+    gesture(app, ev, mods);
+    true
+}
+
+/// The Artboard tool's press, drag and release (the Move tool's board drags share the drag and
+/// release).
+fn gesture(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) {
+    let Some(doc) = app.session.active().map(|d| d.doc.clone()) else { return };
     match ev {
         ToolEvent::Down { x, y, .. } => {
             let p = [x, y];
@@ -196,7 +315,7 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
                 app.ui.artboard_tool.drag = None;
                 let r = app.run("layer.artboard.addBeside", json!({"layer": id.0, "side": side, "duplicate": mods.alt}));
                 report(app, r);
-                return true;
+                return;
             }
             app.ui.artboard_tool.drag = Some(if let Some((id, rect, hx, hy)) = handle_at(app, p) {
                 ArtboardDrag::Resize { id, rect, hx, hy, start: p, cur: p, keep: mods.shift }
@@ -213,31 +332,37 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
         ToolEvent::Move { x, y, .. } => {
             if let Some(d) = &mut app.ui.artboard_tool.drag {
                 follow(d, [x, y], mods);
+                // Snapped to a guide at 22.5, the board lands on a whole pixel: the snap lines
+                // follow it there (by the drag's own rounding, so a centre on a half pixel stays).
+                let e = rounding(d);
+                for l in &mut app.prefs_rt.snap_lines {
+                    l.pos += e[usize::from(!l.vertical)];
+                }
             }
         }
         ToolEvent::Up { x, y } => {
-            let Some(mut d) = app.ui.artboard_tool.drag.take() else { return true };
+            let Some(mut d) = app.ui.artboard_tool.drag.take() else { return };
             follow(&mut d, [x, y], mods);
             let r = preview(&d);
             let result = match d {
                 ArtboardDrag::New { start, cur } => {
                     let screen = (cur[0] - start[0]).hypot(cur[1] - start[1]) * f64::from(app.point_zoom());
                     if screen < CLICK_PX || r[2] <= r[0] || r[3] <= r[1] {
-                        return true;
+                        return;
                     }
-                    app.run("layer.new.artboard", json!({"rect": xywh(r)}))
+                    // Like Photoshop, the new board takes in the layers drawn around.
+                    app.run("layer.new.artboard", json!({"rect": xywh(r), "adopt": true}))
                 }
                 ArtboardDrag::Move { id, rect, .. } if r != rect => app.run("layer.artboard.set", json!({"layer": id.0, "x": r[0], "y": r[1]})),
                 // Resizing leaves the contents where they are, as in Photoshop.
                 ArtboardDrag::Resize { id, rect, .. } if r != rect => {
                     app.run("layer.artboard.set", json!({"layer": id.0, "rect": xywh(r), "moveContents": false}))
                 }
-                _ => return true,
+                _ => return,
             };
             report(app, result);
         }
     }
-    true
 }
 
 /// The resize pointer for handle (`hx`, `hy`) as the view shows it, or none away from the
@@ -255,7 +380,8 @@ pub fn cursor(app: &PhotocraftApp, xf: &ViewXform, p: [f64; 2]) -> Option<Cursor
 
 /// The selected board's handles, its "+" buttons, and the board a gesture in progress would leave.
 pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform) {
-    if app.ui.tool != Tool::Artboard {
+    let moving_with_move_tool = app.ui.tool == Tool::Move && app.ui.artboard_tool.drag.is_some();
+    if app.ui.tool != Tool::Artboard && !moving_with_move_tool {
         return;
     }
     let t = Tokens::get(painter.ctx());
@@ -263,7 +389,18 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
     let outline = |r: [i64; 4]| -> Vec<Pos2> { vec![pt(r[0], r[1]), pt(r[2], r[1]), pt(r[2], r[3]), pt(r[0], r[3]), pt(r[0], r[1])] };
     let drag = app.ui.artboard_tool.drag;
     if let Some(d) = drag.as_ref() {
-        painter.add(egui::Shape::line(outline(preview(d)), Stroke::new(1.5, t.accent)));
+        let r = preview(d);
+        painter.add(egui::Shape::line(outline(r), Stroke::new(1.5, t.accent)));
+        // The size while drawing or resizing, the position while moving, beside the pointer.
+        let (labels, values, cur) = match *d {
+            ArtboardDrag::Move { cur, .. } => (["X:", "Y:"], crate::canvas::size_readout(app, [0.0, 0.0, r[0] as f64, r[1] as f64]), cur),
+            ArtboardDrag::New { cur, .. } | ArtboardDrag::Resize { cur, .. } => (["W:", "H:"], crate::canvas::size_readout(app, as_f64(r)), cur),
+        };
+        let at = xf.to_screen(cur[0] as f32, cur[1] as f32);
+        crate::canvas::draw_value_readout(app, painter.ctx(), "artboard-readout", at, labels, values);
+    }
+    if moving_with_move_tool {
+        return;
     }
     let Some((_, r)) = active_board(app).filter(|_| !matches!(drag, Some(ArtboardDrag::New { .. }))) else { return };
     if drag.is_none()
@@ -295,7 +432,11 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         return false;
     }
     let t = Tokens::get(ui.ctx());
-    let board = active_board(app);
+    // While a board is moved or resized, its fields follow the gesture.
+    let board = active_board(app).map(|(id, r)| match app.ui.artboard_tool.drag {
+        Some(d @ (ArtboardDrag::Move { id: did, .. } | ArtboardDrag::Resize { id: did, .. })) if did == id => (id, preview(&d)),
+        _ => (id, r),
+    });
     let preset = board.and_then(|(id, _)| app.session.active()?.doc.layer(id)?.artboard().map(|a| a.preset.clone()));
     let mut edit: Option<Value> = None;
     ui.add_enabled_ui(board.is_some(), |ui| {
@@ -424,6 +565,125 @@ mod tests {
         tool_event(&mut app, ToolEvent::Move { x: 160.0, y: 85.0, pressure: 1.0 }, m);
         tool_event(&mut app, ToolEvent::Up { x: 160.0, y: 85.0 }, m);
         assert_eq!(boards(&app), vec![photocraft_geom::Rect::new(20, 30, 160, 100)]);
+    }
+
+    /// With View › Snap on, a board drawn near the canvas corners snaps to them, a dragged edge
+    /// snaps to the canvas edge (only on its own axis), and a board moved near the left edge
+    /// snaps its left edge to it.
+    #[test]
+    fn boards_snap_to_the_canvas_when_drawn_resized_and_moved() {
+        let mut app = app();
+        app.ui.extras.snap = true;
+        let tol = crate::snap_ui::tolerance(&app);
+        assert!(tol > 2.5, "snap tolerance {tol} document px");
+        drag(&mut app, [2.0, 2.0], [398.0, 150.0]);
+        assert_eq!(boards(&app), vec![photocraft_geom::Rect::new(0, 0, 400, 150)]);
+        app.run("edit.undo", json!({})).unwrap();
+        drag(&mut app, [20.0, 30.0], [120.0, 110.0]);
+        // The right edge's handle, grabbed 2 px inside the edge, dragged near the canvas's right edge.
+        drag(&mut app, [118.0, 70.0], [396.0, 73.0]);
+        assert_eq!(boards(&app), vec![photocraft_geom::Rect::new(20, 30, 400, 110)]);
+        // From inside: moved 18 px left, 2 px from the canvas edge: it snaps to x = 0.
+        drag(&mut app, [200.0, 70.0], [182.0, 70.0]);
+        assert_eq!(boards(&app)[0].x0, 0);
+        // Snap off: the same gestures land where the pointer is.
+        app.ui.extras.snap = false;
+        drag(&mut app, [200.0, 70.0], [203.0, 70.0]);
+        assert_eq!(boards(&app)[0].x0, 3);
+    }
+
+    /// A board snapped to a guide on a half pixel lands on a whole one, and the snap line shows
+    /// where it landed: 22.5 rounds up when drawing, and a 17.5 px move left rounds to 18.
+    #[test]
+    fn snap_lines_follow_the_board_onto_whole_pixels() {
+        let mut app = app();
+        app.ui.extras.snap = true;
+        app.run("view.newGuide", json!({"orientation": "vertical", "position": 22.5})).unwrap();
+        let m = egui::Modifiers::NONE;
+        let line_x = |app: &PhotocraftApp| app.prefs_rt.snap_lines.iter().find(|l| l.vertical).map(|l| l.pos);
+        tool_event(&mut app, ToolEvent::Down { x: 100.0, y: 30.0, pressure: 1.0 }, m);
+        tool_event(&mut app, ToolEvent::Move { x: 21.0, y: 110.0, pressure: 1.0 }, m);
+        assert_eq!(line_x(&app), Some(23.0));
+        tool_event(&mut app, ToolEvent::Up { x: 21.0, y: 110.0 }, m);
+        assert_eq!(boards(&app)[0].x0, 23);
+        app.run("edit.undo", json!({})).unwrap();
+        drag(&mut app, [40.0, 30.0], [140.0, 110.0]);
+        tool_event(&mut app, ToolEvent::Down { x: 90.0, y: 70.0, pressure: 1.0 }, m);
+        tool_event(&mut app, ToolEvent::Move { x: 73.0, y: 70.0, pressure: 1.0 }, m);
+        assert_eq!(line_x(&app), Some(22.0));
+        tool_event(&mut app, ToolEvent::Up { x: 73.0, y: 70.0 }, m);
+        assert_eq!(boards(&app)[0].x0, 22);
+    }
+
+    /// A board drawn around layers takes them in (the engine's `adopt`), in one undo step.
+    #[test]
+    fn a_drawn_board_takes_in_the_layers_inside_it() {
+        let mut app = app();
+        app.run("layer.new.layer", json!({"name": "Inside"})).unwrap();
+        app.run("paint.pencil", json!({"points": [[50, 50], [80, 60]], "size": 6, "color": "#ff0000"})).unwrap();
+        app.run("layer.new.layer", json!({"name": "Outside"})).unwrap();
+        app.run("paint.pencil", json!({"points": [[300, 250], [380, 280]], "size": 6, "color": "#0000ff"})).unwrap();
+        drag(&mut app, [20.0, 20.0], [150.0, 120.0]);
+        let st = app.session.active().unwrap();
+        let board = st.doc.artboards()[0].0;
+        let names: Vec<&str> = st.doc.layer(board).unwrap().children().unwrap().iter().map(|l| l.name.as_str()).collect();
+        assert_eq!(names, ["Inside"]);
+        assert!(st.doc.layers.iter().any(|l| l.name == "Outside"));
+    }
+
+    /// The Move tool drags a board by its outline (or the name strip above it) in one undo step;
+    /// a press inside is left to the Move tool.
+    #[test]
+    fn the_move_tool_drags_a_board_by_its_edge() {
+        let mut app = app();
+        drag(&mut app, [20.0, 30.0], [120.0, 110.0]);
+        app.ui.tool = Tool::Move;
+        let steps = app.session.active().unwrap().history.past_len();
+        // On the left edge.
+        drag(&mut app, [20.0, 70.0], [60.0, 90.0]);
+        assert_eq!(boards(&app), vec![photocraft_geom::Rect::new(60, 50, 160, 130)]);
+        assert_eq!(app.session.active().unwrap().history.past_len(), steps + 1);
+        // Just above the top edge: the name strip.
+        let above = 50.0 - 0.5 * LABEL_PX / f64::from(app.point_zoom());
+        drag(&mut app, [100.0, above], [90.0, above]);
+        assert_eq!(boards(&app), vec![photocraft_geom::Rect::new(50, 50, 150, 130)]);
+        assert!(app.ui.artboard_tool.drag.is_none());
+        // Inside, away from the edges, the press is the Move tool's own (it moves the selected
+        // layer), not a board grab.
+        assert!(!move_tool_pointer(&mut app, ToolEvent::Down { x: 100.0, y: 90.0, pressure: 1.0 }, egui::Modifiers::NONE));
+        assert!(app.ui.artboard_tool.drag.is_none());
+        // A board drag whose release never came (let go outside the window) doesn't take over
+        // the next press elsewhere: the later drag isn't the board's.
+        let none = egui::Modifiers::NONE;
+        assert!(move_tool_pointer(&mut app, ToolEvent::Down { x: 50.0, y: 90.0, pressure: 1.0 }, none));
+        assert!(!move_tool_pointer(&mut app, ToolEvent::Down { x: 100.0, y: 90.0, pressure: 1.0 }, none));
+        assert!(app.ui.artboard_tool.drag.is_none());
+        assert!(!move_tool_pointer(&mut app, ToolEvent::Move { x: 120.0, y: 100.0, pressure: 1.0 }, none));
+        assert_eq!(boards(&app), vec![photocraft_geom::Rect::new(50, 50, 150, 130)]);
+    }
+
+    /// Resizing a board snaps its edge to the layers inside it (to fit it to the artwork) and to
+    /// other boards' edges.
+    #[test]
+    fn resizing_snaps_to_the_contents_and_other_boards() {
+        let mut app = app();
+        app.ui.extras.snap = true;
+        app.run("layer.new.layer", json!({"name": "Art"})).unwrap();
+        app.run("edit.fill", json!({"contents": "color", "color": "#ff0000"})).unwrap();
+        app.run("select.rect", json!({"x": 40, "y": 40, "width": 61, "height": 40})).unwrap();
+        app.run("select.inverse", json!({})).unwrap();
+        app.run("edit.clear", json!({})).unwrap();
+        app.run("select.deselect", json!({})).unwrap();
+        // A board around the art (it takes the layer in), then its right edge dragged 2 px past
+        // the art's right edge (x = 101).
+        drag(&mut app, [20.0, 20.0], [150.0, 100.0]);
+        assert_eq!(app.session.active().unwrap().doc.artboards()[0].2.rect, photocraft_geom::Rect::new(20, 20, 150, 100));
+        drag(&mut app, [150.0, 60.0], [103.0, 60.0]);
+        assert_eq!(boards(&app)[0].x1, 101);
+        // A second board's left edge snaps to the first one's right edge.
+        drag(&mut app, [200.0, 150.0], [300.0, 250.0]);
+        drag(&mut app, [200.0, 200.0], [103.0, 200.0]);
+        assert_eq!(boards(&app)[1].x0, 101);
     }
 
     /// V picks the Move group, ⇧V cycles Move ↔ Artboard as in Photoshop.

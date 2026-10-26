@@ -259,6 +259,31 @@ fn set_artboard(l: &mut Layer, a: Artboard) {
     l.clipped = false;
 }
 
+/// The top-level layers a board drawn over `rect` takes in (the Artboard tool): those at least
+/// half inside it, in their stacking order, removed from the document. Other artboards, the
+/// Background and layers with nothing in them stay where they are. A clip group moves or stays
+/// whole, as its base decides: splitting one would leave clipped layers clipping to another base.
+/// A layer is measured whole, as it moves: a group by its contents, whatever the selection holds.
+fn adopt_layers(doc: &mut Document, rect: Rect) -> Result<Vec<Layer>> {
+    let area = |r: Rect| f64::from(r.width()) * f64::from(r.height());
+    let inside = |l: &Layer| {
+        let b = crate::transform_cmds::whole_layer_bounds(doc, l);
+        area(b) > 0.0 && area(b.intersect(&rect)) >= area(b) * 0.5
+    };
+    let mut ids = Vec::new();
+    // Bottom to top, a clipped layer follows the nearest unclipped layer below it (its base).
+    let mut base_in = false;
+    for l in &doc.layers {
+        if !l.clipped {
+            base_in = l.artboard().is_none() && !doc.is_background(l.id) && inside(l);
+        }
+        if base_in {
+            ids.push(l.id);
+        }
+    }
+    ids.iter().map(|id| doc.remove(*id).ok_or(EngineError::NoLayer(*id))).collect()
+}
+
 fn new_artboard(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "layer.new.artboard";
     let d = s.active().ok_or(EngineError::NoDocument)?;
@@ -289,10 +314,17 @@ fn new_artboard(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let background = background_param(p, cmd)?.unwrap_or_default();
     let name = p.get("name").and_then(Value::as_str).filter(|n| !n.is_empty()).map(str::to_string);
+    let adopt = match p.get("adopt") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(b)) => *b,
+        Some(o) => return Err(bad(cmd, format!("\"adopt\" must be true or false, not {o}"))),
+    };
     let id = s.edit("New Artboard", |doc, active| {
-        let mut g = Layer::group(name.unwrap_or_else(|| next_artboard_name(doc)), vec![]);
+        let children = if adopt { adopt_layers(doc, rect)? } else { Vec::new() };
+        let mut g = Layer::group(name.unwrap_or_else(|| next_artboard_name(doc)), children);
         set_artboard(&mut g, Artboard { rect, background, preset });
         let id = doc.insert_above(None, g);
+        crate::layer_multi_cmds::check_group_depth(doc, "New Artboard")?;
         fit_canvas(doc);
         *active = Some(id);
         Ok(id)
@@ -671,7 +703,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "layer.new.artboard",
             "Artboard…",
             &["Layer", "New"],
-            r##"{"rect":[x,y,w,h]? | "x","y","width","height"? (default: canvas size, right of the last board),"preset":"iPhone 14|Web 1920|A4|…"?,"name":str?,"background":"white|black|transparent|custom"="white","color":[r,g,b]|"#rrggbb"? (custom)} → {layer, rect}"##,
+            r##"{"rect":[x,y,w,h]? | "x","y","width","height"? (default: canvas size, right of the last board),"preset":"iPhone 14|Web 1920|A4|…"?,"name":str?,"background":"white|black|transparent|custom"="white","color":[r,g,b]|"#rrggbb"? (custom),"adopt":bool=false (move the top-level layers at least half inside the board into it, clip groups whole, as the Artboard tool does)} → {layer, rect}"##,
             has_doc,
             new_artboard
         ),

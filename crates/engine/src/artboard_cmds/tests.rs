@@ -641,6 +641,87 @@ fn add_beside_places_a_board_on_each_side_and_alt_duplicates_contents() {
     assert!(s.execute("layer.artboard.addBeside", json!({"side": "diagonal"})).is_err());
 }
 
+/// The Artboard tool's board takes in the top-level layers at least half inside it, keeps their
+/// order, and leaves the Background, layers mostly outside and other boards alone.
+#[test]
+fn new_artboard_adopts_the_layers_inside_it() {
+    let mut s = session(8);
+    let bg = doc(&s).layers[0].id;
+    let a = add_square(&mut s, Rect::new(10, 10, 30, 30), [1.0, 0.0, 0.0, 1.0]);
+    let b = add_square(&mut s, Rect::new(20, 20, 40, 40), [0.0, 1.0, 0.0, 1.0]);
+    let out = add_square(&mut s, Rect::new(45, 10, 95, 30), [0.0, 0.0, 1.0, 1.0]);
+    let r = s.execute("layer.new.artboard", json!({"rect": [0, 0, 50, 50], "adopt": true})).unwrap();
+    let board = LayerId(r["layer"].as_u64().unwrap());
+    let kids: Vec<LayerId> = doc(&s).layer(board).unwrap().children().unwrap().iter().map(|l| l.id).collect();
+    assert_eq!(kids, vec![a, b], "bottom to top, as they were stacked");
+    for id in [bg, out] {
+        assert!(doc(&s).layers.iter().any(|l| l.id == id), "{id:?} stays top-level");
+    }
+    // One undo step puts everything back.
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(doc(&s).artboards().is_empty());
+    assert_eq!(doc(&s).layers.len(), 4);
+    // Without `adopt` (the default) the board starts empty.
+    let r = s.execute("layer.new.artboard", json!({"rect": [0, 0, 50, 50]})).unwrap();
+    let board = LayerId(r["layer"].as_u64().unwrap());
+    assert!(doc(&s).layer(board).unwrap().children().unwrap().is_empty());
+    // A non-boolean flag is refused and changes nothing.
+    let before: Vec<LayerId> = doc(&s).layers.iter().map(|l| l.id).collect();
+    for bad in [json!("yes"), json!(1), json!([true])] {
+        assert!(s.execute("layer.new.artboard", json!({"rect": [0, 0, 50, 50], "adopt": bad})).is_err(), "{bad}");
+    }
+    assert_eq!(doc(&s).layers.iter().map(|l| l.id).collect::<Vec<_>>(), before);
+    assert_eq!(doc(&s).artboards().len(), 1);
+    // A board drawn over other boards takes the loose layers but never another board.
+    let r = s.execute("layer.new.artboard", json!({"rect": [0, 0, 50, 50], "adopt": true})).unwrap();
+    let kids: Vec<LayerId> = doc(&s).layer(LayerId(r["layer"].as_u64().unwrap())).unwrap().children().unwrap().iter().map(|l| l.id).collect();
+    assert_eq!(kids, vec![a, b]);
+    assert_eq!(doc(&s).artboards().len(), 2);
+}
+
+#[test]
+fn new_artboard_adopts_clip_groups_whole() {
+    let mut s = session(8);
+    let clip = |s: &mut Session, id: LayerId| {
+        s.execute("layer.setProps", json!({"layer": id.0, "clipped": true})).unwrap();
+    };
+    // A base inside the board with a clipped layer mostly outside it: both go in.
+    let base_in = add_square(&mut s, Rect::new(10, 10, 30, 30), [1.0, 0.0, 0.0, 1.0]);
+    let clipped_out = add_square(&mut s, Rect::new(40, 10, 90, 30), [0.0, 1.0, 0.0, 1.0]);
+    clip(&mut s, clipped_out);
+    // A base outside with a clipped layer inside: both stay.
+    let base_out = add_square(&mut s, Rect::new(60, 60, 90, 90), [0.0, 0.0, 1.0, 1.0]);
+    let clipped_in = add_square(&mut s, Rect::new(10, 35, 20, 45), [1.0, 1.0, 0.0, 1.0]);
+    clip(&mut s, clipped_in);
+    let r = s.execute("layer.new.artboard", json!({"rect": [0, 0, 50, 50], "adopt": true})).unwrap();
+    let board = doc(&s).layer(LayerId(r["layer"].as_u64().unwrap())).unwrap();
+    let kids: Vec<(LayerId, bool)> = board.children().unwrap().iter().map(|l| (l.id, l.clipped)).collect();
+    assert_eq!(kids, vec![(base_in, false), (clipped_out, true)], "the whole clip group, still clipped");
+    let top: Vec<LayerId> = doc(&s).layers.iter().map(|l| l.id).collect();
+    assert!(top.contains(&base_out) && top.contains(&clipped_in), "the outside clip group stays whole");
+    assert!(doc(&s).layer(clipped_in).unwrap().clipped);
+}
+
+/// A group is measured by its contents (it offers no snap rect, so it was never taken in), and
+/// a layer by all of it, whatever the selection holds.
+#[test]
+fn new_artboard_adopts_groups_and_ignores_the_selection() {
+    let mut s = session(8);
+    let inner = add_square(&mut s, Rect::new(10, 10, 30, 30), [1.0, 0.0, 0.0, 1.0]);
+    let group = LayerId(s.execute("layer.groupLayers", json!({})).unwrap()["layer"].as_u64().unwrap());
+    let clipped = add_square(&mut s, Rect::new(15, 15, 25, 25), [0.0, 1.0, 0.0, 1.0]);
+    s.execute("layer.setProps", json!({"layer": clipped.0, "clipped": true})).unwrap();
+    // Mostly inside the board; the selection holds only its part outside.
+    let loose = add_square(&mut s, Rect::new(25, 35, 65, 45), [0.0, 0.0, 1.0, 1.0]);
+    s.execute("select.rect", json!({"x": 55, "y": 30, "width": 25, "height": 20})).unwrap();
+    let r = s.execute("layer.new.artboard", json!({"rect": [0, 0, 50, 50], "adopt": true})).unwrap();
+    let board = doc(&s).layer(LayerId(r["layer"].as_u64().unwrap())).unwrap();
+    let kids: Vec<LayerId> = board.children().unwrap().iter().map(|l| l.id).collect();
+    assert_eq!(kids, vec![group, clipped, loose], "the group, its clipped layer and the loose layer");
+    assert_eq!(doc(&s).layer(group).unwrap().children().unwrap()[0].id, inner);
+    assert!(doc(&s).layer(clipped).unwrap().clipped);
+}
+
 /// Adding a duplicated artboard beside another appends "copy" to its name only while the Layers panel option is on.
 #[test]
 fn add_beside_duplicate_honors_panel_copy_name_preference() {

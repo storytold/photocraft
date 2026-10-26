@@ -36,6 +36,9 @@ pub enum Gesture {
     DrawMove { rect: [f64; 4] },
     /// A guide being moved with the Move tool.
     Guide,
+    /// A handle grabbed up to its grab radius away from the pointer (an artboard's edge or
+    /// corner): the handle snaps, not the pointer, on the `axes` it moves (x, y).
+    Handle { point: [f64; 2], axes: [bool; 2] },
     /// Default crop mode, a drag inside an upright box: the image moves under it, so the frame
     /// moves the other way over the document and its edges and centre snap ([`crop_image`]).
     CropImage,
@@ -230,6 +233,9 @@ fn begin(app: &mut PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) {
         }
     } else if tool == Tool::Move && crate::rulers::guide_at(app, p[0], p[1]).is_some() {
         Some((Gesture::Guide, Vec::new()))
+    } else if let Some(g) = (tool == Tool::Move && !mods.command && !mods.alt).then(|| crate::artboard_tool::move_tool_snap(app, p)).flatten() {
+        // The Move tool grabbed a board by its outline: the board snaps, as with the Artboard tool.
+        Some(g)
     } else if tool == Tool::Move || moves_layer {
         let exclude = app.session.active().map(|s| s.selected_layers()).unwrap_or_default();
         moving_rect(app, tool).map(|rect| (Gesture::Move { rect }, exclude))
@@ -265,6 +271,10 @@ fn begin(app: &mut PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) {
         // doesn't snap to its own layer.
         let exclude = if cut { app.session.active().map(|s| s.selected_layers()).unwrap_or_default() } else { Vec::new() };
         selection_rect(app).map(|rect| (Gesture::SelectionMove { rect }, exclude))
+    } else if tool == Tool::Artboard {
+        // A new board snaps its corners, a moved board its edges and centre, a resized one the
+        // dragged edge (never to itself or its contents).
+        crate::artboard_tool::snap_gesture(app, p)
     } else if tool.is_type()
         && let Some(layer) = app.ui.text_edit.as_ref().map(|e| LayerId(e.layer))
     {
@@ -335,6 +345,14 @@ fn apply(app: &mut PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) -> [f64; 2
         }
         Gesture::TransformCorner { .. } => snap.targets.snap_point(p, tol),
         Gesture::Guide => snap.targets.snap_point(p, tol),
+        Gesture::Handle { point, axes } => {
+            let proposed = [point[0] + p[0] - snap.start[0], point[1] + p[1] - snap.start[1]];
+            let (h, mut lines) = snap.targets.snap_point(proposed, tol);
+            // An edge handle moves on one axis: the other neither snaps nor shows a line.
+            let h = [if axes[0] { h[0] } else { proposed[0] }, if axes[1] { h[1] } else { proposed[1] }];
+            lines.retain(|l| axes[usize::from(!l.vertical)]);
+            ([p[0] + h[0] - proposed[0], p[1] + h[1] - proposed[1]], lines)
+        }
         Gesture::Move { rect } | Gesture::TransformMove { rect } | Gesture::SelectionMove { rect } | Gesture::DrawMove { rect } => {
             let d = [p[0] - snap.start[0], p[1] - snap.start[1]];
             let moved = [rect[0] + d[0], rect[1] + d[1], rect[2] + d[0], rect[3] + d[1]];
