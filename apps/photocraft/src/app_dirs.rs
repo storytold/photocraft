@@ -1,5 +1,6 @@
 //! Where the desktop app keeps its per-user data: preferences, brush presets, crash-recovery
-//! autosaves and the GPU startup marker all live under the one directory [`config_dir`] returns.
+//! autosaves, imported ICC profiles and the GPU startup marker all live under the one directory
+//! [`config_dir`] returns.
 //!
 //! In order:
 //! 1. `PHOTOCRAFT_CONFIG_DIR`, when set (tests, agents, custom setups).
