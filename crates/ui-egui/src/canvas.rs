@@ -1530,7 +1530,8 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> (std::sync::Ar
         && pv.doc.id == st.doc.id
         && st.doc.layer(photocraft_doc::LayerId(t.layer)).is_some()
     {
-        return (pv.doc.clone(), (1 << 40) + pv.session);
+        let shown = (pv.doc.clone(), crate::transform_tool::PREVIEW_BASE + pv.session);
+        return crate::transform_tool::live_mask_doc(app).unwrap_or(shown);
     }
     // Layer Style dialog: show its effects live (Cancel just drops the preview).
     let style = app.ui.dialogs.iter().find(|d| d.kind == crate::state::DialogKind::LayerStyle);
@@ -2007,6 +2008,13 @@ pub(crate) fn damage_since(app: &PhotocraftApp, idx: usize, seen: (u64, u64), no
     if seen.0 == now.0
         && let Some(st) = app.session.documents().get(idx)
         && let Some(r) = crate::type_transform::damage(app, st.doc.id, now.0, seen.1 ^ display_key, now.1)
+    {
+        return Some(if r.is_empty() { r } else { r.inflate(effect_reach(&st.doc.layers)) });
+    }
+    // Between a lone layer mask's Free Transform frames: where its moving values are.
+    if seen.0 == now.0
+        && let Some(st) = app.session.documents().get(idx)
+        && let Some(r) = crate::transform_tool::live_mask_damage(app, st.doc.id, now.0, seen.1 ^ display_key, now.1)
     {
         return Some(if r.is_empty() { r } else { r.inflate(effect_reach(&st.doc.layers)) });
     }

@@ -9,6 +9,7 @@
 //! cancels. Undo and Redo step through the session's own changes (`Steps`), not the document's
 //! history.
 
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 use egui::{Color32, CursorIcon, Pos2, Stroke, pos2, vec2};
@@ -91,6 +92,29 @@ pub struct TransformPreview {
     committing: Option<JobId>,
     /// Content-Aware Scale's live preview (cas_transform.rs).
     pub(crate) content_aware: Option<crate::cas_transform::Live>,
+    /// A lone layer mask's live preview ([`live_mask_doc`]).
+    live_mask: Option<LiveMask>,
+}
+
+/// Preview key of a session's `doc` (`canvas::display_doc`): `PREVIEW_BASE + session`.
+pub(crate) const PREVIEW_BASE: u64 = 1 << 40;
+/// Preview keys of a lone layer mask's live frames: `LIVE_MASK_BASE | id`.
+const LIVE_MASK_BASE: u64 = 1 << 43;
+
+/// The live preview of a lone layer mask (#9650): the document with the mask where the box puts
+/// it now, so the canvas shows the layer masked as the commit will leave it, as Photoshop does,
+/// instead of the mask's values in grey over the layer. The canvas recomposites only where the
+/// moving values are ([`live_mask_damage`]).
+struct LiveMask {
+    /// The moving values, grey + alpha (`split_gray_selected`).
+    lifted: photocraft_raster::Surface,
+    /// The revision of the document the session began from.
+    revision: u64,
+    /// The box the latest frame was built for, and that frame (`None` when it couldn't be).
+    quad: Option<[[f64; 2]; 4]>,
+    shown: Option<(Arc<Document>, u64)>,
+    /// Where each frame shown so far differs from `doc` (the values vacated), by preview key.
+    areas: VecDeque<(u64, photocraft_geom::Rect)>,
 }
 
 /// What [`follow_edits`] needs to rebuild the preview document.
@@ -263,6 +287,7 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
         tool: app.ui.tool,
         path: None,
         content_aware: None,
+        live_mask: None,
     });
     app.ui.transform = Some(TransformSession {
         session,
@@ -363,6 +388,7 @@ pub(crate) fn begin_content_aware(
         tool: app.ui.tool,
         path: None,
         content_aware: Some(live),
+        live_mask: None,
         styled: None,
     });
     app.ui.transform = Some(TransformSession {
@@ -459,6 +485,10 @@ fn begin_lone(
     };
     let (lifted, rest) = tc::split_gray_selected(&surf, sel).map_err(|e| e.to_string())?.ok_or("this channel can't be transformed")?;
     crate::type_tool::commit(app);
+    // Alpha channels and the Quick Mask keep the grey preview: only a layer mask shows through
+    // a layer.
+    let revision = app.session.active().map_or(0, |st| st.revision);
+    let live_mask = (target == json!("mask")).then(|| LiveMask { lifted: lifted.clone(), revision, quad: None, shown: None, areas: VecDeque::new() });
     let layer = app.session.active().and_then(|st| st.active_layer).map_or(0, |l| l.0);
     let mut pd = (*doc).clone();
     let tp = json!({ "target": target });
@@ -489,6 +519,7 @@ fn begin_lone(
         tool: app.ui.tool,
         path: None,
         content_aware: None,
+        live_mask,
     });
     app.ui.transform = Some(TransformSession {
         session,
@@ -508,6 +539,62 @@ fn begin_lone(
     });
     start_steps(app);
     Ok(())
+}
+
+/// The document to show while a lone layer mask's box is open: the mask where the box puts it
+/// now ([`LiveMask`]), built again only when the box changes. `None` for other sessions, or
+/// when the frame can't be built (past the transform budget, a degenerate box): the canvas then
+/// shows the mask vacated and [`draw_content`] the grey values.
+pub(crate) fn live_mask_doc(app: &mut PhotocraftApp) -> Option<(Arc<Document>, u64)> {
+    let (t, pv) = (app.ui.transform.as_ref()?, app.transform_preview.as_ref()?);
+    let live = pv.live_mask.as_ref()?;
+    if live.quad == Some(t.quad) {
+        return live.shown.clone();
+    }
+    let key = LIVE_MASK_BASE | (app.ui.alloc_id() & (LIVE_MASK_BASE - 1));
+    let started = crate::gpu_canvas::now_ms();
+    let (t, pv) = (app.ui.transform.as_ref()?, app.transform_preview.as_mut()?);
+    let live = pv.live_mask.as_mut()?;
+    live.quad = Some(t.quad);
+    live.shown = None;
+    // Bilinear keeps a frame cheap while the box moves; the commit uses the chosen interpolation.
+    let interp = if t.interpolation == "nearest" { photocraft_algo::transform::Interp::Nearest } else { photocraft_algo::transform::Interp::Bilinear };
+    let h = Homography::rect_to_quad(t.rect, t.quad)?;
+    let mut doc = (*pv.doc).clone();
+    let params = json!({ "target": t.target.clone()? });
+    let surf = photocraft_engine::transform_cmds::lone_target_mut(&mut doc, Some(LayerId(t.layer)), &params).ok()??;
+    *surf = photocraft_engine::transform_cmds::moved_gray(surf, &live.lifted, &h, interp).ok()?;
+    let (min, max) = t.quad.iter().fold(([f64::MAX; 2], [f64::MIN; 2]), |(lo, hi), q| ([lo[0].min(q[0]), lo[1].min(q[1])], [hi[0].max(q[0]), hi[1].max(q[1])]));
+    let edge = |v: f64| v.clamp(-1e9, 1e9) as i32;
+    let area =
+        photocraft_geom::Rect::new(edge(min[0].floor()), edge(min[1].floor()), edge(max[0].ceil()), edge(max[1].ceil())).inflate(2).intersect(&doc.bounds());
+    if live.areas.len() >= 128 {
+        live.areas.pop_front();
+    }
+    live.areas.push_back((key, area));
+    live.shown = Some((Arc::new(doc), key));
+    let shown = live.shown.clone();
+    app.perf.span("transform mask preview", crate::gpu_canvas::now_ms() - started);
+    shown
+}
+
+/// What changed between preview keys `seen` and `now` of document `doc` at `revision` while a lone
+/// layer mask's box is open: where the moving values are in either frame. `None` when either key
+/// isn't one of this session's (the canvas then recomposites everything).
+pub(crate) fn live_mask_damage(app: &PhotocraftApp, doc: DocId, revision: u64, seen: u64, now: u64) -> Option<photocraft_geom::Rect> {
+    let pv = app.transform_preview.as_ref().filter(|pv| pv.doc.id == doc)?;
+    let live = pv.live_mask.as_ref().filter(|l| l.revision == revision)?;
+    let area = |key: u64| {
+        if key == PREVIEW_BASE + pv.session { Some(photocraft_geom::Rect::EMPTY) } else { live.areas.iter().find(|(k, _)| *k == key).map(|(_, r)| *r) }
+    };
+    let (a, b) = (area(seen)?, area(now)?);
+    Some(if a.is_empty() {
+        b
+    } else if b.is_empty() {
+        a
+    } else {
+        a.union(&b)
+    })
 }
 
 /// Edit › Free Transform Path: the box frames the path's anchors and handles and draws the
@@ -539,6 +626,7 @@ fn begin_path(app: &mut PhotocraftApp, ctx: &egui::Context, params: serde_json::
         tool: app.ui.tool,
         path: Some(path),
         content_aware: None,
+        live_mask: None,
         above: None,
         follow: None,
         committing: None,
@@ -627,6 +715,7 @@ pub fn begin_selection(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(
         tool: app.ui.tool,
         path: None,
         content_aware: None,
+        live_mask: None,
     });
     app.ui.transform = Some(TransformSession {
         session,
@@ -2231,6 +2320,8 @@ pub fn draw_content(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
         mesh.add_triangle(0, 1, 2);
         mesh.add_triangle(0, 2, 3);
         painter.add(clip_to_canvas(mesh, canvas_size(pv), |p| xf.to_screen(p.x, p.y)));
+    } else if pv.live_mask.as_ref().is_some_and(|l| l.shown.is_some()) {
+        // A lone layer mask shows in the document itself (`live_mask_doc`).
     } else if let Some(h) = Homography::rect_to_quad([0.0, 0.0, 1.0, 1.0], t.quad) {
         // A 24×24 grid keeps perspective previews straight.
         let n = 24;
@@ -6146,6 +6237,87 @@ mod tests {
         begin(&mut app, &ctx).unwrap();
         enter_warp(&mut app, &egui::Context::default());
         assert!(app.ui.transform.as_ref().unwrap().warp.is_none());
+    }
+
+    /// #9650: the canvas shows the layer masked by the mask where the box puts it, rebuilt only
+    /// when the box changes, and recomposites only where the mask moves.
+    #[test]
+    fn a_lone_mask_previews_live_through_its_layer() {
+        let mut app = masked_app(false);
+        app.ui.mask_target = true;
+        begin(&mut app, &gpu_ctx()).unwrap();
+        let (id, revision) = {
+            let st = app.session.active().unwrap();
+            (st.doc.id, st.revision)
+        };
+        let layer = app.session.active().unwrap().active_layer.unwrap();
+        let mask_at = |d: &Document, x, y| d.layer(layer).unwrap().mask.as_ref().unwrap().surface.sample_channel(x, y, 0);
+        // Green over the white Background where the mask hides the red square, none where it shows.
+        let shows = |d: &Document, x, y| photocraft_compose::render(d, photocraft_geom::Rect::new(x, y, x + 1, y + 1)).px[0][1] < 0.01;
+        // Untouched, the canvas shows the mask where it is, not vacated.
+        let (first, k0) = crate::canvas::display_doc(&mut app, 0);
+        assert!(mask_at(&first, 4, 4) < 0.01 && mask_at(&first, 30, 4) > 0.99);
+        assert!(!shows(&first, 12, 12) && shows(&first, 20, 12), "x < 16 of the square is hidden");
+        let xf = ViewXform {
+            rect: egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(128.0, 128.0)),
+            zoom: 2.0,
+            center: [32.0, 32.0],
+            flip: false,
+            rotation: 0.0,
+            aspect: 1.0,
+        };
+        assert!(preview_meshes(&app, &xf).is_empty(), "no grey mesh over the layer");
+        // 6 px right: the hidden part follows the box, the pixels stay.
+        let t = app.ui.transform.as_mut().unwrap();
+        t.quad = t.quad.map(|[x, y]| [x + 6.0, y]);
+        let (moved, k1) = crate::canvas::display_doc(&mut app, 0);
+        assert_ne!(k0, k1);
+        assert!(!shows(&moved, 20, 12) && shows(&moved, 23, 12), "hidden up to x 22 now");
+        assert!(mask_at(&moved, 2, 4) > 0.99, "the vacated strip reveals");
+        assert_eq!(moved.layer(layer).unwrap().surface().unwrap().content_bounds(), photocraft_geom::Rect::new(8, 8, 24, 24), "pixels untouched");
+        // The same box again builds nothing.
+        let (again, k2) = crate::canvas::display_doc(&mut app, 0);
+        assert_eq!(k1, k2);
+        assert!(Arc::ptr_eq(&moved, &again));
+        // Damage: where the mask's values are in either frame, not the whole canvas.
+        assert_eq!(live_mask_damage(&app, id, revision, k0, k1), Some(photocraft_geom::Rect::new(0, 0, 24, 64)));
+        let vacated = PREVIEW_BASE + app.transform_preview.as_ref().unwrap().session;
+        assert_eq!(live_mask_damage(&app, id, revision, vacated, k1), Some(photocraft_geom::Rect::new(4, 0, 24, 64)));
+        assert_eq!(live_mask_damage(&app, id, revision + 1, k0, k1), None, "another revision");
+        assert_eq!(live_mask_damage(&app, id, revision, 12345, k1), None, "a key of no frame");
+        // A box the engine refuses falls back to the grey values over the vacated mask.
+        let t = app.ui.transform.as_mut().unwrap();
+        t.quad = [[0.0, 0.0], [1e7, 0.0], [1e7, 1e7], [0.0, 1e7]];
+        let (_, k3) = crate::canvas::display_doc(&mut app, 0);
+        assert_eq!(k3, vacated);
+        assert!(!preview_meshes(&app, &xf).is_empty(), "the grey values show instead");
+        // The commit leaves the mask the preview showed.
+        let t = app.ui.transform.as_mut().unwrap();
+        t.quad = corners(t.rect).map(|[x, y]| [x + 6.0, y]);
+        commit(&mut app);
+        assert!(!app.ui.status_error, "{}", app.ui.status);
+        let st = app.session.active().unwrap();
+        for x in [2, 20, 23, 40] {
+            assert!((mask_at(&st.doc, x, 4) - mask_at(&moved, x, 4)).abs() < 0.01, "x {x}");
+        }
+    }
+
+    /// An alpha channel keeps the grey preview: it masks no layer.
+    #[test]
+    fn a_lone_alpha_channel_keeps_the_grey_preview() {
+        let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+        app.run("channel.new", json!({"name": "Alpha", "fill": "black"})).unwrap();
+        app.session
+            .edit("Fixture", |doc, _| {
+                doc.channels[0].surface.fill_rect(photocraft_geom::Rect::new(4, 4, 20, 20), &[1.0]);
+                Ok(())
+            })
+            .unwrap();
+        app.session.active_mut().unwrap().channel_view.target = photocraft_engine::channel_cmds::ChannelTarget::Alpha(0);
+        begin(&mut app, &gpu_ctx()).unwrap();
+        assert_eq!(app.ui.transform.as_ref().unwrap().target, Some(json!({"channel": 0})));
+        assert!(app.transform_preview.as_ref().unwrap().live_mask.is_none());
+        assert!(live_mask_doc(&mut app).is_none());
     }
 
     #[test]

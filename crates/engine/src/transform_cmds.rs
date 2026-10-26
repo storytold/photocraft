@@ -161,12 +161,25 @@ pub(crate) fn move_gray_selected(
     warp: &dyn Fn(&Surface, Rect) -> Result<Surface>,
     whole: &dyn Fn(&Surface) -> Result<Surface>,
 ) -> Result<Surface> {
-    let Some((lifted, mut out)) = split_gray_selected(s, sel)? else { return whole(s) };
+    let Some((lifted, out)) = split_gray_selected(s, sel)? else { return whole(s) };
+    lay_moved(out, &lifted, warp)
+}
+
+/// A lone mask or channel as Free Transform leaves it, for the live preview of the box: `rest`
+/// with `lifted` moved through `h` laid over it (both from [`split_gray_selected`]). Refused
+/// past the transform budget, as the commit is.
+pub fn moved_gray(rest: &Surface, lifted: &Surface, h: &Homography, interp: Interp) -> Result<Surface> {
+    check_budget(lifted.content_bounds(), h, "mask or channel", rest.format())?;
+    lay_moved(rest.clone(), lifted, &|l, src| Ok(warp_surface(l, src, h, interp)?))
+}
+
+/// `out` with the grey + alpha values of `lifted`, moved by `warp`, laid over it.
+fn lay_moved(mut out: Surface, lifted: &Surface, warp: &dyn Fn(&Surface, Rect) -> Result<Surface>) -> Result<Surface> {
     let src = lifted.content_bounds();
     if src.is_empty() {
         return Ok(out);
     }
-    let w = warp(&lifted, src)?;
+    let w = warp(lifted, src)?;
     let b = w.content_bounds();
     if !b.is_empty() {
         let moved = crate::allocation::read_region(&w, b, "compositing transformed mask pixels")?;
@@ -1372,6 +1385,41 @@ mod tests {
         assert!(mask_at(&s, 12, 65) < 0.01 && mask_at(&s, 12, 15) > 0.99);
         assert!(mask_at(&s, 17, 15) < 0.01, "unselected mask stays");
         assert_eq!(active_bounds(&s), Rect::new(10, 10, 30, 20), "pixels untouched");
+    }
+
+    /// The live preview's mask is the one the commit leaves, with and without a selection.
+    #[test]
+    fn moved_gray_matches_the_committed_mask() {
+        for selected in [false, true] {
+            let mut s = masked(&[Rect::new(10, 10, 20, 20)], false);
+            if selected {
+                s.execute("select.rect", json!({"x": 10, "y": 10, "width": 5, "height": 10})).unwrap();
+            }
+            let st = s.active().unwrap();
+            let id = st.active_layer;
+            let surf = lone_target(&st.doc, id, &json!({"target": "mask"})).unwrap().unwrap().clone();
+            let sel = st.doc.selection.clone().unwrap_or_else(|| {
+                let mut w = Surface::new(PixelFormat::GRAY8);
+                w.fill_rect(target_frame(&st.doc, &surf), &[1.0]);
+                w
+            });
+            let (lifted, rest) = split_gray_selected(&surf, &sel).unwrap().unwrap();
+            let h = Homography([1.0, 0.0, 7.0, 0.0, 1.0, 30.0, 0.0, 0.0, 1.0]);
+            let live = moved_gray(&rest, &lifted, &h, Interp::Bicubic).unwrap();
+            s.execute("edit.transform", json!({"matrix": [1, 0, 0, 1, 7, 30], "target": "mask"})).unwrap();
+            let st = s.active().unwrap();
+            let committed = &st.doc.layer(id.unwrap()).unwrap().mask.as_ref().unwrap().surface;
+            let area = Rect::new(0, 0, 64, 64);
+            assert_eq!(live.read_region(area), committed.read_region(area), "selected: {selected}");
+        }
+        // Past the budget it is refused, not built.
+        let s = masked(&[Rect::new(10, 10, 20, 20)], false);
+        let surf = lone_target(&s.active().unwrap().doc, s.active().unwrap().active_layer, &json!({"target": "mask"})).unwrap().unwrap().clone();
+        let mut sel = Surface::new(PixelFormat::GRAY8);
+        sel.fill_rect(Rect::new(0, 0, 64, 64), &[1.0]);
+        let (lifted, rest) = split_gray_selected(&surf, &sel).unwrap().unwrap();
+        let huge = Homography([1e6, 0.0, 0.0, 0.0, 1e6, 0.0, 0.0, 0.0, 1.0]);
+        assert!(moved_gray(&rest, &lifted, &huge, Interp::Bilinear).is_err());
     }
 
     #[test]
