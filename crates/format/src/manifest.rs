@@ -242,6 +242,9 @@ pub struct LayerM {
     pub advanced: photocraft_doc::AdvancedBlending,
     #[serde(default)]
     pub video: Option<VideoDataM>,
+    /// The layer's own XMP packet (missing in older files = none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub xmp: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -47,7 +47,7 @@ pub fn record(options: DdsOptions, step: &mut serde_json::Value) {
 /// Parks the save behind the prompt. A prompt already waiting is never replaced.
 pub fn park(app: &mut PhotocraftApp, path: String, copy: bool, record: &'static str) -> Result<(), String> {
     if app.save_options_open() {
-        return Err("Answer the TIFF, Targa or DDS Options before starting another save".into());
+        return Err(crate::SAVE_OPTIONS_OPEN.into());
     }
     let doc = app.active_doc_id()?;
     app.dds_options = Some(Prompt { doc, path, options: DdsOptions::default(), copy, record });
@@ -69,7 +69,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let Some(p) = &mut app.dds_options else { return };
     let (mut ok, mut cancel) = (false, false);
     let mut options = p.options;
-    let modal = egui::Modal::new(egui::Id::new("dds-options")).show(ctx, |ui| {
+    let modal = egui::Modal::new(egui::Id::unique("dds-options")).show(ctx, |ui| {
         ui.set_max_width(340.0);
         ui.label(egui::RichText::new(tl!("DDS Options")).font(crate::theme::semibold(15.0)));
         ui.add_space(4.0);

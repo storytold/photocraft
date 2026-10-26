@@ -12,6 +12,8 @@ use crate::commands::{CommandSpec, blend_from_str};
 use crate::presets::{always, bad};
 use crate::{EngineError, Result, Session};
 
+mod gradient_overlay;
+
 /// Parses a gradient style name (`linear`, `radial`, `angle`, `reflected`, `diamond`).
 pub fn gradient_style(s: &str) -> GradientStyle {
     match s.to_ascii_lowercase().as_str() {
@@ -86,19 +88,19 @@ pub fn effect_defaults(kind: &str) -> Value {
             json!({"blend": "Multiply", "color": "#000000", "opacity": 75, "angle": 120, "useGlobalLight": true, "distance": 5, "choke": 0, "size": 5, "contour": "Linear", "antiAlias": false, "noise": 0})
         }
         "outerGlow" => {
-            json!({"blend": "Screen", "opacity": 75, "color": "#ffffbe", "spread": 0, "size": 5, "range": 50, "contour": "Linear", "antiAlias": false, "noise": 0})
+            json!({"blend": "Screen", "opacity": 75, "color": "#ffffbe", "technique": "softer", "spread": 0, "size": 5, "range": 50, "contour": "Linear", "antiAlias": false, "noise": 0})
         }
         "innerGlow" => {
-            json!({"blend": "Screen", "opacity": 75, "color": "#ffffbe", "source": "edge", "choke": 0, "size": 5, "contour": "Linear", "antiAlias": false, "noise": 0})
+            json!({"blend": "Screen", "opacity": 75, "color": "#ffffbe", "technique": "softer", "source": "edge", "choke": 0, "size": 5, "range": 50, "contour": "Linear", "antiAlias": false, "noise": 0})
         }
-        "stroke" => json!({"size": 1, "position": "inside", "blend": "Normal", "opacity": 100, "color": "#000000"}),
+        "stroke" => json!({"size": 1, "position": "inside", "blend": "Normal", "opacity": 100, "overprint": false, "color": "#000000"}),
         "colorOverlay" => json!({"blend": "Normal", "color": "#ff0000", "opacity": 100}),
         "gradientOverlay" => {
-            json!({"blend": "Normal", "opacity": 100, "from": "#000000", "to": "#ffffff", "reverse": false, "style": "linear", "angle": 90, "scale": 100})
+            json!({"blend": "Normal", "opacity": 100, "from": "#000000", "to": "#ffffff", "reverse": false, "style": "linear", "angle": 90, "scale": 100, "method": "custom"})
         }
         "patternOverlay" => json!({"blend": "Normal", "opacity": 100, "pattern": "", "angle": 0, "scale": 100, "link": true}),
         "bevelEmboss" => {
-            json!({"style": "inner", "technique": "smooth", "depth": 100, "direction": "up", "size": 5, "soften": 0, "angle": 120, "useGlobalLight": true, "altitude": 30, "glossContour": "Linear", "contour": false, "contourName": "Linear", "contourRange": 50, "contourAntiAlias": false})
+            json!({"style": "inner", "technique": "smooth", "depth": 100, "direction": "up", "size": 5, "soften": 0, "angle": 120, "useGlobalLight": true, "altitude": 30, "glossContour": "Linear", "glossAntiAlias": false, "highlightBlend": "Screen", "highlightColor": "#ffffff", "highlightOpacity": 75, "shadowBlend": "Multiply", "shadowColor": "#000000", "shadowOpacity": 75, "contour": false, "contourName": "Linear", "contourRange": 50, "contourAntiAlias": false})
         }
         "satin" => {
             json!({"blend": "Multiply", "color": "#000000", "opacity": 50, "angle": 19, "distance": 11, "size": 14, "contour": "Linear", "antiAlias": true, "invert": true})
@@ -460,16 +462,27 @@ pub fn contours_from_shc(bytes: &[u8]) -> Result<Vec<Value>> {
 
 /// An `.shc` file holding `contour` (Contour Editor › Save…).
 pub fn contour_to_shc(contour: &Contour) -> Result<Vec<u8>> {
-    let (name, points) = match contour {
-        Contour::Linear => ("Linear".to_string(), vec![CurvePoint { input: 0.0, output: 0.0 }, CurvePoint { input: 1.0, output: 1.0 }]),
-        Contour::Custom { name, points, .. } => (name.clone(), points.clone()),
-    };
-    let points = points
+    contour_to_shc_all(&[contour])
+}
+
+/// An `.shc` file holding every contour of `list` (Save Contours…).
+pub fn contour_to_shc_all(list: &[&Contour]) -> Result<Vec<u8>> {
+    let file: Vec<photocraft_psd::shc::ShcContour> = list
         .iter()
-        .enumerate()
-        .map(|(i, p)| photocraft_psd::shc::ShcPoint { input: p.input * 255.0, output: p.output * 255.0, continuous: !contour.is_corner(i) })
+        .map(|contour| {
+            let (name, points) = match contour {
+                Contour::Linear => ("Linear".to_string(), vec![CurvePoint { input: 0.0, output: 0.0 }, CurvePoint { input: 1.0, output: 1.0 }]),
+                Contour::Custom { name, points, .. } => (name.clone(), points.clone()),
+            };
+            let points = points
+                .iter()
+                .enumerate()
+                .map(|(i, p)| photocraft_psd::shc::ShcPoint { input: p.input * 255.0, output: p.output * 255.0, continuous: !contour.is_corner(i) })
+                .collect();
+            photocraft_psd::shc::ShcContour { name, points }
+        })
         .collect();
-    photocraft_psd::shc::write(&[photocraft_psd::shc::ShcContour { name, points }]).map_err(|e| EngineError::Other(format!("can't write the contour: {e}")))
+    photocraft_psd::shc::write(&file).map_err(|e| EngineError::Other(format!("can't write the contour: {e}")))
 }
 
 /// An effect of `kind` with its factory settings (before params are applied).
@@ -510,9 +523,12 @@ fn fresh_effect(kind: &str) -> Option<Effect> {
             size: 1.0,
             position: StrokePosition::Inside,
             paint: FxPaint::Color(Color::BLACK),
+            overprint: false,
         }),
         "colorOverlay" => Effect::ColorOverlay { common: FxCommon::new(BlendMode::Normal, 1.0), color: Color::rgb(1.0, 0.0, 0.0) },
-        "gradientOverlay" => Effect::GradientOverlay { common: FxCommon::new(BlendMode::Normal, 1.0), gradient: Gradient::default(), dither: false },
+        "gradientOverlay" => {
+            Effect::GradientOverlay { common: FxCommon::new(BlendMode::Normal, 1.0), gradient: Gradient::default(), dither: false, interpolation: None }
+        }
         "patternOverlay" => Effect::PatternOverlay {
             common: FxCommon::new(BlendMode::Normal, 1.0),
             name: String::new(),
@@ -544,6 +560,7 @@ fn fresh_effect(kind: &str) -> Option<Effect> {
             altitude: 30.0,
             use_global_light: true,
             gloss_contour: Contour::Linear,
+            gloss_anti_alias: false,
             highlight: FxCommon::new(BlendMode::Screen, 0.75),
             highlight_color: Color::WHITE,
             shadow: FxCommon::new(BlendMode::Multiply, 0.75),
@@ -693,6 +710,7 @@ pub fn overlay_effect(fx: &mut Effect, p: &Value) {
                     _ => StrokePosition::Outside,
                 };
             }
+            set_bool(p, "overprint", &mut s.overprint);
             if p.get("from").is_some() {
                 s.paint = FxPaint::Gradient(gradient(p));
             } else if let Some(c) = color_of(p, "color") {
@@ -703,9 +721,9 @@ pub fn overlay_effect(fx: &mut Effect, p: &Value) {
             common(c, p);
             set_color(p, "color", color);
         }
-        Effect::GradientOverlay { common: c, gradient: g, dither } => {
+        Effect::GradientOverlay { common: c, gradient: g, dither, interpolation } => {
             common(c, p);
-            overlay_gradient(g, p);
+            gradient_overlay::overlay(g, interpolation, p);
             if let Some(x) = b_of(p, "dither") {
                 *dither = x;
             }
@@ -792,6 +810,22 @@ pub fn overlay_effect(fx: &mut Effect, p: &Value) {
                 bv.use_global_light = x;
             }
             set_contour(p, "glossContour", &mut bv.gloss_contour);
+            set_bool(p, "glossAntiAlias", &mut bv.gloss_anti_alias);
+            // Keep imported PSD shading settings when a command edits other bevel fields.
+            if let Some(blend) = p.get("highlightBlend").and_then(Value::as_str).and_then(blend_from_str) {
+                bv.highlight.blend = blend;
+            }
+            if let Some(blend) = p.get("shadowBlend").and_then(Value::as_str).and_then(blend_from_str) {
+                bv.shadow.blend = blend;
+            }
+            set_color(p, "highlightColor", &mut bv.highlight_color);
+            set_color(p, "shadowColor", &mut bv.shadow_color);
+            if let Some(x) = f_of(p, "highlightOpacity") {
+                bv.highlight.opacity = (x / 100.0).clamp(0.0, 1.0);
+            }
+            if let Some(x) = f_of(p, "shadowOpacity") {
+                bv.shadow.opacity = (x / 100.0).clamp(0.0, 1.0);
+            }
             // The Contour element: `contour` turns it on/off; its curve, Range and
             // Anti-aliased edit the element in place, so an imported curve survives.
             match b_of(p, "contour") {
@@ -899,6 +933,9 @@ fn replace_effects(s: &mut Session, p: &Value) -> Result<Value> {
             crate::pattern_cmds::ensure_in_doc(doc, pat);
         }
         let mode = doc.mode;
+        if !list.is_empty() {
+            crate::extra_cmds::background_to_layer(doc, id);
+        }
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
         // The list's master switch (`layer.setEffectsVisible`, the Layers panel's "Effects" eye)
         // survives the edit: the dialog models per-effect state, not the switch (#3648). A layer
@@ -922,6 +959,7 @@ fn set_effect(s: &mut Session, p: &Value, kind: &str) -> Result<Value> {
         }
         // Colours in the document's mode, as Image › Mode keeps them.
         let fx = fx.in_mode(doc.mode);
+        crate::extra_cmds::background_to_layer(doc, id);
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
         // Adding or replacing one effect leaves the list's master switch alone (#3648); a fresh
         // effects list already has the default `enabled: true`, so a first effect still shows.
@@ -1002,23 +1040,23 @@ pub fn specs() -> Vec<CommandSpec> {
         style_cmd!(
             "outerGlow",
             "Outer Glow…",
-            r##"{"color":"#rrggbb","opacity":0..100=75,"blend":str="screen","technique":"softer|precise","spread":0..100,"size":px,"range":0..100,"contour":name|curve,"antiAlias":bool,"noise":0..100,"add":bool}"##
+            r##"{"color":"#rrggbb","opacity":0..100=75,"blend":str="screen","technique":"softer|precise","spread":0..100,"size":px,"range":1..100=50,"contour":name|curve,"antiAlias":bool,"noise":0..100,"add":bool}"##
         ),
         style_cmd!(
             "innerGlow",
             "Inner Glow…",
-            r##"{"color":"#rrggbb","opacity":0..100=75,"blend":str="screen","technique":"softer|precise","source":"edge|center","choke":0..100,"size":px,"contour":name|curve,"antiAlias":bool,"noise":0..100,"add":bool}"##
+            r##"{"color":"#rrggbb","opacity":0..100=75,"blend":str="screen","technique":"softer|precise","source":"edge|center","choke":0..100,"size":px,"range":1..100=50,"contour":name|curve,"antiAlias":bool,"noise":0..100,"add":bool}"##
         ),
         style_cmd!(
             "stroke",
             "Stroke…",
-            r##"{"size":px=1,"position":"inside|outside|center","color":"#rrggbb","from":"#rrggbb","to":"#rrggbb","method":"classic|perceptual|linear|smooth"?,"smoothness":0..100=100,"style":str,"angle":deg,"opacity":0..100,"blend":str,"add":bool}"##
+            r##"{"size":px=1,"position":"inside|outside|center","color":"#rrggbb","from":"#rrggbb","to":"#rrggbb","method":"classic|perceptual|linear|smooth"?,"smoothness":0..100=100,"style":str,"angle":deg,"opacity":0..100,"blend":str,"overprint":bool,"add":bool}"##
         ),
         style_cmd!("colorOverlay", "Color Overlay…", r##"{"color":"#rrggbb","opacity":0..100=100,"blend":str,"add":bool}"##),
         style_cmd!(
             "gradientOverlay",
             "Gradient Overlay…",
-            r##"{"from":"#rrggbb","to":"#rrggbb","method":"classic|perceptual|linear|smooth"? (Photoshop's interpolation; omitted: straight stops),"smoothness":0..100=100,"style":"linear|radial|angle|reflected|diamond","angle":deg=90,"scale":10..150=100,"reverse":bool,"opacity":0..100,"blend":str,"add":bool}"##
+            r##"{"from":"#rrggbb","to":"#rrggbb","method":"classic|perceptual|linear|smooth"? (Photoshop's interpolation; omitted on new effects: straight stops; edits retain the recorded method),"smoothness":0..100=100,"style":"linear|radial|angle|reflected|diamond","angle":deg=90,"scale":10..150=100,"reverse":bool,"opacity":0..100,"blend":str,"add":bool}"##
         ),
         style_cmd!(
             "patternOverlay",
@@ -1028,7 +1066,7 @@ pub fn specs() -> Vec<CommandSpec> {
         style_cmd!(
             "bevelEmboss",
             "Bevel & Emboss…",
-            r##"{"style":"inner|outer|emboss|pillow|stroke","technique":"smooth|chiselHard|chiselSoft","contour":bool,"contourName":name|curve,"contourRange":1..100=50,"contourAntiAlias":bool,"glossContour":name|curve,"texture":pattern id|name?,"textureScale":1..1000=100,"textureDepth":-1000..1000=100,"textureInvert":bool,"textureLink":bool=true,"depth":1..1000=100,"direction":"up|down","size":px=5,"soften":px,"angle":deg,"altitude":deg,"add":bool}"##
+            r##"{"style":"inner|outer|emboss|pillow|stroke","technique":"smooth|chiselHard|chiselSoft","contour":bool,"contourName":name|curve,"contourRange":1..100=50,"contourAntiAlias":bool,"glossContour":name|curve,"glossAntiAlias":bool,"texture":pattern id|name?,"textureScale":1..1000=100,"textureDepth":-1000..1000=100,"textureInvert":bool,"textureLink":bool=true,"depth":1..1000=100,"direction":"up|down","size":px=5,"soften":px,"angle":deg,"altitude":deg,"add":bool}"##
         ),
         style_cmd!(
             "satin",
@@ -1142,6 +1180,81 @@ mod tests {
         assert!((b.contour.as_ref().unwrap().range - 0.7).abs() < 1e-6);
         let t = b.texture.as_ref().unwrap();
         assert_eq!((t.name.as_str(), t.depth, t.invert), ("Bubbles", -2.0, true));
+    }
+
+    /// #6698 review: a glow's Range runs 1..100 %, as its slider and Photoshop's do. A 0 is
+    /// held at the 1 % floor, and 100 is kept.
+    #[test]
+    fn glow_range_is_held_to_one_through_one_hundred() {
+        for kind in ["outerGlow", "innerGlow"] {
+            for (sent, kept) in [(0.0, 0.01), (-5.0, 0.01), (1.0, 0.01), (50.0, 0.5), (100.0, 1.0), (250.0, 1.0)] {
+                let mut s = session();
+                s.execute(&format!("layer.layerStyle.{kind}"), json!({"range": sent})).unwrap();
+                let range = match &effects(&s)[0] {
+                    Effect::OuterGlow(g) | Effect::InnerGlow(g) => g.range,
+                    other => panic!("{other:?}"),
+                };
+                assert!((range - kept).abs() < 1e-6, "{kind} range {sent} kept as {range}, not {kept}");
+            }
+        }
+        let doc = |id: &str| specs().into_iter().find(|c| c.id == id).map(|c| c.params).unwrap_or_default();
+        assert!(doc("layer.layerStyle.outerGlow").contains(r#""range":1..100=50"#));
+        assert!(doc("layer.layerStyle.innerGlow").contains(r#""range":1..100=50"#));
+    }
+
+    #[test]
+    fn bevel_gloss_anti_alias_is_a_param() {
+        let mut s = session();
+        s.execute("layer.layerStyle.bevelEmboss", json!({"glossContour": "Ring - Double", "glossAntiAlias": true})).unwrap();
+        let Effect::BevelEmboss(b) = &effects(&s)[0] else { panic!() };
+        assert!(b.gloss_anti_alias);
+        s.execute("layer.layerStyle.bevelEmboss", json!({"glossAntiAlias": false})).unwrap();
+        let Effect::BevelEmboss(b) = &effects(&s)[0] else { panic!() };
+        assert!(!b.gloss_anti_alias);
+    }
+
+    #[test]
+    fn stroke_overprint_is_a_param() {
+        let mut s = session();
+        s.execute("layer.layerStyle.stroke", json!({"size": 4, "overprint": true})).unwrap();
+        let Effect::Stroke(st) = &effects(&s)[0] else { panic!() };
+        assert!(st.overprint);
+        s.execute("layer.layerStyle.stroke", json!({"overprint": false})).unwrap();
+        let Effect::Stroke(st) = &effects(&s)[0] else { panic!() };
+        assert!(!st.overprint);
+    }
+
+    #[test]
+    fn bevel_shading_fields_are_independent_and_preserved_on_partial_edits() {
+        let mut s = session();
+        s.execute(
+            "layer.layerStyle.bevelEmboss",
+            json!({
+                "highlightBlend": "Normal", "highlightColor": "#ff0000", "highlightOpacity": 35,
+                "shadowBlend": "Color Burn", "shadowColor": "#0000ff", "shadowOpacity": 60
+            }),
+        )
+        .unwrap();
+        let fx = effects(&s);
+        let Effect::BevelEmboss(bevel) = &fx[0] else { panic!("{fx:?}") };
+        assert_eq!(bevel.highlight.blend, BlendMode::Normal);
+        assert_eq!(bevel.highlight_color, Color::rgb(1.0, 0.0, 0.0));
+        assert!((bevel.highlight.opacity - 0.35).abs() < 0.001);
+        assert_eq!(bevel.shadow.blend, BlendMode::ColorBurn);
+        assert_eq!(bevel.shadow_color, Color::rgb(0.0, 0.0, 1.0));
+        assert!((bevel.shadow.opacity - 0.60).abs() < 0.001);
+
+        let mut changed = fx[0].clone();
+        overlay_effect(&mut changed, &json!({"size": 12}));
+        let Effect::BevelEmboss(partial) = &changed else { panic!("expected bevel") };
+        assert_eq!(partial.highlight, bevel.highlight);
+        assert_eq!(partial.highlight_color, bevel.highlight_color);
+        assert_eq!(partial.shadow, bevel.shadow);
+        assert_eq!(partial.shadow_color, bevel.shadow_color);
+
+        overlay_effect(&mut changed, &json!({"highlightOpacity": 120, "shadowOpacity": -30}));
+        let Effect::BevelEmboss(limits) = &changed else { panic!("expected bevel") };
+        assert_eq!((limits.highlight.opacity, limits.shadow.opacity), (1.0, 0.0));
     }
 
     #[test]
@@ -1356,6 +1469,7 @@ mod tests {
             size: 7.0,
             position: StrokePosition::Outside,
             paint: FxPaint::Gradient(Gradient { stops: vec![(0.0, Color::rgb(0.0, 0.0, 1.0)), (1.0, Color::WHITE)], ..Gradient::default() }),
+            overprint: false,
         });
         let r = s
             .execute(
@@ -1392,6 +1506,7 @@ mod tests {
             size: 3.0,
             position: StrokePosition::Outside,
             paint: FxPaint::Color(Color::BLACK),
+            overprint: false,
         });
         for p in [
             json!({}),

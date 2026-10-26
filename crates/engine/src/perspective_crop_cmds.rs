@@ -371,6 +371,10 @@ mod tests {
     #[test]
     fn perspective_crop_rejects_bad_quads() {
         let mut s = skewed_ramp(SampleType::U8, &[[0.0, 0.0], [160.0, 0.0], [160.0, 120.0], [0.0, 120.0]], 160.0, 120.0);
+        // A rejected crop leaves the Color Sampler points and the removed count alone.
+        let samplers = vec![[5.0, 5.0], [150.0, 110.0]];
+        s.active_mut().unwrap().color_samplers = samplers.clone();
+        s.samplers_removed = 2;
         for p in [
             json!({}),
             json!({"corners": [[0, 0], [10, 0], [10, 10]]}),
@@ -388,5 +392,7 @@ mod tests {
             assert!(s.execute(CMD, p.clone()).is_err(), "{p}");
         }
         assert_eq!(s.active().unwrap().doc.size, Size::new(160, 120));
+        assert_eq!(s.active().unwrap().color_samplers, samplers);
+        assert_eq!(s.take_samplers_removed(), 2);
     }
 }

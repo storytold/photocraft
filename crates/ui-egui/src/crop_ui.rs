@@ -267,13 +267,22 @@ pub(crate) fn apply_ratio_from(app: &mut PhotocraftApp, base: [f64; 4]) {
 fn fit_frame(app: &mut PhotocraftApp) {
     let dpi = app.session.active().map_or(72.0, |s| f64::from(s.doc.resolution_dpi));
     let pt_per_in = app.session.prefs().units_and_rulers.point_size.per_inch();
+    let sized = crate::crop_size::target(&app.ui.tool_options, dpi, pt_per_in).is_some();
     if let Some(r) = app.ui.crop_rect
         && let Some(ratio) = preset_ratio(app)
         && let Some(fitted) = fitted_ratio(r, ratio)
         // W x H x Resolution can change output size even when the frame already fits.
-        && (fitted != r || crate::crop_size::target(&app.ui.tool_options, dpi, pt_per_in).is_some())
+        && (fitted != r || sized)
     {
-        keyed(app, fitted);
+        // #6750: fitting the untouched default frame to a ratio is not an edit: the user only
+        // picked the tool, so leaving it drops the frame instead of cropping to it, as with the
+        // plain default frame. A W x H x Resolution output size is an explicit instruction and
+        // stays a pending crop even on the default frame.
+        if fitted != r && !sized && app.crop.default_frame {
+            app.ui.crop_rect = Some(fitted);
+        } else {
+            keyed(app, fitted);
+        }
     }
 }
 
@@ -997,7 +1006,7 @@ pub fn draw_turn_cursor(ctx: &egui::Context, p: egui::Pos2, toward: egui::Vec2) 
     }
     let u = toward / len;
     let tokens = crate::theme::Tokens::get(ctx);
-    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("crop-turn-cursor")));
+    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("crop-turn-cursor")));
     const R: f32 = 12.0;
     const HALF: f32 = 0.75;
     let c = p + u * R;
@@ -1475,7 +1484,18 @@ mod tests {
     fn space_on_the_canvas_moves_the_frame_not_the_view() {
         use egui::{Event, Key, PointerButton, pos2};
         let mut a = app(SampleType::U8);
-        let view = crate::state::View { zoom: 2.0, center: [100.0, 50.0], fit_pending: false, fill_pending: false, doc_size: [200, 100], rotation: 0.0 };
+        let view = crate::state::View {
+            zoom: 2.0,
+            center: [100.0, 50.0],
+            fit_pending: false,
+            fill_pending: false,
+            doc_size: [200, 100],
+            rotation: 0.0,
+            zoom_animating: false,
+            zoom_anchor: None,
+            display_camera: None,
+            zoom_transition: None,
+        };
         a.ui.views = vec![view.clone()];
         let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(600.0, 400.0)).build_ui_state(
             |ui, app: &mut PhotocraftApp| {
@@ -1758,6 +1778,60 @@ mod tests {
             assert_eq!((st.doc.size, st.history.past_len()), (Size::new(200, 100), steps), "selection: {select}");
             assert_eq!(app.ui.crop_rect, None);
         }
+    }
+
+    /// #6750: a ratio preset that shrinks the untouched default frame does not make it a drawn
+    /// one: leaving the tool drops the frame and crops nothing, as with the plain default frame.
+    /// Picking the ratio before entering the tool (the issue's repro) and while it is picked both
+    /// stay untouched; editing the fitted frame makes it a drawn one that leaving commits (#3368).
+    #[test]
+    fn another_tool_drops_an_untouched_ratio_fitted_frame() {
+        // Entering the Crop tool with a saved ratio: the frame is fitted but untouched.
+        let mut app = app(SampleType::U8);
+        app.ui.tool_options.crop_ratio = "1:1".into();
+        ensure_frame(&mut app);
+        assert_eq!(app.ui.crop_rect, Some([50.0, 0.0, 150.0, 100.0]), "the default frame is fitted to the ratio");
+        assert!(app.crop.default_frame, "fitting it is not an edit");
+        let steps = app.session.active().unwrap().history.past_len();
+        app.ui.tool = Tool::Move;
+        ensure_frame(&mut app);
+        let st = app.session.active().unwrap();
+        assert_eq!((st.doc.size, st.history.past_len()), (Size::new(200, 100), steps), "switching tools must not crop");
+        assert_eq!(app.ui.crop_rect, None);
+        // Choosing the ratio with the Crop tool already picked: the same untouched fit.
+        let mut app2 = self::app(SampleType::U8);
+        ensure_frame(&mut app2);
+        app2.ui.tool_options.crop_ratio = "1:1".into();
+        crate::crop_size::chosen(&mut app2);
+        assert_eq!(app2.ui.crop_rect, Some([50.0, 0.0, 150.0, 100.0]));
+        assert!(app2.crop.default_frame);
+        let steps = app2.session.active().unwrap().history.past_len();
+        app2.ui.tool = Tool::Move;
+        ensure_frame(&mut app2);
+        let st = app2.session.active().unwrap();
+        assert_eq!((st.doc.size, st.history.past_len()), (Size::new(200, 100), steps));
+        // Resizing a handle of the fitted frame is an edit: leaving commits it (#3368).
+        let mut app3 = self::app(SampleType::U8);
+        app3.ui.tool_options.crop_ratio = "1:1".into();
+        ensure_frame(&mut app3);
+        drag(&mut app3, &[[50.0, 0.0], [70.0, 20.0]], NONE);
+        assert!(!app3.crop.default_frame, "the resize made it a drawn frame");
+        app3.ui.tool = Tool::Move;
+        ensure_frame(&mut app3);
+        assert_eq!(app3.session.active().unwrap().doc.size, Size::new(80, 80), "the edited frame crops");
+        // Default (non-classic) mode, the issue's exact scenario: the fitted preview stays a
+        // preview; pressing V neither crops nor applies anything.
+        let mut app4 = self::app(SampleType::U8);
+        app4.ui.tool_options.crop_shield.classic_mode = false;
+        app4.sync_views();
+        app4.ui.tool_options.crop_ratio = "1:1".into();
+        ensure_frame(&mut app4);
+        assert!(app4.crop.default_frame, "the fitted preview is still the untouched frame");
+        let steps = app4.session.active().unwrap().history.past_len();
+        app4.ui.tool = Tool::Move;
+        ensure_frame(&mut app4);
+        let st = app4.session.active().unwrap();
+        assert_eq!((st.doc.size, st.history.past_len()), (Size::new(200, 100), steps));
     }
 
     /// The pen's eraser end stands in for the Crop tool only until the tip comes back (`stylus`),

@@ -144,6 +144,59 @@ fn rotate_arbitrary_rotates_grouped_locked_children_and_preserves_lock() {
     assert_eq!(photocraft_compose::flatten(&d_arb).px, photocraft_compose::flatten(d_cw).px);
 }
 
+/// Rotating the whole image turns every layer mask, linked or not, as Rotate 180° does (#9201).
+#[test]
+fn rotate_arbitrary_turns_unlinked_layer_masks() {
+    for depth in [8, 16] {
+        for grouped in [false, true] {
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width": 40, "height": 30, "depth": depth, "background": "white"})).unwrap();
+            s.execute("layer.new.layer", json!({"name": "Paint"})).unwrap();
+            s.execute("select.rect", json!({"x": 0, "y": 0, "width": 10, "height": 10})).unwrap();
+            s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+            s.execute("layer.layerMask.revealSelection", json!({})).unwrap();
+            s.execute("layer.layerMask.linked", json!({"linked": false})).unwrap();
+            let id = s.active().unwrap().active_layer.unwrap();
+            if grouped {
+                s.execute("layer.groupLayers", json!({})).unwrap();
+            }
+            let mask = |s: &Session| doc(s).layer(id).unwrap().mask.clone().unwrap();
+            let base = s.active().unwrap().doc.clone();
+            s.execute("image.rotation.arbitrary", json!({"angle": 180, "interpolation": "nearest"})).unwrap();
+            let m = mask(&s);
+            assert!(!m.linked);
+            let at = |x, y| m.surface.sample_channel(x, y, 0);
+            assert!(at(34, 24) > 0.9, "{depth}-bit, grouped {grouped}: the mask turned with its layer");
+            assert!(at(4, 4) < 0.1, "{depth}-bit, grouped {grouped}: nothing left at the old place");
+            // Rotate 180° and a crop turned by 180° over the whole canvas give the same mask.
+            for (id_, p) in [("image.imageRotation.180", json!({})), ("image.crop", json!({"x": 0, "y": 0, "width": 40, "height": 30, "angle": 180}))] {
+                s.active_mut().unwrap().doc = base.clone();
+                s.execute(id_, p).unwrap();
+                let turned = mask(&s);
+                for y in 0..30 {
+                    for x in 0..40 {
+                        let (a, b) = (at(x, y), turned.surface.sample_channel(x, y, 0));
+                        assert!((a - b).abs() < 1e-3, "{id_}, {depth}-bit, grouped {grouped}: ({x},{y}) {a} vs {b}");
+                    }
+                }
+            }
+            // 90° pins the direction too (180° is its own inverse).
+            s.active_mut().unwrap().doc = base.clone();
+            s.execute("image.rotation.arbitrary", json!({"angle": 90, "interpolation": "nearest"})).unwrap();
+            let arbitrary = mask(&s);
+            s.active_mut().unwrap().doc = base.clone();
+            s.execute("image.imageRotation.90cw", json!({})).unwrap();
+            let turned = mask(&s);
+            for y in 0..40 {
+                for x in 0..30 {
+                    let (a, b) = (arbitrary.surface.sample_channel(x, y, 0), turned.surface.sample_channel(x, y, 0));
+                    assert!((a - b).abs() < 1e-3, "90cw, {depth}-bit, grouped {grouped}: ({x},{y}) {a} vs {b}");
+                }
+            }
+        }
+    }
+}
+
 #[test]
 fn flattened_mode_pixels_match_the_allocating_conversion_at_every_channel_count() {
     let px = [[0.0, 0.25, 0.75, 0.0], [0.9, 0.3, 0.2, 0.2], [0.1, 0.7, 0.4, 0.7], [1.0; 4]];
@@ -468,6 +521,37 @@ fn bitmap_rejects_bad_resolutions_and_patterns_without_editing_the_document() {
     // The bounds themselves are fine.
     s.execute("image.mode.bitmap", json!({"resolution": 1})).unwrap();
     assert_eq!((doc(&s).size.width, doc(&s).size.height, doc(&s).resolution_dpi), (1, 1, 1.0));
+}
+
+#[test]
+fn bitmap_output_resolution_budgets_the_whole_conversion_not_just_the_resample() {
+    // 100 x 100 px at 1 ppi to 200 ppi is 20000 x 20000 px: 400 MP. Resampling an 8/16-bit gray
+    // document to it fits the resample budget (under 2 GB), but the conversion's f32 working
+    // buffers at that size (~40 B/px, 16 GB) don't: it is refused before anything is allocated.
+    for depth in [8, 16] {
+        let mut s = ramp(100, 100, depth, 1.0);
+        let d = &s.active().unwrap().doc;
+        assert!(crate::image_cmds::check_resample_budget("t", d, 20_000, 20_000, "").is_ok(), "{depth}");
+        let before = s.active().unwrap().history.past_len();
+        let e = s.execute("image.mode.bitmap", json!({"method": "diffusion", "resolution": 200})).unwrap_err().to_string();
+        assert!(e.contains("megapixels") && e.contains("Output resolution"), "{depth}: {e}");
+        assert_eq!(s.active().unwrap().history.past_len(), before, "{depth}");
+        let d = doc(&s);
+        assert_eq!((d.mode, d.size.width, d.resolution_dpi), (ColorMode::Grayscale, 100, 1.0), "{depth}");
+        // A side past the 300,000 px document limit is refused, not clamped (that would change
+        // the print size): 20000 px at 72 ppi is 333,333 px at 1200 ppi.
+        let mut wide = ramp(20_000, 1, depth, 72.0);
+        let e = wide.execute("image.mode.bitmap", json!({"method": "threshold", "resolution": 1200})).unwrap_err().to_string();
+        assert!(e.contains("300000 px"), "{depth}: {e}");
+        assert_eq!((doc(&wide).mode, doc(&wide).size.width), (ColorMode::Grayscale, 20_000), "{depth}");
+        // 18000 px to 300,000 px exactly is allowed.
+        let mut edge = ramp(18_000, 1, depth, 72.0);
+        edge.execute("image.mode.bitmap", json!({"method": "threshold", "resolution": 1200})).unwrap();
+        assert_eq!(doc(&edge).size.width, 300_000, "{depth}");
+        // A size that fits is still converted.
+        s.execute("image.mode.bitmap", json!({"method": "diffusion", "resolution": 3})).unwrap();
+        assert_eq!((doc(&s).size.width, doc(&s).mode), (300, ColorMode::Bitmap), "{depth}");
+    }
 }
 
 #[test]

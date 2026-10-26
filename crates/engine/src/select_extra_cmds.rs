@@ -159,6 +159,8 @@ fn affine_params(cmd: &str, p: &Value, r: [f64; 4]) -> Result<Homography> {
     Ok(t(px + dx, py + dy).mul(&rot).mul(&skew).mul(&scale).mul(&t(-px, -py)))
 }
 
+/// Select › Transform Selection: warps the selection outline by the params' matrix, quad or
+/// scale/rotate/move, refused when the result would not fit the transform budget.
 fn transform_selection(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "select.transformSelection";
     let d = s.active().ok_or(EngineError::NoDocument)?;
@@ -206,7 +208,7 @@ fn transform_selection(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let selected = s.edit("Transform Selection", |doc, _| {
         if let Some(sel) = &doc.selection {
-            crate::transform_cmds::check_budget(sel.content_bounds(), &h, "selection")?;
+            crate::transform_cmds::check_budget(sel.content_bounds(), &h, "selection", sel.format())?;
             doc.selection = Some(crate::transform_cmds::warp_gray(sel, &h, interp)?).filter(|s| !s.content_bounds().is_empty());
         }
         Ok(doc.selection.is_some())
@@ -248,7 +250,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Transform Selection",
             menu: &["Select"],
             shortcut: None,
-            params: r##"{"rect":[x0,y0,x1,y1]? (frame; default = selection bounds),"quad"|"corners":[[x,y]×4]? (where the frame's corners go: distort/perspective),"matrix":[a,b,c,d,e,f]?,"scaleX":%=100,"scaleY":%=100,"rotate":deg=0,"skewX":deg=0,"skewY":deg=0,"dx":px=0,"dy":px=0,"reference":"center|topLeft|top|topRight|left|right|bottomLeft|bottom|bottomRight"|[x,y]="center","style"|"mesh"|"grid"|"warp":… (warp, as edit.transform.warp),"interpolation":"bilinear|bicubic|nearest"="bilinear"}"##,
+            params: r##"{"rect":[x0,y0,x1,y1]? (frame; default = selection bounds),"quad"|"corners":[[x,y]×4]? (where the frame's corners go: distort/perspective),"matrix":[a,b,c,d,e,f]?,"scaleX":%=100,"scaleY":%=100,"rotate":deg=0,"skewX":deg=0,"skewY":deg=0,"dx":px=0,"dy":px=0,"reference":"center|topLeft|top|topRight|left|right|bottomLeft|bottom|bottomRight"|[x,y]="center","style"|"mesh"|"grid"|"warp":… (warp, as edit.transform.warp),"interpolation":"bilinear|bicubic|nearest|bicubicSharper|bicubicSmoother|bicubicAutomatic"="bilinear" (Photoshop's bicubic variants render as Bicubic)}"##,
             enabled: has_selection,
             run: transform_selection,
             journal: true,
@@ -293,6 +295,26 @@ mod tests {
         })
         .unwrap();
         s
+    }
+
+    /// #8697: Photoshop's bicubic variants are accepted and render as Bicubic, for a selection
+    /// and for a layer (an imported action keeps them).
+    #[test]
+    fn photoshop_bicubic_variants_transform_as_bicubic() {
+        let run = |id: &str, interpolation: &str| {
+            let mut s = landscape(8);
+            s.execute("select.rect", json!({"x": 20, "y": 10, "width": 60, "height": 40, "feather": 3})).unwrap();
+            s.execute(id, json!({"scaleX": 137, "scaleY": 81, "rotate": 7, "interpolation": interpolation})).unwrap();
+            let st = s.active().unwrap();
+            (st.doc.selection.clone(), st.doc.layers.iter().map(|l| l.surface().cloned()).collect::<Vec<_>>())
+        };
+        for id in ["select.transformSelection", "edit.transform"] {
+            let bicubic = run(id, "bicubic");
+            assert_ne!(bicubic, run(id, "bilinear"), "{id}: the interpolation matters here");
+            for variant in ["bicubicSharper", "bicubicSmoother", "bicubicAutomatic"] {
+                assert_eq!(run(id, variant), bicubic, "{id} {variant}");
+            }
+        }
     }
 
     #[test]

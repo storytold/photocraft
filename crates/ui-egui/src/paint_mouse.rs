@@ -37,8 +37,10 @@ pub fn sync_tool_brush(app: &mut PhotocraftApp) {
             let _ = app.session.load_brush_tips(&mut b);
             b
         }
-        // A tool seen for the first time takes what the brush has, at Photoshop's smoothing.
-        None => BrushSettings { smoothing: first_smoothing(), ..current },
+        // A tool seen for the first time takes what the brush has, at Photoshop's smoothing, but
+        // in Normal mode: each tool's Mode starts at Normal, so a Multiply Brush doesn't make the
+        // first Clone Stamp stroke multiply (or give Healing a mode its menu doesn't have).
+        None => BrushSettings { smoothing: first_smoothing(), mode: photocraft_color::BlendMode::Normal, ..current },
     };
     // The picked preset was the outgoing tool's brush: forget it, so Update Brush can't overwrite
     // that preset with this tool's brush.
@@ -92,9 +94,15 @@ pub struct Buttons {
     pub clicked: bool,
 }
 
-/// Tools whose right-click opens the Brush Preset picker (those with the options-bar brush chip).
+/// Tools with the options-bar brush chip, which opens the Brush Preset picker.
 pub fn has_brush_picker(tool: Tool) -> bool {
     tool.is_brushlike() || tool == Tool::QuickSelection
+}
+
+/// Tools whose canvas right-click opens the Brush Preset picker: the painting tools. The Quick
+/// Selection tool has the picker too, but its right-click opens the selection menu (#7268).
+pub fn right_click_picker(tool: Tool) -> bool {
+    has_brush_picker(tool) && !crate::canvas_tool_menu::applies(tool)
 }
 
 /// Does a right-button drag with `tool` erase (rather than open the picker)?
@@ -136,7 +144,7 @@ pub fn canvas_buttons(app: &mut PhotocraftApp, response: &Response, tool: Tool) 
     if right_click
         && !erase
         && !layer_menu
-        && has_brush_picker(tool)
+        && right_click_picker(tool)
         && let Some(p) = response.interact_pointer_pos()
     {
         crate::brush_picker::open(&mut app.ui, &response.ctx, [p.x, p.y]);
@@ -166,7 +174,7 @@ pub fn pointer_secondary(app: &mut PhotocraftApp, ctx: &egui::Context, down: boo
         app.secondary_erase = down;
         return true;
     }
-    if down && has_brush_picker(tool) {
+    if down && right_click_picker(tool) {
         crate::brush_picker::open(&mut app.ui, ctx, at);
     }
     false
@@ -352,7 +360,7 @@ mod tests {
         assert!(strokes(&h).is_empty());
         // The picker shows over the canvas at the pointer, moved up just enough to stay on screen.
         h.run_steps(2);
-        let shown = h.ctx.memory(|m| m.area_rect(egui::Id::new("canvas-brush-picker"))).expect("picker shown");
+        let shown = h.ctx.memory(|m| m.area_rect(egui::Id::unique("canvas-brush-picker"))).expect("picker shown");
         let screen = h.ctx.content_rect();
         assert!((shown.min.x - c.x).abs() < 1.0 && shown.min.y <= c.y + 1.0, "{shown:?}");
         assert!(screen.contains_rect(shown.shrink(0.5)) && shown.width() > 250.0 && shown.height() > 150.0, "{shown:?}");
@@ -443,11 +451,11 @@ mod tests {
         let c = h.state().last_canvas_rect.center();
         h.state_mut().ui.brush_picker = Some([c.x, c.y]);
         h.run_steps(2);
-        assert!(h.query_by_label("Hardness").is_some());
+        assert!(h.query_all_by_label("Hardness").next().is_some());
         let sampled = h.state().session.tools.presets.iter().find(|p| p.brush.tip != photocraft_engine::paint::TipShape::Round).map(|p| p.name.clone());
         h.state_mut().run("tools.setBrush", json!({ "preset": sampled.expect("a sampled preset") })).unwrap();
         h.run_steps(2);
-        assert!(h.query_by_label("Hardness").is_none());
+        assert!(h.query_all_by_label("Hardness").next().is_none());
         assert!(h.state().ui.brush_picker.is_some());
     }
 
@@ -617,6 +625,7 @@ mod tests {
         // Mode, opacity, flow and the dynamics sections are per tool too.
         app.ui.tool = Tool::CloneStamp;
         sync_tool_brush(&mut app);
+        assert_eq!(mode(&brush(&app)), photocraft_color::BlendMode::Normal, "a new tool starts in Normal, not the Brush's Multiply");
         app.run("tools.setBrush", json!({"brush": {"mode": "Screen", "opacity": 0.3}})).unwrap();
         app.ui.tool = Tool::Brush;
         sync_tool_brush(&mut app);

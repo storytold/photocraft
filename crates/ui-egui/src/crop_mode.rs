@@ -3,8 +3,9 @@
 //! - **Default mode** (Photoshop's default, Use Classic Mode off): the crop box stays upright on
 //!   screen and the image turns behind it. A drag outside the box turns the image about the box's
 //!   centre (⇧ in 15° steps; the readout beside the pointer is the image's turn, clockwise
-//!   positive), a drag inside moves the image under the box (the box stays put), the arrow keys
-//!   nudge the image, and the handles resize the box on screen as usual. With **Auto Center
+//!   positive), a drag inside moves the image under the box (the box stays put; with View › Snap
+//!   on, the upright frame's edges and centre snap as a Classic Mode frame's do, #8580), the arrow
+//!   keys nudge the image, and the handles resize the box on screen as usual. With **Auto Center
 //!   Preview** on (the default), a box being resized keeps its centre where it is on screen (also
 //!   after a Space pan) while the handle follows the pointer, a drawn box moves to the middle of
 //!   the canvas on release, and X re-centres it. A drag inside never re-centres the box
@@ -423,6 +424,100 @@ mod tests {
         assert!(mid_of(screen_box(&app)).distance(pos2(370.0, 300.0)) < 0.01, "{:?}", mid_of(screen_box(&app)));
         let r = app.ui.crop_rect.unwrap();
         assert!(r.iter().zip([20.0, 30.0, 80.0, 70.0]).all(|(a, b)| (a - b).abs() < 1e-3), "{r:?}");
+    }
+
+    /// Moves the image under the box from document point `from` by `d` (both in the view at the
+    /// press), checks the snap lines before release, and returns where the box's centre started
+    /// on screen.
+    fn image_drag(app: &mut PhotocraftApp, from: [f32; 2], d: [f32; 2], line: Option<(bool, f64)>) -> Pos2 {
+        let (a, b) = (xf(app).to_screen(from[0], from[1]), xf(app).to_screen(from[0] + d[0], from[1] + d[1]));
+        let mid = mid_of(screen_box(app));
+        let p = xf(app).to_doc(a);
+        tool_event(app, ToolEvent::Down { x: p[0], y: p[1], pressure: 1.0 }, NONE);
+        assert_eq!(app.prefs_rt.snap.as_ref().map(|s| &s.gesture), Some(&crate::snap_ui::Gesture::CropImage));
+        for t in [0.5, 1.0] {
+            let p = xf(app).to_doc(a + (b - a) * t);
+            tool_event(app, ToolEvent::Move { x: p[0], y: p[1], pressure: 1.0 }, NONE);
+        }
+        if let Some((vertical, pos)) = line {
+            assert!(app.prefs_rt.snap_lines.iter().any(|l| l.vertical == vertical && l.pos == pos), "{:?}", app.prefs_rt.snap_lines);
+        }
+        let p = xf(app).to_doc(b);
+        tool_event(app, ToolEvent::Up { x: p[0], y: p[1] }, NONE);
+        mid
+    }
+
+    fn assert_frame(app: &PhotocraftApp, want: [f64; 4], what: &str) {
+        let r = app.ui.crop_rect.unwrap();
+        assert!(r.iter().zip(want).all(|(a, b)| (a - b).abs() < 1e-3), "{what}: {r:?}, want {want:?}");
+    }
+
+    /// #8580: moving the image under the box snaps the frame's edges and centre with View › Snap
+    /// on, so the content can be centred in it without leaving the Crop tool. The box stays put.
+    #[test]
+    fn moving_the_image_snaps_the_frame_to_the_document_centre() {
+        for (snap, zoom, flip) in [(false, 1.0, false), (true, 1.0, false), (true, 2.0, false), (true, 1.0, true)] {
+            let mut app = app();
+            app.ui.extras.snap = snap;
+            app.ui.views[0].zoom = zoom;
+            app.ui.view.flip_horizontal = flip;
+            with_frame(&mut app);
+            // The frame [40, 30, 100, 70] goes 27 px right over the image: its centre lands 3 px
+            // short of the document's (100, 50), inside the snap radius at either zoom.
+            let mid = image_drag(&mut app, [70.0, 50.0], [-27.0, 0.0], snap.then_some((true, 100.0)));
+            let what = format!("snap {snap}, zoom {zoom}, flip {flip}");
+            assert_frame(&app, if snap { [70.0, 30.0, 130.0, 70.0] } else { [67.0, 30.0, 127.0, 70.0] }, &what);
+            assert!(mid_of(screen_box(&app)).distance(mid) < 0.01, "{what}: the box moved on screen");
+            assert!(app.prefs_rt.snap.is_none() && app.prefs_rt.snap_lines.is_empty());
+        }
+    }
+
+    /// The issue's case: a box larger than the canvas (to extend it) centres on the content's
+    /// layer, both ways. A turned box doesn't snap (its edges don't line up with anything).
+    #[test]
+    fn moving_the_image_centres_a_larger_box_on_a_layer() {
+        let mut app = app();
+        app.ui.extras.snap = true;
+        app.run("layer.new.layer", json!({"name": "logo"})).unwrap();
+        app.run("select.rect", json!({"x": 20, "y": 20, "width": 40, "height": 40})).unwrap();
+        app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+        app.run("select.deselect", json!({})).unwrap();
+        crate::crop_ui::ensure_frame(&mut app);
+        app.ui.crop_rect = Some([-40.0, -60.0, 140.0, 120.0]);
+        app.crop.default_frame = false;
+        // Its centre (50, 30) goes to (42, 38): 2 px from the logo's centre (40, 40).
+        image_drag(&mut app, [50.0, 30.0], [8.0, -8.0], Some((false, 40.0)));
+        assert_frame(&app, [-50.0, -50.0, 130.0, 130.0], "centred on the logo");
+
+        app.ui.crop_angle = 30.0;
+        sync(&mut app, None);
+        let p = xf(&app).to_doc(mid_of(screen_box(&app)));
+        tool_event(&mut app, ToolEvent::Down { x: p[0], y: p[1], pressure: 1.0 }, NONE);
+        assert!(matches!(app.crop.drag, Some(CropDrag::MoveImage { .. })));
+        assert!(app.prefs_rt.snap.is_none(), "a turned box doesn't snap");
+        tool_event(&mut app, ToolEvent::Up { x: p[0], y: p[1] }, NONE);
+    }
+
+    /// With View › Snap To › Layers off, smart guides still centre the box on a layer, although
+    /// the document's bounds are snap targets that aren't within reach.
+    #[test]
+    fn moving_the_image_snaps_to_smart_guides_beside_out_of_reach_targets() {
+        for smart in [false, true] {
+            let mut app = app();
+            app.ui.extras.snap = true;
+            app.ui.view.snap_to.layers = false;
+            app.ui.view.show.smart_guides = smart;
+            app.run("layer.new.layer", json!({"name": "logo"})).unwrap();
+            app.run("select.rect", json!({"x": 20, "y": 20, "width": 40, "height": 40})).unwrap();
+            app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+            app.run("select.deselect", json!({})).unwrap();
+            crate::crop_ui::ensure_frame(&mut app);
+            app.ui.crop_rect = Some([-40.0, -60.0, 140.0, 120.0]);
+            app.crop.default_frame = false;
+            image_drag(&mut app, [50.0, 30.0], [8.0, -8.0], smart.then_some((false, 40.0)));
+            let want = if smart { [-50.0, -50.0, 130.0, 130.0] } else { [-48.0, -52.0, 132.0, 128.0] };
+            assert_frame(&app, want, &format!("smart guides {smart}"));
+        }
     }
 
     /// #7088: the box's own Undo/Redo of a move (or a turn) in default mode puts the frame back

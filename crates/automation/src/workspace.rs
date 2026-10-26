@@ -340,6 +340,8 @@ fn params_contain_ambient_path(id: &str, params: &Value) -> bool {
         }
         "image.mode.rgb" | "image.mode.grayscale" | "image.mode.cmyk" | "image.mode.lab" => &["profile"],
         "edit.assignProfile" | "edit.convertToProfile" | "edit.profileInfo" | "view.proofSetup" | "view.gamutWarning" => &["profile"],
+        // New Document's Color Profile (#321) can name an .icc file.
+        "file.new" => &["profile"],
         "edit.colorSettings" => &["workingRgb", "workingCmyk", "workingGray"],
         _ => &[],
     };
@@ -355,6 +357,13 @@ fn profile_command_may_read_ambient(id: &str, params: &Value) -> bool {
     // Installed profiles scan OS and user directories even without a request path.
     if matches!(id, "color.profileMismatch" | "edit.colorSettings" | "edit.installedProfiles" | "view.proofSetup") {
         return true;
+    }
+    // New Document skips exact `working` and `none`; the other working aliases resolve
+    // the configured working space, which may be an .icc path.
+    if id == "file.new" {
+        return params.get("profile").and_then(Value::as_str).is_some_and(|profile| {
+            matches!(profile, "default" | "working-cmyk" | "workingCmyk" | "working-rgb" | "workingRgb" | "working-gray" | "workingGray")
+        });
     }
     matches!(id, "edit.assignProfile" | "edit.convertToProfile" | "edit.profileInfo")
         && params.get("profile").and_then(Value::as_str).is_some_and(|profile| {
@@ -374,18 +383,28 @@ fn preferences_may_grant_ambient_paths(id: &str, params: &Value) -> bool {
 fn preference_uses_ambient_filesystem(path: &str) -> bool {
     // The engine skips empty segments (`.scriptEvents.enabled` sets `scriptEvents.enabled`), so
     // judge the first non-empty one; no segment at all is the whole-preferences update.
-    let Some(section) = path.split('.').find(|segment| !segment.is_empty()) else { return true };
+    let mut segments = path.split('.').filter(|segment| !segment.is_empty());
+    let Some(section) = segments.next() else { return true };
+    // File Handling's LUT folder (#6558) is listed from disk; the rest of that section is not.
     matches!(section, "colorSettings" | "scriptEvents" | "historyLog" | "plugIns" | "scratchDisks")
+        || (section == "fileHandling" && segments.next().is_none_or(|key| key == "lutFolder"))
 }
 
 fn command_uses_ambient_path(id: &str, params: &Value) -> bool {
     match id {
-        "actions.load" | "brush.presets.importAbr" | "brush.presets.importImage" | "gradient.presets.importGrd" | "plugin.install" | "swatches.import" => {
+        "actions.load"
+        | "brush.presets.importAbr"
+        | "brush.presets.importImage"
+        | "gradient.presets.importGrd"
+        | "plugin.install"
+        | "swatches.import"
+        | "style.presets.importAsl"
+        | "layer.layerStyle.contours.load" => {
             // `data` wins over `path` in these commands; any `path` without it reads the filesystem.
             params.get("data").is_none() && params.get("path").is_some()
         }
         // With a `path` the file is written there; without one the bytes come back as `data`.
-        "actions.save" | "swatches.export" => params.get("path").is_some(),
+        "actions.save" | "swatches.export" | "style.presets.exportAsl" | "layer.layerStyle.contours.save" => params.get("path").is_some(),
         // Shortcut sets: a .kys read or written by path, or a Summarize page written by path.
         "edit.keyboardShortcuts" => {
             params.get("path").is_some() || ["importKys", "exportKys", "summarize"].iter().any(|k| params.get(*k).and_then(|v| v.get("path")).is_some())
@@ -759,6 +778,12 @@ mod tests {
         assert!(authorize_desktop_engine_command("image.mode.cmyk", &serde_json::json!({})).is_err());
         assert!(authorize_engine_command("image.mode.rgb", &serde_json::json!({"profile": "/outside/profile.icc"})).is_err());
         assert!(authorize_engine_command("image.mode.rgb", &serde_json::json!({"profile": "srgb"})).is_ok());
+        assert!(authorize_engine_command("file.new", &serde_json::json!({"profile": "/outside/profile.icc"})).is_err());
+        assert!(authorize_engine_command("file.new", &serde_json::json!({"profile": "adobe-rgb-compat"})).is_ok());
+        assert!(authorize_engine_command("file.new", &serde_json::json!({"profile": "working"})).is_ok());
+        assert!(authorize_engine_command("file.new", &serde_json::json!({"profile": "none"})).is_ok());
+        assert!(authorize_engine_command("file.new", &serde_json::json!({"profile": "default"})).is_err());
+        assert!(authorize_engine_command("file.new", &serde_json::json!({"profile": "working-cmyk"})).is_err());
         // Shortcut sets: text in and out is fine; a path reads or writes the filesystem.
         let ks = |p: serde_json::Value| authorize_engine_command("edit.keyboardShortcuts", &p);
         assert!(ks(serde_json::json!({"exportKys": true, "summarize": true, "importKys": "<photoshop-keyboard-shortcuts/>"})).is_ok());
@@ -779,6 +804,21 @@ mod tests {
         assert!(session.execute("file.automate.conditionalModeChange", params).is_err());
         assert_eq!(session.active().unwrap().doc.mode, photocraft_engine::doc::ColorMode::Rgb);
         assert!(authorize_desktop_engine_step("file.saveACopy", &serde_json::json!({})).is_err());
+    }
+
+    // Regression test for #3763: `edit.installedProfiles` scans the OS and user ICC folders but
+    // takes no path parameter, so automation let it through until it was listed as ambient.
+    #[test]
+    fn installed_profiles_listing_is_refused_for_automation() {
+        for params in [serde_json::json!({}), serde_json::json!({"class": "output", "colorSpace": "cmyk"})] {
+            assert!(authorize_engine_command("edit.installedProfiles", &params).is_err(), "authorize_engine_command allowed it with {params}");
+            assert!(authorize_desktop_engine_command("edit.installedProfiles", &params).is_err(), "authorize_desktop_engine_command allowed it with {params}");
+            assert!(authorize_engine_step("edit.installedProfiles", &params).is_err(), "authorize_engine_step allowed it with {params}");
+        }
+        // The sandboxed session refuses it before the engine scans any folder.
+        let mut headless = crate::Headless::new();
+        let refused = headless.command_run("edit.installedProfiles", serde_json::json!({})).unwrap_err();
+        assert!(refused.to_string().contains("ambient filesystem paths"), "{refused}");
     }
 
     #[test]
@@ -821,6 +861,11 @@ mod tests {
             ("swatches.export", serde_json::json!({"path": "/outside/set.ase"})),
             ("actions.load", serde_json::json!({"path": "/outside/set.atn"})),
             ("actions.save", serde_json::json!({"path": "/outside/set.atn"})),
+            ("style.presets.importAsl", serde_json::json!({"path": "/outside/set.asl"})),
+            ("style.presets.exportAsl", serde_json::json!({"path": "/outside/set.asl"})),
+            ("style.presets.exportAsl", serde_json::json!({"path": 5})),
+            ("layer.layerStyle.contours.load", serde_json::json!({"path": "/outside/set.shc"})),
+            ("layer.layerStyle.contours.save", serde_json::json!({"path": "/outside/set.shc"})),
         ] {
             assert!(authorize_engine_command(id, &params).is_err(), "{id}: {params}");
         }
@@ -833,6 +878,10 @@ mod tests {
             ("swatches.export", serde_json::json!({"format": "ase"})),
             ("actions.load", serde_json::json!({"data": "QUJD"})),
             ("actions.save", serde_json::json!({"set": "S"})),
+            ("style.presets.importAsl", serde_json::json!({"data": "QUJD"})),
+            ("style.presets.exportAsl", serde_json::json!({"group": "Basics"})),
+            ("layer.layerStyle.contours.load", serde_json::json!({"data": "QUJD"})),
+            ("layer.layerStyle.contours.save", serde_json::json!({"names": ["a"]})),
         ] {
             assert!(authorize_engine_command(id, &params).is_ok(), "{id}: {params}");
         }
@@ -847,6 +896,8 @@ mod tests {
             "historyLog.filePath",
             ".historyLog.filePath",
             "plugIns.additionalPluginsFolder",
+            "fileHandling.lutFolder",
+            "fileHandling",
             "scratchDisks.disks",
             ".",
             "..historyLog.filePath",
@@ -857,6 +908,7 @@ mod tests {
             authorize_engine_command("prefs.set", &serde_json::json!({"values": {"interface.language": "fr", "historyLog.filePath": "/outside/log"}})).is_err()
         );
         assert!(authorize_engine_command("prefs.set", &serde_json::json!({"path": "interface.language", "value": "fr"})).is_ok());
+        assert!(authorize_engine_command("prefs.set", &serde_json::json!({"path": "fileHandling.autosave", "value": false})).is_ok());
     }
 
     #[test]
@@ -887,7 +939,9 @@ mod tests {
     }
 
     fn documents_filesystem_path_params(id: &str, params: &str) -> bool {
-        if matches!(id, "prefs.get" | "prefs.reset") {
+        // These commands return settings or installed-profile paths; they do not accept a host
+        // filesystem path as an automation input.
+        if matches!(id, "prefs.get" | "prefs.reset" | "edit.installedProfiles") {
             return false;
         }
         // These registry descriptions refer to document vector paths, not host files.
@@ -914,6 +968,7 @@ mod tests {
                 | "path.rename"
                 | "path.stroke"
                 | "type.attachToPath"
+                | "type.fillPath"
                 | "type.detachFromPath"
                 | "select.toWorkPath"
                 | "layer.vectorMask.add"
@@ -960,6 +1015,8 @@ mod tests {
             ("gradient.presets.importGrd", serde_json::json!({"path": "/outside/set.grd"})),
             ("plugin.install", serde_json::json!({"path": "/outside/plugin.wasm"})),
             ("plugin.reload", serde_json::json!({"path": "/outside/plugins"})),
+            ("style.presets.importAsl", serde_json::json!({"path": "/outside/set.asl"})),
+            ("style.presets.exportAsl", serde_json::json!({"path": "/outside/set.asl"})),
             ("prefs.set", serde_json::json!({"path": "historyLog.filePath", "value": "/outside/log"})),
             ("prefs.set", serde_json::json!({"values": {"interface.language": "fr", "historyLog.filePath": "/outside/log"}})),
         ] {

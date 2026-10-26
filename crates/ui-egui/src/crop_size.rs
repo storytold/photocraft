@@ -99,7 +99,10 @@ pub fn normalize_length(typed: &str, previous: &str) -> String {
         return String::new();
     }
     match parse_length(typed, field_unit(previous)) {
-        Some((v, u)) => format_length(v, u),
+        Some((v, u)) => {
+            let text = format_length(v, u);
+            if parse_length(&text, u).is_some() { text } else { previous.to_string() }
+        }
         None => previous.to_string(),
     }
 }
@@ -223,13 +226,28 @@ pub fn clear(o: &mut ToolOptions) {
     o.crop_resolution.clear();
 }
 
-/// Swaps W and H (the ⇄ button, X). False outside W x H x Resolution mode.
+/// The options bar's Clear: W, H and the resolution in W x H x Resolution mode, else the ratio.
+pub fn clear_ratio(o: &mut ToolOptions) {
+    if o.crop_ratio == WHR {
+        clear(o);
+    } else {
+        o.crop_ratio.clear();
+    }
+}
+
+/// Swaps W and H for the Crop tool's X. False outside W x H x Resolution mode.
 pub fn swap(o: &mut ToolOptions) -> bool {
     if o.crop_ratio != WHR {
         return false;
     }
-    std::mem::swap(&mut o.crop_width, &mut o.crop_height);
+    swap_fields(o);
     true
+}
+
+/// The ⇄ button between the W and H fields: always swaps, as Perspective Crop shows the fields
+/// without the Crop tool's W x H x Resolution mode.
+fn swap_fields(o: &mut ToolOptions) {
+    std::mem::swap(&mut o.crop_width, &mut o.crop_height);
 }
 
 /// After the preset dropdown chose `crop_ratio`: a size preset fills the fields and Front Image
@@ -268,7 +286,7 @@ pub fn keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
 /// normalised into `value` (by `normalize(typed, previous)`) when it loses it. Returns true then.
 fn text_field(ui: &mut egui::Ui, id: &str, value: &mut String, hint: &str, width: f32, normalize: fn(&str, &str) -> String) -> bool {
     let t = Tokens::get(ui.ctx());
-    let id = ui.id().with(id);
+    let id = ui.scope_id().with(id);
     let mut buf = ui.data(|d| d.get_temp::<String>(id)).unwrap_or_else(|| value.clone());
     let (rect, _) = ui.allocate_exact_size(vec2(width, 24.0), egui::Sense::hover());
     crate::widgets::surface(ui, rect, t.field, false);
@@ -276,7 +294,10 @@ fn text_field(ui: &mut egui::Ui, id: &str, value: &mut String, hint: &str, width
         ui.painter().rect_stroke(rect, t.radius_sm, Stroke::new(1.0, t.field_border), StrokeKind::Inside);
     }
     let inner = rect.shrink2(vec2(4.0, 2.0));
-    let r = ui.put(inner, egui::TextEdit::singleline(&mut buf).id(id).char_limit(32).hint_text(hint).frame(egui::Frame::NONE).font(crate::theme::mono(12.0)));
+    let r = ui.put(
+        inner,
+        egui::TextEdit::singleline(&mut buf).id(id).char_limit(32).hint_text(hint.to_owned()).frame(egui::Frame::NONE).font(crate::theme::mono(12.0)),
+    );
     if r.has_focus() {
         ui.data_mut(|d| d.insert_temp(id, buf));
         return false;
@@ -295,13 +316,13 @@ fn text_field(ui: &mut egui::Ui, id: &str, value: &mut String, hint: &str, width
 pub fn fields(o: &mut ToolOptions, ui: &mut egui::Ui) {
     text_field(ui, "crop-width", &mut o.crop_width, tl!("Width"), 64.0, normalize_length);
     if crate::icons::button(ui, "arrow-left-right", 22.0, false, tl!("Swaps height and width")).clicked() {
-        swap(o);
+        swap_fields(o);
     }
     text_field(ui, "crop-height", &mut o.crop_height, tl!("Height"), 64.0, normalize_length);
     text_field(ui, "crop-resolution", &mut o.crop_resolution, tl!("Resolution"), 64.0, normalize_resolution);
     let units = [(PX_PER_IN.to_string(), "px/in"), (PX_PER_CM.to_string(), "px/cm")];
     let before = o.crop_resolution_unit.clone();
-    if crate::widgets::dropdown(ui, "crop-resolution-unit", &mut o.crop_resolution_unit, &units, 64.0) && before != o.crop_resolution_unit {
+    if crate::widgets::dropdown(ui, "crop-resolution-unit", tl!("Resolution"), &mut o.crop_resolution_unit, &units, 64.0) && before != o.crop_resolution_unit {
         // The same resolution in the other unit, as in Photoshop.
         if let Some(v) = crate::widgets::parse_num(&o.crop_resolution.trim().replace(',', ".")).filter(|v| v.is_finite() && *v > 0.0) {
             let v = if o.crop_resolution_unit == PX_PER_CM { v / 2.54 } else { v * 2.54 };
@@ -314,6 +335,15 @@ pub fn fields(o: &mut ToolOptions, ui: &mut egui::Ui) {
 mod tests {
     use super::*;
     use photocraft_doc::{Color, ColorMode, Document, SampleType, Size};
+
+    #[test]
+    fn normalize_length_keeps_previous_when_rounding_gives_zero() {
+        assert_eq!(normalize_length("0.001", "100 px"), "100 px");
+        for typed in ["0.004 in", "0.0001 cm"] {
+            let out = normalize_length(typed, "100 px");
+            assert!(parse_length(&out, Unit::Pixels).is_some(), "{typed} -> {out}");
+        }
+    }
 
     fn app(depth: SampleType) -> PhotocraftApp {
         let mut doc = Document::with_background("crop", Size::new(400, 300), ColorMode::Rgb, depth, Color::WHITE);

@@ -61,7 +61,7 @@ pub(crate) fn window(app: &PhotocraftApp, dialog: u64, ui: &mut egui::Ui, f: &mu
     });
 
     let t = Tokens::get(ui.ctx());
-    let cache_id = egui::Id::new(("filter-preview-ui", dialog));
+    let cache_id = egui::Id::unique(("filter-preview-ui", dialog));
     let mut cache: Cache = ui.ctx().data_mut(|d| std::mem::take(d.get_temp_mut_or_default::<Cache>(cache_id)));
     // Channel visibility and the active mask can change without a document revision. Both the
     // original (press-and-hold) and filtered textures must follow the canvas's current view.
@@ -234,7 +234,7 @@ fn upload(ctx: &egui::Context, app: &PhotocraftApp, name: &str, doc: &Document) 
     let (width, height) = (doc.size.width.div_ceil(factor), doc.size.height.div_ceil(factor));
     if let Some(st) = app.session.active()
         && let Some(pixels) =
-            crate::channel_view::render(doc, &st.channel_view, doc.bounds(), factor, app.session.prefs().interface.show_channels_in_color, st.active_layer)
+            crate::channel_view::render(doc, &st.channel_view, doc.bounds(), factor, crate::channel_view::Look::of(&app.session), st.active_layer)
     {
         let image = egui::ColorImage::new([width as usize, height as usize], pixels);
         return ctx.load_texture(name, image, egui::TextureOptions::LINEAR);
@@ -342,7 +342,9 @@ mod tests {
                 let egui::ImageData::Color(image) = &delta.set.get(&texture.id()).unwrap()[0].image;
                 let pixels = image.pixels.clone();
                 delta.clear();
-                let expected = crate::channel_view::render(&preview, &st.channel_view, preview.bounds(), 1, false, st.active_layer).unwrap();
+                let expected =
+                    crate::channel_view::render(&preview, &st.channel_view, preview.bounds(), 1, crate::channel_view::Look::default(), st.active_layer)
+                        .unwrap();
                 assert_eq!(pixels, expected, "depth {depth}, factor {k}");
                 assert_ne!(pixels[0], pixels[pixels.len() - 1], "the alpha edge is visible, not the white RGB layer");
                 assert!(pixels.iter().any(|p| p.r() > 0 && p.r() < 255), "the blurred edge is visible");
@@ -362,7 +364,7 @@ mod tests {
         let id = crate::filter_dialog::open(&mut app, "filter.blur.gaussianBlur").unwrap();
         let mut fields = app.ui.dialogs.last().unwrap().fields.clone();
         let ctx = egui::Context::default();
-        let cache_id = egui::Id::new(("filter-preview-ui", id));
+        let cache_id = egui::Id::unique(("filter-preview-ui", id));
         ctx.run_ui(Default::default(), |ui| window(&app, id, ui, &mut fields)).textures_delta.clear();
         let before = ctx.data(|d| d.get_temp::<Cache>(cache_id).unwrap().original.unwrap().tex.id());
         app.session.active_mut().unwrap().channel_view.target = ChannelTarget::Alpha(1);

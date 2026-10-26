@@ -96,8 +96,8 @@ pub fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, 
             ui.horizontal(|ui| {
                 ui.label(tl!("Name:"));
                 let mut text = f.get("name").and_then(Value::as_str).unwrap_or("").to_string();
-                let id = ui.id().with("new-brush-preset-name");
-                let r = widgets::text_field(ui, id, &mut text, "", 220.0, false);
+                let id = ui.scope_id().with("new-brush-preset-name");
+                let r = widgets::text_field(ui, id, &mut text, "", 220.0, false).accessible_name(tl!("Name:"));
                 // Photoshop opens on the name, all of it selected, so typing replaces it.
                 let once = id.with("focused");
                 if !ui.ctx().data(|d| d.get_temp::<bool>(once).unwrap_or(false)) {

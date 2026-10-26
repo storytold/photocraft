@@ -48,7 +48,7 @@ fn round2(x: f32) -> f64 {
 /// The editor. Returns the new value when the curve changed.
 pub(crate) fn editor(ui: &mut egui::Ui, value: &Value) -> Option<Value> {
     let mut points = points_of(value);
-    let changed = edit_points(ui, egui::Id::new(RECT_KEY), &mut points);
+    let changed = edit_points(ui, egui::Id::unique(RECT_KEY), &mut points);
     changed.then(|| value_of(&points))
 }
 
@@ -167,7 +167,7 @@ mod tests {
 
     /// The screen position of curve point `p` (the editor's square starts at the panel's origin).
     fn at(h: &Harness<'static, Value>, p: [f32; 2]) -> Pos2 {
-        let r: egui::Rect = h.ctx.data(|d| d.get_temp(egui::Id::new(RECT_KEY))).expect("the editor ran");
+        let r: egui::Rect = h.ctx.data(|d| d.get_temp(egui::Id::unique(RECT_KEY))).expect("the editor ran");
         pos2(r.left() + p[0] * r.width(), r.bottom() - p[1] * r.height())
     }
 

@@ -34,10 +34,14 @@
 //! (Multichannel documents, patterns larger than the texture limit, uncached gradients with
 //! coincident colour or opacity stops) returns [`Unsupported`];
 //! callers fall back to the CPU compositor.
+//!
+//! [`CameraRawDevelop`] (`camera_raw.rs`) is a separate pass, not part of the compositor: Camera
+//! Raw's per-pixel develop stages for the dialog's preview, built the first time the dialog opens.
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod bounds;
+mod camera_raw;
 mod fx;
 pub mod health;
 pub mod plan;
@@ -54,6 +58,7 @@ use photocraft_doc::{DocId, Document, LayerContent, LayerId, Pattern};
 use photocraft_geom::{Rect, TILE_SIZE, TileCoord};
 use photocraft_raster::{Surface, Tile};
 
+pub use camera_raw::{CAMERA_RAW_SHADER, CameraRawDevelop};
 pub use health::{DeviceHealth, Fault};
 pub use plan::{Kernel, Plan, Role, Unsupported, plan};
 pub use timing::{GpuTimer, GpuTiming};
@@ -468,6 +473,12 @@ pub struct Compositor {
     resident_budget: u64,
     /// GPU memory the effect-map cache may hold ([`FX_BUDGET`] or less).
     fx_budget: u64,
+    /// Layer-page bytes the last full fit check asked for ([`Compositor::fit_layers`]).
+    layer_need: u64,
+    /// Bytes of `fx_budget` lent to `resident_budget` so those pages fit.
+    lent: u64,
+    /// `resident_budget` was set exactly ([`Compositor::set_resident_budget`]): nothing is lent.
+    exact_resident: bool,
     /// What the view shows: a full refresh draws these cells last, so their pages are the
     /// ones still resident for the edits that follow.
     focus: Option<Rect>,
@@ -478,6 +489,13 @@ pub struct Compositor {
     staged: u64,
     /// Copies and render passes recorded since the last submit.
     recorded: u32,
+    /// Why a layer page texture couldn't be created this refresh (it then ends on the CPU).
+    layer_alloc: Option<String>,
+    /// Bytes of pages dropped to admit new ones, not yet counted towards an intermediate submit.
+    admit_freed: u64,
+    /// Test hook ([`Compositor::fail_layer_allocs`]): how many more layer page textures fail as
+    /// out of memory.
+    fail_allocs: u32,
     acc_format: wgpu::TextureFormat,
     /// Whether the effect-map pipelines could be built (else documents with layer effects are
     /// [`Unsupported`] and use the CPU compositor).
@@ -589,9 +607,28 @@ fn field_reaches(progs: &[fx::MapProgram]) -> HashMap<FieldKind, i32> {
     want
 }
 
+/// Why a refresh whose layer pages don't fit GPU memory is drawn on the CPU.
+pub const OVER_BUDGET: &str = "layers exceed the GPU memory budget; full refresh on the CPU";
+
+/// Which of `pages` (LRU clock, key, bytes) to drop, least recently used first, so `incoming`
+/// more bytes fit `budget` on top of the `total` held now. Callers leave out pages that must stay.
+fn lru_victims<K>(mut pages: Vec<(u64, K, u64)>, total: u64, incoming: u64, budget: u64) -> Vec<K> {
+    pages.sort_unstable_by_key(|p| p.0);
+    let mut total = total;
+    let mut out = Vec::new();
+    for (_, k, bytes) in pages {
+        if total.saturating_add(incoming) <= budget {
+            break;
+        }
+        total = total.saturating_sub(bytes);
+        out.push(k);
+    }
+    out
+}
+
 /// Runs `f` inside GPU error scopes and returns the first error raised.
-/// Native wgpu reports errors synchronously; where they only arrive asynchronously (WebGPU) none
-/// is reported.
+/// Native wgpu reports validation/internal/OOM errors synchronously; where they only arrive
+/// asynchronously (WebGPU) none is reported.
 fn first_error<T>(device: &wgpu::Device, f: impl FnOnce() -> T) -> (T, Option<wgpu::Error>) {
     let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
     let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
@@ -608,17 +645,30 @@ fn first_error<T>(device: &wgpu::Device, f: impl FnOnce() -> T) -> (T, Option<wg
     (out, error)
 }
 
-/// Unwatched native callers need GPU errors to become `Unsupported` instead of reaching wgpu's
-/// default panic handler. Watched callers keep their fault callbacks, which stop work promptly
-/// and update the health flag shared with the canvas.
-fn scoped_work<T>(device: &wgpu::Device, watched: bool, f: impl FnOnce() -> Result<T, Unsupported>) -> Result<T, Unsupported> {
+/// Runs `f` inside the error scopes of [`first_error`], turning a reported error into
+/// [`Unsupported`] instead of letting it escape to wgpu's panic handler.
+///
+/// Every native caller needs this, watched or not: a validation error (writing into a destroyed
+/// or too-small buffer, say) is raised synchronously and never reaches the health callbacks, so a
+/// watched compositor still panicked on it. WebGPU reports its errors asynchronously, long after
+/// the scope has popped, so wasm relies on the health callbacks alone.
+///
+/// A scope also swallows the error that [`DeviceHealth`]'s uncaptured-error handler would have
+/// recorded, so a reported error is handed back to `health`: a watched device must stop being
+/// used and let the caller fall back to the CPU compositor.
+fn scoped_work<T>(device: &wgpu::Device, health: Option<DeviceHealth>, f: impl FnOnce() -> Result<T, Unsupported>) -> Result<T, Unsupported> {
     // WebGPU errors arrive asynchronously; its callers still use the health callbacks.
-    if watched || cfg!(target_arch = "wasm32") {
+    if cfg!(target_arch = "wasm32") {
         return f();
     }
     let (result, error) = first_error(device, f);
     match error {
-        Some(error) => Err(Unsupported(format!("GPU work failed: {error}"))),
+        Some(error) => {
+            if let Some(health) = health.as_ref() {
+                health.caught(device, &error);
+            }
+            Err(Unsupported(format!("GPU work failed: {error}")))
+        }
         None => result,
     }
 }
@@ -642,9 +692,9 @@ impl Compositor {
     /// to the CPU compositor. Where errors only arrive asynchronously (WebGPU), creation is assumed
     /// to have worked.
     pub fn try_new_with_format(device: &wgpu::Device, acc_format: wgpu::TextureFormat) -> Result<Self, Unsupported> {
-        match first_error(device, || Self::new_with_format(device, acc_format)) {
-            (comp, None) => Ok(comp),
-            (_, Some(e)) => Err(Unsupported(format!("couldn't build the compositor's pipelines: {e}"))),
+        match first_error(device, || Self::build(device, acc_format)) {
+            ((comp, None), None) => Ok(comp),
+            ((_, Some(e)), _) | (_, Some(e)) => Err(Unsupported(format!("couldn't build the compositor's pipelines: {e}"))),
         }
     }
 
@@ -652,6 +702,18 @@ impl Compositor {
     /// `Rgba16Float` on adapters that can't render to `Rgba32Float` (e.g. some Intel Vulkan drivers),
     /// which otherwise panics at render-pipeline creation. See `Compositor::preferred_acc_format`.
     pub fn new_with_format(device: &wgpu::Device, acc_format: wgpu::TextureFormat) -> Self {
+        let (comp, error) = Self::build(device, acc_format);
+        if let Some(e) = error {
+            log::error!("GPU compositor: couldn't build its pipelines: {e}");
+        }
+        comp
+    }
+
+    /// The compositor and the first error raised building its (non-map) pipelines. They are
+    /// built in parallel, each inside its own error scope on the thread that builds it (wgpu's
+    /// scopes are per thread): on DX12, FXC compiles one shader at a time and the ~30 pipelines
+    /// took about 8 s on one core (#6419).
+    fn build(device: &wgpu::Device, acc_format: wgpu::TextureFormat) -> (Self, Option<wgpu::Error>) {
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("pc_compose"), source: wgpu::ShaderSource::Wgsl(SHADER.into()) });
         let bgl0 = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("pc_compose_uniforms"),
@@ -686,19 +748,42 @@ impl Compositor {
                 cache: None,
             }))
         };
-        let mut pipelines: HashMap<_, _> =
-            Kernel::DRAWN.iter().filter(|k| !k.is_map()).filter_map(|&k| Some(((k, acc_format), pipeline(k, acc_format)?))).collect();
         // Effect maps render to R32Float / R16Float, which some adapters (e.g. GL without float
         // render targets) can't: then layer effects use the CPU compositor and the rest stays here.
-        let maps = Kernel::DRAWN.iter().filter(|k| k.is_map()).flat_map(|&k| [(k, MAP32), (k, MAP16)]);
-        let (maps, map_error) = first_error(device, || maps.filter_map(|key| Some((key, pipeline(key.0, key.1)?))).collect::<Vec<_>>());
+        let keys = Kernel::DRAWN.iter().filter(|k| !k.is_map()).map(|&k| (k, acc_format));
+        let keys: Vec<_> = keys.chain(Kernel::DRAWN.iter().filter(|k| k.is_map()).flat_map(|&k| [(k, MAP32), (k, MAP16)])).collect();
+        let built = fx::par_map(keys, |key| {
+            let (built, error) = first_error(device, || pipeline(key.0, key.1));
+            (key, built, error)
+        });
+        let (mut pipelines, mut maps) = (HashMap::new(), Vec::new());
+        let (mut error, mut map_error) = (None, None);
+        for (key, built, e) in built {
+            let map = key.0.is_map();
+            // A failed map pipeline turns all effect maps off below. A failed non-map pipeline
+            // keeps its (invalid) handle: draws look pipelines up by key, so dropping it would
+            // turn a validation error into a missing-key panic on the first draw.
+            if let Some(e) = e {
+                if map {
+                    map_error.get_or_insert(e);
+                    continue;
+                }
+                error.get_or_insert(e);
+            }
+            let Some(p) = built else { continue };
+            if map {
+                maps.push((key, p));
+            } else {
+                pipelines.insert(key, p);
+            }
+        }
         if let Some(e) = &map_error {
             log::info!("GPU compositor: no effect-map pipelines ({e}); layer effects use the CPU");
         } else {
             pipelines.extend(maps);
         }
         let dummy = Tex::new(device, "pc_compose_dummy", 1, 1, wgpu::TextureFormat::Rgba8Unorm, wgpu::TextureUsages::TEXTURE_BINDING).view;
-        Self {
+        let comp = Self {
             kit: Kit { pipelines, bgl0, bgl1, dummy },
             pool: Vec::new(),
             residents: HashMap::new(),
@@ -715,18 +800,25 @@ impl Compositor {
             chunk: CHUNK,
             resident_budget: RESIDENT_BUDGET,
             fx_budget: (FX_BUDGET as u64).saturating_sub(prefix::MAX_BYTES),
+            layer_need: 0,
+            lent: 0,
+            exact_resident: false,
             focus: None,
             frame: 0,
             stamp: 0,
             staged: 0,
             recorded: 0,
+            layer_alloc: None,
+            admit_freed: 0,
+            fail_allocs: 0,
             acc_format,
             effect_maps: map_error.is_none(),
             cmyk: 0,
             health: None,
             timer: None,
         }
-        .with_texture_limit(device.limits().max_texture_dimension_2d)
+        .with_texture_limit(device.limits().max_texture_dimension_2d);
+        (comp, error)
     }
 
     fn with_texture_limit(mut self, max: u32) -> Self {
@@ -759,9 +851,21 @@ impl Compositor {
         self.page
     }
 
-    /// Set the GPU memory resident layer pages may hold (default [`RESIDENT_BUDGET`]).
+    /// Test hook: the next `n` layer page textures fail as if the device were out of memory
+    /// (a real one can't be forced), so the fallback paths of #6563 can be tested.
+    #[doc(hidden)]
+    pub fn fail_layer_allocs(&mut self, n: u32) {
+        self.fail_allocs = n;
+    }
+
+    /// Set the GPU memory resident layer pages may hold (default [`RESIDENT_BUDGET`]), exactly:
+    /// nothing is lent to it ([`Self::fit_layers`]) until the next [`Self::set_memory_budget`].
     pub fn set_resident_budget(&mut self, bytes: u64) {
+        // The loan goes back to the effect maps, so the total budget stays what it was.
+        self.fx_budget = self.fx_budget.saturating_add(self.lent);
+        self.lent = 0;
         self.resident_budget = bytes;
+        self.exact_resident = true;
     }
 
     /// Set the GPU memory the compositor may hold for layer pages and caches together
@@ -772,6 +876,36 @@ impl Compositor {
         self.prefix.set_budget((caches / 2).min(prefix::MAX_BYTES));
         self.fx_budget = caches.saturating_sub(self.prefix.budget());
         self.resident_budget = bytes.saturating_sub(caches);
+        self.lent = 0;
+        self.exact_resident = false;
+        self.lend();
+    }
+
+    /// Record that a render needs `needed` bytes of layer pages and return the resident budget
+    /// they now have. A render of the `whole` document sets the need; a part of it only raises
+    /// it, so a large partial refresh never shrinks what the next full one keeps resident.
+    ///
+    /// Pages that miss their share by less than the effect-map share borrow from it: an evicted
+    /// effect map is rebuilt by the next refresh that draws it, but one page too many sends the
+    /// whole refresh to the CPU compositor, 10× slower (#5973, P60: 150 layers of 6 MP on an
+    /// integrated GPU missed by 5 % and took 680 ms instead of 62).
+    /// The lower-stack share is never lent: it is what keeps a mid-stack edit at half the work.
+    /// The loan holds across [`Self::set_memory_budget`] until a later call needs less or more.
+    pub fn fit_layers(&mut self, needed: u64, whole: bool) -> u64 {
+        self.layer_need = if whole { needed } else { self.layer_need.max(needed) };
+        self.lend();
+        self.resident_budget
+    }
+
+    /// Return the loan to the effect maps, then lend what [`Self::layer_need`] still lacks, if
+    /// the effect-map share covers it (lending part of it would fit nothing and only evict maps).
+    fn lend(&mut self) {
+        self.fx_budget = self.fx_budget.saturating_add(self.lent);
+        self.resident_budget = self.resident_budget.saturating_sub(self.lent);
+        let short = self.layer_need.saturating_sub(self.resident_budget);
+        self.lent = if short <= self.fx_budget && !self.exact_resident { short } else { 0 };
+        self.fx_budget = self.fx_budget.saturating_sub(self.lent);
+        self.resident_budget = self.resident_budget.saturating_add(self.lent);
     }
 
     /// The budget of layer pages, effect maps and lower-stack chunks (bytes).
@@ -1025,7 +1159,7 @@ impl Compositor {
         region: Rect,
         mut sink: impl FnMut(&mut wgpu::CommandEncoder, ChunkOut<'_>),
     ) -> Result<Stats, Unsupported> {
-        let result = scoped_work(device, self.health.is_some(), || {
+        let result = scoped_work(device, self.health.clone(), || {
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("pc_compose") });
             if self.timer.as_ref().is_some_and(timing::GpuTimer::busy) {
                 // The readback map completes on a poll. The app polls every frame, but a
@@ -1086,7 +1220,7 @@ impl Compositor {
         region: Rect,
         sink: &mut dyn FnMut(&mut wgpu::CommandEncoder, ChunkOut<'_>),
     ) -> Result<Stats, Unsupported> {
-        let result = scoped_work(device, self.health.is_some(), || self.encode_inner(device, queue, encoder, doc, region, sink, false));
+        let result = scoped_work(device, self.health.clone(), || self.encode_inner(device, queue, encoder, doc, region, sink, false));
         if result.is_err() {
             self.discard_failed_work();
         }
@@ -1162,6 +1296,8 @@ impl Compositor {
         self.stamp += 1;
         self.staged = 0;
         self.recorded = 0;
+        self.layer_alloc = None;
+        self.admit_freed = 0;
 
         // Only render owns submission. A caller may discard encode's command buffer, so it
         // cannot establish (or consume) a checkpoint whose GPU copy might never execute.
@@ -1225,9 +1361,48 @@ impl Compositor {
             if let Some(f) = self.fault() {
                 return Err(Unsupported(f.to_string()));
             }
+            // Out of memory although every page this cell doesn't use was dropped: the work recorded
+            // since the last submit can still hold those pages. Submit it, wait until the GPU is done
+            // with it so their memory is released, and run the cell once more. `encode` can't
+            // submit, so there the refresh goes to the CPU straight away.
+            if flush && self.layer_alloc.as_deref() == Some(OVER_BUDGET) {
+                self.layer_alloc = None;
+                submit_batch(device, queue, encoder, self.health.as_ref(), self.timer.as_mut(), &mut last_submit);
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    let idle = match self.health.as_ref() {
+                        Some(h) => h.wait_idle(device, last_submit.clone()),
+                        None => device.poll(wgpu::PollType::Wait { submission_index: last_submit.clone(), timeout: None }).is_ok(),
+                    };
+                    // The GPU has run every timestamp submitted so far, so a retry that fails too
+                    // can drop this measurement without switching timing off for good.
+                    if idle && let Some(t) = self.timer.as_mut() {
+                        t.drained();
+                    }
+                }
+                self.staged = 0;
+                self.recorded = 0;
+                work = 0;
+                freed = 0;
+                self.admit_freed = 0;
+                stats.flushes += 1;
+                if let Some(f) = self.fault() {
+                    return Err(Unsupported(f.to_string()));
+                }
+                let mut batch = Some(&mut last_submit);
+                self.run_cell(device, queue, encoder, doc.id, &plan, &runs, &paged, cell, &fr, &chunks, checkpoint, &mut stats, sink, &mut batch);
+                if let Some(f) = self.fault() {
+                    return Err(Unsupported(f.to_string()));
+                }
+            }
+            // A page didn't fit even after evicting: this refresh goes to the CPU, the next one
+            // tries the GPU again (#6563).
+            if let Some(e) = self.layer_alloc.take() {
+                return Err(Unsupported(e));
+            }
             let (evicted, bytes) = self.evict();
             stats.evicted += evicted;
-            freed += bytes;
+            freed = freed.saturating_add(bytes.saturating_add(std::mem::take(&mut self.admit_freed)));
             if flush && (self.staged >= flush_bytes || work >= FLUSH_WORK || freed >= flush_bytes || self.recorded >= FLUSH_OPS) {
                 submit_batch(device, queue, encoder, self.health.as_ref(), self.timer.as_mut(), &mut last_submit);
                 self.staged = 0;
@@ -1280,22 +1455,7 @@ impl Compositor {
     /// whole-region effect maps drawn this frame. Returns how many textures were dropped and
     /// their bytes.
     fn evict(&mut self) -> (usize, u64) {
-        let (mut n, mut freed) = (0, 0u64);
-        let mut total = self.resident_bytes();
-        if total > self.resident_budget {
-            let mut lru: Vec<(u64, ResKey, u64)> =
-                self.residents.iter().filter(|(_, r)| r.stamp != self.stamp).map(|(k, r)| (r.stamp, *k, r.bytes())).collect();
-            lru.sort_unstable_by_key(|c| c.0);
-            for (_, k, bytes) in lru {
-                if total <= self.resident_budget {
-                    break;
-                }
-                self.residents.remove(&k);
-                total = total.saturating_sub(bytes);
-                n += 1;
-                freed += bytes;
-            }
-        }
+        let (mut n, mut freed) = self.evict_residents(self.resident_budget, 0, None);
         let mut total = self.fx_cache_bytes();
         let fx_budget = usize::try_from(self.fx_budget).unwrap_or(usize::MAX);
         if total > fx_budget {
@@ -1319,6 +1479,71 @@ impl Compositor {
             }
         }
         (n, freed)
+    }
+
+    /// Drop least recently used resident pages until `incoming` more bytes fit in `budget`.
+    /// Never drops what the current cell uses, nor `keep`. Returns how many pages were dropped
+    /// and their bytes.
+    fn evict_residents(&mut self, budget: u64, incoming: u64, keep: Option<ResKey>) -> (usize, u64) {
+        let stamp = self.stamp;
+        let pages: Vec<(u64, ResKey, u64)> =
+            self.residents.iter().filter(|(k, r)| r.stamp != stamp && Some(**k) != keep).map(|(k, r)| (r.stamp, *k, r.bytes())).collect();
+        let (mut n, mut freed) = (0, 0u64);
+        for k in lru_victims(pages, self.resident_bytes(), incoming, budget) {
+            if let Some(r) = self.residents.remove(&k) {
+                n += 1;
+                freed += r.bytes();
+            }
+        }
+        (n, freed)
+    }
+
+    /// Create the page texture for `key`, `bytes` large. Least recently used pages make room in
+    /// the budget first; when the device is still out of memory, every page the current cell
+    /// doesn't use is dropped and creation is tried once more (#6563). `None` (with
+    /// `layer_alloc` set) when it still fails: `render` submits the recorded work, which can still
+    /// hold the dropped pages, and runs the cell once more; after that the CPU draws the refresh.
+    fn create_layer_texture(
+        &mut self,
+        device: &wgpu::Device,
+        desc: &wgpu::TextureDescriptor<'_>,
+        key: ResKey,
+        bytes: u64,
+        stats: &mut Stats,
+    ) -> Option<wgpu::Texture> {
+        let replaced = self.residents.get(&key).map_or(0, Resident::bytes);
+        let (n, dropped) = self.evict_residents(self.resident_budget, bytes.saturating_sub(replaced), Some(key));
+        stats.evicted += n;
+        self.admit_freed = self.admit_freed.saturating_add(dropped);
+        // WebGPU reports errors asynchronously: its failures reach the health callbacks.
+        if cfg!(target_arch = "wasm32") {
+            return Some(device.create_texture(desc));
+        }
+        for retry in [false, true] {
+            let (texture, mut error) = first_error(device, || device.create_texture(desc));
+            if error.is_none() && self.fail_allocs > 0 {
+                self.fail_allocs -= 1;
+                error = Some(wgpu::Error::OutOfMemory { source: "out of memory (test hook)".into() });
+            }
+            match error {
+                None => return Some(texture),
+                Some(wgpu::Error::OutOfMemory { .. }) if !retry => {
+                    let (n, dropped) = self.evict_residents(0, 0, Some(key));
+                    stats.evicted += n;
+                    self.admit_freed = self.admit_freed.saturating_add(dropped);
+                }
+                Some(wgpu::Error::OutOfMemory { .. }) => {
+                    self.layer_alloc = Some(OVER_BUDGET.into());
+                    return None;
+                }
+                Some(e) => {
+                    self.layer_alloc = Some(format!("GPU layer texture failed: {e}"));
+                    return None;
+                }
+            }
+        }
+        self.layer_alloc = Some(OVER_BUDGET.into());
+        None
     }
 
     /// Per-frame resources of `plan`: the tile area of each pass's surfaces, its LUT and pattern.
@@ -1420,6 +1645,10 @@ impl Compositor {
             .and_then(|_| chunks.iter().map(|c| self.prefix.restore_point(*c).map(|r| r.pass_end)).try_fold(usize::MAX, |m, p| Some(m.min(p?))))
             .unwrap_or(0);
         let bound = self.bind_cell(device, queue, encoder, doc, plan, paged, cell, fr, first_pass, stats);
+        // A page couldn't be created: draw nothing with the pages missing (the caller ends the refresh).
+        if self.layer_alloc.is_some() {
+            return;
+        }
 
         // Chunk pool.
         while self.pool.len() < plan.slots as usize {
@@ -1638,7 +1867,8 @@ impl Compositor {
         region: Rect,
         stats: &mut Stats,
     ) -> Option<(ResKey, [i32; 4])> {
-        if region.is_empty() {
+        // An earlier page of this cell didn't fit: the refresh ends after the cell anyway.
+        if region.is_empty() || self.layer_alloc.is_some() {
             return None;
         }
         let format = surface.format();
@@ -1651,7 +1881,7 @@ impl Compositor {
             .get(&key)
             .is_none_or(|r| r.region != region || r.kind != kind || r.format != format || r.cmyk != cmyk || r.default_bits != default_bits);
         if stale {
-            let texture = device.create_texture(&wgpu::TextureDescriptor {
+            let desc = wgpu::TextureDescriptor {
                 label: Some("pc_compose_layer"),
                 size: wgpu::Extent3d { width: region.width(), height: region.height(), depth_or_array_layers: 1 },
                 mip_level_count: 1,
@@ -1660,7 +1890,9 @@ impl Compositor {
                 format: kind.format(),
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::COPY_SRC,
                 view_formats: &[],
-            });
+            };
+            let bytes = region.width() as u64 * region.height() as u64 * kind.bytes_per_pixel() as u64;
+            let texture = self.create_layer_texture(device, &desc, key, bytes, stats)?;
             let view = texture.create_view(&Default::default());
             let default_nonzero = default_pixel.iter().any(|v| *v != 0.0);
             let mut r = Resident {
@@ -2848,6 +3080,21 @@ mod tests {
             assert_eq!(batch_kernel(&[normal.clone(), other.clone()]), Kernel::LayerBatch);
             assert_eq!(batch_kernel(&[other, normal.clone()]), Kernel::LayerBatch);
         }
+    }
+
+    #[test]
+    fn layer_pages_are_admitted_by_evicting_least_recently_used_first() {
+        let pages = || vec![(5, 'c', 40), (1, 'a', 30), (3, 'b', 20)];
+        // Fits already: nothing dropped.
+        assert!(lru_victims(pages(), 90, 10, 100).is_empty());
+        // 90 held + 40 incoming over 100: the oldest page goes first, then the next.
+        assert_eq!(lru_victims(pages(), 90, 40, 100), vec!['a']);
+        assert_eq!(lru_victims(pages(), 90, 60, 100), vec!['a', 'b']);
+        // Out of memory: a zero budget drops every candidate, and an impossible request stops
+        // when none are left instead of looping or overflowing.
+        assert_eq!(lru_victims(pages(), 90, 0, 0), vec!['a', 'b', 'c']);
+        assert_eq!(lru_victims(pages(), u64::MAX, u64::MAX, 1), vec!['a', 'b', 'c']);
+        assert!(lru_victims(Vec::<(u64, char, u64)>::new(), 90, 40, 100).is_empty());
     }
 
     #[test]

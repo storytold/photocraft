@@ -234,7 +234,10 @@ pub(crate) fn has_filterable_layer(s: &Session) -> std::result::Result<(), Strin
 pub(crate) fn run_filter(s: &mut Session, id: &str, p: &Value) -> Result<Value> {
     validate_params(id, p)?;
     // Session state some filters read (colours) becomes explicit params; external inputs resolve here.
-    let prepared = crate::filters_ext::prepare(s, id, p);
+    let mut prepared = crate::filters_ext::prepare(s, id, p);
+    if id == "filter.distort.displace" {
+        prepared = crate::filters_ext::displace_request(&prepared);
+    }
     let p = &prepared;
     let mut fp = params_for(id, p).ok_or_else(|| EngineError::Other(format!("unknown filter {id}")))?;
     crate::filters_ext::resolve(s, &mut fp, p)?;
@@ -262,9 +265,10 @@ pub(crate) fn run_filter(s: &mut Session, id: &str, p: &Value) -> Result<Value> 
             };
             let selection = doc.selection.clone();
             let sel_bounds = selection.as_ref().map(photocraft_raster::Surface::content_bounds);
-            // Distortions centre on the selection when there is one, else the canvas.
+            // Distortions centre on the selection when there is one, else the canvas. Clouds and
+            // Fibers place and size their pattern by the canvas either way; the selection masks them.
             let doc_bounds = doc.bounds();
-            let bounds = sel_bounds.filter(|b| !b.is_empty()).unwrap_or(doc_bounds);
+            let bounds = if fp.sizes_by_canvas() { doc_bounds } else { sel_bounds.filter(|b| !b.is_empty()).unwrap_or(doc_bounds) };
             // Neighbourhood filters repeat edge pixels at the canvas edge (or past it, where the
             // layer has off-canvas pixels) instead of fading in transparency, as Photoshop does.
             if let Some(surf) = crate::channel_cmds::channel_surface_for_filter(doc, Some(layer), &p)? {
@@ -297,9 +301,24 @@ pub(crate) fn run_filter(s: &mut Session, id: &str, p: &Value) -> Result<Value> 
                     if matches!(fp, FilterParams::LensBlur { depth: algo::DepthSource::Channel, .. }) {
                         return Err(EngineError::Other("Lens Blur can't read an alpha channel as depth on a Smart Object: rasterize the layer first".into()));
                     }
+                    // A smart filter re-renders from its params alone: a Displace map read from an
+                    // open document, which the re-render can't read again, is kept in them, as
+                    // Photoshop embeds it (#7423). A `mapPath` stays a path, read next to the
+                    // document on each re-render.
+                    let params = match &fp {
+                        FilterParams::Displace { map: Some(map), .. }
+                            if photocraft_io::smart_map::displace_embedded_map(&params).is_none() && crate::filters_ext::map_path(&params).is_none() =>
+                        {
+                            photocraft_io::smart_map::displace_embed_map(&params, map).ok_or_else(|| {
+                                EngineError::Other(
+                                    "Displace: the displacement map is too large to keep in a Smart Object's filter: rasterize the layer first".into(),
+                                )
+                            })?
+                        }
+                        _ => params.clone(),
+                    };
                     // Non-destructive: record the filter and re-render the smart object from its source.
-                    let sf =
-                        SmartFilter { command: id.clone(), params: params.clone(), blend: photocraft_color::BlendMode::Normal, opacity: 1.0, visible: true };
+                    let sf = SmartFilter { command: id.clone(), params, blend: photocraft_color::BlendMode::Normal, opacity: 1.0, visible: true };
                     return crate::smart_cmds::add_smart_filter(doc, layer, sf, selection.as_ref()).map(|()| fp);
                 }
                 _ => return Err(EngineError::Other("not a pixel layer".into())),
@@ -933,5 +952,66 @@ mod tests {
         // The cancel was seen inside the pass (after some tiles), and no tile went missing.
         assert!(calls.load(std::sync::atomic::Ordering::SeqCst) > 2);
         assert!(new.tiles().all(|(c, _)| got.tile(*c).is_some()));
+    }
+
+    /// #7423: Displace on a Smart Object keeps its map (read from an open document) in the smart
+    /// filter, as Photoshop embeds it, so the filter displaces and keeps displacing when the
+    /// object re-renders. A map chosen again replaces it.
+    #[test]
+    fn displace_on_a_smart_object_embeds_its_map() {
+        let mut s = Session::new();
+        // Documents 0 and 1: a white and a black displacement map.
+        s.execute("file.new", json!({"width": 8, "height": 8, "background": "white"})).unwrap();
+        s.execute("file.new", json!({"width": 8, "height": 8, "background": "black"})).unwrap();
+        s.execute("file.new", json!({"width": 48, "height": 32, "background": "transparent"})).unwrap();
+        s.edit("square", |doc, active| {
+            let fmt = doc.pixel_format();
+            let surf = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+            surf.fill_rect(photocraft_geom::Rect::new(10, 10, 20, 12), &photocraft_raster::from_rgba(&fmt, [1.0, 0.0, 0.0, 1.0]));
+            Ok(())
+        })
+        .unwrap();
+        s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        let original = {
+            let d = s.active().unwrap();
+            let LayerContent::Smart(sm) = &d.doc.layer(d.active_layer.unwrap()).unwrap().content else { panic!("not a smart object") };
+            sm.cache.as_ref().unwrap().read_region(d.doc.bounds())
+        };
+        let smart = |s: &Session| {
+            let d = s.active().unwrap();
+            let LayerContent::Smart(sm) = &d.doc.layer(d.active_layer.unwrap()).unwrap().content else { panic!("not a smart object") };
+            (sm.smart_filters[0].params.clone(), sm.cache.as_ref().unwrap().read_region(d.doc.bounds()))
+        };
+        let first_value = |params: &Value| photocraft_io::smart_map::displace_embedded_map(params).expect("an embedded map").data[0];
+
+        s.execute("filter.distort.displace", json!({"horizontal": 10, "vertical": 0, "mapDocument": 0})).unwrap();
+        let (params, displaced) = smart(&s);
+        assert!(params.get("mapDocument").is_none(), "{params}");
+        assert_eq!(first_value(&params), 1.0, "the white map");
+        assert_ne!(displaced, original, "the smart object is displaced");
+        // Re-rendered from its params alone (the filter hidden and shown again): still displaced.
+        s.execute("layer.smartFilter.setVisible", json!({"index": 0, "visible": false})).unwrap();
+        assert_eq!(smart(&s).1, original);
+        s.execute("layer.smartFilter.setVisible", json!({"index": 0, "visible": true})).unwrap();
+        assert_eq!(smart(&s).1, displaced);
+
+        // Another map chosen for the filter replaces the embedded one.
+        s.execute("layer.smartFilter.setParams", json!({"index": 0, "params": {"mapDocument": 1}})).unwrap();
+        let (params, again) = smart(&s);
+        assert!(params.get("mapDocument").is_none(), "{params}");
+        assert_eq!(first_value(&params), 0.0, "the black map");
+        assert_ne!(again, displaced, "displaced the other way");
+
+        // The stored params passed back whole (the old embedded map included) with another map
+        // named: the named map wins, for the filter's own edit and for a new Displace alike.
+        let mut back = params.as_object().unwrap().clone();
+        back.insert("mapDocument".into(), json!(0));
+        s.execute("layer.smartFilter.setParams", json!({"index": 0, "params": back.clone()})).unwrap();
+        assert_eq!(first_value(&smart(&s).0), 1.0, "the white map, not the embedded black one");
+        back.insert("mapDocument".into(), json!(1));
+        s.execute("filter.distort.displace", Value::Object(back)).unwrap();
+        let d = s.active().unwrap();
+        let LayerContent::Smart(sm) = &d.doc.layer(d.active_layer.unwrap()).unwrap().content else { panic!("not a smart object") };
+        assert_eq!(first_value(&sm.smart_filters[1].params), 0.0, "the black map, not the passed-back white one");
     }
 }

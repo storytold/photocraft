@@ -61,7 +61,7 @@ choice!(DarkTheme { Pro = "pro", ProMedium = "proMedium", Studio = "studio", Sol
 choice!(LightTheme { ProLight = "proLight", ProLightGray = "proLightGray", StudioLight = "studioLight", Classic = "classic", Adwaita = "adwaita", BreezeLight = "breezeLight", SoftLight = "softLight" } default ProLight);
 choice!(CanvasColor { Default = "default", Black = "black", DarkGray = "darkGray", MediumGray = "mediumGray", LightGray = "lightGray", Custom = "custom" } default Default);
 choice!(CanvasBorder { DropShadow = "dropShadow", Line = "line", None = "none" } default DropShadow);
-choice!(UiScale { Auto = "auto", P75 = "75", P80 = "80", P85 = "85", P90 = "90", P95 = "95", P100 = "100", P125 = "125", P150 = "150", P175 = "175", P200 = "200", P250 = "250", P300 = "300" } default Auto);
+choice!(UiScale { Auto = "auto", P75 = "75", P80 = "80", P85 = "85", P90 = "90", P95 = "95", P100 = "100", P105 = "105", P110 = "110", P115 = "115", P120 = "120", P125 = "125", P150 = "150", P175 = "175", P200 = "200", P250 = "250", P300 = "300" } default Auto);
 choice!(
     /// Graphics backend of the desktop app's window and GPU canvas (applies at next launch).
     /// `auto` lets PhotoCraft pick (DX12 for Intel adapters on Windows); `cpu` composites on the
@@ -86,7 +86,7 @@ choice!(UiFontSize { Tiny = "tiny", Small = "small", Medium = "medium", Large = 
 choice!(LogDestination { Metadata = "metadata", TextFile = "textFile", Both = "both" } default Metadata);
 choice!(LogDetail { SessionsOnly = "sessionsOnly", Concise = "concise", Detailed = "detailed" } default Concise);
 choice!(Ask { Always = "always", Never = "never", Ask = "ask" } default Always);
-choice!(QuickExportFormat { Png = "png", Jpg = "jpg", Gif = "gif", Webp = "webp" } default Png);
+choice!(QuickExportFormat { Png = "png", Jpg = "jpg", Gif = "gif", Webp = "webp", Exr = "exr" } default Png);
 choice!(ExportLocation { Ask = "ask", SameFolder = "sameFolder" } default Ask);
 choice!(ExportMetadata { None = "none", Copyright = "copyright", All = "all" } default Copyright);
 choice!(
@@ -108,6 +108,12 @@ choice!(FontPreview { Off = "off", Small = "small", Medium = "medium", Large = "
 choice!(RawColorSpace { Srgb = "srgb", AdobeRgb = "adobeRgb", ProPhoto = "proPhoto", DisplayP3 = "displayP3" } default AdobeRgb);
 choice!(RawDepth { Eight = "8", Sixteen = "16" } default Sixteen);
 choice!(RawSharpen { None = "none", Screen = "screen", Glossy = "glossy", Matte = "matte" } default None);
+choice!(
+    /// How a raw file's colour filter array is filled in when it is developed: AHD
+    /// (Hirakawa–Parks) keeps edges cleanest, Malvar–He–Cutler is sharp and fast, bilinear is the
+    /// fastest and softest. Photoshop's Camera Raw has no such choice.
+    RawDemosaic { Ahd = "ahd", Mhc = "mhc", Bilinear = "bilinear" } default Ahd
+);
 
 impl Unit {
     /// Document pixels → this unit. `dpi` is the document resolution, `extent` the 100% length
@@ -217,10 +223,13 @@ pub struct General {
     pub always_create_smart_objects_when_placing: bool,
     /// Scroll wheel zooms instead of panning.
     pub zoom_with_scroll_wheel: bool,
+    /// Wheel zoom eases over the frames of a notch; off, a notch is one instant ×1.1 step.
     pub animated_zoom: bool,
     pub zoom_resizes_windows: bool,
     pub use_legacy_free_transform: bool,
     pub auto_show_home_screen: bool,
+    /// Desktop: check published stable releases once in the background at launch.
+    pub automatically_check_updates: bool,
 }
 
 impl Default for General {
@@ -237,6 +246,7 @@ impl Default for General {
             zoom_resizes_windows: false,
             use_legacy_free_transform: false,
             auto_show_home_screen: true,
+            automatically_check_updates: true,
         }
     }
 }
@@ -444,6 +454,8 @@ impl Default for HistoryLog {
 pub struct FileHandling {
     pub image_previews: Ask,
     pub lowercase_extension: bool,
+    /// File › Save a Copy suggests the document's own name rather than "<name> copy" (#8080).
+    pub do_not_append_copy: bool,
     /// Saves run in the background while you keep working (on), or in the foreground under a
     /// modal progress dialog that blocks the app until the file is written (off).
     pub save_in_background: bool,
@@ -465,6 +477,17 @@ pub struct FileHandling {
     pub recent_file_count: u32,
     /// Most recently opened files, newest first (File › Open Recent).
     pub recent_files: Vec<String>,
+    /// A folder whose `.cube`, `.3dl` and `.look` files Color Lookup lists under its built-in
+    /// looks (native only, #6558). Empty lists none.
+    pub lut_folder: String,
+}
+
+impl FileHandling {
+    /// What File › Save a Copy appends to the document's name: " copy", or nothing with Do not
+    /// append "copy" to filename when saving a copy (#8080).
+    pub fn copy_suffix(&self) -> &'static str {
+        if self.do_not_append_copy { "" } else { " copy" }
+    }
 }
 
 impl Default for FileHandling {
@@ -472,6 +495,7 @@ impl Default for FileHandling {
         Self {
             image_previews: Ask::Always,
             lowercase_extension: true,
+            do_not_append_copy: false,
             save_in_background: true,
             autosave: true,
             autosave_minutes: 10,
@@ -483,6 +507,7 @@ impl Default for FileHandling {
             rasterize_svg_groups_deeper_than: photocraft_doc::MAX_GROUP_DEPTH as u32,
             recent_file_count: 20,
             recent_files: Vec::new(),
+            lut_folder: String::new(),
         }
     }
 }
@@ -514,15 +539,22 @@ impl Default for Export {
     }
 }
 
+/// [`Performance::memory_usage_mb`]'s default.
+pub const DEFAULT_MEMORY_USAGE_MB: u32 = 8192;
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Performance {
     /// Memory PhotoCraft may use, in MB: bounds each document's pixels plus its History (the
-    /// oldest states are dropped beyond it).
+    /// oldest states are dropped beyond it), and the result of one transform.
     pub memory_usage_mb: u32,
     /// Undo steps kept per document (History panel states).
     pub history_states: u32,
-    /// Display cache levels (mip levels kept for zoomed-out views).
+    /// Cache Levels, 1–8: the highest cache level the Histogram panel counts a large document at
+    /// (level n counts a proxy 2^(n-1) times smaller; 1 counts every pixel). Lower is more
+    /// accurate, higher faster. The panel picks the level from the document's size up to this;
+    /// the web build, which counts on the UI thread, reduces documents from a quarter of the size
+    /// the desktop does. Uncached Refresh always counts at level 1.
     pub cache_levels: u32,
     /// Side of the GPU canvas texture tiles, in pixels (applies at next launch).
     pub cache_tile_size: u32,
@@ -573,9 +605,10 @@ impl Performance {
 }
 
 impl Default for Performance {
+    /// What a new install starts with, [`DEFAULT_MEMORY_USAGE_MB`] of Memory Usage among it.
     fn default() -> Self {
         Self {
-            memory_usage_mb: 8192,
+            memory_usage_mb: DEFAULT_MEMORY_USAGE_MB,
             history_states: 50,
             cache_levels: 4,
             cache_tile_size: 8192,
@@ -871,6 +904,48 @@ pub struct RawDefaults {
     /// Photoshop does; off develops it with the defaults straight away. Automation opens never
     /// show the dialog.
     pub open_in_camera_raw: bool,
+    /// The demosaic method raws are developed with; the open-time Camera Raw dialog starts from it.
+    pub demosaic: RawDemosaic,
+    /// Keep a raw file's develop settings in a sidecar (`IMG_0001.xmp` beside `IMG_0001.CR2`),
+    /// as Camera Raw's "Save image settings in: Sidecar .xmp files"; the sidecar is read again
+    /// when the file is next opened. Off reads sidecars but never writes one.
+    pub write_xmp_sidecars: bool,
+}
+
+impl RawColorSpace {
+    /// The built-in profile `edit.convertToProfile` knows this space as.
+    pub fn profile_id(self) -> &'static str {
+        match self {
+            RawColorSpace::Srgb => "srgb",
+            RawColorSpace::AdobeRgb => "adobe-rgb-compat",
+            RawColorSpace::ProPhoto => "prophoto-compat",
+            RawColorSpace::DisplayP3 => "display-p3",
+        }
+    }
+}
+
+impl RawSharpen {
+    /// Camera Raw's output sharpening for this medium as the Detail panel's (amount, radius):
+    /// none, Screen (light, fine), Matte paper (stronger, wider: ink spreads), Glossy paper.
+    pub fn preset(self) -> Option<(f32, f32)> {
+        match self {
+            RawSharpen::None => None,
+            RawSharpen::Screen => Some((25.0, 1.0)),
+            RawSharpen::Matte => Some((35.0, 1.2)),
+            RawSharpen::Glossy => Some((40.0, 1.0)),
+        }
+    }
+}
+
+impl RawDemosaic {
+    /// The developer's method.
+    pub fn method(self) -> photocraft_io::raw::Demosaic {
+        match self {
+            RawDemosaic::Ahd => photocraft_io::raw::Demosaic::Ahd,
+            RawDemosaic::Mhc => photocraft_io::raw::Demosaic::Mhc,
+            RawDemosaic::Bilinear => photocraft_io::raw::Demosaic::Bilinear,
+        }
+    }
 }
 
 impl Default for RawDefaults {
@@ -883,6 +958,8 @@ impl Default for RawDefaults {
             open_as_smart_object: false,
             apply_auto_tone: false,
             open_in_camera_raw: true,
+            demosaic: RawDemosaic::Ahd,
+            write_xmp_sidecars: true,
         }
     }
 }
@@ -931,6 +1008,37 @@ impl MenuCustomization {
 pub struct ToolbarCustomization {
     pub hidden: Vec<String>,
     pub order: Vec<String>,
+}
+
+/// Layer Mask Display Options (double-click the layer mask's row in the Channels panel, or Mask
+/// Options… on its Layers thumbnail): the colour and opacity of the layer mask rubylith (`\`,
+/// ⇧⌥-click the thumbnail). As in Photoshop, one setting for every mask, kept across restarts.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct LayerMaskOverlay {
+    /// `#rrggbb`.
+    pub color: String,
+    /// Percent, 0..=100.
+    pub opacity: f32,
+}
+
+impl Default for LayerMaskOverlay {
+    /// Photoshop's: red at 50 %.
+    fn default() -> Self {
+        Self { color: "#ff0000".into(), opacity: 50.0 }
+    }
+}
+
+impl LayerMaskOverlay {
+    /// The colour as 0..1 RGB; red if the stored value isn't a colour.
+    pub fn rgb(&self) -> [f32; 3] {
+        parse_hex(&self.color).unwrap_or([255, 0, 0]).map(|v| f32::from(v) / 255.0)
+    }
+
+    /// The opacity as a fraction (0..1); 50 % if the stored value isn't a number.
+    pub fn alpha(&self) -> f32 {
+        if self.opacity.is_finite() { self.opacity.clamp(0.0, 100.0) / 100.0 } else { 0.5 }
+    }
 }
 
 /// All preferences. JSON keys are the `edit.preferences.<section>` ids.
@@ -1010,6 +1118,8 @@ pub struct Preferences {
     pub view_extras: Value,
     /// File › Scripts › Script Events Manager: event → script bindings.
     pub script_events: crate::automate_cmds::ScriptEvents,
+    /// Layer Mask Display Options: the layer mask rubylith's colour and opacity.
+    pub layer_mask_overlay: LayerMaskOverlay,
 }
 
 /// Preferences dialog sections in Photoshop's order: (id, title).
@@ -1042,10 +1152,8 @@ pub const SECTIONS: [(&str, &str); 18] = [
 /// preference is read anywhere outside `prefs.rs`, and while an unlisted one is read nowhere.
 pub const HIDDEN_UNTIL_IMPLEMENTED: &[&str] = &[
     "general.colorPicker",
-    "general.zoomResizesWindows",
     "workspace.autoShowHiddenPanels",
     "workspace.enableFloatingDocumentWindowDocking",
-    "performance.cacheLevels",
     "performance.effectCacheMb",
     "performance.legacyCompositing",
     "scratchDisks.disks",
@@ -1053,20 +1161,8 @@ pub const HIDDEN_UNTIL_IMPLEMENTED: &[&str] = &[
     "unitsAndRulers.gutter",
     "plugIns.showExtensionPanels",
     "plugIns.allowScriptsToConnect",
-    "plugIns.generatorEnabled",
     "type.textEngine",
-    "type.recentFonts",
     "enhancedControls.scrubbySliderAcceleration",
-    "rawDefaults.colorSpace",
-    "rawDefaults.bitDepth",
-    "rawDefaults.resolution",
-    "rawDefaults.sharpenFor",
-    "rawDefaults.openAsSmartObject",
-    "rawDefaults.applyAutoTone",
-    // Agent access is governed by the launch flags (`--control`, the automation roots), not
-    // by these yet.
-    "integrations.allowAgentControl",
-    "integrations.controlPort",
 ];
 
 /// Is the preference at `path` (`"section.key"`) hidden from the Preferences dialog?
@@ -1120,6 +1216,7 @@ pub fn choices(path: &str) -> Option<&'static [&'static str]> {
         "rawDefaults.colorSpace" => RawColorSpace::NAMES,
         "rawDefaults.bitDepth" => RawDepth::NAMES,
         "rawDefaults.sharpenFor" => RawSharpen::NAMES,
+        "rawDefaults.demosaic" => RawDemosaic::NAMES,
         "performance.gpuBackend" => GpuBackend::NAMES,
         "performance.linuxDisplayServer" => LinuxDisplayServer::NAMES,
         "performance.renderingMode" => RenderingMode::NAMES,
@@ -1147,6 +1244,7 @@ pub fn range(path: &str) -> Option<(f64, f64)> {
         "unitsAndRulers.printResolution" | "unitsAndRulers.screenResolution" | "rawDefaults.resolution" => (1.0, 10_000.0),
         "guidesGridAndSlices.gridlineEvery" => (0.001, 10_000.0),
         "guidesGridAndSlices.subdivisions" => (1.0, 100.0),
+        "layerMaskOverlay.opacity" => (0.0, 100.0),
         "type.recentFonts" => (0.0, 50.0),
         "integrations.controlPort" => (0.0, 65535.0),
         _ => return None,
@@ -1157,6 +1255,9 @@ pub fn range(path: &str) -> Option<(f64, f64)> {
 pub fn is_color(path: &str) -> bool {
     if choices(path).is_some() || path.starts_with("shortcuts.") || path.starts_with("alternateShortcuts.") || path.starts_with("menus.") {
         return false;
+    }
+    if path == "layerMaskOverlay.color" {
+        return true;
     }
     let leaf = path.rsplit('.').next().unwrap_or(path);
     matches!(
@@ -1487,7 +1588,15 @@ pub fn normalize_shortcut(s: &str) -> Option<String> {
     Some(s)
 }
 
+/// Key names spelled with more than one capital (egui's `Key::name`): Title case would turn
+/// `PageUp` into `Pageup`, which no key matches, so a binding saved that way never fired (#6827).
+const MULTI_WORD_KEYS: [&str; 8] =
+    ["PageUp", "PageDown", "OpenBracket", "CloseBracket", "OpenCurlyBracket", "CloseCurlyBracket", "BrowserBack", "IntlBackslash"];
+
 fn capitalize(s: &str) -> String {
+    if let Some(k) = MULTI_WORD_KEYS.iter().find(|k| k.eq_ignore_ascii_case(s)) {
+        return (*k).to_string();
+    }
     let mut c = s.chars();
     match c.next() {
         Some(f) if f.is_ascii_alphabetic() => {
@@ -1519,7 +1628,8 @@ pub const TEMPORARY_TOOLS: &[(&str, &str, &str)] = &[
 /// Photoshop's second default keys (#3665): (command, key). Each command keeps its main key
 /// (the one its menu shows) and answers these as well, as in Photoshop's default set: the
 /// legacy function keys F2 Cut, F3 Copy, F4 Paste and Shift+F7 Inverse; Shift+Backspace
-/// (Shift+Delete on a Mac) for Fill; and ⌘+ beside ⌘= for Zoom In.
+/// (Shift+Delete on a Mac) for Fill; ⌘+ beside ⌘= for Zoom In; and off the Mac, Ctrl+F4 beside
+/// Ctrl+W for Close (Windows' close-document key; macOS keeps Ctrl+F4 for window focus).
 pub const ALTERNATE_SHORTCUTS: &[(&str, &str)] = &[
     ("edit.cut", "F2"),
     ("edit.copy", "F3"),
@@ -1527,6 +1637,8 @@ pub const ALTERNATE_SHORTCUTS: &[(&str, &str)] = &[
     ("edit.fill", "Shift+Backspace"),
     ("select.inverse", "Shift+F7"),
     ("view.zoomIn", "Cmd++"),
+    #[cfg(not(target_os = "macos"))]
+    ("file.close", "Cmd+F4"),
 ];
 
 /// A command's default alternate keys ([`ALTERNATE_SHORTCUTS`]).
@@ -1629,6 +1741,10 @@ impl PrefsStore {
         self.rev
     }
 }
+
+/// The preferences file format written by [`Session::prefs_value`]. 2: Use Shift Key for Tool
+/// Switch stored as chosen (before, a stored `false` was the old default; see `load_prefs_json`).
+pub const PREFS_VERSION: u64 = 2;
 
 /// A saved preference [`Session::load_prefs_json`] couldn't read (a wrong type, an unknown
 /// choice) and left at its default.
@@ -1738,7 +1854,7 @@ impl Session {
     }
 
     /// Push engine-relevant preferences into live state: every document's history limit, the
-    /// layer-effect cache budget and the text engine's missing-glyph protection.
+    /// transform and layer-effect cache budgets and the text engine's missing-glyph protection.
     pub fn apply_prefs(&mut self) {
         let n = self.prefs().performance.history_states.max(1) as usize;
         let bytes = self.prefs().performance.history_budget_bytes();
@@ -1749,6 +1865,7 @@ impl Session {
             st.trim_history();
         }
         photocraft_compose::set_effect_cache_budget(budget << 20);
+        crate::transform_cmds::set_budget(u64::from(self.prefs().performance.memory_usage_mb) << 20);
         // Without waiting for the system font scan: this runs on the UI thread at launch.
         photocraft_text::set_shared_missing_glyph_protection(self.prefs().type_.missing_glyph_protection());
         crate::plugin_cmds::sync_prefs(self);
@@ -1764,7 +1881,7 @@ impl Session {
         let mut v = self.prefs().to_json();
         if let Value::Object(m) = &mut v {
             m.insert("colorSettings".into(), serde_json::to_value(&self.color.settings).unwrap_or(Value::Null));
-            m.insert("version".into(), json!(1));
+            m.insert("version".into(), json!(PREFS_VERSION));
             m.insert("presets".into(), self.presets.to_json(self));
         }
         v
@@ -1779,6 +1896,16 @@ impl Session {
         let mut v: Value = serde_json::from_str(s).map_err(|e| format!("preferences: {e}"))?;
         if !v.is_object() {
             return Err("preferences: expected a JSON object".into());
+        }
+        // Files before version 2 hold Use Shift Key for Tool Switch off because that was the
+        // default when they were written: every key is saved, chosen or not. Like Photoshop it is
+        // on by default now (#3528), so those files take the new default (#5647: a tool letter
+        // pressed again kept cycling its group). A choice made since is saved as version 2.
+        if v.get("version").and_then(Value::as_u64).unwrap_or(0) < 2
+            && let Some(tools) = v.get_mut("tools").and_then(Value::as_object_mut)
+            && tools.get("useShiftKeyForToolSwitch") == Some(&json!(false))
+        {
+            tools.remove("useShiftKeyForToolSwitch");
         }
         // Saved preferences before appearance modes had one concrete theme. Preserve its
         // appearance instead of silently switching established users to Auto.
@@ -1827,7 +1954,11 @@ impl Session {
     /// Batches defer colour validation until their complete candidate is staged. Returns
     /// whether colour settings were touched, including whole-section/root-object updates.
     fn set_pref(&mut self, path: &str, value: Value, validate_color: bool) -> std::result::Result<bool, String> {
-        if let Some(rest) = path.strip_prefix("colorSettings") {
+        // The section itself or a path inside it: `colorSettingsworkingRgb`, `colorSettings.` and
+        // `colorSettings..workingRgb` are none, and the authorization policy doesn't treat them as one.
+        if let Some(rest) =
+            path.strip_prefix("colorSettings").filter(|r| r.is_empty() || r.strip_prefix('.').is_some_and(|c| c.split('.').all(|part| !part.is_empty())))
+        {
             let mut cur = serde_json::to_value(&self.color.settings).map_err(|e| e.to_string())?;
             let rest = rest.trim_start_matches('.');
             if rest.is_empty() {
@@ -2633,3 +2764,19 @@ pub fn specs() -> Vec<CommandSpec> {
 #[cfg(test)]
 #[path = "prefs/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod color_settings_path_tests {
+    use crate::Session;
+    use serde_json::json;
+
+    #[test]
+    fn a_path_that_only_starts_with_color_settings_is_not_in_that_section() {
+        let mut s = Session::new();
+        let before = s.color.settings.clone();
+        for path in ["colorSettingsworkingRgb", "colorSettings.", "colorSettings..workingRgb"] {
+            assert!(s.execute("prefs.set", json!({"path": path, "value": "/dev/zero"})).is_err(), "{path}");
+        }
+        assert_eq!(s.color.settings, before);
+    }
+}

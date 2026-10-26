@@ -541,9 +541,23 @@ fn reveal_follows_linked_paths_like_the_link_and_passes_paths_as_paths() {
     s.execute("file.revealInFinder", json!({"dryRun": true})).unwrap();
 
     assert_eq!(reveal_command_on("macos", "-a.png").unwrap(), ("open", vec!["-R".to_string(), "--".into(), "-a.png".into()]));
-    assert_eq!(reveal_command_on("windows", r"C:\pics\a.png").unwrap(), ("explorer", vec![r"/select,C:\pics\a.png".to_string()]));
+    assert_eq!(reveal_command_on("windows", r"C:\pics\a.png").unwrap(), ("explorer", vec!["/select,".to_string(), r"C:\pics\a.png".to_string()]));
     for path in [r"C:\pics\a,b.png", r#"C:\pics\a".png"#] {
         assert!(reveal_command_on("windows", path).is_err(), "{path}");
+    }
+}
+
+/// Explorer parses `/select,` itself: it must remain outside the quoted file path.
+#[test]
+fn reveal_on_windows_keeps_the_select_switch_separate_from_the_path() {
+    for (path, expected) in [
+        (r"C:\my pictures\a file.png", r"C:\my pictures\a file.png"),
+        ("C:/my pictures/a file.png", r"C:\my pictures\a file.png"),
+        (r"C:\my pictures/a file.png", r"C:\my pictures\a file.png"),
+        ("C:/项目 图片/海报 🖼.png", r"C:\项目 图片\海报 🖼.png"),
+        ("//server/share/my pictures/a file.png", r"\\server\share\my pictures\a file.png"),
+    ] {
+        assert_eq!(reveal_command_on("windows", path).unwrap(), ("explorer", vec!["/select,".to_string(), expected.to_string()]), "{path}");
     }
 }
 

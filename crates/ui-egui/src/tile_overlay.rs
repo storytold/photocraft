@@ -141,7 +141,7 @@ pub fn paint(app: &PhotocraftApp, ctx: &egui::Context, painter: &Painter, xf: &V
     let Some(st) = app.session.documents().get(idx) else { return };
     let Some(surface) = st.active_layer.and_then(|id| st.doc.layer(id)).and_then(|l| l.surface()) else { return };
     let revision = st.revision;
-    let mem = egui::Id::new(("pc-tile-overlay", st.doc.id.0, st.active_layer.map(|l| l.0)));
+    let mem = egui::Id::unique(("pc-tile-overlay", st.doc.id.0, st.active_layer.map(|l| l.0)));
     let cached = ctx.data(|d| d.get_temp::<Cached>(mem)).filter(|c| c.revision == revision);
     let tiles = match cached {
         Some(c) => c.tiles,

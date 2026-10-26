@@ -54,7 +54,7 @@ pub enum CaptionFamily {
 /// The title bar's unused gap, saved by `panels::title_bar` for drags that begin while a modal
 /// backdrop is on top of the normal title-bar widgets.
 pub(crate) fn modal_drag_area_id() -> Id {
-    Id::new(MODAL_DRAG_AREA)
+    Id::unique(MODAL_DRAG_AREA)
 }
 
 /// Restore window dragging over the title bar's empty gap after a modal has blocked the normal
@@ -65,10 +65,10 @@ pub(crate) fn modal_drag_overlay(ctx: &egui::Context) {
     if !area.is_positive() || egui::Popup::is_any_open(ctx) || !crate::dialogs::titlebar_drag_area_is_clear(ctx, area) {
         return;
     }
-    egui::Area::new(Id::new("titlebar-modal-drag-overlay")).order(Order::Tooltip).fixed_pos(area.min).movable(false).sense(Sense::hover()).show(ctx, |ui| {
+    egui::Area::new(Id::unique("titlebar-modal-drag-overlay")).order(Order::Tooltip).fixed_pos(area.min).movable(false).sense(Sense::hover()).show(ctx, |ui| {
         let response = ui.allocate_rect(area, Sense::click_and_drag());
-        if response.drag_started() {
-            ctx.send_viewport_cmd(ViewportCommand::StartDrag);
+        if response.drag_started_by(PointerButton::Primary) {
+            start_os_move(ctx);
         }
         if response.double_clicked() {
             let max = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
@@ -241,7 +241,7 @@ fn layout(s: &CaptionStyle, bar: Rect, left: f32, right: f32) -> Vec<(Caption, R
 
 /// Caption button ids (stable, so tests and agents can find them).
 fn caption_id(c: Caption) -> Id {
-    Id::new(("titlebar-caption", c as u8))
+    Id::unique(("titlebar-caption", c as u8))
 }
 
 fn maximized(ctx: &egui::Context) -> bool {
@@ -266,7 +266,7 @@ pub fn caption_buttons(app: &mut PhotocraftApp, ui: &mut Ui, bar: Rect) {
     for (c, r, centre) in layout(&s, bar, bar.left().max(content.left()), bar.right().min(content.right())) {
         let resp = ui.interact(r, caption_id(c), if windows { Sense::click() } else { Sense::click_and_drag() });
         if resp.drag_started_by(PointerButton::Primary) {
-            ui.ctx().send_viewport_cmd(ViewportCommand::StartDrag);
+            start_os_move(ui.ctx());
         }
         let pressed = resp.is_pointer_button_down_on() && resp.hovered();
         if windows {
@@ -290,7 +290,7 @@ pub fn caption_buttons(app: &mut PhotocraftApp, ui: &mut Ui, bar: Rect) {
             Caption::Maximize => tl!("Maximize"),
             Caption::Close => tl!("Close"),
         };
-        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tip));
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tip));
         if resp.on_hover_text(tip).clicked() {
             clicked = Some(c);
         }
@@ -427,7 +427,7 @@ fn paint_round(ui: &Ui, t: &Tokens, s: &CaptionStyle, c: Caption, maximized: boo
 /// `icon` from the theme at `px` device pixels, uploaded once per theme and size; `None` (also
 /// remembered) when the theme lacks it or it doesn't render.
 fn theme_icon(ctx: &egui::Context, icons: &CaptionIcons, icon: CaptionIcon, px: u32) -> Option<egui::TextureHandle> {
-    let id = Id::new(("caption-icon", &icons.theme, icon, px));
+    let id = Id::unique(("caption-icon", &icons.theme, icon, px));
     if let Some(cached) = ctx.data(|d| d.get_temp::<Option<egui::TextureHandle>>(id)) {
         return cached;
     }
@@ -465,10 +465,10 @@ fn zones(w: Rect) -> [(Rect, ResizeDirection, CursorIcon); 8] {
 }
 
 fn resize_handed_off_id() -> Id {
-    Id::new("titlebar-resize-handed-off")
+    Id::unique("titlebar-resize-handed-off")
 }
 
-/// An OS resize started at `pass`; `released` is the pass whose input ended the press
+/// An OS resize or move started at `pass`; `released` is the pass whose input ended the press
 /// ([`release_after_os_resize`]).
 #[derive(Clone, Copy, Debug)]
 struct HandOff {
@@ -476,11 +476,26 @@ struct HandOff {
     released: Option<u64>,
 }
 
-/// The compositor takes the button release of an OS resize (KDE Wayland), so egui kept the edge
-/// pressed: the zones stopped hovering until the next click, every other resize (#1581). End the
-/// press ourselves on the input after the hand-off, but only while egui still has it down and this
-/// input brings no release of its own: where the OS does send it (Windows, X11), nothing is added,
-/// so no second release can turn into a click. Call from `raw_input_hook`.
+/// The OS took the press at this pass: [`release_after_os_resize`] ends it on the next input.
+fn hand_off(ctx: &egui::Context) {
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data_mut(|d| d.insert_temp(resize_handed_off_id(), HandOff { pass, released: None }));
+}
+
+/// Move the window from this press. The window manager takes the press of an OS move as it does
+/// that of a resize and keeps its release, so egui kept the drag: every other move failed, and a
+/// resize right after one (#5725). The same hand-off ends it.
+pub(crate) fn start_os_move(ctx: &egui::Context) {
+    ctx.send_viewport_cmd(ViewportCommand::StartDrag);
+    hand_off(ctx);
+}
+
+/// The compositor takes the button release of an OS resize or move (KDE Wayland, KWin on X11), so
+/// egui kept the edge pressed: the zones stopped hovering until the next click, every other resize
+/// (#1581, and #5725 for moves). End the press ourselves on the input after the hand-off, but only
+/// while egui still has it down and this input brings no release of its own: where the OS does send
+/// it (Windows), nothing is added, so no second release can turn into a click. Call from
+/// `raw_input_hook`.
 pub fn release_after_os_resize(ctx: &egui::Context, raw: &mut egui::RawInput) {
     let Some(h) = ctx.data(|d| d.get_temp::<HandOff>(resize_handed_off_id())) else { return };
     if h.released.is_some() || h.pass >= ctx.cumulative_pass_nr() {
@@ -518,14 +533,13 @@ pub fn resize_zones(ui: &mut Ui) {
         return;
     }
     let w = ctx.content_rect();
-    let layer = LayerId::new(Order::Foreground, Id::new("titlebar-resize"));
+    let layer = LayerId::new(Order::Foreground, Id::unique("titlebar-resize"));
     let zui = ui.new_child(egui::UiBuilder::new().layer_id(layer).max_rect(w));
     for (i, (r, dir, cursor)) in zones(w).into_iter().enumerate() {
-        let resp = zui.interact(r, Id::new(("titlebar-resize", i)), Sense::drag()).on_hover_cursor(cursor);
+        let resp = zui.interact(r, Id::unique(("titlebar-resize", i)), Sense::drag()).on_hover_cursor(cursor);
         if resp.drag_started_by(PointerButton::Primary) {
             ctx.send_viewport_cmd(ViewportCommand::BeginResize(dir));
-            let pass = ctx.cumulative_pass_nr();
-            ctx.data_mut(|d| d.insert_temp(resize_handed_off_id(), HandOff { pass, released: None }));
+            hand_off(&ctx);
         }
     }
     // After the zones, so its one-frame cursor wins over theirs.
@@ -590,7 +604,7 @@ mod tests {
             let mut out = self.ctx.run_ui(input, |ui| {
                 crate::panels::title_bar(app, ui);
                 if modal {
-                    egui::Modal::new(Id::new("titlebar-drag-test-modal")).backdrop_color(Color32::TRANSPARENT).show(ui.ctx(), |ui| {
+                    egui::Modal::new(Id::unique("titlebar-drag-test-modal")).backdrop_color(Color32::TRANSPARENT).show(ui.ctx(), |ui| {
                         ui.label("Modal dialog");
                     });
                     modal_drag_overlay(ui.ctx());
@@ -608,9 +622,13 @@ mod tests {
         }
 
         fn gesture_with_modal(&mut self, path: &[Pos2], modal: bool) -> Vec<ViewportCommand> {
-            let mut events = vec![vec![Event::PointerMoved(path[0])], vec![button(path[0], true)]];
+            self.gesture_by(path, modal, egui::PointerButton::Primary)
+        }
+
+        fn gesture_by(&mut self, path: &[Pos2], modal: bool, btn: egui::PointerButton) -> Vec<ViewportCommand> {
+            let mut events = vec![vec![Event::PointerMoved(path[0])], vec![button(path[0], true, btn)]];
             events.extend(path[1..].iter().map(|p| vec![Event::PointerMoved(*p)]));
-            events.push(vec![button(*path.last().unwrap_or(&path[0]), false)]);
+            events.push(vec![button(*path.last().unwrap_or(&path[0]), false, btn)]);
             events
                 .into_iter()
                 .flat_map(|e| self.frame_with_modal(e, modal).viewport_output.remove(&ViewportId::ROOT).map(|v| v.commands).unwrap_or_default())
@@ -654,8 +672,8 @@ mod tests {
         v
     }
 
-    fn button(p: Pos2, pressed: bool) -> Event {
-        Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() }
+    fn button(p: Pos2, pressed: bool, button: egui::PointerButton) -> Event {
+        Event::PointerButton { pos: p, button, pressed, modifiers: Default::default() }
     }
 
     #[test]
@@ -711,6 +729,25 @@ mod tests {
         assert!(cmds.iter().any(|c| matches!(c, ViewportCommand::Close)), "{cmds:?}");
     }
 
+    /// After the window's GPU device is lost, the prompt asking about unsaved work could never be
+    /// drawn: the close button quits instead of opening it (see `discard_ui::intercept`).
+    #[test]
+    fn close_quits_without_a_prompt_once_the_window_device_is_lost() {
+        let mut w = Win::new(1100.0);
+        w.app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+        w.app.run("layer.new.layer", json!({})).unwrap();
+        w.frame(vec![]);
+        let close = w.caption(Caption::Close).center();
+        let asks = w.click(close);
+        assert!(!asks.iter().any(|c| matches!(c, ViewportCommand::Close)), "a window that can draw asks first: {asks:?}");
+        assert!(w.app.discard.is_some());
+        w.app.discard = None;
+        w.app.window_lost = true;
+        let quits = w.click(close);
+        assert!(quits.iter().any(|c| matches!(c, ViewportCommand::Close)), "{quits:?}");
+        assert!(w.app.discard.is_none(), "no prompt opened");
+    }
+
     #[test]
     fn minimize_and_maximize_follow_the_window_state() {
         let mut w = Win::new(1100.0);
@@ -759,13 +796,30 @@ mod tests {
     }
 
     #[test]
+    fn middle_button_drag_in_the_gap_does_not_start_a_window_drag() {
+        let mut w = Win::new(1440.0);
+        w.frame(vec![]);
+        let empty = pos2(980.0, 16.0);
+        let path = [empty, empty + vec2(12.0, 4.0), empty + vec2(30.0, 8.0)];
+        let cmds = w.gesture_by(&path, false, egui::PointerButton::Middle);
+        assert!(!cmds.iter().any(|c| matches!(c, ViewportCommand::StartDrag)), "{cmds:?}");
+        // An ordinary left drag afterwards still moves the window.
+        let cmds = w.gesture(&path);
+        assert_eq!(cmds.iter().filter(|c| matches!(c, ViewportCommand::StartDrag)).count(), 1, "{cmds:?}");
+        // Same with a modal open (the overlay over the gap).
+        w.frame_with_modal(vec![], true);
+        let cmds = w.gesture_by(&path, true, egui::PointerButton::Middle);
+        assert!(!cmds.iter().any(|c| matches!(c, ViewportCommand::StartDrag)), "{cmds:?}");
+    }
+
+    #[test]
     fn modal_drag_overlay_does_not_cover_a_dialog_moved_into_the_gap() {
         let mut w = Win::new(1440.0);
         w.frame(vec![]);
         w.frame_with_modal(vec![], true);
         let area = w.ctx.data(|d| d.get_temp::<Rect>(modal_drag_area_id())).unwrap_or(Rect::NOTHING);
         assert!(area.contains(pos2(980.0, 16.0)), "the probe point must be in the gap: {area:?}");
-        w.ctx.data_mut(|d| d.insert_temp(Id::new("pc-dialog-rects"), vec![area]));
+        w.ctx.data_mut(|d| d.insert_temp(Id::unique("pc-dialog-rects"), vec![area]));
         let cmds = w.gesture_with_modal(&[area.center(), area.center() + vec2(12.0, 4.0)], true);
         assert!(!cmds.iter().any(|c| matches!(c, ViewportCommand::StartDrag)), "{cmds:?}");
     }
@@ -780,7 +834,7 @@ mod tests {
         let p = pos2(3.0, 300.0);
         // Press and drag; the compositor takes over, so no release ever arrives.
         let mut cmds = vec![];
-        for e in [vec![Event::PointerMoved(p)], vec![button(p, true)], vec![Event::PointerMoved(p + vec2(6.0, 0.0))]] {
+        for e in [vec![Event::PointerMoved(p)], vec![button(p, true, egui::PointerButton::Primary)], vec![Event::PointerMoved(p + vec2(6.0, 0.0))]] {
             cmds.extend(w.frame(e).viewport_output.remove(&ViewportId::ROOT).map(|v| v.commands).unwrap_or_default());
         }
         assert!(cmds.contains(&ViewportCommand::BeginResize(ResizeDirection::West)), "{cmds:?}");
@@ -795,7 +849,7 @@ mod tests {
         assert!(w.gesture(&[p, p + vec2(6.0, 0.0)]).contains(&ViewportCommand::BeginResize(ResizeDirection::West)));
     }
 
-    /// Where the OS does send the release of a resize (Windows, X11), no second one is added: a
+    /// Where the OS does send the release of a resize (Windows), no second one is added: a
     /// release right after it could count as a click on what lies under the edge.
     #[test]
     fn a_release_the_os_sends_is_not_doubled() {
@@ -803,10 +857,10 @@ mod tests {
         w.frame(vec![]);
         let p = pos2(3.0, 300.0);
         w.frame(vec![Event::PointerMoved(p)]);
-        w.frame(vec![button(p, true)]);
+        w.frame(vec![button(p, true, egui::PointerButton::Primary)]);
         w.frame(vec![Event::PointerMoved(p + vec2(6.0, 0.0))]);
         // The release arrives with the next input.
-        let mut raw = RawInput { events: vec![button(p + vec2(6.0, 0.0), false)], ..Default::default() };
+        let mut raw = RawInput { events: vec![button(p + vec2(6.0, 0.0), false, egui::PointerButton::Primary)], ..Default::default() };
         release_after_os_resize(&w.ctx, &mut raw);
         assert_eq!(raw.events.len(), 1, "{:?}", raw.events);
         // Or it already arrived in an earlier input: egui has the button up, nothing to end.
@@ -816,6 +870,31 @@ mod tests {
         let mut raw = RawInput::default();
         release_after_os_resize(&w.ctx, &mut raw);
         assert!(raw.events.is_empty(), "{:?}", raw.events);
+    }
+
+    /// #5725: the window manager keeps the button release of an OS move just as of a resize, so
+    /// egui kept the drag: every other move of the window failed, and so did a resize right after one.
+    #[test]
+    fn after_an_os_move_the_bar_and_the_edges_take_the_next_press() {
+        /// Press and drag along `path`; the window manager takes over, so no release ever arrives.
+        fn handed_off(w: &mut Win, path: &[Pos2]) -> Vec<ViewportCommand> {
+            let mut events = vec![vec![Event::PointerMoved(path[0])], vec![button(path[0], true, egui::PointerButton::Primary)]];
+            events.extend(path[1..].iter().map(|p| vec![Event::PointerMoved(*p)]));
+            events.push(vec![]);
+            events.into_iter().flat_map(|e| w.frame(e).viewport_output.remove(&ViewportId::ROOT).map(|v| v.commands).unwrap_or_default()).collect()
+        }
+        let moves = |cmds: &[ViewportCommand]| cmds.iter().filter(|c| matches!(c, ViewportCommand::StartDrag)).count();
+        let mut w = Win::new(1440.0);
+        w.frame(vec![]);
+        let empty = pos2(980.0, 16.0);
+        assert!(w.bar_widgets().iter().all(|r| !r.contains(empty)), "the probe point must be empty bar space");
+        let drag = [empty, empty + vec2(12.0, 4.0), empty + vec2(30.0, 8.0)];
+        assert_eq!(moves(&handed_off(&mut w, &drag)), 1);
+        assert!(!w.ctx.input(|i| i.pointer.primary_down()), "the press ends with the hand-off");
+        assert_eq!(moves(&w.gesture(&drag)), 1, "the next move");
+        assert_eq!(moves(&handed_off(&mut w, &drag)), 1);
+        let edge = pos2(3.0, 300.0);
+        assert!(w.gesture(&[edge, edge + vec2(6.0, 0.0)]).contains(&ViewportCommand::BeginResize(ResizeDirection::West)), "a resize after a move");
     }
 
     #[test]

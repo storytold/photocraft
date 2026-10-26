@@ -753,3 +753,28 @@ fn every_arranged_tile_has_rulers() {
     }
     assert!(labels[0] > 0 && labels[1] > 0, "ruler labels per tile: {labels:?}");
 }
+
+#[test]
+fn file_info_dialog_matches_photoshop_field_order_and_labels() {
+    crate::i18n::with_language(crate::i18n::Lang::EN, || {
+        let (mut app, ctx) = app_with(1);
+        let d = menu(&mut app, &ctx, "file.fileInfo", json!({})).unwrap()["dialog"].as_u64().unwrap();
+        let fields = app.ui.dialog_mut(d).unwrap().fields.clone();
+        assert_eq!(
+            form_keys(&fields).iter().map(String::as_str).collect::<Vec<_>>(),
+            ["title", "author", "authorTitle", "description", "keywords", "copyrightStatus", "copyright", "copyrightUrl"]
+        );
+        let labels = fields["__labels"].as_object().unwrap();
+        assert_eq!(labels["title"], "Document Title");
+        assert_eq!(labels["copyright"], "Copyright Notice");
+        assert_eq!(labels["copyrightUrl"], "Copyright Info URL");
+    });
+}
+
+#[test]
+fn form_keys_orders_by_order_then_catalogue() {
+    let f = json!({"zeta": "", "alpha": "", "mid": "", "__order": ["mid", "zeta", "ghost"]}).as_object().unwrap().clone();
+    assert_eq!(form_keys(&f).iter().map(String::as_str).collect::<Vec<_>>(), ["mid", "zeta", "alpha"]);
+    let f = json!({"zeta": "", "alpha": ""}).as_object().unwrap().clone();
+    assert_eq!(form_keys(&f).iter().map(String::as_str).collect::<Vec<_>>(), ["alpha", "zeta"]);
+}

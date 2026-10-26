@@ -131,10 +131,15 @@ fn map_pixels(s: &mut Session, label: &str, p: &Value, f: impl FnOnce(Rect, &mut
     Ok(Value::Null)
 }
 
+/// The effective whole-pixel Stroke width, shared by execution and ATN export.
+pub(crate) fn stroke_width(p: &Value) -> usize {
+    // Whole pixels, rounded up, as in Photoshop (0.5 px strokes 1 px).
+    p.get("width").and_then(Value::as_f64).filter(|w| w.is_finite()).unwrap_or(1.0).clamp(1.0, 250.0).ceil() as usize
+}
+
 /// Edit › Stroke: a band along the selection edge (or the layer's opaque edge without a selection).
 fn stroke(s: &mut Session, p: &Value) -> Result<Value> {
-    // Whole pixels, rounded up, as in Photoshop (0.5 px strokes 1 px).
-    let width = p.get("width").and_then(Value::as_f64).filter(|w| w.is_finite()).unwrap_or(1.0).clamp(1.0, 250.0).ceil() as usize;
+    let width = stroke_width(p);
     let color = color_param("edit.stroke", p, "color", s.tools.foreground)?;
     // A colour picked as CMYK strokes a CMYK document with the picked inks (#4196).
     let picked = s.tools.picked_cmyk([color[0], color[1], color[2]]);
@@ -278,57 +283,6 @@ fn average(s: &mut Session, p: &Value) -> Result<Value> {
     })
 }
 
-fn hash(x: i32, y: i32, seed: u32) -> f32 {
-    let mut h = (x as u32).wrapping_mul(0x8da6_b343) ^ (y as u32).wrapping_mul(0xd816_3841) ^ seed.wrapping_mul(0xcb1a_b31f);
-    h ^= h >> 13;
-    h = h.wrapping_mul(0x5bd1_e995);
-    h ^= h >> 15;
-    (h & 0x00ff_ffff) as f32 / 0x00ff_ffff as f32
-}
-
-/// Smooth value noise, summed over octaves (fBm), in 0..1.
-pub(crate) fn clouds_value(x: f32, y: f32, base: f32, seed: u32) -> f32 {
-    let (mut sum, mut amp, mut freq, mut norm) = (0.0, 1.0, 1.0 / base, 0.0);
-    for o in 0..8u32 {
-        let (fx, fy) = (x * freq, y * freq);
-        let (ix, iy) = (fx.floor() as i32, fy.floor() as i32);
-        let (tx, ty) = (fx - ix as f32, fy - iy as f32);
-        let (sx, sy) = (tx * tx * (3.0 - 2.0 * tx), ty * ty * (3.0 - 2.0 * ty));
-        let s = seed.wrapping_add(o * 7919);
-        let top = hash(ix, iy, s) + (hash(ix + 1, iy, s) - hash(ix, iy, s)) * sx;
-        let bot = hash(ix, iy + 1, s) + (hash(ix + 1, iy + 1, s) - hash(ix, iy + 1, s)) * sx;
-        sum += (top + (bot - top) * sy) * amp;
-        norm += amp;
-        amp *= 0.5;
-        freq *= 2.0;
-    }
-    // Stretch the bell-shaped sum so the clouds use the full foreground→background range.
-    ((sum / norm - 0.5) * 2.2 + 0.5).clamp(0.0, 1.0)
-}
-
-/// Filter › Render › Clouds / Difference Clouds, between the foreground and background colours.
-fn clouds(s: &mut Session, p: &Value, difference: bool) -> Result<Value> {
-    let (fg, bg) = (s.tools.foreground, s.tools.background);
-    let seed = p.get("seed").and_then(Value::as_u64).unwrap_or(0) as u32;
-    let size = s.active().map_or(256.0, |d| d.doc.size.width.max(d.doc.size.height) as f32);
-    let base = (size / 4.0).clamp(16.0, 512.0);
-    map_pixels(s, if difference { "Difference Clouds" } else { "Clouds" }, p, |area, px, _| {
-        let w = area.width() as usize;
-        for (i, p) in px.iter_mut().enumerate() {
-            let (x, y) = ((area.x0 + (i % w) as i32) as f32, (area.y0 + (i / w) as i32) as f32);
-            let t = clouds_value(x, y, base, seed);
-            let c: [f32; 3] = std::array::from_fn(|k| fg[k] + (bg[k] - fg[k]) * t);
-            if difference {
-                for k in 0..3 {
-                    p[k] = (p[k] - c[k]).abs();
-                }
-            } else {
-                *p = [c[0], c[1], c[2], 1.0];
-            }
-        }
-    })
-}
-
 // ---------- transform presets ----------
 
 /// The presets' params: like Free Transform, they follow the Channels and Layers panel target.
@@ -382,6 +336,9 @@ fn can_reselect(s: &Session) -> std::result::Result<(), String> {
     reselect_target(s).map(|_| ()).ok_or_else(|| "there is no selection to restore".into())
 }
 
+/// Edit › Paste Special › Paste Into (or Outside): the clipboard centred on the selection, not
+/// clamped to the canvas, as a new layer masked to the selection (or its inverse), or into the
+/// targeted mask or channel. One history step.
 fn paste_into(s: &mut Session, p: &Value, outside: bool) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let selection = d.doc.selection.clone().ok_or(EngineError::Other("Paste Into needs a selection".into()))?;
@@ -399,7 +356,8 @@ fn paste_into(s: &mut Session, p: &Value, outside: bool) -> Result<Value> {
         selection
     };
     let label = if outside { "Paste Outside" } else { "Paste Into" };
-    let mut params = json!({"center": [(b.x0 + b.x1) as f64 / 2.0, (b.y0 + b.y1) as f64 / 2.0]});
+    // Centred on the selection, even where that runs off the canvas (not clamped like a paste).
+    let mut params = json!({"center": [(b.x0 + b.x1) as f64 / 2.0, (b.y0 + b.y1) as f64 / 2.0], "clampToCanvas": false});
     if let Some(c) = p.get("center") {
         params["center"] = c.clone();
     }
@@ -411,6 +369,13 @@ fn paste_into(s: &mut Session, p: &Value, outside: bool) -> Result<Value> {
         // A targeted mask or channel (#1035): the paste goes into it, only where `limit` allows.
         params["target"] = p.get("target").cloned().unwrap_or_default();
         return crate::edit_cmds::paste_to_target(s, &params, false, Some(&limit), label);
+    }
+    // The pasted layer lands beside the active one, inside its group, and a Lock-All group refuses
+    // its layer mask: refuse before pasting rather than leave an unmasked paste behind.
+    let d = s.active().ok_or(EngineError::NoDocument)?;
+    let group = d.active_layer.and_then(|a| d.doc.path_of(a)).and_then(|p| d.doc.layer_at(p.split_last()?.1).map(|g| g.id));
+    if let Some(g) = group {
+        crate::commands::check_all_unlocked(&d.doc, g)?;
     }
     let key = step_key(s, "pasteInto");
     params["coalesce"] = json!(key);
@@ -435,7 +400,38 @@ fn paste_into(s: &mut Session, p: &Value, outside: bool) -> Result<Value> {
 /// The canvas grown to every layer's pixels: Image › Reveal All's new canvas, and what the Crop
 /// tool shows while a frame is edited.
 pub fn reveal_all_bounds(doc: &Document) -> Rect {
-    doc.walk().into_iter().filter_map(|(_, _, l)| l.surface().map(|s| s.content_bounds())).fold(doc.bounds(), |a, b| a.union(&b))
+    let canvas = doc.bounds();
+    doc.walk().into_iter().filter_map(|(_, _, l)| l.surface().map(|s| visible_bounds(s, canvas))).fold(canvas, |a, b| a.union(&b))
+}
+
+/// Bounds of `s`'s pixels outside `canvas` with alpha > 0, as Photoshop's layer bounds (#9379):
+/// the Eraser only clears alpha, so an erased pixel keeps its colour bytes and `content_bounds`
+/// counts it. Pixels inside `canvas` can't grow the result and aren't read.
+fn visible_bounds(s: &photocraft_raster::Surface, canvas: Rect) -> Rect {
+    use rayon::prelude::*;
+    let fmt = s.format();
+    if !fmt.alpha || s.default_pixel().last().is_none_or(|a| *a > 0.0) {
+        return s.content_bounds();
+    }
+    let (n, bpp, side) = (fmt.channels(), fmt.bytes_per_pixel(), photocraft_geom::TILE_SIZE);
+    let tiles: Vec<_> = s.tiles().filter(|(c, _)| !canvas.contains_rect(&c.rect())).collect();
+    let tile_bounds = |o: Rect, bytes: &[u8]| {
+        let mut out = Rect::EMPTY;
+        for (ly, row) in bytes.chunks_exact(bpp * side as usize).enumerate() {
+            let y = o.y0.saturating_add(ly as i32);
+            let on_canvas = (canvas.y0..canvas.y1).contains(&y);
+            let visible = |lx: &i32| {
+                let x = o.x0.saturating_add(*lx);
+                !(on_canvas && (canvas.x0..canvas.x1).contains(&x))
+                    && row.get(*lx as usize * bpp..).is_some_and(|px| photocraft_color::read_sample(px, fmt.sample, n - 1) > 0.0)
+            };
+            let Some(first) = (0..side).find(visible) else { continue };
+            let last = (first..side).rfind(visible).unwrap_or(first);
+            out = out.union(&Rect::new(o.x0.saturating_add(first), y, o.x0.saturating_add(last).saturating_add(1), y.saturating_add(1)));
+        }
+        out
+    };
+    tiles.par_iter().map(|(c, t)| tile_bounds(c.rect(), t.bytes())).reduce(|| Rect::EMPTY, |a, b| a.union(&b))
 }
 
 // ---------- layers ----------
@@ -933,6 +929,7 @@ pub fn specs() -> Vec<CommandSpec> {
                         gray
                     };
                     for id in ids {
+                        background_to_layer(doc, id);
                         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
                         l.effects = fx.clone();
                         // Pass Through is a group's mode: a group's style pastes onto other layers as
@@ -1057,8 +1054,6 @@ pub fn specs() -> Vec<CommandSpec> {
             show_only
         ),
         spec!("filter.blur.average", "Average", &["Filter", "Blur"], None, "{}", has_pixels, average),
-        spec!("filter.render.clouds", "Clouds", &["Filter", "Render"], None, r##"{"seed":u32=0}"##, has_pixels, |s, p| clouds(s, p, false)),
-        spec!("filter.render.differenceClouds", "Difference Clouds", &["Filter", "Render"], None, r##"{"seed":u32=0}"##, has_pixels, |s, p| clouds(s, p, true)),
     ]
 }
 
@@ -1541,6 +1536,31 @@ mod tests {
         }
     }
 
+    /// A selection masks Clouds but doesn't change their size: inside it they are the canvas's
+    /// clouds, as when Clouds sized itself by the document (before it became a filter).
+    #[test]
+    fn clouds_in_a_selection_are_the_canvas_clouds() {
+        // Big enough that the canvas (cloud size 100 px) and the selection (16 px) size differently.
+        let big = |depth: u32| {
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width": 400, "height": 300, "depth": depth})).unwrap();
+            s.execute("layer.new.layer", json!({})).unwrap();
+            s
+        };
+        for depth in [8, 16, 32] {
+            let mut whole = big(depth);
+            whole.execute("filter.render.clouds", json!({"seed": 4})).unwrap();
+            let mut s = big(depth);
+            s.execute("select.rect", json!({"x": 50, "y": 40, "width": 60, "height": 50})).unwrap();
+            s.execute("filter.render.clouds", json!({"seed": 4})).unwrap();
+            for (x, y) in [(50, 40), (75, 60), (100, 85), (109, 89)] {
+                let (a, b) = (pixel(&s, x, y), pixel(&whole, x, y));
+                assert!((0..4).all(|c| (a[c] - b[c]).abs() < 1e-3), "depth {depth} at {x},{y}: {a:?} vs {b:?}");
+            }
+            assert_eq!(pixel(&s, 300, 200)[3], 0.0, "outside the selection the layer stays empty");
+        }
+    }
+
     #[test]
     fn average_and_clouds() {
         let mut s = session(8);
@@ -1769,6 +1789,28 @@ mod tests {
         assert_eq!(history.past_len(), steps + 1, "one step");
         assert_eq!(history.entries().last().map(String::as_str), Some("Reveal All"), "named as in Photoshop, not Crop");
         assert_eq!(s.execute("image.revealAll", json!({})).unwrap()["changed"], false);
+    }
+
+    #[test]
+    fn reveal_all_skips_erased_pixels() {
+        // #9379: the Eraser only clears alpha, so erased pixels keep their colour bytes; Reveal
+        // All grew the canvas to them although nothing there is visible.
+        // No Background: its off-canvas pixels are opaque and would be revealed anyway.
+        for depth in [8, 16, 32] {
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width": 40, "height": 30, "depth": depth, "background": "transparent"})).unwrap();
+            paint_square(&mut s, Rect::new(0, 0, 40, 30), [1.0, 0.0, 0.0, 1.0]);
+            let erase = json!({"points": [[32, -10], [32, 40]], "size": 28, "erase": true, "brush": {"hardness": 1.0}});
+            s.execute("paint.stroke", erase).unwrap();
+            assert_eq!(pixel(&s, 30, 15)[3], 0.0, "{depth}: erased");
+            s.execute("image.canvasSize", json!({"width": 20, "height": 30, "anchor": "topLeft"})).unwrap();
+            assert_eq!(s.execute("image.revealAll", json!({})).unwrap()["changed"], false, "{depth}");
+            assert_eq!((doc(&s).size.width, doc(&s).size.height), (20, 30), "{depth}");
+            // A pixel that is only partly erased is still there to reveal.
+            paint_square(&mut s, Rect::new(25, 5, 26, 6), [0.0, 0.0, 1.0, 0.5]);
+            assert_eq!(s.execute("image.revealAll", json!({})).unwrap()["changed"], true, "{depth}");
+            assert_eq!((doc(&s).size.width, doc(&s).size.height), (26, 30), "{depth}");
+        }
     }
 
     #[test]

@@ -309,7 +309,7 @@ mod widget_tests {
     fn typed_expression_commits_clamps_and_rejects_invalid() {
         let mut h = Harness::builder().build_ui_state(
             |ui, value| {
-                ui.add(egui::DragValue::new(value).range(0.0..=1000.0).custom_parser(super::parse));
+                ui.add(egui::DragValue::new(value).range(0.0..=1000.0).custom_parser(super::parse)).accessible_name("Test number");
             },
             100.0_f64,
         );

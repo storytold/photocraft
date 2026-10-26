@@ -847,6 +847,38 @@ fn variable_font_axes() {
     assert!(heavy > light * 1.5, "{light} → {heavy}");
 }
 
+/// #8797: a style that carries the PostScript name of a variable font's named condensed light
+/// instance lays out as wide as that instance's axis values, not at the default instance. Uses
+/// Bahnschrift (Windows) or Ubuntu Sans (Ubuntu) when installed, and skips otherwise; the
+/// synthesized-font tests in `font_names_tests` cover the instance lookup and its layout width
+/// everywhere.
+#[test]
+fn postscript_name_of_a_variable_instance_lays_out_at_that_instance() {
+    use photocraft_doc::text::FontVariation;
+    let candidates = [
+        ("C:\\Windows\\Fonts\\bahnschrift.ttf", "Bahnschrift-LightCondensed"),
+        ("/usr/share/fonts/truetype/ubuntu/UbuntuSans[wdth,wght].ttf", "UbuntuSans-CondensedLight"),
+    ];
+    let Some((bytes, ps)) = candidates.iter().find_map(|(p, ps)| std::fs::read(p).ok().map(|b| (b, *ps))) else {
+        return;
+    };
+    let mut e = TextEngine::new();
+    let Some(fam) = e.fonts.register_font_data(bytes).first().cloned() else {
+        return;
+    };
+    let width = |e: &mut TextEngine, style: CharStyle| {
+        let l = e.layout(&styled("Hamburgefonstiv 0123", style), 96.0);
+        l.lines[0].x1 - l.lines[0].x0
+    };
+    let base = CharStyle { font_family: fam.clone(), size_pt: 72.0, weight: 300, ..Default::default() };
+    let axes = vec![FontVariation { axis: "wght".into(), value: 300.0 }, FontVariation { axis: "wdth".into(), value: 75.0 }];
+    let family = width(&mut e, base.clone());
+    let instance = width(&mut e, CharStyle { postscript_name: Some(ps.into()), ..base.clone() });
+    let explicit = width(&mut e, CharStyle { variations: axes, ..base });
+    assert!(explicit < family * 0.9, "the condensed light axes are narrower: {explicit} vs {family}");
+    assert!((instance - explicit).abs() < 0.5, "{ps}: {instance} px, its axes: {explicit} px, default instance: {family} px");
+}
+
 #[test]
 fn warp_bends_rendered_text_and_outlines() {
     use photocraft_doc::text::TextWarp;
@@ -1083,6 +1115,202 @@ fn txt2_keeps_a_kept_objects_extras_and_drops_them_with_its_text() {
     let object = out.path(&["1", "1"]).and_then(E::as_array).unwrap()[0].clone();
     assert!(object.get("21").is_none(), "pen positions of another text are dropped: {:?}", object.get("21"));
     assert!(object.path(&["0", "keep"]).is_none(), "model extras of another text are dropped");
+}
+
+/// The `DocumentObjects` value older Photoshop writes beside the numbered objects
+/// (`/DocumentObjects /TextObjects`, named keys, run lengths under `/Length` in UTF-16 units,
+/// #6971): one entry per layer, its `\r`-terminated text in `Model /Text`, one paragraph run per
+/// paragraph, one style and kern run covering the whole text.
+fn photoshop_era_objects(texts: &[&str]) -> crate::engine_data::Value {
+    use crate::engine_data::Value as E;
+    let run = |len: i64| E::Dict(vec![("RunData".into(), E::Dict(vec![("0".into(), E::String(String::new()))])), ("Length".into(), E::Int(len))]);
+    let entries = texts
+        .iter()
+        .map(|t| {
+            let text = format!("{t}\r");
+            let paragraphs: Vec<i64> = text.split_inclusive('\r').map(|p| p.encode_utf16().count() as i64).collect();
+            let total = text.encode_utf16().count() as i64;
+            E::Dict(vec![
+                (
+                    "Model".into(),
+                    E::Dict(vec![
+                        ("Text".into(), E::String(text)),
+                        ("ParagraphRun".into(), E::Dict(vec![("RunArray".into(), E::Array(paragraphs.iter().map(|&n| run(n)).collect()))])),
+                        ("StyleRun".into(), E::Dict(vec![("RunArray".into(), E::Array(vec![run(total)]))])),
+                        ("KernRun".into(), E::Dict(vec![("RunArray".into(), E::Array(vec![run(total)]))])),
+                    ]),
+                ),
+                ("View".into(), E::Dict(vec![("0".into(), E::Array(vec![E::Dict(vec![("0".into(), E::Int(0))])]))])),
+            ])
+        })
+        .collect();
+    E::Dict(vec![("TextObjects".into(), E::Array(entries))])
+}
+
+/// A whole `Txt2` block shaped like the older Photoshop's: document resources and the objects at
+/// `/DocumentObjects /TextObjects`, no numbered `/1 /1` list at all.
+fn photoshop_era_txt2(texts: &[&str]) -> Vec<u8> {
+    use crate::engine_data::Value as E;
+    crate::engine_data::write_bare(&[
+        ("98".into(), E::Dict(vec![("0".into(), E::Int(14))])),
+        ("0".into(), E::dict()),
+        ("DocumentObjects".into(), photoshop_era_objects(texts)),
+    ])
+}
+
+/// #6971: Photoshop re-renders a type layer from the objects older Photoshop keeps at
+/// `/DocumentObjects /TextObjects` when the file has them, so an edit that left the old text
+/// there showed the old text back on reopen. The save refits that copy the way it refits the
+/// numbered ones — the new text, one paragraph run per paragraph of it, the other runs to its
+/// total — and keeps the entries' view and the rest.
+#[test]
+fn edited_text_updates_the_photoshop_era_objects() {
+    use crate::engine_data::Value as E;
+    use photocraft_doc::text::Kerning;
+    let prev = photoshop_era_txt2(&["Line 1\rLine 2"]);
+    let before = crate::psd::parse_txt2(&prev).unwrap();
+    let t = styled("Hi\nBye", CharStyle { kerning: Kerning::Optical, ..Default::default() });
+    let out = crate::psd::parse_txt2(&crate::psd::build_txt2(&[(0, &t)], Some(&prev))).unwrap();
+    let entries = out.path(&["DocumentObjects", "TextObjects"]).and_then(E::as_array).expect("the objects");
+    assert_eq!(entries.len(), 1, "no entry is added");
+    let entry = entries.first().expect("the entry");
+    let model = entry.get("Model").expect("the model");
+    assert_eq!(model.get("Text").and_then(E::as_str), Some("Hi\rBye\r"), "the stale text is replaced");
+    let lens = |key: &str| -> Vec<i64> {
+        model
+            .path(&[key, "RunArray"])
+            .and_then(E::as_array)
+            .map(|rs| rs.iter().map(|r| r.get("Length").and_then(E::as_i64).unwrap_or(-1)).collect())
+            .unwrap_or_default()
+    };
+    assert_eq!(lens("ParagraphRun"), vec![3, 4], "one paragraph run per paragraph of the new text");
+    assert_eq!(lens("StyleRun"), vec![7], "the style runs cover the new text's UTF-16 units");
+    assert_eq!(lens("KernRun"), vec![7]);
+    assert_eq!(
+        entry.get("View"),
+        before.path(&["DocumentObjects", "TextObjects"]).and_then(E::as_array).and_then(|e| e.first()).and_then(|e| e.get("View")),
+        "the view is kept"
+    );
+    // The numbered list is written alongside, as it was before this fix.
+    let slots = out.path(&["1", "1"]).and_then(E::as_array).expect("the numbered objects");
+    assert_eq!(slots.len(), 1);
+    assert_eq!(slots.first().and_then(|o| o.path(&["0", "0"])).and_then(E::as_str), Some("Hi\rBye\r"));
+}
+
+/// Only the entries of layers the save holds change: another layer's object — one no layer names
+/// — is written back as the file has it.
+#[test]
+fn only_the_edited_photoshop_era_object_changes() {
+    use crate::engine_data::Value as E;
+    use photocraft_doc::text::Kerning;
+    let prev = photoshop_era_txt2(&["One", "Two"]);
+    let before = crate::psd::parse_txt2(&prev).unwrap();
+    let style = |kerning: Kerning| CharStyle { kerning, ..Default::default() };
+    let t0 = runs_of("One", &[(3, style(Kerning::Metrics))]);
+    let t1 = runs_of("Changed", &[(7, style(Kerning::Optical))]);
+    let out = crate::psd::parse_txt2(&crate::psd::build_txt2(&[(0, &t0), (1, &t1)], Some(&prev))).unwrap();
+    let entries = out.path(&["DocumentObjects", "TextObjects"]).and_then(E::as_array).expect("the objects");
+    let was = before.path(&["DocumentObjects", "TextObjects"]).and_then(E::as_array).expect("the objects before");
+    assert_eq!(entries.len(), 2, "no entry is added");
+    assert_eq!(entries.first(), was.first(), "the unchanged entry is written back as it was");
+    assert_eq!(entries.get(1).and_then(|e| e.path(&["Model", "Text"])).and_then(E::as_str), Some("Changed\r"), "the edited entry takes the new text");
+}
+
+/// Files saved by the old code have both lists: the numbered object current, the older copy still
+/// holding the text of an earlier edit. Re-saving repairs the stale copy even when the numbered
+/// object's text matches the layer (nothing else about the file changes).
+#[test]
+fn legacy_file_with_both_object_lists_repairs_the_stale_one() {
+    use crate::engine_data::Value as E;
+    use photocraft_doc::text::Kerning;
+    let mut prev = photoshop_txt2(&[(4, 1)]);
+    prev.extend_from_slice(&crate::engine_data::write_bare(&[("DocumentObjects".into(), photoshop_era_objects(&["Old stuff"]))]));
+    let before = crate::psd::parse_txt2(&prev).unwrap();
+    let t = styled("AVA", CharStyle { kerning: Kerning::Metrics, ..Default::default() });
+    let out = crate::psd::parse_txt2(&crate::psd::build_txt2(&[(0, &t)], Some(&prev))).unwrap();
+    let entries = out.path(&["DocumentObjects", "TextObjects"]).and_then(E::as_array).expect("the objects");
+    assert_eq!(entries.len(), 1);
+    let model = entries.first().expect("the entry").get("Model").expect("the model");
+    assert_eq!(model.get("Text").and_then(E::as_str), Some("AVA\r"), "the stale copy is repaired");
+    let lens = model
+        .path(&["StyleRun", "RunArray"])
+        .and_then(E::as_array)
+        .map(|rs| rs.iter().map(|r| r.get("Length").and_then(E::as_i64).unwrap_or(-1)).collect::<Vec<_>>());
+    assert_eq!(lens, Some(vec![4]), "its runs cover the layer's text");
+    let slots = out.path(&["1", "1"]).and_then(E::as_array).expect("the numbered objects");
+    assert_eq!(slots.first().and_then(|o| o.path(&["0", "0"])).and_then(E::as_str), Some("AVA\r"), "the numbered object is kept as it was");
+    assert_eq!(before.path(&["1", "1"]).and_then(E::as_array).and_then(|s| s.first()), slots.first(), "the numbered object changes not at all");
+}
+
+/// When both lists hold the layer's text, the block is written back byte for byte — #2374 holds
+/// for the older objects too: re-encoding them would only risk Photoshop refusing the file.
+#[test]
+fn unchanged_block_with_both_object_lists_is_byte_identical() {
+    use photocraft_doc::text::Kerning;
+    let mut prev = photoshop_txt2(&[(4, 1)]);
+    prev.extend_from_slice(&crate::engine_data::write_bare(&[("DocumentObjects".into(), photoshop_era_objects(&["AVA"]))]));
+    let t = styled("AVA", CharStyle { kerning: Kerning::Metrics, ..Default::default() });
+    assert_eq!(crate::psd::build_txt2(&[(0, &t)], Some(&prev)), prev);
+}
+
+/// An entry shaped unlike Photoshop writes it — a run without its `/Length`, a `RunArray` that
+/// isn't an array, an empty one, an object with no text to replace — is left exactly as the file
+/// has it: a half-refitted object (new text over old runs) is what made Photoshop quit (#6968),
+/// so the save never writes one.
+#[test]
+fn odd_photoshop_era_entries_are_left_as_the_file_has_them() {
+    use crate::engine_data::Value as E;
+    use photocraft_doc::text::Kerning;
+    let run = |len: i64| E::Dict(vec![("RunData".into(), E::dict()), ("Length".into(), E::Int(len))]);
+    let entry = |model: Vec<(&str, E)>| {
+        E::Dict(vec![("Model".into(), E::Dict(model.into_iter().map(|(k, v)| (k.to_string(), v)).collect())), ("View".into(), E::dict())])
+    };
+    let with_text = |text: E, style: E| {
+        entry(vec![
+            ("Text", text),
+            ("ParagraphRun", E::Dict(vec![("RunArray".into(), E::Array(vec![run(4)]))])),
+            ("StyleRun", E::Dict(vec![("RunArray".into(), style)])),
+        ])
+    };
+    let odd = [
+        with_text(E::String("Old\r".into()), E::Array(vec![E::Dict(vec![("RunData".into(), E::dict())])])),
+        with_text(E::String("Old\r".into()), E::Int(3)),
+        with_text(E::String("Old\r".into()), E::Array(vec![])),
+        E::Int(3),
+        entry(vec![("ParagraphRun", E::Dict(vec![("RunArray".into(), E::Array(vec![run(4)]))]))]),
+        with_text(E::Int(9), E::Array(vec![run(4)])),
+    ];
+    for (i, object) in odd.iter().enumerate() {
+        let prev = crate::engine_data::write_bare(&[
+            ("98".into(), E::Dict(vec![("0".into(), E::Int(14))])),
+            ("0".into(), E::dict()),
+            ("DocumentObjects".into(), E::Dict(vec![("TextObjects".into(), E::Array(vec![object.clone()]))])),
+        ]);
+        let was = crate::psd::parse_txt2(&prev).unwrap();
+        let t = styled("New", CharStyle { kerning: Kerning::Optical, ..Default::default() });
+        let out = crate::psd::parse_txt2(&crate::psd::build_txt2(&[(0, &t)], Some(&prev))).unwrap();
+        let entries = out.path(&["DocumentObjects", "TextObjects"]).and_then(E::as_array).expect("the objects");
+        assert_eq!(
+            entries.first(),
+            was.path(&["DocumentObjects", "TextObjects"]).and_then(E::as_array).and_then(|e| e.first()),
+            "entry {i} is left as the file has it"
+        );
+    }
+}
+
+/// A `TextIndex` past the entries the block holds has no stale copy to fix: nothing is grown to
+/// the layer's number (the slot list grows as it always did), and the entries stay the file's.
+#[test]
+fn a_text_index_beyond_the_photoshop_era_entries_grows_nothing() {
+    use crate::engine_data::Value as E;
+    use photocraft_doc::text::Kerning;
+    let prev = photoshop_era_txt2(&["Only one"]);
+    let was = crate::psd::parse_txt2(&prev).unwrap();
+    let t = styled("Whatever", CharStyle { kerning: Kerning::Optical, ..Default::default() });
+    let out = crate::psd::parse_txt2(&crate::psd::build_txt2(&[(crate::psd::MAX_TEXT_INDEX, &t)], Some(&prev))).unwrap();
+    let entries = out.path(&["DocumentObjects", "TextObjects"]).and_then(E::as_array).expect("the objects");
+    assert_eq!(entries.len(), 1, "no entry is grown to the layer's number");
+    assert_eq!(entries.first(), was.path(&["DocumentObjects", "TextObjects"]).and_then(E::as_array).and_then(|e| e.first()));
 }
 
 /// A `Txt2` shaped like Photoshop's: document resources and settings beside the text objects
@@ -1454,46 +1682,124 @@ fn psd_round_trips_antialias_opentype_and_warp() {
     }
 }
 
-/// #1469: Some older PSD writers combine a zero PointBase with an enormous local ink origin.
-/// The TySh transform cancels that origin, so importing it as a zero-based layout puts text far
-/// off-canvas. Fold the descriptor origin into the imported transform and preserve it on a TySh
-/// round trip so every editing and export path uses the same position.
-#[test]
-fn legacy_tysh_point_origin_imports_and_round_trips_on_canvas() {
+/// A legacy-signature `TySh` (#1469): zero PointBase, `bounds` (the layout box) and `boundingBox`
+/// (the ink box, as Photoshop writes it) both around `anchor` in a remote local space, and a
+/// `transform` that cancels the remote origin.
+fn legacy_tysh(source: &TextLayer, transform: Affine, anchor: [f64; 2], engine: &mut TextEngine) -> Vec<u8> {
     use photocraft_psd::descriptor::{Descriptor, Id, Value as D};
-
-    let source = styled("Name", CharStyle { font_family: "Inter".into(), size_pt: 120.0, ..Default::default() });
-    let mut tysh = crate::psd::parse_tysh(&crate::psd::build_tysh(&source, 72.0, None)).unwrap();
-    tysh.transform = Affine { m: [4.1667, 0.0, 0.0, 4.1667, -32375.0, -32887.5] };
-    let ink = [8050.0, 8160.0, 8220.0, 8300.0];
-    let rect = |class| {
+    let layout = engine.layout(source, 72.0);
+    let logical = layout.bounds().unwrap().map(f64::from);
+    let ink = crate::render::ink_bounds(&layout).unwrap();
+    let rect = |class, r: [f64; 4]| {
         D::Descriptor(
             Descriptor::new(class)
-                .with("Left", D::UnitFloat { unit: *b"#Pnt", value: ink[0] })
-                .with("Top ", D::UnitFloat { unit: *b"#Pnt", value: ink[1] })
-                .with("Rght", D::UnitFloat { unit: *b"#Pnt", value: ink[2] })
-                .with("Btom", D::UnitFloat { unit: *b"#Pnt", value: ink[3] }),
+                .with("Left", D::UnitFloat { unit: *b"#Pnt", value: anchor[0] + r[0] })
+                .with("Top ", D::UnitFloat { unit: *b"#Pnt", value: anchor[1] + r[1] })
+                .with("Rght", D::UnitFloat { unit: *b"#Pnt", value: anchor[0] + r[2] })
+                .with("Btom", D::UnitFloat { unit: *b"#Pnt", value: anchor[1] + r[3] }),
         )
     };
+    let mut tysh = crate::psd::parse_tysh(&crate::psd::build_tysh(source, 72.0, None)).unwrap();
+    tysh.transform = transform;
     tysh.text.items.retain(|(key, _)| !key.is("bounds") && !key.is("boundingBox"));
-    tysh.text.items.push((Id::new("bounds"), rect("bounds")));
-    tysh.text.items.push((Id::new("boundingBox"), rect("boundingBox")));
-    let data = crate::psd::write_tysh(&tysh);
+    tysh.text.items.push((Id::new("bounds"), rect("bounds", logical)));
+    tysh.text.items.push((Id::new("boundingBox"), rect("boundingBox", ink)));
+    crate::psd::write_tysh(&tysh)
+}
 
-    let imported = crate::psd::text_layer_from_tysh(&data, 72.0).unwrap();
-    let expected = [4.1667, 0.0, 0.0, 4.1667, 1166.935, 1112.772];
-    for (got, want) in imported.transform.m.iter().zip(expected) {
-        assert!((got - want).abs() < 0.001, "{:?}", imported.transform.m);
-    }
-    let (_, rendered) = TextEngine::new().render(&imported, 72.0, PixelFormat::RGBA8);
-    let placed = rendered.surface.content_bounds();
-    assert!(!placed.is_empty(), "the normalized layer renders");
-    assert!((1000..3000).contains(&placed.x0) && (500..2000).contains(&placed.y0), "{placed:?}");
+fn assert_transform_near(got: Affine, want: Affine, tolerance: f64, what: &str) {
+    assert!(got.m.iter().zip(want.m).all(|(g, w)| (g - w).abs() < tolerance), "{what}: {:?} vs {:?}", got.m, want.m);
+}
 
-    let round_trip = crate::psd::text_layer_from_tysh(&crate::psd::build_tysh(&imported, 72.0, Some(ink.map(|v| v as f32))), 72.0).unwrap();
-    for (got, want) in round_trip.transform.m.iter().zip(expected) {
-        assert!((got - want).abs() < 0.001, "{:?}", round_trip.transform.m);
+/// #1469: Some older PSD writers combine a zero PointBase with an enormous local ink origin.
+/// The layout's own ink box is lined up with the saved ink box, so point alignment anchors stay
+/// fixed for left, centered and right text through import and a TySh round trip.
+#[test]
+fn legacy_tysh_point_origin_imports_and_round_trips_on_canvas() {
+    use photocraft_psd::descriptor::Value as D;
+
+    let original = Affine { m: [4.1667, 0.0, 0.0, 4.1667, -32375.0, -32887.5] };
+    // The file's layout origin (the anchor on the first baseline) in its local space.
+    let anchor = [8050.0, 8160.0];
+    let expected = original.mul(&Affine::translate(anchor[0], anchor[1]));
+    for align in [TextAlign::Left, TextAlign::Center, TextAlign::Right] {
+        let mut source = styled("Name", CharStyle { font_family: "Inter".into(), size_pt: 120.0, ..Default::default() });
+        source.paragraphs = vec![ParagraphRun { len: source.text.len(), style: ParagraphStyle { align, ..Default::default() } }];
+        let mut engine = TextEngine::new();
+        let data = legacy_tysh(&source, original, anchor, &mut engine);
+
+        let mut imported = crate::psd::text_layer_from_tysh(&data, 72.0).unwrap();
+        imported.psd_raw = Some(std::sync::Arc::new(data.clone()));
+        crate::psd::refine_legacy_point_origin(&mut imported, 72.0, &mut engine, None);
+        assert_eq!(imported.paragraph_runs()[0].style.align, align);
+        assert_transform_near(imported.transform, expected, 1e-6, &format!("{align:?}: anchor"));
+
+        let (_, rendered) = engine.render(&imported, 72.0, PixelFormat::RGBA8);
+        let placed = rendered.surface.content_bounds();
+        assert!(!placed.is_empty(), "{align:?}: no rendered pixels");
+        let mut want = source.clone();
+        want.transform = expected;
+        let (_, expected_pixels) = engine.render(&want, 72.0, PixelFormat::RGBA8);
+        assert_eq!(placed, expected_pixels.surface.content_bounds(), "{align:?}: raster placement");
+
+        let native = engine.layout(&imported, 72.0).bounds();
+        let round_trip = crate::psd::text_layer_from_tysh(&crate::psd::build_tysh(&imported, 72.0, native), 72.0).unwrap();
+        assert_transform_near(round_trip.transform, expected, 0.01, &format!("{align:?}: round trip"));
+
+        // A valid frame may equal the old ink-corner estimate. It must still win over refinement.
+        let t = crate::psd::parse_tysh(&data).unwrap();
+        let Some(D::Descriptor(ink_box)) = t.text.get("boundingBox") else { panic!("boundingBox") };
+        let corner = |k| match ink_box.get(k) {
+            Some(D::UnitFloat { value, .. }) => *value,
+            _ => panic!("{k}"),
+        };
+        let framed = with_text_index(&data, 0);
+        let txt2 = crate::psd::parse_txt2(&txt2_with_frame("Name", Some([corner("Left"), corner("Top ")]), [1.0, 0.0, 0.0, 1.0, 0.0, 0.0])).unwrap();
+        let mut with_frame = crate::psd::text_layer_from_tysh(&framed, 72.0).unwrap();
+        with_frame.psd_raw = Some(std::sync::Arc::new(framed.clone()));
+        crate::psd::apply_txt2_frame(&mut with_frame, &framed, &txt2);
+        let authoritative = with_frame.transform;
+        crate::psd::refine_legacy_point_origin(&mut with_frame, 72.0, &mut engine, Some(&txt2));
+        assert_eq!(with_frame.transform, authoritative, "{align:?}: exact frame wins");
     }
+}
+
+/// #6094 review: `boundingBox` is the tight ink box (a Photoshop-saved Arial 120 pt "..." has
+/// `bounds` top -102.98 but `boundingBox` top -11). Text whose ink starts well below the ascent
+/// line keeps its baseline: lining the layout box up with the ink box put "..." and "_" about
+/// 116 pt too low.
+#[test]
+fn legacy_origin_lines_up_ink_with_the_ink_bounding_box() {
+    let original = Affine { m: [1.0, 0.0, 0.0, 1.0, -7900.0, -7550.0] };
+    for text in ["Name", "...", "_"] {
+        let source = styled(text, CharStyle { font_family: "Inter".into(), size_pt: 120.0, ..Default::default() });
+        let mut engine = TextEngine::new();
+        let data = legacy_tysh(&source, original, [8000.0, 8000.0], &mut engine);
+        let mut imported = crate::psd::text_layer_from_tysh(&data, 72.0).unwrap();
+        imported.psd_raw = Some(std::sync::Arc::new(data));
+        crate::psd::refine_legacy_point_origin(&mut imported, 72.0, &mut engine, None);
+        let baseline = imported.transform.apply(photocraft_geom::Point::new(0.0, 0.0));
+        assert!((baseline.x - 100.0).abs() < 1e-6 && (baseline.y - 450.0).abs() < 1e-6, "{text:?}: {baseline:?}");
+    }
+}
+
+#[test]
+fn legacy_origin_uses_the_rendering_engines_registered_face() {
+    let mut engine = TextEngine::new();
+    let mut style = CharStyle { font_family: "JetBrains Mono".into(), font_style: "Regular".into(), size_pt: 100.0, ..Default::default() };
+    // This exact-face alias exists only in this engine, like a user-registered font.
+    engine.fonts.select_named_face(&mut style);
+    assert!(style.font_family.starts_with(".PhotoCraft-face-"));
+    let source = with_para(styled("Name", style), ParagraphStyle { align: TextAlign::Right, ..Default::default() });
+    let raw = legacy_tysh(&source, Affine::translate(-8000.0, -8000.0), [8100.0, 8200.0], &mut engine);
+    let mut imported = crate::psd::text_layer_from_tysh(&raw, 72.0).unwrap();
+    // Import preparation has resolved the face before refining placement.
+    imported.runs = source.runs.clone();
+    imported.sync_summary();
+    imported.psd_raw = Some(std::sync::Arc::new(raw));
+    crate::psd::refine_legacy_point_origin(&mut imported, 72.0, &mut engine, None);
+    let placed = imported.transform.apply(photocraft_geom::Point::new(0.0, 0.0));
+    assert!((placed.x - 100.0).abs() < 1e-6 && (placed.y - 200.0).abs() < 1e-6, "{placed:?}");
 }
 
 /// Regression: a PSD whose text engine data has no `EngineDict` (or isn't a dictionary)
@@ -1728,10 +2034,17 @@ fn craft_fonts_cover_japanese_without_system_fonts() {
     let l = e.layout(&point(text, 24.0), 72.0);
     assert_eq!(l.glyphs.len(), text.chars().count());
     assert!(l.glyphs.iter().all(|g| g.id != 0), "no .notdef with craft-fonts");
-    // Sans (Inter) runs fall back to the Gothic UI family.
-    assert_eq!(craft_family_of(&l), vec![crate::craft_fonts::UI_JAPANESE_FAMILY]);
-    // Serif runs fall back to a Mincho face when the build has one (not the web build).
-    if crate::CRAFT_FONTS.iter().any(|f| f.is_mincho()) {
+    // Sans (Inter) runs fall back to the first CJK craft family in the UI locale's script order:
+    // the Gothic UI family when Japanese leads that order or the build has no other CJK craft font.
+    let cjk = |f: &crate::CraftFont| f.scripts.iter().any(|s| matches!(*s, "Jpan" | "Hans" | "Hant" | "Kore"));
+    let first = e.fonts.fallback_stack().find_map(|fam| crate::CRAFT_FONTS.iter().find(|f| f.family == fam && cjk(f))).map(|f| f.family);
+    if !crate::CRAFT_FONTS.iter().any(|f| cjk(f) && !f.is_japanese()) || crate::cjk::ui_script_order()[0] == crate::cjk::CjkScript::Japanese {
+        assert_eq!(first, Some(crate::craft_fonts::UI_JAPANESE_FAMILY));
+    }
+    assert_eq!(craft_family_of(&l), first.into_iter().collect::<Vec<_>>());
+    // Serif runs fall back to a Mincho face when the build has one (not the web build) and the
+    // Japanese craft fonts come first.
+    if first == Some(crate::craft_fonts::UI_JAPANESE_FAMILY) && crate::CRAFT_FONTS.iter().any(|f| f.is_mincho()) {
         let mut t = point(text, 24.0);
         t.font_family = "Times New Roman".into();
         let l = e.layout(&t, 72.0);
@@ -1742,6 +2055,23 @@ fn craft_fonts_cover_japanese_without_system_fonts() {
     // Latin keeps Inter.
     let l = e.layout(&point("Layer 1", 24.0), 72.0);
     assert!(craft_family_of(&l).is_empty());
+}
+
+/// Chinese, Arabic and Thai set in Inter fall back to the craft font for their script when the
+/// build has one (Noto Sans CJK SC, Noto Sans Arabic and Noto Sans Thai in newer craft-fonts).
+#[test]
+fn craft_fonts_cover_their_other_scripts_without_system_fonts() {
+    let mut e = TextEngine::new();
+    for (script, text) in [("Hans", "中文图层"), ("Arab", "مرحبا"), ("Thai", "ภาษาไทย")] {
+        if !crate::CRAFT_FONTS.iter().any(|f| f.scripts.contains(&script)) {
+            eprintln!("skipping {script}: built without a craft font for it (set CRAFT_FONTS_DIR to a craft-fonts checkout)");
+            continue;
+        }
+        let l = e.layout(&point(text, 24.0), 72.0);
+        assert!(!l.glyphs.is_empty() && l.glyphs.iter().all(|g| g.id != 0), "{script}: no .notdef with craft-fonts");
+        let fams = craft_family_of(&l);
+        assert!(fams.iter().any(|fam| crate::CRAFT_FONTS.iter().any(|f| f.family == *fam && f.scripts.contains(&script))), "{script}: drawn with {fams:?}");
+    }
 }
 
 #[test]
@@ -2180,6 +2510,30 @@ fn engine_data_antialias_numbers_match_photoshop() {
     }
 }
 
+/// Anti-alias modes must change edge coverage (storytold/photocraft#5902).
+#[test]
+fn antialias_modes_change_edge_fringe() {
+    use photocraft_doc::text::AntiAlias;
+
+    let fringe_mass = |mode: AntiAlias| {
+        let mut e = TextEngine::new();
+        let layer = TextLayer { antialias: mode, ..point("O", 48.0) };
+        let (_, r) = e.render(&layer, 72.0, PixelFormat::RGBA8);
+        let n = r.surface.channels();
+        r.surface.read_region(r.rect).chunks_exact(n).map(|p| f64::from(p[n - 1])).filter(|&a| a > 0.02 && a < 0.98).sum::<f64>()
+    };
+
+    let none = fringe_mass(AntiAlias::None);
+    let sharp = fringe_mass(AntiAlias::Sharp);
+    let smooth = fringe_mass(AntiAlias::Smooth);
+    let strong = fringe_mass(AntiAlias::Strong);
+
+    assert_eq!(none, 0.0, "aliased-off edges are hard");
+    assert!(strong > smooth + 1.0, "strong smooths more than smooth: {strong} vs {smooth}");
+    assert!(smooth > sharp + 0.5, "sharp thins the fringe vs smooth: {sharp} vs {smooth}");
+    assert!(sharp > 0.0);
+}
+
 /// Type on a path (#218): along a vertical line the type runs top to bottom with its glyphs
 /// turned, along a curve it follows the curve, and glyphs beyond the end are not drawn.
 #[test]
@@ -2421,4 +2775,339 @@ fn a_word_wider_than_the_paragraph_box_breaks_at_the_box_edge() {
     let l = e.layout(&spaced, 72.0);
     assert_eq!(l.lines.len(), 2, "{:?}", l.lines);
     assert_eq!(l.lines[1].range.start, 3, "{:?}", l.lines);
+}
+
+/// Closed polygon in text space.
+fn area_poly(pts: &[(f64, f64)]) -> photocraft_doc::vector::Path {
+    photocraft_doc::vector::Path::new(vec![photocraft_doc::vector::Subpath::polygon(pts)])
+}
+
+/// An ellipse from four kappa curves inside `[x, y, w, h]`.
+fn area_ellipse(x: f64, y: f64, w: f64, h: f64) -> photocraft_doc::vector::Path {
+    use photocraft_doc::vector::{Knot, Subpath};
+    use photocraft_geom::Point;
+    let (rx, ry, cx, cy) = (w / 2.0, h / 2.0, x + w / 2.0, y + h / 2.0);
+    let (kx, ky) = (0.552_284_75 * rx, 0.552_284_75 * ry);
+    let p = Point::new;
+    let knots = vec![
+        Knot::smooth(p(cx, y), p(cx - kx, y), p(cx + kx, y)),
+        Knot::smooth(p(x + w, cy), p(x + w, cy - ky), p(x + w, cy + ky)),
+        Knot::smooth(p(cx, y + h), p(cx + kx, y + h), p(cx - kx, y + h)),
+        Knot::smooth(p(x, cy), p(x, cy + ky), p(x, cy - ky)),
+    ];
+    photocraft_doc::vector::Path::new(vec![Subpath { closed: true, knots, op: Default::default() }])
+}
+
+const BUBBLE_TEXT: &str = "Well, that went better than expected. Now where did the cat hide the keys this time?";
+
+/// Every laid-out line sits inside a span of the shape across its band.
+fn assert_lines_inside(l: &crate::TextLayout, path: &photocraft_doc::vector::Path) {
+    let a = crate::area::AreaShape::new(path, false).unwrap();
+    for line in &l.lines {
+        let spans = a.spans(line.baseline - line.ascent, line.baseline + line.descent, 0.0);
+        assert!(spans.iter().any(|&(s0, s1)| line.x0 >= s0 - 0.5 && line.x1 <= s1 + 0.5), "{line:?} not inside {spans:?}");
+    }
+}
+
+#[test]
+fn area_text_stays_inside_an_ellipse() {
+    let mut e = TextEngine::new();
+    let mut t = point(BUBBLE_TEXT, 18.0);
+    let path = area_ellipse(0.0, 0.0, 260.0, 160.0);
+    t.shape = TextShape::Area { path: path.clone() };
+    let l = e.layout(&t, 72.0);
+    assert!(l.lines.len() >= 4, "{}", l.lines.len());
+    assert_lines_inside(&l, &path);
+    // The top of an ellipse is too narrow for a line at its very edge: the first line starts lower.
+    assert!(l.lines[0].baseline - l.lines[0].ascent > 1.0, "{:?}", l.lines[0]);
+    // Lines go down the shape in text order.
+    for w in l.lines.windows(2) {
+        assert!(w[1].baseline >= w[0].baseline && w[1].range.start >= w[0].range.end, "{w:?}");
+    }
+    // Middle lines are wider than the first (the ellipse is widest in the middle).
+    let width = |i: usize| l.lines[i].x1 - l.lines[i].x0;
+    assert!(width(l.lines.len() / 2) > width(0), "{l:?}");
+}
+
+#[test]
+fn area_overflow_is_hidden() {
+    let mut e = TextEngine::new();
+    let mut t = point(&BUBBLE_TEXT.repeat(10), 14.0);
+    let path = area_ellipse(0.0, 0.0, 200.0, 80.0);
+    t.shape = TextShape::Area { path: path.clone() };
+    let l = e.layout(&t, 72.0);
+    assert!(!l.lines.is_empty());
+    assert!(l.lines.last().unwrap().range.end < t.text.len(), "the rest is hidden");
+    assert_lines_inside(&l, &path);
+}
+
+/// A long word that reaches the narrow bottom of a full bubble is hidden with the rest, not
+/// drawn past the outline: the wide middle rows would hold it, so the shape just ran out.
+#[test]
+fn area_overflow_at_the_narrow_bottom_is_hidden() {
+    let mut e = TextEngine::new();
+    let words = "Unfortunately the misunderstanding between representatives continued indefinitely. ";
+    for (w, h, size) in [(260.0, 160.0, 12.0), (180.0, 140.0, 14.0), (150.0, 220.0, 12.0)] {
+        let mut t = point(&words.repeat(8), size);
+        let path = area_ellipse(0.0, 0.0, w, h);
+        t.shape = TextShape::Area { path: path.clone() };
+        let l = e.layout(&t, 72.0);
+        assert!(!l.lines.is_empty());
+        assert!(l.lines.last().unwrap().range.end < t.text.len(), "the rest is hidden");
+        assert_lines_inside(&l, &path);
+    }
+}
+
+/// The same in a later paragraph: its own rows start below the wide top of the shape, but the
+/// shape would still hold the word there, so it is hidden rather than drawn past the outline.
+#[test]
+fn area_overflow_in_a_later_paragraph_is_hidden() {
+    let mut e = TextEngine::new();
+    // A funnel: 300 px wide at the top, a point at the bottom.
+    let path = area_poly(&[(0.0, 0.0), (300.0, 0.0), (150.0, 300.0)]);
+    for n in (10..120).step_by(5) {
+        let text = format!("{}\nmisunderstanding and more", "cat ".repeat(n));
+        let mut t = point(&text, 12.0);
+        t.shape = TextShape::Area { path: path.clone() };
+        let l = e.layout(&t, 72.0);
+        assert_lines_inside(&l, &path);
+    }
+}
+
+#[test]
+fn area_lines_center_in_their_span() {
+    let mut e = TextEngine::new();
+    let mut t = point(BUBBLE_TEXT, 12.0);
+    t.paragraphs = vec![ParagraphRun { len: t.text.len(), style: ParagraphStyle { align: TextAlign::Center, ..Default::default() } }];
+    // A diamond: every row's span is centred on x = 100.
+    t.shape = TextShape::Area { path: area_poly(&[(100.0, 0.0), (200.0, 100.0), (100.0, 200.0), (0.0, 100.0)]) };
+    let l = e.layout(&t, 72.0);
+    assert!(l.lines.len() >= 3);
+    for line in &l.lines {
+        assert!(((line.x0 + line.x1) / 2.0 - 100.0).abs() < 1.5, "{line:?}");
+    }
+}
+
+/// Horizontal scale applies after shaping, so area lines break at the span width divided by it:
+/// widened text stays inside the shape and centred lines stay centred (#5565).
+#[test]
+fn horizontally_scaled_area_text_stays_inside_its_spans() {
+    let mut e = TextEngine::new();
+    let style = CharStyle { font_family: "Inter".into(), size_pt: 12.0, horizontal_scale: 1.5, ..Default::default() };
+    let mut t = styled(BUBBLE_TEXT, style);
+    let path = area_ellipse(0.0, 0.0, 240.0, 200.0);
+    t.shape = TextShape::Area { path: path.clone() };
+    let l = e.layout(&t, 72.0);
+    assert!(l.lines.len() >= 3, "{:?}", l.lines);
+    assert_lines_inside(&l, &path);
+    t.paragraphs = vec![ParagraphRun { len: t.text.len(), style: ParagraphStyle { align: TextAlign::Center, ..Default::default() } }];
+    t.shape = TextShape::Area { path: area_poly(&[(100.0, 0.0), (200.0, 100.0), (100.0, 200.0), (0.0, 100.0)]) };
+    let l = e.layout(&t, 72.0);
+    assert!(l.lines.len() >= 2, "{:?}", l.lines);
+    for line in &l.lines {
+        assert!(((line.x0 + line.x1) / 2.0 - 100.0).abs() < 1.5, "{line:?}");
+    }
+}
+
+#[test]
+fn area_rows_split_around_a_hole() {
+    use photocraft_doc::vector::{PathOp, Subpath};
+    let mut e = TextEngine::new();
+    let mut t = point(&BUBBLE_TEXT.repeat(6), 12.0);
+    let path = photocraft_doc::vector::Path::new(vec![
+        Subpath::polygon(&[(0.0, 0.0), (300.0, 0.0), (300.0, 300.0), (0.0, 300.0)]),
+        Subpath::polygon(&[(120.0, 100.0), (180.0, 100.0), (180.0, 200.0), (120.0, 200.0)]).with_op(PathOp::Subtract),
+    ]);
+    t.shape = TextShape::Area { path: path.clone() };
+    let l = e.layout(&t, 72.0);
+    assert_lines_inside(&l, &path);
+    // Some baseline carries two lines: one left of the hole, one right of it, left first.
+    let w = l.lines.windows(2).find(|w| (w[0].baseline - w[1].baseline).abs() < 1e-3).expect("a row split around the hole");
+    let (left, right) = (&w[0], &w[1]);
+    assert!(left.x1 <= 120.5 && right.x0 >= 179.5, "{left:?} {right:?}");
+}
+
+#[test]
+fn vertical_area_text_stays_inside() {
+    use photocraft_doc::text::Orientation;
+    let mut e = TextEngine::new();
+    let mut t = point(BUBBLE_TEXT, 12.0);
+    t.orientation = Orientation::Vertical;
+    t.shape = TextShape::Area { path: area_poly(&[(0.0, 0.0), (120.0, 0.0), (120.0, 200.0), (0.0, 200.0)]) };
+    let l = e.layout(&t, 72.0);
+    assert!(l.lines.len() >= 2, "several columns");
+    for g in &l.glyphs {
+        assert!(g.x > -1.0 && g.x < 121.0 && g.y > -1.0 && g.y < 201.0, "{g:?}");
+    }
+}
+
+#[test]
+fn area_without_room_lays_out_nothing_and_a_bad_path_lays_out_as_point_text() {
+    let mut e = TextEngine::new();
+    let mut t = point("Hello", 40.0);
+    // 10 px tall: no 40 pt line fits.
+    t.shape = TextShape::Area { path: area_poly(&[(0.0, 0.0), (300.0, 0.0), (300.0, 10.0), (0.0, 10.0)]) };
+    assert!(e.layout(&t, 72.0).lines.is_empty());
+    // An open path encloses nothing (only reachable from a hostile file): point text, no panic.
+    t.shape = TextShape::Area { path: photocraft_doc::vector::Path::new(vec![photocraft_doc::vector::Subpath::polyline(&[(0.0, 0.0), (9.0, 9.0)])]) };
+    let point_layout = e.layout(&point("Hello", 40.0), 72.0);
+    assert_eq!(e.layout(&t, 72.0).lines.len(), point_layout.lines.len());
+}
+
+#[test]
+fn area_word_wider_than_every_span_overflows_instead_of_hiding_the_text() {
+    use photocraft_doc::vector::Subpath;
+    let mut e = TextEngine::new();
+    // Two 40 px columns 120 px apart: their bounding box is 200 px wide, but no span is wider
+    // than 40 px, so no row can ever hold the long word.
+    let mut t = point("Wonderfulness is a long word", 12.0);
+    let path = photocraft_doc::vector::Path::new(vec![
+        Subpath::polygon(&[(0.0, 0.0), (40.0, 0.0), (40.0, 200.0), (0.0, 200.0)]),
+        Subpath::polygon(&[(160.0, 0.0), (200.0, 0.0), (200.0, 200.0), (160.0, 200.0)]),
+    ]);
+    t.shape = TextShape::Area { path };
+    let l = e.layout(&t, 72.0);
+    let first = l.lines.first().expect("the text is shown");
+    // The word overflows its 40 px span on the first row (box text would break it, #6694).
+    assert!(first.x1 - first.x0 > 40.0 && first.x1 - first.x0 < 200.0, "{first:?}");
+    assert!(first.x0 >= -0.5, "{first:?}");
+    // Nothing is hidden.
+    assert_eq!(l.lines.last().map(|line| line.range.end), Some(t.text.len()), "{:?}", l.lines);
+}
+
+#[test]
+fn single_size_area_paragraph_breaks_in_one_pass() {
+    let mut e = TextEngine::new();
+    let mut t = point(BUBBLE_TEXT, 12.0);
+    t.shape = TextShape::Area { path: area_poly(&[(0.0, 0.0), (300.0, 0.0), (300.0, 300.0), (0.0, 300.0)]) };
+    crate::layout::AREA_PASSES.with(|c| c.set(0));
+    let l = e.layout(&t, 72.0);
+    assert!(l.lines.len() >= 2);
+    // Rows are planned with the paragraph's real metrics: no re-plan and no skipped spans.
+    assert_eq!(crate::layout::AREA_PASSES.with(|c| c.get()), 1);
+}
+
+#[test]
+fn area_word_skips_a_narrow_span_for_a_wider_one_on_the_same_row() {
+    let mut e = TextEngine::new();
+    let mut t = point("Wonderful things happen in speech bubbles every single day.", 12.0);
+    // A U: a 24 px left arm and a wide right arm above y = 150, joined below it.
+    let path = area_poly(&[(0.0, 0.0), (24.0, 0.0), (24.0, 150.0), (80.0, 150.0), (80.0, 0.0), (300.0, 0.0), (300.0, 200.0), (0.0, 200.0)]);
+    t.shape = TextShape::Area { path: path.clone() };
+    let l = e.layout(&t, 72.0);
+    assert_lines_inside(&l, &path);
+    let first = l.lines.first().expect("the text is shown");
+    // "Wonderful" is wider than the left arm: it starts the text in the right arm, on the first
+    // row, and nothing is put in the left arm's span on that row.
+    assert_eq!(first.range.start, 0);
+    assert!(first.x0 >= 79.5, "{first:?}");
+    assert!(first.baseline < 30.0, "first row: {first:?}");
+    assert_eq!(l.lines.iter().filter(|line| (line.baseline - first.baseline).abs() < 1e-3).count(), 1, "{:?}", l.lines);
+    assert_eq!(l.lines.last().map(|line| line.range.end), Some(t.text.len()), "nothing hidden");
+}
+
+#[test]
+fn area_stacks_paragraphs_with_leading_and_space_before() {
+    let mut e = TextEngine::new();
+    let text = "First paragraph of the bubble text.\nSecond paragraph goes right after it.";
+    let mut t = point(text, 12.0);
+    let style = ParagraphStyle { space_before_pt: 6.0, ..Default::default() };
+    let leading = style.auto_leading * 12.0;
+    t.paragraphs = vec![ParagraphRun { len: text.len(), style }];
+    let path = area_poly(&[(0.0, 0.0), (120.0, 0.0), (120.0, 300.0), (0.0, 300.0)]);
+    t.shape = TextShape::Area { path: path.clone() };
+    let l = e.layout(&t, 72.0);
+    assert_lines_inside(&l, &path);
+    let (p0, p1): (Vec<_>, Vec<_>) = l.lines.iter().partition(|line| line.paragraph == 0);
+    assert!(p0.len() >= 2 && p1.len() >= 2, "both paragraphs wrap: {:?}", l.lines);
+    assert!(p1.iter().all(|line| line.paragraph == 1));
+    // The second paragraph starts right after the break, one leading plus space before lower.
+    let second = text.find('\n').unwrap() + 1;
+    assert_eq!(p1[0].range.start, second);
+    let gap = p1[0].baseline - p0.last().unwrap().baseline;
+    assert!((gap - (leading + 6.0)).abs() < 1.0, "gap {gap}, want {}", leading + 6.0);
+    // Lines within a paragraph are one leading apart.
+    for w in p0.windows(2) {
+        assert!((w[1].baseline - w[0].baseline - leading).abs() < 1.0, "{w:?}");
+    }
+    assert_eq!(l.lines.last().map(|line| line.range.end), Some(text.len()));
+}
+
+#[test]
+fn area_justify_fills_each_span_but_the_last_line() {
+    let mut e = TextEngine::new();
+    let mut t = point(&BUBBLE_TEXT.repeat(2), 12.0);
+    t.paragraphs = vec![ParagraphRun { len: t.text.len(), style: ParagraphStyle { align: TextAlign::JustifyLeft, ..Default::default() } }];
+    let path = area_ellipse(0.0, 0.0, 260.0, 160.0);
+    t.shape = TextShape::Area { path: path.clone() };
+    let l = e.layout(&t, 72.0);
+    assert!(l.lines.len() >= 4, "{}", l.lines.len());
+    assert_lines_inside(&l, &path);
+    let a = crate::area::AreaShape::new(&path, false).unwrap();
+    let span_of = |line: &crate::LineInfo| {
+        a.spans(line.baseline - line.ascent, line.baseline + line.descent, 0.0)
+            .into_iter()
+            .find(|&(s0, s1)| line.x0 >= s0 - 0.5 && line.x1 <= s1 + 0.5)
+            .unwrap()
+    };
+    let (last, rest) = l.lines.split_last().unwrap();
+    for line in rest {
+        // Justified: the glyphs run from one edge of the line's span to the other.
+        let (s0, s1) = span_of(line);
+        let ink = l.glyphs.iter().filter(|g| (g.y - line.baseline).abs() < 1e-3).map(|g| g.x).fold(f32::MIN, f32::max);
+        assert!((line.x0 - s0).abs() < 1.0, "{line:?} in {s0}..{s1}");
+        assert!(ink > s1 - 12.0, "last glyph at {ink}, span ends {s1}: {line:?}");
+    }
+    // The last line is set flush left, not stretched.
+    let (s0, s1) = span_of(last);
+    assert!((last.x0 - s0).abs() < 1.0 && last.x1 < s1 - 12.0, "{last:?} in {s0}..{s1}");
+}
+
+/// #8602: each colour is rasterised only over its own glyphs instead of the whole text, and the
+/// pixels match a full-size pass per colour (plain, faux bold, underlined, rotated and warped
+/// text; RGB and CMYK), up to float rounding in the coverage sums.
+#[test]
+fn per_colour_passes_match_full_size_passes() {
+    use photocraft_doc::text::TextWarp;
+    let mut e = TextEngine::new();
+    let text = "Many coloured runs of text, one colour a letter, across two lines\nof a point text layer";
+    let colours = [Color::rgb(0.9, 0.1, 0.1), Color::rgb(0.1, 0.7, 0.2), Color::rgb(0.1, 0.2, 0.9), Color::rgb(0.6, 0.6, 0.1)];
+    let runs = |bold: bool| {
+        text.char_indices()
+            .map(|(i, ch)| {
+                let colour = colours[i % colours.len()];
+                let style = CharStyle { size_pt: 28.0, color: colour, faux_bold: bold && i % 3 == 0, underline: i % 5 == 0, ..Default::default() };
+                TextRun { len: ch.len_utf8(), style }
+            })
+            .collect::<Vec<_>>()
+    };
+    let cases = [
+        TextLayer { text: text.into(), runs: runs(false), transform: Affine::translate(10.0, 40.0), ..Default::default() },
+        TextLayer { text: text.into(), runs: runs(true), transform: Affine::rotate(0.3).then(&Affine::translate(30.0, 90.0)), ..Default::default() },
+        TextLayer {
+            text: text.into(),
+            runs: runs(true),
+            transform: Affine::translate(10.0, 60.0),
+            warp: Some(TextWarp { style: "warpArc".into(), value: 40.0, horizontal_distortion: 0.0, vertical_distortion: 0.0, horizontal: true }),
+            ..Default::default()
+        },
+    ];
+    for (k, t) in cases.iter().enumerate() {
+        let l = e.layout(t, 72.0);
+        let warp = crate::render::layout_deform(&l, t);
+        for format in [PixelFormat::RGBA8, PixelFormat::CMYKA8] {
+            let fast = crate::render::rasterize_passes(&l, &t.transform, format, t.antialias, warp.as_ref(), true);
+            let full = crate::render::rasterize_passes(&l, &t.transform, format, t.antialias, warp.as_ref(), false);
+            assert_eq!(fast.rect, full.rect, "case {k}");
+            let (a, b) = (fast.surface.read_region(fast.rect), full.surface.read_region(full.rect));
+            assert!(!a.is_empty());
+            // Compare what shows: colour weighted by alpha (a fully transparent pixel's colour is moot).
+            let ch = format.channels();
+            let shown = |px: &[f32]| {
+                px.chunks_exact(ch).flat_map(|p| p[..ch - 1].iter().map(|c| c * p[ch - 1]).chain([p[ch - 1]]).collect::<Vec<_>>()).collect::<Vec<_>>()
+            };
+            let worst = shown(&a).iter().zip(&shown(&b)).map(|(x, y)| (x - y).abs()).fold(0.0f32, f32::max);
+            assert!(worst <= 1.0 / 255.0, "case {k} {format:?}: largest difference {worst}");
+        }
+    }
 }

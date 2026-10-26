@@ -308,7 +308,7 @@ mod tests {
         assert!(h.state().brush_resize.is_some());
         assert!(h.state().session.tools.brush.size > size0, "dragging right grew the brush");
         assert!(h.state().session.tools.brush.hardness > 0.2, "dragging down hardened it");
-        assert!(h.ctx.memory(|m| m.area_rect(egui::Id::new("brush-resize-readout"))).is_some(), "the readout shows mid-drag");
+        assert!(h.ctx.memory(|m| m.area_rect(egui::Id::unique("brush-resize-readout"))).is_some(), "the readout shows mid-drag");
         assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::None, "the pointer hides");
         press(&mut h, c + vec2(60.0, 48.0), false);
         h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
@@ -370,7 +370,7 @@ mod tests {
             assert!(r.secondary);
             assert!(h.state().session.tools.brush.size > size0, "right grows the brush");
             assert!(h.state().session.tools.brush.hardness > 0.2, "down hardens it");
-            assert!(h.ctx.memory(|m| m.area_rect(egui::Id::new("brush-resize-readout"))).is_some(), "the readout shows");
+            assert!(h.ctx.memory(|m| m.area_rect(egui::Id::unique("brush-resize-readout"))).is_some(), "the readout shows");
             assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::None);
             button(&mut h, end, PointerButton::Secondary, false, Modifiers::ALT);
             h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
@@ -382,6 +382,27 @@ mod tests {
             let sets = app.session.journal.iter().filter(|(id, _)| id == "tools.setBrush").count();
             assert_eq!(sets, 2, "the setup call plus one coalesced resize");
         }
+    }
+
+    /// Alt-right dragging changes tip size without loading paint or touching document history.
+    #[test]
+    fn mixer_alt_right_drag_resizes_without_sampling_or_painting() {
+        let mut a = app(Tool::MixerBrush);
+        let before = a.session.tools.mixer.clone();
+        a.sync_views();
+        let mut h = canvas(a);
+        let (undo0, size0) = (history(h.state()), h.state().session.tools.brush.size);
+        let end = alt_right_drag(&mut h, vec2(10.0, 8.0));
+        assert!(h.state().brush_resize.is_some_and(|resize| resize.secondary));
+        assert!(h.state().session.tools.brush.size > size0);
+        button(&mut h, end, PointerButton::Secondary, false, Modifiers::ALT);
+        h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+        h.run_steps(2);
+        let a = h.state();
+        assert!(a.brush_resize.is_none() && !a.brush_resize_armed);
+        assert_eq!(a.session.tools.mixer, before);
+        assert_eq!(history(a), undo0);
+        assert!(!a.session.journal.iter().any(|(id, _)| id == "brush.mixer.sample" || id == "paint.mixerBrush"));
     }
 
     #[test]

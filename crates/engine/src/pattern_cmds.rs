@@ -22,12 +22,34 @@ use crate::{EngineError, Result, Session};
 #[derive(Clone, Debug)]
 pub struct PatternLibrary {
     pub items: Vec<Pattern>,
+    /// Bumped when a pattern's pixels are replaced under the same id (an imported `.pat` whose
+    /// id is already in the library), which its id, name and size don't show.
+    pub pixels_rev: u64,
 }
 
 impl Default for PatternLibrary {
     fn default() -> Self {
-        PatternLibrary { items: builtin() }
+        PatternLibrary { items: builtin(), pixels_rev: 0 }
     }
+}
+
+impl PatternLibrary {
+    /// Add `pat`, or replace the pattern with its id (marking the pixels changed).
+    pub fn upsert(&mut self, pat: Pattern) {
+        match self.items.iter_mut().find(|q| q.id == pat.id) {
+            Some(q) => {
+                *q = pat;
+                self.pixels_rev += 1;
+            }
+            None => self.items.push(pat),
+        }
+    }
+}
+
+/// Whether `p` is a built-in pattern as shipped (same id, name, size and pixels): those are never
+/// saved. A built-in replaced by an import, or renamed, is the user's and is.
+pub(crate) fn is_pristine_builtin(p: &Pattern, builtins: &[Pattern]) -> bool {
+    builtins.iter().any(|b| b.id == p.id && b.name == p.name && (b.width, b.height) == (p.width, p.height) && b.surface == p.surface)
 }
 
 fn hash01(x: u32, y: u32, seed: u32) -> f32 {
@@ -278,10 +300,7 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
     let mut ids = Vec::new();
     for pat in pats {
         ids.push(pat.id.clone());
-        match s.patterns.items.iter_mut().find(|q| q.id == pat.id) {
-            Some(q) => *q = pat,
-            None => s.patterns.items.push(pat),
-        }
+        s.patterns.upsert(pat);
     }
     Ok(json!({"imported": ids, "count": ids.len()}))
 }
@@ -317,23 +336,32 @@ pub(crate) fn placement(cmd: &str, p: &Value) -> Result<(f32, f32, bool, (f32, f
 
 /// The edit of `layer.newFillLayer.pattern`: a Pattern Fill layer of `pat` placed as `p` asks,
 /// above `active`. The Pattern Fill dialog previews it on a copy of the document.
-pub(crate) fn insert_fill_layer(doc: &mut Document, active: &mut Option<photocraft_doc::LayerId>, pat: &Pattern, p: &Value) -> Result<photocraft_doc::LayerId> {
+pub(crate) fn insert_fill_layer(
+    doc: &mut Document,
+    active: &mut Option<photocraft_doc::LayerId>,
+    pat: &Pattern,
+    p: &Value,
+    default_mask: bool,
+) -> Result<photocraft_doc::LayerId> {
     let (scale, angle, link, phase) = placement("layer.newFillLayer.pattern", p)?;
     ensure_in_doc(doc, pat);
     let fill = Fill::Pattern { name: pat.name.clone(), scale, id: pat.id.clone(), angle, link, phase };
     let mut l = Layer::new(doc.next_layer_name("Pattern Fill"), LayerContent::Fill(fill));
-    crate::commands::mask_new_layer(doc, &mut l, p, "layer.newFillLayer.pattern")?;
+    crate::commands::mask_new_layer(doc, &mut l, p, "layer.newFillLayer.pattern", default_mask)?;
     let id = doc.insert_above(*active, l);
     *active = Some(id);
     Ok(id)
 }
 
+/// `layer.newFillLayer.pattern`: a Pattern Fill layer above the active one, masked as the Layers panel's Use Default Masks on Fill Layers option says.
 fn new_fill_layer(s: &mut Session, p: &Value) -> Result<Value> {
     let pat = resolve_param(s, "layer.newFillLayer.pattern", p)?;
-    let id = s.edit("New Pattern Fill Layer", |doc, active| insert_fill_layer(doc, active, &pat, p))?;
+    let default_mask = crate::commands::layer_panel_option(s, "useDefaultMasksOnFillLayers", true);
+    let id = s.edit("New Pattern Fill Layer", |doc, active| insert_fill_layer(doc, active, &pat, p, default_mask))?;
     Ok(json!({"layer": id.0, "pattern": pat.id}))
 }
 
+/// `brush.texturePattern`: use a pattern as the brush texture, converted to grey as the luminance of its composite over white.
 fn brush_texture(s: &mut Session, p: &Value) -> Result<Value> {
     let pat = resolve_param(s, "brush.texturePattern", p)?;
     let n = pat.is_paintable().then(|| usize::try_from(pat.pixel_count()).ok()).flatten();

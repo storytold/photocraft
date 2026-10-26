@@ -648,7 +648,10 @@ fn run_scaled(doc: &mut Document, sel: &Surface, plan: &Plan, p: &Value, scale: 
         crop(crate::channel_cmds::target_surface(doc, plan.target.id, p)?.0, reach_rect)
     };
     let small = resize_surface_in_canvas(&src, f, f, Resample::Bilinear, plan.canvas);
-    let small_sel = resize_surface_in_canvas(&crop(sel, reach_rect), f, f, Resample::Bilinear, plan.canvas);
+    // The selection is scaled in 32-bit float: in 8 bits a faint, sparse one (scattered 1/255
+    // pixels) averages to 0 and the scaled solve would find nothing selected.
+    let sel_f32 = photocraft_color::PixelFormat { sample: photocraft_color::SampleType::F32, ..sel.format() };
+    let small_sel = resize_surface_in_canvas(&crop(sel, reach_rect).convert(sel_f32), f, f, Resample::Bilinear, plan.canvas);
     ctx.check()?;
     let canvas = scaled_rect(plan.canvas, f, f);
     let size = photocraft_geom::Size { width: canvas.width(), height: canvas.height() };
@@ -757,5 +760,31 @@ mod tests {
         assert!(!preview(&s, &json!({"offset": [20, 20]})).unwrap().is_coarse());
         s.execute("select.rect", json!({"x": 0, "y": 0, "width": 257, "height": 256})).unwrap();
         assert!(preview(&s, &json!({"offset": [20, 20]})).unwrap().is_coarse());
+    }
+
+    #[test]
+    fn a_coarse_preview_keeps_a_faint_sparse_selection() {
+        // An 8-bit selection of scattered 1/255 pixels: scaled down in 8 bits it averaged to 0
+        // everywhere, so the coarse preview failed with "the selection is empty" while the
+        // command itself moves it.
+        let mut s = textured(1200, 800);
+        s.edit("faint selection", |doc, _| {
+            let mut sel = Surface::new(photocraft_color::PixelFormat::GRAY8);
+            let r = Rect::new(20, 20, 1120, 720);
+            let data: Vec<f32> = (r.y0..r.y1).flat_map(|y| (r.x0..r.x1).map(move |x| if x % 4 == 0 && y % 4 == 0 { 1.0 / 255.0 } else { 0.0 })).collect();
+            sel.write_region(r, &data);
+            doc.selection = Some(sel);
+            Ok(())
+        })
+        .unwrap();
+        let p = json!({"offset": [40, 40]});
+        let job = preview(&s, &p).unwrap();
+        assert!(job.is_coarse());
+        let (got, damage) = job.run(&JobCtx::new()).unwrap();
+        assert!(!damage.is_empty());
+        let b = got.bounds();
+        let before = s.active().unwrap().doc.layers[0].surface().unwrap().read_region(b);
+        assert!(got.layers[0].surface().unwrap().read_region(b) != before, "the preview moves something");
+        s.execute("paint.contentAwareMove", p).unwrap();
     }
 }

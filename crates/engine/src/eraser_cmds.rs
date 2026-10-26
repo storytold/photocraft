@@ -170,7 +170,7 @@ pub fn live_background_eraser(s: &Session, p: &Value) -> Result<crate::retouch_c
     doc.layer(id).ok_or(EngineError::NoLayer(id))?;
     crate::extra_cmds::background_to_layer(&mut doc, id);
     let stroke = background_eraser_stroke(&stroke);
-    crate::retouch_cmds::LiveDab::with_effect_on(doc, CMD, &json!({}), stroke, Some(id), 0, true, |pre| match background_eraser_effect(pre, &bs) {
+    crate::retouch_cmds::LiveDab::with_effect_on(doc, CMD, &json!({}), stroke, Some(id), 0, |pre| match background_eraser_effect(pre, &bs) {
         Some(effect) => Box::new(effect),
         // No alpha: the commit erases nothing either.
         None => Box::new(|_: &mut photocraft_paint::retouch::Region, _: &photocraft_paint::retouch::Footprint| {}),

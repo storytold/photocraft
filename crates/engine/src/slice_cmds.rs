@@ -257,6 +257,30 @@ pub fn resolved_json(doc: &Document, r: &ResolvedSlice) -> Value {
     })
 }
 
+/// A stored slice as `slice.list` and `slice.set` report it: once, with its own (canvas-clipped)
+/// rectangle, the one `slice.set` takes back, and the visible `pieces` a later slice cuts it into,
+/// which are numbered and exported separately (#7770). `number` is its first piece's, `null` when
+/// later slices cover it wholly. `None` for an unknown id.
+fn stored_json(doc: &Document, id: u32, resolved: &[ResolvedSlice]) -> Option<Value> {
+    let sl = doc.slices.get(id)?;
+    let pieces: Vec<&ResolvedSlice> = resolved.iter().filter(|r| r.id == Some(id)).collect();
+    let first = pieces.first();
+    let whole = ResolvedSlice {
+        number: first.map_or(0, |r| r.number),
+        id: Some(id),
+        origin: sl.origin,
+        rect: sl.rect.intersect(&doc.bounds()),
+        name: first.map_or_else(|| sl.name.clone(), |r| r.name.clone()),
+        kind: sl.kind,
+    };
+    let mut v = resolved_json(doc, &whole);
+    if first.is_none() {
+        v["number"] = Value::Null;
+    }
+    v["pieces"] = pieces.iter().map(|r| json!({"number": r.number, "name": r.name, "rect": [r.rect.x0, r.rect.y0, r.rect.width(), r.rect.height()]})).collect();
+    Some(v)
+}
+
 // ---------- commands ----------
 
 fn new_slice(s: &mut Session, p: &Value) -> Result<Value> {
@@ -331,15 +355,7 @@ fn set_slice(s: &mut Session, p: &Value) -> Result<Value> {
         Ok(id)
     })?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
-    if let Some(r) = slices::resolve(&d.doc).into_iter().find(|r| r.id == Some(id)) {
-        return Ok(resolved_json(&d.doc, &r));
-    }
-    // Wholly under later slices: it has no visible piece, so no number.
-    let sl = d.doc.slices.get(id).ok_or_else(|| bad(cmd, "slice vanished"))?;
-    let r = ResolvedSlice { number: 0, id: Some(id), origin: sl.origin, rect: sl.rect.intersect(&d.doc.bounds()), name: sl.name.clone(), kind: sl.kind };
-    let mut v = resolved_json(&d.doc, &r);
-    v["number"] = Value::Null;
-    Ok(v)
+    stored_json(&d.doc, id, &slices::resolve(&d.doc)).ok_or_else(|| bad(cmd, "slice vanished"))
 }
 
 fn promote(s: &mut Session, p: &Value) -> Result<Value> {
@@ -453,7 +469,22 @@ fn divide(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn list(s: &mut Session) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
-    let all: Vec<Value> = slices::resolve(&d.doc).iter().map(|r| resolved_json(&d.doc, r)).collect();
+    // One entry per slice, in reading order of its first piece: auto slices as they resolve, a
+    // stored slice once with its pieces; slices wholly covered by later ones follow.
+    let resolved = slices::resolve(&d.doc);
+    let mut listed = std::collections::HashSet::new();
+    let mut all: Vec<Value> = Vec::new();
+    for r in &resolved {
+        match r.id {
+            None => all.push(resolved_json(&d.doc, r)),
+            Some(id) if listed.insert(id) => all.extend(stored_json(&d.doc, id, &resolved)),
+            Some(_) => {}
+        }
+    }
+    let canvas = d.doc.bounds();
+    for sl in d.doc.slices.list.iter().filter(|sl| !listed.contains(&sl.id) && !sl.rect.intersect(&canvas).is_empty()) {
+        all.extend(stored_json(&d.doc, sl.id, &resolved));
+    }
     Ok(json!({"slices": all, "locked": s.file_menu.slices_locked}))
 }
 
@@ -543,7 +574,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "List Slices",
             menu: &[],
             shortcut: None,
-            params: "{} → {slices:[{number,id,origin:auto|layer|user,name,rect:[x,y,w,h],kind,layer,url,alt,…}], locked}",
+            params: "{} → {slices:[{number,id,origin:auto|layer|user,name,rect:[x,y,w,h],kind,layer,url,alt,…,pieces?:[{number,name,rect}] (a stored slice's visible parts; number null when wholly covered)}], locked}",
             enabled: has_doc,
             journal: false,
             run: |s, _| list(s),

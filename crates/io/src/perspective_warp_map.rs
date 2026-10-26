@@ -111,7 +111,12 @@ pub(super) fn import_params(item: &Descriptor) -> Option<J> {
     let neutral = SmartFilter { command: String::new(), params: J::Null, blend: photocraft_color::BlendMode::Normal, opacity: 1.0, visible: true };
     set(&mut template, "blendOptions", blend_options(&neutral));
     set(&mut template, "enab", Value::Boolean(true));
-    Some(json!({"planes": planes, TEMPLATE_KEY: to_hex(&template.to_bytes())}))
+    // Export refuses a larger template; such an item stays opaque, so it is still written back.
+    let bytes = template.to_bytes();
+    if bytes.len() > MAX_TEMPLATE_BYTES {
+        return None;
+    }
+    Some(json!({"planes": planes, TEMPLATE_KEY: to_hex(&bytes)}))
 }
 
 /// The template item of `params` (`None` when there is none), checked to be a Perspective Warp.
@@ -390,6 +395,9 @@ mod tests {
         set(&mut f, "vertices", Value::List(l));
         set(&mut bad_unit, "Fltr", Value::Descriptor(f));
         let too_many: Vec<[i32; 4]> = vec![[0, 1, 2, 3]; MAX_QUADS + 1];
+        // Valid planes, but a template export would refuse as too large.
+        let mut huge = one_plane();
+        huge.items.push((Id::new("bigData"), Value::RawData(vec![0; MAX_TEMPLATE_BYTES])));
         for (i, src) in [
             item_with(&V, &W, &[[0, 1, 2, 4]], FILTER_ID),
             item_with(&V, &W, &[[0, 1, 2, -1]], FILTER_ID),
@@ -405,6 +413,7 @@ mod tests {
             without("warpedVertices"),
             without("quads"),
             bad_unit,
+            huge,
         ]
         .into_iter()
         .enumerate()

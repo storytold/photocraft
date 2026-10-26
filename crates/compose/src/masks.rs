@@ -221,7 +221,14 @@ fn build_mask(layer: &Layer, canvas: Rect) -> Surface {
     }
     let area = area.intersect(&canvas);
     let mut s = Surface::with_default(FORMAT, &[p_def * v_out]);
-    if !area.is_empty() {
+    // Bound the transient dense working set: `area` is derived from sparse mask geometry grown
+    // by feather, so two distant changed pixels could span a canvas-sized rectangle. Building
+    // f32 planes over it (coverage, pixel-mask values, blur scratch) could be gigabytes during
+    // a one-pixel render. Above the budget, fall back to the constant default mask rather than
+    // allocating; feather detail is lost only for pathological geometry.
+    const MAX_MASK_WORKING_BYTES: u64 = 512 << 20;
+    let working = (area.width() as u64).saturating_mul(area.height() as u64).saturating_mul(std::mem::size_of::<f32>() as u64).saturating_mul(3);
+    if !area.is_empty() && working <= MAX_MASK_WORKING_BYTES {
         let (w, h) = (area.width() as usize, area.height() as usize);
         // A slot initializer must not enter Rayon: another tile requesting the
         // same mask could be stolen onto its stack and wait for its own build.

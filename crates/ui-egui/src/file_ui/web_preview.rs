@@ -18,6 +18,12 @@ pub fn dimensions(doc: &photocraft_doc::Document, p: &Value) -> Result<(f64, f64
     Ok((w.round().max(1.0), h.round().max(1.0)))
 }
 
+/// The method a preview proxy is resampled with: the export's own when the proxy is at full
+/// size, so the preview, palette and size estimate show it; bilinear for a reduced proxy.
+pub fn proxy_resample(p: &Value, scale: f64) -> &str {
+    if scale >= 1.0 { p.get("resample").and_then(Value::as_str).unwrap_or("bicubic") } else { "bilinear" }
+}
+
 pub fn prepare_table(app: &PhotocraftApp, f: &mut Map<String, Value>) -> Result<(), String> {
     if !matches!(s(f, "format", "jpeg").as_str(), "gif" | "png8") {
         return Ok(());
@@ -55,7 +61,7 @@ pub fn prepare_table(app: &PhotocraftApp, f: &mut Map<String, Value>) -> Result<
             m.remove("percent");
             m.insert("width".into(), json!((w * scale).round().max(1.0)));
             m.insert("height".into(), json!((h * scale).round().max(1.0)));
-            m.insert("resample".into(), json!("bilinear"));
+            m.insert("resample".into(), json!(proxy_resample(&source, scale)));
         }
         let (doc, _, _) = web_cmds::web_document(&st.doc, &proxy, &settings).map_err(|e| e.to_string())?;
         f.insert("__paletteApproximate".into(), json!(scale < 1.0));
@@ -213,7 +219,7 @@ pub fn controls(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
             nav.zoom = Some((nav.zoom.unwrap_or(effective) * 1.25).min(32.0));
         }
         let mut percent = nav.zoom.unwrap_or(effective) * 100.0;
-        if ui.add(egui::DragValue::new(&mut percent).range(0.01..=3200.0).suffix("%").speed(10.0)).changed() {
+        if ui.add(egui::DragValue::new(&mut percent).range(0.01..=3200.0).suffix("%").speed(10.0)).accessible_name(tl!("Zoom")).changed() {
             nav.zoom = Some(percent / 100.0);
         }
         if ui.small_button(tl!("100%")).clicked() {
@@ -286,7 +292,7 @@ mod tests {
 
     #[test]
     fn palette_picker_reuses_indices_and_updates_preview_pixels() {
-        let key = egui::Id::new("test-web-preview");
+        let key = egui::Id::unique("test-web-preview");
         let p = json!({"format": "gif", "colorTable": ["#ff0000", "#0000ff"], "dither": "none"});
         let mut h = egui_kittest::Harness::builder().build_ui_state(
             move |ui, state: &mut (Value, Vec<u8>)| {

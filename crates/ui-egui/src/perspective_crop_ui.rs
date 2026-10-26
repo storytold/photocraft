@@ -352,6 +352,36 @@ mod tests {
         assert_eq!(ordered([[10.0, 90.0], [100.0, 5.0], [0.0, 0.0], [90.0, 100.0]]), [[0.0, 0.0], [100.0, 5.0], [90.0, 100.0], [10.0, 90.0]]);
     }
 
+    /// Clicking ⇄ in the rendered options bar swaps W and H, although Perspective Crop never sets
+    /// the Crop tool's W x H x Resolution mode (#7059).
+    #[test]
+    fn the_options_bar_swap_button_swaps_w_and_h() {
+        use egui_kittest::kittest::Queryable;
+        let doc = Document::with_background("p", Size::new(200, 150), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+        let mut s = photocraft_engine::Session::new();
+        s.add_document(doc, None);
+        let mut app = PhotocraftApp::new(s, crate::Services::default());
+        app.ui.tool = Tool::PerspectiveCrop;
+        app.ui.tool_options.crop_width = "4 in".into();
+        app.ui.tool_options.crop_height = "6 in".into();
+        assert_ne!(app.ui.tool_options.crop_ratio, crate::crop_size::WHR);
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 60.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    return;
+                }
+                crate::panels::options_bar(app, ui);
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
+        h.run_steps(4);
+        h.get_by_label("Swaps height and width").click();
+        h.run_steps(2);
+        let o = &h.state().ui.tool_options;
+        assert_eq!((o.crop_width.as_str(), o.crop_height.as_str()), ("6 in", "4 in"));
+    }
+
     /// The pending quad belongs to its document (#1918): switching documents drops it, so it is
     /// never drawn on the other one; on its own document it stays.
     #[test]

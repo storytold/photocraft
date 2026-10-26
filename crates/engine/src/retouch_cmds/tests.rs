@@ -690,6 +690,7 @@ fn retouch_commands_are_registered_and_need_a_pixel_layer() {
         "paint.smudge",
         "paint.historyBrush",
         "paint.remove",
+        "paint.artHistoryBrush",
     ];
     for id in ids {
         let spec = crate::commands::find(id).unwrap_or_else(|| panic!("{id} missing"));
@@ -706,7 +707,7 @@ fn retouch_commands_are_registered_and_need_a_pixel_layer() {
 // Paint target (#207): mask, alpha channel, Quick Mask
 // ---------------------------------------------------------------------------------------------
 
-const RETOUCH_IDS: [&str; 12] = [
+const RETOUCH_IDS: [&str; 13] = [
     "paint.cloneStamp",
     "paint.patternStamp",
     "paint.healingBrush",
@@ -719,6 +720,7 @@ const RETOUCH_IDS: [&str; 12] = [
     "paint.smudge",
     "paint.historyBrush",
     "paint.remove",
+    "paint.artHistoryBrush",
 ];
 
 /// Grey noise in 0.3..0.7 (no period along the clone offset used below).
@@ -769,6 +771,10 @@ fn retouch_params(id: &str, history_state: usize, target: Value) -> Value {
     match id {
         "paint.cloneStamp" | "paint.healingBrush" => p["offset"] = json!([-13, 3]),
         "paint.historyBrush" => p["state"] = json!(history_state),
+        "paint.artHistoryBrush" => {
+            p["state"] = json!(history_state);
+            p["tolerance"] = json!(0);
+        }
         "paint.sponge" => p["mode"] = json!("saturate"),
         _ => {}
     }
@@ -1767,6 +1773,122 @@ fn live_dodge_matches_the_commit_across_cells() {
     // A soft tip's footprint spans more live cells, so sums land in a different order: within
     // 2e-4 (a twentieth of an 8-bit level).
     assert!(worst <= 2e-4, "live and commit differ by {worst}");
+}
+
+/// The sequential-dab tools' options for the live hand-off tests.
+fn dab_cases() -> [(&'static str, Value); 6] {
+    [
+        ("paint.dodge", json!({"exposure": 60, "range": "midtones"})),
+        ("paint.burn", json!({"exposure": 40, "range": "shadows", "protectTones": false})),
+        ("paint.sponge", json!({"mode": "saturate"})),
+        ("paint.blur", json!({"strength": 80})),
+        ("paint.sharpen", json!({"strength": 60})),
+        ("paint.smudge", json!({"strength": 70})),
+    ]
+}
+
+/// A stroke's params: `points`, a 40 px brush of `hardness`, and the tool's options.
+fn dab_opts(points: &[[f64; 2]], hardness: u32, extra: &Value) -> Value {
+    let mut o = json!({"points": points, "size": 40, "hardness": hardness, "spacing": 25});
+    for (k, v) in extra.as_object().unwrap() {
+        o[k] = v.clone();
+    }
+    o
+}
+
+/// The active layer's pixels over the whole canvas.
+fn layer_pixels(s: &Session) -> Vec<f32> {
+    let st = s.active().unwrap();
+    st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().read_region(st.doc.bounds())
+}
+
+/// Draw `points` live as the canvas does (the first with `begin`, the rest in pen batches that
+/// carry tilt and times, which the commands don't take) and offer the stroke to its commit.
+fn offer_live(s: &mut Session, cmd: &str, points: &[[f64; 2]], hardness: u32, extra: &Value) {
+    let mut live = LiveDab::begin(s, cmd, &dab_opts(&points[..1], hardness, extra)).unwrap();
+    for (i, batch) in points[1..].chunks(2).enumerate() {
+        let pts: Vec<_> = batch
+            .iter()
+            .map(|q| {
+                let mut p = StrokePoint::new(q[0], q[1], 1.0);
+                (p.tilt_x, p.time) = (25.0, 16.0 * i as f64);
+                p
+            })
+            .collect();
+        live.push(&pts).unwrap();
+    }
+    s.offer_live_dab(live).unwrap();
+}
+
+/// Releasing a live Dodge, Burn, Sponge, Blur, Sharpen or Smudge stroke commits the pixels it
+/// already drew instead of running every dab again, and they are exactly what the command paints
+/// on its own: at every depth (the live working copy isn't rounded between dabs), soft and hard,
+/// over semi-transparent pixels and where the stroke doubles back.
+#[test]
+fn live_dab_strokes_commit_their_pixels_and_they_are_the_commands() {
+    let points = [[10.0, 40.0], [100.0, 60.0], [180.0, 40.0], [60.0, 30.0], [150.0, 70.0], [151.0, 70.5], [-15.0, 85.0]];
+    for depth in DEPTHS {
+        let mut s = session(200, 90, depth, "rgb");
+        s.execute("layer.new.layer", json!({})).unwrap();
+        paint_layer(&mut s, |x, y| {
+            let mut c = texture(x, y);
+            c[3] = if (x / 23 + y / 17) % 4 == 0 { 0.0 } else { 0.35 + 0.065 * ((x * 7 + y * 3) % 11) as f32 };
+            c
+        });
+        let before = layer_pixels(&s);
+        for (cmd, extra) in dab_cases() {
+            for hardness in [0, 100] {
+                let rendered = s.execute(cmd, dab_opts(&points, hardness, &extra)).unwrap();
+                let want = layer_pixels(&s);
+                assert_ne!(want, before, "{cmd} {depth} {hardness}: the stroke changes pixels");
+                s.execute("edit.undo", json!({})).unwrap();
+                assert!(rendered.get("fromLive").is_none());
+
+                offer_live(&mut s, cmd, &points, hardness, &extra);
+                let taken = s.execute(cmd, dab_opts(&points, hardness, &extra)).unwrap();
+                assert_eq!(taken["fromLive"], json!(true), "{cmd} {depth} {hardness}");
+                assert_eq!(taken["damage"], rendered["damage"], "{cmd} {depth} {hardness}");
+                assert!(layer_pixels(&s) == want, "{cmd} at {depth}-bit, hardness {hardness}: the live pixels aren't the command's");
+                s.execute("edit.undo", json!({})).unwrap();
+                assert!(layer_pixels(&s) == before, "{cmd} {depth} {hardness}: undo restores the layer");
+            }
+        }
+    }
+}
+
+/// The offer is only taken by its own stroke: another stroke, a brush or option changed during
+/// the stroke, or a stroke whose commit renders itself (Color Replacement) render as before.
+#[test]
+fn live_dab_offers_are_refused_or_dropped_when_they_dont_match() {
+    let points = [[10.0, 40.0], [100.0, 60.0], [180.0, 40.0]];
+    let blur = json!({"strength": 80});
+    let mut s = session(200, 90, 8, "rgb");
+    paint_layer(&mut s, texture);
+    // Another stroke drops the offer and renders itself.
+    offer_live(&mut s, "paint.blur", &points, 0, &blur);
+    let other = [[10.0, 40.0], [100.0, 61.0], [180.0, 40.0]];
+    let r = s.execute("paint.blur", dab_opts(&other, 0, &blur)).unwrap();
+    assert!(r.get("fromLive").is_none());
+    assert!(s.live_commit.is_none(), "the offer is used up");
+    s.execute("edit.undo", json!({})).unwrap();
+    // The session brush (not in the params) changed during the stroke; the refusal also
+    // withdraws an earlier offer.
+    offer_live(&mut s, "paint.blur", &points, 0, &blur);
+    let live = LiveDab::begin(&s, "paint.blur", &dab_opts(&points, 0, &blur)).unwrap();
+    let roundness = s.tools.brush.roundness;
+    s.tools.brush.roundness = roundness * 0.5;
+    assert!(s.offer_live_dab(live).is_err());
+    assert!(s.live_commit.is_none(), "a refused offer leaves no earlier one behind");
+    s.tools.brush.roundness = roundness;
+    // Finger Painting's colour changed during the stroke.
+    let finger = json!({"strength": 70, "fingerPainting": true});
+    let live = LiveDab::begin(&s, "paint.smudge", &dab_opts(&points, 0, &finger)).unwrap();
+    s.tools.foreground = [0.9, 0.1, 0.1, 1.0];
+    assert!(s.offer_live_dab(live).is_err());
+    // Color Replacement's live stroke runs on `LiveDab` too, but its commit renders itself.
+    let live = crate::brush_cmds::live_color_replacement(&s, &json!({"points": points, "color": [1.0, 0.0, 0.0, 1.0]})).unwrap();
+    assert!(s.offer_live_dab(live).is_err());
+    assert!(s.live_commit.is_none());
 }
 
 #[test]

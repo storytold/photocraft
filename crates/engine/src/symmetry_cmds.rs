@@ -74,9 +74,20 @@ impl PaintingSymmetry {
             Self::Preset(p) => {
                 // The first axis' direction through the map's linear part gives the new angle; a
                 // flip mirrors it.
-                let [dx, dy] = *p.directions().first()?;
+                let directions = p.directions();
+                let [dx, dy] = *directions.first()?;
                 let [m0, m1, m2, m3, _, _] = a.m;
-                let turn = (m1 * dx + m3 * dy).atan2(m0 * dx + m2 * dy) - dy.atan2(dx);
+                let mapped = |[dx, dy]: [f64; 2]| (m1 * dx + m3 * dy).atan2(m0 * dx + m2 * dy);
+                let mut axis = mapped([dx, dy]);
+                // A non-uniform Image Size leaves a turned dual preset's two axes non-perpendicular,
+                // which it can't represent: the new axes split the difference, each turned off its
+                // mapped axis by the same angle. Maps that keep right angles give no difference.
+                if let Some(&second) = directions.get(1) {
+                    let off = (mapped(second) - axis - std::f64::consts::FRAC_PI_2).rem_euclid(std::f64::consts::PI);
+                    let off = if off > std::f64::consts::FRAC_PI_2 { off - std::f64::consts::PI } else { off };
+                    axis += off / 2.0;
+                }
+                let turn = axis - dy.atan2(dx);
                 let rotation = (p.rotation + turn.to_degrees()).rem_euclid(360.0);
                 if !rotation.is_finite() {
                     return None;
@@ -288,6 +299,15 @@ mod tests {
         let p = preset(&s);
         assert_eq!(p.center, [90.0, 40.0], "edge coordinates mirror about the canvas width, not the last pixel");
         assert!((p.rotation - 90.0).abs() < 1e-9, "the 45° axis mirrors to 135°: {}", p.rotation);
+        // A turned dual preset under a non-uniform Image Size: its axes (135° and 45°) map to
+        // 153.4° and 26.6°, no longer perpendicular; the preset splits the difference.
+        s.execute("paint.setSymmetry", json!({"mode": "dual", "center": [30, 40], "rotation": 45})).unwrap();
+        s.execute("image.imageSize", json!({"width": 240, "height": 200})).unwrap();
+        let p = preset(&s);
+        assert_eq!(p.center, [60.0, 40.0]);
+        assert!((p.rotation - 45.0).abs() < 1e-9, "both axes 18.4° off, not one 0° and one 36.9°: {}", p.rotation);
+        s.execute("image.imageRotation.flipCanvasHorizontal", json!({})).unwrap();
+        assert!((preset(&s).rotation - 315.0).abs() < 1e-9, "a flip keeps right angles (axes at 45° and 135° again): {}", preset(&s).rotation);
 
         // A path axis keeps lying on its (moved) source path.
         let mut s = Session::new();
