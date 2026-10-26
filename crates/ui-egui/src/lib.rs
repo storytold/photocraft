@@ -96,6 +96,7 @@ pub mod enable_rules;
 pub mod eraser_ui;
 pub mod export_dialog;
 pub mod eyedropper_ui;
+mod fade_out;
 pub mod field_tab;
 pub mod field_wheel;
 pub mod file_dialog;
@@ -2631,6 +2632,8 @@ impl PhotocraftApp {
         self.automation_input = false;
         shape_stroke_ui::finish_frame(self, &ctx);
         native_menu::sync(self, &ctx);
+        // Every window of the frame is drawn: closed dialogs, menus and popups fade out.
+        fade_out::finish_frame(&ctx);
         if screen_picker::busy(&ctx) {
             // Block input without a backdrop: the worker may still be capturing the screen.
             egui::Modal::new(egui::Id::unique("screen-color-wait")).frame(egui::Frame::NONE).backdrop_color(egui::Color32::TRANSPARENT).show(&ctx, |_| {});
