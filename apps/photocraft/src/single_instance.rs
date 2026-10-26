@@ -29,9 +29,7 @@ use std::io::{BufReader, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 #[cfg(unix)]
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::Path;
-#[cfg(unix)]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{SyncSender, sync_channel};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -181,6 +179,13 @@ fn env_launch_options_from(get: impl Fn(&str) -> Option<std::ffi::OsString>) -> 
     ENV_LAUNCH_OPTIONS.iter().filter(|(name, _, is_on)| get(name).is_some_and(|v| is_on(&v.to_string_lossy()))).map(|(_, option, _)| *option).collect()
 }
 
+/// Whether `--safe-gpu` keeps a launch out of single-instance. It does when a person passes it, but
+/// not for the CPU-compatibility relaunch (which sets `PHOTOCRAFT_GPU_STARTUP_FAILURE`): that one
+/// takes the place of a launch that has already shut its instance down.
+pub fn safe_gpu_is_launch_option(gpu_startup_failure: Option<&std::ffi::OsStr>) -> bool {
+    gpu_startup_failure.is_none()
+}
+
 /// Why this launch runs as its own instance, or `None` to take part in single-instance.
 pub fn skip_reason(c: &LaunchContext) -> Option<String> {
     if !c.per_user_settings {
@@ -210,6 +215,8 @@ pub struct Primary {
     /// then, so the second call (`Drop`) can't remove the socket the next primary has bound.
     #[cfg(unix)]
     socket: Mutex<Option<PathBuf>>,
+    /// Where `instance.json` is, removed on [`Primary::shutdown`].
+    dir: PathBuf,
 }
 
 struct Shared {
@@ -255,7 +262,13 @@ impl Primary {
         if let Some(path) = self.socket.lock().unwrap_or_else(PoisonError::into_inner).take() {
             let _ = std::fs::remove_file(path);
         }
-        drop(self.lock.lock().unwrap_or_else(PoisonError::into_inner).take());
+        let mut lock = self.lock.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(file) = lock.take() {
+            // Before the lock goes, so the file can only be ours: a later launch never reads an
+            // endpoint that has since been freed (or taken by another program).
+            remove_info(&self.dir);
+            drop(file);
+        }
     }
 }
 
@@ -324,11 +337,11 @@ pub fn claim_with(dir: &Path, paths: &[String], timing: Timing) -> Launch {
 /// once a quitting or crashed primary is gone) and then the running primary, wherever
 /// `instance.json` says it listens.
 pub fn claim_in(dir: &Path, paths: &[String], timing: Timing, transport: &Transport) -> Launch {
-    if let Err(e) = std::fs::create_dir_all(dir) {
+    if let Err(e) = create_private_dir(dir) {
         return Launch::Standalone(format!("{}: {e}", dir.display()));
     }
     let lock_path = dir.join(LOCK_FILE);
-    let lock = match OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&lock_path) {
+    let lock = match open_lock(&lock_path) {
         Ok(lock) => lock,
         Err(e) => return Launch::Standalone(format!("{}: {e}", lock_path.display())),
     };
@@ -407,7 +420,37 @@ fn serve(dir: &Path, lock: File, timing: Timing, transport: &Transport) -> Resul
         shared,
         #[cfg(unix)]
         socket: Mutex::new(socket),
+        dir: dir.to_path_buf(),
     })
+}
+
+/// The settings folder, the user's alone (0700) on Unix when this is the first to create it.
+fn create_private_dir(dir: &Path) -> std::io::Result<()> {
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    builder.create(dir)
+}
+
+/// `instance.lock`, the user's alone (0600) on Unix: another local user who could open it could
+/// hold the lock, and every launch would then wait out its hand-off time and start on its own.
+fn open_lock(path: &Path) -> std::io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let lock = options.open(path)?;
+    // The mode applies only on create: narrow a lock file an earlier version left readable.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let wide = lock.metadata().is_ok_and(|m| m.permissions().mode() & 0o077 != 0);
+        if wide && let Err(e) = lock.set_permissions(std::fs::Permissions::from_mode(0o600)) {
+            log::warn!("{}: couldn't make it private: {e}", path.display());
+        }
+    }
+    Ok(lock)
 }
 
 /// The primary's listener on either transport.
@@ -572,6 +615,15 @@ fn write_info(dir: &Path, endpoint: &Endpoint, token: &str) -> Result<(), String
         let _ = std::fs::remove_file(&tmp);
         format!("{}: {e}", path.display())
     })
+}
+
+/// Remove `instance.json` if this process wrote it.
+fn remove_info(dir: &Path) {
+    let path = dir.join(INFO_FILE);
+    let pid = std::fs::read(&path).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok()).and_then(|v| v.get("pid")?.as_u64());
+    if pid == Some(u64::from(std::process::id())) {
+        let _ = std::fs::remove_file(&path);
+    }
 }
 
 fn read_info(dir: &Path) -> Option<(Endpoint, String)> {
@@ -758,9 +810,10 @@ mod tests {
         let waiting = launch(&dir, &["a.psd"], FAST);
         std::thread::sleep(Duration::from_millis(200));
         primary.shutdown();
-        assert!(matches!(waiting.join().unwrap(), Launch::Primary(_)), "the waiting launch becomes the primary");
-        // After shutdown new connections are refused too.
+        let Launch::Primary(next) = waiting.join().unwrap() else { panic!("the waiting launch becomes the primary") };
+        // After shutdown new connections are refused too. (Read before the drop, which removes the file.)
         let (endpoint, token) = read_info(&dir).unwrap();
+        drop(next);
         drop(primary);
         let short = Instant::now() + Duration::from_millis(300);
         assert!(send(&endpoint, &token, &["b.psd".into()], short).is_err());
@@ -850,6 +903,52 @@ mod tests {
         let mode = std::fs::metadata(dir.join(INFO_FILE)).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Follow-up to #3755, point 1: another local user can't open the lock, so can't hold it.
+    #[cfg(unix)]
+    #[test]
+    fn the_lock_file_and_a_new_settings_folder_are_private_to_the_user() {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        let dir = temp_dir("lock-mode").join("photocraft");
+        let first = primary(&dir);
+        assert_eq!((mode(&dir), mode(&dir.join(LOCK_FILE))), (0o700, 0o600));
+        drop(first);
+        // A lock file an earlier version created 0644 is narrowed on the next start.
+        std::fs::set_permissions(dir.join(LOCK_FILE), std::fs::Permissions::from_mode(0o644)).unwrap();
+        let second = primary(&dir);
+        assert_eq!(mode(&dir.join(LOCK_FILE)), 0o600);
+        drop(second);
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+    }
+
+    /// Follow-up to #3755, point 3: a primary that shuts down takes its `instance.json` with it,
+    /// and a second `shutdown` (the drop) leaves the next primary's alone.
+    #[test]
+    fn shutdown_removes_the_instance_file_but_not_the_next_ones() {
+        let dir = temp_dir("info-cleanup");
+        let first = primary(&dir);
+        assert!(read_info(&dir).is_some());
+        first.shutdown();
+        assert!(read_info(&dir).is_none(), "no endpoint left behind for a later launch");
+        let second = primary(&dir);
+        let port = port_of(&dir);
+        drop(first);
+        assert_eq!(port_of(&dir), port, "the running primary's file stays");
+        drop(second);
+        assert!(read_info(&dir).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Follow-up to #3755, point 2: the CPU-compatibility relaunch takes part in single-instance;
+    /// `--safe-gpu` given by a person still gets its own process.
+    #[test]
+    fn the_cpu_relaunch_takes_part_in_single_instance() {
+        assert!(safe_gpu_is_launch_option(None));
+        assert!(!safe_gpu_is_launch_option(Some(std::ffi::OsStr::new("wgpu: no adapter"))));
+        // The relaunch sets the reason even when it is empty.
+        assert!(!safe_gpu_is_launch_option(Some(std::ffi::OsStr::new(""))));
     }
 
     #[test]
