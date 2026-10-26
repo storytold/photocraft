@@ -639,6 +639,9 @@ pub struct Services {
     /// On Wayland, the shell command that starts this install under XWayland, where native file
     /// drops work (#386); `None` when there is no X server to run it on.
     pub xwayland_command: Option<String>,
+    /// Running elevated on Windows ("Run as administrator"), where Windows drops files dragged in
+    /// from Explorer (see `notices::elevated_file_drop_guidance`).
+    pub is_elevated: bool,
     /// Crash-recovery autosave (Preferences › File Handling) and recovery at launch.
     pub autosave: Option<AutosaveFn>,
     /// None for services that report synchronous success through `autosave`.
@@ -1233,6 +1236,7 @@ impl PhotocraftApp {
         // After the saved preferences, which say whether the set was already offered.
         kys_import::offer_import(&mut app);
         notices::wayland_file_drop_guidance(&mut app);
+        notices::elevated_file_drop_guidance(&mut app);
         // File › Scripts › Script Events Manager: "Start Application".
         photocraft_engine::automate_cmds::fire_event(&mut app.session, "startApplication");
         app

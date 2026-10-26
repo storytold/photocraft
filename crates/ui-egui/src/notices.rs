@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::PhotocraftApp;
 
 const WAYLAND_FILE_DROP_DISMISSED: &str = "ui.waylandFileDropGuidanceDismissed";
+const ELEVATED_FILE_DROP_DISMISSED: &str = "ui.elevatedFileDropGuidanceDismissed";
 const CLIPBOARD_UNREADABLE: &str = "Pasting from other apps is unavailable";
 /// At most this many notices are kept; older ones drop off.
 pub const MAX_NOTICES: usize = 3;
@@ -87,6 +88,30 @@ pub fn wayland_file_drop_guidance(app: &mut PhotocraftApp) {
         lines.push("Or set Preferences › Performance › Linux display server to X11: PhotoCraft then always starts under XWayland.".to_owned());
     }
     let id = post(app, "Native file drag-and-drop is unavailable", lines, false, Some(WAYLAND_FILE_DROP_DISMISSED));
+    if let Some(notice) = app.ui.notices.iter_mut().find(|notice| notice.id == id) {
+        notice.args = args;
+    }
+}
+
+/// Show why files dropped from Explorer do nothing when PhotoCraft runs elevated on Windows, unless
+/// the user dismissed it in preferences. Windows' User Interface Privilege Isolation drops the
+/// drag-and-drop messages a non-elevated app (Explorer) sends to an elevated window, silently on
+/// both sides, so the drop looks broken. File › Open and pasting a copied file still work.
+pub fn elevated_file_drop_guidance(app: &mut PhotocraftApp) {
+    if !app.services.is_elevated
+        || app.session.prefs().dialogs.get(ELEVATED_FILE_DROP_DISMISSED).and_then(serde_json::Value::as_bool) == Some(true)
+        || app.ui.notices.iter().any(|notice| notice.dismiss_pref.as_deref() == Some(ELEVATED_FILE_DROP_DISMISSED))
+    {
+        return;
+    }
+    // English templates, translated and filled in when drawn, as in `wayland_file_drop_guidance`.
+    let lines = vec![
+        "PhotoCraft is running as administrator, and Windows blocks files dragged in from apps that are not. Use File › Open, or copy the image in File Explorer and paste it with {paste}."
+            .to_owned(),
+        "To drop files, start PhotoCraft normally, without Run as administrator.".to_owned(),
+    ];
+    let args = vec![("paste".to_owned(), paste_hint(app))];
+    let id = post(app, "Dragging files from File Explorer is blocked", lines, false, Some(ELEVATED_FILE_DROP_DISMISSED));
     if let Some(notice) = app.ui.notices.iter_mut().find(|notice| notice.id == id) {
         notice.args = args;
     }
@@ -365,6 +390,50 @@ mod tests {
         let guidance = english(&app.ui.notices[0]);
         assert!(guidance.contains("File › Open"));
         assert!(!guidance.contains("XWayland"), "{guidance}");
+    }
+
+    #[test]
+    fn elevated_guidance_is_only_shown_when_running_as_administrator() {
+        let app = PhotocraftApp::new(Session::new(), Services { is_elevated: true, ..Default::default() });
+        assert_eq!(app.ui.notices.len(), 1);
+        let notice = &app.ui.notices[0];
+        assert_eq!(notice.title, "Dragging files from File Explorer is blocked");
+        assert_eq!(notice.dismiss_pref.as_deref(), Some(ELEVATED_FILE_DROP_DISMISSED));
+        assert!(!notice.error, "guidance, not an error");
+        let guidance = english(notice);
+        assert!(guidance.contains("running as administrator"), "{guidance}");
+        assert!(guidance.contains("File › Open"), "{guidance}");
+        assert!(guidance.contains(&format!("paste it with {}", paste_hint(&app))), "{guidance}");
+        assert!(guidance.contains("without Run as administrator"), "{guidance}");
+        let es = crate::i18n::Lang::from_code("es").unwrap();
+        assert!(notice.lines.iter().chain([&notice.title]).all(|line| crate::i18n::tr(es, line) != *line), "every line is a catalog template");
+
+        let app = PhotocraftApp::new(Session::new(), Services::default());
+        assert!(app.ui.notices.is_empty());
+    }
+
+    #[test]
+    fn dismissing_elevated_guidance_persists_across_launches() {
+        let saved = Arc::new(Mutex::new(None::<String>));
+        let (load_store, save_store) = (saved.clone(), saved.clone());
+        let services = Services {
+            is_elevated: true,
+            load_prefs: Some(Box::new(move || load_store.lock().unwrap_or_else(|e| e.into_inner()).clone())),
+            save_prefs: Some(Box::new(move |text| {
+                *save_store.lock().unwrap_or_else(|e| e.into_inner()) = Some(text.to_owned());
+                Ok(())
+            })),
+            ..Default::default()
+        };
+        let mut app = PhotocraftApp::new(Session::new(), services);
+        let id = app.ui.notices[0].id;
+        dismiss(&mut app, id);
+        crate::prefs_ui::tick(&mut app, &egui::Context::default());
+
+        let services =
+            Services { is_elevated: true, load_prefs: Some(Box::new(move || saved.lock().unwrap_or_else(|e| e.into_inner()).clone())), ..Default::default() };
+        let app = PhotocraftApp::new(Session::new(), services);
+        assert!(app.ui.notices.is_empty());
     }
 
     #[test]

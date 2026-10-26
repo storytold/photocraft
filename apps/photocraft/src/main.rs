@@ -39,6 +39,7 @@ mod caption_style;
 mod control_server;
 mod crash_guard;
 mod cursor;
+mod elevation;
 mod file_dialog_probe;
 mod gpu_startup;
 #[cfg(target_os = "linux")]
@@ -454,6 +455,11 @@ fn main() -> eframe::Result {
             let automation = control.as_ref().map(|(_, _, workspace)| workspace.clone());
             let mut services = services::native(automation);
             services.preset_store = presets;
+            // Windows drops files dragged from Explorer into an elevated window (UIPI): say so.
+            services.is_elevated = elevation::is_elevated();
+            if services.is_elevated {
+                log::info!("running elevated (Run as administrator): Windows blocks file drops from Explorer");
+            }
             #[cfg(target_os = "linux")]
             let display = tablet::DisplayKind::of(cc);
             #[cfg(target_os = "linux")]

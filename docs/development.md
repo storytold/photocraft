@@ -34,6 +34,10 @@ administrator about an approved development environment. If you only want to run
 use the [packaged Windows release](https://github.com/storytold/photocraft/releases) to avoid
 building locally; the downloaded app is still subject to Windows application-control checks.
 
+Windows-only behaviour in the app itself (antivirus-safe saves, device names, the DX12 shader
+compiler, elevated file drops and more) is listed with the reason for each in
+[windows-guardians.md](windows-guardians.md).
+
 ## Build and run
 
 ```sh
