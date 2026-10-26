@@ -788,6 +788,7 @@ fn render_and_spool(doc: &Document, p: &Value, cmd: &str, spooler: Option<&Spool
         // PhotoCraft already placed and scaled the image on its physical sheet. Scaling again
         // in the driver would change the preview, print resolution and crop-mark positions.
         scaling: craft_print::Scaling::Exact,
+        options: cups_page_options((pw, ph)),
         ..Default::default()
     };
     let command = if send { json!(craft_print::command_preview(&job).map_err(other)?) } else { Value::Null };
@@ -820,6 +821,22 @@ fn render_and_spool(doc: &Document, p: &Value, cmd: &str, spooler: Option<&Spool
     Ok(
         json!({"pdf": pdf_path, "bytes": pdf_len, "paper": [pw, ph], "imageRect": [x, y, w, h], "emulsionDown": emulsion_down, "bleed": marks.bleed / 72.0, "scale": scale * 100.0, "copies": copies, "command": command, "sent": sent, "spooler": spool, "backend": backend, "color": color}),
     )
+}
+
+/// A wide PDF alone does not override a CUPS queue's portrait paper. Describe the physical
+/// sheet and its orientation explicitly, using the resolved layout (also for custom paper).
+fn cups_page_options((pw, ph): (f64, f64)) -> Vec<(String, String)> {
+    let (w, h) = (pw.min(ph), pw.max(ph));
+    let media = PAPERS
+        .iter()
+        .find(|(_, sw, sh)| (w - sw).abs() < 0.01 && (h - sh).abs() < 0.01)
+        .map(|(name, _, _)| match *name {
+            "4x6" => "na_index-4x6_4x6in".to_string(),
+            "5x7" => "na_5x7_5x7in".to_string(),
+            name => name.to_string(),
+        })
+        .unwrap_or_else(|| format!("Custom.{w:.2}x{h:.2}pt"));
+    vec![("media".into(), media), ("orientation-requested".into(), if pw > ph { "4" } else { "3" }.into())]
 }
 
 /// Windows prints a PDF through Windows.Data.Pdf.dll, which the apps delay-load (see their

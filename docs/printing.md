@@ -54,6 +54,13 @@ with a `note` when no server answers. `"printServer"` on `file.print` sends one 
 server; `"dryRun": true` renders the page and reports the equivalent `lp` command without
 spooling.
 
+## Orientation (macOS and Linux with `lp`)
+
+The `lp` job explicitly carries `media` and `orientation-requested` from the resolved page:
+3 for portrait, 4 for landscape. The PDF's wide page alone does not override a queue's portrait
+default. Standard paper uses its CUPS media name; custom paper uses its dimensions in points.
+These are per-job options. `fit-to-page=false` keeps the image at the size PhotoCraft laid out.
+
 ## Orientation (Windows)
 
 On Windows the paper and its orientation are the driver's: the Print dialog takes them from the

@@ -97,6 +97,37 @@ fn pdf_image(pdf: &[u8]) -> (u32, u32, String, Vec<u8>) {
 }
 
 #[test]
+fn cups_command_uses_the_resolved_paper_and_orientation() {
+    // A landscape PDF with no job orientation printed portrait on macOS AirPrint. Check the
+    // complete dry-run command and page geometry; no real queue is contacted.
+    let mut s = session("rgb", 8);
+    for (paper, orientation, media, page, requested) in [
+        (json!("a4"), "landscape", "a4", json!([841.89, 595.28]), "4"),
+        (json!("a4"), "portrait", "a4", json!([595.28, 841.89]), "3"),
+        (json!("letter"), "landscape", "letter", json!([792.0, 612.0]), "4"),
+        (json!([900.0, 600.0]), "portrait", "Custom.600.00x900.00pt", json!([900.0, 600.0]), "4"),
+        (json!([600.0, 900.0]), "landscape", "Custom.600.00x900.00pt", json!([900.0, 600.0]), "4"),
+        (json!([600.0, 900.0]), "portrait", "Custom.600.00x900.00pt", json!([600.0, 900.0]), "3"),
+        (json!("4x6"), "landscape", "na_index-4x6_4x6in", json!([432.0, 288.0]), "4"),
+        (json!("5x7"), "portrait", "na_5x7_5x7in", json!([360.0, 504.0]), "3"),
+    ] {
+        let r = s.execute("file.print", json!({"dryRun": true, "paper": paper, "orientation": orientation, "scaleToFit": true})).unwrap();
+        assert_eq!(r["paper"], page);
+        assert_eq!(r["sent"], false);
+        assert!(r["pdf"].is_null());
+        #[cfg(unix)]
+        {
+            let cmd: Vec<String> = serde_json::from_value(r["command"].clone()).unwrap();
+            for option in [format!("media={media}"), format!("orientation-requested={requested}"), "fit-to-page=false".into()] {
+                assert!(cmd.windows(2).any(|a| a == ["-o", &option]), "{cmd:?} must contain {option}");
+            }
+        }
+        #[cfg(not(unix))]
+        let _ = (media, requested);
+    }
+}
+
+#[test]
 fn print_dry_run_renders_a_pdf_and_reports_the_platform_backend() {
     let dir = tmp("print");
     for depth in [8, 16, 32] {
