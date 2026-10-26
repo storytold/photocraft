@@ -163,6 +163,11 @@ pub(crate) fn color(v: &Value) -> Option<Color> {
                 _ => None,
             }
         }
+        // A stored `Color` (mode + components), so a CMYK or Lab gradient stop survives a
+        // read-modify-write through the shape swatches.
+        Value::Object(_) => serde_json::from_value::<Color>(v.clone())
+            .ok()
+            .filter(|c| c.c.iter().all(|x| x.is_finite()) && c.alpha.is_finite() && (0.0..=1.0).contains(&c.alpha)),
         _ => None,
     }
 }
@@ -247,15 +252,21 @@ pub fn path_json(p: &Path) -> Value {
 fn fill_json(f: &Fill) -> Value {
     match f {
         Fill::Solid(c) => json!(hex(c)),
-        Fill::Gradient { stops, angle, scale, style, reverse, .. } => json!({ "gradient": {
+        Fill::Gradient { stops, angle, scale, style, reverse, opacity_stops, midpoints, offset, dither, align } => json!({ "gradient": {
             "stops": stops.iter().map(|(t, c)| json!([t, hex(c)])).collect::<Vec<_>>(),
-            "angle": angle, "scale": scale * 100.0, "style": format!("{style:?}").to_ascii_lowercase(), "reverse": reverse } }),
+            "angle": angle, "scale": scale * 100.0, "style": format!("{style:?}").to_ascii_lowercase(), "reverse": reverse,
+            "opacityStops": opacity_stops, "midpoints": midpoints, "offset": [offset.0, offset.1], "dither": dither, "align": align } }),
         Fill::Pattern { name, scale, .. } => json!({ "pattern": name, "scale": scale * 100.0 }),
     }
 }
 
-/// `"#rrggbb"` / `[r,g,b,a]` / `{"gradient":{"stops":[[t,"#hex"],…],"angle","scale","style","reverse"}}` /
-/// `{"pattern":name,"scale"}`. `null` → `Ok(None)` (no fill).
+/// The most colour stops, opacity stops or midpoints a gradient fill takes, as the gradient stop
+/// edits (`gradient.fill.stop`, `gradient.presets.stop`) cap them.
+const MAX_GRADIENT_STOPS: usize = 1024;
+
+/// `"#rrggbb"` / `[r,g,b,a]` / `{"gradient":{"stops":[[t,"#hex"|[r,g,b,a]],…],"angle","scale","style","reverse",
+/// "opacityStops":[[t,0..1],…],"midpoints":[0..1,…],"offset":[x,y],"dither","align"}}` / `{"pattern":name,"scale"}`.
+/// `null` → `Ok(None)` (no fill).
 fn parse_fill(v: &Value) -> std::result::Result<Option<Fill>, String> {
     if v.is_null() {
         return Ok(None);
@@ -264,9 +275,14 @@ fn parse_fill(v: &Value) -> std::result::Result<Option<Fill>, String> {
         return Ok(Some(Fill::Solid(c)));
     }
     if let Some(g) = v.get("gradient") {
-        let stops: Vec<(f32, Color)> = g
-            .get("stops")
-            .and_then(Value::as_array)
+        // Stop lists are capped as `gradient.fill.stop` caps them: more is an error, not a cut.
+        let list = |key: &str, what: &str| match g.get(key) {
+            None | Some(Value::Null) => Ok(None),
+            Some(Value::Array(a)) if a.len() > MAX_GRADIENT_STOPS => Err(format!("too many {what} (max {MAX_GRADIENT_STOPS})")),
+            Some(Value::Array(a)) => Ok(Some(a)),
+            Some(_) => Err(format!("gradient `{key}` must be an array")),
+        };
+        let stops: Vec<(f32, Color)> = list("stops", "colour stops")?
             .map(|a| a.iter().filter_map(|s| Some((s.get(0)?.as_f64()? as f32, color(s.get(1)?)?))).collect())
             .unwrap_or_else(|| vec![(0.0, Color::BLACK), (1.0, Color::WHITE)]);
         let style = match g.get("style").and_then(Value::as_str).unwrap_or("linear") {
@@ -276,13 +292,35 @@ fn parse_fill(v: &Value) -> std::result::Result<Option<Fill>, String> {
             "diamond" => GradientStyle::Diamond,
             _ => GradientStyle::Linear,
         };
-        return Ok(Some(Fill::gradient(
+        let mut fill = Fill::gradient(
             stops,
             f64p(g, "angle").unwrap_or(90.0) as f32,
             f64p(g, "scale").unwrap_or(100.0) as f32 / 100.0,
             style,
             g.get("reverse").and_then(Value::as_bool).unwrap_or(false),
-        )));
+        );
+        // The rest of a gradient, so a read-modify-write (the shape swatches) loses nothing.
+        if let Fill::Gradient { opacity_stops, midpoints, offset, dither, align, .. } = &mut fill {
+            let unit = |v: &Value| v.as_f64().map(|n| n.clamp(0.0, 1.0) as f32);
+            if let Some(a) = list("opacityStops", "opacity stops")? {
+                *opacity_stops = a.iter().filter_map(|s| Some((unit(s.get(0)?)?, unit(s.get(1)?)?))).collect();
+                opacity_stops.sort_by(|a, b| a.0.total_cmp(&b.0));
+            }
+            if let Some(a) = list("midpoints", "midpoints")? {
+                *midpoints = a.iter().filter_map(unit).collect();
+            }
+            if let Some(o) = g.get("offset") {
+                let at = |i: usize| o.get(i).and_then(Value::as_f64).map(|n| n.clamp(-1000.0, 1000.0) as f32);
+                *offset = (at(0).ok_or("gradient offset must be [x, y]")?, at(1).ok_or("gradient offset must be [x, y]")?);
+            }
+            if let Some(d) = g.get("dither").and_then(Value::as_bool) {
+                *dither = d;
+            }
+            if let Some(a) = g.get("align").and_then(Value::as_bool) {
+                *align = a;
+            }
+        }
+        return Ok(Some(fill));
     }
     if let Some(name) = v.get("pattern").and_then(Value::as_str) {
         return Ok(Some(Fill::Pattern {
@@ -1756,7 +1794,7 @@ pub(crate) fn leak(s: String) -> &'static str {
 
 pub fn specs() -> Vec<CommandSpec> {
     let stroke = r##""stroke":{"width":px,"color":"#rrggbb"|fill,"opacity":0..100,"align":"inside|center|outside","cap":"butt|round|square","join":"miter|round|bevel","miterLimit":n,"dashes":[multiples of width],"dashOffset":n}|null"##;
-    let fill = r##""fill":"#rrggbb"|[r,g,b,a]|{"gradient":{"stops":[[t,"#hex"]],"angle":deg,"scale":%,"style":"linear|radial|angle|reflected|diamond","reverse":bool}}|{"pattern":name}|null (no fill)"##;
+    let fill = r##""fill":"#rrggbb"|[r,g,b,a]|{"gradient":{"stops":[[t,"#hex"|[r,g,b,a]|stored Color]],"angle":deg,"scale":%,"style":"linear|radial|angle|reflected|diamond","reverse":bool,"opacityStops":[[t,0..1]]?,"midpoints":[0..1]?,"offset":[x,y]?,"dither":bool?,"align":bool?}}|{"pattern":name}|null (no fill)"##;
     vec![
         spec!(
             "shape.create",

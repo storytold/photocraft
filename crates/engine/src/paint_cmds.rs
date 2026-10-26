@@ -1,6 +1,6 @@
 //! Paint helpers: Paint Bucket and Gradient tool.
 
-use photocraft_algo::paint::{GradientShape, bucket_fill_inks, bucket_fill_region_inks, bucket_fill_region_src, bucket_fill_src, paint_gradient};
+use photocraft_algo::paint::{FillMode, GradientShape, bucket_fill_inks, bucket_fill_region_inks, paint_gradient};
 use serde_json::{Value, json};
 
 use crate::commands::{CommandSpec, blend_from_str};
@@ -41,12 +41,27 @@ fn opacity(p: &Value, cmd: &str) -> Result<f32> {
     Ok(crate::eraser_cmds::number(p, cmd, "opacity", 100.0, 1.0..=100.0)? as f32 / 100.0)
 }
 
+/// The Paint Bucket's `mode`: a blend mode (not Pass Through, a group's) or `clear`.
+fn fill_mode(p: &Value) -> Result<FillMode> {
+    let bad = |msg: String| EngineError::BadParams { cmd: "paint.bucket".into(), msg };
+    match p.get("mode") {
+        None | Some(Value::Null) => Ok(FillMode::Blend(photocraft_color::BlendMode::Normal)),
+        Some(Value::String(m)) if m.eq_ignore_ascii_case("clear") => Ok(FillMode::Clear),
+        Some(Value::String(m)) => blend_from_str(m)
+            .filter(|m| *m != photocraft_color::BlendMode::PassThrough)
+            .map(FillMode::Blend)
+            .ok_or_else(|| bad(format!("unknown blend mode `{m}`"))),
+        Some(v) => Err(bad(format!("`mode` must be a blend mode name or `clear`, not {v}"))),
+    }
+}
+
 fn bucket(s: &mut Session, p: &Value) -> Result<Value> {
     let fg = s.tools.foreground;
     let c = color(p.get("color"), fg);
     let (x, y) = (f(p, "x", 0.0).floor() as i32, f(p, "y", 0.0).floor() as i32);
     let (tol, contiguous, aa) = (f(p, "tolerance", 32.0), b(p, "contiguous", true), b(p, "antiAlias", true));
     let opacity = opacity(p, "paint.bucket")?;
+    let mode = fill_mode(p)?;
     let all = b(p, "sampleAllLayers", false) && crate::channel_cmds::target_of(p) == crate::channel_cmds::Target::Pixels;
     // Other visible layers can define the region, but the fill still writes only to the target.
     let region = if all {
@@ -83,16 +98,16 @@ fn bucket(s: &mut Session, p: &Value) -> Result<Value> {
             let w = area.width() as usize;
             let src = |px: i32, py: i32| rendered[(py - area.y0) as usize * w + (px - area.x0) as usize];
             if let Some(region) = &region {
-                bucket_fill_region_src(surf, region, opacity, sel.as_ref(), lock, src);
+                bucket_fill_region_inks(surf, region, opacity, sel.as_ref(), lock, src, None, mode);
                 true
             } else {
-                bucket_fill_src(surf, area, (x, y), tol, contiguous, aa, opacity, sel.as_ref(), lock, src)
+                bucket_fill_inks(surf, area, (x, y), tol, contiguous, aa, opacity, sel.as_ref(), lock, src, None, mode)
             }
         } else if let Some(region) = &region {
-            bucket_fill_region_inks(surf, region, opacity, sel.as_ref(), lock, |_, _| c, inks);
+            bucket_fill_region_inks(surf, region, opacity, sel.as_ref(), lock, |_, _| c, inks, mode);
             true
         } else {
-            bucket_fill_inks(surf, area, (x, y), tol, contiguous, aa, opacity, sel.as_ref(), lock, |_, _| c, inks)
+            bucket_fill_inks(surf, area, (x, y), tol, contiguous, aa, opacity, sel.as_ref(), lock, |_, _| c, inks, mode)
         };
         surf.prune();
         Ok(ok)
@@ -162,7 +177,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Paint Bucket",
             menu: &[],
             shortcut: None,
-            params: r##"{"x":px,"y":px,"tolerance":0..255=32,"contiguous":bool=true,"antiAlias":bool=true,"sampleAllLayers":bool=false,"contents":"foreground|pattern"="foreground","color":"#rrggbb"=foreground,"pattern":id|name (contents=pattern),"scale":%=100,"angle":deg,"opacity":1..100=100,"target":"pixels"|"mask"|"quickMask"|{"channel":i}=Channels panel target}"##,
+            params: r##"{"x":px,"y":px,"tolerance":0..255=32,"contiguous":bool=true,"antiAlias":bool=true,"sampleAllLayers":bool=false,"contents":"foreground|pattern"="foreground","color":"#rrggbb"=foreground,"pattern":id|name (contents=pattern),"scale":%=100,"angle":deg,"opacity":1..100=100,"mode":"normal|multiply|…|clear (erases the filled area)"="normal","target":"pixels"|"mask"|"filterMask"|"quickMask"|{"channel":i}=Channels panel target}"##,
             enabled: crate::commands::has_paintable,
             run: bucket,
             journal: true,
@@ -172,7 +187,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Gradient",
             menu: &[],
             shortcut: None,
-            params: r##"{"from":[x,y],"to":[x,y],"style":"linear|radial|angle|reflected|diamond"="linear","colors":["#rrggbb",…]? (evenly spaced),"gradient":preset name?,"stops":[[t,"#rrggbb"|"foreground"|"background"],…]?,"transparency":[[t,0..100],…]? (default: the current gradient, see gradient.presets.select),"method":"classic|perceptual|linear|smooth"? (Photoshop's interpolation; omitted: straight stops),"smoothness":0..100=100,"reverse":bool=false,"dither":bool=true,"opacity":1..100=100,"mode":"normal|multiply|…"="normal","target":"pixels"|"mask"|"quickMask"|{"channel":i}=Channels panel target}"##,
+            params: r##"{"from":[x,y],"to":[x,y],"style":"linear|radial|angle|reflected|diamond"="linear","colors":["#rrggbb",…]? (evenly spaced),"gradient":preset name?,"stops":[[t,"#rrggbb"|"foreground"|"background"],…]?,"transparency":[[t,0..100],…]? (default: the current gradient, see gradient.presets.select),"method":"classic|perceptual|linear|smooth"? (Photoshop's interpolation; omitted: straight stops),"smoothness":0..100=100,"reverse":bool=false,"dither":bool=true,"opacity":1..100=100,"mode":"normal|multiply|…"="normal","target":"pixels"|"mask"|"filterMask"|"quickMask"|{"channel":i}=Channels panel target}"##,
             enabled: crate::commands::has_paintable,
             run: gradient,
             journal: true,
@@ -208,6 +223,33 @@ mod tests {
         .unwrap();
         s.execute("layer.new.layer", json!({})).unwrap();
         (s, bottom)
+    }
+
+    /// The options bar's Mode reaches the fill: Multiply over grey, Clear erases, a bad name or
+    /// Pass Through is an error and changes nothing.
+    #[test]
+    fn bucket_mode_multiplies_clears_and_rejects_bad_names() {
+        for depth in [8, 16, 32] {
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width": 8, "height": 8, "depth": depth})).unwrap();
+            s.execute("layer.new.layer", json!({})).unwrap();
+            let base = json!({"x": 1, "y": 1, "antiAlias": false, "tolerance": 0});
+            let with = |extra: Value| {
+                let mut p = base.clone();
+                p.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+                p
+            };
+            s.execute("paint.bucket", with(json!({"color": "#808080"}))).unwrap();
+            s.execute("paint.bucket", with(json!({"color": "#ff0000", "mode": "multiply"}))).unwrap();
+            let p = px(&s, 3, 3);
+            assert!((p[0] - 0.5).abs() < 0.01 && p[1] < 0.01 && p[3] > 0.99, "depth {depth}: {p:?}");
+            for bad in [json!("passThrough"), json!("sparkle"), json!(3)] {
+                assert!(s.execute("paint.bucket", with(json!({"mode": bad}))).is_err(), "{bad}");
+            }
+            assert_eq!(px(&s, 3, 3), p, "a refused mode paints nothing");
+            s.execute("paint.bucket", with(json!({"mode": "Clear", "opacity": 50}))).unwrap();
+            assert!((px(&s, 3, 3)[3] - 0.5).abs() < 0.01, "depth {depth}: half cleared");
+        }
     }
 
     #[test]

@@ -10,6 +10,7 @@
 //! `swatches.*` engine command; this module only draws and dispatches. Colours are shown in the
 //! RGB working space through `photocraft-cms` (cached per library revision and colour settings).
 
+use std::ffi::OsStr;
 use std::sync::Arc;
 
 use egui::{Color32, CornerRadius, Rect};
@@ -157,7 +158,7 @@ pub fn import_bytes(app: &mut PhotocraftApp, name: &str, bytes: &[u8], replace: 
     p["mode"] = json!(if replace { "replace" } else { "append" });
     // Bytes without a path (the browser, drag and drop) are sniffed by content, and `.act` has
     // no signature: one starting 00 01 or 00 02 reads as `.aco`. Its file name decides.
-    if std::path::Path::new(name).extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("act")) {
+    if std::path::Path::new(name).extension().and_then(OsStr::to_str).is_some_and(|e| e.eq_ignore_ascii_case("act")) {
         p["format"] = json!("act");
     }
     if let Some(stem) = stem {

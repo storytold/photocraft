@@ -2,6 +2,8 @@
 //! (eye toggles; double-click a filter to re-open its dialog with the recorded parameters; click
 //! to select one; drag onto another smart object to move it there, ⌥-drag to copy it, #4271;
 //! drag it up or down its own stack to reorder it).
+//! The Smart Filters row carries the filter mask thumbnail: click it to paint the filter mask,
+//! ⌥-click to view it, ⇧-click to disable it (FILE-215-3).
 
 use egui::{Color32, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 use photocraft_doc::{Document, Layer, LayerContent, LayerId, SmartObject};
@@ -169,6 +171,13 @@ pub fn filter_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui, doc: &Document, l
                 ui.painter().rect_filled(sw, 0.0, Color32::WHITE);
             }
             ui.painter().rect_stroke(sw, 1.0, Stroke::new(1.0, t.field_border), egui::StrokeKind::Inside);
+            if app.ui.filter_mask_target == Some(l.id.0) && app.filter_mask_targeted() {
+                crate::mask_thumbs_ui::paint_brackets(ui.painter(), sw, t.text);
+            }
+            let sw_resp = ui.interact(sw.expand(2.0), ui.scope_id().with(("sf-mask", l.id.0)), Sense::click());
+            if sw_resp.clicked() {
+                actions.extend(filter_mask_click(l, sm, ui.input(|i| i.modifiers)));
+            }
         }
         let blend = index.map(|_| Rect::from_center_size(pos2(rect.right() - crate::layer_row_ui::RIGHT_PAD - 9.0, rect.center().y), vec2(18.0, 18.0)));
         let right = blend.map_or(rect.right() - crate::layer_row_ui::RIGHT_PAD, |r| r.left() - 4.0);
@@ -226,6 +235,30 @@ pub fn filter_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui, doc: &Document, l
         let pass = ui.ctx().cumulative_pass_nr();
         ui.ctx().data_mut(|d| d.insert_temp(drawn_key(doc.id), pass));
     }
+}
+
+/// What a click on the filter mask thumbnail does: target it for painting (selecting the smart
+/// object), ⌥ view it alone (⇧⌥ as an overlay), ⇧ disable or enable it.
+fn filter_mask_click(l: &Layer, sm: &SmartObject, m: egui::Modifiers) -> Vec<(String, Value)> {
+    let layer = l.id.0;
+    if m.alt {
+        let mode = if m.shift { "toggleOverlay" } else { "toggleGray" };
+        return sm
+            .filter_mask
+            .is_some()
+            .then(|| (photocraft_engine::mask_view_cmds::ID.to_string(), json!({"layer": layer, "mode": mode, "mask": "filter"})))
+            .into_iter()
+            .collect();
+    }
+    if m.shift {
+        return sm
+            .filter_mask
+            .as_ref()
+            .map(|f| ("layer.smartFilter.disableFilterMask".to_string(), json!({"layer": layer, "enabled": !f.enabled})))
+            .into_iter()
+            .collect();
+    }
+    vec![("layer.select".into(), json!({"layer": layer})), ("ui.filterMaskTarget".into(), json!(layer))]
 }
 
 /// Smart filter rows being dragged: the smart object and the filter index (`None` = the Smart
@@ -535,7 +568,81 @@ mod layer_thumbnail_scaling_tests {
 
 #[cfg(test)]
 mod tests {
+    use photocraft_engine::Session;
+
     use super::*;
+    use crate::Services;
+
+    fn smart(app: &PhotocraftApp) -> (photocraft_doc::Layer, photocraft_doc::SmartObject) {
+        let st = app.session.active().unwrap();
+        let l = st.doc.layer(st.active_layer.unwrap()).unwrap().clone();
+        let LayerContent::Smart(sm) = l.content.clone() else { panic!("not a smart object") };
+        (l, sm)
+    }
+
+    /// FILE-215-3: clicking the filter mask thumbnail targets it, the Brush paints into it (not
+    /// the layer mask, no rasterize prompt), and clicking the layer thumbnail goes back.
+    #[test]
+    fn the_filter_mask_thumbnail_targets_the_filter_mask() {
+        let mut app = PhotocraftApp::new(Session::new(), Services::default());
+        app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.run("edit.fill", json!({"contents": "color", "color": "#ff0000"})).unwrap();
+        app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        app.run("filter.blur.gaussianBlur", json!({"radius": 2})).unwrap();
+        let (l, sm) = smart(&app);
+        let actions = super::filter_mask_click(&l, &sm, egui::Modifiers::NONE);
+        assert_eq!(actions.last().unwrap().0, "ui.filterMaskTarget");
+        assert!(super::filter_mask_click(&l, &sm, egui::Modifiers::ALT).is_empty(), "nothing to view yet");
+        app.ui.filter_mask_target = Some(l.id.0);
+        app.sync_views();
+        assert!(app.filter_mask_targeted());
+        assert_eq!(crate::canvas::paint_target(&app), json!("filterMask"));
+        assert_eq!(app.with_mask_target("filter.blur.gaussianBlur", json!({}))["target"], "filterMask");
+        assert!(crate::rasterize_prompt::needed(&app).is_none(), "painting the filter mask needs no rasterizing");
+        app.run(
+            "paint.stroke",
+            json!({"points": [[4, 0], [4, 31]], "size": 4, "hardness": 1, "color": "#000000", "target": crate::canvas::paint_target(&app)}),
+        )
+        .unwrap();
+        let (l, sm) = smart(&app);
+        assert_eq!(sm.filter_mask.as_ref().unwrap().value(4, 16), 0.0);
+        assert!(l.mask.is_none(), "no layer mask");
+        assert_eq!(super::filter_mask_click(&l, &sm, egui::Modifiers::ALT)[0].1["mask"], "filter");
+        // Targeting a layer mask (or the pixels, `ui.maskTarget`) ends it.
+        app.ui.mask_target = true;
+        app.sync_views();
+        assert_eq!(app.ui.filter_mask_target, None, "a layer mask target replaces it");
+    }
+
+    #[test]
+    fn selecting_the_filter_mask_replaces_a_layer_mask_view() {
+        let mut app = PhotocraftApp::new(Session::new(), Services::default());
+        app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.run("edit.fill", json!({"contents": "color", "color": "#ff0000"})).unwrap();
+        app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        app.run("filter.blur.gaussianBlur", json!({"radius": 2})).unwrap();
+        app.run("layer.layerMask.revealAll", json!({})).unwrap();
+        app.run("view.layerMask", json!({"mode": "gray"})).unwrap();
+        app.sync_mask_targets();
+        assert!(app.layer_mask_targeted());
+        let id = app.session.active().unwrap().active_layer.unwrap();
+        app.select_filter_mask_target(Some(id.0));
+        app.sync_views();
+        assert!(app.filter_mask_targeted());
+        assert!(!app.layer_mask_targeted());
+        assert!(photocraft_engine::mask_view_cmds::current(app.session.active().unwrap()).is_none());
+        app.run("paint.stroke", json!({"points": [[8, 8]], "size": 6, "hardness": 1, "color": "#000000"})).unwrap();
+        let st = app.session.active().unwrap();
+        let layer = st.doc.layer(id).unwrap();
+        assert_eq!(layer.mask.as_ref().unwrap().value(8, 8), 1.0);
+        let LayerContent::Smart(sm) = &layer.content else { panic!("smart object") };
+        assert_eq!(sm.filter_mask.as_ref().unwrap().value(8, 8), 0.0);
+        app.run("view.layerMask", json!({"mode": "gray", "mask": "filter"})).unwrap();
+        app.select_filter_mask_target(Some(id.0));
+        assert!(photocraft_engine::mask_view_cmds::current(app.session.active().unwrap()).unwrap().filter, "a matching filter-mask view stays open");
+    }
 
     /// A pixel layer, a shape layer and a smart object, in that order.
     fn layers() -> [Layer; 3] {
@@ -693,5 +800,45 @@ mod tests {
         let doc = &app.session.active().unwrap().doc;
         assert_eq!(smart(&app, doc).smart_filters.len(), 1);
         assert!(photocraft_compose::flatten(&shown).px == photocraft_compose::flatten(doc).px, "OK gives what the preview showed");
+    }
+
+    /// FILE-215-3: with the filter mask targeted, Move and Edit › Transform act on the smart object
+    /// (no filter-mask target, so a move doesn't re-render the filters), and painting and filters
+    /// still edit the filter mask.
+    #[test]
+    fn only_filter_mask_edits_carry_the_filter_mask_target() {
+        let mut app = PhotocraftApp::new(Session::new(), Services::default());
+        app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.run("edit.fill", json!({"contents": "color", "color": "#ff0000"})).unwrap();
+        app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        app.run("filter.blur.gaussianBlur", json!({"radius": 2})).unwrap();
+        let id = app.session.active().unwrap().active_layer.unwrap();
+        app.select_filter_mask_target(Some(id.0));
+        assert!(app.filter_mask_targeted());
+        for cmd in [
+            "layer.translate",
+            "select.float",
+            "edit.transform.rotate180",
+            "filter.convertForSmartFilters",
+            "image.applyImage",
+            "filter.liquify",
+            "filter.lastFilter",
+            "image.adjustments.desaturate",
+            "filter.render.flame",
+        ] {
+            assert!(app.with_mask_target(cmd, json!({"dx": 1})).get("target").is_none(), "{cmd}");
+        }
+        for cmd in [
+            "paint.stroke",
+            "filter.blur.gaussianBlur",
+            "edit.fill",
+            "edit.paste",
+            "image.adjustments.invert",
+            "image.adjustments.equalize",
+            "filter.blur.average",
+        ] {
+            assert_eq!(app.with_mask_target(cmd, json!({}))["target"], "filterMask", "{cmd}");
+        }
     }
 }

@@ -307,15 +307,18 @@ fn copy(s: &mut Session, merged: bool) -> Result<Value> {
     Ok(json!({"bounds": [b.x0, b.y0, b.width(), b.height()]}))
 }
 
-/// Copy with the layer mask targeted (`"target":"mask"`, #2928): the mask's values as a
+/// Copy the targeted layer mask (`"target":"mask"`, #2928) or smart-filter mask
+/// (`"target":"filterMask"`): the mask's values as a
 /// grayscale clip, inside the selection or the whole canvas — an untouched mask copies at its
 /// default value, so a plain Reveal All / Hide All mask transfers too. Paste then writes into
 /// another layer's mask (targeted, #1035), in this or another document.
-fn copy_mask(s: &mut Session) -> Result<Value> {
+fn copy_mask(s: &mut Session, filter: bool) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let canvas = d.doc.bounds();
     let id = d.active_layer.ok_or_else(|| EngineError::Other("no active layer".into()))?;
-    let mask = d.doc.layer(id).ok_or(EngineError::NoLayer(id))?.mask.as_ref().ok_or_else(|| EngineError::Other("the active layer has no layer mask".into()))?;
+    let layer = d.doc.layer(id).ok_or(EngineError::NoLayer(id))?;
+    let mask = crate::mask_view_cmds::viewed_mask(layer, filter)
+        .ok_or_else(|| EngineError::Other(if filter { "the active layer has no filter mask" } else { "the active layer has no layer mask" }.into()))?;
     let sel = d.doc.selection.as_ref();
     let area = sel.map_or(canvas, |m| m.content_bounds().intersect(&canvas));
     if area.is_empty() {
@@ -347,7 +350,7 @@ fn copy_mask(s: &mut Session) -> Result<Value> {
     let b = bounds;
     let (resolution, source) = (Some(d.doc.resolution_dpi), Some(d.doc.id));
     s.clipboard = Some(Clip { surface, bounds: b, layers: None, resolution, source });
-    Ok(json!({"bounds": [b.x0, b.y0, b.width(), b.height()], "target": "mask"}))
+    Ok(json!({"bounds": [b.x0, b.y0, b.width(), b.height()], "target": if filter { "filterMask" } else { "mask" }}))
 }
 
 fn clear_selected(doc: &mut Document, id: LayerId, background: [f32; 4]) -> Result<()> {
@@ -999,11 +1002,11 @@ pub fn specs() -> Vec<CommandSpec> {
             "Copy",
             &["Edit"],
             Some("Cmd+C"),
-            r##"{"target":"mask"? = the targeted mask, copied as grayscale (#2928)} (a targeted colour or alpha channel copies that channel, as grayscale)"##,
+            r##"{"target":"mask|filterMask"? = the targeted mask, copied as grayscale (#2928)} (a targeted colour or alpha channel copies that channel, as grayscale)"##,
             can_copy,
             |s, p| {
                 if crate::commands::is_mask_target(p) {
-                    return copy_mask(s);
+                    return copy_mask(s, crate::channel_cmds::target_of(p) == crate::channel_cmds::Target::FilterMask);
                 }
                 match crate::channel_clip::copy(s)? {
                     Some(r) => Ok(r),
