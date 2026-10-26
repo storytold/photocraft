@@ -856,3 +856,23 @@ fn matrix_trc_blocks_match_per_pixel_eval() {
         }
     }
 }
+
+/// 8-bit conversion through an analytic pipeline (no lookup table, here RGB to Lab) tabulates
+/// the first stage's curves per code; the result must equal the exact per-pixel evaluation.
+#[test]
+fn exact_core_u8_matches_exact_eval() {
+    let t = Transform::new(srgb(), lab(), Intent::RelativeColorimetric, true).unwrap();
+    let px = 256usize * 256;
+    let src: Vec<u8> = (0..px as u32).flat_map(|i| [(i & 255) as u8, (i >> 8) as u8, (i.wrapping_mul(2654435761) >> 13) as u8, 200]).collect();
+    let mut out = vec![0u8; px * 4];
+    t.convert_u8(&src, 4, &mut out, 4, true);
+    for (sp, dp) in src.as_chunks::<4>().0.iter().zip(out.as_chunks::<4>().0) {
+        let inp = [sp[0] as f32 / 255.0, sp[1] as f32 / 255.0, sp[2] as f32 / 255.0];
+        let mut want = [0.0f32; 3];
+        t.eval(&inp, &mut want);
+        for k in 0..3 {
+            assert_eq!(dp[k], (want[k].clamp(0.0, 1.0) * 255.0 + 0.5) as u8, "{sp:?} ch {k}");
+        }
+        assert_eq!(dp[3], 200);
+    }
+}
