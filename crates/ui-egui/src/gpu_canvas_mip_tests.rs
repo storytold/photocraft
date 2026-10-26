@@ -171,3 +171,55 @@ fn partial_updates_match_a_full_rebuild_at_every_mip_level() {
         }
     }
 }
+
+/// #9561: on an Intel Arc 140V (DX12, driver 32.0.101.9150) a texture copy into a mip level that
+/// follows an odd-width level landed 16 texels to the left, so zoomed out, a 6466 px wide canvas
+/// was drawn shifted with a transparent strip at its right edge. A flat colour can't show a
+/// shift; this fills the canvas with a sawtooth across x and compares every level's middle row
+/// with the same bilinear taps run on the CPU, on both mip paths and at every depth.
+#[test]
+fn mip_levels_after_an_odd_width_stay_in_place() {
+    let _gpu = photocraft_testkit::gpu_lock();
+    let rs = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| egui_kittest::wgpu::create_render_state(wgpu_setup(), Default::default())));
+    let Ok(rs) = rs else {
+        eprintln!("skipping mip placement check: no GPU adapter");
+        return;
+    };
+    let gpu = GpuCanvas::new(&rs);
+    let (w, h) = (6466u32, 64u32);
+    if gpu.tile < w {
+        // `read_mips` reads one tile; a smaller tile (`PHOTOCRAFT_GPU_TILE`) splits this canvas.
+        eprintln!("skipping mip placement check: a {}-px tile splits the {w}-px canvas", gpu.tile);
+        return;
+    }
+    let tooth = |x: u32| (x % 256) as f64 / 255.0;
+    let mut full = Buffer::filled(Rect::from_xywh(0, 0, w, h), [0.0; 4]);
+    for (i, px) in full.px.iter_mut().enumerate() {
+        *px = [tooth(i as u32 % w) as f32, 0.0, 0.0, 1.0];
+    }
+    for (separate, depth) in [false, true].into_iter().flat_map(|s| [SampleType::U8, SampleType::U16, SampleType::F32].map(|d| (s, d))) {
+        gpu.rs.renderer.write().callback_resources.get_mut::<Resources>().unwrap().separate_mip_targets = separate;
+        gpu.upload_buffer_full(1, &full, depth);
+        let mips = read_mips(&gpu, 1);
+        // The red channel of one row through the chain, as the mip shader's taps compute it.
+        let mut row: Vec<f64> = (0..w).map(tooth).collect();
+        for (level, pixels) in mips.iter().enumerate().take(6).skip(1) {
+            let (sw, lw, lh) = (row.len(), (w >> level).max(1) as usize, (h >> level).max(1) as usize);
+            row = (0..lw)
+                .map(|x| {
+                    let f = (x as f64 + 0.5) / lw as f64 * sw as f64 - 0.5;
+                    let (i, t) = (f.floor(), f - f.floor());
+                    let at = |k: f64| row[(k.max(0.0) as usize).min(sw - 1)];
+                    at(i) * (1.0 - t) + at(i + 1.0) * t
+                })
+                .collect();
+            let mid = &pixels[(lh / 2) * lw..(lh / 2 + 1) * lw];
+            for (x, (pixel, expected)) in mid.iter().zip(&row).enumerate() {
+                assert!(
+                    (pixel[3] - 1.0).abs() < 0.001 && (f64::from(pixel[0]) - expected).abs() < 0.02,
+                    "separate {separate}, {depth:?}: mip {level} ({lw} wide) at x {x}: {pixel:?}, expected red {expected:.3}"
+                );
+            }
+        }
+    }
+}
