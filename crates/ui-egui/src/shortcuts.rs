@@ -415,6 +415,9 @@ pub fn clipboard_keys(ctx: &egui::Context, typing: bool, raw: &mut egui::RawInpu
 pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // A held tool letter released: a temporary tool gives the previous one back (#2672).
     crate::spring_tools::tick(app, ctx);
+    if crate::canvas::cancel_mixer_on_context_change(app, ctx) {
+        return;
+    }
     // However the tool was picked (toolbar, flyout, shortcut, automation), its group's key brings
     // it back later (#2608).
     app.ui.remember_group_tool();
@@ -447,8 +450,9 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
         return;
     }
     // So does the right-click menu of text being edited: Esc closes only it, and keys typed while
-    // it is open don't reach the text beneath.
-    if app.ui.canvas_tool_menu.as_ref().is_some_and(|m| m.text) {
+    // it is open don't reach the text beneath. The crop menu's likewise: Esc and ↵ don't cancel or
+    // commit the crop under it (#6561).
+    if app.ui.canvas_tool_menu.as_ref().is_some_and(|m| m.text || m.crop.is_some()) {
         return;
     }
     let symmetry_editing = app.ui.symmetry_transform.is_some();
@@ -742,6 +746,9 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
         }
         return;
     }
+    // ⇧+ / ⇧− step the blend mode and ⇧⌥ letters pick one (`blend_keys`). Before the tool
+    // letters: `consume_key` ignores extra ⇧ and ⌥, so ⇧⌥M would otherwise pick a tool.
+    crate::blend_keys::handle(app, ctx);
     // Tool keys; pressing the key of the current group cycles within it. With Preferences ›
     // Tools › Use Shift Key for Tool Switch, only ⇧+key cycles and the plain key keeps the
     // group's current tool. From another group, the key picks the group's last-used tool.
@@ -779,8 +786,6 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
     // 1–0 set opacity, ⇧1–0 flow or fill (`opacity_keys`).
     crate::opacity_keys::handle(app, ctx);
-    // ⇧+ / ⇧− step the blend mode (`blend_keys`).
-    crate::blend_keys::handle(app, ctx);
 }
 
 #[cfg(test)]

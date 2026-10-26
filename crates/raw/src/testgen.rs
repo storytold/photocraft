@@ -88,9 +88,19 @@ impl BitWriter {
 
 /// Encodes `samples` (raster order, `components` interleaved, values below
 /// `2^precision`) as a lossless JPEG with the given predictor (1–7) and an
-/// optional restart interval in rows.
+/// optional restart interval in rows. All components share one Huffman table.
 pub fn lj92_encode(samples: &[u16], width: usize, height: usize, components: usize, precision: u8, predictor: u8, restart_rows: Option<usize>) -> Vec<u8> {
+    lj92_encode_tables(samples, width, height, &vec![0; components], precision, predictor, restart_rows)
+}
+
+/// Like [`lj92_encode`], but component `c` uses Huffman table `table_of[c]`
+/// (0–3; the component count is `table_of.len()`), one DHT per table id as
+/// CR2 writes them. Table `t` assigns its code lengths rotated by `t`, so the
+/// tables differ even when their statistics match.
+pub fn lj92_encode_tables(samples: &[u16], width: usize, height: usize, table_of: &[u8], precision: u8, predictor: u8, restart_rows: Option<usize>) -> Vec<u8> {
+    let components = table_of.len();
     assert_eq!(samples.len(), width * height * components);
+    assert!(table_of.iter().all(|&t| t < 4));
     let row = width * components;
     let interval = restart_rows.unwrap_or(usize::MAX);
     // Differences per sample, following T.81 H.1.2.1 prediction rules.
@@ -127,31 +137,41 @@ pub fn lj92_encode(samples: &[u16], width: usize, height: usize, components: usi
             }
         }
     }
-    // Table: categories ordered by frequency get increasing code lengths.
-    let mut freq = [0usize; 17];
-    for &d in &diffs {
-        freq[category(d) as usize] += 1;
-    }
-    let mut order: Vec<usize> = (0..17).collect();
-    order.sort_by_key(|&c| std::cmp::Reverse(freq[c]));
-    let mut len_of = [0u8; 17];
-    for (rank, &c) in order.iter().enumerate() {
-        len_of[c] = LENGTHS[rank];
-    }
-    let mut counts = [0u8; 16];
-    let mut vals: Vec<u8> = Vec::new();
-    let mut code_of = [(0u32, 0u32); 17];
-    let mut code = 0u32;
-    for len in 1..=16u8 {
-        for c in 0..17 {
-            if len_of[c] == len {
-                counts[len as usize - 1] += 1;
-                vals.push(c as u8);
-                code_of[c] = (code, u32::from(len));
-                code += 1;
+    // Tables: categories ordered by frequency get increasing code lengths.
+    let mut ids: Vec<u8> = table_of.to_vec();
+    ids.sort_unstable();
+    ids.dedup();
+    let mut code_of = [[(0u32, 0u32); 17]; 4];
+    let mut dhts = Vec::new();
+    for &t in &ids {
+        let mut freq = [0usize; 17];
+        for (i, &d) in diffs.iter().enumerate() {
+            if table_of[i % components] == t {
+                freq[category(d) as usize] += 1;
             }
         }
-        code <<= 1;
+        let mut order: Vec<usize> = (0..17).collect();
+        order.sort_by_key(|&c| std::cmp::Reverse(freq[c]));
+        order.rotate_left(usize::from(t));
+        let mut len_of = [0u8; 17];
+        for (rank, &c) in order.iter().enumerate() {
+            len_of[c] = LENGTHS[rank];
+        }
+        let mut counts = [0u8; 16];
+        let mut vals: Vec<u8> = Vec::new();
+        let mut code = 0u32;
+        for len in 1..=16u8 {
+            for c in 0..17 {
+                if len_of[c] == len {
+                    counts[len as usize - 1] += 1;
+                    vals.push(c as u8);
+                    code_of[usize::from(t)][c] = (code, u32::from(len));
+                    code += 1;
+                }
+            }
+            code <<= 1;
+        }
+        dhts.push((t, counts, vals));
     }
     let mut out = vec![0xFF, 0xD8];
     // SOF3
@@ -164,12 +184,14 @@ pub fn lj92_encode(samples: &[u16], width: usize, height: usize, components: usi
     for c in 0..components {
         out.extend_from_slice(&[c as u8 + 1, 0x11, 0]);
     }
-    // DHT (one table, id 0)
-    out.extend_from_slice(&[0xFF, 0xC4]);
-    out.extend_from_slice(&((2 + 17 + vals.len()) as u16).to_be_bytes());
-    out.push(0x00);
-    out.extend_from_slice(&counts);
-    out.extend_from_slice(&vals);
+    // DHT, one per table id
+    for (t, counts, vals) in &dhts {
+        out.extend_from_slice(&[0xFF, 0xC4]);
+        out.extend_from_slice(&((2 + 17 + vals.len()) as u16).to_be_bytes());
+        out.push(*t);
+        out.extend_from_slice(counts);
+        out.extend_from_slice(vals);
+    }
     if let Some(r) = restart_rows {
         out.extend_from_slice(&[0xFF, 0xDD, 0, 4]);
         out.extend_from_slice(&((r * width) as u16).to_be_bytes());
@@ -178,8 +200,8 @@ pub fn lj92_encode(samples: &[u16], width: usize, height: usize, components: usi
     out.extend_from_slice(&[0xFF, 0xDA]);
     out.extend_from_slice(&((6 + 2 * components) as u16).to_be_bytes());
     out.push(components as u8);
-    for c in 0..components {
-        out.extend_from_slice(&[c as u8 + 1, 0x00]);
+    for (c, &t) in table_of.iter().enumerate() {
+        out.extend_from_slice(&[c as u8 + 1, t << 4]);
     }
     out.extend_from_slice(&[predictor, 0, 0]);
     let mut w = BitWriter { out, acc: 0, n: 0 };
@@ -191,7 +213,7 @@ pub fn lj92_encode(samples: &[u16], width: usize, height: usize, components: usi
             rst = (rst + 1) % 8;
         }
         let s = category(d);
-        let (c, l) = code_of[s as usize];
+        let (c, l) = code_of[usize::from(table_of[i % components])][s as usize];
         w.put(c, l);
         if (1..16).contains(&s) {
             let extra = if d < 0 { (d - 1) as u32 & ((1 << s) - 1) } else { d as u32 };
@@ -487,6 +509,8 @@ pub struct DngSpec {
     pub model: String,
     /// Extra IFD0 entries, written after the generated ones (e.g. malformed colour tags).
     pub ifd0_extra: Vec<(u16, Val)>,
+    /// Extra raw-IFD entries, written after the generated ones (e.g. SampleFormat).
+    pub raw_extra: Vec<(u16, Val)>,
 }
 
 impl DngSpec {
@@ -524,6 +548,7 @@ impl DngSpec {
             make: "Photocraft".into(),
             model: "Synthetic".into(),
             ifd0_extra: Vec::new(),
+            raw_extra: Vec::new(),
         }
     }
 
@@ -772,6 +797,7 @@ impl DngSpec {
         if let Some(l) = &self.linearization {
             raw.push((50712, Val::Short(l.clone())));
         }
+        raw.extend(self.raw_extra.iter().cloned());
         let raw_ifd = t.ifd(raw);
         // IFD0: a tiny RGB thumbnail plus the DNG metadata.
         let thumb = t.blob(vec![128; 3 * 4]);
@@ -844,6 +870,27 @@ pub fn gain_map_opcode_list(area: [u32; 4], pitch: u32, gains: [[f32; 2]; 2]) ->
         b.extend_from_slice(&v.to_be_bytes());
     }
     b.extend_from_slice(&p);
+    b
+}
+
+/// An opcode list of MapPolynomial opcodes (ID 8), one per `(plane, coefficients)`, each over
+/// `area` (top, left, bottom, right) at pitch 1.
+pub fn map_polynomial_opcode_list(area: [u32; 4], planes: &[(u32, Vec<f64>)]) -> Vec<u8> {
+    let mut b = (planes.len() as u32).to_be_bytes().to_vec();
+    for (plane, coefficients) in planes {
+        let mut p = Vec::new();
+        let degree = coefficients.len().saturating_sub(1) as u32;
+        for v in [area[0], area[1], area[2], area[3], *plane, 1, 1, 1, degree] {
+            p.extend_from_slice(&v.to_be_bytes());
+        }
+        for c in coefficients {
+            p.extend_from_slice(&c.to_be_bytes());
+        }
+        for v in [8u32, 0x0103_0000, 0, p.len() as u32] {
+            b.extend_from_slice(&v.to_be_bytes());
+        }
+        b.extend_from_slice(&p);
+    }
     b
 }
 

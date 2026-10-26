@@ -2778,16 +2778,31 @@ pub(crate) fn family_picker_in(
         let ql = q.to_lowercase();
         // The recent group stays as it was when the menu opened: each arrow step applies (and so
         // records) a family, and moving it to the top would send the next step back up.
+        let opening = ui.data(|d| d.get_temp::<Vec<String>>(recents_id).is_none());
         let open_recents: Vec<String> = ui.data_mut(|d| d.get_temp_mut_or_insert_with(recents_id, || recents.to_vec()).clone());
         let (rows, n_recent) = font_menu_rows(families, labels, &ql, &open_recents);
         // A recent family is listed twice. The current family's row is the one the last arrow
-        // selected while it still shows that family, else its alphabetical copy, so the arrows
-        // step through the alphabet as on the closed field.
+        // selected while it still shows that family, else its first copy: as in Photoshop, the
+        // one in the recent group when it has one (#9160), and the arrows walk on from there.
         let mut selected = ui
             .data(|d| d.get_temp::<usize>(row_id))
             .filter(|&i| rows.get(i).is_some_and(|(f, _)| *f == current))
-            .or_else(|| rows.iter().skip(n_recent).position(|(f, _)| *f == current).map(|i| i + n_recent))
             .or_else(|| rows.iter().position(|(f, _)| *f == current));
+        // The menu opens on the current family, as Photoshop's does: with the recent group at the
+        // top of the view when the marked row fits below it, else the marked row itself, at the
+        // top of the view when it is not a recent one. Applied on the first laid-out pass (the
+        // popup's first pass only measures), whether or not a row matches, so a missing font or
+        // a filtered list never scrolls the menu later.
+        let reveal_id = search_id.with("reveal");
+        if opening {
+            ui.data_mut(|d| d.insert_temp(reveal_id, true));
+        }
+        let revealing = ui.data(|d| d.get_temp::<bool>(reveal_id)).unwrap_or(false) && !ui.is_sizing_pass();
+        if revealing {
+            ui.data_mut(|d| d.remove::<bool>(reveal_id));
+        }
+        let reveal = if revealing { selected } else { None };
+        let reveal_from = reveal.map(|i| if i < n_recent { 0 } else { i });
         let mut stepped = None;
         if down || up {
             let next = match selected {
@@ -2818,6 +2833,8 @@ pub(crate) fn family_picker_in(
         // Wrap the font rows in a ScrollArea so only the list scrolls: the search field above
         // stays fixed at the top of the popup.
         let mut hovered: Option<String> = None;
+        let reveal = if stepped.is_some() { None } else { reveal };
+        let mut reveal_top: Option<egui::Rect> = None;
         egui::ScrollArea::vertical().show(ui, |ui| {
             for (i, (f, label)) in rows.into_iter().enumerate() {
                 if i == n_recent && n_recent > 0 {
@@ -2838,6 +2855,22 @@ pub(crate) fn family_picker_in(
                 let response = ui.add_sized([330.0, row_h], button);
                 if stepped == Some(i) {
                     response.scroll_to_me(Some(egui::Align::Center));
+                } else if reveal.is_some() {
+                    if reveal_from == Some(i) {
+                        reveal_top = Some(response.rect);
+                    }
+                    if reveal == Some(i) {
+                        // Jump, not glide: the menu opens with its current family in view. Arrow
+                        // steps above keep the animation. A recent row too far below the top of
+                        // the group (large previews, many recents) is brought up to the bottom.
+                        let top = reveal_top.unwrap_or(response.rect);
+                        let (rect, align) = if response.rect.bottom() - top.top() <= ui.clip_rect().height() {
+                            (top, egui::Align::Min)
+                        } else {
+                            (response.rect, egui::Align::Max)
+                        };
+                        ui.scroll_to_rect_animation(rect, Some(align), egui::style::ScrollAnimation::none());
+                    }
                 }
                 if let Some((size, _)) = preview
                     && ui.is_rect_visible(response.rect)
@@ -2878,6 +2911,7 @@ pub(crate) fn family_picker_in(
             d.remove::<bool>(focus_id);
             d.remove::<Vec<String>>(recents_id);
             d.remove::<usize>(row_id);
+            d.remove::<bool>(search_id.with("reveal"));
         });
     }
     let hovered_font = response.inner.unwrap_or_default();
@@ -2980,7 +3014,16 @@ pub(crate) fn target(app: &PhotocraftApp) -> Option<(u64, Option<[usize; 2]>)> {
 /// The type layer whose properties the Type controls and dialogs show (see [`target`]).
 pub(crate) fn target_text(app: &PhotocraftApp) -> Option<&TextLayer> {
     let (id, _) = target(app)?;
-    text_layer(&app.session.active()?.doc, LayerId(id))
+    text_layer(&target_doc(app)?.doc, LayerId(id))
+}
+
+/// The document [`target`]'s layer is in: a text edit's own, which can stay in a background
+/// document where the same layer id may name another layer, else the active one.
+fn target_doc(app: &PhotocraftApp) -> Option<&photocraft_engine::DocState> {
+    match &app.ui.text_edit {
+        Some(ed) => app.session.documents().get(edit_home(app, ed)?),
+        None => app.session.active(),
+    }
 }
 
 /// Snapshot the mutation scope separately from the representative used to display properties.
@@ -3280,10 +3323,23 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
     crate::widgets::vline(ui, 22.0);
     ui.spacing_mut().item_spacing.x = 2.0;
+    // Alignment and direction show the target paragraph's, as Photoshop's bar follows the text
+    // being edited or the selected type layer; the tool defaults otherwise. A justified paragraph
+    // lights none of the three.
+    let para = styles_at(app).map(|(_, p)| p);
+    let shown_align = match &para {
+        Some(p) => match p.align {
+            photocraft_doc::text::TextAlign::Left => "left",
+            photocraft_doc::text::TextAlign::Center => "center",
+            photocraft_doc::text::TextAlign::Right => "right",
+            _ => "",
+        },
+        None => o.type_align.as_str(),
+    };
     for (align, icon, tip) in
         [("left", "align-left", tl!("Left align text")), ("center", "align-center", tl!("Center text")), ("right", "align-right", tl!("Right align text"))]
     {
-        if crate::icons::button(ui, icon, 24.0, o.type_align == align, tip).clicked() {
+        if crate::icons::button(ui, icon, 24.0, shown_align == align, tip).clicked() {
             app.ui.tool_options.type_align = align.into();
             apply(app, ui.ctx(), json!({"align": align}));
         }
@@ -3292,7 +3348,8 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     crate::widgets::vline(ui, 22.0);
     ui.spacing_mut().item_spacing.x = 2.0;
     for (key, tip, d) in direction_items() {
-        if direction_button(ui, d, o.type_direction == key, tip).clicked() {
+        let on = para.as_ref().map_or(o.type_direction == key, |p| p.direction == d);
+        if direction_button(ui, d, on, tip).clicked() {
             app.ui.tool_options.type_direction = key.into();
             apply(app, ui.ctx(), json!({"direction": key}));
         }
@@ -3347,12 +3404,17 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 }
 
 /// Character and paragraph style at the target (selection start, else the layer's first run).
+/// The paragraph at a collapsed caret is the caret's, as Photoshop's options bar and Paragraph
+/// panel show it.
 pub(crate) fn styles_at(app: &PhotocraftApp) -> Option<(photocraft_doc::text::CharStyle, photocraft_doc::text::ParagraphStyle)> {
     let (layer, range) = target(app)?;
-    let st = app.session.active()?;
-    let t = text_layer(&st.doc, LayerId(layer))?;
+    let t = text_layer(&target_doc(app)?.doc, LayerId(layer))?;
     let at = range.map_or(0, |r| byte_of(&t.text, r[0]));
-    let pick = |lens: Vec<usize>| -> usize {
+    let para_at = match (range, &app.ui.text_edit) {
+        (None, Some(ed)) => byte_of(&t.text, ed.caret),
+        _ => at,
+    };
+    let pick_at = |at: usize, lens: Vec<usize>| -> usize {
         let mut acc = 0;
         for (i, len) in lens.iter().enumerate() {
             acc += len;
@@ -3364,8 +3426,8 @@ pub(crate) fn styles_at(app: &PhotocraftApp) -> Option<(photocraft_doc::text::Ch
     };
     let runs = t.char_runs();
     let paras = t.paragraph_runs();
-    let c = runs.get(pick(runs.iter().map(|r| r.len).collect())).map(|r| r.style.clone())?;
-    let p = paras.get(pick(paras.iter().map(|r| r.len).collect())).map(|r| r.style.clone()).unwrap_or_default();
+    let c = runs.get(pick_at(at, runs.iter().map(|r| r.len).collect())).map(|r| r.style.clone())?;
+    let p = paras.get(pick_at(para_at, paras.iter().map(|r| r.len).collect())).map(|r| r.style.clone()).unwrap_or_default();
     Some((c, p))
 }
 

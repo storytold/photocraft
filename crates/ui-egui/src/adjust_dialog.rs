@@ -307,10 +307,14 @@ pub(crate) fn remember(app: &mut PhotocraftApp, fields: &Map<String, Value>) {
 }
 
 /// The Curves dialog's single-channel target: the Channels panel's, plus the Layers panel's mask
-/// selection — both ways of selecting a mask must give the same dropdown (#5335).
+/// selection — both ways of selecting a mask must give the same dropdown (#5335). A targeted
+/// filter mask is a gray plane too (FILE-215-3).
 fn isolated(app: &PhotocraftApp) -> Option<photocraft_engine::channel_cmds::IsolatedCurveChannel> {
-    let mask = app.layer_mask_targeted();
-    app.session.active().and_then(|st| photocraft_engine::channel_cmds::isolated_curve_channel_for(st, mask))
+    let st = app.session.active()?;
+    if app.filter_mask_targeted() {
+        return photocraft_engine::channel_cmds::filter_mask_curve_channel(st);
+    }
+    photocraft_engine::channel_cmds::isolated_curve_channel_for(st, app.layer_mask_targeted())
 }
 
 /// The colour mode the Levels/Curves dialog seeds and parses in: a mask, saved channel or
@@ -1223,5 +1227,29 @@ mod tests {
     /// The Channel popup's selected value (its option labels are what it shows).
     fn popup_channels(h: &mut Harness<'static, PhotocraftApp>) -> Vec<String> {
         h.query_all_by_role(egui::accesskit::Role::ComboBox).filter_map(|n| n.value().map(|s| s.to_string())).collect()
+    }
+
+    /// FILE-215-3: Curves on a targeted filter mask edits a gray plane, and its histogram is the
+    /// filter mask's, not the smart object's colours.
+    #[test]
+    fn curves_on_a_targeted_filter_mask_is_a_gray_plane() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.run("edit.fill", json!({"contents": "color", "color": "#ff0000"})).unwrap();
+        app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        app.run("filter.blur.gaussianBlur", json!({"radius": 2})).unwrap();
+        let id = app.session.active().unwrap().active_layer.unwrap();
+        app.select_filter_mask_target(Some(id.0));
+        assert!(app.filter_mask_targeted());
+        let c = isolated(&app).expect("a gray target");
+        assert_eq!(c.gray, Some(photocraft_engine::channel_cmds::GraySurface::FilterMask));
+        // Its histogram counts the filter mask's levels: half black after a stroke.
+        app.run("paint.stroke", json!({"points": [[8, 0], [8, 31]], "size": 16, "hardness": 1, "color": "#000000", "target": "filterMask"})).unwrap();
+        let surface = photocraft_engine::channel_cmds::GraySurface::FilterMask;
+        let st = app.session.active().unwrap();
+        let h = tone::compute_histograms(&st.doc, HistSource::Channel { layer: id, surface }, photocraft_doc::adjust::ToneSpace::Rgb);
+        assert!(h.ch[0][0] > 0 && h.ch[0][255] > 0, "black and white levels");
+        assert_eq!(curve_mode(&app, "curves"), photocraft_doc::ColorMode::Grayscale);
     }
 }
