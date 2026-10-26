@@ -87,7 +87,7 @@ fn numeric_row(ui: &mut egui::Ui, id: &str, name: &str, current: f32, range: std
     ui.push_id(id, |ui| {
         ui.horizontal(|ui| {
             let label = row_label(ui, name);
-            let key = ui.id().with("draft");
+            let key = ui.scope_id().with("draft");
             let mut value = ui.data(|d| d.get_temp::<f32>(key)).unwrap_or(current);
             let response = widgets::value_field(ui, &mut value, range, suffix, ui.available_width().min(88.0)).labelled_by(label.id);
             if response.dragged() || response.has_focus() {
@@ -130,7 +130,7 @@ fn style_button(ui: &mut egui::Ui, style: GradientStyle, selected: bool, name: &
     }
     ui.painter().add(egui::Shape::mesh(mesh));
     ui.painter().rect_stroke(preview, 0.0, Stroke::new(1.0, t.text_dim), StrokeKind::Outside);
-    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, ui.is_enabled(), selected, tl!(name)));
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), selected, tl!(name)));
     response.on_hover_text(tl!(name))
 }
 
@@ -155,7 +155,7 @@ pub(super) fn stop_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, sink: Sink
                 let rgb = color.to_rgb();
                 ui.painter().rect_filled(rect.shrink(2.0), Tokens::get(ui.ctx()).radius_sm, c32([rgb[0], rgb[1], rgb[2], 1.0]));
                 ui.painter().rect_stroke(rect, Tokens::get(ui.ctx()).radius_sm, Stroke::new(1.0, Tokens::get(ui.ctx()).field_border), StrokeKind::Inside);
-                response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), tl!("Color")));
+                response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tl!("Color")));
                 if response.on_hover_text(tl!("Color")).clicked() {
                     match sink {
                         Sink::Layer(id) => edit_stop_color(app, id, i),
@@ -202,7 +202,7 @@ pub(super) fn stop_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, sink: Sink
         ui.add_space(72.0 + ui.spacing().item_spacing.x);
         ui.add_enabled_ui(count > 2, |ui| {
             let response = icons::button(ui, "trash", 24.0, false, "Delete");
-            response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), tl!("Delete")));
+            response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tl!("Delete")));
             if response.clicked() {
                 let _ = app.run(sink.cmd(), sink.params(json!({"action": "delete", "kind": kind, "index": index})));
                 ui.data_mut(|d| d.remove::<Marker>(key));

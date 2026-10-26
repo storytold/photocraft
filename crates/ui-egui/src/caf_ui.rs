@@ -307,6 +307,10 @@ pub struct CafWorkspace {
     pub error: Option<String>,
 }
 
+/// The preview's error when the sampling area has no pixels outside the fill area (the engine's
+/// fill refuses that case with the same words).
+const NOTHING_TO_SAMPLE: &str = "nothing to sample from: the sampling area has no pixels outside the fill area";
+
 /// The plan of the current state (without strokes when `strokes` is false).
 fn plan_params(w: &CafWorkspace, strokes: bool) -> Value {
     let o = &w.opts;
@@ -623,14 +627,23 @@ pub fn apply(app: &mut PhotocraftApp) -> Result<Value, String> {
     r
 }
 
-/// OK: fill and close.
+/// OK: fill and close. A fill that fails (nothing to sample from, a fill area too large, …)
+/// leaves the workspace open with the error in its panel, so the areas can be fixed and OK
+/// pressed again instead of the work being thrown away.
 pub fn commit(app: &mut PhotocraftApp) {
-    let ok = apply(app);
-    if let Err(e) = ok {
-        app.ui.status = e;
-        app.ui.status_error = true;
+    match apply(app) {
+        Ok(_) => close(app),
+        Err(e) => report(app, e),
     }
-    close(app);
+}
+
+/// An Apply or OK that failed: the error in the panel and the status bar.
+fn report(app: &mut PhotocraftApp, e: String) {
+    if let Some(w) = app.distort.caf.as_mut() {
+        w.error = Some(e.clone());
+    }
+    app.ui.status = e;
+    app.ui.status_error = true;
 }
 
 /// Cancel (button, Esc): closes; what was applied stays. The settings are kept.
@@ -678,6 +691,9 @@ fn undo(app: &mut PhotocraftApp) {
             w.redo.push(step);
             w.restate_all();
             w.stale();
+            // The sampling area changed, as with a new stroke: an error a failed OK or Apply left
+            // in the panel no longer applies (the other steps rebase, which clears it too).
+            w.error = None;
             false
         }
         Step::Fill(_) => {
@@ -710,6 +726,7 @@ fn redo(app: &mut PhotocraftApp) {
             w.undo.push(step);
             w.restate_all();
             w.stale();
+            w.error = None;
             false
         }
         Step::Fill(e) => {
@@ -895,10 +912,14 @@ pub fn control(app: &mut PhotocraftApp, ui: &Value) -> Result<Value, String> {
     if flag("waitPreview") {
         wait_preview(app)?;
     }
-    // OK last, with the settings given alongside.
+    // OK last, with the settings given alongside. A failed fill keeps the workspace open, as
+    // the OK button does.
     if flag("commit") {
         let r = apply(app);
-        close(app);
+        match &r {
+            Ok(_) => close(app),
+            Err(e) => report(app, e.clone()),
+        }
         return r.map(|v| json!({"committed": true, "result": v}));
     }
     Ok(app.distort.caf.as_ref().map(CafWorkspace::describe).unwrap_or(Value::Null))
@@ -932,6 +953,12 @@ fn compute_preview(
         photocraft_engine::EngineError::Cancelled => "cancelled".to_string(),
         e => e.to_string(),
     })?;
+    // Patches come only from the sampling area outside the fill area. With none (the Sampling
+    // Brush erased it all, a Custom area not painted yet) the fill would come out black, so the
+    // preview says so instead of showing that.
+    if !plan.source.iter().any(|s| *s) {
+        return Err(NOTHING_TO_SAMPLE.into());
+    }
     let (w, h) = (plan.rect.width() as usize, plan.rect.height() as usize);
     let n = plan.fmt.channels();
     let filled =
@@ -1216,7 +1243,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let mut reset_what: Option<&str> = None;
     let mut rebase_needed = false;
     let mut dragging = false;
-    egui::Area::new(egui::Id::new("caf-workspace")).order(egui::Order::Foreground).fixed_pos(screen.min).show(ctx, |ui| {
+    egui::Area::new(egui::Id::unique("caf-workspace")).order(egui::Order::Foreground).fixed_pos(screen.min).show(ctx, |ui| {
         let Some(w) = app.distort.caf.as_mut() else { return };
         let before = w.opts.clone();
         w.texture_limit = ctx.input(|i| i.max_texture_side);
@@ -1252,7 +1279,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 bui.add_space(8.0);
                 bui.label(tl!("Size:"));
                 let mut size = w.brush_size as f32;
-                if widgets::value_field(&mut bui, &mut size, 1.0..=5000.0, " px", 64.0).changed() {
+                if widgets::value_field(&mut bui, &mut size, 1.0..=5000.0, " px", 64.0).accessible_name(tl!("Size:")).changed() {
                     w.brush_size = f64::from(size);
                 }
             }
@@ -1276,7 +1303,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 if widgets::secondary_button(&mut bui, tl!("Contract"), 70.0).clicked() {
                     fill_btn = Some(json!({"op": "contract", "by": w.expand_by}));
                 }
-                widgets::value_field(&mut bui, &mut w.expand_by, 1.0..=100.0, " px", 56.0);
+                widgets::value_field(&mut bui, &mut w.expand_by, 1.0..=100.0, " px", 56.0).accessible_name(tl!("Expand"));
                 if crate::icons::button(&mut bui, "undo-2", 26.0, false, tl!("Reset")).clicked() {
                     reset_what = Some("lasso");
                 }
@@ -1311,7 +1338,14 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     widgets::color_edit_button_srgb(ui, &mut w.opts.color);
                     ui.add_space(8.0);
                     ui.label(tl!("Indicates"));
-                    widgets::dropdown(ui, "caf-indicates", &mut w.opts.excluded, &[(false, tl!("Sampling Area")), (true, tl!("Excluded Area"))], 120.0);
+                    widgets::dropdown(
+                        ui,
+                        "caf-indicates",
+                        tl!("Indicates"),
+                        &mut w.opts.excluded,
+                        &[(false, tl!("Sampling Area")), (true, tl!("Excluded Area"))],
+                        120.0,
+                    );
                 });
             });
             widgets::hairline(ui);
@@ -1350,7 +1384,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     ("high".to_string(), tl!("High")),
                     ("veryHigh".to_string(), tl!("Very High")),
                 ];
-                widgets::dropdown(ui, "caf-color", &mut w.opts.color_adaptation, &o, 110.0);
+                widgets::dropdown(ui, "caf-color", tl!("Color Adaptation"), &mut w.opts.color_adaptation, &o, 110.0);
             });
             ui.horizontal(|ui| {
                 ui.label(tl!("Rotation Adaptation"));
@@ -1361,7 +1395,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     ("high".to_string(), tl!("High")),
                     ("full".to_string(), tl!("Full")),
                 ];
-                widgets::dropdown(ui, "caf-rotation", &mut w.opts.rotation, &o, 110.0);
+                widgets::dropdown(ui, "caf-rotation", tl!("Rotation Adaptation"), &mut w.opts.rotation, &o, 110.0);
             });
             ui.horizontal(|ui| {
                 widgets::checkbox(ui, &mut w.opts.scale, tl!("Scale"));
@@ -1373,7 +1407,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 ui.label(tl!("Output To"));
                 let o =
                     [("current".to_string(), tl!("Current Layer")), ("new".to_string(), tl!("New Layer")), ("duplicate".to_string(), tl!("Duplicate Layer"))];
-                widgets::dropdown(ui, "caf-output", &mut w.opts.output, &o, 140.0);
+                widgets::dropdown(ui, "caf-output", tl!("Output To"), &mut w.opts.output, &o, 140.0);
             });
             if let Some(e) = w.error.as_ref().or(w.preview.error.as_ref()) {
                 ui.label(egui::RichText::new(e.as_str()).color(t.danger).size(11.0));
@@ -1426,7 +1460,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             let sp = ERect::from_min_size(pv_area.right_bottom() - vec2(26.0, 26.0), vec2(18.0, 18.0));
             ui.put(sp, egui::Spinner::new().size(16.0));
         }
-        let presp = ui.interact(pv_area, egui::Id::new("caf-preview-view"), Sense::click_and_drag());
+        let presp = ui.interact(pv_area, egui::Id::unique("caf-preview-view"), Sense::click_and_drag());
         if presp.dragged() {
             let d = presp.drag_delta();
             w.preview.center = [w.preview.center[0] - f64::from(d.x / pv.zoom), w.preview.center[1] - f64::from(d.y / pv.zoom)];
@@ -1440,11 +1474,11 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         let zrow = ERect::from_min_size(pos2(pv_rect.left() + 10.0, pv_rect.bottom() - 38.0), vec2(PREVIEW_W - 20.0, 30.0));
         let mut zr = ui.new_child(egui::UiBuilder::new().max_rect(zrow).layout(egui::Layout::left_to_right(egui::Align::Center)));
         let mut pct = (w.preview.zoom * 100.0).round();
-        if widgets::value_field(&mut zr, &mut pct, 1.0..=3200.0, "%", 64.0).changed() {
+        if widgets::value_field(&mut zr, &mut pct, 1.0..=3200.0, "%", 64.0).accessible_name(tl!("Zoom")).changed() {
             w.preview.zoom = pct / 100.0;
         }
         let mut lz = pct.max(1.0).ln();
-        if zr.add(egui::Slider::new(&mut lz, 0.0..=3200f32.ln()).show_value(false)).changed() {
+        if zr.add(egui::Slider::new(&mut lz, 0.0..=3200f32.ln()).show_value(false)).accessible_name(tl!("Zoom")).changed() {
             w.preview.zoom = lz.exp() / 100.0;
         }
         // The document view.
@@ -1454,7 +1488,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         if w.zoom <= 0.0 {
             w.zoom = ((area.width() - 40.0) / cw).min((area.height() - 40.0) / chh).clamp(0.01, 4.0);
         }
-        let resp = ui.interact(area, egui::Id::new("caf-view"), Sense::click_and_drag());
+        let resp = ui.interact(area, egui::Id::unique("caf-view"), Sense::click_and_drag());
         if resp.hovered() {
             let scroll = ui.input(|i| i.smooth_scroll_delta.y);
             if scroll != 0.0
@@ -1566,8 +1600,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         Some("cancel") => cancel(app),
         Some("apply") => {
             if let Err(e) = apply(app) {
-                app.ui.status = e;
-                app.ui.status_error = true;
+                report(app, e);
             }
         }
         _ => {}
@@ -1676,6 +1709,65 @@ mod tests {
         // The reset button goes back to the selection.
         let d = control(&mut app, &json!({"reset": "lasso"})).unwrap();
         assert_eq!(d["fillArea"], json!(400));
+    }
+
+    /// A sampling area the Sampling Brush erased entirely previews as an error naming the
+    /// problem, not as the black fill it would make; undoing the stroke brings the preview back.
+    #[test]
+    fn an_erased_sampling_area_previews_as_an_error() {
+        let mut app = app_with_selection();
+        open(&mut app).unwrap();
+        control(&mut app, &json!({"sampling": "rectangular", "waitPreview": true})).unwrap();
+        assert!(ws(&app).describe()["previewError"].is_null());
+        // Subtracting (the default) with a brush wider than the 200 × 160 window.
+        let e = control(&mut app, &json!({"stroke": {"points": [[100.0, 80.0]], "size": 600}, "waitPreview": true})).unwrap_err();
+        assert!(e.contains("nothing to sample from"), "{e}");
+        let d = ws(&app).describe();
+        assert_eq!(d["sampledProxyPixels"].as_u64(), Some(0), "{d}");
+        assert!(d["previewError"].as_str().is_some_and(|e| e.contains("nothing to sample from")), "{d}");
+        let d = control(&mut app, &json!({"undo": true, "waitPreview": true})).unwrap();
+        assert!(d["previewError"].is_null(), "{d}");
+    }
+
+    /// OK whose fill fails keeps the workspace open with the error in its panel, from the button
+    /// and from the control channel, so the work isn't thrown away; once the fill can run, OK
+    /// fills and closes.
+    #[test]
+    fn a_failed_ok_keeps_the_workspace_open() {
+        let mut app = app_with_selection();
+        open(&mut app).unwrap();
+        let steps = app.session.active().unwrap().history.past_len();
+        app.session.execute("layer.setProps", json!({"locks": {"pixels": true}})).unwrap();
+        commit(&mut app);
+        assert!(app.distort.caf.is_some(), "OK keeps the workspace open when the fill fails");
+        assert!(ws(&app).error.as_deref().is_some_and(|e| e.contains("locked")), "{:?}", ws(&app).error);
+        assert!(app.ui.status_error);
+        assert!(control(&mut app, &json!({"commit": true})).unwrap_err().contains("locked"));
+        assert!(app.distort.caf.is_some(), "the control channel's OK too");
+        app.session.execute("layer.setProps", json!({"locks": {"pixels": false}})).unwrap();
+        let steps = app.session.active().unwrap().history.past_len().max(steps);
+        commit(&mut app);
+        assert!(app.distort.caf.is_none(), "OK closes once the fill runs");
+        assert!(app.session.active().unwrap().history.past_len() > steps, "and fills");
+    }
+
+    /// Undo or Redo of a sampling stroke changes what OK would fill, so it clears the error a
+    /// failed OK left in the panel, as a new stroke does; otherwise the stale error would stay
+    /// drawn over the recovered preview.
+    #[test]
+    fn undo_and_redo_of_a_stroke_clear_a_failed_oks_error() {
+        let mut app = app_with_selection();
+        open(&mut app).unwrap();
+        control(&mut app, &json!({"stroke": {"points": [[20.0, 20.0], [60.0, 20.0]], "size": 10}})).unwrap();
+        app.session.execute("layer.setProps", json!({"locks": {"pixels": true}})).unwrap();
+        commit(&mut app);
+        assert!(ws(&app).error.is_some(), "the failed OK reports in the panel");
+        control(&mut app, &json!({"undo": true})).unwrap();
+        assert!(ws(&app).error.is_none(), "Undo of the stroke clears it");
+        commit(&mut app);
+        assert!(ws(&app).error.is_some());
+        control(&mut app, &json!({"redo": true})).unwrap();
+        assert!(ws(&app).error.is_none(), "Redo of the stroke clears it too");
     }
 
     #[test]

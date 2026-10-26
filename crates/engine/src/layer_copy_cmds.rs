@@ -11,7 +11,7 @@
 use std::collections::{HashMap, HashSet};
 
 use photocraft_color::ColorMode;
-use photocraft_doc::{Document, LayerContent, LayerId, SmartContentsId};
+use photocraft_doc::{Document, Layer, LayerContent, LayerId, SmartContentsId};
 use photocraft_geom::Rect;
 use serde_json::{Value, json};
 
@@ -57,6 +57,17 @@ pub(crate) fn layered(mode: ColorMode) -> bool {
 
 fn center(r: Rect) -> [f64; 2] {
     [(f64::from(r.x0) + f64::from(r.x1)) / 2.0, (f64::from(r.y0) + f64::from(r.y1)) / 2.0]
+}
+
+/// Restore missing shape caches, or refresh every shape for a changed canvas, including groups.
+fn prepare_shapes(layers: &mut [Layer], doc: &Document, new_canvas: bool) {
+    for layer in layers {
+        match &mut layer.content {
+            LayerContent::Shape(shape) if new_canvas || shape.cache.is_none() => crate::vector_cmds::refresh_shape(doc, shape),
+            LayerContent::Group(group) => prepare_shapes(&mut group.children, doc, new_canvas),
+            _ => {}
+        }
+    }
 }
 
 /// Readies `copies` (a scratch document of the source's colour holding duplicated layers) for
@@ -107,13 +118,20 @@ pub(crate) fn adapt_copies(s: &Session, copies: &mut Document, dest: &Document) 
             *surf = surf.convert(f);
         });
     }
+    let new_canvas = copies.bounds() != dest.bounds();
+    prepare_shapes(&mut copies.layers, dest, new_canvas);
     Ok(())
 }
 
 /// Moves every layer of `copies` by whole pixels (content, masks, vectors and smart placement).
-pub(crate) fn translate_copies(copies: &mut Document, dx: i32, dy: i32) {
+pub(crate) fn translate_copies(copies: &mut Document, destination: &Document, dx: i32, dy: i32) {
     if dx != 0 || dy != 0 {
-        let snapshot = copies.clone();
+        let mut snapshot = copies.clone();
+        // Vector caches are clipped and quantized for the destination, not the clipboard's source.
+        snapshot.size = destination.size;
+        snapshot.mode = destination.mode;
+        snapshot.depth = destination.depth;
+        snapshot.icc_profile = destination.icc_profile.clone();
         for l in &mut copies.layers {
             crate::commands::translate_layer(&snapshot, l, dx, dy);
             crate::vector_cmds::translate_vectors(&snapshot, l, f64::from(dx), f64::from(dy));
@@ -172,11 +190,14 @@ fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
     if let (Some(name), [l]) = (p.get("name").and_then(Value::as_str).filter(|n| !n.is_empty()), copies.layers.as_mut_slice()) {
         l.name = name.to_string();
     }
+    // Measure in source space: destination refresh may clip a shape before it is moved.
+    // Missing caches must participate too, including shapes nested inside groups.
+    prepare_shapes(&mut copies.layers, &sdoc, false);
+    let bounds = copies.layers.iter().filter_map(crate::layer_multi_cmds::layer_bounds).fold(Rect::EMPTY, |a, b| a.union(&b));
+    let content = if bounds.is_empty() { sdoc.bounds() } else { bounds };
     adapt_copies(s, &mut copies, &ddoc)?;
     // Placement: centred on the destination's canvas, centred on a point, or offset from where
     // the layers are in the source (default: the same canvas position).
-    let bounds = copies.layers.iter().filter_map(crate::layer_multi_cmds::layer_bounds).fold(Rect::EMPTY, |a, b| a.union(&b));
-    let content = if bounds.is_empty() { sdoc.bounds() } else { bounds };
     let (dx, dy) = if p.get("center").and_then(Value::as_bool).unwrap_or(false) {
         let (c, d) = (center(content), center(ddoc.bounds()));
         (d[0] - c[0], d[1] - c[1])
@@ -187,7 +208,7 @@ fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
         point(p, "offset")?.map_or((0.0, 0.0), |o| (o[0], o[1]))
     };
     let (dx, dy) = (dx.round() as i32, dy.round() as i32);
-    translate_copies(&mut copies, dx, dy);
+    translate_copies(&mut copies, &ddoc, dx, dy);
     let patterns: Vec<_> = sdoc.patterns.iter().filter(|pat| !ddoc.patterns.iter().any(|d| d.id == pat.id)).cloned().collect();
     s.set_active(dest);
     let label = if ids.len() == 1 { "Duplicate Layer" } else { "Duplicate Layers" };
@@ -201,6 +222,8 @@ fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
             new.push(id);
         }
         *active = above;
+        // Copied groups keep their own depth: repeated copies would otherwise nest without end.
+        crate::layer_multi_cmds::check_group_depth(doc, "Copy Layers")?;
         Ok(new)
     });
     // Nothing changed: the source stays the active document.

@@ -9,10 +9,10 @@
 //! what the Free Transform warp UI uses) or the active smart object's stored warp (a history step).
 
 use photocraft_algo::transform::{Homography, Interp};
-use photocraft_algo::warp::{warp_mesh_gray, warp_mesh_surface};
+use photocraft_algo::warp::{warp_mesh_gray, warp_mesh_surface_with};
 use photocraft_doc::{Document, Layer, LayerContent, LayerId, Locks, Rect};
 use photocraft_geom::warp::{BezierMesh, Warp, WarpStyle};
-use photocraft_raster::Surface;
+use photocraft_raster::{Interrupt, Surface};
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
@@ -71,10 +71,17 @@ pub fn smart_warp_doc_space(layer: &Layer) -> Option<Warp> {
 }
 
 /// Parses the warp params: a full `"warp"` object, or `"style"` (+ `"bend"`, `"hDistort"`,
-/// `"vDistort"`, `"vertical"`), `"mesh"` and `"grid"` over `rect`.
+/// `"vDistort"`, `"vertical"`; `"values"` for a cylinder), `"mesh"` and `"grid"` over `rect`.
 pub fn warp_from_params(cmd: &str, p: &Value, rect: [f64; 4]) -> Result<Warp> {
     if let Some(w) = p.get("warp") {
-        let w: Warp = serde_json::from_value(w.clone()).map_err(|e| bad(cmd, format!("bad `warp`: {e}")))?;
+        let mut w: Warp = serde_json::from_value(w.clone()).map_err(|e| bad(cmd, format!("bad `warp`: {e}")))?;
+        // A cylinder is its values: the mesh is rebuilt from them, whatever was passed.
+        if w.style == WarpStyle::Cylinder {
+            if w.vertical || w.h_distort != 0.0 || w.v_distort != 0.0 {
+                return Err(bad(cmd, CYLINDER_SHAPE));
+            }
+            w = Warp::cylinder(&w.values, w.bounds).ok_or_else(|| bad(cmd, CYLINDER_VALUES))?;
+        }
         if w.mesh.as_ref().is_some_and(|m| !m.is_valid()) {
             return Err(bad(cmd, "malformed warp mesh"));
         }
@@ -90,6 +97,13 @@ pub fn warp_from_params(cmd: &str, p: &Value, rect: [f64; 4]) -> Result<Warp> {
     w.h_distort = num("hDistort", 0.0);
     w.v_distort = num("vDistort", 0.0);
     w.vertical = p.get("vertical").and_then(Value::as_bool).unwrap_or(false);
+    if style == WarpStyle::Cylinder {
+        if w.vertical || w.h_distort != 0.0 || w.v_distort != 0.0 {
+            return Err(bad(cmd, CYLINDER_SHAPE));
+        }
+        let values: Option<Vec<f64>> = p.get("values").and_then(Value::as_array).and_then(|a| a.iter().map(Value::as_f64).collect());
+        return values.and_then(|v| Warp::cylinder(&v, rect)).ok_or_else(|| bad(cmd, CYLINDER_VALUES));
+    }
     if style == WarpStyle::Custom {
         let mesh = match p.get("mesh") {
             Some(m) => {
@@ -110,9 +124,67 @@ pub fn warp_from_params(cmd: &str, p: &Value, rect: [f64; 4]) -> Result<Warp> {
     Ok(w)
 }
 
+const CYLINDER_VALUES: &str =
+    "a cylinder needs `values`: seven numbers [left, bottom, right, top, top depth, bottom depth, wrap 0..1], the right silhouette right of the left one";
+const CYLINDER_SHAPE: &str = "a cylinder is horizontal, with no hDistort or vDistort";
+
+/// A document-space cylinder `w` stored on a smart object, whose placement's inverse is `inv` and
+/// whose warp box `w.bounds` lands on `sb` in source space. A placement that only scales and
+/// moves keeps it a cylinder (written to PSD as one): the silhouettes and edges map, and the
+/// ellipses' depth, in units of the half axis, follows the change of aspect. Otherwise (rotated,
+/// skewed, flipped, in perspective) it becomes its mesh, a custom warp.
+fn cylinder_in_source(w: &Warp, inv: &Homography, sb: [f64; 4]) -> Option<Warp> {
+    let m = inv.0;
+    let axis_aligned = m[8] != 0.0 && m[1] == 0.0 && m[3] == 0.0 && m[6] == 0.0 && m[7] == 0.0;
+    let (sx, sy) = (m[0] / m[8], m[4] / m[8]);
+    if axis_aligned && sx > 0.0 && sy > 0.0 && w.values.len() == 7 {
+        let v = &w.values;
+        let (x, y) = (|v: f64| sx * v + m[2] / m[8], |v: f64| sy * v + m[5] / m[8]);
+        let k = sy / sx;
+        if let Some(c) = Warp::cylinder(&[x(v[0]), y(v[1]), x(v[2]), y(v[3]), v[4] * k, v[5] * k, v[6]], sb) {
+            return Some(c);
+        }
+    }
+    let mesh = w.to_mesh(1, 1).map_points(|p| hom_apply(inv, p));
+    Some(Warp::custom(mesh, sb))
+}
+
+/// Whether the custom warp `w` is exactly what Warp mode shows for `layer`'s stored cylinder
+/// ([`smart_warp_doc_space`]: its mesh over the same box), so committing it untouched changes
+/// nothing. Stored as a custom warp instead, the cylinder would be lost, as a PSD keeps it only
+/// as `warpCylinder` (#4112).
+fn is_stored_cylinder(layer: &Layer, w: &Warp) -> bool {
+    let LayerContent::Smart(sm) = &layer.content else { return false };
+    if w.style != WarpStyle::Custom || sm.warp.as_ref().is_none_or(|s| s.style != WarpStyle::Cylinder) {
+        return false;
+    }
+    let (Some(shown), Some(m)) = (smart_warp_doc_space(layer), w.mesh.as_ref()) else { return false };
+    let Some(o) = shown.mesh.as_ref() else { return false };
+    let tol = 1e-6 * (1.0 + o.points.iter().flatten().chain(&shown.bounds).fold(0.0f64, |a, v| a.max(v.abs())));
+    let near = |a: &[f64], b: &[f64]| a.len() == b.len() && a.iter().zip(b).all(|(x, y)| (x - y).abs() <= tol);
+    o.us == m.us && o.vs == m.vs && near(&shown.bounds, &w.bounds) && near(o.points.as_flattened(), m.points.as_flattened())
+}
+
 /// A Background is turned into a normal layer by the caller first
 /// ([`crate::extra_cmds::background_to_layer`]).
-fn warp_layer(doc_sel: Option<&Surface>, group: Locks, l: &mut Layer, w: &Warp, rect: Rect, interp: Interp, frames: Option<&Frames>) -> Result<()> {
+/// `Err(Cancelled)` once `ctl` is cancelled: between the steps of a warp that don't check it.
+fn cancelled(ctl: &Interrupt) -> Result<()> {
+    if ctl.cancelled() { Err(EngineError::Cancelled) } else { Ok(()) }
+}
+
+/// `ctl` reports progress and cancels (`Err(Cancelled)`, the layer left half-done for the caller
+/// to discard).
+#[allow(clippy::too_many_arguments)]
+fn warp_layer(
+    doc_sel: Option<&Surface>,
+    group: Locks,
+    l: &mut Layer,
+    w: &Warp,
+    rect: Rect,
+    interp: Interp,
+    frames: Option<&Frames>,
+    ctl: &Interrupt,
+) -> Result<()> {
     let locks = l.locks.union(group);
     if locks.position || locks.all {
         return Err(EngineError::Other(format!("layer \"{}\" is locked", l.name)));
@@ -127,7 +199,7 @@ fn warp_layer(doc_sel: Option<&Surface>, group: Locks, l: &mut Layer, w: &Warp, 
     match &mut l.content {
         LayerContent::Group(g) => {
             for c in g.children.iter_mut() {
-                warp_layer(None, locks, c, w, rect, interp, frames)?;
+                warp_layer(None, locks, c, w, rect, interp, frames, ctl)?;
             }
         }
         LayerContent::Text(_) => return Err(EngineError::Other("Warp needs rasterized type (or use Type › Warp Text)".into())),
@@ -149,12 +221,13 @@ fn warp_layer(doc_sel: Option<&Surface>, group: Locks, l: &mut Layer, w: &Warp, 
                         None => Some(Warp::custom(mesh, sb)),
                     }
                 }
+                WarpStyle::Cylinder => cylinder_in_source(w, &inv, sb),
                 _ => Some(Warp { bounds: sb, mesh: None, ..w.clone() }),
             };
             sm.warp = src_warp.filter(|w| !w.is_identity());
             // Fallback appearance for sources that can't be re-rendered.
             if let Some(c) = &mut sm.cache {
-                *c = warp_mesh_surface(c, rect, &map, interp);
+                *c = warp_mesh_surface_with(c, rect, &map, interp, ctl).ok_or(EngineError::Cancelled)?;
             }
             if let Some(m) = &mut sm.filter_mask {
                 m.surface = warp_mesh_gray(&m.surface, &map, interp);
@@ -165,7 +238,8 @@ fn warp_layer(doc_sel: Option<&Surface>, group: Locks, l: &mut Layer, w: &Warp, 
                 *surf = match doc_sel {
                     Some(sel) => {
                         let (lifted, mut rest) = crate::transform_cmds::split_selected(surf, sel)?;
-                        let moved = warp_mesh_surface(&lifted, rect, &map, interp);
+                        let moved = warp_mesh_surface_with(&lifted, rect, &map, interp, ctl).ok_or(EngineError::Cancelled)?;
+                        cancelled(ctl)?;
                         crate::transform_cmds::composite_over(&mut rest, &moved);
                         rest.prune();
                         rest
@@ -173,12 +247,20 @@ fn warp_layer(doc_sel: Option<&Surface>, group: Locks, l: &mut Layer, w: &Warp, 
                     None => {
                         // Content outside the warp box stays where it is.
                         let fmt = surf.format();
-                        let warped = warp_mesh_surface(surf, rect, &map, interp);
-                        let mut rest = surf.convert(photocraft_color::PixelFormat::new(fmt.mode, fmt.sample, true));
+                        let warped = warp_mesh_surface_with(surf, rect, &map, interp, ctl).ok_or(EngineError::Cancelled)?;
+                        cancelled(ctl)?;
+                        // Tiles are shared, so a surface that has alpha already costs nothing to copy.
+                        let mut rest = if fmt.alpha { surf.clone() } else { surf.convert(photocraft_color::PixelFormat::new(fmt.mode, fmt.sample, true)) };
                         crate::pixels::try_clear_surface(&mut rest, rect, None)?;
-                        crate::transform_cmds::composite_over(&mut rest, &warped);
-                        rest.prune();
-                        rest
+                        if rest.content_bounds().is_empty() {
+                            // The box held all of the layer: the warp is the whole result.
+                            warped
+                        } else {
+                            cancelled(ctl)?;
+                            crate::transform_cmds::composite_over(&mut rest, &warped);
+                            rest.prune();
+                            rest
+                        }
                     }
                 };
             }
@@ -189,7 +271,12 @@ fn warp_layer(doc_sel: Option<&Surface>, group: Locks, l: &mut Layer, w: &Warp, 
     {
         let whole = |m: &Surface| Ok(warp_mesh_gray(m, &map, interp));
         m.surface = match mask_sel {
-            Some(sel) => crate::transform_cmds::move_gray_selected(&m.surface, sel, &|lifted, src| Ok(warp_mesh_surface(lifted, src, &map, interp)), &whole)?,
+            Some(sel) => crate::transform_cmds::move_gray_selected(
+                &m.surface,
+                sel,
+                &|lifted, src| warp_mesh_surface_with(lifted, src, &map, interp, ctl).ok_or(EngineError::Cancelled),
+                &whole,
+            )?,
             None => whole(&m.surface)?,
         };
     }
@@ -305,6 +392,7 @@ fn type_warp(cmd: &str, w: &Warp) -> Result<Option<photocraft_doc::text::TextWar
         WarpStyle::None => Ok(None),
         WarpStyle::Custom if w.is_identity() => Ok(None),
         WarpStyle::Custom => Err(bad(cmd, "type can only take a warp style (arc, flag, …); a custom mesh needs rasterized type")),
+        WarpStyle::Cylinder => Err(bad(cmd, "type can only take a warp style (arc, flag, …); a cylinder needs rasterized type")),
         s => Ok(Some(photocraft_doc::text::TextWarp {
             style: s.psd_name().into(),
             value: clamp(w.bend),
@@ -324,7 +412,7 @@ fn warp_type_layer(s: &mut Session, cmd: &str, id: LayerId, w: &Warp) -> Result<
     }
     s.edit("Warp", |doc, _| {
         let group = crate::transform_cmds::group_locks(doc, id);
-        let snapshot = doc.clone();
+        let (dpi, format) = (doc.resolution_dpi, doc.pixel_format());
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
         let locks = l.locks.union(group);
         if locks.position || locks.all {
@@ -332,7 +420,7 @@ fn warp_type_layer(s: &mut Session, cmd: &str, id: LayerId, w: &Warp) -> Result<
         }
         let LayerContent::Text(t) = &mut l.content else { return Err(EngineError::Other("not a type layer".into())) };
         t.warp = tw.clone();
-        crate::type_cmds::refresh(&snapshot, t);
+        crate::type_cmds::refresh_at(dpi, format, t);
         Ok(())
     })?;
     Ok(json!({"layer": id.0, "changed": true, "warp": tw}))
@@ -348,32 +436,45 @@ fn apply(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
     if w.is_identity() && !is_smart {
         return Ok(json!({"layer": id.0, "changed": false}));
     }
+    // An untouched cylinder (Warp mode, then Enter) stays as it is, with no history step.
+    if p.get("mesh").is_none() && s.active().and_then(|d| d.doc.layer(id)).is_some_and(|l| is_stored_cylinder(l, &w)) {
+        return Ok(json!({"layer": id.0, "changed": false}));
+    }
     let interp = Interp::parse(p.get("interpolation").and_then(Value::as_str).unwrap_or("bicubic"));
     let content_knots = p.get("mesh").is_some() && p.get("warp").is_none();
-    s.edit("Warp", |doc, _| {
-        let sel = doc.selection.clone();
-        let frames = content_knots.then(|| {
-            let mut f = Frames::new();
-            if let Some(l) = doc.layer(id) {
-                source_frames(doc, l, &mut f);
-            }
-            f
-        });
-        let is_group = doc.layer(id).is_some_and(Layer::is_group);
-        let group = crate::transform_cmds::group_locks(doc, id);
-        crate::extra_cmds::background_to_layer(doc, id);
-        let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
-        warp_layer(if is_group { None } else { sel.as_ref() }, group, l, &w, rect, interp, frames.as_ref())?;
-        let snapshot = doc.clone();
-        if let Some(l) = doc.layer_mut(id) {
-            crate::transform_cmds::refresh_text(&snapshot, l);
+    // A background job when started with `Session::start` (as Free Transform, #4218): the warp of
+    // a large layer runs on a worker with progress, and can be cancelled.
+    crate::jobs::edit_job(
+        s,
+        "Warp",
+        move |doc, _, ctx| ctx.stage(0.0, 1.0, "Warping", |ctl| warp_doc(doc, id, &w, rect, interp, content_knots, ctl)),
+        move |()| json!({"layer": id.0, "changed": true, "rect": [rect.x0, rect.y0, rect.x1, rect.y1]}),
+    )
+}
+
+/// The edit of [`apply`]: the layer and the selection outline.
+fn warp_doc(doc: &mut Document, id: LayerId, w: &Warp, rect: Rect, interp: Interp, content_knots: bool, ctl: &Interrupt) -> Result<()> {
+    let sel = doc.selection.clone();
+    let frames = content_knots.then(|| {
+        let mut f = Frames::new();
+        if let Some(l) = doc.layer(id) {
+            source_frames(doc, l, &mut f);
         }
-        if let Some(sel) = &doc.selection {
-            doc.selection = Some(warp_mesh_gray(sel, &|x, y| w.map(x, y), Interp::Bilinear)).filter(|s| !s.content_bounds().is_empty());
-        }
-        Ok(())
-    })?;
-    Ok(json!({"layer": id.0, "changed": true, "rect": [rect.x0, rect.y0, rect.x1, rect.y1]}))
+        f
+    });
+    let is_group = doc.layer(id).is_some_and(Layer::is_group);
+    let group = crate::transform_cmds::group_locks(doc, id);
+    crate::extra_cmds::background_to_layer(doc, id);
+    let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
+    warp_layer(if is_group { None } else { sel.as_ref() }, group, l, w, rect, interp, frames.as_ref(), ctl)?;
+    let snapshot = doc.clone();
+    if let Some(l) = doc.layer_mut(id) {
+        crate::transform_cmds::refresh_text(&snapshot, l);
+    }
+    if let Some(sel) = &doc.selection {
+        doc.selection = Some(warp_mesh_gray(sel, &|x, y| w.map(x, y), Interp::Bilinear)).filter(|s| !s.content_bounds().is_empty());
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy)]
@@ -549,7 +650,7 @@ fn grid(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 pub fn specs() -> Vec<CommandSpec> {
-    const P: &str = r##"{"layer":id?,"rect":[x0,y0,x1,y1]? (warp box; default = layer content ∩ selection),"style":"custom|none|arc|arcLower|arcUpper|arch|bulge|shellLower|shellUpper|flag|wave|fish|rise|fisheye|inflate|squeeze|twist","bend":%=50,"hDistort":%,"vDistort":%,"vertical":bool,"mesh":{"us":[0,…,1],"vs":[0,…,1],"points":[[x,y]…]} ((3c+1)×(3r+1) control points, row-major, document px; on a smart object `us`/`vs` span the source contents, so points equal to the placement are an identity warp even when it is skewed),"grid":[cols,rows]?,"warp":{full warp object}?,"interpolation":"bicubic|bilinear|nearest"} — on a type layer a style (or none) sets its Warp Text and the type stays editable"##;
+    const P: &str = r##"{"layer":id?,"rect":[x0,y0,x1,y1]? (warp box; default = layer content ∩ selection),"style":"custom|none|arc|arcLower|arcUpper|arch|bulge|shellLower|shellUpper|flag|wave|fish|rise|fisheye|inflate|squeeze|twist|cylinder","bend":%=50,"hDistort":%,"vDistort":%,"vertical":bool,"values":[left,bottom,right,top,topDepth,bottomDepth,wrap]? (cylinder: silhouettes and edges in document px, the ellipses' depths in half-axis units, wrap 0..1; horizontal only),"mesh":{"us":[0,…,1],"vs":[0,…,1],"points":[[x,y]…]} ((3c+1)×(3r+1) control points, row-major, document px; on a smart object `us`/`vs` span the source contents, so points equal to the placement are an identity warp even when it is skewed),"grid":[cols,rows]?,"warp":{full warp object}?,"interpolation":"bicubic|bilinear|nearest"} — on a type layer a style (or none) sets its Warp Text and the type stays editable"##;
     const S: &str = r##"{"warp":{…}? (the warp being edited; returned split),"rect":[x0,y0,x1,y1]?,"at":[x,y]? (document point; default = middle of the patch)} — without `warp`, edits the active smart object's warp. A 1×1 custom mesh is divided at the thirds first (the guides drawn on the default grid), so splitWarpCrosswise on an identity custom warp returns a 4×4 mesh (knots at 0, 1/3, 1/2, 2/3 and 1), not a 2×2. A preset is fitted as one patch and split without that step."##;
     const G: &str = r##"{"warp":{…}? (the warp being edited; returned with the new mesh),"rect":[x0,y0,x1,y1]?,"size":n|"default"|"3"|"4"|"5" (square patches, 1..=64; 1 and "default" are the single-patch grid)} — without `warp`/`style`/`mesh`, edits the active smart object's warp. The surface is kept and the new lines are real splits at i/n."##;
     vec![
@@ -630,6 +731,36 @@ pub fn specs() -> Vec<CommandSpec> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_warp_box_holding_the_whole_layer_gives_what_compositing_over_the_cleared_layer_did() {
+        for depth in [8, 16, 32] {
+            let s = session(depth);
+            let st = s.active().unwrap();
+            let l = st.doc.layer(st.active_layer.unwrap()).unwrap().clone();
+            let surf = l.surface().unwrap().clone();
+            let rect = surf.content_bounds();
+            let w = Warp::preset(WarpStyle::Flag, 35.0, rect_f(rect));
+            // What the warp built before the shortcut: the warp composited over the cleared layer.
+            let map = |x: f64, y: f64| w.map(x, y);
+            let warped = warp_mesh_surface_with(&surf, rect, &map, Interp::Bicubic, &Interrupt::NONE).unwrap();
+            let mut want = surf.clone();
+            crate::pixels::try_clear_surface(&mut want, rect, None).unwrap();
+            crate::transform_cmds::composite_over(&mut want, &warped);
+            want.prune();
+            let mut got = l.clone();
+            warp_layer(None, Locks::default(), &mut got, &w, rect, Interp::Bicubic, None, &Interrupt::NONE).unwrap();
+            let got = got.surface().unwrap();
+            let b = want.content_bounds();
+            assert_eq!(got.content_bounds(), b, "depth {depth}");
+            let (g, wv) = (got.read_region(b), want.read_region(b));
+            // Exact at 8 and 16 bits. At 32 the composite's `t·a / a` rounds a few values by an
+            // ulp; the shortcut keeps the warp's own.
+            let tol = if depth == 32 { 1e-6 } else { 0.0 };
+            let worst = g.iter().zip(&wv).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+            assert!(worst <= tol, "depth {depth}: off by {worst}");
+        }
+    }
+
     fn session(depth: u64) -> Session {
         let mut s = Session::new();
         s.execute("file.new", json!({"width": 80, "height": 60, "depth": depth})).unwrap();
@@ -669,6 +800,147 @@ mod tests {
         assert_eq!(st.history.past_len(), n + 1);
         let mesh = BezierMesh::identity([0.0, 0.0, 10.0, 10.0], 1, 1).map_points(|p| [p[0] * 2.0, p[1]]);
         assert!(s.execute("edit.transform.warp", json!({"warp": Warp::custom(mesh, [0.0, 0.0, 10.0, 10.0])})).is_err());
+    }
+
+    /// The seven values of a cylinder over the session's painted box (x 10..60, y 10..40).
+    const CYL: [f64; 7] = [10.0, 40.0, 60.0, 10.0, 0.3, 0.3, 0.5];
+
+    /// `style: "cylinder"` takes its seven values (#4112); anything that isn't a horizontal
+    /// cylinder is refused, never a silent no-op, and the layer is left alone.
+    #[test]
+    fn cylinder_style_needs_its_values() {
+        let mut s = session(8);
+        let before = active_surface(&s);
+        for p in [
+            json!({"style": "cylinder"}),
+            json!({"style": "cylinder", "values": [10, 40, 60, 10, 0.3, 0.3]}),
+            json!({"style": "cylinder", "values": [60, 40, 10, 10, 0.3, 0.3, 0.5]}),
+            json!({"style": "cylinder", "values": [10, 40, 60, 10, 0.3, 0.3, "x"]}),
+            json!({"style": "cylinder", "values": "seven"}),
+            json!({"style": "cylinder", "values": CYL, "vertical": true}),
+            json!({"style": "cylinder", "values": CYL, "hDistort": 10}),
+            json!({"warp": {"style": "cylinder", "bounds": [10.0, 10.0, 60.0, 40.0]}}),
+            json!({"warp": {"style": "cylinder", "values": CYL, "bounds": [10.0, 10.0, 60.0, 40.0], "vertical": true}}),
+            json!({"warp": {"style": "cylinder", "values": CYL, "bounds": [10.0, 10.0, 60.0, 40.0], "hDistort": 10.0}}),
+            json!({"warp": {"style": "cylinder", "values": CYL, "bounds": [10.0, 10.0, 60.0, 40.0], "vDistort": -5.0}}),
+        ] {
+            let e = s.execute("edit.transform.warp", p.clone()).unwrap_err().to_string();
+            assert!(e.contains("cylinder"), "{p}: {e}");
+        }
+        assert_eq!(active_surface(&s), before);
+        // On type it is refused like a custom mesh: Warp Text has no cylinder.
+        s.execute("type.create", json!({"x": 10, "y": 50, "text": "Hi"})).unwrap();
+        assert!(s.execute("edit.transform.warp", json!({"style": "cylinder", "values": CYL})).is_err());
+    }
+
+    #[test]
+    fn cylinder_warps_pixels_at_every_depth() {
+        for depth in [8u64, 16, 32] {
+            let mut s = session(depth);
+            let r = s.execute("edit.transform.warp", json!({"style": "cylinder", "values": CYL})).unwrap();
+            assert_eq!(r["changed"], true, "{depth}");
+            let after = active_surface(&s);
+            let b = after.content_bounds();
+            // Between the silhouettes, the edges bowed down by the ellipses.
+            assert!(b.x0 >= 9 && b.x1 <= 61 && b.y0 >= 9 && b.y1 > 40, "{depth}: {b:?}");
+            // The same cylinder as a full warp object (its mesh rebuilt from the values) agrees.
+            let mut t = session(depth);
+            let w = Warp::cylinder(&CYL, [10.0, 10.0, 60.0, 40.0]).unwrap();
+            let mut garbled = w.clone();
+            garbled.mesh = None;
+            t.execute("edit.transform.warp", json!({"warp": garbled})).unwrap();
+            assert_eq!(active_surface(&t), after, "{depth}");
+        }
+    }
+
+    /// On a smart object the cylinder is stored in source space: still a cylinder (so it goes to
+    /// PSD as one) when the placement only scales and moves, its mesh when it rotates.
+    #[test]
+    fn smart_object_cylinder_is_stored_in_source_space() {
+        let stored = |s: &Session| {
+            let st = s.active().unwrap();
+            let LayerContent::Smart(sm) = &st.doc.layer(st.active_layer.unwrap()).unwrap().content else { panic!("smart") };
+            sm.warp.clone().unwrap()
+        };
+        let mut s = session(8);
+        s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        s.execute("layer.smartObjects.warp", json!({"style": "cylinder", "values": CYL, "rect": [10, 10, 60, 40]})).unwrap();
+        let w = stored(&s);
+        assert_eq!(w.style, WarpStyle::Cylinder);
+        let LayerContent::Smart(sm) = &s.active().unwrap().doc.layers[1].content else { panic!("smart") };
+        let inv = crate::smart_cmds::placement(sm).inverse().unwrap();
+        let src = |x: f64, y: f64| inv.apply(x, y);
+        let ((l, t), (r, bt)) = (src(10.0, 10.0), src(60.0, 40.0));
+        for (a, b) in w.values.iter().zip([l, bt, r, t, 0.3, 0.3, 0.5]) {
+            assert!((a - b).abs() < 1e-9, "{:?}", w.values);
+        }
+        // Twice as wide: the silhouettes double, the ellipses' depth (in half axes) halves.
+        let mut s = session(8);
+        s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        s.execute("edit.transform", json!({"scaleX": 200, "scaleY": 100})).unwrap();
+        let wide = [-15.0, 40.0, 85.0, 10.0, 0.3, 0.3, 0.5];
+        s.execute("layer.smartObjects.warp", json!({"style": "cylinder", "values": wide, "rect": [-15, 10, 85, 40]})).unwrap();
+        let w = stored(&s);
+        assert_eq!(w.style, WarpStyle::Cylinder);
+        assert!((w.values[4] - 0.6).abs() < 1e-9 && (w.values[5] - 0.6).abs() < 1e-9, "{:?}", w.values);
+        // The silhouettes land on the source's own edges (its contents span the scaled box).
+        let LayerContent::Smart(sm) = &s.active().unwrap().doc.layers[1].content else { panic!("smart") };
+        let inv = crate::smart_cmds::placement(sm).inverse().unwrap();
+        assert!((w.values[0] - inv.apply(-15.0, 10.0).0).abs() < 1e-9 && (w.values[2] - inv.apply(85.0, 10.0).0).abs() < 1e-9, "{:?}", w.values);
+        // Rotated: a custom mesh with the same shape.
+        let mut s = session(8);
+        s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        s.execute("edit.transform", json!({"rotate": 30})).unwrap();
+        s.execute("layer.smartObjects.warp", json!({"style": "cylinder", "values": CYL, "rect": [10, 10, 60, 40]})).unwrap();
+        let w = stored(&s);
+        assert_eq!(w.style, WarpStyle::Custom);
+        assert_eq!(w.mesh.as_ref().map(|m| (m.nx(), m.ny())), Some((13, 4)));
+    }
+
+    /// Warp mode shows a stored cylinder as its mesh, and Enter commits that mesh untouched: the
+    /// smart object keeps its cylinder (else the next PSD save writes no warp), while a moved
+    /// point still makes it a custom warp.
+    #[test]
+    fn untouched_cylinder_committed_from_warp_mode_stays_a_cylinder() {
+        for scale in [100, 150] {
+            let mut s = session(8);
+            s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+            s.execute("edit.transform", json!({"scaleX": scale, "scaleY": 100})).unwrap();
+            let id = s.active().unwrap().active_layer.unwrap();
+            let rect = warp_bounds(&s.active().unwrap().doc, s.active().unwrap().doc.layer(id).unwrap());
+            let [x0, x1] = [f64::from(rect.x0), f64::from(rect.x1)];
+            let values = [x0, 40.0, x1, 10.0, 0.3, 0.3, 0.5];
+            s.execute("layer.smartObjects.warp", json!({"style": "cylinder", "values": values, "rect": [rect.x0, 10, rect.x1, 40]})).unwrap();
+            let stored = |s: &Session| {
+                let st = s.active().unwrap();
+                let LayerContent::Smart(sm) = &st.doc.layer(id).unwrap().content else { panic!("smart") };
+                sm.warp.clone().unwrap()
+            };
+            let cylinder = stored(&s);
+            assert_eq!(cylinder.style, WarpStyle::Cylinder, "{scale}");
+            let shown = smart_warp_doc_space(s.active().unwrap().doc.layer(id).unwrap()).unwrap();
+            assert_eq!(shown.style, WarpStyle::Custom);
+            s.execute("select.all", json!({})).unwrap();
+            let (sel, steps) = (s.active().unwrap().doc.selection.clone(), s.active().unwrap().history.past_len());
+            let r = s.execute("edit.transform.warp", json!({"layer": id.0, "rect": shown.bounds, "warp": shown, "interpolation": "bicubic"})).unwrap();
+            assert_eq!(r["changed"], false, "{scale}");
+            assert_eq!(stored(&s), cylinder, "{scale}: untouched");
+            let st = s.active().unwrap();
+            assert!(st.doc.selection == sel && st.history.past_len() == steps, "{scale}: no step, the selection stays");
+            // The same mesh over another box is another warp.
+            let mut wider = shown.clone();
+            wider.bounds[2] += 10.0;
+            s.execute("edit.transform.warp", json!({"layer": id.0, "rect": wider.bounds, "warp": wider})).unwrap();
+            assert_eq!(stored(&s).style, WarpStyle::Custom, "{scale}: other box");
+            s.execute("edit.undo", json!({})).unwrap();
+            assert_eq!(stored(&s), cylinder);
+            let mut moved = shown.clone();
+            if let Some(m) = moved.mesh.as_mut() {
+                m.points[20][1] += 5.0;
+            }
+            s.execute("edit.transform.warp", json!({"layer": id.0, "rect": moved.bounds, "warp": moved})).unwrap();
+            assert_eq!(stored(&s).style, WarpStyle::Custom, "{scale}: edited");
+        }
     }
 
     #[test]
@@ -893,5 +1165,28 @@ mod tests {
             let want = if x < 15 { 0.0 } else { 1.0 };
             assert!((mask_at(&s, x, y) - want).abs() < 0.01, "({x},{y}): {}", mask_at(&s, x, y));
         }
+    }
+
+    /// Esc stops the warp of a selected linked mask too, not only of the pixels. A fill layer has
+    /// no pixels to warp, so the mask is the only part that can see the cancel.
+    #[test]
+    fn a_cancelled_warp_stops_in_a_selected_linked_mask() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 100, "height": 100})).unwrap();
+        s.execute("layer.newFillLayer.solidColor", json!({})).unwrap();
+        s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+        s.edit("link", |doc, active| {
+            doc.layer_mut(active.unwrap()).unwrap().mask.as_mut().unwrap().linked = true;
+            Ok(())
+        })
+        .unwrap();
+        s.execute("select.rect", json!({"x": 10, "y": 10, "width": 10, "height": 10})).unwrap();
+        let st = s.active().unwrap();
+        let (sel, mut l) = (st.doc.selection.clone().unwrap(), st.doc.layer(st.active_layer.unwrap()).unwrap().clone());
+        let rect = Rect::new(10, 10, 20, 20);
+        let w = Warp::preset(WarpStyle::Flag, 35.0, rect_f(rect));
+        let ctl = Interrupt::cancel_only(&|| true);
+        let r = warp_layer(Some(&sel), Locks::default(), &mut l, &w, rect, Interp::Bicubic, None, &ctl);
+        assert!(matches!(r, Err(EngineError::Cancelled)), "{r:?}");
     }
 }

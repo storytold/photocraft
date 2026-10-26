@@ -314,6 +314,7 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
                 Some(i) => {
                     app.ui.analysis.note_selected = Some(i);
                     app.ui.analysis.notes = true;
+                    show_note_options(app, i);
                     app.ui.analysis.drag = Some(Drag::Note(i, [x - doc.notes[i].position[0], y - doc.notes[i].position[1]]));
                 }
                 None => {
@@ -529,7 +530,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             if !m.count_groups.is_empty() {
                 let mut gi = m.active_count_group.min(m.count_groups.len() - 1);
                 let opts: Vec<(usize, &str)> = m.count_groups.iter().enumerate().map(|(i, g)| (i, g.name.as_str())).collect();
-                if crate::widgets::dropdown(ui, "count-group", &mut gi, &opts, 140.0) {
+                if crate::widgets::dropdown(ui, "count-group", tl!("Group"), &mut gi, &opts, 140.0) {
                     let _ = app.run("count.setGroup", json!({"group": gi, "active": true}));
                 }
                 let g = &m.count_groups[gi];
@@ -562,9 +563,9 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                 crate::widgets::vline(ui, 22.0);
                 let (mut ms, mut ls) = (g.marker_size as f32, g.label_size as f32);
                 ui.label(RichText::new(tl!("Marker Size")).color(t.text_dim).size(11.0));
-                let a = crate::widgets::value_field(ui, &mut ms, 1.0..=10.0, "", 40.0).changed();
+                let a = crate::widgets::value_field(ui, &mut ms, 1.0..=10.0, "", 40.0).accessible_name(tl!("Marker Size")).changed();
                 ui.label(RichText::new(tl!("Label Size")).color(t.text_dim).size(11.0));
-                let b = crate::widgets::value_field(ui, &mut ls, 8.0..=72.0, "", 44.0).changed();
+                let b = crate::widgets::value_field(ui, &mut ls, 8.0..=72.0, "", 44.0).accessible_name(tl!("Label Size")).changed();
                 if a || b {
                     let _ = app.run("count.setGroup", count_size_params(ms, ls));
                 }
@@ -573,8 +574,8 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         }
         Tool::Note => {
             let t = Tokens::get(ui.ctx());
-            ui.label(RichText::new(tl!("Author:")).color(t.text_dim).size(11.0));
-            ui.add(egui::TextEdit::singleline(&mut app.ui.analysis.note_author).desired_width(120.0));
+            let author_label = ui.label(RichText::new(tl!("Author:")).color(t.text_dim).size(11.0));
+            ui.add(egui::TextEdit::singleline(&mut app.ui.analysis.note_author).desired_width(120.0)).labelled_by(author_label.id);
             ui.label(RichText::new(tl!("Color:")).color(t.text_dim).size(11.0));
             let rgb = app.ui.analysis.note_color;
             if crate::widgets::color_swatch_button(ui, color32(rgb), tl!("Color")).clicked() {
@@ -652,7 +653,7 @@ pub(crate) fn panel_window(app: &PhotocraftApp, ctx: &egui::Context, id: &str, t
     let t = Tokens::get(ctx);
     let canvas = app.last_canvas_rect;
     egui::Window::new(title)
-        .id(egui::Id::new(id))
+        .id(egui::Id::unique(id))
         .title_bar(false)
         .resizable(false)
         .movable(!app.session.prefs().workspace_locked)
@@ -760,6 +761,15 @@ pub fn windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
 }
 
+/// Selecting note `i` shows its author and colour in the Note tool's options bar, as Photoshop
+/// does (#7940); a new note then takes them unless they are changed.
+fn show_note_options(app: &mut PhotocraftApp, i: usize) {
+    let Some(note) = app.session.active().and_then(|d| d.doc.notes.get(i)) else { return };
+    let (author, color) = (note.author.clone(), note.color.to_rgb());
+    app.ui.analysis.note_author = author;
+    app.ui.analysis.note_color = color;
+}
+
 fn notes_panel(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let notes = app.session.active().map(|d| d.doc.notes.clone()).unwrap_or_default();
     let n = notes.len();
@@ -767,6 +777,7 @@ fn notes_panel(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let mut close = false;
     let mut edit: Option<Value> = None;
     let mut delete = false;
+    let mut navigated = false;
     let t = Tokens::get(ctx);
     panel_window(app, ctx, "notes-panel", tl!("Notes"), vec2(-40.0, 300.0), 260.0, |ui| {
         close = title_row(ui, tl!("Notes"));
@@ -778,7 +789,7 @@ fn notes_panel(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 let note = &notes[i];
                 ui.label(RichText::new(if note.author.is_empty() { tl!("No author").to_string() } else { note.author.clone() }).color(t.text_dim).size(11.0));
                 let mut text = note.text.clone();
-                if ui.add(egui::TextEdit::multiline(&mut text).desired_rows(6).desired_width(f32::INFINITY)).changed() {
+                if ui.add(egui::TextEdit::multiline(&mut text).desired_rows(6).desired_width(f32::INFINITY)).accessible_name(tl!("Notes")).changed() {
                     edit = Some(json!({"index": i, "text": text, "coalesce": format!("note-{i}")}));
                 }
             }
@@ -787,9 +798,11 @@ fn notes_panel(app: &mut PhotocraftApp, ctx: &egui::Context) {
         ui.horizontal(|ui| {
             if ui.add_enabled_ui(n > 1, |ui| crate::icons::button(ui, "chevrons-left", 22.0, false, tl!("Previous note"))).inner.clicked() {
                 sel = sel.map(|i| (i + n - 1) % n);
+                navigated = true;
             }
             if ui.add_enabled_ui(n > 1, |ui| crate::icons::button(ui, "chevrons-right", 22.0, false, tl!("Next note"))).inner.clicked() {
                 sel = sel.map(|i| (i + 1) % n);
+                navigated = true;
             }
             let template = "{index} of {total}";
             let position = crate::i18n::fmt(tl!(template), &[("index", &sel.map_or(0, |i| i + 1).to_string()), ("total", &n.to_string())]);
@@ -802,6 +815,9 @@ fn notes_panel(app: &mut PhotocraftApp, ctx: &egui::Context) {
         });
     });
     app.ui.analysis.note_selected = sel;
+    if navigated && let Some(i) = sel {
+        show_note_options(app, i);
+    }
     if let Some(p) = edit {
         let _ = app.run("notes.set", p);
     }
@@ -821,7 +837,7 @@ fn num_field(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, label: &s
     ui.horizontal(|ui| {
         ui.add_sized(vec2(110.0, 18.0), egui::Label::new(RichText::new(tl!(&label)).color(t.text_dim).size(11.0)));
         let mut v = f.get(key).and_then(Value::as_f64).unwrap_or(0.0) as f32;
-        if crate::widgets::value_field(ui, &mut v, range, suffix, 80.0).changed() {
+        if crate::widgets::value_field(ui, &mut v, range, suffix, 80.0).accessible_name(tl!(label)).changed() {
             f.insert(key.into(), json!(v));
         }
     });
@@ -833,7 +849,7 @@ fn choice(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, label: &str,
         ui.add_sized(vec2(110.0, 18.0), egui::Label::new(RichText::new(tl!(&label)).color(t.text_dim).size(11.0)));
         let mut cur = f.get(key).and_then(Value::as_str).unwrap_or(opts[0].0).to_string();
         let list: Vec<(String, &str)> = opts.iter().map(|(k, l)| (k.to_string(), *l)).collect();
-        if crate::widgets::dropdown(ui, &format!("an-{key}"), &mut cur, &list, 120.0) {
+        if crate::widgets::dropdown(ui, &format!("an-{key}"), tl!(label), &mut cur, &list, 120.0) {
             f.insert(key.into(), json!(cur));
         }
     });
@@ -871,7 +887,7 @@ fn dialog(app: &mut PhotocraftApp, ctx: &egui::Context) {
     };
     let mut result: Option<bool> = None;
     egui::Window::new(title)
-        .id(egui::Id::new("analysis-dialog"))
+        .id(egui::Id::unique("analysis-dialog"))
         .collapsible(false)
         .resizable(false)
         .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
@@ -888,9 +904,10 @@ fn dialog(app: &mut PhotocraftApp, ctx: &egui::Context) {
                         num_field(ui, &mut f, "pixelLength", tl!("Pixel Length:"), 0.001..=1e7, "");
                         num_field(ui, &mut f, "logicalLength", tl!("Logical Length:"), 0.0001..=1e7, "");
                         ui.horizontal(|ui| {
-                            ui.add_sized(vec2(110.0, 18.0), egui::Label::new(RichText::new(tl!("Logical Units:")).color(t.text_dim).size(11.0)));
+                            let units_label =
+                                ui.add_sized(vec2(110.0, 18.0), egui::Label::new(RichText::new(tl!("Logical Units:")).color(t.text_dim).size(11.0)));
                             let mut u = f.get("units").and_then(Value::as_str).unwrap_or("pixels").to_string();
-                            if ui.add(egui::TextEdit::singleline(&mut u).desired_width(80.0)).changed() {
+                            if ui.add(egui::TextEdit::singleline(&mut u).desired_width(80.0)).labelled_by(units_label.id).changed() {
                                 f.insert("units".into(), json!(u));
                             }
                         });
@@ -1109,6 +1126,30 @@ pub(crate) mod tests {
         assert_eq!(app.session.active().unwrap().doc.notes[0].position, [60.0, 50.0]);
         // The panel renders without panicking.
         render(&mut app, &ctx, windows);
+    }
+
+    /// Clicking a note with the Note tool shows its author and colour in the options bar (#7940),
+    /// so a note from a PSD reads as itself, not as the next note's defaults.
+    #[test]
+    fn clicking_a_note_shows_its_author_and_color() {
+        let (mut app, _ctx) = app();
+        app.run("notes.add", json!({"x": 20, "y": 20, "author": "Ann", "color": [1.0, 0.5, 0.75]})).unwrap();
+        app.run("notes.add", json!({"x": 120, "y": 80, "author": "Bob", "color": [0.25, 0.5, 1.0]})).unwrap();
+        app.ui.tool = Tool::Note;
+        app.ui.analysis.note_author = "Me".into();
+        app.ui.analysis.note_color = [1.0, 1.0, 0.51];
+        down(&mut app, 22.0, 22.0, egui::Modifiers::NONE);
+        up(&mut app, 22.0, 22.0);
+        assert_eq!(app.ui.analysis.note_selected, Some(0));
+        assert_eq!((app.ui.analysis.note_author.as_str(), app.ui.analysis.note_color), ("Ann", [1.0, 0.5, 0.75]));
+        down(&mut app, 122.0, 82.0, egui::Modifiers::NONE);
+        up(&mut app, 122.0, 82.0);
+        assert_eq!((app.ui.analysis.note_author.as_str(), app.ui.analysis.note_color), ("Bob", [0.25, 0.5, 1.0]));
+        // A click off the notes adds one with what the bar now shows, and leaves the notes as they were.
+        down(&mut app, 170.0, 40.0, egui::Modifiers::NONE);
+        up(&mut app, 170.0, 40.0);
+        let notes = app.session.active().unwrap().doc.notes.clone();
+        assert_eq!(notes.iter().map(|n| n.author.as_str()).collect::<Vec<_>>(), ["Ann", "Bob", "Bob"]);
     }
 
     #[test]

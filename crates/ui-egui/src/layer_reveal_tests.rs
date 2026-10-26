@@ -6,7 +6,6 @@ use photocraft_doc::LayerId;
 use serde_json::json;
 
 use crate::PhotocraftApp;
-use crate::dock::{Group, last_rects};
 use crate::theme::ThemeKind;
 
 /// 30 layers above a closed group holding `inner` (near the bottom of the panel).
@@ -35,7 +34,7 @@ fn harness(app: PhotocraftApp, theme: ThemeKind) -> Harness<'static, PhotocraftA
             if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 return;
             }
-            crate::panels::right_dock(app, ui);
+            crate::panels::dock_area(app, ui);
             egui::CentralPanel::default().show(ui, |_| {});
         },
         app,
@@ -46,15 +45,19 @@ fn harness(app: PhotocraftApp, theme: ThemeKind) -> Harness<'static, PhotocraftA
     h
 }
 
+fn layers_group(h: &Harness<'static, PhotocraftApp>) -> Option<Rect> {
+    crate::panel_docking::probe::group_rect(h.state(), &h.ctx, "layers")
+}
+
 /// The Layers panel row of `name`, if drawn.
 fn row(h: &Harness<'static, PhotocraftApp>, name: &str) -> Option<Rect> {
-    let layers = last_rects(&h.ctx).into_iter().find(|(g, _)| *g == Group::Layers)?.1;
+    let layers = layers_group(h)?;
     h.query_all_by_label(name).map(|n| n.rect()).find(|r| layers.contains(r.center()) || (r.left() >= layers.left() && r.right() <= layers.right()))
 }
 
 /// Fully inside the rows viewport (below the strip and the blend/lock rows, above the footer).
 fn in_view(h: &Harness<'static, PhotocraftApp>, r: Rect) -> bool {
-    let layers = last_rects(&h.ctx).into_iter().find(|(g, _)| *g == Group::Layers).unwrap().1;
+    let layers = layers_group(h).unwrap();
     r.top() >= layers.top() + 26.0 && r.bottom() <= layers.bottom() - (crate::widgets::FOOTER_BAR + 1.0)
 }
 

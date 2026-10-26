@@ -179,7 +179,7 @@ pub(crate) fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, V
     let mut scale = num(f, "scale", 100.0);
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(tl!("Scale:")).color(Tokens::get(ui.ctx()).text_dim));
-        if crate::widgets::value_field(ui, &mut scale, min as f32..=max as f32, "%", 70.0).changed() {
+        if crate::widgets::value_field(ui, &mut scale, min as f32..=max as f32, "%", 70.0).accessible_name(tl!("Scale:")).changed() {
             f.insert("scale".into(), json!(scale.clamp(min as f32, max as f32)));
         }
     });

@@ -1,4 +1,4 @@
-//! Unit tests on synthetic inputs; `tests/real_files.rs` covers public Affinity documents.
+//! Unit tests on synthetic inputs; `tests/it/real_files.rs` covers public Affinity documents.
 
 mod preview {
     use crate::container::header;
@@ -259,6 +259,20 @@ mod archive {
     }
 
     #[test]
+    fn a_failed_read_still_spends_the_extraction_allowance() {
+        let d = doc();
+        let file = synth::container(&[("doc.dat", &d, Method::Zstd)], None);
+        let mut broken = file.clone();
+        broken[90] ^= 0x55;
+        // Room for exactly one read: the failed attempt must use it up, so a caller that
+        // recovers from the checksum error cannot make the same entry decode again.
+        let mut a = Archive::open(&broken, Limits { max_entry: usize::MAX, max_total: d.len(), ..Limits::default() }).unwrap();
+        assert!(a.read("doc.dat").is_err());
+        assert_eq!(a.extracted(), d.len());
+        assert!(matches!(a.read("doc.dat"), Err(Error::Limit(_))));
+    }
+
+    #[test]
     fn a_declared_size_smaller_than_the_data_is_rejected_not_truncated() {
         let big = vec![7u8; 1 << 20];
         let mut file = synth::container(&[("doc.dat", &big, Method::Zlib)], None);
@@ -300,6 +314,17 @@ mod archive {
         for end in 0..d.len() {
             assert!(stream::parse(&d[..end]).is_err(), "{end}");
         }
+    }
+
+    #[test]
+    fn fixed_records_of_zero_width_are_rejected_before_any_value_is_made() {
+        // Four million records of no bytes each pass a length check that multiplies by the width.
+        let mut f = vec![0x80 | 0x2c];
+        f.extend(tag(b"Big_").0.to_le_bytes());
+        f.extend(4_000_000u32.to_le_bytes());
+        f.extend(0u16.to_le_bytes());
+        let d = synth::stream(&[(tag(b"Big_"), F::Raw(f))]);
+        assert_eq!(stream::parse(&d).unwrap_err(), Error::Malformed("array longer than its data"));
     }
 
     #[test]
