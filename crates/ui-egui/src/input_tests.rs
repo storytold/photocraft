@@ -470,7 +470,8 @@ fn alt_scroll_zooms_in_steps_around_the_pointer() {
     assert_eq!(zoom(&h), z2, "a plain scroll never zooms");
     assert!(h.state().ui.views[0].center[1] > c2[1], "a plain scroll pans");
 
-    // ⌘/Ctrl + scroll zooms around the pointer ×1.1 a notch (#5363), on Windows (Ctrl) and macOS (⌘).
+    // Opt in, while the view is still near the centre: ⌘/Ctrl + a notch zooms around the pointer.
+    h.state_mut().session.edit_prefs(|prefs| prefs.general.wheel_action_ctrl = photocraft_engine::prefs::WheelAction::Zoom);
     for m in [Modifiers { ctrl: true, command: true, ..Modifiers::NONE }, Modifiers { mac_cmd: true, command: true, ..Modifiers::NONE }] {
         let (z, d) = (zoom(&h), doc_at(&h, p));
         wheel(&h, 1.0, m);
@@ -478,9 +479,19 @@ fn alt_scroll_zooms_in_steps_around_the_pointer() {
         let at_once = zoom(&h);
         h.run_steps(40);
         let (z1, d1) = (zoom(&h), doc_at(&h, p));
-        assert!((z1 / z - 1.1).abs() < 1e-3, "one ⌘/Ctrl notch is ×1.1: {z} -> {z1}");
+        assert!((z1 / z - 1.1).abs() < 1e-3, "one mapped ⌘/Ctrl notch is ×1.1: {z} -> {z1}");
         assert_eq!(at_once, z1, "the notch is applied the frame it arrives");
         assert!((d1[0] - d[0]).abs() < 0.05 && (d1[1] - d[1]).abs() < 0.05, "centred on the pointer: {d:?} -> {d1:?}");
+    }
+    // The default mapping pans sideways (#635), on Windows (Ctrl) and macOS (⌘).
+    h.state_mut().session.edit_prefs(|prefs| prefs.general.wheel_action_ctrl = photocraft_engine::prefs::WheelAction::Default);
+    for m in [Modifiers { ctrl: true, command: true, ..Modifiers::NONE }, Modifiers { mac_cmd: true, command: true, ..Modifiers::NONE }] {
+        let (z, c) = (zoom(&h), h.state().ui.views[0].center);
+        wheel(&h, -1.0, m);
+        h.run_steps(40);
+        let c1 = h.state().ui.views[0].center;
+        assert_eq!(zoom(&h), z, "⌘/Ctrl-scroll does not zoom by default");
+        assert!(c1[0] > c[0] && c1[1] == c[1], "⌘/Ctrl-scroll pans sideways: {c:?} -> {c1:?}");
     }
     let z2 = zoom(&h);
     // ⇧ + scroll still pans sideways.

@@ -237,7 +237,7 @@ Values the app honours live: history states (every open document), effect-cache 
 theme, canvas colour and border, checkerboard size and colours (CPU and GPU canvas), gamut warning
 colour and opacity, guide/grid/smart-guide colours and styles, grid spacing and subdivisions, ruler
 units (rulers, Info panel, Image Size default unit), image interpolation (Image Size default),
-painting and other cursors, zoom with scroll wheel, Use Shift Key for Tool Switch, Bundle Arrow-Key
+painting and other cursors, zoom with scroll wheel, Ctrl/Cmd + wheel (`general.wheelActionCtrl`: `photoshop` pans sideways, `zoomContinuous` zooms ×1.1 around the pointer), Use Shift Key for Tool Switch, Bundle Arrow-Key
 Nudges and Nudge Bundle Pause (arrow keys sent with `ui.key` that follow each other within the pause
 nudge the layers, selection outline or Free Transform box as one history step; an agent calling
 `layer.translate` or `select.transformSelection` itself gets the same with a shared `coalesce` key),

@@ -3978,3 +3978,5 @@ cameraData	Lens	Lens
 # DDS Options (#1327)
 	DDS Options	DDS Seçenekleri
 	Generate Mipmaps	Mipmap oluştur
+	Ctrl/Cmd + Scroll Wheel	Ctrl/Cmd + kaydırma tekeri
+	Default (as in Photoshop)	Varsayılan (Photoshop’taki gibi)

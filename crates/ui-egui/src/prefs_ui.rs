@@ -1163,6 +1163,9 @@ fn humanize(key: &str) -> String {
     if key == "gpuMemoryMb" {
         return "GPU Memory (MB, 0 = Automatic)".into();
     }
+    if key == "wheelActionCtrl" {
+        return "Ctrl/Cmd + Scroll Wheel".into();
+    }
     let mut s = String::new();
     for (i, ch) in key.chars().enumerate() {
         if i == 0 {
@@ -1186,6 +1189,8 @@ fn choice_label(v: &str) -> String {
         "16" => "16 Bits/Channel".into(),
         "postScript" => "PostScript (72 points/inch)".into(),
         "traditional" => "Traditional (72.27 points/inch)".into(),
+        "photoshop" => "Default (as in Photoshop)".into(),
+        "zoomContinuous" => "Zoom".into(),
         "vulkan" => "Vulkan".into(),
         "dx12" => "DirectX 12".into(),
         "metal" => "Metal".into(),

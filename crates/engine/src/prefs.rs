@@ -55,6 +55,11 @@ choice!(TypeUnit { Points = "points", Pixels = "pixels", Millimeters = "mm" } de
 choice!(PointSize { PostScript = "postScript", Traditional = "traditional" } default PostScript);
 choice!(Interpolation { BicubicAutomatic = "bicubicAutomatic", Nearest = "nearestNeighbor", Bilinear = "bilinear", Bicubic = "bicubic", BicubicSmoother = "bicubicSmoother", BicubicSharper = "bicubicSharper", PreserveDetails = "preserveDetails" } default BicubicAutomatic);
 choice!(ColorPicker { Adobe = "adobe", System = "system" } default Adobe);
+choice!(
+    /// What Ctrl/Cmd + wheel does over the canvas. `photoshop` pans sideways, as the canvas does
+    /// today. `zoomContinuous` zooms ×1.1 around the pointer (#5363). Ctrl and Cmd share this slot.
+    WheelAction { Default = "photoshop", Zoom = "zoomContinuous" } default Default
+);
 choice!(Theme { Pro = "pro", ProMedium = "proMedium", ProLightGray = "proLightGray", ProLight = "proLight", Studio = "studio", StudioLight = "studioLight", Classic = "classic", SolarizedDark = "solarizedDark", Adwaita = "adwaita", AdwaitaDark = "adwaitaDark", BreezeLight = "breezeLight", BreezeDark = "breezeDark", SoftDark = "softDark", SoftLight = "softLight" } default ProMedium);
 choice!(AppearanceMode { Auto = "auto", Dark = "dark", Light = "light" } default Dark);
 choice!(DarkTheme { Pro = "pro", ProMedium = "proMedium", Studio = "studio", SolarizedDark = "solarizedDark", AdwaitaDark = "adwaitaDark", BreezeDark = "breezeDark", SoftDark = "softDark" } default ProMedium);
@@ -217,6 +222,8 @@ pub struct General {
     pub always_create_smart_objects_when_placing: bool,
     /// Scroll wheel zooms instead of panning.
     pub zoom_with_scroll_wheel: bool,
+    /// Ctrl/Cmd + wheel over the canvas. `photoshop` pans sideways; `zoomContinuous` zooms (#5363).
+    pub wheel_action_ctrl: WheelAction,
     pub animated_zoom: bool,
     pub zoom_resizes_windows: bool,
     pub use_legacy_free_transform: bool,
@@ -233,11 +240,19 @@ impl Default for General {
             resize_image_during_place: true,
             always_create_smart_objects_when_placing: true,
             zoom_with_scroll_wheel: false,
+            wheel_action_ctrl: WheelAction::Default,
             animated_zoom: true,
             zoom_resizes_windows: false,
             use_legacy_free_transform: false,
             auto_show_home_screen: true,
         }
+    }
+}
+
+impl General {
+    /// Ctrl/Cmd + a whole mouse-wheel notch zooms the canvas ×1.1. The default pans sideways.
+    pub fn ctrl_wheel_zooms(&self) -> bool {
+        self.wheel_action_ctrl == WheelAction::Zoom
     }
 }
 
@@ -1071,6 +1086,7 @@ pub fn choices(path: &str) -> Option<&'static [&'static str]> {
     Some(match path {
         "general.colorPicker" => ColorPicker::NAMES,
         "general.imageInterpolation" => Interpolation::NAMES,
+        "general.wheelActionCtrl" => WheelAction::NAMES,
         "interface.theme" => Theme::NAMES,
         "interface.appearanceMode" => AppearanceMode::NAMES,
         "interface.darkTheme" => DarkTheme::NAMES,

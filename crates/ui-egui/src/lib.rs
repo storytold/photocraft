@@ -2534,7 +2534,8 @@ impl PhotocraftApp {
         // egui's own ⌘+ / ⌘- / ⌘0 scale the whole interface; PhotoCraft zooms the canvas instead
         // (shortcuts.rs), like Photoshop.
         ctx.options_mut(|o| o.zoom_with_keyboard = false);
-        // ⌘/Ctrl + wheel zooms the canvas ×1.1 a notch; ⇧ + wheel pans sideways (wheel_nav.rs).
+        // ⇧ and ⌘/Ctrl + wheel pan sideways. Ctrl/Cmd zooms only when wheelActionCtrl says so
+        // (wheel_nav.rs, #5363).
         wheel_nav::configure(ctx);
     }
 }

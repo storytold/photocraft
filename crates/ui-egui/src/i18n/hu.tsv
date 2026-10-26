@@ -4167,3 +4167,5 @@ cameraRaw	Yellow	Sárga
 # DDS Options (#1327)
 	DDS Options	DDS-beállítások
 	Generate Mipmaps	Mipmapek létrehozása
+	Ctrl/Cmd + Scroll Wheel	Ctrl/Cmd + görgő
+	Default (as in Photoshop)	Alapértelmezett (mint a Photoshopban)

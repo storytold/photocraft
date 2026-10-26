@@ -3948,3 +3948,5 @@ curves	Smooth	Εξομάλυνση
 # DDS Options (#1327)
 	DDS Options	Επιλογές DDS
 	Generate Mipmaps	Δημιουργία mipmap
+	Ctrl/Cmd + Scroll Wheel	Ctrl/Cmd + τροχός κύλισης
+	Default (as in Photoshop)	Προεπιλογή (όπως στο Photoshop)
