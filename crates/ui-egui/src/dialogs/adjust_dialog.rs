@@ -253,7 +253,7 @@ pub(crate) fn hue_picker_button(ui: &mut egui::Ui, selected: bool, enabled: bool
         let color = if enabled { tokens.text } else { tokens.text_faint };
         ui.painter().text(response.rect.right_bottom() - egui::vec2(5.0, 6.0), egui::Align2::CENTER_CENTER, badge, egui::FontId::proportional(12.0), color);
     }
-    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, selected, tooltip));
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, enabled, selected, tooltip));
     response
 }
 
