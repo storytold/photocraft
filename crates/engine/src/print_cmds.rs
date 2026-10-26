@@ -1136,6 +1136,8 @@ fn package(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let folder = join(&dir, &crate::file_cmds::sanitize(&name));
     let links_dir = join(&folder, "Links");
+    // The package creates its folder tree on purpose (#6606 keeps atomic_write from doing it).
+    std::fs::create_dir_all(&folder).map_err(|e| other(format!("mkdir `{folder}`: {e}")))?;
     // Copy every linked file once; relink the copy of the document to the copies.
     let mut copied: Vec<(String, String)> = Vec::new();
     let mut relinks: Vec<(photocraft_doc::LayerId, String)> = Vec::new();
@@ -1178,6 +1180,7 @@ fn package(s: &mut Session, p: &Value) -> Result<Value> {
                 // Only a file PhotoCraft can place is copied; anything else is packaged as missing.
                 match read_file(&file.to_string_lossy()).ok().filter(|bytes| crate::file_cmds::import(&fname, bytes).is_ok()) {
                     Some(bytes) => {
+                        std::fs::create_dir_all(&links_dir).map_err(|e| other(format!("mkdir `{links_dir}`: {e}")))?;
                         write_file(&t, &bytes)?;
                         copied.push((path.clone(), t.clone()));
                         t

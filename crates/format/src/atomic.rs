@@ -14,6 +14,12 @@
 //!   if it does anyway, the save fails with a clear error. It never falls back to writing the
 //!   destination in place.
 //! - **Unwritable folder:** the save fails with a clear error instead of writing in place.
+//! - **Missing folder:** a plain or scripted save fails with a clear error instead of creating the
+//!   folder tree, so a typo in its path can't scatter folders beside the user's files (#6606).
+//!   A dangling symlink is the exception: saving through it creates the folder on the way to its
+//!   target (#6605). Batch output is the other exception: callers that intentionally produce
+//!   output trees (batch export, Image Assets, packages) create their directories explicitly, so
+//!   a typo in one of those paths does create folders under the intended destination.
 //! - **Read-only file:** the save is refused before anything is written (#6600). A rename only
 //!   needs the folder to be writable, so without this check Linux and macOS would silently replace
 //!   a `chmod 444` file while Windows refuses; now every platform refuses, as Photoshop does, and
@@ -207,13 +213,34 @@ pub fn atomic_write_with(fs: &dyn AtomicFs, retry: RenameRetry, path: &Path, byt
 
 /// [`atomic_write_with`] reporting write progress (see [`atomic_write_progress`]).
 pub fn atomic_write_with_progress(fs: &dyn AtomicFs, retry: RenameRetry, path: &Path, bytes: &[u8], progress: &dyn Fn(f32)) -> io::Result<()> {
+    let is_link = std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink());
     let target = resolve_symlink(path).map_err(|e| context(e, format!("cannot save {}", path.display())))?;
     let name = target.file_name().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, format!("{}: not a file path", path.display())))?;
     let dir = match target.parent() {
         Some(d) if !d.as_os_str().is_empty() => d.to_path_buf(),
         _ => PathBuf::from("."),
     };
-    std::fs::create_dir_all(&dir).map_err(|e| context(e, format!("cannot create the folder {}", dir.display())))?;
+    // Inspect the folder instead of `exists()`: that swallows access errors, which would be
+    // misreported as a missing folder (#6606 review).
+    match dir.metadata() {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            if is_link {
+                // A dangling symlink is an explicit instruction to write at its target (#6605),
+                // so the folder on the way there is created.
+                std::fs::create_dir_all(&dir).map_err(|e| context(e, format!("cannot create the folder {}", dir.display())))?;
+            } else {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("cannot save {}: the folder {} does not exist; create it first", path.display(), dir.display()),
+                ));
+            }
+        }
+        Err(e) => return Err(io::Error::new(e.kind(), format!("cannot save {}: the folder {} could not be read ({e})", path.display(), dir.display()))),
+        Ok(m) if !m.is_dir() => {
+            return Err(io::Error::new(io::ErrorKind::NotADirectory, format!("cannot save {}: {} is a file, not a folder", path.display(), dir.display())));
+        }
+        Ok(_) => {}
+    }
     if fs.is_readonly(&target) {
         return Err(io::Error::new(io::ErrorKind::PermissionDenied, format!("cannot save {}: the file is read-only; {UNCHANGED}", path.display())));
     }

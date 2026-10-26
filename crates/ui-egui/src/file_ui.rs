@@ -1513,6 +1513,7 @@ mod tests {
         let r = crate::menus::invoke(&mut app, &ctx, "file.export.saveForWebLegacy", json!({})).unwrap();
         let id = r["dialog"].as_u64().unwrap();
         let dir = std::env::temp_dir().join(format!("pc-webui-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("web.gif").to_string_lossy().into_owned();
         let d = app.ui.dialog_mut(id).unwrap();
         d.fields.insert("format".into(), json!("gif"));

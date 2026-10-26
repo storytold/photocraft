@@ -1159,6 +1159,31 @@ fn layers_to_files_writes_each_visible_layer() {
     assert_eq!(r["files"].as_array().unwrap().len(), 3);
 }
 
+/// #6606: a scripted save into a folder that doesn't exist fails with a clear error and leaves
+/// no folder tree behind; only batch output creates directories, explicitly.
+#[test]
+fn save_into_a_missing_folder_fails_without_creating_it() {
+    let d = tmp("missing-folder");
+    let mut s = session(8, 8, 8);
+    let missing = join(&d, "typo/does/not/exist/a.psd");
+    let e = s.execute("file.saveACopy", json!({"path": missing})).unwrap_err();
+    assert!(e.to_string().contains("does not exist"), "{e}");
+    assert!(!std::path::Path::new(&d).join("typo").exists(), "no folder tree was created");
+}
+
+/// Batch output still creates its destination: Layers to Files into a fresh folder.
+#[test]
+fn layers_to_files_creates_a_missing_output_folder() {
+    let d = tmp("layers-mkdir");
+    let mut s = session(8, 8, 8);
+    s.execute("layer.new.layer", json!({"name": "Ink"})).unwrap();
+    let dir = join(&d, "out/sub");
+    let r = s.execute("file.export.layersToFiles", json!({"dir": dir, "format": "png"})).unwrap();
+    let files: Vec<String> = r["files"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
+    assert!(!files.is_empty());
+    assert!(files.iter().all(|f| std::path::Path::new(f).is_file()), "{files:?}");
+}
+
 #[test]
 fn load_files_into_stack_and_image_processor_and_batch() {
     let dir = tmp("batch");

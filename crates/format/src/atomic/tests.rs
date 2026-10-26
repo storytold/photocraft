@@ -148,12 +148,50 @@ fn reports_write_progress() {
     assert_no_temp(&d.0);
 }
 
+/// #6606: a save into a folder that doesn't exist fails instead of creating the folder tree,
+/// so a typo in a scripted path can't scatter folders.
 #[test]
-fn creates_missing_parent_folders() {
+fn missing_parent_folder_is_an_error_and_creates_nothing() {
     let d = TempDir::new("parent");
     let p = d.0.join("a/b/out.png");
-    atomic_write(&p, b"x").unwrap();
-    assert_eq!(std::fs::read(&p).unwrap(), b"x");
+    let e = atomic_write(&p, b"x").unwrap_err();
+    assert_eq!(e.kind(), io::ErrorKind::NotFound);
+    assert!(e.to_string().contains("does not exist"), "{e}");
+    assert!(!d.0.join("a").exists(), "no folder tree is created");
+    assert_no_temp(&d.0);
+}
+
+/// A parent path that is a file is reported as such, not as a missing folder.
+#[test]
+fn parent_that_is_a_file_is_an_error() {
+    let d = TempDir::new("parent-file");
+    std::fs::write(d.0.join("blocker"), b"x").unwrap();
+    let e = atomic_write(&d.0.join("blocker/out.png"), b"x").unwrap_err();
+    assert_eq!(e.kind(), io::ErrorKind::NotADirectory);
+    assert!(e.to_string().contains("not a folder"), "{e}");
+    assert_no_temp(&d.0);
+}
+
+/// An ancestor that denies traversal is an access error, not a "folder does not exist" one.
+#[cfg(unix)]
+#[test]
+fn unreadable_folder_is_not_reported_as_missing() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = TempDir::new("noexec");
+    let locked = d.0.join("locked");
+    std::fs::create_dir(&locked).unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let e = atomic_write(&locked.join("sub/out.png"), b"x").unwrap_err();
+    // Probing a non-existent child answers NotFound only when traversal of `locked`
+    // is permitted despite mode 0o000, i.e. when running as root.
+    let can_traverse = matches!(std::fs::metadata(locked.join("sub")), Err(p) if p.kind() == io::ErrorKind::NotFound);
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+    if e.kind() == io::ErrorKind::NotFound {
+        assert!(can_traverse, "a run that cannot traverse {locked:?} must report the inaccessible ancestor, not a missing folder: {e}");
+        return; // running as root: permissions aren't enforced
+    }
+    assert_eq!(e.kind(), io::ErrorKind::PermissionDenied);
+    assert!(!e.to_string().contains("does not exist"), "{e}");
 }
 
 /// A partial temporary write must preserve the original and never reach publication or its flush.
