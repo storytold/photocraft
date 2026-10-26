@@ -536,6 +536,8 @@ pub fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
     autosave(app);
     #[cfg(not(target_arch = "wasm32"))]
     link_updates(app, ctx);
+    #[cfg(not(target_arch = "wasm32"))]
+    plugin_updates(app, ctx);
     history_log(app);
 }
 
@@ -725,6 +727,33 @@ fn link_updates(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
     let wait = if app.session.link_scan.is_some() { 100 } else { 2000 };
     ctx.request_repaint_after(std::time::Duration::from_millis(wait));
+}
+
+/// Hot-reloads WebAssembly filter plug-ins installed, updated, repaired, or uninstalled on disk
+/// while PhotoCraft is running, without closing or losing any open document or undo history.
+#[cfg(not(target_arch = "wasm32"))]
+fn plugin_updates(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    let pi = &app.session.prefs().plug_ins;
+    if !pi.use_additional_plugins_folder || pi.additional_plugins_folder.trim().is_empty() {
+        return;
+    }
+
+    let (last_key, focus_key) = (egui::Id::new("pluginWatch.lastScan"), egui::Id::new("pluginWatch.focused"));
+    let now = ctx.input(|i| i.time);
+    let focused = ctx.input(|i| i.focused);
+    let was_focused: bool = ctx.data(|d| d.get_temp(focus_key)).unwrap_or(focused);
+    ctx.data_mut(|d| d.insert_temp(focus_key, focused));
+    let last: f64 = ctx.data(|d| d.get_temp(last_key)).unwrap_or(f64::NEG_INFINITY);
+    if now - last < 1.5 && !(focused && !was_focused) {
+        return;
+    }
+    ctx.data_mut(|d| d.insert_temp(last_key, now));
+
+    if app.session.poll_plugin_folder().is_some() {
+        app.menu_cache = None;
+        ctx.request_repaint();
+    }
+    ctx.request_repaint_after(std::time::Duration::from_millis(1500));
 }
 
 /// Background autosave of documents with unsaved changes every N minutes (File Handling).
