@@ -4551,11 +4551,11 @@ shape	Appearance	Aspetto
 	The original RAW file is unavailable	Il file RAW originale non è disponibile
 	Updating RAW white balance	Aggiornamento del bilanciamento del bianco RAW
 
-cameraRaw	PhotoCraft Standard	PhotoCraft Standard
-cameraRaw	PhotoCraft Color	PhotoCraft Colori
-cameraRaw	PhotoCraft Vivid	PhotoCraft Intenso
-cameraRaw	PhotoCraft Landscape	PhotoCraft Paesaggio
-cameraRaw	PhotoCraft Portrait	PhotoCraft Ritratto
-cameraRaw	PhotoCraft Monochrome	PhotoCraft Monocromatico
-cameraRaw	Original PhotoCraft looks; not Adobe profiles	Look originali PhotoCraft; diversi dai profili Adobe
+	PhotoCraft Standard	PhotoCraft Standard
+	PhotoCraft Color	PhotoCraft Colori
+	PhotoCraft Vivid	PhotoCraft Intenso
+	PhotoCraft Landscape	PhotoCraft Paesaggio
+	PhotoCraft Portrait	PhotoCraft Ritratto
+	PhotoCraft Monochrome	PhotoCraft Monocromatico
+	Original PhotoCraft looks; not Adobe profiles	Look originali PhotoCraft; diversi dai profili Adobe
 cameraRaw	Profile	Profilo

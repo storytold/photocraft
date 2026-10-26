@@ -5,6 +5,25 @@ use photocraft_ui_egui::{PhotocraftApp, camera_raw_ui, control, i18n, theme::The
 use serde_json::json;
 
 #[test]
+fn raw_balance_menu_in_italian_labels_match_the_plain_ui_catalog() {
+    let lang = i18n::Lang::from_code("it").unwrap();
+    // tl! and widgets::dropdown read the plain catalog. Checking only tr_ctx
+    // could pass while the actual dialog still displayed the English labels.
+    for (source, expected) in [
+        ("PhotoCraft Standard", "PhotoCraft Standard"),
+        ("PhotoCraft Color", "PhotoCraft Colori"),
+        ("PhotoCraft Vivid", "PhotoCraft Intenso"),
+        ("PhotoCraft Landscape", "PhotoCraft Paesaggio"),
+        ("PhotoCraft Portrait", "PhotoCraft Ritratto"),
+        ("PhotoCraft Monochrome", "PhotoCraft Monocromatico"),
+        ("Original PhotoCraft looks; not Adobe profiles", "Look originali PhotoCraft; diversi dai profili Adobe"),
+    ] {
+        assert_eq!(i18n::tr(lang, source), expected, "actual UI label: {source}");
+        assert_eq!(i18n::tr_ctx(lang, "cameraRaw", source), expected, "render-test label: {source}");
+    }
+}
+
+#[test]
 fn raw_balance_menu_in_italian() {
     use photocraft_raw::testgen::{DngSpec, mosaic, scene};
     let _gpu = photocraft_testkit::gpu_lock();
