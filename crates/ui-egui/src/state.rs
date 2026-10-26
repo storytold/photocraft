@@ -1509,6 +1509,9 @@ pub struct UiState {
     /// Selected row in the Paths panel ("work" or a saved path name).
     #[serde(default)]
     pub selected_path: Option<String>,
+    /// Whole-Work-Path drag preview is never persisted into preferences or documents.
+    #[serde(skip)]
+    pub work_path_drag: crate::work_path_drag::State,
     /// Layers panel kind filter ("pixel", "adjustment", "type", "shape", "smart"); empty = all.
     #[serde(default)]
     pub layer_filter: Vec<String>,
@@ -1735,6 +1738,7 @@ impl Default for UiState {
             direct_selection: Default::default(),
             corner_radius: None,
             selected_path: None,
+            work_path_drag: Default::default(),
             panels: Panels::default(),
             views: Vec::new(),
             dialogs: Vec::new(),

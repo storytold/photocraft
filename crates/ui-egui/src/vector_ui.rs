@@ -1047,6 +1047,13 @@ pub fn pick_shape_at(doc: &Document, at: [f64; 2], tol: f64) -> Option<photocraf
 }
 
 pub fn path_selection_finish(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
+    if let Some(result) = crate::work_path_drag::finish(app, start, end) {
+        if let Err(error) = result {
+            app.ui.status = error;
+            app.ui.status_error = true;
+        }
+        return;
+    }
     let (dx, dy) = (end[0] - start[0], end[1] - start[1]);
     let tol = 6.0 / f64::from(app.point_zoom().max(0.01));
     if dx.abs() + dy.abs() < 0.5 {
@@ -1191,11 +1198,12 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
     let tool = app.ui.tool;
     let accent = Tokens::get(painter.ctx()).accent;
     let to_scr = |q: [f64; 2]| xf.to_screen(q[0] as f32, q[1] as f32);
-    let draw_path = |p: &Path, anchors: bool| {
-        draw_outline(painter, p, &to_scr, accent);
+    let draw_path = |p: &Path, anchors: bool, delta: [f64; 2]| {
+        let shown = |q: [f64; 2]| to_scr([q[0] + delta[0], q[1] + delta[1]]);
+        draw_outline(painter, p, &shown, accent);
         if anchors {
             for k in p.subpaths.iter().flat_map(|s| &s.knots) {
-                draw_anchor(painter, to_scr([k.anchor.x, k.anchor.y]), false, accent);
+                draw_anchor(painter, shown([k.anchor.x, k.anchor.y]), false, accent);
             }
         }
     };
@@ -1208,7 +1216,7 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
         if paths {
             // The selected saved path shows too, though Direct Selection doesn't edit it yet.
             if let Some(p) = selected_saved_path(app) {
-                draw_path(p, true);
+                draw_path(p, true, [0.0, 0.0]);
             }
             crate::anchor_tools::draw_hover(app, painter, &to_scr, accent, painter.ctx().input(|i| i.modifiers));
         }
@@ -1222,21 +1230,22 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
         if let Some(wp) = &doc.work_path
             && (anchors || app.ui.selected_path.as_deref() == Some("work"))
         {
-            draw_path(wp, anchors);
+            let delta = app.session.active().filter(|st| st.doc.id == doc.id).and_then(|_| crate::work_path_drag::preview(app)).unwrap_or([0.0, 0.0]);
+            draw_path(wp, anchors, delta);
         }
         // The saved path selected in the Paths panel is the target path (#6550).
         if let Some(p) = selected_saved_path(app) {
-            draw_path(p, anchors);
+            draw_path(p, anchors, [0.0, 0.0]);
         }
         let st = app.session.active();
         if let Some(l) = st.and_then(|s| s.active_layer.and_then(|id| s.doc.layer(id)))
             && let LayerContent::Shape(sh) = &l.content
         {
-            draw_path(&sh.path, anchors);
+            draw_path(&sh.path, anchors, [0.0, 0.0]);
         }
         // A targeted vector mask shows its path with any tool (#196).
         if let Some((_, p)) = targeted_vector_mask(app) {
-            draw_path(&p, anchors);
+            draw_path(&p, anchors, [0.0, 0.0]);
         }
         crate::corner_radius::draw(app, painter, &to_scr, accent);
     }
