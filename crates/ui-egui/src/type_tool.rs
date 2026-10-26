@@ -2199,10 +2199,9 @@ fn commit_here(app: &mut PhotocraftApp, mods: egui::Modifiers) {
     }
     if text.trim().is_empty() && ed.created {
         let _ = app.run("layer.delete", json!({"layer": ed.layer}));
-    } else if ed.created {
-        let name = photocraft_engine::type_cmds::layer_name(&text);
-        let _ = app.run("type.edit", json!({"layer": ed.layer, "name": name, "coalesce": ed.session}));
     }
+    // Text edits already maintain the automatic label. Sending `name` here would turn a
+    // generated label into an explicit custom name (or overwrite a user's rename).
 }
 
 /// Commit the edit once its layer is no longer the one worked on (#6483): another layer became
@@ -4399,6 +4398,21 @@ mod tests {
         // Edited later, outside the session that created it (#483).
         app.run("type.edit", json!({"layer": id, "text": "\nSubtitle"})).unwrap();
         assert_eq!(name(&app), "Subtitle");
+    }
+
+    #[test]
+    fn committing_new_type_preserves_an_explicit_equal_text_name() {
+        for command in ["layer.renameLayer", "layer.setProps", "type.edit"] {
+            let mut app = app();
+            pointer_up(&mut app, [50.0, 100.0], [50.0, 100.0]);
+            insert(&mut app, "Title");
+            let id = app.ui.text_edit.as_ref().unwrap().layer;
+            app.run(command, json!({"layer": id, "name": "Title"})).unwrap();
+            insert(&mut app, " expanded");
+            commit(&mut app);
+            app.run("type.edit", json!({"layer": id, "text": "Subtitle"})).unwrap();
+            assert_eq!(app.session.active().unwrap().doc.layer(LayerId(id)).unwrap().name, "Title", "{command}");
+        }
     }
 
     #[test]

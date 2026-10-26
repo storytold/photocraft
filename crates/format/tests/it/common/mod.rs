@@ -122,6 +122,8 @@ pub fn rich_doc(mode: ColorMode, depth: SampleType) -> Document {
         "Type",
         LayerContent::Text(TextLayer {
             text: "Hello ✓ world".into(),
+            auto_name: Some("Type".into()),
+            custom_name: true,
             font_family: "Inter".into(),
             size_pt: 24.0,
             color: Color::rgb(0.2, 0.4, 0.6),

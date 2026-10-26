@@ -268,6 +268,10 @@ pub enum ContentM {
     },
     Text {
         text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        auto_name: Option<String>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        custom_name: bool,
         font_family: String,
         size_pt: f32,
         color: Color,
@@ -378,6 +382,30 @@ pub struct MetadataM {
     pub psd_resources: Vec<(u16, String, Hash)>,
     /// (signature hex, key hex, blob)
     pub psd_global_blocks: Vec<(String, String, Hash)>,
+}
+
+#[cfg(test)]
+mod text_name_tests {
+    use super::*;
+
+    #[test]
+    fn older_text_without_auto_name_remains_unmarked() {
+        let old = serde_json::json!({
+            "kind": "text", "text": "Heading", "font_family": "Inter", "size_pt": 12.0,
+            "color": Color::BLACK, "transform": Affine::IDENTITY, "cache": null, "psd_raw": null
+        });
+        let content: ContentM = serde_json::from_value(old).unwrap();
+        let ContentM::Text { auto_name, custom_name, .. } = &content else { panic!("not text") };
+        assert_eq!(auto_name, &None);
+        assert!(!custom_name);
+        let value = serde_json::to_value(content).unwrap();
+        assert!(value.get("auto_name").is_none());
+        assert!(value.get("custom_name").is_none());
+        let mut explicit = value;
+        explicit["custom_name"] = serde_json::json!(true);
+        let content: ContentM = serde_json::from_value(explicit).unwrap();
+        assert_eq!(serde_json::to_value(content).unwrap()["custom_name"], true);
+    }
 }
 
 #[cfg(test)]

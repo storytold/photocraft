@@ -1492,7 +1492,7 @@ fn rename_layer(s: &mut Session, p: &Value) -> Result<Value> {
     let name = p.get("name").and_then(Value::as_str).filter(|n| !n.trim().is_empty()).ok_or_else(|| bad("layer.renameLayer", "missing `name`"))?.to_string();
     let id = crate::commands::layer_param(s, p)?;
     s.edit("Rename Layer", |doc, _| {
-        doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?.name = name;
+        crate::type_cmds::set_custom_name(doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?, name);
         Ok(())
     })?;
     Ok(Value::Null)
