@@ -180,6 +180,29 @@ fn purge_commands() {
     let _ = s.execute("edit.purge.all", json!({}));
 }
 
+#[test]
+fn purge_all_releases_prepared_brush_tips_even_without_a_document() {
+    use photocraft_paint::{BrushContext, BrushSettings, Dab, GrayTile, TipShape};
+    let mut s = Session::new();
+    let brush = BrushSettings { tip: TipShape::Sampled(GrayTile::from_fn(31, 17, |x, y| ((x + y) % 5) as f32 / 4.0)), ..Default::default() };
+    let ctx = BrushContext::new(&brush);
+    let dab = Dab::round(photocraft_geom::Point::new(12.5, 14.5), 10.0, 1.0);
+    let rect = ctx.dab_rect(&dab, false);
+    let mut before = Vec::new();
+    ctx.rasterize(&dab, false, rect, &mut before);
+    assert!(s.is_enabled("edit.purge.all"), "prepared tips alone enable All");
+    let result = s.execute("edit.purge.all", json!({})).unwrap();
+    assert!(result["purged"].as_array().unwrap().contains(&json!("brush mip cache")));
+    assert!(result["bytes"].as_u64().unwrap() > 0);
+    // An already prepared brush remains valid after the cache releases its Arc.
+    let mut after = Vec::new();
+    ctx.rasterize(&dab, false, rect, &mut after);
+    assert_eq!(before, after);
+    let next = BrushContext::new(&brush);
+    next.rasterize(&dab, false, rect, &mut after);
+    assert_eq!(before, after);
+}
+
 /// White canvas with vertical black stripes, a red blob to remove, and a selection around it.
 fn blob_session(depth: u32) -> Session {
     let mut s = session(depth);
