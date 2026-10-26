@@ -37,6 +37,7 @@ pub mod faces;
 pub mod features;
 mod fxutil;
 mod gallery;
+pub mod global_perspective;
 pub mod hdr;
 pub mod histogram;
 mod image;
