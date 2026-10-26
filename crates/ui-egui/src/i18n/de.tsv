@@ -3454,6 +3454,103 @@ curves	Smooth	Glätten
 	Grayscale Ramp	Graustufenbalken
 	Current Colors	Aktuelle Farben
 	Make Ramp Web Safe	Farbbalken auf Webfarben beschränken
+
+# AI API workflows
+
+# AI API workflows
+
+# AI API workflows
+
+# AI API workflows
+
+# AI workflow translations retained from the integration branch
+	AI Integrations	KI-Integrationen
+	API configuration can be saved now. AI generation is still being implemented.	Die API-Konfiguration kann gespeichert werden. Die KI-Bildgenerierung wird noch implementiert.
+	OpenAI · Prompt preparation	OpenAI · Prompt-Erstellung
+	OpenAI · Images	OpenAI · Bilder
+	API base URL	API-Basisadresse
+	API key environment variable	Umgebungsvariable für API-Schlüssel
+	Local or self-hosted image generation. Leave the key variable empty if no authentication is needed.	Lokale oder selbst gehostete Bildgenerierung. Ohne Authentifizierung bleibt die Schlüsselvariable leer.
+	Creates the prompt for the ComfyUI workflow using the Responses API.	Erstellt den Prompt für den ComfyUI-Workflow über die Responses API.
+	Direct image generation and editing using the Images API.	Direkte Bildgenerierung und Bearbeitung über die Images API.
+	Enter the variable name, not the API key. Only the name is saved. Set the variable before starting PhotoCraft.	Den Variablennamen eingeben, nicht den API-Schlüssel. Nur der Name wird gespeichert. Die Variable vor dem Start von PhotoCraft setzen.
+	AI creates a preview. Apply it as a new layer after reviewing the result.	Die KI erstellt eine Vorschau. Nach der Prüfung als neue Ebene übernehmen.
+	Prepare the prompt automatically with OpenAI	Prompt automatisch mit OpenAI erstellen
+	Only your text instruction is sent to OpenAI. API usage is billed by your provider.	Nur die Textanweisung wird an OpenAI gesendet. Der Anbieter berechnet die API-Nutzung.
+	Direct OpenAI Images sends the image and mask to your API endpoint and requires a square working area.	OpenAI Images sendet Bild und Maske an den API-Endpunkt und benötigt einen quadratischen Arbeitsbereich.
+	API Settings…	API-Einstellungen…
+	No AI results yet.	Noch keine KI-Ergebnisse.
+	AI Result	KI-Ergebnis
+	AI Results	KI-Ergebnisse
+	List AI Results	KI-Ergebnisse anzeigen
+	The document changed. Generate a new result before applying.	Das Dokument wurde geändert. Vor der Übernahme ein neues Ergebnis erstellen.
+	Apply as New Layer	Als neue Ebene übernehmen
+	Choose your ComfyUI and OpenAI API endpoints.	Die API-Endpunkte für ComfyUI und OpenAI festlegen.
+	Generate Image…	Bild generieren…
+	Edit Image with AI…	Bild mit KI bearbeiten…
+	Generative Fill…	Generatives Füllen…
+	Generative Remove…	Generatives Entfernen…
+	Generative Expand…	Generatives Erweitern…
+	Remove Background with AI…	Hintergrund mit KI entfernen…
+	Prompt	Prompt
+	Prompt model	Prompt-Modell
+	Image model	Bildmodell
+	Negative prompt	Negativer Prompt
+	Context margin	Kontextrand
+	Create Preview	Vorschau erstellen
+	Hide original layers to show the cutout	Originalebenen ausblenden, um die Freistellung zu sehen
+	Replace Background with AI…	Hintergrund mit KI ersetzen…
+	Discard	Verwerfen
+	Output size	Ausgabegröße
+	Current document	Aktuelles Dokument
+	Image quality	Bildqualität
+	AI working size	KI-Arbeitsauflösung
+	The canvas size changes only when you apply the result.	Die Arbeitsfläche ändert sich erst bei der Übernahme des Ergebnisses.
+	Upsampled to the destination; this is not native high-resolution AI detail.	Auf die Zielgröße hochskaliert; keine native KI-Generierung in dieser Auflösung.
+	Direct OpenAI generation must fit the selected model limits (up to 4K for GPT Image 2/2.5). API usage is billed by your provider.	Direkte OpenAI-Generierung muss innerhalb der Grenzen des gewählten Modells liegen (bis zu 4K für GPT Image 2/2.5). Dein Anbieter berechnet die API-Nutzung.
+	Restore high-resolution detail with ComfyUI (Real-ESRGAN)	Details mit ComfyUI hochskalieren (Real-ESRGAN)
+	AI detail restoration	KI-Detailrekonstruktion
+	Open as New Document	Als neues Dokument öffnen
+	AI Upscale…	KI-Upscale…
+	Generation resolution	Generierungsauflösung
+	Direct generation	Direkte Generierung
+	Reduced generation	Generierung mit reduzierter Auflösung
+	Sampling steps	Sampling-Schritte
+	Upscale factor	Vergrößerungsfaktor
+	Hide original layers	Originalebenen ausblenden
+	Direct generation uses the output size. Model and GPU limits apply; use AI Upscale separately for enlargement.	Direkt in Ausgabegröße generieren. Modell- und GPU-Grenzen gelten; zum Vergrößern KI-Upscale separat verwenden.
+	Upscale the visible image from its original pixels with ComfyUI (Real-ESRGAN). Transparency is preserved.	Das sichtbare Bild aus den Originalpixeln mit ComfyUI (Real-ESRGAN) vergrößern. Transparenz bleibt erhalten.
+	Enter the variable name configured on the web server, not the API key. Keys stay in the server container.	Den auf dem Webserver konfigurierten Variablennamen eingeben, nicht den API-Schlüssel. Die Schlüssel bleiben im Server-Container.
+	API key	API-Schlüssel
+	Enter or replace API key	API-Schlüssel eingeben oder ersetzen
+	Clear API key	API-Schlüssel löschen
+	Optional environment variable	Optionale Umgebungsvariable
+	Local or self-hosted image generation. Leave the API key empty if no authentication is needed.	Lokale oder selbst gehostete Bildgenerierung. Ohne Authentifizierung den API-Schlüssel leer lassen.
+	API keys stay in memory for this session and are never written to your preferences. To keep a key between sessions, name an environment variable instead; a key entered here takes precedence over it.	API-Schlüssel bleiben nur für diese Sitzung im Arbeitsspeicher und werden nie in die Einstellungen geschrieben. Um einen Schlüssel dauerhaft zu nutzen, gib stattdessen eine Umgebungsvariable an; ein hier eingegebener Schlüssel hat Vorrang.
+	API keys are saved in the server configuration. An empty field keeps the saved key; use Clear API key to remove it.	API-Schlüssel werden in der Server-Konfiguration gespeichert. Ein leeres Feld behält den gespeicherten Schlüssel; zum Entfernen auf API-Schlüssel löschen klicken.
+
+# AI additions: English defaults where translation is pending.
+	A working image up to 1024 pixels is sent to your prompt provider. Choose a vision-capable model.	Eine Arbeitskopie mit bis zu 1024 Pixeln wird an deinen Prompt-Anbieter gesendet. Wähle ein bildfähiges Modell.
+	Analysis instructions	Anweisungen zur Bildanalyse
+	Analyze image	Bild analysieren
+	Analyze the visible image and create an editable prompt for recreating it.	Analysiere das sichtbare Bild und erstelle einen bearbeitbaren Prompt zur Rekonstruktion.
+	Apply your AI settings before checking dependencies. Downloads run on the ComfyUI host.	Übernimm deine KI-Einstellungen vor der Prüfung. Downloads laufen auf dem ComfyUI-Host.
+	Check ComfyUI Dependencies…	ComfyUI-Abhängigkeiten prüfen…
+	Check dependencies	Abhängigkeiten prüfen
+	ComfyUI Dependencies	ComfyUI-Abhängigkeiten
+	ComfyUI · Dependency service	ComfyUI · Abhängigkeitsdienst
+	Create Prompt from Image…	Prompt aus Bild erstellen…
+	Download ComfyUI Models	ComfyUI-Modelle herunterladen
+	Download selected models	Ausgewählte Modelle herunterladen
+	I have reviewed and accept the selected model licenses.	Ich habe die Lizenzen der ausgewählten Modelle geprüft und akzeptiere sie.
+	Image description	Bildbeschreibung
+	Manage ComfyUI dependencies…	ComfyUI-Abhängigkeiten verwalten…
+	Optional companion service for downloading verified models on the ComfyUI host.	Optionaler Begleitdienst zum Herunterladen geprüfter Modelle auf dem ComfyUI-Host.
+	Recreation prompt	Rekonstruktionsprompt
+	Review Recreation Prompt	Rekonstruktionsprompt prüfen
+	Review the prompt, then continue to image generation. Matching pixels are not guaranteed.	Prüfe den Prompt und fahre dann mit der Bildgenerierung fort. Identische Pixel sind nicht garantiert.
+	Use prompt for generation	Prompt zur Generierung verwenden
+	AI	KI
 # Art History Brush (#213).
 	Art History Brush	Künstlerischer Protokollpinsel
 	Art History Brush Tool	Künstlerischer-Protokollpinsel-Werkzeug

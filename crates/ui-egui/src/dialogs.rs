@@ -439,6 +439,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     outcome = crate::brush_preset_dialog::body(app, ui, &mut fields, interactive)
                 }
                 DialogKind::Command if crate::fill_ui::owns(&fields) => crate::fill_ui::body(app, ui, &mut fields),
+                DialogKind::Command if crate::ai_ui::owns(&fields) => crate::ai_ui::body(app, ui, &mut fields),
                 DialogKind::Command if crate::pattern_fill_ui::owns(&fields) => crate::pattern_fill_ui::body(app, ui, &mut fields),
                 DialogKind::Command if crate::stroke_ui::owns(&fields) => crate::stroke_ui::body(ui, &mut fields),
                 DialogKind::Command if crate::snapshot_dialog::owns(&fields) => crate::snapshot_dialog::body(ui, &mut fields),
@@ -529,7 +530,11 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 // (larger) size, so a dialog whose body gets shorter would never shrink back.
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
                     ui.spacing_mut().item_spacing.x = 10.0;
-                    if matches!(d.kind, DialogKind::About | DialogKind::Error) {
+                    if crate::ai_ui::owns(&fields) && fields.get("__ai").and_then(Value::as_str) == Some("results") {
+                        if dialog_buttons(ui, &[DialogButton::new(ButtonRole::Default, tl!("Close"), 84.0)]).is_some() {
+                            outcome = Some(false);
+                        }
+                    } else if matches!(d.kind, DialogKind::About | DialogKind::Error) {
                         // ↩ is OK too, as on every other dialog (#4872), from the frame after the
                         // alert appeared: the ↩ that raised it (committing a locked layer's Free
                         // Transform, say) must not close it again at once.
@@ -541,10 +546,18 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                             outcome = Some(false);
                         }
                     } else {
-                        let ok_label = if d.kind == DialogKind::NewDocument {
+                        let ok_label = if fields.get("__ai").and_then(Value::as_str) == Some("interpretation") {
+                            tl!("Use prompt for generation")
+                        } else if fields.get("__ai").and_then(Value::as_str) == Some("dependencies") {
+                            tl!("Close")
+                        } else if fields.get("__command").and_then(Value::as_str) == Some("edit.aiDescribeImage") {
+                            tl!("Analyze image")
+                        } else if d.kind == DialogKind::NewDocument {
                             tl!("Create")
                         } else if crate::open_prompt::owns_damage(&d.fields) {
                             tl!("Continue")
+                        } else if crate::ai_ui::owns(&fields) {
+                            tl!("Create Preview")
                         } else if crate::delete_layer_prompt::owns(&d.fields) {
                             tl!("Delete")
                         } else if crate::disk_change_prompt::owns(&d.fields) || crate::replace_prompt::owns(&d.fields) {
@@ -556,7 +569,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                         };
                         // Dialogs that need an input first (a preset name, a selection) grey OK out.
                         let can_ok = crate::crop_presets::can_confirm(app, &fields) && crate::stack_dialog::can_confirm(&fields);
-                        let ok = DialogButton::new(ButtonRole::Default, ok_label, 84.0).enabled(can_ok);
+                        let ok = DialogButton::new(ButtonRole::Default, ok_label, if crate::ai_ui::owns(&fields) { 150.0 } else { 84.0 }).enabled(can_ok);
                         // Photoshop: holding Alt turns Cancel into Reset (the dialog stays open).
                         // Dialogs opt in via `dialog_alt_reset::supported` (per marker).
                         let reset = ui.input(|i| i.modifiers.alt) && crate::dialog_alt_reset::supported(&fields);
@@ -806,6 +819,11 @@ fn file_command(fields: &Fields) -> Option<&'static str> {
 
 /// Confirm a dialog: run its action and close it. Used by the OK button and by automation.
 pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
+    if let Some(fields) = app.ui.dialogs.iter().find(|d| d.id == id && crate::ai_ui::owns(&d.fields)).map(|d| d.fields.clone()) {
+        let result = crate::ai_ui::confirm(app, &fields)?;
+        app.ui.close_dialog(id);
+        return Ok(result);
+    }
     if crate::layer_style::color_picker::has_child(app, id) {
         return Err("confirm or cancel the Layer Style color picker first".into());
     }
@@ -817,6 +835,13 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
         && let Some(authorize) = app.services.automation_command.as_ref()
     {
         authorize(command, &Value::Object(d.fields.clone()))?;
+    }
+    // Preferences validate before closing, so a rejected draft remains editable with OK as
+    // well as Apply. Both the button and the control channel use this path.
+    if app.ui.dialogs.iter().any(|d| d.id == id && d.kind == DialogKind::Command && crate::prefs_ui::is_preferences(&d.fields)) {
+        let result = crate::prefs_ui::apply(app, id)?;
+        app.ui.close_dialog(id);
+        return Ok(result);
     }
     if let Some(d) = app.ui.dialogs.iter().find(|d| d.id == id).filter(|d| crate::guide_layout_ui::owns(&d.fields)) {
         if app.ui.dialogs.iter().any(|child| crate::color_picker_ui::owns(&child.fields) && child.fields.get("__dialog").and_then(Value::as_u64) == Some(id)) {
@@ -861,6 +886,7 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
         DialogKind::Command if crate::crop_presets::owns(&d.fields) => crate::crop_presets::confirm(app, &d.fields),
         DialogKind::Command if crate::variables_ui::owns(&d.fields) => crate::variables_ui::confirm(app, &d.fields),
         DialogKind::Command if crate::file_ui::owns(&d.fields) => crate::file_ui::confirm(app, &d.fields),
+        DialogKind::Command if crate::ai_ui::owns(&d.fields) => crate::ai_ui::confirm(app, &d.fields),
         DialogKind::Command if crate::new_guide_ui::owns(&d.fields) => crate::new_guide_ui::confirm(app, &d.fields),
         DialogKind::Command if crate::color_picker_ui::owns(&d.fields) => crate::color_picker_ui::confirm(app, &d.fields),
         DialogKind::Command if crate::color_range_ui::owns(&d.fields) => crate::color_range_ui::confirm(app, &d.fields),

@@ -11,6 +11,11 @@ pub mod actions_cmds;
 pub mod actions_edit_cmds;
 pub mod adjust_cmds;
 pub mod adjust_params;
+pub mod ai_cmds;
+mod ai_dependency_cmds;
+pub mod ai_runtime_cmds;
+pub mod ai_upscale_cmds;
+mod ai_vision_cmds;
 pub mod align_cmds;
 mod allocation;
 pub mod analysis_cmds;
@@ -136,6 +141,8 @@ mod variables_cmds;
 pub use variables_cmds::{export_data_sets_with, import_data_sets_text};
 pub mod vector_cmds;
 mod video_cmds;
+#[cfg(target_arch = "wasm32")]
+mod web_ai_cmds;
 pub use video_cmds::render_video_with;
 pub mod vp_cmds;
 pub mod warp_cmds;
@@ -201,6 +208,8 @@ pub(crate) fn active_layer_of(s: &Session) -> std::result::Result<&photocraft_do
 #[derive(Clone, Debug)]
 pub struct DocState {
     pub doc: Arc<Document>,
+    /// Runtime identity of this open document, stable across saves/view changes.
+    pub(crate) incarnation: Arc<()>,
     pub history: History,
     /// The primary ("key") layer: what single-layer commands act on. Always a member of
     /// `selected_layers` when set.
@@ -281,6 +290,7 @@ impl DocState {
         let first = history_cmds::Snapshot { id: 0, name: doc.name.clone(), doc: doc.clone(), layers: target };
         Self {
             doc,
+            incarnation: Arc::new(()),
             history,
             active_layer,
             selected_layers: active_layer.into_iter().collect(),
@@ -538,6 +548,8 @@ pub struct Session {
     pub print_spooler: Option<print_cmds::Spooler>,
     /// Background jobs (see [`jobs`]).
     jobs: jobs::Jobs,
+    /// Bounded, session-only AI previews; pixels change only through `ai.result.apply`.
+    ai: ai_cmds::AiState,
     /// Color Sampler points dropped by the last canvas-size change (crop, Canvas Size, Image Size,
     /// rotation), for the status message. Read with [`Session::take_samplers_removed`].
     samplers_removed: usize,
@@ -698,6 +710,7 @@ impl Session {
         smart_cmds::on_close(self, index);
         if let Some(id) = self.docs.get(index).map(|d| d.doc.id) {
             self.cancel_jobs_on(id);
+            self.ai.forget_document(id);
             self.subject_cache.forget_doc(id);
             self.object_finder.forget_doc(id);
         }

@@ -54,6 +54,74 @@ fn job(r: Started) -> JobId {
 }
 
 #[test]
+fn external_jobs_allow_edits_and_do_not_switch_the_active_document_on_completion() {
+    let mut s = session(8, 8);
+    let doc = s.active().unwrap().doc.id;
+    let external = s.start_external_job("test.external", "External preview", Some(doc), |_s, value: u32| Ok(json!({"value": value}))).unwrap();
+    let id = external.id;
+    assert!(!s.job(id).unwrap().locks_document);
+    assert!(s.active_job().is_none());
+    assert!(s.wait_job(id).is_err(), "waiting must not block the runtime driving completion");
+    s.execute("filter.blur.gaussianBlur", json!({"radius": 1})).unwrap();
+    s.execute("file.new", json!({"width": 4, "height": 4})).unwrap();
+    let active = s.active().unwrap().doc.id;
+    assert!(external.complete(Ok(7)));
+    assert_eq!(wait_event(&mut s, id).outcome, JobOutcome::Done(json!({"value": 7})));
+    assert_eq!(s.active().unwrap().doc.id, active);
+    assert_ne!(active, doc);
+}
+
+#[test]
+fn closing_or_cancelling_external_jobs_discards_late_results() {
+    let mut s = session(8, 8);
+    let doc = s.active().unwrap().doc.id;
+    let external = s.start_external_job("test.external", "External preview", Some(doc), |_s, _: ()| panic!("cancelled result must not apply")).unwrap();
+    let id = external.id;
+    let ctx = external.ctx.clone();
+    s.close(0);
+    assert!(ctx.cancelled());
+    assert!(!external.complete(Ok(())));
+    assert_eq!(wait_event(&mut s, id).outcome, JobOutcome::Cancelled);
+    assert!(s.poll_jobs().is_empty());
+
+    let external = s.start_external_job("test.external", "External preview", None, |_s, _: ()| panic!("cancelled result must not apply")).unwrap();
+    let id = external.id;
+    assert!(s.cancel_job(id));
+    assert!(!external.complete(Ok(())));
+    assert_eq!(wait_event(&mut s, id).outcome, JobOutcome::Cancelled);
+}
+
+#[test]
+fn dropping_an_external_completion_handle_reports_failure_without_mutating_documents() {
+    let mut s = session(8, 8);
+    let before = s.active().unwrap().doc.clone();
+    let external = s.start_external_job("test.external", "External preview", Some(before.id), |_s, _: ()| Ok(Value::Null)).unwrap();
+    let id = external.id;
+    drop(external);
+    assert!(matches!(wait_event(&mut s, id).outcome, JobOutcome::Failed(_)));
+    assert!(Arc::ptr_eq(&before, &s.active().unwrap().doc));
+}
+
+#[test]
+fn waiting_for_a_completed_external_job_keeps_its_event_for_the_ui() {
+    let mut s = Session::new();
+    let external = s.start_external_job("test.external", "External preview", None, |_s, value: u32| Ok(json!(value))).unwrap();
+    let id = external.id;
+    assert!(external.complete(Ok(9)));
+    assert_eq!(s.wait_job(id).unwrap(), json!(9));
+    assert_eq!(s.poll_jobs().into_iter().map(|e| e.id).collect::<Vec<_>>(), vec![id]);
+}
+
+#[test]
+fn job_id_exhaustion_returns_an_error_instead_of_panicking_or_reusing_ids() {
+    let mut s = Session::new();
+    s.jobs.next = u64::MAX;
+    assert!(s.start_external_job("test.external", "External preview", None, |_s, _: ()| Ok(Value::Null)).is_err());
+    assert!(s.start_job("test.worker", json!({}), "Worker", false, |_ctx| Ok(()), |_s, ()| Ok(Value::Null)).is_err());
+    assert!(!s.has_jobs());
+}
+
+#[test]
 fn a_job_applies_as_one_undo_step_and_matches_the_inline_result() {
     let mut inline = session(300, 200);
     inline.execute("filter.blur.gaussianBlur", json!({"radius": 4})).unwrap();
@@ -726,6 +794,46 @@ fn a_job_lands_in_the_recording_it_was_started_in_only() {
     s.wait_job(id).unwrap();
     s.execute("actions.stop", json!({})).unwrap();
     assert_eq!(action_steps(&mut s, "A"), ["filter.blur.gaussianBlur"]);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn external_worker_keeps_inline_semantics_and_async_document_lifetime_without_lock() {
+    let mut s = session(32, 32);
+    let document = s.active().unwrap().doc.id;
+    let inline = run_external(&mut s, "test.worker", "Test", Some(document), |_| Ok(7u32), |_, value| Ok(json!(value))).unwrap();
+    assert_eq!(inline, json!(7));
+    assert!(!s.has_jobs());
+    s.jobs.spawn = true;
+    let started = run_external(
+        &mut s,
+        "test.worker",
+        "Test",
+        Some(document),
+        |ctx| {
+            ctx.progress(0.5, "Test");
+            Ok(11u32)
+        },
+        |_, value| Ok(json!(value)),
+    )
+    .unwrap();
+    s.jobs.spawn = false;
+    let pending = s.jobs.pending.take().unwrap();
+    let id = pending.id;
+    s.jobs.running.push(pending);
+    assert_eq!(started["job"], id.0);
+    assert!(s.job_on(document).is_none());
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let events = s.poll_jobs();
+        if let Some(event) = events.into_iter().find(|e| e.id == id) {
+            assert!(matches!(event.outcome,JobOutcome::Done(v) if v==json!(11)));
+            break;
+        }
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(5));
+    }
 }
 
 /// Exercise six terminal job routes so prepared paint snapshots cannot outlive a completed or discarded job.

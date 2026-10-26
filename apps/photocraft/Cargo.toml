@@ -16,6 +16,7 @@ heif = ["photocraft-codecs/heif"]
 workspace = true
 
 [dependencies]
+photocraft-ai = { workspace = true }
 photocraft-doc = { workspace = true }
 photocraft-color = { workspace = true }
 photocraft-raster = { workspace = true }

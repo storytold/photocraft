@@ -1,0 +1,17 @@
+services:
+  dependencies:
+    image: photocraft-comfy-deps:0.8.2-ai
+    container_name: photocraft-comfy-deps
+    restart: unless-stopped
+    user: "${PHOTOCRAFT_MODELS_UID:-1000}:${PHOTOCRAFT_MODELS_GID:-1000}"
+    environment:
+      PHOTOCRAFT_DEPS_TOKEN: "${PHOTOCRAFT_DEPS_TOKEN:?Set a private dependency service token}"
+    ports:
+      - "${PHOTOCRAFT_DEPS_HOST_IP:-127.0.0.1}:8190:8190"
+    volumes:
+      - "${PHOTOCRAFT_MODELS_DIR:?Set the existing ComfyUI model directory}:/models:rw"
+    read_only: true
+    cpus: 1
+    mem_limit: 512m
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]

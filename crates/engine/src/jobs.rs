@@ -180,8 +180,10 @@ pub struct JobInfo {
     pub command: String,
     /// Shown in the progress UI ("Gaussian Blur").
     pub label: String,
-    /// The document the job edits (and locks), if any.
+    /// The document the job belongs to, if any (including jobs that don't lock it).
     pub document: Option<DocId>,
+    /// Whether this job prevents edits to its document.
+    pub locks_document: bool,
     /// `running`, `done`, `failed` or `cancelled`.
     pub state: &'static str,
     pub progress: f32,
@@ -197,8 +199,26 @@ pub struct JobInfo {
 type Payload = Box<dyn Any + Send>;
 type Apply = Box<dyn FnOnce(&mut Session, Payload) -> Result<Value> + Send>;
 
-/// Wall-clock milliseconds since some fixed point (0 on wasm, where `Instant` is unavailable and
-/// jobs run inline anyway).
+/// Completion inbox for an externally driven job. Dropping it without completing
+/// reports a worker failure on the next poll. Cancellation is shared with the
+/// session; late completions are discarded rather than mutating a closed document.
+pub struct ExternalJob<T: Send + 'static> {
+    pub id: JobId,
+    pub ctx: JobCtx,
+    tx: std::sync::mpsc::Sender<Result<Payload>>,
+    marker: std::marker::PhantomData<T>,
+}
+
+impl<T: Send + 'static> ExternalJob<T> {
+    pub fn complete(self, result: Result<T>) -> bool {
+        if self.ctx.cancelled() {
+            return false;
+        }
+        self.tx.send(result.map(|value| Box::new(value) as Payload)).is_ok()
+    }
+}
+
+/// Wall-clock milliseconds since some fixed point; browser async jobs use the host clock.
 fn now_ms() -> f64 {
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -207,7 +227,7 @@ fn now_ms() -> f64 {
     }
     #[cfg(target_arch = "wasm32")]
     {
-        0.0
+        js_sys::Date::now()
     }
 }
 
@@ -223,6 +243,9 @@ struct Running {
     recorded_by: Option<u64>,
     pre_selected: Option<Vec<LayerId>>,
     doc: Option<DocId>,
+    locks_document: bool,
+    /// Externally completed jobs must not block a browser in `wait_job`.
+    external: bool,
     /// The document as the job saw it: applying fails if it was edited meanwhile.
     snapshot: Option<Weak<Document>>,
     ctx: JobCtx,
@@ -267,6 +290,7 @@ impl Running {
             command: self.command.clone(),
             label: self.label.clone(),
             document: self.doc,
+            locks_document: self.locks_document,
             state: "running",
             progress: self.ctx.fraction(),
             message: self.ctx.message(),
@@ -325,7 +349,7 @@ pub enum Started {
 
 /// Commands that never edit the active document, allowed while a job runs on it.
 fn independent_of_document(id: &str) -> bool {
-    const PREFIXES: &[&str] = &["jobs.", "tools.", "view.", "window.", "help.", "brush.presets.", "gradient.presets."];
+    const PREFIXES: &[&str] = &["jobs.", "tools.", "view.", "window.", "help.", "brush.presets.", "gradient.presets.", "ai.result."];
     const IDS: &[&str] = &["file.new", "file.close", "file.closeAll", "edit.preferences", "edit.colorSettings", "edit.keyboardShortcuts", "edit.menus"];
     PREFIXES.iter().any(|p| id.starts_with(p)) || IDS.contains(&id)
 }
@@ -382,7 +406,7 @@ pub fn run<T: Send + 'static>(
         let t = any.downcast::<T>().map_err(|_| EngineError::Other("internal error: job result type mismatch".into()))?;
         apply(s, *t)
     });
-    s.jobs.next += 1;
+    s.jobs.next = s.jobs.next.checked_add(1).ok_or_else(|| EngineError::Other("job id limit reached".into()))?;
     let id = JobId(s.jobs.next);
     #[cfg(not(target_arch = "wasm32"))]
     let handle = {
@@ -414,6 +438,8 @@ pub fn run<T: Send + 'static>(
         recorded_by: None,
         pre_selected: None,
         doc,
+        locks_document: lock_document,
+        external: false,
         snapshot,
         ctx,
         started_ms: now_ms(),
@@ -513,6 +539,66 @@ impl Session {
     /// default, a context nothing can cancel.
     pub fn set_inline_job_ctx(&mut self, ctx: Option<JobCtx>) {
         self.jobs.inline = ctx;
+    }
+
+    /// Register a nonblocking external job and return a completion handle to the
+    /// injected runtime. Works on native and wasm without spawning a thread or
+    /// requiring a browser future to be `Send`.
+    ///
+    /// `document` controls lifetime only: edits remain enabled, closing cancels
+    /// the job. Completion should store preview artifacts; a separate command
+    /// must check the captured revision before applying them to a document.
+    pub fn start_external_job<T: Send + 'static>(
+        &mut self,
+        command: &str,
+        label: &str,
+        document: Option<DocId>,
+        apply: impl FnOnce(&mut Session, T) -> Result<Value> + Send + 'static,
+    ) -> Result<ExternalJob<T>> {
+        if self.jobs.spawn && self.jobs.pending.is_some() {
+            return Err(EngineError::Other("a command cannot start a second background job".into()));
+        }
+        if document.is_some_and(|id| !self.docs.iter().any(|st| st.doc.id == id)) {
+            return Err(EngineError::Other("the external job document is not open".into()));
+        }
+        let next = self.jobs.next.checked_add(1).ok_or_else(|| EngineError::Other("job id limit reached".into()))?;
+        let id = JobId(next);
+        let ctx = JobCtx::new();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let erased: Apply = Box::new(move |s, any| {
+            let value = any.downcast::<T>().map_err(|_| EngineError::Other("internal error: external job result type mismatch".into()))?;
+            apply(s, *value)
+        });
+        let running = Running {
+            id,
+            command: command.to_string(),
+            label: label.to_string(),
+            params: Value::Null,
+            journal: false,
+            recorded_by: None,
+            pre_selected: None,
+            doc: document,
+            locks_document: false,
+            external: true,
+            snapshot: None,
+            ctx: ctx.clone(),
+            started_ms: now_ms(),
+            coalesce: None,
+            color_restrict: None,
+            filter_mask_layer: None,
+            layers: None,
+            rx,
+            apply: Some(erased),
+            #[cfg(not(target_arch = "wasm32"))]
+            handle: None,
+        };
+        if self.jobs.spawn {
+            self.jobs.pending = Some(running);
+        } else {
+            self.jobs.running.push(running);
+        }
+        self.jobs.next = next;
+        Ok(ExternalJob { id, ctx, tx, marker: std::marker::PhantomData })
     }
 
     /// Run a command, in the background when it supports it (see [`jobs`](crate::jobs)). Errors
@@ -642,6 +728,11 @@ impl Session {
     /// Apply finished background jobs (on this thread) and return every job that ended since
     /// the last call. Cheap when nothing runs; the UI calls it every frame.
     pub fn poll_jobs(&mut self) -> Vec<JobEvent> {
+        self.collect_jobs();
+        std::mem::take(&mut self.jobs.events)
+    }
+
+    fn collect_jobs(&mut self) {
         let mut i = 0;
         while i < self.jobs.running.len() {
             match self.jobs.running.get(i).map(|r| r.rx.try_recv()) {
@@ -660,12 +751,19 @@ impl Session {
         }
         #[cfg(not(target_arch = "wasm32"))]
         self.jobs.draining.retain(|h| !h.is_finished());
-        std::mem::take(&mut self.jobs.events)
     }
 
     /// Block until job `id` ends, apply it, and return its result (the control channel's and
     /// MCP's default `wait`, and the CLI). `Err(Cancelled)` if it was cancelled.
     pub fn wait_job(&mut self, id: JobId) -> Result<Value> {
+        // Network/browser futures progress outside the engine. Poll their inbox
+        // instead of blocking this thread waiting for it to drive itself.
+        if self.jobs.running.iter().any(|r| r.id == id && r.external) {
+            self.collect_jobs();
+            if self.jobs.running.iter().any(|r| r.id == id) {
+                return Err(EngineError::Other("external job is still running; poll jobs.list for completion".into()));
+            }
+        }
         if let Some(i) = self.jobs.running.iter().position(|r| r.id == id) {
             let job = self.jobs.running.remove(i);
             let r = job.rx.recv().unwrap_or_else(|_| Err(EngineError::Other(format!("`{}` stopped unexpectedly", job.label))));
@@ -728,7 +826,7 @@ impl Session {
 
     /// The running job that locks document `doc`, if any.
     pub fn job_on(&self, doc: DocId) -> Option<JobInfo> {
-        self.jobs.running.iter().find(|r| r.doc == Some(doc)).map(Running::info)
+        self.jobs.running.iter().find(|r| r.doc == Some(doc) && r.locks_document).map(Running::info)
     }
 
     /// The running job that locks the active document, if any.
@@ -969,7 +1067,7 @@ impl Session {
         }
         let prev_active = self.active;
         let target = match doc {
-            Some(d) => {
+            Some(d) if job.locks_document => {
                 let i =
                     self.documents().iter().position(|st| st.doc.id == *d).ok_or_else(|| EngineError::Other(format!("`{label}`: the document was closed")))?;
                 let unchanged = snapshot.as_ref().is_some_and(|w| self.documents().get(i).is_some_and(|st| Weak::ptr_eq(w, &Arc::downgrade(&st.doc))));
@@ -979,6 +1077,12 @@ impl Session {
                 self.active = Some(i);
                 self.note_active_change();
                 Some(i)
+            }
+            Some(d) => {
+                if !self.documents().iter().any(|st| st.doc.id == *d) {
+                    return Err(EngineError::Other(format!("`{label}`: the document was closed")));
+                }
+                None
             }
             None => None,
         };
@@ -1106,6 +1210,37 @@ pub fn specs() -> Vec<crate::commands::CommandSpec> {
             journal: false,
         },
     ]
+}
+
+/// Native worker with document lifetime but no editing lock. Headless execution stays inline.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn run_external<T: Send + 'static>(
+    session: &mut Session,
+    command: &str,
+    label: &str,
+    document: Option<DocId>,
+    work: impl FnOnce(&JobCtx) -> Result<T> + Send + 'static,
+    apply: impl FnOnce(&mut Session, T) -> Result<Value> + Send + 'static,
+) -> Result<Value> {
+    if !session.jobs.spawn {
+        let result = work(&session.jobs.inline.clone().unwrap_or_default())?;
+        return apply(session, result);
+    }
+    let completion = session.start_external_job(command, label, document, apply)?;
+    let id = completion.id;
+    let context = completion.ctx.clone();
+    let handle = std::thread::Builder::new()
+        .name(format!("photocraft-ai-{}", id.0))
+        .spawn(move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work(&context)))
+                .unwrap_or_else(|_| Err(EngineError::Other("AI worker failed with an internal error; the document is unchanged".into())));
+            completion.complete(result);
+        })
+        .map_err(|_| EngineError::Other("could not start AI worker".into()))?;
+    if let Some(pending) = &mut session.jobs.pending {
+        pending.handle = Some(handle);
+    }
+    Ok(json!({"job":id.0,"pending":true}))
 }
 
 #[cfg(test)]

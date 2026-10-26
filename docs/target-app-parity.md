@@ -10,6 +10,19 @@ the measured checklists are [`scorecard.md`](scorecard.md) (`cargo xtask scoreca
 [file formats](file-format-parity.md), [hardware](hardware-parity.md),
 [localization](localization-parity.md).
 
+## AI fork update (2026-10-14)
+
+This fork integrates the 0.8.2 base with external ComfyUI and OpenAI-compatible
+providers in the native and Rust/WASM applications. Generation, masked editing,
+background replacement/removal, expansion, standalone upscaling and automatic
+prompt preparation are implemented. Reference-image interpretation returns an
+editable recreation prompt; a separate scoped service checks and downloads the
+fixed ComfyUI model dependencies. See [AI usage](ai-usage.md) and
+[implementation status](ai-integration-plan.md) for validation and remaining limits.
+These additions do not establish Photoshop output-quality parity or change the
+historical weighted percentages below. Provider access, model capabilities and
+GPU memory remain external requirements.
+
 ## Headline (2026-10-10, PhotoCraft 0.6.0, `main` at 3e000bc1)
 
 | Number | Value | Kind |
@@ -591,6 +604,7 @@ See [method, raw measurements and reproduction](five-algorithm-performance.md).
 | 2026-10-12 | minor | Free Transform options bar H/V skew fields; percentages unchanged |
 | 2026-10-12 | minor | `.atn` import: 112 events mapped (TrueGrit Texture Supply sets play end to end); percentages unchanged |
 | 2026-10-11 | minor | Type row evidence: manual/optical kerning and the live Warp Text preview are done (TYPE-218-6/7; variable-font axes TYPE-218-4 too); the 40% estimate is not re-measured |
+| 2026-10-14 | minor | AI fork: external ComfyUI/OpenAI workflows, reference-image prompts and dependency management; historical upstream percentages unchanged |
 | 2026-10-12 | minor | Photoshop Actions `.atn` load and save (90 events mapped both ways); percentages unchanged |
 | 2026-10-12 | minor | Rows checked against `main` and the regenerated scorecard: menu count 631, Workspace checklist and preference count, transform context menu, Puppet Warp mesh, Select and Mask, anchor-point tools, Smart Object conversion, Stamp Visible, mask targeting, Free Transform commit/cancel, Vietnamese catalog, Windows ARM64; percentages, weights and hours not re-measured |
 | 2026-10-11 | minor | Retouching evidence: Pattern Stamp and Background Eraser draw live (#3754), only the Mixer Brush is left of TOOL-213-7; percentages unchanged |

@@ -689,7 +689,9 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
         clipboard_unreadable: Some(Box::new(move || clip_unreadable.get())),
         load_prefs: Some(Box::new(|| std::fs::read_to_string(prefs_file()?).ok())),
         photoshop_shortcuts: Some(Box::new(|| crate::photoshop_settings::live_keyboard_shortcuts(&|k| std::env::var_os(k)))),
-        save_prefs: Some(Box::new(|text: &str| write_atomic(&prefs_file().ok_or("no config directory")?, text.as_bytes()))),
+        save_prefs: Some(Box::new(|text: &str| {
+            photocraft_ai::config::write_private_file(&prefs_file().ok_or("no config directory")?, text.as_bytes()).map_err(|e| e.to_string())
+        })),
         system_theme: crate::appearance::service(),
         append_text: Some(Box::new(|path: &str, text: &str| {
             use std::io::Write;

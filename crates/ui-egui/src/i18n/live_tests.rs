@@ -229,12 +229,12 @@ fn harness_with_services(services: Services) -> egui_kittest::Harness<'static, P
 }
 
 #[test]
-fn first_launch_renders_the_system_language_without_overwriting_auto() {
-    for (tag, code) in [("en-US", "en"), ("zh-CN", "zh-hans"), ("ja-JP", "ja"), ("ko-KR", "ko"), ("ru-RU", "ru"), ("uk-UA", "uk"), ("fr-CA", "fr")] {
+fn first_launch_defaults_to_english_independent_of_system_language() {
+    for (tag, code) in [("en-US", "en"), ("zh-CN", "en"), ("ja-JP", "en"), ("ko-KR", "en"), ("ru-RU", "en"), ("uk-UA", "en"), ("fr-CA", "en")] {
         system::with_system_tags(&[tag], || {
             with_language(Lang::EN, || {
                 let h = harness();
-                assert_eq!(h.state().session.prefs().interface.language, "auto");
+                assert_eq!(h.state().session.prefs().interface.language, "en");
                 assert_eq!(current(), lang(code), "{tag}");
                 assert!(drawn_text(&h).iter().any(|text| *text == file_title(lang(code))), "first-launch menu: {tag}");
             });
@@ -248,7 +248,7 @@ fn missing_or_unsupported_system_languages_render_english() {
         system::with_system_tags(&tags, || {
             with_language(Lang::EN, || {
                 let h = harness();
-                assert_eq!(h.state().session.prefs().interface.language, "auto");
+                assert_eq!(h.state().session.prefs().interface.language, "en");
                 assert_eq!(current(), Lang::EN);
                 assert!(drawn_text(&h).iter().any(|text| text == "File"));
             });
@@ -257,14 +257,14 @@ fn missing_or_unsupported_system_languages_render_english() {
 }
 
 #[test]
-fn older_preferences_without_a_language_follow_the_system() {
+fn older_preferences_without_a_language_default_to_english() {
     system::with_system_tags(&["fr-CA"], || {
         with_language(Lang::EN, || {
             let services = Services { load_prefs: Some(Box::new(|| Some(r#"{"interface":{"uiScale":"125"}}"#.into()))), ..Default::default() };
             let h = harness_with_services(services);
-            assert_eq!(h.state().session.prefs().interface.language, "auto");
+            assert_eq!(h.state().session.prefs().interface.language, "en");
             assert_eq!(h.state().session.prefs().interface.ui_scale, photocraft_engine::prefs::UiScale::P125);
-            assert_eq!(current(), lang("fr"));
+            assert_eq!(current(), Lang::EN);
         });
     });
 }
@@ -274,7 +274,7 @@ fn an_explicit_language_survives_restart_on_a_different_system_language() {
     let saved = system::with_system_tags(&["ja-JP"], || {
         with_language(Lang::EN, || {
             let mut h = harness();
-            assert_eq!(current(), lang("ja"));
+            assert_eq!(current(), Lang::EN);
             h.state_mut().run("prefs.set", json!({"path":"interface.language","value":"ko"})).expect("choose language");
             h.step();
             assert_eq!(current(), lang("ko"));
@@ -328,7 +328,7 @@ fn preferences_preview_does_not_commit_until_applied_and_survives_reload() {
         assert!(text.iter().any(|text| text == tr(fr, "Appearance")), "the draft language must translate the visible dialog");
         assert!(text.iter().any(|text| text == tr(fr, "Cancel")), "the dialog buttons must preview the language too");
         assert!(text.iter().any(|text| text == "File"), "the main window keeps its committed language");
-        assert_eq!(h.state().session.prefs().interface.language, "auto");
+        assert_eq!(h.state().session.prefs().interface.language, "en");
         assert_eq!(current(), Lang::EN, "preview must not leak to the main window");
         h.state_mut().ui.close_dialog(id);
         h.step();
@@ -447,5 +447,17 @@ fn czech_shortcut_conflicts_keep_warning_state_and_shortcut_codes() {
             assert!(message.contains(piece), "{message:?} lacks {piece:?}");
         }
         assert_eq!(fields["overrides"]["file.new"], json!("Cmd+O"));
+    });
+}
+
+#[test]
+fn explicitly_selected_auto_language_still_follows_the_system() {
+    system::with_system_tags(&["fr-CA"], || {
+        with_language(Lang::EN, || {
+            let services = Services { load_prefs: Some(Box::new(|| Some(r#"{"interface":{"language":"auto"}}"#.into()))), ..Default::default() };
+            let h = harness_with_services(services);
+            assert_eq!(h.state().session.prefs().interface.language, "auto");
+            assert_eq!(current(), lang("fr"));
+        });
     });
 }

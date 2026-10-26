@@ -4370,6 +4370,101 @@ layerLabel	No Color	Sem cor
 	Grayscale Ramp	Rampa de tons de cinza
 	Current Colors	Cores atuais
 	Make Ramp Web Safe	Tornar rampa segura para a Web
+
+# AI API workflows
+
+# AI API workflows
+
+# AI API workflows
+
+# AI API workflows
+
+# AI workflow translations retained from the integration branch
+	API configuration can be saved now. AI generation is still being implemented.	A configuração da API pode ser salva. A geração com IA ainda está em desenvolvimento.
+	OpenAI · Prompt preparation	OpenAI · Preparação do prompt
+	OpenAI · Images	OpenAI · Imagens
+	API base URL	URL base da API
+	API key environment variable	Variável de ambiente da chave API
+	Local or self-hosted image generation. Leave the key variable empty if no authentication is needed.	Geração de imagens local ou em servidor próprio. Deixe a variável da chave vazia se não for necessária autenticação.
+	Creates the prompt for the ComfyUI workflow using the Responses API.	Cria o prompt do fluxo de trabalho do ComfyUI pela API Responses.
+	Direct image generation and editing using the Images API.	Geração e edição direta de imagens pela API Images.
+	Enter the variable name, not the API key. Only the name is saved. Set the variable before starting PhotoCraft.	Digite o nome da variável, não a chave API. Apenas o nome é salvo. Defina a variável antes de iniciar o PhotoCraft.
+	AI creates a preview. Apply it as a new layer after reviewing the result.	AI creates a preview. Apply it as a new layer after reviewing the result.
+	Prepare the prompt automatically with OpenAI	Prepare the prompt automatically with OpenAI
+	Only your text instruction is sent to OpenAI. API usage is billed by your provider.	Only your text instruction is sent to OpenAI. API usage is billed by your provider.
+	Direct OpenAI Images sends the image and mask to your API endpoint and requires a square working area.	Direct OpenAI Images sends the image and mask to your API endpoint and requires a square working area.
+	API Settings…	API Settings…
+	No AI results yet.	No AI results yet.
+	AI Result	AI Result
+	AI Results	AI Results
+	List AI Results	List AI Results
+	The document changed. Generate a new result before applying.	The document changed. Generate a new result before applying.
+	Apply as New Layer	Apply as New Layer
+	Choose your ComfyUI and OpenAI API endpoints.	Choose your ComfyUI and OpenAI API endpoints.
+	Generate Image…	Generate Image…
+	Edit Image with AI…	Edit Image with AI…
+	Generative Fill…	Generative Fill…
+	Generative Remove…	Generative Remove…
+	Generative Expand…	Generative Expand…
+	Remove Background with AI…	Remove Background with AI…
+	Prompt	Prompt
+	Prompt model	Prompt model
+	Image model	Image model
+	Negative prompt	Negative prompt
+	Context margin	Context margin
+	Create Preview	Create Preview
+	Hide original layers to show the cutout	Hide original layers to show the cutout
+	Replace Background with AI…	Replace Background with AI…
+	Discard	Discard
+	Output size	Output size
+	Current document	Current document
+	Image quality	Image quality
+	AI working size	AI working size
+	The canvas size changes only when you apply the result.	The canvas size changes only when you apply the result.
+	Upsampled to the destination; this is not native high-resolution AI detail.	Upsampled to the destination; this is not native high-resolution AI detail.
+	Direct OpenAI generation must fit the selected model limits (up to 4K for GPT Image 2/2.5). API usage is billed by your provider.	Direct OpenAI generation must fit the selected model limits (up to 4K for GPT Image 2/2.5). API usage is billed by your provider.
+	Restore high-resolution detail with ComfyUI (Real-ESRGAN)	Restore high-resolution detail with ComfyUI (Real-ESRGAN)
+	AI detail restoration	AI detail restoration
+	Open as New Document	Open as New Document
+	AI Upscale…	AI Upscale…
+	Generation resolution	Generation resolution
+	Direct generation	Direct generation
+	Reduced generation	Reduced generation
+	Sampling steps	Sampling steps
+	Upscale factor	Upscale factor
+	Hide original layers	Hide original layers
+	Direct generation uses the output size. Model and GPU limits apply; use AI Upscale separately for enlargement.	Direct generation uses the output size. Model and GPU limits apply; use AI Upscale separately for enlargement.
+	Upscale the visible image from its original pixels with ComfyUI (Real-ESRGAN). Transparency is preserved.	Upscale the visible image from its original pixels with ComfyUI (Real-ESRGAN). Transparency is preserved.
+	Enter the variable name configured on the web server, not the API key. Keys stay in the server container.	Enter the variable name configured on the web server, not the API key. Keys stay in the server container.
+	API key	Chave API
+	Enter or replace API key	Inserir ou substituir a chave API
+	Clear API key	Limpar chave API
+	Optional environment variable	Variável de ambiente opcional
+	Local or self-hosted image generation. Leave the API key empty if no authentication is needed.	Geração local de imagens ou em servidor próprio. Deixe a chave API vazia se não for necessária autenticação.
+	API keys are saved in the server configuration. An empty field keeps the saved key; use Clear API key to remove it.	As chaves API são salvas na configuração do servidor. Um campo vazio mantém a chave salva; use Limpar chave API para removê-la.
+
+# AI additions: English defaults where translation is pending.
+	A working image up to 1024 pixels is sent to your prompt provider. Choose a vision-capable model.	A working image up to 1024 pixels is sent to your prompt provider. Choose a vision-capable model.
+	Analysis instructions	Analysis instructions
+	Analyze image	Analyze image
+	Analyze the visible image and create an editable prompt for recreating it.	Analyze the visible image and create an editable prompt for recreating it.
+	Apply your AI settings before checking dependencies. Downloads run on the ComfyUI host.	Apply your AI settings before checking dependencies. Downloads run on the ComfyUI host.
+	Check ComfyUI Dependencies…	Check ComfyUI Dependencies…
+	Check dependencies	Check dependencies
+	ComfyUI Dependencies	ComfyUI Dependencies
+	ComfyUI · Dependency service	ComfyUI · Dependency service
+	Create Prompt from Image…	Create Prompt from Image…
+	Download ComfyUI Models	Download ComfyUI Models
+	Download selected models	Download selected models
+	I have reviewed and accept the selected model licenses.	I have reviewed and accept the selected model licenses.
+	Image description	Image description
+	Manage ComfyUI dependencies…	Manage ComfyUI dependencies…
+	Optional companion service for downloading verified models on the ComfyUI host.	Optional companion service for downloading verified models on the ComfyUI host.
+	Recreation prompt	Recreation prompt
+	Review Recreation Prompt	Review Recreation Prompt
+	Review the prompt, then continue to image generation. Matching pixels are not guaranteed.	Review the prompt, then continue to image generation. Matching pixels are not guaranteed.
+	Use prompt for generation	Use prompt for generation
+	AI	AI
 # Art History Brush (#213).
 	Art History Brush Tool	Ferramenta Pincel do histórico da arte
 	Tight Short	Curto cerrado

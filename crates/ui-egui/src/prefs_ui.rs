@@ -1222,6 +1222,9 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
             f.insert("__gpuAdapters".into(), json!(app.perf.gpu_info.adapters));
             let system = system_theme(app, ui.ctx());
             prefs_body(ui, f, system);
+            if f.remove("__openDependencies").is_some() {
+                crate::ai_ui::open_dependencies(app, None);
+            }
         }
         "shortcuts" => shortcuts_body(app, ui, f),
         "presets" => presets_body(app, ui, f),
@@ -1457,7 +1460,14 @@ fn prefs_body(ui: &mut egui::Ui, f: &mut Map<String, Value>, system: Option<egui
                     ui.add_space(4.0);
                     ui.label(RichText::new(tl!("These settings aren't available in PhotoCraft yet.")).color(t.text_faint));
                 } else if let Some(obj) = values.get_mut(&section).and_then(Value::as_object_mut) {
-                    section_fields(ui, &section, obj, &order, lang, system, filter);
+                    if section == "integrations" {
+                        integrations_fields(ui, obj);
+                        if ui.button(tl!("Manage ComfyUI dependencies…")).clicked() {
+                            f.insert("__openDependencies".into(), json!(true));
+                        }
+                    } else {
+                        section_fields(ui, &section, obj, &order, lang, system, filter);
+                    }
                     if section == "fileHandling" {
                         ui.label(
                             RichText::new(tl!("0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized."))
@@ -1485,6 +1495,88 @@ fn prefs_body(ui: &mut egui::Ui, f: &mut Map<String, Value>, system: Option<egui
     // A colour swatch was clicked: open the Color Picker on that value (#2144).
     if let Some((path, name)) = ctx_take_pick(ui) {
         crate::color_picker_ui::request_field(f, &format!("/values/{}", path.replace('.', "/")), &crate::color_picker_ui::title_for(&name));
+    }
+}
+
+/// API configuration is an editable draft, like every other preference section. Rendering or
+/// saving it never contacts a provider; the future adapters consume these same engine values.
+fn integrations_fields(ui: &mut egui::Ui, obj: &mut Map<String, Value>) {
+    let t = Tokens::get(ui.ctx());
+    ui.label(RichText::new(tl!("Choose your ComfyUI and OpenAI API endpoints.")).color(t.text_dim));
+    ui.add_space(8.0);
+    for (title, endpoint, key, reference, hint) in [
+        (
+            "ComfyUI",
+            "comfyuiEndpoint",
+            "comfyuiApiKey",
+            "comfyuiApiKeyEnv",
+            "Local or self-hosted image generation. Leave the API key empty if no authentication is needed.",
+        ),
+        (
+            "OpenAI · Prompt preparation",
+            "openaiPromptEndpoint",
+            "openaiPromptApiKey",
+            "openaiPromptApiKeyEnv",
+            "Creates the prompt for the ComfyUI workflow using the Responses API.",
+        ),
+        ("OpenAI · Images", "openaiImageEndpoint", "openaiImageApiKey", "openaiImageApiKeyEnv", "Direct image generation and editing using the Images API."),
+        (
+            "ComfyUI · Dependency service",
+            "comfyuiDependencyEndpoint",
+            "comfyuiDependencyApiKey",
+            "",
+            "Optional companion service for downloading verified models on the ComfyUI host.",
+        ),
+    ] {
+        ui.push_id(endpoint, |ui| {
+            ui.label(RichText::new(tl!(title)).font(crate::theme::semibold(12.5)).color(t.text));
+            egui::Grid::new("api-fields").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
+                let mut value = obj.get(endpoint).and_then(Value::as_str).unwrap_or_default().to_string();
+                let label = ui.label(RichText::new(tl!("API base URL")).color(t.text_dim));
+                if ui.add(egui::TextEdit::singleline(&mut value).desired_width(300.0).char_limit(2048)).labelled_by(label.id).changed() {
+                    obj.insert(endpoint.into(), json!(value));
+                }
+                ui.end_row();
+                let mut value = obj.get(key).and_then(Value::as_str).unwrap_or_default().to_string();
+                let label = ui.label(RichText::new(tl!("API key")).color(t.text_dim));
+                if ui
+                    .add(egui::TextEdit::singleline(&mut value).password(true).desired_width(300.0).char_limit(4096).hint_text(tl!("Enter or replace API key")))
+                    .labelled_by(label.id)
+                    .changed()
+                {
+                    obj.insert(key.into(), json!(value));
+                }
+                ui.end_row();
+            });
+            if ui.small_button(tl!("Clear API key")).clicked() {
+                obj.insert(key.into(), json!(""));
+            }
+            if !reference.is_empty() {
+                ui.collapsing(tl!("Optional environment variable"), |ui| {
+                    let mut value = obj.get(reference).and_then(Value::as_str).unwrap_or_default().to_string();
+                    if ui.add(egui::TextEdit::singleline(&mut value).desired_width(300.0).char_limit(128)).changed() {
+                        obj.insert(reference.into(), json!(value));
+                    }
+                });
+            }
+            ui.label(RichText::new(tl!(hint)).small().color(t.text_faint));
+            ui.add_space(12.0);
+        });
+    }
+    ui.label(
+        RichText::new(if cfg!(target_arch = "wasm32") {
+            tl!("API keys are saved in the server configuration. An empty field keeps the saved key; use Clear API key to remove it.")
+        } else {
+            tl!("API keys stay in memory for this session and are never written to your preferences. To keep a key between sessions, name an environment variable instead; a key entered here takes precedence over it.")
+        })
+        .small()
+        .color(t.text_dim),
+    );
+    if let Ok(integrations) = serde_json::from_value::<prefs::Integrations>(Value::Object(obj.clone()))
+        && let Err(error) = integrations.validate()
+    {
+        ui.add_space(6.0);
+        ui.label(RichText::new(error).color(t.danger));
     }
 }
 
@@ -3297,6 +3389,42 @@ mod tests {
         }
     }
 
+    #[test]
+    fn preference_labels_are_translated() {
+        let session = photocraft_engine::Session::new();
+        let v: Value = serde_json::from_str(&session.prefs_to_json()).expect("prefs json");
+        for lang in crate::i18n::Lang::all().filter(|l| l.complete_menus()) {
+            let mut missing = Vec::new();
+            for (sec, title) in SECTIONS {
+                if !crate::i18n::has(lang, title) {
+                    missing.push(title.to_string());
+                }
+                let Some(obj) = v.get(sec).and_then(Value::as_object) else { continue };
+                for k in obj.keys() {
+                    if sec == "integrations" && !prefs::is_hidden(&format!("{sec}.{k}")) {
+                        // AI endpoints use the purpose-labelled rows in integrations_fields,
+                        // not the generic field-name editor.
+                        for label in ["API base URL", "API key environment variable", "OpenAI · Prompt preparation", "OpenAI · Images"] {
+                            if !crate::i18n::has(lang, label) {
+                                missing.push(label.to_string());
+                            }
+                        }
+                        continue;
+                    }
+                    if sec == "interface" && k == "favoriteThemes" {
+                        continue; // Rendered as star controls beside the theme choices.
+                    }
+                    let mut labels = vec![humanize(k)];
+                    labels.extend(prefs::choices(&format!("{sec}.{k}")).into_iter().flatten().map(|c| choice_label(c)));
+                    missing.extend(labels.into_iter().filter(|l| !crate::i18n::has(lang, l)));
+                }
+            }
+            missing.sort();
+            missing.dedup();
+            assert!(missing.is_empty(), "{}: untranslated preference labels: {missing:#?}", lang.code());
+        }
+    }
+
     fn app_with_store() -> (PhotocraftApp, Arc<Mutex<Option<String>>>) {
         app_with_saved(None)
     }
@@ -4250,6 +4378,60 @@ mod tests {
         for n in ["Early", "Late"] {
             assert!(s2.tools.presets.iter().any(|p| p.name == n), "{n}");
         }
+    }
+
+    #[test]
+    fn ai_configuration_menu_applies_persists_and_rejects_invalid_drafts() {
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        let (mut app, store) = app_with_store();
+        app.run("prefs.set", json!({"path": "interface.language", "value": "en"})).unwrap();
+        let ctx = egui::Context::default();
+        let id = crate::menus::invoke(&mut app, &ctx, "edit.preferences.integrations", json!({})).unwrap()["dialog"].as_u64().unwrap();
+        let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).build_eframe(move |cc| {
+            PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+            app
+        });
+        h.run_steps(4);
+        h.get_by_label("ComfyUI");
+        h.get_by_label("OpenAI · Prompt preparation");
+        h.get_by_label("OpenAI · Images");
+        h.get_by_label("API keys stay in memory for this session and are never written to your preferences. To keep a key between sessions, name an environment variable instead; a key entered here takes precedence over it.");
+        h.get_by_label("Reset Section");
+        // Merely opening and rendering the dialog does not change the preferences.
+        assert_eq!(h.state().session.prefs().integrations, prefs::Integrations::default());
+
+        let values = h.state_mut().ui.dialog_mut(id).unwrap().fields.get_mut("values").unwrap();
+        values["integrations"]["comfyuiEndpoint"] = json!("http://127.0.0.1:8188");
+        values["integrations"]["openaiPromptEndpoint"] = json!("https://example.com/prompt/v1");
+        values["integrations"]["openaiPromptApiKey"] = json!("synthetic-prompt-key");
+        values["integrations"]["openaiImageApiKeyEnv"] = json!("IMAGE_API_KEY");
+        h.run_steps(2);
+        h.get_by_label("Apply").click();
+        h.run_steps(4);
+        assert_eq!(h.state().session.prefs().integrations.comfyui_endpoint, "http://127.0.0.1:8188");
+        assert!(h.state().ui.dialogs.iter().any(|d| d.id == id));
+        let saved = store.lock().unwrap().clone().unwrap();
+        let (mut restarted, _) = app_with_saved(Some(saved.clone()));
+        tick(&mut restarted, &egui::Context::default());
+        // Keys last for the session only; the environment-variable name is what persists.
+        assert!(!saved.contains("synthetic-prompt-key"), "a key must not reach the preferences file");
+        assert!(restarted.session.prefs().integrations.openai_prompt_api_key.is_none());
+        assert_eq!(restarted.session.prefs().integrations.openai_image_api_key_env, "IMAGE_API_KEY");
+        assert_eq!(h.state().session.prefs().integrations.openai_prompt_api_key.as_ref().unwrap().expose(), "synthetic-prompt-key");
+        assert!(!crate::control::inspect(h.state(), &ctx).to_string().contains("synthetic-prompt-key"));
+
+        // Invalid drafts stay editable, including after an earlier successful Apply.
+        h.state_mut().ui.dialog_mut(id).unwrap().fields.get_mut("values").unwrap()["integrations"]["openaiImageEndpoint"] = json!("invalid");
+        assert!(apply(h.state_mut(), id).is_err());
+        assert!(crate::dialogs::confirm(h.state_mut(), id).is_err());
+        assert!(h.state().ui.dialogs.iter().any(|d| d.id == id));
+        h.get_by_label("Cancel").click();
+        h.run_steps(4);
+        // Cancelling keeps the applied settings; only the session-only key differs from a restart.
+        let mut applied = h.state().session.prefs().integrations.clone();
+        applied.openai_prompt_api_key = None;
+        assert_eq!(applied, restarted.session.prefs().integrations);
     }
 
     #[test]

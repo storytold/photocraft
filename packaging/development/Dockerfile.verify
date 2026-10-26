@@ -1,0 +1,5 @@
+FROM photocraft-installer-builder:20261009
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    wine64 xvfb xauth p7zip-full libxkbcommon-x11-0 \
+    && rm -rf /var/lib/apt/lists/*
+ENV PATH=/usr/lib/wine:/rust/bin:$PATH

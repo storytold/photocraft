@@ -4513,6 +4513,11 @@ shape	Appearance	Izgled
 	Grayscale Ramp	Skala nijansi sive
 	Current Colors	Trenutne boje
 	Make Ramp Web Safe	Učini skalu bezbednom za veb
+
+	OpenAI · Prompt preparation	OpenAI · Priprema upita
+	OpenAI · Images	OpenAI · Slike
+	API base URL	Osnovna adresa API-ja
+	API key environment variable	Promenljiva okruženja za API ključ
 # Art History Brush (#213).
 	Art History Brush Tool	Alatka umetnička četkica istorije
 	Tight Short	Usko kratko

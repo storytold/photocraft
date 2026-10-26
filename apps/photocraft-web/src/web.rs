@@ -56,10 +56,20 @@ pub fn start() {
             return;
         };
         let q = query();
+        let gateway_base = web_sys::window().and_then(|w| w.location().origin().ok()).map(|origin| format!("{origin}/api/ai"));
+        let gateway_config = if let Some(base) = &gateway_base {
+            match photocraft_ai::browser::Gateway::new(base) {
+                Ok(gateway) => gateway.configuration().await.ok(),
+                Err(_) => None,
+            }
+        } else {
+            None
+        };
         let force_cpu = q.contains("cpu");
+        let control_enabled = q.contains("control");
         let mut options = eframe::WebOptions::default();
         photocraft_ui_egui::gpu_canvas::use_adapter_limits(&mut options.wgpu_options.wgpu_setup);
-        if q.contains("webgl")
+        if (q.contains("webgl") || web_sys::window().is_some_and(|w| !w.is_secure_context()))
             && let eframe::egui_wgpu::WgpuSetup::CreateNew(create) = &mut options.wgpu_options.wgpu_setup
         {
             create.instance_descriptor.backends = eframe::wgpu::Backends::GL;
@@ -90,6 +100,41 @@ pub fn start() {
                     preset_warnings.extend(warnings);
                     let drag = listen_drag(&pen_target);
                     let mut app = PhotocraftApp::new(session, services(inbox.clone(), place_inbox.clone(), drag_pos_service(pen_target.clone(), drag)));
+                    if control_enabled {
+                        let (sender, receiver) = std::sync::mpsc::channel();
+                        crate::control::attach(sender, cc.egui_ctx.clone());
+                        app = app.with_control(receiver);
+                    }
+                    if let (Some(base), Some(config)) = (&gateway_base, &gateway_config) {
+                        if let Err(error) = app.session.configure_web_ai_gateway(base) {
+                            log::error!("{error}");
+                        }
+                        if let Some(model) = config.pointer("/webDefaults/promptModel").and_then(serde_json::Value::as_str)
+                            && let Err(error) = app.session.configure_ai_prompt_model(model)
+                        {
+                            log::error!("{error}");
+                        }
+                        let language = web_sys::window()
+                            .and_then(|w| w.session_storage().ok().flatten())
+                            .and_then(|storage| storage.get_item(LANGUAGE_OVERRIDE_KEY).ok().flatten())
+                            .or_else(|| config.pointer("/webDefaults/language").and_then(serde_json::Value::as_str).map(str::to_owned))
+                            .unwrap_or_else(|| "auto".into());
+                        LANGUAGE_BASELINE.with(|baseline| *baseline.borrow_mut() = language.clone());
+                        if let Err(error) = app.session.execute("prefs.set", serde_json::json!({"path":"interface.language","value":language})) {
+                            log::error!("{error}");
+                        }
+                        // The private server configuration is authoritative for API endpoints.
+                        if let Some(providers) = config.get("providers").and_then(|v| v.as_object()) {
+                            let values: serde_json::Map<_, _> = providers
+                                .iter()
+                                .filter(|(name, _)| name.ends_with("Endpoint") || name.ends_with("ApiKeyEnv"))
+                                .map(|(name, value)| (format!("integrations.{name}"), value.clone()))
+                                .collect();
+                            if let Err(error) = app.session.execute("prefs.set", serde_json::json!({"values":values})) {
+                                log::error!("{error}");
+                            }
+                        }
+                    }
                     if !preset_warnings.is_empty() {
                         photocraft_ui_egui::notices::post(&mut app, i18n::t("Some brush presets could not be loaded"), preset_warnings, true, None);
                     }
@@ -288,7 +333,7 @@ impl WebShell {
                 wake.request_repaint();
             });
         }
-        self.unsaved.store(self.app.has_unsaved_work() || self.presets.unsaved(), Ordering::Relaxed);
+        self.unsaved.store(self.app.has_unsaved_work() || self.presets.unsaved() || photocraft_ai::browser::configuration_pending(), Ordering::Relaxed);
     }
 
     /// Fetches the served families asked for (picked in a font menu, or needed by a layout) and
@@ -453,12 +498,31 @@ fn services(inbox: Inbox, place_inbox: Inbox, cursor_pos: photocraft_ui_egui::Cu
         cursor_pos: Some(cursor_pos),
         // Preferences live in the browser's localStorage.
         load_prefs: Some(Box::new(|| local_storage()?.get_item(PREFS_KEY).ok().flatten())),
-        save_prefs: Some(Box::new(|text: &str| local_storage().ok_or("no localStorage")?.set_item(PREFS_KEY, text).map_err(|e| format!("{e:?}")))),
+        save_prefs: Some(Box::new(|text: &str| {
+            let mut preferences: serde_json::Value = serde_json::from_str(text).map_err(|_| "Invalid preferences")?;
+            if let Some(language) = preferences.pointer("/interface/language").and_then(serde_json::Value::as_str) {
+                let changed = LANGUAGE_BASELINE.with(|baseline| baseline.borrow().as_str() != language);
+                if changed {
+                    let storage = web_sys::window().and_then(|w| w.session_storage().ok().flatten()).ok_or("no sessionStorage")?;
+                    storage.set_item(LANGUAGE_OVERRIDE_KEY, language).map_err(|_| "Cannot save session language")?;
+                    LANGUAGE_BASELINE.with(|baseline| *baseline.borrow_mut() = language.into());
+                }
+            }
+            if let Some(providers) = preferences.get("integrations") {
+                photocraft_ai::browser::queue_configuration(providers.clone()).map_err(|e| e.to_string())?;
+            }
+            photocraft_ai::secret::redact(&mut preferences);
+            local_storage().ok_or("no localStorage")?.set_item(PREFS_KEY, &preferences.to_string()).map_err(|e| format!("{e:?}"))
+        })),
         ..Default::default()
     }
 }
 
 const PREFS_KEY: &str = "photocraft.preferences";
+const LANGUAGE_OVERRIDE_KEY: &str = "photocraft.session-language";
+thread_local! {
+    static LANGUAGE_BASELINE: std::cell::RefCell<String> = std::cell::RefCell::new("auto".into());
+}
 
 fn local_storage() -> Option<web_sys::Storage> {
     web_sys::window()?.local_storage().ok().flatten()

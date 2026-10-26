@@ -1,0 +1,30 @@
+[package]
+name = "photocraft-ai"
+description = "Provider-neutral contracts and validated workflows for PhotoCraft AI jobs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+url = "2.5"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "multipart"] }
+tokio = { version = "1", features = ["rt", "time", "macros"] }
+image = { workspace = true, features = ["png"] }
+uuid = { version = "1", features = ["v4"] }
+base64 = "0.22"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = ["Window", "Location"] }
+uuid = { version = "1", features = ["v4", "js"] }

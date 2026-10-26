@@ -25,6 +25,11 @@ page to choose an installer; installation remains a user action. Drafts and prer
 not trigger it. Web/headless frontends and the Flatpak (no network in its sandbox; `flatpak update`
 owns updates there) have no update transport. No release-workflow changes
 are required: publishing a newer stable GitHub Release makes it discoverable.
+For local, unpublished Windows/Linux x64 installers from a working tree, see
+[development installers](../packaging/development/README.md). This route uses an Ubuntu 22.04
+container and unsigned MinGW/NSIS Windows packages; it does not invoke or replace the official
+release workflow. AppImages retain bundled licenses; set `PHOTOCRAFT_APPIMAGE_UPDATE_INFO=''`
+when packaging an unpublished build to omit the release update feed.
 
 ## Cutting a release
 

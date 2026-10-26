@@ -3934,6 +3934,92 @@ curves	Smooth	Làm mượt
 	Grayscale Ramp	Dải thang xám
 	Current Colors	Màu hiện tại
 	Make Ramp Web Safe	Giới hạn dải màu ở màu web
+
+# AI additions: English defaults where translation is pending.
+	A working image up to 1024 pixels is sent to your prompt provider. Choose a vision-capable model.	A working image up to 1024 pixels is sent to your prompt provider. Choose a vision-capable model.
+	AI Integrations	AI Integrations
+	AI Result	AI Result
+	AI Results	AI Results
+	AI Upscale…	AI Upscale…
+	AI creates a preview. Apply it as a new layer after reviewing the result.	AI creates a preview. Apply it as a new layer after reviewing the result.
+	AI detail restoration	AI detail restoration
+	AI working size	AI working size
+	API Settings…	API Settings…
+	API base URL	API base URL
+	API configuration can be saved now. AI generation is still being implemented.	API configuration can be saved now. AI generation is still being implemented.
+	API key	API key
+	API key environment variable	API key environment variable
+	API keys are saved in the server configuration. An empty field keeps the saved key; use Clear API key to remove it.	API keys are saved in the server configuration. An empty field keeps the saved key; use Clear API key to remove it.
+	Analysis instructions	Analysis instructions
+	Analyze image	Analyze image
+	Analyze the visible image and create an editable prompt for recreating it.	Analyze the visible image and create an editable prompt for recreating it.
+	Apply as New Layer	Apply as New Layer
+	Apply your AI settings before checking dependencies. Downloads run on the ComfyUI host.	Apply your AI settings before checking dependencies. Downloads run on the ComfyUI host.
+	Check ComfyUI Dependencies…	Check ComfyUI Dependencies…
+	Check dependencies	Check dependencies
+	Choose your ComfyUI and OpenAI API endpoints.	Choose your ComfyUI and OpenAI API endpoints.
+	Clear API key	Clear API key
+	ComfyUI Dependencies	ComfyUI Dependencies
+	ComfyUI · Dependency service	ComfyUI · Dependency service
+	Context margin	Context margin
+	Create Preview	Create Preview
+	Create Prompt from Image…	Create Prompt from Image…
+	Creates the prompt for the ComfyUI workflow using the Responses API.	Creates the prompt for the ComfyUI workflow using the Responses API.
+	Current document	Current document
+	Direct OpenAI Images sends the image and mask to your API endpoint and requires a square working area.	Direct OpenAI Images sends the image and mask to your API endpoint and requires a square working area.
+	Direct OpenAI generation must fit the selected model limits (up to 4K for GPT Image 2/2.5). API usage is billed by your provider.	Direct OpenAI generation must fit the selected model limits (up to 4K for GPT Image 2/2.5). API usage is billed by your provider.
+	Direct generation	Direct generation
+	Direct generation uses the output size. Model and GPU limits apply; use AI Upscale separately for enlargement.	Direct generation uses the output size. Model and GPU limits apply; use AI Upscale separately for enlargement.
+	Direct image generation and editing using the Images API.	Direct image generation and editing using the Images API.
+	Discard	Discard
+	Download ComfyUI Models	Download ComfyUI Models
+	Download selected models	Download selected models
+	Edit Image with AI…	Edit Image with AI…
+	Enter or replace API key	Enter or replace API key
+	Enter the variable name configured on the web server, not the API key. Keys stay in the server container.	Enter the variable name configured on the web server, not the API key. Keys stay in the server container.
+	Enter the variable name, not the API key. Only the name is saved. Set the variable before starting PhotoCraft.	Enter the variable name, not the API key. Only the name is saved. Set the variable before starting PhotoCraft.
+	Generate Image…	Generate Image…
+	Generation resolution	Generation resolution
+	Generative Expand…	Generative Expand…
+	Generative Fill…	Generative Fill…
+	Generative Remove…	Generative Remove…
+	Hide original layers	Hide original layers
+	Hide original layers to show the cutout	Hide original layers to show the cutout
+	I have reviewed and accept the selected model licenses.	I have reviewed and accept the selected model licenses.
+	Image description	Image description
+	Image model	Image model
+	Image quality	Image quality
+	List AI Results	List AI Results
+	Local or self-hosted image generation. Leave the API key empty if no authentication is needed.	Local or self-hosted image generation. Leave the API key empty if no authentication is needed.
+	Local or self-hosted image generation. Leave the key variable empty if no authentication is needed.	Local or self-hosted image generation. Leave the key variable empty if no authentication is needed.
+	Manage ComfyUI dependencies…	Manage ComfyUI dependencies…
+	Negative prompt	Negative prompt
+	No AI results yet.	No AI results yet.
+	Only your text instruction is sent to OpenAI. API usage is billed by your provider.	Only your text instruction is sent to OpenAI. API usage is billed by your provider.
+	Open as New Document	Open as New Document
+	OpenAI · Images	OpenAI · Images
+	OpenAI · Prompt preparation	OpenAI · Prompt preparation
+	Optional companion service for downloading verified models on the ComfyUI host.	Optional companion service for downloading verified models on the ComfyUI host.
+	Optional environment variable	Optional environment variable
+	Output size	Output size
+	Prepare the prompt automatically with OpenAI	Prepare the prompt automatically with OpenAI
+	Prompt	Prompt
+	Prompt model	Prompt model
+	Recreation prompt	Recreation prompt
+	Reduced generation	Reduced generation
+	Remove Background with AI…	Remove Background with AI…
+	Replace Background with AI…	Replace Background with AI…
+	Restore high-resolution detail with ComfyUI (Real-ESRGAN)	Restore high-resolution detail with ComfyUI (Real-ESRGAN)
+	Review Recreation Prompt	Review Recreation Prompt
+	Review the prompt, then continue to image generation. Matching pixels are not guaranteed.	Review the prompt, then continue to image generation. Matching pixels are not guaranteed.
+	Sampling steps	Sampling steps
+	The canvas size changes only when you apply the result.	The canvas size changes only when you apply the result.
+	The document changed. Generate a new result before applying.	The document changed. Generate a new result before applying.
+	Upsampled to the destination; this is not native high-resolution AI detail.	Upsampled to the destination; this is not native high-resolution AI detail.
+	Upscale factor	Upscale factor
+	Upscale the visible image from its original pixels with ComfyUI (Real-ESRGAN). Transparency is preserved.	Upscale the visible image from its original pixels with ComfyUI (Real-ESRGAN). Transparency is preserved.
+	Use prompt for generation	Use prompt for generation
+	AI	AI
 # Art History Brush (#213).
 	Art History Brush	Cọ lịch sử nghệ thuật
 	Art History Brush Tool	Công cụ Cọ lịch sử nghệ thuật

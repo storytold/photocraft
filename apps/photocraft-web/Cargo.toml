@@ -20,6 +20,8 @@ path = "src/main.rs"
 
 [dependencies]
 photocraft-engine = { workspace = true }
+photocraft-ai = { workspace = true }
+serde_json = { workspace = true }
 photocraft-io = { workspace = true }
 photocraft-codecs = { workspace = true }
 photocraft-doc = { workspace = true }

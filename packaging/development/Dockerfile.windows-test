@@ -1,0 +1,9 @@
+FROM debian:trixie-slim
+ENV DEBIAN_FRONTEND=noninteractive
+RUN dpkg --add-architecture i386 \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+       wine wine64 wine32:i386 xvfb xauth python3 p7zip-full \
+       mesa-vulkan-drivers libegl1 libgl1-mesa-dri \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /src

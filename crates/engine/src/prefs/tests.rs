@@ -1,4 +1,61 @@
 use super::*;
+#[test]
+fn explicit_anonymous_selfhosted_api_key_references_are_persisted() {
+    let mut s = Session::new();
+    s.execute("prefs.set", json!({"values":{"integrations.openaiPromptApiKeyEnv":"","integrations.openaiImageApiKeyEnv":""}})).unwrap();
+    assert_eq!(s.prefs().integrations.openai_prompt_api_key_env, "");
+    assert_eq!(s.prefs().integrations.openai_image_api_key_env, "");
+}
+
+#[test]
+fn ai_endpoints_round_trip_and_old_preferences_keep_defaults() {
+    let mut s = Session::new();
+    let changes = json!({
+        "integrations.comfyuiEndpoint": "http://127.0.0.1:8188",
+        "integrations.comfyuiApiKeyEnv": "COMFYUI_TOKEN",
+        "integrations.openaiPromptEndpoint": "https://example.com/text/v1/",
+        "integrations.openaiPromptApiKeyEnv": "PROMPT_KEY",
+        "integrations.openaiImageEndpoint": "http://localhost:9000/v1",
+        "integrations.openaiImageApiKeyEnv": "IMAGE_KEY"
+    });
+    s.execute("prefs.set", json!({"values": changes})).unwrap();
+    let menu = s.execute("edit.preferences.integrations", json!({})).unwrap();
+    assert_eq!(menu["section"], "integrations");
+    assert_eq!(menu["values"]["comfyuiEndpoint"], "http://127.0.0.1:8188");
+    let mut restarted = Session::new();
+    restarted.load_prefs_json(&s.prefs_to_json()).unwrap();
+    assert_eq!(restarted.prefs().integrations, s.prefs().integrations);
+    let mut old = Session::new();
+    old.load_prefs_json(r#"{"integrations":{"allowAgentControl":false}}"#).unwrap();
+    assert!(!old.prefs().integrations.allow_agent_control);
+    assert_eq!(old.prefs().integrations.comfyui_endpoint, "http://127.0.0.1:8188");
+    assert_eq!(old.prefs().integrations.openai_prompt_endpoint, "https://api.openai.com/v1");
+    s.execute("prefs.reset", json!({"section": "integrations"})).unwrap();
+    assert_eq!(s.prefs().integrations, Integrations::default());
+    assert!(s.journal.is_empty(), "configuration isn't recorded in the command journal");
+}
+
+#[test]
+fn invalid_ai_configuration_is_rejected_atomically_by_commands_and_load() {
+    let mut s = Session::new();
+    let before = s.prefs().clone();
+    for (path, value) in [
+        ("integrations.comfyuiEndpoint", json!("file:///tmp/image")),
+        ("integrations.openaiPromptEndpoint", json!("https://user:secret@example.com/v1")),
+        ("integrations.openaiImageEndpoint", json!("https://example.com?api_key=secret")),
+        ("integrations.openaiPromptApiKeyEnv", json!("sk-secret")),
+        ("integrations.openaiImageApiKeyEnv", json!("bad key name")),
+        ("integrations.comfyuiEndpoint", json!(42)),
+    ] {
+        assert!(s.execute("prefs.set", json!({"values": {"integrations.comfyuiApiKeyEnv": "VALID_KEY", path: value}})).is_err());
+        assert_eq!(s.prefs(), &before, "{path}");
+    }
+    // A whole section must not bypass validation either.
+    assert!(s.execute("prefs.set", json!({"path": "integrations", "value": {"comfyuiEndpoint": "invalid"}})).is_err());
+    assert!(s.load_prefs_json(r#"{"integrations":{"comfyuiEndpoint":"invalid"},"colorSettings":{"workingRgb":"display-p3"}}"#).is_err());
+    assert_eq!(s.prefs(), &before);
+    assert_eq!(s.color.settings.working_rgb, "srgb");
+}
 
 fn session() -> Session {
     let mut s = Session::new();
@@ -670,6 +727,30 @@ fn prefs_set_validates_the_pressure_curve() {
         assert!(p.set("tools.pressureCurve", bad.clone()).is_err(), "{bad}");
     }
     assert_eq!(p.tools.pressure_curve, vec![[0.0, 0.1], [0.5, 0.7], [1.0, 1.0]], "a refused value changes nothing");
+}
+
+#[test]
+fn ai_credentials_are_private_and_public_roundtrips_preserve_them() {
+    let mut s = session();
+    let result = s.execute("prefs.set", json!({"path":"integrations.openaiPromptApiKey","value":"synthetic-config-key"})).unwrap();
+    assert!(!result.to_string().contains("synthetic-config-key"));
+    assert!(!s.prefs_to_json().contains("synthetic-config-key"), "keys never reach the preferences file");
+    let public = s.execute("prefs.get", json!({})).unwrap();
+    assert!(public["integrations"]["openaiPromptApiKey"].is_null());
+    s.execute("prefs.set", json!({"path":"integrations.openaiPromptApiKey","value":null})).unwrap();
+    assert_eq!(s.prefs().integrations.openai_prompt_api_key.as_ref().unwrap().expose(), "synthetic-config-key");
+    // A reload of the stored settings neither revives file-borne keys nor drops the session's.
+    let legacy = r#"{"integrations":{"openaiPromptApiKey":"legacy-plaintext-key","openaiPromptApiKeyEnv":"MY_KEY"}}"#;
+    let mut restored = session();
+    restored.load_prefs_json(legacy).unwrap();
+    assert!(restored.prefs().integrations.openai_prompt_api_key.is_none());
+    assert_eq!(restored.prefs().integrations.openai_prompt_api_key_env, "MY_KEY");
+    assert!(!restored.prefs_to_json().contains("legacy-plaintext-key"));
+    s.load_prefs_json(&s.prefs_to_json()).unwrap();
+    assert_eq!(s.prefs().integrations.openai_prompt_api_key.as_ref().unwrap().expose(), "synthetic-config-key");
+    assert!(s.execute("prefs.set", json!({"path":"integrations.openaiPromptApiKey","value":"bad\nkey"})).is_err());
+    s.execute("prefs.reset", json!({"path":"integrations.openaiPromptApiKey"})).unwrap();
+    assert!(s.prefs().integrations.openai_prompt_api_key.is_none());
 }
 
 /// #2434: each unit's readout keeps Photoshop's precision, rounded half away from zero and

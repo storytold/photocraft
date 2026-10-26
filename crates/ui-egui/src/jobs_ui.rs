@@ -525,8 +525,17 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
             app.sync_views();
             crate::file_ui::print_status(app, result);
         }
-        JobOutcome::Done(_) => {
+        JobOutcome::Done(v) => {
             app.sync_views();
+            if let Some(report) = v.get("dependencyReport") {
+                crate::ai_ui::open_dependencies(app, Some(report));
+            }
+            if let Some(result) = v.get("imageInterpretation") {
+                crate::ai_ui::open_interpretation(app, result);
+            }
+            if v.get("preview").and_then(Value::as_bool) == Some(true) {
+                crate::ai_ui::open_results(app);
+            }
             app.ui.status = e.label;
             app.ui.status_error = false;
         }

@@ -455,3 +455,14 @@ Forks and modified versions must remove them.
 ## Star history
 
 [![Star History Chart](https://api.star-history.com/svg?repos=storytold/photocraft&type=Date&legend=top-left)](https://www.star-history.com/?repos=storytold%2Fphotocraft&type=date&legend=top-left)
+
+## AI workflows
+
+The AI integration branch adds ComfyUI and OpenAI-compatible image workflows,
+automatic prompt preparation, direct high-resolution generation and AI Upscale.
+Create an editable recreation prompt from a reference image, and inspect/download
+the required ComfyUI models from AI Settings. English is the default UI language.
+The Rust/WASM web build uses an authenticated Rust gateway with Docker deployment.
+See [AI usage](docs/ai-usage.md), [implementation status](docs/ai-integration-plan.md)
+and the [AI changelog](docs/ai-changelog.md) for setup, supported workflows and limits.
+Personal provider configuration and keys belong in ignored local configuration.

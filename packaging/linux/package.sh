@@ -13,6 +13,8 @@
 # is downloaded at verified pins into $CARGO_TARGET_DIR. Build on an old distro (CI: Ubuntu 22.04,
 # glibc 2.35) so the binaries run on newer ones. Optional: desktop-file-validate, appstreamcli,
 # zsyncmake (the zsync package) for the AppImage's .zsync.
+# PHOTOCRAFT_APPIMAGE_UPDATE_INFO overrides the release update feed; set it to an empty
+# string for unpublished development builds, which have no corresponding update feed.
 #
 # Cross builds (CI: riscv64, tar.gz only): set CROSS_ARCH (riscv64), CROSS_TARGET (the Rust
 # triple), CROSS_COMPILE (binutils prefix, for strip) and optionally EMULATOR (e.g. qemu-riscv64)
@@ -189,16 +191,18 @@ if has appimage; then
   # next to each AppImage on GitHub Releases. `latest` is the newest published release that is
   # not a pre-release. A fork's builds point at its own releases through GITHUB_REPOSITORY.
   REPO="${GITHUB_REPOSITORY:-storytold/photocraft}"
-  UPDATE_INFO="gh-releases-zsync|${REPO%%/*}|${REPO#*/}|latest|photocraft-*-linux-$ARCH.AppImage.zsync"
+  UPDATE_INFO="${PHOTOCRAFT_APPIMAGE_UPDATE_INFO-gh-releases-zsync|${REPO%%/*}|${REPO#*/}|latest|photocraft-*-linux-$ARCH.AppImage.zsync}"
+  UPDATE_ARGS=()
+  if [ -n "$UPDATE_INFO" ]; then UPDATE_ARGS=(-u "$UPDATE_INFO"); fi
   # Extract-and-run: works without FUSE (containers, CI). The output embeds the static runtime,
   # so users don't need libfuse2 either. With zsyncmake on the host (CI installs the zsync
   # package) appimagetool also writes the .zsync, into its working directory, hence the cd.
   (cd "$DIST" && ARCH="$ARCH" APPIMAGE_EXTRACT_AND_RUN=1 "$TOOL" --no-appstream \
-    --runtime-file "$RUNTIME" -u "$UPDATE_INFO" "$APPDIR" "$OUT")
+    --runtime-file "$RUNTIME" "${UPDATE_ARGS[@]}" "$APPDIR" "$OUT")
   echo "wrote $OUT"
   if [[ -s "$OUT.zsync" ]]; then
     echo "wrote $OUT.zsync"
-  else
+  elif [ -n "$UPDATE_INFO" ]; then
     warn "zsyncmake not found, so $OUT.zsync was not written; AppImage delta updates need it"
   fi
 fi

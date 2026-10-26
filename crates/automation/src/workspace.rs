@@ -386,7 +386,9 @@ fn preference_uses_ambient_filesystem(path: &str) -> bool {
     let mut segments = path.split('.').filter(|segment| !segment.is_empty());
     let Some(section) = segments.next() else { return true };
     // File Handling's LUT folder (#6558) is listed from disk; the rest of that section is not.
-    matches!(section, "colorSettings" | "scriptEvents" | "historyLog" | "plugIns" | "scratchDisks")
+    // `integrations` names the endpoints that receive stored credentials and the environment
+    // variables read as Bearer tokens: an agent must not redirect either.
+    matches!(section, "colorSettings" | "scriptEvents" | "historyLog" | "plugIns" | "scratchDisks" | "integrations")
         || (section == "fileHandling" && segments.next().is_none_or(|key| key == "lutFolder"))
 }
 
@@ -899,6 +901,10 @@ mod tests {
             "fileHandling.lutFolder",
             "fileHandling",
             "scratchDisks.disks",
+            "integrations",
+            "integrations.openaiPromptEndpoint",
+            "integrations.openaiPromptApiKeyEnv",
+            ".integrations.comfyuiEndpoint",
             ".",
             "..historyLog.filePath",
         ] {

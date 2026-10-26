@@ -333,8 +333,23 @@ pub fn drop_floating(s: &mut Session) -> Result<Value> {
 
 /// Commands that leave a floating piece floating: its own, and ones that don't touch documents.
 fn keeps_floating(id: &str) -> bool {
-    matches!(id, "select.float" | "select.drop" | "brush.mixer.sample" | "brush.mixer.load" | "brush.mixer.clean")
-        || ["view.", "window.", "help.", "prefs."].iter().any(|p| id.starts_with(p))
+    matches!(
+        id,
+        "select.float"
+            | "select.drop"
+            | "brush.mixer.sample"
+            | "brush.mixer.load"
+            | "brush.mixer.clean"
+            | "edit.generateImage"
+            | "edit.aiEdit"
+            | "ai.result.openDocument"
+            | "image.aiUpscale"
+            | "edit.generativeFill"
+            | "edit.generativeRemove"
+            | "edit.aiBackground"
+            | "layer.aiRemoveBackground"
+            | "image.generativeExpand"
+    ) || ["view.", "window.", "help.", "prefs.", "ai.result."].iter().any(|p| id.starts_with(p))
 }
 
 /// Before any command (`Session::dispatch`): Undo puts a floating piece back (and is used up:

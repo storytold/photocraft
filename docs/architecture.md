@@ -133,6 +133,7 @@ photocraft/
 │  ├─ format/                  photocraft-format    native document format (.pcraft bundle): manifest + content-addressed tiles
 │  ├─ io/                      photocraft-io        import/export orchestration; doc ⇄ PSD mapping; PDF/SVG import (features)
 │  │  ── intelligence ──
+│  ├─ ai/                      photocraft-ai        external AI contracts, prompt pipeline, validated ComfyUI workflows and native HTTP adapters
 │  ├─ ml/                      photocraft-ml        model registry + InferenceBackend trait (ort native / burn|candle web); SAM2, matting, depth, sky
 │  ├─ plugins/                 photocraft-plugins   sandboxed WebAssembly filter plug-ins (wasmi host, limits, ABI v1, registry)
 │  │  ── the façade every frontend talks to ──
@@ -155,7 +156,7 @@ photocraft/
 └─ plan/                       this directory
 ```
 
-**What exists today.** This layout is the target design. Built so far: `geom`, `cms`, `color`, `raster`, `psd`, `codecs`, `doc`, `ops`, `algo`, `paint`, `text`, `vector`, `compose`, `gpu`, `format`, `raw`, `io`, `plugins`, `engine`, `ui-egui`, `automation`, `testkit`, and the three apps. Not yet split out: `viewport` and `tools` live inside `ui-egui` and `engine`; `platform` services are function hooks injected by each app (`ui_egui::Services`); `adobe-assets` and `ml` are not started.
+**What exists today.** This layout is the target design. Built so far: `geom`, `cms`, `color`, `raster`, `psd`, `codecs`, `doc`, `ops`, `algo`, `paint`, `text`, `vector`, `compose`, `gpu`, `format`, `raw`, `io`, `plugins`, `ai` (initial provider contracts), `engine`, `ui-egui`, `automation`, `testkit`, and the three apps. Not yet split out: `viewport` and `tools` live inside `ui-egui` and `engine`; `platform` services are function hooks injected by each app (`ui_egui::Services`); `adobe-assets` and `ml` are not started.
 
 **Crate granularity:** start with the crates above. Split `algo` into `-adjust`, `-filters`, `-select`, `-inpaint` and `-warp` once any module passes about 10k lines, or once compile times hurt. Its internal module boundaries should already follow those lines.
 
@@ -169,7 +170,7 @@ photocraft/
  L7  apps/*                         (binaries: wire everything together)
  L6  ui-egui · automation · platform
  L5  engine
- L4  tools · viewport · io · ml · plugins
+ L4  tools · viewport · io · ml · plugins · ai
  L3  compose · gpu · format
  L2  ops · algo · paint · text · vector
  L1  doc
@@ -443,6 +444,25 @@ psd/src/
 ---
 
 ## 11. Engine runtime model
+
+The AI bridge in `engine::ai_cmds` captures a COW document snapshot and a bounded
+ROI, converts RGB/Gray 8/16-bit sources through ICC into SDR sRGB, and prepares
+native result layers and separate native masks before delivering an external job.
+Direct generation uses the requested native canvas with tiled VAE decoding;
+explicit reduced generation and edit workflows use bounded working copies.
+Original selection coverage stays exact; display previews are reduced in bands.
+The session retains results in a shared 1 GiB / 16-entry cache; `ai.result.*`
+commands list, discard or explicitly apply them. Apply checks the captured
+document incarnation/revision and cached semantic content (ignoring the name
+and group disclosure), commits one undo step and preserves the selected tab.
+Native ComfyUI/OpenAI workers provide generation, editing and segmentation;
+expansion and generation-size changes are committed only on confirmation.
+Optional ComfyUI Real-ESRGAN uses overlapping bounded patches for 4K/8K detail
+restoration. Independent `image.aiUpscale` reads the original native composite
+and preserves ICC, depth and alpha. `ai.result.openDocument` recovers a stale
+result into a fresh document from its captured source. Source COW data and
+scratch buffers are additional to the result cache. Display textures are at most 1024 pixels on their longer side.
+HDR and other colour modes remain unsupported until their mappings are verified.
 
 ```text
  UI thread ──dispatch()──► Engine thread (owns mutable docs, applies ops, publishes snapshots)

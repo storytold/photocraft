@@ -1,0 +1,10 @@
+FROM ubuntu:22.04
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates fonts-dejavu-core && rm -rf /var/lib/apt/lists/*
+COPY photocraft-web-gateway /usr/local/bin/photocraft-web-gateway
+COPY site/ /opt/photocraft/web/
+COPY licenses/ /opt/photocraft/licenses/
+USER 10001:10001
+ENV PHOTOCRAFT_WEB_BIND=0.0.0.0:8080 PHOTOCRAFT_WEB_ROOT=/opt/photocraft/web RAYON_NUM_THREADS=2
+EXPOSE 8080
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s CMD ["/usr/local/bin/photocraft-web-gateway", "--health-check"]
+ENTRYPOINT ["/usr/local/bin/photocraft-web-gateway"]

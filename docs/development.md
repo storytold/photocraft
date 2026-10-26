@@ -95,6 +95,64 @@ the opted-in test; an unset variable leaves the ordinary behavior tests availabl
 After review, remove only the two generated PNGs and their owned temporary directory. The same
 Rust test and variable work on Windows with the native shell's environment-variable syntax.
 
+## AI image bridge (engine)
+
+The provider runtime captures `ai_cmds::Snapshot` from a `DocState` and chooses
+`Source::Composite` or `Source::ActiveRaster` (raw pixels). The selection plus
+0–1024 pixels of context defines the ROI. Use `snapshot.size()` for the request.
+Run `Snapshot::prepare`, the async provider pipeline and `PreparedInput::finish`
+on the worker/runtime path. Deliver the resulting `PreparedResult` through
+`Session::start_external_job` and retain it with `Session::retain_ai_result`.
+Neither retaining nor previewing modifies a document. `Session::ai_result`
+exposes a read-only provider preview to a frontend.
+
+`ai.result.list {}` lists destinations, revisions, variants, stale status and
+cache bytes. `ai.result.apply {"result":1,"variant":0}` adds one prepared native
+layer in one undo step to its captured document, keeping the selected tab.
+`ai.result.discard {"result":1}` releases it.
+`ai.result.openDocument {"result":1}` copies the captured source and result into
+a fresh document, including when the original has since been edited. Stale revisions cannot be applied;
+closing a document releases its results and cancels associated external jobs.
+The native generative menus and CLI/MCP commands submit production jobs through
+the same registry; see [AI workflows](ai-usage.md).
+
+Initial support is exact ROI resolution, RGB/Gray at 8/16 bits, ICC conversion
+to/from SDR sRGB and separate float layer masks. Selection coverage is never
+baked into pixel alpha. Segmentation adds a native source copy with a foreground
+mask; it keeps original layers visible. Four-sided canvas expansion and small VAE rounding have explicit mappings;
+native generation and standalone Upscale have bounded mappings; HDR and other
+colour modes still need verification. Results plus prepared native layers/masks
+share a 1 GiB / 16-result cache; captured sources and scratch are additional; oversize requests are
+rejected before provider submission, without silent eviction.
+
+Run `cargo run --release -p photocraft-engine --example bench_ai_bridge` for the
+synthetic 24 MP document / 1 MP ROI benchmark (no network or personal images).
+
+## AI API configuration
+
+Open **Edit › Preferences › AI Integrations…** to save API base URLs for ComfyUI,
+OpenAI prompt preparation (Responses) and direct OpenAI image generation/editing
+(Images). OpenAI defaults to `https://api.openai.com/v1`; ComfyUI defaults to
+`http://127.0.0.1:8188`. A reverse-proxy path prefix is supported. Enter the base
+URL, without `/prompt`, `/responses` or `/images/generations`.
+
+Each service accepts a direct API key, kept for the session in the desktop app and
+saved in the gateway's private configuration on the web. Environment-variable
+references are what the desktop app persists; a key entered directly takes precedence.
+Public control responses redact keys. Browser keys are saved by the authenticated
+gateway and excluded from browser storage. ComfyUI nodes/models are checked before
+upload or paid prompt preparation. Saving configuration makes no provider request.
+
+Agents use the same validated settings, for example:
+
+```json
+{"command":"prefs.set","params":{"values":{"integrations.comfyuiEndpoint":"http://127.0.0.1:8188","integrations.openaiPromptEndpoint":"https://api.openai.com/v1","integrations.openaiPromptApiKeyEnv":"OPENAI_API_KEY"}}}
+```
+
+**Apply** saves without closing; **OK** saves and closes; **Cancel** discards the
+unapplied draft. Invalid endpoints or variable names leave the dialog open and
+the saved configuration unchanged.
+
 ## Fonts (craft-fonts)
 
 Font assets shared by the Crafting Apps live in [storytold/craft-fonts](https://github.com/storytold/craft-fonts), never in this repo: don't commit font files here (Inter and JetBrains Mono in `assets/fonts/` are the only exceptions; new fonts go to craft-fonts). The rules are in `craftrules/standards/fonts.md` in a sibling `craftrules` checkout (see below); that repository is not public, so outside contributors can ask a maintainer for the rules that apply to their change.

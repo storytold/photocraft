@@ -192,6 +192,13 @@ what an agent can't finish alone.
 - **Estimate:** 120–200 h.
 
 ### G15. AI and generative features
+- **Fork progress (2026-10-13):** the 0.8.2 AI integration adds external ComfyUI
+  generation/edit/fill/removal/expansion, BiRefNet cutouts/background replacement,
+  Real-ESRGAN Upscale, OpenAI prompt preparation/direct Images, image-to-prompt
+  interpretation, and a scoped model downloader. Native and browser clients share
+  commands and require explicit result application. See [AI workflows](ai-usage.md)
+  for measured limits and validation status. This does not establish full Photoshop
+  AI parity or change the upstream percentage estimates below.
 - **Missing:** Generative Fill and Expand, Generative Upscale, Neural Filters, Sky Replacement,
   Super Zoom, ML Select Subject/Sky. There is no ML runtime (AUTO-219-7). Classical substitutes
   exist (GrabCut/max-flow selection, Remove tool by non-local patch completion).
@@ -465,6 +472,7 @@ what an agent can't finish alone.
 | 2026-10-12 | minor | G10: DPX read and write (#1049); Cineon remains open |
 | 2026-10-12 | minor | G4: checkbox-only Brush Settings rows preserve the open controls and Smoothing settings (#4283); no readiness percentage or estimate changed |
 | 2026-10-11 | minor | G8: the live Warp Text preview (TYPE-218-7) moved to done; TYPE-218-9 listed as done; Type evidence recounted to 5/3/1 (TYPE-218-1 type on a path is partial on main) |
+| 2026-10-14 | minor | AI fork: external ComfyUI/OpenAI workflows, reference-image prompts and dependency management; historical upstream percentages unchanged |
 | 2026-10-12 | minor | G11: Load/Save Actions `.atn` landed (AUTO-219-2 partial); remaining panel work listed |
 | 2026-10-12 | minor | Refreshed against main: G5 items fixed by #2480, #2327, #2609, #2684, #2675, #2556, #2396, #2527, #2625 and TOOL-214-5/#2442; G7 TOOL-214-7 and Transform On Drop done; G2 #2377 fixed (#2417); G9 UI scale (UI-217-9) and Stamp Visible (UI-217-22) done, prefs 27 of 156; G10 #2225 done (#2482); G13 Khmer, Lao, Myanmar fallback (#3259); G14 CR3 line; G17 Windows ARM64 done (DIST-220-2) |
 | 2026-10-11 | minor | G7: Tilt-Shift's band (lines, turn dots) and Spin Blur's pins (outline handles, blur-angle ring) on the image; Path Blur remains a dialog |

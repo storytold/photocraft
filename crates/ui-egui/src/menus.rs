@@ -94,6 +94,9 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
     if id == "help.checkForUpdates" {
         return crate::updates_ui::check(app, ctx, params);
     }
+    if let Some(result) = crate::ai_ui::menu(app, id, &params) {
+        return result;
+    }
     if id == "ui.symmetryTransform" {
         return crate::symmetry_ui::begin(app).map(|_| Value::Null);
     }
