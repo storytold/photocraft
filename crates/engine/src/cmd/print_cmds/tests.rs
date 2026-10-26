@@ -15,7 +15,7 @@ fn negative_print_positions_match_pdf_without_changing_the_document() {
         let path = format!("{dir}/{scale}-{fit}-{landscape}-{mirrored}.pdf");
         let p = json!({"paper": "a4", "center": false, "left": -0.5, "top": -0.25,
             "scale": scale, "scaleToFit": fit, "orientation": if landscape {"landscape"} else {"portrait"},
-            "emulsionDown": mirrored, "output": path, "send": false, "dryRun": true});
+            "autoRotate": false, "emulsionDown": mirrored, "output": path, "send": false, "dryRun": true});
         let preview = layout(&before, &p, "file.print").unwrap();
         let (x, y, w, h) = preview.rect;
         assert_eq!(x, -36.0);
