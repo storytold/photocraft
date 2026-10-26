@@ -105,15 +105,20 @@ fn rasterize_layer_style(s: &mut Session, p: &Value) -> Result<Value> {
     let ids = crate::layer_multi_cmds::targets(s, p)?;
     let many = ids.len() > 1;
     let key = crate::extra_cmds::step_key(s, "rasterizeLayerStyle");
-    let mut done = Vec::new();
-    for id in ids {
-        if bake_one(s, id, &key)? {
-            done.push(id.0);
+    // A layer that fails to bake takes back the ones baked before it (#4974); with nothing to
+    // bake the error is raised inside, so no empty step is recorded.
+    let (first, done) = crate::analysis_cmds::compound(s, "Rasterize Layer Style", |s| {
+        let mut done = Vec::new();
+        for id in ids {
+            if bake_one(s, id, &key)? {
+                done.push(id.0);
+            }
         }
-    }
-    let Some(&first) = done.first() else {
-        return Err(EngineError::Other(if many { "none of the selected layers has layer effects" } else { "the layer has no layer effects" }.into()));
-    };
+        let Some(&first) = done.first() else {
+            return Err(EngineError::Other(if many { "none of the selected layers has layer effects" } else { "the layer has no layer effects" }.into()));
+        };
+        Ok((first, done))
+    })?;
     let active = s.active().and_then(|d| d.active_layer).map(|id| id.0).filter(|id| done.contains(id));
     Ok(json!({"layer": active.unwrap_or(first), "layers": done}))
 }
