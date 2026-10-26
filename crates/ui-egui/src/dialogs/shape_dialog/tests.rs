@@ -354,3 +354,17 @@ fn right_click_picks_the_unit_of_that_field_only_and_it_is_not_remembered() {
     let s = sides(&frame(&egui::Context::default(), &app, &mut f, vec![]));
     assert_eq!(shown(&s), [("1.76".to_string(), "cm".to_string()), ("3.53".to_string(), "cm".to_string())]);
 }
+
+/// CodeRabbit on #9456: in Path mode a click opens no Create dialog, whose OK would make a shape
+/// layer; Path mode never draws one (a drag adds its outline to the work path).
+#[test]
+fn a_path_mode_click_opens_no_create_dialog() {
+    for tool in [Tool::Rectangle, Tool::EllipseShape, Tool::Triangle, Tool::Polygon] {
+        let mut app = app();
+        app.ui.tool_options.shape_mode = "path".into();
+        let before = layers(&app);
+        press(&mut app, tool, [20.4, 30.2], [20.4, 30.2]);
+        assert!(app.ui.dialogs.is_empty(), "{tool:?}: no Create dialog in Path mode");
+        assert_eq!(layers(&app), before, "{tool:?}: and no layer");
+    }
+}
