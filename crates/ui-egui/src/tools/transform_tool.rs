@@ -9,6 +9,7 @@
 //! cancels. Undo and Redo step through the session's own changes (`Steps`), not the document's
 //! history.
 
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 use egui::{Color32, CursorIcon, Pos2, Stroke, pos2, vec2};
@@ -67,6 +68,7 @@ pub(crate) use preview::solo_layer;
 use preview::{Above, composite_image, show_only};
 #[cfg(test)]
 use preview::{covering, preview_image};
+pub(crate) use preview::{live_mask_damage, live_mask_doc};
 pub use warp::{edit_session_warp, split};
 #[cfg(test)]
 use warp::{on_section_edge, single_patch, split_cursor, surface_at, warp_hit, warp_pointer};
@@ -142,6 +144,29 @@ pub struct TransformPreview {
     pub(crate) content_aware: Option<crate::cas_transform::Live>,
     /// A box over several layers (#6501): their composite, which `texture` holds.
     several: Option<Several>,
+    /// A lone layer mask's live preview ([`live_mask_doc`]).
+    live_mask: Option<LiveMask>,
+}
+
+/// Preview key of a session's `doc` (`canvas::display_doc`): `PREVIEW_BASE + session`.
+pub(crate) const PREVIEW_BASE: u64 = 1 << 40;
+/// Preview keys of a lone layer mask's live frames: `LIVE_MASK_BASE | id`.
+const LIVE_MASK_BASE: u64 = 1 << 43;
+
+/// The live preview of a lone layer mask (#9650): the document with the mask where the box puts
+/// it now, so the canvas shows the layer masked as the commit will leave it, as Photoshop does,
+/// instead of the mask's values in grey over the layer. The canvas recomposites only where the
+/// moving values are ([`live_mask_damage`]).
+struct LiveMask {
+    /// The moving values, grey + alpha (`split_gray_selected`).
+    lifted: photocraft_raster::Surface,
+    /// The revision of the document the session began from.
+    revision: u64,
+    /// The box the latest frame was built for, and that frame (`None` when it couldn't be).
+    quad: Option<[[f64; 2]; 4]>,
+    shown: Option<(Arc<Document>, u64)>,
+    /// Where each frame shown so far differs from `doc` (the values vacated), by preview key.
+    areas: VecDeque<(u64, photocraft_geom::Rect)>,
 }
 
 /// The moving pixels of a box over several layers ([`begin_several`]): the layers composited on

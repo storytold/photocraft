@@ -105,6 +105,13 @@ issue = 205
 note = "transform_tool.rs preview_mask + preview_applies_the_linked_mask (5a5facc, #242)"
 
 [[item]]
+id = "BUG-205-6"
+target = "Live transform preview of a targeted unlinked mask shows the layer masked by it as the box moves it"
+status = "done"
+issue = 9650
+note = "transform_tool.rs live_mask_doc + a_lone_mask_previews_live_through_its_layer; tests/it/transform_lone_mask_live.rs drags it in the offscreen app"
+
+[[item]]
 id = "BUG-205-3"
 target = "edit.transform honours target mask: transforms only a targeted, unlinked mask"
 status = "done"

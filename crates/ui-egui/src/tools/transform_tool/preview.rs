@@ -1,3 +1,4 @@
+use super::{Arc, DocId, Homography, LIVE_MASK_BASE, PREVIEW_BASE, PhotocraftApp, json};
 use super::{Color32, Document, LayerContent, LayerId, ViewXform, pos2};
 
 /// Texels of the moving pixels over `b`: full resolution unless the long side exceeds the GPU's
@@ -252,4 +253,60 @@ pub(crate) fn solo_layer(layers: &mut [photocraft_doc::Layer], id: LayerId) {
 
 fn contains(l: &photocraft_doc::Layer, id: LayerId) -> bool {
     l.id == id || matches!(&l.content, LayerContent::Group(g) if g.children.iter().any(|c| contains(c, id)))
+}
+
+/// The document to show while a lone layer mask's box is open: the mask where the box puts it
+/// now ([`LiveMask`]), built again only when the box changes. `None` for other sessions, or
+/// when the frame can't be built (past the transform budget, a degenerate box): the canvas then
+/// shows the mask vacated and [`draw_content`] the grey values.
+pub(crate) fn live_mask_doc(app: &mut PhotocraftApp) -> Option<(Arc<Document>, u64)> {
+    let (t, pv) = (app.ui.transform.as_ref()?, app.transform_preview.as_ref()?);
+    let live = pv.live_mask.as_ref()?;
+    if live.quad == Some(t.quad) {
+        return live.shown.clone();
+    }
+    let key = LIVE_MASK_BASE | (app.ui.alloc_id() & (LIVE_MASK_BASE - 1));
+    let started = crate::gpu_canvas::now_ms();
+    let (t, pv) = (app.ui.transform.as_ref()?, app.transform_preview.as_mut()?);
+    let live = pv.live_mask.as_mut()?;
+    live.quad = Some(t.quad);
+    live.shown = None;
+    // Bilinear keeps a frame cheap while the box moves; the commit uses the chosen interpolation.
+    let interp = if t.interpolation == "nearest" { photocraft_algo::transform::Interp::Nearest } else { photocraft_algo::transform::Interp::Bilinear };
+    let h = Homography::rect_to_quad(t.rect, t.quad)?;
+    let mut doc = (*pv.doc).clone();
+    let params = json!({ "target": t.target.clone()? });
+    let surf = photocraft_engine::transform_cmds::lone_target_mut(&mut doc, Some(LayerId(t.layer)), &params).ok()??;
+    *surf = photocraft_engine::transform_cmds::moved_gray(surf, &live.lifted, &h, interp).ok()?;
+    let (min, max) = t.quad.iter().fold(([f64::MAX; 2], [f64::MIN; 2]), |(lo, hi), q| ([lo[0].min(q[0]), lo[1].min(q[1])], [hi[0].max(q[0]), hi[1].max(q[1])]));
+    let edge = |v: f64| v.clamp(-1e9, 1e9) as i32;
+    let area =
+        photocraft_geom::Rect::new(edge(min[0].floor()), edge(min[1].floor()), edge(max[0].ceil()), edge(max[1].ceil())).inflate(2).intersect(&doc.bounds());
+    if live.areas.len() >= 128 {
+        live.areas.pop_front();
+    }
+    live.areas.push_back((key, area));
+    live.shown = Some((Arc::new(doc), key));
+    let shown = live.shown.clone();
+    app.perf.span("transform mask preview", crate::gpu_canvas::now_ms() - started);
+    shown
+}
+
+/// What changed between preview keys `seen` and `now` of document `doc` at `revision` while a lone
+/// layer mask's box is open: where the moving values are in either frame. `None` when either key
+/// isn't one of this session's (the canvas then recomposites everything).
+pub(crate) fn live_mask_damage(app: &PhotocraftApp, doc: DocId, revision: u64, seen: u64, now: u64) -> Option<photocraft_geom::Rect> {
+    let pv = app.transform_preview.as_ref().filter(|pv| pv.doc.id == doc)?;
+    let live = pv.live_mask.as_ref().filter(|l| l.revision == revision)?;
+    let area = |key: u64| {
+        if key == PREVIEW_BASE + pv.session { Some(photocraft_geom::Rect::EMPTY) } else { live.areas.iter().find(|(k, _)| *k == key).map(|(_, r)| *r) }
+    };
+    let (a, b) = (area(seen)?, area(now)?);
+    Some(if a.is_empty() {
+        b
+    } else if b.is_empty() {
+        a
+    } else {
+        a.union(&b)
+    })
 }

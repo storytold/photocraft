@@ -174,7 +174,8 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> (std::sync::Ar
         && pv.doc.id == st.doc.id
         && st.doc.layer(photocraft_doc::LayerId(t.layer)).is_some()
     {
-        return (pv.doc.clone(), (1 << 40) + pv.session);
+        let shown = (pv.doc.clone(), crate::transform_tool::PREVIEW_BASE + pv.session);
+        return crate::transform_tool::live_mask_doc(app).unwrap_or(shown);
     }
     // Layer Style dialog: show its effects live (Cancel just drops the preview).
     let style = app.ui.dialogs.iter().find(|d| d.kind == crate::state::DialogKind::LayerStyle);

@@ -110,6 +110,8 @@ pub fn draw_content(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
         mesh.add_triangle(0, 1, 2);
         mesh.add_triangle(0, 2, 3);
         painter.add(clip_to_canvas(mesh, canvas_size(pv), |p| xf.to_screen(p.x, p.y)));
+    } else if pv.live_mask.as_ref().is_some_and(|l| l.shown.is_some()) {
+        // A lone layer mask shows in the document itself (`live_mask_doc`).
     } else if let Some(h) = Homography::rect_to_quad([0.0, 0.0, 1.0, 1.0], texture_quad(t, pv)) {
         // A 24×24 grid keeps perspective previews straight.
         let n = 24;

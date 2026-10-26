@@ -2985,6 +2985,87 @@ fn mask_view_keeps_move_and_transform_available_behind_a_colour_set() {
     }
 }
 
+/// #9650: the canvas shows the layer masked by the mask where the box puts it, rebuilt only
+/// when the box changes, and recomposites only where the mask moves.
+#[test]
+fn a_lone_mask_previews_live_through_its_layer() {
+    let mut app = masked_app(false);
+    app.ui.mask_target = true;
+    begin(&mut app, &gpu_ctx()).unwrap();
+    let (id, revision) = {
+        let st = app.session.active().unwrap();
+        (st.doc.id, st.revision)
+    };
+    let layer = app.session.active().unwrap().active_layer.unwrap();
+    let mask_at = |d: &Document, x, y| d.layer(layer).unwrap().mask.as_ref().unwrap().surface.sample_channel(x, y, 0);
+    // Green over the white Background where the mask hides the red square, none where it shows.
+    let shows = |d: &Document, x, y| photocraft_compose::render(d, photocraft_geom::Rect::new(x, y, x + 1, y + 1)).px[0][1] < 0.01;
+    // Untouched, the canvas shows the mask where it is, not vacated.
+    let (first, k0) = crate::canvas::display_doc(&mut app, 0);
+    assert!(mask_at(&first, 4, 4) < 0.01 && mask_at(&first, 30, 4) > 0.99);
+    assert!(!shows(&first, 12, 12) && shows(&first, 20, 12), "x < 16 of the square is hidden");
+    let xf = ViewXform {
+        rect: egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(128.0, 128.0)),
+        zoom: 2.0,
+        center: [32.0, 32.0],
+        flip: false,
+        rotation: 0.0,
+        aspect: 1.0,
+    };
+    assert!(preview_meshes(&app, &xf).is_empty(), "no grey mesh over the layer");
+    // 6 px right: the hidden part follows the box, the pixels stay.
+    let t = app.ui.transform.as_mut().unwrap();
+    t.quad = t.quad.map(|[x, y]| [x + 6.0, y]);
+    let (moved, k1) = crate::canvas::display_doc(&mut app, 0);
+    assert_ne!(k0, k1);
+    assert!(!shows(&moved, 20, 12) && shows(&moved, 23, 12), "hidden up to x 22 now");
+    assert!(mask_at(&moved, 2, 4) > 0.99, "the vacated strip reveals");
+    assert_eq!(moved.layer(layer).unwrap().surface().unwrap().content_bounds(), photocraft_geom::Rect::new(8, 8, 24, 24), "pixels untouched");
+    // The same box again builds nothing.
+    let (again, k2) = crate::canvas::display_doc(&mut app, 0);
+    assert_eq!(k1, k2);
+    assert!(Arc::ptr_eq(&moved, &again));
+    // Damage: where the mask's values are in either frame, not the whole canvas.
+    assert_eq!(live_mask_damage(&app, id, revision, k0, k1), Some(photocraft_geom::Rect::new(0, 0, 24, 64)));
+    let vacated = PREVIEW_BASE + app.transform_preview.as_ref().unwrap().session;
+    assert_eq!(live_mask_damage(&app, id, revision, vacated, k1), Some(photocraft_geom::Rect::new(4, 0, 24, 64)));
+    assert_eq!(live_mask_damage(&app, id, revision + 1, k0, k1), None, "another revision");
+    assert_eq!(live_mask_damage(&app, id, revision, 12345, k1), None, "a key of no frame");
+    // A box the engine refuses falls back to the grey values over the vacated mask.
+    let t = app.ui.transform.as_mut().unwrap();
+    t.quad = [[0.0, 0.0], [1e7, 0.0], [1e7, 1e7], [0.0, 1e7]];
+    let (_, k3) = crate::canvas::display_doc(&mut app, 0);
+    assert_eq!(k3, vacated);
+    assert!(!preview_meshes(&app, &xf).is_empty(), "the grey values show instead");
+    // The commit leaves the mask the preview showed.
+    let t = app.ui.transform.as_mut().unwrap();
+    t.quad = corners(t.rect).map(|[x, y]| [x + 6.0, y]);
+    commit(&mut app);
+    assert!(!app.ui.status_error, "{}", app.ui.status);
+    let st = app.session.active().unwrap();
+    for x in [2, 20, 23, 40] {
+        assert!((mask_at(&st.doc, x, 4) - mask_at(&moved, x, 4)).abs() < 0.01, "x {x}");
+    }
+}
+
+/// An alpha channel keeps the grey preview: it masks no layer.
+#[test]
+fn a_lone_alpha_channel_keeps_the_grey_preview() {
+    let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+    app.run("channel.new", json!({"name": "Alpha", "fill": "black"})).unwrap();
+    app.session
+        .edit("Fixture", |doc, _| {
+            doc.channels[0].surface.fill_rect(photocraft_geom::Rect::new(4, 4, 20, 20), &[1.0]);
+            Ok(())
+        })
+        .unwrap();
+    app.session.active_mut().unwrap().channel_view.target = photocraft_engine::channel_cmds::ChannelTarget::Alpha(0);
+    begin(&mut app, &gpu_ctx()).unwrap();
+    assert_eq!(app.ui.transform.as_ref().unwrap().target, Some(json!({"channel": 0})));
+    assert!(app.transform_preview.as_ref().unwrap().live_mask.is_none());
+    assert!(live_mask_doc(&mut app).is_none());
+}
+
 #[test]
 fn linked_mask_target_transforms_the_layer() {
     let mut app = masked_app(true);
