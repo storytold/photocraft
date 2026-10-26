@@ -25,6 +25,7 @@ use crate::{Error, Sample, Update, deliver};
 pub struct Monitor {
     token: Retained<AnyObject>,
     _handler: RcBlock<dyn Fn(NonNull<NSEvent>) -> *mut NSEvent>,
+    coalescing_enabled: bool,
 }
 
 impl Monitor {
@@ -58,7 +59,11 @@ impl Monitor {
         // in `Monitor` as well, although AppKit copies it.
         let token = unsafe { NSEvent::addLocalMonitorForEventsMatchingMask_handler(mask, &handler) };
         let token = token.ok_or_else(|| Error::Platform("addLocalMonitorForEventsMatchingMask returned nil".into()))?;
-        Ok(Self { token, _handler: handler })
+        // Preserve actual mouse/pen positions even while painting makes the UI busy. Draining
+        // every winit event cannot recover intermediate moves AppKit already coalesced away.
+        let coalescing_enabled = NSEvent::isMouseCoalescingEnabled();
+        NSEvent::setMouseCoalescingEnabled(false);
+        Ok(Self { token, _handler: handler, coalescing_enabled })
     }
 }
 
@@ -67,6 +72,7 @@ impl Drop for Monitor {
         // SAFETY: `token` is exactly the object `addLocalMonitorForEventsMatchingMask:handler:`
         // returned, removed once (here). `Monitor` is not `Send`, so this runs on the main thread.
         unsafe { NSEvent::removeMonitor(&self.token) };
+        NSEvent::setMouseCoalescingEnabled(self.coalescing_enabled);
     }
 }
 

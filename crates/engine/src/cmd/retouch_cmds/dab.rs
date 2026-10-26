@@ -500,7 +500,7 @@ impl LiveDab {
         // Generate the same dabs as `apply_dab_stroke` (zoom 1), without a StrokeRenderer:
         // its accumulated coverage isn't used here, and each effect rasterizes its own footprint.
         let ctx = photocraft_paint::BrushContext::new(&stroke.brush);
-        let generator = photocraft_paint::dynamics::DabGenerator::new(&stroke.brush, 1.0);
+        let generator = photocraft_paint::dynamics::DabGenerator::new_polyline(&stroke.brush, 1.0);
         let mut live = Self {
             doc: std::sync::Arc::new(doc),
             cmd: cmd.into(),

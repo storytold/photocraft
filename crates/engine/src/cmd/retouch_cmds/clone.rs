@@ -345,7 +345,7 @@ impl LiveRetouch {
         dmg = dmg.union(&self.composite(r, &cov)?);
         if let Some(mut tail) = self.renderer.tail_preview() {
             let r = tail.take_dirty_rect();
-            let cov = tail.coverage_in(r);
+            let cov = self.renderer.coverage_in_with_tail(r, &tail);
             self.tail = self.composite(r, &cov)?;
             dmg = dmg.union(&self.tail);
         }
