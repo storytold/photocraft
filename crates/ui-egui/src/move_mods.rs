@@ -195,6 +195,9 @@ pub fn abandon(app: &mut PhotocraftApp) {
 /// where ⌘ is the temporary Move tool (`hold_keys::cmd_nudges`, #2474). Returns true when a key
 /// was used.
 pub fn arrow_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
+    if app.ui.text_edit.is_some() {
+        return false;
+    }
     use egui::{Key, Modifiers};
     let cmd = ctx.input(|i| i.modifiers.command) && crate::hold_keys::cmd_nudges(app);
     if app.ui.tool != Tool::Move && app.ui.transform.is_none() && !cmd {
@@ -798,5 +801,28 @@ mod tests {
         }
         app.run("edit.undo", json!({})).unwrap();
         assert_eq!(quad(&app), moved(2.0, 0.0));
+    }
+
+    /// Arrow keys while editing text must not nudge layers, leaving the keys to the type tool (#5355).
+    #[test]
+    fn arrow_keys_ignored_during_text_edit() {
+        let mut app = app_with_layer();
+        let id = app.session.active().unwrap().active_layer.unwrap();
+        let b0 = bounds(&app, id);
+        app.ui.text_edit = Some(crate::state::TextEdit {
+            layer: id.0,
+            caret: 0,
+            anchor: 0,
+            session: "test".into(),
+            created: false,
+            mask: false,
+            dragging: false,
+            resize: None,
+            preedit: None,
+        });
+        assert!(!press(&mut app, egui::Key::ArrowRight, egui::Modifiers::NONE));
+        assert!(!press(&mut app, egui::Key::ArrowDown, egui::Modifiers::SHIFT));
+        assert!(!press(&mut app, egui::Key::ArrowLeft, egui::Modifiers::ALT));
+        assert_eq!(bounds(&app, id), b0, "arrow keys do not nudge while editing text");
     }
 }
