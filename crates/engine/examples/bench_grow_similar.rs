@@ -9,7 +9,7 @@ use serde_json::json;
 fn main() {
     let reps: usize = std::env::args().nth(1).and_then(|v| v.parse().ok()).unwrap_or(3);
     let mut s = Session::new();
-    let (w, h) = (4000, 3000);
+    let (w, h) = (6000, 4000);
     s.execute("file.new", json!({"width": w, "height": h})).unwrap();
 
     s.edit("paint", |doc, _| {

@@ -902,7 +902,7 @@ pub fn polygon(points: &[(f32, f32)], area: Rect, anti_alias: bool) -> Vec<f32> 
 /// falsely include intermediate colors when disparate hues like red and blue are selected),
 /// this indexes selected colors in a bounding-volume hierarchy (BVH). Candidate colors
 /// outside the expanded bounds of subtrees are pruned in $O(1)$ time. Fully transparent
-/// pixels (`a <= 1e-5`) match if the selection itself contains transparent pixels.
+/// pixels (`a == 0`) match each other whatever their hidden RGB, as in [`magic_wand`].
 #[derive(Clone, Debug)]
 pub struct ColorMatcher {
     has_transparent: bool,
@@ -944,8 +944,8 @@ impl ColorBvh {
         if max_spread <= 1e-6 {
             return ColorBvh::Leaf(points);
         }
-        points.sort_unstable_by(|a, b| a[best_axis].total_cmp(&b[best_axis]));
         let mid = points.len() / 2;
+        points.select_nth_unstable_by(mid, |a, b| a[best_axis].total_cmp(&b[best_axis]));
         let right_pts = points.split_off(mid);
         let left = ColorBvh::build(points);
         let right = ColorBvh::build(right_pts);
@@ -981,11 +981,10 @@ impl ColorMatcher {
         let mut has_transparent = false;
         let mut opaque_or_semi = Vec::new();
         for c in selected_colors {
-            if c[3] <= 1e-5 {
-                has_transparent = true;
-            } else {
-                opaque_or_semi.push(c);
-            }
+            // A transparent color also stays in the tree: a nearly transparent query is compared
+            // by its RGB and alpha like any other.
+            has_transparent |= c[3] == 0.0;
+            opaque_or_semi.push(c);
         }
         opaque_or_semi.sort_unstable_by(|a, b| {
             a[0].total_cmp(&b[0]).then_with(|| a[1].total_cmp(&b[1])).then_with(|| a[2].total_cmp(&b[2])).then_with(|| a[3].total_cmp(&b[3]))
@@ -1004,8 +1003,8 @@ impl ColorMatcher {
     /// Returns `true` if `q` falls within `tol` of any selected color.
     #[inline]
     pub fn matches(&self, q: [f32; 4]) -> bool {
-        if q[3] <= 1e-5 {
-            return self.has_transparent;
+        if q[3] == 0.0 && self.has_transparent {
+            return true;
         }
         self.tree.matches(&q, self.tol)
     }
@@ -1039,6 +1038,33 @@ mod tests {
         let empty = ColorMatcher::new([], 10.0 / 255.0);
         assert!(empty.is_empty());
         assert!(!empty.matches(red));
+
+        // Only an exactly transparent pair ignores RGB: a faint pixel is compared like any other.
+        let faint = [0.0, 0.0, 0.0, 1e-6];
+        assert!(!matcher_trans.matches([0.5, 0.2, 0.1, 1e-6]));
+        assert!(matcher_trans.matches(faint));
+        let matcher_faint = ColorMatcher::new([faint], 10.0 / 255.0);
+        assert!(matcher_faint.matches([0.0, 0.0, 0.0, 0.0]));
+        assert!(!matcher_faint.matches([0.5, 0.0, 0.0, 0.0]));
+    }
+
+    #[test]
+    fn color_matcher_tree_matches_brute_force() {
+        // More than 16 distinct colors, so the tree has nodes and not just one leaf.
+        let selected: Vec<[f32; 4]> = (0..200)
+            .map(|i| {
+                let t = i as f32 / 199.0;
+                [t, (t * 7.0).fract(), (t * 13.0).fract(), if i % 25 == 0 { 0.0 } else { 1.0 }]
+            })
+            .collect();
+        let tol = 0.05;
+        let matcher = ColorMatcher::new(selected.iter().copied(), tol);
+        for i in 0..2000 {
+            let t = i as f32 / 1999.0;
+            let q = [(t * 3.0).fract(), (t * 5.0).fract(), (t * 11.0).fract(), if i % 7 == 0 { 0.0 } else { 1.0 }];
+            let want = selected.iter().any(|p| (q[3] == 0.0 && p[3] == 0.0) || (0..4).all(|c| (q[c] - p[c]).abs() <= tol + 1e-6));
+            assert_eq!(matcher.matches(q), want, "{q:?}");
+        }
     }
     use super::*;
 
