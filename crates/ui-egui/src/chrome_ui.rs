@@ -119,10 +119,17 @@ fn status_info_text_with_units(doc: &Document, key: &str, tool: &str, profile: &
     }
 }
 
-fn profile_name(doc: &Document) -> String {
+fn profile_name(doc: &Document, working: &str) -> String {
     let mode = crate::canvas::mode_label(doc);
     let Some(bytes) = doc.icc_profile.as_ref() else {
-        return crate::i18n::fmt(tl!("Untagged {mode}"), &[("mode", tl!(mode))]);
+        // An untagged document is assumed to be in the working space (Color Settings policy),
+        // so the status line names that space rather than showing a bare "Untagged" (#8832).
+        let name: String = working.chars().filter(|c| !c.is_control()).take(128).collect();
+        let name = name.trim();
+        if name.is_empty() {
+            return crate::i18n::fmt(tl!("Untagged {mode}"), &[("mode", tl!(mode))]);
+        }
+        return crate::i18n::fmt(tl!("{profile} (untagged)"), &[("profile", name)]);
     };
     let Ok(profile) = photocraft_engine::color_cmds::profile_from_bytes(bytes) else {
         return crate::i18n::fmt(tl!("Invalid {mode} profile"), &[("mode", tl!(mode))]);
@@ -151,7 +158,7 @@ pub fn status_bar_pro(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         &st.doc,
         &app.ui.chrome.status_info,
         tl!(app.ui.tool.label()),
-        &profile_name(&st.doc),
+        &profile_name(&st.doc, &app.session.color.working(st.doc.mode).description),
         &app.session.prefs().units_and_rulers,
     );
     let mut pct = app.ui.views[i].zoom * 100.0;
@@ -384,44 +391,57 @@ mod tests {
     }
 
     #[test]
+    fn untagged_document_shows_the_working_space_not_a_bare_untagged_label() {
+        // #8832: a new document is untagged by design (untagged = working space), but the
+        // status line showed "Untagged RGB" even after the user set a working space, making
+        // the Color Settings choice look ignored.
+        let d = doc();
+        assert!(d.icc_profile.is_none(), "a default new document is untagged");
+        assert_eq!(profile_name(&d, "Adobe RGB (1998)"), "Adobe RGB (1998) (untagged)");
+        assert_eq!(status_info_text(&d, "profile", "", &profile_name(&d, "Adobe RGB (1998)")), "Adobe RGB (1998) (untagged) (8bpc)");
+        // No working description to show: the old label remains.
+        assert_eq!(profile_name(&d, "  "), crate::i18n::fmt(tl!("Untagged {mode}"), &[("mode", tl!(crate::canvas::mode_label(&d)))]));
+    }
+
+    #[test]
     fn status_profile_describes_rgb_gray_and_custom_profiles_without_mutating_the_document() {
         let mut rgb = doc();
         rgb.icc_profile = Some(photocraft_engine::color_cmds::working_profile(rgb.mode).to_bytes());
         let before = rgb.icc_profile.clone();
-        assert_eq!(profile_name(&rgb), "sRGB IEC61966-2.1");
-        assert_eq!(status_info_text(&rgb, "profile", "", &profile_name(&rgb)), "sRGB IEC61966-2.1 (8bpc)");
+        assert_eq!(profile_name(&rgb, "sRGB IEC61966-2.1"), "sRGB IEC61966-2.1");
+        assert_eq!(status_info_text(&rgb, "profile", "", &profile_name(&rgb, "sRGB IEC61966-2.1")), "sRGB IEC61966-2.1 (8bpc)");
         assert_eq!(rgb.icc_profile, before);
 
         let mut gray = doc();
         gray.mode = photocraft_doc::ColorMode::Grayscale;
         gray.icc_profile = Some(photocraft_engine::color_cmds::working_profile(gray.mode).to_bytes());
-        assert_eq!(profile_name(&gray), "Dot Gain 20%-compatible (gamma 1.732, PhotoCraft)");
+        assert_eq!(profile_name(&gray, "Dot Gain 20%-compatible (gamma 1.732, PhotoCraft)"), "Dot Gain 20%-compatible (gamma 1.732, PhotoCraft)");
 
         let mut custom = (*photocraft_engine::color_cmds::working_profile(photocraft_doc::ColorMode::Cmyk)).clone();
         custom.description = "PhotoCraft Studio CMYK".into();
         let mut custom_doc = doc();
         custom_doc.mode = photocraft_doc::ColorMode::Cmyk;
         custom_doc.icc_profile = Some(custom.with_encoded_bytes().to_bytes());
-        assert_eq!(profile_name(&custom_doc), "PhotoCraft Studio CMYK");
+        assert_eq!(profile_name(&custom_doc, "sRGB IEC61966-2.1"), "PhotoCraft Studio CMYK");
     }
 
     #[test]
     fn status_profile_falls_back_for_malformed_unnamed_and_mismatched_profiles() {
         let mut malformed = doc();
         malformed.icc_profile = Some(std::sync::Arc::new(vec![1, 2, 3]));
-        assert_eq!(profile_name(&malformed), "Invalid RGB profile");
+        assert_eq!(profile_name(&malformed, "sRGB IEC61966-2.1"), "Invalid RGB profile");
 
         let mut unnamed_profile = (*photocraft_engine::color_cmds::working_profile(photocraft_doc::ColorMode::Cmyk)).clone();
         unnamed_profile.description.clear();
         let mut unnamed = doc();
         unnamed.mode = photocraft_doc::ColorMode::Cmyk;
         unnamed.icc_profile = Some(unnamed_profile.with_encoded_bytes().to_bytes());
-        assert_eq!(profile_name(&unnamed), "Unnamed CMYK profile");
+        assert_eq!(profile_name(&unnamed, "sRGB IEC61966-2.1"), "Unnamed CMYK profile");
 
         let mut mismatched = doc();
         mismatched.mode = photocraft_doc::ColorMode::Grayscale;
         mismatched.icc_profile = Some(photocraft_engine::color_cmds::working_profile(photocraft_doc::ColorMode::Rgb).to_bytes());
-        assert_eq!(profile_name(&mismatched), "Invalid Gray profile");
+        assert_eq!(profile_name(&mismatched, "sRGB IEC61966-2.1"), "Invalid Gray profile");
     }
 
     #[test]
