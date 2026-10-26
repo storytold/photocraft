@@ -412,9 +412,79 @@ pub fn clipboard_keys(ctx: &egui::Context, typing: bool, raw: &mut egui::RawInpu
     raw.events = out;
 }
 
+/// The keys held down in floating panels' own OS windows, from the presses and releases they
+/// forwarded ([`handle_forwarded`]).
+fn forwarded_down_id() -> egui::Id {
+    egui::Id::unique("pc-forwarded-keys-down")
+}
+
+#[cfg(test)]
+pub(crate) fn forwarded_keys_down(ctx: &egui::Context) -> Vec<Key> {
+    ctx.data(|d| d.get_temp::<std::collections::BTreeSet<Key>>(forwarded_down_id())).unwrap_or_default().into_iter().collect()
+}
+
+/// Keys that a floating panel's own OS window left over (craft-ui's
+/// `DockOutput::forwarded_events`, with the modifiers held in that window) run through
+/// [`handle`] in the frame they arrive, as if pressed in the main window: tool keys, undo and
+/// the clipboard work while a floating window has the keyboard. craft-ui forwards nothing while
+/// one of that window's widgets has keyboard focus. egui-winit sends ⌘C, ⌘X and ⌘V there as
+/// `Copy`, `Cut` and `Paste` too, so [`clipboard_keys`] turns them into presses first.
+pub(crate) fn handle_forwarded(app: &mut PhotocraftApp, ctx: &egui::Context, events: Vec<egui::Event>, modifiers: Modifiers) {
+    if events.is_empty() {
+        return;
+    }
+    ctx.data_mut(|d| {
+        let down = d.get_temp_mut_or_default::<std::collections::BTreeSet<Key>>(forwarded_down_id());
+        for e in &events {
+            if let egui::Event::Key { key, pressed, .. } = e {
+                if *pressed {
+                    down.insert(*key);
+                } else {
+                    down.remove(key);
+                }
+            }
+        }
+    });
+    // The main window runs no shortcuts while the screen color picker is open.
+    if crate::screen_picker::busy(ctx) {
+        return;
+    }
+    let typing = ctx.text_edit_focused() || app.ui.text_edit.is_some();
+    let (events_before, modifiers_before) = ctx.input_mut(|i| (std::mem::take(&mut i.events), std::mem::replace(&mut i.modifiers, modifiers)));
+    let mut raw = egui::RawInput { events, ..Default::default() };
+    clipboard_keys(ctx, typing, &mut raw);
+    ctx.input_mut(|i| i.events = raw.events);
+    handle(app, ctx);
+    ctx.input_mut(|i| {
+        i.events = events_before;
+        i.modifiers = modifiers_before;
+    });
+}
+
+/// Runs the shortcuts on this frame's input. Keys still held in a floating panel's own window
+/// count as held (`key_down`) while that window has the keyboard: a spring-loaded tool or Space
+/// for the Hand tool stays on while the pointer moves over the canvas. Its releases stop coming
+/// once the main window or no window of the app has the keyboard, or one of its widgets takes
+/// keyboard focus, so the keys count as released then.
 pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    let held = !ctx.input(|i| i.focused) && crate::panel_docking::other_window_keyboard(ctx) == Some(false);
+    if !held {
+        ctx.data_mut(|d| d.remove_temp::<std::collections::BTreeSet<Key>>(forwarded_down_id()));
+    }
+    let down = if held { ctx.data(|d| d.get_temp::<std::collections::BTreeSet<Key>>(forwarded_down_id())).unwrap_or_default() } else { Default::default() };
+    let added: Vec<Key> = ctx.input_mut(|i| down.into_iter().filter(|k| i.keys_down.insert(*k)).collect());
+    handle_keys(app, ctx);
+    if !added.is_empty() {
+        ctx.input_mut(|i| added.iter().for_each(|k| _ = i.keys_down.remove(k)));
+    }
+}
+
+fn handle_keys(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // A held tool letter released: a temporary tool gives the previous one back (#2672).
     crate::spring_tools::tick(app, ctx);
+    if crate::canvas::cancel_mixer_on_context_change(app, ctx) {
+        return;
+    }
     // However the tool was picked (toolbar, flyout, shortcut, automation), its group's key brings
     // it back later (#2608).
     app.ui.remember_group_tool();
@@ -447,8 +517,9 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
         return;
     }
     // So does the right-click menu of text being edited: Esc closes only it, and keys typed while
-    // it is open don't reach the text beneath.
-    if app.ui.canvas_tool_menu.as_ref().is_some_and(|m| m.text) {
+    // it is open don't reach the text beneath. The crop menu's likewise: Esc and ↵ don't cancel or
+    // commit the crop under it (#6561).
+    if app.ui.canvas_tool_menu.as_ref().is_some_and(|m| m.text || m.crop.is_some()) {
         return;
     }
     let symmetry_editing = app.ui.symmetry_transform.is_some();
@@ -742,6 +813,9 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
         }
         return;
     }
+    // ⇧+ / ⇧− step the blend mode and ⇧⌥ letters pick one (`blend_keys`). Before the tool
+    // letters: `consume_key` ignores extra ⇧ and ⌥, so ⇧⌥M would otherwise pick a tool.
+    crate::blend_keys::handle(app, ctx);
     // Tool keys; pressing the key of the current group cycles within it. With Preferences ›
     // Tools › Use Shift Key for Tool Switch, only ⇧+key cycles and the plain key keeps the
     // group's current tool. From another group, the key picks the group's last-used tool.
@@ -779,8 +853,6 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
     // 1–0 set opacity, ⇧1–0 flow or fill (`opacity_keys`).
     crate::opacity_keys::handle(app, ctx);
-    // ⇧+ / ⇧− step the blend mode (`blend_keys`).
-    crate::blend_keys::handle(app, ctx);
 }
 
 #[cfg(test)]

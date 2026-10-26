@@ -731,8 +731,17 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
         return e;
     }
     match id {
-        "window.panel.activate" | "window.panel.layout" => true,
-        "window.panel.group" | "window.panel.move" | "window.panel.float" | "window.panel.dock" | "window.panel.close" => !app.session.prefs().workspace_locked,
+        "window.panel.activate" | "window.panel.layout" | "ui.dock" => true,
+        "window.panel.group"
+        | "window.panel.move"
+        | "window.panel.float"
+        | "window.panel.window"
+        | "window.panel.dock"
+        | "window.panel.close"
+        | "window.panel.closeGroup"
+        | "window.panel.closeOthers"
+        | "window.panel.minimize"
+        | "window.panel.iconic" => !app.session.prefs().workspace_locked,
         "file.open" | "file.exit" | "file.clearRecent" | "file.removeRecent" | "help.about" | "help.systemInfo" | "edit.search" => true,
         i if i.starts_with("file.openRecent.") => true,
         i if i.starts_with(DOCUMENT_ITEM) => true,
@@ -1639,7 +1648,8 @@ pub fn apply_workspace(app: &mut PhotocraftApp) {
     app.ui.docking_reveal = None;
     app.ui.docking_generation = app.ui.docking_generation.wrapping_add(1);
     app.ui.docking = None;
-    app.ui.docking_hidden.clear();
+    app.ui.docking_kept = None;
+    app.ui.docking_returns.clear();
     app.ui.docking_collapsed.clear();
     app.ui.dock_tabs = Default::default();
     let p = &mut app.ui.panels;

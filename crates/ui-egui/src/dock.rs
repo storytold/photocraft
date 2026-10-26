@@ -642,6 +642,10 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, shown: &[Group], mut bod
                 crate::brush_panel::panel_menu(app, ui);
                 ui.separator();
             }
+            if tabs.get(sel) == Some(&"Histogram") {
+                crate::histogram_panel::panel_menu(app, ui);
+                ui.separator();
+            }
             if tabs.get(sel) == Some(&"Actions") {
                 crate::actions::panel_menu(app, ui);
                 ui.separator();
@@ -820,20 +824,53 @@ fn resize(layout: &mut DockLayout, heights: &[(Group, f32)], i: usize, dy: f32) 
 }
 
 /// What `prefs.panelLayout` holds: the live layout and open panels.
-fn snapshot(app: &PhotocraftApp) -> Value {
-    json!({"workspace": app.ui.workspace, "panels": app.ui.panels, "dockTabs": app.ui.dock_tabs, "dock": app.ui.dock, "timelineOpen": app.ui.timeline.open, "docking": app.ui.docking, "dockingHidden": app.ui.docking_hidden, "dockingCollapsed": app.ui.docking_collapsed})
+pub(crate) fn snapshot(app: &PhotocraftApp) -> Value {
+    let mut layout = json!({"workspace": app.ui.workspace, "panels": app.ui.panels, "dockTabs": app.ui.dock_tabs, "dock": app.ui.dock, "timelineOpen": app.ui.timeline.open, "docking": app.ui.docking, "dockingReturns": app.ui.docking_returns, "dockingCollapsed": app.ui.docking_collapsed});
+    keep_newer(app, &mut layout);
+    layout
+}
+
+/// A saved layout's workspace from a newer version stays as saved while the default layout
+/// shows in its place (craft-ui: keep it on disk, don't overwrite it).
+pub(crate) fn keep_newer(app: &PhotocraftApp, layout: &mut Value) {
+    if let (None, Some(kept), Some(layout)) = (&app.ui.docking, &app.ui.docking_kept, layout.as_object_mut()) {
+        layout.extend(kept.clone());
+    }
 }
 
 /// Remember the layout in the preferences once the user lets go of the mouse (Workspace ›
-/// Remember Workspace Changes). Cheap: a small JSON compare per frame.
+/// Remember Workspace Changes), and once panel windows the OS moves or resizes keep still. Cheap:
+/// a small JSON compare per frame.
 pub fn persist(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    // Once the layout changes, the newer workspace is replaced.
+    if app.ui.docking.is_some() {
+        app.ui.docking_kept = None;
+    }
     if !app.session.prefs().workspace.remember_workspace_changes || ctx.input(|i| i.pointer.any_down()) {
+        return;
+    }
+    if native_moved(app, ctx) {
+        ctx.request_repaint_after(std::time::Duration::from_millis(100));
         return;
     }
     let now = snapshot(app);
     if app.session.prefs().panel_layout != now {
         app.session.prefs.edit(|p| p.panel_layout = now);
     }
+}
+
+/// A floating panel's own window has another place than last frame. A move or resize by its OS
+/// title bar or edges changes the place each frame with no button down in any of the app's
+/// windows.
+fn native_moved(app: &PhotocraftApp, ctx: &egui::Context) -> bool {
+    let places: Vec<(u64, [f32; 4])> =
+        app.ui.docking.iter().flat_map(|workspace| workspace.layout.floating.iter().filter_map(|window| Some((window.id, window.native?)))).collect();
+    let id = egui::Id::unique("dock-native-places");
+    ctx.data_mut(|data| {
+        let moved = data.get_temp::<Vec<(u64, [f32; 4])>>(id).is_some_and(|last| last != places);
+        data.insert_temp(id, places);
+        moved
+    })
 }
 
 /// Restore the remembered layout at launch. Unreadable parts keep their defaults.
@@ -862,11 +899,16 @@ pub fn restore(app: &mut PhotocraftApp) {
 /// legacy layout is rebuilt (the split/tab arrangement resets). Panel widths are a separate
 /// `egui::PanelState` migration and still carry over.
 pub fn apply(app: &mut PhotocraftApp, v: &Value) {
-    app.ui.docking_collapsed = v.get("dockingCollapsed").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
     app.ui.docking_reveal = None;
     app.ui.docking_generation = app.ui.docking_generation.wrapping_add(1);
-    app.ui.docking_hidden = v.get("dockingHidden").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
-    app.ui.docking = v.get("docking").and_then(|d| serde_json::from_value(d.clone()).ok()).filter(crate::panel_docking::valid);
+    (app.ui.docking, app.ui.docking_returns) = crate::panel_docking::load(v).map_or((None, Default::default()), |(w, r)| (Some(w), r));
+    app.ui.docking_kept = (app.ui.docking.is_none() && crate::panel_docking::newer(v))
+        .then(|| ["docking", "dockingReturns", "dockingCollapsed"].into_iter().filter_map(|key| Some((key.to_owned(), v.get(key)?.clone()))).collect());
+    // Collapsed custom groups belong to the workspace; the native dock keeps its own flags.
+    app.ui.docking_collapsed = match app.ui.docking {
+        Some(_) => v.get("dockingCollapsed").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default(),
+        None => Vec::new(),
+    };
     if let Some(mut p) = v.get("panels").and_then(|p| serde_json::from_value::<Panels>(p.clone()).ok()) {
         // The embedding host owns these flags, including for layouts that serialize them.
         p.menu_bar = app.ui.panels.menu_bar;

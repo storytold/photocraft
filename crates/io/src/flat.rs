@@ -280,6 +280,7 @@ pub(crate) fn image_to_document(name: &str, img: &Image) -> Result<ImportResult,
         bg
     };
     doc.layers.push(layer);
+    warnings.extend(crate::tiff_layers::channels_from_extras(&mut doc, img));
     doc.icc_profile = img.icc.clone().map(Arc::new);
     doc.metadata.exif = img.meta.exif.clone().map(Arc::new);
     doc.metadata.xmp = img.meta.xmp.as_deref().map(Arc::from);
@@ -668,6 +669,12 @@ pub(crate) fn export_flat_with(doc: &Document, format: Format, opts: &ExportOpti
     if format == Format::Tga {
         img = tga_image(doc, img, opts.tga_bits, &mut warnings)?;
     }
+    if format == Format::Dds {
+        img = dds_image(doc, img, &mut warnings)?;
+    }
+    if format == Format::Tiff {
+        warnings.extend(crate::tiff_layers::stamp_flat_channels(doc, &mut img));
+    }
     encode_image(&img, format, opts, warnings)
 }
 
@@ -706,7 +713,7 @@ fn tga_image(doc: &Document, img: Image, bits: Option<TgaBits>, warnings: &mut V
             warnings.push("transparency composited over white; a 24-bit Targa has no alpha".into());
             matte_over_white(&img)
         }
-        (TgaBits::Bits32, [channel]) => tga_with_alpha_channel(doc, img, channel, warnings),
+        (TgaBits::Bits32, [channel]) => with_alpha_channel(doc, img, channel, "Targa", warnings),
         (TgaBits::Bits32, alphas) => {
             if !alphas.is_empty() {
                 warnings.push("Targa holds one alpha channel; with several, none was written (as in Photoshop)".into());
@@ -719,11 +726,32 @@ fn tga_image(doc: &Document, img: Image, bits: Option<TgaBits>, warnings: &mut V
     }
 }
 
-/// A 32-bit Targa's image: the colours (composited over white where the layers are transparent)
-/// and `channel`'s values as the alpha.
-fn tga_with_alpha_channel(doc: &Document, img: Image, channel: &AlphaChannel, warnings: &mut Vec<String>) -> Result<Image, IoError> {
+/// The image a DDS texture holds (#8563): as with a 32-bit Targa, the document's alpha channel
+/// becomes the texture's alpha when it has exactly one (spot channels don't count), the colours
+/// composited over white where the layers are transparent; BC1 keeps it as on/off, BC2 and BC3
+/// in full. With none, the layers' transparency is the alpha as before; with several, none of
+/// them is written. Grayscale textures keep their transparency.
+fn dds_image(doc: &Document, img: Image, warnings: &mut Vec<String>) -> Result<Image, IoError> {
+    let alphas: Vec<&AlphaChannel> = doc.channels.iter().filter(|c| c.spot.is_none()).collect();
+    match alphas.as_slice() {
+        [] => Ok(img),
+        [channel] if img.layout().is_rgb() => with_alpha_channel(doc, img, channel, "texture", warnings),
+        [_] => {
+            warnings.push("a grayscale DDS keeps the layers' transparency; the alpha channel was not saved".into());
+            Ok(img)
+        }
+        _ => {
+            warnings.push("a DDS texture holds one alpha channel; with several, none was written".into());
+            Ok(img)
+        }
+    }
+}
+
+/// A 32-bit Targa's or a texture's image: the colours (composited over white where the layers are
+/// transparent) and `channel`'s values as the alpha. `what` names the file in the warning.
+fn with_alpha_channel(doc: &Document, img: Image, channel: &AlphaChannel, what: &str, warnings: &mut Vec<String>) -> Result<Image, IoError> {
     let img = if img.layout().has_alpha() {
-        warnings.push("transparency composited over white; the alpha channel is the Targa's alpha".into());
+        warnings.push(format!("transparency composited over white; the alpha channel is the {what}'s alpha"));
         matte_over_white(&img)?
     } else {
         img

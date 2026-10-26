@@ -451,7 +451,7 @@ fn line(painter: &egui::Painter, a: Pos2, b: Pos2) {
     painter.line_segment([a, b], Stroke::new(1.5, Color32::WHITE));
 }
 
-fn diamond(painter: &egui::Painter, c: Pos2, r: f32, fill: Color32, outline: Color32) {
+pub(crate) fn diamond(painter: &egui::Painter, c: Pos2, r: f32, fill: Color32, outline: Color32) {
     let pts = vec![pos2(c.x, c.y - r), pos2(c.x + r, c.y), pos2(c.x, c.y + r), pos2(c.x - r, c.y)];
     painter.add(egui::Shape::convex_polygon(pts, fill, Stroke::new(1.0, outline)));
 }
@@ -513,7 +513,7 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
 // ---------------------------------------------------------------- options bar
 
 /// A ramp of RGBA stops over a checkerboard in `r`.
-fn paint_ramp(p: &egui::Painter, r: Rect, sample: impl Fn(f32) -> [f32; 4]) {
+pub(crate) fn paint_ramp(p: &egui::Painter, r: Rect, sample: impl Fn(f32) -> [f32; 4]) {
     // The tessellator snaps the checker's rects to pixels but not the mesh: snap both alike, or a
     // half-pixel offset leaves a row of checker showing under the ramp (#4577).
     let r = r.round_to_pixels(p.pixels_per_point());

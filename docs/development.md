@@ -424,6 +424,8 @@ cargo xtask perf --update-baseline   # also write perf/baseline.json from this r
   `cargo xtask perf --update-baseline`, with the machine (CPU, RAM, GPU adapter, OS), its machine
   class, commit, date and load average.
 - `crates/io/tests/it/corpus.rs`: the corpus floors (every `Source { .. }` constant).
+- `xtask/*-corpus.sha256`: file counts for pinned corpora, so stale counts in doc comments cannot
+  change the reported denominators. No downloaded corpus is needed to generate the scorecard.
 - The prefs audit: `Preferences` fields that no code reads (target 0, #204), plus counts taken
   from the tree (never-crash attribute coverage, `docs/parity-checklist.md`).
 
@@ -609,7 +611,7 @@ against committed **sha256 manifests**. All pins are in one place:
 
 | Directory | What | Source | Manifest |
 |---|---|---|---|
-| `corpus/photoshop/` | 256 PSDs we authored with Photoshop: smart filters, layer-style effect shapes, the text engine, adjustments in every mode and depth | https://github.com/storytold/photocraft-corpus (ours, MIT OR Apache-2.0) | `xtask/photoshop-corpus.sha256` |
+| `corpus/photoshop/` | 258 PSDs we authored with Photoshop: smart filters, layer-style effect shapes, the text engine, adjustments in every mode and depth | https://github.com/storytold/photocraft-corpus (ours, MIT OR Apache-2.0) | `xtask/photoshop-corpus.sha256` |
 | `corpus/gimp/` | 14 XCF files written by GIMP 3.2.6 with GIMP's merged rendering of each as a PNG (28 files), the oracles of the XCF reader | https://github.com/storytold/photocraft-corpus (ours, MIT OR Apache-2.0; its own pin) | `xtask/gimp-corpus.sha256` |
 | `corpus/psd/` | 170 small psd-tools and ag-psd files, the mix most PSD tests use | psd-tools and ag-psd upstreams (MIT) | `xtask/psd-corpus.sha256` |
 | `corpus/psd-tools/` | the complete psd-tools test set (309 files) | psd-tools upstream (MIT) | `xtask/psd-tools-corpus.sha256` |

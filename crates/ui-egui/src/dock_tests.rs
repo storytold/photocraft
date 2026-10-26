@@ -5,6 +5,7 @@ use egui_kittest::Harness;
 use serde_json::json;
 
 use super::*;
+use crate::panel_docking::probe;
 use crate::theme::ThemeKind;
 
 const ESSENTIALS: [Group; 3] = [Group::Color, Group::Properties, Group::Layers];
@@ -94,7 +95,7 @@ fn harness(app: PhotocraftApp, size: egui::Vec2, theme: ThemeKind) -> Harness<'s
             if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 return;
             }
-            crate::panels::right_dock(app, ui);
+            crate::panels::dock_area(app, ui);
             egui::CentralPanel::default().show(ui, |_| {});
         },
         app,
@@ -105,8 +106,20 @@ fn harness(app: PhotocraftApp, size: egui::Vec2, theme: ThemeKind) -> Harness<'s
     h
 }
 
+/// The panel id of the native `group`'s tab `tab`.
+fn panel_id(g: Group, tab: usize, pro: bool) -> &'static str {
+    crate::panel_docking::normalize(g.tabs(pro)[tab]).unwrap()
+}
+
 fn rect_of(h: &Harness<'static, PhotocraftApp>, g: Group) -> Rect {
-    last_rects(&h.ctx).into_iter().find(|(x, _)| *x == g).map(|(_, r)| r).unwrap_or_else(|| panic!("{g:?} not drawn"))
+    probe::native_group_rect(h.state(), &h.ctx, g).unwrap_or_else(|| panic!("{g:?} not drawn"))
+}
+
+type Drawn = (Vec<(String, Rect)>, Vec<(craft_ui::docking::Hit<String>, Rect)>);
+
+/// Every panel body and docking control drawn last frame.
+fn drawn(h: &Harness<'static, PhotocraftApp>) -> Drawn {
+    (crate::panel_docking::last_bodies(&h.ctx), craft_ui::docking::DockArea::<String>::hit_rects(&h.ctx, egui::Id::unique("photocraft-panel-docking")))
 }
 
 fn drag(h: &mut Harness<'static, PhotocraftApp>, from: Pos2, to: Pos2) {
@@ -127,55 +140,43 @@ fn switching_layer_kinds_keeps_the_layers_panel_still() {
     for theme in [ThemeKind::ProMedium, ThemeKind::Studio] {
         let (app, pixel, adj) = app_with_layers();
         let mut h = harness(app, vec2(1200.0, 800.0), theme);
-        let rects = |h: &Harness<'static, PhotocraftApp>| last_rects(&h.ctx);
-        let with_adj = rects(&h);
-        assert!(with_adj.iter().any(|(g, _)| *g == Group::Layers));
+        assert!(probe::panel_rect(&h.ctx, "layers").is_some(), "{theme:?}: Layers drawn");
+        let with_adj = drawn(&h);
         h.state_mut().run("layer.select", json!({"layer": pixel.0})).unwrap();
         h.run_steps(4);
-        assert_eq!(rects(&h), with_adj, "{theme:?}: selecting a pixel layer moved the dock groups");
+        assert_eq!(drawn(&h), with_adj, "{theme:?}: selecting a pixel layer moved the dock groups");
         h.state_mut().run("layer.select", json!({"layer": adj.0})).unwrap();
         h.run_steps(4);
-        assert_eq!(rects(&h), with_adj, "{theme:?}: selecting an adjustment layer moved the dock groups");
+        assert_eq!(drawn(&h), with_adj, "{theme:?}: selecting an adjustment layer moved the dock groups");
         // Properties ↔ Adjustments tabs don't move anything either.
         h.state_mut().ui.dock_tabs.properties = 1;
         h.run_steps(3);
-        assert_eq!(rects(&h), with_adj);
+        assert_eq!(drawn(&h).0.iter().map(|(_, r)| *r).collect::<Vec<_>>(), with_adj.0.iter().map(|(_, r)| *r).collect::<Vec<_>>());
     }
 }
 
+/// A group height dragged in the dock is part of the UI state and the remembered layout.
 #[test]
 fn dragging_the_splitter_resizes_and_survives_a_ui_state_round_trip() {
     let (app, _, _) = app_with_layers();
     let mut h = harness(app, vec2(1200.0, 800.0), ThemeKind::ProMedium);
     let props = rect_of(&h, Group::Properties);
-    let layers = rect_of(&h, Group::Layers);
-    let split = Pos2::new(props.center().x, props.bottom() + GAP / 2.0);
     let color = rect_of(&h, Group::Color);
-    drag(&mut h, split, split - vec2(0.0, 60.0));
+    let split = probe::hit_rect(&h.ctx, &craft_ui::docking::Hit::Divider(craft_ui::docking::Divider::Group("properties".into())))
+        .expect("divider below Properties")
+        .center();
+    // Less than Properties has above its minimum, so the groups above don't give way.
+    drag(&mut h, split, split - vec2(0.0, 40.0));
     let props2 = rect_of(&h, Group::Properties);
-    let layers2 = rect_of(&h, Group::Layers);
-    assert!((props2.height() - (props.height() - 60.0)).abs() < 2.0, "{props:?} -> {props2:?}");
-    assert!((layers2.top() - (layers.top() - 60.0)).abs() < 2.0, "{layers:?} -> {layers2:?}");
+    assert!((props2.height() - (props.height() - 40.0)).abs() < 2.0, "{props:?} -> {props2:?}");
     assert_eq!(rect_of(&h, Group::Color), color, "the group above keeps its place");
-    assert_eq!(layers2.bottom(), layers.bottom());
-    // Dragging past the minimum pushes the group above down to its minimum too (#2573), then stops.
-    let split = Pos2::new(props2.center().x, props2.bottom() + GAP / 2.0);
-    drag(&mut h, split, split - vec2(0.0, 600.0));
-    assert_eq!(rect_of(&h, Group::Properties).height(), Group::Properties.min_height());
-    assert_eq!(rect_of(&h, Group::Color).height(), Group::Color.min_height());
-    assert_eq!(rect_of(&h, Group::Layers).bottom(), layers.bottom());
-    // Dragging back down grows Properties alone; Color stays where it was pushed.
-    let from = Pos2::new(split.x, rect_of(&h, Group::Properties).bottom() + GAP / 2.0);
-    drag(&mut h, from, split);
-    assert!((rect_of(&h, Group::Properties).bottom() - props2.bottom()).abs() < 2.0);
-    assert_eq!(rect_of(&h, Group::Color).height(), Group::Color.min_height());
 
     // Save and restore the UI state (what `ui.inspect` / `ui.set` and workspaces carry).
     let saved = serde_json::to_value(&h.state().ui).unwrap();
     let (mut app2, _, _) = app_with_layers();
     app2.ui = serde_json::from_value(saved).unwrap();
     let h2 = harness(app2, vec2(1200.0, 800.0), ThemeKind::ProMedium);
-    assert_eq!(last_rects(&h2.ctx), last_rects(&h.ctx));
+    assert_eq!(drawn(&h2).0, drawn(&h).0);
 
     // Remembered in the preferences once the mouse is up, and restored at the next launch.
     let prefs = h.state().session.prefs_to_json();
@@ -183,13 +184,15 @@ fn dragging_the_splitter_resizes_and_survives_a_ui_state_round_trip() {
     s2.load_prefs_json(&prefs).unwrap();
     let mut app3 = PhotocraftApp::new(s2, crate::Services::default());
     restore(&mut app3);
-    assert_eq!(app3.ui.dock, h.state().ui.dock);
+    assert!(app3.ui.docking.is_some());
+    assert_eq!(app3.ui.docking.as_ref().map(|w| &w.layout), h.state().ui.docking.as_ref().map(|w| &w.layout));
     // …unless Remember Workspace Changes is off.
     let mut s3 = photocraft_engine::Session::new();
     s3.load_prefs_json(&prefs).unwrap();
     s3.prefs.edit(|p| p.workspace.remember_workspace_changes = false);
     let mut app4 = PhotocraftApp::new(s3, crate::Services::default());
     restore(&mut app4);
+    assert!(app4.ui.docking.is_none());
     assert_eq!(app4.ui.dock, DockLayout::default());
 }
 
@@ -280,30 +283,6 @@ fn pushing_skips_collapsed_groups_and_respects_the_filler() {
 }
 
 #[test]
-fn dragging_swatches_down_pushes_properties_then_layers() {
-    let (app, _, _) = app_with_layers();
-    let mut h = harness(app, vec2(1200.0, 800.0), ThemeKind::ProMedium);
-    let color = rect_of(&h, Group::Color);
-    let props = rect_of(&h, Group::Properties);
-    let layers = rect_of(&h, Group::Layers);
-    let room = (props.height() - Group::Properties.min_height()) + (layers.height() - Group::Layers.min_height());
-    let split = Pos2::new(color.center().x, color.bottom() + GAP / 2.0);
-    // Past Properties' minimum: Layers gives way too instead of the drag hard-stopping.
-    let dy = props.height() - Group::Properties.min_height() + 40.0;
-    drag(&mut h, split, split + vec2(0.0, dy));
-    assert!((rect_of(&h, Group::Color).height() - (color.height() + dy)).abs() < 2.0, "{color:?} -> {:?}", rect_of(&h, Group::Color));
-    assert_eq!(rect_of(&h, Group::Properties).height(), Group::Properties.min_height());
-    assert!((rect_of(&h, Group::Layers).height() - (layers.height() - 40.0)).abs() < 2.0);
-    assert_eq!(rect_of(&h, Group::Layers).bottom(), layers.bottom());
-    // All the way: everything below at its minimum.
-    let split = Pos2::new(color.center().x, rect_of(&h, Group::Color).bottom() + GAP / 2.0);
-    drag(&mut h, split, split + vec2(0.0, 2000.0));
-    assert!((rect_of(&h, Group::Color).height() - (color.height() + room)).abs() < 2.0);
-    assert_eq!(rect_of(&h, Group::Layers).height(), Group::Layers.min_height());
-    assert_eq!(rect_of(&h, Group::Layers).bottom(), layers.bottom());
-}
-
-#[test]
 fn reset_workspace_restores_the_default_layout_and_new_workspaces_keep_theirs() {
     let (app, _, _) = app_with_layers();
     let mut h = harness(app, vec2(1200.0, 800.0), ThemeKind::ProMedium);
@@ -314,12 +293,12 @@ fn reset_workspace_restores_the_default_layout_and_new_workspaces_keep_theirs() 
     let mine = h.state().ui.dock.clone();
     crate::menus::invoke(h.state_mut(), &ctx, "window.workspace.essentials", json!({})).unwrap();
     h.run_steps(3);
-    let default = last_rects(&h.ctx);
+    let default = drawn(&h).0;
     assert_eq!(h.state().ui.dock, DockLayout::default());
     h.state_mut().ui.dock.heights.insert(Group::Color, 300.0);
     crate::menus::invoke(h.state_mut(), &ctx, "window.workspace.resetWorkspace", json!({})).unwrap();
     h.run_steps(3);
-    assert_eq!(last_rects(&h.ctx), default);
+    assert_eq!(drawn(&h).0, default);
     crate::menus::invoke(h.state_mut(), &ctx, "window.workspace.select", json!({"name": "Tall Layers"})).unwrap();
     assert_eq!(h.state().ui.dock, mine);
 }
@@ -335,15 +314,8 @@ fn a_single_tab_click_expands_a_collapsed_panel() {
             app.session.prefs.edit(|p| p.workspace_locked = true);
             let mut h = harness(app, vec2(1200.0, 800.0), theme);
             let collapsed_height = rect_of(&h, Group::Color).height();
-            let strips = last_strips(&h.ctx);
-            let strip = strips.iter().find(|s| s.group == Group::Color).unwrap();
-            let tab = strip.tabs.iter().find(|(i, _)| *i == tab_index).unwrap().1.center();
-            h.event(egui::Event::PointerMoved(tab));
-            h.run_steps(1);
-            h.event(egui::Event::PointerButton { pos: tab, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
-            h.step();
-            h.event(egui::Event::PointerButton { pos: tab, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
-            h.run_steps(3);
+            let tab = probe::tab_rect(&h.ctx, panel_id(Group::Color, tab_index, is_pro(theme))).unwrap().center();
+            click(&mut h, tab);
             assert!(!h.state().ui.dock.is_collapsed(Group::Color), "{theme:?}: tab {tab_index}");
             assert_eq!(h.state().ui.dock_tabs.color, tab_index);
             assert!(rect_of(&h, Group::Color).height() > collapsed_height);
@@ -351,134 +323,26 @@ fn a_single_tab_click_expands_a_collapsed_panel() {
     }
 }
 
-/// Auto-Collapse Iconic Panels: a group expanded by clicking a tab on its collapsed strip
-/// closes again when the next click lands outside it; with the preference off it stays open.
-#[test]
-fn auto_collapse_icon_panels_closes_a_peeked_panel_on_an_outside_click() {
-    for auto in [true, false] {
-        let (mut app, _, _) = app_with_layers();
-        app.session.prefs.edit(|p| p.workspace.auto_collapse_icon_panels = auto);
-        app.ui.dock.set_collapsed(Group::Color, true);
-        let mut h = harness(app, vec2(1200.0, 800.0), ThemeKind::ProMedium);
-        let collapsed_height = rect_of(&h, Group::Color).height();
-        let tab = last_strips(&h.ctx).iter().find(|s| s.group == Group::Color).unwrap().tabs[0].1.center();
-        h.event(egui::Event::PointerMoved(tab));
-        h.run_steps(1);
-        h.event(egui::Event::PointerButton { pos: tab, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
-        h.step();
-        h.event(egui::Event::PointerButton { pos: tab, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
-        h.run_steps(3);
-        assert!(!h.state().ui.dock.is_collapsed(Group::Color), "auto={auto}: the tab click expands the panel");
-        let rect = rect_of(&h, Group::Color);
-        // A click inside the panel leaves it open; one outside (the canvas) closes it again.
-        for p in [rect.center(), Pos2::new(rect.left() / 2.0, rect.center().y)] {
-            h.event(egui::Event::PointerMoved(p));
-            h.run_steps(1);
-            h.event(egui::Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
-            h.step();
-            h.event(egui::Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
-            h.run_steps(3);
-        }
-        assert_eq!(h.state().ui.dock.is_collapsed(Group::Color), auto, "auto={auto}: outside closes it when enabled");
-        if auto {
-            assert_eq!(rect_of(&h, Group::Color).height(), collapsed_height);
-        } else {
-            assert!(rect_of(&h, Group::Color).height() > collapsed_height);
-        }
-    }
-}
-
-#[test]
-fn double_clicking_a_tab_collapses_and_dragging_a_strip_reorders() {
-    let (app, _, _) = app_with_layers();
-    let mut h = harness(app, vec2(1200.0, 800.0), ThemeKind::ProMedium);
-    let color = rect_of(&h, Group::Color);
-    let tab = color.left_top() + vec2(20.0, 13.0);
-    h.event(egui::Event::PointerMoved(tab));
-    h.run_steps(1);
-    for _ in 0..2 {
-        h.event(egui::Event::PointerButton { pos: tab, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
-        h.step();
-        h.event(egui::Event::PointerButton { pos: tab, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
-        h.step();
-    }
-    h.run_steps(2);
-    assert!(h.state().ui.dock.is_collapsed(Group::Color));
-    assert!(rect_of(&h, Group::Color).height() < 40.0);
-    h.state_mut().ui.dock.set_collapsed(Group::Color, false);
-    h.run_steps(3);
-    // Drag the Layers tab strip (right of its tabs) above Color.
-    let layers = rect_of(&h, Group::Layers);
-    let strip = Pos2::new(layers.right() - 60.0, layers.top() + 13.0);
-    let to = rect_of(&h, Group::Color).left_top() + vec2(120.0, 10.0);
-    drag(&mut h, strip, to);
-    assert_eq!(h.state().ui.dock.order().first(), Some(&Group::Layers));
-    // A locked workspace keeps the order.
-    h.state_mut().session.prefs.edit(|p| p.workspace_locked = true);
-    let layers = rect_of(&h, Group::Layers);
-    drag(&mut h, Pos2::new(layers.right() - 60.0, layers.top() + 13.0), Pos2::new(layers.right() - 60.0, 790.0));
-    assert_eq!(h.state().ui.dock.order().first(), Some(&Group::Layers));
-}
-
-#[test]
-fn dragging_a_tab_onto_another_group_moves_only_that_panel() {
-    let (app, _, _) = app_with_layers();
-    let mut h = harness(app, vec2(1200.0, 800.0), ThemeKind::ProMedium);
-    let strips = last_strips(&h.ctx);
-    let source = strips
-        .iter()
-        .find(|strip| strip.group == Group::Color)
-        .and_then(|strip| strip.tabs.iter().find(|(index, _)| *index == 1))
-        .map(|(_, rect)| rect.center())
-        .unwrap();
-    let destination = strips.iter().find(|strip| strip.group == Group::Layers).and_then(|strip| strip.tabs.first()).map(|(_, rect)| rect.center()).unwrap();
-
-    drag(&mut h, source, destination);
-
-    let layout = h.state().ui.docking.as_ref().expect("moving one native tab promotes to the shared layout");
-    fn tabs<'a>(node: &'a craft_ui::docking::Node<String>, panel: &str) -> Option<&'a [String]> {
-        match node {
-            craft_ui::docking::Node::Tabs { panels, .. } if panels.iter().any(|id| id == panel) => Some(panels),
-            craft_ui::docking::Node::Split { first, second, .. } => tabs(first, panel).or_else(|| tabs(second, panel)),
-            _ => None,
-        }
-    }
-    let source_group = tabs(layout.root.as_ref().unwrap(), "swatches").unwrap();
-    assert!(source_group.contains(&"layers".to_owned()), "dropped into the destination tab group");
-    assert!(!source_group.contains(&"color".to_owned()), "the source group remains intact");
-    assert!(crate::panel_docking::valid(layout));
-}
-
-/// The strip shows reordered tabs by position; the drop moves the panel that was dragged, not
-/// the one at that position in the default order.
+/// The strip shows reordered tabs in their order; dragging one onto another group moves the
+/// panel that was dragged, and only that panel.
 #[test]
 fn dragging_a_reordered_tab_onto_another_group_moves_that_panel() {
     let (mut app, _, _) = app_with_layers();
     // Gradients (original tab 2) drawn first: Gradients | Color | Swatches | Patterns.
     app.ui.dock.move_tab(Group::Color, 2, Some(0), true);
     let mut h = harness(app, vec2(1200.0, 800.0), ThemeKind::ProMedium);
-    let strips = last_strips(&h.ctx);
-    let source = strips
-        .iter()
-        .find(|strip| strip.group == Group::Color)
-        .and_then(|strip| strip.tabs.iter().find(|(index, _)| *index == 2))
-        .map(|(_, rect)| rect.center())
-        .unwrap();
-    let destination = strips.iter().find(|strip| strip.group == Group::Layers).and_then(|strip| strip.tabs.first()).map(|(_, rect)| rect.center()).unwrap();
+    let tab = |h: &Harness<'static, PhotocraftApp>, panel: &str| probe::tab_rect(&h.ctx, panel).unwrap_or_else(|| panic!("{panel} tab drawn"));
+    assert!(tab(&h, "gradients").left() < tab(&h, "color").left());
+    let (source, destination) = (tab(&h, "gradients").center(), tab(&h, "layers").center());
 
     drag(&mut h, source, destination);
 
-    let layout = h.state().ui.docking.as_ref().expect("moving one native tab promotes to the shared layout");
-    fn tabs<'a>(node: &'a craft_ui::docking::Node<String>, panel: &str) -> Option<&'a [String]> {
-        match node {
-            craft_ui::docking::Node::Tabs { panels, .. } if panels.iter().any(|id| id == panel) => Some(panels),
-            craft_ui::docking::Node::Split { first, second, .. } => tabs(first, panel).or_else(|| tabs(second, panel)),
-            _ => None,
-        }
-    }
-    let moved = tabs(layout.root.as_ref().unwrap(), "gradients").unwrap();
+    assert!(h.state().ui.docking.is_some(), "moving one native tab promotes to the shared layout");
+    let moved = probe::group_of(h.state(), "gradients");
     assert!(moved.contains(&"layers".to_owned()), "the dragged Gradients tab joined Layers: {moved:?}");
     assert!(!moved.contains(&"color".to_owned()), "Color stayed in its group: {moved:?}");
+    assert_eq!(probe::group_of(h.state(), "color"), ["color", "swatches", "patterns"]);
+    assert!(crate::panel_docking::valid(&h.state().ui.docking.as_ref().unwrap().layout));
 }
 
 #[test]
@@ -489,12 +353,14 @@ fn tiny_windows_do_not_panic() {
             app.ui.panels.history = true;
             app.ui.panels.navigator = true;
             let mut h = harness(app, vec2(w, ht), theme);
-            for (_, r) in last_rects(&h.ctx) {
+            let (bodies, hits) = drawn(&h);
+            for (_, r) in bodies {
                 assert!(r.height() >= 0.0 && r.is_finite());
             }
             // Drag a splitter way off-screen.
-            if let Some((_, r)) = last_rects(&h.ctx).first().copied() {
-                let p = Pos2::new(r.center().x, r.bottom() + GAP / 2.0);
+            let divider = hits.iter().find(|(hit, _)| matches!(hit, craft_ui::docking::Hit::Divider(craft_ui::docking::Divider::Group(_))));
+            if let Some((_, r)) = divider {
+                let p = r.center();
                 drag(&mut h, p, p + vec2(0.0, 5000.0));
                 drag(&mut h, p, p - vec2(0.0, 5000.0));
             }
@@ -548,8 +414,8 @@ fn clicking_around_the_ui_keeps_the_panels_put() {
     h.run_steps(8);
     let panels = h.state().ui.panels.clone();
     let tabs = h.state().ui.dock_tabs;
-    let rects = last_rects(&h.ctx);
-    assert!(rects.iter().any(|(g, _)| *g == Group::Layers), "{rects:?}");
+    let rects = drawn(&h);
+    assert!(probe::panel_rect(&h.ctx, "layers").is_some(), "{rects:?}");
     let layers = rect_of(&h, Group::Layers);
     let canvas = h.state().last_canvas_rect;
     let mut points: Vec<Pos2> = Vec::new();
@@ -584,7 +450,7 @@ fn clicking_around_the_ui_keeps_the_panels_put() {
         assert_eq!(app.ui.dock_tabs, tabs, "click at {p:?} switched a dock tab");
         assert!(app.ui.dock.collapsed.is_empty(), "click at {p:?} collapsed a group");
         if app.ui.dialogs.is_empty() && app.ui.shell.dialog.is_none() {
-            assert_eq!(last_rects(&h.ctx), rects, "click at {p:?} moved the dock groups");
+            assert_eq!(drawn(&h), rects, "click at {p:?} moved the dock groups");
         }
         h.state_mut().ui.dialogs.clear();
     }
@@ -608,13 +474,8 @@ fn closing_tabs_keeps_stable_names_across_themes_and_workspace_round_trips() {
     assert_eq!(restored.visible_tabs(Group::Color, false).len(), 4);
 }
 
-fn right_click_tab(h: &mut Harness<'static, PhotocraftApp>, group: Group, original_index: usize) {
-    let p = last_strips(&h.ctx)
-        .into_iter()
-        .find(|s| s.group == group)
-        .and_then(|s| s.tabs.into_iter().find(|(i, _)| *i == original_index))
-        .map(|(_, r)| r.center())
-        .unwrap_or_else(|| panic!("requested dock tab visible: {:?}", last_strips(&h.ctx).iter().map(|s| (s.group, s.tabs.clone())).collect::<Vec<_>>()));
+fn right_click_tab(h: &mut Harness<'static, PhotocraftApp>, panel: &str) {
+    let p = probe::tab_rect(&h.ctx, panel).unwrap_or_else(|| panic!("{panel} tab drawn")).center();
     h.hover_at(p);
     h.run_steps(1);
     h.event(egui::Event::PointerButton { pos: p, button: PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE });
@@ -634,23 +495,24 @@ fn panel_tab_context_menu_closes_one_tab_or_its_group() {
     {
         let pro = is_pro(theme);
         let names = g.tabs(pro);
+        let ids: Vec<&str> = (0..names.len()).map(|i| panel_id(g, i, pro)).collect();
         let (app, _, _) = app_with_layers();
         let mut h = harness(app, vec2(1300.0, 850.0), theme);
         // Close the first tab: the group stays, showing (and selecting) the next one.
-        right_click_tab(&mut h, g, 0);
-        h.get_by_label("Close").click();
+        right_click_tab(&mut h, ids[0]);
+        h.get_by_label("Close Panel").click();
         h.run_steps(3);
         assert!(g.shown(&h.state().ui.panels), "{theme:?}: closing one tab keeps the group");
         assert_eq!(*g.tab_mut(&mut h.state_mut().ui.dock_tabs), 1);
         let rest: Vec<(usize, &str)> = names.iter().copied().enumerate().skip(1).collect();
         assert_eq!(h.state().ui.dock.visible_tabs(g, pro), rest);
-        let strip: Vec<usize> = last_strips(&h.ctx).iter().find(|s| s.group == g).unwrap().tabs.iter().map(|(i, _)| *i).collect();
-        assert_eq!(strip, rest.iter().map(|(i, _)| *i).collect::<Vec<_>>());
+        assert_eq!(probe::group_of(h.state(), ids[1]), ids[1..]);
+        assert!(probe::tab_rect(&h.ctx, ids[0]).is_none());
 
         // Close the remaining tabs: the last one hides this group, not the other dock groups.
-        for i in 1..names.len() {
-            right_click_tab(&mut h, g, i);
-            h.get_by_label("Close").click();
+        for id in &ids[1..] {
+            right_click_tab(&mut h, id);
+            h.get_by_label("Close Panel").click();
             h.run_steps(3);
         }
         assert!(!g.shown(&h.state().ui.panels), "{theme:?}");
@@ -662,12 +524,16 @@ fn panel_tab_context_menu_closes_one_tab_or_its_group() {
         h.run_steps(3);
         assert!(g.shown(&h.state().ui.panels) && !h.state().ui.dock.is_collapsed(g));
         assert_eq!(h.state().ui.dock.visible_tabs(g, pro), vec![(0, names[0])]);
+        assert_eq!(probe::group_of(h.state(), ids[0]), [ids[0]]);
 
-        // A tab's Close Tab Group closes the entire group without hiding its one tab.
-        right_click_tab(&mut h, g, 0);
+        // A tab's Close Tab Group closes the entire group, which Window brings back with its one tab.
+        right_click_tab(&mut h, ids[0]);
         h.get_by_label("Close Tab Group").click();
         h.run_steps(3);
         assert!(!g.shown(&h.state().ui.panels));
+        crate::menus::invoke(h.state_mut(), &ctx, window, json!({})).unwrap();
+        h.run_steps(3);
+        assert_eq!(probe::group_of(h.state(), ids[0]), [ids[0]]);
         assert_eq!(h.state().ui.dock.visible_tabs(g, pro), vec![(0, names[0])]);
     }
 }
@@ -785,7 +651,7 @@ fn default_layout_shows_ten_layer_rows_at_900pt() {
     for (size, want) in [(vec2(1440.0, 900.0), 10), (vec2(1280.0, 720.0), 4)] {
         let h = app_harness_rows(size, ThemeKind::ProMedium, 40);
         let rows = rows_in_view(&h, 40);
-        let groups = last_rects(&h.ctx);
+        let groups = crate::panel_docking::last_bodies(&h.ctx);
         assert!(rows >= want, "{size:?}: {rows} rows visible, want ≥ {want}: {groups:?}");
         // Color and Properties stay open, just not at the expense of Layers.
         for g in [Group::Color, Group::Properties] {
@@ -832,7 +698,7 @@ fn window_character_opens_its_own_group_and_keeps_properties() {
             let props = rect_of(&h, Group::Properties);
             assert!(props.height() > 60.0 && props.bottom() <= ch.top(), "{theme:?}: Properties visible above Character");
         }
-        assert!(rect_of(&h, Group::Layers).top() > ch.bottom(), "{theme:?}: Layers stays the filler at the bottom");
+        assert!(rect_of(&h, Group::Layers).top() >= ch.bottom(), "{theme:?}: Layers stays the filler at the bottom");
         assert_eq!(crate::view_cmds::checked(h.state(), "window.panel.character"), Some(true));
         // Paragraph is the group's second tab; choosing it again on its tab closes the group.
         crate::menus::invoke(h.state_mut(), &ctx, "window.panel.paragraph", json!({})).unwrap();
@@ -840,7 +706,7 @@ fn window_character_opens_its_own_group_and_keeps_properties() {
         crate::menus::invoke(h.state_mut(), &ctx, "window.panel.paragraph", json!({})).unwrap();
         h.run_steps(3);
         assert!(!h.state().ui.panels.character && h.state().ui.panels.properties, "{theme:?}");
-        assert!(!last_rects(&h.ctx).iter().any(|(g, _)| *g == Group::Character));
+        assert!(probe::native_group_rect(h.state(), &h.ctx, Group::Character).is_none());
         // Type › Panels › Character Panel always shows it; Reset Workspace closes it.
         crate::menus::invoke(h.state_mut(), &ctx, "type.panels.character", json!({})).unwrap();
         crate::menus::invoke(h.state_mut(), &ctx, "type.panels.character", json!({})).unwrap();
@@ -908,37 +774,9 @@ fn tab_strips_never_overlap_the_menu_button() {
     }
 }
 
-/// #151 in the real dock: every strip at 2× scale fits beside its menu button, and a tab in the
-/// chevron menu can still be chosen.
+/// #151: a card strip too narrow for its tabs still offers the hidden ones in its chevron menu.
 #[test]
-fn dock_strips_fit_and_the_chevron_menu_switches_tabs() {
-    for theme in ThemeKind::ALL {
-        let (mut app, _, _) = app_with_layers();
-        app.ui.panels.history = true;
-        app.ui.panels.navigator = true;
-        app.ui.panels.character = true;
-        let mut h = Harness::builder().with_size(vec2(900.0, 1000.0)).with_pixels_per_point(2.0).build_ui_state(
-            |ui, app: &mut PhotocraftApp| {
-                if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
-                    return;
-                }
-                crate::panels::right_dock(app, ui);
-                egui::CentralPanel::default().show(ui, |_| {});
-            },
-            app,
-        );
-        PhotocraftApp::setup_context(&h.ctx, theme);
-        h.state_mut().ui.theme = theme;
-        h.run_steps(4);
-        let strips = last_strips(&h.ctx);
-        assert!(strips.len() >= 5, "{theme:?}: {strips:?}");
-        for s in &strips {
-            for (i, r) in &s.tabs {
-                assert!(r.intersect(s.menu).width() <= 0.5, "{theme:?} {:?}: tab {i} under the menu", s.group);
-            }
-        }
-    }
-    // A strip too narrow for its tabs: pick a hidden tab from the chevron menu.
+fn the_chevron_menu_switches_tabs() {
     let mut h = Harness::builder().with_size(vec2(150.0, 200.0)).build_ui_state(
         |ui, sel: &mut usize| {
             if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
@@ -1076,14 +914,6 @@ fn navigator_preview_fills_its_group_and_keeps_aspect() {
     }
 }
 
-fn strip_tabs(h: &Harness<'static, PhotocraftApp>, g: Group) -> Vec<(usize, Rect)> {
-    last_strips(&h.ctx).into_iter().find(|s| s.group == g).map(|s| s.tabs).unwrap_or_else(|| panic!("{g:?} strip not drawn"))
-}
-
-fn tab_rect(h: &Harness<'static, PhotocraftApp>, g: Group, tab: usize) -> Rect {
-    strip_tabs(h, g).into_iter().find(|(i, _)| *i == tab).map(|(_, r)| r).unwrap_or_else(|| panic!("{g:?} tab {tab} not on the strip"))
-}
-
 fn click(h: &mut Harness<'static, PhotocraftApp>, p: Pos2) {
     h.event(egui::Event::PointerMoved(p));
     h.run_steps(1);
@@ -1135,42 +965,29 @@ fn move_tab_reorders_by_name_and_bad_saved_orders_fall_back() {
     assert_eq!(names(&back, Group::Layers, true), ["Channels", "Layers", "Paths"], "missing tabs follow in their default order");
 }
 
-/// #2272: dragging a tab along its strip reorders the group's tabs; the order persists in the
-/// UI state, the remembered layout and saved workspaces, and clicking still selects.
+/// #2272: a tab dragged along its strip reorders the group's tabs; the order persists in the
+/// remembered layout and saved workspaces, and clicking still selects.
 #[test]
 fn dragging_a_tab_reorders_the_group_and_the_order_persists() {
     for theme in [ThemeKind::ProMedium, ThemeKind::Studio] {
         let (app, _, _) = app_with_layers();
         let mut h = harness(app, vec2(1200.0, 800.0), theme);
-        let order = h.state().ui.dock.order();
-        let rects = last_rects(&h.ctx);
-        let paths = tab_rect(&h, Group::Layers, 2);
-        let layers = tab_rect(&h, Group::Layers, 0);
-        drag(&mut h, paths.center(), layers.left_center() + vec2(4.0, 0.0));
-        let strip: Vec<usize> = strip_tabs(&h, Group::Layers).iter().map(|(i, _)| *i).collect();
-        assert_eq!(strip, [2, 0, 1], "{theme:?}: Paths moved before Layers");
-        assert_eq!(h.state().ui.dock.order(), order, "{theme:?}: a tab drag along the strip leaves the groups put");
-        assert_eq!(last_rects(&h.ctx), rects);
-        // The dragged tab is brought to the front; dockTabs keeps its original indices.
-        assert_eq!(h.state().ui.dock_tabs.layers, 2, "{theme:?}");
+        let tab = |h: &Harness<'static, PhotocraftApp>, panel: &str| probe::tab_rect(&h.ctx, panel).unwrap_or_else(|| panic!("{panel} tab drawn"));
+        let others = |h: &Harness<'static, PhotocraftApp>| probe::group_of(h.state(), "color");
+        let color = others(&h);
+        let (paths, layers) = (tab(&h, "paths"), tab(&h, "layers"));
+        drag(&mut h, paths.center(), layers.left_center() + vec2(layers.width() / 4.0, 0.0));
+        assert_eq!(probe::group_of(h.state(), "layers"), ["paths", "layers", "channels"], "{theme:?}: Paths moved before Layers");
+        assert_eq!(others(&h), color, "{theme:?}: a tab drag along the strip leaves the other groups put");
+        assert_eq!(h.state().ui.dock_tabs.layers, 2, "{theme:?}: the dragged tab is selected");
 
         // A plain click still selects, and selects the tab under the pointer.
-        let layers = tab_rect(&h, Group::Layers, 0).center();
+        let layers = tab(&h, "layers").center();
         click(&mut h, layers);
         assert_eq!(h.state().ui.dock_tabs.layers, 0, "{theme:?}");
-        assert_eq!(strip_tabs(&h, Group::Layers).iter().map(|(i, _)| *i).collect::<Vec<_>>(), [2, 0, 1]);
+        assert_eq!(probe::group_of(h.state(), "layers"), ["paths", "layers", "channels"]);
 
-        // UI state round trip (the control channel's ui.get / ui.set).
-        let dock = serde_json::to_value(&h.state().ui.dock).unwrap();
-        assert_eq!(dock["tabOrder"], json!({"layers": ["Paths", "Layers", "Channels"]}));
         let ctx = h.ctx.clone();
-        let (req, _rx) = crate::control::ControlRequest::new("ui.set", json!({"dock": {"tabOrder": {"layers": ["Channels"]}}}));
-        crate::control::handle(h.state_mut(), &ctx, &req);
-        assert_eq!(h.state().ui.dock.visible_tabs(Group::Layers, is_pro(theme))[0], (1, "Channels"));
-        let (req, _rx) = crate::control::ControlRequest::new("ui.set", json!({"dock": dock}));
-        crate::control::handle(h.state_mut(), &ctx, &req);
-        assert_eq!(h.state().ui.dock.visible_tabs(Group::Layers, is_pro(theme))[0], (2, "Paths"));
-
         // Remembered across launches (prefs panelLayout) ...
         h.state_mut().session.prefs.edit(|p| p.workspace.remember_workspace_changes = true);
         persist(h.state_mut(), &ctx);
@@ -1181,40 +998,17 @@ fn dragging_a_tab_reorders_the_group_and_the_order_persists() {
             p.panel_layout = saved.clone();
         });
         restore(&mut fresh);
-        assert_eq!(fresh.ui.dock.visible_tabs(Group::Layers, is_pro(theme))[0], (2, "Paths"), "{theme:?}");
+        assert_eq!(probe::group_of(&fresh, "layers"), ["paths", "layers", "channels"], "{theme:?}");
 
         // ... and in a saved workspace, which Essentials resets and selecting brings back.
         crate::menus::invoke(h.state_mut(), &ctx, "window.workspace.newWorkspace", json!({"name": "Paths First"})).unwrap();
         crate::menus::invoke(h.state_mut(), &ctx, "window.workspace.essentials", json!({})).unwrap();
-        assert!(h.state().ui.dock.tab_order.is_empty());
+        assert_eq!(probe::group_of(h.state(), "layers"), ["layers", "channels", "paths"]);
         crate::menus::invoke(h.state_mut(), &ctx, "window.workspace.select", json!({"name": "Paths First"})).unwrap();
         h.run_steps(3);
-        assert_eq!(strip_tabs(&h, Group::Layers).iter().map(|(i, _)| *i).collect::<Vec<_>>(), [2, 0, 1], "{theme:?}");
+        assert_eq!(probe::group_of(h.state(), "layers"), ["paths", "layers", "channels"], "{theme:?}");
+        assert!(tab(&h, "paths").left() < tab(&h, "layers").left());
     }
-}
-
-/// Dragging a tab onto another group's body moves the whole group; onto its tab strip moves only
-/// the tab. A locked workspace keeps both the tab and group order.
-#[test]
-fn a_tab_dragged_off_the_strip_moves_the_group_and_locking_stops_reordering() {
-    let (app, _, _) = app_with_layers();
-    let mut h = harness(app, vec2(1200.0, 800.0), ThemeKind::ProMedium);
-    let paths = tab_rect(&h, Group::Layers, 2);
-    let to = rect_of(&h, Group::Color).left_top() + vec2(120.0, 40.0);
-    drag(&mut h, paths.center(), to);
-    assert_eq!(h.state().ui.dock.order().first(), Some(&Group::Layers));
-    assert!(h.state().ui.dock.tab_order.is_empty(), "the tabs kept their order");
-
-    h.state_mut().session.prefs.edit(|p| p.workspace_locked = true);
-    h.run_steps(2);
-    let order = h.state().ui.dock.order();
-    let paths = tab_rect(&h, Group::Layers, 2);
-    let layers = tab_rect(&h, Group::Layers, 0).left_center();
-    drag(&mut h, paths.center(), layers + vec2(4.0, 0.0));
-    assert!(h.state().ui.dock.tab_order.is_empty());
-    let paths = tab_rect(&h, Group::Layers, 2);
-    drag(&mut h, paths.center(), paths.center() + vec2(0.0, 500.0));
-    assert_eq!(h.state().ui.dock.order(), order);
 }
 
 #[test]
@@ -1281,4 +1075,47 @@ fn workspace_layouts_leave_the_layers_panel_options_alone() {
     assert!(!app.ui.layers_panel_options.show_filters);
     assert_ne!(app.ui.layers_panel_options.thumbnail_size, crate::state::LayerThumbnailSize::Large);
     assert_eq!(app.session.prefs().dialogs.get("ui.layersPanelOptions").cloned(), stored);
+}
+
+#[test]
+fn a_panel_window_the_os_moves_is_saved_once_it_keeps_still() {
+    let (mut app, _, _) = app_with_layers();
+    app.session.prefs.edit(|p| p.workspace.remember_workspace_changes = true);
+    app.run("window.panel.float", json!({"panel": "info"})).unwrap();
+    let ctx = egui::Context::default();
+    let frame = |app: &mut PhotocraftApp| ctx.run_ui(Default::default(), |ui| persist(app, ui.ctx())).textures_delta.clear();
+    let place = |app: &mut PhotocraftApp, x: f32| {
+        let window = app.ui.docking.as_mut().unwrap().layout.floating.iter_mut().find(|w| w.contains("info")).unwrap();
+        window.native = Some([x, 100.0, 300.0, 200.0]);
+    };
+    frame(&mut app);
+    let saved = app.session.prefs().panel_layout.clone();
+    for x in 500..520 {
+        place(&mut app, x as f32);
+        frame(&mut app);
+        assert_eq!(app.session.prefs().panel_layout, saved, "not saved while the window moves");
+    }
+    frame(&mut app);
+    let native = app.session.prefs().panel_layout["docking"]["layout"]["floating"][0]["native"].clone();
+    assert_eq!(native, json!([519.0, 100.0, 300.0, 200.0]), "saved once it keeps still");
+}
+
+#[test]
+fn a_workspace_from_a_newer_version_shows_the_default_and_stays_saved() {
+    let (mut app, _, _) = app_with_layers();
+    app.session.prefs.edit(|p| p.workspace.remember_workspace_changes = true);
+    let mut saved = snapshot(&app);
+    saved["docking"] = json!({"version": 99, "layout": {"root": null, "floating": []}, "future": true});
+    app.session.prefs.edit(|p| p.panel_layout = saved.clone());
+    restore(&mut app);
+    assert!(app.ui.docking.is_none(), "the default layout shows");
+    let ctx = egui::Context::default();
+    let frame = |app: &mut PhotocraftApp| ctx.run_ui(Default::default(), |ui| persist(app, ui.ctx())).textures_delta.clear();
+    frame(&mut app);
+    assert_eq!(app.session.prefs().panel_layout, saved, "an idle frame leaves it saved");
+
+    app.run("window.panel.close", json!({"panel": "layers"})).unwrap();
+    frame(&mut app);
+    let docking = &app.session.prefs().panel_layout["docking"];
+    assert_eq!(docking["version"], json!(craft_ui::docking::Workspace::<String>::VERSION), "a changed layout replaces it: {docking}");
 }

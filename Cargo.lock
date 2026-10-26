@@ -1341,12 +1341,12 @@ dependencies = [
 [[package]]
 name = "craft-docpath"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=82a24b006eefa036b43c09a67fb9a3fbd17ffe63#82a24b006eefa036b43c09a67fb9a3fbd17ffe63"
+source = "git+https://github.com/storytold/craft-libs?rev=495e5971bc024aa96e6ed318cb6e7cd3a0103184#495e5971bc024aa96e6ed318cb6e7cd3a0103184"
 
 [[package]]
 name = "craft-jpeg"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=6e7f28518dd1cb57e1624bdc269c3c14316b13ae#6e7f28518dd1cb57e1624bdc269c3c14316b13ae"
+source = "git+https://github.com/storytold/craft-libs?rev=495e5971bc024aa96e6ed318cb6e7cd3a0103184#495e5971bc024aa96e6ed318cb6e7cd3a0103184"
 dependencies = [
  "thiserror 2.0.21",
 ]
@@ -1354,7 +1354,7 @@ dependencies = [
 [[package]]
 name = "craft-print"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=25da1314d443171b4adeaad2cd9454b273f35c6f#25da1314d443171b4adeaad2cd9454b273f35c6f"
+source = "git+https://github.com/storytold/craft-libs?rev=495e5971bc024aa96e6ed318cb6e7cd3a0103184#495e5971bc024aa96e6ed318cb6e7cd3a0103184"
 dependencies = [
  "craft-winprint-gdi",
  "miniz_oxide 0.8.9",
@@ -1367,9 +1367,13 @@ dependencies = [
 [[package]]
 name = "craft-ui"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=25da1314d443171b4adeaad2cd9454b273f35c6f#25da1314d443171b4adeaad2cd9454b273f35c6f"
+source = "git+https://github.com/storytold/craft-libs?rev=495e5971bc024aa96e6ed318cb6e7cd3a0103184#495e5971bc024aa96e6ed318cb6e7cd3a0103184"
 dependencies = [
  "egui",
+ "log",
+ "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
  "serde",
 ]
 
@@ -5082,8 +5086,10 @@ dependencies = [
 name = "photocraft-gpu"
 version = "0.16.0"
 dependencies = [
+ "bytemuck",
  "half",
  "log",
+ "photocraft-algo",
  "photocraft-cms",
  "photocraft-color",
  "photocraft-compose",
@@ -5132,6 +5138,9 @@ dependencies = [
  "roxmltree 0.21.1",
  "serde_json",
  "thiserror 2.0.21",
+ "tiff",
+ "zune-core 0.5.3",
+ "zune-jpegxl",
 ]
 
 [[package]]
@@ -5149,9 +5158,11 @@ dependencies = [
 name = "photocraft-paint"
 version = "0.16.0"
 dependencies = [
+ "photocraft-cms",
  "photocraft-color",
  "photocraft-geom",
  "photocraft-raster",
+ "rayon",
  "serde",
  "serde_json",
 ]

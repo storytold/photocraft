@@ -114,7 +114,7 @@ fn put_focus(h: &mut Harness<'_, PhotocraftApp>, place: Place) {
         }
         Place::OpacityField => {
             // The Layers panel's Opacity field: the DragValue in the right dock reading 100.
-            let layers = crate::dock::last_rects(&h.ctx).into_iter().find(|(g, _)| *g == crate::dock::Group::Layers).expect("Layers drawn").1;
+            let layers = crate::panel_docking::probe::group_rect(h.state(), &h.ctx, "layers").expect("Layers drawn");
             let at = h
                 .query_all_by_role(Role::SpinButton)
                 .map(|n| n.rect())
@@ -570,6 +570,41 @@ fn delete_with_the_mask_targeted_edits_the_mask_not_the_layer() {
         assert!(h.state().session.active().unwrap().doc.layer(layer).is_some(), "{key}: the layer stays");
         assert_eq!(layer_pixels(&h), before, "{key}: the layer's pixels are untouched");
     }
+}
+
+/// FILE-215-3: with a smart object's filter mask targeted, Delete with a selection fills the filter
+/// mask with the background colour there (not Edit › Clear on the smart object); with no
+/// selection Photoshop deletes the layer, as it does with the pixels targeted.
+#[test]
+fn delete_with_the_filter_mask_targeted_edits_the_filter_mask() {
+    let mut h = harness();
+    put_focus(&mut h, Place::Canvas);
+    let s = &mut h.state_mut().session;
+    s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    s.execute("filter.blur.gaussianBlur", json!({"radius": 2})).unwrap();
+    let layer = s.active().unwrap().active_layer.unwrap();
+    let sel = s.active().unwrap().doc.selection.as_ref().expect("the harness keeps a selection").content_bounds();
+    let (x, y) = ((sel.x0 + sel.x1) / 2, (sel.y0 + sel.y1) / 2);
+    h.state_mut().select_filter_mask_target(Some(layer.0));
+    assert!(h.state().filter_mask_targeted());
+    h.run_steps(2);
+    let smart = |h: &Harness<'_, PhotocraftApp>| match h.state().session.active().unwrap().doc.layer(layer).map(|l| &l.content) {
+        Some(photocraft_doc::LayerContent::Smart(sm)) => Some(sm.clone()),
+        _ => None,
+    };
+    let filters = smart(&h).unwrap().smart_filters.len();
+    let bg = h.state().session.tools.background;
+    press(&mut h, "Delete");
+    assert_eq!(logged(&h), ["edit.fillBackground"]);
+    let sm = smart(&h).expect("the smart object stays");
+    assert_eq!(sm.filter_mask.as_ref().map(|m| m.value(x, y)), Some(bg[0]), "the filter mask takes the background colour");
+    assert_eq!(bg[0], 0.0, "a targeted mask's background colour is black");
+    assert_eq!(sm.smart_filters.len(), filters);
+    h.state_mut().session.execute("select.deselect", json!({})).unwrap();
+    h.run_steps(2);
+    press(&mut h, "Delete");
+    assert_eq!(logged(&h), ["layer.delete"]);
+    assert!(smart(&h).is_none(), "no selection deletes the layer, as in Photoshop");
 }
 
 /// Every selected layer goes, pixel layers too (Photoshop deletes, it doesn't clear the layer).

@@ -223,12 +223,59 @@ pub fn apply_txt2(layer: &mut TextLayer, tysh: &[u8], txt2: &E) {
     layer.sync_summary();
 }
 
-/// The frame (`Txt2 /0 /8 /0` entry) of text object `index`: its rendered frame's `/10` names it.
-fn txt2_frame(txt2: &E, index: usize) -> Option<&E> {
+/// The frame (`Txt2 /0 /8 /0` entry) of text object `index`: its rendered frame's `/10` names it
+/// (with `named`, else the frame its view names; see [`object_frame`]).
+fn txt2_frame(txt2: &E, index: usize, named: bool) -> Option<&E> {
     let object = txt2.path(&["1", "1"]).and_then(E::as_array)?.get(index)?;
-    let frame =
-        object.path(&["1", "2"]).and_then(E::as_array)?.first()?.get("6").and_then(E::as_array)?.iter().find_map(|f| f.get("10").and_then(E::as_i64))?;
-    txt2.path(&["0", "8", "0"]).and_then(E::as_array)?.get(usize::try_from(frame).ok()?)?.get("0")
+    txt2.path(&["0", "8", "0"]).and_then(E::as_array)?.get(object_frame(object, named)?)?.get("0")
+}
+
+/// The number of the frame the text object `object` is drawn in: its rendered frame's `/10`, else
+/// (with `named`) the frame its view names (`/1 /0 [ << /0 n >> ]`). Photoshop leaves the rendered
+/// strikes out for type it did not lay out (`text/path-wave-open.psd`, whose EngineData text is
+/// blank).
+fn object_frame(object: &E, named: bool) -> Option<usize> {
+    let rendered = object
+        .path(&["1", "2"])
+        .and_then(E::as_array)
+        .and_then(|s| s.first())
+        .and_then(|s| s.get("6"))
+        .and_then(E::as_array)
+        .and_then(|parts| parts.iter().find_map(|f| f.get("10").and_then(E::as_i64)));
+    let view = || named.then(|| object.path(&["1", "0"]).and_then(E::as_array).and_then(|f| f.first()).and_then(|f| f.get("0")).and_then(E::as_i64)).flatten();
+    usize::try_from(rendered.or_else(view)?).ok()
+}
+
+/// The `TySh` of `tysh` and the `Txt2` frame of its text object (`named`: see [`object_frame`]),
+/// when that object still holds `layer`'s text (an edit elsewhere leaves `Txt2` stale).
+fn layer_frame<'a>(layer: &TextLayer, tysh: &[u8], txt2: &'a E, named: bool) -> Option<(TySh, &'a E)> {
+    let t = parse_tysh(tysh)?;
+    let index = match t.text.get("TextIndex") {
+        Some(D::Integer(i)) => usize::try_from(*i).ok()?,
+        _ => return None,
+    };
+    let text = txt2.path(&["1", "1"]).and_then(E::as_array).and_then(|a| a.get(index)).and_then(|o| o.path(&["0", "0"])).and_then(E::as_str)?;
+    if text.strip_suffix('\r').unwrap_or(text).replace('\r', "\n") != layer.text {
+        return None;
+    }
+    let frame = txt2_frame(txt2, index, named)?;
+    Some((t, frame))
+}
+
+/// Puts `layer` on its path when its `Txt2` frame is type on a path (#7962): Photoshop keeps the
+/// path only there, and EngineData describes the layer as a text box the size of the path's
+/// bounds. The path is read into the `TySh` text space, the type starting where Photoshop starts
+/// it (see `psd_path`). `Ok(true)` when the layer is now path text, `Ok(false)` when its frame is
+/// no path (or `Txt2` holds another text for it), `Err` with the reason when the path can't be
+/// read: the layer then stays the box or point text EngineData describes.
+pub fn apply_txt2_path(layer: &mut TextLayer, tysh: &[u8], txt2: &E) -> Result<bool, String> {
+    let Some((_, frame)) = layer_frame(layer, tysh, txt2, true) else { return Ok(false) };
+    if crate::psd_path::frame_kind(frame) != crate::psd_path::PATH_FRAME {
+        return Ok(false);
+    }
+    let path = crate::psd_path::read(frame)?;
+    layer.shape = TextShape::Path { path, start: 0.0, flip: false };
+    Ok(true)
 }
 
 /// Places `layer` where Photoshop draws it when the text object's frame in `Txt2` is moved
@@ -240,18 +287,11 @@ fn txt2_frame(txt2: &E, index: usize) -> Option<&E> {
 /// alignment anchor. Only when the layer's `TextIndex` entry still holds the layer's text, as
 /// for [`apply_txt2`], and the frame agrees with the `TySh` `bounds`.
 pub fn apply_txt2_frame(layer: &mut TextLayer, tysh: &[u8], txt2: &E) {
-    let Some(t) = parse_tysh(tysh) else { return };
-    let Some(index) = (match t.text.get("TextIndex") {
-        Some(D::Integer(i)) => usize::try_from(*i).ok(),
-        _ => None,
-    }) else {
-        return;
-    };
-    let text = txt2.path(&["1", "1"]).and_then(E::as_array).and_then(|a| a.get(index)).and_then(|o| o.path(&["0", "0"])).and_then(E::as_str);
-    if text.is_none_or(|t| t.strip_suffix('\r').unwrap_or(t).replace('\r', "\n") != layer.text) {
+    // Type on a path: [`apply_txt2_path`] already read the path through the frame's matrix.
+    if matches!(layer.shape, TextShape::Path { .. }) {
         return;
     }
-    let Some(frame) = txt2_frame(txt2, index) else { return };
+    let Some((t, frame)) = layer_frame(layer, tysh, txt2, false) else { return };
     let m = arr_f(frame.path(&["2", "2"]));
     let matrix = if m.len() == 6 && m.iter().all(|v| v.is_finite()) { Affine { m: [m[0], m[1], m[2], m[3], m[4], m[5]] } } else { Affine::IDENTITY };
     let at = match layer.shape {
@@ -1173,6 +1213,20 @@ pub fn build_txt2_at(objects: &[(i32, &TextLayer)], previous: Option<&[u8]>, dpi
     let all_stubs = prev_objects.iter().all(is_stub);
     // A template is copied once per new layer, so a large one is skipped (the stub is written).
     let template = prev_objects.iter().rev().find(|o| names_one_frame(o) && fits(o, &mut { TEMPLATE_NODES }) && edited_object(o, "\r").is_some());
+    // The frame each written object is drawn in, with its layer's shape (type on a path lives
+    // only in the frame, #7962).
+    let mut frame_shapes: Vec<(usize, &TextShape)> = Vec::new();
+    // A new or rebuilt object must not be drawn in a frame another object is drawn in: the two
+    // layers would share one shape. The frames the file's objects name are taken; a free one is
+    // found past the frame list and the slots (`pad_frames` adds it).
+    let frame_count = prev.as_ref().and_then(|p| p.path(&["0", "8", "0"])).and_then(E::as_array).map(<[E]>::len);
+    let mut taken: std::collections::HashSet<usize> = prev_objects.iter().filter_map(|o| object_frame(o, true)).collect();
+    let slot_count =
+        objects.iter().filter_map(|(i, _)| usize::try_from(*i).ok().filter(|_| (0..=MAX_TEXT_INDEX).contains(i))).map(|i| i + 1).max().unwrap_or(0);
+    let mut next_free = frame_count.unwrap_or(0).max(prev_objects.len()).max(slot_count);
+    // The frame list grows only for the frames handed out here, never for a frame number an
+    // object the file kept names past its list.
+    let mut frames_needed = 0usize;
     for (index, layer) in objects {
         if !(0..=MAX_TEXT_INDEX).contains(index) {
             continue;
@@ -1208,8 +1262,28 @@ pub fn build_txt2_at(objects: &[(i32, &TextLayer)], previous: Option<&[u8]>, dpi
         // A new object (#7698): a layer the file's block has no object for (a type layer added
         // here) takes the shape of one of the file's own objects, refitted the same way, with its
         // view naming its own frame. A bare stub beside Photoshop's objects, its slot without a
-        // frame in `/0 /8 /0`, made Photoshop and Photopea refuse the file.
-        let fresh = (kept.is_none() && edited.is_none()).then(|| template.and_then(|t| new_object(t, at, &text))).flatten();
+        // frame in `/0 /8 /0`, made Photoshop and Photopea refuse the file. A slot whose object
+        // can't be refitted keeps the frame that object was drawn in.
+        let fresh = (kept.is_none() && edited.is_none())
+            .then(|| {
+                let template = template?;
+                let own = slot.and_then(|o| object_frame(o, true)).filter(|f| frame_count.is_some_and(|n| *f < n));
+                let frame = match own {
+                    Some(f) => f,
+                    None if frame_count.is_some() && taken.contains(&at) => {
+                        while taken.contains(&next_free) {
+                            next_free += 1;
+                        }
+                        if next_free > MAX_TEXT_INDEX as usize { at } else { next_free }
+                    }
+                    None => at,
+                };
+                let object = new_object(template, frame, &text)?;
+                taken.insert(frame);
+                frames_needed = frames_needed.max(frame.saturating_add(1));
+                Some(object)
+            })
+            .flatten();
         let reuse = kept.is_some() || edited.is_some();
         let unchanged = kept.is_some();
         let mut object = kept.cloned().or(edited).or(fresh).unwrap_or_else(E::dict);
@@ -1239,6 +1313,9 @@ pub fn build_txt2_at(objects: &[(i32, &TextLayer)], previous: Option<&[u8]>, dpi
             _ => model.set("6", E::Dict(vec![("0".into(), E::Array(runs))])),
         }
         object.set("0", model);
+        if let Some(frame) = object_frame(&object, true) {
+            frame_shapes.push((frame, &layer.shape));
+        }
         if slots.len() <= at {
             slots.resize(at + 1, E::dict());
         }
@@ -1249,7 +1326,24 @@ pub fn build_txt2_at(objects: &[(i32, &TextLayer)], previous: Option<&[u8]>, dpi
     // The outer dictionary keeps whatever the block held (`/98` version, block extras, …), and
     // `/1` whatever it holds beside the text objects.
     let mut outer = prev.clone().unwrap_or_else(|| E::Dict(vec![("98".into(), E::Dict(vec![("0".into(), E::Int(14))])), ("0".into(), E::dict())]));
-    pad_frames(&mut outer, slots.len());
+    pad_frames(&mut outer, slots.len().max(frames_needed));
+    // A path layer's frame holds its path; a layer taken off its path loses its path frame. An
+    // unchanged path leaves the file's frame as it was, and so does a frame the file already had
+    // more than one object drawn in (which layer's shape it should hold is unknown).
+    let mut claims: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+    for (at, _) in &frame_shapes {
+        *claims.entry(*at).or_default() += 1;
+    }
+    if let Some(E::Array(frames)) = outer.get_mut("0").and_then(|v| v.get_mut("8")).and_then(|v| v.get_mut("0")) {
+        for (at, shape) in frame_shapes {
+            if claims.get(&at) != Some(&1) {
+                continue;
+            }
+            if let Some(entry) = frames.get_mut(at) {
+                crate::psd_path::update_frame(entry, shape);
+            }
+        }
+    }
     if fonts.len() != fonts_before
         && let Some(list @ E::Dict(_)) = outer.get_mut("0").and_then(|v| v.get_mut("1"))
     {
@@ -1373,10 +1467,7 @@ fn pad_frames(outer: &mut E, count: usize) {
     let Some(E::Array(frames)) = outer.get_mut("0").and_then(|v| v.get_mut("8")).and_then(|v| v.get_mut("0")) else { return };
     let count = count.min(MAX_TEXT_INDEX as usize + 1);
     if frames.len() < count {
-        let kind = E::Dict(vec![("4".into(), E::Int(-1)), ("7".into(), E::Bool(false))]);
-        let data = E::Dict(vec![("6".into(), E::Array(vec![E::Real(-1.0), E::Real(-1.0)])), ("11".into(), kind)]);
-        let frame = E::Dict(vec![("0".into(), E::Dict(vec![("2".into(), data)]))]);
-        frames.resize(count, frame);
+        frames.resize(count, crate::psd_path::point_frame());
     }
 }
 
@@ -1694,7 +1785,9 @@ pub fn build_engine_data(layer: &TextLayer, template: Option<E>, dpi: f32) -> E 
         dict.set("UseFractionalGlyphWidths", E::Bool(true));
     }
     let (shape_type, box_bounds) = match &layer.shape {
-        // PSD path type is not written yet: the layer saves as point text.
+        // Type on a path: the path goes into the layer's `Txt2` frame ([`build_txt2`], #7962),
+        // which only a file that already has a `Txt2` object for the layer gets; EngineData
+        // keeps it as point text, one line for readers (and files) without that frame.
         TextShape::Point | TextShape::Path { .. } => (0, None),
         TextShape::Box { x, y, width, height } => (1, Some([*x, *y, x + width, y + height])),
         // PSD area type is not written yet: the layer saves as paragraph text over the path's

@@ -21,6 +21,14 @@ pub fn sample_for_depth(depth: u16) -> SampleType {
     }
 }
 
+/// Complements every native-endian sample of one plane (`max − v`, `1 − v` for float). A
+/// trailing partial sample is left unchanged.
+pub(crate) fn invert_plane(bytes: &mut [u8], s: SampleType) {
+    for c in bytes.chunks_exact_mut(s.bytes().max(1)) {
+        invert_sample(c, s);
+    }
+}
+
 fn invert_sample(bytes: &mut [u8], s: SampleType) {
     match s {
         SampleType::U8 => bytes[0] = 255 - bytes[0],

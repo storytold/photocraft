@@ -797,7 +797,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                         let opts: Vec<(String, &str)> = options.iter().cloned().zip(labels.iter().map(String::as_str)).collect();
                         ui.horizontal(|ui| {
                             ui.label(egui::RichText::new(tl!(&label)).color(t.text_dim));
-                            widgets::dropdown(ui, &format!("gallery-{}", p.key), &label, &mut c, &opts, 140.0);
+                            widgets::dropdown(ui, &format!("gallery-{}", p.key), tl!(&label), &mut c, &opts, 140.0);
                         });
                         e.params.insert(p.key, json!(c));
                     }

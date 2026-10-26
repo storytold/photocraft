@@ -10,9 +10,7 @@ license = "MIT OR Apache-2.0"
 rust-version = "1.95"
 
 [workspace.dependencies]
-# egui 0.37 port with capture; PhotoCraft uses its old docking surface, so do not bump this
-# to the new-docking L revision without porting panel_docking.rs.
-craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "25da1314d443171b4adeaad2cd9454b273f35c6f", features = ["serde"] }
+craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "495e5971bc024aa96e6ed318cb6e7cd3a0103184", features = ["serde"] }
 # internal
 photocraft-geom = { path = "crates/geom" }
 photocraft-color = { path = "crates/color" }
@@ -41,12 +39,9 @@ photocraft-tablet = { path = "crates/tablet" }
 photocraft-ipp = { path = "crates/ipp" }
 
 # external
-# Kept at the egui-0.37 port revision on purpose: 25da contains 4f85efb's bounded print
-# parsing and 2bbef53's printer names; 3d37da38 (PhotoCraft main's pin) lacks both. This is a
-# targeted security/UI bump, not an all-libs flatten. Re-check if main backports them.
-craft-print = { git = "https://github.com/storytold/craft-libs", rev = "25da1314d443171b4adeaad2cd9454b273f35c6f" }
-craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "82a24b006eefa036b43c09a67fb9a3fbd17ffe63" }
-craft-jpeg = { git = "https://github.com/storytold/craft-libs", rev = "6e7f28518dd1cb57e1624bdc269c3c14316b13ae" }
+craft-print = { git = "https://github.com/storytold/craft-libs", rev = "495e5971bc024aa96e6ed318cb6e7cd3a0103184" }
+craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "495e5971bc024aa96e6ed318cb6e7cd3a0103184" }
+craft-jpeg = { git = "https://github.com/storytold/craft-libs", rev = "495e5971bc024aa96e6ed318cb6e7cd3a0103184" }
 craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "495e5971bc024aa96e6ed318cb6e7cd3a0103184", features = ["egui"] }
 thiserror = "2"
 serde = { version = "1", features = ["derive", "rc"] }

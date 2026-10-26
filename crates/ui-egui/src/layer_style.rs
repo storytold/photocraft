@@ -21,6 +21,8 @@ use serde_json::{Map, Value, json};
 use crate::theme::Tokens;
 use crate::{PhotocraftApp, widgets};
 
+#[cfg(test)]
+mod bevel_modes_tests;
 pub(crate) mod color_picker;
 mod contour;
 #[cfg(test)]
@@ -1055,7 +1057,8 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                             let mut cur = disp.get(key).and_then(Value::as_str).unwrap_or("Normal").to_string();
                             let opts: Vec<(String, &str)> =
                                 photocraft_color::BlendMode::LAYER_MODES.iter().map(|m| (m.label().to_string(), m.label())).collect();
-                            if widgets::dropdown(ui, &format!("fx-blend-{sel_kind}"), tl!("Blend Mode"), &mut cur, &opts, 150.0) {
+                            // One id per mode: Bevel & Emboss has two (Highlight, Shadow), which must not share a list (#9368).
+                            if widgets::dropdown(ui, &format!("fx-blend-{sel_kind}-{key}"), tl!(&label), &mut cur, &opts, 150.0) {
                                 let value = json!(cur);
                                 disp[key] = value.clone();
                                 set_param(f, &selected, key, value);

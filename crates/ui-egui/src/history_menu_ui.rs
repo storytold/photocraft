@@ -132,11 +132,11 @@ mod tests {
     fn close_hides_the_history_panel() {
         let mut app = app();
         app.run("window.panel.activate", json!({"panel": "history"})).unwrap();
-        assert!(app.ui.docking.as_ref().unwrap().contains(&"history".to_string()));
+        assert!(app.ui.docking.as_ref().unwrap().layout.contains(&"history".to_string()));
         let mut h = harness(app);
         click(&mut h, "Close");
         assert!(!h.state().ui.status_error, "{}", h.state().ui.status);
-        let layout = h.state().ui.docking.clone().unwrap();
+        let layout = h.state().ui.docking.clone().unwrap().layout;
         assert!(!layout.contains(&"history".to_string()), "the History panel is closed");
     }
 

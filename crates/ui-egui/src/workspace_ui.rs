@@ -160,6 +160,9 @@ pub fn menu(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<
         "window.workspace.lockWorkspace" => {
             let on = params.get("on").and_then(Value::as_bool).unwrap_or(!app.session.prefs().workspace_locked);
             app.session.prefs.edit(|p| p.workspace_locked = on);
+            if let Some(workspace) = app.ui.docking.as_mut() {
+                workspace.locked = on;
+            }
             Ok(json!({"locked": on}))
         }
         "window.workspace.newWorkspace" if no_params(params) => {
@@ -210,7 +213,8 @@ fn new_workspace(app: &mut PhotocraftApp, p: &Value) -> Result<Value, String> {
         return Err(format!("\"{name}\" is a built-in workspace"));
     }
     let prefs = app.session.prefs().clone();
-    let mut ws = json!({"panels": app.ui.panels, "dockTabs": app.ui.dock_tabs, "dock": app.ui.dock, "timelineOpen": app.ui.timeline.open, "docking": app.ui.docking, "dockingHidden": app.ui.docking_hidden, "dockingCollapsed": app.ui.docking_collapsed});
+    let mut ws = json!({"panels": app.ui.panels, "dockTabs": app.ui.dock_tabs, "dock": app.ui.dock, "timelineOpen": app.ui.timeline.open, "docking": app.ui.docking, "dockingReturns": app.ui.docking_returns, "dockingCollapsed": app.ui.docking_collapsed});
+    crate::dock::keep_newer(app, &mut ws);
     // The icon rail and menu bar flags belong to an embedding app's session, not to a saved
     // layout: a workspace never brings back a window without its menus.
     if let Some(panels) = ws.get_mut("panels").and_then(Value::as_object_mut) {
@@ -593,10 +597,12 @@ mod tests {
                 crate::menus::invoke(h.state_mut(), &ctx, "window.workspace.select", json!({"name": "Embedded"})).unwrap();
                 h.run_steps(4);
                 assert_eq!(h.state().ui.theme, theme, "the fixture renders the requested theme");
-                for name in ["title_bar", "rail"] {
-                    if egui::containers::panel::PanelState::load(&h.ctx, crate::panels::panel_state_id(&h.ctx, name)).is_some() {
-                        failures.push(format!("{theme:?}, width={width}: {name} is drawn"));
-                    }
+                if egui::containers::panel::PanelState::load(&h.ctx, crate::panels::panel_state_id(&h.ctx, "title_bar")).is_some() {
+                    failures.push(format!("{theme:?}, width={width}: title_bar is drawn"));
+                }
+                // The rail is drawn inside the canvas panel: find it by a button only it has.
+                if egui_kittest::kittest::Queryable::query_by_label(&h, "Color & Swatches").is_some() {
+                    failures.push(format!("{theme:?}, width={width}: rail is drawn"));
                 }
                 if h.state().ui.panels.menu_bar || h.state().ui.panels.rail {
                     failures.push(format!("{theme:?}, width={width}: host flags were overwritten"));

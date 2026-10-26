@@ -46,6 +46,7 @@ pub mod caf_ui;
 pub(crate) mod cam_preview;
 mod cam_transform;
 mod camera_raw_detail_ui;
+mod camera_raw_gpu;
 mod camera_raw_preview_ui;
 mod camera_raw_scope_ui;
 pub mod camera_raw_ui;
@@ -114,6 +115,7 @@ pub mod gpu_status;
 pub mod gradient_ui;
 pub mod guide_layout_ui;
 pub mod guide_select;
+pub mod histogram_panel;
 pub mod history_menu_ui;
 pub mod hold_keys;
 pub mod i18n;
@@ -201,6 +203,7 @@ pub mod select_mask_view;
 pub mod served_fonts;
 pub mod shape_dialog;
 pub(crate) mod shape_fill_ui;
+mod shape_gradient_ui;
 mod shape_options;
 mod shape_paint_ui;
 pub mod shape_stroke_ui;
@@ -212,6 +215,7 @@ pub mod slice_ui;
 pub mod smart_filter_dialog;
 pub mod smart_ui;
 pub mod snap_ui;
+pub mod snapshot_dialog;
 pub(crate) mod solid_fill_ui;
 pub mod spring_tools;
 pub mod stack_dialog;
@@ -683,10 +687,6 @@ pub struct Services {
     pub quit: Option<QuitFn>,
 }
 
-/// A document histogram being computed off the UI thread: (document, revision, receiver of
-/// (document, compute ms, histograms)).
-pub(crate) type HistJob = (DocId, u64, std::sync::mpsc::Receiver<(DocId, f64, std::sync::Arc<tone::Histograms>)>);
-
 /// The Info panel's cached sample: pixel x, y, document revision and Eyedropper Sample Size.
 type InfoSampleKey = (i32, i32, u64, u32);
 
@@ -778,6 +778,9 @@ pub struct PhotocraftApp {
     /// This press began with ⌥ (Alt) held on a painting tool, so it samples colours instead of
     /// painting until it is released (`canvas::alt_eyedropper`, #417).
     pub(crate) alt_sampling: bool,
+    /// This press began with ⌥ (Alt) held on the Mixer Brush, so it loaded paint from the canvas
+    /// and paints nothing until it is released, even with ⌥ let go (`canvas::tool_event`).
+    pub(crate) mixer_sampling: bool,
     /// Caps Lock toggled on, read from the OS each frame (`services.caps_lock`): painting tools
     /// show the precise crosshair whatever the cursor preference (#1758).
     pub caps_lock: bool,
@@ -888,10 +891,14 @@ pub struct PhotocraftApp {
     pub(crate) paused_playbacks: actions::PausedPlaybacks,
     /// Levels/Curves histogram cache: (document, adjustment layer, revision it is valid for).
     pub(crate) tone_hist: Option<(DocId, photocraft_doc::LayerId, u64, std::sync::Arc<tone::Histograms>)>,
-    /// Histogram panel cache: (document, revision, computed at ms, histograms).
-    pub(crate) doc_hist: Option<(DocId, u64, f64, std::sync::Arc<tone::Histograms>)>,
-    /// The document histogram being computed on a worker thread: (document, revision, receiver).
-    pub(crate) hist_job: Option<HistJob>,
+    /// Histogram panel: the document's histogram (`histogram_panel`).
+    pub(crate) doc_hist: Option<histogram_panel::PanelHist>,
+    /// Histogram panel: the histogram of the adjustment previewing on the canvas.
+    pub(crate) doc_hist_preview: Option<histogram_panel::PanelHist>,
+    /// The panel histogram being computed on a worker thread.
+    pub(crate) hist_job: Option<histogram_panel::HistJob>,
+    /// The (document, revision) an Uncached Refresh asked to count at cache level 1.
+    pub(crate) hist_uncached: Option<(DocId, u64)>,
     /// Free Transform preview (document without the moving pixels + their texture).
     pub(crate) transform_preview: Option<transform_tool::TransformPreview>,
     /// Move-tool ⇧/⌥ drag state (move_mods).
@@ -916,8 +923,9 @@ pub struct PhotocraftApp {
     /// A raw file just opened interactively, waiting for the open-time Camera Raw dialog (shown
     /// on the next frame, which has the egui context).
     pub(crate) pending_raw_open: Option<camera_raw_ui::RawOpen>,
-    /// The open-time re-develop (or its Camera Raw step) running in the background.
-    pub(crate) raw_redevelop: Option<camera_raw_ui::Redevelop>,
+    /// The open-time re-develops (or their Camera Raw steps) running in the background, one per
+    /// raw being opened.
+    pub(crate) raw_redevelop: Vec<camera_raw_ui::Redevelop>,
     /// Filter › Adaptive Wide Angle dialog (wide_angle_ui).
     pub(crate) wide_angle: Option<wide_angle_ui::WideAngleDialog>,
     /// ⌘Z history of each open parameter dialog (edit_history).
@@ -1100,6 +1108,7 @@ impl PhotocraftApp {
             quick_pick: false,
             brush_resize_armed: false,
             alt_sampling: false,
+            mixer_sampling: false,
             caps_lock: false,
             opacity_keys: None,
             control_rx: None,
@@ -1177,13 +1186,15 @@ impl PhotocraftApp {
             gradient: Default::default(),
             camera_raw: None,
             pending_raw_open: None,
-            raw_redevelop: None,
+            raw_redevelop: Vec::new(),
             wide_angle: None,
             dialog_edits: Default::default(),
             pending_after_prompt: None,
             tone_hist: None,
             doc_hist: None,
+            doc_hist_preview: None,
             hist_job: None,
+            hist_uncached: None,
             gpu: None,
             window_device: None,
             window_lost: false,
@@ -1218,6 +1229,7 @@ impl PhotocraftApp {
         // Saved preferences are in place before the first frame; recovery starts in upkeep.
         prefs_ui::load(&mut app);
         layers_panel_ui::restore_options(&mut app);
+        histogram_panel::restore_options(&mut app);
         // After the saved preferences, which say whether the set was already offered.
         kys_import::offer_import(&mut app);
         notices::wayland_file_drop_guidance(&mut app);
@@ -2556,15 +2568,18 @@ impl PhotocraftApp {
         if (chrome && self.ui.panels.toolbar) || tabbed_in {
             panels::toolbar(self, ui);
         }
-        if (chrome && self.ui.panels.dock) || tabbed_in {
-            panels::right_dock(self, ui);
+        // craft-ui's layout holds the canvas as its protected `canvas` panel.
+        let docking = (chrome && self.ui.panels.dock) || tabbed_in;
+        if docking {
+            panels::dock_area(self, ui);
+        } else {
+            let t = theme::Tokens::get(&ctx);
+            let backdrop = if chrome { prefs_ui::pasteboard_color(self).unwrap_or(t.canvas) } else { egui::Color32::BLACK };
+            egui::CentralPanel::default().frame(egui::Frame::NONE.fill(backdrop)).show(ui, |ui| {
+                canvas::document_area(self, ui);
+            });
+            panels::properties_window(self, &ctx);
         }
-        let t = theme::Tokens::get(&ctx);
-        let backdrop = if chrome { prefs_ui::pasteboard_color(self).unwrap_or(t.canvas) } else { egui::Color32::BLACK };
-        egui::CentralPanel::default().frame(egui::Frame::NONE.fill(backdrop)).show(ui, |ui| {
-            canvas::document_area(self, ui);
-        });
-        panels::properties_window(self, &ctx);
         brush_panel::window(self, &ctx);
         preset_panels::windows(self, &ctx);
         gradient_ui::editor_window(self, &ctx);
@@ -2700,7 +2715,11 @@ impl eframe::App for PhotocraftApp {
         if let Some(menu) = self.services.native_menu.as_mut() {
             menu.raw_input(raw_input);
         }
-        shortcuts::clipboard_keys(ctx, ctx.text_edit_focused() || self.ui.text_edit.is_some(), raw_input);
+        // While a text field of a floating panel's own window has the keyboard, the dock area
+        // hands that window the text keys in this input and converts them there.
+        if craft_ui::docking::typing_window(ctx).is_none() {
+            shortcuts::clipboard_keys(ctx, ctx.text_edit_focused() || self.ui.text_edit.is_some(), raw_input);
+        }
         // Windows precision touchpads and some Linux Wayland compositors send pinches
         // as fractional Ctrl + wheel rather than a native Zoom event (#4566).
         // Leave Ctrl+whole-notch mouse scrolling alone, and honour the pinch preference.
@@ -2773,16 +2792,34 @@ impl PhotocraftApp {
     /// ⌘I then inverts the mask, as in Photoshop (#780). A targeted alpha channel or Quick Mask
     /// mode wins, as the engine routes those itself.
     pub fn with_mask_target(&self, id: &str, params: Value) -> Value {
-        if !photocraft_engine::channel_cmds::follows_target(id) || params.get("target").is_some() || !self.layer_mask_targeted() {
+        if !photocraft_engine::channel_cmds::follows_target(id) || params.get("target").is_some() {
             return params;
         }
+        // A filter mask is painted, filled and filtered in place; it doesn't float or move, and
+        // Edit › Transform, Apply Image and the dialog filters act on the smart object.
+        let target = if self.filter_mask_targeted() && photocraft_engine::channel_cmds::follows_filter_mask(id) {
+            "filterMask"
+        } else if self.layer_mask_targeted() {
+            "mask"
+        } else {
+            return params;
+        };
         match params {
             Value::Object(mut m) => {
-                m.insert("target".into(), Value::from("mask"));
+                m.insert("target".into(), Value::from(target));
                 Value::Object(m)
             }
-            _ => serde_json::json!({ "target": "mask" }),
+            _ => serde_json::json!({ "target": target }),
         }
+    }
+
+    /// The Layers panel targets the active smart object's filter mask (FILE-215-3), and no alpha
+    /// channel or Quick Mask takes over.
+    pub fn filter_mask_targeted(&self) -> bool {
+        let Some(st) = self.session.active() else { return false };
+        let Some(id) = st.active_layer.filter(|id| self.ui.filter_mask_target == Some(id.0)) else { return false };
+        let composite = st.channel_view.target == photocraft_engine::channel_cmds::ChannelTarget::Composite && st.doc.quick_mask.is_none();
+        composite && st.doc.layer(id).is_some_and(|l| matches!(&l.content, photocraft_doc::LayerContent::Smart(sm) if !sm.smart_filters.is_empty()))
     }
 
     /// The active layer's mask is what pixel commands edit: the Layers panel targets it, the layer
@@ -2804,17 +2841,72 @@ impl PhotocraftApp {
         colors_off && !alpha_on
     }
 
+    /// Targeting the pixels, the layer mask or the vector mask ends a shown filter mask (⌥-click
+    /// on its thumbnail): while it shows, [`Self::sync_mask_targets`] keeps the filter mask
+    /// targeted, so strokes would keep landing there.
+    pub(crate) fn end_filter_mask_view(&mut self) {
+        let Some(v) = self.session.active().and_then(photocraft_engine::mask_view_cmds::current).filter(|v| v.filter) else { return };
+        let off = serde_json::json!({"layer": v.layer.0, "mode": "off", "mask": "filter"});
+        if let Err(err) = self.session.execute(photocraft_engine::mask_view_cmds::ID, off) {
+            log::warn!("could not end the filter mask view: {err}");
+        }
+    }
+
+    /// Explicitly targeting a filter mask ends any conflicting mask view; untargeting it ends its
+    /// own view too.
+    pub(crate) fn select_filter_mask_target(&mut self, layer: Option<u64>) {
+        if layer.is_none() {
+            self.end_filter_mask_view();
+        }
+        if layer.is_some() {
+            if let Some(st) = self.session.active_mut() {
+                if st.channel_view.layer_mask.is_some_and(|v| !v.filter || Some(v.layer.0) != layer) {
+                    st.channel_view.layer_mask = None;
+                }
+                if matches!(
+                    st.channel_view.target,
+                    photocraft_engine::channel_cmds::ChannelTarget::LayerMask | photocraft_engine::channel_cmds::ChannelTarget::VectorMask
+                ) {
+                    st.channel_view.target = photocraft_engine::channel_cmds::ChannelTarget::Composite;
+                }
+            }
+            self.ui.mask_target = false;
+            self.ui.vector_mask_target = false;
+        }
+        self.ui.filter_mask_target = layer;
+        self.sync_mask_targets();
+    }
+
     /// Viewing a layer mask (#196) targets it; a vector-mask target needs a vector mask on the
     /// active layer (a shape layer's path is its content, not a mask). Targeting a mask or the
     /// pixels brings back that target's foreground/background pair, as in Photoshop (#2166).
     pub(crate) fn sync_mask_targets(&mut self) {
         if let Some(st) = self.session.active_mut() {
-            if photocraft_engine::mask_view_cmds::current(st).is_some() || st.channel_view.target == photocraft_engine::channel_cmds::ChannelTarget::LayerMask {
-                self.ui.mask_target = true;
-                self.ui.vector_mask_target = false;
-            } else if st.channel_view.target == photocraft_engine::channel_cmds::ChannelTarget::VectorMask {
-                self.ui.vector_mask_target = true;
-                self.ui.mask_target = false;
+            use photocraft_engine::channel_cmds::ChannelTarget;
+            let channel = st.channel_view.target;
+            match photocraft_engine::mask_view_cmds::current(st) {
+                Some(v) if v.filter => {
+                    self.ui.filter_mask_target = Some(v.layer.0);
+                    self.ui.mask_target = false;
+                    self.ui.vector_mask_target = false;
+                }
+                Some(_) => {
+                    self.ui.mask_target = true;
+                    self.ui.vector_mask_target = false;
+                    self.ui.filter_mask_target = None;
+                }
+                None if channel == ChannelTarget::LayerMask => {
+                    self.ui.mask_target = true;
+                    self.ui.vector_mask_target = false;
+                }
+                None if channel == ChannelTarget::VectorMask => {
+                    self.ui.vector_mask_target = true;
+                    self.ui.mask_target = false;
+                }
+                None => {}
+            }
+            if self.ui.mask_target || self.ui.vector_mask_target {
+                self.ui.filter_mask_target = None;
             }
             if self.ui.vector_mask_target && !mask_thumbs_ui::has_vector_mask(st) {
                 self.ui.vector_mask_target = false;
@@ -2829,7 +2921,10 @@ impl PhotocraftApp {
                 self.ui.properties_layer = None;
             }
         }
-        let mask = self.layer_mask_targeted();
+        if self.ui.filter_mask_target.is_some() && !self.filter_mask_targeted() {
+            self.ui.filter_mask_target = None;
+        }
+        let mask = self.layer_mask_targeted() || self.filter_mask_targeted();
         self.session.tools.target_mask(mask);
     }
 

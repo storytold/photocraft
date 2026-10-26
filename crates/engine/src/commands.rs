@@ -65,12 +65,16 @@ pub(crate) fn has_paintable(s: &Session) -> std::result::Result<(), String> {
     }
 }
 
-/// Surface a paint command writes to: the layer's pixels, or its mask with `"target":"mask"`.
+/// Surface a paint command writes to: the layer's pixels, its mask with `"target":"mask"`, or a
+/// smart object's filter mask with `"target":"filterMask"`.
 pub(crate) fn paint_surface<'a>(doc: &'a mut Document, id: LayerId, p: &Value) -> Result<&'a mut photocraft_raster::Surface> {
     if is_mask_target(p) {
         check_all_unlocked(doc, id)?;
     } else {
         check_pixels_unlocked(doc, id)?;
+    }
+    if crate::channel_cmds::target_of(p) == crate::channel_cmds::Target::FilterMask {
+        return crate::smart_cmds::filter_mask_surface(doc, id);
     }
     let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
     if is_mask_target(p) {
@@ -99,8 +103,10 @@ pub(crate) fn check_pixels_unlocked(doc: &Document, id: LayerId) -> Result<()> {
     Ok(())
 }
 
+/// The params target a grayscale mask of the layer: its layer mask (`"mask"`) or, on a smart
+/// object, its filter mask (`"filterMask"`).
 pub(crate) fn is_mask_target(p: &Value) -> bool {
-    p.get("target").and_then(Value::as_str) == Some("mask")
+    matches!(p.get("target").and_then(Value::as_str), Some("mask" | "filterMask"))
 }
 
 fn can_undo(s: &Session) -> std::result::Result<(), String> {
@@ -467,9 +473,7 @@ fn destructive_adjust(s: &mut Session, label: &str, adj: Adjustment, p: &Value) 
         return s.edit(label, |doc, _| {
             check_all_unlocked(doc, id)?;
             let sel = doc.selection.clone();
-            let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
-            let mask = l.mask.as_mut().ok_or_else(|| EngineError::Other("layer has no mask".into()))?;
-            pixels::adjust_mask(&mut mask.surface, &adj, sel.as_ref()).map_err(EngineError::Other)?;
+            pixels::adjust_mask(paint_surface(doc, id, p)?, &adj, sel.as_ref()).map_err(EngineError::Other)?;
             Ok(Value::Null)
         });
     }
@@ -614,7 +618,7 @@ fn build() -> Vec<CommandSpec> {
             "Fill…",
             ["Edit"],
             Some("Shift+F5"),
-            r##"{"contents":"foreground|background|color|contentAware|pattern|history|black|gray|white"="color","color":"#rrggbb|[r,g,b,a]"=foreground (contents=color),"pattern":id|name (contents=pattern),"scale":%=100,"angle":deg,"state":row?,"snapshot":id? (contents=history: a History panel row as history.setSource, redo rows last, or a snapshot; default the History Brush source),"colorAdaptation":bool=true (contents=contentAware),"mode":"normal|multiply|…"="normal","opacity":0..100=100,"preserveTransparency":bool=false,"target":"pixels"|"mask"|"quickMask"|{"channel":i}?}"##,
+            r##"{"contents":"foreground|background|color|contentAware|pattern|history|black|gray|white"="color","color":"#rrggbb|[r,g,b,a]"=foreground (contents=color),"pattern":id|name (contents=pattern),"scale":%=100,"angle":deg,"state":row?,"snapshot":id? (contents=history: a History panel row as history.setSource, redo rows last, or a snapshot; default the History Brush source),"colorAdaptation":bool=true (contents=contentAware),"mode":"normal|multiply|…"="normal","opacity":0..100=100,"preserveTransparency":bool=false,"target":"pixels"|"mask"|"filterMask"|"quickMask"|{"channel":i}?}"##,
             has_pixel_or_channel,
             crate::fill_cmds::fill
         ),
@@ -1195,7 +1199,7 @@ fn build() -> Vec<CommandSpec> {
             "Brush Stroke",
             [],
             None,
-            r##"{"points":[[x,y,pressure?,tiltX?,tiltY?,rotation?,timeMs?,wheel?],…],"brush":{…BrushSettings}?,"preset":name?,"size":0.5..5000 px?,"hardness":0..1?,"opacity":0..1?,"flow":0..1?,"spacing":0..10?,"color":"#rrggbb"?=foreground,"mode":"normal|multiply|screen|…|clear (erases with this brush)"="normal","erase":bool?,"smoothing":0..1?,"zoom":number=1,"seed":u64?,"target":"pixels"|"mask"|"quickMask"|{"channel":i}=Channels panel target}"##,
+            r##"{"points":[[x,y,pressure?,tiltX?,tiltY?,rotation?,timeMs?,wheel?],…],"brush":{…BrushSettings}?,"preset":name?,"size":0.5..5000 px?,"hardness":0..1?,"opacity":0..1?,"flow":0..1?,"spacing":0..10?,"color":"#rrggbb"?=foreground,"mode":"normal|multiply|screen|…|clear (erases with this brush)"="normal","erase":bool?,"smoothing":0..1?,"zoom":number=1,"seed":u64?,"target":"pixels"|"mask"|"filterMask"|"quickMask"|{"channel":i}=Channels panel target}"##,
             has_paintable,
             crate::brush_cmds::paint_stroke
         ),

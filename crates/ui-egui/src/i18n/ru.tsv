@@ -449,6 +449,10 @@
 	Zoom Out	Уменьшить
 	Fit on Screen	По размеру экрана
 	100%	100%
+	105%	105%
+	110%	110%
+	115%	115%
+	120%	120%
 	200%	200%
 	75%	75%
 	80%	80%
@@ -2910,6 +2914,9 @@ fontWeight	Italic	Курсив
 	Create new document from current state	Создать новый документ из текущего состояния
 	Create new fill or adjustment layer	Создать новый слой-заливку или корректирующий слой
 	Create new snapshot	Создать новый снимок
+	From:	Из:
+	Full Document	Весь документ
+	Merged Layers	Объединённые слои
 	Delete Cropped Pixels	Удалить отсечённые пикселы
 	Delete current state	Удалить текущее состояние
 	Delete layer	Удалить слой
@@ -3074,6 +3081,8 @@ curves	Smooth	Сгладить
 	Vanishing Point is not active	Точка схода не активна
 	Apply Vanishing Point ({key})	Применить точку схода ({key})
 	Fix the red plane first: its corners must form a convex quad	Сначала исправьте красную плоскость: ее углы должны образовывать выпуклый четырехугольник
+	Alt-click a plane to set the clone source	Щёлкните плоскость с Alt, чтобы задать источник клонирования
+	Too many clone strokes: apply Vanishing Point first	Слишком много мазков клонирования: сначала примените «Точку схода»
 # Select and Mask view modes (#1754)
 	Onion Skin	Калька
 	Marching Ants	Бегущие муравьи
@@ -3193,6 +3202,17 @@ curves	Smooth	Сгладить
 	Sent to {printer}	Отправлено на {printer}
 	set in Print Settings…	задаётся в параметрах печати…
 	ICO is limited to 256 × 256 pixels	ICO ограничен размером 256 × 256 пикселей
+	Calibration	Калибровка
+	Red Primary	Красный основной
+	Green Primary	Зелёный основной
+	Blue Primary	Синий основной
+	Write xmp sidecars	Записывать сопутствующие файлы XMP
+	Set the tone sliders from the image	Установить ползунки тона по изображению
+	Settings from {name}	Настройки из {name}
+	Settings from {name}; {count} not supported: {names}	Настройки из {name}; не поддерживается: {count}: {names}
+	Could not write {name}: {error}	Не удалось записать {name}: {error}
+	Kept {name}: written by another application	{name} сохранён без изменений: записан другим приложением
+	Shadow Tint	Оттенок теней
 # History panel › History Brush source (#2966)
 	Paints from the History panel's source state	Рисует из исходного состояния панели «История»
 	Sets the source for the history brush	Задаёт источник для кисти истории
@@ -4623,3 +4643,14 @@ shape	Appearance	Оформление
 	Grayscale Ramp	Шкала градаций серого
 	Current Colors	Текущие цвета
 	Make Ramp Web Safe	Сделать шкалу безопасной для web
+# Art History Brush (#213).
+	Art History Brush Tool	Инструмент «Кисть истории искусств»
+	Tight Short	Плотный короткий
+	Tight Medium	Плотный средний
+	Tight Long	Плотный длинный
+	Loose Medium	Свободный средний
+	Loose Long	Свободный длинный
+	Dab	Мазок
+	Tight Curl	Плотный завиток
+	Loose Curl	Свободный завиток
+	Stylized dabs from a history state	Стилизованные мазки из состояния истории

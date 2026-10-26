@@ -158,7 +158,7 @@ pub fn card_ex(
 }
 
 /// Inner margin of a dock panel's body: a Pro panel's, or a Studio card's below its tab strip.
-fn body_margin(pro: bool) -> egui::Margin {
+pub(crate) fn body_margin(pro: bool) -> egui::Margin {
     if pro { egui::Margin::same(8) } else { egui::Margin { left: 8, right: 8, top: 6, bottom: 10 } }
 }
 
