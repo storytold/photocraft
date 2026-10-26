@@ -86,6 +86,28 @@ fn deleting_the_vector_mask_prunes_its_thumbnail() {
     assert!(!h.state().thumbs.contains_key(&key));
 }
 
+// Regression test for #119: the Layers panel's thumbnail textures of a deleted layer, and of
+// every layer of a closed document, were kept for the rest of the session.
+#[test]
+fn deleting_a_layer_or_closing_its_document_releases_the_thumbnails() {
+    let (s, masked, shape) = session();
+    let mut h = harness(s, 0, 1.0, 290.0);
+    let layer_key = |id: u64| (photocraft_doc::LayerId(id), crate::mask_thumbs_ui::THUMB_LAYER);
+    assert!(h.state().thumbs.contains_key(&layer_key(masked)) && h.state().thumbs.contains_key(&layer_key(shape)), "both rows drew a thumbnail");
+    let before = h.state().thumbs.len();
+
+    h.state_mut().run("layer.delete", json!({"layer": shape})).unwrap();
+    h.run_steps(3);
+    assert!(!h.state().thumbs.contains_key(&layer_key(shape)), "the deleted layer's thumbnail is released");
+    assert!(h.state().thumbs.contains_key(&layer_key(masked)), "the other layer keeps its thumbnail");
+    assert!(h.state().thumbs.len() < before);
+
+    h.state_mut().run("file.close", json!({})).unwrap();
+    h.run_steps(3);
+    assert!(h.state().session.documents().is_empty());
+    assert!(h.state().thumbs.is_empty(), "no thumbnails outlive their document: {:?}", h.state().thumbs.keys().collect::<Vec<_>>());
+}
+
 #[test]
 fn footer_trash_deletes_only_the_targeted_mask_linked_or_unlinked() {
     for linked in [true, false] {
@@ -417,7 +439,7 @@ fn paths_list_the_layer_path_above_a_bottom_footer() {
     let row = h.get_by_label("Masked Vector Mask").rect();
     let footer = crate::vector_ui::paths_footer(&h.ctx).expect("footer drawn");
     assert!(footer.top() > row.bottom(), "buttons below the rows");
-    let group = crate::dock::last_rects(&h.ctx).into_iter().find(|(g, _)| *g == crate::dock::Group::Layers).unwrap().1;
+    let group = crate::panel_docking::probe::group_rect(h.state(), &h.ctx, "paths").unwrap();
     assert!(group.bottom() - footer.bottom() < 16.0, "footer at the panel bottom: footer {footer:?}, group {group:?}");
     assert!(footer.bottom() - row.bottom() > 100.0, "the footer is pinned, not right below the rows");
     h.state_mut().run("layer.select", json!({"layer": shape})).unwrap();
@@ -481,7 +503,8 @@ fn mask_view(h: &Harness<'_, PhotocraftApp>) -> serde_json::Value {
 
 fn canvas_px(h: &Harness<'_, PhotocraftApp>) -> Option<Vec<egui::Color32>> {
     let st = h.state().session.active().unwrap();
-    crate::channel_view::render(&st.doc, &st.channel_view, photocraft_geom::Rect::new(0, 0, 200, 100), 1, false, st.active_layer)
+    let look = crate::channel_view::Look::of(&h.state().session);
+    crate::channel_view::render(&st.doc, &st.channel_view, photocraft_geom::Rect::new(0, 0, 200, 100), 1, look, st.active_layer)
 }
 
 fn near(a: Rect, b: Rect) -> bool {
@@ -626,6 +649,7 @@ fn mask_view_gestures_fail_gracefully_without_a_mask() {
     h.state_mut().session.active_mut().unwrap().channel_view.layer_mask = Some(photocraft_engine::mask_view_cmds::LayerMaskView {
         layer: photocraft_doc::LayerId(u64::MAX),
         mode: photocraft_engine::mask_view_cmds::MaskViewMode::Gray,
+        filter: false,
     });
     assert!(canvas_px(&h).is_none());
     h.run_steps(2);
@@ -651,6 +675,9 @@ fn backslash_toggles_the_rubylith() {
     assert_eq!(crate::canvas::paint_target(h.state()), json!("mask"), "painting paints the mask");
     let px = canvas_px(&h).unwrap();
     assert_eq!(px[50 * 200 + 50], egui::Color32::from_rgba_premultiplied(128, 0, 0, 128), "50% red over hidden areas");
+    // Layer Mask Display Options: opaque green over what the mask hides instead.
+    h.state_mut().run("channel.options", json!({"channel": "mask", "color": "#00ff00", "opacity": 100})).unwrap();
+    assert_eq!(canvas_px(&h).unwrap()[50 * 200 + 50], egui::Color32::from_rgb(0, 255, 0));
     h.key_press(egui::Key::Backslash);
     h.run_steps(2);
     assert_eq!(mask_view(&h), serde_json::Value::Null, "\\ again hides it");

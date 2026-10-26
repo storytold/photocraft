@@ -41,6 +41,8 @@ use photocraft_automation::security::{LineRead, generate_token, read_bounded_lin
 use photocraft_ui_egui::{OsEvent, OsEventsFn};
 use serde_json::{Value, json};
 
+use crate::launch_args::PerProcess;
+
 const LOCK_FILE: &str = "instance.lock";
 const INFO_FILE: &str = "instance.json";
 /// The Unix socket a sandboxed primary listens on, in the app's runtime directory.
@@ -129,8 +131,54 @@ pub struct LaunchContext<'a> {
     pub control: bool,
     /// Paths that aren't valid Unicode: this launch reports them.
     pub unreadable_paths: bool,
-    /// Options that only apply to the process they're given to (`--safe-gpu`, …).
-    pub launch_options: &'a [&'static str],
+    /// Options that only apply to the process they're given to (`--safe-gpu`, …), including the
+    /// ones this launch's environment sets (see [`env_launch_options`]).
+    pub launch_options: &'a [PerProcess],
+}
+
+/// Variables documented as the equivalent of a per-launch flag, each with the option it stands for
+/// (`PHOTOCRAFT_PRESENT_MODE` is `--present-mode`) and the rule that says whether its value asks for
+/// that option at all. Setting one asks for the same thing as giving the flag, so it belongs to this
+/// process alone. These are read where they take effect, not by the command line; the variables
+/// that are a flag's fallback (`PHOTOCRAFT_IN_WINDOW_MENUS`, the automation roots) are counted by
+/// [`crate::launch_args::parse`], as clap reads them.
+const ENV_LAUNCH_OPTIONS: [(&str, PerProcess, ValueRule); 3] = [
+    ("PHOTOCRAFT_PRESENT_MODE", PerProcess::PresentMode, present_mode_is_on),
+    ("PHOTOCRAFT_FRAME_LATENCY", PerProcess::FrameLatency, frame_latency_is_on),
+    ("PHOTOCRAFT_STROKE_TRACE", PerProcess::StrokeTrace, stroke_trace_is_on),
+];
+
+/// Whether a variable's value asks this launch for its own option. Each rule matches how that
+/// variable is read where it takes effect, so a value ignored there keeps no process here either.
+type ValueRule = fn(&str) -> bool;
+
+/// A value `presentation::parse` accepts, handed over as written: it trims, treats empty as unset and
+/// warns and ignores anything it does not recognise, so an unrecognised `PHOTOCRAFT_PRESENT_MODE`
+/// changes nothing there and so needs no process of its own here.
+fn present_mode_is_on(value: &str) -> bool {
+    crate::presentation::parse(Some(value), None).0.mode.is_some()
+}
+
+/// [`present_mode_is_on`] for `PHOTOCRAFT_FRAME_LATENCY`, which takes `1` to `3`.
+fn frame_latency_is_on(value: &str) -> bool {
+    crate::presentation::parse(None, Some(value)).0.latency.is_some()
+}
+
+/// Anything except `""`, `0`, `off` and `false`, which is how `StrokeTrace::from_value` reads it: the
+/// rest is a stderr summary or a CSV path. It trims, so `" 0 "` is off there and off here.
+fn stroke_trace_is_on(value: &str) -> bool {
+    !matches!(value.trim(), "" | "0" | "off" | "false")
+}
+
+/// The per-process options this launch's environment sets. A launch that sets only variables would
+/// otherwise hand its files to the running instance, which never sees the override, and exit.
+pub fn env_launch_options() -> Vec<PerProcess> {
+    env_launch_options_from(|name| std::env::var_os(name))
+}
+
+/// [`env_launch_options`] with the reader given, so the rule is testable without the environment.
+fn env_launch_options_from(get: impl Fn(&str) -> Option<std::ffi::OsString>) -> Vec<PerProcess> {
+    ENV_LAUNCH_OPTIONS.iter().filter(|(name, _, is_on)| get(name).is_some_and(|v| is_on(&v.to_string_lossy()))).map(|(_, option, _)| *option).collect()
 }
 
 /// Why this launch runs as its own instance, or `None` to take part in single-instance.
@@ -148,7 +196,8 @@ pub fn skip_reason(c: &LaunchContext) -> Option<String> {
         return Some("some paths aren't valid Unicode".into());
     }
     if !c.launch_options.is_empty() {
-        return Some(format!("{} only applies to a new process", c.launch_options.join(", ")));
+        let options: Vec<String> = c.launch_options.iter().map(ToString::to_string).collect();
+        return Some(format!("{} only applies to a new process", options.join(", ")));
     }
     None
 }
@@ -837,8 +886,8 @@ mod tests {
         assert_eq!(skip_reason(&LaunchContext { new_instance_env: Some(""), ..base }), None);
         assert!(skip_reason(&LaunchContext { control: true, ..base }).is_some());
         assert!(skip_reason(&LaunchContext { unreadable_paths: true, ..base }).is_some());
-        let reason = skip_reason(&LaunchContext { launch_options: &["--safe-gpu"], ..base });
-        assert!(reason.is_some_and(|r| r.contains("--safe-gpu")));
+        let reason = skip_reason(&LaunchContext { launch_options: &[PerProcess::SafeGpu, PerProcess::GpuAdapterEnv], ..base });
+        assert_eq!(reason.as_deref(), Some("--safe-gpu, PHOTOCRAFT_GPU_ADAPTER only applies to a new process"));
     }
 
     /// #1540: inside a Flatpak sandbox the hand-off runs over a Unix socket in the app's runtime
@@ -914,5 +963,42 @@ mod tests {
         assert_eq!(sandbox_socket(Some(id), None), None);
         assert_eq!(sandbox_socket(Some(OsStr::new("")), Some(run)), None);
         assert_eq!(sandbox_socket(Some(id), Some(OsStr::new(""))), None);
+    }
+
+    /// A variable documented as the equivalent of a per-launch flag counts as that flag: a launch
+    /// that sets only variables has per-process options, so it keeps its own process rather than
+    /// handing its files to the running instance, which never sees the override.
+    #[test]
+    fn an_environment_override_counts_as_a_process_option() {
+        let with = |values: &[(&str, &str)]| env_launch_options_from(|n| values.iter().find(|(k, _)| *k == n).map(|(_, v)| (*v).into()));
+        assert_eq!(with(&[("PHOTOCRAFT_PRESENT_MODE", "novsync")]), vec![PerProcess::PresentMode]);
+        assert_eq!(
+            with(&[("PHOTOCRAFT_STROKE_TRACE", "strokes.csv"), ("PHOTOCRAFT_FRAME_LATENCY", "2")]),
+            vec![PerProcess::FrameLatency, PerProcess::StrokeTrace]
+        );
+        // Nothing set, or a value that means off, is an ordinary launch. Each variable is off the way
+        // it is read where it takes effect, not by one rule shared across all three.
+        assert!(with(&[]).is_empty());
+        assert!(with(&[("PHOTOCRAFT_FRAME_LATENCY", "")]).is_empty());
+        // The trace is off at `off` and `false` as well, and a value the presentation parser rejects
+        // is ignored there, so neither keeps a process of its own here.
+        assert!(with(&[("PHOTOCRAFT_STROKE_TRACE", "off"), ("PHOTOCRAFT_PRESENT_MODE", "maybe"), ("PHOTOCRAFT_FRAME_LATENCY", "4")]).is_empty());
+        // The trace and the two presentation values are trimmed where they take effect.
+        assert_eq!(
+            with(&[("PHOTOCRAFT_PRESENT_MODE", " novsync "), ("PHOTOCRAFT_STROKE_TRACE", " 1 ")]),
+            vec![PerProcess::PresentMode, PerProcess::StrokeTrace]
+        );
+        // The menus and the automation roots are flags' fallbacks: `launch_args::parse` counts them.
+        assert!(with(&[("PHOTOCRAFT_IN_WINDOW_MENUS", "1"), ("PHOTOCRAFT_AUTOMATION_WRITE_ROOT", "/tmp/out")]).is_empty());
+        let base = LaunchContext {
+            per_user_settings: true,
+            new_instance_flag: false,
+            new_instance_env: None,
+            control: false,
+            unreadable_paths: false,
+            launch_options: &[],
+        };
+        let reason = skip_reason(&LaunchContext { launch_options: &with(&[("PHOTOCRAFT_PRESENT_MODE", "novsync")]), ..base });
+        assert!(reason.as_deref().is_some_and(|r| r.contains("--present-mode")), "{reason:?}");
     }
 }

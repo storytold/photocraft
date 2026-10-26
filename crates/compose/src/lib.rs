@@ -19,6 +19,7 @@
 pub mod adjust;
 pub mod advanced;
 pub mod bounds;
+pub mod cmyk;
 pub mod effects;
 pub mod fill_layout;
 pub mod filter_mask;
@@ -148,6 +149,22 @@ fn scratch_reuse_preserves_pixels_and_bounds_retention() {
         assert_eq!(slot.borrow().as_ptr(), cached);
         assert!(slot.borrow().capacity() <= (RENDER_TILE * RENDER_TILE) as usize);
     });
+}
+
+/// Every layer the compositor draws, groups before their children: hidden layers and everything
+/// inside hidden groups are left out.
+pub(crate) fn visible_layers(layers: &[Layer]) -> Vec<&Layer> {
+    fn rec<'a>(layers: &'a [Layer], out: &mut Vec<&'a Layer>) {
+        for l in layers.iter().filter(|l| l.visible) {
+            out.push(l);
+            if let Some(children) = l.children() {
+                rec(children, out);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    rec(layers, &mut out);
+    out
 }
 
 /// Composite the whole document over `rect`, in parallel 256² tiles on
@@ -327,9 +344,12 @@ pub fn band_rows_for(width: u32, requested: i32) -> i32 {
 /// leaves colour behind in CMYK (K = 100%) and Lab (neutral a/b = 0.5), and those pixels would
 /// otherwise count as content: the result would span the whole canvas.
 ///
-/// A CMYK document of plain Normal layers is composited in its ink values instead
-/// ([`native::flatten_cmyk`]), so flattening doesn't round-trip its pixels through RGB (#3778),
-/// and a Lab one in its L, a and b ([`native_lab::flatten_lab`]).
+/// A CMYK document flattened to CMYK is composited in its ink values instead, so flattening
+/// doesn't round-trip its pixels through RGB: plain Normal layers by [`native::flatten_cmyk`]
+/// (#3778), and masks, groups, clipping, other blend modes and the other layer kinds by [`cmyk`]
+/// where its layers mix on their inks (#2220). Otherwise the composite goes back to CMYK through
+/// the document's own profile, the one its layers were read through. A Lab document of plain
+/// layers is composited in its L, a and b ([`native_lab::flatten_lab`]).
 pub fn flatten_to_surface(doc: &Document, fmt: photocraft_color::PixelFormat, background: Option<[f32; 3]>) -> Surface {
     composite_to_surface(doc, doc.bounds(), fmt, background)
 }
@@ -347,13 +367,17 @@ pub fn composite_to_surface(doc: &Document, rect: Rect, fmt: photocraft_color::P
     {
         return s;
     }
+    let space = cmyk_space(doc);
+    let to_cmyk = fmt.mode == photocraft_color::ColorMode::Cmyk && doc.mode == photocraft_color::ColorMode::Cmyk;
+    if to_cmyk && cmyk::renders_inks(doc) {
+        return composite_inks_to_surface(doc, rect, fmt, background, space.as_ref());
+    }
+    // The composite separates back to CMYK through the document's own profile, the one its
+    // pixels were read through.
     let mut s = Surface::new(fmt);
     let n = fmt.channels();
     let empty = s.default_pixel();
     let mut data = Vec::new();
-    // The composite separates back to CMYK through the document's own profile, the one its
-    // pixels were read through.
-    let cmyk = cmyk_space(doc);
     let _ = render_bands(doc, rect, 0, |band| -> Result<(), ()> {
         let band = match background {
             Some(bg) => band.over_background(bg),
@@ -361,7 +385,7 @@ pub fn composite_to_surface(doc: &Document, rect: Rect, fmt: photocraft_color::P
         };
         data.clear();
         data.resize(band.px.len() * n, 0.0);
-        photocraft_color::convert::with_cmyk_space(cmyk.as_ref(), || {
+        photocraft_color::convert::with_cmyk_space(space.as_ref(), || {
             for (p, out) in band.px.iter().zip(data.chunks_exact_mut(n)) {
                 if fmt.alpha && (p[3] <= 0.0 || p[3].is_nan()) && empty.len() == n {
                     out.copy_from_slice(&empty);
@@ -377,13 +401,62 @@ pub fn composite_to_surface(doc: &Document, rect: Rect, fmt: photocraft_color::P
     s
 }
 
+/// One CMYK pixel's output channels into `data`: its inks (over `paper` when given) and alpha.
+fn push_ink_pixel(data: &mut Vec<f32>, p: &[f32; 5], paper: Option<[f32; 4]>, fmt: photocraft_color::PixelFormat, empty: &[f32]) {
+    if paper.is_none() && fmt.alpha && (p[4] <= 0.0 || p[4].is_nan()) && empty.len() == fmt.channels() {
+        data.extend_from_slice(empty);
+        return;
+    }
+    // Over the paper (fully covered pixels keep their inks exactly), or straight.
+    let ink = |c: usize| match paper {
+        Some(bg) if p[4] < 1.0 => p[c] * p[4] + bg[c] * (1.0 - p[4]),
+        _ => p[c],
+    };
+    data.extend((0..4).map(ink));
+    if fmt.alpha {
+        data.push(if paper.is_some() { 1.0 } else { p[4] });
+    }
+}
+
+/// [`composite_to_surface`] for a CMYK document flattened to CMYK, composited in its inks.
+fn composite_inks_to_surface(
+    doc: &Document,
+    rect: Rect,
+    fmt: photocraft_color::PixelFormat,
+    background: Option<[f32; 3]>,
+    space: Option<&std::sync::Arc<photocraft_color::convert::CmykSpace>>,
+) -> Surface {
+    let mut s = Surface::new(fmt);
+    let n = fmt.channels();
+    let empty = s.default_pixel();
+    let mut data = Vec::new();
+    // White paper is no ink; another background colour goes through the profile.
+    let paper = background
+        .map(|bg| if bg == [1.0; 3] { [0.0; 4] } else { photocraft_color::convert::with_cmyk_space(space, || photocraft_color::convert::rgb_to_cmyk(bg)) });
+    let _ = cmyk::render_cmyk_bands(doc, rect, 0, |band| -> Result<(), ()> {
+        data.clear();
+        data.reserve(band.px.len() * n);
+        for p in &band.px {
+            push_ink_pixel(&mut data, p, paper, fmt, &empty);
+        }
+        s.write_region(band.rect, &data);
+        Ok(())
+    });
+    s.prune();
+    s
+}
+
 /// Composite the full canvas.
 pub fn flatten(doc: &Document) -> Buffer {
     render(doc, doc.bounds())
 }
 
 /// Render an arbitrary subset: a single layer (e.g. for thumbnails), isolated.
+/// Rects past [`MAX_RENDER_PIXELS`] give an empty buffer.
 pub fn render_layer(layer: &Layer, rect: Rect) -> Buffer {
+    if u64::from(rect.width()) * u64::from(rect.height()) > MAX_RENDER_PIXELS {
+        return Buffer::transparent(Rect::EMPTY);
+    }
     let mut buf = Buffer::transparent(rect);
     let patterns = pattern::PreparedPatterns::new(&[], pattern::PREPARED_PATTERN_BYTES);
     composite_stack_at(
@@ -399,6 +472,7 @@ pub fn render_layer(layer: &Layer, rect: Rect) -> Buffer {
             vector_masks: RenderVectorMasks::default(),
             fx_maps: Default::default(),
             fx_clip: Default::default(),
+            fx_over_budget: false,
             tone_luts: prepare_tones(std::slice::from_ref(layer), 0),
             doc: None,
             layer_keys: Default::default(),
@@ -771,6 +845,9 @@ struct Ctx<'a> {
     fx_maps: std::sync::Mutex<std::collections::HashMap<u64, (std::sync::Arc<effects::FxMaps>, bool)>>,
     /// The rectangle being rendered (a band of [`render_bands`]); see [`effect_region`].
     fx_clip: std::sync::Mutex<Option<Rect>>,
+    /// The whole-region effect maps of this render's layers wouldn't fit in the effect cache
+    /// together ([`fx_over_budget`]), so local ones are clipped to the render rect (#8330).
+    fx_over_budget: bool,
     /// The document being rendered (deep knockouts reveal its Background); `None` for a lone layer.
     doc: Option<&'a Document>,
     /// Effect-map identities of this render's document layers (see [`LayerKeys`]).
@@ -842,6 +919,7 @@ impl<'a> Ctx<'a> {
             vector_masks: RenderVectorMasks::default(),
             fx_maps: Default::default(),
             fx_clip: Default::default(),
+            fx_over_budget: fx_over_budget(&doc.layers, doc.bounds()),
             layer_keys: Default::default(),
             tone_luts: prepare_tones(&doc.layers, 0),
         }
@@ -865,7 +943,8 @@ impl<'a> Ctx<'a> {
             if identity == [true; 3] {
                 return;
             }
-            adjust::apply_tone(buf, *space, luts.get_or_init(|| adjust::tone_luts_depth(adj, Some(self.depth))), identity);
+            let extrapolate = adjust::float_tone_extrapolates(adj, Some(self.depth), self.mode);
+            adjust::apply_tone(buf, *space, luts.get_or_init(|| adjust::tone_luts_depth(adj, Some(self.depth))), identity, extrapolate);
         } else {
             adjust::apply_in(adj, buf, self.transfer, Some(self.depth), self.mode);
         }
@@ -984,8 +1063,38 @@ pub fn adjustment_quantum(depth: photocraft_color::SampleType) -> Option<f32> {
 fn quantize(b: &mut Buffer, q: f32) {
     for p in &mut b.px {
         for v in p.iter_mut() {
-            *v = (*v * q + 0.5).floor() / q;
+            *v = branchless_floor(*v * q + 0.5) / q;
         }
+    }
+}
+
+/// `x.floor()`, bit for bit (signed zeros, infinities and NaNs included), without a call: baseline
+/// x86-64 has no SSE4.1 `roundss`, so `floor` is a software routine there, called once per sample
+/// of the backdrop under every adjustment layer ([`quantize`]). This form has no branch, so the
+/// loop vectorizes.
+#[inline]
+fn branchless_floor(x: f32) -> f32 {
+    // From 2^23 on every f32 is whole. Below it, adding and taking away 2^23 rounds to the
+    // nearest whole number; where that went up, step down.
+    const WHOLE: f32 = 8_388_608.0;
+    let a = x.abs();
+    let r = ((a + WHOLE) - WHOLE).copysign(x);
+    let r = if r > x { r - 1.0 } else { r };
+    if a < WHOLE { r } else { x }
+}
+
+/// Blend an adjustment layer's result (`adjusted`) back into the backdrop it was made from, each
+/// pixel by its coverage `ks` (opacity × mask) in blend mode `mode`.
+fn blend_back(backdrop: &mut [[f32; 4]], adjusted: &[[f32; 4]], ks: impl Iterator<Item = f32>, mode: BlendMode) {
+    for ((b, a), k) in backdrop.iter_mut().zip(adjusted).zip(ks) {
+        if k <= 0.0 {
+            continue;
+        }
+        let s = [a[0], a[1], a[2]];
+        // Normal is the source as it is (`blend_rgb` gives exactly that), and most adjustment
+        // layers are Normal: no per-pixel mode dispatch for them.
+        let blended = if mode == BlendMode::Normal { s } else { blend::blend_rgb(mode, [b[0], b[1], b[2]], s) };
+        *b = [b[0] + (blended[0] - b[0]) * k, b[1] + (blended[1] - b[1]) * k, b[2] + (blended[2] - b[2]) * k, b[3]];
     }
 }
 
@@ -1685,14 +1794,34 @@ fn blend_if_level(x: f32) -> f32 {
     if (v - r).abs() < 1e-4 { r } else { v }
 }
 
+/// Blend If groups inside one another whose own colour is still rendered separately. Each extra
+/// level multiplies the work by the tree's depth, so the cost is polynomial, not exponential.
+const MAX_BLEND_IF_GROUP_DEPTH: u32 = 2;
+
+thread_local! {
+    /// Blend If groups being rendered for their own colour on this thread.
+    static BLEND_IF_GROUPS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
 /// Apply `layer`'s Blend If to a finished composite: `out` (the backdrop with the layer drawn)
 /// is mixed back towards `before` (the backdrop without it) where the ranges hide the layer.
 /// Mixing premultiplied colour by `k` equals compositing the layer at `k` × its alpha, since
 /// every blend mode's source-over result is linear in the source alpha.
 fn apply_blend_if(layer: &Layer, before: &Buffer, out: &mut Buffer, cx: &Ctx) {
     // "This Layer" is the layer's own colour; adjustment layers (no content of their own) are
-    // judged by their result.
-    let own = if matches!(layer.content, LayerContent::Adjustment(_)) { None } else { render_content(layer, out.rect, cx) };
+    // judged by their result. So are groups nested deeper than `MAX_BLEND_IF_GROUP_DEPTH` Blend
+    // Ifs: a group's own colour re-composites its children, which doubles the work at every
+    // level of Blend If groups inside one another.
+    let is_group = matches!(layer.content, LayerContent::Group(_));
+    let nested = BLEND_IF_GROUPS.with(std::cell::Cell::get);
+    let own = if matches!(layer.content, LayerContent::Adjustment(_)) || (is_group && nested >= MAX_BLEND_IF_GROUP_DEPTH) {
+        None
+    } else {
+        BLEND_IF_GROUPS.with(|d| d.set(nested + u32::from(is_group)));
+        let own = render_content(layer, out.rect, cx);
+        BLEND_IF_GROUPS.with(|d| d.set(nested));
+        own
+    };
     for (i, (p, b)) in out.px.iter_mut().zip(&before.px).enumerate() {
         let this = match &own {
             Some(o) => Some(o.px[i]).filter(|q| q[3] > 0.0),
@@ -1890,18 +2019,23 @@ fn composite_layer_plain(layer: &Layer, clipped: &[Layer], backdrop: &mut Buffer
         cx.apply_adjustment(adj, &mut adjusted);
         // Clipped layers onto an adjustment are uncommon; they composite atop the adjusted result.
         advanced::composite_clipped(clipped, &mut adjusted, cx);
-        for y in rect.y0..rect.y1 {
-            for x in rect.x0..rect.x1 {
-                let i = ((y - rect.y0) as usize) * rect.width() as usize + (x - rect.x0) as usize;
-                let k = opacity * mask_k(&mv, i);
-                if k <= 0.0 {
-                    continue;
+        if layer.blend == BlendMode::Dissolve {
+            // An adjustment has no standalone source alpha. Its effective coverage comes from its
+            // own opacity and mask, not a continuous RGB mix (#3050).
+            for y in rect.y0..rect.y1 {
+                for x in rect.x0..rect.x1 {
+                    let i = ((y - rect.y0) as usize) * rect.width() as usize + (x - rect.x0) as usize;
+                    let k = opacity * mask_k(&mv, i);
+                    if k > 0.0 && dissolve_noise(x, y) < k {
+                        let a = adjusted.px[i];
+                        backdrop.px[i] = [a[0], a[1], a[2], backdrop.px[i][3]];
+                    }
                 }
-                // Only `adjusted` has changed; this pixel's original backdrop is still in place.
-                let b = backdrop.px[i];
-                let a = adjusted.px[i];
-                let blended = blend::blend_rgb(layer.blend, [b[0], b[1], b[2]], [a[0], a[1], a[2]]);
-                backdrop.px[i] = [b[0] + (blended[0] - b[0]) * k, b[1] + (blended[1] - b[1]) * k, b[2] + (blended[2] - b[2]) * k, b[3]];
+            }
+        } else {
+            match &mv {
+                Some(m) => blend_back(&mut backdrop.px, &adjusted.px, m.iter().map(|v| opacity * v), layer.blend),
+                None => blend_back(&mut backdrop.px, &adjusted.px, std::iter::repeat(opacity), layer.blend),
             }
         }
         recycle_buffer(adjusted);
@@ -2136,7 +2270,9 @@ fn fx_cache() -> &'static std::sync::Mutex<FxCache> {
 /// 1920 × 103675 webtoon page each such layer's maps took about 2.4 GB, and a render held them for
 /// every layer at once (60 GB with 25 stroked type layers, #1909). When its effects are local
 /// ([`effects::maps_are_local`]), such a layer's maps are built over the render rectangle padded
-/// by twice the effect reach instead, which gives the same pixels there. Only when `rect`, what
+/// by twice the effect reach instead, which gives the same pixels there. So are any layer's local
+/// maps when the render's whole-region maps wouldn't fit in the effect cache ([`fx_over_budget`]).
+/// Only when `rect`, what
 /// the caller composites the layer over, lies within the render rectangle: a group's effect shape
 /// (or anything else rendering children over a wider area) gets the whole region.
 fn effect_region(layer: &Layer, rect: Rect, cx: &Ctx) -> (Rect, bool) {
@@ -2144,7 +2280,7 @@ fn effect_region(layer: &Layer, rect: Rect, cx: &Ctx) -> (Rect, bool) {
     let region = effect_source_bounds(layer, cx.canvas).inflate(m).intersect(&cx.canvas.inflate(m));
     let clip = *cx.fx_clip.lock().unwrap_or_else(|e| e.into_inner());
     match clip {
-        Some(c) if c.contains_rect(&rect) && advanced::shapeless(layer) && effects::maps_are_local(layer) => {
+        Some(c) if c.contains_rect(&rect) && (advanced::shapeless(layer) || cx.fx_over_budget) && effects::maps_are_local(layer) => {
             let part = region.intersect(&c.inflate(m.saturating_mul(2)));
             (part, part != region)
         }
@@ -2152,12 +2288,53 @@ fn effect_region(layer: &Layer, rect: Rect, cx: &Ctx) -> (Rect, bool) {
     }
 }
 
+/// Whether the effect maps of the visible layers of `layers` (groups included), each over its
+/// whole region, would take more than the effect cache budget together. A render needs all of
+/// them, so when they don't fit, building one evicts the next one needed and every render builds
+/// them all again, seconds even for a small rect (#8330). Counted as [`effects::FxMaps::bytes`]
+/// counts the built maps ([`effects::map_count`] arrays over each region).
+fn fx_over_budget(layers: &[Layer], canvas: Rect) -> bool {
+    fx_region_bytes(layers, canvas) > effect_cache_budget() as u64
+}
+
+/// The bytes [`fx_over_budget`] compares with the budget.
+fn fx_region_bytes(layers: &[Layer], canvas: Rect) -> u64 {
+    fn bytes(layers: &[Layer], canvas: Rect, depth: u32) -> u64 {
+        let mut total = 0u64;
+        for l in layers.iter().filter(|l| l.visible) {
+            if effects::has_effects(l) {
+                let m = effects::margin(l);
+                let region = effect_source_bounds(l, canvas).inflate(m).intersect(&canvas.inflate(m));
+                let maps = effects::map_count(l) as u64;
+                let px = u64::from(region.width()) * u64::from(region.height());
+                total = total.saturating_add(maps.saturating_mul(px).saturating_mul(4));
+            }
+            if let LayerContent::Group(g) = &l.content
+                && depth < PREPARE_DEPTH
+            {
+                total = total.saturating_add(bytes(&g.children, canvas, depth + 1));
+            }
+        }
+        total
+    }
+    bytes(layers, canvas, 0)
+}
+
+/// Most bytes one layer's effect maps and source may take to build, whatever the cache budget.
+const MAX_FX_BUILD_BYTES: u64 = if cfg!(target_pointer_width = "64") { 4 << 30 } else { 512 << 20 };
+
 /// The layer's effect maps over its region (layer bounds grown by the effect reach, within the
 /// canvas grown likewise; see [`effect_region`]), built once per layer state and shared by every
 /// tile. `rect` is what the caller composites the layer over (see [`effect_region`]).
 fn effect_maps(layer: &Layer, rect: Rect, cx: &Ctx) -> std::sync::Arc<effects::FxMaps> {
     use std::hash::{Hash, Hasher};
-    let (region, clipped) = effect_region(layer, rect, cx);
+    let (mut region, clipped) = effect_region(layer, rect, cx);
+    // Non-local effects keep their whole source region, which a few distant pixels stretch over
+    // the canvas: past the cap the effects are left out instead of allocating it.
+    let region_px = u64::from(region.width()) * u64::from(region.height());
+    if (effects::map_count(layer) as u64 + 1).saturating_mul(region_px).saturating_mul(4) > MAX_FX_BUILD_BYTES {
+        region = Rect::EMPTY;
+    }
     static NO_CACHE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     if *NO_CACHE.get_or_init(|| std::env::var_os("PHOTOCRAFT_FX_NOCACHE").is_some()) {
         let shape = if region.is_empty() { Vec::new() } else { effect_shape(layer, region, cx) };
@@ -2174,6 +2351,41 @@ fn effect_maps(layer: &Layer, rect: Rect, cx: &Ctx) -> std::sync::Arc<effects::F
     }
     let maps = cached_effect_maps(layer, region, key, cx);
     cx.fx_maps.lock().unwrap_or_else(|e| e.into_inner()).entry(key).or_insert((maps, clipped)).0.clone()
+}
+
+fn build_fx_slot_maps(layer: &Layer, region: Rect, key: u64, cx: &Ctx, slot: &FxSlot) -> std::sync::Arc<effects::FxMaps> {
+    let shape: Vec<f32> = if region.is_empty() { Vec::new() } else { effect_shape(layer, region, cx) };
+    let maps = effects::build_maps_prepared(layer, shape, region, &cx.light, &texture_ctx(layer, region, cx), cx.patterns);
+    let mut pin = Vec::new();
+    layer_identity(layer, &mut std::collections::hash_map::DefaultHasher::new(), &mut |t| pin.push(std::sync::Arc::downgrade(t)));
+    // The maps, plus what each reserved tile address keeps allocated.
+    let bytes = maps.bytes().saturating_add(pin.len().saturating_mul(std::mem::size_of::<photocraft_raster::Tile>() + 2 * std::mem::size_of::<usize>()));
+    let maps = std::sync::Arc::new(maps);
+    if slot.set(FxEntry { maps: maps.clone(), _pin: pin, bytes }).is_ok() {
+        // Counted exactly once, by the build that filled the slot, and only while the
+        // slot is still cached (eviction may have dropped it meanwhile).
+        let mut c = fx_cache().lock().unwrap_or_else(|e| e.into_inner());
+        if c.map.get(&key).is_some_and(|s| std::sync::Arc::ptr_eq(s, slot)) {
+            c.bytes += bytes;
+        }
+    }
+    // A concurrent build that finished first wins, so every tile shares one map.
+    slot.get().map_or(maps, |e| e.maps.clone())
+}
+
+fn evict_fx_cache_over_budget(key: u64) {
+    let mut c = fx_cache().lock().unwrap_or_else(|e| e.into_inner());
+    let budget = effect_cache_budget();
+    while c.bytes > budget && c.order.len() > 1 {
+        let Some(old) = c.order.pop_front() else { break };
+        if old == key {
+            c.order.push_back(old);
+            continue;
+        }
+        if let Some(s) = c.map.remove(&old) {
+            c.bytes = c.bytes.saturating_sub(s.get().map_or(0, |e| e.bytes));
+        }
+    }
 }
 
 /// The layer's effect maps from the global cache, built on a miss.
@@ -2197,40 +2409,10 @@ fn cached_effect_maps(layer: &Layer, region: Rect, key: u64, cx: &Ctx) -> std::s
     };
     let maps = match slot.get() {
         Some(e) => e.maps.clone(),
-        None => {
-            let shape: Vec<f32> = if region.is_empty() { Vec::new() } else { effect_shape(layer, region, cx) };
-            let maps = effects::build_maps_prepared(layer, shape, region, &cx.light, &texture_ctx(layer, region, cx), cx.patterns);
-            let mut pin = Vec::new();
-            layer_identity(layer, &mut std::collections::hash_map::DefaultHasher::new(), &mut |t| pin.push(std::sync::Arc::downgrade(t)));
-            // The maps, plus what each reserved tile address keeps allocated.
-            let bytes =
-                maps.bytes().saturating_add(pin.len().saturating_mul(std::mem::size_of::<photocraft_raster::Tile>() + 2 * std::mem::size_of::<usize>()));
-            let maps = std::sync::Arc::new(maps);
-            if slot.set(FxEntry { maps: maps.clone(), _pin: pin, bytes }).is_ok() {
-                // Counted exactly once, by the build that filled the slot, and only while the
-                // slot is still cached (eviction may have dropped it meanwhile).
-                let mut c = fx_cache().lock().unwrap_or_else(|e| e.into_inner());
-                if c.map.get(&key).is_some_and(|s| std::sync::Arc::ptr_eq(s, &slot)) {
-                    c.bytes += bytes;
-                }
-            }
-            // A concurrent build that finished first wins, so every tile shares one map.
-            slot.get().map_or(maps, |e| e.maps.clone())
-        }
+        None => build_fx_slot_maps(layer, region, key, cx, &slot),
     };
     // Evict the oldest entries over budget (never the one just used).
-    let mut c = fx_cache().lock().unwrap_or_else(|e| e.into_inner());
-    let budget = effect_cache_budget();
-    while c.bytes > budget && c.order.len() > 1 {
-        let Some(old) = c.order.pop_front() else { break };
-        if old == key {
-            c.order.push_back(old);
-            continue;
-        }
-        if let Some(s) = c.map.remove(&old) {
-            c.bytes = c.bytes.saturating_sub(s.get().map_or(0, |e| e.bytes));
-        }
-    }
+    evict_fx_cache_over_budget(key);
     maps
 }
 
@@ -2265,6 +2447,14 @@ fn composite_atop_any(layer: &Layer, base: &mut Buffer, cx: &Ctx) {
         for (i, p) in base.px.iter_mut().enumerate() {
             let k = layer.opacity * layer.fill_opacity * mask_k(&mv, i);
             let a = adjusted.px[i];
+            if layer.blend == BlendMode::Dissolve {
+                let x = rect.x0 + (i % rect.width() as usize) as i32;
+                let y = rect.y0 + (i / rect.width() as usize) as i32;
+                if dissolve_noise(x, y) < k {
+                    *p = [a[0], a[1], a[2], p[3]];
+                }
+                continue;
+            }
             let bl = blend::blend_rgb(layer.blend, [p[0], p[1], p[2]], [a[0], a[1], a[2]]);
             for c in 0..3 {
                 p[c] += (bl[c] - p[c]) * k;
@@ -2311,6 +2501,16 @@ fn composite_atop_any(layer: &Layer, base: &mut Buffer, cx: &Ctx) {
             continue;
         }
         let s = content.px[i];
+        if layer.blend == BlendMode::Dissolve {
+            // Clipping preserves the opaque base's alpha. Dissolve still selects source
+            // pixels by spatial coverage instead of continuously mixing the colours (#3052).
+            let x = rect.x0 + (i as i32 % rect.width() as i32);
+            let y = rect.y0 + (i as i32 / rect.width() as i32);
+            if dissolve_noise(x, y) < s[3] * opacity {
+                *p = [s[0], s[1], s[2], alpha];
+            }
+            continue;
+        }
         // Blend as if the base were opaque, then keep the base's alpha.
         let r = blend::composite_gamma(layer.blend, [p[0], p[1], p[2], 1.0], s, opacity, gamma);
         *p = [r[0], r[1], r[2], alpha];

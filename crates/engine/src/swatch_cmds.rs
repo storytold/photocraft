@@ -328,6 +328,13 @@ fn use_swatch(s: &mut Session, p: &Value) -> Result<Value> {
         "background" => s.tools.background = c,
         t => return Err(bad(CMD, format!("unknown target `{t}` (foreground|background)"))),
     }
+    // A CMYK swatch keeps its inks (as a colour picked in CMYK does, #4196): the Color Picker
+    // shows them and a CMYK document is painted with them, not with the sRGB round trip (#7474).
+    if let SwatchColor::Cmyk(inks) = sw.color
+        && inks.iter().all(|v| v.is_finite())
+    {
+        s.tools.remember_cmyk(rgb, inks.map(|v| v.clamp(0.0, 1.0)));
+    }
     Ok(json!({"swatch": sw.name, "target": target, "hex": hex(rgb)}))
 }
 

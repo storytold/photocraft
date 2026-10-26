@@ -336,3 +336,192 @@ fn float_feathered_selection_preserves_partial_alpha_across_depths() {
         assert!(edge_a > 0.1 && edge_a < 0.9, "{depth}-bit feathered edge alpha={edge_a}");
     }
 }
+
+/// Coverage of `d`'s selection at (x, y).
+fn selected(d: &Document, x: i32, y: i32) -> f32 {
+    d.selection.as_ref().map_or(0.0, |s| s.sample_channel(x, y, 0))
+}
+
+/// #7538: a marquee drawn loosely around an object on a transparent layer shrinks to the object
+/// once its pixels move, as in Photoshop, at every depth and when moving a copy.
+#[test]
+fn moving_shrinks_the_selection_to_the_moved_pixels_at_every_depth() {
+    for depth in [8, 16, 32] {
+        for copy in [false, true] {
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width": 80, "height": 60, "background": "transparent", "depth": depth})).unwrap();
+            s.execute("select.rect", json!({"x": 10, "y": 10, "width": 20, "height": 20})).unwrap();
+            s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+            // A marquee with empty space all round the red square.
+            s.execute("select.rect", json!({"x": 4, "y": 6, "width": 34, "height": 30})).unwrap();
+            s.execute("select.float", json!({"dx": 20, "dy": 5, "copy": copy})).unwrap();
+            let st = s.active().unwrap();
+            let outline = floating(st).unwrap().parts.outline().unwrap();
+            assert_eq!(outline.content_bounds(), Rect::new(10, 10, 30, 30), "{depth}-bit, copy {copy}: the outline while floating");
+            assert_eq!(st.doc.selection.as_ref().unwrap().content_bounds(), Rect::new(4, 6, 38, 36), "the document's is untouched");
+            s.execute("select.drop", json!({})).unwrap();
+            let doc = &s.active().unwrap().doc;
+            assert_eq!(doc.selection.as_ref().unwrap().content_bounds(), Rect::new(30, 15, 50, 35), "{depth}-bit, copy {copy}");
+            assert_eq!((selected(doc, 40, 25), selected(doc, 26, 13)), (1.0, 0.0), "{depth}-bit, copy {copy}: the moved square only");
+            // Undo brings back the marquee as it was drawn.
+            s.undo();
+            assert_eq!(s.active().unwrap().doc.selection.as_ref().unwrap().content_bounds(), Rect::new(4, 6, 38, 36), "{depth}-bit, copy {copy}");
+        }
+    }
+}
+
+/// The new selection is what each pixel took with it: the selection, at most the pixel's alpha. A
+/// soft selection keeps its soft edge; a half-transparent pixel half selected moves whole.
+#[test]
+fn the_outline_is_what_the_moved_pixels_took() {
+    let (mut s, id) = session();
+    s.edit("soften", |doc, _| {
+        // Half-transparent red over (30..40, 10..30), beside the opaque (10..30)² square.
+        doc.layer_mut(id).unwrap().surface_mut().unwrap().fill_rect(Rect::new(30, 10, 40, 30), &[1.0, 0.0, 0.0, 0.5]);
+        let mut sel = Surface::new(PixelFormat::GRAY8);
+        sel.fill_rect(Rect::new(0, 0, 60, 50), &[0.5]);
+        sel.fill_rect(Rect::new(10, 10, 20, 30), &[1.0]);
+        doc.selection = Some(sel);
+        Ok(())
+    })
+    .unwrap();
+    s.execute("select.float", json!({"dx": 10, "dy": 0})).unwrap();
+    s.execute("select.drop", json!({})).unwrap();
+    let doc = &s.active().unwrap().doc;
+    let near = |x: i32, y: i32, want: f32| assert!((selected(doc, x, y) - want).abs() < 0.01, "({x}, {y}): {} for {want}", selected(doc, x, y));
+    near(25, 20, 1.0); // fully selected, opaque
+    near(35, 20, 0.5); // half selected, opaque: half of it moved
+    near(45, 20, 0.5); // half selected, half transparent: all of it moved
+    near(5, 5, 0.0); // selected, but nothing there
+    assert_eq!(doc.selection.as_ref().unwrap().content_bounds(), Rect::new(20, 10, 50, 30));
+}
+
+/// Where the selection is the moved piece already (the Background, which has no transparency)
+/// or the piece has no outline (a mask, or only transparent pixels), the selection just moves.
+#[test]
+fn the_selection_just_moves_without_transparency_to_shrink_to() {
+    // The Background.
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 40, "height": 40})).unwrap();
+    s.execute("select.rect", json!({"x": 5, "y": 5, "width": 10, "height": 10})).unwrap();
+    s.execute("select.float", json!({"dx": 15, "dy": 0})).unwrap();
+    s.execute("select.drop", json!({})).unwrap();
+    assert_eq!(s.active().unwrap().doc.selection.as_ref().unwrap().content_bounds(), Rect::new(20, 5, 30, 15), "the Background");
+    // Only transparent pixels selected.
+    let (mut s, _) = session();
+    s.execute("select.rect", json!({"x": 40, "y": 5, "width": 10, "height": 10})).unwrap();
+    s.execute("select.float", json!({"dx": 5, "dy": 0})).unwrap();
+    assert!(floating(s.active().unwrap()).unwrap().parts.outline().is_none());
+    s.execute("select.drop", json!({})).unwrap();
+    assert_eq!(s.active().unwrap().doc.selection.as_ref().unwrap().content_bounds(), Rect::new(45, 5, 55, 15), "an empty piece");
+    // The mask: it has no transparency of its own.
+    let (mut s, id) = session();
+    s.edit("mask", |doc, _| {
+        doc.layer_mut(id).unwrap().mask = Some(photocraft_doc::LayerMask::reveal_all());
+        Ok(())
+    })
+    .unwrap();
+    s.execute("select.rect", json!({"x": 5, "y": 5, "width": 40, "height": 40})).unwrap();
+    s.execute("select.float", json!({"dx": 5, "dy": 0, "target": "mask"})).unwrap();
+    s.execute("select.drop", json!({})).unwrap();
+    assert_eq!(s.active().unwrap().doc.selection.as_ref().unwrap().content_bounds(), Rect::new(10, 5, 50, 45), "the mask");
+}
+
+/// #7538: an anti-aliased shape moved, dropped, then moved again from its shrunk selection leaves
+/// nothing behind. With the selection shrunk to the pixels' alpha, the second move left
+/// a × (1 − a) of each edge pixel (up to 25 %), a faint outline where the shape had been.
+#[test]
+fn moving_again_from_the_shrunk_selection_leaves_no_edge_behind() {
+    for depth in [8, 16, 32] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 120, "height": 100, "background": "transparent", "depth": depth})).unwrap();
+        s.execute("select.rect", json!({"x": 20, "y": 20, "width": 50, "height": 40, "ellipse": true})).unwrap();
+        s.execute("edit.fill", json!({"color": "#0000ff"})).unwrap();
+        let id = s.active().unwrap().active_layer.unwrap();
+        let total = |doc: &Document| (0..100).flat_map(|y| (0..120).map(move |x| (x, y))).map(|(x, y)| alpha(doc, id, x, y)).sum::<f32>();
+        let (before, soft) = {
+            let doc = &s.active().unwrap().doc;
+            (total(doc), (0..100).flat_map(|y| (0..120).map(move |x| (x, y))).filter(|&(x, y)| (0.01..0.99).contains(&alpha(doc, id, x, y))).count())
+        };
+        assert!(soft > 20, "{depth}-bit: the ellipse has anti-aliased edges ({soft})");
+        s.execute("select.rect", json!({"x": 10, "y": 10, "width": 70, "height": 60})).unwrap();
+        s.execute("select.float", json!({"dx": 40, "dy": 30})).unwrap();
+        s.execute("select.drop", json!({})).unwrap();
+        // The ellipse now sits at (60..110, 50..90); move it back where it started.
+        s.execute("select.float", json!({"dx": -40, "dy": -30})).unwrap();
+        s.execute("select.drop", json!({})).unwrap();
+        let doc = &s.active().unwrap().doc;
+        let leftover = (50..100)
+            .flat_map(|y| (55..115).map(move |x| (x, y)))
+            .filter(|&(x, y)| x >= 72 || y >= 62)
+            .map(|(x, y)| alpha(doc, id, x, y))
+            .fold(0.0f32, f32::max);
+        assert_eq!(leftover, 0.0, "{depth}-bit: nothing left where it was moved from");
+        assert!((total(doc) - before).abs() < 0.05, "{depth}-bit: every edge pixel came back whole ({} vs {before})", total(doc));
+    }
+}
+
+/// #7538, measured in Photoshop 2025: after moving a soft-edged shape from a loose marquee, the
+/// selection's strength at each edge pixel is that pixel's alpha (its marching ants run along the
+/// edge's 50 % line, and Quick Mask shows the edge partly selected), and a feathered selection
+/// over opaque pixels still lifts only part of them, leaving the rest behind.
+#[test]
+fn a_soft_edge_is_as_selected_as_it_is_opaque_and_feathered_moves_leave_the_rest() {
+    let (mut s, id) = session();
+    s.edit("soft edge", |doc, _| {
+        let surf = doc.layer_mut(id).unwrap().surface_mut().unwrap();
+        for (x, a) in [(30, 0.75), (31, 0.5), (32, 0.25)] {
+            surf.fill_rect(Rect::new(x, 10, x + 1, 30), &[1.0, 0.0, 0.0, a]);
+        }
+        Ok(())
+    })
+    .unwrap();
+    s.execute("select.rect", json!({"x": 5, "y": 5, "width": 40, "height": 30})).unwrap();
+    s.execute("select.float", json!({"dx": 10, "dy": 0})).unwrap();
+    s.execute("select.drop", json!({})).unwrap();
+    let doc = &s.active().unwrap().doc;
+    for (x, a) in [(39, 1.0), (40, 0.75), (41, 0.5), (42, 0.25), (43, 0.0)] {
+        assert!((selected(doc, x, 20) - a).abs() < 0.01, "x {x}: selected {} where alpha {a}", selected(doc, x, 20));
+        assert!((alpha(doc, id, x, 20) - a).abs() < 0.01, "x {x}: the pixel moved whole");
+    }
+    assert!((10..20).all(|x| alpha(doc, id, x, 20) == 0.0), "nothing left where it was");
+
+    // A feathered (half) selection over opaque pixels lifts half of them and leaves half.
+    let (mut s, id) = session();
+    s.edit("half", |doc, _| {
+        let mut sel = Surface::new(PixelFormat::GRAY8);
+        sel.fill_rect(Rect::new(10, 10, 30, 30), &[0.5]);
+        doc.selection = Some(sel);
+        Ok(())
+    })
+    .unwrap();
+    s.execute("select.float", json!({"dx": 30, "dy": 0})).unwrap();
+    s.execute("select.drop", json!({})).unwrap();
+    let doc = &s.active().unwrap().doc;
+    assert!((alpha(doc, id, 15, 20) - 0.5).abs() < 0.01 && (alpha(doc, id, 45, 20) - 0.5).abs() < 0.01, "half left, half moved");
+}
+
+/// #7538: arrow nudges add up to one floating piece, so up then down is back at no offset. The
+/// selection is the moved pixels' all the same, as after each of Photoshop's nudges, in one step;
+/// a piece that never moved (a click) changes nothing.
+#[test]
+fn nudging_away_and_back_keeps_the_moved_pixels_selection() {
+    let (mut s, _) = session();
+    s.execute("select.rect", json!({"x": 2, "y": 2, "width": 40, "height": 40})).unwrap();
+    let steps = s.active().unwrap().history.past_len();
+    s.execute("select.float", json!({"dx": 0, "dy": -1})).unwrap();
+    s.execute("select.float", json!({"dx": 0, "dy": 1})).unwrap();
+    s.execute("select.drop", json!({})).unwrap();
+    let st = s.active().unwrap();
+    assert_eq!(st.doc.selection.as_ref().map(|s| s.content_bounds()), Some(Rect::new(10, 10, 30, 30)), "the moved square's");
+    assert_eq!(st.history.past_len(), steps + 1, "one step");
+    s.undo();
+    assert_eq!(s.active().unwrap().doc.selection.as_ref().map(|s| s.content_bounds()), Some(Rect::new(2, 2, 42, 42)), "undone");
+
+    // A click: cut, never moved, dropped.
+    s.execute("select.float", json!({"dx": 0, "dy": 0})).unwrap();
+    s.execute("select.drop", json!({})).unwrap();
+    let st = s.active().unwrap();
+    assert_eq!(st.doc.selection.as_ref().map(|s| s.content_bounds()), Some(Rect::new(2, 2, 42, 42)), "a click keeps the marquee");
+    assert_eq!(st.history.past_len(), steps, "and adds no step");
+}

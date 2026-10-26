@@ -40,7 +40,7 @@ struct StripCache {
 }
 
 fn cache_id() -> egui::Id {
-    egui::Id::new("frame-strip-thumbs")
+    egui::Id::unique("frame-strip-thumbs")
 }
 
 fn with_cache<R>(ctx: &egui::Context, f: impl FnOnce(&mut StripCache) -> R) -> R {
@@ -246,7 +246,7 @@ pub fn is_noop_drop(group: &[usize], slot: usize) -> bool {
 
 /// Id of the frame being dragged, kept in egui memory between frames.
 fn drag_id() -> egui::Id {
-    egui::Id::new("frame-strip-drag")
+    egui::Id::unique("frame-strip-drag")
 }
 
 /// How far the pointer may stray above or below the strip before a drop cancels the drag.
@@ -425,7 +425,7 @@ fn drag_frame(ui: &mut egui::Ui, ctx: &egui::Context, cells: &[Rect], from: usiz
     // A ghost of the carried frame follows the pointer.
     if let Some(src) = cells.get(from) {
         let ghost = Rect::from_center_size(pos, src.size());
-        let layer = egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("frame-strip-ghost"));
+        let layer = egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("frame-strip-ghost"));
         let p = ui.ctx().layer_painter(layer);
         p.rect_filled(ghost, t.radius_sm, t.accent_soft.gamma_multiply(0.8));
         let label = if group.len() > 1 { format!("{} ×{}", from + 1, group.len()) } else { (from + 1).to_string() };
@@ -503,7 +503,7 @@ fn loop_menu(ui: &mut egui::Ui, loops: LoopCount, acts: &mut Vec<Act>) {
 /// The Tween menu: how many frames to add, then which frame to tween the selected one with.
 fn tween_menu(ui: &mut egui::Ui, acts: &mut Vec<Act>) {
     drop_menu(ui, tl!("Tween"), |ui| {
-        let id = ui.id().with("tween-count");
+        let id = ui.scope_id().with("tween-count");
         let mut count: u32 = ui.data_mut(|d| d.get_temp(id)).unwrap_or(3);
         ui.horizontal(|ui| {
             ui.label(tl!("Frames to add"));
@@ -546,7 +546,7 @@ fn onion_menu(ui: &mut egui::Ui, onion: crate::onion_skin::OnionSkin, out: &mut 
 
 /// "Other…" with a text field inside a menu; Enter hands the text to `apply`.
 fn other_field(ui: &mut egui::Ui, label: &str, initial: &str, apply: impl FnOnce(&mut egui::Ui, &str)) {
-    let id = ui.id().with(("other-field", label));
+    let id = ui.scope_id().with(("other-field", label));
     let mut text: String = ui.data_mut(|d| d.get_temp(id)).unwrap_or_else(|| initial.to_string());
     ui.horizontal(|ui| {
         ui.label(label);

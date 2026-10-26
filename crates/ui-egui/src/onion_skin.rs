@@ -90,7 +90,7 @@ struct GhostCache {
 }
 
 fn with_cache<R>(ctx: &egui::Context, f: impl FnOnce(&mut GhostCache) -> R) -> R {
-    let id = egui::Id::new("onion-skin-ghosts");
+    let id = egui::Id::unique("onion-skin-ghosts");
     let cell = ctx.data_mut(|d| d.get_temp::<std::sync::Arc<std::sync::Mutex<GhostCache>>>(id));
     let cell = cell.unwrap_or_else(|| {
         let c = std::sync::Arc::new(std::sync::Mutex::new(GhostCache::default()));

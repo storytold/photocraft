@@ -486,7 +486,7 @@ pub(crate) fn map_path(p: &Value) -> Option<&str> {
 /// Displace's `mapDocument`: an index or a name. Null and a negative index (the dialog's "None")
 /// name no document.
 pub(crate) fn map_document(p: &Value) -> Option<&Value> {
-    p.get("mapDocument").filter(|d| !d.is_null() && !d.as_i64().is_some_and(|i| i < 0))
+    p.get("mapDocument").filter(|d| !d.is_null() && d.as_i64().is_none_or(|i| i >= 0))
 }
 
 /// Displace's map read from a file (flattened, or its `mapLayer`).

@@ -183,6 +183,20 @@ pub(crate) fn place_copy(doc: &mut Document, id: LayerId) -> Result<()> {
     Ok(())
 }
 
+/// Record a Duplicate's `inPlace` only when a copy (the selection after it) is an artboard: for
+/// any other layer it changes nothing, and Photoshop's Duplicate can't express it, so a recorded
+/// Alt-drag copy of a plain layer must stay exportable to .atn (#7200).
+pub(crate) fn recorded_duplicate(s: &Session, mut p: Value) -> Value {
+    let Some(st) = s.active() else { return p };
+    if st.selected_layers().into_iter().any(|id| st.doc.layer(id).is_some_and(|l| l.artboard().is_some())) {
+        return p;
+    }
+    if let Some(fields) = p.as_object_mut() {
+        fields.remove("inPlace");
+    }
+    p
+}
+
 /// Grow the canvas so every artboard fits. Photoshop's artboard documents grow in every
 /// direction: a board left of or above the origin shifts the whole document (boards, their
 /// contents, guides, paths…) right/down by its overhang, then the canvas grows to show it. An
@@ -217,6 +231,23 @@ fn next_artboard_name(doc: &Document) -> String {
     let names: Vec<&str> = doc.artboards().into_iter().map(|b| b.1).collect();
     // `names.len() + 1` candidates always include a free one.
     (1..=names.len() + 1).map(|n| format!("Artboard {n}")).find(|n| !names.contains(&n.as_str())).unwrap_or_else(|| "Artboard".into())
+}
+
+/// File › New with Artboards (#9086): one board over the whole canvas, its background the
+/// document's (white, black, a colour or transparent), holding an empty Layer 1. As in Photoshop,
+/// there is no Background layer.
+pub fn new_artboard_document(name: String, size: Size, mode: ColorMode, depth: SampleType, background: Option<Color>) -> Document {
+    let mut doc = Document::new(name, size, mode, depth);
+    let background = match background {
+        None => ArtboardBackground::Transparent,
+        Some(c) if c == Color::WHITE => ArtboardBackground::White,
+        Some(c) if c == Color::BLACK => ArtboardBackground::Black,
+        Some(c) => ArtboardBackground::Custom(c),
+    };
+    let mut board = Layer::group("Artboard 1", vec![Layer::raster("Layer 1", doc.pixel_format())]);
+    set_artboard(&mut board, Artboard { rect: doc.bounds(), background, preset: String::new() });
+    doc.layers.push(board);
+    doc
 }
 
 fn set_artboard(l: &mut Layer, a: Artboard) {

@@ -110,7 +110,7 @@ fn tiled_adjustment_matches_one_pass_over_the_content() {
             for sel in [None, Some(&soft)] {
                 let want = one_pass(&s, &adj, sel, fmt.mode);
                 let mut got = s.clone();
-                adjust_surface(&mut got, &adj, sel, fmt.mode);
+                adjust_surface(&mut got, &adj, sel, fmt.mode).unwrap();
                 assert!(want != s, "{kind} {fmt:?}: the adjustment changes the layer");
                 assert!(got == want, "{kind} {fmt:?} selection {}: tiled result differs", sel.is_some());
             }
@@ -121,7 +121,7 @@ fn tiled_adjustment_matches_one_pass_over_the_content() {
 #[test]
 fn an_empty_layer_is_left_alone() {
     let mut s = Surface::new(PixelFormat::RGBA8);
-    adjust_surface(&mut s, &Adjustment::Invert, None, ColorMode::Rgb);
+    adjust_surface(&mut s, &Adjustment::Invert, None, ColorMode::Rgb).unwrap();
     assert_eq!(s.tile_count(), 0);
 }
 
@@ -183,19 +183,29 @@ fn tiled_clear_and_fill_match_one_pass_over_the_area() {
     let sr = Rect::new(0, 0, 600, 400);
     soft.write_region(sr, &(0..sr.height()).flat_map(|_| (0..sr.width()).map(|x| (1.0 - (x as f32 - 256.0).max(0.0) / 300.0).max(0.0))).collect::<Vec<_>>());
     let canvas = Rect::new(0, 0, 700, 600);
+    // Pixel formats and fill settings are independent: a run takes a quarter of their combinations,
+    // a different quarter each day.
+    let sweep = photocraft_testkit::Sweep::new(4);
+    let mut case = 0;
+    let mut runs = || {
+        case += 1;
+        sweep.includes(case)
+    };
     for fmt in formats {
         let s = clear_layer(fmt);
         for sel in [None, Some(&soft)] {
             let area = sel.map_or(canvas, |m| m.content_bounds());
             let what = format!("{fmt:?} selection {}", sel.is_some());
-            let mut got = s.clone();
-            try_clear_surface(&mut got, area, sel).unwrap();
-            assert!(same_pixels(&got, &reference_fill_or_clear(&s, area, sel, None)), "clear {what}");
-            if fmt.alpha {
-                assert!(!same_pixels(&got, &s), "clear {what} changes the layer");
+            if runs() {
+                let mut got = s.clone();
+                try_clear_surface(&mut got, area, sel).unwrap();
+                assert!(same_pixels(&got, &reference_fill_or_clear(&s, area, sel, None)), "clear {what}");
+                if fmt.alpha {
+                    assert!(!same_pixels(&got, &s), "clear {what} changes the layer");
+                }
             }
             for color in [[1.0, 1.0, 1.0, 1.0], [0.3, 0.5, 0.9, 1.0], [0.3, 0.5, 0.9, 0.4]] {
-                for lock in [true, false] {
+                for lock in [true, false].into_iter().filter(|_| runs()) {
                     let mut got = s.clone();
                     try_fill_surface(&mut got, area, color, sel, lock).unwrap();
                     assert!(same_pixels(&got, &reference_fill_or_clear(&s, area, sel, Some((color, lock)))), "fill {color:?} lock {lock} {what}");
@@ -253,7 +263,7 @@ fn invert_in_a_lab_document_mirrors_l_a_and_b() {
         let mut s = Surface::new(fmt);
         let r = Rect::new(0, 0, 2, 2);
         s.write_region(r, &(0..4).flat_map(|_| from_rgba(&fmt, [c[0], c[1], c[2], 1.0])).collect::<Vec<_>>());
-        adjust_surface(&mut s, &Adjustment::Invert, None, ColorMode::Lab);
+        adjust_surface(&mut s, &Adjustment::Invert, None, ColorMode::Lab).unwrap();
         let px = s.read_region(Rect::new(1, 1, 2, 2));
         let rgba = photocraft_raster::to_rgba(&fmt, &px);
         let got = srgb_to_lab([rgba[0], rgba[1], rgba[2]]);
@@ -308,7 +318,7 @@ fn adjusted_pixel(fmt: PixelFormat, ch: &[f32], adj: &Adjustment, k: Option<f32>
     if let Some(k) = k {
         sel.write_region(unit, &[k]);
     }
-    adjust_surface(&mut s, adj, k.map(|_| &sel), fmt.mode);
+    adjust_surface(&mut s, adj, k.map(|_| &sel), fmt.mode).unwrap();
     s.read_region(unit)
 }
 
@@ -393,4 +403,53 @@ fn hue_saturation_and_color_balance_keep_a_cmyk_layers_black() {
         let k = 128.0 / 255.0;
         assert!((0..4).all(|c| (half[c] - (ink[c] + (want[0][c] - ink[c]) * k)).abs() < 1e-3), "{}: half a selection", adj.label());
     }
+}
+
+/// Two small blocks two billion pixels apart: the content bounds are a grid of 6·10¹³ tiles
+/// that holds nothing, which no adjustment may materialize.
+fn distant_blocks(fmt: PixelFormat, default: f32) -> Surface {
+    let mut s = Surface::with_default(fmt, &vec![default; fmt.channels()]);
+    s.fill_rect(Rect::new(0, 0, 10, 10), &vec![0.25; fmt.channels()]);
+    s.fill_rect(Rect::new(2_000_000_000, 2_000_000_000, 2_000_000_010, 2_000_000_010), &vec![0.25; fmt.channels()]);
+    s
+}
+
+#[test]
+fn adjusting_a_layer_of_distant_blocks_visits_only_its_tiles() {
+    let mut s = distant_blocks(PixelFormat::RGBA8, 0.0);
+    adjust_surface(&mut s, &Adjustment::Invert, None, ColorMode::Rgb).unwrap();
+    let p = s.read_region(Rect::new(2_000_000_005, 2_000_000_005, 2_000_000_006, 2_000_000_006));
+    // Straight colour inverted, alpha untouched.
+    assert!((p[0] - 0.75).abs() < 0.01 && (p[3] - 0.25).abs() < 0.01, "{p:?}");
+    assert_eq!(s.tile_count(), 2);
+}
+
+#[test]
+fn adjusting_a_mask_of_distant_blocks_visits_only_its_tiles() {
+    let mut m = distant_blocks(PixelFormat::GRAY8, 1.0);
+    adjust_mask(&mut m, &Adjustment::Invert, None).unwrap();
+    assert!(m.default_pixel()[0] < 0.01, "the default is inverted: {:?}", m.default_pixel());
+    let p = m.read_region(Rect::new(2_000_000_005, 2_000_000_005, 2_000_000_006, 2_000_000_006));
+    assert!((p[0] - 0.75).abs() < 0.01, "{p:?}");
+    // Through a selection of its own distant tiles, too.
+    let mut sel = Surface::new(PixelFormat::GRAY8);
+    sel.fill_rect(Rect::new(2_000_000_000, 2_000_000_000, 2_000_000_010, 2_000_000_010), &[1.0]);
+    adjust_mask(&mut m, &Adjustment::Invert, Some(&sel)).unwrap();
+    let p = m.read_region(Rect::new(2_000_000_005, 2_000_000_005, 2_000_000_006, 2_000_000_006));
+    assert!((p[0] - 0.25).abs() < 0.01, "{p:?}");
+}
+
+#[test]
+fn an_opaque_layer_of_distant_blocks_is_refused_not_half_adjusted() {
+    let mut s = distant_blocks(PixelFormat::RGBA8, 1.0);
+    let before = s.clone();
+    assert!(adjust_surface(&mut s, &Adjustment::Invert, None, ColorMode::Rgb).is_err());
+    assert!(s == before, "a refused adjustment leaves the layer as it was");
+}
+
+#[test]
+fn a_selection_with_a_nonzero_default_over_distant_blocks_is_refused() {
+    let mut m = Surface::with_default(PixelFormat::GRAY8, &[0.5]);
+    let sel = distant_blocks(PixelFormat::GRAY8, 1.0);
+    assert!(adjust_mask(&mut m, &Adjustment::Invert, Some(&sel)).is_err());
 }

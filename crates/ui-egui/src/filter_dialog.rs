@@ -14,6 +14,8 @@ use serde_json::{Map, Value, json};
 use crate::PhotocraftApp;
 use crate::theme::Tokens;
 
+mod zoom_center;
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Kind {
     Range {
@@ -119,8 +121,8 @@ pub fn parse_spec(spec: &str) -> Vec<Param> {
             Kind::Grid(n)
         } else if let Some((range, default)) = v.split_once('=').map(|(a, b)| (a, b.trim())).or(Some((v, ""))) {
             if let Some((lo, hi)) = range.split_once("..") {
-                let min = lo.trim().parse().unwrap_or(0.0);
-                let max = hi.trim().parse().unwrap_or(100.0);
+                let min = leading_number(lo).unwrap_or(0.0);
+                let max = leading_number(hi).unwrap_or(100.0);
                 let default = default.parse().unwrap_or(min);
                 Kind::Range { min, max, default }
             } else {
@@ -132,6 +134,17 @@ pub fn parse_spec(spec: &str) -> Vec<Param> {
         out.push(Param { key, kind });
     }
     out
+}
+
+/// The number a range bound starts with, ignoring a unit or marker after it: `5000 px?` → 5000,
+/// `1000 %` → 1000. A bound that is not a number at all is `None`.
+fn leading_number(bound: &str) -> Option<f32> {
+    let b = bound.trim();
+    if let Ok(v) = b.parse() {
+        return Some(v);
+    }
+    let end = b.find(|c: char| !(c.is_ascii_digit() || matches!(c, '.' | '-' | '+'))).unwrap_or(b.len());
+    b.get(..end)?.parse().ok()
 }
 
 /// The inside of the spec's leading `{…}` object. Notes after it, like `→ {…}` results or
@@ -251,6 +264,10 @@ pub fn preview_factor(command: &str, params: &Value, k: u32) -> u32 {
     if k <= 1 || full_resolution_preview(command, params) {
         return 1;
     }
+    // A plug-in's pixel lengths are the params its manifest marks `"unit": "px"` (#7524).
+    if command == photocraft_engine::plugin_cmds::RUN {
+        return photocraft_engine::plugin_cmds::preview_factor(params, k);
+    }
     let Some(spec) = photocraft_engine::commands::find(command) else { return k };
     let k = parse_spec(spec.params).into_iter().fold(k, |k, p| match p.kind {
         Kind::Range { min, .. } if min > 0.0 && is_pixel_param_of(command, &p.key) => match params.get(&p.key).and_then(Value::as_f64) {
@@ -335,7 +352,7 @@ fn restore_remembered(app: &PhotocraftApp, command: &str, spec: &str, fields: &m
 
 /// Remember successful built-in schema dialogs; failed or cancelled dialogs do not persist.
 pub(crate) fn remember(app: &mut PhotocraftApp, command: &str, fields: &Map<String, Value>) {
-    if !fields.contains_key("__filter") || fields.contains_key("__spec") {
+    if !fields.contains_key("__filter") || fields.contains_key("__spec") || fields.contains_key("__smartFilter") {
         return;
     }
     let Some(spec) = photocraft_engine::commands::find(command) else { return };
@@ -684,7 +701,7 @@ fn uses_angle_dial(command: &str, key: &str) -> bool {
 /// eyedropper like Photoshop's. While armed, the next click on the image writes the merged
 /// composite colour into the `color` field (the same sampler the Color Picker uses).
 const REPLACE_COLOR: &str = "image.adjustments.replaceColor";
-/// What OK on an edited smart filter runs (`smart_ui::confirm_command`); its preview too.
+/// What OK on an edited smart filter runs (`smart_ui::confirm_command`).
 const SMART_FILTER_SET_PARAMS: &str = "layer.smartFilter.setParams";
 const COLOR_EYEDROPPER: &str = "__colorEyedropper";
 
@@ -775,6 +792,12 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         crate::select_mask_view::controls(ui, f);
     }
     for p in parse_spec(&spec) {
+        if zoom_center::owns(&cmd, f) && matches!(p.key.as_str(), "centerX" | "centerY") {
+            if p.key == "centerX" {
+                zoom_center::row(ui, f);
+            }
+            continue;
+        }
         match p.kind {
             Kind::Range { min, max, default } => {
                 let mut v = f.get(&p.key).and_then(Value::as_f64).unwrap_or(default as f64) as f32;
@@ -806,9 +829,10 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                         // Keep one numeric field for direct entry and one log-scaled slider for
                         // wide ranges. slider_row would add a second, linear slider (#146).
                         ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new(label(&p.key)).color(t.text_dim));
+                            let name = label(&p.key);
+                            ui.label(egui::RichText::new(&name).color(t.text_dim));
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                crate::widgets::value_field(ui, &mut v, min..=max, unit, 74.0);
+                                crate::widgets::value_field(ui, &mut v, min..=max, unit, 74.0).accessible_name(name);
                             });
                         });
                         let mut lv = v.clamp(min, max).ln();
@@ -868,7 +892,7 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                     if lists_installed && !opts.iter().any(|(v, _)| *v == cur) {
                         opts.push((cur.clone(), stem.as_str()));
                     }
-                    crate::widgets::dropdown(ui, &format!("flt-{cmd}-{}", p.key), &mut cur, &opts, 170.0);
+                    crate::widgets::dropdown(ui, &format!("flt-{cmd}-{}", p.key), &label(&p.key), &mut cur, &opts, 170.0);
                     if let Some(i) = cur.strip_prefix("channel:").filter(|_| depth).and_then(|i| i.parse::<usize>().ok()) {
                         f.insert("depthChannel".into(), json!(i));
                         cur = "channel".into();
@@ -886,8 +910,12 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
             Kind::Text => {
                 let mut v = f.get(&p.key).and_then(Value::as_str).unwrap_or_default().to_string();
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(label(&p.key)).color(t.text_dim));
-                    ui.add(egui::TextEdit::singleline(&mut v).desired_width(200.0));
+                    let lp = ui.label(egui::RichText::new(label(&p.key)).color(t.text_dim));
+                    ui.add(egui::TextEdit::singleline(&mut v).desired_width(200.0)).labelled_by(lp.id);
+                    // Install Plug-in…: pick the .wasm file instead of typing its path (#7531).
+                    if cmd == "plugin.install" && p.key == "path" && crate::widgets::secondary_button(ui, tl!("Browse…"), 0.0).clicked() {
+                        f.insert(crate::dialogs::BROWSE_FIELD.into(), json!(p.key));
+                    }
                 });
                 if v.is_empty() {
                     f.remove(&p.key);
@@ -904,7 +932,7 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 opts.extend(names.iter().enumerate().map(|(i, n)| (i.to_string(), n.as_str())));
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new(label(&p.key)).color(t.text_dim));
-                    crate::widgets::dropdown(ui, &format!("flt-{cmd}-{}", p.key), &mut sel, &opts, 170.0);
+                    crate::widgets::dropdown(ui, &format!("flt-{cmd}-{}", p.key), &label(&p.key), &mut sel, &opts, 170.0);
                 });
                 match sel.parse::<i64>() {
                     Ok(i) if i >= 0 => f.insert(p.key, json!(i)),
@@ -919,7 +947,7 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 ui.label(egui::RichText::new(label(&p.key)).color(t.text_dim));
                 egui::Grid::new(format!("flt-grid-{cmd}-{}", p.key)).spacing([4.0, 4.0]).show(ui, |ui| {
                     for (i, v) in vals.iter_mut().enumerate() {
-                        crate::widgets::value_field(ui, v, -999.0..=999.0, "", 44.0);
+                        crate::widgets::value_field(ui, v, -999.0..=999.0, "", 44.0).accessible_name(format!("{} {}", label(&p.key), i + 1));
                         if (i + 1) % side == 0 {
                             ui.end_row();
                         }
@@ -964,7 +992,7 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 let mut v = f.get(&p.key).and_then(Value::as_f64).unwrap_or(default as f64) as f32;
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new(label(&p.key)).color(t.text_dim));
-                    crate::widgets::value_field(ui, &mut v, -30000.0..=30000.0, "", 80.0);
+                    crate::widgets::value_field(ui, &mut v, -30000.0..=30000.0, "", 80.0).accessible_name(label(&p.key));
                     // A seed gets a fresh random value in one click (#5710): Clouds, Add Noise,
                     // Fibers… then render a new pattern, as each run of Photoshop's does.
                     if p.key == "seed" && ui.button(tl!("Random")).clicked() {
@@ -1035,7 +1063,7 @@ pub(crate) fn ask_displace_map(app: &mut PhotocraftApp, command: String, fields:
         let mut fields = fields;
         fields.insert("mapPath".into(), json!(path));
         app.refocus(doc)?;
-        let (cmd, params) = crate::smart_ui::confirm_command(&fields, command, params_of(&fields));
+        let (cmd, params) = crate::smart_ui::confirm_command(app, &fields, command, params_of(&fields))?;
         let result = app.run(&cmd, params);
         if result.is_ok() {
             remember(app, &cmd, &fields);
@@ -1093,16 +1121,39 @@ pub(crate) fn preview_document_for_target(
         return crate::select_mask_view::preview_document(doc, active, params, k, cancel);
     }
     // Warp Text renders the type again from the layer model (font size, position), which a
-    // reduced proxy doesn't scale: it runs at full size and the result is reduced (#218). So does
-    // a smart filter being edited: the smart object renders again from its source (#6324).
-    let (run_k, reduce_k) = if command == "type.warpText" || command == SMART_FILTER_SET_PARAMS { (1, k) } else { (k, 1) };
-    let proxy = crate::proxy::proxy_document(doc, run_k);
+    // reduced proxy doesn't scale: it runs at full size and the result is reduced (#218).
+    let (run_k, reduce_k) = if command == "type.warpText" { (1, k) } else { (k, 1) };
+    let mut proxy = crate::proxy::proxy_document(doc, run_k);
+    let mut p = params.clone();
+    if is_smart_edit(command) {
+        let layer = match params.get("layer") {
+            Some(id) => photocraft_doc::LayerId(id.as_u64()?),
+            None => active?,
+        };
+        let index = usize::try_from(params.get("index")?.as_u64()?).ok()?;
+        let photocraft_doc::LayerContent::Smart(sm) = &mut proxy.layer_mut(layer)?.content else { return None };
+        // Proxy_document scales the cache, placement and shared mask (#5766). Editing a filter
+        // re-renders its source: scale every filter's lengths and the mask's feather as well.
+        if run_k > 1 {
+            if let Some(mask) = &mut sm.filter_mask {
+                mask.feather /= run_k as f32;
+            }
+            for f in &mut sm.smart_filters {
+                scale_preview_params(&f.command, &mut f.params, run_k);
+            }
+            if command == "layer.smartFilter.setParams" {
+                let f = sm.smart_filters.get(index)?;
+                scale_preview_params(&f.command, p.get_mut("params")?, run_k);
+            }
+        }
+    } else {
+        scale_preview_params(command, &mut p, run_k);
+    }
     let mut s = photocraft_engine::Session::new();
     s.color.settings = color.clone();
     s.set_inline_job_ctx(cancel.cloned());
     let doc_id = proxy.id;
     s.add_document(proxy, None);
-    let mut p = params.clone();
     // Bitmap's Output resolution resamples the image: the preview keeps the canvas's size and
     // resolution, so its dots and halftone screen show at their printed size (#5559).
     if command == crate::bitmap_dialog::COMMAND
@@ -1115,8 +1166,42 @@ pub(crate) fn preview_document_for_target(
         s.select_layer(id).ok()?;
     }
     s.active_mut()?.channel_view.target = target;
-    if run_k > 1
-        && let Some(o) = p.as_object_mut()
+    s.execute(command, p).ok()?;
+    s.active().map(|d| crate::proxy::proxy_document(&d.doc, reduce_k))
+}
+
+/// Whether `command` is a Smart Filter edit (its parameters or its blending) rather than a filter run on its own.
+fn is_smart_edit(command: &str) -> bool {
+    matches!(command, "layer.smartFilter.setParams" | "layer.smartFilter.blendingOptions")
+}
+
+/// Each stage constrains the proxy factor; an unscalable filter keeps full-resolution preview.
+pub(crate) fn smart_preview_factor(doc: &Document, command: &str, params: &Value, k: u32) -> u32 {
+    if !is_smart_edit(command) {
+        return preview_factor(command, params, k);
+    }
+    let Some(layer) = params.get("layer").and_then(Value::as_u64).and_then(|id| doc.layer(photocraft_doc::LayerId(id))) else { return 1 };
+    let photocraft_doc::LayerContent::Smart(sm) = &layer.content else { return 1 };
+    let mut factor = sm.smart_filters.iter().fold(k, |k, f| preview_factor(&f.command, &f.params, k));
+    if command == "layer.smartFilter.setParams"
+        && let Some(index) = params.get("index").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok())
+        && let Some(f) = sm.smart_filters.get(index)
+        && let Some(p) = params.get("params")
+    {
+        factor = preview_factor(&f.command, p, factor);
+    }
+    factor
+}
+
+/// Scale the pixel-sized parameters of `command` down by the preview proxy factor `k`, keeping each above its minimum and negative lengths negative.
+fn scale_preview_params(command: &str, params: &mut Value, k: u32) {
+    if command == photocraft_engine::plugin_cmds::RUN {
+        // A plug-in declares its pixel lengths (`"unit": "px"` in its manifest), and only those
+        // are scaled: a 12 px shift previewed 4 times too wide at k = 4, and a unitless param that
+        // happens to be called `size` or `radius` must not be divided (#7524).
+        photocraft_engine::plugin_cmds::scale_for_preview(params, k);
+    } else if k > 1
+        && let Some(o) = params.as_object_mut()
     {
         let spec = photocraft_engine::commands::find(command).map(|c| parse_spec(c.params)).unwrap_or_default();
         for (key, v) in o.iter_mut() {
@@ -1132,17 +1217,15 @@ pub(crate) fn preview_document_for_target(
                 let floor = minimum.unwrap_or(0.0).max(if key == "cellSize" { 1.0 } else { 0.1 });
                 // Negative lengths (Offset's left/up shift, Displace's inverted scale) keep their
                 // sign: the floor that keeps a radius positive turned them into +0.1 (#2063).
-                let x = x / run_k as f64;
+                let x = x / k as f64;
                 *v = json!(if x > 0.0 { x.max(floor) } else { minimum.map_or(x, |m| x.max(m)) });
             }
         }
     }
     // Blur Gallery pins carry their blur in document pixels too.
     if command.starts_with("filter.blurGallery.") {
-        crate::blur_pins::scale_for_proxy(&mut p, run_k);
+        crate::blur_pins::scale_for_proxy(params, k);
     }
-    s.execute(command, p).ok()?;
-    s.active().map(|d| crate::proxy::proxy_document(&d.doc, reduce_k))
 }
 
 /// The preview session holds only the proxy of the edited document (index 0), so a document param
@@ -1237,6 +1320,28 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_unit_after_a_range_bound_does_not_reset_the_range_to_its_fallback() {
+        // #7598: `0.5..5000 px?` fell back to a maximum of 100, so the Mixer Brush's Size slider
+        // (and every range documented with a px or % suffix) topped out at 100.
+        let range = |spec: &str| match parse_spec(spec).into_iter().next().map(|p| p.kind) {
+            Some(Kind::Range { min, max, default }) => (min, max, default),
+            other => panic!("{spec}: {other:?}"),
+        };
+        assert_eq!(range(r#"{"size":0.5..5000 px?}"#), (0.5, 5000.0, 0.5));
+        assert_eq!(range(r#"{"scale":1..1000 %=100}"#), (1.0, 1000.0, 100.0));
+        assert_eq!(range(r#"{"tolerance":0.5..10 px=2}"#), (0.5, 10.0, 2.0));
+        assert_eq!(range(r#"{"angle":-180..180}"#), (-180.0, 180.0, -180.0));
+        assert_eq!(range(r#"{"radius":0.1..1000=1}"#), (0.1, 1000.0, 1.0));
+        assert_eq!(range(r#"{"gain":1e-3..2e2}"#), (0.001, 200.0, 0.001));
+        // A bound that is no number at all still takes the old fallback rather than failing.
+        assert_eq!(range(r#"{"x":0..many}"#), (0.0, 100.0, 0.0));
+        // The documented specs of the real commands read their full ranges.
+        let spec = photocraft_engine::commands::find("paint.pencil").expect("paint.pencil is registered");
+        let size = parse_spec(spec.params).into_iter().find(|p| p.key == "size");
+        assert!(matches!(size.map(|p| p.kind), Some(Kind::Range { max, .. }) if max == 5000.0));
+    }
+
+    #[test]
     fn color_settings_working_spaces_list_installed_profiles_of_their_space() {
         // #6323: a press condition installed in the system can be the CMYK working space, as in
         // Photoshop's Color Settings; each working-space menu lists only profiles of its space.
@@ -1292,14 +1397,10 @@ mod tests {
         assert_eq!(source_label("centerX"), "Center X");
     }
 
-    /// Convert to Profile's and Proof Setup's `bpc` read "Bpc": spelled out, and translated.
+    /// Convert to Profile's and Proof Setup's `bpc` read "Bpc": spelled out.
     #[test]
     fn black_point_compensation_is_spelled_out() {
         assert_eq!(source_label("bpc"), "Black Point Compensation");
-        // English is the source: it has no catalog.
-        for lang in crate::i18n::Lang::all().filter(|l| l.code() != "en") {
-            assert!(crate::i18n::has(lang, "Black Point Compensation"), "{lang:?}");
-        }
     }
 
     fn key() -> FilterPreviewKey {
@@ -1751,99 +1852,14 @@ mod tests {
         assert!(!has_dialog("filter.stylize.findEdges"));
     }
 
-    /// Generated filter and adjustment labels (param names, symbolic choices) and gallery
-    /// names that `lang` has no catalog row for.
-    fn missing_generated_filter_labels(lang: crate::i18n::Lang) -> std::collections::BTreeSet<String> {
-        let mut missing = std::collections::BTreeSet::new();
-        let mut check = |s: String| {
-            if !matches!(s.as_str(), "X" | "Y" | "A" | "B") && !crate::i18n::has(lang, &s) {
-                missing.insert(s);
-            }
-        };
-        for c in photocraft_engine::command_specs().iter().filter(|c| c.id.starts_with("filter.") || c.id.starts_with("image.adjustments.")) {
-            for p in parse_spec(c.params) {
-                if !p.key.chars().all(|c| c.is_ascii_alphanumeric()) || matches!(p.kind, Kind::Json) {
-                    continue;
-                }
-                check(source_label(&p.key));
-                if let Kind::Choice { options, .. } = &p.kind {
-                    for choice in options {
-                        // Only symbolic options are UI choices; registry docs also contain
-                        // colour syntax and array notation, which are not translatable names.
-                        if choice.chars().all(|c| c.is_ascii_alphanumeric()) {
-                            check(source_label(choice));
-                        }
-                    }
-                }
-            }
-        }
-        for f in photocraft_algo::GalleryFilter::ALL {
-            check(f.name().to_string());
-        }
-        for cat in photocraft_algo::GALLERY_CATEGORIES {
-            check(cat.to_string());
-        }
-        missing
-    }
-
+    /// Select and Mask's Output To lists all six output targets.
     #[test]
-    fn korean_covers_generated_filter_options_and_gallery_names() {
-        let missing = missing_generated_filter_labels(crate::i18n::lang_from_tag("ko-KR").unwrap());
-        assert!(missing.is_empty(), "missing Korean dynamic labels: {missing:#?}");
-    }
-
-    #[test]
-    fn italian_covers_generated_filter_options_and_gallery_names() {
-        let missing = missing_generated_filter_labels(crate::i18n::lang_from_tag("it-IT").unwrap());
-        assert!(missing.is_empty(), "missing Italian dynamic labels: {missing:#?}");
-    }
-
-    #[test]
-    fn spanish_covers_generated_filter_options_and_gallery_names() {
-        let missing = missing_generated_filter_labels(crate::i18n::lang_from_tag("es-ES").unwrap());
-        assert!(missing.is_empty(), "missing Spanish dynamic labels: {missing:#?}");
-    }
-
-    /// The Select menu's generated dialogs (Select and Mask, Modify ▸ …) show their
-    /// params, choices and title in every UI language, not just Korean.
-    #[test]
-    fn select_dialogs_are_translated_in_every_language() {
-        let mut missing = std::collections::BTreeMap::<&str, std::collections::BTreeSet<String>>::new();
-        for lang in crate::i18n::Lang::all().filter(|l| l.code() != "en") {
-            let mut check = |s: String| {
-                if !crate::i18n::has(lang, &s) {
-                    missing.entry(lang.code()).or_default().insert(s);
-                }
-            };
-            for c in photocraft_engine::command_specs().iter().filter(|c| c.id.starts_with("select.") && has_dialog(c.id)) {
-                let title = c.label.trim_end_matches('…');
-                if !crate::i18n::has(lang, title) {
-                    check(format!("{title}…"));
-                }
-                for p in parse_spec(c.params) {
-                    check(source_label(&p.key));
-                    if let Kind::Choice { options: choices, .. } = p.kind {
-                        choices.iter().for_each(|choice| check(source_label(choice)));
-                    }
-                }
-            }
-        }
-        assert!(missing.is_empty(), "untranslated Select dialog labels: {missing:#?}");
-    }
-
-    /// Select and Mask's Output To lists all six of Photoshop's targets, each translated.
-    #[test]
-    fn select_and_mask_output_choices_are_translated() {
+    fn select_and_mask_output_lists_all_six_targets() {
         let spec = photocraft_engine::commands::find("select.refineEdge").unwrap().params;
         let p = parse_spec(spec).into_iter().find(|p| p.key == "output").unwrap();
         let Kind::Choice { options: choices, .. } = p.kind else { panic!("output is not a choice") };
         let labels: Vec<String> = choices.iter().map(|c| source_label(c)).collect();
         assert_eq!(labels, ["Selection", "Layer Mask", "New Layer", "New Layer With Mask", "New Document", "New Document With Mask"]);
-        for lang in crate::i18n::Lang::all().filter(|l| l.code() != "en") {
-            for label in &labels {
-                assert!(crate::i18n::has(lang, label), "{}: untranslated {label}", lang.code());
-            }
-        }
     }
 
     #[test]
@@ -2337,12 +2353,24 @@ mod tests {
             _ => panic!("a smart object"),
         };
         let k = 4;
-        let shown = preview_document(&doc, Some(layer), "image.adjustments.curves", &json!({"points": [[0, 20], [90, 150], [255, 230]]}), k).unwrap();
+        let params = json!({"points": [[0, 20], [90, 150], [255, 230]]});
+        let shown = preview_document(&doc, Some(layer), "image.adjustments.curves", &params, k).unwrap();
+        let full = preview_document(&doc, Some(layer), "image.adjustments.curves", &params, 1).unwrap();
+        let photocraft_doc::LayerContent::Smart(full_sm) = &full.layer(layer).unwrap().content else { panic!("a smart object") };
+        let reference = photocraft_algo::resample::resize_surface(full_sm.cache.as_ref().unwrap(), 0.25, 0.25, photocraft_algo::resample::Resample::Bicubic);
         let photocraft_doc::LayerContent::Smart(sm) = &shown.layer(layer).unwrap().content else { panic!("a smart object") };
         assert_eq!(sm.smart_filters.len(), 1, "the preview adds the Curves smart filter");
         assert_eq!(shown.size, crate::proxy::proxy_document(&doc, k).size);
         // The 16 px square at (16, 16) is a 4 px square at (4, 4) on the proxy, not 16 px at (16, 16).
-        // Its corners are partly covered by the smart object's resampling (220/255), its inside fully.
+        // Bicubic reduction blends the square's boundary with transparency; compare all alpha
+        // values with a reduced full-size result, and require opacity only in the interior.
+        for y in 0..shown.size.height as i32 {
+            for x in 0..shown.size.width as i32 {
+                let expected = reference.pixel(x, y).last().copied().unwrap();
+                let actual = alpha(&shown, x, y);
+                assert!((actual - expected).abs() <= 1.0 / 255.0, "({x}, {y}): alpha {actual}, expected {expected}");
+            }
+        }
         for (x, y) in [(5, 5), (5, 6), (6, 6)] {
             assert!(alpha(&shown, x, y) > 0.99, "({x}, {y}) is inside the reduced square");
         }

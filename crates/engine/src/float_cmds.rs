@@ -12,11 +12,12 @@
 //!   which puts it back and then returns to the chosen state.
 //!
 //! While floating, the document is unchanged; [`displayed`] gives the document with the piece at
-//! its offset, for the canvas. The selection stays where it was until the drop.
+//! its offset, for the canvas. The selection stays where it was until the drop, when it becomes
+//! the piece's outline ([`CutParts::outline`]); the canvas shows that outline from the start.
 
 use std::sync::Arc;
 
-use photocraft_color::PixelFormat;
+use photocraft_color::{ColorMode, PixelFormat};
 use photocraft_doc::{Document, LayerContent, LayerId};
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
@@ -33,6 +34,11 @@ pub struct CutParts {
     rest: Surface,
     piece: Surface,
     piece_bounds: photocraft_geom::Rect,
+    /// The selection the moved pixels take, unmoved: the alpha the piece took, the selection
+    /// limited to the layer's transparency (Photoshop shrinks the marching ants to the piece as the
+    /// drag starts, #7538). `None` keeps the selection: a mask has no transparency, and an empty
+    /// piece no outline.
+    outline: Option<Surface>,
     /// The pieces are the layer's mask (`"target":"mask"`), not its pixels.
     mask: bool,
 }
@@ -60,11 +66,23 @@ impl CutParts {
         let base = if mask || fmt == with_alpha { surf.clone() } else { surf.convert(with_alpha) };
         let mut rest = base.clone();
         let mut piece = Surface::new(with_alpha);
+        let mut outline: Option<Surface> = None;
         let fill = !copy && (mask || doc.is_background(layer));
         // A mask's untouched pixels (its default, e.g. white) move too, so take the whole canvas.
         let b = sel.content_bounds().intersect(&if mask { doc.bounds() } else { base.content_bounds() });
         if !b.is_empty() {
             piece = cut_piece(&base, sel, b, with_alpha)?;
+            // The moved pixels' selection is what they took with them: the alpha the piece
+            // holds, which is the selection limited to the layer's own coverage (Photoshop's
+            // marching ants hug the piece as the drag starts, #7538). A mask has no outline.
+            if !mask {
+                let n = with_alpha.channels();
+                let cover: Vec<f32> = piece.try_read_region(b)?.chunks_exact(n).filter_map(|p| p.last().copied()).collect();
+                let mut o = Surface::new(PixelFormat::new(ColorMode::Grayscale, sel.format().sample, false));
+                o.try_write_region(b, &cover)?;
+                o.prune();
+                outline = Some(o);
+            }
             if fill {
                 let opaque_bg = [background[0], background[1], background[2], 1.0];
                 crate::pixels::try_fill_surface(&mut rest, b, opaque_bg, Some(sel), false)?;
@@ -76,7 +94,13 @@ impl CutParts {
             }
         }
         let piece_bounds = piece.content_bounds();
-        Ok(Self { layer, rest, piece, piece_bounds, mask })
+        let outline = outline.filter(|o| !o.content_bounds().is_empty());
+        Ok(Self { layer, rest, piece, piece_bounds, outline, mask })
+    }
+
+    /// The selection the moved pixels take, where they were cut (`None`: the selection stays).
+    pub fn outline(&self) -> Option<&Surface> {
+        self.outline.as_ref()
     }
 
     /// `doc` with the piece moved by whole pixels (dx, dy) over the cut-out layer.
@@ -214,6 +238,9 @@ pub struct Floating {
     pub offset: (i32, i32),
     pub revision: u64,
     pub parts: Arc<CutParts>,
+    /// The piece has been moved at least once, even if it is back where it was cut (nudged away
+    /// and back): its selection is the moved pixels' then, as each of Photoshop's nudges leaves it.
+    pub moved: bool,
 }
 
 /// The floating piece of `st`, if it is still valid (the document hasn't changed under it).
@@ -264,15 +291,17 @@ fn float(s: &mut Session, p: &Value) -> Result<Value> {
     let st = s.active_mut().ok_or(EngineError::NoDocument)?;
     if floating(st).is_none() {
         let layer = st.active_layer.ok_or_else(|| EngineError::Other("no active layer".into()))?;
-        let parts = CutParts::new(&st.doc, layer, copy, background, crate::commands::is_mask_target(p))?;
-        st.floating = Some(Floating { layer, offset: (0, 0), revision: st.revision, parts: Arc::new(parts) });
+        let parts = CutParts::new(&st.doc, layer, copy, background, crate::channel_cmds::target_of(p) == crate::channel_cmds::Target::Mask)?;
+        st.floating = Some(Floating { layer, offset: (0, 0), revision: st.revision, parts: Arc::new(parts), moved: false });
     }
     let f = st.floating.as_mut().ok_or(EngineError::NoDocument)?;
     f.offset = (f.offset.0.saturating_add(dx), f.offset.1.saturating_add(dy));
+    f.moved |= (dx, dy) != (0, 0);
     Ok(json!({"layer": f.layer.0, "offset": [f.offset.0, f.offset.1]}))
 }
 
-/// Drop the floating piece into its layer and move the selection with it (one history step).
+/// Drop the floating piece into its layer and move the selection with it, shrunk to the piece's
+/// outline (one history step).
 pub fn drop_floating(s: &mut Session) -> Result<Value> {
     let Some(st) = s.active_mut() else { return Ok(json!({"dropped": false})) };
     let Some(f) = floating(st).cloned() else {
@@ -282,11 +311,21 @@ pub fn drop_floating(s: &mut Session) -> Result<Value> {
     st.floating = None;
     let (dx, dy) = f.offset;
     if (dx, dy) == (0, 0) {
+        // Back where it was cut: the pixels are as they were. A piece that never moved (a click)
+        // changes nothing; one nudged away and back keeps the moved pixels' selection (#7538).
+        if let Some(outline) = f.parts.outline().filter(|_| f.moved) {
+            let outline = outline.clone();
+            s.edit("Move", |doc, _| {
+                doc.selection = Some(outline);
+                Ok(())
+            })?;
+        }
         return Ok(json!({"dropped": true, "offset": [0, 0]}));
     }
     s.edit("Move", |doc, _| {
         f.parts.place(doc, dx, dy)?;
-        doc.selection = doc.selection.as_ref().map(|sel| photocraft_algo::resample::translate_surface(sel, dx, dy));
+        let sel = f.parts.outline().or(doc.selection.as_ref());
+        doc.selection = sel.map(|sel| photocraft_algo::resample::translate_surface(sel, dx, dy));
         Ok(())
     })?;
     Ok(json!({"dropped": true, "offset": [dx, dy]}))
@@ -294,7 +333,8 @@ pub fn drop_floating(s: &mut Session) -> Result<Value> {
 
 /// Commands that leave a floating piece floating: its own, and ones that don't touch documents.
 fn keeps_floating(id: &str) -> bool {
-    matches!(id, "select.float" | "select.drop") || ["view.", "window.", "help.", "prefs."].iter().any(|p| id.starts_with(p))
+    matches!(id, "select.float" | "select.drop" | "brush.mixer.sample" | "brush.mixer.load" | "brush.mixer.clean")
+        || ["view.", "window.", "help.", "prefs."].iter().any(|p| id.starts_with(p))
 }
 
 /// Before any command (`Session::dispatch`): Undo puts a floating piece back (and is used up:
@@ -307,7 +347,7 @@ pub(crate) fn before_command(s: &mut Session, id: &str) -> Result<Option<Value>>
     }
     match id {
         // Edit › Undo and the History panel's Step Backward step back over the move itself.
-        "edit.undo" | "edit.stepBackward" | "history.stepBackward" => {
+        "edit.undo" | "history.stepBackward" => {
             st.floating = None;
             Ok(Some(json!({"floating": "returned"})))
         }
@@ -342,7 +382,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Drop Floating Selection",
             menu: &[],
             shortcut: None,
-            params: r##"{} → {dropped, offset} (drops the floating piece into its layer and moves the selection with it: one history step)"##,
+            params: r##"{} → {dropped, offset} (drops the floating piece into its layer and moves the selection with it, shrunk to the moved pixels: the selection limited to where the layer has pixels, as in Photoshop; a mask or an empty piece keeps the selection's shape; one history step)"##,
             enabled: |s| s.active().map(|_| ()).ok_or_else(|| "no document".into()),
             journal: true,
             run: |s, _| drop_floating(s),

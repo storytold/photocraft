@@ -19,9 +19,12 @@ pub mod adjust_dialog;
 pub mod adjust_editors;
 pub mod adjust_preview;
 pub mod adjust_ui;
+mod align_bar;
 mod alt_grab;
 pub mod analysis_ui;
 pub mod anchor_tools;
+mod ants;
+pub mod apply_color;
 pub mod artboard_tool;
 pub mod artboard_ui;
 pub(crate) mod background_redraw;
@@ -43,6 +46,7 @@ pub mod caf_ui;
 pub(crate) mod cam_preview;
 mod cam_transform;
 mod camera_raw_detail_ui;
+mod camera_raw_gpu;
 mod camera_raw_preview_ui;
 mod camera_raw_scope_ui;
 pub mod camera_raw_ui;
@@ -57,11 +61,13 @@ pub mod channels_panel;
 pub mod chrome_ui;
 pub mod cjk_fonts;
 pub mod clip_line_ui;
+pub mod color_panel_ui;
 pub mod color_picker_ui;
 pub mod color_range_ui;
 pub mod color_table_ui;
 pub mod comps_ui;
 pub mod control;
+mod control_click;
 pub mod corner_radius;
 pub mod credits;
 pub mod crop_mode;
@@ -91,6 +97,7 @@ pub mod eraser_ui;
 pub mod export_dialog;
 pub mod eyedropper_ui;
 pub mod field_tab;
+pub mod field_wheel;
 pub mod file_dialog;
 pub mod file_open;
 pub mod file_ui;
@@ -109,12 +116,14 @@ pub mod gpu_status;
 pub mod gradient_ui;
 pub mod guide_layout_ui;
 pub mod guide_select;
+pub mod histogram_panel;
 pub mod history_menu_ui;
 pub mod hold_keys;
 pub mod i18n;
 mod icon_data;
 pub mod icons;
 pub mod jobs_ui;
+pub mod jpeg_options_ui;
 pub mod kys_import;
 pub mod lasso_ui;
 pub(crate) mod last_brush;
@@ -159,6 +168,7 @@ mod onion_skin;
 mod opacity_keys;
 pub mod open_prompt;
 pub mod outline;
+mod page_keys;
 pub mod paint_mouse;
 pub mod palette;
 mod panel_docking;
@@ -182,25 +192,32 @@ pub mod proxy;
 pub mod puppet_ui;
 pub mod quick_pick;
 pub mod rasterize_prompt;
+pub mod replace_prompt;
 pub mod retouch_ui;
 mod rgb_histogram;
 pub mod rotate_view;
 pub mod rulers;
 pub mod screen_picker;
+pub mod screenshot;
 pub mod scrollbars;
 mod scrub_wrap;
 pub mod select_mask_view;
 pub mod served_fonts;
 pub mod shape_dialog;
 pub(crate) mod shape_fill_ui;
+mod shape_gradient_ui;
+mod shape_options;
+mod shape_paint_ui;
 pub mod shape_stroke_ui;
 pub mod shortcut_dispatch;
 pub mod shortcuts;
 mod single_line_drag;
 mod sizing;
 pub mod slice_ui;
+pub mod smart_filter_dialog;
 pub mod smart_ui;
 pub mod snap_ui;
+pub mod snapshot_dialog;
 pub(crate) mod solid_fill_ui;
 pub mod spring_tools;
 pub mod stack_dialog;
@@ -215,6 +232,7 @@ pub mod swatches_ui;
 pub mod symmetry_ui;
 mod tab_strip;
 pub mod targa_options_ui;
+pub mod texel_guard;
 pub mod text_field_menu;
 pub mod theme;
 pub mod tiff_options_ui;
@@ -236,6 +254,7 @@ mod type_font_preview;
 pub mod type_panels_ui;
 pub mod type_tool;
 mod type_transform;
+pub mod updates_ui;
 mod variables_ui;
 pub mod vector_ui;
 pub mod view_cmds;
@@ -249,6 +268,7 @@ pub mod workspace_ui;
 pub mod zoom_hold;
 pub mod zoom_levels;
 pub mod zoom_tool;
+pub mod zoom_window_fit;
 
 use std::collections::HashMap;
 use std::sync::mpsc::{Receiver, Sender};
@@ -262,13 +282,72 @@ pub use file_dialog::{FileDialogAnswer, FileDialogFn, FileDialogReply, FileDialo
 pub use file_open::OsEvent;
 pub use state::{Tool, UiState};
 
+/// The error a save gets while another save waits on its format prompt.
+pub(crate) const SAVE_OPTIONS_OPEN: &str = "Answer the TIFF, Targa, DDS or JPEG Options before starting another save";
+
+/// The format answers a save takes instead of asking: the Targa bits per pixel (`"tgaBits"`),
+/// the DDS options (`"ddsCompression"`, `"ddsMipmaps"`) and JPEG Options (`"quality"` 0–12,
+/// `"jpegFormat"`). `None` asks in Save As and takes the default in automation saves, which never
+/// prompt.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct FormatChoices {
+    pub tga_bits: Option<photocraft_io::TgaBits>,
+    pub dds: Option<photocraft_io::DdsOptions>,
+    pub jpeg: Option<jpeg_options_ui::JpegChoice>,
+}
+
+impl FormatChoices {
+    /// The answers in command or control call `cmd`'s params; a bad value is an error.
+    pub fn from_params(params: &Value, cmd: &str) -> Result<Self, String> {
+        Ok(FormatChoices {
+            tga_bits: targa_options_ui::bits_param(params, cmd)?,
+            dds: dds_options_ui::options_param(params, cmd)?,
+            jpeg: jpeg_options_ui::choice_param(params, cmd)?,
+        })
+    }
+
+    /// The answers in a recorded save step, read as leniently as the engine command that may have
+    /// recorded it (see [`jpeg_options_ui::recorded_choice`]).
+    pub(crate) fn from_step(params: &Value, cmd: &str) -> Result<Self, String> {
+        Ok(FormatChoices {
+            tga_bits: targa_options_ui::bits_param(params, cmd)?,
+            dds: dds_options_ui::options_param(params, cmd)?,
+            jpeg: jpeg_options_ui::recorded_choice(params, cmd)?,
+        })
+    }
+
+    /// The export settings with these answers applied.
+    pub fn apply(self, settings: ExportSettings) -> ExportSettings {
+        let settings = ExportSettings { tga_bits: self.tga_bits.or(settings.tga_bits), dds: self.dds.unwrap_or(settings.dds), ..settings };
+        match self.jpeg {
+            Some(j) => j.apply(settings),
+            None => settings,
+        }
+    }
+
+    /// Adds the answers to a recorded save step.
+    pub(crate) fn record(self, step: &mut Value) {
+        if let Some(bits) = self.tga_bits {
+            step["tgaBits"] = bits.bits().into();
+        }
+        if let Some(dds) = self.dds {
+            dds_options_ui::record(dds, step);
+        }
+        if let Some(j) = self.jpeg {
+            j.record(step);
+        }
+    }
+}
+
 /// Decode a file: (document, warnings about anything approximated or dropped).
-pub type ImportFn = Box<dyn Fn(&str, &[u8], usize) -> Result<(Document, Vec<String>), String>>;
+pub type ImportFn = Box<dyn Fn(&str, &[u8], &photocraft_io::ImportOptions) -> Result<(Document, Vec<String>), String>>;
 /// Encoder settings chosen in Export As (the file format comes from the name's extension).
 #[derive(Clone, Debug, PartialEq)]
 pub struct ExportSettings {
     /// JPEG quality 1–100 (None = codec default).
     pub jpeg_quality: Option<u8>,
+    /// JPEG Options › Format Options: baseline, baseline optimized or progressive.
+    pub jpeg_format: photocraft_codecs::JpegFormat,
     /// WebP: lossless (VP8L) rather than lossy (VP8 at [`Self::webp_quality`]).
     pub webp_lossless: bool,
     /// Lossy WebP quality 1–100 (None = codec default).
@@ -302,12 +381,16 @@ pub struct ExportSettings {
     pub document_path: Option<std::path::PathBuf>,
     /// Native save cache owned by the open document; exports without one remain one-shot.
     pub pcraft_cache: Option<photocraft_io::PcraftExportCache>,
+    /// Read and embed the files linked smart objects name ([`photocraft_io::ExportOptions::read_linked_files`]).
+    /// Off for automation saves, which are granted only their target.
+    pub read_linked_files: bool,
 }
 
 impl Default for ExportSettings {
     fn default() -> Self {
         ExportSettings {
             jpeg_quality: None,
+            jpeg_format: photocraft_codecs::JpegFormat::Baseline,
             webp_lossless: true,
             webp_quality: None,
             tiff_layers: true,
@@ -320,6 +403,7 @@ impl Default for ExportSettings {
             embed_metadata: true,
             document_path: None,
             pcraft_cache: None,
+            read_linked_files: true,
         }
     }
 }
@@ -332,6 +416,7 @@ impl ExportSettings {
         if let Some(q) = self.jpeg_quality {
             opts.encode.jpeg_quality = q;
         }
+        opts.encode.jpeg_format = self.jpeg_format;
         opts.encode.webp_lossless = self.webp_lossless;
         if let Some(q) = self.webp_quality {
             opts.encode.webp_quality = q;
@@ -346,38 +431,8 @@ impl ExportSettings {
         opts.psd_maximize_compatibility = self.psd_maximize_compatibility;
         opts.document_path = self.document_path.clone();
         opts.pcraft_cache = self.pcraft_cache.clone();
+        opts.read_linked_files = self.read_linked_files;
         opts
-    }
-}
-
-/// The format answers a save takes instead of asking: the Targa bits per pixel and the DDS options
-/// (`"tgaBits"`, `"ddsCompression"`, `"ddsMipmaps"`). `None` asks in Save As and takes the
-/// default in automation saves, which never prompt.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct FormatChoices {
-    pub tga_bits: Option<photocraft_io::TgaBits>,
-    pub dds: Option<photocraft_io::DdsOptions>,
-}
-
-impl FormatChoices {
-    /// The answers in command `cmd`'s params; a bad value is an error.
-    pub fn from_params(params: &Value, cmd: &str) -> Result<Self, String> {
-        Ok(FormatChoices { tga_bits: targa_options_ui::bits_param(params, cmd)?, dds: dds_options_ui::options_param(params, cmd)? })
-    }
-
-    /// The export settings with these answers applied.
-    pub(crate) fn apply(self, settings: ExportSettings) -> ExportSettings {
-        ExportSettings { tga_bits: self.tga_bits, dds: self.dds.unwrap_or(settings.dds), ..settings }
-    }
-
-    /// Adds the answers to a recorded save step.
-    fn record(self, step: &mut Value) {
-        if let Some(bits) = self.tga_bits {
-            step["tgaBits"] = bits.bits().into();
-        }
-        if let Some(dds) = self.dds {
-            dds_options_ui::record(dds, step);
-        }
     }
 }
 
@@ -416,6 +471,8 @@ pub struct FileStamp {
 }
 /// The [`FileStamp`] of the file at a path, `None` when it can't be read.
 pub type FileStampFn = Box<dyn Fn(&str) -> Option<FileStamp>>;
+/// Whether two paths name one entry in one folder on disk; false when either can't be read.
+pub type SameFileFn = Box<dyn Fn(&str, &str) -> bool>;
 /// Encode a document and write it to a path, reporting the stage to the job; returns the export
 /// warnings. Runs on a worker thread (see [`Services::save_file`]). It must call
 /// [`jobs_ui::SaveCtl::commit`] right before replacing the file, and write nothing if that fails.
@@ -528,6 +585,11 @@ pub struct Services {
     /// Size and modification time of a file (native); `None` on the web, where Save never
     /// writes back to a file.
     pub file_stamp: Option<FileStampFn>,
+    /// Whether two paths name one entry in one folder (native): a save dialog's answer and the
+    /// path the save writes to after Lowercase Extension, on a file system that ignores letter
+    /// case. A hard link is another entry. A save asks before replacing an entry it finds
+    /// different (`replace_prompt`).
+    pub same_file: Option<SameFileFn>,
     /// `write` only asks for the bytes to be kept (a browser download, which the user can
     /// cancel and which reports nothing back), so a save through it names the document but
     /// leaves its changes unsaved and the leave-page guard armed (#4962).
@@ -552,6 +614,8 @@ pub struct Services {
     /// Preferences ▸ General ▸ Beep When Done: the platform's default beep, played when a
     /// background job finishes successfully. `None` in the web build (and in tests).
     pub beep: Option<fn()>,
+    /// Starts a background check for published releases (desktop, outside Flatpak).
+    pub check_updates: Option<photocraft_engine::updates_cmds::CheckFn>,
     /// Files delivered asynchronously (web drag-and-drop): drained every frame and opened as
     /// documents.
     pub inbox: Option<Inbox>,
@@ -625,10 +689,6 @@ pub struct Services {
     pub quit: Option<QuitFn>,
 }
 
-/// A document histogram being computed off the UI thread: (document, revision, receiver of
-/// (document, compute ms, histograms)).
-pub(crate) type HistJob = (DocId, u64, std::sync::mpsc::Receiver<(DocId, f64, std::sync::Arc<tone::Histograms>)>);
-
 /// The Info panel's cached sample: pixel x, y, document revision and Eyedropper Sample Size.
 type InfoSampleKey = (i32, i32, u64, u32);
 
@@ -666,6 +726,9 @@ pub struct PhotocraftApp {
     /// A live stroke just committed with its own pixels: the canvas caches that showed it
     /// refresh only what it drew after the step they showed (`canvas::damage_since`).
     committed_stroke: Option<canvas::CommittedStroke>,
+    /// Whether the last retouching stroke's commit took the pixels its live stroke drew
+    /// (`"fromLive"`) instead of rendering the stroke again (`retouch_ui::finish_stroke`).
+    pub(crate) retouch_from_live: bool,
     /// Footprint trail of a retouching drag (see `stroke_trail`).
     trail: Option<stroke_trail::Trail>,
     /// Remove tool strokes waiting to be applied together (Remove after each stroke off), the
@@ -717,15 +780,20 @@ pub struct PhotocraftApp {
     /// This press began with ⌥ (Alt) held on a painting tool, so it samples colours instead of
     /// painting until it is released (`canvas::alt_eyedropper`, #417).
     pub(crate) alt_sampling: bool,
+    /// This press began with ⌥ (Alt) held on the Mixer Brush, so it loaded paint from the canvas
+    /// and paints nothing until it is released, even with ⌥ let go (`canvas::tool_event`).
+    pub(crate) mixer_sampling: bool,
     /// Caps Lock toggled on, read from the OS each frame (`services.caps_lock`): painting tools
     /// show the precise crosshair whatever the cursor preference (#1758).
     pub caps_lock: bool,
     /// The first digit of a two-digit opacity typed on the number keys (`opacity_keys`, #352).
     pub(crate) opacity_keys: opacity_keys::Pending,
     control_rx: Option<Receiver<ControlRequest>>,
-    pending_screenshots: Vec<(u64, Option<String>, Sender<ControlResponse>)>,
-    /// Screenshots not yet requested from the viewport: (token, earliest time in ms, frames seen).
-    queued_screenshots: Vec<(u64, f64, u32)>,
+    /// `ui.screenshot` requests: bounded admission, a weak-slot callback per issuance, monotonic
+    /// deadlines and a capture-time geometry epoch (see `screenshot.rs`).
+    captures: screenshot::Captures,
+    /// The custom Type tool's IME owner/generation/receipt tracker (`type_tool::sync_ime`).
+    pub(crate) type_ime: type_tool::ImeState,
     /// Control replies waiting for queued synthetic input to be processed.
     input_waiters: Vec<Sender<ControlResponse>>,
     /// Live (uncommitted) adjustment edit shown on canvas while a slider is dragged.
@@ -786,6 +854,7 @@ pub struct PhotocraftApp {
     /// Selection outline cache: (doc, revision, segments).
     /// Live filter preview (proxy document with the filter applied).
     pub(crate) filter_preview: Option<filter_dialog::FilterPreview>,
+    pub(crate) smart_filter_targets: smart_filter_dialog::Targets,
     #[cfg(not(target_arch = "wasm32"))]
     filter_preview_worker: filter_preview_worker::Worker,
     /// Full CPU canvas redraws running in the background, by document (#4024).
@@ -801,16 +870,37 @@ pub struct PhotocraftApp {
     pub(crate) live_adjust_preview: Option<adjust_preview::LiveAdjust>,
     /// Synthetic input events queued by automation (`ui.click`, `ui.key`, …), injected next frame.
     pub(crate) synthetic: Vec<egui::Event>,
+    /// The one synthetic batch currently being delivered.
+    ///
+    /// eframe preserves input appended by `raw_input_hook` across hidden (`update_logic_only`)
+    /// ticks, so draining another step every hidden tick would deliver several host iterations
+    /// as one burst. At most one batch is ever in flight; the next step waits for a pass.
+    synthetic_batch: Option<Vec<egui::Event>>,
+    /// A pass consumed the batch but returned before handling input (fonts not ready): put the
+    /// same events back on the next hook so the step is not lost. Cleared as soon as they are
+    /// re-appended, so two hidden ticks cannot deliver the same step twice.
+    synthetic_reinject: bool,
+    /// Document/focus identity the batch was created for. A batch queued against one document is
+    /// cancelled, not replayed, after the active document (including a switch away and back) or
+    /// the focus changes; an edit in the same document does not cancel it.
+    synthetic_snapshot: Option<SyntheticTarget>,
     /// True only while a frame is processing synthetic automation input. It
     /// makes shortcut- and dialog-triggered commands pass the same policy as
     /// direct control calls.
     pub(crate) automation_input: bool,
+    /// Action playbacks paused at a step dialog, by the token in that dialog's fields
+    /// ([`actions::RESUME`]): what to play next and the automation gate it paused under.
+    pub(crate) paused_playbacks: actions::PausedPlaybacks,
     /// Levels/Curves histogram cache: (document, adjustment layer, revision it is valid for).
     pub(crate) tone_hist: Option<(DocId, photocraft_doc::LayerId, u64, std::sync::Arc<tone::Histograms>)>,
-    /// Histogram panel cache: (document, revision, computed at ms, histograms).
-    pub(crate) doc_hist: Option<(DocId, u64, f64, std::sync::Arc<tone::Histograms>)>,
-    /// The document histogram being computed on a worker thread: (document, revision, receiver).
-    pub(crate) hist_job: Option<HistJob>,
+    /// Histogram panel: the document's histogram (`histogram_panel`).
+    pub(crate) doc_hist: Option<histogram_panel::PanelHist>,
+    /// Histogram panel: the histogram of the adjustment previewing on the canvas.
+    pub(crate) doc_hist_preview: Option<histogram_panel::PanelHist>,
+    /// The panel histogram being computed on a worker thread.
+    pub(crate) hist_job: Option<histogram_panel::HistJob>,
+    /// The (document, revision) an Uncached Refresh asked to count at cache level 1.
+    pub(crate) hist_uncached: Option<(DocId, u64)>,
     /// Free Transform preview (document without the moving pixels + their texture).
     pub(crate) transform_preview: Option<transform_tool::TransformPreview>,
     /// Move-tool ⇧/⌥ drag state (move_mods).
@@ -835,8 +925,9 @@ pub struct PhotocraftApp {
     /// A raw file just opened interactively, waiting for the open-time Camera Raw dialog (shown
     /// on the next frame, which has the egui context).
     pub(crate) pending_raw_open: Option<camera_raw_ui::RawOpen>,
-    /// The open-time re-develop (or its Camera Raw step) running in the background.
-    pub(crate) raw_redevelop: Option<camera_raw_ui::Redevelop>,
+    /// The open-time re-develops (or their Camera Raw steps) running in the background, one per
+    /// raw being opened.
+    pub(crate) raw_redevelop: Vec<camera_raw_ui::Redevelop>,
     /// Filter › Adaptive Wide Angle dialog (wide_angle_ui).
     pub(crate) wide_angle: Option<wide_angle_ui::WideAngleDialog>,
     /// ⌘Z history of each open parameter dialog (edit_history).
@@ -896,6 +987,13 @@ pub struct PhotocraftApp {
     /// When (in `egui::InputState::time`) to try saving unsaved work for recovery again after a
     /// failed attempt; the app closes only once it succeeded.
     window_recovery_retry: Option<f64>,
+    /// The render state the GPU canvas was built on, kept after it is dropped so Retry GPU can
+    /// build a new one on the same device (see `gpu_status::choose_recovery`, #6577).
+    gpu_render_state: Option<eframe::egui_wgpu::RenderState>,
+    /// Why the GPU canvas was dropped (see `gpu_status::fall_back`).
+    gpu_fault: Option<photocraft_gpu::Fault>,
+    /// Out-of-memory errors this session after which the GPU canvas was rebuilt by itself (#6564).
+    gpu_oom_retries: u32,
     /// Run once the first frames have rendered (see [`Self::on_started`]).
     started: Option<gpu_status::StartedHook>,
     /// Frame and canvas-upload timings (exposed via `ui.inspect`).
@@ -904,6 +1002,7 @@ pub struct PhotocraftApp {
     pub stroke_trace: stroke_trace::StrokeTrace,
     /// Preferences, autosave and snapping runtime state (see `prefs_ui`, `snap_ui`).
     pub(crate) prefs_rt: prefs_ui::Runtime,
+    pub(crate) updates_rt: updates_ui::Runtime,
     /// Close, Revert or Exit parked behind the unsaved-changes prompt (see `discard_ui`).
     pub(crate) discard: Option<discard_ui::Prompt>,
     /// The Open or Save dialog in progress, and the action waiting on it (see `file_dialog`).
@@ -918,6 +1017,8 @@ pub struct PhotocraftApp {
     pub(crate) disk_stamps: HashMap<photocraft_doc::DocId, (String, FileStamp)>,
     /// A save to an RGB Targa parked behind the Targa Options prompt (see `targa_options_ui`).
     pub(crate) targa_options: Option<targa_options_ui::Prompt>,
+    /// A save to a JPEG parked behind the JPEG Options prompt (see `jpeg_options_ui`).
+    pub(crate) jpeg_options: Option<jpeg_options_ui::Prompt>,
     /// A save to a DDS texture parked behind the DDS Options prompt (see `dds_options_ui`).
     pub(crate) dds_options: Option<dds_options_ui::Prompt>,
     /// Files read but not opened yet: the first waits on its profile prompt, the rest behind it
@@ -927,6 +1028,7 @@ pub struct PhotocraftApp {
     pub(crate) allow_close: bool,
     /// Pen pressure/tilt from the platform (see `stylus`).
     pub stylus: stylus::Stylus,
+    control_click: control_click::ControlClick,
     /// Run long commands and file opens as background jobs with progress and Cancel (#210; see
     /// `jobs_ui`). The desktop app turns it on; off (the default), everything runs inline as
     /// before, which tests and scripts rely on.
@@ -943,8 +1045,29 @@ pub struct PhotocraftApp {
     live_tokens: theme::live::LiveTokens,
 }
 
+/// The state a synthetic input batch was queued for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SyntheticTarget {
+    document: Option<screenshot::DocumentId>,
+    focus: Option<egui::Id>,
+}
+
+impl SyntheticTarget {
+    /// The document must be the same one in the same activation (a switch away and back is a
+    /// change); its revision is attribution only, so an edit does not cancel a queued step.
+    fn matches(self, other: Self) -> bool {
+        self.focus == other.focus
+            && match (self.document, other.document) {
+                (Some(a), Some(b)) => a.same_activation(b),
+                (None, None) => true,
+                _ => false,
+            }
+    }
+}
+
 impl PhotocraftApp {
-    pub fn new(session: Session, services: Services) -> Self {
+    pub fn new(mut session: Session, mut services: Services) -> Self {
+        session.updates.check = services.check_updates.take();
         let mut app = Self {
             session,
             ui: UiState::default(),
@@ -962,6 +1085,7 @@ impl PhotocraftApp {
             tool_override: None,
             live_stroke: None,
             committed_stroke: None,
+            retouch_from_live: false,
             trail: None,
             remove_pending: Vec::new(),
             remove_pending_target: None,
@@ -986,11 +1110,12 @@ impl PhotocraftApp {
             quick_pick: false,
             brush_resize_armed: false,
             alt_sampling: false,
+            mixer_sampling: false,
             caps_lock: false,
             opacity_keys: None,
             control_rx: None,
-            pending_screenshots: Vec::new(),
-            queued_screenshots: Vec::new(),
+            captures: screenshot::Captures::default(),
+            type_ime: type_tool::ImeState::default(),
             input_waiters: Vec::new(),
             live_adjust: None,
             frame: 0,
@@ -1018,6 +1143,7 @@ impl PhotocraftApp {
             proxy_uploaded: None,
             outline_cache: None,
             filter_preview: None,
+            smart_filter_targets: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             filter_preview_worker: Default::default(),
             redraws: Default::default(),
@@ -1026,7 +1152,11 @@ impl PhotocraftApp {
             adjust_preview: None,
             live_adjust_preview: None,
             synthetic: Vec::new(),
+            synthetic_batch: None,
+            synthetic_reinject: false,
+            synthetic_snapshot: None,
             automation_input: false,
+            paused_playbacks: Default::default(),
             channel_thumbs: None,
             channel_views: HashMap::new(),
             type_layout: None,
@@ -1058,31 +1188,39 @@ impl PhotocraftApp {
             gradient: Default::default(),
             camera_raw: None,
             pending_raw_open: None,
-            raw_redevelop: None,
+            raw_redevelop: Vec::new(),
             wide_angle: None,
             dialog_edits: Default::default(),
             pending_after_prompt: None,
             tone_hist: None,
             doc_hist: None,
+            doc_hist_preview: None,
             hist_job: None,
+            hist_uncached: None,
             gpu: None,
             window_device: None,
             window_lost: false,
             window_recovery_retry: None,
+            gpu_render_state: None,
+            gpu_fault: None,
+            gpu_oom_retries: 0,
             started: None,
             perf: Default::default(),
             stroke_trace: stroke_trace::StrokeTrace::from_env(),
             prefs_rt: Default::default(),
+            updates_rt: Default::default(),
             discard: None,
             file_dialog: None,
             tiff_options: None,
             save_dirs: HashMap::new(),
             disk_stamps: HashMap::new(),
             targa_options: None,
+            jpeg_options: None,
             dds_options: None,
             held_opens: Default::default(),
             allow_close: false,
             stylus: Default::default(),
+            control_click: Default::default(),
             background_jobs: false,
             min_frame_ms: None,
             last_frame_start_ms: 0.0,
@@ -1093,6 +1231,7 @@ impl PhotocraftApp {
         // Saved preferences are in place before the first frame; recovery starts in upkeep.
         prefs_ui::load(&mut app);
         layers_panel_ui::restore_options(&mut app);
+        histogram_panel::restore_options(&mut app);
         // After the saved preferences, which say whether the set was already offered.
         kys_import::offer_import(&mut app);
         notices::wayland_file_drop_guidance(&mut app);
@@ -1111,6 +1250,7 @@ impl PhotocraftApp {
         // The browser has no adapter list (egui-wgpu only has it natively).
         #[cfg(not(target_arch = "wasm32"))]
         self.perf.gpu_info.set_available(&rs.available_adapters);
+        self.gpu_render_state = Some(rs.clone());
         let gpu = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| gpu_canvas::GpuCanvas::with_tile(&rs, Some(tile)))) {
             Ok(gpu) => gpu,
             Err(payload) => {
@@ -1210,6 +1350,9 @@ impl PhotocraftApp {
     }
 
     fn run_command(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        if !vector_ui::cancel_stale(self) {
+            return Err(self.ui.status.clone());
+        }
         if matches!(id, "paint.setSymmetry" | "paint.symmetryFromPath" | "paint.symmetryDisable") {
             self.ui.symmetry_transform = None;
         }
@@ -1234,6 +1377,7 @@ impl PhotocraftApp {
                 return Err(if self.ui.status.is_empty() { tl!("The transform couldn't be applied.").into() } else { self.ui.status.clone() });
             }
         }
+        actions::suspended_guard(self, id)?;
         if let Some(result) = panel_docking::command(self, id, &params) {
             return result;
         }
@@ -1281,10 +1425,6 @@ impl PhotocraftApp {
             id,
             "layer.vectorMask.add" | "layer.vectorMask.fromPath" | "layer.vectorMask.revealAll" | "layer.vectorMask.hideAll" | "layer.vectorMask.currentPath"
         ) && on_active_layer;
-        // A draft Pen path belongs to the current document, not the one about to be created.
-        if id == "file.new" && self.ui.pen.is_some() {
-            vector_ui::pen_commit(self, false);
-        }
         let r = if id == "actions.play" {
             actions::play(self, &params)
         } else if photocraft_engine::actions_cmds::shell_view_command(id) {
@@ -1373,16 +1513,16 @@ impl PhotocraftApp {
         self.perf.command_ms = gpu_canvas::now_ms() - t0;
         match &r {
             Ok(_) => {
+                if self.ui.status_error {
+                    self.ui.status.clear();
+                    self.ui.status_error = false;
+                }
                 self.sync_views();
                 let removed = self.session.take_samplers_removed();
-                if removed > 0 {
+                if removed > 0 && !self.ui.status_error {
                     // A canvas-size change (crop, Canvas Size, Image Size, rotation) dropped Color
                     // Sampler points that fell outside the new canvas (#1046).
                     self.ui.status = crate::i18n::trn(crate::i18n::current(), removed as u64, "{n} sample point removed", "{n} sample points removed");
-                    self.ui.status_error = false;
-                }
-                if self.ui.status_error {
-                    self.ui.status.clear();
                     self.ui.status_error = false;
                 }
             }
@@ -1417,7 +1557,10 @@ impl PhotocraftApp {
         // ... and to the document it was started on.
         crate::canvas::polygon_cancel_stale(self);
         crate::crop_ui::cancel_stale(self);
+        crate::distort_ui::cancel_stale(self);
         crate::perspective_crop_ui::cancel_stale(self);
+        // A pen path under construction belongs to the document it was started on too.
+        vector_ui::cancel_stale(self);
         let ids: Vec<DocId> = self.session.documents().iter().map(|d| d.doc.id).collect();
         // Where the document of view `i` is now. Views not tracked yet keep their index.
         let now = |i: usize| match self.view_docs.get(i) {
@@ -1466,6 +1609,26 @@ impl PhotocraftApp {
         r.truncate(cap);
         self.ui.recent_files = r.clone();
         self.session.prefs.edit(|p| p.file_handling.recent_files = r);
+    }
+
+    /// Records a picked type family for the font menu's Recent group, capped by
+    /// Preferences ▸ Type ▸ Recent Fonts (0 keeps no list), most recent first, de-duplicated.
+    pub fn note_recent_font(&mut self, family: &str) {
+        let cap = self.session.prefs().type_.recent_fonts.min(50) as usize;
+        let r = &mut self.ui.recent_fonts;
+        r.retain(|f| f != family);
+        if cap == 0 {
+            r.clear();
+            return;
+        }
+        r.insert(0, family.to_string());
+        r.truncate(cap);
+    }
+
+    /// Preferences ▸ Type ▸ Recent Fonts: a smaller cap (or 0) applies to the existing list at
+    /// once, not only after the next pick.
+    pub fn sync_recent_fonts(&mut self) {
+        self.ui.recent_fonts.truncate(self.session.prefs().type_.recent_fonts.min(50) as usize);
     }
 
     /// File › Open Recent › Clear Recent File List.
@@ -1519,8 +1682,18 @@ impl PhotocraftApp {
             return Ok(Vec::new());
         }
         let import = self.services.import.as_ref().ok_or("no importer configured")?;
-        let max_svg_group_depth = self.session.prefs().file_handling.rasterize_svg_groups_deeper_than as usize;
-        let (doc, warnings) = import(name, bytes, max_svg_group_depth)?;
+        let opts = photocraft_engine::jobs::import_options(self.session.prefs());
+        let (mut doc, warnings, damaged) = if photocraft_io::is_psd(bytes) {
+            // Read PSD damage as structured information in the same decode, not by
+            // retrying an error or matching the text of a compatibility warning.
+            let (r, damaged) = photocraft_io::import_for_open(name, bytes, &opts).map_err(|e| e.to_string())?;
+            (r.document, r.warnings, damaged)
+        } else {
+            let (doc, warnings) = import(name, bytes, &opts)?;
+            (doc, warnings, false)
+        };
+        // Preferences › Raw Defaults › Resolution, as the engine's open applies it.
+        photocraft_engine::file_cmds::raw_defaults(&self.session, &warnings, &mut doc);
         // Edit › Color Settings policies apply on open; Ask When Opening holds the file back
         // until its prompt is answered, and later files wait behind it (`open_prompt`).
         // Missing fonts are read from the document itself: it may not be open yet (#4559).
@@ -1534,6 +1707,7 @@ impl PhotocraftApp {
             open_prompt::Held {
                 doc,
                 read_only: photocraft_io::affinity::is_affinity(bytes),
+                damage_pending: damaged,
                 name: name.to_string(),
                 path: path.map(str::to_string),
                 warnings: warnings.clone(),
@@ -1569,8 +1743,9 @@ impl PhotocraftApp {
     /// events and no Color Settings policy (which may read user-configured profile paths).
     fn import_automation_document(&mut self, name: &str, bytes: &[u8]) -> Result<Vec<String>, String> {
         let import = self.services.import.as_ref().ok_or("no importer configured")?;
-        let max_svg_group_depth = self.session.prefs().file_handling.rasterize_svg_groups_deeper_than as usize;
-        let (doc, warnings) = import(name, bytes, max_svg_group_depth)?;
+        let opts = photocraft_engine::jobs::import_options(self.session.prefs());
+        let (mut doc, warnings) = import(name, bytes, &opts)?;
+        photocraft_engine::file_cmds::raw_defaults(&self.session, &warnings, &mut doc);
         // The caller records the path it read from.
         self.session.add_document(doc, None);
         if let Some(st) = self.session.active_mut() {
@@ -1590,9 +1765,9 @@ impl PhotocraftApp {
         self.save_as_with(path, FormatChoices::default())
     }
 
-    /// [`Self::save_as`], writing a Targa or DDS texture with the `choices` given instead of
-    /// asking for them (no Targa or DDS Options prompt): `file.save` and `file.saveAs` with
-    /// `tgaBits`, `ddsCompression` or `ddsMipmaps`.
+    /// [`Self::save_as`] with the format choices already made, which skip their prompts:
+    /// `file.save` and `file.saveAs` with `tgaBits` (no Targa Options), `ddsCompression` or
+    /// `ddsMipmaps` (no DDS Options), or `quality` or `jpegFormat` (no JPEG Options).
     pub fn save_as_with(&mut self, path: Option<String>, choices: FormatChoices) -> Result<Value, String> {
         self.save_dialog_flow(path, choices, false)
     }
@@ -1602,7 +1777,7 @@ impl PhotocraftApp {
     /// which writes whichever file the action is played on, not as a Save As to a fixed path.
     pub(crate) fn save_dialog_flow(&mut self, path: Option<String>, choices: FormatChoices, plain_save: bool) -> Result<Value, String> {
         if self.save_options_open() {
-            return Err("Answer the TIFF, Targa or DDS Options before starting another save".into());
+            return Err(SAVE_OPTIONS_OPEN.into());
         }
         // Edit Contents documents save back into their smart object.
         if path.is_none() && self.session.is_enabled("layer.smartObjects.saveContents") {
@@ -1646,7 +1821,7 @@ impl PhotocraftApp {
                 // Confirming the document's own file: ask first if another app changed it (#6596).
                 if plain_save
                     && own.as_deref() == Some(path.as_str())
-                    && let Some(r) = crate::disk_change_prompt::intercept(app, doc, &path, true)
+                    && let Some(r) = crate::disk_change_prompt::intercept(app, doc, &path, true, choices)
                 {
                     return r;
                 }
@@ -1661,9 +1836,10 @@ impl PhotocraftApp {
 
     /// [`Self::save_as_with`] once the path is known.
     pub(crate) fn save_to(&mut self, path: String, choices: FormatChoices) -> Result<Value, String> {
-        // An RGB Targa asks for its bits per pixel, and a DDS texture for its compression, unless
-        // the caller chose them; the save continues from the prompt (still a copy when it would
-        // be one without the prompt), which records the step once answered.
+        // An RGB Targa asks for its bits per pixel, a DDS texture for its compression, and a JPEG
+        // for its quality and format, unless the caller chose them; the save continues from the
+        // prompt (still a copy when it would be one without the prompt), which records the step
+        // once answered.
         if choices.tga_bits.is_none() && targa_options_ui::wants_prompt(self, &path) {
             let copy = self.saves_copy(&path, None)?;
             targa_options_ui::park(self, path.clone(), copy, "file.saveAs")?;
@@ -1672,6 +1848,11 @@ impl PhotocraftApp {
         if choices.dds.is_none() && dds_options_ui::wants_prompt(&path) {
             let copy = self.saves_copy(&path, None)?;
             dds_options_ui::park(self, path.clone(), copy, "file.saveAs")?;
+            return Ok(serde_json::json!({"path": path, "warnings": []}));
+        }
+        if choices.jpeg.is_none() && jpeg_options_ui::wants_prompt(self, &path) {
+            let copy = self.saves_copy(&path, None)?;
+            jpeg_options_ui::park(self, path.clone(), copy, "file.saveAs")?;
             return Ok(serde_json::json!({"path": path, "warnings": []}));
         }
         // A layered TIFF asks about its layers first (Preferences › File Handling); the save
@@ -1684,20 +1865,23 @@ impl PhotocraftApp {
     }
 
     /// File › Save back to the document's own file, recorded as a `file.save` step with the
-    /// Targa or DDS answer in `choices` (a replayed Save of a flat file brings its own).
+    /// Targa, DDS or JPEG answer in `choices` (a replayed or scripted Save of a flat file brings
+    /// its own).
     pub(crate) fn save_in_place(&mut self, path: String, choices: FormatChoices) -> Result<Value, String> {
         if self.save_options_open() {
-            return Err("Answer the TIFF, Targa or DDS Options before starting another save".into());
+            return Err(SAVE_OPTIONS_OPEN.into());
         }
         let r = self.write_save(path, None, choices)?;
-        let mut step = Value::Object(Default::default());
-        choices.record(&mut step);
+        // JPEG Options are recorded only where they change something
+        // ([`jpeg_options_ui::plain_save_step`]); the Targa and DDS answers as given.
+        let mut step = jpeg_options_ui::plain_save_step(choices.jpeg);
+        FormatChoices { jpeg: None, ..choices }.record(&mut step);
         self.session.journal.push(("file.save".into(), step));
         Ok(r)
     }
 
     /// Writes the Save As and journals it as a `file.saveAs` step with its path (and TIFF,
-    /// Targa or DDS answer), so an action being recorded keeps it (#2032).
+    /// Targa, DDS or JPEG answer), so an action being recorded keeps it (#2032).
     fn save_as_step(&mut self, path: String, tiff_layers: Option<bool>, choices: FormatChoices) -> Result<Value, String> {
         let r = self.write_save(path.clone(), tiff_layers, choices)?;
         let mut step = serde_json::json!({"path": path});
@@ -1710,20 +1894,26 @@ impl PhotocraftApp {
     }
 
     /// Re-label the Save As just journaled for `path` as File › Save (see [`Self::save_dialog_flow`]),
-    /// keeping its Targa or DDS answer so playback writes the file the same way. A save parked
-    /// behind Targa or DDS Options hasn't been journaled yet: it is recorded as File › Save once
-    /// answered.
+    /// keeping its Targa, DDS or JPEG answer so playback writes the file the same way. A save
+    /// parked behind Targa, DDS or JPEG Options hasn't been journaled yet: it is recorded as
+    /// File › Save once answered.
     pub(crate) fn journal_as_plain_save(&mut self, path: &str) {
-        let parked = [self.targa_options.as_mut().map(|p| (&p.path, &mut p.record)), self.dds_options.as_mut().map(|p| (&p.path, &mut p.record))];
+        let parked = [
+            self.targa_options.as_mut().map(|p| (&p.path, &mut p.record)),
+            self.dds_options.as_mut().map(|p| (&p.path, &mut p.record)),
+            self.jpeg_options.as_mut().map(|p| (&p.path, &mut p.record)),
+        ];
         if let Some((_, record)) = parked.into_iter().flatten().find(|(p, record)| p.as_str() == path && **record == "file.saveAs") {
             *record = "file.save";
             return;
         }
+        // Only the path goes: a script's format answer stays, so a replay writes the file it is
+        // played on the same way. Any other answer (TIFF layers) keeps the Save As.
         if let Some(last) = self.session.journal.last_mut()
             && last.0 == "file.saveAs"
             && last.1.get("path").and_then(Value::as_str) == Some(path)
             && let Some(step) = last.1.as_object()
-            && step.keys().all(|k| matches!(k.as_str(), "path" | "tgaBits" | "ddsCompression" | "ddsMipmaps"))
+            && step.keys().all(|k| matches!(k.as_str(), "path" | "tgaBits" | "ddsCompression" | "ddsMipmaps" | "quality" | "jpegFormat"))
         {
             let mut step = step.clone();
             step.remove("path");
@@ -1732,18 +1922,18 @@ impl PhotocraftApp {
     }
 
     /// Replays a recorded `file.save` / `file.saveAs` / `file.saveACopy` / `file.export.exportAs`
-    /// step: no dialog or prompt, and the recorded TIFF, Targa or DDS answer (if any) stands in for
-    /// the TIFF, Targa or DDS Options prompt.
+    /// step: no dialog or prompt, and the recorded TIFF, Targa, DDS or JPEG answer (if any) stands
+    /// in for its prompt.
     pub(crate) fn replay_save(&mut self, id: &str, params: &Value) -> Result<Value, String> {
         if self.save_options_open() {
-            return Err("Answer the TIFF, Targa or DDS Options before starting another save".into());
+            return Err(SAVE_OPTIONS_OPEN.into());
         }
         if id == "file.save" {
             // The file the action is played on: one that holds the whole document, or a flat
             // file a recorded Save confirmed in the dialog while the document is still a plain
-            // raster, so it is never flattened over (#3531, #3806). A flat file's recorded Targa
-            // or DDS answer stands in for the prompt.
-            let choices = FormatChoices::from_params(params, id)?;
+            // raster, so it is never flattened over (#3531, #3806). A flat file's recorded Targa,
+            // DDS or JPEG answer writes the same way, without asking.
+            let choices = FormatChoices::from_step(params, id)?;
             let st = self.session.active().ok_or("no document")?;
             let flat_own = |p: &str| {
                 !photocraft_engine::file_cmds::saves_in_place(p)
@@ -1760,7 +1950,7 @@ impl PhotocraftApp {
             return crate::export_dialog::replay(self, params);
         }
         let path = params.get("path").and_then(Value::as_str).filter(|p| !p.is_empty()).ok_or("Save As needs a `path`")?;
-        let choices = FormatChoices::from_params(params, id)?;
+        let choices = FormatChoices::from_step(params, id)?;
         if id == "file.saveACopy" {
             // A copy: the document keeps its own file and unsaved state, as when recorded (#4373).
             let doc = self.session.active().ok_or("no document")?.doc.clone();
@@ -1807,8 +1997,9 @@ impl PhotocraftApp {
     }
 
     /// Writes the active document to a known path. `tiff_layers` is the TIFF Options answer:
-    /// `Some(false)` discards the layers and saves a copy. `choices` are the Targa bits per
-    /// pixel (`None`: 32 with an alpha channel or transparency, else 24) and the DDS options.
+    /// `Some(false)` discards the layers and saves a copy. `choices` are the Targa bits per pixel
+    /// (`None`: 32 with an alpha channel or transparency, else 24), the DDS options and the JPEG
+    /// Options.
     fn write_save(&mut self, path: String, tiff_layers: Option<bool>, choices: FormatChoices) -> Result<Value, String> {
         let copy = self.saves_copy(&path, tiff_layers)?;
         let settings = choices.apply(ExportSettings { tiff_layers: tiff_layers.unwrap_or(ExportSettings::default().tiff_layers), ..self.save_settings() });
@@ -1840,6 +2031,50 @@ impl PhotocraftApp {
         Ok(Some((path, warnings)))
     }
 
+    /// After `saver` was written to `path`, any other open document bound to that file no longer
+    /// matches it: it loses the file and is marked unsaved, so it can't stay "saved" while its file
+    /// holds something else, closing it asks first, and its own Save asks for a name instead of
+    /// writing over the new file (#6597). Paths are compared as files, so another letter case on a
+    /// case-insensitive volume or a hard link counts. A notice names the documents affected.
+    pub(crate) fn detach_others_from_file(&mut self, path: &str, saver: DocId) {
+        let others: Vec<(DocId, String)> = self
+            .session
+            .documents()
+            .iter()
+            .filter(|st| st.doc.id != saver && st.path.as_deref().is_some_and(|p| photocraft_engine::file_cmds::same_file(p, path)))
+            .map(|st| (st.doc.id, st.doc.name.clone()))
+            .collect();
+        let mut detached = Vec::new();
+        for (id, name) in others {
+            let done = self.with_document(id, |app| {
+                let st = app.session.active_mut().ok_or("no document")?;
+                st.path = None;
+                // No revision ever equals this, so the document reads as unsaved until saved again.
+                st.saved_revision = u64::MAX;
+                Ok(())
+            });
+            if done.is_ok() {
+                detached.push(name);
+            }
+        }
+        if detached.is_empty() {
+            return;
+        }
+        let name = file_open::display_name(path);
+        let title = {
+            let template = "{name} was saved over from another tab";
+            crate::i18n::fmt(tl!(template), &[("name", name.as_str())])
+        };
+        let lines = detached
+            .iter()
+            .map(|doc| {
+                let template = "\"{doc}\" no longer has a file and is marked unsaved: save it under a new name to keep it";
+                crate::i18n::fmt(tl!(template), &[("doc", doc.as_str())])
+            })
+            .collect();
+        notices::post(self, title, lines, false, None);
+    }
+
     /// Record a written save of document `doc` as it was at `revision`: its name, path and saved
     /// state (unless a copy), the status, script events and the warnings.
     pub(crate) fn saved(&mut self, doc: DocId, revision: u64, path: &str, warnings: &[String], copy: bool) {
@@ -1862,6 +2097,8 @@ impl PhotocraftApp {
             }
         };
         self.ui.status = crate::i18n::fmt(tl!("Saved {name}"), &[("name", path)]);
+        // The file was written, copy or not: another tab bound to it no longer matches it.
+        self.detach_others_from_file(path, doc);
         if !copy {
             // A background save may finish while another document is active (or after its
             // document was closed, when there is nothing left to record).
@@ -1917,9 +2154,30 @@ impl PhotocraftApp {
         own == path && self.services.file_stamp.as_ref().and_then(|stamp| stamp(path)).is_some_and(|now| now != *then)
     }
 
-    /// TIFF, Targa or DDS Options is waiting on an answer before a save is written.
+    /// TIFF, Targa, DDS or JPEG Options is waiting on an answer before a save is written.
     pub(crate) fn save_options_open(&self) -> bool {
-        self.tiff_options.is_some() || self.targa_options.is_some() || self.dds_options.is_some()
+        self.tiff_options.is_some() || self.targa_options.is_some() || self.dds_options.is_some() || self.jpeg_options.is_some()
+    }
+
+    /// Writes a save that waited on a format prompt (Targa, DDS or JPEG Options) once answered:
+    /// journals `step` as its command (`file.saveAs` for Save As, `file.saveACopy` for Save a
+    /// Copy, `file.save` for a plain Save), so an action being recorded keeps it with this answer
+    /// (#2032, #4373), reports a failure in the status bar, and releases a close prompt waiting on
+    /// the save.
+    pub(crate) fn write_answered_save(&mut self, ctx: &egui::Context, doc: DocId, path: String, settings: &ExportSettings, copy: bool, step: (&str, Value)) {
+        let written = self.with_document(doc, |app| app.write_document(path, settings, copy));
+        if written.is_ok() {
+            self.session.journal.push((step.0.into(), step.1));
+        }
+        match written {
+            Err(e) => {
+                self.ui.status = crate::i18n::fmt(tl!("Save failed: {error}"), &[("error", &e)]);
+                self.ui.status_error = true;
+            }
+            Ok(Some(_)) if !copy => crate::discard_ui::saved_document(self, ctx, doc),
+            // A background save releases the close prompt when it finishes (`jobs_ui`).
+            Ok(_) => {}
+        }
     }
 
     /// A print worker may still be handing a job to the system queue.
@@ -1939,9 +2197,9 @@ impl PhotocraftApp {
         self.save_automation_with(path, FormatChoices::default())
     }
 
-    /// [`Self::save_automation`] writing a Targa or DDS texture with the `choices` given (a
-    /// Targa's `None`: 32 with an alpha channel or transparency, else 24; a DDS texture's:
-    /// uncompressed without mipmaps). Automation saves never prompt.
+    /// [`Self::save_automation`] writing with the format `choices` given (a Targa's `None`: 32
+    /// with an alpha channel or transparency, else 24; a DDS texture's: uncompressed without
+    /// mipmaps; a JPEG's: the file's own quality, Baseline). Automation saves never prompt.
     pub fn save_automation_with(&mut self, path: Option<String>, choices: FormatChoices) -> Result<Value, String> {
         let target = {
             let state = self.session.active().ok_or("no document")?;
@@ -1951,11 +2209,14 @@ impl PhotocraftApp {
             )?
         };
         let reply = |path: &str, warnings: &[String]| json!({"path": path, "warnings": warnings});
+        // Only the target is granted: a linked smart object's stored path is document data, so
+        // PSD export writes that layer as pixels instead of embedding the file.
+        let settings = ExportSettings { read_linked_files: false, ..choices.apply(self.save_settings()) };
         // #2017: the File › Save worker path, so the encode doesn't block the frame loop.
         if self.background_jobs
             && let Some(save) = self.services.automation_save.clone()
         {
-            return match jobs_ui::start_save(self, target.clone(), choices.apply(self.save_settings()), false, save, true)? {
+            return match jobs_ui::start_save(self, target.clone(), settings, false, save, true)? {
                 Some((path, warnings)) => Ok(reply(&path, &warnings)),
                 None => {
                     let job = self.jobs.last_started;
@@ -1965,7 +2226,6 @@ impl PhotocraftApp {
         }
         let state = self.session.active().ok_or("no document")?;
         let (doc, revision) = (state.doc.id, state.revision);
-        let settings = choices.apply(self.save_settings());
         let export = self.services.export.as_ref().ok_or("no exporter configured")?;
         let (bytes, warnings) = export(&state.doc, &target, &settings)?;
         let write = self.services.automation_write.as_mut().ok_or("automation write authority is not configured")?;
@@ -1989,10 +2249,13 @@ impl PhotocraftApp {
                 control::Outcome::AfterInput => self.input_waiters.push(reply),
                 control::Outcome::AfterJob(job) => self.jobs.waiters.push((job, reply)),
                 control::Outcome::Screenshot { token, path } => {
-                    // Wait out egui's fade animations (~83 ms) and a few rendered frames first.
-                    let settle = ctx.global_style().animation_time as f64 * 2000.0 + 60.0;
-                    self.queued_screenshots.push((token, gpu_canvas::now_ms() + settle, 0));
-                    self.pending_screenshots.push((token, path, reply));
+                    // Admission is budgeted here, after this pass's completed captures were
+                    // drained, so a just-finished request never causes a false rejection.
+                    let settle = screenshot::settle_ms(ctx.global_style().animation_time);
+                    let document = self.document_identity();
+                    if let Err((reply, e)) = self.captures.admit(token, path, reply, document, settle, screenshot::now()) {
+                        let _ = reply.send(serde_json::json!({"ok": false, "error": e}));
+                    }
                 }
             }
             // `ui.set` may have changed the edit target: the next request sees its colours.
@@ -2001,41 +2264,67 @@ impl PhotocraftApp {
         self.control_rx = Some(rx);
     }
 
-    fn issue_screenshots(&mut self, ctx: &egui::Context) {
-        let now = gpu_canvas::now_ms();
-        self.queued_screenshots.retain_mut(|(token, at, frames)| {
-            *frames += 1;
-            if now >= *at && *frames >= 3 {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::new(*token)));
-                false
-            } else {
-                true
-            }
-        });
+    /// The active document's identity at admission: a queued capture never applies to another
+    /// document. Includes the revision so a saved image is attributable to a known state.
+    fn document_identity(&self) -> Option<screenshot::DocumentId> {
+        self.session.active().map(|st| screenshot::DocumentId { document: st.doc.id.0, revision: st.revision, generation: self.session.active_generation() })
     }
 
-    fn collect_screenshots(&mut self, ctx: &egui::Context) {
-        if self.pending_screenshots.is_empty() {
+    /// Issue due screenshot requests. UI phase only: settling counts real layout passes, and the
+    /// geometry epoch is that of the pass the image will be rendered from.
+    fn issue_captures(&mut self, ctx: &egui::Context) {
+        // A discarded pass (popup sizing, `request_discard`) will be re-run: capture only a pass
+        // whose UI state will actually be present.
+        if ctx.will_discard() {
             return;
         }
-        let events: Vec<_> = ctx.input(|i| {
-            i.raw
-                .events
-                .iter()
-                .filter_map(|e| match e {
-                    egui::Event::Screenshot { user_data, image, .. } => {
-                        let token = user_data.data.as_ref().and_then(|d| d.downcast_ref::<u64>()).copied()?;
-                        Some((token, image.clone()))
+        let now = screenshot::now();
+        let doc = self.document_identity();
+        let finished = self.captures.issue(ctx, now, doc, |callback| screenshot::send_command(ctx, callback));
+        self.finish_captures(finished);
+    }
+
+    /// Collect callbacks and expire requests. Logic phase; the image is encoded and written here,
+    /// on the UI thread, never inside the callback.
+    fn drain_captures(&mut self, ctx: &egui::Context) {
+        let now = screenshot::now();
+        let doc = self.document_identity();
+        // begin_pass supplies the new RawInput before App::logic; run_logic refreshes native
+        // viewport metadata too. Observe it before any completed callback can be delivered.
+        let current = screenshot::CaptureGeometry::current(ctx, doc);
+        self.captures.note_geometry(current);
+        let observed = self.captures.last_geometry();
+        let finished = self.captures.drain(now, observed, doc);
+        self.finish_captures(finished);
+    }
+
+    fn finish_captures(&mut self, finished: Vec<screenshot::Finished>) {
+        for f in finished {
+            let reply = match f.result {
+                Ok(image) => {
+                    let [w, h] = image.size;
+                    // The encoder takes RGBA bytes; its copy is bounded by the same per-image
+                    // reservation as the retained image, and the image itself is released first.
+                    match w.checked_mul(h).and_then(|n| n.checked_mul(4)) {
+                        Some(bytes) if bytes <= screenshot::MAX_IMAGE_BYTES => {
+                            let rgba: Vec<u8> = image.pixels.iter().flat_map(|c| c.to_array()).collect();
+                            drop(image);
+                            control::save_screenshot_rgba(self, w, h, &rgba, f.path.as_deref())
+                        }
+                        _ => serde_json::json!({
+                            "ok": false,
+                            "error": format!(
+                                "screenshot {} failed: the image exceeds the {} MiB encode budget",
+                                f.token,
+                                screenshot::MAX_IMAGE_BYTES / (1 << 20)
+                            ),
+                        }),
                     }
-                    _ => None,
-                })
-                .collect()
-        });
-        for (token, image) in events {
-            if let Some(i) = self.pending_screenshots.iter().position(|(t, _, _)| *t == token) {
-                let (_, path, reply) = self.pending_screenshots.remove(i);
-                let r = control::save_screenshot(self, &image, path.as_deref());
-                let _ = reply.send(r);
+                }
+                Err(e) => serde_json::json!({"ok": false, "error": e}),
+            };
+            if let Some(tx) = f.reply {
+                let _ = tx.send(reply);
             }
         }
     }
@@ -2055,14 +2344,26 @@ impl PhotocraftApp {
     }
 }
 
-impl eframe::App for PhotocraftApp {
-    fn on_exit(&mut self) {
-        if let Err(err) = tool_memory::save_on_exit(self) {
-            log::warn!("Preferences: could not save the final tool selection: {err}");
-        }
+impl PhotocraftApp {
+    /// Install the callback-mode markers in an app creator, before the first `run_ui` on this
+    /// Context (and again through [`Self::setup_context`] when a host replaces its Context).
+    /// Installing while a pass is already running cannot mark that pass; it only arms the next.
+    pub fn install_type_reset_hooks(ctx: &egui::Context) {
+        type_tool::install_reset_hooks(ctx);
     }
 
-    fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+    /// The host's UI tail, after all panels and any shell-side model/focus mutations.
+    pub fn finish_type_reset_pass(&mut self, ctx: &egui::Context) {
+        type_tool::finish_reset_pass(self, ctx);
+    }
+
+    /// The host's logic tail; full UI passes leave availability to their later UI tail.
+    pub fn finish_type_reset_logic(&mut self, ctx: &egui::Context) {
+        type_tool::finish_reset_logic(self, ctx);
+    }
+
+    /// Shared logic body. A wrapping host owns the final reset tail after its own work.
+    pub fn logic_frame(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         self.cap_frame_rate();
         i18n::set_current(i18n::Lang::from_pref(&self.session.prefs().interface.language));
         // Caps Lock state read from the OS once per frame (see `Services::caps_lock`): the canvas
@@ -2089,6 +2390,9 @@ impl eframe::App for PhotocraftApp {
         if self.live_tokens.poll(ctx, self.ui.theme) {
             self.checker = None;
         }
+        // Finish or expire outstanding captures first, so a new request admitted in this pass
+        // sees their released budget.
+        self.drain_captures(ctx);
         self.drain_control(ctx);
         native_menu::run(self, ctx);
         // Switching tools commits, also between the Type and Type Mask tools.
@@ -2102,9 +2406,8 @@ impl eframe::App for PhotocraftApp {
         }
         transform_tool::end_if_left(self);
         shape_stroke_ui::sync_editor(self, ctx);
-        self.collect_screenshots(ctx);
-        self.issue_screenshots(ctx);
         prefs_ui::tick(self, ctx);
+        updates_ui::tick(self, ctx);
         monitor_status::poll_frame(self, ctx, frame);
         // Control requests and persisted preferences can change the language in this frame.
         i18n::sync_context(ctx, &self.session.prefs().interface.language);
@@ -2119,7 +2422,13 @@ impl eframe::App for PhotocraftApp {
             jobs_ui::tick(self, ctx);
             #[cfg(not(target_arch = "wasm32"))]
             filter_preview_worker::discard_closed(self);
-            shortcuts::handle(self, ctx);
+            if type_tool::in_ui_pass(ctx) {
+                if self.fonts_ready {
+                    shortcuts::handle(self, ctx);
+                } else {
+                    type_tool::controls_only(self, ctx);
+                }
+            }
         }
         // The Timeline's keys use where the panel was drawn last frame; a frame that doesn't draw it
         // (full-screen modes hide the docked panel) must not leave the old place behind.
@@ -2153,52 +2462,55 @@ impl eframe::App for PhotocraftApp {
         self.place_next_dropped(ctx);
         // The control transport wakes the UI on arrival (ctx.request_repaint); only poll while a
         // screenshot is pending. (Polling every 50 ms here made idle apps render at 20 fps.)
-        if !self.pending_screenshots.is_empty() {
+        if self.captures.any_pending() {
             ctx.request_repaint_after(std::time::Duration::from_millis(16));
+        }
+        // A hidden host runs no UI pass: a queued (or re-queued) capture asks for one. An issued
+        // capture's own `Screenshot` command forces its paint; asking again would spin a hidden
+        // window while a slow readback is in flight. Synthetic input queued during hidden ticks
+        // needs the same wake: its events sit in eframe's preserved input until a UI pass.
+        if self.captures.any_unissued() || self.synthetic_batch.is_some() || !self.synthetic.is_empty() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaintWhileHidden);
         }
         self.poll_file_dialog(ctx, Some(frame));
     }
 
-    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
-        let frame_start = gpu_canvas::now_ms();
-        // An undecorated window gets its caption back when the toolkit changes its flags
-        // (maximize, restore, …): take it off again before the frame is laid out (#2246).
-        if let Some(window_frame) = self.services.window_frame.as_mut() {
-            window_frame();
-        }
-        // Native menu key equivalents become the key presses they were (see `native_menu`).
-        if let Some(menu) = self.services.native_menu.as_mut() {
-            menu.raw_input(raw_input);
-        }
-        shortcuts::clipboard_keys(ctx, ctx.text_edit_focused() || self.ui.text_edit.is_some(), raw_input);
-        // Windows precision touchpads and some Linux Wayland compositors send pinches
-        // as fractional Ctrl + wheel rather than a native Zoom event (#4566).
-        // Leave Ctrl+whole-notch mouse scrolling alone, and honour the pinch preference.
-        if cfg!(any(target_os = "windows", target_os = "linux")) && self.session.prefs().enhanced_controls.zoom_with_trackpad_pinch {
-            wheel_nav::fold_legacy_pinch(ctx, raw_input);
-        }
-        raw_input.events.extend(self.take_synthetic_step());
-        // A pen held still is no touch screen's press-and-hold right click (stylus.rs).
-        let pen_down = self.stylus.pen_contacts.observe(&raw_input.events);
-        stylus::pen_hold_is_no_right_click(ctx, pen_down);
-        if self.custom_titlebar {
-            titlebar::release_after_os_resize(ctx, raw_input);
-        }
-        if self.stroke_trace.enabled() {
-            // The OS's moves and the control channel's (injected just above).
-            let moves = raw_input.events.iter().filter(|e| matches!(e, egui::Event::PointerMoved(_))).count();
-            self.stroke_trace.begin_frame(frame_start, moves);
-        }
-    }
-
-    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+    /// Shared UI body. A wrapping host must call `finish_type_reset_pass` after return,
+    /// including when this body returns early without drawing an editor.
+    pub fn ui_frame(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        // One control owner even when this callback cannot draw the custom editor.
+        if !self.fonts_ready
+            || !self.ui.dialogs.is_empty()
+            || screen_picker::busy(&ctx)
+            || self.ui.text_edit.is_none()
+            || ctx.text_edit_focused()
+            || ctx.egui_wants_keyboard_input()
+        {
+            type_tool::controls_only(self, &ctx);
+        }
+        // 0.36 saved panel sizes under `Id::unique(name)`; 0.37 reads parent-scoped keys. Data-only,
+        // so it runs even before fonts are ready; the old keys stay for a 0.36 rollback.
+        panels::migrate_panel_state(&ctx);
+        // A real UI pass, not a hidden `run_logic` tick: record the capture geometry (the
+        // document identity included) and count one settling pass. `run_logic` leaves these
+        // input values stale; only this real UI phase counts toward settling.
+        let geometry = screenshot::CaptureGeometry::current(&ctx, self.document_identity());
+        self.captures.note_geometry(geometry);
+        self.captures.note_pass();
+        // A real UI pass consumes the one in-flight synthetic batch (see `inject_synthetic`).
+        self.begin_synthetic_pass(&ctx);
         self.hover_layer = None;
         i18n::set_current(i18n::Lang::from_pref(&self.session.prefs().interface.language));
         // Fonts registered via set_fonts only take effect next frame; named families would panic now.
         if !self.fonts_ready {
+            // egui consumed this pass's input without PhotoCraft handling it: keep the synthetic
+            // batch for the next pass instead of losing the step.
+            self.defer_synthetic_pass();
             ctx.request_repaint();
             self.automation_input = false;
+            // No editor was drawn this pass: end its IME context rather than keep a stale owner.
+            type_tool::sync_ime(self, &ctx);
             return;
         }
         let t0 = gpu_canvas::now_ms();
@@ -2206,8 +2518,13 @@ impl eframe::App for PhotocraftApp {
         self.stroke_trace.cpu_prev(frame.info().cpu_usage);
         // A text field's right-click menu, before any field is drawn (text_field_menu.rs).
         text_field_menu::show(&ctx);
+        // The wheel goes to a focused value field before the canvas or a panel sees it (#5473).
+        field_wheel::begin_frame(&ctx);
         // Each painting tool keeps its own brush (#218), so switch the active tool's brush in
         // before anything this frame reads it (the cursor, the options bar, a stroke).
+        // Preferences ▸ Type ▸ Recent Fonts: a smaller cap (or 0) trims the existing list at
+        // once, not only after the next pick.
+        self.sync_recent_fonts();
         paint_mouse::sync_tool_brush(self);
         // A unit typed into a value field (`1in` in a px field) converts at the active document's
         // resolution, as in Photoshop.
@@ -2217,14 +2534,17 @@ impl eframe::App for PhotocraftApp {
         // View › Screen Mode › Full Screen Mode: only the image, on black (F or Esc returns).
         screen_picker::show(&ctx);
         if screen_picker::busy(&ctx) && screen_picker::showing(&ctx) {
-            egui::Modal::new(egui::Id::new("screen-color-wait")).show(&ctx, |ui| {
+            egui::Modal::new(egui::Id::unique("screen-color-wait")).show(&ctx, |ui| {
                 ui.spinner();
                 ui.label(tl!("Pick a screen pixel or press Esc to cancel"));
                 if ui.button(tl!("Cancel")).clicked() {
                     screen_picker::cancel(&ctx);
                 }
             });
+            // This pass handled its input (the modal above ran): deliver the synthetic batch.
+            self.finish_synthetic_pass();
             self.automation_input = false;
+            type_tool::sync_ime(self, &ctx);
             gpu_status::check_window(self, &ctx);
             return;
         }
@@ -2253,19 +2573,22 @@ impl eframe::App for PhotocraftApp {
         if (chrome && self.ui.panels.toolbar) || tabbed_in {
             panels::toolbar(self, ui);
         }
-        if (chrome && self.ui.panels.dock) || tabbed_in {
-            panels::right_dock(self, ui);
+        // craft-ui's layout holds the canvas as its protected `canvas` panel.
+        let docking = (chrome && self.ui.panels.dock) || tabbed_in;
+        if docking {
+            panels::dock_area(self, ui);
+        } else {
+            // The docked frame-animation Timeline spans the canvas column, below the canvas.
+            if chrome {
+                timeline_ui::dock(self, ui);
+            }
+            let t = theme::Tokens::get(&ctx);
+            let backdrop = if chrome { prefs_ui::pasteboard_color(self).unwrap_or(t.canvas) } else { egui::Color32::BLACK };
+            egui::CentralPanel::default().frame(egui::Frame::NONE.fill(backdrop)).show(ui, |ui| {
+                canvas::document_area(self, ui);
+            });
+            panels::properties_window(self, &ctx);
         }
-        // The docked Timeline spans the canvas column: after the side panels, before the canvas.
-        if chrome {
-            timeline_ui::dock(self, ui);
-        }
-        let t = theme::Tokens::get(&ctx);
-        let backdrop = if chrome { prefs_ui::pasteboard_color(self).unwrap_or(t.canvas) } else { egui::Color32::BLACK };
-        egui::CentralPanel::default().frame(egui::Frame::NONE.fill(backdrop)).show(ui, |ui| {
-            canvas::document_area(self, ui);
-        });
-        panels::properties_window(self, &ctx);
         brush_panel::window(self, &ctx);
         preset_panels::windows(self, &ctx);
         gradient_ui::editor_window(self, &ctx);
@@ -2281,12 +2604,14 @@ impl eframe::App for PhotocraftApp {
         discard_ui::show(self, &ctx);
         tiff_options_ui::show(self, &ctx);
         targa_options_ui::show(self, &ctx);
+        jpeg_options_ui::show(self, &ctx);
         dds_options_ui::show(self, &ctx);
         distort_ui::show(self, &ctx);
         camera_raw_ui::show(self, &ctx);
         wide_angle_ui::show(self, &ctx);
         canvas::extra_windows(self, &ctx);
         notices::show(self, &ctx);
+        updates_ui::show(self, &ctx);
         gpu_status::show_fallback(self, &ctx);
         kys_import::show_offer(self, &ctx);
         if self.titlebar_modal_drag(chrome) {
@@ -2309,12 +2634,15 @@ impl eframe::App for PhotocraftApp {
         tool_memory::persist(self, &ctx);
         // So are View › Extras, Show and Snap To (#3762).
         view_cmds::persist(self, &ctx);
+        // Remember the 0.37 panel sizes so a later 0.36 rollback's newer old-key values win on
+        // the next upgrade (see `panels::migrate_panel_state`).
+        panels::remember_panel_state(&ctx);
         self.automation_input = false;
         shape_stroke_ui::finish_frame(self, &ctx);
         native_menu::sync(self, &ctx);
         if screen_picker::busy(&ctx) {
             // Block input without a backdrop: the worker may still be capturing the screen.
-            egui::Modal::new(egui::Id::new("screen-color-wait")).frame(egui::Frame::NONE).backdrop_color(egui::Color32::TRANSPARENT).show(&ctx, |_| {});
+            egui::Modal::new(egui::Id::unique("screen-color-wait")).frame(egui::Frame::NONE).backdrop_color(egui::Color32::TRANSPARENT).show(&ctx, |_| {});
             ctx.set_cursor_icon(egui::CursorIcon::Wait);
         }
         let ui_ms = gpu_canvas::now_ms() - t0;
@@ -2339,9 +2667,14 @@ impl eframe::App for PhotocraftApp {
                 if info.present.is_empty() { gpu } else { format!("{gpu}, {}", info.present) }
             });
         }
+        // This pass handled its input: the in-flight synthetic batch is delivered once and the
+        // next step may be injected on the next frame.
+        self.finish_synthetic_pass();
         // Synthetic input is injected one press/release step per frame: keep frames coming until
         // the queue is empty, then release control replies waiting on it.
-        if !self.synthetic.is_empty() {
+        // Only a pass that reached the end of the UI and delivered the in-flight batch counts as
+        // settled input; an early-returning pass keeps the batch (and the waiting replies).
+        if !self.synthetic.is_empty() || self.synthetic_batch.is_some() {
             ctx.request_repaint();
         } else if !self.input_waiters.is_empty() {
             for w in self.input_waiters.drain(..) {
@@ -2353,8 +2686,86 @@ impl eframe::App for PhotocraftApp {
         jobs_ui::keep_polling(self, &ctx);
         // Menus and buttons in this frame may have asked for a file dialog.
         self.poll_file_dialog(&ctx, Some(frame));
+        // The Type tool's IME descriptor is the last writer of this pass: every panel and the
+        // canvas have finished mutating the model, and an absent/focus-moved editor ends here.
+        type_tool::sync_ime(self, &ctx);
+        // Issue any due `ui.screenshot` now that this pass's state is settled: a queued request
+        // that has waited its passes and animation delay captures exactly this frame.
+        self.issue_captures(&ctx);
         // Last, after everything drawn this frame: a lost window device can't draw it (#3438).
         gpu_status::check_window(self, &ctx);
+    }
+}
+
+impl eframe::App for PhotocraftApp {
+    fn on_exit(&mut self) {
+        if let Err(err) = tool_memory::save_on_exit(self) {
+            log::warn!("Preferences: could not save the final tool selection: {err}");
+        }
+        // Release a pending screenshot's image budget and answer its control request; the
+        // callback is inert afterwards (it holds only a weak slot).
+        let finished = self.captures.cancel_all("the application is closing");
+        self.finish_captures(finished);
+    }
+
+    fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        self.logic_frame(ctx, frame);
+        self.finish_type_reset_logic(ctx);
+    }
+
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        let frame_start = gpu_canvas::now_ms();
+        // An undecorated window gets its caption back when the toolkit changes its flags
+        // (maximize, restore, …): take it off again before the frame is laid out (#2246).
+        if let Some(window_frame) = self.services.window_frame.as_mut() {
+            window_frame();
+        }
+        // Native menu key equivalents become the key presses they were (see `native_menu`).
+        if let Some(menu) = self.services.native_menu.as_mut() {
+            menu.raw_input(raw_input);
+        }
+        // While a text field of a floating panel's own window has the keyboard, the dock area
+        // hands that window the text keys in this input and converts them there.
+        if craft_ui::docking::typing_window(ctx).is_none() {
+            shortcuts::clipboard_keys(ctx, ctx.text_edit_focused() || self.ui.text_edit.is_some(), raw_input);
+        }
+        // Windows precision touchpads and some Linux Wayland compositors send pinches
+        // as fractional Ctrl + wheel rather than a native Zoom event (#4566).
+        // Leave Ctrl+whole-notch mouse scrolling alone, and honour the pinch preference.
+        if cfg!(any(target_os = "windows", target_os = "linux")) && self.session.prefs().enhanced_controls.zoom_with_trackpad_pinch {
+            wheel_nav::fold_legacy_pinch(ctx, raw_input);
+        }
+        self.inject_synthetic(ctx, raw_input);
+        // After the control channel's own events (`ui.type`) join the OS's, before any widget.
+        widgets::cap_text_events(&mut raw_input.events);
+        self.control_click.normalize(&mut raw_input.events, cfg!(target_os = "macos"));
+        // A pen held still is no touch screen's press-and-hold right click (stylus.rs).
+        let pen_down = self.stylus.pen_contacts.observe(&raw_input.events);
+        stylus::pen_hold_is_no_right_click(ctx, pen_down);
+        if self.custom_titlebar {
+            titlebar::release_after_os_resize(ctx, raw_input);
+        }
+        if self.stroke_trace.enabled() {
+            // The OS's moves and the control channel's (injected just above).
+            let moves = raw_input.events.iter().filter(|e| matches!(e, egui::Event::PointerMoved(_))).count();
+            self.stroke_trace.begin_frame(frame_start, moves);
+        }
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        self.ui_frame(ui, frame);
+        self.finish_type_reset_pass(ui.ctx());
+    }
+}
+
+/// Remove one contiguous run equal to `batch` from `events` (eframe's preserved synthetic
+/// input). A no-op when the run is not present.
+fn remove_event_run(events: &mut Vec<egui::Event>, batch: &[egui::Event]) {
+    if batch.is_empty() || batch.len() > events.len() {
+        return;
+    }
+    if let Some(pos) = events.windows(batch.len()).position(|w| w == batch) {
+        events.drain(pos..pos + batch.len());
     }
 }
 
@@ -2390,16 +2801,34 @@ impl PhotocraftApp {
     /// ⌘I then inverts the mask, as in Photoshop (#780). A targeted alpha channel or Quick Mask
     /// mode wins, as the engine routes those itself.
     pub fn with_mask_target(&self, id: &str, params: Value) -> Value {
-        if !photocraft_engine::channel_cmds::follows_target(id) || params.get("target").is_some() || !self.layer_mask_targeted() {
+        if !photocraft_engine::channel_cmds::follows_target(id) || params.get("target").is_some() {
             return params;
         }
+        // A filter mask is painted, filled and filtered in place; it doesn't float or move, and
+        // Edit › Transform, Apply Image and the dialog filters act on the smart object.
+        let target = if self.filter_mask_targeted() && photocraft_engine::channel_cmds::follows_filter_mask(id) {
+            "filterMask"
+        } else if self.layer_mask_targeted() {
+            "mask"
+        } else {
+            return params;
+        };
         match params {
             Value::Object(mut m) => {
-                m.insert("target".into(), Value::from("mask"));
+                m.insert("target".into(), Value::from(target));
                 Value::Object(m)
             }
-            _ => serde_json::json!({ "target": "mask" }),
+            _ => serde_json::json!({ "target": target }),
         }
+    }
+
+    /// The Layers panel targets the active smart object's filter mask (FILE-215-3), and no alpha
+    /// channel or Quick Mask takes over.
+    pub fn filter_mask_targeted(&self) -> bool {
+        let Some(st) = self.session.active() else { return false };
+        let Some(id) = st.active_layer.filter(|id| self.ui.filter_mask_target == Some(id.0)) else { return false };
+        let composite = st.channel_view.target == photocraft_engine::channel_cmds::ChannelTarget::Composite && st.doc.quick_mask.is_none();
+        composite && st.doc.layer(id).is_some_and(|l| matches!(&l.content, photocraft_doc::LayerContent::Smart(sm) if !sm.smart_filters.is_empty()))
     }
 
     /// The active layer's mask is what pixel commands edit: the Layers panel targets it, the layer
@@ -2421,17 +2850,72 @@ impl PhotocraftApp {
         colors_off && !alpha_on
     }
 
+    /// Targeting the pixels, the layer mask or the vector mask ends a shown filter mask (⌥-click
+    /// on its thumbnail): while it shows, [`Self::sync_mask_targets`] keeps the filter mask
+    /// targeted, so strokes would keep landing there.
+    pub(crate) fn end_filter_mask_view(&mut self) {
+        let Some(v) = self.session.active().and_then(photocraft_engine::mask_view_cmds::current).filter(|v| v.filter) else { return };
+        let off = serde_json::json!({"layer": v.layer.0, "mode": "off", "mask": "filter"});
+        if let Err(err) = self.session.execute(photocraft_engine::mask_view_cmds::ID, off) {
+            log::warn!("could not end the filter mask view: {err}");
+        }
+    }
+
+    /// Explicitly targeting a filter mask ends any conflicting mask view; untargeting it ends its
+    /// own view too.
+    pub(crate) fn select_filter_mask_target(&mut self, layer: Option<u64>) {
+        if layer.is_none() {
+            self.end_filter_mask_view();
+        }
+        if layer.is_some() {
+            if let Some(st) = self.session.active_mut() {
+                if st.channel_view.layer_mask.is_some_and(|v| !v.filter || Some(v.layer.0) != layer) {
+                    st.channel_view.layer_mask = None;
+                }
+                if matches!(
+                    st.channel_view.target,
+                    photocraft_engine::channel_cmds::ChannelTarget::LayerMask | photocraft_engine::channel_cmds::ChannelTarget::VectorMask
+                ) {
+                    st.channel_view.target = photocraft_engine::channel_cmds::ChannelTarget::Composite;
+                }
+            }
+            self.ui.mask_target = false;
+            self.ui.vector_mask_target = false;
+        }
+        self.ui.filter_mask_target = layer;
+        self.sync_mask_targets();
+    }
+
     /// Viewing a layer mask (#196) targets it; a vector-mask target needs a vector mask on the
     /// active layer (a shape layer's path is its content, not a mask). Targeting a mask or the
     /// pixels brings back that target's foreground/background pair, as in Photoshop (#2166).
     pub(crate) fn sync_mask_targets(&mut self) {
         if let Some(st) = self.session.active_mut() {
-            if photocraft_engine::mask_view_cmds::current(st).is_some() || st.channel_view.target == photocraft_engine::channel_cmds::ChannelTarget::LayerMask {
-                self.ui.mask_target = true;
-                self.ui.vector_mask_target = false;
-            } else if st.channel_view.target == photocraft_engine::channel_cmds::ChannelTarget::VectorMask {
-                self.ui.vector_mask_target = true;
-                self.ui.mask_target = false;
+            use photocraft_engine::channel_cmds::ChannelTarget;
+            let channel = st.channel_view.target;
+            match photocraft_engine::mask_view_cmds::current(st) {
+                Some(v) if v.filter => {
+                    self.ui.filter_mask_target = Some(v.layer.0);
+                    self.ui.mask_target = false;
+                    self.ui.vector_mask_target = false;
+                }
+                Some(_) => {
+                    self.ui.mask_target = true;
+                    self.ui.vector_mask_target = false;
+                    self.ui.filter_mask_target = None;
+                }
+                None if channel == ChannelTarget::LayerMask => {
+                    self.ui.mask_target = true;
+                    self.ui.vector_mask_target = false;
+                }
+                None if channel == ChannelTarget::VectorMask => {
+                    self.ui.vector_mask_target = true;
+                    self.ui.mask_target = false;
+                }
+                None => {}
+            }
+            if self.ui.mask_target || self.ui.vector_mask_target {
+                self.ui.filter_mask_target = None;
             }
             if self.ui.vector_mask_target && !mask_thumbs_ui::has_vector_mask(st) {
                 self.ui.vector_mask_target = false;
@@ -2446,7 +2930,10 @@ impl PhotocraftApp {
                 self.ui.properties_layer = None;
             }
         }
-        let mask = self.layer_mask_targeted();
+        if self.ui.filter_mask_target.is_some() && !self.filter_mask_targeted() {
+            self.ui.filter_mask_target = None;
+        }
+        let mask = self.layer_mask_targeted() || self.filter_mask_targeted();
         self.session.tools.target_mask(mask);
     }
 
@@ -2469,6 +2956,9 @@ impl PhotocraftApp {
                 }
                 if layer.vector_mask.is_some() {
                     live.insert((layer.id, mask_thumbs_ui::THUMB_VECTOR));
+                }
+                if matches!(&layer.content, photocraft_doc::LayerContent::Smart(sm) if sm.filter_mask.is_some()) {
+                    live.insert((layer.id, mask_thumbs_ui::THUMB_SMART_MASK));
                 }
                 if let Some(children) = layer.children() {
                     pending.extend(children);
@@ -2553,9 +3043,22 @@ impl PhotocraftApp {
         id
     }
 
+    /// The cached thumbnail of `mask`, the layer mask of layer `id`.
     pub fn mask_thumb(&mut self, ctx: &egui::Context, doc: &Document, id: photocraft_doc::LayerId, mask: &photocraft_doc::LayerMask) -> egui::TextureId {
-        let rev = surface_fingerprint(&mask.surface) ^ (doc.size.width as u64) << 40;
-        let key = (id, mask_thumbs_ui::THUMB_MASK);
+        self.mask_thumb_kind(ctx, doc, id, mask, mask_thumbs_ui::THUMB_MASK)
+    }
+
+    /// The thumbnail of `mask` under cache `kind`, re-rendered only when the mask's pixels or the document size change; Smart Filter and layer masks are cached apart.
+    pub(crate) fn mask_thumb_kind(
+        &mut self,
+        ctx: &egui::Context,
+        doc: &Document,
+        id: photocraft_doc::LayerId,
+        mask: &photocraft_doc::LayerMask,
+        kind: u8,
+    ) -> egui::TextureId {
+        let rev = surface_fingerprint(&mask.surface) ^ (doc.size.width as u64) << 40 ^ (doc.size.height as u64) << 16;
+        let key = (id, kind);
         if let Some((r, tex)) = self.thumbs.get(&key)
             && *r == rev
         {
@@ -2634,6 +3137,99 @@ fn thumb_image(frame: photocraft_geom::Rect, side: usize, mut f: impl FnMut(i32,
 }
 
 impl PhotocraftApp {
+    /// The document/focus identity the in-flight synthetic batch was queued for.
+    fn synthetic_target(&self, ctx: &egui::Context) -> SyntheticTarget {
+        SyntheticTarget { document: self.document_identity(), focus: ctx.memory(|m| m.focused()) }
+    }
+
+    fn synthetic_target_matches(&self, ctx: &egui::Context) -> bool {
+        self.synthetic_snapshot.is_some_and(|queued| queued.matches(self.synthetic_target(ctx)))
+    }
+
+    /// Put at most one queued synthetic batch into this pass's input.
+    ///
+    /// The batch is appended once and tracked; `begin_pass` consumes it. While it is in flight no
+    /// further step is drained, so hidden logic ticks cannot accumulate several batches into one
+    /// pass. A document or focus change observed here is before eframe consumes the events, so the
+    /// batch is dropped and its waiting control replies fail instead of landing somewhere else.
+    /// If a pass consumed it but PhotoCraft returned before handling input (fonts not ready), the
+    /// same batch is appended again on the next hook, exactly once.
+    fn inject_synthetic(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        if self.synthetic_batch.is_some() {
+            if !self.synthetic_target_matches(ctx) {
+                // eframe may already carry the batch in its preserved input: withdraw exactly
+                // those events before the host consumes them, then fail the waiting replies.
+                if let Some(batch) = self.synthetic_batch.as_ref() {
+                    remove_event_run(&mut raw_input.events, batch);
+                }
+                self.cancel_synthetic("the active document or focus changed while the input was queued");
+                return;
+            }
+            if self.synthetic_reinject {
+                if let Some(batch) = self.synthetic_batch.clone() {
+                    raw_input.events.extend(batch);
+                }
+                self.synthetic_reinject = false;
+                self.automation_input = true;
+            }
+            return;
+        }
+        if self.synthetic.is_empty() {
+            return;
+        }
+        let events = self.take_synthetic_step();
+        if events.is_empty() {
+            return;
+        }
+        self.synthetic_snapshot = Some(self.synthetic_target(ctx));
+        raw_input.events.extend(events.iter().cloned());
+        self.synthetic_batch = Some(events);
+    }
+
+    /// A pass begins with the in-flight batch. The events are already in this pass's input, so a
+    /// target change detected now cannot withdraw them: deliver them (never half-apply) and keep
+    /// `automation_input` set so the commands they trigger still go through the automation policy.
+    /// `inject_synthetic` performs the withdrawable check, before the host consumes the events.
+    /// Called at the start of `App::ui` only (a hidden `run_logic` tick consumes no input).
+    fn begin_synthetic_pass(&mut self, ctx: &egui::Context) {
+        if self.synthetic_batch.is_none() {
+            return;
+        }
+        if !self.synthetic_target_matches(ctx) {
+            log::warn!("synthetic input: the document or focus changed inside the pass; delivering it as automation input");
+        }
+        self.automation_input = true;
+    }
+
+    /// One full UI pass handled the in-flight batch: deliver it once and let the next step in.
+    fn finish_synthetic_pass(&mut self) {
+        let _ = self.synthetic_batch.take();
+        self.synthetic_snapshot = None;
+        self.synthetic_reinject = false;
+    }
+
+    /// The pass returned before the input handling (fonts not ready): keep the batch and have the
+    /// next hook append it again exactly once, because egui already consumed the events.
+    fn defer_synthetic_pass(&mut self) {
+        if self.synthetic_batch.is_some() {
+            self.synthetic_reinject = true;
+        }
+    }
+
+    /// Drop the in-flight batch and fail the replies waiting on it.
+    fn cancel_synthetic(&mut self, reason: &str) {
+        let pending = self.synthetic_batch.take().is_some() || !self.synthetic.is_empty();
+        self.synthetic.clear();
+        self.synthetic_snapshot = None;
+        self.synthetic_reinject = false;
+        self.automation_input = false;
+        if pending || !self.input_waiters.is_empty() {
+            for w in self.input_waiters.drain(..) {
+                let _ = w.send(serde_json::json!({"ok": false, "error": format!("input cancelled: {reason}")}));
+            }
+        }
+    }
+
     /// Next step of queued synthetic input (automation): events up to and including the first
     /// release, so egui sees press and release in separate frames. Hosts that don't call
     /// `raw_input_hook` (offscreen harnesses) feed these to their input themselves.
@@ -2650,9 +3246,12 @@ impl PhotocraftApp {
         events
     }
 
-    /// Install fonts, image loaders and the theme. Call from the app creator when possible so the
-    /// very first frame renders; otherwise `logic` does it and the first frame is skipped.
+    /// Install fonts, image loaders and the theme. Call from the app creator (and again for a
+    /// replacement Context) before the first `run_ui` so the very first frame renders and the
+    /// Type reset begin/end pass markers exist; otherwise `logic` does it and the first frame is
+    /// skipped, with the begin-pass marker necessarily starting on the following pass.
     pub fn setup_context(ctx: &egui::Context, kind: theme::ThemeKind) {
+        Self::install_type_reset_hooks(ctx);
         ctx.add_plugin(tool_cursor::CursorLifecycle);
         ctx.add_plugin(single_line_drag::SingleLineDrag::default());
         theme::install_fonts(ctx);
@@ -2981,13 +3580,19 @@ impl PhotocraftApp {
         let r = photocraft_geom::Rect::new(0, 0, w as i32, h as i32);
         let mut surface = photocraft_raster::Surface::from_interleaved(photocraft_color::PixelFormat::RGBA8, r, &bytes);
         surface.prune();
-        self.session.clipboard = Some(photocraft_engine::edit_cmds::Clip { surface, bounds: r, layers: None, resolution: None });
+        self.session.clipboard = Some(photocraft_engine::edit_cmds::Clip { surface, bounds: r, layers: None, resolution: None, source: None });
         self.os_clip_sig = Some(sig);
         self.clip_external = true;
         self.clip_unmirrored = false;
         Ok(true)
     }
 }
+
+#[cfg(test)]
+mod lifecycle_tests;
+
+#[cfg(test)]
+mod screenshot_tests;
 
 #[cfg(test)]
 mod navigator_gpu_tests;
@@ -3019,6 +3624,8 @@ mod live_retouch_tests;
 #[cfg(test)]
 mod pencil_tests;
 #[cfg(test)]
+mod tool_options_theme_tests;
+#[cfg(test)]
 mod tool_shortcut_tests;
 
 #[cfg(test)]
@@ -3040,6 +3647,8 @@ mod transform_undo_tests;
 mod transform_type_tests;
 
 #[cfg(test)]
+mod psd_open_tests;
+#[cfg(test)]
 mod save_identity_tests;
 
 #[cfg(test)]
@@ -3048,6 +3657,8 @@ mod move_auto_select_tests;
 #[cfg(test)]
 mod new_group_button_tests;
 
+#[cfg(test)]
+mod color_panel_tests;
 #[cfg(test)]
 mod color_tab_theme_tests;
 
@@ -3082,9 +3693,14 @@ mod warp_text_dialog_tests;
 
 #[cfg(test)]
 mod blend_dropdown_wheel_tests;
+#[cfg(test)]
+mod paths_scroll_tests;
 
 #[cfg(test)]
 mod options_bar_mode_wheel_tests;
+
+#[cfg(test)]
+mod field_wheel_app_tests;
 
 #[cfg(test)]
 mod dropdown_press_tests;
@@ -3403,10 +4019,11 @@ mod clipboard_tests {
         app
     }
 
+    /// Paste is enabled from the clipboard service alone (no read); the explicit paste imports
+    /// the OS image, once, and centres it in the view like Photoshop does for foreign clipboard
+    /// content.
     #[test]
     fn external_clipboard_enables_and_centres_paste() {
-        // Paste is enabled from the clipboard service alone (no read); the explicit paste imports
-        // the OS image, once, and centres it like Photoshop does for foreign clipboard content.
         let (os, reads) = (OsClip::default(), Arc::default());
         let mut app = app_with_os_clipboard(&os, &reads);
         *os.lock().unwrap() = Some((4, 4, [255u8, 0, 0, 255].repeat(16)));
@@ -3414,8 +4031,9 @@ mod clipboard_tests {
         assert!(crate::menus::is_enabled(&app, "edit.paste"));
         assert!(crate::menus::is_enabled(&app, "edit.pasteSpecial.pasteInPlace"));
         assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 0, "enablement never reads the clipboard");
+        app.ui.views[0].center = [40.0, 20.0];
         let r = crate::menus::invoke(&mut app, &egui::Context::default(), "edit.paste", serde_json::json!({})).unwrap();
-        assert_ne!(r["offset"], serde_json::json!([0, 0]), "external image is centred: {r}");
+        assert_eq!(r["offset"], serde_json::json!([38, 18]), "external image is centred in the view: {r}");
         assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 1, "one read per explicit paste");
         // Without a clipboard service Paste greys until something is copied in the app.
         let mut plain = PhotocraftApp::new(Session::new(), Services::default());
@@ -3609,4 +4227,8 @@ mod channel_tint_tests {
 }
 
 #[cfg(test)]
+mod browse_field_tests;
+#[cfg(test)]
 mod options_hit_area_tests;
+#[cfg(test)]
+mod select_and_mask_button_tests;

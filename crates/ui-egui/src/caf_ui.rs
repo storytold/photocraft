@@ -1243,7 +1243,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let mut reset_what: Option<&str> = None;
     let mut rebase_needed = false;
     let mut dragging = false;
-    egui::Area::new(egui::Id::new("caf-workspace")).order(egui::Order::Foreground).fixed_pos(screen.min).show(ctx, |ui| {
+    egui::Area::new(egui::Id::unique("caf-workspace")).order(egui::Order::Foreground).fixed_pos(screen.min).show(ctx, |ui| {
         let Some(w) = app.distort.caf.as_mut() else { return };
         let before = w.opts.clone();
         w.texture_limit = ctx.input(|i| i.max_texture_side);
@@ -1279,7 +1279,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 bui.add_space(8.0);
                 bui.label(tl!("Size:"));
                 let mut size = w.brush_size as f32;
-                if widgets::value_field(&mut bui, &mut size, 1.0..=5000.0, " px", 64.0).changed() {
+                if widgets::value_field(&mut bui, &mut size, 1.0..=5000.0, " px", 64.0).accessible_name(tl!("Size:")).changed() {
                     w.brush_size = f64::from(size);
                 }
             }
@@ -1303,7 +1303,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 if widgets::secondary_button(&mut bui, tl!("Contract"), 70.0).clicked() {
                     fill_btn = Some(json!({"op": "contract", "by": w.expand_by}));
                 }
-                widgets::value_field(&mut bui, &mut w.expand_by, 1.0..=100.0, " px", 56.0);
+                widgets::value_field(&mut bui, &mut w.expand_by, 1.0..=100.0, " px", 56.0).accessible_name(tl!("Expand"));
                 if crate::icons::button(&mut bui, "undo-2", 26.0, false, tl!("Reset")).clicked() {
                     reset_what = Some("lasso");
                 }
@@ -1338,7 +1338,14 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     widgets::color_edit_button_srgb(ui, &mut w.opts.color);
                     ui.add_space(8.0);
                     ui.label(tl!("Indicates"));
-                    widgets::dropdown(ui, "caf-indicates", &mut w.opts.excluded, &[(false, tl!("Sampling Area")), (true, tl!("Excluded Area"))], 120.0);
+                    widgets::dropdown(
+                        ui,
+                        "caf-indicates",
+                        tl!("Indicates"),
+                        &mut w.opts.excluded,
+                        &[(false, tl!("Sampling Area")), (true, tl!("Excluded Area"))],
+                        120.0,
+                    );
                 });
             });
             widgets::hairline(ui);
@@ -1377,7 +1384,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     ("high".to_string(), tl!("High")),
                     ("veryHigh".to_string(), tl!("Very High")),
                 ];
-                widgets::dropdown(ui, "caf-color", &mut w.opts.color_adaptation, &o, 110.0);
+                widgets::dropdown(ui, "caf-color", tl!("Color Adaptation"), &mut w.opts.color_adaptation, &o, 110.0);
             });
             ui.horizontal(|ui| {
                 ui.label(tl!("Rotation Adaptation"));
@@ -1388,7 +1395,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     ("high".to_string(), tl!("High")),
                     ("full".to_string(), tl!("Full")),
                 ];
-                widgets::dropdown(ui, "caf-rotation", &mut w.opts.rotation, &o, 110.0);
+                widgets::dropdown(ui, "caf-rotation", tl!("Rotation Adaptation"), &mut w.opts.rotation, &o, 110.0);
             });
             ui.horizontal(|ui| {
                 widgets::checkbox(ui, &mut w.opts.scale, tl!("Scale"));
@@ -1400,7 +1407,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 ui.label(tl!("Output To"));
                 let o =
                     [("current".to_string(), tl!("Current Layer")), ("new".to_string(), tl!("New Layer")), ("duplicate".to_string(), tl!("Duplicate Layer"))];
-                widgets::dropdown(ui, "caf-output", &mut w.opts.output, &o, 140.0);
+                widgets::dropdown(ui, "caf-output", tl!("Output To"), &mut w.opts.output, &o, 140.0);
             });
             if let Some(e) = w.error.as_ref().or(w.preview.error.as_ref()) {
                 ui.label(egui::RichText::new(e.as_str()).color(t.danger).size(11.0));
@@ -1453,7 +1460,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             let sp = ERect::from_min_size(pv_area.right_bottom() - vec2(26.0, 26.0), vec2(18.0, 18.0));
             ui.put(sp, egui::Spinner::new().size(16.0));
         }
-        let presp = ui.interact(pv_area, egui::Id::new("caf-preview-view"), Sense::click_and_drag());
+        let presp = ui.interact(pv_area, egui::Id::unique("caf-preview-view"), Sense::click_and_drag());
         if presp.dragged() {
             let d = presp.drag_delta();
             w.preview.center = [w.preview.center[0] - f64::from(d.x / pv.zoom), w.preview.center[1] - f64::from(d.y / pv.zoom)];
@@ -1467,11 +1474,11 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         let zrow = ERect::from_min_size(pos2(pv_rect.left() + 10.0, pv_rect.bottom() - 38.0), vec2(PREVIEW_W - 20.0, 30.0));
         let mut zr = ui.new_child(egui::UiBuilder::new().max_rect(zrow).layout(egui::Layout::left_to_right(egui::Align::Center)));
         let mut pct = (w.preview.zoom * 100.0).round();
-        if widgets::value_field(&mut zr, &mut pct, 1.0..=3200.0, "%", 64.0).changed() {
+        if widgets::value_field(&mut zr, &mut pct, 1.0..=3200.0, "%", 64.0).accessible_name(tl!("Zoom")).changed() {
             w.preview.zoom = pct / 100.0;
         }
         let mut lz = pct.max(1.0).ln();
-        if zr.add(egui::Slider::new(&mut lz, 0.0..=3200f32.ln()).show_value(false)).changed() {
+        if zr.add(egui::Slider::new(&mut lz, 0.0..=3200f32.ln()).show_value(false)).accessible_name(tl!("Zoom")).changed() {
             w.preview.zoom = lz.exp() / 100.0;
         }
         // The document view.
@@ -1481,7 +1488,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         if w.zoom <= 0.0 {
             w.zoom = ((area.width() - 40.0) / cw).min((area.height() - 40.0) / chh).clamp(0.01, 4.0);
         }
-        let resp = ui.interact(area, egui::Id::new("caf-view"), Sense::click_and_drag());
+        let resp = ui.interact(area, egui::Id::unique("caf-view"), Sense::click_and_drag());
         if resp.hovered() {
             let scroll = ui.input(|i| i.smooth_scroll_delta.y);
             if scroll != 0.0
@@ -1638,6 +1645,31 @@ mod tests {
 
     fn ws(app: &PhotocraftApp) -> &CafWorkspace {
         app.distort.caf.as_ref().unwrap()
+    }
+
+    #[test]
+    fn settings_dropdowns_are_named_for_their_visible_labels() {
+        use egui::accesskit::Role;
+        use egui_kittest::Harness;
+        use egui_kittest::kittest::{NodeT, Queryable};
+
+        let mut app = app_with_selection();
+        open(&mut app).unwrap();
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(1000.0, 900.0))
+            .with_context_setup(|ctx| PhotocraftApp::setup_context(ctx, crate::theme::ThemeKind::ALL[0]))
+            .build_ui_state(|ui, app: &mut PhotocraftApp| show(app, ui.ctx()), app);
+        h.run_steps(2);
+        // The Indicates dropdown lives inside a collapsed "Sampling Area Overlay" header.
+        h.get_by_role_and_label(Role::DisclosureTriangle, "Sampling Area Overlay").click();
+        h.run_steps(3);
+        let labels: Vec<String> = h.query_all_by_role(Role::ComboBox).filter_map(|n| n.accesskit_node().label()).collect();
+        for label in ["Indicates", "Color Adaptation", "Rotation Adaptation", "Output To"] {
+            assert!(labels.iter().any(|have| have == label), "{label} names its dropdown: {labels:?}");
+        }
+        for wrong in ["Contents:", "Color", "Rotation", "Source"] {
+            assert!(!labels.iter().any(|have| have == wrong), "{wrong} names no control here: {labels:?}");
+        }
     }
 
     /// Photoshop opens the workspace with the Sampling Brush subtracting at a tenth of the

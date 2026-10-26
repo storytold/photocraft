@@ -118,6 +118,114 @@ pub(crate) fn recorded_selection(s: &Session, mut p: Value) -> Value {
     p
 }
 
+/// The layers named `name`, in document order, other than the ones being moved and (groups) their
+/// contents. Moving layers never changes the others' order, so an occurrence counted among these
+/// means the same layer before the move (when an action replays it) and after it (when the step
+/// is recorded).
+fn same_named_targets(doc: &photocraft_doc::Document, name: &str, moved: &[LayerId]) -> Vec<LayerId> {
+    fn subtree(l: &Layer, out: &mut Vec<LayerId>, depth: usize) {
+        out.push(l.id);
+        if depth < 256
+            && let Some(children) = l.children()
+        {
+            children.iter().for_each(|c| subtree(c, out, depth + 1));
+        }
+    }
+    let mut skip = Vec::new();
+    for l in moved.iter().filter_map(|id| doc.layer(*id)) {
+        subtree(l, &mut skip, 0);
+    }
+    doc.walk().into_iter().filter(|(_, _, l)| l.name == name && !skip.contains(&l.id)).map(|(_, _, l)| l.id).collect()
+}
+
+/// A Layers-panel drag of the selected layer records its drop target by name (and which of
+/// several same-named layers it is), as [`recorded_selection`] does: the id means nothing in the
+/// document the action plays in later, so playback failed with "no such layer" (#7845). Drags of
+/// several layers, or of a layer that isn't the selected one, keep their ids.
+fn recorded_move(s: &Session, mut p: Value, pre_selected: Option<&[LayerId]>) -> Value {
+    if p.get("layers").is_some() {
+        return p;
+    }
+    let Some(st) = s.active() else { return p };
+    let moved = match p.get("layer") {
+        None => st.active_layer,
+        Some(v) => match v.as_u64().map(LayerId) {
+            Some(id) if pre_selected.map_or_else(|| st.selected_layers().as_slice() == [id], |sel| sel == [id]) => Some(id),
+            _ => return p,
+        },
+    };
+    if let Some(fields) = p.as_object_mut() {
+        fields.remove("layer");
+    }
+    let Some(id) = p.get("target").and_then(Value::as_u64).map(LayerId) else { return p };
+    let Some(layer) = st.doc.layer(id) else { return p };
+    // A copy leaves its source where it is (it may even land beside it), so the source stays a
+    // candidate; the new copy (the active layer once the step has run, which is when it is
+    // recorded) is left out instead, as it doesn't exist yet when the step replays.
+    let copy = p.get("copy").and_then(Value::as_bool).unwrap_or(false);
+    let skip = if copy { st.active_layer.filter(|a| Some(*a) != moved) } else { moved };
+    let matches = same_named_targets(&st.doc, &layer.name, skip.as_slice());
+    let Some(occurrence) = matches.iter().position(|candidate| *candidate == id) else { return p };
+    if let Some(fields) = p.as_object_mut() {
+        fields.insert("target".into(), json!(layer.name));
+        if matches.len() > 1 {
+            fields.insert("targetOccurrence".into(), json!(occurrence));
+        }
+    }
+    p
+}
+
+/// `layer.moveTo`'s drop target: an id, or a name with `targetOccurrence` choosing among layers
+/// that share it (in document order, the `moved` layers aside; required when several do).
+fn move_target(s: &Session, p: &Value, moved: &[LayerId]) -> Result<LayerId> {
+    const CMD: &str = "layer.moveTo";
+    match p.get("target") {
+        Some(Value::String(name)) => {
+            let occurrence = p
+                .get("targetOccurrence")
+                .map(|v| v.as_u64().and_then(|n| usize::try_from(n).ok()).ok_or_else(|| bad(CMD, "`targetOccurrence` must be a non-negative integer")))
+                .transpose()?;
+            let st = s.active().ok_or(EngineError::NoDocument)?;
+            let matches = same_named_targets(&st.doc, name, moved);
+            if matches.len() > 1 && occurrence.is_none() {
+                return Err(bad(CMD, format!("multiple layers named `{name}`; specify `targetOccurrence`")));
+            }
+            let index = occurrence.unwrap_or(0);
+            matches.get(index).copied().ok_or_else(|| bad(CMD, format!("no layer named `{name}` at occurrence {index}")))
+        }
+        Some(v) => v.as_u64().map(LayerId).ok_or_else(|| bad(CMD, "`target` must be a layer id or name")),
+        None => Err(bad(CMD, "missing `target`")),
+    }
+}
+
+/// Normalise parameters when recording an action step.
+///
+/// For `layer.select`, captures the layer by name. For other commands, if a numeric `layer`
+/// parameter references the document's sole selected layer, normalises it to the target form
+/// (omitting `layer`) so that the recorded step applies to whatever layer is targeted when
+/// replayed or exported to `.atn` (#7248).
+pub(crate) fn recorded_step(s: &Session, id: &str, p: Value, pre_selected: Option<&[LayerId]>) -> Value {
+    if id == "layer.select" {
+        return recorded_selection(s, p);
+    }
+    if id == "layer.moveTo" {
+        return recorded_move(s, p, pre_selected);
+    }
+    let Some(layer_id) = p.get("layer").and_then(Value::as_u64).map(LayerId) else { return p };
+    let is_sole_selected = match pre_selected {
+        Some(sel) => sel == [layer_id],
+        None => s.active().is_some_and(|st| st.selected_layers().as_slice() == [layer_id]),
+    };
+    if is_sole_selected {
+        let mut p = p;
+        if let Some(fields) = p.as_object_mut() {
+            fields.remove("layer");
+        }
+        return p;
+    }
+    p
+}
+
 fn selection_target(s: &Session, p: &Value) -> Result<LayerId> {
     let Some(name) = p.get("name") else {
         if p.get("occurrence").is_some() {
@@ -361,6 +469,10 @@ pub fn translate(s: &mut Session, p: &Value) -> Result<Value> {
         }
         Some(other) => return Err(bad("layer.translate", format!("unknown units `{other}` (px|pt)"))),
     };
+    let carry = match p.get("selection") {
+        None | Some(Value::Null) => false,
+        Some(v) => v.as_bool().ok_or_else(|| bad("layer.translate", "`selection` must be a boolean"))?,
+    };
     if dx == 0 && dy == 0 {
         return Ok(Value::Null);
     }
@@ -395,6 +507,11 @@ pub fn translate(s: &mut Session, p: &Value) -> Result<Value> {
         // A board moved past any canvas edge grows the canvas, as a new one does (#1531, #3070).
         if ids.iter().any(|id| doc.layer(*id).is_some_and(|l| l.artboard().is_some())) {
             crate::artboard_cmds::fit_canvas(doc);
+        }
+        // The Move tool carries the selection along when it moves several layers whole, as
+        // Photoshop does (#7538): one step, so Undo takes both back.
+        if carry {
+            doc.selection = doc.selection.as_ref().map(|sel| shift_surface(sel, dx, dy));
         }
         Ok(ids)
     })?;
@@ -463,26 +580,7 @@ fn shift_shown(doc: &Document, l: &mut Layer, dx: i32, dy: i32) {
                 *c = translate_surface(c, dx, dy);
             }
         }
-        LayerContent::Shape(sh) => {
-            // The rendered shape is cut at the canvas: one that reaches past it renders again.
-            let canvas = doc.bounds();
-            let was_inside = sh.cache.as_ref().is_some_and(|c| {
-                let b = photocraft_compose::bounds::content_bounds(c);
-                b.is_empty() || (b.x0 > canvas.x0 && b.y0 > canvas.y0 && b.x1 < canvas.x1 && b.y1 < canvas.y1)
-            });
-            crate::vector_cmds::transform_shape(sh, &a);
-            let stroke_pad = sh.stroke.as_ref().filter(|s| s.opacity > 0.0).map_or(0.0, |s| f64::from(s.width.ceil()));
-            let stays_inside = sh.path.control_bounds().is_some_and(|(x0, y0, x1, y1)| {
-                (x0 - stroke_pad) > canvas.x0 as f64
-                    && (y0 - stroke_pad) > canvas.y0 as f64
-                    && (x1 + stroke_pad) < canvas.x1 as f64
-                    && (y1 + stroke_pad) < canvas.y1 as f64
-            });
-            match &mut sh.cache {
-                Some(c) if was_inside && stays_inside => *c = translate_surface(c, dx, dy),
-                _ => crate::vector_cmds::refresh_shape(doc, sh),
-            }
-        }
+        LayerContent::Shape(sh) => crate::vector_cmds::shift_shape(doc, sh, f64::from(dx), f64::from(dy)),
         LayerContent::Smart(sm) => crate::smart_cmds::shift_smart(sm, dx, dy),
         LayerContent::Group(g) => {
             if let Some(ab) = &mut g.artboard {
@@ -622,7 +720,7 @@ fn alpha_channels_equal(a: &photocraft_doc::AlphaChannel, b: &photocraft_doc::Al
 /// compared here: the caller walks into them, so an edit inside a group damages only the
 /// edited child's extent, not the whole group's. The destructure is exhaustive, so a new
 /// `Layer` field fails to compile until it is classified: compared, or explicitly ignored
-/// (name, locks, label, `psd_blocks`, `psd_id`, link group — none of them composite; video
+/// (name, locks, label, `psd_blocks`, `psd_id`, link group, XMP — none of them composite; video
 /// bails out earlier in the walk).
 fn layer_pixels_equal(a: &Layer, b: &Layer) -> bool {
     let Layer {
@@ -647,6 +745,7 @@ fn layer_pixels_equal(a: &Layer, b: &Layer) -> bool {
         blend_if,
         advanced,
         video: _,
+        xmp: _,
     } = a;
     *id == b.id
         && *visible == b.visible
@@ -1073,8 +1172,9 @@ fn align(s: &mut Session, p: &Value, kind: &str) -> Result<Value> {
                 // Photoshop: with an active selection, the layers align to its bounds (Layer › Align
                 // Layers to Selection), however many are selected.
                 (Some(m), _) if to == "auto" && !m.content_bounds().is_empty() => m.content_bounds(),
-                // One layer with no selection aligns to the canvas (otherwise it would align to itself).
-                (None, 1) if to == "auto" => doc.bounds(),
+                // One layer with no selection aligns to the canvas (otherwise it would align to
+                // itself), or to the artboard it sits in, as in Photoshop (#7945).
+                (None, 1) if to == "auto" => items.first().map_or_else(|| doc.bounds(), |(id, _)| board_or_canvas(doc, *id)),
                 _ => items.iter().fold(Rect::EMPTY, |a, (_, b)| a.union(b)),
             },
             other => return Err(bad(&cmd, format!("`to` must be auto|layers|selection|canvas, not `{other}`"))),
@@ -1097,6 +1197,12 @@ fn align(s: &mut Session, p: &Value, kind: &str) -> Result<Value> {
         Ok(moves.iter().filter(|m| m.1 != 0 || m.2 != 0).count())
     })?;
     Ok(json!({"moved": moved}))
+}
+
+/// The bounds a lone layer aligns to: the artboard holding it, else the canvas. An artboard
+/// itself aligns to the canvas.
+fn board_or_canvas(doc: &Document, id: LayerId) -> Rect {
+    doc.artboard_of(id).filter(|board| *board != id).and_then(|board| doc.layer(board)?.artboard().map(|a| a.rect)).unwrap_or_else(|| doc.bounds())
 }
 
 /// One move per layer (first wins), skipping layers nested in another moved layer.
@@ -1247,7 +1353,6 @@ fn apply_move(doc: &mut Document, moved_ids: &[LayerId], target: LayerId, pos: &
 /// selected nodes are detached, and every reference is validated before editing.
 pub fn move_to(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "layer.moveTo";
-    let target = LayerId(p.get("target").and_then(Value::as_u64).ok_or_else(|| bad(CMD, "missing `target`"))?);
     let pos = p.get("position").and_then(Value::as_str).unwrap_or("above");
     if !matches!(pos, "above" | "below" | "into") {
         return Err(bad(CMD, "position must be above, below, or into"));
@@ -1273,6 +1378,8 @@ pub fn move_to(s: &mut Session, p: &Value) -> Result<Value> {
     } else {
         vec![crate::commands::layer_param(s, p)?]
     };
+    // A copy moves nothing, so its source stays a candidate (⌥-dragging a layer beside itself).
+    let target = move_target(s, p, if copy { &[] } else { &requested })?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let doc = &st.doc;
     let target_path = doc.path_of(target).ok_or(EngineError::NoLayer(target))?;
@@ -1472,32 +1579,54 @@ fn merge_layers(s: &mut Session) -> Result<Value> {
     }
     let mid = s.edit("Merge Layers", |doc, active| {
         let ids = top_level(doc, &sel);
-        let top_id = *ids.last().ok_or_else(|| EngineError::Other("Merge Layers needs two or more layers".into()))?;
-        let top = doc.layer(top_id).ok_or(EngineError::NoLayer(top_id))?.clone();
+        let lowest_id = *ids.first().ok_or_else(|| EngineError::Other("Merge Layers needs two or more layers".into()))?;
+        let is_background = doc.is_background(lowest_id);
+
         let mut solo = doc.clone();
         solo.layers = ids.iter().filter_map(|id| doc.layer(*id)).filter(|l| l.visible).cloned().collect();
         if solo.layers.is_empty() {
             return Err(EngineError::Other("the selected layers are all hidden".into()));
         }
-        let fmt = doc.pixel_format();
-        let fmt = PixelFormat::new(fmt.mode, fmt.sample, true);
-        let mut merged = Layer::raster(top.name.clone(), fmt);
-        merged.locks = top.locks;
-        merged.label = top.label;
-        // Clipped layers of one chain merge into a layer still clipped to their base. Clipped
-        // layers of different chains don't: the result, at the top one's slot, would clip the
-        // lower chain's pixels to the upper chain's base.
-        let base = crate::clip_group::base_of(doc, top_id);
-        merged.clipped = base.is_some() && solo.layers.iter().all(|l| l.clipped && crate::clip_group::base_of(doc, l.id) == base);
-        *crate::pixels_mut(&mut merged)? = crate::pixels::composite_layers_uncropped(&solo, fmt);
-        let mid = merged.id;
-        // Hidden selected layers are discarded, as in Photoshop.
-        for id in &ids[..ids.len() - 1] {
-            doc.remove(*id);
+
+        if is_background {
+            let base = doc.layer(lowest_id).ok_or(EngineError::NoLayer(lowest_id))?.clone();
+            let fmt = doc.pixel_format();
+            let mut merged = Layer::raster(base.name.clone(), fmt);
+            merged.locks = base.locks;
+            merged.label = base.label;
+            merged.id = lowest_id;
+            merged.blend = base.blend;
+            merged.opacity = 1.0;
+            *crate::pixels_mut(&mut merged)? = crate::pixels::composite_layers(&solo, fmt, None);
+            for id in &ids[1..] {
+                doc.remove(*id);
+            }
+            *doc.layer_mut(lowest_id).ok_or(EngineError::NoLayer(lowest_id))? = merged;
+            *active = Some(lowest_id);
+            Ok(lowest_id)
+        } else {
+            let top_id = *ids.last().ok_or_else(|| EngineError::Other("Merge Layers needs two or more layers".into()))?;
+            let top = doc.layer(top_id).ok_or(EngineError::NoLayer(top_id))?.clone();
+            let fmt = doc.pixel_format();
+            let fmt = PixelFormat::new(fmt.mode, fmt.sample, true);
+            let mut merged = Layer::raster(top.name.clone(), fmt);
+            merged.locks = top.locks;
+            merged.label = top.label;
+            // Clipped layers of one chain merge into a layer still clipped to their base. Clipped
+            // layers of different chains don't: the result, at the top one's slot, would clip the
+            // lower chain's pixels to the upper chain's base.
+            let base = crate::clip_group::base_of(doc, top_id);
+            merged.clipped = base.is_some() && solo.layers.iter().all(|l| l.clipped && crate::clip_group::base_of(doc, l.id) == base);
+            *crate::pixels_mut(&mut merged)? = crate::pixels::composite_layers_uncropped(&solo, fmt);
+            let mid = merged.id;
+            // Hidden selected layers are discarded, as in Photoshop.
+            for id in &ids[..ids.len() - 1] {
+                doc.remove(*id);
+            }
+            *doc.layer_mut(top_id).ok_or(EngineError::NoLayer(top_id))? = merged;
+            *active = Some(mid);
+            Ok(mid)
         }
-        *doc.layer_mut(top_id).ok_or(EngineError::NoLayer(top_id))? = merged;
-        *active = Some(mid);
-        Ok(mid)
     })?;
     reselect(s, vec![mid], Some(mid));
     Ok(json!({ "layer": mid.0 }))
@@ -1681,6 +1810,23 @@ pub fn specs() -> Vec<CommandSpec> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn merge_with_background_preserves_background() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 20, "height": 20})).unwrap();
+        let bg_id = s.active().unwrap().doc.layers[0].id;
+        assert!(s.active().unwrap().doc.is_background(bg_id));
+        let l1 = LayerId(s.execute("layer.new.layer", json!({"name": "Generative Fill"})).unwrap()["layer"].as_u64().unwrap());
+        set_selection(&mut s, vec![bg_id, l1], Some(l1), Some(bg_id)).unwrap();
+        let res = s.execute("layer.mergeLayers", json!({})).unwrap();
+        let mid = LayerId(res["layer"].as_u64().unwrap());
+        assert_eq!(mid, bg_id);
+        let doc = &s.active().unwrap().doc;
+        assert_eq!(doc.layers.len(), 1);
+        assert!(doc.is_background(mid));
+        assert_eq!(doc.layers[0].name, "Background");
+    }
 
     #[test]
     fn duplicates_are_numbered_not_stacked() {
@@ -3014,6 +3160,39 @@ mod tests {
         let v = s.execute("document.inspect", json!({})).unwrap();
         assert_eq!(v["selectedLayers"], json!([a.0, b.0]));
         assert_eq!(v["layers"][0]["selected"], true);
+    }
+
+    /// #7538: `selection: true` moves the selection with the layers in the same step, as the Move
+    /// tool does with several layers selected; without it the selection stays.
+    #[test]
+    fn translate_can_carry_the_selection_in_the_same_step() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 100, "height": 100, "background": "transparent"})).unwrap();
+        let a = s.active().unwrap().active_layer.unwrap();
+        s.execute("select.rect", json!({"x": 10, "y": 10, "width": 20, "height": 20})).unwrap();
+        s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+        let b = LayerId(s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap());
+        s.execute("select.rect", json!({"x": 50, "y": 10, "width": 20, "height": 20})).unwrap();
+        s.execute("edit.fill", json!({"color": "#0000ff"})).unwrap();
+        s.execute("layer.select", json!({"layer": a.0, "mode": "add"})).unwrap();
+        s.execute("select.rect", json!({"x": 5, "y": 5, "width": 70, "height": 30})).unwrap();
+        let sel = |s: &Session| s.active().unwrap().doc.selection.as_ref().map(|m| m.content_bounds());
+        let bounds = |s: &Session, id: LayerId| s.active().unwrap().doc.layer(id).unwrap().surface().unwrap().content_bounds();
+        let steps = s.active().unwrap().history.past_len();
+        s.execute("layer.translate", json!({"dx": 7, "dy": 20, "selection": true})).unwrap();
+        assert_eq!((bounds(&s, a), bounds(&s, b)), (Rect::new(17, 30, 37, 50), Rect::new(57, 30, 77, 50)));
+        assert_eq!(sel(&s), Some(Rect::new(12, 25, 82, 55)), "the selection came along");
+        assert_eq!(s.active().unwrap().history.past_len(), steps + 1, "one step");
+        s.undo();
+        assert_eq!((sel(&s), bounds(&s, a)), (Some(Rect::new(5, 5, 75, 35)), Rect::new(10, 10, 30, 30)), "undone together");
+        s.execute("layer.translate", json!({"dx": 7, "dy": 20})).unwrap();
+        assert_eq!(sel(&s), Some(Rect::new(5, 5, 75, 35)), "without it the selection stays");
+        let state = |s: &Session| (bounds(s, a), bounds(s, b), sel(s), s.active().unwrap().history.past_len());
+        let before = state(&s);
+        for dx in [1, 0] {
+            assert!(s.execute("layer.translate", json!({"dx": dx, "selection": "yes"})).is_err(), "dx {dx}: a bad `selection` is an error");
+            assert_eq!(state(&s), before, "dx {dx}: and changes nothing");
+        }
     }
 }
 

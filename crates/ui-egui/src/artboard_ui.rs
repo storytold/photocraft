@@ -121,6 +121,8 @@ pub fn fit_artboard(app: &mut PhotocraftApp) -> Result<Value, String> {
     // overflows an i32 sum (#981).
     v.center = [((f64::from(b.x0) + f64::from(b.x1)) / 2.0) as f32, ((f64::from(b.y0) + f64::from(b.y1)) / 2.0) as f32];
     v.fit_pending = false;
+    v.request_zoom_animation(app.session.prefs().general.animated_zoom);
+    v.zoom_anchor = None;
     Ok(json!({"zoom": v.zoom, "artboard": id.0, "bounds": [b.x0, b.y0, b.x1, b.y1]}))
 }
 
@@ -139,27 +141,30 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
     opts.extend(photocraft_engine::artboard_cmds::PRESETS.iter().map(|(n, _, _)| (n.to_string(), *n)));
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(tl!("Size")).color(t.text_dim).size(12.0));
-        if crate::widgets::dropdown(ui, &key("preset"), &mut preset, &opts, 150.0) && !preset.is_empty() {
+        if crate::widgets::dropdown(ui, &key("preset"), tl!("Preset"), &mut preset, &opts, 150.0) && !preset.is_empty() {
             edit = Some(json!({"layer": layer.id.0, "preset": preset}));
         }
     });
-    let num = |ui: &mut egui::Ui, label: &str, v: &mut f32, range: std::ops::RangeInclusive<f32>| -> bool {
+    // W/H use a short visible label but the full word as the accessible name (a screen reader
+    // says "Width", not "W"); X/Y already name their axis, so their name comes from the call site
+    // too.
+    let num = |ui: &mut egui::Ui, label: &str, name: &str, v: &mut f32, range: std::ops::RangeInclusive<f32>| -> bool {
         ui.label(egui::RichText::new(tl!(&label)).color(t.text_dim).size(12.0));
-        crate::widgets::value_field(ui, v, range, "px", 64.0).changed()
+        crate::widgets::value_field(ui, v, range, "px", 64.0).accessible_name(name).changed()
     };
     let r = a.rect;
     ui.horizontal(|ui| {
         let (mut w, mut h) = (r.width() as f32, r.height() as f32);
-        let cw = num(ui, "W", &mut w, 1.0..=300_000.0);
-        let ch = num(ui, "H", &mut h, 1.0..=300_000.0);
+        let cw = num(ui, "W", tl!("Width"), &mut w, 1.0..=300_000.0);
+        let ch = num(ui, "H", tl!("Height"), &mut h, 1.0..=300_000.0);
         if cw || ch {
             edit = Some(json!({"layer": layer.id.0, "width": w.round(), "height": h.round(), "coalesce": key("wh")}));
         }
     });
     ui.horizontal(|ui| {
         let (mut x, mut y) = (r.x0 as f32, r.y0 as f32);
-        let cx = num(ui, "X", &mut x, -300_000.0..=300_000.0);
-        let cy = num(ui, "Y", &mut y, -300_000.0..=300_000.0);
+        let cx = num(ui, "X", tl!("X"), &mut x, -300_000.0..=300_000.0);
+        let cy = num(ui, "Y", tl!("Y"), &mut y, -300_000.0..=300_000.0);
         if cx || cy {
             edit = Some(json!({"layer": layer.id.0, "x": x.round(), "y": y.round(), "coalesce": key("xy")}));
         }
@@ -176,7 +181,7 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
             ("transparent".to_string(), tl!("Transparent")),
             ("custom".to_string(), tl!("Other…")),
         ];
-        if crate::widgets::dropdown(ui, &key("bg"), &mut bg, &opts, 120.0) {
+        if crate::widgets::dropdown(ui, &key("bg"), tl!("Background"), &mut bg, &opts, 120.0) {
             let mut params = json!({"layer": layer.id.0, "background": bg});
             if bg == "custom" {
                 let hex = match a.background {
@@ -441,5 +446,24 @@ mod tests {
         assert_eq!(crate::comps_ui::target(&app), Some(a));
         app.ui.layer_comp_selected = Some(999);
         assert_eq!(crate::comps_ui::target(&app), Some(b));
+    }
+
+    #[test]
+    fn property_fields_are_named_for_their_axis() {
+        use egui::accesskit::Role;
+        use egui_kittest::Harness;
+        use egui_kittest::kittest::{NodeT, Queryable};
+
+        let (mut app, _) = app();
+        app.run("layer.new.artboard", json!({"rect": [0, 0, 40, 50]})).unwrap();
+        let id = app.session.active().unwrap().doc.artboards()[0].0;
+        let layer = app.session.active().unwrap().doc.layer(id).unwrap().clone();
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(520.0, 420.0))
+            .with_context_setup(|ctx| PhotocraftApp::setup_context(ctx, crate::theme::ThemeKind::ALL[0]))
+            .build_ui_state(move |ui, app: &mut PhotocraftApp| properties(app, ui, &layer), app);
+        h.run_steps(2);
+        let labels: Vec<String> = h.query_all_by_role(Role::SpinButton).filter_map(|n| n.accesskit_node().label()).collect();
+        assert_eq!(labels, ["Width", "Height", "X", "Y"].map(String::from).to_vec(), "the fields announce their own axis in layout order");
     }
 }

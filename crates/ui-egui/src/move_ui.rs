@@ -39,7 +39,10 @@ pub(crate) fn float_selected(app: &mut PhotocraftApp, copy: bool, dx: f64, dy: f
     let floating = app.session.active().is_some_and(|st| photocraft_engine::float_cmds::floating(st).is_some());
     let dropped = if copy && floating { app.run("select.drop", json!({})) } else { Ok(json!(null)) };
     match dropped.and_then(|_| app.run("select.float", json!({"dx": dx, "dy": dy, "copy": copy}))) {
-        Ok(_) => true,
+        Ok(_) => {
+            crate::snap_ui::follow_cut(app);
+            true
+        }
         Err(e) => {
             app.ui.status = e;
             app.ui.status_error = true;
@@ -183,7 +186,7 @@ fn with_descendants(doc: &Document, ids: &[LayerId]) -> Vec<LayerId> {
 /// offset of the latest Move drag frame drawn ([`display_doc`]) when the layer moves with the drag,
 /// so its Layer Edges outline moves in lockstep with its pixels (#2413). `None` when it shows
 /// where it is.
-pub(crate) fn shown_offset(app: &PhotocraftApp, doc: DocId, revision: u64, id: LayerId) -> Option<(i32, i32)> {
+pub(crate) fn shown_layer_offset(app: &PhotocraftApp, doc: DocId, revision: u64, id: LayerId) -> Option<(i32, i32)> {
     let p = app.move_preview.as_ref().filter(|p| p.doc == doc && p.revision == revision && !p.floating && p.shown.is_some())?;
     if !p.moving.contains(&id) {
         return None;
@@ -268,6 +271,13 @@ pub(crate) fn is_preview_key(key: u64) -> bool {
     key > BASE && key < BASE << 1
 }
 
+/// Does a Move drag of whole layers take the selection along? With several layers selected, as
+/// in Photoshop (#7538): their selected pixels can't float, so the layers move and the marching
+/// ants follow them.
+pub(crate) fn carries_selection(app: &PhotocraftApp) -> bool {
+    app.session.active().is_some_and(|st| st.doc.selection.is_some() && st.selected_layers().len() > 1)
+}
+
 /// Release: one `layer.translate` by the drag's offset. The canvas already shows the result, so
 /// its caches are told it showed the document: the command's damage rect refreshes that area.
 pub(crate) fn finish(app: &mut PhotocraftApp, dx: f64, dy: f64) {
@@ -280,7 +290,7 @@ pub(crate) fn finish(app: &mut PhotocraftApp, dx: f64, dy: f64) {
     if dx == 0.0 && dy == 0.0 {
         return;
     }
-    if app.run("layer.translate", json!({"dx": dx, "dy": dy})).is_err() {
+    if app.run("layer.translate", json!({"dx": dx, "dy": dy, "selection": carries_selection(app)})).is_err() {
         return;
     }
     let Some(p) = shown else { return };
@@ -536,6 +546,28 @@ mod tests {
             assert!(alpha(&app, id, 10, 10) == 1.0 && alpha(&app, id, 35, 35) == 1.0, "{depth}-bit: original and copy");
             assert!(app.session.undo());
             assert_eq!(alpha(&app, id, 35, 35), 0.0, "{depth}-bit: undone");
+        }
+    }
+
+    /// #7538: a loose marquee round the red square shrinks to it as the drag starts: the canvas
+    /// outlines the moved pixels while they float, and the dropped selection is theirs. Alt-drag
+    /// (a copy) too.
+    #[test]
+    fn dragging_selected_pixels_shrinks_the_ants_to_them() {
+        for depth in [8, 16, 32] {
+            for m in [egui::Modifiers::NONE, egui::Modifiers::ALT] {
+                let (mut app, _) = selected_pixels(depth);
+                app.session.execute("select.rect", json!({"x": 2, "y": 2, "width": 30, "height": 30})).unwrap();
+                drag(&mut app, [16.0, 16.0], [26.0, 21.0], m);
+                assert_eq!(offset(&app), Some((10, 5)), "{depth}-bit, {m:?}: floating");
+                let ants = crate::canvas::floating_outline(&app, 0).map(|s| s.content_bounds());
+                assert_eq!(ants, Some(Rect::new(8, 8, 24, 24)), "{depth}-bit, {m:?}: the ants hug the red square");
+                assert!(crate::canvas::floating_outline(&app, 1).is_none(), "only the active document's");
+                app.run("select.drop", json!({})).unwrap();
+                let sel = app.session.active().unwrap().doc.selection.as_ref().map(|s| s.content_bounds());
+                assert_eq!(sel, Some(Rect::new(18, 13, 34, 29)), "{depth}-bit, {m:?}: dropped");
+                assert!(crate::canvas::floating_outline(&app, 0).is_none(), "nothing floats");
+            }
         }
     }
 

@@ -146,11 +146,20 @@ fn add_abr_presets(s: &mut Session, p: &Value, group: String, imp: photocraft_io
     Ok(json!({ "group": group, "imported": names, "count": names.len(), "folders": folders, "version": imp.version, "warnings": imp.warnings }))
 }
 
+/// Largest canvas (268 MP) a brush may be made from.
+const MAX_BRUSH_SOURCE_PIXELS: u64 = 1 << 28;
+
 /// The image's paint amount (darkness × alpha of its composite, as Define Brush Preset reads a
 /// selection), cropped to the painted extent. The composite is rendered in bands twice: once to
 /// find the painted bounds, then only those, so a large mostly-white image never needs a
 /// full-size buffer.
 fn image_paint(doc: &photocraft_doc::Document, cmd: &str) -> Result<(Vec<f32>, usize, usize)> {
+    // The whole canvas is rendered (twice) to find the painted part: a sparse native file declares
+    // its canvas, so refuse one far past any brush source before rendering it.
+    let canvas = doc.bounds();
+    if u64::from(canvas.width()) * u64::from(canvas.height()) > MAX_BRUSH_SOURCE_PIXELS {
+        return Err(bad(cmd, format!("the image's {}×{} canvas is too large to make a brush from", canvas.width(), canvas.height())));
+    }
     let paint = |c: [f32; 4]| ((1.0 - photocraft_color::blend::lum([c[0], c[1], c[2]])) * c[3]).clamp(0.0, 1.0);
     let mut bounds: Option<photocraft_geom::Rect> = None;
     let _ = photocraft_compose::render_bands(doc, doc.bounds(), 0, |band| -> std::result::Result<(), ()> {

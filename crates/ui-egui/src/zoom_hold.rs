@@ -40,7 +40,7 @@ struct Hold {
 /// Where a canvas keeps its hold: each canvas (document `idx` of the tiled windows, in the main
 /// or a secondary window) has its own, so a hold on one never zooms another.
 pub fn hold_id(idx: usize, primary: bool, viewport: egui::ViewportId) -> egui::Id {
-    egui::Id::new(("pc-zoom-tool-hold", idx, primary, viewport))
+    egui::Id::unique(("pc-zoom-tool-hold", idx, primary, viewport))
 }
 
 /// The zoom after holding for `dt` seconds at `zoom` (out: shrinking), within the range for a
@@ -110,7 +110,10 @@ pub fn update(ctx: &egui::Context, view: &mut View, xf: &ViewXform, enabled: boo
     }
     let dt = now - h.last.unwrap_or(now);
     let zoom = hold_zoom(view.zoom, dt, out, view.doc_size);
-    crate::zoom_tool::anchor_view(view, xf, h.anchor, h.doc, zoom, ppp);
+    // At the zoom limit the view stays as it is (a window wrapped around the image centred it).
+    if zoom.to_bits() != view.zoom.to_bits() {
+        crate::zoom_tool::anchor_view(view, xf, h.anchor, h.doc, zoom, ppp);
+    }
     h.last = Some(now);
     ctx.data_mut(|d| d.insert_temp(id, h));
     ctx.request_repaint();
@@ -244,6 +247,29 @@ mod tests {
         assert_eq!(zs[10], zs[9], "{zs:?}");
         assert!(zs[9] > zs[8] / 1.2, "{zs:?}");
         assert!(xf(&h).to_screen(doc[0] as f32, doc[1] as f32).distance(p) < 0.5);
+    }
+
+    #[test]
+    fn a_hold_at_the_zoom_limit_leaves_the_view_alone() {
+        // Zoom Resizes Windows centres the image in a window wrapped around it
+        // (zoom_window_fit.rs); a hold that can't zoom further must not move it back.
+        let mut h = harness(true);
+        let p = h.state().last_canvas_rect.center() + vec2(50.0, -30.0);
+        h.event(Event::PointerMoved(p));
+        h.step();
+        button(&mut h, p, true, true);
+        let min = crate::zoom_levels::min(DOC);
+        for _ in 0..200 {
+            if h.state().current_zoom() == min {
+                break;
+            }
+            h.step();
+        }
+        assert_eq!(h.state().current_zoom(), min);
+        h.state_mut().ui.views[0].center = [200.0, 150.0];
+        h.run_steps(3);
+        assert_eq!(h.state().ui.views[0].center, [200.0, 150.0]);
+        button(&mut h, p, false, true);
     }
 
     #[test]

@@ -17,6 +17,7 @@
 #[cfg(test)]
 mod tests;
 
+use std::collections::HashMap;
 use std::io::Read;
 use std::sync::Arc;
 
@@ -42,6 +43,10 @@ pub(crate) const MAX_LAYERS: usize = 8192;
 const MAX_CHANNELS: usize = 1024;
 /// Group nesting.
 const MAX_DEPTH: usize = 64;
+/// Total copied layer metadata (names and item paths). A single reused record with a large
+/// name is bounded by MAX_STRING, but repeated layer offsets referencing it must not multiply
+/// into unbounded retained metadata.
+const MAX_METADATA_BYTES: usize = 32 << 20;
 /// A string field (layer names, parasite names).
 const MAX_STRING: usize = 1 << 20;
 /// A property payload or a parasite that is read into memory.
@@ -200,15 +205,17 @@ impl<'a> Cursor<'a> {
 
     /// A STRING: `n+1` then `n` bytes and a NUL (0 for the empty string).
     fn string(&mut self) -> Result<String> {
+        Ok(String::from_utf8_lossy(self.string_bytes()?).into_owned())
+    }
+
+    /// The same bounded STRING read without allocating or decoding an unused field.
+    fn string_bytes(&mut self) -> Result<&'a [u8]> {
         let n = self.u32()? as usize;
-        if n == 0 {
-            return Ok(String::new());
-        }
         if n > MAX_STRING {
             return Err(invalid(format!("a string of {n} bytes exceeds the limit")));
         }
         let s = self.take(n)?;
-        Ok(String::from_utf8_lossy(s.strip_suffix(&[0]).unwrap_or(s)).into_owned())
+        Ok(s.strip_suffix(&[0]).unwrap_or(s))
     }
 
     fn skip(&mut self, n: usize) -> Result<()> {
@@ -222,8 +229,8 @@ struct Prop<'a> {
     data: &'a [u8],
 }
 
-/// Reads a property list; `fixed` gives the native payload sizes the spec says GIMP trusts over
-/// the length word. Ends at PROP_END (type 0) or at the end of the file.
+/// Reads a property list, measuring known payloads whose length words GIMP writes incorrectly.
+/// Ends at PROP_END (type 0).
 fn props<'a>(c: &mut Cursor<'a>) -> Result<Vec<Prop<'a>>> {
     let mut out = Vec::new();
     loop {
@@ -234,12 +241,14 @@ fn props<'a>(c: &mut Cursor<'a>) -> Result<Vec<Prop<'a>>> {
         }
         // PROP_COLORMAP's length word was wrong in some releases (n+4 for 3n+4 bytes); its real
         // size follows from the count. PROP_USER_UNIT's length is wrong in every release.
+        // PROP_LINK_LAYER's length can be four bytes short (#8857); read all its fields.
         let len = match kind {
             1 => {
                 let n = c.at(c.pos).u32()? as usize;
                 4usize.checked_add(n.checked_mul(3).ok_or_else(|| invalid("colormap overflow"))?).ok_or_else(|| invalid("colormap overflow"))?
             }
             24 => user_unit_len(c)?,
+            48 => link_layer_len(c)?,
             _ => len,
         };
         if len > MAX_PAYLOAD {
@@ -251,6 +260,16 @@ fn props<'a>(c: &mut Cursor<'a>) -> Result<Vec<Prop<'a>>> {
             return Err(invalid("too many properties"));
         }
     }
+}
+
+/// A PROP_LINK_LAYER payload: flags, a path STRING, then the source width and height.
+/// The dimensions are present for raster links too, where their values are unused.
+fn link_layer_len(c: &Cursor<'_>) -> Result<usize> {
+    let mut p = c.at(c.pos);
+    p.skip(4)?;
+    p.string_bytes()?;
+    p.skip(8)?;
+    Ok(p.pos - c.pos)
 }
 
 /// The real size of a PROP_USER_UNIT payload: a float, a count and three (XCF 21+) or five
@@ -290,13 +309,21 @@ fn be_f32(b: &[u8]) -> Option<f32> {
 fn parasites(data: &[u8]) -> Vec<(String, Vec<u8>)> {
     let mut c = Cursor { b: data, pos: 0, wide: false };
     let mut out: Vec<(String, Vec<u8>)> = Vec::new();
+    // Map each name to its output slot so duplicate replacement is O(1). The parasite
+    // records are file-controlled, so scanning `out` with iter_mut().find() per record is
+    // O(n^2) and lets a crafted payload with many distinct names stall import. The map
+    // preserves insertion order and last-value-wins behavior.
+    let mut index: HashMap<String, usize> = HashMap::new();
     while c.pos < data.len() {
         let Ok(name) = c.string() else { break };
         let (Ok(_flags), Ok(len)) = (c.u32(), c.u32()) else { break };
         let Ok(payload) = c.take(len as usize) else { break };
-        match out.iter_mut().find(|(n, _)| *n == name) {
-            Some(slot) => slot.1 = payload.to_vec(),
-            None => out.push((name, payload.to_vec())),
+        match index.get(&name) {
+            Some(&i) => out[i].1 = payload.to_vec(),
+            None => {
+                index.insert(name.clone(), out.len());
+                out.push((name, payload.to_vec()));
+            }
         }
     }
     out
@@ -381,6 +408,10 @@ struct Image<'a> {
     base_type: u32,
     colormap: Vec<[u8; 3]>,
     budget: usize,
+    /// Remaining allowance for copied layer metadata (names, item paths). Repeated layer
+    /// offsets referencing one record with a large name would otherwise allocate an owned
+    /// copy per reference, multiplying a small file into gigabytes of retained metadata.
+    meta_budget: usize,
     warnings: Warnings,
     /// Layers GIMP composites with "Clip to backdrop" (its default for every mode but Normal).
     clipped_to_backdrop: usize,
@@ -685,7 +716,18 @@ pub(crate) fn import(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<Im
         path_count += n;
     }
 
-    let mut image = Image { c: c.at(0), version, precision, compression, base_type, colormap, budget: MAX_PIXEL_BYTES, warnings, clipped_to_backdrop: 0 };
+    let mut image = Image {
+        c: c.at(0),
+        version,
+        precision,
+        compression,
+        base_type,
+        colormap,
+        budget: MAX_PIXEL_BYTES,
+        meta_budget: MAX_METADATA_BYTES,
+        warnings,
+        clipped_to_backdrop: 0,
+    };
     let fmt = PixelFormat::new(mode, depth, true);
     let mask_fmt = PixelFormat::new(ColorMode::Grayscale, depth, false);
     let total = layer_ptrs.len().max(1) as f32;
@@ -842,6 +884,9 @@ impl<'a> Image<'a> {
         let mut c = self.c.at(ptr);
         let (lw, lh, kind) = (c.u32()?, c.u32()?, c.u32()?);
         let name = c.string()?;
+        // Charge the owned name against the document-wide metadata budget: repeated layer
+        // offsets referencing one large name must not retain unbounded copies.
+        self.meta_budget = self.meta_budget.checked_sub(name.len()).ok_or_else(|| invalid("layer metadata exceeds the budget"))?;
         let lprops = props(&mut c)?;
         let hptr = c.ptr()?;
         let mptr = c.ptr()?;
@@ -902,7 +947,11 @@ impl<'a> Image<'a> {
                 26 => text = true,
                 28 => locks.pixels = v != 0,
                 29 => group = true,
-                30 => path = p.data.as_chunks::<4>().0.iter().map(|s| u32::from_be_bytes(*s)).collect(),
+                30 => {
+                    path = p.data.as_chunks::<4>().0.iter().map(|s| u32::from_be_bytes(*s)).collect();
+                    self.meta_budget =
+                        self.meta_budget.checked_sub(path.len().saturating_mul(4)).ok_or_else(|| invalid("layer metadata exceeds the budget"))?;
+                }
                 31 => expanded = v & 1 != 0,
                 32 => locks.position = v != 0,
                 34 => tag = label(v),

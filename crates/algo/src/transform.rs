@@ -512,8 +512,11 @@ fn warp(
                 any = true;
                 let o = ((y - t.y0) as usize * w + (x - t.x0) as usize) * n;
                 for c in 0..a {
-                    // Integer storage clips on write; float colours retain their signed/HDR range.
-                    outp[o + c] = (acc[c] / al) as f32;
+                    // Un-premultiply by the unclamped alpha: bicubic overshoots it past 1 next to
+                    // partly transparent pixels, and dividing by the clamped 1 would lighten the
+                    // colour by the overshoot (#6203). Integer storage clips on write; float
+                    // colours retain their signed/HDR range.
+                    outp[o + c] = (acc[c] / acc[a]) as f32;
                 }
                 outp[o + a] = al as f32;
             }
@@ -835,6 +838,32 @@ mod tests {
         assert!(b.width().abs_diff(20) <= 2 && b.height().abs_diff(40) <= 2, "{b:?}");
         let p = rot.pixel(20, 10);
         assert!((p[0] - 0.2).abs() < 0.01 && p[3] > 0.99, "{p:?}");
+    }
+
+    /// #6203: a bicubic rotation of a sprite whose edge pixels are partly transparent overshoots
+    /// its alpha past 1. The colour must stay the sprite's, not grow with the overshoot into a
+    /// light border.
+    #[test]
+    fn rotation_keeps_the_colour_of_a_soft_edged_sprite() {
+        let mut s = rgba();
+        s.fill_rect(Rect::new(10, 10, 30, 30), &[0.8, 0.6, 0.4, 0.5]);
+        s.fill_rect(Rect::new(11, 11, 29, 29), &[0.8, 0.6, 0.4, 1.0]);
+        let (c, k) = (20.0, std::f64::consts::FRAC_1_SQRT_2 * 10.0);
+        let q = [[c, c - 2.0 * k], [c + 2.0 * k, c], [c, c + 2.0 * k], [c - 2.0 * k, c]];
+        let h = Homography::rect_to_quad([10.0, 10.0, 30.0, 30.0], q).unwrap();
+        for interp in [Interp::Bicubic, Interp::Bilinear] {
+            let out = warp_surface(&s, s.content_bounds(), &h, interp).unwrap();
+            let b = out.content_bounds();
+            for y in b.y0..b.y1 {
+                for x in b.x0..b.x1 {
+                    let p = out.pixel(x, y);
+                    if p[3] > 0.0 {
+                        let off = (0..3).map(|i| (p[i] - [0.8, 0.6, 0.4][i]).abs()).fold(0.0f32, f32::max);
+                        assert!(off <= 1.0 / 255.0, "{interp:?} ({x}, {y}): {p:?}");
+                    }
+                }
+            }
+        }
     }
 
     #[test]

@@ -114,7 +114,7 @@ fn put_focus(h: &mut Harness<'_, PhotocraftApp>, place: Place) {
         }
         Place::OpacityField => {
             // The Layers panel's Opacity field: the DragValue in the right dock reading 100.
-            let layers = crate::dock::last_rects(&h.ctx).into_iter().find(|(g, _)| *g == crate::dock::Group::Layers).expect("Layers drawn").1;
+            let layers = crate::panel_docking::probe::group_rect(h.state(), &h.ctx, "layers").expect("Layers drawn");
             let at = h
                 .query_all_by_role(Role::SpinButton)
                 .map(|n| n.rect())
@@ -310,9 +310,11 @@ fn a_disabled_shortcut_says_why() {
 #[test]
 fn a_disabled_shortcut_uses_the_command_id_translation() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
-    crate::i18n::with_language(crate::i18n::Lang::from_code("cs").unwrap(), || {
+    let cs = crate::i18n::Lang::from_code("cs").unwrap();
+    crate::i18n::with_language(cs, || {
         super::dispatch(&mut app, &egui::Context::default(), "select.all");
-        assert!(app.ui.status.starts_with("Vybrat vše není k dispozici:"), "{}", app.ui.status);
+        let shown = crate::i18n::tr_id(cs, "select.all", &super::label("select.all")).to_string();
+        assert!(app.ui.status.contains(&shown), "{}", app.ui.status);
         assert!(app.ui.status_error);
     });
 }
@@ -568,6 +570,41 @@ fn delete_with_the_mask_targeted_edits_the_mask_not_the_layer() {
         assert!(h.state().session.active().unwrap().doc.layer(layer).is_some(), "{key}: the layer stays");
         assert_eq!(layer_pixels(&h), before, "{key}: the layer's pixels are untouched");
     }
+}
+
+/// FILE-215-3: with a smart object's filter mask targeted, Delete with a selection fills the filter
+/// mask with the background colour there (not Edit › Clear on the smart object); with no
+/// selection Photoshop deletes the layer, as it does with the pixels targeted.
+#[test]
+fn delete_with_the_filter_mask_targeted_edits_the_filter_mask() {
+    let mut h = harness();
+    put_focus(&mut h, Place::Canvas);
+    let s = &mut h.state_mut().session;
+    s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    s.execute("filter.blur.gaussianBlur", json!({"radius": 2})).unwrap();
+    let layer = s.active().unwrap().active_layer.unwrap();
+    let sel = s.active().unwrap().doc.selection.as_ref().expect("the harness keeps a selection").content_bounds();
+    let (x, y) = ((sel.x0 + sel.x1) / 2, (sel.y0 + sel.y1) / 2);
+    h.state_mut().select_filter_mask_target(Some(layer.0));
+    assert!(h.state().filter_mask_targeted());
+    h.run_steps(2);
+    let smart = |h: &Harness<'_, PhotocraftApp>| match h.state().session.active().unwrap().doc.layer(layer).map(|l| &l.content) {
+        Some(photocraft_doc::LayerContent::Smart(sm)) => Some(sm.clone()),
+        _ => None,
+    };
+    let filters = smart(&h).unwrap().smart_filters.len();
+    let bg = h.state().session.tools.background;
+    press(&mut h, "Delete");
+    assert_eq!(logged(&h), ["edit.fillBackground"]);
+    let sm = smart(&h).expect("the smart object stays");
+    assert_eq!(sm.filter_mask.as_ref().map(|m| m.value(x, y)), Some(bg[0]), "the filter mask takes the background colour");
+    assert_eq!(bg[0], 0.0, "a targeted mask's background colour is black");
+    assert_eq!(sm.smart_filters.len(), filters);
+    h.state_mut().session.execute("select.deselect", json!({})).unwrap();
+    h.run_steps(2);
+    press(&mut h, "Delete");
+    assert_eq!(logged(&h), ["layer.delete"]);
+    assert!(smart(&h).is_none(), "no selection deletes the layer, as in Photoshop");
 }
 
 /// Every selected layer goes, pixel layers too (Photoshop deletes, it doesn't clear the layer).
@@ -843,4 +880,118 @@ fn plain_comma_and_semicolon_bindings_follow_the_typed_character_on_azerty() {
     assert_eq!(logged(&h), ["tools.increaseBrushHardness"]);
     tap(&mut h, egui::Key::Comma, egui::Key::M);
     assert_eq!(logged(&h), ["tools.decreaseBrushHardness"]);
+}
+
+/// #8900: ⌥ added to an adjustment's shortcut opens its dialog with the settings last confirmed
+/// there (Photoshop's ⌥⌘L for Levels, ⌥⌘M for Curves); the plain shortcut still opens at the
+/// defaults, Cancel remembers nothing, each adjustment remembers its own, and a key assigned to
+/// another command in Edit › Keyboard Shortcuts stays that command's.
+#[test]
+fn alt_adjustment_shortcut_reopens_the_last_confirmed_settings() {
+    use photocraft_doc::ColorMode;
+    use photocraft_engine::adjust_params::{default_for, from_params, to_params};
+    let mut h = harness();
+    put_focus(&mut h, Place::Canvas);
+    let top = |h: &Harness<'_, PhotocraftApp>| h.state().ui.dialogs.last().map(|d| (d.id, d.fields.clone())).expect("a dialog");
+    let set = |h: &mut Harness<'_, PhotocraftApp>, id: u64, values: serde_json::Value| {
+        let d = h.state_mut().ui.dialog_mut(id).unwrap();
+        d.fields.extend(values.as_object().unwrap().clone());
+        h.run_steps(2);
+    };
+    let levels = to_params(&from_params("levels", &json!({"inBlack": 30, "gamma": 1.3}), None, ColorMode::Rgb).unwrap());
+    let level_defaults = to_params(&default_for("levels", ColorMode::Rgb).unwrap());
+    assert_ne!(levels["inBlack"], level_defaults["inBlack"]);
+
+    press(&mut h, "Cmd+L");
+    let (id, _) = top(&h);
+    set(&mut h, id, json!({"inBlack": 30, "gamma": 1.3}));
+    crate::dialogs::confirm(h.state_mut(), id).unwrap();
+    h.run_steps(2);
+
+    press(&mut h, "Cmd+L");
+    let (id, fields) = top(&h);
+    assert_eq!((&fields["inBlack"], &fields["gamma"]), (&level_defaults["inBlack"], &level_defaults["gamma"]), "⌘L opens at the defaults");
+    crate::dialogs::cancel(h.state_mut(), id).unwrap();
+    h.run_steps(2);
+
+    press(&mut h, "Cmd+Alt+L");
+    assert_eq!(logged(&h), ["image.adjustments.levels", "image.adjustments.levels", "image.adjustments.levels"]);
+    let (id, fields) = top(&h);
+    assert_eq!((&fields["inBlack"], &fields["gamma"]), (&levels["inBlack"], &levels["gamma"]), "⌥⌘L opens at the last OK'd settings");
+    set(&mut h, id, json!({"inBlack": 50}));
+    crate::dialogs::cancel(h.state_mut(), id).unwrap();
+    h.run_steps(2);
+    press(&mut h, "Cmd+Alt+L");
+    let (id, fields) = top(&h);
+    assert_eq!(fields["inBlack"], levels["inBlack"], "Cancel remembers nothing");
+    crate::dialogs::cancel(h.state_mut(), id).unwrap();
+    h.run_steps(2);
+
+    // Curves has nothing of its own yet: its defaults, not Levels' settings.
+    let curve_defaults = to_params(&default_for("curves", ColorMode::Rgb).unwrap());
+    press(&mut h, "Cmd+Alt+M");
+    let (id, fields) = top(&h);
+    assert_eq!(fields["__adjust"], json!("curves"));
+    assert_eq!(fields["points"], curve_defaults["points"], "⌥⌘M with no Curves confirmed yet");
+    let curve = json!({"points": [[0, 0], [100, 150], [255, 255]]});
+    set(&mut h, id, curve.clone());
+    crate::dialogs::confirm(h.state_mut(), id).unwrap();
+    h.run_steps(2);
+    press(&mut h, "Cmd+Alt+M");
+    let (id, fields) = top(&h);
+    let curves = to_params(&from_params("curves", &curve, None, ColorMode::Rgb).unwrap());
+    assert_eq!(fields["points"], curves["points"], "⌥⌘M opens at the last OK'd curve");
+    crate::dialogs::cancel(h.state_mut(), id).unwrap();
+    h.run_steps(2);
+    take_log(&h.ctx);
+
+    h.state_mut().session.edit_prefs(|p| {
+        p.shortcuts.insert("image.adjustments.desaturate".into(), "Cmd+Alt+L".into());
+    });
+    press(&mut h, "Cmd+Alt+L");
+    assert_eq!(logged(&h), ["image.adjustments.desaturate"], "a key assigned to another command is that command's");
+    assert!(h.state().ui.dialogs.is_empty());
+}
+
+/// #8900: in Photoshop ⌥ held while choosing an Image › Adjustments item opens it at its last
+/// settings too; a plain click still opens it at the defaults.
+#[test]
+fn alt_choosing_an_adjustment_from_the_menu_reopens_the_last_settings() {
+    use photocraft_doc::ColorMode;
+    use photocraft_engine::adjust_params::{default_for, from_params, to_params};
+    let mut h = harness();
+    h.state_mut().session.edit_prefs(|p| {
+        p.dialogs.insert("image.adjustments.levels".into(), json!({"inBlack": 30, "gamma": 1.3}));
+    });
+    let levels = to_params(&from_params("levels", &json!({"inBlack": 30, "gamma": 1.3}), None, ColorMode::Rgb).unwrap());
+    let defaults = to_params(&default_for("levels", ColorMode::Rgb).unwrap());
+    let choose = |h: &mut Harness<'_, PhotocraftApp>, m: Modifiers| {
+        h.get_by_label("Image").click();
+        h.run_steps(3);
+        // The Image menu's row, not the Adjustments panel's tab in the dock on the right.
+        let adjustments = h.get_all_by_label_contains("Adjustments").map(|n| n.rect()).min_by(|a, b| a.left().total_cmp(&b.left())).unwrap().center();
+        h.hover_at(adjustments);
+        h.run_steps(30);
+        let at = h.get_by_label_contains("Levels…").rect().center();
+        h.hover_at(at);
+        h.run_steps(2);
+        h.event(egui::Event::ModifiersChanged(m));
+        h.event(egui::Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: m });
+        h.run_steps(1);
+        h.event(egui::Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: m });
+        h.run_steps(1);
+        h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+        h.run_steps(3);
+        let d = h.state().ui.dialogs.last().expect("Levels opened").clone();
+        assert_eq!(d.fields["__adjust"], json!("levels"));
+        crate::dialogs::cancel(h.state_mut(), d.id).unwrap();
+        h.run_steps(2);
+        (d.fields["inBlack"].clone(), d.fields["gamma"].clone())
+    };
+    assert_eq!(choose(&mut h, Modifiers::NONE), (defaults["inBlack"].clone(), defaults["gamma"].clone()), "a click opens at the defaults");
+    assert_eq!(choose(&mut h, Modifiers::ALT), (levels["inBlack"].clone(), levels["gamma"].clone()), "⌥-click opens at the last settings");
+    // The plain click noted Levels already: put another command in front of it first.
+    crate::palette::note_recent(&h.ctx, "file.new");
+    choose(&mut h, Modifiers::ALT);
+    assert_eq!(crate::palette::recent_ids(&h.ctx).first().map(String::as_str), Some("image.adjustments.levels"), "Edit › Search's most recent");
 }

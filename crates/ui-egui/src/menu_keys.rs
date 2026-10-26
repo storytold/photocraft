@@ -1,6 +1,6 @@
 //! The menu bar from the keyboard (#4988), as Photoshop's on Windows: a tap on Alt (or F10)
-//! puts the keyboard on the bar (File lit; ← / → move along it, ↓ / ↩ / Space open the lit menu,
-//! Esc or a click leaves), Alt+letter opens the menu with that mnemonic straight away, and in an
+//! puts the keyboard on the bar (File lit; ← / → move along it, ↓ / ↩ open the lit menu,
+//! Esc, Space or a click leaves), Alt+letter opens the menu with that mnemonic straight away, and in an
 //! open menu a letter runs the row with that mnemonic (or opens its submenu).
 //!
 //! Mnemonics are underlined while Alt is held, the bar is focused or a menu was opened from the
@@ -8,7 +8,8 @@
 //! They are assigned per menu level from the labels as shown (so translated), unique within
 //! the level: Photoshop's letters for the top menus where the label has them (F E I L Y S T V
 //! W H), else the first unused letter, word starts first. Only ASCII letters and digits are keys
-//! the keyboard reports as such, so a label without one (Japanese, Chinese…) has no mnemonic.
+//! the keyboard reports as such, so a label without one (Japanese, Chinese…) shows its English
+//! label's letter after it, as Windows menus do in those languages: "文件(F)" ([`localized`]).
 //!
 //! The state is view state in egui memory, like [`crate::menu_nav::Nav`]. On macOS the native
 //! menu bar replaces the in-window one and this never runs.
@@ -42,16 +43,19 @@ pub struct Keys {
     alt_down: bool,
     /// Alt went down and nothing else was pressed since: releasing it is a tap.
     alt_tap: bool,
+    /// The mouse buttons that are down, one bit each, from the button events in order (the
+    /// frame's pointer state is its end state, which a whole click within one frame doesn't show).
+    buttons_held: u8,
     /// A menu was just opened from the keyboard: light its first row once it is drawn.
     first_row: bool,
 }
 
 fn keys_id() -> Id {
-    Id::new("pc-menu-bar-keys")
+    Id::unique("pc-menu-bar-keys")
 }
 
 fn focus_id() -> Id {
-    Id::new("pc-menu-bar-focus")
+    Id::unique("pc-menu-bar-focus")
 }
 
 /// Is the keyboard on the menu bar (no menu open yet)? The shortcuts leave the keys to it then,
@@ -126,6 +130,49 @@ pub fn assign(labels: &[&str], preferred: &[Option<char>]) -> Vec<Option<char>> 
         out.push(pick);
     }
     out
+}
+
+/// The labels to show and their mnemonics for translated `labels` whose English originals are
+/// `english` (same order). A label with an ASCII letter or digit keeps its text and is assigned
+/// as [`assign`] does. One without (Chinese, Japanese, Korean…) can't be typed on its own, so it
+/// shows its English label's letter after it in parentheses and takes that letter, as Windows menus
+/// do in those languages ("文件(F)", #5863). Mnemonics stay unique within the group, and a shown
+/// "(F)" is always the row's key.
+pub fn localized(labels: &[String], english: &[&str], preferred: &[Option<char>]) -> (Vec<String>, Vec<Option<char>>) {
+    let typed = |l: &str| l.chars().any(|c| c.is_ascii_alphanumeric());
+    // The key goes before a trailing ellipsis, as Windows writes it: "新建(N)…".
+    let with_key = |l: &str, k: char| match l.strip_suffix('…').map(|b| (b, "…")).or_else(|| l.strip_suffix("...").map(|b| (b, "..."))) {
+        Some((base, tail)) => format!("{base}({k}){tail}"),
+        None => format!("{l}({k})"),
+    };
+    let english_keys = assign(english, preferred);
+    let mut shown = Vec::with_capacity(labels.len());
+    let mut pref = Vec::with_capacity(labels.len());
+    for (i, label) in labels.iter().enumerate() {
+        match english_keys.get(i).copied().flatten().filter(|_| !typed(label)) {
+            Some(k) => {
+                shown.push(with_key(label, k));
+                pref.push(Some(k));
+            }
+            None => {
+                shown.push(label.clone());
+                pref.push(preferred.get(i).copied().flatten());
+            }
+        }
+    }
+    // The suffixed labels take their keys first: a label with letters of its own must not take
+    // the key a suffix shows ("Camera Raw 滤镜…" before "转换为智能滤镜(C)" leaves C to the latter).
+    let suffixed = |i: &usize| shown.get(*i) != labels.get(*i);
+    let order: Vec<usize> = (0..shown.len()).filter(suffixed).chain((0..shown.len()).filter(|i| !suffixed(i))).collect();
+    let ordered: Vec<&str> = order.iter().map(|&i| shown.get(i).map_or("", String::as_str)).collect();
+    let ordered_pref: Vec<Option<char>> = order.iter().map(|&i| pref.get(i).copied().flatten()).collect();
+    let mut keys = vec![None; shown.len()];
+    for (&i, key) in order.iter().zip(assign(&ordered, &ordered_pref)) {
+        if let Some(slot) = keys.get_mut(i) {
+            *slot = key;
+        }
+    }
+    (shown, keys)
 }
 
 /// `prefix + label` as menu text with the mnemonic's first occurrence in `label` underlined
@@ -249,20 +296,40 @@ impl Keys {
         let raw = ctx.input(|i| i.raw.events.clone());
         for e in &raw {
             match e {
+                // A held Alt auto-repeats (after about half a second on Windows): only its first
+                // press starts a tap. A repeat must neither re-arm a tap that Alt+wheel or a key
+                // already spent, nor spend one itself (holding Alt alone is still a tap).
+                Event::Key { key: Key::AltLeft | Key::AltRight, pressed: true, repeat: true, .. } => self.alt_down = true,
                 Event::Key { key: Key::AltLeft | Key::AltRight, pressed: true, .. } => {
                     self.alt_down = true;
-                    self.alt_tap = true;
+                    // Alt pressed while a mouse button is down is a modifier for that drag
+                    // (Free Transform's scale-from-centre), never a tap (#8113).
+                    self.alt_tap = self.buttons_held == 0;
                 }
                 Event::Key { key: Key::AltLeft | Key::AltRight, pressed: false, .. } => {
                     self.alt_down = false;
                     tap |= std::mem::take(&mut self.alt_tap);
                 }
-                // Alt+wheel (zoom, brush size…) or Alt going to the desktop is no tap either.
-                Event::Key { pressed: true, .. }
-                | Event::Text(_)
-                | Event::PointerButton { pressed: true, .. }
-                | Event::MouseWheel { .. }
-                | Event::WindowFocused(false) => self.alt_tap = false,
+                // A click or the end of a drag while Alt is held is no tap. It also cancels a tap
+                // taken earlier in this frame: a whole drag can arrive in one frame (press, Alt
+                // down, Alt up, release).
+                Event::PointerButton { button, pressed, .. } => {
+                    let bit = 1u8 << (*button as u8);
+                    if *pressed {
+                        self.buttons_held |= bit;
+                    } else {
+                        self.buttons_held &= !bit;
+                    }
+                    self.alt_tap = false;
+                    tap = false;
+                }
+                // Alt going to the desktop is no tap, and a button let go out there is up.
+                Event::WindowFocused(false) => {
+                    self.alt_tap = false;
+                    self.buttons_held = 0;
+                }
+                // Alt+wheel (zoom, brush size…) is no tap either.
+                Event::Key { pressed: true, .. } | Event::Text(_) | Event::MouseWheel { .. } => self.alt_tap = false,
                 _ => {}
             }
         }
@@ -341,8 +408,13 @@ impl Keys {
             self.focus = Some((focus + 1) % n);
         } else if press(Key::ArrowLeft) {
             self.focus = Some((focus + n - 1) % n);
-        } else if press(Key::ArrowDown) || press(Key::Enter) || press(Key::Space) {
+        } else if press(Key::ArrowDown) || press(Key::Enter) {
             open_top(focus, self);
+        } else if events.iter().any(|e| matches!(e, Event::Key { key: Key::Space, pressed: true, .. })) {
+            // Space is the Hand tool, and on Windows it opens the window menu there, never File:
+            // it takes the keyboard off the bar, so a stray Alt tap can't have held Space run
+            // File › New….
+            self.focus = None;
         } else if let Some((key, c)) = events.iter().find_map(|e| match e {
             Event::Key { key, pressed: true, modifiers, .. } if modifiers.is_none() => key_char(*key).map(|c| (*key, c)),
             _ => None,

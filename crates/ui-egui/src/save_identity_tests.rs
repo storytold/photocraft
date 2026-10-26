@@ -9,8 +9,8 @@ fn app() -> PhotocraftApp {
     let mut app = PhotocraftApp::new(
         Session::new(),
         Services {
-            import: Some(Box::new(|name, bytes, max_svg_group_depth| {
-                photocraft_io::import_with_svg_group_depth(name, bytes, max_svg_group_depth).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())
+            import: Some(Box::new(|name, bytes, opts| {
+                photocraft_io::import_with_options(name, bytes, opts).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())
             })),
             export: Some(Box::new(|doc, path, _| {
                 photocraft_io::export(doc, path, &Default::default()).map(|r| (r.bytes, r.warnings)).map_err(|e| e.to_string())
@@ -149,7 +149,8 @@ fn save_as_flat_keeps_the_layered_original() {
         app.run("edit.fill", json!({"color": "#000000"})).unwrap();
         let before = identity(&app);
         for flat in ["art.jpg", "art.png"] {
-            menus::invoke(&mut app, &ctx, "file.saveAs", json!({"path": flat})).unwrap();
+            // A JPEG Options answer, so the JPEG doesn't wait on the prompt.
+            menus::invoke(&mut app, &ctx, "file.saveAs", json!({"path": flat, "jpegFormat": "baseline"})).unwrap();
             assert_eq!(identity(&app), before, "{flat}, layered: {layered}");
         }
         menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap();
@@ -159,8 +160,15 @@ fn save_as_flat_keeps_the_layered_original() {
     }
     // An untitled layered document saved as a JPEG is still untitled and unsaved.
     let mut app = app();
+    let written = Rc::new(RefCell::new(Vec::new()));
+    let w = written.clone();
+    app.services.write = Some(Box::new(move |path, _| {
+        w.borrow_mut().push(path.to_string());
+        Ok(())
+    }));
     let before = identity(&app);
-    app.save_as(Some("flat.jpg".into())).unwrap();
+    menus::invoke(&mut app, &ctx, "file.saveAs", json!({"path": "flat.jpg", "jpegFormat": "baseline"})).unwrap();
+    assert_eq!(*written.borrow(), ["flat.jpg"]);
     assert_eq!(identity(&app), before);
 }
 
@@ -172,6 +180,8 @@ fn save_as_flat_retargets_a_flat_document() {
     app.save_as(Some("shot.png".into())).unwrap();
     assert_eq!(app.session.active().unwrap().path.as_deref(), Some("shot.png"));
     app.save_as(Some("shot.jpg".into())).unwrap();
+    // JPEG Options asks first; OK writes.
+    crate::jpeg_options_ui::confirm(&mut app, &egui::Context::default());
     let st = app.session.active().unwrap();
     assert_eq!((st.doc.name.as_str(), st.path.as_deref()), ("shot.jpg", Some("shot.jpg")));
     assert_eq!(st.saved_revision, st.revision);

@@ -779,6 +779,57 @@ fn live_stroke_equals_the_commit_at_every_zoom_with_smoothing() {
 }
 
 #[test]
+fn pose_axes_commands_keep_minimal_patches_legacy_alias_and_preset_replay() {
+    let mut s = session(100, 80);
+    let input = StrokePoint { tilt_x: 13.0, tilt_y: -27.0, pressure: 0.71, rotation: 67.0, ..Default::default() };
+    s.execute("tools.setBrush", json!({"brush": {"pose": {"enabled": true, "tiltX": 45, "tiltY": -18, "overrideTilt": true}}})).unwrap();
+    assert_eq!(photocraft_paint::dynamics::apply_pose(&s.tools.brush, input), StrokePoint { tilt_x: 45.0, tilt_y: -18.0, ..input });
+    let before = s.tools.brush.clone();
+    s.execute("tools.setBrush", json!({"pose": {"overrideTiltX": false}})).unwrap();
+    assert_eq!(
+        photocraft_paint::dynamics::apply_pose(&s.tools.brush, input),
+        StrokePoint { tilt_y: -18.0, ..input },
+        "turning X off retains Y override and live X input"
+    );
+    let mixed = s.tools.brush.clone();
+    assert_eq!(brush_patch(&before, &mixed), json!({"pose": {"overrideTiltX": false}}), "the derived combined flag must not enter an axis-only patch");
+    let wire = s.execute("brush.get", json!({})).unwrap();
+    assert_eq!(wire["pose"]["overrideTiltX"], false);
+    assert_eq!(wire["pose"]["overrideTiltY"], true);
+    assert_eq!(wire["pose"]["overrideTilt"], false, "legacy readback reports whether both axes are overridden");
+    s.execute("brush.presets.save", json!({"name": "Independent pose"})).unwrap();
+    s.execute("tools.setBrush", json!({"brush": {"pose": {"overrideTilt": false}}})).unwrap();
+    assert_eq!(photocraft_paint::dynamics::apply_pose(&s.tools.brush, input), input, "legacy false clears both axes even after axis editing");
+    s.execute("tools.setBrush", json!({"preset": "Independent pose"})).unwrap();
+    assert_eq!(s.tools.brush.pose, mixed.pose, "preset picking preserves independent state");
+    // Explicit axis keys win over a legacy combined key in the same command.
+    s.execute("tools.setBrush", json!({"brush": {"pose": {"overrideTilt": true, "overrideTiltY": false}}})).unwrap();
+    assert_eq!(photocraft_paint::dynamics::apply_pose(&s.tools.brush, input), StrokePoint { tilt_x: 45.0, ..input });
+    let mut replay = Session::new();
+    for (id, params) in &s.journal {
+        replay.execute(id, params.clone()).unwrap();
+    }
+    assert_eq!(replay.tools.brush, s.tools.brush, "recorded commands reproduce the same axes");
+}
+
+#[test]
+fn pose_axes_invalid_flags_fail_atomically() {
+    let mut s = session(100, 80);
+    let before = s.tools.brush.clone();
+    let n = s.journal.len();
+    for pose in [
+        json!({"overrideTiltX": "yes"}),
+        json!({"overrideTiltY": null}),
+        json!({"overrideTiltX": true, "overrideTiltY": 1}),
+        json!({"overrideTilt": "yes", "overrideTiltX": false}),
+    ] {
+        assert!(s.execute("tools.setBrush", json!({"brush": {"pose": pose}})).is_err());
+        assert_eq!(s.tools.brush, before);
+        assert_eq!(s.journal.len(), n, "a failed update records no command");
+    }
+}
+
+#[test]
 fn new_brush_controls_round_trip_through_set_brush() {
     let mut s = session(40, 40);
     let patch = json!({

@@ -483,9 +483,13 @@ fn save_in_background_off_blocks_the_app_until_the_file_is_written() {
     assert_eq!(r["pending"], true, "the same background job does the work");
     h.run_steps(1);
     // The dialog is up from the first frame (no delay), titled with the save, then its stage.
+    // A new modal's accessibility tree can take a second pass to appear under kittest.
+    let t = Instant::now();
+    while h.query_by_label("Saving fg.psd").is_none() && t.elapsed() < Duration::from_secs(30) {
+        h.step();
+    }
     h.get_by_label("Saving fg.psd");
     h.get_by_label("Esc to cancel");
-    let t = Instant::now();
     while h.query_by_label("Encoding").is_none() && t.elapsed() < Duration::from_secs(30) {
         h.step();
     }
@@ -933,7 +937,161 @@ fn background_open_warns_about_missing_fonts() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     // What the open job leaves behind: the decoded document in the session, then its result.
     let (index, _) = app.session.open_document(doc, None);
-    super::finish_open(&mut app, "poster.psd", None, &json!({"document": index, "warnings": []}), None).unwrap();
+    let id = app.session.documents()[index].doc.id;
+    super::finish_open(&mut app, "poster.psd", None, &json!({"document": index, "docId": id.0, "warnings": []}), None).unwrap();
     let want = vec!["font 'NoSuchFamily4559' is not installed; text may render using a fallback face".to_string()];
     assert!(app.ui.notices.last().is_some_and(|n| n.title.contains("poster.psd") && n.lines == want), "{:?}", app.ui.notices);
+}
+
+fn identity_app() -> PhotocraftApp {
+    let mut session = photocraft_engine::Session::new();
+    session.execute("file.new", json!({"width": 8, "height": 6})).unwrap();
+    session.execute("layer.new.layer", json!({})).unwrap();
+    session.execute("edit.fill", json!({"color": "#336699"})).unwrap();
+    session.active_mut().unwrap().path = Some("accepted-control.pcraft".into());
+    assert!(session.active().unwrap().is_dirty());
+    PhotocraftApp::new(session, crate::Services::default())
+}
+
+fn identity_png(profile: Option<photocraft_cms::Builtin>) -> Vec<u8> {
+    let app = identity_app();
+    let mut doc = (*app.session.active().unwrap().doc).clone();
+    doc.icc_profile = profile.map(|profile| profile.profile().to_bytes());
+    photocraft_io::export(&doc, "synthetic.png", &Default::default()).unwrap().bytes
+}
+
+/// Complete the real decoder/apply path without delivering its result to the UI yet. This is
+/// the same boundary as a poll that applies all ready jobs before handling their UI events.
+fn completed_identity_open(app: &mut PhotocraftApp, name: &str, bytes: Vec<u8>) -> Value {
+    match app.session.start_open(name, photocraft_engine::jobs::OpenSource::Bytes(Arc::new(bytes))).unwrap() {
+        Started::Done(result) => result,
+        Started::Job(job) => app.session.wait_job(job).unwrap(),
+    }
+}
+
+struct IdentityControl {
+    doc: Arc<photocraft_doc::Document>,
+    path: Option<String>,
+    revision: u64,
+    saved_revision: u64,
+    history: usize,
+    redo: bool,
+}
+
+impl IdentityControl {
+    fn capture(app: &PhotocraftApp) -> Self {
+        let state = app.session.active().unwrap();
+        Self {
+            doc: state.doc.clone(),
+            path: state.path.clone(),
+            revision: state.revision,
+            saved_revision: state.saved_revision,
+            history: state.history.past_len(),
+            redo: state.history.can_redo(),
+        }
+    }
+
+    fn assert_untouched(&self, app: &PhotocraftApp) {
+        let state = app.session.documents().iter().find(|state| state.doc.id == self.doc.id).expect("the accepted control remains open");
+        assert!(Arc::ptr_eq(&state.doc, &self.doc), "the accepted control's pixels and document data must not change");
+        assert_eq!(state.path, self.path, "an import must not rebind another document's save path");
+        assert_eq!(
+            (state.revision, state.saved_revision, state.history.past_len(), state.history.can_redo()),
+            (self.revision, self.saved_revision, self.history, self.redo)
+        );
+        assert!(state.is_dirty(), "the unrelated document must still need saving");
+    }
+}
+
+/// Exercise the consumer separately from the engine result-schema regression: the identity is
+/// observed from the real imported document, then supplied even on the old producer.
+fn identified_result(app: &PhotocraftApp, mut result: Value) -> (Value, photocraft_doc::DocId) {
+    let id = app.session.documents()[result["document"].as_u64().unwrap() as usize].doc.id;
+    result["docId"] = json!(id.0);
+    (result, id)
+}
+
+#[test]
+fn open_identity_survives_tab_reordering() {
+    let mut app = identity_app();
+    let control = IdentityControl::capture(&app);
+    let result = completed_identity_open(&mut app, "imported.png", identity_png(None));
+    let (result, imported) = identified_result(&app, result);
+    let old_index = result["document"].as_u64().unwrap() as usize;
+    app.session.move_document(old_index, 0).unwrap();
+    assert_eq!(app.session.documents()[old_index].doc.id, control.doc.id);
+    super::finish_open(&mut app, "imported.png", Some("imported.png"), &result, None).unwrap();
+    control.assert_untouched(&app);
+    assert_eq!(app.session.active().unwrap().doc.id, imported);
+    assert_eq!(app.session.active().unwrap().path.as_deref(), Some("imported.png"));
+}
+
+#[test]
+fn open_identity_survives_an_earlier_tab_closing() {
+    let mut app = identity_app();
+    let control = IdentityControl::capture(&app);
+    app.session.execute("file.new", json!({"width": 2, "height": 2})).unwrap();
+    let result = completed_identity_open(&mut app, "imported.png", identity_png(None));
+    let (result, imported) = identified_result(&app, result);
+    app.session.close(1).unwrap();
+    app.session.set_active(0);
+    super::finish_open(&mut app, "imported.png", Some("imported.png"), &result, Some(0)).unwrap();
+    control.assert_untouched(&app);
+    assert_eq!(app.session.active().unwrap().doc.id, imported);
+    assert_eq!(app.session.documents()[0].doc.id, imported, "the requested destination slot applies to the correct document");
+}
+
+#[test]
+fn open_identity_rejects_closed_missing_and_invalid_identities() {
+    for identity in [None, Some(Value::Null), Some(json!("not-an-id")), Some(json!(-1)), Some(json!(u64::MAX)), Some(json!(1.5))] {
+        let mut app = identity_app();
+        let control = IdentityControl::capture(&app);
+        let result = completed_identity_open(&mut app, "closed.png", identity_png(None));
+        let (mut result, imported) = identified_result(&app, result);
+        app.session.close(result["document"].as_u64().unwrap() as usize).unwrap();
+        // A reused/stale index must never become permission to finish another document.
+        result["document"] = json!(0);
+        match identity {
+            None => {
+                result.as_object_mut().unwrap().remove("docId");
+            }
+            Some(value) => result["docId"] = value,
+        }
+        assert!(super::finish_open(&mut app, "closed.png", Some("closed.png"), &result, Some(0)).is_err(), "invalid identity was accepted: {result}");
+        control.assert_untouched(&app);
+        assert_eq!(app.session.active().unwrap().doc.id, control.doc.id);
+        assert_eq!(app.session.documents().len(), 1);
+        result["docId"] = json!(imported.0);
+        assert!(
+            super::finish_open(&mut app, "closed.png", Some("closed.png"), &result, None).is_err(),
+            "a closed identity must not fall back to the old tab index"
+        );
+        control.assert_untouched(&app);
+    }
+}
+
+#[test]
+fn open_identity_keeps_same_poll_results_in_the_profile_queue() {
+    let mut app = identity_app();
+    let control = IdentityControl::capture(&app);
+    app.session.execute("edit.colorSettings", json!({"askOnMismatch": true, "askOnMissing": false, "policyRgb": "preserve"})).unwrap();
+    let mismatched = identity_png(photocraft_cms::Builtin::from_id("adobe-rgb-compat"));
+    let prompt = completed_identity_open(&mut app, "profile.png", mismatched);
+    assert!(prompt["held"].as_u64().is_some());
+    let first = completed_identity_open(&mut app, "first.png", identity_png(None));
+    let (first, first_id) = identified_result(&app, first);
+    let second = completed_identity_open(&mut app, "second.png", identity_png(None));
+    let (second, second_id) = identified_result(&app, second);
+    // All engine applies have finished. Handling the first ordinary result removes its tab,
+    // shifting the second result before its UI callback runs.
+    super::finish_open(&mut app, "profile.png", Some("profile.png"), &prompt, None).unwrap();
+    super::finish_open(&mut app, "first.png", Some("first.png"), &first, None).unwrap();
+    super::finish_open(&mut app, "second.png", Some("second.png"), &second, None).unwrap();
+    assert_eq!(app.held_opens.iter().map(|held| held.name.as_str()).collect::<Vec<_>>(), ["profile.png", "first.png", "second.png"]);
+    assert_eq!(app.held_opens.iter().skip(1).map(|held| held.doc.id).collect::<Vec<_>>(), [first_id, second_id]);
+    assert_eq!(app.session.documents().len(), 1, "both completed imports wait behind the profile prompt");
+    control.assert_untouched(&app);
+    assert_eq!(crate::open_prompt::answer(&mut app, None).unwrap()["cancelled"], 3);
+    assert!(app.held_opens.is_empty());
+    control.assert_untouched(&app);
 }

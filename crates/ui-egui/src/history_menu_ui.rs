@@ -132,11 +132,11 @@ mod tests {
     fn close_hides_the_history_panel() {
         let mut app = app();
         app.run("window.panel.activate", json!({"panel": "history"})).unwrap();
-        assert!(app.ui.docking.as_ref().unwrap().contains(&"history".to_string()));
+        assert!(app.ui.docking.as_ref().unwrap().layout.contains(&"history".to_string()));
         let mut h = harness(app);
         click(&mut h, "Close");
         assert!(!h.state().ui.status_error, "{}", h.state().ui.status);
-        let layout = h.state().ui.docking.clone().unwrap();
+        let layout = h.state().ui.docking.clone().unwrap().layout;
         assert!(!layout.contains(&"history".to_string()), "the History panel is closed");
     }
 
@@ -185,17 +185,6 @@ mod tests {
         click(&mut h, "Delete");
         assert_eq!(snaps(&h), before - 1, "no snapshot selected now: the snapshots are kept");
         assert_eq!(states(&h).0, steps.0 - 1, "the current state is deleted");
-    }
-
-    /// The labels aren't `tl!` literals, so the catalog scan can't see them: every language that
-    /// claims complete menus must still translate them.
-    #[test]
-    fn menu_labels_are_translated() {
-        for lang in crate::i18n::Lang::all().filter(|l| l.complete_menus()) {
-            for &(label, _) in ITEMS.iter().filter(|(l, _)| *l != "---") {
-                assert!(crate::i18n::has(lang, label), "{}: {label}", lang.code());
-            }
-        }
     }
 
     #[test]

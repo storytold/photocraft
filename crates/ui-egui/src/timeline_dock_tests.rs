@@ -595,8 +595,11 @@ fn the_tween_menu_adds_frames_between_two() {
     h.run_steps(4);
     assert!(h.query_by_label("Frames to add").is_some(), "the menu opened");
     // The count starts at 3; tween with the previous frame.
-    let items: Vec<_> = h.query_all_by_label("Previous frame").collect();
-    items.last().expect("the menu's Previous frame item").click();
+    // The menu's item, not the bar's step-back button of the same name: the one nearest the
+    // menu's count field.
+    let field = h.get_by_label("Frames to add").rect().center();
+    let item = h.query_all_by_label("Previous frame").min_by(|a, b| a.rect().center().distance(field).total_cmp(&b.rect().center().distance(field)));
+    item.expect("the menu's Previous frame item").click();
     h.run_steps(4);
     let a = anim(&h);
     assert_eq!(a.frames.len(), 6, "three frames added to the three");

@@ -57,6 +57,25 @@ fn use_sets_foreground_and_background_through_colour_management() {
     assert!(s.tools.background.iter().all(|v| (v - 1.0).abs() < 0.01), "{:?}", s.tools.background);
 }
 
+/// #7474: a CMYK swatch (an .ase Pantone colour) keeps its inks when it becomes the foreground,
+/// instead of reading back as what its sRGB stand-in converts to (0/0/100/0 -> 5/1/92/0).
+#[test]
+fn using_a_cmyk_swatch_remembers_its_inks() {
+    let mut s = Session::new();
+    s.execute("swatches.add", json!({"name": "P 1-8 C", "kind": "spot", "color": {"model": "cmyk", "values": [0, 0, 100, 0]}})).unwrap();
+    s.execute("swatches.use", json!({"swatch": "P 1-8 C"})).unwrap();
+    let fg = s.tools.foreground;
+    assert_eq!(s.tools.picked_cmyk([fg[0], fg[1], fg[2]]), Some([0.0, 0.0, 1.0, 0.0]));
+    s.execute("swatches.add", json!({"name": "Print cyan", "color": {"model": "cmyk", "values": [100, 0, 0, 0]}})).unwrap();
+    s.execute("swatches.use", json!({"swatch": "Print cyan", "target": "background"})).unwrap();
+    let bg = s.tools.background;
+    assert_eq!(s.tools.picked_cmyk([bg[0], bg[1], bg[2]]), Some([1.0, 0.0, 0.0, 0.0]));
+    // An RGB swatch records nothing.
+    s.execute("swatches.use", json!({"swatch": "Red"})).unwrap();
+    let fg = s.tools.foreground;
+    assert_eq!(s.tools.picked_cmyk([fg[0], fg[1], fg[2]]), None);
+}
+
 #[test]
 fn rename_delete_move_and_groups() {
     let mut s = Session::new();

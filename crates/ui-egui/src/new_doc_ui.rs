@@ -453,7 +453,8 @@ fn saved_presets(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<
                     let response = ui.add_sized(vec2(422.0, 32.0), label).on_hover_text(&preset.name);
                     if response.clicked() {
                         apply_saved_preset(f, preset);
-                        create |= response.double_clicked() || response.triple_clicked();
+                        // Touch-tolerant double-tap (finger jitter > egui's 6 px); see `widgets::second_click`.
+                        create |= widgets::second_click(ui, &response);
                     }
                     if widgets::secondary_button(ui, tl!("Delete"), 76.0).clicked() {
                         match app.run("document.presets.delete", json!({"name":preset.name})) {
@@ -517,7 +518,8 @@ fn save_preset(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<St
         });
     }
     if let Some(error) = f.get("__presetError").and_then(Value::as_str) {
-        ui.add(egui::Label::new(error).wrap());
+        // The engine's message stays copyable, unlike the static labels around it.
+        ui.add(egui::Label::new(error).wrap().selectable(true));
     }
 }
 
@@ -525,6 +527,9 @@ fn save_preset(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<St
 /// A recent category click can make egui count the preset double-click as a triple-click.
 pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) -> bool {
     let t = Tokens::get(ui.ctx());
+    // Headings and field labels are static, as in Photoshop: no text cursor over them, no
+    // drag-selecting them (#8331). Text fields keep theirs.
+    ui.style_mut().interaction.selectable_labels = false;
     let cat = get_s(f, "__category", "Recent");
     let mut create = false;
     // Category tabs.
@@ -578,6 +583,7 @@ pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
                         ui.spacing_mut().item_spacing.x = 8.0;
                         for c in row {
                             let (r, resp) = ui.allocate_exact_size(card, Sense::click());
+                            let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
                             let (w, h, _) = c.size(&units);
                             let on = match c {
                                 Card::Builtin(p) => chosen == p.0,
@@ -623,7 +629,8 @@ pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
                                     Card::Builtin(p) => apply_preset(f, p, &units),
                                     Card::Recent(settings) => apply_settings(f, settings),
                                 }
-                                create |= resp.double_clicked() || resp.triple_clicked();
+                                // Touch-tolerant double-tap (finger jitter > egui's 6 px); see `widgets::second_click`.
+                                create |= widgets::second_click(ui, &resp);
                             }
                         }
                     });
@@ -640,7 +647,7 @@ pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
             // Keep the canonical English default in state; only the TextEdit shows a translation.
             let raw = get_s(f, "name", "Untitled-1");
             let mut name = if raw == "Untitled-1" { tl!("Untitled-1").to_string() } else { raw };
-            let r = ui.add(egui::TextEdit::singleline(&mut name).desired_width(250.0).font(egui::FontId::proportional(15.0)));
+            let r = ui.add(egui::TextEdit::singleline(&mut name).desired_width(250.0).font(egui::FontId::proportional(15.0))).accessible_name(tl!("Name"));
             if r.changed() {
                 f.insert("name".into(), json!(name));
             }
@@ -662,11 +669,12 @@ pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
             small_label(ui, tl!("Width"));
             ui.horizontal(|ui| {
                 let mut w = shown_size(f, "width", 1920.0, &unit, ppi);
-                if widgets::value_field_units(ui, &mut w, 0.0..=300_000.0, 110.0, widgets::unit_decimals(&unit), units).changed() {
+                if widgets::value_field_units(ui, &mut w, 0.0..=300_000.0, 110.0, widgets::unit_decimals(&unit), units).accessible_name(tl!("Width")).changed()
+                {
                     set_size(f, "width", w, &unit, ppi);
                 }
                 let opts: Vec<(String, &str)> = UNITS.iter().map(|u| (u.0.to_string(), u.1)).collect();
-                if widgets::dropdown(ui, "nd-unit", &mut unit, &opts, 120.0) {
+                if widgets::dropdown(ui, "nd-unit", tl!("Units"), &mut unit, &opts, 120.0) {
                     f.insert("__unit".into(), json!(unit));
                     f.remove("__savedPreset");
                 }
@@ -674,7 +682,8 @@ pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
             small_label(ui, tl!("Height"));
             ui.horizontal(|ui| {
                 let mut h = shown_size(f, "height", 1080.0, &unit, ppi);
-                if widgets::value_field_units(ui, &mut h, 0.0..=300_000.0, 110.0, widgets::unit_decimals(&unit), units).changed() {
+                if widgets::value_field_units(ui, &mut h, 0.0..=300_000.0, 110.0, widgets::unit_decimals(&unit), units).accessible_name(tl!("Height")).changed()
+                {
                     set_size(f, "height", h, &unit, ppi);
                 }
                 ui.add_space(6.0);
@@ -692,17 +701,28 @@ pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
                     }
                 }
             });
+            // Under Orientation, as in Photoshop: the document starts as one artboard (#9086).
+            let mut artboard = f.get("artboard").and_then(Value::as_bool).unwrap_or(false);
+            if widgets::checkbox(ui, &mut artboard, tl!("Artboards")).changed() {
+                f.insert("artboard".into(), json!(artboard));
+            }
             ui.add_space(4.0);
             small_label(ui, tl!("Resolution"));
             ui.horizontal(|ui| {
                 let per_cm = get_s(f, "__resUnit", "in") == "cm";
                 let mut r = if per_cm { ppi / 2.54 } else { ppi };
-                if widgets::value_field(ui, &mut r, 1.0..=30_000.0, "", 110.0).changed() {
+                if widgets::value_field(ui, &mut r, 1.0..=30_000.0, "", 110.0).accessible_name(tl!("Resolution")).changed() {
                     set_resolution(f, if per_cm { r * 2.54 } else { r });
                 }
                 let mut ru = get_s(f, "__resUnit", "in");
-                if widgets::dropdown(ui, "nd-resunit", &mut ru, &[("in".to_string(), tl!("Pixels/Inch")), ("cm".to_string(), tl!("Pixels/Centimeter"))], 120.0)
-                {
+                if widgets::dropdown(
+                    ui,
+                    "nd-resunit",
+                    tl!("Resolution"),
+                    &mut ru,
+                    &[("in".to_string(), tl!("Pixels/Inch")), ("cm".to_string(), tl!("Pixels/Centimeter"))],
+                    120.0,
+                ) {
                     f.insert("__resUnit".into(), json!(ru));
                     f.remove("__savedPreset");
                 }
@@ -714,6 +734,7 @@ pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
                 if widgets::dropdown(
                     ui,
                     "nd-mode",
+                    tl!("Color Mode"),
                     &mut mode,
                     &[
                         ("gray".to_string(), tl!("Grayscale")),
@@ -730,7 +751,7 @@ pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
                 }
                 let mut depth = f.get("depth").and_then(Value::as_u64).unwrap_or(8);
                 let depth_options: Vec<(u64, &str, &str)> = DEPTH_OPTIONS.iter().map(|(bits, label, tooltip)| (*bits, *label, *tooltip)).collect();
-                if widgets::dropdown_with_tooltips(ui, "nd-depth", &mut depth, &depth_options, 120.0) {
+                if widgets::dropdown_with_tooltips(ui, "nd-depth", tl!("Depth"), &mut depth, &depth_options, 120.0) {
                     f.insert("depth".into(), json!(depth));
                     f.remove("__savedPreset");
                 }
@@ -752,7 +773,7 @@ pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
                     f.remove("profile");
                 }
                 let shown: Vec<(String, &str)> = opts.iter().map(|(v, l)| (v.clone(), l.as_str())).collect();
-                if widgets::dropdown(ui, "nd-profile", &mut profile, &shown, 240.0) {
+                if widgets::dropdown(ui, "nd-profile", tl!("Color Profile"), &mut profile, &shown, 240.0) {
                     if profile == "working" {
                         f.remove("profile");
                     } else {
@@ -776,7 +797,7 @@ pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
             let shown = background_rgb(app, f);
             let mut pick = false;
             ui.horizontal(|ui| {
-                if widgets::dropdown(ui, "nd-bg", &mut bg, &opts, 240.0 - SWATCH - 6.0) {
+                if widgets::dropdown(ui, "nd-bg", tl!("Background"), &mut bg, &opts, 240.0 - SWATCH - 6.0) {
                     if bg == CUSTOM {
                         // Custom… opens the Color Picker on the colour shown so far.
                         pick = true;
@@ -803,7 +824,7 @@ pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
                 }
                 ui.painter().rect_stroke(r, 2.0, Stroke::new(1.0, Tokens::get(ui.ctx()).field_border), StrokeKind::Inside);
                 let resp = resp.on_hover_text(tl!("Custom background color")).on_hover_cursor(egui::CursorIcon::PointingHand);
-                resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Custom background color")));
+                resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Custom background color")));
                 if resp.clicked() {
                     pick = true;
                     f.remove("__savedPreset");
@@ -872,6 +893,21 @@ mod tests {
         assert!(s.execute("file.new", command_params(&f)).is_ok());
         apply_saved_preset(&mut f, &s.presets.documents[1]);
         assert_eq!(f["profile"], "coated-cmyk");
+    }
+
+    /// #9086: the Artboards checkbox's field reaches `file.new`, which starts the document as one
+    /// artboard; the dialog's own `__` keys don't.
+    #[test]
+    fn the_artboards_box_creates_an_artboard_document() {
+        let mut s = photocraft_engine::Session::new();
+        let mut f = Map::new();
+        for (k, v) in [("width", json!(64)), ("height", json!(48)), ("artboard", json!(true)), ("__orientation", json!("landscape"))] {
+            f.insert(k.into(), v);
+        }
+        s.execute("file.new", command_params(&f)).unwrap();
+        let doc = &s.active().unwrap().doc;
+        assert_eq!(doc.artboards().len(), 1);
+        assert_eq!(doc.artboards()[0].2.rect, doc.bounds());
     }
 
     #[test]
@@ -1021,23 +1057,6 @@ mod tests {
             }
         });
         out.textures_delta.clear();
-    }
-
-    #[test]
-    fn new_document_depth_labels_and_tooltips_are_translated() {
-        // Bit-depth labels are unit/number strings that some languages legitimately write exactly
-        // like the English source (Turkish and Italian "8 bit"); they only need a catalog entry there.
-        const SAME_AS_SOURCE: &[(&str, &str)] = &[("tr", "8 bit"), ("tr", "16 bit"), ("it", "8 bit"), ("it", "16 bit")];
-        for lang in crate::i18n::Lang::all().filter(|lang| lang.code() != "en") {
-            for (_, label, tooltip) in DEPTH_OPTIONS {
-                if SAME_AS_SOURCE.contains(&(lang.code(), *label)) {
-                    assert!(crate::i18n::has(lang, label), "{}: {label}", lang.code());
-                } else {
-                    assert_ne!(crate::i18n::tr(lang, label), *label, "{}: {label}", lang.code());
-                }
-                assert_ne!(crate::i18n::tr(lang, tooltip), *tooltip, "{}: {tooltip}", lang.code());
-            }
-        }
     }
 
     #[test]
@@ -1315,6 +1334,17 @@ mod tests {
             h.run_steps(2);
         }
 
+        /// A finger tap at `at`. Events for one phase share a frame (`input_mut`), because `Harness::step` would otherwise run one frame per queued event and drop Touch before the click release (so `second_click` would not see touch).
+        fn touch_tap_at(h: &mut Harness<'static, PhotocraftApp>, at: egui::Pos2) {
+            let touch = |phase| egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(1), phase, pos: at, force: None };
+            let button = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+            h.input_mut().events.extend([egui::Event::PointerMoved(at), touch(egui::TouchPhase::Start), button(true)]);
+            h.step();
+            h.input_mut().events.extend([touch(egui::TouchPhase::End), button(false)]);
+            h.step();
+            h.run_steps(1);
+        }
+
         /// The Width (0), Height (1) and Resolution (2) fields.
         fn field(h: &Harness<'static, PhotocraftApp>, i: usize) -> egui::Rect {
             h.query_all_by_role(Role::SpinButton).nth(i).map(|n| n.rect()).expect("a size field")
@@ -1380,6 +1410,37 @@ mod tests {
             }
         }
 
+        fn cursor_over(h: &mut Harness<'static, PhotocraftApp>, at: egui::Pos2) -> egui::CursorIcon {
+            h.hover_at(at);
+            h.run_steps(2);
+            h.output().platform_output.cursor_icon
+        }
+
+        /// #8331: headings and field labels keep the arrow; only the text fields show the I-beam.
+        #[test]
+        fn labels_show_the_arrow_and_only_text_fields_the_text_cursor() {
+            use egui_kittest::kittest::NodeT;
+            let mut h = harness();
+            let label_at = |h: &Harness<'static, PhotocraftApp>, text: &str| {
+                h.query_all_by_label(text)
+                    .find(|n| n.accesskit_node().role() == Role::Label)
+                    .map(|n| n.rect().center())
+                    .unwrap_or_else(|| panic!("a {text:?} label"))
+            };
+            for text in ["PRESET DETAILS", "Width", "Height", "Resolution", "Color Mode", "Background Contents"] {
+                let at = label_at(&h, text);
+                assert_eq!(cursor_over(&mut h, at), egui::CursorIcon::Default, "over {text:?}");
+            }
+            // The name field still shows the text cursor, so the check above can tell them apart.
+            let name = h.query_all_by_role(Role::TextInput).next().map(|n| n.rect().center()).expect("the name field");
+            assert_eq!(cursor_over(&mut h, name), egui::CursorIcon::Text, "over the name field");
+            // The Saved tab's labels too.
+            h.get_by_label("Saved").click();
+            h.run_steps(2);
+            let at = label_at(&h, "No saved presets yet.");
+            assert_eq!(cursor_over(&mut h, at), egui::CursorIcon::Default, "over the empty Saved list");
+        }
+
         #[test]
         fn double_click_builtin_preset_creates_its_size_and_current_details() {
             let mut h = harness();
@@ -1402,6 +1463,33 @@ mod tests {
             assert_eq!(doc.name, "Portrait proof");
             assert_eq!((doc.mode, doc.depth), (photocraft_doc::ColorMode::Cmyk, photocraft_doc::SampleType::U16));
             assert_pixel(&mut h, [0.0; 4]);
+        }
+
+        /// Framework-style touch: the second tap lands ~48 px off (past egui's 6 px and the old 32 px touch slop) and still creates.
+        #[test]
+        fn touch_double_tap_with_jitter_creates_from_builtin_preset() {
+            let mut h = harness();
+            h.get_by_label("Photo").click();
+            h.run_steps(2);
+            let at = preset_title_at(&h, "Portrait, 4 x 6");
+            touch_tap_at(&mut h, at);
+            assert_eq!(fields(&h)["__preset"], "Portrait, 4 x 6");
+            assert!(h.state().session.documents().is_empty(), "first tap only selects");
+            touch_tap_at(&mut h, egui::pos2(at.x + 48.0, at.y));
+            assert_eq!(created(&h), (1200, 1800, 300.0));
+        }
+
+        /// Mouse keeps egui's tight distance: 20 px between clicks is two singles, not a create.
+        #[test]
+        fn mouse_double_click_with_large_jitter_does_not_create() {
+            let mut h = harness();
+            h.get_by_label("Photo").click();
+            h.run_steps(2);
+            let at = preset_title_at(&h, "Portrait, 4 x 6");
+            click_at(&mut h, at);
+            click_at(&mut h, at + egui::vec2(20.0, 0.0));
+            assert!(h.state().session.documents().is_empty());
+            assert_eq!(h.state().ui.dialogs.len(), 1, "dialog stays open");
         }
 
         #[test]

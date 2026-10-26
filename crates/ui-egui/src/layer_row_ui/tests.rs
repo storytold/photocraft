@@ -23,8 +23,8 @@ fn busy() -> photocraft_engine::Session {
         s.execute("layer.layerStyle.dropShadow", json!({"layer": a})).unwrap();
         // #153: the vector mask thumbnail and both link chains take row width too.
         s.execute("layer.vectorMask.revealAll", json!({"layer": a})).unwrap();
-        s.execute("layer.setProps", json!({"layer": a, "blend": "Multiply", "locks": {"all": true}})).unwrap();
         s.execute("layer.layerMask.revealAll", json!({"layer": a})).unwrap();
+        s.execute("layer.setProps", json!({"layer": a, "blend": "Multiply", "locks": {"all": true}})).unwrap();
         let b = s.execute("layer.new.layer", json!({"name": format!("{LONG} b{depth}")})).unwrap()["layer"].as_u64().unwrap();
         s.execute("layer.setProps", json!({"layer": b, "clipped": true})).unwrap();
         s.execute("layer.select", json!({"layer": a})).unwrap();
@@ -108,6 +108,26 @@ fn long_names_never_run_under_the_indicators() {
     }
 }
 
+/// A layer inside a group sits one step right of the group's row, so the hierarchy shows: its
+/// name used to start where the group's did. Top-level layers stay where they were.
+#[test]
+fn a_groups_layers_indent_past_the_group() {
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
+    let child = s.execute("layer.new.layer", json!({"name": "Child"})).unwrap()["layer"].as_u64().unwrap();
+    let group = s.execute("layer.groupLayers", json!({"name": "Group"})).unwrap()["layer"].as_u64().unwrap();
+    // Group Layers creates the group collapsed; open it so the panel lists its layers.
+    s.execute("layer.setExpanded", json!({"layer": group, "expanded": true})).unwrap();
+    let top = s.execute("layer.new.layer", json!({"name": "Top"})).unwrap()["layer"].as_u64().unwrap();
+    let h = harness(s, 1.0, "promedium", 290.0);
+    let rows = recorded(&h.ctx);
+    let left = |id: u64| rows.iter().find(|r| r.layer == id).and_then(|r| r.name).map(|n| n.left()).unwrap_or_else(|| panic!("layer {id} drawn"));
+    let step = crate::layer_tree_ui::TRIANGLE_W;
+    assert!((left(child) - left(group) - step).abs() < 0.5, "child {} vs group {}", left(child), left(group));
+    assert!((left(group) - left(top) - step).abs() < 0.5, "a top-level layer keeps its place: {} vs group {}", left(top), left(group));
+}
+
+/// A primary click at `at`: hover, press and release a frame apart, then let the panel settle.
 fn click(h: &mut Harness<'_, PhotocraftApp>, at: Pos2) {
     h.hover_at(at);
     h.run_steps(1);
@@ -209,9 +229,10 @@ fn groups_open(s: &photocraft_engine::Session) -> Vec<bool> {
 fn collapse_all_groups_from_the_panel_menu_and_it_is_saved() {
     let mut h = harness(busy(), 1.0, "promedium", 290.0);
     assert!(groups_open(&h.state().session).iter().all(|o| *o));
-    let menu = crate::dock::last_rects(&h.ctx).into_iter().find(|(g, _)| *g == crate::dock::Group::Layers).expect("layers group").1;
-    // The hamburger sits at the right end of the group's tab strip.
-    click(&mut h, pos2(menu.right() - 14.0, menu.top() + 14.0));
+    let group = crate::panel_docking::probe::group_rect(h.state(), &h.ctx, "layers").expect("layers group");
+    // The group's menu button sits on its tab strip.
+    let menu = h.query_all_by_label("Panel menu").map(|n| n.rect()).find(|r| group.contains(r.center())).expect("Layers panel menu");
+    click(&mut h, menu.center());
     let item = h.get_by_label("Collapse All Groups").rect().center();
     click(&mut h, item);
     let open = groups_open(&h.state().session);
@@ -443,7 +464,7 @@ fn the_footer_is_a_bar_along_the_panel_bottom_with_its_buttons_centred() {
         s.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
         s.execute("layer.new.layer", json!({})).unwrap();
         let h = harness(s, 1.0, theme, 290.0);
-        let group = crate::dock::last_rects(&h.ctx).into_iter().find(|(g, _)| *g == crate::dock::Group::Layers).unwrap().1;
+        let group = crate::panel_docking::probe::group_rect(h.state(), &h.ctx, "layers").unwrap();
         let delete = h.get_by_label("Delete layer").rect();
         let bar_middle = group.bottom() - crate::widgets::FOOTER_BAR / 2.0;
         assert!((delete.center().y - bar_middle).abs() <= 1.5, "{theme}: button at {delete:?}, bar middle {bar_middle}, group {group:?}");
@@ -637,4 +658,68 @@ fn clicking_the_lock_icon_on_a_row_unlocks_the_layer() {
     let doc = &h.state().session.active().unwrap().doc;
     assert!(doc.background().is_none(), "the Background became a normal layer");
     assert!(!doc.layer(bg).unwrap().locks.any());
+}
+
+#[test]
+fn eye_column_edges_toggle_visibility_without_selecting_layer() {
+    // #8467: clicks at the far left or right edge of the eye column must toggle visibility
+    // rather than falling through to select the row.
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
+    let l1 = s.execute("layer.new.layer", json!({"name": "Top"})).unwrap()["layer"].as_u64().unwrap();
+    let l0 = s.execute("layer.new.layer", json!({"name": "Bottom"})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("layer.select", json!({"layer": l0})).unwrap();
+
+    let mut h = harness(s, 1.0, "promedium", 290.0);
+    let visible = |h: &Harness<'_, PhotocraftApp>, id: u64| h.state().session.active().unwrap().doc.layer(photocraft_doc::LayerId(id)).unwrap().visible;
+    let selected = |h: &Harness<'_, PhotocraftApp>| h.state().session.active().unwrap().active_layer.unwrap().0;
+
+    let row_for = |h: &Harness<'_, PhotocraftApp>, id: u64| recorded(&h.ctx).into_iter().find(|r| r.layer == id).unwrap().row;
+
+    let top_row = row_for(&h, l1);
+    // Click at the far left edge of the eye column (left + 1.0, top + 1.0)
+    let left_edge = pos2(top_row.left() + 1.0, top_row.top() + 1.0);
+    click(&mut h, left_edge);
+
+    assert!(!visible(&h, l1), "click on left edge of eye column should hide layer");
+    assert_eq!(selected(&h), l0, "click on eye column must not select the layer");
+
+    // Click at the right edge of the eye column (left + 29.0, bottom - 1.0)
+    let right_edge = pos2(top_row.left() + 29.0, top_row.bottom() - 1.0);
+    click(&mut h, right_edge);
+
+    assert!(visible(&h, l1), "click on right edge of eye column should show layer again");
+    assert_eq!(selected(&h), l0, "click on eye column must not select the layer");
+}
+
+/// #1662: a hidden layer's eye box stays empty, as in Photoshop (only a visible layer paints its
+/// eye), in every theme; the widened hit area (#8467) changes nothing that is drawn.
+#[test]
+fn a_hidden_layers_eye_box_paints_nothing() {
+    fn bounds(shape: &egui::Shape, out: &mut Vec<Rect>) {
+        match shape {
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| bounds(s, out)),
+            s => out.push(s.visual_bounding_rect()),
+        }
+    }
+    for theme in ["promedium", "pro", "studio", "studiolight", "classic"] {
+        let mut s = photocraft_engine::Session::new();
+        s.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
+        let hidden = s.execute("layer.new.layer", json!({"name": "Hidden"})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("layer.setProps", json!({"layer": hidden, "visible": false})).unwrap();
+        let shown = s.execute("layer.new.layer", json!({"name": "Shown"})).unwrap()["layer"].as_u64().unwrap();
+        let h = harness(s, 1.0, theme, 290.0);
+        let mut drawn = Vec::new();
+        for clipped in &h.output().shapes {
+            bounds(&clipped.shape, &mut drawn);
+        }
+        let rows = recorded(&h.ctx);
+        let in_eye_box = |id: u64| {
+            let row = rows.iter().find(|r| r.layer == id).unwrap().row;
+            let cell = Rect::from_min_max(row.left_top(), pos2(row.left() + 30.0, row.bottom())).shrink(1.0);
+            drawn.iter().filter(|b| b.is_positive() && cell.contains_rect(**b)).count()
+        };
+        assert!(in_eye_box(shown) > 0, "{theme}: a visible layer paints its eye");
+        assert_eq!(in_eye_box(hidden), 0, "{theme}: a hidden layer's eye box is left empty");
+    }
 }

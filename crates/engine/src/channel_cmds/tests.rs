@@ -401,6 +401,41 @@ fn quick_mask_without_selection_and_options() {
     assert!(sel_at(&s, 10, 10) < 0.05 && sel_at(&s, 30, 10) > 0.99, "{} {}", sel_at(&s, 10, 10), sel_at(&s, 30, 10));
 }
 
+/// Layer Mask Display Options: `channel.options` on `"mask"` sets the rubylith's colour and
+/// opacity for every mask. They're a preference (kept across restarts, as in Photoshop), not an
+/// undo step, and come back in the result.
+#[test]
+fn layer_mask_display_options() {
+    let mut s = session();
+    let o = || crate::prefs::LayerMaskOverlay::default();
+    assert_eq!(s.prefs().layer_mask_overlay, o());
+    assert_eq!((o().rgb(), o().alpha()), ([1.0, 0.0, 0.0], 0.5));
+    let hist = s.active().unwrap().history.entries().len();
+    let r = s.execute("channel.options", json!({"channel": "mask", "color": "#00ff00", "opacity": 30})).unwrap();
+    assert_eq!(r["layerMaskOverlay"], json!({"color": "#00ff00", "opacity": 30.0}));
+    assert_eq!(s.execute("prefs.get", json!({"path": "layerMaskOverlay"})).unwrap(), json!({"color": "#00ff00", "opacity": 30.0}));
+    assert_eq!(s.active().unwrap().history.entries().len(), hist, "not an undo step");
+    // Just one of them leaves the other; no fields reads them back; out of range clamps.
+    s.execute("channel.options", json!({"channel": "mask", "opacity": 250})).unwrap();
+    let r = s.execute("channel.options", json!({"channel": "layerMask"})).unwrap();
+    assert_eq!(r["layerMaskOverlay"], json!({"color": "#00ff00", "opacity": 100.0}));
+    // A layer mask has no name, Color Indicates or solidity here.
+    for bad in [json!({"name": "x"}), json!({"indicates": "selected"}), json!({"indicates": "spot"}), json!({"solidity": 20})] {
+        let mut p = bad.clone();
+        p["channel"] = json!("mask");
+        assert!(s.execute("channel.options", p).is_err(), "{bad}");
+    }
+    assert_eq!(s.prefs().layer_mask_overlay.opacity, 100.0, "a refused call changes nothing");
+    // prefs.set validates them like other preferences; prefs.reset restores red at 50 %.
+    assert!(s.execute("prefs.set", json!({"path": "layerMaskOverlay.color", "value": "green"})).is_err());
+    assert!(s.execute("prefs.set", json!({"path": "layerMaskOverlay.opacity", "value": 101})).is_err());
+    s.execute("prefs.reset", json!({"path": "layerMaskOverlay"})).unwrap();
+    assert_eq!(s.prefs().layer_mask_overlay, o());
+    // A hand-edited settings file can't break the view.
+    let odd = crate::prefs::LayerMaskOverlay { color: "nope".into(), opacity: f32::NAN };
+    assert_eq!((odd.rgb(), odd.alpha()), ([1.0, 0.0, 0.0], 0.5));
+}
+
 /// Overlay coverage of the live Quick Mask at (x, y): how much colour the canvas shows there.
 fn qm_overlay(s: &Session, x: i32, y: i32) -> f32 {
     let q = doc(s).quick_mask.as_ref().unwrap();

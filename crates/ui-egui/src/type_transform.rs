@@ -97,8 +97,13 @@ pub(crate) fn frame(app: &mut PhotocraftApp) -> Option<TransformSession> {
     if !aff.m.iter().all(|v| v.is_finite()) || aff.inverse().is_none() {
         return None;
     }
-    let rect = match shape {
-        TextShape::Box { x, y, width, height } => [x, y, x + width, y + height].map(f64::from),
+    let area = match &shape {
+        TextShape::Area { path } => photocraft_text::area::path_bounds(path),
+        _ => None,
+    };
+    let rect = match (shape, area) {
+        (TextShape::Box { x, y, width, height }, _) => [x, y, x + width, y + height].map(f64::from),
+        (_, Some((x0, y0, x1, y1))) => [x0, y0, x1, y1],
         _ => {
             let mut r = layout.bounds().unwrap_or([0.0, -size * layout.px_per_pt, 1.0, 0.0]).map(f64::from);
             // Empty lines still have a caret and can be moved/scaled, without inventing glyphs.
@@ -418,7 +423,7 @@ pub(crate) fn draw_box(painter: &egui::Painter, xf: &ViewXform, t: &TransformSes
 
 pub(crate) fn rotation_cursor(ctx: &egui::Context, p: Pos2) {
     let tokens = crate::theme::Tokens::get(ctx);
-    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("type-rotate-cursor")));
+    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("type-rotate-cursor")));
     let first = -std::f32::consts::FRAC_PI_4;
     let last = std::f32::consts::PI + std::f32::consts::FRAC_PI_4;
     let points: Vec<Pos2> = (0..=24)
@@ -451,28 +456,20 @@ pub(crate) fn cursor(app: &mut PhotocraftApp, ctx: &egui::Context, xf: &ViewXfor
             return move_zone(app, q).map(|_| CursorIcon::Move);
         };
         let t = frame(app)?;
-        let direction = if handle < 4 {
-            let a = *t.quad.get(usize::from(handle))?;
-            let b = *t.quad.get((usize::from(handle) + 2) % 4)?;
-            [a[0] - b[0], a[1] - b[1]]
-        } else {
-            let b = if handle.is_multiple_of(2) { t.quad[3] } else { t.quad[1] };
-            [b[0] - t.quad[0][0], b[1] - t.quad[0][1]]
-        };
-        return Some(crate::tool_cursor::resize(direction, xf));
+        if handle < 4 {
+            return Some(crate::tool_cursor::corner_resize(&t.quad, usize::from(handle), xf));
+        }
+        let b = if handle.is_multiple_of(2) { t.quad[3] } else { t.quad[1] };
+        return Some(crate::tool_cursor::resize([b[0] - t.quad[0][0], b[1] - t.quad[0][1]], xf));
     }
     let Some(t) = frame(app) else { return Some(CursorIcon::Default) };
     let h = app.ui.type_transform.as_ref().map(|t| t.gesture.hit).or_else(|| hit(app, &t, xf.to_doc(p)));
     Some(match h {
-        Some(Hit::Corner(i)) => {
-            let q = *t.quad.get(i)?;
-            let opposite = *t.quad.get((i + 2) % 4)?;
-            crate::tool_cursor::resize([q[0] - opposite[0], q[1] - opposite[1]], xf)
-        }
+        Some(Hit::Corner(i)) => crate::tool_cursor::corner_resize(&t.quad, i, xf),
         Some(Hit::Edge(_)) => {
             // Original arrowhead indicator, above the canvas, without a proprietary cursor asset.
             let tokens = crate::theme::Tokens::get(ctx);
-            let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("type-skew-cursor")));
+            let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("type-skew-cursor")));
             painter.add(egui::Shape::convex_polygon(vec![p, p + vec2(14.0, 6.0), p + vec2(6.0, 14.0)], tokens.accent_text, Stroke::new(1.0, tokens.shadow)));
             CursorIcon::None
         }

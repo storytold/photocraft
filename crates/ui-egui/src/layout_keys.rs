@@ -68,7 +68,7 @@ fn is_digit(key: Key) -> bool {
 /// What was typed comes as the text event next to the key press: right after it natively, right
 /// before it on the web.
 pub fn apply(ctx: &egui::Context) {
-    let id = egui::Id::new("photocraft_layout_keys");
+    let id = egui::Id::unique("photocraft_layout_keys");
     let mut learnt: Learnt = ctx.data(|d| d.get_temp(id)).unwrap_or_default();
     let before = (learnt.brackets, learnt.table_layout);
     ctx.input_mut(|i| {

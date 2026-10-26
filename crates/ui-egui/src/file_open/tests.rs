@@ -18,7 +18,7 @@ fn app_with(answers: Vec<Option<FileDialogAnswer>>) -> (PhotocraftApp, Written) 
     let written: Written = Rc::default();
     let w = written.clone();
     let services = Services {
-        import: Some(Box::new(|name: &str, bytes: &[u8], _depth: usize| {
+        import: Some(Box::new(|name: &str, bytes: &[u8], _opts: &photocraft_io::ImportOptions| {
             if bytes == b"bad" {
                 return Err("not an image".into());
             }
@@ -858,7 +858,8 @@ fn a_set_of_background_opens_keeps_its_order_however_they_finish() {
         let i = app.jobs.opens.iter().position(|o| o.order.is_some_and(|x| x.seq == seq)).unwrap();
         let tab = app.jobs.opens.remove(i);
         let index = app.session.add_document(Document::new(&tab.name, Size::new(4, 4), ColorMode::Rgb, SampleType::U8), None);
-        jobs_ui::finish_open_tab(&mut app, &tab, &json!({"document": index})).unwrap();
+        let id = app.session.documents()[index].doc.id;
+        jobs_ui::finish_open_tab(&mut app, &tab, &json!({"document": index, "docId": id.0})).unwrap();
     }
     assert_eq!(doc_names(&app), ["existing.psd", "f0.psd", "f1.psd", "f2.psd", "f3.psd"]);
     assert_eq!(app.session.active().map(|d| d.doc.name.as_str()), Some("f2.psd"), "the one that just opened is active");
@@ -867,10 +868,12 @@ fn a_set_of_background_opens_keeps_its_order_however_they_finish() {
     // A tab with a slot (dropped on the tabs) keeps it; one from a forgotten set goes to the end.
     let dropped = OpenTab { job: JobId(200), name: "dropped.psd".into(), path: None, slot: Some(0), order: None };
     let index = app.session.add_document(Document::new("dropped.psd", Size::new(4, 4), ColorMode::Rgb, SampleType::U8), None);
-    jobs_ui::finish_open_tab(&mut app, &dropped, &json!({"document": index})).unwrap();
+    let id = app.session.documents()[index].doc.id;
+    jobs_ui::finish_open_tab(&mut app, &dropped, &json!({"document": index, "docId": id.0})).unwrap();
     let late = OpenTab { job: JobId(201), name: "late.psd".into(), path: None, slot: None, order: Some(OpenOrder { batch: 999, seq: 0 }) };
     let index = app.session.add_document(Document::new("late.psd", Size::new(4, 4), ColorMode::Rgb, SampleType::U8), None);
-    jobs_ui::finish_open_tab(&mut app, &late, &json!({"document": index})).unwrap();
+    let id = app.session.documents()[index].doc.id;
+    jobs_ui::finish_open_tab(&mut app, &late, &json!({"document": index, "docId": id.0})).unwrap();
     assert_eq!(doc_names(&app), ["dropped.psd", "existing.psd", "f0.psd", "f1.psd", "f2.psd", "f3.psd", "late.psd"]);
 }
 
@@ -979,7 +982,7 @@ fn opening_type_in_a_missing_font_warns() {
     let (with_missing, installed) = (doc_with_type(Some(MISSING)), doc_with_type(None));
     let already = warning.clone();
     let services = Services {
-        import: Some(Box::new(move |name: &str, _bytes: &[u8], _depth: usize| {
+        import: Some(Box::new(move |name: &str, _bytes: &[u8], _opts: &photocraft_io::ImportOptions| {
             Ok(match name {
                 "installed.psd" => (installed.clone(), Vec::new()),
                 "warned.psd" => (with_missing.clone(), vec![already.clone()]),
@@ -1000,6 +1003,37 @@ fn opening_type_in_a_missing_font_warns() {
     assert_eq!(app.ui.notices.len(), 1);
     // The importer's own warning for the same font isn't doubled.
     assert_eq!(app.open_bytes("warned.psd", b"x").unwrap(), vec![warning]);
+}
+
+/// A file name that isn't valid Unicode on this platform: non-UTF-8 bytes on Unix, an unpaired
+/// surrogate on Windows.
+fn non_unicode_path() -> std::path::PathBuf {
+    #[cfg(unix)]
+    let name = {
+        use std::os::unix::ffi::OsStrExt;
+        std::ffi::OsStr::from_bytes(b"img\xFF.png").to_owned()
+    };
+    #[cfg(windows)]
+    let name = {
+        use std::os::windows::ffi::OsStringExt;
+        let mut wide: Vec<u16> = "img".encode_utf16().collect();
+        wide.push(0xD800);
+        wide.extend(".png".encode_utf16());
+        std::ffi::OsString::from_wide(&wide)
+    };
+    std::env::temp_dir().join(name)
+}
+
+/// #6601: a lossy copy of such a name is another file's name, so it is refused instead.
+#[test]
+fn a_path_that_is_not_valid_unicode_is_refused_not_rewritten() {
+    let bad = non_unicode_path();
+    let open = path_text(&bad, false).unwrap_err();
+    assert!(open.contains("not valid Unicode") && open.contains("open it again"), "{open}");
+    let save = path_text(&bad, true).unwrap_err();
+    assert!(save.contains("not valid Unicode") && save.contains("another name"), "{save}");
+    let good = std::env::temp_dir().join("img é.png");
+    assert_eq!(path_text(&good, true).as_deref(), Ok(good.to_str().unwrap()));
 }
 
 /// #6598: opening a file that is already open shows its document, as Photoshop does, rather than

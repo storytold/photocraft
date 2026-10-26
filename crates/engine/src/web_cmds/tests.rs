@@ -168,6 +168,19 @@ fn reserved_document_and_slice_names_export_with_portable_names() {
 }
 
 #[test]
+fn a_dotted_device_file_name_exports_without_the_device_stem() {
+    // `nul.v2_` would still be the NUL device on Windows; `nul_.v2` is a file.
+    let dir = tmp("reserved-dotted-name");
+    let mut s = session(8);
+    s.execute("slice.new", json!({"rect": [0, 0, 16, 16], "name": "logo"})).unwrap();
+    let path = format!("{dir}/nul.v2.png");
+    let result = s.execute("file.export.saveForWebLegacy", json!({"path": path, "slices": "all", "format": "png24", "html": true})).unwrap();
+    let html = result["html"].as_str().unwrap();
+    assert!(html.ends_with("/nul_.v2.html"), "{html}");
+    assert!(std::path::Path::new(html).is_file());
+}
+
+#[test]
 fn platform_writer_failure_stops_export_and_preserves_saved_settings() {
     let mut s = session(8);
     let saved = json!({"format": "png24", "path": "saved.png"});
@@ -466,6 +479,33 @@ fn quick_export_never_replaces_the_documents_own_file_unasked() {
     s.execute("prefs.reset", json!({"path": "export"})).unwrap();
 }
 
+/// #8519: Quick Export as PNG renamed to `photo.jpeg` in the save dialog wrote PNG bytes under a
+/// JPEG name, which upload checks refuse. A Quick Export extension picks the format; another
+/// image extension is refused; no extension keeps Export Preferences' format.
+#[test]
+fn quick_export_writes_the_format_its_path_names() {
+    let dir = tmp("quick_ext");
+    let mut s = session(8);
+    s.execute("file.export.exportPreferences", json!({"quickExportFormat": "png"})).unwrap();
+    for (name, format, magic) in [
+        ("a.jpeg", "jpg", &b"\xFF\xD8\xFF"[..]),
+        ("b.JPG", "jpg", b"\xFF\xD8\xFF"),
+        ("c.gif", "gif", b"GIF8"),
+        ("d.webp", "webp", b"RIFF"),
+        ("e", "png", b"\x89PNG"),
+    ] {
+        let path = format!("{dir}/{name}");
+        let r = s.execute("file.export.quickExport", json!({"path": path})).unwrap();
+        assert_eq!(r["format"], json!(format), "{name}");
+        assert!(std::fs::read(&path).unwrap().starts_with(magic), "{name} holds {format} data");
+    }
+    let tif = format!("{dir}/f.tif");
+    let e = s.execute("file.export.quickExport", json!({"path": tif})).unwrap_err().to_string();
+    assert!(e.contains("Export As"), "{e}");
+    assert!(!std::path::Path::new(&tif).exists());
+    s.execute("prefs.reset", json!({"path": "export"})).unwrap();
+}
+
 #[test]
 fn same_file_sees_through_other_names_for_one_file() {
     let dir = tmp("same_file");
@@ -473,13 +513,13 @@ fn same_file_sees_through_other_names_for_one_file() {
     std::fs::write(&a, b"a").unwrap();
     std::fs::write(&c, b"c").unwrap();
     assert!(crate::file_cmds::same_file(&a, &a));
-    assert!(crate::file_cmds::same_file(&a, &format!("{dir}/./a.png")));
+    assert!(crate::file_cmds::same_file(&a, format!("{dir}/./a.png")));
     assert!(!crate::file_cmds::same_file(&a, &c));
     assert!(!crate::file_cmds::same_file(&a, &b), "a missing file is not the same file");
     std::fs::hard_link(&a, &b).unwrap();
     assert!(crate::file_cmds::same_file(&a, &b), "a hard link is the same file");
     #[cfg(windows)]
-    assert!(crate::file_cmds::same_file(&a, &format!("{dir}/A.PNG")), "NTFS names ignore case");
+    assert!(crate::file_cmds::same_file(&a, format!("{dir}/A.PNG")), "NTFS names ignore case");
 }
 
 #[test]
@@ -571,9 +611,34 @@ fn generator_naming_grammar() {
 }
 
 #[test]
+fn image_assets_needs_the_generator_preference() {
+    let dir = tmp("generator_pref");
+    let mut s = session(8);
+    let id = s.active().unwrap().active_layer.unwrap();
+    s.execute("layer.renameLayer", json!({"layer": id.0, "name": "logo.png"})).unwrap();
+    assert!(!s.prefs().plug_ins.generator_enabled, "off by default, as in Photoshop");
+    assert!(!s.is_enabled("file.generate.imageAssets"), "unavailable until it is enabled");
+    assert!(s.execute("file.generate.imageAssets", json!({"dir": dir})).is_err());
+
+    s.execute("prefs.set", json!({"path": "plugIns.generatorEnabled", "value": true})).unwrap();
+    assert!(s.is_enabled("file.generate.imageAssets"));
+    assert_eq!(s.execute("file.generate.imageAssets", json!({"dir": dir})).unwrap()["enabled"], true);
+    s.active_mut().unwrap().path = Some(format!("{dir}/doc.psd"));
+    assert!(crate::automate_cmds::document_saved(&mut s, 0).is_some(), "assets are written on save");
+
+    // Turning it off again takes the menu item away and stops the export, even for a document
+    // left switched on.
+    s.execute("prefs.set", json!({"path": "plugIns.generatorEnabled", "value": false})).unwrap();
+    assert!(!s.is_enabled("file.generate.imageAssets"));
+    assert!(crate::automate_cmds::document_saved(&mut s, 0).is_none(), "no assets while Generator is off");
+}
+
+#[test]
 fn image_assets_are_generated_now_and_on_save() {
     let dir = tmp("assets");
     let mut s = session(8);
+    // Preferences ▸ Plug-ins ▸ Generator enabled: the feature is opt-in.
+    s.execute("prefs.set", json!({"path": "plugIns.generatorEnabled", "value": true})).unwrap();
     let id = s.active().unwrap().active_layer.unwrap();
     s.execute("layer.renameLayer", json!({"layer": id.0, "name": "logo.png, 50% small/logo.gif, logo.jpg80%"})).unwrap();
     let r = s.execute("file.generate.imageAssets", json!({"dir": dir})).unwrap();
@@ -603,6 +668,74 @@ fn image_assets_are_generated_now_and_on_save() {
     assert!(errors.is_empty(), "{errors:?}");
     assert_eq!(files.iter().map(|p| std::path::PathBuf::from(p.as_str())).collect::<Vec<_>>(), vec![std::path::Path::new(&dir).join("icon@2x.png")]);
     assert_eq!(decode(&files[0]).dimensions(), (128, 80));
+}
+
+/// Photoshop's Generator exports an artboard named like an asset at the board's size, transparent
+/// edges included (generator-assets renderer: the canvas bounds are the artboard's), with no
+/// preference. Layers inside the board are still trimmed to their pixels.
+#[test]
+fn image_assets_keep_full_artboards() {
+    let dir = tmp("asset-artboards");
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 64, "height": 48, "name": "boards.psd", "background": "transparent"})).unwrap();
+    s.edit("board", |doc, _| {
+        let fmt = doc.pixel_format();
+        let mut logo = Layer::raster("logo.png", fmt);
+        logo.surface_mut().unwrap().fill_rect(Rect::new(12, 10, 20, 16), &photocraft_raster::from_rgba(&fmt, [1.0, 0.0, 0.0, 1.0]));
+        let board =
+            photocraft_doc::Artboard { rect: Rect::new(4, 6, 44, 36), background: photocraft_doc::ArtboardBackground::Transparent, preset: String::new() };
+        let group = photocraft_doc::Group { children: vec![logo], expanded: true, artboard: Some(board) };
+        doc.layers = vec![Layer::new("board.png", LayerContent::Group(group))];
+        Ok(())
+    })
+    .unwrap();
+
+    s.execute("prefs.set", json!({"path": "plugIns.generatorEnabled", "value": true})).unwrap();
+    let r = s.execute("file.generate.imageAssets", json!({"on": true, "dir": dir})).unwrap();
+    assert!(r["errors"].as_array().unwrap().is_empty(), "{r}");
+    let board = decode(&format!("{dir}/board.png"));
+    assert_eq!(board.dimensions(), (40, 30), "the whole board, not its trimmed pixels");
+    let px = board.to_rgba8();
+    let at = |x: usize, y: usize| &px[(y * 40 + x) * 4..(y * 40 + x) * 4 + 4];
+    assert_eq!(at(0, 0)[3], 0, "the board's empty corner stays transparent");
+    assert_eq!(at(39, 29)[3], 0);
+    // The logo keeps its place on the board: document (12, 10) is board (8, 4).
+    assert!(at(8, 4)[0] > 250 && at(8, 4)[3] == 255, "{:?}", at(8, 4));
+    assert_eq!(at(7, 4)[3], 0);
+    assert_eq!(decode(&format!("{dir}/logo.png")).dimensions(), (8, 6), "a layer on the board is still trimmed");
+}
+
+/// An artboard asset with nothing on the board (empty, or its contents all outside it) is
+/// refused like an empty layer, not written as a blank board: Photoshop's Generator refuses a
+/// zero-bounds pixmap before it pads to the board.
+#[test]
+fn image_assets_refuse_empty_artboards() {
+    let dir = tmp("asset-empty-artboards");
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 64, "height": 48, "name": "boards.psd", "background": "transparent"})).unwrap();
+    s.edit("boards", |doc, _| {
+        let fmt = doc.pixel_format();
+        let mut outside = Layer::raster("outside", fmt);
+        outside.surface_mut().unwrap().fill_rect(Rect::new(50, 40, 60, 46), &photocraft_raster::from_rgba(&fmt, [1.0, 0.0, 0.0, 1.0]));
+        let board = |x0| photocraft_doc::Artboard {
+            rect: Rect::new(x0, 0, x0 + 20, 20),
+            background: photocraft_doc::ArtboardBackground::Transparent,
+            preset: String::new(),
+        };
+        let empty = photocraft_doc::Group { children: vec![], expanded: true, artboard: Some(board(0)) };
+        let off = photocraft_doc::Group { children: vec![outside], expanded: true, artboard: Some(board(24)) };
+        doc.layers = vec![Layer::new("empty.png", LayerContent::Group(empty)), Layer::new("off.png", LayerContent::Group(off))];
+        Ok(())
+    })
+    .unwrap();
+    s.execute("prefs.set", json!({"path": "plugIns.generatorEnabled", "value": true})).unwrap();
+    let r = s.execute("file.generate.imageAssets", json!({"on": true, "dir": dir})).unwrap();
+    assert_eq!(r["files"], json!([]), "{r}");
+    let errors = r["errors"].as_array().unwrap();
+    assert_eq!(errors.len(), 2, "{r}");
+    assert!(errors.iter().all(|e| e["error"].as_str().unwrap().contains("the layer is empty")), "{r}");
+    assert!(!std::path::Path::new(&format!("{dir}/empty.png")).exists());
+    assert!(!std::path::Path::new(&format!("{dir}/off.png")).exists());
 }
 
 /// #6614: two layers, or two default variants, naming one file never overwrite each other: the
@@ -1027,4 +1160,39 @@ fn save_for_web_writes_a_gif_of_a_frame_animation_as_an_animation() {
     assert_eq!(one, still * 2, "two frames of a size the still has");
     s.execute("file.export.saveForWebLegacy", json!({"format": "gif", "path": format!("{dir}/still.gif")})).unwrap();
     assert_eq!(gif_frames(&format!("{dir}/still.gif")).len(), 1);
+}
+
+#[test]
+fn quick_export_exr_preserves_linear_hdr_and_alpha() {
+    use photocraft_codecs::{ChannelLayout, Format, Image, SampleType};
+    let dir = tmp("quick_exr_hdr");
+    let samples = [-0.25, 2.0, 0.125, 1.0, 4.0, 0.25, 0.5, 0.5];
+    let image = Image::from_f32(2, 1, ChannelLayout::Rgba, &samples).unwrap();
+    let bytes = photocraft_codecs::encode(&image, Format::OpenExr, &Default::default()).unwrap();
+    let doc = photocraft_io::import("hdr.exr", &bytes).unwrap().document;
+    let mut s = Session::new();
+    s.add_document(doc, Some(format!("{dir}/source.psd")));
+    for convert in [true, false] {
+        s.execute("file.export.exportPreferences", json!({"quickExportFormat": "exr", "quickExportLocation": "sameFolder", "convertToSrgb": convert})).unwrap();
+        let result = s.execute("file.export.quickExport", json!({})).unwrap();
+        assert_eq!(result["format"], "exr");
+        let path = format!("{dir}/source.exr");
+        assert_eq!(result["path"], path);
+        assert_eq!(result["bytes"].as_u64(), Some(std::fs::metadata(&path).unwrap().len()));
+        let decoded = decode(&path);
+        assert_eq!(decoded.sample_type(), SampleType::F32);
+        let actual = decoded.convert(ChannelLayout::Rgba, SampleType::F32).to_f32_samples().unwrap();
+        for (got, expected) in actual.iter().zip(samples) {
+            assert!((got - expected).abs() < 0.0001, "EXR preserves scene values: {actual:?}");
+        }
+        assert_eq!(actual.len(), samples.len());
+    }
+    // The format preference must never silently overwrite the source EXR.
+    let own = format!("{dir}/source.exr");
+    s.active_mut().unwrap().path = Some(own.clone());
+    let before = std::fs::read(&own).unwrap();
+    assert!(s.execute("file.export.quickExport", json!({})).is_err());
+    assert_eq!(std::fs::read(&own).unwrap(), before);
+    s.execute("file.export.quickExport", json!({"path": format!("{dir}/explicit.exr")})).unwrap();
+    assert_eq!(decode(&format!("{dir}/explicit.exr")).dimensions(), (2, 1));
 }

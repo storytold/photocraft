@@ -314,6 +314,34 @@ fn type_attaches_to_a_path_and_releases_it() {
     assert!(matches!(text(&s, id).shape, TextShape::Path { .. }));
 }
 
+/// The Type tool's click on a path: `"at"` starts the type where the path passes nearest the
+/// click, and the paragraph alignment is kept about that point, as in Photoshop.
+#[test]
+fn type_attaches_to_a_path_at_a_document_point() {
+    let mut s = session(8);
+    s.edit("path", |doc, _| {
+        doc.work_path = Some(Path::new(vec![Subpath::polyline(&[(10.0, 60.0), (290.0, 60.0)])]));
+        Ok(())
+    })
+    .unwrap();
+    for (align, centred) in [("left", false), ("center", true)] {
+        let r = s.execute("type.create", json!({"x": 150, "y": 60, "text": "Path", "size": 24, "align": align, "color": "#000000"})).unwrap();
+        let id = LayerId(r["layer"].as_u64().unwrap());
+        assert!(s.execute("type.attachToPath", json!({"at": [150, "y"]})).is_err());
+        assert!(s.execute("type.attachToPath", json!({"at": [150]})).is_err());
+        assert!(s.execute("type.attachToPath", json!({"at": [150, 60], "start": 3})).is_err());
+        let r = s.execute("type.attachToPath", json!({"at": [150, 64]})).unwrap();
+        assert!((r["start"].as_f64().unwrap() - 140.0).abs() < 0.5, "{r}");
+        let b = ink(&s, id);
+        assert!(b.y1 <= 61, "the type sits on the path: {b:?}");
+        if centred {
+            assert!(b.x0 < 145 && b.x1 > 155, "centred on the click: {b:?}");
+        } else {
+            assert!((148..=156).contains(&b.x0), "starts at the click: {b:?}");
+        }
+    }
+}
+
 #[test]
 fn all_locked_layer_rejects_paste_lorem_ipsum_without_history() {
     // #4188: Lock All stopped type.edit (#3132) but not Paste Lorem Ipsum into the layer.

@@ -89,9 +89,7 @@ fn text_x(h: &Harness<'static, PhotocraftApp>, text: &str) -> f32 {
 }
 
 fn dock_x(h: &Harness<'static, PhotocraftApp>) -> f32 {
-    let rects = crate::dock::last_rects(&h.ctx);
-    let (_, layers) = rects.iter().find(|(g, _)| *g == crate::dock::Group::Layers).expect("Layers docked");
-    layers.center().x
+    crate::panel_docking::probe::panel_rect(&h.ctx, "layers").expect("Layers docked").center().x
 }
 
 #[test]

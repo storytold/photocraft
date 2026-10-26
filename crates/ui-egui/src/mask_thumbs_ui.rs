@@ -22,6 +22,7 @@ pub const CHAIN_W: f32 = 12.0;
 pub const THUMB_LAYER: u8 = 0;
 pub const THUMB_MASK: u8 = 1;
 pub const THUMB_VECTOR: u8 = 2;
+pub const THUMB_SMART_MASK: u8 = 3;
 
 /// Which of a layer's masks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -111,7 +112,7 @@ pub fn paint(
     for (kind, enabled, linked) in masks(l) {
         // The chain sits in the gap before the thumbnail, centred between the two.
         let chain = Rect::from_min_max(pos2(*x - 4.0, cy - ts / 2.0), pos2(*x - 4.0 + CHAIN_W, cy + ts / 2.0));
-        let resp = ui.interact(chain, ui.id().with(("mask-chain", l.id.0, kind == MaskKind::Vector)), Sense::click());
+        let resp = ui.interact(chain, ui.scope_id().with(("mask-chain", l.id.0, kind == MaskKind::Vector)), Sense::click());
         if linked {
             paint_chain(painter, chain.center(), if resp.hovered() { t.text } else { t.icon });
         } else if resp.hovered() {
@@ -121,11 +122,7 @@ pub fn paint(
         let resp = resp.on_hover_text(if linked { tl!("Unlink the mask from the layer") } else { tl!("Link the mask to the layer") });
         let template = "{verb} {mask} {layer}";
         resp.widget_info(|| {
-            egui::WidgetInfo::labeled(
-                egui::WidgetType::Button,
-                true,
-                crate::i18n::fmt(tl!(template), &[("verb", tl!(verb)), ("mask", tl!(what)), ("layer", &name)]),
-            )
+            egui::WidgetInfo::labeled(egui::Role::Button, true, crate::i18n::fmt(tl!(template), &[("verb", tl!(verb)), ("mask", tl!(what)), ("layer", &name)]))
         });
         if resp.clicked() {
             out.clicked = true;
@@ -174,7 +171,7 @@ type Rects = (Vec<(MaskKind, Rect)>, Vec<(MaskKind, Rect)>);
 
 /// Memory key of the per-layer record of where the mask thumbnails and chains were drawn.
 fn rects_id() -> egui::Id {
-    egui::Id::new("mask-thumb-rects")
+    egui::Id::unique("mask-thumb-rects")
 }
 
 /// The mask thumbnails and chains last drawn for layer `id` (for tests and automation).
@@ -254,7 +251,7 @@ pub fn paint_brackets(painter: &Painter, r: Rect, color: Color32) {
 }
 
 fn bracket_id() -> egui::Id {
-    egui::Id::new("layer-target-brackets")
+    egui::Id::unique("layer-target-brackets")
 }
 
 /// Where the target brackets were last drawn (for tests and automation).

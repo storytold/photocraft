@@ -408,7 +408,7 @@ fn eyedropper(ui: &mut egui::Ui, badge: &str, selected: bool, label: &str) -> eg
         let at = r.rect.right_bottom() - vec2(5.0, 6.0);
         ui.painter().text(at, egui::Align2::CENTER_CENTER, badge, crate::theme::semibold(12.0), if selected { t.accent_text } else { t.text });
     }
-    r.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), selected, label));
+    r.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), selected, label));
     r
 }
 
@@ -424,7 +424,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(tl!("Select:")).color(t.text_dim));
         let mut cur: &str = &select;
-        if widgets::dropdown(ui, "color-range-select", &mut cur, SELECTS, 170.0) {
+        if widgets::dropdown(ui, "color-range-select", tl!("Select"), &mut cur, SELECTS, 170.0) {
             f.insert("select".into(), json!(cur));
         }
     });
@@ -512,7 +512,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
             Some(e) => format!("Color Range preview unavailable: {e}"),
             None => tl!("Color Range preview").to_string(),
         };
-        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Image, ui.is_enabled(), &label));
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Image, ui.is_enabled(), &label));
         ui.add_space(10.0);
         ui.vertical(|ui| {
             ui.add_enabled_ui(c.sampling, |ui| {
@@ -566,7 +566,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
         ui.label(egui::RichText::new(tl!("Selection Preview:")).color(t.text_dim));
         let mode = s(f, "__selectionPreview", "none").to_string();
         let mut chosen = mode.as_str();
-        if widgets::dropdown(ui, "color-range-selection-preview", &mut chosen, PREVIEWS, 170.0) {
+        if widgets::dropdown(ui, "color-range-selection-preview", tl!("Preview"), &mut chosen, PREVIEWS, 170.0) {
             f.insert("__selectionPreview".into(), json!(chosen));
         }
     });
@@ -685,7 +685,7 @@ pub fn canvas_eyedropper(app: &mut PhotocraftApp, ctx: &egui::Context, over: egu
         _ => "",
     };
     if !badge.is_empty() {
-        let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("pc-color-range-badge")));
+        let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("pc-color-range-badge")));
         let at = over + vec2(20.0, -4.0);
         p.text(at + vec2(1.0, 1.0), egui::Align2::CENTER_CENTER, badge, crate::theme::semibold(13.0), Color32::from_black_alpha(200));
         p.text(at, egui::Align2::CENTER_CENTER, badge, crate::theme::semibold(13.0), Color32::WHITE);
@@ -807,7 +807,8 @@ mod tests {
     }
 
     fn disabled(h: &Harness<'static, PhotocraftApp>, label: &str) -> bool {
-        h.get_by_label(label).accesskit_node().is_disabled()
+        // A slider row names both its number and its slider with the caption; either reports it.
+        h.query_all_by_label(label).next().unwrap_or_else(|| panic!("`{label}`")).accesskit_node().is_disabled()
     }
 
     #[test]
@@ -906,7 +907,7 @@ mod tests {
         h.run_steps(3);
         assert!(h.state().ui.dialogs.iter().any(|d| owns(&d.fields)), "Select › Color Range… must open the dialog");
         for label in ["Color Range", "Fuzziness:", "Localized Color Clusters", "Invert", "Selection", "Color Range preview", "Add to Sample"] {
-            assert!(h.query_by_label(label).is_some(), "missing {label}");
+            assert!(h.query_all_by_label(label).next().is_some(), "missing {label}");
         }
         assert_eq!(h.query_all_by_label("Image").count(), 2, "the Image menu and the Image preview radio");
         assert_eq!(h.state().session.active().unwrap().revision, rev, "opening must not edit the document");
@@ -923,23 +924,23 @@ mod tests {
         h.run_steps(4);
         // Sampled Colors: Fuzziness, eyedroppers and Localized Color Clusters; Range only when localized.
         assert!(!disabled(&h, "Fuzziness:") && !disabled(&h, "Localized Color Clusters") && !disabled(&h, "Add to Sample"));
-        assert!(h.query_by_label("Range:").is_none());
+        assert!(h.query_all_by_label("Range:").next().is_none());
         h.get_by_label("Localized Color Clusters").click();
         h.run_steps(2);
-        assert!(h.query_by_label("Range:").is_some(), "Range shows with Localized Color Clusters");
+        assert!(h.query_all_by_label("Range:").next().is_some(), "Range shows with Localized Color Clusters");
         // A hue family: no Fuzziness, eyedroppers or clusters (Photoshop disables them).
         set(&mut h, "select", json!("reds"));
         assert!(disabled(&h, "Fuzziness:") && disabled(&h, "Localized Color Clusters") && disabled(&h, "Add to Sample"));
-        assert!(h.query_by_label("Range:").is_none());
+        assert!(h.query_all_by_label("Range:").next().is_none());
         assert!(!disabled(&h, "Invert"));
         // Tones: Fuzziness and the tonal range.
         set(&mut h, "select", json!("shadows"));
         assert!(!disabled(&h, "Fuzziness:") && disabled(&h, "Localized Color Clusters"));
-        assert!(h.query_by_label("Shadows up to:").is_some());
+        assert!(h.query_all_by_label("Shadows up to:").next().is_some());
         set(&mut h, "select", json!("midtones"));
-        assert!(h.query_by_label("Midtones from:").is_some() && h.query_by_label("Midtones to:").is_some());
+        assert!(h.query_all_by_label("Midtones from:").next().is_some() && h.query_all_by_label("Midtones to:").next().is_some());
         set(&mut h, "select", json!("outOfGamut"));
-        assert!(disabled(&h, "Fuzziness:") && h.query_by_label("Midtones from:").is_none());
+        assert!(disabled(&h, "Fuzziness:") && h.query_all_by_label("Midtones from:").next().is_none());
         // Skin Tones: Fuzziness (the colour one), no eyedroppers or clusters.
         set(&mut h, "select", json!("skinTones"));
         assert!(!disabled(&h, "Fuzziness:") && disabled(&h, "Localized Color Clusters") && disabled(&h, "Add to Sample"));
@@ -956,7 +957,7 @@ mod tests {
         let mut h = harness(app_with_doc());
         open(h.state_mut());
         h.run_steps(4);
-        let area = egui::Id::new(("dialog", dialog_id(h.state())));
+        let area = egui::Id::unique(("dialog", dialog_id(h.state())));
         let rect = |h: &Harness<'static, PhotocraftApp>| h.ctx.memory(|m| m.area_rect(area)).unwrap_or(egui::Rect::NOTHING);
         set(&mut h, "select", json!("outOfGamut"));
         let short = rect(&h);
@@ -1273,7 +1274,7 @@ mod tests {
         h.get_by_label("Color Range…").click();
         h.run_steps(6);
         let id = dialog_id(h.state());
-        let area = h.ctx.memory(|m| m.area_rect(egui::Id::new(("dialog", id)))).expect("the dialog is drawn");
+        let area = h.ctx.memory(|m| m.area_rect(egui::Id::unique(("dialog", id)))).expect("the dialog is drawn");
         assert!(h.ctx.content_rect().contains_rect(area), "the dialog is on screen: {area:?}");
         assert!(h.query_by_label("Color Range preview").is_some());
         let p = h.state().color_range.as_ref().expect("the preview is cached");

@@ -615,7 +615,7 @@ fn hidden_controls_and_collapsed_appearance_release_popup_and_keyboard_ownership
         h.run_steps(3);
         assert!(egui::Popup::is_any_open(&h.ctx));
         if collapsed {
-            h.ctx.data_mut(|d| d.insert_temp(egui::Id::new(("props-section", "appearance")), false));
+            h.ctx.data_mut(|d| d.insert_temp(egui::Id::unique(("props-section", "appearance")), false));
         } else {
             h.state_mut().show_controls = false;
         }

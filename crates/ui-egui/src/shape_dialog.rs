@@ -2,10 +2,13 @@
 //! opens Photoshop's creation dialog instead of drawing. OK runs the same `shape.create` command as
 //! a drag, with the options bar's fill and stroke, at the clicked point (or centred on it).
 //! Width and height are stored in document pixels (so automation can set them with
-//! `ui.dialog.set`) and shown in the ruler unit.
+//! `ui.dialog.set`) and shown in the ruler unit, or each in one picked from its right-click menu
+//! (`widthUnit`, `heightUnit`; not remembered, as in Photoshop).
 
 use egui::{Align2, Sense, pos2, vec2};
 use serde_json::{Map, Value, json};
+
+use photocraft_engine::prefs::Unit;
 
 use crate::PhotocraftApp;
 use crate::state::{DialogKind, Tool};
@@ -160,24 +163,33 @@ fn label(ui: &mut egui::Ui, text: &str) {
 pub fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     ui.spacing_mut().item_spacing.y = 6.0;
     let kind = f.get(MARK).and_then(Value::as_str).unwrap_or("").to_string();
-    // Width and height in the ruler unit (percent of the document's side).
+    // Width and height each in its own unit (percent of the document's side): the ruler unit, or
+    // the one picked from that field's right-click menu, as in Photoshop (#7786).
     let ur = &app.session.prefs().units_and_rulers;
-    let (unit, ppi) = (ur.rulers, ur.point_size.per_inch());
+    let (rulers, ppi) = (ur.rulers, ur.point_size.per_inch());
     let (dpi, size) = app
         .session
         .active()
         .map_or((72.0, [1.0, 1.0]), |d| (f64::from(d.doc.resolution_dpi.max(1.0)), [f64::from(d.doc.size.width), f64::from(d.doc.size.height)]));
-    for (key, text, extent) in [("width", tl!("Width:"), size[0]), ("height", tl!("Height:"), size[1])] {
+    for (key, unit_key, text, extent) in [("width", "widthUnit", tl!("Width:"), size[0]), ("height", "heightUnit", tl!("Height:"), size[1])] {
+        let unit = f.get(unit_key).and_then(Value::as_str).and_then(Unit::parse).unwrap_or(rulers);
         ui.horizontal(|ui| {
             label(ui, text);
             let px = num(f, key).unwrap_or(100.0);
             let to_unit = |px: f64| unit.from_px(px, dpi, extent, ppi) as f32;
             let mut v = to_unit(px);
             let places = unit.decimals() as u32;
-            if crate::widgets::value_field_prec(ui, &mut v, to_unit(1.0)..=to_unit(MAX_PX), unit.suffix(), 110.0, places).changed() {
+            let resp = crate::widgets::value_field_prec(ui, &mut v, to_unit(1.0)..=to_unit(MAX_PX), unit.suffix(), 110.0, places).accessible_name(text);
+            if resp.changed() {
                 let px = unit.to_px(f64::from(v), dpi, extent, ppi).clamp(1.0, MAX_PX);
                 f.insert(key.into(), json!((px * 1000.0).round() / 1000.0));
             }
+            // Right-click: the length units for this field (the sizes stay in pixels).
+            resp.context_menu(|ui| {
+                if let Some(name) = crate::rulers::unit_menu_of(ui, unit, &crate::rulers::LENGTH_UNITS) {
+                    f.insert(unit_key.into(), json!(name));
+                }
+            });
         });
     }
     match kind.as_str() {
@@ -190,13 +202,18 @@ pub fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) 
             }
             let mut linked = f.get("linkRadii").and_then(Value::as_bool).unwrap_or(true);
             let mut changed = None;
+            // `radii` is [top-left, top-right, bottom-right, bottom-left].
             ui.horizontal(|ui| {
                 label(ui, tl!("Radius:"));
                 ui.vertical(|ui| {
+                    // All four fields show "Radius:"; the accessible name says which corner
+                    // (radii are top-left, top-right, bottom-right, bottom-left).
+                    let corners = ["Top Left", "Top Right", "Bottom Right", "Bottom Left"];
                     for row in [[0usize, 1], [3, 2]] {
                         ui.horizontal(|ui| {
                             for i in row {
-                                if crate::widgets::value_field(ui, &mut radii[i], 0.0..=10000.0, "px", 72.0).changed() {
+                                let name = format!("{} {}", tl!(corners[i]), tl!("Radius:"));
+                                if crate::widgets::value_field(ui, &mut radii[i], 0.0..=10000.0, "px", 72.0).accessible_name(name).changed() {
                                     changed = Some(i);
                                 }
                             }
@@ -221,14 +238,14 @@ pub fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) 
             ui.horizontal(|ui| {
                 label(ui, tl!("Sides:"));
                 let mut s = num(f, "sides").unwrap_or(5.0) as f32;
-                if crate::widgets::value_field(ui, &mut s, 3.0..=100.0, "", 72.0).changed() {
+                if crate::widgets::value_field(ui, &mut s, 3.0..=100.0, "", 72.0).accessible_name(tl!("Sides:")).changed() {
                     f.insert("sides".into(), json!(s.round().clamp(3.0, 100.0) as u32));
                 }
             });
             ui.horizontal(|ui| {
                 label(ui, tl!("Star Ratio:"));
                 let mut r = num(f, "starRatio").unwrap_or(100.0) as f32;
-                if crate::widgets::value_field(ui, &mut r, 1.0..=100.0, "%", 72.0).changed() {
+                if crate::widgets::value_field(ui, &mut r, 1.0..=100.0, "%", 72.0).accessible_name(tl!("Star Ratio:")).changed() {
                     f.insert("starRatio".into(), json!(f64::from(r.clamp(1.0, 100.0))));
                 }
             });

@@ -22,7 +22,7 @@ use parley::{
     PositionedLayoutItem, StyleProperty,
 };
 use photocraft_doc::TextLayer;
-use photocraft_doc::text::{Caps, CharStyle, FontBaseline, Kerning, Orientation, TextAlign, TextDirection, TextShape};
+use photocraft_doc::text::{Caps, CharStyle, FontBaseline, Kerning, Orientation, ParagraphStyle, TextAlign, TextDirection, TextShape};
 use skrifa::raw::types::Tag;
 
 use crate::fonts::FontDb;
@@ -522,9 +522,18 @@ impl Layouter {
         let text = &t.text;
         let (box_rect, is_box) = match t.shape {
             TextShape::Box { x, y, width, height } => ((x, y, width, height), true),
-            // Path text is laid out as one point-text line, then bent onto the path.
-            TextShape::Point | TextShape::Path { .. } => ((0.0, 0.0, 0.0, 0.0), false),
+            // Path text is laid out as one point-text line, then bent onto the path. Area text
+            // places its own lines (`area` below).
+            TextShape::Point | TextShape::Path { .. } | TextShape::Area { .. } => ((0.0, 0.0, 0.0, 0.0), false),
         };
+        // Area type: the shape its lines wrap inside. A path that encloses nothing (only from a
+        // hostile file; `type.fillPath` refuses one) lays out as point text.
+        let area = match &t.shape {
+            TextShape::Area { path } => crate::area::AreaShape::new(path, vertical),
+            _ => None,
+        };
+        // Box and area text wrap, align within their lines and hide what doesn't fit.
+        let wraps = is_box || area.is_some();
         let mut prev_baseline: Option<f32> = None;
         let mut pending_space = 0.0f32;
         let mut stop = false;
@@ -597,12 +606,13 @@ impl Layouter {
             // fetches it (`served`); it joins the fallback stack once it arrives.
             crate::served::request_for_text(&ptext);
             let fallback: Vec<String> = fonts.fallback_stack().map(str::to_string).collect();
+            let si0 = style_at(prange.start);
+            let si_end = run_starts.partition_point(|&rs| rs < content_end).max(si0 + 1).min(out.styles.len());
             // Shapes the paragraph, each tab widened by its letter spacing in `tab_spacing` (px).
             let build = |lcx: &mut LayoutContext<RunBrush>, fcx: &mut parley::FontContext, tab_spacing: &[f32]| -> Layout<RunBrush> {
                 let mut b = lcx.ranged_builder(fcx, &ptext, 1.0, false);
                 // Paragraph-start style as the default (covers the direction mark and empty
                 // paragraphs), then every run piece intersecting this paragraph.
-                let si0 = style_at(prange.start);
                 for p in style_props(&out.styles[si0], k, &fallback, si0 as u32, small_caps[si0]) {
                     b.push_default(p);
                 }
@@ -612,7 +622,7 @@ impl Layouter {
                 if is_box {
                     b.push_default(StyleProperty::OverflowWrap(parley::style::OverflowWrap::BreakWord));
                 }
-                for (ri, st) in out.styles.iter().enumerate() {
+                for (ri, st) in out.styles.iter().enumerate().take(si_end).skip(si0) {
                     let rs = run_starts[ri];
                     let (a, z) = (rs.max(prange.start), (rs + runs[ri].len).min(content_end));
                     if a >= z {
@@ -672,11 +682,10 @@ impl Layouter {
             let (line_origin, line_len) = if vertical { (box_rect.1, box_rect.3) } else { (box_rect.0, box_rect.2) };
             let avail = if is_box { Some((line_len - indent_start - indent_end).max(1.0)) } else { None };
             // Horizontal scale is applied after shaping, so paragraph text breaks at the box
-            // width divided by it (#5565). Mixed scales break at the largest, so no line
-            // overflows the box.
-            let break_scale = if is_box {
-                let si0 = style_at(prange.start);
-                (0..out.styles.len())
+            // (or area span) width divided by it (#5565). Mixed scales break at the largest, so
+            // no line overflows the box.
+            let break_scale = if wraps {
+                (si0..si_end)
                     .filter(|&ri| {
                         let rs = run_starts.get(ri).copied().unwrap_or(0);
                         let end = rs.saturating_add(runs.get(ri).map_or(0, |r| r.len));
@@ -689,35 +698,56 @@ impl Layouter {
                 1.0
             };
             let break_scale = if break_scale > 0.0 { break_scale } else { 1.0 };
-            let break_lines = |layout: &mut Layout<RunBrush>| {
+            // Area type: the first row goes no higher than one leading (plus paragraph spacing)
+            // below the previous paragraph's last line.
+            let space_before = if prev_baseline.is_some() { ps.space_before_pt * k } else { 0.0 };
+            let area_from = |m: LineMetrics| match (&area, prev_baseline) {
+                (Some(_), Some(b)) => b + m.leading + pending_space + space_before,
+                (Some(a), None) => a.bounds[1] + m.ascent,
+                (None, _) => 0.0,
+            };
+            // Line-breaking passes left for this paragraph's area type (see `break_area`).
+            let area_budget = std::cell::Cell::new(MAX_AREA_PASSES);
+            let break_lines = |layout: &mut Layout<RunBrush>| -> (Vec<Slot>, bool) {
                 if first_indent != 0.0 {
                     layout.set_text_indent(first_indent / break_scale, IndentOptions::default());
                 }
-                layout.break_all_lines(avail.map(|a| a / break_scale));
+                let Some(a) = &area else {
+                    layout.break_all_lines(avail.map(|a| a / break_scale));
+                    return (Vec::new(), false);
+                };
+                // Plan every row with the paragraph's real line metrics (its tallest font and
+                // largest leading, measured on the unwrapped paragraph), so no wrapped line comes
+                // out taller than the row it was planned in and no second plan is needed.
+                layout.break_all_lines(None);
+                let m = area_metrics(layout, &out.styles, &ps, k, first_style, vertical);
+                break_area(layout, a, area_from(m), m, (indent_start, indent_end), first_px, break_scale, &area_budget)
             };
             // Paragraph text: a tab is never wider than a space plus one tab interval, so breaking
             // lines at that width keeps the expanded tabs inside the box, but can wrap early.
             // Break again with the tab widths that layout gives until they agree; if they don't
             // settle, keep the safe layout.
-            let wide = if is_box { tab_px } else { 0.0 };
+            let wide = if wraps { tab_px } else { 0.0 };
             let mut layout = build(&mut self.lcx, &mut fonts.fcx, &vec![wide; tabs.len()]);
-            break_lines(&mut layout);
-            if is_box && !tabs.is_empty() {
+            let (mut area_slots, mut area_full) = break_lines(&mut layout);
+            if wraps && !tabs.is_empty() {
                 let first = tab_widths(&layout, &tabs, &out.styles, indent_start, first_indent, tab_px);
                 let mut want: Vec<f32> = first.iter().map(|t| t.width).collect();
                 for _ in 0..4 {
                     let spacing: Vec<f32> = first.iter().zip(&want).map(|(t, w)| w / t.scale - (t.advance - tab_px)).collect();
                     let mut next = build(&mut self.lcx, &mut fonts.fcx, &spacing);
-                    break_lines(&mut next);
+                    let (next_slots, next_full) = break_lines(&mut next);
                     let got: Vec<f32> = tab_widths(&next, &tabs, &out.styles, indent_start, first_indent, tab_px).iter().map(|t| t.width).collect();
                     if got.iter().zip(&want).all(|(a, b)| (a - b).abs() < 0.01) {
                         layout = next;
+                        area_slots = next_slots;
+                        area_full = next_full;
                         break;
                     }
                     want = got;
                 }
             }
-            let alignment = if is_box {
+            let alignment = if wraps {
                 match ps.align {
                     TextAlign::Left => Alignment::Left,
                     TextAlign::Center => Alignment::Center,
@@ -727,7 +757,7 @@ impl Layouter {
             } else {
                 Alignment::Left
             };
-            layout.align(alignment, AlignmentOptions { align_when_overflowing: !is_box });
+            layout.align(alignment, AlignmentOptions { align_when_overflowing: !wraps });
 
             // Stack lines.
             if prev_baseline.is_some() {
@@ -735,44 +765,24 @@ impl Layouter {
             }
             let nlines = layout.len();
             for (li, line) in layout.lines().enumerate() {
+                // Area type: the slot the breaker gave this line.
+                let slot = area_slots.get(li).copied();
+                if area.is_some() && slot.is_none() {
+                    stop = true;
+                    break;
+                }
                 let m = *line.metrics();
-                // Largest leading among the glyph runs of the line.
-                let mut leading = 0.0f32;
-                for item in line.items() {
-                    if let PositionedLayoutItem::GlyphRun(gr) = item {
-                        let st = &out.styles[gr.style().brush.0 as usize];
-                        let px = gr.run().font_size();
-                        leading = leading.max(st.leading_pt.map_or(ps.auto_leading * px, |l| l * k));
-                    }
-                }
-                if leading == 0.0 {
-                    let st = &out.styles[style_at(prange.start)];
-                    leading = st.leading_pt.map_or(ps.auto_leading * st.size_pt * k, |l| l * k);
-                }
-                // Vertical type: half the column width (the largest em on the column).
-                let col_half = line
-                    .items()
-                    .filter_map(|it| match it {
-                        PositionedLayoutItem::GlyphRun(gr) => Some(gr.run().font_size() * 0.5),
-                        _ => None,
-                    })
-                    .fold(0.0f32, f32::max);
-                let col_half = if col_half > 0.0 { col_half } else { first_px * 0.5 };
-                let (ascent, descent) = if vertical {
-                    (col_half, col_half)
-                } else if m.ascent > 0.0 || m.descent > 0.0 {
-                    (m.ascent, m.descent)
-                } else {
-                    (first_px * 0.8, first_px * 0.2)
-                };
-                let baseline = match prev_baseline {
+                let LineMetrics { ascent, descent, leading } = line_metrics(&line, &out.styles, &ps, k, first_style, vertical);
+                let baseline = match (slot, prev_baseline) {
+                    (Some(s), _) => s.baseline,
                     // The first column's right edge touches the box's right edge.
-                    None if is_box && vertical => -(box_rect.0 + box_rect.2) + col_half,
+                    // (In vertical type the ascent is half the column width.)
+                    (None, None) if is_box && vertical => -(box_rect.0 + box_rect.2) + ascent,
                     // Photoshop's "first baseline: ascent": the top of the tallest ascender
                     // (height of 'd') touches the box top, not the font's hhea ascent.
-                    None if is_box => box_rect.1 + first_ascent(&line).unwrap_or(ascent),
-                    None => 0.0,
-                    Some(b) => b + leading + pending_space,
+                    (None, None) if is_box => box_rect.1 + first_ascent(&line).unwrap_or(ascent),
+                    (None, None) => 0.0,
+                    (None, Some(b)) => b + leading + pending_space,
                 };
                 pending_space = 0.0;
                 // Photoshop keeps a horizontal line whose baseline is inside the box and lets
@@ -902,7 +912,7 @@ impl Layouter {
                     cursors.push((run.index(), g2s, 0, base));
                 }
                 // Parley aligned box lines without the kerning.
-                let kern_align = if is_box {
+                let kern_align = if wraps {
                     match ps.align {
                         TextAlign::Center => line_kern / 2.0,
                         TextAlign::Right => line_kern,
@@ -911,9 +921,13 @@ impl Layouter {
                 } else {
                     0.0
                 };
-                let dx = if is_box {
-                    let base = line_origin + indent_start - kern_align;
-                    let slack = avail.unwrap_or(0.0) - adv * break_scale - line_kern;
+                // Box and area lines start at their box or span edge; the line's own width
+                // (`line_avail`) takes the justify-last-line slack.
+                let line_avail = slot.map(|s| s.width).or(avail);
+                let dx = if wraps {
+                    let origin = slot.map_or(line_origin, |s| s.x);
+                    let base = origin + indent_start - kern_align;
+                    let slack = line_avail.unwrap_or(0.0) - adv * break_scale - line_kern;
                     // Parley aligned the unscaled line in `avail / break_scale`: scale its
                     // indent and alignment offset back to the box.
                     let scaled_offset = m.offset * (break_scale - 1.0);
@@ -934,7 +948,7 @@ impl Layouter {
                     };
                     target - m.offset
                 };
-                let justify_all = is_box && last_line && ps.align == TextAlign::JustifyAll;
+                let justify_all = wraps && last_line && ps.align == TextAlign::JustifyAll;
                 let line_index = out.lines.len();
                 let lr = line.text_range();
                 let g0 = out.glyphs.len();
@@ -1054,7 +1068,7 @@ impl Layouter {
                     extra -= squeeze_punctuation(text, &mut out.clusters[c0..], &mut out.glyphs[g0..]);
                 }
                 if justify_all {
-                    let slack = avail.unwrap_or(0.0) - (adv + extra);
+                    let slack = line_avail.unwrap_or(0.0) - (adv + extra);
                     let n = out.clusters.len() - c0;
                     if n > 1 && slack > 0.0 {
                         let step = slack / (n - 1) as f32;
@@ -1095,6 +1109,10 @@ impl Layouter {
                     paragraph: pi,
                 });
             }
+            if area_full {
+                // The shape is full: later paragraphs are hidden too.
+                stop = true;
+            }
             pending_space += ps.space_after_pt * k;
         }
         out
@@ -1109,6 +1127,246 @@ fn effective_horizontal_scale(st: &CharStyle) -> f32 {
 /// The first tab stop after `pos` (px from the anchor or box edge); stops are `interval` apart.
 fn next_tab_stop(pos: f32, interval: f32) -> f32 {
     if interval > 0.0 && pos.is_finite() { ((pos + 1e-3) / interval).floor() * interval + interval } else { pos }
+}
+
+/// Where one line of area type goes: its baseline, the left edge of its span, and the width
+/// it may fill (the span less the paragraph's indents), plus the row and span it came from.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Slot {
+    baseline: f32,
+    x: f32,
+    width: f32,
+    row: usize,
+    span: usize,
+}
+
+/// A line's ascent, descent and leading (px); for area type, the largest over a paragraph.
+#[derive(Clone, Copy, Debug)]
+struct LineMetrics {
+    ascent: f32,
+    descent: f32,
+    leading: f32,
+}
+
+/// Most line-breaking passes area type makes for one paragraph, over all its plans (each span
+/// left empty for a word that doesn't fit costs a pass). Past it, words overflow their spans.
+const MAX_AREA_PASSES: usize = 32;
+/// Most rows one area paragraph is planned on.
+const MAX_AREA_ROWS: usize = 4096;
+
+#[cfg(test)]
+thread_local! {
+    /// Area line-breaking passes made on this thread, for tests.
+    pub(crate) static AREA_PASSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The rows an area paragraph's lines go on: baselines from `next` down, one leading apart,
+/// each with its spans left to right. They don't depend on the text, so they are found once
+/// (lazily) and shared by every pass.
+struct AreaRows<'a> {
+    area: &'a crate::area::AreaShape,
+    m: LineMetrics,
+    min_width: f32,
+    /// Where the search for the next row starts.
+    next: f32,
+    rows: Vec<(f32, Vec<(f32, f32)>)>,
+    done: bool,
+}
+
+impl AreaRows<'_> {
+    /// Row `i`: its baseline and spans; `None` past the shape.
+    fn get(&mut self, i: usize) -> Option<&(f32, Vec<(f32, f32)>)> {
+        while self.rows.len() <= i && !self.done {
+            match self.area.next_row(self.next, self.m.ascent, self.m.descent, self.min_width) {
+                Some((b, spans)) if self.rows.len() < MAX_AREA_ROWS => {
+                    self.next = b + self.m.leading;
+                    self.rows.push((b, spans));
+                }
+                _ => self.done = true,
+            }
+        }
+        self.rows.get(i)
+    }
+
+    /// The first span, from span `span` of row `row` on, that leaves at least `width` once
+    /// `inset` (the paragraph's indents) is taken off: its row and span.
+    fn first_fit(&mut self, row: usize, span: usize, width: f32, inset: f32) -> Option<(usize, usize)> {
+        let (mut r, mut first) = (row, span);
+        while let Some((_, spans)) = self.get(r) {
+            if let Some(j) = spans.iter().skip(first).position(|&(x0, x1)| x1 - x0 - inset + 0.5 >= width) {
+                return Some((r, first + j));
+            }
+            r += 1;
+            first = 0;
+        }
+        None
+    }
+}
+
+/// A line wider than the span it fell in, that a later span can hold: the line's index in the
+/// paragraph, where its text starts, and its width.
+#[derive(Clone, Copy, Debug)]
+struct Need {
+    line: usize,
+    start: usize,
+    width: f32,
+}
+
+/// Breaks one paragraph of area type a line at a time, each line as wide as the next span the
+/// shape leaves (rows from `from` down, spans left to right). Returns each line's slot and
+/// whether text was left over because the shape ran out (hidden, like box overflow).
+///
+/// A span too narrow for the word that would start it (the narrow top of an ellipse) is left
+/// empty and the word goes to the first later span that holds it, as Photoshop does. A word no
+/// later span holds but another span of the shape would means the shape is full: it and the rest are
+/// hidden. Only a word no span holds overflows its span. Parley doesn't report a line's
+/// trailing whitespace while breaking, so overflowing lines are found after a pass and the
+/// paragraph broken again; `budget` (shared by the paragraph's calls) bounds the passes.
+///
+/// Horizontal scale applies after shaping, so each line breaks at its span width divided by
+/// `scale`; widths compared with spans are the scaled ones.
+#[allow(clippy::too_many_arguments)]
+fn break_area(
+    layout: &mut Layout<RunBrush>,
+    area: &crate::area::AreaShape,
+    from: f32,
+    m: LineMetrics,
+    indents: (f32, f32),
+    min_width: f32,
+    scale: f32,
+    budget: &std::cell::Cell<usize>,
+) -> (Vec<Slot>, bool) {
+    let inset = indents.0 + indents.1;
+    let mut rows = AreaRows { area, m, min_width, next: from, rows: Vec::new(), done: false };
+    // Every row of the shape from its top, whatever paragraph came before (found lazily).
+    let mut shape_rows = AreaRows { area, m, min_width, next: area.bounds[1], rows: Vec::new(), done: false };
+    let mut needs: Vec<Need> = Vec::new();
+    loop {
+        let (slots, overflow) = break_area_pass(layout, &mut rows, inset, scale, &needs);
+        budget.set(budget.get().saturating_sub(1));
+        // Each line's text start and scaled width without its trailing whitespace.
+        let lines: Vec<(usize, f32)> = layout
+            .lines()
+            .map(|l| {
+                let lm = l.metrics();
+                (l.text_range().start, (lm.advance - lm.trailing_whitespace) * scale)
+            })
+            .collect();
+        // A line still wider than its span that some span of the shape would hold: the shape ran
+        // out of room for it (the narrow bottom of a full bubble). It and the rest are hidden, as
+        // overflow; only a word no span holds overflows its span.
+        let mut ran_out = |slots: Vec<Slot>, overflow: bool| match lines
+            .iter()
+            .zip(&slots)
+            .position(|(&(_, width), s)| width > s.width + 0.5 && shape_rows.first_fit(0, 0, width, inset).is_some())
+        {
+            Some(li) => (slots.into_iter().take(li).collect(), true),
+            None => (slots, overflow),
+        };
+        if budget.get() == 0 {
+            return ran_out(slots, overflow);
+        }
+        // A line that now starts elsewhere (an earlier line changed) no longer needs its span.
+        let kept = needs.len();
+        needs.retain(|n| lines.get(n.line).is_some_and(|l| l.0 == n.start));
+        if needs.len() != kept {
+            continue;
+        }
+        let mut new = None;
+        for (li, (&(start, width), s)) in lines.iter().zip(&slots).enumerate() {
+            if width > s.width + 0.5 && !needs.iter().any(|n| n.line == li) && rows.first_fit(s.row, s.span + 1, width, inset).is_some() {
+                new = Some(Need { line: li, start, width });
+                break;
+            }
+        }
+        if let Some(n) = new {
+            needs.push(n);
+            continue;
+        }
+        return ran_out(slots, overflow);
+    }
+}
+
+/// One pass of [`break_area`]: each line in the next span, skipping spans too narrow for a
+/// line in `needs` when a later span holds it.
+fn break_area_pass(layout: &mut Layout<RunBrush>, rows: &mut AreaRows<'_>, inset: f32, scale: f32, needs: &[Need]) -> (Vec<Slot>, bool) {
+    #[cfg(test)]
+    AREA_PASSES.with(|c| c.set(c.get() + 1));
+    let mut slots: Vec<Slot> = Vec::new();
+    let mut br = layout.break_lines();
+    // Per-line widths below are never wider than this, as parley requires.
+    br.state_mut().set_layout_max_advance(f32::INFINITY);
+    let (mut row, mut span) = (0, 0);
+    let mut overflow = false;
+    while !br.is_done() {
+        let Some((baseline, spans)) = rows.get(row) else {
+            overflow = true;
+            break;
+        };
+        let baseline = *baseline;
+        let Some(&(x0, x1)) = spans.get(span) else {
+            row += 1;
+            span = 0;
+            continue;
+        };
+        let width = (x1 - x0 - inset).max(1.0);
+        // A line known to be too wide here moves on to the first span that holds it.
+        if let Some(w) = needs.iter().find(|n| n.line == slots.len()).map(|n| n.width)
+            && w > width + 0.5
+            && let Some((r, j)) = rows.first_fit(row, span + 1, w, inset)
+        {
+            (row, span) = (r, j);
+            continue;
+        }
+        br.state_mut().set_line_max_advance(width / scale);
+        if br.break_next().is_none() {
+            break;
+        }
+        // Parley aligns each line within the width it was broken at.
+        br.set_prior_line_width(width / scale);
+        slots.push(Slot { baseline, x: x0, width, row, span });
+        span += 1;
+    }
+    br.finish();
+    (slots, overflow)
+}
+
+/// One laid-out line's ascent, descent and leading, as the line loop stacks it. `fallback` is
+/// the paragraph's first style, used for a line with no glyph runs.
+fn line_metrics(line: &parley::Line<'_, RunBrush>, styles: &[CharStyle], ps: &ParagraphStyle, k: f32, fallback: &CharStyle, vertical: bool) -> LineMetrics {
+    let first_px = fallback.size_pt * k;
+    let m = line.metrics();
+    // Largest leading among the glyph runs, and half the largest em (a vertical column's half width).
+    let mut leading = 0.0f32;
+    let mut half = 0.0f32;
+    for item in line.items() {
+        if let PositionedLayoutItem::GlyphRun(gr) = item {
+            let px = gr.run().font_size();
+            half = half.max(px * 0.5);
+            let lp = styles.get(gr.style().brush.0 as usize).and_then(|st| st.leading_pt);
+            leading = leading.max(lp.map_or(ps.auto_leading * px, |l| l * k));
+        }
+    }
+    if leading == 0.0 {
+        leading = fallback.leading_pt.map_or(ps.auto_leading * first_px, |l| l * k);
+    }
+    let (ascent, descent) = if vertical {
+        let h = if half > 0.0 { half } else { first_px * 0.5 };
+        (h, h)
+    } else if m.ascent > 0.0 || m.descent > 0.0 {
+        (m.ascent, m.descent)
+    } else {
+        (first_px * 0.8, first_px * 0.2)
+    };
+    LineMetrics { ascent, descent, leading }
+}
+
+/// Largest ascent, descent and leading over the lines of a broken paragraph, by
+/// [`line_metrics`], so an area paragraph's rows are planned with the metrics it is stacked with.
+fn area_metrics(layout: &Layout<RunBrush>, styles: &[CharStyle], ps: &ParagraphStyle, k: f32, fallback: &CharStyle, vertical: bool) -> LineMetrics {
+    layout.lines().map(|line| line_metrics(&line, styles, ps, k, fallback, vertical)).fold(LineMetrics { ascent: 0.0, descent: 0.0, leading: 0.0 }, |a, b| {
+        LineMetrics { ascent: a.ascent.max(b.ascent), descent: a.descent.max(b.descent), leading: a.leading.max(b.leading) }
+    })
 }
 
 /// A tab as line breaking saw it: its shaped advance (before horizontal scale), the horizontal

@@ -17,7 +17,7 @@ use crate::PhotocraftApp;
 struct Seen(usize, Option<LayerId>);
 
 fn seen_id() -> egui::Id {
-    egui::Id::new("layers-reveal-seen")
+    egui::Id::unique("layers-reveal-seen")
 }
 
 /// Called once per Layers panel frame, before its rows are listed. When the active layer

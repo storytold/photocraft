@@ -202,13 +202,17 @@ mod web_preview;
 
 const WEB_FORMATS: [(&str, &str); 5] = [("gif", "GIF"), ("png8", "PNG-8"), ("png24", "PNG-24"), ("jpeg", "JPEG"), ("wbmp", "WBMP")];
 const WEB_COMMAND: &str = "file.export.saveForWebLegacy";
+/// Save for Web's preview tabs: the `__view` field's values and their labels.
+const WEB_VIEWS: [(&str, &str); 4] = [("original", "Original"), ("optimized", "Optimized"), ("2up", "2-Up"), ("4up", "4-Up")];
 
 pub fn open_web(app: &mut PhotocraftApp) -> u64 {
     let mut f = Map::new();
     f.insert("__web".into(), json!(true));
     f.insert("__command".into(), json!(WEB_COMMAND));
     f.insert("__label".into(), json!("Save for Web (Legacy)"));
-    f.insert("__view".into(), json!("2up"));
+    // The preview tab chosen last time, 2-Up at first (#9174).
+    let view = app.ui.web_view.as_deref().filter(|v| WEB_VIEWS.iter().any(|(k, _)| k == v)).unwrap_or("2up");
+    f.insert("__view".into(), json!(view));
     // Remember encoding choices, but each document starts at its own full size. This session's
     // last export lives in `file_menu`; the last one before a restart comes from the
     // preferences' remembered dialog settings (`web_cmds::remember_web_settings`).
@@ -242,6 +246,7 @@ pub fn open_web(app: &mut PhotocraftApp) -> u64 {
         ("convertToSrgb", json!(true)),
         ("metadata", json!("copyright")),
         ("percent", json!(100.0)),
+        ("resample", json!("bicubic")),
         ("webSnap", json!(0)),
     ] {
         f.entry(k.to_string()).or_insert(v);
@@ -288,8 +293,9 @@ fn web_proxy(doc: &photocraft_doc::Document, base: &Value, frame: Option<usize>,
     let k = (longest_side / fw.max(fh)).min(1.0);
     let st = WebSettings::from_params(base, "preview").unwrap_or_default();
     let shown = web_frame_document(doc, frame).map_err(|e| e.to_string())?;
+    let resample = web_preview::proxy_resample(base, k);
     let (wd, _, _) =
-        web_cmds::web_document(&shown, &json!({"width": (fw * k).round().max(1.0), "height": (fh * k).round().max(1.0), "resample": "bilinear"}), &st)
+        web_cmds::web_document(&shown, &json!({"width": (fw * k).round().max(1.0), "height": (fh * k).round().max(1.0), "resample": resample}), &st)
             .map_err(|e| e.to_string())?;
     let buf = photocraft_compose::flatten(&wd);
     Ok((
@@ -365,8 +371,8 @@ fn web_pane(app: &PhotocraftApp, ui: &mut egui::Ui, size: egui::Vec2, p: Option<
     let playing = b(f, "__web_playing", false);
     // A bounded proxy; navigation never recomposites or re-encodes it.
     let base = p.cloned().unwrap_or_else(|| json!({}));
-    let size_sig = format!("{}|{}|{}|{}", base["percent"], base["width"], base["height"], base["convertToSrgb"]);
-    let wkey = egui::Id::new(("web-proxy", doc.id.0, pane));
+    let size_sig = format!("{}|{}|{}|{}|{}", base["percent"], base["width"], base["height"], base["resample"], base["convertToSrgb"]);
+    let wkey = egui::Id::unique(("web-proxy", doc.id.0, pane));
     let proxy_sig = format!("{rev}|{frame:?}|{size_sig}");
     let cached_proxy: Option<(String, WebProxy)> = ui.data(|d| d.get_temp(wkey));
     let proxy = cached_proxy.filter(|(sig, _)| sig == &proxy_sig).map(|(_, proxy)| proxy);
@@ -385,7 +391,7 @@ fn web_pane(app: &PhotocraftApp, ui: &mut egui::Ui, size: egui::Vec2, p: Option<
         }
     };
     let sig = format!("{}|{rev}|{frame:?}|{size_sig}|{}", doc.id.0, p.map(|v| v.to_string()).unwrap_or_else(|| "original".into()));
-    let key = egui::Id::new(("web-pane", doc.id.0, pane));
+    let key = egui::Id::unique(("web-pane", doc.id.0, pane));
     let cached: Option<WebCache> = ui.data(|d| d.get_temp(key));
     let (tex, info) = match cached.filter(|c| c.0 == sig) {
         Some((_, tex, info)) => (tex, info),
@@ -476,10 +482,10 @@ fn printer_options(list: Option<&Value>, current: &str) -> Vec<(String, String)>
     opts
 }
 
-fn dropdown_str(ui: &mut egui::Ui, id: &str, f: &mut Map<String, Value>, key: &str, opts: &[(&str, &str)], w: f32) {
+fn dropdown_str(ui: &mut egui::Ui, id: &str, name: &str, f: &mut Map<String, Value>, key: &str, opts: &[(&str, &str)], w: f32) {
     let mut v = s(f, key, opts.first().map_or("", |o| o.0));
     let o: Vec<(String, &str)> = opts.iter().map(|(k, l)| (k.to_string(), *l)).collect();
-    if crate::widgets::dropdown(ui, id, &mut v, &o, w) {
+    if crate::widgets::dropdown(ui, id, name, &mut v, &o, w) {
         f.insert(key.into(), json!(v));
     }
 }
@@ -495,7 +501,7 @@ fn number(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, label: &str,
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(tl!(&label)).color(t.text_dim));
         let mut v = n(f, key, d) as f32;
-        crate::widgets::value_field(ui, &mut v, range, unit, 64.0);
+        crate::widgets::value_field(ui, &mut v, range, unit, 64.0).accessible_name(tl!(&label));
         f.insert(key.into(), json!(v.round()));
     });
 }
@@ -645,9 +651,11 @@ fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
     let Some(doc) = app.session.active().map(|d| d.doc.clone()) else { return };
     ui.horizontal(|ui| {
         let mut view = s(f, "__view", "2up");
-        for (k, l) in [("original", tl!("Original")), ("optimized", tl!("Optimized")), ("2up", "2-Up"), ("4up", "4-Up")] {
-            if ui.selectable_label(view == k, tl!(&l)).clicked() {
+        for (k, l) in WEB_VIEWS {
+            if ui.selectable_label(view == k, tl!(l)).clicked() {
                 view = k.into();
+                // The next Save for Web opens on this tab, as Photoshop's does.
+                app.ui.web_view = Some(view.clone());
             }
         }
         f.insert("__view".into(), json!(view));
@@ -705,14 +713,14 @@ fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                 let mut preset = s(f, "__preset", "");
                 let mut opts: Vec<(String, &str)> = vec![("".into(), "[Unnamed]")];
                 opts.extend(web_cmds::PRESETS.iter().map(|p| (p.to_string(), *p)));
-                if crate::widgets::dropdown(ui, "web-preset", &mut preset, &opts, 230.0) && !preset.is_empty() {
+                if crate::widgets::dropdown(ui, "web-preset", tl!("Preset"), &mut preset, &opts, 230.0) && !preset.is_empty() {
                     if let Some(Value::Object(m)) = web_cmds::preset_settings(&preset).map(|st| st.to_params()) {
                         f.extend(m);
                     }
                     f.insert("__preset".into(), json!(preset));
                 }
                 ui.add_space(4.0);
-                dropdown_str(ui, "web-format", f, "format", &WEB_FORMATS, 230.0);
+                dropdown_str(ui, "web-format", tl!("Format"), f, "format", &WEB_FORMATS, 230.0);
                 ui.add_space(4.0);
                 let fmt = s(f, "format", "jpeg");
                 match fmt.as_str() {
@@ -720,6 +728,7 @@ fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                         dropdown_str(
                             ui,
                             "web-palette",
+                            tl!("Color Table"),
                             f,
                             "palette",
                             &[
@@ -735,6 +744,7 @@ fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                         dropdown_str(
                             ui,
                             "web-dither",
+                            tl!("Dither"),
                             f,
                             "dither",
                             &[("none", tl!("No Dither")), ("diffusion", tl!("Diffusion")), ("pattern", tl!("Pattern")), ("noise", tl!("Noise"))],
@@ -755,6 +765,7 @@ fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                         dropdown_str(
                             ui,
                             "web-dither",
+                            tl!("Dither"),
                             f,
                             "dither",
                             &[("none", tl!("No Dither")), ("diffusion", tl!("Diffusion")), ("pattern", tl!("Pattern"))],
@@ -768,9 +779,9 @@ fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                 }
                 if fmt != "png24" || !b(f, "transparency", true) {
                     ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new(tl!("Matte")).color(t.text_dim));
+                        let matte_label = ui.label(egui::RichText::new(tl!("Matte")).color(t.text_dim));
                         let mut m = s(f, "matte", "#ffffff");
-                        if ui.add(egui::TextEdit::singleline(&mut m).desired_width(80.0)).changed() {
+                        if ui.add(egui::TextEdit::singleline(&mut m).desired_width(80.0)).labelled_by(matte_label.id).changed() {
                             f.insert("matte".into(), json!(m));
                         }
                     });
@@ -782,6 +793,7 @@ fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                     dropdown_str(
                         ui,
                         "web-meta",
+                        tl!("Metadata"),
                         f,
                         "metadata",
                         &[
@@ -798,22 +810,97 @@ fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                 }
                 ui.add_space(8.0);
                 ui.label(egui::RichText::new(tl!("Image Size")).font(crate::theme::semibold(12.0)).color(t.text));
-                number(ui, f, "percent", tl!("Percent"), 1.0..=1000.0, "%", 100.0);
-                let pct = n(f, "percent", 100.0) / 100.0;
-                ui.label(
-                    egui::RichText::new(format!("W: {} px   H: {} px", (f64::from(doc.size.width) * pct).round(), (f64::from(doc.size.height) * pct).round()))
-                        .color(t.text_dim)
-                        .size(11.5),
-                );
+                web_size(ui, f, &doc);
                 let nslices = photocraft_doc::slices::resolve(&doc).len();
                 if !doc.slices.is_empty() {
                     ui.add_space(6.0);
                     ui.label(egui::RichText::new(crate::i18n::trn(crate::i18n::current(), nslices as u64, "{n} slice", "{n} slices")).color(t.text_dim));
                     check(ui, f, "html", tl!("Save HTML and Images"), true);
-                    dropdown_str(ui, "web-slices", f, "slices", &[("all", tl!("All Slices")), ("user", tl!("All User Slices"))], 150.0);
+                    dropdown_str(ui, "web-slices", tl!("Slices"), f, "slices", &[("all", tl!("All Slices")), ("user", tl!("All User Slices"))], 150.0);
                 }
             });
         });
+    });
+}
+
+/// A size row in a two-column grid: the label, then a field showing `shown`. Returns the typed
+/// value when it changed, compared with the value the widget was given so a field that only
+/// clamps does not count as an edit.
+fn size_field(ui: &mut egui::Ui, label: &str, shown: f64, range: std::ops::RangeInclusive<f32>, unit: &str, decimals: u32) -> Option<f64> {
+    let t = Tokens::get(ui.ctx());
+    let passed = (shown as f32).clamp(*range.start(), *range.end());
+    let mut v = passed;
+    ui.label(egui::RichText::new(label).color(t.text_dim));
+    crate::widgets::value_field_prec(ui, &mut v, range, unit, 90.0, decimals).accessible_name(tl!(&label));
+    ui.end_row();
+    (v != passed).then_some(f64::from(v))
+}
+
+/// Image Size, as in Photoshop's Save for Web: Width and Height linked in proportion (on at
+/// each opening), Percent and the resampling method. A side edit sets exact pixels and drops
+/// `percent`, which the engine would otherwise apply first; a Percent edit sets both sides.
+fn web_size(ui: &mut egui::Ui, f: &mut Map<String, Value>, doc: &photocraft_doc::Document) {
+    use crate::export_dialog::{MAX_PX, resize_from_scale, resize_from_side};
+    let (w0, h0) = (f64::from(doc.size.width).max(1.0), f64::from(doc.size.height).max(1.0));
+    let (w, h) = web_preview::dimensions(doc, &params(f)).unwrap_or((w0, h0));
+    let lock = b(f, "__constrain", true);
+    let pct = n(f, "percent", w / w0 * 100.0);
+    let write = |f: &mut Map<String, Value>, width: f64, height: f64| {
+        f.insert("width".into(), json!(width));
+        f.insert("height".into(), json!(height));
+    };
+    let max = MAX_PX as f32;
+    let (width, height, percent) = egui::Grid::new("web-size")
+        .num_columns(2)
+        .show(ui, |ui| {
+            (
+                size_field(ui, tl!("Width"), w, 1.0..=max, "px", 0),
+                size_field(ui, tl!("Height"), h, 1.0..=max, "px", 0),
+                size_field(ui, tl!("Percent"), pct, 1.0..=1000.0, "%", 2),
+            )
+        })
+        .inner;
+    let side = match (width, height) {
+        (Some(v), _) => resize_from_side(w0, h0, v.round(), h, lock, true).ok(),
+        (_, Some(v)) => resize_from_side(w0, h0, w, v.round(), lock, false).ok(),
+        _ => None,
+    };
+    if let Some(size) = side {
+        f.remove("percent");
+        write(f, size.width, size.height);
+    } else if let Some(v) = percent
+        && let Ok(size) = resize_from_scale(w0, h0, v)
+    {
+        f.insert("percent".into(), json!(size.scale));
+        write(f, size.width, size.height);
+    }
+    let mut linked = lock;
+    if crate::widgets::checkbox(ui, &mut linked, tl!("Constrain proportions")).changed() {
+        f.insert("__constrain".into(), json!(linked));
+        // Linked again, the height follows the width in the document's proportions.
+        if linked && let Ok(size) = resize_from_side(w0, h0, w, h, true, true) {
+            f.remove("percent");
+            write(f, size.width, size.height);
+        }
+    }
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(tl!("Resample")).color(Tokens::get(ui.ctx()).text_dim));
+        // Photoshop's Save for Web list, in its order.
+        dropdown_str(
+            ui,
+            "web-resample",
+            tl!("Resample"),
+            f,
+            "resample",
+            &[
+                ("nearest", tl!("Nearest Neighbor (hard edges)")),
+                ("bilinear", tl!("Bilinear")),
+                ("bicubic", tl!("Bicubic (smooth gradients)")),
+                ("bicubicSmoother", tl!("Bicubic Smoother (enlargement)")),
+                ("bicubicSharper", tl!("Bicubic Sharper (reduction)")),
+            ],
+            170.0,
+        );
     });
 }
 
@@ -893,6 +980,10 @@ fn download_for_web(app: &mut PhotocraftApp, mut p: Value) -> Result<Value, Stri
 
 // ---------- Print ----------
 
+/// Opens a Print dialog seeded from the last print, filling missing fields with defaults.
+/// Refreshes the printer list on each opening; when native driver enumeration succeeds,
+/// an unavailable saved printer is replaced and its stale driver settings are discarded.
+/// Returns the dialog ID without submitting a print job.
 pub fn open_print(app: &mut PhotocraftApp) -> u64 {
     let mut f = Map::new();
     f.insert("__print".into(), json!(true));
@@ -987,10 +1078,12 @@ fn driver_page(f: &mut Map<String, Value>) {
     match craft_print::rgb::page(&printer, settings.as_ref()) {
         Ok(pg) => {
             f.insert("paper".into(), json!([pg.paper.0, pg.paper.1]));
+            f.insert("printable".into(), json!([pg.printable.0, pg.printable.1, pg.printable.2, pg.printable.3]));
             f.insert("orientation".into(), json!("portrait"));
             f.remove("__pageError");
         }
         Err(e) => {
+            f.remove("printable");
             f.insert("__pageError".into(), json!(e.to_string()));
         }
     }
@@ -1010,7 +1103,15 @@ fn length_field(ui: &mut egui::Ui, label: &str, pt: &mut f64, units: &str) -> bo
     length_field_prec(ui, label, pt, units, 0)
 }
 
+/// Edits a point-valued length in the selected units, with the requested decimal precision.
+/// Retains the nonnegative 0..=10000 display-unit range used by existing size fields.
 fn length_field_prec(ui: &mut egui::Ui, label: &str, pt: &mut f64, units: &str, decimals: u32) -> bool {
+    length_field_range(ui, label, pt, units, decimals, 0.0..=10000.0)
+}
+
+/// Edits a length stored in print points (72 per inch), returning true for a finite edit.
+/// `range` is in the displayed `units`; a signed range permits negative Top/Left offsets.
+fn length_field_range(ui: &mut egui::Ui, label: &str, pt: &mut f64, units: &str, decimals: u32, range: std::ops::RangeInclusive<f32>) -> bool {
     let t = Tokens::get(ui.ctx());
     let k = unit_pt(units);
     let mut v = (*pt / k) as f32;
@@ -1018,7 +1119,7 @@ fn length_field_prec(ui: &mut egui::Ui, label: &str, pt: &mut f64, units: &str, 
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(label).color(t.text_dim));
         let before = v;
-        crate::widgets::value_field_prec(ui, &mut v, 0.0..=10000.0, units, 70.0, decimals);
+        crate::widgets::value_field_prec(ui, &mut v, range, units, 70.0, decimals).accessible_name(tl!(&label));
         if (v - before).abs() > 1e-4 && v.is_finite() {
             *pt = f64::from(v) * k;
             changed = true;
@@ -1037,13 +1138,16 @@ fn print_paper_size(value: Option<&Value>) -> (f64, f64) {
     }
 }
 
+/// Edits the paper preset, orientation and custom dimensions, remembering custom sizes
+/// across preset switches. Dimensions are displayed in the selected units but stored as
+/// unrotated print points; the engine applies orientation and validates the final size.
 fn print_paper_controls(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let previous = f.get("paper").cloned();
     let mut selected = if previous.as_ref().is_some_and(Value::is_array) { "custom".to_string() } else { s(f, "paper", "letter") };
     ui.horizontal(|ui| {
         let mut papers: Vec<_> = photocraft_engine::print_cmds::PAPERS.iter().map(|p| (p.0.to_string(), p.0)).collect();
         papers.push(("custom".to_string(), tl!("Custom")));
-        if crate::widgets::dropdown(ui, "print-paper", &mut selected, &papers, 110.0) {
+        if crate::widgets::dropdown(ui, "print-paper", tl!("Paper"), &mut selected, &papers, 110.0) {
             if selected == "custom" {
                 let (w, h) = print_paper_size(f.get("__customPaper").or(previous.as_ref()));
                 f.insert("paper".into(), json!([w, h]));
@@ -1054,7 +1158,7 @@ fn print_paper_controls(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 f.insert("paper".into(), json!(selected));
             }
         }
-        dropdown_str(ui, "print-orient", f, "orientation", &[("portrait", tl!("Portrait")), ("landscape", tl!("Landscape"))], 110.0);
+        dropdown_str(ui, "print-orient", tl!("Orientation"), f, "orientation", &[("portrait", tl!("Portrait")), ("landscape", tl!("Landscape"))], 110.0);
     });
     if f.get("paper").is_some_and(Value::is_array) {
         let (mut w, mut h) = print_paper_size(f.get("paper"));
@@ -1089,6 +1193,44 @@ fn browse_pdf(app: &mut PhotocraftApp, id: u64, suggested: &str) {
     }
 }
 
+/// Converts total displacement from a fixed drag-start layout into manual inch offsets.
+/// Resolving Center before the drag avoids a jump; each update replaces the offsets rather
+/// than accumulating movement. Emulsion Down reverses horizontal layout-space movement.
+///
+/// `delta` and the painter use egui points, including on Retina displays; the scale is egui
+/// points per print point (1/72 inch). Applying pixels_per_point would count HiDPI twice.
+/// Invalid scales or nonfinite displacement/offsets return false without changing fields.
+/// Accepted offsets are clamped to the engine's safety bound and Center is disabled.
+fn drag_print_position(f: &mut Map<String, Value>, start: photocraft_engine::print_cmds::PrintLayout, delta: egui::Vec2, points_per_print_point: f32) -> bool {
+    if !points_per_print_point.is_finite() || points_per_print_point <= 0.0 || !delta.is_finite() {
+        return false;
+    }
+    let (x, y, _, h) = start.rect;
+    let direction = if start.emulsion_down { -1.0 } else { 1.0 };
+    let left = (x + direction * f64::from(delta.x) / f64::from(points_per_print_point)) / 72.0;
+    let top = (start.paper.1 - y - h + f64::from(delta.y) / f64::from(points_per_print_point)) / 72.0;
+    if !left.is_finite() || !top.is_finite() {
+        return false;
+    }
+    let limit = photocraft_engine::print_cmds::MAX_POSITION_INCHES;
+    f.insert("center".into(), json!(false));
+    f.insert("left".into(), json!(left.clamp(-limit, limit)));
+    f.insert("top".into(), json!(top.clamp(-limit, limit)));
+    true
+}
+
+/// Maps the engine's bottom-left print-point rectangle into top-left egui coordinates.
+/// `k` is egui points per print point; Emulsion Down mirrors placement across the page,
+/// matching the PDF page transform. Returns the full image bounds for the caller to clip.
+fn print_preview_image(l: photocraft_engine::print_cmds::PrintLayout, page: egui::Rect, k: f32) -> egui::Rect {
+    let (x, y, w, h) = l.rect;
+    let x = if l.emulsion_down { l.paper.0 - x - w } else { x };
+    egui::Rect::from_min_size(egui::pos2(page.left() + x as f32 * k, page.bottom() - (y + h) as f32 * k), egui::vec2(w as f32 * k, h as f32 * k))
+}
+
+/// Draws the print controls and paper-clipped preview using the engine's shared layout.
+/// Dragging the visible image updates dialog offsets live from a fixed gesture origin;
+/// the position row stays present while centered so switching to manual cannot move the page.
 fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, id: u64) {
     let t = Tokens::get(ui.ctx());
     let Some(doc) = app.session.active().map(|d| d.doc.clone()) else { return };
@@ -1106,7 +1248,9 @@ fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Va
             f.insert("__driverPageInitialized".into(), json!(true));
         }
     } else {
+        // PDF output and previews have no driver page: Scale to Fit Media uses the paper.
         f.remove("__driverPageInitialized");
+        f.remove("printable");
     }
     let p = params(f);
     let mut browse = false;
@@ -1116,20 +1260,40 @@ fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Va
             let (area, _) = ui.allocate_exact_size(egui::vec2(330.0, 400.0), egui::Sense::hover());
             ui.painter().rect_filled(area, 0.0, t.canvas);
             match photocraft_engine::print_cmds::layout(&doc, &p, "file.print") {
-                Ok(l) => {
+                Ok(mut l) => {
                     let (pw, ph) = l.paper;
                     let k = ((area.width() - 20.0) / pw as f32).min((area.height() - 20.0) / ph as f32);
                     let page = egui::Rect::from_center_size(area.center(), egui::vec2(pw as f32 * k, ph as f32 * k));
                     ui.painter().rect_filled(page, 0.0, egui::Color32::WHITE);
                     ui.painter().rect_stroke(page, 0.0, egui::Stroke::new(1.0, t.separator), egui::StrokeKind::Outside);
+                    let mut img = print_preview_image(l, page, k);
+                    let drag_id = ui.scope_id().with(("print-position", id));
+                    let visible = img.intersect(page).intersect(ui.clip_rect());
+                    let response = ui.interact(visible, drag_id, egui::Sense::drag()).on_hover_cursor(egui::CursorIcon::Grab);
+                    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Image, true, tl!("Print preview image")));
+                    // Keep a fixed layout and press origin for the whole gesture: rounding and
+                    // the transition from Center must never accumulate or move the grab point.
+                    if response.drag_started_by(egui::PointerButton::Primary)
+                        && let Some(origin) = ui.input(|i| i.pointer.press_origin())
+                    {
+                        ui.data_mut(|d| d.insert_temp(drag_id, (l, origin, k)));
+                    }
+                    if (response.dragged_by(egui::PointerButton::Primary) || response.drag_stopped_by(egui::PointerButton::Primary))
+                        && let Some((start, origin, scale)) = ui.data(|d| d.get_temp::<(photocraft_engine::print_cmds::PrintLayout, egui::Pos2, f32)>(drag_id))
+                        && let Some(pointer) = response.interact_pointer_pos()
+                        && drag_print_position(f, start, pointer - origin, scale)
+                    {
+                        if let Ok(updated) = photocraft_engine::print_cmds::layout(&doc, &params(f), "file.print") {
+                            l = updated;
+                            img = print_preview_image(l, page, k);
+                        }
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                    }
+                    if !ui.input(|i| i.pointer.primary_down()) {
+                        ui.data_mut(|d| d.remove::<(photocraft_engine::print_cmds::PrintLayout, egui::Pos2, f32)>(drag_id));
+                    }
                     let (x, y, w, h) = l.rect;
-                    // Emulsion Down shows the page as it prints: mirrored.
-                    let x = if l.emulsion_down { pw - x - w } else { x };
-                    let img = egui::Rect::from_min_size(
-                        egui::pos2(page.left() + x as f32 * k, page.bottom() - (y + h) as f32 * k),
-                        egui::vec2(w as f32 * k, h as f32 * k),
-                    );
-                    let key = egui::Id::new(("print-thumb", doc.id.0, app.session.active().map_or(0, |d| d.revision)));
+                    let key = egui::Id::unique(("print-thumb", doc.id.0, app.session.active().map_or(0, |d| d.revision)));
                     let tex: Option<Arc<egui::TextureHandle>> = ui.data(|d| d.get_temp(key));
                     let tex = tex.unwrap_or_else(|| {
                         let th = photocraft_compose::thumbnail(&doc, 400);
@@ -1147,11 +1311,13 @@ fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Va
                     clip.image(tex.id(), img, uv, egui::Color32::WHITE);
                     let mark = egui::Stroke::new(1.0, egui::Color32::BLACK);
                     if l.marks.corner_crop {
+                        // Bleed puts the marks on the trim line, inside the image edge.
+                        let b = l.marks.bleed as f32 * k;
                         for (c, dx, dy) in
                             [(img.left_top(), -1.0, -1.0), (img.right_top(), 1.0, -1.0), (img.left_bottom(), -1.0, 1.0), (img.right_bottom(), 1.0, 1.0)]
                         {
-                            clip.line_segment([c + egui::vec2(dx * 3.0, 0.0), c + egui::vec2(dx * 12.0, 0.0)], mark);
-                            clip.line_segment([c + egui::vec2(0.0, dy * 3.0), c + egui::vec2(0.0, dy * 12.0)], mark);
+                            clip.line_segment([c + egui::vec2(dx * 3.0, -dy * b), c + egui::vec2(dx * 12.0, -dy * b)], mark);
+                            clip.line_segment([c + egui::vec2(-dx * b, dy * 3.0), c + egui::vec2(-dx * b, dy * 12.0)], mark);
                         }
                     }
                     if l.marks.registration {
@@ -1191,7 +1357,7 @@ fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Va
                     ui.label(egui::RichText::new(tl!("Printer")).color(t.text_dim));
                     let before = s(f, "printer", "");
                     let opts: Vec<(&str, &str)> = printers.iter().map(|n| (n.as_str(), n.as_str())).collect();
-                    dropdown_str(ui, "print-printer", f, "printer", &opts, 220.0);
+                    dropdown_str(ui, "print-printer", tl!("Printer"), f, "printer", &opts, 220.0);
                     if s(f, "printer", "") != before {
                         f.remove("printerSettings");
                         driver_page(f);
@@ -1240,7 +1406,7 @@ fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Va
                     let mut pr = s(f, "printer", "");
                     let opts = printer_options(f.get("__systemPrinters"), &pr);
                     let o: Vec<(String, &str)> = opts.iter().map(|(k, l)| (k.clone(), l.as_str())).collect();
-                    if crate::widgets::dropdown(ui, "print-printer", &mut pr, &o, 240.0) {
+                    if crate::widgets::dropdown(ui, "print-printer", tl!("Printer"), &mut pr, &o, 240.0) {
                         f.insert("printer".into(), json!(pr));
                     }
                 });
@@ -1251,6 +1417,7 @@ fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Va
             dropdown_str(
                 ui,
                 "print-color",
+                tl!("Color Management"),
                 f,
                 "colorHandling",
                 &[
@@ -1281,11 +1448,12 @@ fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Va
                 if !profiles.iter().any(|(v, _)| *v == cur) {
                     profiles.push((cur.as_str(), stem.as_str()));
                 }
-                dropdown_str(ui, "print-profile", f, "printerProfile", &profiles, 240.0);
+                dropdown_str(ui, "print-profile", tl!("Profile"), f, "printerProfile", &profiles, 240.0);
                 ui.horizontal(|ui| {
                     dropdown_str(
                         ui,
                         "print-intent",
+                        tl!("Mode"),
                         f,
                         "intent",
                         &[
@@ -1305,20 +1473,27 @@ fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Va
                 }
             }
             head(ui, tl!("Position and Size"));
-            dropdown_str(ui, "print-units", f, "units", &[("cm", tl!("Centimeters")), ("mm", tl!("Millimeters")), ("in", tl!("Inches"))], 130.0);
+            dropdown_str(ui, "print-units", tl!("Units"), f, "units", &[("cm", tl!("Centimeters")), ("mm", tl!("Millimeters")), ("in", tl!("Inches"))], 130.0);
             let units = s(f, "units", "cm");
             check(ui, f, "center", tl!("Center"), true);
-            if !b(f, "center", true) {
+            let centered = b(f, "center", true);
+            let centered_layout = centered.then(|| photocraft_engine::print_cmds::layout(&doc, &params(f), "file.print").ok()).flatten();
+            // Revealing this row during a drag resizes the centered modal and moves the paper.
+            // Keep it present, showing the resolved position while Center owns the offsets.
+            ui.add_enabled_ui(!centered, |ui| {
                 ui.horizontal(|ui| {
                     // Kept in inches (Photoshop's Position fields), shown in the chosen units.
                     for (key, label) in [("top", tl!("Top")), ("left", tl!("Left"))] {
-                        let mut pt = n(f, key, 0.0) * 72.0;
-                        if length_field(ui, label, &mut pt, &units) {
-                            f.insert(key.into(), json!(pt / 72.0));
+                        let mut pt =
+                            centered_layout.map_or_else(|| n(f, key, 0.0) * 72.0, |l| if key == "top" { l.paper.1 - l.rect.1 - l.rect.3 } else { l.rect.0 });
+                        let limit = (photocraft_engine::print_cmds::MAX_POSITION_INCHES * 72.0 / unit_pt(&units)) as f32;
+                        if length_field_range(ui, label, &mut pt, &units, 2, -limit..=limit) {
+                            let limit = photocraft_engine::print_cmds::MAX_POSITION_INCHES;
+                            f.insert(key.into(), json!((pt / 72.0).clamp(-limit, limit)));
                         }
                     }
                 });
-            }
+            });
             check(ui, f, "scaleToFit", tl!("Scale to Fit Media"), false);
             // Scaled Print Size: Scale, Height and Width move together; Print Resolution follows.
             if let Ok(l) = photocraft_engine::print_cmds::layout(&doc, &params(f), "file.print") {
@@ -1330,7 +1505,7 @@ fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Va
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new(tl!("Scale")).color(t.text_dim));
                         let mut v = n(f, "scale", 100.0) as f32;
-                        crate::widgets::value_field(ui, &mut v, 1.0..=1000.0, "%", 64.0);
+                        crate::widgets::value_field(ui, &mut v, 1.0..=1000.0, "%", 64.0).accessible_name(tl!("Scale"));
                         f.insert("scale".into(), json!((f64::from(v) * 100.0).round() / 100.0));
                     });
                 }
@@ -1386,8 +1561,22 @@ fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Va
     }
 }
 
+/// `file.print`'s params. The driver's printable area only goes with a print to the printer:
+/// an output path or a preview set in the same frame as the confirm still drops it.
+fn print_params(f: &Map<String, Value>) -> Value {
+    let mut p = params(f);
+    if (b(f, "dryRun", false) || !s(f, "output", "").is_empty())
+        && let Some(o) = p.as_object_mut()
+    {
+        o.remove("printable");
+    }
+    p
+}
+
+/// Submits the dialog parameters to `file.print`, propagating command errors unchanged.
+/// Updates the status for completed results only; pending jobs report completion later.
 fn print_confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
-    let r = app.run("file.print", params(f))?;
+    let r = app.run("file.print", print_params(f))?;
     if r["pending"] != json!(true) {
         print_status(app, &r);
     }
@@ -1410,6 +1599,63 @@ pub(crate) fn print_status(app: &mut PhotocraftApp, r: &Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Checks no-jump centering and nonaccumulating screen displacement against shared layout
+    /// across fit, percentage scaling, orientation and mirroring combinations.
+    #[test]
+    fn print_drag_uses_the_resolved_layout_and_screen_points_without_accumulation() {
+        let (app, _) = app();
+        let doc = &app.session.active().unwrap().doc;
+        for fit in [false, true] {
+            for mirror in [false, true] {
+                for orientation in ["portrait", "landscape"] {
+                    let mut f = json!({"center": true, "scale": 175, "scaleToFit": fit,
+                        "emulsionDown": mirror, "orientation": orientation})
+                    .as_object()
+                    .unwrap()
+                    .clone();
+                    let start = photocraft_engine::print_cmds::layout(doc, &Value::Object(f.clone()), "file.print").unwrap();
+                    let page = egui::Rect::from_min_size(egui::pos2(20.0, 30.0), egui::vec2(start.paper.0 as f32, start.paper.1 as f32));
+                    assert!(drag_print_position(&mut f, start, egui::Vec2::ZERO, 1.0));
+                    let manual = photocraft_engine::print_cmds::layout(doc, &Value::Object(f.clone()), "file.print").unwrap();
+                    assert!((manual.rect.0 - start.rect.0).abs() < 1e-9);
+                    assert!((manual.rect.1 - start.rect.1).abs() < 1e-9);
+                    assert_eq!(manual.scale, start.scale);
+                    for k in [0.25, 0.5, 1.0, 2.0] {
+                        let delta = egui::vec2(-90.0, 45.0) * k;
+                        assert!(drag_print_position(&mut f, start, delta, k));
+                        let moved = photocraft_engine::print_cmds::layout(doc, &Value::Object(f.clone()), "file.print").unwrap();
+                        let old_img = print_preview_image(start, page, k);
+                        let new_img = print_preview_image(moved, page, k);
+                        assert!((new_img.min - old_img.min - delta).length() < 0.001);
+                        assert_eq!((moved.rect.2, moved.rect.3, moved.scale), (start.rect.2, start.rect.3, start.scale));
+                        let once = f.clone();
+                        assert!(drag_print_position(&mut f, start, delta, k));
+                        assert_eq!(f, once, "total drag displacement must not accumulate");
+                    }
+                }
+            }
+        }
+    }
+
+    /// Checks rejected pointer geometry leaves fields untouched and extreme finite drags
+    /// clamp both inch offsets to the same safety limits as numeric positioning.
+    #[test]
+    fn print_drag_rejects_nonfinite_input_and_bounds_offsets() {
+        let (app, _) = app();
+        let doc = &app.session.active().unwrap().doc;
+        let start = photocraft_engine::print_cmds::layout(doc, &json!({}), "file.print").unwrap();
+        let mut f = Map::new();
+        for k in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            assert!(!drag_print_position(&mut f, start, egui::vec2(10.0, 10.0), k));
+            assert!(f.is_empty());
+        }
+        assert!(!drag_print_position(&mut f, start, egui::vec2(f32::NAN, 0.0), 1.0));
+        assert!(f.is_empty());
+        assert!(drag_print_position(&mut f, start, egui::vec2(-f32::MAX, f32::MAX), 1.0));
+        assert_eq!(f["left"], -photocraft_engine::print_cmds::MAX_POSITION_INCHES);
+        assert_eq!(f["top"], photocraft_engine::print_cmds::MAX_POSITION_INCHES);
+    }
 
     fn app() -> (PhotocraftApp, egui::Context) {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
@@ -1477,6 +1723,98 @@ mod tests {
         assert_eq!(f["percent"], 100.0);
         assert!(!f.contains_key("width"));
         assert!(!f.contains_key("height"));
+    }
+
+    /// Save for Web's Image Size on a 120 x 80 document, as a PNG-24 (no other number fields).
+    fn web_size_dialog(app: PhotocraftApp) -> (egui_kittest::Harness<'static, PhotocraftApp>, u64) {
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1600.0, 1100.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("semibold".into()))) {
+                    crate::dialogs::show(app, ui.ctx());
+                }
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, Default::default());
+        let id = open_web(h.state_mut());
+        h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("format".into(), json!("png24"));
+        h.run_steps(5);
+        (h, id)
+    }
+
+    /// Types `text` into the number field now showing `value`, and leaves it with Tab.
+    fn type_into_field(h: &mut egui_kittest::Harness<'static, PhotocraftApp>, value: f64, text: &str) {
+        use egui_kittest::kittest::{NodeT, Queryable};
+        let field = h
+            .query_all_by_role(egui::accesskit::Role::SpinButton)
+            .find(|n| n.accesskit_node().numeric_value() == Some(value))
+            .map(|n| n.rect())
+            .expect("a field showing the value");
+        h.hover_at(field.center());
+        h.run_steps(1);
+        h.drag_at(field.center());
+        h.run_steps(1);
+        h.drop_at(field.center());
+        h.run_steps(2);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.event(egui::Event::Text(text.into()));
+        h.run_steps(1);
+        h.key_press(egui::Key::Tab);
+        h.run_steps(3);
+    }
+
+    /// #6388: Save for Web's Image Size has Width and Height linked in proportion, as in
+    /// Photoshop. A typed width sets the height, the file comes out at that size, and the
+    /// document itself is never resized.
+    #[test]
+    fn save_for_web_width_keeps_proportions_and_sizes_the_file() {
+        let (app, _) = app();
+        let (mut h, id) = web_size_dialog(app);
+        let revision = h.state().session.active().unwrap().revision;
+        type_into_field(&mut h, 120.0, "60");
+        let f = h.state().ui.dialogs[0].fields.clone();
+        assert_eq!((f["width"].as_f64(), f["height"].as_f64()), (Some(60.0), Some(40.0)), "{f:?}");
+        // Unlinked, the height changes alone; linked again, it follows the width.
+        {
+            use egui_kittest::kittest::Queryable;
+            h.get_by_label("Constrain proportions").click();
+            h.run_steps(3);
+            type_into_field(&mut h, 40.0, "50");
+            let f = h.state().ui.dialogs[0].fields.clone();
+            assert_eq!((f["width"].as_f64(), f["height"].as_f64()), (Some(60.0), Some(50.0)), "{f:?}");
+            h.get_by_label("Constrain proportions").click();
+            h.run_steps(3);
+        }
+        let f = h.state().ui.dialogs[0].fields.clone();
+        assert_eq!((f["width"].as_f64(), f["height"].as_f64(), f.get("__constrain")), (Some(60.0), Some(40.0), Some(&json!(true))), "{f:?}");
+        let path = std::env::temp_dir().join(format!("pc-webui-wh-{}.png", std::process::id())).to_string_lossy().into_owned();
+        h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("path".into(), json!(path));
+        let r = crate::dialogs::confirm(h.state_mut(), id).unwrap();
+        assert_eq!((r["width"].as_u64(), r["height"].as_u64()), (Some(60), Some(40)), "{r}");
+        let st = h.state().session.active().unwrap();
+        assert_eq!((st.revision, st.doc.size), (revision, photocraft_doc::Size::new(120, 80)));
+    }
+
+    /// Reopened on another document, Save for Web starts at that document's full size again
+    /// (#1857) but keeps the resampling method, like the other encoding choices.
+    #[test]
+    fn save_for_web_reopens_at_full_size_with_the_resample_method() {
+        let (app, _) = app();
+        let (mut h, id) = web_size_dialog(app);
+        type_into_field(&mut h, 120.0, "60");
+        let path = std::env::temp_dir().join(format!("pc-webui-reopen-{}.png", std::process::id())).to_string_lossy().into_owned();
+        let d = h.state_mut().ui.dialog_mut(id).unwrap();
+        d.fields.insert("resample".into(), json!("nearest"));
+        d.fields.insert("path".into(), json!(path));
+        crate::dialogs::confirm(h.state_mut(), id).unwrap();
+        h.state_mut().run("file.new", json!({"width": 240, "height": 160, "name": "next"})).unwrap();
+        let id = open_web(h.state_mut());
+        h.run_steps(3);
+        let f = h.state().ui.dialogs.iter().find(|d| d.id == id).unwrap().fields.clone();
+        assert_eq!(f["resample"], "nearest");
+        assert!(!f.contains_key("width") && !f.contains_key("height"), "{f:?}");
+        let p = web_preview::dimensions(&h.state().session.active().unwrap().doc, &params(&f)).unwrap();
+        assert_eq!(p, (240.0, 160.0));
     }
 
     #[test]
@@ -1590,7 +1928,7 @@ mod tests {
             )
         };
         let before = pane(&h);
-        let rects: Vec<egui::Rect> = h.ctx.data(|m| m.get_temp(egui::Id::new("pc-dialog-rects"))).unwrap();
+        let rects: Vec<egui::Rect> = h.ctx.data(|m| m.get_temp(egui::Id::unique("pc-dialog-rects"))).unwrap();
         let corner = rects[0].max - egui::vec2(14.0, 14.0);
         h.event(egui::Event::PointerMoved(corner));
         h.step();
@@ -1667,6 +2005,10 @@ mod tests {
         assert_eq!(checked(&app, "view.lockSlices"), Some(false));
         crate::menus::invoke(&mut app, &ctx, "view.lockSlices", json!({})).unwrap();
         assert_eq!(checked(&app, "view.lockSlices"), Some(true));
+        // Generator is opt-in (Preferences ▸ Plug-ins), as in Photoshop: the menu item is
+        // unavailable until it is enabled.
+        assert!(crate::menus::invoke(&mut app, &ctx, "file.generate.imageAssets", json!({})).is_err());
+        app.run("prefs.set", json!({"path": "plugIns.generatorEnabled", "value": true})).unwrap();
         crate::menus::invoke(&mut app, &ctx, "file.generate.imageAssets", json!({})).unwrap();
         assert_eq!(checked(&app, "file.generate.imageAssets"), Some(true));
         // Form dialogs open for the rest.
@@ -1695,6 +2037,20 @@ mod tests {
         assert!(f.get("__systemPrinters").is_some_and(Value::is_array));
         assert!(params(f).get("__systemPrinters").is_none());
         assert!(params(f).get("__printers").is_none());
+    }
+
+    /// An output path or a preview typed and confirmed in one frame doesn't take the driver's area.
+    #[test]
+    fn the_printable_area_goes_only_with_a_print_to_the_printer() {
+        let area = json!([0.0, 0.0, 842.29, 1191.14]);
+        let mut f = Map::new();
+        f.insert("printable".into(), area.clone());
+        assert_eq!(print_params(&f)["printable"], area);
+        f.insert("output".into(), json!("/tmp/out.pdf"));
+        assert!(print_params(&f).get("printable").is_none());
+        f.insert("output".into(), json!(""));
+        f.insert("dryRun".into(), json!(true));
+        assert!(print_params(&f).get("printable").is_none());
     }
 
     /// #7410: File › Print opens with the settings of the last print, also those remembered from
@@ -1993,6 +2349,28 @@ mod web_playback_tests {
         assert!((began - 0.1).abs() < 1e-9);
     }
 
+    /// #9174: Save for Web reopens on the preview tab chosen last, as Photoshop's does; 2-Up at
+    /// first, and for a remembered value it doesn't know.
+    #[test]
+    fn save_for_web_reopens_on_the_last_preview_tab() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 40, "height": 30})).unwrap();
+        let id = open_web(&mut app);
+        let fields = app.ui.dialog_mut(id).unwrap().fields.clone();
+        assert_eq!(fields["__view"], "2up");
+        let mut h = harness(app, fields);
+        use egui_kittest::kittest::Queryable;
+        h.get_by_label("4-Up").click();
+        h.run_steps(2);
+        assert_eq!(h.state().1["__view"], "4up");
+        let (mut app, _) = h.into_state();
+        let id = open_web(&mut app);
+        assert_eq!(app.ui.dialog_mut(id).unwrap().fields["__view"], "4up");
+        app.ui.web_view = Some("6up".into());
+        let id = open_web(&mut app);
+        assert_eq!(app.ui.dialog_mut(id).unwrap().fields["__view"], "2up");
+    }
+
     #[test]
     fn animated_save_for_web_offers_playback() {
         let mut app = animated_app(8);
@@ -2065,9 +2443,9 @@ mod web_playback_tests {
             h.state_mut().1.insert("__web_frame".into(), json!(frame));
             h.run_steps(2);
             for pane in 0usize..4 {
-                let proxy: (String, WebProxy) = h.ctx.data(|d| d.get_temp(egui::Id::new(("web-proxy", doc_id, pane)))).unwrap();
+                let proxy: (String, WebProxy) = h.ctx.data(|d| d.get_temp(egui::Id::unique(("web-proxy", doc_id, pane)))).unwrap();
                 assert!(proxy.1.0[0][frame] > 0.99, "pane {pane} must show frame {frame}");
-                let cache: WebCache = h.ctx.data(|d| d.get_temp(egui::Id::new(("web-pane", doc_id, pane)))).unwrap();
+                let cache: WebCache = h.ctx.data(|d| d.get_temp(egui::Id::unique(("web-pane", doc_id, pane)))).unwrap();
                 assert!(cache.0.contains(&format!("Some({frame})")));
             }
         }
@@ -2087,7 +2465,7 @@ mod web_playback_tests {
         h.state_mut().1.insert("colorTable".into(), expected_palette.clone());
         h.run_steps(2);
         assert_eq!(h.state().1["colorTable"], expected_palette);
-        let key = egui::Id::new(("web-pane", doc_id, 1usize)).with("indexed-source");
+        let key = egui::Id::unique(("web-pane", doc_id, 1usize)).with("indexed-source");
         let encoded = |ctx: &egui::Context| ctx.data(|d| d.get_temp::<(String, Arc<Optimized>)>(key)).unwrap().1;
         let first = encoded(&h.ctx);
         h.state_mut().1.insert("colorTableEdits".into(), json!({"0":"#ffff00"}));

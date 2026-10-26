@@ -1573,6 +1573,53 @@ fn document_inspect_and_activate_invalid_index() {
     assert_eq!(err_act.to_string(), "no document at index 9");
 }
 
+/// #7103: Photoshop's Select Document by offset (previous is -1, next +1) walks the open
+/// documents in tab order from the active one. Past either end it is refused, not wrapped onto
+/// another document, and bad params leave the active document as it was.
+#[test]
+fn document_activate_by_offset_walks_the_tabs() {
+    let mut s = Session::new();
+    for name in ["a", "b", "c"] {
+        s.execute("file.new", json!({"width": 2, "height": 2, "name": name})).unwrap();
+    }
+    let active = |s: &Session| s.active().unwrap().doc.name.clone();
+    assert_eq!(active(&s), "c");
+    assert_eq!(s.execute("document.activate", json!({"offset": -2})).unwrap(), json!({"document": 0}));
+    assert_eq!(active(&s), "a");
+    assert_eq!(s.execute("document.activate", json!({"offset": 1})).unwrap(), json!({"document": 1}));
+    assert_eq!(active(&s), "b");
+    s.execute("document.activate", json!({"offset": 0})).unwrap();
+    assert_eq!(active(&s), "b");
+    assert_eq!(s.execute("document.activate", json!({"document": 2})).unwrap(), json!({"document": 2}));
+    // A null key counts as omitted.
+    s.execute("document.activate", json!({"document": null, "offset": -1})).unwrap();
+    assert_eq!(active(&s), "b");
+
+    let err = s.execute("document.activate", json!({"offset": 2})).unwrap_err().to_string();
+    assert_eq!(err, "no document 2 after the active one, which is 2 of 3");
+    let err = s.execute("document.activate", json!({"offset": -2})).unwrap_err().to_string();
+    assert_eq!(err, "no document 2 before the active one, which is 2 of 3");
+    for bad in [
+        json!({}),
+        json!({"offset": null}),
+        json!({"offset": 1.5}),
+        json!({"offset": "1"}),
+        json!({"offset": i64::MAX}),
+        json!({"offset": i64::MIN}),
+        json!({"offset": u64::MAX}),
+        json!({"document": 0, "offset": 1}),
+        json!({"document": -1}),
+    ] {
+        assert!(s.execute("document.activate", bad.clone()).is_err(), "{bad}");
+        assert_eq!(active(&s), "b", "{bad}");
+    }
+    // Tabs, not the order the documents were opened in: with "c" dragged to the front, two tabs
+    // before "b" is "c".
+    s.execute("document.move", json!({"document": 2, "to": 0})).unwrap();
+    s.execute("document.activate", json!({"offset": -2})).unwrap();
+    assert_eq!(active(&s), "c");
+}
+
 /// #2166, measured in Photoshop 25.1: a layer mask and the layer pixels keep separate
 /// foreground/background pairs, swapped when the edit target changes.
 #[test]
@@ -1741,4 +1788,60 @@ fn restore_layer_selection_puts_back_what_still_exists() {
     let st = s.active().unwrap();
     assert_eq!((st.active_layer, st.selected_layers(), st.layer_anchor), (None, vec![], None), "no layer selected");
     assert!(Session::new().restore_layer_selection(None, &[], None).is_err(), "no document");
+}
+
+/// #4535: every edit snapshots the document into history. The large payloads it carries (the
+/// XMP packet, Duotone's PSD data, an unsupported adjustment's bytes) are shared between the
+/// snapshot and the document, not copied per state.
+#[test]
+fn history_states_share_large_document_payloads() {
+    use photocraft_doc::{Adjustment, Duotone, DuotoneInk, Layer, LayerContent};
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 16, "height": 16})).unwrap();
+    let raw_id = {
+        let st = s.active_mut().unwrap();
+        let doc = std::sync::Arc::make_mut(&mut st.doc);
+        doc.metadata.xmp = Some("x".repeat(1 << 20).into());
+        doc.duotone = Some(Duotone { inks: vec![DuotoneInk::new("Black", [0.0; 3])], psd_raw: Some(vec![7u8; 1 << 16].into()) });
+        let layer = Layer::new("kept", LayerContent::Adjustment(Adjustment::Unsupported { psd_key: "abcd".into(), raw: vec![9u8; 1 << 16].into() }));
+        let id = layer.id;
+        doc.layers.push(layer);
+        id
+    };
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let st = s.active().unwrap();
+    let before = st.history.state(st.history.past_len() - 1).unwrap();
+    let (now, then) = (&st.doc, &before);
+    assert!(!std::sync::Arc::ptr_eq(now, then), "the edit made a new document");
+    let xmp = |d: &Document| d.metadata.xmp.clone().unwrap();
+    assert!(std::sync::Arc::ptr_eq(&xmp(now), &xmp(then)), "the XMP packet is shared");
+    let duotone = |d: &Document| d.duotone.as_ref().and_then(|d| d.psd_raw.clone()).unwrap();
+    assert!(std::sync::Arc::ptr_eq(&duotone(now), &duotone(then)), "the Duotone data is shared");
+    let raw = |d: &Document| match &d.layer(raw_id).unwrap().content {
+        LayerContent::Adjustment(Adjustment::Unsupported { raw, .. }) => raw.clone(),
+        other => panic!("{other:?}"),
+    };
+    assert!(std::sync::Arc::ptr_eq(&raw(now), &raw(then)), "the adjustment's bytes are shared");
+}
+
+#[test]
+fn the_document_activation_generation_bumps_on_switch_and_back() {
+    let mut s = session_with_doc();
+    let first = s.active().unwrap().doc.id;
+    let g1 = s.active_generation();
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let second = s.active().unwrap().doc.id;
+    assert_ne!(second, first);
+    let g2 = s.active_generation();
+    assert!(g2 > g1, "opening a document activates it");
+    let i = s.documents().iter().position(|d| d.doc.id == first).expect("the first document");
+    assert!(s.set_active(i));
+    let g3 = s.active_generation();
+    assert!(g3 > g2, "switching back is a new activation");
+    // Re-selecting the already-active document is not a switch; neither is an edit.
+    assert!(s.set_active(i));
+    assert_eq!(s.active_generation(), g3);
+    s.execute("layer.new.layer", json!({})).unwrap();
+    assert_eq!(s.active_generation(), g3);
+    assert_eq!(s.active().unwrap().doc.id, first);
 }

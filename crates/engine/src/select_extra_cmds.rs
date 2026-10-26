@@ -250,7 +250,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Transform Selection",
             menu: &["Select"],
             shortcut: None,
-            params: r##"{"rect":[x0,y0,x1,y1]? (frame; default = selection bounds),"quad"|"corners":[[x,y]×4]? (where the frame's corners go: distort/perspective),"matrix":[a,b,c,d,e,f]?,"scaleX":%=100,"scaleY":%=100,"rotate":deg=0,"skewX":deg=0,"skewY":deg=0,"dx":px=0,"dy":px=0,"reference":"center|topLeft|top|topRight|left|right|bottomLeft|bottom|bottomRight"|[x,y]="center","style"|"mesh"|"grid"|"warp":… (warp, as edit.transform.warp),"interpolation":"bilinear|bicubic|nearest"="bilinear"}"##,
+            params: r##"{"rect":[x0,y0,x1,y1]? (frame; default = selection bounds),"quad"|"corners":[[x,y]×4]? (where the frame's corners go: distort/perspective),"matrix":[a,b,c,d,e,f]?,"scaleX":%=100,"scaleY":%=100,"rotate":deg=0,"skewX":deg=0,"skewY":deg=0,"dx":px=0,"dy":px=0,"reference":"center|topLeft|top|topRight|left|right|bottomLeft|bottom|bottomRight"|[x,y]="center","style"|"mesh"|"grid"|"warp":… (warp, as edit.transform.warp),"interpolation":"bilinear|bicubic|nearest|bicubicSharper|bicubicSmoother|bicubicAutomatic"="bilinear" (Photoshop's bicubic variants render as Bicubic)}"##,
             enabled: has_selection,
             run: transform_selection,
             journal: true,
@@ -295,6 +295,26 @@ mod tests {
         })
         .unwrap();
         s
+    }
+
+    /// #8697: Photoshop's bicubic variants are accepted and render as Bicubic, for a selection
+    /// and for a layer (an imported action keeps them).
+    #[test]
+    fn photoshop_bicubic_variants_transform_as_bicubic() {
+        let run = |id: &str, interpolation: &str| {
+            let mut s = landscape(8);
+            s.execute("select.rect", json!({"x": 20, "y": 10, "width": 60, "height": 40, "feather": 3})).unwrap();
+            s.execute(id, json!({"scaleX": 137, "scaleY": 81, "rotate": 7, "interpolation": interpolation})).unwrap();
+            let st = s.active().unwrap();
+            (st.doc.selection.clone(), st.doc.layers.iter().map(|l| l.surface().cloned()).collect::<Vec<_>>())
+        };
+        for id in ["select.transformSelection", "edit.transform"] {
+            let bicubic = run(id, "bicubic");
+            assert_ne!(bicubic, run(id, "bilinear"), "{id}: the interpolation matters here");
+            for variant in ["bicubicSharper", "bicubicSmoother", "bicubicAutomatic"] {
+                assert_eq!(run(id, variant), bicubic, "{id} {variant}");
+            }
+        }
     }
 
     #[test]
