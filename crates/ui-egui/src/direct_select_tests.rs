@@ -517,3 +517,213 @@ fn a_curvature_pen_double_click_through_the_canvas_rounds_a_corner() {
     assert!(k.smooth && k.in_ctrl != k.anchor, "the double-clicked corner is smooth: {k:?}");
     assert!(h.state().ui.pen.is_none(), "and no path was started");
 }
+
+/// A marquee and drag edit every selected shape in one undoable operation.
+#[test]
+fn marquee_selects_and_moves_anchors_on_all_selected_shapes() {
+    let mut app = app(Tool::DirectSelection);
+    let mut ids = Vec::new();
+    for x in [20, 100] {
+        app.run("shape.create", json!({"kind":"rect","rect":[x,20,30,30],"fill":"#ff0000"})).unwrap();
+        ids.push(app.session.active().unwrap().active_layer.unwrap());
+    }
+    app.session.active_mut().unwrap().selected_layers = ids.clone();
+    let before = app.session.active().unwrap().doc.clone();
+    drag(&mut app, [10.0, 10.0], [150.0, 60.0], Modifiers::NONE);
+    assert_eq!(app.ui.direct_selection.anchors.len(), 4);
+    assert_eq!(app.ui.direct_selection.additional.len(), 1);
+    assert_eq!(app.ui.direct_selection.additional[0].1.len(), 4);
+    let n = steps(&app);
+    drag(&mut app, [20.0, 20.0], [25.0, 25.0], Modifiers::NONE);
+    assert_eq!(steps(&app), n + 1);
+    for id in &ids {
+        let get = |d: &photocraft_doc::Document| match &d.layer(*id).unwrap().content {
+            photocraft_doc::LayerContent::Shape(sh) => sh.path.subpaths[0].knots[0].anchor,
+            _ => panic!("shape"),
+        };
+        let a = get(&before);
+        let b = get(&app.session.active().unwrap().doc);
+        assert_eq!(b, Point::new(a.x + 5.0, a.y + 5.0));
+    }
+    assert!(app.session.undo());
+    for id in ids {
+        assert_eq!(app.session.active().unwrap().doc.layer(id), before.layer(id));
+    }
+}
+
+/// Two separate rectangles with stable ids, for cross-path interaction regressions.
+fn two_shapes() -> (PhotocraftApp, [u64; 2]) {
+    let mut app = app(Tool::DirectSelection);
+    let mut ids = Vec::new();
+    for x in [20, 100] {
+        let result = app.run("shape.create", json!({"kind":"rect","rect":[x,20,30,30],"fill":"#ff0000"})).unwrap();
+        ids.push(result["layer"].as_u64().unwrap());
+    }
+    (app, [ids[0], ids[1]])
+}
+
+/// Read a shape path without raster/cache details in assertion failures.
+fn shape_path(app: &PhotocraftApp, id: u64) -> Path {
+    let layer = app.session.active().unwrap().doc.layer(photocraft_doc::LayerId(id)).unwrap();
+    let photocraft_doc::LayerContent::Shape(shape) = &layer.content else { panic!("shape") };
+    shape.path.clone()
+}
+
+/// A plain/Alt anchor click or a segment click replaces the earlier multi-path selection.
+#[test]
+fn replacing_multi_path_selection_does_not_move_other_shapes() {
+    for (point, mods) in [([20.0, 50.0], Modifiers::NONE), ([20.0, 50.0], Modifiers::ALT), ([35.0, 20.0], Modifiers::NONE)] {
+        let (mut app, ids) = two_shapes();
+        drag(&mut app, [10.0, 10.0], [150.0, 25.0], Modifiers::NONE);
+        assert_eq!(app.ui.direct_selection.additional.len(), 1);
+        let before = [shape_path(&app, ids[0]), shape_path(&app, ids[1])];
+        click(&mut app, point, mods);
+        assert!(app.ui.direct_selection.additional.is_empty());
+        drag(&mut app, point, [point[0] + 5.0, point[1] + 5.0], Modifiers::NONE);
+        assert_ne!(shape_path(&app, ids[0]), before[0]);
+        assert_eq!(shape_path(&app, ids[1]), before[1]);
+        assert!(!app.ui.status_error);
+    }
+}
+
+/// Deselecting every primary anchor must not poison a later drag on a secondary path.
+#[test]
+fn promoting_a_path_after_deselecting_primary_anchors_keeps_drag_valid() {
+    let (mut app, ids) = two_shapes();
+    drag(&mut app, [10.0, 10.0], [150.0, 25.0], Modifiers::NONE);
+    click(&mut app, [100.0, 20.0], Modifiers::SHIFT);
+    click(&mut app, [130.0, 20.0], Modifiers::SHIFT);
+    assert!(app.ui.direct_selection.anchors.is_empty());
+    let before = shape_path(&app, ids[1]);
+    let n = steps(&app);
+    drag(&mut app, [20.0, 20.0], [25.0, 25.0], Modifiers::NONE);
+    assert_eq!(shape_path(&app, ids[0]).subpaths[0].knots[0].anchor, Point::new(25.0, 25.0));
+    assert_eq!(shape_path(&app, ids[1]), before);
+    assert_eq!(steps(&app), n + 1);
+    assert!(!app.ui.status_error);
+}
+
+/// Arrow keys still edit selected secondary paths when the primary list becomes empty.
+#[test]
+fn nudging_with_no_primary_anchors_moves_remaining_selected_paths() {
+    let (mut app, ids) = two_shapes();
+    drag(&mut app, [10.0, 10.0], [150.0, 25.0], Modifiers::NONE);
+    click(&mut app, [100.0, 20.0], Modifiers::SHIFT);
+    click(&mut app, [130.0, 20.0], Modifiers::SHIFT);
+    let before = shape_path(&app, ids[1]);
+    assert!(press(&mut app, egui::Key::ArrowRight, Modifiers::NONE));
+    assert_eq!(shape_path(&app, ids[0]).subpaths[0].knots[0].anchor, Point::new(21.0, 20.0));
+    assert_eq!(shape_path(&app, ids[1]), before);
+    assert!(!app.ui.status_error);
+}
+
+/// Shift adds to the current path while keeping selections on other paths.
+#[test]
+fn shift_click_keeps_other_paths_selected() {
+    let (mut app, ids) = two_shapes();
+    drag(&mut app, [10.0, 10.0], [150.0, 25.0], Modifiers::NONE);
+    click(&mut app, [20.0, 50.0], Modifiers::SHIFT);
+    assert_eq!(app.ui.direct_selection.additional.len(), 1);
+    drag(&mut app, [20.0, 50.0], [25.0, 55.0], Modifiers::NONE);
+    assert_eq!(shape_path(&app, ids[0]).subpaths[0].knots[3].anchor, Point::new(25.0, 55.0));
+    assert_eq!(shape_path(&app, ids[1]).subpaths[0].knots[0].anchor, Point::new(105.0, 25.0));
+}
+
+/// Handle edits preserve other selected paths without editing their anchors.
+#[test]
+fn dragging_a_handle_keeps_other_paths_selected_without_moving_them() {
+    let (mut app, ids) = two_shapes();
+    drag(&mut app, [10.0, 10.0], [150.0, 25.0], Modifiers::NONE);
+    app.run("path.moveHandle", json!({"name":"layer","layer":ids[1],"subpath":0,"knot":0,"handle":"out","to":[100,5]})).unwrap();
+    let before = shape_path(&app, ids[0]);
+    drag(&mut app, [100.0, 5.0], [105.0, 5.0], Modifiers::NONE);
+    assert_eq!(app.ui.direct_selection.additional.len(), 1);
+    assert_eq!(shape_path(&app, ids[0]), before);
+    assert_eq!(shape_path(&app, ids[1]).subpaths[0].knots[0].out_ctrl, Point::new(105.0, 5.0));
+}
+
+/// Command serialization accepts only nonempty selections owned by the document.
+#[test]
+fn command_targets_exclude_empty_selections_and_transient_pen_paths() {
+    let ds = super::DirectSelection {
+        target: Some(PathRef::Work),
+        additional: vec![(PathRef::Layer(1), vec![]), (PathRef::Layer(2), vec![[0, 0]]), (PathRef::Pen, vec![[0, 1]])],
+        ..Default::default()
+    };
+    assert_eq!(super::anchor_targets(&ds), vec![json!({"name":"layer","layer":2,"anchors":[[0,0]]})]);
+}
+
+/// Build an uncommitted two-anchor Pen path alongside the document's paths.
+fn with_pending_pen(app: &mut PhotocraftApp) {
+    app.ui.pen = Some(crate::vector_ui::PenPath { knots: vec![[[70.0, 80.0]; 3], [[80.0, 80.0]; 3]], ..Default::default() });
+}
+
+/// Mixed marquees edit document paths together without swallowing edits into a Pen preview.
+#[test]
+fn mixed_pen_and_document_marquee_moves_only_document_paths() {
+    let (mut app, ids) = two_shapes();
+    with_pending_pen(&mut app);
+    let pen = app.ui.pen.clone();
+    super::marquee(&mut app, [10.0, 10.0], [150.0, 100.0], false);
+    assert_ne!(app.ui.direct_selection.target, Some(PathRef::Pen));
+    assert_eq!(super::anchor_targets(&app.ui.direct_selection).len(), 2);
+    drag(&mut app, [20.0, 20.0], [25.0, 25.0], Modifiers::NONE);
+    assert_eq!(shape_path(&app, ids[0]).subpaths[0].knots[0].anchor, Point::new(25.0, 25.0));
+    assert_eq!(shape_path(&app, ids[1]).subpaths[0].knots[0].anchor, Point::new(105.0, 25.0));
+    assert_eq!(app.ui.pen, pen);
+}
+
+/// Pen-only selection stays local; Shift cannot mix it into a document selection in either order.
+#[test]
+fn pen_only_marquee_and_shift_domain_changes_stay_separate() {
+    let (mut app, _) = two_shapes();
+    with_pending_pen(&mut app);
+    super::marquee(&mut app, [65.0, 75.0], [85.0, 85.0], false);
+    assert_eq!(app.ui.direct_selection.target, Some(PathRef::Pen));
+    assert_eq!(app.ui.direct_selection.anchors.len(), 2);
+    let n = steps(&app);
+    drag(&mut app, [70.0, 80.0], [75.0, 85.0], Modifiers::NONE);
+    assert_eq!(app.ui.pen.as_ref().unwrap().knots[0][0], [75.0, 85.0]);
+    assert_eq!(steps(&app), n);
+    super::marquee(&mut app, [10.0, 10.0], [150.0, 25.0], true);
+    assert_ne!(app.ui.direct_selection.target, Some(PathRef::Pen));
+    let targets = super::anchor_targets(&app.ui.direct_selection);
+    assert_eq!(targets.len(), 2);
+    super::marquee(&mut app, [65.0, 75.0], [90.0, 95.0], true);
+    assert_eq!(super::anchor_targets(&app.ui.direct_selection), targets);
+    assert!(app.ui.direct_selection.additional.iter().all(|(t, _)| *t != PathRef::Pen));
+}
+
+/// Anchor selection and dragging work with either zero or one selected layer.
+#[test]
+fn marquee_selects_across_shapes_regardless_of_layer_selection() {
+    for active in [false, true] {
+        let mut app = app(Tool::DirectSelection);
+        let mut ids = Vec::new();
+        for x in [20, 100] {
+            app.run("shape.create", json!({"kind":"rect","rect":[x,20,30,30],"fill":"#ff0000"})).unwrap();
+            ids.push(app.session.active().unwrap().active_layer.unwrap());
+        }
+        if !active {
+            let st = app.session.active_mut().unwrap();
+            st.active_layer = None;
+            st.selected_layers.clear();
+        }
+        assert_eq!(app.session.active().unwrap().selected_layers().len(), usize::from(active));
+        drag(&mut app, [10.0, 10.0], [150.0, 60.0], Modifiers::NONE);
+        assert_eq!(app.ui.direct_selection.anchors.len(), 4);
+        assert_eq!(app.ui.direct_selection.additional.len(), 1);
+        assert_eq!(app.ui.direct_selection.additional[0].1.len(), 4);
+        let before = app.session.active().unwrap().doc.clone();
+        drag(&mut app, [20.0, 20.0], [25.0, 25.0], Modifiers::NONE);
+        for id in ids {
+            let get = |doc: &photocraft_doc::Document| match &doc.layer(id).unwrap().content {
+                photocraft_doc::LayerContent::Shape(sh) => sh.path.subpaths[0].knots[0].anchor,
+                _ => panic!("shape"),
+            };
+            let a = get(&before);
+            let b = get(&app.session.active().unwrap().doc);
+            assert_eq!(b, Point::new(a.x + 5.0, a.y + 5.0));
+        }
+    }
+}
