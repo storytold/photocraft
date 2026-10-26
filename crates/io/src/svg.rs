@@ -438,12 +438,16 @@ struct Canvas {
     scale: f32,
 }
 
-fn canvas(tree: &usvg::Tree, warnings: &mut Vec<String>) -> Canvas {
+/// The canvas for `tree` drawn at `want` × its own size (#8910; 1 = its own size), scaled down
+/// further to fit [`MAX_SIDE`] when needed.
+fn canvas(tree: &usvg::Tree, want: f32, warnings: &mut Vec<String>) -> Canvas {
     let (w, h) = (tree.size().width().max(1.0), tree.size().height().max(1.0));
+    let want = if want.is_finite() && want > 0.0 { want } else { 1.0 };
     let limit = MAX_SIDE as f32;
-    let scale = (limit / w).min(limit / h).min(1.0);
-    if scale < 1.0 {
-        warnings.push(format!("SVG: the {w:.0} × {h:.0} px drawing was scaled down to fit {MAX_SIDE} px"));
+    let fit = (limit / w).min(limit / h);
+    let scale = want.min(fit);
+    if scale < want {
+        warnings.push(format!("SVG: the {:.0} × {:.0} px drawing was scaled down to fit {MAX_SIDE} px", w * want, h * want));
     }
     let side = |v: f32| ((v * scale).round() as u32).clamp(1, MAX_SIDE);
     Canvas { size: Size::new(side(w), side(h)), scale }
@@ -457,20 +461,33 @@ pub fn import_svg(name: &str, bytes: &[u8]) -> Result<ImportResult, IoError> {
 /// Opens an SVG while rasterising any subtrees deeper than `max_group_depth` into single pixel
 /// layers. The document's hard nesting limit remains [`MAX_GROUP_DEPTH`].
 pub fn import_svg_with_group_depth(name: &str, bytes: &[u8], max_group_depth: usize) -> Result<ImportResult, IoError> {
-    import_parsed(name, parse(bytes)?, max_group_depth)
+    import_svg_scaled(name, bytes, max_group_depth, 1.0)
 }
 
+/// [`import_svg_with_group_depth`] drawn at `scale` × the drawing's own size (#8910): shapes stay
+/// shapes, so a small icon opens large and sharp.
+pub fn import_svg_scaled(name: &str, bytes: &[u8], max_group_depth: usize, scale: f32) -> Result<ImportResult, IoError> {
+    import_parsed_with_budget(name, parse(bytes)?, max_group_depth, MAX_PIXEL_BYTES, scale)
+}
+
+/// The drawing's own size in px (its width and height, or viewBox), as it opens at scale 1.
+pub fn drawing_size(bytes: &[u8]) -> Result<(f32, f32), IoError> {
+    let tree = parse(bytes)?.tree;
+    Ok((tree.size().width(), tree.size().height()))
+}
+
+#[cfg(test)]
 fn import_parsed(name: &str, parsed: Parsed, max_group_depth: usize) -> Result<ImportResult, IoError> {
-    import_parsed_with_budget(name, parsed, max_group_depth, MAX_PIXEL_BYTES)
+    import_parsed_with_budget(name, parsed, max_group_depth, MAX_PIXEL_BYTES, 1.0)
 }
 
-fn import_parsed_with_budget(name: &str, parsed: Parsed, max_group_depth: usize, pixel_budget: u64) -> Result<ImportResult, IoError> {
+fn import_parsed_with_budget(name: &str, parsed: Parsed, max_group_depth: usize, pixel_budget: u64, scale: f32) -> Result<ImportResult, IoError> {
     let Parsed { tree, fontless_text } = parsed;
     let mut warnings = Vec::new();
     if fontless_text {
         warnings.push("SVG: the text needs a font and none is installed, so it was dropped".to_string());
     }
-    let cv = canvas(&tree, &mut warnings);
+    let cv = canvas(&tree, scale, &mut warnings);
     let mut doc = Document::new(name, cv.size, ColorMode::Rgb, SampleType::U8);
     let fmt = doc.pixel_format();
     let global = tiny_skia::Transform::from_scale(cv.scale, cv.scale);
@@ -497,7 +514,7 @@ fn import_parsed_with_budget(name: &str, parsed: Parsed, max_group_depth: usize,
 /// the origin. Smart objects use it to stay sharp at any placement.
 pub fn rasterize(bytes: &[u8], scale: f32) -> Result<photocraft_compose::Buffer, IoError> {
     let tree = parse(bytes)?.tree;
-    let cv = canvas(&tree, &mut Vec::new());
+    let cv = canvas(&tree, 1.0, &mut Vec::new());
     let k = cv.scale * scale.clamp(1.0 / 64.0, 64.0);
     let side = |v: f32| ((v * k).ceil() as u32).max(1);
     let (w, h) = (side(tree.size().width()), side(tree.size().height()));
@@ -990,6 +1007,28 @@ fn knots(path: &tiny_skia::Path) -> Vec<Subpath> {
 mod tests {
     use super::*;
 
+    /// #8910: an SVG opens at a chosen scale of its own size, as shapes (sharp at any size); the
+    /// size limit still applies, and a nonsense scale opens it at its own size.
+    #[test]
+    fn opens_at_a_chosen_scale() {
+        let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10"><rect x="5" y="2" width="10" height="6" fill="#f00"/></svg>"##;
+        assert_eq!(drawing_size(svg).unwrap(), (20.0, 10.0));
+        let r = import_svg_scaled("a.svg", svg, MAX_GROUP_DEPTH, 4.0).unwrap();
+        assert_eq!((r.document.size.width, r.document.size.height), (80, 40));
+        let bounds = r.document.layers.iter().find_map(|l| match &l.content {
+            LayerContent::Shape(sh) => sh.path.control_bounds(),
+            _ => None,
+        });
+        assert_eq!(bounds, Some((20.0, 8.0, 60.0, 32.0)), "the rect scales with the canvas, as a shape");
+        for bad in [0.0, -2.0, f32::NAN, f32::INFINITY] {
+            let r = import_svg_scaled("a.svg", svg, MAX_GROUP_DEPTH, bad).unwrap();
+            assert_eq!((r.document.size.width, r.document.size.height), (20, 10), "{bad}");
+        }
+        let r = import_svg_scaled("a.svg", svg, MAX_GROUP_DEPTH, 10_000.0).unwrap();
+        assert_eq!(r.document.size.width, MAX_SIDE);
+        assert!(r.warnings.iter().any(|w| w.contains("scaled down")), "{:?}", r.warnings);
+    }
+
     #[test]
     fn sniffing_accepts_svg_and_rejects_other_xml() {
         assert!(is_svg(b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>"));
@@ -1354,7 +1393,7 @@ mod tests {
         svg.push_str("</svg>");
         // Enough for one retained 256×256 RGBA8 surface, not eight of them.
         let budget = 256u64 * 256 * 4;
-        let result = import_parsed_with_budget("budget", parse(svg.as_bytes()).unwrap(), MAX_GROUP_DEPTH, budget).unwrap();
+        let result = import_parsed_with_budget("budget", parse(svg.as_bytes()).unwrap(), MAX_GROUP_DEPTH, budget, 1.0).unwrap();
         assert_eq!(result.document.layers.len(), 1, "one U8 surface fills the retained-byte allowance");
         assert_eq!(result.document.layers[0].name, "g0");
         assert!(result.warnings.iter().any(|warning| warning.contains("pixel memory")), "{:?}", result.warnings);
@@ -1374,7 +1413,7 @@ mod tests {
             <g id="oversized" mask="url(#big)"><rect width="5100" height="4800" fill="red"/></g>
             <g id="small" mask="url(#small-mask)"><rect width="32" height="32" fill="blue"/></g>
         </svg>"##;
-        let result = import_parsed_with_budget("budget", parse(svg).unwrap(), MAX_GROUP_DEPTH, 64 * 64 * 4).unwrap();
+        let result = import_parsed_with_budget("budget", parse(svg).unwrap(), MAX_GROUP_DEPTH, 64 * 64 * 4, 1.0).unwrap();
         assert_eq!(result.document.layers.len(), 1, "the oversized group must not debit the budget");
         assert_eq!(result.document.layers[0].name, "small");
         assert!(result.warnings.iter().any(|w| w.contains("too large to rasterise")), "{:?}", result.warnings);
@@ -1391,7 +1430,7 @@ mod tests {
             <g id="large" mask="url(#big)"><rect width="256" height="256" fill="red"/></g>
             <g id="small" mask="url(#little)"><rect width="16" height="16" fill="blue"/></g>
         </svg>"##;
-        let result = import_parsed_with_budget("budget", parse(svg).unwrap(), MAX_GROUP_DEPTH, 32 * 32 * 4).unwrap();
+        let result = import_parsed_with_budget("budget", parse(svg).unwrap(), MAX_GROUP_DEPTH, 32 * 32 * 4, 1.0).unwrap();
         assert_eq!(result.document.layers.len(), 1);
         assert_eq!(result.document.layers[0].name, "small");
         assert!(result.warnings.iter().any(|w| w.contains("some rasterised elements were omitted")), "{:?}", result.warnings);
@@ -1401,7 +1440,7 @@ mod tests {
     fn huge_drawings_scale_to_the_side_limit() {
         let tree = parse(b"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 100000 50000\"/>").unwrap().tree;
         let mut w = Vec::new();
-        let cv = canvas(&tree, &mut w);
+        let cv = canvas(&tree, 1.0, &mut w);
         assert_eq!((cv.size.width, cv.size.height), (MAX_SIDE, MAX_SIDE / 2));
         assert_eq!(w.len(), 1);
     }

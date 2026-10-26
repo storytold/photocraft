@@ -246,7 +246,14 @@ impl PhotocraftApp {
         self.ask_file(FileDialogRequest::Open { multiple: true, initial_dir, extensions: None }, |app, answer| {
             match answer {
                 FileDialogAnswer::Paths(paths) => {
-                    app.open_paths(&paths);
+                    // An SVG asks for its size first, as Photoshop's Rasterize SVG does (#8910).
+                    let (svgs, rest): (Vec<String>, Vec<String>) = paths.into_iter().partition(|p| crate::svg_open_ui::asks(p));
+                    app.open_paths(&rest);
+                    for path in svgs {
+                        if let Err(e) = crate::svg_open_ui::ask(app, &path) {
+                            app.open_failed(&crate::file_open::display_name(&path), &e);
+                        }
+                    }
                 }
                 FileDialogAnswer::Contents(name, bytes) => app.open_contents(vec![(name, bytes)]),
                 FileDialogAnswer::ContentsMany(files) => app.open_contents(files),

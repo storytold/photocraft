@@ -224,7 +224,12 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
         }
         "file.open" => {
             if let Some(path) = params.get("path").and_then(Value::as_str) {
-                open_path(app, path)
+                match params.get("svgScale").and_then(Value::as_f64) {
+                    // An SVG at a size of the caller's own, as the Open SVG dialog opens it (#8910).
+                    Some(k) if k.is_finite() && k > 0.0 => app.open_svg_scaled(path, k as f32).map(|w| json!({"warnings": w})),
+                    Some(_) => Err("`svgScale` must be a positive number".into()),
+                    None => open_path(app, path),
+                }
             } else {
                 app.open_dialog_file()
             }

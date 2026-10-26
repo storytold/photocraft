@@ -1093,3 +1093,47 @@ fn opening_an_open_file_again_shows_its_tab() {
         let _ = std::fs::remove_dir_all(&d);
     }
 }
+
+/// #8910: an SVG picked in File › Open asks for its size, Width and Height starting at the
+/// drawing's own size, and opens at the size chosen; `file.open` from a script never asks.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn an_svg_asks_for_its_size_when_picked_but_not_from_a_script() {
+    let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10"><rect x="5" y="2" width="10" height="6" fill="#f00"/></svg>"##;
+    let (_dir, paths) = files("svg-size", &["icon.svg", "logo.svg", "badge.svg"], svg);
+    let real = |answers: Vec<Option<FileDialogAnswer>>| {
+        let services = Services {
+            import: Some(Box::new(|name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions| {
+                photocraft_io::import_with_options(name, bytes, opts).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())
+            })),
+            file_dialog: Some(file_dialog::fake(answers).0),
+            ..Default::default()
+        };
+        PhotocraftApp::new(photocraft_engine::Session::new(), services)
+    };
+    let size = |app: &PhotocraftApp| app.session.active().map(|d| (d.doc.size.width, d.doc.size.height));
+    // Picked in File › Open: a dialog at 20 × 10, nothing open yet.
+    let mut app = real(vec![Some(FileDialogAnswer::Paths(vec![paths[0].clone()]))]);
+    app.open_dialog_file().unwrap();
+    answer(&mut app);
+    assert!(app.session.documents().is_empty(), "nothing opens before the answer");
+    let d = app.ui.dialogs.last().expect("the Open SVG dialog").clone();
+    assert!(crate::svg_open_ui::owns(&d.fields));
+    assert_eq!((d.fields["width"].as_f64(), d.fields["height"].as_f64()), (Some(20.0), Some(10.0)));
+    // Width 80 keeps the proportions: an 80 × 40 document whose shapes scaled with it.
+    if let Some(open) = app.ui.dialogs.iter_mut().find(|x| x.id == d.id) {
+        open.fields.insert("width".into(), json!(80));
+    }
+    crate::dialogs::confirm(&mut app, d.id).unwrap();
+    assert_eq!(size(&app), Some((80, 40)));
+    assert_eq!(app.session.active().unwrap().path.as_deref(), Some(paths[0].as_str()));
+    // A script's `file.open` opens at once: the drawing's own size, or `svgScale` × it.
+    let ctx = egui::Context::default();
+    let mut app = real(Vec::new());
+    menus::invoke(&mut app, &ctx, "file.open", json!({"path": paths[1]})).unwrap();
+    assert!(app.ui.dialogs.is_empty());
+    assert_eq!(size(&app), Some((20, 10)));
+    menus::invoke(&mut app, &ctx, "file.open", json!({"path": paths[2], "svgScale": 2.5})).unwrap();
+    assert_eq!(size(&app), Some((50, 25)));
+    assert!(menus::invoke(&mut app, &ctx, "file.open", json!({"path": paths[2], "svgScale": -1})).is_err());
+}

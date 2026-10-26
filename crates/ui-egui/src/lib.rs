@@ -225,6 +225,7 @@ pub mod stroke_trace;
 pub mod stroke_trail;
 pub mod stroke_ui;
 pub mod stylus;
+pub mod svg_open_ui;
 pub mod swap_arrow;
 pub mod swatches_ui;
 pub mod symmetry_ui;
@@ -1010,6 +1011,9 @@ pub struct PhotocraftApp {
     /// Where each document was last saved or exported to through a dialog (#1826): its next Save
     /// As or export dialog starts there rather than beside the document. Session-only.
     pub(crate) save_dirs: HashMap<photocraft_doc::DocId, std::path::PathBuf>,
+    /// An SVG being opened draws at this × its own size (the Open SVG dialog's answer, #8910;
+    /// 1 otherwise). Set only for the open it answers (`open_svg_scaled`).
+    pub(crate) svg_scale: f32,
     /// Each document's own file as it was when the document was opened from it or saved to it
     /// (see [`FileStamp`]).
     pub(crate) disk_stamps: HashMap<photocraft_doc::DocId, (String, FileStamp)>,
@@ -1211,6 +1215,7 @@ impl PhotocraftApp {
             file_dialog: None,
             tiff_options: None,
             save_dirs: HashMap::new(),
+            svg_scale: 1.0,
             disk_stamps: HashMap::new(),
             targa_options: None,
             jpeg_options: None,
@@ -1680,7 +1685,7 @@ impl PhotocraftApp {
             return Ok(Vec::new());
         }
         let import = self.services.import.as_ref().ok_or("no importer configured")?;
-        let opts = photocraft_engine::jobs::import_options(self.session.prefs());
+        let opts = photocraft_io::ImportOptions { svg_scale: self.svg_scale, ..photocraft_engine::jobs::import_options(self.session.prefs()) };
         let (mut doc, warnings, damaged) = if photocraft_io::is_psd(bytes) {
             // Read PSD damage as structured information in the same decode, not by
             // retrying an error or matching the text of a compatibility warning.

@@ -333,11 +333,13 @@ pub struct ImportOptions {
     pub max_group_depth: usize,
     /// The demosaic method camera raws are developed with.
     pub demosaic: raw::Demosaic,
+    /// An SVG opens at this × its drawing's own size (1; File › Open asks, #8910).
+    pub svg_scale: f32,
 }
 
 impl Default for ImportOptions {
     fn default() -> Self {
-        ImportOptions { max_group_depth: photocraft_doc::MAX_GROUP_DEPTH, demosaic: raw::Demosaic::default() }
+        ImportOptions { max_group_depth: photocraft_doc::MAX_GROUP_DEPTH, demosaic: raw::Demosaic::default(), svg_scale: 1.0 }
     }
 }
 
@@ -432,7 +434,7 @@ fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, o
         return raw::import_raw_demosaic(name, bytes, opts.demosaic);
     }
     if is_svg_input(name, bytes) {
-        return svg::import_svg_with_group_depth(name, bytes, opts.max_group_depth);
+        return svg::import_svg_scaled(name, bytes, opts.max_group_depth, opts.svg_scale);
     }
     // A `.psd`/`.psb`/`.psdt` with no raster signature keeps the PSD error instead of
     // `codec: unrecognized image format` (#5258). Magic already returned above.

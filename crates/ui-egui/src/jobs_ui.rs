@@ -200,7 +200,7 @@ pub fn run(app: &mut PhotocraftApp, id: &str, params: Value) -> Result<Value, St
 /// replaces it when decoded. `path` is remembered for File › Save and Open Recent.
 pub fn start_open(app: &mut PhotocraftApp, name: &str, path: Option<String>, source: OpenSource) -> Result<(), String> {
     let name = &app.open_name(name);
-    match app.session.start_open_for_user(name, source).map_err(|e| e.to_string())? {
+    match app.session.start_open_for_user_scaled(name, source, app.svg_scale).map_err(|e| e.to_string())? {
         // Inline (wasm): finish now, like a background open that ended at once.
         Started::Done(v) => finish_open(app, name, path.as_deref(), &v, None),
         Started::Job(job) => {

@@ -145,6 +145,15 @@ impl PhotocraftApp {
         self.open_file(path, &bytes)
     }
 
+    /// Open the SVG at `path` drawn at `scale` × its own size (the Open SVG dialog's answer and
+    /// `file.open`'s `svgScale`, #8910).
+    pub fn open_svg_scaled(&mut self, path: &str, scale: f32) -> Result<Vec<String>, String> {
+        self.svg_scale = if scale.is_finite() && scale > 0.0 { scale } else { 1.0 };
+        let r = self.open_path(path);
+        self.svg_scale = 1.0;
+        r
+    }
+
     #[cfg(target_arch = "wasm32")]
     pub fn open_path(&mut self, path: &str) -> Result<Vec<String>, String> {
         Err(format!("cannot open paths on the web: {path}"))
@@ -285,7 +294,13 @@ impl PhotocraftApp {
         // Opens append: a background open's tab, or a document.
         let (docs, opens) = (self.session.documents().len(), self.jobs.opens.len());
         if f.path().is_absolute() {
-            self.open_path(&path_text(f.path(), false)?)?;
+            let path = path_text(f.path(), false)?;
+            // A dropped SVG asks for its size first (#8910).
+            if crate::svg_open_ui::asks(&path) {
+                crate::svg_open_ui::ask(self, &path)?;
+                return Ok(false);
+            }
+            self.open_path(&path)?;
         } else {
             self.open_bytes(name, &crate::read_dropped(&**f)?)?;
         }

@@ -502,6 +502,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     }
                 }
                 DialogKind::Command if crate::new_guide_ui::owns(&fields) => crate::new_guide_ui::body(ui, &mut fields),
+                DialogKind::Command if crate::svg_open_ui::owns(&fields) => crate::svg_open_ui::body(ui, &mut fields),
                 DialogKind::Command if fields.contains_key("__form") => crate::view_cmds::form_body(ui, &mut fields),
                 DialogKind::Command => {}
                 DialogKind::LayerStyle => crate::layer_style::body(app, ui, &mut fields),
@@ -768,6 +769,7 @@ const ROUTES: &[fn(&Fields) -> bool] = &[
     crate::variables_ui::owns,
     crate::file_ui::owns,
     crate::new_guide_ui::owns,
+    crate::svg_open_ui::owns,
     crate::color_picker_ui::owns,
     crate::color_range_ui::owns,
     crate::prefs_ui::owns,
@@ -862,6 +864,7 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
         DialogKind::Command if crate::variables_ui::owns(&d.fields) => crate::variables_ui::confirm(app, &d.fields),
         DialogKind::Command if crate::file_ui::owns(&d.fields) => crate::file_ui::confirm(app, &d.fields),
         DialogKind::Command if crate::new_guide_ui::owns(&d.fields) => crate::new_guide_ui::confirm(app, &d.fields),
+        DialogKind::Command if crate::svg_open_ui::owns(&d.fields) => crate::svg_open_ui::confirm(app, &d.fields),
         DialogKind::Command if crate::color_picker_ui::owns(&d.fields) => crate::color_picker_ui::confirm(app, &d.fields),
         DialogKind::Command if crate::color_range_ui::owns(&d.fields) => crate::color_range_ui::confirm(app, &d.fields),
         DialogKind::Command if crate::prefs_ui::owns(&d.fields) => crate::prefs_ui::confirm(app, &d.fields),
