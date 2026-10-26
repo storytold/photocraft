@@ -41,9 +41,9 @@ fn layer_color_context_menu_edits_the_clicked_layer_and_preserves_multi_selectio
         let (mut h, red, other) = harness(crate::theme::ThemeKind::Pro, ppp);
         let at = row(&h, red).center();
         click(&mut h, at, PointerButton::Secondary, Modifiers::NONE);
-        let at = h.get_by_label("Color ⏵").rect().center();
+        let at = h.query_all_by_role_and_label(egui::accesskit::Role::Button, "Color").last().expect("the Color submenu").rect().center();
         click(&mut h, at, PointerButton::Primary, Modifiers::NONE);
-        let at = h.get_by_label("Seafoam").rect().center();
+        let at = h.get_by_role_and_label(egui::accesskit::Role::Button, "Seafoam").rect().center();
         click(&mut h, at, PointerButton::Primary, Modifiers::NONE);
         let st = h.state().session.active().unwrap();
         assert_eq!(st.active_layer, Some(red));
@@ -55,9 +55,9 @@ fn layer_color_context_menu_edits_the_clicked_layer_and_preserves_multi_selectio
         assert_eq!(common_color(h.state(), clicked, true), None);
         let at = row(&h, red).center();
         click(&mut h, at, PointerButton::Secondary, Modifiers::NONE);
-        let at = h.get_by_label("Color ⏵").rect().center();
+        let at = h.query_all_by_role_and_label(egui::accesskit::Role::Button, "Color").last().expect("the Color submenu").rect().center();
         click(&mut h, at, PointerButton::Primary, Modifiers::NONE);
-        let at = h.get_by_label("Indigo").rect().center();
+        let at = h.get_by_role_and_label(egui::accesskit::Role::Button, "Indigo").rect().center();
         click(&mut h, at, PointerButton::Primary, Modifiers::NONE);
         let st = h.state().session.active().unwrap();
         assert_eq!(st.selected_layers().len(), 2);
@@ -119,7 +119,7 @@ fn right_clicking_eye_opens_color_choices_without_toggling_visibility() {
     let r = row(&h, red);
     let eye = pos2(r.left() + 17.0, r.center().y);
     click(&mut h, eye, PointerButton::Secondary, Modifiers::NONE);
-    let blue = h.get_by_label("Blue").rect().center();
+    let blue = h.get_by_role_and_label(egui::accesskit::Role::Button, "Blue").rect().center();
     click(&mut h, blue, PointerButton::Primary, Modifiers::NONE);
 
     let st = h.state().session.active().unwrap();
@@ -136,6 +136,6 @@ fn layer_color_menu_marks_only_the_common_color() {
         }
     });
     h.run();
-    assert_eq!(h.get_by_label("Blue").accesskit_node().toggled(), Some(egui::accesskit::Toggled::True));
-    assert_eq!(h.get_by_label("Red").accesskit_node().toggled(), Some(egui::accesskit::Toggled::False));
+    assert_eq!(h.get_by_role_and_label(egui::accesskit::Role::Button, "Blue").accesskit_node().toggled(), Some(egui::accesskit::Toggled::True));
+    assert_eq!(h.get_by_role_and_label(egui::accesskit::Role::Button, "Red").accesskit_node().toggled(), Some(egui::accesskit::Toggled::False));
 }

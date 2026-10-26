@@ -514,6 +514,29 @@ fn define_brush_from_selection_survives_allocation_failure() {
 }
 
 #[test]
+fn define_brush_from_selection_survives_failure_of_the_second_allocation() {
+    // Review of #5469: fail_next_for_test trips on the first buffer, so the second fallible
+    // call (the selection-mask read) did not have its own regression. Count the tip buffer as
+    // a clean attempt and fail the mask read instead; both report the same command purpose,
+    // and the command must still bow out before touching anything.
+    let mut s = session(40, 40);
+    s.execute("select.rect", json!({"x": 5, "y": 5, "width": 20, "height": 20})).unwrap();
+    let pixels_before = surface(&s);
+    let brush_before = s.tools.brush.clone();
+    let presets_before = s.tools.presets.clone();
+    let history_before = s.active().unwrap().history.past_len();
+    crate::allocation::fail_after_for_test(1);
+    let result = s.execute("brush.defineFromSelection", json!({"name": "Blob"}));
+    let _ = crate::allocation::capacity::<u8>(0, "reset failpoint");
+    assert!(result.is_err(), "an allocation failure must be reported, not panic");
+    assert!(result.as_ref().is_err_and(|e| e.to_string().contains("not enough memory for defining a brush from the selection")));
+    assert_eq!(s.tools.brush, brush_before, "the current brush is unchanged");
+    assert_eq!(s.tools.presets, presets_before, "the preset list is unchanged");
+    assert_eq!(s.active().unwrap().history.past_len(), history_before, "no history step was recorded");
+    assert!(same_pixels(&pixels_before, &surface(&s), s.active().unwrap().doc.bounds()), "the document pixels are unchanged");
+}
+
+#[test]
 fn works_on_cmyk_and_16_bit() {
     for (mode, depth) in [("cmyk", 8), ("rgb", 16), ("grayscale", 32)] {
         let mut s = Session::new();
@@ -752,6 +775,57 @@ fn live_stroke_equals_the_commit_at_every_zoom_with_smoothing() {
                 assert!(done.rgba(40, 60)[0] < 0.1 && (0.05..0.9).contains(&done.rgba(40, 60 - 14)[2]), "{label}: soft stroke");
             }
         }
+    }
+}
+
+#[test]
+fn pose_axes_commands_keep_minimal_patches_legacy_alias_and_preset_replay() {
+    let mut s = session(100, 80);
+    let input = StrokePoint { tilt_x: 13.0, tilt_y: -27.0, pressure: 0.71, rotation: 67.0, ..Default::default() };
+    s.execute("tools.setBrush", json!({"brush": {"pose": {"enabled": true, "tiltX": 45, "tiltY": -18, "overrideTilt": true}}})).unwrap();
+    assert_eq!(photocraft_paint::dynamics::apply_pose(&s.tools.brush, input), StrokePoint { tilt_x: 45.0, tilt_y: -18.0, ..input });
+    let before = s.tools.brush.clone();
+    s.execute("tools.setBrush", json!({"pose": {"overrideTiltX": false}})).unwrap();
+    assert_eq!(
+        photocraft_paint::dynamics::apply_pose(&s.tools.brush, input),
+        StrokePoint { tilt_y: -18.0, ..input },
+        "turning X off retains Y override and live X input"
+    );
+    let mixed = s.tools.brush.clone();
+    assert_eq!(brush_patch(&before, &mixed), json!({"pose": {"overrideTiltX": false}}), "the derived combined flag must not enter an axis-only patch");
+    let wire = s.execute("brush.get", json!({})).unwrap();
+    assert_eq!(wire["pose"]["overrideTiltX"], false);
+    assert_eq!(wire["pose"]["overrideTiltY"], true);
+    assert_eq!(wire["pose"]["overrideTilt"], false, "legacy readback reports whether both axes are overridden");
+    s.execute("brush.presets.save", json!({"name": "Independent pose"})).unwrap();
+    s.execute("tools.setBrush", json!({"brush": {"pose": {"overrideTilt": false}}})).unwrap();
+    assert_eq!(photocraft_paint::dynamics::apply_pose(&s.tools.brush, input), input, "legacy false clears both axes even after axis editing");
+    s.execute("tools.setBrush", json!({"preset": "Independent pose"})).unwrap();
+    assert_eq!(s.tools.brush.pose, mixed.pose, "preset picking preserves independent state");
+    // Explicit axis keys win over a legacy combined key in the same command.
+    s.execute("tools.setBrush", json!({"brush": {"pose": {"overrideTilt": true, "overrideTiltY": false}}})).unwrap();
+    assert_eq!(photocraft_paint::dynamics::apply_pose(&s.tools.brush, input), StrokePoint { tilt_x: 45.0, ..input });
+    let mut replay = Session::new();
+    for (id, params) in &s.journal {
+        replay.execute(id, params.clone()).unwrap();
+    }
+    assert_eq!(replay.tools.brush, s.tools.brush, "recorded commands reproduce the same axes");
+}
+
+#[test]
+fn pose_axes_invalid_flags_fail_atomically() {
+    let mut s = session(100, 80);
+    let before = s.tools.brush.clone();
+    let n = s.journal.len();
+    for pose in [
+        json!({"overrideTiltX": "yes"}),
+        json!({"overrideTiltY": null}),
+        json!({"overrideTiltX": true, "overrideTiltY": 1}),
+        json!({"overrideTilt": "yes", "overrideTiltX": false}),
+    ] {
+        assert!(s.execute("tools.setBrush", json!({"brush": {"pose": pose}})).is_err());
+        assert_eq!(s.tools.brush, before);
+        assert_eq!(s.journal.len(), n, "a failed update records no command");
     }
 }
 
@@ -1185,6 +1259,20 @@ fn the_remembered_brush_restores_at_launch() {
     bad.prefs.edit(|p| p.last_brush = json!({"brush": {"size": "huge"}}));
     restore_brush(&mut bad);
     assert_eq!(bad.tools.brush.size, Session::new().tools.brush.size);
+}
+
+/// #6212: a remembered brush reads back clamped to its controls' ranges; one that fails the
+/// `tools.setBrush` checks, or isn't a brush at all, doesn't read back.
+#[test]
+fn restored_brush_settings_are_clamped_or_rejected() {
+    let s = Session::new();
+    let b = restored_settings(&s, &json!({"size": -4.0, "opacity": 7.0, "flow": -1.0, "hardness": 0.25, "smoothing": {"amount": 9.0}})).unwrap();
+    assert_eq!((b.size, b.opacity, b.flow, b.hardness, b.smoothing.amount), (1.0, 1.0, 0.0, 0.25, 1.0));
+    let round = restored_settings(&s, &remembered_settings(&b).unwrap()).unwrap();
+    assert_eq!(round, b, "a remembered brush reads back as it was");
+    for bad in [json!({"size": 1e30}), json!({"size": "big"}), json!(null), json!([1]), json!("brush")] {
+        assert!(restored_settings(&s, &bad).is_none(), "{bad}");
+    }
 }
 
 #[test]

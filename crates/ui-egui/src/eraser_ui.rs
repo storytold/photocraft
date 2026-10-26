@@ -40,17 +40,23 @@ pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]]) -
     if tool != Tool::BackgroundEraser {
         return false;
     }
+    let r = app.run("paint.backgroundEraser", background_eraser_params(app, points));
+    report(app, r);
+    true
+}
+
+/// `paint.backgroundEraser` params for a stroke along `points`: shared by the live preview and
+/// the commit, with the jitter seed from the first point (`retouch_ui::stroke_seed`).
+pub(crate) fn background_eraser_params(app: &PhotocraftApp, points: &[[f64; 3]]) -> Value {
     let o = &app.ui.tool_options;
-    let p = json!({
+    json!({
         "points": points,
         "sampling": o.bg_sampling,
         "limits": o.bg_limits,
         "tolerance": o.bg_tolerance,
         "protectForegroundColor": o.bg_protect_fg,
-    });
-    let r = app.run("paint.backgroundEraser", p);
-    report(app, r);
-    true
+        "seed": crate::retouch_ui::stroke_seed(points),
+    })
 }
 
 /// Whether `tool` is the Eraser in Pencil mode: it erases hard, aliased pixels through
@@ -75,12 +81,13 @@ pub fn block_size(app: &PhotocraftApp) -> f32 {
 pub fn mode_dropdown(ui: &mut egui::Ui, mode: &mut String) -> bool {
     opt(ui, tl!("Mode:"));
     let modes = [("brush".to_string(), tl!("Brush")), ("pencil".to_string(), tl!("Pencil")), ("block".to_string(), tl!("Block"))];
-    widgets::dropdown(ui, "eraser-mode", mode, &modes, 96.0)
+    widgets::dropdown(ui, "eraser-mode", tl!("Mode"), mode, &modes, 96.0)
 }
 
 fn opt(ui: &mut egui::Ui, text: &str) {
     let t = Tokens::get(ui.ctx());
-    ui.label(egui::RichText::new(tl!(&text)).color(t.text_dim).size(12.0));
+    let label = ui.label(egui::RichText::new(tl!(&text)).color(t.text_dim).size(12.0));
+    crate::widgets::scrub_option_label(ui, &label);
 }
 
 /// Options bar for the Magic Eraser and Background Eraser. Returns false for other tools.
@@ -117,7 +124,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                 ("contiguous".to_string(), tl!("Contiguous")),
                 ("findEdges".to_string(), tl!("Find Edges")),
             ];
-            widgets::dropdown(ui, "bg-eraser-limits", &mut o.bg_limits, &limits, 110.0);
+            widgets::dropdown(ui, "bg-eraser-limits", tl!("Limits:"), &mut o.bg_limits, &limits, 110.0);
             opt(ui, tl!("Tolerance:"));
             widgets::value_field(ui, &mut o.bg_tolerance, 0.0..=100.0, "%", 62.0);
             widgets::checkbox(ui, &mut o.bg_protect_fg, tl!("Protect Foreground Color"));

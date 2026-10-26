@@ -110,8 +110,8 @@ mod tests {
                 "help.artcraftWebsite",
                 "help.github",
                 "help.reportIssue",
-                "---",
                 "help.checkForUpdates",
+                "---",
                 "help.systemInfo",
                 "help.about"
             ]

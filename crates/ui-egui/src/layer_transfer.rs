@@ -30,7 +30,7 @@ struct Transfer {
 }
 
 fn key() -> egui::Id {
-    egui::Id::new("pc-layer-transfer")
+    egui::Id::unique("pc-layer-transfer")
 }
 
 fn get(ctx: &egui::Context) -> Option<Transfer> {
@@ -99,7 +99,7 @@ pub fn over_tab(app: &mut PhotocraftApp, ctx: &egui::Context, index: usize) {
         app.session.set_active(index);
         app.jobs.focus = None;
         // The Layers panel now lists the other document: its rows don't take the drag.
-        ctx.data_mut(|d| d.remove::<u64>(egui::Id::new("layer-drag")));
+        ctx.data_mut(|d| d.remove::<u64>(egui::Id::unique("layer-drag")));
     }
     if ctx.input(|i| i.pointer.any_released()) {
         drop(app, ctx, index, None);
@@ -168,7 +168,7 @@ fn drop(app: &mut PhotocraftApp, ctx: &egui::Context, dest: usize, at: Option<[f
 /// The dragged layers' name next to the pointer (also the Layers panel's reorder drag).
 pub fn ghost(ctx: &egui::Context, p: egui::Pos2, label: &str) {
     let t = crate::theme::Tokens::get(ctx);
-    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("layer-transfer-ghost")));
+    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("layer-transfer-ghost")));
     let g = painter.layout_no_wrap(label.to_string(), egui::FontId::proportional(12.0), t.text);
     let r = egui::Rect::from_min_size(p + egui::vec2(12.0, -10.0), g.size() + egui::vec2(16.0, 8.0));
     painter.rect_filled(r, t.radius_sm, t.card.gamma_multiply(0.95));

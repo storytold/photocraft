@@ -5,6 +5,22 @@ position and scale, crop and registration marks, labels, colour handling) and ha
 to a printer. The rendering is `print_cmds.rs` in `photocraft-engine`, shared by the dialog, the
 batch commands and automation (`file.print`, `file.printOneCopy`); this page is about the hand-off.
 
+## Positioning the preview
+
+Drag the visible image on the paper to change Top and Left. Starting a drag switches Center
+off using the currently resolved layout, including Scale to Fit Media, so the image stays at
+the grab point. Top/Left stay visible but disabled while Center is on, keeping the dialog and
+paper stationary when a drag enables them. Position fields accept negative values in inches, centimetres or millimetres;
+the stored command parameters are inches from the sheet's top-left. Manual positions are
+bounded to ±10000 inches. Height, width and paper dimensions retain their positive fields.
+
+The preview converts egui point displacement to PDF points using its paper display scale.
+No extra Retina pixel factor is needed: painting and pointer input both use egui points.
+Emulsion Down reverses the horizontal position change to match the mirrored output. The image
+is clipped to the paper; any visible portion remains a drag target. A completely off-page image
+can be recovered with Top/Left or Center. These controls affect print parameters only, and
+the preview and generated PDF continue to share `print_cmds::layout`.
+
 ## Routes to the printer
 
 | Route | When | What the user sees |

@@ -344,8 +344,8 @@ fn readout_text(value: Option<Value>) -> String {
 
 fn warning(ui: &mut egui::Ui, rect: Rect, mask: u8, on: &mut bool, label: &str) {
     let t = Tokens::get(ui.ctx());
-    let response = ui.interact(rect, ui.id().with(label), Sense::click()).on_hover_text(label);
-    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), *on, label));
+    let response = ui.interact(rect, ui.scope_id().with(label), Sense::click()).on_hover_text(label);
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, ui.is_enabled(), *on, label));
     let r = rect.shrink(3.0);
     ui.painter().add(egui::Shape::convex_polygon(
         vec![pos2(r.center().x, r.top()), r.left_bottom(), r.right_bottom()],
@@ -381,7 +381,7 @@ fn graph(ui: &mut egui::Ui, d: &mut CameraRawDialog, view: &mut CameraRawScopeSt
     let t = Tokens::get(ui.ctx());
     let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width().max(1.0), height), Sense::click_and_drag());
     d.scope.rect = Some(rect);
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, ui.is_enabled(), tl!("Tone Histogram")));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Unknown, ui.is_enabled(), tl!("Tone Histogram")));
     ui.painter().rect_filled(rect, t.radius_sm, t.histogram_background());
     let plot = rect.shrink(4.0);
     // Camera Raw's scale: the typical columns set it and a shadow or highlight spike runs off the top.
@@ -525,7 +525,7 @@ pub(crate) fn floating(ctx: &egui::Context, d: &mut CameraRawDialog, view: &mut 
         r[1].clamp(content.top(), (content.bottom() - 150.0).max(content.top())),
     );
     let window = egui::Window::new("")
-        .id(egui::Id::new("cr-floating-scope"))
+        .id(egui::Id::unique("cr-floating-scope"))
         .order(egui::Order::Foreground)
         .collapsible(false)
         .resizable(true)
@@ -619,36 +619,41 @@ pub(crate) fn preview(ui: &mut egui::Ui, d: &mut CameraRawDialog, view: &mut Cam
     } else if mode != ClippingMode::None {
         if d.scope.overlay_key != Some(key) || d.scope.overlay_detail {
             d.scope.overlay_detail = false;
-            let colors = d
-                .pixels()
-                .iter()
-                .map(|p| {
-                    let (lo, hi) = clipping(*p);
-                    if p[3] <= 0.0 || !p.iter().all(|v| v.is_finite()) {
-                        return Color32::TRANSPARENT;
-                    }
-                    match mode {
-                        ClippingMode::ShadowChannels => t.histogram_color(7 ^ lo),
-                        ClippingMode::HighlightChannels => {
-                            if hi == 0 {
-                                t.histogram_background()
-                            } else {
-                                t.histogram_color(hi)
-                            }
+            let color = |p: &[f32; 4]| {
+                let (lo, hi) = clipping(*p);
+                if p[3] <= 0.0 || !p.iter().all(|v| v.is_finite()) {
+                    return Color32::TRANSPARENT;
+                }
+                match mode {
+                    ClippingMode::ShadowChannels => t.histogram_color(7 ^ lo),
+                    ClippingMode::HighlightChannels => {
+                        if hi == 0 {
+                            t.histogram_background()
+                        } else {
+                            t.histogram_color(hi)
                         }
-                        ClippingMode::Warnings(warnings) => {
-                            if warnings & 2 != 0 && hi != 0 {
-                                t.histogram_color(1)
-                            } else if warnings & 1 != 0 && lo != 0 {
-                                t.histogram_color(4)
-                            } else {
-                                Color32::TRANSPARENT
-                            }
-                        }
-                        ClippingMode::None => Color32::TRANSPARENT,
                     }
-                })
-                .collect();
+                    ClippingMode::Warnings(warnings) => {
+                        if warnings & 2 != 0 && hi != 0 {
+                            t.histogram_color(1)
+                        } else if warnings & 1 != 0 && lo != 0 {
+                            t.histogram_color(4)
+                        } else {
+                            Color32::TRANSPARENT
+                        }
+                    }
+                    ClippingMode::None => Color32::TRANSPARENT,
+                }
+            };
+            // Rebuilt for every new preview while a warning is on: one colour per proxy pixel,
+            // each independent, so it runs across cores (#211, P36).
+            #[cfg(not(target_arch = "wasm32"))]
+            let colors = {
+                use rayon::prelude::*;
+                d.pixels().par_iter().with_min_len(crate::camera_raw_ui::PARALLEL_MIN_PIXELS).map(color).collect()
+            };
+            #[cfg(target_arch = "wasm32")]
+            let colors = d.pixels().iter().map(color).collect();
             let image = egui::ColorImage::new([d.pw, d.ph], colors);
             match &mut d.scope.overlay_tex {
                 Some(t) => t.set(image, egui::TextureOptions::NEAREST),

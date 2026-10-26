@@ -1,6 +1,6 @@
 //! Non-destructive layer-mask controls (pixel and vector), shared by docked and floating Properties.
 
-use photocraft_doc::Layer;
+use photocraft_doc::{Layer, LayerContent};
 use serde_json::json;
 
 use crate::props_layout::COL_GAP;
@@ -49,13 +49,30 @@ pub fn vector_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Lay
     });
 }
 
+/// A shape layer's path is its vector mask (Photoshop's Properties › Masks): its Density and
+/// Feather soften the fill through `layer.vectorMask.edit`, the shape staying editable.
+pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
+    let LayerContent::Shape(sh) = &layer.content else { return };
+    if layer.vector_mask.is_some() {
+        return;
+    }
+    let Some(document) = app.session.active().map(|s| s.doc.id.0) else { return };
+    ui.push_id((document, layer.id, "shape-mask-properties"), |ui| {
+        if !crate::props_layout::section(ui, "shape-mask", "Vector Mask") {
+            return;
+        }
+        let (density, feather) = (sh.density, sh.feather);
+        sliders(app, ui, layer.id.0, document, "layer.vectorMask.edit", "shape-mask", density, feather);
+    });
+}
+
 /// Density (%) and Feather (px) sliders writing one undoable edit per drag: the value lives on the
 /// mask, not in its pixels. `command` is the mask's edit command and `prefix` keys its coalescing.
 #[allow(clippy::too_many_arguments)]
 fn sliders(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: u64, document: u64, command: &str, prefix: &str, density: f32, feather: f32) {
     // Like brush settings, track pointer presses even on frames without a value change.
     // slider_row also merges numeric scrubbing, whose drag flags are not in its Response.
-    let key = ui.id().with("gesture");
+    let key = ui.scope_id().with("gesture");
     let pass = ui.ctx().cumulative_pass_nr();
     let pressed = ui.input(|i| i.pointer.any_pressed());
     let gesture = ui.data_mut(|d| {

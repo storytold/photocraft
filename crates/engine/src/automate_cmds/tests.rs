@@ -166,6 +166,24 @@ fn droplets_are_written_and_run() {
     assert!(s.execute("file.automate.createDroplet", json!({"path": path, "steps": [["bogus", {}]]})).is_err());
 }
 
+/// A droplet keeps the action's recorded saves, which mark the result as in Batch, so one made from
+/// an action ending in Save As and Close writes its files instead of failing on every one.
+#[test]
+fn droplets_keep_the_recorded_save_that_marks_the_result() {
+    let dir = tmp("droplet-save-close");
+    let inputs = images(&dir, 1, 4, 2);
+    let mut s = Session::new();
+    let steps = json!([["image.adjustments.invert", {}], ["file.saveAs", {}], ["file.close", {}]]);
+    let p = json!({"path": format!("{dir}/Invert"), "steps": steps, "format": "png", "output": format!("{dir}/out"), "shim": false});
+    let dp = s.execute("file.automate.createDroplet", p).unwrap()["path"].as_str().unwrap().to_string();
+    let r = s.execute("file.automate.runDroplet", json!({"droplet": dp, "input": [dir.clone()]})).unwrap();
+    assert_eq!(r["errors"], json!([]), "{r}");
+    assert_eq!(r["files"].as_array().unwrap().len(), inputs.len(), "{r}");
+    let out = photocraft_io::import("img0.png", &std::fs::read(format!("{dir}/out/img0.png")).unwrap()).unwrap().document;
+    let px = photocraft_compose::render(&out, photocraft_geom::Rect::new(1, 1, 2, 2)).px[0];
+    assert!((px[0] - 235.0 / 255.0).abs() < 1e-3, "img0's gray 20 inverted: {px:?}");
+}
+
 #[cfg(unix)]
 #[test]
 fn droplet_shim_passes_shell_metacharacters_as_a_literal_path() {
@@ -250,6 +268,38 @@ fn droplets_carry_the_actions_their_play_steps_call() {
     .unwrap();
     let r = fresh.execute("file.automate.runDroplet", json!({"droplet": old, "input": [dir.clone()]})).unwrap();
     assert_eq!(r["files"].as_array().unwrap().len(), inputs.len(), "{r}");
+}
+
+#[test]
+fn droplets_carry_the_actions_their_conditional_steps_call() {
+    use crate::actions_cmds::Action;
+    let dir = tmp("droplet-conditional");
+    let inputs = images(&dir, 2, 40, 20);
+    let mut s = Session::new();
+    let act = |name: &str, steps: Value| -> Action { serde_json::from_value(json!({"name": name, "steps": steps})).unwrap() };
+    s.actions.list = vec![
+        act("Unrelated", json!([["image.imageRotation.180", {}]])),
+        act("Rotate", json!([["image.imageRotation.90cw", {}]])),
+        // The then branch calls Rotate by index, as the panel records it.
+        act("Wide", json!([["actions.play", {"action": 1}]])),
+        act("Tall", json!([["image.imageRotation.180", {}]])),
+    ];
+    let steps = json!([["actions.conditional", {"if": "landscape", "then": "Wide", "else": "Tall"}]]);
+    let out = format!("{dir}/out");
+    let r = s
+        .execute("file.automate.createDroplet", json!({"path": format!("{dir}/Cond"), "steps": steps, "format": "png", "output": out, "shim": false}))
+        .unwrap();
+    let dp = r["path"].as_str().unwrap().to_string();
+    let v: Value = serde_json::from_slice(&std::fs::read(&dp).unwrap()).unwrap();
+    let names: Vec<&str> = v["calledActions"].as_array().unwrap().iter().map(|a| a["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["Rotate", "Wide", "Tall"], "both branches and what they call");
+
+    // A fresh session, as `photocraft-cli droplet` and the droplet shim use.
+    let mut fresh = Session::new();
+    let r = fresh.execute("file.automate.runDroplet", json!({"droplet": dp, "input": [dir.clone()]})).unwrap();
+    assert_eq!(r["files"].as_array().unwrap().len(), inputs.len(), "{r}");
+    let img = photocraft_codecs::decode(&std::fs::read(format!("{out}/img0.png")).unwrap()).unwrap();
+    assert_eq!(img.dimensions(), (20, 40), "the landscape input took the then branch");
 }
 
 #[test]
@@ -433,4 +483,47 @@ fn load_files_into_stack_aligns_before_the_smart_object() {
     let mut s = Session::new();
     s.execute("file.scripts.loadFilesIntoStack", json!({"paths": [files[0].clone()], "align": true})).unwrap();
     assert_eq!(s.active().unwrap().doc.layers.len(), 1);
+}
+
+/// A script file of `lines` (one `file.scripts.browse` call per entry) in `dir`.
+fn script_calling(dir: &str, name: &str, callees: &[String]) -> String {
+    let path = format!("{dir}/{name}.txt");
+    let body: String = callees.iter().map(|c| format!("file.scripts.browse {}\n", json!({"path": c}))).collect();
+    std::fs::write(&path, body).unwrap();
+    path
+}
+
+#[test]
+fn scripts_calling_scripts_share_one_step_budget() {
+    let dir = tmp("fanout");
+    // Eight levels, each calling the one below six times: 6^8 (1.7 million) calls of the leaf.
+    let mut below = script_calling(&dir, "leaf", &[]);
+    std::fs::write(&below, "select.deselect {}\n").unwrap();
+    for level in 0..8 {
+        below = script_calling(&dir, &format!("level{level}"), &vec![below; 6]);
+    }
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let started = std::time::Instant::now();
+    let r = s.execute("file.scripts.browse", json!({"path": below})).unwrap();
+    assert_eq!(r["ok"], false, "the budget stops the run: {r}");
+    assert!(started.elapsed().as_secs() < 60, "{:?}", started.elapsed());
+    // The budget restarts with the next top-level script.
+    s.execute("file.scripts.browse", json!({"script": "select.deselect {}"})).unwrap();
+}
+
+#[test]
+fn scripts_nested_deeper_than_the_limit_fail() {
+    let dir = tmp("deep");
+    let mut below = script_calling(&dir, "leaf", &[]);
+    std::fs::write(&below, "select.deselect {}\n").unwrap();
+    for level in 0..20 {
+        below = script_calling(&dir, &format!("level{level}"), &[below]);
+    }
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let r = s.execute("file.scripts.browse", json!({"path": below})).unwrap();
+    assert_eq!(r["ok"], false, "{r}");
+    assert!(r.to_string().contains("nested more than"), "{r}");
+    assert_eq!(s.actions.script_depth, 0, "the depth is released");
 }

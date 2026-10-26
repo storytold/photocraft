@@ -9,6 +9,25 @@ This is PhotoCraft's implementation of the shared
 [release playbook](release-playbook.md). User-facing names say **PhotoCraft**. Files, binaries
 and ids stay lowercase (`photocraft-<version>-<platform>-<arch>.<ext>`, `ai.storyteller.photocraft`).
 
+## In-app update checks
+
+The native desktop app checks the public GitHub latest-release endpoint in a background
+thread once at launch, with no periodic checks or automatic retries. Preferences › General › Automatically
+Check for Updates disables the startup check; Help › Check for Updates runs one manually.
+Checks use a 15-second timeout and a 1 MiB response limit, need no GitHub token, and send
+no document or personal data. Network failures are quiet during automatic checks and visible
+in the manual check window. Concurrent requests share one check.
+HTTPS validates certificates and host names against the operating system's trust store.
+
+Tags must be semantic versions (`v0.8.0` or `0.8.0`); only published stable versions newer
+than the installed workspace version trigger a notice. The same update window offers the
+install. A signed macOS release hands that install to Sparkle; other desktop builds use the
+shared installer. Drafts and prereleases do not trigger it. Web/headless frontends and the
+Flatpak (no network in its sandbox; `flatpak update` owns updates there) have no update
+transport. No release-workflow changes are required for discovery: publishing a newer stable
+GitHub Release makes it discoverable. The signed macOS installer also needs the Sparkle feed
+described under Cutting a release.
+
 ## Cutting a release
 
 1. **Bump the version** on `main`. The only place it lives is `[workspace.package] version`
@@ -104,22 +123,20 @@ in `ci.yml`. Rules: `../craftrules/standards/fonts.md`; build option: `docs/deve
   them it only checks signature integrity and warns, like `package.sh`. Run it locally after a
   build: `packaging/macos/verify.sh --arch aarch64`.
 
-- **In-app updates:** one flow for every platform: PhotoCraft asks GitHub's release API at
-  startup (at most once a day, Preferences › General › Automatically Check for Updates at
-  Startup) and on *Help ▸ Check for Updates…*, and the prompt shows the release notes. On macOS the
-  prompt's *Install Update* hands off to Sparkle, which downloads the signed update in the
-  background and replaces the app when PhotoCraft quits, so an open editing session is not
-  interrupted; Sparkle opens its own native update window for that. Windows and Linux get the
-  release's installer download (MSI or AppImage), and package-managed installs are pointed at
-  their package manager. There is no scheduled polling or resident updater process: Sparkle starts
-  its helper only while downloading or installing, and `SUEnableAutomaticChecks` stays off so the
-  app's own preference decides when anything is checked. To enable updates in release builds, create a
-  Sparkle EdDSA key pair on a maintainer-controlled Mac with the pinned Sparkle `generate_keys`
-  tool. Store the exported private key as the `SPARKLE_EDDSA_PRIVATE_KEY` Actions secret and the
-  matching base64 public key as the `SPARKLE_PUBLIC_KEY` Actions variable in the `release`
-  environment. The workflow signs `appcast.xml` with the private key and uploads it with the DMG.
-  When either value is missing, the build disables in-app updates and emits a warning. Never
-  commit or share the private key.
+- **In-app updates:** one flow for every platform. PhotoCraft checks published releases once at
+  startup when Preferences › General › Automatically Check for Updates is on, and again from
+  *Help ▸ Check for Updates…*. The existing update window is the only notification. On a signed
+  macOS release, *Update and Restart* hands the install to Sparkle, which downloads the signed
+  update and replaces the app when PhotoCraft quits. Sparkle does not check on its own:
+  `SUEnableAutomaticChecks` stays off, and the app turns Sparkle's automatic checks off after
+  startup. Other desktop builds install through the shared self-update prompt (DMG, MSI, or
+  AppImage). Flatpak leaves updates to its package manager. To enable the signed macOS installer,
+  create a Sparkle EdDSA key pair on a maintainer-controlled Mac with the pinned Sparkle
+  `generate_keys` tool. Store the exported private key as the `SPARKLE_EDDSA_PRIVATE_KEY` Actions
+  secret and the matching base64 public key as the `SPARKLE_PUBLIC_KEY` Actions variable in the
+  `release` environment. The workflow signs `appcast.xml` with the private key and uploads it
+  with the DMG. When either value is missing, the build disables the Sparkle handoff and emits a
+  warning. Never commit or share the private key.
 
   The optional desktop `macos-updater` feature links Sparkle; ordinary macOS development and CI
   builds leave it disabled and use installer downloads. `packaging/macos/package.sh` enables
@@ -185,7 +202,9 @@ goes in `CARGO_TARGET_<TRIPLE>_RUSTFLAGS`, so host build scripts aren't affected
   1. a `.pfx` file (`WINDOWS_CERTIFICATE`, `WINDOWS_CERTIFICATE_PASSWORD`), timestamped by
      DigiCert, or
   2. Azure Trusted Signing (`AZURE_*`): the script downloads the
-     `Microsoft.Trusted.Signing.Client` dlib and timestamps with Microsoft's server.
+     `Microsoft.Trusted.Signing.Client` dlib and timestamps with Microsoft's server. The package
+     is pinned to a version and SHA-256 at the top of `sign.ps1` and refused on a mismatch, so an
+     upgrade is a deliberate change to both.
 
   The script is the single place to change when the Windows signing setup changes.
 
@@ -197,8 +216,12 @@ Locally on Windows: `dotnet tool install -g wix --version 5.0.2`,
 
 `packaging/linux/package.sh` stages one FHS tree and makes every format from it. The tree
 holds both binaries, `ai.storyteller.photocraft.desktop`, hicolor icons from 16 px to 512 px
-plus a scalable SVG, AppStream metainfo, and a shared-mime-info file for `.pcraft`, `.psb` and
-`.qoi`.
+plus a scalable SVG, AppStream metainfo, a shared-mime-info file for `.pcraft`, `.psb` and
+`.qoi`, and `photocraft-cli`'s man pages and bash, zsh and fish completions. The
+`man-and-completions` example, built with the binaries, writes those; a cross build runs it
+through `EMULATOR` and leaves them out without one. The zsh completion is in
+`/usr/share/zsh/site-functions`, which Fedora's and openSUSE's zsh read; the `.deb` also links it
+from `/usr/share/zsh/vendor-completions`, which Debian's zsh reads instead.
 
 Why these formats:
 
@@ -286,7 +309,9 @@ binaries with `CARGO_BUILD_JOBS=4` (more runs the 12 GB VM out of memory) and wr
 `x86_64` like the other artifacts. The tarball is a `/usr/local`-style tree: `bin/photocraft`,
 `bin/photocraft-cli`, and under `share/` the same desktop entry, MIME type, AppStream metainfo
 and hicolor icons as Linux, plus the licences, `NOTICE` and `ATTRIBUTION.md` in
-`share/doc/photocraft/`. Users install it with:
+`share/doc/photocraft/`, and `photocraft-cli`'s man pages (`man/man1/`) and bash, zsh and fish
+completions (`share/bash-completion`, `share/zsh/site-functions`, `share/fish`), written by the
+`man-and-completions` example built with the binaries. Users install it with:
 
 ```sh
 pkg install libxkbcommon wayland libX11 libXcursor libXrandr libXi libxcb mesa-libs vulkan-loader gtk3 fontconfig freetype2 alsa-lib

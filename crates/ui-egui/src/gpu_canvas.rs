@@ -120,6 +120,9 @@ pub struct GpuCanvas {
     /// [`canvas_budget`], shared with the paint callback's resources: [`GpuCanvas::format_for`]
     /// reads it while the renderer is locked.
     canvas_budget: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    /// Camera Raw's preview pass, built the first time the dialog asks (#6419).
+    camera_raw: crate::camera_raw_gpu::Slot,
+    camera_raw_started: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// Whether `regenerate_mips` builds each level in a scratch texture and copies it back: on
@@ -177,12 +180,48 @@ impl GpuCanvas {
             rs.target_format,
             vram.map_or_else(|| "unknown".to_owned(), |b| format!("{} MB", b >> 20))
         );
-        Self { rs: rs.clone(), tile, high, health, vram, canvas_budget: budget }
+        Self { rs: rs.clone(), tile, high, health, vram, canvas_budget: budget, camera_raw: Default::default(), camera_raw_started: Default::default() }
     }
 
     /// The device's health flag (shared with the wgpu compositor and the paint callback).
     pub fn health(&self) -> &photocraft_gpu::DeviceHealth {
         &self.health
+    }
+
+    /// Camera Raw's GPU preview develop on this device; the first call starts building its
+    /// pipeline. `None` on a software adapter, without `Rgba32Float` render targets, after a
+    /// fault, or when the driver couldn't build the pipeline; the dialog then develops on the CPU.
+    pub(crate) fn camera_raw(&self) -> Option<crate::camera_raw_gpu::CameraRawGpu> {
+        if self.fault().is_some() {
+            return None;
+        }
+        if !self.camera_raw_started.swap(true, Ordering::AcqRel) {
+            crate::camera_raw_gpu::Pass::start(&self.rs.adapter, &self.rs.device, &self.camera_raw);
+        }
+        if matches!(self.camera_raw.get(), Some(None)) {
+            return None;
+        }
+        Some(crate::camera_raw_gpu::CameraRawGpu::new(self.rs.device.clone(), self.rs.queue.clone(), self.health.clone(), self.camera_raw.clone()))
+    }
+
+    /// Whether [`Self::camera_raw`] started building the pass.
+    #[cfg(test)]
+    pub(crate) fn camera_raw_started(&self) -> bool {
+        self.camera_raw_started.load(Ordering::Acquire)
+    }
+
+    /// Waits until the pass is built or refused.
+    #[cfg(test)]
+    pub(crate) fn wait_camera_raw_pass(&self) {
+        let _ = self.camera_raw.wait();
+    }
+
+    /// Builds Camera Raw's pass even where [`Self::camera_raw`] wouldn't (egui_kittest's software
+    /// adapter), so tests drive the GPU develop.
+    #[cfg(test)]
+    pub(crate) fn force_camera_raw_pass(&self) {
+        self.camera_raw_started.store(true, Ordering::Release);
+        let _ = self.camera_raw.set(crate::camera_raw_gpu::Pass::build_on(&self.rs.device));
     }
 
     /// Why the GPU can't be used any more (`None` while it can).
@@ -326,7 +365,8 @@ impl GpuCanvas {
         if let Some(b) = budget {
             comp.set_memory_budget(b);
         }
-        let fit = LayerFit { doc: doc.id.0, needed: comp.working_set(doc, doc.bounds()), budget: comp.resident_budget() };
+        let needed = comp.working_set(doc, doc.bounds());
+        let fit = LayerFit { doc: doc.id.0, needed, budget: comp.fit_layers(needed, true) };
         res.layer_fit = Some(fit);
         Some(fit)
     }
@@ -509,7 +549,8 @@ impl GpuCanvas {
         // as hiding a big layer (#4024); small edits in the view stay on the GPU.
         let large = region.width() as u64 * region.height() as u64 >= DEFER_PX;
         if region == doc.bounds() || large {
-            let fit = LayerFit { doc: doc.id.0, needed: comp.working_set(doc, region), budget: comp.resident_budget() };
+            let needed = comp.working_set(doc, region);
+            let fit = LayerFit { doc: doc.id.0, needed, budget: comp.fit_layers(needed, region == doc.bounds()) };
             res.layer_fit = Some(fit);
             if !fit.fits() {
                 res.compositor = Some(comp);
@@ -988,15 +1029,15 @@ fn device_limits_for(backend: wgpu::Backend, supported: wgpu::Limits) -> wgpu::L
     wgpu::Limits { max_texture_dimension_2d: supported.max_texture_dimension_2d, max_buffer_size: supported.max_buffer_size, ..base }
 }
 
-/// Milliseconds since first call (monotonic). Always 0 on wasm, where `std::time` is unavailable.
+/// Milliseconds since the process (or page) started, from a monotonic clock.
+///
+/// `web_time::Instant` is `std::time::Instant` natively and `performance.now()` on wasm, so frame
+/// caps, autosave intervals, preference retry backoff, stroke traces and screenshot deadlines all
+/// measure durations the same way on both. The old wasm value was a constant 0, which made every
+/// interval comparison (`now >= deadline`) permanently false on the web.
 pub fn now_ms() -> f64 {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
-        START.get_or_init(std::time::Instant::now).elapsed().as_secs_f64() * 1000.0
-    }
-    #[cfg(target_arch = "wasm32")]
-    0.0
+    static START: std::sync::OnceLock<web_time::Instant> = std::sync::OnceLock::new();
+    START.get_or_init(web_time::Instant::now).elapsed().as_secs_f64() * 1000.0
 }
 
 /// UI-thread timings (CPU side), exponentially smoothed.
@@ -1136,6 +1177,14 @@ impl GpuInfo {
                 let template = "Driver: {driver}";
                 crate::i18n::fmt(tl!(template), &[("driver", &or(&self.driver, "unknown"))])
             },
+        ];
+        // The card's own memory caps the GPU budgets, so it explains a huge canvas falling back
+        // to the CPU. Only discrete cards report one (integrated GPUs share system memory).
+        if let Some(mb) = self.video_memory_mb {
+            let template = "Graphics memory: {size}";
+            v.push(crate::i18n::fmt(tl!(template), &[("size", &crate::chrome_ui::fmt_bytes(mb.saturating_mul(1 << 20)))]));
+        }
+        v.extend([
             {
                 let template = "GPU backend preference: {backend}";
                 crate::i18n::fmt(tl!(template), &[("backend", &or(&self.preference, "auto"))])
@@ -1159,7 +1208,7 @@ impl GpuInfo {
                 };
                 crate::i18n::fmt(tl!(template), &[("renderer", tl!(renderer))])
             },
-        ];
+        ]);
         if let Some(f) = &self.fallback {
             v.push({
                 let template = "Fallback: {reason}";
@@ -1379,8 +1428,9 @@ impl LayerFit {
 /// Floor of the compositor's memory budget: enough for a viewport's pages of a dozen layers.
 pub const MIN_GPU_BUDGET: u64 = 512 << 20;
 
-/// Why a full refresh whose layer pages don't fit [`memory_budget`] goes to the CPU compositor.
-pub const OVER_BUDGET: &str = "layers exceed the GPU memory budget; full refresh on the CPU";
+/// Why a full refresh whose layer pages don't fit [`memory_budget`] (or GPU memory) goes to the
+/// CPU compositor.
+pub const OVER_BUDGET: &str = photocraft_gpu::OVER_BUDGET;
 
 /// GPU memory the wgpu compositor may hold for layer pages and effect maps.
 ///
@@ -2790,6 +2840,19 @@ mod tests {
             assert_eq!(detect_video_memory(d.VendorId, d.DeviceId), Some(first.DedicatedVideoMemory as u64));
         }
         assert_eq!(detect_video_memory(0xdead, 0xbeef), None, "no such adapter");
+    }
+
+    /// System Info names the card's own memory, after the driver, when the card reports one; an
+    /// integrated GPU or an unknown card shows no such line.
+    #[test]
+    fn system_info_shows_the_cards_memory() {
+        let info = GpuInfo { adapter: "Card".into(), driver: "Driver 1".into(), video_memory_mb: Some(8192), ..Default::default() };
+        let lines = info.lines();
+        assert_eq!(lines.get(2).map(String::as_str), Some("Driver: Driver 1"));
+        assert_eq!(lines.get(3).map(String::as_str), Some("Graphics memory: 8.0G"));
+        let none = GpuInfo { video_memory_mb: None, ..info }.lines();
+        assert!(none.iter().all(|l| !l.starts_with("Graphics memory")), "{none:?}");
+        assert_eq!(none.len() + 1, lines.len());
     }
 
     /// The Linux reader finds the card by its PCI ids in a `/sys/class/drm`-shaped folder and reads

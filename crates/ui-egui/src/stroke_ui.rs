@@ -84,7 +84,7 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     ui.horizontal(|ui| {
         label(ui, tl!("Width:"));
         let mut width = f.get("width").and_then(Value::as_f64).unwrap_or(1.0) as f32;
-        if crate::widgets::value_field(ui, &mut width, 1.0..=250.0, "px", 84.0).changed() {
+        if crate::widgets::value_field(ui, &mut width, 1.0..=250.0, "px", 84.0).accessible_name(tl!("Width:")).changed() {
             f.insert("width".into(), json!(width.round()));
         }
     });
@@ -105,7 +105,7 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         label(ui, tl!("Location:"));
         let mut location = f.get("location").and_then(Value::as_str).unwrap_or("center").to_string();
         let opts: Vec<(String, &str)> = LOCATIONS.iter().map(|(key, label)| (key.to_string(), tl!(label))).collect();
-        if crate::widgets::dropdown(ui, "stroke-location", &mut location, &opts, 170.0) {
+        if crate::widgets::dropdown(ui, "stroke-location", tl!("Location"), &mut location, &opts, 170.0) {
             f.insert("location".into(), json!(location));
         }
     });

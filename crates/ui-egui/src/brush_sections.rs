@@ -8,6 +8,7 @@ use photocraft_engine::BrushSettings;
 use photocraft_engine::paint::{self, BrushPreset, Control, Dynamic, MAX_BRUSH_SIZE, MaskMode, Pattern, PatternStyle, TipShape};
 
 use crate::brush_preview;
+use crate::state::Tool;
 use crate::theme::{self, Tokens};
 use crate::widgets;
 
@@ -75,7 +76,7 @@ pub(crate) fn takes_curve(control: Control, angle: bool) -> bool {
 
 /// egui memory key of the open/closed state of a dynamic's curve editor.
 pub(crate) fn curve_open_id(id: &str) -> egui::Id {
-    egui::Id::new(("brush-curve-open", id))
+    egui::Id::unique(("brush-curve-open", id))
 }
 
 /// `Control: [Off ▾] [25] [~]`: the controller pop-up, Fade's step count and the button that
@@ -87,10 +88,10 @@ fn control_row(ui: &mut egui::Ui, id: &str, d: &mut Dynamic, angle: bool) {
     ui.horizontal(|ui| {
         dim(ui, tl!("Control:"));
         let n = if angle || matches!(d.control, Control::InitialDirection | Control::Direction) { 8 } else { 6 };
-        widgets::dropdown(ui, id, &mut d.control, &CONTROLS[..n], 130.0);
+        widgets::dropdown(ui, id, tl!("Control:"), &mut d.control, &CONTROLS[..n], 130.0);
         if d.control == Control::Fade {
             let mut steps = d.fade_steps as f32;
-            if widgets::value_field(ui, &mut steps, 1.0..=9999.0, "", 56.0).on_hover_text(tl!("Fade steps")).changed() {
+            if widgets::value_field(ui, &mut steps, 1.0..=9999.0, "", 56.0).accessible_name(tl!("Fade steps")).on_hover_text(tl!("Fade steps")).changed() {
                 d.fade_steps = steps.round().clamp(1.0, 9999.0) as u32;
             }
         }
@@ -100,7 +101,7 @@ fn control_row(ui: &mut egui::Ui, id: &str, d: &mut Dynamic, angle: bool) {
     });
     if open && takes_curve(d.control, angle) {
         let mut points = d.curve.points();
-        if crate::pressure_curve_ui::edit_points(ui, egui::Id::new(("brush-curve-rect", id)), &mut points) {
+        if crate::pressure_curve_ui::edit_points(ui, egui::Id::unique(("brush-curve-rect", id)), &mut points) {
             d.curve = paint::ResponseCurve::new(&points);
         }
     }
@@ -131,7 +132,7 @@ fn size_row(ui: &mut egui::Ui, label: &str, size: &mut f32, max: f32, restore: O
         ui.label(RichText::new(tl!(label)).color(t.text_dim));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let mut s = *size;
-            if widgets::value_field(ui, &mut s, 1.0..=max, "px", 74.0).changed() {
+            if widgets::value_field(ui, &mut s, 1.0..=max, "px", 74.0).accessible_name(tl!(label)).changed() {
                 *size = s.round().clamp(1.0, max);
             }
             if let Some(orig) = restore
@@ -331,7 +332,7 @@ fn tip_shape(ui: &mut egui::Ui, b: &mut BrushSettings, presets: &[BrushPreset], 
             ui.horizontal(|ui| {
                 ui.allocate_ui_with_layout(vec2(72.0, 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| dim(ui, tl!("Angle:")));
                 let mut a = b.angle;
-                if widgets::value_field(ui, &mut a, -180.0..=180.0, "°", 70.0).changed() {
+                if widgets::value_field(ui, &mut a, -180.0..=180.0, "°", 70.0).accessible_name(tl!("Angle:")).changed() {
                     b.angle = a.round().clamp(-180.0, 180.0);
                 }
             });
@@ -339,7 +340,7 @@ fn tip_shape(ui: &mut egui::Ui, b: &mut BrushSettings, presets: &[BrushPreset], 
             ui.horizontal(|ui| {
                 ui.allocate_ui_with_layout(vec2(72.0, 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| dim(ui, tl!("Roundness:")));
                 let mut r = (b.roundness * 100.0).round();
-                if widgets::value_field(ui, &mut r, 1.0..=100.0, "%", 70.0).changed() {
+                if widgets::value_field(ui, &mut r, 1.0..=100.0, "%", 70.0).accessible_name(tl!("Roundness:")).changed() {
                     b.roundness = (r.round() / 100.0).clamp(0.01, 1.0);
                 }
             });
@@ -453,7 +454,7 @@ fn texture(ui: &mut egui::Ui, b: &mut BrushSettings) {
             if style.is_none() {
                 opts.push((None, tl!("Custom")));
             }
-            if widgets::dropdown(ui, "brush-pattern", &mut style, &opts, 110.0)
+            if widgets::dropdown(ui, "brush-pattern", tl!("Pattern"), &mut style, &opts, 110.0)
                 && let Some(s) = style
             {
                 let size = match &tx.pattern {
@@ -487,7 +488,7 @@ fn texture(ui: &mut egui::Ui, b: &mut BrushSettings) {
     ui.add_space(4.0);
     ui.horizontal(|ui| {
         dim(ui, tl!("Mode:"));
-        widgets::dropdown(ui, "brush-texture-mode", &mut tx.mode, &MASK_MODES, 130.0);
+        widgets::dropdown(ui, "brush-texture-mode", tl!("Mode"), &mut tx.mode, &MASK_MODES, 130.0);
     });
     ui.add_space(4.0);
     pct(ui, tl!("Depth"), &mut tx.depth, 1.0);
@@ -503,7 +504,7 @@ fn dual_brush(ui: &mut egui::Ui, b: &mut BrushSettings, presets: &[BrushPreset])
     let d = &mut b.dual_brush;
     ui.horizontal(|ui| {
         dim(ui, tl!("Mode:"));
-        widgets::dropdown(ui, "brush-dual-mode", &mut d.mode, &MASK_MODES, 120.0);
+        widgets::dropdown(ui, "brush-dual-mode", tl!("Mode"), &mut d.mode, &MASK_MODES, 120.0);
         ui.add_space(8.0);
         widgets::checkbox(ui, &mut d.flip, tl!("Flip"));
     });
@@ -542,12 +543,16 @@ fn color_dynamics(ui: &mut egui::Ui, b: &mut BrushSettings) {
     signed_pct(ui, tl!("Purity"), &mut c.purity, -1.0, 1.0);
 }
 
-fn transfer(ui: &mut egui::Ui, b: &mut BrushSettings) {
+fn transfer(ui: &mut egui::Ui, b: &mut BrushSettings, tool: Tool) {
     let tr = &mut b.transfer;
     dynamic(ui, "brush-opacity-ctl", tl!("Opacity Jitter"), &mut tr.opacity, 1.0, Some(tl!("Minimum")), false);
     dynamic(ui, "brush-flow-ctl", tl!("Flow Jitter"), &mut tr.flow, 1.0, Some(tl!("Minimum")), false);
-    dynamic(ui, "brush-wet-ctl", tl!("Wetness Jitter"), &mut tr.wetness, 1.0, Some(tl!("Minimum")), false);
-    dynamic(ui, "brush-mix-ctl", tl!("Mix Jitter"), &mut tr.mix, 1.0, Some(tl!("Minimum")), false);
+    // Wetness and mix only affect the Mixer Brush. Keep their settings visible and saved
+    // for other tools, but disable the whole blocks, including controllers and minimums.
+    ui.add_enabled_ui(tool == Tool::MixerBrush, |ui| {
+        dynamic(ui, "brush-wet-ctl", tl!("Wetness Jitter"), &mut tr.wetness, 1.0, Some(tl!("Minimum")), false);
+        dynamic(ui, "brush-mix-ctl", tl!("Mix Jitter"), &mut tr.mix, 1.0, Some(tl!("Minimum")), false);
+    });
 }
 
 /// The Mixer Brush options the brush carries (Photoshop shows them in the Mixer Brush's options
@@ -580,8 +585,10 @@ fn tilt(ui: &mut egui::Ui, label: &str, deg: &mut f32) {
 fn pose(ui: &mut egui::Ui, b: &mut BrushSettings) {
     let p = &mut b.pose;
     tilt(ui, tl!("Tilt X"), &mut p.tilt_x);
+    widgets::checkbox(ui, &mut p.override_tilt_x, tl!("Override Tilt X"));
+    ui.add_space(8.0);
     tilt(ui, tl!("Tilt Y"), &mut p.tilt_y);
-    widgets::checkbox(ui, &mut p.override_tilt, tl!("Override Tilt"));
+    widgets::checkbox(ui, &mut p.override_tilt_y, tl!("Override Tilt Y"));
     ui.add_space(8.0);
     num(ui, tl!("Rotation"), &mut p.rotation, 0.0..=360.0, "°");
     widgets::checkbox(ui, &mut p.override_rotation, tl!("Override Rotation"));
@@ -602,7 +609,8 @@ fn smoothing(ui: &mut egui::Ui, b: &mut BrushSettings) {
 /// Controls for section `i` (see [`crate::brush_panel::SECTIONS`]). `presets` feed the tip grids.
 /// Returns the name of a preset whose tip was picked in the Brush Tip Shape grid, for
 /// `brush.presets.setCurrent`.
-pub fn section_body(ui: &mut egui::Ui, b: &mut BrushSettings, i: usize, presets: &[BrushPreset], current: Option<&str>) -> Option<String> {
+/// The active `tool` determines which Transfer controls apply.
+pub fn section_body(ui: &mut egui::Ui, b: &mut BrushSettings, i: usize, presets: &[BrushPreset], current: Option<&str>, tool: Tool) -> Option<String> {
     let t = Tokens::get(ui.ctx());
     let note = |ui: &mut egui::Ui, s: &str| {
         ui.label(RichText::new(s).color(t.text_faint).font(theme::medium(11.5)));
@@ -617,7 +625,7 @@ pub fn section_body(ui: &mut egui::Ui, b: &mut BrushSettings, i: usize, presets:
         4 => dual_brush(ui, b, presets),
         5 => color_dynamics(ui, b),
         6 => {
-            transfer(ui, b);
+            transfer(ui, b, tool);
             mixer_options(ui, b);
         }
         7 => pose(ui, b),
@@ -643,6 +651,14 @@ mod tests {
         kittest::{NodeT, Queryable},
     };
 
+    /// The slider row's visible caption, not the field or slider it names.
+    fn caption_rect<T>(h: &Harness<'_, T>, text: &str) -> egui::Rect {
+        h.query_all(egui_kittest::kittest::by().label(text).include_labels())
+            .find(|n| n.accesskit_node().role() == Role::Label)
+            .unwrap_or_else(|| panic!("the `{text}` caption"))
+            .rect()
+    }
+
     fn minimum_brush() -> BrushSettings {
         let mut b = BrushSettings::default();
         b.shape_dynamics.size.minimum = 0.2;
@@ -663,12 +679,46 @@ mod tests {
                     ready = true;
                     return;
                 }
-                section_body(ui, b, section, &[], None);
+                section_body(ui, b, section, &[], None, Tool::MixerBrush);
             },
             b,
         );
         h.run_steps(3);
         h
+    }
+
+    #[test]
+    fn pose_axes_controls_are_independent_and_below_each_tilt_in_all_themes() {
+        use egui::accesskit::Toggled;
+        for kind in theme::ThemeKind::ALL {
+            let b: BrushSettings = serde_json::from_value(serde_json::json!({"pose": {
+                "enabled": true, "tiltX": 45.0, "tiltY": -18.0,
+                "overrideTiltX": true, "overrideTiltY": false,
+                "pressure": 0.71, "rotation": 67.0
+            }}))
+            .unwrap();
+            let mut h = section_harness(7, b.clone());
+            crate::PhotocraftApp::setup_context(&h.ctx, kind);
+            h.run_steps(3);
+            let x = h.get_by_role_and_label(Role::CheckBox, "Override Tilt X");
+            let y = h.get_by_role_and_label(Role::CheckBox, "Override Tilt Y");
+            assert_eq!(x.accesskit_node().toggled(), Some(Toggled::True));
+            assert_eq!(y.accesskit_node().toggled(), Some(Toggled::False));
+            assert!(caption_rect(&h, "Tilt X").bottom() < x.rect().top() && x.rect().bottom() < caption_rect(&h, "Tilt Y").top());
+            assert!(caption_rect(&h, "Tilt Y").bottom() < y.rect().top() && y.rect().bottom() < caption_rect(&h, "Rotation").top());
+            assert_eq!(h.state(), &b, "drawing preserves pose degrees and flags");
+            y.focus();
+            h.run_steps(1);
+            h.key_press(egui::Key::Space);
+            h.run_steps(2);
+            let wire = serde_json::to_value(h.state()).unwrap();
+            assert_eq!(wire["pose"]["overrideTiltX"], true);
+            assert_eq!(wire["pose"]["overrideTiltY"], true);
+            let mut expected = serde_json::to_value(b).unwrap();
+            expected["pose"]["overrideTiltY"] = serde_json::json!(true);
+            expected["pose"]["overrideTilt"] = serde_json::json!(true);
+            assert_eq!(wire, expected, "Space changes only Y, plus the derived legacy readback");
+        }
     }
 
     /// #3825: jitter is an amount, not a hue selector; it uses the themed amount track.
@@ -680,7 +730,7 @@ mod tests {
             let mut h = section_harness(5, b.clone());
             crate::PhotocraftApp::setup_context(&h.ctx, kind);
             h.run_steps(3);
-            let label = h.get_by_label("Hue Jitter").rect();
+            let label = caption_rect(&h, "Hue Jitter");
             let t = Tokens::get(&h.ctx);
             assert!(
                 h.output().shapes.iter().any(|c| matches!(&c.shape, egui::Shape::Rect(r)
@@ -692,6 +742,134 @@ mod tests {
             assert!(h.query_all_by_role(Role::SpinButton).any(|n| n.accesskit_node().numeric_value() == Some(37.0)));
             assert_eq!(h.state(), &b, "rendering does not change saved brush settings");
         }
+    }
+
+    struct TransferState {
+        brush: BrushSettings,
+        tool: Tool,
+    }
+
+    fn transfer_mixer_brush() -> BrushSettings {
+        let mut b = BrushSettings::default();
+        b.transfer.enabled = true;
+        for (dynamic, jitter, minimum, fade_steps) in [
+            (&mut b.transfer.opacity, 0.13, 0.17, 119),
+            (&mut b.transfer.flow, 0.27, 0.29, 229),
+            (&mut b.transfer.wetness, 0.41, 0.43, 339),
+            (&mut b.transfer.mix, 0.63, 0.67, 449),
+        ] {
+            *dynamic = Dynamic { control: Control::Fade, jitter, minimum, fade_steps, ..Default::default() };
+        }
+        b
+    }
+
+    fn transfer_mixer_harness(kind: theme::ThemeKind, tool: Tool) -> Harness<'static, TransferState> {
+        let mut ready = false;
+        let mut h = Harness::builder().with_size(vec2(340.0, 1400.0)).build_ui_state(
+            move |ui, state: &mut TransferState| {
+                if !ready {
+                    crate::PhotocraftApp::setup_context(ui.ctx(), kind);
+                    ready = true;
+                    return;
+                }
+                ui.add_enabled_ui(state.brush.transfer.enabled, |ui| section_body(ui, &mut state.brush, 6, &[], None, state.tool));
+            },
+            TransferState { brush: transfer_mixer_brush(), tool },
+        );
+        h.run_steps(3);
+        h
+    }
+
+    /// #3825: Mixer-only blocks follow the tool, including sliders, minimums and Fade steps.
+    #[test]
+    fn transfer_mixer_controls_follow_the_tool_and_section_in_every_theme() {
+        for kind in theme::ThemeKind::ALL {
+            let mut h = transfer_mixer_harness(kind, Tool::Brush);
+            let before = h.state().brush.clone();
+            for tool in Tool::ALL {
+                h.state_mut().tool = tool;
+                h.run_steps(2);
+                for (mixer_only, values) in [(false, [13.0, 17.0, 119.0, 27.0, 29.0, 229.0]), (true, [41.0, 43.0, 339.0, 63.0, 67.0, 449.0])] {
+                    for value in values {
+                        let field = h.query_all_by_role(Role::SpinButton).find(|node| node.accesskit_node().numeric_value() == Some(value)).unwrap();
+                        assert_eq!(field.accesskit_node().is_disabled(), mixer_only && tool != Tool::MixerBrush, "{kind:?}, {tool:?}, {value}");
+                    }
+                }
+                for (index, node) in h.query_all_by_role(Role::ComboBox).enumerate() {
+                    assert_eq!(node.accesskit_node().is_disabled(), index >= 2 && tool != Tool::MixerBrush, "{kind:?}, {tool:?}: controller {index}");
+                }
+                assert_eq!(h.state().brush, before, "changing tool context only changes availability");
+            }
+            h.state_mut().tool = Tool::MixerBrush;
+            h.state_mut().brush.transfer.enabled = false;
+            h.run_steps(2);
+            assert!(h.query_all_by_role(Role::SpinButton).all(|node| node.accesskit_node().is_disabled()), "section Off still disables every field");
+            assert!(h.query_all_by_role(Role::ComboBox).all(|node| node.accesskit_node().is_disabled()));
+            h.state_mut().brush.transfer.enabled = true;
+            h.state_mut().brush.transfer.wetness.control = Control::Off;
+            h.run_steps(2);
+            let minimum = h.query_all_by_role(Role::SpinButton).find(|node| node.accesskit_node().numeric_value() == Some(43.0)).unwrap();
+            assert!(minimum.accesskit_node().is_disabled(), "Control Off still disables the applicable minimum");
+        }
+    }
+
+    #[test]
+    fn transfer_mixer_controls_ignore_disabled_edits_and_keep_values_on_reactivation() {
+        let mut h = transfer_mixer_harness(theme::ThemeKind::ProMedium, Tool::Brush);
+        let before = h.state().brush.clone();
+        for value in [41.0, 43.0, 339.0, 63.0, 67.0, 449.0] {
+            let field = h.query_all_by_role(Role::SpinButton).find(|node| node.accesskit_node().numeric_value() == Some(value)).unwrap();
+            let at = field.rect().center();
+            field.click();
+            h.key_press(egui::Key::ArrowUp);
+            h.event(egui::Event::Text("999".into()));
+            h.key_press(egui::Key::Enter);
+            h.run_steps(2);
+            h.hover_at(at);
+            h.drag_at(at);
+            h.run_steps(1);
+            h.drop_at(at + vec2(60.0, 0.0));
+            h.run_steps(2);
+            assert_eq!(h.state().brush, before, "inactive field {value} ignores keyboard and pointer input");
+        }
+        for label in ["Wetness Jitter", "Mix Jitter"] {
+            let row = caption_rect(&h, label);
+            let from = pos2(row.left() + 120.0, row.bottom() + 16.0);
+            h.hover_at(from);
+            h.drag_at(from);
+            h.run_steps(1);
+            h.hover_at(from + vec2(150.0, 0.0));
+            h.run_steps(1);
+            h.drop_at(from + vec2(150.0, 0.0));
+            h.run_steps(2);
+            assert_eq!(h.state().brush, before, "the inactive {label} track ignores a drag");
+        }
+        h.state_mut().tool = Tool::MixerBrush;
+        h.run_steps(2);
+        let row = caption_rect(&h, "Wetness Jitter");
+        let from = pos2(row.left() + 120.0, row.bottom() + 16.0);
+        h.hover_at(from);
+        h.drag_at(from);
+        h.run_steps(1);
+        h.hover_at(from + vec2(150.0, 0.0));
+        h.run_steps(1);
+        h.drop_at(from + vec2(150.0, 0.0));
+        h.run_steps(2);
+        assert!(h.state().brush.transfer.wetness.jitter > 0.6, "the same track accepts a drag when applicable");
+        h.state_mut().brush.transfer.wetness.jitter = 0.41;
+        h.run_steps(2);
+        let field = h.query_all_by_role(Role::SpinButton).find(|node| node.accesskit_node().numeric_value() == Some(41.0)).unwrap();
+        field.click();
+        h.key_press(egui::Key::ArrowUp);
+        h.run_steps(2);
+        assert!((h.state().brush.transfer.wetness.jitter - 0.42).abs() < 1e-6);
+        let after = h.state().brush.clone();
+        h.state_mut().tool = Tool::Brush;
+        h.run_steps(2);
+        h.state_mut().tool = Tool::MixerBrush;
+        h.run_steps(2);
+        assert_eq!(h.state().brush, after);
+        assert!(h.query_all_by_role(Role::SpinButton).any(|node| node.accesskit_node().numeric_value() == Some(42.0) && !node.accesskit_node().is_disabled()));
     }
 
     fn set_controls(b: &mut BrushSettings, control: Control) {
@@ -762,7 +940,7 @@ mod tests {
         // The slider below the number and its scrubby label are disabled too.
         let track = pos2(300.0, center.y + 24.0);
         drag(&mut h, track, track);
-        let label = h.get_by_label("Minimum Diameter").rect().center();
+        let label = caption_rect(&h, "Minimum Diameter").center();
         drag(&mut h, label, label + vec2(60.0, 0.0));
         assert_eq!(h.state(), &before, "disabled interactions never rewrite brush settings");
 

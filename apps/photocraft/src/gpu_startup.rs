@@ -12,10 +12,10 @@
 //! - macOS: Metal → CPU
 //!
 //! The choice that worked is remembered in `performance.gpuBackend` (Preferences › Performance,
-//! where it can be reset). With `auto`, Intel adapters on Windows use DX12, and when DXGI lists an
-//! Intel adapter the instance leaves Vulkan out, so the first start doesn't load the Intel Vulkan
-//! driver either. `WGPU_BACKEND` still overrides everything, and `--safe-gpu` forces the CPU path
-//! for one launch.
+//! where it can be reset). With `auto`, Intel and Qualcomm (Windows on ARM) adapters on Windows
+//! use DX12, and when DXGI lists an Intel adapter the instance leaves Vulkan out, so the first
+//! start doesn't load the Intel Vulkan driver either. `WGPU_BACKEND` still overrides everything,
+//! and `--safe-gpu` forces the CPU path for one launch.
 //!
 //! "CPU" composites on the CPU and draws the window with a software adapter where the platform
 //! has one (WARP on Windows, llvmpipe over GL elsewhere). On Linux a GL adapter that can't present
@@ -35,6 +35,10 @@ use serde_json::{Value, json};
 pub const MARKER_FILE: &str = "gpu-starting.json";
 /// PCI vendor id of Intel.
 pub const INTEL: u32 = 0x8086;
+/// Qualcomm's vendor id as its Vulkan driver reports it.
+pub const QUALCOMM: u32 = 0x5143;
+/// Qualcomm's vendor id as DXGI (DX12) reports it: "QCOM".
+pub const QUALCOMM_DXGI: u32 = 0x4D4F_4351;
 /// Largest marker read (a marker is a few hundred bytes).
 const MARKER_MAX: u64 = 64 << 10;
 
@@ -244,6 +248,18 @@ pub fn dx12_compiler(env: Option<&str>, exe_dir: Option<&Path>) -> wgpu::Dx12Com
     }
 }
 
+/// The GPU makers whose Windows Vulkan driver `auto` avoids, so DX12 comes first: Intel's
+/// (`igvk64.dll` crashed while the device was created, #4) and Qualcomm's Adreno driver on
+/// Windows on ARM (it lost the device mid-session and the window went with it; DX12 on the same
+/// machine didn't, #7537). The name is for System Info.
+fn dx12_first_on_windows(vendor: u32) -> Option<&'static str> {
+    match vendor {
+        INTEL => Some("Intel"),
+        QUALCOMM | QUALCOMM_DXGI => Some("Qualcomm"),
+        _ => None,
+    }
+}
+
 /// What adapter selection needs to know about an adapter.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Candidate {
@@ -258,9 +274,10 @@ pub struct Candidate {
 
 /// Rank of an adapter (lower is better): high-performance device types first (egui's power
 /// preference) or software adapters first for `cpu`; then backends, with DX12 before Vulkan for
-/// Intel on Windows. For `cpu`, any GL adapter comes before Vulkan, which is only the fallback
-/// for presenting the window (see [`backends`]). On Windows GL comes after every other adapter,
-/// WARP included: GL there (VMware's SVGA3D, GL-only old GPUs) drew a black window (#5191, #1788).
+/// Intel and Qualcomm on Windows ([`dx12_first_on_windows`]). For `cpu`, any GL adapter comes
+/// before Vulkan, which is only the fallback for presenting the window (see [`backends`]). On
+/// Windows GL comes after every other adapter, WARP included: GL there (VMware's SVGA3D, GL-only
+/// old GPUs) drew a black window (#5191, #1788).
 fn rank(a: &Candidate, backend: GpuBackend, os: Os) -> (u8, u8, u8) {
     let fallback = u8::from((backend == GpuBackend::Cpu && a.backend == wgpu::Backend::Vulkan) || (os == Os::Windows && a.backend == wgpu::Backend::Gl));
     let ty = match a.device_type {
@@ -276,7 +293,7 @@ fn rank(a: &Candidate, backend: GpuBackend, os: Os) -> (u8, u8, u8) {
         _ => ty,
     };
     let be = match a.backend {
-        wgpu::Backend::Dx12 if os == Os::Windows && a.vendor == INTEL => 0,
+        wgpu::Backend::Dx12 if os == Os::Windows && dx12_first_on_windows(a.vendor).is_some() => 0,
         wgpu::Backend::Vulkan | wgpu::Backend::Metal => 1,
         wgpu::Backend::Dx12 => 2,
         wgpu::Backend::Gl => 3,
@@ -329,15 +346,18 @@ pub fn wanted_adapter(env: Option<&str>, pref: &str) -> Option<String> {
     [env.unwrap_or(""), pref].iter().map(|s| s.trim()).find(|s| !s.is_empty()).map(|s| s.chars().take(256).collect())
 }
 
-/// Whether picking `chosen` applied the Intel-on-Windows DX12 default (a Vulkan adapter of the
-/// same vendor was available, or `vulkan_left_out`: [`windows_auto_backends`] left Vulkan out of
-/// the instance).
-pub fn intel_dx12_applied(adapters: &[Candidate], chosen: usize, os: Os, vulkan_left_out: bool) -> bool {
-    let Some(c) = adapters.get(chosen) else { return false };
-    os == Os::Windows
-        && c.vendor == INTEL
-        && c.backend == wgpu::Backend::Dx12
-        && (vulkan_left_out || adapters.iter().any(|a| a.vendor == INTEL && a.backend == wgpu::Backend::Vulkan))
+/// The maker's name when picking `chosen` applied the Windows DX12 default of
+/// [`dx12_first_on_windows`]: a Vulkan adapter of the same maker was available, or, for Intel,
+/// `vulkan_left_out` ([`windows_auto_backends`] left Vulkan out of the instance).
+pub fn dx12_default_applied(adapters: &[Candidate], chosen: usize, os: Os, vulkan_left_out: bool) -> Option<&'static str> {
+    let c = adapters.get(chosen)?;
+    if os != Os::Windows || c.backend != wgpu::Backend::Dx12 {
+        return None;
+    }
+    let maker = dx12_first_on_windows(c.vendor)?;
+    let applied =
+        (vulkan_left_out && c.vendor == INTEL) || adapters.iter().any(|a| a.backend == wgpu::Backend::Vulkan && dx12_first_on_windows(a.vendor) == Some(maker));
+    applied.then_some(maker)
 }
 
 /// wgpu compiles indirect-call validation shaders inside `request_device`; Metal's compiler
@@ -349,8 +369,8 @@ fn skips_indirect_validation(os: Os, intel: bool) -> bool {
 }
 
 /// Configure eframe's wgpu setup for `plan`: instance backends, the DX12 shader compiler, adapter
-/// selection (Intel on Windows, software adapters for `cpu`) and the marker update once the
-/// adapter is chosen. `note` receives a remark for System Info (e.g. the Intel default).
+/// selection (Intel and Qualcomm on Windows, software adapters for `cpu`) and the marker update
+/// once the adapter is chosen. `note` receives a remark for System Info (e.g. the DX12 default).
 pub fn configure(setup: &mut egui_wgpu::WgpuSetup, plan: &Plan, os: Os, wanted: Option<String>, sentinel: SharedSentinel, note: Arc<Mutex<Option<String>>>) {
     if let egui_wgpu::WgpuSetup::CreateNew(create) = setup {
         if let Some(b) = backends(plan, os) {
@@ -396,9 +416,11 @@ pub fn configure(setup: &mut egui_wgpu::WgpuSetup, plan: &Plan, os: Os, wanted: 
                     *note.lock().unwrap_or_else(PoisonError::into_inner) =
                         Some("CPU image rendering; no software graphics adapter is available, so the window uses hardware graphics".into());
                 }
-                if backend == GpuBackend::Auto && intel_dx12_applied(&cands, i, os, vulkan_left_out) {
+                if backend == GpuBackend::Auto
+                    && let Some(maker) = dx12_default_applied(&cands, i, os, vulkan_left_out)
+                {
                     *note.lock().unwrap_or_else(PoisonError::into_inner) =
-                        Some("Intel graphics on Windows: using DirectX 12 (the Intel Vulkan driver is known to crash)".into());
+                        Some(format!("{maker} graphics on Windows: using DirectX 12 (the {maker} Vulkan driver is known to crash)"));
                 }
                 adapters.get(i).cloned().ok_or_else(|| "no graphics adapter found".to_string())
             }));
@@ -772,13 +794,13 @@ mod tests {
         let intel = [cand(INTEL, T::IntegratedGpu, B::Vulkan), cand(INTEL, T::IntegratedGpu, B::Dx12), cand(INTEL, T::IntegratedGpu, B::Gl)];
         let i = pick(&intel, Auto, Os::Windows).unwrap();
         assert_eq!(intel[i].backend, B::Dx12);
-        assert!(intel_dx12_applied(&intel, i, Os::Windows, false));
+        assert_eq!(dx12_default_applied(&intel, i, Os::Windows, false), Some("Intel"));
         // Elsewhere (and for other vendors) Vulkan stays first.
         assert_eq!(intel[pick(&intel, Auto, Os::Other).unwrap()].backend, B::Vulkan);
         let nv = [cand(0x10de, T::DiscreteGpu, B::Dx12), cand(0x10de, T::DiscreteGpu, B::Vulkan)];
         let i = pick(&nv, Auto, Os::Windows).unwrap();
         assert_eq!(nv[i].backend, B::Vulkan);
-        assert!(!intel_dx12_applied(&nv, i, Os::Windows, false));
+        assert_eq!(dx12_default_applied(&nv, i, Os::Windows, false), None);
         // Intel iGPU + discrete GPU: the discrete one wins (high performance), on Vulkan.
         let hybrid = [intel[0], intel[1], nv[1]];
         assert_eq!(pick(&hybrid, Auto, Os::Windows), Some(2));
@@ -787,6 +809,27 @@ mod tests {
         only[0].surface_ok = false;
         assert_eq!(pick(&only, Auto, Os::Windows), Some(1));
         assert_eq!(pick(&[], Auto, Os::Windows), None);
+    }
+
+    /// #7537: on Windows on ARM the Adreno Vulkan driver lost the device mid-session and took the
+    /// window with it; DX12 on the same machine didn't. DXGI and Vulkan report different vendor ids.
+    #[test]
+    fn qualcomm_on_windows_defaults_to_dx12() {
+        use wgpu::{Backend as B, DeviceType as T};
+        let adreno = [cand(QUALCOMM, T::IntegratedGpu, B::Vulkan), cand(QUALCOMM_DXGI, T::IntegratedGpu, B::Dx12)];
+        let i = pick(&adreno, Auto, Os::Windows).unwrap();
+        assert_eq!(adreno[i].backend, B::Dx12);
+        assert_eq!(dx12_default_applied(&adreno, i, Os::Windows, false), Some("Qualcomm"));
+        // Only Vulkan offered: still Vulkan, and no note.
+        assert_eq!(pick(&adreno[..1], Auto, Os::Windows), Some(0));
+        assert_eq!(dx12_default_applied(&adreno, 0, Os::Windows, false), None);
+        // An Intel Vulkan adapter doesn't make a Qualcomm DX12 pick "the default".
+        let mixed = [cand(INTEL, T::IntegratedGpu, B::Vulkan), adreno[1]];
+        assert_eq!(dx12_default_applied(&mixed, 1, Os::Windows, false), None);
+        // Vulkan left out of the instance (an Intel adapter was listed) speaks only for Intel.
+        assert_eq!(dx12_default_applied(&adreno[1..], 0, Os::Windows, true), None);
+        // Elsewhere Vulkan stays first.
+        assert_eq!(adreno[pick(&adreno, Auto, Os::Other).unwrap()].backend, B::Vulkan);
     }
 
     /// #4: an instance with Vulkan loads the Intel Vulkan driver, which crashed at startup, before
@@ -824,8 +867,8 @@ mod tests {
         let listed = [cand(INTEL, T::IntegratedGpu, B::Dx12), cand(WARP, T::Cpu, B::Dx12), cand(INTEL, T::IntegratedGpu, B::Gl)];
         let i = pick(&listed, Auto, Os::Windows).unwrap();
         assert_eq!(i, 0);
-        assert!(intel_dx12_applied(&listed, i, Os::Windows, true));
-        assert!(!intel_dx12_applied(&listed, i, Os::Windows, false));
+        assert_eq!(dx12_default_applied(&listed, i, Os::Windows, true), Some("Intel"));
+        assert_eq!(dx12_default_applied(&listed, i, Os::Windows, false), None);
     }
 
     #[test]
