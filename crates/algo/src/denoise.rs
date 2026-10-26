@@ -293,8 +293,7 @@ mod tests {
         }
         for (c, expected) in expected.iter().enumerate() {
             let actual: Vec<f32> = out.as_chunks::<3>().0.iter().map(|px| px[c]).collect();
-            let worst = actual.iter().zip(expected).map(|(a, e)| (a - e).abs()).fold(0.0f32, f32::max);
-            assert!(worst < 1e-4, "plane {c} differs from the independent filters by {worst}");
+            assert_bits(&actual, expected);
             assert!(actual.iter().zip(&plane(c)).any(|(a, o)| (a - o).abs() > 1e-3), "plane {c} was filtered");
         }
     }
