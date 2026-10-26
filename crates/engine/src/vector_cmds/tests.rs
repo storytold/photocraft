@@ -1238,3 +1238,57 @@ fn triangles_and_polygons_take_a_corner_radius_kept_through_edits_and_scaling() 
     s.execute("shape.edit", json!({"layer": id, "transform": [0.5, 0, 0, 0.5, 0, 0]})).unwrap();
     assert!(matches!(live(&s), Some(LiveShape::Polygon { corner_radius, .. }) if (corner_radius - 5.0).abs() < 1e-9));
 }
+
+#[test]
+fn arrowhead_flags_reject_wrong_types_without_mutation() {
+    let mut s = session(160, 120, 8);
+    let id = s
+        .execute(
+            "shape.create",
+            json!({
+                "kind": "line",
+                "from": [10, 20],
+                "to": [120, 20],
+                "arrowStart": true,
+                "arrowEnd": false
+            }),
+        )
+        .unwrap()["layer"]
+        .as_u64()
+        .unwrap();
+
+    let original_doc = s.active().unwrap().doc.clone();
+    let original_history = s.active().unwrap().history.past_len();
+
+    for key in ["arrowStart", "arrowEnd"] {
+        for invalid in [json!("true"), json!(null), json!(1), json!([])] {
+            let mut create = json!({
+                "kind": "line",
+                "from": [10, 40],
+                "to": [120, 40]
+            });
+            create[key] = invalid.clone();
+
+            assert!(s.execute("shape.create", create).is_err(), "{key} must reject {invalid}");
+
+            let mut edit = json!({"layer": id});
+            edit[key] = invalid.clone();
+
+            assert!(s.execute("shape.edit", edit).is_err(), "{key} edit must reject {invalid}");
+
+            assert_eq!(s.active().unwrap().doc, original_doc);
+            assert_eq!(s.active().unwrap().history.past_len(), original_history);
+        }
+    }
+
+    // Valid boolean values remain accepted.
+    s.execute(
+        "shape.edit",
+        json!({
+            "layer": id,
+            "arrowStart": false,
+            "arrowEnd": true
+        }),
+    )
+    .unwrap();
+}

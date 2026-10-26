@@ -492,12 +492,19 @@ fn live_from_params(cmd: &str, kind: &str, p: &Value, prev: Option<&LiveShape>) 
                     }
                     Ok(value)
                 };
+                // Reject invalid flag types rather than silently using defaults.
+                let flag = |key: &str, fallback: bool| -> Result<bool> {
+                    match p.get(key) {
+                        Some(v) => v.as_bool().ok_or_else(|| bad(cmd, format!("`{key}` must be a boolean"))),
+                        None => Ok(fallback),
+                    }
+                };
                 LiveShape::ArrowLine {
                     from,
                     to,
                     weight,
-                    start: p.get("arrowStart").and_then(Value::as_bool).unwrap_or(ps),
-                    end: p.get("arrowEnd").and_then(Value::as_bool).unwrap_or(pe),
+                    start: flag("arrowStart", ps)?,
+                    end: flag("arrowEnd", pe)?,
                     width: dim("arrowWidth", pwidth, 1.0, 4096.0)?,
                     length: dim("arrowLength", plen, 1.0, 4096.0)?,
                     concavity: dim("arrowConcavity", pc, 0.0, 100.0)?,

@@ -53,7 +53,19 @@ fn copy_arrow_to_tool_defaults(app: &mut PhotocraftApp, id: photocraft_doc::Laye
     let values = app.session.active().and_then(|st| st.doc.layer(id)).and_then(|layer| match &layer.content {
         LayerContent::Shape(sh) => match sh.live.as_ref() {
             Some(photocraft_doc::vector::LiveShape::ArrowLine { start, end, width, length, concavity, weight, .. }) => {
-                Some((*start, *end, *width as f32, *length as f32, *concavity as f32, *weight as f32))
+                {
+                    // Live dimensions may exceed new-arrow input limits after scaling.
+                    // Clamp only the defaults, never the existing shape.
+                    let bounded = |v: f64, min: f64, max: f64| -> f32 { if v.is_finite() { v.clamp(min, max) as f32 } else { min as f32 } };
+                    Some((
+                        *start,
+                        *end,
+                        bounded(*width, 1.0, 4096.0),
+                        bounded(*length, 1.0, 4096.0),
+                        bounded(*concavity, 0.0, 100.0),
+                        bounded(*weight, 1.0, 10000.0),
+                    ))
+                }
             }
             _ => None,
         },
