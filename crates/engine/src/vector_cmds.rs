@@ -650,7 +650,8 @@ pub fn transform_shape(sh: &mut ShapeLayer, a: &Affine) {
     let axis_aligned = m1.abs() < 1e-12 && m2.abs() < 1e-12 && m0 > 0.0 && m3 > 0.0;
     // The path has already received the exact affine transform. Drop live arrow
     // parameters if later edits would regenerate a different, unskewed head.
-    if let Some(LiveShape::ArrowLine { from, to, .. }) = sh.live.as_ref()
+    if let Some(LiveShape::ArrowLine { from, to, start, end, .. }) = sh.live.as_ref()
+        && (*start || *end)
         && arrow_axis_scales(a, *from, *to).is_none()
     {
         sh.live = None;
@@ -2249,6 +2250,39 @@ mod arrow_affine_regression_tests {
 
         assert_eq!(sh.path, expected_path);
         assert!(sh.live.is_none());
+    }
+
+    #[test]
+    fn headless_arrow_survives_nonuniform_diagonal_scale() {
+        let live =
+            LiveShape::ArrowLine { from: [0.0, 0.0], to: [100.0, 100.0], weight: 5.0, start: false, end: false, width: 52.0, length: 50.0, concavity: 0.0 };
+
+        let mut sh = ShapeLayer { path: vector::shapes::live_path(&live), live: Some(live), ..ShapeLayer::default() };
+
+        let mut a = Affine::translate(0.0, 0.0);
+        a.m = [2.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+
+        let expected_path = sh.path.transform(&a);
+        transform_shape(&mut sh, &a);
+
+        assert_eq!(sh.path, expected_path);
+        assert!(matches!(sh.live, Some(LiveShape::ArrowLine { start: false, end: false, .. })));
+    }
+
+    #[test]
+    fn zero_length_headless_arrow_survives_scale() {
+        let live = LiveShape::ArrowLine { from: [0.0, 0.0], to: [0.0, 0.0], weight: 5.0, start: false, end: false, width: 52.0, length: 50.0, concavity: 0.0 };
+
+        let mut sh = ShapeLayer { path: vector::shapes::live_path(&live), live: Some(live), ..ShapeLayer::default() };
+
+        let mut a = Affine::translate(0.0, 0.0);
+        a.m = [2.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+
+        let expected_path = sh.path.transform(&a);
+        transform_shape(&mut sh, &a);
+
+        assert_eq!(sh.path, expected_path);
+        assert!(matches!(sh.live, Some(LiveShape::ArrowLine { start: false, end: false, .. })));
     }
 
     #[test]
