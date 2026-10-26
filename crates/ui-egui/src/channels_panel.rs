@@ -165,13 +165,13 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 painter.line_segment([rect.left_bottom(), rect.right_bottom()], Stroke::new(1.0, t.separator));
             }
             let eye = Rect::from_min_size(pos2(rect.left() + 6.0, rect.center().y - 11.0), vec2(22.0, 22.0));
-            let eye_resp = ui.interact(eye, ui.id().with(("chan-eye", format!("{:?}", row.reference()))), Sense::click());
+            let eye_resp = ui.interact(eye, ui.scope_id().with(("chan-eye", format!("{:?}", row.reference()))), Sense::click());
             // Like Photoshop, the temporary mask row's eye is empty until the mask is shown.
             if row != Row::LayerMask || visible || eye_resp.hovered() {
                 icons::paint(ui, eye, if visible { "eye" } else { "eye-off" }, 14.0, if visible { t.icon } else { t.text_faint });
             }
             let eye_resp = eye_resp.on_hover_text(if row == Row::LayerMask { tl!("Show the layer mask as an overlay") } else { tl!("Toggle visibility") });
-            eye_resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, format!("Visibility {name}")));
+            eye_resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, format!("Visibility {name}")));
             let layer_id = masked.as_ref().map(|l| l.id.0);
             if eye_resp.clicked() {
                 let view_cmd = photocraft_engine::mask_view_cmds::ID.to_string();
@@ -193,7 +193,7 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             }
             drawn.push((name.clone(), thumb));
             // Rows are painted: name them for screen readers and UI tests.
-            resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected, &name));
+            resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, &name));
             // Spot channels: a swatch of the ink on the thumbnail corner.
             if let Row::Alpha(i) = row
                 && let Some((ink, _)) = doc.channels[i].spot
@@ -223,7 +223,7 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     t.text_faint,
                 );
             }
-            let rename_id = egui::Id::new(("chan-rename", doc.id.0, format!("{:?}", row.reference())));
+            let rename_id = egui::Id::unique(("chan-rename", doc.id.0, format!("{:?}", row.reference())));
             if resp.clicked() && !eye_resp.clicked() {
                 let m = ui.input(|i| i.modifiers);
                 if m.command && row == Row::LayerMask {
@@ -261,7 +261,7 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 }
                 if let Some(mut text) = ctx.data(|d| d.get_temp::<String>(rename_id)) {
                     let edit_rect = Rect::from_min_max(pos2(text_pos.x - 3.0, rect.center().y - 11.0), pos2(rect.right() - 36.0, rect.center().y + 11.0));
-                    let te = ui.put(edit_rect, egui::TextEdit::singleline(&mut text).font(egui::FontId::proportional(12.5)));
+                    let te = ui.put(edit_rect, egui::TextEdit::singleline(&mut text).font(egui::FontId::proportional(12.5))).accessible_name(tl!("Name"));
                     if !te.has_focus() && !te.lost_focus() {
                         te.request_focus();
                     }
@@ -390,7 +390,7 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         if id == "ui.renameChannel" {
             if let Some(i) = p.as_u64().and_then(|i| doc.channels.get(i as usize)) {
                 let row = Row::Alpha(p.as_u64().unwrap_or(0) as usize);
-                ctx.data_mut(|d| d.insert_temp(egui::Id::new(("chan-rename", doc.id.0, format!("{:?}", row.reference()))), i.name.clone()));
+                ctx.data_mut(|d| d.insert_temp(egui::Id::unique(("chan-rename", doc.id.0, format!("{:?}", row.reference()))), i.name.clone()));
             }
             continue;
         }
@@ -436,11 +436,11 @@ fn drop_action(row: Row, name: &str, mask_layer: Option<u64>, on: Footer) -> Opt
 }
 
 fn drag_id() -> egui::Id {
-    egui::Id::new("channel-row-drag")
+    egui::Id::unique("channel-row-drag")
 }
 
 fn thumbs_id() -> egui::Id {
-    egui::Id::new("channel-thumb-rects")
+    egui::Id::unique("channel-thumb-rects")
 }
 
 /// The Channels rows drawn last frame: (name, thumbnail rect).
@@ -523,7 +523,7 @@ mod tests {
         ctx.run_ui(Default::default(), |_| {}).textures_delta.clear();
         let doc = app.session.active().unwrap().doc.id.0;
         let name = app.session.active().unwrap().doc.channels[0].name.clone();
-        ctx.data_mut(|d| d.insert_temp(egui::Id::new(("chan-rename", doc, format!("{:?}", Row::Alpha(0).reference()))), name));
+        ctx.data_mut(|d| d.insert_temp(egui::Id::unique(("chan-rename", doc, format!("{:?}", Row::Alpha(0).reference()))), name));
         // The field takes focus on the first pass and owns the IME from the second on (#585).
         let interrupts: Vec<Option<bool>> = (0..4)
             .map(|_| {

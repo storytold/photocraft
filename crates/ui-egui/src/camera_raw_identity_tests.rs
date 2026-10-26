@@ -2,7 +2,9 @@
 
 use std::sync::Arc;
 
-use super::*;
+use serde_json::{Value, json};
+
+use super::{CameraRaw, PhotocraftApp, RawOpen, commit_open_raw, finish_redevelop, queue_open_dialog, replace_raw_document};
 
 fn synthetic_raw() -> Vec<u8> {
     use photocraft_raw::testgen::{DngSpec, mosaic, scene};
@@ -63,14 +65,14 @@ fn identity_app() -> (PhotocraftApp, RawOpen, Control) {
 fn completed_redevelop(app: &mut PhotocraftApp, raw: &RawOpen) -> (CameraRaw, Value, photocraft_doc::DocId) {
     app.background_jobs = true;
     let params = CameraRaw { exposure: 1.0, contrast: 20.0, ..Default::default() };
-    let started = commit_open_raw(app, &params, raw).unwrap();
+    let started = commit_open_raw(app, &params, raw, None).unwrap();
     let job = photocraft_engine::jobs::JobId(started["job"].as_u64().expect("the sensor re-develop runs as a real job"));
     let mut result = app.session.wait_job(job).unwrap();
     let replacement = app.session.documents()[result["document"].as_u64().unwrap() as usize].doc.id;
     // The producer has a separate contract test. Supply the observed identity here to isolate
     // the UI consumer's handling even when run against the old result schema.
     result["docId"] = json!(replacement.0);
-    app.raw_redevelop = None;
+    app.raw_redevelop.clear();
     app.background_jobs = false;
     (params, result, replacement)
 }
@@ -96,7 +98,7 @@ fn completion_identity_applies_remaining_settings_after_tab_reordering() {
     let index = result["document"].as_u64().unwrap() as usize;
     app.session.move_document(index, 0).unwrap();
     assert_eq!(app.session.documents()[index].doc.id, control.doc.id, "another completion may move this tab before the RAW callback");
-    finish_redevelop(&mut app, &params, &raw, &result).unwrap();
+    finish_redevelop(&mut app, &params, &raw, &result, &Default::default()).unwrap();
     control.assert_untouched(&app);
     let state = app.session.active().unwrap();
     assert_eq!(state.doc.id, replacement);
@@ -113,7 +115,7 @@ fn completion_identity_rejects_a_closed_replacement_without_filtering_the_active
     let index = app.session.documents().iter().position(|state| state.doc.id == replacement).unwrap();
     app.session.close(index).unwrap();
     assert_eq!(app.session.active().unwrap().doc.id, control.doc.id);
-    assert!(finish_redevelop(&mut app, &params, &raw, &result).is_err(), "a closed replacement must not fall back to the active document");
+    assert!(finish_redevelop(&mut app, &params, &raw, &result, &Default::default()).is_err(), "a closed replacement must not fall back to the active document");
     control.assert_untouched(&app);
     assert_eq!(app.session.documents().len(), 1);
 }
@@ -133,7 +135,7 @@ fn completion_identity_rejects_missing_and_invalid_ids_before_any_side_effect() 
         app.session.set_active(0);
         let views = app.view_docs.clone();
         let notices = app.ui.notices.len();
-        assert!(finish_redevelop(&mut app, &params, &raw, &result).is_err(), "invalid identity was accepted: {result}");
+        assert!(finish_redevelop(&mut app, &params, &raw, &result, &Default::default()).is_err(), "invalid identity was accepted: {result}");
         control.assert_untouched(&app);
         assert_eq!(app.session.active().unwrap().doc.id, control.doc.id);
         assert_eq!(app.view_docs, views, "identity validation precedes view remapping");

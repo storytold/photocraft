@@ -638,7 +638,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let screen = ctx.content_rect();
     let mut action: Option<&str> = None;
     let background = app.background_jobs;
-    egui::Area::new(egui::Id::new("gallery-dialog")).order(egui::Order::Foreground).fixed_pos(screen.min).show(ctx, |ui| {
+    egui::Area::new(egui::Id::unique("gallery-dialog")).order(egui::Order::Foreground).fixed_pos(screen.min).show(ctx, |ui| {
         let Some(d) = app.distort.gallery.as_mut() else { return };
         d.history.settle(&d.effects, ctx.input(|i| i.pointer.any_down()));
         let (full, _) = ui.allocate_exact_size(screen.size(), Sense::hover());
@@ -665,7 +665,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             clip.image(tex.id(), r, ERect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
             clip.rect_stroke(r, 0.0, Stroke::new(1.0, t.separator), egui::StrokeKind::Outside);
         }
-        let resp = ui.interact(area, egui::Id::new("gallery-preview"), Sense::drag());
+        let resp = ui.interact(area, egui::Id::unique("gallery-preview"), Sense::drag());
         if resp.dragged() && d.zoom > 0.0 {
             let dl = resp.drag_delta() / d.zoom;
             d.center = [d.center[0] - dl.x, d.center[1] - dl.y];
@@ -688,7 +688,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             let at = opts.iter().position(|(v, _)| *v > z).unwrap_or(opts.len());
             opts.insert(at, (z, &off_menu));
         }
-        if widgets::dropdown(&mut zb, "gallery-zoom", &mut z, &opts, 110.0) {
+        if widgets::dropdown(&mut zb, "gallery-zoom", tl!("Zoom"), &mut z, &opts, 110.0) {
             d.zoom = z;
         }
         if let Some(p) = d.rendering() {
@@ -773,7 +773,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         ru.add_space(4.0);
         let mut cur = d.effects[d.selected].filter;
         let names: Vec<(GalleryFilter, &str)> = GalleryFilter::ALL.iter().map(|f| (*f, f.name())).collect();
-        if widgets::dropdown(&mut ru, "gallery-filter", &mut cur, &names, inner.width() - 8.0) {
+        if widgets::dropdown(&mut ru, "gallery-filter", tl!("Filter"), &mut cur, &names, inner.width() - 8.0) {
             d.set_filter(cur);
         }
         widgets::hairline(&mut ru);
@@ -797,7 +797,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                         let opts: Vec<(String, &str)> = options.iter().cloned().zip(labels.iter().map(String::as_str)).collect();
                         ui.horizontal(|ui| {
                             ui.label(egui::RichText::new(tl!(&label)).color(t.text_dim));
-                            widgets::dropdown(ui, &format!("gallery-{}", p.key), &mut c, &opts, 140.0);
+                            widgets::dropdown(ui, &format!("gallery-{}", p.key), tl!(&label), &mut c, &opts, 140.0);
                         });
                         e.params.insert(p.key, json!(c));
                     }

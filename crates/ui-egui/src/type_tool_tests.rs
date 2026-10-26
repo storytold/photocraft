@@ -32,9 +32,10 @@ fn focused_font_search_does_not_type_into_the_canvas_layer() {
     });
     let mut h = Harness::builder().build_ui_state(
         |ui, app: &mut PhotocraftApp| {
-            let search_id = egui::Id::new("font-search-regression");
+            let search_id = egui::Id::unique("font-search-regression");
             let mut query = ui.data(|d| d.get_temp::<String>(search_id)).unwrap_or_default();
-            ui.add(egui::TextEdit::singleline(&mut query).id(search_id)).request_focus();
+            // Match the production font-search field: its hint is the field's accessible name.
+            ui.add(egui::TextEdit::singleline(&mut query).id(search_id).hint_text("Search fonts")).request_focus();
             ui.data_mut(|d| d.insert_temp(search_id, query));
             super::handle_keys(app, ui.ctx());
         },
@@ -43,7 +44,7 @@ fn focused_font_search_does_not_type_into_the_canvas_layer() {
     h.run_steps(2);
     h.event(egui::Event::Text("Ins".into()));
     h.run();
-    assert_eq!(h.ctx.data(|d| d.get_temp::<String>(egui::Id::new("font-search-regression"))).as_deref(), Some("Ins"));
+    assert_eq!(h.ctx.data(|d| d.get_temp::<String>(egui::Id::unique("font-search-regression"))).as_deref(), Some("Ins"));
     assert_eq!(super::current_text(h.state_mut(), LayerId(id)).as_deref(), Some("Sample"));
 }
 
@@ -703,7 +704,7 @@ fn options_harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
 
 /// Drags the options bar's "T" icon `dx` points to the right with `mods` held.
 fn scrub_size_icon(h: &mut Harness<'static, PhotocraftApp>, dx: f32, mods: Modifiers) {
-    let icon = h.get_by_label("Font size").rect().center();
+    let icon = h.get_by_role_and_label(egui::accesskit::Role::Label, "Font size").rect().center();
     h.hover_at(icon);
     h.run_steps(1);
     press(h, icon, true);
@@ -773,8 +774,8 @@ fn options_bar_t_icon_scrub_stops_at_the_size_limits() {
 
 /// Rests the pointer on the widget named `label` past the tooltip delay; true when its tooltip
 /// (a second node with the same name) shows.
-fn tooltip_shows(h: &mut Harness<'static, PhotocraftApp>, label: &str) -> bool {
-    let at = h.get_by_label(label).rect().center();
+fn tooltip_shows(h: &mut Harness<'static, PhotocraftApp>, role: egui::accesskit::Role, label: &str) -> bool {
+    let at = h.get_by_role_and_label(role, label).rect().center();
     h.hover_at(at);
     h.run_steps(8);
     h.query_all_by_label(label).count() == 2
@@ -787,10 +788,10 @@ fn options_bar_t_icon_shows_its_tooltip() {
     let mut app = new_app();
     app.run("type.create", json!({"text": "Hello", "size": 20, "x": 300, "y": 420})).unwrap();
     let mut h = options_harness(app);
-    assert!(tooltip_shows(&mut h, "Set the text color"), "the probe sees an ordinary tooltip");
+    assert!(tooltip_shows(&mut h, egui::accesskit::Role::Button, "Set the text color"), "the probe sees an ordinary tooltip");
     h.hover_at(egui::pos2(890.0, 55.0));
     h.run_steps(4);
-    assert!(tooltip_shows(&mut h, "Font size"), "hovering the \"T\" icon shows \"Font size\"");
+    assert!(tooltip_shows(&mut h, egui::accesskit::Role::Label, "Font size"), "hovering the \"T\" icon shows \"Font size\"");
 }
 
 /// A point inside glyph `i` of vertical type: `f` of the way down its advance, right of the
@@ -1585,18 +1586,23 @@ fn temporary_type_transform_preserves_paragraph_resize_pivot_ime_and_shortcuts()
     h.key_press_modifiers(Modifiers::COMMAND, egui::Key::A);
     h.run_steps(2);
     assert_eq!(selection(&h), (0, after.text.chars().count()));
-    h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: "候補".into(), active_range_chars: None }));
-    h.run_steps(2);
     let f = crate::type_transform::frame(h.state_mut()).unwrap();
     let a = f.quad[2];
     tool_event(h.state_mut(), ToolEvent::Down { x: a[0], y: a[1], pressure: 1.0 }, type_command());
     tool_event(h.state_mut(), ToolEvent::Up { x: a[0] + 20.0, y: a[1] + 10.0 }, type_command());
+    // Complete the application edit before starting this composition: a completed transform
+    // changes the document revision and must cancel an older composition through the reset guard.
+    h.run_steps(2);
+    h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: "候補".into(), active_range_chars: None }));
+    h.run_steps(2);
     assert_eq!(h.state().ui.text_edit.as_ref().unwrap().preedit, Some((0, 2)));
     let f = crate::type_transform::frame(h.state_mut()).unwrap();
     let a = f.quad[2];
     tool_event(h.state_mut(), ToolEvent::Down { x: a[0], y: a[1], pressure: 1.0 }, type_command());
     tool_event(h.state_mut(), ToolEvent::Move { x: a[0] + 15.0, y: a[1] + 10.0, pressure: 1.0 }, type_command());
     let composed_transform = crate::type_transform::current_transform(h.state(), id).unwrap();
+    // A pending transform has not changed the revision yet. Keep the real raw-input route so
+    // the accepted commit must finish that transform before replacing its current preedit.
     h.event(egui::Event::Ime(egui::ImeEvent::Commit("確定".into())));
     h.run_steps(2);
     assert_eq!(text(h.state(), id).text, "確定");
@@ -1914,7 +1920,10 @@ mod multi_layer_formatting {
     }
 
     fn controls(app: PhotocraftApp, properties: bool) -> Harness<'static, PhotocraftApp> {
-        let mut h = Harness::builder().with_size(vec2(1100.0, 800.0)).build_ui_state(
+        // The lazily populated font popup introduces widgets in successive passes. egui 0.37
+        // styles each new widget on its following pass; keep a bounded settle assertion while
+        // allowing those additional passes (the loaded menu requires six under parallel tests).
+        let mut h = Harness::builder().with_size(vec2(1100.0, 800.0)).with_max_steps(8).build_ui_state(
             move |ui, app| {
                 if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                     if properties {
@@ -2080,8 +2089,9 @@ mod multi_layer_formatting {
         PhotocraftApp::setup_context(&h.ctx, Default::default());
         h.run_steps(4);
         h.get_all_by_role(Role::ComboBox).next().unwrap().click();
-        h.run();
-        h.run();
+        // The font menu's search caret repaints every pass; step a bounded number of times.
+        h.run_steps(2);
+        h.run_steps(2);
     }
 
     #[test]
@@ -2301,7 +2311,8 @@ mod multi_layer_formatting {
             );
             PhotocraftApp::setup_context(&h.ctx, Default::default());
             h.run_steps(4);
-            assert!(h.query_by_label("Bend").is_some(), "the actual Warp form is visible");
+            h.get_by_role_and_label(egui::accesskit::Role::SpinButton, "Bend");
+            assert!(h.query_all_by_label("Bend").count() >= 1, "the actual Warp form is visible");
             for label in ["Layer", "Layers", "Range", "Coalesce"] {
                 assert!(h.query_by_label(label).is_none(), "target metadata must not become a form field: {label}");
             }
@@ -3117,4 +3128,81 @@ fn alt_mirrors_side_and_corner_drags_and_clamps_at_the_minimum() {
     app.ui.extras.snap = false;
     drag(&mut app, [540.0, 480.0], [590.0, 530.0], Modifiers::ALT);
     assert_eq!(box_doc_rect(&app, id), [250.0, 250.0, 340.0, 280.0]);
+}
+
+/// The options bar's alignment and direction buttons show the type layer's paragraph, as
+/// Photoshop's bar follows the text, and the tool defaults again without a type target.
+#[test]
+fn options_bar_alignment_follows_the_target_paragraph() {
+    use egui::accesskit::Toggled;
+    use egui_kittest::kittest::NodeT;
+    let mut app = new_app();
+    let id = app.run("type.create", json!({"text": "Middle", "size": 20, "x": 300, "y": 420})).unwrap()["layer"].as_u64().unwrap();
+    app.run("type.setStyle", json!({"layer": id, "align": "center", "direction": "rtl"})).unwrap();
+    assert_eq!(app.ui.tool_options.type_align, "left", "the tool default stays Left");
+    let mut h = options_harness(app);
+    let on = |h: &Harness<'static, PhotocraftApp>, label: &str| h.get_by_label(label).accesskit_node().toggled() == Some(Toggled::True);
+    assert!(on(&h, "Center text") && !on(&h, "Left align text"), "the layer's centred paragraph");
+    assert!(on(&h, "Right-to-left paragraph direction") && !on(&h, "Automatic paragraph direction"));
+    h.state_mut().run("layer.new.layer", json!({})).unwrap();
+    h.run_steps(2);
+    assert!(on(&h, "Left align text") && !on(&h, "Center text"), "no type target: the tool default");
+}
+
+/// #9179 review: a text edit left in a background document shows its own paragraph, not that of
+/// a same-id layer in the active document (layer ids repeat across documents).
+#[test]
+fn styles_at_follows_the_text_edit_document() {
+    let mut app = new_app();
+    let a = app.session.active().unwrap().doc.id.0;
+    let id = app.run("type.create", json!({"text": "Edited", "size": 20, "x": 300, "y": 420})).unwrap()["layer"].as_u64().unwrap();
+    app.run("type.setStyle", json!({"layer": id, "align": "center"})).unwrap();
+    app.ui.text_edit = Some(crate::state::TextEdit {
+        layer: id,
+        document: Some(a),
+        caret: 2,
+        anchor: 2,
+        session: "s".into(),
+        created: false,
+        mask: false,
+        dragging: false,
+        resize: None,
+        preedit: None,
+    });
+    // The same file opened twice: a second document whose layers have the same ids.
+    let twin = app.session.active().unwrap().doc.as_ref().clone();
+    app.session.open_document(twin, None);
+    app.run("type.setStyle", json!({"layer": id, "align": "right"})).unwrap();
+    assert_ne!(app.session.active().unwrap().doc.id.0, a, "the other document is active");
+    let (_, p) = super::styles_at(&app).unwrap();
+    assert_eq!(p.align, photocraft_doc::text::TextAlign::Center, "the edited document's paragraph");
+}
+
+/// A collapsed caret shows the paragraph it is in, as Photoshop's options bar and Paragraph panel
+/// do; it read the first paragraph's (byte 0) wherever the caret was.
+#[test]
+fn styles_at_a_collapsed_caret_shows_the_caret_s_paragraph() {
+    let mut app = new_app();
+    let id = app.run("type.create", json!({"text": "First\rSecond", "size": 20, "x": 300, "y": 420})).unwrap()["layer"].as_u64().unwrap();
+    app.run("type.setStyle", json!({"layer": id, "range": [6, 12], "align": "right"})).unwrap();
+    let edit = |caret: usize| crate::state::TextEdit {
+        layer: id,
+        document: None,
+        caret,
+        anchor: caret,
+        session: "s".into(),
+        created: false,
+        mask: false,
+        dragging: false,
+        resize: None,
+        preedit: None,
+    };
+    use photocraft_doc::text::TextAlign;
+    for (caret, want) in
+        [(0, TextAlign::Left), (3, TextAlign::Left), (5, TextAlign::Left), (6, TextAlign::Right), (9, TextAlign::Right), (12, TextAlign::Right)]
+    {
+        app.ui.text_edit = Some(edit(caret));
+        let (_, p) = super::styles_at(&app).unwrap();
+        assert_eq!(p.align, want, "caret {caret}");
+    }
 }

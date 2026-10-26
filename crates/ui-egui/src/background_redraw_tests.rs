@@ -210,7 +210,10 @@ fn a_full_cpu_refresh_draws_in_the_background_with_the_synchronous_pixels() {
 fn an_edit_during_a_redraw_is_not_overwritten_by_blocks_drawn_before_it() {
     let _gpu = photocraft_testkit::gpu_lock();
     let Some(mut g) = gpu_app() else { return };
-    // 4×3 blocks: the worker can't hand them all over before the next frame.
+    // Hold the worker after its first batch: how fast it composites is not reproducible (a fast
+    // machine finished all 4×3 blocks before the edit's frame on FreeBSD), and the test needs the
+    // redraw to still be running when the edit lands. The hold is released before `settle`.
+    let hold = test_hold::hold();
     let doc = cpu_only_document(g.harness.state_mut(), 4096, 3072);
     g.harness.step();
     assert!(g.harness.state().redraws.contains_key(&doc));
@@ -224,6 +227,7 @@ fn an_edit_during_a_redraw_is_not_overwritten_by_blocks_drawn_before_it() {
     g.harness.step();
     assert_eq!(g.harness.state().perf.last_refresh, "rect", "the fill's damage was drawn synchronously");
     assert!(g.harness.state().redraws.contains_key(&doc), "the redraw goes on");
+    drop(hold);
     settle(&mut g);
     assert_matches_synchronous(&mut g, doc);
 }

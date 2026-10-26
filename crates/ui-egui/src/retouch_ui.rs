@@ -1,7 +1,7 @@
-//! UI for the retouching tools (healing, patch, clone, history brush, blur/sharpen/smudge,
-//! dodge/burn/sponge, Mixer Brush, Color Replacement) and the smart selection tools (Quick
-//! Selection, Object Selection): gesture → engine command, options bars, and the clone-source
-//! marker.
+//! UI for the retouching tools (healing, patch, clone, history brush, art history brush,
+//! blur/sharpen/smudge, dodge/burn/sponge, Mixer Brush, Color Replacement) and the smart
+//! selection tools (Quick Selection, Object Selection): gesture → engine command, options bars,
+//! and the clone-source marker.
 
 use egui::{Color32, Stroke, vec2};
 use serde_json::{Value, json};
@@ -27,7 +27,9 @@ pub(crate) fn alt_flipped(tool: Tool, alt: bool) -> Tool {
 /// point is set yet.
 pub(crate) fn clone_params(app: &PhotocraftApp) -> Option<Value> {
     let o = &app.ui.tool_options;
-    let mut p = json!({"aligned": o.clone_aligned, "sampleLayer": o.clone_sample});
+    // The options bar's Mode is the tool's own brush's.
+    let mode = crate::blend_keys::brush_tool_mode(app.ui.tool, app.session.tools.brush.mode);
+    let mut p = json!({"aligned": o.clone_aligned, "sampleLayer": o.clone_sample, "mode": mode.label()});
     if app.ui.tool == Tool::CloneStamp {
         p["wrap"] = json!(app.ui.view.pattern_preview);
         p["opacity"] = json!(app.session.tools.brush.opacity * 100.0);
@@ -43,6 +45,12 @@ pub(crate) fn clone_params(app: &PhotocraftApp) -> Option<Value> {
         (None, None) => return None,
     }
     Some(p)
+}
+
+/// History Brush params for the live preview and the commit (without `points` and `target`): the
+/// options bar's Mode, which is the tool's own brush's.
+pub(crate) fn history_brush_params(app: &PhotocraftApp) -> Value {
+    json!({"mode": app.session.tools.brush.mode.label()})
 }
 
 /// The command and options-bar params (without `points` and `target`) of a sequential-dab tool:
@@ -90,6 +98,8 @@ pub(crate) fn pattern_stamp_params(app: &PhotocraftApp, points: &[[f64; 3]]) -> 
         "scale": o.pattern_stamp_scale,
         "angle": o.pattern_stamp_angle,
         "seed": stroke_seed(points),
+        // The options bar's Mode is the tool's own brush's.
+        "mode": app.session.tools.brush.mode.label(),
     });
     if o.pattern_stamp_aligned
         && let Some(ph) = app.ui.pattern_stamp_phase
@@ -141,7 +151,15 @@ pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], m
             };
             (if tool == Tool::Healing { "paint.healingBrush" } else { "paint.cloneStamp" }, p)
         }
-        Tool::HistoryBrush => ("paint.historyBrush", json!({})),
+        Tool::HistoryBrush => ("paint.historyBrush", history_brush_params(app)),
+        Tool::ArtHistoryBrush => (
+            "paint.artHistoryBrush",
+            json!({
+                "style": o.art_history_style,
+                "area": o.art_history_area,
+                "tolerance": o.art_history_tolerance,
+            }),
+        ),
         Tool::Blur | Tool::Sharpen | Tool::Smudge | Tool::Dodge | Tool::Burn | Tool::Sponge => match dab_params(app, tool) {
             Some(cp) => cp,
             None => return false,
@@ -464,7 +482,9 @@ pub fn draw_source_marker(app: &PhotocraftApp, painter: &egui::Painter, xf: &Vie
 
 fn opt(ui: &mut egui::Ui, text: &str) {
     let t = Tokens::get(ui.ctx());
-    ui.label(egui::RichText::new(tl!(&text)).color(t.text_dim).size(12.0));
+    let label = ui.label(egui::RichText::new(tl!(&text)).color(t.text_dim).size(12.0));
+    // The caption scrubs and names the field or dropdown drawn right after it.
+    crate::widgets::scrub_option_label(ui, &label);
 }
 
 fn pct(ui: &mut egui::Ui, label: &str, v: &mut f32) {
@@ -517,7 +537,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             opt(ui, tl!("Patch:"));
             let kinds = [("normal".to_string(), tl!("Normal")), ("contentAware".to_string(), tl!("Content-Aware"))];
             let mut kind = if o.patch_content_aware { "contentAware" } else { "normal" }.to_string();
-            crate::widgets::dropdown(ui, "patch-kind", &mut kind, &kinds, 120.0);
+            crate::widgets::dropdown(ui, "patch-kind", tl!("Type"), &mut kind, &kinds, 120.0);
             o.patch_content_aware = kind == "contentAware";
             if o.patch_content_aware {
                 opt(ui, tl!("Structure:"));
@@ -539,7 +559,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         Tool::ContentAwareMove => {
             opt(ui, tl!("Mode:"));
             let modes = [("move".to_string(), tl!("Move")), ("extend".to_string(), tl!("Extend"))];
-            crate::widgets::dropdown(ui, "cam-mode", &mut o.cam_mode, &modes, 90.0);
+            crate::widgets::dropdown(ui, "cam-mode", tl!("Mode"), &mut o.cam_mode, &modes, 90.0);
             opt(ui, tl!("Structure:"));
             crate::widgets::value_field(ui, &mut o.cam_structure, 1.0..=7.0, "", 40.0);
             opt(ui, tl!("Color:"));
@@ -551,12 +571,12 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                 // The box on the dropped patch: ✓ computes the move, ⊘ drops it (as ↩ / Esc).
                 let tip = crate::i18n::fmt(tl!("Commit transform ({key})"), &[("key", &crate::shortcuts::pretty("Enter"))]);
                 let commit = crate::icons::button(ui, "check", 26.0, false, &tip);
-                commit.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Commit transform"));
+                commit.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Commit transform"));
                 if commit.clicked() {
                     crate::cam_transform::commit(app);
                 }
                 let cancel = crate::icons::button(ui, "ban", 26.0, false, tl!("Cancel transform (Esc)"));
-                cancel.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Cancel transform"));
+                cancel.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Cancel transform"));
                 if cancel.clicked() {
                     crate::cam_transform::cancel(app);
                 }
@@ -575,7 +595,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                 ("currentAndBelow".to_string(), tl!("Current & Below")),
                 ("all".to_string(), tl!("All Layers")),
             ];
-            crate::widgets::dropdown(ui, "clone-sample", &mut o.clone_sample, &opts, 130.0);
+            crate::widgets::dropdown(ui, "clone-sample", tl!("Source"), &mut o.clone_sample, &opts, 130.0);
             if app.ui.clone_source.is_none() {
                 crate::widgets::vline(ui, 22.0);
                 opt(ui, &crate::i18n::fmt(tl!("{key}-click to set the source"), &[("key", &crate::shortcuts::pretty("Alt"))]));
@@ -584,14 +604,14 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         Tool::Dodge | Tool::Burn => {
             opt(ui, tl!("Range:"));
             let opts = [("shadows".to_string(), tl!("Shadows")), ("midtones".to_string(), tl!("Midtones")), ("highlights".to_string(), tl!("Highlights"))];
-            crate::widgets::dropdown(ui, "tone-range", &mut o.tone_range, &opts, 100.0);
+            crate::widgets::dropdown(ui, "tone-range", tl!("Range"), &mut o.tone_range, &opts, 100.0);
             pct(ui, tl!("Exposure:"), &mut o.exposure);
             crate::widgets::checkbox(ui, &mut o.protect_tones, tl!("Protect Tones"));
         }
         Tool::Sponge => {
             opt(ui, tl!("Mode:"));
             let opts = [("desaturate".to_string(), tl!("Desaturate")), ("saturate".to_string(), tl!("Saturate"))];
-            crate::widgets::dropdown(ui, "sponge-mode", &mut o.sponge_mode, &opts, 110.0);
+            crate::widgets::dropdown(ui, "sponge-mode", tl!("Mode"), &mut o.sponge_mode, &opts, 110.0);
             crate::widgets::checkbox(ui, &mut o.vibrance, tl!("Vibrance"));
         }
         Tool::Blur | Tool::Sharpen | Tool::Smudge => {
@@ -615,7 +635,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                 ("color".to_string(), tl!("Color")),
                 ("luminosity".to_string(), tl!("Luminosity")),
             ];
-            crate::widgets::dropdown(ui, "color-replacement-mode", &mut o.cr_mode, &modes, 100.0);
+            crate::widgets::dropdown(ui, "color-replacement-mode", tl!("Mode"), &mut o.cr_mode, &modes, 100.0);
             crate::widgets::vline(ui, 22.0);
             ui.spacing_mut().item_spacing.x = 2.0;
             for (k, icon, tip) in [
@@ -635,12 +655,32 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                 ("contiguous".to_string(), tl!("Contiguous")),
                 ("findEdges".to_string(), tl!("Find Edges")),
             ];
-            crate::widgets::dropdown(ui, "color-replacement-limits", &mut o.cr_limits, &limits, 110.0);
+            crate::widgets::dropdown(ui, "color-replacement-limits", tl!("Limits:"), &mut o.cr_limits, &limits, 110.0);
             opt(ui, tl!("Tolerance:"));
             crate::widgets::value_field(ui, &mut o.cr_tolerance, 0.0..=100.0, "%", 62.0);
             crate::widgets::checkbox(ui, &mut o.cr_anti_alias, tl!("Anti-alias"));
         }
         Tool::HistoryBrush => opt(ui, tl!("Paints from the History panel's source state")),
+        Tool::ArtHistoryBrush => {
+            opt(ui, tl!("Style"));
+            let styles = [
+                ("tightShort".to_string(), tl!("Tight Short")),
+                ("tightMedium".to_string(), tl!("Tight Medium")),
+                ("tightLong".to_string(), tl!("Tight Long")),
+                ("looseMedium".to_string(), tl!("Loose Medium")),
+                ("looseLong".to_string(), tl!("Loose Long")),
+                ("dab".to_string(), tl!("Dab")),
+                ("tightCurl".to_string(), tl!("Tight Curl")),
+                ("looseCurl".to_string(), tl!("Loose Curl")),
+            ];
+            crate::widgets::dropdown(ui, "art-history-style", tl!("Style"), &mut o.art_history_style, &styles, 130.0);
+            opt(ui, tl!("Area"));
+            crate::widgets::value_field(ui, &mut o.art_history_area, 0.0..=100.0, "", 50.0);
+            opt(ui, tl!("Tolerance"));
+            crate::widgets::value_field(ui, &mut o.art_history_tolerance, 0.0..=100.0, "", 50.0);
+            crate::widgets::vline(ui, 22.0);
+            opt(ui, tl!("Stylized dabs from a history state"));
+        }
         Tool::QuickSelection => {
             crate::widgets::checkbox(ui, &mut o.sample_all.quick_selection, tl!("Sample All Layers"));
             crate::widgets::checkbox(ui, &mut o.enhance_edge, tl!("Enhance Edge"));
@@ -687,7 +727,7 @@ fn pattern_stamp_options(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         ui.label(egui::RichText::new(tl!("No patterns")).color(Tokens::get(ui.ctx()).text_faint));
         false
     } else {
-        crate::widgets::dropdown(ui, "pattern-stamp-pat", &mut pat, &opts_ref, 140.0)
+        crate::widgets::dropdown(ui, "pattern-stamp-pat", tl!("Pattern"), &mut pat, &opts_ref, 140.0)
     };
     opt(ui, tl!("Scale"));
     crate::widgets::value_field(ui, &mut o.pattern_stamp_scale, 1.0..=1000.0, "%", 58.0);
@@ -797,6 +837,67 @@ mod tests {
         assert_eq!(id, "paint.cloneStamp");
         assert_eq!(params["opacity"], 50.0);
         assert_eq!(params["flow"], 50.0);
+    }
+
+    /// A Healing Brush whose brush holds a mode outside its menu (Overlay, restored with the tool
+    /// active, so no tool switch sees it) heals in Normal; the Clone Stamp keeps Overlay.
+    #[test]
+    fn healing_brush_heals_in_normal_with_a_mode_outside_its_menu() {
+        for (tool, want) in [(Tool::Healing, "Normal"), (Tool::CloneStamp, "Overlay")] {
+            let mut app = app();
+            app.ui.tool = tool;
+            crate::paint_mouse::sync_tool_brush(&mut app);
+            app.session.tools.brush.mode = photocraft_color::BlendMode::Overlay;
+            app.ui.clone_source = Some([10.0, 10.0]);
+            drag(&mut app, tool);
+            let (_, params) = app.session.journal.last().unwrap();
+            assert_eq!(params["mode"], want, "{tool:?}");
+        }
+    }
+
+    /// The options bar's Mode (each tool's own brush's) reaches the stamps', the History Brush's
+    /// and the Healing Brush's strokes, live and committed.
+    #[test]
+    fn retouch_mode_reaches_the_command() {
+        for (tool, cmd, mode) in [
+            (Tool::CloneStamp, "paint.cloneStamp", "Multiply"),
+            (Tool::Healing, "paint.healingBrush", "Luminosity"),
+            (Tool::HistoryBrush, "paint.historyBrush", "Screen"),
+            (Tool::PatternStamp, "paint.patternStamp", "Overlay"),
+        ] {
+            let mut app = app();
+            app.ui.tool = tool;
+            crate::paint_mouse::sync_tool_brush(&mut app);
+            app.run("tools.setBrush", json!({"brush": {"mode": mode}})).unwrap();
+            app.ui.clone_source = Some([10.0, 10.0]);
+            drag(&mut app, tool);
+            let (id, params) = app.session.journal.last().unwrap();
+            assert_eq!((id.as_str(), params["mode"].as_str()), (cmd, Some(mode)), "{tool:?}");
+        }
+    }
+
+    /// The Paint Bucket's Mode reaches the fill: Multiply darkens, Clear erases.
+    #[test]
+    fn paint_bucket_mode_reaches_the_fill() {
+        let mut app = app();
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.ui.tool = Tool::PaintBucket;
+        app.session.tools.foreground = [0.5, 0.5, 0.5, 1.0];
+        let click = |app: &mut PhotocraftApp| {
+            let m = egui::Modifiers::NONE;
+            tool_event(app, ToolEvent::Down { x: 20.0, y: 20.0, pressure: 1.0 }, m);
+            tool_event(app, ToolEvent::Up { x: 20.0, y: 20.0 }, m);
+        };
+        click(&mut app);
+        app.session.tools.foreground = [1.0, 0.0, 0.0, 1.0];
+        app.ui.tool_options.bucket_blend_mode = photocraft_color::BlendMode::Multiply;
+        click(&mut app);
+        let px = active(&app).surface().unwrap().rgba(20, 20);
+        assert!((px[0] - 0.5).abs() < 0.02 && px[1] < 0.02, "multiplied: {px:?}");
+        app.ui.tool_options.bucket_clear = true;
+        click(&mut app);
+        assert_eq!(app.session.journal.last().unwrap().1["mode"], "clear");
+        assert!(active(&app).surface().unwrap().rgba(20, 20)[3] < 0.01, "cleared");
     }
 
     #[test]
@@ -1376,5 +1477,51 @@ mod tests {
         assert!(finish_stroke(&mut app, Tool::PatternStamp, &[[12.0, 30.0, 1.0]], egui::Modifiers::NONE));
         assert!(!app.ui.status_error, "{}", app.ui.status);
         assert!(app.ui.clone_source.is_none());
+    }
+
+    #[test]
+    fn art_history_is_in_the_y_flyout() {
+        let y = [Tool::HistoryBrush, Tool::ArtHistoryBrush];
+        assert_eq!(y[0], Tool::HistoryBrush);
+        assert_eq!(y[1], Tool::ArtHistoryBrush);
+        assert!(y.iter().all(|t| t.key() == 'Y'));
+        assert!(Tool::ArtHistoryBrush.is_brushlike());
+    }
+
+    #[test]
+    fn art_history_options_bar_defaults() {
+        use crate::theme::ThemeKind;
+        use egui::vec2;
+        use egui_kittest::kittest::Queryable;
+        let mut app = app();
+        app.ui.tool = Tool::ArtHistoryBrush;
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 60.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    return;
+                }
+                crate::panels::options_bar(app, ui);
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, ThemeKind::Studio);
+        h.run_steps(4);
+        h.get_by_label("Style");
+        h.get_by_label("Area");
+        h.get_by_label("Tolerance");
+        assert_eq!(h.state().ui.tool_options.art_history_style, "tightMedium");
+        assert_eq!(h.state().ui.tool_options.art_history_area, 50.0);
+        assert_eq!(h.state().ui.tool_options.art_history_tolerance, 0.0);
+    }
+
+    #[test]
+    fn art_history_stroke_runs_the_command() {
+        let mut app = app();
+        app.run("paint.pencil", json!({"points": [[0, 30], [100, 30]], "size": 20, "color": "#3060c0"})).unwrap();
+        app.ui.tool = Tool::ArtHistoryBrush;
+        app.ui.tool_options.art_history_style = "tightMedium".into();
+        app.ui.tool_options.art_history_tolerance = 0.0;
+        drag(&mut app, Tool::ArtHistoryBrush);
+        assert_eq!(app.session.journal.last().map(|(id, _)| id.as_str()), Some("paint.artHistoryBrush"));
     }
 }

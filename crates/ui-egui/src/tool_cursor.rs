@@ -140,14 +140,61 @@ fn native(ctx: &egui::Context) -> bool {
     cfg!(not(target_arch = "wasm32")) && ctx.viewport_id() == egui::ViewportId::ROOT && !scaled_wayland(ctx)
 }
 
+/// Whether the pointer this viewport last saw has moved on to another of the app's windows,
+/// `others` (the current viewport among them is skipped): from the frame one of them reports the
+/// pointer arriving until this viewport gets a pointer event again. macOS sends a window no
+/// pointer-left event when the pointer moves onto another of the app's windows lying over it (a
+/// floating panel's own OS window), so egui's pointer stays where it was last seen. This also
+/// covers the pointer moving on from that window to the desktop, where this one still hears
+/// nothing. Always false where egui embeds viewports, as they share one window's pointer.
+pub(crate) fn pointer_elsewhere(ctx: &egui::Context, others: &[egui::ViewportId]) -> bool {
+    let own = ctx.viewport_id();
+    let key = egui::Id::unique(("pc-pointer-elsewhere", own));
+    let before = ctx.data(|d| d.get_temp::<bool>(key)).unwrap_or(false);
+    let separate = !ctx.embed_viewports() && others.iter().any(|&v| v != own);
+    if !separate && !before {
+        return false;
+    }
+    let here = ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::PointerMoved(_) | egui::Event::PointerButton { .. } | egui::Event::PointerGone)));
+    // A pointer that arrived: moving or pressing there. One that only stayed (a hidden window
+    // keeps its last one) does not take the pointer from this window.
+    let arrived = |i: &egui::InputState| {
+        i.pointer.has_pointer() && i.events.iter().any(|e| matches!(e, egui::Event::PointerMoved(_) | egui::Event::PointerButton { .. }))
+    };
+    // Where this window has pointer events of its own too, another window's report counts only
+    // if this window's pointer lies inside that window: one just outside its edge, where both
+    // may hear the pointer, stays this window's.
+    let at = ctx.input(|i| i.viewport().inner_rect.zip(i.pointer.latest_pos()).map(|(r, p)| r.min + p.to_vec2()));
+    let there = separate && others.iter().any(|&v| v != own && ctx.input_for(v, |i| arrived(i) && (!here || covers(i.viewport().inner_rect, at))));
+    let now = separate && elsewhere(before, here, there);
+    if now != before {
+        ctx.data_mut(|d| d.insert_temp(key, now));
+    }
+    now
+}
+
+/// Whether a window at `rect` (desktop points) lies over the desktop point `at`; unknown when
+/// either is, which counts as covering.
+fn covers(rect: Option<egui::Rect>, at: Option<Pos2>) -> bool {
+    rect.zip(at).is_none_or(|(r, p)| r.contains(p))
+}
+
+/// [`pointer_elsewhere`] for one frame: whether the pointer belonged to another window `before`,
+/// whether this window got a pointer event (`here`) and whether another window reports the
+/// pointer arriving (`there`). Both in one frame mean the pointer just crossed into the other
+/// window: this window's last events come from before the crossing.
+fn elsewhere(before: bool, here: bool, there: bool) -> bool {
+    there || (before && !here)
+}
+
 /// Mark this window as a Wayland surface (or not), for [`native`]; the shell calls it every pass.
 pub(crate) fn set_wayland(ctx: &egui::Context, wayland: bool) {
-    ctx.data_mut(|d| d.insert_temp(egui::Id::new("photocraft-cursor-wayland"), wayland));
+    ctx.data_mut(|d| d.insert_temp(egui::Id::unique("photocraft-cursor-wayland"), wayland));
 }
 
 /// A Wayland window whose scale is not 1, where winit's cursor bitmaps are unreliable.
 fn scaled_wayland(ctx: &egui::Context) -> bool {
-    let wayland = cfg!(target_os = "linux") && ctx.data(|d| d.get_temp::<bool>(egui::Id::new("photocraft-cursor-wayland"))).unwrap_or(false);
+    let wayland = cfg!(target_os = "linux") && ctx.data(|d| d.get_temp::<bool>(egui::Id::unique("photocraft-cursor-wayland"))).unwrap_or(false);
     wayland && ctx.native_pixels_per_point().unwrap_or_else(|| ctx.pixels_per_point() / ctx.zoom_factor()) != 1.0
 }
 
@@ -259,7 +306,7 @@ fn show(painter: &Painter, at: Pos2, shape: Shape) -> CursorIcon {
 }
 
 fn cached_image(ctx: &egui::Context, shape: &Shape, scale: f32) -> Option<CustomCursorImage> {
-    let id = egui::Id::new("photocraft-tool-cursor");
+    let id = egui::Id::unique("photocraft-tool-cursor");
     if let Some(cached) = ctx.data(|d| d.get_temp::<Cached>(id))
         && cached.shape == *shape
         && cached.scale == scale

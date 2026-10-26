@@ -731,8 +731,17 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
         return e;
     }
     match id {
-        "window.panel.activate" | "window.panel.layout" => true,
-        "window.panel.group" | "window.panel.move" | "window.panel.float" | "window.panel.dock" | "window.panel.close" => !app.session.prefs().workspace_locked,
+        "window.panel.activate" | "window.panel.layout" | "ui.dock" => true,
+        "window.panel.group"
+        | "window.panel.move"
+        | "window.panel.float"
+        | "window.panel.window"
+        | "window.panel.dock"
+        | "window.panel.close"
+        | "window.panel.closeGroup"
+        | "window.panel.closeOthers"
+        | "window.panel.minimize"
+        | "window.panel.iconic" => !app.session.prefs().workspace_locked,
         "file.open" | "file.exit" | "file.clearRecent" | "file.removeRecent" | "help.about" | "help.systemInfo" | "edit.search" => true,
         i if i.starts_with("file.openRecent.") => true,
         i if i.starts_with(DOCUMENT_ITEM) => true,
@@ -1324,7 +1333,7 @@ pub fn menu_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> f32 {
 }
 
 fn press_gesture_id() -> egui::Id {
-    egui::Id::new("menu-press-gesture")
+    egui::Id::unique("menu-press-gesture")
 }
 
 /// A menu title's open/close command this frame, the press opens a closed menu (and
@@ -1432,7 +1441,7 @@ pub fn search_items<'a>(items: &'a [MenuItem], query: &str, lang: crate::i18n::L
 fn help_search(ui: &mut egui::Ui, items: &[MenuItem], opening: bool, clicked: &mut Option<String>, nav: &mut crate::menu_nav::Nav) {
     let ctx = ui.ctx().clone();
     let lang = crate::i18n::current();
-    let text_id = egui::Id::new("help-menu-search");
+    let text_id = egui::Id::unique("help-menu-search");
     let pass_id = text_id.with("pass");
     // A fresh opening of the Help menu starts empty, with the field focused.
     let pass = ctx.cumulative_pass_nr();
@@ -1601,7 +1610,7 @@ fn submenu_row<R>(ui: &mut egui::Ui, title: egui::WidgetText, content: impl FnOn
     if open {
         ui.style_mut().visuals.widgets.inactive = ui.style().visuals.widgets.open;
     }
-    let response = ui.add(egui::Button::new(title).right_text(SubMenuButton::RIGHT_ARROW));
+    let response = ui.add(egui::Button::new(title).right_text(SubMenuButton::arrow_atom(None)));
     ui.style_mut().visuals.widgets.inactive = inactive;
     // The rect egui tests the pointer against (`SubMenu::show`), against the part that can be seen.
     let reach = response.rect.expand2(ui.spacing().item_spacing / 2.0);
@@ -1639,7 +1648,8 @@ pub fn apply_workspace(app: &mut PhotocraftApp) {
     app.ui.docking_reveal = None;
     app.ui.docking_generation = app.ui.docking_generation.wrapping_add(1);
     app.ui.docking = None;
-    app.ui.docking_hidden.clear();
+    app.ui.docking_kept = None;
+    app.ui.docking_returns.clear();
     app.ui.docking_collapsed.clear();
     app.ui.dock_tabs = Default::default();
     let p = &mut app.ui.panels;
@@ -1840,12 +1850,15 @@ mod tests {
                 egui::CentralPanel::default().show(ui, |ui| {
                     let (rect, _) = ui.allocate_exact_size(egui::vec2(80.0, 24.0), egui::Sense::hover());
                     let shifted = rect.translate(egui::vec2(p.x - rect.center().x, p.y - rect.center().y));
-                    let response = ui.interact(shifted, egui::Id::new("menu-title-test"), egui::Sense::hover());
+                    let response = ui.interact(shifted, egui::Id::unique("menu-title-test"), egui::Sense::hover());
                     title = Some(response);
                 });
-                egui::Area::new(egui::Id::new("overlapping-popup-test")).order(egui::Order::Foreground).fixed_pos(p - egui::vec2(10.0, 10.0)).show(ctx, |ui| {
-                    ui.allocate_space(egui::vec2(20.0, 20.0));
-                });
+                egui::Area::new(egui::Id::unique("overlapping-popup-test")).order(egui::Order::Foreground).fixed_pos(p - egui::vec2(10.0, 10.0)).show(
+                    ctx,
+                    |ui| {
+                        ui.allocate_space(egui::vec2(20.0, 20.0));
+                    },
+                );
                 let response = title.as_ref().unwrap();
                 reaches = pointer_reaches_title(ctx, response, p);
             });
@@ -2011,7 +2024,7 @@ mod tests {
                 h.run_steps(3);
             };
             let open = |h: &Harness<'_, PhotocraftApp>| h.query_by_label_contains("About PhotoCraft").is_some();
-            let field_id = egui::Id::new("help-menu-search").with("field");
+            let field_id = egui::Id::unique("help-menu-search").with("field");
             let help = h.get_by_label("Help").rect().center();
             click(&mut h, help);
             assert!(open(&h), "Help opened ({what})");
@@ -2063,7 +2076,7 @@ mod tests {
         }
         h.run_steps(3);
         assert!(h.query_by_label_contains("About PhotoCraft").is_some(), "typing keeps Help open");
-        let query: String = h.ctx.data(|d| d.get_temp(egui::Id::new("help-menu-search"))).unwrap_or_default();
+        let query: String = h.ctx.data(|d| d.get_temp(egui::Id::unique("help-menu-search"))).unwrap_or_default();
         assert_eq!(query, "DeSelect all", "every letter reached the field");
         assert!(h.state().ui.dialogs.is_empty(), "no menu command ran: {:?}", h.state().ui.dialogs);
     }
@@ -2144,6 +2157,7 @@ mod tests {
         let before = item.rect().top();
         harness.hover_at(item.rect().center());
         harness.event(egui::Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
             unit: egui::MouseWheelUnit::Point,
             delta: egui::vec2(0.0, -80.0),
             phase: egui::TouchPhase::Move,

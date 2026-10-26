@@ -48,13 +48,15 @@ fn edit_tolerance(layer: &Layer, u: LenUnit, extent: f64) -> f32 {
     }
 }
 
-/// `len` is the unit shown and its 100% extent (for percent).
-fn field(ui: &mut egui::Ui, id: &str, label: (&str, &str), current: f32, width: f32, len: (LenUnit, f64), tol: f32) -> Option<f32> {
+/// `len` is the unit shown and its 100% extent (for percent); `name` is the field's accessible name.
+// The explicit accessible name accompanies the existing numeric-field parameters.
+#[expect(clippy::too_many_arguments)]
+fn field(ui: &mut egui::Ui, id: &str, label: (&str, &str), name: &str, current: f32, width: f32, len: (LenUnit, f64), tol: f32) -> Option<f32> {
     let (u, extent) = len;
     stacked_label(ui, tl!(label.0), &[tl!(label.0), tl!(label.1)], LABEL_W, 2.0);
     let key = ui.make_persistent_id(("layer-props-field", id));
     let mut v = ui.data(|d| d.get_temp::<f32>(key)).unwrap_or_else(|| u.shown(f64::from(current), extent));
-    let resp = widgets::value_field(ui, &mut v, -300_000.0..=300_000.0, u.unit.suffix(), width);
+    let resp = widgets::value_field(ui, &mut v, -300_000.0..=300_000.0, u.unit.suffix(), width).accessible_name(tl!(name));
     if resp.dragged() || resp.has_focus() {
         ui.data_mut(|d| d.insert_temp(key, v));
         return None;
@@ -156,30 +158,30 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
         let (dw, dh) = app.session.active().map_or((1.0, 1.0), |s| (f64::from(s.doc.size.width), f64::from(s.doc.size.height)));
         let (tw, th) = (edit_tolerance(layer, u, dw), edit_tolerance(layer, u, dh));
         if section(ui, "transform", tl!("Transform")) {
-            let link_key = egui::Id::new("layer-props-link");
+            let link_key = egui::Id::unique("layer-props-link");
             let linked = ui.data(|d| d.get_temp::<bool>(link_key)).unwrap_or(true);
             // Two label+field columns with the link toggle between them, filling the panel.
             let w = ((ui.available_width() - 2.0 * (LABEL_W + LABEL_GAP) - LINK_W - 2.0 * LABEL_GAP) / 2.0).max(36.0);
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = LABEL_GAP;
-                if let Some(v) = field(ui, "w", ("W", "X"), (bb[2] - bb[0]) as f32, w, (u, dw), tw) {
+                if let Some(v) = field(ui, "w", ("W", "X"), "Width", (bb[2] - bb[0]) as f32, w, (u, dw), tw) {
                     run.extend(transform_params(layer.id.0, bb, Some(v), None, linked, tw).map(|p| ("edit.transform".to_string(), p)));
                 }
                 if crate::icons::button(ui, if linked { "link" } else { "unlink" }, LINK_W, linked, tl!("Link width and height")).clicked() {
                     ui.data_mut(|d| d.insert_temp(link_key, !linked));
                 }
-                if let Some(v) = field(ui, "h", ("H", "Y"), (bb[3] - bb[1]) as f32, w, (u, dh), th) {
+                if let Some(v) = field(ui, "h", ("H", "Y"), "Height", (bb[3] - bb[1]) as f32, w, (u, dh), th) {
                     run.extend(transform_params(layer.id.0, bb, None, Some(v), linked, th).map(|p| ("edit.transform".to_string(), p)));
                 }
             });
             ui.add_space(ROW_GAP);
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = LABEL_GAP;
-                if let Some(v) = field(ui, "x", ("X", "W"), bb[0] as f32, w, (u, dw), 0.5) {
+                if let Some(v) = field(ui, "x", ("X", "W"), "X", bb[0] as f32, w, (u, dw), 0.5) {
                     run.push(("layer.translate".into(), json!({"layer": layer.id.0, "dx": (v - bb[0] as f32).round() as i32, "dy": 0})));
                 }
                 ui.add_space(LINK_W + LABEL_GAP);
-                if let Some(v) = field(ui, "y", ("Y", "H"), bb[1] as f32, w, (u, dh), 0.5) {
+                if let Some(v) = field(ui, "y", ("Y", "H"), "Y", bb[1] as f32, w, (u, dh), 0.5) {
                     run.push(("layer.translate".into(), json!({"layer": layer.id.0, "dx": 0, "dy": (v - bb[1] as f32).round() as i32})));
                 }
             });
@@ -241,7 +243,7 @@ fn align_and_distribute(app: &PhotocraftApp, ui: &mut egui::Ui, run: &mut Vec<(S
             }
             align_glyph(ui, r, kind, if on { t.icon } else { t.text_faint });
             let tip = crate::i18n::fmt(tl!("Align {what}"), &[("what", tl!(&label))]);
-            resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, on, &tip));
+            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, on, &tip));
             if resp.on_hover_text(tip).clicked() {
                 run.push((id, json!({})));
             }

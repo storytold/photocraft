@@ -2,36 +2,58 @@
 
 use egui::{Color32, Sense, Stroke, vec2};
 
+use serde_json::{Value, json};
+
+use crate::shape_gradient_ui::{self as shape_gradient, GradientChoices};
 use crate::theme::Tokens;
 
 pub(crate) fn color_of(f: &photocraft_doc::Fill) -> Option<[f32; 4]> {
     match f {
-        photocraft_doc::Fill::Solid(c) => {
-            let [r, g, b] = c.to_rgb();
-            Some([r, g, b, c.alpha])
-        }
+        photocraft_doc::Fill::Solid(c) => Some(rgba_of(c)),
         _ => None,
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) fn rgba_of(c: &photocraft_doc::Color) -> [f32; 4] {
+    let [r, g, b] = c.to_rgb();
+    [r, g, b, c.alpha]
+}
+
+/// A solid or gradient paint exactly as `shape.create` / `shape.edit` take it: float RGBA, the
+/// gradient's stops as stored colours (a CMYK or Lab stop keeps its model) and every gradient
+/// field, so a swatch edit (angle, style…) keeps the rest of the gradient. The swatches never
+/// hand it a pattern (they don't offer one).
+pub(crate) fn paint_param(f: &photocraft_doc::Fill) -> Value {
+    match f {
+        photocraft_doc::Fill::Gradient { stops, angle, scale, style, reverse, opacity_stops, midpoints, offset, dither, align } => json!({"gradient": {
+            "stops": stops.iter().map(|(t, c)| json!([t, c])).collect::<Vec<_>>(),
+            "angle": angle, "scale": scale * 100.0, "style": format!("{style:?}").to_ascii_lowercase(), "reverse": reverse,
+            "opacityStops": opacity_stops, "midpoints": midpoints, "offset": [offset.0, offset.1], "dither": dither, "align": align,
+        }}),
+        other => json!(color_of(other)),
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) enum PaintChange {
     Color([f32; 4]),
+    /// A `Fill::Gradient` (the swatch's Gradient tab).
+    Gradient(photocraft_doc::Fill),
     None,
 }
 
-fn rgba32(c: [f32; 4]) -> Color32 {
+pub(crate) fn rgba32(c: [f32; 4]) -> Color32 {
     let b = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
     Color32::from_rgba_unmultiplied(b(c[0]), b(c[1]), b(c[2]), b(c[3]))
 }
 
-fn picker_color(c: [f32; 4]) -> egui::ecolor::Hsva {
+pub(crate) fn picker_color(c: [f32; 4]) -> egui::ecolor::Hsva {
     let linear = egui::ecolor::linear_from_gamma;
     let display = c.map(|v| if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 });
     egui::ecolor::Hsva::from_rgba_unmultiplied(linear(display[0]), linear(display[1]), linear(display[2]), display[3])
 }
 
-fn picker_rgba(hsva: egui::ecolor::Hsva) -> [f32; 4] {
+pub(crate) fn picker_rgba(hsva: egui::ecolor::Hsva) -> [f32; 4] {
     let [r, g, b, a] = hsva.to_rgba_unmultiplied();
     let gamma = egui::ecolor::gamma_from_linear;
     [gamma(r), gamma(g), gamma(b), a]
@@ -39,10 +61,16 @@ fn picker_rgba(hsva: egui::ecolor::Hsva) -> [f32; 4] {
 
 /// The shared compact picker keeps the float RGB paint and its alpha. Color32 is only display
 /// data: opening the picker must never quantize an existing high-depth colour or enable paint.
-pub(crate) fn swatch(ui: &mut egui::Ui, fill: Option<&photocraft_doc::Fill>, fallback: [f32; 4], tip: &str) -> Option<PaintChange> {
+pub(crate) fn swatch(
+    ui: &mut egui::Ui,
+    fill: Option<&photocraft_doc::Fill>,
+    fallback: [f32; 4],
+    tip: &str,
+    gradients: &mut GradientChoices,
+) -> Option<PaintChange> {
     let t = Tokens::get(ui.ctx());
     let (r, resp) = ui.allocate_exact_size(vec2(30.0, 22.0), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ColorButton, ui.is_enabled(), tip));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ColorWell, ui.is_enabled(), tip));
     let current = fill.and_then(color_of);
     crate::widgets::checker(ui.painter(), r.shrink(1.0), 4.0);
     match (current, fill) {
@@ -98,7 +126,9 @@ pub(crate) fn swatch(ui: &mut egui::Ui, fill: Option<&photocraft_doc::Fill>, fal
     if let Some(PaintChange::Color(color)) = out {
         hsva = picker_color(color);
     }
-    crate::widgets::swatch_popup(&resp).show(|ui| {
+    let gradient = fill.filter(|f| matches!(f, photocraft_doc::Fill::Gradient { .. }));
+    let popup_id = resp.id;
+    let shown = crate::widgets::swatch_popup(&resp).show(|ui| {
         ui.horizontal(|ui| {
             if ui.selectable_label(fill.is_none(), tl!("No Color")).clicked() && fill.is_some() {
                 out = Some(PaintChange::None);
@@ -106,8 +136,17 @@ pub(crate) fn swatch(ui: &mut egui::Ui, fill: Option<&photocraft_doc::Fill>, fal
             if ui.selectable_label(current.is_some(), tl!("Solid")).clicked() && current.is_none() {
                 out = Some(PaintChange::Color(original));
             }
+            if ui.selectable_label(gradient.is_some(), tl!("Gradient")).clicked() && gradient.is_none() {
+                out = Some(PaintChange::Gradient(gradients.default_fill()));
+            }
         });
         ui.separator();
+        if let Some(g) = gradient {
+            if let Some(edited) = shape_gradient::gradient_tab(ui, g, gradients, popup_id) {
+                out = Some(PaintChange::Gradient(edited));
+            }
+            return;
+        }
         let before = picker_rgba(hsva);
         if egui::color_picker::color_picker_hsva_2d(ui, &mut hsva, egui::color_picker::Alpha::OnlyBlend) {
             let color = picker_rgba(hsva);
@@ -152,6 +191,17 @@ pub(crate) fn swatch(ui: &mut egui::Ui, fill: Option<&photocraft_doc::Fill>, fal
             hsva = picker_color([rgb[0], rgb[1], rgb[2], original[3]]);
         }
     });
+    // The gradient a swatch's popup closes on joins the Gradient tab's Recent row.
+    let open_key = popup_id.with("open");
+    let was_open = ui.data(|d| d.get_temp::<bool>(open_key)).unwrap_or(false);
+    let open = shown.is_some();
+    if was_open
+        && !open
+        && let Some(g) = gradient
+    {
+        gradients.remember(g);
+    }
+    ui.data_mut(|d| d.insert_temp(open_key, open));
     let cached_color = match out {
         Some(PaintChange::Color(color)) => color,
         _ => original,

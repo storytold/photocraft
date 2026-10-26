@@ -439,7 +439,7 @@ fn paths_list_the_layer_path_above_a_bottom_footer() {
     let row = h.get_by_label("Masked Vector Mask").rect();
     let footer = crate::vector_ui::paths_footer(&h.ctx).expect("footer drawn");
     assert!(footer.top() > row.bottom(), "buttons below the rows");
-    let group = crate::dock::last_rects(&h.ctx).into_iter().find(|(g, _)| *g == crate::dock::Group::Layers).unwrap().1;
+    let group = crate::panel_docking::probe::group_rect(h.state(), &h.ctx, "paths").unwrap();
     assert!(group.bottom() - footer.bottom() < 16.0, "footer at the panel bottom: footer {footer:?}, group {group:?}");
     assert!(footer.bottom() - row.bottom() > 100.0, "the footer is pinned, not right below the rows");
     h.state_mut().run("layer.select", json!({"layer": shape})).unwrap();
@@ -649,6 +649,7 @@ fn mask_view_gestures_fail_gracefully_without_a_mask() {
     h.state_mut().session.active_mut().unwrap().channel_view.layer_mask = Some(photocraft_engine::mask_view_cmds::LayerMaskView {
         layer: photocraft_doc::LayerId(u64::MAX),
         mode: photocraft_engine::mask_view_cmds::MaskViewMode::Gray,
+        filter: false,
     });
     assert!(canvas_px(&h).is_none());
     h.run_steps(2);

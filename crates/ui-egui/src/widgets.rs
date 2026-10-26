@@ -61,104 +61,8 @@ pub fn surface(ui: &Ui, rect: Rect, fill: Color32, raised: bool) {
     }
 }
 
-/// A dock card: rounded container with a header of pill tabs and optional trailing actions.
-/// Returns the index of the selected tab.
-pub fn card(ui: &mut Ui, id: &str, tabs: &[&str], selected: &mut usize, body: impl FnOnce(&mut Ui, usize)) {
-    let _ = card_ex(ui, id, tabs, selected, false, false, body);
-}
-
-/// What happened on a card's tab strip this frame (see [`card_ex`]).
-pub struct CardResponse {
-    /// The tab strip background: drag to move the group, double-click to collapse it.
-    pub strip: Response,
-    /// The panel menu button (hamburger in Pro, ellipsis in Studio).
-    pub menu: Response,
-    /// A tab was clicked or chosen from the overflow menu.
-    pub tab_clicked: bool,
-    /// A tab was double-clicked (Photoshop collapses the group).
-    pub tab_double_clicked: bool,
-    /// Right-click action selected for a visible tab.
-    pub tab_context: Option<crate::tab_strip::TabContextAction>,
-    /// Rects of the tabs on the strip, `(tab index, rect)`; tabs that don't fit are in the
-    /// chevron menu instead (#151).
-    pub tabs: Vec<(usize, Rect)>,
-    pub responses: Vec<(usize, Response)>,
-    /// The » overflow button, when some tabs didn't fit.
-    pub chevron: Option<Rect>,
-    /// A tab dragged along the strip was dropped: `(tab, before)` (#2272).
-    pub tab_reorder: Option<(usize, Option<usize>)>,
-    /// The index of a tab being dragged away from the strip.
-    pub tab_dragging_out: Option<usize>,
-    /// The index of a tab whose drag ended away from the strip.
-    pub tab_dropped_out: Option<usize>,
-}
-
-impl CardResponse {
-    fn new(strip: Response, menu: Response, tabs: crate::tab_strip::StripOut) -> Self {
-        CardResponse {
-            strip,
-            menu,
-            tab_clicked: tabs.clicked,
-            tab_double_clicked: tabs.double_clicked,
-            tab_context: tabs.context,
-            tabs: tabs.tabs,
-            responses: tabs.responses,
-            chevron: tabs.chevron,
-            tab_reorder: tabs.reorder,
-            tab_dragging_out: tabs.dragging_out,
-            tab_dropped_out: tabs.dropped_out,
-        }
-    }
-}
-
-/// [`card`] that can be collapsed to its tab strip and reports strip and menu interactions.
-/// With `reorderable`, tabs can be dragged along the strip (reported, not applied).
-#[allow(clippy::too_many_arguments)]
-pub fn card_ex(
-    ui: &mut Ui,
-    id: &str,
-    tabs: &[&str],
-    selected: &mut usize,
-    collapsed: bool,
-    reorderable: bool,
-    body: impl FnOnce(&mut Ui, usize),
-) -> CardResponse {
-    let t = Tokens::get(ui.ctx());
-    if t.pro {
-        return pro_panel(ui, id, tabs, selected, collapsed, reorderable, body);
-    }
-    let m = body_margin(false);
-    let frame = egui::Frame::NONE
-        .fill(t.card)
-        .stroke(Stroke::new(1.0, t.card_border))
-        .corner_radius(CornerRadius::same(t.radius as u8))
-        .inner_margin(egui::Margin { bottom: if collapsed { 6 } else { m.bottom }, ..m });
-    let out = frame
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            // Registered before the tabs so they keep their clicks; drags fall through to it.
-            let strip_rect = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), 22.0));
-            let strip = ui.interact(strip_rect, ui.id().with((id, "strip")), Sense::click_and_drag());
-            // Pill tabs left of the menu button; they elide or overflow into a chevron (#151).
-            let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::hover());
-            let tip = crate::i18n::fmt(tl!("{name} options"), &[("name", tl!(tabs.get(*selected).copied().unwrap_or(id)))]);
-            let menu_rect = Rect::from_min_max(pos2(row.right() - 22.0, row.top() + 1.0), pos2(row.right(), row.bottom() - 1.0));
-            let menu = crate::icons::button(&mut ui.new_child(egui::UiBuilder::new().max_rect(menu_rect)), "ellipsis", 22.0, false, &tip);
-            let area = Rect::from_min_max(row.min, pos2((menu_rect.left() - 4.0).max(row.left()), row.bottom()));
-            let tabs_out = crate::tab_strip::pill_tabs(ui, ui.id().with((id, "tabs")), area, tabs, selected, reorderable);
-            if !collapsed {
-                ui.add_space(6.0);
-                body(ui, *selected);
-            }
-            CardResponse::new(strip, menu, tabs_out)
-        })
-        .inner;
-    ui.add_space(6.0);
-    out
-}
-
 /// Inner margin of a dock panel's body: a Pro panel's, or a Studio card's below its tab strip.
-fn body_margin(pro: bool) -> egui::Margin {
+pub(crate) fn body_margin(pro: bool) -> egui::Margin {
     if pro { egui::Margin::same(8) } else { egui::Margin { left: 8, right: 8, top: 6, bottom: 10 } }
 }
 
@@ -190,44 +94,6 @@ pub fn panel_footer<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     add(&mut bar_ui)
 }
 
-/// Photoshop-grammar panel group: dark tab strip with flat tabs, flat body, hamburger menu.
-fn pro_panel(
-    ui: &mut Ui,
-    id: &str,
-    tabs: &[&str],
-    selected: &mut usize,
-    collapsed: bool,
-    reorderable: bool,
-    body: impl FnOnce(&mut Ui, usize),
-) -> CardResponse {
-    let t = Tokens::get(ui.ctx());
-    let width = ui.available_width();
-    // Tab strip. Its background senses drags (move the group) and double-clicks (collapse);
-    // the tabs, registered after it, keep their clicks.
-    let (strip, _) = ui.allocate_exact_size(vec2(width, 26.0), Sense::hover());
-    let strip_resp = ui.interact(strip, ui.id().with((id, "strip")), Sense::click_and_drag());
-    let rounding = if collapsed { CornerRadius::same(3) } else { CornerRadius { nw: 3, ne: 3, sw: 0, se: 0 } };
-    ui.painter().rect_filled(strip, rounding, t.tab_strip);
-    // Panel menu (hamburger); the tabs stay left of it, eliding or overflowing (#151).
-    let menu = Rect::from_center_size(pos2(strip.right() - 14.0, strip.center().y), vec2(20.0, 18.0));
-    let tabs_out = crate::tab_strip::pro_tabs(ui, ui.id().with((id, "tabs")), strip, menu.left(), tabs, selected, collapsed, reorderable);
-    let mresp = ui.interact(menu, ui.id().with((id, "menu")), Sense::click());
-    let c = if mresp.hovered() { t.text } else { t.text_faint };
-    for k in 0..3 {
-        let y = menu.center().y - 3.5 + k as f32 * 3.5;
-        ui.painter().line_segment([pos2(menu.center().x - 5.0, y), pos2(menu.center().x + 5.0, y)], Stroke::new(1.0, c));
-    }
-    // Body.
-    if !collapsed {
-        egui::Frame::NONE.fill(t.card).corner_radius(CornerRadius { nw: 0, ne: 0, sw: 3, se: 3 }).inner_margin(body_margin(true)).show(ui, |ui| {
-            ui.set_width(width - 16.0);
-            body(ui, *selected);
-        });
-    }
-    ui.add_space(2.0);
-    CardResponse::new(strip_resp, mresp, tabs_out)
-}
-
 /// The panel menu button (hamburger in Pro, ellipsis in Studio), matching the dock and cards.
 pub fn panel_menu_button(ui: &mut Ui) -> Response {
     let t = Tokens::get(ui.ctx());
@@ -243,7 +109,7 @@ pub fn panel_menu_button(ui: &mut Ui) -> Response {
         crate::icons::paint(ui, rect, "ellipsis", 14.0, tint);
     }
     let tip = tl!("Panel menu");
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tip));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tip));
     resp.on_hover_text(tip)
 }
 
@@ -264,7 +130,7 @@ pub fn pill_tab(ui: &mut Ui, label: &str, selected: bool) -> Response {
     }
     let color = if selected { t.text } else { t.text_dim };
     ui.painter().galley_with_override_text_color(rect.center() - galley.size() / 2.0, galley, color);
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, translated));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, translated));
     resp
 }
 
@@ -272,7 +138,13 @@ pub fn pill_tab(ui: &mut Ui, label: &str, selected: bool) -> Response {
 /// arithmetic (`1920/2`) applies on Enter, Tab or click-away, and a unit after a number converts
 /// into the field's unit (`1in` in a px field, at the resolution [`set_field_resolution`] gave).
 pub fn value_field(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>, suffix: &str, width: f32) -> Response {
-    value_field_in(ui, value, range, suffix, width, 0.0, FieldOpts::default()).0
+    value_field_in(ui, value, range, suffix, width, 0.0, FieldOpts::default(), None).0
+}
+
+/// A [`value_field`] whose visible caption was drawn apart from it (an options-bar caption in a
+/// nested layout): `name` names the number when the caption's scrub link did not reach it.
+pub fn value_field_named(ui: &mut Ui, name: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, suffix: &str, width: f32) -> Response {
+    value_field_in(ui, value, range, suffix, width, 0.0, FieldOpts::default(), Some(name)).0
 }
 
 /// A single-line label for a row that also holds fixed-width controls: laid out no wider than
@@ -287,7 +159,7 @@ pub fn elided_label_sensed(ui: &mut Ui, text: &str, max_w: f32, sense: Sense) ->
     let elided = galley.elided;
     let (rect, resp) = ui.allocate_exact_size(galley.size(), sense);
     ui.painter().galley(rect.min, galley, t.text_dim);
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, ui.is_enabled(), text));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, ui.is_enabled(), text));
     if elided { resp.on_hover_text(text) } else { resp }
 }
 
@@ -302,12 +174,12 @@ pub const VALUE_FIELD_H: f32 = 24.0;
 /// A [`value_field`] `height` points tall instead of [`VALUE_FIELD_H`], for slim bars such as
 /// the status bar (#2823).
 pub fn compact_value_field(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>, suffix: &str, width: f32, height: f32) -> Response {
-    value_field_box(ui, value, range, suffix, vec2(width, height), 0.0, FieldOpts::default()).0
+    value_field_box(ui, value, range, suffix, vec2(width, height), 0.0, FieldOpts::default(), None).0
 }
 
 /// A compact field whose mouse scrub wraps at the native fullscreen viewport's horizontal edges.
 pub(crate) fn compact_wrapping_value_field(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>, suffix: &str, size: Vec2) -> Response {
-    value_field_box(ui, value, range, suffix, size, 0.0, FieldOpts { wrap_drag: true, ..Default::default() }).0
+    value_field_box(ui, value, range, suffix, size, 0.0, FieldOpts { wrap_drag: true, ..Default::default() }, None).0
 }
 
 /// A size dialog's unit key (`px`, `in`, `cm`, `mm`, `pt`, `pica`, `percent`) as a unit.
@@ -334,7 +206,7 @@ pub fn unit_decimals(key: &str) -> u32 {
 /// A [`value_field`] showing `decimals` decimal places instead of the one (or two, for a small
 /// range) it picks itself: the ruler units need their own precision (#2434).
 pub fn value_field_prec(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>, suffix: &str, width: f32, decimals: u32) -> Response {
-    value_field_in(ui, value, range, suffix, width, 0.0, FieldOpts { decimals: Some(decimals), ..Default::default() }).0
+    value_field_in(ui, value, range, suffix, width, 0.0, FieldOpts { decimals: Some(decimals), ..Default::default() }, None).0
 }
 
 /// A field's unit and the resolution a typed unit converts at (`1in` in a px field).
@@ -350,7 +222,7 @@ pub struct FieldUnits {
 /// A [`value_field_prec`] without a suffix, whose unit is chosen beside it (Image Size and New
 /// Document's unit menus) and converts typed units at that dialog's own resolution.
 pub fn value_field_units(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>, width: f32, decimals: u32, units: FieldUnits) -> Response {
-    value_field_in(ui, value, range, "", width, 0.0, FieldOpts { decimals: Some(decimals), units: Some(units), ..Default::default() }).0
+    value_field_in(ui, value, range, "", width, 0.0, FieldOpts { decimals: Some(decimals), units: Some(units), ..Default::default() }, None).0
 }
 
 /// A [`value_field_prec`] in `units` whose 100 % is a length of `extent` px (Free Transform's W
@@ -369,11 +241,11 @@ pub fn value_field_extent(
     extent: f64,
 ) -> Response {
     let opts = FieldOpts { decimals: Some(decimals), units: Some(units), extent: Some(extent), ..Default::default() };
-    value_field_in(ui, value, range, suffix, width, 0.0, opts).0
+    value_field_in(ui, value, range, suffix, width, 0.0, opts, None).0
 }
 
 fn field_resolution_id() -> egui::Id {
-    egui::Id::new("pc-field-resolution")
+    egui::Id::unique("pc-field-resolution")
 }
 
 /// The resolution (pixels per inch) and point size (points per inch) a unit typed into a value
@@ -402,7 +274,10 @@ fn unit_of_suffix(suffix: &str) -> Option<photocraft_engine::prefs::Unit> {
 #[derive(Clone, Copy, Debug)]
 struct LabelScrub {
     pass: u64,
+    /// The id whose drags move the field (the label itself, or an options caption's hit area).
     label: egui::Id,
+    /// The visible label's own id, which names the field it scrubs.
+    name: Option<egui::Id>,
     rect: Rect,
     /// How far right of the label the field may start (the whole row for a slider row).
     max_gap: f32,
@@ -418,7 +293,7 @@ struct LabelScrub {
 }
 
 fn label_scrub_id() -> egui::Id {
-    egui::Id::new("pc-label-scrub")
+    egui::Id::unique("pc-label-scrub")
 }
 
 /// Makes `label` scrubby: dragging it left or right moves the value field drawn right after it on
@@ -444,6 +319,7 @@ fn scrub_option_area(ui: &Ui, label: &Response, tip: Option<&'static str>) {
     let scrub = LabelScrub {
         pass: ui.ctx().cumulative_pass_nr(),
         label: label.id.with("pc-option-scrub"),
+        name: Some(label.id),
         rect: label.rect,
         max_gap: 24.0,
         option_area: true,
@@ -459,7 +335,7 @@ fn scrub_option_area(ui: &Ui, label: &Response, tip: Option<&'static str>) {
 fn scrub_label_within(ui: &Ui, label: &Response, max_gap: f32) -> Response {
     // Drag only, not focusable: Tab goes to the value field, not to its label as well.
     let resp = label.interact(Sense::DRAG);
-    let scrub = label_scrub_response(ui, &resp, label.rect, max_gap);
+    let scrub = label_scrub_response(ui, &resp, label.rect, max_gap, Some(label.id));
     ui.data_mut(|d| {
         d.insert_temp(label_scrub_id(), scrub);
         d.insert_temp(resp.id.with("pc-scrub-linked"), false);
@@ -467,7 +343,7 @@ fn scrub_label_within(ui: &Ui, label: &Response, max_gap: f32) -> Response {
     resp
 }
 
-fn label_scrub_response(ui: &Ui, resp: &Response, original_rect: Rect, max_gap: f32) -> LabelScrub {
+fn label_scrub_response(ui: &Ui, resp: &Response, original_rect: Rect, max_gap: f32, name: Option<egui::Id>) -> LabelScrub {
     // Whether a field took this label's drags last frame: only then is it scrubby.
     let linked = ui.data(|d| d.get_temp::<bool>(resp.id.with("pc-scrub-linked"))).unwrap_or(false);
     if linked && resp.enabled() && (resp.hovered() || resp.dragged()) {
@@ -500,6 +376,7 @@ fn label_scrub_response(ui: &Ui, resp: &Response, original_rect: Rect, max_gap: 
     LabelScrub {
         pass: ui.ctx().cumulative_pass_nr(),
         label: resp.id,
+        name,
         rect: original_rect,
         max_gap,
         option_area: false,
@@ -526,6 +403,22 @@ fn take_label_scrub(ui: &Ui, rect: Rect) -> Option<LabelScrub> {
         ui.data_mut(|d| d.insert_temp(s.label.with("pc-scrub-linked"), true));
     }
     linked.then_some(s)
+}
+
+/// The visible caption left for the control drawn next this frame, if any, consumed so that a
+/// non-scrubbing control (a dropdown) can still take its name and the caption cannot leak on.
+fn take_label_scrub_name(ui: &Ui, rect: Rect) -> Option<egui::Id> {
+    let s = ui.data_mut(|d| {
+        let s = d.get_temp::<LabelScrub>(label_scrub_id());
+        d.remove::<LabelScrub>(label_scrub_id());
+        s
+    })?;
+    if s.pass != ui.ctx().cumulative_pass_nr() {
+        return None;
+    }
+    // Only a caption on the control's own row names it; one left over from an earlier row does not.
+    let same_row = rect.top() < s.rect.bottom() && rect.bottom() > s.rect.top();
+    same_row.then_some(s.name).flatten()
 }
 
 /// How a [`value_field_in`] shows and reads its number, beyond its suffix.
@@ -557,6 +450,8 @@ fn field_fine(range: &std::ops::RangeInclusive<f32>, decimals: Option<u32>, step
 
 /// A [`value_field`] that leaves `trailing` points free inside its box, right of the suffix, and
 /// returns the box with the number's response.
+// The explicit accessible name accompanies the existing numeric-field parameters.
+#[expect(clippy::too_many_arguments)]
 fn value_field_in(
     ui: &mut Ui,
     value: &mut f32,
@@ -565,11 +460,14 @@ fn value_field_in(
     width: f32,
     trailing: f32,
     opts: FieldOpts,
+    name: Option<&str>,
 ) -> (Response, Rect) {
-    value_field_box(ui, value, range, suffix, vec2(width, VALUE_FIELD_H), trailing, opts)
+    value_field_box(ui, value, range, suffix, vec2(width, VALUE_FIELD_H), trailing, opts, name)
 }
 
 /// [`value_field_in`] with a box of any `size`.
+// The explicit accessible name accompanies the existing numeric-field parameters.
+#[expect(clippy::too_many_arguments)]
 fn value_field_box(
     ui: &mut Ui,
     value: &mut f32,
@@ -578,10 +476,13 @@ fn value_field_box(
     size: Vec2,
     trailing: f32,
     opts: FieldOpts,
+    name: Option<&str>,
 ) -> (Response, Rect) {
     let FieldOpts { decimals, step_from_decimals, units, extent, wrap_drag } = opts;
     let t = Tokens::get(ui.ctx());
     let (rect, slot) = ui.allocate_exact_size(size, Sense::hover());
+    let last_editor = ui.data(|d| d.get_temp::<egui::Id>(slot.id));
+    let mut option_click = false;
     let scrub = take_label_scrub(ui, rect).map(|s| {
         if !s.option_area {
             return s;
@@ -591,12 +492,13 @@ fn value_field_box(
         // Preserve a popup field's trailing arrow, and never extend outside the UI clip.
         let hit = Rect::from_min_max(pos2(s.rect.left(), rect.top()), pos2(rect.right() - trailing, rect.bottom())).intersect(ui.clip_rect());
         let mut resp = ui.interact(hit, s.label, Sense::CLICK | Sense::DRAG);
+        option_click = resp.clicked();
         if let Some(tip) = s.tip
             && resp.hover_pos().is_some_and(|p| s.rect.contains(p))
         {
             resp = resp.on_hover_text(tip);
         }
-        label_scrub_response(ui, &resp, s.rect, s.max_gap)
+        label_scrub_response(ui, &resp, s.rect, s.max_gap, s.name)
     });
     let (dpi, ppi) = ui.data(|d| d.get_temp::<(f64, f64)>(field_resolution_id())).unwrap_or((72.0, 72.0));
     // Typed text loses its spaces before parsing, so a " pt" suffix reads as "pt".
@@ -662,6 +564,21 @@ fn value_field_box(
         }
     };
     ui.data_mut(|d| d.insert_temp(slot.id, resp.id));
+    // A click on the caption's expanded hit area (outside the editor) is not an edit: keep the
+    // number's keyboard focus, but never take it for a field that did not have it.
+    if option_click
+        && let Some(id) = last_editor
+        && ui.memory(|m| m.had_focus_last_frame(id))
+    {
+        ui.memory_mut(|m| m.request_focus(id));
+    }
+    // A scrubby caption is also the field's visible label, so it names the number for screen readers.
+    if let Some(id) = scrub.as_ref().and_then(|s| s.name) {
+        resp = resp.labelled_by(id);
+    } else if let Some(name) = name {
+        // The caption drew in another Ui (or row), so it could not name the number itself.
+        resp = resp.accessible_name(name);
+    }
     if let Some(s) = scrub {
         if s.started && ui.memory(|m| m.has_focus(resp.id)) {
             ui.memory_mut(|m| m.surrender_focus(resp.id));
@@ -740,11 +657,13 @@ pub struct PopupFieldResponse {
 pub fn popup_value_field(ui: &mut Ui, name: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, suffix: &str, width: f32) -> PopupFieldResponse {
     let t = Tokens::get(ui.ctx());
     let (lo, hi) = (*range.start(), *range.end());
-    let (field, rect) = value_field_in(ui, value, range.clone(), suffix, width, POPUP_ARROW_W, FieldOpts::default());
+    let (mut field, rect) = value_field_in(ui, value, range.clone(), suffix, width, POPUP_ARROW_W, FieldOpts::default(), None);
     let arrow = Rect::from_min_max(pos2(rect.right() - POPUP_ARROW_W - 2.0, rect.top() + 2.0), rect.max - vec2(2.0, 2.0));
     let resp = ui.interact(arrow, field.id.with("popup-slider"), Sense::click_and_drag());
     let name = name.trim_end_matches([':', '：']).to_string();
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), &name));
+    // Both the number and its ▾ are named by the control's own semantic name.
+    field = field.accessible_name(name.clone());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), &name));
     let resp = resp.on_hover_text(&name);
     let drag_key = resp.id.with("drag");
     // Every drag gets a new number when it starts, even if its first frame changes nothing.
@@ -890,11 +809,11 @@ pub fn text_field_ex(ui: &mut Ui, id: egui::Id, text: &mut String, hint: &str, w
     // the text sits on the field's middle like a dropdown's or value field's.
     let edit = egui::TextEdit::singleline(shown)
         .id(id)
-        .hint_text(hint)
+        .hint_text(hint.to_owned())
         .frame(egui::Frame::NONE)
         .font(font)
         .min_size(inner.size())
-        .vertical_align(egui::Align::Center)
+        .align(egui::Align2::LEFT_CENTER)
         .char_limit(limit);
     // A child Ui keeps the field's selection colour local: `Visuals::selection` also fills selected
     // list rows and slider trails, which must keep the theme's.
@@ -913,7 +832,7 @@ pub fn text_field_ex(ui: &mut Ui, id: egui::Id, text: &mut String, hint: &str, w
 }
 
 fn first_field_id() -> egui::Id {
-    egui::Id::new("pc-focus-first-field")
+    egui::Id::unique("pc-focus-first-field")
 }
 
 /// While `on`, the next number field drawn takes the keyboard focus with its text selected (a
@@ -1291,9 +1210,12 @@ pub fn slider_row_prec(
 ) -> Response {
     let t = Tokens::get(ui.ctx());
     let mut changed_resp = None;
+    // The row's caption names both its number (through the scrub link) and its slider.
+    let mut label_id = None;
     ui.horizontal(|ui| {
         // The label scrubs the row's field, across the row (Photoshop's scrubby labels).
         let l = ui.label(egui::RichText::new(tl!(label)).color(t.text_dim));
+        label_id = Some(l.id);
         scrub_label_within(ui, &l, f32::INFINITY);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             changed_resp = Some(
@@ -1305,12 +1227,15 @@ pub fn slider_row_prec(
                     74.0,
                     0.0,
                     FieldOpts { decimals, step_from_decimals: decimals.is_some(), ..Default::default() },
+                    None,
                 )
                 .0,
             );
         });
     });
     let s = slider_with(ui, value, range, gradient, g);
+    s.widget_info(|| egui::WidgetInfo::slider(ui.is_enabled(), f64::from(*value), tl!(label)));
+    let s = if let Some(id) = label_id { s.labelled_by(id) } else { s };
     let mut r = s.clone();
     if let Some(v) = changed_resp {
         if v.changed() {
@@ -1491,7 +1416,7 @@ fn button_impl_h(ui: &mut Ui, label: &str, min_width: f32, height: Option<f32>, 
     let h = size.y;
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
     // Painted text: name the button for accessibility (and so tests and agents can find it).
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label));
     if resp.has_focus() {
         // Keyboard focus (Tab); clicks don't focus egui buttons.
         let r = if t.pro { h / 2.0 } else { t.radius_sm } + 2.0;
@@ -1579,20 +1504,20 @@ pub fn hue_stops() -> Vec<Color32> {
 }
 
 /// A compact labelled dropdown in the studio style.
-pub fn dropdown<T: PartialEq + Clone>(ui: &mut Ui, id: &str, current: &mut T, options: &[(T, &str)], width: f32) -> bool {
-    dropdown_hovered(ui, id, current, options, width).0
+pub fn dropdown<T: PartialEq + Clone>(ui: &mut Ui, id: &str, name: &str, current: &mut T, options: &[(T, &str)], width: f32) -> bool {
+    dropdown_hovered(ui, id, name, current, options, width).0
 }
 
 /// [`dropdown`] whose option labels are shown exactly as given: names the user typed (a channel
 /// or layer name) must not be translated, unlike the built-in labels [`dropdown`] translates (#5335).
-pub fn dropdown_literal<T: PartialEq + Clone>(ui: &mut Ui, id: &str, current: &mut T, options: &[(T, &str)], width: f32) -> bool {
-    let (chosen, _) = dropdown_with(ui, id, current, options, width, false, false);
+pub fn dropdown_literal<T: PartialEq + Clone>(ui: &mut Ui, id: &str, name: &str, current: &mut T, options: &[(T, &str)], width: f32) -> bool {
+    let (chosen, _) = dropdown_with(ui, id, name, current, options, width, false, false);
     !chosen.is_empty()
 }
 
 /// [`dropdown`], also returning the option under the pointer in its open list (live previews).
-pub fn dropdown_hovered<T: PartialEq + Clone>(ui: &mut Ui, id: &str, current: &mut T, options: &[(T, &str)], width: f32) -> (bool, Option<T>) {
-    let (chosen, hovered) = dropdown_with(ui, id, current, options, width, false, true);
+pub fn dropdown_hovered<T: PartialEq + Clone>(ui: &mut Ui, id: &str, name: &str, current: &mut T, options: &[(T, &str)], width: f32) -> (bool, Option<T>) {
+    let (chosen, hovered) = dropdown_with(ui, id, name, current, options, width, false, true);
     (!chosen.is_empty(), hovered)
 }
 
@@ -1602,14 +1527,22 @@ pub fn dropdown_hovered<T: PartialEq + Clone>(ui: &mut Ui, id: &str, current: &m
 /// follows the value instead, nor what the dropdown is in. Returns every option chosen this frame
 /// in order (one per notch; the last is `current`) and the option under the pointer in the open
 /// list, none while the pointer rests where the wheel last stepped.
-pub fn dropdown_wheel_hovered<T: PartialEq + Clone>(ui: &mut Ui, id: &str, current: &mut T, options: &[(T, &str)], width: f32) -> (Vec<T>, Option<T>) {
-    dropdown_with(ui, id, current, options, width, true, true)
+pub fn dropdown_wheel_hovered<T: PartialEq + Clone>(
+    ui: &mut Ui,
+    id: &str,
+    name: &str,
+    current: &mut T,
+    options: &[(T, &str)],
+    width: f32,
+) -> (Vec<T>, Option<T>) {
+    dropdown_with(ui, id, name, current, options, width, true, true)
 }
 
 #[allow(clippy::too_many_arguments)]
 fn dropdown_with<T: PartialEq + Clone>(
     ui: &mut Ui,
     id: &str,
+    name: &str,
     current: &mut T,
     options: &[(T, &str)],
     width: f32,
@@ -1678,14 +1611,19 @@ fn dropdown_with<T: PartialEq + Clone>(
                 hovered = nearest.map(|(_, v)| v.clone());
             }
         });
-    press.after(&response.response);
-    if combo_box_arrow_keys(ui, &response.response, current, options) {
+    // A scrubby caption drawn just before the dropdown names it; otherwise its own name does.
+    let response = match take_label_scrub_name(ui, response.response.rect) {
+        Some(label) => response.response.labelled_by(label),
+        None => response.response.accessible_name(name),
+    };
+    press.after(&response);
+    if combo_box_arrow_keys(ui, &response, current, options) {
         chosen.push(current.clone());
     }
     if wheel && !over_list {
-        let stepped = wheel_steps(ui, wheel_id, response.response.hovered(), current, options);
+        let stepped = wheel_steps(ui, wheel_id, response.hovered(), current, options);
         wheeled = !stepped.is_empty();
-        if wheeled && egui::ComboBox::is_open(ui.ctx(), response.response.id) {
+        if wheeled && egui::ComboBox::is_open(ui.ctx(), response.id) {
             ui.data_mut(|d| d.insert_temp(reveal_id, true));
         }
         chosen.extend(stepped);
@@ -1824,7 +1762,7 @@ pub fn swatch_popup(swatch: &Response) -> egui::Popup<'static> {
         .align_alternatives(&[egui::RectAlign::TOP_START])
 }
 
-pub fn dropdown_with_tooltips<T: PartialEq + Clone>(ui: &mut Ui, id: &str, current: &mut T, options: &[(T, &str, &str)], width: f32) -> bool {
+pub fn dropdown_with_tooltips<T: PartialEq + Clone>(ui: &mut Ui, id: &str, name: &str, current: &mut T, options: &[(T, &str, &str)], width: f32) -> bool {
     let label = options.iter().find(|(v, _, _)| v == current).map(|(_, l, _)| tl!(l)).unwrap_or("—");
     let mut changed = false;
     let (press, close) = crate::press_menu::PressCombo::before(ui, id);
@@ -1845,9 +1783,13 @@ pub fn dropdown_with_tooltips<T: PartialEq + Clone>(ui: &mut Ui, id: &str, curre
                 }
             }
         });
-    press.after(&response.response);
+    let response = match take_label_scrub_name(ui, response.response.rect) {
+        Some(label) => response.response.labelled_by(label),
+        None => response.response.accessible_name(name),
+    };
+    press.after(&response);
     if let Some((_, _, tip)) = options.iter().find(|(v, _, _)| v == current) {
-        let _ = response.response.on_hover_text(tl!(tip));
+        response.on_hover_text(tl!(tip));
     }
     changed
 }
@@ -1882,7 +1824,7 @@ fn checker_uv(rect: Rect, cell: f32) -> Rect {
 }
 
 fn checker_tile_id() -> egui::Id {
-    egui::Id::new("transparency-checker-tile")
+    egui::Id::unique("transparency-checker-tile")
 }
 
 /// The checker's two-by-two tile (light, dark / dark, light), loaded once per context and shared
@@ -1927,7 +1869,7 @@ pub fn checkbox(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
     }
     // The label is the single named, focusable checkbox; the box is a mouse target.
     // Override Label's metadata instead of creating a second node with the same name.
-    label_resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), *on, tl!(label)));
+    label_resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, ui.is_enabled(), *on, tl!(label)));
     resp
 }
 
@@ -2261,7 +2203,7 @@ mod tests {
         let mut h = Harness::new_ui_state(
             |ui, s: &mut (String, egui::Color32, egui::Color32)| {
                 s.1 = ui.visuals().selection.bg_fill;
-                super::text_field(ui, egui::Id::new("tf"), &mut s.0, "hint", 140.0, false);
+                super::text_field(ui, egui::Id::unique("tf"), &mut s.0, "hint", 140.0, false);
                 s.2 = ui.visuals().selection.bg_fill;
             },
             (String::new(), egui::Color32::WHITE, egui::Color32::BLACK),
@@ -2283,7 +2225,7 @@ mod tests {
     #[test]
     fn text_field_caps_a_huge_paste() {
         use egui::accesskit::Role;
-        let mut h = Harness::new_ui_state(|ui, s: &mut String| drop(super::text_field(ui, egui::Id::new("tf"), s, "", 140.0, false)), String::new());
+        let mut h = Harness::new_ui_state(|ui, s: &mut String| drop(super::text_field(ui, egui::Id::unique("tf"), s, "Value", 140.0, false)), String::new());
         crate::PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
         h.run();
         h.get_by_role(Role::TextInput).click();
@@ -2303,7 +2245,7 @@ mod tests {
     fn text_field_bounds_an_oversized_existing_value() {
         use egui::accesskit::Role;
         let long = "9".repeat(super::TEXT_FIELD_LIMIT * 4);
-        let mut h = Harness::new_ui_state(|ui, s: &mut String| drop(super::text_field(ui, egui::Id::new("tf"), s, "", 140.0, false)), long.clone());
+        let mut h = Harness::new_ui_state(|ui, s: &mut String| drop(super::text_field(ui, egui::Id::unique("tf"), s, "Value", 140.0, false)), long.clone());
         crate::PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
         h.run();
         assert_eq!(*h.state(), long, "drawing alone leaves the caller's value alone");
@@ -2358,11 +2300,53 @@ mod tests {
         assert_eq!(events[5], egui::Event::Copy);
     }
 
+    /// A row's visible caption names both its number and its slider; a dropdown is named by its
+    /// own caption, or by the scrubby caption drawn just before it.
+    #[test]
+    fn labelled_rows_and_dropdowns_have_semantic_accessible_names() {
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        #[derive(Default)]
+        struct State {
+            value: f32,
+            fill: f32,
+            blend: usize,
+            mode: usize,
+        }
+
+        let mut h = Harness::builder().with_size(egui::vec2(360.0, 240.0)).build_ui_state(
+            |ui, s: &mut State| {
+                super::slider_row(ui, "Opacity", &mut s.value, 0.0..=100.0, "%", None);
+                super::popup_value_field(ui, "Fill", &mut s.fill, 0.0..=100.0, "%", 74.0);
+                let opts = [(0usize, "Normal"), (1, "Multiply")];
+                super::dropdown(ui, "blend", "Blend Mode", &mut s.blend, &opts, 120.0);
+                ui.horizontal(|ui| {
+                    let caption = ui.label("Mode");
+                    super::scrub_option_label(ui, &caption);
+                    super::dropdown(ui, "mode", "Not this name", &mut s.mode, &opts, 120.0);
+                });
+            },
+            State::default(),
+        );
+        crate::PhotocraftApp::setup_context(&h.ctx, Default::default());
+        h.run();
+
+        // The row's caption is the accessible name of the value field and of the slider.
+        h.get_by_role_and_label(egui::accesskit::Role::SpinButton, "Opacity");
+        h.get_by_role_and_label(egui::accesskit::Role::Slider, "Opacity");
+        // A popup value field names both its number and the arrow that opens its slider.
+        h.get_by_role_and_label(egui::accesskit::Role::SpinButton, "Fill");
+        h.get_by_role_and_label(egui::accesskit::Role::Button, "Fill");
+        // A dropdown requires a real name; a preceding scrubby caption is used when present.
+        h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Blend Mode");
+        h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Mode");
+    }
+
     /// Sets up a test with one value field. Its state is its value and how many times it changed.
     fn field(value: f32, range: std::ops::RangeInclusive<f32>) -> Harness<'static, (f32, u32)> {
         let mut h = Harness::new_ui_state(
             move |ui, s: &mut (f32, u32)| {
-                if super::value_field(ui, &mut s.0, range.clone(), "px", 80.0).changed() {
+                if super::value_field(ui, &mut s.0, range.clone(), "px", 80.0).accessible_name("Test number").changed() {
                     s.1 += 1;
                 }
             },
@@ -2390,7 +2374,9 @@ mod tests {
     fn value_field_number_slot_is_centred_in_its_box() {
         let mut h = Harness::new_ui_state(
             |ui, s: &mut (f32, egui::Rect)| {
-                s.1 = super::value_field_in(ui, &mut s.0, 0.0..=100.0, "px", 80.0, 0.0, super::FieldOpts::default()).1;
+                let field = super::value_field_in(ui, &mut s.0, 0.0..=100.0, "px", 80.0, 0.0, super::FieldOpts::default(), None);
+                s.1 = field.1;
+                field.0.accessible_name("Value");
             },
             (50.0, egui::Rect::NOTHING),
         );
@@ -2409,7 +2395,9 @@ mod tests {
         for kind in [crate::theme::ThemeKind::Pro, crate::theme::ThemeKind::Studio] {
             let mut h = Harness::builder().with_size(egui::vec2(100.0, 40.0)).with_pixels_per_point(scale).wgpu().build_ui_state(
                 |ui, s: &mut (f32, egui::Rect)| {
-                    s.1 = super::value_field_in(ui, &mut s.0, 0.0..=100.0, "%", 80.0, 0.0, super::FieldOpts::default()).1;
+                    let field = super::value_field_in(ui, &mut s.0, 0.0..=100.0, "%", 80.0, 0.0, super::FieldOpts::default(), None);
+                    s.1 = field.1;
+                    field.0.accessible_name("Value");
                 },
                 (100.0, egui::Rect::NOTHING),
             );
@@ -2446,7 +2434,7 @@ mod tests {
                 let mut harness = Harness::new_ui_state(
                     move |ui, s: &mut (f32, egui::Rect)| {
                         let before = ui.cursor().min;
-                        super::compact_value_field(ui, &mut s.0, 0.0..=3200.0, "%", w, h);
+                        super::compact_value_field(ui, &mut s.0, 0.0..=3200.0, "%", w, h).accessible_name("Zoom");
                         s.1 = egui::Rect::from_min_size(before, egui::vec2(w, h));
                     },
                     (v, egui::Rect::NOTHING),
@@ -2471,7 +2459,7 @@ mod tests {
             let mut h = Harness::new_ui_state(
                 move |ui, s: &mut (f32, egui::Rect, f32)| {
                     let before = ui.cursor().min;
-                    super::compact_value_field(ui, &mut s.0, 0.0..=3200.0, suffix, 64.0, 18.0);
+                    super::compact_value_field(ui, &mut s.0, 0.0..=3200.0, suffix, 64.0, 18.0).accessible_name("Zoom");
                     s.1 = egui::Rect::from_min_size(before, egui::vec2(64.0, 18.0));
                     s.2 = ui.painter().layout_no_wrap(suffix.to_owned(), crate::theme::mono(11.0), egui::Color32::WHITE).size().x;
                 },
@@ -2589,8 +2577,8 @@ mod tests {
     fn held_arrow_keeps_stepping_the_focused_field() {
         let mut h = Harness::new_ui_state(
             |ui, s: &mut (f32, f32)| {
-                super::value_field(ui, &mut s.0, 0.0..=1000.0, "", 80.0);
-                super::value_field(ui, &mut s.1, 0.0..=1000.0, "", 80.0);
+                super::value_field(ui, &mut s.0, 0.0..=1000.0, "", 80.0).accessible_name("Left");
+                super::value_field(ui, &mut s.1, 0.0..=1000.0, "", 80.0).accessible_name("Right");
             },
             (10.0, 59.0),
         );
@@ -2641,13 +2629,13 @@ mod tests {
                 ui.horizontal(|ui| {
                     let l = ui.label("Size:");
                     super::scrub_label(ui, &l);
-                    super::value_field(ui, &mut s.0, 0.0..=1000.0, "px", 80.0);
+                    super::value_field(ui, &mut s.0, 0.0..=1000.0, "px", 80.0).accessible_name("Start");
                 });
                 ui.horizontal(|ui| {
                     let l = ui.label("Mode:");
                     super::scrub_label(ui, &l);
                     ui.add_space(60.0);
-                    super::value_field(ui, &mut s.1, 0.0..=1000.0, "px", 80.0);
+                    super::value_field(ui, &mut s.1, 0.0..=1000.0, "px", 80.0).accessible_name("End");
                 });
             },
             (100.0, 100.0),
@@ -2759,7 +2747,7 @@ mod tests {
         use egui_kittest::{Harness, kittest::Queryable};
         let mut h = Harness::builder().with_size(egui::vec2(300.0, 100.0)).build_ui_state(
             move |ui, (v, ok): &mut (f32, Option<f32>)| {
-                super::value_field(ui, v, 0.0..=300000.0, "px", 90.0);
+                super::value_field(ui, v, 0.0..=300000.0, "px", 90.0).accessible_name("Size");
                 if round {
                     *v = v.round();
                 }
@@ -2787,7 +2775,7 @@ mod tests {
         use egui_kittest::{Harness, kittest::Queryable};
         let mut h = Harness::builder().with_size(egui::vec2(300.0, 100.0)).build_ui_state(
             |ui, (v, changes): &mut (f32, u32)| {
-                if super::value_field(ui, v, 0.0..=100.0, "%", 90.0).changed() {
+                if super::value_field(ui, v, 0.0..=100.0, "%", 90.0).accessible_name("Opacity").changed() {
                     *changes += 1;
                 }
             },
@@ -2811,7 +2799,7 @@ mod tests {
         use egui_kittest::{Harness, kittest::Queryable};
         let mut h = Harness::builder().with_size(egui::vec2(300.0, 100.0)).build_ui_state(
             |ui, (v, changes): &mut (f32, u32)| {
-                if super::value_field(ui, v, 0.1..=1296.0, "pt", 90.0).changed() {
+                if super::value_field(ui, v, 0.1..=1296.0, "pt", 90.0).accessible_name("Font size").changed() {
                     *changes += 1;
                 }
             },
@@ -2863,7 +2851,7 @@ mod tests {
         let mut h = Harness::builder().with_size(egui::vec2(300.0, 100.0)).build_ui_state(
             |ui, selected: &mut usize| {
                 let options = [(0, "Normal"), (1, "Multiply"), (2, "Screen")];
-                super::dropdown(ui, "blend-mode", selected, &options, 120.0);
+                super::dropdown(ui, "blend-mode", tl!("Blend Mode"), selected, &options, 120.0);
             },
             0,
         );
@@ -2885,7 +2873,7 @@ mod tests {
         let mut h = Harness::builder().with_size(egui::vec2(400.0, 700.0)).build_ui_state(
             |ui, mode: &mut BlendMode| {
                 let opts: Vec<(BlendMode, &str)> = BlendMode::LAYER_MODES.iter().map(|m| (*m, m.label())).collect();
-                super::dropdown(ui, "brush-mode", mode, &opts, 96.0);
+                super::dropdown(ui, "brush-mode", tl!("Mode"), mode, &opts, 96.0);
             },
             BlendMode::Normal,
         );
@@ -2899,6 +2887,7 @@ mod tests {
         for _ in 0..30 {
             h.hover_at(open.center());
             h.event(egui::Event::MouseWheel {
+                source: egui::MouseWheelSource::Unknown,
                 unit: egui::MouseWheelUnit::Line,
                 delta: egui::vec2(0.0, -1.0),
                 phase: egui::TouchPhase::Move,
@@ -2916,9 +2905,9 @@ mod tests {
         Harness::builder().with_size(egui::vec2(300.0, 100.0)).build_ui_state(
             move |ui, selected: &mut usize| {
                 if wheel {
-                    super::dropdown_wheel_hovered(ui, "blend-mode", selected, &MODES, 120.0);
+                    super::dropdown_wheel_hovered(ui, "blend-mode", tl!("Blend Mode"), selected, &MODES, 120.0);
                 } else {
-                    super::dropdown(ui, "blend-mode", selected, &MODES, 120.0);
+                    super::dropdown(ui, "blend-mode", tl!("Blend Mode"), selected, &MODES, 120.0);
                 }
             },
             0,
@@ -2931,7 +2920,7 @@ mod tests {
         h.event(egui::Event::ModifiersChanged(modifiers));
         h.hover_at(at);
         h.run();
-        h.event(egui::Event::MouseWheel { unit, delta, phase: egui::TouchPhase::Move, modifiers });
+        h.event(egui::Event::MouseWheel { source: egui::MouseWheelSource::Unknown, unit, delta, phase: egui::TouchPhase::Move, modifiers });
         h.run();
         h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
         h.run();
@@ -2964,7 +2953,7 @@ mod tests {
         let mut h = Harness::builder().with_size(egui::vec2(300.0, 100.0)).build_ui_state(
             |ui, selected: &mut usize| {
                 egui::ScrollArea::vertical().max_height(80.0).show(ui, |ui| {
-                    super::dropdown_wheel_hovered(ui, "blend-mode", selected, &MODES, 120.0);
+                    super::dropdown_wheel_hovered(ui, "blend-mode", tl!("Blend Mode"), selected, &MODES, 120.0);
                     ui.add_space(400.0);
                 });
             },
@@ -2995,7 +2984,9 @@ pub fn color_edit_button_srgba(ui: &mut Ui, color: &mut Color32) -> Response {
 pub(crate) fn color_swatch(ui: &mut Ui, color: Color32) -> Response {
     let t = Tokens::get(ui.ctx());
     let (rect, response) = ui.allocate_exact_size(ui.spacing().interact_size, Sense::click());
-    response.widget_info(|| egui::WidgetInfo::new(egui::WidgetType::ColorButton));
+    // A swatch's meaning is the colour it edits; callers with a more specific caption use
+    // `color_swatch_button` or add `labelled_by`.
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ColorWell, ui.is_enabled(), tl!("Color")));
     checker_rounded(ui.painter(), rect, 4.0, t.radius_sm);
     ui.painter().rect_filled(rect.shrink(1.0), t.radius_sm, color);
     ui.painter().rect_stroke(rect, t.radius_sm, Stroke::new(1.0, t.field_border), StrokeKind::Inside);
@@ -3016,7 +3007,7 @@ pub fn pick_pos(resp: &Response) -> Option<Pos2> {
 pub fn color_swatch_button(ui: &mut Ui, color: Color32, label: &str) -> Response {
     let t = Tokens::get(ui.ctx());
     let (rect, response) = ui.allocate_exact_size(ui.spacing().interact_size, Sense::click());
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ColorButton, true, label));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ColorWell, true, label));
     checker_rounded(ui.painter(), rect, 4.0, t.radius_sm);
     ui.painter().rect_filled(rect.shrink(1.0), t.radius_sm, color);
     ui.painter().rect_stroke(rect, t.radius_sm, Stroke::new(1.0, t.field_border), StrokeKind::Inside);

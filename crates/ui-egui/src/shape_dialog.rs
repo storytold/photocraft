@@ -179,7 +179,7 @@ pub fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) 
             let to_unit = |px: f64| unit.from_px(px, dpi, extent, ppi) as f32;
             let mut v = to_unit(px);
             let places = unit.decimals() as u32;
-            let resp = crate::widgets::value_field_prec(ui, &mut v, to_unit(1.0)..=to_unit(MAX_PX), unit.suffix(), 110.0, places);
+            let resp = crate::widgets::value_field_prec(ui, &mut v, to_unit(1.0)..=to_unit(MAX_PX), unit.suffix(), 110.0, places).accessible_name(text);
             if resp.changed() {
                 let px = unit.to_px(f64::from(v), dpi, extent, ppi).clamp(1.0, MAX_PX);
                 f.insert(key.into(), json!((px * 1000.0).round() / 1000.0));
@@ -205,10 +205,14 @@ pub fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) 
             ui.horizontal(|ui| {
                 label(ui, tl!("Radius:"));
                 ui.vertical(|ui| {
+                    // All four fields show "Radius:"; the accessible name says which corner
+                    // (radii are top-left, top-right, bottom-right, bottom-left).
+                    let corners = ["Top Left", "Top Right", "Bottom Right", "Bottom Left"];
                     for row in [[0usize, 1], [3, 2]] {
                         ui.horizontal(|ui| {
                             for i in row {
-                                if crate::widgets::value_field(ui, &mut radii[i], 0.0..=10000.0, "px", 72.0).changed() {
+                                let name = format!("{} {}", tl!(corners[i]), tl!("Radius:"));
+                                if crate::widgets::value_field(ui, &mut radii[i], 0.0..=10000.0, "px", 72.0).accessible_name(name).changed() {
                                     changed = Some(i);
                                 }
                             }
@@ -233,14 +237,14 @@ pub fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) 
             ui.horizontal(|ui| {
                 label(ui, tl!("Sides:"));
                 let mut s = num(f, "sides").unwrap_or(5.0) as f32;
-                if crate::widgets::value_field(ui, &mut s, 3.0..=100.0, "", 72.0).changed() {
+                if crate::widgets::value_field(ui, &mut s, 3.0..=100.0, "", 72.0).accessible_name(tl!("Sides:")).changed() {
                     f.insert("sides".into(), json!(s.round().clamp(3.0, 100.0) as u32));
                 }
             });
             ui.horizontal(|ui| {
                 label(ui, tl!("Star Ratio:"));
                 let mut r = num(f, "starRatio").unwrap_or(100.0) as f32;
-                if crate::widgets::value_field(ui, &mut r, 1.0..=100.0, "%", 72.0).changed() {
+                if crate::widgets::value_field(ui, &mut r, 1.0..=100.0, "%", 72.0).accessible_name(tl!("Star Ratio:")).changed() {
                     f.insert("starRatio".into(), json!(f64::from(r.clamp(1.0, 100.0))));
                 }
             });

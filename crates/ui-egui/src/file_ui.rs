@@ -290,7 +290,7 @@ fn web_pane(app: &PhotocraftApp, ui: &mut egui::Ui, size: egui::Vec2, p: Option<
     // A bounded proxy; navigation never recomposites or re-encodes it.
     let base = p.cloned().unwrap_or_else(|| json!({}));
     let size_sig = format!("{}|{}|{}|{}|{}", base["percent"], base["width"], base["height"], base["resample"], base["convertToSrgb"]);
-    let wkey = egui::Id::new(("web-proxy", doc.id.0, pane));
+    let wkey = egui::Id::unique(("web-proxy", doc.id.0, pane));
     let proxy_sig = format!("{rev}|{frame:?}|{size_sig}");
     let cached_proxy: Option<(String, WebProxy)> = ui.data(|d| d.get_temp(wkey));
     let proxy = cached_proxy.filter(|(sig, _)| sig == &proxy_sig).map(|(_, proxy)| proxy);
@@ -326,7 +326,7 @@ fn web_pane(app: &PhotocraftApp, ui: &mut egui::Ui, size: egui::Vec2, p: Option<
         }
     };
     let sig = format!("{}|{rev}|{frame:?}|{size_sig}|{}", doc.id.0, p.map(|v| v.to_string()).unwrap_or_else(|| "original".into()));
-    let key = egui::Id::new(("web-pane", doc.id.0, pane));
+    let key = egui::Id::unique(("web-pane", doc.id.0, pane));
     let cached: Option<WebCache> = ui.data(|d| d.get_temp(key));
     let (tex, info) = match cached.filter(|c| c.0 == sig) {
         Some((_, tex, info)) => (tex, info),
@@ -396,10 +396,10 @@ fn printer_options(list: Option<&Value>, current: &str) -> Vec<(String, String)>
     opts
 }
 
-fn dropdown_str(ui: &mut egui::Ui, id: &str, f: &mut Map<String, Value>, key: &str, opts: &[(&str, &str)], w: f32) {
+fn dropdown_str(ui: &mut egui::Ui, id: &str, name: &str, f: &mut Map<String, Value>, key: &str, opts: &[(&str, &str)], w: f32) {
     let mut v = s(f, key, opts.first().map_or("", |o| o.0));
     let o: Vec<(String, &str)> = opts.iter().map(|(k, l)| (k.to_string(), *l)).collect();
-    if crate::widgets::dropdown(ui, id, &mut v, &o, w) {
+    if crate::widgets::dropdown(ui, id, name, &mut v, &o, w) {
         f.insert(key.into(), json!(v));
     }
 }
@@ -415,7 +415,7 @@ fn number(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, label: &str,
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(tl!(&label)).color(t.text_dim));
         let mut v = n(f, key, d) as f32;
-        crate::widgets::value_field(ui, &mut v, range, unit, 64.0);
+        crate::widgets::value_field(ui, &mut v, range, unit, 64.0).accessible_name(tl!(&label));
         f.insert(key.into(), json!(v.round()));
     });
 }
@@ -543,14 +543,14 @@ fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                 let mut preset = s(f, "__preset", "");
                 let mut opts: Vec<(String, &str)> = vec![("".into(), "[Unnamed]")];
                 opts.extend(web_cmds::PRESETS.iter().map(|p| (p.to_string(), *p)));
-                if crate::widgets::dropdown(ui, "web-preset", &mut preset, &opts, 230.0) && !preset.is_empty() {
+                if crate::widgets::dropdown(ui, "web-preset", tl!("Preset"), &mut preset, &opts, 230.0) && !preset.is_empty() {
                     if let Some(Value::Object(m)) = web_cmds::preset_settings(&preset).map(|st| st.to_params()) {
                         f.extend(m);
                     }
                     f.insert("__preset".into(), json!(preset));
                 }
                 ui.add_space(4.0);
-                dropdown_str(ui, "web-format", f, "format", &WEB_FORMATS, 230.0);
+                dropdown_str(ui, "web-format", tl!("Format"), f, "format", &WEB_FORMATS, 230.0);
                 ui.add_space(4.0);
                 let fmt = s(f, "format", "jpeg");
                 match fmt.as_str() {
@@ -558,6 +558,7 @@ fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                         dropdown_str(
                             ui,
                             "web-palette",
+                            tl!("Color Table"),
                             f,
                             "palette",
                             &[
@@ -573,6 +574,7 @@ fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                         dropdown_str(
                             ui,
                             "web-dither",
+                            tl!("Dither"),
                             f,
                             "dither",
                             &[("none", tl!("No Dither")), ("diffusion", tl!("Diffusion")), ("pattern", tl!("Pattern")), ("noise", tl!("Noise"))],
@@ -593,6 +595,7 @@ fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                         dropdown_str(
                             ui,
                             "web-dither",
+                            tl!("Dither"),
                             f,
                             "dither",
                             &[("none", tl!("No Dither")), ("diffusion", tl!("Diffusion")), ("pattern", tl!("Pattern"))],
@@ -606,9 +609,9 @@ fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                 }
                 if fmt != "png24" || !b(f, "transparency", true) {
                     ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new(tl!("Matte")).color(t.text_dim));
+                        let matte_label = ui.label(egui::RichText::new(tl!("Matte")).color(t.text_dim));
                         let mut m = s(f, "matte", "#ffffff");
-                        if ui.add(egui::TextEdit::singleline(&mut m).desired_width(80.0)).changed() {
+                        if ui.add(egui::TextEdit::singleline(&mut m).desired_width(80.0)).labelled_by(matte_label.id).changed() {
                             f.insert("matte".into(), json!(m));
                         }
                     });
@@ -620,6 +623,7 @@ fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                     dropdown_str(
                         ui,
                         "web-meta",
+                        tl!("Metadata"),
                         f,
                         "metadata",
                         &[
@@ -642,7 +646,7 @@ fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                     ui.add_space(6.0);
                     ui.label(egui::RichText::new(crate::i18n::trn(crate::i18n::current(), nslices as u64, "{n} slice", "{n} slices")).color(t.text_dim));
                     check(ui, f, "html", tl!("Save HTML and Images"), true);
-                    dropdown_str(ui, "web-slices", f, "slices", &[("all", tl!("All Slices")), ("user", tl!("All User Slices"))], 150.0);
+                    dropdown_str(ui, "web-slices", tl!("Slices"), f, "slices", &[("all", tl!("All Slices")), ("user", tl!("All User Slices"))], 150.0);
                 }
             });
         });
@@ -657,7 +661,7 @@ fn size_field(ui: &mut egui::Ui, label: &str, shown: f64, range: std::ops::Range
     let passed = (shown as f32).clamp(*range.start(), *range.end());
     let mut v = passed;
     ui.label(egui::RichText::new(label).color(t.text_dim));
-    crate::widgets::value_field_prec(ui, &mut v, range, unit, 90.0, decimals);
+    crate::widgets::value_field_prec(ui, &mut v, range, unit, 90.0, decimals).accessible_name(tl!(&label));
     ui.end_row();
     (v != passed).then_some(f64::from(v))
 }
@@ -715,6 +719,7 @@ fn web_size(ui: &mut egui::Ui, f: &mut Map<String, Value>, doc: &photocraft_doc:
         dropdown_str(
             ui,
             "web-resample",
+            tl!("Resample"),
             f,
             "resample",
             &[
@@ -944,7 +949,7 @@ fn length_field_range(ui: &mut egui::Ui, label: &str, pt: &mut f64, units: &str,
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(label).color(t.text_dim));
         let before = v;
-        crate::widgets::value_field_prec(ui, &mut v, range, units, 70.0, decimals);
+        crate::widgets::value_field_prec(ui, &mut v, range, units, 70.0, decimals).accessible_name(tl!(&label));
         if (v - before).abs() > 1e-4 && v.is_finite() {
             *pt = f64::from(v) * k;
             changed = true;
@@ -972,7 +977,7 @@ fn print_paper_controls(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     ui.horizontal(|ui| {
         let mut papers: Vec<_> = photocraft_engine::print_cmds::PAPERS.iter().map(|p| (p.0.to_string(), p.0)).collect();
         papers.push(("custom".to_string(), tl!("Custom")));
-        if crate::widgets::dropdown(ui, "print-paper", &mut selected, &papers, 110.0) {
+        if crate::widgets::dropdown(ui, "print-paper", tl!("Paper"), &mut selected, &papers, 110.0) {
             if selected == "custom" {
                 let (w, h) = print_paper_size(f.get("__customPaper").or(previous.as_ref()));
                 f.insert("paper".into(), json!([w, h]));
@@ -983,7 +988,7 @@ fn print_paper_controls(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 f.insert("paper".into(), json!(selected));
             }
         }
-        dropdown_str(ui, "print-orient", f, "orientation", &[("portrait", tl!("Portrait")), ("landscape", tl!("Landscape"))], 110.0);
+        dropdown_str(ui, "print-orient", tl!("Orientation"), f, "orientation", &[("portrait", tl!("Portrait")), ("landscape", tl!("Landscape"))], 110.0);
     });
     if f.get("paper").is_some_and(Value::is_array) {
         let (mut w, mut h) = print_paper_size(f.get("paper"));
@@ -1092,10 +1097,10 @@ fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Va
                     ui.painter().rect_filled(page, 0.0, egui::Color32::WHITE);
                     ui.painter().rect_stroke(page, 0.0, egui::Stroke::new(1.0, t.separator), egui::StrokeKind::Outside);
                     let mut img = print_preview_image(l, page, k);
-                    let drag_id = ui.id().with(("print-position", id));
+                    let drag_id = ui.scope_id().with(("print-position", id));
                     let visible = img.intersect(page).intersect(ui.clip_rect());
                     let response = ui.interact(visible, drag_id, egui::Sense::drag()).on_hover_cursor(egui::CursorIcon::Grab);
-                    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Image, true, tl!("Print preview image")));
+                    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Image, true, tl!("Print preview image")));
                     // Keep a fixed layout and press origin for the whole gesture: rounding and
                     // the transition from Center must never accumulate or move the grab point.
                     if response.drag_started_by(egui::PointerButton::Primary)
@@ -1118,7 +1123,7 @@ fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Va
                         ui.data_mut(|d| d.remove::<(photocraft_engine::print_cmds::PrintLayout, egui::Pos2, f32)>(drag_id));
                     }
                     let (x, y, w, h) = l.rect;
-                    let key = egui::Id::new(("print-thumb", doc.id.0, app.session.active().map_or(0, |d| d.revision)));
+                    let key = egui::Id::unique(("print-thumb", doc.id.0, app.session.active().map_or(0, |d| d.revision)));
                     let tex: Option<Arc<egui::TextureHandle>> = ui.data(|d| d.get_temp(key));
                     let tex = tex.unwrap_or_else(|| {
                         let th = photocraft_compose::thumbnail(&doc, 400);
@@ -1182,7 +1187,7 @@ fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Va
                     ui.label(egui::RichText::new(tl!("Printer")).color(t.text_dim));
                     let before = s(f, "printer", "");
                     let opts: Vec<(&str, &str)> = printers.iter().map(|n| (n.as_str(), n.as_str())).collect();
-                    dropdown_str(ui, "print-printer", f, "printer", &opts, 220.0);
+                    dropdown_str(ui, "print-printer", tl!("Printer"), f, "printer", &opts, 220.0);
                     if s(f, "printer", "") != before {
                         f.remove("printerSettings");
                         driver_page(f);
@@ -1231,7 +1236,7 @@ fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Va
                     let mut pr = s(f, "printer", "");
                     let opts = printer_options(f.get("__systemPrinters"), &pr);
                     let o: Vec<(String, &str)> = opts.iter().map(|(k, l)| (k.clone(), l.as_str())).collect();
-                    if crate::widgets::dropdown(ui, "print-printer", &mut pr, &o, 240.0) {
+                    if crate::widgets::dropdown(ui, "print-printer", tl!("Printer"), &mut pr, &o, 240.0) {
                         f.insert("printer".into(), json!(pr));
                     }
                 });
@@ -1242,6 +1247,7 @@ fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Va
             dropdown_str(
                 ui,
                 "print-color",
+                tl!("Color Management"),
                 f,
                 "colorHandling",
                 &[
@@ -1272,11 +1278,12 @@ fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Va
                 if !profiles.iter().any(|(v, _)| *v == cur) {
                     profiles.push((cur.as_str(), stem.as_str()));
                 }
-                dropdown_str(ui, "print-profile", f, "printerProfile", &profiles, 240.0);
+                dropdown_str(ui, "print-profile", tl!("Profile"), f, "printerProfile", &profiles, 240.0);
                 ui.horizontal(|ui| {
                     dropdown_str(
                         ui,
                         "print-intent",
+                        tl!("Mode"),
                         f,
                         "intent",
                         &[
@@ -1296,7 +1303,7 @@ fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Va
                 }
             }
             head(ui, tl!("Position and Size"));
-            dropdown_str(ui, "print-units", f, "units", &[("cm", tl!("Centimeters")), ("mm", tl!("Millimeters")), ("in", tl!("Inches"))], 130.0);
+            dropdown_str(ui, "print-units", tl!("Units"), f, "units", &[("cm", tl!("Centimeters")), ("mm", tl!("Millimeters")), ("in", tl!("Inches"))], 130.0);
             let units = s(f, "units", "cm");
             check(ui, f, "center", tl!("Center"), true);
             let centered = b(f, "center", true);
@@ -1328,7 +1335,7 @@ fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Va
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new(tl!("Scale")).color(t.text_dim));
                         let mut v = n(f, "scale", 100.0) as f32;
-                        crate::widgets::value_field(ui, &mut v, 1.0..=1000.0, "%", 64.0);
+                        crate::widgets::value_field(ui, &mut v, 1.0..=1000.0, "%", 64.0).accessible_name(tl!("Scale"));
                         f.insert("scale".into(), json!((f64::from(v) * 100.0).round() / 100.0));
                     });
                 }
@@ -1751,7 +1758,7 @@ mod tests {
             )
         };
         let before = pane(&h);
-        let rects: Vec<egui::Rect> = h.ctx.data(|m| m.get_temp(egui::Id::new("pc-dialog-rects"))).unwrap();
+        let rects: Vec<egui::Rect> = h.ctx.data(|m| m.get_temp(egui::Id::unique("pc-dialog-rects"))).unwrap();
         let corner = rects[0].max - egui::vec2(14.0, 14.0);
         h.event(egui::Event::PointerMoved(corner));
         h.step();
@@ -2116,9 +2123,9 @@ mod web_playback_tests {
             h.state_mut().1.insert("__web_frame".into(), json!(frame));
             h.run_steps(2);
             for pane in 0usize..4 {
-                let proxy: (String, WebProxy) = h.ctx.data(|d| d.get_temp(egui::Id::new(("web-proxy", doc_id, pane)))).unwrap();
+                let proxy: (String, WebProxy) = h.ctx.data(|d| d.get_temp(egui::Id::unique(("web-proxy", doc_id, pane)))).unwrap();
                 assert!(proxy.1.0[0][frame] > 0.99, "pane {pane} must show frame {frame}");
-                let cache: WebCache = h.ctx.data(|d| d.get_temp(egui::Id::new(("web-pane", doc_id, pane)))).unwrap();
+                let cache: WebCache = h.ctx.data(|d| d.get_temp(egui::Id::unique(("web-pane", doc_id, pane)))).unwrap();
                 assert!(cache.0.contains(&format!("Some({frame})")));
             }
         }
@@ -2138,7 +2145,7 @@ mod web_playback_tests {
         h.state_mut().1.insert("colorTable".into(), expected_palette.clone());
         h.run_steps(2);
         assert_eq!(h.state().1["colorTable"], expected_palette);
-        let key = egui::Id::new(("web-pane", doc_id, 1usize)).with("indexed-source");
+        let key = egui::Id::unique(("web-pane", doc_id, 1usize)).with("indexed-source");
         let encoded = |ctx: &egui::Context| ctx.data(|d| d.get_temp::<(String, Arc<Optimized>)>(key)).unwrap().1;
         let first = encoded(&h.ctx);
         h.state_mut().1.insert("colorTableEdits".into(), json!({"0":"#ffff00"}));

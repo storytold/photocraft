@@ -62,7 +62,7 @@ pub fn choose(app: &mut PhotocraftApp, layer: u64) {
 }
 
 fn menu_id() -> egui::Id {
-    egui::Id::new("canvas-layer-menu")
+    egui::Id::unique("canvas-layer-menu")
 }
 
 /// Show the open menu. Escape or a click outside closes it.

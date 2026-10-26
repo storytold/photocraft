@@ -456,6 +456,36 @@ fn spawn(app: &mut PhotocraftApp, ctx: &egui::Context, s: Spawn) {
     );
 }
 
+/// A test can hold the worker after a batch: a real worker's speed is not reproducible, and the
+/// edit-during-a-redraw test needs the redraw to be certainly still running.
+#[cfg(test)]
+pub(crate) mod test_hold {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    static HELD: AtomicBool = AtomicBool::new(false);
+
+    /// Holds every redraw worker after its next batch until this guard drops.
+    pub(crate) struct Hold;
+
+    pub(crate) fn hold() -> Hold {
+        HELD.store(true, Ordering::SeqCst);
+        Hold
+    }
+
+    impl Drop for Hold {
+        fn drop(&mut self) {
+            HELD.store(false, Ordering::SeqCst);
+        }
+    }
+
+    /// Called by the worker between batches while a test holds it.
+    pub(crate) fn wait() {
+        while HELD.load(Ordering::SeqCst) {
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+    }
+}
+
 /// The worker: composite `todo`'s blocks of `doc` in batches and hand each over, until done or
 /// stopped.
 #[allow(clippy::too_many_arguments)]
@@ -487,6 +517,8 @@ fn draw(
             }
             ctx.request_repaint();
         }
+        #[cfg(test)]
+        test_hold::wait();
     }
 }
 

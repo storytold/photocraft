@@ -690,6 +690,7 @@ fn retouch_commands_are_registered_and_need_a_pixel_layer() {
         "paint.smudge",
         "paint.historyBrush",
         "paint.remove",
+        "paint.artHistoryBrush",
     ];
     for id in ids {
         let spec = crate::commands::find(id).unwrap_or_else(|| panic!("{id} missing"));
@@ -706,7 +707,7 @@ fn retouch_commands_are_registered_and_need_a_pixel_layer() {
 // Paint target (#207): mask, alpha channel, Quick Mask
 // ---------------------------------------------------------------------------------------------
 
-const RETOUCH_IDS: [&str; 12] = [
+const RETOUCH_IDS: [&str; 13] = [
     "paint.cloneStamp",
     "paint.patternStamp",
     "paint.healingBrush",
@@ -719,6 +720,7 @@ const RETOUCH_IDS: [&str; 12] = [
     "paint.smudge",
     "paint.historyBrush",
     "paint.remove",
+    "paint.artHistoryBrush",
 ];
 
 /// Grey noise in 0.3..0.7 (no period along the clone offset used below).
@@ -769,6 +771,10 @@ fn retouch_params(id: &str, history_state: usize, target: Value) -> Value {
     match id {
         "paint.cloneStamp" | "paint.healingBrush" => p["offset"] = json!([-13, 3]),
         "paint.historyBrush" => p["state"] = json!(history_state),
+        "paint.artHistoryBrush" => {
+            p["state"] = json!(history_state);
+            p["tolerance"] = json!(0);
+        }
         "paint.sponge" => p["mode"] = json!("saturate"),
         _ => {}
     }

@@ -353,7 +353,7 @@ fn list_row(ui: &mut egui::Ui, p: &BrushPreset, current: bool, presets: &[BrushP
     let (full, resp) = ui.allocate_exact_size(vec2(ui.available_width(), list_row_height(scale)), Sense::click_and_drag());
     // Rows inside nested folders are indented; the whole width stays the drop target.
     let r = egui::Rect::from_min_max(full.min + vec2(indent.min(full.width() / 2.0), 0.0), full.max);
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, current, &p.name));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, current, &p.name));
     if !ui.is_rect_visible(r) {
         return;
     }
@@ -407,7 +407,7 @@ pub(crate) fn grid_columns(width: f32, cell: f32, indent: f32, gap: f32) -> (f32
 fn grid_cell(ui: &mut egui::Ui, p: &BrushPreset, current: bool, presets: &[BrushPreset], cell: f32, acts: &mut Vec<Action>) {
     let t = Tokens::get(ui.ctx());
     let (r, resp) = ui.allocate_exact_size(vec2(cell, cell + 6.0), Sense::click_and_drag());
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, current, &p.name));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, current, &p.name));
     if !ui.is_rect_visible(r) {
         return;
     }
@@ -555,7 +555,7 @@ fn preset_card(
         0.0
     };
     let (full, resp) = ui.allocate_exact_size(vec2(width, pad_y * 2.0 + top_h + name_h), Sense::click_and_drag());
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, current, &p.name));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, current, &p.name));
     if !ui.is_rect_visible(full) {
         return;
     }
@@ -696,7 +696,7 @@ fn group_header(ui: &mut egui::Ui, label: &str, key: &str, folder: &[String], op
     let font = if folder.is_empty() { theme::semibold(12.0) } else { theme::medium(12.0) };
     ui.painter().text(pos2(x + 40.0, r.center().y), egui::Align2::LEFT_CENTER, shown, font, t.text);
     ui.painter().text(pos2(r.right() - 8.0, r.center().y), egui::Align2::RIGHT_CENTER, count.to_string(), theme::medium(11.0), t.text_faint);
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::CollapsingHeader, true, shown));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::DisclosureTriangle, true, shown));
     let me = match folder {
         [] => BrushDrag::Group(key.to_string()),
         f => BrushDrag::Folder { group: key.to_string(), folder: f.to_vec() },
@@ -866,8 +866,10 @@ fn rename_bar(ui: &mut egui::Ui, st: &mut BrushesPanelState, acts: &mut Vec<Acti
     }
     let mut done = false;
     ui.horizontal(|ui| {
-        ui.label(RichText::new(if r.group { tl!("Group name") } else { tl!("Brush name") }).color(t.text_dim));
-        let resp = ui.add(egui::TextEdit::singleline(&mut r.text).desired_width((ui.available_width() - 140.0).max(60.0)).id_salt("brush-rename"));
+        let name_label = ui.label(RichText::new(if r.group { tl!("Group name") } else { tl!("Brush name") }).color(t.text_dim));
+        let resp = ui
+            .add(egui::TextEdit::singleline(&mut r.text).desired_width((ui.available_width() - 140.0).max(60.0)).id_salt("brush-rename"))
+            .labelled_by(name_label.id);
         if !resp.has_focus() && !resp.lost_focus() {
             resp.request_focus();
         }
@@ -952,7 +954,7 @@ pub fn preset_list(ui: &mut egui::Ui, presets: &[BrushPreset], current: Option<&
             }
             BrushDrag::Folder { folder, .. } => folder.last().cloned().unwrap_or_default(),
         };
-        egui::Area::new(egui::Id::new(("brush-drag-label", layout.id))).order(egui::Order::Tooltip).fixed_pos(p + vec2(12.0, 8.0)).interactable(false).show(
+        egui::Area::new(egui::Id::unique(("brush-drag-label", layout.id))).order(egui::Order::Tooltip).fixed_pos(p + vec2(12.0, 8.0)).interactable(false).show(
             ui.ctx(),
             |ui| {
                 if matches!(&*d, BrushDrag::Preset(_)) {
@@ -1002,7 +1004,7 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             r
         });
         let mut s = b.size;
-        if widgets::value_field(ui, &mut s, 1.0..=MAX_BRUSH_SIZE, "px", 74.0).changed() {
+        if widgets::value_field(ui, &mut s, 1.0..=MAX_BRUSH_SIZE, "px", 74.0).accessible_name(tl!("Size")).changed() {
             b.size = s.round().clamp(1.0, MAX_BRUSH_SIZE);
         }
     });
@@ -1012,7 +1014,7 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         icons::paint(ui, egui::Rect::from_min_size(ui.cursor().min + vec2(0.0, 3.0), vec2(16.0, 16.0)), "search", 14.0, t.text_faint);
         ui.add_space(20.0);
         let search_w = (inner_w - 112.0).clamp(90.0, inner_w - 40.0);
-        widgets::text_field(ui, ui.id().with("brush-search"), &mut app.ui.brushes_panel.filter, tl!("Search Brushes"), search_w, false);
+        widgets::text_field(ui, ui.scope_id().with("brush-search"), &mut app.ui.brushes_panel.filter, tl!("Search Brushes"), search_w, false);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let view = &mut app.ui.brushes_panel.view;
             let grid_tip = "Grid view";

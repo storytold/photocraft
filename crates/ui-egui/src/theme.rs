@@ -764,7 +764,7 @@ impl Tokens {
 
     /// Tokens for the active theme (stored in egui's context data by [`apply`]).
     pub fn get(ctx: &egui::Context) -> Tokens {
-        ctx.data(|d| d.get_temp::<Tokens>(egui::Id::new("photocraft-theme"))).unwrap_or_else(|| Tokens::for_kind(ThemeKind::Studio))
+        ctx.data(|d| d.get_temp::<Tokens>(egui::Id::unique("photocraft-theme"))).unwrap_or_else(|| Tokens::for_kind(ThemeKind::Studio))
     }
 
     /// Thin RGB outlines; the filled bands use the same hues with subdued coverage.
@@ -872,6 +872,29 @@ pub fn install_fonts_with(ctx: &egui::Context, cjk: crate::cjk_fonts::Sources) {
     if let Some(mono) = mono {
         fonts.families.entry(FontFamily::Monospace).or_default().insert(0, mono);
     }
+    // The optional craft-fonts input carries Japanese, Simplified Chinese, Korean, Arabic, Thai and
+    // other faces. Register them up front: the lazy loader cannot react before the first frame
+    // shapes (and a headless frame panics on a missing glyph rather than drawing tofu).
+    if cjk.eager_craft_fonts {
+        // The UI Japanese face comes first, as in the lazy loader (`japanese_for_ui`): egui uses
+        // the first family member that covers a glyph, and the manifest lists Shippori Mincho
+        // before BIZ UDPGothic, so manifest order alone would draw Japanese UI in serif glyphs
+        // and shared Han characters in Japanese forms.
+        let craft = photocraft_text::craft_fonts::CRAFT_FONTS;
+        let ui_first: Vec<usize> =
+            photocraft_text::craft_fonts::japanese_for_ui().iter().filter_map(|f| craft.iter().position(|c| std::ptr::eq(c, *f))).collect();
+        let order = ui_first.iter().copied().chain((0..craft.len()).filter(|i| !ui_first.contains(i)));
+        for i in order {
+            let f = &craft[i];
+            if f.bytes.is_empty() {
+                continue;
+            }
+            let name = format!("craft-font-{i}");
+            fonts.font_data.insert(name.clone(), Arc::new(FontData::from_static(f.bytes)));
+            fonts.families.entry(FontFamily::Proportional).or_default().push(name.clone());
+            fonts.families.entry(FontFamily::Monospace).or_default().push(name);
+        }
+    }
     // Named weights fall back to the default stack for missing glyphs.
     let fallback: Vec<String> = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
     for (fam, primary) in [("medium", medium), ("semibold", semibold)] {
@@ -908,7 +931,7 @@ fn ui_fonts_active(ctx: &egui::Context) -> bool {
 }
 
 fn ui_fonts_id() -> egui::Id {
-    egui::Id::new("photocraft-ui-fonts")
+    egui::Id::unique("photocraft-ui-fonts")
 }
 
 fn ui_font_size(ctx: &egui::Context) -> UiFontSize {
@@ -997,7 +1020,7 @@ pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
     // including when an integration or restored egui state pinned its own theme preference.
     ctx.set_theme(egui::ThemePreference::System);
     let t = Tokens::for_kind(kind);
-    ctx.data_mut(|d| d.insert_temp(egui::Id::new("photocraft-theme"), t));
+    ctx.data_mut(|d| d.insert_temp(egui::Id::unique("photocraft-theme"), t));
     let mut v = if t.dark() { Visuals::dark() } else { Visuals::light() };
     v.panel_fill = t.chrome;
     v.window_fill = t.card;
@@ -1494,7 +1517,7 @@ pub mod live {
                     super::apply(ctx, kind);
                     let mut t = Tokens::get(ctx);
                     let unknown = apply_overrides(&mut t, &v);
-                    ctx.data_mut(|d| d.insert_temp(egui::Id::new("photocraft-theme"), t));
+                    ctx.data_mut(|d| d.insert_temp(egui::Id::unique("photocraft-theme"), t));
                     if !unknown.is_empty() {
                         log::warn!("unknown token keys: {unknown:?}");
                     }

@@ -63,7 +63,7 @@ pub fn gesture(ctx: &Context) -> Option<String> {
 }
 
 fn focus_key() -> Id {
-    Id::new("apply-color-focus")
+    Id::unique("apply-color-focus")
 }
 
 /// Counts the changes of keyboard focus, so two values typed into one field, each after

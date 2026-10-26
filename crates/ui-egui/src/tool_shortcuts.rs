@@ -80,7 +80,9 @@ mod tests {
         app.run("prefs.set", json!({"path": "shortcuts.tools.select.pencil", "value": "Q"})).unwrap();
         let mut h = egui_kittest::Harness::builder().build_ui_state(
             |ui, app: &mut PhotocraftApp| {
-                ui.text_edit_singleline(&mut app.ui.status).request_focus();
+                let edit = ui.text_edit_singleline(&mut app.ui.status);
+                edit.request_focus();
+                edit.accessible_name("Status");
                 crate::shortcuts::handle(app, ui.ctx());
             },
             app,
