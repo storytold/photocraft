@@ -63,6 +63,23 @@ fn save_as_to_a_bmp_asks_for_its_depth() {
     assert_eq!(writes.borrow()[1], ("c.bmp".to_string(), asked(Some(32))));
 }
 
+/// FredApps on #9175: the choice says what each depth does to transparency (24 Bit composites it
+/// over white, 32 Bit keeps it as alpha), and offers no depth it can't write.
+#[test]
+fn bmp_options_say_what_each_depth_does_to_transparency() {
+    let (mut h, _writes) = bmp_app("unused.bmp");
+    h.state_mut().save_as(Some("b.bmp".into())).unwrap();
+    h.run_steps(2);
+    let (white, alpha) = ("Transparent areas are composited over white.", "Transparency is kept as the alpha channel.");
+    assert!(h.query_by_label(white).is_some() && h.query_by_label(alpha).is_none(), "24 Bit");
+    h.get_by_label("32 Bit").click();
+    h.run_steps(2);
+    assert!(h.query_by_label(alpha).is_some() && h.query_by_label(white).is_none(), "32 Bit");
+    for other in ["16 Bit", "Advanced Modes"] {
+        assert!(h.query_by_label(other).is_none(), "no {other}");
+    }
+}
+
 /// Scripts choose with `bmpBits` and are never asked; a grayscale BMP (8-bit, nothing to choose)
 /// isn't asked either.
 #[test]

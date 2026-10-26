@@ -73,6 +73,13 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         crate::widgets::section_label(ui, tl!("Depth"));
         ui.radio_value(&mut bits, BmpBits::Bits24, tl!("24 Bit"));
         ui.radio_value(&mut bits, BmpBits::Bits32, tl!("32 Bit"));
+        // What the chosen depth does to transparency, at the choice.
+        let note = match bits {
+            BmpBits::Bits24 => tl!("Transparent areas are composited over white."),
+            BmpBits::Bits32 => tl!("Transparency is kept as the alpha channel."),
+        };
+        ui.add_space(4.0);
+        ui.label(egui::RichText::new(note).color(crate::theme::Tokens::get(ui.ctx()).text_dim).size(11.0));
         ui.add_space(12.0);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 10.0;
