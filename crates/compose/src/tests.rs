@@ -1248,6 +1248,43 @@ fn stroke(size: f32, position: StrokePosition) -> Effect {
     })
 }
 
+/// The middle pixel of a grey square carrying `effect`, in a white document of `depth`.
+fn effect_on_grey(depth: SampleType, grey: f32, effect: Effect) -> [f32; 4] {
+    let mut d = Document::with_background("t", Size::new(40, 40), ColorMode::Rgb, depth, Color::WHITE);
+    let fmt = d.pixel_format();
+    let mut l = Layer::raster("sq", fmt);
+    l.surface_mut().unwrap().fill_rect(Rect::new(10, 10, 30, 30), &photocraft_raster::from_rgba(&fmt, [grey, grey, grey, 1.0]));
+    l.effects.items = vec![effect];
+    d.layers.push(l);
+    px(&d, 20, 20)
+}
+
+#[test]
+fn special_eight_effect_strength_acts_like_fill() {
+    // Photoshop shows a white Vivid Light effect at 56 % on a dark grey (16/255) as
+    // 16 / (1 - 0.56) = 36.4 / 255: the strength pulls the colour toward the mode's neutral and
+    // the blend runs at full strength, as with a layer's Fill. Mixing the full-strength result
+    // in linearly gave about 150.
+    let grey = 16.0 / 255.0;
+    let want = grey / (1.0 - 0.56);
+    let overlay = |mode, opacity| Effect::ColorOverlay { common: FxCommon::new(mode, opacity), color: Color::WHITE };
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        let got = effect_on_grey(depth, grey, overlay(BlendMode::VividLight, 0.56));
+        let tolerance = if depth == SampleType::U8 { 1.5 / 255.0 } else { 0.5 / 255.0 };
+        assert!((got[0] - want).abs() <= tolerance, "{depth:?}: {got:?} vs {want}");
+        assert!(close4(got, [got[0], got[0], got[0], 1.0]), "{depth:?}: stays neutral {got:?}");
+        // Full strength is the plain mode; no strength leaves the fill alone.
+        let full = effect_on_grey(depth, grey, overlay(BlendMode::VividLight, 1.0));
+        let plain = blend_px(depth, BlendMode::VividLight, [grey; 3], [1.0; 3]);
+        assert!(close4(full, plain), "{depth:?}: {full:?} vs {plain:?}");
+        let none = effect_on_grey(depth, grey, overlay(BlendMode::VividLight, 0.0));
+        assert!((none[0] - grey).abs() <= 0.5 / 255.0, "{depth:?}: {none:?}");
+        // Modes outside the special eight still mix linearly.
+        let soft = effect_on_grey(depth, grey, overlay(BlendMode::Normal, 0.56));
+        let linear = grey + (1.0 - grey) * 0.56;
+        assert!((soft[0] - linear).abs() <= 1.0 / 255.0, "{depth:?}: {soft:?} vs {linear}");
+    }
+}
 #[test]
 fn outside_stroke_width() {
     let d = fx_doc(vec![stroke(3.0, StrokePosition::Outside)]);

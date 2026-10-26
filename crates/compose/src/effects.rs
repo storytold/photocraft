@@ -1142,6 +1142,16 @@ fn paint(dst: &mut Buffer, m: &Map, color: impl Fn(usize) -> [f32; 4], blend: Bl
             }
             continue;
         }
+        if psblend::fill_is_special(blend) {
+            // Photoshop's "special eight" (Vivid Light, Color Dodge, ...): an effect's strength
+            // (coverage x Opacity), like a layer's Fill, pulls the colour toward the mode's
+            // neutral and blends it at full strength, instead of mixing the full-strength
+            // result in linearly. Linear mixing turned a Vivid Light white inner shadow on a
+            // near-black fill into mid grey, and a Vivid Light white satin on gold into white,
+            // where Photoshop keeps the fill dark / the gold saturated.
+            *p = psblend::composite_fill(blend, *p, [c[0], c[1], c[2], c[3]], 1.0, a.min(1.0), 1.0);
+            continue;
+        }
         *p = psblend::composite(blend, *p, [c[0], c[1], c[2], c[3] * a], 1.0);
     }
 }
