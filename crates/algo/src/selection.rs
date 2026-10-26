@@ -895,8 +895,151 @@ pub fn polygon(points: &[(f32, f32)], area: Rect, anti_alias: bool) -> Vec<f32> 
     m
 }
 
+/// Matches candidate colors against a set of selected colors within an $L_\\infty$
+/// tolerance per channel.
+///
+/// Rather than checking against a single 4D axis-aligned bounding box (which would
+/// falsely include intermediate colors when disparate hues like red and blue are selected),
+/// this indexes selected colors in a bounding-volume hierarchy (BVH). Candidate colors
+/// outside the expanded bounds of subtrees are pruned in $O(1)$ time. Fully transparent
+/// pixels (`a <= 1e-5`) match if the selection itself contains transparent pixels.
+#[derive(Clone, Debug)]
+pub struct ColorMatcher {
+    has_transparent: bool,
+    tree: ColorBvh,
+    tol: f32,
+}
+
+#[derive(Clone, Debug)]
+enum ColorBvh {
+    Empty,
+    Leaf(Vec<[f32; 4]>),
+    Node { min: [f32; 4], max: [f32; 4], left: Box<ColorBvh>, right: Box<ColorBvh> },
+}
+
+impl ColorBvh {
+    fn build(mut points: Vec<[f32; 4]>) -> Self {
+        if points.is_empty() {
+            return ColorBvh::Empty;
+        }
+        if points.len() <= 16 {
+            return ColorBvh::Leaf(points);
+        }
+        let (mut min, mut max) = ([f32::MAX; 4], [f32::MIN; 4]);
+        for p in &points {
+            for c in 0..4 {
+                min[c] = min[c].min(p[c]);
+                max[c] = max[c].max(p[c]);
+            }
+        }
+        let mut best_axis = 0;
+        let mut max_spread = -1.0;
+        for c in 0..4 {
+            let spread = max[c] - min[c];
+            if spread > max_spread {
+                max_spread = spread;
+                best_axis = c;
+            }
+        }
+        if max_spread <= 1e-6 {
+            return ColorBvh::Leaf(points);
+        }
+        points.sort_unstable_by(|a, b| a[best_axis].total_cmp(&b[best_axis]));
+        let mid = points.len() / 2;
+        let right_pts = points.split_off(mid);
+        let left = ColorBvh::build(points);
+        let right = ColorBvh::build(right_pts);
+        ColorBvh::Node { min, max, left: Box::new(left), right: Box::new(right) }
+    }
+
+    fn matches(&self, q: &[f32; 4], tol: f32) -> bool {
+        match self {
+            ColorBvh::Empty => false,
+            ColorBvh::Leaf(pts) => pts.iter().any(|p| (0..4).all(|c| (q[c] - p[c]).abs() <= tol + 1e-6)),
+            ColorBvh::Node { min, max, left, right } => {
+                for c in 0..4 {
+                    let d = if q[c] < min[c] {
+                        min[c] - q[c]
+                    } else if q[c] > max[c] {
+                        q[c] - max[c]
+                    } else {
+                        0.0
+                    };
+                    if d > tol + 1e-6 {
+                        return false;
+                    }
+                }
+                left.matches(q, tol) || right.matches(q, tol)
+            }
+        }
+    }
+}
+
+impl ColorMatcher {
+    /// Creates a color matcher from selected RGBA colors and an $L_\\infty$ tolerance in $[0, 1]$.
+    pub fn new(selected_colors: impl IntoIterator<Item = [f32; 4]>, tol: f32) -> Self {
+        let mut has_transparent = false;
+        let mut opaque_or_semi = Vec::new();
+        for c in selected_colors {
+            if c[3] <= 1e-5 {
+                has_transparent = true;
+            } else {
+                opaque_or_semi.push(c);
+            }
+        }
+        opaque_or_semi.sort_unstable_by(|a, b| {
+            a[0].total_cmp(&b[0]).then_with(|| a[1].total_cmp(&b[1])).then_with(|| a[2].total_cmp(&b[2])).then_with(|| a[3].total_cmp(&b[3]))
+        });
+        opaque_or_semi.dedup_by(|a, b| (0..4).all(|c| (a[c] - b[c]).abs() <= 1e-5));
+
+        Self { has_transparent, tree: ColorBvh::build(opaque_or_semi), tol: tol.max(0.0) }
+    }
+
+    /// Returns `true` if no colors (including transparent pixels) were provided.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        !self.has_transparent && matches!(self.tree, ColorBvh::Empty)
+    }
+
+    /// Returns `true` if `q` falls within `tol` of any selected color.
+    #[inline]
+    pub fn matches(&self, q: [f32; 4]) -> bool {
+        if q[3] <= 1e-5 {
+            return self.has_transparent;
+        }
+        self.tree.matches(&q, self.tol)
+    }
+}
+
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn color_matcher_bvh_and_transparency() {
+        let red = [1.0, 0.0, 0.0, 1.0];
+        let blue = [0.0, 0.0, 1.0, 1.0];
+        let matcher = ColorMatcher::new([red, blue], 10.0 / 255.0);
+        assert!(!matcher.is_empty());
+
+        assert!(matcher.matches([0.98, 0.02, 0.0, 1.0]));
+        assert!(matcher.matches([0.0, 0.02, 0.98, 1.0]));
+
+        assert!(!matcher.matches([0.0, 0.0, 0.0, 1.0]));
+        assert!(!matcher.matches([0.0, 1.0, 0.0, 1.0]));
+        assert!(!matcher.matches([1.0, 1.0, 0.0, 1.0]));
+        assert!(!matcher.matches([0.5, 0.0, 0.5, 1.0]));
+        assert!(!matcher.matches([0.0, 0.0, 0.0, 0.0]));
+
+        let matcher_trans = ColorMatcher::new([red, [0.0, 0.0, 0.0, 0.0]], 10.0 / 255.0);
+        assert!(matcher_trans.matches([0.0, 0.0, 0.0, 0.0]));
+        assert!(matcher_trans.matches([0.5, 0.2, 0.1, 0.0]));
+        assert!(matcher_trans.matches([0.98, 0.0, 0.0, 1.0]));
+        assert!(!matcher_trans.matches([0.0, 1.0, 0.0, 1.0]));
+
+        let empty = ColorMatcher::new([], 10.0 / 255.0);
+        assert!(empty.is_empty());
+        assert!(!empty.matches(red));
+    }
     use super::*;
 
     fn img(w: usize, h: usize, f: impl Fn(usize, usize) -> [f32; 4]) -> Vec<[f32; 4]> {
