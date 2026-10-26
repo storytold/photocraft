@@ -245,7 +245,7 @@ fn brush_size(fields: &Map<String, Value>) -> f32 {
 }
 
 /// The brush restores the original edge (Photoshop's − mode) instead of expanding the area.
-fn brush_subtract(fields: &Map<String, Value>) -> bool {
+pub(crate) fn brush_subtract(fields: &Map<String, Value>) -> bool {
     fields.get("__brushMode").and_then(Value::as_str) == Some("subtract")
 }
 

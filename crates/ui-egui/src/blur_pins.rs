@@ -533,9 +533,7 @@ fn grab(fields: &Map<String, Value>, xf: &ViewXform, at: Pos2) -> Grab {
 pub fn canvas(app: &mut PhotocraftApp, ctx: &egui::Context, xf: &ViewXform, over: Pos2, press: Option<Pos2>) -> bool {
     let Some(d) = app.ui.dialogs.last_mut().filter(|d| owns(&d.fields)) else { return false };
     let f = &mut d.fields;
-    let Some(b) = bounds(f) else { return false };
-    let Some(k) = kind(f) else { return false };
-    let (start, down) = ctx.input(|i| (i.pointer.primary_pressed(), i.pointer.primary_down()));
+    let Some(k) = kind(f).filter(|_| bounds(f).is_some()) else { return false };
     ctx.set_cursor_icon(match grab(f, xf, over) {
         Grab::Ring(_) | Grab::Round(_) | Grab::Turn(..) => egui::CursorIcon::Alias,
         Grab::Axis(..) | Grab::Feather(_) => egui::CursorIcon::Move,
@@ -544,11 +542,23 @@ pub fn canvas(app: &mut PhotocraftApp, ctx: &egui::Context, xf: &ViewXform, over
         Grab::New if k == Kind::Tilt => egui::CursorIcon::Default,
         Grab::New => egui::CursorIcon::Crosshair,
     });
+    let (start, down) = ctx.input(|i| (i.pointer.primary_pressed(), i.pointer.primary_down()));
+    if press_at(f, xf, press, start, down) {
+        ctx.request_repaint();
+    }
+    true
+}
+
+/// The pins' side of [`canvas`], also driven by `ui.pointer`: `press` is where the primary button
+/// is held (screen points), `start` true on the press itself, `down` while the button is held.
+/// Returns whether a pin changed.
+pub fn press_at(f: &mut Map<String, Value>, xf: &ViewXform, press: Option<Pos2>, start: bool, down: bool) -> bool {
+    let (Some(b), Some(k)) = (bounds(f), kind(f)) else { return false };
     if !down && press.is_none() {
         f.remove("__drag");
-        return true;
+        return false;
     }
-    let Some(at) = press else { return true };
+    let Some(at) = press else { return false };
     let doc = xf.to_doc(at);
     let mut list = pins(f);
     if start {
@@ -580,13 +590,12 @@ pub fn canvas(app: &mut PhotocraftApp, ctx: &egui::Context, xf: &ViewXform, over
                 select(f, Some(list.len() - 1));
                 json!({"pin": list.len() - 1, "dx": 0.0, "dy": 0.0})
             }
-            Grab::New => return true,
+            Grab::New => return false,
         };
         f.insert("__drag".into(), drag);
-        ctx.request_repaint();
         return true;
     }
-    let Some(drag) = f.get("__drag").cloned() else { return true };
+    let Some(drag) = f.get("__drag").cloned() else { return false };
     let index = |key: &str| drag.get(key).and_then(Value::as_u64).map(|i| i as usize);
     let ss = short_side(b);
     if let Some(i) = index("pin")
@@ -667,7 +676,6 @@ pub fn canvas(app: &mut PhotocraftApp, ctx: &egui::Context, xf: &ViewXform, over
     if let Some(i) = ["pin", "ring", "axis", "round", "feather", "turn", "focus", "transition"].into_iter().find_map(index) {
         select(f, Some(i));
     }
-    ctx.request_repaint();
     true
 }
 
