@@ -744,10 +744,15 @@ struct Haze {
     dark: Tex,
     /// The cells' order for the atmospheric light (`fs_haze_rank`).
     order: Tex,
-    /// The light's sums per tile, and the light.
+    /// The light's sums per tile, and the light (the tiles also take the weight's sums).
     tiles: Tex,
     tiles_size: [u32; 2],
     air: Tex,
+    /// The dark channel over the light, its opening, and the transmission's weight from their
+    /// means.
+    norm: Tex,
+    opened: Tex,
+    weight: Tex,
     /// The transmission's guided filter: its input, then working textures; the transmission ends
     /// in the last.
     guide: [Tex; 3],
@@ -772,6 +777,9 @@ impl Haze {
             tiles: rgba("pc_camera_raw_haze_tiles", tiles_size),
             tiles_size,
             air: rgba("pc_camera_raw_haze_air", [1, 1]),
+            norm: plane("pc_camera_raw_haze_norm"),
+            opened: plane("pc_camera_raw_haze_opened"),
+            weight: rgba("pc_camera_raw_haze_weight", [1, 1]),
             guide: [0, 1, 2].map(|_| rgba("pc_camera_raw_haze_guide", size)),
             chain: Chain::new(device, size),
             dehazed: rgba("pc_camera_raw_dehazed", full),
@@ -991,9 +999,20 @@ impl ToneFrame {
             b.draw(Pipe::Air, tiles, Reads { a: v(&hz.order), b: v(&hz.cells), ..Default::default() }, &[&hz.tiles.view], None);
             b.filter(Pipe::Air, [1, 1], hz.tiles_size, [1, 0, 0, DEHAZE_AIR_FLOOR.to_bits()], &hz.tiles, None, &hz.air);
             // The transmission: the dark channel of the cells over the light, minimum filtered,
-            // then guided by their luminance.
+            // opened (maximum filtered at the same radius, #9273), weighted by ω times the ratio of
+            // the two means, then guided by their luminance.
             b.filter(Pipe::Min, s, s, [0, r, 2, 0], &hz.cells, Some(&hz.air), &hz.min);
-            b.filter(Pipe::MinPack, s, s, [1, r, 3, DEHAZE_OMEGA.to_bits()], &hz.min, Some(&hz.cells), &hz.guide[0]);
+            b.filter(Pipe::Min, s, s, [1, r, 0, 0], &hz.min, None, &hz.norm);
+            b.filter(Pipe::Min, s, s, [0, r, 4, 0], &hz.norm, None, &hz.min);
+            b.filter(Pipe::Min, s, s, [1, r, 4, 0], &hz.min, None, &hz.opened);
+            let mut sums = Step::sized(hz.tiles_size, s);
+            sums.sizes2[3] = COUNT_TILE;
+            sums.misc = [2, 0, 0, 0];
+            b.draw(Pipe::Air, sums, Reads { a: v(&hz.norm), b: v(&hz.opened), ..Default::default() }, &[&hz.tiles.view], None);
+            b.filter(Pipe::Air, [1, 1], hz.tiles_size, [3, n, 0, DEHAZE_OMEGA.to_bits()], &hz.tiles, None, &hz.weight);
+            let mut pack = Step::sized(s, s);
+            pack.misc = [1, 0, 3, 0];
+            b.draw(Pipe::MinPack, pack, Reads { a: v(&hz.opened), b: v(&hz.cells), fine: v(&hz.weight), ..Default::default() }, &[&hz.guide[0].view], None);
             b.guided(s, gr, DEHAZE_EPS, &hz.guide, true);
         }
         bounds[0] = b.ops.len();
