@@ -577,6 +577,31 @@ fn clarity_texture_and_dehaze_on_tiny_and_odd_frames() {
     }
 }
 
+/// #9273: the GPU opens the dark channel like the CPU, so a sky beside a dark tower clears as it
+/// does there. The scene of algo's `dehaze_leaves_no_halo_beside_dark_objects`: a clear sky and a
+/// dark tower hazed with `I = J·t + A·(1 − t)`.
+#[test]
+fn dehaze_opens_the_dark_channel_like_the_cpu() {
+    let Some(mut g) = gpu() else { return };
+    let (w, h) = (600usize, 400usize);
+    let tower = |x: usize, y: usize| (250..350).contains(&x) && y >= 120;
+    let (t, air) = (0.55f32, [0.9f32, 0.9, 0.9]);
+    let src: Vec<[f32; 4]> = (0..w * h)
+        .map(|i| {
+            let (x, y) = (i % w, i / w);
+            let j = if tower(x, y) { [0.06, 0.06, 0.07] } else { [0.35 + 0.1 * y as f32 / h as f32, 0.5, 0.8] };
+            let c: [f32; 3] = std::array::from_fn(|k| j[k] * t + air[k] * (1.0 - t));
+            [c[0], c[1], c[2], 1.0]
+        })
+        .collect();
+    for dehaze in [100.0, 60.0, -40.0] {
+        for depth in DEPTHS {
+            let d = compare_image(&mut g, &CameraRaw { dehaze, ..Default::default() }, depth, &src, (w, h));
+            eprintln!("dehaze {dehaze} on the tower {depth:?}: max |GPU - CPU| = {d:.2e}");
+        }
+    }
+}
+
 #[test]
 fn dehaze_remakes_its_copy_when_the_white_balance_changes() {
     let Some(mut g) = gpu() else { return };

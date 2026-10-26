@@ -1007,7 +1007,9 @@ fn dehaze(px: &mut [[f32; 4]], w: usize, h: usize, d: &Dehaze) {
     // outline and is still a lower bound of the dark channel over the window. It raises the dark
     // channel on average, so the ω weight is scaled to keep the slider's overall strength.
     let opened = rank_filter(&norm_dark, f32::MIN, f32::max);
-    let mean = |v: &[f32]| v.iter().sum::<f32>() / v.len().max(1) as f32;
+    // Summed in f64: an f32 running sum over the copy's few hundred thousand cells drifts by about
+    // 1e-5, which the low transmission beside haze multiplies up to a visible fraction of a level.
+    let mean = |v: &[f32]| (v.iter().map(|x| f64::from(*x)).sum::<f64>() / v.len().max(1) as f64) as f32;
     let weight = spatial::DEHAZE_OMEGA * mean(&norm_dark) / mean(&opened).max(1e-6);
     let t_raw: Vec<f32> = opened.iter().map(|d| 1.0 - weight * d).collect();
     let guide: Vec<f32> = small.iter().map(|c| luma(*c)).collect();
