@@ -37,8 +37,54 @@ impl EntropyScratch {
     }
 }
 
+/// One shared table per combine, never per pixel or worker. Rows cover the contributing sample
+/// count, which can change at every pixel because of transparency or unequal layer lengths.
+/// The triangular layout stores log2(n) followed by -p*log2(p) for counts 1..=n. Keeping the
+/// division after the sum (rather than normalising each term) preserves the old output bits.
+struct EntropyTerms {
+    values: Vec<f32>,
+}
+
+impl EntropyTerms {
+    // At most 130 KiB, independent of image size and total layer count. Deeper stacks retain
+    // the original calculation; pixels with fewer contributors can still use a cached row.
+    const MAX_SAMPLES: usize = 256;
+
+    fn new(samples: usize, pixels: usize) -> Self {
+        let mut values = Vec::new();
+        // Tiny images do not amortise preparation, especially with hundreds of layers.
+        if samples < 2 || pixels < 256 {
+            return Self { values };
+        }
+        let max = samples.min(Self::MAX_SAMPLES);
+        // max is capped at 256 before any size arithmetic or allocation.
+        let len = (max + 1) * (max + 2) / 2;
+        if values.try_reserve_exact(len).is_err() {
+            return Self { values };
+        }
+        values.extend_from_slice(&[0.0; 3]); // Unused rows for zero and one sample.
+        for samples in 2..=max {
+            let n = samples as f32;
+            values.push(n.log2());
+            for count in 1..=samples {
+                let p = count as f32 / n;
+                values.push(-p * p.log2());
+            }
+        }
+        Self { values }
+    }
+
+    fn row(&self, samples: usize) -> Option<&[f32]> {
+        if !(2..=Self::MAX_SAMPLES).contains(&samples) {
+            return None;
+        }
+        let start = samples * (samples + 1) / 2;
+        self.values.get(start..start + samples + 1)
+    }
+}
+
 /// Shannon entropy (bits) of the 8-bit values in `v`, over log2(N). `v.len() >= 2`.
-fn entropy(v: &[f32], scratch: &mut EntropyScratch) -> f32 {
+fn entropy(v: &[f32], scratch: &mut EntropyScratch, terms: Option<&[f32]>) -> f32 {
     let n = v.len() as f32;
     for x in v {
         let bin = (x.clamp(0.0, 1.0) * 255.0).round() as u8;
@@ -57,8 +103,11 @@ fn entropy(v: &[f32], scratch: &mut EntropyScratch) -> f32 {
         .touched
         .iter()
         .map(|&bin| {
-            let p = scratch.counts[usize::from(bin)] as f32 / n;
-            -p * p.log2()
+            let count = scratch.counts[usize::from(bin)];
+            terms.and_then(|row| row.get(count as usize)).copied().unwrap_or_else(|| {
+                let p = count as f32 / n;
+                -p * p.log2()
+            })
         })
         .sum();
     // Reset only the bins used, so the 256-entry array is never cleared wholesale.
@@ -66,7 +115,7 @@ fn entropy(v: &[f32], scratch: &mut EntropyScratch) -> f32 {
         scratch.counts[usize::from(bin)] = 0;
     }
     scratch.touched.clear();
-    h / n.log2()
+    h / terms.and_then(|row| row.first()).copied().unwrap_or_else(|| n.log2())
 }
 
 /// `x` to the power `k` by repeated squaring. Every step is one IEEE 754 multiplication, so the
@@ -109,7 +158,7 @@ fn stat(v: &mut [f32], s: Stat, scratch: &mut EntropyScratch) -> f32 {
             if v.len() < 2 {
                 return 0.0;
             }
-            return entropy(v, scratch);
+            return entropy(v, scratch, None);
         }
         _ => {}
     }
@@ -147,7 +196,11 @@ pub fn combine(layers: &[Vec<[f32; 4]>], s: Stat) -> Vec<[f32; 4]> {
     // serial loop (Mean, Variance, StdDev, Skewness, Kurtosis); this alone cuts Mean's
     // instructions by a fifth.
     match s {
-        Stat::Entropy => combine_with(layers, |v, sc| stat(v, Stat::Entropy, sc)),
+        Stat::Entropy => {
+            let pixels = layers.iter().map(Vec::len).max().unwrap_or(0);
+            let terms = EntropyTerms::new(layers.len(), pixels);
+            combine_with(layers, |v, sc| if v.len() < 2 { 0.0 } else { entropy(v, sc, terms.row(v.len())) })
+        }
         Stat::Kurtosis => combine_with(layers, |v, sc| stat(v, Stat::Kurtosis, sc)),
         Stat::Maximum => combine_with(layers, |v, sc| stat(v, Stat::Maximum, sc)),
         Stat::Mean => combine_with(layers, |v, sc| stat(v, Stat::Mean, sc)),
@@ -450,6 +503,102 @@ mod tests {
         let first = bits(&combine(&layers, Stat::Entropy));
         for _ in 0..8 {
             assert_eq!(bits(&combine(&layers, Stat::Entropy)), first);
+        }
+    }
+
+    /// The pre-lookup calculation, summing the 8-bit bins in ascending order. This deliberately
+    /// does not call `entropy` or use its lookup/scratch, so it catches changes in rounding too.
+    fn entropy_reference(v: &[f32]) -> f32 {
+        if v.len() < 2 {
+            return 0.0;
+        }
+        let mut counts = [0u32; 256];
+        for x in v {
+            counts[(x.clamp(0.0, 1.0) * 255.0).round() as usize] += 1;
+        }
+        let n = v.len() as f32;
+        let h: f32 = counts
+            .iter()
+            .filter(|&&count| count > 0)
+            .map(|&count| {
+                let p = count as f32 / n;
+                -p * p.log2()
+            })
+            .sum();
+        h / n.log2()
+    }
+
+    #[test]
+    fn entropy_terms_preserve_each_operation_and_bound_storage() {
+        let terms = EntropyTerms::new(usize::MAX, usize::MAX);
+        let max = EntropyTerms::MAX_SAMPLES;
+        assert_eq!(terms.values.len(), (max + 1) * (max + 2) / 2);
+        assert!(terms.values.len() * size_of::<f32>() < 130 * 1024);
+        for samples in 2..=max {
+            let row = terms.row(samples).unwrap();
+            let n = samples as f32;
+            assert_eq!(row[0].to_bits(), n.log2().to_bits());
+            for count in 1..=samples {
+                let p = count as f32 / n;
+                assert_eq!(row[count].to_bits(), (-p * p.log2()).to_bits(), "{count}/{samples}");
+            }
+        }
+        for samples in [0, 1, max + 1, usize::MAX] {
+            assert!(terms.row(samples).is_none());
+        }
+        assert!(EntropyTerms::new(1, usize::MAX).values.is_empty());
+        assert!(EntropyTerms::new(usize::MAX, 255).values.is_empty());
+        assert!(EntropyTerms { values: Vec::new() }.row(2).is_none());
+    }
+
+    #[test]
+    fn entropy_lookup_and_fallback_match_reference_bits() {
+        let terms = EntropyTerms::new(EntropyTerms::MAX_SAMPLES, CHUNK);
+        let mut scratch = EntropyScratch::new();
+        let special = [f32::NAN, f32::NEG_INFINITY, f32::INFINITY, -3.0, -0.0, 0.0, 0.5 / 255.0, 0.5, 1.0, 4.0];
+        // Move repeatedly between counts and distributions to exercise scratch reset, duplicate
+        // bins, every cached denominator and the uncached side of the table boundary.
+        for samples in (2..=EntropyTerms::MAX_SAMPLES + 2).chain([513, 3, 256, 2]) {
+            for pattern in 0..4 {
+                let v: Vec<f32> = (0..samples)
+                    .map(|i| match pattern {
+                        0 => 0.5,
+                        1 => (i % 256) as f32 / 255.0,
+                        2 => ((i * 137 + samples * 29) % 65536) as f32 / 65535.0,
+                        _ => special[i % special.len()],
+                    })
+                    .collect();
+                let expected = entropy_reference(&v).to_bits();
+                assert_eq!(entropy(&v, &mut scratch, terms.row(samples)).to_bits(), expected, "cached: n={samples}, pattern={pattern}");
+                assert_eq!(entropy(&v, &mut scratch, None).to_bits(), expected, "fallback: n={samples}, pattern={pattern}");
+            }
+        }
+    }
+
+    #[test]
+    fn entropy_combine_matches_reference_with_changing_contributor_counts() {
+        for (count, len) in [(19, 2 * CHUNK + 17), (EntropyTerms::MAX_SAMPLES + 1, 513)] {
+            let layers: Vec<Vec<[f32; 4]>> = (0..count)
+                .map(|k| {
+                    (0..len.saturating_sub(k % 13))
+                        .map(|i| {
+                            [
+                                ((i * 31 + k * 7) % 256) as f32 / 255.0,
+                                ((i * 17 + k) % 65536) as f32 / 65535.0,
+                                if (i + k).is_multiple_of(23) { f32::NAN } else { (i % 7) as f32 - 2.0 },
+                                if k > i % (count + 1) { 0.0 } else { 0.5 },
+                            ]
+                        })
+                        .collect()
+                })
+                .collect();
+            let expected = bits(&combine_with(&layers, |v, _| entropy_reference(v)));
+            assert_eq!(bits(&combine(&layers, Stat::Entropy)), expected);
+            #[cfg(not(target_arch = "wasm32"))]
+            for threads in [1, 3] {
+                let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
+                assert_eq!(pool.install(|| bits(&combine(&layers, Stat::Entropy))), expected, "{threads} threads");
+            }
         }
     }
 
