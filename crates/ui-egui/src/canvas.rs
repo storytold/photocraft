@@ -4699,7 +4699,6 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             view = now.clone();
             ctx.request_repaint();
         }
-        crate::snap_ui::draw(app, &painter, &xf);
         crate::move_distance::draw(app, &painter, &xf, idx, response.hover_pos());
         // The canvas edge isn't outlined while the pixels past it show (Photoshop's crop preview),
         // nor while the Crop tool hides everything outside its box (Show Cropped Area off).
@@ -4720,6 +4719,9 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         crate::slice_ui::draw_overlay(app, &painter, &xf);
         crate::frame_tool::draw_overlay(app, &painter, &xf);
         crate::artboard_tool::draw_overlay(app, &painter, &xf);
+        // Snap lines last: over the transform preview's pixels and the other overlays, which
+        // would otherwise hide where the moving content lines up.
+        crate::snap_ui::draw(app, &painter, &xf);
         // Tool cursors (Photoshop-style).
         let guide_hover = response.hover_pos().and_then(|p| {
             let d = xf.to_doc(p);
@@ -4736,7 +4738,8 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         } else if let Some((vertical, _)) = guide_hover {
             ui.ctx().set_cursor_icon(crate::rulers::guide_cursor(&xf, vertical));
         } else if let Some(p) = response.hover_pos()
-            && let Some(c) = crate::transform_tool::cursor(app, &xf, xf.to_doc(p), ui.input(|i| i.modifiers.alt || i.modifiers.command))
+            && let Some(c) =
+                crate::transform_tool::cursor(app, &xf, xf.to_doc(p), ui.input(|i| i.modifiers.alt || i.modifiers.command), ui.input(|i| i.modifiers.alt))
         {
             ui.ctx().set_cursor_icon(c);
             // CursorIcon::None hides the pointer; the curved arrow has to be drawn or the

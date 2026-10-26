@@ -1393,14 +1393,15 @@ pub(crate) enum Hit {
 }
 
 /// The nearest handle within `tol` (on a small box their grab areas overlap), else inside or
-/// outside the box.
+/// outside the box. The reference point comes first, so where it sits on a handle (snapped
+/// there) a press drags the point, not the handle.
 pub(crate) fn hit(t: &TransformSession, p: [f64; 2], tol: f64) -> Hit {
     let d = |a: [f64; 2]| ((a[0] - p[0]).powi(2) + (a[1] - p[1]).powi(2)).sqrt();
     let mid = |i: usize| {
         let (a, b) = (t.quad[i], t.quad[(i + 1) % 4]);
         [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0]
     };
-    let handles = (0..4).map(|i| (t.quad[i], Hit::Corner(i))).chain((0..4).map(|i| (mid(i), Hit::Edge(i)))).chain([(t.pivot, Hit::Pivot)]);
+    let handles = [(t.pivot, Hit::Pivot)].into_iter().chain((0..4).map(|i| (t.quad[i], Hit::Corner(i)))).chain((0..4).map(|i| (mid(i), Hit::Edge(i))));
     let nearest = handles.map(|(q, h)| (d(q), h)).filter(|(dist, _)| *dist < tol).min_by(|a, b| a.0.total_cmp(&b.0));
     match nearest {
         Some((_, h)) => h,
@@ -2151,8 +2152,8 @@ fn rotate_dir(t: &TransformSession, pv: Option<&TransformPreview>, p: [f64; 2], 
 }
 
 /// Cursor for hovering a document point while transforming. `xf` is the canvas's view;
-/// `quick_split` is Ctrl or Option, which arms a quick split while a warp is active.
-pub fn cursor(app: &PhotocraftApp, xf: &ViewXform, p: [f64; 2], quick_split: bool) -> Option<CursorIcon> {
+/// `quick_split` is Ctrl or Option, which arms a quick split while a warp is active; `alt` is ⌥.
+pub fn cursor(app: &PhotocraftApp, xf: &ViewXform, p: [f64; 2], quick_split: bool, alt: bool) -> Option<CursorIcon> {
     let t = app.ui.transform.as_ref()?;
     let tol = handle_tolerance(app);
     if let Some(w) = &t.warp {
@@ -2192,6 +2193,8 @@ pub fn cursor(app: &PhotocraftApp, xf: &ViewXform, p: [f64; 2], quick_split: boo
         Hit::Corner(i) => crate::tool_cursor::corner_resize(&t.quad, i, xf),
         Hit::Edge(i) => resize(edge_mid(i + 2), edge_mid(i)),
         Hit::Pivot => CursorIcon::Crosshair,
+        // ⌥ over the box: a press places the reference point there.
+        Hit::Inside if alt => CursorIcon::Crosshair,
         Hit::Inside => CursorIcon::Move,
         Hit::Outside => CursorIcon::Alias,
     })
@@ -2311,6 +2314,12 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
         let r = egui::Rect::from_center_size(*p, vec2(7.0, 7.0));
         painter.rect_filled(r, 0.0, Color32::WHITE);
         painter.rect_stroke(r, 0.0, Stroke::new(1.0, accent), egui::StrokeKind::Inside);
+    }
+    // While ⌥ is held or the reference point is being dragged, mark the box's centre: the point
+    // snaps there (`snap_ui::box_anchors`), and unlike the corners and edges it has no handle.
+    if pv.gesture.is_some_and(|g| g.hit == Hit::Pivot) || painter.ctx().input(|i| i.modifiers.alt) {
+        let centre = pts[0].lerp(pts[2], 0.5).lerp(pts[1].lerp(pts[3], 0.5), 0.5);
+        painter.circle(centre, 2.5, Color32::WHITE, Stroke::new(1.0, accent));
     }
     // Reference point (Photoshop's crosshair circle).
     let c = scr(t.pivot);
@@ -4017,6 +4026,10 @@ mod tests {
         assert_eq!(hit(&s, [8.0, -1.0], 12.0), Hit::Edge(0));
         assert_eq!(hit(&s, [8.0, 8.0], 12.0), Hit::Pivot);
         assert_eq!(hit(&s, [40.0, 40.0], 12.0), Hit::Outside);
+        // A reference point on a handle wins the press.
+        s.pivot = [0.0, 0.0];
+        assert_eq!(hit(&s, [1.0, 1.0], 12.0), Hit::Pivot);
+        assert_eq!(hit(&s, [16.0, 17.0], 12.0), Hit::Corner(2));
     }
 
     #[test]
@@ -4856,10 +4869,10 @@ mod tests {
         let h = std::f64::consts::FRAC_1_SQRT_2;
         let (tl, br) = ([32.0 - tol * 1.5, 32.0 - tol * 1.5], [160.0 + tol * 1.5, 160.0 + tol * 1.5]);
         let xf = ViewXform::active(&app).unwrap();
-        assert_eq!(cursor(&app, &xf, tl, false), Some(CursorIcon::None), "the arrow is drawn instead");
+        assert_eq!(cursor(&app, &xf, tl, false, false), Some(CursorIcon::None), "the arrow is drawn instead");
         assert!(near2(rotate_cursor_dir(&app, tl), [h, h]), "{:?}", rotate_cursor_dir(&app, tl));
         assert!(near2(rotate_cursor_dir(&app, br), [-h, -h]), "bends round the bottom-right corner");
-        assert_eq!(cursor(&app, &xf, [60.0, 60.0], false), Some(CursorIcon::Move));
+        assert_eq!(cursor(&app, &xf, [60.0, 60.0], false, false), Some(CursorIcon::Move));
         assert_eq!(rotate_cursor_dir(&app, [60.0, 60.0]), None, "inside moves");
         assert_eq!(rotate_cursor_dir(&app, [32.0, 32.0]), None, "the corner handle scales");
         assert_eq!(rotate_cursor_dir(&app, [f64::NAN, 32.0]), None);
@@ -4942,7 +4955,8 @@ mod tests {
             let t = app.ui.transform.clone().unwrap();
             let xf = ViewXform::active(&app).unwrap();
             let mid = |i: usize| [(t.quad[i][0] + t.quad[(i + 1) % 4][0]) / 2.0, (t.quad[i][1] + t.quad[(i + 1) % 4][1]) / 2.0];
-            let got: Vec<_> = (0..4).map(|i| cursor(&app, &xf, t.quad[i], false)).chain((0..4).map(|i| cursor(&app, &xf, mid(i), false))).collect();
+            let got: Vec<_> =
+                (0..4).map(|i| cursor(&app, &xf, t.quad[i], false, false)).chain((0..4).map(|i| cursor(&app, &xf, mid(i), false, false))).collect();
             let want = [want[0], want[1], want[0], want[1], want[2], want[3], want[2], want[3]].map(Some);
             assert_eq!(got, want, "box {deg}°, view {view}°, flip {flip}");
         }
@@ -4958,7 +4972,7 @@ mod tests {
             crate::menus::invoke(&mut app, &egui::Context::default(), "edit.freeTransform", json!({})).unwrap();
             let t = app.ui.transform.clone().unwrap();
             let xf = ViewXform::active(&app).unwrap();
-            let got: Vec<_> = (0..4).map(|i| cursor(&app, &xf, t.quad[i], false)).collect();
+            let got: Vec<_> = (0..4).map(|i| cursor(&app, &xf, t.quad[i], false, false)).collect();
             assert_eq!(got, [NwSe, NeSw, NwSe, NeSw].map(Some), "{rect:?}");
         }
     }
