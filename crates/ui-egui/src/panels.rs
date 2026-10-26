@@ -1336,6 +1336,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                 });
                                 widgets::vline(ui, 22.0);
                                 select_and_mask_button(app, ui);
+                                crate::genai_ui::options_bar_button(app, ui);
                             }
                             Tool::Lasso | Tool::PolygonLasso | Tool::MagneticLasso => {
                                 selection_mode_buttons(app, ui);
@@ -1361,6 +1362,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                     widgets::vline(ui, 22.0);
                                 }
                                 select_and_mask_button(app, ui);
+                                crate::genai_ui::options_bar_button(app, ui);
                                 if crate::lasso_ui::active(app) || (app.ui.tool == Tool::PolygonLasso && !app.ui.polygon.is_empty()) {
                                     hint(
                                         ui,
@@ -1396,6 +1398,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                     crate::retouch_ui::report_smart_result(app, r, tl!("No subject found — try Object Selection or the Lasso"));
                                 }
                                 select_and_mask_button(app, ui);
+                                crate::genai_ui::options_bar_button(app, ui);
                             }
                             Tool::PaintBucket => {
                                 opt_label(ui, tl!("Fill"));
@@ -1806,6 +1809,7 @@ pub fn status_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     // Background job progress with Cancel, at the far end (#210).
                     ui.with_layout(crate::direction::trailing(), |ui| {
                         crate::jobs_ui::status_progress(app, ui);
+                        crate::genai_ui::status_fills(app, ui);
                         crate::background_redraw::status(app, ui);
                         crate::chrome_ui::gpu_memory_status(app, ui);
                     });
@@ -1850,6 +1854,7 @@ pub fn status_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         ui.add_space(6.0);
                         crate::jobs_ui::status_progress(app, ui);
                     }
+                    crate::genai_ui::status_fills(app, ui);
                     crate::background_redraw::status(app, ui);
                     crate::chrome_ui::gpu_memory_status(app, ui);
                 });
@@ -2850,6 +2855,8 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             // The drawn rows, top to bottom (#1721): the space between them and below the last
             // one is a drop zone too.
             let mut drawn: Vec<(LayerId, Rect)> = Vec::new();
+            // Where Generative Fills still generating will land.
+            crate::genai_ui::layer_rows_unplaced(app, ui, doc.id, &rows);
             for &(depth, l) in &rows {
                 // Select › Isolate Layers.
                 if !photocraft_engine::select_extra_cmds::isolation_shows(&doc, &isolated, l.id) {
@@ -2859,6 +2866,7 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     continue;
                 }
                 let row = RowSel { selected: selection.contains(&l.id), primary: active == Some(l.id), multi: selection.len() > 1 };
+                crate::genai_ui::layer_rows(app, ui, doc.id, l.id, depth);
                 let top = ui.cursor().top();
                 drawn.push((l.id, layer_row(app, &ctx, ui, &doc, l, depth, row, &mut actions)));
                 if reveal == Some(l.id) {
@@ -4152,6 +4160,8 @@ fn properties_body_inner(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         widgets::hairline(ui);
         ui.add_space(6.0);
     }
+    // A generative layer's variations, above its own sections.
+    crate::genai_ui::variations_section(app, ui);
     if let LayerContent::Adjustment(adj) = &layer.content {
         adjustment_controls(app, ui, id, adj);
     } else if layer.artboard().is_some() {

@@ -4161,6 +4161,75 @@ curves	Smooth	Згладити
 	Tight Curl	Щільний завиток
 	Loose Curl	Вільний завиток
 	Stylized dabs from a history state	Стилізовані мазки зі стану історії
-
 # Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
 	Target	Ціль
+# Generative Fill and Generative AI Settings (#41)
+	API key	Ключ API
+	Describe what to generate in the selection, or leave it empty to continue the image through it.	Опишіть, що створити у виділеній області, або залиште поле порожнім, щоб зображення продовжилося крізь неї.
+	Fill the selection from a prompt	Заповнити виділення за описом
+	Generative AI	Генеративний ШІ
+	Generative AI Settings…	Налаштування генеративного ШІ…
+	Generative AI needs the desktop app.	Генеративний ШІ доступний лише в настільному застосунку.
+	Generative Fill uses {name} ({model}).	Генеративна заливка використовує {name} ({model}).
+	Generative Fill…	Генеративна заливка…
+	Get a Gemini API key from Google AI Studio	Отримати ключ API Gemini у Google AI Studio
+	No API key is saved for {provider}.	Для {provider} не збережено ключа API.
+	Nothing is sent until you run Generative Fill. Each time you do, PhotoCraft sends the selected area and the image around it, a black-and-white mask of the selection, and your prompt to Google (generativelanguage.googleapis.com) with your API key. Google's Gemini API terms and privacy policy apply, and its usage is billed to your key. Results carry Google's SynthID watermark.	Нічого не надсилається, доки ви не запустите генеративну заливку. Під час кожного запуску PhotoCraft надсилає до Google (generativelanguage.googleapis.com) виділену область разом із зображенням навколо неї, чорно-білу маску виділення та ваш опис, а також ваш ключ API. Діють умови використання та політика конфіденційності Gemini API від Google, а використання оплачується за вашим ключем. Результати мають водяний знак SynthID від Google.
+	Off. Set up a provider with your own API key to use Generative Fill.	Вимкнено. Щоб користуватися генеративною заливкою, налаштуйте постачальника з власним ключем API.
+	Paste your Gemini API key	Вставте ключ API Gemini
+	Prompt (optional)	Опис (необов’язково)
+	Provider	Постачальник
+	Remove Key	Видалити ключ
+	Saved (paste to replace)	Збережено (вставте новий, щоб замінити)
+	Set up Generative Fill with your own API key	Налаштувати генеративну заливку з власним ключем API
+	The selected area, the image around it and the prompt are sent to {name} ({model}).	Виділена область, зображення навколо неї та опис надсилаються до {name} ({model}).
+	What is sent, and to whom	Що надсилається і кому
+	Your key is kept in {store}, never in PhotoCraft's settings files.	Ваш ключ зберігається в {store} і ніколи не потрапляє до файлів налаштувань PhotoCraft.
+	the macOS Keychain	зв’язці ключів macOS
+	Windows Credential Manager	диспетчері облікових даних Windows
+	memory until PhotoCraft quits	пам’яті до закриття PhotoCraft
+# Generative Fill variations (#41)
+	Variations	Варіанти
+	No prompt: continues the image	Без опису: продовжує зображення
+	Sends the same area and prompt to {name} again for three more.	Знову надсилає ту саму область і опис до {name}, щоб отримати ще три.
+	Generate More	Створити ще
+	Each Generative Fill makes three variations, so it sends three requests, each billed to your key.	Кожна Генеративна заливка створює три варіанти, тож надсилає три запити, кожен оплачується за вашим ключем.
+# Generative Fill: Edit mode and reference images
+	Fill selection	Заповнити виділення
+	Edit selection	Змінити виділення
+	Generate new content in the selection, or remove what is there	Створити новий вміст у виділеній області або видалити те, що в ній є
+	Keep what is in the selection and change only what you ask for	Зберегти вміст виділеної області й змінити лише те, що ви просите
+	Describe what to change in the selection: what is there is kept, except what you ask to change (a colour, a text, a material).	Опишіть, що змінити у виділеній області: її вміст збережеться, крім того, що ви попросите змінити (колір, текст, матеріал).
+	What to change	Що змінити
+	Empty: removes what is selected and continues the image through it.	Порожньо: видаляє виділене й продовжує зображення крізь виділену область.
+	Empty: places what the reference images show in the selection.	Порожньо: розміщує у виділеній області те, що показують референсні зображення.
+	Reference images	Референсні зображення
+	Optional: an object or product to show, or a design, colour or look to match.	Необов’язково: об’єкт або товар, який треба показати, чи дизайн, колір або стиль, на який треба орієнтуватися.
+	Add Reference…	Додати референс…
+	Image File…	Файл зображення…
+	Open Documents	Відкриті документи
+	The reference images are sent too, at most 1024 pixels on their long side.	Референсні зображення теж надсилаються, не більше 1024 пікселів по довшій стороні.
+	In Edit mode the selected area is sent as it is. Reference images you add are sent too.	У режимі «Змінити виділення» виділена область надсилається як є. Додані референсні зображення теж надсилаються.
+# Generative Fill side by side: fills that don't wait for each other
+	Cancel this Generative Fill	Скасувати цю генеративну заливку
+	Discard	Відкинути
+	Each area becomes its own Generative Fill and layer, generated side by side; each sends its own requests.	Кожна область стане окремою генеративною заливкою з власним шаром; вони створюються одночасно, і кожна надсилає власні запити.
+	Failed: {name}	Помилка: {name}
+	Generated {name}	Створено: {name}
+	Generating	Створюється
+	Generating: {name}	Створюється: {name}
+	Generative Fill	Генеративна заливка
+	Generative Fill failed: {error}	Генеративна заливка не вдалася: {error}
+	Generative Fills in progress	Генеративні заливки в роботі
+	Go to area	Перейти до області
+	Locked until its layer lands	Заблоковано, доки не з’явиться шар
+	No prompt: removes what is selected	Без опису: видаляє виділене
+	The selection has {n} separate areas, too many to fill one by one (at most {max}): it is filled as one.	У виділенні {n} окремих областей — забагато, щоб заливати їх по одній (не більше {max}): воно заливається цілком.
+	Waiting ({n})	У черзі ({n})
+	Waiting: {name}	У черзі: {name}
+	Retry	Повторити
+	Failed	Помилка
+@plural	{n} generating|{n} generating	{n} створюється|{n} створюються|{n} створюються
+@plural	{n} waiting|{n} waiting	{n} у черзі|{n} у черзі|{n} у черзі
+@plural	{n} failed|{n} failed	{n} з помилкою|{n} з помилкою|{n} з помилкою
+@plural	Fill each of the {n} separate areas on its own|Fill each of the {n} separate areas on its own	Залити кожну з {n} окремих областей окремо|Залити кожну з {n} окремих областей окремо|Залити кожну з {n} окремих областей окремо

@@ -1,0 +1,499 @@
+//! Google Gemini image models ("Nano Banana") through the Gemini API's Interactions endpoint,
+//! with the user's own API key.
+//!
+//! Gemini edits from instructions and reference images; it takes no mask parameter. Generative
+//! Fill sends the mask as a second image and says what it means, then any reference images; the
+//! engine keeps only the masked pixels of the result, so anything the model changes outside the
+//! mask is discarded.
+
+use base64::Engine as _;
+use serde_json::{Value, json};
+
+use crate::{
+    ApiKey, Capabilities, EditMode, EditRequest, GenError, GenerateRequest, GeneratedImage, HttpRequest, HttpTransport, ImageProvider, ImageSize, ProviderInfo,
+    Result, VariationRequest,
+};
+
+pub const ID: &str = "gemini";
+pub const NAME: &str = "Google Gemini";
+pub const HOST: &str = "generativelanguage.googleapis.com";
+const ENDPOINT: &str = "https://generativelanguage.googleapis.com/v1beta/interactions";
+
+/// Image models offered in settings, best default first: (id, description).
+pub const MODELS: &[(&str, &str)] = &[
+    ("gemini-nano-banana-2.1", "Nano Banana 2.1"),
+    ("gemini-3-pro-image", "Nano Banana Pro"),
+    ("gemini-3.1-flash-image", "Nano Banana 2"),
+    ("gemini-3.1-flash-lite-image", "Nano Banana 2 Lite (fastest, 1K only)"),
+];
+pub const DEFAULT_MODEL: &str = "gemini-nano-banana-2.1";
+
+/// Output aspect ratios the image models accept.
+const RATIOS: &[(u32, u32)] = &[(1, 1), (3, 2), (2, 3), (3, 4), (4, 3), (4, 5), (5, 4), (9, 16), (16, 9), (21, 9)];
+
+pub struct GeminiProvider<T: HttpTransport> {
+    key: ApiKey,
+    model: String,
+    transport: T,
+}
+
+impl<T: HttpTransport> GeminiProvider<T> {
+    /// `model` must look like a Gemini model id (letters, digits, `-`, `.`); it is not checked
+    /// against [`MODELS`] so a newer model works without a PhotoCraft update.
+    pub fn new(key: ApiKey, model: &str, transport: T) -> Result<Self> {
+        let model = model.trim();
+        let model = if model.is_empty() { DEFAULT_MODEL } else { model };
+        if model.len() > 80 || !model.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'.') {
+            return Err(GenError::Invalid(format!("`{model}` is not a Gemini model id")));
+        }
+        Ok(Self { key, model: model.to_owned(), transport })
+    }
+
+    pub fn transport(&self) -> &T {
+        &self.transport
+    }
+
+    fn size_token(&self, size: ImageSize) -> &'static str {
+        if self.model.contains("lite") {
+            return "1K";
+        }
+        match size {
+            ImageSize::Small => "1K",
+            ImageSize::Medium => "2K",
+            ImageSize::Large => "4K",
+        }
+    }
+
+    fn request(&self, input: Vec<Value>, aspect: (u32, u32), size: ImageSize) -> Result<GeneratedImage> {
+        let (a, b) = crate::nearest_ratio(aspect.0, aspect.1, RATIOS).unwrap_or((1, 1));
+        let body = json!({
+            "model": self.model,
+            "input": input,
+            "response_format": {
+                "type": "image",
+                // The Interactions API returns JPEG only ("Supported values: 'image/jpeg'").
+                "mime_type": "image/jpeg",
+                "aspect_ratio": format!("{a}:{b}"),
+                "image_size": self.size_token(size),
+            },
+        });
+        let body = serde_json::to_vec(&body).map_err(|_| GenError::Invalid("could not encode the request".into()))?;
+        let response = self.transport.post(HttpRequest {
+            url: ENDPOINT.into(),
+            headers: vec![("x-goog-api-key", self.key.expose().to_owned()), ("content-type", "application/json".into())],
+            body,
+        })?;
+        if response.body.len() > crate::MAX_RESPONSE {
+            return Err(GenError::BadResponse("the response is too large"));
+        }
+        if !(200..300).contains(&response.status) {
+            return Err(self.http_error(response.status, &response.body));
+        }
+        let value: Value = serde_json::from_slice(&response.body).map_err(|_| GenError::BadResponse("not JSON"))?;
+        if let Some(image) = find_image(&value)? {
+            return Ok(image);
+        }
+        // No image: the model answered in text (a refusal or a safety block) or produced nothing.
+        let text = output_text(&value);
+        Err(GenError::Refused(if text.is_empty() { "it returned no image".into() } else { clip(&self.key.scrub(&text), 300) }))
+    }
+
+    fn http_error(&self, status: u16, body: &[u8]) -> GenError {
+        // Some errors (402 when prepaid credit runs out) come wrapped in a one-element array.
+        let error = serde_json::from_slice::<Value>(body).ok().and_then(|v| {
+            let v = match v {
+                Value::Array(mut items) if !items.is_empty() => items.swap_remove(0),
+                v => v,
+            };
+            v.get("error").cloned()
+        });
+        let message = error.as_ref().and_then(|e| e.get("message")).and_then(Value::as_str).unwrap_or("");
+        let reason = error.as_ref().and_then(|e| e.get("status")).and_then(Value::as_str).unwrap_or("");
+        let invalid_key = message.contains("API key") || message.contains("API_KEY") || reason == "UNAUTHENTICATED";
+        match status {
+            401 | 403 => GenError::Auth,
+            400 if invalid_key => GenError::Auth,
+            429 => GenError::Quota,
+            _ => GenError::Http { status, message: if message.is_empty() { reason.to_owned() } else { clip(&self.key.scrub(message), 300) } },
+        }
+    }
+}
+
+impl<T: HttpTransport> ImageProvider for GeminiProvider<T> {
+    fn info(&self) -> ProviderInfo {
+        ProviderInfo { id: ID, name: NAME, model: self.model.clone(), host: HOST }
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        Capabilities { generate: true, edit: true, variations: true, edit_in_place: true, max_references: crate::MAX_REFERENCES }
+    }
+
+    fn edit_aspect(&self, w: u32, h: u32) -> (u32, u32) {
+        crate::nearest_ratio(w, h, RATIOS).unwrap_or((1, 1))
+    }
+
+    fn generate(&self, r: &GenerateRequest) -> Result<GeneratedImage> {
+        crate::check_prompt(&r.prompt, true)?;
+        self.request(vec![text(&r.prompt)], r.aspect, r.size)
+    }
+
+    fn edit(&self, r: &EditRequest) -> Result<GeneratedImage> {
+        crate::check_prompt(&r.prompt, r.mode == EditMode::Edit)?;
+        crate::check_references(&r.references, crate::MAX_REFERENCES)?;
+        let size = crate::png_size(&r.image).ok_or_else(|| GenError::Invalid("the image must be a PNG".into()))?;
+        if crate::png_size(&r.mask) != Some(size) {
+            return Err(GenError::Invalid("the mask must be a PNG the size of the image".into()));
+        }
+        let n = r.references.len();
+        let instruction = match r.mode {
+            EditMode::Fill => fill_instruction(&r.prompt, n),
+            EditMode::Edit => edit_instruction(&r.prompt, n),
+        };
+        let mut input = vec![text(&instruction), png(&r.image), png(&r.mask)];
+        input.extend(r.references.iter().map(|i| image(&i.bytes, &i.mime)));
+        self.request(input, size, r.size)
+    }
+
+    fn variations(&self, r: &VariationRequest) -> Result<GeneratedImage> {
+        crate::check_prompt(&r.prompt, false)?;
+        let size = crate::png_size(&r.image).ok_or_else(|| GenError::Invalid("the image must be a PNG".into()))?;
+        let ask = if r.prompt.trim().is_empty() {
+            "Create a variation of this image: the same subject, composition and style, with natural differences in detail.".to_owned()
+        } else {
+            format!("Create a variation of this image, keeping its composition and style: {}", r.prompt.trim())
+        };
+        self.request(vec![text(&ask), png(&r.image)], size, r.size)
+    }
+}
+
+/// What the instructions say about the images after the mask, if any. Empty without them, so a
+/// request without references reads exactly as it did before they existed.
+fn references_note(references: usize, use_for: &str) -> String {
+    match references {
+        0 => String::new(),
+        1 => format!("The third image is a reference the user supplied: {use_for} "),
+        n => format!("The {n} images after the mask are references the user supplied: {use_for} "),
+    }
+}
+
+/// The instruction that stands in for a mask parameter. The selected area arrives blurred out (a
+/// smooth, dimmed placeholder made of the colours around it), so the model can't copy what was there and
+/// has no flat shape to mistake for an object. An empty prompt means "what would be there without
+/// whatever stood in it": the background and anything crossing the edge carry on through it,
+/// unless reference images came with it: then it means "put what they show there".
+pub fn fill_instruction(prompt: &str, references: usize) -> String {
+    let refs = references_note(
+        references,
+        "use them for what the request asks (an object, product, person, material or style to show in the placeholder) and match them closely.",
+    );
+    let what = if prompt.trim().is_empty() && references > 0 {
+        "Replace the placeholder with the subject of the reference images. Make it belong to the scene: the right size for \
+         its place in the perspective, lit from the same direction, casting and receiving shadows and reflections, and \
+         interacting with whatever touches it. Around it, continue the background and anything that crosses the \
+         placeholder's edge."
+            .to_owned()
+    } else if prompt.trim().is_empty() {
+        "Replace the placeholder with what would be there if whatever stood in it had never existed: continue the \
+         background, surfaces, textures and lighting from around it, and carry on anything that crosses its edge (lines, \
+         edges, horizon, patterns, objects partly outside it) the way it would plausibly continue. Do not add a new \
+         object, light or shape that nothing around it suggests."
+            .to_owned()
+    } else {
+        format!(
+            "Replace the placeholder with: {}. Make it belong to the scene: the right size for its place in the \
+             perspective, lit from the same direction, casting and receiving shadows and reflections, and interacting \
+             with whatever touches it. Around the new content, continue the background and anything that crosses the \
+             placeholder's edge.",
+            prompt.trim().trim_end_matches('.')
+        )
+    };
+    format!(
+        "Edit the first image. The second image is a mask the same size: white marks an area of the first image that has \
+         been blurred out as a placeholder, black the area to keep. {refs}The blur is not part of the scene: replace all of it \
+         with sharp, detailed content that has the same focus, noise and grain as its surroundings. Before editing, study \
+         the whole first image: what the scene is, where the light comes from, the perspective and depth, and what runs \
+         up to the placeholder. {what} Keep everything in the black area, the framing, the scale and the position of \
+         every object exactly as they are. Reply with the edited image only."
+    )
+}
+
+/// The instruction for [`EditMode::Edit`]: the selected area arrives as it is, and the model
+/// changes only what the prompt asks for there (Photoshop's Prompt to Edit, or its partner models
+/// in Generative Fill), keeping shapes, texture, lettering and light.
+pub fn edit_instruction(prompt: &str, references: usize) -> String {
+    let refs =
+        references_note(references, "use them as the request says (for example a colour, material, design, logo or object to match) and match them closely.");
+    format!(
+        "Edit the first image. The second image is a mask the same size: white marks the area of the first image to edit, \
+         black the area to keep. {refs}In the white area: {}. Change only what that asks for. Keep the shape, size, \
+         position, perspective, lighting, texture and material of everything there, and keep any text, logo or pattern \
+         with the same lettering, layout and alignment, except where the request changes it. The edited area must look \
+         like part of the same photograph, with the same focus, noise and grain. Keep everything in the black area, the \
+         framing and the scale exactly as they are. Reply with the edited image only.",
+        prompt.trim().trim_end_matches('.')
+    )
+}
+
+fn text(t: &str) -> Value {
+    json!({"type": "text", "text": t})
+}
+
+fn png(bytes: &[u8]) -> Value {
+    image(bytes, "image/png")
+}
+
+fn image(bytes: &[u8], mime: &str) -> Value {
+    json!({"type": "image", "mime_type": mime, "data": base64::engine::general_purpose::STANDARD.encode(bytes)})
+}
+
+/// The first image in a response: `output_image`, else an image block in `steps[].content[]` or
+/// `outputs[]`.
+fn find_image(v: &Value) -> Result<Option<GeneratedImage>> {
+    let mut candidates: Vec<&Value> = Vec::new();
+    candidates.extend(v.get("output_image"));
+    for key in ["steps", "outputs"] {
+        for item in v.get(key).and_then(Value::as_array).into_iter().flatten() {
+            candidates.push(item);
+            candidates.extend(item.get("content").and_then(Value::as_array).into_iter().flatten());
+        }
+    }
+    for c in candidates {
+        let is_image = c.get("type").and_then(Value::as_str).is_none_or(|t| t == "image");
+        let Some(data) = c.get("data").and_then(Value::as_str).filter(|_| is_image) else { continue };
+        if data.len() > crate::MAX_RESPONSE {
+            return Err(GenError::BadResponse("the image is too large"));
+        }
+        let bytes = base64::engine::general_purpose::STANDARD.decode(data).map_err(|_| GenError::BadResponse("the image data is not base64"))?;
+        let mime = c.get("mime_type").and_then(Value::as_str).unwrap_or("image/jpeg").to_owned();
+        return Ok(Some(GeneratedImage { bytes, mime }));
+    }
+    Ok(None)
+}
+
+fn output_text(v: &Value) -> String {
+    if let Some(t) = v.get("output_text").and_then(Value::as_str) {
+        return t.trim().to_owned();
+    }
+    let mut out = Vec::new();
+    for step in v.get("steps").and_then(Value::as_array).into_iter().flatten() {
+        for c in step.get("content").and_then(Value::as_array).into_iter().flatten() {
+            if c.get("type").and_then(Value::as_str) == Some("text")
+                && let Some(t) = c.get("text").and_then(Value::as_str)
+            {
+                out.push(t.trim());
+            }
+        }
+    }
+    out.join(" ")
+}
+
+fn clip(s: &str, max: usize) -> String {
+    match s.char_indices().nth(max) {
+        Some((i, _)) => format!("{}…", &s[..i]),
+        None => s.to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{HttpResponse, ReferenceImage};
+    use std::sync::Mutex;
+
+    /// A request as sent: URL, headers, JSON body.
+    type Sent = (String, Vec<(&'static str, String)>, Value);
+
+    /// Records each request and answers with the next canned response.
+    struct Fake {
+        sent: Mutex<Vec<Sent>>,
+        replies: Mutex<Vec<Result<HttpResponse>>>,
+    }
+
+    impl Fake {
+        fn new(replies: Vec<Result<HttpResponse>>) -> Self {
+            Self { sent: Mutex::new(Vec::new()), replies: Mutex::new(replies) }
+        }
+        fn ok(body: Value) -> Result<HttpResponse> {
+            Ok(HttpResponse { status: 200, body: serde_json::to_vec(&body).unwrap() })
+        }
+        fn status(status: u16, body: Value) -> Result<HttpResponse> {
+            Ok(HttpResponse { status, body: serde_json::to_vec(&body).unwrap() })
+        }
+    }
+
+    impl HttpTransport for Fake {
+        fn post(&self, r: HttpRequest) -> Result<HttpResponse> {
+            let body = serde_json::from_slice(&r.body).unwrap_or(Value::Null);
+            self.sent.lock().unwrap().push((r.url, r.headers, body));
+            self.replies.lock().unwrap().remove(0)
+        }
+    }
+
+    fn png_of(w: u32, h: u32) -> Vec<u8> {
+        let mut v = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR".to_vec();
+        v.extend_from_slice(&w.to_be_bytes());
+        v.extend_from_slice(&h.to_be_bytes());
+        v.extend_from_slice(b"rest");
+        v
+    }
+
+    fn b64(b: &[u8]) -> String {
+        base64::engine::general_purpose::STANDARD.encode(b)
+    }
+
+    fn provider(replies: Vec<Result<HttpResponse>>) -> GeminiProvider<Fake> {
+        GeminiProvider::new(ApiKey::new("AIza-test-secret").unwrap(), DEFAULT_MODEL, Fake::new(replies)).unwrap()
+    }
+
+    fn edit(prompt: &str, w: u32, h: u32) -> EditRequest {
+        EditRequest { image: png_of(w, h), mask: png_of(w, h), prompt: prompt.into(), size: ImageSize::Medium, mode: EditMode::Fill, references: Vec::new() }
+    }
+
+    #[test]
+    fn edit_sends_prompt_image_and_mask_with_the_key_in_a_header() {
+        let p = provider(vec![Fake::ok(json!({"output_image": {"mime_type": "image/png", "data": b64(b"result")}}))]);
+        let out = p.edit(&edit("a red balloon", 1600, 900)).unwrap();
+        assert_eq!(out, GeneratedImage { bytes: b"result".to_vec(), mime: "image/png".into() });
+        let sent = p.transport().sent.lock().unwrap();
+        let (url, headers, body) = &sent[0];
+        assert_eq!(url, ENDPOINT);
+        assert!(!url.contains("secret"), "the key goes in a header, never the URL");
+        assert!(headers.contains(&("x-goog-api-key", "AIza-test-secret".into())));
+        assert_eq!(body["model"], DEFAULT_MODEL);
+        let input = body["input"].as_array().unwrap();
+        assert_eq!(input.len(), 3);
+        assert!(input[0]["text"].as_str().unwrap().contains("placeholder with: a red balloon."));
+        assert_eq!(input[1]["data"], b64(&png_of(1600, 900)));
+        assert_eq!(input[2]["type"], "image");
+        assert_eq!(body["response_format"]["aspect_ratio"], "16:9");
+        assert_eq!(body["response_format"]["image_size"], "2K");
+        assert_eq!(body["response_format"]["mime_type"], "image/jpeg", "the only output format the API accepts");
+    }
+
+    #[test]
+    fn an_empty_prompt_asks_for_removal() {
+        let empty = fill_instruction("", 0);
+        assert!(empty.contains("had never existed") && empty.contains("Do not add a new"), "{empty}");
+        assert!(fill_instruction("  a boat. ", 0).contains("placeholder with: a boat."));
+    }
+
+    /// Without references, Fill sends exactly the instruction it sent before Edit mode and
+    /// reference images existed: removal (an empty prompt) works well and must not drift.
+    #[test]
+    fn fill_without_references_is_unchanged() {
+        const EMPTY: &str = "Edit the first image. The second image is a mask the same size: white marks an area of the first image that has been blurred out as a placeholder, black the area to keep. The blur is not part of the scene: replace all of it with sharp, detailed content that has the same focus, noise and grain as its surroundings. Before editing, study the whole first image: what the scene is, where the light comes from, the perspective and depth, and what runs up to the placeholder. Replace the placeholder with what would be there if whatever stood in it had never existed: continue the background, surfaces, textures and lighting from around it, and carry on anything that crosses its edge (lines, edges, horizon, patterns, objects partly outside it) the way it would plausibly continue. Do not add a new object, light or shape that nothing around it suggests. Keep everything in the black area, the framing, the scale and the position of every object exactly as they are. Reply with the edited image only.";
+        const BALLOON: &str = "Edit the first image. The second image is a mask the same size: white marks an area of the first image that has been blurred out as a placeholder, black the area to keep. The blur is not part of the scene: replace all of it with sharp, detailed content that has the same focus, noise and grain as its surroundings. Before editing, study the whole first image: what the scene is, where the light comes from, the perspective and depth, and what runs up to the placeholder. Replace the placeholder with: a red balloon. Make it belong to the scene: the right size for its place in the perspective, lit from the same direction, casting and receiving shadows and reflections, and interacting with whatever touches it. Around the new content, continue the background and anything that crosses the placeholder's edge. Keep everything in the black area, the framing, the scale and the position of every object exactly as they are. Reply with the edited image only.";
+        assert_eq!(fill_instruction("", 0), EMPTY);
+        assert_eq!(fill_instruction("  a red balloon. ", 0), BALLOON);
+        assert!(!EMPTY.contains("reference"));
+    }
+
+    #[test]
+    fn edit_mode_keeps_what_is_there_and_needs_a_prompt() {
+        let p = provider(vec![Fake::ok(json!({"output_image": {"data": b64(b"r")}}))]);
+        let r = EditRequest { mode: EditMode::Edit, ..edit("make the label black. ", 800, 800) };
+        p.edit(&r).unwrap();
+        let sent = p.transport().sent.lock().unwrap();
+        let input = sent[0].2["input"].as_array().unwrap();
+        assert_eq!(input.len(), 3);
+        let t = input[0]["text"].as_str().unwrap();
+        assert!(t.contains("In the white area: make the label black. Change only what that asks for."), "{t}");
+        assert!(t.contains("same lettering") && !t.contains("blurred out"), "{t}");
+        drop(sent);
+        let empty = EditRequest { mode: EditMode::Edit, ..edit("  ", 8, 8) };
+        assert!(matches!(p.edit(&empty), Err(GenError::Invalid(_))));
+        assert_eq!(p.transport().sent.lock().unwrap().len(), 1, "nothing sent for an empty edit");
+    }
+
+    #[test]
+    fn reference_images_follow_the_mask() {
+        let reply = || Fake::ok(json!({"output_image": {"data": b64(b"r")}}));
+        let p = provider(vec![reply(), reply(), reply()]);
+        let jpeg = |b: &[u8]| ReferenceImage { bytes: b.to_vec(), mime: "image/jpeg".into() };
+        let one = EditRequest { references: vec![jpeg(b"bottle")], ..edit("this bottle", 64, 64) };
+        p.edit(&one).unwrap();
+        let two = EditRequest { mode: EditMode::Edit, references: vec![jpeg(b"a"), jpeg(b"b")], ..edit("like these", 64, 64) };
+        p.edit(&two).unwrap();
+        // An empty Fill prompt with a reference puts what the reference shows in the selection.
+        let placed = EditRequest { references: vec![jpeg(b"bottle")], ..edit("", 64, 64) };
+        p.edit(&placed).unwrap();
+        let sent = p.transport().sent.lock().unwrap();
+        let input = |i: usize| sent[i].2["input"].as_array().unwrap().clone();
+        assert_eq!(input(0).len(), 4);
+        assert_eq!(input(0)[3], json!({"type": "image", "mime_type": "image/jpeg", "data": b64(b"bottle")}));
+        assert!(input(0)[0]["text"].as_str().unwrap().contains("The third image is a reference"));
+        assert_eq!(input(1).len(), 5);
+        assert!(input(1)[0]["text"].as_str().unwrap().contains("The 2 images after the mask are references"));
+        let t = input(2)[0]["text"].as_str().unwrap().to_owned();
+        assert!(t.contains("subject of the reference images") && !t.contains("had never existed"), "{t}");
+    }
+
+    #[test]
+    fn bad_references_fail_before_anything_is_sent() {
+        let p = provider(Vec::new());
+        let jpeg = ReferenceImage { bytes: b"x".to_vec(), mime: "image/jpeg".into() };
+        let too_many = EditRequest { references: vec![jpeg.clone(); crate::MAX_REFERENCES + 1], ..edit("x", 8, 8) };
+        assert!(matches!(p.edit(&too_many), Err(GenError::Invalid(_))));
+        let gif = EditRequest { references: vec![ReferenceImage { mime: "image/gif".into(), ..jpeg }], ..edit("x", 8, 8) };
+        assert!(matches!(p.edit(&gif), Err(GenError::Invalid(_))));
+        assert!(p.transport().sent.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn images_are_found_in_steps_too_and_lite_models_stay_at_1k() {
+        let reply = json!({"steps": [{"type": "model_output", "content": [{"type": "text", "text": "Here"}, {"type": "image", "mime_type": "image/jpeg", "data": b64(b"jpg")}]}]});
+        let p = GeminiProvider::new(ApiKey::new("k").unwrap(), "gemini-3.1-flash-lite-image", Fake::new(vec![Fake::ok(reply)])).unwrap();
+        let out = p.edit(&EditRequest { size: ImageSize::Large, ..edit("", 100, 100) }).unwrap();
+        assert_eq!(out.mime, "image/jpeg");
+        assert_eq!(p.transport().sent.lock().unwrap()[0].2["response_format"]["image_size"], "1K");
+    }
+
+    #[test]
+    fn errors_map_to_actionable_messages_without_the_key() {
+        let cases = [
+            (Fake::status(400, json!({"error": {"message": "API key not valid. Please pass a valid API key.", "status": "INVALID_ARGUMENT"}})), GenError::Auth),
+            (Fake::status(403, json!({})), GenError::Auth),
+            (Fake::status(429, json!({"error": {"message": "Resource exhausted"}})), GenError::Quota),
+            (Fake::status(500, json!({"error": {"message": "boom AIza-test-secret"}})), GenError::Http { status: 500, message: "boom [key]".into() }),
+            (
+                Fake::status(402, json!([{"error": {"code": 402, "message": "Your prepayment credits are depleted.", "status": "RESOURCE_EXHAUSTED"}}])),
+                GenError::Http { status: 402, message: "Your prepayment credits are depleted.".into() },
+            ),
+            (Fake::ok(json!({"output_text": "I can't help with that."})), GenError::Refused("I can't help with that.".into())),
+            (Fake::ok(json!({})), GenError::Refused("it returned no image".into())),
+            (Ok(HttpResponse { status: 200, body: b"<html>".to_vec() }), GenError::BadResponse("not JSON")),
+            (Fake::ok(json!({"output_image": {"data": "%%%"}})), GenError::BadResponse("the image data is not base64")),
+            (Err(GenError::Network("timed out".into())), GenError::Network("timed out".into())),
+        ];
+        for (reply, want) in cases {
+            let p = provider(vec![reply]);
+            let got = p.edit(&edit("x", 64, 64)).unwrap_err();
+            assert_eq!(got, want);
+            assert!(!format!("{got} {got:?}").contains("AIza-test-secret"));
+        }
+    }
+
+    #[test]
+    fn bad_input_fails_before_anything_is_sent() {
+        let p = provider(Vec::new());
+        assert!(matches!(p.edit(&EditRequest { image: b"jpeg".to_vec(), ..edit("x", 8, 8) }), Err(GenError::Invalid(_))));
+        assert!(matches!(p.edit(&EditRequest { mask: png_of(9, 8), ..edit("x", 8, 8) }), Err(GenError::Invalid(_))));
+        assert!(matches!(p.generate(&GenerateRequest { prompt: " ".into(), aspect: (1, 1), size: ImageSize::Small }), Err(GenError::Invalid(_))));
+        assert!(p.transport().sent.lock().unwrap().is_empty());
+        assert!(GeminiProvider::new(ApiKey::new("k").unwrap(), "bad model/../x", Fake::new(Vec::new())).is_err());
+        assert_eq!(GeminiProvider::new(ApiKey::new("k").unwrap(), " ", Fake::new(Vec::new())).unwrap().info().model, DEFAULT_MODEL);
+    }
+
+    #[test]
+    fn generate_and_variations_shape() {
+        let p = provider(vec![Fake::ok(json!({"output_image": {"data": b64(b"a")}})), Fake::ok(json!({"output_image": {"data": b64(b"b")}}))]);
+        p.generate(&GenerateRequest { prompt: "a fox".into(), aspect: (3, 4), size: ImageSize::Small }).unwrap();
+        p.variations(&VariationRequest { image: png_of(500, 500), prompt: String::new(), size: ImageSize::Small }).unwrap();
+        let sent = p.transport().sent.lock().unwrap();
+        assert_eq!(sent[0].2["input"].as_array().unwrap().len(), 1);
+        assert_eq!(sent[0].2["response_format"]["aspect_ratio"], "3:4");
+        assert_eq!(sent[1].2["input"].as_array().unwrap().len(), 2);
+        assert_eq!(p.capabilities(), Capabilities { generate: true, edit: true, variations: true, edit_in_place: true, max_references: 4 });
+        assert_eq!(p.edit_aspect(1920, 1080), (16, 9));
+    }
+}

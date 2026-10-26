@@ -4198,6 +4198,73 @@ cameraRaw	Dehaze	Odstranění oparu
 	Tight Curl	Těsná smyčka
 	Loose Curl	Volná smyčka
 	Stylized dabs from a history state	Stylizované šmouhy ze stavu historie
-
 # Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
 	Aspect Ratio	Poměr stran
+# Generative Fill and Generative AI Settings (#41)
+	API key	Klíč API
+	Describe what to generate in the selection, or leave it empty to continue the image through it.	Popište, co se má ve výběru vytvořit, nebo nechte prázdné a obraz bude výběrem plynule pokračovat.
+	Fill the selection from a prompt	Vyplnit výběr podle popisu
+	Generative AI	Generativní AI
+	Generative AI Settings…	Nastavení generativní AI…
+	Generative AI needs the desktop app.	Generativní AI vyžaduje desktopovou aplikaci.
+	Generative Fill uses {name} ({model}).	Generativní výplň používá {name} ({model}).
+	Generative Fill…	Generativní výplň…
+	Get a Gemini API key from Google AI Studio	Získat klíč API Gemini v Google AI Studiu
+	No API key is saved for {provider}.	Pro {provider} není uložen žádný klíč API.
+	Nothing is sent until you run Generative Fill. Each time you do, PhotoCraft sends the selected area and the image around it, a black-and-white mask of the selection, and your prompt to Google (generativelanguage.googleapis.com) with your API key. Google's Gemini API terms and privacy policy apply, and its usage is billed to your key. Results carry Google's SynthID watermark.	Nic se neodešle, dokud nespustíte generativní výplň. Pokaždé, když ji spustíte, odešle PhotoCraft společnosti Google (generativelanguage.googleapis.com) vybranou oblast i obraz kolem ní, černobílou masku výběru a váš popis spolu s vaším klíčem API. Platí podmínky a zásady ochrany soukromí rozhraní Gemini API společnosti Google a využití se účtuje na váš klíč. Výsledky nesou vodoznak SynthID od Googlu.
+	Off. Set up a provider with your own API key to use Generative Fill.	Vypnuto. Chcete-li používat generativní výplň, nastavte poskytovatele s vlastním klíčem API.
+	Paste your Gemini API key	Vložte svůj klíč API Gemini
+	Prompt (optional)	Popis (nepovinný)
+	Provider	Poskytovatel
+	Remove Key	Odebrat klíč
+	Saved (paste to replace)	Uložen (vložením nahradíte)
+	Set up Generative Fill with your own API key	Nastavit generativní výplň s vlastním klíčem API
+	The selected area, the image around it and the prompt are sent to {name} ({model}).	Vybraná oblast, obraz kolem ní a popis se odešlou do {name} ({model}).
+	What is sent, and to whom	Co se odesílá a komu
+	Your key is kept in {store}, never in PhotoCraft's settings files.	Váš klíč je uložen v {store}, nikdy v souborech nastavení PhotoCraftu.
+	the macOS Keychain	klíčence macOS
+	Windows Credential Manager	Správci pověření Windows
+	memory until PhotoCraft quits	paměti, dokud se PhotoCraft neukončí
+# Generative Fill variations (#41)
+	Variations	Varianty
+	No prompt: continues the image	Bez popisu: pokračuje v obrázku
+	Sends the same area and prompt to {name} again for three more.	Odešle stejnou oblast a popis znovu do {name} pro tři další.
+	Generate More	Generovat další
+	Each Generative Fill makes three variations, so it sends three requests, each billed to your key.	Každá generativní výplň vytvoří tři varianty, takže odešle tři požadavky a každý se účtuje na váš klíč.
+# Generative Fill: Edit mode and reference images
+	Fill selection	Vyplnit výběr
+	Edit selection	Upravit výběr
+	Generate new content in the selection, or remove what is there	Vytvořit ve výběru nový obsah, nebo odstranit, co v něm je
+	Keep what is in the selection and change only what you ask for	Zachovat obsah výběru a změnit jen to, o co požádáte
+	Describe what to change in the selection: what is there is kept, except what you ask to change (a colour, a text, a material).	Popište, co se má ve výběru změnit: jeho obsah se zachová, kromě toho, co chcete změnit (barva, text, materiál).
+	What to change	Co změnit
+	Empty: removes what is selected and continues the image through it.	Prázdné: odstraní vybraný obsah a obraz bude výběrem plynule pokračovat.
+	Empty: places what the reference images show in the selection.	Prázdné: vloží do výběru to, co ukazují referenční obrázky.
+	Reference images	Referenční obrázky
+	Optional: an object or product to show, or a design, colour or look to match.	Nepovinné: objekt nebo produkt, který se má zobrazit, nebo design, barva či styl, kterým se řídit.
+	Add Reference…	Přidat referenci…
+	Image File…	Soubor obrázku…
+	Open Documents	Otevřené dokumenty
+	The reference images are sent too, at most 1024 pixels on their long side.	Odešlou se i referenční obrázky, nejvýše 1024 pixelů na delší straně.
+	In Edit mode the selected area is sent as it is. Reference images you add are sent too.	V režimu Upravit výběr se vybraná oblast odešle tak, jak je. Přidané referenční obrázky se odešlou také.
+# Generative Fill side by side: fills that don't wait for each other
+	Cancel this Generative Fill	Zrušit tuto generativní výplň
+	Discard	Zahodit
+	Each area becomes its own Generative Fill and layer, generated side by side; each sends its own requests.	Každá oblast se stane samostatnou generativní výplní a vrstvou, generují se souběžně; každá posílá vlastní požadavky.
+	Failed: {name}	Selhalo: {name}
+	Generated {name}	Vygenerováno: {name}
+	Generating	Generuje se
+	Generating: {name}	Generuje se: {name}
+	Generative Fill	Generativní výplň
+	Generative Fill failed: {error}	Generativní výplň selhala: {error}
+	Generative Fills in progress	Probíhající generativní výplně
+	Go to area	Přejít na oblast
+	Locked until its layer lands	Zamčeno, dokud nedorazí její vrstva
+	No prompt: removes what is selected	Bez popisu: odstraní vybrané
+	The selection has {n} separate areas, too many to fill one by one (at most {max}): it is filled as one.	Výběr má {n} samostatných oblastí, příliš mnoho na vyplnění po jedné (nejvýše {max}): vyplní se jako celek.
+	Waiting ({n})	Čeká ({n})
+	Waiting: {name}	Čeká: {name}
+@plural	{n} generating|{n} generating	{n} se generuje|{n} se generují|{n} se generuje
+@plural	{n} waiting|{n} waiting	{n} čeká|{n} čekají|{n} čeká
+@plural	{n} failed|{n} failed	{n} selhala|{n} selhaly|{n} selhalo
+@plural	Fill each of the {n} separate areas on its own|Fill each of the {n} separate areas on its own	Vyplnit každou z {n} oblastí zvlášť|Vyplnit každou z {n} oblastí zvlášť|Vyplnit každou z {n} oblastí zvlášť

@@ -4366,3 +4366,71 @@ cameraRaw	Yellow	Sárga
 	Tight Curl	Szoros göndör
 	Loose Curl	Laza göndör
 	Stylized dabs from a history state	Stilizált pöttyök egy előzményállapotból
+# Generative Fill and Generative AI Settings (#41)
+	API key	API-kulcs
+	Describe what to generate in the selection, or leave it empty to continue the image through it.	Írd le, mi jelenjen meg a kijelölésben, vagy hagyd üresen, hogy a kép folytatódjon rajta keresztül.
+	Generative AI	Generatív MI
+	Generative AI Settings…	Generatív MI beállításai…
+	Generative AI needs the desktop app.	A generatív MI-hez az asztali alkalmazás kell.
+	Generative Fill uses {name} ({model}).	A Generatív kitöltés ezt használja: {name} ({model}).
+	Generative Fill…	Generatív kitöltés…
+	Get a Gemini API key from Google AI Studio	Gemini API-kulcs beszerzése a Google AI Studióban
+	No API key is saved for {provider}.	Nincs mentett API-kulcs ehhez: {provider}.
+	Nothing is sent until you run Generative Fill. Each time you do, PhotoCraft sends the selected area and the image around it, a black-and-white mask of the selection, and your prompt to Google (generativelanguage.googleapis.com) with your API key. Google's Gemini API terms and privacy policy apply, and its usage is billed to your key. Results carry Google's SynthID watermark.	Semmi sem kerül elküldésre, amíg nem futtatod a Generatív kitöltést. Ilyenkor a PhotoCraft minden alkalommal elküldi a kijelölt területet a körülötte lévő képpel, a kijelölés fekete-fehér maszkját és a leírásodat a Google-nek (generativelanguage.googleapis.com) az API-kulcsoddal. A Google Gemini API felhasználási feltételei és adatvédelmi irányelvei érvényesek, a használatot a kulcsodra számlázzák. Az eredmények a Google SynthID vízjelét hordozzák.
+	Off. Set up a provider with your own API key to use Generative Fill.	Ki. A Generatív kitöltéshez állíts be egy szolgáltatót a saját API-kulcsoddal.
+	Paste your Gemini API key	Illeszd be a Gemini API-kulcsodat
+	Prompt (optional)	Leírás (nem kötelező)
+	Provider	Szolgáltató
+	Remove Key	Kulcs eltávolítása
+	Saved (paste to replace)	Mentve (beillesztéssel lecserélheted)
+	The selected area, the image around it and the prompt are sent to {name} ({model}).	A kijelölt terület, a körülötte lévő kép és a leírás ide kerül elküldésre: {name} ({model}).
+	What is sent, and to whom	Mi kerül elküldésre, és kinek
+	Your key is kept in {store}, never in PhotoCraft's settings files.	A kulcsod helye: {store}, sosem a PhotoCraft beállításfájljai.
+	the macOS Keychain	a macOS-kulcskarika
+	Windows Credential Manager	a Windows Hitelesítőadat-kezelő
+	memory until PhotoCraft quits	a memória, amíg a PhotoCraft be nem zárul
+	Fill the selection from a prompt	A kijelölés kitöltése leírás alapján
+	Set up Generative Fill with your own API key	Generatív kitöltés beállítása a saját API-kulcsoddal
+# Generative Fill variations (#41)
+	Variations	Változatok
+	No prompt: continues the image	Nincs leírás: a kép folytatódik
+	Sends the same area and prompt to {name} again for three more.	Ugyanazt a területet és leírást újra elküldi ide: {name}, további háromért.
+	Generate More	Továbbiak létrehozása
+	Each Generative Fill makes three variations, so it sends three requests, each billed to your key.	Minden Generatív kitöltés három változatot készít, ezért három kérést küld, mindegyiket a kulcsodra számlázzák.
+# Generative Fill: Edit mode and reference images
+	Fill selection	Kijelölés kitöltése
+	Edit selection	Kijelölés szerkesztése
+	Generate new content in the selection, or remove what is there	Új tartalom létrehozása a kijelölésben, vagy a benne lévők eltávolítása
+	Keep what is in the selection and change only what you ask for	A kijelölés tartalmának megtartása, csak a kért rész módosítása
+	Describe what to change in the selection: what is there is kept, except what you ask to change (a colour, a text, a material).	Írja le, mit kell módosítani a kijelölésben: a tartalma megmarad, kivéve amit módosíttatni szeretne (szín, szöveg, anyag).
+	What to change	Mit kell módosítani
+	Empty: removes what is selected and continues the image through it.	Üres: eltávolítja a kijelölt tartalmat, és a képet a kijelölésen át folytatja.
+	Empty: places what the reference images show in the selection.	Üres: a referenciaképeken látható dolgot helyezi a kijelölésbe.
+	Reference images	Referenciaképek
+	Optional: an object or product to show, or a design, colour or look to match.	Nem kötelező: megjelenítendő tárgy vagy termék, illetve követendő minta, szín vagy stílus.
+	Add Reference…	Referencia hozzáadása…
+	Image File…	Képfájl…
+	Open Documents	Megnyitott dokumentumok
+	The reference images are sent too, at most 1024 pixels on their long side.	A referenciaképek is elküldésre kerülnek, a hosszabb oldalukon legfeljebb 1024 képpontban.
+	In Edit mode the selected area is sent as it is. Reference images you add are sent too.	„Kijelölés szerkesztése” módban a kijelölt terület változatlanul kerül elküldésre. A hozzáadott referenciaképek is elküldésre kerülnek.
+# Generative Fill side by side: fills that don't wait for each other
+	Cancel this Generative Fill	Generatív kitöltés megszakítása
+	Discard	Elvetés
+	Each area becomes its own Generative Fill and layer, generated side by side; each sends its own requests.	Minden terület külön generatív kitöltés és réteg lesz, egyszerre készülnek; mindegyik saját kéréseket küld.
+	Failed: {name}	Sikertelen: {name}
+	Generated {name}	Elkészült: {name}
+	Generating	Generálás
+	Generating: {name}	Generálás: {name}
+	Generative Fill	Generatív kitöltés
+	Generative Fill failed: {error}	A generatív kitöltés sikertelen: {error}
+	Generative Fills in progress	Folyamatban lévő generatív kitöltések
+	Go to area	Ugrás a területre
+	Locked until its layer lands	Zárolva, amíg meg nem érkezik a rétege
+	No prompt: removes what is selected	Nincs leírás: eltávolítja a kijelölt részt
+	The selection has {n} separate areas, too many to fill one by one (at most {max}): it is filled as one.	A kijelölésnek {n} különálló területe van, túl sok ahhoz, hogy egyenként legyen kitöltve (legfeljebb {max}): egyben lesz kitöltve.
+	Waiting ({n})	Várakozik ({n})
+	Waiting: {name}	Várakozik: {name}
+@plural	{n} generating|{n} generating	{n} készül
+@plural	{n} waiting|{n} waiting	{n} várakozik
+@plural	{n} failed|{n} failed	{n} sikertelen
+@plural	Fill each of the {n} separate areas on its own|Fill each of the {n} separate areas on its own	A(z) {n} különálló terület kitöltése egyenként

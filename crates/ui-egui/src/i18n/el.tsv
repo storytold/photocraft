@@ -4151,6 +4151,73 @@ curves	Smooth	Εξομάλυνση
 	Tight Curl	Σφιχτή μπούκλα
 	Loose Curl	Χαλαρή μπούκλα
 	Stylized dabs from a history state	Στυλιζαρισμένες πινελιές από μια κατάσταση ιστορικού
-
 # Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
 	Target	Στόχος
+# Generative Fill and Generative AI Settings (#41)
+	API key	Κλειδί API
+	Describe what to generate in the selection, or leave it empty to continue the image through it.	Περιγράψτε τι θα δημιουργηθεί στην επιλογή ή αφήστε το κενό για να συνεχιστεί η εικόνα μέσα της.
+	Fill the selection from a prompt	Γέμισμα της επιλογής από περιγραφή
+	Generative AI	Παραγωγική ΤΝ
+	Generative AI Settings…	Ρυθμίσεις παραγωγικής ΤΝ…
+	Generative AI needs the desktop app.	Η παραγωγική ΤΝ χρειάζεται την εφαρμογή υπολογιστή.
+	Generative Fill uses {name} ({model}).	Το παραγωγικό γέμισμα χρησιμοποιεί {name} ({model}).
+	Generative Fill…	Παραγωγικό γέμισμα…
+	Get a Gemini API key from Google AI Studio	Λήψη κλειδιού API του Gemini από το Google AI Studio
+	No API key is saved for {provider}.	Δεν υπάρχει αποθηκευμένο κλειδί API για {provider}.
+	Nothing is sent until you run Generative Fill. Each time you do, PhotoCraft sends the selected area and the image around it, a black-and-white mask of the selection, and your prompt to Google (generativelanguage.googleapis.com) with your API key. Google's Gemini API terms and privacy policy apply, and its usage is billed to your key. Results carry Google's SynthID watermark.	Τίποτα δεν αποστέλλεται μέχρι να εκτελέσετε το παραγωγικό γέμισμα. Κάθε φορά που το κάνετε, το PhotoCraft στέλνει στην Google (generativelanguage.googleapis.com) την επιλεγμένη περιοχή και την εικόνα γύρω της, μια ασπρόμαυρη μάσκα της επιλογής και την περιγραφή σας, μαζί με το κλειδί API σας. Ισχύουν οι όροι και η πολιτική απορρήτου του Gemini API της Google, και η χρήση χρεώνεται στο κλειδί σας. Τα αποτελέσματα φέρουν το υδατογράφημα SynthID της Google.
+	Off. Set up a provider with your own API key to use Generative Fill.	Ανενεργό. Ορίστε έναν πάροχο με το δικό σας κλειδί API για να χρησιμοποιήσετε το παραγωγικό γέμισμα.
+	Paste your Gemini API key	Επικολλήστε το κλειδί API του Gemini
+	Prompt (optional)	Περιγραφή (προαιρετική)
+	Provider	Πάροχος
+	Remove Key	Αφαίρεση κλειδιού
+	Saved (paste to replace)	Αποθηκευμένο (επικολλήστε για αντικατάσταση)
+	Set up Generative Fill with your own API key	Ρύθμιση παραγωγικού γεμίσματος με το δικό σας κλειδί API
+	The selected area, the image around it and the prompt are sent to {name} ({model}).	Η επιλεγμένη περιοχή, η εικόνα γύρω της και η περιγραφή αποστέλλονται στο {name} ({model}).
+	What is sent, and to whom	Τι αποστέλλεται και σε ποιον
+	Your key is kept in {store}, never in PhotoCraft's settings files.	Το κλειδί σας φυλάσσεται στη {store}, ποτέ στα αρχεία ρυθμίσεων του PhotoCraft.
+	the macOS Keychain	Κλειδοθήκη του macOS
+	Windows Credential Manager	Διαχείριση διαπιστευτηρίων των Windows
+	memory until PhotoCraft quits	μνήμη μέχρι να κλείσει το PhotoCraft
+# Generative Fill variations (#41)
+	Variations	Παραλλαγές
+	No prompt: continues the image	Χωρίς περιγραφή: συνεχίζει την εικόνα
+	Sends the same area and prompt to {name} again for three more.	Στέλνει ξανά την ίδια περιοχή και περιγραφή στο {name} για τρεις ακόμη.
+	Generate More	Δημιουργία περισσότερων
+	Each Generative Fill makes three variations, so it sends three requests, each billed to your key.	Κάθε Παραγωγικό γέμισμα δημιουργεί τρεις παραλλαγές, άρα στέλνει τρία αιτήματα, το καθένα χρεώνεται στο κλειδί σας.
+# Generative Fill: Edit mode and reference images
+	Fill selection	Γέμισμα επιλογής
+	Edit selection	Επεξεργασία επιλογής
+	Generate new content in the selection, or remove what is there	Δημιουργία νέου περιεχομένου στην επιλογή ή αφαίρεση όσων υπάρχουν σε αυτήν
+	Keep what is in the selection and change only what you ask for	Διατήρηση του περιεχομένου της επιλογής και αλλαγή μόνο όσων ζητάτε
+	Describe what to change in the selection: what is there is kept, except what you ask to change (a colour, a text, a material).	Περιγράψτε τι θα αλλάξει στην επιλογή: το περιεχόμενό της διατηρείται, εκτός από όσα ζητάτε να αλλάξουν (ένα χρώμα, ένα κείμενο, ένα υλικό).
+	What to change	Τι θα αλλάξει
+	Empty: removes what is selected and continues the image through it.	Κενό: αφαιρεί το επιλεγμένο περιεχόμενο και συνεχίζει την εικόνα μέσα από την επιλογή.
+	Empty: places what the reference images show in the selection.	Κενό: τοποθετεί στην επιλογή ό,τι δείχνουν οι εικόνες αναφοράς.
+	Reference images	Εικόνες αναφοράς
+	Optional: an object or product to show, or a design, colour or look to match.	Προαιρετικά: ένα αντικείμενο ή προϊόν που θα εμφανιστεί ή ένα σχέδιο, χρώμα ή ύφος που θα ακολουθηθεί.
+	Add Reference…	Προσθήκη αναφοράς…
+	Image File…	Αρχείο εικόνας…
+	Open Documents	Ανοιχτά έγγραφα
+	The reference images are sent too, at most 1024 pixels on their long side.	Αποστέλλονται και οι εικόνες αναφοράς, έως 1024 εικονοστοιχεία στη μεγάλη πλευρά τους.
+	In Edit mode the selected area is sent as it is. Reference images you add are sent too.	Στη λειτουργία «Επεξεργασία επιλογής» η επιλεγμένη περιοχή αποστέλλεται όπως είναι. Αποστέλλονται επίσης οι εικόνες αναφοράς που προσθέτετε.
+# Generative Fill side by side: fills that don't wait for each other
+	Cancel this Generative Fill	Ακύρωση αυτού του παραγωγικού γεμίσματος
+	Discard	Απόρριψη
+	Each area becomes its own Generative Fill and layer, generated side by side; each sends its own requests.	Κάθε περιοχή γίνεται ξεχωριστό παραγωγικό γέμισμα και επίπεδο, και δημιουργούνται ταυτόχρονα· η καθεμία στέλνει τα δικά της αιτήματα.
+	Failed: {name}	Απέτυχε: {name}
+	Generated {name}	Δημιουργήθηκε: {name}
+	Generating	Δημιουργείται
+	Generating: {name}	Δημιουργείται: {name}
+	Generative Fill	Παραγωγικό γέμισμα
+	Generative Fill failed: {error}	Το παραγωγικό γέμισμα απέτυχε: {error}
+	Generative Fills in progress	Παραγωγικά γεμίσματα σε εξέλιξη
+	Go to area	Μετάβαση στην περιοχή
+	Locked until its layer lands	Κλειδωμένο μέχρι να έρθει το επίπεδό του
+	No prompt: removes what is selected	Χωρίς περιγραφή: αφαιρεί ό,τι είναι επιλεγμένο
+	The selection has {n} separate areas, too many to fill one by one (at most {max}): it is filled as one.	Η επιλογή έχει {n} ξεχωριστές περιοχές, πάρα πολλές για να γεμίσουν μία μία (το πολύ {max}): γεμίζει ως μία.
+	Waiting ({n})	Σε αναμονή ({n})
+	Waiting: {name}	Σε αναμονή: {name}
+@plural	{n} generating|{n} generating	{n} δημιουργείται|{n} δημιουργούνται
+@plural	{n} waiting|{n} waiting	{n} σε αναμονή|{n} σε αναμονή
+@plural	{n} failed|{n} failed	{n} απέτυχε|{n} απέτυχαν
+@plural	Fill each of the {n} separate areas on its own|Fill each of the {n} separate areas on its own	Γέμισμα καθεμίας από τις {n} ξεχωριστές περιοχές χωριστά|Γέμισμα καθεμίας από τις {n} ξεχωριστές περιοχές χωριστά

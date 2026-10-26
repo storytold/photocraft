@@ -4180,3 +4180,71 @@ cameraData	Lens	Lens
 	Tight Curl	Sıkı Kıvrım
 	Loose Curl	Gevşek Kıvrım
 	Stylized dabs from a history state	Bir geçmiş durumundan stilize benekler
+# Generative Fill and Generative AI Settings (#41)
+	API key	API anahtarı
+	Describe what to generate in the selection, or leave it empty to continue the image through it.	Seçimde ne oluşturulacağını açıklayın veya görüntünün seçim boyunca devam etmesi için boş bırakın.
+	Generative AI	Üretken Yapay Zekâ
+	Generative AI Settings…	Üretken Yapay Zekâ Ayarları…
+	Generative AI needs the desktop app.	Üretken yapay zekâ için masaüstü uygulaması gerekir.
+	Generative Fill uses {name} ({model}).	Üretken Dolgu şunu kullanır: {name} ({model}).
+	Generative Fill…	Üretken Dolgu…
+	Get a Gemini API key from Google AI Studio	Google AI Studio'dan Gemini API anahtarı alın
+	No API key is saved for {provider}.	Şunun için kayıtlı API anahtarı yok: {provider}.
+	Nothing is sent until you run Generative Fill. Each time you do, PhotoCraft sends the selected area and the image around it, a black-and-white mask of the selection, and your prompt to Google (generativelanguage.googleapis.com) with your API key. Google's Gemini API terms and privacy policy apply, and its usage is billed to your key. Results carry Google's SynthID watermark.	Üretken Dolgu'yu çalıştırana kadar hiçbir şey gönderilmez. Her çalıştırdığınızda PhotoCraft seçili alanı ve çevresindeki görüntüyü, seçimin siyah beyaz maskesini ve isteminizi API anahtarınızla Google'a (generativelanguage.googleapis.com) gönderir. Google'ın Gemini API koşulları ve gizlilik politikası geçerlidir; kullanım anahtarınıza faturalandırılır. Sonuçlar Google'ın SynthID filigranını taşır.
+	Off. Set up a provider with your own API key to use Generative Fill.	Kapalı. Üretken Dolgu'yu kullanmak için kendi API anahtarınızla bir sağlayıcı ayarlayın.
+	Paste your Gemini API key	Gemini API anahtarınızı yapıştırın
+	Prompt (optional)	İstem (isteğe bağlı)
+	Provider	Sağlayıcı
+	Remove Key	Anahtarı Kaldır
+	Saved (paste to replace)	Kaydedildi (değiştirmek için yapıştırın)
+	The selected area, the image around it and the prompt are sent to {name} ({model}).	Seçili alan, çevresindeki görüntü ve istem şuraya gönderilir: {name} ({model}).
+	What is sent, and to whom	Ne gönderilir ve kime
+	Your key is kept in {store}, never in PhotoCraft's settings files.	Anahtarınızın saklandığı yer: {store}. PhotoCraft'ın ayar dosyalarında asla saklanmaz.
+	the macOS Keychain	macOS Anahtar Zinciri
+	Windows Credential Manager	Windows Kimlik Bilgisi Yöneticisi
+	memory until PhotoCraft quits	PhotoCraft kapanana kadar bellek
+	Fill the selection from a prompt	Seçimi bir istemle doldur
+	Set up Generative Fill with your own API key	Üretken Dolgu'yu kendi API anahtarınızla ayarlayın
+# Generative Fill variations (#41)
+	Variations	Varyasyonlar
+	No prompt: continues the image	İstem yok: görüntü devam eder
+	Sends the same area and prompt to {name} again for three more.	Üç tane daha için aynı alanı ve istemi yeniden şuraya gönderir: {name}.
+	Generate More	Daha Fazla Üret
+	Each Generative Fill makes three variations, so it sends three requests, each billed to your key.	Her Üretken Dolgu üç varyasyon oluşturur; bu yüzden her biri anahtarınıza faturalandırılan üç istek gönderir.
+# Generative Fill: Edit mode and reference images
+	Fill selection	Seçimi doldur
+	Edit selection	Seçimi düzenle
+	Generate new content in the selection, or remove what is there	Seçimde yeni içerik oluştur veya içindekini kaldır
+	Keep what is in the selection and change only what you ask for	Seçimdekini koru ve yalnızca istediğiniz kısmı değiştir
+	Describe what to change in the selection: what is there is kept, except what you ask to change (a colour, a text, a material).	Seçimde neyin değişeceğini açıklayın: istediğiniz değişiklik (renk, metin, malzeme) dışında içerik korunur.
+	What to change	Ne değişecek
+	Empty: removes what is selected and continues the image through it.	Boş: seçili içeriği kaldırır ve görüntüyü seçimin içinden sürdürür.
+	Empty: places what the reference images show in the selection.	Boş: referans görüntülerde görüneni seçime yerleştirir.
+	Reference images	Referans görüntüler
+	Optional: an object or product to show, or a design, colour or look to match.	İsteğe bağlı: gösterilecek bir nesne veya ürün ya da uyulacak bir tasarım, renk veya stil.
+	Add Reference…	Referans Ekle…
+	Image File…	Görüntü Dosyası…
+	Open Documents	Açık Belgeler
+	The reference images are sent too, at most 1024 pixels on their long side.	Referans görüntüler de gönderilir; uzun kenarları en fazla 1024 piksel olur.
+	In Edit mode the selected area is sent as it is. Reference images you add are sent too.	"Seçimi düzenle" modunda seçili alan olduğu gibi gönderilir. Eklediğiniz referans görüntüler de gönderilir.
+# Generative Fill side by side: fills that don't wait for each other
+	Cancel this Generative Fill	Bu Üretken Dolguyu iptal et
+	Discard	Vazgeç
+	Each area becomes its own Generative Fill and layer, generated side by side; each sends its own requests.	Her alan kendi Üretken Dolgusu ve katmanı olur, aynı anda üretilir; her biri kendi isteklerini gönderir.
+	Failed: {name}	Başarısız: {name}
+	Generated {name}	Oluşturuldu: {name}
+	Generating	Oluşturuluyor
+	Generating: {name}	Oluşturuluyor: {name}
+	Generative Fill	Üretken Dolgu
+	Generative Fill failed: {error}	Üretken Dolgu başarısız oldu: {error}
+	Generative Fills in progress	Süren Üretken Dolgular
+	Go to area	Alana git
+	Locked until its layer lands	Katmanı gelene kadar kilitli
+	No prompt: removes what is selected	Açıklama yok: seçili olanı kaldırır
+	The selection has {n} separate areas, too many to fill one by one (at most {max}): it is filled as one.	Seçimde {n} ayrı alan var; tek tek doldurmak için çok fazla (en fazla {max}): tek parça olarak doldurulur.
+	Waiting ({n})	Bekliyor ({n})
+	Waiting: {name}	Bekliyor: {name}
+@plural	{n} generating|{n} generating	{n} oluşturuluyor
+@plural	{n} waiting|{n} waiting	{n} bekliyor
+@plural	{n} failed|{n} failed	{n} başarısız
+@plural	Fill each of the {n} separate areas on its own|Fill each of the {n} separate areas on its own	{n} ayrı alanın her birini ayrı ayrı doldur

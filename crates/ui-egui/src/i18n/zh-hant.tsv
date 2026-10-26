@@ -3080,7 +3080,6 @@ curves	Smooth	平滑
 	Loose Curl	寬鬆捲曲
 	Area	區域
 	Stylized dabs from a history state	從歷史狀態繪製風格化點塗
-
 # Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
 	Aspect Ratio	外觀比例
 	Category	類別
@@ -3090,3 +3089,73 @@ curves	Smooth	平滑
 	Profile	描述檔
 	Target	目標
 	Units	單位
+# Generative Fill and Generative AI Settings (#41)
+	API key	API 金鑰
+	Describe what to generate in the selection, or leave it empty to continue the image through it.	描述要在選取範圍中產生的內容，留空則讓周圍的影像在選取範圍中自然延續。
+	Fill the selection from a prompt	依描述填滿選取範圍
+	Generative AI	生成式 AI
+	Generative AI Settings…	生成式 AI 設定…
+	Generative AI needs the desktop app.	生成式 AI 需要桌面版應用程式。
+	Generative Fill uses {name} ({model}).	生成式填色使用 {name}（{model}）。
+	Generative Fill…	生成式填色…
+	Get a Gemini API key from Google AI Studio	在 Google AI Studio 取得 Gemini API 金鑰
+	No API key is saved for {provider}.	尚未為 {provider} 儲存 API 金鑰。
+	Nothing is sent until you run Generative Fill. Each time you do, PhotoCraft sends the selected area and the image around it, a black-and-white mask of the selection, and your prompt to Google (generativelanguage.googleapis.com) with your API key. Google's Gemini API terms and privacy policy apply, and its usage is billed to your key. Results carry Google's SynthID watermark.	在你執行生成式填色之前，不會傳送任何內容。每次執行時，PhotoCraft 會將選取的區域及其周圍的影像、選取範圍的黑白遮色片以及你的描述，連同你的 API 金鑰一起傳送給 Google（generativelanguage.googleapis.com）。Google Gemini API 的條款與隱私權政策適用，用量計入你的金鑰。產生的結果帶有 Google 的 SynthID 浮水印。
+	Off. Set up a provider with your own API key to use Generative Fill.	已關閉。請以你自己的 API 金鑰設定服務供應商，以使用生成式填色。
+	Paste your Gemini API key	貼上你的 Gemini API 金鑰
+	Prompt (optional)	描述（選填）
+	Provider	服務供應商
+	Remove Key	移除金鑰
+	Saved (paste to replace)	已儲存（貼上即可取代）
+	Set up Generative Fill with your own API key	以你自己的 API 金鑰設定生成式填色
+	The selected area, the image around it and the prompt are sent to {name} ({model}).	選取的區域、其周圍的影像和描述會傳送給 {name}（{model}）。
+	What is sent, and to whom	傳送什麼，傳送給誰
+	Your key is kept in {store}, never in PhotoCraft's settings files.	你的金鑰保存在 {store}，不會寫入 PhotoCraft 的設定檔。
+	the macOS Keychain	macOS 鑰匙圈
+	Windows Credential Manager	Windows 認證管理員
+	memory until PhotoCraft quits	記憶體中，直到 PhotoCraft 結束
+# Generative Fill variations (#41)
+	Variations	變體
+	No prompt: continues the image	無描述：延續影像
+	Sends the same area and prompt to {name} again for three more.	再次將相同區域和描述傳送到 {name}，再產生三個。
+	Generate More	產生更多
+	Each Generative Fill makes three variations, so it sends three requests, each billed to your key.	每次生成式填色會產生三個變體，因此會傳送三個請求，每個都計費到你的金鑰。
+# Generative Fill: Edit mode and reference images
+	Fill selection	填滿選取範圍
+	Edit selection	編輯選取範圍
+	Generate new content in the selection, or remove what is there	在選取範圍中產生新內容，或移除其中的內容
+	Keep what is in the selection and change only what you ask for	保留選取範圍中的內容，只變更你要求的部分
+	Describe what to change in the selection: what is there is kept, except what you ask to change (a colour, a text, a material).	描述要在選取範圍中變更的內容：除了你要求變更的部分（顏色、文字、材質）之外，其餘內容都會保留。
+	What to change	要變更的內容
+	Empty: removes what is selected and continues the image through it.	留空：移除所選內容，並讓周圍的影像在選取範圍中延續。
+	Empty: places what the reference images show in the selection.	留空：將參考影像中的內容放入選取範圍。
+	Reference images	參考影像
+	Optional: an object or product to show, or a design, colour or look to match.	選填：要顯示的物件或產品，或要參照的設計、顏色或風格。
+	Add Reference…	加入參考…
+	Image File…	影像檔案…
+	Open Documents	開啟的文件
+	The reference images are sent too, at most 1024 pixels on their long side.	參考影像也會一併傳送，長邊最多 1024 像素。
+	In Edit mode the selected area is sent as it is. Reference images you add are sent too.	在「編輯選取範圍」模式下，選取的區域會依原樣傳送。你加入的參考影像也會一併傳送。
+# Generative Fill side by side: fills that don't wait for each other
+	Cancel this Generative Fill	取消此生成式填色
+	Discard	捨棄
+	Each area becomes its own Generative Fill and layer, generated side by side; each sends its own requests.	每個區域都會成為獨立的生成式填色與圖層，同時產生；每個區域各自傳送請求。
+	Failed: {name}	失敗：{name}
+	Generated {name}	已產生：{name}
+	Generating	正在產生
+	Generating: {name}	正在產生：{name}
+	Generative Fill	生成式填色
+	Generative Fill failed: {error}	生成式填色失敗：{error}
+	Generative Fills in progress	進行中的生成式填色
+	Go to area	前往區域
+	Locked until its layer lands	在圖層產生前保持鎖定
+	No prompt: removes what is selected	無描述：移除所選內容
+	The selection has {n} separate areas, too many to fill one by one (at most {max}): it is filled as one.	選取範圍有 {n} 個分離的區域，太多而無法逐一填色（最多 {max} 個）：將整體填色。
+	Waiting ({n})	等待中（{n}）
+	Waiting: {name}	等待中：{name}
+	Retry	重試
+	Failed	失敗
+@plural	{n} generating|{n} generating	{n} 個正在產生
+@plural	{n} waiting|{n} waiting	{n} 個等待中
+@plural	{n} failed|{n} failed	{n} 個失敗
+@plural	Fill each of the {n} separate areas on its own|Fill each of the {n} separate areas on its own	分別填色 {n} 個分離的區域

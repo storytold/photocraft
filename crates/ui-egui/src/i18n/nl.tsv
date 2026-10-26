@@ -4211,3 +4211,71 @@ curves	Smooth	Vloeiend maken
 	Tight Curl	Strakke krul
 	Loose Curl	Losse krul
 	Stylized dabs from a history state	Gestileerde tikken uit een historiestatus
+# Generative Fill and Generative AI Settings (#41)
+	API key	API-sleutel
+	Describe what to generate in the selection, or leave it empty to continue the image through it.	Beschrijf wat er in de selectie moet komen, of laat leeg om de afbeelding erdoorheen voort te zetten.
+	Fill the selection from a prompt	De selectie vullen op basis van een beschrijving
+	Generative AI	Generatieve AI
+	Generative AI Settings…	Instellingen voor generatieve AI…
+	Generative AI needs the desktop app.	Generatieve AI werkt alleen in de desktop-app.
+	Generative Fill uses {name} ({model}).	Generatief vullen gebruikt {name} ({model}).
+	Generative Fill…	Generatief vullen…
+	Get a Gemini API key from Google AI Studio	Een Gemini-API-sleutel halen bij Google AI Studio
+	No API key is saved for {provider}.	Er is geen API-sleutel bewaard voor {provider}.
+	Nothing is sent until you run Generative Fill. Each time you do, PhotoCraft sends the selected area and the image around it, a black-and-white mask of the selection, and your prompt to Google (generativelanguage.googleapis.com) with your API key. Google's Gemini API terms and privacy policy apply, and its usage is billed to your key. Results carry Google's SynthID watermark.	Er wordt niets verstuurd totdat u Generatief vullen uitvoert. Elke keer dat u dat doet, stuurt PhotoCraft het geselecteerde gebied met de omringende afbeelding, een zwart-wit masker van de selectie en uw beschrijving met uw API-sleutel naar Google (generativelanguage.googleapis.com). De voorwaarden en het privacybeleid van de Gemini API van Google zijn van toepassing en het gebruik wordt via uw sleutel gefactureerd. Resultaten dragen het SynthID-watermerk van Google.
+	Off. Set up a provider with your own API key to use Generative Fill.	Uit. Stel een aanbieder in met uw eigen API-sleutel om Generatief vullen te gebruiken.
+	Paste your Gemini API key	Plak uw Gemini-API-sleutel
+	Prompt (optional)	Beschrijving (optioneel)
+	Provider	Aanbieder
+	Remove Key	Sleutel verwijderen
+	Saved (paste to replace)	Bewaard (plak om te vervangen)
+	Set up Generative Fill with your own API key	Generatief vullen instellen met uw eigen API-sleutel
+	The selected area, the image around it and the prompt are sent to {name} ({model}).	Het geselecteerde gebied, de omringende afbeelding en de beschrijving worden naar {name} ({model}) gestuurd.
+	What is sent, and to whom	Wat er wordt verstuurd, en naar wie
+	Your key is kept in {store}, never in PhotoCraft's settings files.	Uw sleutel wordt bewaard in {store}, nooit in de instellingenbestanden van PhotoCraft.
+	the macOS Keychain	de macOS-sleutelhanger
+	Windows Credential Manager	Windows Referentiebeheer
+	memory until PhotoCraft quits	het geheugen totdat PhotoCraft stopt
+# Generative Fill variations (#41)
+	Variations	Variaties
+	No prompt: continues the image	Geen beschrijving: zet de afbeelding voort
+	Sends the same area and prompt to {name} again for three more.	Stuurt hetzelfde gebied en dezelfde beschrijving opnieuw naar {name} voor nog drie.
+	Generate More	Meer genereren
+	Each Generative Fill makes three variations, so it sends three requests, each billed to your key.	Elk Generatief vullen maakt drie variaties en stuurt dus drie verzoeken, die elk op uw sleutel worden gefactureerd.
+# Generative Fill: Edit mode and reference images
+	Fill selection	Selectie vullen
+	Edit selection	Selectie bewerken
+	Generate new content in the selection, or remove what is there	Nieuwe inhoud in de selectie genereren of verwijderen wat er staat
+	Keep what is in the selection and change only what you ask for	Behouden wat in de selectie staat en alleen veranderen wat u vraagt
+	Describe what to change in the selection: what is there is kept, except what you ask to change (a colour, a text, a material).	Beschrijf wat er in de selectie moet veranderen: wat er staat blijft behouden, behalve wat u laat veranderen (een kleur, een tekst, een materiaal).
+	What to change	Wat moet veranderen
+	Empty: removes what is selected and continues the image through it.	Leeg: verwijdert wat geselecteerd is en zet de afbeelding erdoorheen voort.
+	Empty: places what the reference images show in the selection.	Leeg: plaatst wat de referentieafbeeldingen tonen in de selectie.
+	Reference images	Referentieafbeeldingen
+	Optional: an object or product to show, or a design, colour or look to match.	Optioneel: een object of product om te tonen, of een ontwerp, kleur of stijl om na te bootsen.
+	Add Reference…	Referentie toevoegen…
+	Image File…	Afbeeldingsbestand…
+	Open Documents	Geopende documenten
+	The reference images are sent too, at most 1024 pixels on their long side.	De referentieafbeeldingen worden ook verstuurd, met hoogstens 1024 pixels aan de lange zijde.
+	In Edit mode the selected area is sent as it is. Reference images you add are sent too.	In de modus Selectie bewerken wordt het geselecteerde gebied verstuurd zoals het is. Toegevoegde referentieafbeeldingen worden ook verstuurd.
+# Generative Fill side by side: fills that don't wait for each other
+	Cancel this Generative Fill	Deze generatieve vulling annuleren
+	Discard	Verwerpen
+	Each area becomes its own Generative Fill and layer, generated side by side; each sends its own requests.	Elk gebied wordt een eigen generatieve vulling met een eigen laag, tegelijk gegenereerd; elk stuurt zijn eigen verzoeken.
+	Failed: {name}	Mislukt: {name}
+	Generated {name}	Gegenereerd: {name}
+	Generating	Bezig met genereren
+	Generating: {name}	Bezig met genereren: {name}
+	Generative Fill	Generatief vullen
+	Generative Fill failed: {error}	Generatief vullen mislukt: {error}
+	Generative Fills in progress	Generatieve vullingen bezig
+	Go to area	Naar gebied
+	Locked until its layer lands	Vergrendeld tot de laag binnenkomt
+	No prompt: removes what is selected	Geen beschrijving: verwijdert wat geselecteerd is
+	The selection has {n} separate areas, too many to fill one by one (at most {max}): it is filled as one.	De selectie heeft {n} losse gebieden, te veel om één voor één te vullen (maximaal {max}): ze wordt als geheel gevuld.
+	Waiting ({n})	Wachtend ({n})
+	Waiting: {name}	Wachtend: {name}
+@plural	{n} generating|{n} generating	{n} bezig|{n} bezig
+@plural	{n} waiting|{n} waiting	{n} wachtend|{n} wachtend
+@plural	{n} failed|{n} failed	{n} mislukt|{n} mislukt
+@plural	Fill each of the {n} separate areas on its own|Fill each of the {n} separate areas on its own	Elk van de {n} losse gebieden apart vullen|Elk van de {n} losse gebieden apart vullen

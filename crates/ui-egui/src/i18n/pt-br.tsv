@@ -4381,3 +4381,71 @@ layerLabel	No Color	Sem cor
 	Tight Curl	Curva cerrada
 	Loose Curl	Curva solta
 	Stylized dabs from a history state	Toques estilizados a partir de um estado do histórico
+# Generative Fill and Generative AI Settings (#41)
+	API key	Chave de API
+	Describe what to generate in the selection, or leave it empty to continue the image through it.	Descreva o que gerar na seleção ou deixe vazio para continuar a imagem através dela.
+	Fill the selection from a prompt	Preencher a seleção a partir de uma descrição
+	Generative AI	IA generativa
+	Generative AI Settings…	Configurações de IA generativa…
+	Generative AI needs the desktop app.	A IA generativa precisa do aplicativo para desktop.
+	Generative Fill uses {name} ({model}).	O preenchimento generativo usa {name} ({model}).
+	Generative Fill…	Preenchimento generativo…
+	Get a Gemini API key from Google AI Studio	Obter uma chave de API do Gemini no Google AI Studio
+	No API key is saved for {provider}.	Nenhuma chave de API salva para {provider}.
+	Nothing is sent until you run Generative Fill. Each time you do, PhotoCraft sends the selected area and the image around it, a black-and-white mask of the selection, and your prompt to Google (generativelanguage.googleapis.com) with your API key. Google's Gemini API terms and privacy policy apply, and its usage is billed to your key. Results carry Google's SynthID watermark.	Nada é enviado até você executar o preenchimento generativo. A cada execução, o PhotoCraft envia ao Google (generativelanguage.googleapis.com) a área selecionada e a imagem ao redor, uma máscara em preto e branco da seleção e a sua descrição, com a sua chave de API. Valem os termos e a política de privacidade da API Gemini do Google, e o uso é cobrado na sua chave. Os resultados levam a marca-d’água SynthID do Google.
+	Off. Set up a provider with your own API key to use Generative Fill.	Desativado. Configure um provedor com a sua própria chave de API para usar o preenchimento generativo.
+	Paste your Gemini API key	Cole sua chave de API do Gemini
+	Prompt (optional)	Descrição (opcional)
+	Provider	Provedor
+	Remove Key	Remover chave
+	Saved (paste to replace)	Salva (cole para substituir)
+	Set up Generative Fill with your own API key	Configurar o preenchimento generativo com a sua própria chave de API
+	The selected area, the image around it and the prompt are sent to {name} ({model}).	A área selecionada, a imagem ao redor e a descrição são enviadas para {name} ({model}).
+	What is sent, and to whom	O que é enviado, e para quem
+	Your key is kept in {store}, never in PhotoCraft's settings files.	Sua chave fica guardada em {store}, nunca nos arquivos de configuração do PhotoCraft.
+	the macOS Keychain	no Porta-Chaves do macOS
+	Windows Credential Manager	no Gerenciador de Credenciais do Windows
+	memory until PhotoCraft quits	na memória até o PhotoCraft ser fechado
+# Generative Fill variations (#41)
+	Variations	Variações
+	No prompt: continues the image	Sem descrição: continua a imagem
+	Sends the same area and prompt to {name} again for three more.	Envia a mesma área e descrição para {name} de novo para mais três.
+	Generate More	Gerar mais
+	Each Generative Fill makes three variations, so it sends three requests, each billed to your key.	Cada Preenchimento generativo cria três variações, então envia três solicitações, cada uma cobrada na sua chave.
+# Generative Fill: Edit mode and reference images
+	Fill selection	Preencher seleção
+	Edit selection	Editar seleção
+	Generate new content in the selection, or remove what is there	Gerar conteúdo novo na seleção ou remover o que há nela
+	Keep what is in the selection and change only what you ask for	Manter o que está na seleção e mudar só o que você pedir
+	Describe what to change in the selection: what is there is kept, except what you ask to change (a colour, a text, a material).	Descreva o que mudar na seleção: o que está nela é mantido, exceto o que você pedir para mudar (uma cor, um texto, um material).
+	What to change	O que mudar
+	Empty: removes what is selected and continues the image through it.	Vazio: remove o que está selecionado e continua a imagem através da seleção.
+	Empty: places what the reference images show in the selection.	Vazio: coloca na seleção o que as imagens de referência mostram.
+	Reference images	Imagens de referência
+	Optional: an object or product to show, or a design, colour or look to match.	Opcional: um objeto ou produto a mostrar, ou um design, cor ou estilo a imitar.
+	Add Reference…	Adicionar referência…
+	Image File…	Arquivo de imagem…
+	Open Documents	Documentos abertos
+	The reference images are sent too, at most 1024 pixels on their long side.	As imagens de referência também são enviadas, com no máximo 1024 pixels no lado maior.
+	In Edit mode the selected area is sent as it is. Reference images you add are sent too.	No modo Editar seleção, a área selecionada é enviada como está. As imagens de referência que você adicionar também são enviadas.
+# Generative Fill side by side: fills that don't wait for each other
+	Cancel this Generative Fill	Cancelar este preenchimento generativo
+	Discard	Descartar
+	Each area becomes its own Generative Fill and layer, generated side by side; each sends its own requests.	Cada área vira um preenchimento generativo próprio, com sua camada, gerados ao mesmo tempo; cada uma envia as próprias solicitações.
+	Failed: {name}	Falhou: {name}
+	Generated {name}	Gerado: {name}
+	Generating	Gerando
+	Generating: {name}	Gerando: {name}
+	Generative Fill	Preenchimento generativo
+	Generative Fill failed: {error}	O preenchimento generativo falhou: {error}
+	Generative Fills in progress	Preenchimentos generativos em andamento
+	Go to area	Ir para a área
+	Locked until its layer lands	Bloqueada até a camada chegar
+	No prompt: removes what is selected	Sem descrição: remove o que está selecionado
+	The selection has {n} separate areas, too many to fill one by one (at most {max}): it is filled as one.	A seleção tem {n} áreas separadas, demais para preencher uma a uma (no máximo {max}): ela é preenchida como um todo.
+	Waiting ({n})	Aguardando ({n})
+	Waiting: {name}	Aguardando: {name}
+@plural	{n} generating|{n} generating	{n} em andamento|{n} em andamento
+@plural	{n} waiting|{n} waiting	{n} aguardando|{n} aguardando
+@plural	{n} failed|{n} failed	{n} com falha|{n} com falha
+@plural	Fill each of the {n} separate areas on its own|Fill each of the {n} separate areas on its own	Preencher separadamente cada uma das {n} áreas|Preencher separadamente cada uma das {n} áreas

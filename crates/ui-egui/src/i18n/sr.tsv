@@ -4524,3 +4524,71 @@ shape	Appearance	Izgled
 	Tight Curl	Usko uvijeno
 	Loose Curl	Labavo uvijeno
 	Stylized dabs from a history state	Stilizovane mrlje iz stanja istorije
+# Generative Fill and Generative AI Settings (#41)
+	API key	API ključ
+	Describe what to generate in the selection, or leave it empty to continue the image through it.	Opišite šta da se stvori u selekciji ili ostavite prazno da se slika nastavi kroz nju.
+	Generative AI	Generativna AI
+	Generative AI Settings…	Podešavanja generativne AI…
+	Generative AI needs the desktop app.	Generativna AI radi samo u desktop aplikaciji.
+	Generative Fill uses {name} ({model}).	Generativna popuna koristi {name} ({model}).
+	Generative Fill…	Generativna popuna…
+	Get a Gemini API key from Google AI Studio	Nabavite Gemini API ključ u Google AI Studiju
+	No API key is saved for {provider}.	Nema sačuvanog API ključa za {provider}.
+	Nothing is sent until you run Generative Fill. Each time you do, PhotoCraft sends the selected area and the image around it, a black-and-white mask of the selection, and your prompt to Google (generativelanguage.googleapis.com) with your API key. Google's Gemini API terms and privacy policy apply, and its usage is billed to your key. Results carry Google's SynthID watermark.	Ništa se ne šalje dok ne pokrenete Generativnu popunu. Svaki put kada to uradite, PhotoCraft šalje Google-u (generativelanguage.googleapis.com) izabranu oblast i sliku oko nje, crno-belu masku selekcije i vaš opis, uz vaš API ključ. Važe Google-ovi uslovi korišćenja i politika privatnosti za Gemini API, a korišćenje se naplaćuje na vaš ključ. Rezultati nose Google-ov SynthID vodeni žig.
+	Off. Set up a provider with your own API key to use Generative Fill.	Isključeno. Podesite dobavljača sa sopstvenim API ključem da biste koristili Generativnu popunu.
+	Paste your Gemini API key	Nalepite svoj Gemini API ključ
+	Prompt (optional)	Opis (opciono)
+	Provider	Dobavljač
+	Remove Key	Ukloni ključ
+	Saved (paste to replace)	Sačuvano (nalepite da zamenite)
+	The selected area, the image around it and the prompt are sent to {name} ({model}).	Izabrana oblast, slika oko nje i opis šalju se ka {name} ({model}).
+	What is sent, and to whom	Šta se šalje i kome
+	Your key is kept in {store}, never in PhotoCraft's settings files.	Vaš ključ se čuva ovde: {store}, nikad u datotekama podešavanja PhotoCrafta.
+	the macOS Keychain	macOS privezak ključeva
+	Windows Credential Manager	Windows menadžer akreditiva
+	memory until PhotoCraft quits	memorija, dok se PhotoCraft ne zatvori
+	Fill the selection from a prompt	Popuni selekciju prema opisu
+	Set up Generative Fill with your own API key	Podesite Generativnu popunu sa sopstvenim API ključem
+# Generative Fill variations (#41)
+	Variations	Varijacije
+	No prompt: continues the image	Bez opisa: slika se nastavlja
+	Sends the same area and prompt to {name} again for three more.	Ponovo šalje istu oblast i opis ka {name} za još tri.
+	Generate More	Napravi još
+	Each Generative Fill makes three variations, so it sends three requests, each billed to your key.	Svaka Generativna popuna pravi tri varijacije, pa šalje tri zahteva, a svaki se naplaćuje na vaš ključ.
+# Generative Fill: Edit mode and reference images
+	Fill selection	Popuni selekciju
+	Edit selection	Uredi selekciju
+	Generate new content in the selection, or remove what is there	Generiši novi sadržaj u selekciji ili ukloni ono što je u njoj
+	Keep what is in the selection and change only what you ask for	Zadrži ono što je u selekciji i promeni samo ono što tražite
+	Describe what to change in the selection: what is there is kept, except what you ask to change (a colour, a text, a material).	Opišite šta treba promeniti u selekciji: ono što je u njoj ostaje, osim onoga što tražite da se promeni (boja, tekst, materijal).
+	What to change	Šta promeniti
+	Empty: removes what is selected and continues the image through it.	Prazno: uklanja selektovano i nastavlja sliku kroz selekciju.
+	Empty: places what the reference images show in the selection.	Prazno: postavlja u selekciju ono što prikazuju referentne slike.
+	Reference images	Referentne slike
+	Optional: an object or product to show, or a design, colour or look to match.	Opciono: predmet ili proizvod koji treba prikazati, ili dizajn, boja ili stil koji treba pratiti.
+	Add Reference…	Dodaj referencu…
+	Image File…	Datoteka slike…
+	Open Documents	Otvoreni dokumenti
+	The reference images are sent too, at most 1024 pixels on their long side.	Šalju se i referentne slike, najviše 1024 piksela po dužoj strani.
+	In Edit mode the selected area is sent as it is. Reference images you add are sent too.	U režimu „Uredi selekciju“ selektovana oblast se šalje onakva kakva jeste. Šalju se i referentne slike koje dodate.
+# Generative Fill side by side: fills that don't wait for each other
+	Cancel this Generative Fill	Otkaži ovu generativnu popunu
+	Discard	Odbaci
+	Each area becomes its own Generative Fill and layer, generated side by side; each sends its own requests.	Svaka oblast postaje zasebna generativna popuna sa svojim slojem, generišu se istovremeno; svaka šalje svoje zahteve.
+	Failed: {name}	Neuspešno: {name}
+	Generated {name}	Generisano: {name}
+	Generating	Generiše se
+	Generating: {name}	Generiše se: {name}
+	Generative Fill	Generativna popuna
+	Generative Fill failed: {error}	Generativna popuna nije uspela: {error}
+	Generative Fills in progress	Generativne popune u toku
+	Go to area	Idi na oblast
+	Locked until its layer lands	Zaključano dok ne stigne njen sloj
+	No prompt: removes what is selected	Bez opisa: uklanja izabrano
+	The selection has {n} separate areas, too many to fill one by one (at most {max}): it is filled as one.	Izbor ima {n} zasebnih oblasti, previše da bi se popunjavale jedna po jedna (najviše {max}): popunjava se kao celina.
+	Waiting ({n})	Čeka ({n})
+	Waiting: {name}	Čeka: {name}
+@plural	{n} generating|{n} generating	{n} se generiše|{n} se generišu|{n} se generiše
+@plural	{n} waiting|{n} waiting	{n} čeka|{n} čekaju|{n} čeka
+@plural	{n} failed|{n} failed	{n} neuspešna|{n} neuspešne|{n} neuspešnih
+@plural	Fill each of the {n} separate areas on its own|Fill each of the {n} separate areas on its own	Popuni posebno svaku od {n} odvojenih oblasti|Popuni posebno svaku od {n} odvojenih oblasti|Popuni posebno svaku od {n} odvojenih oblasti

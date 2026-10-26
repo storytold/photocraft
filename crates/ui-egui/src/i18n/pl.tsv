@@ -4068,6 +4068,75 @@ curves	Smooth	Wygładź
 	Tight Curl	Ścisły lok
 	Loose Curl	Luźny lok
 	Stylized dabs from a history state	Stylizowane plamy ze stanu historii
-
 # Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
 	Target	Cel
+# Generative Fill and Generative AI Settings (#41)
+	API key	Klucz API
+	Describe what to generate in the selection, or leave it empty to continue the image through it.	Opisz, co ma powstać w zaznaczeniu, albo zostaw puste, aby obraz był w nim kontynuowany.
+	Fill the selection from a prompt	Wypełnij zaznaczenie na podstawie opisu
+	Generative AI	Generatywna AI
+	Generative AI Settings…	Ustawienia generatywnej AI…
+	Generative AI needs the desktop app.	Generatywna AI wymaga aplikacji na komputer.
+	Generative Fill uses {name} ({model}).	Wypełnienie generatywne korzysta z {name} ({model}).
+	Generative Fill…	Wypełnienie generatywne…
+	Get a Gemini API key from Google AI Studio	Uzyskaj klucz API Gemini w Google AI Studio
+	No API key is saved for {provider}.	Brak zapisanego klucza API dla {provider}.
+	Nothing is sent until you run Generative Fill. Each time you do, PhotoCraft sends the selected area and the image around it, a black-and-white mask of the selection, and your prompt to Google (generativelanguage.googleapis.com) with your API key. Google's Gemini API terms and privacy policy apply, and its usage is billed to your key. Results carry Google's SynthID watermark.	Nic nie jest wysyłane, dopóki nie uruchomisz wypełnienia generatywnego. Za każdym razem PhotoCraft wysyła do Google (generativelanguage.googleapis.com) zaznaczony obszar wraz z otaczającym go obrazem, czarno-białą maskę zaznaczenia i Twój opis, razem z Twoim kluczem API. Obowiązują warunki i polityka prywatności Gemini API firmy Google, a korzystanie jest rozliczane na Twój klucz. Wyniki mają znak wodny SynthID firmy Google.
+	Off. Set up a provider with your own API key to use Generative Fill.	Wyłączone. Aby korzystać z wypełnienia generatywnego, skonfiguruj dostawcę z własnym kluczem API.
+	Paste your Gemini API key	Wklej swój klucz API Gemini
+	Prompt (optional)	Opis (opcjonalny)
+	Provider	Dostawca
+	Remove Key	Usuń klucz
+	Saved (paste to replace)	Zapisany (wklej, aby zastąpić)
+	Set up Generative Fill with your own API key	Skonfiguruj wypełnienie generatywne z własnym kluczem API
+	The selected area, the image around it and the prompt are sent to {name} ({model}).	Zaznaczony obszar, otaczający go obraz i opis są wysyłane do {name} ({model}).
+	What is sent, and to whom	Co jest wysyłane i do kogo
+	Your key is kept in {store}, never in PhotoCraft's settings files.	Twój klucz jest przechowywany w {store}, nigdy w plikach ustawień PhotoCraft.
+	the macOS Keychain	pęku kluczy macOS
+	Windows Credential Manager	Menedżerze poświadczeń systemu Windows
+	memory until PhotoCraft quits	pamięci do zamknięcia PhotoCraft
+# Generative Fill variations (#41)
+	Variations	Warianty
+	No prompt: continues the image	Bez opisu: kontynuuje obraz
+	Sends the same area and prompt to {name} again for three more.	Wysyła ten sam obszar i opis ponownie do {name}, aby uzyskać trzy kolejne.
+	Generate More	Generuj więcej
+	Each Generative Fill makes three variations, so it sends three requests, each billed to your key.	Każde Wypełnienie generatywne tworzy trzy warianty, więc wysyła trzy żądania, a każde jest rozliczane z Twojego klucza.
+# Generative Fill: Edit mode and reference images
+	Fill selection	Wypełnij zaznaczenie
+	Edit selection	Edytuj zaznaczenie
+	Generate new content in the selection, or remove what is there	Wygeneruj nową zawartość w zaznaczeniu albo usuń to, co w nim jest
+	Keep what is in the selection and change only what you ask for	Zachowaj zawartość zaznaczenia i zmień tylko to, o co prosisz
+	Describe what to change in the selection: what is there is kept, except what you ask to change (a colour, a text, a material).	Opisz, co zmienić w zaznaczeniu: jego zawartość zostaje zachowana, z wyjątkiem tego, co każesz zmienić (kolor, tekst, materiał).
+	What to change	Co zmienić
+	Empty: removes what is selected and continues the image through it.	Puste: usuwa zaznaczoną zawartość i kontynuuje w niej obraz.
+	Empty: places what the reference images show in the selection.	Puste: umieszcza w zaznaczeniu to, co pokazują obrazy referencyjne.
+	Reference images	Obrazy referencyjne
+	Optional: an object or product to show, or a design, colour or look to match.	Opcjonalnie: obiekt lub produkt do pokazania albo wzór, kolor lub styl do naśladowania.
+	Add Reference…	Dodaj obraz referencyjny…
+	Image File…	Plik obrazu…
+	Open Documents	Otwarte dokumenty
+	The reference images are sent too, at most 1024 pixels on their long side.	Obrazy referencyjne też są wysyłane, najwyżej 1024 piksele na dłuższym boku.
+	In Edit mode the selected area is sent as it is. Reference images you add are sent too.	W trybie Edytuj zaznaczenie zaznaczony obszar jest wysyłany bez zmian. Dodane obrazy referencyjne też są wysyłane.
+# Generative Fill side by side: fills that don't wait for each other
+	Cancel this Generative Fill	Anuluj to wypełnienie generatywne
+	Discard	Odrzuć
+	Each area becomes its own Generative Fill and layer, generated side by side; each sends its own requests.	Każdy obszar staje się osobnym wypełnieniem generatywnym z własną warstwą, generowanym równolegle; każdy wysyła własne żądania.
+	Failed: {name}	Niepowodzenie: {name}
+	Generated {name}	Wygenerowano: {name}
+	Generating	Generowanie
+	Generating: {name}	Generowanie: {name}
+	Generative Fill	Wypełnienie generatywne
+	Generative Fill failed: {error}	Wypełnienie generatywne nie powiodło się: {error}
+	Generative Fills in progress	Trwające wypełnienia generatywne
+	Go to area	Przejdź do obszaru
+	Locked until its layer lands	Zablokowane, dopóki nie pojawi się jego warstwa
+	No prompt: removes what is selected	Bez opisu: usuwa zaznaczoną zawartość
+	The selection has {n} separate areas, too many to fill one by one (at most {max}): it is filled as one.	Zaznaczenie ma {n} oddzielnych obszarów, za dużo, by wypełniać je po kolei (najwyżej {max}): zostanie wypełnione jako całość.
+	Waiting ({n})	Oczekuje ({n})
+	Waiting: {name}	Oczekuje: {name}
+	Retry	Spróbuj ponownie
+	Failed	Niepowodzenie
+@plural	{n} generating|{n} generating	{n} w toku|{n} w toku|{n} w toku
+@plural	{n} waiting|{n} waiting	{n} oczekuje|{n} oczekują|{n} oczekuje
+@plural	{n} failed|{n} failed	{n} nieudane|{n} nieudane|{n} nieudanych
+@plural	Fill each of the {n} separate areas on its own|Fill each of the {n} separate areas on its own	Wypełnij osobno każdy z {n} oddzielnych obszarów|Wypełnij osobno każdy z {n} oddzielnych obszarów|Wypełnij osobno każdy z {n} oddzielnych obszarów
