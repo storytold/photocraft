@@ -646,21 +646,16 @@ fn fill_alpha_is_the_rendered_fill_alpha_past_the_canvas_too() {
                 }
                 // Past the canvas the fill continues: its coverage as the path defines it there
                 // (an inverted path's is 1, a normal path's 0) with its density applied, times
-                // the paint's alpha — 1 for a pattern, which this crate does not render.
-                let paint_alpha = match fill {
+                // the paint's alpha out there — this gradient's last stop, 0.75; 1 for a pattern,
+                // which this crate does not render.
+                let alpha_out = match fill {
                     Fill::Solid(c) => c.alpha,
-                    Fill::Gradient { .. } => 1.0,
+                    Fill::Gradient { .. } => 0.75,
                     Fill::Pattern { .. } => 1.0,
                 };
-                let far = if matches!(fill, Fill::Gradient { .. }) {
-                    // The gradient's alpha there depends on the frame; just stay in range.
-                    0.5 * paint_alpha
-                } else {
-                    paint_alpha * if inverted { 1.0 } else { 1.0 - density }
-                };
-                let tol = if matches!(fill, Fill::Gradient { .. }) { 0.5 } else { 1e-6 };
+                let far = alpha_out * if inverted { 1.0 } else { 1.0 - density };
                 for v in fill_alpha(&sh, Rect::new(60, 60, 68, 68), canvas) {
-                    assert!((v - far).abs() <= tol, "inverted {inverted} density {density} feather {feather}: {v} past the canvas, want {far}");
+                    assert!((v - far).abs() <= 1.0 / 255.0, "inverted {inverted} density {density} feather {feather}: {v} past the canvas, want {far}");
                 }
             }
         }
