@@ -347,6 +347,15 @@ pub fn ensure_frame(app: &mut PhotocraftApp) {
     crate::crop_mode::sync(app, None);
 }
 
+/// The frame a new crop starts from: the selection's bounds, or the whole canvas.
+fn default_rect(app: &PhotocraftApp) -> Option<[f64; 4]> {
+    let st = app.session.active()?;
+    let canvas = st.doc.bounds();
+    // Computed once per new frame, not per frame drawn.
+    let r = st.doc.selection.as_ref().map(|s| s.content_bounds().intersect(&canvas)).filter(|b| !b.is_empty()).unwrap_or(canvas);
+    (!r.is_empty()).then(|| [f64::from(r.x0), f64::from(r.y0), f64::from(r.x1), f64::from(r.y1)])
+}
+
 fn frame(app: &mut PhotocraftApp) {
     if app.ui.tool != Tool::Crop {
         app.crop.editing = false;
@@ -377,14 +386,8 @@ fn frame(app: &mut PhotocraftApp) {
     if app.ui.crop_rect.is_some() || app.crop.drag.is_some() {
         return;
     }
-    let Some(st) = app.session.active() else { return };
-    let canvas = st.doc.bounds();
-    // Computed once per new frame, not per frame drawn.
-    let r = st.doc.selection.as_ref().map(|s| s.content_bounds().intersect(&canvas)).filter(|b| !b.is_empty()).unwrap_or(canvas);
-    if r.is_empty() {
-        return;
-    }
-    app.ui.crop_rect = Some([f64::from(r.x0), f64::from(r.y0), f64::from(r.x1), f64::from(r.y1)]);
+    let Some(r) = default_rect(app) else { return };
+    app.ui.crop_rect = Some(r);
     app.crop.default_frame = true;
     app.crop.frame_for = key;
     app.crop.editing = false;
@@ -431,6 +434,37 @@ pub fn cancel(app: &mut PhotocraftApp) {
     app.crop.editing = false;
     clear_history(app);
     crate::crop_straighten::reset(app);
+}
+
+/// The frame was drawn, moved, resized or turned since it was last framed by default, so
+/// [`reset`] has something to undo.
+pub fn modified(app: &PhotocraftApp) -> bool {
+    app.ui.tool == Tool::Crop && app.ui.crop_rect.is_some() && app.crop.drag.is_none() && (!app.crop.default_frame || app.ui.crop_angle != 0.0)
+}
+
+/// Reset the crop box (the options bar's Reset): the default frame again, upright, with the
+/// straighten line gone. The tool stays up and the old frame is a box Undo step, unlike
+/// [`cancel`], which drops the box's history.
+pub fn reset(app: &mut PhotocraftApp) {
+    if !modified(app) {
+        return;
+    }
+    let Some(rect) = default_rect(app) else { return };
+    let before = step_of(app);
+    app.ui.crop_rect = Some(rect);
+    app.ui.crop_angle = 0.0;
+    app.crop.default_frame = true;
+    app.crop.frame_for = app.session.active_index().zip(app.session.active()).map(|(i, st)| (i, st.doc.size.width, st.doc.size.height));
+    app.crop.editing = false;
+    app.crop.press_step = None;
+    claim(app);
+    crate::crop_straighten::reset(app);
+    if step_of(app) != before {
+        app.crop.undo.push(before);
+        app.crop.redo.clear();
+    }
+    crate::crop_mode::sync_frame(app);
+    crate::crop_mode::auto_center(app);
 }
 
 /// Drop the box's own Undo/Redo (leaving the tool, cancelling or committing a crop).
