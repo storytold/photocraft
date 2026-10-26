@@ -1192,9 +1192,9 @@ fn effect_shape(layer: &Layer, rect: Rect, cx: &Ctx) -> Vec<f32> {
             && !sh.path.is_empty()
             && !cx.canvas.contains_rect(&rect)
         {
-            // `photocraft-vector`'s coverage, so a density or a feather reads past the canvas
-            // exactly as it does inside it (including a feather's ramp crossing the border).
-            let cov = photocraft_vector::fill_coverage(sh, rect, cx.canvas);
+            // `photocraft-vector`'s fill alpha, so a density, a feather or a translucent paint
+            // reads past the canvas exactly as it does inside it.
+            let cov = photocraft_vector::fill_alpha(sh, rect, cx.canvas);
             let mv = mask_vals(layer, rect, cx);
             let w = rect.width() as usize;
             for y in rect.y0..rect.y1 {

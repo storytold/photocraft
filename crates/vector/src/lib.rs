@@ -678,15 +678,36 @@ pub fn render_shape(shape: &ShapeLayer, format: PixelFormat, clip: Rect) -> Surf
     CompiledShape::new(shape, DEFAULT_TOLERANCE, clip).render(format, clip)
 }
 
-/// The shape's fill coverage over `rect` (row-major, `0..=1`): its path's coverage with the
-/// shape's density and feather applied, as [`render_shape`] gives the fill's alpha. `canvas`
-/// frames a feather's blur; a `rect` reaching past it is blurred with it, so a caller completing
+/// The fill's alpha over `rect` (row-major, `0..=1`): the path's coverage with the shape's
+/// density and feather, times the paint's own alpha — what [`render_shape`] writes for a filled
+/// shape's fill (its stroke apart). `canvas` frames a feather's blur and a gradient that is not
+/// aligned with the layer; a `rect` reaching past it is blurred with it, so a caller completing
 /// a surface that is clipped at the canvas gets the ramp continuing outside instead of the
-/// fill's far value there. Beyond the blurred area samples take that far value — an inverted
-/// path, which fills outside its subpaths, therefore reads as filled past the canvas.
-pub fn fill_coverage(shape: &ShapeLayer, rect: Rect, canvas: Rect) -> Vec<f32> {
+/// fill's far value there. Beyond the blurred area samples take that far coverage — an inverted
+/// path, which fills outside its subpaths, therefore reads as filled past the canvas. A pattern
+/// fill (its pixels live above this crate) counts as opaque.
+pub fn fill_alpha(shape: &ShapeLayer, rect: Rect, canvas: Rect) -> Vec<f32> {
+    let n = rect.width() as usize * rect.height() as usize;
+    let Some(fill) = shape.fill.as_ref() else { return vec![0.0; n] };
+    let (x0, y0, x1, y1) = shape.path.control_bounds().unwrap_or((0.0, 0.0, 0.0, 0.0));
+    let (cx0, cy0, cx1, cy1) = (f64::from(canvas.x0), f64::from(canvas.y0), f64::from(canvas.x1), f64::from(canvas.y1));
+    let paint = Paint::from_fill(fill, (x0, y0, x1, y1), (cx0, cy0, cx1, cy1));
     let area = fill_rasterizer(&shape.path, DEFAULT_TOLERANCE);
-    FillCoverage::new(shape, &area, canvas.union(&rect)).render(rect)
+    let cov = FillCoverage::new(shape, &area, canvas.union(&rect)).render(rect);
+    let w = rect.width() as usize;
+    cov.iter()
+        .enumerate()
+        .map(|(i, c)| {
+            if *c <= 0.0 {
+                return 0.0;
+            }
+            let paint = match paint {
+                Paint::None => 1.0,
+                _ => paint.at((rect.x0 + (i % w) as i32) as f64 + 0.5, (rect.y0 + (i / w) as i32) as f64 + 0.5)[3],
+            };
+            paint * c
+        })
+        .collect()
 }
 
 #[cfg(test)]

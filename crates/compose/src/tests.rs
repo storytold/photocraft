@@ -1386,6 +1386,18 @@ fn inverted_shape_effect_shape_reaches_past_the_canvas() {
         let got = at(&v, -8, -8);
         assert!((got - want).abs() < 1e-3, "density {density}: (-8, -8) = {got}, want {want}");
     }
+    // A translucent fill: the margin is the fill's alpha (paint × coverage), not just the
+    // coverage, or the effect shape would step from 0.5 to 1 at the canvas border.
+    let d = doc_white(200, 200);
+    let mut sh = inverted_shape(1.0, 0.0);
+    sh.fill = Some(Fill::Solid(Color::rgba(0.0, 0.0, 0.0, 0.5)));
+    sh.cache = Some(photocraft_vector::render_shape(&sh, PixelFormat::RGBA8, Rect::new(0, 0, 200, 200)));
+    let l = Layer::new("shape", LayerContent::Shape(sh));
+    let v = layer_shape(&d, &l, region);
+    for (x, y) in [(-16, -16), (-1, 100), (100, -1), (100, 200)] {
+        assert!((at(&v, x, y) - 0.5).abs() < 0.01, "translucent fill: ({x}, {y}) = {}", at(&v, x, y));
+    }
+    assert!((at(&v, 0, 100) - at(&v, -1, 100)).abs() < 0.01, "translucent fill: an edge at the canvas border");
     // A feather whose ramp crosses the canvas border: outside, the margin continues the ramp —
     // neither the clipped path's hard coverage (0) nor the fill's far value (1), which would
     // both put an alpha step on the canvas border.
