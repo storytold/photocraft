@@ -979,17 +979,22 @@ impl ColorMatcher {
     /// Creates a color matcher from selected RGBA colors and an $L_\\infty$ tolerance in $[0, 1]$.
     pub fn new(selected_colors: impl IntoIterator<Item = [f32; 4]>, tol: f32) -> Self {
         let mut has_transparent = false;
+        let mut seen = std::collections::HashSet::new();
         let mut opaque_or_semi = Vec::new();
         for c in selected_colors {
             // A transparent color also stays in the tree: a nearly transparent query is compared
             // by its RGB and alpha like any other.
             has_transparent |= c[3] == 0.0;
-            opaque_or_semi.push(c);
+            let norm = |x: f32| if x == 0.0 { 0.0f32.to_bits() } else { x.to_bits() };
+            let key = [norm(c[0]), norm(c[1]), norm(c[2]), norm(c[3])];
+            if seen.insert(key) {
+                opaque_or_semi.push(c);
+            }
         }
         opaque_or_semi.sort_unstable_by(|a, b| {
             a[0].total_cmp(&b[0]).then_with(|| a[1].total_cmp(&b[1])).then_with(|| a[2].total_cmp(&b[2])).then_with(|| a[3].total_cmp(&b[3]))
         });
-        opaque_or_semi.dedup_by(|a, b| (0..4).all(|c| (a[c] - b[c]).abs() <= 1e-5));
+        opaque_or_semi.dedup_by(|a, b| a == b);
 
         Self { has_transparent, tree: ColorBvh::build(opaque_or_semi), tol: tol.max(0.0) }
     }
@@ -1046,6 +1051,27 @@ mod tests {
         let matcher_faint = ColorMatcher::new([faint], 10.0 / 255.0);
         assert!(matcher_faint.matches([0.0, 0.0, 0.0, 0.0]));
         assert!(!matcher_faint.matches([0.5, 0.0, 0.0, 0.0]));
+    }
+
+    #[test]
+    fn color_matcher_preserves_distinct_faint_32f_colors_at_zero_tolerance() {
+        let zero = [0.0, 0.0, 0.0, 0.0];
+        let faint = [0.0, 0.0, 0.0, 8e-6];
+        let matcher = ColorMatcher::new([zero, faint], 0.0);
+        assert!(matcher.matches(zero));
+        assert!(matcher.matches(faint));
+        assert!(!matcher.matches([0.0, 0.0, 0.0, 2e-5]));
+    }
+
+    #[test]
+    fn color_matcher_coalesces_exact_repeated_colors() {
+        let red = [1.0, 0.0, 0.0, 1.0];
+        let transparent = [0.0, 0.0, 0.0, 0.0];
+        let colors = std::iter::repeat_n(red, 10_000).chain(std::iter::repeat_n(transparent, 10_000));
+        let matcher = ColorMatcher::new(colors, 0.0);
+        assert!(matcher.matches(red));
+        assert!(matcher.matches(transparent));
+        assert!(!matcher.matches([0.0, 1.0, 0.0, 1.0]));
     }
 
     #[test]
