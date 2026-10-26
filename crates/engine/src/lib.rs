@@ -87,6 +87,7 @@ pub mod new_layer;
 pub mod notes_cmds;
 pub mod paint_cmds;
 mod param_check;
+pub mod param_schema;
 mod path_edit_cmds;
 pub mod pattern_cmds;
 pub mod pattern_fill_cmds;
