@@ -459,7 +459,9 @@ pub fn fill_from_desc(key: &[u8; 4], d: &Descriptor) -> Option<Fill> {
     match key {
         b"SoCo" => Some(Fill::Solid(color_from_desc(get_desc(d, "Clr ")?)?)),
         b"GdFl" => {
-            let angle = num(d.get("Angl")).unwrap_or(90.0) as f32;
+            // Photoshop omits `Angl` when the angle is 0° (the noise fills in psd-tools'
+            // gradient-styles.psd have no `Angl` and horizontal pixels); psd-tools reads it as 0.
+            let angle = num(d.get("Angl")).unwrap_or(0.0) as f32;
             let scale = num(d.get("Scl ")).map_or(1.0, |v| v as f32 / 100.0);
             let gradient = get_desc(d, "Grad");
             let raw = gradient.map(|g| gradient_stops_editable(g, gradient_method(d)));
@@ -952,6 +954,31 @@ mod tests {
             let Some(Fill::Gradient { stops, .. }) = fill_from_desc(b"GdFl", &descriptor) else { panic!("variable noise gradient must stay a fill layer") };
             assert_eq!(stops, vec![(0.0, Color::BLACK), (1.0, Color::WHITE)]);
         }
+    }
+
+    /// Photoshop omits `Angl` from a gradient fill at 0°: the five linear noise fills of
+    /// psd-tools' gradient-styles.psd have no `Angl` and store pixels that vary horizontally,
+    /// and psd-tools reads the missing key as 0. PhotoCraft read it as 90 and drew those fills
+    /// vertical whenever they were re-rendered from their parameters.
+    #[test]
+    fn gradient_fill_without_angl_is_horizontal() {
+        use photocraft_color::Color;
+        use photocraft_doc::{Fill, GradientStyle};
+        let (k, mut d) = super::fill_to_desc(&Fill::gradient(vec![(0.0, Color::BLACK), (1.0, Color::WHITE)], 0.0, 1.0, GradientStyle::Linear, false));
+        d.items.retain(|(key, _)| !key.is("Angl"));
+        let Some(Fill::Gradient { angle, .. }) = super::fill_from_desc(&k, &d) else { panic!("gradient fill") };
+        assert_eq!(angle, 0.0);
+    }
+
+    /// Only a missing `Angl` means 0°: an explicit angle (90° here) is read as written.
+    #[test]
+    fn gradient_fill_keeps_an_explicit_angle() {
+        use photocraft_color::Color;
+        use photocraft_doc::{Fill, GradientStyle};
+        let f = Fill::gradient(vec![(0.0, Color::BLACK), (1.0, Color::WHITE)], 90.0, 1.0, GradientStyle::Linear, false);
+        let (k, data) = super::write_fill(&f);
+        let Some(Fill::Gradient { angle, .. }) = super::parse_fill(&k, &data) else { panic!("gradient fill") };
+        assert_eq!(angle, 90.0);
     }
 
     /// psd-tools layers-minimal/gradient-fill.psd ("Color to Transparent", no stored pixels): a
