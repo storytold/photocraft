@@ -547,12 +547,12 @@ impl PhotocraftApp {
         own == path && self.services.file_stamp.as_ref().and_then(|stamp| stamp(path)).is_some_and(|now| now != *then)
     }
 
-    /// TIFF, Targa, DDS or JPEG Options is waiting on an answer before a save is written.
+    /// TIFF, Targa, BMP, DDS or JPEG Options is waiting on an answer before a save is written.
     pub(crate) fn save_options_open(&self) -> bool {
         self.tiff_options.is_some() || self.targa_options.is_some() || self.bmp_options.is_some() || self.dds_options.is_some() || self.jpeg_options.is_some()
     }
 
-    /// Writes a save that waited on a format prompt (Targa, DDS or JPEG Options) once answered:
+    /// Writes a save that waited on a format prompt (Targa, BMP, DDS or JPEG Options) once answered:
     /// journals `step` as its command (`file.saveAs` for Save As, `file.saveACopy` for Save a
     /// Copy, `file.save` for a plain Save), so an action being recorded keeps it with this answer
     /// (#2032, #4373), reports a failure in the status bar, and releases a close prompt waiting on

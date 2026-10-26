@@ -48,7 +48,8 @@ fn save_as_to_a_bmp_asks_for_its_depth() {
     h.run_steps(2);
     assert_eq!(h.state().bmp_options.as_ref().map(|p| (p.bits, p.copy)), Some((BmpBits::Bits24, false)));
     assert!(writes.borrow().is_empty(), "nothing is written before the answer");
-    assert!(h.state_mut().save_as(Some("other.bmp".into())).is_err(), "one save at a time");
+    let busy = h.state_mut().save_as(Some("other.bmp".into())).expect_err("one save at a time");
+    assert!(busy.contains("BMP"), "the message names the open dialog: {busy}");
     h.key_press(Key::Enter);
     h.run_steps(3);
     assert_eq!(writes.borrow().as_slice(), &[("b.bmp".to_string(), asked(Some(24)))]);

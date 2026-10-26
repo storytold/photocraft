@@ -4,7 +4,7 @@ use super::{
 };
 
 /// The error a save gets while another save waits on its format prompt.
-pub(crate) const SAVE_OPTIONS_OPEN: &str = "Answer the TIFF, Targa, DDS or JPEG Options before starting another save";
+pub(crate) const SAVE_OPTIONS_OPEN: &str = "Answer the TIFF, Targa, BMP, DDS or JPEG Options before starting another save";
 
 /// The format answers a save takes instead of asking: the Targa bits per pixel (`"tgaBits"`),
 /// the DDS options (`"ddsCompression"`, `"ddsMipmaps"`) and JPEG Options (`"quality"` 0–12,
