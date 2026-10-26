@@ -114,8 +114,8 @@ pub type ContourPoint = (f32, f32, bool);
 
 /// Built-in contour presets, in the order of Photoshop's default contour picker. Each is Photoshop's
 /// own curve as measured in Photoshop 27.11 (a Satin of each preset against a Linear one, 38
-/// levels per curve, read back through Satin's mirrored lookup — see
-/// `photocraft_compose::effects::satin_lut` — and thinned to within 1 %), joined by straight
+/// levels per curve, read back through a Satin (the measurement assumed a mirrored lookup, see
+/// `photocraft_compose::effects::satin_lut`) and thinned to within 1 %), joined by straight
 /// segments (every inner point a corner). Imported PSD contours keep their own points.
 pub const CONTOURS: &[(&str, &[ContourPoint])] = &[
     ("Linear", &[(0.0, 0.0, false), (1.0, 1.0, false)]),
@@ -1559,21 +1559,21 @@ mod tests {
         assert_eq!(lin.contour, Contour::Linear);
     }
 
+    /// The Gaussian and Cove - Deep presets keep their measured shape.
     #[test]
     fn contour_presets_match_photoshop() {
-        // Photoshop 27.11, measured through Satin: Cone and Cone − Inverted Satins are identical,
-        // and Gaussian reads 0.36 at 0.5 through Satin but 0.64 as the preset curve (glows, gloss).
+        // Measured: Gaussian reads 0.64 at 0.5 as the preset curve (glows, gloss). A Satin applies
+        // the contour to each blurred copy before the difference (measured, `tools/probe.py
+        // satin1`), so its lookup is the preset curve itself.
         let lut = |name: &str| {
             let Some(Contour::Custom { points, corners, .. }) = builtin_contour(name) else { panic!("{name}") };
             photocraft_compose::adjust::contour_curve_lut(&points, &corners)
         };
         let satin = |name: &str| photocraft_compose::effects::satin_lut(&builtin_contour(name).unwrap()).unwrap();
         let at = |l: &[f32], x: f32| l[(x * (l.len() - 1) as f32).round() as usize];
-        let (cone, inverted) = (satin("Cone"), satin("Cone - Inverted"));
-        for x in [0.1, 0.25, 0.5, 0.8] {
-            assert!((at(&cone, x) - at(&inverted, x)).abs() < 0.03, "{x}: {} vs {}", at(&cone, x), at(&inverted, x));
+        for x in [0.1, 0.5, 0.8] {
+            assert!((at(&satin("Gaussian"), x) - at(&lut("Gaussian"), x)).abs() < 1e-6);
         }
-        assert!((at(&satin("Gaussian"), 0.5) - 0.36).abs() < 0.04, "{}", at(&satin("Gaussian"), 0.5));
         assert!((at(&lut("Gaussian"), 0.5) - 0.64).abs() < 0.03, "{}", at(&lut("Gaussian"), 0.5));
         assert!((at(&lut("Cove - Deep"), 0.0) - 0.26).abs() < 0.02, "Cove - Deep starts above zero");
     }

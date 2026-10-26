@@ -304,6 +304,15 @@ pub struct Effects {
     pub reference: Option<(f64, f64)>,
 }
 
+impl Effects {
+    /// The effects that render: enabled ones, minus a Stroke Emboss bevel on a layer with no enabled
+    /// stroke (it embosses the stroke only, so nothing is drawn without one).
+    pub fn active(&self) -> impl Iterator<Item = &Effect> {
+        let stroked = self.items.iter().any(|e| matches!(e, Effect::Stroke(_)) && e.enabled());
+        self.items.iter().filter(move |e| e.enabled() && (stroked || !matches!(e, Effect::BevelEmboss(b) if b.style == BevelStyle::StrokeEmboss)))
+    }
+}
+
 /// Deepest group nesting a document may hold: a layer inside this many nested groups is the
 /// deepest legal one. Everything that walks the layer tree (engine lookups, the layers panel,
 /// PSD export, `.pcraft` save and load) recurses once per level, so deeper trees risk

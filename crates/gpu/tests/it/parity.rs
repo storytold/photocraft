@@ -205,13 +205,46 @@ fn worst_diff(cpu: &[[f32; 4]], gpu: &[[f32; 4]]) -> (f32, usize) {
     worst
 }
 
-/// GPU (whole textures, then pages) vs CPU over `rect`: Err with the worst pixel if over the
-/// tolerance, else the stats of the unpaged render.
+/// The documented CPU-only stacks: a layer with effect noise, Stroke Emboss next to a stroke, or an outside stroke over a
+/// drop shadow or outer glow. The GPU declines these ("uses the CPU path") so the app renders them on the CPU compositor.
+fn is_cpu_only(doc: &Document) -> bool {
+    use photocraft_doc::{BevelStyle, Effect};
+    doc.walk().into_iter().any(|(_, _, layer)| {
+        let fx: Vec<&Effect> = layer.effects.active().collect();
+        let noisy = fx.iter().any(|e| match e {
+            Effect::DropShadow(s) | Effect::InnerShadow(s) => s.noise > 0.0,
+            Effect::OuterGlow(g) | Effect::InnerGlow(g) => g.noise > 0.0,
+            _ => false,
+        });
+        let stroke_emboss = fx.iter().any(|e| matches!(e, Effect::BevelEmboss(b) if b.style == BevelStyle::StrokeEmboss));
+        let outside_stroke = fx.iter().any(|e| matches!(e, Effect::Stroke(st) if photocraft_compose::effects::stroke_widths(st).1 > 0.0));
+        let exterior = fx.iter().any(|e| matches!(e, Effect::DropShadow(_) | Effect::OuterGlow(_)));
+        noisy || stroke_emboss || (outside_stroke && exterior)
+    })
+}
+
+/// GPU (whole textures, then pages) vs CPU over `rect`: Err with the worst pixel if over the tolerance, else the stats of
+/// the unpaged render. A stack the GPU falls back on is an error unless it is one of the documented CPU-only stacks
+/// ([`is_cpu_only`]), and those must be declined: the test fails either way when the expectation and the GPU disagree.
 fn diff_rect(g: &mut Gpu, doc: &Document, rect: Rect, what: &str) -> Result<photocraft_gpu::Stats, String> {
+    if is_cpu_only(doc) {
+        for (label, comp) in [("", &mut g.comp), (" (paged)", &mut g.paged)] {
+            match photocraft_gpu::render_to_vec_stats(comp, &g.device, &g.queue, doc, rect) {
+                Err(e) if e.to_string().contains("uses the CPU path") => {}
+                Err(e) => return Err(format!("{what}{label}: expected the CPU path, got {e}")),
+                Ok(_) => return Err(format!("{what}{label}: a CPU-only stack rendered on the GPU")),
+            }
+        }
+        return Ok(photocraft_gpu::Stats::default());
+    }
     let cpu = photocraft_compose::render(doc, rect);
     let mut first = None;
     for (label, comp) in [("", &mut g.comp), (" (paged)", &mut g.paged)] {
-        let (out, stats) = photocraft_gpu::render_to_vec_stats(comp, &g.device, &g.queue, doc, rect).map_err(|e| format!("{what}{label}: {e}"))?;
+        let (out, stats) = match photocraft_gpu::render_to_vec_stats(comp, &g.device, &g.queue, doc, rect) {
+            Ok(r) => r,
+            // An unexpected fallback is a failure, not a pass: the documented CPU-only stacks are handled above.
+            Err(e) => return Err(format!("{what}{label}: {e}")),
+        };
         let worst = worst_diff(&cpu.px, &out);
         let w = rect.width() as usize;
         let (x, y) = (rect.x0 + (worst.1 % w) as i32, rect.y0 + (worst.1 / w) as i32);
@@ -1542,6 +1575,7 @@ fn stroke(size: f32, position: StrokePosition, paint: FxPaint) -> StrokeFx {
     StrokeFx { common: FxCommon::new(BlendMode::Normal, 0.9), size, position, paint, overprint: false }
 }
 
+/// A small two-tone checker pattern for the pattern cases.
 fn checker_pattern() -> Pattern {
     let mut s = photocraft_raster::Surface::new(PixelFormat::RGBA8);
     s.fill_rect(Rect::new(0, 0, 6, 5), &[0.9, 0.2, 0.1, 1.0]);
@@ -1551,6 +1585,21 @@ fn checker_pattern() -> Pattern {
 }
 
 /// Every effect kind with several option combinations, one effect stack per case.
+/// A chisel bevel whose gloss contour shades flat ground (the foot-fade case of `effects::bevel_foot_k`).
+fn emboss_chisel(style: BevelStyle, technique: BevelTechnique) -> Bevel {
+    let mut b = bevel(style, true, 9.0, 0.0);
+    b.technique = technique;
+    b.depth = 3.0;
+    b.use_global_light = false;
+    b.gloss_contour = Contour::Custom {
+        name: "half".into(),
+        points: vec![Cp { input: 0.0, output: 0.0 }, Cp { input: 0.5, output: 0.87 }, Cp { input: 1.0, output: 1.0 }],
+        corners: vec![],
+    };
+    b
+}
+
+/// Every effect configuration the CPU and GPU compositors must agree on.
 fn effect_cases() -> Vec<(&'static str, Vec<Effect>)> {
     let pat = checker_pattern();
     let pat_paint = FxPaint::Pattern { name: pat.name.clone(), id: pat.id.clone(), scale: 1.0 };
@@ -1748,6 +1797,109 @@ fn effect_cases() -> Vec<(&'static str, Vec<Effect>)> {
                 Effect::ColorOverlay { common: FxCommon::new(BlendMode::Normal, 0.3), color: Color::rgb(1.0, 0.0, 0.0) },
             ],
         ),
+        // Behaviours measured with `tools/probe.py`: emboss / outer bevel foot fade with a
+        // gloss contour and the Chisel Hard / Soft ramps, gradient glows, unaligned and angled radial
+        // gradient strokes, and every effect paint in the special-eight modes acting as Fill.
+        ("emboss chisel gloss foot", vec![Effect::BevelEmboss(emboss_chisel(BevelStyle::Emboss, BevelTechnique::ChiselHard))]),
+        ("pillow chisel soft gloss foot", vec![Effect::BevelEmboss(emboss_chisel(BevelStyle::PillowEmboss, BevelTechnique::ChiselSoft))]),
+        ("outer bevel chisel gloss foot", vec![Effect::BevelEmboss(emboss_chisel(BevelStyle::OuterBevel, BevelTechnique::ChiselHard))]),
+        (
+            "gradient glows",
+            vec![
+                Effect::OuterGlow({
+                    let mut g = glow(FxPaint::Gradient(gradient()), GlowTechnique::Softer, 8.0, 0.2, GlowSource::Edge);
+                    g.range = 0.8;
+                    g
+                }),
+                Effect::InnerGlow(glow(FxPaint::Gradient(gradient()), GlowTechnique::Precise, 6.0, 0.3, GlowSource::Edge)),
+            ],
+        ),
+        (
+            "radial gradient strokes, unaligned and angled",
+            vec![
+                Effect::Stroke(stroke(
+                    4.0,
+                    StrokePosition::Outside,
+                    FxPaint::Gradient(Gradient { style: GradientStyle::Radial, align: false, angle: 35.0, ..gradient() }),
+                )),
+                Effect::Stroke(stroke(5.0, StrokePosition::Inside, FxPaint::Gradient(Gradient { style: GradientStyle::Diamond, angle: -120.0, ..gradient() }))),
+            ],
+        ),
+        (
+            "special-eight modes as Fill",
+            vec![
+                Effect::InnerShadow({
+                    let mut s = shadow(BlendMode::ColorDodge, 0.8, 120.0, 3.0, 6.0, 0.0);
+                    s.common.opacity = 0.6;
+                    s
+                }),
+                Effect::InnerGlow({
+                    let mut g = glow(FxPaint::Color(Color::rgb(0.7, 0.3, 0.2)), GlowTechnique::Softer, 6.0, 0.0, GlowSource::Edge);
+                    g.common = FxCommon::new(BlendMode::VividLight, 0.7);
+                    g
+                }),
+                Effect::Satin(Satin {
+                    common: FxCommon::new(BlendMode::LinearBurn, 0.6),
+                    color: Color::rgb(0.9, 0.4, 0.1),
+                    angle: 60.0,
+                    distance: 5.0,
+                    size: 6.0,
+                    contour: Contour::Linear,
+                    anti_alias: false,
+                    invert: false,
+                }),
+                Effect::ColorOverlay { common: FxCommon::new(BlendMode::LinearLight, 0.5), color: Color::rgb(0.8, 0.2, 0.1) },
+                Effect::Stroke(stroke(3.0, StrokePosition::Inside, FxPaint::Color(Color::rgb(0.1, 0.4, 0.9)))),
+            ],
+        ),
+        // A paint with its own alpha (a gradient with opacity stops) in the special-eight modes: the alpha folds into the
+        // Fill amount on both renderers.
+        (
+            "special-eight modes with translucent gradient paints",
+            vec![
+                Effect::GradientOverlay { common: FxCommon::new(BlendMode::ColorDodge, 0.8), gradient: gradient(), dither: false, interpolation: None },
+                Effect::InnerGlow(glow(FxPaint::Gradient(gradient()), GlowTechnique::Softer, 6.0, 0.0, GlowSource::Edge)),
+                Effect::Stroke(StrokeFx {
+                    common: FxCommon::new(BlendMode::Normal, 0.9),
+                    size: 4.0,
+                    position: StrokePosition::Outside,
+                    paint: FxPaint::Gradient(gradient()),
+                    overprint: false,
+                }),
+            ],
+        ),
+        // The documented CPU-only stacks: `diff_rect` asserts the GPU declines them ("uses the CPU path").
+        (
+            "cpu-only: stroke emboss with a stroke",
+            vec![
+                Effect::BevelEmboss(emboss_chisel(BevelStyle::StrokeEmboss, BevelTechnique::ChiselHard)),
+                Effect::Stroke(stroke(5.0, StrokePosition::Center, FxPaint::Color(Color::rgb(0.1, 0.4, 0.9)))),
+            ],
+        ),
+        (
+            "cpu-only: effect noise",
+            vec![Effect::OuterGlow({
+                let mut g = glow(FxPaint::Color(Color::rgb(1.0, 0.9, 0.2)), GlowTechnique::Softer, 8.0, 0.0, GlowSource::Edge);
+                g.noise = 0.3;
+                g
+            })],
+        ),
+        (
+            "cpu-only: outside stroke over a shadow",
+            vec![
+                Effect::DropShadow(shadow(BlendMode::Multiply, 0.75, 120.0, 6.0, 8.0, 0.0)),
+                Effect::Stroke(stroke(4.0, StrokePosition::Outside, FxPaint::Color(Color::rgb(0.0, 0.0, 0.0)))),
+            ],
+        ),
+        (
+            "multiple instances without exterior effects",
+            vec![
+                Effect::Stroke(stroke(2.0, StrokePosition::Outside, FxPaint::Color(Color::rgb(1.0, 1.0, 1.0)))),
+                Effect::Stroke(stroke(5.0, StrokePosition::Outside, FxPaint::Color(Color::rgb(0.1, 0.1, 0.1)))),
+                Effect::InnerShadow(shadow(BlendMode::Normal, 0.5, 270.0, 8.0, 3.0, 0.0)),
+                Effect::ColorOverlay { common: FxCommon::new(BlendMode::Normal, 0.3), color: Color::rgb(1.0, 0.0, 0.0) },
+            ],
+        ),
         (
             "full stack",
             vec![
@@ -1768,7 +1920,22 @@ fn effect_cases() -> Vec<(&'static str, Vec<Effect>)> {
                 }),
                 Effect::ColorOverlay { common: FxCommon::new(BlendMode::SoftLight, 0.5), color: Color::rgb(0.9, 0.3, 0.2) },
                 Effect::GradientOverlay { common: FxCommon::new(BlendMode::Overlay, 0.4), gradient: gradient(), dither: false, interpolation: None },
-                Effect::Stroke(stroke(3.0, StrokePosition::Outside, FxPaint::Color(Color::rgb(0.0, 0.0, 0.0)))),
+                // Inside: an outside stroke over the shadow and glow is only built on the CPU.
+                Effect::Stroke(stroke(3.0, StrokePosition::Inside, FxPaint::Color(Color::rgb(0.0, 0.0, 0.0)))),
+            ],
+        ),
+        (
+            "overlapping outside strokes replace what they cover",
+            vec![
+                Effect::Stroke(StrokeFx {
+                    common: FxCommon::new(BlendMode::Multiply, 0.6),
+                    ..stroke(3.0, StrokePosition::Outside, FxPaint::Color(Color::rgb(0.9, 0.1, 0.1)))
+                }),
+                Effect::Stroke(stroke(7.0, StrokePosition::Outside, FxPaint::Gradient(gradient()))),
+                Effect::Stroke(StrokeFx {
+                    common: FxCommon::new(BlendMode::Normal, 0.4),
+                    ..stroke(5.0, StrokePosition::Center, FxPaint::Color(Color::rgb(0.1, 0.2, 0.9)))
+                }),
             ],
         ),
     ]
@@ -1783,6 +1950,7 @@ fn fx_check(g: &mut Gpu, doc: &Document, what: &str) -> photocraft_gpu::Stats {
     fx_diff(g, doc, what).unwrap_or_else(|e| panic!("{e}"))
 }
 
+/// Every effect case renders the same on the GPU as on the CPU, at 8 and 16 bits.
 #[test]
 fn layer_effects_every_kind() {
     let Some(mut g) = gpu() else { return };
@@ -1800,6 +1968,50 @@ fn layer_effects_every_kind() {
         }
     }
     assert!(failures.is_empty(), "{} failures:\n{}", failures.len(), failures.join("\n"));
+}
+
+/// Stacks whose maps or paint order only the CPU builds are declined with "uses the CPU path" (so the app renders
+/// them there): an outside stroke over a shadow or glow (it replaces them under its band), Stroke Emboss.
+#[test]
+fn stacks_that_only_the_cpu_builds_are_declined() {
+    let Some(mut g) = gpu() else { return };
+    let cases = [
+        (
+            "outside stroke over a shadow",
+            vec![
+                Effect::DropShadow(shadow(BlendMode::Multiply, 0.75, 120.0, 6.0, 8.0, 0.0)),
+                Effect::Stroke(stroke(4.0, StrokePosition::Outside, FxPaint::Color(Color::rgb(0.0, 0.0, 1.0)))),
+            ],
+        ),
+        (
+            "outside stroke over a glow",
+            vec![
+                Effect::OuterGlow(glow(FxPaint::Color(Color::rgb(1.0, 0.9, 0.2)), GlowTechnique::Softer, 8.0, 0.0, GlowSource::Edge)),
+                Effect::Stroke(stroke(4.0, StrokePosition::Outside, FxPaint::Color(Color::rgb(0.0, 0.0, 1.0)))),
+            ],
+        ),
+        (
+            "stroke emboss",
+            vec![
+                Effect::BevelEmboss(bevel(BevelStyle::StrokeEmboss, true, 5.0, 0.0)),
+                Effect::Stroke(stroke(4.0, StrokePosition::Inside, FxPaint::Color(Color::rgb(0.0, 0.0, 1.0)))),
+            ],
+        ),
+    ];
+    for (name, fx) in cases {
+        let mut d = fx_doc(96, 80, SampleType::U8);
+        let mut l = blob("fx", d.pixel_format(), 46.0, 40.0, 22.0, [0.9, 0.4, 0.2]);
+        l.effects.items = fx;
+        d.layers.push(l);
+        let err = photocraft_gpu::render_to_vec_stats(&mut g.comp, &g.device, &g.queue, &d, d.bounds()).err().map(|e| e.to_string());
+        assert!(err.as_deref().is_some_and(|e| e.contains("uses the CPU path")), "{name}: {err:?}");
+    }
+    // Inside strokes and strokes without a shadow or glow stay on the GPU.
+    let mut d = fx_doc(96, 80, SampleType::U8);
+    let mut l = blob("fx", d.pixel_format(), 46.0, 40.0, 22.0, [0.9, 0.4, 0.2]);
+    l.effects.items = vec![Effect::Stroke(stroke(4.0, StrokePosition::Outside, FxPaint::Color(Color::rgb(0.0, 0.0, 1.0))))];
+    d.layers.push(l);
+    fx_check(&mut g, &d, "outside stroke alone");
 }
 
 #[test]
@@ -2028,6 +2240,7 @@ fn layer_effects_update_incrementally() {
     fx_check(&mut g, &d, "moved and painted");
 }
 
+/// Effects follow a layer that overhangs the canvas edge the same way on both renderers.
 #[test]
 fn layer_effects_move_with_a_layer_overhanging_the_canvas() {
     // A layer the size of the canvas with a drop shadow and a stroke, dragged with the Move tool
@@ -2039,7 +2252,7 @@ fn layer_effects_move_with_a_layer_overhanging_the_canvas() {
     l.surface_mut().unwrap().fill_rect(Rect::new(40, 30, 90, 70), &[0.0, 0.0, 0.0, 0.0]);
     l.effects.items = vec![
         Effect::DropShadow(shadow(BlendMode::Multiply, 0.8, 120.0, 6.0, 5.0, 0.0)),
-        Effect::Stroke(stroke(3.0, StrokePosition::Outside, FxPaint::Color(Color::rgb(1.0, 1.0, 1.0)))),
+        Effect::Stroke(stroke(3.0, StrokePosition::Inside, FxPaint::Color(Color::rgb(1.0, 1.0, 1.0)))),
     ];
     d.layers.push(l);
     let first = fx_check(&mut g, &d, "initial");

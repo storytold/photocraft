@@ -60,6 +60,8 @@ const F_QUANT: u32 = 32768u;    // lerp: A rounded to p0.x steps (adjustment res
 const F_ADD_DIFF: u32 = 16384u;  // lerp: A + (B - C) premultiplied (clips on pass-through groups)
 const F_BLEND_IF: u32 = 524288u; // lerp: B back towards A by the Blend If ranges in p0..p3
 const F_TEXT_GAMMA: u32 = 8192u; // blend / atop / fx merge: type layer, mix coverage at gamma p4.w
+const F_REPLACE: u32 = 4194304u;  // effect paint: an inside stroke replaces the layer under its band (effects::replace_with_stroke)
+const F_FILL: u32 = 2097152u;    // effect paint: the coverage acts as the layer's Fill (bevel highlight / shadow)
 const F_LAYER_SHAPE: u32 = 1048576u; // fx merge: B is the shape; layer = its colour at fill p0.x inside it × its alpha
 
 @group(0) @binding(0) var<uniform> chunk: Chunk;
@@ -806,17 +808,16 @@ fn gradient_t(d: vec2<i32>) -> f32 {
     let dy = f32(d.y) + 0.5 - cy;
     let along = dx * c - dy * s;
     let across = dx * s + dy * c;
-    let len = max(sqrt((c * w) * (c * w) + (s * h) * (s * h)), 1.0) * max(op.p0.y, 1e-3);
     // effects::gradient_t: Linear / Reflected span the bounds' chord along the angle.
     let chord = max(min(w / max(abs(c), 1e-6), h / max(abs(s), 1e-6)), 1.0) * max(op.p0.y, 1e-3);
     // Linear / Reflected sample the pixel's top-left corner (effects::gradient_t).
     let corner = 0.5 * (c - s);
     var t: f32;
     switch i32(op.p0.w) {
-        case 1: { t = sqrt(dx * dx + dy * dy) / (len / 2.0); }                  // Radial
+        case 1: { t = sqrt(dx * dx + dy * dy) / (chord / 2.0); }                // Radial
         case 2: { t = rem_euclid((a - atan2(-dy, dx)) / 6.28318530718, 1.0); }   // Angle
         case 3: { t = abs((along - corner) / (chord / 2.0)); }                  // Reflected
-        case 4: { t = (abs(along) + abs(across)) / (len / 2.0); }               // Diamond
+        case 4: { t = (abs(along) + abs(across)) / (chord / 2.0); }             // Diamond
         default: { t = (along - corner) / chord + 0.5; }                        // Linear
     }
     t = clamp(t, 0.0, 1.0);
@@ -1236,14 +1237,29 @@ fn fs_fxpaint(in: VOut) -> @location(0) vec4<f32> {
     }
     if (i32(op.p2.z) == 4) {
         // effects::paint_glow: the gradient at 1 - strength, opaque from strength 1 / gain (p0.x).
-        let k = min(m * op.p0.x, 1.0) * op.opacity;
+        // p0.x = 0: an inner glow's gradient, opaque over the whole shape.
+        let k = select(min(m * op.p0.x, 1.0), 1.0, op.p0.x <= 0.0) * op.opacity;
         if (k <= 0.0) { return dst; }
         let t = 1.0 - clamp(m, 0.0, 1.0);
         return fx_composite(d, dst, vec4(lut(0, t), lut(1, t), lut(2, t), lut(3, t) * k));
     }
+    if ((op.flags & F_REPLACE) != 0u && op.mode != M_DISSOLVE) {
+        if (m <= 0.0) { return dst; }
+        let c = fx_color(d);
+        let sa = m * c.a * op.opacity;
+        let a = dst.a * (1.0 - m) + sa;
+        if (a <= 0.0) { return vec4(0.0); }
+        return vec4((dst.rgb * dst.a * (1.0 - m) + c.rgb * sa) / a, min(a, 1.0));
+    }
     let k = m * op.opacity;
     if (k <= 0.0) { return dst; }
     let c = fx_color(d);
+    // effects::paint_color_fill: a bevel's highlight / shadow in the special eight blends a colour pulled
+    // toward the mode's neutral by the amount, at full strength (Fill), not at that coverage.
+    if ((op.flags & F_FILL) != 0u && fill_is_special(op.mode)) {
+        // As `effects::paint`: the paint's own alpha folds into the Fill amount, the source itself is opaque.
+        return composite_fill(op.mode, dst, vec4(c.rgb, 1.0), 1.0, k * c.a, false);
+    }
     return fx_composite(d, dst, vec4(c.rgb, c.a * k));
 }
 
@@ -1279,10 +1295,13 @@ fn fs_fxstroke(in: VOut) -> @location(0) vec4<f32> {
             k = k * outline_share(a, lay_a);
         }
     }
-    var cov = k * op.opacity;
+    // effects.rs: a stroke takes its band's coverage whole (it replaces what lies under it) and mixes its colour
+    // in at its opacity; a Dissolve stroke covers each pixel fully or not at all, at that opacity.
+    var cov = k;
+    var mix_op = op.opacity;
     if (op.mode == M_DISSOLVE) {
-        // effects.rs: a Dissolve stroke covers each pixel fully or not at all.
-        cov = select(0.0, 1.0, cov > 0.0 && dissolve_noise(d) < cov);
+        cov = select(0.0, 1.0, cov > 0.0 && dissolve_noise(d) < cov * op.opacity);
+        mix_op = 1.0;
     }
     let share = cov * (1.0 - cover);
     if (op.kind == 1) { return vec4(cover + share, lay_a, 0.0, 0.0); }
@@ -1295,7 +1314,7 @@ fn fs_fxstroke(in: VOut) -> @location(0) vec4<f32> {
             let c = fx_color(d);
             bl = composite(op.mode, base, vec4(c.rgb, c.a), 1.0);
         }
-        acc += share * vec4(bl.rgb * bl.a, bl.a);
+        acc += share * (mix_op * vec4(bl.rgb * bl.a, bl.a) + (1.0 - mix_op) * vec4(base.rgb * base.a, base.a));
     }
     return acc;
 }
@@ -1411,24 +1430,33 @@ fn fs_mblur(in: VOut) -> @location(0) vec4<f32> {
 
 // Precise glow from a distance map (`effects::glow_map`): p0 = (solid, soft). Coverage is 0.5 at
 // the edge falling to 0 at `size + 1` px centre to centre (the field is 0.5 px short of that),
-// solid within the spread / choke.
+// and climbing on towards 1 inside the spread / choke.
 @fragment
 fn fs_mglow(in: VOut) -> @location(0) vec4<f32> {
     let d = textureLoad(tex_a, local(in.pos), 0).r + 0.5;
-    var m = 0.5 * clamp(1.0 - (d - op.p0.x) / op.p0.y, 0.0, 1.0);
-    if (d <= op.p0.x) { m = 1.0; }
+    let m = clamp(0.5 * (1.0 - (d - op.p0.x) / op.p0.y), 0.0, 1.0);
     return mout(m);
 }
 
 // Last step of a coverage map: p0 = (|A - B| (satin), 1 - v (1: before the contour, 2: after it,
-// as a centre-source inner glow), contour (LUT row 0), × shape (`layer_tex`)).
+// as a centre-source inner glow), contour (LUT row 0), × shape (`layer_tex`)); p1.x: A / B first,
+// capped at 1 (bevel Soften, `effects::soften_maps`: the blurred map over the blurred support).
 @fragment
 fn fs_mfinish(in: VOut) -> @location(0) vec4<f32> {
     let p = local(in.pos);
     var v = textureLoad(tex_a, p, 0).r;
-    if (op.p0.x > 0.5) { v = abs(v - textureLoad(tex_b, p, 0).r); }
-    if (op.p0.y > 0.5 && op.p0.y < 1.5) { v = 1.0 - v; }
-    if (op.p0.z > 0.5) { v = lut(0, v); }
+    if (op.p1.x > 0.5) {
+        let k = textureLoad(tex_b, p, 0).r;
+        v = select(0.0, min(v / k, 1.0), k > 1e-4);
+    }
+    if (op.p0.x > 1.5) {
+        // Satin: the contour on each blurred copy, then their difference.
+        v = abs(lut(0, v) - lut(0, textureLoad(tex_b, p, 0).r));
+    } else {
+        if (op.p0.x > 0.5) { v = abs(v - textureLoad(tex_b, p, 0).r); }
+        if (op.p0.y > 0.5 && op.p0.y < 1.5) { v = 1.0 - v; }
+        if (op.p0.z > 0.5) { v = lut(0, v); }
+    }
     if (op.p0.y > 1.5) { v = 1.0 - v; }
     if (op.p0.w > 0.5) { v = v * textureLoad(layer_tex, p, 0).r; }
     return mout(v);
@@ -1460,7 +1488,7 @@ fn fs_mbevelh(in: VOut) -> @location(0) vec4<f32> {
             if (din > 0.0) {
                 h = 0.5 + 0.5 * clamp(din / half, 0.0, 1.0);
             } else {
-                h = 0.5 - 0.5 * clamp(dout / half, 0.0, 1.0);
+                h = 0.5 - 0.5 * clamp(dout / (half + select(1.0, 0.0, soft)), 0.0, 1.0);
             }
         }
         default: {
@@ -1487,7 +1515,9 @@ fn fs_mbevelshade(in: VOut) -> @location(0) vec4<f32> {
     if (op.p1.y > 1.5 || op.p3.x > 0.5) {
         hmax = max(max(hmax, max(ra(p + vec2(1, 0)), ra(p - vec2(1, 0)))), max(ra(p + vec2(0, 1)), ra(p - vec2(0, 1))));
     }
-    let outside = select(0.0, 1.0, s < 1.0 - INSIDE_EPS && hmax > 1e-5);
+    // p3.y: the foot fade of an outer bevel's shading (`effects::bevel_foot_k`), 0 = none.
+    let foot = select(1.0, min(op.p3.y * ra(p), 1.0), op.p3.y > 0.0);
+    let outside = select(0.0, 1.0, s < 1.0 - INSIDE_EPS && hmax > 1e-5) * foot;
     // p1.y: 0 inside (× alpha), 1 under the edge and outside (outer bevel), 2 / 3 emboss / pillow
     // emboss (inside where the shape is, plus the outside half, flipped for pillow, × 1 − alpha).
     if (op.p1.y < 0.5) { return mout(bevel_part(p, op.p1.x, s)); }
@@ -1508,8 +1538,8 @@ fn bevel_part(p: vec2<i32>, depth: f32, region: f32) -> f32 {
     let shade = (n.x * op.p0.x + n.y * op.p0.y + n.z * op.p0.z) / len;
     let se = op.p0.w;
     var k = shade - se;
-    // effects::bevel_maps: the gloss contour maps the shading, a flat face's as the neutral (#7360).
-    if (op.p1.w > 0.5) { k = lut(0, shade) - lut(0, se); }
+    // effects::bevel_maps: the gloss contour maps the shading, split at sin(altitude) (#7360).
+    if (op.p1.w > 0.5) { k = lut(0, shade) - se; }
     var v = 0.0;
     if (op.p1.z > 0.5) {
         if (k <= 0.0) { v = clamp(-k / max(se, 1e-3), 0.0, 1.0) * region; }

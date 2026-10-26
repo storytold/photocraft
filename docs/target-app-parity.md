@@ -275,7 +275,7 @@ just presence.
 
 | Area | Parity | Notes |
 |---|---:|---|
-| Layers, masks, groups, blend modes, smart objects, layer styles | ~92% | Broad + GPU-accelerated; bevel/satin shapes and a few blend edge cases remain |
+| Layers, masks, groups, blend modes, smart objects, layer styles | ~92% | Broad + GPU-accelerated; shadow, glow, satin, stroke and most bevel shapes match the measured target (2026-10-25); effect noise pixels, Outer Bevel Smooth and a few blend edge cases remain |
 | Selections, paths, vector shapes, pen | ~90% | Select menu 100% of items; Select Subject/Sky are heuristic, not ML |
 | Paint / brush engine, retouch (clone, healing) | ~85% | Solid; no Mixer Brush depth, no Content-Aware healing |
 | Adjustments + adjustment layers | ~90% | All kinds present; Camera Raw depth and a few toe-curve models approximate |
@@ -313,7 +313,7 @@ in a handful of wall-clock hours using 8 parallel agents, so wall-clock ≈ agen
 | Milestone | Scope | Agent-hours | Wall-clock |
 |---|---|---:|---:|
 | **To 90% functional** | remaining non-AI/non-video menu items (Variables, Trap, Frame, Migrate, WIA), Camera Raw depth, Vanishing Point UI, selection quality, polish | 60–90 | 10–15 h |
-| **To 95% functional** | the above + PSD oracle 65% → ~90% (bevel/satin shapes, Lab blending, noise-gradient RNG, toe curves), broad UI-parity pass, perf pass | +80–130 | +15–22 h |
+| **To 95% functional** | the above + PSD oracle 65% → ~90% (remaining bevel shapes, Lab blending, noise-gradient RNG, toe curves), broad UI-parity pass, perf pass | +80–130 | +15–22 h |
 | **Video / Timeline subsystem** | frame model, clean-room decode/encode, timeline, animation, Render Video | 50–80 | 10–14 h |
 | **Credible AI tier** | ML Select Subject/Sky, Content-Aware Fill (PatchMatch++), basic generative fill/expand — needs model integration; some features may be infeasible fully clean-room without licensed models | 120–250+ | 25–45 h |
 

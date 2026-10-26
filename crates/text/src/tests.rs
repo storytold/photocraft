@@ -2530,8 +2530,95 @@ fn antialias_modes_change_edge_fringe() {
 
     assert_eq!(none, 0.0, "aliased-off edges are hard");
     assert!(strong > smooth + 1.0, "strong smooths more than smooth: {strong} vs {smooth}");
-    assert!(smooth > sharp + 0.5, "sharp thins the fringe vs smooth: {sharp} vs {smooth}");
     assert!(sharp > 0.0);
+}
+
+/// Glyph origins round in device space: with a scaled draw transform the left edge of every 'l' still has at most a few
+/// distinct coverages (the correction must not be scaled again, which would leave the origins off the grid).
+#[test]
+fn glyph_origins_round_after_the_draw_transform() {
+    use photocraft_doc::text::AntiAlias;
+    let mut e = TextEngine::new();
+    let layer = TextLayer { antialias: AntiAlias::Smooth, transform: Affine::scale(2.0), ..point("llllllllllllllll", 12.0) };
+    let (_, r) = e.render(&layer, 72.0, PixelFormat::RGBA8);
+    let n = r.surface.channels();
+    let w = r.rect.width() as usize;
+    let px = r.surface.read_region(r.rect);
+    let row = r.rect.height() as usize / 2;
+    let alpha: Vec<f32> = (0..w).map(|x| px[(row * w + x) * n + n - 1]).collect();
+    let mut seen = std::collections::BTreeSet::new();
+    for x in 1..w {
+        if alpha[x - 1] < 0.01 && alpha[x] > 0.01 {
+            seen.insert((alpha[x] * 20.0).round() as i32);
+        }
+    }
+    assert!(seen.len() <= 5, "quarter-pixel origins give at most four distinct edge coverages, got {}", seen.len());
+}
+
+/// Measured (`tools/typo_probe.py`): glyph origins are rounded along x to a per-mode grid: Smooth to a quarter
+/// pixel (mean RMSE over 9 / 13 / 24 / 64 px 2.86 -> 2.32), None to whole pixels with light hinting (14.9 -> 8.1), Sharp
+/// and Crisp to 1/4, 1/2 and 1 px as the size grows (Crisp 4.74 -> 2.38, Sharp 6.65 -> 4.13), Strong not at all.
+#[test]
+fn glyph_origins_follow_each_modes_grid() {
+    use crate::render::glyph_grid;
+    use photocraft_doc::text::AntiAlias;
+    assert_eq!(glyph_grid(AntiAlias::Smooth, 24.0), (0.25, false));
+    assert_eq!(glyph_grid(AntiAlias::None, 13.0), (1.0, true));
+    assert_eq!(glyph_grid(AntiAlias::Strong, 24.0), (0.0, false));
+    for (size, quantum) in [(9.0, 0.25), (16.0, 0.25), (24.0, 0.5), (32.0, 0.5), (64.0, 1.0)] {
+        assert_eq!(glyph_grid(AntiAlias::Crisp, size).0, quantum, "crisp {size}");
+        assert_eq!(glyph_grid(AntiAlias::Sharp, size).0, quantum, "sharp {size}");
+    }
+    assert!(glyph_grid(AntiAlias::Sharp, 24.0).1 && !glyph_grid(AntiAlias::Sharp, 64.0).1, "hinted up to 32 px only");
+
+    // The raster shows it: the left edge of every 'l' in a row of them has one of a few coverages when the origins are
+    // rounded to a quarter pixel, and many when they are not.
+    let edge_coverages = |mode: AntiAlias| {
+        let mut e = TextEngine::new();
+        let layer = TextLayer { antialias: mode, ..point("llllllllllllllll", 24.0) };
+        let (_, r) = e.render(&layer, 72.0, PixelFormat::RGBA8);
+        let n = r.surface.channels();
+        let w = r.rect.width() as usize;
+        let px = r.surface.read_region(r.rect);
+        let row = r.rect.height() as usize / 2;
+        let alpha: Vec<f32> = (0..w).map(|x| px[(row * w + x) * n + n - 1]).collect();
+        let mut seen = std::collections::BTreeSet::new();
+        for x in 1..w {
+            if alpha[x - 1] < 0.01 && alpha[x] > 0.01 {
+                seen.insert((alpha[x] * 20.0).round() as i32);
+            }
+        }
+        seen.len()
+    };
+    let (smooth, strong) = (edge_coverages(AntiAlias::Smooth), edge_coverages(AntiAlias::Strong));
+    assert!(smooth <= 5, "quarter-pixel origins give at most four distinct edge coverages, got {smooth}");
+    assert!(strong > smooth, "unrounded origins give more: {strong} vs {smooth}");
+}
+
+/// Measured (`tools/typo_probe.py`: Montserrat, Roboto and Lato, black on transparent): the total ink of the
+/// anti-alias modes relative to Smooth's is Crisp 0.99, Sharp 1.22 and Strong 1.28 at 13 px (Sharp 1.40 and Strong
+/// 1.42 at 9 px, both about 1.0 to 1.06 at 64 px). The old curves drew Sharp at 0.53 of the measured ink at 13 px.
+#[test]
+fn antialias_modes_carry_the_measured_ink() {
+    use photocraft_doc::text::AntiAlias;
+
+    let ink = |mode: AntiAlias, size: f32| {
+        let mut e = TextEngine::new();
+        let layer = TextLayer { antialias: mode, ..point("Hamburgefonstiv AV To Wa fi", size) };
+        let (_, r) = e.render(&layer, 72.0, PixelFormat::RGBA8);
+        let n = r.surface.channels();
+        r.surface.read_region(r.rect).chunks_exact(n).map(|p| f64::from(p[n - 1])).sum::<f64>()
+    };
+    for size in [13.0f32, 24.0] {
+        let smooth = ink(AntiAlias::Smooth, size);
+        let (crisp, sharp, strong) = (ink(AntiAlias::Crisp, size) / smooth, ink(AntiAlias::Sharp, size) / smooth, ink(AntiAlias::Strong, size) / smooth);
+        assert!((crisp - 0.99).abs() < 0.03, "{size} px: crisp {crisp}");
+        assert!(sharp > 1.0 && sharp < strong, "{size} px: sharp {sharp} vs strong {strong}");
+        let (want_sharp, want_strong) = if size < 20.0 { (1.22, 1.28) } else { (1.02, 1.16) };
+        // Sharp is also hinted and snapped here, so it lands near, not on, the heavier measured small-size ink (the probe fonts give 1.11 at 13 px).
+        assert!((sharp - want_sharp).abs() < 0.25, "{size} px: sharp {sharp} vs reference {want_sharp}");
+        assert!((strong - want_strong).abs() < 0.12, "{size} px: strong {strong} vs reference {want_strong}");
+    }
 }
 
 /// Type on a path (#218): along a vertical line the type runs top to bottom with its glyphs
@@ -3107,7 +3194,7 @@ fn per_colour_passes_match_full_size_passes() {
                 px.chunks_exact(ch).flat_map(|p| p[..ch - 1].iter().map(|c| c * p[ch - 1]).chain([p[ch - 1]]).collect::<Vec<_>>()).collect::<Vec<_>>()
             };
             let worst = shown(&a).iter().zip(&shown(&b)).map(|(x, y)| (x - y).abs()).fold(0.0f32, f32::max);
-            assert!(worst <= 1.0 / 255.0, "case {k} {format:?}: largest difference {worst}");
+            assert!(worst <= 1.0 / 255.0 + 1e-6, "case {k} {format:?}: largest difference {worst}");
         }
     }
 }

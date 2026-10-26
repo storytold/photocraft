@@ -997,14 +997,8 @@ impl Compositor {
     /// How far beyond a page cell the effect maps of `f` must be computed to be exact in it.
     fn fx_apron(doc: &Document, f: &plan::FxLayer<'_>) -> i32 {
         let vector_shape = matches!(f.layer.content, LayerContent::Shape(_)) && photocraft_compose::effect_outline(f.layer).is_none();
-        let progs: Vec<fx::MapProgram> = f
-            .layer
-            .effects
-            .items
-            .iter()
-            .filter(|e| e.enabled())
-            .map(|e| fx::program_with(e, &doc.global_light, vector_shape, &doc.patterns, (0.0, 0.0)))
-            .collect();
+        let progs: Vec<fx::MapProgram> =
+            f.layer.effects.active().map(|e| fx::program_with(e, &doc.global_light, vector_shape, &doc.patterns, (0.0, 0.0))).collect();
         let want = field_reaches(&progs);
         // Distance fields are exact one pixel inside the window they are computed from.
         progs.iter().map(|p| p.reach(&|k| want.get(&k).copied().unwrap_or(0))).max().unwrap_or(0).saturating_add(2)
@@ -1023,7 +1017,15 @@ impl Compositor {
                     return Err(Unsupported(format!("effects of `{}` reach too far to build per page", f.layer.name)));
                 }
             }
-            for e in f.layer.effects.items.iter().filter(|e| e.enabled()) {
+            // An outside stroke replaces the shadow or glow under it (`effects::composite_with_effects`), which
+            // needs the bare backdrop the exterior effects were painted over: CPU path.
+            let outside_stroke =
+                f.layer.effects.active().any(|e| matches!(e, photocraft_doc::Effect::Stroke(st) if photocraft_compose::effects::stroke_widths(st).1 > 0.0));
+            let exterior = f.layer.effects.active().any(|e| matches!(e, photocraft_doc::Effect::DropShadow(_) | photocraft_doc::Effect::OuterGlow(_)));
+            if outside_stroke && exterior {
+                return Err(Unsupported(format!("outside stroke over a shadow or glow on `{}` uses the CPU path", f.layer.name)));
+            }
+            for e in f.layer.effects.active() {
                 // Effect noise is speckled in the CPU maps; keep CPU and GPU identical by
                 // rendering noise-carrying effects on the CPU path.
                 let noisy = match e {
@@ -1033,6 +1035,10 @@ impl Compositor {
                 };
                 if noisy {
                     return Err(Unsupported(format!("effect noise on `{}` uses the CPU path", f.layer.name)));
+                }
+                // Stroke Emboss bevels the stroke's band (`effects::stroke_emboss_maps`), built on the CPU.
+                if matches!(e, photocraft_doc::Effect::BevelEmboss(b) if b.style == photocraft_doc::BevelStyle::StrokeEmboss) {
+                    return Err(Unsupported(format!("stroke emboss on `{}` uses the CPU path", f.layer.name)));
                 }
                 for s in fx::program_with(e, &doc.global_light, false, &doc.patterns, (0.0, 0.0)).stages {
                     if s.lut.as_ref().is_some_and(|l| l.len() > 4096) {
@@ -2182,8 +2188,7 @@ impl Compositor {
         // Filled shapes stroke their outline (the effect shape); others estimate it.
         let vector_shape = matches!(layer.content, LayerContent::Shape(_)) && photocraft_compose::effect_outline(layer).is_none();
         let anchor = layer.effects.reference.unwrap_or((f64::from(f.bounds.x0), f64::from(f.bounds.y0)));
-        let progs: Vec<fx::MapProgram> =
-            layer.effects.items.iter().filter(|e| e.enabled()).map(|e| fx::program_with(e, &doc.global_light, vector_shape, &doc.patterns, anchor)).collect();
+        let progs: Vec<fx::MapProgram> = layer.effects.active().map(|e| fx::program_with(e, &doc.global_light, vector_shape, &doc.patterns, anchor)).collect();
         let want = field_reaches(&progs);
         e.fields.retain(|k, _| want.contains_key(k));
         // Each field to recompute: over which rectangle, exact up to which reach.

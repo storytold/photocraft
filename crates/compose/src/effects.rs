@@ -46,7 +46,7 @@ pub fn spans_frame(layer: &Layer) -> bool {
     let unanchored = layer.effects.reference.is_none();
     let pattern = |p: &FxPaint| unanchored && matches!(p, FxPaint::Pattern { .. });
     has_effects(layer)
-        && layer.effects.items.iter().filter(|e| e.enabled()).any(|e| match e {
+        && layer.effects.active().any(|e| match e {
             Effect::GradientOverlay { .. } => true,
             Effect::PatternOverlay { link, .. } => *link && unanchored,
             Effect::Stroke(s) => matches!(s.paint, FxPaint::Gradient(_)) || pattern(&s.paint),
@@ -59,7 +59,7 @@ pub fn spans_frame(layer: &Layer) -> bool {
 /// Pixels an effect stack can reach beyond the layer's shape.
 pub fn margin(layer: &Layer) -> i32 {
     let mut m = 0.0f32;
-    for e in layer.effects.items.iter().filter(|e| e.enabled()) {
+    for e in layer.effects.active() {
         let r = match e {
             Effect::DropShadow(s) | Effect::InnerShadow(s) => s.distance + s.size,
             Effect::OuterGlow(g) | Effect::InnerGlow(g) => g.size,
@@ -90,13 +90,13 @@ pub const MAX_REACH: f32 = 512.0;
 /// Dissolve is not local for the same reason: it turns any coverage above zero into a chance of
 /// a full pixel.
 pub(crate) fn maps_are_local(layer: &Layer) -> bool {
-    layer.effects.items.iter().filter(|e| e.enabled()).all(|e| {
+    layer.effects.active().all(|e| {
         !dissolves(e)
             && match e {
                 Effect::Stroke(s) => !matches!(s.paint, FxPaint::Gradient(_)),
                 Effect::DropShadow(s) | Effect::InnerShadow(s) => s.noise <= 0.0,
                 Effect::OuterGlow(g) | Effect::InnerGlow(g) => g.technique != GlowTechnique::Precise && g.noise <= 0.0,
-                Effect::BevelEmboss(b) => b.technique == BevelTechnique::Smooth,
+                Effect::BevelEmboss(b) => b.technique == BevelTechnique::Smooth && b.style != BevelStyle::StrokeEmboss,
                 _ => true,
             }
     })
@@ -923,6 +923,7 @@ fn dilate(s: &Map, r: f32) -> Map {
     out
 }
 
+/// The contour as a coverage lookup table (`None` for Linear, which changes nothing).
 fn contour_lut(c: &Contour) -> Option<Vec<f32>> {
     match c {
         Contour::Linear => None,
@@ -930,14 +931,11 @@ fn contour_lut(c: &Contour) -> Option<Vec<f32>> {
     }
 }
 
-/// Satin's coverage transfer: the contour read from its far end, `|c(1 − v) − c(1)|`. Measured in
-/// Photoshop 27.11: Cone and Cone − Inverted Satins are identical, and a Gaussian Satin runs under
-/// the diagonal (0.36 at 0.5) while the same Gaussian on a glow or gloss runs over it (0.65).
-/// `None` = identity.
+/// Satin's contour: applied to each of the two blurred copies before they are subtracted,
+/// `|c(a) - c(b)|` (measured, `tools/probe.py satin1`: a Cone satin of a wide shape is flat zero
+/// because `a + b = 1` there, which no transfer of `|a - b|` gives). `None` = identity.
 pub fn satin_lut(c: &Contour) -> Option<Vec<f32>> {
-    let lut = contour_lut(c)?;
-    let end = lut.last().copied().unwrap_or(1.0);
-    Some(lut.iter().rev().map(|v| (v - end).abs()).collect())
+    contour_lut(c)
 }
 
 /// Interpolated lookup in a 0..=1 table (as the GPU's `lut()`).
@@ -973,6 +971,26 @@ pub fn ranged_lut(contour: &Contour, range: f32) -> Option<Vec<f32>> {
     )
 }
 
+/// An outer effect's (drop shadow, outer glow) coverage is capped at `FRINGE_SLOPE × v` of the
+/// blurred coverage `v`, whatever the contour: Cone - Inverted (1 at 0) paints nothing where `v` is 0
+/// and ramps up at 8.5 × v until it meets the contour (v ≈ 0.09). The same for a shadow and a glow
+/// (size 40, spread 0 and 50 %; `tools/probe.py shadow`, whole-image RMSE 37.8 → 2.2).
+/// Contours that rise slower than that (Linear, Cone, Ring, Half Round) are not affected.
+const FRINGE_SLOPE: f32 = 8.5;
+
+/// An outer effect's coverage LUT (`lut`, indexed by `v`; `None` = identity) with the cap baked in.
+pub fn outer_fringe_lut(lut: Option<Vec<f32>>) -> Option<Vec<f32>> {
+    // Only a contour that starts above zero is capped: Cone, Ring and Half Round at Range 25 % run steeper than
+    // 8.5 v and they are not capped (`tools/probe.py glowrange`: its Cone glow is the contour of the ranged coverage).
+    match lut {
+        Some(l) if l.first().is_some_and(|c| *c > 0.01) => {
+            let n = (l.len().max(2) - 1) as f32;
+            Some(l.iter().enumerate().map(|(k, c)| c.min(FRINGE_SLOPE * k as f32 / n)).collect())
+        }
+        other => other,
+    }
+}
+
 /// The bevel Contour element's height transfer: the contour alone. Unlike a glow's, its Range is
 /// not a `v / range` stretch: that flattened a Linear contour at the default 50 % to a bevel half
 /// as wide as Photoshop's (a real 18 px smooth inner bevel at 136 % depth: top-edge highlight gone
@@ -1001,30 +1019,32 @@ pub fn hash_noise(x: i64, y: i64) -> f32 {
     (h & 0xffff) as f32 / 65536.0
 }
 
-/// Effect noise (Photoshop's Noise slider): monochrome speckle in the coverage,
-/// applied after the contour. `amount` is 0..=1; 0 leaves the map untouched. The speckle is
-/// scaled by the coverage, so it fades out with the effect instead of lighting up the blur's
-/// near-zero tail out to the edge of its rectangular reach (#7833).
-fn noise(m: &mut Map, amount: f32, x0: i32, y0: i32) {
+/// Effect noise (the Noise slider): monochrome speckle added to the coverage, applied after
+/// the contour. `amount` is 0..=1; 0 leaves the map untouched. Measured
+/// (`tools/probe.py noiseflat`, `noisepos`): `v' = clip(v + a (2u - 1))` with `u` uniform in 0..1, white
+/// (no correlation between pixels) and a function of the canvas position alone: the same for every
+/// effect, order and layer size, and identical on every render. Its amplitude `a` is the amount, but
+/// at most `FRINGE_SLOPE × v`, so the speckle fades out with the effect instead of lighting up the
+/// blur's near-zero tail out to the edge of its reach (#7833). The original generator was not recovered
+/// (its bytes show no simple LCG, tiling or lane structure), so `u` here is [`hash_noise`]: the statistics match,
+/// individual pixels cannot.
+///
+/// The cap is `FRINGE_SLOPE × coverage before the contour` (`pre`), not × the contoured value: Photoshop caps by
+/// the blurred coverage, so a non-monotonic contour (ring, sawtooth) does not inflate the speckle
+fn noise(m: &mut Map, pre: &Map, amount: f32, x0: i32, y0: i32) {
     if !amount.is_finite() || amount <= 0.0 {
         return;
     }
     for y in 0..m.h {
         for x in 0..m.w {
-            let v = &mut m.v[y * m.w + x];
+            let i = y * m.w + x;
+            let v = &mut m.v[i];
             if *v <= 0.0 {
                 continue;
             }
             let n = hash_noise(i64::from(x0 + x as i32), i64::from(y0 + y as i32));
-            *v = (*v * (1.0 + (n - 0.5) * 2.0 * amount)).clamp(0.0, 1.0);
+            *v = (*v + amount.min(FRINGE_SLOPE * pre.v[i]) * (2.0 * n - 1.0)).clamp(0.0, 1.0);
         }
-    }
-}
-
-fn apply_contour(m: Map, c: &Contour) -> Map {
-    match contour_lut(c) {
-        None => m,
-        Some(l) => m.map(|v| lut_at(&l, v)),
     }
 }
 
@@ -1067,8 +1087,9 @@ pub fn gradient_t(style: GradientStyle, angle: f32, scale: f32, reverse: bool, o
     // Distance along the gradient direction (y axis points down).
     let along = dx * c - dy * s;
     let across = dx * s + dy * c;
-    let (chord, len) = gradient_units(angle, w, h);
-    let (chord, len) = (chord * scale.max(1e-3), len * scale.max(1e-3));
+    // Radial and Diamond reach half the chord too, not the ellipse norm: at 35° on a square the measured radius
+    // grows as 1 / cos (measured, `tools/probe.py sangle`, `gfangle`).
+    let chord = gradient_units(angle, w, h).0 * scale.max(1e-3);
     // Linear / Reflected sample the pixel's top-left corner, half a pixel before its centre
     // (with the whole-pixel end points of `fill_layout`: layer_effects' overlay 5.8 → 1.8/255,
     // shape-fx2 2.8 → 1.1/255, gradient-fill.psd 1.9 → 0.5/255).
@@ -1076,8 +1097,8 @@ pub fn gradient_t(style: GradientStyle, angle: f32, scale: f32, reverse: bool, o
     let mut t = match style {
         GradientStyle::Linear => (along - corner) / chord + 0.5,
         GradientStyle::Reflected => ((along - corner) / (chord / 2.0)).abs(),
-        GradientStyle::Radial => (dx * dx + dy * dy).sqrt() / (len / 2.0),
-        GradientStyle::Diamond => (along.abs() + across.abs()) / (len / 2.0),
+        GradientStyle::Radial => (dx * dx + dy * dy).sqrt() / (chord / 2.0),
+        GradientStyle::Diamond => (along.abs() + across.abs()) / (chord / 2.0),
         // Clockwise sweep starting at the gradient angle.
         GradientStyle::Angle => ((angle.to_radians() - (-dy).atan2(dx)) / std::f32::consts::TAU).rem_euclid(1.0),
     };
@@ -1142,6 +1163,12 @@ fn paint(dst: &mut Buffer, m: &Map, color: impl Fn(usize) -> [f32; 4], blend: Bl
             }
             continue;
         }
+        if psblend::fill_is_special(blend) {
+            // The coverage acts as the layer's Fill (measured on bevels, glows, satin and overlays):
+            // the special-eight modes blend a colour pulled toward their neutral at full strength.
+            *p = psblend::composite_fill(blend, *p, [c[0], c[1], c[2], 1.0], 1.0, c[3] * a, 1.0);
+            continue;
+        }
         *p = psblend::composite(blend, *p, [c[0], c[1], c[2], c[3] * a], 1.0);
     }
 }
@@ -1177,6 +1204,7 @@ pub fn spread_split(size: f32, spread: f32) -> (f32, f32) {
     ((size * spread).round(), size * (1.0 - spread))
 }
 
+/// A drop or inner shadow's coverage map: the shape shifted by the angle and distance, spread, blurred, contoured (outer shadows keep the fringe cap) and speckled by noise.
 fn shadow_map(shape: &Map, s: &Shadow, light: &GlobalLight, inner: bool, origin: (i32, i32)) -> Map {
     let angle = if s.use_global_light { light.angle } else { s.angle };
     let (dx, dy) = offset(angle, s.distance);
@@ -1185,8 +1213,10 @@ fn shadow_map(shape: &Map, s: &Shadow, light: &GlobalLight, inner: bool, origin:
     let (r, bw) = spread_split(s.size, s.spread);
     m = dilate(&m, r);
     blur(&mut m, bw);
-    let mut m = apply_contour(m, &s.contour);
-    noise(&mut m, s.noise, origin.0, origin.1);
+    let lut = contour_lut(&s.contour);
+    let pre = m.clone();
+    let mut m = apply_lut(m, if inner { lut } else { outer_fringe_lut(lut) });
+    noise(&mut m, &pre, s.noise, origin.0, origin.1);
     if inner {
         for (v, a) in m.v.iter_mut().zip(&shape.v) {
             *v *= a;
@@ -1195,6 +1225,7 @@ fn shadow_map(shape: &Map, s: &Shadow, light: &GlobalLight, inner: bool, origin:
     m
 }
 
+/// An outer or inner glow's coverage map from the shape: the technique's falloff, then the contour over the Range, then noise.
 fn glow_map(shape: &Map, g: &Glow, inner: bool, origin: (i32, i32)) -> Map {
     // An inner glow is built from the edge inwards; a centre-source glow is its inverse, taken
     // after the contour and Range (Photoshop 27.11, measured: the centre glow is exactly
@@ -1213,7 +1244,10 @@ fn glow_map(shape: &Map, g: &Glow, inner: bool, origin: (i32, i32)) -> Map {
             let mut m = Map::new(shape.w, shape.h, 0.0);
             for (o, d) in m.v.iter_mut().zip(d) {
                 let d = d + 0.5;
-                *o = if d <= solid { 1.0 } else { 0.5 * (1.0 - (d - solid) / soft).clamp(0.0, 1.0) };
+                // The ramp keeps climbing inside the spread (no plateau): 0.5 at `solid`, 1 at `solid - soft / 2`
+                // (measured, precise outer glow spread 50 % at Range 100 %: 0.977 at the edge of a
+                // size 40 glow; with the default Range 50 % that is the same solid colour).
+                *o = (0.5 * (1.0 - (d - solid) / soft)).clamp(0.0, 1.0);
             }
             m
         }
@@ -1224,11 +1258,12 @@ fn glow_map(shape: &Map, g: &Glow, inner: bool, origin: (i32, i32)) -> Map {
             m
         }
     };
-    m = apply_lut(m, glow_lut(g));
+    let pre = m.clone();
+    m = apply_lut(m, if inner { glow_lut(g) } else { outer_fringe_lut(glow_lut(g)) });
     if inner && g.source == GlowSource::Center {
         m = m.map(|v| 1.0 - v);
     }
-    noise(&mut m, g.noise, origin.0, origin.1);
+    noise(&mut m, &pre, g.noise, origin.0, origin.1);
     if inner {
         for (v, a) in m.v.iter_mut().zip(&shape.v) {
             *v *= a;
@@ -1265,6 +1300,7 @@ fn paint_pattern(
     );
 }
 
+/// Paints `m` through an effect paint (colour, gradient or pattern) into `dst` with the effect's blend mode and opacity.
 #[allow(clippy::too_many_arguments)]
 fn paint_fx(
     dst: &mut Buffer,
@@ -1300,25 +1336,29 @@ fn paint_fx(
     }
 }
 
-/// The opacity gain of a gradient glow: it is opaque from strength `range²` on (see [`paint_glow`]).
+/// The opacity gain of a gradient glow's (ranged) strength: its alpha is the raw coverage `v` × `FRINGE_SLOPE`
+/// whatever the Range (measured, `tools/probe.py gglow`: the alpha ramp is the same at Range 50 and
+/// 100 %), and the strength is `v / range`, so the gain is `FRINGE_SLOPE × range` (4.25 at the default 50 %).
 pub fn glow_gradient_gain(range: f32) -> f32 {
     let r = if range.is_finite() { range.clamp(0.01, 1.0) } else { 1.0 };
-    1.0 / (r * r)
+    FRINGE_SLOPE * r
 }
 
 /// A glow's paint over its map `m`. A gradient runs along the glow rather than across the
 /// canvas: Photoshop colours the glow where its (ranged, contoured) strength is `v` with the
-/// gradient at `1 - v`, so the first stop hugs the edge, and the glow is opaque from `v = range²`
+/// gradient at `1 - v`, so the first stop hugs the edge, and the glow is opaque from `v = 1 / FRINGE_SLOPE`
 /// on (photoshop corpus outer-glow-gradient.psd: 1.4/255 mean, against bands across the canvas;
 /// psd-tools layer_params.psd). Glows have no gradient angle, style or Reverse.
 #[allow(clippy::too_many_arguments)]
-fn paint_glow(dst: &mut Buffer, m: &Map, g: &Glow, shape_bounds: Rect, anchor: (f64, f64), big: Rect, patterns: &PreparedPatterns<'_>) {
+fn paint_glow(dst: &mut Buffer, m: &Map, g: &Glow, inner: bool, shape_bounds: Rect, anchor: (f64, f64), big: Rect, patterns: &PreparedPatterns<'_>) {
     let FxPaint::Gradient(gradient) = &g.paint else {
         return paint_fx(dst, m, &g.paint, shape_bounds, anchor, big, g.common.blend, g.common.opacity, patterns);
     };
     let prepared = PreparedGradient::new(gradient);
+    // An inner glow's gradient covers the whole shape (its own opacity stops decide;
+    // `tools/probe.py gglow`); an outer one fades in over the outer fringe.
     let gain = glow_gradient_gain(g.range);
-    let strength = Map { w: m.w, h: m.h, v: m.v.iter().map(|v| (v * gain).min(1.0)).collect() };
+    let strength = Map { w: m.w, h: m.h, v: m.v.iter().map(|v| if inner { 1.0 } else { (v * gain).min(1.0) }).collect() };
     paint(dst, &strength, |i| prepared.sample(1.0 - m.v.get(i).copied().unwrap_or(0.0).clamp(0.0, 1.0)), g.common.blend, g.common.opacity);
 }
 
@@ -1578,13 +1618,9 @@ fn bevel_height(shape: &Map, b: &Bevel, g: &BevelGeom, tex: &TextureCtx, pattern
                 *o = bevel_chisel_h(g.paint, size, din[i], dout[i], soft);
             }
         });
-        let mut h = Map { w, h: shape.h, v };
-        // Inner and outer Chisel Soft are not blurred in Photoshop (their facets equal Chisel
-        // Hard's across a straight edge); emboss styles keep the blur until measured.
-        if soft && g.paint == BevelPaint::Both {
-            tent(&mut h, g.chisel_soft);
-        }
-        h
+        // Chisel Soft is not blurred in any style (its facets equal Chisel Hard's across a
+        // straight edge; emboss and pillow emboss measured, `tools/probe.py bevstyle`).
+        Map { w, h: shape.h, v }
     };
     // Contour element: the height profile through the contour.
     if let Some(c) = &b.contour {
@@ -1617,10 +1653,33 @@ fn bevel_height(shape: &Map, b: &Bevel, g: &BevelGeom, tex: &TextureCtx, pattern
             },
         );
     }
-    if b.soften >= 1.0 {
-        tent(&mut h, b.soften);
-    }
     h
+}
+
+/// Soften blurs the shaded result, not the height (the target application's documentation: "blurs the shaded results of the
+/// bevel"). Measured on a chisel-bevelled square (Soften 12): the lit facets keep their value right up
+/// to the shape's edge and the step to the flat face is blurred symmetrically around it, where blurring
+/// the height flattened the slope for the first `soften` pixels in from the edge (a bottom facet at 211
+/// on the edge instead of 140). The blur is normalised by the part of the kernel that lies on the
+/// maps' support (inside the shape, or outside it for an outer bevel), so the edge is not dimmed.
+fn soften_maps(maps: Vec<Map>, shape: &Map, paint: BevelPaint, soften: f32) -> Vec<Map> {
+    let support = |s: f32| match paint {
+        BevelPaint::Inner => s.min(1.0),
+        BevelPaint::Outer => f32::from(s < 1.0 - INSIDE_EPS),
+        BevelPaint::Both => 1.0,
+    };
+    let sup: Vec<f32> = shape.v.iter().map(|&s| support(s)).collect();
+    let mut norm = Map { w: shape.w, h: shape.h, v: sup.clone() };
+    tent(&mut norm, soften);
+    maps.into_iter()
+        .map(|mut m| {
+            tent(&mut m, soften);
+            for ((o, k), s) in m.v.iter_mut().zip(&norm.v).zip(&sup) {
+                *o = if *k > 1e-4 { (*o / *k).min(1.0) * s } else { 0.0 };
+            }
+            m
+        })
+        .collect()
 }
 
 /// Where a bevel texture tiles: the maps' rectangle, the document's patterns and the linked
@@ -1629,6 +1688,8 @@ pub struct TextureCtx<'a> {
     pub rect: Rect,
     pub patterns: &'a [Pattern],
     pub anchor: (f64, f64),
+    /// The canvas: the frame of a gradient effect whose "Align with layer" is off.
+    pub canvas: Rect,
 }
 
 /// Chiselled height from the inside / outside distances (keep in sync with `fs_mbevelh`).
@@ -1656,7 +1717,9 @@ pub fn bevel_chisel_h(paint: BevelPaint, size: f32, din: f32, dout: f32, soft: b
         }
         BevelPaint::Both => {
             let half = size / 2.0 + 0.5;
-            if din > 0.0 { 0.5 + 0.5 * (din / half).clamp(0.0, 1.0) } else { 0.5 - 0.5 * (dout / half).clamp(0.0, 1.0) }
+            // Chisel Hard's outer half runs a pixel longer than the inner (reach 1 px further at sizes 4
+            // to 40, `tools/probe.py embsz`); Chisel Soft's stops where the inner one does.
+            if din > 0.0 { 0.5 + 0.5 * (din / half).clamp(0.0, 1.0) } else { 0.5 - 0.5 * (dout / (half + if soft { 0.0 } else { 1.0 })).clamp(0.0, 1.0) }
         }
         BevelPaint::Inner if soft => {
             if din > 0.0 {
@@ -1672,6 +1735,22 @@ pub fn bevel_chisel_h(paint: BevelPaint, size: f32, din: f32, dout: f32, soft: b
                 0.0
             }
         }
+    }
+}
+
+/// How fast an outer bevel's shading fades in at the foot of its ramp, per unit of normalised height
+/// (0 = not at all). With a gloss contour that shades a flat face (`C(sin altitude) != sin altitude`)
+/// The outermost pixels are not painted at full strength: the strength grows
+/// `min(1, K × height)` over about two pixels (chisel, `K = 5` for outer bevels and 10 for the outer
+/// half of emboss styles, whose height only reaches 0.5; measured, `tools/probe.py outerfade`,
+/// `pillowgloss`: the foot of Outer Bevel / Emboss with Half Round, Cone, Gaussian ... glosses). A Linear
+/// gloss leaves a flat face unshaded and shows no fade.
+pub fn bevel_foot_k(paint: BevelPaint, gloss: Option<&[f32]>, se: f32) -> f32 {
+    let flat = gloss.is_some_and(|l| (lut_at(l, se) - se).abs() > 0.01);
+    match (flat, paint) {
+        (true, BevelPaint::Outer) => 5.0,
+        (true, BevelPaint::Both) => 10.0,
+        _ => 0.0,
     }
 }
 
@@ -1696,11 +1775,18 @@ fn bevel_maps(shape: &Map, b: &Bevel, light: &GlobalLight, tex: &TextureCtx, pat
         hmap.get(x, y) > BEVEL_H_EPS || (reach_past && [(1, 0), (-1, 0), (0, 1), (0, -1)].iter().any(|(dx, dy)| hmap.get(x + dx, y + dy) > BEVEL_H_EPS))
     };
     // The gloss contour remaps the shading `n · light` before it splits into highlight (above
-    // what it maps a flat face's `sin(altitude)` to) and shadow. Applied to the highlight and shadow amounts
-    // instead, a contour that starts high (Rolling Slope - Descending) lit every pixel the light
-    // missed, so a bevelled glyph's flat face took the full highlight (#7360) where Photoshop
-    // leaves it at the layer's colour. The Linear contour changes nothing either way.
+    // `sin(altitude)`, the shade of a flat face with no contour) and shadow. Applied to the
+    // highlight and shadow amounts instead, a contour that starts high (Rolling Slope -
+    // Descending) lit every pixel the light missed (#7360). The split stays at `sin(altitude)`:
+    // it is not the contour's value there. Measured with chisel bevels on a
+    // square (four planar facets, 12 contours, altitudes 10, 30, 60 and 80): `u = C(shade)`,
+    // amount `(u - se) / (1 - se)` above `se`, `(u - se) / se` below, within 0.012 of the
+    // amounts measured, where splitting at `C(se)` was off by 0.64 (and by far more at
+    // high altitudes). So a flat face is shaded by `C(se) - se`: a Cone contour paints it fully
+    // lit, and a contour that crosses the diagonal at `se` leaves it neutral. The Linear contour
+    // changes nothing either way.
     let gloss = contour_lut(&b.gloss_contour);
+    let foot_k = bevel_foot_k(g.paint, gloss.as_deref(), se);
     let shade_into = |depth: f32, region_kind: u8| -> (Map, Map) {
         let (mut hi, mut sh) = (Map::new(shape.w, shape.h, 0.0), Map::new(shape.w, shape.h, 0.0));
         // Rows on threads: every pixel reads only `hmap` and `shape`.
@@ -1720,8 +1806,13 @@ fn bevel_maps(shape: &Map, b: &Bevel, light: &GlobalLight, tex: &TextureCtx, pat
                     let n = [-gx, -gy, 1.0];
                     let len = (n[0] * n[0] + n[1] * n[1] + 1.0).sqrt();
                     let shade = (n[0] * light_v[0] + n[1] * light_v[1] + n[2] * light_v[2]) / len;
-                    let region = if region_kind == 0 { shape.v[i] } else { f32::from(shape.v[i] < 1.0 - INSIDE_EPS && on_bevel(x, y)) };
-                    let k = gloss.as_ref().map_or(shade - se, |l| lut_at(l, shade) - lut_at(l, se));
+                    let region = if region_kind == 0 {
+                        shape.v[i]
+                    } else {
+                        let foot = if foot_k > 0.0 { (foot_k * hmap.get(x, y)).min(1.0) } else { 1.0 };
+                        f32::from(shape.v[i] < 1.0 - INSIDE_EPS && on_bevel(x, y)) * foot
+                    };
+                    let k = gloss.as_ref().map_or(shade, |l| lut_at(l, shade)) - se;
                     if k > 0.0 {
                         hi_row[x as usize] = (k / (1.0 - se).max(1e-3)).clamp(0.0, 1.0) * region;
                     } else {
@@ -1757,7 +1848,47 @@ fn bevel_maps(shape: &Map, b: &Bevel, light: &GlobalLight, tex: &TextureCtx, pat
             vec![mix(hi, ho), mix(sh, so)]
         }
     };
+    let maps = if b.soften >= 1.0 { soften_maps(maps, shape, g.paint, b.soften) } else { maps };
     (maps, g.paint)
+}
+
+/// Stroke Emboss: the bevel of the shape that matches the stroke's position, shading only the stroke's
+/// band. Measured (`tools/probe.py strokeemb`, `strokeemb2`: a square with a Stroke
+/// Emboss of size 8 / 16 and strokes of size 6 to 40): an outside stroke is shaded out to `size + 2` px from
+/// the shape's edge like an Outer Bevel, an inside one for `size` px in like an Inner Bevel, and a centre one
+/// `size / 2` px in and `size / 2 + 2` px out like an Emboss; each only within the stroke's own width, and
+/// the fill is never shaded.
+fn stroke_emboss_maps(
+    shape: &Map,
+    b: &Bevel,
+    st: &photocraft_doc::StrokeFx,
+    light: &GlobalLight,
+    tex: &TextureCtx,
+    patterns: &PreparedPatterns<'_>,
+) -> (Vec<Map>, BevelPaint) {
+    let (in_w, out_w) = stroke_widths(st);
+    let style = match st.position {
+        StrokePosition::Outside => BevelStyle::OuterBevel,
+        StrokePosition::Inside => BevelStyle::InnerBevel,
+        StrokePosition::Center => BevelStyle::Emboss,
+    };
+    let as_style = Bevel { style, ..b.clone() };
+    let (mut maps, paint) = bevel_maps(shape, &as_style, light, tex, patterns);
+    let din = if in_w > 0.0 { dist_inside_by(shape, Metric::Chamfer) } else { Vec::new() };
+    let dout = if out_w > 0.0 { dist_outside_by(shape, if stroke_outside_exact(out_w) { Metric::Euclidean } else { Metric::Chamfer }) } else { Vec::new() };
+    for m in &mut maps {
+        for (i, v) in m.v.iter_mut().enumerate() {
+            let a = shape.v[i].clamp(0.0, 1.0);
+            let inner = if in_w > 0.0 { (in_w + 0.5 - din[i]).clamp(0.0, 1.0) } else { 0.0 };
+            let outer = if out_w > 0.0 { (out_w + 0.5 - dout[i]).clamp(0.0, 1.0) } else { 0.0 };
+            *v *= match paint {
+                BevelPaint::Inner => inner,
+                BevelPaint::Outer => outer,
+                BevelPaint::Both => inner * a + outer * (1.0 - a),
+            };
+        }
+    }
+    (maps, paint)
 }
 
 /// Effect maps derived from a layer's shape (its alpha), computed once over the layer's whole
@@ -1782,11 +1913,17 @@ pub struct FxMaps {
     outline: bool,
     /// Frames of gradient strokes by outside width (bits): see [`stroke_frame`].
     frames: Vec<(u32, Rect)>,
+    /// The canvas (`TextureCtx::canvas`).
+    canvas: Rect,
 }
 
 impl FxMaps {
-    /// The frame of a gradient stroke `st` of this layer (see [`stroke_frame`]), if built.
+    /// The frame of a gradient stroke `st` of this layer (see [`stroke_frame`]), if built. A gradient
+    /// with Align with Layer off is laid out over the canvas (measured, `tools/probe.py sgrad`).
     pub fn stroke_frame(&self, st: &photocraft_doc::StrokeFx) -> Option<Rect> {
+        if matches!(&st.paint, FxPaint::Gradient(g) if !g.align) {
+            return Some(self.canvas);
+        }
         self.frames.iter().find(|f| f.0 == stroke_widths(st).1.to_bits()).map(|f| f.1)
     }
 }
@@ -1835,6 +1972,7 @@ pub fn satin_distance(s: &photocraft_doc::effects::Satin) -> f32 {
     s.distance.max(1.0)
 }
 
+/// A satin's coverage map: the contour applied to the shape shifted both ways and blurred, their absolute difference, then Invert.
 fn satin_map(shape: &Map, s: &photocraft_doc::effects::Satin) -> Map {
     let (dx, dy) = offset(s.angle, satin_distance(s));
     let mut a = shape.shifted(dx, dy, 0.0);
@@ -1842,11 +1980,14 @@ fn satin_map(shape: &Map, s: &photocraft_doc::effects::Satin) -> Map {
     // Two box passes of the satin size (fitted: 0.2 % mean error on psd-tools layer_effects).
     tent(&mut a, s.size);
     tent(&mut b, s.size);
+    let lut = satin_lut(&s.contour);
+    let (a, b) = (apply_lut(a, lut.clone()), apply_lut(b, lut));
+    // Invert flips the contoured result: Gaussian, Cone and Ring Inverted satins are exactly one minus
+    // the plain ones (measured, `tools/probe.py satin0`).
     let mut m = Map { w: shape.w, h: shape.h, v: a.v.iter().zip(&b.v).map(|(x, y)| (x - y).abs()).collect() };
     if s.invert {
         m = m.map(|v| 1.0 - v);
     }
-    let mut m = apply_lut(m, satin_lut(&s.contour));
     for (v, a) in m.v.iter_mut().zip(&shape.v) {
         *v *= a;
     }
@@ -1863,7 +2004,7 @@ pub fn build_maps(layer: &Layer, shape: Vec<f32>, rect: Rect, light: &GlobalLigh
 /// [`FxMaps::bytes`] counts): the shape, each effect's maps, and a stroke's distance fields. Kept
 /// next to the builder so the effect cache's estimate (#8330) follows it.
 pub(crate) fn map_count(layer: &Layer) -> usize {
-    let items: Vec<&Effect> = layer.effects.items.iter().filter(|e| e.enabled()).collect();
+    let items: Vec<&Effect> = layer.effects.active().collect();
     let per: usize = items
         .iter()
         .map(|e| match e {
@@ -1882,6 +2023,7 @@ pub(crate) fn map_count(layer: &Layer) -> usize {
     1 + per + stroke + vector_outline
 }
 
+/// [`build_maps`] with the document's patterns already prepared.
 pub(crate) fn build_maps_prepared(
     layer: &Layer,
     shape: Vec<f32>,
@@ -1892,7 +2034,7 @@ pub(crate) fn build_maps_prepared(
 ) -> FxMaps {
     let (w, h) = (rect.width() as usize, rect.height() as usize);
     let shape = Map { w, h, v: shape };
-    let items: Vec<&Effect> = layer.effects.items.iter().filter(|e| e.enabled()).collect();
+    let items: Vec<&Effect> = layer.effects.active().collect();
     let mut bevel_paint = vec![BevelPaint::Inner; items.len()];
     let per: Vec<Vec<Map>> = items
         .iter()
@@ -1904,7 +2046,11 @@ pub(crate) fn build_maps_prepared(
             Effect::InnerGlow(g) => vec![glow_map(&shape, g, true, (rect.x0, rect.y0))],
             Effect::Satin(s) => vec![satin_map(&shape, s)],
             Effect::BevelEmboss(b) => {
-                let (maps, paint) = bevel_maps(&shape, b, light, tex, patterns);
+                let stroke = items.iter().find_map(|e| if let Effect::Stroke(st) = e { Some(st) } else { None });
+                let (maps, paint) = match stroke {
+                    Some(st) if b.style == BevelStyle::StrokeEmboss => stroke_emboss_maps(&shape, b, st, light, tex, patterns),
+                    _ => bevel_maps(&shape, b, light, tex, patterns),
+                };
                 bevel_paint[i] = paint;
                 maps
             }
@@ -1952,7 +2098,34 @@ pub(crate) fn build_maps_prepared(
             }
         }
     }
-    FxMaps { rect, shape, per, bevel_paint, din, dout, dout_exact, vdout, vdout_exact, outline, frames }
+    FxMaps { rect, shape, per, bevel_paint, din, dout, dout_exact, vdout, vdout_exact, outline, frames, canvas: tex.canvas }
+}
+
+/// An inside stroke replaces the layer's own pixels under its band: the layer's weight falls with the band's
+/// coverage `k`, not with the stroke's opacity, so a 40 % stroke over an opaque layer leaves the stroke colour
+/// at 40 % alpha, with the backdrop showing through the rest, instead of a 40 % mix over the layer (measured
+/// 2026, `tools/probe.py stroke`, read over white / black: `(220, 60, 40, alpha 102)`). `stroke` is the
+/// band's paint over transparent (alpha = coverage × opacity × the paint's own alpha). Premultiplied:
+/// `layer × (1 - k) + stroke`.
+fn replace_with_stroke(layer: [f32; 4], stroke: [f32; 4], k: f32) -> [f32; 4] {
+    if k <= 0.0 {
+        return layer;
+    }
+    let a = layer[3] * (1.0 - k) + stroke[3];
+    if a <= 0.0 {
+        return [0.0, 0.0, 0.0, 0.0];
+    }
+    let mix = |c: usize| (layer[c] * layer[3] * (1.0 - k) + stroke[c] * stroke[3]) / a;
+    [mix(0), mix(1), mix(2), a.min(1.0)]
+}
+
+/// The mode an inside stroke paints over the layer's own pixels with: Normal. A stroke is not blended
+/// a stroke with the layer it strokes (a Multiply, Color Dodge or Hue stroke over a grey square is
+/// the plain stroke colour, at the stroke's opacity; measured, `tools/probe.py stroke`), the way it
+/// blends every other interior effect. The mode acts on what lies beneath the layer, which here is the
+/// outside part's backdrop. Shortcut: an inside part over a non-empty backdrop is not blended with it.
+pub fn inside_stroke_blend(mode: BlendMode) -> BlendMode {
+    if mode == BlendMode::Dissolve { mode } else { BlendMode::Normal }
 }
 
 /// Far outside any shape (distance fill for cropped distance fields).
@@ -1999,12 +2172,12 @@ pub fn premerges_layer(layer: &Layer) -> bool {
 /// other than Normal.
 fn blends_inside(layer: &Layer) -> bool {
     let blends = |m: BlendMode| m != BlendMode::Normal;
-    layer.effects.items.iter().filter(|e| e.enabled()).any(|e| match e {
+    layer.effects.active().any(|e| match e {
         Effect::ColorOverlay { common, .. } | Effect::GradientOverlay { common, .. } | Effect::PatternOverlay { common, .. } => blends(common.blend),
         Effect::Satin(s) => blends(s.common.blend),
         Effect::InnerGlow(g) => blends(g.common.blend),
         Effect::InnerShadow(s) => blends(s.common.blend),
-        Effect::Stroke(s) => stroke_widths(s).0 > 0.0 && blends(s.common.blend),
+        Effect::Stroke(_) => false, // an inside stroke paints Normal (`inside_stroke_blend`)
         Effect::BevelEmboss(b) => bevel_geom(b).paint == BevelPaint::Inner && (blends(b.highlight.blend) || blends(b.shadow.blend)),
         Effect::DropShadow(_) | Effect::OuterGlow(_) => false,
     })
@@ -2017,6 +2190,7 @@ pub fn composite_with_effects(layer: &Layer, content: &Buffer, backdrop: &mut Bu
     composite_with_effects_prepared(layer, content, backdrop, maps, layer_bounds, &prepared, None);
 }
 
+/// [`composite_with_effects`] with the document's patterns already prepared.
 pub(crate) fn composite_with_effects_prepared(
     layer: &Layer,
     content: &Buffer,
@@ -2059,7 +2233,9 @@ pub(crate) fn composite_with_effects_prepared(
             work.px[((y - big.y0) as usize) * w + (x - big.x0) as usize] = before.get(x, y);
         }
     }
-    let items: Vec<&Effect> = layer.effects.items.iter().filter(|e| e.enabled()).collect();
+    let items: Vec<&Effect> = layer.effects.active().collect();
+    // The bare backdrop an outside stroke is painted over (it replaces the exterior effects under it).
+    let mut backdrop_only = items.iter().any(|e| matches!(e, Effect::Stroke(st) if stroke_widths(st).1 > 0.0)).then(|| work.clone());
     let vector_shape = matches!(layer.content, photocraft_doc::LayerContent::Shape(_));
     // Multiple instances: the first listed is on top, so paint in reverse.
     let rev = || items.iter().copied().enumerate().rev();
@@ -2082,7 +2258,7 @@ pub(crate) fn composite_with_effects_prepared(
             // The glow is behind the shape, not painted across its interior when Fill is 0 %.
             // Preserve the existing anti-aliased edge when the fill is fully opaque.
             knock_out_exterior(&mut m, &shape, layer.fill_opacity);
-            paint_glow(&mut work, &m, g, sb, anchor, big, patterns);
+            paint_glow(&mut work, &m, g, false, sb, anchor, big, patterns);
         }
     }
 
@@ -2127,7 +2303,17 @@ pub(crate) fn composite_with_effects_prepared(
     }
     for (_, e) in rev() {
         if let Effect::GradientOverlay { common, gradient, .. } = e {
-            paint_fx(&mut lay, &full, &FxPaint::Gradient(gradient.clone()), sb, anchor, big, common.blend, common.opacity, patterns)
+            paint_fx(
+                &mut lay,
+                &full,
+                &FxPaint::Gradient(gradient.clone()),
+                if gradient.align { sb } else { maps.canvas },
+                anchor,
+                big,
+                common.blend,
+                common.opacity,
+                patterns,
+            )
         }
     }
     for (_, e) in rev() {
@@ -2143,7 +2329,10 @@ pub(crate) fn composite_with_effects_prepared(
     }
     for (i, e) in rev() {
         if let Effect::InnerGlow(g) = e {
-            paint_glow(&mut lay, &rel(fx(i, 0)), g, sb, anchor, big, patterns);
+            match &g.paint {
+                FxPaint::Color(c) => paint_color(&mut lay, &rel(fx(i, 0)), rgb(c), g.common.blend, g.common.opacity),
+                _ => paint_glow(&mut lay, &rel(fx(i, 0)), g, true, sb, anchor, big, patterns),
+            }
         }
     }
     if interior_group {
@@ -2188,7 +2377,16 @@ pub(crate) fn composite_with_effects_prepared(
         for ((mv, a), dv) in m.v.iter_mut().zip(&shape.v).zip(&din) {
             *mv = if inside(*a) { (in_w + 0.5 - dv).clamp(0.0, 1.0) } else { 0.0 };
         }
-        paint_fx(&mut lay, &m, &st.paint, frame(st), anchor, big, st.common.blend, st.common.opacity, patterns);
+        if st.common.blend == BlendMode::Dissolve {
+            paint_fx(&mut lay, &m, &st.paint, frame(st), anchor, big, BlendMode::Dissolve, st.common.opacity, patterns);
+            continue;
+        }
+        // The stroke replaces the layer under its band (see `replace_with_stroke`).
+        let mut stroke = Buffer::transparent(lay.rect);
+        paint_fx(&mut stroke, &m, &st.paint, frame(st), anchor, big, BlendMode::Normal, st.common.opacity, patterns);
+        for ((p, s), k) in lay.px.iter_mut().zip(&stroke.px).zip(&m.v) {
+            *p = replace_with_stroke(*p, *s, *k);
+        }
     }
     for (i, e) in rev() {
         if let Effect::BevelEmboss(b) = e
@@ -2208,11 +2406,13 @@ pub(crate) fn composite_with_effects_prepared(
     let vector_outline = vector_shape && !maps.outline;
     // Outside parts lie beneath the layer and blend onto the backdrop with their own mode. A
     // higher stroke covers the ones below it (Photoshop: a Multiply stroke listed above a wider
-    // Normal stroke multiplies the backdrop, not the lower stroke). Each stroke's share is its
-    // coverage × opacity not yet taken by strokes above; for Normal strokes this equals stacking
-    // them top over bottom.
+    // Normal stroke multiplies the backdrop, not the lower stroke). Each stroke takes its band's
+    // coverage not yet taken by strokes above and REPLACES what the exterior effects painted there: its
+    // colour at its opacity over the bare backdrop, the backdrop showing through the rest, so a drop
+    // shadow or glow under a 80 % stroke does not show through it (measured, `tools/probe.py
+    // strokemodes`: alpha 204 over a 27 % glow, plain colour in any mode).
     if strokes.iter().any(|st| widths(st).1 > 0.0) {
-        let base = work.clone();
+        let base = backdrop_only.take().unwrap_or_else(|| work.clone());
         let mut acc = vec![[0.0f32; 4]; w * h]; // premultiplied Σ share·blended
         let mut cover = vec![0.0f32; w * h];
         for st in strokes.iter().copied() {
@@ -2236,26 +2436,28 @@ pub(crate) fn composite_with_effects_prepared(
                 let band = (out_w + 0.5 - d[i]).clamp(0.0, 1.0);
                 let k =
                     if inside(shape.v[i]) { if vector_shape && !maps.outline { 0.0 } else { band * outline_share(shape.v[i], lay.px[i][3]) } } else { band };
-                let mut k = k * st.common.opacity;
+                let mut k = k;
                 if st.common.blend == BlendMode::Dissolve {
                     let (x, y) = (i64::from(big.x0) + (i % w) as i64, i64::from(big.y0) + (i / w) as i64);
-                    k = if k > 0.0 && dissolves_in(x, y, k) { 1.0 } else { 0.0 };
+                    k = if k > 0.0 && dissolves_in(x, y, k * st.common.opacity) { 1.0 } else { 0.0 };
                 }
                 *sh = k * (1.0 - cover[i]);
                 cover[i] += *sh;
             }
+            // Dissolve already chose all-or-nothing above, at the stroke's opacity.
+            let opacity = if st.common.blend == BlendMode::Dissolve { 1.0 } else { st.common.opacity };
             // The stroke blended over the backdrop at full coverage.
             let mut blended = base.clone();
             let ones = Map { w, h, v: share.iter().map(|&s| if s > 0.0 { 1.0 } else { 0.0 }).collect() };
             // The share already carries the Dissolve choice, so the paint itself composites as Normal.
             let paint_blend = if st.common.blend == BlendMode::Dissolve { BlendMode::Normal } else { st.common.blend };
             paint_fx(&mut blended, &ones, &st.paint, frame(st), anchor, big, paint_blend, 1.0, patterns);
-            for ((a, b), s) in acc.iter_mut().zip(&blended.px).zip(&share) {
+            for (((a, b), s), d) in acc.iter_mut().zip(&blended.px).zip(&share).zip(&base.px) {
                 if *s > 0.0 {
                     for c in 0..3 {
-                        a[c] += s * b[c] * b[3];
+                        a[c] += s * (opacity * b[c] * b[3] + (1.0 - opacity) * d[c] * d[3]);
                     }
-                    a[3] += s * b[3];
+                    a[3] += s * (opacity * b[3] + (1.0 - opacity) * d[3]);
                 }
             }
         }
@@ -2589,8 +2791,9 @@ mod tests {
         assert_eq!(tent_kernel(f32::NAN), (0, vec![1.0]));
     }
 
+    /// A texture context with no patterns, for tests.
     fn no_tex() -> TextureCtx<'static> {
-        TextureCtx { rect: Rect::new(0, 0, 1, 1), patterns: &[], anchor: (0.0, 0.0) }
+        TextureCtx { rect: Rect::new(0, 0, 1, 1), patterns: &[], anchor: (0.0, 0.0), canvas: Rect::new(0, 0, 1, 1) }
     }
 
     fn square(n: usize, x0: usize, x1: usize) -> Map {
@@ -2603,6 +2806,7 @@ mod tests {
         m
     }
 
+    /// A default bevel of `style` and `technique`, for tests.
     fn bevel_of(style: BevelStyle, technique: BevelTechnique) -> Bevel {
         Bevel {
             enabled: true,
@@ -2624,6 +2828,27 @@ mod tests {
             contour: None,
             texture: None,
         }
+    }
+
+    /// Stroke Emboss is active only while an enabled stroke is on the layer.
+    #[test]
+    fn stroke_emboss_renders_only_on_a_stroked_layer() {
+        let bevel = Effect::BevelEmboss(bevel_of(BevelStyle::StrokeEmboss, BevelTechnique::Smooth));
+        let stroke = Effect::Stroke(photocraft_doc::StrokeFx {
+            common: photocraft_doc::FxCommon::new(BlendMode::Normal, 1.0),
+            size: 3.0,
+            position: photocraft_doc::StrokePosition::Outside,
+            paint: photocraft_doc::FxPaint::Color(photocraft_color::Color::BLACK),
+            overprint: false,
+        });
+        let mut fx = photocraft_doc::Effects { enabled: true, items: vec![bevel], ..Default::default() };
+        assert_eq!(fx.active().count(), 0, "no stroke: nothing is drawn");
+        fx.items.push(stroke);
+        assert_eq!(fx.active().count(), 2);
+        if let Effect::Stroke(s) = &mut fx.items[1] {
+            s.common.enabled = false;
+        }
+        assert_eq!(fx.active().count(), 0, "a disabled stroke does not count");
     }
 
     #[test]
@@ -3087,6 +3312,7 @@ mod tests {
         }
     }
 
+    /// The bevel maps are the same whatever the number of worker threads.
     #[test]
     fn bevel_maps_do_not_depend_on_the_threads() {
         // Every style and technique, softened or not, and a texture; one thread (in order) is the reference.
@@ -3104,7 +3330,12 @@ mod tests {
         let light = GlobalLight::default();
         let styles = [BevelStyle::InnerBevel, BevelStyle::OuterBevel, BevelStyle::Emboss, BevelStyle::PillowEmboss, BevelStyle::StrokeEmboss];
         for (k, shape) in shapes.iter().enumerate() {
-            let tex = TextureCtx { rect: Rect::new(3, 5, 3 + shape.w as i32, 5 + shape.h as i32), patterns: &pats, anchor: (0.0, 0.0) };
+            let tex = TextureCtx {
+                rect: Rect::new(3, 5, 3 + shape.w as i32, 5 + shape.h as i32),
+                patterns: &pats,
+                anchor: (0.0, 0.0),
+                canvas: Rect::new(0, 0, 1, 1),
+            };
             for style in styles {
                 for technique in [BevelTechnique::Smooth, BevelTechnique::ChiselHard, BevelTechnique::ChiselSoft] {
                     for (size, soften, textured) in [(5.0, 0.0, false), (12.0, 2.0, false), (8.0, 0.0, true)] {
@@ -3209,6 +3440,7 @@ mod tests {
         }
     }
 
+    /// A bevel's Contour and Texture elements reshape its height map.
     #[test]
     fn bevel_contour_and_texture_shape_the_height() {
         let shape = square(40, 6, 34);
@@ -3245,11 +3477,240 @@ mod tests {
             link: true,
             phase: (0.0, 0.0),
         });
-        let tex = TextureCtx { rect: Rect::new(0, 0, 40, 40), patterns: &pats, anchor: (0.0, 0.0) };
+        let tex = TextureCtx { rect: Rect::new(0, 0, 40, 40), patterns: &pats, anchor: (0.0, 0.0), canvas: Rect::new(0, 0, 1, 1) };
         let (m, _) = bevel_maps(&shape, &t, &l, &tex, &PreparedPatterns::new(&pats, PREPARED_PATTERN_BYTES));
         let mid: f32 = (16..24).map(|y| m[0].v[y * 40 + 20] + m[1].v[y * 40 + 20]).sum();
         let flat: f32 = (16..24).map(|y| a[0].v[y * 40 + 20] + a[1].v[y * 40 + 20]).sum();
         assert!(mid > flat + 0.5, "{mid} vs {flat}");
+    }
+
+    // The tests below pin behaviour measured with `tools/probe.py` (square probes in
+    // `photocraft-compare/probes`); the numbers are the measured pixels.
+
+    /// Every effect paint in the special-eight modes acts as the layer's Fill: 128 grey under a (220, 60, 40)
+    /// solid colour overlay at 50 % (probe `ovl`). Plain blending at 50 % would give other values.
+    #[test]
+    fn special_eight_modes_paint_like_fill() {
+        let grey = |v: f32| Buffer { rect: Rect::new(0, 0, 1, 1), px: vec![[v, v, v, 1.0]] };
+        let one = Map { w: 1, h: 1, v: vec![1.0] };
+        let c = [220.0 / 255.0, 60.0 / 255.0, 40.0 / 255.0];
+        for (mode, want) in [
+            (BlendMode::ColorDodge, [225.0, 145.0, 139.0]),
+            (BlendMode::LinearBurn, [110.0, 30.0, 20.0]),
+            (BlendMode::VividLight, [201.0, 82.0, 61.0]),
+            (BlendMode::Difference, [18.0, 98.0, 108.0]),
+        ] {
+            let mut b = grey(128.0 / 255.0);
+            paint_color(&mut b, &one, c, mode, 0.5);
+            for (k, w) in want.iter().enumerate() {
+                assert!((b.px[0][k] * 255.0 - w).abs() <= 1.5, "{mode:?} channel {k}: {} vs reference {w}", b.px[0][k] * 255.0);
+            }
+        }
+    }
+
+    /// Stroke Emboss shades only the stroke's band, with the bevel its position implies (probes `strokeemb`,
+    /// `strokeemb2`): an inside stroke like an Inner Bevel (`size` px in from the edge), an outside one like an
+    /// Outer Bevel, a centre one like an Emboss; the fill is never shaded and a wide stroke's far part stays flat.
+    #[test]
+    fn stroke_emboss_shades_only_the_stroke_band() {
+        let shape = square(120, 40, 80);
+        let light = GlobalLight::default();
+        let tex = TextureCtx { rect: Rect::new(0, 0, 120, 120), patterns: &[], anchor: (0.0, 0.0), canvas: Rect::new(0, 0, 1, 1) };
+        let prepared = PreparedPatterns::new(&[], PREPARED_PATTERN_BYTES);
+        let stroke = |position, size| photocraft_doc::StrokeFx {
+            common: photocraft_doc::FxCommon::new(BlendMode::Normal, 1.0),
+            size,
+            position,
+            paint: photocraft_doc::FxPaint::Color(photocraft_color::Color::BLACK),
+            overprint: false,
+        };
+        let mut b = bevel_of(BevelStyle::StrokeEmboss, BevelTechnique::ChiselHard);
+        b.size = 8.0;
+        b.depth = 2.0;
+        let shaded = |m: &[Map], x: usize| m.iter().any(|m| m.v[60 * 120 + x] > 0.01);
+        // Outside, 14 px wide: shaded from the shape's edge outwards (the far part, past size + 2, is flat).
+        let (m, paint) = stroke_emboss_maps(&shape, &b, &stroke(StrokePosition::Outside, 14.0), &light, &tex, &prepared);
+        assert_eq!(paint, BevelPaint::Outer);
+        assert!(shaded(&m, 36) && shaded(&m, 31), "the band beside the edge is shaded");
+        assert!(!shaded(&m, 24), "the far part of a wide stroke stays flat");
+        assert!(!shaded(&m, 50), "the fill is not shaded");
+        // Inside, 14 px wide: size px in, nothing outside.
+        let (m, paint) = stroke_emboss_maps(&shape, &b, &stroke(StrokePosition::Inside, 14.0), &light, &tex, &prepared);
+        assert_eq!(paint, BevelPaint::Inner);
+        assert!(shaded(&m, 42) && !shaded(&m, 36) && !shaded(&m, 60));
+        // Centre: both sides of the edge (Emboss).
+        let (m, paint) = stroke_emboss_maps(&shape, &b, &stroke(StrokePosition::Center, 14.0), &light, &tex, &prepared);
+        assert_eq!(paint, BevelPaint::Both);
+        assert!(shaded(&m, 37) && shaded(&m, 42) && !shaded(&m, 60));
+    }
+
+    /// Effect noise is additive and uniform, `v' = clip(v + a (2u - 1))` with `a = min(amount, 8.5 v)` (measured
+    /// 2026, `tools/probe.py noiseflat`: a constant 0.5 coverage at amount 50 % reads as uniform 0..255, mean 128,
+    /// std 74), and a near-zero coverage gains at most 8.5 v.
+    #[test]
+    fn effect_noise_is_additive_and_uniform() {
+        let n = 200;
+        let mut m = Map::new(n, n, 0.5);
+        let pre = m.clone();
+        noise(&mut m, &pre, 0.5, 0, 0);
+        let mean = m.v.iter().sum::<f32>() / m.v.len() as f32;
+        let std = (m.v.iter().map(|v| (v - mean).powi(2)).sum::<f32>() / m.v.len() as f32).sqrt();
+        assert!((mean - 0.5).abs() < 0.01, "mean {mean}");
+        assert!((std - 0.2887).abs() < 0.01, "std {std} (uniform 0..1 is 0.2887; the measured value is 74/255)");
+        assert!(m.v.iter().cloned().fold(1.0f32, f32::min) < 0.02 && m.v.iter().cloned().fold(0.0f32, f32::max) > 0.98);
+        let mut tiny = Map::new(n, n, 0.004);
+        let pre = tiny.clone();
+        noise(&mut tiny, &pre, 0.5, 0, 0);
+        assert!(tiny.v.iter().all(|v| *v <= 0.004 * 9.5 + 1e-6), "a near-zero coverage gains at most 8.5 v");
+    }
+
+    /// Only a contour that starts above zero is capped at 8.5 v: a Cone glow at Range 25 % is the plain contour
+    /// of the ranged coverage (probe `glowrange`, 0.65 RMSE; capped it was 10.7).
+    #[test]
+    fn the_fringe_cap_leaves_contours_that_start_at_zero_alone() {
+        let n = 4096;
+        // Natural spline of Cone through (0, 0), (0.5, 1), (1, 0): 3x - 4x^3, slope 3 at 0.
+        let cone: Vec<f32> = (0..n)
+            .map(|k| {
+                let x = k as f32 / (n - 1) as f32;
+                let x = x.min(1.0 - x);
+                3.0 * x - 4.0 * x * x * x
+            })
+            .collect();
+        // Range 25 %: steeper than 8.5 v at small coverage (3 x 4 = 12 v).
+        let ranged: Vec<f32> = (0..n).map(|k| lut_at(&cone, (k as f32 / (n - 1) as f32 / 0.25).min(1.0))).collect();
+        assert_eq!(outer_fringe_lut(Some(ranged.clone())), Some(ranged));
+        assert_eq!(outer_fringe_lut(None), None);
+        let inverted: Vec<f32> = cone.iter().map(|c| 1.0 - c).collect();
+        let capped = outer_fringe_lut(Some(inverted)).unwrap();
+        assert!(capped[0] < 1e-6 && capped[1] <= 8.5 / (n - 1) as f32 + 1e-6, "a contour starting at 1 is capped: {} {}", capped[0], capped[1]);
+    }
+
+    /// An inside stroke replaces the layer under its band (probe `stroke`, read over white and black): a 40 %
+    /// stroke over an opaque layer is the stroke colour at alpha 0.4, not a 40 % mix over the layer.
+    #[test]
+    fn an_inside_stroke_replaces_the_layer_under_its_band() {
+        let layer = [0.5, 0.5, 0.5, 1.0];
+        // Full coverage, opacity 0.4: the stroke's own alpha is 0.4.
+        let got = replace_with_stroke(layer, [220.0 / 255.0, 60.0 / 255.0, 40.0 / 255.0, 0.4], 1.0);
+        assert!((got[3] - 0.4).abs() < 1e-6 && (got[0] * 255.0 - 220.0).abs() < 0.01 && (got[1] * 255.0 - 60.0).abs() < 0.01, "{got:?}");
+        // Opaque stroke: plain colour. Half coverage of an opaque stroke: an even premultiplied mix, opaque.
+        assert_eq!(replace_with_stroke(layer, [1.0, 0.0, 0.0, 1.0], 1.0), [1.0, 0.0, 0.0, 1.0]);
+        let half = replace_with_stroke(layer, [1.0, 0.0, 0.0, 0.5], 0.5);
+        assert!((half[3] - 1.0).abs() < 1e-6 && (half[0] - 0.75).abs() < 1e-6, "{half:?}");
+        // Outside the band nothing changes.
+        assert_eq!(replace_with_stroke(layer, [0.0; 4], 0.0), layer);
+    }
+
+    /// An inside stroke paints Normal over the layer's own pixels whatever its mode (probe `stroke`:
+    /// Multiply, Color Dodge and Hue strokes over a grey square are the plain stroke colour).
+    #[test]
+    fn an_inside_stroke_ignores_its_blend_mode() {
+        for m in [BlendMode::Multiply, BlendMode::ColorDodge, BlendMode::Hue, BlendMode::Normal] {
+            assert_eq!(inside_stroke_blend(m), BlendMode::Normal);
+        }
+        assert_eq!(inside_stroke_blend(BlendMode::Dissolve), BlendMode::Dissolve);
+    }
+
+    /// A satin map of `shape` at angle 0 with the given contour, Invert, distance and size, for tests.
+    fn satin_of(shape: &Map, contour: Contour, invert: bool, distance: f32, size: f32) -> Map {
+        let s = photocraft_doc::effects::Satin {
+            common: photocraft_doc::FxCommon::new(BlendMode::Normal, 1.0),
+            color: photocraft_color::Color::BLACK,
+            angle: 0.0,
+            distance,
+            size,
+            contour,
+            anti_alias: false,
+            invert,
+        };
+        satin_map(shape, &s)
+    }
+
+    /// The Cone contour, for tests.
+    fn cone() -> Contour {
+        let pt = |input, output| photocraft_doc::adjust::CurvePoint { input, output };
+        Contour::Custom { name: "Cone".into(), points: vec![pt(0.0, 0.0), pt(0.5, 1.0), pt(1.0, 0.0)], corners: vec![true; 3] }
+    }
+
+    /// Satin applies its contour to each blurred copy before subtracting them (probe `satin1`: a Cone
+    /// satin of a wide shape, distance 100 and size 100, is exactly nothing: `a + b = 1` there), and
+    /// Invert flips the contoured result (probe `satin0`).
+    #[test]
+    fn satin_contours_each_copy_and_invert_flips_the_result() {
+        let shape = square(400, 100, 300);
+        let m = satin_of(&shape, cone(), false, 100.0, 100.0);
+        for x in [110, 150, 190] {
+            assert!(m.v[200 * 400 + x] < 0.03, "x {x}: {}", m.v[200 * 400 + x]);
+        }
+        let plain = satin_of(&shape, cone(), false, 30.0, 40.0);
+        let inv = satin_of(&shape, cone(), true, 30.0, 40.0);
+        for x in [105, 125, 200, 260] {
+            let i = 200 * 400 + x;
+            assert!((plain.v[i] + inv.v[i] - 1.0).abs() < 1e-4, "x {x}: {} + {}", plain.v[i], inv.v[i]);
+        }
+    }
+
+    /// The foot fade of an outer bevel's shading exists only when the gloss contour shades a flat face
+    /// (`C(sin altitude) != sin altitude`), 5 for Outer Bevel and 10 for the outer half of emboss styles
+    /// (probes `outerfade`, `pillowgloss`: Linear gloss shows no fade).
+    #[test]
+    fn the_bevel_foot_fades_only_with_a_gloss_that_shades_flat_ground() {
+        let linear: Vec<f32> = (0..256).map(|k| k as f32 / 255.0).collect();
+        let half_round: Vec<f32> = (0..256).map(|k| (1.0 - (1.0 - k as f32 / 255.0).powi(2)).sqrt()).collect();
+        let se = 30f32.to_radians().sin();
+        assert_eq!(bevel_foot_k(BevelPaint::Outer, Some(&linear), se), 0.0);
+        assert_eq!(bevel_foot_k(BevelPaint::Outer, None, se), 0.0);
+        assert_eq!(bevel_foot_k(BevelPaint::Outer, Some(&half_round), se), 5.0);
+        assert_eq!(bevel_foot_k(BevelPaint::Both, Some(&half_round), se), 10.0);
+        assert_eq!(bevel_foot_k(BevelPaint::Inner, Some(&half_round), se), 0.0);
+    }
+
+    /// Emboss ramps: Chisel Hard's outer half reaches a pixel further than its inner half, Chisel Soft's
+    /// does not (probe `embsz`: reach 1 px further at sizes 4 to 40; `bevstyle` for Soft).
+    #[test]
+    fn emboss_chisel_hard_reaches_one_pixel_further_outside_than_soft() {
+        // Size 10: half = 5.5 px, so Soft's outer ramp ends at 5.5 and Hard's at 6.5.
+        assert!(bevel_chisel_h(BevelPaint::Both, 10.0, 0.0, 6.0, false) > 0.0);
+        assert_eq!(bevel_chisel_h(BevelPaint::Both, 10.0, 0.0, 6.0, true), 0.0);
+        assert_eq!(bevel_chisel_h(BevelPaint::Both, 10.0, 0.0, 6.6, false), 0.0);
+    }
+
+    /// A gradient glow's alpha is `FRINGE_SLOPE` × the raw coverage whatever the Range (probe `gglow`).
+    #[test]
+    fn a_gradient_glows_gain_follows_the_range() {
+        assert!((glow_gradient_gain(0.5) - 4.25).abs() < 1e-6);
+        assert!((glow_gradient_gain(1.0) - 8.5).abs() < 1e-6);
+    }
+
+    /// Radial and Diamond gradients reach half the chord through the frame at the gradient angle, not the
+    /// ellipse norm (probes `gfangle`, `sangle`: on a 200 px square at 35° the measured radial radius is
+    /// the 1 / cos 35° longer chord, and the gradient fit of the measured colours agrees to 0.01).
+    #[test]
+    fn radial_and_diamond_gradients_scale_with_the_chord() {
+        let frame = Rect::new(100, 100, 300, 300);
+        let t = |style, angle, x: f32, y: f32| gradient_t(style, angle, 1.0, false, (0.0, 0.0), frame, x, y);
+        let (c35, c120) = (35f32.to_radians().cos(), 120f32.to_radians());
+        // 60 px right of the centre: radius 100 / cos 35°.
+        assert!((t(GradientStyle::Radial, 35.0, 260.0, 200.0) - 60.0 * c35 / 100.0).abs() < 1e-3);
+        // Diamond at -120°: L1 distance over half the chord 100 / sin 60°.
+        let want = 60.0 * (c120.cos().abs() + c120.sin().abs()) / (100.0 / c120.sin().abs());
+        assert!((t(GradientStyle::Diamond, -120.0, 260.0, 200.0) - want).abs() < 1e-3);
+        // At 0° and 90° the chord is the side: unchanged.
+        assert!((t(GradientStyle::Radial, 0.0, 250.0, 200.0) - 0.5).abs() < 1e-3);
+        assert!((t(GradientStyle::Radial, 90.0, 200.0, 250.0) - 0.5).abs() < 1e-3);
+    }
+
+    /// An outer effect with a contour that is high at zero still paints nothing where it has no coverage.
+    #[test]
+    fn an_inverted_contour_paints_nothing_where_an_outer_effect_has_no_coverage() {
+        // Measured: Cone - Inverted is 1 at 0, yet a shadow / outer glow is 0 outside its blur.
+        let inv: Vec<f32> = (0..4096).map(|k| (1.0 - 2.0 * k as f32 / 4095.0).abs()).collect();
+        let l = outer_fringe_lut(Some(inv)).unwrap();
+        assert!(lut_at(&l, 0.0) < 1e-6 && (lut_at(&l, 0.04) - 0.34).abs() < 0.02, "{} {}", lut_at(&l, 0.0), lut_at(&l, 0.04));
+        assert!((lut_at(&l, 0.25) - 0.5).abs() < 1e-3, "past the ramp the contour is untouched");
+        let linear: Vec<f32> = (0..4096).map(|k| k as f32 / 4095.0).collect();
+        assert!((lut_at(&outer_fringe_lut(Some(linear)).unwrap(), 0.3) - 0.3).abs() < 1e-3);
     }
 
     #[test]
@@ -3305,9 +3766,15 @@ mod tests {
             let got = 255.0 * (1.0 - at(&m, 20 - d));
             assert!((got - ps).abs() <= 1.5, "outer precise at {d} px: {got} vs Photoshop {ps}");
         }
-        // Spread 40 %: solid for the first 4 px.
+        // Spread 40 %: solid (at the default Range) for the first 4 px.
         let m = glow_map(&shape, &glow(GlowTechnique::Precise, 10.0, 0.4, GlowSource::Edge), false, (0, 0));
-        assert!((at(&m, 16) - 1.0).abs() < 1e-6 && at(&m, 14) < 1.0);
+        assert!((at(&m, 16) - 1.0).abs() < 1e-3 && at(&m, 14) < 1.0);
+        // Range 100 %: the ramp climbs on inside the spread instead of stopping at 0.5 (measured,
+        // size 40, spread 50 %: 0.977 at the edge, 0.714 at 11 px out).
+        let mut g = glow(GlowTechnique::Precise, 40.0, 0.5, GlowSource::Edge);
+        g.range = 1.0;
+        let m = glow_map(&shape, &g, false, (0, 0));
+        assert!((at(&m, 19) - 0.97).abs() < 0.02, "{}", at(&m, 19));
         // Centre source = 1 − edge, for both techniques.
         for t in [GlowTechnique::Precise, GlowTechnique::Softer] {
             let e = glow_map(&shape, &glow(t, 6.0, 0.0, GlowSource::Edge), true, (0, 0));
@@ -3422,7 +3889,8 @@ mod tests {
             tent_direct(&mut direct, size);
             let mut actual = shape;
             blur(&mut actual, size);
-            noise(&mut actual, 0.26, 0, 0);
+            let pre = actual.clone();
+            noise(&mut actual, &pre, 0.26, 0, 0);
             let stray = direct.v.iter().zip(&actual.v).filter(|(reference, noisy)| **reference == 0.0 && **noisy > 1e-5).count();
             assert_eq!(stray, 0, "noise created {stray} visible pixels outside a size-{size} blur");
         }
@@ -3492,8 +3960,10 @@ mod tests {
         ];
         for (name, plain, noisy) in pairs {
             for (i, (p, n)) in plain.v.iter().zip(&noisy.v).enumerate() {
+                // Measured (`tools/probe.py noisepos`): the speckle added to a near-zero coverage `v` is at most
+                // 8.5 v (a pixel under 2/255 gained up to 19/255), so the blur's far tail stays dark.
                 if *p < 1.0 / 255.0 {
-                    assert!(*n <= 2.0 / 255.0, "{name}: pixel ({}, {}) invisible without noise: {p} -> {n}", i % 80, i / 80);
+                    assert!(*n <= p * 9.5 + 1e-6, "{name}: pixel ({}, {}) invisible without noise: {p} -> {n}", i % 80, i / 80);
                 }
             }
         }

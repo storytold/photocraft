@@ -395,6 +395,8 @@ pub const F_VECTOR: u32 = 64;
 pub const F_ATOP: u32 = 128;
 pub const F_GATE: u32 = 256;
 pub const F_REL: u32 = 512;
+/// Effect paint: the coverage acts as a layer's Fill (a bevel's highlight and shadow; `composite_fill`).
+pub const F_FILL: u32 = 2_097_152;
 pub const F_STROKE_OUT: u32 = 1024;
 /// First outside stroke (no accumulated share yet).
 pub const F_FIRST: u32 = 2048;
@@ -419,6 +421,8 @@ pub const F_TEXT_GAMMA: u32 = 8192;
 /// `FxMerge`: B is the layer's shape (its content); the layer is its colour at fill opacity
 /// (`p0.x`) inside the shape, times the shape's alpha: `FxInit` `INIT_INSIDE` then
 /// `INIT_ALPHA` in the merge, for a layer with no interior effects between them.
+/// Effect paint: an inside stroke replaces the layer under its band (`effects::replace_with_stroke`).
+pub const F_REPLACE: u32 = 4_194_304;
 pub const F_LAYER_SHAPE: u32 = 1_048_576;
 
 /// A layer's Blend If ranges for `F_BLEND_IF`: Gray, then the colour channels, each as
@@ -1102,7 +1106,7 @@ impl<'a> Planner<'a> {
             content = self.emit(p);
         }
 
-        let items: Vec<&'a Effect> = layer.effects.items.iter().filter(|e| e.enabled()).collect();
+        let items: Vec<&'a Effect> = layer.effects.active().collect();
         for e in &items {
             let gradient = match e {
                 Effect::GradientOverlay { gradient, .. } => Some(gradient),
@@ -1165,7 +1169,7 @@ impl<'a> Planner<'a> {
         }
         for &(i, e) in &rev {
             if let Effect::OuterGlow(g) = e {
-                let paint = self.glow_paint(g, anchor);
+                let paint = self.glow_paint(g, anchor, false);
                 // Match CPU exterior knockout: a see-through fill must not reveal the
                 // glow through its own shape. The shader applies m × (1 − alpha × k).
                 let see_through = 1.0 - layer.fill_opacity.clamp(0.0, 1.0);
@@ -1222,7 +1226,17 @@ impl<'a> Planner<'a> {
         }
         for &(_, e) in &rev {
             if let Effect::GradientOverlay { common, gradient, .. } = e {
-                l = self.paint(l, content, Cov::One, &Paint::Gradient(gradient), common.blend, common.opacity, F_GATE, clip, sb);
+                l = self.paint(
+                    l,
+                    content,
+                    Cov::One,
+                    &Paint::Gradient(gradient),
+                    common.blend,
+                    common.opacity,
+                    F_GATE,
+                    clip,
+                    if gradient.align { sb } else { self.cx.doc.bounds() },
+                );
             }
         }
         for &(_, e) in &rev {
@@ -1232,18 +1246,38 @@ impl<'a> Planner<'a> {
         }
         for &(i, e) in &rev {
             if let Effect::Satin(s) = e {
-                l = self.paint(l, content, Cov::Map(map(i, 0), 0.0), &Paint::Color(s.color.to_rgb()), s.common.blend, s.common.opacity, F_REL, clip, sb);
+                l = self.paint(
+                    l,
+                    content,
+                    Cov::Map(map(i, 0), 0.0),
+                    &Paint::Color(s.color.to_rgb()),
+                    s.common.blend,
+                    s.common.opacity,
+                    F_REL | F_FILL,
+                    clip,
+                    sb,
+                );
             }
         }
         for &(i, e) in &rev {
             if let Effect::InnerGlow(g) = e {
-                let paint = self.glow_paint(g, anchor);
+                let paint = self.glow_paint(g, anchor, true);
                 l = self.paint(l, content, Cov::Map(map(i, 0), 0.0), &paint, g.common.blend, g.common.opacity, F_REL, clip, sb);
             }
         }
         for &(i, e) in &rev {
             if let Effect::InnerShadow(s) = e {
-                l = self.paint(l, content, Cov::Map(map(i, 0), 0.0), &Paint::Color(s.color.to_rgb()), s.common.blend, s.common.opacity, F_REL, clip, sb);
+                l = self.paint(
+                    l,
+                    content,
+                    Cov::Map(map(i, 0), 0.0),
+                    &Paint::Color(s.color.to_rgb()),
+                    s.common.blend,
+                    s.common.opacity,
+                    F_REL | F_FILL,
+                    clip,
+                    sb,
+                );
             }
         }
         if let Some(s) = vstroke {
@@ -1267,9 +1301,9 @@ impl<'a> Planner<'a> {
                         content,
                         Cov::Map(map(i, 1), (in_w + 0.5).clamp(0.0, 1.0)),
                         &paint,
-                        st.common.blend,
+                        photocraft_compose::effects::inside_stroke_blend(st.common.blend),
                         st.common.opacity,
-                        F_GATE,
+                        F_GATE | F_REPLACE,
                         clip,
                         photocraft_compose::stroke_frame(self.cx.doc, layer, st).unwrap_or(sb),
                     );
@@ -1288,11 +1322,21 @@ impl<'a> Planner<'a> {
                     &Paint::Color(b.highlight_color.to_rgb()),
                     b.highlight.blend,
                     b.highlight.opacity,
-                    F_REL,
+                    F_REL | F_FILL,
                     clip,
                     sb,
                 );
-                l = self.paint(l, content, Cov::Map(map(i, 1), 0.0), &Paint::Color(b.shadow_color.to_rgb()), b.shadow.blend, b.shadow.opacity, F_REL, clip, sb);
+                l = self.paint(
+                    l,
+                    content,
+                    Cov::Map(map(i, 1), 0.0),
+                    &Paint::Color(b.shadow_color.to_rgb()),
+                    b.shadow.blend,
+                    b.shadow.opacity,
+                    F_REL | F_FILL,
+                    clip,
+                    sb,
+                );
             }
         }
         // The shape's own alpha.
@@ -1368,11 +1412,21 @@ impl<'a> Planner<'a> {
                     &Paint::Color(b.highlight_color.to_rgb()),
                     b.highlight.blend,
                     b.highlight.opacity,
-                    0,
+                    F_FILL,
                     clip,
                     sb,
                 );
-                w = self.paint(w, content, Cov::Map(map(i, k + 1), 0.0), &Paint::Color(b.shadow_color.to_rgb()), b.shadow.blend, b.shadow.opacity, 0, clip, sb);
+                w = self.paint(
+                    w,
+                    content,
+                    Cov::Map(map(i, k + 1), 0.0),
+                    &Paint::Color(b.shadow_color.to_rgb()),
+                    b.shadow.blend,
+                    b.shadow.opacity,
+                    F_FILL,
+                    clip,
+                    sb,
+                );
             }
         }
 
@@ -1408,7 +1462,7 @@ impl<'a> Planner<'a> {
             let mut m = self.emit(p);
             for (i, b) in late {
                 for (k, color, fxc) in [(0, &b.highlight_color, &b.highlight), (1, &b.shadow_color, &b.shadow)] {
-                    m = self.paint(m, content, Cov::Map(map(i, k), 0.0), &Paint::Color(color.to_rgb()), fxc.blend, fxc.opacity, 0, clip, sb);
+                    m = self.paint(m, content, Cov::Map(map(i, k), 0.0), &Paint::Color(color.to_rgb()), fxc.blend, fxc.opacity, F_FILL, clip, sb);
                 }
             }
             let mut p = Pass::new(Kernel::FxMerge, 0);
@@ -1427,6 +1481,7 @@ impl<'a> Planner<'a> {
         Ok(self.write_back(backdrop, merged, clip))
     }
 
+    /// The paint source of an effect (colour, gradient or pattern) laid out in `anchor`'s frame.
     fn fx_paint(&self, p: &'a FxPaint, anchor: (f64, f64)) -> Paint<'a> {
         match p {
             FxPaint::Color(c) => Paint::Color(c.to_rgb()),
@@ -1438,9 +1493,10 @@ impl<'a> Planner<'a> {
         }
     }
 
-    fn glow_paint(&self, g: &'a Glow, anchor: (f64, f64)) -> Paint<'a> {
+    /// A glow's paint; an inner glow's gradient covers the whole shape (gain 0, `effects::paint_glow`).
+    fn glow_paint(&self, g: &'a Glow, anchor: (f64, f64), inner: bool) -> Paint<'a> {
         match &g.paint {
-            FxPaint::Gradient(gradient) => Paint::GlowGradient(gradient, photocraft_compose::effects::glow_gradient_gain(g.range)),
+            FxPaint::Gradient(gradient) => Paint::GlowGradient(gradient, if inner { 0.0 } else { photocraft_compose::effects::glow_gradient_gain(g.range) }),
             p => self.fx_paint(p, anchor),
         }
     }
@@ -1526,7 +1582,8 @@ impl<'a> Planner<'a> {
             // Missing pattern: compose paints nothing.
             return dst;
         }
-        let mut p = self.fx_pass(dst, content, paint, blend, opacity, flags, clip, sb);
+        // Every effect paint acts as a layer's Fill (`effects::paint`): F_FILL.
+        let mut p = self.fx_pass(dst, content, paint, blend, opacity, flags | F_FILL, clip, sb);
         self.release(dst);
         match cov {
             Cov::Map(m, outside) => {

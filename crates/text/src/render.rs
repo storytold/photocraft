@@ -59,7 +59,12 @@ fn nothing(format: PixelFormat) -> Rendered {
 }
 
 /// Maps raw area-coverage to the opacity Photoshop's anti-alias modes imply. Exponents above 1 thin
-/// the fringe (sharper); below 1 widen it (stronger smoothing).
+/// the fringe (sharper); below 1 widen it (stronger smoothing). Fitted on type probes
+/// (`tools/typo_probe.py`: Montserrat, Roboto and Lato at 9, 13, 24 and 64 px, black on transparent), where the
+/// raw coverage is Smooth's: Smooth 1.0, Crisp 1.0 (its ink equals Smooth's), Strong 0.6 (ink 1.42 / 1.28 /
+/// 1.16 / 1.06 times Smooth's at 9 / 13 / 24 / 64 px), Sharp 0.8 (ink 1.40 / 1.22 / 1.02 / 1.00: heavier than
+/// Smooth at small sizes, where stems snap to the grid; the old 2.2 drew 0.37 / 0.53 / 0.78 / 0.92 of the measured
+/// ink). The Windows modes were not measured and keep the old Sharp curve.
 fn shape_antialias_coverage(cv: f32, mode: AntiAlias) -> f32 {
     if !cv.is_finite() {
         return 0.0;
@@ -74,9 +79,10 @@ fn shape_antialias_coverage(cv: f32, mode: AntiAlias) -> f32 {
             }
         }
         AntiAlias::Smooth => cv,
-        AntiAlias::Strong => cv.powf(0.55),
-        AntiAlias::Crisp => cv.powf(1.35),
-        AntiAlias::Sharp | AntiAlias::Windows | AntiAlias::WindowsLcd => cv.powf(2.2),
+        AntiAlias::Strong => cv.powf(0.6),
+        AntiAlias::Crisp => cv,
+        AntiAlias::Sharp => cv.powf(0.8),
+        AntiAlias::Windows | AntiAlias::WindowsLcd => cv.powf(2.2),
     }
 }
 
@@ -114,7 +120,7 @@ impl<S: LineSink> LineSink for WarpSink<'_, S> {
 /// when `color` is `None`) into `sink`, through `transform` (text space → sink space), bending
 /// the outlines with `warp` first (in text space).
 fn draw(layout: &TextLayout, transform: &Xform, sink: &mut impl LineSink, only_color: Option<&Color>, warp: Option<&Warp>) {
-    draw_pass(layout, transform, sink, only_color, warp, Pass::All);
+    draw_pass(layout, transform, sink, only_color, warp, Pass::All, AntiAlias::Smooth);
 }
 
 /// Which part of the layout [`draw_pass`] emits. Faux bold draws each glyph at several offsets;
@@ -185,7 +191,34 @@ fn visible_color_passes(layout: &TextLayout, warp: Option<&Warp>) -> Vec<(Color,
     colors
 }
 
-fn draw_pass(layout: &TextLayout, transform: &Xform, sink: &mut impl LineSink, only_color: Option<&Color>, warp: Option<&Warp>, pass: Pass) {
+/// How glyphs are placed and fitted in each anti-alias mode: the quantum (px) its horizontal glyph origins are
+/// rounded to (0 = unrounded) and whether the outlines get light, vertical-only hinting. Fitted on type probes
+/// type probes (`tools/typo_probe.py`: Montserrat, Roboto, Lato at 9, 13, 24 and 64 px, mean RMSE per mode over
+/// the sizes, unrounded -> rounded): Smooth rounds to a quarter pixel (2.86 -> 2.32), Strong not at all (2.50
+/// best unrounded), None to whole pixels with light hinting (14.9 -> 8.1), and Sharp and Crisp to a quantum
+/// that grows with the size, 1/4 px up to 16 px, 1/2 px to 32 px and 1 px beyond (Crisp 4.74 -> about 3, Sharp 6.65
+/// -> about 5.5 with light hinting up to 32 px; at 64 px the hinted outlines were worse). The Windows modes were not
+/// measured and stay as they were.
+pub(crate) fn glyph_grid(mode: AntiAlias, size_px: f32) -> (f64, bool) {
+    let sized = if size_px <= 16.0 {
+        0.25
+    } else if size_px <= 32.0 {
+        0.5
+    } else {
+        1.0
+    };
+    match mode {
+        AntiAlias::None => (1.0, true),
+        AntiAlias::Sharp => (sized, size_px <= 32.0),
+        AntiAlias::Crisp => (sized, false),
+        AntiAlias::Smooth => (0.25, false),
+        AntiAlias::Strong | AntiAlias::Windows | AntiAlias::WindowsLcd => (0.0, false),
+    }
+}
+
+/// Draws one [`Pass`] of the layout's glyphs and decorations into `sink` through `transform`, at the mode's glyph grid and hinting.
+fn draw_pass(layout: &TextLayout, transform: &Xform, sink: &mut impl LineSink, only_color: Option<&Color>, warp: Option<&Warp>, pass: Pass, aa: AntiAlias) {
+    let mut hinters: Vec<Option<skrifa::outline::HintingInstance>> = (0..layout.faces.len()).map(|_| None).collect();
     for g in &layout.glyphs {
         let st = &layout.styles[g.style as usize];
         if only_color.is_some_and(|c| c != &st.color) {
@@ -227,7 +260,18 @@ fn draw_pass(layout: &TextLayout, transform: &Xform, sink: &mut impl LineSink, o
         };
         for &(ox, oy) in offsets {
             let local = glyph.mul(&Xform([1.0, 0.0, 0.0, 1.0, ox * r, oy * r]));
-            let settings = DrawSettings::unhinted(Size::new(face.size_px), LocationRef::new(&coords));
+            let (quantum, hint) = glyph_grid(aa, face.size_px);
+            let hinter_slot = &mut hinters[g.face as usize];
+            if hint && hinter_slot.is_none() {
+                let target =
+                    skrifa::outline::Target::Smooth { mode: skrifa::outline::SmoothMode::Light, symmetric_rendering: true, preserve_linear_metrics: false };
+                let opts = skrifa::outline::HintingOptions { engine: skrifa::outline::Engine::Auto(None), target };
+                *hinter_slot = skrifa::outline::HintingInstance::new(&font.outline_glyphs(), Size::new(face.size_px), LocationRef::new(&coords), opts).ok();
+            }
+            let settings = match hinter_slot.as_ref() {
+                Some(h) if hint => DrawSettings::hinted(h, false),
+                _ => DrawSettings::unhinted(Size::new(face.size_px), LocationRef::new(&coords)),
+            };
             match bend {
                 Some(w) => {
                     let mut ws = WarpSink { inner: &mut *sink, warp: w, post: *transform };
@@ -237,7 +281,15 @@ fn draw_pass(layout: &TextLayout, transform: &Xform, sink: &mut impl LineSink, o
                     }
                 }
                 None => {
-                    let mut pen = Pen::new(&mut *sink, transform.mul(&local));
+                    // Round the glyph origin along x to the mode's grid, after the draw transform (a scale or turn
+                    // would otherwise carry the correction sideways); warped text keeps its exact placement.
+                    let mut placed = transform.mul(&local);
+                    if quantum > 0.0 {
+                        // Half-up with a nudge, so a glyph sitting exactly on a tie rounds the same in every pass and
+                        // tile (the transform's float error differs between them).
+                        placed.0[4] = (placed.0[4] / quantum + 0.5 + 1e-3).floor() * quantum;
+                    }
+                    let mut pen = Pen::new(&mut *sink, placed);
                     if outline.draw(settings, &mut pen).is_ok() {
                         skrifa::outline::OutlinePen::close(&mut pen);
                     }
@@ -403,7 +455,7 @@ pub(crate) fn rasterize_passes(
         // (#8602). Outside its ink a colour's coverage is zero, so the result is the same.
         let sub = if per_colour {
             let mut b = Bounds::default();
-            draw_pass(layout, &xf, &mut b, Some(&c), warp, Pass::All);
+            draw_pass(layout, &xf, &mut b, Some(&c), warp, Pass::All, antialias);
             b.rect.map(rect_from_bounds).unwrap_or(Rect::EMPTY).intersect(&whole)
         } else {
             whole
@@ -424,7 +476,7 @@ pub(crate) fn rasterize_passes(
         let Some(mut cov) = Coverage::try_new(sw, sh) else {
             return nothing(format);
         };
-        draw_pass(layout, &xf, &mut cov, Some(&c), warp, Pass::Plain);
+        draw_pass(layout, &xf, &mut cov, Some(&c), warp, Pass::Plain, antialias);
         let Some(mut cov) = cov.finish() else {
             return nothing(format);
         };
@@ -433,7 +485,7 @@ pub(crate) fn rasterize_passes(
                 let Some(mut bc) = Coverage::try_new(sw, sh) else {
                     return nothing(format);
                 };
-                draw_pass(layout, &xf, &mut bc, Some(&c), warp, Pass::Bold(k));
+                draw_pass(layout, &xf, &mut bc, Some(&c), warp, Pass::Bold(k), antialias);
                 let Some(bold_cov) = bc.finish() else {
                     return nothing(format);
                 };

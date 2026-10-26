@@ -238,9 +238,6 @@ impl B {
         v.lut = Some(w);
         self.push(v)
     }
-    fn finish(&mut self, a: In, b: Option<In>, invert: bool, contour: &Contour, times_shape: bool, out: usize) {
-        self.finish_lut(a, b, invert, contour_lut(contour), times_shape, out);
-    }
     /// A glow's last step: its contour over the Range, then (centre-source inner glows) the
     /// inverse, then × the shape when inner.
     fn finish_glow(&mut self, a: In, lut: Option<Vec<f32>>, inner: bool, center: bool) {
@@ -254,9 +251,16 @@ impl B {
         self.stages.push(s);
     }
 
+    /// The last step of a coverage map: optional difference of two inputs, Invert, the contour lookup and the shape multiply.
     fn finish_lut(&mut self, a: In, b: Option<In>, invert: bool, lut: Option<Vec<f32>>, times_shape: bool, out: usize) {
         let flag = |v: bool| f32::from(u8::from(v));
-        let mut s = stage(Kernel::MFinish, Some(a), b, [flag(b.is_some()), flag(invert), flag(lut.is_some()), flag(times_shape)], 0);
+        let mut s = stage(
+            Kernel::MFinish,
+            Some(a),
+            b,
+            [if b.is_some() && lut.is_some() { 2.0 } else { flag(b.is_some()) }, if invert { 2.0 } else { 0.0 }, flag(lut.is_some()), flag(times_shape)],
+            0,
+        );
         s.lut = lut.map(Arc::new);
         if times_shape {
             s.s = Some(In::Shape);
@@ -282,11 +286,18 @@ pub(crate) fn blur_kernel(size: f32) -> Option<(i32, Vec<f32>)> {
     (k.0 > 0).then_some(k)
 }
 
+/// The contour as a coverage lookup table (`None` for Linear).
 fn contour_lut(c: &Contour) -> Option<Vec<f32>> {
     match c {
         Contour::Linear => None,
         Contour::Custom { points, corners, .. } => Some(photocraft_compose::adjust::contour_curve_lut(points, corners)),
     }
+}
+
+/// `glow_map`'s coverage LUT: the contour over the Range, with the outer fringe ramp for outer glows.
+fn glow_lut(g: &photocraft_doc::Glow, inner: bool) -> Option<Vec<f32>> {
+    let lut = photocraft_compose::effects::glow_lut(g);
+    if inner { lut } else { photocraft_compose::effects::outer_fringe_lut(lut) }
 }
 
 /// `compose::effects::offset`: shadow offset away from the light, whole pixels.
@@ -326,7 +337,9 @@ pub(crate) fn program_with(e: &Effect, light: &GlobalLight, vector_shape: bool, 
                 m = b.dilate(src, d, r);
             }
             let m = b.blur(m, bw);
-            b.finish(m, None, false, &s.contour, inner, 0);
+            let lut = contour_lut(&s.contour);
+            let lut = if inner { lut } else { photocraft_compose::effects::outer_fringe_lut(lut) };
+            b.finish_lut(m, None, false, lut, inner, 0);
             1
         }
         Effect::OuterGlow(g) | Effect::InnerGlow(g) => {
@@ -339,7 +352,7 @@ pub(crate) fn program_with(e: &Effect, light: &GlobalLight, vector_shape: bool, 
                     let solid = g.size * g.spread;
                     let soft = (g.size + 1.0 - solid).max(1e-3);
                     let m = b.push(stage(Kernel::MGlow, Some(d), None, [solid, soft, 0.0, 0.0], 0));
-                    b.finish_glow(m, photocraft_compose::effects::glow_lut(g), inner, center);
+                    b.finish_glow(m, glow_lut(g, inner), inner, center);
                 }
                 GlowTechnique::Softer => {
                     // Inner glows (edge, and centre as 1 - the edge result) spread 1 - alpha.
@@ -351,7 +364,7 @@ pub(crate) fn program_with(e: &Effect, light: &GlobalLight, vector_shape: bool, 
                         m = b.dilate(src, d, r);
                     }
                     let m = b.blur(m, bw);
-                    b.finish_glow(m, photocraft_compose::effects::glow_lut(g), inner, center);
+                    b.finish_glow(m, glow_lut(g, inner), inner, center);
                 }
             }
             1
@@ -381,9 +394,8 @@ pub(crate) fn program_with(e: &Effect, light: &GlobalLight, vector_shape: bool, 
             } else {
                 let [din, dout] = b.bevel_fields(size);
                 let soft = g.chisel_soft > 0.0;
-                let h = b.push(stage(Kernel::MBevelH, Some(din), Some(dout), [paint(g.paint), size, f32::from(u8::from(soft)), 0.0], 0));
-                // As `effects::bevel_height`: only emboss styles blur a Chisel Soft ramp.
-                if soft && g.paint == BevelPaint::Both { b.conv(h, photocraft_compose::effects::tent_kernel(g.chisel_soft)) } else { h }
+                // As `effects::bevel_height`: a Chisel Soft ramp is not blurred.
+                b.push(stage(Kernel::MBevelH, Some(din), Some(dout), [paint(g.paint), size, f32::from(u8::from(soft)), 0.0], 0))
             };
             if let Some(c) = &bv.contour {
                 // Contour element: the height through the contour (`bevel_contour_lut`).
@@ -405,13 +417,11 @@ pub(crate) fn program_with(e: &Effect, light: &GlobalLight, vector_shape: bool, 
                 st.pattern = Some(pat.clone());
                 h = b.push(st);
             }
-            if bv.soften >= 1.0 {
-                h = b.conv(h, photocraft_compose::effects::tent_kernel(bv.soften));
-            }
             let (angle, altitude) = if bv.use_global_light { (light.angle, light.altitude) } else { (bv.angle, bv.altitude) };
             let (sa, ca) = angle.to_radians().sin_cos();
             let (se, ce) = altitude.to_radians().sin_cos();
             let lut = contour_lut(&bv.gloss_contour).map(Arc::new);
+            let foot_k = photocraft_compose::effects::bevel_foot_k(g.paint, lut.as_deref().map(Vec::as_slice), se);
             // Region (`fs_mbevelshade`): 0 inside, 1 under the edge and outside, 2 / 3 emboss /
             // pillow emboss (both halves in one map).
             let passes: Vec<(f32, f32)> = match g.paint {
@@ -419,17 +429,44 @@ pub(crate) fn program_with(e: &Effect, light: &GlobalLight, vector_shape: bool, 
                 BevelPaint::Outer => vec![(g.depth, 1.0)],
                 BevelPaint::Both => vec![(g.depth, if g.pillow { 3.0 } else { 2.0 })],
             };
+            // Soften (`effects::soften_maps`): the shaded maps are blurred, normalised by the blurred
+            // support (inside the shape; outside it for an outer bevel; none for emboss styles), and
+            // multiplied by the support again.
+            let soften = (bv.soften >= 1.0).then(|| {
+                let support = match g.paint {
+                    BevelPaint::Inner => Some(In::Shape),
+                    BevelPaint::Outer => {
+                        let mut st = stage(Kernel::MFinish, Some(In::Shape), None, [0.0, 0.0, 1.0, 0.0], 0);
+                        // 1 where the shape is not (nearly) opaque: `s < 1 - INSIDE_EPS`.
+                        st.lut = Some(Arc::new((0..4096).map(|i| f32::from(u8::from((i as f32 / 4095.0) < 1.0 - 0.5 / 255.0))).collect()));
+                        Some(b.push(st))
+                    }
+                    BevelPaint::Both => None,
+                };
+                let norm = support.map(|s| b.conv(s, photocraft_compose::effects::tent_kernel(bv.soften)));
+                (support, norm)
+            });
             let mut out = 0;
             for (depth, region) in &passes {
                 for which in [0.0, 1.0] {
                     let mut s = stage(Kernel::MBevelShade, Some(h), None, [ca * ce, -sa * ce, se, se], 1);
                     s.p1 = [*depth, *region, which, f32::from(u8::from(lut.is_some()))];
-                    s.p3 = [f32::from(u8::from(g.paint == BevelPaint::Outer && bv.technique != BevelTechnique::Smooth)), 0.0, 0.0, 0.0];
+                    s.p3 = [f32::from(u8::from(g.paint == BevelPaint::Outer && bv.technique != BevelTechnique::Smooth)), foot_k, 0.0, 0.0];
                     s.lut = lut.clone();
                     s.s = Some(In::Shape);
-                    s.out = Some(out);
+                    if let Some((support, norm)) = soften {
+                        let m = b.push(s);
+                        let m = b.conv(m, photocraft_compose::effects::tent_kernel(bv.soften));
+                        let mut f = stage(Kernel::MFinish, Some(m), norm, [0.0, 0.0, 0.0, f32::from(u8::from(support.is_some()))], 0);
+                        f.p1 = [f32::from(u8::from(norm.is_some())), 0.0, 0.0, 0.0];
+                        f.s = support;
+                        f.out = Some(out);
+                        b.stages.push(f);
+                    } else {
+                        s.out = Some(out);
+                        b.stages.push(s);
+                    }
                     out += 1;
-                    b.stages.push(s);
                 }
             }
             out

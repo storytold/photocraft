@@ -1238,16 +1238,23 @@ fn fx_doc(effects: Vec<Effect>) -> Document {
     d
 }
 
-fn stroke(size: f32, position: StrokePosition) -> Effect {
-    Effect::Stroke(StrokeFx {
+/// A blue stroke of `size` at `position`, for tests.
+fn stroke_fx(size: f32, position: StrokePosition) -> StrokeFx {
+    StrokeFx {
         common: FxCommon::new(photocraft_color::BlendMode::Normal, 1.0),
         size,
         position,
         paint: FxPaint::Color(Color::rgb(0.0, 0.0, 1.0)),
         overprint: false,
-    })
+    }
 }
 
+/// [`stroke_fx`] as an effect.
+fn stroke(size: f32, position: StrokePosition) -> Effect {
+    Effect::Stroke(stroke_fx(size, position))
+}
+
+/// An outside stroke is exactly as wide as its size.
 #[test]
 fn outside_stroke_width() {
     let d = fx_doc(vec![stroke(3.0, StrokePosition::Outside)]);
@@ -1255,6 +1262,76 @@ fn outside_stroke_width() {
     assert!(close4(px(&d, 7, 20), [0.0, 0.0, 1.0, 1.0]));
     assert!(close4(px(&d, 5, 20), [1.0; 4]), "{:?}", px(&d, 5, 20));
     assert!(close4(px(&d, 20, 20), [1.0, 0.0, 0.0, 1.0]), "interior untouched");
+}
+
+/// Measured (`tools/probe.py stroke`): a Multiply / Color Dodge / Hue stroke over a layer's own pixels is the
+/// plain stroke colour; the mode only acts on what lies beneath the layer.
+#[test]
+fn an_inside_stroke_paints_the_plain_colour_whatever_its_mode() {
+    for mode in [photocraft_color::BlendMode::Multiply, photocraft_color::BlendMode::ColorDodge, photocraft_color::BlendMode::Hue] {
+        let mut st = stroke_fx(3.0, StrokePosition::Inside);
+        st.common = FxCommon::new(mode, 1.0);
+        let d = fx_doc(vec![Effect::Stroke(st)]);
+        assert!(close4(px(&d, 11, 20), [0.0, 0.0, 1.0, 1.0]), "{mode:?}: {:?}", px(&d, 11, 20));
+        assert!(close4(px(&d, 20, 20), [1.0, 0.0, 0.0, 1.0]), "{mode:?}: interior untouched");
+    }
+}
+
+/// Measured (`tools/probe.py stroke`, read over white and black): an inside stroke at 40 % over an opaque red
+/// layer is the stroke colour at 40 % alpha with the backdrop behind it, not a 40 % mix over the red.
+#[test]
+fn a_translucent_inside_stroke_replaces_the_layer_instead_of_mixing_with_it() {
+    let mut st = stroke_fx(3.0, StrokePosition::Inside);
+    st.common = FxCommon::new(photocraft_color::BlendMode::Normal, 0.4);
+    let d = fx_doc(vec![Effect::Stroke(st)]);
+    // White backdrop: 0.4 blue + 0.6 white (a mix over the red layer would give [0.6, 0.0, 0.4]).
+    assert!(close4(px(&d, 11, 20), [0.6, 0.6, 1.0, 1.0]), "{:?}", px(&d, 11, 20));
+    assert!(close4(px(&d, 20, 20), [1.0, 0.0, 0.0, 1.0]), "interior untouched");
+}
+
+/// An outside stroke replaces the shadow beneath it (measured, `tools/probe.py strokemodes`: an 80 % stroke
+/// over a 27 % glow is alpha 204, the plain colour): over white it is 0.8 blue + 0.2 white, whatever lies under it.
+#[test]
+fn an_outside_stroke_replaces_the_shadow_under_its_band() {
+    let mut st = stroke_fx(4.0, StrokePosition::Outside);
+    st.common = FxCommon::new(photocraft_color::BlendMode::Normal, 0.8);
+    let mut sh = shadow(0.0, 90.0);
+    sh.size = 8.0;
+    sh.spread = 0.0;
+    let d = fx_doc(vec![Effect::DropShadow(sh), Effect::Stroke(st)]);
+    // The square is 10..30; the band is 6..10, the shadow reaches 2..10 at distance 0.
+    assert!(close4(px(&d, 8, 20), [0.2, 0.2, 1.0, 1.0]), "{:?}", px(&d, 8, 20));
+    // Beyond the band the shadow shows (darker than white).
+    assert!(px(&d, 4, 20)[0] < 1.0, "{:?}", px(&d, 4, 20));
+}
+
+/// A gradient with Align with Layer off is laid out over the canvas, not the layer's frame (measured,
+/// `tools/probe.py sgrad`).
+#[test]
+fn an_unaligned_gradient_stroke_is_laid_out_over_the_canvas() {
+    let grad = |align| Gradient {
+        stops: vec![(0.0, Color::rgb(1.0, 0.0, 0.0)), (1.0, Color::rgb(0.0, 0.0, 1.0))],
+        opacity_stops: Vec::new(),
+        style: GradientStyle::Radial,
+        angle: 35.0,
+        scale: 1.0,
+        reverse: false,
+        align,
+        offset: (0.0, 0.0),
+    };
+    let make = |align| StrokeFx {
+        common: FxCommon::new(photocraft_color::BlendMode::Normal, 1.0),
+        size: 3.0,
+        position: StrokePosition::Outside,
+        paint: FxPaint::Gradient(grad(align)),
+        overprint: false,
+    };
+    let (aligned, free) = (make(true), make(false));
+    let mut d = fx_doc(vec![Effect::Stroke(aligned.clone())]);
+    let layer = d.layers.pop().unwrap();
+    assert_eq!(stroke_frame(&d, &layer, &free), Some(d.bounds()));
+    let frame = stroke_frame(&d, &layer, &aligned).unwrap();
+    assert!(frame.width() < d.bounds().width(), "the aligned frame hugs the layer: {frame:?}");
 }
 
 #[test]
@@ -1617,7 +1694,10 @@ fn a_gloss_contour_leaves_the_flat_face_of_a_bevel_unlit() {
             .iter()
             .map(|&(input, output)| CurvePoint { input, output })
             .collect(),
-        corners: vec![],
+        // Corner points: a polyline, as the preset curves are. With smooth points the
+        // spline's value at the flat face's shade (sin 30° = 0.5) is 0.54 and the face is
+        // lit a little; the contour's value there decides how much (see the test below).
+        corners: vec![true; 5],
     };
     let render = |gloss_contour: photocraft_doc::Contour| {
         let mut d = doc_white(40, 40);
@@ -1653,6 +1733,46 @@ fn a_gloss_contour_leaves_the_flat_face_of_a_bevel_unlit() {
     let linear = render(photocraft_doc::Contour::Linear);
     assert!(close4(px(&linear, 20, 20), fill), "Linear leaves the flat face too");
     assert!(!close4(px(&d, 20, 11), fill), "the slopes are still shaded");
+}
+
+/// A flat face is shaded by the contour's value at its own shade `sin(altitude)`, split at
+/// `sin(altitude)` (measured on a chisel-bevelled square: Cone paints the face
+/// fully lit, Cone - Inverted fully dark, at 30° altitude where both contours span 0.5).
+#[test]
+fn a_gloss_contour_shades_the_flat_face_by_its_value_at_the_light_altitude() {
+    let render = |name: &str, ys: [f32; 3]| {
+        let contour = photocraft_doc::Contour::Custom {
+            name: name.into(),
+            points: [0.0, 0.5, 1.0].iter().zip(ys).map(|(&input, output)| CurvePoint { input, output }).collect(),
+            corners: vec![],
+        };
+        let mut d = doc_white(40, 40);
+        let mut l = solid_layer("sq", Rect::new(10, 10, 30, 30), [0.5, 0.5, 0.5, 1.0]);
+        l.effects.items = vec![Effect::BevelEmboss(photocraft_doc::Bevel {
+            enabled: true,
+            style: photocraft_doc::BevelStyle::InnerBevel,
+            technique: photocraft_doc::BevelTechnique::ChiselHard,
+            depth: 1.0,
+            up: true,
+            size: 3.0,
+            soften: 0.0,
+            angle: 90.0,
+            altitude: 30.0,
+            use_global_light: false,
+            gloss_contour: contour,
+            gloss_anti_alias: false,
+            highlight: FxCommon::new(photocraft_color::BlendMode::Normal, 1.0),
+            highlight_color: Color::WHITE,
+            shadow: FxCommon::new(photocraft_color::BlendMode::Normal, 1.0),
+            shadow_color: Color::BLACK,
+            contour: None,
+            texture: None,
+        })];
+        d.layers.push(l);
+        px(&d, 20, 20)
+    };
+    assert!(close4(render("Cone", [0.0, 1.0, 0.0]), [1.0, 1.0, 1.0, 1.0]), "Cone lights the flat face");
+    assert!(close4(render("Cone - Inverted", [1.0, 0.0, 1.0]), [0.0, 0.0, 0.0, 1.0]), "Cone - Inverted darkens it");
 }
 
 #[test]
@@ -1761,6 +1881,7 @@ fn vector_mask_combines_with_pixel_mask() {
     assert!(close4(px(&d, 6, 1), [1.0; 4]));
 }
 
+/// Effect maps over a few distant pixels are not built over the whole canvas.
 #[test]
 fn effect_maps_over_distant_pixels_are_not_built_over_the_canvas() {
     // Two pixels 190000 apart: the effect source region spans 3.6·10¹⁰ px.
@@ -1773,6 +1894,22 @@ fn effect_maps_over_distant_pixels_are_not_built_over_the_canvas() {
     let px = render(&doc, Rect::new(0, 0, 4, 4));
     assert_eq!(px.px.len(), 16);
     assert!(t.elapsed().as_secs() < 20, "{:?}", t.elapsed());
+}
+
+/// The maps keep the canvas as the frame of unaligned gradients, so another canvas must not reuse them.
+#[test]
+fn effect_maps_are_rebuilt_for_another_canvas() {
+    let mut doc = doc_white(64, 64);
+    let mut l = solid_layer("fx", Rect::new(16, 16, 48, 48), [1.0, 0.0, 0.0, 1.0]);
+    l.effects.items.push(photocraft_doc::Effect::default_drop_shadow());
+    doc.layers.push(l);
+    let patterns = pattern::PreparedPatterns::new(&doc.patterns, pattern::PREPARED_PATTERN_BYTES);
+    let cx = Ctx::for_doc(&doc, &patterns);
+    let a = effect_maps(&doc.layers[1], doc.bounds(), &cx);
+    let mut bigger = Ctx::for_doc(&doc, &patterns);
+    bigger.canvas = Rect::new(0, 0, 200, 200);
+    let b = effect_maps(&doc.layers[1], doc.bounds(), &bigger);
+    assert!(!std::sync::Arc::ptr_eq(&a, &b), "a resized canvas rebuilds the maps");
 }
 
 #[test]

@@ -200,7 +200,8 @@ fn unit_reach(style: GradientStyle, angle: f32, frame: Rect) -> f32 {
     match style {
         GradientStyle::Linear => chord,
         GradientStyle::Reflected => chord / 2.0,
-        GradientStyle::Radial | GradientStyle::Angle | GradientStyle::Diamond => len / 2.0,
+        GradientStyle::Radial | GradientStyle::Diamond => chord / 2.0,
+        GradientStyle::Angle => len / 2.0,
     }
 }
 

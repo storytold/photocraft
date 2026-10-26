@@ -46,6 +46,15 @@ what an agent can't finish alone.
   constant and transparency is disabled. Variable-range synthesis, HSB/Lab modes and
   transparency remain unsupported and are preserved verbatim; the five visual examples do not
   establish Photoshop's exact noise algorithm or include this degenerate constant case.
+- **Partial (2026-10-25):** layer-effect rendering measured against the target application with small probes and
+  corrected, CPU and GPU together: blend modes in the special eight act as Fill in every effect paint; inside and centre
+  strokes replace the layer under their band; outer shadow and glow coverage is capped for contours that start above
+  zero, and precise glows keep climbing inside the spread; satin contours each blurred copy and Invert flips the result;
+  gradient glows, canvas-framed unaligned gradients and chord-sized radial and diamond gradients; bevel ramps, foot fade
+  for non-linear gloss and Stroke Emboss on the stroke band; effect noise has the measured law. On the 1,000-file
+  effects corpus the mean RMSE fell from 17.57 to 8.87 (noise-free items 6.27). Still open: the exact noise pixels (the
+  generator was not recovered, the statistics match, and about 585 corpus files carry noise), Outer Bevel with the Smooth
+  technique, unaligned gradient strokes, the gradient seam, and an inside stroke's mode over a non-empty backdrop.
 - **Evidence:** corpus floors (`crates/io/tests/it/corpus.rs`, scorecard): Photoshop-authored
   oracles 190/258 (74%; 32-bit Hue/Saturation 2026-10-22; smart filter masks 2026-10-14; CMYK and Lab adjustment layers, 32-bit unclipped adjustments, Levels, Threshold, Posterize and mask feathers 2026-10-13; Gradient Map luminosity 2026-10-13; CMYK Invert, Posterize and Threshold on the inks 2026-10-12), io corpus 148/170 (87%), psd-tools 249/309 (81%); round trips ~100%
   within the corpus. Smart-filter re-render matches 5/30. User reports: a PSD with text layers
@@ -102,6 +111,12 @@ what an agent can't finish alone.
   word, line, paragraph and all text, with tests (TYPE-218-8, #3493). 2026-10-15: area type, type
   inside a closed path or shape, with holes (TYPE-218-10). The Type tool froze the app for
   60 s on one macOS machine (#2518).
+- **Partial (2026-10-25):** type anti-aliasing fitted against the target application with 60 small probes (three fonts
+  at 9, 13, 24 and 64 px in every mode): coverage curves Smooth 1.0, Crisp 1.0, Strong 0.6, Sharp 0.8, and glyph origins
+  rounded to a per-mode grid (Smooth a quarter pixel, None whole pixels with light hinting, Sharp and Crisp a quarter,
+  half or whole pixel by size). Mean probe RMSE 7.28 to 3.88. Still open: None at 64 px (about 15), Sharp at 64 px
+  (about 8), the Windows modes and hinting at large sizes. The effects corpus never exercises this path (it shows cached
+  type pixels); `tools/typo_probe.py` re-renders from the model.
 - **Estimate:** 120–200 h.
 
 ### G11. Actions and scripting
@@ -390,12 +405,7 @@ what an agent can't finish alone.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-10-25 | minor | G9: the count of preferences that do nothing is the scorecard's again, 12 of 178 (it still said 24 of 171, from 2026-10-15); no estimate changed |
-| 2026-10-25 | minor | G6: Art History Brush landed as partial (TOOL-213-20, #1610), so no toolbar tool is missing; no percentage or estimate changed |
-| 2026-10-23 | minor | G4: hard-round built-in presets use 5% spacing (#8842), guarded by large-stroke outline and pressure-opacity pixel regressions at 8/16/32-bit; percentages and estimates unchanged |
-| 2026-10-23 | minor | G10: PSD stores and reads spot channels as Photoshop does (ink 0 = solid) with their identifiers (1053); PSDs from PhotoCraft 0.1.0–0.16.0 keep their ink (#7415 split, part 4); FILE-215-17 stays partial; estimate unchanged |
-| 2026-10-23 | minor | G10: TIFF alpha and spot channels written and read as extra samples with Photoshop's channel resources, PSD output unchanged (#7415); FILE-215-7 leaves the list, FILE-215-17 narrows to RGB/CMYK spot preview and PDF Separation |
-| 2026-10-23 | minor | G10: Amiga IFF write landed (24-plane ILBM, Save As `.iff`) and 24-plane ILBMs open |
+| 2026-10-25 | minor | G1 / G8: layer-effect shapes and type anti-aliasing measured and corrected (effects corpus mean RMSE 17.57 to 8.87, type probe 7.28 to 3.88); noise pixels and a few bevel and type edges remain open; estimates unchanged |
 | 2026-10-22 | minor | G17: Help › Check for Updates and an opt-out check once per launch (#5485), DIST-220-1 partial; estimate unchanged |
 | 2026-10-22 | minor | G1: 32-bit Hue/Saturation unclipped with Photoshop's saturation factor, bright colours keep their hue, Colorize's saturation scaled by 1 − \|Lightness\|; photoshop rgb32 hue-saturation and hue-saturation-colorize pass; Photoshop-oracle floor 188 → 190 of 258 (#5781) |
 | 2026-10-21 | minor | G9: adjustment clipping remains visible in compact Properties (#5231); no readiness percentage or estimate changed |

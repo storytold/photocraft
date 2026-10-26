@@ -390,13 +390,14 @@ fn gradient_t(style: GradientStyle, angle: f32, scale: f32, reverse: bool, offse
     let along = dx * c - dy * s;
     let across = dx * s + dy * c;
     let (chord, len) = gradient_units(a, w, h);
-    let (chord, len) = (chord * f64::from(scale.max(1e-3)), len * f64::from(scale.max(1e-3)));
+    let _ = len;
+    let chord = chord * f64::from(scale.max(1e-3));
     let corner = 0.5 * (c - s);
     let mut t = match style {
         GradientStyle::Linear => (along - corner) / chord + 0.5,
         GradientStyle::Reflected => ((along - corner) / (chord / 2.0)).abs(),
-        GradientStyle::Radial => dx.hypot(dy) / (len / 2.0),
-        GradientStyle::Diamond => (along.abs() + across.abs()) / (len / 2.0),
+        GradientStyle::Radial => dx.hypot(dy) / (chord / 2.0),
+        GradientStyle::Diamond => (along.abs() + across.abs()) / (chord / 2.0),
         // Clockwise sweep starting at the gradient angle.
         GradientStyle::Angle => ((a - (-dy).atan2(dx)) / std::f64::consts::TAU).rem_euclid(1.0),
     };
