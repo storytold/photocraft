@@ -9,7 +9,7 @@ use crate::dock::Group;
 use crate::theme::{ThemeKind, Tokens};
 
 fn left_top() -> egui::Id {
-    egui::Id::new("color-tab-test-origin")
+    egui::Id::unique("color-tab-test-origin")
 }
 
 /// The Color tab of `kind`, alone in a 300 pt wide panel, starting from a red foreground. `fill`
@@ -59,7 +59,7 @@ fn every_theme_shows_the_same_spectrum_field() {
         assert!((r - g).abs() < 0.02 && (g - b).abs() < 0.02 && (0.3..0.7).contains(&r), "{kind:?}: the field picks a mid grey, got {r} {g} {b}");
         // No theme swaps the field for sliders or adds them under it (#6000).
         for slider in ["Hue", "Saturation", "Brightness"] {
-            assert!(h.query_by_label(slider).is_none(), "{kind:?}: no {slider} slider");
+            assert!(h.query_all_by_label(slider).next().is_none(), "{kind:?}: no {slider} slider");
         }
     }
 }

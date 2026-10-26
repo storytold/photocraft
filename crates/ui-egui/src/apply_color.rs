@@ -9,6 +9,10 @@
 //! * any other tool (the Move tool, the brushes, the pixel selection tools…): nothing, only the
 //!   foreground.
 //!
+//! A click on a swatch is broader, as in Photoshop: whatever the tool, it recolours every selected
+//! type layer and the fill of every selected shape layer (#9238; Photoshop 2025 measured with the
+//! Move and Brush tools), while the Color panel keeps to the rules above.
+//!
 //! One pick is one history step for all the layers it recolours; a drag in the Color panel's field
 //! or sliders is one step too.
 
@@ -59,7 +63,7 @@ pub fn gesture(ctx: &Context) -> Option<String> {
 }
 
 fn focus_key() -> Id {
-    Id::new("apply-color-focus")
+    Id::unique("apply-color-focus")
 }
 
 /// Counts the changes of keyboard focus, so two values typed into one field, each after
@@ -79,14 +83,25 @@ pub fn track_focus(ctx: &Context) {
 /// Picks of one `gesture` (a Color panel drag or typed value, see [`gesture`]) share one history
 /// step; `None` (a swatch, the Color Picker, a click) is a step of its own.
 pub fn foreground_changed(app: &mut PhotocraftApp, gesture: Option<String>) {
+    recolour(app, gesture, false);
+}
+
+/// A swatch just set the foreground: recolour the selected characters while editing type, else
+/// every selected type layer and shape fill, whatever the tool (see the module docs).
+pub fn swatch_picked(app: &mut PhotocraftApp) {
+    recolour(app, None, true);
+}
+
+fn recolour(app: &mut PhotocraftApp, gesture: Option<String>, any_tool: bool) {
     // Editing type: the selected characters, in the editing session's step; nothing else.
     if app.ui.text_edit.is_some() {
         crate::type_tool::foreground_changed(app);
         return;
     }
     let tool = app.ui.tool;
-    // What the tool in hand recolours: type layers or shape layers.
+    // What the tool in hand recolours: type layers or shape layers (a swatch: both).
     let (do_texts, do_shapes) = match tool {
+        _ if any_tool => (true, true),
         t if t.is_type() && !t.is_type_mask() => (true, false),
         t if recolours_shapes(t) => (false, true),
         _ => return,

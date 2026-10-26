@@ -30,11 +30,11 @@ struct RotateDrag {
 }
 
 fn id() -> egui::Id {
-    egui::Id::new("pc-rotate-view-drag")
+    egui::Id::unique("pc-rotate-view-drag")
 }
 
 fn compass_id() -> egui::Id {
-    egui::Id::new("pc-rotate-view-compass")
+    egui::Id::unique("pc-rotate-view-compass")
 }
 
 /// Wrap `a` degrees into (−180, 180]. Non-finite values become 0 so a hostile angle never

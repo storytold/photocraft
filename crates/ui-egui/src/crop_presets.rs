@@ -34,9 +34,9 @@ pub const MAX_NAME: usize = 255;
 /// The `ToolOptions` fields a crop preset saves.
 const KEYS: [&str; 5] = ["crop_ratio", "crop_width", "crop_height", "crop_resolution", "crop_resolution_unit"];
 
-/// One entry of the preset dropdown.
+/// One entry of the preset dropdown (and of the Crop tool's canvas menu).
 #[derive(Clone, Debug, PartialEq)]
-enum Choice {
+pub(crate) enum Choice {
     /// A built-in key (`crop_ratio` value, size preset or Front Image), see [`crop_size::chosen`].
     Builtin(String),
     /// A saved crop preset, by name.
@@ -139,55 +139,70 @@ pub fn dropdown(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let users = user_presets(app);
     let o = &app.ui.tool_options;
     let label = button_label(o, &builtin, &users);
-    let current_user = users.iter().rev().find(|(_, f)| matches(o, f)).map(|(n, _)| n.clone());
+    let current_user = current_user(app);
     let can_new = savable(o).is_some();
     let mut chosen: Option<Choice> = None;
     let parent_layer = ui.layer_id();
-    egui::ComboBox::from_id_salt("crop-ratio").selected_text(label).width(140.0).height(420.0).icon(crate::widgets::chevron_icon).show_ui(ui, |ui| {
-        crate::press_menu::above_parent_ui(parent_layer, ui);
-        let (before, after): (Vec<_>, Vec<_>) = builtin.iter().partition(|(k, _)| k != crop_size::FRONT);
-        for (k, l) in &before {
-            if ui.selectable_label(current_user.is_none() && *k == o.crop_ratio, tl!(l)).clicked() {
-                chosen = Some(Choice::Builtin(k.clone()));
+    let combo =
+        egui::ComboBox::from_id_salt("crop-ratio").selected_text(label).width(140.0).height(420.0).icon(crate::widgets::chevron_icon).show_ui(ui, |ui| {
+            crate::press_menu::above_parent_ui(parent_layer, ui);
+            let (before, after): (Vec<_>, Vec<_>) = builtin.iter().partition(|(k, _)| k != crop_size::FRONT);
+            for (k, l) in &before {
+                if ui.selectable_label(current_user.is_none() && *k == o.crop_ratio, tl!(l)).clicked() {
+                    chosen = Some(Choice::Builtin(k.clone()));
+                }
             }
-        }
-        for (name, _) in &users {
-            if ui.selectable_label(current_user.as_deref() == Some(name), name.as_str()).clicked() {
-                chosen = Some(Choice::User(name.clone()));
+            for (name, _) in &users {
+                if ui.selectable_label(current_user.as_deref() == Some(name), name.as_str()).clicked() {
+                    chosen = Some(Choice::User(name.clone()));
+                }
             }
-        }
-        for (k, l) in &after {
-            if ui.selectable_label(false, tl!(l)).clicked() {
-                chosen = Some(Choice::Builtin(k.clone()));
+            for (k, l) in &after {
+                if ui.selectable_label(false, tl!(l)).clicked() {
+                    chosen = Some(Choice::Builtin(k.clone()));
+                }
             }
-        }
-        ui.separator();
-        if ui.add_enabled(can_new, egui::Button::selectable(false, tl!("New Crop Preset…"))).clicked() {
-            chosen = Some(Choice::New);
-        }
-        if ui.add_enabled(!users.is_empty(), egui::Button::selectable(false, tl!("Delete Crop Preset…"))).clicked() {
-            chosen = Some(Choice::Delete);
-        }
-    });
-    match chosen {
-        Some(Choice::Builtin(k)) => {
+            ui.separator();
+            if ui.add_enabled(can_new, egui::Button::selectable(false, tl!("New Crop Preset…"))).clicked() {
+                chosen = Some(Choice::New);
+            }
+            if ui.add_enabled(!users.is_empty(), egui::Button::selectable(false, tl!("Delete Crop Preset…"))).clicked() {
+                chosen = Some(Choice::Delete);
+            }
+        });
+    let _ = combo.response.accessible_name(tl!("Aspect Ratio"));
+    if let Some(c) = chosen {
+        apply_choice(app, c);
+    }
+}
+
+/// What picking a dropdown entry does; the Crop tool's canvas menu picks through it too.
+pub(crate) fn apply_choice(app: &mut PhotocraftApp, choice: Choice) {
+    match choice {
+        Choice::Builtin(k) => {
             app.ui.tool_options.crop_ratio = k;
             // A size preset or Front Image fills W x H x Resolution (#2443).
             crop_size::chosen(app);
             sync_custom_ratio_fields(app);
         }
-        Some(Choice::User(name)) => {
+        Choice::User(name) => {
             select(app, &name);
             sync_custom_ratio_fields(app);
         }
-        Some(Choice::New) => {
+        Choice::New => {
             open_new(app);
         }
-        Some(Choice::Delete) => {
+        Choice::Delete => {
             open_delete(app);
         }
-        None => {}
     }
+}
+
+/// The saved crop preset whose values the fields hold (the latest saved one first), as the
+/// dropdown shows it.
+pub(crate) fn current_user(app: &PhotocraftApp) -> Option<String> {
+    let o = &app.ui.tool_options;
+    user_presets(app).into_iter().rev().find(|(_, f)| matches(o, f)).map(|(n, _)| n)
 }
 
 /// A newly chosen ratio fills the editable custom W/H fields (free Ratio clears them, #3188).
@@ -265,10 +280,10 @@ pub fn body(app: &PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String, Val
 
 fn new_body(ui: &mut egui::Ui, fields: &mut Map<String, Value>) {
     let mut name = fields.get("name").and_then(Value::as_str).unwrap_or_default().to_string();
-    let id = ui.id().with("crop-preset-name");
+    let id = ui.scope_id().with("crop-preset-name");
     ui.horizontal(|ui| {
-        ui.label(tl!("Name:"));
-        let r = ui.add(egui::TextEdit::singleline(&mut name).id(id).char_limit(MAX_NAME).desired_width(260.0));
+        let name_label = ui.label(tl!("Name:"));
+        let r = ui.add(egui::TextEdit::singleline(&mut name).id(id).char_limit(MAX_NAME).desired_width(260.0)).labelled_by(name_label.id);
         // Photoshop focuses the name with all of it selected, so typing replaces it.
         let once = id.with("focused");
         if !ui.ctx().data(|d| d.get_temp::<bool>(once).unwrap_or(false)) {

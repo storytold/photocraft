@@ -1162,16 +1162,16 @@ pub mod transcode {
         fn type_layer(&mut self) -> Result<()> {
             self.u16()?;
             self.f64s(6)?;
-            self.type_descriptor(50)?;
-            self.type_descriptor(1)?;
+            self.type_descriptor(50, ByteOrder::Big)?;
+            self.type_descriptor(1, self.to)?;
             self.i32s(4)
         }
 
-        fn type_descriptor(&mut self, version: u16) -> Result<()> {
+        fn type_descriptor(&mut self, version: u16, to: ByteOrder) -> Result<()> {
             let [hi, lo] = version.to_be_bytes();
             let from = if self.from.is_little() && self.r.peek_rest().starts_with(&[hi, lo, 0, 0, 0, 16]) { ByteOrder::Big } else { self.from };
             let data = self.r.peek_rest();
-            let mut descriptor = Tx::new(data, self.version, from, self.to);
+            let mut descriptor = Tx::new(data, self.version, from, to);
             descriptor.depth = self.depth;
             descriptor.u16()?;
             descriptor.versioned_descriptor()?;
@@ -1834,6 +1834,132 @@ mod tests {
         let mut data = 0u32.to_be_bytes().to_vec();
         data.extend(VersionedDescriptor::new(desc).to_bytes());
         block_rt(*b"lfx2", data);
+    }
+
+    fn type_layer_data() -> Vec<u8> {
+        let mut data = Vec::new();
+        data.put_u16(1);
+        for value in [1.5, 0.0, -0.25, 1.75, 12.5, -3.25] {
+            data.put_f64(value);
+        }
+        data.put_u16(50);
+        let text = Descriptor::new("TxLr").with("Txt ", Value::Text(UnicodeString::new_nul("Synthetic Ω 🦀")));
+        data.extend(VersionedDescriptor::new(text).to_bytes());
+        data.put_u16(1);
+        data.extend(VersionedDescriptor::new(Descriptor::new("warp")).to_bytes());
+        for value in [11, -22, 333, 4_444] {
+            data.put_i32(value);
+        }
+        data
+    }
+
+    fn tagged_payload<'a>(bytes: &'a [u8], signature_and_key: &[u8; 8], little: bool) -> &'a [u8] {
+        let block_at = bytes.windows(8).position(|window| window == signature_and_key).expect("tagged block");
+        let length_at = block_at + 8;
+        let length_bytes: [u8; 4] = bytes.get(length_at..length_at + 4).expect("tagged block length").try_into().expect("four-byte length");
+        let length = if little { u32::from_le_bytes(length_bytes) } else { u32::from_be_bytes(length_bytes) };
+        let data_at = length_at + 4;
+        let data_end = data_at + usize::try_from(length).expect("test block length fits usize");
+        bytes.get(data_at..data_end).expect("tagged block payload")
+    }
+
+    fn legacy_little_endian_type_block() -> Vec<u8> {
+        let mut tysh = Vec::new();
+        tysh.extend_from_slice(&1u16.to_le_bytes());
+        for value in [1.5f64, 0.0, -0.25, 1.75, 12.5, -3.25] {
+            tysh.extend_from_slice(&value.to_le_bytes());
+        }
+        tysh.extend_from_slice(&50u16.to_le_bytes());
+        // Independently encode a little-endian `VersionedDescriptor` with a single TEXT value.
+        tysh.extend_from_slice(&16u32.to_le_bytes());
+        tysh.extend_from_slice(&0u32.to_le_bytes()); // empty descriptor name
+        tysh.extend_from_slice(&0u32.to_le_bytes()); // four-character class id
+        tysh.extend_from_slice(b"rLxT"); // little-endian four-character class id
+        tysh.extend_from_slice(&1u32.to_le_bytes()); // one item
+        tysh.extend_from_slice(&0u32.to_le_bytes()); // four-character key
+        tysh.extend_from_slice(b" txT"); // little-endian four-character key
+        tysh.extend_from_slice(b"TXET"); // little-endian OSType
+        let mut units: Vec<u16> = "Synthetic Ω 🦀".encode_utf16().collect();
+        units.push(0); // `new_nul`, matching the canonical fixture
+        tysh.extend_from_slice(&u32::try_from(units.len()).expect("short test string").to_le_bytes());
+        for unit in units {
+            tysh.extend_from_slice(&unit.to_le_bytes());
+        }
+        tysh.extend_from_slice(&1u16.to_le_bytes());
+        // Empty warp descriptor, also encoded independently in little-endian order.
+        tysh.extend_from_slice(&16u32.to_le_bytes());
+        tysh.extend_from_slice(&0u32.to_le_bytes()); // empty descriptor name
+        tysh.extend_from_slice(&4u32.to_le_bytes()); // `warp` is a four-byte string id
+        tysh.extend_from_slice(b"warp");
+        tysh.extend_from_slice(&0u32.to_le_bytes()); // no items
+        for value in [11i32, -22, 333, 4_444] {
+            tysh.extend_from_slice(&value.to_le_bytes());
+        }
+
+        let mut image_source = super::SIGNATURE.to_vec();
+        image_source.extend_from_slice(b"MIB8hSyT");
+        image_source.extend_from_slice(&u32::try_from(tysh.len()).expect("short test block").to_le_bytes());
+        image_source.extend_from_slice(&tysh);
+        let padding = (4 - tysh.len() % 4) % 4;
+        image_source.resize(image_source.len() + padding, 0);
+        image_source
+    }
+
+    #[test]
+    fn type_block_write_keeps_text_descriptor_in_psd_order() {
+        let canonical = type_layer_data();
+        let source = ImageSourceData { global_blocks: vec![TaggedBlock::new(*b"TySh", canonical.clone())], ..Default::default() };
+
+        let (little, warnings) = source.to_bytes(ByteOrder::Little).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let payload = tagged_payload(&little, b"MIB8hSyT", true);
+        assert_eq!(payload.get(..2), Some(&[1, 0][..]), "TySh header stays in TIFF order");
+        for (index, expected) in [1.5f64, 0.0, -0.25, 1.75, 12.5, -3.25].into_iter().enumerate() {
+            let start = 2 + index * 8;
+            let bytes: [u8; 8] = payload.get(start..start + 8).unwrap().try_into().unwrap();
+            assert_eq!(f64::from_le_bytes(bytes), expected, "matrix element {index}");
+        }
+
+        let (text_descriptor, descriptor_len) = VersionedDescriptor::parse_prefix(canonical.get(52..).unwrap()).unwrap();
+        let text_section_len = 2 + descriptor_len;
+        assert_eq!(payload.get(50..52), Some(&50u16.to_be_bytes()[..]));
+        assert_eq!(payload.get(52..56), Some(&16u32.to_be_bytes()[..]));
+        assert_eq!(payload.get(50..50 + text_section_len), canonical.get(50..50 + text_section_len));
+        assert!(matches!(text_descriptor.descriptor.get("Txt "), Some(Value::Text(value)) if value.to_string_lossy() == "Synthetic Ω 🦀"));
+        let text_descriptor_from_output = VersionedDescriptor::parse_prefix(payload.get(52..).unwrap()).unwrap().0;
+        assert!(matches!(text_descriptor_from_output.descriptor.get("Txt "), Some(Value::Text(value)) if value.to_string_lossy() == "Synthetic Ω 🦀"));
+
+        let warp_at = 50 + text_section_len;
+        assert_eq!(payload.get(warp_at..warp_at + 2), Some(&1u16.to_le_bytes()[..]));
+        let (_, warp_len) = VersionedDescriptor::parse_prefix(canonical.get(warp_at + 2..).unwrap()).unwrap();
+        let warp_descriptor_at = warp_at + 2;
+        assert_eq!(payload.get(warp_descriptor_at..warp_descriptor_at + 4), Some(&16u32.to_le_bytes()[..]));
+        assert_eq!(payload.get(warp_descriptor_at + 4..warp_descriptor_at + 8), Some(&0u32.to_le_bytes()[..]));
+        assert_eq!(payload.get(warp_descriptor_at + 8..warp_descriptor_at + 12), Some(&4u32.to_le_bytes()[..]));
+        assert_eq!(payload.get(warp_descriptor_at + 12..warp_descriptor_at + 16), Some(b"warp".as_slice()));
+        assert_eq!(payload.get(warp_descriptor_at + 16..warp_descriptor_at + 20), Some(&0u32.to_le_bytes()[..]));
+        let bounds_at = warp_descriptor_at + warp_len;
+        for (index, expected) in [11i32, -22, 333, 4_444].into_iter().enumerate() {
+            let start = bounds_at + index * 4;
+            assert_eq!(payload.get(start..start + 4), Some(&expected.to_le_bytes()[..]), "bound {index}");
+        }
+
+        let (big, warnings) = source.to_bytes(ByteOrder::Big).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(tagged_payload(&big, b"8BIMTySh", false), canonical);
+
+        let (reopened, warnings) = ImageSourceData::from_bytes(&little).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(reopened.global_blocks[0].data, canonical);
+        assert_eq!(reopened.to_bytes(ByteOrder::Big).unwrap().0, big);
+    }
+
+    #[test]
+    fn legacy_little_endian_type_descriptor_still_imports() {
+        let input = legacy_little_endian_type_block();
+        let (reopened, warnings) = ImageSourceData::from_bytes(&input).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(reopened.global_blocks[0].data, type_layer_data());
     }
 
     #[test]

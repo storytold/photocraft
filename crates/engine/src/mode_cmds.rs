@@ -123,6 +123,8 @@ pub(crate) fn rotate_arbitrary(s: &mut Session, p: &Value) -> Result<Value> {
             } else {
                 // Rotating the whole image moves locked layers too, including inside groups.
                 with_released_movement_locks(l, |l| crate::transform_cmds::transform_layer(None, photocraft_doc::Locks::default(), l, &h, Some(a), interp))?;
+                // Free Transform moves only linked masks; the whole image turns them all (#9201).
+                warp_unlinked_masks(l, &h, interp)?;
             }
             // What Free Transform leaves alone: unlinked vector masks, gradient angles, artboards…
             crate::canvas_geom::transform_layer_geometry(l, &a, false, dpi);
@@ -140,6 +142,24 @@ pub(crate) fn rotate_arbitrary(s: &mut Session, p: &Value) -> Result<Value> {
         Ok(new)
     })?;
     Ok(json!({"width": size.width, "height": size.height}))
+}
+
+/// Warps the unlinked pixel masks of `l` and its descendants, which [`transform_layer`] leaves in
+/// place.
+///
+/// [`transform_layer`]: crate::transform_cmds::transform_layer
+fn warp_unlinked_masks(l: &mut Layer, h: &Homography, interp: Interp) -> Result<()> {
+    if let Some(m) = l.mask.as_mut()
+        && !m.linked
+    {
+        m.surface = crate::transform_cmds::warp_gray(&m.surface, h, interp)?;
+    }
+    if let LayerContent::Group(g) = &mut l.content {
+        for c in &mut g.children {
+            warp_unlinked_masks(c, h, interp)?;
+        }
+    }
+    Ok(())
 }
 
 /// Runs `f` with movement locks (`position` and `all`) temporarily released on `l` and all its

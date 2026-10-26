@@ -176,7 +176,7 @@ pub(crate) fn run(app: &mut PhotocraftApp, id: &str, p: Value) -> Option<Value> 
 // ------------------------------------------------------------------ textures
 
 fn cached_texture(ctx: &egui::Context, key: impl std::hash::Hash + std::fmt::Debug, make: impl FnOnce() -> ColorImage) -> TextureHandle {
-    let id = egui::Id::new(("preset-tex", key));
+    let id = egui::Id::unique(("preset-tex", key));
     if let Some(t) = ctx.data(|d| d.get_temp::<TextureHandle>(id)) {
         return t;
     }
@@ -258,7 +258,7 @@ pub(crate) fn pattern_picker(app: &PhotocraftApp, ui: &mut egui::Ui, selected: &
     ui.painter().rect_stroke(r, 0.0, Stroke::new(1.0, t.field_border), egui::StrokeKind::Outside);
     let name = current.map_or(String::new(), |p| p.display_name().to_string());
     let resp = resp.on_hover_text(&name);
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Patterns")));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Patterns")));
     let mut picked = None;
     egui::Popup::menu(&resp).show(|ui| {
         picked = pattern_grid(app, ui, selected);
@@ -283,7 +283,7 @@ pub(crate) fn pattern_grid(app: &PhotocraftApp, ui: &mut egui::Ui, selected: &st
             let (w, c) = if p.id == selected { (2.0, t.accent) } else { (1.0, t.field_border) };
             ui.painter().rect_stroke(r, 0.0, Stroke::new(w, c), egui::StrokeKind::Outside);
             let cell = cell.on_hover_text(p.display_name());
-            cell.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), p.display_name()));
+            cell.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), p.display_name()));
             if cell.clicked() {
                 picked = Some(p.id.clone());
                 ui.close();
@@ -378,8 +378,8 @@ pub(crate) fn browser(
     if let Some((p, key, mut text)) = st.renaming.clone().filter(|r| r.0 == panel) {
         let mut done = None;
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(tl!("Name:")).color(t.text_dim).size(11.5));
-            let r = ui.add(egui::TextEdit::singleline(&mut text).desired_width(ui.available_width() - 4.0));
+            let name_label = ui.label(egui::RichText::new(tl!("Name:")).color(t.text_dim).size(11.5));
+            let r = ui.add(egui::TextEdit::singleline(&mut text).desired_width(ui.available_width() - 4.0)).labelled_by(name_label.id);
             if !r.has_focus() && !r.lost_focus() {
                 r.request_focus();
             }
@@ -408,7 +408,7 @@ pub(crate) fn browser(
     let display = st.display_order(panel, &group_names);
     // The footer stays in view: the list gets the height left after it (as measured last frame)
     // and scrolls, rather than pushing the footer out of a short dock group (#4790).
-    let footer_id = egui::Id::new(("preset-footer", panel));
+    let footer_id = egui::Id::unique(("preset-footer", panel));
     let footer_h = ui.data(|d| d.get_temp::<f32>(footer_id)).unwrap_or(FOOTER_GUESS);
     let max_h = max_h.min((ui.available_height() - footer_h).max(0.0));
     egui::ScrollArea::vertical().id_salt(("preset-scroll", panel)).max_height(max_h).min_scrolled_height(max_h.min(64.0)).auto_shrink([false, true]).show(
@@ -472,8 +472,8 @@ pub(crate) fn browser(
                 for (ii, it) in g.items.iter().enumerate() {
                     let (cx, cy) = ((ii % cols) as f32, (ii / cols) as f32);
                     let r = Rect::from_min_size(area.min + vec2(pad + cx * (cell.x + gap), cy * (cell.y + gap)), cell);
-                    let resp = ui.interact(r, ui.id().with((panel, gi, ii)), Sense::click_and_drag());
-                    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &it.name));
+                    let resp = ui.interact(r, ui.scope_id().with((panel, gi, ii)), Sense::click_and_drag());
+                    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &it.name));
                     let is_sel = selected.as_deref() == Some(&it.key);
                     if list {
                         if is_sel {
@@ -511,7 +511,7 @@ pub(crate) fn browser(
                         && let Some(pp) = ui.ctx().pointer_interact_pos()
                     {
                         // A ghost of the swatch follows the pointer.
-                        let lp = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("preset-drag")));
+                        let lp = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("preset-drag")));
                         let gr = Rect::from_center_size(pp, vec2(28.0, 28.0));
                         lp.rect_filled(gr, 3.0, t.card.gamma_multiply(0.8));
                         lp.rect_stroke(gr, 3.0, Stroke::new(1.0, t.accent), egui::StrokeKind::Outside);
@@ -567,7 +567,7 @@ pub(crate) fn browser(
         }
     }
     let recorded: Vec<(String, Rect)> = headers.iter().map(|(_, r, n)| (n.clone(), *r)).collect();
-    ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(("preset-group-headers", panel)), recorded));
+    ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique(("preset-group-headers", panel)), recorded));
     if let Some((key, pos)) = dropped {
         if let Some((_, _, g)) = headers.iter().find(|(_, r, _)| r.contains(pos)) {
             ev.push(Ev::Move(key, g.clone()));
@@ -581,7 +581,9 @@ pub(crate) fn browser(
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
         let mut s = size;
-        ui.add_sized(vec2(90.0, 18.0), egui::Slider::new(&mut s, MIN_THUMB..=96.0).show_value(false)).on_hover_text(tl!("Thumbnail size (smallest: list)"));
+        ui.add_sized(vec2(90.0, 18.0), egui::Slider::new(&mut s, MIN_THUMB..=96.0).show_value(false))
+            .accessible_name(tl!("Thumbnail size (smallest: list)"))
+            .on_hover_text(tl!("Thumbnail size (smallest: list)"));
         if (s - size).abs() > 0.01 {
             st.sizes.insert(panel.to_string(), s);
         }
@@ -623,7 +625,7 @@ fn group_drop_before(headers: &[(usize, Rect, String)], from: usize, y: f32) -> 
 
 /// Folder header rects drawn last frame (name → rect), in display order; for tests and automation.
 pub fn last_group_headers(ctx: &egui::Context, panel: &str) -> Vec<(String, Rect)> {
-    ctx.data(|d| d.get_temp(egui::Id::new(("preset-group-headers", panel)))).unwrap_or_default()
+    ctx.data(|d| d.get_temp(egui::Id::unique(("preset-group-headers", panel)))).unwrap_or_default()
 }
 
 /// Shared handling of the generic events through `<prefix>.edit` / `.new`.
@@ -792,7 +794,7 @@ fn float_window(
     let canvas = canvas_drop_rect(app);
     let mut close = false;
     egui::Window::new(title)
-        .id(egui::Id::new(("preset-window", key)))
+        .id(egui::Id::unique(("preset-window", key)))
         .title_bar(false)
         .resizable(false)
         .frame(frame)
@@ -1139,8 +1141,8 @@ pub fn tool_presets_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // Rename field.
     if let Some((_, key, mut text)) = app.ui.presets_ui.renaming.clone().filter(|r| r.0 == "toolPresets") {
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(tl!("Name:")).color(t.text_dim).size(11.5));
-            let r = ui.add(egui::TextEdit::singleline(&mut text).desired_width(ui.available_width() - 4.0));
+            let name_label = ui.label(egui::RichText::new(tl!("Name:")).color(t.text_dim).size(11.5));
+            let r = ui.add(egui::TextEdit::singleline(&mut text).desired_width(ui.available_width() - 4.0)).labelled_by(name_label.id);
             if !r.has_focus() && !r.lost_focus() {
                 r.request_focus();
             }
@@ -1254,7 +1256,8 @@ pub fn clone_source_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     ui.label(egui::RichText::new(src_line).color(t.text_dim).size(11.0));
     ui.add_space(4.0);
     let lbl = |ui: &mut egui::Ui, s: &str| {
-        ui.add_sized(vec2(18.0, 18.0), egui::Label::new(egui::RichText::new(s).color(t.text_dim).size(11.5)));
+        let label = ui.add_sized(vec2(18.0, 18.0), egui::Label::new(egui::RichText::new(s).color(t.text_dim).size(11.5)));
+        crate::widgets::scrub_option_label(ui, &label);
     };
     let off = slot.offset().unwrap_or([0.0, 0.0]);
     let (mut ox, mut oy) = (off[0] as f32, off[1] as f32);
@@ -1316,14 +1319,14 @@ pub fn clone_source_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         ui.add_space(18.0);
         ui.label(egui::RichText::new(tl!("Opacity:")).color(t.text_dim).size(11.5));
-        crate::widgets::value_field(ui, &mut o.opacity, 0.0..=100.0, "%", 56.0);
+        crate::widgets::value_field(ui, &mut o.opacity, 0.0..=100.0, "%", 56.0).accessible_name(tl!("Opacity:"));
         let opts = [
             ("normal".to_string(), tl!("Normal")),
             ("darken".to_string(), tl!("Darken")),
             ("lighten".to_string(), tl!("Lighten")),
             ("difference".to_string(), tl!("Difference")),
         ];
-        crate::widgets::dropdown(ui, "clone-overlay-mode", &mut o.blend, &opts, 90.0);
+        crate::widgets::dropdown(ui, "clone-overlay-mode", tl!("Blend Mode"), &mut o.blend, &opts, 90.0);
     });
     ui.horizontal(|ui| {
         ui.add_space(18.0);

@@ -249,6 +249,14 @@ pub fn cycle(o: &mut ToolOptions) {
     o.crop_overlay_orientation = 0;
 }
 
+/// Picks overlay `k`; another overlay starts at its first orientation.
+pub fn set_overlay(o: &mut ToolOptions, k: CropOverlay) {
+    if o.crop_overlay != k {
+        o.crop_overlay_orientation = 0;
+    }
+    o.crop_overlay = k;
+}
+
 /// ⇧O: the overlay's next orientation (nothing for a symmetric one).
 pub fn cycle_orientation(o: &mut ToolOptions) {
     let n = o.crop_overlay.orientations().max(1);
@@ -288,10 +296,7 @@ pub fn options_button(o: &mut ToolOptions, ui: &mut egui::Ui) {
         };
         for k in CropOverlay::ALL {
             if item(ui, o.crop_overlay == k, tl!(k.label()), None) {
-                if o.crop_overlay != k {
-                    o.crop_overlay_orientation = 0;
-                }
-                o.crop_overlay = k;
+                set_overlay(o, k);
                 ui.close();
             }
         }

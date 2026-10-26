@@ -16,6 +16,12 @@ struct State {
     recents: Vec<String>,
 }
 
+/// Frames a harness may take to settle. Opening the font menu scrolls it to the current family on
+/// the first laid-out pass, and the rows that scroll into view load their samples then: a family
+/// with an Arabic sample asks for one more pass to widen its row. How many do depends on the
+/// fonts installed (Linux CI settled after 6), so 4 frames, egui's default, is too few.
+const SETTLE_STEPS: u64 = 16;
+
 fn harness() -> Harness<'static, State> {
     harness_with(FontPreview::Medium)
 }
@@ -29,7 +35,7 @@ fn harness_with_recents(preview: FontPreview, recents: Vec<String>) -> Harness<'
     let mut families: Vec<String> = (0..60).map(|i| format!("Family {i:02}")).collect();
     families.push("Zeta Sans".into());
     let state = State { current: "Family 00".into(), families, button: egui::Id::NULL, popup: egui::Id::NULL, preview, recents };
-    let mut h = Harness::builder().with_size(vec2(600.0, 900.0)).build_ui_state(
+    let mut h = Harness::builder().with_size(vec2(600.0, 900.0)).with_max_steps(SETTLE_STEPS).build_ui_state(
         |ui, s: &mut State| {
             s.button = ui.make_persistent_id(egui::IdSalt::new("type-font"));
             s.popup = s.button.with("popup");
@@ -73,7 +79,7 @@ fn hovering_a_font_row_sets_preview_and_leaving_clears_it() {
     assert!(popup.contains(row), "row {row:?} is outside popup {popup:?}");
     h.hover_at(row);
     h.run_steps(2);
-    let hover_id = egui::Id::new("type-font-hover");
+    let hover_id = egui::Id::unique("type-font-hover");
     assert_eq!(h.ctx.input(|i| i.pointer.interact_pos()), Some(row));
     assert!(popup_rect(&h).is_some(), "popup closes while moving pointer to the row");
     assert_eq!(
@@ -132,6 +138,7 @@ fn the_search_field_stays_put_while_the_list_scrolls() {
     h.hover_at(h.get_by_label("Family 05").rect().center());
     for _ in 0..6 {
         h.event(egui::Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
             unit: egui::MouseWheelUnit::Line,
             delta: vec2(0.0, -3.0),
             phase: egui::TouchPhase::Move,
@@ -340,7 +347,7 @@ fn the_first_arrow_after_a_pick_keeps_the_focus_between_neighbours() {
         let families: Vec<String> = (0..20).map(|i| format!("Family {i:02}")).collect();
         let state =
             State { current: "Family 03".into(), families, button: egui::Id::NULL, popup: egui::Id::NULL, preview: FontPreview::Off, recents: Vec::new() };
-        let mut h = Harness::builder().with_size(vec2(600.0, 900.0)).build_ui_state(
+        let mut h = Harness::builder().with_size(vec2(600.0, 900.0)).with_max_steps(SETTLE_STEPS).build_ui_state(
             |ui, s: &mut State| {
                 let _ = ui.button("Above");
                 s.button = ui.make_persistent_id(egui::IdSalt::new("type-font"));
@@ -435,7 +442,7 @@ fn font_cycle_in_options_bar_edits_the_layer_and_can_be_undone() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
     app.run("file.new", json!({"width": 200, "height": 100})).unwrap();
     app.run("type.create", json!({"text": "Sample", "font": "Inter", "size": 18})).unwrap();
-    let mut h = Harness::builder().with_size(vec2(900.0, 700.0)).build_ui_state(
+    let mut h = Harness::builder().with_size(vec2(900.0, 700.0)).with_max_steps(SETTLE_STEPS).build_ui_state(
         |ui, app| {
             if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 ui.horizontal(|ui| crate::type_tool::options_bar(app, ui));
@@ -446,7 +453,8 @@ fn font_cycle_in_options_bar_edits_the_layer_and_can_be_undone() {
     crate::PhotocraftApp::setup_context(&h.ctx, Default::default());
     h.run_steps(4);
     h.query_all_by_role(Role::ComboBox).next().unwrap().click();
-    h.run();
+    // The font search field's caret blinks every pass, so settle with bounded steps instead.
+    h.run_steps(2);
     h.get_by_role(Role::TextInput).type_text("JetBrains");
     h.key_press(Key::ArrowDown);
     h.run();
@@ -480,7 +488,7 @@ fn hovering_a_font_does_not_pollute_history_and_clears_on_close() {
 
     // Simulate hovering a font directly via the preview module
     let ctx = egui::Context::default();
-    ctx.data_mut(|d| d.insert_temp(egui::Id::new("type-font-hover"), "JetBrains Mono".to_string()));
+    ctx.data_mut(|d| d.insert_temp(egui::Id::unique("type-font-hover"), "JetBrains Mono".to_string()));
     crate::type_font_preview::follow_hover(&mut app, &ctx);
 
     // Verify a preview document is generated
@@ -529,7 +537,9 @@ fn options_bar_hover_previews_on_canvas_without_committing() {
         }
     }
 
-    let mut h = Harness::builder().with_size(vec2(900.0, 700.0)).build_eframe(|cc| {
+    // Opening the menu on the current family (#9197) paints rows that load their font samples
+    // over a few frames, more than the default four steps.
+    let mut h = Harness::builder().with_size(vec2(900.0, 700.0)).with_max_steps(64).build_eframe(|cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, crate::theme::ThemeKind::ALL[0]);
         PreviewApp { app: PhotocraftApp::new(photocraft_engine::Session::new(), Services::default()) }
     });
@@ -656,7 +666,7 @@ fn localized_font_names_label_the_menu_but_pick_the_family() {
         preview: FontPreview::Medium,
         recents: Vec::new(),
     };
-    let mut h = Harness::builder().with_size(vec2(600.0, 900.0)).build_ui_state(
+    let mut h = Harness::builder().with_size(vec2(600.0, 900.0)).with_max_steps(SETTLE_STEPS).build_ui_state(
         |ui, s: &mut State| {
             s.popup = ui.make_persistent_id(egui::IdSalt::new("type-font")).with("popup");
             let fams = s.families.clone();
@@ -665,6 +675,9 @@ fn localized_font_names_label_the_menu_but_pick_the_family() {
         },
         state,
     );
+    // The localized menu lists Japanese names, so install the app's bundled theme fonts
+    // (including the craft-fonts Japanese faces) before the first pass shapes text.
+    crate::theme::install_fonts(&h.ctx);
     // Show Font Names in English on: no localized labels.
     crate::type_tool::sync_font_names(&h.ctx, true);
     let labels: HashMap<String, String> = [("MS Gothic".to_string(), "ＭＳ ゴシック".to_string())].into();
@@ -768,26 +781,162 @@ fn open_menu_arrows_walk_on_through_recent_fonts() {
 }
 
 /// Opened on a family that is also a recent one (the usual case: every pick records it), the
-/// arrows start from its alphabetical place, and only that row is marked.
+/// menu marks its copy in the recent group, as Photoshop's does (#9160), and only that row; the
+/// arrows walk on from there through the list as shown (Photoshop: ↓ goes to the next recent
+/// family).
 #[test]
-fn open_menu_on_a_recent_font_steps_through_the_alphabet() {
+fn open_menu_on_a_recent_font_marks_its_recent_row() {
     use egui_kittest::kittest::NodeT;
-    for (key, want) in [(Key::ArrowDown, "Family 06"), (Key::ArrowUp, "Family 04")] {
-        let mut h = harness_with_recents(FontPreview::Off, vec!["Family 05".into(), "Family 09".into()]);
-        h.state_mut().current = "Family 05".into();
-        h.run();
-        open(&mut h);
-        let marked = |h: &Harness<'static, State>, label: &str| {
-            h.query_all_by_label(label).filter(|n| n.accesskit_node().toggled() == Some(egui::accesskit::Toggled::True)).count()
-        };
-        assert_eq!(marked(&h, "Family 05"), 1, "one row marked");
-        h.key_press(key);
-        h.run();
-        assert_eq!(h.state().current, want);
-        h.key_press(Key::ArrowDown);
+    let mut h = harness_with_recents(FontPreview::Off, vec!["Family 05".into(), "Family 09".into()]);
+    h.state_mut().current = "Family 05".into();
+    h.run();
+    open(&mut h);
+    let marked = |h: &Harness<'static, State>, label: &str| -> Vec<f32> {
+        h.query_all_by_label(label).filter(|n| n.accesskit_node().toggled() == Some(egui::accesskit::Toggled::True)).map(|n| n.rect().top()).collect()
+    };
+    let tops = |h: &Harness<'static, State>, label: &str| -> Vec<f32> {
+        let mut t: Vec<f32> = h.query_all_by_label(label).map(|n| n.rect().top()).collect();
+        t.sort_by(f32::total_cmp);
+        t
+    };
+    assert_eq!(marked(&h, "Family 05"), [tops(&h, "Family 05")[0]], "the upper (recent) copy alone is marked");
+    h.key_press(Key::ArrowDown);
+    h.run();
+    assert_eq!(h.state().current, "Family 09", "↓ walks on to the next recent family");
+    h.key_press(Key::ArrowUp);
+    h.run();
+    assert_eq!(h.state().current, "Family 05", "and ↑ back");
+}
+
+/// #9160: the menu opens showing the current family, as Photoshop's does: a family deep in the
+/// list is scrolled to the top of the view, not left wherever the list happens to start.
+#[test]
+fn open_menu_shows_the_current_family() {
+    let mut h = harness_with_recents(FontPreview::Off, vec!["Zeta Sans".into()]);
+    h.state_mut().current = "Family 40".into();
+    h.run();
+    open(&mut h);
+    h.run();
+    let popup = popup_rect(&h).expect("the menu is open");
+    let row = h.query_all_by_label("Family 40").next().expect("its row").rect();
+    assert!(popup.contains_rect(row), "Family 40 is in view: {row:?} in {popup:?}");
+}
+
+/// The current family is in view the frame the menu opens, with the app's scroll animation on:
+/// the reveal jumps, where an animated scroll left the row outside the popup for a while.
+/// The harness turns animations off, so this turns a slow one back on.
+#[test]
+fn open_menu_shows_the_current_family_without_animating() {
+    let mut h = harness_with_recents(FontPreview::Off, Vec::new());
+    h.ctx.all_styles_mut(|s| s.scroll_animation = egui::style::ScrollAnimation::duration(10.0));
+    h.state_mut().current = "Family 40".into();
+    h.run();
+    h.query_all_by_role(Role::ComboBox).next().unwrap().click();
+    h.run_steps(4);
+    let popup = popup_rect(&h).expect("the menu is open");
+    let row = h.query_all_by_label("Family 40").next().expect("its row").rect();
+    assert!(popup.contains_rect(row), "Family 40 is in view: {row:?} in {popup:?}");
+}
+
+/// Photoshop: ↑ on the top recent row stays there, without wrapping or changing the font.
+#[test]
+fn open_menu_arrow_up_on_the_top_recent_row_stays_there() {
+    use egui_kittest::kittest::NodeT;
+    let mut h = harness_with_recents(FontPreview::Off, vec!["Family 05".into(), "Family 09".into()]);
+    h.state_mut().current = "Family 05".into();
+    h.run();
+    open(&mut h);
+    let marked_top = |h: &Harness<'static, State>| -> Vec<f32> {
+        h.query_all_by_label("Family 05").filter(|n| n.accesskit_node().toggled() == Some(egui::accesskit::Toggled::True)).map(|n| n.rect().top()).collect()
+    };
+    let before = marked_top(&h);
+    assert_eq!(before.len(), 1, "one row marked");
+    for _ in 0..2 {
         h.key_press(Key::ArrowUp);
         h.run();
-        assert_eq!(h.state().current, want, "and walks on from there");
+        assert_eq!(h.state().current, "Family 05", "↑ on the top row keeps the font");
+        assert_eq!(marked_top(&h), before, "and the mark stays on the top row");
+    }
+}
+
+/// #9160: when the marked recent row fits below the top of the recent group, the menu opens
+/// with the whole group in view, its first row just below the search field.
+#[test]
+fn open_menu_shows_the_recent_group_when_the_marked_row_fits_below_it() {
+    use egui_kittest::kittest::NodeT;
+    let recents: Vec<String> = (10..15).map(|i| format!("Family {i}")).collect();
+    let mut h = harness_with_recents(FontPreview::Off, recents);
+    h.state_mut().current = "Family 12".into();
+    h.run();
+    open(&mut h);
+    h.run();
+    let popup = popup_rect(&h).expect("the menu is open");
+    let search = h.get_by_role(Role::TextInput).rect();
+    let first = h.query_all_by_label("Family 10").map(|n| n.rect()).min_by(|a, b| a.top().total_cmp(&b.top())).expect("the recent group's first row");
+    let row = h.query_all_by_label("Family 12").find(|n| n.accesskit_node().toggled() == Some(egui::accesskit::Toggled::True)).expect("its marked row").rect();
+    assert!(popup.contains_rect(row) && row.top() >= search.bottom(), "recent #3 is in view: {row:?} in {popup:?}");
+    assert!(
+        popup.contains_rect(first) && (0.0..=12.0).contains(&(first.top() - search.bottom())),
+        "the group's first row sits just below the search field: {first:?} under {search:?}"
+    );
+}
+
+/// #9160 with large previews: a recent family further down the default ten recents opens in view,
+/// not below the fold because the menu scrolled to the top of the recent group.
+#[test]
+fn open_menu_shows_a_lower_recent_family_with_large_previews() {
+    use egui_kittest::kittest::NodeT;
+    for preview in [FontPreview::Huge, FontPreview::ExtraLarge] {
+        let recents: Vec<String> = (10..20).map(|i| format!("Family {i}")).collect();
+        let mut h = harness_with_recents(preview, recents);
+        h.state_mut().current = "Family 17".into();
+        h.run();
+        open(&mut h);
+        h.run();
+        let popup = popup_rect(&h).expect("the menu is open");
+        let search = h.get_by_role(Role::TextInput).rect();
+        let row =
+            h.query_all_by_label("Family 17").find(|n| n.accesskit_node().toggled() == Some(egui::accesskit::Toggled::True)).expect("its marked row").rect();
+        assert!(popup.contains_rect(row) && row.top() >= search.bottom(), "{preview:?}: recent #8 is in view: {row:?} in {popup:?} below {search:?}");
+    }
+}
+
+/// The open-scroll happens once, when the menu opens. With no row for the current family then
+/// (a missing font, a mixed selection), the list the user scrolled does not jump later when one
+/// turns up: the font finishes loading, or the selection settles on one family.
+#[test]
+fn open_menu_without_the_current_family_never_jumps_later() {
+    for missing in [true, false] {
+        let mut h = harness_with_recents(FontPreview::Off, Vec::new());
+        if missing {
+            h.state_mut().families.retain(|f| f != "Family 40");
+            h.state_mut().current = "Family 40".into();
+        } else {
+            h.state_mut().current = String::new();
+        }
+        h.run();
+        open(&mut h);
+        h.run();
+        h.hover_at(h.get_by_label("Family 05").rect().center());
+        for _ in 0..3 {
+            h.event(egui::Event::MouseWheel {
+                source: egui::MouseWheelSource::Unknown,
+                unit: egui::MouseWheelUnit::Line,
+                delta: vec2(0.0, -3.0),
+                phase: egui::TouchPhase::Move,
+                modifiers: Modifiers::NONE,
+            });
+            h.run();
+        }
+        let scrolled = h.get_by_label("Family 00").rect();
+        if missing {
+            h.state_mut().families.push("Family 40".into());
+        } else {
+            h.state_mut().current = "Family 40".into();
+        }
+        h.run_steps(3);
+        assert!(popup_rect(&h).is_some(), "the menu stays open");
+        assert_eq!(h.get_by_label("Family 00").rect(), scrolled, "missing = {missing}: the list jumped");
     }
 }
 
@@ -799,7 +948,7 @@ fn options_bar_menu_arrows_walk_on_while_recording_recent_fonts() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
     app.run("file.new", json!({"width": 200, "height": 100})).unwrap();
     app.run("type.create", json!({"text": "Sample", "font": "Inter", "size": 18})).unwrap();
-    let mut h = Harness::builder().with_size(vec2(900.0, 700.0)).build_ui_state(
+    let mut h = Harness::builder().with_size(vec2(900.0, 700.0)).with_max_steps(SETTLE_STEPS).build_ui_state(
         |ui, app| {
             if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 ui.horizontal(|ui| crate::type_tool::options_bar(app, ui));
@@ -814,7 +963,8 @@ fn options_bar_menu_arrows_walk_on_while_recording_recent_fonts() {
     let mut seen = vec![h.state().ui.tool_options.type_font.clone()];
     for _ in 0..4 {
         h.key_press(Key::ArrowDown);
-        h.run();
+        // The open font menu repaints for its caret, so step a bounded number of times.
+        h.run_steps(2);
         seen.push(h.state().ui.tool_options.type_font.clone());
     }
     let mut once = seen.clone();
@@ -831,7 +981,13 @@ fn wheel_over_the_closed_font_button_steps_through_the_families() {
     h.hover_at(button);
     h.run();
     let wheel = |h: &mut Harness<'static, State>, y: f32| {
-        h.event(egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Line, delta: vec2(0.0, y), phase: egui::TouchPhase::Move, modifiers: Modifiers::NONE });
+        h.event(egui::Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
+            unit: egui::MouseWheelUnit::Line,
+            delta: vec2(0.0, y),
+            phase: egui::TouchPhase::Move,
+            modifiers: Modifiers::NONE,
+        });
         h.run();
     };
     wheel(&mut h, -2.0);
@@ -850,7 +1006,13 @@ fn wheel_over_the_closed_button_keeps_a_stable_order_with_recents() {
     h.hover_at(button);
     h.run();
     let wheel = |h: &mut Harness<'static, State>, y: f32| {
-        h.event(egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Line, delta: vec2(0.0, y), phase: egui::TouchPhase::Move, modifiers: Modifiers::NONE });
+        h.event(egui::Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
+            unit: egui::MouseWheelUnit::Line,
+            delta: vec2(0.0, y),
+            phase: egui::TouchPhase::Move,
+            modifiers: Modifiers::NONE,
+        });
         h.run();
     };
     wheel(&mut h, -1.0);

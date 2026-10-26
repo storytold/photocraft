@@ -483,9 +483,13 @@ fn save_in_background_off_blocks_the_app_until_the_file_is_written() {
     assert_eq!(r["pending"], true, "the same background job does the work");
     h.run_steps(1);
     // The dialog is up from the first frame (no delay), titled with the save, then its stage.
+    // A new modal's accessibility tree can take a second pass to appear under kittest.
+    let t = Instant::now();
+    while h.query_by_label("Saving fg.psd").is_none() && t.elapsed() < Duration::from_secs(30) {
+        h.step();
+    }
     h.get_by_label("Saving fg.psd");
     h.get_by_label("Esc to cancel");
-    let t = Instant::now();
     while h.query_by_label("Encoding").is_none() && t.elapsed() < Duration::from_secs(30) {
         h.step();
     }

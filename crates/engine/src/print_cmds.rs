@@ -1143,12 +1143,31 @@ fn package(s: &mut Session, p: &Value) -> Result<Value> {
     for (_, _, l) in doc.walk() {
         let LayerContent::Smart(so) = &l.content else { continue };
         let SmartSource::Linked { path } = &so.source else { continue };
+        if missing.contains(path) {
+            continue;
+        }
         let target = match copied.iter().find(|(src, _)| src == path) {
             Some((_, t)) => t.clone(),
             None => {
-                let mut fname = file_name(path);
-                if copied.iter().any(|(_, t)| file_name(t) == fname) {
-                    fname = format!("{}-{}", copied.len(), fname);
+                // A name no earlier copy has, ignoring case (macOS and Windows folders do): a
+                // renamed copy can't take the name of another link either. A file already in
+                // Links (an earlier package into the same folder) is never overwritten.
+                let base = file_name(path);
+                let taken = |n: &str| {
+                    copied.iter().any(|(_, t)| file_name(t).to_lowercase() == n.to_lowercase())
+                        || std::path::Path::new(&join(&links_dir, n)).exists()
+                        || std::fs::read_dir(&links_dir)
+                            .ok()
+                            .into_iter()
+                            .flatten()
+                            .flatten()
+                            .any(|entry| entry.file_name().to_string_lossy().to_lowercase() == n.to_lowercase())
+                };
+                let mut fname = base.clone();
+                let mut k = copied.len();
+                while taken(&fname) {
+                    fname = format!("{k}-{base}");
+                    k += 1;
                 }
                 let t = join(&links_dir, &fname);
                 // A path that is not followed is packaged as missing, like a file that is gone.

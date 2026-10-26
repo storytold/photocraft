@@ -506,7 +506,7 @@ pub fn draw_rulers(app: &mut PhotocraftApp, ui: &mut egui::Ui, full: Rect, xf: &
     for (r, vertical, salt) in [(top, false, "ruler-top"), (left, true, "ruler-left"), (corner, false, "ruler-corner")] {
         // Guides drag out of the top/left rulers and the zero point out of the corner; all three
         // sense clicks so the right-click unit menu opens anywhere on the ruler.
-        let resp = ui.interact(r, ui.id().with(salt), Sense::click_and_drag());
+        let resp = ui.interact(r, ui.scope_id().with(salt), Sense::click_and_drag());
         if salt == "ruler-corner" {
             corner_origin(app, ui, &resp, &p, xf, origin, ticks);
         } else if resp.hovered() {
@@ -896,14 +896,16 @@ mod tests {
         h.run_steps(1);
         for y in [40.0, 60.0, 75.0] {
             h.event(egui::Event::PointerMoved(canvas_at(&h, 200.0, y)));
-            h.run_steps(1);
+            // egui 0.37 lays an Area's contents out a pass after it is shown; step to the settled
+            // frame with the pointer still at `y` (readout included) rather than the first pass.
+            h.run_steps(2);
             let pos = h.state().guide_drag.map(|d| d.pos);
             assert_eq!(pos, Some(f64::from(y)), "the drag follows the pointer");
             assert!(h.query_by_label(&format!("{y} px")).is_some(), "readout at {y} in the same frame");
         }
         let up = canvas_at(&h, 200.0, 75.0);
         h.event(egui::Event::PointerButton { pos: up, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
-        h.run_steps(1);
+        h.run_steps(2);
         assert!(h.state().guide_drag.is_none());
         assert!(h.query_by_label("Y:").is_none(), "no readout in the frame that drops the guide");
         assert!(h.state().session.active().unwrap().doc.guides.horizontal.contains(&75.0), "the guide lands at y = 75");

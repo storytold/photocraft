@@ -10,6 +10,7 @@
 //! `swatches.*` engine command; this module only draws and dispatches. Colours are shown in the
 //! RGB working space through `photocraft-cms` (cached per library revision and colour settings).
 
+use std::ffi::OsStr;
 use std::sync::Arc;
 
 use egui::{Color32, CornerRadius, Rect};
@@ -31,7 +32,7 @@ fn c32(c: [f32; 3]) -> Color32 {
 /// Display colours of every swatch, rebuilt when the library or the working spaces change.
 fn colors(app: &PhotocraftApp, ctx: &egui::Context) -> Arc<Vec<Vec<Color32>>> {
     let c = &app.session.color.settings;
-    let key = egui::Id::new(("swatch-colors", app.session.presets.rev, &c.working_rgb, &c.working_cmyk, &c.working_gray));
+    let key = egui::Id::unique(("swatch-colors", app.session.presets.rev, &c.working_rgb, &c.working_cmyk, &c.working_gray));
     if let Some(v) = ctx.data(|d| d.get_temp::<Arc<Vec<Vec<Color32>>>>(key)) {
         return v;
     }
@@ -39,10 +40,10 @@ fn colors(app: &PhotocraftApp, ctx: &egui::Context) -> Arc<Vec<Vec<Color32>>> {
     let v: Arc<Vec<Vec<Color32>>> = Arc::new(app.session.presets.swatches.iter().map(|g| g.items.iter().map(|s| c32(conv.rgb(&s.color))).collect()).collect());
     ctx.data_mut(|d| {
         // Only the newest table is kept.
-        if let Some(old) = d.get_temp::<egui::Id>(egui::Id::new("swatch-colors-key")) {
+        if let Some(old) = d.get_temp::<egui::Id>(egui::Id::unique("swatch-colors-key")) {
             d.remove::<Arc<Vec<Vec<Color32>>>>(old);
         }
-        d.insert_temp(egui::Id::new("swatch-colors-key"), key);
+        d.insert_temp(egui::Id::unique("swatch-colors-key"), key);
         d.insert_temp(key, v.clone());
     });
     v
@@ -52,9 +53,9 @@ fn colors(app: &PhotocraftApp, ctx: &egui::Context) -> Arc<Vec<Vec<Color32>>> {
 pub fn use_swatch(app: &mut PhotocraftApp, name: &str, background: bool) {
     let target = if background { "background" } else { "foreground" };
     if run(app, "swatches.use", json!({"swatch": name, "target": target})).is_some() && !background {
-        // Clicking a swatch recolours the selected characters (#364), or the selected type or
-        // shape layers with a Type, shape or Pen tool, as in Photoshop.
-        crate::apply_color::foreground_changed(app, None);
+        // Clicking a swatch recolours the selected characters (#364), or the selected type and
+        // shape layers whatever the tool, as in Photoshop (#9238).
+        crate::apply_color::swatch_picked(app);
     }
 }
 
@@ -157,7 +158,7 @@ pub fn import_bytes(app: &mut PhotocraftApp, name: &str, bytes: &[u8], replace: 
     p["mode"] = json!(if replace { "replace" } else { "append" });
     // Bytes without a path (the browser, drag and drop) are sniffed by content, and `.act` has
     // no signature: one starting 00 01 or 00 02 reads as `.aco`. Its file name decides.
-    if std::path::Path::new(name).extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("act")) {
+    if std::path::Path::new(name).extension().and_then(OsStr::to_str).is_some_and(|e| e.eq_ignore_ascii_case("act")) {
         p["format"] = json!("act");
     }
     if let Some(stem) = stem {

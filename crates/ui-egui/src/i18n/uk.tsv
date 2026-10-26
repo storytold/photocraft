@@ -426,6 +426,10 @@
 	Zoom Out	Зменшити
 	Fit on Screen	Умістити на екрані
 	100%	100%
+	105%	105%
+	110%	110%
+	115%	115%
+	120%	120%
 	200%	200%
 	75%	75%
 	80%	80%
@@ -2760,6 +2764,9 @@ fontWeight	Italic	Курсивний
 	Create new document from current state	Створити новий документ із поточного стану
 	Create new fill or adjustment layer	Створити новий шар заливки або корекції
 	Create new snapshot	Створити новий знімок стану
+	From:	З:
+	Full Document	Увесь документ
+	Merged Layers	Об'єднані шари
 	Delete Cropped Pixels	Видаляти обрізані пікселі
 	Delete current state	Видалити поточний стан
 
@@ -3815,6 +3822,8 @@ curves	Smooth	Згладити
 	Vanishing Point is not active	Точка сходження не активна
 	Apply Vanishing Point ({key})	Застосувати точку сходження ({key})
 	Fix the red plane first: its corners must form a convex quad	Спершу виправте червону площину: її кути мають утворювати опуклий чотирикутник
+	Alt-click a plane to set the clone source	Клацніть площину з Alt, щоб задати джерело клонування
+	Too many clone strokes: apply Vanishing Point first	Забагато мазків клонування: спочатку застосуйте «Точку сходження»
 # Select and Mask view modes (#1754)
 	Onion Skin	Калька
 	Marching Ants	Мурашки
@@ -3939,6 +3948,17 @@ curves	Smooth	Згладити
 	Sent to {printer}	Надіслано на {printer}
 	set in Print Settings…	задається в параметрах друку…
 	ICO is limited to 256 × 256 pixels	ICO обмежено розміром 256 × 256 пікселів
+	Calibration	Калібрування
+	Red Primary	Червоний основний
+	Green Primary	Зелений основний
+	Blue Primary	Синій основний
+	Write xmp sidecars	Записувати супутні файли XMP
+	Set the tone sliders from the image	Встановити повзунки тону за зображенням
+	Settings from {name}	Налаштування з {name}
+	Settings from {name}; {count} not supported: {names}	Налаштування з {name}; не підтримується: {count}: {names}
+	Could not write {name}: {error}	Не вдалося записати {name}: {error}
+	Kept {name}: written by another application	{name} залишено без змін: записаний іншою програмою
+	Shadow Tint	Відтінок тіней
 # PhotoCraft release checks.
 	Check for Updates…	Перевірити оновлення…
 	PhotoCraft Updates	Оновлення PhotoCraft
@@ -4130,3 +4150,17 @@ curves	Smooth	Згладити
 	Grayscale Ramp	Шкала градацій сірого
 	Current Colors	Поточні кольори
 	Make Ramp Web Safe	Зробити шкалу безпечною для вебу
+# Art History Brush (#213).
+	Art History Brush Tool	Інструмент «Художній пензель історії»
+	Tight Short	Щільний короткий
+	Tight Medium	Щільний середній
+	Tight Long	Щільний довгий
+	Loose Medium	Вільний середній
+	Loose Long	Вільний довгий
+	Dab	Мазок
+	Tight Curl	Щільний завиток
+	Loose Curl	Вільний завиток
+	Stylized dabs from a history state	Стилізовані мазки зі стану історії
+
+# Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
+	Target	Ціль

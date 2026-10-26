@@ -451,7 +451,7 @@ fn line(painter: &egui::Painter, a: Pos2, b: Pos2) {
     painter.line_segment([a, b], Stroke::new(1.5, Color32::WHITE));
 }
 
-fn diamond(painter: &egui::Painter, c: Pos2, r: f32, fill: Color32, outline: Color32) {
+pub(crate) fn diamond(painter: &egui::Painter, c: Pos2, r: f32, fill: Color32, outline: Color32) {
     let pts = vec![pos2(c.x, c.y - r), pos2(c.x + r, c.y), pos2(c.x, c.y + r), pos2(c.x - r, c.y)];
     painter.add(egui::Shape::convex_polygon(pts, fill, Stroke::new(1.0, outline)));
 }
@@ -513,7 +513,7 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
 // ---------------------------------------------------------------- options bar
 
 /// A ramp of RGBA stops over a checkerboard in `r`.
-fn paint_ramp(p: &egui::Painter, r: Rect, sample: impl Fn(f32) -> [f32; 4]) {
+pub(crate) fn paint_ramp(p: &egui::Painter, r: Rect, sample: impl Fn(f32) -> [f32; 4]) {
     // The tessellator snaps the checker's rects to pixels but not the mesh: snap both alike, or a
     // half-pixel offset leaves a row of checker showing under the ramp (#4577).
     let r = r.round_to_pixels(p.pixels_per_point());
@@ -565,7 +565,7 @@ pub fn paint_thumbnail(ui: &egui::Ui, layer: LayerId, f: &Fill, rect: Rect) -> b
         return false;
     }
     let ctx = ui.ctx();
-    let key = egui::Id::new(("gradient-thumb", layer.0));
+    let key = egui::Id::unique(("gradient-thumb", layer.0));
     let cached: Option<(Fill, egui::TextureHandle)> = ctx.data(|d| d.get_temp(key));
     let tex = match cached {
         Some((cf, t)) if cf == *f => t,
@@ -596,7 +596,7 @@ pub fn preset_swatch(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> bool {
     paint_ramp(ui.painter(), r, |u| photocraft_algo::paint::sample_stops(&stops, u));
     ui.painter().rect_stroke(r, 0.0, Stroke::new(1.0, t.field_border), StrokeKind::Outside);
     // Name the control for accessibility (and so tests and agents can find it).
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Gradient picker")));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Gradient picker")));
     resp.on_hover_text(tl!("Click to edit the gradient")).clicked()
 }
 
@@ -622,7 +622,7 @@ pub fn editor_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // Resolved before the closure so `app` is borrowed only once inside it.
     let layer = selected_gradient(app);
     egui::Window::new(tl!("Gradient Editor"))
-        .id(egui::Id::new("gradient-editor"))
+        .id(egui::Id::unique("gradient-editor"))
         .open(&mut open)
         .collapsible(false)
         .resizable(true)
@@ -745,8 +745,8 @@ impl Sink {
     /// Uniqueness for the drag state.
     fn key(self) -> egui::Id {
         match self {
-            Sink::Layer(id) => egui::Id::new(("gradient-stops-drag", id.0)),
-            Sink::Preset => egui::Id::new(("gradient-stops-drag", "preset")),
+            Sink::Layer(id) => egui::Id::unique(("gradient-stops-drag", id.0)),
+            Sink::Preset => egui::Id::unique(("gradient-stops-drag", "preset")),
         }
     }
     fn cmd(self) -> &'static str {
@@ -887,7 +887,7 @@ fn stop_strip(ui: &mut egui::Ui, key: egui::Id, f: &Fill, midpoints: bool, pendi
     let w = ui.available_width().max(120.0);
     let (outer, resp) = ui.allocate_exact_size(vec2(w, 58.0), Sense::click_and_drag());
     // Name the strip for accessibility (and so tests and agents can find it).
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), tl!("Gradient stops")));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tl!("Gradient stops")));
     let top = outer.top() + 16.0;
     let bar = Rect::from_min_max(pos2(outer.left() + 8.0, top), pos2(outer.right() - 8.0, top + 24.0));
     let x_of = |loc: f32| bar.left() + loc.clamp(0.0, 1.0) * bar.width();

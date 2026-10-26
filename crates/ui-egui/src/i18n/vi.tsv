@@ -578,6 +578,10 @@
 
 # Phase 3.5 — View menu
 	100%	100%
+	105%	105%
+	110%	110%
+	115%	115%
+	120%	120%
 	200%	200%
 	32-bit Preview Options…	Tùy chọn xem trước 32-bit…
 	Anamorphic 2:1 (2)	Anamorphic 2:1 (2)
@@ -981,6 +985,10 @@
 	Frame from Layers…	Frame từ các lớp…
 	Create new document from current state	Tạo tài liệu mới từ trạng thái hiện tại
 	Create new snapshot	Tạo ảnh chụp trạng thái mới
+	From:	Từ:
+	Full Document	Toàn bộ tài liệu
+	Merged Layers	Các lớp đã gộp
+	New Snapshot	Ảnh chụp trạng thái mới
 	Delete current state	Xóa trạng thái hiện tại
 	No properties	Không có thuộc tính
 	Hide Properties	Ẩn Thuộc tính
@@ -2454,6 +2462,8 @@ shape	Appearance	Diện mạo
 	Fill with {mode}-neutral color (black)	Tô bằng màu trung tính của {mode} (đen)
 	Fill with {mode}-neutral color (white)	Tô bằng màu trung tính của {mode} (trắng)
 	Fix the red plane first: its corners must form a convex quad	Hãy sửa mặt phẳng đỏ trước: các góc phải tạo thành tứ giác lồi
+	Alt-click a plane to set the clone source	Nhấp Alt vào một mặt phẳng để đặt nguồn sao chép
+	Too many clone strokes: apply Vanishing Point first	Quá nhiều nét sao chép: hãy áp dụng Điểm tụ trước
 	Float Panel	Thả nổi bảng
 	Functions	Hàm
 	Grid Size:	Cỡ lưới:
@@ -3702,6 +3712,17 @@ curves	Smooth	Làm mượt
 	Sent to {printer}	Đã gửi tới {printer}
 	set in Print Settings…	đặt trong thiết lập in…
 	ICO is limited to 256 × 256 pixels	ICO giới hạn ở 256 × 256 pixel
+	Calibration	Hiệu chuẩn
+	Red Primary	Màu đỏ cơ bản
+	Green Primary	Màu lục cơ bản
+	Blue Primary	Màu lam cơ bản
+	Write xmp sidecars	Ghi tệp phụ XMP
+	Set the tone sliders from the image	Đặt các thanh trượt tông từ ảnh
+	Settings from {name}	Thiết lập từ {name}
+	Settings from {name}; {count} not supported: {names}	Thiết lập từ {name}; {count} không được hỗ trợ: {names}
+	Could not write {name}: {error}	Không thể ghi {name}: {error}
+	Kept {name}: written by another application	Đã giữ {name}: do ứng dụng khác ghi
+	Shadow Tint	Sắc độ bóng tối
 	Check for Updates…	Kiểm tra bản cập nhật…
 	PhotoCraft Updates	Bản cập nhật PhotoCraft
 	Checking for updates…	Đang kiểm tra bản cập nhật…
@@ -3913,3 +3934,18 @@ curves	Smooth	Làm mượt
 	Grayscale Ramp	Dải thang xám
 	Current Colors	Màu hiện tại
 	Make Ramp Web Safe	Giới hạn dải màu ở màu web
+# Art History Brush (#213).
+	Art History Brush	Cọ lịch sử nghệ thuật
+	Art History Brush Tool	Công cụ Cọ lịch sử nghệ thuật
+	Tight Short	Chặt ngắn
+	Tight Medium	Chặt vừa
+	Tight Long	Chặt dài
+	Loose Medium	Lỏng vừa
+	Loose Long	Lỏng dài
+	Dab	Chấm
+	Tight Curl	Xoắn chặt
+	Loose Curl	Xoắn lỏng
+	Stylized dabs from a history state	Các chấm cách điệu từ một trạng thái lịch sử
+
+# Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
+	Aspect Ratio	Tỷ lệ khung hình

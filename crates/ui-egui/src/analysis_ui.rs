@@ -530,7 +530,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             if !m.count_groups.is_empty() {
                 let mut gi = m.active_count_group.min(m.count_groups.len() - 1);
                 let opts: Vec<(usize, &str)> = m.count_groups.iter().enumerate().map(|(i, g)| (i, g.name.as_str())).collect();
-                if crate::widgets::dropdown(ui, "count-group", &mut gi, &opts, 140.0) {
+                if crate::widgets::dropdown(ui, "count-group", tl!("Group"), &mut gi, &opts, 140.0) {
                     let _ = app.run("count.setGroup", json!({"group": gi, "active": true}));
                 }
                 let g = &m.count_groups[gi];
@@ -563,9 +563,9 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                 crate::widgets::vline(ui, 22.0);
                 let (mut ms, mut ls) = (g.marker_size as f32, g.label_size as f32);
                 ui.label(RichText::new(tl!("Marker Size")).color(t.text_dim).size(11.0));
-                let a = crate::widgets::value_field(ui, &mut ms, 1.0..=10.0, "", 40.0).changed();
+                let a = crate::widgets::value_field(ui, &mut ms, 1.0..=10.0, "", 40.0).accessible_name(tl!("Marker Size")).changed();
                 ui.label(RichText::new(tl!("Label Size")).color(t.text_dim).size(11.0));
-                let b = crate::widgets::value_field(ui, &mut ls, 8.0..=72.0, "", 44.0).changed();
+                let b = crate::widgets::value_field(ui, &mut ls, 8.0..=72.0, "", 44.0).accessible_name(tl!("Label Size")).changed();
                 if a || b {
                     let _ = app.run("count.setGroup", count_size_params(ms, ls));
                 }
@@ -574,8 +574,8 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         }
         Tool::Note => {
             let t = Tokens::get(ui.ctx());
-            ui.label(RichText::new(tl!("Author:")).color(t.text_dim).size(11.0));
-            ui.add(egui::TextEdit::singleline(&mut app.ui.analysis.note_author).desired_width(120.0));
+            let author_label = ui.label(RichText::new(tl!("Author:")).color(t.text_dim).size(11.0));
+            ui.add(egui::TextEdit::singleline(&mut app.ui.analysis.note_author).desired_width(120.0)).labelled_by(author_label.id);
             ui.label(RichText::new(tl!("Color:")).color(t.text_dim).size(11.0));
             let rgb = app.ui.analysis.note_color;
             if crate::widgets::color_swatch_button(ui, color32(rgb), tl!("Color")).clicked() {
@@ -653,7 +653,7 @@ pub(crate) fn panel_window(app: &PhotocraftApp, ctx: &egui::Context, id: &str, t
     let t = Tokens::get(ctx);
     let canvas = app.last_canvas_rect;
     egui::Window::new(title)
-        .id(egui::Id::new(id))
+        .id(egui::Id::unique(id))
         .title_bar(false)
         .resizable(false)
         .movable(!app.session.prefs().workspace_locked)
@@ -789,7 +789,7 @@ fn notes_panel(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 let note = &notes[i];
                 ui.label(RichText::new(if note.author.is_empty() { tl!("No author").to_string() } else { note.author.clone() }).color(t.text_dim).size(11.0));
                 let mut text = note.text.clone();
-                if ui.add(egui::TextEdit::multiline(&mut text).desired_rows(6).desired_width(f32::INFINITY)).changed() {
+                if ui.add(egui::TextEdit::multiline(&mut text).desired_rows(6).desired_width(f32::INFINITY)).accessible_name(tl!("Notes")).changed() {
                     edit = Some(json!({"index": i, "text": text, "coalesce": format!("note-{i}")}));
                 }
             }
@@ -837,7 +837,7 @@ fn num_field(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, label: &s
     ui.horizontal(|ui| {
         ui.add_sized(vec2(110.0, 18.0), egui::Label::new(RichText::new(tl!(&label)).color(t.text_dim).size(11.0)));
         let mut v = f.get(key).and_then(Value::as_f64).unwrap_or(0.0) as f32;
-        if crate::widgets::value_field(ui, &mut v, range, suffix, 80.0).changed() {
+        if crate::widgets::value_field(ui, &mut v, range, suffix, 80.0).accessible_name(tl!(label)).changed() {
             f.insert(key.into(), json!(v));
         }
     });
@@ -849,7 +849,7 @@ fn choice(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, label: &str,
         ui.add_sized(vec2(110.0, 18.0), egui::Label::new(RichText::new(tl!(&label)).color(t.text_dim).size(11.0)));
         let mut cur = f.get(key).and_then(Value::as_str).unwrap_or(opts[0].0).to_string();
         let list: Vec<(String, &str)> = opts.iter().map(|(k, l)| (k.to_string(), *l)).collect();
-        if crate::widgets::dropdown(ui, &format!("an-{key}"), &mut cur, &list, 120.0) {
+        if crate::widgets::dropdown(ui, &format!("an-{key}"), tl!(label), &mut cur, &list, 120.0) {
             f.insert(key.into(), json!(cur));
         }
     });
@@ -887,7 +887,7 @@ fn dialog(app: &mut PhotocraftApp, ctx: &egui::Context) {
     };
     let mut result: Option<bool> = None;
     egui::Window::new(title)
-        .id(egui::Id::new("analysis-dialog"))
+        .id(egui::Id::unique("analysis-dialog"))
         .collapsible(false)
         .resizable(false)
         .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
@@ -904,9 +904,10 @@ fn dialog(app: &mut PhotocraftApp, ctx: &egui::Context) {
                         num_field(ui, &mut f, "pixelLength", tl!("Pixel Length:"), 0.001..=1e7, "");
                         num_field(ui, &mut f, "logicalLength", tl!("Logical Length:"), 0.0001..=1e7, "");
                         ui.horizontal(|ui| {
-                            ui.add_sized(vec2(110.0, 18.0), egui::Label::new(RichText::new(tl!("Logical Units:")).color(t.text_dim).size(11.0)));
+                            let units_label =
+                                ui.add_sized(vec2(110.0, 18.0), egui::Label::new(RichText::new(tl!("Logical Units:")).color(t.text_dim).size(11.0)));
                             let mut u = f.get("units").and_then(Value::as_str).unwrap_or("pixels").to_string();
-                            if ui.add(egui::TextEdit::singleline(&mut u).desired_width(80.0)).changed() {
+                            if ui.add(egui::TextEdit::singleline(&mut u).desired_width(80.0)).labelled_by(units_label.id).changed() {
                                 f.insert("units".into(), json!(u));
                             }
                         });
