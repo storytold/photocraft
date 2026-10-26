@@ -893,7 +893,11 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
             }
             if fmt == "png" {
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(tl!("Compression")).color(t.text_dim));
+                    // PNG is lossless at every effort, so the choice is time against file size and
+                    // never image quality. Said on hover rather than in the label, which keeps the
+                    // one-word label the catalogs already translate (#5409 review).
+                    ui.label(egui::RichText::new(tl!("Compression")).color(t.text_dim))
+                        .on_hover_text(tl!("Lossless either way: more effort takes longer and writes a smaller file, and never changes a pixel."));
                     let mut c = s(f, "pngCompression");
                     if c.is_empty() {
                         c = "default".into();
