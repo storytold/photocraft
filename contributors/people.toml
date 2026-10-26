@@ -265,6 +265,8 @@ sync_github_name = false
 [people.drunkeninja42]
 real_name = "Kushagra Sharma"
 
+[people.kobaltgit]
+sync_github_name = true
 [people.WebWork-rrs]
 display_name = "Ratul Paul"
 

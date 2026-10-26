@@ -3597,14 +3597,42 @@ fn layer_thumb_fit(cell: Rect, w: u32, h: u32) -> (Rect, Rect) {
     crate::channels_panel::fit_thumb(cell, w, h)
 }
 
+/// The registered icon name matching Photoshop's adjustment layer glyph for `adj`.
+pub(crate) fn adjustment_icon(adj: &photocraft_doc::Adjustment) -> &'static str {
+    use photocraft_doc::Adjustment;
+    match adj {
+        Adjustment::BrightnessContrast { .. } => "brightness-contrast",
+        Adjustment::Levels { .. } => "levels",
+        Adjustment::Curves { .. } => "curves",
+        Adjustment::Exposure { .. } => "exposure",
+        Adjustment::Vibrance { .. } => "vibrance",
+        Adjustment::HueSaturation { .. } => "hue-saturation",
+        Adjustment::ColorBalance { .. } => "scale",
+        Adjustment::BlackWhite { .. } => "black-white",
+        Adjustment::PhotoFilter { .. } => "photo-filter",
+        Adjustment::ChannelMixer { .. } => "channel-mixer",
+        Adjustment::ColorLookup { .. } => "color-lookup",
+        Adjustment::Invert => "invert",
+        Adjustment::Posterize { .. } => "posterize",
+        Adjustment::Threshold { .. } => "threshold",
+        Adjustment::GradientMap { .. } => "gradient-map",
+        Adjustment::SelectiveColor { .. } => "selective-color",
+        Adjustment::Unsupported { .. } => "adjustment-layer",
+    }
+}
+
+/// Draws the thumbnail tile for a layer (pixel preview, adjustment icon, type "T", or folder).
 fn draw_layer_thumb(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &egui::Ui, doc: &photocraft_doc::Document, l: &Layer, rect: Rect, selected: bool) {
     let t = Tokens::get(ctx);
     let p = ui.painter();
     match &l.content {
-        LayerContent::Adjustment(_) | LayerContent::Group(_) => {
+        LayerContent::Adjustment(adj) => {
             p.rect_filled(rect, 6.0, t.field);
-            let icon = if l.is_group() { "folder" } else { "contrast" };
-            icons::paint(ui, rect, icon, 18.0, t.icon);
+            icons::paint(ui, rect, adjustment_icon(adj), 18.0, t.icon);
+        }
+        LayerContent::Group(_) => {
+            p.rect_filled(rect, 6.0, t.field);
+            icons::paint(ui, rect, "folder", 18.0, t.icon);
         }
         LayerContent::Text(_) => {
             // Photoshop: type layers show a "T" tile rather than a pixel thumbnail.
@@ -4181,22 +4209,22 @@ fn adjustments_grid(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     ui.label(RichText::new(tl!("Add an adjustment")).color(t.text_dim));
     ui.add_space(4.0);
     let items: [(&str, &str, &str); 16] = [
-        ("brightnessContrast", "sun", tl!("Brightness/Contrast")),
-        ("levels", "gauge", tl!("Levels")),
-        ("curves", "pen-tool", tl!("Curves")),
-        ("exposure", "scan", tl!("Exposure")),
-        ("vibrance", "sparkles", tl!("Vibrance")),
-        ("hueSaturation", "droplet", tl!("Hue/Saturation")),
-        ("colorBalance", "blend", tl!("Color Balance")),
-        ("blackWhite", "contrast", tl!("Black & White")),
-        ("photoFilter", "circle-dot", tl!("Photo Filter")),
-        ("channelMixer", "sliders-horizontal", tl!("Channel Mixer")),
-        ("invert", "squares-subtract", tl!("Invert")),
-        ("posterize", "layers", tl!("Posterize")),
-        ("threshold", "square", tl!("Threshold")),
-        ("gradientMap", "palette", tl!("Gradient Map")),
-        ("selectiveColor", "swatch-book", tl!("Selective Color")),
-        ("colorLookup", "grid-3x3", tl!("Color Lookup")),
+        ("brightnessContrast", "brightness-contrast", tl!("Brightness/Contrast")),
+        ("levels", "levels", tl!("Levels")),
+        ("curves", "curves", tl!("Curves")),
+        ("exposure", "exposure", tl!("Exposure")),
+        ("vibrance", "vibrance", tl!("Vibrance")),
+        ("hueSaturation", "hue-saturation", tl!("Hue/Saturation")),
+        ("colorBalance", "scale", tl!("Color Balance")),
+        ("blackWhite", "black-white", tl!("Black & White")),
+        ("photoFilter", "photo-filter", tl!("Photo Filter")),
+        ("channelMixer", "channel-mixer", tl!("Channel Mixer")),
+        ("invert", "invert", tl!("Invert")),
+        ("posterize", "posterize", tl!("Posterize")),
+        ("threshold", "threshold", tl!("Threshold")),
+        ("gradientMap", "gradient-map", tl!("Gradient Map")),
+        ("selectiveColor", "selective-color", tl!("Selective Color")),
+        ("colorLookup", "color-lookup", tl!("Color Lookup")),
     ];
     let mut run = None;
     ui.horizontal_wrapped(|ui| {
