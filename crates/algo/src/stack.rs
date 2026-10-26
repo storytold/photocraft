@@ -538,9 +538,9 @@ mod tests {
             let row = terms.row(samples).unwrap();
             let n = samples as f32;
             assert_eq!(row[0].to_bits(), n.log2().to_bits());
-            for count in 1..=samples {
+            for (count, &term) in row.iter().enumerate().skip(1) {
                 let p = count as f32 / n;
-                assert_eq!(row[count].to_bits(), (-p * p.log2()).to_bits(), "{count}/{samples}");
+                assert_eq!(term.to_bits(), (-p * p.log2()).to_bits(), "{count}/{samples}");
             }
         }
         for samples in [0, 1, max + 1, usize::MAX] {
