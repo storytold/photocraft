@@ -338,6 +338,59 @@ fn gradient_dither_is_deterministic_and_one_level() {
 }
 
 #[test]
+fn angle_gradient_seam_is_anti_aliased() {
+    // An Angle fill's sweep wraps at the gradient angle (0 → the +x ray from the centre): the
+    // ramp jumps from its last stop back to its first there. Offset the centre half a pixel up
+    // (a fraction of the 10 px path height) so the seam passes through row 4's pixel centres:
+    // those pixels mix the end value into the start's instead of stepping across the seam
+    // (#4933), like the compositor's fill layers (its parity tests compare the two).
+    let g = |offset: (f32, f32)| Fill::Gradient {
+        stops: vec![(0.0, Color::BLACK), (1.0, Color::WHITE)],
+        angle: 0.0,
+        scale: 1.0,
+        style: photocraft_doc::GradientStyle::Angle,
+        reverse: false,
+        opacity_stops: vec![],
+        midpoints: vec![],
+        offset,
+        dither: false,
+        align: true,
+    };
+    let px = grad(g((0.0, -0.05)), Rect::new(0, 0, 100, 10));
+    let at = |x: usize, y: usize| px[y * 100 + x][0];
+    for x in 51..70 {
+        assert!((at(x, 4) - 0.5).abs() < 1e-3, "seam pixel ({x},4): {}", at(x, 4));
+        let step = (at(x, 3) - at(x, 4)).abs().max((at(x, 4) - at(x, 5)).abs());
+        assert!(0.3 < step && step < 0.55, "step at ({x},4): {step}");
+    }
+}
+
+#[test]
+fn angle_gradient_seam_mixes_premultiplied() {
+    // Half covered by the transparent end and half by the opaque one, a seam pixel stores the
+    // opaque colour at half alpha (the seam weight is area coverage), so it composites to half
+    // its colour — straight mixing would store a half-intensity colour compositing to a
+    // quarter. As the compositor's gradient fills (its parity tests compare the two).
+    let g = Fill::Gradient {
+        stops: vec![(0.0, Color { alpha: 0.0, ..Color::BLACK }), (1.0, Color::WHITE)],
+        angle: 0.0,
+        scale: 1.0,
+        style: photocraft_doc::GradientStyle::Angle,
+        reverse: false,
+        opacity_stops: vec![],
+        midpoints: vec![],
+        offset: (0.0, -0.05),
+        dither: false,
+        align: true,
+    };
+    let px = grad(g, Rect::new(0, 0, 100, 10));
+    for x in 51..70 {
+        let p = px[4 * 100 + x];
+        assert!((p[3] - 0.5).abs() < 1e-3 && p[0] > 0.99, "seam pixel ({x},4): {p:?}");
+    }
+}
+
+#[test]
 fn coverage_surface_and_vector_mask_values() {
     let p = shapes::rect(10.0, 10.0, 20.0, 20.0);
     let r = fill_rasterizer(&p, DEFAULT_TOLERANCE);

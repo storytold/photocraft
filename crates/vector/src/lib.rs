@@ -306,8 +306,26 @@ impl Paint {
             Paint::None => [0.0; 4],
             Paint::Solid(c) => *c,
             Paint::Gradient { stops, midpoints, opacity_stops, style, layout, reverse, dither: dith, frame } => {
-                let t = gradient_t(*style, layout.0, layout.1, *reverse, layout.2, *frame, x, y);
+                let (t, wrap, seam) = gradient_seam(*style, layout.0, layout.1, *reverse, layout.2, *frame, x, y);
                 let mut c = sample_stops(stops, midpoints, opacity_stops, t);
+                if seam > 0.0 {
+                    // The seam of an Angle gradient's sweep is anti-aliased like the compositor's
+                    // (the parity tests keep the two in step): the weight is area coverage, so
+                    // the two sides mix premultiplied by alpha and convert back to straight.
+                    let past = sample_stops(stops, midpoints, opacity_stops, wrap);
+                    let pm = |mut v: [f32; 4]| {
+                        let alpha = v[3];
+                        v[..3].iter_mut().for_each(|ch| *ch *= alpha);
+                        v
+                    };
+                    let (a, b) = (pm(c), pm(past));
+                    let mut m = std::array::from_fn(|i| a[i] + (b[i] - a[i]) * seam);
+                    if m[3] > 0.0 {
+                        let alpha = m[3];
+                        m[..3].iter_mut().for_each(|ch| *ch /= alpha);
+                    }
+                    c = m;
+                }
                 if *dith {
                     dither(&mut c, x.floor() as i32, y.floor() as i32);
                 }
@@ -373,13 +391,13 @@ fn gradient_layout(style: GradientStyle, angle: f32, scale: f32, offset: (f32, f
     (a2.to_degrees() as f32, scale2 as f32, (offset.0 + shift.0, offset.1 + shift.1))
 }
 
-/// Gradient parameter `t` (`0..=1`) at pixel centre `(x, y)` in `frame`: the centre moves by
-/// `offset` (a fraction of the frame), Linear and Reflected gradients sample the pixel's
-/// top-left corner (Photoshop's whole-pixel end points). Mirrors the compositor's
-/// `effects::gradient_t` (which the parity tests keep in step); unlike the compositor, the
-/// frame stays exact fractional shape bounds.
+/// Gradient parameter `t` (`0..=1`) at pixel centre `(x, y)` in `frame`, with the pixel's
+/// distance from the gradient's centre (pixels): the centre moves by `offset` (a fraction of
+/// the frame), Linear and Reflected gradients sample the pixel's top-left corner (Photoshop's
+/// whole-pixel end points). Mirrors the compositor's `effects::gradient_t` (which the parity
+/// tests keep in step); unlike the compositor, the frame stays exact fractional shape bounds.
 #[allow(clippy::too_many_arguments)]
-fn gradient_t(style: GradientStyle, angle: f32, scale: f32, reverse: bool, offset: (f32, f32), frame: (f64, f64, f64, f64), x: f64, y: f64) -> f32 {
+fn gradient_pos(style: GradientStyle, angle: f32, scale: f32, reverse: bool, offset: (f32, f32), frame: (f64, f64, f64, f64), x: f64, y: f64) -> (f64, f64) {
     let w = (frame.2 - frame.0).max(1.0);
     let h = (frame.3 - frame.1).max(1.0);
     let cx = frame.0 + w / 2.0 + f64::from(offset.0) * w;
@@ -401,7 +419,33 @@ fn gradient_t(style: GradientStyle, angle: f32, scale: f32, reverse: bool, offse
         GradientStyle::Angle => ((a - (-dy).atan2(dx)) / std::f64::consts::TAU).rem_euclid(1.0),
     };
     t = t.clamp(0.0, 1.0);
-    (if reverse { 1.0 - t } else { t }) as f32
+    ((if reverse { 1.0 - t } else { t }), (dx * dx + dy * dy).sqrt())
+}
+
+/// The gradient parameter `t` with an Angle gradient's 0/1 wrap seam anti-aliased, as the
+/// compositor's `effects::gradient_seam`: the ramp position, the position past the seam the
+/// pixel also covers (`t` itself when `weight` is 0) and the fraction of the pixel beyond the
+/// seam.
+#[allow(clippy::too_many_arguments)]
+fn gradient_seam(
+    style: GradientStyle,
+    angle: f32,
+    scale: f32,
+    reverse: bool,
+    offset: (f32, f32),
+    frame: (f64, f64, f64, f64),
+    x: f64,
+    y: f64,
+) -> (f32, f32, f32) {
+    let (t, r) = gradient_pos(style, angle, scale, reverse, offset, frame, x, y);
+    let (s, c) = f64::from(angle).to_radians().sin_cos();
+    // Half the pixel's extent across the seam as a fraction of the sweep: a square pixel's
+    // half-width projected on the seam's normal (|sin| + |cos| of the seam angle), capped at
+    // half the ramp, for pixels at the sweep's centre where the arc is unbounded.
+    let half = (0.5 * (s.abs() + c.abs()) / (std::f64::consts::TAU * r.max(1e-6))).min(0.5);
+    let d = t.min(1.0 - t);
+    let (wrap, weight) = if style == GradientStyle::Angle && d < half { (if t >= 0.5 { t - 1.0 } else { t + 1.0 }, 0.5 - 0.5 * (d / half)) } else { (t, 0.0) };
+    (t as f32, wrap as f32, weight as f32)
 }
 
 /// Where a segment of relative position `u` lands once its midpoint is `m` (0.5 = unchanged):
