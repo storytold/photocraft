@@ -163,15 +163,15 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
             ui.radio_value(&mut orientation, "vertical".to_string(), tl!("Vertical"));
         });
         ui.end_row();
-        ui.label(tl!("Position"));
-        ui.add(egui::TextEdit::singleline(&mut position).desired_width(120.0));
+        let position_label = ui.label(tl!("Position"));
+        ui.add(egui::TextEdit::singleline(&mut position).desired_width(120.0)).labelled_by(position_label.id);
         ui.end_row();
         ui.label(tl!("Color"));
         ui.horizontal(|ui| {
             // Custom… first, then Photoshop's colours.
             let options: Vec<(String, &str)> =
                 std::iter::once(CUSTOM).chain(GUIDE_COLORS.iter().map(|(n, ..)| *n)).map(|n| (n.to_string(), color_label(n))).collect();
-            crate::widgets::dropdown(ui, "new-guide-color", &mut color, &options, 140.0);
+            crate::widgets::dropdown(ui, "new-guide-color", tl!("Color"), &mut color, &options, 140.0);
             if color == CUSTOM {
                 let hex = custom_color(f);
                 let rgb = photocraft_engine::prefs::parse_hex(&hex).unwrap_or([0x4a, 0xff, 0xff]);

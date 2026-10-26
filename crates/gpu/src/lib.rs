@@ -34,10 +34,14 @@
 //! (Multichannel documents, patterns larger than the texture limit, uncached gradients with
 //! coincident colour or opacity stops) returns [`Unsupported`];
 //! callers fall back to the CPU compositor.
+//!
+//! [`CameraRawDevelop`] (`camera_raw.rs`) is a separate pass, not part of the compositor: Camera
+//! Raw's per-pixel develop stages for the dialog's preview, built the first time the dialog opens.
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod bounds;
+mod camera_raw;
 mod fx;
 pub mod health;
 pub mod plan;
@@ -54,6 +58,7 @@ use photocraft_doc::{DocId, Document, LayerContent, LayerId, Pattern};
 use photocraft_geom::{Rect, TILE_SIZE, TileCoord};
 use photocraft_raster::{Surface, Tile};
 
+pub use camera_raw::{CAMERA_RAW_SHADER, CameraRawDevelop};
 pub use health::{DeviceHealth, Fault};
 pub use plan::{Kernel, Plan, Role, Unsupported, plan};
 pub use timing::{GpuTimer, GpuTiming};
@@ -488,6 +493,9 @@ pub struct Compositor {
     layer_alloc: Option<String>,
     /// Bytes of pages dropped to admit new ones, not yet counted towards an intermediate submit.
     admit_freed: u64,
+    /// Test hook ([`Compositor::fail_layer_allocs`]): how many more layer page textures fail as
+    /// out of memory.
+    fail_allocs: u32,
     acc_format: wgpu::TextureFormat,
     /// Whether the effect-map pipelines could be built (else documents with layer effects are
     /// [`Unsupported`] and use the CPU compositor).
@@ -802,6 +810,7 @@ impl Compositor {
             recorded: 0,
             layer_alloc: None,
             admit_freed: 0,
+            fail_allocs: 0,
             acc_format,
             effect_maps: map_error.is_none(),
             cmyk: 0,
@@ -840,6 +849,13 @@ impl Compositor {
     /// The page side layer surfaces are stored in.
     pub fn page_size(&self) -> u32 {
         self.page
+    }
+
+    /// Test hook: the next `n` layer page textures fail as if the device were out of memory
+    /// (a real one can't be forced), so the fallback paths of #6563 can be tested.
+    #[doc(hidden)]
+    pub fn fail_layer_allocs(&mut self, n: u32) {
+        self.fail_allocs = n;
     }
 
     /// Set the GPU memory resident layer pages may hold (default [`RESIDENT_BUDGET`]), exactly:
@@ -1353,12 +1369,15 @@ impl Compositor {
                 self.layer_alloc = None;
                 submit_batch(device, queue, encoder, self.health.as_ref(), self.timer.as_mut(), &mut last_submit);
                 #[cfg(not(target_arch = "wasm32"))]
-                match self.health.as_ref() {
-                    Some(h) => {
-                        h.wait(device, last_submit.clone());
-                    }
-                    None => {
-                        let _ = device.poll(wgpu::PollType::Wait { submission_index: last_submit.clone(), timeout: None });
+                {
+                    let idle = match self.health.as_ref() {
+                        Some(h) => h.wait_idle(device, last_submit.clone()),
+                        None => device.poll(wgpu::PollType::Wait { submission_index: last_submit.clone(), timeout: None }).is_ok(),
+                    };
+                    // The GPU has run every timestamp submitted so far, so a retry that fails too
+                    // can drop this measurement without switching timing off for good.
+                    if idle && let Some(t) = self.timer.as_mut() {
+                        t.drained();
                     }
                 }
                 self.staged = 0;
@@ -1501,7 +1520,11 @@ impl Compositor {
             return Some(device.create_texture(desc));
         }
         for retry in [false, true] {
-            let (texture, error) = first_error(device, || device.create_texture(desc));
+            let (texture, mut error) = first_error(device, || device.create_texture(desc));
+            if error.is_none() && self.fail_allocs > 0 {
+                self.fail_allocs -= 1;
+                error = Some(wgpu::Error::OutOfMemory { source: "out of memory (test hook)".into() });
+            }
             match error {
                 None => return Some(texture),
                 Some(wgpu::Error::OutOfMemory { .. }) if !retry => {

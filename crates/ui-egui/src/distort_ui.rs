@@ -91,6 +91,23 @@ pub(crate) fn surface_image(surf: &Surface, r: Rect, max_side: usize) -> ColorIm
     ColorImage::new([tw, th], px)
 }
 
+/// The menu id of the open full-window workspace (Liquify, Content-Aware Fill, Filter Gallery,
+/// Adaptive Wide Angle). These are modal: other menu commands wait for OK or Cancel
+/// (`menus::modal_allows`).
+pub(crate) fn modal_workspace(app: &PhotocraftApp) -> Option<&'static str> {
+    if app.distort.liquify.is_some() {
+        Some("filter.liquify")
+    } else if app.distort.caf.is_some() {
+        Some("edit.contentAwareFill")
+    } else if app.distort.gallery.is_some() {
+        Some("filter.filterGallery")
+    } else if app.wide_angle.is_some() {
+        Some(photocraft_engine::lens_cmds::WIDE)
+    } else {
+        None
+    }
+}
+
 fn active_doc(app: &PhotocraftApp) -> Option<DocId> {
     app.session.active().map(|st| st.doc.id)
 }
@@ -121,12 +138,13 @@ pub fn cancel_stale(app: &mut PhotocraftApp) {
     }
 }
 
-/// The document shown on the canvas while Puppet or Perspective Warp previews a layer.
+/// The document shown on the canvas while Puppet or Perspective Warp previews a layer, or
+/// Vanishing Point's Stamp has painted.
 pub fn display_doc(app: &PhotocraftApp, idx: usize) -> Option<(Arc<Document>, u64)> {
     if app.session.active_index() != Some(idx) {
         return None;
     }
-    let id = app.session.documents().get(idx).map(|st| st.doc.id)?;
+    let (id, revision) = app.session.documents().get(idx).map(|st| (st.doc.id, st.revision))?;
     if let Some(p) = &app.distort.puppet
         && p.document == id
     {
@@ -137,7 +155,8 @@ pub fn display_doc(app: &PhotocraftApp, idx: usize) -> Option<(Arc<Document>, u6
     {
         return Some((p.preview_doc.clone(), (1 << 42) + p.key));
     }
-    None
+    // Vanishing Point: the clone strokes painted so far, on the document as they were painted.
+    app.distort.vanishing.as_ref().and_then(|v| v.shown_on(id, revision))
 }
 
 /// Menu / control routing. `Some` when this module handles the invocation.

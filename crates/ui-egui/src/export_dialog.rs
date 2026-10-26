@@ -533,7 +533,7 @@ fn poll_or_start_preview(
     doc: Arc<Document>,
     fields: &Map<String, Value>,
 ) -> Option<Result<PreviewPixels, String>> {
-    let pending_key = egui::Id::new(("export-preview-pending", doc.id.0));
+    let pending_key = egui::Id::unique(("export-preview-pending", doc.id.0));
     let pending: Option<PendingPreview> = ui.data(|d| d.get_temp(pending_key));
     if let Some(pending) = pending {
         let result = pending.result.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()?;
@@ -659,7 +659,7 @@ fn size_fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, src_w: f64, src_h:
     let mut sc = passed as f32;
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(tl!("Scale")).color(t.text_dim));
-        crate::widgets::value_field(ui, &mut sc, 1.0..=1000.0, "%", 70.0);
+        crate::widgets::value_field(ui, &mut sc, 1.0..=1000.0, "%", 70.0).accessible_name(tl!("Scale"));
     });
     let sc_r = f64::from(sc).round().clamp(1.0, 1000.0);
     if (sc_r - passed).abs() > 0.01
@@ -672,7 +672,7 @@ fn size_fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, src_w: f64, src_h:
     let mut width = stored_w.clamp(1.0, MAX_PX) as f32;
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(tl!("Width")).color(t.text_dim));
-        crate::widgets::value_field(ui, &mut width, 1.0..=MAX_PX as f32, "px", 70.0);
+        crate::widgets::value_field(ui, &mut width, 1.0..=MAX_PX as f32, "px", 70.0).accessible_name(tl!("Width"));
     });
     let width_r = f64::from(width).round();
     if (width_r - stored_w.round()).abs() > 0.01
@@ -684,7 +684,7 @@ fn size_fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, src_w: f64, src_h:
     let mut height = stored_h.clamp(1.0, MAX_PX) as f32;
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(tl!("Height")).color(t.text_dim));
-        crate::widgets::value_field(ui, &mut height, 1.0..=MAX_PX as f32, "px", 70.0);
+        crate::widgets::value_field(ui, &mut height, 1.0..=MAX_PX as f32, "px", 70.0).accessible_name(tl!("Height"));
     });
     let height_r = f64::from(height).round();
     if (height_r - stored_h.round()).abs() > 0.01
@@ -709,7 +709,7 @@ fn resample_field(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         ui.label(egui::RichText::new(tl!("Resample")).color(t.text_dim));
         let mut method = resample_method(f, None).unwrap_or(DEFAULT_RESAMPLE).to_string();
         let opts: Vec<(String, &str)> = RESAMPLE.iter().map(|(k, label)| ((*k).to_string(), resample_label(label))).collect();
-        if crate::widgets::dropdown(ui, "export-resample", &mut method, &opts, 130.0) {
+        if crate::widgets::dropdown(ui, "export-resample", tl!("Resample"), &mut method, &opts, 130.0) {
             f.insert("resample".into(), json!(method));
         }
     });
@@ -788,7 +788,7 @@ fn preset_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String,
             for name in &names {
                 opts.push((name.clone(), name.as_str()));
             }
-            if crate::widgets::dropdown(ui, "export-preset", &mut selected, &opts, 130.0) {
+            if crate::widgets::dropdown(ui, "export-preset", tl!("Preset"), &mut selected, &opts, 130.0) {
                 f.insert("__preset".into(), json!(selected));
                 if let Some(preset) = app.session.presets.export_presets.iter().find(|p| p.name == s(f, "__preset")).cloned() {
                     apply_preset(f, &preset.settings, src_w, src_h);
@@ -858,7 +858,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                 ui.label(egui::RichText::new(tl!("Format")).color(t.text_dim));
                 let mut fmt = s_fmt(f);
                 let opts: Vec<(String, &str)> = FORMATS.iter().map(|(k, l)| (k.to_string(), *l)).collect();
-                if crate::widgets::dropdown(ui, "export-format", &mut fmt, &opts, 130.0) {
+                if crate::widgets::dropdown(ui, "export-format", tl!("Format"), &mut fmt, &opts, 130.0) {
                     set_format_defaults(f, &fmt, &app.session.prefs().export);
                 }
             });
@@ -879,7 +879,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                     let mut bits = s(f, "tgaBits");
                     let opts: Vec<(String, &str)> =
                         vec![("auto".into(), tl!("Auto")), ("24".into(), tl!("24 bits/pixel")), ("32".into(), tl!("32 bits/pixel"))];
-                    if crate::widgets::dropdown(ui, "export-tga-bits", &mut bits, &opts, 130.0) {
+                    if crate::widgets::dropdown(ui, "export-tga-bits", tl!("Depth"), &mut bits, &opts, 130.0) {
                         f.insert("tgaBits".into(), json!(bits));
                     }
                 });
@@ -893,7 +893,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                 ui.label(egui::RichText::new(tl!("Metadata")).color(t.text_dim));
                 let mut m = s(f, "metadata");
                 let opts: Vec<(String, &str)> = vec![("none".into(), tl!("None")), ("exif".into(), tl!("EXIF")), ("all".into(), tl!("All"))];
-                if crate::widgets::dropdown(ui, "export-metadata", &mut m, &opts, 130.0) {
+                if crate::widgets::dropdown(ui, "export-metadata", tl!("Metadata"), &mut m, &opts, 130.0) {
                     f.insert("metadata".into(), json!(m));
                 }
             });
@@ -904,7 +904,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                     profile = "document".into();
                 }
                 let opts: Vec<(String, &str)> = vec![("document".into(), tl!("Document Profile")), ("srgb".into(), tl!("Convert to sRGB"))];
-                if crate::widgets::dropdown(ui, "export-profile", &mut profile, &opts, 130.0) {
+                if crate::widgets::dropdown(ui, "export-profile", tl!("Color Profile"), &mut profile, &opts, 130.0) {
                     f.insert("profile".into(), json!(profile));
                 }
             });
@@ -927,7 +927,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
         // Right: preview + estimated size.
         ui.vertical(|ui| {
             let layer = f.get("__layer").and_then(Value::as_u64);
-            let key = egui::Id::new(("export-preview", doc.id.0, app.session.active().map_or(0, |s| s.revision), layer));
+            let key = egui::Id::unique(("export-preview", doc.id.0, app.session.active().map_or(0, |s| s.revision), layer));
             let sig = format!(
                 "{}{}{}{}{}{}{}{}{}{}{}{}{}",
                 s_fmt(f),
@@ -1423,7 +1423,7 @@ mod tests {
         assert!((old as f64 / actual as f64 - 1.0).abs() > 0.1, "the proxy estimate was off: {old} vs {actual}");
 
         let ctx = egui::Context::default();
-        let key = egui::Id::new("exact-estimate-test");
+        let key = egui::Id::unique("exact-estimate-test");
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
         let size = loop {
             let mut size = None;
@@ -1562,7 +1562,7 @@ mod tests {
         assert!(background_preview_needed(&doc));
         let fields = Map::from_iter([("format".into(), json!("png")), ("scale".into(), json!(100))]);
         let ctx = egui::Context::default();
-        let key = egui::Id::new("layered-preview-test");
+        let key = egui::Id::unique("layered-preview-test");
         let mut result = None;
         let mut output = ctx.run_ui(Default::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {

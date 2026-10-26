@@ -181,19 +181,33 @@ fn define_page(ui: &mut egui::Ui, _t: &Tokens, layers: &[(u64, String, bool)], s
             // layer
             let mut layer = d.get("layer").and_then(Value::as_u64).unwrap_or(layers[0].0);
             let opts: Vec<(u64, &str)> = layers.iter().map(|(id, n, _)| (*id, n.as_str())).collect();
-            if crate::widgets::dropdown(ui, &format!("vl{i}"), &mut layer, &opts, 120.0) {
+            if crate::widgets::dropdown(ui, &format!("vl{i}"), tl!("Layer"), &mut layer, &opts, 120.0) {
                 d["layer"] = json!(layer);
             }
             // type
             let mut ty = d.get("type").and_then(Value::as_str).unwrap_or("visibility").to_string();
             let mut tsel = ty.clone();
-            if crate::widgets::dropdown(ui, &format!("vt{i}"), &mut tsel, &TYPES.iter().map(|(a, b)| (a.to_string(), *b)).collect::<Vec<_>>(), 150.0) {
+            if crate::widgets::dropdown(
+                ui,
+                &format!("vt{i}"),
+                tl!("Type"),
+                &mut tsel,
+                &TYPES.iter().map(|(a, b)| (a.to_string(), *b)).collect::<Vec<_>>(),
+                150.0,
+            ) {
                 ty = tsel.clone();
                 d["type"] = json!(ty);
             }
             if ty == "pixelReplacement" {
                 let mut m = d.get("method").and_then(Value::as_str).unwrap_or("fit").to_string();
-                if crate::widgets::dropdown(ui, &format!("vm{i}"), &mut m, &METHODS.iter().map(|(a, b)| (a.to_string(), *b)).collect::<Vec<_>>(), 80.0) {
+                if crate::widgets::dropdown(
+                    ui,
+                    &format!("vm{i}"),
+                    tl!("Method"),
+                    &mut m,
+                    &METHODS.iter().map(|(a, b)| (a.to_string(), *b)).collect::<Vec<_>>(),
+                    80.0,
+                ) {
                     d["method"] = json!(m);
                 }
             }
@@ -277,8 +291,8 @@ fn data_sets_page(ui: &mut egui::Ui, _t: &Tokens, state: &mut Value, fields: &mu
         // name
         let mut sname = set.get("name").and_then(Value::as_str).unwrap_or("").to_string();
         ui.horizontal(|ui| {
-            ui.label(tl!("Name:"));
-            if ui.add(egui::TextEdit::singleline(&mut sname).desired_width(200.0)).changed() {
+            let name_label = ui.label(tl!("Name:"));
+            if ui.add(egui::TextEdit::singleline(&mut sname).desired_width(200.0)).labelled_by(name_label.id).changed() {
                 set["name"] = json!(sname);
             }
         });
@@ -316,7 +330,7 @@ fn data_sets_page(ui: &mut egui::Ui, _t: &Tokens, state: &mut Value, fields: &mu
                     }
                     _ => {
                         let mut txt = values[i].get("value").and_then(Value::as_str).unwrap_or("").to_string();
-                        if ui.add(egui::TextEdit::singleline(&mut txt).desired_width(240.0)).changed() {
+                        if ui.add(egui::TextEdit::singleline(&mut txt).desired_width(240.0)).accessible_name(vname.clone()).changed() {
                             values[i]["value"] = json!(txt);
                         }
                     }

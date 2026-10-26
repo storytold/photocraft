@@ -190,7 +190,7 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
         Tool::ColorReplacement => reset!(cr_mode, cr_sampling, cr_limits, cr_tolerance, cr_anti_alias),
         Tool::MagicEraser => reset!(tolerance, anti_alias, contiguous, magic_eraser_opacity),
         Tool::Gradient => reset!(gradient_style, gradient_reverse, gradient_dither, gradient_classic, gradient_blend_mode, fill_opacity),
-        Tool::PaintBucket => reset!(bucket_fill_pattern, fill_opacity, tolerance, anti_alias, contiguous),
+        Tool::PaintBucket => reset!(bucket_fill_pattern, bucket_blend_mode, bucket_clear, fill_opacity, tolerance, anti_alias, contiguous),
         Tool::Type | Tool::VerticalType | Tool::HorizontalTypeMask | Tool::VerticalTypeMask => {
             reset!(type_font, type_style, type_size, type_aa, type_align, type_direction, type_style_defaults)
         }
@@ -201,6 +201,7 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
         Tool::ContentAwareMove => reset!(cam_mode, cam_structure, cam_color, cam_transform_on_drop),
         Tool::RedEye => reset!(red_eye_pupil_size, red_eye_darken),
         Tool::CloneStamp => reset!(clone_aligned, clone_sample),
+        Tool::ArtHistoryBrush => reset!(art_history_style, art_history_area, art_history_tolerance),
         Tool::PatternStamp => reset!(pattern_stamp_aligned, pattern_stamp_impressionist, pattern_stamp_scale, pattern_stamp_angle),
         Tool::Blur | Tool::Sharpen => reset!(strength, protect_detail),
         Tool::Smudge => reset!(strength, finger_painting),
@@ -211,7 +212,7 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
         Tool::CurvaturePen => reset!(vector_mode),
         Tool::FreeformPen => reset!(vector_mode, curve_fit),
         Tool::Rectangle | Tool::EllipseShape | Tool::Triangle | Tool::Polygon | Tool::Line | Tool::CustomShape => {
-            reset!(vector_mode, shape_fill, stroke_width, shape_stroke, corner_radius, polygon_sides, line_weight)
+            reset!(vector_mode, shape_fill, stroke_width, shape_stroke, shape_fill_gradient, shape_stroke_gradient, corner_radius, polygon_sides, line_weight)
         }
         Tool::ColorSampler
         | Tool::Ruler

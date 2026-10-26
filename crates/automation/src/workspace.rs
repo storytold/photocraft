@@ -806,6 +806,21 @@ mod tests {
         assert!(authorize_desktop_engine_step("file.saveACopy", &serde_json::json!({})).is_err());
     }
 
+    // Regression test for #3763: `edit.installedProfiles` scans the OS and user ICC folders but
+    // takes no path parameter, so automation let it through until it was listed as ambient.
+    #[test]
+    fn installed_profiles_listing_is_refused_for_automation() {
+        for params in [serde_json::json!({}), serde_json::json!({"class": "output", "colorSpace": "cmyk"})] {
+            assert!(authorize_engine_command("edit.installedProfiles", &params).is_err(), "authorize_engine_command allowed it with {params}");
+            assert!(authorize_desktop_engine_command("edit.installedProfiles", &params).is_err(), "authorize_desktop_engine_command allowed it with {params}");
+            assert!(authorize_engine_step("edit.installedProfiles", &params).is_err(), "authorize_engine_step allowed it with {params}");
+        }
+        // The sandboxed session refuses it before the engine scans any folder.
+        let mut headless = crate::Headless::new();
+        let refused = headless.command_run("edit.installedProfiles", serde_json::json!({})).unwrap_err();
+        assert!(refused.to_string().contains("ambient filesystem paths"), "{refused}");
+    }
+
     #[test]
     fn apply_data_set_is_judged_by_the_values_it_applies() {
         let mut headless = crate::Headless::new();

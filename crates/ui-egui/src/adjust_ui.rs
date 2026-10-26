@@ -35,12 +35,12 @@ pub fn selective_color_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: La
         Some((l, v)) if *l == id && v.get("reds").is_some() => v.clone(),
         _ => committed,
     };
-    let key = egui::Id::new(("selc-range", id.0));
+    let key = egui::Id::unique(("selc-range", id.0));
     let mut range: usize = ui.data(|d| d.get_temp(key)).unwrap_or(0);
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(tl!("Colors")).color(t.text_dim));
         let opts: Vec<(usize, &str)> = RANGE_LABELS.iter().copied().enumerate().collect();
-        if widgets::dropdown(ui, &format!("selc-colors-{}", id.0), &mut range, &opts, 150.0) {
+        if widgets::dropdown(ui, &format!("selc-colors-{}", id.0), tl!("Color"), &mut range, &opts, 150.0) {
             ui.data_mut(|d| d.insert_temp(key, range));
         }
     });
@@ -113,7 +113,7 @@ struct FolderScan {
 fn folder_luts(app: &PhotocraftApp, ctx: &egui::Context) -> FolderLuts {
     let folder = app.session.prefs().file_handling.lut_folder.clone();
     let now = ctx.input(|input| input.time);
-    let key = egui::Id::new("color-lookup-folder");
+    let key = egui::Id::unique("color-lookup-folder");
     let mut scan = ctx.data(|data| data.get_temp::<FolderScan>(key)).unwrap_or_default();
     if let Some(done) = scan.pending.as_ref().and_then(|p| p.lock().unwrap_or_else(PoisonError::into_inner).take()) {
         scan.luts = done;
@@ -197,7 +197,7 @@ pub fn color_lookup_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: Layer
     let mut sel = current.clone();
     let mut params: Option<Value> = None;
     let mut browse = false;
-    let cycle_key = egui::Id::new(("color-lookup-cycle", id.0));
+    let cycle_key = egui::Id::unique(("color-lookup-cycle", id.0));
     let cycle_input = ui.input(|input| {
         input.raw.events.iter().any(|event| {
             matches!(event, egui::Event::MouseWheel { .. })
@@ -207,7 +207,7 @@ pub fn color_lookup_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: Layer
     let mut cycling_preview = false;
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(tl!("3D LUT File")).color(t.text_dim));
-        let (chosen, _) = widgets::dropdown_wheel_hovered(ui, &format!("clrl-{}", id.0), &mut sel, &opts, 170.0);
+        let (chosen, _) = widgets::dropdown_wheel_hovered(ui, &format!("clrl-{}", id.0), tl!("Color"), &mut sel, &opts, 170.0);
         if !chosen.is_empty() {
             if cycle_input {
                 // ponytail: wheel previews cover the built-ins only; a folder LUT would be re-read

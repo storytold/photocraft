@@ -5,7 +5,7 @@
 
 use egui::{Pos2, Rect, vec2};
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use photocraft_doc::{Adjustment, LayerContent, LayerId};
 use serde_json::json;
 
@@ -88,12 +88,17 @@ fn click(h: &mut Harness<'_, PhotocraftApp>, at: Pos2) {
 }
 
 fn label_rect(h: &Harness<'_, PhotocraftApp>, text: &str) -> Option<Rect> {
-    // The last match: the Properties header repeats the kind's name above its controls.
-    h.query_all_by_label(text).last().map(|n| n.rect())
+    // The last caption: the Properties header repeats the kind's name above its controls.
+    // `get_by_label` hides a caption that names a control, so ask for the label node itself;
+    // a checkbox paints its caption as the control, so fall back to the last matching widget.
+    h.query_all(egui_kittest::kittest::by().label(text).include_labels())
+        .rfind(|n| n.accesskit_node().role() == egui::accesskit::Role::Label)
+        .map(|n| n.rect())
+        .or_else(|| h.query_all_by_label(text).last().map(|n| n.rect()))
 }
 
 fn curves_graph(h: &Harness<'_, PhotocraftApp>, id: LayerId) -> Rect {
-    h.ctx.data(|d| d.get_temp::<Rect>(egui::Id::new(("adjust-layer", id.0)).with("curves-graph"))).expect("curves graph drawn")
+    h.ctx.data(|d| d.get_temp::<Rect>(egui::Id::unique(("adjust-layer", id.0)).with("curves-graph"))).expect("curves graph drawn")
 }
 
 /// Issue #12: every adjustment kind, on a new document at 8/16/32 bits and in RGB, Grayscale,
@@ -182,6 +187,7 @@ fn color_lookup_picker_cycles_luts_with_the_mouse_wheel() {
     assert!(h.state().live_adjust.is_some(), "arrow navigation selects a preview LUT");
     for _ in 0..3 {
         h.event(egui::Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
             unit: egui::MouseWheelUnit::Line,
             delta: vec2(0.0, -1.0),
             phase: egui::TouchPhase::Move,
@@ -327,7 +333,13 @@ fn wheel_at(h: &mut Harness<'_, PhotocraftApp>, at: Pos2, notches: f32, mods: eg
     h.event(egui::Event::ModifiersChanged(mods));
     h.hover_at(at);
     h.run_steps(1);
-    h.event(egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Line, delta: vec2(0.0, notches), phase: egui::TouchPhase::Move, modifiers: mods });
+    h.event(egui::Event::MouseWheel {
+        source: egui::MouseWheelSource::Unknown,
+        unit: egui::MouseWheelUnit::Line,
+        delta: vec2(0.0, notches),
+        phase: egui::TouchPhase::Move,
+        modifiers: mods,
+    });
     h.run_steps(1);
     h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
     h.run_steps(3);
@@ -580,7 +592,7 @@ fn gradient_map_stop_controls_fit_a_narrow_properties_panel_in_every_theme() {
                         return;
                     }
                     let cx = EditorCx {
-                        mem: egui::Id::new("map-layout"),
+                        mem: egui::Id::unique("map-layout"),
                         hist: None,
                         gray: false,
                         swatches: [[0.0; 3], [1.0; 3]],
@@ -789,7 +801,7 @@ fn editor_harness(kind: &'static str, params: serde_json::Value) -> Harness<'sta
     let mut h = Harness::builder().with_size(vec2(300.0, 400.0)).build_ui_state(
         move |ui, values: &mut serde_json::Value| {
             let cx = EditorCx {
-                mem: egui::Id::new("precision"),
+                mem: egui::Id::unique("precision"),
                 hist: None,
                 gray: false,
                 swatches: [[0.0; 3], [1.0; 3]],
@@ -805,6 +817,37 @@ fn editor_harness(kind: &'static str, params: serde_json::Value) -> Harness<'sta
     PhotocraftApp::setup_context(&h.ctx, Default::default());
     h.run_steps(4);
     h
+}
+
+/// #9242: the Hue/Saturation spectrum bars stretch with the panel, like the sliders above them.
+#[test]
+fn hue_saturation_bars_fill_the_panel_width() {
+    use crate::adjust_editors::{EditorCx, editor};
+    for width in [300.0, 600.0] {
+        let mut h = Harness::builder().with_size(vec2(width, 500.0)).build_ui_state(
+            |ui, values: &mut serde_json::Value| {
+                let cx = EditorCx {
+                    mem: egui::Id::unique("hs"),
+                    hist: None,
+                    gray: false,
+                    swatches: [[0.0; 3], [1.0; 3]],
+                    gradients: Vec::new(),
+                    dialog: false,
+                    dynamic_color_sliders: true,
+                    isolated_curve: None,
+                };
+                let avail = ui.available_width();
+                editor(ui, "hueSaturation", values, &cx);
+                ui.data_mut(|d| d.insert_temp(egui::Id::unique("hs-avail"), avail));
+            },
+            json!({}),
+        );
+        PhotocraftApp::setup_context(&h.ctx, Default::default());
+        h.run_steps(4);
+        let bars = h.ctx.data(|d| d.get_temp::<Rect>(egui::Id::unique("hs").with("hs-bars"))).expect("bars drawn");
+        let avail = h.ctx.data(|d| d.get_temp::<f32>(egui::Id::unique("hs-avail"))).unwrap();
+        assert!((bars.width() - avail).abs() < 0.5, "{width}: bars {} of {avail}", bars.width());
+    }
 }
 
 /// Types `text` into the `index`th number field and commits it with Enter.

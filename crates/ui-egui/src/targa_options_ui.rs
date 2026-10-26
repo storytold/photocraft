@@ -59,7 +59,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let Some(p) = &mut app.targa_options else { return };
     let (mut ok, mut cancel) = (false, false);
     let mut bits = p.bits;
-    let modal = egui::Modal::new(egui::Id::new("targa-options")).show(ctx, |ui| {
+    let modal = egui::Modal::new(egui::Id::unique("targa-options")).show(ctx, |ui| {
         ui.set_max_width(340.0);
         ui.label(egui::RichText::new(tl!("Targa Options")).font(crate::theme::semibold(15.0)));
         ui.add_space(4.0);

@@ -144,6 +144,59 @@ fn rotate_arbitrary_rotates_grouped_locked_children_and_preserves_lock() {
     assert_eq!(photocraft_compose::flatten(&d_arb).px, photocraft_compose::flatten(d_cw).px);
 }
 
+/// Rotating the whole image turns every layer mask, linked or not, as Rotate 180° does (#9201).
+#[test]
+fn rotate_arbitrary_turns_unlinked_layer_masks() {
+    for depth in [8, 16] {
+        for grouped in [false, true] {
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width": 40, "height": 30, "depth": depth, "background": "white"})).unwrap();
+            s.execute("layer.new.layer", json!({"name": "Paint"})).unwrap();
+            s.execute("select.rect", json!({"x": 0, "y": 0, "width": 10, "height": 10})).unwrap();
+            s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+            s.execute("layer.layerMask.revealSelection", json!({})).unwrap();
+            s.execute("layer.layerMask.linked", json!({"linked": false})).unwrap();
+            let id = s.active().unwrap().active_layer.unwrap();
+            if grouped {
+                s.execute("layer.groupLayers", json!({})).unwrap();
+            }
+            let mask = |s: &Session| doc(s).layer(id).unwrap().mask.clone().unwrap();
+            let base = s.active().unwrap().doc.clone();
+            s.execute("image.rotation.arbitrary", json!({"angle": 180, "interpolation": "nearest"})).unwrap();
+            let m = mask(&s);
+            assert!(!m.linked);
+            let at = |x, y| m.surface.sample_channel(x, y, 0);
+            assert!(at(34, 24) > 0.9, "{depth}-bit, grouped {grouped}: the mask turned with its layer");
+            assert!(at(4, 4) < 0.1, "{depth}-bit, grouped {grouped}: nothing left at the old place");
+            // Rotate 180° and a crop turned by 180° over the whole canvas give the same mask.
+            for (id_, p) in [("image.imageRotation.180", json!({})), ("image.crop", json!({"x": 0, "y": 0, "width": 40, "height": 30, "angle": 180}))] {
+                s.active_mut().unwrap().doc = base.clone();
+                s.execute(id_, p).unwrap();
+                let turned = mask(&s);
+                for y in 0..30 {
+                    for x in 0..40 {
+                        let (a, b) = (at(x, y), turned.surface.sample_channel(x, y, 0));
+                        assert!((a - b).abs() < 1e-3, "{id_}, {depth}-bit, grouped {grouped}: ({x},{y}) {a} vs {b}");
+                    }
+                }
+            }
+            // 90° pins the direction too (180° is its own inverse).
+            s.active_mut().unwrap().doc = base.clone();
+            s.execute("image.rotation.arbitrary", json!({"angle": 90, "interpolation": "nearest"})).unwrap();
+            let arbitrary = mask(&s);
+            s.active_mut().unwrap().doc = base.clone();
+            s.execute("image.imageRotation.90cw", json!({})).unwrap();
+            let turned = mask(&s);
+            for y in 0..40 {
+                for x in 0..30 {
+                    let (a, b) = (arbitrary.surface.sample_channel(x, y, 0), turned.surface.sample_channel(x, y, 0));
+                    assert!((a - b).abs() < 1e-3, "90cw, {depth}-bit, grouped {grouped}: ({x},{y}) {a} vs {b}");
+                }
+            }
+        }
+    }
+}
+
 #[test]
 fn flattened_mode_pixels_match_the_allocating_conversion_at_every_channel_count() {
     let px = [[0.0, 0.25, 0.75, 0.0], [0.9, 0.3, 0.2, 0.2], [0.1, 0.7, 0.4, 0.7], [1.0; 4]];

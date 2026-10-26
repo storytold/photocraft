@@ -173,7 +173,7 @@ const LAYOUTS: [&str; 10] = [
 
 /// Whether the window was maximized when a screen mode took it full screen (egui temp data).
 fn was_maximized_id() -> egui::Id {
-    egui::Id::new("pc-full-screen-was-maximized")
+    egui::Id::unique("pc-full-screen-was-maximized")
 }
 
 /// The window commands for switching to screen mode `next`, and whether the window should be
@@ -1141,7 +1141,7 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 let mut quality = v.as_f64().or_else(|| f.get("__batchQuality").and_then(Value::as_f64)).unwrap_or(8.0).clamp(0.0, 12.0) as f32;
                 ui.horizontal(|ui| {
                     crate::widgets::checkbox(ui, &mut custom, tl!("Custom"));
-                    ui.add_enabled_ui(custom, |ui| crate::widgets::value_field(ui, &mut quality, 0.0..=12.0, "", 74.0));
+                    ui.add_enabled_ui(custom, |ui| crate::widgets::value_field(ui, &mut quality, 0.0..=12.0, "", 74.0).accessible_name(tl!("Quality")));
                 });
                 // None preserves the command's existing JPEG and lossless WebP defaults.
                 // The inactive custom value is shell state, never a command parameter.
@@ -1165,13 +1165,13 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                         Some(opts) => {
                             let opts: Vec<(String, String)> = opts.iter().filter_map(Value::as_str).map(|o| (o.to_string(), label(o))).collect();
                             let refs: Vec<(String, &str)> = opts.iter().map(|(a, b)| (a.clone(), b.as_str())).collect();
-                            crate::widgets::dropdown(ui, &format!("form-{k}"), &mut s, &refs, 200.0);
+                            crate::widgets::dropdown(ui, &format!("form-{k}"), &label(&k), &mut s, &refs, 200.0);
                         }
                         None => {
                             ui.horizontal(|ui| {
-                                ui.add(egui::TextEdit::singleline(&mut s).desired_width(260.0));
-                                // A folder field gets the system folder picker (#7942).
-                                if k == "dir" && crate::widgets::secondary_button(ui, tl!("Browse…"), 0.0).clicked() {
+                                ui.add(egui::TextEdit::singleline(&mut s).desired_width(260.0)).accessible_name(label(&k));
+                                // A folder field gets the system folder picker (#7942, #9357).
+                                if crate::dialogs::is_folder_field(&k) && crate::widgets::secondary_button(ui, tl!("Browse…"), 0.0).clicked() {
                                     browse = Some(k.clone());
                                 }
                             });
@@ -1182,11 +1182,11 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 Value::Number(n) => {
                     ui.label(label(&k));
                     if let Some(mut i) = n.as_i64() {
-                        ui.add(egui::DragValue::new(&mut i).custom_parser(crate::widgets::parse_num));
+                        ui.add(egui::DragValue::new(&mut i).custom_parser(crate::widgets::parse_num)).accessible_name(label(&k));
                         json!(i)
                     } else {
                         let mut x = n.as_f64().unwrap_or(0.0);
-                        ui.add(egui::DragValue::new(&mut x).speed(0.5).custom_parser(crate::widgets::parse_num));
+                        ui.add(egui::DragValue::new(&mut x).speed(0.5).custom_parser(crate::widgets::parse_num)).accessible_name(label(&k));
                         json!(x)
                     }
                 }

@@ -1,6 +1,6 @@
 //! Canvas context menus for the selection tools, the Pen, the Zoom and Hand tools, an active Free
 //! Transform box, text being edited with a Type tool, committed type under a Type tool, the
-//! pasteboard (outside the image) and a guide.
+//! pasteboard (outside the image), a guide and a pending crop.
 
 use egui::Context;
 use photocraft_doc::LayerContent;
@@ -42,6 +42,10 @@ pub struct CanvasToolMenu {
     /// the menu.
     #[serde(default)]
     pub spelling: Option<Spelling>,
+    /// Opened on a pending crop: the crop menu, listing the saved crop presets by the names they
+    /// had when it opened.
+    #[serde(default)]
+    pub crop: Option<Vec<String>>,
 }
 
 /// A misspelled word in the type layer being edited (`edit.checkSpelling`'s `list` entry).
@@ -63,7 +67,7 @@ const SPELLING_NONE: &str = "spelling.none";
 const SPELLING_ADD: &str = "spelling.add";
 
 /// One menu row: label and command id. `None` is a separator.
-pub type Row = Option<(&'static str, &'static str)>;
+pub type Row<S = &'static str> = Option<(S, S)>;
 
 /// Right-click while transforming, in Photoshop's order: what the box's handles do, then Rotate
 /// and Flip, which turn the open box without committing it (`transform_tool::intercept`).
@@ -195,6 +199,146 @@ pub const GUIDE_MENU: &[Row] = &[
     Some(("Clear Selected Guides", GUIDE_CLEAR)),
     Some(("Clear Selected Artboard Guides", "view.clearSelectedArtboardGuides")),
 ];
+
+/// The crop menu's row ids. A ratio row is `crop.ratio.<key>`, the options bar's preset dropdown
+/// key (`crop_size::dropdown_options`); a saved preset is `crop.preset.<n>`, the n-th name the menu
+/// opened with; an overlay row is `crop.overlay.<id>` or `crop.overlayShow.<id>`.
+const CROP_RATIO: &str = "crop.ratio.";
+const CROP_PRESET: &str = "crop.preset.";
+const CROP_OVERLAY: &str = "crop.overlay.";
+const CROP_SHOW: &str = "crop.overlayShow.";
+pub const CROP_CLEAR: &str = "crop.clear";
+pub const CROP_NEW: &str = "crop.newPreset";
+pub const CROP_DELETE: &str = "crop.deletePreset";
+pub const CROP_CANCEL: &str = "crop.cancel";
+pub const CROP_COMMIT: &str = "crop.commit";
+
+/// The crop menu (right-click on a pending crop, #6561): the options bar's preset dropdown, in its
+/// order, and its Clear; the overlay and when it shows; then Cancel and Crop, the bar's ⊘ and ✓.
+/// Built from the bar's own lists, so the two cannot disagree. Empty for any other menu.
+pub fn crop_rows(menu: &CanvasToolMenu) -> Vec<Row<String>> {
+    use crate::crop_overlay::{CropOverlay, OverlayShow};
+    let Some(users) = menu.crop.as_ref() else { return Vec::new() };
+    let ratio = |(k, l): &(String, &str)| Some((l.to_string(), format!("{CROP_RATIO}{k}")));
+    let (before, after): (Vec<_>, Vec<_>) = crate::crop_size::dropdown_options().into_iter().partition(|(k, _)| k != crate::crop_size::FRONT);
+    let mut rows: Vec<Row<String>> = before.iter().map(ratio).collect();
+    rows.extend(users.iter().enumerate().map(|(i, name)| Some((name.clone(), format!("{CROP_PRESET}{i}")))));
+    rows.extend(after.iter().map(ratio));
+    rows.push(Some(("Clear".into(), CROP_CLEAR.into())));
+    rows.push(None);
+    rows.push(Some(("New Crop Preset…".into(), CROP_NEW.into())));
+    rows.push(Some(("Delete Crop Preset…".into(), CROP_DELETE.into())));
+    rows.push(None);
+    rows.extend(CropOverlay::ALL.iter().map(|k| Some((k.label().to_string(), format!("{CROP_OVERLAY}{}", k.id())))));
+    rows.push(None);
+    rows.extend(OverlayShow::ALL.iter().map(|k| Some((k.label().to_string(), format!("{CROP_SHOW}{}", k.id())))));
+    rows.push(None);
+    rows.push(Some(("Cancel".into(), CROP_CANCEL.into())));
+    rows.push(Some(("Crop".into(), CROP_COMMIT.into())));
+    rows
+}
+
+/// Is a crop row's label UI text (translated), rather than a saved preset's name?
+pub fn crop_label_is_ui(id: &str) -> bool {
+    !id.starts_with(CROP_PRESET)
+}
+
+/// Is `command` one of the crop menu's rows?
+fn is_crop(menu: &CanvasToolMenu, command: &str) -> bool {
+    crop_rows(menu).iter().flatten().any(|(_, id)| id == command)
+}
+
+/// The saved crop preset a `crop.preset.<n>` row picks.
+fn crop_preset<'a>(menu: &'a CanvasToolMenu, command: &str) -> Option<&'a String> {
+    let n = command.strip_prefix(CROP_PRESET)?.parse::<usize>().ok()?;
+    menu.crop.as_ref()?.get(n)
+}
+
+/// The crop menu's checkmarks, as the options bar shows them: the dropdown's entry (a saved
+/// preset the fields hold, else the mode or ratio, so a size preset checks W x H x Resolution),
+/// the overlay and when it shows.
+fn crop_checked(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) -> bool {
+    let o = &app.ui.tool_options;
+    let user = crate::crop_presets::current_user(app);
+    if let Some(k) = command.strip_prefix(CROP_RATIO) {
+        return user.is_none() && k == o.crop_ratio;
+    }
+    if command.starts_with(CROP_PRESET) {
+        return user.is_some() && crop_preset(menu, command) == user.as_ref();
+    }
+    if let Some(k) = command.strip_prefix(CROP_OVERLAY) {
+        return k == o.crop_overlay.id();
+    }
+    command.strip_prefix(CROP_SHOW).is_some_and(|k| k == o.crop_overlay_show.id())
+}
+
+fn crop_enabled(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) -> bool {
+    match command {
+        CROP_NEW => crate::crop_presets::savable(&app.ui.tool_options).is_some(),
+        CROP_DELETE => menu.crop.as_ref().is_some_and(|u| !u.is_empty()),
+        c => is_crop(menu, c),
+    }
+}
+
+/// Right-click with `tool` on a pending crop: the crop menu at screen point `pos`. Only the Crop
+/// tool itself, not one held over it (Space's Hand).
+pub fn open_crop(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 2]) -> bool {
+    if tool != Tool::Crop || !crate::crop_ui::pending(app) || !pos.iter().all(|v| v.is_finite()) {
+        return false;
+    }
+    app.ui.brush_picker = None;
+    app.ui.layer_menu = None;
+    let users = crate::crop_presets::user_presets(app).into_iter().map(|(name, _)| name).collect();
+    app.ui.canvas_tool_menu = Some(CanvasToolMenu {
+        pos,
+        tool,
+        has_selection: false,
+        has_path: false,
+        path_name: None,
+        transform: false,
+        pasteboard: false,
+        anchor: None,
+        text: false,
+        type_layer: false,
+        guide: false,
+        spelling: None,
+        crop: Some(users),
+    });
+    crate::canvas_popup::mark_open(ctx, menu_id());
+    true
+}
+
+/// A crop row: each runs what its options-bar twin runs.
+fn choose_crop(app: &mut PhotocraftApp, menu: &CanvasToolMenu, command: &str) -> Result<(), String> {
+    use crate::crop_overlay::{CropOverlay, OverlayShow};
+    use crate::crop_presets::{Choice, apply_choice};
+    match command {
+        CROP_CANCEL => crate::crop_ui::cancel(app),
+        CROP_COMMIT => crate::canvas::commit_crop(app),
+        CROP_NEW => apply_choice(app, Choice::New),
+        CROP_DELETE => apply_choice(app, Choice::Delete),
+        _ => {
+            let before = crate::crop_ui::preset_ratio(app);
+            if let Some(k) = command.strip_prefix(CROP_RATIO) {
+                apply_choice(app, Choice::Builtin(k.to_string()));
+            } else if let Some(name) = crop_preset(menu, command) {
+                apply_choice(app, Choice::User(name.clone()));
+            } else if command == CROP_CLEAR {
+                crate::crop_size::clear_ratio(&mut app.ui.tool_options);
+            } else if let Some(k) = command.strip_prefix(CROP_OVERLAY).and_then(CropOverlay::from_id) {
+                crate::crop_overlay::set_overlay(&mut app.ui.tool_options, k);
+            } else if let Some(k) = command.strip_prefix(CROP_SHOW).and_then(OverlayShow::from_id) {
+                app.ui.tool_options.crop_overlay_show = k;
+            }
+            // As the options bar does: a saved preset or Clear changes the ratio without refitting
+            // the frame, so refit it when the ratio (or W x H) the frame follows changed.
+            if crate::crop_ui::preset_ratio(app) != before {
+                crate::crop_ui::apply_ratio(app);
+            }
+        }
+    }
+    Ok(())
+}
 
 /// The pasteboard colours in the menu's order, which Space+F steps through.
 const CANVAS_COLORS: [CanvasColor; 6] =
@@ -339,7 +483,10 @@ pub fn selection_rows(has_selection: bool) -> &'static [Row] {
 
 /// The rows of an open menu.
 pub fn rows(menu: &CanvasToolMenu) -> &'static [Row] {
-    if menu.guide {
+    if menu.crop.is_some() {
+        // Built per menu: [`crop_rows`].
+        &[]
+    } else if menu.guide {
         GUIDE_MENU
     } else if menu.pasteboard {
         PASTEBOARD_MENU
@@ -360,13 +507,16 @@ pub fn rows(menu: &CanvasToolMenu) -> &'static [Row] {
 
 /// Is `command` one of the open menu's rows, and enabled?
 pub fn available(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) -> bool {
-    (rows(menu).iter().flatten().any(|(_, id)| *id == command) || is_spelling(menu, command)) && entry_enabled(app, menu, command)
+    (rows(menu).iter().flatten().any(|(_, id)| *id == command) || is_spelling(menu, command) || is_crop(menu, command)) && entry_enabled(app, menu, command)
 }
 
 /// Is `command` the transform box's current mode (checked in the transform menu)?
 /// Scale stays Free Transform's mode (only Free Transform is checked). Rotate is its own mode.
 /// Warp is not a box mode (it is its own session), and `for_command` would read it as Free.
 pub(crate) fn mode_checked(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) -> bool {
+    if menu.crop.is_some() {
+        return crop_checked(app, menu, command);
+    }
     if menu.guide {
         return command == "view.lockGuides" && app.ui.extras.lock_guides;
     }
@@ -488,6 +638,7 @@ pub fn open_transform(app: &mut PhotocraftApp, ctx: &Context, pos: [f32; 2]) -> 
         type_layer: false,
         guide: false,
         spelling: None,
+        crop: None,
     });
     crate::canvas_popup::mark_open(ctx, menu_id());
     true
@@ -502,6 +653,9 @@ fn pasteboard_choice(command: &str) -> Option<CanvasColor> {
 /// The engine command (and params) a pasteboard row runs, for the automation policy: every row
 /// changes a preference.
 pub fn engine_call(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) -> (String, Value) {
+    if menu.crop.is_some() && command == CROP_COMMIT {
+        return ("image.crop".into(), json!({}));
+    }
     if menu.guide {
         let selected = crate::guide_select::selected(app);
         return match command {
@@ -562,6 +716,7 @@ pub fn open_pasteboard(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: 
         type_layer: false,
         guide: false,
         spelling: None,
+        crop: None,
     });
     crate::canvas_popup::mark_open(ctx, menu_id());
     true
@@ -592,6 +747,7 @@ pub fn open_guide(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, mods: egui
         type_layer: false,
         guide: true,
         spelling: None,
+        crop: None,
     });
     crate::canvas_popup::mark_open(ctx, menu_id());
     true
@@ -619,6 +775,9 @@ fn choose_pasteboard(app: &mut PhotocraftApp, menu: &CanvasToolMenu, command: &s
 }
 
 pub fn entry_enabled(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) -> bool {
+    if menu.crop.is_some() {
+        return crop_enabled(app, menu, command);
+    }
     if menu.guide {
         return match command {
             GUIDE_EDIT | GUIDE_CLEAR => crate::guide_select::selected(app).is_some(),
@@ -719,6 +878,7 @@ pub fn open_at(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 2]
         type_layer,
         guide: false,
         spelling,
+        crop: None,
     });
     crate::canvas_popup::mark_open(ctx, menu_id());
     true
@@ -745,6 +905,7 @@ pub fn open_view(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 
         type_layer: false,
         guide: false,
         spelling: None,
+        crop: None,
     });
     crate::canvas_popup::mark_open(ctx, menu_id());
     true
@@ -784,7 +945,9 @@ pub fn choose(app: &mut PhotocraftApp, ctx: &Context, command: &str) {
     if !available(app, &menu, command) {
         return;
     }
-    let result = if menu.guide {
+    let result = if menu.crop.is_some() {
+        choose_crop(app, &menu, command)
+    } else if menu.guide {
         choose_guide(app, ctx, command)
     } else if menu.pasteboard {
         choose_pasteboard(app, &menu, command)
@@ -937,7 +1100,7 @@ fn choose_pen(app: &mut PhotocraftApp, ctx: &Context, menu: &CanvasToolMenu, com
 }
 
 fn menu_id() -> egui::Id {
-    egui::Id::new("canvas-selection-menu")
+    egui::Id::unique("canvas-selection-menu")
 }
 
 pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
@@ -947,6 +1110,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
         || (menu.transform && app.ui.transform.is_none())
         || (menu.text && app.ui.text_edit.is_none())
         || (menu.type_layer && app.ui.text_edit.is_some())
+        || (menu.crop.is_some() && !crate::crop_ui::pending(app))
     {
         app.ui.canvas_tool_menu = None;
         return;
@@ -980,6 +1144,17 @@ pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
                 }
                 if !spelling.is_empty() {
                     ui.separator();
+                }
+                for row in crop_rows(&menu) {
+                    let Some((label, command)) = row else {
+                        ui.separator();
+                        continue;
+                    };
+                    let text = if crop_label_is_ui(&command) { tl!(&label).to_string() } else { label };
+                    let item = egui::Button::selectable(mode_checked(app, &menu, &command), text).min_size(egui::vec2(200.0, 20.0));
+                    if ui.add_enabled(entry_enabled(app, &menu, &command), item).clicked() {
+                        selected = Some(command);
+                    }
                 }
                 for row in rows(&menu) {
                     let Some((label, command)) = *row else {
@@ -1936,5 +2111,278 @@ mod tests {
             assert!(!entry_enabled(&app, menu, id), "{id} must not act on the layer replaced by the pending shape");
         }
         assert!(entry_enabled(&app, menu, "path.toSelection"));
+    }
+
+    /// A 32 × 32 document with the Crop tool picked (Classic Mode, so the view stays put) and its
+    /// untouched default frame.
+    fn crop_app() -> PhotocraftApp {
+        let mut app = app();
+        app.ui.tool = Tool::Crop;
+        app.ui.tool_options.crop_shield.classic_mode = true;
+        app.ui.extras.snap = false;
+        crate::crop_ui::ensure_frame(&mut app);
+        app
+    }
+
+    /// Draws a crop frame from (4, 4) to (28, 28): a pending crop. Returns the frame.
+    fn draw_crop(app: &mut PhotocraftApp) -> [f64; 4] {
+        use crate::canvas::{ToolEvent, tool_event};
+        tool_event(app, ToolEvent::Down { x: 4.0, y: 4.0, pressure: 1.0 }, Modifiers::NONE);
+        tool_event(app, ToolEvent::Move { x: 16.0, y: 16.0, pressure: 1.0 }, Modifiers::NONE);
+        tool_event(app, ToolEvent::Move { x: 28.0, y: 28.0, pressure: 1.0 }, Modifiers::NONE);
+        tool_event(app, ToolEvent::Up { x: 28.0, y: 28.0 }, Modifiers::NONE);
+        assert!(crate::crop_ui::pending(app), "the drag draws a pending frame");
+        app.ui.crop_rect.unwrap()
+    }
+
+    fn aspect(r: [f64; 4]) -> f64 {
+        (r[2] - r[0]) / (r[3] - r[1])
+    }
+
+    /// #6561: right-click on a pending crop opens its menu without touching the frame, and a ratio
+    /// row refits the frame as the options bar's dropdown does.
+    #[test]
+    fn right_click_on_a_pending_crop_opens_the_crop_menu_and_a_ratio_refits_the_frame() {
+        let mut app = crop_app();
+        let frame = draw_crop(&mut app);
+        let mut h = harness(app);
+        let center = h.state().last_canvas_rect.center();
+        right_click(&mut h, center, Modifiers::NONE);
+        let menu = h.state().ui.canvas_tool_menu.clone().expect("right-click on a pending crop opens a menu");
+        assert_eq!(h.state().ui.crop_rect, Some(frame), "the right-click leaves the frame alone");
+        assert!(available(h.state(), &menu, "crop.ratio.16:9"), "the menu lists the options bar's ratios");
+        let ctx = h.ctx.clone();
+        choose(h.state_mut(), &ctx, "crop.ratio.16:9");
+        assert_eq!(h.state().ui.tool_options.crop_ratio, "16:9");
+        let r = h.state().ui.crop_rect.unwrap();
+        assert!((aspect(r) - 16.0 / 9.0).abs() < 1e-9, "the frame is 16 : 9 now: {r:?}");
+        assert!(r[0] >= frame[0] && r[1] >= frame[1] && r[2] <= frame[2] && r[3] <= frame[3], "fitted inside the old frame: {r:?}");
+        assert!(h.state().ui.canvas_tool_menu.is_none());
+    }
+
+    #[test]
+    fn untouched_crop_frame_has_no_menu_and_a_pending_one_wins_over_the_pasteboard() {
+        let mut h = harness(crop_app());
+        let rect = h.state().last_canvas_rect;
+        let outside = rect.min + vec2(5.0, 5.0);
+        right_click(&mut h, rect.center(), Modifiers::NONE);
+        assert!(h.state().ui.canvas_tool_menu.is_none(), "the tool's untouched frame is no crop in progress");
+        right_click(&mut h, outside, Modifiers::NONE);
+        assert!(h.state().ui.canvas_tool_menu.as_ref().is_some_and(|m| m.pasteboard), "outside: the pasteboard menu, as before");
+        h.state_mut().ui.canvas_tool_menu = None;
+        draw_crop(h.state_mut());
+        h.run_steps(2);
+        right_click(&mut h, outside, Modifiers::NONE);
+        let menu = h.state().ui.canvas_tool_menu.clone().unwrap();
+        assert!(menu.crop.is_some() && !menu.pasteboard, "with a crop pending, its menu also outside the image");
+    }
+
+    /// A harness in the app's order: shortcuts (the crop's Esc and ↵ among them), then the canvas.
+    fn shortcut_harness(mut app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+        app.sync_views();
+        let mut h = Harness::builder().with_size(vec2(1000.0, 700.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                let ctx = ui.ctx().clone();
+                if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    return;
+                }
+                crate::shortcuts::handle(app, &ctx);
+                egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::default());
+        h.run_steps(4);
+        h
+    }
+
+    #[test]
+    fn esc_closes_only_the_crop_menu() {
+        let mut app = crop_app();
+        let frame = draw_crop(&mut app);
+        let mut h = shortcut_harness(app);
+        let center = h.state().last_canvas_rect.center();
+        right_click(&mut h, center, Modifiers::NONE);
+        assert!(h.state().ui.canvas_tool_menu.as_ref().is_some_and(|m| m.crop.is_some()));
+        h.key_press(egui::Key::Escape);
+        h.run_steps(2);
+        assert!(h.state().ui.canvas_tool_menu.is_none(), "Esc closes the menu");
+        assert_eq!(h.state().ui.crop_rect, Some(frame), "and only the menu: the crop is not cancelled");
+        assert!(crate::crop_ui::pending(h.state()));
+    }
+
+    /// ↵ under the open crop menu doesn't commit the crop beneath it.
+    #[test]
+    fn enter_under_the_crop_menu_does_not_crop() {
+        let mut app = crop_app();
+        let frame = draw_crop(&mut app);
+        let mut h = shortcut_harness(app);
+        let size = h.state().session.active().map(|s| s.doc.size);
+        let center = h.state().last_canvas_rect.center();
+        right_click(&mut h, center, Modifiers::NONE);
+        assert!(h.state().ui.canvas_tool_menu.as_ref().is_some_and(|m| m.crop.is_some()));
+        h.key_press(egui::Key::Enter);
+        h.run_steps(2);
+        assert_eq!(h.state().session.active().map(|s| s.doc.size), size, "↵ under the menu doesn't crop");
+        assert_eq!(h.state().ui.crop_rect, Some(frame));
+        assert!(crate::crop_ui::pending(h.state()));
+    }
+
+    /// A right-click while the left button drags the crop frame opens no menu over the drag, on
+    /// the image or outside it (no pasteboard menu either), and the menu opens again once the left
+    /// button is up, though egui ended that drag without a release of its own.
+    #[test]
+    fn no_crop_menu_while_the_left_button_drags_the_frame() {
+        let mut app = crop_app();
+        draw_crop(&mut app);
+        let mut h = harness(app);
+        let rect = h.state().last_canvas_rect;
+        let (center, outside) = (rect.center(), rect.min + vec2(5.0, 5.0));
+        let left = |pos, pressed| egui::Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+        h.event(egui::Event::PointerMoved(center));
+        h.run_steps(1);
+        h.event(left(center, true));
+        h.run_steps(1);
+        for k in 1..=4 {
+            h.event(egui::Event::PointerMoved(center + vec2(8.0 * k as f32, 0.0)));
+            h.run_steps(1);
+        }
+        assert!(h.state().crop.drag.is_some(), "the left button drags the frame");
+        let held = center + vec2(32.0, 0.0);
+        right_click(&mut h, held, Modifiers::NONE);
+        assert!(h.state().ui.canvas_tool_menu.is_none(), "no crop menu over the drag");
+        right_click(&mut h, outside, Modifiers::NONE);
+        assert!(h.state().ui.canvas_tool_menu.is_none(), "nor the pasteboard menu outside the image");
+        h.event(egui::Event::PointerMoved(held));
+        h.event(left(held, false));
+        h.run_steps(2);
+        right_click(&mut h, center, Modifiers::NONE);
+        assert!(h.state().ui.canvas_tool_menu.as_ref().is_some_and(|m| m.crop.is_some()), "with the button up the menu opens");
+    }
+
+    /// The left button down with no crop gesture under way (a press egui doesn't take for a drag
+    /// yet, or one whose release was lost to an Alt+Tab or a cancelled touch) doesn't keep the
+    /// crop menu shut.
+    #[test]
+    fn a_left_button_down_without_a_crop_drag_keeps_the_crop_menu() {
+        let mut app = crop_app();
+        draw_crop(&mut app);
+        let mut h = harness(app);
+        let center = h.state().last_canvas_rect.center();
+        h.event(egui::Event::PointerMoved(center));
+        h.run_steps(1);
+        h.event(egui::Event::PointerButton { pos: center, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        h.run_steps(1);
+        assert!(h.ctx.input(|i| i.pointer.primary_down()) && h.state().crop.drag.is_none(), "down, dragging nothing");
+        right_click(&mut h, center, Modifiers::NONE);
+        assert!(h.state().ui.canvas_tool_menu.as_ref().is_some_and(|m| m.crop.is_some()), "the crop menu opens");
+    }
+
+    /// Nor does a right-click open a menu over a Straighten line the left button still draws.
+    #[test]
+    fn no_crop_menu_while_the_left_button_draws_a_straighten_line() {
+        let mut app = crop_app();
+        draw_crop(&mut app);
+        crate::crop_straighten::toggle(&mut app);
+        let mut h = harness(app);
+        let center = h.state().last_canvas_rect.center();
+        let left = |pos, pressed| egui::Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+        h.event(egui::Event::PointerMoved(center));
+        h.run_steps(1);
+        h.event(left(center, true));
+        h.run_steps(1);
+        for k in 1..=4 {
+            h.event(egui::Event::PointerMoved(center + vec2(8.0 * k as f32, 4.0)));
+            h.run_steps(1);
+        }
+        assert!(h.state().crop.straighten.line.is_some() && h.state().crop.drag.is_none(), "the left button draws a Straighten line");
+        right_click(&mut h, center + vec2(32.0, 4.0), Modifiers::NONE);
+        assert!(h.state().ui.canvas_tool_menu.is_none(), "no menu over the line");
+    }
+
+    /// A finger held still on a pending crop (a touch screen's press-and-hold right-click) opens
+    /// the crop menu, though the touch counts as the primary button down.
+    #[test]
+    fn a_finger_held_on_a_pending_crop_opens_the_crop_menu() {
+        let mut app = crop_app();
+        let frame = draw_crop(&mut app);
+        let mut h = harness(app);
+        let at = h.state().last_canvas_rect.center();
+        let touch = |phase| egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(1), phase, pos: at, force: None };
+        let button = |pressed| egui::Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+        h.input_mut().events.extend([egui::Event::PointerMoved(at), touch(egui::TouchPhase::Start), button(true)]);
+        h.step();
+        // Held past egui's max_click_duration (0.8 s) without moving.
+        for _ in 0..120 {
+            if h.state().ui.canvas_tool_menu.is_some() {
+                break;
+            }
+            h.step();
+        }
+        assert!(h.state().ui.canvas_tool_menu.as_ref().is_some_and(|m| m.crop.is_some()), "the held finger opens the crop menu");
+        h.input_mut().events.extend([touch(egui::TouchPhase::End), button(false)]);
+        h.run_steps(2);
+        assert_eq!(h.state().ui.crop_rect, Some(frame), "the hold leaves the frame alone");
+    }
+
+    #[test]
+    fn crop_menu_rows_act_like_the_options_bar() {
+        use crate::crop_overlay::{CropOverlay, OverlayShow};
+        let ctx = Context::default();
+        let mut app = crop_app();
+        draw_crop(&mut app);
+        // Space's Hand held over the Crop tool keeps its own right-click.
+        assert!(!open_crop(&mut app, &ctx, Tool::Hand, [10.0, 10.0]));
+        let reopen = |app: &mut PhotocraftApp| {
+            assert!(open_crop(app, &Context::default(), Tool::Crop, [10.0, 10.0]));
+            app.ui.canvas_tool_menu.clone().unwrap()
+        };
+        // Nothing to save with a free ratio, nothing to delete without saved presets.
+        let menu = reopen(&mut app);
+        assert!(!entry_enabled(&app, &menu, CROP_NEW) && !entry_enabled(&app, &menu, CROP_DELETE));
+        assert!(mode_checked(&app, &menu, "crop.ratio."), "free Ratio is checked, as in the dropdown");
+        // A size preset fills W x H x Resolution, which the menu checks, as the dropdown does.
+        choose(&mut app, &ctx, "crop.ratio.preset:4x5in");
+        let menu = reopen(&mut app);
+        assert!(mode_checked(&app, &menu, "crop.ratio.whr") && !mode_checked(&app, &menu, "crop.ratio.preset:4x5in"));
+        assert!((aspect(app.ui.crop_rect.unwrap()) - 0.8).abs() < 1e-9);
+        assert!(entry_enabled(&app, &menu, CROP_NEW));
+        // Clear empties W x H x Resolution, as the bar's Clear.
+        choose(&mut app, &ctx, CROP_CLEAR);
+        assert_eq!(app.ui.tool_options.crop_width, "");
+        // Overlays: another overlay starts at its first orientation; when it shows.
+        app.ui.tool_options.crop_overlay = CropOverlay::GoldenSpiral;
+        app.ui.tool_options.crop_overlay_orientation = 2;
+        reopen(&mut app);
+        choose(&mut app, &ctx, "crop.overlay.triangle");
+        assert_eq!((app.ui.tool_options.crop_overlay, app.ui.tool_options.crop_overlay_orientation), (CropOverlay::Triangle, 0));
+        reopen(&mut app);
+        choose(&mut app, &ctx, "crop.overlayShow.never");
+        assert_eq!(app.ui.tool_options.crop_overlay_show, OverlayShow::Never);
+        let menu = reopen(&mut app);
+        assert!(mode_checked(&app, &menu, "crop.overlay.triangle") && mode_checked(&app, &menu, "crop.overlayShow.never"));
+        // A saved preset is listed by name; picking it refits the frame to its W x H, though the
+        // ratio key is "whr" before and after.
+        app.ui.canvas_tool_menu = None;
+        app.ui.tool_options.crop_ratio = crate::crop_size::WHR.into();
+        let saved = json!({"crop_ratio": "whr", "crop_width": "300 px", "crop_height": "100 px", "crop_resolution": "72", "crop_resolution_unit": "px/in"});
+        app.run("tool.presets.new", json!({"name": "Banner", "tool": "crop", "options": {"toolOptions": saved}})).unwrap();
+        let menu = reopen(&mut app);
+        let banner = crop_rows(&menu).into_iter().flatten().find(|(l, _)| l == "Banner").expect("the saved preset is a row").1;
+        assert!(entry_enabled(&app, &menu, CROP_DELETE));
+        choose(&mut app, &ctx, &banner);
+        assert_eq!(app.ui.tool_options.crop_width, "300 px");
+        assert!((aspect(app.ui.crop_rect.unwrap()) - 3.0).abs() < 1e-9, "the frame follows the preset: {:?}", app.ui.crop_rect);
+        let menu = reopen(&mut app);
+        assert!(mode_checked(&app, &menu, &banner));
+        // Crop commits as ↵ does: the preset's size.
+        choose(&mut app, &ctx, CROP_COMMIT);
+        let size = app.session.active().unwrap().doc.size;
+        assert_eq!((size.width, size.height), (300, 100));
+        // Cancel drops a pending crop.
+        draw_crop(&mut app);
+        reopen(&mut app);
+        choose(&mut app, &ctx, CROP_CANCEL);
+        assert!(!crate::crop_ui::pending(&app));
     }
 }

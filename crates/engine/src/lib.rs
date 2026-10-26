@@ -244,8 +244,9 @@ pub struct DocState {
     /// pixel coordinates. Per-document view state: discarded when the document closes, never saved
     /// to `.pcraft` or PSD, and not a history step.
     pub color_samplers: Vec<[f64; 2]>,
-    /// History panel snapshots, oldest first (`history.newSnapshot`, #2966). Kept for the
-    /// session only, as in Photoshop: not history states, and not saved with the document.
+    /// History panel snapshots, oldest first (`history.newSnapshot`, #2966): the first (id 0) is
+    /// the document as opened. Kept for the session only, as in Photoshop: not history states,
+    /// and not saved with the document.
     pub snapshots: Vec<history_cmds::Snapshot>,
     /// The id the next snapshot gets; ids are never reused, so deleting one keeps the others.
     next_snapshot: u64,
@@ -272,9 +273,14 @@ impl DocState {
     pub fn new(doc: Document, path: Option<String>) -> Self {
         let active_layer = doc.top_layer();
         let mut history = History::default();
-        history.set_current_layers(LayerTarget { active: active_layer, selected: active_layer.into_iter().collect() });
+        let target = LayerTarget { active: active_layer, selected: active_layer.into_iter().collect() };
+        history.set_current_layers(target.clone());
+        let doc = Arc::new(doc);
+        // Photoshop's first snapshot: the document as opened, named after it, so the History
+        // panel's top row can always bring it back (#2966).
+        let first = history_cmds::Snapshot { id: 0, name: doc.name.clone(), doc: doc.clone(), layers: target };
         Self {
-            doc: Arc::new(doc),
+            doc,
             history,
             active_layer,
             selected_layers: active_layer.into_iter().collect(),
@@ -294,7 +300,7 @@ impl DocState {
             show_only: None,
             floating: None,
             color_samplers: Vec::new(),
-            snapshots: Vec::new(),
+            snapshots: vec![first],
             next_snapshot: 1,
             source_snapshot: None,
         }
@@ -470,6 +476,12 @@ pub const PRECHECKED: &[&str] = &["layer.new.layer", "layer.new.group", "layer.n
 pub struct Session {
     docs: Vec<DocState>,
     active: Option<usize>,
+    /// Monotonic counter, bumped whenever a different document becomes active (including a
+    /// switch away and back inside one pass). UI work that must not cross documents (control
+    /// screenshots, automation input) binds to it.
+    active_generation: u64,
+    /// The document id [`Self::active_generation`] was last bumped for.
+    active_doc_for_generation: Option<photocraft_doc::DocId>,
     pub tools: ToolState,
     /// Log of executed commands (for action recording and debugging).
     pub journal: Vec<(String, Value)>,
@@ -493,6 +505,9 @@ pub struct Session {
     pub quick_mask_options: channel_cmds::QuickMaskOptions,
     /// Colour channel the running command may change (a single colour channel is targeted).
     color_restrict: Option<usize>,
+    /// Smart object whose filter mask the running command edits (`"target":"filterMask"`): each
+    /// edit re-renders it, in the same history step.
+    filter_mask_layer: Option<LayerId>,
     /// Edit › Preferences, keyboard shortcuts, menu and toolbar customisation (see `prefs`).
     pub prefs: prefs::PrefsStore,
     /// Release checks use an injected platform transport; no network I/O in the engine.
@@ -581,9 +596,25 @@ impl Session {
     pub fn active_mut(&mut self) -> Option<&mut DocState> {
         self.active.and_then(|i| self.docs.get_mut(i))
     }
+    /// Monotonic active-document generation. It changes when a different document becomes
+    /// active, including a switch away and back between two observations; equal values therefore
+    /// mean the document was not switched in between.
+    pub fn active_generation(&self) -> u64 {
+        self.active_generation
+    }
+    /// Bump [`Self::active_generation`] when the active document id changed. Call after every
+    /// assignment to `self.active`.
+    pub(crate) fn note_active_change(&mut self) {
+        let id = self.active().map(|st| st.doc.id);
+        if id != self.active_doc_for_generation {
+            self.active_doc_for_generation = id;
+            self.active_generation = self.active_generation.wrapping_add(1);
+        }
+    }
     pub fn set_active(&mut self, index: usize) -> bool {
         if index < self.docs.len() {
             self.active = Some(index);
+            self.note_active_change();
             self.sync_tools_mask_target();
             true
         } else {
@@ -623,6 +654,7 @@ impl Session {
         let active = self.active().map(|d| d.doc.id);
         let to = move_item(&mut self.docs, from, to)?;
         self.active = active.and_then(|id| self.docs.iter().position(|d| d.doc.id == id));
+        self.note_active_change();
         Some(to)
     }
 
@@ -640,6 +672,7 @@ impl Session {
         self.docs.push(st);
         let i = self.docs.len() - 1;
         self.active = Some(i);
+        self.note_active_change();
         i
     }
 
@@ -678,6 +711,7 @@ impl Session {
                 _ => index.min(self.docs.len() - 1),
             })
         };
+        self.note_active_change();
         Some(d)
     }
 
@@ -710,6 +744,17 @@ impl Session {
     /// `paint.cloneStamp` / `paint.historyBrush` it was drawn for. Refused for the Healing Brush
     /// (it blends on release) and when the brush, layer or clone source changed during the stroke.
     pub fn offer_live_retouch(&mut self, live: retouch_cmds::LiveRetouch) -> Result<()> {
+        let commit = live.into_commit(self)?;
+        self.live_commit = Some(commit);
+        Ok(())
+    }
+
+    /// [`Self::offer_live_stroke`] for a live Dodge, Burn, Sponge, Blur, Sharpen or Smudge stroke,
+    /// taken by the command it was drawn for: the stroke's finishing dabs are run first. Refused
+    /// when the brush, tool options or layer changed during the stroke.
+    pub fn offer_live_dab(&mut self, live: retouch_cmds::LiveDab) -> Result<()> {
+        // A refused offer withdraws the previous one too.
+        self.live_commit = None;
         let commit = live.into_commit(self)?;
         self.live_commit = Some(commit);
         Ok(())
@@ -822,7 +867,7 @@ impl Session {
         let d = self.active_mut()?;
         d.doc.layer(target)?;
         let active = d.active_layer.replace(target);
-        let r = (spec.enabled)(self);
+        let r = self.precondition(spec, params);
         if let Some(d) = self.active_mut() {
             d.active_layer = active;
         }
@@ -836,6 +881,7 @@ impl Session {
         let _authorization = crate::jobs::render_authorization_scope(self.authorize);
         let _document = crate::doc_path::scope(self.active().and_then(|d| d.path.as_deref()).map(std::path::Path::new));
         let restrict = self.color_restrict;
+        let filter_mask_layer = self.filter_mask_layer;
         let sampler_map = self.sampler_map.take();
         let symmetry_map = self.symmetry_map.take();
         let st = self.active_mut().ok_or(EngineError::NoDocument)?;
@@ -848,6 +894,9 @@ impl Session {
         let r = f(&mut doc, &mut active)?;
         if let (Some(k), Some(id)) = (restrict, active) {
             channel_cmds::restrict_to_color(&before, &mut doc, id, k);
+        }
+        if let Some(id) = filter_mask_layer {
+            smart_cmds::refresh_after_filter_mask_edit(&mut doc, id)?;
         }
         st.doc = Arc::new(doc);
         st.active_layer = active;

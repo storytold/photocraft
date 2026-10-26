@@ -661,6 +661,10 @@
 	Fit Layer(s) on Screen	Přizpůsobit vrstvy obrazovce
 	Fit Artboard on Screen	Přizpůsobit kreslicí plochu obrazovce
 	100%	100 %
+	105%	105 %
+	110%	110 %
+	115%	115 %
+	120%	120 %
 	200%	200 %
 	75%	75 %
 	80%	80 %
@@ -1033,6 +1037,9 @@
 	Create new pattern from the selection	Vytvořit nový vzorek z výběru
 	Create new shape from the current path	Vytvořit nový tvar z aktuální cesty
 	Create new snapshot	Vytvořit nový snímek
+	From:	Z:
+	Full Document	Celý dokument
+	Merged Layers	Sloučené vrstvy
 	Create new tool preset	Vytvořit nové přednastavení nástroje
 	Crop Factor	Crop faktor
 	Ctrl	Ctrl
@@ -3581,6 +3588,8 @@ curves	Smooth	Vyhladit
 	Vanishing Point is not active	Úběžník není aktivní
 	Apply Vanishing Point ({key})	Použít úběžník ({key})
 	Fix the red plane first: its corners must form a convex quad	Nejprve opravte červenou rovinu: její rohy musí tvořit konvexní čtyřúhelník
+	Alt-click a plane to set the clone source	Klepnutím s Alt na rovinu nastavte zdroj klonování
+	Too many clone strokes: apply Vanishing Point first	Příliš mnoho tahů klonování: nejprve použijte Úběžník
 # Select and Mask view modes (#1754)
 	Onion Skin	Cibulová slupka
 	Marching Ants	Pochodující mravenci
@@ -3851,6 +3860,17 @@ navigator	Zoom	Zvětšení
 	Sent to {printer}	Odesláno do {printer}
 	set in Print Settings…	nastavuje se v nastavení tisku…
 	ICO is limited to 256 × 256 pixels	ICO je omezen na 256 × 256 pixelů
+	Calibration	Kalibrace
+	Red Primary	Červená základní
+	Green Primary	Zelená základní
+	Blue Primary	Modrá základní
+	Write xmp sidecars	Zapisovat přidružené soubory XMP
+	Set the tone sliders from the image	Nastavit posuvníky tónů podle obrazu
+	Settings from {name}	Nastavení z {name}
+	Settings from {name}; {count} not supported: {names}	Nastavení z {name}; {count} nepodporováno: {names}
+	Could not write {name}: {error}	Nelze zapsat {name}: {error}
+	Kept {name}: written by another application	Soubor {name} ponechán: zapsala ho jiná aplikace
+	Shadow Tint	Odstín stínů
 # PhotoCraft release checks.
 	Check for Updates…	Zkontrolovat aktualizace…
 	PhotoCraft Updates	Aktualizace PhotoCraft
@@ -4166,3 +4186,18 @@ cameraRaw	Dehaze	Odstranění oparu
 	Grayscale Ramp	Přechod stupňů šedi
 	Current Colors	Aktuální barvy
 	Make Ramp Web Safe	Omezit pruh na webové barvy
+# Art History Brush (#213).
+	Art History Brush	Štětec umělecké historie
+	Art History Brush Tool	Nástroj štětec umělecké historie
+	Tight Short	Těsný krátký
+	Tight Medium	Těsný střední
+	Tight Long	Těsný dlouhý
+	Loose Medium	Volný střední
+	Loose Long	Volný dlouhý
+	Dab	Šmouha
+	Tight Curl	Těsná smyčka
+	Loose Curl	Volná smyčka
+	Stylized dabs from a history state	Stylizované šmouhy ze stavu historie
+
+# Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
+	Aspect Ratio	Poměr stran

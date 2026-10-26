@@ -40,7 +40,7 @@ struct Hold {
 /// Where a canvas keeps its hold: each canvas (document `idx` of the tiled windows, in the main
 /// or a secondary window) has its own, so a hold on one never zooms another.
 pub fn hold_id(idx: usize, primary: bool, viewport: egui::ViewportId) -> egui::Id {
-    egui::Id::new(("pc-zoom-tool-hold", idx, primary, viewport))
+    egui::Id::unique(("pc-zoom-tool-hold", idx, primary, viewport))
 }
 
 /// The zoom after holding for `dt` seconds at `zoom` (out: shrinking), within the range for a

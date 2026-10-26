@@ -104,9 +104,10 @@ pub fn fill(s: &CropShield, canvas: Color32, editing: bool) -> Option<Color32> {
     (a > 0).then(|| Color32::from_rgba_unmultiplied(r, g, b, a))
 }
 
-/// The pasteboard colour the shield matches: Preferences › Interface's, else the theme's canvas.
+/// The pasteboard colour the shield matches: Preferences › Interface's, else black in Full Screen
+/// Mode (the backdrop there) and the theme's canvas otherwise.
 pub fn canvas_color(app: &PhotocraftApp, ctx: &egui::Context) -> Color32 {
-    crate::prefs_ui::pasteboard_color(app).unwrap_or_else(|| crate::theme::Tokens::get(ctx).canvas)
+    crate::prefs_ui::pasteboard_color(app).unwrap_or_else(|| if app.ui.view.hides_chrome() { Color32::BLACK } else { crate::theme::Tokens::get(ctx).canvas })
 }
 
 /// The shield over the pending crop box now ([`fill`]).
@@ -305,6 +306,32 @@ mod tests {
         crate::crop_ui::ensure_frame(&mut app);
         assert!(app.ui.crop_rect.is_some());
         app
+    }
+
+    #[test]
+    fn match_canvas_is_the_black_full_screen_pasteboard() {
+        let mut app = crop_app();
+        let ctx = egui::Context::default();
+        let theme_canvas = crate::theme::Tokens::get(&ctx).canvas;
+        assert_ne!(theme_canvas, Color32::BLACK);
+        app.ui.tool_options.crop_shield.show_cropped_area = false;
+        assert!(hides_outside(&app));
+        // Full Screen Mode shows the document on black (lib.rs backdrop); the opaque shield
+        // over the cropped area matches it.
+        for (mode, want) in [
+            ("view.screenMode.fullScreen", Color32::BLACK),
+            ("view.screenMode.fullScreenWithMenuBar", theme_canvas),
+            ("view.screenMode.standard", theme_canvas),
+        ] {
+            crate::menus::invoke(&mut app, &ctx, mode, serde_json::json!({})).unwrap();
+            assert_eq!(current(&app, &ctx), Some(want), "{mode}");
+        }
+        // A chosen pasteboard colour is painted in every screen mode, and the shield follows it.
+        app.run("prefs.set", serde_json::json!({"values": {"interface.canvasColor": "custom", "interface.canvasCustomColor": "#123456"}})).unwrap();
+        for mode in ["view.screenMode.fullScreen", "view.screenMode.standard"] {
+            crate::menus::invoke(&mut app, &ctx, mode, serde_json::json!({})).unwrap();
+            assert_eq!(current(&app, &ctx), Some(Color32::from_rgb(0x12, 0x34, 0x56)), "{mode}");
+        }
     }
 
     #[test]

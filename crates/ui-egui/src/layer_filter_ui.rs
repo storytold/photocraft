@@ -123,7 +123,7 @@ pub fn bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
         let by = [(FilterBy::Kind, tl!("Kind")), (FilterBy::Name, tl!("Name")), (FilterBy::Mode, tl!("Mode"))];
-        widgets::dropdown(ui, "layer-filter-by", &mut app.ui.layer_filter_by, &by, 64.0);
+        widgets::dropdown(ui, "layer-filter-by", tl!("Kind"), &mut app.ui.layer_filter_by, &by, 64.0);
         ui.add_space(4.0);
         match app.ui.layer_filter_by {
             FilterBy::Kind => {
@@ -146,12 +146,12 @@ pub fn bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             }
             FilterBy::Name => {
                 let width = ui.available_width().max(48.0);
-                widgets::text_field(ui, ui.id().with("layer-filter-name"), &mut app.ui.layer_filter_name, tl!("Search"), width, false);
+                widgets::text_field(ui, ui.scope_id().with("layer-filter-name"), &mut app.ui.layer_filter_name, tl!("Search"), width, false);
             }
             FilterBy::Mode => {
                 let modes: Vec<(BlendMode, &str)> = std::iter::once(BlendMode::PassThrough).chain(BlendMode::LAYER_MODES).map(|m| (m, m.label())).collect();
                 let width = ui.available_width().max(96.0);
-                widgets::dropdown(ui, "layer-filter-mode", &mut app.ui.layer_filter_mode, &modes, width);
+                widgets::dropdown(ui, "layer-filter-mode", tl!("Mode"), &mut app.ui.layer_filter_mode, &modes, width);
             }
         }
     });
