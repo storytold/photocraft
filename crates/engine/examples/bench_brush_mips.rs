@@ -39,7 +39,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         for side in [0, 1024, 2048, 5000] {
             let original = (side > 0).then(|| GrayTile::from_fn(side, side, |x, y| ((x * 13 + y * 7) % 31) as f32 / 30.0));
             for symmetry in ["off", "dual"] {
-                s.execute("paint.setSymmetry", json!({"mode":symmetry}))?;
+                if symmetry == "off" {
+                    if s.is_enabled("paint.symmetryDisable") {
+                        s.execute("paint.symmetryDisable", json!({}))?;
+                    }
+                } else {
+                    s.execute("paint.setSymmetry", json!({"mode":symmetry}))?;
+                }
                 let (mut cold, mut warm, mut begin, mut draw, mut release) = (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
                 let mut fingerprint = None;
                 // A fresh allocation makes every cold preparation a genuine miss. Copying
