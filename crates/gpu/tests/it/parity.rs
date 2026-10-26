@@ -1739,6 +1739,23 @@ fn effect_cases() -> Vec<(&'static str, Vec<Effect>)> {
             ],
         ),
         (
+            "special-eight effects act like Fill",
+            vec![
+                Effect::InnerShadow(shadow(BlendMode::VividLight, 0.56, 120.0, 4.0, 6.0, 0.0)),
+                Effect::Satin(Satin {
+                    common: FxCommon::new(BlendMode::VividLight, 1.0),
+                    color: Color::rgb(1.0, 1.0, 1.0),
+                    angle: 19.0,
+                    distance: 7.0,
+                    size: 8.0,
+                    contour: Contour::Linear,
+                    anti_alias: false,
+                    invert: false,
+                }),
+                Effect::ColorOverlay { common: FxCommon::new(BlendMode::LinearDodge, 0.35), color: Color::rgb(0.9, 0.5, 0.1) },
+            ],
+        ),
+        (
             "multiple instances",
             vec![
                 Effect::Stroke(stroke(2.0, StrokePosition::Outside, FxPaint::Color(Color::rgb(1.0, 1.0, 1.0)))),

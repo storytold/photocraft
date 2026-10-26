@@ -1171,6 +1171,15 @@ fn fx_composite(d: vec2<i32>, dst: vec4<f32>, s: vec4<f32>) -> vec4<f32> {
     return composite(op.mode, dst, s, 1.0);
 }
 
+// The same with the effect's strength `k` (coverage x opacity) kept apart from the colour's own
+// alpha `s.a`: Photoshop's special-eight modes treat it like a layer's Fill (effects::paint).
+fn fx_composite_k(d: vec2<i32>, dst: vec4<f32>, s: vec4<f32>, k: f32) -> vec4<f32> {
+    if (op.mode != M_DISSOLVE && fill_is_special(op.mode)) {
+        return composite_fill(op.mode, dst, s, 1.0, min(k, 1.0), false);
+    }
+    return fx_composite(d, dst, vec4(s.rgb, s.a * k));
+}
+
 // Effect chain steps (`kind`): 0 A at `opacity` × alpha; 1 an opaque copy of A (a clipping base
 // for clipped layers' effects); 2 A's colour with alpha `opacity` inside B's shape (the layer
 // before its interior effects); 3 A with its alpha × B's alpha (the shape's own alpha); 4 the
@@ -1239,12 +1248,12 @@ fn fs_fxpaint(in: VOut) -> @location(0) vec4<f32> {
         let k = min(m * op.p0.x, 1.0) * op.opacity;
         if (k <= 0.0) { return dst; }
         let t = 1.0 - clamp(m, 0.0, 1.0);
-        return fx_composite(d, dst, vec4(lut(0, t), lut(1, t), lut(2, t), lut(3, t) * k));
+        return fx_composite_k(d, dst, vec4(lut(0, t), lut(1, t), lut(2, t), lut(3, t)), k);
     }
     let k = m * op.opacity;
     if (k <= 0.0) { return dst; }
     let c = fx_color(d);
-    return fx_composite(d, dst, vec4(c.rgb, c.a * k));
+    return fx_composite_k(d, dst, c, k);
 }
 
 // Outside strokes (A = the exterior result before them, B = the layer, C = coverage so far in
