@@ -154,8 +154,17 @@ fn data_sets(s: &mut Session, p: &Value) -> Result<Value> {
     list(s)
 }
 
+/// Read a Pixel Replacement image the way the interactive commands do: the stored path resolved
+/// next to the document ([`crate::doc_path::resolve`]) and read from the filesystem. Automation
+/// passes its own reader instead, scoped to its read root (#8586).
+pub fn read_pixel_image(path: &str) -> Result<Vec<u8>> {
+    let file = crate::doc_path::resolve(path).map_err(|why| crate::doc_path::refusal("the image", path, why))?;
+    std::fs::read(&file).map_err(|e| EngineError::Other(format!("read `{path}`: {e}")))
+}
+
 /// Apply one data set's values to the document (visibility, text, pixels). A history step.
-fn apply_to_doc(doc: &mut Document, vars: &Variables, set: &DataSet) -> Result<()> {
+/// Pixel Replacement images are read through `read`, the caller's file authority.
+fn apply_to_doc(doc: &mut Document, vars: &Variables, set: &DataSet, read: &mut dyn FnMut(&str) -> Result<Vec<u8>>) -> Result<()> {
     for dv in &set.values {
         let Some(def) = vars.def(&dv.variable) else { continue };
         match (&def.kind, &dv.value) {
@@ -184,7 +193,7 @@ fn apply_to_doc(doc: &mut Document, vars: &Variables, set: &DataSet) -> Result<(
                 }
             }
             (VarKind::PixelReplacement { method, align, clip }, VarValue::Pixels(path)) => {
-                replace_pixels(doc, def.layer, path, *method, *align, *clip)?;
+                replace_pixels(doc, def.layer, path, read, *method, *align, *clip)?;
             }
             _ => {} // value type doesn't match the variable kind: skip
         }
@@ -193,15 +202,22 @@ fn apply_to_doc(doc: &mut Document, vars: &Variables, set: &DataSet) -> Result<(
 }
 
 /// Replace a pixel layer's content with an image file, scaled (method) and aligned.
-fn replace_pixels(doc: &mut Document, layer: LayerId, path: &str, method: PixelMethod, align: PixelAlign, clip: bool) -> Result<()> {
+fn replace_pixels(
+    doc: &mut Document,
+    layer: LayerId,
+    path: &str,
+    read: &mut dyn FnMut(&str) -> Result<Vec<u8>>,
+    method: PixelMethod,
+    align: PixelAlign,
+    clip: bool,
+) -> Result<()> {
     let target = doc.layer(layer).and_then(|l| l.surface()).map(|s| s.content_bounds()).filter(|r| !r.is_empty()).unwrap_or_else(|| doc.bounds());
     if target.is_empty() {
         return Ok(());
     }
     let fmt = doc.pixel_format();
-    // The path is stored in the document's data sets.
-    let file = crate::doc_path::resolve(path).map_err(|why| crate::doc_path::refusal("the image", path, why))?;
-    let bytes = std::fs::read(&file).map_err(|e| EngineError::Other(format!("read `{path}`: {e}")))?;
+    // The path is stored in the document's data sets; the caller's reader decides where it may point.
+    let bytes = read(path)?;
     let src = crate::file_cmds::import(path, &bytes)?;
     let img = crate::file_cmds::flattened(&src, fmt);
     let (iw, ih) = (src.size.width.max(1) as f64, src.size.height.max(1) as f64);
@@ -260,7 +276,7 @@ fn apply_data_set(s: &mut Session, p: &Value) -> Result<Value> {
     let (set, idx) = resolve_set(s, p, "image.applyDataSet")?;
     let vars = s.active().ok_or(EngineError::NoDocument)?.doc.variables.clone();
     authorize_pixel_paths(s, &set)?;
-    s.edit(&format!("Apply Data Set \"{}\"", set.name), |doc, _| apply_to_doc(doc, &vars, &set))?;
+    s.edit(&format!("Apply Data Set \"{}\"", set.name), |doc, _| apply_to_doc(doc, &vars, &set, &mut read_pixel_image))?;
     set_vars(s, |v| v.active = Some(idx))?;
     Ok(json!({"applied": set.name, "index": idx}))
 }
@@ -285,12 +301,14 @@ fn resolve_set(s: &Session, p: &Value, cmd: &str) -> Result<(DataSet, usize)> {
 fn import_data_sets(s: &mut Session, p: &Value) -> Result<Value> {
     let path = p.get("path").and_then(Value::as_str).ok_or_else(|| bad("file.import.variableDataSets", "need `path`"))?;
     let text = std::fs::read_to_string(path).map_err(|e| EngineError::Other(format!("read `{path}`: {e}")))?;
-    import_data_sets_text(s, &text, p)
+    import_data_sets_text(s, &text, p, |_| Ok(()))
 }
 
 /// The body of `file.import.variableDataSets` over CSV text already read: automation reads the
-/// file beneath its read root and hands the text over (#3216).
-pub fn import_data_sets_text(s: &mut Session, text: &str, p: &Value) -> Result<Value> {
+/// file beneath its read root and hands the text over (#3216). `check_image` judges each Pixel
+/// Replacement path before anything is stored, so automation refuses one outside its read root
+/// (#8586); the interactive command accepts any.
+pub fn import_data_sets_text(s: &mut Session, text: &str, p: &Value, check_image: impl Fn(&str) -> Result<()>) -> Result<Value> {
     let delim = p.get("delimiter").and_then(Value::as_str).and_then(|d| d.bytes().next()).unwrap_or(b',');
     // Excel's "CSV UTF-8" starts with a byte order mark that is not part of the first header cell.
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
@@ -316,7 +334,10 @@ pub fn import_data_sets_text(s: &mut Session, text: &str, p: &Value) -> Result<V
             let Some(def) = vars.def(var) else { continue };
             let value = match def.kind {
                 VarKind::Visibility => VarValue::Visibility(matches!(cell.trim().to_ascii_lowercase().as_str(), "true" | "1" | "yes" | "visible" | "on")),
-                VarKind::PixelReplacement { .. } => VarValue::Pixels(cell.clone()),
+                VarKind::PixelReplacement { .. } => {
+                    check_image(cell)?;
+                    VarValue::Pixels(cell.clone())
+                }
                 VarKind::TextReplacement => VarValue::Text(cell.clone()),
             };
             values.push(DataValue { variable: var.clone(), value });
@@ -385,10 +406,17 @@ fn split_csv(line: &str, delim: u8) -> Vec<String> {
 /// `{dir, format?("png"), dataSets?[names]}` → `{files:[…],count}`.
 fn export_as_files(s: &mut Session, p: &Value) -> Result<Value> {
     let dir = p.get("dir").and_then(Value::as_str).ok_or_else(|| bad("file.export.dataSetsAsFiles", "need `dir`"))?.to_string();
+    // The command reads images by ambient path, so an untrusted session's gate judges every image
+    // path before anything is written, as Apply Data Set does.
+    let wanted = p.get("dataSets").and_then(Value::as_array);
+    let sets = s.active().ok_or(EngineError::NoDocument)?.doc.variables.data_sets.clone();
+    for set in sets.iter().filter(|d| wanted.is_none_or(|w| w.iter().any(|n| n.as_str() == Some(d.name.as_str())))) {
+        authorize_pixel_paths(s, set)?;
+    }
     // The directory appears only once the batch has been planned, as it always did, so a batch
     // rejected for colliding names still leaves no directory behind.
     let mut made_dir = false;
-    let names = export_data_sets_with(s, p, |name, bytes| {
+    let names = export_data_sets_with(s, p, read_pixel_image, |name, bytes| {
         if !made_dir {
             std::fs::create_dir_all(&dir).map_err(|e| EngineError::Other(format!("mkdir `{dir}`: {e}")))?;
             made_dir = true;
@@ -403,9 +431,15 @@ fn export_as_files(s: &mut Session, p: &Value) -> Result<Value> {
 /// The bodies of `file.export.dataSetsAsFiles`, streamed to `write` as a single-component
 /// filename plus its bytes: one flattened file per data set. The whole batch is planned first,
 /// so colliding names are rejected before any file is written, and automation writes exactly
-/// these bytes beneath its write root (#3216) — the two paths cannot drift. Returns the
-/// filenames written, in order.
-pub fn export_data_sets_with(s: &Session, p: &Value, mut write: impl FnMut(&str, &[u8]) -> Result<()>) -> Result<Vec<String>> {
+/// these bytes beneath its write root (#3216) — the two paths cannot drift. Pixel Replacement
+/// images are read through `read`: automation reads them beneath its read root (#8586), the
+/// command with [`read_pixel_image`]. Returns the filenames written, in order.
+pub fn export_data_sets_with(
+    s: &Session,
+    p: &Value,
+    mut read: impl FnMut(&str) -> Result<Vec<u8>>,
+    mut write: impl FnMut(&str, &[u8]) -> Result<()>,
+) -> Result<Vec<String>> {
     let format = p.get("format").and_then(Value::as_str).unwrap_or("png");
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let original = st.doc.clone();
@@ -415,9 +449,14 @@ pub fn export_data_sets_with(s: &Session, p: &Value, mut write: impl FnMut(&str,
     if sets.is_empty() {
         return Err(bad("file.export.dataSetsAsFiles", "no data sets to export"));
     }
-    // Judge every image path before anything is written, as Apply Data Set does.
+    // Every image is read through `read` before anything is written, so an image the caller's
+    // authority refuses (automation: outside its read root) fails the batch with no file written.
     for set in &sets {
-        authorize_pixel_paths(s, set)?;
+        for dv in &set.values {
+            if let (Some(VarKind::PixelReplacement { .. }), VarValue::Pixels(path)) = (vars.def(&dv.variable).map(|d| &d.kind), &dv.value) {
+                read(path)?;
+            }
+        }
     }
     // Filename template: `{name}` (sanitised data-set name), `{index}` (1-based). Default `{name}`.
     let template = p.get("naming").and_then(Value::as_str).unwrap_or("{name}");
@@ -458,7 +497,7 @@ pub fn export_data_sets_with(s: &Session, p: &Value, mut write: impl FnMut(&str,
     let mut written = Vec::new();
     for (set, name) in sets.iter().zip(&names) {
         let mut doc = (*original).clone();
-        apply_to_doc(&mut doc, &vars, set)?;
+        apply_to_doc(&mut doc, &vars, set, &mut read)?;
         // An untrusted session's PSD export embeds no file a linked smart object names.
         let opts = photocraft_io::ExportOptions { read_linked_files: s.authorize.is_none(), ..Default::default() };
         let bytes = photocraft_io::export(&doc, format, &opts).map(|r| r.bytes).map_err(|e| EngineError::Other(format!("export `{}`: {e}", set.name)))?;

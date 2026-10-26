@@ -162,7 +162,7 @@ fn csv_import_ignores_utf8_bom() {
     let (mut s, _p, badge, title) = session();
     s.execute("image.variables.define", json!({"defs": [{"name": "headline", "layer": title.0, "type": "textReplacement"}]})).unwrap();
     let _ = badge;
-    let r = import_data_sets_text(&mut s, "\u{feff}headline\nHello\n", &json!({})).unwrap();
+    let r = import_data_sets_text(&mut s, "\u{feff}headline\nHello\n", &json!({}), |_| Ok(())).unwrap();
     assert_eq!(r["imported"], 1);
     s.execute("image.applyDataSet", json!({"index": 0})).unwrap();
     assert_eq!(text_of(&s, title), "Hello");

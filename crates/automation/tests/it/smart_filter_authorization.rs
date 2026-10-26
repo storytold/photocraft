@@ -9,7 +9,7 @@ use fixture::{Fixture, assert_denied, cube, path_params};
 use photocraft_automation::{Headless, workspace::authorize_desktop_engine_step};
 use photocraft_doc::LayerContent;
 use photocraft_engine::{Session, actions_cmds::Action, jobs::Started, smart_cmds};
-use serde_json::json;
+use serde_json::{Value, json};
 
 #[test]
 fn parameter_edits_reject_outside_images_and_luts_without_changing_the_document() {
@@ -32,6 +32,30 @@ fn parameter_edits_reject_outside_images_and_luts_without_changing_the_document(
         let safe = if lookup { json!({"data": cube(0), "fileName": "embedded.cube"}) } else { json!({"horizontal": 10}) };
         h.session.execute("layer.smartFilter.setParams", json!({"layer": layer.0, "params": safe})).unwrap();
     }
+}
+
+/// #8585: the audit's repro, through `Headless::handle` only. A layer converted to a smart
+/// object gets a harmless Color Lookup smart filter; `layer.smartFilter.setParams` then points
+/// the filter's `file` outside the workspace. The merged params are judged as the filter's own
+/// command, so the edit is refused and no render or save picks up the outside LUT.
+#[test]
+fn set_params_cannot_point_a_color_lookup_smart_filter_outside_the_workspace() {
+    let f = Fixture::new();
+    let mut h = f.headless();
+    h.handle("doc.new", json!({"width": 8, "height": 8, "background": "#808080"})).unwrap();
+    let run = |h: &mut Headless, command: &str, params: Value| h.handle("engine.execute", json!({"command": command, "params": params}));
+    run(&mut h, "layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    run(&mut h, "image.adjustments.colorLookup", json!({"lut": "none"})).unwrap();
+    let render = |h: &mut Headless| h.handle("doc.render", json!({"maxSide": 8})).unwrap()["base64"].clone();
+    let before = render(&mut h);
+    let doc = h.session.active().unwrap().doc.clone();
+
+    assert_denied(run(&mut h, "layer.smartFilter.setParams", json!({"params": {"file": f.outside("white.cube")}})));
+    assert!(Arc::ptr_eq(&doc, &h.session.active().unwrap().doc), "the refused edit changed nothing");
+    assert_eq!(render(&mut h), before, "the outside LUT never reached the pixels");
+    h.handle("doc.save", json!({"path": "after.png"})).unwrap();
+    let saved = photocraft_codecs::decode(&std::fs::read(f.root().join("after.png")).unwrap()).unwrap().to_rgba8();
+    assert!(saved.chunks(4).all(|px| px[..3] == [128, 128, 128]), "the saved file holds the unfiltered grey");
 }
 
 #[test]

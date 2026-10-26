@@ -223,7 +223,9 @@ impl Headless {
                 _ => return Err(AutomationError::BadRequest("automation filesystem access is not granted: write authority is absent".into())),
             };
             let mut outputs = workspace.export_sequence(dir)?;
-            let written = photocraft_engine::export_data_sets_with(&this.session, params, |name, bytes| {
+            // Pixel Replacement images are read beneath the read root, never by ambient path (#8586).
+            let read = |path: &str| workspace.read(path).map_err(|e| photocraft_engine::EngineError::Other(e.to_string()));
+            let written = photocraft_engine::export_data_sets_with(&this.session, params, read, |name, bytes| {
                 outputs.write(name, bytes).map_err(|e| photocraft_engine::EngineError::Other(e.to_string()))
             });
             exported(dir, written, &mut outputs)
@@ -241,15 +243,16 @@ impl Headless {
                 opts.insert("path".into(), json!(path));
                 return this.command_run("file.import.variableDataSets", Value::Object(opts));
             }
-            let text = match &this.filesystem {
-                Filesystem::Workspace(workspace) => {
-                    let bytes = workspace.read(path)?;
-                    String::from_utf8(bytes).map_err(|e| AutomationError::BadRequest(format!("automation read `{path}` is not valid UTF-8: {e}")))?
-                }
-                _ => return Err(AutomationError::BadRequest("automation filesystem access is not granted: read authority is absent".into())),
+            let Filesystem::Workspace(workspace) = &this.filesystem else {
+                return Err(AutomationError::BadRequest("automation filesystem access is not granted: read authority is absent".into()));
             };
+            let bytes = workspace.read(path)?;
+            let text = String::from_utf8(bytes).map_err(|e| AutomationError::BadRequest(format!("automation read `{path}` is not valid UTF-8: {e}")))?;
+            // Each image path the CSV names must lie beneath the read root, as the export reads it (#8586).
+            let workspace = workspace.clone();
+            let check = move |image: &str| workspace.check_read(image).map_err(|e| photocraft_engine::EngineError::Other(e.to_string()));
             this.sync_jobs();
-            Ok(photocraft_engine::import_data_sets_text(&mut this.session, &text, params)?)
+            Ok(photocraft_engine::import_data_sets_text(&mut this.session, &text, params, check)?)
         })
     }
 
@@ -379,6 +382,7 @@ impl Headless {
                 return self.render_video(params, |_, _| true);
             }
             authorize_engine_command(id, &params)?;
+            self.check_data_set_images(id, &params)?;
         }
         // Background jobs that finished since the last request (or batch step) are applied first.
         self.sync_jobs();
@@ -393,6 +397,22 @@ impl Headless {
 }
 
 impl Headless {
+    /// `image.variables.dataSets` stores Pixel Replacement image paths that exports read later.
+    /// Under a workspace each must lie beneath the read root (#8586); the export reads it through
+    /// that root as well, so a path stored any other way is still refused there.
+    fn check_data_set_images(&self, id: &str, params: &Value) -> Result<(), AutomationError> {
+        let Filesystem::Workspace(workspace) = &self.filesystem else { return Ok(()) };
+        if id != "image.variables.dataSets" {
+            return Ok(());
+        }
+        let values = params.get("dataSets").and_then(Value::as_array).into_iter().flatten().filter_map(|set| set.get("values")?.as_array()).flatten();
+        let images = values.filter(|v| v.get("kind").and_then(Value::as_str) == Some("pixels")).filter_map(|v| v.get("value")?.as_str());
+        for path in images {
+            workspace.check_read(path)?;
+        }
+        Ok(())
+    }
+
     /// A direct automation Render Video uses only the launch-time write capability. Nested
     /// engine actions still reject this filesystem command until they can carry capabilities.
     pub(crate) fn render_video(&mut self, params: Value, progress: impl FnMut(usize, usize) -> bool) -> Result<Value, AutomationError> {

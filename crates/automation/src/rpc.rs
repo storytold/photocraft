@@ -1017,27 +1017,33 @@ mod tests {
         let red = photocraft_codecs::Image::from_u8(4, 4, photocraft_codecs::ChannelLayout::Rgb, [255, 0, 0].repeat(16)).unwrap();
         let photo = base.join("photo.png");
         std::fs::write(&photo, photocraft_codecs::encode(&red, photocraft_codecs::Format::Png, &Default::default()).unwrap()).unwrap();
+        let store = json!({"command": "image.variables.dataSets", "params": {"dataSets": [
+            {"name": "swap", "values": [{"variable": "photo", "kind": "pixels", "value": photo.to_string_lossy()}]},
+        ]}});
+        // A workspace refuses to store the outside path (#8586), so a document saved elsewhere
+        // brings it in.
+        let mut trusted = Headless::trusted_local();
+        trusted.handle("doc.new", json!({"width": 8, "height": 8, "background": "white", "name": "card"})).unwrap();
+        let layer = trusted.handle("engine.execute", json!({"command": "layer.new.layer", "params": {}})).unwrap()["layer"].clone();
+        trusted
+            .handle(
+                "engine.execute",
+                json!({"command": "image.variables.define", "params": {"defs": [{"name": "photo", "layer": layer, "type": "pixelReplacement"}]}}),
+            )
+            .unwrap();
+        trusted.handle("engine.execute", store.clone()).unwrap();
+        trusted.handle("doc.save", json!({"path": root.join("stored.pcraft").to_string_lossy()})).unwrap();
+        drop(trusted);
         let mut h = Headless::with_workspace(crate::AuthorizedWorkspace::new(Some(&root), Some(&root)).unwrap());
-        h.handle("doc.new", json!({"width": 8, "height": 8, "background": "white", "name": "card"})).unwrap();
-        let layer = h.handle("engine.execute", json!({"command": "layer.new.layer", "params": {}})).unwrap()["layer"].clone();
-        h.handle(
-            "engine.execute",
-            json!({"command": "image.variables.define", "params": {"defs": [{"name": "photo", "layer": layer, "type": "pixelReplacement"}]}}),
-        )
-        .unwrap();
-        // Storing the path is allowed; reading it is what the gate judges.
-        h.handle(
-            "engine.execute",
-            json!({"command": "image.variables.dataSets", "params": {"dataSets": [
-                {"name": "swap", "values": [{"variable": "photo", "kind": "pixels", "value": photo.to_string_lossy()}]},
-            ]}}),
-        )
-        .unwrap();
+        h.open(std::path::Path::new("stored.pcraft")).unwrap();
+        let stored = h.handle("engine.execute", store).unwrap_err().to_string();
+        assert!(stored.contains("must be inside the automation root"), "{stored}");
         let applied = h.handle("engine.execute", json!({"command": "image.applyDataSet", "params": {"name": "swap"}})).unwrap_err().to_string();
         assert!(applied.contains("ambient filesystem paths"), "{applied}");
         let sets = root.join("sets");
+        // The export reads each image beneath the read root (#8586): this one lies outside it.
         let exported = h.handle("doc.exportDataSets", json!({"dir": sets.to_string_lossy(), "format": "png"})).unwrap_err().to_string();
-        assert!(exported.contains("ambient filesystem paths"), "{exported}");
+        assert!(exported.contains("must be inside the automation root"), "{exported}");
         assert_eq!(std::fs::read_dir(&sets).map_or(0, Iterator::count), 0, "nothing of the refused batch is written");
         // Release directory capabilities before cleanup on Windows.
         drop(h);

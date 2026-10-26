@@ -54,6 +54,14 @@ impl AuthorizedWorkspace {
         read_to_observed_length(&mut file, metadata.len())
     }
 
+    /// Judge a path that will be read later beneath the read root, without touching the
+    /// filesystem: the same rules [`Self::read`] applies before it opens anything. Data sets
+    /// store Pixel Replacement image paths this way (#8586).
+    pub fn check_read(&self, path: &str) -> Result<(), AutomationError> {
+        request_path(path, self.read.as_ref())?;
+        self.read.as_ref().map(|_| ()).ok_or_else(|| AutomationError::BadRequest(format!("{DENIED}: read authority is absent")))
+    }
+
     /// Load one `.pcraft` document in directory form — the native on-disk layout — below the
     /// read root. `read` serves regular files only (the zip form), so a regular file at the
     /// path is reported as `Ok(None)` for the caller to fall back to.
