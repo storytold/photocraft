@@ -105,9 +105,9 @@ pub fn show(ui: &mut egui::Ui, doc: &Document, actions: &mut Vec<(String, Value)
     let Some(p) = hover.filter(|_| alt && ctx.dragged_id().is_none()) else { return };
     let Some(line) = at(doc, &crate::layer_row_ui::recorded(&ctx), p).filter(|l| ui.rect_contains_pointer(l.rect)) else { return };
     // Registered after the rows, so it is on top of them and gets the click.
-    let resp = ui.interact(line.rect, ui.id().with("clip-line"), Sense::click());
+    let resp = ui.interact(line.rect, ui.scope_id().with("clip-line"), Sense::click());
     let label = if line.release { "Release Clipping Mask" } else { "Create Clipping Mask" };
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
     // PhotoCraft's own cursors: a hooked arrow onto the layer below, and the same arrow with a
     // small "no" badge to release. The arrow's tip, (15, 16) of the 24-unit box, is the hot spot.
     let icon = if line.release { "clip-release" } else { "clip-below" };

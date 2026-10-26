@@ -189,6 +189,9 @@ pub(crate) struct Plane {
     pub samples: usize,
     pub bits: u32,
     pub data: Vec<u16>,
+    /// For floating-point samples, the factor they were multiplied by (their white level becomes
+    /// 65535, `bits` is then 16): the file's black and white levels are scaled by it too.
+    pub float_scale: Option<f32>,
 }
 
 pub(crate) struct Segment {
@@ -212,7 +215,7 @@ pub(crate) enum JpegLayout {
 }
 
 /// DNG 1.7 JPEG XL compression.
-const JPEG_XL: u32 = 52546;
+pub(crate) const JPEG_XL: u32 = 52546;
 
 /// Inflates one zlib tile into at most `need` bytes. The stream must run to its end: a truncated
 /// stream, or one that holds more than `need` bytes, is an error rather than a silent cut-off.
@@ -237,9 +240,22 @@ pub(crate) fn read_plane(t: &Tiff, ifd: &Ifd, limits: &Limits, layout: JpegLayou
     if !(1..=4).contains(&samples) {
         return Err(RawError::unsupported(format!("{samples} samples per pixel")));
     }
-    if t.tag_uint(ifd, tag::SAMPLE_FORMAT) == Some(3) {
-        return Err(RawError::unsupported("floating-point raw data"));
+    // Floating-point data is read when it is JPEG XL-compressed, as converters write lossy
+    // LinearRaw (DNG 1.7, #8125): 16, 24 or 32-bit floats, read as 16-bit samples.
+    let float = t.tag_uint(ifd, tag::SAMPLE_FORMAT) == Some(3);
+    if float && compression != JPEG_XL {
+        return Err(RawError::unsupported("floating-point raw data that isn't JPEG XL-compressed"));
     }
+    if float && !matches!(bits, 16 | 24 | 32) {
+        return Err(RawError::unsupported(format!("{bits}-bit floating-point raw samples")));
+    }
+    let bits = if float { 16 } else { bits };
+    // The floats' highest white level (default 1.0; DNG 1.7 WhiteLevel has one per sample plane)
+    // becomes 65535, so no plane is clipped below its own white level.
+    let float_scale = float.then(|| {
+        let white = t.tag_floats(ifd, tag::WHITE_LEVEL).iter().map(|v| *v as f32).filter(|v| v.is_finite() && *v > 0.0).fold(0.0f32, f32::max);
+        65535.0 / if white > 0.0 { white } else { 1.0 }
+    });
     if !(1..=16).contains(&bits) {
         return Err(RawError::unsupported(format!("{bits}-bit raw samples")));
     }
@@ -286,7 +302,7 @@ pub(crate) fn read_plane(t: &Tiff, ifd: &Ifd, limits: &Limits, layout: JpegLayou
                 // The TIFF predictor runs after unpacking, per row, per sample plane.
                 match t.tag_uint(ifd, tag::PREDICTOR).unwrap_or(1) {
                     1 => Ok(v),
-                    2 => Ok(undelta(&v, samples, s.w * samples, rows, bits)),
+                    2 => Ok(undelta(v, samples, s.w * samples, rows, bits)),
                     3 => Err(RawError::unsupported("floating-point predictor (compression 8, predictor 3)")),
                     p => Err(RawError::malformed(format!("unknown predictor {p}"))),
                 }
@@ -294,7 +310,7 @@ pub(crate) fn read_plane(t: &Tiff, ifd: &Ifd, limits: &Limits, layout: JpegLayou
             // A JPEG XL segment codes only the rows inside the image (strips) or the whole tile.
             JPEG_XL => {
                 let coded_rows = if tiled { s.h } else { rows };
-                let mut v = jxl::decode(src, s.w, coded_rows, samples, bits, limits)?;
+                let mut v = jxl::decode(src, s.w, coded_rows, samples, bits, float_scale, limits)?;
                 v.resize(s.w * s.h * samples, 0);
                 Ok(v)
             }
@@ -303,7 +319,21 @@ pub(crate) fn read_plane(t: &Tiff, ifd: &Ifd, limits: &Limits, layout: JpegLayou
             _ => lossless_jpeg(src, s, rows, samples, layout, limits),
         }
     });
-    let mut data = vec![0u16; width * height * samples];
+    // One segment holding the whole image row for row (a single strip): its buffer is the plane, no
+    // second full-size buffer and no copy. The scatter below then has no segment left to place.
+    let whole = matches!(segments.as_slice(), [s] if s.x == 0 && s.y == 0 && s.w == width && s.h >= height);
+    let mut decoded = decoded.into_iter();
+    let taken = if whole {
+        let mut d = decoded.next().ok_or_else(|| RawError::malformed("raw segment missing"))??;
+        if d.len() < width * height * samples {
+            return Err(RawError::malformed("raw segment is smaller than the image"));
+        }
+        d.truncate(width * height * samples);
+        Some(d)
+    } else {
+        None
+    };
+    let mut data = taken.unwrap_or_else(|| vec![0u16; width * height * samples]);
     for (s, d) in segments.iter().zip(decoded) {
         let d = d?;
         let rows = s.h.min(height - s.y);
@@ -314,7 +344,7 @@ pub(crate) fn read_plane(t: &Tiff, ifd: &Ifd, limits: &Limits, layout: JpegLayou
             data[at..at + cols * samples].copy_from_slice(src);
         }
     }
-    Ok(Plane { width, height, samples, bits, data })
+    Ok(Plane { width, height, samples, bits, data, float_scale })
 }
 
 /// Bytes of decoded samples the segments hold at once.
@@ -464,9 +494,8 @@ fn lossy_jpeg(src: &[u8], s: &Segment, rows: usize, samples: usize, bits: u32, t
 
 /// Reverses TIFF predictor 2 (horizontal differencing) on interleaved samples: each sample
 /// gains its channel's predecessor in the row, wrapping at the sample's container (8 or 16 bits).
-fn undelta(v: &[u16], plane: usize, row_samples: usize, rows: usize, bits: u32) -> Vec<u16> {
+fn undelta(mut out: Vec<u16>, plane: usize, row_samples: usize, rows: usize, bits: u32) -> Vec<u16> {
     let mask: u16 = if bits <= 8 { 0xFF } else { 0xFFFF };
-    let mut out = v.to_vec();
     for row in out.chunks_mut(row_samples.max(1)).take(rows) {
         for i in plane..row.len() {
             if let (Some(&prev), Some(&cur)) = (row.get(i - plane), row.get(i)) {
@@ -495,6 +524,18 @@ fn unpack(src: &[u8], w: usize, rows: usize, samples: usize, bits: u32, le: bool
     if src.len() < row_bytes * rows {
         return Err(truncated());
     }
+    // The common packings, a whole group of samples per fixed run of bytes (MSB first).
+    let per_row = w * samples;
+    match bits {
+        12 | 14 | 10 => {
+            let mut out = vec![0u16; n];
+            for (orow, row) in out.chunks_exact_mut(per_row.max(1)).zip(src.chunks_exact(row_bytes.max(1))) {
+                unpack_row_msb(row, orow, bits);
+            }
+            return Ok(out);
+        }
+        _ => {}
+    }
     let mut out = Vec::with_capacity(n);
     for r in 0..rows {
         let row = &src[r * row_bytes..(r + 1) * row_bytes];
@@ -513,9 +554,85 @@ fn unpack(src: &[u8], w: usize, rows: usize, samples: usize, bits: u32, le: bool
     Ok(out)
 }
 
+/// One MSB-first bit-packed row of 10, 12 or 14-bit samples (`row` holds at least
+/// `out.len() * bits / 8` bytes, rounded up; missing bytes read as 0, as [`unpack`] does).
+fn unpack_row_msb(row: &[u8], out: &mut [u16], bits: u32) {
+    let mask = (1u64 << bits) - 1;
+    // Samples per group and bytes per group: 4 × 10 = 40, 2 × 12 = 24, 4 × 14 = 56 bits.
+    let (g, gb) = match bits {
+        10 => (4, 5),
+        12 => (2, 3),
+        _ => (4, 7),
+    };
+    let groups = out.len() / g;
+    for (o, b) in out[..groups * g].chunks_exact_mut(g).zip(row.chunks_exact(gb)) {
+        let mut acc = 0u64;
+        for &x in b {
+            acc = (acc << 8) | u64::from(x);
+        }
+        for (k, v) in o.iter_mut().enumerate() {
+            *v = ((acc >> ((g - 1 - k) as u32 * bits)) & mask) as u16;
+        }
+    }
+    // The tail (fewer than a group): the general reader.
+    let mut acc: u32 = 0;
+    let mut have = 0u32;
+    let mut it = row.iter().skip(groups * gb);
+    for v in &mut out[groups * g..] {
+        while have < bits {
+            acc = (acc << 8) | u32::from(*it.next().unwrap_or(&0));
+            have += 8;
+        }
+        have -= bits;
+        *v = ((acc >> have) & ((1 << bits) - 1)) as u16;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The grouped 10/12/14-bit readers equal the plain bit reader on every row width.
+    #[test]
+    fn grouped_unpack_matches_the_bit_reader() {
+        let plain = |src: &[u8], w: usize, rows: usize, bits: u32| {
+            let row_bytes = (w * bits as usize).div_ceil(8);
+            let mut out = Vec::new();
+            for r in 0..rows {
+                let row = &src[r * row_bytes..(r + 1) * row_bytes];
+                let (mut acc, mut have, mut it) = (0u32, 0u32, row.iter());
+                for _ in 0..w {
+                    while have < bits {
+                        acc = (acc << 8) | u32::from(*it.next().unwrap_or(&0));
+                        have += 8;
+                    }
+                    have -= bits;
+                    out.push(((acc >> have) & ((1 << bits) - 1)) as u16);
+                }
+            }
+            out
+        };
+        let mut s = 7u64;
+        for bits in [10u32, 12, 14] {
+            for samples in [1usize, 3] {
+                // Widths whose packed rows are shorter than 16-bit containers (else `unpack` reads containers).
+                for w in [4usize, 5, 7, 8, 13, 64, 67] {
+                    let rows = 3;
+                    let src: Vec<u8> = (0..(w * samples * bits as usize).div_ceil(8) * rows)
+                        .map(|_| {
+                            s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                            (s >> 40) as u8
+                        })
+                        .collect();
+                    assert_eq!(
+                        unpack(&src, w, rows, samples, bits, true).unwrap(),
+                        plain(&src, w * samples, rows, bits),
+                        "{bits} bits, {samples} samples, {w} wide"
+                    );
+                }
+            }
+        }
+    }
 
     /// #4959: a decoded segment is retained until the scatter, so the segments are charged
     /// together. Each of these is far inside the budget on its own; their sum is not.

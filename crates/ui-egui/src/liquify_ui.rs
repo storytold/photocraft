@@ -59,7 +59,7 @@ pub enum BackdropMode {
 }
 
 impl BackdropMode {
-    const ALL: [(BackdropMode, &'static str); 3] = [(BackdropMode::InFront, "inFront"), (BackdropMode::Behind, "behind"), (BackdropMode::Blend, "blend")];
+    const ALL: [(BackdropMode, &str); 3] = [(BackdropMode::InFront, "inFront"), (BackdropMode::Behind, "behind"), (BackdropMode::Blend, "blend")];
 
     fn key(self) -> &'static str {
         Self::ALL.iter().find(|(m, _)| *m == self).map_or("inFront", |(_, k)| k)
@@ -904,7 +904,8 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let mut events: Vec<ToolEvent> = Vec::new();
     let mut mods = egui::Modifiers::NONE;
     let pinch_zooms = app.session.prefs().enhanced_controls.zoom_with_trackpad_pinch;
-    egui::Area::new(egui::Id::new("liquify-dialog")).order(egui::Order::Foreground).fixed_pos(screen.min).show(ctx, |ui| {
+    let animated_zoom = app.session.prefs().general.animated_zoom;
+    egui::Area::new(egui::Id::unique("liquify-dialog")).order(egui::Order::Foreground).fixed_pos(screen.min).show(ctx, |ui| {
         let Some(d) = app.distort.liquify.as_mut() else { return };
         d.upload(ctx);
         let (full, _) = ui.allocate_exact_size(screen.size(), Sense::hover());
@@ -984,7 +985,14 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             widgets::checkbox(ui, &mut d.opts.show_mesh, tl!("Show Mesh"));
             ui.horizontal(|ui| {
                 ui.label(tl!("Mesh Size"));
-                widgets::dropdown(ui, "liquify-mesh-size", &mut d.opts.mesh_size, &[(0, tl!("Small")), (1, tl!("Medium")), (2, tl!("Large"))], 110.0);
+                widgets::dropdown(
+                    ui,
+                    "liquify-mesh-size",
+                    tl!("Mesh Size"),
+                    &mut d.opts.mesh_size,
+                    &[(0, tl!("Small")), (1, tl!("Medium")), (2, tl!("Large"))],
+                    110.0,
+                );
             });
             widgets::checkbox(ui, &mut d.opts.show_mask, tl!("Show Mask"));
             widgets::checkbox(ui, &mut d.opts.show_backdrop, tl!("Show Backdrop"));
@@ -992,12 +1000,12 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 ui.horizontal(|ui| {
                     ui.label(tl!("Use"));
                     let names: Vec<(Option<u64>, &str)> = backdrop_layers.iter().map(|(id, n)| (*id, n.as_str())).collect();
-                    widgets::dropdown_literal(ui, "liquify-backdrop-use", &mut d.opts.backdrop_layer, &names, 150.0);
+                    widgets::dropdown_literal(ui, "liquify-backdrop-use", tl!("Layer"), &mut d.opts.backdrop_layer, &names, 150.0);
                 });
                 ui.horizontal(|ui| {
                     ui.label(tl!("Mode"));
                     let modes = [(BackdropMode::InFront, tl!("In Front")), (BackdropMode::Behind, tl!("Behind")), (BackdropMode::Blend, tl!("Blend"))];
-                    widgets::dropdown(ui, "liquify-backdrop-mode", &mut d.opts.backdrop_mode, &modes, 150.0);
+                    widgets::dropdown(ui, "liquify-backdrop-mode", tl!("Mode"), &mut d.opts.backdrop_mode, &modes, 150.0);
                 });
                 widgets::slider_row(ui, tl!("Opacity"), &mut d.opts.backdrop_opacity, 0.0..=100.0, "", None);
             }
@@ -1034,14 +1042,22 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             d.zoom = ((area.width() - 40.0) / cw).min((area.height() - 40.0) / ch).clamp(ZOOM_MIN, 4.0);
             d.center = [f64::from(d.canvas.x0) + f64::from(cw) / 2.0, f64::from(d.canvas.y0) + f64::from(ch) / 2.0];
         }
-        let resp = ui.interact(area, egui::Id::new("liquify-preview"), Sense::click_and_drag());
+        let resp = ui.interact(area, egui::Id::unique("liquify-preview"), Sense::click_and_drag());
         // The wheel zooms about the pointer, ×1.1 a notch, and so does a trackpad pinch (unless
         // Preferences › Enhanced Controls › Zoom with Trackpad Pinch is off); a sideways scroll
         // pans (#7210). Read every frame, as `wheel_nav` asks, so its modifier state follows.
-        let wheel = crate::wheel_nav::read(ctx, true, pinch_zooms, egui::Id::new("liquify-preview-wheel"), resp.hovered());
+        let wheel_id = egui::Id::unique("liquify-preview-wheel");
+        let wheel = crate::wheel_nav::read(ctx, true, pinch_zooms, animated_zoom, wheel_id, resp.hovered());
         if let Some(hp) = resp.hover_pos() {
             let zoom = match wheel {
-                Some(crate::wheel_nav::Wheel::Zoom(f)) => Some((d.zoom * f).clamp(ZOOM_MIN, ZOOM_MAX)),
+                Some(crate::wheel_nav::Wheel::Zoom(f)) => {
+                    let z = d.zoom * f;
+                    // At a limit, drop the rest of an eased notch, or it would swallow the first notch back.
+                    if z != z.clamp(ZOOM_MIN, ZOOM_MAX) {
+                        crate::wheel_nav::settle(ctx, wheel_id);
+                    }
+                    Some(z.clamp(ZOOM_MIN, ZOOM_MAX))
+                }
                 Some(crate::wheel_nav::Wheel::SnapZoom(n)) => {
                     Some((0..n.unsigned_abs()).fold(d.zoom, |z, _| crate::zoom_levels::step_in_range(z, n.signum(), ZOOM_MIN, ZOOM_MAX)))
                 }
@@ -1705,7 +1721,7 @@ mod tests {
         };
         let mut out = ctx.run_ui(raw, |ui| {
             let ctx = ui.ctx();
-            ctx.memory_mut(|m| m.request_focus(egui::Id::new("liquify-slider-focus")));
+            ctx.memory_mut(|m| m.request_focus(egui::Id::unique("liquify-slider-focus")));
             assert!(ctx.egui_wants_keyboard_input());
             crate::shortcuts::handle(&mut app, ctx);
         });
@@ -1725,6 +1741,80 @@ mod tests {
             crate::shortcuts::handle(&mut app, ui.ctx());
         });
         assert_eq!(app.distort.liquify.as_ref().unwrap().strokes.len(), 1, "Cmd+Shift+Z redoes the last stroke");
+    }
+
+    // Regression test for #4134: Cmd+Z and Cmd+Shift+Z were ignored in Liquify while a numeric
+    // field's text edit (Size, Pressure, ...) had keyboard focus, so a stroke could not be undone.
+    #[test]
+    fn liquify_undo_and_redo_work_while_a_numeric_field_is_focused() {
+        let ctx = egui::Context::default();
+        let mut app = app_with_layer();
+        open(&mut app, &ctx).unwrap();
+        for ev in [ToolEvent::Down { x: 40.0, y: 40.0, pressure: 1.0 }, ToolEvent::Move { x: 52.0, y: 40.0, pressure: 1.0 }, ToolEvent::Up { x: 52.0, y: 40.0 }]
+        {
+            pointer(&mut app, ev, egui::Modifiers::NONE);
+        }
+        let strokes = |app: &PhotocraftApp| app.distort.liquify.as_ref().unwrap().strokes.len();
+        assert_eq!(strokes(&app), 1);
+
+        // One frame of the real shortcut handler, then a focused single-line text edit (the
+        // numeric fields are text edits), as the app orders them.
+        let mut text = String::from("100");
+        let field = egui::Id::unique("liquify-size-field");
+        let mut frame = |app: &mut PhotocraftApp, events: Vec<egui::Event>| {
+            let raw = egui::RawInput { events, ..Default::default() };
+            let mut out = ctx.run_ui(raw, |ui| {
+                crate::shortcuts::handle(app, ui.ctx());
+                let edit = ui.add(egui::TextEdit::singleline(&mut text).id(field));
+                edit.request_focus();
+            });
+            out.textures_delta.clear();
+        };
+        frame(&mut app, Vec::new());
+        assert!(ctx.text_edit_focused(), "the numeric field is a focused text edit");
+
+        let z = |modifiers| egui::Event::Key { key: egui::Key::Z, physical_key: None, pressed: true, repeat: false, modifiers };
+        frame(&mut app, vec![z(egui::Modifiers::COMMAND)]);
+        assert_eq!(strokes(&app), 0, "Cmd+Z undoes the stroke with the field focused");
+        frame(&mut app, vec![z(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT)]);
+        assert_eq!(strokes(&app), 1, "Cmd+Shift+Z redoes it");
+    }
+
+    // Regression test for #4134: other Liquify keys must not steal characters from a focused
+    // numeric field, and the bracket keys step the brush by at least one pixel.
+    #[test]
+    fn liquify_tool_keys_leave_a_focused_field_alone_and_brackets_reach_one_pixel() {
+        let ctx = egui::Context::default();
+        let mut app = app_with_layer();
+        open(&mut app, &ctx).unwrap();
+        app.distort.liquify.as_mut().unwrap().opts.size = 2.0;
+        let size = |app: &PhotocraftApp| app.distort.liquify.as_ref().unwrap().opts.size;
+        let press = |app: &mut PhotocraftApp, key: egui::Key| {
+            let ev = egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
+            let mut out = ctx.run_ui(egui::RawInput { events: vec![ev], ..Default::default() }, |ui| crate::shortcuts::handle(app, ui.ctx()));
+            out.textures_delta.clear();
+        };
+        // 2 px * 0.9 used to round back to 2, so `[` never reached 1 px; `]` steps up from 1.
+        press(&mut app, egui::Key::OpenBracket);
+        assert_eq!(size(&app), 1.0, "`[` steps a 2 px brush down to 1 px");
+        press(&mut app, egui::Key::CloseBracket);
+        assert_eq!(size(&app), 2.0, "`]` steps it back up");
+
+        // With a text edit focused, `[` belongs to the field.
+        let mut text = String::new();
+        let field = egui::Id::unique("liquify-size-field");
+        let focused_frame = |app: &mut PhotocraftApp, text: &mut String, events: Vec<egui::Event>| {
+            let mut out = ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
+                crate::shortcuts::handle(app, ui.ctx());
+                ui.add(egui::TextEdit::singleline(text).id(field)).request_focus();
+            });
+            out.textures_delta.clear();
+        };
+        focused_frame(&mut app, &mut text, Vec::new());
+        assert!(ctx.text_edit_focused());
+        let bracket = egui::Event::Key { key: egui::Key::OpenBracket, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
+        focused_frame(&mut app, &mut text, vec![bracket]);
+        assert_eq!(size(&app), 2.0, "the focused field keeps its keys");
     }
 
     fn key(key: egui::Key) -> egui::Event {
@@ -1792,8 +1882,11 @@ mod tests {
         let still = to_doc(d, area, at);
         assert!((still[0] - under[0]).abs() < 1e-3 && (still[1] - under[1]).abs() < 1e-3, "the point under the pointer stays: {under:?} → {still:?}");
 
+        // Animated Zoom off: a notch is one instant step, so one frame shows the whole ×1.1.
+        app.session.prefs.edit(|p| p.general.animated_zoom = false);
         let notch = ctx.options(|o| o.input_options.line_scroll_speed);
         let wheel = egui::Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
             unit: egui::MouseWheelUnit::Line,
             delta: vec2(0.0, 1.0),
             modifiers: egui::Modifiers::NONE,

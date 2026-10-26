@@ -7,7 +7,7 @@
 use egui::{Popup, PopupCloseBehavior, Response, SetOpenCommand, Ui};
 
 fn gesture_id() -> egui::Id {
-    egui::Id::new("press-menu-gesture")
+    egui::Id::unique("press-menu-gesture")
 }
 
 /// The popup whose button's press started the current press-drag gesture, if any. Several press

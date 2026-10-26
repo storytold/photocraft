@@ -11,11 +11,18 @@ use crate::widgets::{ButtonRole, DialogButton, dialog_buttons};
 /// [`show`] takes it out again and opens the matching file or folder dialog.
 pub(crate) const BROWSE_FIELD: &str = "__browse";
 
-/// Browse… beside a path field of dialog `id`: a folder picker for `dir` fields, a `.wasm` picker
-/// for Install Plug-in…'s `path`. The answer fills the field.
+/// A text field that names a folder: an export's `dir`, and the source (`input`) and destination
+/// (`output`) folders of Image Processor, Batch, Lens Correction, Contact Sheet and Create
+/// Droplet, which Photoshop picks with Select Folder… / Choose… (#9357).
+pub(crate) fn is_folder_field(key: &str) -> bool {
+    matches!(key, "dir" | "input" | "output")
+}
+
+/// Browse… beside a path field of dialog `id`: a folder picker for folder fields
+/// ([`is_folder_field`]), a `.wasm` picker for Install Plug-in…'s `path`. The answer fills the field.
 fn browse_field(app: &mut PhotocraftApp, id: u64, fields: &serde_json::Map<String, Value>, key: &str) {
     let key = key.to_string();
-    let r = if key == "dir" {
+    let r = if is_folder_field(&key) {
         app.ask_folder(move |app, path| fill_field(app, id, &key, path))
     } else if fields.get("__command").and_then(Value::as_str) == Some("plugin.install") {
         let initial_dir = crate::file_dialog::last_used_dir(&app.ui.recent_files);
@@ -42,7 +49,7 @@ fn fill_field(app: &mut PhotocraftApp, id: u64, key: &str, path: String) -> Resu
 const RECTS: &str = "pc-dialog-rects";
 
 fn rects(ctx: &egui::Context) -> Vec<egui::Rect> {
-    ctx.data(|m| m.get_temp(egui::Id::new(RECTS))).unwrap_or_default()
+    ctx.data(|m| m.get_temp(egui::Id::unique(RECTS))).unwrap_or_default()
 }
 
 /// The window drag target must not cover a dialog which has been moved into the title bar.
@@ -55,7 +62,7 @@ pub(crate) fn titlebar_drag_area_is_clear(ctx: &egui::Context, area: egui::Rect)
 /// check against the dialog rects alone would take the drag for a canvas drag. Remembered from the
 /// frame of the press, which is the only frame that carries the press event.
 fn press_began_on_dialog(ctx: &egui::Context, rects: &[egui::Rect]) -> bool {
-    let key = egui::Id::new("pc-dialog-press-grabbed");
+    let key = egui::Id::unique("pc-dialog-press-grabbed");
     let pressed = ctx.input(|i| {
         i.events.iter().rev().find_map(|e| match e {
             egui::Event::PointerButton { pos, pressed: true, .. } => Some(*pos),
@@ -99,7 +106,7 @@ pub fn pan_delta(ctx: &egui::Context, canvas: egui::Rect, hand: bool) -> Option<
 /// response would report them if it weren't inert: for the held Zoom (⌘Space / ⌥Space, #6460).
 /// A drag counts from egui's drag threshold, like `drag_started`.
 pub fn free_buttons(ctx: &egui::Context, canvas: egui::Rect) -> crate::paint_mouse::Buttons {
-    let id = egui::Id::new("pc-dialog-free-drag");
+    let id = egui::Id::unique("pc-dialog-free-drag");
     let was = ctx.data(|d| d.get_temp::<bool>(id)).unwrap_or(false);
     let rects = rects(ctx);
     let open_popup = egui::Popup::is_any_open(ctx);
@@ -163,15 +170,15 @@ fn first_field_focused<R>(ui: &mut egui::Ui, id: egui::Id, body: impl FnOnce(&mu
 /// its own), per kind for the rest.
 fn place_id(d: &Dialog) -> egui::Id {
     match d.fields.get("__command").and_then(Value::as_str) {
-        Some(cmd) => egui::Id::new(("dialog-place", cmd)),
-        None => egui::Id::new(("dialog-place", format!("{:?}", d.kind))),
+        Some(cmd) => egui::Id::unique(("dialog-place", cmd)),
+        None => egui::Id::unique(("dialog-place", format!("{:?}", d.kind))),
     }
 }
 
 /// Whether another dialog is drawn above `live` (egui's layer order, back to front).
 fn older_dialog_above(ctx: &egui::Context, live: egui::LayerId, dialogs: &[Dialog]) -> bool {
     let others: Vec<egui::LayerId> =
-        dialogs.iter().map(|d| egui::LayerId::new(egui::Order::Foreground, egui::Id::new(("dialog", d.id)))).filter(|l| *l != live).collect();
+        dialogs.iter().map(|d| egui::LayerId::new(egui::Order::Foreground, egui::Id::unique(("dialog", d.id)))).filter(|l| *l != live).collect();
     ctx.memory(|m| m.layer_ids().skip_while(|l| *l != live).skip(1).any(|l| others.contains(&l)))
 }
 
@@ -279,7 +286,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         let mut outcome: Option<bool> = None; // Some(true)=OK, Some(false)=Cancel
         let mut apply_requested = false;
         let title = display_title(&d);
-        let id = egui::Id::new(("dialog", d.id));
+        let id = egui::Id::unique(("dialog", d.id));
         // Opens where the same dialog was last left (centred the first time), then its top-left
         // stays put (offset from the window's top-left, moved by dragging the title bar; view
         // state only, so egui memory): a dialog whose body grows, like Layer Style switching
@@ -434,6 +441,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 DialogKind::Command if crate::fill_ui::owns(&fields) => crate::fill_ui::body(app, ui, &mut fields),
                 DialogKind::Command if crate::pattern_fill_ui::owns(&fields) => crate::pattern_fill_ui::body(app, ui, &mut fields),
                 DialogKind::Command if crate::stroke_ui::owns(&fields) => crate::stroke_ui::body(ui, &mut fields),
+                DialogKind::Command if crate::snapshot_dialog::owns(&fields) => crate::snapshot_dialog::body(ui, &mut fields),
                 DialogKind::Command if crate::channel_options_ui::owns(&fields) => crate::channel_options_ui::body(ui, &mut fields),
                 DialogKind::Command if crate::channel_options_ui::owns_new_spot(&fields) => crate::channel_options_ui::new_spot_body(ui, &mut fields),
                 DialogKind::Command if crate::shape_dialog::owns(&fields) => crate::shape_dialog::body(app, ui, &mut fields),
@@ -674,7 +682,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             }
         }
     }
-    ctx.data_mut(|m| m.insert_temp(egui::Id::new(RECTS), shown));
+    ctx.data_mut(|m| m.insert_temp(egui::Id::unique(RECTS), shown));
 }
 
 /// The About window's tabs, as stored in its `tab` field.
@@ -836,6 +844,7 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
         DialogKind::Command if crate::fill_ui::owns(&d.fields) => crate::fill_ui::confirm(app, &d.fields),
         DialogKind::Command if crate::pattern_fill_ui::owns(&d.fields) => crate::pattern_fill_ui::confirm(app, &d.fields),
         DialogKind::Command if crate::stroke_ui::owns(&d.fields) => crate::stroke_ui::confirm(app, &d.fields),
+        DialogKind::Command if crate::snapshot_dialog::owns(&d.fields) => crate::snapshot_dialog::confirm(app, &d.fields),
         DialogKind::Command if crate::channel_options_ui::owns(&d.fields) => crate::channel_options_ui::confirm(app, &d.fields),
         DialogKind::Command if crate::channel_options_ui::owns_new_spot(&d.fields) => crate::channel_options_ui::confirm_new_spot(app, &d.fields),
         DialogKind::Command if crate::shape_dialog::owns(&d.fields) => crate::shape_dialog::confirm(app, &d.fields),
@@ -1115,7 +1124,7 @@ mod tests {
         let at_press = egui::Rect::from_min_max(egui::pos2(100.0, 100.0), egui::pos2(300.0, 200.0));
         let moved = egui::Rect::from_min_max(egui::pos2(550.0, 480.0), egui::pos2(750.0, 580.0));
         let run = |rect: egui::Rect, events: Vec<egui::Event>| {
-            ctx.data_mut(|m| m.insert_temp(egui::Id::new(RECTS), vec![rect]));
+            ctx.data_mut(|m| m.insert_temp(egui::Id::unique(RECTS), vec![rect]));
             ctx.begin_pass(egui::RawInput { events, ..Default::default() });
             let out = (pan_delta(&ctx, canvas, true), free_press(&ctx, canvas));
             ctx.end_pass().textures_delta.clear();
@@ -1271,7 +1280,8 @@ mod tests {
         assert_eq!(angle(&h), Some(0.0));
         // The dial's field is the dialog's first number, so it opens focused (#1757).
         let first = h.get_all_by_role(egui::accesskit::Role::SpinButton).next().unwrap();
-        assert!(first.is_focused() && first.rect().center().y < h.get_by_label("Distance").rect().center().y, "the Angle field has focus");
+        let distance = h.query_all_by_label("Distance").next().expect("the Distance field").rect();
+        assert!(first.is_focused() && first.rect().center().y < distance.center().y, "the Angle field has focus");
         // Click above the centre: straight up is 90°.
         let up = centre(&h) + egui::vec2(0.0, -15.0);
         h.event(egui::Event::PointerMoved(up));
@@ -1394,10 +1404,12 @@ mod tests {
         let ctx = h.ctx.clone();
         let d = crate::menus::invoke(h.state_mut(), &ctx, "file.automate.fitImage", json!({})).unwrap()["dialog"].as_u64().unwrap();
         h.run_steps(4);
-        let window = h.ctx.memory(|m| m.area_rect(egui::Id::new(("dialog", d)))).expect("the Fit Image window");
+        let window = h.ctx.memory(|m| m.area_rect(egui::Id::unique(("dialog", d)))).expect("the Fit Image window");
         assert!(window.width() < 300.0, "Fit Image is {} points wide", window.width());
         for label in ["Fit Image", "Width", "Height", "OK", "Cancel"] {
-            assert!(window.contains_rect(h.get_by_label(label).rect()), "{label} inside the window");
+            // A caption and the field it names share the label; either sits inside the window.
+            let node = h.query_all_by_label(label).next().unwrap_or_else(|| panic!("{label} in the dialog"));
+            assert!(window.contains_rect(node.rect()), "{label} inside the window");
         }
     }
 }
@@ -1433,7 +1445,7 @@ mod preference_resize_tests {
     }
 
     fn frame(h: &egui_kittest::Harness<'_, PhotocraftApp>) -> egui::Rect {
-        let rects: Vec<egui::Rect> = h.ctx.data(|m| m.get_temp(egui::Id::new(RECTS))).unwrap();
+        let rects: Vec<egui::Rect> = h.ctx.data(|m| m.get_temp(egui::Id::unique(RECTS))).unwrap();
         rects[0]
     }
 

@@ -1,5 +1,6 @@
 use egui::vec2;
 use egui_kittest::Harness;
+use egui_kittest::kittest::{NodeT, Queryable};
 use photocraft_engine::paint::{Control, GrayTile, MaskMode, Pattern, PatternStyle, TipShape};
 
 use super::*;
@@ -10,6 +11,14 @@ fn app() -> PhotocraftApp {
 
 fn last_journal(app: &PhotocraftApp) -> Option<(String, Value)> {
     app.session.journal.last().cloned()
+}
+
+/// The visible options caption, not the numeric field it names.
+fn caption_rect(h: &Harness<'_, PhotocraftApp>, text: &str) -> egui::Rect {
+    h.query_all(egui_kittest::kittest::by().label(text).include_labels())
+        .find(|n| n.accesskit_node().role() == egui::accesskit::Role::Label)
+        .unwrap_or_else(|| panic!("the `{text}` caption"))
+        .rect()
 }
 
 #[test]
@@ -420,11 +429,10 @@ fn options_bar_harness(tool: crate::state::Tool) -> Harness<'static, PhotocraftA
 
 #[test]
 fn clone_stamp_opacity_and_flow_are_journaled_per_gesture() {
-    use egui_kittest::kittest::Queryable;
     let mut h = options_bar_harness(crate::state::Tool::CloneStamp);
     for (label, field) in [("Opacity", "opacity"), ("Flow", "flow")] {
         let n = h.state().session.journal.len();
-        let rect = h.get_by_label(label).rect();
+        let rect = caption_rect(&h, label);
         let start = egui::pos2(rect.right() + 40.0, rect.center().y);
         h.hover_at(start);
         h.run();
@@ -464,7 +472,7 @@ fn options_bar_edits_are_one_set_brush_per_gesture() {
     h.run_steps(3);
     assert_eq!(h.state().session.journal.len(), n, "showing the bar issues nothing");
     // Drag the Opacity field left: many frames, one journal entry.
-    let label = h.get_by_label("Opacity").rect();
+    let label = caption_rect(&h, "Opacity");
     let start = egui::pos2(label.right() + 40.0, label.center().y);
     h.hover_at(start);
     h.run();
@@ -753,8 +761,9 @@ fn transfer_mixer_edits_use_the_brush_command_and_survive_real_tool_swaps() {
     a.ui.tool = Tool::MixerBrush;
     crate::paint_mouse::sync_tool_brush(a);
     h.run_steps(2);
-    h.hover_at(h.get_by_label("Opacity Jitter").rect().center());
+    h.hover_at(caption_rect(&h, "Opacity Jitter").center());
     h.event(egui::Event::MouseWheel {
+        source: egui::MouseWheelSource::Unknown,
         unit: egui::MouseWheelUnit::Point,
         delta: vec2(0.0, -250.0),
         phase: egui::TouchPhase::Move,
@@ -1003,12 +1012,11 @@ fn checkbox_only_rows_are_accessible_checkboxes_and_accept_space() {
 
 #[test]
 fn editing_the_options_bar_amount_reenables_smoothing() {
-    use egui_kittest::kittest::Queryable;
     let mut h = options_bar_harness(crate::state::Tool::Brush);
     h.state_mut().run("tools.setBrush", json!({"brush": {"smoothing": {"enabled": false, "amount": 0.4}}})).unwrap();
     h.run_steps(3);
     let n = h.state().session.journal.len();
-    let label = h.get_by_label("Smoothing").rect();
+    let label = caption_rect(&h, "Smoothing");
     let at = egui::pos2(label.right() + 25.0, label.center().y);
     h.hover_at(at);
     h.run_steps(2);

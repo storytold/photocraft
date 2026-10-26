@@ -262,7 +262,7 @@ fn brush_picker_menu_closes_when_a_slider_or_the_grip_is_grabbed() {
     h.state_mut().ui.tool = crate::state::Tool::Brush;
     h.state_mut().ui.brush_picker = Some([300.0, 120.0]);
     h.run_steps(8);
-    let picker = h.ctx.memory(|m| m.area_rect(egui::Id::new("canvas-brush-picker"))).expect("the picker is shown");
+    let picker = h.ctx.memory(|m| m.area_rect(egui::Id::unique("canvas-brush-picker"))).expect("the picker is shown");
     assert!(!egui::Popup::is_any_open(&h.ctx), "nothing open to start with");
     click_gear(&h);
     h.run_steps(2);
@@ -312,7 +312,7 @@ fn brush_picker_upper_controls_stop_at_their_max_width() {
     h.state_mut().ui.brush_picker = Some([300.0, 120.0]);
     h.state_mut().ui.brush_picker_size = Some([500.0, 420.0]);
     h.run_steps(8);
-    let picker = h.ctx.memory(|m| m.area_rect(egui::Id::new("canvas-brush-picker"))).expect("the picker is shown");
+    let picker = h.ctx.memory(|m| m.area_rect(egui::Id::unique("canvas-brush-picker"))).expect("the picker is shown");
     let size_label = h.query_all_by_label(crate::i18n::t("Size")).find(|n| picker.contains(n.rect().center())).expect("the picker's Size label").rect();
     // The Size slider's middle: 12 pt below the label's (the row stands as tall as its 24 pt value
     // field, the label centred in it), the style's spacing, then half the slider's 18 pt — 27 pt

@@ -222,7 +222,7 @@ pub fn show_offer(app: &mut PhotocraftApp, ctx: &egui::Context) {
     );
     let mut answer = None;
     egui::Window::new(tl!("Import keyboard shortcuts?"))
-        .id(egui::Id::new("kys-offer"))
+        .id(egui::Id::unique("kys-offer"))
         .collapsible(false)
         .resizable(false)
         .default_width(440.0)

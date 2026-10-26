@@ -225,6 +225,10 @@ fn clipboard_press(e: &egui::Event, mods: Modifiers, is_windows: bool) -> Option
         egui::Event::Cut if is_windows && mods.shift && !mods.command => Some((Key::Delete, mods)),
         egui::Event::Cut => Some((Key::X, held)),
         egui::Event::Paste(_) => Some((Key::V, held)),
+        // egui 0.37 emits this when the clipboard holds an image and no text. Treat it as the
+        // paste shortcut; the command reads the OS clipboard once through the existing import
+        // path, never a second time from this event.
+        egui::Event::PasteImage(_) => Some((Key::V, held)),
         _ => None,
     }
 }
@@ -235,7 +239,7 @@ fn clipboard_press(e: &egui::Event, mods: Modifiers, is_windows: bool) -> Option
 /// empty selection behind, which must not take ⌘C from the document. Read once a frame, from the
 /// frame before.
 fn label_text_selected(ctx: &egui::Context) -> bool {
-    let id = egui::Id::new("pc-label-text-selected");
+    let id = egui::Id::unique("pc-label-text-selected");
     let any = ctx.plugin_opt::<egui::text_selection::LabelSelectionState>().is_some_and(|p| p.lock().has_selection());
     let (selects, pressed) = ctx.input(|i| {
         let p = &i.pointer;
@@ -323,11 +327,11 @@ pub fn clipboard_keys(ctx: &egui::Context, typing: bool, raw: &mut egui::RawInpu
         });
         return;
     }
-    let seen = egui::Id::new("pc-paste-key-seen");
+    let seen = egui::Id::unique("pc-paste-key-seen");
     // A V press without ⌘ that reached us (the Move tool's key): its release is not a paste.
-    let plain_v = egui::Id::new("pc-plain-v-down");
+    let plain_v = egui::Id::unique("pc-plain-v-down");
     // ⌘ was held since the last key press without it: a swallowed ⌘V can be under way.
-    let command_lately = egui::Id::new("pc-paste-command-lately");
+    let command_lately = egui::Id::unique("pc-paste-command-lately");
     // The modifiers held at each event: last frame's, updated as the events report changes.
     let mut mods = ctx.input(|i| i.modifiers);
     if mods.command {
@@ -411,6 +415,9 @@ pub fn clipboard_keys(ctx: &egui::Context, typing: bool, raw: &mut egui::RawInpu
 pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // A held tool letter released: a temporary tool gives the previous one back (#2672).
     crate::spring_tools::tick(app, ctx);
+    if crate::canvas::cancel_mixer_on_context_change(app, ctx) {
+        return;
+    }
     // However the tool was picked (toolbar, flyout, shortcut, automation), its group's key brings
     // it back later (#2608).
     app.ui.remember_group_tool();
@@ -443,8 +450,9 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
         return;
     }
     // So does the right-click menu of text being edited: Esc closes only it, and keys typed while
-    // it is open don't reach the text beneath.
-    if app.ui.canvas_tool_menu.as_ref().is_some_and(|m| m.text) {
+    // it is open don't reach the text beneath. The crop menu's likewise: Esc and ↵ don't cancel or
+    // commit the crop under it (#6561).
+    if app.ui.canvas_tool_menu.as_ref().is_some_and(|m| m.text || m.crop.is_some()) {
         return;
     }
     let symmetry_editing = app.ui.symmetry_transform.is_some();
@@ -468,6 +476,10 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
         } else {
             crate::liquify_ui::keys(app, ctx);
         }
+    }
+    // The Filter Gallery's preview takes the zoom keys from the canvas behind it.
+    if app.distort.gallery.is_some() && !ctx.text_edit_focused() {
+        crate::gallery_ui::keys(app, ctx);
     }
     // The Content-Aware Fill workspace likewise.
     if app.distort.caf.is_some() && !ctx.text_edit_focused() {
@@ -717,7 +729,7 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
         || app.save_options_open()
         || app.distort.gallery.is_some()
         || ctx.any_popup_open()
-        || ctx.data(|d| d.get_temp::<(egui::Id, egui::Rect)>(egui::Id::new("tool-flyout")).is_some());
+        || ctx.data(|d| d.get_temp::<(egui::Id, egui::Rect)>(egui::Id::unique("tool-flyout")).is_some());
     // Both full screen modes (with and without the menu bar) return to Standard, as in Photoshop
     // (#4116), through the menu command so the window and the Screen Mode check follow.
     if !esc_taken && app.ui.view.screen_mode != "standard" && pressed(Key::Escape) {
@@ -734,6 +746,9 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
         }
         return;
     }
+    // ⇧+ / ⇧− step the blend mode and ⇧⌥ letters pick one (`blend_keys`). Before the tool
+    // letters: `consume_key` ignores extra ⇧ and ⌥, so ⇧⌥M would otherwise pick a tool.
+    crate::blend_keys::handle(app, ctx);
     // Tool keys; pressing the key of the current group cycles within it. With Preferences ›
     // Tools › Use Shift Key for Tool Switch, only ⇧+key cycles and the plain key keeps the
     // group's current tool. From another group, the key picks the group's last-used tool.
@@ -771,8 +786,6 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
     // 1–0 set opacity, ⇧1–0 flow or fill (`opacity_keys`).
     crate::opacity_keys::handle(app, ctx);
-    // ⇧+ / ⇧− step the blend mode (`blend_keys`).
-    crate::blend_keys::handle(app, ctx);
 }
 
 #[cfg(test)]
@@ -1182,6 +1195,10 @@ mod tests {
         assert_eq!(clipboard_press(&egui::Event::Cut, shift, false), Some((Key::X, Modifiers::COMMAND)));
         // Shift+Insert pastes on Windows.
         assert_eq!(clipboard_press(&egui::Event::Paste("x".into()), shift, true), Some((Key::V, Modifiers::COMMAND)));
+        // egui 0.37's image-only clipboard paste is the same ⌘V press; the command reads the
+        // clipboard itself, once, through the existing import path.
+        let image = std::sync::Arc::new(egui::ColorImage::filled([1, 1], egui::Color32::BLACK));
+        assert_eq!(clipboard_press(&egui::Event::PasteImage(image), shift, true), Some((Key::V, Modifiers::COMMAND)));
         // Through the raw-input hook on this platform; a text field keeps its Cut.
         let ctx = egui::Context::default();
         let cut = || egui::RawInput { events: vec![egui::Event::ModifiersChanged(shift), egui::Event::Cut], ..Default::default() };
