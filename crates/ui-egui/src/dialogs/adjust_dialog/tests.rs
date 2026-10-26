@@ -451,7 +451,7 @@ fn grayscale_curves_shows_presets_with_stale_channel_keys() {
         // A drag on the graph edits the gray curve, `points`, and leaves the stale key alone.
         h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("points".into(), json!([[0, 0], [128, 128], [255, 255]]));
         h.run_steps(3);
-        let graph = h.ctx.data(|d| d.get_temp::<egui::Rect>(egui::Id::new(("adjust-dialog", "curves")).with("curves-graph"))).unwrap();
+        let graph = h.ctx.data(|d| d.get_temp::<egui::Rect>(dialog_mem("curves").with("curves-graph"))).unwrap();
         let a = egui::pos2(graph.left() + 128.0 / 255.0 * graph.width(), graph.bottom() - 128.0 / 255.0 * graph.height());
         h.hover_at(a);
         h.run_steps(1);
