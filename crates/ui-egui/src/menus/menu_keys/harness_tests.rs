@@ -427,7 +427,7 @@ fn a_command_shortcut_runs_from_the_help_search_field() {
     h.state_mut().run("select.deselect", json!({})).unwrap();
     h.get_by_label("Help").click();
     h.run_steps(4);
-    let field = egui::Id::new("help-menu-search").with("field");
+    let field = egui::Id::unique("help-menu-search").with("field");
     assert!(is_open(&h.ctx) && h.ctx.memory(|m| m.focused()) == Some(field), "Help is open with its field focused");
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
     h.run_steps(3);

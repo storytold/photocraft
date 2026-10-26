@@ -246,7 +246,7 @@ mod tests {
         let labels = ["Alpha", "Dark", "Dawn"];
         let mut h = egui_kittest::Harness::builder().build_ui_state(
             move |ui, (open, picked): &mut (bool, Option<usize>)| {
-                if *open && let Some(i) = super::keys(ui, egui::Id::new("list"), Some(0), &labels) {
+                if *open && let Some(i) = super::keys(ui, egui::Id::unique("list"), Some(0), &labels) {
                     *picked = Some(i);
                 }
             },
