@@ -3,8 +3,9 @@
 //! 1. At a reduced working resolution every pixel gets a *sky likelihood*: a colour prior
 //!    (blue and bright, or bright and unsaturated for overcast / cloud, or a bright warm glow
 //!    for sunsets) times a smoothness term (sky has little gradient energy).
-//! 2. Seeds are likely-sky pixels in the top rows; the sky region grows from them through
-//!    4-connected neighbours that stay likely-sky and change colour gradually.
+//! 2. Seeds are likely-sky pixels in the top rows, falling back to substantial high-confidence
+//!    components in the upper half when the top is obstructed. The sky region grows from them
+//!    through 4-connected neighbours that stay likely-sky and change colour gradually.
 //! 3. Sky seen through gaps (between branches) is not connected to the top: likely-sky pixels
 //!    that fit a colour model (GMM) of the grown sky are added too. Small holes are filled.
 //! 4. The binary working-resolution mask is upsampled and refined at full resolution with a
@@ -79,7 +80,7 @@ pub fn likelihood(img: &RgbImage) -> Vec<f32> {
     img.px.iter().zip(&tex).map(|(p, t)| colour_prior(*p) * (1.0 - smooth(0.015, 0.07, *t))).collect()
 }
 
-/// Binary sky mask at working resolution (`None` when no sky touches the top of the image).
+/// Binary sky mask at working resolution (`None` when no plausible sky region is found).
 pub fn sky_mask_low(img: &RgbImage, threshold: f32) -> Option<Vec<bool>> {
     let (w, h) = (img.w, img.h);
     if w < 2 || h < 2 {
@@ -98,7 +99,18 @@ pub fn sky_mask_low(img: &RgbImage, threshold: f32) -> Option<Vec<bool>> {
         }
     }
     if stack.len() * 20 < top * w {
-        return None; // less than 5 % of the top edge looks like sky
+        // An overhang can hide the entire top band. Discard the sparse top seeds before
+        // looking for more certain, connected sky patches below it.
+        mask.fill(false);
+        stack = obstructed_sky_seeds(&like, w, h, t + 0.1);
+        if stack.is_empty() {
+            return None;
+        }
+        for &i in &stack {
+            if let Some(m) = mask.get_mut(i) {
+                *m = true;
+            }
+        }
     }
     // Region growing with a gradual-change constraint.
     let max_step = 0.12f32;
@@ -136,6 +148,48 @@ pub fn sky_mask_low(img: &RgbImage, threshold: f32) -> Option<Vec<bool>> {
         return None;
     }
     mask.iter().any(|v| *v).then_some(mask)
+}
+
+/// Without border evidence, require a connected patch of at least 0.5% of the image (and
+/// 16 pixels). Searching only the upper half avoids using water or blue ground as seeds;
+/// counting each component separately keeps scattered bright specks from passing the gate.
+fn obstructed_sky_seeds(like: &[f32], w: usize, h: usize, threshold: f32) -> Vec<usize> {
+    let Some(area) = w.checked_mul(h) else { return Vec::new() };
+    let Some(upper) = w.checked_mul(h.div_ceil(2)) else { return Vec::new() };
+    let Some(like) = like.get(..upper) else { return Vec::new() };
+    let minimum = area.div_ceil(200).max(16);
+    let mut seen = vec![false; upper];
+    let mut seeds = Vec::new();
+    let mut component = Vec::new();
+    for (start, &score) in like.iter().enumerate() {
+        if score <= threshold || seen.get(start).copied().unwrap_or(true) {
+            continue;
+        }
+        component.clear();
+        component.push(start);
+        if let Some(s) = seen.get_mut(start) {
+            *s = true;
+        }
+        let mut cursor = 0;
+        while let Some(&i) = component.get(cursor) {
+            cursor += 1;
+            let x = i % w;
+            let neighbours = [(x > 0).then(|| i - 1), (x + 1 < w).then(|| i + 1), i.checked_sub(w), i.checked_add(w).filter(|j| *j < upper)];
+            for j in neighbours.into_iter().flatten() {
+                if like.get(j).is_some_and(|v| *v > threshold)
+                    && let Some(s) = seen.get_mut(j)
+                    && !*s
+                {
+                    *s = true;
+                    component.push(j);
+                }
+            }
+        }
+        if component.len() >= minimum {
+            seeds.extend_from_slice(&component);
+        }
+    }
+    seeds
 }
 
 /// A neutral region that also covers most of the bottom rows is a studio or product backdrop,
@@ -289,6 +343,63 @@ mod tests {
         let img = RgbImage::from_fn(64, 64, |_, y| if y < 30 { [0.85, 0.86, 0.88] } else { [0.2, 0.3, 0.1] });
         let r = select_sky(&ImageSampler { img: &img, origin: (0, 0) }, Rect::new(0, 0, 64, 64), SkyParams::default()).expect("sky");
         assert!(r.at(30, 10) > 0.9 && r.at(30, 50) < 0.1);
+    }
+
+    #[test]
+    fn finds_obstructed_blue_and_overcast_sky_in_disconnected_openings() {
+        for sky in [[0.35, 0.6, 0.95], [0.85, 0.86, 0.88]] {
+            // A dark arch with two openings: neither sky component touches an image edge.
+            let img =
+                RgbImage::from_fn(
+                    160,
+                    100,
+                    |x, y| {
+                        if (15..65).contains(&y) && ((15..65).contains(&x) || (95..145).contains(&x)) { sky } else { [0.12, 0.2, 0.1] }
+                    },
+                );
+            for threshold in [0.0, 50.0, 100.0] {
+                let p = SkyParams { threshold, ..SkyParams::default() };
+                let r = select_sky(&ImageSampler { img: &img, origin: (0, 0) }, Rect::new(0, 0, 160, 100), p).expect("sky beneath arch");
+                assert!(r.at(40, 30) > 0.9 && r.at(120, 30) > 0.9, "both disconnected openings: {sky:?}, {threshold}");
+                assert!(r.at(40, 55) > 0.9, "growth beyond the upper-half seed search");
+                assert!(r.at(40, 5) < 0.1, "overhead obstruction");
+                assert!(r.at(80, 30) < 0.1, "arch pillar");
+                assert!(r.at(40, 85) < 0.1, "ground");
+            }
+        }
+    }
+
+    #[test]
+    fn obstructed_fallback_rejects_small_patches_and_lower_half_objects() {
+        for colour in [[0.35, 0.6, 0.95], [0.9, 0.9, 0.92]] {
+            let img = RgbImage::from_fn(160, 100, |x, y| {
+                if ((20..26).contains(&x) && (20..26).contains(&y)) || ((20..140).contains(&x) && (65..95).contains(&y)) { colour } else { [0.12, 0.2, 0.1] }
+            });
+            assert!(sky_mask_low(&img, 50.0).is_none(), "small upper patch and large lower object: {colour:?}");
+        }
+    }
+
+    #[test]
+    fn obstructed_neutral_backdrop_is_still_rejected() {
+        let img = RgbImage::from_fn(160, 100, |_, y| if y < 12 { [0.12, 0.2, 0.1] } else { [0.95, 0.95, 0.94] });
+        assert!(sky_mask_low(&img, 50.0).is_none());
+    }
+
+    #[test]
+    fn fallback_requires_individually_large_four_connected_components() {
+        let (w, h) = (80, 80);
+        // Enough total likely pixels to pass the area gate, but no large component.
+        let mut like: Vec<f32> = (0..w * h).map(|i| if i % w % 4 == 0 && i / w % 4 == 0 { 1.0 } else { 0.0 }).collect();
+        assert!(obstructed_sky_seeds(&like, w, h, 0.5).is_empty());
+        // Adjacent row ends must not join across the horizontal image boundary.
+        like.fill(0.0);
+        for y in 10..20 {
+            for x in 0..2 {
+                like[y * w + x] = 1.0;
+                like[(y - 1) * w + w - 1 - x] = 1.0;
+            }
+        }
+        assert!(obstructed_sky_seeds(&like, w, h, 0.5).is_empty());
     }
 
     /// #4634: a near-white studio backdrop around a product is not an overcast sky, but blue sky
