@@ -41,6 +41,7 @@ pub static CATALOG: &[(&[&str], &str, Option<&str>, &str)] = &[
     (&["File"], "Package…", None, "file.package"),
     (&["File"], "---", None, "---"),
     (&["File", "Automate"], "Batch…", None, "file.automate.batch"),
+    (&["File", "Automate"], "PDF Presentation…", None, "file.automate.pdfPresentation"),
     (&["File", "Automate"], "Create Droplet…", None, "file.automate.createDroplet"),
     (&["File", "Automate"], "---", None, "---"),
     (&["File", "Automate"], "Crop and Straighten Photos", None, "file.automate.cropAndStraightenPhotos"),
