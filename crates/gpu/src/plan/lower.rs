@@ -147,6 +147,11 @@ pub fn adjustment_program(adj: &Adjustment, transfer: Transfer, depth: photocraf
             (4, p, None)
         }
         Adjustment::BrightnessContrast { brightness, contrast, .. } => {
+            // The lookup table covers 0..1; identity must retain the full HDR range.
+            if *brightness == 0.0 && *contrast == 0.0 {
+                p[0] = [1.0, 1.0, 1.0, 0.0];
+                return (7, p, None);
+            }
             // Modern B/C: the CPU's lookup table (compose::adjust::modern_lut) on every channel,
             // through the Levels / Curves kernel.
             let row = to_row(&adjust::modern_lut(*brightness, *contrast));
