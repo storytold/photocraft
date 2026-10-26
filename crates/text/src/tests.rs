@@ -2148,6 +2148,22 @@ fn word_and_line_navigation() {
     assert!(jumped > kept);
 }
 
+/// A paging step (|dir| > 1) moves that many lines in one step, keeping the column, and the
+/// edges clamp exactly like a single-line step: past the top 0, past the bottom the text's end.
+#[test]
+fn line_step_pages_by_many_lines_and_clamps_at_the_edges() {
+    use crate::layout::{char_index, line_step};
+
+    let mut e = TextEngine::new();
+    let text = "aa\nbb\ncc\ndd\nee\nff";
+    let l = e.layout(&point(text, 24.0), 72.0);
+    assert!(l.lines.len() >= 6, "{}", l.lines.len());
+    let x = l.caret(0).0;
+    assert_eq!(line_step(&l, text, 0, x, 2), char_index(text, l.lines[2].range.start), "paging down two lines");
+    assert_eq!(line_step(&l, text, 0, x, 99), text.chars().count(), "past the bottom: the text's end");
+    assert_eq!(line_step(&l, text, 11, x, -99), 0, "past the top: the text's head");
+}
+
 #[test]
 fn line_navigation_reaches_adjacent_line_with_large_leading() {
     use crate::layout::{byte_index, line_step};
