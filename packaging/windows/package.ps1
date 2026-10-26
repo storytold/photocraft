@@ -4,7 +4,7 @@
 
 .DESCRIPTION
   Produces, in $env:DIST (default: dist/release):
-    photocraft-<version>-windows-<arch>.msi            per-machine installer (WiX v5)
+    photocraft-<version>-windows-<arch>.msi            per-machine installer (WiX v5); with photocraft_shell.dll (x64, arm64)
     photocraft-<version>-windows-<arch>-portable.zip   photocraft.exe + photocraft-cli.exe + portable.txt
 
   The binaries link the C runtime statically (+crt-static), so neither the MSI nor the portable
@@ -47,6 +47,9 @@ if (-not $Version) { throw 'could not read [workspace.package] version from Carg
 $MsiVersion = ($Version -split '-')[0]
 
 $Target = switch ($Arch) { 'x64' { 'x86_64-pc-windows-msvc' } 'x86' { 'i686-pc-windows-msvc' } 'arm64' { 'aarch64-pc-windows-msvc' } }
+# The thumbnail provider is registered as a COM class in the per-user view of the registry that
+# Explorer (64-bit) reads; a 32-bit build's registration lands in the 32-bit view, so x86 ships none.
+$ShellDll = $Arch -ne 'x86'
 $Dist = if ($env:DIST) { $env:DIST } else { Join-Path $Root 'dist\release' }
 $TargetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $Root 'target' }
 New-Item -ItemType Directory -Force -Path $Dist | Out-Null
@@ -64,6 +67,8 @@ if (-not $SkipBuild) {
   # Fail the build (rather than warn) if the icon/VERSIONINFO can't be embedded.
   $env:PHOTOCRAFT_REQUIRE_WINRES = '1'
   Invoke-Native "cargo build ($Target)" { cargo build --release --locked -p photocraft -p photocraft-cli --features heif --target $Target }
+  # The File Explorer document thumbnail provider (a COM DLL the MSI installs beside photocraft.exe).
+  if ($ShellDll) { Invoke-Native "cargo build photocraft-shell ($Target)" { cargo build --release --locked -p photocraft-shell --target $Target } }
 }
 
 $Bin = Join-Path $TargetDir "$Target\release"
@@ -84,12 +89,22 @@ foreach ($check in @(@('photocraft.exe', 2), @('photocraft-cli.exe', 3))) {
   if ($h.Subsystem -ne $check[1]) { throw "$($check[0]) has PE subsystem $($h.Subsystem), expected $($check[1])" }
   Write-Output "ok $($check[0]): $Arch, PE subsystem $($h.Subsystem)"
 }
+if ($ShellDll) {
+  $h = Get-PeHeader (Join-Path $Bin 'photocraft_shell.dll')
+  if ($h.Machine -ne $Machine) { throw "photocraft_shell.dll is for machine 0x$('{0:X}' -f $h.Machine), expected 0x$('{0:X}' -f $Machine) ($Arch)" }
+  Write-Output "ok photocraft_shell.dll: $Arch"
+}
 $Stage = Join-Path $TargetDir "windows-package\$Arch"
 Remove-Item -Recurse -Force $Stage -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $Stage | Out-Null
 Copy-Item (Join-Path $Bin 'photocraft.exe'), (Join-Path $Bin 'photocraft-cli.exe') $Stage
+$Signables = @((Join-Path $Stage 'photocraft.exe'), (Join-Path $Stage 'photocraft-cli.exe'))
+if ($ShellDll) {
+  Copy-Item (Join-Path $Bin 'photocraft_shell.dll') $Stage
+  $Signables += Join-Path $Stage 'photocraft_shell.dll'
+}
 
-& (Join-Path $PSScriptRoot 'sign.ps1') (Join-Path $Stage 'photocraft.exe') (Join-Path $Stage 'photocraft-cli.exe')
+& (Join-Path $PSScriptRoot 'sign.ps1') @Signables
 
 # ---- font notices for the MSI ------------------------------------------------------------------
 # The portable ZIP already carries these notices; stage the complete files before MSI creation too.
@@ -146,12 +161,13 @@ New-InstallerArt (Join-Path $Root 'assets\app-icon\hicolor\256x256\apps\ai.story
 
 $Msi = Join-Path $Dist "photocraft-$Version-windows-$Arch.msi"
 & (Join-Path $PSScriptRoot 'check-icons.ps1')
+$ShellDefine = if ($ShellDll) { @('-d', "ShellDll=$(Join-Path $Stage 'photocraft_shell.dll')") } else { @() }
 Invoke-Native 'wix build' {
   wix build (Join-Path $PSScriptRoot 'photocraft.wxs') -arch $Arch `
     -ext WixToolset.UI.wixext -ext WixToolset.Util.wixext `
     -culture en-US -loc (Join-Path $PSScriptRoot 'photocraft.en-us.wxl') `
     -d "Version=$MsiVersion" -d "DisplayVersion=$Version" -d "BinDir=$Stage" -d "IconPath=$(Join-Path $Root 'assets\app-icon\photocraft.ico')" `
-    -d "BannerBmp=$Banner" -d "DialogBmp=$Dialog" `
+    -d "BannerBmp=$Banner" -d "DialogBmp=$Dialog" @ShellDefine `
     -d "DocsDir=$Docs" -d "HasCraftFontLicences=$HasCraftFontLicences" `
     -o $Msi
 }

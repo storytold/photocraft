@@ -86,6 +86,11 @@ choice!(UiFontSize { Tiny = "tiny", Small = "small", Medium = "medium", Large = 
 choice!(LogDestination { Metadata = "metadata", TextFile = "textFile", Both = "both" } default Metadata);
 choice!(LogDetail { SessionsOnly = "sessionsOnly", Concise = "concise", Detailed = "detailed" } default Concise);
 choice!(Ask { Always = "always", Never = "never", Ask = "ask" } default Always);
+choice!(
+    /// Windows: PSD/PSB/PhotoCraft thumbnails in File Explorer (the `photocraft-shell` DLL), with the file
+    /// type's logo badge on them or without it. Stored on every platform, used only on Windows.
+    ExplorerThumbnails { Off = "off", WithLogo = "withLogo", NoLogo = "noLogo" } default WithLogo
+);
 choice!(QuickExportFormat { Png = "png", Jpg = "jpg", Gif = "gif", Webp = "webp", Exr = "exr" } default Png);
 choice!(ExportLocation { Ask = "ask", SameFolder = "sameFolder" } default Ask);
 choice!(ExportMetadata { None = "none", Copyright = "copyright", All = "all" } default Copyright);
@@ -472,6 +477,9 @@ pub struct FileHandling {
     pub exr_aces_cg: bool,
     pub ask_before_saving_layered_tiff: bool,
     pub maximize_psd_compatibility: Ask,
+    /// Windows: PSD/PSB/PhotoCraft thumbnails in File Explorer, with or without the logo badge (registers
+    /// `photocraft_shell.dll`). Shown only on Windows.
+    pub explorer_thumbnails: ExplorerThumbnails,
     /// SVG groups deeper than this are rasterised on import; parser and document safety caps remain fixed.
     pub rasterize_svg_groups_deeper_than: u32,
     pub recent_file_count: u32,
@@ -504,6 +512,7 @@ impl Default for FileHandling {
             exr_aces_cg: false,
             ask_before_saving_layered_tiff: true,
             maximize_psd_compatibility: Ask::Always,
+            explorer_thumbnails: ExplorerThumbnails::WithLogo,
             rasterize_svg_groups_deeper_than: photocraft_doc::MAX_GROUP_DEPTH as u32,
             recent_file_count: 20,
             recent_files: Vec::new(),
@@ -1167,7 +1176,9 @@ pub const HIDDEN_UNTIL_IMPLEMENTED: &[&str] = &[
 
 /// Is the preference at `path` (`"section.key"`) hidden from the Preferences dialog?
 pub fn is_hidden(path: &str) -> bool {
-    HIDDEN_UNTIL_IMPLEMENTED.contains(&path) || (!cfg!(target_os = "linux") && LINUX_ONLY.contains(&path))
+    HIDDEN_UNTIL_IMPLEMENTED.contains(&path)
+        || (!cfg!(target_os = "linux") && LINUX_ONLY.contains(&path))
+        || (!cfg!(target_os = "windows") && WINDOWS_ONLY.contains(&path))
 }
 
 /// Preferences that only do something on Linux; the dialog doesn't show them elsewhere. They
@@ -1182,6 +1193,9 @@ pub fn gpu_adapter_matches(name: &str, wanted: &str) -> bool {
     let mut words = wanted.split_whitespace().peekable();
     words.peek().is_some() && words.all(|w| name.contains(&w.to_lowercase()))
 }
+
+/// Preferences that only do something on Windows, handled like [`LINUX_ONLY`].
+pub const WINDOWS_ONLY: &[&str] = &["fileHandling.explorerThumbnails"];
 
 /// Choices of an enumerated preference (dotted path, e.g. `"cursors.painting"`).
 pub fn choices(path: &str) -> Option<&'static [&'static str]> {
@@ -1199,6 +1213,7 @@ pub fn choices(path: &str) -> Option<&'static [&'static str]> {
         "historyLog.destination" => LogDestination::NAMES,
         "historyLog.detail" => LogDetail::NAMES,
         "fileHandling.imagePreviews" | "fileHandling.maximizePsdCompatibility" => Ask::NAMES,
+        "fileHandling.explorerThumbnails" => ExplorerThumbnails::NAMES,
         "export.quickExportFormat" => QuickExportFormat::NAMES,
         "export.quickExportLocation" => ExportLocation::NAMES,
         "export.metadata" => ExportMetadata::NAMES,

@@ -605,6 +605,27 @@ fn linux_only_preferences_show_only_on_linux() {
 }
 
 #[test]
+fn explorer_thumbnails_is_a_windows_only_choice_defaulting_to_on_with_logo() {
+    assert_eq!(Preferences::default().file_handling.explorer_thumbnails, ExplorerThumbnails::WithLogo);
+    assert_eq!(is_hidden("fileHandling.explorerThumbnails"), !cfg!(target_os = "windows"));
+    assert_eq!(choices("fileHandling.explorerThumbnails"), Some(&["off", "withLogo", "noLogo"][..]));
+    let mut s = Session::new();
+    for (value, want) in [("off", ExplorerThumbnails::Off), ("noLogo", ExplorerThumbnails::NoLogo), ("withLogo", ExplorerThumbnails::WithLogo)] {
+        s.execute("prefs.set", json!({"path": "fileHandling.explorerThumbnails", "value": value})).unwrap();
+        assert_eq!(s.prefs().file_handling.explorer_thumbnails, want);
+    }
+    assert!(s.execute("prefs.set", json!({"path": "fileHandling.explorerThumbnails", "value": "sometimes"})).is_err());
+    assert_eq!(s.prefs().file_handling.explorer_thumbnails, ExplorerThumbnails::WithLogo);
+    // Older preference files without the setting keep it on.
+    let mut t = Session::new();
+    t.load_prefs_json(r#"{"fileHandling": {"autosave": false}}"#).unwrap();
+    assert_eq!(t.prefs().file_handling.explorer_thumbnails, ExplorerThumbnails::WithLogo);
+    for path in WINDOWS_ONLY {
+        assert!(s.execute("prefs.get", json!({"path": path})).is_ok(), "{path} is a real preference");
+    }
+}
+
+#[test]
 fn the_default_pressure_curve_is_linear() {
     let c = PressureCurve::new(&Preferences::default().tools.pressure_curve);
     assert!(c.is_linear());

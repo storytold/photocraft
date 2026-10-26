@@ -1177,6 +1177,9 @@
 	Apply the pen's tilt and rotation to the tip shape	Áp dụng độ nghiêng và góc xoay bút vào hình đầu cọ
 	Control:	Điều khiển:
 	Off	Tắt
+	Explorer thumbnails	Hình thu nhỏ trong File Explorer
+	On, with logo	Bật, có logo
+	On, no logo	Bật, không có logo
 	Fade	Giảm dần
 	Fade steps	Số bước giảm dần
 	Pen Pressure	Áp lực bút

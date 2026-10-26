@@ -126,6 +126,8 @@ On Linux, on a machine with several GPUs (say an eGPU, a discrete laptop GPU and
 
 On DX12 the shader compiler is FXC (`d3dcompiler_47.dll`, part of Windows), or a `dxcompiler.dll` placed beside `photocraft.exe`, loaded by its full path. wgpu's default looks `dxcompiler.dll` up by name, which reaches the current directory and `PATH` and loaded other programs' incompatible builds (#712).
 
+On Windows, File Explorer shows a PSD/PSB's embedded preview (the 160 px image resource 1036 that Preferences › File Handling › Image Previews saves) as its thumbnail. That is `photocraft_shell.dll`, built from `crates/shell` (`cargo build --release -p photocraft-shell`) and shipped beside `photocraft.exe`: a COM `IThumbnailProvider` that reads only the start of the file with a small bounds-checked parser and decodes the JPEG with the GDI+ that ships with Windows. Preferences › File Handling › Explorer Thumbnails sets Off, On with logo (Windows' usual look, the default) or On without logo (hides the file-type badge). The app registers the DLL for the current user only (`HKCU\Software\Classes`, no elevation) at launch and when the preference changes, leaves `.psd` alone when another program such as Photoshop already provides its thumbnails until the user picks the preference explicitly, and does nothing in portable mode, with `PHOTOCRAFT_CONFIG_DIR`, or in a 32-bit build. `regsvr32 photocraft_shell.dll` and `regsvr32 /u` do the same by hand. Explorer caches thumbnails, so a file already shown may keep its old picture for a while. Code: `crates/shell`, `apps/photocraft/src/explorer_thumbnails.rs`.
+
 Handled windowing and app initialization errors clear this launch's startup marker, restoring any
 prior crash evidence. For example, a Linux launch without `DISPLAY` or `WAYLAND_DISPLAY` does not
 change the next launch's graphics backend. Renderer initialization errors and driver crashes still
@@ -714,3 +716,12 @@ backend command without submitting; it writes a PDF only when `output` is explic
 without an output requires `dryRun: true`. Remembered print settings omit `output`, `dryRun` and
 `send`, so Print One Copy derives submission from its own output choice. Shared spooler transport
 files are automatically removed on Windows; CUPS needs none.
+
+
+### Extended document thumbnails
+
+The integration branch also registers `.psb` and `.pcraft`. Photoshop-compatible PSD/PSB resource 1036 is read irrespective of the application that saved it. Native `.pcraft` files use the existing 256 px `thumb.png`, emitted directly after `manifest.json` in a STORE ZIP. The provider bounds its prefix read to 16 MiB and the PNG to 4 MiB/2048 px per side, validates the ZIP payload CRC, and never decodes document layers. Repacked/deflated native bundles, oversized manifests and files without embedded previews fall back to the icon. PNG transparency is composited onto white by GDI+.
+
+Registration and saved previous handlers are separate for all three extensions. Automatic startup preserves other programs' handlers; an explicit preference change may replace them. Turning the feature off restores each previous per-user handler. Portable/custom-config runs do not register handlers. Re-save older files with Image Previews enabled and allow Explorer to refresh its thumbnail cache.
+
+The Windows shell implementation comes from [wer33321's PR #7805](https://github.com/storytold/photocraft/pull/7805), extended here with PSB coverage and native PhotoCraft previews. Its isolated COM/registry `unsafe` exception is proposed for maintainer review; it is not an already-approved upstream policy change. Real Windows Explorer and installer install/upgrade/uninstall testing remain required for this extended version.

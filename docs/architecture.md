@@ -23,8 +23,9 @@ What exists on `main` today. The numbered sections below are the original design
   Affinity (`affinity`), document mapping (`io`), native `.pcraft` (`format`, atomic saves).
   Coverage: [`file-format-parity.md`](file-format-parity.md).
 - **Not built (yet) from the plan:** the `ml` crate (no ML runtime; see gap G15), plug-in ABI v2.
-- **Deviations from the plan below:** `photocraft-tablet` is the one crate allowed `unsafe`
-  (AppKit pen events); `affinity`, `heif` and `raw` crates were added; the phased roadmap in §15
+- **Deviations from the plan below:** `photocraft-tablet` (AppKit pen events) and `photocraft-shell`
+  (the Windows Explorer PSD thumbnail provider, a COM DLL) are the two crates allowed `unsafe`;
+  `affinity`, `heif` and `raw` crates were added; the phased roadmap in §15
   is superseded by [`roadmap.md`](roadmap.md).
 
 ---

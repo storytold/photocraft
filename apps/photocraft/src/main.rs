@@ -39,6 +39,9 @@ mod caption_style;
 mod control_server;
 mod crash_guard;
 mod cursor;
+// Windows: PSD thumbnails in File Explorer (the photocraft-shell DLL), toggled in the preferences.
+#[cfg(target_os = "windows")]
+mod explorer_thumbnails;
 mod file_dialog_probe;
 mod gpu_startup;
 #[cfg(target_os = "linux")]
@@ -424,6 +427,9 @@ fn main() -> eframe::Result {
     let wanted_adapter =
         gpu_startup::wanted_adapter(std::env::var("PHOTOCRAFT_GPU_ADAPTER").ok().as_deref(), &gpu_startup::read_gpu_adapter(services::prefs_file().as_deref()));
     gpu_startup::configure(&mut options.wgpu_options.wgpu_setup, &plan, os, wanted_adapter, sentinel.clone(), gpu_note.clone());
+    // Preferences › File Handling › Explorer Thumbnails (Windows): on by default.
+    #[cfg(target_os = "windows")]
+    explorer_thumbnails::startup(services::prefs_file().as_deref());
     // Preferences › Performance › Low-Latency Drawing (#1343): without vsync a stroke shows about
     // 50 ms sooner; wgpu picks Immediate, else Mailbox, else Fifo by what the driver offers.
     if gpu_startup::read_low_latency(services::prefs_file().as_deref()) {

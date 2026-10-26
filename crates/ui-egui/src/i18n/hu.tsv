@@ -1216,6 +1216,9 @@
 	Now drag the selection onto another area	Most húzd a kijelölést egy másik területre
 	Object Selection found nothing there — try a tighter rectangle	Az Objektumkijelölés ott nem talált semmit – próbálj szűkebb téglalapot
 	Off	Ki
+	Explorer thumbnails	Indexképek a Fájlkezelőben
+	On, with logo	Be, logóval
+	On, no logo	Be, logó nélkül
 	Off: the speed of the pointer sets the spacing	Kikapcsolva: a térközt a mutató sebessége határozza meg
 	Opacity Jitter	Átlátszatlanság ingadozása
 	Opacity:	Átlátszatlanság:

@@ -58,6 +58,9 @@
       <?endif ?>
       <ComponentGroupRef Id="PhotocraftFiles" />
     </Feature>
+<?ifdef ShellDll?>
+    <CustomActionRef Id="UnregisterShellThumbnails" />
+<?endif?>
 
     <!-- The setup wizard: WixUI_InstallDir without its licence page (the code is MIT OR
          Apache-2.0; there is nothing to accept). A later NewDialog on the same button wins. -->
@@ -162,6 +165,30 @@
       <Component Id="PhotocraftCli">
         <File Id="PhotocraftCliExe" Source="$(var.BinDir)\photocraft-cli.exe" KeyPath="yes" />
       </Component>
+<?ifdef ShellDll?>
+
+      <!-- File Explorer thumbnails for PSD, PSB and PhotoCraft files (crates/shell). This only puts the COM DLL beside
+           photocraft.exe: the app registers it for each user (Preferences › File Handling ›
+           Explorer Thumbnails), so the choice stays per user. Not built for x86 (package.ps1). -->
+      <Component Id="PhotocraftShell">
+        <File Id="PhotocraftShellDll" Source="$(var.ShellDll)" KeyPath="yes" />
+      </Component>
+<?endif?>
     </ComponentGroup>
   </Fragment>
+<?ifdef ShellDll?>
+
+  <Fragment>
+    <!-- On uninstall, undo the uninstalling user's registration (`regsvr32 /u` calls the DLL's
+         DllUnregisterServer) before the DLL is deleted: it puts back the .psd thumbnail handler
+         and badge setting that PhotoCraft replaced. It runs as that user, so only their registry
+         is touched; other users' registrations fall back to the default icon until they are
+         changed. Not on upgrades: the new version keeps the same DLL path. -->
+    <CustomAction Id="UnregisterShellThumbnails" Directory="INSTALLFOLDER" Execute="deferred" Impersonate="yes" Return="ignore"
+        ExeCommand="&quot;[System64Folder]regsvr32.exe&quot; /s /u &quot;[#PhotocraftShellDll]&quot;" />
+    <InstallExecuteSequence>
+      <Custom Action="UnregisterShellThumbnails" Before="RemoveFiles" Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+    </InstallExecuteSequence>
+  </Fragment>
+<?endif?>
 </Wix>

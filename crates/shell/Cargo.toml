@@ -1,0 +1,44 @@
+[package]
+name = "photocraft-shell"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Windows Explorer thumbnail provider that shows the embedded preview of PSD, PSB and PhotoCraft files"
+
+[lib]
+# `cdylib` is the COM server Explorer loads (photocraft_shell.dll); `rlib` lets the app call
+# `enable_explorer_thumbnails` and lets `cargo test` run the parser tests.
+crate-type = ["cdylib", "rlib"]
+
+# The second isolated `unsafe` helper crate (after `photocraft-tablet`): a COM server is raw FFI
+# by nature.
+# Every `unsafe` function and block follows the safety contract at the top of `windows_thumbnail.rs`
+# (the four invariants it numbers) or carries a `SAFETY:` comment (`registration.rs`). The PSD parser
+# (`psd.rs`), the only code that reads untrusted bytes, is safe.
+# Every other crate keeps the workspace's `unsafe_code = "forbid"`.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+dbg_macro = "warn"
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+unimplemented = "deny"
+todo = "deny"
+unreachable = "deny"
+
+# Already in Cargo.lock; pinned exactly: review the diff before bumping. Compiles to nothing on
+# macOS, Linux and the web.
+[target.'cfg(target_os = "windows")'.dependencies.windows-sys]
+version = "=0.59.0"
+features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Graphics_GdiPlus",
+    "Win32_Security",
+    "Win32_System_Com",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Registry",
+    "Win32_UI_Shell",
+]

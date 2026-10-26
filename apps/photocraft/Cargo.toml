@@ -94,6 +94,9 @@ winit = { version = "=0.30.13", default-features = false, features = ["x11"] }
 # GetCursorPos) and the window frame for the custom title bar (`window_frame.rs`, window styles),
 # no dependencies of its own. Pinned exactly: review the diff before bumping.
 [target.'cfg(target_os = "windows")'.dependencies]
+# Explorer thumbnails for PSD files (the Windows COM server DLL is built from this crate; the app
+# only calls its safe register/unregister functions).
+photocraft-shell = { workspace = true }
 # Safe Windows screen-capture bindings; Linux uses the pure-Rust X11 client/portal.
 xcap = "=0.9.8"
 winsafe = { version = "=0.0.29", default-features = false, features = ["user"] }

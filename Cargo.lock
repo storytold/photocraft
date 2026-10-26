@@ -4861,6 +4861,7 @@ dependencies = [
  "photocraft-geom",
  "photocraft-io",
  "photocraft-raster",
+ "photocraft-shell",
  "photocraft-tablet",
  "photocraft-ui-egui",
  "resvg",
@@ -5218,6 +5219,13 @@ dependencies = [
  "zune-core 0.5.3",
  "zune-jpeg 0.5.15",
  "zune-jpegxl",
+]
+
+[[package]]
+name = "photocraft-shell"
+version = "0.16.0"
+dependencies = [
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
