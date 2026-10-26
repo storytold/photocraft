@@ -233,7 +233,7 @@ impl BrushContext {
     pub fn new(brush: &BrushSettings) -> Self {
         let brush = brush.bounded_for_render();
         let mips = |t: &TipShape| match t.bitmap() {
-            Some(g) if g.is_valid() => Some(Arc::new(Mips::new(g))),
+            Some(g) if g.is_valid() => Some(crate::mip_cache::tip_mips(g)),
             _ => None,
         };
         Self {
@@ -1295,3 +1295,7 @@ impl RoundTip {
 #[cfg(test)]
 #[path = "render_reference.rs"]
 mod reference;
+
+#[cfg(test)]
+#[path = "mip_cache_render_tests.rs"]
+mod mip_cache_tests;
