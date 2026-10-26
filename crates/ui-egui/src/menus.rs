@@ -2247,6 +2247,10 @@ mod open_recent_tests {
         assert_eq!(labels, vec!["a.png", "b.psd"]);
         assert!(items.iter().any(|i| i.id == "file.clearRecent" && i.path == rp));
 
+        let shortcuts = crate::prefs_ui::shortcut_items(&app);
+        assert!(!shortcuts.iter().any(|(id, _, _, _)| id.starts_with("file.openRecent.")));
+        assert!(shortcuts.iter().any(|(id, _, _, _)| id == "file.open"));
+
         // Clear Recent Files empties the list.
         let ctx = egui::Context::default();
         invoke(&mut app, &ctx, "file.clearRecent", json!({})).unwrap();
