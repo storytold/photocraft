@@ -267,8 +267,8 @@ what an agent can't finish alone.
   dab spacing, even at 0% smoothing. Adaptive subdivision removes straight chords from sparse
   fast curves; one-sample provisional tails keep the live preview consistent with the commit.
   Dense tail previews retain older coverage in holes between their tiles. Sequential effects
-  (Smudge, Dodge/Burn, etc.) retain their existing immediate paths; supporting replaceable
-  segments there requires effect-state snapshots. Right-angle/sharper turns and the aliased
+  (Mixer Brush, Smudge, Dodge/Burn, etc.) retain their existing immediate paths; supporting replaceable
+  segments there requires matching replay and effect-state snapshots. Right-angle/sharper turns and the aliased
   Pencil keep their geometry. The macOS input monitor
   disables AppKit mouse coalescing and restores its previous setting on drop. Geometry, sensor,
   batching, 8/16/32-bit preview and real-canvas regressions cover the change. Native position/time

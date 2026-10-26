@@ -776,7 +776,7 @@ pub struct DabGenerator {
 impl DabGenerator {
     /// Sequential effects cannot replace their last segment without also restoring the effect's
     /// state (e.g. Smudge's reservoir). Keep their existing, immediately committed polyline path.
-    pub(crate) fn new_polyline(brush: &BrushSettings, zoom: f32) -> Self {
+    pub fn new_polyline(brush: &BrushSettings, zoom: f32) -> Self {
         Self { interpolator: None, ..Self::new(brush, zoom) }
     }
 
