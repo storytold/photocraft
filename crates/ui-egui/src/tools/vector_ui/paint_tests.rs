@@ -866,3 +866,19 @@ fn path_mode_radius_leaves_the_active_shape_layer_alone() {
     assert_eq!(radii(h.state()), [10.0; 4], "the shape layer keeps its radius");
     assert_eq!(h.state().session.active().unwrap().history.past_len(), history, "no edit");
 }
+
+/// CodeRabbit on #9456: the Shape tools' Path mode is theirs alone. With a shape selected, Path
+/// Selection and Direct Selection keep their Fill and Stroke controls whatever that mode is.
+#[test]
+fn selection_tools_ignore_the_shape_tools_path_mode() {
+    for tool in [Tool::PathSelection, Tool::DirectSelection] {
+        let mut app = app("rgb", 8);
+        app.run("shape.create", json!({"rect": [20, 20, 60, 40]})).unwrap();
+        app.ui.tool = tool;
+        app.ui.tool_options.shape_mode = "path".into();
+        let h = harness(app, false);
+        for label in ["Fill color", "Stroke color"] {
+            assert!(h.query_by_label(label).is_some(), "{tool:?}: {label} stays");
+        }
+    }
+}
