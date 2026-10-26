@@ -260,6 +260,45 @@ mod tests {
         }
     }
 
+    #[test]
+    fn reduce_noise_guides_both_chroma_planes_by_the_cleaned_luma() {
+        // Caller wiring: Lab keeps its planes as they are, so each output plane is compared with
+        // the independent filters run on the planes in order (luma by itself, chroma by the
+        // cleaned luma).
+        let (w, h) = (19, 13);
+        let rect = Rect::new(0, 0, w as i32, h as i32);
+        let mut src = Image::new(rect, 3);
+        for (i, px) in src.data.as_chunks_mut::<3>().0.iter_mut().enumerate() {
+            px[0] = (i * 37 % 101) as f32 / 100.0;
+            px[1] = (i * 13 % 71) as f32 / 70.0 - 0.5;
+            px[2] = (i * 29 % 83) as f32 / 41.0 - 1.0;
+        }
+        let ctx = Ctx { bounds: rect, mode: ColorMode::Lab, alpha: false };
+        let spec = DenoiseSpec { strength: 6.0, preserve: 30.0, color: 50.0, sharpen: 0.0, jpeg: false };
+        let out = reduce_noise(&src, rect, &ctx, &spec);
+
+        let plane = |c: usize| -> Vec<f32> { src.data.as_chunks::<3>().0.iter().map(|px| px[c]).collect() };
+        let (luma, chroma) = (plane(0), [plane(1), plane(2)]);
+        let s = spec.strength / 10.0;
+        let eps = (0.004 + 0.05 * s).powi(2) * (1.05 - spec.preserve / 100.0);
+        let smooth = reference_guided(&luma, &luma, w, h, (1.0 + spec.strength * 0.4).round() as usize, eps);
+        let cleaned: Vec<f32> = luma.iter().zip(&smooth).map(|(&v, &d)| v + (d - v) * s.sqrt()).collect();
+        let col = spec.color / 100.0;
+        let chroma_r = (1.0 + col * 8.0).round() as usize;
+        let chroma_eps = (0.01 + 0.05 * col).powi(2);
+        let mut expected = vec![cleaned];
+        for p in &chroma {
+            let filtered = reference_guided(&expected[0], p, w, h, chroma_r, chroma_eps);
+            expected.push(p.iter().zip(filtered).map(|(&v, f)| v + (f - v) * col).collect());
+        }
+        for (c, expected) in expected.iter().enumerate() {
+            let actual: Vec<f32> = out.as_chunks::<3>().0.iter().map(|px| px[c]).collect();
+            let worst = actual.iter().zip(expected).map(|(a, e)| (a - e).abs()).fold(0.0f32, f32::max);
+            assert!(worst < 1e-4, "plane {c} differs from the independent filters by {worst}");
+            assert!(actual.iter().zip(&plane(c)).any(|(a, o)| (a - o).abs() > 1e-3), "plane {c} was filtered");
+        }
+    }
+
     fn assert_bits(actual: &[f32], expected: &[f32]) {
         assert_eq!(actual.len(), expected.len());
         for (i, (actual, expected)) in actual.iter().zip(expected).enumerate() {
