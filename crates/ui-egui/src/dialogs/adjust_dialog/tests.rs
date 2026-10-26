@@ -425,7 +425,10 @@ fn curves_auto_stretches_a_low_contrast_image() {
         PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
         let id = open(h.state_mut(), "image.adjustments.curves").unwrap();
         if pencil {
-            h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("pencil".into(), json!(true));
+            // A drawn (inverted) curve: Auto replaces it with its point curve.
+            let fields = &mut h.state_mut().ui.dialog_mut(id).unwrap().fields;
+            fields.insert("pencil".into(), json!(true));
+            fields.insert("points".into(), json!((0..256).map(|i| 255 - i).collect::<Vec<_>>()));
         }
         h.run_steps(4);
         h.get_by_role_and_label(egui::accesskit::Role::Button, "Auto").click();
