@@ -4180,3 +4180,26 @@ cameraData	Lens	Lens
 	Tight Curl	Sıkı Kıvrım
 	Loose Curl	Gevşek Kıvrım
 	Stylized dabs from a history state	Bir geçmiş durumundan stilize benekler
+# Generative Fill and Generative AI Settings (#41)
+	API key	API anahtarı
+	Describe what to generate in the selection, or leave it empty to continue the image through it.	Seçimde ne oluşturulacağını açıklayın veya görüntünün seçim boyunca devam etmesi için boş bırakın.
+	Generative AI	Üretken Yapay Zekâ
+	Generative AI Settings…	Üretken Yapay Zekâ Ayarları…
+	Generative AI needs the desktop app.	Üretken yapay zekâ için masaüstü uygulaması gerekir.
+	Generative Fill uses {name} ({model}).	Üretken Dolgu şunu kullanır: {name} ({model}).
+	Generative Fill…	Üretken Dolgu…
+	Get a Gemini API key from Google AI Studio	Google AI Studio'dan Gemini API anahtarı alın
+	No API key is saved for {provider}.	Şunun için kayıtlı API anahtarı yok: {provider}.
+	Nothing is sent until you run Generative Fill. Each time you do, PhotoCraft sends the selected area and the image around it, a black-and-white mask of the selection, and your prompt to Google (generativelanguage.googleapis.com) with your API key. Google's Gemini API terms and privacy policy apply, and its usage is billed to your key. Results carry Google's SynthID watermark.	Üretken Dolgu'yu çalıştırana kadar hiçbir şey gönderilmez. Her çalıştırdığınızda PhotoCraft seçili alanı ve çevresindeki görüntüyü, seçimin siyah beyaz maskesini ve isteminizi API anahtarınızla Google'a (generativelanguage.googleapis.com) gönderir. Google'ın Gemini API koşulları ve gizlilik politikası geçerlidir; kullanım anahtarınıza faturalandırılır. Sonuçlar Google'ın SynthID filigranını taşır.
+	Off. Set up a provider with your own API key to use Generative Fill.	Kapalı. Üretken Dolgu'yu kullanmak için kendi API anahtarınızla bir sağlayıcı ayarlayın.
+	Paste your Gemini API key	Gemini API anahtarınızı yapıştırın
+	Prompt (optional)	İstem (isteğe bağlı)
+	Provider	Sağlayıcı
+	Remove Key	Anahtarı Kaldır
+	Saved (paste to replace)	Kaydedildi (değiştirmek için yapıştırın)
+	The selected area, the image around it and the prompt are sent to {name} ({model}).	Seçili alan, çevresindeki görüntü ve istem şuraya gönderilir: {name} ({model}).
+	What is sent, and to whom	Ne gönderilir ve kime
+	Your key is kept in {store}, never in PhotoCraft's settings files.	Anahtarınızın saklandığı yer: {store}. PhotoCraft'ın ayar dosyalarında asla saklanmaz.
+	the macOS Keychain	macOS Anahtar Zinciri
+	Windows Credential Manager	Windows Kimlik Bilgisi Yöneticisi
+	memory until PhotoCraft quits	PhotoCraft kapanana kadar bellek

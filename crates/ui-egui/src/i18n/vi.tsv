@@ -3946,6 +3946,28 @@ curves	Smooth	Làm mượt
 	Tight Curl	Xoắn chặt
 	Loose Curl	Xoắn lỏng
 	Stylized dabs from a history state	Các chấm cách điệu từ một trạng thái lịch sử
-
 # Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
 	Aspect Ratio	Tỷ lệ khung hình
+# Generative Fill and Generative AI Settings (#41)
+	API key	Khóa API
+	Describe what to generate in the selection, or leave it empty to continue the image through it.	Mô tả nội dung cần tạo trong vùng chọn, hoặc để trống để ảnh tiếp nối qua vùng đó.
+	Generative AI	AI tạo sinh
+	Generative AI Settings…	Cài đặt AI tạo sinh…
+	Generative AI needs the desktop app.	AI tạo sinh cần ứng dụng máy tính.
+	Generative Fill uses {name} ({model}).	Tô tạo sinh dùng {name} ({model}).
+	Generative Fill…	Tô tạo sinh…
+	Get a Gemini API key from Google AI Studio	Lấy khóa Gemini API từ Google AI Studio
+	No API key is saved for {provider}.	Chưa lưu khóa API nào cho {provider}.
+	Nothing is sent until you run Generative Fill. Each time you do, PhotoCraft sends the selected area and the image around it, a black-and-white mask of the selection, and your prompt to Google (generativelanguage.googleapis.com) with your API key. Google's Gemini API terms and privacy policy apply, and its usage is billed to your key. Results carry Google's SynthID watermark.	Không có gì được gửi đi cho đến khi bạn chạy Tô tạo sinh. Mỗi lần bạn chạy, PhotoCraft gửi vùng đã chọn cùng phần ảnh xung quanh, một mặt nạ đen trắng của vùng chọn và lời nhắc của bạn tới Google (generativelanguage.googleapis.com) kèm khóa API của bạn. Điều khoản và chính sách quyền riêng tư của Gemini API của Google được áp dụng, và mức sử dụng được tính phí vào khóa của bạn. Kết quả mang hình mờ SynthID của Google.
+	Off. Set up a provider with your own API key to use Generative Fill.	Tắt. Thiết lập một nhà cung cấp bằng khóa API của riêng bạn để dùng Tô tạo sinh.
+	Paste your Gemini API key	Dán khóa Gemini API của bạn
+	Prompt (optional)	Lời nhắc (không bắt buộc)
+	Provider	Nhà cung cấp
+	Remove Key	Gỡ khóa
+	Saved (paste to replace)	Đã lưu (dán để thay thế)
+	The selected area, the image around it and the prompt are sent to {name} ({model}).	Vùng đã chọn, phần ảnh xung quanh và lời nhắc được gửi tới {name} ({model}).
+	What is sent, and to whom	Những gì được gửi, và gửi cho ai
+	Your key is kept in {store}, never in PhotoCraft's settings files.	Khóa của bạn được lưu trong {store}, không bao giờ nằm trong các tệp cài đặt của PhotoCraft.
+	the macOS Keychain	Chuỗi khóa macOS
+	Windows Credential Manager	Trình quản lý thông tin xác thực Windows
+	memory until PhotoCraft quits	bộ nhớ cho đến khi PhotoCraft thoát

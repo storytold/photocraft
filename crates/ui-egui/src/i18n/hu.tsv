@@ -4366,3 +4366,26 @@ cameraRaw	Yellow	Sárga
 	Tight Curl	Szoros göndör
 	Loose Curl	Laza göndör
 	Stylized dabs from a history state	Stilizált pöttyök egy előzményállapotból
+# Generative Fill and Generative AI Settings (#41)
+	API key	API-kulcs
+	Describe what to generate in the selection, or leave it empty to continue the image through it.	Írd le, mi jelenjen meg a kijelölésben, vagy hagyd üresen, hogy a kép folytatódjon rajta keresztül.
+	Generative AI	Generatív MI
+	Generative AI Settings…	Generatív MI beállításai…
+	Generative AI needs the desktop app.	A generatív MI-hez az asztali alkalmazás kell.
+	Generative Fill uses {name} ({model}).	A Generatív kitöltés ezt használja: {name} ({model}).
+	Generative Fill…	Generatív kitöltés…
+	Get a Gemini API key from Google AI Studio	Gemini API-kulcs beszerzése a Google AI Studióban
+	No API key is saved for {provider}.	Nincs mentett API-kulcs ehhez: {provider}.
+	Nothing is sent until you run Generative Fill. Each time you do, PhotoCraft sends the selected area and the image around it, a black-and-white mask of the selection, and your prompt to Google (generativelanguage.googleapis.com) with your API key. Google's Gemini API terms and privacy policy apply, and its usage is billed to your key. Results carry Google's SynthID watermark.	Semmi sem kerül elküldésre, amíg nem futtatod a Generatív kitöltést. Ilyenkor a PhotoCraft minden alkalommal elküldi a kijelölt területet a körülötte lévő képpel, a kijelölés fekete-fehér maszkját és a leírásodat a Google-nek (generativelanguage.googleapis.com) az API-kulcsoddal. A Google Gemini API felhasználási feltételei és adatvédelmi irányelvei érvényesek, a használatot a kulcsodra számlázzák. Az eredmények a Google SynthID vízjelét hordozzák.
+	Off. Set up a provider with your own API key to use Generative Fill.	Ki. A Generatív kitöltéshez állíts be egy szolgáltatót a saját API-kulcsoddal.
+	Paste your Gemini API key	Illeszd be a Gemini API-kulcsodat
+	Prompt (optional)	Leírás (nem kötelező)
+	Provider	Szolgáltató
+	Remove Key	Kulcs eltávolítása
+	Saved (paste to replace)	Mentve (beillesztéssel lecserélheted)
+	The selected area, the image around it and the prompt are sent to {name} ({model}).	A kijelölt terület, a körülötte lévő kép és a leírás ide kerül elküldésre: {name} ({model}).
+	What is sent, and to whom	Mi kerül elküldésre, és kinek
+	Your key is kept in {store}, never in PhotoCraft's settings files.	A kulcsod helye: {store}, sosem a PhotoCraft beállításfájljai.
+	the macOS Keychain	a macOS-kulcskarika
+	Windows Credential Manager	a Windows Hitelesítőadat-kezelő
+	memory until PhotoCraft quits	a memória, amíg a PhotoCraft be nem zárul

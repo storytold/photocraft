@@ -37,6 +37,7 @@ photocraft-ui-egui = { path = "crates/ui-egui" }
 photocraft-testkit = { path = "crates/testkit" }
 photocraft-tablet = { path = "crates/tablet" }
 photocraft-ipp = { path = "crates/ipp" }
+photocraft-genai = { path = "crates/genai" }
 
 # external
 craft-print = { git = "https://github.com/storytold/craft-libs", rev = "495e5971bc024aa96e6ed318cb6e7cd3a0103184" }
