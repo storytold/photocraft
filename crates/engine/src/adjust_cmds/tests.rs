@@ -751,3 +751,58 @@ fn folder_luts_lists_lut_files_by_name() {
     assert!(folder_luts("").is_empty());
     assert!(folder_luts(dir.path().join("missing").to_str().unwrap()).is_empty());
 }
+
+#[test]
+fn discovered_luts_discovers_candidate_luts() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("preset.cube");
+    std::fs::write(&file, "LUT_3D_SIZE 2\n").unwrap();
+    let dirs = discovered_lut_dirs_with(Some(dir.path().into()), None);
+    let list = scan_lut_dirs(dirs);
+    assert!(list.iter().any(|(name, path)| name == "preset.cube" && path == file.to_str().unwrap()));
+}
+
+#[test]
+fn scan_lut_dirs_rejected_stem_does_not_reserve_target() {
+    let dir1 = tempfile::tempdir().unwrap();
+    let dir2 = tempfile::tempdir().unwrap();
+    let dir3 = tempfile::tempdir().unwrap();
+    let file1 = dir1.path().join("foo.cube");
+    let file2 = dir2.path().join("foo.3dl");
+    let file3 = dir3.path().join("bar.3dl");
+    std::fs::write(&file1, "LUT_3D_SIZE 2\n").unwrap();
+    std::fs::write(&file2, "LUT_3D_SIZE 2\n").unwrap();
+    if std::fs::hard_link(&file2, &file3).is_ok() {
+        let list = scan_lut_dirs([dir1.path().to_path_buf(), dir2.path().to_path_buf(), dir3.path().to_path_buf()]);
+        let names: Vec<_> = list.iter().map(|(n, _)| n.as_str()).collect();
+        assert!(names.contains(&"foo.cube"));
+        assert!(!names.contains(&"foo.3dl"));
+        assert!(names.contains(&"bar.3dl"));
+    }
+}
+
+#[test]
+fn cached_lut_file_caches_parsed_luts() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("cached.cube");
+    std::fs::write(&path, "LUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n").unwrap();
+    let p_str = path.to_str().unwrap();
+    let parsed1 = cached_lut_file(p_str).unwrap();
+    let parsed2 = cached_lut_file(p_str).unwrap();
+    assert_eq!(parsed1.size, 2);
+    assert_eq!(parsed1.data, parsed2.data);
+    assert!(std::sync::Arc::ptr_eq(&parsed1.data, &parsed2.data));
+}
+
+#[test]
+fn discovered_luts_override_seam() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("override_test.cube");
+    std::fs::write(&file, "LUT_3D_SIZE 2\n").unwrap();
+
+    set_discovered_luts_dir_override(Some(dir.path().to_path_buf()));
+    let list = discovered_luts();
+    set_discovered_luts_dir_override(None);
+
+    assert!(list.iter().any(|(name, _)| name == "override_test.cube"));
+}

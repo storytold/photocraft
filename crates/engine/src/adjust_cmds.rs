@@ -97,6 +97,41 @@ pub fn selective_from_params(p: &Value, base: Option<&Adjustment>) -> Result<Adj
     Ok(Adjustment::SelectiveColor { relative, adjustments: adj })
 }
 
+#[derive(Clone)]
+pub(crate) struct ParsedLut {
+    pub(crate) data: std::sync::Arc<Vec<f32>>,
+    pub(crate) size: usize,
+    pub(crate) domain_min: [f32; 3],
+    pub(crate) domain_max: [f32; 3],
+    pub(crate) label: String,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn cached_lut_file(path: &str) -> Result<ParsedLut> {
+    const CMD: &str = "colorLookup";
+    use std::sync::{LazyLock, Mutex, PoisonError};
+    static CACHE: LazyLock<Mutex<std::collections::HashMap<String, (Option<std::time::SystemTime>, ParsedLut)>>> =
+        LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+
+    let mtime = std::fs::metadata(path).ok().and_then(|m| m.modified().ok());
+    if let Ok(guard) = CACHE.lock() {
+        if let Some((cached_mtime, cached)) = guard.get(path) {
+            if *cached_mtime == mtime {
+                return Ok(cached.clone());
+            }
+        }
+    }
+    let bytes = read_file(path).ok_or_else(|| bad(CMD, format!("can't read {path}")))?;
+    let f = photocraft_cms::lutfile::parse(path, &bytes).map_err(|e| bad(CMD, format!("{path}: {}", e.0)))?;
+    let parsed = ParsedLut { data: std::sync::Arc::new(f.data), size: f.size, domain_min: f.domain_min, domain_max: f.domain_max, label: base_name(path) };
+    let mut guard = CACHE.lock().unwrap_or_else(PoisonError::into_inner);
+    if guard.len() >= 64 {
+        guard.clear();
+    }
+    guard.insert(path.to_string(), (mtime, parsed.clone()));
+    Ok(parsed)
+}
+
 /// Color Lookup from params: `"lut"` (a built-in look id or `"none"`), `"file"` (a .cube / .3dl /
 /// .look path, native only) or `"data"` (the file's text, with `"fileName"` naming its format),
 /// `"interpolation":"trilinear|tetrahedral"`, `"dither":bool`. The table is embedded in the
@@ -108,7 +143,7 @@ pub fn lookup_from_params(p: &Value, base: Option<&Adjustment>) -> Result<Adjust
         Some(Adjustment::ColorLookup { name, lut, size, tetrahedral, dither }) => (name.clone(), lut.clone(), *size, *tetrahedral, *dither),
         _ => (String::new(), None, 0, false, false),
     };
-    let mut loaded: Option<(photocraft_cms::lutfile::LutFile, String)> = None;
+    let mut loaded: Option<ParsedLut> = None;
     if let Some(id) = opt_str(CMD, p, "lut")? {
         if id == "none" || id.is_empty() {
             name.clear();
@@ -117,33 +152,45 @@ pub fn lookup_from_params(p: &Value, base: Option<&Adjustment>) -> Result<Adjust
         } else {
             let f = photocraft_cms::lutfile::builtin(id).ok_or_else(|| bad(CMD, format!("unknown look `{id}` (built-ins: {})", builtin_ids())))?;
             let label = f.title.clone();
-            loaded = Some((f, label));
+            loaded = Some(ParsedLut { data: std::sync::Arc::new(f.data), size: f.size, domain_min: f.domain_min, domain_max: f.domain_max, label });
         }
     }
     let file_name = opt_str(CMD, p, "fileName")?;
     if let Some(text) = opt_str(CMD, p, "data")? {
         let file_name = file_name.unwrap_or("lut.cube");
         let f = photocraft_cms::lutfile::parse(file_name, text.as_bytes()).map_err(|e| bad(CMD, e.0))?;
-        loaded = Some((f, base_name(file_name)));
+        loaded = Some(ParsedLut {
+            data: std::sync::Arc::new(f.data),
+            size: f.size,
+            domain_min: f.domain_min,
+            domain_max: f.domain_max,
+            label: base_name(file_name),
+        });
     }
     if let Some(path) = opt_str(CMD, p, "file")?.filter(|s| !s.is_empty()) {
-        let bytes = read_file(path).ok_or_else(|| bad(CMD, format!("can't read {path}")))?;
-        let f = photocraft_cms::lutfile::parse(path, &bytes).map_err(|e| bad(CMD, format!("{path}: {}", e.0)))?;
-        loaded = Some((f, base_name(path)));
+        #[cfg(not(target_arch = "wasm32"))]
+        let parsed = cached_lut_file(path)?;
+        #[cfg(target_arch = "wasm32")]
+        let parsed = {
+            let bytes = read_file(path).ok_or_else(|| bad(CMD, format!("can't read {path}")))?;
+            let f = photocraft_cms::lutfile::parse(path, &bytes).map_err(|e| bad(CMD, format!("{path}: {}", e.0)))?;
+            ParsedLut { data: std::sync::Arc::new(f.data), size: f.size, domain_min: f.domain_min, domain_max: f.domain_max, label: base_name(path) }
+        };
+        loaded = Some(parsed);
     }
-    if let Some((f, label)) = loaded {
-        if !f.domain_is_default() {
+    if let Some(p) = loaded {
+        if p.domain_min != [0.0, 0.0, 0.0] || p.domain_max != [1.0, 1.0, 1.0] {
             return Err(bad(
                 CMD,
                 format!(
                     "`{}` declares DOMAIN_MIN {:?} / DOMAIN_MAX {:?}: Color Lookup applies the plain 0..1 domain, so the look would shift; honouring a custom domain is not supported yet",
-                    label, f.domain_min, f.domain_max
+                    p.label, p.domain_min, p.domain_max
                 ),
             ));
         }
-        name = label;
-        size = f.size as u32;
-        lut = Some(std::sync::Arc::new(f.data));
+        name = p.label;
+        size = p.size as u32;
+        lut = Some(p.data);
     }
     match opt_str(CMD, p, "interpolation")? {
         None => {}
@@ -172,6 +219,141 @@ fn base_name(path: &str) -> String {
 const MAX_FOLDER_LUTS: usize = 500;
 /// Largest LUT file [`folder_luts`] lists: a 129³ `.cube` (the parser's largest) is about 60 MB.
 const MAX_FOLDER_LUT_BYTES: u64 = 64 << 20;
+
+/// Standard directories to search for LUT files when no explicit folder is configured.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn discovered_lut_dirs_with(env_dir: Option<std::ffi::OsString>, exe: Option<std::path::PathBuf>) -> Vec<std::path::PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(dir) = env_dir.filter(|s| !s.is_empty()) {
+        dirs.push(std::path::PathBuf::from(dir));
+    }
+    if let Some(parent) = exe.as_deref().and_then(std::path::Path::parent) {
+        dirs.push(parent.join("LUTs"));
+        dirs.push(parent.join("PhotoCraftData").join("LUTs"));
+        dirs.push(parent.join("luts"));
+    }
+    #[cfg(windows)]
+    {
+        if let Some(appdata) = std::env::var_os("APPDATA").filter(|s| !s.is_empty()) {
+            let base = std::path::PathBuf::from(appdata);
+            dirs.push(base.join("PhotoCraft").join("LUTs"));
+            dirs.push(base.join("PhotoCraft").join("luts"));
+        }
+        if let Some(local) = std::env::var_os("LOCALAPPDATA").filter(|s| !s.is_empty()) {
+            let base = std::path::PathBuf::from(local);
+            dirs.push(base.join("PhotoCraft").join("LUTs"));
+            dirs.push(base.join("PhotoCraft").join("luts"));
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(home) = std::env::var_os("HOME").filter(|s| !s.is_empty()) {
+            let base = std::path::PathBuf::from(home);
+            dirs.push(base.join("Library/Application Support/PhotoCraft/LUTs"));
+            dirs.push(base.join("Library/Application Support/PhotoCraft/luts"));
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(xdg) = std::env::var_os("XDG_DATA_HOME").filter(|s| !s.is_empty()) {
+            dirs.push(std::path::PathBuf::from(xdg).join("photocraft/luts"));
+            dirs.push(std::path::PathBuf::from(xdg).join("photocraft/LUTs"));
+        } else if let Some(home) = std::env::var_os("HOME").filter(|s| !s.is_empty()) {
+            dirs.push(std::path::PathBuf::from(home).join(".local/share/photocraft/luts"));
+            dirs.push(std::path::PathBuf::from(home).join(".local/share/photocraft/LUTs"));
+        }
+        if let Some(xdg_cfg) = std::env::var_os("XDG_CONFIG_HOME").filter(|s| !s.is_empty()) {
+            dirs.push(std::path::PathBuf::from(xdg_cfg).join("photocraft/luts"));
+            dirs.push(std::path::PathBuf::from(xdg_cfg).join("photocraft/LUTs"));
+        } else if let Some(home) = std::env::var_os("HOME").filter(|s| !s.is_empty()) {
+            dirs.push(std::path::PathBuf::from(home).join(".config/photocraft/luts"));
+            dirs.push(std::path::PathBuf::from(home).join(".config/photocraft/LUTs"));
+        }
+    }
+    dirs
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+static LUTS_DIR_OVERRIDE: std::sync::LazyLock<std::sync::RwLock<Option<std::path::PathBuf>>> = std::sync::LazyLock::new(|| std::sync::RwLock::new(None));
+
+/// Override or clear the candidate directory used by default discovery (useful for tests
+/// without modifying process environment).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn set_discovered_luts_dir_override(path: Option<std::path::PathBuf>) {
+    if let Ok(mut w) = LUTS_DIR_OVERRIDE.write() {
+        *w = path;
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn default_lut_dirs() -> Vec<std::path::PathBuf> {
+    if let Ok(r) = LUTS_DIR_OVERRIDE.read() {
+        if let Some(ref dir) = *r {
+            return vec![dir.clone()];
+        }
+    }
+    discovered_lut_dirs_with(std::env::var_os("PHOTOCRAFT_LUTS_DIR"), std::env::current_exe().ok())
+}
+
+/// Scan `.cube`, `.3dl` and `.look` files from directories, deduplicating by stem and target.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn scan_lut_dirs(dirs: impl IntoIterator<Item = std::path::PathBuf>) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    let mut seen_names = std::collections::HashSet::new();
+    let mut seen_targets = std::collections::HashSet::new();
+
+    for dir in dirs {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let Some(name) = entry.file_name().into_string().ok() else {
+                continue;
+            };
+            let Some(ext) = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()) else {
+                continue;
+            };
+            if name.starts_with('.') || !matches!(ext.as_str(), "cube" | "3dl" | "look") {
+                continue;
+            }
+            let path = entry.path();
+            let Ok(meta) = std::fs::metadata(&path) else {
+                continue;
+            };
+            if !meta.is_file() || meta.len() > MAX_FOLDER_LUT_BYTES {
+                continue;
+            }
+            let stem = name.rsplit_once('.').map_or(name.as_str(), |(s, _)| s);
+            let stem_lower = stem.to_ascii_lowercase();
+            let canonical = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+            if seen_names.contains(&stem_lower) || seen_targets.contains(&canonical) {
+                continue;
+            }
+            let Some(p) = path.to_str() else {
+                continue;
+            };
+            seen_names.insert(stem_lower);
+            seen_targets.insert(canonical);
+            out.push((name, p.to_string()));
+        }
+    }
+    out.sort_by_key(|(name, _)| name.to_lowercase());
+    out.truncate(MAX_FOLDER_LUTS);
+    out
+}
+
+/// Automatically discover `.cube`, `.3dl` and `.look` files from standard application, user
+/// config, and system preset directories (native only).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn discovered_luts() -> Vec<(String, String)> {
+    scan_lut_dirs(default_lut_dirs())
+}
+
+/// No file system on the web: discovered LUTs list nothing there.
+#[cfg(target_arch = "wasm32")]
+pub fn discovered_luts() -> Vec<(String, String)> {
+    Vec::new()
+}
 
 /// The `.cube`, `.3dl` and `.look` files directly in `dir`, as (file name, path) sorted by name,
 /// for Color Lookup's dropdown (Preferences › File Handling › LUT Folder, #6558). An empty,
