@@ -1,18 +1,28 @@
 //! Crash recovery in the browser (#6615): IndexedDB side of [`crate::recovery_bridge`], and the
 //! `Services` the UI's existing autosave and recovery code calls.
-use js_sys::Uint8Array;
-use wasm_bindgen::JsCast;
+//!
+//! Several tabs share the database, so every page load writes under its own session id and
+//! holds a Web Lock named after it for as long as the page lives. At launch a page lists the
+//! database's keys, and for each session that is not its own tries to take that session's lock
+//! "if available": only a page whose writer is gone gets it, and only one page wins. Entries of
+//! sessions it could not lock belong to a page that may be open; they are never listed, adopted
+//! or deleted (see [`Recovery::claim`]). Without the Web Locks API (insecure contexts), no
+//! earlier entries are offered, which is the safe side.
+use js_sys::{Function, Object, Promise, Reflect, Uint8Array};
+use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 use web_sys::{Blob, IdbDatabase, IdbTransactionMode};
 
 use crate::indexed_presets::{FILES, TIMEOUT_MS, before, js, open, request, write};
-use crate::recovery_bridge::{MAX_ENTRIES, MAX_SNAPSHOT_BYTES, Recovery};
+use crate::recovery_bridge::{MAX_ENTRIES, MAX_SNAPSHOT_BYTES, Recovery, recover_on_launch, session_of};
 use photocraft_ui_egui::Services;
 
 const DATABASE: &str = "photocraft.recovery";
+const PREFS_KEY: &str = "photocraft.preferences";
 
-/// Open the recovery database and read what an earlier page load left. Storage the browser
-/// denies (private windows, blocked site data) returns the error; the app then runs without
-/// recovery and says so when an autosave is attempted.
+/// Open the recovery database, take this page's lock and read what earlier page loads left.
+/// Storage the browser denies (private windows, blocked site data) returns the error; the app
+/// then runs without recovery and says so when an autosave is attempted. A slow or unreadable
+/// record is skipped, not fatal.
 pub async fn load() -> Result<(IdbDatabase, Recovery), String> {
     let deadline = js_sys::Date::now() + TIMEOUT_MS;
     let db = open(DATABASE, deadline).await?;
@@ -27,23 +37,99 @@ pub async fn load() -> Result<(IdbDatabase, Recovery), String> {
     }
 }
 
+fn lock_name(session: &str) -> String {
+    format!("photocraft.recovery.{session}")
+}
+
+/// Take Web Lock `name` and keep it until the page goes away (the callback's promise never
+/// settles). With `if_available`, `Ok(false)` means another page holds it.
+async fn hold(name: &str, if_available: bool) -> Result<bool, String> {
+    let navigator = web_sys::window().ok_or("no window")?.navigator();
+    let locks = Reflect::get(&navigator, &JsValue::from_str("locks")).map_err(js)?;
+    if locks.is_undefined() || locks.is_null() {
+        return Err("Web Locks are unavailable".into());
+    }
+    let request = Reflect::get(&locks, &JsValue::from_str("request")).map_err(js)?.dyn_into::<Function>().map_err(|_| "Web Locks are unavailable")?;
+    let options = Object::new();
+    Reflect::set(&options, &JsValue::from_str("ifAvailable"), &JsValue::from_bool(if_available)).map_err(js)?;
+    let mut failed = None;
+    let granted = Promise::new(&mut |resolve, reject| {
+        let callback = Closure::once_into_js(move |lock: JsValue| -> Promise {
+            let got = !lock.is_null();
+            let _ = resolve.call1(&JsValue::NULL, &JsValue::from_bool(got));
+            if got { Promise::new(&mut |_, _| {}) } else { Promise::resolve(&JsValue::UNDEFINED) }
+        });
+        if let Err(e) = request.call3(&locks, &JsValue::from_str(name), &options, &callback) {
+            failed = Some(e);
+            let _ = reject.call1(&JsValue::NULL, &JsValue::from_str("lock request failed"));
+        }
+    });
+    if let Some(e) = failed {
+        return Err(js(e));
+    }
+    Ok(before(&granted, js_sys::Date::now() + TIMEOUT_MS).await?.as_bool().unwrap_or(false))
+}
+
+/// One record, read in its own transaction (and under its own deadline) so one slow record
+/// cannot take the others, or the database, down with it.
+async fn get_blob(db: &IdbDatabase, name: &str) -> Result<Option<Blob>, String> {
+    let tx = db.transaction_with_str_and_mode(FILES, IdbTransactionMode::Readonly).map_err(js)?;
+    let req = tx.object_store(FILES).map_err(js)?.get(&JsValue::from_str(name)).map_err(js)?;
+    let pending = request(&req);
+    Ok(before(&pending.promise, js_sys::Date::now() + TIMEOUT_MS).await?.dyn_into::<Blob>().ok())
+}
+
 async fn read(db: &IdbDatabase, recovery: &Recovery, deadline: f64) -> Result<(), String> {
     let tx = db.transaction_with_str_and_mode(FILES, IdbTransactionMode::Readonly).map_err(js)?;
-    let store = tx.object_store(FILES).map_err(js)?;
-    // Both requests are issued before awaiting either, so the transaction stays active.
-    let keys = request(&store.get_all_keys().map_err(js)?);
-    let values = request(&store.get_all().map_err(js)?);
-    let keys = js_sys::Array::from(&before(&keys.promise, deadline).await?);
-    let values = js_sys::Array::from(&before(&values.promise, deadline).await?);
-    for (key, value) in keys.iter().zip(values.iter()).take(MAX_ENTRIES * 2) {
-        let Some(name) = key.as_string().filter(|n| n.len() <= 110) else { continue };
-        let Ok(blob) = value.dyn_into::<Blob>() else { continue };
-        // Inspect the size before copying a record into wasm memory.
-        if blob.size() > MAX_SNAPSHOT_BYTES as f64 + 4096.0 {
+    let keys = request(&tx.object_store(FILES).map_err(js)?.get_all_keys().map_err(js)?);
+    let names: Vec<String> =
+        js_sys::Array::from(&before(&keys.promise, deadline).await?).iter().filter_map(|k| k.as_string().filter(|n| n.len() <= 110)).collect();
+    // This page's lock comes before any write, so no other page can ever see its entries as
+    // abandoned. Without locks nothing is claimed.
+    let own = recovery.session();
+    let locked = match hold(&lock_name(&own), false).await {
+        Ok(got) => got,
+        Err(e) => {
+            log::warn!("Crash recovery cannot tell live tabs from closed ones, so earlier entries are not offered: {e}");
+            false
+        }
+    };
+    let stored = web_sys::window().and_then(|w| w.local_storage().ok().flatten()).and_then(|s| s.get_item(PREFS_KEY).ok().flatten());
+    let mut claimed: Vec<&str> = Vec::new();
+    if locked && recover_on_launch(stored.as_deref()) {
+        for session in names.iter().filter_map(|n| session_of(n)).filter(|s| *s != own) {
+            if claimed.len() < MAX_ENTRIES && !claimed.contains(&session) && hold(&lock_name(session), true).await.unwrap_or(false) {
+                recovery.claim(session);
+                claimed.push(session);
+            }
+        }
+    }
+    for name in names.iter().take(MAX_ENTRIES * 2) {
+        let mine = session_of(name).is_some_and(|s| claimed.contains(&s));
+        let bundle = name.ends_with(".pcraft");
+        // Only a claimed page's sidecars and bundles are read; other bundles are only measured
+        // (their size still counts against the total cap, their bytes are never copied).
+        if !(bundle || (mine && name.ends_with(".json"))) {
             continue;
         }
-        let buffer = before(&blob.array_buffer(), deadline).await?;
-        recovery.load(&name, Uint8Array::new(&buffer).to_vec());
+        let blob = match get_blob(db, name).await {
+            Ok(Some(blob)) => blob,
+            Ok(None) => continue,
+            Err(e) => {
+                log::warn!("Skipping recovery record {name}: {e}");
+                continue;
+            }
+        };
+        if blob.size() > MAX_SNAPSHOT_BYTES as f64 + 4096.0 {
+            log::warn!("Skipping recovery record {name}: it is larger than the autosave limit");
+        } else if !mine {
+            recovery.note_size(name, blob.size() as u64);
+        } else {
+            match before(&blob.array_buffer(), js_sys::Date::now() + TIMEOUT_MS).await {
+                Ok(buffer) => recovery.load(name, Uint8Array::new(&buffer).to_vec()),
+                Err(e) => log::warn!("Skipping recovery record {name}: {e}"),
+            }
+        }
     }
     Ok(())
 }

@@ -9,7 +9,7 @@
 //! transaction (`indexed_presets::write`, shared with the presets). Nothing here touches the
 //! browser, so it is unit tested natively.
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -39,6 +39,21 @@ fn valid_key(key: &str) -> bool {
     !key.is_empty() && key.len() <= 96 && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
+/// The page-load session that wrote an entry (`web-<session>-<document id>`). Sessions are
+/// alphanumeric, so the last `-` always separates the id.
+pub fn session_of(key: &str) -> Option<&str> {
+    key.strip_prefix("web-")?.rsplit_once('-').map(|(session, _)| session).filter(|s| !s.is_empty())
+}
+
+/// Whether the stored preferences (the UI's JSON text) leave "Recover on launch" on. Unreadable
+/// or missing preferences keep the default, which is on.
+pub fn recover_on_launch(prefs: Option<&str>) -> bool {
+    prefs
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
+        .and_then(|v| v.pointer("/fileHandling/recoverOnLaunch").and_then(serde_json::Value::as_bool))
+        .unwrap_or(true)
+}
+
 struct State {
     /// Unique to this page load: document ids restart every load, and a new document must not
     /// overwrite an entry an earlier load left.
@@ -50,8 +65,15 @@ struct State {
     writers: HashMap<u64, PcraftWriter>,
     /// Stored bytes per entry, for the total cap.
     sizes: HashMap<String, u64>,
-    /// Records read at launch, by name.
-    loaded: BTreeMap<String, Arc<[u8]>>,
+    /// The size an entry had before each document's write in flight, so a failed write does not
+    /// leave its attempted size counted: document id -> (revision, key, previous size).
+    pending: HashMap<u64, (u64, String, Option<u64>)>,
+    /// Sessions of earlier page loads whose entries this page owns: it holds their lock (the
+    /// web layer takes it, so only one page wins). Entries of any other session belong to a
+    /// page that may still be open and are neither listed nor deleted.
+    claimed: HashSet<String>,
+    /// Records of claimed sessions read at launch, by name.
+    loaded: BTreeMap<String, Vec<u8>>,
     done: Vec<(u64, u64, Result<(), String>)>,
 }
 
@@ -73,6 +95,8 @@ impl Recovery {
             keys: HashMap::new(),
             writers: HashMap::new(),
             sizes: HashMap::new(),
+            pending: HashMap::new(),
+            claimed: HashSet::new(),
             loaded: BTreeMap::new(),
             done: Vec::new(),
         })))
@@ -83,16 +107,36 @@ impl Recovery {
         Ok(f(&mut s))
     }
 
-    /// A record read from storage at launch.
+    pub fn session(&self) -> String {
+        self.with(|s| s.session.clone()).unwrap_or_default()
+    }
+
+    /// This page now owns `session`'s entries (it holds that session's lock).
+    pub fn claim(&self, session: &str) {
+        let _ = self.with(|s| s.claimed.insert(session.to_string()));
+    }
+
+    fn owns(s: &State, key: &str) -> bool {
+        session_of(key).is_some_and(|k| k == s.session || s.claimed.contains(k))
+    }
+
+    /// A record of a claimed session read from storage at launch.
     pub fn load(&self, name: &str, bytes: Vec<u8>) {
         let _ = self.with(|s| {
             if s.loaded.len() < MAX_ENTRIES * 2 {
-                s.sizes
-                    .entry(name.rsplit_once('.').map_or(name, |(k, _)| k).to_string())
-                    .and_modify(|n| *n += bytes.len() as u64)
-                    .or_insert(bytes.len() as u64);
-                s.loaded.insert(name.to_string(), bytes.into());
+                let key = name.rsplit_once('.').map_or(name, |(k, _)| k).to_string();
+                *s.sizes.entry(key).or_insert(0) += bytes.len() as u64;
+                s.loaded.insert(name.to_string(), bytes);
             }
+        });
+    }
+
+    /// A record left in storage whose bytes were not read (another page's, or recovery is off):
+    /// it still counts against the total cap.
+    pub fn note_size(&self, name: &str, len: u64) {
+        let _ = self.with(|s| {
+            let key = name.rsplit_once('.').map_or(name, |(k, _)| k).to_string();
+            *s.sizes.entry(key).or_insert(0) += len;
         });
     }
 
@@ -117,7 +161,8 @@ impl Recovery {
             }
             let info = RecoveryInfo { key: key.clone(), document_name: doc.name.clone(), original_path: path.map(str::to_string), saved_at, revision };
             let info = serde_json::to_vec(&info).map_err(|e| e.to_string())?;
-            s.sizes.insert(key.clone(), bytes.len() as u64);
+            let before = s.sizes.insert(key.clone(), bytes.len() as u64);
+            s.pending.insert(id, (revision, key.clone(), before));
             let mut batch = Batch::new();
             batch.insert(bundle_name(&key), Some(bytes.into()));
             batch.insert(info_name(&key), Some(info.into()));
@@ -128,7 +173,19 @@ impl Recovery {
     /// A write for `doc_id`'s `revision` finished (or failed): reported through
     /// `Services::autosave_results`.
     pub fn finish(&self, doc_id: u64, revision: u64, result: Result<(), String>) {
-        let _ = self.with(|s| s.done.push((doc_id, revision, result)));
+        let _ = self.with(|s| {
+            if s.pending.get(&doc_id).is_some_and(|(r, ..)| *r == revision)
+                && let Some((_, key, before)) = s.pending.remove(&doc_id)
+                && result.is_err()
+            {
+                // The failed transaction left the old entry in storage.
+                match before {
+                    Some(n) => s.sizes.insert(key, n),
+                    None => s.sizes.remove(&key),
+                };
+            }
+            s.done.push((doc_id, revision, result));
+        });
     }
 
     pub fn take_completed(&self) -> Vec<(u64, u64, Result<(), String>)> {
@@ -138,7 +195,7 @@ impl Recovery {
     /// A recovered document takes over its entry.
     pub fn adopt(&self, doc_id: u64, key: &str) {
         if valid_key(key) {
-            let _ = self.with(|s| s.keys.insert(doc_id, key.to_string()));
+            let _ = self.with(|s| if Self::owns(s, key) { s.keys.insert(doc_id, key.to_string()) } else { None });
         }
     }
 
@@ -146,7 +203,12 @@ impl Recovery {
     pub fn discard(&self, doc_id: u64) -> Option<Batch> {
         self.with(|s| {
             s.writers.remove(&doc_id);
+            s.pending.remove(&doc_id);
             let key = s.keys.remove(&doc_id)?;
+            // Never delete what another page owns.
+            if !Self::owns(s, &key) {
+                return None;
+            }
             s.sizes.remove(&key);
             s.loaded.remove(&bundle_name(&key));
             s.loaded.remove(&info_name(&key));
@@ -156,18 +218,27 @@ impl Recovery {
         .flatten()
     }
 
-    /// The entries read at launch, newest first. A `.pcraft` without a readable sidecar is not
-    /// offered (and stays in storage).
+    /// The claimed entries read at launch, newest first. A `.pcraft` without a readable sidecar
+    /// is not offered (and stays in storage). The bytes move into each entry's loader, so they
+    /// are freed as soon as that document is decoded.
     pub fn recoverable(&self) -> Vec<Recoverable> {
-        let mut found: Vec<(RecoveryInfo, Arc<[u8]>)> = self
+        let mut found: Vec<(RecoveryInfo, Vec<u8>)> = self
             .with(|s| {
-                s.loaded
+                let infos: Vec<RecoveryInfo> = s
+                    .loaded
                     .iter()
                     .filter(|(_, b)| b.len() <= SIDECAR_MAX)
                     .filter_map(|(name, bytes)| {
                         let key = name.strip_suffix(".json")?;
                         let info = serde_json::from_slice::<RecoveryInfo>(bytes).ok().filter(|i| valid_key(key) && i.key == key)?;
-                        Some((info, s.loaded.get(&bundle_name(key))?.clone()))
+                        (Self::owns(s, key) && s.loaded.contains_key(&bundle_name(key))).then_some(info)
+                    })
+                    .collect();
+                infos
+                    .into_iter()
+                    .filter_map(|info| {
+                        let bytes = s.loaded.remove(&bundle_name(&info.key))?;
+                        Some((info, bytes))
                     })
                     .collect()
             })
@@ -195,11 +266,13 @@ mod tests {
         Arc::new(Document::with_background(name, Size::new(64, 48), ColorMode::Rgb, SampleType::U8, Color::WHITE))
     }
 
-    /// Stores a batch like the IndexedDB write does, and hands it to a fresh page load.
+    /// Stores a batch like the IndexedDB write does, and hands it to a fresh page load that
+    /// owns the writing session (as when its lock was free).
     fn reload(batch: &Batch) -> Recovery {
         let next = Recovery::new("next".into());
         for (name, bytes) in batch {
             if let Some(b) = bytes {
+                next.claim(session_of(name.rsplit_once('.').map_or(name, |(k, _)| k)).unwrap_or_default());
                 next.load(name, b.to_vec());
             }
         }
@@ -233,6 +306,7 @@ mod tests {
         let old = Recovery::new("old".into());
         let batch = old.snapshot(&doc("Lost"), 1, None, 5).unwrap();
         let now = reload(&batch);
+        assert_eq!(now.session(), "next");
         let key = now.recoverable().remove(0).key;
         let open = doc("Lost");
         now.adopt(open.id.0, &key);
@@ -265,6 +339,86 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_write_no_longer_counts_against_the_total_cap() {
+        let probe = Recovery::new("s".into()).snapshot(&doc("A"), 1, None, 1).unwrap();
+        let size = probe.values().flatten().map(|b| b.len() as u64).max().unwrap_or(1);
+        let r = Recovery::with_limits("s".into(), MAX_SNAPSHOT_BYTES, size + size / 2);
+        let (a, b) = (doc("A"), doc("B"));
+        r.snapshot(&a, 1, None, 1).unwrap();
+        assert!(r.snapshot(&b, 1, None, 2).is_err(), "A's attempt fills the cap");
+        // A different revision finishing does not touch A's pending write.
+        r.finish(a.id.0, 0, Err("old".into()));
+        assert!(r.snapshot(&b, 1, None, 2).is_err());
+        r.finish(a.id.0, 1, Err("QuotaExceededError".into()));
+        r.snapshot(&b, 1, None, 3).unwrap();
+    }
+
+    #[test]
+    fn a_failed_replacement_restores_the_previous_size() {
+        let r = Recovery::with_limits("s".into(), MAX_SNAPSHOT_BYTES, MAX_TOTAL_BYTES);
+        let a = doc("A");
+        r.snapshot(&a, 1, None, 1).unwrap();
+        r.finish(a.id.0, 1, Ok(()));
+        let stored = r.with(|s| s.sizes.values().sum::<u64>()).unwrap();
+        r.snapshot(&a, 2, None, 2).unwrap();
+        r.finish(a.id.0, 2, Err("fail".into()));
+        assert_eq!(r.with(|s| s.sizes.values().sum::<u64>()).unwrap(), stored);
+        r.snapshot(&a, 3, None, 3).unwrap();
+        r.discard(a.id.0);
+        r.finish(a.id.0, 3, Err("late".into()));
+        assert_eq!(r.with(|s| s.sizes.len()).unwrap(), 0, "a discarded entry stays uncounted");
+    }
+
+    #[test]
+    fn entries_of_another_live_page_are_not_offered_or_deleted() {
+        let theirs = Recovery::new("tabA".into());
+        let d = doc("Live");
+        let batch = theirs.snapshot(&d, 1, None, 5).unwrap();
+        let key = format!("web-tabA-{}", d.id.0);
+        assert_eq!(session_of(&key), Some("tabA"));
+        // This page read the records but could not take tabA's lock: nothing is claimed.
+        let me = Recovery::new("tabB".into());
+        for (name, bytes) in &batch {
+            me.load(name, bytes.as_ref().map(|b| b.to_vec()).unwrap_or_default());
+        }
+        assert!(me.recoverable().is_empty(), "a live page's entries are not offered");
+        // Adopting a foreign key is ignored, so closing the document deletes nothing.
+        let open = doc("Adopted");
+        me.adopt(open.id.0, &key);
+        assert!(me.discard(open.id.0).is_none());
+        // Once the other page is gone and its lock is taken, the entry is offered and adoptable.
+        me.claim("tabA");
+        me.load(&info_name(&key), batch[&info_name(&key)].as_ref().map(|b| b.to_vec()).unwrap_or_default());
+        me.load(&bundle_name(&key), batch[&bundle_name(&key)].as_ref().map(|b| b.to_vec()).unwrap_or_default());
+        assert_eq!(me.recoverable().len(), 1);
+        me.adopt(open.id.0, &key);
+        assert!(me.discard(open.id.0).is_some());
+    }
+
+    #[test]
+    fn unread_entries_still_count_against_the_total_cap() {
+        let r = Recovery::with_limits("s".into(), MAX_SNAPSHOT_BYTES, 1000);
+        r.note_size("web-other-1.pcraft", 990);
+        assert!(r.snapshot(&doc("A"), 1, None, 1).unwrap_err().contains("limit"));
+    }
+
+    #[test]
+    fn recovered_bytes_are_handed_over_once() {
+        let batch = Recovery::new("old".into()).snapshot(&doc("Lost"), 1, None, 5).unwrap();
+        let now = reload(&batch);
+        assert_eq!(now.recoverable().len(), 1);
+        assert!(now.recoverable().is_empty(), "the loader owns the only copy of the bytes");
+    }
+
+    #[test]
+    fn recover_on_launch_reads_the_stored_preference() {
+        assert!(recover_on_launch(None));
+        assert!(recover_on_launch(Some("not json")));
+        assert!(recover_on_launch(Some(r#"{"fileHandling":{"autosave":true}}"#)));
+        assert!(!recover_on_launch(Some(r#"{"fileHandling":{"recoverOnLaunch":false}}"#)));
+    }
+
+    #[test]
     fn write_outcomes_are_reported_once() {
         let r = Recovery::new("s".into());
         r.finish(3, 9, Ok(()));
@@ -276,6 +430,8 @@ mod tests {
     #[test]
     fn damaged_or_foreign_records_are_not_offered() {
         let r = Recovery::new("s".into());
+        r.claim("x");
+        r.claim("y");
         r.load("web-x-1.json", b"not json".to_vec());
         r.load("web-x-1.pcraft", vec![1, 2, 3]);
         r.load("../evil.json", br#"{"key":"../evil","document_name":"x","original_path":null,"saved_at":1,"revision":1}"#.to_vec());
