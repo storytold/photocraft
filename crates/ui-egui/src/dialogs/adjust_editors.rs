@@ -124,6 +124,12 @@ pub struct EditorCx {
 }
 
 /// The Levels/Curves channel space the values address.
+/// The tone space a Curves editor works in: a grayscale document's is always its one Gray curve
+/// (`points`), whatever channel keys of another mode its settings still hold.
+pub fn curves_space(v: &Value, gray: bool) -> ToneSpace {
+    if gray { ToneSpace::Rgb } else { space_of(v) }
+}
+
 pub fn space_of(v: &Value) -> ToneSpace {
     if v.get("cyan").is_some() || v.get("black").is_some() {
         ToneSpace::Cmyk

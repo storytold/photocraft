@@ -465,6 +465,13 @@ fn grayscale_curves_shows_presets_with_stale_channel_keys() {
         let points = fields.get("points").unwrap_or_else(|| panic!("with `{key}`: the edit keeps `points`"));
         assert!(points[1][0].as_f64().unwrap() > 150.0, "with `{key}`: the drag edited `points`: {points}");
         assert_eq!(fields[key], json!([[0.0, 0.0], [255.0, 255.0]]), "with `{key}`: the stale key is untouched");
+        // CodeRabbit on #9234: a click on the image adds its point to the Gray curve too.
+        let n = fields["points"].as_array().map_or(0, Vec::len);
+        let ctx = h.ctx.clone();
+        assert!(add_point_at(h.state_mut(), &ctx, 4.0, 4.0, false));
+        let fields = &h.state().ui.dialogs[0].fields;
+        assert_eq!(fields["points"].as_array().map_or(0, Vec::len), n + 1, "with `{key}`: the image click adds to `points`");
+        assert!(fields.get("lightness").is_none_or(|l| l == &json!([[0.0, 0.0], [255.0, 255.0]])), "with `{key}`: not to `lightness`");
         h.state_mut().ui.dialog_mut(id).unwrap().fields.remove(key);
     }
     crate::dialogs::cancel(h.state_mut(), id).unwrap();
