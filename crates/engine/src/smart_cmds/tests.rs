@@ -512,8 +512,7 @@ fn undo_after_save_contents_still_commits_on_close() {
     paint(&mut s);
     let _id = convert(&mut s);
     let before = flat(&s);
-    let r = s.execute("layer.smartObjects.editContents", json!({})).unwrap();
-    let child = r["document"].as_u64().unwrap() as usize;
+    s.execute("layer.smartObjects.editContents", json!({})).unwrap();
     s.edit("paint", |doc, _| {
         let l = &mut doc.layers[0];
         let b = Rect::new(0, 0, 46, 33);
