@@ -31,20 +31,29 @@ pub struct SkyParams {
 }
 
 impl Default for SkyParams {
+    /// Default parameters (threshold 50, softness 50).
     fn default() -> Self {
         Self { threshold: 50.0, softness: 50.0 }
     }
 }
 
+/// Hermite interpolation between `e0` and `e1` with cubic smoothing.
 #[inline]
 fn smooth(e0: f32, e1: f32, x: f32) -> f32 {
     let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
 }
 
+/// Rec. 601 perceptual luminance of an RGB triple.
 #[inline]
 fn luma(p: [f32; 3]) -> f32 {
     0.299 * p[0] + 0.587 * p[1] + 0.114 * p[2]
+}
+
+/// Euclidean distance between two RGB colours.
+#[inline]
+fn rgb_dist(a: [f32; 3], b: [f32; 3]) -> f32 {
+    ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt()
 }
 
 /// Colour prior: how sky-like a colour is on its own (0–1).
@@ -98,11 +107,12 @@ pub fn sky_mask_low(img: &RgbImage, threshold: f32) -> Option<Vec<bool>> {
             stack.push(i);
         }
     }
+    let max_step = 0.12f32;
     if stack.len() * 20 < top * w {
         // An overhang can hide the entire top band. Discard the sparse top seeds before
         // looking for more certain, connected sky patches below it.
         mask.fill(false);
-        stack = obstructed_sky_seeds(&like, w, h, t + 0.1);
+        stack = obstructed_sky_seeds(img, &like, t + 0.1, max_step);
         if stack.is_empty() {
             return None;
         }
@@ -113,7 +123,6 @@ pub fn sky_mask_low(img: &RgbImage, threshold: f32) -> Option<Vec<bool>> {
         }
     }
     // Region growing with a gradual-change constraint.
-    let max_step = 0.12f32;
     while let Some(i) = stack.pop() {
         let (x, y) = (i % w, i / w);
         let n = [(x > 0).then(|| i - 1), (x + 1 < w).then(|| i + 1), (y > 0).then(|| i - w), (y + 1 < h).then(|| i + w)];
@@ -122,8 +131,7 @@ pub fn sky_mask_low(img: &RgbImage, threshold: f32) -> Option<Vec<bool>> {
                 continue;
             }
             let (a, b) = (img.px[i], img.px[j]);
-            let d = ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt();
-            if d < max_step {
+            if rgb_dist(a, b) < max_step {
                 mask[j] = true;
                 stack.push(j);
             }
@@ -153,9 +161,14 @@ pub fn sky_mask_low(img: &RgbImage, threshold: f32) -> Option<Vec<bool>> {
 /// Without border evidence, require a connected patch of at least 0.5% of the image (and
 /// 16 pixels). Searching only the upper half avoids using water or blue ground as seeds;
 /// counting each component separately keeps scattered bright specks from passing the gate.
-fn obstructed_sky_seeds(like: &[f32], w: usize, h: usize, threshold: f32) -> Vec<usize> {
+/// Adjacent pixels must satisfy the same gradual colour constraint (`max_step`) as region growing.
+fn obstructed_sky_seeds(img: &RgbImage, like: &[f32], threshold: f32, max_step: f32) -> Vec<usize> {
+    let (w, h) = (img.w, img.h);
     let Some(area) = w.checked_mul(h) else { return Vec::new() };
     let Some(upper) = w.checked_mul(h.div_ceil(2)) else { return Vec::new() };
+    if img.px.len() < upper {
+        return Vec::new();
+    }
     let Some(like) = like.get(..upper) else { return Vec::new() };
     let minimum = area.div_ceil(200).max(16);
     let mut seen = vec![false; upper];
@@ -180,8 +193,11 @@ fn obstructed_sky_seeds(like: &[f32], w: usize, h: usize, threshold: f32) -> Vec
                     && let Some(s) = seen.get_mut(j)
                     && !*s
                 {
-                    *s = true;
-                    component.push(j);
+                    let (a, b) = (img.px[i], img.px[j]);
+                    if rgb_dist(a, b) < max_step {
+                        *s = true;
+                        component.push(j);
+                    }
                 }
             }
         }
@@ -388,9 +404,10 @@ mod tests {
     #[test]
     fn fallback_requires_individually_large_four_connected_components() {
         let (w, h) = (80, 80);
+        let img = RgbImage { w, h, px: vec![[0.35, 0.6, 0.95]; w * h] };
         // Enough total likely pixels to pass the area gate, but no large component.
         let mut like: Vec<f32> = (0..w * h).map(|i| if i % w % 4 == 0 && i / w % 4 == 0 { 1.0 } else { 0.0 }).collect();
-        assert!(obstructed_sky_seeds(&like, w, h, 0.5).is_empty());
+        assert!(obstructed_sky_seeds(&img, &like, 0.5, 0.12).is_empty());
         // Adjacent row ends must not join across the horizontal image boundary.
         like.fill(0.0);
         for y in 10..20 {
@@ -399,7 +416,32 @@ mod tests {
                 like[(y - 1) * w + w - 1 - x] = 1.0;
             }
         }
-        assert!(obstructed_sky_seeds(&like, w, h, 0.5).is_empty());
+        assert!(obstructed_sky_seeds(&img, &like, 0.5, 0.12).is_empty());
+    }
+
+    #[test]
+    fn obstructed_fallback_excludes_attached_differently_coloured_patch() {
+        let (w, h) = (160, 100);
+        // Minimum qualifying component size: area.div_ceil(200).max(16) = 16000 / 200 = 80.
+        // Sky component is 40x40 = 1600 pixels in rows 15..55, cols 20..60 (qualifies).
+        // Attached differently coloured patch is 2x5 = 10 pixels in rows 20..25, cols 60..62 (< 80 min).
+        // Both patches have high likelihood, but their colour distance exceeds max_step (0.12).
+        let img = RgbImage::from_fn(w, h, |x, y| {
+            if (15..55).contains(&y) && (20..60).contains(&x) {
+                [0.35, 0.6, 0.95]
+            } else if (20..25).contains(&y) && (60..62).contains(&x) {
+                [0.85, 0.86, 0.88]
+            } else {
+                [0.12, 0.2, 0.1]
+            }
+        });
+        let mask = sky_mask_low(&img, 50.0).expect("sky mask");
+        assert!(mask[30 * w + 40], "qualifying blue sky must be in mask");
+        for y in 20..25 {
+            for x in 60..62 {
+                assert!(!mask[y * w + x], "attached patch at ({x}, {y}) must be excluded from mask");
+            }
+        }
     }
 
     /// #4634: a near-white studio backdrop around a product is not an overcast sky, but blue sky
