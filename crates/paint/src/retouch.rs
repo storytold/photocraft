@@ -18,7 +18,7 @@ use photocraft_color::{BlendMode, PixelFormat};
 use photocraft_geom::Rect;
 use photocraft_raster::{Surface, from_rgba_into, to_rgba};
 
-use crate::{Dab, Stroke, dab_coverage, dabs};
+use crate::{Dab, Stroke, dab_coverage};
 
 /// A rectangle of native-channel pixels (`rect.width() × rect.height() × ch` floats, row-major).
 #[derive(Clone, Debug, PartialEq)]
@@ -250,7 +250,12 @@ pub fn apply_dab_stroke(
     halo: i32,
     mut effect: impl FnMut(&mut Region, &Footprint),
 ) -> Rect {
-    let ds = dabs(stroke);
+    // Match LiveDab's immediately committed path: replacing the newest curve segment would
+    // also require a snapshot of the tool's paint/toning state, not just its working pixels.
+    let mut generator = crate::dynamics::DabGenerator::new_polyline(&stroke.brush, 1.0);
+    let (mut ds, mut dual) = (Vec::new(), Vec::new());
+    generator.push(&stroke.points, &mut ds, &mut dual);
+    generator.finish(&mut ds, &mut dual);
     if ds.is_empty() {
         return Rect::EMPTY;
     }

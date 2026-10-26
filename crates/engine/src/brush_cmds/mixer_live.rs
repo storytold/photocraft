@@ -202,7 +202,8 @@ impl LiveMixer {
         let work = Surface::new(PixelFormat { sample: SampleType::F32, ..pre.format() });
         let core = Core {
             doc: Arc::new(doc),
-            generator: DabGenerator::new(&brush, num(p, "zoom").unwrap_or(1.0)),
+            // Match the reference mixer kernel's sequential path, including its paint load.
+            generator: DabGenerator::new_polyline(&brush, num(p, "zoom").unwrap_or(1.0)),
             ctx: BrushContext::new(&brush),
             pre,
             work,

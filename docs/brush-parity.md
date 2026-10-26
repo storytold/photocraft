@@ -1,6 +1,6 @@
 # Brush and painting parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-25 · **Change:** minor (Art History Brush row added as partial, 8 of 10 styles, TOOL-213-20, #1610; hard-round built-in presets use 5% spacing to remove stacked-tip outlines and reduce pressure-opacity bands, #8842; Mode for Clone Stamp, Pattern Stamp, History Brush, Healing and Paint Bucket; named, stateful Brush Settings locks and visible keyboard focus; independent Brush Pose tilt-axis overrides; Transfer Wetness/Mix tool applicability; dragged preset tip preview; Hue Jitter amount track; Brush Settings minimum fields follow their Control; checkbox-only rows and non-destructive Smoothing switch; shaped-tip cursor follows the view; Color Replacement is a live toolbar tool; no brush-feel estimate changed; 2026-10-11: Pattern Stamp and Background Eraser draw live, TOOL-213-7) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-25 · **Last updated:** 2026-10-25 · **Change:** minor (sparse brush curves reconstructed before dab spacing; macOS move coalescing disabled during input monitoring; Art History Brush row added as partial, 8 of 10 styles, TOOL-213-20, #1610; hard-round built-in presets use 5% spacing to remove stacked-tip outlines and reduce pressure-opacity bands, #8842; Mode for Clone Stamp, Pattern Stamp, History Brush, Healing and Paint Bucket; named, stateful Brush Settings locks and visible keyboard focus; independent Brush Pose tilt-axis overrides; Transfer Wetness/Mix tool applicability; dragged preset tip preview; Hue Jitter amount track; Brush Settings minimum fields follow their Control; checkbox-only rows and non-destructive Smoothing switch; shaped-tip cursor follows the view; Color Replacement is a live toolbar tool; no brush-feel estimate changed; 2026-10-11: Pattern Stamp and Background Eraser draw live, TOOL-213-7) · **Target:** Adobe Photoshop 2026
 
 Painting is where Photoshop users notice differences first, so it gets its own checklist: the
 brush engine (`crates/paint/src/brush.rs`), the Brush Settings UI
@@ -42,7 +42,7 @@ tablets against Photoshop side by side.
 
 | Behaviour | Status | Evidence |
 |---|---|---|
-| Pressure drives size/opacity/flow per sample (no shared pressure within a frame) | done | #2112 |
+| Pressure drives size/opacity/flow per sample (no shared pressure within a frame) | done | #2112; 2026-10-25: the macOS input monitor disables AppKit mouse coalescing and restores the previous setting on drop (`tablet/tests/monitor_macos.rs`). Position and native timestamp capture remain separate follow-up work. |
 | Global pressure curve in Preferences | done | #2195 |
 | Per-control pressure curves | missing | TOOL-213-11 |
 | Quick taps keep their pressure | partial | #1967 fixed one case; tap paints a full blob (#1798), tap sensitivity (#1933) |
@@ -56,7 +56,7 @@ tablets against Photoshop side by side.
 |---|---|---|
 | No seams, hard edges stay hard, zero-scatter defaults, ABR tips never black | done | TOOL-213-13 |
 | Smooth line weight along a pressure ramp | partial | stair-steps (#1776); 2026-10-23: the five hard-round built-in presets use 5% spacing (#8842), with rendered 150 px outline and pressure-opacity continuity regressions at 8/16/32-bit and 0/49% smoothing. Other brush-feel gaps remain open. |
-| Interpolation and smoothing match Photoshop | partial | #2138, #2057 |
+| Interpolation and smoothing match Photoshop | partial | #2138, #2057; 2026-10-25: Brush/Eraser and coverage-based retouch strokes reconstruct bounded cubic segments with adaptive subdivision before dab spacing, including at 0% smoothing. One-sample provisional tails preserve live/commit equality; corners at 90 degrees or sharper and the aliased Pencil retain their geometry. Sparse-arc, sensor, frame-batch, dual-brush and 8/16/32-bit preview regressions covered in `paint/src/interpolation_tests.rs`; real canvas regression in `stroke_timing_tests.rs`. Dense tail coverage preserves older tiles between the newest segment's tiles. Stateful sequential effects (Mixer Brush, Smudge, Dodge/Burn, etc.) retain their existing immediate polyline paths until replay and effect-state snapshots support replaceable segments. Photoshop/tablet feel still needs comparison. |
 | Soft-edge falloff matches Photoshop's curve | partial | #2149, #1619 |
 | Brush preview and cursor crisp, not pixelated | partial | #1433 |
 | Cursor outline equals the painted footprint at every zoom | partial | #1761, #2364; shaped tips trace their outline (#3467), turned and flipped with a rotated or flipped view |
@@ -119,6 +119,7 @@ tablets against Photoshop side by side.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-25 | minor | Sparse freehand curves gain cubic reconstruction before dab spacing, bounded subdivision and provisional tails; sensor rotation follows the shorter arc. macOS preserves intermediate moves while monitoring input. Added geometry, batching, pixel-depth and canvas regressions; full Photoshop feel remains partial. |
 | 2026-10-25 | minor | Art History Brush row added as partial (8 of 10 styles, TOOL-213-20, #1610). No brush-feel estimate changed. |
 | 2026-10-23 | minor | Hard-round built-in presets use 5% spacing (#8842); rendered large-tip outline and pressure-opacity continuity tests cover 8/16/32-bit and 0/49% smoothing. Other presets and user settings retain their spacing; percentages and estimates unchanged. |
 | 2026-10-14 | minor | Brush Pose tilt overrides are independent end to end (#3825 partial); ABR flags, legacy JSON/commands, presets and three pixel depths covered; no readiness percentage or estimate changed |

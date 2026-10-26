@@ -104,6 +104,32 @@ fn stroke_points_carry_increasing_times_from_zero() {
     assert!(times.last().copied().unwrap_or(0.0) > 0.0, "time advances over the frames: {times:?}");
 }
 
+#[test]
+fn sparse_fast_curve_through_the_canvas_does_not_paint_straight_chords() {
+    let mut h = harness();
+    let app = h.state_mut();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("tools.setBrush", json!({"brush": {"size": 1.5, "hardness": 1.0, "pressureSize": false, "spacing": 0.1, "smoothing": {"amount": 0.0}}})).unwrap();
+    let points: Vec<_> = (0..=6)
+        .map(|i| {
+            let a = f64::from(i) * std::f64::consts::PI / 6.0;
+            (100.0 + 70.0 * a.cos(), 20.0 + 70.0 * a.sin())
+        })
+        .collect();
+    move_to(&mut h, 170.0, 20.0);
+    button(&mut h, 170.0, 20.0, true);
+    for &(x, y) in &points[1..] {
+        move_to(&mut h, x as f32, y as f32);
+    }
+    button(&mut h, 30.0, 20.0, false);
+    h.run_steps(2);
+    let st = h.state().session.active().unwrap();
+    let surface = st.doc.layer(st.active_layer.unwrap()).and_then(|l| l.surface()).unwrap();
+    // Halfway between the first two samples, the circular arc is 2.39 pixels outside the
+    // straight chord. A 1.5 px brush reaches this arc pixel only after curve reconstruction.
+    assert!(surface.rgba(167, 38)[3] > 0.5, "the brush follows the arc between sparse pointer moves");
+}
+
 /// Points of the drag in progress after holding the pointer still for a while.
 fn held_points(h: &mut Harness<'static, PhotocraftApp>) -> (usize, usize) {
     move_to(h, 20.0, 50.0);
@@ -455,7 +481,9 @@ fn releasing_a_clone_stamp_stroke_commits_what_a_replay_paints() {
     let a = photocraft_compose::render(&st.doc, st.doc.bounds());
     let b = photocraft_compose::render(&fresh.active().unwrap().doc, st.doc.bounds());
     assert_eq!(a.px.len(), b.px.len());
-    assert!(a.px.iter().zip(&b.px).all(|(x, y)| x == y), "live commit and replay differ");
+    let first_difference = a.px.iter().zip(&b.px).enumerate().find(|(_, (x, y))| x != y);
+    let worst = a.px.iter().flatten().zip(b.px.iter().flatten()).map(|(x, y)| (x - y).abs()).fold(0.0f32, f32::max);
+    assert!(first_difference.is_none(), "live commit and replay differ: first {first_difference:?}, worst {worst}, committed {committed:?}");
 }
 
 /// A Blur, Smudge or Dodge stroke through the canvas: releasing it commits the pixels its live

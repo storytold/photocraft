@@ -846,11 +846,21 @@ impl StrokeRenderer {
     }
     /// `fmt` = target pixel format (needed for per-dab colour); `zoom` for smoothing.
     pub fn new(brush: &BrushSettings, fmt: Option<PixelFormat>, zoom: f32) -> Self {
+        Self::with_generator(brush, fmt, DabGenerator::new(brush, zoom))
+    }
+
+    /// The path used by sequential effects and their one-shot commits. These tools carry state
+    /// between dabs, so their preview cannot replace a curve segment on scratch pixels alone.
+    pub fn for_sequential_dabs(brush: &BrushSettings, fmt: Option<PixelFormat>, zoom: f32) -> Self {
+        Self::with_generator(brush, fmt, DabGenerator::new_polyline(brush, zoom))
+    }
+
+    fn with_generator(brush: &BrushSettings, fmt: Option<PixelFormat>, generator: DabGenerator) -> Self {
         let per_dab_color = brush.color_dynamics.enabled && !brush.erase && fmt.is_some();
         let nc = if per_dab_color { fmt.map_or(0, |f| f.mode.color_channels()) } else { 0 };
         Self {
             ctx: BrushContext::new(brush),
-            generator: DabGenerator::new(brush, zoom),
+            generator,
             cov: CoverageMap::new(nc),
             dual: brush.dual_brush.enabled.then(|| CoverageMap::new(0)),
             fmt,
@@ -1033,6 +1043,20 @@ impl StrokeRenderer {
     /// over its bounds).
     pub fn coverage_in(&self, r: Rect) -> Vec<f32> {
         (r.y0..r.y1).flat_map(|y| (r.x0..r.x1).map(move |x| (x, y))).map(|(x, y)| self.coverage_at(x, y)).collect()
+    }
+
+    /// Finished coverage over the tail's dirty rectangle. A tail contains only tiles touched by
+    /// its dabs; holes inside their bounding rectangle still need the older stroke's coverage.
+    /// Dense preview consumers must use this instead of treating missing tail tiles as empty.
+    pub fn coverage_in_with_tail(&self, r: Rect, tail: &Self) -> Vec<f32> {
+        (r.y0..r.y1)
+            .flat_map(|y| (r.x0..r.x1).map(move |x| (x, y)))
+            .map(
+                |(x, y)| {
+                    if tail.cov.tiles.contains_key(&(x.div_euclid(COV_TILE), y.div_euclid(COV_TILE))) { tail.coverage_at(x, y) } else { self.coverage_at(x, y) }
+                },
+            )
+            .collect()
     }
 
     /// Final stroke coverage at a pixel (stroke-level masks applied, before opacity/selection).

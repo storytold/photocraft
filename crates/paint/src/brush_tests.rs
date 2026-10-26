@@ -1254,10 +1254,16 @@ fn tail_preview_shows_the_stroke_as_finishing_it_would() {
     let mut done = pre.clone();
     render_stroke(&mut done, &b, &pts, None, false, 1.0);
     assert!((0..60).all(|y| (0..120).all(|x| live.rgba(x, y) == done.rgba(x, y))));
-    // Without smoothing (and past the first dab) finishing adds nothing.
+    // Even with smoothing off, the newest curve segment has a provisional tail. Finishing
+    // commits it exactly once; the aliased Pencil still has no curve lookahead.
     let mut r = StrokeRenderer::new(&brush(), Some(fmt), 1.0);
     r.push(&pts);
+    assert!(r.tail_preview().is_some());
+    r.finish();
     assert!(r.tail_preview().is_none());
+    let mut pencil = StrokeRenderer::new(&BrushSettings { aliased: true, ..brush() }, Some(fmt), 1.0);
+    pencil.push(&pts);
+    assert!(pencil.tail_preview().is_none());
 }
 
 #[test]

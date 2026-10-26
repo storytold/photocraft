@@ -586,7 +586,7 @@ impl LiveRetouch {
         dmg = dmg.union(&self.composite(r, &cov)?);
         if let Some(mut tail) = self.renderer.tail_preview() {
             let r = tail.take_dirty_rect();
-            let cov = tail.coverage_in(r);
+            let cov = self.renderer.coverage_in_with_tail(r, &tail);
             self.tail = self.composite(r, &cov)?;
             dmg = dmg.union(&self.tail);
         }
@@ -1343,8 +1343,8 @@ impl LiveDab {
         let (surf, lock) = crate::channel_cmds::target_surface(&mut doc, id, p)?;
         let pre_surf = surf.clone();
         let effect = effect(&pre_surf);
-        // `apply_dab_stroke` generates the same dabs (`dabs`: zoom 1, no smoothing scale).
-        let renderer = photocraft_paint::StrokeRenderer::new(&stroke.brush, None, 1.0).record_dabs();
+        // `apply_dab_stroke` uses the same immediate polyline dabs (zoom 1, no smoothing scale).
+        let renderer = photocraft_paint::StrokeRenderer::for_sequential_dabs(&stroke.brush, None, 1.0).record_dabs();
         let mut live = Self {
             doc: std::sync::Arc::new(doc),
             cmd: cmd.into(),

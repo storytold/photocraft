@@ -22,6 +22,9 @@ pub mod bg_erase;
 pub mod brush;
 pub mod curve;
 pub mod dynamics;
+mod interpolate;
+#[cfg(test)]
+mod interpolation_tests;
 pub mod mixer;
 pub mod outline;
 pub mod presets;

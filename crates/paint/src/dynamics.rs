@@ -1,5 +1,5 @@
-//! From input points to dabs: smoothing, brush pose, path walking (spacing, airbrush build-up) and
-//! the per-dab dynamics (shape, scattering, transfer, colour, texture depth).
+//! From input points to dabs: smoothing, cubic path reconstruction, brush pose, path walking
+//! (spacing, airbrush build-up) and per-dab dynamics (shape, scattering, transfer, colour, texture).
 //!
 //! Everything is incremental (feed points in any chunking, get the same dabs) and deterministic:
 //! jitter comes from [`crate::rng`] keyed by the stroke seed and the step/dab index.
@@ -7,6 +7,7 @@
 use photocraft_geom::Point;
 
 use crate::brush::{BrushSettings, Control, Dynamic, Smoothing};
+use crate::interpolate::StrokeInterpolator;
 use crate::rng::{rand_signed, rand01, stream};
 use crate::{Dab, StrokePoint};
 
@@ -40,7 +41,7 @@ pub(crate) fn grid_cell(v: f64, offset: f64) -> f64 {
 }
 
 #[inline]
-fn lerp_pt(a: &StrokePoint, b: &StrokePoint, f: f64) -> StrokePoint {
+pub(crate) fn lerp_pt(a: &StrokePoint, b: &StrokePoint, f: f64) -> StrokePoint {
     let ff = f as f32;
     StrokePoint {
         x: a.x + (b.x - a.x) * f,
@@ -48,7 +49,7 @@ fn lerp_pt(a: &StrokePoint, b: &StrokePoint, f: f64) -> StrokePoint {
         pressure: a.pressure + (b.pressure - a.pressure) * ff,
         tilt_x: a.tilt_x + (b.tilt_x - a.tilt_x) * ff,
         tilt_y: a.tilt_y + (b.tilt_y - a.tilt_y) * ff,
-        rotation: a.rotation + (b.rotation - a.rotation) * ff,
+        rotation: (a.rotation + ((b.rotation - a.rotation + 540.0).rem_euclid(360.0) - 180.0) * ff).rem_euclid(360.0),
         wheel: a.wheel + (b.wheel - a.wheel) * ff,
         time: a.time + (b.time - a.time) * f,
     }
@@ -734,14 +735,22 @@ pub fn apply_pose(b: &BrushSettings, mut p: StrokePoint) -> StrokePoint {
 #[derive(Clone, Debug)]
 pub struct DabGenerator {
     smoother: Smoother,
+    interpolator: Option<StrokeInterpolator>,
     walker: PathWalker,
     dual_walker: Option<PathWalker>,
     builder: DabBuilder,
     dual: Option<DualBuilder>,
     scratch: Vec<StrokePoint>,
+    path_scratch: Vec<StrokePoint>,
 }
 
 impl DabGenerator {
+    /// Sequential effects cannot replace their last segment without also restoring the effect's
+    /// state (e.g. Smudge's reservoir). Keep their existing, immediately committed polyline path.
+    pub fn new_polyline(brush: &BrushSettings, zoom: f32) -> Self {
+        Self { interpolator: None, ..Self::new(brush, zoom) }
+    }
+
     /// Does the stroke change with time while the pointer is held still (airbrush Build-up, or
     /// smoothing still catching up)? The canvas then keeps feeding it the held point.
     pub fn wants_time(&self) -> bool {
@@ -764,11 +773,13 @@ impl DabGenerator {
         }
         Self {
             smoother: Smoother::new(&brush.smoothing, zoom),
+            interpolator: (!brush.aliased).then(StrokeInterpolator::default),
             walker,
             dual_walker: dual_on.then(|| PathWalker::new(None)),
             builder: DabBuilder::new(&brush),
             dual: dual_on.then(|| DualBuilder::new(&brush)),
             scratch: Vec::new(),
+            path_scratch: Vec::new(),
         }
     }
 
@@ -793,14 +804,32 @@ impl DabGenerator {
         }
     }
 
-    /// Feed input points; appends the new primary and dual dabs.
+    fn interpolate(&mut self, pts: &[StrokePoint], finish: bool, dabs: &mut Vec<Dab>, dual: &mut Vec<Dab>) {
+        let Some(interpolator) = &mut self.interpolator else {
+            self.walk(pts, dabs, dual);
+            return;
+        };
+        let mut path = std::mem::take(&mut self.path_scratch);
+        path.clear();
+        for p in pts {
+            interpolator.push(*p, &mut path);
+        }
+        if finish {
+            interpolator.finish(&mut path);
+        }
+        self.walk(&path, dabs, dual);
+        self.path_scratch = path;
+    }
+
+    /// Feed input points; appends the new primary and dual dabs. The newest curve segment stays
+    /// provisional until the following point; finishing a clone supplies the live preview.
     pub fn push(&mut self, pts: &[StrokePoint], dabs: &mut Vec<Dab>, dual: &mut Vec<Dab>) {
         let mut sm = std::mem::take(&mut self.scratch);
         sm.clear();
         for p in pts {
             self.smoother.push(*p, &mut sm);
         }
-        self.walk(&sm, dabs, dual);
+        self.interpolate(&sm, false, dabs, dual);
         self.scratch = sm;
     }
 
@@ -808,7 +837,7 @@ impl DabGenerator {
     pub fn finish(&mut self, dabs: &mut Vec<Dab>, dual: &mut Vec<Dab>) {
         let mut sm = Vec::new();
         self.smoother.finish(&mut sm);
-        self.walk(&sm, dabs, dual);
+        self.interpolate(&sm, true, dabs, dual);
         let mut steps = Vec::new();
         self.walker.finish(&mut |s| steps.push(s));
         for s in &steps {
