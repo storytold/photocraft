@@ -74,10 +74,87 @@ fn procedural(name: &str, w: u32, h: u32, f: impl Fn(u32, u32) -> [f32; 3]) -> P
     Pattern::new(name, s, w, h)
 }
 
-/// Built-in patterns: generated procedurally here (our own, CC0), so the library is never empty.
+/// Photographic tiles made from CC0 material scans (ambientCG; see `assets/patterns/SOURCES.md`
+/// and the repository's `ATTRIBUTION.md`). Decoded once and shared: a session clones the
+/// patterns, and a pattern's tiles are `Arc`, so the clone stays cheap.
+///
+/// The web build leaves them out: about 3.8 MB of scans would push the wasm past the browser
+/// bundle's per-file cap. The procedural tiles are identical on both targets.
+#[cfg(not(target_arch = "wasm32"))]
+fn photographic() -> &'static [Pattern] {
+    static PHOTO: std::sync::OnceLock<Vec<Pattern>> = std::sync::OnceLock::new();
+    PHOTO.get_or_init(|| {
+        const FILES: [(&str, &[u8]); 38] = [
+            ("Bricks 058", include_bytes!("../assets/patterns/Bricks058.jpg")),
+            ("Bricks 059", include_bytes!("../assets/patterns/Bricks059.jpg")),
+            ("Bricks 066", include_bytes!("../assets/patterns/Bricks066.jpg")),
+            ("Bricks 076 A", include_bytes!("../assets/patterns/Bricks076A.jpg")),
+            ("Bricks 090", include_bytes!("../assets/patterns/Bricks090.jpg")),
+            ("Concrete 023", include_bytes!("../assets/patterns/Concrete023.jpg")),
+            ("Concrete 025", include_bytes!("../assets/patterns/Concrete025.jpg")),
+            ("Concrete 046", include_bytes!("../assets/patterns/Concrete046.jpg")),
+            ("Fabric 019", include_bytes!("../assets/patterns/Fabric019.jpg")),
+            ("Fabric 045", include_bytes!("../assets/patterns/Fabric045.jpg")),
+            ("Fabric 077", include_bytes!("../assets/patterns/Fabric077.jpg")),
+            ("Fabric 085", include_bytes!("../assets/patterns/Fabric085.jpg")),
+            ("Ground 041", include_bytes!("../assets/patterns/Ground041.jpg")),
+            ("Scattered Leaves 008", include_bytes!("../assets/patterns/ScatteredLeaves008.jpg")),
+            ("Scattered Leaves 009", include_bytes!("../assets/patterns/ScatteredLeaves009.jpg")),
+            ("Ground 062 S", include_bytes!("../assets/patterns/Ground062S.jpg")),
+            ("Ground 072", include_bytes!("../assets/patterns/Ground072.jpg")),
+            ("Ground 076", include_bytes!("../assets/patterns/Ground076.jpg")),
+            ("Ground 079 L", include_bytes!("../assets/patterns/Ground079L.jpg")),
+            ("Ground 079 S", include_bytes!("../assets/patterns/Ground079S.jpg")),
+            ("Marble 016", include_bytes!("../assets/patterns/Marble016.jpg")),
+            ("Marble 019", include_bytes!("../assets/patterns/Marble019.jpg")),
+            ("Marble 021", include_bytes!("../assets/patterns/Marble021.jpg")),
+            ("Marble 025", include_bytes!("../assets/patterns/Marble025.jpg")),
+            ("Diamond Plate 009", include_bytes!("../assets/patterns/DiamondPlate009.jpg")),
+            ("Metal 053 C", include_bytes!("../assets/patterns/Metal053C.jpg")),
+            ("Metal 061 B", include_bytes!("../assets/patterns/Metal061B.jpg")),
+            ("Paper 001", include_bytes!("../assets/patterns/Paper001.jpg")),
+            ("Paper 004", include_bytes!("../assets/patterns/Paper004.jpg")),
+            ("Paper 006", include_bytes!("../assets/patterns/Paper006.jpg")),
+            ("Grass 005", include_bytes!("../assets/patterns/Grass005.jpg")),
+            ("Ground 003", include_bytes!("../assets/patterns/Ground003.jpg")),
+            ("Ground 013", include_bytes!("../assets/patterns/Ground013.jpg")),
+            ("Ground 037", include_bytes!("../assets/patterns/Ground037.jpg")),
+            ("Bark 014", include_bytes!("../assets/patterns/Bark014.jpg")),
+            ("Planks 037 A", include_bytes!("../assets/patterns/Planks037A.jpg")),
+            ("Wood 048", include_bytes!("../assets/patterns/Wood048.jpg")),
+            ("Wood 049", include_bytes!("../assets/patterns/Wood049.jpg")),
+        ];
+        FILES
+            .iter()
+            .filter_map(|(name, bytes)| {
+                let img = photocraft_codecs::decode(bytes).ok()?.convert(photocraft_codecs::ChannelLayout::Rgb, photocraft_codecs::SampleType::U8);
+                let (w, h) = (img.width(), img.height());
+                let mut surface = Surface::new(PixelFormat::new(ColorMode::Rgb, SampleType::U8, false));
+                surface.write_interleaved(Rect::new(0, 0, w as i32, h as i32), img.data());
+                Some(Pattern::new(*name, surface, w, h))
+            })
+            .collect()
+    })
+}
+
+/// The web build has no room for the photographic tiles (see above).
+#[cfg(target_arch = "wasm32")]
+fn photographic() -> &'static [Pattern] {
+    &[]
+}
+
+/// The built-in pattern library, generated once and shared: a session clones the patterns, and a
+/// pattern's tiles are `Arc`, so the clone stays cheap even for the 512 px photographic tiles.
 pub fn builtin() -> Vec<Pattern> {
+    static CACHE: std::sync::OnceLock<Vec<Pattern>> = std::sync::OnceLock::new();
+    CACHE.get_or_init(build_builtin).clone()
+}
+
+/// The procedural built-in tiles (our own formulas, so the library is never empty) followed by the
+/// photographic tiles from [`photographic`].
+fn build_builtin() -> Vec<Pattern> {
     let g = |v: f32| [v, v, v];
-    vec![
+    let mut patterns = vec![
         procedural("Checkerboard", 16, 16, |x, y| g(if (x / 8 + y / 8) % 2 == 0 { 0.8 } else { 1.0 })),
         procedural("Diagonal Lines", 8, 8, |x, y| g(if (x + y) % 8 < 2 { 0.2 } else { 1.0 })),
         procedural("Dots", 12, 12, |x, y| {
@@ -113,7 +190,9 @@ pub fn builtin() -> Vec<Pattern> {
             };
             g(0.78 + 0.14 * oct(8, 1) + 0.08 * oct(2, 2))
         }),
-    ]
+    ];
+    patterns.extend(photographic().iter().cloned());
+    patterns
 }
 
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
@@ -509,6 +588,39 @@ mod tests {
         assert!(v[0]["id"].as_str().unwrap().len() == 36);
         // Built-in ids are stable across sessions.
         assert_eq!(builtin()[0].id, Session::new().patterns.items[0].id);
+    }
+
+    /// Native-only: the web build leaves the photographic tiles out (see [`photographic`]).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn photographic_tiles_decode_and_are_grouped() {
+        assert_eq!(photographic().len(), 38, "every photographic tile decodes");
+        let s = Session::new();
+        // A CC0 photo tile decodes at 512×512 with a real tonal range.
+        let marble = resolve(&s, "Marble 016").unwrap();
+        assert_eq!((marble.width, marble.height), (512, 512));
+        let (mut lo, mut hi) = (1.0f32, 0.0f32);
+        for y in (0..512).step_by(8) {
+            for x in (0..512).step_by(8) {
+                let px = marble.surface.pixel(x, y);
+                let l = (px[0] + px[1] + px[2]) / 3.0;
+                lo = lo.min(l);
+                hi = hi.max(l);
+            }
+        }
+        assert!(hi - lo > 0.1, "tonal range {lo}..{hi}");
+    }
+
+    #[test]
+    fn every_builtin_pattern_is_in_exactly_one_group() {
+        let ids: std::collections::BTreeSet<String> = builtin().iter().map(|p| p.id.clone()).collect();
+        let mut grouped: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for group in crate::presets::patterns::builtin_groups() {
+            for id in group.items {
+                assert!(grouped.insert(id.clone()), "`{id}` is in two groups");
+            }
+        }
+        assert_eq!(grouped, ids, "every built-in pattern is in a group");
     }
 
     #[test]
