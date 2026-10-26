@@ -197,9 +197,9 @@ pub fn adjustment_program(adj: &Adjustment, transfer: Transfer, depth: photocraf
                     && hue.is_finite()
                     && (-180.0..=0.0).contains(hue)
                     && saturation.is_finite()
-                    && (0.0..=100.0).contains(saturation)
+                    && (-100.0..=100.0).contains(saturation)
                     && lightness.is_finite()
-                    && (0.0..=100.0).contains(lightness)
+                    && (-100.0..=100.0).contains(lightness)
                 {
                     p[1][1] = 1.0;
                 }

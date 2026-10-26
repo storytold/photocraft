@@ -193,18 +193,27 @@ fn apply_depth_mode(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, dept
                 && hue.is_finite()
                 && (-180.0..=0.0).contains(hue)
                 && saturation.is_finite()
-                && (0.0..=100.0).contains(saturation)
+                && (-100.0..=100.0).contains(saturation)
                 && lightness.is_finite()
-                && (0.0..=100.0).contains(lightness);
+                && (-100.0..=100.0).contains(lightness);
             if rgb8 {
-                let sat = (*saturation / 100.0).clamp(0.0, 1.0);
-                let light = (*lightness / 100.0).clamp(0.0, 1.0);
+                let sat = (*saturation / 100.0).clamp(-1.0, 1.0);
+                // RGB/8 Lightness keeps only whole 1/255 slider levels. Photoshop's
+                // +41 and -16 ramps both use floor(abs(percent) * 255 / 100).
+                let light = (*lightness / 100.0).clamp(-1.0, 1.0);
+                let light = light.signum() * (light.abs() * 255.0 + 1e-4).floor() / 255.0;
                 if *hue == 0.0 && sat == 0.0 && light == 0.0 {
                     return;
                 }
-                let steps = ((sat * 254.0 + 1e-4).floor() as i32).clamp(0, 254);
-                let factor = (65280 / (255 - steps)).min(32767);
-                let shift = if *hue == 0.0 { 0 } else { (*hue * 256.0 / 60.0 - 0.5).floor() as i32 };
+                let factor = if sat < 0.0 {
+                    256 - (-sat * 256.0 + 1e-4).floor() as i32
+                } else {
+                    let steps = ((sat * 254.0 + 1e-4).floor() as i32).clamp(0, 254);
+                    (65280 / (255 - steps)).min(32767)
+                };
+                // The quarter-step phase matches measured RGB/8 slider positions at -62,
+                // -138 and -158; the sector-crossing rule below handles their endpoints.
+                let shift = if *hue == 0.0 { 0 } else { (*hue * 256.0 / 60.0 - 0.25).floor() as i32 };
                 let rotated = *hue != 0.0;
                 let lightness_levels = rgb8_lightness_levels(light);
                 map_rgb(buf, |c| hue_saturation_rgb8(c, factor, shift, rotated, light, &lightness_levels));
@@ -422,12 +431,12 @@ mod lookup_tests {
         }
     }
 
-    /// Every 8-bit grey level retains the prior Lightness rounding at whole slider percents;
-    /// hue and chroma are irrelevant for grey, so this exercises the new lookup in isolation.
+    /// Fifth-step percentages retain their prior scalar rounding. Other signed percentages
+    /// follow measured Photoshop RGB/8 grey samples rather than unquantized scalar arithmetic.
     #[test]
-    fn rgb8_lightness_levels_match_scalar_rounding() {
+    fn rgb8_lightness_levels_match_photoshop_rounding() {
         let source: Vec<[f32; 4]> = (0..=255).map(|v| [v as f32 / 255.0, v as f32 / 255.0, v as f32 / 255.0, 1.0]).collect();
-        for percent in 0..=100 {
+        for percent in [0, 20, 40, 60, 80, 100] {
             let lightness = percent as f32 / 100.0;
             let adjustment =
                 Adjustment::HueSaturation { hue: -158.0, saturation: 20.0, lightness: percent as f32, colorize: false, ranges: HueRange::defaults() };
@@ -437,6 +446,18 @@ mod lookup_tests {
                 let expected = (v as f32 + (255 - v) as f32 * lightness).round() as u8;
                 let actual: [u8; 3] = std::array::from_fn(|channel| (pixel[channel] * 255.0).round() as u8);
                 assert_eq!(actual, [expected; 3], "lightness {percent}%, level {v}");
+            }
+        }
+        let measured = [(41.0, [104, 105, 107, 113, 123, 142, 161, 180, 199, 218, 237, 254]), (-16.0, [0, 1, 4, 13, 27, 54, 81, 108, 135, 162, 189, 214])];
+        let levels = [0, 1, 5, 16, 32, 64, 96, 128, 160, 192, 224, 254];
+        for (lightness, expected) in measured {
+            let adjustment = Adjustment::HueSaturation { hue: -62.0, saturation: 15.0, lightness, colorize: false, ranges: HueRange::defaults() };
+            for (level, want) in levels.into_iter().zip(expected) {
+                let v = level as f32 / 255.0;
+                let mut buffer = Buffer { rect: Rect::new(0, 0, 1, 1), px: vec![[v, v, v, 1.0]] };
+                apply_depth(&adjustment, &mut buffer, Transfer::Srgb, Some(SampleType::U8));
+                let actual: [u8; 3] = std::array::from_fn(|channel| (buffer.px[0][channel] * 255.0).round() as u8);
+                assert_eq!(actual, [want; 3], "lightness {lightness}%, level {level}");
             }
         }
     }

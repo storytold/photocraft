@@ -896,6 +896,54 @@ fn adjustment_layers() {
 }
 
 #[test]
+fn clipped_stacked_adjustments_match_photoshop_rgb8_bytes() {
+    let Some(mut g) = gpu() else { return };
+    let cases = [
+        (
+            [1, 34, 65, 255],
+            [
+                Adjustment::BrightnessContrast { brightness: -52.0, contrast: 43.0, legacy: false },
+                Adjustment::HueSaturation { hue: -62.0, saturation: 15.0, lightness: -16.0, colorize: false, ranges: HueRange::defaults() },
+            ],
+            [0, 31, 15, 255],
+        ),
+        (
+            [194, 153, 151, 255],
+            [
+                Adjustment::BrightnessContrast { brightness: -52.0, contrast: 43.0, legacy: false },
+                Adjustment::HueSaturation { hue: -62.0, saturation: 15.0, lightness: -16.0, colorize: false, ranges: HueRange::defaults() },
+            ],
+            [132, 85, 133, 255],
+        ),
+        (
+            [1, 34, 65, 255],
+            [
+                Adjustment::HueSaturation { hue: -138.0, saturation: -42.0, lightness: 41.0, colorize: false, ranges: HueRange::defaults() },
+                Adjustment::BrightnessContrast { brightness: -54.0, contrast: 39.0, legacy: false },
+            ],
+            [85, 88, 71, 255],
+        ),
+    ];
+    for (source, adjustments, expected) in cases {
+        let mut doc = Document::new("stacked RGB8", Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
+        let mut surface = photocraft_raster::Surface::new(PixelFormat::RGBA8);
+        surface.write_interleaved(doc.bounds(), &source);
+        doc.layers.push(Layer::new("image", LayerContent::Raster(surface)));
+        for adjustment in adjustments {
+            let mut layer = Layer::new("adjustment", LayerContent::Adjustment(adjustment));
+            layer.clipped = true;
+            doc.layers.push(layer);
+        }
+        assert_eq!(photocraft_compose::render(&doc, doc.bounds()).to_rgba8().pixels, expected);
+        for comp in [&mut g.comp, &mut g.paged] {
+            let pixels = render_to_vec(comp, &g.device, &g.queue, &doc, doc.bounds()).expect("render stacked adjustments");
+            let actual: [u8; 4] = pixels[0].map(|channel| (channel.clamp(0.0, 1.0) * 255.0).round() as u8);
+            assert_eq!(actual, expected, "GPU stacked RGB8 source {source:?}");
+        }
+    }
+}
+
+#[test]
 fn groups_masks_and_clipping() {
     let Some(mut g) = gpu() else { return };
     let child = |seed, mode| {

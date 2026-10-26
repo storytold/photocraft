@@ -640,17 +640,25 @@ fn tone_channel(row: i32, v: f32, identity: f32, extrapolate: f32) -> f32 {
 fn hue_saturation_rgb8(c: vec3<f32>, hue: f32, saturation: f32, lightness: f32) -> vec3<f32> {
     if (hue == 0.0 && saturation == 0.0 && lightness == 0.0) { return c; }
     var rgb = vec3<i32>(floor(clamp(c, vec3(0.0), vec3(1.0)) * 255.0 + vec3(0.5)));
-    if (lightness > 0.0) {
+    let light = sign(lightness) * floor(abs(lightness) * 255.0 + 1e-4) / 255.0;
+    if (light >= 0.0) {
         let levels = vec3<f32>(rgb);
-        rgb = vec3<i32>(floor(levels + (vec3(255.0) - levels) * lightness + vec3(0.5)));
+        rgb = vec3<i32>(floor(levels + (vec3(255.0) - levels) * light + vec3(0.5)));
+    } else {
+        rgb = vec3<i32>(floor(vec3<f32>(rgb) * (1.0 + light) + vec3(0.5)));
     }
     let minimum = min(rgb.r, min(rgb.g, rgb.b));
     let maximum = max(rgb.r, max(rgb.g, rgb.b));
     let old_chroma = maximum - minimum;
     if (old_chroma == 0) { return vec3(f32(minimum) / 255.0); }
     let sum = minimum + maximum;
-    let steps = clamp(i32(floor(saturation * 254.0 + 1e-4)), 0, 254);
-    let factor = min(65280 / (255 - steps), 32767);
+    var factor = 0;
+    if (saturation < 0.0) {
+        factor = 256 - i32(floor(-saturation * 256.0 + 1e-4));
+    } else {
+        let steps = clamp(i32(floor(saturation * 254.0 + 1e-4)), 0, 254);
+        factor = min(65280 / (255 - steps), 32767);
+    }
     let chroma = min((old_chroma * factor + 127) / 256, min(sum, 510 - sum));
     let low = (sum - chroma) / 2;
     let high = (sum + chroma) / 2;
@@ -667,17 +675,21 @@ fn hue_saturation_rgb8(c: vec3<f32>, hue: f32, saturation: f32, lightness: f32) 
     }
     let ratio = sign(numerator) * ((abs(numerator) * 255 + old_chroma / 2) / old_chroma);
     var shift = 0;
-    if (hue != 0.0) { shift = i32(floor(hue * 256.0 / 60.0 - 0.5)); }
+    // Match compose's measured RGB/8 quarter-step slider phase and sector crossing.
+    if (hue != 0.0) { shift = i32(floor(hue * 256.0 / 60.0 - 0.25)); }
+    let primary = base + shift;
+    let primary_sector = (((primary % 1536) + 1536) % 1536) / 256;
     let raw = base + ratio + shift;
     let initial = ((raw % 1536) + 1536) % 1536;
+    let initial_sector = initial / 256;
     var phase = 0;
-    if (hue != 0.0 && numerator > 0 && (initial / 256) % 2 == 0) { phase = 2; }
+    if (hue != 0.0 && numerator > 0 && initial_sector != primary_sector && initial_sector % 2 == 0) { phase = 2; }
     let position = (initial + phase) % 1536;
     let sector = position / 256;
     let offset = position % 256;
     let rising = low + (chroma * offset + 127) / 256;
     var complement = 254;
-    if (hue == 0.0) { complement = 256; }
+    if (hue == 0.0 || (numerator < 0 && initial_sector != primary_sector)) { complement = 256; }
     let falling = low + i32(floor(f32(chroma * (complement - offset) + 127) / 256.0));
     var result = vec3<i32>(high, rising, low);
     switch sector {
