@@ -15,6 +15,61 @@ use crate::shape_paint_ui::{PaintChange, swatch};
 use crate::state::{Tool, ToolOptions};
 use crate::theme::Tokens;
 
+// "Set as default" is a temporary UI choice, not a document property.
+#[derive(Clone, Copy, Default)]
+struct ArrowDefaultLink {
+    target: Option<(u64, u64)>,
+    enabled: bool,
+}
+
+fn arrow_default_link_id() -> egui::Id {
+    egui::Id::unique("arrow-default-link")
+}
+
+/// Reset the checkbox whenever the selected document, layer or shape changes.
+pub(crate) fn track_arrow_default_selection(app: &PhotocraftApp, ctx: &egui::Context) {
+    let target = app.session.active().and_then(|st| {
+        let id = st.active_layer?;
+        let layer = st.doc.layer(id)?;
+        match &layer.content {
+            LayerContent::Shape(sh) if matches!(sh.live.as_ref(), Some(photocraft_doc::vector::LiveShape::ArrowLine { .. })) => Some((st.doc.id.0, id.0)),
+            _ => None,
+        }
+    });
+
+    ctx.data_mut(|data| {
+        let key = arrow_default_link_id();
+        let previous = data.get_temp::<ArrowDefaultLink>(key).unwrap_or_default();
+        if previous.target != target {
+            data.insert_temp(key, ArrowDefaultLink { target, enabled: false });
+        }
+    });
+}
+
+/// Copy only the selected arrow's live parameters into new-arrow defaults.
+/// Existing shapes and geometry are not modified.
+fn copy_arrow_to_tool_defaults(app: &mut PhotocraftApp, id: photocraft_doc::LayerId) {
+    let values = app.session.active().and_then(|st| st.doc.layer(id)).and_then(|layer| match &layer.content {
+        LayerContent::Shape(sh) => match sh.live.as_ref() {
+            Some(photocraft_doc::vector::LiveShape::ArrowLine { start, end, width, length, concavity, weight, .. }) => {
+                Some((*start, *end, *width as f32, *length as f32, *concavity as f32, *weight as f32))
+            }
+            _ => None,
+        },
+        _ => None,
+    });
+
+    if let Some((start, end, width, length, concavity, weight)) = values {
+        let o = &mut app.ui.tool_options;
+        o.arrow_start = start;
+        o.arrow_end = end;
+        o.arrow_width = width;
+        o.arrow_length = length;
+        o.arrow_concavity = concavity;
+        o.line_weight = weight;
+    }
+}
+
 /// Pen tool path under construction: knots as [anchor, in, out] (document px).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct PenPath {
@@ -1633,17 +1688,33 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
                     }
                 });
                 ui.horizontal(|ui| {
-                    let mut v = *concavity as f32;
-                    if num(ui, "Concavity", &mut v, 0.0..=100.0, "%") {
-                        edit = Some(json!({"arrowConcavity": v, "coalesce": key("arrow-concavity")}));
-                    }
-                });
-                ui.horizontal(|ui| {
                     let mut v = *weight as f32;
                     if num(ui, "Weight", &mut v, 1.0..=10000.0, "px") {
                         edit = Some(json!({"weight": v, "coalesce": key("arrow-weight")}));
                     }
                 });
+                ui.horizontal(|ui| {
+                    let mut v = *concavity as f32;
+                    if num(ui, "Concavity", &mut v, 0.0..=100.0, "%") {
+                        edit = Some(json!({"arrowConcavity": v, "coalesce": key("arrow-concavity")}));
+                    }
+                });
+
+                // Explicitly adopt this arrow's values as defaults for new arrows.
+                let target = app.session.active().map(|st| (st.doc.id.0, id.0));
+                let mut linked = ui.ctx().data(|data| {
+                    let state = data.get_temp::<ArrowDefaultLink>(arrow_default_link_id()).unwrap_or_default();
+                    state.target == target && state.enabled
+                });
+
+                if ui.checkbox(&mut linked, tl!("Set as default")).on_hover_text(tl!("Use these settings for new arrows")).changed() {
+                    ui.ctx().data_mut(|data| {
+                        data.insert_temp(arrow_default_link_id(), ArrowDefaultLink { target, enabled: linked });
+                    });
+                    if linked {
+                        copy_arrow_to_tool_defaults(app, id);
+                    }
+                }
             }
             photocraft_doc::vector::LiveShape::Line { weight, .. } => {
                 ui.horizontal(|ui| {
@@ -1659,9 +1730,23 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
     }
     if let Some(mut p) = edit {
         p["layer"] = json!(id.0);
-        if let Err(e) = app.run("shape.edit", p) {
-            app.ui.status = e;
-            app.ui.status_error = true;
+        match app.run("shape.edit", p) {
+            Ok(_) => {
+                // Only a successful Properties edit updates new-arrow defaults,
+                // and only while the user explicitly enables the checkbox.
+                let target = app.session.active().map(|st| (st.doc.id.0, id.0));
+                let linked = ui.ctx().data(|data| {
+                    let state = data.get_temp::<ArrowDefaultLink>(arrow_default_link_id()).unwrap_or_default();
+                    state.enabled && state.target == target
+                });
+                if linked {
+                    copy_arrow_to_tool_defaults(app, id);
+                }
+            }
+            Err(e) => {
+                app.ui.status = e;
+                app.ui.status_error = true;
+            }
         }
         if !ui.input(|i| i.pointer.any_down()) {
             ui.data_mut(|d| {
