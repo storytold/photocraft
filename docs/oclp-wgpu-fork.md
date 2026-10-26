@@ -76,14 +76,24 @@ Repeated package runs, including a serial run, failed
 (182 passed, one failed each); it passed when rerun alone. The initial
 183-test run passed. This IPC failure remains untriaged.
 
-PhotoCraft validation on the OCLP Intel/AMD Mac remains pending. Launcher
-results below establish shared-dependency coverage, not a PhotoCraft pass.
+On MacBookPro11,5 running macOS 15.8.1 through OCLP, the native build and
+affected-package Clippy passed. All 183 app tests, 13 startup/control integration
+tests and the native AppKit menu harness passed. Separate AMD Radeon R9 M370X
+and Intel Iris Pro
+Graphics runs confirmed the selected adapter, an active GPU canvas, and no
+reported device loss. Both opened and exported the synthetic PNG; their internal
+screenshots were visually inspected. The debug window responded after about
+33 seconds on AMD and 42 seconds on Intel. Automatic probing selected MSL 3.1
+instead of the OS maximum 3.2; the Intel workgroup-attribute probe triggered
+the compiler workaround. Internal indirect-call validation remained enabled,
+with external Metal layers disabled as described above.
 
 ## Known limits of the shared backport
 
 The prior launcher debug runs on MacBookPro11,5, macOS 15.8.1 through OCLP,
-took roughly 35–45 seconds to reach swapchain creation. PhotoCraft startup
-and editing performance must be measured independently.
+took roughly 35–45 seconds to reach swapchain creation. These are separate
+from the PhotoCraft window timings above; editing performance still needs
+measurement.
 
 The backport's full wgpu suite on Apple M4 Max ran 1,010 tests: 1,002 passed,
 eight failed, and six were skipped. Failures were:
