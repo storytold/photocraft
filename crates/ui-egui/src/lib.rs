@@ -46,6 +46,7 @@ pub mod caf_ui;
 pub(crate) mod cam_preview;
 mod cam_transform;
 mod camera_raw_detail_ui;
+mod camera_raw_gpu;
 mod camera_raw_preview_ui;
 mod camera_raw_scope_ui;
 pub mod camera_raw_ui;
@@ -114,6 +115,7 @@ pub mod gpu_status;
 pub mod gradient_ui;
 pub mod guide_layout_ui;
 pub mod guide_select;
+pub mod histogram_panel;
 pub mod history_menu_ui;
 pub mod hold_keys;
 pub mod i18n;
@@ -201,6 +203,7 @@ pub mod select_mask_view;
 pub mod served_fonts;
 pub mod shape_dialog;
 pub(crate) mod shape_fill_ui;
+mod shape_gradient_ui;
 mod shape_options;
 mod shape_paint_ui;
 pub mod shape_stroke_ui;
@@ -212,6 +215,7 @@ pub mod slice_ui;
 pub mod smart_filter_dialog;
 pub mod smart_ui;
 pub mod snap_ui;
+pub mod snapshot_dialog;
 pub(crate) mod solid_fill_ui;
 pub mod spring_tools;
 pub mod stack_dialog;
@@ -683,10 +687,6 @@ pub struct Services {
     pub quit: Option<QuitFn>,
 }
 
-/// A document histogram being computed off the UI thread: (document, revision, receiver of
-/// (document, compute ms, histograms)).
-pub(crate) type HistJob = (DocId, u64, std::sync::mpsc::Receiver<(DocId, f64, std::sync::Arc<tone::Histograms>)>);
-
 /// The Info panel's cached sample: pixel x, y, document revision and Eyedropper Sample Size.
 type InfoSampleKey = (i32, i32, u64, u32);
 
@@ -778,6 +778,9 @@ pub struct PhotocraftApp {
     /// This press began with ⌥ (Alt) held on a painting tool, so it samples colours instead of
     /// painting until it is released (`canvas::alt_eyedropper`, #417).
     pub(crate) alt_sampling: bool,
+    /// This press began with ⌥ (Alt) held on the Mixer Brush, so it loaded paint from the canvas
+    /// and paints nothing until it is released, even with ⌥ let go (`canvas::tool_event`).
+    pub(crate) mixer_sampling: bool,
     /// Caps Lock toggled on, read from the OS each frame (`services.caps_lock`): painting tools
     /// show the precise crosshair whatever the cursor preference (#1758).
     pub caps_lock: bool,
@@ -888,10 +891,14 @@ pub struct PhotocraftApp {
     pub(crate) paused_playbacks: actions::PausedPlaybacks,
     /// Levels/Curves histogram cache: (document, adjustment layer, revision it is valid for).
     pub(crate) tone_hist: Option<(DocId, photocraft_doc::LayerId, u64, std::sync::Arc<tone::Histograms>)>,
-    /// Histogram panel cache: (document, revision, computed at ms, histograms).
-    pub(crate) doc_hist: Option<(DocId, u64, f64, std::sync::Arc<tone::Histograms>)>,
-    /// The document histogram being computed on a worker thread: (document, revision, receiver).
-    pub(crate) hist_job: Option<HistJob>,
+    /// Histogram panel: the document's histogram (`histogram_panel`).
+    pub(crate) doc_hist: Option<histogram_panel::PanelHist>,
+    /// Histogram panel: the histogram of the adjustment previewing on the canvas.
+    pub(crate) doc_hist_preview: Option<histogram_panel::PanelHist>,
+    /// The panel histogram being computed on a worker thread.
+    pub(crate) hist_job: Option<histogram_panel::HistJob>,
+    /// The (document, revision) an Uncached Refresh asked to count at cache level 1.
+    pub(crate) hist_uncached: Option<(DocId, u64)>,
     /// Free Transform preview (document without the moving pixels + their texture).
     pub(crate) transform_preview: Option<transform_tool::TransformPreview>,
     /// Move-tool ⇧/⌥ drag state (move_mods).
@@ -916,8 +923,9 @@ pub struct PhotocraftApp {
     /// A raw file just opened interactively, waiting for the open-time Camera Raw dialog (shown
     /// on the next frame, which has the egui context).
     pub(crate) pending_raw_open: Option<camera_raw_ui::RawOpen>,
-    /// The open-time re-develop (or its Camera Raw step) running in the background.
-    pub(crate) raw_redevelop: Option<camera_raw_ui::Redevelop>,
+    /// The open-time re-develops (or their Camera Raw steps) running in the background, one per
+    /// raw being opened.
+    pub(crate) raw_redevelop: Vec<camera_raw_ui::Redevelop>,
     /// Filter › Adaptive Wide Angle dialog (wide_angle_ui).
     pub(crate) wide_angle: Option<wide_angle_ui::WideAngleDialog>,
     /// ⌘Z history of each open parameter dialog (edit_history).
@@ -1100,6 +1108,7 @@ impl PhotocraftApp {
             quick_pick: false,
             brush_resize_armed: false,
             alt_sampling: false,
+            mixer_sampling: false,
             caps_lock: false,
             opacity_keys: None,
             control_rx: None,
@@ -1177,13 +1186,15 @@ impl PhotocraftApp {
             gradient: Default::default(),
             camera_raw: None,
             pending_raw_open: None,
-            raw_redevelop: None,
+            raw_redevelop: Vec::new(),
             wide_angle: None,
             dialog_edits: Default::default(),
             pending_after_prompt: None,
             tone_hist: None,
             doc_hist: None,
+            doc_hist_preview: None,
             hist_job: None,
+            hist_uncached: None,
             gpu: None,
             window_device: None,
             window_lost: false,
@@ -1218,6 +1229,7 @@ impl PhotocraftApp {
         // Saved preferences are in place before the first frame; recovery starts in upkeep.
         prefs_ui::load(&mut app);
         layers_panel_ui::restore_options(&mut app);
+        histogram_panel::restore_options(&mut app);
         // After the saved preferences, which say whether the set was already offered.
         kys_import::offer_import(&mut app);
         notices::wayland_file_drop_guidance(&mut app);

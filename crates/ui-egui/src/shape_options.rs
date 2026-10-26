@@ -4,7 +4,8 @@ use photocraft_doc::LayerContent;
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
-use crate::shape_paint_ui::{PaintChange, swatch};
+use crate::shape_gradient_ui::GradientChoices;
+use crate::shape_paint_ui::{PaintChange, paint_param, swatch};
 use crate::state::Tool;
 use crate::theme::Tokens;
 use crate::vector_ui::{enabled_stroke_width, paint_gesture};
@@ -44,8 +45,14 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
     let (fg, bg) = (app.session.tools.foreground, app.session.tools.background);
     let (mut has_fill, fill, stroke) = match &target {
         Some(s) => (s.fill.is_some(), s.fill.clone(), s.stroke.clone()),
-        None => (o.shape_fill, o.shape_fill.then(|| solid(fg)), (o.stroke_width > 0.0).then(|| o.shape_stroke.stroke(o.stroke_width, solid(bg)))),
+        None => {
+            let fill = o.shape_fill_gradient.clone().unwrap_or_else(|| solid(fg));
+            let stroke = o.shape_stroke_gradient.clone().unwrap_or_else(|| solid(bg));
+            (o.shape_fill, o.shape_fill.then_some(fill), (o.stroke_width > 0.0).then(|| o.shape_stroke.stroke(o.stroke_width, stroke)))
+        }
     };
+    let mut gradients =
+        GradientChoices { presets: &app.session.presets.gradients, current: &app.session.presets.gradient, recent: &mut app.ui.recent_gradients, fg, bg };
     let mut width = stroke.as_ref().map_or(0.0, |s| s.width);
     let stroke_enabled = stroke.as_ref().is_some_and(|s| s.width > 0.0);
     let style = stroke.as_ref().map_or_else(|| o.shape_stroke.clone(), crate::shape_stroke_ui::StrokeOptions::from);
@@ -56,18 +63,18 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
     lbl(ui, tl!("Fill:"));
     if crate::widgets::checkbox(ui, &mut has_fill, tl!("Fill")).changed() {
         o.shape_fill = has_fill;
-        edit = Some(json!({"fill": if has_fill { json!(fg) } else { Value::Null }}));
+        edit = Some(json!({"fill": if has_fill { o.shape_fill_gradient.as_ref().map_or_else(|| json!(fg), paint_param) } else { Value::Null }}));
     }
-    let fill_color = swatch(ui, fill.as_ref(), fg, tl!("Fill color"));
+    let fill_color = swatch(ui, fill.as_ref(), fg, tl!("Fill color"), &mut gradients);
     lbl(ui, tl!("Stroke:"));
-    let stroke_color = swatch(ui, stroke.as_ref().map(|s| &s.paint), bg, tl!("Stroke color"));
+    let stroke_color = swatch(ui, stroke.as_ref().map(|s| &s.paint), bg, tl!("Stroke color"), &mut gradients);
     if crate::widgets::value_field(ui, &mut width, 0.0..=288.0, "px", 58.0).accessible_name(tl!("Stroke:")).changed() {
         o.stroke_width = width;
         // A 0 px "change" (an arrow step clamped at the minimum) must not add a stroke.
         if stroke.is_some() || width > 0.0 {
             let mut p = json!({"width": width});
             if stroke.is_none() {
-                p["color"] = json!(bg);
+                p["color"] = o.shape_stroke_gradient.as_ref().map_or_else(|| json!(bg), paint_param);
             }
             edit = Some(json!({"stroke": p, "coalesce": key("stroke-w")}));
         }
@@ -81,7 +88,7 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
             p["width"] = json!(3.0);
         }
         if stroke.is_none() {
-            p["color"] = json!(bg);
+            p["color"] = o.shape_stroke_gradient.as_ref().map_or_else(|| json!(bg), paint_param);
         }
         edit = Some(json!({"stroke": p, "coalesce": change.coalesce}));
         o.shape_stroke = change.options;
@@ -134,15 +141,17 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
     }
     for (is_stroke, change) in [(false, fill_color), (true, stroke_color)] {
         let Some(change) = change else { continue };
-        if let Err(e) = set_tool_paint(app, is_stroke, change) {
+        if let Err(e) = set_tool_paint(app, is_stroke, change.clone()) {
             app.ui.status = e;
             app.ui.status_error = true;
         }
         edit = Some(match (is_stroke, change) {
             (false, PaintChange::None) => json!({"fill": null}),
             (false, PaintChange::Color(color)) => json!({"fill": color, "coalesce": key("fill")}),
+            (false, PaintChange::Gradient(g)) => json!({"fill": paint_param(&g), "coalesce": key("fill")}),
             (true, PaintChange::None) => json!({"stroke": null}),
             (true, PaintChange::Color(color)) => json!({"stroke": {"color": color, "width": enabled_stroke_width(width)}, "coalesce": key("stroke")}),
+            (true, PaintChange::Gradient(g)) => json!({"stroke": {"color": paint_param(&g), "width": enabled_stroke_width(width)}, "coalesce": key("stroke")}),
         });
     }
     if let (Some(mut p), Some(s)) = (edit, &target) {
@@ -162,6 +171,14 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
 
 /// Tool-bar paint changes affect the next shape; Properties edits the selected shape instead.
 pub(crate) fn set_tool_paint(app: &mut PhotocraftApp, stroke: bool, change: PaintChange) -> Result<(), String> {
+    // A colour takes the place of a gradient; No Color keeps it for when the paint comes back.
+    let o = &mut app.ui.tool_options;
+    let gradient = if stroke { &mut o.shape_stroke_gradient } else { &mut o.shape_fill_gradient };
+    match &change {
+        PaintChange::Gradient(g) => *gradient = Some(g.clone()),
+        PaintChange::Color(_) => *gradient = None,
+        PaintChange::None => {}
+    }
     if let PaintChange::Color(color) = change {
         app.run("tools.setColors", if stroke { json!({"background": color}) } else { json!({"foreground": color}) })?;
     }

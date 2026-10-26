@@ -138,6 +138,7 @@ pub const TOOLS: &[(&str, &str, Option<&str>)] = &[
     ("tools.select.cloneStamp", "Clone Stamp Tool", Some("S")),
     ("tools.select.patternStamp", "Pattern Stamp Tool", Some("S")),
     ("tools.select.historyBrush", "History Brush Tool", Some("Y")),
+    ("tools.select.artHistoryBrush", "Art History Brush Tool", Some("Y")),
     ("tools.select.blur", "Blur Tool", None),
     ("tools.select.sharpen", "Sharpen Tool", None),
     ("tools.select.smudge", "Smudge Tool", None),

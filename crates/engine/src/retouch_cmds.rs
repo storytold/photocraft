@@ -1,5 +1,6 @@
 //! Retouching tools as commands: Clone Stamp, Pattern Stamp, Healing Brush, Spot Healing Brush,
-//! Patch, Content-Aware Move, Remove, Dodge, Burn, Sponge, Blur, Sharpen, Smudge and History Brush.
+//! Patch, Content-Aware Move, Remove, Dodge, Burn, Sponge, Blur, Sharpen, Smudge, History Brush and
+//! Art History Brush.
 //!
 //! Every command takes a Photoshop-style brush (`points`, `size`, `hardness`, `opacity`, `flow`,
 //! `spacing`, `layer`), respects the active selection as a mask and the layer's transparency lock, and
@@ -24,6 +25,7 @@ use serde_json::{Value, json};
 use crate::commands::{CommandSpec, blend_from_str};
 use crate::{EngineError, Result, Session};
 
+mod art_history;
 mod content_aware_move;
 mod patch;
 mod pattern_stamp;
@@ -552,7 +554,7 @@ impl LiveRetouch {
         let bounds = self.bounds();
         let (surf, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc), self.id, &self.params)?;
         let surface = surf.clone();
-        Ok(crate::brush_cmds::LiveCommit { cmd: self.cmd, base: self.base, params: self.params, seed: None, points: self.points, surface, bounds })
+        Ok(crate::brush_cmds::LiveCommit { mixer: None, cmd: self.cmd, base: self.base, params: self.params, seed: None, points: self.points, surface, bounds })
     }
 
     /// Render more points; returns the rectangle that changed. Each changed area is redrawn from
@@ -1472,7 +1474,16 @@ impl LiveDab {
         self.bounds = self.bounds.union(&dmg);
         let (surf, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc), self.id, &self.params)?;
         let surface = surf.clone();
-        Ok(crate::brush_cmds::LiveCommit { cmd: self.cmd, base, params: self.params, seed: None, points: self.points, surface, bounds: self.bounds })
+        Ok(crate::brush_cmds::LiveCommit {
+            mixer: None,
+            cmd: self.cmd,
+            base,
+            params: self.params,
+            seed: None,
+            points: self.points,
+            surface,
+            bounds: self.bounds,
+        })
     }
 }
 
@@ -1677,6 +1688,18 @@ pub fn specs() -> Vec<CommandSpec> {
             ),
             enabled: has_pixel_layer,
             run: history_brush,
+            journal: true,
+        },
+        CommandSpec {
+            id: "paint.artHistoryBrush",
+            label: "Art History Brush",
+            menu: &[],
+            shortcut: None,
+            params: brush_params!(
+                r#","state":row (a History panel row, as history.setSource),"snapshot":id (a history.newSnapshot id; default: the History panel's source, as paint.historyBrush; a source of another canvas size is an error),"style":"tightShort|tightMedium|tightLong|looseMedium|looseLong|dab|tightCurl|looseCurl"="tightMedium","area":0..100=50,"tolerance":0..100=0"#
+            ),
+            enabled: has_pixel_layer,
+            run: art_history::run,
             journal: true,
         },
     ]

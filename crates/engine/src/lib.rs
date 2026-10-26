@@ -244,8 +244,9 @@ pub struct DocState {
     /// pixel coordinates. Per-document view state: discarded when the document closes, never saved
     /// to `.pcraft` or PSD, and not a history step.
     pub color_samplers: Vec<[f64; 2]>,
-    /// History panel snapshots, oldest first (`history.newSnapshot`, #2966). Kept for the
-    /// session only, as in Photoshop: not history states, and not saved with the document.
+    /// History panel snapshots, oldest first (`history.newSnapshot`, #2966): the first (id 0) is
+    /// the document as opened. Kept for the session only, as in Photoshop: not history states,
+    /// and not saved with the document.
     pub snapshots: Vec<history_cmds::Snapshot>,
     /// The id the next snapshot gets; ids are never reused, so deleting one keeps the others.
     next_snapshot: u64,
@@ -272,9 +273,14 @@ impl DocState {
     pub fn new(doc: Document, path: Option<String>) -> Self {
         let active_layer = doc.top_layer();
         let mut history = History::default();
-        history.set_current_layers(LayerTarget { active: active_layer, selected: active_layer.into_iter().collect() });
+        let target = LayerTarget { active: active_layer, selected: active_layer.into_iter().collect() };
+        history.set_current_layers(target.clone());
+        let doc = Arc::new(doc);
+        // Photoshop's first snapshot: the document as opened, named after it, so the History
+        // panel's top row can always bring it back (#2966).
+        let first = history_cmds::Snapshot { id: 0, name: doc.name.clone(), doc: doc.clone(), layers: target };
         Self {
-            doc: Arc::new(doc),
+            doc,
             history,
             active_layer,
             selected_layers: active_layer.into_iter().collect(),
@@ -294,7 +300,7 @@ impl DocState {
             show_only: None,
             floating: None,
             color_samplers: Vec::new(),
-            snapshots: Vec::new(),
+            snapshots: vec![first],
             next_snapshot: 1,
             source_snapshot: None,
         }

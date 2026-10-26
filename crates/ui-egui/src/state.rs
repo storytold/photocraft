@@ -176,6 +176,7 @@ pub enum Tool {
     CloneStamp,
     PatternStamp,
     HistoryBrush,
+    ArtHistoryBrush,
     Blur,
     Sharpen,
     Smudge,
@@ -206,7 +207,7 @@ pub enum Tool {
 }
 
 impl Tool {
-    pub const ALL: [Tool; 67] = [
+    pub const ALL: [Tool; 68] = [
         Tool::Move,
         Tool::Artboard,
         Tool::RectMarquee,
@@ -249,6 +250,7 @@ impl Tool {
         Tool::CloneStamp,
         Tool::PatternStamp,
         Tool::HistoryBrush,
+        Tool::ArtHistoryBrush,
         Tool::Blur,
         Tool::Sharpen,
         Tool::Smudge,
@@ -323,6 +325,7 @@ impl Tool {
             Tool::CloneStamp => "Clone Stamp Tool",
             Tool::PatternStamp => "Pattern Stamp Tool",
             Tool::HistoryBrush => "History Brush Tool",
+            Tool::ArtHistoryBrush => "Art History Brush Tool",
             Tool::Blur => "Blur Tool",
             Tool::Sharpen => "Sharpen Tool",
             Tool::Smudge => "Smudge Tool",
@@ -375,6 +378,7 @@ impl Tool {
                 | Tool::CloneStamp
                 | Tool::PatternStamp
                 | Tool::HistoryBrush
+                | Tool::ArtHistoryBrush
                 | Tool::Blur
                 | Tool::Sharpen
                 | Tool::Smudge
@@ -402,7 +406,7 @@ impl Tool {
             Tool::Zoom => 'Z',
             Tool::Remove | Tool::SpotHealing | Tool::Healing | Tool::Patch | Tool::ContentAwareMove | Tool::RedEye => 'J',
             Tool::CloneStamp | Tool::PatternStamp => 'S',
-            Tool::HistoryBrush => 'Y',
+            Tool::HistoryBrush | Tool::ArtHistoryBrush => 'Y',
             Tool::Blur | Tool::Sharpen | Tool::Smudge => '\0',
             // In the Marquee flyout, but M cycles only the Rectangular and Elliptical Marquee.
             Tool::SingleRowMarquee | Tool::SingleColumnMarquee => '\0',
@@ -650,6 +654,10 @@ pub struct ToolOptions {
     pub fill_opacity: f32,
     /// Paint Bucket fill source: false = Foreground colour, true = Pattern (Patterns panel selection).
     pub bucket_fill_pattern: bool,
+    /// Paint Bucket › Mode (any layer mode; Clear is `bucket_clear`).
+    pub bucket_blend_mode: photocraft_color::BlendMode,
+    /// Paint Bucket › Mode: Clear, which erases the filled area (see `brush_clear`).
+    pub bucket_clear: bool,
     /// Type tool: family, style name, size (pt), anti-aliasing and paragraph alignment.
     pub type_font: String,
     pub type_style: String,
@@ -711,6 +719,10 @@ pub struct ToolOptions {
     pub stroke_width: f32,
     #[serde(default)]
     pub shape_stroke: crate::shape_stroke_ui::StrokeOptions,
+    /// Shape tools: the gradient the next shape's fill / stroke takes (the swatches' Gradient
+    /// tab) instead of the foreground / background colour; `None` = the colour.
+    pub shape_fill_gradient: Option<photocraft_doc::Fill>,
+    pub shape_stroke_gradient: Option<photocraft_doc::Fill>,
     pub corner_radius: f32,
     pub polygon_sides: u32,
     pub line_weight: f32,
@@ -847,6 +859,17 @@ pub struct ToolOptions {
     /// Eyedropper › Show Sampling Ring.
     #[serde(default = "yes")]
     pub eyedropper_ring: bool,
+    /// Art History Brush: dab layout, Area (0–100), Tolerance (0–100).
+    #[serde(default = "default_art_history_style")]
+    pub art_history_style: String,
+    #[serde(default = "fifty")]
+    pub art_history_area: f32,
+    #[serde(default)]
+    pub art_history_tolerance: f32,
+}
+
+fn default_art_history_style() -> String {
+    "tightMedium".into()
 }
 
 fn yes() -> bool {
@@ -967,6 +990,8 @@ impl Default for ToolOptions {
             gradient_blend_mode: photocraft_color::BlendMode::Normal,
             fill_opacity: 100.0,
             bucket_fill_pattern: false,
+            bucket_blend_mode: photocraft_color::BlendMode::Normal,
+            bucket_clear: false,
             type_font: "Inter".into(),
             type_style: "Regular".into(),
             type_size: 48.0,
@@ -1002,6 +1027,8 @@ impl Default for ToolOptions {
             shape_fill: true,
             stroke_width: 0.0,
             shape_stroke: Default::default(),
+            shape_fill_gradient: None,
+            shape_stroke_gradient: None,
             corner_radius: 0.0,
             polygon_sides: 5,
             line_weight: 3.0,
@@ -1055,6 +1082,9 @@ impl Default for ToolOptions {
             eyedropper_size: 1,
             eyedropper_sample: default_eyedropper_sample(),
             eyedropper_ring: true,
+            art_history_style: default_art_history_style(),
+            art_history_area: 50.0,
+            art_history_tolerance: 0.0,
         }
     }
 }
@@ -1563,6 +1593,12 @@ pub struct UiState {
     /// Which chip the Color panel edits, and how it shows the colour.
     #[serde(default)]
     pub color_panel: ColorPanelState,
+    /// Histogram panel options: view, channel, statistics, colours, source.
+    #[serde(default)]
+    pub histogram_panel: crate::histogram_panel::HistogramPanelState,
+    /// The tonal range dragged across the Histogram panel's graph (its statistics), `[from, to]`.
+    #[serde(default, skip_deserializing)]
+    pub histogram_range: Option<[u8; 2]>,
     /// Brush Settings: selected section (0 = Brush Tip Shape) and tab (0 settings, 1 Brushes).
     #[serde(default)]
     pub brush_section: usize,
@@ -1576,6 +1612,10 @@ pub struct UiState {
     pub selection_mode: u8,
     #[serde(default)]
     pub tool_options: ToolOptions,
+    /// The shape Fill / Stroke swatches' recently used gradients, newest first (the Gradient
+    /// tab's Recent row).
+    #[serde(default)]
+    pub recent_gradients: Vec<photocraft_doc::Fill>,
     /// In-progress polygonal lasso vertices (document coordinates).
     #[serde(default)]
     pub polygon: Vec<[f64; 2]>,
@@ -1678,6 +1718,8 @@ impl Default for UiState {
             shell: Default::default(),
             layer_filter: Vec::new(),
             layers_panel_options: LayersPanelOptions::default(),
+            histogram_panel: Default::default(),
+            histogram_range: None,
             layers_panel_dialog: None,
             layer_filter_by: Default::default(),
             layer_filter_name: String::new(),
@@ -1708,6 +1750,7 @@ impl Default for UiState {
             brushes_panel: Default::default(),
             selection_mode: 0,
             tool_options: ToolOptions::default(),
+            recent_gradients: Vec::new(),
             polygon: Vec::new(),
             polygon_mode: String::new(),
             polygon_doc: None,
@@ -1807,11 +1850,14 @@ mod tests {
         assert_eq!(Tool::from_name("Color Replacement Tool"), Some(Tool::ColorReplacement));
         assert_eq!(Tool::from_name("redEye"), Some(Tool::RedEye));
         assert_eq!(Tool::from_name("Red Eye Tool"), Some(Tool::RedEye));
+        assert_eq!(Tool::from_name("artHistoryBrush"), Some(Tool::ArtHistoryBrush));
+        assert_eq!(Tool::from_name("Art History Brush"), Some(Tool::ArtHistoryBrush));
+        assert_eq!(Tool::from_name("Art History Brush Tool"), Some(Tool::ArtHistoryBrush));
         assert_eq!(Tool::RedEye.key(), 'J');
         assert!(!Tool::RedEye.is_brushlike());
         assert_eq!(Tool::from_name("patternStamp"), Some(Tool::PatternStamp));
         assert_eq!(Tool::from_name("Pattern Stamp Tool"), Some(Tool::PatternStamp));
-        assert_eq!(Tool::ALL.len(), 67);
+        assert_eq!(Tool::ALL.len(), 68);
         assert_eq!(Tool::from_name("Vertical Type Mask Tool"), Some(Tool::VerticalTypeMask));
         assert_eq!(Tool::from_name("addAnchorPoint"), Some(Tool::AddAnchorPoint));
         assert_eq!(Tool::from_name("Delete Anchor Point Tool"), Some(Tool::DeleteAnchorPoint));
@@ -1826,6 +1872,8 @@ mod tests {
         assert_eq!(Tool::from_name("RotateView"), Some(Tool::RotateView));
         assert_eq!(Tool::from_name("Rotate View Tool"), Some(Tool::RotateView));
         assert_eq!(Tool::RotateView.key(), 'R');
+        assert_eq!(Tool::ArtHistoryBrush.key(), 'Y');
+        assert!(Tool::ArtHistoryBrush.is_brushlike());
         assert_eq!(Tool::from_name("nope"), None);
     }
 

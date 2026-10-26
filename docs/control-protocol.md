@@ -55,6 +55,7 @@ The transport is `apps/photocraft/src/control_server.rs`, and the handlers are i
 - `ui.set` also accepts `tileGrid` (boolean), a developer overlay of the active layer's storage tiles: the tile grid over the document, every stored tile filled and labelled `tx,ty`, tiles with identical pixels in a shared colour and unique ones in blue. It has no menu item and View › Extras doesn't hide it. `ui.inspect` reports it as `view.tile_grid`.
 - `ui.set` also accepts `strokeTrace` (`true`, `false`, `"stderr"` or `"off"`): turn the stroke latency trace on or off at runtime; each stroke's summary is in `ui.inspect` `perf.strokeTrace`. A CSV file of every frame is set only at launch (`PHOTOCRAFT_STROKE_TRACE=<file.csv>` / `--stroke-trace <file.csv>`): the control channel doesn't write files outside the automation write root
 - `ui.set` also accepts `layerFilter` (#5048), the Layers panel filter row: `{by?, kinds?, name?, mode?}`, any subset. `by` is `kind`, `name` or `mode` (the filter-type dropdown); `kinds` lists the Kind toggles that are on (`pixel`, `adjustment`, `type`, `shape`, `smart`); `name` matches part of a layer name, ignoring case; `mode` is a blend mode name (`Multiply`, `Pass Through`). Kind and Name filter only once a kind is on or text is typed; Mode always filters, by Normal at first, as in Photoshop. Fields left out keep their value; a bad one is an error and changes nothing.
+- `ui.set` also accepts the Histogram panel: `histogramPanel` `{view?, channel?, showChannelsInColor?, showStatistics?, source?}` (any subset, kept with the preferences): `view` is `compact`, `expanded` or `allChannels`; `channel` is `composite`, `red`, `green`, `blue`, `cyan`, `magenta`, `yellow`, `black`, `a`, `b`, `luminosity` or `colors` (one the document's mode lacks shows as its composite); `source` is `entireImage`, `selectedLayer` or `adjustmentComposite` (Entire Image is counted in Compact View, when the document has one layer, or when no adjustment layer is selected for Adjustment Composite). `histogramRange` is `[from, to]` (levels 0..255) or `null`: the dragged tonal range whose Count and Percentile the statistics show. `histogramRefresh: true` is Uncached Refresh: the current state is recounted at cache level 1. `ui.inspect` › `histogram` reports the options, the channel and source as they apply, the channels the document offers, whether the shown histogram is `current` (counted for the document's revision, source and cache level the panel wants now), its `cacheLevel`, `maxCacheLevel` (Preferences › Performance › Cache Levels), `preview` (an adjustment's preview is counted) and `stats` (`mean`, `stdDev`, `median`, `pixels`, `level`, `count`, `percentile`, `clipped` percent at 0 and 255). Histograms are counted while the panel is shown.
 - Each painting tool keeps its own brush, as in Photoshop: `tools.setBrush` and `ui.set {brushSize}` change the active tool's brush, and switching tools swaps in that tool's own (size, hardness, mode, opacity, flow, dynamics, smoothing). A tool used for the first time starts from the brush in hand. The colours, the erase flag and the stroke seed stay shared. So `ui.set {tool: "eraser", brushSize: 12}` sets the Eraser's size, and `ui.set {tool: "brush"}` afterwards brings the Brush's own size back.
 - Brush Pose's `pose.overrideTiltX` and `pose.overrideTiltY` are independent booleans. For example, `engine.execute {"command":"tools.setBrush","params":{"pose":{"enabled":true,"tiltX":45,"overrideTiltX":true,"overrideTiltY":false}}}` fixes X at 45° while Y follows the stylus. Pose tilts are degrees (±90); the Brush Settings panel displays percentages (±100). Old stored `overrideTilt` values migrate to both axes. In command patches, `overrideTilt` sets both axes unless an explicit axis field in the same patch overrides it. `brush.get` includes both axis flags and the legacy combined readback (`overrideTilt` is true only when both flags are true). Axis-only journals omit that derived combined key so replay retains the other axis. Present flag values must be booleans; null and other types return an error.
 - `ui.set` also accepts the Eyedropper options bar (#1649): `eyedropperSampleSize` (`"point"` or 1, 3, 5, 11, 31, 51, 101: the side of the averaged square, shared by the Eyedropper, a painting tool's Alt-click eyedropper, the Curves/Color Picker eyedroppers and the Info panel), `eyedropperSample` (`current`, `currentAndBelow`, `all`, `allNoAdjustments`, `currentAndBelowNoAdjustments`) and `eyedropperRing` (boolean, Show Sampling Ring). `ui.inspect` reports them under `toolOptions` (`eyedropper_size`, `eyedropper_sample`, `eyedropper_ring`). The engine command `document.sampleColor {x, y, size, sampleLayer}` returns the colour such a sample picks, as four floats 0..1 (not 0..255).
@@ -130,7 +131,7 @@ store expose and persist the same setting; scripts keep using canonical command 
 | `layer.newAdjustmentLayer.hueSaturation` | `{"hue":30,"saturation":10}` |
 | `paint.stroke` | `{"points":[[x,y,pressure],…],"size":20,"color":"#ff0000"}` |
 | `select.rect` | `{"x":0,"y":0,"width":100,"height":50,"mode":"add","ellipse":false}` |
-| `document.inspect` | `{}`: layer tree, history, snapshots (`[{id, name}]`, for `history.selectSnapshot`), selection bounds |
+| `document.inspect` | `{}`: layer tree, history, snapshots (`[{id, name}]`, for `history.selectSnapshot`; id 0 is the document as opened), selection bounds |
 | `layer.list` | `{"document":index?,"flat":bool?}`: just the layers, top-down: `id`, `name`, `kind`, `visible`, `bounds` (`[x,y,w,h]` or null), `selected`, `active`; groups list their `children`, or with `flat` every layer is one row with its `depth` and `parent` group id |
 | `document.pixel` | `{"x":10,"y":10}`: composite RGBA, four floats 0..1 (not 0..255) |
 | `document.presets.list` | `{}` → `{presets:[{name,settings}]}`: saved New Document configurations |
@@ -510,14 +511,25 @@ viewports, so the dialog is drawn over the main window and appears in the image.
 RGB/Grayscale layer. `params: {"smartFilter": {"layer": id, "index": i}}` opens it on an existing
 Camera Raw smart filter instead (as double-clicking the filter in the Layers panel does): the
 stored settings over the pixels below that filter, previewed through the filter mask; commit
-then runs `layer.smartFilter.setParams` with every setting. `params.ui` accepts `set` (filter settings), `before`, `scope`, `view`, `commit` and
+then runs `layer.smartFilter.setParams` with every setting. `params.ui` accepts `set` (filter settings), `before`, `scope`, `view`, `auto` (true: the Light
+sliders from the image's histogram, the panel's Auto button), `commit` and
 `cancel`, and while a raw file opens also `demosaic` (below). All parts of one request are validated before any is applied; a rejected request
 leaves the settings, view state, preferences and document unchanged (and closes a dialog it
-opened). Unknown `ui` or settings properties, non-boolean `before` / `commit` / `cancel`, and
+opened). Unknown `ui` or settings properties, non-boolean `before` / `auto` / `commit` / `cancel`, and
 `commit` together with `cancel` are errors. Point curves (`pointCurve`, `pointCurveRed`,
 `pointCurveGreen`, `pointCurveBlue`) are empty or 2–16 finite points in 0–255 with inputs at
 least one level apart. Commit dispatches one `filter.cameraRaw` engine command; a failed commit
 keeps the dialog open for correction. Nothing else writes document history.
+
+A raw file opened from a path reads its sidecar (`IMG_0001.xmp` beside `IMG_0001.CR2`, Camera
+Raw's `crs:` settings) into the open-time dialog, and Open writes changed settings back
+(Preferences › Camera Raw Defaults › Write xmp sidecars). It never writes beside a DNG, over a
+sidecar another application wrote (a notice says it was kept), or for a control or MCP request.
+Open also applies the other Camera Raw Defaults (Sharpen For as part of the Camera Raw step, then
+colour space, bit depth and Open as Smart Object, so the step works on the pixels the dialog
+previewed; Apply auto tone fills the dialog), reported as `defaults` in the commit's reply; the
+resolution is set when the file opens. With "Open in Camera Raw" off the sidecar and the defaults
+apply without the dialog.
 
 **Opening a raw file.** An interactive open (File › Open, Open Recent, drag and drop, the
 command line) of a camera raw developed from its sensor data shows this dialog first, titled

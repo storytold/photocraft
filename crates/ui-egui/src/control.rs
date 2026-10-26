@@ -133,7 +133,7 @@ pub enum Outcome {
 /// field's value is validated before the first one is applied, so a typo, an unknown field, a
 /// bad value or a bad nested key can't reply with success while nothing — or only half of it —
 /// changed (#412).
-pub const UI_SET_FIELDS: [&str; 40] = [
+pub const UI_SET_FIELDS: [&str; 43] = [
     "updatesOpen",
     "tool",
     "strokeTrace",
@@ -174,6 +174,9 @@ pub const UI_SET_FIELDS: [&str; 40] = [
     "camTransformOnDrop",
     "tileGrid",
     "layerFilter",
+    "histogramPanel",
+    "histogramRange",
+    "histogramRefresh",
 ];
 
 /// Most clicks one `ui.click` may queue (#982). Each click is a press and a release that the app
@@ -390,12 +393,16 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest
 /// The open canvas context menu's rows for `ui.state`: the spelling suggestions first (type edit
 /// menu over a misspelled word), then the menu's own rows.
 fn context_entries(app: &PhotocraftApp, menu: &crate::canvas_tool_menu::CanvasToolMenu) -> Vec<Value> {
-    use crate::canvas_tool_menu::{entry_enabled, rows, spelling_rows};
+    use crate::canvas_tool_menu::{crop_rows, entry_enabled, rows, spelling_rows};
     let spelling = spelling_rows(menu);
     let mut entries: Vec<Value> = spelling.iter().map(|(label, id)| json!({"label": label, "id": id, "enabled": entry_enabled(app, menu, id)})).collect();
     if !spelling.is_empty() {
         entries.push(json!({"separator": true}));
     }
+    entries.extend(crop_rows(menu).iter().map(|row| match row {
+        Some((label, id)) => json!({"label": label, "id": id, "enabled": entry_enabled(app, menu, id)}),
+        None => json!({"separator": true}),
+    }));
     entries.extend(rows(menu).iter().map(|row| match row {
         Some((label, id)) => json!({"label": label, "id": id, "enabled": entry_enabled(app, menu, id)}),
         None => json!({"separator": true}),
@@ -588,6 +595,17 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 if crop_shield.as_ref().is_some_and(|s| !(0.0..=100.0).contains(&s.opacity)) {
                     return Err("cropShield.opacity must be 0..100".into());
                 }
+                // The Histogram panel: its options, the dragged tonal range ([from, to] levels or
+                // null) and Uncached Refresh.
+                let histogram_panel = merged_object(&app.ui.histogram_panel, p.get("histogramPanel"), "histogramPanel")?;
+                let histogram_range = match p.get("histogramRange") {
+                    Some(v) => Some(
+                        serde_json::from_value::<Option<[u8; 2]>>(v.clone())
+                            .map_err(|_| "histogramRange must be [from, to] levels 0..255, or null".to_string())?,
+                    ),
+                    None => None,
+                };
+                let histogram_refresh = bool_field(p, "histogramRefresh")?;
                 let panels = merged_object(&app.ui.panels, p.get("panels"), "panels")?;
                 let mask_target = bool_field(p, "maskTarget")?;
                 let updates_open = bool_field(p, "updatesOpen")?;
@@ -746,6 +764,16 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 }
                 if let Some(f) = layer_filter {
                     crate::layer_filter_ui::apply(&mut app.ui, f);
+                }
+                if let Some(h) = histogram_panel {
+                    app.ui.histogram_panel = h;
+                    crate::histogram_panel::persist_options(app);
+                }
+                if let Some(r) = histogram_range {
+                    app.ui.histogram_range = r;
+                }
+                if histogram_refresh == Some(true) {
+                    crate::histogram_panel::uncached_refresh(app);
                 }
                 if let Some(k) = crop_overlay {
                     app.ui.tool_options.crop_overlay = k;
@@ -1156,6 +1184,17 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                         }
                         continue;
                     }
+                    // No menu over the agent's own crop frame or Straighten line still being
+                    // dragged, also the first one on the default frame (nothing pending yet).
+                    if app.ui.tool == crate::state::Tool::Crop && (app.crop.drag.is_some() || app.crop.straighten.line.is_some()) {
+                        continue;
+                    }
+                    if app.ui.tool == crate::state::Tool::Crop && crate::crop_ui::pending(app) {
+                        if down {
+                            crate::canvas_tool_menu::open_crop(app, ctx, app.ui.tool, screen_point(app, x, y));
+                        }
+                        continue;
+                    }
                     if crate::canvas_tool_menu::pasteboard_at(app, app.ui.tool, [x, y]) {
                         if down {
                             crate::canvas_tool_menu::open_pasteboard(app, ctx, app.ui.tool, screen_point(app, x, y));
@@ -1413,6 +1452,7 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
                 "tool": menu.tool,
                 "pasteboard": menu.pasteboard,
                 "guide": menu.guide,
+                "crop": menu.crop.is_some(),
                 "entries": context_entries(app, menu)
             })
         }),
@@ -1441,6 +1481,7 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
         "brush": {"size": app.session.tools.brush.size, "hardness": app.session.tools.brush.hardness, "opacity": app.session.tools.brush.opacity},
         "distort": app.distort.describe(),
         "jobs": crate::jobs_ui::inspect(app),
+        "histogram": crate::histogram_panel::inspect(app),
         "cameraRaw": app.camera_raw.as_ref().map(|d| d.describe(&app.ui.camera_raw_scope, &app.ui.camera_raw_preview)),
     })
 }
@@ -2003,6 +2044,78 @@ mod tests {
         assert_eq!(call(&mut app, &ctx, "ui.context.choose", json!({"id":"view.twoHundredPercent"}))["ok"], true);
         assert_eq!(app.ui.views[0].zoom, 2.0);
         assert!(app.ui.canvas_tool_menu.is_none());
+    }
+
+    /// #6561: an agent's right-click on a pending crop opens the crop menu, as on the canvas.
+    #[test]
+    fn agent_right_click_on_a_pending_crop_opens_and_runs_the_crop_menu() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
+        app.sync_views();
+        app.ui.tool = crate::state::Tool::Crop;
+        app.ui.tool_options.crop_shield.classic_mode = true;
+        app.ui.extras.snap = false;
+        crate::crop_ui::ensure_frame(&mut app);
+        tool_event(&mut app, ToolEvent::Down { x: 4.0, y: 4.0, pressure: 1.0 }, egui::Modifiers::NONE);
+        tool_event(&mut app, ToolEvent::Move { x: 16.0, y: 12.0, pressure: 1.0 }, egui::Modifiers::NONE);
+        tool_event(&mut app, ToolEvent::Move { x: 28.0, y: 20.0, pressure: 1.0 }, egui::Modifiers::NONE);
+        tool_event(&mut app, ToolEvent::Up { x: 28.0, y: 20.0 }, egui::Modifiers::NONE);
+        let frame = app.ui.crop_rect.unwrap();
+        let result = call(
+            &mut app,
+            &ctx,
+            "ui.pointer",
+            json!({"tool": "Crop", "button": "secondary", "events": [{"kind":"down","x":16,"y":12},{"kind":"up","x":16,"y":12}]}),
+        );
+        assert_eq!(result["ok"], true);
+        let inspected = call(&mut app, &ctx, "ui.inspect", json!({}));
+        assert_eq!(inspected.pointer("/result/canvasToolMenu/crop"), Some(&json!(true)));
+        let entries = inspected.pointer("/result/canvasToolMenu/entries").and_then(Value::as_array).unwrap();
+        assert!(entries.iter().any(|row| row.get("id") == Some(&json!("crop.commit")) && row.get("enabled") == Some(&json!(true))));
+        assert_eq!(app.ui.crop_rect, Some(frame), "the right-click leaves the frame alone");
+        assert_eq!(call(&mut app, &ctx, "ui.context.choose", json!({"id":"crop.commit"}))["ok"], true);
+        let size = app.session.active().unwrap().doc.size;
+        assert_eq!([f64::from(size.width), f64::from(size.height)], [frame[2] - frame[0], frame[3] - frame[1]], "cropped to the frame");
+    }
+
+    /// An agent's right-click while its own crop frame drag is still down opens no menu over it;
+    /// after the drag's release it does.
+    #[test]
+    fn agent_right_click_during_its_crop_drag_opens_no_menu() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
+        app.sync_views();
+        app.ui.tool = crate::state::Tool::Crop;
+        app.ui.tool_options.crop_shield.classic_mode = true;
+        app.ui.extras.snap = false;
+        crate::crop_ui::ensure_frame(&mut app);
+        let pointer = |app: &mut PhotocraftApp, button: &str, events: Value| {
+            assert_eq!(call(app, &ctx, "ui.pointer", json!({"tool": "Crop", "button": button, "events": events}))["ok"], true);
+        };
+        // The first drag on the default frame (nothing pending yet): no pasteboard menu outside the image.
+        pointer(&mut app, "left", json!([{"kind":"down","x":4,"y":4},{"kind":"move","x":16,"y":12},{"kind":"move","x":28,"y":20}]));
+        assert!(app.crop.drag.is_some() && !crate::crop_ui::pending(&app), "the first frame is still being drawn");
+        pointer(&mut app, "secondary", json!([{"kind":"down","x":-8,"y":-8},{"kind":"up","x":-8,"y":-8}]));
+        assert!(app.ui.canvas_tool_menu.is_none(), "no pasteboard menu over the first drag");
+        pointer(&mut app, "left", json!([{"kind":"up","x":28,"y":20}]));
+        // A second drag, on the drawn frame, still down.
+        pointer(&mut app, "left", json!([{"kind":"down","x":16,"y":12},{"kind":"move","x":18,"y":14}]));
+        assert!(app.crop.drag.is_some() && crate::crop_ui::pending(&app), "the frame drag is still down");
+        let right_click = json!([{"kind":"down","x":16,"y":12},{"kind":"up","x":16,"y":12}]);
+        pointer(&mut app, "secondary", right_click.clone());
+        assert!(app.ui.canvas_tool_menu.is_none(), "no menu over the drag");
+        pointer(&mut app, "left", json!([{"kind":"up","x":18,"y":14}]));
+        pointer(&mut app, "secondary", right_click.clone());
+        assert!(app.ui.canvas_tool_menu.as_ref().is_some_and(|m| m.crop.is_some()), "after the release it opens");
+        // Nor over a Straighten line still being drawn.
+        app.ui.canvas_tool_menu = None;
+        crate::crop_straighten::toggle(&mut app);
+        pointer(&mut app, "left", json!([{"kind":"down","x":6,"y":6},{"kind":"move","x":20,"y":8}]));
+        assert!(app.crop.straighten.line.is_some(), "the Straighten line is still down");
+        pointer(&mut app, "secondary", right_click);
+        assert!(app.ui.canvas_tool_menu.is_none(), "no menu over the Straighten line");
     }
 
     #[test]

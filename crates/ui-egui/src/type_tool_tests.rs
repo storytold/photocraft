@@ -3129,3 +3129,80 @@ fn alt_mirrors_side_and_corner_drags_and_clamps_at_the_minimum() {
     drag(&mut app, [540.0, 480.0], [590.0, 530.0], Modifiers::ALT);
     assert_eq!(box_doc_rect(&app, id), [250.0, 250.0, 340.0, 280.0]);
 }
+
+/// The options bar's alignment and direction buttons show the type layer's paragraph, as
+/// Photoshop's bar follows the text, and the tool defaults again without a type target.
+#[test]
+fn options_bar_alignment_follows_the_target_paragraph() {
+    use egui::accesskit::Toggled;
+    use egui_kittest::kittest::NodeT;
+    let mut app = new_app();
+    let id = app.run("type.create", json!({"text": "Middle", "size": 20, "x": 300, "y": 420})).unwrap()["layer"].as_u64().unwrap();
+    app.run("type.setStyle", json!({"layer": id, "align": "center", "direction": "rtl"})).unwrap();
+    assert_eq!(app.ui.tool_options.type_align, "left", "the tool default stays Left");
+    let mut h = options_harness(app);
+    let on = |h: &Harness<'static, PhotocraftApp>, label: &str| h.get_by_label(label).accesskit_node().toggled() == Some(Toggled::True);
+    assert!(on(&h, "Center text") && !on(&h, "Left align text"), "the layer's centred paragraph");
+    assert!(on(&h, "Right-to-left paragraph direction") && !on(&h, "Automatic paragraph direction"));
+    h.state_mut().run("layer.new.layer", json!({})).unwrap();
+    h.run_steps(2);
+    assert!(on(&h, "Left align text") && !on(&h, "Center text"), "no type target: the tool default");
+}
+
+/// #9179 review: a text edit left in a background document shows its own paragraph, not that of
+/// a same-id layer in the active document (layer ids repeat across documents).
+#[test]
+fn styles_at_follows_the_text_edit_document() {
+    let mut app = new_app();
+    let a = app.session.active().unwrap().doc.id.0;
+    let id = app.run("type.create", json!({"text": "Edited", "size": 20, "x": 300, "y": 420})).unwrap()["layer"].as_u64().unwrap();
+    app.run("type.setStyle", json!({"layer": id, "align": "center"})).unwrap();
+    app.ui.text_edit = Some(crate::state::TextEdit {
+        layer: id,
+        document: Some(a),
+        caret: 2,
+        anchor: 2,
+        session: "s".into(),
+        created: false,
+        mask: false,
+        dragging: false,
+        resize: None,
+        preedit: None,
+    });
+    // The same file opened twice: a second document whose layers have the same ids.
+    let twin = app.session.active().unwrap().doc.as_ref().clone();
+    app.session.open_document(twin, None);
+    app.run("type.setStyle", json!({"layer": id, "align": "right"})).unwrap();
+    assert_ne!(app.session.active().unwrap().doc.id.0, a, "the other document is active");
+    let (_, p) = super::styles_at(&app).unwrap();
+    assert_eq!(p.align, photocraft_doc::text::TextAlign::Center, "the edited document's paragraph");
+}
+
+/// A collapsed caret shows the paragraph it is in, as Photoshop's options bar and Paragraph panel
+/// do; it read the first paragraph's (byte 0) wherever the caret was.
+#[test]
+fn styles_at_a_collapsed_caret_shows_the_caret_s_paragraph() {
+    let mut app = new_app();
+    let id = app.run("type.create", json!({"text": "First\rSecond", "size": 20, "x": 300, "y": 420})).unwrap()["layer"].as_u64().unwrap();
+    app.run("type.setStyle", json!({"layer": id, "range": [6, 12], "align": "right"})).unwrap();
+    let edit = |caret: usize| crate::state::TextEdit {
+        layer: id,
+        document: None,
+        caret,
+        anchor: caret,
+        session: "s".into(),
+        created: false,
+        mask: false,
+        dragging: false,
+        resize: None,
+        preedit: None,
+    };
+    use photocraft_doc::text::TextAlign;
+    for (caret, want) in
+        [(0, TextAlign::Left), (3, TextAlign::Left), (5, TextAlign::Left), (6, TextAlign::Right), (9, TextAlign::Right), (12, TextAlign::Right)]
+    {
+        app.ui.text_edit = Some(edit(caret));
+        let (_, p) = super::styles_at(&app).unwrap();
+        assert_eq!(p.align, want, "caret {caret}");
+    }
+}

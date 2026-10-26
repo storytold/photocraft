@@ -773,6 +773,7 @@ const PAINT_IDS: &[&str] = &[
     "paint.sharpen",
     "paint.smudge",
     "paint.historyBrush",
+    "paint.artHistoryBrush",
     "paint.redEye",
     "paint.remove",
 ];
