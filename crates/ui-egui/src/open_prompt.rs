@@ -265,5 +265,12 @@ fn open(app: &mut PhotocraftApp, held: Held, action: Option<&str>) -> Result<Val
     };
     app.session.set_active(index);
     crate::jobs_ui::after_open(app, document, &name, path.as_deref(), &warnings, bytes.as_deref().map(Vec::as_slice))?;
+    if path.is_none()
+        && let Some(bytes) = bytes
+        && let Some(recent) = app.services.recent_files.as_mut()
+    {
+        // This is the accepted-open boundary shared by picker, drop and browser control.
+        let _ = recent(crate::RecentFileRequest::Remember(name, bytes));
+    }
     Ok(json!({"document": index, "action": action}))
 }

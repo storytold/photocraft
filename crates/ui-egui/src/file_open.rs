@@ -147,6 +147,12 @@ impl PhotocraftApp {
 
     #[cfg(target_arch = "wasm32")]
     pub fn open_path(&mut self, path: &str) -> Result<Vec<String>, String> {
+        if path.starts_with("browser-recent/")
+            && let Some(recent) = self.services.recent_files.as_mut()
+        {
+            recent(crate::RecentFileRequest::Open(path.to_string()))?;
+            return Ok(Vec::new());
+        }
         Err(format!("cannot open paths on the web: {path}"))
     }
 

@@ -278,18 +278,10 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
             Ok(Value::Null)
         }
         id if id.starts_with("file.openRecent.") => {
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                match id.rsplit('.').next().and_then(|s| s.parse::<usize>().ok()).and_then(|i| app.ui.recent_files.get(i).cloned()) {
-                    Some(p) => open_path(app, &p),
-                    None => Err("no such recent file".to_string()),
-                }
-            }
-            #[cfg(target_arch = "wasm32")]
-            {
-                let _ = app;
-                let message = "Open Recent is unavailable on the web";
-                Err(tl!(message).to_string())
+            // The platform loader resolves either a native path or a retained browser copy.
+            match id.rsplit('.').next().and_then(|s| s.parse::<usize>().ok()).and_then(|i| app.ui.recent_files.get(i).cloned()) {
+                Some(p) => open_path(app, &p),
+                None => Err("no such recent file".to_string()),
             }
         }
         "file.saveAs" => {
@@ -1056,7 +1048,13 @@ pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
             .iter()
             .enumerate()
             .map(|(i, p)| {
-                let label = std::path::Path::new(p).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| p.clone());
+                let mut label = std::path::Path::new(p).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| p.clone());
+                // Same-name browser imports remain distinguishable while retaining their names.
+                if let Some((hash, _)) = p.strip_prefix("browser-recent/").and_then(|p| p.split_once('/'))
+                    && let Some(short) = hash.get(..8)
+                {
+                    label.push_str(&format!(" [{short}]"));
+                }
                 MenuItem { id: format!("file.openRecent.{i}"), label, path: rp.clone(), shortcut: None, enabled: true, checked: None, color: None }
             })
             .collect();

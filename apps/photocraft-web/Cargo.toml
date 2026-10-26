@@ -24,6 +24,7 @@ photocraft-io = { workspace = true }
 photocraft-codecs = { workspace = true }
 photocraft-doc = { workspace = true }
 photocraft-ui-egui = { workspace = true }
+sha2 = "0.10"
 egui = { workspace = true }
 log = { workspace = true }
 

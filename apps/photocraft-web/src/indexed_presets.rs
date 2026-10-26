@@ -75,7 +75,7 @@ fn request(request: &IdbRequest) -> Pending {
 }
 
 /// A single deadline bounds the whole startup read, not ten seconds per record.
-async fn before(promise: &Promise, deadline: f64) -> Result<JsValue, String> {
+pub(crate) async fn before(promise: &Promise, deadline: f64) -> Result<JsValue, String> {
     let window = web_sys::window().ok_or("no window")?;
     let mut timer = None;
     let mut callback = None;
@@ -96,9 +96,10 @@ async fn before(promise: &Promise, deadline: f64) -> Result<JsValue, String> {
     result
 }
 
-async fn open(deadline: f64) -> Result<IdbDatabase, String> {
+/// Open an isolated browser collection using the same bounded transaction machinery.
+pub(crate) async fn open(name: &str, deadline: f64) -> Result<IdbDatabase, String> {
     let factory = web_sys::window().ok_or("no window")?.indexed_db().map_err(js)?.ok_or("IndexedDB unavailable")?;
-    let req = factory.open_with_u32(DATABASE, 1).map_err(js)?;
+    let req = factory.open_with_u32(name, 1).map_err(js)?;
     let mut upgrade = Listeners::new();
     let upgrade_req = req.clone();
     upgrade
@@ -133,7 +134,7 @@ async fn open(deadline: f64) -> Result<IdbDatabase, String> {
 
 pub async fn load() -> Result<(IdbDatabase, Bridge, Vec<String>), String> {
     let deadline = js_sys::Date::now() + TIMEOUT_MS;
-    let db = open(deadline).await?;
+    let db = open(DATABASE, deadline).await?;
     let result = read(&db, deadline).await;
     match result {
         Ok((bridge, warnings)) => Ok((db, bridge, warnings)),
@@ -207,6 +208,19 @@ async fn read(db: &IdbDatabase, deadline: f64) -> Result<(Bridge, Vec<String>), 
         bridge.load(&name, Uint8Array::new(&buffer).to_vec())?;
     }
     Ok((bridge, warnings))
+}
+
+/// Read one retained document lazily. Document sizes use the browser's own quota,
+/// rather than the preset library's separate record-size limits.
+pub(crate) async fn read_file(db: &IdbDatabase, key: &str) -> Result<Vec<u8>, String> {
+    let deadline = js_sys::Date::now() + TIMEOUT_MS;
+    let tx = db.transaction_with_str_and_mode(FILES, IdbTransactionMode::Readonly).map_err(js)?;
+    let req = tx.object_store(FILES).map_err(js)?.get(&JsValue::from_str(key)).map_err(js)?;
+    let pending = request(&req);
+    let value = before(&pending.promise, deadline).await?;
+    let blob = value.dyn_into::<Blob>().map_err(|_| "The retained copy is no longer available; use File → Open.".to_string())?;
+    let buffer = before(&blob.array_buffer(), deadline).await?;
+    Ok(Uint8Array::new(&buffer).to_vec())
 }
 
 pub async fn write(db: &IdbDatabase, batch: &Batch) -> Result<(), String> {

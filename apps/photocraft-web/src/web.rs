@@ -89,7 +89,10 @@ pub fn start() {
                     let (session, warnings) = crate::preset_bridge::session(presets.clone());
                     preset_warnings.extend(warnings);
                     let drag = listen_drag(&pen_target);
-                    let mut app = PhotocraftApp::new(session, services(inbox.clone(), place_inbox.clone(), drag_pos_service(pen_target.clone(), drag)));
+                    let recent = crate::browser_recent::Recent::default();
+                    let mut platform = services(inbox.clone(), place_inbox.clone(), drag_pos_service(pen_target.clone(), drag));
+                    platform.recent_files = Some(recent.service());
+                    let mut app = PhotocraftApp::new(session, platform);
                     if !preset_warnings.is_empty() {
                         photocraft_ui_egui::notices::post(&mut app, i18n::t("Some brush presets could not be loaded"), preset_warnings, true, None);
                     }
@@ -103,7 +106,7 @@ pub fn start() {
                     }
                     let unsaved = Arc::new(AtomicBool::new(false));
                     guard_unload(unsaved.clone());
-                    Ok(Box::new(WebShell { app, inbox, place_inbox, unsaved, served, database, presets }))
+                    Ok(Box::new(WebShell { app, inbox, place_inbox, unsaved, served, database, presets, recent }))
                 }),
             )
             .await;
@@ -270,6 +273,7 @@ struct WebShell {
     served: Served,
     database: Option<web_sys::IdbDatabase>,
     presets: crate::preset_bridge::Bridge,
+    recent: crate::browser_recent::Recent,
 }
 
 impl WebShell {
@@ -362,6 +366,7 @@ impl eframe::App for WebShell {
         }
         self.serve_fonts(ctx);
         self.app.logic_frame(ctx, frame);
+        self.recent.tick(&mut self.app, ctx);
         self.save_presets(ctx);
         self.app.finish_type_reset_logic(ctx);
     }

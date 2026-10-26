@@ -339,6 +339,15 @@ impl FormatChoices {
 
 /// Decode a file: (document, warnings about anything approximated or dropped).
 pub type ImportFn = Box<dyn Fn(&str, &[u8], &photocraft_io::ImportOptions) -> Result<(Document, Vec<String>), String>>;
+
+/// Platform history requests carry browser copies, never native write-back paths.
+pub enum RecentFileRequest {
+    Remember(String, std::sync::Arc<Vec<u8>>),
+    Open(String),
+    /// Pending retention cannot undo the user's removal or clearing of the list.
+    Invalidate,
+}
+pub type RecentFilesFn = Box<dyn FnMut(RecentFileRequest) -> Result<(), String>>;
 /// Encoder settings chosen in Export As (the file format comes from the name's extension).
 #[derive(Clone, Debug, PartialEq)]
 pub struct ExportSettings {
@@ -567,6 +576,8 @@ pub type RightButtonDownFn = Box<dyn Fn() -> bool + Send + Sync>;
 /// I/O dependencies.
 #[derive(Default)]
 pub struct Services {
+    /// Asynchronous recent-file persistence supplied by browser shells.
+    pub recent_files: Option<RecentFilesFn>,
     /// User-initiated desktop/browser pixel sampling.
     pub screen_pick: Option<screen_picker::Service>,
     /// Decode a file's bytes into a document (PSD, PNG, JPEG, …).
@@ -1631,6 +1642,9 @@ impl PhotocraftApp {
 
     /// File › Open Recent › Clear Recent File List.
     pub fn clear_recent(&mut self) {
+        if let Some(recent) = self.services.recent_files.as_mut() {
+            let _ = recent(RecentFileRequest::Invalidate);
+        }
         self.ui.recent_files.clear();
         self.session.prefs.edit(|p| p.file_handling.recent_files.clear());
     }
@@ -1638,6 +1652,9 @@ impl PhotocraftApp {
     /// Take one file off the recent list (the Home screen's × or Remove from Recent, #2691). The
     /// file stays on disk, and opening it again lists it again.
     pub fn remove_recent(&mut self, path: &str) {
+        if let Some(recent) = self.services.recent_files.as_mut() {
+            let _ = recent(RecentFileRequest::Invalidate);
+        }
         self.ui.recent_files.retain(|p| p != path);
         self.session.prefs.edit(|p| p.file_handling.recent_files.retain(|r| r != path));
     }
@@ -1700,6 +1717,8 @@ impl PhotocraftApp {
         let developed = warnings.iter().any(|w| w.contains(photocraft_io::raw::DEVELOPED_NOTE));
         let question = self.session.color.open_question(&doc).filter(|_| !developed);
         let wants_raw = camera_raw_ui::wants_open_dialog(self, &warnings);
+        // Hold the source only when the platform needs a retained browser copy.
+        let keep_bytes = (wants_raw || self.services.recent_files.is_some()) && path.is_none();
         open_prompt::arrive(
             self,
             open_prompt::Held {
@@ -1709,7 +1728,9 @@ impl PhotocraftApp {
                 name: name.to_string(),
                 path: path.map(str::to_string),
                 warnings: warnings.clone(),
-                bytes: (wants_raw && path.is_none()).then(|| std::sync::Arc::new(bytes.to_vec())),
+                // Keep bytes until the open prompt actually accepts the document. Preset files,
+                // failed imports, and cancelled profile prompts never enter browser history.
+                bytes: keep_bytes.then(|| std::sync::Arc::new(bytes.to_vec())),
                 slot: None,
                 question,
                 policy_applied: false,
