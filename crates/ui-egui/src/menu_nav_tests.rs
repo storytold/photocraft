@@ -45,6 +45,7 @@ fn reported_menus_stay_above_the_panel_when_the_window_position_is_unknown() {
                     break;
                 }
                 h.event(egui::Event::MouseWheel {
+                    source: egui::MouseWheelSource::Unknown,
                     unit: egui::MouseWheelUnit::Point,
                     delta: egui::vec2(0.0, -60.0),
                     modifiers: egui::Modifiers::NONE,
@@ -164,6 +165,7 @@ fn the_mouse_wheel_scrolls_a_long_menu() {
                 break;
             }
             h.event(egui::Event::MouseWheel {
+                source: egui::MouseWheelSource::Unknown,
                 unit: egui::MouseWheelUnit::Point,
                 delta: egui::vec2(0.0, -60.0),
                 modifiers: egui::Modifiers::NONE,
@@ -263,6 +265,44 @@ fn left_and_right_switch_menus_and_shortcuts_wait_while_one_is_open() {
     h.run_steps(2);
     assert!(h.query_by_label_contains("Open…").is_none(), "Esc closes the menu");
     assert!(!is_open(&h.ctx), "shortcuts work again");
+}
+
+/// In Help › Search, ← / → move the field's cursor instead of switching to Window / File, and
+/// Space types a space instead of running the lit row.
+#[test]
+fn help_search_keeps_the_arrows_and_space_that_edit_it() {
+    let mut h = harness((1280.0, 720.0, 1.0));
+    open(&mut h, "Help");
+    let field = egui::Id::unique("help-menu-search").with("field");
+    assert_eq!(h.ctx.memory(|m| m.focused()), Some(field), "the search field has the keyboard");
+    let text = |h: &Harness<'static, PhotocraftApp>| h.ctx.data(|d| d.get_temp::<String>(egui::Id::unique("help-menu-search"))).unwrap_or_default();
+    let typing = |h: &mut Harness<'static, PhotocraftApp>, s: &str| {
+        h.event(egui::Event::Text(s.to_string()));
+        h.run_steps(3);
+    };
+    typing(&mut h, "levls");
+    key(&mut h, egui::Key::ArrowLeft);
+    assert!(h.query_by_label_contains("About PhotoCraft").is_some(), "← keeps Help open");
+    key(&mut h, egui::Key::ArrowLeft);
+    typing(&mut h, "e");
+    assert_eq!(text(&h), "levels", "← moved the cursor");
+    // The cursor sits at `leve|ls`: two → take it to the end.
+    key(&mut h, egui::Key::ArrowRight);
+    assert!(h.query_by_label_contains("About PhotoCraft").is_some(), "→ keeps Help open");
+    key(&mut h, egui::Key::ArrowRight);
+    // The pointer resting on a result lights it; a space typed then is text, not a click.
+    // "levels" finds both Image › Adjustments › Levels… and the Levels adjustment layer.
+    let levels = h.get_all_by_label_contains("› Levels").next().expect("a Levels result").rect().center();
+    h.hover_at(levels);
+    h.run_steps(3);
+    assert!(Nav::current(&h.ctx).highlighted(0).is_some(), "a result is lit");
+    h.event(egui::Event::Key { key: egui::Key::Space, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE });
+    h.event(egui::Event::Text(" ".into()));
+    h.event(egui::Event::Key { key: egui::Key::Space, physical_key: None, pressed: false, repeat: false, modifiers: egui::Modifiers::NONE });
+    h.run_steps(3);
+    assert!(is_open(&h.ctx) && h.query_by_label_contains("About PhotoCraft").is_some(), "Space keeps Help open");
+    assert!(h.state().ui.dialogs.is_empty(), "Space ran no command: {:?}", h.state().ui.dialogs);
+    assert_eq!(text(&h), "levels ");
 }
 
 /// A level's visible height (its view) and the full height of its rows: equal means no scrolling.
@@ -373,6 +413,7 @@ fn a_short_window_still_scrolls_the_file_menu_to_its_last_row() {
             break;
         }
         h.event(egui::Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
             unit: egui::MouseWheelUnit::Point,
             delta: egui::vec2(0.0, -60.0),
             modifiers: egui::Modifiers::NONE,
@@ -527,6 +568,7 @@ fn menus_stay_above_the_taskbar_and_scroll_to_their_last_row() {
             h.hover_at(view.center());
             for _ in 0..60 {
                 h.event(egui::Event::MouseWheel {
+                    source: egui::MouseWheelSource::Unknown,
                     unit: egui::MouseWheelUnit::Point,
                     delta: egui::vec2(0.0, 120.0),
                     modifiers: egui::Modifiers::NONE,
@@ -689,6 +731,37 @@ fn press_drag_release_reaches_other_menus_and_submenus() {
     assert!(Nav::current(&h.ctx).rows.first().is_none_or(|r| r.is_empty()), "and closed the menus");
 }
 
+/// Press-and-hold a menu title and drag through the items: the highlight follows the
+/// pointer the whole way, down and back up, without lagging or dropping (#8887).
+#[test]
+fn press_drag_highlight_follows_the_pointer() {
+    use egui::{Modifiers, PointerButton};
+    let mut h = harness((1280.0, 720.0, 1.0));
+    let title = h.get_by_label("View").rect().center();
+    h.event(egui::Event::PointerMoved(title));
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: title, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+    let rows = Nav::current(&h.ctx).rows.first().cloned().unwrap_or_default();
+    assert!(rows.len() > 4, "the View menu has rows to drag through");
+    // Drag down through the first rows, one at a time, still holding the button.
+    for i in 1..=4 {
+        let row = rows.get(i).expect("row exists");
+        h.event(egui::Event::PointerMoved(row.rect.center()));
+        h.run_steps(1);
+        assert_eq!(Nav::current(&h.ctx).highlighted(0), Some(i), "holding and dragging onto row {i} highlights it");
+    }
+    // Back up the way a user overshooting and correcting does.
+    for i in (1..=3).rev() {
+        let row = rows.get(i).unwrap();
+        h.event(egui::Event::PointerMoved(row.rect.center()));
+        h.run_steps(1);
+        assert_eq!(Nav::current(&h.ctx).highlighted(0), Some(i), "dragging back up to row {i} highlights it");
+    }
+    h.event(egui::Event::PointerButton { pos: rows.get(1).unwrap().rect.center(), button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+}
+
 /// A menu bar whose frames are `dt` seconds apart, as with a real pointer sending moves.
 fn harness_dt(dt: f32) -> Harness<'static, PhotocraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1280.0, 720.0)).with_step_dt(dt).build_ui_state(
@@ -843,4 +916,64 @@ fn heading_is_the_triangle_to_the_submenus_near_edge() {
     assert!(heading(egui::pos2(150.0, 110.0), egui::pos2(130.0, 160.0), left));
     assert!(!heading(egui::pos2(150.0, 110.0), egui::pos2(170.0, 160.0), left));
     assert!(!heading(from, from, egui::Rect::NOTHING));
+}
+
+/// #5896, #6225: a menu scrolled down (to reach Edit › Preferences or Window › Theme) reopens
+/// scrolled, with the rows above its view lying over the menu bar. egui opens a submenu when the
+/// pointer is over its row even where the row is scrolled out of sight, so a hidden submenu row
+/// under the title opened on the press and the click on the title then closed the whole menu.
+/// Rows out of view must not open their submenus: the menu stays open.
+#[test]
+fn a_scrolled_menu_reopens_and_stays_open_with_a_hidden_submenu_row_under_its_title() {
+    use egui::{Modifiers, PointerButton};
+    for top in ["Edit", "Window"] {
+        let mut h = harness((1280.0, 420.0, 1.0));
+        open(&mut h, top);
+        let title = h.get_by_label(top).rect().center();
+        let view = Nav::current(&h.ctx).views[0];
+        assert!(Nav::current(&h.ctx).contents[0] > view.height() + 1.0, "{top} must overflow for this test to mean anything");
+        // Scroll to the end, then back up until a submenu row is out of view right under the title.
+        h.hover_at(egui::pos2(view.center().x, view.bottom() - 2.0));
+        let wheel = |h: &mut Harness<'static, PhotocraftApp>, dy: f32| {
+            h.event(egui::Event::MouseWheel {
+                source: egui::MouseWheelSource::Unknown,
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(0.0, dy),
+                modifiers: Modifiers::NONE,
+                phase: egui::TouchPhase::Move,
+            });
+            h.run_steps(1);
+        };
+        for _ in 0..60 {
+            wheel(&mut h, -60.0);
+        }
+        let under = |h: &Harness<'static, PhotocraftApp>| {
+            rows(h, 0).iter().any(|r| r.command.is_none() && r.enabled && r.rect.x_range().contains(title.x) && r.rect.y_range().contains(title.y))
+        };
+        for _ in 0..400 {
+            if under(&h) {
+                break;
+            }
+            wheel(&mut h, 8.0);
+        }
+        assert!(under(&h), "{top}: a submenu row scrolled under the title");
+        key(&mut h, egui::Key::Escape);
+        assert!(!is_open(&h.ctx), "{top}: Esc closed it");
+        // Click the title again: press, release, as a mouse does.
+        h.hover_at(title);
+        h.run_steps(1);
+        h.event(egui::Event::PointerButton { pos: title, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        h.run_steps(1);
+        h.event(egui::Event::PointerButton { pos: title, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        // Per frame after the click: is the menu open, and how many levels are drawn?
+        let frames: Vec<(bool, usize)> = (0..6)
+            .map(|_| {
+                h.run_steps(1);
+                let nav = Nav::current(&h.ctx);
+                (nav.rows.first().is_some_and(|r| !r.is_empty()), nav.rows.len())
+            })
+            .collect();
+        assert!(frames.iter().all(|f| f.0), "{top}: the menu closed again right after the click: {frames:?}");
+        assert!(frames.iter().all(|f| f.1 == 1), "{top}: a submenu scrolled out of view opened under the title: {frames:?}");
+    }
 }

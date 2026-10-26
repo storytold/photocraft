@@ -182,7 +182,9 @@ fn follow(d: &mut ArtboardDrag, p: [f64; 2], mods: egui::Modifiers) {
 
 /// Pointer input for the Artboard tool. Returns true when the event was its own.
 pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) -> bool {
-    if app.ui.tool != Tool::Artboard {
+    // ⌘ is the Move tool (`hold_keys::cmd_moves`): a press with it held is not this tool's,
+    // so it drags a guide or the layer (#6288). A drag already under way keeps its events.
+    if app.ui.tool != Tool::Artboard || (app.ui.artboard_tool.drag.is_none() && crate::canvas::event_tool(app, mods) != Tool::Artboard) {
         return false;
     }
     let Some(doc) = app.session.active().map(|d| d.doc.clone()) else { return true };
@@ -238,20 +240,17 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
     true
 }
 
-/// The resize pointer for handle (`hx`, `hy`), or none away from the selected board's handles.
-pub fn cursor(app: &PhotocraftApp, p: [f64; 2]) -> Option<CursorIcon> {
+/// The resize pointer for handle (`hx`, `hy`) as the view shows it, or none away from the
+/// selected board's handles.
+pub fn cursor(app: &PhotocraftApp, xf: &ViewXform, p: [f64; 2]) -> Option<CursorIcon> {
     let (hx, hy) = match app.ui.artboard_tool.drag {
         Some(ArtboardDrag::Resize { hx, hy, .. }) => (hx, hy),
         Some(_) => return None,
         None if plus_at(app, p).is_some() => return Some(CursorIcon::PointingHand),
         None => handle_at(app, p).map(|h| (h.2, h.3))?,
     };
-    Some(match (hx, hy) {
-        (_, 0) => CursorIcon::ResizeHorizontal,
-        (0, _) => CursorIcon::ResizeVertical,
-        _ if hx == hy => CursorIcon::ResizeNwSe,
-        _ => CursorIcon::ResizeNeSw,
-    })
+    // (hx, hy) is the handle's outward direction: -1, 0 or 1 on each axis.
+    Some(crate::tool_cursor::resize([f64::from(hx), f64::from(hy)], xf))
 }
 
 /// The selected board's handles, its "+" buttons, and the board a gesture in progress would leave.
@@ -305,14 +304,14 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         let mut preset = preset.unwrap_or_default();
         let mut opts: Vec<(String, &str)> = vec![(String::new(), tl!("Custom"))];
         opts.extend(photocraft_engine::artboard_cmds::PRESETS.iter().map(|(n, _, _)| (n.to_string(), *n)));
-        if crate::widgets::dropdown(ui, "artboard-tool-preset", &mut preset, &opts, 150.0) && !preset.is_empty() {
+        if crate::widgets::dropdown(ui, "artboard-tool-preset", tl!("Preset"), &mut preset, &opts, 150.0) && !preset.is_empty() {
             edit = Some(json!({"layer": id.0, "preset": preset}));
         }
         let (mut w, mut h) = ((r[2] - r[0]) as f32, (r[3] - r[1]) as f32);
         ui.label(egui::RichText::new(tl!("W")).color(t.text_dim));
-        let cw = crate::widgets::value_field(ui, &mut w, 1.0..=300_000.0, "px", 64.0).changed();
+        let cw = crate::widgets::value_field(ui, &mut w, 1.0..=300_000.0, "px", 64.0).accessible_name(tl!("Width")).changed();
         ui.label(egui::RichText::new(tl!("H")).color(t.text_dim));
-        let ch = crate::widgets::value_field(ui, &mut h, 1.0..=300_000.0, "px", 64.0).changed();
+        let ch = crate::widgets::value_field(ui, &mut h, 1.0..=300_000.0, "px", 64.0).accessible_name(tl!("Height")).changed();
         if cw || ch {
             edit = Some(json!({"layer": id.0, "width": w.round(), "height": h.round(), "coalesce": format!("artboard-tool-wh-{}", id.0)}));
         }
@@ -386,6 +385,24 @@ mod tests {
         // A click on empty canvas draws nothing.
         drag(&mut app, [300.0, 250.0], [300.0, 250.0]);
         assert_eq!(boards(&app).len(), 1);
+    }
+
+    /// The handles' resize arrows turn with a rotated view: on a view turned 90°, the right edge's
+    /// handle resizes up and down on screen.
+    #[test]
+    fn resize_cursors_turn_with_the_view() {
+        use CursorIcon::{ResizeHorizontal as H, ResizeNeSw as NeSw, ResizeNwSe as NwSe, ResizeVertical as V};
+        let mut app = app();
+        drag(&mut app, [20.0, 30.0], [120.0, 110.0]);
+        // The right edge, the top edge, the top-left and the top-right corner.
+        let handles = [[120.0, 70.0], [70.0, 30.0], [20.0, 30.0], [120.0, 30.0]];
+        for (rotation, want) in [(0.0, [H, V, NwSe, NeSw]), (90.0, [V, H, NeSw, NwSe])] {
+            let view_index = app.session.active_index().unwrap();
+            app.ui.views[view_index].rotation = rotation;
+            let xf = ViewXform::active(&app).unwrap();
+            let got = handles.map(|p| cursor(&app, &xf, p));
+            assert_eq!(got, want.map(Some), "view turned {rotation}°");
+        }
     }
 
     /// #3033: a click on the selected board's right "+" adds a board of its size a gap to the right;

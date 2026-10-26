@@ -1,5 +1,6 @@
 //! The top-level [`PsdFile`] model, parser and writer.
 
+use crate::compression::{Compression, MAX_DECODED_BYTES, decode_planes, validate_planes};
 use crate::error::{PsdError, Result};
 use crate::header::{ColorMode, Header, Version};
 use crate::image_data::ImageData;
@@ -38,6 +39,14 @@ pub struct GlobalLayerMask {
 }
 
 impl GlobalLayerMask {
+    /// The mask Photoshop writes for a layered file that has no global mask of its own:
+    /// an RGB red overlay at 50% opacity, kind 128 (use the per-layer setting), plus the
+    /// filler byte. A zero-length `LMsk` block in a TIFF makes Photoshop give up on the
+    /// layer data (it reads this 14-byte record from the block).
+    pub fn photoshop_default() -> Self {
+        GlobalLayerMask { data: vec![0, 0, 0xff, 0xff, 0, 0, 0, 0, 0, 0, 0, 50, 128, 0] }
+    }
+
     fn be16(&self, at: usize) -> Option<u16> {
         self.data.get(at..at + 2).map(|b| u16::from_be_bytes([b[0], b[1]]))
     }
@@ -90,6 +99,33 @@ pub struct PsdFile {
 impl PsdFile {
     /// Parses a PSD or PSB file.
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        Self::from_bytes_and_merged(data, |_| false).map(|(file, _)| file)
+    }
+
+    /// Parses like [`Self::from_bytes`] and, when `want` asks for it, decodes the merged image
+    /// (as [`Self::decode_merged`] would) in the same pass. `want` sees the file with everything
+    /// but the merged image parsed (its `image_data` is still empty). A ZIP merged image is then
+    /// inflated once for both the parse's check of the stream and the decode, not twice.
+    ///
+    /// Errors are those of [`Self::from_bytes`]; a merged image that passes the parse's check but
+    /// cannot be decoded is the inner `Err`, as [`Self::decode_merged`] would return it.
+    pub fn from_bytes_and_merged(data: &[u8], want: impl FnOnce(&PsdFile) -> bool) -> Result<(Self, Option<Result<Vec<u8>>>)> {
+        Self::from_bytes_and_merged_recovering(data, want, |_| false)
+    }
+
+    /// Parses like [`Self::from_bytes_and_merged`], but lets `recover` accept damage confined to
+    /// the merged image after all layer records and channel data have been read successfully.
+    /// Callers should opt in only when they can reconstruct the document from its layers.
+    ///
+    /// The original encoded image bytes are preserved and its parse error is returned as
+    /// `Some(Err(..))`, even when `want` did not request a decode. The caller must report that
+    /// error rather than silently discarding the merged image (which may hold extra channels).
+    /// Header/layer errors, missing compression fields and parse safety-limit errors stay fatal.
+    pub fn from_bytes_and_merged_recovering(
+        data: &[u8],
+        want: impl FnOnce(&PsdFile) -> bool,
+        recover: impl FnOnce(&PsdFile) -> bool,
+    ) -> Result<(Self, Option<Result<Vec<u8>>>)> {
         let mut r = Reader::new(data);
         let header = Header::read(&mut r)?;
         let psb = header.version.is_psb();
@@ -146,8 +182,59 @@ impl PsdFile {
                 layer_mask_trailing = s.peek_rest().to_vec();
             }
         }
-        let image_data = ImageData::read(&mut r, &header)?;
-        Ok(PsdFile { header, color_mode_data, resources, layer_info, layer_info_placement, global_layer_mask, global_blocks, layer_mask_trailing, image_data })
+        let image_data = ImageData { compression: Compression::Raw, data: Vec::new() };
+        let mut file =
+            PsdFile { header, color_mode_data, resources, layer_info, layer_info_placement, global_layer_mask, global_blocks, layer_mask_trailing, image_data };
+        let mut encoded = r.clone();
+        let merged = if want(&file) {
+            file.read_merged_decoded(&mut r).map(Some)
+        } else {
+            ImageData::read(&mut r, &file.header).map(|image| {
+                file.image_data = image;
+                None
+            })
+        };
+        let merged = match merged {
+            Ok(merged) => merged,
+            Err(error) => {
+                if matches!(error, PsdError::LimitExceeded(_)) || !recover(&file) {
+                    return Err(error);
+                }
+                let compression = Compression::from_u16(encoded.u16()?);
+                let source = encoded.peek_rest();
+                let mut data = Vec::new();
+                data.try_reserve_exact(source.len()).map_err(|_| PsdError::LimitExceeded("not enough memory to retain the damaged merged image"))?;
+                data.extend_from_slice(source);
+                file.image_data = ImageData { compression, data };
+                Some(Err(error))
+            }
+        };
+        Ok((file, merged))
+    }
+
+    /// Reads the merged image into `self.image_data` and decodes it. A ZIP stream within the
+    /// decode limit is inflated once: by the decode, whose stream check is the one
+    /// [`ImageData::read`] makes. Only when the decode fails is that check run on its own, to
+    /// tell a file the parse rejects (the outer `Err`) from one it accepts (the inner `Err`).
+    fn read_merged_decoded(&mut self, r: &mut Reader<'_>) -> Result<Result<Vec<u8>>> {
+        let layout = ImageData::layout(&self.header);
+        let compression = Compression::from_u16(r.clone().u16()?);
+        let zip = matches!(compression, Compression::Zip | Compression::ZipPrediction);
+        if !zip || layout.total_bytes()? > MAX_DECODED_BYTES {
+            // Nothing is inflated twice here: the parse's check reads sizes only (or skips an
+            // over-limit stream, which the decode then refuses).
+            self.image_data = ImageData::read(r, &self.header)?;
+            return Ok(self.decode_merged());
+        }
+        r.u16()?;
+        let data = r.peek_rest();
+        let decoded = decode_planes(compression, data, &layout);
+        if decoded.is_err() {
+            validate_planes(compression, data, &layout)?;
+        }
+        self.image_data = ImageData { compression, data: data.to_vec() };
+        r.skip(data.len())?;
+        Ok(decoded)
     }
 
     /// Serializes the file.
@@ -272,7 +359,13 @@ impl PsdFile {
         self.image_data.decode(&self.header)
     }
 
-    /// `true` if the merged image carries a transparency channel.
+    /// `true` if the merged image carries a transparency channel: its first extra channel, when
+    /// the layer count was stored negative or a "Saving Merged Transparency" global block (see
+    /// [`TaggedBlock::is_merged_transparency_marker`]) is present. Photoshop marks 32-bit documents
+    /// with `Mt32` and a positive layer count (psd-tools transparentbg.psd). Photoshop also names
+    /// the merged transparency "Transparency" and lists it first among the alpha channel names,
+    /// and some of its 16-bit PSBs carry no other mark (#4654): when the layers sit in a global
+    /// `Lr16`/`Lr32` block, that name with one name per extra channel marks it too.
     pub fn merged_has_alpha(&self) -> bool {
         let Some(color) = self.header.color_mode.color_channels() else {
             return false;
@@ -280,10 +373,40 @@ impl PsdFile {
         if self.header.channels <= color {
             return false;
         }
+        let marked = self.global_blocks.iter().any(TaggedBlock::is_merged_transparency_marker);
         match &self.layer_info {
-            Some(li) => li.merged_alpha,
+            Some(li) => {
+                let in_block = matches!(self.layer_info_placement, LayerInfoPlacement::GlobalBlock { .. });
+                li.merged_alpha || marked || (in_block && self.names_merged_transparency(self.header.channels - color))
+            }
             None => true,
         }
+    }
+
+    /// `true` when the alpha channel names (resource 1045, else 1006) hold exactly `extra` names
+    /// and the first is "Transparency", Photoshop's name for the merged transparency.
+    fn names_merged_transparency(&self, extra: u16) -> bool {
+        const NAME: &str = "Transparency";
+        let mut names = Vec::new();
+        if let Some(r) = self.resource(1045) {
+            let mut at = 0usize;
+            while let Some(len) = r.data.get(at..at.saturating_add(4)).and_then(|b| b.try_into().ok()).map(u32::from_be_bytes) {
+                at = at.saturating_add(4);
+                let end = (len as usize).checked_mul(2).and_then(|n| at.checked_add(n));
+                let Some(units) = end.and_then(|end| r.data.get(at..end)) else { break };
+                let units: Vec<u16> = units.as_chunks::<2>().0.iter().map(|c| u16::from_be_bytes(*c)).collect();
+                names.push(String::from_utf16_lossy(&units).trim_end_matches('\0').to_string());
+                at = at.saturating_add(units.len() * 2);
+            }
+        } else if let Some(r) = self.resource(1006) {
+            let mut at = 0usize;
+            while let Some(&len) = r.data.get(at) {
+                let Some(name) = r.data.get(at + 1..at + 1 + usize::from(len)) else { break };
+                names.push(String::from_utf8_lossy(name).into_owned());
+                at += 1 + usize::from(len);
+            }
+        }
+        names.len() == usize::from(extra) && names.first().is_some_and(|n| n == NAME)
     }
 
     /// Checks structural invariants that the writer relies on.
@@ -370,6 +493,40 @@ mod write_tests {
         let file = PsdFile::from_bytes(&bytes).unwrap();
         assert!(!file.layers().is_empty());
         assert!(matches!(file.decode_merged(), Err(PsdError::LimitExceeded(_))));
+        let (same, merged) = PsdFile::from_bytes_and_merged(&bytes, |_| true).unwrap();
+        assert_eq!(same, file);
+        assert!(matches!(merged, Some(Err(PsdError::LimitExceeded(_)))));
+    }
+
+    /// Parsing and decoding a ZIP merged image together inflates it once (the parse's stream
+    /// check is the decode's), with the same model, pixels and errors as the two steps apart.
+    #[test]
+    fn merged_zip_image_is_inflated_once_when_decoded_with_the_parse() {
+        use crate::compression::INFLATES;
+        let inflates = |f: &dyn Fn()| {
+            let before = INFLATES.with(std::cell::Cell::get);
+            f();
+            INFLATES.with(std::cell::Cell::get) - before
+        };
+        for compression in [Compression::Zip, Compression::ZipPrediction] {
+            let bytes = testgen::small(Version::Psd, compression).to_bytes().unwrap();
+            let file = PsdFile::from_bytes(&bytes).unwrap();
+            let pixels = file.decode_merged().unwrap();
+            let apart = inflates(&|| drop(PsdFile::from_bytes(&bytes).unwrap().decode_merged().unwrap()));
+            let together = inflates(&|| {
+                let (parsed, merged) = PsdFile::from_bytes_and_merged(&bytes, |f| f.image_data.data.is_empty()).unwrap();
+                assert_eq!(parsed, file);
+                assert_eq!(merged.unwrap().unwrap(), pixels);
+            });
+            assert_eq!(together + 1, apart, "{compression:?}");
+            let (parsed, merged) = PsdFile::from_bytes_and_merged(&bytes, |_| false).unwrap();
+            assert_eq!((parsed, merged), (file, None));
+            // A broken stream (its checksum) is still the parse's error.
+            let mut broken = bytes.clone();
+            *broken.last_mut().unwrap() ^= 0xff;
+            let alone = PsdFile::from_bytes(&broken).unwrap_err().to_string();
+            assert_eq!(PsdFile::from_bytes_and_merged(&broken, |_| true).unwrap_err().to_string(), alone);
+        }
     }
 
     #[test]
@@ -432,6 +589,29 @@ mod write_tests {
                 assert_eq!(parsed.layers()[0].name(), file.layers()[0].name());
                 assert!(matches!(parsed.layer_info_placement, LayerInfoPlacement::GlobalBlock { key: k, .. } if k == key));
             }
+        }
+    }
+
+    /// A positive layer count plus a merged-transparency marker still makes the first extra
+    /// channel the transparency, for the specification's keys and for the `MTrn` Photoshop
+    /// writes in a layered TIFF.
+    #[test]
+    fn merged_transparency_markers_mark_the_first_extra_channel() {
+        let mut file = testgen::small(Version::Psd, Compression::Raw);
+        if let Some(li) = &mut file.layer_info {
+            li.merged_alpha = false;
+        }
+        assert!(!file.merged_has_alpha());
+        for key in [*b"Mtrn", *b"MTrn", *b"Mt16", *b"Mt32"] {
+            let mut marked = file.clone();
+            marked.global_blocks.push(TaggedBlock::new(key, Vec::new()));
+            assert!(marked.merged_has_alpha(), "{}", String::from_utf8_lossy(&key));
+        }
+        // Other keys, and the marker's letters in another case, do not.
+        for key in [*b"MTRN", *b"mtrn", *b"Lr16"] {
+            let mut other = file.clone();
+            other.global_blocks.push(TaggedBlock::new(key, Vec::new()));
+            assert!(!other.merged_has_alpha(), "{}", String::from_utf8_lossy(&key));
         }
     }
 }

@@ -13,6 +13,11 @@
 //! Color lists Photoshop's guide colours (Cyan by default) and Custom…, whose swatch opens the
 //! Color Picker. The guide stores the chosen colour itself, so changing the preference guide
 //! colour later doesn't recolour it.
+//!
+//! Edit Selected Guides (the guide menu, `guide_select`) opens the same dialog on the selected
+//! guide: its orientation, its position in the ruler unit and its colour. OK runs `view.editGuide`,
+//! sending the colour only when it was changed, so a guide that uses the preference colour keeps
+//! doing so.
 
 use photocraft_engine::edit_cmds::GUIDE_COLORS;
 use photocraft_engine::prefs::Unit;
@@ -23,6 +28,11 @@ use crate::state::DialogKind;
 
 const MARK: &str = "__newGuide";
 const COMMAND: &str = "view.newGuide";
+const EDIT_COMMAND: &str = "view.editGuide";
+/// In an Edit Selected Guides dialog: the guide being edited, as `{"orientation", "index"}`, and
+/// the colour it opened with.
+const EDIT: &str = "__edit";
+const INITIAL_COLOR: &str = "__initialColor";
 const CUSTOM: &str = "custom";
 /// New Guide's colour when nothing was remembered, as in Photoshop.
 const DEFAULT_COLOR: &str = "cyan";
@@ -100,6 +110,44 @@ pub fn open(app: &mut PhotocraftApp) -> u64 {
     app.ui.open_dialog(DialogKind::Command, f)
 }
 
+/// The list entry (and Custom… colour) showing `rgb`: a named colour when it is one, else Custom….
+fn color_choice(rgb: [u8; 3]) -> (String, String) {
+    let hex = format!("#{:02x}{:02x}{:02x}", rgb[0], rgb[1], rgb[2]);
+    match GUIDE_COLORS.iter().find(|(.., c)| *c == rgb) {
+        Some((name, ..)) => (name.to_string(), hex),
+        None => (CUSTOM.to_string(), hex),
+    }
+}
+
+/// Edit Selected Guides: the dialog on the selected guide, with its orientation, its position in
+/// the current ruler unit and its colour (its own, or the preference colour it is drawn in).
+pub fn open_edit(app: &mut PhotocraftApp) -> Result<u64, String> {
+    let (vertical, index) = crate::guide_select::selected(app).ok_or_else(|| "No guide is selected".to_string())?;
+    let (px, own) = app
+        .session
+        .active()
+        .and_then(|st| {
+            let g = &st.doc.guides;
+            let p = *if vertical { &g.vertical } else { &g.horizontal }.get(index)?;
+            Some((p, g.color(vertical, p)))
+        })
+        .ok_or_else(|| "No guide is selected".to_string())?;
+    let pref = photocraft_engine::prefs::parse_hex(&app.session.prefs().guides_grid_and_slices.guide_color).unwrap_or([0x4a, 0xff, 0xff]);
+    let (color, custom) = color_choice(own.unwrap_or(pref));
+    let orientation = if vertical { "vertical" } else { "horizontal" };
+    let mut f = Map::new();
+    f.insert(MARK.into(), json!(true));
+    f.insert("__command".into(), json!(EDIT_COMMAND));
+    f.insert("__label".into(), json!("Edit Selected Guides"));
+    f.insert(EDIT.into(), json!({"orientation": orientation, "index": index}));
+    f.insert("orientation".into(), json!(orientation));
+    f.insert("position".into(), json!(in_ruler_unit(app, px, vertical)));
+    f.insert(INITIAL_COLOR.into(), json!(if color == CUSTOM { custom.clone() } else { color.clone() }));
+    f.insert("color".into(), json!(color));
+    f.insert("customColor".into(), json!(custom));
+    Ok(app.ui.open_dialog(DialogKind::Command, f))
+}
+
 pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let mut orientation = f.get("orientation").and_then(Value::as_str).unwrap_or("horizontal").to_string();
     let mut position = f.get("position").and_then(Value::as_str).unwrap_or_default().to_string();
@@ -115,15 +163,15 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
             ui.radio_value(&mut orientation, "vertical".to_string(), tl!("Vertical"));
         });
         ui.end_row();
-        ui.label(tl!("Position"));
-        ui.add(egui::TextEdit::singleline(&mut position).desired_width(120.0));
+        let position_label = ui.label(tl!("Position"));
+        ui.add(egui::TextEdit::singleline(&mut position).desired_width(120.0)).labelled_by(position_label.id);
         ui.end_row();
         ui.label(tl!("Color"));
         ui.horizontal(|ui| {
             // Custom… first, then Photoshop's colours.
             let options: Vec<(String, &str)> =
                 std::iter::once(CUSTOM).chain(GUIDE_COLORS.iter().map(|(n, ..)| *n)).map(|n| (n.to_string(), color_label(n))).collect();
-            crate::widgets::dropdown(ui, "new-guide-color", &mut color, &options, 140.0);
+            crate::widgets::dropdown(ui, "new-guide-color", tl!("Color"), &mut color, &options, 140.0);
             if color == CUSTOM {
                 let hex = custom_color(f);
                 let rgb = photocraft_engine::prefs::parse_hex(&hex).unwrap_or([0x4a, 0xff, 0xff]);
@@ -152,11 +200,23 @@ pub fn params(app: &PhotocraftApp, f: &Map<String, Value>) -> Value {
     };
     let color = f.get("color").and_then(Value::as_str).filter(|c| is_color_name(c)).unwrap_or(DEFAULT_COLOR);
     let color = if color == CUSTOM { custom_color(f) } else { color.to_string() };
-    json!({"orientation": orientation, "position": position, "color": color})
+    match f.get(EDIT) {
+        Some(edit) => {
+            let mut p = json!({"orientation": edit["orientation"], "index": edit["index"], "newOrientation": orientation, "position": position});
+            if f.get(INITIAL_COLOR).and_then(Value::as_str) != Some(color.as_str()) {
+                p["color"] = json!(color);
+            }
+            p
+        }
+        None => json!({"orientation": orientation, "position": position, "color": color}),
+    }
 }
 
 pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
     let params = params(app, f);
+    if f.contains_key(EDIT) {
+        return confirm_edit(app, f, &params);
+    }
     match app.run(COMMAND, params.clone()) {
         Ok(result) => {
             // Remember where the guide landed (so it reopens in whatever the ruler unit is then),
@@ -174,6 +234,31 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
         }
         Err(e) => {
             // `dialogs::confirm` has already closed it: open it again with the typed values.
+            let mut again = f.clone();
+            again.insert("__error".into(), json!(e));
+            app.ui.open_dialog(DialogKind::Command, again);
+            Err(e)
+        }
+    }
+}
+
+/// Edit Selected Guides' OK: the edited guide stays selected (at the end of the other list if it
+/// turned). A refused edit reopens the dialog, as New Guide does.
+fn confirm_edit(app: &mut PhotocraftApp, f: &Map<String, Value>, params: &Value) -> Result<Value, String> {
+    match app.run(EDIT_COMMAND, params.clone()) {
+        Ok(result) => {
+            let (from, to) = (params["orientation"] == "vertical", params["newOrientation"] == "vertical");
+            let index = if from == to {
+                params["index"].as_u64().and_then(|i| usize::try_from(i).ok())
+            } else {
+                app.session.active().map(|st| if to { st.doc.guides.vertical.len() } else { st.doc.guides.horizontal.len() }.saturating_sub(1))
+            };
+            if let Some(i) = index {
+                crate::guide_select::select(app, to, i);
+            }
+            Ok(result)
+        }
+        Err(e) => {
             let mut again = f.clone();
             again.insert("__error".into(), json!(e));
             app.ui.open_dialog(DialogKind::Command, again);

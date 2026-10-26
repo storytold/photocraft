@@ -13,9 +13,25 @@ fn key(h: &mut Harness<'_, PhotocraftApp>, key: Key, pressed: bool, modifiers: M
     h.event(Event::Key { key, physical_key: None, pressed, repeat: false, modifiers });
 }
 
+fn input_state(events: Vec<Event>, modifiers: Modifiers) -> egui::InputState {
+    let ctx = egui::Context::default();
+    ctx.begin_pass(egui::RawInput { events, ..Default::default() });
+    let state = ctx.input(|i| i.clone());
+    ctx.end_pass().textures_delta.clear();
+    let mut state = state;
+    state.modifiers = modifiers;
+    state
+}
+
 /// The Keyboard Shortcuts dialog with `command` selected, filtered to it.
 fn dialog(ppp: f32, command: &str, filter: &str) -> (Harness<'static, PhotocraftApp>, u64) {
-    let mut h = Harness::builder().with_size(egui::vec2(1100.0, 760.0)).with_pixels_per_point(ppp).with_max_steps(64).build_eframe(|cc| {
+    dialog_with_renderer(ppp, command, filter, false)
+}
+
+fn dialog_with_renderer(ppp: f32, command: &str, filter: &str, gpu: bool) -> (Harness<'static, PhotocraftApp>, u64) {
+    let builder = Harness::builder().with_size(egui::vec2(1100.0, 760.0)).with_pixels_per_point(ppp).with_max_steps(64);
+    let builder = if gpu { builder.wgpu() } else { builder };
+    let mut h = builder.build_eframe(|cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
         PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default())
     });
@@ -134,21 +150,78 @@ fn capture(h: &mut Harness<'_, PhotocraftApp>, button: &str, modifier: Key, held
     h.run_steps(2);
 }
 
+fn captured_ctrl_k(ppp: f32, gpu: bool) -> Harness<'static, PhotocraftApp> {
+    let (mut h, id) = dialog_with_renderer(ppp, "edit.search", "search…", gpu);
+    // Search's default is ⌘F (Photoshop); ⌘K is Preferences, so this also reports a conflict.
+    let current = crate::shortcuts::pretty("Cmd+F");
+    // On Windows and Linux the Ctrl key is the command modifier.
+    capture(&mut h, &current, Key::ControlLeft, Modifiers::COMMAND, Key::K);
+    assert_eq!(field(&h, id, "overrides")["edit.search"], json!("Cmd+K"), "@{ppp}x");
+    assert_eq!(field(&h, id, "capture"), json!(false));
+    let message = field(&h, id, "message");
+    assert!(!message.as_str().unwrap().contains("ontrol"), "@{ppp}x: {message}");
+    // The row shows the new shortcut.
+    h.get_by_label(&crate::shortcuts::pretty("Cmd+K"));
+    h
+}
+
+#[test]
+fn capture_key_press_records_shift_when_key_events_carry_no_modifier_bits() {
+    // Same event pattern as Linux/Windows egui: modifier and letter Key events with empty bits.
+    // Legacy capture → (F6, NONE) → shortcut_text → "F6"; capture_key_press → "Shift+F6".
+    let key_event = |key: Key| Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE };
+    let (mods, pressed) =
+        crate::prefs_ui::capture_key_press(Modifiers::NONE, &input_state(vec![key_event(Key::ShiftLeft), key_event(Key::F6)], Modifiers::NONE));
+    assert!(mods.shift);
+    let (key, m) = pressed.expect("F6 press");
+    assert_eq!(key, Key::F6);
+    assert!(m.shift);
+    assert_eq!(crate::prefs_ui::shortcut_text(key, m).as_deref(), Some("Shift+F6"));
+    let (mods, pressed) = crate::prefs_ui::capture_key_press(Modifiers::NONE, &input_state(vec![key_event(Key::ShiftLeft)], Modifiers::NONE));
+    assert!(mods.shift);
+    assert!(pressed.is_none(), "modifier alone does not finish capture");
+    let (_, pressed) = crate::prefs_ui::capture_key_press(mods, &input_state(vec![key_event(Key::F6)], Modifiers::NONE));
+    let (_, m) = pressed.expect("letter in a later frame");
+    assert!(m.shift, "captureMods carries Shift across frames");
+    assert_eq!(crate::prefs_ui::shortcut_text(Key::F6, m).as_deref(), Some("Shift+F6"));
+}
+
+#[test]
+fn shift_is_recorded_when_modifier_key_events_carry_no_bits() {
+    // End-to-end: dialog capture → overrides JSON (shortcut_text → prefs::normalize_shortcut).
+    let (mut h, id) = dialog(1.0, "edit.search", "search…");
+    h.get_by_label(&crate::shortcuts::pretty("Cmd+F")).click();
+    h.run_steps(2);
+    key(&mut h, Key::ShiftLeft, true, Modifiers::NONE);
+    h.run_steps(1);
+    key(&mut h, Key::F6, true, Modifiers::NONE);
+    h.run_steps(2);
+    assert_eq!(field(&h, id, "overrides")["edit.search"], json!("Shift+F6"));
+    assert_eq!(field(&h, id, "capture"), json!(false));
+}
+
 #[test]
 fn ctrl_k_is_recorded_as_ctrl_k_not_the_control_key() {
     for ppp in [1.0, 2.0] {
-        let (mut h, id) = dialog(ppp, "edit.search", "search…");
-        // Search's default is ⌘F (Photoshop); ⌘K is Preferences, so this also reports a conflict.
-        let current = crate::shortcuts::pretty("Cmd+F");
-        // On Windows and Linux the Ctrl key is the command modifier.
-        capture(&mut h, &current, Key::ControlLeft, Modifiers::COMMAND, Key::K);
-        assert_eq!(field(&h, id, "overrides")["edit.search"], json!("Cmd+K"), "@{ppp}x");
-        assert_eq!(field(&h, id, "capture"), json!(false));
-        let message = field(&h, id, "message");
-        assert!(!message.as_str().unwrap().contains("ontrol"), "@{ppp}x: {message}");
-        // The row shows the new shortcut.
-        h.get_by_label(&crate::shortcuts::pretty("Cmd+K"));
-        h.render().ok();
+        let _h = captured_ctrl_k(ppp, false);
+    }
+}
+
+/// Opt-in visual check, following the Camera Raw localization snapshot convention.
+#[test]
+fn captured_shortcut_gpu_snapshots() {
+    let Some(directory) = std::env::var_os("PHOTOCRAFT_SHORTCUT_SNAPSHOTS") else {
+        eprintln!("set PHOTOCRAFT_SHORTCUT_SNAPSHOTS to capture the shortcut dialog at 1x and 2x");
+        return;
+    };
+    let _gpu = photocraft_testkit::gpu_lock();
+    let directory = std::path::PathBuf::from(directory);
+    std::fs::create_dir_all(&directory).unwrap();
+    for (scale, ppp) in [(1, 1.0), (2, 2.0)] {
+        let mut h = captured_ctrl_k(ppp, true);
+        let image = h.render().expect("render captured shortcut");
+        assert_eq!((image.width(), image.height()), (1100 * scale, 760 * scale));
+        image.save(directory.join(format!("ctrl-k-{scale}x.png"))).expect("save shortcut snapshot");
     }
 }
 
@@ -200,7 +273,13 @@ fn a_function_key_moved_off_a_panel_toggle_runs_its_new_command() {
     // row in the dialog is Photoshop's `window.panel.brushSettings` while the key ran the shell's
     // `window.toggle.brushSettings`.
     let (mut h, id) = dialog(1.0, "select.modify.feather", "feather");
-    capture(&mut h, &crate::shortcuts::pretty("Shift+F6"), Key::ShiftLeft, Modifiers::NONE, Key::F5);
+    // Enter capture on the default row, then press plain F5 (not Shift+F5: #7190 records held modifiers).
+    h.get_by_label(&crate::shortcuts::pretty("Shift+F6")).click();
+    h.run_steps(2);
+    key(&mut h, Key::F5, true, Modifiers::NONE);
+    h.run_steps(1);
+    key(&mut h, Key::F5, false, Modifiers::NONE);
+    h.run_steps(2);
     let message = field(&h, id, "message");
     assert!(message.as_str().unwrap().contains("already in use"), "{message}");
     crate::dialogs::confirm(h.state_mut(), id).unwrap();
@@ -229,4 +308,120 @@ fn a_user_shortcut_wins_over_a_default_it_was_not_moved_from() {
     let f7 = crate::shortcuts::parse("F7").unwrap();
     let bound: Vec<String> = crate::shortcut_dispatch::bindings(&app).into_iter().filter(|(_, sc)| *sc == f7).map(|(id, _)| id).collect();
     assert_eq!(bound, ["select.modify.feather"]);
+}
+
+/// Capture `k` with `m` for the selected command.
+fn capture_key(h: &mut Harness<'_, PhotocraftApp>, id: u64, k: Key, m: Modifiers) {
+    h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("capture".into(), json!(true));
+    h.run_steps(2);
+    key(h, k, true, m);
+    h.run_steps(2);
+    key(h, k, false, m);
+    h.run_steps(2);
+}
+
+fn click(h: &mut Harness<'_, PhotocraftApp>, label: &str) {
+    h.get_by_role_and_label(egui::accesskit::Role::Button, label).click();
+    h.run_steps(3);
+}
+
+#[test]
+fn a_conflict_offers_accept_and_go_to_conflict() {
+    // Photoshop: the key is taken from Copy now, and Copy is selected to get a new one.
+    let (mut h, id) = dialog(1.0, "edit.cut", "");
+    capture_key(&mut h, id, Key::C, Modifiers::COMMAND);
+    assert_eq!(field(&h, id, "overrides")["edit.cut"], json!("Cmd+C"));
+    assert_eq!(field(&h, id, "conflict")["with"], json!("edit.copy"));
+    click(&mut h, "Accept and Go to Conflict");
+    assert_eq!(field(&h, id, "selected"), json!("edit.copy"));
+    assert_eq!(field(&h, id, "overrides")["edit.copy"], json!(""), "Copy no longer holds Cmd+C");
+    assert!(field(&h, id, "conflict").is_null());
+    crate::dialogs::confirm(h.state_mut(), id).unwrap();
+    assert_eq!(crate::shortcuts::effective_shortcut(h.state(), "edit.cut", Some("Cmd+X")).as_deref(), Some("Cmd+C"));
+    assert_eq!(crate::shortcuts::effective_shortcut(h.state(), "edit.copy", Some("Cmd+C")), None);
+}
+
+#[test]
+fn undo_changes_puts_the_command_back() {
+    let (mut h, id) = dialog(1.0, "edit.cut", "");
+    capture_key(&mut h, id, Key::C, Modifiers::COMMAND);
+    click(&mut h, "Undo Changes");
+    assert!(field(&h, id, "overrides").get("edit.cut").is_none(), "{}", field(&h, id, "overrides"));
+    assert!(field(&h, id, "conflict").is_null());
+    // An alternate added with Add Shortcut is undone the same way.
+    h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("captureAlt".into(), json!(true));
+    capture_key(&mut h, id, Key::C, Modifiers::COMMAND);
+    assert_eq!(field(&h, id, "alternates")["edit.cut"], json!(["F2", "Cmd+C"]), "beside Photoshop's F2");
+    click(&mut h, "Undo Changes");
+    assert!(field(&h, id, "alternates").get("edit.cut").is_none(), "{}", field(&h, id, "alternates"));
+    crate::dialogs::confirm(h.state_mut(), id).unwrap();
+    assert_eq!(crate::shortcuts::effective_shortcut(h.state(), "edit.copy", Some("Cmd+C")).as_deref(), Some("Cmd+C"));
+}
+
+#[test]
+fn a_system_key_is_refused() {
+    let (k, m) = if cfg!(target_os = "macos") { (Key::Tab, Modifiers::MAC_CMD | Modifiers::COMMAND) } else { (Key::F4, Modifiers::ALT) };
+    let (mut h, id) = dialog(1.0, "edit.cut", "");
+    capture_key(&mut h, id, k, m);
+    assert!(field(&h, id, "overrides").get("edit.cut").is_none(), "{}", field(&h, id, "overrides"));
+    assert!(field(&h, id, "message").as_str().is_some_and(|s| s.contains("reserved")), "{}", field(&h, id, "message"));
+    assert_eq!(field(&h, id, "messageWarning"), json!(true));
+    assert!(crate::prefs_ui::reserved_shortcut(if cfg!(target_os = "macos") { "Cmd+Tab" } else { "Alt+F4" }));
+    assert!(!crate::prefs_ui::reserved_shortcut("Cmd+Shift+F4"));
+    assert!(!crate::prefs_ui::reserved_shortcut("garbage+"));
+}
+
+/// The conflict describes the bindings as the capture left them: Reset All, Use Default or
+/// Escape after it makes it stale, so Accept can't take a key nothing holds any more.
+#[test]
+fn a_conflict_goes_stale_when_the_bindings_change() {
+    for undo in ["Reset All to Defaults", "Use Default", "escape"] {
+        let (mut h, id) = dialog(1.0, "edit.cut", "");
+        capture_key(&mut h, id, Key::C, Modifiers::COMMAND);
+        assert!(field(&h, id, "conflict").is_object(), "{undo}");
+        if undo == "escape" {
+            h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("capture".into(), json!(true));
+            h.run_steps(2);
+            key(&mut h, Key::Escape, true, Modifiers::NONE);
+            h.run_steps(2);
+            key(&mut h, Key::Escape, false, Modifiers::NONE);
+            h.run_steps(2);
+        } else {
+            click(&mut h, undo);
+        }
+        assert!(field(&h, id, "conflict").is_null(), "{undo}: {}", field(&h, id, "conflict"));
+        assert!(h.query_by_label("Accept and Go to Conflict").is_none(), "{undo}");
+        crate::dialogs::confirm(h.state_mut(), id).unwrap();
+        if undo != "escape" {
+            assert_eq!(crate::shortcuts::effective_shortcut(h.state(), "edit.copy", Some("Cmd+C")).as_deref(), Some("Cmd+C"), "{undo}: Copy keeps ⌘C");
+        }
+    }
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+#[test]
+fn linux_reserves_its_own_system_keys() {
+    assert!(crate::prefs_ui::reserved_shortcut("Cmd+Alt+F2"));
+    assert!(!crate::prefs_ui::reserved_shortcut("Cmd+Escape"));
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn windows_reserves_its_own_system_keys() {
+    assert!(crate::prefs_ui::reserved_shortcut("Cmd+Escape"));
+    assert!(!crate::prefs_ui::reserved_shortcut("Cmd+Alt+F2"));
+}
+
+/// A key two commands hold (Cut's ⌘X, given to Copy too): Accept takes it from both.
+#[test]
+fn accept_takes_the_key_from_every_command_holding_it() {
+    let (mut h, id) = dialog(1.0, "edit.paste", "");
+    h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("overrides".into(), json!({"edit.copy": "Cmd+X"}));
+    h.run_steps(2);
+    capture_key(&mut h, id, Key::X, Modifiers::COMMAND);
+    let holders = field(&h, id, "conflict")["holders"].clone();
+    assert!(holders.as_array().is_some_and(|a| a.len() == 2), "{holders}");
+    click(&mut h, "Accept and Go to Conflict");
+    let o = field(&h, id, "overrides");
+    assert_eq!((o["edit.cut"].clone(), o["edit.copy"].clone(), o["edit.paste"].clone()), (json!(""), json!(""), json!("Cmd+X")), "{o}");
 }

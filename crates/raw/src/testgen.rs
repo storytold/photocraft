@@ -88,9 +88,19 @@ impl BitWriter {
 
 /// Encodes `samples` (raster order, `components` interleaved, values below
 /// `2^precision`) as a lossless JPEG with the given predictor (1–7) and an
-/// optional restart interval in rows.
+/// optional restart interval in rows. All components share one Huffman table.
 pub fn lj92_encode(samples: &[u16], width: usize, height: usize, components: usize, precision: u8, predictor: u8, restart_rows: Option<usize>) -> Vec<u8> {
+    lj92_encode_tables(samples, width, height, &vec![0; components], precision, predictor, restart_rows)
+}
+
+/// Like [`lj92_encode`], but component `c` uses Huffman table `table_of[c]`
+/// (0–3; the component count is `table_of.len()`), one DHT per table id as
+/// CR2 writes them. Table `t` assigns its code lengths rotated by `t`, so the
+/// tables differ even when their statistics match.
+pub fn lj92_encode_tables(samples: &[u16], width: usize, height: usize, table_of: &[u8], precision: u8, predictor: u8, restart_rows: Option<usize>) -> Vec<u8> {
+    let components = table_of.len();
     assert_eq!(samples.len(), width * height * components);
+    assert!(table_of.iter().all(|&t| t < 4));
     let row = width * components;
     let interval = restart_rows.unwrap_or(usize::MAX);
     // Differences per sample, following T.81 H.1.2.1 prediction rules.
@@ -127,31 +137,41 @@ pub fn lj92_encode(samples: &[u16], width: usize, height: usize, components: usi
             }
         }
     }
-    // Table: categories ordered by frequency get increasing code lengths.
-    let mut freq = [0usize; 17];
-    for &d in &diffs {
-        freq[category(d) as usize] += 1;
-    }
-    let mut order: Vec<usize> = (0..17).collect();
-    order.sort_by_key(|&c| std::cmp::Reverse(freq[c]));
-    let mut len_of = [0u8; 17];
-    for (rank, &c) in order.iter().enumerate() {
-        len_of[c] = LENGTHS[rank];
-    }
-    let mut counts = [0u8; 16];
-    let mut vals: Vec<u8> = Vec::new();
-    let mut code_of = [(0u32, 0u32); 17];
-    let mut code = 0u32;
-    for len in 1..=16u8 {
-        for c in 0..17 {
-            if len_of[c] == len {
-                counts[len as usize - 1] += 1;
-                vals.push(c as u8);
-                code_of[c] = (code, u32::from(len));
-                code += 1;
+    // Tables: categories ordered by frequency get increasing code lengths.
+    let mut ids: Vec<u8> = table_of.to_vec();
+    ids.sort_unstable();
+    ids.dedup();
+    let mut code_of = [[(0u32, 0u32); 17]; 4];
+    let mut dhts = Vec::new();
+    for &t in &ids {
+        let mut freq = [0usize; 17];
+        for (i, &d) in diffs.iter().enumerate() {
+            if table_of[i % components] == t {
+                freq[category(d) as usize] += 1;
             }
         }
-        code <<= 1;
+        let mut order: Vec<usize> = (0..17).collect();
+        order.sort_by_key(|&c| std::cmp::Reverse(freq[c]));
+        order.rotate_left(usize::from(t));
+        let mut len_of = [0u8; 17];
+        for (rank, &c) in order.iter().enumerate() {
+            len_of[c] = LENGTHS[rank];
+        }
+        let mut counts = [0u8; 16];
+        let mut vals: Vec<u8> = Vec::new();
+        let mut code = 0u32;
+        for len in 1..=16u8 {
+            for c in 0..17 {
+                if len_of[c] == len {
+                    counts[len as usize - 1] += 1;
+                    vals.push(c as u8);
+                    code_of[usize::from(t)][c] = (code, u32::from(len));
+                    code += 1;
+                }
+            }
+            code <<= 1;
+        }
+        dhts.push((t, counts, vals));
     }
     let mut out = vec![0xFF, 0xD8];
     // SOF3
@@ -164,12 +184,14 @@ pub fn lj92_encode(samples: &[u16], width: usize, height: usize, components: usi
     for c in 0..components {
         out.extend_from_slice(&[c as u8 + 1, 0x11, 0]);
     }
-    // DHT (one table, id 0)
-    out.extend_from_slice(&[0xFF, 0xC4]);
-    out.extend_from_slice(&((2 + 17 + vals.len()) as u16).to_be_bytes());
-    out.push(0x00);
-    out.extend_from_slice(&counts);
-    out.extend_from_slice(&vals);
+    // DHT, one per table id
+    for (t, counts, vals) in &dhts {
+        out.extend_from_slice(&[0xFF, 0xC4]);
+        out.extend_from_slice(&((2 + 17 + vals.len()) as u16).to_be_bytes());
+        out.push(*t);
+        out.extend_from_slice(counts);
+        out.extend_from_slice(vals);
+    }
     if let Some(r) = restart_rows {
         out.extend_from_slice(&[0xFF, 0xDD, 0, 4]);
         out.extend_from_slice(&((r * width) as u16).to_be_bytes());
@@ -178,8 +200,8 @@ pub fn lj92_encode(samples: &[u16], width: usize, height: usize, components: usi
     out.extend_from_slice(&[0xFF, 0xDA]);
     out.extend_from_slice(&((6 + 2 * components) as u16).to_be_bytes());
     out.push(components as u8);
-    for c in 0..components {
-        out.extend_from_slice(&[c as u8 + 1, 0x00]);
+    for (c, &t) in table_of.iter().enumerate() {
+        out.extend_from_slice(&[c as u8 + 1, t << 4]);
     }
     out.extend_from_slice(&[predictor, 0, 0]);
     let mut w = BitWriter { out, acc: 0, n: 0 };
@@ -191,7 +213,7 @@ pub fn lj92_encode(samples: &[u16], width: usize, height: usize, components: usi
             rst = (rst + 1) % 8;
         }
         let s = category(d);
-        let (c, l) = code_of[s as usize];
+        let (c, l) = code_of[usize::from(table_of[i % components])][s as usize];
         w.put(c, l);
         if (1..16).contains(&s) {
             let extra = if d < 0 { (d - 1) as u32 & ((1 << s) - 1) } else { d as u32 };
@@ -398,14 +420,30 @@ fn urat(v: f64) -> (u32, u32) {
 
 // ---------------------------------------------------------------- DNG
 
+/// Encodes 8-bit samples (1 gray or 3 RGB per pixel, row-major) as a baseline JPEG at
+/// quality 60, the way a lossy DNG segment is stored (an RGB segment is coded as YCbCr).
+pub fn baseline_jpeg(samples: &[u8], width: usize, height: usize, per_pixel: usize) -> Vec<u8> {
+    use image::ImageEncoder as _;
+    let colour = if per_pixel == 3 { image::ExtendedColorType::Rgb8 } else { image::ExtendedColorType::L8 };
+    let mut j = Vec::new();
+    let enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut j, 60);
+    enc.write_image(samples, width as u32, height as u32, colour).expect("jpeg segment");
+    j
+}
+
 /// How the DNG stores its raw data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DngStorage {
     /// One strip per `rows` rows, uncompressed at `bits` per sample (8, 12, 16…).
     Strips { rows: usize },
-    /// Adobe DNG compression 34892: baseline JPEG tiles, 8-bit luma at tile size (the reader
-    /// decodes and widens to 16 bits). Quality 60 leaves visible-but-mild artifacts.
+    /// Adobe DNG compression 34892: baseline JPEG tiles at tile size (edge tiles padded), one
+    /// gray component for CFA and monochrome data, three (YCbCr-coded RGB) for LinearRaw. The
+    /// spec's `bits` should be 8 (the DNG spec's depth for lossy JPEG; the reader rejects others);
+    /// wider samples are written as their top 8 bits. Quality 60 leaves visible-but-mild artifacts.
     LossyJpegTiles { width: usize, height: usize },
+    /// Adobe DNG compression 34892 in strips of this many rows: each strip is a baseline JPEG
+    /// of the image width by the strip's own row count (the last strip is shorter).
+    LossyJpegStrips { rows: usize },
     /// Adobe DNG compression 8: zlib streams with the TIFF predictor (1 = none, 2 = horizontal
     /// differencing) applied before compressing.
     DeflateStrips { rows: usize, predictor: u16 },
@@ -438,6 +476,7 @@ pub struct DngSpec {
     pub big_endian: bool,
     pub black: Vec<u32>,
     pub black_repeat: (u16, u16),
+    /// WhiteLevel; 0 leaves the tag out (the reader then defaults to the bit depth's maximum).
     pub white: u32,
     /// top, left, bottom, right
     pub active_area: Option<[u32; 4]>,
@@ -459,6 +498,10 @@ pub struct DngSpec {
     pub opcode_list2: Option<Vec<u8>>,
     /// Encoded segments for [`DngStorage::JxlStrips`] / [`DngStorage::JxlTiles`].
     pub jxl_segments: Vec<Vec<u8>>,
+    /// Pre-encoded segments for [`DngStorage::LossyJpegTiles`] / [`DngStorage::LossyJpegStrips`]
+    /// (row-major), used instead of encoding `data` where present: for tiles that disagree with
+    /// the IFD (hostile-input tests).
+    pub lossy_segments: Vec<Vec<u8>>,
     /// Raw ProfileGainTableMap bytes, written to IFD0 (contents are not interpreted).
     pub profile_gain_table_map: Option<Vec<u8>>,
     pub orientation: u16,
@@ -466,6 +509,8 @@ pub struct DngSpec {
     pub model: String,
     /// Extra IFD0 entries, written after the generated ones (e.g. malformed colour tags).
     pub ifd0_extra: Vec<(u16, Val)>,
+    /// Extra raw-IFD entries, written after the generated ones (e.g. SampleFormat).
+    pub raw_extra: Vec<(u16, Val)>,
 }
 
 impl DngSpec {
@@ -498,10 +543,12 @@ impl DngSpec {
             orientation: 1,
             opcode_list2: None,
             jxl_segments: Vec::new(),
+            lossy_segments: Vec::new(),
             profile_gain_table_map: None,
             make: "Photocraft".into(),
             model: "Synthetic".into(),
             ifd0_extra: Vec::new(),
+            raw_extra: Vec::new(),
         }
     }
 
@@ -513,6 +560,12 @@ impl DngSpec {
 
     fn is_cfa(&self) -> bool {
         self.samples == 1 && !self.monochrome
+    }
+
+    /// The 8-bit sample a lossy JPEG segment stores for `v`: the value itself at 8 bits, else
+    /// its top 8 bits.
+    fn sample8(&self, v: u16) -> u8 {
+        (v >> self.bits.saturating_sub(8)) as u8
     }
 
     fn pack(&self, rows: std::ops::Range<usize>) -> Vec<u8> {
@@ -554,10 +607,12 @@ impl DngSpec {
             (262, Val::Short(vec![if self.is_cfa() { 32803 } else { 34892 }])),
             (277, Val::Short(vec![self.samples as u16])),
             (284, Val::Short(vec![1])),
-            (50717, Val::Long(vec![self.white; self.samples])),
             (50713, Val::Short(vec![self.black_repeat.0, self.black_repeat.1])),
             (50714, Val::Long(self.black.clone())),
         ];
+        if self.white != 0 {
+            raw.push((50717, Val::Long(vec![self.white; self.samples])));
+        }
         if self.is_cfa() {
             raw.push((33421, Val::Short(vec![2, 2])));
             raw.push((33422, Val::Byte(self.cfa.to_vec())));
@@ -620,23 +675,18 @@ impl DngSpec {
                 let s = self.samples;
                 for ty in (0..self.height).step_by(th) {
                     for tx in (0..self.width).step_by(tw) {
-                        // Edge tiles are padded by repeating the last row / column. A 3-sample
-                        // (LinearRaw) spec writes RGB tiles, a CFA spec gray ones.
+                        // Edge tiles are padded by repeating the last row / column.
                         let mut tile = vec![0u8; tw * th * s];
                         for y in 0..th {
                             for x in 0..tw {
                                 let sy = (ty + y).min(self.height - 1);
                                 let sx = (tx + x).min(self.width - 1);
                                 for c in 0..s {
-                                    tile[(y * tw + x) * s + c] = (self.data[(sy * self.width + sx) * s + c] >> 8) as u8;
+                                    tile[(y * tw + x) * s + c] = self.sample8(self.data[(sy * self.width + sx) * s + c]);
                                 }
                             }
                         }
-                        let colour = if s == 3 { image::ExtendedColorType::Rgb8 } else { image::ExtendedColorType::L8 };
-                        let mut j = Vec::new();
-                        let enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut j, 60);
-                        use image::ImageEncoder as _;
-                        enc.write_image(&tile, tw as u32, th as u32, colour).expect("jpeg tile");
+                        let j = self.lossy_segments.get(offs.len()).cloned().unwrap_or_else(|| baseline_jpeg(&tile, tw, th, s));
                         lens.push(j.len() as u32);
                         offs.push(t.blob(j));
                     }
@@ -646,6 +696,22 @@ impl DngSpec {
                 raw.push((323, Val::Long(vec![th as u32])));
                 raw.push((324, Val::Blobs(offs)));
                 raw.push((325, Val::Long(lens)));
+            }
+            DngStorage::LossyJpegStrips { rows } => {
+                let mut offs = Vec::new();
+                let mut lens = Vec::new();
+                let n = self.width * self.samples;
+                for y in (0..self.height).step_by(rows) {
+                    let r = (y + rows).min(self.height) - y;
+                    let strip: Vec<u8> = self.data[y * n..(y + r) * n].iter().map(|&v| self.sample8(v)).collect();
+                    let j = self.lossy_segments.get(offs.len()).cloned().unwrap_or_else(|| baseline_jpeg(&strip, self.width, r, self.samples));
+                    lens.push(j.len() as u32);
+                    offs.push(t.blob(j));
+                }
+                raw.push((259, Val::Short(vec![34892])));
+                raw.push((278, Val::Long(vec![rows as u32])));
+                raw.push((273, Val::Blobs(offs)));
+                raw.push((279, Val::Long(lens)));
             }
             DngStorage::Lj92Strips { rows } => {
                 let mut offs = Vec::new();
@@ -731,6 +797,7 @@ impl DngSpec {
         if let Some(l) = &self.linearization {
             raw.push((50712, Val::Short(l.clone())));
         }
+        raw.extend(self.raw_extra.iter().cloned());
         let raw_ifd = t.ifd(raw);
         // IFD0: a tiny RGB thumbnail plus the DNG metadata.
         let thumb = t.blob(vec![128; 3 * 4]);
@@ -803,6 +870,27 @@ pub fn gain_map_opcode_list(area: [u32; 4], pitch: u32, gains: [[f32; 2]; 2]) ->
         b.extend_from_slice(&v.to_be_bytes());
     }
     b.extend_from_slice(&p);
+    b
+}
+
+/// An opcode list of MapPolynomial opcodes (ID 8), one per `(plane, coefficients)`, each over
+/// `area` (top, left, bottom, right) at pitch 1.
+pub fn map_polynomial_opcode_list(area: [u32; 4], planes: &[(u32, Vec<f64>)]) -> Vec<u8> {
+    let mut b = (planes.len() as u32).to_be_bytes().to_vec();
+    for (plane, coefficients) in planes {
+        let mut p = Vec::new();
+        let degree = coefficients.len().saturating_sub(1) as u32;
+        for v in [area[0], area[1], area[2], area[3], *plane, 1, 1, 1, degree] {
+            p.extend_from_slice(&v.to_be_bytes());
+        }
+        for c in coefficients {
+            p.extend_from_slice(&c.to_be_bytes());
+        }
+        for v in [8u32, 0x0103_0000, 0, p.len() as u32] {
+            b.extend_from_slice(&v.to_be_bytes());
+        }
+        b.extend_from_slice(&p);
+    }
     b
 }
 

@@ -7,13 +7,13 @@ fn color_replacement_preserves_pixel_membership_and_transparency() {
         for dither in ["none", "diffusion", "pattern", "noise"] {
             let p = json!({"format": format, "colorTable": ["#ff0000", "#0000ff"], "dither": dither, "matte": "none"});
             let original = WebSettings::from_params(&p, "test").unwrap();
-            let before = optimize(&px, 4, Rect::new(0, 0, 4, 1), &original, None, None, 72.0, true).unwrap();
+            let before = optimize(&px, 4, Rect::new(0, 0, 4, 1), &original, None, None, None, 72.0, true).unwrap();
             let mut edited = p.clone();
             // Replace red with blue: re-quantization would now send all opaque pixels to blue.
             edited["colorTableEdits"] = json!({"0": "#0000ff", "1": "#00ff00"});
             let settings = WebSettings::from_params(&edited, "test").unwrap();
             assert_eq!(WebSettings::from_params(&settings.to_params(), "test").unwrap(), settings);
-            let after = optimize(&px, 4, Rect::new(0, 0, 4, 1), &settings, None, None, 72.0, true).unwrap();
+            let after = optimize(&px, 4, Rect::new(0, 0, 4, 1), &settings, None, None, None, 72.0, true).unwrap();
             for (old, new) in before.preview.as_chunks::<4>().0.iter().zip(after.preview.as_chunks::<4>().0) {
                 if old[3] == 0 {
                     assert_eq!(new[3], 0);
@@ -81,8 +81,8 @@ fn malformed_tables_and_out_of_bounds_slices_return_errors() {
     }
     let settings = WebSettings::default();
     for (bw, rect) in [(0, Rect::new(0, 0, 1, 1)), (1, Rect::new(-1, 0, 1, 1)), (1, Rect::new(0, 0, 2, 1)), (1, Rect::new(0, 0, 1, i32::MAX))] {
-        assert!(optimize(&[[0.0; 4]], bw, rect, &settings, None, None, 72.0, false).is_err());
+        assert!(optimize(&[[0.0; 4]], bw, rect, &settings, None, None, None, 72.0, false).is_err());
     }
     let settings = WebSettings::from_params(&json!({"format": "gif", "colorTable": vec!["#000000"; 256]}), "test").unwrap();
-    assert!(optimize(&[[0.0; 4]], 1, Rect::new(0, 0, 1, 1), &settings, None, None, 72.0, true).is_err());
+    assert!(optimize(&[[0.0; 4]], 1, Rect::new(0, 0, 1, 1), &settings, None, None, None, 72.0, true).is_err());
 }

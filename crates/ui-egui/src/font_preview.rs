@@ -123,7 +123,7 @@ fn key(ctx: &egui::Context, family: &str, size: f32) -> Key {
 pub(crate) fn slot_width(ctx: &egui::Context, family: &str, size: f32) -> f32 {
     let key = key(ctx, family, size);
     let arabic = ctx.data_mut(|d| {
-        let cache = d.get_temp_mut_or_default::<Cache>(egui::Id::new(CACHE_ID));
+        let cache = d.get_temp_mut_or_default::<Cache>(egui::Id::unique(CACHE_ID));
         cache.0.iter().any(|(k, samples)| k == &key && samples.as_ref().is_some_and(|s| s.arabic.is_some()))
     });
     if arabic { scaled(WIDTH, size) + GAP + scaled(ARABIC_WIDTH, size) } else { scaled(WIDTH, size) }
@@ -133,7 +133,7 @@ pub(crate) fn paint(ui: &egui::Ui, family: &str, row: Rect, size: f32) {
     let ctx = ui.ctx();
     let scale = ctx.pixels_per_point().ceil().clamp(1.0, 4.0) as u32;
     let key = key(ctx, family, size);
-    let id = egui::Id::new(CACHE_ID);
+    let id = egui::Id::unique(CACHE_ID);
     let cached = ctx.data_mut(|d| {
         let cache = d.get_temp_mut_or_default::<Cache>(id);
         let index = cache.0.iter().position(|(k, _)| k == &key)?;
@@ -244,14 +244,20 @@ mod tests {
     fn a_system_arabic_face_renders_both_samples() {
         let mut engine = photocraft_text::TextEngine::new();
         engine.fonts.load_system_fonts();
-        let both = engine.fonts.families().into_iter().find(|f| sample_texts(&engine.fonts.charmap(f, 400, false)).1.is_some());
-        let Some(family) = both else {
-            eprintln!("skipped: no installed family covers both Latin and Arabic");
+        let candidates: Vec<String> = engine.fonts.families().into_iter().filter(|f| sample_texts(&engine.fonts.charmap(f, 400, false)).1.is_some()).collect();
+        // A face can map the Arabic characters to blank glyphs (#5259): `render` then rightly gives
+        // no sample, so every candidate is rendered and the first one with an Arabic sample is checked.
+        let mut rendered = None;
+        for family in &candidates {
+            if let Some(arabic) = images(&mut engine, family, 1, MEDIUM).and_then(|i| i.arabic) {
+                rendered.get_or_insert((family.clone(), arabic));
+            }
+        }
+        let Some((family, arabic)) = rendered else {
+            eprintln!("skipped: no installed family renders both Latin and Arabic ({} claim both)", candidates.len());
             return;
         };
-        let images = images(&mut engine, &family, 1, MEDIUM).expect(&family);
-        let arabic = images.arabic.expect("Arabic sample");
-        assert_eq!(arabic.size, [ARABIC_WIDTH as usize, HEIGHT as usize]);
+        assert_eq!(arabic.size, [ARABIC_WIDTH as usize, HEIGHT as usize], "{family}");
         assert!(arabic.pixels.iter().any(|p| p.a() > 0), "{family}");
     }
 }

@@ -106,13 +106,13 @@ pub fn fill(s: &mut Session, p: &Value) -> Result<Value> {
     let source = match contents {
         "foreground" => color_source(s, s.tools.foreground),
         "background" => color_source(s, s.tools.background),
-        "color" => color_source(s, color_param(p, "color", s.tools.foreground)),
+        "color" => color_source(s, color_param(CMD, p, "color", s.tools.foreground)?),
         "black" => Source::Color([0.0, 0.0, 0.0, 1.0]),
         "gray" => Source::Color([128.0 / 255.0, 128.0 / 255.0, 128.0 / 255.0, 1.0]),
         "white" => Source::Color([1.0; 4]),
         "pattern" => {
             let pat = crate::pattern_cmds::resolve_param(s, CMD, p)?;
-            let (scale, angle, _, phase) = crate::pattern_cmds::placement(p);
+            let (scale, angle, _, phase) = crate::pattern_cmds::placement(CMD, p)?;
             let tile = photocraft_compose::pattern::Tile::new(&pat).ok_or_else(|| bad("the pattern is empty or too large to paint"))?;
             // Photoshop's Fill uses the canvas origin.
             let place = photocraft_compose::pattern::Placement::new(Rect::EMPTY, false, phase, scale, angle);
@@ -120,17 +120,8 @@ pub fn fill(s: &mut Session, p: &Value) -> Result<Value> {
             Source::Pixels(area, photocraft_compose::pattern::render(&tile, &place, area))
         }
         "history" => {
-            let explicit = match p.get("state") {
-                None | Some(Value::Null) => None,
-                Some(v) => Some(v.as_u64().ok_or_else(|| bad(format!("`state` must be a history state index, not {v}")))? as usize),
-            };
-            let past = st.history.past_len();
-            let source_doc = match explicit {
-                Some(i) if i == past => st.doc.clone(),
-                Some(i) => st.history.state(i).ok_or_else(|| bad(format!("no history state {i} (0..={past})")))?,
-                // The History Brush's default source: the oldest state still held.
-                None => st.history.state(0).unwrap_or_else(|| st.doc.clone()),
-            };
+            // A History panel row `state` or a `snapshot`, else the History Brush's source.
+            let source_doc = crate::history_source_cmds::paint_source(st, p, CMD)?;
             let src = crate::channel_cmds::read_target_surface(source_doc.as_ref(), id, p)
                 .map_err(|_| EngineError::Other("the target did not exist (as pixels, a mask or a channel) in that history state".into()))?;
             Source::Pixels(area, read_rgba(src, area, "reading Fill's history source")?)
@@ -235,24 +226,47 @@ pub(crate) fn blend_color_mask(
 /// The selection filled from its surroundings (`photocraft_algo::content_aware`), as straight
 /// RGBA over the sampling window. Only the selected pixels are used.
 fn content_aware(surf: &Surface, sel: &Surface, canvas: Rect, color_adaptation: bool, seed: u64) -> Result<Source> {
-    use photocraft_algo::content_aware::{FillOptions, color_level, fill, rotation_level};
     let hole_bounds = sel.content_bounds().intersect(&canvas);
     if hole_bounds.is_empty() {
         return Err(EngineError::Other("the selection is outside the canvas".into()));
     }
-    let window = sampling_window(hole_bounds, canvas);
+    let is_hole = |x: i32, y: i32| sel.sample_channel(x, y, 0) > 0.0;
+    let (window, filled) = content_aware_native(surf, hole_bounds, canvas, color_adaptation, seed, is_hole, |_, _| true)?;
     let fmt = surf.format();
-    let n = fmt.channels();
+    let px = filled.chunks_exact(fmt.channels().max(1)).map(|c| to_rgba(&fmt, c)).collect();
+    Ok(Source::Pixels(window, px))
+}
+
+/// The pixels `is_hole` picks inside `hole_bounds` filled from their surroundings
+/// (`photocraft_algo::content_aware`): Photoshop's sampling window around `hole_bounds`, sampling
+/// only the non-hole pixels `usable` allows. Returns the window and its pixels in the surface's
+/// own channels (the hole filled, the rest as read). Shared by Edit › Fill › Content-Aware and the
+/// Crop tool's Content-Aware fill (#3823).
+pub(crate) fn content_aware_native(
+    surf: &Surface,
+    hole_bounds: Rect,
+    canvas: Rect,
+    color_adaptation: bool,
+    seed: u64,
+    is_hole: impl Fn(i32, i32) -> bool,
+    usable: impl Fn(i32, i32) -> bool,
+) -> Result<(Rect, Vec<f32>)> {
+    use photocraft_algo::content_aware::{FillOptions, color_level, fill, rotation_level};
+    let window = sampling_window(hole_bounds, canvas);
+    let n = surf.format().channels();
     let (w, h) = window_size(window)?;
     let img = surf.read_region(window);
-    let mut hole = vec![false; w * h];
-    for (i, hv) in hole.iter_mut().enumerate() {
-        *hv = sel.sample_channel(window.x0 + (i % w) as i32, window.y0 + (i / w) as i32, 0) > 0.0;
+    let len = w.checked_mul(h).ok_or_else(|| EngineError::Other("the area is too large for Content-Aware fill".into()))?;
+    let mut hole = crate::allocation::filled(len, false, "Content-Aware fill")?;
+    let mut source = crate::allocation::filled(len, false, "Content-Aware fill")?;
+    for (i, (hv, sv)) in hole.iter_mut().zip(source.iter_mut()).enumerate() {
+        let (x, y) = (window.x0 + (i % w) as i32, window.y0 + (i / w) as i32);
+        *hv = is_hole(x, y);
+        *sv = !*hv && usable(x, y);
     }
-    if hole.iter().all(|h| *h) {
-        return Err(EngineError::Other("Content-Aware fill needs pixels outside the selection to sample from".into()));
+    if !source.iter().any(|s| *s) {
+        return Err(EngineError::Other("Content-Aware fill needs pixels outside the area to fill to sample from".into()));
     }
-    let source = vec![true; w * h];
     let opts = FillOptions {
         color_adaptation: color_level(if color_adaptation { "default" } else { "none" }),
         rotations: rotation_level("none"),
@@ -260,12 +274,10 @@ fn content_aware(surf: &Surface, sel: &Surface, canvas: Rect, color_adaptation: 
         mirror: false,
         seed,
     };
-    if img.len() != w * h * n {
+    if img.len() != len * n {
         return Err(EngineError::Other("could not read the layer pixels".into()));
     }
-    let filled = fill(w, h, n, &img, &hole, &source, &opts);
-    let px = filled.chunks_exact(n.max(1)).map(|c| to_rgba(&fmt, c)).collect();
-    Ok(Source::Pixels(window, px))
+    Ok((window, fill(w, h, n, &img, &hole, &source, &opts)))
 }
 
 /// Photoshop's Content-Aware sampling window around the selection bounds `hole`
@@ -308,30 +320,6 @@ pub(crate) fn read_window(surf: &Surface, r: Rect, cancelled: &(dyn Fn() -> bool
         surf.read_region_into(band, buf);
         if buf.len() == chunk.len() {
             chunk.copy_from_slice(buf);
-        }
-    });
-    if cancelled() { None } else { Some(out) }
-}
-
-/// Which pixels of `r` a selection (or mask) covers at all: channel 0 above zero, read in
-/// parallel bands as [`read_window`] does, without holding the coverage itself.
-pub(crate) fn read_window_cover(surf: &Surface, r: Rect, cancelled: &(dyn Fn() -> bool + Sync)) -> Option<Vec<bool>> {
-    use rayon::prelude::*;
-    const BAND: usize = 64;
-    let n = surf.channels().max(1);
-    let (w, h) = (r.width() as usize, r.height() as usize);
-    let mut out = vec![false; w * h];
-    if out.is_empty() {
-        return Some(out);
-    }
-    out.par_chunks_mut(BAND * w).enumerate().for_each_init(Vec::new, |buf, (i, chunk)| {
-        if cancelled() {
-            return;
-        }
-        let y0 = r.y0 + (i * BAND) as i32;
-        surf.read_region_into(Rect::new(r.x0, y0, r.x1, y0 + (chunk.len() / w) as i32), buf);
-        for (o, px) in chunk.iter_mut().zip(buf.chunks_exact(n)) {
-            *o = px[0] > 0.0;
         }
     });
     if cancelled() { None } else { Some(out) }
@@ -497,8 +485,17 @@ fn blend_tile(bytes: &mut [u8], fmt: &photocraft_color::PixelFormat, origin: Rec
                     continue;
                 }
             }
-            let mut o = if restore && blend == BlendMode::Normal { lerp(d, c, k) } else { photocraft_color::blend::composite(blend, d, c, k) };
-            if keep_alpha || !fmt.alpha {
+            let keep = keep_alpha || !fmt.alpha;
+            let mut o = if restore && blend == BlendMode::Normal {
+                lerp(d, c, k)
+            } else if keep {
+                // Alpha kept: source atop, so a half-transparent pixel takes the new colour by the
+                // source alpha alone (#5783).
+                photocraft_color::blend::composite_atop(blend, d, c, k)
+            } else {
+                photocraft_color::blend::composite(blend, d, c, k)
+            };
+            if keep {
                 o[3] = d[3];
             }
             let m = from_rgba_into(fmt, o, &mut enc);
@@ -593,6 +590,21 @@ mod tests {
             let v = surf.rgba(x, 3)[0];
             v.is_finite() && !(0.01..=0.99).contains(&v)
         }));
+    }
+
+    #[test]
+    fn preserve_transparency_blends_source_atop_on_semi_transparent_pixels() {
+        // White at 50%, then black at 50% keeping alpha: Photoshop gives (127,127,127,128), the
+        // colour moved halfway, at every depth and in non-Normal modes too (#5783).
+        for depth in [8, 16, 32] {
+            for mode in ["normal", "multiply"] {
+                let mut s = Session::new();
+                s.execute("file.new", json!({"width": 8, "height": 8, "depth": depth, "background": "transparent"})).unwrap();
+                s.execute(CMD, json!({"contents": "white", "opacity": 50})).unwrap();
+                s.execute(CMD, json!({"contents": "black", "opacity": 50, "mode": mode, "preserveTransparency": true})).unwrap();
+                assert!(close(px(&s, 3, 3), [0.5, 0.5, 0.5, 0.5]), "{depth} {mode} {:?}", px(&s, 3, 3));
+            }
+        }
     }
 
     #[test]

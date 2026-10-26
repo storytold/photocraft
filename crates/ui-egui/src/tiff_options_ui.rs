@@ -45,7 +45,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let Some(p) = &mut app.tiff_options else { return };
     let (mut ok, mut cancel) = (false, false);
     let (mut discard, mut dont_ask) = (p.discard_layers, p.dont_ask_again);
-    let modal = egui::Modal::new(egui::Id::new("tiff-options")).show(ctx, |ui| {
+    let modal = egui::Modal::new(egui::Id::unique("tiff-options")).show(ctx, |ui| {
         ui.set_max_width(420.0);
         ui.label(egui::RichText::new(tl!("TIFF Options")).font(crate::theme::semibold(15.0)));
         ui.add_space(4.0);
@@ -65,7 +65,8 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     cancel |= modal.should_close();
     p.discard_layers = discard;
     p.dont_ask_again = dont_ask;
-    if ok || ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
+    // A focused button takes Enter as its click without consuming the key: Enter on Cancel cancels.
+    if ok || (!cancel && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter))) {
         let Some(p) = app.tiff_options.take() else { return };
         if p.dont_ask_again {
             app.session.edit_prefs(|prefs| prefs.file_handling.ask_before_saving_layered_tiff = false);

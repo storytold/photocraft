@@ -70,7 +70,8 @@ pub fn reset(f: &mut Map<String, Value>) {
 
 pub fn open(app: &mut PhotocraftApp, command: &str) -> Option<u64> {
     let unit = pref_unit(app.session.prefs().units_and_rulers.rulers);
-    let resample = pref_resample(app.session.prefs().general.image_interpolation);
+    let mut resample = pref_resample(app.session.prefs().general.image_interpolation);
+    let pt_per_in = app.session.prefs().units_and_rulers.point_size.per_inch();
     let d = &app.session.active()?.doc;
     let (w, h, res) = (d.size.width as f64, d.size.height as f64, d.resolution_dpi as f64);
     let label = photocraft_engine::commands::find(command).map(|c| c.label).unwrap_or("Image Size…");
@@ -82,10 +83,17 @@ pub fn open(app: &mut PhotocraftApp, command: &str) -> Option<u64> {
     f.insert("__origH".into(), json!(h));
     f.insert("__origRes".into(), json!(res));
     f.insert("__unit".into(), json!(unit));
+    f.insert("__ptPerIn".into(), json!(pt_per_in));
     f.insert("__bytesPerPixel".into(), json!(d.layers.first().and_then(|l| l.surface()).map_or(4, |s| s.format().bytes_per_pixel())));
     f.insert("width".into(), json!(w));
     f.insert("height".into(), json!(h));
     if command == "image.imageSize" {
+        // Indexed Color resamples with Nearest Neighbor only, as the command does (#6019).
+        let indexed = d.mode == photocraft_color::ColorMode::Indexed;
+        if indexed && resample != "automatic" {
+            resample = "nearest";
+        }
+        f.insert("__indexed".into(), json!(indexed));
         f.insert("__constrain".into(), json!(true));
         f.insert("resolution".into(), json!(res));
         f.insert("resample".into(), json!(resample));
@@ -102,27 +110,33 @@ fn num(f: &Map<String, Value>, k: &str) -> f64 {
     f.get(k).and_then(Value::as_f64).unwrap_or(0.0)
 }
 
-/// Pixels → display unit.
-fn to_unit(px: f64, unit: &str, orig: f64, res: f64) -> f64 {
+/// Points per inch from Preferences › Units & Rulers › Point/Pica Size, stored when the dialog
+/// opens: 72 (PostScript) when missing or not a positive finite number.
+fn pt_per_in(f: &Map<String, Value>) -> f64 {
+    f.get("__ptPerIn").and_then(Value::as_f64).filter(|v| v.is_finite() && *v > 0.0).unwrap_or(72.0)
+}
+
+/// Pixels → display unit; `ppi` is points per inch (a pica is 12 points).
+fn to_unit(px: f64, unit: &str, orig: f64, res: f64, ppi: f64) -> f64 {
     match unit {
         "percent" => px / orig.max(1.0) * 100.0,
         "in" => px / res.max(1.0),
         "cm" => px / res.max(1.0) * 2.54,
         "mm" => px / res.max(1.0) * 25.4,
-        "pt" => px / res.max(1.0) * 72.0,
-        "pica" => px / res.max(1.0) * 6.0,
+        "pt" => px / res.max(1.0) * ppi,
+        "pica" => px / res.max(1.0) * ppi / 12.0,
         _ => px,
     }
 }
 
-fn from_unit(v: f64, unit: &str, orig: f64, res: f64) -> f64 {
+fn from_unit(v: f64, unit: &str, orig: f64, res: f64, ppi: f64) -> f64 {
     match unit {
         "percent" => v * orig / 100.0,
         "in" => v * res,
         "cm" => v / 2.54 * res,
         "mm" => v / 25.4 * res,
-        "pt" => v / 72.0 * res,
-        "pica" => v / 6.0 * res,
+        "pt" => v / ppi * res,
+        "pica" => v / ppi * 12.0 * res,
         _ => v,
     }
 }
@@ -165,18 +179,21 @@ fn dim_field(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, orig_key:
     let res = f.get("resolution").and_then(Value::as_f64).unwrap_or(num(f, "__origRes"));
     let orig = num(f, orig_key);
     let px = num(f, key);
-    let mut v = to_unit(px, &unit, orig, res) as f32;
+    let ppi = pt_per_in(f);
+    let mut v = to_unit(px, &unit, orig, res, ppi) as f32;
     // The engine's 300000 px limit in this unit (never below 30000), so a large document's size
     // isn't clamped when the field is drawn: egui clamps the shown value to the range, and the
     // field reports that as an edit (#4162).
-    let lim = if unit == "px" { 300000.0 } else { to_unit(300000.0, &unit, orig, res).max(30000.0) as f32 };
+    let lim = if unit == "px" { 300000.0 } else { to_unit(300000.0, &unit, orig, res, ppi).max(30000.0) as f32 };
     let range = -lim..=lim;
     // Each unit keeps its own precision: whole pixels, 3 places for inches, 2 for cm/mm/picas (#2434).
     // A typed unit (`2in` while in pixels) converts at the dialog's resolution.
-    let units = crate::widgets::FieldUnits { unit: crate::widgets::unit_of_key(&unit), dpi: res, ppi: 72.0 };
-    let changed = crate::widgets::value_field_units(ui, &mut v, range, 90.0, crate::widgets::unit_decimals(&unit), units).changed();
+    let units = crate::widgets::FieldUnits { unit: crate::widgets::unit_of_key(&unit), dpi: res, ppi };
+    let changed = crate::widgets::value_field_units(ui, &mut v, range, 90.0, crate::widgets::unit_decimals(&unit), units)
+        .accessible_name(if key == "width" { tl!("Width") } else { tl!("Height") })
+        .changed();
     if changed {
-        let px = from_unit(v as f64, &unit, orig, res);
+        let px = from_unit(v as f64, &unit, orig, res, ppi);
         f.insert(key.into(), json!(if unit == "px" { px.round() } else { px }));
     }
     let _ = id;
@@ -186,7 +203,7 @@ fn dim_field(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, orig_key:
 fn unit_dropdown(ui: &mut egui::Ui, f: &mut Map<String, Value>, id: &str) {
     let mut unit = f.get("__unit").and_then(Value::as_str).unwrap_or("px").to_string();
     let opts: Vec<(String, &str)> = UNITS.iter().map(|(k, l)| (k.to_string(), *l)).collect();
-    if crate::widgets::dropdown(ui, id, &mut unit, &opts, 110.0) {
+    if crate::widgets::dropdown(ui, id, tl!("Units"), &mut unit, &opts, 110.0) {
         f.insert("__unit".into(), json!(unit));
     }
 }
@@ -248,7 +265,7 @@ fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     // Photoshop's chain bracket linking width and height (right of the unit dropdowns).
     let x0 = w_row.response.rect.right().max(h_row.response.rect.right()) + 4.0;
     let bracket = Rect::from_min_max(pos2(x0, w_row.response.rect.center().y), pos2(x0 + 14.0, h_row.response.rect.center().y));
-    let link = ui.interact(bracket.expand(2.0), ui.id().with("constrain"), Sense::click());
+    let link = ui.interact(bracket.expand(2.0), ui.scope_id().with("constrain"), Sense::click());
     let col = if constrain { t.text } else { t.text_faint };
     if constrain {
         let p = ui.painter();
@@ -275,12 +292,21 @@ fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     ui.horizontal(|ui| {
         label(ui, tl!("Resolution:"), 90.0);
         let mut r = f.get("resolution").and_then(Value::as_f64).unwrap_or(72.0) as f32;
-        if crate::widgets::value_field(ui, &mut r, 1.0..=30000.0, "", 90.0).changed() {
+        if crate::widgets::value_field(ui, &mut r, 1.0..=30000.0, "", 90.0).accessible_name(tl!("Resolution")).changed() {
             let r = r.max(1.0) as f64;
             if !resampling {
                 // Without resampling the pixel count is fixed: physical size follows resolution.
                 f.insert("width".into(), json!(ow));
                 f.insert("height".into(), json!(oh));
+            } else if !matches!(unit.as_str(), "px" | "percent") {
+                // Resampling in a physical unit keeps the print size: the pixels follow the
+                // resolution (Photoshop). In pixels or percent the pixel count stays.
+                let old = f.get("resolution").and_then(Value::as_f64).unwrap_or(num(f, "__origRes"));
+                if old > 0.0 && old.is_finite() {
+                    for key in ["width", "height"] {
+                        f.insert(key.into(), json!((num(f, key) * r / old).max(1.0)));
+                    }
+                }
             }
             f.insert("resolution".into(), json!(r));
         }
@@ -312,7 +338,11 @@ fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 ("bilinear".to_string(), tl!("Bilinear")),
                 ("lanczos".to_string(), tl!("Lanczos (sharp)")),
             ];
-            if crate::widgets::dropdown(ui, "is-resample", &mut cur, &opts, 200.0) {
+            // Indexed Color: every other method blends colours the colour table doesn't have,
+            // which the command doesn't use and a save quantises away (#6019).
+            let indexed = f.get("__indexed").and_then(Value::as_bool) == Some(true);
+            let opts: Vec<_> = opts.into_iter().filter(|(k, _)| !indexed || k == "automatic" || k == "nearest").collect();
+            if crate::widgets::dropdown(ui, "is-resample", tl!("Resample"), &mut cur, &opts, 200.0) {
                 f.insert("resample".into(), json!(cur));
             }
         }
@@ -376,7 +406,7 @@ fn canvas_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
             ("black".to_string(), tl!("Black")),
             ("transparent".to_string(), tl!("Transparent")),
         ];
-        if crate::widgets::dropdown(ui, "cs-ext", &mut cur, &opts, 140.0) {
+        if crate::widgets::dropdown(ui, "cs-ext", tl!("Canvas extension color:"), &mut cur, &opts, 140.0) {
             f.insert("extensionColor".into(), json!(cur));
         }
     });
@@ -393,7 +423,7 @@ fn anchor_grid(ui: &mut egui::Ui, current: &str, dw: f64, dh: f64) -> Option<&'s
     for (i, a) in ANCHORS.iter().enumerate() {
         let (x, y) = (i as i32 % 3, i as i32 / 3);
         let r = Rect::from_min_size(rect.min + vec2(x as f32 * cell, y as f32 * cell), vec2(cell, cell)).shrink(1.0);
-        let resp = ui.interact(r, ui.id().with(("anchor", i)), Sense::click());
+        let resp = ui.interact(r, ui.scope_id().with(("anchor", i)), Sense::click());
         let selected = i as i32 == ci;
         ui.painter().rect_filled(
             r,
@@ -442,13 +472,34 @@ mod tests {
 
     #[test]
     fn unit_conversions_round_trip() {
-        for unit in ["px", "percent", "in", "cm", "mm", "pt", "pica"] {
-            let v = to_unit(1500.0, unit, 3000.0, 300.0);
-            assert!((from_unit(v, unit, 3000.0, 300.0) - 1500.0).abs() < 1e-9, "{unit}");
+        for ppi in [72.0, 72.27] {
+            for unit in ["px", "percent", "in", "cm", "mm", "pt", "pica"] {
+                let v = to_unit(1500.0, unit, 3000.0, 300.0, ppi);
+                assert!((from_unit(v, unit, 3000.0, 300.0, ppi) - 1500.0).abs() < 1e-9, "{unit} at {ppi} pt/in");
+            }
         }
-        assert_eq!(to_unit(1500.0, "percent", 3000.0, 300.0), 50.0);
-        assert_eq!(to_unit(600.0, "in", 3000.0, 300.0), 2.0);
+        assert_eq!(to_unit(1500.0, "percent", 3000.0, 300.0, 72.0), 50.0);
+        assert_eq!(to_unit(600.0, "in", 3000.0, 300.0, 72.0), 2.0);
         assert_eq!(human_bytes(6016.0 * 6016.0 * 4.0), "138.1M");
+    }
+
+    /// #5756: points and picas use the Point/Pica Size preference (Traditional is 72.27 pt/in),
+    /// and a dialog without the field (or with a bad one) falls back to PostScript's 72.
+    #[test]
+    fn points_and_picas_use_the_points_per_inch() {
+        assert!((to_unit(72.0, "pt", 72.0, 72.0, 72.27) - 72.27).abs() < 1e-9);
+        assert!((to_unit(72.0, "pica", 72.0, 72.0, 72.27) - 72.27 / 12.0).abs() < 1e-9);
+        assert_eq!(to_unit(72.0, "pt", 72.0, 72.0, 72.0), 72.0);
+        assert_eq!(to_unit(72.0, "pica", 72.0, 72.0, 72.0), 6.0);
+        assert!((from_unit(72.27, "pt", 72.0, 72.0, 72.27) - 72.0).abs() < 1e-9);
+        let mut f = Map::new();
+        assert_eq!(pt_per_in(&f), 72.0);
+        for bad in [json!(0.0), json!(-3.0), json!("x")] {
+            f.insert("__ptPerIn".into(), bad);
+            assert_eq!(pt_per_in(&f), 72.0);
+        }
+        f.insert("__ptPerIn".into(), json!(72.27));
+        assert_eq!(pt_per_in(&f), 72.27);
     }
 
     #[test]
@@ -483,6 +534,35 @@ mod tests {
         assert_eq!((num(&d.fields, "width"), num(&d.fields, "height"), num(&d.fields, "resolution")), (200.0, 100.0, 72.0));
         assert_eq!(d.fields.get("__constrain"), Some(&json!(true)));
         assert!(app.ui.dialogs.iter().any(|x| x.id == id), "reset leaves the dialog open");
+    }
+
+    /// #6019: on an Indexed Color document the dialog opens on, and offers only, Automatic and Nearest Neighbor.
+    #[test]
+    fn indexed_color_resamples_with_nearest_neighbor_only() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.session.execute("file.new", json!({"width": 200, "height": 100})).unwrap();
+        app.session.execute("image.mode.indexedColor", json!({})).unwrap();
+        for (pref, method) in [("bicubic", "nearest"), ("bicubicAutomatic", "automatic"), ("nearestNeighbor", "nearest")] {
+            app.session.execute("prefs.set", json!({"path": "general.imageInterpolation", "value": pref})).unwrap();
+            let id = open(&mut app, "image.imageSize").unwrap();
+            let f = &app.ui.dialog_mut(id).unwrap().fields;
+            assert_eq!(f.get("resample"), Some(&json!(method)), "{pref}");
+            assert_eq!(f.get("__indexed"), Some(&json!(true)));
+            app.ui.close_dialog(id);
+        }
+        // The open list offers only Automatic and Nearest Neighbor.
+        use egui_kittest::{Harness, kittest::Queryable};
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        open(h.state_mut(), "image.imageSize").unwrap();
+        h.run_steps(3);
+        let combo = h.query_all_by_role(egui::accesskit::Role::ComboBox).find(|n| n.value().as_deref() == Some("Nearest Neighbor (hard edges)"));
+        combo.expect("the Resample list shows Nearest Neighbor").click();
+        h.run_steps(3);
+        assert!(h.query_by_label_contains("Automatic").is_some(), "Automatic is offered");
+        for gone in ["Bicubic", "Bilinear", "Lanczos", "Preserve Details"] {
+            assert!(h.query_by_label_contains(gone).is_none(), "{gone} is not offered for Indexed Color");
+        }
     }
 
     /// The dialog starts on Preferences › General › Image Interpolation: Bicubic Automatic opens
@@ -547,11 +627,43 @@ mod tests {
         (h, id)
     }
 
+    /// #5756: points and picas follow Preferences › Units & Rulers › Point/Pica Size. With
+    /// Traditional (72.27 pt/in) and Resample off, 100 px typed as 72.27 pt wide is 100 ppi.
+    #[test]
+    fn traditional_point_size_drives_points_and_picas() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.session.execute("file.new", json!({"width": 100, "height": 50, "resolution": 72})).unwrap();
+        app.session.execute("prefs.set", json!({"path": "unitsAndRulers.pointSize", "value": "traditional"})).unwrap();
+        for command in ["image.imageSize", "image.canvasSize"] {
+            let id = open(&mut app, command).unwrap();
+            assert_eq!(app.ui.dialog_mut(id).unwrap().fields.get("__ptPerIn"), Some(&json!(72.27)), "{command}");
+            app.ui.close_dialog(id);
+        }
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(1400.0, 900.0))
+            .build_ui_state(|ui, app: &mut PhotocraftApp| crate::dialogs::show(app, ui.ctx()), app);
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        let id = open(h.state_mut(), "image.imageSize").unwrap();
+        let d = h.state_mut().ui.dialog_mut(id).unwrap();
+        d.fields.insert("resample".into(), json!("none"));
+        d.fields.insert("__unit".into(), json!("pt"));
+        h.run_steps(3);
+        type_width(&mut h, "72.27");
+        let f = fields(&h);
+        assert_eq!((num(&f, "width"), num(&f, "height")), (100.0, 50.0), "{f:?}");
+        assert!((num(&f, "resolution") - 100.0).abs() < 1e-2, "{f:?}");
+    }
+
     /// Types `text` into the Width field and leaves it with Tab.
     fn type_width(h: &mut egui_kittest::Harness<'static, PhotocraftApp>, text: &str) {
+        type_into(h, 0, text);
+    }
+
+    /// Types `text` into the `n`th number field (Width, Height, Resolution) and leaves it with Tab.
+    fn type_into(h: &mut egui_kittest::Harness<'static, PhotocraftApp>, n: usize, text: &str) {
         use egui::accesskit::Role;
         use egui_kittest::kittest::Queryable;
-        let width = h.query_all_by_role(Role::SpinButton).next().map(|n| n.rect()).expect("the Width field");
+        let width = h.query_all_by_role(Role::SpinButton).nth(n).map(|n| n.rect()).expect("the number field");
         h.hover_at(width.center());
         h.run_steps(1);
         h.drag_at(width.center());
@@ -598,6 +710,32 @@ mod tests {
         let doc = &h.state().session.active().unwrap().doc;
         assert_eq!(doc.size, photocraft_doc::Size::new(100, 50));
         assert!((doc.resolution_dpi - 50.0).abs() < 1e-3, "{}", doc.resolution_dpi);
+    }
+
+    /// #6979: with Resample on, a new Resolution keeps the print size in a physical unit and
+    /// resamples the pixels (Photoshop): 720 x 576 px at 72 ppi is 10 x 8 in, so 300 ppi is
+    /// 3000 x 2400 px. In pixels the pixel count stays.
+    #[test]
+    fn resample_on_resolution_keeps_the_physical_size() {
+        for (unit, size) in [("in", (3000.0, 2400.0)), ("cm", (3000.0, 2400.0)), ("px", (720.0, 576.0))] {
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            app.session.execute("file.new", json!({"width": 720, "height": 576, "resolution": 72})).unwrap();
+            let mut h = egui_kittest::Harness::builder()
+                .with_size(egui::vec2(1400.0, 900.0))
+                .build_ui_state(|ui, app: &mut PhotocraftApp| crate::dialogs::show(app, ui.ctx()), app);
+            PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+            let id = open(h.state_mut(), "image.imageSize").unwrap();
+            let d = h.state_mut().ui.dialog_mut(id).unwrap();
+            d.fields.insert("resample".into(), json!("bicubic"));
+            d.fields.insert("__unit".into(), json!(unit));
+            h.run_steps(3);
+            type_into(&mut h, 2, "300");
+            let f = fields(&h);
+            assert_eq!((num(&f, "width"), num(&f, "height"), num(&f, "resolution")), (size.0, size.1, 300.0), "{unit}: {f:?}");
+            crate::dialogs::confirm(h.state_mut(), id).unwrap();
+            let doc = &h.state().session.active().unwrap().doc;
+            assert_eq!((doc.size, doc.resolution_dpi), (photocraft_doc::Size::new(size.0 as u32, size.1 as u32), 300.0), "{unit}");
+        }
     }
 
     /// #4162: a document wider than 30000 units in a physical unit (40000 px at 72 ppi is 40000 pt)

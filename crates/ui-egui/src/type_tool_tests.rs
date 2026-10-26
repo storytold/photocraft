@@ -10,7 +10,7 @@ use photocraft_doc::{LayerContent, LayerId, TextLayer};
 use photocraft_geom::{Affine, Point};
 use serde_json::json;
 
-use super::{layout, text_layer};
+use super::{PathClick, layout, path_target, text_layer};
 use crate::PhotocraftApp;
 use crate::canvas::ViewXform;
 
@@ -20,6 +20,7 @@ fn focused_font_search_does_not_type_into_the_canvas_layer() {
     let id = app.run("type.create", json!({"text": "Sample", "size": 24})).unwrap()["layer"].as_u64().unwrap();
     app.ui.text_edit = Some(crate::state::TextEdit {
         layer: id,
+        document: None,
         caret: 6,
         anchor: 6,
         session: "s".into(),
@@ -31,9 +32,10 @@ fn focused_font_search_does_not_type_into_the_canvas_layer() {
     });
     let mut h = Harness::builder().build_ui_state(
         |ui, app: &mut PhotocraftApp| {
-            let search_id = egui::Id::new("font-search-regression");
+            let search_id = egui::Id::unique("font-search-regression");
             let mut query = ui.data(|d| d.get_temp::<String>(search_id)).unwrap_or_default();
-            ui.add(egui::TextEdit::singleline(&mut query).id(search_id)).request_focus();
+            // Match the production font-search field: its hint is the field's accessible name.
+            ui.add(egui::TextEdit::singleline(&mut query).id(search_id).hint_text("Search fonts")).request_focus();
             ui.data_mut(|d| d.insert_temp(search_id, query));
             super::handle_keys(app, ui.ctx());
         },
@@ -42,7 +44,7 @@ fn focused_font_search_does_not_type_into_the_canvas_layer() {
     h.run_steps(2);
     h.event(egui::Event::Text("Ins".into()));
     h.run();
-    assert_eq!(h.ctx.data(|d| d.get_temp::<String>(egui::Id::new("font-search-regression"))).as_deref(), Some("Ins"));
+    assert_eq!(h.ctx.data(|d| d.get_temp::<String>(egui::Id::unique("font-search-regression"))).as_deref(), Some("Ins"));
     assert_eq!(super::current_text(h.state_mut(), LayerId(id)).as_deref(), Some("Sample"));
 }
 
@@ -64,13 +66,247 @@ fn numeric_type_fields_have_localized_accessible_names() {
     );
     PhotocraftApp::setup_context(&h.ctx, Default::default());
     h.run_steps(4);
-    h.get_by_role_and_label(egui::accesskit::Role::SpinButton, "Tamanho da fonte").click();
+    h.get_by_role_and_label(egui::accesskit::Role::SpinButton, crate::i18n::tr(pt, "Font size")).click();
     h.run();
     h.key_press_modifiers(Modifiers::COMMAND, egui::Key::A);
     h.event(egui::Event::Text("36".into()));
     h.key_press(egui::Key::Enter);
     h.run();
     assert_eq!(*h.state(), 36.0);
+}
+
+/// #5556: the dedicated panels remain usable before there is any type layer, including
+/// before opening a document. Properties still belongs to the selected layer.
+#[test]
+fn type_panels_show_default_controls_without_a_type_target() {
+    for app in [PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default()), new_app()] {
+        let mut h = Harness::builder().with_size(vec2(760.0, 800.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    return;
+                }
+                ui.columns(2, |columns| {
+                    super::character_panel(app, &mut columns[0], false);
+                    super::character_panel(app, &mut columns[1], true);
+                });
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, Default::default());
+        h.run_steps(4);
+        h.get_by_label("Faux Bold");
+        h.get_by_label("Fractions");
+        h.get_by_label("Center text");
+        h.get_by_role_and_label(egui::accesskit::Role::SpinButton, "Font size");
+    }
+}
+
+mod panel_defaults {
+    use super::*;
+    use crate::state::{Tool, ToolOptions};
+    use egui::accesskit::{Role, Toggled};
+    use egui_kittest::kittest::NodeT;
+    use photocraft_doc::text::{Caps, Kerning, Orientation, TextAlign, TextShape};
+
+    fn panels(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+        // Wait for the font scan: while it runs the panels repaint every 100 ms and `Harness::run` gives up.
+        let _ = photocraft_text::shared();
+        let mut h = Harness::builder().with_size(vec2(760.0, 800.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    ui.columns(2, |columns| {
+                        super::super::character_panel(app, &mut columns[0], false);
+                        super::super::character_panel(app, &mut columns[1], true);
+                    });
+                }
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, Default::default());
+        h.run_steps(4);
+        h
+    }
+
+    fn number(h: &mut Harness<'static, PhotocraftApp>, label: &str, value: &str) {
+        h.get_by_role_and_label(Role::SpinButton, label).click();
+        h.run();
+        h.key_press_modifiers(Modifiers::COMMAND, egui::Key::A);
+        h.event(egui::Event::Text(value.into()));
+        h.key_press(egui::Key::Enter);
+        h.run();
+    }
+
+    #[test]
+    fn panel_defaults_are_editable_and_reach_every_type_tool() {
+        let mut h = panels(new_app());
+        let revision = h.state().session.active().unwrap().revision;
+        let layers = h.state().session.active().unwrap().doc.walk().len();
+        number(&mut h, "Font size", "36");
+        number(&mut h, "Tracking (1/1000 em)", "80");
+        number(&mut h, "Leading (set to the font size × auto-leading when Auto)", "44");
+        number(&mut h, "Indent left margin", "9");
+        for label in ["Faux Bold", "Fractions", "Standard Ligatures", "Discretionary Ligatures", "Center text"] {
+            h.get_by_label(label).click();
+            h.run();
+        }
+        assert_eq!(h.get_by_label("Fractions").accesskit_node().toggled(), Some(Toggled::True));
+        assert_eq!(h.get_by_label("Standard Ligatures").accesskit_node().toggled(), Some(Toggled::False));
+        assert_eq!(h.state().session.active().unwrap().revision, revision, "pre-styling does not create document history");
+        assert_eq!(h.state().session.active().unwrap().doc.walk().len(), layers);
+        let options = h.state().ui.tool_options.clone();
+        for tool in [Tool::Type, Tool::VerticalType, Tool::HorizontalTypeMask, Tool::VerticalTypeMask] {
+            for paragraph in [false, true] {
+                let mut app = new_app();
+                app.ui.tool_options = options.clone();
+                app.ui.tool = tool;
+                app.session.tools.foreground = [0.2, 0.4, 0.6, 1.0];
+                let revision = app.session.active().unwrap().revision;
+                super::super::pointer_up(&mut app, [100.0, 100.0], if paragraph { [500.0, 400.0] } else { [100.0, 100.0] });
+                let id = LayerId(app.ui.text_edit.as_ref().unwrap().layer);
+                let t = text(&app, id);
+                let c = &t.char_runs()[0].style;
+                let p = &t.paragraph_runs()[0].style;
+                assert_eq!(c.size_pt, 36.0);
+                assert_eq!(c.tracking, 80.0);
+                assert_eq!(c.leading_pt, Some(44.0));
+                assert!(c.faux_bold && c.discretionary_ligatures && !c.ligatures);
+                assert!(photocraft_engine::type_extra_cmds::feature_on(c, "frac"));
+                assert_eq!(c.color.to_rgba8(), [51, 102, 153, 255]);
+                assert_eq!(p.align, TextAlign::Center);
+                assert_eq!(p.start_indent_pt, 9.0);
+                assert_eq!(t.orientation, if tool.is_vertical_type() { Orientation::Vertical } else { Orientation::Horizontal });
+                assert_eq!(matches!(t.shape, TextShape::Box { .. }), paragraph);
+                assert_eq!(app.ui.text_edit.as_ref().unwrap().mask, tool.is_type_mask());
+                assert!(app.session.active().unwrap().revision > revision);
+                super::super::cancel(&mut app);
+                assert!(app.session.active().unwrap().doc.layer(id).is_none(), "creating and formatting is one undoable edit");
+                assert_eq!(app.ui.tool_options, options, "cancelling text does not discard the chosen defaults");
+            }
+        }
+    }
+
+    #[test]
+    fn extended_defaults_merge_serialize_and_reset_without_replacing_legacy_options() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        super::super::apply(
+            &mut app,
+            &ctx,
+            json!({
+                "fontStyle": "Bold", "size": 32, "kerning": 25, "caps": "smallCaps",
+                "baselineShift": 3, "horizontalScale": 90, "verticalScale": 110,
+                "underline": true, "strikethrough": true, "fauxItalic": true,
+                "firstLineIndent": 5, "endIndent": 7, "spaceBefore": 11, "spaceAfter": 13,
+                "features": {"swsh": 1}, "variations": {"wght": 650, "wdth": 90}
+            }),
+        );
+        super::super::apply(&mut app, &ctx, json!({"features": {"frac": 1}, "variations": {"slnt": -8}}));
+        let (c, p) = super::super::default_styles(&app);
+        assert_eq!((c.size_pt, c.kern, c.kerning, c.caps), (32.0, 25.0, Kerning::Off, Caps::SmallCaps));
+        assert_eq!((c.baseline_shift_pt, c.horizontal_scale, c.vertical_scale), (3.0, 0.9, 1.1));
+        assert!(c.underline && c.strikethrough && c.faux_italic);
+        assert_eq!((p.first_line_indent_pt, p.end_indent_pt, p.space_before_pt, p.space_after_pt), (5.0, 7.0, 11.0, 13.0));
+        assert_eq!(c.features.iter().map(|f| f.tag.as_str()).collect::<Vec<_>>(), ["frac", "swsh"]);
+        assert_eq!(c.variations.iter().map(|v| (v.axis.as_str(), v.value)).collect::<Vec<_>>(), [("slnt", -8.0), ("wdth", 90.0), ("wght", 650.0)]);
+        // A named style replaces wght; it must not come back when a later layer is created.
+        super::super::apply(&mut app, &ctx, json!({"fontStyle": "Regular"}));
+        let (c, _) = super::super::default_styles(&app);
+        assert!(!c.variations.iter().any(|v| v.axis == "wght"));
+        assert_eq!(c.variations.len(), 2);
+        let saved = serde_json::to_value(&app.ui.tool_options).unwrap();
+        let restored: ToolOptions = serde_json::from_value(saved.clone()).unwrap();
+        assert_eq!(restored, app.ui.tool_options);
+        crate::tool_memory::persist(&mut app, &ctx);
+        let remembered = app.session.prefs().tool_options.clone();
+        let mut restarted = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        restarted.session.prefs.edit(|p| p.tool_options = remembered);
+        crate::tool_memory::restore(&mut restarted);
+        assert_eq!(restarted.ui.tool_options, restored, "the real preference restore path retains panel defaults");
+        let mut legacy = saved;
+        legacy.as_object_mut().unwrap().remove("type_style_defaults");
+        let legacy: ToolOptions = serde_json::from_value(legacy).unwrap();
+        assert_eq!((legacy.type_font.as_str(), legacy.type_style.as_str(), legacy.type_size), ("Inter", "Regular", 32.0));
+        assert!(legacy.type_style_defaults.is_empty());
+        for tool in [Tool::Type, Tool::VerticalType, Tool::HorizontalTypeMask, Tool::VerticalTypeMask] {
+            let mut reset = restored.clone();
+            crate::tool_reset::reset_options(&mut reset, tool);
+            assert!(reset.type_style_defaults.is_empty());
+            assert_eq!(reset.type_size, ToolOptions::default().type_size);
+        }
+    }
+
+    #[test]
+    fn selected_text_edits_leave_panel_defaults_and_other_characters_untouched() {
+        let mut app = new_app();
+        let ctx = egui::Context::default();
+        super::super::apply(&mut app, &ctx, json!({"tracking": 80, "fauxBold": true}));
+        let defaults = app.ui.tool_options.type_style_defaults.clone();
+        let id = LayerId(app.run("type.create", json!({"text": "AéBC", "size": 24})).unwrap()["layer"].as_u64().unwrap());
+        app.ui.text_edit = Some(crate::state::TextEdit {
+            layer: id.0,
+            document: None,
+            caret: 2,
+            anchor: 1,
+            session: "panel-default-selection".into(),
+            created: false,
+            mask: false,
+            dragging: false,
+            resize: None,
+            preedit: None,
+        });
+        super::super::apply(&mut app, &ctx, json!({"tracking": 15}));
+        super::super::toggle_opentype(&mut app, "type.openType.fractions", false);
+        let runs = text(&app, id).char_runs();
+        assert_eq!(runs.iter().map(|r| (r.len, r.style.tracking)).collect::<Vec<_>>(), [(1, 0.0), (2, 15.0), (2, 0.0)]);
+        assert!(photocraft_engine::type_extra_cmds::feature_on(&runs[1].style, "frac"));
+        assert!(!photocraft_engine::type_extra_cmds::feature_on(&runs[0].style, "frac"));
+        assert_eq!(app.ui.tool_options.type_style_defaults, defaults);
+        app.run("edit.undo", json!({})).unwrap();
+        assert_eq!(text(&app, id).char_runs().len(), 1, "selection edits keep their typing-session coalescing");
+        assert_eq!(text(&app, id).char_runs()[0].style.tracking, 0.0);
+    }
+
+    #[test]
+    fn default_text_color_uses_foreground_and_cancel_preserves_it() {
+        let mut app = new_app();
+        let before = app.session.tools.foreground;
+        let revision = app.session.active().unwrap().revision;
+        let dialog = super::super::open_color_picker(&mut app, [0.0; 3]);
+        app.ui.dialogs.last_mut().unwrap().fields.insert("color".into(), json!("#ff8800"));
+        crate::dialogs::cancel(&mut app, dialog).unwrap();
+        assert_eq!(app.session.tools.foreground, before);
+        let dialog = super::super::open_color_picker(&mut app, [0.0; 3]);
+        app.ui.dialogs.last_mut().unwrap().fields.insert("color".into(), json!("#336699"));
+        crate::dialogs::confirm(&mut app, dialog).unwrap();
+        assert_eq!(super::super::default_styles(&app).0.color.to_rgba8(), [51, 102, 153, 255]);
+        assert_eq!(app.session.active().unwrap().revision, revision);
+        super::super::pointer_up(&mut app, [100.0, 100.0], [100.0, 100.0]);
+        let id = LayerId(app.ui.text_edit.as_ref().unwrap().layer);
+        assert_eq!(text(&app, id).char_runs()[0].style.color.to_rgba8(), [51, 102, 153, 255]);
+    }
+
+    #[test]
+    fn unknown_saved_defaults_cannot_become_creation_parameters() {
+        let mut app = new_app();
+        app.ui.tool_options.type_style_defaults =
+            json!({"tracking": 20, "text": "Injected", "box": [0, 0, 2, 2], "coalesce": "unrelated"}).as_object().unwrap().clone();
+        let p = super::super::default_style_params(&app);
+        assert_eq!(p["tracking"], 20);
+        assert!(p.get("text").is_none() && p.get("box").is_none() && p.get("coalesce").is_none());
+        app.ui.tool_options.type_style_defaults = json!({
+            "tracking": 1e300, "leading": 1e300, "spaceAfter": 1e300,
+            "variations": {"wght": 1e300}, "features": {"frac": {"bad": 1}}, "fauxBold": true
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+        let p = super::super::default_style_params(&app);
+        for key in ["tracking", "leading", "spaceAfter", "variations", "features"] {
+            assert!(p.get(key).is_none(), "hostile {key} is ignored");
+        }
+        let (c, para) = super::super::default_styles(&app);
+        assert!(c.faux_bold && c.leading_pt.is_none() && c.tracking == 0.0 && para.space_after_pt == 0.0);
+    }
 }
 
 fn harness(ppp: f32, app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
@@ -113,6 +349,49 @@ fn new_app() -> PhotocraftApp {
     app.ui.extras.rulers = false;
     app.ui.tool = crate::state::Tool::Type;
     app
+}
+
+/// #6085: the text caret is a solid black line inside a white halo, so it shows on a white
+/// background (the black used to be a 0.75 pt hairline inside a white line) and on a dark one.
+#[test]
+fn the_caret_reads_on_white_and_on_black() {
+    use crate::canvas::{ToolEvent, tool_event};
+    let mut app = new_app();
+    app.ui.tool = crate::state::Tool::Type;
+    tool_event(&mut app, ToolEvent::Down { x: 100.0, y: 100.0, pressure: 1.0 }, Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Up { x: 100.0, y: 100.0 }, Modifiers::NONE);
+    // A caret, not the placeholder's selection; solid, whatever the blink (as while dragging).
+    let ed = app.ui.text_edit.as_mut().expect("editing");
+    ed.anchor = ed.caret;
+    ed.dragging = true;
+    let xf = ViewXform {
+        rect: egui::Rect::from_min_size(Pos2::ZERO, vec2(400.0, 300.0)),
+        zoom: 1.0,
+        center: [100.0, 100.0],
+        flip: false,
+        rotation: 0.0,
+        aspect: 1.0,
+    };
+    let mut h =
+        Harness::builder().with_size(vec2(400.0, 300.0)).build_ui_state(move |ui, app: &mut PhotocraftApp| super::draw_overlay(app, ui.painter(), &xf), app);
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
+    h.run();
+    // Vertical line segments are the caret (the frame and underline run sideways).
+    let caret: Vec<(f32, egui::Color32)> = h
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|s| match &s.shape {
+            egui::Shape::LineSegment { points: [a, b], stroke } if (a.x - b.x).abs() < 0.01 && (a.y - b.y).abs() > 1.0 => Some((stroke.width, stroke.color)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(caret.len(), 2, "a halo and a line: {caret:?}");
+    let ((halo_w, halo), (line_w, line)) = (caret[0], caret[1]);
+    assert_eq!(line, egui::Color32::BLACK);
+    assert!(line_w >= 1.0, "a solid black line, not a hairline: {line_w}");
+    assert_eq!(halo, egui::Color32::WHITE);
+    assert!(halo_w >= line_w + 2.0, "at least 1 pt of white on each side: {halo_w}");
 }
 
 fn xf(app: &PhotocraftApp) -> ViewXform {
@@ -357,6 +636,7 @@ fn size_applies_at_layer_and_selection_scope() {
         // Selection scope: "world" only.
         app.ui.text_edit = Some(crate::state::TextEdit {
             layer: id.0,
+            document: None,
             caret: 11,
             anchor: 6,
             session: "s".into(),
@@ -408,6 +688,110 @@ fn size_drag_is_live_and_one_history_step_per_drag() {
     assert!(h.state_mut().session.undo());
     assert!(h.state_mut().session.undo());
     assert_eq!(size_at(h.state(), id, 0), 20.0);
+}
+
+fn options_harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+    let mut h = Harness::builder().with_size(vec2(900.0, 60.0)).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            ui.horizontal(|ui| super::options_bar(app, ui));
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h.run_steps(3);
+    h
+}
+
+/// Drags the options bar's "T" icon `dx` points to the right with `mods` held.
+fn scrub_size_icon(h: &mut Harness<'static, PhotocraftApp>, dx: f32, mods: Modifiers) {
+    let icon = h.get_by_role_and_label(egui::accesskit::Role::Label, "Font size").rect().center();
+    h.hover_at(icon);
+    h.run_steps(1);
+    press(h, icon, true);
+    for k in 1..=5 {
+        h.event(egui::Event::ModifiersChanged(mods));
+        h.hover_at(icon + vec2(dx * k as f32 / 5.0, 0.0));
+        h.run_steps(1);
+    }
+    press(h, icon + vec2(dx, 0.0), false);
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(2);
+}
+
+fn history_len(h: &Harness<'static, PhotocraftApp>) -> usize {
+    h.state().session.active().unwrap().history.entries().len()
+}
+
+/// Photoshop's options bar "T" icon is a scrubby slider for the size beside it, like the
+/// Character panel's icons (#6437): a point per point dragged, the whole drag one undo step.
+#[test]
+fn options_bar_t_icon_scrubs_the_size_in_one_history_step() {
+    let mut app = new_app();
+    let id = LayerId(app.run("type.create", json!({"text": "Hello", "size": 20, "x": 300, "y": 420})).unwrap()["layer"].as_u64().unwrap());
+    let mut h = options_harness(app);
+    let steps = history_len(&h);
+    scrub_size_icon(&mut h, 30.0, Modifiers::NONE);
+    assert_eq!(size_at(h.state(), id, 0), 50.0, "30 points to the right: 20 pt → 50 pt");
+    assert_eq!(history_len(&h), steps + 1, "one history step for the whole drag");
+    assert!(h.state_mut().session.undo());
+    assert_eq!(size_at(h.state(), id, 0), 20.0);
+}
+
+/// While editing with characters selected, scrubbing the "T" icon sizes only the selection.
+#[test]
+fn options_bar_t_icon_scrubs_the_selected_characters_only() {
+    let mut app = new_app();
+    let id = LayerId(app.run("type.create", json!({"text": "Hello world", "size": 20, "x": 300, "y": 420})).unwrap()["layer"].as_u64().unwrap());
+    app.ui.text_edit = Some(crate::state::TextEdit {
+        layer: id.0,
+        caret: 11,
+        anchor: 6,
+        session: "s".into(),
+        created: false,
+        mask: false,
+        dragging: false,
+        resize: None,
+        preedit: None,
+        document: None,
+    });
+    let mut h = options_harness(app);
+    scrub_size_icon(&mut h, -8.0, Modifiers::NONE);
+    let sizes = [0, 5, 6, 10].map(|ci| size_at(h.state(), id, ci));
+    assert_eq!(sizes, [20.0, 20.0, 12.0, 12.0], "\"world\" goes 20 pt → 12 pt, \"Hello \" stays");
+}
+
+/// Scrubbing the "T" icon stops at the size field's limits: 1 pt and 1296 pt.
+#[test]
+fn options_bar_t_icon_scrub_stops_at_the_size_limits() {
+    let mut app = new_app();
+    let id = LayerId(app.run("type.create", json!({"text": "Hello", "size": 20, "x": 300, "y": 420})).unwrap()["layer"].as_u64().unwrap());
+    let mut h = options_harness(app);
+    scrub_size_icon(&mut h, -60.0, Modifiers::NONE);
+    assert_eq!(size_at(h.state(), id, 0), 1.0, "60 points left of 20 pt stops at the minimum");
+    scrub_size_icon(&mut h, 200.0, Modifiers::SHIFT);
+    assert_eq!(size_at(h.state(), id, 0), 1296.0, "Shift (10 pt per point) past the top stops at the maximum");
+}
+
+/// Rests the pointer on the widget named `label` past the tooltip delay; true when its tooltip
+/// (a second node with the same name) shows.
+fn tooltip_shows(h: &mut Harness<'static, PhotocraftApp>, role: egui::accesskit::Role, label: &str) -> bool {
+    let at = h.get_by_role_and_label(role, label).rect().center();
+    h.hover_at(at);
+    h.run_steps(8);
+    h.query_all_by_label(label).count() == 2
+}
+
+/// The scrubby "T" icon keeps its "Font size" tooltip: the size field's drag area, laid over the
+/// icon after it, must not take its hover.
+#[test]
+fn options_bar_t_icon_shows_its_tooltip() {
+    let mut app = new_app();
+    app.run("type.create", json!({"text": "Hello", "size": 20, "x": 300, "y": 420})).unwrap();
+    let mut h = options_harness(app);
+    assert!(tooltip_shows(&mut h, egui::accesskit::Role::Button, "Set the text color"), "the probe sees an ordinary tooltip");
+    h.hover_at(egui::pos2(890.0, 55.0));
+    h.run_steps(4);
+    assert!(tooltip_shows(&mut h, egui::accesskit::Role::Label, "Font size"), "hovering the \"T\" icon shows \"Font size\"");
 }
 
 /// A point inside glyph `i` of vertical type: `f` of the way down its advance, right of the
@@ -504,6 +888,7 @@ fn foreground_colour_recolours_only_selected_type() {
     assert_eq!(rgb_at(&app, id, 0), [0, 0, 0, 255], "not editing: unchanged");
     let edit = |caret, anchor| crate::state::TextEdit {
         layer: id.0,
+        document: None,
         caret,
         anchor,
         session: "s".into(),
@@ -585,6 +970,33 @@ fn tab_while_typing_inserts_a_tab() {
     assert_eq!(h.state().ui.panels.dock, panels, "the panels stay as they were");
 }
 
+/// #8889: separate Tab presses must keep inserting text with the menu bar and panels present.
+#[test]
+fn repeated_tabs_while_typing_keep_keyboard_focus_on_the_canvas() {
+    let mut app = new_app();
+    let id = LayerId(app.run("type.create", json!({"text": "HOHO", "size": 60, "x": 300, "y": 420})).unwrap()["layer"].as_u64().unwrap());
+    let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).with_max_steps(32).build_eframe(move |cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        app
+    });
+    h.run_steps(4);
+    let p = glyph(&mut h, id, 1, 0.2);
+    click(&mut h, p);
+    assert_eq!(selection(&h), (1, 1));
+    let panels = h.state().ui.panels.dock;
+    for (expected, caret) in [("H\tOHO", 2), ("H\t\tOHO", 3), ("H\t\t\tOHO", 4)] {
+        h.key_press(egui::Key::Tab);
+        h.run_steps(2);
+        assert_eq!(text(h.state(), id).text, expected);
+        assert_eq!(selection(&h), (caret, caret));
+        assert!(h.state().ui.text_edit.is_some(), "still editing");
+        assert_eq!(h.state().ui.panels.dock, panels, "the panels stay as they were");
+    }
+    h.event(egui::Event::Text("typed".into()));
+    h.run_steps(2);
+    assert_eq!(text(h.state(), id).text, "H\t\t\ttypedOHO");
+}
+
 #[test]
 fn text_color_dialog_edits_only_the_selected_range_and_cancel_is_inert() {
     let mut app = new_app();
@@ -593,6 +1005,7 @@ fn text_color_dialog_edits_only_the_selected_range_and_cancel_is_inert() {
     app.run("layer.select", json!({"layer": id.0, "mode": "add"})).unwrap();
     app.ui.text_edit = Some(crate::state::TextEdit {
         layer: id.0,
+        document: None,
         caret: 11,
         anchor: 6,
         session: "text-color-dialog-test".into(),
@@ -650,6 +1063,7 @@ fn empty_ime_events_never_delete_the_selection() {
     let id = LayerId(app.run("type.create", json!({"text": "Hello", "size": 40, "x": 300, "y": 420})).unwrap()["layer"].as_u64().unwrap());
     app.ui.text_edit = Some(crate::state::TextEdit {
         layer: id.0,
+        document: None,
         caret: 5,
         anchor: 0,
         session: "s".into(),
@@ -734,6 +1148,84 @@ fn assert_affine(a: Affine, b: Affine) {
     }
 }
 
+/// #5956: while typing, a plain drag from just outside the text moves it (Photoshop's Move cursor
+/// there), and typing carries on; a press further out commits the text, as before.
+#[test]
+fn a_drag_just_outside_the_typed_text_moves_it() {
+    let (app, id) = transform_app(false, false, Affine::translate(500.0, 350.0));
+    let mut h = harness(1.0, app);
+    let f = crate::type_transform::frame(h.state_mut()).unwrap();
+    let zoom = f64::from(h.state().point_zoom());
+    let mid = (f.quad[1][1] + f.quad[2][1]) / 2.0;
+    let near = frame_point(h.state(), [f.quad[1][0] + 20.0 / zoom, mid]);
+    let (ctx, view) = (h.ctx.clone(), xf(h.state()));
+    let cursor = crate::type_transform::cursor(h.state_mut(), &ctx, &view, near, Modifiers::NONE);
+    assert_eq!(cursor, Some(egui::CursorIcon::Move), "the Move cursor just outside the text");
+    let before = text(h.state(), id);
+    let count = h.state().session.active().unwrap().history.entries().len();
+    transform_drag(&mut h, near, near + egui::vec2(60.0, 30.0), Modifiers::NONE, false);
+    let after = text(h.state(), id);
+    assert_affine(after.transform, Affine::translate(60.0 / zoom, 30.0 / zoom).mul(&before.transform));
+    assert_eq!(after.text, before.text);
+    assert_eq!(h.state().ui.text_edit.as_ref().map(|e| e.layer), Some(id.0), "still typing");
+    assert_eq!(h.state().session.active().unwrap().history.entries().len(), count + 1);
+    // Further out: the press commits the text.
+    let f = crate::type_transform::frame(h.state_mut()).unwrap();
+    let far = frame_point(h.state(), [f.quad[1][0] + 100.0 / zoom, (f.quad[1][1] + f.quad[2][1]) / 2.0]);
+    let view = xf(h.state());
+    assert_eq!(crate::type_transform::cursor(h.state_mut(), &ctx, &view, far, Modifiers::NONE), None);
+    click(&mut h, far);
+    assert!(h.state().ui.text_edit.is_none(), "committed");
+    assert_affine(text(h.state(), id).transform, after.transform);
+}
+
+/// #5956 review: the reach is screen points as the view draws them, so a pixel-aspect stretch
+/// doesn't widen it, and a press on another type layer near the text is still the Type tool's.
+#[test]
+fn the_move_reach_is_on_screen_and_leaves_other_type_alone() {
+    let (mut app, id) = transform_app(false, false, Affine::translate(500.0, 350.0));
+    app.ui.view.pixel_aspect_correction = true;
+    app.ui.view.pixel_aspect = "anamorphic2To1".into();
+    let mut h = harness(1.0, app);
+    h.run_steps(1);
+    let f = crate::type_transform::frame(h.state_mut()).unwrap();
+    let mid = (f.quad[1][1] + f.quad[2][1]) / 2.0;
+    let edge = frame_point(h.state(), [f.quad[1][0], mid]);
+    let (ctx, view) = (h.ctx.clone(), xf(h.state()));
+    assert_eq!(crate::type_transform::cursor(h.state_mut(), &ctx, &view, edge + egui::vec2(30.0, 0.0), Modifiers::NONE), Some(egui::CursorIcon::Move));
+    // 50 points out is 25 document points across a 2:1 pixel: out of reach.
+    assert_eq!(crate::type_transform::cursor(h.state_mut(), &ctx, &view, edge + egui::vec2(50.0, 0.0), Modifiers::NONE), None);
+    let before = text(h.state(), id);
+    transform_drag(&mut h, edge + egui::vec2(50.0, 0.0), edge + egui::vec2(110.0, 30.0), Modifiers::NONE, false);
+    assert_affine(text(h.state(), id).transform, before.transform);
+}
+
+/// #5956 review: a press on another type layer within reach of the text being typed is the Type
+/// tool's (it commits and moves to that text), not a move of the edited text.
+#[test]
+fn a_press_on_other_type_near_the_text_does_not_move_it() {
+    let mut app = new_app();
+    let id = LayerId(app.run("type.create", json!({"text": "Hi", "size": 32, "x": 300, "y": 420})).unwrap()["layer"].as_u64().unwrap());
+    let right = app.session.active().unwrap().doc.layer(id).unwrap().surface().unwrap().content_bounds().x1;
+    let other = LayerId(app.run("type.create", json!({"text": "Other", "size": 32, "x": right + 6, "y": 420})).unwrap()["layer"].as_u64().unwrap());
+    app.run("layer.select", json!({"layer": id.0})).unwrap();
+    super::edit_active(&mut app).unwrap();
+    let mut h = harness(1.0, app);
+    h.run_steps(1);
+    let f = crate::type_transform::frame(h.state_mut()).unwrap();
+    let ob = h.state().session.active().unwrap().doc.layer(other).unwrap().surface().unwrap().content_bounds();
+    let mid = f64::from(ob.y0 + ob.y1) / 2.0;
+    let on_other = frame_point(h.state(), [f64::from(ob.x0) + 4.0, mid]);
+    let edge = frame_point(h.state(), [f.quad[1][0], mid]);
+    assert!(on_other.x - edge.x > 0.0 && on_other.x - edge.x < 40.0, "the other text is within reach: {} pt", on_other.x - edge.x);
+    let (ctx, view) = (h.ctx.clone(), xf(h.state()));
+    assert_ne!(crate::type_transform::cursor(h.state_mut(), &ctx, &view, on_other, Modifiers::NONE), Some(egui::CursorIcon::Move));
+    let before = text(h.state(), id);
+    transform_drag(&mut h, on_other, on_other + egui::vec2(60.0, 30.0), Modifiers::NONE, false);
+    assert_affine(text(h.state(), id).transform, before.transform);
+    assert_ne!(h.state().ui.text_edit.as_ref().map(|e| e.layer), Some(id.0), "the edit moved on");
+}
+
 /// #1091: modifier changes alone draw/hide the oriented frame without touching editing/history.
 #[test]
 fn temporary_type_transform_visibility_and_cursors() {
@@ -777,6 +1269,23 @@ fn temporary_type_transform_visibility_and_cursors() {
     h.state_mut().ui.shell.sticky_command = true;
     let sticky = crate::workspace_ui::sticky_mods(h.state(), Modifiers::NONE);
     assert!(crate::type_transform::visible(h.state(), sticky));
+}
+
+#[test]
+fn type_selection_highlight_visible_with_command_held() {
+    let (app, _id) = transform_app(false, false, Affine::IDENTITY);
+    let mut h = harness(1.0, app);
+    if let Some(ed) = h.state_mut().ui.text_edit.as_mut() {
+        ed.anchor = 0;
+        ed.caret = 5;
+    }
+    hold(&mut h, type_command());
+    h.run();
+    let accent = crate::theme::Tokens::get(&h.ctx).accent;
+    let expected_fill = egui::Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 110);
+    let has_selection_highlight =
+        h.output().shapes.iter().any(|clipped| if let egui::Shape::Path(path) = &clipped.shape { path.fill == expected_fill && path.closed } else { false });
+    assert!(has_selection_highlight, "selection highlight must remain visible while Ctrl/Cmd is held");
 }
 
 /// Real canvas input: layer-local scaling stays correct across orientation, zoom, HiDPI and flip.
@@ -902,6 +1411,33 @@ fn temporary_type_transform_free_scale_center_scale_move_skew_and_rotation() {
             assert_ne!(after.transform.m[2], before.transform.m[2]);
         }
     }
+}
+
+/// Editing paragraph text, a click inside the box but off the glyphs moves the caret to the
+/// nearest offset, as in Photoshop; a click outside the box still commits.
+#[test]
+fn click_inside_the_paragraph_box_off_the_glyphs_moves_the_caret() {
+    use crate::canvas::{ToolEvent, tool_event};
+    // The box is 240 × 180; the two 32 pt lines only fill its top.
+    let (mut app, id) = transform_app(true, false, Affine::translate(400.0, 350.0));
+    let (bx, by, _, h) = super::box_shape(&app, id).unwrap();
+    let (l, aff, _) = layout(&mut app, id).unwrap();
+    let click = |app: &mut PhotocraftApp, tx: f32, ty: f32| {
+        let p = aff.apply(Point::new(f64::from(tx), f64::from(ty)));
+        tool_event(app, ToolEvent::Down { x: p.x, y: p.y, pressure: 1.0 }, Modifiers::NONE);
+        tool_event(app, ToolEvent::Up { x: p.x, y: p.y }, Modifiers::NONE);
+    };
+    let layers = app.session.active().unwrap().doc.layers.len();
+    // Near the bottom of the box, just right of its left edge.
+    assert!(!photocraft_text::text_point_inside(&l, bx + 8.0, by + h - 8.0, 6.0), "the point is off the glyphs");
+    click(&mut app, bx + 8.0, by + h - 8.0);
+    let ed = app.ui.text_edit.clone().expect("still editing");
+    // "Hello é世界\n" is 10 characters: the start of the second line.
+    assert_eq!((ed.layer, ed.caret, ed.anchor), (id.0, 10, 10));
+    // Outside the box the edit commits, without starting new text.
+    click(&mut app, bx - 40.0, by + h - 8.0);
+    assert!(app.ui.text_edit.is_none());
+    assert_eq!(app.session.active().unwrap().doc.layers.len(), layers);
 }
 
 #[test]
@@ -1050,18 +1586,23 @@ fn temporary_type_transform_preserves_paragraph_resize_pivot_ime_and_shortcuts()
     h.key_press_modifiers(Modifiers::COMMAND, egui::Key::A);
     h.run_steps(2);
     assert_eq!(selection(&h), (0, after.text.chars().count()));
-    h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: "候補".into(), active_range_chars: None }));
-    h.run_steps(2);
     let f = crate::type_transform::frame(h.state_mut()).unwrap();
     let a = f.quad[2];
     tool_event(h.state_mut(), ToolEvent::Down { x: a[0], y: a[1], pressure: 1.0 }, type_command());
     tool_event(h.state_mut(), ToolEvent::Up { x: a[0] + 20.0, y: a[1] + 10.0 }, type_command());
+    // Complete the application edit before starting this composition: a completed transform
+    // changes the document revision and must cancel an older composition through the reset guard.
+    h.run_steps(2);
+    h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: "候補".into(), active_range_chars: None }));
+    h.run_steps(2);
     assert_eq!(h.state().ui.text_edit.as_ref().unwrap().preedit, Some((0, 2)));
     let f = crate::type_transform::frame(h.state_mut()).unwrap();
     let a = f.quad[2];
     tool_event(h.state_mut(), ToolEvent::Down { x: a[0], y: a[1], pressure: 1.0 }, type_command());
     tool_event(h.state_mut(), ToolEvent::Move { x: a[0] + 15.0, y: a[1] + 10.0, pressure: 1.0 }, type_command());
     let composed_transform = crate::type_transform::current_transform(h.state(), id).unwrap();
+    // A pending transform has not changed the revision yet. Keep the real raw-input route so
+    // the accepted commit must finish that transform before replacing its current preedit.
     h.event(egui::Event::Ime(egui::ImeEvent::Commit("確定".into())));
     h.run_steps(2);
     assert_eq!(text(h.state(), id).text, "確定");
@@ -1113,6 +1654,7 @@ fn temporary_type_transform_captures_press_and_rejects_collapsed_geometry() {
 #[test]
 #[ignore = "writes visual evidence to target/issue-1091; run explicitly for visual QA"]
 fn temporary_type_transform_visual_evidence() {
+    let _gpu = photocraft_testkit::gpu_lock();
     let out = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/issue-1091");
     std::fs::create_dir_all(&out).unwrap();
     for (index, theme) in crate::theme::ThemeKind::ALL.into_iter().enumerate() {
@@ -1271,6 +1813,9 @@ fn font_styles_keep_metadata_names_and_numeric_labels() {
 
 #[test]
 fn postscript_only_style_shows_actual_subfamily() {
+    // selected_style reads the engine only once the font scan is done (try_shared). Under nextest
+    // this test runs in a process of its own, where nothing else has started the scan, so start it.
+    let _ = photocraft_text::shared();
     let style = photocraft_doc::text::CharStyle { font_family: "Inter".into(), postscript_name: Some("Inter-SemiBold".into()), ..Default::default() };
     assert_eq!(super::selected_style(&style), "SemiBold");
 }
@@ -1339,6 +1884,7 @@ fn the_font_menu_lists_served_families() {
 mod multi_layer_formatting {
     use super::*;
     use egui::accesskit::Role;
+    use egui_kittest::kittest::NodeT;
     use photocraft_doc::text::{AntiAlias, CharStyle, Orientation, TextAlign};
 
     fn selected(app: &mut PhotocraftApp, ids: &[LayerId]) {
@@ -1374,7 +1920,10 @@ mod multi_layer_formatting {
     }
 
     fn controls(app: PhotocraftApp, properties: bool) -> Harness<'static, PhotocraftApp> {
-        let mut h = Harness::builder().with_size(vec2(1100.0, 800.0)).build_ui_state(
+        // The lazily populated font popup introduces widgets in successive passes. egui 0.37
+        // styles each new widget on its following pass; keep a bounded settle assertion while
+        // allowing those additional passes (the loaded menu requires six under parallel tests).
+        let mut h = Harness::builder().with_size(vec2(1100.0, 800.0)).with_max_steps(8).build_ui_state(
             move |ui, app| {
                 if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                     if properties {
@@ -1406,6 +1955,7 @@ mod multi_layer_formatting {
     fn editing(app: &mut PhotocraftApp, id: LayerId) {
         app.ui.text_edit = Some(crate::state::TextEdit {
             layer: id.0,
+            document: None,
             caret: 3,
             anchor: 1,
             session: "batch-type-edit".into(),
@@ -1415,6 +1965,62 @@ mod multi_layer_formatting {
             resize: None,
             preedit: None,
         });
+    }
+
+    /// The Paragraph section's direction buttons set the selected layers' paragraph direction in
+    /// one undo step, show the current one, and leave unselected layers and the tool's default for
+    /// new type alone (TYPE-218-2).
+    #[test]
+    fn paragraph_direction_buttons_set_and_show_the_direction() {
+        use egui::accesskit::Toggled;
+        use egui_kittest::kittest::NodeT;
+        use photocraft_doc::text::TextDirection;
+        let (app, ids) = fixture();
+        let dir = |app: &PhotocraftApp, id: LayerId| text(app, id).paragraph_runs()[0].style.direction;
+        let shown = |h: &Harness<'static, PhotocraftApp>, label: &str| h.get_by_label(label).accesskit_node().toggled();
+        let mut h = controls(app, true);
+        assert_eq!(shown(&h, "Automatic paragraph direction"), Some(Toggled::True), "new type follows its text");
+        assert_eq!(shown(&h, "Right-to-left paragraph direction"), Some(Toggled::False));
+        let steps = h.state().session.active().unwrap().history.entries().len();
+        h.get_by_label("Right-to-left paragraph direction").click();
+        h.run();
+        for id in &ids[..2] {
+            assert_eq!(dir(h.state(), *id), TextDirection::Rtl, "selected layers get the direction");
+        }
+        assert_eq!(dir(h.state(), ids[2]), TextDirection::Auto, "an unselected layer is untouched");
+        assert_eq!(h.state().session.active().unwrap().history.entries().len(), steps + 1, "one undo step");
+        assert_eq!(h.state().ui.tool_options.type_direction, "auto", "the panel edits layers, not new type");
+        h.run();
+        assert_eq!(shown(&h, "Right-to-left paragraph direction"), Some(Toggled::True), "the button shows it");
+        assert_eq!(shown(&h, "Automatic paragraph direction"), Some(Toggled::False));
+        h.get_by_label("Left-to-right paragraph direction").click();
+        h.run();
+        assert_eq!(dir(h.state(), ids[0]), TextDirection::Ltr);
+        assert!(h.state_mut().session.undo());
+        assert!(h.state_mut().session.undo());
+        for id in &ids[..2] {
+            assert_eq!(dir(h.state(), *id), TextDirection::Auto, "undo restores it");
+        }
+    }
+
+    /// The options bar's direction buttons set the selected layers' direction and the one new
+    /// type starts with, as its alignment buttons do (TYPE-218-2).
+    #[test]
+    fn options_bar_direction_sets_selected_layers_and_new_type() {
+        use photocraft_doc::text::TextDirection;
+        let (app, ids) = fixture();
+        let mut h = controls(app, false);
+        h.get_by_label("Right-to-left paragraph direction").click();
+        h.run();
+        assert_eq!(h.state().ui.tool_options.type_direction, "rtl");
+        for id in &ids[..2] {
+            assert_eq!(text(h.state(), *id).paragraph_runs()[0].style.direction, TextDirection::Rtl);
+        }
+        assert_eq!(text(h.state(), ids[2]).paragraph_runs()[0].style.direction, TextDirection::Auto);
+        super::super::pointer_up(h.state_mut(), [40.0, 60.0], [40.0, 60.0]);
+        let id = h.state().session.active().unwrap().active_layer.unwrap();
+        assert!(!ids.contains(&id), "a new type layer");
+        assert_eq!(text(h.state(), id).paragraph_runs()[0].style.direction, TextDirection::Rtl, "new type starts right to left");
     }
 
     #[test]
@@ -1483,8 +2089,17 @@ mod multi_layer_formatting {
         PhotocraftApp::setup_context(&h.ctx, Default::default());
         h.run_steps(4);
         h.get_all_by_role(Role::ComboBox).next().unwrap().click();
-        h.run();
-        h.run();
+        // The font menu's search caret repaints every pass; step a bounded number of times.
+        h.run_steps(2);
+        h.run_steps(2);
+    }
+
+    #[test]
+    fn hyphenate_is_not_shown_while_layout_does_not_hyphenate() {
+        // #6710: layout never hyphenates; the control must stay hidden until it does.
+        let (app, _) = fixture();
+        let h = controls(app, true);
+        assert!(h.query_by_label("Hyphenate").is_none());
     }
 
     #[test]
@@ -1504,8 +2119,6 @@ mod multi_layer_formatting {
         h.run();
         h.get_by_label("Center text").click();
         h.run();
-        h.get_by_label("Hyphenate").click();
-        h.run();
         number(&mut h, "Indent left margin", "9");
         for (id, scale) in [(ids[0], 2.0), (ids[1], 4.0)] {
             let c = style(h.state(), id, 0);
@@ -1514,7 +2127,6 @@ mod multi_layer_formatting {
             assert!(c.faux_bold);
             let p = text(h.state(), id).paragraph_runs()[0].style.clone();
             assert_eq!(p.align, TextAlign::Center);
-            assert!(p.hyphenate);
             assert_eq!(p.start_indent_pt, 9.0);
         }
         assert_eq!(style(h.state(), ids[2], 0), untouched);
@@ -1526,6 +2138,51 @@ mod multi_layer_formatting {
         number(&mut h, "Font size", "40");
         assert_eq!((size_at(h.state(), ids[0], 0), size_at(h.state(), ids[0], 1), size_at(h.state(), ids[0], 3)), (30.0, 20.0, 30.0));
         assert_eq!(text(h.state(), ids[1]).char_runs(), peer);
+    }
+
+    /// #6491: with Units & Rulers ▸ Type set to pixels, the Character and Paragraph fields show
+    /// and take pixels, like the options bar. 144 ppi so a pixel is not a point.
+    #[test]
+    fn character_and_paragraph_fields_follow_the_type_units_preference() {
+        use egui_kittest::kittest::NodeT;
+        // The resolution is set before the type exists: Image Size keeps existing type's pixel
+        // size (#7125), so a layer made earlier would be 6 pt here.
+        let mut app = new_app();
+        app.run("prefs.set", json!({"path": "unitsAndRulers.typeUnits", "value": "pixels"})).unwrap();
+        app.run("image.imageSize", json!({"resolution": 144, "resample": "none"})).unwrap();
+        let ids =
+            [LayerId(app.run("type.create", json!({"text": "AéBCD", "font": "Inter", "size": 12, "color": "#000000"})).unwrap()["layer"].as_u64().unwrap())];
+        selected(&mut app, &[ids[0]]);
+        let mut h = controls(app, true);
+        let shown = h.get_by_role_and_label(Role::SpinButton, "Font size").accesskit_node().numeric_value();
+        assert_eq!(shown, Some(24.0), "12 pt at 144 ppi");
+        number(&mut h, "Font size", "60");
+        number(&mut h, "Leading (set to the font size × auto-leading when Auto)", "84");
+        number(&mut h, "Baseline shift", "10");
+        number(&mut h, "Indent left margin", "9");
+        let c = style(h.state(), ids[0], 0);
+        assert_eq!((c.size_pt, c.leading_pt, c.baseline_shift_pt), (30.0, Some(42.0), 5.0));
+        assert_eq!(text(h.state(), ids[0]).paragraph_runs()[0].style.start_indent_pt, 4.5);
+    }
+
+    /// #5717: a layer scaled so its shown size or leading is past a field's range (2400 pt, or
+    /// 0.08 pt) keeps it while the Character panel and the options bar only show it.
+    #[test]
+    fn showing_a_scaled_layer_past_the_size_range_does_not_change_it() {
+        for (layer, scale) in [(0, 200.0), (1, 0.005)] {
+            for properties in [true, false] {
+                let (mut app, ids) = fixture();
+                let id = ids[layer];
+                app.run("type.edit", json!({"layer": id.0, "transform": [scale, 0.0, 0.0, scale, 0.0, 0.0]})).unwrap();
+                selected(&mut app, &[id]);
+                let before = text(&app, id).char_runs();
+                let steps = app.session.active().unwrap().history.entries().len();
+                let mut h = controls(app, properties);
+                h.run_steps(3);
+                assert_eq!(text(h.state(), id).char_runs(), before, "scale {scale}, properties {properties}");
+                assert_eq!(h.state().session.active().unwrap().history.entries().len(), steps, "no history step");
+            }
+        }
     }
 
     #[test]
@@ -1654,7 +2311,8 @@ mod multi_layer_formatting {
             );
             PhotocraftApp::setup_context(&h.ctx, Default::default());
             h.run_steps(4);
-            assert!(h.query_by_label("Bend").is_some(), "the actual Warp form is visible");
+            h.get_by_role_and_label(egui::accesskit::Role::SpinButton, "Bend");
+            assert!(h.query_all_by_label("Bend").count() >= 1, "the actual Warp form is visible");
             for label in ["Layer", "Layers", "Range", "Coalesce"] {
                 assert!(h.query_by_label(label).is_none(), "target metadata must not become a form field: {label}");
             }
@@ -1708,6 +2366,28 @@ mod multi_layer_formatting {
         for (id, expected) in ids.into_iter().zip(originals) {
             assert_eq!(style(h.state(), id, 0), expected);
         }
+    }
+
+    /// #5911: the options bar's Create warped text button opens Warp Text for the selected type
+    /// layers, as Type › Warp Text… does; with no type layer to warp it is greyed.
+    #[test]
+    fn options_bar_warp_button_warps_the_selected_type_layers() {
+        let (app, ids) = fixture();
+        let mut h = controls(app, false);
+        h.get_by_role_and_label(Role::Button, "Create warped text").click();
+        h.run();
+        let dialog = h.state().ui.dialogs.last().unwrap();
+        assert_eq!(dialog.fields.get("__command").and_then(|c| c.as_str()), Some("type.warpText"));
+        let dialog = dialog.id;
+        h.state_mut().ui.dialog_mut(dialog).unwrap().fields.insert("style".into(), json!("arc"));
+        crate::dialogs::confirm(h.state_mut(), dialog).unwrap();
+        for id in &ids[..2] {
+            assert!(text(h.state(), *id).warp.is_some(), "a selected layer is warped");
+        }
+        assert!(text(h.state(), ids[2]).warp.is_none(), "an unselected layer is left alone");
+        h.state_mut().run("layer.new.layer", json!({})).unwrap();
+        h.run();
+        assert!(h.get_by_role_and_label(Role::Button, "Create warped text").accesskit_node().is_disabled());
     }
 }
 
@@ -1887,6 +2567,77 @@ fn multi_click_selects_word_line_paragraph_and_all_in_point_text() {
     assert_eq!(selection(&h), (0, edited.chars().count()), "⌘A selects all text");
 }
 
+/// #6819: all eight paragraph-box handles resize the box while editing, with View › Snap on (the
+/// default), at 25–200 % zoom, 1× and 2× HiDPI, for a plain, a scaled and a rotated layer. A press
+/// on a handle (anywhere in its grab area) never moves the caret, and the edited text's own glyph
+/// bounds don't pull the press off the handle.
+#[test]
+fn every_paragraph_box_handle_resizes_the_box_with_snapping_on() {
+    let scaled = Affine { m: [1.5, 0.0, 0.0, 0.75, 300.0, 300.0] };
+    let rotated = Affine { m: [1.2 * 0.94, 1.2 * 0.342, -1.2 * 0.342, 1.2 * 0.94, 300.0, 300.0] };
+    for ppp in [1.0, 2.0] {
+        for zoom in [0.25f32, 0.5, 1.0, 2.0] {
+            for (name, tf) in [("plain", None), ("scaled", Some(scaled)), ("rotated", Some(rotated))] {
+                let mut app = new_app();
+                assert!(app.ui.extras.snap, "snapping is on by default");
+                let size = 24.0 / zoom;
+                let p = json!({"text": "HOHOHO HOHO HOHOHO HOHO HOHOHO", "size": size, "x": 300, "y": 300, "box": [300.0, 300.0, size * 8.0, size * 4.0]});
+                let id = LayerId(app.run("type.create", p).unwrap()["layer"].as_u64().unwrap());
+                if let Some(a) = tf {
+                    app.run("type.edit", json!({"layer": id.0, "transform": a.m})).unwrap();
+                }
+                let mut h = harness(ppp, app);
+                let (bx, by, w, bh) = super::box_shape(h.state(), id).unwrap();
+                let aff = layout(h.state_mut(), id).unwrap().1;
+                let m = aff.apply(Point::new(f64::from(bx + w / 2.0), f64::from(by + bh / 2.0)));
+                let v = &mut h.state_mut().ui.views[0];
+                (v.zoom, v.center, v.fit_pending) = (zoom, [m.x as f32, m.y as f32], false);
+                h.run_steps(2);
+                let ctx = format!("ppp {ppp} zoom {zoom} {name}");
+                let p = glyph(&mut h, id, 2, 0.2);
+                click(&mut h, p);
+                assert_eq!(selection(&h), (2, 2), "{ctx}: editing");
+                for i in 0..8u8 {
+                    // Press at the handle and inside its grab area, towards the text.
+                    for off in [0.0f32, 4.0] {
+                        let (bx, by, w, bh) = super::box_shape(h.state(), id).unwrap();
+                        let (l, r, t, b) = super::handle_sides(i);
+                        let hx = if l {
+                            bx
+                        } else if r {
+                            bx + w
+                        } else {
+                            bx + w / 2.0
+                        };
+                        let hy = if t {
+                            by
+                        } else if b {
+                            by + bh
+                        } else {
+                            by + bh / 2.0
+                        };
+                        let dir = vec2(f32::from(u8::from(r)) - f32::from(u8::from(l)), f32::from(u8::from(b)) - f32::from(u8::from(t)));
+                        let at = screen(&mut h, id, hx, hy);
+                        let out = (screen(&mut h, id, hx + dir.x * 10.0, hy + dir.y * 10.0) - at).normalized();
+                        let a = at - out * off;
+                        drag(&mut h, a, a + out * 30.0);
+                        let ctx = format!("{ctx} handle {i} offset {off}");
+                        assert_eq!(selection(&h), (2, 2), "{ctx}: the caret stays put");
+                        let (_, _, w2, h2) = super::box_shape(h.state(), id).unwrap();
+                        // 30 points outward (a corner's diagonal: about 21 per side) is that over
+                        // zoom × layer scale in text units; snapping may shift the release by up to
+                        // its 8 point reach.
+                        let min = 6.0 / (zoom / h.state().canvas_ppp()) / 1.5;
+                        let grew = |was: f32, now: f32, moved: bool| if moved { now - was >= min } else { (now - was).abs() < 1e-3 };
+                        assert!(grew(w, w2, l || r), "{ctx}: width {w} -> {w2}");
+                        assert!(grew(bh, h2, t || b), "{ctx}: height {bh} -> {h2}");
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Paragraph text: three clicks select only the visual (soft-wrapped) line, four the whole
 /// paragraph; vertical type selects the column the same way.
 #[test]
@@ -1973,6 +2724,7 @@ fn multi_click_without_a_session_does_nothing() {
     assert!(app.ui.text_edit.is_none() && app.type_clicks.is_none());
     app.ui.text_edit = Some(crate::state::TextEdit {
         layer: 999_999,
+        document: None,
         caret: 5,
         anchor: 5,
         session: "stale".into(),
@@ -2024,4 +2776,433 @@ fn type_mask_shift_adds_and_alt_subtracts_without_a_layer_row() {
     type_and_commit(&mut app, Modifiers::ALT);
     assert!(at(&app, stem.0, stem.1) < 0.01, "⌥ subtracts the glyphs");
     assert!(at(&app, 1050, 150) > 0.99, "and keeps the rest");
+}
+
+/// #7713: justification needs a paragraph box. On point text the Paragraph panel's four justify
+/// buttons are greyed, as in Photoshop; on paragraph text they work.
+#[test]
+fn justify_buttons_are_greyed_on_point_text() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let justify = ["Justify last left", "Justify last centered", "Justify last right", "Justify all"];
+    for (paragraph, enabled) in [(false, false), (true, true)] {
+        let mut app = new_app();
+        let mut p = json!({"text": "one two three four", "size": 24, "x": 300, "y": 420});
+        if paragraph {
+            p["box"] = json!([300, 300, 240, 180]);
+        }
+        app.run("type.create", p).unwrap();
+        let mut h = Harness::builder().with_size(vec2(320.0, 700.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    crate::type_tool::character_panel(app, ui, true);
+                }
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        h.run_steps(4);
+        for tip in justify {
+            assert_eq!(!h.get_by_label(tip).accesskit_node().is_disabled(), enabled, "{tip} on {}", if paragraph { "paragraph text" } else { "point text" });
+        }
+        assert!(!h.get_by_label("Center text").accesskit_node().is_disabled(), "alignment itself stays available");
+    }
+    // A selection of a paragraph and a point type layer formats both: justify is greyed.
+    let mut app = new_app();
+    let point = app.run("type.create", json!({"text": "point", "size": 24, "x": 300, "y": 420})).unwrap()["layer"].as_u64().unwrap();
+    let boxed =
+        app.run("type.create", json!({"text": "boxed text", "size": 24, "x": 300, "y": 300, "box": [300, 300, 240, 180]})).unwrap()["layer"].as_u64().unwrap();
+    app.run("layer.select", json!({"layer": point})).unwrap();
+    app.run("layer.select", json!({"layer": boxed, "mode": "add"})).unwrap();
+    assert_eq!(app.session.active().unwrap().selected_layers().len(), 2);
+    let mut h = Harness::builder().with_size(vec2(320.0, 700.0)).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                crate::type_tool::character_panel(app, ui, true);
+            }
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h.run_steps(4);
+    assert!(h.get_by_label("Justify all").accesskit_node().is_disabled(), "one of the formatted layers is point text");
+}
+
+fn ellipse_layer(app: &mut PhotocraftApp) -> u64 {
+    app.run("shape.create", json!({"kind": "ellipse", "rect": [200, 200, 400, 300], "fill": "#dddddd"})).unwrap()["layer"].as_u64().unwrap()
+}
+
+fn click_at(app: &mut PhotocraftApp, x: f64, y: f64) {
+    use crate::canvas::{ToolEvent, tool_event};
+    tool_event(app, ToolEvent::Down { x, y, pressure: 1.0 }, Modifiers::NONE);
+    tool_event(app, ToolEvent::Up { x, y }, Modifiers::NONE);
+}
+
+#[test]
+fn clicking_inside_a_shape_starts_area_type_in_one_step() {
+    use photocraft_doc::text::TextShape;
+    let mut app = new_app();
+    let shape = ellipse_layer(&mut app);
+    assert!(matches!(path_target(&app, 400.0, 350.0), Some(PathClick::Area { shape: Some(s) }) if s == shape));
+    let before = app.session.active().unwrap().history.entries().len();
+    click_at(&mut app, 400.0, 350.0);
+    let id = LayerId(app.ui.text_edit.as_ref().expect("editing").layer);
+    let st = app.session.active().unwrap();
+    assert!(matches!(text_layer(&st.doc, id).unwrap().shape, TextShape::Area { .. }));
+    assert_eq!(st.history.entries().len(), before + 1, "create + fill is one step");
+    super::commit(&mut app);
+    app.run("edit.undo", json!({})).unwrap();
+    assert!(app.session.active().unwrap().doc.layer(id).is_none());
+}
+
+#[test]
+fn clicking_on_a_path_outline_starts_type_on_the_path_where_clicked() {
+    use photocraft_doc::text::TextShape;
+    let mut app = new_app();
+    ellipse_layer(&mut app);
+    // The ellipse's bottom point (400, 500); its perimeter is about 1105 px.
+    let Some(PathClick::OnPath { start, .. }) = path_target(&app, 400.0, 500.0) else { panic!("on the outline") };
+    assert!((0.0..1110.0).contains(&start), "{start}");
+    // A point a quarter of the way further round is about 276 px further along (mod the perimeter).
+    let Some(PathClick::OnPath { start: right, .. }) = path_target(&app, 600.0, 350.0) else { panic!("on the outline") };
+    let d = (right - start).rem_euclid(1105.0);
+    assert!((d - 276.0).abs() < 15.0 || (d - 829.0).abs() < 15.0, "{start} → {right}");
+    let before = app.session.active().unwrap().history.entries().len();
+    click_at(&mut app, 400.0, 500.0);
+    let id = LayerId(app.ui.text_edit.as_ref().unwrap().layer);
+    assert_eq!(app.session.active().unwrap().history.entries().len(), before + 1, "create + attach is one step");
+    assert!(
+        matches!(text_layer(&app.session.active().unwrap().doc, id).unwrap().shape, TextShape::Path { start: s, .. } if (f64::from(s) - start).abs() < 0.01)
+    );
+}
+
+/// The path pointer shows what the release would do: kept while a press on a path is held or
+/// barely moves (the release still makes path type there), none once a text box is dragged out
+/// over a path (the release makes a box) or while a type edit is open (a click commits).
+#[test]
+fn the_path_pointer_is_off_while_dragging_a_text_box_or_editing() {
+    use crate::canvas::{ToolEvent, tool_event};
+    let mut app = new_app();
+    ellipse_layer(&mut app);
+    assert!(matches!(super::hover_path_target(&mut app, 400.0, 350.0, false), Some(PathClick::Area { .. })), "a hover inside the shape");
+    // Press and hold on the shape, then a flat drag: still a click on release.
+    tool_event(&mut app, ToolEvent::Down { x: 400.0, y: 350.0, pressure: 1.0 }, Modifiers::NONE);
+    assert!(app.drag.is_some(), "the press starts a drag");
+    assert!(matches!(super::hover_path_target(&mut app, 400.0, 350.0, false), Some(PathClick::Area { .. })), "press and hold");
+    tool_event(&mut app, ToolEvent::Move { x: 1200.0, y: 351.0, pressure: 1.0 }, Modifiers::NONE);
+    assert!(matches!(super::hover_path_target(&mut app, 1200.0, 351.0, false), Some(PathClick::Area { .. })), "a flat drag");
+    tool_event(&mut app, ToolEvent::Up { x: 1200.0, y: 351.0 }, Modifiers::NONE);
+    let id = LayerId(app.ui.text_edit.as_ref().expect("editing").layer);
+    assert!(
+        matches!(text_layer(&app.session.active().unwrap().doc, id).unwrap().shape, photocraft_doc::text::TextShape::Area { .. }),
+        "the release made area type"
+    );
+    let mut app = new_app();
+    ellipse_layer(&mut app);
+    tool_event(&mut app, ToolEvent::Down { x: 300.0, y: 300.0, pressure: 1.0 }, Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Move { x: 400.0, y: 350.0, pressure: 1.0 }, Modifiers::NONE);
+    assert!(app.drag.is_some(), "dragging out a box from inside the shape");
+    assert!(super::hover_path_target(&mut app, 400.0, 350.0, false).is_none(), "the drag makes a box, not area type");
+    tool_event(&mut app, ToolEvent::Up { x: 400.0, y: 350.0 }, Modifiers::NONE);
+    assert!(app.ui.text_edit.is_some(), "the box is being edited");
+    assert!(super::hover_path_target(&mut app, 400.0, 350.0, false).is_none(), "a click now commits");
+}
+
+#[test]
+fn click_outside_paths_still_makes_point_text() {
+    use photocraft_doc::text::TextShape;
+    let mut app = new_app();
+    ellipse_layer(&mut app);
+    assert!(path_target(&app, 1200.0, 700.0).is_none());
+    click_at(&mut app, 1200.0, 700.0);
+    let id = LayerId(app.ui.text_edit.as_ref().unwrap().layer);
+    assert_eq!(text_layer(&app.session.active().unwrap().doc, id).unwrap().shape, TextShape::Point);
+    // A drag inside the shape still makes a text box, as in Photoshop.
+    let mut app = new_app();
+    ellipse_layer(&mut app);
+    use crate::canvas::{ToolEvent, tool_event};
+    tool_event(&mut app, ToolEvent::Down { x: 300.0, y: 300.0, pressure: 1.0 }, Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Move { x: 450.0, y: 400.0, pressure: 1.0 }, Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Up { x: 450.0, y: 400.0 }, Modifiers::NONE);
+    let id = LayerId(app.ui.text_edit.as_ref().unwrap().layer);
+    assert!(matches!(text_layer(&app.session.active().unwrap().doc, id).unwrap().shape, TextShape::Box { .. }));
+}
+
+#[test]
+fn type_mask_tools_ignore_paths() {
+    let mut app = new_app();
+    ellipse_layer(&mut app);
+    app.ui.tool = crate::state::Tool::HorizontalTypeMask;
+    click_at(&mut app, 400.0, 350.0);
+    let id = LayerId(app.ui.text_edit.as_ref().unwrap().layer);
+    assert_eq!(text_layer(&app.session.active().unwrap().doc, id).unwrap().shape, photocraft_doc::text::TextShape::Point);
+}
+
+#[test]
+fn a_one_anchor_work_path_is_not_a_path_target() {
+    // `type.attachToPath` needs a segment, so the pointer must not promise type on this path.
+    let mut app = new_app();
+    std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).work_path =
+        Some(photocraft_doc::Path::new(vec![photocraft_doc::Subpath::polyline(&[(500.0, 400.0)])]));
+    assert!(path_target(&app, 500.0, 400.0).is_none());
+    click_at(&mut app, 500.0, 400.0);
+    let id = LayerId(app.ui.text_edit.as_ref().unwrap().layer);
+    assert_eq!(text_layer(&app.session.active().unwrap().doc, id).unwrap().shape, photocraft_doc::text::TextShape::Point);
+}
+
+#[test]
+fn over_existing_type_on_a_shape_the_pointer_is_the_plain_i_beam_and_a_click_edits_it() {
+    let mut app = new_app();
+    let text = app.run("type.create", json!({"text": "Hello", "x": 330, "y": 370, "size": 36})).unwrap()["layer"].as_u64().unwrap();
+    let shape = ellipse_layer(&mut app); // the shape layer is active, so its path is the target
+    let layers = app.session.active().unwrap().doc.walk().len();
+    let mut h = harness(1.0, app);
+    let on_text = glyph(&mut h, LayerId(text), 1, 0.5);
+    let [dx, dy] = xf(h.state()).to_doc(on_text);
+    assert!(matches!(path_target(h.state(), dx, dy), Some(PathClick::Area { shape: Some(s) }) if s == shape), "the text sits inside the shape");
+    h.hover_at(on_text);
+    h.run_steps(2);
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Text, "a click here edits the type, so the plain I-beam");
+    // Inside the shape but away from the type: the area-type pointer (drawn, not the OS I-beam).
+    let inside = xf(h.state()).to_screen(400.0, 250.0);
+    h.hover_at(inside);
+    h.run_steps(2);
+    assert_ne!(h.output().platform_output.cursor_icon, egui::CursorIcon::Text, "area-type pointer inside the shape");
+    click(&mut h, on_text);
+    let app = h.state();
+    assert_eq!(app.ui.text_edit.as_ref().expect("editing").layer, text, "the click edits the existing layer");
+    assert_eq!(app.session.active().unwrap().doc.walk().len(), layers, "no new layer");
+    assert_eq!(text_layer(&app.session.active().unwrap().doc, LayerId(text)).unwrap().shape, photocraft_doc::text::TextShape::Point);
+}
+
+#[test]
+fn paths_with_too_many_anchors_are_not_hover_targets() {
+    // The hover hit-tests every segment each frame, so huge paths are skipped (click and pointer alike).
+    let ring = |n: usize| -> Vec<(f64, f64)> {
+        (0..n).map(|i| i as f64 / n as f64 * std::f64::consts::TAU).map(|a| (500.0 + 200.0 * a.cos(), 400.0 + 200.0 * a.sin())).collect()
+    };
+    let mut app = new_app();
+    std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).work_path =
+        Some(photocraft_doc::Path::new(vec![photocraft_doc::Subpath::polygon(&ring(4000))]));
+    app.ui.selected_path = Some("work".into());
+    assert!(matches!(path_target(&app, 500.0, 400.0), Some(PathClick::Area { shape: None })));
+    std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).work_path =
+        Some(photocraft_doc::Path::new(vec![photocraft_doc::Subpath::polygon(&ring(5000))]));
+    assert!(path_target(&app, 500.0, 400.0).is_none());
+}
+
+#[test]
+fn hidden_target_path_is_not_a_click_target() {
+    // View › Show › Target Path off hides the path, so a click there makes plain point text.
+    let mut app = new_app();
+    std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).work_path =
+        Some(photocraft_doc::Path::new(vec![photocraft_doc::Subpath::polygon(&[(300.0, 300.0), (700.0, 300.0), (700.0, 500.0), (300.0, 500.0)])]));
+    app.ui.selected_path = Some("work".into());
+    assert!(matches!(path_target(&app, 500.0, 400.0), Some(PathClick::Area { shape: None })));
+    app.ui.view.show.target_path = false;
+    assert!(path_target(&app, 500.0, 400.0).is_none(), "Target Path off");
+    app.ui.view.show.target_path = true;
+    app.ui.view.extras = false;
+    assert!(path_target(&app, 500.0, 400.0).is_none(), "Extras off");
+}
+
+#[test]
+fn an_unselected_work_path_is_not_an_area_target() {
+    // The canvas draws a Work Path only while it is selected in Paths (or a path tool is active,
+    // #6551). One left unselected, as after Ctrl-click Load as Selection, is invisible with the
+    // Type tool, so a click inside it is plain point text; its outline still takes type on a
+    // path, as before area type (#5180).
+    let mut app = new_app();
+    std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).work_path =
+        Some(photocraft_doc::Path::new(vec![photocraft_doc::Subpath::polygon(&[(300.0, 300.0), (700.0, 300.0), (700.0, 500.0), (300.0, 500.0)])]));
+    app.ui.selected_path = None;
+    assert!(path_target(&app, 500.0, 400.0).is_none(), "inside a hidden work path");
+    assert!(matches!(path_target(&app, 500.0, 301.0), Some(PathClick::OnPath { shape: None, .. })));
+    click_at(&mut app, 500.0, 400.0);
+    let id = LayerId(app.ui.text_edit.as_ref().expect("editing").layer);
+    assert_eq!(text_layer(&app.session.active().unwrap().doc, id).unwrap().shape, photocraft_doc::text::TextShape::Point);
+    app.ui.selected_path = Some("work".into());
+    assert!(matches!(path_target(&app, 500.0, 400.0), Some(PathClick::Area { shape: None })));
+}
+
+/// Area type is paragraph text too: the justify buttons work on it (#7713 greys them on point text).
+#[test]
+fn justify_buttons_work_on_area_type() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut app = new_app();
+    app.run("type.create", json!({"text": "one two three four five six", "size": 24, "x": 300, "y": 420})).unwrap();
+    std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).work_path =
+        Some(photocraft_doc::Path::new(vec![photocraft_doc::Subpath::polygon(&[(300.0, 300.0), (600.0, 300.0), (600.0, 500.0), (300.0, 500.0)])]));
+    app.run("type.fillPath", json!({})).unwrap();
+    let mut h = Harness::builder().with_size(vec2(320.0, 700.0)).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                crate::type_tool::character_panel(app, ui, true);
+            }
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h.run_steps(4);
+    for tip in ["Justify last left", "Justify last centered", "Justify last right", "Justify all"] {
+        assert!(!h.get_by_label(tip).accesskit_node().is_disabled(), "{tip} on area type");
+    }
+}
+
+/// The paragraph box's document rect: its text-space origin through the layer transform, then
+/// width and height. Only what the symmetric-resize tests need (identity linear part).
+fn box_doc_rect(app: &PhotocraftApp, id: LayerId) -> [f64; 4] {
+    let t = text(app, id);
+    let (x, y, w, h) = match t.shape {
+        photocraft_doc::text::TextShape::Box { x, y, width, height } => (f64::from(x), f64::from(y), f64::from(width), f64::from(height)),
+        ref s => panic!("not a box: {s:?}"),
+    };
+    let p = t.transform.apply(Point::new(x, y));
+    [p.x, p.y, w, h]
+}
+
+/// ⌥ on an edge drag of a paragraph box mirrors the opposite edge about the box's centre, so
+/// the block grows symmetrically; without ⌥ the opposite edge stays put.
+#[test]
+fn alt_dragging_a_box_edge_mirrors_the_opposite_edge() {
+    use crate::canvas::{ToolEvent, tool_event};
+    let (mut app, id) = transform_app(true, false, Affine::translate(300.0, 300.0));
+    app.ui.extras.snap = false;
+    // The box is at (300, 300), 240×180: its bottom-edge handle is the midpoint (420, 480).
+    tool_event(&mut app, ToolEvent::Down { x: 420.0, y: 480.0, pressure: 1.0 }, Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Move { x: 420.0, y: 530.0, pressure: 1.0 }, Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Up { x: 420.0, y: 530.0 }, Modifiers::NONE);
+    assert_eq!(box_doc_rect(&app, id), [300.0, 300.0, 240.0, 230.0], "plain drag: the top edge stays");
+    tool_event(&mut app, ToolEvent::Down { x: 420.0, y: 530.0, pressure: 1.0 }, Modifiers::ALT);
+    tool_event(&mut app, ToolEvent::Move { x: 420.0, y: 580.0, pressure: 1.0 }, Modifiers::ALT);
+    tool_event(&mut app, ToolEvent::Up { x: 420.0, y: 580.0 }, Modifiers::ALT);
+    // The centre (300 + 115 = 415) held: the bottom followed the pointer (580), the top
+    // mirrored up to 250.
+    assert_eq!(box_doc_rect(&app, id), [300.0, 250.0, 240.0, 330.0]);
+}
+
+/// ⌥ pressed or released mid-drag applies as if it had been held from the start: the mirror
+/// turns about the centre the box had at the press, not about wherever the box drifted.
+#[test]
+fn alt_pressed_mid_drag_mirrors_about_the_press_centre() {
+    use crate::canvas::{ToolEvent, tool_event};
+    let (mut app, id) = transform_app(true, false, Affine::translate(300.0, 300.0));
+    app.ui.extras.snap = false;
+    // Bottom edge (420, 480) dragged down 80 px without ⌥: only the bottom moves.
+    tool_event(&mut app, ToolEvent::Down { x: 420.0, y: 480.0, pressure: 1.0 }, Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Move { x: 420.0, y: 520.0, pressure: 1.0 }, Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Move { x: 420.0, y: 560.0, pressure: 1.0 }, Modifiers::NONE);
+    assert_eq!(box_doc_rect(&app, id), [300.0, 300.0, 240.0, 260.0]);
+    // ⌥ pressed mid-drag: the bottom follows the pointer, the top jumps to the mirror about
+    // the press centre (390): 2*390 − 600 = 180 — not about the drifted one (430).
+    tool_event(&mut app, ToolEvent::Move { x: 420.0, y: 600.0, pressure: 1.0 }, Modifiers::ALT);
+    assert_eq!(box_doc_rect(&app, id), [300.0, 180.0, 240.0, 420.0]);
+    // ⌥ released again mid-drag: the top snaps back to where a plain drag leaves it.
+    tool_event(&mut app, ToolEvent::Move { x: 420.0, y: 600.0, pressure: 1.0 }, Modifiers::NONE);
+    assert_eq!(box_doc_rect(&app, id), [300.0, 300.0, 240.0, 300.0]);
+    tool_event(&mut app, ToolEvent::Up { x: 420.0, y: 600.0 }, Modifiers::NONE);
+}
+
+/// ⌥ mirrors a side-edge drag the same way, and a corner drag grows both axes about the
+/// centre; clamped, the ⌥ box stops at MIN_BOX about its centre instead of collapsing.
+#[test]
+fn alt_mirrors_side_and_corner_drags_and_clamps_at_the_minimum() {
+    use crate::canvas::{ToolEvent, tool_event};
+    let drag = |app: &mut PhotocraftApp, from: [f64; 2], to: [f64; 2], mods: Modifiers| {
+        tool_event(app, ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 }, mods);
+        tool_event(app, ToolEvent::Move { x: to[0], y: to[1], pressure: 1.0 }, mods);
+        tool_event(app, ToolEvent::Up { x: to[0], y: to[1] }, mods);
+    };
+    // Right-edge handle: (540, 390) for the box at (300, 300), 240×180.
+    let (mut app, id) = transform_app(true, false, Affine::translate(300.0, 300.0));
+    app.ui.extras.snap = false;
+    drag(&mut app, [540.0, 390.0], [590.0, 390.0], Modifiers::ALT);
+    // cx = 420 held: the right edge followed to 590, the left mirrored from 300 to 250.
+    assert_eq!(box_doc_rect(&app, id), [250.0, 300.0, 340.0, 180.0]);
+    // Clamped: dragging the right edge past the centre leaves the minimum box about it.
+    drag(&mut app, [590.0, 390.0], [400.0, 390.0], Modifiers::ALT);
+    let r = box_doc_rect(&app, id);
+    assert_eq!(r[2], 4.0, "MIN_BOX wide");
+    assert!(((r[0] + r[2] / 2.0) - 420.0).abs() < 1e-9, "still centred on 420");
+    // Corner handle (bottom-right of the fresh box): ⌥ grows both axes about the centre.
+    let (mut app, id) = transform_app(true, false, Affine::translate(300.0, 300.0));
+    app.ui.extras.snap = false;
+    drag(&mut app, [540.0, 480.0], [590.0, 530.0], Modifiers::ALT);
+    assert_eq!(box_doc_rect(&app, id), [250.0, 250.0, 340.0, 280.0]);
+}
+
+/// The options bar's alignment and direction buttons show the type layer's paragraph, as
+/// Photoshop's bar follows the text, and the tool defaults again without a type target.
+#[test]
+fn options_bar_alignment_follows_the_target_paragraph() {
+    use egui::accesskit::Toggled;
+    use egui_kittest::kittest::NodeT;
+    let mut app = new_app();
+    let id = app.run("type.create", json!({"text": "Middle", "size": 20, "x": 300, "y": 420})).unwrap()["layer"].as_u64().unwrap();
+    app.run("type.setStyle", json!({"layer": id, "align": "center", "direction": "rtl"})).unwrap();
+    assert_eq!(app.ui.tool_options.type_align, "left", "the tool default stays Left");
+    let mut h = options_harness(app);
+    let on = |h: &Harness<'static, PhotocraftApp>, label: &str| h.get_by_label(label).accesskit_node().toggled() == Some(Toggled::True);
+    assert!(on(&h, "Center text") && !on(&h, "Left align text"), "the layer's centred paragraph");
+    assert!(on(&h, "Right-to-left paragraph direction") && !on(&h, "Automatic paragraph direction"));
+    h.state_mut().run("layer.new.layer", json!({})).unwrap();
+    h.run_steps(2);
+    assert!(on(&h, "Left align text") && !on(&h, "Center text"), "no type target: the tool default");
+}
+
+/// #9179 review: a text edit left in a background document shows its own paragraph, not that of
+/// a same-id layer in the active document (layer ids repeat across documents).
+#[test]
+fn styles_at_follows_the_text_edit_document() {
+    let mut app = new_app();
+    let a = app.session.active().unwrap().doc.id.0;
+    let id = app.run("type.create", json!({"text": "Edited", "size": 20, "x": 300, "y": 420})).unwrap()["layer"].as_u64().unwrap();
+    app.run("type.setStyle", json!({"layer": id, "align": "center"})).unwrap();
+    app.ui.text_edit = Some(crate::state::TextEdit {
+        layer: id,
+        document: Some(a),
+        caret: 2,
+        anchor: 2,
+        session: "s".into(),
+        created: false,
+        mask: false,
+        dragging: false,
+        resize: None,
+        preedit: None,
+    });
+    // The same file opened twice: a second document whose layers have the same ids.
+    let twin = app.session.active().unwrap().doc.as_ref().clone();
+    app.session.open_document(twin, None);
+    app.run("type.setStyle", json!({"layer": id, "align": "right"})).unwrap();
+    assert_ne!(app.session.active().unwrap().doc.id.0, a, "the other document is active");
+    let (_, p) = super::styles_at(&app).unwrap();
+    assert_eq!(p.align, photocraft_doc::text::TextAlign::Center, "the edited document's paragraph");
+}
+
+/// A collapsed caret shows the paragraph it is in, as Photoshop's options bar and Paragraph panel
+/// do; it read the first paragraph's (byte 0) wherever the caret was.
+#[test]
+fn styles_at_a_collapsed_caret_shows_the_caret_s_paragraph() {
+    let mut app = new_app();
+    let id = app.run("type.create", json!({"text": "First\rSecond", "size": 20, "x": 300, "y": 420})).unwrap()["layer"].as_u64().unwrap();
+    app.run("type.setStyle", json!({"layer": id, "range": [6, 12], "align": "right"})).unwrap();
+    let edit = |caret: usize| crate::state::TextEdit {
+        layer: id,
+        document: None,
+        caret,
+        anchor: caret,
+        session: "s".into(),
+        created: false,
+        mask: false,
+        dragging: false,
+        resize: None,
+        preedit: None,
+    };
+    use photocraft_doc::text::TextAlign;
+    for (caret, want) in
+        [(0, TextAlign::Left), (3, TextAlign::Left), (5, TextAlign::Left), (6, TextAlign::Right), (9, TextAlign::Right), (12, TextAlign::Right)]
+    {
+        app.ui.text_edit = Some(edit(caret));
+        let (_, p) = super::styles_at(&app).unwrap();
+        assert_eq!(p.align, want, "caret {caret}");
+    }
 }

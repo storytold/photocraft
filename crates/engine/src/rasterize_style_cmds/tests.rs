@@ -78,7 +78,6 @@ fn fill_opacity_masks_and_layer_opacity_survive_the_bake() {
         s.execute("layer.setProps", json!({"layer": id, "fill": 0.4, "opacity": 0.7})).unwrap();
         s.execute("select.rect", json!({"x": 0, "y": 0, "width": 34, "height": 48})).unwrap();
         s.execute("layer.layerMask.revealSelection", json!({})).unwrap();
-        s.execute("select.deselect", json!({})).unwrap();
         let square = json!({"subpaths": [{"closed": true, "knots": [[4, 4], [60, 4], [60, 26], [4, 26]]}]});
         s.execute("layer.vectorMask.add", json!({"layer": id, "path": square})).unwrap();
         bake_and_check(&mut s, id, depth);
@@ -153,7 +152,7 @@ fn disabled_and_bad_params_fail_gracefully() {
     let (mut s, id) = scene(8);
     let bg = doc(&s).layers[0].id.0;
     assert!(s.execute(ID, json!({"layer": bg})).is_err(), "the Background has no effects");
-    assert!(s.execute(ID, json!({"layer": 9999})).is_err(), "no such layer");
+    assert!(s.execute(ID, json!({"layer": u64::MAX})).is_err(), "no such layer");
     assert!(s.execute(ID, json!({"layer": u64::MAX})).is_err(), "no such layer");
     assert_eq!(layer(&s, id).effects.items.len(), 5, "a bad call changes nothing");
     s.execute("layer.layerStyle.hideAllEffects", json!({})).unwrap();

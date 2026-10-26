@@ -1,7 +1,7 @@
 //! Batch output names are planned before opening or writing files. Names substituted from an
 //! input are literal: braces in a source filename must never be interpreted as template tokens.
 
-use super::{EngineError, Result, Value, join, stem};
+use super::{BatchInput, EngineError, Result, Value, join, stem};
 
 fn bad(message: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: "file.automate.batch".into(), msg: message.into() }
@@ -51,7 +51,7 @@ fn expand(parts: &[Part<'_>], name: &str, serial: u32, date: &str) -> String {
 
 /// An absent or empty template preserves the old filename path exactly. An explicit template
 /// generates one component per input; the export format supplies the extension separately.
-pub(super) fn plan(inputs: &[String], output: &str, format: &str, params: &Value) -> Result<Option<Vec<String>>> {
+pub(super) fn plan(inputs: &[BatchInput], output: &str, format: &str, params: &Value) -> Result<Option<Vec<String>>> {
     let start = match params.get("startingSerial") {
         None => 1,
         Some(n) => {
@@ -77,7 +77,7 @@ pub(super) fn plan(inputs: &[String], output: &str, format: &str, params: &Value
         return Err(bad("naming: the current UTC date is unavailable"));
     }
     let mut outputs = Vec::with_capacity(inputs.len());
-    for (index, path) in inputs.iter().enumerate() {
+    for (index, BatchInput { path, rel_dir }) in inputs.iter().enumerate() {
         let serial = if has_serial {
             u32::try_from(index).ok().and_then(|index| start.checked_add(index)).ok_or_else(|| bad("startingSerial plus the input count exceeds 4294967295"))?
         } else {
@@ -87,20 +87,20 @@ pub(super) fn plan(inputs: &[String], output: &str, format: &str, params: &Value
         if base.is_empty() || base.ends_with(['.', ' ']) {
             return Err(bad("naming must produce a nonempty filename stem without a trailing dot or space"));
         }
-        let ext =
-            if format == "same" { path.rsplit('.').next().unwrap_or("png").to_ascii_lowercase() } else { format.trim_start_matches('.').to_ascii_lowercase() };
+        let ext = if format == "same" { super::same_format(path) } else { format.trim_start_matches('.').to_ascii_lowercase() };
         let name = format!("{base}.{ext}");
         if name.len() > 255 || name.chars().any(|c| c.is_control() || "/\\<>:\"|?*".contains(c)) {
             return Err(bad("naming must produce a filename of at most 255 bytes without path separators or reserved characters"));
         }
-        outputs.push(join(output, &name));
+        // From subfolders ("Include All Subfolders"), each result keeps its subfolder.
+        outputs.push(join(&join(output, rel_dir), &name));
     }
     // Renaming within the source folder could replace a later input before it is read. Resolve
     // existing paths so aliases such as `source/./001.png` cannot bypass the check. The default
     // (no template) path keeps its existing in-place behavior.
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let sources: std::collections::HashSet<_> = inputs.iter().filter_map(|p| std::fs::canonicalize(p).ok()).collect();
+        let sources: std::collections::HashSet<_> = inputs.iter().filter_map(|i| std::fs::canonicalize(&i.path).ok()).collect();
         for output in &outputs {
             if std::fs::canonicalize(output).ok().is_some_and(|p| sources.contains(&p)) {
                 return Err(bad(format!("naming would replace an input file: {output}; choose a different destination or template")));

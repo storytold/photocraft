@@ -10,6 +10,21 @@ use photocraft_raster::Surface;
 /// A boundary segment in document pixel coordinates (axis-aligned).
 pub type Segment = ([i32; 2], [i32; 2]);
 
+/// Bound a whole-selection trace, including offscreen pixels carried into view by a transform.
+/// Include grid alignment and the two padding cells in the budget; ordinary traces keep their step.
+pub(crate) fn bounded_step(bounds: Rect, mut step: u32) -> u32 {
+    step = step.max(1);
+    let cells = |step: u32| {
+        let s = i64::from(step);
+        let axis = |lo: i32, hi: i32| ((i64::from(hi) + s - 1).div_euclid(s) - i64::from(lo).div_euclid(s) + 2).max(0) as u64;
+        axis(bounds.x0, bounds.x1).saturating_mul(axis(bounds.y0, bounds.y1))
+    };
+    while cells(step) > 1_048_576 {
+        step = step.saturating_mul(2);
+    }
+    step
+}
+
 /// Extract the boundary of `mask` (> 0.5 = selected) as merged horizontal and vertical segments.
 pub fn outline(mask: &Surface, bounds: Rect) -> Vec<Segment> {
     outline_scaled(mask, bounds, 1)
@@ -40,15 +55,22 @@ fn outline_scaled_impl(mask: &Surface, bounds: Rect, step: u32, parallel: bool) 
     let mut grid = vec![false; w * h];
     let half = step / 2;
     let sample_row = |gy: usize, row: &mut [bool]| {
-        let y = (gy0 + gy as i32) * step + half;
-        if y < bounds.y0 || y >= bounds.y1 {
+        let y0 = (gy0 + gy as i32) * step;
+        if y0 >= bounds.y1 || y0 + step <= bounds.y0 {
             return;
         }
+        // A coarse cell can overlap a one-pixel-wide selection even when its centre misses it.
+        // Sample the overlapping edge; padding cells still stay outside the mask.
+        let y = (y0 + half).clamp(bounds.y0, bounds.y1 - 1);
         let mut vals = vec![0.0f32; row.len()];
         mask.sample_row_strided(y, gx0 * step + half, step, 0, &mut vals);
         for (gx, (cell, v)) in row.iter_mut().zip(vals).enumerate() {
             let x = (gx0 + gx as i32) * step + half;
-            *cell = x >= bounds.x0 && x < bounds.x1 && v > 0.5;
+            *cell = if x >= bounds.x0 && x < bounds.x1 {
+                v > 0.5
+            } else {
+                x - half < bounds.x1 && x - half + step > bounds.x0 && mask.sample_channel(x.clamp(bounds.x0, bounds.x1 - 1), y, 0) > 0.5
+            };
         }
     };
     #[cfg(not(target_arch = "wasm32"))]
@@ -107,6 +129,33 @@ fn outline_scaled_impl(mask: &Surface, bounds: Rect, step: u32, parallel: bool) 
 mod tests {
     use super::*;
     use photocraft_color::PixelFormat;
+
+    #[test]
+    fn whole_transform_trace_has_a_bounded_grid() {
+        assert_eq!(bounded_step(Rect::new(0, 0, 200, 150), 1), 1);
+        assert_eq!(bounded_step(Rect::new(0, 0, 6000, 6000), 1), 8);
+        for bounds in [Rect::new(-50_001, -50_003, 50_000, 50_000), Rect::new(-1_000_000, 0, 1_000_000, 1)] {
+            let step = i64::from(bounded_step(bounds, 1));
+            let w = (i64::from(bounds.x1) + step - 1).div_euclid(step) - i64::from(bounds.x0).div_euclid(step) + 2;
+            let h = (i64::from(bounds.y1) + step - 1).div_euclid(step) - i64::from(bounds.y0).div_euclid(step) + 2;
+            assert!(w * h <= 1_048_576, "{bounds:?}: {w} × {h}");
+        }
+        // Both distant pieces survive the coarse trace: it covers the whole selection, not the viewport.
+        let mut mask = Surface::new(PixelFormat::GRAY8);
+        mask.fill_rect(Rect::new(-50_000, -50_000, -49_488, -49_488), &[1.0]);
+        mask.fill_rect(Rect::new(49_488, 49_488, 50_000, 50_000), &[1.0]);
+        let bounds = mask.content_bounds();
+        let lines = outline_scaled_serial(&mask, bounds, bounded_step(bounds, 1));
+        assert!(lines.iter().any(|(a, _)| a[0] < -49_000));
+        assert!(lines.iter().any(|(a, _)| a[0] > 49_000));
+        let mut thin = Surface::new(PixelFormat::GRAY8);
+        thin.fill_rect(Rect::new(-1_000_000, 0, -999_488, 1), &[1.0]);
+        thin.fill_rect(Rect::new(999_488, 0, 1_000_000, 1), &[1.0]);
+        let bounds = thin.content_bounds();
+        let lines = outline_scaled_serial(&thin, bounds, bounded_step(bounds, 1));
+        assert!(lines.iter().any(|(a, _)| a[0] < -999_000), "thin left piece remains visible");
+        assert!(lines.iter().any(|(a, _)| a[0] > 999_000), "thin right piece remains visible");
+    }
 
     #[test]
     fn rectangle_has_four_edges() {

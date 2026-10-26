@@ -65,6 +65,31 @@ fn sample(s: &Surface, r: Rect, factor: u32) -> Vec<f32> {
     out
 }
 
+/// How the view draws what it shows.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Look {
+    /// Single colour channels tinted instead of grayscale (Photoshop's "Show Channels in Color").
+    pub in_color: bool,
+    /// The layer mask rubylith's colour and opacity (0..1): Layer Mask Display Options.
+    pub mask_rgb: [f32; 3],
+    pub mask_opacity: f32,
+}
+
+impl Default for Look {
+    /// Photoshop's: grayscale channels, a red rubylith at 50 %.
+    fn default() -> Self {
+        Self { in_color: false, mask_rgb: AlphaChannel::DEFAULT_COLOR.to_rgb(), mask_opacity: 0.5 }
+    }
+}
+
+impl Look {
+    /// The current preferences of `s`.
+    pub fn of(s: &photocraft_engine::Session) -> Self {
+        let p = s.prefs();
+        Self { in_color: p.interface.show_channels_in_color, mask_rgb: p.layer_mask_overlay.rgb(), mask_opacity: p.layer_mask_overlay.alpha() }
+    }
+}
+
 /// Composite RGBA (over white, like Photoshop's channel views) at `factor` stride.
 /// Render in bands instead of allocating a full-resolution float composite to sample a preview.
 fn composite(doc: &Document, r: Rect, factor: u32) -> Vec<[f32; 4]> {
@@ -86,11 +111,10 @@ fn composite(doc: &Document, r: Rect, factor: u32) -> Vec<[f32; 4]> {
 }
 
 /// The channel view of `r` (document pixels, sampled every `factor` px) as premultiplied pixels,
-/// or `None` when the plain composite is all there is to show. `in_color` shows single colour
-/// channels tinted instead of grayscale (Photoshop's "Show Channels in Color").
-pub fn render(doc: &Document, v: &ChannelView, r: Rect, factor: u32, in_color: bool, active: Option<photocraft_doc::LayerId>) -> Option<Vec<Color32>> {
+/// or `None` when the plain composite is all there is to show.
+pub fn render(doc: &Document, v: &ChannelView, r: Rect, factor: u32, look: Look, active: Option<photocraft_doc::LayerId>) -> Option<Vec<Color32>> {
     let mut unused = None;
-    render_with_source(doc, v, r, factor, in_color, active, CompositeSource { cached: None, fresh: &mut unused })
+    render_with_source(doc, v, r, factor, look, active, CompositeSource { cached: None, fresh: &mut unused })
 }
 
 fn render_with_source(
@@ -98,24 +122,36 @@ fn render_with_source(
     v: &ChannelView,
     r: Rect,
     factor: u32,
-    in_color: bool,
+    look: Look,
     active: Option<photocraft_doc::LayerId>,
     source: CompositeSource<'_>,
 ) -> Option<Vec<Color32>> {
     if v.is_plain(doc) || r.is_empty() {
         return None;
     }
+    let in_color = look.in_color;
+    let (mask_rgb, mask_opacity) = (look.mask_rgb, look.mask_opacity.clamp(0.0, 1.0));
     let layer_mask = v.shown_layer_mask(doc);
-    // ⌥-click mask view (#196): the layer mask alone, in grayscale (white reveals); ⇧⌥ with
-    // nothing else shown: just the rubylith. Both straight from the mask, in parallel rows, so
-    // switching the view on a 24 MP document takes one frame.
+    // ⌥-click mask view (#196): the pixel mask alone, in grayscale (white reveals); ⇧⌥ with
+    // nothing else shown: just the rubylith. Use the compositor's cached feather for the pixel
+    // mask, but leave vector masks out: this view targets the pixel mask channel by itself.
+    let feathered_mask = v
+        .layer_mask
+        .and_then(|view| doc.layer(view.layer))
+        .filter(|layer| layer.mask.as_ref().is_some_and(|mask| mask.enabled && photocraft_compose::masks::feather_sigma(mask.feather) > 0.0))
+        .and_then(|layer| {
+            let mut pixel_mask_layer = layer.clone();
+            pixel_mask_layer.vector_mask = None;
+            photocraft_compose::masks::combined_mask(&pixel_mask_layer, doc.bounds())
+        });
+    let shown_mask = layer_mask.map(|(m, mode)| (feathered_mask.as_ref().unwrap_or(&m.surface), mode));
     let only_mask = ChannelView { layer_mask: None, ..v.clone() }.is_plain(doc);
-    match layer_mask {
-        Some((m, MaskViewMode::Gray)) => return Some(mask_px(&m.surface, r, factor, |g| Color32::from_gray(q(g)))),
+    match shown_mask {
+        Some((m, MaskViewMode::Gray)) => return Some(mask_px(m, r, factor, |g| Color32::from_gray(q(g)))),
         Some((m, MaskViewMode::Overlay)) if only_mask => {
-            let c = AlphaChannel::DEFAULT_COLOR.to_rgb();
-            return Some(mask_px(&m.surface, r, factor, |g| {
-                let a = 0.5 * (1.0 - g.clamp(0.0, 1.0));
+            let c = mask_rgb;
+            return Some(mask_px(m, r, factor, |g| {
+                let a = mask_opacity * (1.0 - g.clamp(0.0, 1.0));
                 Color32::from_rgba_premultiplied(q(c[0] * a), q(c[1] * a), q(c[2] * a), q(a))
             }));
         }
@@ -138,9 +174,9 @@ fn render_with_source(
         } else if let Some(q) = doc.quick_mask.as_ref().filter(|_| !v.quick_mask_hidden) {
             solo_quick = true;
             gray(&q.surface)
-        } else if let Some((m, _)) = layer_mask {
+        } else if let Some((m, _)) = shown_mask {
             solo_mask = true;
-            gray(&m.surface)
+            gray(m)
         } else {
             let m = active.and_then(|id| doc.layer(id)).and_then(|l| l.mask.as_ref())?;
             solo_mask = true;
@@ -202,10 +238,11 @@ fn render_with_source(
         };
         tint(sample(&ch.surface, r, factor), color, opacity, &|x| ch.overlay_coverage(x));
     }
-    // ⇧⌥-click mask view (#196): the layer mask as Quick Mask's red over the hidden areas
-    // (Photoshop's Layer Mask Display Options default).
-    if !solo_mask && let Some((m, MaskViewMode::Overlay)) = layer_mask {
-        tint(sample(&m.surface, r, factor), AlphaChannel::DEFAULT_COLOR, 0.5, &|x| 1.0 - x);
+    // ⇧⌥-click mask view (#196): the layer mask tinted over the hidden areas in the Layer Mask
+    // Display Options colour and opacity (red at 50 % unless set).
+    if !solo_mask && let Some((m, MaskViewMode::Overlay)) = shown_mask {
+        let [cr, cg, cb] = mask_rgb;
+        tint(sample(m, r, factor), photocraft_color::Color::rgb(cr, cg, cb), mask_opacity, &|x| 1.0 - x);
     }
     Some(out.into_iter().map(|p| Color32::from_rgba_premultiplied(q(p[0]), q(p[1]), q(p[2]), q(p[3]))).collect())
 }
@@ -242,9 +279,9 @@ fn q(x: f32) -> u8 {
     (x.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
 }
 
-fn view_key(v: &ChannelView, in_color: bool) -> u64 {
-    let s = serde_json::to_string(v).unwrap_or_default();
-    s.bytes().fold(in_color as u64 + 1, |h, b| h.wrapping_mul(1_099_511_628_211).wrapping_add(b as u64))
+fn view_key(v: &ChannelView, look: Look) -> u64 {
+    let s = serde_json::to_string(&(v, look.mask_rgb, look.mask_opacity)).unwrap_or_default();
+    s.bytes().fold(look.in_color as u64 + 1, |h, b| h.wrapping_mul(1_099_511_628_211).wrapping_add(b as u64))
 }
 
 /// Make the channel-view texture of document `idx` current; `None` = nothing to draw.
@@ -266,10 +303,10 @@ pub fn ensure(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize) -> Optio
     // The plain-composite path above needs no preview work.
     let (doc, preview_key) = crate::canvas::filter_channel_preview(app, idx, ctx).unwrap_or_else(|| crate::canvas::display_doc(app, idx));
     // Interface ▸ Show Channels in Color tints single colour channel views on the canvas too,
-    // not just the panel thumbnails (#2385). The view key carries the flag, so toggling it
-    // rebuilds the texture.
-    let in_color = app.session.prefs().interface.show_channels_in_color;
-    let key = view_key(&view, in_color);
+    // not just the panel thumbnails (#2385). The view key carries the flag and the Layer Mask
+    // Display Options, so changing them rebuilds the texture.
+    let look = Look::of(&app.session);
+    let key = view_key(&view, look);
     // Never exceed what the GPU accepts (egui panics on oversized textures).
     let max_side = (ctx.input(|i| i.max_texture_side) as u32).clamp(256, MAX_SIDE);
     let factor = doc.size.width.max(doc.size.height).div_ceil(max_side).max(1);
@@ -305,7 +342,7 @@ pub fn ensure(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize) -> Optio
         let d = d.intersect(&doc.bounds());
         let r = Rect::new(d.x0.div_euclid(f) * f, d.y0.div_euclid(f) * f, d.x1, d.y1).intersect(&doc.bounds());
         if !r.is_empty()
-            && let Some(px) = render(&doc, &view, r, factor, in_color, active)
+            && let Some(px) = render(&doc, &view, r, factor, look, active)
         {
             let img = egui::ColorImage::new([r.width().div_ceil(factor) as usize, r.height().div_ceil(factor) as usize], px);
             c.tex.set_partial([(r.x0 / f) as usize, (r.y0 / f) as usize], img, TextureOptions::LINEAR);
@@ -317,7 +354,7 @@ pub fn ensure(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize) -> Optio
     let b = doc.bounds();
     let cached = app.channel_views.get(&id).and_then(|c| c.source.as_ref()).map(|s| s.pixels.as_slice());
     let mut fresh = None;
-    let px = render_with_source(&doc, &view, b, factor, in_color, active, CompositeSource { cached, fresh: &mut fresh })?;
+    let px = render_with_source(&doc, &view, b, factor, look, active, CompositeSource { cached, fresh: &mut fresh })?;
     let new_source = fresh.is_some();
     let size = [b.width().div_ceil(factor) as usize, b.height().div_ceil(factor) as usize];
     let img = egui::ColorImage::new(size, px);
@@ -419,14 +456,14 @@ mod tests {
         let st = app.session.active().unwrap();
         assert_eq!(refreshed.revision, st.revision);
         assert_ne!(refreshed.pixels[0], original_sample, "new pixels must be recomposited");
-        let expected = render(&st.doc, &st.channel_view, st.doc.bounds(), 1, false, st.active_layer).unwrap();
+        let expected = render(&st.doc, &st.channel_view, st.doc.bounds(), 1, Look::default(), st.active_layer).unwrap();
         let mut unused = None;
         let actual = render_with_source(
             &st.doc,
             &st.channel_view,
             st.doc.bounds(),
             1,
-            false,
+            Look::default(),
             st.active_layer,
             CompositeSource { cached: Some(&refreshed.pixels), fresh: &mut unused },
         )
@@ -439,7 +476,7 @@ mod tests {
     fn plain_composite_draws_nothing() {
         let s = session();
         let st = s.active().unwrap();
-        assert!(render(&st.doc, &st.channel_view, st.doc.bounds(), 1, false, st.active_layer).is_none());
+        assert!(render(&st.doc, &st.channel_view, st.doc.bounds(), 1, Look::default(), st.active_layer).is_none());
     }
 
     #[test]
@@ -448,7 +485,7 @@ mod tests {
         s.execute("select.rect", json!({"x": 0, "y": 0, "width": 4, "height": 4})).unwrap();
         s.execute("select.editInQuickMaskMode", json!({})).unwrap();
         let st = s.active().unwrap();
-        let px = render(&st.doc, &st.channel_view, st.doc.bounds(), 1, false, st.active_layer).unwrap();
+        let px = render(&st.doc, &st.channel_view, st.doc.bounds(), 1, Look::default(), st.active_layer).unwrap();
         assert_eq!(px[0], Color32::TRANSPARENT, "selected: no overlay");
         assert_eq!(px[6], Color32::from_rgba_premultiplied(128, 0, 0, 128), "masked: 50% red");
     }
@@ -463,12 +500,12 @@ mod tests {
             }
             s.execute("select.editInQuickMaskMode", json!({})).unwrap();
             let st = s.active().unwrap();
-            let px = render(&st.doc, &st.channel_view, st.doc.bounds(), 1, false, st.active_layer).unwrap();
+            let px = render(&st.doc, &st.channel_view, st.doc.bounds(), 1, Look::default(), st.active_layer).unwrap();
             assert!(px.iter().all(|p| *p == Color32::TRANSPARENT), "{before:?}");
             if let Some(i) = after {
                 s.execute("channel.options", json!({"channel": "quickMask", "indicates": i})).unwrap();
                 let st = s.active().unwrap();
-                let px = render(&st.doc, &st.channel_view, st.doc.bounds(), 1, false, st.active_layer).unwrap();
+                let px = render(&st.doc, &st.channel_view, st.doc.bounds(), 1, Look::default(), st.active_layer).unwrap();
                 assert!(px.iter().all(|p| *p == Color32::TRANSPARENT), "{before:?} → {i}");
             }
         }
@@ -478,7 +515,7 @@ mod tests {
         s.execute("select.all", json!({})).unwrap();
         s.execute("select.editInQuickMaskMode", json!({})).unwrap();
         let st = s.active().unwrap();
-        let px = render(&st.doc, &st.channel_view, st.doc.bounds(), 1, false, st.active_layer).unwrap();
+        let px = render(&st.doc, &st.channel_view, st.doc.bounds(), 1, Look::default(), st.active_layer).unwrap();
         assert!(px.iter().all(|p| *p == Color32::from_rgba_premultiplied(128, 0, 0, 128)));
     }
 
@@ -493,14 +530,14 @@ mod tests {
         s.execute("view.layerMask", json!({"mode": "gray"})).unwrap();
         let st = s.active().unwrap();
         let b = st.doc.bounds();
-        let full = render(&st.doc, &st.channel_view, b, 1, false, st.active_layer).unwrap();
+        let full = render(&st.doc, &st.channel_view, b, 1, Look::default(), st.active_layer).unwrap();
         assert!(full[0].r() < 10 && full[36].r() > 245 && full[0].a() == 255, "opaque grayscale ramp");
         // A sub-rect starting on the factor grid matches the same pixels of the full render.
         for f in [1u32, 2, 3] {
-            let all = render(&st.doc, &st.channel_view, b, f, false, st.active_layer).unwrap();
+            let all = render(&st.doc, &st.channel_view, b, f, Look::default(), st.active_layer).unwrap();
             let w = b.width().div_ceil(f) as usize;
             let r = Rect::new(3 * f as i32, 2 * f as i32, 30, 19);
-            let part = render(&st.doc, &st.channel_view, r, f, false, st.active_layer).unwrap();
+            let part = render(&st.doc, &st.channel_view, r, f, Look::default(), st.active_layer).unwrap();
             let pw = r.width().div_ceil(f) as usize;
             for (i, p) in part.iter().enumerate() {
                 assert_eq!(*p, all[(i / pw + 2) * w + i % pw + 3], "factor {f}, pixel {i}");
@@ -508,9 +545,58 @@ mod tests {
         }
         s.execute("view.layerMask", json!({"mode": "overlay"})).unwrap();
         let st = s.active().unwrap();
-        let px = render(&st.doc, &st.channel_view, b, 1, false, st.active_layer).unwrap();
+        let px = render(&st.doc, &st.channel_view, b, 1, Look::default(), st.active_layer).unwrap();
         assert!(px[0].r() >= 124 && px[0].g() == 0 && px[0].a() >= 124, "about 50% red over the hidden end: {:?}", px[0]);
         assert!(px[36].a() <= 4, "next to nothing over the revealed end: {:?}", px[36]);
+    }
+
+    #[test]
+    fn layer_mask_views_show_the_feathered_mask() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 37, "height": 21})).unwrap();
+        s.execute("layer.new.layer", json!({})).unwrap();
+        s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+        s.execute("paint.gradient", json!({"from": [0, 0], "to": [37, 0], "colors": ["#000000", "#ffffff"], "target": "mask"})).unwrap();
+        s.execute("layer.layerMask.edit", json!({"feather": 4})).unwrap();
+        s.execute("view.layerMask", json!({"mode": "gray"})).unwrap();
+
+        let st = s.active().unwrap();
+        let bounds = st.doc.bounds();
+        let layer = st.doc.layer(st.active_layer.unwrap()).unwrap();
+        let raw = layer.mask.as_ref().unwrap().surface.sample_channel(0, 0, 0);
+        let effective = photocraft_compose::masks::combined_mask(layer, bounds).unwrap();
+        let softened = effective.sample_channel(0, 0, 0);
+        assert!((softened - raw).abs() > 0.01, "the fixture has a visible feather at its edge");
+
+        let gray = render(&st.doc, &st.channel_view, bounds, 1, Look::default(), st.active_layer).unwrap();
+        assert_eq!(gray[0], Color32::from_gray(q(softened)), "gray view uses the compositor's feathered mask");
+
+        s.execute("view.layerMask", json!({"mode": "overlay"})).unwrap();
+        let st = s.active().unwrap();
+        let overlay = render(&st.doc, &st.channel_view, bounds, 1, Look::default(), st.active_layer).unwrap();
+        let alpha = 0.5 * (1.0 - softened);
+        let red = AlphaChannel::DEFAULT_COLOR.to_rgb();
+        assert_eq!(overlay[0], Color32::from_rgba_premultiplied(q(red[0] * alpha), q(red[1] * alpha), q(red[2] * alpha), q(alpha)));
+    }
+
+    /// Layer Mask Display Options: the rubylith takes their colour and opacity, alone over the
+    /// composite and with a colour channel hidden.
+    #[test]
+    fn layer_mask_overlay_takes_its_display_options() {
+        let mut s = session();
+        s.execute("layer.new.layer", json!({})).unwrap();
+        s.execute("edit.fill", json!({"color": "#0000ff"})).unwrap();
+        s.execute("layer.layerMask.hideAll", json!({})).unwrap();
+        s.execute("view.layerMask", json!({"mode": "overlay"})).unwrap();
+        let green = Look { mask_rgb: [0.0, 1.0, 0.0], mask_opacity: 0.25, ..Look::default() };
+        let st = s.active().unwrap();
+        let b = st.doc.bounds();
+        assert_eq!(render(&st.doc, &st.channel_view, b, 1, Look::default(), st.active_layer).unwrap()[0], Color32::from_rgba_premultiplied(128, 0, 0, 128));
+        assert_eq!(render(&st.doc, &st.channel_view, b, 1, green, st.active_layer).unwrap()[0], Color32::from_rgba_premultiplied(0, 64, 0, 64));
+        // Red hidden: the white picture shows cyan, then green at 25 % over it.
+        s.execute("channel.setVisible", json!({"channel": "red", "visible": false})).unwrap();
+        let st = s.active().unwrap();
+        assert_eq!(render(&st.doc, &st.channel_view, b, 1, green, st.active_layer).unwrap()[0], Color32::from_rgb(0, 255, 191));
     }
 
     /// `cargo test --release -p photocraft-ui-egui --lib mask_view_switch_24mp -- --ignored --nocapture`
@@ -530,7 +616,7 @@ mod tests {
             let mut best = f64::MAX;
             for _ in 0..8 {
                 let t = std::time::Instant::now();
-                let px = render(&st.doc, &st.channel_view, st.doc.bounds(), factor, false, st.active_layer).unwrap();
+                let px = render(&st.doc, &st.channel_view, st.doc.bounds(), factor, Look::default(), st.active_layer).unwrap();
                 let img = egui::ColorImage::new([3000, 2000], px);
                 std::hint::black_box(img);
                 best = best.min(t.elapsed().as_secs_f64() * 1000.0);
@@ -549,17 +635,20 @@ mod tests {
         s.execute("channel.target", json!({"channel": "green"})).unwrap();
         let st = s.active().unwrap();
         let b = st.doc.bounds();
-        assert_eq!(render(&st.doc, &st.channel_view, b, 1, false, st.active_layer).unwrap()[0], Color32::from_gray(128));
-        assert_eq!(render(&st.doc, &st.channel_view, b, 1, true, st.active_layer).unwrap()[0], Color32::from_rgb(0, 128, 0));
+        assert_eq!(render(&st.doc, &st.channel_view, b, 1, Look::default(), st.active_layer).unwrap()[0], Color32::from_gray(128));
+        assert_eq!(
+            render(&st.doc, &st.channel_view, b, 1, Look { in_color: true, ..Look::default() }, st.active_layer).unwrap()[0],
+            Color32::from_rgb(0, 128, 0)
+        );
 
         let mut s = Session::new();
         s.execute("file.new", json!({"width": 4, "height": 4, "mode": "cmyk"})).unwrap();
         s.execute("edit.fill", json!({"color": "#4080c0"})).unwrap();
         s.execute("channel.target", json!({"channel": "cyan"})).unwrap();
         let st = s.active().unwrap();
-        let px = render(&st.doc, &st.channel_view, st.doc.bounds(), 1, true, st.active_layer).unwrap()[0];
+        let px = render(&st.doc, &st.channel_view, st.doc.bounds(), 1, Look { in_color: true, ..Look::default() }, st.active_layer).unwrap()[0];
         assert!(px.r() < 100 && px.g() > 150 && px.b() > 150, "cyan ink, not gray: {px:?}");
-        let gray = render(&st.doc, &st.channel_view, st.doc.bounds(), 1, false, st.active_layer).unwrap()[0];
+        let gray = render(&st.doc, &st.channel_view, st.doc.bounds(), 1, Look::default(), st.active_layer).unwrap()[0];
         assert_eq!(gray.r(), gray.g(), "off stays grayscale");
     }
 
@@ -572,12 +661,12 @@ mod tests {
         let b = s.active().unwrap().doc.bounds();
         s.execute("channel.target", json!({"channel": {"color": 0}})).unwrap();
         let st = s.active().unwrap();
-        let px = render(&st.doc, &st.channel_view, b, 1, true, st.active_layer).unwrap()[0];
+        let px = render(&st.doc, &st.channel_view, b, 1, Look { in_color: true, ..Look::default() }, st.active_layer).unwrap()[0];
         let spread = px.r().max(px.g().max(px.b())) as i32 - px.r().min(px.g().min(px.b())) as i32;
         assert!(spread <= 3, "Lightness stays gray: {px:?}");
         s.execute("channel.target", json!({"channel": {"color": 1}})).unwrap();
         let st = s.active().unwrap();
-        let px = render(&st.doc, &st.channel_view, b, 1, true, st.active_layer).unwrap()[0];
+        let px = render(&st.doc, &st.channel_view, b, 1, Look { in_color: true, ..Look::default() }, st.active_layer).unwrap()[0];
         assert!(px.r() != px.g() || px.g() != px.b(), "a channel is tinted, not gray: {px:?}");
     }
 
@@ -595,6 +684,10 @@ mod tests {
         assert!(ensure(&mut app, &ctx, 0).is_some());
         let key_on = app.channel_views.values().next().unwrap().key;
         assert_ne!(key_off, key_on, "the preference changes the cached view key");
+        // So do the Layer Mask Display Options.
+        app.session.execute("channel.options", json!({"channel": "mask", "color": "#00ff00", "opacity": 70})).unwrap();
+        assert!(ensure(&mut app, &ctx, 0).is_some());
+        assert_ne!(app.channel_views.values().next().unwrap().key, key_on, "the overlay options change the cached view key");
     }
 
     #[test]
@@ -605,17 +698,17 @@ mod tests {
         s.execute("channel.new", json!({"fill": "selection"})).unwrap();
         let st = s.active().unwrap();
         assert_eq!(st.channel_view.target, ChannelTarget::Alpha(0));
-        let px = render(&st.doc, &st.channel_view, st.doc.bounds(), 1, false, st.active_layer).unwrap();
+        let px = render(&st.doc, &st.channel_view, st.doc.bounds(), 1, Look::default(), st.active_layer).unwrap();
         assert_eq!((px[0], px[5]), (Color32::WHITE, Color32::BLACK));
         // Green alone: grayscale of the green channel; with blue hidden only.
         s.execute("channel.target", json!({"channel": "green"})).unwrap();
         let st = s.active().unwrap();
-        let px = render(&st.doc, &st.channel_view, st.doc.bounds(), 1, false, st.active_layer).unwrap();
+        let px = render(&st.doc, &st.channel_view, st.doc.bounds(), 1, Look::default(), st.active_layer).unwrap();
         assert_eq!(px[0], Color32::from_gray(128));
         s.execute("channel.target", json!({"channel": "composite"})).unwrap();
         s.execute("channel.setVisible", json!({"channel": "red", "visible": false})).unwrap();
         let st = s.active().unwrap();
-        let px = render(&st.doc, &st.channel_view, st.doc.bounds(), 2, false, st.active_layer).unwrap();
+        let px = render(&st.doc, &st.channel_view, st.doc.bounds(), 2, Look::default(), st.active_layer).unwrap();
         assert_eq!(px.len(), 4 * 2);
         assert_eq!(px[0], Color32::from_rgb(0, 128, 0));
     }
@@ -628,7 +721,7 @@ mod tests {
         s.execute("channel.setVisible", json!({"channel": "composite", "visible": true})).unwrap();
         s.execute("channel.setVisible", json!({"channel": "composite", "visible": false})).unwrap();
         let st = s.active().unwrap();
-        let px = render(&st.doc, &st.channel_view, st.doc.bounds(), 1, false, st.active_layer).unwrap();
+        let px = render(&st.doc, &st.channel_view, st.doc.bounds(), 1, Look::default(), st.active_layer).unwrap();
         assert_eq!(px[0], Color32::WHITE, "Alpha alone is the channel, not the red image");
 
         let mut q = session();
@@ -636,7 +729,7 @@ mod tests {
         q.execute("select.editInQuickMaskMode", json!({})).unwrap();
         q.execute("channel.setVisible", json!({"channel": "composite", "visible": false})).unwrap();
         let st = q.active().unwrap();
-        let px = render(&st.doc, &st.channel_view, st.doc.bounds(), 1, false, st.active_layer).unwrap();
+        let px = render(&st.doc, &st.channel_view, st.doc.bounds(), 1, Look::default(), st.active_layer).unwrap();
         assert_eq!(px[0], Color32::WHITE, "Quick Mask alone is grayscale, not the red composite");
 
         let mut m = session();
@@ -646,7 +739,7 @@ mod tests {
         m.execute("channel.setVisible", json!({"channel": "composite", "visible": false})).unwrap();
         let st = m.active().unwrap();
         assert_eq!(st.channel_view.visible_colors(3), 0);
-        let px = render(&st.doc, &st.channel_view, st.doc.bounds(), 1, false, st.active_layer).unwrap();
+        let px = render(&st.doc, &st.channel_view, st.doc.bounds(), 1, Look::default(), st.active_layer).unwrap();
         assert_eq!(px[0], Color32::BLACK, "the hidden mask reads black, not the red layer");
     }
 }

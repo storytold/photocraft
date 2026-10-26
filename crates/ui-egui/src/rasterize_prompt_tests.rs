@@ -137,7 +137,7 @@ fn a_stale_or_bad_prompt_fails_gracefully() {
     app.run("layer.rasterize.type", json!({})).unwrap();
     assert!(crate::dialogs::confirm(&mut app, id).is_err());
     // Garbage fields.
-    for f in [json!({"__rasterize": "plaid", "layer": 1}), json!({"__rasterize": "type"}), json!({"__rasterize": "type", "layer": 999_999})] {
+    for f in [json!({"__rasterize": "plaid", "layer": 1}), json!({"__rasterize": "type"}), json!({"__rasterize": "type", "layer": u64::MAX})] {
         let id = app.ui.open_dialog(crate::state::DialogKind::Command, f.as_object().unwrap().clone());
         assert!(crate::dialogs::confirm(&mut app, id).is_err(), "{f}");
     }

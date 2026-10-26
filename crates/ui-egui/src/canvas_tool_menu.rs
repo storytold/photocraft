@@ -1,5 +1,6 @@
 //! Canvas context menus for the selection tools, the Pen, the Zoom and Hand tools, an active Free
-//! Transform box, text being edited with a Type tool and the pasteboard (outside the image).
+//! Transform box, text being edited with a Type tool, committed type under a Type tool, the
+//! pasteboard (outside the image), a guide and a pending crop.
 
 use egui::Context;
 use photocraft_doc::LayerContent;
@@ -31,10 +32,20 @@ pub struct CanvasToolMenu {
     /// Opened while a Type tool edits text: the text and type rows instead of the tool's actions.
     #[serde(default)]
     pub text: bool,
+    /// Opened with a Type tool over committed type (no edit running): the type layer rows.
+    #[serde(default)]
+    pub type_layer: bool,
+    /// Opened on a guide: the guide menu (`guide_select`) instead of the tool's actions.
+    #[serde(default)]
+    pub guide: bool,
     /// The misspelled word under the pointer when the type edit menu opened: its suggestions head
     /// the menu.
     #[serde(default)]
     pub spelling: Option<Spelling>,
+    /// Opened on a pending crop: the crop menu, listing the saved crop presets by the names they
+    /// had when it opened.
+    #[serde(default)]
+    pub crop: Option<Vec<String>>,
 }
 
 /// A misspelled word in the type layer being edited (`edit.checkSpelling`'s `list` entry).
@@ -56,7 +67,7 @@ const SPELLING_NONE: &str = "spelling.none";
 const SPELLING_ADD: &str = "spelling.add";
 
 /// One menu row: label and command id. `None` is a separator.
-pub type Row = Option<(&'static str, &'static str)>;
+pub type Row<S = &'static str> = Option<(S, S)>;
 
 /// Right-click while transforming, in Photoshop's order: what the box's handles do, then Rotate
 /// and Flip, which turn the open box without committing it (`transform_tool::intercept`).
@@ -134,6 +145,33 @@ pub const TYPE_EDIT_MENU: &[Row] = &[
     Some(("Warp Text…", "type.warpText")),
 ];
 
+/// Right-click with a Type tool over type that isn't being edited (#7324): the type edit menu's
+/// layer rows. Its edit rows would act on the document instead of the text, and Faux Bold/Italic
+/// on characters being edited, so they are left out.
+pub const TYPE_LAYER_MENU: &[Row] = &[
+    Some(("Check Spelling…", "edit.checkSpelling")),
+    Some(("Find and Replace Text…", "edit.findAndReplaceText")),
+    None,
+    Some(("Rasterize Type", "type.rasterizeTypeLayer")),
+    Some(("Create Work Path", "type.createWorkPath")),
+    Some(("Convert to Shape", "type.convertToShape")),
+    None,
+    Some(("Horizontal", "type.orientation.horizontal")),
+    Some(("Vertical", "type.orientation.vertical")),
+    None,
+    Some(("None", "type.antiAlias.none")),
+    Some(("Sharp", "type.antiAlias.sharp")),
+    Some(("Crisp", "type.antiAlias.crisp")),
+    Some(("Strong", "type.antiAlias.strong")),
+    Some(("Smooth", "type.antiAlias.smooth")),
+    Some(("Windows LCD", "type.antiAlias.windowsLcd")),
+    Some(("Windows", "type.antiAlias.windows")),
+    None,
+    Some(("Convert to Paragraph Text", "type.convertToParagraphText")),
+    Some(("Convert to Point Text", "type.convertToPointText")),
+    Some(("Warp Text…", "type.warpText")),
+];
+
 /// The type edit menu's Faux Bold and Faux Italic rows.
 pub const FAUX_BOLD: &str = "type.fauxBold";
 pub const FAUX_ITALIC: &str = "type.fauxItalic";
@@ -144,6 +182,163 @@ const ENDS_TYPE_EDIT: [&str; 5] =
 
 /// The pasteboard menu's Select Custom Color… row.
 pub const PASTEBOARD_PICK: &str = "pasteboard.selectCustomColor";
+
+/// The guide menu's Edit Selected Guides row: New Guide's dialog on the selected guide.
+pub const GUIDE_EDIT: &str = "guides.editSelected";
+/// The guide menu's Clear Selected Guides row.
+pub const GUIDE_CLEAR: &str = "guides.clearSelected";
+
+/// Photoshop's guide menu (right-click on a guide), in its order. Its two Selected Guides rows act
+/// on the guide the right-click selected; the rest are the View menu's.
+pub const GUIDE_MENU: &[Row] = &[
+    Some(("Edit Selected Guides", GUIDE_EDIT)),
+    None,
+    Some(("Lock Guides", "view.lockGuides")),
+    Some(("Clear Guides", "view.clearGuides")),
+    Some(("Clear Canvas Guides", "view.clearCanvasGuides")),
+    Some(("Clear Selected Guides", GUIDE_CLEAR)),
+    Some(("Clear Selected Artboard Guides", "view.clearSelectedArtboardGuides")),
+];
+
+/// The crop menu's row ids. A ratio row is `crop.ratio.<key>`, the options bar's preset dropdown
+/// key (`crop_size::dropdown_options`); a saved preset is `crop.preset.<n>`, the n-th name the menu
+/// opened with; an overlay row is `crop.overlay.<id>` or `crop.overlayShow.<id>`.
+const CROP_RATIO: &str = "crop.ratio.";
+const CROP_PRESET: &str = "crop.preset.";
+const CROP_OVERLAY: &str = "crop.overlay.";
+const CROP_SHOW: &str = "crop.overlayShow.";
+pub const CROP_CLEAR: &str = "crop.clear";
+pub const CROP_NEW: &str = "crop.newPreset";
+pub const CROP_DELETE: &str = "crop.deletePreset";
+pub const CROP_CANCEL: &str = "crop.cancel";
+pub const CROP_COMMIT: &str = "crop.commit";
+
+/// The crop menu (right-click on a pending crop, #6561): the options bar's preset dropdown, in its
+/// order, and its Clear; the overlay and when it shows; then Cancel and Crop, the bar's ⊘ and ✓.
+/// Built from the bar's own lists, so the two cannot disagree. Empty for any other menu.
+pub fn crop_rows(menu: &CanvasToolMenu) -> Vec<Row<String>> {
+    use crate::crop_overlay::{CropOverlay, OverlayShow};
+    let Some(users) = menu.crop.as_ref() else { return Vec::new() };
+    let ratio = |(k, l): &(String, &str)| Some((l.to_string(), format!("{CROP_RATIO}{k}")));
+    let (before, after): (Vec<_>, Vec<_>) = crate::crop_size::dropdown_options().into_iter().partition(|(k, _)| k != crate::crop_size::FRONT);
+    let mut rows: Vec<Row<String>> = before.iter().map(ratio).collect();
+    rows.extend(users.iter().enumerate().map(|(i, name)| Some((name.clone(), format!("{CROP_PRESET}{i}")))));
+    rows.extend(after.iter().map(ratio));
+    rows.push(Some(("Clear".into(), CROP_CLEAR.into())));
+    rows.push(None);
+    rows.push(Some(("New Crop Preset…".into(), CROP_NEW.into())));
+    rows.push(Some(("Delete Crop Preset…".into(), CROP_DELETE.into())));
+    rows.push(None);
+    rows.extend(CropOverlay::ALL.iter().map(|k| Some((k.label().to_string(), format!("{CROP_OVERLAY}{}", k.id())))));
+    rows.push(None);
+    rows.extend(OverlayShow::ALL.iter().map(|k| Some((k.label().to_string(), format!("{CROP_SHOW}{}", k.id())))));
+    rows.push(None);
+    rows.push(Some(("Cancel".into(), CROP_CANCEL.into())));
+    rows.push(Some(("Crop".into(), CROP_COMMIT.into())));
+    rows
+}
+
+/// Is a crop row's label UI text (translated), rather than a saved preset's name?
+pub fn crop_label_is_ui(id: &str) -> bool {
+    !id.starts_with(CROP_PRESET)
+}
+
+/// Is `command` one of the crop menu's rows?
+fn is_crop(menu: &CanvasToolMenu, command: &str) -> bool {
+    crop_rows(menu).iter().flatten().any(|(_, id)| id == command)
+}
+
+/// The saved crop preset a `crop.preset.<n>` row picks.
+fn crop_preset<'a>(menu: &'a CanvasToolMenu, command: &str) -> Option<&'a String> {
+    let n = command.strip_prefix(CROP_PRESET)?.parse::<usize>().ok()?;
+    menu.crop.as_ref()?.get(n)
+}
+
+/// The crop menu's checkmarks, as the options bar shows them: the dropdown's entry (a saved
+/// preset the fields hold, else the mode or ratio, so a size preset checks W x H x Resolution),
+/// the overlay and when it shows.
+fn crop_checked(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) -> bool {
+    let o = &app.ui.tool_options;
+    let user = crate::crop_presets::current_user(app);
+    if let Some(k) = command.strip_prefix(CROP_RATIO) {
+        return user.is_none() && k == o.crop_ratio;
+    }
+    if command.starts_with(CROP_PRESET) {
+        return user.is_some() && crop_preset(menu, command) == user.as_ref();
+    }
+    if let Some(k) = command.strip_prefix(CROP_OVERLAY) {
+        return k == o.crop_overlay.id();
+    }
+    command.strip_prefix(CROP_SHOW).is_some_and(|k| k == o.crop_overlay_show.id())
+}
+
+fn crop_enabled(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) -> bool {
+    match command {
+        CROP_NEW => crate::crop_presets::savable(&app.ui.tool_options).is_some(),
+        CROP_DELETE => menu.crop.as_ref().is_some_and(|u| !u.is_empty()),
+        c => is_crop(menu, c),
+    }
+}
+
+/// Right-click with `tool` on a pending crop: the crop menu at screen point `pos`. Only the Crop
+/// tool itself, not one held over it (Space's Hand).
+pub fn open_crop(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 2]) -> bool {
+    if tool != Tool::Crop || !crate::crop_ui::pending(app) || !pos.iter().all(|v| v.is_finite()) {
+        return false;
+    }
+    app.ui.brush_picker = None;
+    app.ui.layer_menu = None;
+    let users = crate::crop_presets::user_presets(app).into_iter().map(|(name, _)| name).collect();
+    app.ui.canvas_tool_menu = Some(CanvasToolMenu {
+        pos,
+        tool,
+        has_selection: false,
+        has_path: false,
+        path_name: None,
+        transform: false,
+        pasteboard: false,
+        anchor: None,
+        text: false,
+        type_layer: false,
+        guide: false,
+        spelling: None,
+        crop: Some(users),
+    });
+    crate::canvas_popup::mark_open(ctx, menu_id());
+    true
+}
+
+/// A crop row: each runs what its options-bar twin runs.
+fn choose_crop(app: &mut PhotocraftApp, menu: &CanvasToolMenu, command: &str) -> Result<(), String> {
+    use crate::crop_overlay::{CropOverlay, OverlayShow};
+    use crate::crop_presets::{Choice, apply_choice};
+    match command {
+        CROP_CANCEL => crate::crop_ui::cancel(app),
+        CROP_COMMIT => crate::canvas::commit_crop(app),
+        CROP_NEW => apply_choice(app, Choice::New),
+        CROP_DELETE => apply_choice(app, Choice::Delete),
+        _ => {
+            let before = crate::crop_ui::preset_ratio(app);
+            if let Some(k) = command.strip_prefix(CROP_RATIO) {
+                apply_choice(app, Choice::Builtin(k.to_string()));
+            } else if let Some(name) = crop_preset(menu, command) {
+                apply_choice(app, Choice::User(name.clone()));
+            } else if command == CROP_CLEAR {
+                crate::crop_size::clear_ratio(&mut app.ui.tool_options);
+            } else if let Some(k) = command.strip_prefix(CROP_OVERLAY).and_then(CropOverlay::from_id) {
+                crate::crop_overlay::set_overlay(&mut app.ui.tool_options, k);
+            } else if let Some(k) = command.strip_prefix(CROP_SHOW).and_then(OverlayShow::from_id) {
+                app.ui.tool_options.crop_overlay_show = k;
+            }
+            // As the options bar does: a saved preset or Clear changes the ratio without refitting
+            // the frame, so refit it when the ratio (or W x H) the frame follows changed.
+            if crate::crop_ui::preset_ratio(app) != before {
+                crate::crop_ui::apply_ratio(app);
+            }
+        }
+    }
+    Ok(())
+}
 
 /// The pasteboard colours in the menu's order, which Space+F steps through.
 const CANVAS_COLORS: [CanvasColor; 6] =
@@ -159,18 +354,17 @@ pub fn cycle_canvas_color(app: &mut PhotocraftApp, backward: bool) -> Result<(),
     app.run("prefs.set", json!({"values": {"interface.canvasColor": name}})).map(|_| ())
 }
 
-/// The Zoom and Hand tools' context menu: the zoom steps and fixed zooms of the View menu, plus
-/// the Hand tool's Fill Screen.
+/// The Zoom and Hand tools' context menu: the fixed zooms of the View menu (plus the Hand tool's
+/// Fill Screen), then the zoom steps last, in Photoshop's order (#6005).
 pub const VIEW_MENU: &[Row] = &[
-    Some(("Zoom In", "view.zoomIn")),
-    Some(("Zoom Out", "view.zoomOut")),
-    None,
     Some(("Fit on Screen", "view.fitOnScreen")),
     Some(("Fill Screen", FILL_SCREEN)),
-    None,
     Some(("100%", "view.actualPixels")),
     Some(("200%", "view.twoHundredPercent")),
     Some(("Print Size", "view.printSize")),
+    None,
+    Some(("Zoom In", "view.zoomIn")),
+    Some(("Zoom Out", "view.zoomOut")),
 ];
 
 /// The view menu's Fill Screen row. Photoshop has no View menu command for it, so the menu sets
@@ -264,8 +458,17 @@ pub fn applies(tool: Tool) -> bool {
             | Tool::MagneticLasso
             | Tool::MagicWand
             | Tool::ObjectSelection
-            | Tool::Pen
-    )
+            // Its brush is set from the options bar's chip; the canvas right-click is the
+            // selection menu, as in Photoshop (#7268).
+            | Tool::QuickSelection
+    ) || path_menu(tool)
+}
+
+/// Tools whose canvas right-click opens the path menu ([`PEN_MENU`]): the Pen, and the Path
+/// Selection and Direct Selection tools, whose Photoshop menu offers the same whole-path actions
+/// for the selected path (#1056).
+pub fn path_menu(tool: Tool) -> bool {
+    matches!(tool, Tool::Pen | Tool::PathSelection | Tool::DirectSelection)
 }
 
 /// Tools whose plain canvas right-click offers the view menu.
@@ -280,7 +483,12 @@ pub fn selection_rows(has_selection: bool) -> &'static [Row] {
 
 /// The rows of an open menu.
 pub fn rows(menu: &CanvasToolMenu) -> &'static [Row] {
-    if menu.pasteboard {
+    if menu.crop.is_some() {
+        // Built per menu: [`crop_rows`].
+        &[]
+    } else if menu.guide {
+        GUIDE_MENU
+    } else if menu.pasteboard {
         PASTEBOARD_MENU
     } else if menu.transform {
         TRANSFORM_MENU
@@ -288,7 +496,9 @@ pub fn rows(menu: &CanvasToolMenu) -> &'static [Row] {
         VIEW_MENU
     } else if menu.text {
         TYPE_EDIT_MENU
-    } else if menu.tool == Tool::Pen {
+    } else if menu.type_layer {
+        TYPE_LAYER_MENU
+    } else if path_menu(menu.tool) {
         PEN_MENU
     } else {
         selection_rows(menu.has_selection)
@@ -297,17 +507,23 @@ pub fn rows(menu: &CanvasToolMenu) -> &'static [Row] {
 
 /// Is `command` one of the open menu's rows, and enabled?
 pub fn available(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) -> bool {
-    (rows(menu).iter().flatten().any(|(_, id)| *id == command) || is_spelling(menu, command)) && entry_enabled(app, menu, command)
+    (rows(menu).iter().flatten().any(|(_, id)| *id == command) || is_spelling(menu, command) || is_crop(menu, command)) && entry_enabled(app, menu, command)
 }
 
 /// Is `command` the transform box's current mode (checked in the transform menu)?
 /// Scale stays Free Transform's mode (only Free Transform is checked). Rotate is its own mode.
 /// Warp is not a box mode (it is its own session), and `for_command` would read it as Free.
 pub(crate) fn mode_checked(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) -> bool {
+    if menu.crop.is_some() {
+        return crop_checked(app, menu, command);
+    }
+    if menu.guide {
+        return command == "view.lockGuides" && app.ui.extras.lock_guides;
+    }
     if menu.pasteboard {
         return pasteboard_choice(command) == Some(app.session.prefs().interface.canvas_color);
     }
-    if menu.text {
+    if menu.text || menu.type_layer {
         return type_checked(app, command);
     }
     menu.transform
@@ -331,6 +547,32 @@ fn type_checked(app: &PhotocraftApp, command: &str) -> bool {
 /// Is the Type tool editing text, so that a right-click opens the type edit menu?
 pub fn editing_text(app: &PhotocraftApp, tool: Tool) -> bool {
     tool.is_type() && app.ui.text_edit.is_some()
+}
+
+/// The committed type layer under document point `doc` when a right-click there with a Type tool
+/// opens the type layer menu (#7324). The Type Mask tools are left out: to them existing type is
+/// just pixels.
+pub fn type_layer_at(app: &mut PhotocraftApp, tool: Tool, doc: [f64; 2]) -> Option<photocraft_doc::LayerId> {
+    if !tool.is_type() || tool.is_type_mask() || app.ui.text_edit.is_some() || !doc.iter().all(|v| v.is_finite()) {
+        return None;
+    }
+    crate::type_tool::hit_layer(app, doc[0], doc[1])
+}
+
+/// Make the right-clicked type layer `id` the active layer, which the structural rows (Rasterize
+/// Type, Convert to Shape…) act on and the checks show. Inside a multiselection the selection stays,
+/// so the formatting rows still act on every selected type layer, as the Type menu's do; outside it
+/// the type replaces the selection, as a click with the Type tool does.
+fn target_type_layer(app: &mut PhotocraftApp, id: photocraft_doc::LayerId) -> bool {
+    let Some(st) = app.session.active() else { return false };
+    let selected = st.selected_layers();
+    if st.active_layer == Some(id) {
+        true
+    } else if selected.contains(&id) {
+        photocraft_engine::layer_multi_cmds::set_selection(&mut app.session, selected, Some(id), Some(id)).is_ok()
+    } else {
+        app.session.select_layer(id).is_ok()
+    }
 }
 
 /// The misspelled word of the edited text under document point `doc`, with its suggestions.
@@ -393,7 +635,10 @@ pub fn open_transform(app: &mut PhotocraftApp, ctx: &Context, pos: [f32; 2]) -> 
         pasteboard: false,
         anchor: None,
         text: false,
+        type_layer: false,
+        guide: false,
         spelling: None,
+        crop: None,
     });
     crate::canvas_popup::mark_open(ctx, menu_id());
     true
@@ -407,7 +652,18 @@ fn pasteboard_choice(command: &str) -> Option<CanvasColor> {
 
 /// The engine command (and params) a pasteboard row runs, for the automation policy: every row
 /// changes a preference.
-pub fn engine_call(menu: &CanvasToolMenu, command: &str) -> (String, Value) {
+pub fn engine_call(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) -> (String, Value) {
+    if menu.crop.is_some() && command == CROP_COMMIT {
+        return ("image.crop".into(), json!({}));
+    }
+    if menu.guide {
+        let selected = crate::guide_select::selected(app);
+        return match command {
+            GUIDE_EDIT => ("view.editGuide".into(), json!({})),
+            GUIDE_CLEAR => ("view.deleteGuide".into(), selected.map_or(json!({}), |(v, i)| crate::guide_select::delete_params(v, i))),
+            _ => (command.into(), json!({})),
+        };
+    }
     match pasteboard_choice(command) {
         Some(c) if menu.pasteboard => ("prefs.set".into(), json!({"values": {"interface.canvasColor": c.name()}})),
         _ if menu.pasteboard => ("prefs.set".into(), json!({})),
@@ -437,7 +693,7 @@ pub fn pasteboard_at(app: &PhotocraftApp, tool: Tool, doc: [f64; 2]) -> bool {
     let Some(st) = app.session.active() else { return false };
     let (w, h) = (f64::from(st.doc.size.width), f64::from(st.doc.size.height));
     let outside = doc.iter().all(|v| v.is_finite()) && (doc[0] < 0.0 || doc[1] < 0.0 || doc[0] >= w || doc[1] >= h);
-    outside && tool != Tool::Pen && !crate::paint_mouse::has_brush_picker(tool) && !crate::paint_mouse::right_erases(app, tool) && app.ui.text_edit.is_none()
+    outside && !path_menu(tool) && !crate::paint_mouse::has_brush_picker(tool) && !crate::paint_mouse::right_erases(app, tool) && app.ui.text_edit.is_none()
 }
 
 /// Right-click on the pasteboard: its colour menu at screen point `pos`.
@@ -457,10 +713,54 @@ pub fn open_pasteboard(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: 
         pasteboard: true,
         anchor: None,
         text: false,
+        type_layer: false,
+        guide: false,
         spelling: None,
+        crop: None,
     });
     crate::canvas_popup::mark_open(ctx, menu_id());
     true
+}
+
+/// Right-click at document point `doc` on a guide that `tool` could drag (the Move tool, or ⌘ with
+/// a tool on which ⌘ moves guides, `canvas::command_guide_at`): select the guide and open the guide
+/// menu at screen point `pos`.
+pub fn open_guide(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, mods: egui::Modifiers, pos: [f32; 2], doc: [f64; 2]) -> bool {
+    if !pos.iter().all(|v| v.is_finite()) || !doc.iter().all(|v| v.is_finite()) {
+        return false;
+    }
+    let hit = if tool == Tool::Move { crate::rulers::guide_at(app, doc[0], doc[1]) } else { crate::canvas::command_guide_at(app, tool, doc, mods) };
+    let Some((vertical, index)) = hit else { return false };
+    crate::guide_select::select(app, vertical, index);
+    app.ui.brush_picker = None;
+    app.ui.layer_menu = None;
+    app.ui.canvas_tool_menu = Some(CanvasToolMenu {
+        pos,
+        tool,
+        has_selection: false,
+        has_path: false,
+        path_name: None,
+        transform: false,
+        pasteboard: false,
+        anchor: None,
+        text: false,
+        type_layer: false,
+        guide: true,
+        spelling: None,
+        crop: None,
+    });
+    crate::canvas_popup::mark_open(ctx, menu_id());
+    true
+}
+
+/// A guide row: the two Selected Guides rows act on the selected guide; the rest are the View
+/// menu's commands.
+fn choose_guide(app: &mut PhotocraftApp, ctx: &Context, command: &str) -> Result<(), String> {
+    match command {
+        GUIDE_EDIT => crate::new_guide_ui::open_edit(app).map(|_| ()),
+        GUIDE_CLEAR => crate::guide_select::delete_selected(app).map(|_| ()),
+        _ => crate::menus::invoke(app, ctx, command, json!({})).map(|_| ()),
+    }
 }
 
 /// A pasteboard row: set the colour, or open the Color Picker on the custom one.
@@ -470,11 +770,20 @@ fn choose_pasteboard(app: &mut PhotocraftApp, menu: &CanvasToolMenu, command: &s
         crate::color_picker_ui::open_for_target(app, "pasteboard", "Color Picker (Custom Canvas Color)", rgb);
         return Ok(());
     }
-    let (command, params) = engine_call(menu, command);
+    let (command, params) = engine_call(app, menu, command);
     app.run(&command, params).map(|_| ())
 }
 
 pub fn entry_enabled(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) -> bool {
+    if menu.crop.is_some() {
+        return crop_enabled(app, menu, command);
+    }
+    if menu.guide {
+        return match command {
+            GUIDE_EDIT | GUIDE_CLEAR => crate::guide_select::selected(app).is_some(),
+            _ => GUIDE_MENU.iter().flatten().any(|(_, id)| *id == command) && crate::menus::is_enabled(app, command),
+        };
+    }
     if menu.pasteboard {
         return PASTEBOARD_MENU.iter().flatten().any(|(_, id)| *id == command);
     }
@@ -493,7 +802,10 @@ pub fn entry_enabled(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) 
             c => TYPE_EDIT_MENU.iter().flatten().any(|(_, id)| *id == c) && crate::menus::is_enabled(app, c),
         };
     }
-    if menu.transform || menu.tool != Tool::Pen {
+    if menu.type_layer {
+        return TYPE_LAYER_MENU.iter().flatten().any(|(_, id)| *id == command) && crate::menus::is_enabled(app, command);
+    }
+    if menu.transform || !path_menu(menu.tool) {
         return crate::menus::is_enabled(app, command);
     }
     let Some(st) = app.session.active() else { return false };
@@ -536,10 +848,15 @@ pub fn open(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 2]) -
 }
 
 /// [`open`] for a right-click at document point `doc`: over a misspelled word of the text being
-/// edited, the menu starts with its spelling suggestions.
+/// edited, the menu starts with its spelling suggestions; over committed type with a Type tool, the
+/// type layer menu.
 pub fn open_at(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 2], doc: Option<[f64; 2]>) -> bool {
     let text = editing_text(app, tool);
-    if !(applies(tool) || text) || !pos.iter().all(|v| v.is_finite()) {
+    if !pos.iter().all(|v| v.is_finite()) {
+        return false;
+    }
+    let type_layer = !text && doc.and_then(|d| type_layer_at(app, tool, d)).is_some_and(|id| target_type_layer(app, id));
+    if !(applies(tool) || text || type_layer) {
         return false;
     }
     app.ui.brush_picker = None;
@@ -548,8 +865,21 @@ pub fn open_at(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 2]
     let has_path = crate::vector_ui::active_path_name(app).is_some() || app.ui.pen.as_ref().is_some_and(|p| p.knots.len() >= 2);
     let path_name = crate::vector_ui::active_path_name(app);
     let spelling = if text { doc.and_then(|d| spelling_at(app, d)) } else { None };
-    app.ui.canvas_tool_menu =
-        Some(CanvasToolMenu { pos, tool, has_selection, has_path, path_name, transform: false, pasteboard: false, anchor: None, text, spelling });
+    app.ui.canvas_tool_menu = Some(CanvasToolMenu {
+        pos,
+        tool,
+        has_selection,
+        has_path,
+        path_name,
+        transform: false,
+        pasteboard: false,
+        anchor: None,
+        text,
+        type_layer,
+        guide: false,
+        spelling,
+        crop: None,
+    });
     crate::canvas_popup::mark_open(ctx, menu_id());
     true
 }
@@ -572,7 +902,10 @@ pub fn open_view(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 
         pasteboard: false,
         anchor: Some(doc),
         text: false,
+        type_layer: false,
+        guide: false,
         spelling: None,
+        crop: None,
     });
     crate::canvas_popup::mark_open(ctx, menu_id());
     true
@@ -586,6 +919,8 @@ fn choose_view(app: &mut PhotocraftApp, ctx: &Context, menu: &CanvasToolMenu, co
         let v = app.ui.views.get_mut(i).ok_or("no document view")?;
         v.fit_pending = false;
         v.fill_pending = true;
+        v.request_zoom_animation(app.session.prefs().general.animated_zoom);
+        v.zoom_anchor = None;
         return Ok(());
     }
     let before = app.ui.views.get(i).map(|v| (v.zoom, v.center));
@@ -601,6 +936,7 @@ fn choose_view(app: &mut PhotocraftApp, ctx: &Context, menu: &CanvasToolMenu, co
     // from the centre shrinks (or grows) by the zoom ratio, whatever the rotation or flip.
     let ratio = zoom0 / v.zoom;
     v.center = if center_on_point || !ratio.is_finite() { d } else { [d[0] - (d[0] - c[0]) * ratio, d[1] - (d[1] - c[1]) * ratio] };
+    v.zoom_anchor = (v.zoom_animating && !center_on_point).then_some(([d[0] as f64, d[1] as f64], menu.pos));
     Ok(())
 }
 
@@ -609,15 +945,19 @@ pub fn choose(app: &mut PhotocraftApp, ctx: &Context, command: &str) {
     if !available(app, &menu, command) {
         return;
     }
-    let result = if menu.pasteboard {
+    let result = if menu.crop.is_some() {
+        choose_crop(app, &menu, command)
+    } else if menu.guide {
+        choose_guide(app, ctx, command)
+    } else if menu.pasteboard {
         choose_pasteboard(app, &menu, command)
     } else if menu.anchor.is_some() {
         choose_view(app, ctx, &menu, command)
     } else if menu.text && is_spelling(&menu, command) {
         choose_spelling(app, &menu, command)
-    } else if menu.text {
+    } else if menu.text || menu.type_layer {
         choose_type(app, ctx, command)
-    } else if menu.tool == Tool::Pen && !menu.transform {
+    } else if path_menu(menu.tool) && !menu.transform {
         choose_pen(app, ctx, &menu, command)
     } else if command == "select.toWorkPath" {
         // Photoshop's Make Work Path… asks for the tolerance first.
@@ -635,7 +975,7 @@ pub fn choose(app: &mut PhotocraftApp, ctx: &Context, command: &str) {
 /// A spelling row: replace the word under the pointer (the caret lands after the replacement), or
 /// add it to the user dictionary.
 fn choose_spelling(app: &mut PhotocraftApp, menu: &CanvasToolMenu, command: &str) -> Result<(), String> {
-    let (id, params) = engine_call(menu, command);
+    let (id, params) = engine_call(app, menu, command);
     let result = app.run(&id, params)?;
     if let Some(end) = result["end"].as_u64().map(|e| e as usize)
         && let Some(e) = app.ui.text_edit.as_mut()
@@ -714,6 +1054,23 @@ fn pen_dialog(app: &mut PhotocraftApp, command: &str, label: &str, name: &str) {
     spec_dialog(app, command, label, spec, fields);
 }
 
+/// The Pen options bar's Make Selection (Path mode, #5703): the canvas menu's Make Selection…
+/// dialog for the path being drawn (committed first, as the menu does) or the active path.
+pub(crate) fn make_selection(app: &mut PhotocraftApp) -> Result<(), String> {
+    let pending = app.ui.pen.as_ref().is_some_and(|p| p.knots.len() >= 2);
+    // Where `pen_commit` puts the path being drawn: a shape layer or the targeted vector mask,
+    // else the Paths panel path it adds to (a selected saved path, or the Work Path), which it
+    // selects so it is the active path.
+    let pending_layer = pending && (app.ui.tool_options.vector_mode == "shape" || crate::vector_ui::targeted_vector_mask(app).is_some());
+    if pending {
+        crate::vector_ui::pen_commit(app, false);
+    }
+    let name = if pending_layer { Some("layer".to_string()) } else { crate::vector_ui::active_path_name(app) }
+        .ok_or_else(|| "No path is available for this action".to_string())?;
+    pen_dialog(app, "path.toSelection", "Make Selection…", &name);
+    Ok(())
+}
+
 fn choose_pen(app: &mut PhotocraftApp, ctx: &Context, menu: &CanvasToolMenu, command: &str) -> Result<(), String> {
     if command == "select.isolateLayers" {
         crate::menus::invoke(app, ctx, command, json!({}))?;
@@ -743,7 +1100,7 @@ fn choose_pen(app: &mut PhotocraftApp, ctx: &Context, menu: &CanvasToolMenu, com
 }
 
 fn menu_id() -> egui::Id {
-    egui::Id::new("canvas-selection-menu")
+    egui::Id::unique("canvas-selection-menu")
 }
 
 pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
@@ -752,6 +1109,8 @@ pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
         || app.ui.tool != menu.tool
         || (menu.transform && app.ui.transform.is_none())
         || (menu.text && app.ui.text_edit.is_none())
+        || (menu.type_layer && app.ui.text_edit.is_some())
+        || (menu.crop.is_some() && !crate::crop_ui::pending(app))
     {
         app.ui.canvas_tool_menu = None;
         return;
@@ -785,6 +1144,17 @@ pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
                 }
                 if !spelling.is_empty() {
                     ui.separator();
+                }
+                for row in crop_rows(&menu) {
+                    let Some((label, command)) = row else {
+                        ui.separator();
+                        continue;
+                    };
+                    let text = if crop_label_is_ui(&command) { tl!(&label).to_string() } else { label };
+                    let item = egui::Button::selectable(mode_checked(app, &menu, &command), text).min_size(egui::vec2(200.0, 20.0));
+                    if ui.add_enabled(entry_enabled(app, &menu, &command), item).clicked() {
+                        selected = Some(command);
+                    }
                 }
                 for row in rows(&menu) {
                     let Some((label, command)) = *row else {
@@ -965,6 +1335,91 @@ mod tests {
         reopen(&mut app);
         choose(&mut app, &ctx, "type.rasterizeTypeLayer");
         assert!(app.ui.text_edit.is_none() && text_of(&app, id).is_none(), "the type layer is pixels now");
+    }
+
+    /// A committed type layer reading "Hello" over the middle of the canvas, no edit running.
+    fn committed_type(app: &mut PhotocraftApp) -> u64 {
+        app.ui.tool = Tool::Type;
+        let id = app.run("type.create", json!({"text": "Hello", "size": 14, "x": 1, "y": 22})).unwrap()["layer"].as_u64().unwrap();
+        assert!(app.ui.text_edit.is_none());
+        id
+    }
+
+    #[test]
+    fn right_click_on_committed_type_opens_the_type_layer_menu() {
+        use photocraft_doc::text::Orientation;
+        let mut app = app();
+        let id = committed_type(&mut app);
+        assert_eq!(crate::type_tool::hit_layer(&mut app, 16.0, 16.0).map(|l| l.0), Some(id), "the canvas centre is on the type");
+        let mut h = harness(app);
+        let center = h.state().last_canvas_rect.center();
+        right_click(&mut h, center, Modifiers::NONE);
+        let menu = h.state().ui.canvas_tool_menu.clone().expect("right-click on committed type opens a menu (#7324)");
+        assert!(menu.type_layer && !menu.text && !menu.pasteboard);
+        assert_eq!(rows(&menu), TYPE_LAYER_MENU);
+        assert!(h.state().ui.text_edit.is_none(), "the right-click doesn't start an edit");
+        h.run_steps(2);
+        assert!(h.state().ui.canvas_tool_menu.is_some(), "the menu stays open without an edit");
+        // An edit started some other way (here, as an agent's Type › Edit Text would) closes the
+        // menu, which has no text edit rows.
+        crate::menus::invoke(h.state_mut(), &Context::default(), "type.editText", json!({})).unwrap();
+        h.run_steps(2);
+        assert!(h.state().ui.canvas_tool_menu.is_none(), "an edit closes the type layer menu");
+        crate::type_tool::commit(h.state_mut());
+        right_click(&mut h, center, Modifiers::NONE);
+        let menu = h.state().ui.canvas_tool_menu.clone().expect("committed again, the menu opens again");
+        assert!(menu.type_layer && mode_checked(h.state(), &menu, "type.orientation.horizontal"));
+        choose(h.state_mut(), &Context::default(), "type.orientation.vertical");
+        assert_eq!(text_of(h.state(), id).unwrap().orientation, Orientation::Vertical);
+    }
+
+    #[test]
+    fn type_layer_menu_targets_the_type_under_the_pointer() {
+        let mut app = app();
+        let id = committed_type(&mut app);
+        app.run("layer.new.layer", json!({})).unwrap();
+        let ctx = Context::default();
+        let active = |app: &PhotocraftApp| app.session.active().unwrap().active_layer.map(|l| l.0);
+        assert_ne!(active(&app), Some(id));
+        // Away from the type, or with a Type Mask tool, nothing opens and nothing is selected.
+        assert!(!open_at(&mut app, &ctx, Tool::Type, [10.0, 10.0], Some([30.0, 2.0])));
+        assert!(!open_at(&mut app, &ctx, Tool::HorizontalTypeMask, [10.0, 10.0], Some([16.0, 16.0])));
+        assert!(!open_at(&mut app, &ctx, Tool::Type, [10.0, 10.0], Some([f64::NAN, 16.0])));
+        assert_ne!(active(&app), Some(id));
+        // Over the type: its layer becomes the target, and the menu has no text edit rows.
+        assert!(open_at(&mut app, &ctx, Tool::Type, [10.0, 10.0], Some([16.0, 16.0])));
+        assert_eq!(active(&app), Some(id));
+        let menu = app.ui.canvas_tool_menu.clone().unwrap();
+        for edit_row in ["edit.undo", "edit.cut", "edit.copy", "edit.paste", "select.all", FAUX_BOLD, FAUX_ITALIC] {
+            assert!(!available(&app, &menu, edit_row), "{edit_row} belongs to the edit menu only");
+        }
+        assert!(entry_enabled(&app, &menu, "type.convertToParagraphText") && !entry_enabled(&app, &menu, "type.convertToPointText"));
+        choose(&mut app, &ctx, "type.rasterizeTypeLayer");
+        assert!(text_of(&app, id).is_none(), "the type layer is pixels now");
+        assert!(app.ui.text_edit.is_none());
+    }
+
+    /// Two selected type layers: the one right-clicked becomes active, and the selection stays.
+    #[test]
+    fn type_layer_menu_in_a_multiselection_acts_on_the_clicked_type() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 200, "height": 100})).unwrap();
+        app.ui.tool = Tool::Type;
+        let top = app.run("type.create", json!({"text": "Top", "size": 30, "x": 10, "y": 40})).unwrap()["layer"].as_u64().unwrap();
+        let bottom = app.run("type.create", json!({"text": "Low", "size": 30, "x": 10, "y": 90})).unwrap()["layer"].as_u64().unwrap();
+        app.run("layer.select", json!({"layer": bottom})).unwrap();
+        app.run("layer.select", json!({"layer": top, "mode": "add"})).unwrap();
+        let at = [25.0, 80.0];
+        assert_eq!(crate::type_tool::hit_layer(&mut app, at[0], at[1]).map(|l| l.0), Some(bottom));
+        assert_eq!(app.session.active().unwrap().active_layer.map(|l| l.0), Some(top));
+        let ctx = Context::default();
+        assert!(open_at(&mut app, &ctx, Tool::Type, [10.0, 10.0], Some(at)));
+        let st = app.session.active().unwrap();
+        assert_eq!(st.active_layer.map(|l| l.0), Some(bottom), "the clicked type is the target");
+        assert_eq!(st.selected_layers().len(), 2, "the multiselection stays");
+        choose(&mut app, &ctx, "type.rasterizeTypeLayer");
+        assert!(text_of(&app, bottom).is_none(), "the clicked type is rasterized");
+        assert!(text_of(&app, top).is_some(), "not the other selected type");
     }
 
     #[test]
@@ -1225,11 +1680,13 @@ mod tests {
         assert_eq!(app.session.journal.len(), before);
     }
 
+    /// Photoshop's Zoom tool menu is Fit on Screen, 100%, 200%, Print Size, then Zoom In and Zoom
+    /// Out after a separator (#6005); Fill Screen (the Hand tool's) keeps its place by Fit on Screen.
     #[test]
     fn view_menu_follows_photoshop_order() {
         assert_eq!(
             labels(VIEW_MENU),
-            vec![Some("Zoom In"), Some("Zoom Out"), None, Some("Fit on Screen"), Some("Fill Screen"), None, Some("100%"), Some("200%"), Some("Print Size")]
+            vec![Some("Fit on Screen"), Some("Fill Screen"), Some("100%"), Some("200%"), Some("Print Size"), None, Some("Zoom In"), Some("Zoom Out")]
         );
         // Every row but Fill Screen (the Hand tool's options-bar button) is a View menu command.
         let app = app();
@@ -1294,6 +1751,53 @@ mod tests {
         h.run_steps(3);
         assert_eq!(h.state().ui.views[0].zoom, zoom);
         assert!((screen_of(h.state(), doc) - p).length() < 1.0);
+    }
+
+    #[test]
+    fn animated_zoom_off_view_menu_keeps_the_anchor_without_a_transition() {
+        for command in ["view.zoomIn", "view.zoomOut", FILL_SCREEN] {
+            let mut app = zoom_app(400, 300);
+            app.ui.tool = Tool::Zoom;
+            app.run("prefs.set", json!({"values": {"general.animatedZoom": false, "tools.zoomClickedPointToCenter": false}})).unwrap();
+            let mut h = harness(app);
+            let doc = [300.0, 100.0];
+            let p = screen_of(h.state(), doc);
+            right_click(&mut h, p, Modifiers::NONE);
+            let ctx = h.ctx.clone();
+            choose(h.state_mut(), &ctx, command);
+            assert!(!h.state().ui.views[0].zoom_animating, "{command}");
+            h.step();
+            let v = &h.state().ui.views[0];
+            let xf = crate::canvas::ViewXform::active(h.state()).unwrap();
+            assert_eq!((xf.zoom, xf.center), (v.zoom, v.center), "{command}");
+            assert!(v.zoom_anchor.is_none() && v.zoom_transition.is_none(), "{command}");
+            if command != FILL_SCREEN {
+                assert!(screen_of(h.state(), doc).distance(p) < 1.0, "{command}: preserve the clicked point");
+            }
+        }
+    }
+
+    #[test]
+    fn view_menu_zoom_keeps_its_anchor_during_the_animation() {
+        let mut app = zoom_app(400, 300);
+        app.ui.tool = Tool::Zoom;
+        let mut h = harness(app);
+        let zoom = h.state().ui.views[0].zoom;
+        let doc = [300.0, 100.0];
+        let p = screen_of(h.state(), doc);
+        right_click(&mut h, p, Modifiers::NONE);
+        let ctx = h.ctx.clone();
+        // Choose without the widget click helper, which runs repaint frames until settled.
+        choose(h.state_mut(), &ctx, "view.zoomIn");
+        h.step();
+        h.input_mut().time = Some(ctx.input(|i| i.time) + 0.11);
+        h.step();
+        let displayed = crate::canvas::ViewXform::active(h.state()).unwrap();
+        assert!(displayed.zoom > zoom && displayed.zoom < h.state().ui.views[0].zoom);
+        assert!(displayed.to_screen(doc[0], doc[1]).distance(p) < 1.0);
+        h.input_mut().time = Some(ctx.input(|i| i.time) + 0.3);
+        h.step();
+        assert!(!h.state().ui.views[0].zoom_animating);
     }
 
     #[test]
@@ -1374,7 +1878,7 @@ mod tests {
         let mut app = app();
         app.ui.tool = Tool::Pen;
         for (x, y) in [(2.0, 2.0), (20.0, 2.0), (20.0, 20.0)] {
-            crate::vector_ui::pen_down(&mut app, x, y);
+            crate::vector_ui::pen_down(&mut app, x, y, false);
             crate::vector_ui::pen_up(&mut app);
         }
         crate::vector_ui::pen_commit(&mut app, true);
@@ -1396,7 +1900,7 @@ mod tests {
         let mut app = app();
         app.ui.tool = Tool::Pen;
         for (x, y) in [(2.0, 2.0), (20.0, 2.0), (20.0, 20.0)] {
-            crate::vector_ui::pen_down(&mut app, x, y);
+            crate::vector_ui::pen_down(&mut app, x, y, false);
             crate::vector_ui::pen_up(&mut app);
         }
         assert!(app.session.active().unwrap().doc.work_path.is_none());
@@ -1408,6 +1912,68 @@ mod tests {
         crate::dialogs::confirm(&mut app, dialog).unwrap();
         assert!(app.session.active().unwrap().doc.work_path.is_some());
         assert!(app.session.active().unwrap().doc.selection.is_some());
+    }
+
+    /// #5703: the Pen options bar's Make Selection (Path mode) opens the same dialog for the path
+    /// being drawn (finished into the Work Path first), and OK selects inside it; with no path at
+    /// all it reports that instead.
+    #[test]
+    fn pen_options_bar_makes_a_selection_from_the_path() {
+        let mut app = app();
+        app.ui.tool = Tool::Pen;
+        assert!(make_selection(&mut app).is_err(), "no path yet");
+        assert!(app.ui.dialogs.is_empty());
+        for (x, y) in [(2.0, 2.0), (20.0, 2.0), (20.0, 20.0)] {
+            crate::vector_ui::pen_down(&mut app, x, y, false);
+            crate::vector_ui::pen_up(&mut app);
+        }
+        make_selection(&mut app).unwrap();
+        let dialog = app.ui.dialogs.last().map(|d| d.id).unwrap();
+        crate::dialogs::confirm(&mut app, dialog).unwrap();
+        let st = app.session.active().unwrap();
+        assert!(st.doc.work_path.is_some() && st.doc.selection.is_some());
+        // The active (Work) path again, with no pen path in progress.
+        app.run("select.deselect", json!({})).unwrap();
+        make_selection(&mut app).unwrap();
+        let dialog = app.ui.dialogs.last().map(|d| d.id).unwrap();
+        crate::dialogs::confirm(&mut app, dialog).unwrap();
+        assert!(app.session.active().unwrap().doc.selection.is_some());
+        // Drawn with a saved path selected, the path is added to that one (#4721): the dialog is
+        // for it, not for a Work Path.
+        app.run("path.rename", json!({"name": "work", "to": "Cutout"})).unwrap();
+        app.ui.selected_path = Some("Cutout".into());
+        for (x, y) in [(4.0, 24.0), (12.0, 24.0), (12.0, 30.0)] {
+            crate::vector_ui::pen_down(&mut app, x, y, false);
+            crate::vector_ui::pen_up(&mut app);
+        }
+        make_selection(&mut app).unwrap();
+        assert_eq!(app.ui.dialogs.last().and_then(|d| d.fields.get("name")), Some(&json!("Cutout")));
+    }
+
+    /// #1056: the Path Selection and Direct Selection tools' right-click opens the path menu for
+    /// the selected path, as the Pen's does, instead of nothing.
+    #[test]
+    fn path_selection_tools_open_the_path_menu() {
+        for tool in [Tool::PathSelection, Tool::DirectSelection] {
+            let mut app = app();
+            app.ui.tool = Tool::Pen;
+            for (x, y) in [(2.0, 2.0), (20.0, 2.0), (20.0, 20.0)] {
+                crate::vector_ui::pen_down(&mut app, x, y, false);
+                crate::vector_ui::pen_up(&mut app);
+            }
+            crate::vector_ui::pen_commit(&mut app, false);
+            assert!(app.session.active().unwrap().doc.work_path.is_some());
+            app.ui.tool = tool;
+            assert!(applies(tool));
+            assert!(open(&mut app, &Context::default(), tool, [10.0, 10.0]), "{tool:?}");
+            let menu = app.ui.canvas_tool_menu.clone().unwrap();
+            assert_eq!(rows(&menu), PEN_MENU, "{tool:?}");
+            assert!(menu.has_path && entry_enabled(&app, &menu, "path.toSelection"), "{tool:?}");
+            choose(&mut app, &Context::default(), "path.toSelection");
+            let dialog = app.ui.dialogs.last().map(|d| d.id).unwrap();
+            crate::dialogs::confirm(&mut app, dialog).unwrap();
+            assert!(app.session.active().unwrap().doc.selection.is_some(), "{tool:?}: Make Selection made one");
+        }
     }
 
     #[test]
@@ -1536,7 +2102,7 @@ mod tests {
         app.ui.tool = Tool::Pen;
         app.ui.tool_options.vector_mode = "shape".into();
         for (x, y) in [(2.0, 2.0), (20.0, 2.0), (20.0, 20.0)] {
-            crate::vector_ui::pen_down(&mut app, x, y);
+            crate::vector_ui::pen_down(&mut app, x, y, false);
             crate::vector_ui::pen_up(&mut app);
         }
         assert!(open(&mut app, &Context::default(), Tool::Pen, [10.0, 10.0]));
@@ -1545,5 +2111,278 @@ mod tests {
             assert!(!entry_enabled(&app, menu, id), "{id} must not act on the layer replaced by the pending shape");
         }
         assert!(entry_enabled(&app, menu, "path.toSelection"));
+    }
+
+    /// A 32 × 32 document with the Crop tool picked (Classic Mode, so the view stays put) and its
+    /// untouched default frame.
+    fn crop_app() -> PhotocraftApp {
+        let mut app = app();
+        app.ui.tool = Tool::Crop;
+        app.ui.tool_options.crop_shield.classic_mode = true;
+        app.ui.extras.snap = false;
+        crate::crop_ui::ensure_frame(&mut app);
+        app
+    }
+
+    /// Draws a crop frame from (4, 4) to (28, 28): a pending crop. Returns the frame.
+    fn draw_crop(app: &mut PhotocraftApp) -> [f64; 4] {
+        use crate::canvas::{ToolEvent, tool_event};
+        tool_event(app, ToolEvent::Down { x: 4.0, y: 4.0, pressure: 1.0 }, Modifiers::NONE);
+        tool_event(app, ToolEvent::Move { x: 16.0, y: 16.0, pressure: 1.0 }, Modifiers::NONE);
+        tool_event(app, ToolEvent::Move { x: 28.0, y: 28.0, pressure: 1.0 }, Modifiers::NONE);
+        tool_event(app, ToolEvent::Up { x: 28.0, y: 28.0 }, Modifiers::NONE);
+        assert!(crate::crop_ui::pending(app), "the drag draws a pending frame");
+        app.ui.crop_rect.unwrap()
+    }
+
+    fn aspect(r: [f64; 4]) -> f64 {
+        (r[2] - r[0]) / (r[3] - r[1])
+    }
+
+    /// #6561: right-click on a pending crop opens its menu without touching the frame, and a ratio
+    /// row refits the frame as the options bar's dropdown does.
+    #[test]
+    fn right_click_on_a_pending_crop_opens_the_crop_menu_and_a_ratio_refits_the_frame() {
+        let mut app = crop_app();
+        let frame = draw_crop(&mut app);
+        let mut h = harness(app);
+        let center = h.state().last_canvas_rect.center();
+        right_click(&mut h, center, Modifiers::NONE);
+        let menu = h.state().ui.canvas_tool_menu.clone().expect("right-click on a pending crop opens a menu");
+        assert_eq!(h.state().ui.crop_rect, Some(frame), "the right-click leaves the frame alone");
+        assert!(available(h.state(), &menu, "crop.ratio.16:9"), "the menu lists the options bar's ratios");
+        let ctx = h.ctx.clone();
+        choose(h.state_mut(), &ctx, "crop.ratio.16:9");
+        assert_eq!(h.state().ui.tool_options.crop_ratio, "16:9");
+        let r = h.state().ui.crop_rect.unwrap();
+        assert!((aspect(r) - 16.0 / 9.0).abs() < 1e-9, "the frame is 16 : 9 now: {r:?}");
+        assert!(r[0] >= frame[0] && r[1] >= frame[1] && r[2] <= frame[2] && r[3] <= frame[3], "fitted inside the old frame: {r:?}");
+        assert!(h.state().ui.canvas_tool_menu.is_none());
+    }
+
+    #[test]
+    fn untouched_crop_frame_has_no_menu_and_a_pending_one_wins_over_the_pasteboard() {
+        let mut h = harness(crop_app());
+        let rect = h.state().last_canvas_rect;
+        let outside = rect.min + vec2(5.0, 5.0);
+        right_click(&mut h, rect.center(), Modifiers::NONE);
+        assert!(h.state().ui.canvas_tool_menu.is_none(), "the tool's untouched frame is no crop in progress");
+        right_click(&mut h, outside, Modifiers::NONE);
+        assert!(h.state().ui.canvas_tool_menu.as_ref().is_some_and(|m| m.pasteboard), "outside: the pasteboard menu, as before");
+        h.state_mut().ui.canvas_tool_menu = None;
+        draw_crop(h.state_mut());
+        h.run_steps(2);
+        right_click(&mut h, outside, Modifiers::NONE);
+        let menu = h.state().ui.canvas_tool_menu.clone().unwrap();
+        assert!(menu.crop.is_some() && !menu.pasteboard, "with a crop pending, its menu also outside the image");
+    }
+
+    /// A harness in the app's order: shortcuts (the crop's Esc and ↵ among them), then the canvas.
+    fn shortcut_harness(mut app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+        app.sync_views();
+        let mut h = Harness::builder().with_size(vec2(1000.0, 700.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                let ctx = ui.ctx().clone();
+                if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    return;
+                }
+                crate::shortcuts::handle(app, &ctx);
+                egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::default());
+        h.run_steps(4);
+        h
+    }
+
+    #[test]
+    fn esc_closes_only_the_crop_menu() {
+        let mut app = crop_app();
+        let frame = draw_crop(&mut app);
+        let mut h = shortcut_harness(app);
+        let center = h.state().last_canvas_rect.center();
+        right_click(&mut h, center, Modifiers::NONE);
+        assert!(h.state().ui.canvas_tool_menu.as_ref().is_some_and(|m| m.crop.is_some()));
+        h.key_press(egui::Key::Escape);
+        h.run_steps(2);
+        assert!(h.state().ui.canvas_tool_menu.is_none(), "Esc closes the menu");
+        assert_eq!(h.state().ui.crop_rect, Some(frame), "and only the menu: the crop is not cancelled");
+        assert!(crate::crop_ui::pending(h.state()));
+    }
+
+    /// ↵ under the open crop menu doesn't commit the crop beneath it.
+    #[test]
+    fn enter_under_the_crop_menu_does_not_crop() {
+        let mut app = crop_app();
+        let frame = draw_crop(&mut app);
+        let mut h = shortcut_harness(app);
+        let size = h.state().session.active().map(|s| s.doc.size);
+        let center = h.state().last_canvas_rect.center();
+        right_click(&mut h, center, Modifiers::NONE);
+        assert!(h.state().ui.canvas_tool_menu.as_ref().is_some_and(|m| m.crop.is_some()));
+        h.key_press(egui::Key::Enter);
+        h.run_steps(2);
+        assert_eq!(h.state().session.active().map(|s| s.doc.size), size, "↵ under the menu doesn't crop");
+        assert_eq!(h.state().ui.crop_rect, Some(frame));
+        assert!(crate::crop_ui::pending(h.state()));
+    }
+
+    /// A right-click while the left button drags the crop frame opens no menu over the drag, on
+    /// the image or outside it (no pasteboard menu either), and the menu opens again once the left
+    /// button is up, though egui ended that drag without a release of its own.
+    #[test]
+    fn no_crop_menu_while_the_left_button_drags_the_frame() {
+        let mut app = crop_app();
+        draw_crop(&mut app);
+        let mut h = harness(app);
+        let rect = h.state().last_canvas_rect;
+        let (center, outside) = (rect.center(), rect.min + vec2(5.0, 5.0));
+        let left = |pos, pressed| egui::Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+        h.event(egui::Event::PointerMoved(center));
+        h.run_steps(1);
+        h.event(left(center, true));
+        h.run_steps(1);
+        for k in 1..=4 {
+            h.event(egui::Event::PointerMoved(center + vec2(8.0 * k as f32, 0.0)));
+            h.run_steps(1);
+        }
+        assert!(h.state().crop.drag.is_some(), "the left button drags the frame");
+        let held = center + vec2(32.0, 0.0);
+        right_click(&mut h, held, Modifiers::NONE);
+        assert!(h.state().ui.canvas_tool_menu.is_none(), "no crop menu over the drag");
+        right_click(&mut h, outside, Modifiers::NONE);
+        assert!(h.state().ui.canvas_tool_menu.is_none(), "nor the pasteboard menu outside the image");
+        h.event(egui::Event::PointerMoved(held));
+        h.event(left(held, false));
+        h.run_steps(2);
+        right_click(&mut h, center, Modifiers::NONE);
+        assert!(h.state().ui.canvas_tool_menu.as_ref().is_some_and(|m| m.crop.is_some()), "with the button up the menu opens");
+    }
+
+    /// The left button down with no crop gesture under way (a press egui doesn't take for a drag
+    /// yet, or one whose release was lost to an Alt+Tab or a cancelled touch) doesn't keep the
+    /// crop menu shut.
+    #[test]
+    fn a_left_button_down_without_a_crop_drag_keeps_the_crop_menu() {
+        let mut app = crop_app();
+        draw_crop(&mut app);
+        let mut h = harness(app);
+        let center = h.state().last_canvas_rect.center();
+        h.event(egui::Event::PointerMoved(center));
+        h.run_steps(1);
+        h.event(egui::Event::PointerButton { pos: center, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        h.run_steps(1);
+        assert!(h.ctx.input(|i| i.pointer.primary_down()) && h.state().crop.drag.is_none(), "down, dragging nothing");
+        right_click(&mut h, center, Modifiers::NONE);
+        assert!(h.state().ui.canvas_tool_menu.as_ref().is_some_and(|m| m.crop.is_some()), "the crop menu opens");
+    }
+
+    /// Nor does a right-click open a menu over a Straighten line the left button still draws.
+    #[test]
+    fn no_crop_menu_while_the_left_button_draws_a_straighten_line() {
+        let mut app = crop_app();
+        draw_crop(&mut app);
+        crate::crop_straighten::toggle(&mut app);
+        let mut h = harness(app);
+        let center = h.state().last_canvas_rect.center();
+        let left = |pos, pressed| egui::Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+        h.event(egui::Event::PointerMoved(center));
+        h.run_steps(1);
+        h.event(left(center, true));
+        h.run_steps(1);
+        for k in 1..=4 {
+            h.event(egui::Event::PointerMoved(center + vec2(8.0 * k as f32, 4.0)));
+            h.run_steps(1);
+        }
+        assert!(h.state().crop.straighten.line.is_some() && h.state().crop.drag.is_none(), "the left button draws a Straighten line");
+        right_click(&mut h, center + vec2(32.0, 4.0), Modifiers::NONE);
+        assert!(h.state().ui.canvas_tool_menu.is_none(), "no menu over the line");
+    }
+
+    /// A finger held still on a pending crop (a touch screen's press-and-hold right-click) opens
+    /// the crop menu, though the touch counts as the primary button down.
+    #[test]
+    fn a_finger_held_on_a_pending_crop_opens_the_crop_menu() {
+        let mut app = crop_app();
+        let frame = draw_crop(&mut app);
+        let mut h = harness(app);
+        let at = h.state().last_canvas_rect.center();
+        let touch = |phase| egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(1), phase, pos: at, force: None };
+        let button = |pressed| egui::Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+        h.input_mut().events.extend([egui::Event::PointerMoved(at), touch(egui::TouchPhase::Start), button(true)]);
+        h.step();
+        // Held past egui's max_click_duration (0.8 s) without moving.
+        for _ in 0..120 {
+            if h.state().ui.canvas_tool_menu.is_some() {
+                break;
+            }
+            h.step();
+        }
+        assert!(h.state().ui.canvas_tool_menu.as_ref().is_some_and(|m| m.crop.is_some()), "the held finger opens the crop menu");
+        h.input_mut().events.extend([touch(egui::TouchPhase::End), button(false)]);
+        h.run_steps(2);
+        assert_eq!(h.state().ui.crop_rect, Some(frame), "the hold leaves the frame alone");
+    }
+
+    #[test]
+    fn crop_menu_rows_act_like_the_options_bar() {
+        use crate::crop_overlay::{CropOverlay, OverlayShow};
+        let ctx = Context::default();
+        let mut app = crop_app();
+        draw_crop(&mut app);
+        // Space's Hand held over the Crop tool keeps its own right-click.
+        assert!(!open_crop(&mut app, &ctx, Tool::Hand, [10.0, 10.0]));
+        let reopen = |app: &mut PhotocraftApp| {
+            assert!(open_crop(app, &Context::default(), Tool::Crop, [10.0, 10.0]));
+            app.ui.canvas_tool_menu.clone().unwrap()
+        };
+        // Nothing to save with a free ratio, nothing to delete without saved presets.
+        let menu = reopen(&mut app);
+        assert!(!entry_enabled(&app, &menu, CROP_NEW) && !entry_enabled(&app, &menu, CROP_DELETE));
+        assert!(mode_checked(&app, &menu, "crop.ratio."), "free Ratio is checked, as in the dropdown");
+        // A size preset fills W x H x Resolution, which the menu checks, as the dropdown does.
+        choose(&mut app, &ctx, "crop.ratio.preset:4x5in");
+        let menu = reopen(&mut app);
+        assert!(mode_checked(&app, &menu, "crop.ratio.whr") && !mode_checked(&app, &menu, "crop.ratio.preset:4x5in"));
+        assert!((aspect(app.ui.crop_rect.unwrap()) - 0.8).abs() < 1e-9);
+        assert!(entry_enabled(&app, &menu, CROP_NEW));
+        // Clear empties W x H x Resolution, as the bar's Clear.
+        choose(&mut app, &ctx, CROP_CLEAR);
+        assert_eq!(app.ui.tool_options.crop_width, "");
+        // Overlays: another overlay starts at its first orientation; when it shows.
+        app.ui.tool_options.crop_overlay = CropOverlay::GoldenSpiral;
+        app.ui.tool_options.crop_overlay_orientation = 2;
+        reopen(&mut app);
+        choose(&mut app, &ctx, "crop.overlay.triangle");
+        assert_eq!((app.ui.tool_options.crop_overlay, app.ui.tool_options.crop_overlay_orientation), (CropOverlay::Triangle, 0));
+        reopen(&mut app);
+        choose(&mut app, &ctx, "crop.overlayShow.never");
+        assert_eq!(app.ui.tool_options.crop_overlay_show, OverlayShow::Never);
+        let menu = reopen(&mut app);
+        assert!(mode_checked(&app, &menu, "crop.overlay.triangle") && mode_checked(&app, &menu, "crop.overlayShow.never"));
+        // A saved preset is listed by name; picking it refits the frame to its W x H, though the
+        // ratio key is "whr" before and after.
+        app.ui.canvas_tool_menu = None;
+        app.ui.tool_options.crop_ratio = crate::crop_size::WHR.into();
+        let saved = json!({"crop_ratio": "whr", "crop_width": "300 px", "crop_height": "100 px", "crop_resolution": "72", "crop_resolution_unit": "px/in"});
+        app.run("tool.presets.new", json!({"name": "Banner", "tool": "crop", "options": {"toolOptions": saved}})).unwrap();
+        let menu = reopen(&mut app);
+        let banner = crop_rows(&menu).into_iter().flatten().find(|(l, _)| l == "Banner").expect("the saved preset is a row").1;
+        assert!(entry_enabled(&app, &menu, CROP_DELETE));
+        choose(&mut app, &ctx, &banner);
+        assert_eq!(app.ui.tool_options.crop_width, "300 px");
+        assert!((aspect(app.ui.crop_rect.unwrap()) - 3.0).abs() < 1e-9, "the frame follows the preset: {:?}", app.ui.crop_rect);
+        let menu = reopen(&mut app);
+        assert!(mode_checked(&app, &menu, &banner));
+        // Crop commits as ↵ does: the preset's size.
+        choose(&mut app, &ctx, CROP_COMMIT);
+        let size = app.session.active().unwrap().doc.size;
+        assert_eq!((size.width, size.height), (300, 100));
+        // Cancel drops a pending crop.
+        draw_crop(&mut app);
+        reopen(&mut app);
+        choose(&mut app, &ctx, CROP_CANCEL);
+        assert!(!crate::crop_ui::pending(&app));
     }
 }

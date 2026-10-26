@@ -25,6 +25,9 @@ finish-args:
   - --share=ipc
   # GPU access for the wgpu compositor (Vulkan, or GL as a fallback).
   - --device=dri
+  # Printing: the host's CUPS socket, so File › Print reaches the print server directly (IPP,
+  # in process). Without it the app shows the system print dialog through the print portal.
+  - --socket=cups
   # Open/Save dialogs go through the file-chooser portal (rfd's xdg-portal backend) and
   # drag-and-drop through the document portal, so picked files work anywhere without broad
   # filesystem access. Pictures and Documents are granted so files passed by path (the command
@@ -46,6 +49,8 @@ modules:
     build-commands:
       - cargo --offline build --release --locked -p photocraft --features heif
       - install -Dm755 target/release/photocraft /app/bin/photocraft
+      - install -Dm644 NOTICE /app/share/doc/photocraft/NOTICE
+      - install -Dm644 ATTRIBUTION.md /app/share/doc/photocraft/ATTRIBUTION.md
       - install -Dm644 packaging/linux/ai.storyteller.photocraft.desktop /app/share/applications/ai.storyteller.photocraft.desktop
       - install -Dm644 packaging/linux/ai.storyteller.photocraft.mime.xml /app/share/mime/packages/ai.storyteller.photocraft.xml
       - mkdir -p /app/share/icons && cp -R assets/app-icon/hicolor /app/share/icons/

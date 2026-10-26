@@ -15,7 +15,7 @@ use std::hash::{Hash, Hasher};
 
 use egui::{Align2, Color32, FontId, Rect as ERect, Sense, Stroke, TextureHandle, pos2, vec2};
 use photocraft_algo::{FilterParams, GALLERY_CATEGORIES, GalleryFilter};
-use photocraft_doc::LayerId;
+use photocraft_doc::{DocId, LayerId};
 use photocraft_geom::Rect;
 use photocraft_raster::{Interrupt, Surface};
 use serde_json::{Map, Value, json};
@@ -66,6 +66,8 @@ fn default_params(f: GalleryFilter) -> Map<String, Value> {
 }
 
 pub struct GalleryDialog {
+    /// Document this dialog belongs to (#5115).
+    pub document: DocId,
     pub layer: LayerId,
     layer_name: String,
     canvas: Rect,
@@ -78,6 +80,8 @@ pub struct GalleryDialog {
     background: [f32; 4],
     /// Screen px per document px (0 = fit) and the view centre (document px).
     pub zoom: f32,
+    /// The zoom Fit in View showed last (1 before the first frame).
+    fit: f32,
     center: [f32; 2],
     tex: Option<TextureHandle>,
     /// The key of the preview in `tex` and the document rect it covers.
@@ -92,18 +96,22 @@ pub struct GalleryDialog {
     thumb_src: Surface,
     thumbs: Vec<Option<TextureHandle>>,
     pub preview_ms: f64,
+    /// Editing smart filter `index` of the layer: OK updates it instead of adding a filter.
+    pub smart_filter: Option<usize>,
     history: EditHistory<Vec<EffectLayer>>,
 }
 
 impl GalleryDialog {
     pub fn describe(&self) -> Value {
         json!({
+            "document": self.document.0,
             "layer": self.layer.0,
             "effects": self.effects.iter().map(EffectLayer::to_json).collect::<Vec<_>>(),
             "selected": self.selected,
             "zoom": if self.zoom > 0.0 { json!(self.zoom) } else { json!("fit") },
             "previewMs": self.preview_ms,
             "rendering": self.rendering().is_some(),
+            "smartFilter": self.smart_filter,
         })
     }
 
@@ -269,18 +277,12 @@ fn image(surf: &Surface, w: usize, h: usize) -> egui::ColorImage {
     egui::ColorImage::new([w, h], px.iter().map(|p| Color32::from_rgba_unmultiplied(p[0], p[1], p[2], if alpha { p[3] } else { 255 })).collect())
 }
 
-/// Opens the dialog on the active layer, starting from the last gallery stack used.
-pub fn open(app: &mut PhotocraftApp) -> Result<(), String> {
-    let (layer, src, _) = crate::distort_ui::active_pixels(app)?;
-    let st = app.session.active().ok_or("no document")?;
-    let canvas = st.doc.bounds();
-    let layer_name = st.doc.layer(layer).map(|l| l.name.clone()).unwrap_or_default();
-    let last = app.session.journal.iter().rev().find(|(id, _)| id == "filter.filterGallery").map(|(_, p)| p.clone());
-    let mut effects: Vec<EffectLayer> = last
-        .as_ref()
-        .and_then(|p| p.get("effects").and_then(Value::as_array).cloned())
-        .unwrap_or_default()
-        .iter()
+/// The effect layers of a `filter.filterGallery` params object (unknown filters are skipped).
+fn effects_from(p: &Value) -> Vec<EffectLayer> {
+    p.get("effects")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
         .filter_map(|e| {
             let f = GalleryFilter::from_key(e.get("filter")?.as_str()?)?;
             let mut l = EffectLayer::new(f);
@@ -290,7 +292,56 @@ pub fn open(app: &mut PhotocraftApp) -> Result<(), String> {
             l.visible = e.get("visible").and_then(Value::as_bool).unwrap_or(true);
             Some(l)
         })
-        .collect();
+        .collect()
+}
+
+/// A recorded `[r, g, b, a]` colour param.
+fn colour_param(p: &Value, key: &str) -> Option<[f32; 4]> {
+    let a = p.get(key)?.as_array()?;
+    let c = |j: usize, d: f32| a.get(j).and_then(Value::as_f64).map_or(Some(d), |v| Some(v as f32).filter(|v| v.is_finite()));
+    Some([c(0, 0.0)?, c(1, 0.0)?, c(2, 0.0)?, c(3, 1.0)?])
+}
+
+/// Opens the dialog on the active layer, starting from the last gallery stack used.
+pub fn open(app: &mut PhotocraftApp) -> Result<(), String> {
+    let (layer, src, _) = crate::distort_ui::active_pixels(app)?;
+    let last = app.session.journal.iter().rev().find(|(id, _)| id == "filter.filterGallery").map(|(_, p)| p.clone());
+    let effects = last.as_ref().map(effects_from).unwrap_or_default();
+    let (fg, bg) = (app.session.tools.foreground, app.session.tools.background);
+    open_on(app, layer, src, effects, [fg, bg], None)
+}
+
+/// Re-opens Filter Gallery smart filter `index` of smart object `layer` with its recorded stack,
+/// previewing on the pixels below it; OK updates that filter (`layer.smartFilter.setParams`).
+pub fn open_smart_filter(app: &mut PhotocraftApp, layer: LayerId, index: usize) -> Result<(), String> {
+    let st = app.session.active().ok_or("no document")?;
+    let Some(photocraft_doc::LayerContent::Smart(sm)) = st.doc.layer(layer).map(|l| &l.content) else {
+        return Err("the layer is not a smart object".into());
+    };
+    let filter = sm.smart_filters.get(index).ok_or("no such smart filter")?;
+    if filter.command != "filter.filterGallery" {
+        return Err("the smart filter is not a Filter Gallery filter".into());
+    }
+    let p = filter.params.clone();
+    let src = photocraft_engine::smart_cmds::render_below_filter(&st.doc, sm, index)
+        .map_err(|e| e.to_string())?
+        .ok_or("the smart object's contents are unavailable (missing linked file?)")?;
+    let fg = colour_param(&p, "foreground").unwrap_or(app.session.tools.foreground);
+    let bg = colour_param(&p, "background").unwrap_or(app.session.tools.background);
+    open_on(app, layer, src, effects_from(&p), [fg, bg], Some(index))
+}
+
+fn open_on(
+    app: &mut PhotocraftApp,
+    layer: LayerId,
+    src: Surface,
+    mut effects: Vec<EffectLayer>,
+    colours: [[f32; 4]; 2],
+    smart_filter: Option<usize>,
+) -> Result<(), String> {
+    let st = app.session.active().ok_or("no document")?;
+    let canvas = st.doc.bounds();
+    let layer_name = st.doc.layer(layer).map(|l| l.name.clone()).unwrap_or_default();
     if effects.is_empty() {
         effects.push(EffectLayer::new(GalleryFilter::ColoredPencil));
     }
@@ -305,6 +356,7 @@ pub fn open(app: &mut PhotocraftApp) -> Result<(), String> {
     let open_cats = std::array::from_fn(|i| effects[sel].filter.category() == GALLERY_CATEGORIES[i]);
     let history = EditHistory::new(&effects);
     app.distort.gallery = Some(GalleryDialog {
+        document: st.doc.id,
         layer,
         layer_name,
         canvas,
@@ -312,9 +364,10 @@ pub fn open(app: &mut PhotocraftApp) -> Result<(), String> {
         effects,
         selected: sel,
         open: open_cats,
-        foreground: app.session.tools.foreground,
-        background: app.session.tools.background,
+        foreground: colours[0],
+        background: colours[1],
         zoom: 0.0,
+        fit: 1.0,
         center: [(canvas.x0 + canvas.x1) as f32 / 2.0, (canvas.y0 + canvas.y1) as f32 / 2.0],
         tex: None,
         shown: None,
@@ -325,6 +378,7 @@ pub fn open(app: &mut PhotocraftApp) -> Result<(), String> {
         thumb_src,
         thumbs: vec![None; GalleryFilter::ALL.len()],
         preview_ms: 0.0,
+        smart_filter,
         history,
     });
     Ok(())
@@ -335,6 +389,9 @@ pub fn commit(app: &mut PhotocraftApp) -> Result<Value, String> {
     let Some(d) = app.distort.gallery.take() else { return Err("the Filter Gallery is not open".into()) };
     if !d.effects.iter().any(|e| e.visible) {
         return Ok(json!({"committed": false}));
+    }
+    if let Some(index) = d.smart_filter {
+        return app.run("layer.smartFilter.setParams", json!({"layer": d.layer.0, "index": index, "params": d.params()}));
     }
     let mut p = d.params();
     p["layer"] = json!(d.layer.0);
@@ -383,9 +440,9 @@ pub fn control(app: &mut PhotocraftApp, ui: &Value) -> Result<Value, String> {
     d.history.settle(&d.effects, false);
     match ui.get("zoom") {
         Some(Value::String(s)) if s == "fit" => d.zoom = 0.0,
-        // The gallery's own preview zoom, not the canvas (`zoom_levels` doesn't apply): its − / +
-        // buttons and menu stop at 400 %, an agent may set up to 3200 %.
-        Some(v) if v.is_number() => d.zoom = (v.as_f64().unwrap_or(1.0) as f32).clamp(0.01, 32.0),
+        // The gallery's own preview zoom, not the canvas: its menu stops at 400 %, the − / +
+        // buttons, ⌘+ and an agent go up to 3200 %.
+        Some(v) if v.is_number() => d.zoom = (v.as_f64().unwrap_or(1.0) as f32).clamp(ZOOM_MIN, ZOOM_MAX),
         _ => {}
     }
     Ok(d.describe())
@@ -408,12 +465,39 @@ impl Drop for PreviewJob {
     }
 }
 
+/// The preview's zoom range (1 = 100 %), as Liquify's.
+const ZOOM_MIN: f32 = 0.01;
+const ZOOM_MAX: f32 = 32.0;
+
+/// Zoom In (`dir` > 0) or Zoom Out along the canvas's ladder, as Liquify's preview does (#7210),
+/// from the zoom on screen: Fit in View steps from the zoom it fits at, so zooming in from a
+/// large image's Fit never shrinks it, and zooming out from a Fit below [`ZOOM_MIN`] stays at Fit.
+fn step_zoom(d: &GalleryDialog, dir: i32) -> f32 {
+    let on_screen = if d.zoom > 0.0 { d.zoom } else { d.fit };
+    let next = crate::zoom_levels::step_in_range(on_screen, dir, ZOOM_MIN, ZOOM_MAX);
+    if d.zoom <= 0.0 && dir < 0 && next >= d.fit { 0.0 } else { next }
+}
+
+/// ⌘+ / ⌘− / ⌘0 / ⌘1 (or their overrides) zoom the preview like its − / + buttons, Fit in View
+/// and 100 %, not the canvas behind the dialog.
+pub fn keys(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    let nav = if app.distort.gallery.is_some() { crate::shortcuts::nav_shortcut(app, ctx) } else { None };
+    let (Some(d), Some(id)) = (app.distort.gallery.as_mut(), nav) else { return };
+    d.zoom = match id {
+        "view.zoomIn" => step_zoom(d, 1),
+        "view.zoomOut" => step_zoom(d, -1),
+        "view.fitOnScreen" => 0.0,
+        _ => 1.0,
+    };
+}
+
 /// The preview's zoom (screen px per document px), the visible document rect and the factor the
 /// texture is reduced by. Fit in View also recentres the view.
 fn view(d: &mut GalleryDialog, area: ERect) -> (f32, Rect, u32) {
     let (cw, ch) = (d.canvas.width().max(1) as f32, d.canvas.height().max(1) as f32);
     let zoom = if d.zoom > 0.0 { d.zoom } else { ((area.width() - 24.0) / cw).min((area.height() - 24.0) / ch).clamp(0.005, 1.0) };
     if d.zoom <= 0.0 {
+        d.fit = zoom;
         d.center = [d.canvas.x0 as f32 + cw / 2.0, d.canvas.y0 as f32 + ch / 2.0];
     }
     let (hw, hh) = (area.width() / zoom / 2.0, area.height() / zoom / 2.0);
@@ -554,7 +638,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let screen = ctx.content_rect();
     let mut action: Option<&str> = None;
     let background = app.background_jobs;
-    egui::Area::new(egui::Id::new("gallery-dialog")).order(egui::Order::Foreground).fixed_pos(screen.min).show(ctx, |ui| {
+    egui::Area::new(egui::Id::unique("gallery-dialog")).order(egui::Order::Foreground).fixed_pos(screen.min).show(ctx, |ui| {
         let Some(d) = app.distort.gallery.as_mut() else { return };
         d.history.settle(&d.effects, ctx.input(|i| i.pointer.any_down()));
         let (full, _) = ui.allocate_exact_size(screen.size(), Sense::hover());
@@ -581,7 +665,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             clip.image(tex.id(), r, ERect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
             clip.rect_stroke(r, 0.0, Stroke::new(1.0, t.separator), egui::StrokeKind::Outside);
         }
-        let resp = ui.interact(area, egui::Id::new("gallery-preview"), Sense::drag());
+        let resp = ui.interact(area, egui::Id::unique("gallery-preview"), Sense::drag());
         if resp.dragged() && d.zoom > 0.0 {
             let dl = resp.drag_delta() / d.zoom;
             d.center = [d.center[0] - dl.x, d.center[1] - dl.y];
@@ -589,17 +673,22 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         // ---- Zoom bar ----
         painter.rect_filled(zoom_bar, 0.0, t.dock);
         let mut zb = ui.new_child(egui::UiBuilder::new().max_rect(zoom_bar.shrink2(vec2(10.0, 3.0))).layout(egui::Layout::left_to_right(egui::Align::Center)));
-        let steps = [0.0f32, 0.125, 0.25, 0.5, 1.0, 2.0, 4.0];
         if crate::icons::button(&mut zb, "minus", 22.0, false, tl!("Zoom out")).clicked() {
-            d.zoom = steps.iter().rev().copied().find(|&s| s > 0.0 && s < d.zoom.max(0.0) - 1e-3).unwrap_or(0.0);
+            d.zoom = step_zoom(d, -1);
         }
         if crate::icons::button(&mut zb, "plus", 22.0, false, tl!("Zoom in")).clicked() {
-            d.zoom = steps.iter().copied().find(|&s| s > d.zoom + 1e-3).unwrap_or(4.0);
+            d.zoom = step_zoom(d, 1);
         }
         let mut z = d.zoom;
-        let opts: Vec<(f32, &str)> =
+        let mut opts: Vec<(f32, &str)> =
             vec![(0.0, tl!("Fit in View")), (0.125, "12.5%"), (0.25, "25%"), (0.5, "50%"), (1.0, "100%"), (2.0, "200%"), (4.0, "400%")];
-        if widgets::dropdown(&mut zb, "gallery-zoom", &mut z, &opts, 110.0) {
+        // A zoom off the menu (stepped to 300 %, say) shows as itself, not as "—".
+        let off_menu = format!("{:.0}%", z * 100.0);
+        if !opts.iter().any(|(v, _)| *v == z) {
+            let at = opts.iter().position(|(v, _)| *v > z).unwrap_or(opts.len());
+            opts.insert(at, (z, &off_menu));
+        }
+        if widgets::dropdown(&mut zb, "gallery-zoom", tl!("Zoom"), &mut z, &opts, 110.0) {
             d.zoom = z;
         }
         if let Some(p) = d.rendering() {
@@ -684,7 +773,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         ru.add_space(4.0);
         let mut cur = d.effects[d.selected].filter;
         let names: Vec<(GalleryFilter, &str)> = GalleryFilter::ALL.iter().map(|f| (*f, f.name())).collect();
-        if widgets::dropdown(&mut ru, "gallery-filter", &mut cur, &names, inner.width() - 8.0) {
+        if widgets::dropdown(&mut ru, "gallery-filter", tl!("Filter"), &mut cur, &names, inner.width() - 8.0) {
             d.set_filter(cur);
         }
         widgets::hairline(&mut ru);
@@ -708,7 +797,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                         let opts: Vec<(String, &str)> = options.iter().cloned().zip(labels.iter().map(String::as_str)).collect();
                         ui.horizontal(|ui| {
                             ui.label(egui::RichText::new(tl!(&label)).color(t.text_dim));
-                            widgets::dropdown(ui, &format!("gallery-{}", p.key), &mut c, &opts, 140.0);
+                            widgets::dropdown(ui, &format!("gallery-{}", p.key), tl!(&label), &mut c, &opts, 140.0);
                         });
                         e.params.insert(p.key, json!(c));
                     }
@@ -825,6 +914,67 @@ mod tests {
         app
     }
 
+    /// ⌘+ / ⌘− step the preview along the canvas's zoom ladder as Liquify's do, from the zoom Fit
+    /// in View shows; ⌘0 fits it and ⌘1 is 100 %, through the canvas's own shortcuts; the canvas
+    /// behind keeps its zoom.
+    #[test]
+    fn zoom_shortcuts_zoom_the_preview_not_the_canvas() {
+        let ctx = egui::Context::default();
+        PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::ALL[0]);
+        // Large enough that Fit in View is well under 100 % in a 1000 × 700 window.
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.session.execute("file.new", json!({"width": 3000, "height": 2000})).unwrap();
+        app.sync_views();
+        open(&mut app).unwrap();
+        let canvas_zoom = app.ui.views.first().map(|v| v.zoom);
+        let mut run = |key: Option<egui::Key>| {
+            let events = key
+                .map(|key| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND })
+                .into_iter()
+                .collect();
+            let screen = ERect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 700.0));
+            let raw = egui::RawInput { screen_rect: Some(screen), events, ..Default::default() };
+            let mut out = ctx.run_ui(raw, |ui| {
+                crate::shortcuts::handle(&mut app, ui.ctx());
+                show(&mut app, ui.ctx());
+            });
+            out.textures_delta.clear();
+            let d = app.distort.gallery.as_ref().unwrap();
+            (d.zoom, d.fit)
+        };
+        let (zoom, fit) = run(None);
+        assert_eq!(zoom, 0.0, "opens at Fit in View");
+        assert!(fit > 0.0 && fit < 0.5, "fits a 3000 px image well under 100 %: {fit}");
+        let step = |z, dir| crate::zoom_levels::step_in_range(z, dir, ZOOM_MIN, ZOOM_MAX);
+        let (zoom, _) = run(Some(egui::Key::Equals));
+        assert_eq!(zoom, step(fit, 1), "⌘= steps up from the fitted zoom, not from the menu's first entry");
+        assert!(zoom > fit);
+        assert_eq!(run(Some(egui::Key::Plus)).0, step(step(fit, 1), 1), "⌘+ typed as Plus too");
+        assert_eq!(run(Some(egui::Key::Num0)).0, 0.0, "Fit in View");
+        assert!(run(Some(egui::Key::Minus)).0 < fit, "⌘− steps down from the fitted zoom");
+        assert_eq!(run(Some(egui::Key::Num1)).0, 1.0);
+        assert_eq!(run(Some(egui::Key::Equals)).0, 2.0);
+        assert_eq!(run(Some(egui::Key::Equals)).0, 3.0, "past the menu's steps, on the canvas's ladder");
+        assert_eq!(run(Some(egui::Key::Minus)).0, 2.0);
+        assert!(app.distort.gallery.is_some(), "the dialog stays open");
+        assert_eq!(app.ui.views.first().map(|v| v.zoom), canvas_zoom, "the canvas behind keeps its zoom");
+    }
+
+    /// A huge image can fit below the 1 % minimum: Zoom Out keeps Fit in View rather than
+    /// enlarging it to 1 %, and Zoom In still steps up from there.
+    #[test]
+    fn zoom_out_from_a_fit_below_the_minimum_stays_at_fit() {
+        let mut app = app();
+        open(&mut app).unwrap();
+        let d = app.distort.gallery.as_mut().unwrap();
+        d.zoom = 0.0;
+        d.fit = 0.005;
+        assert_eq!(step_zoom(d, -1), 0.0, "no smaller zoom than Fit: stays at Fit in View");
+        assert!(step_zoom(d, 1) > d.fit);
+        d.fit = 0.05;
+        assert!(step_zoom(d, -1) > 0.0 && step_zoom(d, -1) < 0.05, "a Fit above the minimum still steps down");
+    }
+
     #[test]
     fn stack_editing_and_commit_match_the_engine() {
         let ctx = egui::Context::default();
@@ -857,6 +1007,51 @@ mod tests {
         assert_eq!(app.distort.gallery.as_ref().unwrap().effects.len(), 2);
         control(&mut app, &json!({"cancel": true})).unwrap();
         assert_eq!(app.session.active().unwrap().history.past_len(), before + 1, "cancel records nothing");
+    }
+
+    #[test]
+    fn smart_filter_double_click_edits_the_stored_gallery_stack() {
+        let ctx = egui::Context::default();
+        let mut app = app();
+        app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        let stack = json!({"effects": [{"filter": "chrome", "params": {"detail": 2, "smoothness": 9}, "visible": true}], "foreground": [1.0, 0.0, 0.0, 1.0], "background": [0.0, 0.0, 1.0, 1.0]});
+        app.run("filter.filterGallery", stack).unwrap();
+        app.run("filter.blur.gaussianBlur", json!({"radius": 2.0})).unwrap();
+        let layer = app.session.active().unwrap().active_layer.unwrap();
+        let smart = |app: &PhotocraftApp| match &app.session.active().unwrap().doc.layer(layer).unwrap().content {
+            photocraft_doc::LayerContent::Smart(sm) => sm.clone(),
+            _ => panic!("not a smart object"),
+        };
+        let steps = app.session.active().unwrap().history.past_len();
+
+        let sm = smart(&app);
+        crate::smart_ui::open_editor(&mut app, &ctx, layer.0, &sm, 0);
+        assert!(app.ui.dialogs.is_empty(), "no generic parameter form");
+        let d = app.distort.gallery.as_ref().expect("the gallery dialog opens");
+        assert_eq!((d.smart_filter, d.foreground, d.background), (Some(0), [1.0, 0.0, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0]));
+        assert_eq!(d.effects.len(), 1);
+        assert_eq!((d.effects[0].filter, &d.effects[0].params["detail"]), (GalleryFilter::Chrome, &json!(2)));
+        // The preview starts from the pixels below the filter (no blur, no chrome).
+        let below = photocraft_engine::smart_cmds::render_below_filter(&app.session.active().unwrap().doc, &sm, 0).unwrap().unwrap();
+        let d = app.distort.gallery.as_ref().unwrap();
+        assert_eq!(d.src.read_region(d.canvas), below.read_region(d.canvas));
+
+        control(&mut app, &json!({"params": {"detail": 7}})).unwrap();
+        control(&mut app, &json!({"commit": true})).unwrap();
+        assert!(app.distort.gallery.is_none());
+        let sm = smart(&app);
+        assert_eq!(sm.smart_filters.len(), 2, "edited in place, not added");
+        assert_eq!(sm.smart_filters[0].command, "filter.filterGallery");
+        assert_eq!(sm.smart_filters[0].params["effects"][0]["params"]["detail"], json!(7));
+        assert_eq!(sm.smart_filters[0].params["foreground"], json!([1.0, 0.0, 0.0, 1.0]));
+        assert_eq!(app.session.active().unwrap().history.past_len(), steps + 1);
+        app.run("edit.undo", json!({})).unwrap();
+        assert_eq!(smart(&app).smart_filters[0].params["effects"][0]["params"]["detail"], json!(2));
+
+        // Not a gallery filter / no such filter: an error, no dialog.
+        assert!(open_smart_filter(&mut app, layer, 1).is_err());
+        assert!(open_smart_filter(&mut app, layer, 9).is_err());
+        assert!(app.distort.gallery.is_none());
     }
 
     #[test]

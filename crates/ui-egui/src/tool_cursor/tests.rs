@@ -272,6 +272,40 @@ fn ordinary_brush_cursor_is_not_part_of_the_canvas_draw_list() {
     assert!(output.shapes.iter().any(|s| matches!(s.shape, egui::Shape::Circle(_))), "the full tip is not silently shrunk");
 }
 
+#[test]
+#[cfg(target_os = "linux")]
+fn scaled_wayland_paints_the_brush_outline_instead_of_an_os_bitmap() {
+    // Hyprland ignores the viewport winit sizes cursor bitmaps with: at 1.25 the outline was
+    // 1.25× too large and its centre 0.2 × its half-width right of and below where the brush
+    // painted. Off scale 1 on Wayland the outline is painted at the pointer, at its true size.
+    let run = |ctx: &egui::Context, native_ppp: f32| {
+        let mut input = egui::RawInput::default();
+        input.viewports.entry(egui::ViewportId::ROOT).or_default().native_pixels_per_point = Some(native_ppp);
+        let mut output = ctx.run_ui(input, |ui| {
+            let icon = circle(ui.painter(), pos2(100.0, 100.0), 20.0, false);
+            ui.ctx().set_cursor_icon(icon);
+        });
+        output.textures_delta.clear();
+        let circles: Vec<_> =
+            output.shapes.iter().filter_map(|s| if let egui::Shape::Circle(c) = &s.shape { Some((c.center, c.radius)) } else { None }).collect();
+        (output.platform_output.cursor_image.is_some(), output.platform_output.cursor_icon, circles)
+    };
+    let ctx = egui::Context::default();
+    ctx.add_plugin(CursorLifecycle);
+    set_wayland(&ctx, true);
+    for ppp in [1.25, 1.5, 2.0] {
+        let (bitmap, icon, circles) = run(&ctx, ppp);
+        assert!(!bitmap, "{ppp}: no OS bitmap");
+        assert_eq!(icon, CursorIcon::None, "{ppp}: the painted outline is the pointer");
+        assert!(!circles.is_empty() && circles.iter().all(|&(c, r)| c == pos2(100.0, 100.0) && r == 20.0), "{ppp}: {circles:?}");
+    }
+    let (bitmap, _, circles) = run(&ctx, 1.0);
+    assert!(bitmap && circles.is_empty(), "Wayland at scale 1 keeps the low-latency bitmap");
+    set_wayland(&ctx, false);
+    let (bitmap, _, circles) = run(&ctx, 1.25);
+    assert!(bitmap && circles.is_empty(), "X11 at 1.25 keeps the bitmap");
+}
+
 /// Run explicitly for visual QA: native cursors are absent from GPU screenshots.
 #[test]
 #[ignore = "writes target/tool-cursor-preview.png for visual inspection"]
@@ -344,6 +378,80 @@ fn harness() -> Harness<'static, crate::PhotocraftApp> {
     h.event(Event::PointerMoved(h.state().last_canvas_rect.center()));
     h.run_steps(3);
     h
+}
+
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn brush_cursor_follows_pen_orientation_6350() {
+    for control in ["penTilt", "rotation"] {
+        let mut h = harness();
+        h.state_mut()
+            .run(
+                "tools.setBrush",
+                json!({"brush": {
+                    "size": 60, "hardness": 1.0, "roundness": 0.25,
+                    "shapeDynamics": {"enabled": true, "angle": {"control": control}}
+                }}),
+            )
+            .unwrap();
+        h.state_mut().stylus.feed.set(Some(crate::stylus::PenSample { tilt_x: 45.0, ..Default::default() }));
+        h.run_steps(3);
+        let initial = h.output().platform_output.cursor_image.clone().expect("initial brush cursor");
+        h.state_mut().stylus.feed.set(Some(crate::stylus::PenSample { tilt_y: -45.0, rotation: 90.0, ..Default::default() }));
+        h.run_steps(3);
+        let turned = h.output().platform_output.cursor_image.clone().expect("turned brush cursor");
+        save_pen_cursor_image(&format!("{control}-initial"), &initial);
+        save_pen_cursor_image(&format!("{control}-turned"), &turned);
+        let pen = h.state().stylus.sample().expect("simulated pen reaches the canvas");
+        assert_eq!((pen.tilt_y, pen.rotation), (-45.0, 90.0));
+        let point = photocraft_paint::StrokePoint { tilt_y: pen.tilt_y, rotation: pen.rotation, ..Default::default() };
+        let step = photocraft_paint::dynamics::StepInput { point, direction: 0.0, initial_direction: 0.0, step: 0 };
+        let mut dabs = Vec::new();
+        photocraft_paint::dynamics::DabBuilder::new(&h.state().session.tools.brush).build(&step, &mut dabs);
+        assert_eq!(dabs.len(), 1);
+        assert!((dabs[0].angle.to_degrees() - 90.0).abs() < 0.001, "painted dab turns: {control}");
+        assert_ne!(initial.rgba, turned.rgba, "cursor must follow pen orientation: {control}");
+        // The dynamically rotated cursor must match the same tip set to that angle directly.
+        h.state_mut().session.tools.brush.shape_dynamics.enabled = false;
+        h.state_mut().session.tools.brush.angle = 90.0;
+        h.run_steps(3);
+        let reference = h.output().platform_output.cursor_image.clone().expect("static rotated reference");
+        assert_eq!(turned.size, reference.size);
+        assert_eq!(turned.hotspot, reference.hotspot);
+        assert_eq!(turned.rgba, reference.rgba, "dynamic cursor matches the dab angle: {control}");
+    }
+}
+
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn round_cursor_shows_brush_projection_6350() {
+    let mut h = harness();
+    h.state_mut().session.tools.brush.shape_dynamics.enabled = true;
+    h.state_mut().session.tools.brush.shape_dynamics.brush_projection = true;
+    h.state_mut().stylus.feed.set(Some(crate::stylus::PenSample::default()));
+    h.run_steps(3);
+    let upright = h.output().platform_output.cursor_image.clone().unwrap();
+    h.state_mut().stylus.feed.set(Some(crate::stylus::PenSample { tilt_x: 60.0, ..Default::default() }));
+    h.run_steps(3);
+    let tilted = h.output().platform_output.cursor_image.clone().unwrap();
+    save_pen_cursor_image("projection-upright", &upright);
+    save_pen_cursor_image("projection-tilted", &tilted);
+    assert_ne!(upright.rgba, tilted.rgba, "a projected round brush must not keep a circular cursor");
+    h.state_mut().stylus.feed.set(None);
+    h.run_steps(3);
+    assert_eq!(upright.rgba, h.output().platform_output.cursor_image.clone().unwrap().rgba, "mouse restores the unprojected tip");
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn save_pen_cursor_image(name: &str, cursor: &egui::CustomCursorImage) {
+    let Some(dir) = std::env::var_os("PHOTOCRAFT_CURSOR_OUTPUT") else { return };
+    let dir = std::path::PathBuf::from(dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let image =
+        photocraft_codecs::Image::from_u8(u32::from(cursor.size[0]), u32::from(cursor.size[1]), photocraft_codecs::ChannelLayout::Rgba, cursor.rgba.to_vec())
+            .unwrap();
+    let png = photocraft_codecs::encode(&image, photocraft_codecs::Format::Png, &Default::default()).unwrap();
+    std::fs::write(dir.join(format!("{name}.png")), png).unwrap();
 }
 
 #[test]
@@ -457,4 +565,54 @@ fn circle_bitmaps_evaluate_only_the_ring_and_match_every_pixel() {
             }
         }
     }
+}
+
+/// The arrow is the handle's direction as the view shows it: turned with a rotated view and
+/// mirrored with a flipped one.
+#[test]
+fn resize_follows_the_view() {
+    use CursorIcon::{ResizeHorizontal as H, ResizeNeSw as NeSw, ResizeNwSe as NwSe, ResizeVertical as V};
+    let view = |rotation: f32, flip: bool| ViewXform {
+        rect: egui::Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0)),
+        zoom: 1.0,
+        center: [0.0, 0.0],
+        flip,
+        rotation,
+        aspect: 1.0,
+    };
+    // Right, down-right, down and down-left in the document.
+    let directions = [[1.0, 0.0], [1.0, 1.0], [0.0, 1.0], [-1.0, 1.0]];
+    for (rotation, flip, want) in
+        [(0.0, false, [H, NwSe, V, NeSw]), (90.0, false, [V, NeSw, H, NwSe]), (45.0, false, [NwSe, V, NeSw, H]), (0.0, true, [H, NeSw, V, NwSe])]
+    {
+        let got = directions.map(|d| resize(d, &view(rotation, flip)));
+        assert_eq!(got, want, "view turned {rotation}°, flip {flip}");
+    }
+}
+
+#[test]
+fn type_path_cursors_are_small_and_centred() {
+    for rings in [super::area_type_rings(), super::path_type_rings()] {
+        assert!(rings.len() > 3);
+        for v in rings.iter().flatten() {
+            assert!(v.x.abs() <= 12.0 && v.y.abs() <= 12.0, "{v:?}");
+        }
+    }
+}
+
+#[test]
+fn the_pointer_belongs_to_another_window_from_its_report_until_this_one_hears_it_again() {
+    // The main window, then a floating panel's window over it, the desktop, and back.
+    let mut state = false;
+    let mut frame = |here, there| {
+        state = elsewhere(state, here, there);
+        state
+    };
+    assert!(!frame(true, false), "over the main window");
+    assert!(frame(true, true), "crossing into the floating window");
+    assert!(frame(false, true), "moving in the floating window");
+    assert!(frame(false, false), "on the desktop: the main window still heard nothing");
+    assert!(!frame(true, false), "back over the main window");
+    let float = Some(egui::Rect::from_min_size(egui::pos2(100.0, 100.0), egui::vec2(200.0, 300.0)));
+    assert!(covers(float, Some(egui::pos2(150.0, 150.0))) && !covers(float, Some(egui::pos2(98.0, 150.0))), "just outside its edge stays here");
 }

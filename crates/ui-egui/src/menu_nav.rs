@@ -50,13 +50,17 @@ pub struct Row {
     pub command: Option<String>,
     /// Where it was drawn (scrolled out of view when outside its level's `views` rect).
     pub rect: Rect,
+    /// The letter that runs it from the keyboard ([`crate::menu_keys`]), upper case.
+    pub mnemonic: Option<char>,
 }
 
 /// Keyboard / highlight state of the open menu.
 #[derive(Clone, Debug, Default)]
 pub struct Nav {
     /// The open top-level menu (index into the menu bar).
-    top: Option<usize>,
+    pub(crate) top: Option<usize>,
+    /// Underline the rows' mnemonics this frame ([`crate::menu_keys`]).
+    pub underline: bool,
     /// Popup ids of the top-level menus, from the last frame.
     tops: Vec<Id>,
     /// The level the arrow keys move in (0 = the top-level menu).
@@ -89,11 +93,11 @@ pub struct Nav {
 }
 
 fn nav_id() -> Id {
-    Id::new("pc-menu-nav")
+    Id::unique("pc-menu-nav")
 }
 
 fn open_id() -> Id {
-    Id::new("pc-menu-open")
+    Id::unique("pc-menu-open")
 }
 
 /// Is one of the menu bar's menus open? (Shortcuts leave the keys to it meanwhile.)
@@ -146,7 +150,15 @@ impl Nav {
     /// Draw a row of `level` with `add`, highlighted like a hovered row when the keyboard (or the
     /// pointer) is on it, and register it for the keys. `add` returns the row's response. A row
     /// without a `command` opens a submenu.
-    pub fn row<R>(&mut self, ui: &mut Ui, level: usize, enabled: bool, command: Option<&str>, add: impl FnOnce(&mut Ui, &mut Nav) -> (egui::Response, R)) -> R {
+    pub fn row<R>(
+        &mut self,
+        ui: &mut Ui,
+        level: usize,
+        enabled: bool,
+        command: Option<&str>,
+        mnemonic: Option<char>,
+        add: impl FnOnce(&mut Ui, &mut Nav) -> (egui::Response, R),
+    ) -> R {
         let i = self.rows.get(level).map_or(usize::MAX, Vec::len);
         // While a submenu is kept open for the pointer heading to it, its row stays lit and the
         // rows crossed on the way don't light up.
@@ -166,7 +178,7 @@ impl Nav {
             self.aim(level, i, root, open, &r);
         }
         if let Some(rows) = self.rows.get_mut(level) {
-            rows.push(Row { widget: r.id, enabled, command: command.map(str::to_string), rect: r.rect });
+            rows.push(Row { widget: r.id, enabled, command: command.map(str::to_string), rect: r.rect, mnemonic });
             if let Some(index) = held {
                 self.set_hi(level, Some(index));
             } else {
@@ -234,7 +246,11 @@ impl Nav {
     fn after_row(&mut self, level: usize, i: usize, lit: bool, r: &egui::Response) {
         let moved = r.ctx.input(|inp| inp.pointer.delta() != egui::Vec2::ZERO);
         let follow = self.follow == Some(level);
-        if (moved || follow) && r.hovered() && !lit {
+        // `hovered` is false while the primary button is held (egui attributes the pointer to
+        // the pressed widget), so a press-drag through the items never highlighted anything
+        // (#8887). `contains_pointer` keeps answering while a button is down.
+        let over = r.contains_pointer();
+        if (moved || follow) && over && !lit {
             if follow {
                 self.follow = None;
             }
@@ -278,6 +294,24 @@ impl Nav {
     }
 
     /// Open the highlighted submenu of `level` and move the keyboard into it.
+    /// Light the first enabled row of `level` once it has been drawn (a menu opened from the
+    /// keyboard, as on Windows).
+    pub(crate) fn highlight_first(&mut self, level: usize) {
+        self.first_at = Some(level);
+    }
+
+    /// The enabled row of the level the arrows are in whose mnemonic is `c`.
+    pub(crate) fn row_with_mnemonic(&self, c: char) -> Option<Row> {
+        let level = self.level.min(self.rows.len().saturating_sub(1));
+        self.rows.get(level)?.iter().find(|r| r.enabled && r.mnemonic == Some(c)).cloned()
+    }
+
+    /// Open the submenu of row `widget` of the level the arrows are in.
+    pub(crate) fn open_sub_row(&mut self, ctx: &egui::Context, widget: Id) {
+        let level = self.level.min(self.rows.len().saturating_sub(1));
+        self.open_sub(ctx, level, widget);
+    }
+
     fn open_sub(&mut self, ctx: &egui::Context, level: usize, widget: Id) {
         let Some(&root) = self.roots.get(level) else { return };
         let sub = SubMenu::id_from_widget_id(widget);
@@ -306,7 +340,10 @@ impl Nav {
         let Some(top) = self.top.filter(|_| !tops.is_empty()) else { return };
         let level = self.level.min(self.rows.len().saturating_sub(1));
         self.level = level;
-        let press = |k: Key| ctx.input_mut(|i| i.consume_key(Modifiers::NONE, k));
+        // A text field in the menu (Help › Search) keeps the keys that edit it: ← / → move its
+        // cursor and Space types a space.
+        let typing = ctx.text_edit_focused();
+        let press = |k: Key| !(typing && matches!(k, Key::ArrowLeft | Key::ArrowRight | Key::Space)) && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, k));
         let current = self.highlighted(level).and_then(|i| self.rows.get(level)?.get(i)).cloned();
         let switch = |by: usize| {
             let n = tops.len();
@@ -425,14 +462,14 @@ pub fn level_room_in(screen: Rect, visible: Rect, bar_bottom: Option<f32>, depth
 pub fn level(ui: &mut Ui, depth: usize, nav: &mut Nav, rows: impl FnOnce(&mut Ui, &mut Nav)) {
     let ctx = ui.ctx().clone();
     let level = depth.saturating_sub(1);
-    nav.begin_level(level, find_menu_root(ui).id);
+    nav.begin_level(level, find_menu_root(ui).scope_id);
     let screen = ctx.content_rect();
     // Only the part of the window on its monitor, clear of the taskbar, can be seen (#315).
     let visible = crate::work_area::visible_rect(&ctx);
     // The menu frame's margin and stroke around the rows.
     let frame = ui.spacing().menu_margin.sum().y + 2.0;
     let anchor = nav.anchors.get(level).copied().flatten();
-    let key = ui.id().with(("pc-menu-level", depth));
+    let key = ui.scope_id().with(("pc-menu-level", depth));
     // Rows' height from the last frame: does this level overflow?
     let content: Option<f32> = ctx.data(|d| d.get_temp(key));
     let room = level_room_in(screen, visible, nav.bar_bottom, depth, anchor, content, frame);
@@ -444,12 +481,18 @@ pub fn level(ui: &mut Ui, depth: usize, nav: &mut Nav, rows: impl FnOnce(&mut Ui
     // pt, on the first): a scroll area never grows past that, so every menu stuck at that height
     // and scrolled even on a tall window (#235). Ask for the room the window has; auto-shrink then
     // fits the area to its rows, so a menu scrolls only when they don't fit.
-    let out = egui::ScrollArea::vertical()
+    // egui 0.37 made `ScrollAreaState::offset` private: a scroll target requested by last
+    // frame's arrows is applied through the builder instead of writing the stored state.
+    let mut area = egui::ScrollArea::vertical()
         .id_salt(("menu-level", depth))
         .max_height(height)
         .min_scrolled_height(height)
-        .scroll_source(egui::containers::scroll_area::ScrollSource::ALL)
-        .show(ui, |ui| rows(ui, nav));
+        .scroll_source(egui::containers::scroll_area::ScrollSource::ALL);
+    if let Some(target) = ctx.data(|d| d.get_temp::<f32>(scroll_request_id(key))) {
+        area = area.vertical_scroll_offset(target);
+    }
+    let out = area.show(ui, |ui| rows(ui, nav));
+    ctx.data_mut(|d| d.remove_temp::<f32>(scroll_request_id(key)));
     let down = over.then(|| ui.allocate_exact_size(vec2(0.0, ARROW), Sense::hover()).0);
     ctx.data_mut(|d| d.insert_temp(key, out.content_size.y));
     if let Some(v) = nav.views.get_mut(level) {
@@ -468,7 +511,7 @@ pub fn level(ui: &mut Ui, depth: usize, nav: &mut Nav, rows: impl FnOnce(&mut Ui
     let t = crate::theme::Tokens::get(&ctx);
     let x = ui.min_rect().x_range();
     let max = (out.content_size.y - out.inner_rect.height()).max(0.0);
-    let offset = out.state.offset.y;
+    let offset = out.state.clamped_offset().y;
     let dt = ctx.input(|i| i.stable_dt).clamp(0.0, 0.1);
     let mut target = offset;
     for (strip, dir, live) in [(up, -1.0, offset > 0.5), (down, 1.0, offset < max - 0.5)] {
@@ -484,7 +527,7 @@ pub fn level(ui: &mut Ui, depth: usize, nav: &mut Nav, rows: impl FnOnce(&mut Ui
         let id = key.with(dir < 0.0);
         let r = ui.interact(strip, id, Sense::hover());
         let label = if dir < 0.0 { "Scroll menu up" } else { "Scroll menu down" };
-        r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, live, tl!(label)));
+        r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, live, tl!(label)));
         if live && pointer_on(ui, strip) {
             target = (offset + dir * SPEED * dt.max(1.0 / 120.0)).clamp(0.0, max);
             ctx.request_repaint();
@@ -498,10 +541,15 @@ pub fn level(ui: &mut Ui, depth: usize, nav: &mut Nav, rows: impl FnOnce(&mut Ui
         }
     }
     if target != offset {
-        let mut st = out.state;
-        st.offset.y = target;
-        st.store(&ctx, out.id);
+        // Applied to the scroll area on its next frame (egui 0.37 keeps the offset private).
+        ctx.data_mut(|d| d.insert_temp(scroll_request_id(key), target));
+        ctx.request_repaint();
     }
+}
+
+/// The temp key that carries an arrow/wheel scroll target to the next `ScrollArea` build.
+fn scroll_request_id(key: egui::Id) -> egui::Id {
+    key.with("scroll-request")
 }
 
 #[cfg(test)]

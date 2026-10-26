@@ -145,6 +145,32 @@ mod tests {
     }
 
     #[test]
+    fn opacity_fill_or_a_blend_mode_turn_the_background_into_a_layer() {
+        // Like Photoshop: the Background takes none of them, so it becomes "Layer 0" first.
+        for (key, value) in [("opacity", json!(0.5)), ("fill", json!(0.5)), ("blend", json!("Multiply"))] {
+            let (mut s, [bg, ..]) = with_background();
+            s.execute("layer.setProps", json!({"layer": bg.0, key: value})).unwrap();
+            let l = doc(&s).layer(bg).unwrap();
+            assert!(!doc(&s).is_background(bg) && l.name == "Layer 0", "{key}");
+            assert!(l.opacity < 1.0 || l.fill_opacity < 1.0 || l.blend == photocraft_color::BlendMode::Multiply, "{key}: applied");
+        }
+        // Values that leave its look alone keep it the Background.
+        let (mut s, [bg, ..]) = with_background();
+        s.execute("layer.setProps", json!({"layer": bg.0, "opacity": 1.0, "fill": 1.0, "blend": "Normal", "visible": false})).unwrap();
+        assert!(doc(&s).is_background(bg));
+    }
+
+    #[test]
+    fn select_and_mask_output_to_a_layer_mask_turns_the_background_into_a_layer() {
+        let (mut s, [bg, ..]) = with_background();
+        s.execute("layer.select", json!({"layer": bg.0})).unwrap();
+        s.execute("select.rect", json!({"x": 2, "y": 2, "width": 6, "height": 6})).unwrap();
+        s.execute("select.refineEdge", json!({"output": "layerMask"})).unwrap();
+        let l = doc(&s).layer(bg).unwrap();
+        assert!(l.mask.is_some() && !doc(&s).is_background(bg) && l.name == "Layer 0");
+    }
+
+    #[test]
     fn makes_the_layer_the_background_at_the_bottom() {
         for depth in [8, 16, 32] {
             let (mut s, [l0, a, b]) = session(depth);
@@ -207,7 +233,7 @@ mod tests {
         assert!(s.execute(CMD, json!({"layer": bg.0})).is_err());
         // Bad params.
         let (mut s, [_, a, _]) = session(8);
-        for p in [json!({"layer": "A"}), json!({"layer": -1}), json!({"layer": 1.5}), json!({"layer": 99999}), json!({"layer": [a.0]})] {
+        for p in [json!({"layer": "A"}), json!({"layer": -1}), json!({"layer": 1.5}), json!({"layer": u64::MAX}), json!({"layer": [a.0]})] {
             assert!(s.execute(CMD, p.clone()).is_err(), "{p}");
         }
         assert!(doc(&s).background().is_none());

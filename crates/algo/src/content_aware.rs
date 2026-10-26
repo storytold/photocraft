@@ -114,6 +114,21 @@ struct Variant {
     ok: Vec<bool>,
 }
 
+/// Most pixels the mosaic of the image and its variants may span. It is one dense rectangle, so
+/// thin images turned to different angles leave it mostly empty: the cost grows with the square
+/// of their length, not with their pixels.
+const MAX_MOSAIC_PIXELS: usize = 1 << 25;
+
+/// Size of the mosaic of an `w`×`h` image and `extra` variant sizes separated by `gap`, or `None`
+/// when it spans more than [`MAX_MOSAIC_PIXELS`] (or overflows).
+fn mosaic_size(w: usize, h: usize, gap: usize, extra: &[(usize, usize)]) -> Option<(usize, usize)> {
+    let col_w = extra.iter().map(|v| v.0).max().unwrap_or(0);
+    let col_h = extra.iter().try_fold(0usize, |n, v| n.checked_add(v.1)?.checked_add(gap))?;
+    let mw = w.checked_add(gap)?.checked_add(col_w)?;
+    let mh = h.max(col_h);
+    (mw.checked_mul(mh)? <= MAX_MOSAIC_PIXELS).then_some((mw, mh))
+}
+
 /// A source buffer and which of its pixels may be sampled.
 #[derive(Clone, Copy)]
 struct Src<'a> {
@@ -149,13 +164,20 @@ fn sample(src: Src, x: f32, y: f32, out: &mut [f32]) -> bool {
 
 /// Transformed copy of the source: rotation (degrees) and scale about the centre, optional mirror.
 /// `Err` when cancelled.
-fn variant(src: Src, deg: f32, scale: f32, mirror: bool, ctl: &Interrupt) -> Result<Variant, Cancelled> {
-    let Src { w, h, ch, .. } = src;
+/// Dimensions of the [`variant`] copy: the same bounding-box maths without building its pixels.
+fn variant_dims(w: usize, h: usize, deg: f32, scale: f32) -> (usize, usize) {
     let (s, c) = (-deg.to_radians()).sin_cos();
-    // Output size: the rotated, scaled bounding box.
     let (fw, fh) = (w as f32 * scale, h as f32 * scale);
     let ow = ((fw * c.abs() + fh * s.abs()).round() as usize).max(1);
     let oh = ((fw * s.abs() + fh * c.abs()).round() as usize).max(1);
+    (ow, oh)
+}
+
+fn variant(src: Src, deg: f32, scale: f32, mirror: bool, ctl: &Interrupt) -> Result<Variant, Cancelled> {
+    let Src { w, h, ch, .. } = src;
+    // Output size: the rotated, scaled bounding box.
+    let (ow, oh) = variant_dims(w, h, deg, scale);
+    let (s, c) = (-deg.to_radians()).sin_cos();
     let (icx, icy) = ((w as f32 - 1.0) / 2.0, (h as f32 - 1.0) / 2.0);
     let (ocx, ocy) = ((ow as f32 - 1.0) / 2.0, (oh as f32 - 1.0) / 2.0);
     let mut out = Variant { w: ow, h: oh, img: vec![0.0; ow * oh * ch], ok: vec![false; ow * oh] };
@@ -243,17 +265,27 @@ fn fill_cow(
     let gap = 2 * params.patch_radius + 2;
     let ok: Vec<bool> = par::map(w * h, true, |i| !hole[i] && source[i]);
     let src = Src { w, h, ch, img: &img, ok: &ok };
-    // Variants: the identity (which holds the hole) first, then the adaptations.
-    let mut extra: Vec<Variant> = Vec::new();
+    // Variants: the identity (which holds the hole) first, then the adaptations. Their pixels are
+    // expensive, so the mosaic budget is settled on their dimensions before any variant is built;
+    // when the variants would not fit, the image itself is completed without them.
+    let mut specs: Vec<(f32, f32, bool)> = Vec::new();
     if opts.mirror {
-        extra.push(variant(src, 0.0, 1.0, true, ctl)?);
+        specs.push((0.0, 1.0, true));
     }
     for &deg in &opts.rotations {
-        extra.push(variant(src, deg, 1.0, false, ctl)?);
+        specs.push((deg, 1.0, false));
     }
     if opts.scale {
-        extra.push(variant(src, 0.0, 0.8, false, ctl)?);
-        extra.push(variant(src, 0.0, 1.25, false, ctl)?);
+        specs.push((0.0, 0.8, false));
+        specs.push((0.0, 1.25, false));
+    }
+    let dims: Vec<(usize, usize)> = specs.iter().map(|&(deg, scale, _)| variant_dims(w, h, deg, scale)).collect();
+    let size = if specs.is_empty() { None } else { mosaic_size(w, h, gap, &dims) };
+    let mut extra: Vec<Variant> = Vec::new();
+    if size.is_some() {
+        for &(deg, scale, mirror) in &specs {
+            extra.push(variant(src, deg, scale, mirror, ctl)?);
+        }
     }
     let role = |s: usize| {
         if hole[s] {
@@ -265,14 +297,9 @@ fn fill_cow(
         }
     };
     // Mosaic: identity at the left, variants in a column to its right, gaps that are no image.
-    // Without variants it is the image itself.
-    let (mw, mh, mosaic, roles): (usize, usize, Option<Vec<f32>>, Vec<Px>) = if extra.is_empty() {
-        (w, h, None, par::map(w * h, true, role))
-    } else {
-        let col_w = extra.iter().map(|v| v.w).max().unwrap_or(0);
-        let col_h: usize = extra.iter().map(|v| v.h + gap).sum();
-        let mw = w + gap + col_w;
-        let mh = h.max(col_h);
+    // Without variants it is the image itself; so it is when the variants would not fit
+    // (`size` above is then None and `extra` is empty).
+    let (mw, mh, mosaic, roles): (usize, usize, Option<Vec<f32>>, Vec<Px>) = if let Some((mw, mh)) = size {
         let mut mimg = vec![0.0f32; mw * mh * ch];
         let mut roles = vec![Px::Void; mw * mh];
         for y in 0..h {
@@ -297,6 +324,8 @@ fn fill_cow(
             oy += v.h + gap;
         }
         (mw, mh, Some(mimg), roles)
+    } else {
+        (w, h, None, par::map(w * h, true, role))
     };
     drop((extra, ok));
     ctl.check()?;
@@ -474,8 +503,10 @@ pub fn auto_sampling_with(w: usize, h: usize, ch: usize, img: &[f32], hole: &[bo
     let mut cost_fg = vec![0.0f32; sw * sh];
     let mut cost_bg = vec![0.0f32; sw * sh];
     let mut fixed = vec![FREE; sw * sh];
+    // Always the hole's own edge, and around a thin selection each part's surroundings.
+    let keep = thin_band(sw, sh, &shole);
     for i in 0..sw * sh {
-        if shole[i] || dist[i] <= 1.5 {
+        if shole[i] || dist[i] <= keep {
             fixed[i] = HARD_FG;
             continue;
         }
@@ -506,6 +537,22 @@ pub fn auto_sampling_with(w: usize, h: usize, ch: usize, img: &[f32], hole: &[bo
         return Ok(everything());
     }
     Ok(out)
+}
+
+/// How far around a thin selection (strings, wires, and any small parts selected with them, all
+/// at most a quarter as thick as the selection is long) the Auto area always reaches, in cells of
+/// a `w × h` grid: as far as the selection is thick, so that each part, however far from the
+/// rest, keeps its own surroundings to copy from. 1.5 cells for any other selection.
+fn thin_band(w: usize, h: usize, hole: &[bool]) -> f32 {
+    let inside = crate::selection::edt(&hole.iter().map(|h| !h).collect::<Vec<_>>(), w, h);
+    let thickness = 2.0 * inside.iter().zip(hole).filter(|(_, h)| **h).map(|(d, _)| *d).fold(0.0f32, f32::max);
+    let (mut x0, mut y0, mut x1, mut y1) = (w, h, 0, 0);
+    for (i, _) in hole.iter().enumerate().filter(|(_, h)| **h) {
+        let (x, y) = (i % w, i / w);
+        (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x + 1), y1.max(y + 1));
+    }
+    let extent = x1.saturating_sub(x0).max(y1.saturating_sub(y0)) as f32;
+    if 4.0 * thickness <= extent { thickness.max(1.5) } else { 1.5 }
 }
 
 /// The Patch Tool's and the Content-Aware Move Tool's Color option (0–10) as the colour adaptation
@@ -548,8 +595,149 @@ pub fn level_transform(ch: usize, from: &[f32], to: &[f32], a: Adapt) -> Vec<(f3
         .collect()
 }
 
+/// One stroke of the Content-Aware Fill workspace's Sampling Brush: a hard round brush of
+/// diameter `size` along `points` (document px), adding to the sampling area or taking from it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SamplingStroke {
+    pub add: bool,
+    pub size: f64,
+    pub points: Vec<[f64; 2]>,
+}
+
+impl SamplingStroke {
+    /// Bounds of the pixels the stroke covers.
+    pub fn bounds(&self) -> Rect {
+        let r = (self.size / 2.0).max(0.5);
+        self.points.iter().fold(Rect::EMPTY, |acc, p| {
+            let b = Rect::new(
+                (p[0] - r).floor() as i32,
+                (p[1] - r).floor() as i32,
+                ((p[0] + r).ceil() as i32).saturating_add(1),
+                ((p[1] + r).ceil() as i32).saturating_add(1),
+            );
+            if acc.is_empty() { b } else { acc.union(&b) }
+        })
+    }
+}
+
+/// Squared distance from `p` to the segment `a`–`b`.
+fn seg_dist2(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
+    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+    let l2 = dx * dx + dy * dy;
+    let t = if l2 > 0.0 { (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2).clamp(0.0, 1.0) } else { 0.0 };
+    let (qx, qy) = (a[0] + t * dx - p[0], a[1] + t * dy - p[1]);
+    qx * qx + qy * qy
+}
+
+/// Paint `strokes` in order into `mask` (row-major over `area`): a pixel whose centre lies within
+/// half the brush size of a stroke's path is set (adding) or cleared (subtracting). A mask that
+/// does not cover `area` exactly is left as it is.
+pub fn paint_strokes(mask: &mut [bool], area: Rect, strokes: &[SamplingStroke]) {
+    let w = area.width() as usize;
+    if mask.len() != w * area.height() as usize {
+        return;
+    }
+    for s in strokes {
+        let r = (s.size / 2.0).max(0.5);
+        let r2 = r.powi(2);
+        let segs: Vec<([f64; 2], [f64; 2])> = match s.points.as_slice() {
+            [] => continue,
+            [p] => vec![(*p, *p)],
+            pts => pts.windows(2).map(|p| (p[0], p[1])).collect(),
+        };
+        // A stroke covers the union of its segments' pixels: each segment only looks at its own
+        // bounds.
+        for (a, b) in segs {
+            let bounds = Rect::new(
+                (a[0].min(b[0]) - r).floor() as i32,
+                (a[1].min(b[1]) - r).floor() as i32,
+                ((a[0].max(b[0]) + r).ceil() as i32).saturating_add(1),
+                ((a[1].max(b[1]) + r).ceil() as i32).saturating_add(1),
+            )
+            .intersect(&area);
+            for y in bounds.y0..bounds.y1 {
+                for x in bounds.x0..bounds.x1 {
+                    let c = [f64::from(x) + 0.5, f64::from(y) + 0.5];
+                    if seg_dist2(c, a, b) <= r2
+                        && let Some(m) = mask.get_mut((y - area.y0) as usize * w + (x - area.x0) as usize)
+                    {
+                        *m = s.add;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The pixels of `area` (row-major) whose centres lie inside the polygon `pts` (even-odd rule):
+/// what a lasso outlines.
+pub fn polygon_mask(area: Rect, pts: &[[f64; 2]]) -> Vec<bool> {
+    let (w, h) = (area.width() as usize, area.height() as usize);
+    let mut out = vec![false; w * h];
+    if pts.len() < 3 {
+        return out;
+    }
+    let mut xs: Vec<f64> = Vec::new();
+    for row in 0..h {
+        let cy = f64::from(area.y0) + row as f64 + 0.5;
+        xs.clear();
+        for i in 0..pts.len() {
+            let (a, b) = (pts[i], pts[(i + 1) % pts.len()]);
+            if (a[1] <= cy) != (b[1] <= cy) {
+                xs.push(a[0] + (cy - a[1]) / (b[1] - a[1]) * (b[0] - a[0]));
+            }
+        }
+        xs.sort_by(f64::total_cmp);
+        for pair in xs.as_chunks::<2>().0 {
+            // Pixel centres x + 0.5 within [pair0, pair1).
+            let x0 = ((pair[0] - 0.5).ceil() as i64 - i64::from(area.x0)).clamp(0, w as i64) as usize;
+            let x1 = ((pair[1] - 0.5).ceil() as i64 - i64::from(area.x0)).clamp(0, w as i64) as usize;
+            out[row * w + x0..row * w + x1.max(x0)].iter_mut().for_each(|v| *v = true);
+        }
+    }
+    out
+}
+
+/// Grow (`by` > 0) or shrink (`by` < 0) a mask by `|by|` pixels (Euclidean): the lasso's Expand
+/// and Contract.
+pub fn grow_mask(mask: &[bool], w: usize, h: usize, by: i32) -> Vec<bool> {
+    if by == 0 || w == 0 || h == 0 {
+        return mask.to_vec();
+    }
+    let r = f32::from(u16::try_from(by.unsigned_abs()).unwrap_or(u16::MAX));
+    if by > 0 {
+        let d = crate::selection::edt(mask, w, h);
+        d.iter().map(|v| *v <= r).collect()
+    } else {
+        let outside: Vec<bool> = mask.iter().map(|v| !v).collect();
+        let d = crate::selection::edt(&outside, w, h);
+        d.iter().map(|v| *v > r).collect()
+    }
+}
+
+/// The Sampling Brush's starting size for a selection with bounds `hole`: a tenth of the sampling
+/// window's side, as Photoshop opens the workspace (20 px for a 50 px selection, 40 for 100).
+pub fn default_brush_size(hole: Rect) -> f64 {
+    let (w, h) = (f64::from(hole.width().max(50)), f64::from(hole.height().max(50)));
+    (0.4 * (w * h).sqrt()).round()
+}
+
 #[cfg(test)]
 mod tests {
+    use super::mosaic_size;
+
+    fn blank(w: usize, h: usize) -> (usize, usize) {
+        (w, h)
+    }
+
+    #[test]
+    fn a_thin_image_with_turned_variants_does_not_get_a_quadratic_mosaic() {
+        // 40000×1 plus its 90° copy (1×40000): about 1.6 billion mosaic cells for 80000 pixels.
+        assert_eq!(mosaic_size(40_000, 1, 8, &[blank(1, 40_000)]), None);
+        assert_eq!(mosaic_size(usize::MAX, 1, 8, &[blank(1, 1)]), None);
+        assert_eq!(mosaic_size(100, 100, 8, &[blank(100, 100)]), Some((208, 108)));
+    }
+
     use super::*;
 
     /// Vertical stripes (period 6) in grey, with a hole in the middle.
@@ -557,6 +745,43 @@ mod tests {
         let img: Vec<f32> = (0..w * h).map(|i| if (i % w) % 6 < 3 { 0.2 } else { 0.8 }).collect();
         let hole: Vec<bool> = (0..w * h).map(|i| (i % w).abs_diff(w / 2) < 4 && (i / w).abs_diff(h / 2) < 4).collect();
         (img, hole)
+    }
+
+    #[test]
+    fn strokes_paint_their_path_and_leave_a_mismatched_mask_alone() {
+        let area = Rect::new(10, 20, 50, 40);
+        let (w, h) = (40, 20);
+        let strokes = [
+            SamplingStroke { add: true, size: 6.0, points: vec![[12.0, 25.0], [40.0, 25.0], [45.0, 35.0]] },
+            SamplingStroke { add: false, size: 3.0, points: vec![[30.0, 25.0]] },
+            SamplingStroke { add: true, size: 2.0, points: Vec::new() },
+        ];
+        let mut mask = vec![false; w * h];
+        paint_strokes(&mut mask, area, &strokes);
+        // The same pixels as testing every pixel against every segment of each stroke in turn.
+        let mut want = vec![false; w * h];
+        for s in &strokes {
+            let r2 = (s.size / 2.0).max(0.5).powi(2);
+            let segs: Vec<_> = if s.points.len() == 1 { vec![(s.points[0], s.points[0])] } else { s.points.windows(2).map(|p| (p[0], p[1])).collect() };
+            for (i, m) in want.iter_mut().enumerate() {
+                let c = [f64::from(area.x0) + (i % w) as f64 + 0.5, f64::from(area.y0) + (i / w) as f64 + 0.5];
+                if segs.iter().any(|(a, b)| seg_dist2(c, *a, *b) <= r2) {
+                    *m = s.add;
+                }
+            }
+        }
+        assert_eq!(mask, want);
+        assert!(mask[5 * w + 10] && !mask[5 * w + 20], "added along the path, cleared under the subtracting dab");
+        // A mask shorter or longer than the area is not touched (and nothing panics).
+        for len in [0, 7, w * h - 1, w * h + 3] {
+            let mut short = vec![false; len];
+            paint_strokes(&mut short, area, &strokes);
+            assert!(short.iter().all(|v| !v), "len {len}");
+        }
+        // Hostile coordinates stay inside the area.
+        let mut m = vec![false; w * h];
+        let wild = [SamplingStroke { add: true, size: 5000.0, points: vec![[f64::MAX, -1e300], [f64::NAN, 1e7]] }];
+        paint_strokes(&mut m, area, &wild);
     }
 
     #[test]
@@ -752,6 +977,31 @@ mod tests {
     }
 
     #[test]
+    fn auto_sampling_keeps_the_surroundings_of_every_part_of_a_thin_selection() {
+        // A long thin selection across a grey ramp, and a small knob selected with it in a red
+        // corner. Each part keeps its own surroundings; a compact selection is unchanged.
+        let (w, h) = (900, 600);
+        let tex = noise(w, h, 4);
+        let img: Vec<f32> = (0..w * h * 3)
+            .map(|i| {
+                let (x, y, c) = ((i / 3) % w, (i / 3) / w, i % 3);
+                let base = if x > 690 && y > 420 { [0.7, 0.25, 0.2][c] } else { 0.2 + 0.5 * x as f32 / w as f32 };
+                base + (tex[i] - 0.5) * 0.04
+            })
+            .collect();
+        let line = |i: usize| (30..870).contains(&(i % w)) && (180..192).contains(&(i / w));
+        let knob = |i: usize| ((i % w) as f32 - 795.0).hypot((i / w) as f32 - 510.0) < 10.0;
+        let hole: Vec<bool> = (0..w * h).map(|i| line(i) || knob(i)).collect();
+        let area = auto_sampling(w, h, 3, &img, &hole);
+        let around_knob = (0..w * h).filter(|&i| !hole[i] && ((i % w) as f32 - 795.0).hypot((i / w) as f32 - 510.0) < 24.0);
+        let (n, kept) = around_knob.fold((0, 0), |(n, k), i| (n + 1, k + usize::from(area[i])));
+        assert!(kept as f32 > 0.9 * n as f32, "{kept} of {n} pixels around the knob");
+        assert!(thin_band(w, h, &hole) >= 20.0, "{}", thin_band(w, h, &hole));
+        let disc: Vec<bool> = (0..w * h).map(|i| ((i % w) as f32 - 450.0).hypot((i / w) as f32 - 300.0) < 90.0).collect();
+        assert_eq!(thin_band(w, h, &disc), 1.5);
+    }
+
+    #[test]
     fn without_colour_adaptation_the_fill_copies_pixels_exactly() {
         // A smooth texture with fine noise, so that every value is unique: a filled pixel equal to
         // an image pixel was copied from it. Photoshop's fill (colour adaptation None) is such
@@ -796,6 +1046,116 @@ mod tests {
         assert_eq!(shift(0), 0.0);
         assert!((shift(3) - 0.12).abs() < 0.01, "{}", shift(3));
         assert!((shift(10) - 0.4).abs() < 0.01, "{}", shift(10));
+    }
+
+    /// A soft background (gradients, broad out-of-focus blobs of colour, fine noise) with thin, long bright
+    /// objects over it: three coiled strings 3 to 7 px wide and two straighter ones, each with an
+    /// anti-aliased edge and a faint halo. Returns the image; what removing the coils should give
+    /// (the background and the straighter strings, which stay); and the selection a user would draw
+    /// around the coils, `margin` px wide.
+    fn strings_scene(w: usize, h: usize, margin: f32) -> (Vec<f32>, Vec<f32>, Vec<bool>) {
+        let fine = noise(w, h, 11);
+        // Out-of-focus colour: broad blobs over two gradients.
+        let blob = noise(3, 3, 5);
+        let bg: Vec<f32> = (0..w * h * 3)
+            .map(|i| {
+                let (x, y, c) = (((i / 3) % w) as f32 / w as f32, ((i / 3) / w) as f32 / h as f32, i % 3);
+                let mut v = [0.18 + 0.25 * x, 0.22 + 0.1 * y, 0.3 - 0.1 * x][c];
+                for b in blob.as_chunks::<3>().0 {
+                    let (bx, by, s) = (b[0] * 1.6 - 0.3, b[1] * 1.6 - 0.3, 0.1 + 0.25 * b[2]);
+                    v += (b[(c + 1) % 3] - 0.2) * 0.5 * (-((x - bx).powi(2) + (y - by).powi(2) * 0.56) / (2.0 * s * s)).exp();
+                }
+                v + (fine[i] - 0.5) * 0.03
+            })
+            .collect();
+        // Signed distance to each object's surface, stamped from points along it.
+        let stamp = |sd: &mut [f32], pts: &mut dyn Iterator<Item = (f32, f32)>, half: f32| {
+            for (px, py) in pts {
+                let reach = (half + 4.0) as i32 + 1;
+                for dy in -reach..=reach {
+                    for dx in -reach..=reach {
+                        let (x, y) = (px as i32 + dx, py as i32 + dy);
+                        if x >= 0 && y >= 0 && (x as usize) < w && (y as usize) < h {
+                            let i = y as usize * w + x as usize;
+                            sd[i] = sd[i].min((x as f32 - px).hypot(y as f32 - py) - half);
+                        }
+                    }
+                }
+            }
+        };
+        let mut coils = vec![f32::INFINITY; w * h];
+        for (k, half) in [1.5f32, 2.5, 3.5].into_iter().enumerate() {
+            let (y0, r) = ((0.22 + 0.28 * k as f32) * h as f32, 10.0 + 2.0 * k as f32);
+            let mut pts = (0..4000).map(|j| {
+                let t = j as f32 / 4000.0;
+                let a = 8.0 * std::f32::consts::TAU * t;
+                (18.0 + t * (w as f32 - 60.0) + r * a.cos(), y0 + 6.0 * (6.0 * t).sin() + 0.7 * r * a.sin())
+            });
+            stamp(&mut coils, &mut pts, half);
+        }
+        let mut straight = vec![f32::INFINITY; w * h];
+        for y in [0.07, 0.93] {
+            stamp(&mut straight, &mut (0..2000).map(|j| (j as f32 / 2000.0 * w as f32, y * h as f32 + 3.0 * (j as f32 / 300.0).sin())), 2.0);
+        }
+        let draw = |base: &[f32], sd: &[f32]| -> Vec<f32> {
+            let mut img = base.to_vec();
+            for i in 0..w * h {
+                let cover = (0.5 - sd[i]).clamp(0.0, 1.0);
+                let halo = if sd[i] > 0.0 { 0.08 * (-sd[i] * sd[i] / 2.9).exp() } else { 0.0 };
+                for (c, metal) in [0.9f32, 0.85, 0.7].into_iter().enumerate() {
+                    let v = &mut img[i * 3 + c];
+                    *v = *v * (1.0 - cover) + metal * cover + halo * (1.0 - cover);
+                }
+            }
+            img
+        };
+        let clean = draw(&bg, &straight);
+        let both: Vec<f32> = coils.iter().zip(&straight).map(|(a, b)| a.min(*b)).collect();
+        let img = draw(&bg, &both);
+        let hole = coils.iter().map(|d| *d <= margin).collect();
+        (img, clean, hole)
+    }
+
+    /// RMS over the hole of the error averaged over 7 × 7 pixels (in levels of 255): the noise
+    /// cancels out, a ghost of the removed outline or a blotch of another shade does not.
+    fn blotch_error(w: usize, h: usize, out: &[f32], clean: &[f32], hole: &[bool]) -> f32 {
+        let (mut sum, mut n) = (0.0f64, 0usize);
+        for y in 3..h - 3 {
+            for x in 3..w - 3 {
+                if !hole[y * w + x] {
+                    continue;
+                }
+                let mut e = [0.0f32; 3];
+                for j in (y - 3..=y + 3).flat_map(|yy| (x - 3..=x + 3).map(move |xx| yy * w + xx)) {
+                    for (c, ec) in e.iter_mut().enumerate() {
+                        *ec += out[j * 3 + c] - clean[j * 3 + c];
+                    }
+                }
+                sum += f64::from(e.iter().map(|v| (v / 49.0).powi(2)).sum::<f32>() / 3.0);
+                n += 1;
+            }
+        }
+        ((sum / n.max(1) as f64).sqrt() * 255.0) as f32
+    }
+
+    /// Removing thin, long objects (guitar strings, wires) from a soft background (#1366): the
+    /// fill is the background, with no ghost of their outline and nothing of their colour copied
+    /// back in. Their selection is long but only a few pixels thick, so the fill is worked out at
+    /// a scale where it is still a few pixels thick rather than one where the strings' surroundings
+    /// have merged into a blur.
+    #[test]
+    fn thin_objects_leave_no_ghost_and_none_of_their_colour() {
+        let (w, h) = (360, 270);
+        let (img, clean, hole) = strings_scene(w, h, 2.0);
+        let source = auto_sampling(w, h, 3, &img, &hole);
+        let out = fill(w, h, 3, &img, &hole, &source, &FillOptions::default());
+        let blotch = blotch_error(w, h, &out, &clean, &hole);
+        let luma = |v: &[f32], i: usize| (v[i * 3] + v[i * 3 + 1] + v[i * 3 + 2]) / 3.0;
+        let bright = (0..w * h).filter(|&i| hole[i] && luma(&out, i) > luma(&clean, i) + 0.06).count();
+        // Before #1366 the outlines stayed as darker and lighter blotches (13 levels of 255) and
+        // 1121 pixels took the strings' colour.
+        assert!(blotch < 2.5, "ghosts and blotches: {blotch:.2} levels of 255");
+        assert_eq!(bright, 0, "filled pixels with the strings' colour");
     }
 
     #[test]

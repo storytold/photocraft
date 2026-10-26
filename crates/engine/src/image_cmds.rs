@@ -1,6 +1,8 @@
 //! Image menu: Image Size, Canvas Size, Crop, Trim, Mode (colour model and
 //! bit depth) conversions, Duplicate.
 
+use std::convert::Infallible;
+
 use photocraft_algo::resample::{Resample, crop_surface, resize_surface_in_canvas, translate_surface};
 use photocraft_color::{ColorMode, SampleType};
 use photocraft_doc::{Document, Effect, Effects, FxPaint, Layer, LayerContent, LayerId, Size};
@@ -16,7 +18,8 @@ fn has_doc(s: &Session) -> std::result::Result<(), String> {
 }
 
 /// Applies `f` to every pixel surface of a layer tree: content (raster or
-/// cached text/shape/smart pixels), fill caches, and (if `masks`) masks.
+/// cached text/shape/smart pixels), fill caches, stored video frames (current and original),
+/// and (if `masks`) masks.
 pub(crate) fn for_each_surface(layers: &mut [Layer], masks: bool, f: &mut dyn FnMut(&mut Surface, bool)) {
     for l in layers {
         if masks && let Some(m) = &mut l.mask {
@@ -24,6 +27,13 @@ pub(crate) fn for_each_surface(layers: &mut [Layer], masks: bool, f: &mut dyn Fn
         }
         if let Some(fc) = &mut l.fill_cache {
             f(&mut fc.surface, false);
+        }
+        // The displayed content is only a copy of the frame at the playhead; the other frames
+        // would keep the old geometry and depth and come back stale when scrubbing (#4956).
+        if let Some(v) = &mut l.video {
+            for frame in v.frames.iter_mut().chain(v.original_frames.iter_mut().flatten()) {
+                f(frame, false);
+            }
         }
         match &mut l.content {
             LayerContent::Raster(s) => f(s, false),
@@ -54,6 +64,18 @@ pub(crate) fn for_each_surface(layers: &mut [Layer], masks: bool, f: &mut dyn Fn
     }
 }
 
+/// Drops every fill cache of a layer tree. A fill layer covers the whole canvas, but its cache
+/// (the pixels a PSD stored) only the old one: after the canvas grows the fill must re-render
+/// from its model, or the added area stays transparent (#7362).
+fn drop_fill_caches(layers: &mut [Layer]) {
+    for l in layers {
+        l.fill_cache = None;
+        if let LayerContent::Group(g) = &mut l.content {
+            drop_fill_caches(&mut g.children);
+        }
+    }
+}
+
 /// Converts every pixel surface of a layer tree (masks included) to `depth`.
 pub(crate) fn convert_layers_depth(layers: &mut [Layer], depth: SampleType) {
     for_each_surface(layers, true, &mut |surf, _| {
@@ -71,11 +93,12 @@ pub(crate) fn for_each_layer(layers: &mut [Layer], f: &mut dyn FnMut(&mut Layer)
     }
 }
 
-/// Assign new layer ids to a copied document and update every saved layer-comp reference.
+/// Assign new layer ids to a copied document and update every saved layer reference.
 ///
-/// A document copy needs fresh identities, but its comps must still target the copied
-/// layers. Deliberately leave references to already-deleted layers untouched so their
-/// missing-layer warnings remain meaningful. The same applies to Last Document State.
+/// A document copy needs fresh identities, but its comps and variable definitions must
+/// still target the copied layers. Deliberately leave references to already-deleted
+/// layers untouched so their missing-layer warnings remain meaningful. The same applies
+/// to Last Document State.
 pub(crate) fn reidentify_copied_layers(doc: &mut Document) {
     let mut ids = std::collections::HashMap::new();
     for_each_layer(&mut doc.layers, &mut |layer| {
@@ -96,6 +119,16 @@ pub(crate) fn reidentify_copied_layers(doc: &mut Document) {
     }
     if let Some(last) = &mut doc.last_document_state {
         remap(last);
+    }
+    for def in &mut doc.variables.defs {
+        if let Some(&new_id) = ids.get(&def.layer) {
+            def.layer = new_id;
+        }
+    }
+    for slice in &mut doc.slices.list {
+        if let Some(&new_id) = slice.layer.and_then(|layer| ids.get(&layer)) {
+            slice.layer = Some(new_id);
+        }
     }
 }
 
@@ -165,6 +198,12 @@ fn image_size(s: &mut Session, p: &Value) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let (ow, oh) = (d.doc.size.width, d.doc.size.height);
     let resample = parse_resample(p.get("resample").and_then(Value::as_str).unwrap_or("bicubic"));
+    // An Indexed Color document holds only its colour table's colours, and a save quantises to
+    // them: interpolation showed blends that the saved file didn't have (#6019).
+    let resample = match resample {
+        Method::Filter(_) | Method::Automatic if d.doc.mode == ColorMode::Indexed => Method::Filter(Resample::Nearest),
+        m => m,
+    };
     let mut pw = p.get("width").and_then(Value::as_f64);
     let mut ph = p.get("height").and_then(Value::as_f64);
     // `percent` scales both sides (what a Photoshop action records as "200%"); an explicit side wins.
@@ -206,7 +245,8 @@ fn image_size(s: &mut Session, p: &Value) -> Result<Value> {
     }
     s.edit("Image Size", |doc, _| {
         if let Some(r) = dpi {
-            doc.resolution_dpi = r.clamp(1.0, 10_000.0);
+            // Type keeps its pixel size; resampling below then scales it with the pixels.
+            crate::canvas_geom::set_resolution(doc, r.clamp(1.0, 10_000.0));
         }
         let filter = match resample {
             Method::None => return Ok(()),
@@ -235,10 +275,23 @@ pub(crate) fn check_resample_budget(cmd: &str, doc: &Document, nw: u32, nh: u32,
     Err(bad(cmd, format!("{nw} x {nh} px is {mp} megapixels; resampling at this bit depth is limited to {max_mp} megapixels. Choose a smaller size{hint}")))
 }
 
+/// Like [`check_resample_budget`] for a command that, besides resampling the document to
+/// `nw` x `nh` px, holds `work_bytes_per_px` more bytes per pixel of full-canvas working buffers
+/// (a composite, a mask, an output layer) at once.
+pub(crate) fn check_working_budget(cmd: &str, doc: &Document, nw: u32, nh: u32, work_bytes_per_px: u64, hint: &str) -> Result<()> {
+    let bpp = (doc.pixel_format().bytes_per_pixel().max(1) as u64).saturating_add(work_bytes_per_px);
+    let px = u64::from(nw).saturating_mul(u64::from(nh));
+    if px.saturating_mul(bpp) <= MAX_RESAMPLE_BYTES {
+        return Ok(());
+    }
+    let max_mp = MAX_RESAMPLE_BYTES / bpp / 1_000_000;
+    Err(bad(cmd, format!("{nw} x {nh} px is {} megapixels; this conversion is limited to {max_mp} megapixels. Choose a smaller size{hint}", px / 1_000_000)))
+}
+
 /// Resamples the whole document (pixels, masks, channels, selection, effects, vectors, guides) to
 /// `nw` x `nh` px with `filter`: the body of Image Size, shared by the Crop tool's W x H x Resolution
 /// mode. Callers check [`check_resample_budget`] first.
-fn resample_doc(doc: &mut Document, nw: u32, nh: u32, filter: Resample) {
+pub(crate) fn resample_doc(doc: &mut Document, nw: u32, nh: u32, filter: Resample) {
     let (ow, oh) = (doc.size.width, doc.size.height);
     let (sx, sy) = (nw as f64 / ow.max(1) as f64, nh as f64 / oh.max(1) as f64);
     if (sx - 1.0).abs() < 1e-12 && (sy - 1.0).abs() < 1e-12 {
@@ -246,11 +299,21 @@ fn resample_doc(doc: &mut Document, nw: u32, nh: u32, filter: Resample) {
     }
     // Content that reaches the canvas edge keeps it: a Background stays opaque to the border.
     let canvas = Rect::from_xywh(0, 0, ow, oh);
+    let taken = crate::smart_cmds::take_caches(&mut doc.layers);
     for_each_surface(&mut doc.layers, true, &mut |surf, is_mask| {
         *surf = resize_surface_in_canvas(surf, sx, sy, if is_mask { Resample::Bilinear } else { filter }, canvas);
     });
     let k = ((sx + sy) / 2.0) as f32;
-    for_each_layer(&mut doc.layers, &mut |l| scale_effects(&mut l.effects, k));
+    for_each_layer(&mut doc.layers, &mut |l| {
+        scale_effects(&mut l.effects, k);
+        // Canvas resampling scales the whole appearance, including shape strokes (#8341).
+        // Dash lengths and offsets are already expressed in multiples of this width.
+        if let LayerContent::Shape(sh) = &mut l.content
+            && let Some(stroke) = &mut sh.stroke
+        {
+            stroke.width *= k;
+        }
+    });
     for ch in doc.channels.iter_mut().chain(doc.quick_mask.as_mut()) {
         ch.surface = resize_surface_in_canvas(&ch.surface, sx, sy, Resample::Bilinear, canvas);
     }
@@ -261,10 +324,22 @@ fn resample_doc(doc: &mut Document, nw: u32, nh: u32, filter: Resample) {
     crate::canvas_geom::transform_geometry(doc, &photocraft_geom::Affine { m: [sx, 0.0, 0.0, sy, 0.0, 0.0] });
     doc.size = Size::new(nw, nh);
     crate::canvas_geom::refresh(doc, crate::canvas_geom::Refresh::All);
+    let Ok(()) = crate::smart_cmds::restore_unrendered(doc, taken, |c| Ok::<_, Infallible>(resize_surface_in_canvas(c, sx, sy, filter, canvas)));
 }
 
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: cmd.into(), msg: msg.into() }
+}
+
+/// The flattened document, or an error when the canvas is over the compositor's render cap
+/// ([`photocraft_compose::MAX_RENDER_PIXELS`]; `flatten` returns an empty buffer then).
+fn flatten_whole(doc: &Document, cmd: &str) -> Result<photocraft_compose::Buffer> {
+    let buf = photocraft_compose::flatten(doc);
+    let (w, h) = (doc.size.width, doc.size.height);
+    if buf.px.len() as u64 != u64::from(w) * u64::from(h) {
+        return Err(bad(cmd, format!("the document ({w} x {h} px) is too large to flatten (limit {} pixels)", photocraft_compose::MAX_RENDER_PIXELS)));
+    }
+    Ok(buf)
 }
 
 /// Moves every surface, channel, selection and guide by `(dx, dy)`.
@@ -300,6 +375,26 @@ pub(crate) fn translate_doc(doc: &mut Document, cmd: &str, dx: i32, dy: i32) -> 
     Ok(())
 }
 
+/// Delete Cropped Pixels on a layer tree: crops pixel-layer data only to `r`. Type and smart
+/// objects move by shifting their rendered pixels, so cutting those would clip them at the old
+/// edge. A video layer's stored frames are its pixels too: the displayed content is only the frame
+/// at the playhead, so the others would bring the cropped pixels back when scrubbing (#4956).
+fn delete_cropped_pixels(layers: &mut [Layer], r: Rect) {
+    for_each_layer(layers, &mut |l| {
+        if let Some(fc) = &mut l.fill_cache {
+            fc.surface = crop_surface(&fc.surface, r);
+        }
+        if let Some(v) = &mut l.video {
+            for frame in v.frames.iter_mut().chain(v.original_frames.iter_mut().flatten()) {
+                *frame = crop_surface(frame, r);
+            }
+        }
+        if let LayerContent::Raster(s) = &mut l.content {
+            *s = crop_surface(s, r);
+        }
+    });
+}
+
 /// Crops the document to `r` (in current document coordinates).
 /// A frame that extends past the canvas fills the Background's new area with `extension` (the
 /// background colour, as Photoshop's Crop tool does); other layers get transparent pixels there.
@@ -311,7 +406,7 @@ fn crop_doc(doc: &mut Document, cmd: &str, r: Rect, delete_pixels: bool, extensi
     let old_canvas = doc.bounds();
     let extends = r.x0 < old_canvas.x0 || r.y0 < old_canvas.y0 || r.x1 > old_canvas.x1 || r.y1 > old_canvas.y1;
     if delete_pixels {
-        for_each_surface(&mut doc.layers, false, &mut |surf, _| *surf = crop_surface(surf, r));
+        delete_cropped_pixels(&mut doc.layers, r);
     }
     translate_doc(doc, cmd, dx, dy)?;
     doc.size = Size::new(r.width(), r.height());
@@ -322,17 +417,56 @@ fn crop_doc(doc: &mut Document, cmd: &str, r: Rect, delete_pixels: bool, extensi
         && let LayerContent::Raster(surf) = &mut bg.content
     {
         let old = old_canvas.translate(dx, dy);
-        let fmt = surf.format();
-        let px = photocraft_raster::from_rgba(&fmt, [extension[0], extension[1], extension[2], 1.0]);
-        let keep = surf.content_bounds().intersect(&old);
-        let saved = surf.to_interleaved(keep);
-        surf.fill_rect(Rect::from_xywh(0, 0, r.width(), r.height()), &px);
-        if !keep.is_empty() {
-            surf.write_interleaved(keep, &saved);
-        }
+        let px = photocraft_raster::from_rgba(&surf.format(), [extension[0], extension[1], extension[2], 1.0]);
+        fill_background_extension(surf, Rect::from_xywh(0, 0, r.width(), r.height()), old, &px);
+    }
+    if extends {
+        drop_fill_caches(&mut doc.layers);
     }
     crate::canvas_geom::refresh(doc, crate::canvas_geom::Refresh::Shapes);
     Ok(())
+}
+
+/// Fills the area an extension adds to the Background's `canvas` (all of it outside the `old`
+/// canvas, and any gap there) with `px`, under the pixels the Background already holds there:
+/// those a crop with Delete Cropped Pixels off hid show again instead of being painted over (#7086).
+/// Only the added strips are touched, so the cost follows the added area, not the canvas.
+fn fill_background_extension(surf: &mut Surface, canvas: Rect, old: Rect, px: &[f32]) {
+    let keep = surf.content_bounds().intersect(&old).intersect(&canvas);
+    let strips = if keep.is_empty() {
+        vec![canvas]
+    } else {
+        vec![
+            Rect::new(canvas.x0, canvas.y0, canvas.x1, keep.y0),
+            Rect::new(canvas.x0, keep.y1, canvas.x1, canvas.y1),
+            Rect::new(canvas.x0, keep.y0, keep.x0, keep.y1),
+            Rect::new(keep.x1, keep.y0, canvas.x1, keep.y1),
+        ]
+    };
+    let n = surf.channels();
+    let a = n.saturating_sub(1);
+    let pa = px.get(a).copied().unwrap_or(1.0);
+    // Without an alpha channel hidden pixels can't be told from empty ones: fill the strips.
+    let has_alpha = surf.format().alpha;
+    for strip in strips.into_iter().filter(|r| !r.is_empty()) {
+        if !has_alpha || !surf.has_tiles_in(strip) {
+            surf.fill_rect(strip, px);
+            continue;
+        }
+        // The Background's own pixels over `px` (source-over).
+        let mut d = surf.read_region(strip);
+        for p in d.chunks_exact_mut(n) {
+            let ta = p.get(a).copied().unwrap_or(0.0);
+            let oa = ta + pa * (1.0 - ta);
+            for (c, &f) in p.iter_mut().zip(px).take(a) {
+                *c = if oa > 0.0 { (*c * ta + f * pa * (1.0 - ta)) / oa } else { 0.0 };
+            }
+            if let Some(alpha) = p.get_mut(a) {
+                *alpha = oa;
+            }
+        }
+        surf.write_region(strip, &d);
+    }
 }
 
 /// The nine documented canvas-size anchors, in the order the command lists them, each mapped to
@@ -391,6 +525,9 @@ fn canvas_size(s: &mut Session, p: &Value) -> Result<Value> {
     s.edit("Canvas Size", |doc, _| {
         translate_doc(doc, "image.canvasSize", dx, dy)?;
         doc.size = Size::new(nw, nh);
+        if nw > ow as u32 || nh > oh as u32 {
+            drop_fill_caches(&mut doc.layers);
+        }
         crate::canvas_geom::refresh(doc, crate::canvas_geom::Refresh::Shapes);
         let canvas = doc.bounds();
         let old = Rect::from_xywh(dx, dy, ow as u32, oh as u32);
@@ -408,14 +545,8 @@ fn canvas_size(s: &mut Session, p: &Value) -> Result<Value> {
             && let Some(bg) = doc.background_mut()
             && let LayerContent::Raster(surf) = &mut bg.content
         {
-            let fmt = surf.format();
-            let px = photocraft_raster::from_rgba(&fmt, ext);
-            let keep = surf.content_bounds().intersect(&old);
-            let saved = surf.to_interleaved(keep);
-            surf.fill_rect(canvas, &px);
-            if !keep.is_empty() {
-                surf.write_interleaved(keep, &saved);
-            }
+            let px = photocraft_raster::from_rgba(&surf.format(), ext);
+            fill_background_extension(surf, canvas, old, &px);
         }
         Ok(())
     })?;
@@ -428,6 +559,12 @@ const MAX_CROP_SIDE: i32 = 300_000;
 /// Image → Crop (to the selection bounds).
 fn crop(s: &mut Session, p: &Value) -> Result<Value> {
     let delete = p.get("deleteCroppedPixels").and_then(Value::as_bool).unwrap_or(true);
+    // The Crop tool's Fill: Content-Aware Fill of what the crop uncovers (#3823).
+    let content_aware = match p.get("contentAware") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(b)) => *b,
+        Some(v) => return Err(bad("image.crop", format!("`contentAware` must be true or false, not {v}"))),
+    };
     // Values beyond i32 would wrap through the narrowing casts into a rectangle unrelated to
     // the numbers passed; reject them (see `commands::int_i32`).
     let explicit = match (
@@ -459,7 +596,7 @@ fn crop(s: &mut Session, p: &Value) -> Result<Value> {
     }
     if let Some(a) = crop_angle(p)? {
         let rect = explicit.ok_or_else(|| bad("image.crop", "an `angle` needs an explicit `x`, `y`, `width` and `height`"))?;
-        return rotated_crop(s, rect, a, delete, &target);
+        return rotated_crop(s, rect, a, delete, content_aware, &target);
     }
     // An explicit rectangle (the Crop tool) may extend past the canvas; a selection crop is clamped.
     let r = explicit
@@ -468,10 +605,16 @@ fn crop(s: &mut Session, p: &Value) -> Result<Value> {
     if r.is_empty() {
         return Err(EngineError::Other("nothing to crop: pass x/y/width/height or make a selection".into()));
     }
-    s.set_sampler_map(photocraft_geom::Affine::translate(-f64::from(r.x0), -f64::from(r.y0)));
+    s.set_sampler_map(target.sampler_map(r));
     let extension = s.tools.background;
-    s.edit("Crop", |doc, _| {
+    s.edit("Crop", |doc, active| {
+        let original = doc.size;
         crop_doc(doc, "image.crop", r, delete, extension)?;
+        // A straight crop fills all of the area past the old canvas, pixels an earlier Delete Cropped
+        // Pixels off crop hid there included, as Photoshop does; only a turned frame keeps them (#8060).
+        if content_aware {
+            crate::crop_fill::fill_uncovered(doc, *active, &crate::crop_fill::Coverage::crop(r, original.width, original.height))?;
+        }
         doc.selection = None;
         target.apply(doc);
         Ok(())
@@ -491,10 +634,25 @@ impl CropTarget {
     /// Applies the target to a document that has just been cropped (inside the crop's history step).
     fn apply(&self, doc: &mut Document) {
         if let Some((w, h)) = self.size {
-            resample_doc(doc, w, h, self.filter);
+            // As for Image Size: an Indexed Color document holds only its colour table's colours (#6019).
+            let filter = if doc.mode == ColorMode::Indexed { Resample::Nearest } else { self.filter };
+            resample_doc(doc, w, h, filter);
         }
         if let Some(r) = self.resolution {
             doc.resolution_dpi = r;
+        }
+    }
+
+    /// Where Color Sampler points go: shifted by the crop's origin, then scaled with the pixels
+    /// when [`Self::apply`] resamples the cropped area `r` (as Image Size scales them).
+    fn sampler_map(&self, r: Rect) -> photocraft_geom::Affine {
+        let shift = photocraft_geom::Affine::translate(-f64::from(r.x0), -f64::from(r.y0));
+        match self.size {
+            Some((w, h)) if r.width() > 0 && r.height() > 0 => {
+                let (sx, sy) = (f64::from(w) / f64::from(r.width()), f64::from(h) / f64::from(r.height()));
+                shift.then(&photocraft_geom::Affine { m: [sx, 0.0, 0.0, sy, 0.0, 0.0] })
+            }
+            _ => shift,
         }
     }
 }
@@ -509,8 +667,10 @@ fn crop_target(p: &Value) -> Result<CropTarget> {
     let side = |key: &str| -> Result<Option<u32>> {
         match p.get(key) {
             None | Some(Value::Null) => Ok(None),
+            // Whole-number floats (`100.0`) count too, as for the crop rectangle.
             Some(v) => v
                 .as_u64()
+                .or_else(|| v.as_f64().filter(|f| f.fract() == 0.0 && (0.0..=f64::from(MAX_CROP_SIDE)).contains(f)).map(|f| f as u64))
                 .and_then(|n| u32::try_from(n).ok())
                 .filter(|n| (1..=MAX_CROP_SIDE as u32).contains(n))
                 .map(Some)
@@ -579,8 +739,9 @@ fn crop_angle(p: &Value) -> Result<Option<f64>> {
 /// Arbitrary: the canvas grows to fit, the Background fills what the rotation uncovers with the
 /// background colour, other layers keep transparency there and every pixel of theirs), which makes
 /// the frame upright, then cropped to it (`deleteCroppedPixels` as for an unrotated crop), all in
-/// one undo step.
-fn rotated_crop(s: &mut Session, r: Rect, angle: f64, delete: bool, crop_target: &CropTarget) -> Result<Value> {
+/// one undo step. With `content_aware`, the corners the rotation uncovers (and any area past the
+/// rotated image) are then filled from their surroundings, in the same step (#3823).
+fn rotated_crop(s: &mut Session, r: Rect, angle: f64, delete: bool, content_aware: bool, crop_target: &CropTarget) -> Result<Value> {
     const CMD: &str = "image.crop";
     let size = s.active().ok_or(EngineError::NoDocument)?.doc.size;
     let (w, h) = (f64::from(r.width()), f64::from(r.height()));
@@ -601,13 +762,57 @@ fn rotated_crop(s: &mut Session, r: Rect, angle: f64, delete: bool, crop_target:
     let end = |o: i32, len: u32| i32::try_from(len).ok().and_then(|l| o.checked_add(l));
     let (Some(x1), Some(y1)) = (end(x, r.width()), end(y, r.height())) else { return Err(far()) };
     let target = Rect::new(x, y, x1, y1);
+    // The cropped canvas back to the original document: undo the crop's offset, then the rotation
+    // (x = c·(x' − nx) + s·(y' − ny) + cx, y = −s·(x' − nx) + c·(y' − ny) + cy).
+    let (ox, oy) = (f64::from(target.x0) - f64::from(new.width) / 2.0, f64::from(target.y0) - f64::from(new.height) / 2.0);
+    let (ocx, ocy) = (f64::from(size.width) / 2.0, f64::from(size.height) / 2.0);
+    let coverage = crate::crop_fill::Coverage {
+        map: [cs, sn, -sn, cs, cs * ox + sn * oy + ocx, -sn * ox + cs * oy + ocy],
+        width: f64::from(size.width),
+        height: f64::from(size.height),
+        rotated: true,
+        held: None,
+    };
+    // The pixels before the turn: under a turned frame a Delete Cropped Pixels off crop's hidden ones
+    // count as image, as in Photoshop (a straight crop fills over them) (#8060).
+    let coverage = if content_aware {
+        let d = s.active().ok_or(EngineError::NoDocument)?;
+        coverage.holding(&d.doc, d.active_layer)
+    } else {
+        coverage
+    };
     crate::analysis_cmds::compound(s, "Crop", |s| {
+        // Pixels the crop deletes needn't be turned first: keeping only what lands in the frame
+        // makes the rotation cost the frame's size, not the canvas's (a small turned crop of a
+        // 10 MP photo took over half a second).
+        if delete {
+            let keep = turned_crop_source(size, new, angle, target);
+            s.edit("Crop", |doc, _| {
+                // Type and smart objects stay whole, as in the crop itself: the rotation re-renders
+                // them, but a smart object whose source is unavailable keeps its cache.
+                delete_cropped_pixels(&mut doc.layers, keep);
+                for_each_layer(&mut doc.layers, &mut |l| {
+                    if let Some(m) = &mut l.mask {
+                        m.surface = crop_surface(&m.surface, keep);
+                    }
+                });
+                for ch in doc.channels.iter_mut().chain(doc.quick_mask.as_mut()) {
+                    ch.surface = crop_surface(&ch.surface, keep);
+                }
+                // The crop drops the selection anyway.
+                doc.selection = None;
+                Ok(())
+            })?;
+        }
         crate::mode_cmds::rotate_arbitrary(s, &json!({"angle": angle, "direction": "ccw"}))?;
         // Color Sampler points follow the crop's origin shift too (the rotation moved them above).
-        s.set_sampler_map(photocraft_geom::Affine::translate(-f64::from(target.x0), -f64::from(target.y0)));
+        s.set_sampler_map(crop_target.sampler_map(target));
         let extension = s.tools.background;
-        s.edit("Crop", |doc, _| {
+        s.edit("Crop", |doc, active| {
             crop_doc(doc, CMD, target, delete, extension)?;
+            if content_aware {
+                crate::crop_fill::fill_uncovered(doc, *active, &coverage)?;
+            }
             doc.selection = None;
             crop_target.apply(doc);
             Ok(())
@@ -616,15 +821,35 @@ fn rotated_crop(s: &mut Session, r: Rect, angle: f64, delete: bool, crop_target:
     Ok(crop_result(s, json!({ "x": r.x0, "y": r.y0, "width": r.width(), "height": r.height(), "angle": angle })))
 }
 
+/// The pixels a turned crop reads, in document coordinates before the turn: the source of the
+/// `target` frame (on the `new` canvas the rotation by `-angle` makes of `old`), grown by the widest
+/// interpolation kernel's reach so every sample the frame's pixels take is kept.
+fn turned_crop_source(old: Size, new: Size, angle: f64, target: Rect) -> Rect {
+    const KERNEL_REACH: f64 = 4.0;
+    // The inverse of `rotate_arbitrary`'s map: x = c·u + s·v + cx, y = −s·u + c·v + cy, where
+    // (u, v) is the point relative to the new canvas's centre.
+    let (sn, cs) = (-angle).to_radians().sin_cos();
+    let (cx, cy) = (f64::from(old.width) / 2.0, f64::from(old.height) / 2.0);
+    let (nx, ny) = (f64::from(new.width) / 2.0, f64::from(new.height) / 2.0);
+    let (mut x0, mut y0, mut x1, mut y1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+    for (px, py) in [(target.x0, target.y0), (target.x1, target.y0), (target.x0, target.y1), (target.x1, target.y1)] {
+        let (u, v) = (f64::from(px) - nx, f64::from(py) - ny);
+        let (x, y) = (cs * u + sn * v + cx, -sn * u + cs * v + cy);
+        (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+    }
+    // `as` saturates: a frame near the coordinate limits keeps more, never less.
+    Rect::new((x0 - KERNEL_REACH).floor() as i32, (y0 - KERNEL_REACH).floor() as i32, (x1 + KERNEL_REACH).ceil() as i32, (y1 + KERNEL_REACH).ceil() as i32)
+}
+
 /// Image → Trim.
 fn trim(s: &mut Session, p: &Value) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let canvas = d.doc.bounds();
-    let buf = photocraft_compose::flatten(&d.doc);
+    let buf = flatten_whole(&d.doc, "image.trim")?;
     let based = p.get("basedOn").and_then(Value::as_str).unwrap_or("transparent");
     let w = canvas.width() as usize;
     let reference = match based {
-        "topLeft" => Some(buf.px[0]),
+        "topLeft" => buf.px.first().copied(),
         "bottomRight" => buf.px.last().copied(),
         _ => None,
     };
@@ -668,28 +893,33 @@ fn convert_depth(s: &mut Session, depth: SampleType) -> Result<Value> {
         return Ok(Value::Null);
     }
     s.edit("Bit Depth", |doc, _| {
-        // 32-bit documents hold linear light (as Photoshop's do: grey 128 becomes 0.2159, measured
-        // in Photoshop 27.11), so the colour samples cross the document's tone curve when the
-        // depth crosses 32 bits: decoded after widening, encoded before narrowing (so no linear
-        // value is quantised to 8 or 16 bits). Masks, alpha and channels are not colour.
-        let crosses = (current == SampleType::F32) != (depth == SampleType::F32) && matches!(doc.mode, ColorMode::Rgb | ColorMode::Grayscale);
-        let to_linear = depth == SampleType::F32;
-        let transfer = photocraft_compose::adjust::Transfer::for_document(doc.mode, if to_linear { current } else { depth });
-        if crosses && !to_linear {
-            for_each_surface(&mut doc.layers, false, &mut |surf, _| surf.map_color(|v| transfer.encode(v).clamp(0.0, 1.0)));
-        }
-        convert_layers_depth(&mut doc.layers, depth);
-        if crosses && to_linear {
-            for_each_surface(&mut doc.layers, false, &mut |surf, _| surf.map_color(|v| transfer.decode(v)));
-        }
-        for ch in doc.channels.iter_mut().chain(doc.quick_mask.as_mut()) {
-            let f = ch.surface.format().with_sample(depth);
-            ch.surface = ch.surface.convert(f);
-        }
-        doc.depth = depth;
+        change_depth(doc, depth);
         Ok(())
     })?;
     Ok(Value::Null)
+}
+
+pub(crate) fn change_depth(doc: &mut Document, depth: SampleType) {
+    let current = doc.depth;
+    // 32-bit documents hold linear light (as Photoshop's do: grey 128 becomes 0.2159, measured
+    // in Photoshop 27.11), so the colour samples cross the document's tone curve when the
+    // depth crosses 32 bits: decoded after widening, encoded before narrowing (so no linear
+    // value is quantised to 8 or 16 bits). Masks, alpha and channels are not colour.
+    let crosses = (current == SampleType::F32) != (depth == SampleType::F32) && matches!(doc.mode, ColorMode::Rgb | ColorMode::Grayscale);
+    let to_linear = depth == SampleType::F32;
+    let transfer = photocraft_compose::adjust::Transfer::for_document(doc.mode, if to_linear { current } else { depth });
+    if crosses && !to_linear {
+        for_each_surface(&mut doc.layers, false, &mut |surf, _| surf.map_color(|v| transfer.encode(v).clamp(0.0, 1.0)));
+    }
+    convert_layers_depth(&mut doc.layers, depth);
+    if crosses && to_linear {
+        for_each_surface(&mut doc.layers, false, &mut |surf, _| surf.map_color(|v| transfer.decode(v)));
+    }
+    for ch in doc.channels.iter_mut().chain(doc.quick_mask.as_mut()) {
+        let f = ch.surface.format().with_sample(depth);
+        ch.surface = ch.surface.convert(f);
+    }
+    doc.depth = depth;
 }
 
 /// Image → Duplicate.
@@ -699,18 +929,27 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
     doc.id = photocraft_doc::DocId::fresh();
     doc.name = p.get("name").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| format!("{} copy", d.doc.name));
     if p.get("mergedOnly").and_then(Value::as_bool).unwrap_or(false) {
-        let buf = photocraft_compose::flatten(&doc);
+        let buf = flatten_whole(&doc, "image.duplicate")?;
         let fmt = doc.pixel_format();
         let mut surf = Surface::new(fmt);
         let vals: Vec<f32> = buf.px.iter().flat_map(|q| photocraft_raster::from_rgba(&fmt, *q)).collect();
         surf.write_region(doc.bounds(), &vals);
         surf.prune();
-        doc.layers = vec![Layer::new("Background", LayerContent::Raster(surf))];
+        // As Photoshop: a source with a Background gives one (opaque, locked); otherwise a plain
+        // "Layer 1" that keeps the composite's transparency.
+        let has_background = doc.background().is_some();
+        let mut merged = Layer::new(if has_background { "Background" } else { "Layer 1" }, LayerContent::Raster(surf));
+        merged.locks.transparency = has_background;
+        merged.locks.position = has_background;
+        doc.layers = vec![merged];
         // A merged-only copy has no original layers for saved comps to restore.
         // Don't carry dangling comp state into a single-layer flattened document.
         doc.layer_comps.clear();
         doc.last_applied_comp = None;
         doc.last_document_state = None;
+        // Likewise, variables drove template layers that no longer exist: drop the whole
+        // binding set (defs, data sets and the active index) on the flattened copy.
+        doc.variables = photocraft_doc::Variables::default();
     }
     reidentify_copied_layers(&mut doc);
     let name = doc.name.clone();
@@ -747,7 +986,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "image.crop",
             "Crop",
             ["Image"],
-            r##"{"x":px,"y":px,"width":px,"height":px,"angle":-3600..3600=0,"deleteCroppedPixels":bool=true,"targetWidth":px,"targetHeight":px,"resolution":ppi,"resample":"bicubic|bilinear|nearest|lanczos|preserveDetails"="bicubic"} → {x,y,width,height,documentWidth,documentHeight,resolution} (targetWidth/targetHeight, both or neither: the cropped area is resampled to exactly that size, as Image Size, in the same undo step; resolution: the document's new ppi)"##,
+            r##"{"x":px,"y":px,"width":px,"height":px,"angle":-3600..3600=0,"deleteCroppedPixels":bool=true,"contentAware":bool=false,"targetWidth":px,"targetHeight":px,"resolution":ppi,"resample":"bicubic|bilinear|nearest|lanczos|preserveDetails"="bicubic"} → {x,y,width,height,documentWidth,documentHeight,resolution} (targetWidth/targetHeight, both or neither: the cropped area is resampled to exactly that size, as Image Size, in the same undo step; resolution: the document's new ppi; contentAware: the Crop tool's Fill › Content-Aware Fill, the area a rotated or extending crop uncovers filled from its surroundings on the Background, else the active pixel layer)"##,
             has_doc,
             crop
         ),
@@ -874,6 +1113,59 @@ mod tests {
         &s.active().unwrap().doc
     }
 
+    /// Document-wide conversions must move every stored video frame, not just the displayed one (#4956).
+    #[test]
+    fn crop_moves_stored_video_frames() {
+        let mut s = session();
+        s.edit("video", |doc, active| {
+            let l = doc.layer_mut(active.unwrap()).unwrap();
+            let frame = l.surface().unwrap().clone();
+            let mut v = photocraft_doc::VideoData::new(vec![frame.clone(), frame.clone()], 24.0);
+            v.original_frames = Some(vec![frame.clone(), frame]);
+            l.video = Some(v);
+            Ok(())
+        })
+        .unwrap();
+        s.execute("image.crop", json!({"x": -10, "y": -5, "width": 60, "height": 30})).unwrap();
+        let v = doc(&s).layers[1].video.as_ref().unwrap();
+        let red = vec![1.0, 0.0, 0.0, 1.0];
+        for frame in v.frames.iter().chain(v.original_frames.iter().flatten()) {
+            assert_eq!(frame.pixel(20, 10), red);
+            assert_eq!(frame.pixel(5, 5)[3], 0.0);
+        }
+    }
+
+    /// Delete Cropped Pixels on a shrinking crop deletes the cropped area from every stored video
+    /// frame (and the original footage), not just the displayed one (#4956).
+    #[test]
+    fn delete_cropped_pixels_crops_stored_video_frames() {
+        let mut s = session();
+        s.edit("video", |doc, active| {
+            let l = doc.layer_mut(active.unwrap()).unwrap();
+            let red = l.surface().unwrap().clone();
+            let mut blue = red.clone();
+            blue.fill_rect(Rect::new(0, 0, 40, 20), &[0.0, 0.0, 1.0, 1.0]);
+            let mut v = photocraft_doc::VideoData::new(vec![red.clone(), blue.clone()], 24.0);
+            v.original_frames = Some(vec![red, blue]);
+            l.video = Some(v);
+            Ok(())
+        })
+        .unwrap();
+        s.execute("image.crop", json!({"x": 15, "y": 0, "width": 25, "height": 20, "deleteCroppedPixels": true})).unwrap();
+        assert_eq!(doc(&s).size, Size::new(25, 20));
+        let v = doc(&s).layers[1].video.as_ref().unwrap();
+        let originals = v.original_frames.as_ref().unwrap();
+        assert_eq!((v.frames.len(), originals.len()), (2, 2));
+        for frames in [&v.frames, originals] {
+            // The red square (10..20, 5..15) keeps only its right half; the full blue frame
+            // keeps exactly the 25×20 crop.
+            assert_eq!(frames[0].content_bounds(), Rect::new(0, 5, 5, 15));
+            assert_eq!(frames[0].pixel(2, 10), vec![1.0, 0.0, 0.0, 1.0]);
+            assert_eq!(frames[1].content_bounds(), Rect::new(0, 0, 25, 20));
+            assert_eq!(frames[1].pixel(24, 19), vec![0.0, 0.0, 1.0, 1.0]);
+        }
+    }
+
     /// Resample on with only a new resolution keeps the print size, as Photoshop's Image Size
     /// does (an action's `imageSize` with `Rslt` alone); without `keepPrintSize` only the
     /// resolution changes.
@@ -902,6 +1194,28 @@ mod tests {
             let Effect::DropShadow(sh) = &l.effects.items[0] else { panic!() };
             assert_eq!(sh.distance, 10.0);
             assert_eq!(l.mask.as_ref().unwrap().surface.default_pixel(), vec![1.0]);
+        }
+    }
+
+    /// #6019: Image Size on an Indexed Color document makes no colours the colour table doesn't have.
+    #[test]
+    fn image_size_resamples_indexed_color_with_nearest_neighbor() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 2, "height": 1})).unwrap();
+        s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+        s.execute("select.rect", json!({"x": 1, "y": 0, "width": 1, "height": 1})).unwrap();
+        s.execute("edit.fill", json!({"color": "#0000ff"})).unwrap();
+        s.execute("select.deselect", json!({})).unwrap();
+        s.execute("image.mode.indexedColor", json!({})).unwrap();
+        for resample in ["bicubic", "automatic", "bilinear", "lanczos", "preserveDetails"] {
+            s.execute("image.imageSize", json!({"width": 8, "resample": resample})).unwrap();
+            let st = s.active().unwrap();
+            let surf = st.doc.layers[0].surface().unwrap();
+            for x in 0..8 {
+                let px = surf.pixel(x, 0);
+                assert!(px[..3] == [1.0, 0.0, 0.0] || px[..3] == [0.0, 0.0, 1.0], "{resample}: no blended colour at x {x}: {px:?}");
+            }
+            s.execute("history.undo", json!({})).unwrap();
         }
     }
 
@@ -965,6 +1279,28 @@ mod tests {
         assert_eq!(doc(&s).resolution_dpi, 300.0);
         // #1815: the result is the size the document has, not the ignored request.
         assert_eq!(r, json!({"width": 40, "height": 20}));
+    }
+
+    /// Type keeps its pixel size across a resolution change: resampled 2x at twice the ppi it is
+    /// twice as tall (not 4x), with Resample off it stays, and a later re-render doesn't jump.
+    #[test]
+    fn image_size_with_a_new_resolution_scales_type_with_the_pixels_only() {
+        for (params, k) in [(json!({"width": 200, "height": 200, "resolution": 144}), 2), (json!({"resolution": 144, "resample": "none"}), 1)] {
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width": 100, "height": 100})).unwrap();
+            s.execute("type.create", json!({"x": 10, "y": 50, "text": "Hi", "size": 12})).unwrap();
+            let height = |s: &Session| doc(s).layers.last().unwrap().surface().unwrap().content_bounds().height();
+            let h0 = height(&s);
+            assert!(h0 > 4, "{h0}");
+            s.execute("image.imageSize", params.clone()).unwrap();
+            assert!(height(&s).abs_diff(h0 * k) <= 2, "{params}: {h0} -> {}", height(&s));
+            let d = doc(&s);
+            let LayerContent::Text(t) = &d.layers.last().unwrap().content else { panic!("type layer") };
+            let mut t = t.clone();
+            crate::type_cmds::refresh(d, &mut t);
+            let after = t.cache.unwrap().content_bounds().height();
+            assert!(after.abs_diff(h0 * k) <= 2, "{params}: re-rendered {h0} -> {after}");
+        }
     }
 
     #[test]
@@ -1137,6 +1473,100 @@ mod tests {
         assert_eq!(doc(&s).layers[0].surface().unwrap().rgba(1, 8), [0.0; 4]);
     }
 
+    /// Delete Cropped Pixels deletes pixel-layer data only: type and smart objects keep what lies
+    /// outside the frame, so moving them later doesn't show them cut at the old edge.
+    #[test]
+    fn delete_cropped_pixels_keeps_type_and_smart_objects_whole() {
+        let mut s = session();
+        s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        s.execute("type.create", json!({"x": 10, "y": 15, "text": "Hi", "size": 12})).unwrap();
+        let bounds = |s: &Session| -> Vec<Rect> { doc(s).layers[1..].iter().map(|l| l.surface().unwrap().content_bounds()).collect() };
+        let before = bounds(&s);
+        assert!(before.iter().all(|b| b.x0 < 15 && b.x1 > 15), "both cross the crop edge: {before:?}");
+        s.execute("image.crop", json!({"x": 15, "y": 0, "width": 25, "height": 20})).unwrap();
+        assert!(matches!(doc(&s).layers[1].content, LayerContent::Smart(_)) && matches!(doc(&s).layers[2].content, LayerContent::Text(_)));
+        assert_eq!(bounds(&s), before.iter().map(|b| b.translate(-15, 0)).collect::<Vec<_>>());
+    }
+
+    /// A turned crop deleting pixels keeps type and smart objects whole too, also a smart object
+    /// whose source is unavailable (the rotation can't re-render it, so it keeps its cache): each
+    /// ends up exactly as the same turned crop with Delete Cropped Pixels off leaves it.
+    #[test]
+    fn turned_crop_deleting_pixels_keeps_type_and_smart_objects_whole() {
+        let [deleted, kept] = [true, false].map(|delete| {
+            let mut s = session();
+            s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+            s.edit("unlink", |doc, active| {
+                if let LayerContent::Smart(sm) = &mut doc.layer_mut(active.unwrap()).unwrap().content {
+                    sm.source = photocraft_doc::SmartSource::Linked { path: "missing-photocraft-test-source.psd".into() };
+                }
+                Ok(())
+            })
+            .unwrap();
+            s.execute("type.create", json!({"x": 10, "y": 15, "text": "Hi", "size": 12})).unwrap();
+            s.execute("image.crop", json!({"x": 20, "y": 0, "width": 20, "height": 20, "angle": 2.0, "deleteCroppedPixels": delete})).unwrap();
+            s
+        });
+        let (a, b) = (doc(&deleted), doc(&kept));
+        assert!(matches!(a.layers[1].content, LayerContent::Smart(_)) && matches!(a.layers[2].content, LayerContent::Text(_)));
+        for i in [1, 2] {
+            let (sa, sb) = (a.layers[i].surface().unwrap(), b.layers[i].surface().unwrap());
+            let r = sb.content_bounds();
+            assert!(r.x0 < 0, "layer {i} reaches past the crop's left edge: {r:?}");
+            assert_eq!(sa.content_bounds(), r, "layer {i}");
+            assert_eq!(sa.read_region(r), sb.read_region(r), "layer {i}");
+        }
+    }
+
+    /// The Background keeps the pixels a crop with Delete Cropped Pixels off hid: extending the
+    /// canvas over them again (Reveal All, Canvas Size) shows them rather than painting them over
+    /// with the background colour (#7086).
+    #[test]
+    fn extending_the_canvas_keeps_the_backgrounds_hidden_pixels() {
+        for depth in [8, 16, 32] {
+            let hidden = |s: &mut Session| {
+                s.execute("file.new", json!({"width": 100, "height": 100, "depth": depth, "background": "white"})).unwrap();
+                s.edit("paint", |doc, _| {
+                    let bg = doc.background_mut().unwrap();
+                    bg.surface_mut().unwrap().fill_rect(Rect::new(0, 0, 50, 100), &[1.0, 0.0, 0.0, 1.0]);
+                    Ok(())
+                })
+                .unwrap();
+                s.execute("image.crop", json!({"x": 50, "y": 0, "width": 50, "height": 100, "deleteCroppedPixels": false})).unwrap();
+                s.tools.background = [0.0, 0.0, 0.0, 1.0];
+            };
+            let mut s = Session::new();
+            hidden(&mut s);
+            s.execute("image.revealAll", json!({})).unwrap();
+            let surf = doc(&s).background().unwrap().surface().unwrap();
+            assert_eq!(doc(&s).size, Size::new(100, 100), "{depth}-bit");
+            assert_eq!(surf.rgba(10, 50), [1.0, 0.0, 0.0, 1.0], "{depth}-bit: Reveal All shows the hidden red half");
+            assert_eq!(surf.rgba(80, 50), [1.0, 1.0, 1.0, 1.0], "{depth}-bit");
+
+            // Canvas Size wider than the hidden pixels: they show, the rest takes the colour.
+            let mut s = Session::new();
+            hidden(&mut s);
+            s.execute("image.canvasSize", json!({"width": 120, "height": 100, "anchor": "right"})).unwrap();
+            let surf = doc(&s).background().unwrap().surface().unwrap();
+            assert_eq!(surf.rgba(5, 50), [0.0, 0.0, 0.0, 1.0], "{depth}-bit: past the hidden pixels the background colour");
+            assert_eq!(surf.rgba(30, 50), [1.0, 0.0, 0.0, 1.0], "{depth}-bit: Canvas Size shows the hidden red half");
+            assert_eq!(surf.rgba(100, 50), [1.0, 1.0, 1.0, 1.0], "{depth}-bit");
+        }
+    }
+
+    /// A Background without an alpha channel (a Grayscale PSD import) has no hidden pixels to tell
+    /// from empty ones: the added area takes the colour, the kept area stays (#7086).
+    #[test]
+    fn an_alpha_less_background_extension_takes_the_colour() {
+        let mut surf = Surface::new(photocraft_color::PixelFormat::GRAY8);
+        surf.fill_rect(Rect::new(-50, 0, 100, 100), &[0.6]);
+        let kept = surf.pixel(50, 50);
+        fill_background_extension(&mut surf, Rect::new(-60, 0, 100, 100), Rect::new(0, 0, 100, 100), &[0.0]);
+        assert_eq!(surf.pixel(-55, 50), vec![0.0], "past the old pixels the colour");
+        assert_eq!(surf.pixel(-30, 50), vec![0.0], "no alpha: the added area takes the colour");
+        assert_eq!(surf.pixel(50, 50), kept, "the kept area is unchanged");
+    }
+
     /// A document (`mode`, `depth`) with a white Background and a layer holding a red pixel at
     /// (12, 8) and a blue one at (30, 3).
     fn marked(mode: &str, depth: u32) -> Session {
@@ -1179,7 +1609,10 @@ mod tests {
                 for y in 0..20 {
                     for x in 0..10 {
                         let (a, b) = (layer_rgba(&s, l, x, y), layer_rgba(&reference, l, x, y));
-                        assert!(a.iter().zip(b).all(|(p, q)| (p - q).abs() < 1e-3), "{depth} layer {l} ({x}, {y}): {a:?} vs {b:?}");
+                        // A fully transparent pixel's colour is invisible, and the turned crop
+                        // doesn't turn the pixels it deletes, which the warp spreads colour from.
+                        let n = if b[3] > 1e-3 { 4 } else { 1 };
+                        assert!(a.iter().rev().zip(b.iter().rev()).take(n).all(|(p, q)| (p - q).abs() < 1e-3), "{depth} layer {l} ({x}, {y}): {a:?} vs {b:?}");
                     }
                 }
             }
@@ -1216,6 +1649,61 @@ mod tests {
                 // The Background stays opaque white inside the canvas it came from.
                 let bg = layer_rgba(&s, 0, 10, 7);
                 assert!(bg.iter().all(|v| (v - 1.0).abs() < 0.02), "{mode} {depth} {angle}: {bg:?}");
+            }
+        }
+    }
+
+    /// A turned crop that deletes the cropped pixels turns only what lands in the frame; inside the
+    /// new canvas every layer, mask and channel is exactly what turning everything gives (the
+    /// frame spans several tiles, at several depths and angles).
+    #[test]
+    fn turned_crop_deleting_pixels_matches_turning_the_whole_canvas() {
+        use photocraft_color::PixelFormat;
+        let pixels = || (0..500).flat_map(|y| (0..700).map(move |x| (x, y)));
+        for depth in [8, 16, 32] {
+            for angle in [3.0, -7.5, 33.0, 181.0] {
+                let mut sessions = [true, false].map(|delete| {
+                    let mut s = Session::new();
+                    s.execute("file.new", json!({"width": 700, "height": 500, "depth": depth, "background": "white"})).unwrap();
+                    s.execute("layer.new.layer", json!({})).unwrap();
+                    s.edit("paint", |doc, active| {
+                        let wave = |x: i32, y: i32, k: i32| ((x * 7 + y * 13 + k * 31) % 97) as f32 / 96.0;
+                        let all = Rect::new(0, 0, 700, 500);
+                        let rgba: Vec<f32> = pixels().flat_map(|(x, y)| [wave(x, y, 0), wave(x, y, 1), wave(x, y, 2), wave(y, x, 3)]).collect();
+                        let gray: Vec<f32> = pixels().map(|(x, y)| wave(y, x, 4)).collect();
+                        let l = doc.layer_mut(active.unwrap()).unwrap();
+                        l.surface_mut().unwrap().write_region(all, &rgba);
+                        let mut mask = photocraft_doc::LayerMask::reveal_all();
+                        mask.surface.write_region(all, &gray);
+                        l.mask = Some(mask);
+                        let bg = doc.background_mut().unwrap().surface_mut().unwrap();
+                        bg.write_region(all, &pixels().flat_map(|(x, y)| [wave(x, y, 5), wave(x, y, 6), wave(x, y, 7), 1.0]).collect::<Vec<_>>());
+                        let fmt = PixelFormat::new(ColorMode::Grayscale, doc.pixel_format().sample, false);
+                        let mut ch = Surface::new(fmt);
+                        ch.write_region(all, &gray);
+                        doc.channels.push(photocraft_doc::AlphaChannel::new("Alpha 1", ch));
+                        Ok(())
+                    })
+                    .unwrap();
+                    let p = json!({"x": 150, "y": 120, "width": 330, "height": 290, "angle": angle, "deleteCroppedPixels": delete});
+                    s.execute("image.crop", p).unwrap();
+                    s
+                });
+                let [deleted, kept] = &mut sessions;
+                let (a, b) = (doc(deleted), doc(kept));
+                assert_eq!(a.size, b.size, "{depth} {angle}");
+                let canvas = a.bounds();
+                for (la, lb) in a.layers.iter().zip(&b.layers) {
+                    let (sa, sb) = (la.surface().unwrap(), lb.surface().unwrap());
+                    assert!(sa.to_interleaved(canvas) == sb.to_interleaved(canvas), "{depth} {angle}: layer {}", la.name);
+                    if let (Some(ma), Some(mb)) = (&la.mask, &lb.mask) {
+                        assert!(ma.surface.to_interleaved(canvas) == mb.surface.to_interleaved(canvas), "{depth} {angle}: mask of {}", la.name);
+                    }
+                }
+                assert!(a.channels[0].surface.to_interleaved(canvas) == b.channels[0].surface.to_interleaved(canvas), "{depth} {angle}: alpha channel");
+                // Deleting keeps nothing past the canvas.
+                let layer = a.layers[1].surface().unwrap();
+                assert!(canvas.contains_rect(&layer.content_bounds()), "{depth} {angle}: {:?}", layer.content_bounds());
             }
         }
     }
@@ -1339,6 +1827,40 @@ mod tests {
         assert_eq!((doc(&s).size, doc(&s).resolution_dpi), (Size::new(30, 10), 150.0));
     }
 
+    /// #7722: a W x H crop of an Indexed Color document resamples like Image Size (#6019), with
+    /// Nearest Neighbor, so no pixel gets a blend that isn't in the colour table.
+    #[test]
+    fn crop_target_resamples_indexed_color_with_nearest_neighbor() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 2, "height": 1})).unwrap();
+        s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+        s.execute("select.rect", json!({"x": 1, "y": 0, "width": 1, "height": 1})).unwrap();
+        s.execute("edit.fill", json!({"color": "#0000ff"})).unwrap();
+        s.execute("select.deselect", json!({})).unwrap();
+        s.execute("image.mode.indexedColor", json!({})).unwrap();
+        for resample in [None, Some("bicubic"), Some("automatic"), Some("bilinear"), Some("lanczos")] {
+            let mut p = json!({"x": 0, "y": 0, "width": 2, "height": 1, "targetWidth": 8, "targetHeight": 1});
+            if let Some(r) = resample {
+                p["resample"] = json!(r);
+            }
+            s.execute("image.crop", p).unwrap();
+            let surf = doc(&s).layers[0].surface().unwrap();
+            for x in 0..8 {
+                let px = surf.pixel(x, 0);
+                assert!(px[..3] == [1.0, 0.0, 0.0] || px[..3] == [0.0, 0.0, 1.0], "{resample:?}: no blended colour at x {x}: {px:?}");
+            }
+            s.execute("history.undo", json!({})).unwrap();
+        }
+    }
+
+    #[test]
+    fn crop_target_accepts_whole_number_floats() {
+        // `json.dumps(100.0)` and many other JSON writers send whole numbers as floats.
+        let mut s = session();
+        s.execute("image.crop", json!({"x": 0, "y": 0, "width": 20, "height": 10, "targetWidth": 40.0, "targetHeight": 20.0})).unwrap();
+        assert_eq!(doc(&s).size, Size::new(40, 20));
+    }
+
     #[test]
     fn crop_target_rejects_bad_params_without_changing_the_document() {
         let rect = json!({"x": 0, "y": 0, "width": 10, "height": 10});
@@ -1348,6 +1870,10 @@ mod tests {
             json!({"targetWidth": 0, "targetHeight": 10}),
             json!({"targetWidth": -5, "targetHeight": 10}),
             json!({"targetWidth": 10.5, "targetHeight": 10}),
+            json!({"targetWidth": -1.0, "targetHeight": 10}),
+            json!({"targetWidth": 0.0, "targetHeight": 10}),
+            json!({"targetWidth": 1e39, "targetHeight": 10}),
+            json!({"targetWidth": 300_001.0, "targetHeight": 10}),
             json!({"targetWidth": "10", "targetHeight": 10}),
             json!({"targetWidth": 300_001, "targetHeight": 10}),
             json!({"targetWidth": 4_294_967_306_u64, "targetHeight": 10}),
@@ -1455,6 +1981,22 @@ mod tests {
         assert_eq!(s.active().unwrap().revision, revision, "an unchanged bit depth must preserve the history branch");
         assert!(s.redo(), "selecting the current depth must not discard the undone conversion");
         assert_eq!(doc(&s).depth, SampleType::U8);
+    }
+
+    /// Duplicate › Merged Layers Only gives one locked Background when the source has one and a
+    /// plain "Layer 1" (keeping transparency) when it doesn't, as Photoshop does.
+    #[test]
+    fn merged_duplicate_is_a_background_only_when_the_source_has_one() {
+        let mut s = session();
+        s.execute("image.duplicate", json!({"mergedOnly": true})).unwrap();
+        let d = doc(&s);
+        assert!(d.is_background(d.layers[0].id), "source has a Background: the merged copy is one");
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 8, "height": 8, "background": "transparent"})).unwrap();
+        s.execute("image.duplicate", json!({"mergedOnly": true})).unwrap();
+        let d = doc(&s);
+        assert!(d.background().is_none(), "transparent source: no Background in the copy");
+        assert_eq!(d.layers[0].name, "Layer 1");
     }
 
     #[test]

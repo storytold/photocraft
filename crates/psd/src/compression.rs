@@ -111,9 +111,10 @@ pub mod packbits {
     ///
     /// Errors if the input is exhausted early or a packet would overflow the
     /// row. Trailing input after the row is complete is ignored except for
-    /// `-128` no-op bytes (which are always permitted).
-    pub fn decode_into(src: &[u8], expected: usize, out: &mut Vec<u8>) -> Result<()> {
-        let target = out.len() + expected;
+    /// `-128` no-op bytes (which are always permitted). Errors, rather than
+    /// overflowing, when `out.len() + expected` does not fit in `usize`.
+    pub(crate) fn decode_into(src: &[u8], expected: usize, out: &mut Vec<u8>) -> Result<()> {
+        let target = out.len().checked_add(expected).ok_or(PsdError::LimitExceeded("PackBits output length overflows usize"))?;
         let mut i = 0;
         while out.len() < target {
             let Some(&h) = src.get(i) else {
@@ -126,7 +127,7 @@ pub mod packbits {
                 let Some(lit) = src.get(i..i + len) else {
                     return Err(PsdError::Decompress("PackBits literal truncated".into()));
                 };
-                if out.len() + len > target {
+                if len > target - out.len() {
                     return Err(PsdError::Decompress("PackBits literal overflows row".into()));
                 }
                 out.extend_from_slice(lit);
@@ -138,7 +139,7 @@ pub mod packbits {
                     return Err(PsdError::Decompress("PackBits run truncated".into()));
                 };
                 i += 1;
-                if out.len() + len > target {
+                if len > target - out.len() {
                     return Err(PsdError::Decompress("PackBits run overflows row".into()));
                 }
                 out.extend(std::iter::repeat_n(b, len));
@@ -279,10 +280,18 @@ pub(crate) fn validate_planes(compression: Compression, data: &[u8], layout: &Pl
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// ZIP streams inflated on this thread (tests count passes over the merged image).
+    pub(crate) static INFLATES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 // Keep only the requested pixels, but consume the trailer to verify Adler-32.
 // A bounded surplus tolerates padding without unbounded decompression work.
 fn inflate_checked(data: &[u8], expected: u64, keep: bool) -> Result<Vec<u8>> {
     const OOM: PsdError = PsdError::LimitExceeded("not enough memory for the decoded channel data");
+    #[cfg(test)]
+    INFLATES.with(|n| n.set(n.get() + 1));
     let mut decoder = flate2::Decompress::new(true);
     let mut out = Vec::new();
     if keep {
@@ -677,6 +686,20 @@ mod tests {
         assert!(packbits::decode(&[0xfe], 3).is_err()); // run truncated
         assert!(packbits::decode(&[0xfd, 1], 3).is_err()); // run overflows (4 > 3)
         assert!(packbits::decode(&[3, 1, 2, 3, 4], 3).is_err()); // literal overflows
+    }
+
+    /// `out.len() + expected` past `usize::MAX` used to panic in debug builds and, in release,
+    /// wrap and return `Ok` having decoded nothing.
+    #[test]
+    fn packbits_decode_into_output_length_overflow_is_an_error() {
+        let mut out = vec![7u8];
+        let r = packbits::decode_into(&[0x00, 0xaa], usize::MAX, &mut out);
+        assert!(matches!(r, Err(PsdError::LimitExceeded(_))), "{r:?}");
+        assert_eq!(out, [7]);
+        // The largest `expected` that fits still decodes up to the input, then reports it short.
+        let r = packbits::decode_into(&[0x00, 0xaa], usize::MAX - 1, &mut out);
+        assert!(matches!(r, Err(PsdError::Decompress(_))), "{r:?}");
+        assert_eq!(out, [7, 0xaa]);
     }
 
     #[test]

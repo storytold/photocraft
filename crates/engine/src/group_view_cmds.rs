@@ -102,6 +102,9 @@ mod tests {
         s.execute("layer.new.layer", json!({"name": "deep"})).unwrap();
         let inner = s.execute("layer.groupLayers", json!({"name": "inner"})).unwrap()["layer"].as_u64().unwrap();
         let outer = s.execute("layer.groupLayers", json!({"layer": inner, "name": "outer"})).unwrap()["layer"].as_u64().unwrap();
+        // Group Layers creates collapsed groups; the tests start from both open.
+        assert!(!expanded(&s, inner) && !expanded(&s, outer));
+        s.execute(ID, json!({"all": true, "expanded": true})).unwrap();
         (s, inner, outer)
     }
 
@@ -142,7 +145,7 @@ mod tests {
         let bg = s.active().unwrap().doc.layers[0].id.0;
         for p in [
             json!({"layer": bg}),
-            json!({"layer": 9999}),
+            json!({"layer": u64::MAX}),
             json!({"layer": "x"}),
             json!({"layer": -1}),
             json!({"expanded": "yes", "all": true}),

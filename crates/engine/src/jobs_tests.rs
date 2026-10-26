@@ -95,6 +95,36 @@ fn free_transform_runs_as_a_job_with_the_inline_result() {
 }
 
 #[test]
+fn warp_runs_as_a_job_with_the_inline_result() {
+    let arc = json!({"style": "arc", "bend": 30});
+    let mut inline = session(300, 200);
+    inline.execute("edit.transform.warp", arc.clone()).unwrap();
+
+    let mut s = session(300, 200);
+    let steps = s.active().unwrap().history.past_len();
+    let id = job(s.start("edit.transform.warp", arc).unwrap());
+    let e = wait_event(&mut s, id);
+    assert!(matches!(e.outcome, JobOutcome::Done(_)), "{e:?}");
+    assert_eq!(e.label, "Warp");
+    assert_eq!(s.active().unwrap().history.past_len(), steps + 1, "one undo step");
+    assert_eq!(pixels(&s), pixels(&inline), "same pixels as the synchronous command");
+}
+
+#[test]
+fn a_cancelled_warp_leaves_the_document_unchanged() {
+    let mut s = session(1600, 1200);
+    let doc_before = s.active().unwrap().doc.clone();
+    let steps = s.active().unwrap().history.past_len();
+    let id = job(s.start("edit.transform.warp", json!({"style": "flag", "bend": 40})).unwrap());
+    assert!(s.cancel_job(id));
+    assert_eq!(wait_event(&mut s, id).outcome, JobOutcome::Cancelled);
+    s.join_cancelled_jobs();
+    let st = s.active().unwrap();
+    assert!(Arc::ptr_eq(&st.doc, &doc_before), "the document snapshot was not replaced");
+    assert_eq!(st.history.past_len(), steps);
+}
+
+#[test]
 fn cancel_leaves_the_document_byte_identical() {
     let mut s = session(1600, 1200);
     let doc_before = s.active().unwrap().doc.clone();
@@ -322,6 +352,56 @@ fn background_job_finishes_bookkeeping_on_edited_document_after_tab_switch() {
     assert!(s.is_enabled("edit.fade"), "Fade must be available on the document that was edited");
 }
 
+/// #7382: a background filter on a targeted alpha channel or the Quick Mask, finished while another
+/// document is shown, leaves Fade on that channel of the edited document: at 0 % it restores the
+/// channel exactly and leaves the layer alone.
+#[test]
+fn background_filter_on_a_channel_fades_that_channel_after_a_tab_switch() {
+    use crate::edit_menu_cmds::FadeTarget;
+    for quick_mask in [false, true] {
+        let mut s = session(32, 24);
+        let edited_doc = s.active().unwrap().doc.id;
+        if quick_mask {
+            s.execute("select.editInQuickMaskMode", json!({"on": true})).unwrap();
+        } else {
+            s.execute("channel.new", json!({"fill": "black"})).unwrap();
+            s.execute("channel.target", json!({"channel": 0})).unwrap();
+        }
+        // A pattern for the blur to change.
+        s.edit("pattern", |doc, _| {
+            let c = if quick_mask { doc.quick_mask.as_mut() } else { doc.channels.first_mut() };
+            let c = c.ok_or_else(|| EngineError::Other("no channel".into()))?;
+            c.surface.fill_rect(photocraft_geom::Rect::new(0, 0, 32, 24), &[0.0]);
+            c.surface.fill_rect(photocraft_geom::Rect::new(8, 6, 20, 16), &[1.0]);
+            Ok(())
+        })
+        .unwrap();
+        let channel = |s: &Session, d: usize| {
+            let doc = &s.documents()[d].doc;
+            let c = if quick_mask { doc.quick_mask.as_ref() } else { doc.channels.first() };
+            let c = c.unwrap();
+            (0..24).flat_map(|y| (0..32).map(move |x| (x, y))).map(|(x, y)| c.surface.pixel(x, y)[0]).collect::<Vec<f32>>()
+        };
+        let layer = |s: &Session| {
+            let st = &s.documents()[0];
+            st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().pixel(5, 5)
+        };
+        let (pattern, pixels) = (channel(&s, 0), layer(&s));
+        let id = job(s.start("filter.blur.gaussianBlur", json!({"radius": 2})).unwrap());
+        s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+        let event = wait_event(&mut s, id);
+        assert!(matches!(event.outcome, JobOutcome::Done(_)), "{event:?}");
+        assert_ne!(channel(&s, 0), pattern, "quick mask {quick_mask}: the blur changed the channel");
+        let fade = s.edit_state.fade.clone().unwrap();
+        assert_eq!(fade.doc, edited_doc);
+        assert_eq!(fade.target, if quick_mask { FadeTarget::QuickMask } else { FadeTarget::Channel(0) });
+        assert!(s.set_active(0));
+        s.execute("edit.fade", json!({"opacity": 0})).unwrap();
+        assert_eq!(channel(&s, 0), pattern, "quick mask {quick_mask}: Fade at 0 % restores the channel");
+        assert_eq!(layer(&s), pixels, "quick mask {quick_mask}: the layer is left alone");
+    }
+}
+
 #[test]
 fn closing_the_document_cancels_its_job() {
     let mut s = session(1600, 1200);
@@ -491,6 +571,32 @@ fn an_open_that_asks_about_its_profile_holds_the_document_back() {
 }
 
 #[test]
+fn warm_layer_bounds_visits_every_layer_and_can_be_cancelled() {
+    let mut s = session(40, 30);
+    s.execute("layer.groupLayers", json!({})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let doc = s.active().unwrap().doc.clone();
+    fn count(layers: &[photocraft_doc::Layer]) -> usize {
+        layers.iter().map(|l| 1 + l.children().map_or(0, count)).sum()
+    }
+    assert!(doc.layers.iter().any(|l| l.children().is_some_and(|c| !c.is_empty())), "a group with a layer in it");
+    let mut checks = 0;
+    warm_layer_bounds(&doc, || {
+        checks += 1;
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(checks, count(&doc.layers), "one check per layer, nested ones included");
+    let mut checks = 0;
+    let r = warm_layer_bounds(&doc, || {
+        checks += 1;
+        if checks > 1 { Err(EngineError::Cancelled) } else { Ok(()) }
+    });
+    assert!(matches!(r, Err(EngineError::Cancelled)));
+    assert_eq!(checks, 2, "stops at the first failed check");
+}
+
+#[test]
 fn wait_job_blocks_until_applied() {
     let mut s = session(400, 300);
     let id = job(s.start("filter.blur.gaussianBlur", json!({"radius": 3})).unwrap());
@@ -578,4 +684,101 @@ fn an_inline_job_ctx_lets_another_thread_cancel_inline_work() {
     assert_ne!(pixels(&s), before);
     s.set_inline_job_ctx(None);
     s.execute("filter.blur.gaussianBlur", json!({"radius": 2})).unwrap();
+}
+
+/// The command ids an action holds.
+fn action_steps(s: &mut Session, name: &str) -> Vec<String> {
+    let a = s.execute("actions.get", json!({"action": name})).unwrap();
+    a["steps"].as_array().unwrap().iter().map(|step| step[0].as_str().unwrap().to_string()).collect()
+}
+
+/// A job's result is recorded only by the recording it was started in: one started later keeps
+/// its own steps around it but doesn't pick up the older edit (#7289).
+#[test]
+fn a_job_lands_in_the_recording_it_was_started_in_only() {
+    // Started while recording A, applied after A stopped and B started.
+    let mut s = session(40, 30);
+    s.execute("actions.record", json!({"name": "A"})).unwrap();
+    let id = job(s.start("filter.blur.gaussianBlur", json!({"radius": 1})).unwrap());
+    s.execute("actions.stop", json!({})).unwrap();
+    s.execute("actions.record", json!({"name": "B"})).unwrap();
+    // B's own steps before and after the result lands stay in B (a new document, so the job's
+    // document is unchanged and its result applies).
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    s.wait_job(id).unwrap();
+    s.execute("image.adjustments.desaturate", json!({})).unwrap();
+    s.execute("actions.stop", json!({})).unwrap();
+    assert!(action_steps(&mut s, "A").is_empty());
+    assert_eq!(action_steps(&mut s, "B"), ["file.new", "image.adjustments.desaturate"]);
+
+    // Started before any recording, applied while B records.
+    let mut s = session(40, 30);
+    let id = job(s.start("filter.blur.gaussianBlur", json!({"radius": 1})).unwrap());
+    s.execute("actions.record", json!({"name": "B"})).unwrap();
+    s.wait_job(id).unwrap();
+    s.execute("actions.stop", json!({})).unwrap();
+    assert!(action_steps(&mut s, "B").is_empty());
+
+    // Started and applied while A records: A has it, as before.
+    let mut s = session(40, 30);
+    s.execute("actions.record", json!({"name": "A"})).unwrap();
+    let id = job(s.start("filter.blur.gaussianBlur", json!({"radius": 1})).unwrap());
+    s.wait_job(id).unwrap();
+    s.execute("actions.stop", json!({})).unwrap();
+    assert_eq!(action_steps(&mut s, "A"), ["filter.blur.gaussianBlur"]);
+}
+
+/// Exercise six terminal job routes so prepared paint snapshots cannot outlive a completed or discarded job.
+#[test]
+fn every_job_terminal_path_drops_a_live_commit_stroke() {
+    use crate::brush_cmds::mixer_live::LiveMixer;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    for outcome in 0..6 {
+        let mut s = session(32, 32);
+        let live = LiveMixer::begin(&s, &json!({"points": [[16, 16]], "size": 4})).unwrap();
+        live.prepare_commit(&mut s).unwrap();
+        let gate = Arc::new(AtomicBool::new(false));
+        let worker_gate = gate.clone();
+        let id = job(s
+            .start_job(
+                "test.mixer_cleanup",
+                json!({}),
+                "Mixer cleanup",
+                true,
+                move |ctx| {
+                    while !worker_gate.load(Ordering::Relaxed) {
+                        ctx.check()?;
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                    if outcome == 1 { Err(EngineError::Other("worker failed".into())) } else { Ok(()) }
+                },
+                move |_, ()| {
+                    if outcome == 4 { Err(EngineError::Other("apply failed".into())) } else { Ok(json!({})) }
+                },
+            )
+            .unwrap());
+        assert!(s.live_commit.is_some());
+        if outcome == 2 {
+            assert!(s.cancel_job(id));
+            s.join_cancelled_jobs();
+        } else {
+            if outcome == 3 {
+                // Simulate replacement outside command dispatch, which itself clears offers.
+                let doc = (*s.active().unwrap().doc).clone();
+                s.active_mut().unwrap().doc = Arc::new(doc);
+            } else if outcome == 5 {
+                s.docs.clear();
+                s.active = None;
+            }
+            gate.store(true, Ordering::Relaxed);
+        }
+        let event = wait_event(&mut s, id);
+        match outcome {
+            0 => assert!(matches!(event.outcome, JobOutcome::Done(_))),
+            2 => assert!(matches!(event.outcome, JobOutcome::Cancelled)),
+            _ => assert!(matches!(event.outcome, JobOutcome::Failed(_))),
+        }
+        assert!(s.live_commit.is_none(), "terminal path {outcome} retained the preview");
+    }
 }

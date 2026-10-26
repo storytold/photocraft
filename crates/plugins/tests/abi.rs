@@ -319,28 +319,46 @@ fn folder_loading_skips_bad_files() {
 }
 
 #[test]
-fn example_invert_rejects_mismatched_buffer_length() {
-    use wasmi::{Engine, Linker, Module, Store};
+fn a_start_function_that_spins_is_cut_off_at_one_slice() {
+    // `fuel_base` is what a call may use; the start function cannot be interrupted to check the
+    // clock, so it gets one slice of it at most.
+    let spin = "(func $spin (loop $l (br $l))) (start $spin)";
+    let limits = Limits { fuel_base: u64::MAX / 4, ..Limits::default() };
+    let (error, took) = run_err(&module(MANIFEST, 1, "(i32.const 0)", spin), limits);
+    assert!(matches!(error, Error::Trap(_) | Error::Limit(_)), "{error:?}");
+    assert!(took < Duration::from_secs(30), "{took:?}");
+}
 
-    let engine = Engine::default();
-    let module = Module::new(&engine, INVERT).unwrap();
-    let mut store = Store::new(&engine, ());
-    let linker = Linker::<()>::new(&engine);
+#[test]
+fn content_spread_over_millions_of_bands_is_refused_before_planning_them() {
+    let p = Plugin::load(INVERT, Limits::default()).unwrap();
+    let mut s = Surface::new(PixelFormat::RGBA8);
+    s.write_pixel(0, 0, &[0.1, 0.2, 0.3, 1.0]);
+    s.write_pixel(4_000_000, 4_000_000, &[0.1, 0.2, 0.3, 1.0]);
+    let t = Instant::now();
+    let e = p.apply(&s, Rect::new(0, 0, 8, 8), None, &json!({})).expect_err("a 15600 × 15600 tile grid is not one run");
+    assert!(matches!(e, Error::Limit(_)), "{e:?}");
+    assert!(t.elapsed() < Duration::from_secs(5), "{:?}", t.elapsed());
+}
 
-    let instance = linker.instantiate_and_start(&mut store, &module).unwrap();
-
-    let alloc = instance.get_typed_func::<i32, i32>(&store, "pc_alloc").unwrap();
-
-    let filter = instance.get_typed_func::<(i32, i32, i32, i32, i32, i32, i32, i32), i32>(&store, "pc_filter").unwrap();
-
-    // A 2x2 RGBA image requires 16 f32 samples = 64 bytes.
-    let ptr = alloc.call(&mut store, 80).unwrap();
-
-    // The host provides valid allocated memory, but the
-    // declared byte length disagrees with image dimensions.
-    for (name, len, expected) in [("valid", 64, 0), ("too short", 48, 1), ("too long", 80, 1), ("unaligned", 63, 1)] {
-        let result = filter.call(&mut store, (ptr, len, 2, 2, 4, 0, 0, 0)).unwrap();
-
-        assert_eq!(result, expected, "{name}");
-    }
+#[cfg(unix)]
+#[test]
+fn a_fifo_in_place_of_a_module_file_does_not_block_loading() {
+    let dir = std::env::temp_dir().join(format!("photocraft-plugin-fifo-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("evil.wasm");
+    let _ = std::fs::remove_file(&path);
+    // `rustix::fs::mknodat` is unavailable on Apple targets. `mkfifo` is the
+    // POSIX utility for creating this special file and keeps this regression
+    // test available on macOS as well as other Unix platforms.
+    let status = std::process::Command::new("mkfifo").arg(&path).status().unwrap();
+    assert!(status.success(), "mkfifo failed with {status}");
+    let (tx, rx) = std::sync::mpsc::channel();
+    let p = path.clone();
+    std::thread::spawn(move || {
+        let _ = tx.send(photocraft_plugins::registry::load_file(&p, Limits::default()).map(|_| ()));
+    });
+    let r = rx.recv_timeout(Duration::from_secs(10)).expect("loading a FIFO must not block");
+    assert!(matches!(r, Err(Error::Io(_))), "{r:?}");
+    let _ = std::fs::remove_dir_all(&dir);
 }

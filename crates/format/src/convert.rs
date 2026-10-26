@@ -152,6 +152,8 @@ fn layer_m(l: &Layer, sink: &mut dyn Sink) -> LayerM {
             path: s.path.clone(),
             stroke: s.stroke.clone(),
             live: s.live.clone(),
+            density: s.density,
+            feather: s.feather,
         },
         LayerContent::Smart(s) => ContentM::Smart {
             contents_id: Some(s.contents_id.0),
@@ -209,6 +211,7 @@ fn layer_m(l: &Layer, sink: &mut dyn Sink) -> LayerM {
         blend_if: l.blend_if.clone(),
         advanced: l.advanced,
         video: l.video.as_ref().map(|v| video_m(v, sink)),
+        xmp: l.xmp.as_deref().map(str::to_string),
     }
 }
 
@@ -233,7 +236,7 @@ pub(crate) fn doc_m(d: &Document, sink: &mut dyn Sink) -> DocM {
         ruler_origin: d.ruler_origin,
         selection: d.selection.as_ref().map(|s| surface_m(s, sink)),
         metadata: MetadataM {
-            xmp: d.metadata.xmp.clone(),
+            xmp: d.metadata.xmp.as_deref().map(str::to_owned),
             exif: opt_blob(&d.metadata.exif, sink),
             text: d.metadata.text.clone(),
             psd_resources: d.metadata.psd_resources.iter().map(|(id, n, b)| (*id, n.clone(), sink.blob(b))).collect(),
@@ -466,13 +469,15 @@ impl Loader<'_> {
                     warp: warp.clone(),
                 })
             }
-            ContentM::Shape { fill, cache, psd_raw, path, stroke, live } => LayerContent::Shape(ShapeLayer {
+            ContentM::Shape { fill, cache, psd_raw, path, stroke, live, density, feather } => LayerContent::Shape(ShapeLayer {
                 path: path.clone(),
                 fill: fill.clone(),
                 stroke: stroke.clone(),
                 live: live.clone(),
                 cache: self.opt_surface(cache)?,
                 psd_raw: self.opt_blob(psd_raw)?,
+                density: *density,
+                feather: *feather,
             }),
             ContentM::Smart { contents_id, source, transform, smart_filters, cache, psd_raw, filters_enabled, filter_mask, warp, stack_mode, perspective } => {
                 LayerContent::Smart(SmartObject {
@@ -543,6 +548,7 @@ impl Loader<'_> {
             blend_if: m.blend_if.clone(),
             advanced: m.advanced,
             video: m.video.as_ref().map(|v| self.video(v)).transpose()?,
+            xmp: m.xmp.as_deref().map(Arc::from),
         })
     }
 
@@ -575,7 +581,7 @@ impl Loader<'_> {
         }
         let quick_mask = m.quick_mask.as_ref().map(|c| self.channel(c)).transpose()?;
         let mut md = Metadata {
-            xmp: m.metadata.xmp.clone(),
+            xmp: m.metadata.xmp.as_deref().map(std::sync::Arc::from),
             exif: self.opt_blob(&m.metadata.exif)?,
             text: m.metadata.text.clone(),
             psd_resources: Vec::new(),
@@ -617,6 +623,15 @@ impl Loader<'_> {
                 }
             }
         }
+        // Variable targets follow their layers through id remapping; a dangling one keeps a
+        // non-colliding placeholder so it stays a missing-layer skip rather than driving an
+        // unrelated layer (#4969). With preserved ids the map is the identity and defs stay as saved.
+        let mut variables = m.variables.clone();
+        if !self.preserve_ids {
+            for vd in &mut variables.defs {
+                vd.layer = self.id_map.get(&vd.layer.0).copied().unwrap_or(LayerId(u64::MAX - vd.layer.0.min(u64::MAX / 2)));
+            }
+        }
         let id = if self.preserve_ids { DocId(m.id) } else { DocId::fresh() };
         Ok(Document {
             id,
@@ -641,7 +656,7 @@ impl Loader<'_> {
             patterns,
             color_table: m.color_table.clone(),
             duotone: m.duotone.clone(),
-            variables: m.variables.clone(),
+            variables,
             timeline: m.timeline.clone(),
             file_encoding: m.file_encoding,
             layer_comps,

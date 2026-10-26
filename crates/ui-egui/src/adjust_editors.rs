@@ -21,7 +21,7 @@ use serde_json::{Value, json};
 use crate::PhotocraftApp;
 use crate::theme::Tokens;
 use crate::tone::{self, HistSource, Histograms};
-use crate::widgets;
+use crate::widgets::{self, hue_color};
 
 /// Kinds edited here (Selective Color and Color Lookup have their own editors; Invert has none).
 pub const KINDS: [&str; 13] = [
@@ -92,6 +92,8 @@ pub struct EditorCx {
     /// Preferences ▸ Interface ▸ Dynamic Color Sliders: colour tracks on the colour sliders
     /// (off: the plain track).
     pub dynamic_color_sliders: bool,
+    /// Image › Curves with a single Channels-panel target: that channel only (#5335).
+    pub isolated_curve: Option<photocraft_engine::channel_cmds::IsolatedCurveChannel>,
 }
 
 /// The Levels/Curves channel space the values address.
@@ -214,7 +216,7 @@ fn sliders(ui: &mut egui::Ui, v: &mut Value, rows: &[SliderRow]) -> Edit {
     for &(key, text, min, max, default, unit, decimals) in rows {
         let mut x = num(v, key, default).clamp(min, max);
         // A double-click on the slider puts it back to its default (Photoshop).
-        let gestures = widgets::RowGestures { reset: Some(default), wheel_step: None };
+        let gestures = widgets::RowGestures { reset: Some(default), wheel_step: None, ..Default::default() };
         let r = widgets::slider_row_prec(ui, text, &mut x, min..=max, unit, None, gestures, decimals);
         if r.changed() {
             v[key] = json!(row_value(x, min, max, decimals));
@@ -291,14 +293,26 @@ pub fn tone_channels(space: ToneSpace, gray: bool) -> &'static [ToneChannel] {
 }
 
 fn channel_picker(ui: &mut egui::Ui, id: egui::Id, chans: &[ToneChannel], text: &str) -> usize {
+    let opts: Vec<(usize, &str)> = chans.iter().enumerate().map(|(i, c)| (i, c.label)).collect();
+    channel_picker_opts(ui, id, &opts, text, true)
+}
+
+/// The popup, with `translate` for whether the built-in labels follow the interface language;
+/// a user-typed channel name is shown exactly as entered (#5335).
+fn channel_picker_opts(ui: &mut egui::Ui, id: egui::Id, opts: &[(usize, &str)], text: &str, translate: bool) -> usize {
     let mut ch: usize = ui.data(|d| d.get_temp(id)).unwrap_or(0);
-    if ch >= chans.len() {
+    if ch >= opts.len() {
         ch = 0;
     }
     ui.horizontal(|ui| {
         label(ui, text);
-        let opts: Vec<(usize, &str)> = chans.iter().enumerate().map(|(i, c)| (i, c.label)).collect();
-        widgets::dropdown(ui, &format!("{id:?}-ch"), &mut ch, &opts, 110.0);
+        let width = if opts.len() == 1 { 160.0 } else { 110.0 };
+        let key = format!("{id:?}-ch");
+        if translate {
+            widgets::dropdown(ui, &key, text, &mut ch, opts, width);
+        } else {
+            widgets::dropdown_literal(ui, &key, text, &mut ch, opts, width);
+        }
     });
     ui.data_mut(|d| d.insert_temp(id, ch));
     ch
@@ -343,12 +357,33 @@ fn gradient_bar(p: &egui::Painter, r: Rect, from: Color32, to: Color32, vertical
 const CURVE_HANDLE_SIZE: f32 = 7.0;
 const CURVE_GRAPH_PADDING: f32 = 5.0;
 
+/// The room left on screen for the Curves dialog's other rows (title, channel and mode, Input and
+/// Output, eyedroppers, buttons) when its graph is as tall as it can be.
+const CURVES_CHROME: f32 = 360.0;
+/// The smallest and the default largest side of the Curves graph: 300 points was the fixed
+/// size until #8984.
+const CURVE_SIDE: (f32, f32) = (120.0, 300.0);
+
+/// The Curves graph's side (#8984): the width it is given, in the Properties panel and in the
+/// resizable dialog, and no taller than the window leaves room for beside the other rows.
+fn curve_side(ui: &egui::Ui) -> f32 {
+    let tallest = curve_side_max(ui.ctx());
+    let width = ui.available_width();
+    if width.is_finite() { width.clamp(CURVE_SIDE.0, tallest) } else { CURVE_SIDE.1 }
+}
+
+/// The largest the Curves graph gets in this window: as tall as the window leaves room for beside
+/// the dialog's other rows, and never under the old 300 points. The Curves dialog is no wider.
+pub(crate) fn curve_side_max(ctx: &egui::Context) -> f32 {
+    (ctx.content_rect().height() - CURVES_CHROME).max(CURVE_SIDE.1)
+}
+
 fn curve_graph(full: Rect, side: f32) -> Rect {
     let base = Rect::from_min_size(full.min + vec2(14.0, 0.0), vec2(side - 14.0, side - 14.0));
     Rect::from_min_max(base.min + vec2(CURVE_GRAPH_PADDING, CURVE_GRAPH_PADDING), base.max - vec2(CURVE_GRAPH_PADDING, CURVE_GRAPH_PADDING))
 }
 
-fn read_curve(v: &Value, key: &str) -> Vec<[f32; 2]> {
+pub(crate) fn read_curve(v: &Value, key: &str) -> Vec<[f32; 2]> {
     let pts: Vec<[f32; 2]> = v
         .get(key)
         .and_then(Value::as_array)
@@ -428,17 +463,26 @@ fn curves(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     let chans = tone_channels(space, cx.gray);
     let state_id = cx.mem.with("curves");
     let mut st: CurveUi = ui.data(|d| d.get_temp(state_id)).unwrap_or_default();
-    let ch = channel_picker(ui, cx.mem.with("curves-ch"), chans, tl!("Channel:"));
+    let isolated = cx.isolated_curve.as_ref();
+    let ch = if let Some(iso) = isolated {
+        channel_picker_opts(ui, cx.mem.with("curves-ch"), &[(0, iso.name.as_str())], tl!("Channel:"), iso.translate)
+    } else {
+        channel_picker(ui, cx.mem.with("curves-ch"), chans, tl!("Channel:"))
+    };
     if ch != st.channel {
         st = CurveUi { channel: ch, ..Default::default() };
     }
-    let chan = chans.get(ch).copied().unwrap_or(ToneChannel { key: "", label: "" });
+    let chan =
+        if let Some(iso) = isolated { ToneChannel { key: iso.key, label: "" } } else { chans.get(ch).copied().unwrap_or(ToneChannel { key: "", label: "" }) };
+    let overlay_others = isolated.is_none();
+    let tinted = isolated.is_some_and(|c| c.tint) || (isolated.is_none() && ch != 0);
+    let hist_i = isolated.map_or(ch, |c| c.hist);
     let key = curve_key(&chan);
     let mut e = curves_mode_row(ui, v, key, cx.gray);
     let pencil = v.get("pencil").and_then(Value::as_bool).unwrap_or(false);
     let mut pts = read_curve(v, key);
     let mut map = read_map(v, key);
-    let side = ui.available_width().clamp(120.0, 300.0);
+    let side = curve_side(ui);
     ui.add_space(4.0);
     let (full, resp) = ui.allocate_exact_size(vec2(side, side + 14.0), Sense::click_and_drag());
     let graph = curve_graph(full, side);
@@ -477,7 +521,7 @@ fn curves(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     let p = ui.painter_at(full.expand(2.0));
     p.rect_filled(graph, 0.0, t.field);
     if let Some(h) = &cx.hist {
-        tone::draw_histogram(&p, graph, &h[ch], Color32::from_gray(if t.pro { 88 } else { 190 }).gamma_multiply(0.75));
+        tone::draw_histogram(&p, graph, &h[hist_i], Color32::from_gray(if t.pro { 88 } else { 190 }).gamma_multiply(0.75));
     }
     for i in 1..4 {
         let f = i as f32 / 4.0;
@@ -510,7 +554,7 @@ fn curves(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
         let line: Vec<Pos2> = map.iter().enumerate().map(|(k, o)| to_scr([k as f32 / last * 255.0, *o])).collect();
         p.add(egui::Shape::line(line, Stroke::new(width, color)));
     };
-    if ch == 0 {
+    if overlay_others && ch == 0 {
         // Photoshop overlays the edited channel curves on the composite.
         for c in chans.iter().skip(1) {
             if pencil {
@@ -526,7 +570,7 @@ fn curves(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
             }
         }
     }
-    let color = if ch == 0 { t.text } else { bar_color(&chan, &t) };
+    let color = if tinted { bar_color(&chan, &t) } else { t.text };
     if pencil {
         draw_map(&map, color, 1.5);
     } else {
@@ -549,9 +593,9 @@ fn curves(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
         let i = st.gesture.selected.filter(|i| *i < pts.len() && !pencil);
         let (mut vi, mut vo) = i.map_or((0.0, 0.0), |i| (pts[i][0], pts[i][1]));
         label(ui, tl!("Input:"));
-        let ri = ui.add_enabled_ui(i.is_some(), |ui| widgets::value_field(ui, &mut vi, 0.0..=255.0, "", 52.0)).inner;
+        let ri = ui.add_enabled_ui(i.is_some(), |ui| widgets::value_field(ui, &mut vi, 0.0..=255.0, "", 52.0).accessible_name(tl!("Input:"))).inner;
         label(ui, tl!("Output:"));
-        let ro = ui.add_enabled_ui(i.is_some(), |ui| widgets::value_field(ui, &mut vo, 0.0..=255.0, "", 52.0)).inner;
+        let ro = ui.add_enabled_ui(i.is_some(), |ui| widgets::value_field(ui, &mut vo, 0.0..=255.0, "", 52.0).accessible_name(tl!("Output:"))).inner;
         if let Some(i) = i
             && (ri.changed() || ro.changed())
             && curve_edit::move_to(&mut pts, i, [vi, vo])
@@ -724,11 +768,11 @@ fn levels(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
         let fw = ((w - 16.0) / 3.0).min(70.0);
         let (mut nb, mut ng, mut nw) = (l[0], l[1], l[2]);
         let gap = ((w - 3.0 * fw) / 2.0 - 12.0).max(0.0);
-        let r0 = widgets::value_field(ui, &mut nb, 0.0..=253.0, "", fw);
+        let r0 = widgets::value_field(ui, &mut nb, 0.0..=253.0, "", fw).accessible_name(tl!("Black"));
         ui.add_space(gap);
-        let r1 = widgets::value_field(ui, &mut ng, 0.01..=9.99, "", fw);
+        let r1 = widgets::value_field(ui, &mut ng, 0.01..=9.99, "", fw).accessible_name(tl!("Gamma"));
         ui.add_space(gap);
-        let r2 = widgets::value_field(ui, &mut nw, 2.0..=255.0, "", fw);
+        let r2 = widgets::value_field(ui, &mut nw, 2.0..=255.0, "", fw).accessible_name(tl!("White"));
         if r0.changed() {
             l[0] = nb.round().min(l[2] - 2.0);
         }
@@ -778,9 +822,9 @@ fn levels(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     ui.horizontal(|ui| {
         let fw = ((w - 16.0) / 3.0).min(70.0);
         let (mut a, mut c) = (l[3], l[4]);
-        let ra = widgets::value_field(ui, &mut a, 0.0..=255.0, "", fw);
+        let ra = widgets::value_field(ui, &mut a, 0.0..=255.0, "", fw).accessible_name(tl!("Black"));
         ui.add_space((w - 2.0 * fw - 16.0).max(0.0));
-        let rc = widgets::value_field(ui, &mut c, 0.0..=255.0, "", fw);
+        let rc = widgets::value_field(ui, &mut c, 0.0..=255.0, "", fw).accessible_name(tl!("White"));
         if ra.changed() {
             l[3] = a.round();
         }
@@ -825,19 +869,15 @@ fn threshold(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
 
 const RANGE_LABELS: [&str; 6] = ["Reds", "Yellows", "Greens", "Cyans", "Blues", "Magentas"];
 
-fn hue_color(deg: f32) -> Color32 {
-    let rgb = egui::ecolor::Hsva::new(deg.rem_euclid(360.0) / 360.0, 1.0, 1.0, 1.0).to_srgb();
-    Color32::from_rgb(rgb[0], rgb[1], rgb[2])
-}
-
 /// The Saturation slider's track: grey to the hue at full saturation (UI-217-16).
 fn saturation_track(hue_deg: f32) -> [Color32; 2] {
     [Color32::from_gray(128), hue_color(hue_deg)]
 }
 
-/// The Lightness slider's track: black, the hue, white (UI-217-16).
-fn lightness_track(hue_deg: f32) -> [Color32; 3] {
-    [Color32::BLACK, hue_color(hue_deg), Color32::WHITE]
+/// The Lightness slider's track: black, mid grey, white, whatever the hue, as in Photoshop
+/// (UI-217-16, #6539).
+fn lightness_track() -> [Color32; 3] {
+    [Color32::BLACK, Color32::from_gray(128), Color32::WHITE]
 }
 
 fn move_hue_range_handle(bounds: [f32; 4], k: usize, deg: f32) -> [f32; 4] {
@@ -862,7 +902,7 @@ fn adjusted_spectrum(v: &Value, n: usize) -> Vec<Color32> {
     let rect = photocraft_geom::Rect::new(0, 0, n as i32, 1);
     let px = (0..n)
         .map(|i| {
-            let c = egui::ecolor::Hsva::new(i as f32 / (n - 1).max(1) as f32, 1.0, 1.0, 1.0).to_rgb();
+            let c = photocraft_color::convert::hsb_to_rgb([i as f32 / (n - 1).max(1) as f32 * 360.0, 1.0, 1.0]);
             [c[0], c[1], c[2], 1.0]
         })
         .collect();
@@ -890,7 +930,7 @@ fn hue_saturation(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     }
     ui.horizontal(|ui| {
         let opts: Vec<(usize, &str)> = std::iter::once((0, tl!("Master"))).chain(RANGE_LABELS.iter().enumerate().map(|(i, l)| (i + 1, *l))).collect();
-        ui.add_enabled_ui(!colorize, |ui| widgets::dropdown(ui, &format!("{range_id:?}"), &mut range, &opts, 120.0));
+        ui.add_enabled_ui(!colorize, |ui| widgets::dropdown(ui, &format!("{range_id:?}"), tl!("Range"), &mut range, &opts, 120.0));
     });
     ui.data_mut(|d| d.insert_temp(range_id, range));
     let mut e = Edit::default();
@@ -903,7 +943,8 @@ fn hue_saturation(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
             v["hue"] = json!(h.round());
         }
         e.add(Edit::of(&r));
-        // The Saturation and Lightness tracks follow the current hue, as in Photoshop (UI-217-16).
+        // The Saturation track follows the current hue; the Lightness track is a fixed
+        // black-grey-white ramp, as in Photoshop (UI-217-16).
         let sat_track = saturation_track(h);
         let mut s = num(v, "saturation", 0.0).clamp(slo, 100.0);
         let r = widgets::slider_row(ui, tl!("Saturation"), &mut s, slo..=100.0, "%", track_stops(cx, &sat_track));
@@ -911,7 +952,7 @@ fn hue_saturation(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
             v["saturation"] = json!(s.round());
         }
         e.add(Edit::of(&r));
-        let light_track = lightness_track(h);
+        let light_track = lightness_track();
         let mut l = num(v, "lightness", 0.0).clamp(-100.0, 100.0);
         let r = widgets::slider_row(ui, tl!("Lightness"), &mut l, -100.0..=100.0, "%", track_stops(cx, &light_track));
         if r.changed() {
@@ -959,8 +1000,10 @@ fn hue_saturation(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     }
     // Spectrum bars: input hues above, adjusted below; the selected range's sliders between.
     ui.add_space(6.0);
-    let w = ui.available_width().min(300.0);
+    // As wide as the sliders above, whatever the panel's width (#9242).
+    let w = ui.available_width();
     let (bars, bresp) = ui.allocate_exact_size(vec2(w, 40.0), Sense::click_and_drag());
+    ui.data_mut(|d| d.insert_temp(cx.mem.with("hs-bars"), bars));
     let top = Rect::from_min_size(bars.min, vec2(w, 10.0));
     let bottom = Rect::from_min_size(pos2(bars.left(), bars.bottom() - 10.0), vec2(w, 10.0));
     let p = ui.painter_at(bars.expand(4.0));
@@ -1072,7 +1115,7 @@ fn color_balance(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     ];
     // Photoshop: a double-click on a slider zeroes it (this tone only); the dialog's sliders step
     // with the wheel; Up/Down step the fields; Shift makes those steps 10.
-    let gestures = widgets::RowGestures { reset: Some(0.0), wheel_step: cx.dialog.then_some(1.0) };
+    let gestures = widgets::RowGestures { reset: Some(0.0), wheel_step: cx.dialog.then_some(1.0), ..Default::default() };
     let mut changed = false;
     for (i, (text, a, b)) in rows.iter().enumerate() {
         let r = Edit::of(&widgets::slider_row_with(ui, text, &mut vals[i], -100.0..=100.0, "", Some(&[*a, *b]), gestures));
@@ -1148,7 +1191,7 @@ fn photo_filter(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
         if preset.is_none() {
             opts.insert(0, ("custom".into(), "Custom"));
         }
-        let changed = ui.add_enabled_ui(!use_color, |ui| widgets::dropdown(ui, &format!("{mode_id:?}-filter"), &mut sel, &opts, 170.0)).inner;
+        let changed = ui.add_enabled_ui(!use_color, |ui| widgets::dropdown(ui, &format!("{mode_id:?}-filter"), tl!("Filter:"), &mut sel, &opts, 170.0)).inner;
         if changed && let Some(f) = PHOTO_FILTERS.iter().find(|f| f.0 == sel) {
             c = f.2.map(|x| f32::from(x) / 255.0);
             v["color"] = json!(adjust_params::hex(c));
@@ -1189,7 +1232,7 @@ fn channel_mixer(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     }
     ui.horizontal(|ui| {
         label(ui, tl!("Output Channel:"));
-        widgets::dropdown(ui, &format!("{out_id:?}"), &mut out, outs, 110.0);
+        widgets::dropdown(ui, &format!("{out_id:?}"), tl!("Output Channel:"), &mut out, outs, 110.0);
     });
     ui.data_mut(|d| d.insert_temp(out_id, out));
     let key = if mono { "gray" } else { ["red", "green", "blue"][out] };
@@ -1298,7 +1341,7 @@ fn gradient_map_strip(ui: &mut egui::Ui, stops: &mut Vec<Stop>, cx: &EditorCx, s
     let mut edit = Edit::default();
     let w = ui.available_width().min(300.0);
     let (outer, resp) = ui.allocate_exact_size(vec2(w, 44.0), Sense::click_and_drag());
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), tl!("Gradient stops")));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tl!("Gradient stops")));
     let bar = Rect::from_min_max(outer.min + vec2(8.0, 2.0), pos2(outer.right() - 8.0, outer.top() + 26.0));
     let x_of = |loc: f32| bar.left() + loc * bar.width();
     let loc_of = |x: f32| ((x - bar.left()) / bar.width().max(1.0)).clamp(0.0, 1.0);
@@ -1417,6 +1460,7 @@ fn gradient_map(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
                 }
             });
         press.after(&combo.response);
+        let _ = combo.response.accessible_name(tl!("Preset:"));
         if let Some(p) = picked {
             stops = p;
             selected = 0;
@@ -1445,7 +1489,7 @@ fn gradient_map(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
         ui.horizontal(|ui| {
             label(ui, tl!("Location:"));
             let mut loc = s.0 * 100.0;
-            let rl = widgets::value_field(ui, &mut loc, 0.0..=100.0, "%", 70.0);
+            let rl = widgets::value_field(ui, &mut loc, 0.0..=100.0, "%", 70.0).accessible_name(tl!("Location:"));
             if rl.changed() {
                 location = Some(loc / 100.0);
                 changed = true;
@@ -1510,7 +1554,7 @@ pub fn swatches(app: &PhotocraftApp) -> [[f32; 3]; 2] {
 
 /// Root of an adjustment layer's Properties editor view state in egui memory.
 pub fn layer_mem(id: LayerId) -> egui::Id {
-    egui::Id::new(("adjust-layer", id.0))
+    egui::Id::unique(("adjust-layer", id.0))
 }
 
 /// Kinds whose Properties edits follow Photoshop's history and Reset (measured for Color Balance,
@@ -1623,6 +1667,7 @@ pub fn layer_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, adj
         gradients: gradient_presets(app, kind),
         dialog: false,
         dynamic_color_sliders: app.session.prefs().interface.dynamic_color_sliders,
+        isolated_curve: None,
     };
     if matches!(kind, "levels" | "curves") {
         crate::layer_picker::controls(app, ui, id);
@@ -1657,12 +1702,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn saturation_and_lightness_tracks_follow_the_hue() {
-        // The S/L slider tracks recolour with the hue (UI-217-16).
+    fn saturation_track_follows_the_hue() {
+        // The Saturation slider track recolours with the hue (UI-217-16).
         assert_eq!(saturation_track(0.0), [Color32::from_gray(128), hue_color(0.0)]);
         assert_ne!(saturation_track(0.0)[1], saturation_track(120.0)[1]);
         assert_eq!(saturation_track(720.0)[1], saturation_track(0.0)[1], "hue wraps");
-        assert_eq!(lightness_track(200.0), [Color32::BLACK, hue_color(200.0), Color32::WHITE]);
+    }
+
+    #[test]
+    fn lightness_track_is_black_grey_white_whatever_the_hue() {
+        // Photoshop's Lightness track does not take the hue's colour (#6539).
+        assert_eq!(lightness_track(), [Color32::BLACK, Color32::from_gray(128), Color32::WHITE]);
+        let [_, mid, _] = lightness_track();
+        assert!(mid.r() == mid.g() && mid.g() == mid.b(), "the middle stop is neutral grey");
     }
 
     /// Preferences ▸ Interface ▸ Dynamic Color Sliders: off, the colour sliders get plain tracks.
@@ -1676,6 +1728,7 @@ mod tests {
             gradients: Vec::new(),
             dialog: false,
             dynamic_color_sliders: dynamic,
+            isolated_curve: None,
         };
         let stops = [Color32::BLACK, Color32::RED];
         assert_eq!(track_stops(&cx(true), &stops), Some(&stops[..]));

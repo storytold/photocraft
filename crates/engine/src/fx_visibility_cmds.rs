@@ -161,7 +161,7 @@ mod tests {
         let before = state(&s, a);
         for p in [
             json!({"layer": bg}),
-            json!({"layer": 9999}),
+            json!({"layer": u64::MAX}),
             json!({"layer": "x"}),
             json!({"layer": -1}),
             json!({"layer": a, "index": 2}),

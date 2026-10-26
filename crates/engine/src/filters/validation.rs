@@ -1,4 +1,4 @@
-//! Validate new core-filter invocations, without changing how old smart-filter records decode.
+//! Validate new filter invocations, without changing how old smart-filter records decode.
 
 use serde_json::Value;
 
@@ -33,7 +33,7 @@ impl Rule {
     }
 }
 
-// The bounds and choices are the core filters' public dialog-unit contract. Defaults remain in
+// The bounds and choices are the filters' public dialog-unit contract. Defaults remain in
 // params_for; gallery filters are checked in gallery_cmds.
 fn fields(id: &str) -> Option<&'static [(&'static str, Rule)]> {
     use Rule::{Bool, Choice, Number, Unsigned};
@@ -47,6 +47,20 @@ fn fields(id: &str) -> Option<&'static [(&'static str, Rule)]> {
             ("quality", Choice("draft|good|best")),
             ("centerX", Number(0.0, 1.0)),
             ("centerY", Number(0.0, 1.0)),
+        ],
+        "filter.blur.smartBlur" => &[
+            ("radius", Number(0.1, 100.0)),
+            ("threshold", Number(0.1, 100.0)),
+            ("quality", Choice("high|medium|low")),
+            ("mode", Choice("normal|edgeOnly|overlayEdge")),
+        ],
+        "filter.blur.shapeBlur" => &[("radius", Number(5.0, 1000.0)), ("shape", Choice("circle|ring|square|diamond|triangle|hexagon|star|heart|cross"))],
+        "filter.noise.reduceNoise" => &[
+            ("strength", Number(0.0, 10.0)),
+            ("preserveDetails", Number(0.0, 100.0)),
+            ("reduceColorNoise", Number(0.0, 100.0)),
+            ("sharpenDetails", Number(0.0, 100.0)),
+            ("removeJpegArtifact", Bool),
         ],
         "filter.blur.surfaceBlur" => &[("radius", Number(1.0, 100.0)), ("threshold", Number(2.0, 255.0))],
         "filter.sharpen.unsharpMask" => &[("amount", Number(1.0, 500.0)), ("radius", Number(0.1, 1000.0)), ("threshold", Number(0.0, 255.0))],
@@ -92,8 +106,8 @@ fn fields(id: &str) -> Option<&'static [(&'static str, Rule)]> {
     })
 }
 
-// Extended filters: only their documented choices are checked for now, since `prepare` injects
-// extra keys (colours, map documents) and their numeric ranges clamp in params_for.
+// Remaining extended filters: only their documented choices are checked for now, since some
+// accept extra keys (colours, map documents) and their numeric ranges clamp in params_for.
 fn choices(id: &str) -> Option<&'static [(&'static str, &'static str)]> {
     Some(match id {
         "filter.pixelate.mezzotint" => {
@@ -109,11 +123,11 @@ fn choices(id: &str) -> Option<&'static [(&'static str, &'static str)]> {
         "filter.distort.zigZag" => &[("style", "pondRipples|outFromCenter|aroundCenter")],
         "filter.render.lensFlare" => &[("lens", "zoom|prime35|prime105|moviePrime")],
         "filter.render.lightingEffects" => &[("lightType", "spot|point|infinite"), ("texture", "none|red|green|blue|alpha|luminance")],
-        "filter.blur.smartBlur" => &[("quality", "high|medium|low"), ("mode", "normal|edgeOnly|overlayEdge")],
-        "filter.blur.lensBlur" => {
-            &[("shape", "hexagon|triangle|square|pentagon|heptagon|octagon"), ("depthMap", "none|transparency|layerMask"), ("distribution", "uniform|gaussian")]
-        }
-        "filter.blur.shapeBlur" => &[("shape", "circle|ring|square|diamond|triangle|hexagon|star|heart|cross")],
+        "filter.blur.lensBlur" => &[
+            ("shape", "hexagon|triangle|square|pentagon|heptagon|octagon"),
+            ("depthMap", "none|transparency|layerMask|channel"),
+            ("distribution", "uniform|gaussian"),
+        ],
         "filter.other.hsbHsl" => &[("inputMode", "rgb|hsb|hsl"), ("rowOrder", "hsb|hsl|rgb")],
         "filter.video.deInterlace" => &[("eliminate", "oddFields|evenFields"), ("createBy", "interpolation|duplication")],
         _ => return None,
@@ -147,9 +161,9 @@ pub(crate) fn validate_params(id: &str, params: &Value) -> Result<()> {
                 "layer" => (value.as_u64().is_some(), "an unsigned layer id".into()),
                 "coalesce" => (value.is_string(), "a string".into()),
                 "target" => (
-                    value.as_str().is_some_and(|s| matches!(s, "pixels" | "mask" | "quickMask"))
+                    value.as_str().is_some_and(|s| matches!(s, "pixels" | "mask" | "filterMask" | "quickMask"))
                         || value.as_object().is_some_and(|o| o.len() == 1 && o.get("channel").and_then(Value::as_u64).is_some()),
-                    "pixels, mask, quickMask or {\"channel\":index}".into(),
+                    "pixels, mask, filterMask, quickMask or {\"channel\":index}".into(),
                 ),
                 _ => return Err(bad(format!("unknown parameter `{key}`"))),
             }
@@ -324,9 +338,7 @@ mod tests {
             "filter.distort.zigZag",
             "filter.render.lensFlare",
             "filter.render.lightingEffects",
-            "filter.blur.smartBlur",
             "filter.blur.lensBlur",
-            "filter.blur.shapeBlur",
             "filter.other.hsbHsl",
             "filter.video.deInterlace",
         ];
@@ -346,6 +358,124 @@ mod tests {
         // Keys `prepare` injects, and undocumented ones, stay accepted as before.
         s.execute("filter.stylize.tiles", json!({"count":4,"foreground":[1,0,0,1]})).unwrap();
         s.execute("filter.stylize.wind", json!({"direction":"fromLeft"})).unwrap();
+    }
+
+    const STRICT_EXTENDED: [&str; 3] = ["filter.blur.smartBlur", "filter.blur.shapeBlur", "filter.noise.reduceNoise"];
+
+    #[test]
+    fn strict_extended_filters_reject_bad_fields_without_editing() {
+        let numbers = [
+            ("filter.blur.smartBlur", "radius", 0.1, 100.0),
+            ("filter.blur.smartBlur", "threshold", 0.1, 100.0),
+            ("filter.blur.shapeBlur", "radius", 5.0, 1000.0),
+            ("filter.noise.reduceNoise", "strength", 0.0, 10.0),
+            ("filter.noise.reduceNoise", "preserveDetails", 0.0, 100.0),
+            ("filter.noise.reduceNoise", "reduceColorNoise", 0.0, 100.0),
+            ("filter.noise.reduceNoise", "sharpenDetails", 0.0, 100.0),
+        ];
+        let specs = crate::filters_ext::specs();
+        for depth in [8, 16, 32] {
+            let mut s = session(depth);
+            for (id, key, min, max) in numbers {
+                let doc = specs.iter().find(|spec| spec.id == id).unwrap().params;
+                assert!(doc.contains(&format!("\"{key}\":{min}..{max}=")), "{id}.{key}");
+                for value in [json!("3"), json!(true), Value::Null, json!([]), json!({}), json!(min - 0.01), json!(max + 0.01), json!(1e300)] {
+                    rejected(&mut s, id, key, value);
+                }
+                // Validate large endpoints without allocating large blur kernels.
+                for value in [min, max] {
+                    validate_params(id, &json!({key:value})).unwrap();
+                }
+            }
+            for id in STRICT_EXTENDED {
+                for (key, value) in [("radus", json!(3)), ("layer", json!("2")), ("target", json!("typo")), ("coalesce", json!(false))] {
+                    rejected(&mut s, id, key, value);
+                }
+                for value in [json!([]), json!(false), json!(3), json!("params")] {
+                    assert!(matches!(validate_params(id, &value), Err(EngineError::BadParams { .. })));
+                }
+            }
+            for value in [json!("true"), json!(1), Value::Null, json!([]), json!({})] {
+                rejected(&mut s, "filter.noise.reduceNoise", "removeJpegArtifact", value);
+            }
+        }
+        for value in [false, true] {
+            validate_params("filter.noise.reduceNoise", &json!({"removeJpegArtifact":value})).unwrap();
+        }
+        for (id, key, allowed) in [
+            ("filter.blur.smartBlur", "quality", "high|medium|low"),
+            ("filter.blur.smartBlur", "mode", "normal|edgeOnly|overlayEdge"),
+            ("filter.blur.shapeBlur", "shape", "circle|ring|square|diamond|triangle|hexagon|star|heart|cross"),
+        ] {
+            let doc = specs.iter().find(|spec| spec.id == id).unwrap().params;
+            assert!(doc.contains(&format!("\"{key}\":\"{allowed}\"")), "{id}.{key}");
+            let mut s = session(8);
+            for value in [json!("typo"), json!(false), json!(1), Value::Null] {
+                rejected(&mut s, id, key, value);
+            }
+            for value in allowed.split('|') {
+                validate_params(id, &json!({key:value})).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn strict_extended_filters_validate_before_floating_selection_commit_and_jobs() {
+        let mut s = session(16);
+        s.execute("select.rect", json!({"x":0,"y":0,"width":4,"height":4})).unwrap();
+        s.execute("select.float", json!({"dx":8})).unwrap();
+        for id in STRICT_EXTENDED {
+            rejected(&mut s, id, "radus", json!(3));
+            let doc = s.active().unwrap().doc.clone();
+            let history = s.active().unwrap().history.entries();
+            let journal = s.journal.clone();
+            let params = json!({"radus":3});
+            assert!(matches!(s.start(id, params.clone()), Err(EngineError::BadParams { .. })));
+            let spec = crate::commands::find(id).unwrap();
+            assert!(matches!((spec.run)(&mut s, &params), Err(EngineError::BadParams { .. })));
+            assert!(crate::float_cmds::floating(s.active().unwrap()).is_some());
+            assert!(Arc::ptr_eq(&s.active().unwrap().doc, &doc));
+            assert_eq!(s.active().unwrap().history.entries(), history);
+            assert_eq!(s.journal, journal);
+            assert!(s.jobs().is_empty());
+        }
+    }
+
+    #[test]
+    fn strict_extended_filters_keep_defaults_targets_history_and_last_filter() {
+        for depth in [8, 16, 32] {
+            for id in STRICT_EXTENDED {
+                let mut s = session(depth);
+                let layer = s.active().unwrap().active_layer.unwrap();
+                for params in [Value::Null, json!({}), json!({"layer":layer.0,"target":"pixels","coalesce":"extended"})] {
+                    let before = s.active().unwrap().doc.clone();
+                    let history = s.active().unwrap().history.past_len();
+                    s.execute(id, params).unwrap();
+                    assert_eq!(s.active().unwrap().history.past_len(), history + 1);
+                    let after = s.active().unwrap().doc.clone();
+                    s.undo();
+                    assert_eq!(*s.active().unwrap().doc, *before);
+                    s.redo();
+                    assert_eq!(*s.active().unwrap().doc, *after);
+                }
+                s.execute("filter.lastFilter", json!({})).unwrap();
+                // The session injects this target when editing an alpha channel.
+                s.execute("channel.new", json!({"fill":"white"})).unwrap();
+                s.execute(id, json!({})).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn stored_extended_filter_records_still_decode_tolerantly() {
+        use photocraft_algo::{BlurQuality, BlurShape, FilterParams, SmartBlurMode};
+        let smart =
+            crate::filters::params_for("filter.blur.smartBlur", &json!({"radius":-2,"threshold":900,"quality":"old","mode":false,"extra":true})).unwrap();
+        assert!(matches!(smart, FilterParams::SmartBlur { radius: 0.1, threshold: 100.0, quality: BlurQuality::High, mode: SmartBlurMode::Normal }));
+        let shape = crate::filters::params_for("filter.blur.shapeBlur", &json!({"radius":2000,"shape":"old"})).unwrap();
+        assert!(matches!(shape, FilterParams::ShapeBlur { radius: 1000.0, shape: BlurShape::Circle }));
+        let noise = crate::filters::params_for("filter.noise.reduceNoise", &json!({"strength":-1,"preserveDetails":101,"removeJpegArtifact":"yes"})).unwrap();
+        assert!(matches!(noise, FilterParams::ReduceNoise { strength: 0.0, preserve_details: 100.0, remove_jpeg_artifact: false, .. }));
     }
 
     #[test]

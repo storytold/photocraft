@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod bg_erase;
 pub mod brush;
+pub mod curve;
 pub mod dynamics;
 pub mod mixer;
 pub mod outline;
@@ -36,6 +37,7 @@ pub use brush::{
     BrushPreset, BrushSettings, ColorDynamics, Control, DualBrush, Dynamic, MAX_BRUSH_SIZE, MAX_SCATTER, MaskMode, Pattern, PatternStyle, Pose, PresetCaptures,
     Scattering, SectionLocks, ShapeDynamics, Smoothing, Texture, TipShape, Transfer,
 };
+pub use curve::ResponseCurve;
 pub use mixer::MixerSettings;
 pub use render::{BrushContext, StrokeRenderer, UnionLive, grid_center, grid_square, render_stroke};
 pub use tile::{GrayTile, StoredTile};
@@ -317,6 +319,24 @@ mod tests {
         apply_stroke(&mut s, &stroke(&[(10.0, 10.0), (90.0, 10.0)], 8.0), None, true);
         assert_eq!(s.pixel(20, 10), vec![0.0, 0.0, 0.0, 1.0]);
         assert_eq!(s.pixel(70, 10)[3], 0.0);
+    }
+
+    #[test]
+    fn lock_transparency_blends_source_atop_on_semi_transparent_pixels() {
+        // Half-transparent white under a black stroke at 50%: the colour moves halfway (Photoshop's
+        // source-atop), not by the source-over weight 0.5 / 0.75 (#5783).
+        for f in [PixelFormat::RGBA8, PixelFormat::RGBA16, PixelFormat::RGBA32F] {
+            for mode in [photocraft_color::BlendMode::Normal, photocraft_color::BlendMode::Multiply] {
+                let mut s = Surface::new(f);
+                s.fill_rect(Rect::new(0, 0, 100, 20), &[1.0, 1.0, 1.0, 0.5]);
+                let mut st = stroke(&[(10.0, 10.0), (90.0, 10.0)], 8.0);
+                st.brush.opacity = 0.5;
+                st.brush.mode = mode;
+                apply_stroke(&mut s, &st, None, true);
+                let p = s.rgba(50, 10);
+                assert!((p[0] - 0.5).abs() < 0.01 && (p[3] - 0.5).abs() < 0.01, "{f:?} {mode:?} {p:?}");
+            }
+        }
     }
 
     #[test]

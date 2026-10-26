@@ -174,7 +174,7 @@ fn edit_type_command_rejects_missing_or_non_type_layers_without_changes() {
 }
 
 #[test]
-fn reentering_type_edit_keeps_the_session_and_cancel_restores_cached_pixels() {
+fn layer_reselection_commits_type_edit_and_cancel_preserves_committed_text() {
     let mut s = session();
     let id = s.execute("type.create", json!({"text": "Hello", "size": 48, "x": 100, "y": 180})).unwrap()["layer"].as_u64().unwrap();
     // Stand-in for a PSD's retained Photoshop rendering, displaced from our glyph layout.
@@ -197,10 +197,13 @@ fn reentering_type_edit_keeps_the_session_and_cancel_restores_cached_pixels() {
     let key = h.state().ui.text_edit.as_ref().expect("inline text editor").session.clone();
     h.event(Event::Text("Changed".into()));
     h.run_steps(2);
+    // The first row click commits the edit; the second opens a new session (#5584).
     double_click(&mut h, at);
-    assert_eq!(h.state().ui.text_edit.as_ref().unwrap().session, key);
+    assert_ne!(h.state().ui.text_edit.as_ref().unwrap().session, key);
     assert_eq!(h.state().session.active().unwrap().history.entries().len(), steps + 1);
     crate::type_tool::cancel(h.state_mut());
+    assert_eq!(text(&h, id), "Changed");
+    assert!(h.state_mut().session.undo());
     assert_eq!(text(&h, id), "Hello");
     let st = h.state().session.active().unwrap();
     let LayerContent::Text(t) = &st.doc.layer(LayerId(id)).unwrap().content else { panic!("text") };

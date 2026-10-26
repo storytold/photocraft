@@ -61,7 +61,7 @@ fn app() -> PhotocraftApp {
 fn parses_rows_shortcuts_entities_and_tool_keys() {
     let set = parse(SAMPLE).unwrap();
     assert_eq!(set.commands.len(), 11);
-    assert_eq!(set.commands[2], KysCommand { name: "Undo".into(), shortcuts: vec!["Cmd+Z".into(), "F1".into()] });
+    assert_eq!(set.commands[2], KysCommand { name: "Undo".into(), shortcuts: vec!["Cmd+Z".into(), "F1".into()], id: None });
     assert_eq!(set.commands[7].name, "Black & White...");
     assert_eq!(set.tool_keys, 1, "the empty Default Colors row carries no key");
 }
@@ -104,7 +104,12 @@ fn rows_match_our_commands_by_label_with_photoshop_tie_breaks() {
 #[test]
 fn an_unreadable_shortcut_is_reported_not_imported() {
     let app = app();
-    let set = super::KysSet { name: None, commands: vec![KysCommand { name: "Undo".into(), shortcuts: vec!["Cmd+Shift+Ctrl".into()] }], tool_keys: 0 };
+    let set = super::KysSet {
+        name: None,
+        commands: vec![KysCommand { name: "Undo".into(), shortcuts: vec!["Cmd+Shift+Ctrl".into()], id: None }],
+        tool_keys: 0,
+        ..Default::default()
+    };
     let p = plan(&app, &set);
     assert!(p.set.is_empty());
     assert_eq!(p.unreadable, vec!["Undo".to_string()]);
@@ -143,7 +148,9 @@ fn import_button_fills_the_dialog_and_ok_applies_the_set() {
     assert!(overrides.get("select.all").is_none(), "already the default: {overrides}");
     assert!(overrides.get("view.zoomIn").is_none(), "Cmd+= is among the keys, so the default stays: {overrides}");
     let message = field(&h, "message");
-    assert_eq!(message, json!("Imported 9 shortcuts from texcuts.kys. Click OK to keep them. 2 commands are not in PhotoCraft."));
+    // 9 commands and the Move Tool's V (its own letter: no override).
+    assert_eq!(message, json!("Imported 10 shortcuts from texcuts.kys. Click OK to keep them. 2 commands are not in PhotoCraft."));
+    assert!(overrides.get("tools.select.move").is_none(), "{overrides}");
     assert_eq!(field(&h, "capture"), json!(false));
     assert_eq!(field(&h, "messageWarning"), json!(false), "an import clears the earlier shortcut conflict warning");
     // Nothing is applied until OK.
@@ -178,6 +185,31 @@ fn an_opened_kys_file_opens_the_dialog_filled() {
     assert_eq!(d.fields["message"], json!("Imported 1 shortcuts from more.kys. Click OK to keep them."));
     let bad = crate::preset_files_ui::open(&mut app, "notes.kys", b"hello").unwrap().unwrap_err();
     assert!(bad.contains("not a keyboard shortcut set (.kys)"), "{bad}");
+}
+
+/// #3665: a row listing Copy's ⌘C and F3 keeps both; the old import kept the first key only,
+/// and a row of F3 alone left ⌘C unbound only because the set says so.
+#[test]
+fn an_imported_row_keeps_its_second_key() {
+    let mut app = app();
+    let set = "<photoshop-keyboard-shortcuts>\
+        <command name=\"Copy\"><shortcut>F3</shortcut><shortcut>Cmd+C</shortcut></command>\
+        <command name=\"Cut\"><shortcut>Cmd+X</shortcut></command>\
+        <command name=\"Undo\"><shortcut>Cmd+Z</shortcut><shortcut>F1</shortcut></command>\
+        </photoshop-keyboard-shortcuts>";
+    let r = super::import_text(&mut app, "ps.kys", set).unwrap();
+    assert_eq!(r["alternateKeys"]["edit.copy"], json!(["F3"]));
+    let id = r["dialog"].as_u64().unwrap();
+    let f = &app.ui.dialog_mut(id).unwrap().fields;
+    assert!(f["overrides"].get("edit.copy").is_none(), "Copy keeps ⌘C: {}", f["overrides"]);
+    assert!(f["alternates"].get("edit.copy").is_none(), "F3 is Copy's default alternate");
+    assert_eq!(f["alternates"]["edit.cut"], json!([]), "the set gives Cut no F2");
+    assert_eq!(f["alternates"]["edit.undo"], json!(["F1"]));
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    assert_eq!(crate::shortcuts::effective_shortcut(&app, "edit.copy", Some("Cmd+C")).as_deref(), Some("Cmd+C"));
+    assert_eq!(crate::shortcuts::effective_alternates(&app, "edit.copy"), ["F3"]);
+    assert!(crate::shortcuts::effective_alternates(&app, "edit.cut").is_empty());
+    assert_eq!(crate::shortcuts::effective_alternates(&app, "edit.undo"), ["F1"]);
 }
 
 type Store = std::sync::Arc<std::sync::Mutex<Option<String>>>;
@@ -294,4 +326,32 @@ fn an_oversized_file_is_refused() {
     let e = super::open_bytes(&mut app, "huge.kys", &big).unwrap_err();
     assert!(e.contains("larger than 4 MiB"), "{e}");
     assert!(app.ui.dialogs.is_empty());
+}
+
+#[test]
+fn a_windows_set_with_tool_keys_imports_as_photoshop_meant_it() {
+    // Photoshop on Windows writes Ctrl for the primary modifier; the tool rows give letters.
+    let set = "<photoshop-keyboard-shortcuts version=\"4\">
+\t<command kind=\"static\" name=\"Copy\" id=\"103\"><shortcut>Ctrl+C</shortcut><shortcut>F3</shortcut></command>
+\t<command kind=\"static\" name=\"Levels...\" id=\"1801\"><shortcut>Ctrl+Shift+Alt+L</shortcut></command>
+\t<tool name=\"Move Tool\" type=\"1\">V</tool>
+\t<tool name=\"Pencil Tool\" type=\"1\">N</tool>
+\t<tool name=\"Imaginary Tool\" type=\"1\">Q</tool>
+</photoshop-keyboard-shortcuts>";
+    let mut app = app();
+    let r = super::import_text(&mut app, "win.kys", set).unwrap();
+    assert_eq!((r["windows"].as_bool(), r["unknownTools"].clone()), (Some(true), json!(["Imaginary Tool"])));
+    assert_eq!(r["tools"], json!({"tools.select.move": "V", "tools.select.pencil": "N"}));
+    let id = r["dialog"].as_u64().unwrap();
+    let f = &app.ui.dialog_mut(id).unwrap().fields;
+    assert!(f["overrides"].get("edit.copy").is_none(), "Ctrl+C on Windows is the default ⌘C: {}", f["overrides"]);
+    assert!(f["overrides"].get("tools.select.move").is_none(), "Move's own V keeps it cycling");
+    assert_eq!(f["overrides"]["tools.select.pencil"], json!("N"));
+    let levels = f["overrides"].as_object().unwrap().iter().find(|(id, _)| id.contains("levels")).map(|(_, v)| v.clone());
+    assert_eq!(
+        levels.as_ref().and_then(Value::as_str).and_then(photocraft_engine::prefs::normalize_shortcut),
+        photocraft_engine::prefs::normalize_shortcut("Cmd+Alt+Shift+L")
+    );
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    assert_eq!(crate::tool_shortcuts::shortcut(&app, crate::state::Tool::Pencil).as_deref(), Some("N"));
 }

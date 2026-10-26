@@ -95,6 +95,11 @@ pub(crate) fn active_outline(app: &mut PhotocraftApp, at: Option<[f64; 2]>, comm
         app.canvas_hover_layer = None;
         return None;
     }
+    // A live rectangle's corner widget under the pointer (or being dragged) isn't a layer to pick.
+    if at.is_some_and(|p| crate::corner_radius::hovers(app, p)) {
+        app.canvas_hover_layer = None;
+        return None;
+    }
     // A layer hovered in the Layers panel takes precedence over canvas rollover.
     if let Some(id) = app.hover_layer
         && app.drag.is_none()
@@ -180,7 +185,7 @@ mod tests {
         assert_eq!(active_outline(&mut app, None, false, false), Some(a));
 
         // When a drag or transform is in progress, no outline:
-        app.guide_drag = Some(crate::rulers::GuideDrag { vertical: false, index: None, pos: 10.0 });
+        app.guide_drag = Some(crate::rulers::GuideDrag { vertical: false, index: None, pos: 10.0, press: 10.0, over_ruler: false });
         assert_eq!(active_outline(&mut app, None, false, false), None);
         app.guide_drag = None;
 

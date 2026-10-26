@@ -1,5 +1,5 @@
 use super::*;
-use photocraft_doc::ColorMode;
+use photocraft_doc::{ColorMode, LayerContent, LayerId};
 
 fn session(w: u32, h: u32, depth: u32) -> Session {
     let mut s = Session::new();
@@ -9,6 +9,69 @@ fn session(w: u32, h: u32, depth: u32) -> Session {
 
 fn d(s: &Session) -> Arc<Document> {
     s.active().unwrap().doc.clone()
+}
+
+#[test]
+fn failed_compound_restores_layer_target_history_and_journal() {
+    let mut s = session(80, 60, 8);
+    let background = s.active().unwrap().active_layer.unwrap();
+    s.execute("layer.new.layer", json!({"name": "Selected"})).unwrap();
+    let selected = s.active().unwrap().active_layer.unwrap();
+    {
+        let st = s.active_mut().unwrap();
+        st.selected_layers = vec![background, selected];
+        st.layer_anchor = Some(background);
+        st.coalesce = Some("previous-gesture".into());
+    }
+
+    let st = s.active().unwrap();
+    let prior_doc = st.doc.clone();
+    let prior_history = st.history.past_len();
+    let prior_channel_view = st.channel_view.clone();
+    let prior_mask_targeted = s.tools.mask_targeted;
+    let prior_journal = s.journal.len();
+    let error = compound(&mut s, "Place Scale Marker", |s| -> Result<()> {
+        // Mirrors a scale-bar creation followed by a failed type.create: the
+        // inner command selects a new layer, which rollback must remove.
+        s.execute("layer.new.layer", json!({"name": "Temporary Scale Bar"}))?;
+        s.active_mut().unwrap().channel_view.target = crate::channel_cmds::ChannelTarget::LayerMask;
+        s.sync_tools_mask_target();
+        Err(bad("test", "synthetic second step failed"))
+    })
+    .unwrap_err();
+
+    assert!(error.to_string().contains("synthetic second step failed"));
+    let st = s.active().unwrap();
+    assert!(Arc::ptr_eq(&prior_doc, &st.doc), "the original document is restored");
+    assert_eq!(st.history.past_len(), prior_history, "no undo step remains");
+    assert_eq!(s.journal.len(), prior_journal, "no rolled-back command is journaled");
+    assert_eq!(st.active_layer, Some(selected));
+    assert_eq!(st.selected_layers, vec![background, selected]);
+    assert_eq!(st.layer_anchor, Some(background));
+    assert_eq!(st.channel_view, prior_channel_view);
+    assert_eq!(s.tools.mask_targeted, prior_mask_targeted, "tool mask target follows the restored channel");
+    assert_eq!(st.coalesce.as_deref(), Some("previous-gesture"));
+    assert!(st.doc.layer(selected).is_some());
+
+    // Subsequent ordinary commands target the original layer, not the
+    // nonexistent scale bar.
+    s.execute("layer.setProps", json!({"layer": selected.0, "visible": false})).unwrap();
+    assert!(!s.active().unwrap().doc.layer(selected).unwrap().visible);
+}
+
+#[test]
+fn failed_compound_preserves_a_clean_document() {
+    let mut s = session(80, 60, 8);
+    assert!(!s.active().unwrap().is_dirty());
+    let prior_doc = d(&s);
+    let error = compound(&mut s, "Place Scale Marker", |s| -> Result<()> {
+        s.execute("layer.new.layer", json!({"name": "Temporary Scale Bar"}))?;
+        Err(bad("test", "synthetic second step failed"))
+    })
+    .unwrap_err();
+    assert!(error.to_string().contains("synthetic second step failed"));
+    assert!(Arc::ptr_eq(&prior_doc, &d(&s)));
+    assert!(!s.active().unwrap().is_dirty(), "a rolled-back edit does not need saving");
 }
 
 #[test]
@@ -229,6 +292,27 @@ fn count_groups_markers_and_undo() {
 }
 
 #[test]
+fn deleting_an_earlier_count_group_keeps_the_active_group() {
+    let mut s = session(100, 100, 8);
+    s.execute("count.add", json!({"x": 10, "y": 10})).unwrap();
+    for _ in 0..3 {
+        s.execute("count.newGroup", json!({})).unwrap();
+    }
+    s.execute("count.setGroup", json!({"group": 2})).unwrap();
+    let r = s.execute("count.deleteGroup", json!({"group": 0})).unwrap();
+    assert_eq!(r["activeGroup"], 1);
+    assert_eq!(r["groups"][1]["name"], "Count Group 3");
+    // A later group leaves the active index alone.
+    let r = s.execute("count.deleteGroup", json!({"group": 2})).unwrap();
+    assert_eq!(r["activeGroup"], 1);
+    assert_eq!(r["groups"][1]["name"], "Count Group 3");
+    // Deleting the active last group selects the new last group.
+    let r = s.execute("count.deleteGroup", json!({})).unwrap();
+    assert_eq!(r["activeGroup"], 0);
+    assert_eq!(r["groups"][0]["name"], "Count Group 2");
+}
+
+#[test]
 fn log_delete_and_csv_export() {
     let mut s = session(10, 10, 8);
     assert!(!s.is_enabled("measurementLog.delete"));
@@ -290,6 +374,27 @@ fn place_scale_marker_builds_one_group_in_one_step() {
     assert!(s.undo());
     assert!(s.undo());
     assert!(d(&s).layers.iter().all(|l| l.name != "Measurement Scale Marker"));
+}
+
+#[test]
+fn place_scale_marker_lays_out_its_label_in_points_at_high_resolution() {
+    // `fontSize` is in points and `type.create` renders it at resolution/72 px per point, but the
+    // layout treated it as pixels: at 300 ppi a 12 pt label (50 px) overlapped the bar.
+    for res in [72.0, 300.0] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 1200, "height": 900, "resolution": res, "background": "white"})).unwrap();
+        let r = s.execute("image.analysis.placeScaleMarker", json!({"fontSize": 12, "textPosition": "bottom"})).unwrap();
+        let bar_bottom = r["barRect"][3].as_f64().unwrap();
+        let doc = d(&s);
+        let Some(LayerContent::Text(t)) = doc.layer(LayerId(r["text"].as_u64().unwrap())).map(|l| &l.content) else { panic!("a type layer: {r}") };
+        assert_eq!(t.size_pt, 12.0, "{res} ppi: type.create still gets points");
+        let layout = photocraft_text::shared().lock().unwrap().layout(t, doc.resolution_dpi);
+        let b = layout.bounds().expect("the label has a line");
+        let ty = t.transform.m[5];
+        let (top, bottom) = (f64::from(b[1]) + ty, f64::from(b[3]) + ty);
+        assert!(top >= bar_bottom - 0.5, "{res} ppi: label top {top} overlaps the bar ending at {bar_bottom}: {r}");
+        assert!(bottom <= 900.5, "{res} ppi: label bottom {bottom} stays on the canvas: {r}");
+    }
 }
 
 #[test]
@@ -385,4 +490,65 @@ fn count_set_group_rejects_sizes_that_are_not_whole_numbers() {
     let g = &d(&s).measurement.count_groups[0];
     assert_eq!((g.marker_size, g.label_size), (3, 12), "a rejected call changes nothing");
     assert_eq!(s.active().unwrap().history.past_len(), past);
+}
+
+#[test]
+fn count_add_rejects_unknown_groups_without_changing_the_document() {
+    for groups in [0, 1, 3] {
+        for group in [(groups as u64).max(1), u64::MAX] {
+            let mut s = session(10, 10, 8);
+            for _ in 0..groups {
+                s.execute("count.newGroup", json!({})).unwrap();
+            }
+            let before = d(&s);
+            let history = s.active().unwrap().history.past_len();
+            let journal = s.journal.len();
+            let error = s.execute("count.add", json!({"x": 2, "y": 3, "group": group})).unwrap_err();
+            assert!(error.to_string().contains("no such group"), "{error}");
+            assert!(Arc::ptr_eq(&before, &d(&s)), "an invalid target must not create a group or add a marker");
+            assert_eq!(s.active().unwrap().history.past_len(), history);
+            assert_eq!(s.journal.len(), journal);
+        }
+    }
+}
+
+#[test]
+fn count_add_keeps_first_group_creation_and_targets_the_requested_group() {
+    let mut s = session(10, 10, 8);
+    // Group zero can be requested before the first marker creates it.
+    let r = s.execute("count.add", json!({"x": 2, "y": 3, "group": 0})).unwrap();
+    assert_eq!(r["groups"][0]["points"], json!([[2.0, 3.0]]));
+    s.execute("count.newGroup", json!({})).unwrap();
+    let before = d(&s).measurement.clone();
+    let history = s.active().unwrap().history.past_len();
+    let r = s.execute("count.add", json!({"x": 4, "y": 5, "group": 0})).unwrap();
+    assert_eq!(r["activeGroup"], 1);
+    assert_eq!(r["groups"][0]["points"], json!([[2.0, 3.0], [4.0, 5.0]]));
+    assert_eq!(r["groups"][1]["count"], 0);
+    assert_eq!(s.active().unwrap().history.past_len(), history + 1);
+    let after = d(&s).measurement.clone();
+    assert!(s.undo());
+    assert_eq!(d(&s).measurement, before);
+    assert!(s.redo());
+    assert_eq!(d(&s).measurement, after);
+    // Omitting the group still uses the active group.
+    let r = s.execute("count.add", json!({"x": 6, "y": 7})).unwrap();
+    assert_eq!(r["groups"][1]["points"], json!([[6.0, 7.0]]));
+}
+
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn iso_from_unix_matches_the_old_cycle_conversion_including_beyond_chrono() {
+    use super::iso_from_unix;
+    assert_eq!(iso_from_unix(0), "1970-01-01T00:00:00Z");
+    assert_eq!(iso_from_unix(951_782_400), "2000-02-29T00:00:00Z");
+    assert_eq!(iso_from_unix(1_791_446_357), "2026-10-08T07:59:17Z");
+    // Years past 9999 keep the plain zero-padded year (no `+`).
+    assert_eq!(iso_from_unix(253_402_300_800), "10000-01-01T00:00:00Z");
+    // Beyond chrono's year range the old hand-rolled code still converted; pin that output
+    // (never the epoch) in both directions and at the i64 extremes.
+    assert_eq!(iso_from_unix(10_000_000_000_000), "318857-05-20T17:46:40Z");
+    assert_eq!(iso_from_unix(-10_000_000_000_000), "-314918-08-13T06:13:20Z");
+    assert_eq!(iso_from_unix(i64::MAX), "292277026596-12-04T15:30:07Z");
+    assert_eq!(iso_from_unix(i64::MIN), "-292277022657-01-27T08:29:52Z");
 }

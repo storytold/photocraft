@@ -66,6 +66,7 @@ mod tests {
 
     #[test]
     fn rendered_glyph_has_a_left_head_and_a_lower_right_head() {
+        let _gpu = photocraft_testkit::gpu_lock();
         let mut h = egui_kittest::Harness::builder().with_size(vec2(32.0, 32.0)).wgpu().build_ui(|ui| {
             paint(ui.painter(), pos2(8.0, 8.0), Color32::WHITE);
         });

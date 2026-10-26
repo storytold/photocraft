@@ -165,7 +165,7 @@ fn apply_to_doc(doc: &mut Document, vars: &Variables, set: &DataSet) -> Result<(
                 }
             }
             (VarKind::TextReplacement, VarValue::Text(text)) => {
-                let snapshot = doc.clone();
+                let (dpi, format) = (doc.resolution_dpi, doc.pixel_format());
                 if let Some(l) = doc.layer_mut(def.layer)
                     && let LayerContent::Text(t) = &mut l.content
                 {
@@ -180,7 +180,7 @@ fn apply_to_doc(doc: &mut Document, vars: &Variables, set: &DataSet) -> Result<(
                     t.sync_summary();
                     // The compositor draws a type layer from its cache: clearing it left the
                     // layer blank until some other edit re-rendered it (#990).
-                    crate::type_cmds::refresh(&snapshot, t);
+                    crate::type_cmds::refresh_at(dpi, format, t);
                 }
             }
             (VarKind::PixelReplacement { method, align, clip }, VarValue::Pixels(path)) => {
@@ -199,7 +199,9 @@ fn replace_pixels(doc: &mut Document, layer: LayerId, path: &str, method: PixelM
         return Ok(());
     }
     let fmt = doc.pixel_format();
-    let bytes = std::fs::read(path).map_err(|e| EngineError::Other(format!("read `{path}`: {e}")))?;
+    // The path is stored in the document's data sets.
+    let file = crate::doc_path::resolve(path).map_err(|why| crate::doc_path::refusal("the image", path, why))?;
+    let bytes = std::fs::read(&file).map_err(|e| EngineError::Other(format!("read `{path}`: {e}")))?;
     let src = crate::file_cmds::import(path, &bytes)?;
     let img = crate::file_cmds::flattened(&src, fmt);
     let (iw, ih) = (src.size.width.max(1) as f64, src.size.height.max(1) as f64);
@@ -241,10 +243,9 @@ fn replace_pixels(doc: &mut Document, layer: LayerId, path: &str, method: PixelM
     Ok(())
 }
 
-fn apply_data_set(s: &mut Session, p: &Value) -> Result<Value> {
-    let (set, idx) = resolve_set(s, p, "image.applyDataSet")?;
-    let vars = s.active().ok_or(EngineError::NoDocument)?.doc.variables.clone();
-    // Pixel Replacement reads image files, so an untrusted session's gate judges each path.
+/// Pixel Replacement reads image files, so an untrusted session's gate judges each path a data
+/// set would read: whether it is applied or exported, the path is document data.
+fn authorize_pixel_paths(s: &Session, set: &DataSet) -> Result<()> {
     if let Some(auth) = s.authorize {
         for dv in &set.values {
             if let VarValue::Pixels(path) = &dv.value {
@@ -252,6 +253,13 @@ fn apply_data_set(s: &mut Session, p: &Value) -> Result<Value> {
             }
         }
     }
+    Ok(())
+}
+
+fn apply_data_set(s: &mut Session, p: &Value) -> Result<Value> {
+    let (set, idx) = resolve_set(s, p, "image.applyDataSet")?;
+    let vars = s.active().ok_or(EngineError::NoDocument)?.doc.variables.clone();
+    authorize_pixel_paths(s, &set)?;
     s.edit(&format!("Apply Data Set \"{}\"", set.name), |doc, _| apply_to_doc(doc, &vars, &set))?;
     set_vars(s, |v| v.active = Some(idx))?;
     Ok(json!({"applied": set.name, "index": idx}))
@@ -284,6 +292,8 @@ fn import_data_sets(s: &mut Session, p: &Value) -> Result<Value> {
 /// file beneath its read root and hands the text over (#3216).
 pub fn import_data_sets_text(s: &mut Session, text: &str, p: &Value) -> Result<Value> {
     let delim = p.get("delimiter").and_then(Value::as_str).and_then(|d| d.bytes().next()).unwrap_or(b',');
+    // Excel's "CSV UTF-8" starts with a byte order mark that is not part of the first header cell.
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let vars = s.active().ok_or(EngineError::NoDocument)?.doc.variables.clone();
     let mut records = csv_records(text).filter(|r| !r.trim().is_empty());
     let header: Vec<String> = records.next().map(|h| split_csv(h, delim)).unwrap_or_default();
@@ -405,9 +415,22 @@ pub fn export_data_sets_with(s: &Session, p: &Value, mut write: impl FnMut(&str,
     if sets.is_empty() {
         return Err(bad("file.export.dataSetsAsFiles", "no data sets to export"));
     }
+    // Judge every image path before anything is written, as Apply Data Set does.
+    for set in &sets {
+        authorize_pixel_paths(s, set)?;
+    }
     // Filename template: `{name}` (sanitised data-set name), `{index}` (1-based). Default `{name}`.
     let template = p.get("naming").and_then(Value::as_str).unwrap_or("{name}");
-    let doc_stem = original.name.rsplit_once('.').map_or(original.name.as_str(), |(a, _)| a).to_string();
+    // A document name is not a path: a separator in it, or a stem of `.` / `..` before a `/` in
+    // the template, must not leave `dir`.
+    let doc_stem: String = original
+        .name
+        .rsplit_once('.')
+        .map_or(original.name.as_str(), |(a, _)| a)
+        .chars()
+        .map(|c| if c.is_control() || "/\\<>:\"|?*".contains(c) { '_' } else { c })
+        .collect();
+    let doc_stem = if matches!(doc_stem.as_str(), "" | "." | "..") { "_".to_string() } else { doc_stem };
     // Plan the whole batch before writing: sanitised names or a constant template may collide.
     // Match the case-insensitive comparison used by the other batch exporters.
     let mut claimed = std::collections::HashMap::new();
@@ -415,7 +438,15 @@ pub fn export_data_sets_with(s: &Session, p: &Value, mut write: impl FnMut(&str,
     for (n, set) in sets.iter().enumerate() {
         let safe: String = set.name.chars().map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
         let stem = template.replace("{name}", &safe).replace("{index}", &format!("{:03}", n + 1)).replace("{document}", &doc_stem);
-        let name = format!("{stem}.{format}");
+        // Each folder the template makes is checked too: `{document}/{name}` of `nul.psd` would
+        // otherwise write into the `nul` device.
+        let name: String = format!("{stem}.{format}")
+            .split_inclusive(['/', '\\'])
+            .map(|part| {
+                let sep = ["/", "\\"].into_iter().find(|s| part.ends_with(s)).unwrap_or("");
+                crate::file_cmds::portable_device_name(part.strip_suffix(sep).unwrap_or(part).to_string()) + sep
+            })
+            .collect();
         if let Some(first) = claimed.insert(name.to_lowercase(), &set.name) {
             return Err(bad(
                 "file.export.dataSetsAsFiles",
@@ -428,7 +459,8 @@ pub fn export_data_sets_with(s: &Session, p: &Value, mut write: impl FnMut(&str,
     for (set, name) in sets.iter().zip(&names) {
         let mut doc = (*original).clone();
         apply_to_doc(&mut doc, &vars, set)?;
-        let opts = photocraft_io::ExportOptions::default();
+        // An untrusted session's PSD export embeds no file a linked smart object names.
+        let opts = photocraft_io::ExportOptions { read_linked_files: s.authorize.is_none(), ..Default::default() };
         let bytes = photocraft_io::export(&doc, format, &opts).map(|r| r.bytes).map_err(|e| EngineError::Other(format!("export `{}`: {e}", set.name)))?;
         write(name, &bytes)?;
         written.push(name.clone());

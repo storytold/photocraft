@@ -8,6 +8,10 @@
 # No proprietary translation resources were used.
 # Licensed MIT OR Apache-2.0. See LICENSE-translations.txt and ATTRIBUTION.md.
 
+# Layer Mask Display Options (the layer mask rubylith's colour and opacity)
+	Mask Options…	Параметри маски…
+	Layer Mask Display Options…	Параметри відображення маски шару…
+
 # Channel Options and New Spot Channel (#3761)
 	Channel Color	Колір каналу
 	Color Indicates:	Кольором позначено:
@@ -234,6 +238,7 @@
 	Inner Glow…	Внутрішнє світіння…
 	Bevel & Emboss…	Фаска та рельєф…
 	Use Global Light	Використовувати глобальне освітлення
+	Overprint	Накладання
 	Satin…	Атлас…
 	Color Overlay…	Накладання кольору…
 	Gradient Overlay…	Накладання градієнта…
@@ -309,6 +314,7 @@
 	Current & Below	Поточний і нижчі
 	Current Layer	Поточний шар
 	Refine Strokes	Штрихи уточнення
+	Edits	Правки
 
 # Filter
 	Last Filter	Останній фільтр
@@ -324,6 +330,9 @@
 # Field Blur pins (#3373)
 	No pin selected	Шпильку не вибрано
 	Click the image to add a pin; drag a pin to move it, or its ring to change its blur. Delete removes the selected pin.	Клацніть зображення, щоб додати шпильку; перетягніть шпильку, щоб перемістити її, або її кільце, щоб змінити розмиття. Delete видаляє вибрану шпильку.
+	Drag the handles on the outline to resize and turn it, the square to round its corners, and the dots inside to set where the blur starts.	Перетягуйте маркери на контурі, щоб змінити розмір і повернути його, квадрат — щоб заокруглити кути, а точки всередині — щоб задати, де починається розмиття.
+	Drag the pin to move the band, or its ring to change its blur. Drag the solid lines to widen the sharp band, the dashed lines to set the transition, and the dots to turn it.	Перетягніть шпильку, щоб зсунути смугу, або її кільце, щоб змінити розмиття. Суцільні лінії розширюють різку смугу, пунктирні задають перехід, а точки повертають її.
+	Drag the handles on the outline to resize and turn it; the ring sets the blur angle.	Перетягуйте маркери на контурі, щоб змінити розмір і повернути його; кільце задає кут розмиття.
 	Iris Blur…	Розмиття діафрагми…
 	Tilt-Shift…	Нахил і зсув…
 	Path Blur…	Розмиття вздовж контуру…
@@ -417,6 +426,10 @@
 	Zoom Out	Зменшити
 	Fit on Screen	Умістити на екрані
 	100%	100%
+	105%	105%
+	110%	110%
+	115%	115%
+	120%	120%
 	200%	200%
 	75%	75%
 	80%	80%
@@ -756,6 +769,7 @@
 	Set shape fill type	Установити тип заливки фігури
 	Set shape stroke type	Установити тип обведення фігури
 	Set the text color	Установити колір тексту
+	Create warped text	Створити деформований текст
 	Only Web Colors	Лише вебкольори
 	Overlay Color	Колір накладання
 	Overlay Opacity	Непрозорість накладання
@@ -887,9 +901,7 @@
 	Newspaper	Газета
 	Working Spaces	Робочі простори
 	Color Management Policies	Політики керування кольором
-	Convert document's colors to the working space	Перетворити кольори документа в робочий простір
 	Assign working space	Призначити робочий простір
-	Use the embedded profile (instead of the working space)	Використати вбудований профіль (замість робочого простору)
 	Leave as is (don't color manage)	Залишити як є (без керування кольором)
 	Discard the embedded profile (don't color manage)	Відкинути вбудований профіль (без керування кольором)
 	Embed Color Profile	Вбудувати колірний профіль
@@ -999,6 +1011,11 @@
 	Mix	Змішування
 	Auto Clean Brush	Автоматично очищувати пензель
 	Wet	Вологість
+	Current Brush Load	Поточне завантаження пензля
+	Load Brush	Завантажити пензель
+	Clean Brush	Очистити пензель
+	Load the brush after each stroke	Завантажувати пензель після кожного штриха
+	Clean the brush after each stroke	Очищати пензель після кожного штриха
 	Rate	Частота
 	Airbrush: keeps depositing paint while the pointer rests.	Аерограф: продовжує наносити фарбу, коли вказівник нерухомий.
 	Pulled String Mode	Режим натягнутої нитки
@@ -1035,6 +1052,8 @@
 	No brush presets	Немає наборів пензлів
 	Override Pressure	Перевизначити натиск
 	Override Tilt	Перевизначити нахил
+	Override Tilt X	Перевизначити нахил X
+	Override Tilt Y	Перевизначити нахил Y
 	Override Rotation	Перевизначити обертання
 	Apply the pen's tilt and rotation to the tip shape	Застосувати нахил і обертання пера до форми кінчика
 
@@ -1164,6 +1183,7 @@
 	Clipping Path	Відсічний контур
 	New Path	Новий контур
 	Duplicate Path	Дублювати контур
+	Rename Path…	Перейменувати контур…
 	Delete Path	Видалити контур
 	Current Path	Поточний контур
 	Vector Mask from Current Path	Векторна маска з поточного контуру
@@ -1313,6 +1333,8 @@
 	Keywords	Ключові слова
 	Copyright Info URL	URL інформації про авторське право
 	Copyright Status	Статус авторського права
+	Copyright Notice	Застереження про авторські права
+	Document Title	Назва документа
 	Copyrighted	Захищено авторським правом
 	Public Domain	Суспільне надбання
 	Unknown	Невідомо
@@ -1555,7 +1577,7 @@
 	Click to restore the current colour	Клацніть, щоб відновити поточний колір
 	Click with the Note tool to add a note.	Клацніть інструментом «Нотатка», щоб додати нотатку.
 	Drag a rectangle around the object	Намалюйте прямокутник навколо об'єкта
-	Drag on the image to add a constraint; Shift for horizontal/vertical; right-click to delete.	Перетягніть на зображенні, щоб додати обмеження; Shift для горизонталі/вертикалі; праве клацання для видалення.
+	Drag on the image to add a constraint; Shift for horizontal/vertical; right-click a constraint to change or delete it.	Перетягніть на зображенні, щоб додати обмеження; Shift для горизонталі/вертикалі; клацніть правою кнопкою на обмеженні, щоб змінити або видалити його.
 	Drag the arrow to set the angle, the dots to set the roundness	Перетягніть стрілку, щоб установити кут, а точки — округлість
 	Create new pattern from the selection	Створити новий візерунок із виділення
 	Create new gradient	Створити новий градієнт
@@ -1677,6 +1699,7 @@
 	These settings aren't available in PhotoCraft yet.	Ці параметри ще недоступні у PhotoCraft.
 	Shortcut removed.	Клавіатурне скорочення вилучено.
 	All shortcuts reset to PhotoCraft defaults.	Усі клавіатурні скорочення скинуто до типових значень PhotoCraft.
+	Add Shortcut	Додати клавіатурне скорочення
 	Delete Shortcut	Видалити клавіатурне скорочення
 	Press keys…	Натисніть клавіші…
 	shortcut	клавіатурне скорочення
@@ -2279,6 +2302,8 @@
 	Camera Raw Defaults	Типові параметри Camera Raw
 	Canvas border	Межа полотна
 	Show canvas dots	Показувати крапки полотна
+	Clip thumbnails to layer bounds	Обрізати мініатюри до меж шару
+	Clip Thumbnails to Layer Bounds	Обрізати мініатюри до меж шару
 	Canvas color	Колір полотна
 	Canvas custom color	Довільний колір полотна
 	Classic	Класична
@@ -2382,6 +2407,7 @@
 	Quick export format	Формат швидкого експорту
 	Quick export location	Розташування швидкого експорту
 	Recent file count	Кількість нещодавніх файлів
+	LUT folder	Папка LUT
 	Recent files	Нещодавні файли
 	Recent fonts	Нещодавні шрифти
 	Recover on launch	Відновлювати під час запуску
@@ -2447,9 +2473,13 @@
 	No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.	Немає контуру для створення виділення: намалюйте його пером або виберіть на панелі контурів.
 	Cancel opening	Скасувати відкриття
 	Cancelled opening {name}	Відкриття {name} скасовано
+	Damaged Photoshop document	Пошкоджений документ Photoshop
+	The document “{name}” may be damaged.	Документ «{name}», можливо, пошкоджено.
+	Some layers, pixels or masks could not be read. Do you want to continue opening it?	Не вдалося прочитати деякі шари, пікселі або маски. Продовжити відкриття?
+	If you continue, saving over the original may permanently discard unreadable data. Save a copy to keep the original.	Якщо продовжити, збереження поверх оригіналу може безповоротно видалити дані, які не вдалося прочитати. Щоб зберегти оригінал, збережіть копію.
+	Continue	Продовжити
 	The document “{name}” does not have an embedded {mode} profile.	Документ «{name}» не має вбудованого профілю {mode}.
 	The document “{name}” has an embedded color profile that does not match the current {mode} working space.	Вбудований колірний профіль документа «{name}» не відповідає поточному робочому простору {mode}.
-	Embedded: {embedded}	Вбудований: {embedded}
 	Working: {working}	Робочий простір: {working}
 	Developing {name}	Обробка {name}
 	Cancelled {label}	Скасовано: {label}
@@ -2478,6 +2508,8 @@
 	GPU acceleration could not continue. Your documents are unchanged.	Прискорення GPU не може продовжувати роботу. Ваші документи не змінено.
 	PhotoCraft is using the CPU image compositor. The window may still use your graphics adapter.	PhotoCraft використовує компонувальник зображень CPU. Вікно може й далі використовувати ваш графічний адаптер.
 	Retry GPU requires a restart. Save your work first.	Повторна спроба використати GPU потребує перезапуску. Спочатку збережіть роботу.
+	Retry GPU tries the graphics processor again now.	Повторити спробу з GPU — одразу знову спробувати графічний процесор.
+	GPU acceleration resumed.	Прискорення GPU відновлено.
 	Keep Using CPU	Продовжити з CPU
 	Retry GPU	Повторити спробу з GPU
 	GPU Backend	Графічний бекенд
@@ -2544,6 +2576,11 @@ cameraRaw	Roughness	Шорсткість
 	Content-Aware Move Tool	Інструмент «Переміщення з урахуванням вмісту»
 	TIFF Options	Параметри TIFF
 	Targa Options	Параметри Targa
+	JPEG Options	Параметри JPEG
+	Image Options	Параметри зображення
+	Format Options	Різновид формату
+	Baseline ("Standard")	Базовий («Стандартний»)
+	Baseline Optimized	Базовий оптимізований
 	24 bits/pixel	24 біт/піксель
 	32 bits/pixel	32 біт/піксель
 	Including layers will increase file size.	Додавання шарів збільшить розмір файлу.
@@ -2676,7 +2713,6 @@ cameraRaw	Roughness	Шорсткість
 	Redrawing	Перемальовування
 	This redraw took {seconds} s on the CPU.	Це перемальовування на CPU тривало {seconds} с.
 	Edits that change the whole document, such as a layer's blend mode, opacity or visibility, redraw all of it.	Зміни, що впливають на весь документ, як-от режим накладання, непрозорість чи видимість шару, перемальовують його повністю.
-	Its layers don't fit the GPU memory budget. Raising Memory usage in Preferences › Performance raises the budget, up to a quarter of this computer's memory.	Його шари не вміщуються в бюджет пам'яті GPU. Збільшення використання пам'яті в Налаштування › Продуктивність підвищує бюджет до чверті пам'яті цього комп'ютера.
 	The GPU compositor wasn't used: {reason}	Компонувальник GPU не використовувався: {reason}
 fontWeight	Thin	Тонкий
 fontWeight	ExtraLight	Екстралегкий
@@ -2728,6 +2764,9 @@ fontWeight	Italic	Курсивний
 	Create new document from current state	Створити новий документ із поточного стану
 	Create new fill or adjustment layer	Створити новий шар заливки або корекції
 	Create new snapshot	Створити новий знімок стану
+	From:	З:
+	Full Document	Увесь документ
+	Merged Layers	Об'єднані шари
 	Delete Cropped Pixels	Видаляти обрізані пікселі
 	Delete current state	Видалити поточний стан
 
@@ -2903,7 +2942,8 @@ fontWeight	Italic	Курсивний
 	Frame {current} / {total}	Кадр {current} / {total}
 	Create new brush from the current settings	Створити новий пензель із поточних параметрів
 	Delete brush	Видалити пензель
-	Import Brushes… (.abr)	Імпортувати пензлі… (.abr)
+	Import Brushes… (.abr or image)	Імпортувати пензлі… (.abr або зображення)
+	Import Brush from Image…	Імпортувати пензель із зображення…
 	System Info	Інформація про систему
 	Click to sample the foreground colour  ·  {key}-click for background	Клацання бере зразок переднього плану  ·  {key}+клацання для фону
 	Create Warped Text	Створити деформований текст
@@ -3605,6 +3645,8 @@ cameraRaw	Masking	Маскування
 	Color Picker (Layer Style Color)	Палітра кольорів (колір стилю шару)
 	Auto Hide Notifications	Автоматично приховувати сповіщення
 	Notification Duration (seconds)	Тривалість сповіщення (секунди)
+	Bundle Arrow-Key Nudges	Поєднувати зсуви стрілками
+	Nudge Bundle Pause (ms)	Пауза поєднання зсувів (мс)
 	Appearance Mode	Режим вигляду
 	Dark Theme	Темна тема
 	Light Theme	Світла тема
@@ -3717,7 +3759,50 @@ cameraData	Lens	Об'єктив
 	Search settings…	Пошук налаштувань…
 	No matching settings	Немає відповідних налаштувань
 	PhotoCraft — Screen Color Picker	PhotoCraft — Піпетка кольору екрана
+# Edit › Content-Aware Fill workspace
+	Sampling Brush Tool	Пензель області вибірки
+	Sampling Area Overlay	Накладання області вибірки
+	Show Sampling Area	Показати область вибірки
+	Indicates	Позначає
+	Sampling Area	Область вибірки
+	Excluded Area	Виключена область
+	Sampling Area Options	Параметри області вибірки
+	Rectangular	Прямокутна
+	Fill Settings	Параметри заливки
+	Rotation Adaptation	Адаптація повороту
+	Very High	Дуже висока
+	Full	Повна
+	Mirror	Віддзеркалення
+	Output Settings	Параметри виводу
+	Output To	Вивести в
+
+	Animation Options	Параметри анімації
+	Entire Document	Увесь документ
+	Filter Options	Параметри фільтрів
+	Layer Bounds	Межі шару
+	Layers Panel Options	Параметри панелі «Шари»
+	New Artboard…	Нова монтажна область…
+	New Group…	Нова група…
+	Prevent Auto-Nesting	Заборонити автоматичне вкладення
+	Show Layers	Показати шари
+	Thumbnail Contents	Вміст мініатюр
+	Thumbnail Size	Розмір мініатюр
+	Use Default Masks on Fill Layers	Використовувати типові маски для шарів заливки
+	Expand New Effects	Розгортати нові ефекти
+	Add “copy” to Copied Layers and Groups	Додавати «копія» до скопійованих шарів і груп
+	Preview on canvas when reordering layers	Попередній перегляд на полотні під час зміни порядку шарів
+	Show layer mask badges	Показувати позначки масок шарів
+
+# Smart Filter editors
+	Blending Options ({filter})	Параметри накладання ({filter})
+	Hide the layer's effects and Smart Filters  ({key}-click: all layers)	Приховати ефекти шару та смарт-фільтри  ({key}-клік: усі шари)
+	Show the layer's effects and Smart Filters  ({key}-click: all layers)	Показати ефекти шару та смарт-фільтри  ({key}-клік: усі шари)
+	Wait for the current job to finish.	Дочекайтеся завершення поточного завдання.
+	The document or Smart Filter changed. Reopen its dialog.	Документ або смарт-фільтр змінився. Відкрийте його діалог знову.
+	Opacity must be between 0% and 100%.	Непрозорість має бути від 0% до 100%.
+	Dissolve is approximated: it blends without Photoshop's dither.	Розчинення наближене: змішування без дизерингу Photoshop.
 	Loading fonts…	Завантаження шрифтів…
+	Response curve	Крива відгуку
 	Simulate Pressure	Імітувати натиск
 	Stroke Path…	Обвести контур…
 	Background Eraser	Фонова гумка
@@ -3737,6 +3822,8 @@ curves	Smooth	Згладити
 	Vanishing Point is not active	Точка сходження не активна
 	Apply Vanishing Point ({key})	Застосувати точку сходження ({key})
 	Fix the red plane first: its corners must form a convex quad	Спершу виправте червону площину: її кути мають утворювати опуклий чотирикутник
+	Alt-click a plane to set the clone source	Клацніть площину з Alt, щоб задати джерело клонування
+	Too many clone strokes: apply Vanishing Point first	Забагато мазків клонування: спочатку застосуйте «Точку сходження»
 # Select and Mask view modes (#1754)
 	Onion Skin	Калька
 	Marching Ants	Мурашки
@@ -3771,6 +3858,10 @@ curves	Smooth	Згладити
 	Click to place · Alt-click or drag off-canvas to remove	Клацніть, щоб розмістити · Alt-клацання або перетягування за межі полотна для видалення
 	No document open	Документ не відкрито
 	{n} of {max} sample points	{n} з {max} точок вимірювання
+
+# History panel menu (#2966)
+	New Snapshot…	Новий знімок стану…
+	History Options…	Параметри історії…
 # Print dialog (#2697)
 	Emulsion Down	Емульсією донизу
 	Functions	Функції
@@ -3805,9 +3896,17 @@ curves	Smooth	Згладити
 	Light Gray	Світло-сірий
 	Object Finder	Пошук об’єктів
 	No object found there — drag a rectangle around it	Там не знайдено об’єкта — обведіть його прямокутником
+	The active layer has no pixels here — turn on Sample All Layers or select a layer with pixels	В активному шарі тут немає пікселів — увімкніть «Зразок з усіх шарів» або виберіть шар із пікселями
 	Remove after each stroke	Видаляти після кожного штриха
 	Apply the removal ({key})	Застосувати видалення ({key})
 	Strokes to remove: {n} (Enter applies, Esc cancels)	Штрихів для видалення: {n} (Enter застосовує, Esc скасовує)
+	Load Contours…	Завантажити контури…
+	Replace Contours…	Замінити контури…
+	Save Contours…	Зберегти контури…
+	Delete Contour	Видалити контур
+	Loaded contours from {file}	Контури завантажено з {file}
+	Saved contours to {file}	Контури збережено в {file}
+	Show home recent files	Показувати нещодавні файли на головному екрані
 	Clear Brush Controls	Очистити параметри пензля
 	Reset All Locked Settings	Скинути всі заблоковані параметри
 	Copy Texture to Other Tools	Скопіювати текстуру в інші інструменти
@@ -3815,6 +3914,9 @@ curves	Smooth	Згладити
 # Actions panel: Load/Save Actions (.atn) and kept Photoshop steps
 	Load Actions…	Завантажити операції…
 	Save Actions…	Зберегти операції…
+	New Action…	Нова операція…
+	Start Recording	Почати запис
+	Stop Recording	Зупинити запис
 	{name} (Photoshop)	{name} (Photoshop)
 	{message} ({note})	{message} ({note})
 @plural	Loaded {n} action from {file}|Loaded {n} actions from {file}	Завантажено {n} операцію з {file}|Завантажено {n} операції з {file}|Завантажено {n} операцій з {file}
@@ -3834,5 +3936,231 @@ curves	Smooth	Згладити
 	Action playback stopped	Відтворення операції зупинено
 	Step {step} is waiting for its dialog	Крок {step} очікує на свій діалог
 @plural	{n} action|{n} actions	{n} операція|{n} операції|{n} операцій
+	Background (Default)	Фон (типовий)
+# Batch / Image Processor
+	Include All Subfolders	Включити всі вкладені папки
 	Auto Add/Delete	Автододавання/видалення
+
+# Native Windows printing qualification
+	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	Не вмикайте також дзеркальне відображення в параметрах друку: два відображення скасовують одне одного.
+	Print Settings…	Параметри друку…
+	Remember to turn off the printer's own colour management in Print Settings…	Не забудьте вимкнути керування кольором самого принтера в параметрах друку…
+	Sent to {printer}	Надіслано на {printer}
+	set in Print Settings…	задається в параметрах друку…
 	ICO is limited to 256 × 256 pixels	ICO обмежено розміром 256 × 256 пікселів
+	Calibration	Калібрування
+	Red Primary	Червоний основний
+	Green Primary	Зелений основний
+	Blue Primary	Синій основний
+	Write xmp sidecars	Записувати супутні файли XMP
+	Set the tone sliders from the image	Встановити повзунки тону за зображенням
+	Settings from {name}	Налаштування з {name}
+	Settings from {name}; {count} not supported: {names}	Налаштування з {name}; не підтримується: {count}: {names}
+	Could not write {name}: {error}	Не вдалося записати {name}: {error}
+	Kept {name}: written by another application	{name} залишено без змін: записаний іншою програмою
+	Shadow Tint	Відтінок тіней
+# PhotoCraft release checks.
+	Check for Updates…	Перевірити оновлення…
+	PhotoCraft Updates	Оновлення PhotoCraft
+	Checking for updates…	Перевірка оновлень…
+	Open the release page to choose an installer for your system.	Відкрийте сторінку випуску й виберіть інсталятор для своєї системи.
+	Open Download Page	Відкрити сторінку завантаження
+	PhotoCraft is up to date.	PhotoCraft оновлено до останньої версії.
+	Could not check for updates.	Не вдалося перевірити оновлення.
+	Updates have not been checked yet.	Оновлення ще не перевірялися.
+	Check Again	Перевірити знову
+	Automatically Check for Updates	Автоматично перевіряти оновлення
+	Installed version: {version}	Встановлена версія: {version}
+	PhotoCraft {version} is available.	Доступна версія PhotoCraft {version}.
+# History panel › History Brush source (#2966)
+	Paints from the History panel's source state	Малює з вихідного стану панелі «Історія»
+	Sets the source for the history brush	Задає джерело для пензля історії
+# Bevel & Emboss shading controls.
+	Highlight Mode	Режим світлих тонів
+	Highlight Color	Колір світлих тонів
+	Highlight Opacity	Непрозорість світлих тонів
+	Shadow Mode	Режим тіней
+	Shadow Color	Колір тіней
+	Shadow Opacity	Непрозорість тіней
+# Embedded Profile Mismatch: profile names beside the choices, Remember this choice
+	Use the embedded profile ({profile})	Використати вбудований профіль ({profile})
+	Convert to the working space ({profile})	Перетворити в робочий простір ({profile})
+	Remember this choice for future images	Запам’ятати цей вибір для наступних зображень
+	Turn the prompt back on with Ask On Mismatch in Edit › Color Settings.	Знову ввімкнути запитання можна параметром Ask On Mismatch у Редагування › Налаштування кольору.
+	Button Mode	Режим кнопок
+	Button Mode On	Режим кнопок увімкнено
+
+# Darken / Lighten Interface (⇧⌘F1 / ⇧⌘F2)
+	Darken Interface	Зробити інтерфейс темнішим
+	Lighten Interface	Зробити інтерфейс світлішим
+# Bevel & Emboss Technique.
+	Technique	Метод
+	Chisel Hard	Жорстке різьблення
+	Chisel Soft	М'яке різьблення
+	Open color-less EXR as ACEScg	Відкривати EXR без колірного профілю як ACEScg
+	Do not append "copy" to filename when saving a copy	Не додавати «copy» до імені файлу під час збереження копії
+
+# View › Guides › right-click a guide
+	Edit Selected Guides	Редагувати вибрані напрямні
+	Clear Selected Guides	Очистити вибрані напрямні
+	Bicubic Automatic	Бікубічна, автоматично
+	Bicubic Smoother	Бікубічна, гладкіша
+	Bicubic Sharper	Бікубічна, чіткіша
+	Pasting from other apps is unavailable	Вставлення з інших застосунків недоступне
+	PhotoCraft can't reach the system clipboard in this session. On Wayland, a Flatpak sandbox hides the protocol that images from other apps are read through.	У цьому сеансі PhotoCraft не має доступу до системного буфера обміну. У Wayland пісочниця Flatpak приховує протокол, через який читаються зображення з інших застосунків.
+	To paste from other apps, start PhotoCraft under XWayland: `{command}`	Щоб вставляти з інших застосунків, запустіть PhotoCraft під XWayland: `{command}`
+	Nothing to paste: PhotoCraft can't read the system clipboard here	Нічого вставити: тут PhotoCraft не може прочитати системний буфер обміну
+	Delete this set	Видалити цей набір
+	New Set…	Новий набір…
+	PhotoCraft Defaults	Стандартні PhotoCraft
+	Save a list of these shortcuts as a web page	Зберегти список цих клавіатурних скорочень як вебсторінку
+	Save the changes to this set	Зберегти зміни в цьому наборі
+	Save these shortcuts as a .kys file	Зберегти ці клавіатурні скорочення як файл .kys
+	Save these shortcuts as a new set	Зберегти ці клавіатурні скорочення як новий набір
+	Set deleted.	Набір видалено.
+	Set saved.	Набір збережено.
+	Set:	Набір:
+	Summarize…	Зведення…
+	There are too many sets: delete one first.	Забагато наборів: спершу видаліть один.
+	set name	назва набору
+	{set} (modified)	{set} (змінено)
+	Show file name in title	Показувати ім’я файла в заголовку
+
+# Image › Mode › Bitmap (#5559)
+	50% Threshold	Поріг 50%
+	Pattern Dither	Візерунковий дизеринг
+	Diffusion Dither	Дифузійний дизеринг
+	Halftone Screen	Півтоновий растр
+	Custom Pattern	Довільний візерунок
+	Frequency:	Лініатура:
+	Lines/Inch	Ліній/дюйм
+	Lines/Centimeter	Ліній/сантиметр
+	Ellipse	Еліпс
+	Accept and Go to Conflict	Прийняти й перейти до конфлікту
+	Changes undone.	Зміни скасовано.
+	Choose a new shortcut for this command, or leave it without one.	Виберіть нове клавіатурне скорочення для цієї команди або залиште її без нього.
+	Put this command's shortcuts back as they were	Повернути клавіатурні скорочення цієї команди
+	Take the shortcut from the other command and select it	Забрати скорочення в іншої команди й вибрати її
+	Undo Changes	Скасувати зміни
+	{shortcut} is reserved by the system and can't be assigned.	{shortcut} зарезервовано системою, його не можна призначити.
+	Low-Latency Drawing (vsync off, applies at next launch)	Малювання з малою затримкою (без вертикальної синхронізації, після перезапуску)
+# Free Transform: a new layer while the box is open (#5859)
+	Free Transform is still being applied; try again when it has finished.	Вільне трансформування ще застосовується; спробуйте знову, коли воно завершиться.
+	The transform couldn't be applied.	Не вдалося застосувати трансформування.
+# Preferences › Performance › GPU Memory; the status bar and slow-redraw notice
+	Its layers need {needed} of GPU memory; the budget leaves them {budget}.	Його шарам потрібно {needed} пам'яті GPU; бюджет залишає їм {budget}.
+	Set GPU Memory in Preferences › Performance to what your graphics card can hold, at most 3/8 of its memory. Automatic follows Memory Usage, within a quarter of this computer's memory and 3/8 of the card's, and doesn't count the document against a card whose memory is known. The status bar shows GPU Memory Full while they don't fit.	Задайте «Пам'ять GPU» в Налаштування › Продуктивність відповідно до того, скільки вміщує ваша відеокарта, не більше 3/8 її пам'яті. «Автоматично» стежить за використанням пам'яті, у межах чверті пам'яті цього комп'ютера й 3/8 пам'яті відеокарти, і не враховує документ на відеокарті з відомим обсягом пам'яті. Поки шари не вміщуються, рядок стану показує «Пам'ять GPU заповнена».
+	GPU Memory Full	Пам'ять GPU заповнена
+	The layers need {needed} of GPU memory and may hold {budget}, so edits that redraw the whole document do it on the CPU. Click to set GPU Memory.	Шарам потрібно {needed} пам'яті GPU, а займати вони можуть {budget}, тому зміни, що перемальовують увесь документ, виконуються на CPU. Натисніть, щоб задати «Пам'ять GPU».
+	GPU memory budget: {budget}	Бюджет пам'яті GPU: {budget}
+	Graphics memory: {size}	Відеопам'ять: {size}
+	This document's layers: {needed} of {budget} for layers	Шари цього документа: {needed} з {budget} для шарів
+	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Шарам цього документа потрібно {needed}, але займати вони можуть {budget}: увесь документ перемальовується на CPU
+	GPU Memory (MB, 0 = Automatic)	Пам'ять GPU (МБ, 0 = автоматично)
+	{path}: the path is not valid Unicode; save under another name.	{path}: шлях не є коректним Unicode; збережіть під іншою назвою.
+	Replace	Замінити
+	{name} was changed by another app after it was opened or saved here.	Файл {name} змінила інша програма після того, як його тут відкрили або зберегли.
+	Replace it with this document, or cancel and use File › Save As to keep both.	Замініть його цим документом або скасуйте й скористайтеся Файл › Зберегти як, щоб зберегти обидва.
+	Decrease Brush Size	Зменшити розмір пензля
+	Increase Brush Size	Збільшити розмір пензля
+	Decrease Brush Hardness	Зменшити жорсткість пензля
+	Increase Brush Hardness	Збільшити жорсткість пензля
+	“{name}” already exists. Replace it?	«{name}» уже існує. Замінити?
+	The name in the save dialog was “{name}”.	У вікні збереження було вказано назву «{name}».
+	Previous Brush	Попередній пензель
+	Next Brush	Наступний пензель
+	First Brush	Перший пензель
+	Last Brush	Останній пензель
+	Preview size	Preview size
+# Dynamic color-picker titles and warnings about losing editable layer content.
+	Color Picker (Background Color)	Вибір кольору (колір тла)
+	Color Picker (Foreground Color)	Вибір кольору (основний колір)
+	Color Picker (Custom Canvas Color)	Вибір кольору (власний колір полотна)
+	This type layer must be rasterized before proceeding. Its text will no longer be editable. Rasterize the type?	Щоб продовжити, потрібно растеризувати цей текстовий шар. Після цього його текст більше не можна буде редагувати. Растеризувати текст?
+	This shape layer must be rasterized before proceeding. It will no longer be editable as a shape. Rasterize the shape?	Щоб продовжити, потрібно растеризувати цей шар фігури. Після цього його більше не можна буде редагувати як фігуру. Растеризувати фігуру?
+	This Smart Object must be rasterized before proceeding. Its contents will no longer be editable. Rasterize the Smart Object?	Щоб продовжити, потрібно растеризувати цей смартоб’єкт. Після цього його вміст більше не можна буде редагувати. Растеризувати смартоб’єкт?
+	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	Щоб продовжити, потрібно растеризувати цей шар заливки. Після цього його заливку більше не можна буде редагувати. Растеризувати шар?
+	Demosaic	Демозаїк
+	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Як відновлюється мозаїка кольорового фільтра камери. Застосовується під час відкриття файлу; попередній перегляд показує метод, з яким файл було відкрито.
+	AHD (adaptive homogeneity)	AHD (адаптивна однорідність)
+	Malvar–He–Cutler	Malvar–He–Cutler
+	Hirakawa–Parks: the cleanest edges and the least colour fringing, the slowest.	Хіракава–Паркс: найчистіші краї й найменше кольорової облямівки, найповільніший.
+	Gradient-corrected interpolation: sharp and fast, with some colour fringing on fine detail.	Інтерполяція з корекцією градієнта: різка й швидка, з невеликою кольоровою облямівкою на дрібних деталях.
+	The fastest and the softest, with colour fringing on fine detail.	Найшвидший і найм'якший, з кольоровою облямівкою на дрібних деталях.
+	Move Up	Перемістити вгору
+	Move Down	Перемістити вниз
+	Memory Usage	Використання пам’яті
+	Per-document RAM limit (MB)	Ліміт RAM на документ (МБ)
+	Installed RAM: {ram} MB; this limit: {percent}%	Встановлено RAM: {ram} МБ; цей ліміт: {percent}%
+	Limits each open document's pixels plus History. Oldest undo states are discarded when the limit is exceeded.	Обмежує пікселі плюс Історію кожного відкритого документа. Найстаріші стани скасування відкидаються після перевищення ліміту.
+	Applies immediately when saved. Memory is not reserved in advance.	Застосовується одразу після збереження. Пам’ять заздалегідь не резервується.
+	With GPU Memory set to Automatic, this also limits the GPU layer budget. That budget is capped at one quarter of installed RAM and, when known, three eighths of the graphics card's memory, with a 512 MB minimum. Raising this limit beyond those caps does not increase the GPU budget.	Якщо пам’ять GPU — Авто, це також обмежує бюджет GPU. Стеля — чверть RAM і, якщо відомо, три восьмих пам’яті карти, мінімум 512 МБ. Більший ліміт бюджет GPU не збільшує.
+	Use	Використати
+	In Front	Спереду
+	Behind	Ззаду
+
+# DDS Options (#1327)
+	DDS Options	Параметри DDS
+	Compression	Стиснення
+	Generate Mipmaps	Створити MIP-карти
+
+# Color Table (.act) dialog
+	There is no color table to save.	Немає таблиці кольорів для збереження.
+@plural	Saved {n} color to {file}|Saved {n} colors to {file}	Збережено {n} колір у {file}|Збережено {n} кольори у {file}|Збережено {n} кольорів у {file}
+
+# Graphics Adapter preference (#1885)
+	GPU adapter	Адаптер GPU
+
+# Styles panel: Import / Export Styles (.asl)
+	Import Styles…	Імпортувати стилі…
+	Export Selected Styles…	Експортувати вибрані стилі…
+	Export Styles…	Експортувати стилі…
+	{file} is not a style library (.asl)	{file} не є бібліотекою стилів (.asl)
+@plural	Imported {n} style from {file}|Imported {n} styles from {file}	Імпортовано {n} стиль з {file}|Імпортовано {n} стилі з {file}|Імпортовано {n} стилів з {file}
+@plural	Exported {n} style to {file}|Exported {n} styles to {file}	Експортовано {n} стиль до {file}|Експортовано {n} стилі до {file}|Експортовано {n} стилів до {file}
+# Actions: a step dialog holds a suspended recording (#7365)
+	Confirm or cancel the open action step dialog first	Спочатку підтвердьте або скасуйте відкритий діалог кроку операції
+	Pro Medium Gray	Середньосіра «Профі»
+	Solarized	Solarized
+	Breeze	Breeze
+	Pro Light Gray	Світло-сіра «Профі»
+	Pro Light	Світла «Профі»
+	Resize Windows to Fit	Підганяти розмір вікон
+	EXR	EXR
+# Paragraph direction (TYPE-218-2)
+	Automatic paragraph direction	Автоматичний напрямок абзацу
+	Left-to-right paragraph direction	Напрямок абзацу зліва направо
+	Right-to-left paragraph direction	Напрямок абзацу справа наліво
+	Not rendered: this adjustment ({key}) is kept as imported.	Не відображається: це коригування ({key}) збережено як було імпортовано.
+# Print preview image (#8236)
+	Print preview image	Print preview image
+# Color panel menu: modes, copy commands and colour ramps (#6000)
+	Hue Cube	Куб тону
+	Brightness Cube	Куб яскравості
+	Color Wheel	Колірне коло
+	RGB Sliders	Повзунки RGB
+	HSB Sliders	Повзунки HSB
+	CMYK Sliders	Повзунки CMYK
+	Lab Sliders	Повзунки Lab
+	Web Color Sliders	Повзунки вебкольорів
+	Copy Color as HTML	Копіювати колір як HTML
+	Copy Color's Hex Code	Копіювати шістнадцятковий код кольору
+	RGB Spectrum	Спектр RGB
+	CMYK Spectrum	Спектр CMYK
+	Grayscale Ramp	Шкала градацій сірого
+	Current Colors	Поточні кольори
+	Make Ramp Web Safe	Зробити шкалу безпечною для вебу
+# Art History Brush (#213).
+	Art History Brush Tool	Інструмент «Художній пензель історії»
+	Tight Short	Щільний короткий
+	Tight Medium	Щільний середній
+	Tight Long	Щільний довгий
+	Loose Medium	Вільний середній
+	Loose Long	Вільний довгий
+	Dab	Мазок
+	Tight Curl	Щільний завиток
+	Loose Curl	Вільний завиток
+	Stylized dabs from a history state	Стилізовані мазки зі стану історії
+
+# Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
+	Target	Ціль

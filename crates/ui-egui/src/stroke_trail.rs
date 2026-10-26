@@ -74,6 +74,13 @@ impl Trail {
         self.fed = points.len();
     }
 
+    /// Stamp a whole new drag into the same mask (the Remove tool's waiting strokes, #6555): its
+    /// points are counted from its own start, not from where the previous drag ended.
+    pub fn feed_stroke(&mut self, points: &[[f64; 3]], diameter: f32) {
+        self.fed = 0;
+        self.feed(points, diameter);
+    }
+
     /// Show the coverage the brush's own dabs leave along the drag, as the stroke commit renders
     /// it (`photocraft_paint::retouch::stroke_coverage`): soft edges for a soft brush, the size and
     /// shape each dab takes from pen pressure and dynamics. `brush` is asked for once, on the first
@@ -222,6 +229,24 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn each_stroke_fed_whole_is_stamped_in_full() {
+        let mut t = Trail::new([300, 300]);
+        let strokes: [&[[f64; 3]]; 3] = [
+            &[[50.0, 50.0, 1.0], [120.0, 50.0, 1.0], [200.0, 50.0, 1.0]],
+            &[[50.0, 120.0, 1.0], [120.0, 120.0, 1.0]],
+            &[[50.0, 200.0, 1.0], [80.0, 200.0, 1.0], [120.0, 200.0, 1.0], [160.0, 200.0, 1.0], [200.0, 200.0, 1.0], [260.0, 200.0, 1.0]],
+        ];
+        for s in strokes {
+            t.feed_stroke(s, 10.0);
+        }
+        for (x, y) in [(50, 50), (85, 50), (199, 50), (50, 120), (85, 120), (119, 120), (50, 200), (65, 200), (100, 200), (259, 200)] {
+            assert_eq!(t.coverage(x, y), 255, "({x}, {y}) lies on a stroke");
+        }
+        assert_eq!(t.coverage(50, 85), 0, "no capsule joins one stroke's end to the next one's start");
+        assert_eq!(t.coverage(150, 160), 0);
     }
 
     #[test]

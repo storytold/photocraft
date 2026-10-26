@@ -14,6 +14,32 @@ fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
     menu_items(app).into_iter().find(|i| i.id == id).and_then(|i| i.checked)
 }
 
+/// #1209: the browser picker supplies bytes even when the engine cannot read native paths.
+#[test]
+fn place_embedded_enablement_does_not_require_native_doc() {
+    for has_doc in [true, false] {
+        for has_picker in [true, false] {
+            let (mut app, _) = app_with(usize::from(has_doc));
+            if has_picker {
+                app.services.file_dialog = Some(Box::new(|_, _, _| {}));
+            }
+            for native_filesystem in [false, true] {
+                let native_doc = native_filesystem && has_doc;
+                assert_eq!(
+                    is_enabled_with_engine(&app, "file.placeEmbedded", || native_doc),
+                    Some(has_doc && has_picker),
+                    "Place Embedded: doc={has_doc}, picker={has_picker}, native_doc={native_doc}"
+                );
+                assert_eq!(
+                    is_enabled_with_engine(&app, "file.placeLinked", || native_doc),
+                    Some(native_doc),
+                    "Place Linked must retain the engine's native_doc guard"
+                );
+            }
+        }
+    }
+}
+
 #[test]
 fn show_snap_extras_and_screen_modes_are_state() {
     let (mut app, ctx) = app_with(1);
@@ -157,6 +183,28 @@ fn arrange_layouts_floating_windows_and_matching() {
     assert_eq!(app.ui.windows.len(), 1);
 }
 
+/// Match Zoom clamps the matched zoom to each document's own range: a 10 x 10 document can't go
+/// below the zoom at which its shorter side is 2 px, even when the source view is lower.
+#[test]
+fn match_zoom_clamps_to_each_documents_zoom_range() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 10, "height": 10})).unwrap();
+    app.run("file.new", json!({"width": 2000, "height": 2000})).unwrap();
+    app.sync_views();
+    let ctx = egui::Context::default();
+    assert_eq!(app.session.active_index(), Some(1));
+    app.ui.views[1].zoom = 0.05;
+    menu(&mut app, &ctx, "window.arrange.matchZoom", json!({})).unwrap();
+    assert_eq!(app.ui.views[1].zoom, 0.05);
+    assert_eq!(app.ui.views[0].zoom, crate::zoom_levels::min([10, 10]));
+    // Floating windows too, before their first frame (no `doc_size` yet).
+    menu(&mut app, &ctx, "window.arrange.floatAllInWindows", json!({})).unwrap();
+    app.ui.views[1].zoom = 0.05;
+    menu(&mut app, &ctx, "window.arrange.matchZoom", json!({})).unwrap();
+    assert_eq!(app.ui.windows.len(), 2);
+    assert!(app.ui.windows.iter().all(|w| w.view.zoom == if w.document == 0 { crate::zoom_levels::min([10, 10]) } else { 0.05 }));
+}
+
 #[test]
 fn two_up_and_stacked_cells_keep_their_existing_boundaries() {
     let rect = egui::Rect::from_min_max(egui::pos2(40.0, 75.0), egui::pos2(940.0, 675.0));
@@ -205,6 +253,20 @@ fn type_menu_checkmarks_follow_the_layer() {
     assert_eq!(checked(&app, "type.openType.fractions"), Some(true));
     assert_eq!(checked(&app, "type.openType.standardLigatures"), Some(true));
     assert_eq!(checked(&app, "type.orientation.horizontal"), Some(true));
+}
+
+#[test]
+fn batch_menu_requires_a_recorded_action() {
+    let (mut app, ctx) = app_with(1);
+    assert!(!crate::menus::is_enabled(&app, "file.automate.batch"));
+
+    app.run("actions.record", json!({"name": "Invert"})).unwrap();
+    app.run("image.adjustments.invert", json!({})).unwrap();
+    app.run("actions.stop", json!({})).unwrap();
+
+    assert!(crate::menus::is_enabled(&app, "file.automate.batch"));
+    let dialog = menu(&mut app, &ctx, "file.automate.batch", json!({})).unwrap()["dialog"].as_u64().unwrap();
+    assert_eq!(app.ui.dialog_mut(dialog).unwrap().fields["action"], "Invert");
 }
 
 #[test]
@@ -327,8 +389,8 @@ fn new_guide_layout_remembers_successful_values_not_cancelled_edits() {
 
 #[test]
 fn new_guide_layout_does_not_remember_a_failed_command() {
-    let (mut app, _) = app_with(0);
-    let id = front(&mut app, "view.newGuideLayout", &json!({})).unwrap().unwrap()["dialog"].as_u64().unwrap();
+    let (mut app, ctx) = app_with(0);
+    let id = front(&mut app, &ctx, "view.newGuideLayout", &json!({})).unwrap().unwrap()["dialog"].as_u64().unwrap();
     app.ui.dialog_mut(id).unwrap().fields.insert("columns".into(), json!(3));
     assert!(crate::dialogs::confirm(&mut app, id).is_err());
     assert_eq!(app.ui.view.guide_layout["columns"], 8);
@@ -336,10 +398,10 @@ fn new_guide_layout_does_not_remember_a_failed_command() {
 
 #[test]
 fn lookup_export_dialog_uses_the_current_adjustment_selection() {
-    let (mut app, _ctx) = app_with(1);
+    let (mut app, ctx) = app_with(1);
     app.run("layer.newAdjustmentLayer.invert", json!({})).unwrap();
     let current = app.session.active().unwrap().active_layer.unwrap();
-    let opened = front(&mut app, "file.export.colorLookupTables", &json!({})).unwrap().unwrap();
+    let opened = front(&mut app, &ctx, "file.export.colorLookupTables", &json!({})).unwrap().unwrap();
     let id = opened["dialog"].as_u64().unwrap();
     let dialog = &app.ui.dialogs.last().unwrap().fields;
     assert_eq!(dialog["scope"], "selected");
@@ -348,7 +410,7 @@ fn lookup_export_dialog_uses_the_current_adjustment_selection() {
     app.ui.close_dialog(id);
 
     app.run("layer.new.layer", json!({"name": "Unrelated pixels"})).unwrap();
-    let opened = front(&mut app, "file.export.colorLookupTables", &json!({})).unwrap().unwrap();
+    let opened = front(&mut app, &ctx, "file.export.colorLookupTables", &json!({})).unwrap().unwrap();
     let id = opened["dialog"].as_u64().unwrap();
     assert_eq!(app.ui.dialogs.last().unwrap().fields["scope"], "all");
     app.ui.close_dialog(id);
@@ -357,6 +419,32 @@ fn lookup_export_dialog_uses_the_current_adjustment_selection() {
     let direct = app.run("file.export.colorLookupTables", json!({"size": 3, "scope": "selected"})).unwrap();
     assert_eq!(direct["layerCount"], 1);
     assert!(direct["cube"].as_str().unwrap().contains("LUT_3D_SIZE 3"));
+}
+
+/// Batch and Image Processor carry Photoshop's "Include All Subfolders" checkbox (AUTO-219-5,
+/// #3753): off by default, and confirming it on processes a subfolder's images too.
+#[test]
+fn batch_dialogs_include_all_subfolders() {
+    let (mut app, ctx) = app_with(1);
+    let dir = std::env::temp_dir().join(format!("photocraft-ui-batch-subfolders-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("in/sub")).unwrap();
+    let input = dir.join("in").to_string_lossy().into_owned();
+    app.run("file.saveACopy", json!({"path": dir.join("in/sub/a.png").to_string_lossy()})).unwrap();
+    app.session.actions.list.push(photocraft_engine::actions_cmds::Action::new("Invert", vec![("image.adjustments.invert".into(), json!({}))]));
+    for (id, out) in [("file.automate.batch", "batch"), ("file.scripts.imageProcessor", "processed")] {
+        let d = menu(&mut app, &ctx, id, json!({})).unwrap()["dialog"].as_u64().unwrap();
+        let fields = &mut app.ui.dialog_mut(d).unwrap().fields;
+        assert_eq!(fields["includeSubfolders"], json!(false), "{id}");
+        assert_eq!(fields["__labels"]["includeSubfolders"], json!("Include All Subfolders"), "{id}");
+        fields.insert("input".into(), json!(input));
+        fields.insert("output".into(), json!(dir.join(out).to_string_lossy()));
+        fields.insert("includeSubfolders".into(), json!(true));
+        let r = crate::dialogs::confirm(&mut app, d).unwrap();
+        assert_eq!(r["files"].as_array().map(Vec::len), Some(1), "{id}: {r}");
+        assert!(dir.join(out).join("sub").is_dir(), "{id} keeps the subfolder: {r}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Float in Window takes the document and the screen position a dragged-off tab was dropped at
@@ -437,6 +525,24 @@ fn load_selection_without_alpha_channels_offers_the_composite() {
     crate::dialogs::confirm(&mut app, dialog).unwrap();
 }
 
+#[test]
+fn video_menu_commands_open_pickers_and_dialogs() {
+    let (mut app, ctx) = app_with(1);
+    app.services.file_dialog = Some(Box::new(|_, _, _| {}));
+
+    for id in ["layer.videoLayers.newVideoLayerFromFile", "layer.videoLayers.replaceFootage"] {
+        assert!(is_live(id), "{id}");
+        assert_eq!(menu(&mut app, &ctx, id, json!({})).unwrap(), json!({"fileDialog": "open"}), "{id}");
+        app.file_dialog = None;
+    }
+
+    let interpret = menu(&mut app, &ctx, "layer.videoLayers.interpretFootage", json!({})).unwrap()["dialog"].as_u64().unwrap();
+    let fields = &app.ui.dialog_mut(interpret).unwrap().fields;
+    assert_eq!(fields["__command"], "layer.videoLayers.interpretFootage");
+    assert_eq!(fields["fps"], 30.0);
+    app.ui.close_dialog(interpret);
+}
+
 /// One frame of the shortcut handler with a plain Esc press.
 fn press_esc(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let key = egui::Key::Escape;
@@ -446,6 +552,29 @@ fn press_esc(app: &mut PhotocraftApp, ctx: &egui::Context) {
         ..Default::default()
     };
     ctx.run_ui(input, |ui| crate::shortcuts::handle(app, ui.ctx())).textures_delta.clear();
+}
+
+#[test]
+fn esc_leaves_full_screen_with_the_crop_tool_showing_its_default_frame() {
+    let (mut app, ctx) = app_with(1);
+    app.ui.tool = crate::Tool::Crop;
+    crate::crop_ui::ensure_frame(&mut app);
+    assert!(app.ui.crop_rect.is_some() && app.crop.default_frame);
+    for mode in ["fullScreen", "fullScreenWithMenuBar"] {
+        menu(&mut app, &ctx, &format!("view.screenMode.{mode}"), json!({})).unwrap();
+        press_esc(&mut app, &ctx);
+        assert_eq!(app.ui.view.screen_mode, "standard", "{mode}");
+        assert!(app.ui.crop_rect.is_some() && app.crop.default_frame, "{mode}: the default frame stays");
+    }
+    // With Straighten armed, Esc drops it first and the mode stays.
+    menu(&mut app, &ctx, "view.screenMode.fullScreen", json!({})).unwrap();
+    app.crop.straighten.armed = true;
+    press_esc(&mut app, &ctx);
+    assert!(!app.crop.straighten.armed);
+    assert_eq!(app.ui.view.screen_mode, "fullScreen");
+    crate::crop_ui::ensure_frame(&mut app);
+    press_esc(&mut app, &ctx);
+    assert_eq!(app.ui.view.screen_mode, "standard");
 }
 
 #[test]
@@ -479,4 +608,173 @@ fn esc_leaves_full_screen_modes_unless_something_else_owns_it() {
     press_esc(&mut app, &ctx);
     assert_eq!(app.ui.view.screen_mode, "standard");
     assert!(app.session.active().unwrap().doc.selection.is_some());
+}
+
+#[test]
+fn creating_a_selection_restores_hidden_extras() {
+    let mut hidden = Vec::new();
+    for (command, params) in [
+        ("select.rect", json!({"x": 10, "y": 10, "width": 20, "height": 20})),
+        ("select.rect", json!({"x": 10, "y": 10, "width": 20, "height": 20, "ellipse": true})),
+        ("select.lasso", json!({"points": [[10,10], [30,10], [20,30]]})),
+        ("select.magneticLasso", json!({"points": [[10,10], [30,10], [20,30]], "trace": false})),
+        ("select.magicWand", json!({"x": 10, "y": 10})),
+        ("select.quick", json!({"points": [[10,10]], "size": 8})),
+        ("select.loadSelection", json!({"channel": "transparency"})),
+        ("select.loadLuminosity", json!({})),
+    ] {
+        let (mut app, ctx) = app_with(1);
+        app.run("edit.fill", json!({"color": "#cc4422"})).unwrap();
+        menu(&mut app, &ctx, "view.extras", json!({})).unwrap();
+        assert!(!app.ui.view.extras, "explicit hide remains effective before a new selection");
+        app.run(command, params).unwrap();
+        assert!(app.session.active().unwrap().doc.selection.is_some(), "{command} creates a selection");
+        if !app.ui.view.shows(app.ui.view.show.selection_edges) || checked(&app, "view.extras") != Some(true) {
+            hidden.push(command);
+        }
+    }
+    assert!(hidden.is_empty(), "new selections stayed hidden after Extras was disabled: {hidden:?}");
+}
+
+#[test]
+fn failed_selection_and_unrelated_edits_keep_extras_hidden() {
+    let (mut app, ctx) = app_with(1);
+    app.run("select.rect", json!({"x": 10, "y": 10, "width": 20, "height": 20})).unwrap();
+    menu(&mut app, &ctx, "view.extras", json!({})).unwrap();
+    assert!(!app.ui.view.extras);
+    assert!(app.run("select.rect", json!({"x": "invalid"})).is_err());
+    assert!(!app.ui.view.extras, "failed selection must not change the view");
+    app.run("edit.fill", json!({"color": "#cc4422"})).unwrap();
+    assert!(!app.ui.view.extras, "painting an existing hidden selection keeps it hidden");
+    app.run("select.deselect", json!({})).unwrap();
+    assert!(!app.ui.view.extras, "deselecting has no new outline to reveal");
+}
+
+#[test]
+fn new_selection_preserves_individual_show_preferences() {
+    let (mut app, ctx) = app_with(1);
+    app.ui.view.show.selection_edges = false;
+    app.ui.view.show.pixel_grid = false;
+    menu(&mut app, &ctx, "view.extras", json!({})).unwrap();
+    app.run("select.rect", json!({"x": 10, "y": 10, "width": 20, "height": 20})).unwrap();
+    assert!(app.ui.view.extras);
+    assert!(!app.ui.view.show.selection_edges);
+    assert!(!app.ui.view.show.pixel_grid);
+}
+
+#[test]
+fn object_selection_finding_nothing_keeps_extras_hidden() {
+    let (mut app, ctx) = app_with(1);
+    app.run("edit.fill", json!({"color": "#ffffff"})).unwrap();
+    app.run("select.rect", json!({"x": 10, "y": 10, "width": 20, "height": 20})).unwrap();
+    menu(&mut app, &ctx, "view.extras", json!({})).unwrap();
+    let result = app.run("select.object", json!({"point": [3,3]})).unwrap();
+    assert_eq!(result["changed"], false);
+    assert!(app.session.active().unwrap().doc.selection.is_some());
+    assert!(!app.ui.view.extras, "finding no object must not reveal an old selection");
+}
+
+#[test]
+fn object_selection_restores_extras_when_it_finds_an_object() {
+    let (mut app, ctx) = app_with(0);
+    app.run("file.new", json!({"width": 200, "height": 160})).unwrap();
+    app.run("edit.fill", json!({"color": "#4073b3"})).unwrap();
+    app.run("select.rect", json!({"x": 55, "y": 35, "width": 90, "height": 90, "ellipse": true})).unwrap();
+    app.run("edit.fill", json!({"color": "#e64d26"})).unwrap();
+    app.run("select.deselect", json!({})).unwrap();
+    menu(&mut app, &ctx, "view.extras", json!({})).unwrap();
+    assert!(!app.ui.view.extras);
+    let result = app.run("select.object", json!({"rect": [45,25,110,110]})).unwrap();
+    assert_eq!(result["changed"], true, "the fixture must produce a new object selection");
+    let selection = app.session.active().unwrap().doc.selection.as_ref().unwrap();
+    assert!(selection.sample_channel(100, 80, 0) > 0.5, "the central object is selected");
+    assert!(app.ui.view.shows(app.ui.view.show.selection_edges));
+}
+
+/// #6017: a click into another tile activated that document and moved it to the first tile, so
+/// the two side-by-side documents swapped places. Each document keeps its tile; with more
+/// documents than tiles, the shown run slides just enough to include the active one.
+#[test]
+fn arranged_documents_keep_their_tiles() {
+    let rect = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(900.0, 600.0));
+    let (mut app, _) = app_with(3);
+    app.ui.view.arrange = "tileAllVertically".into();
+    for active in 0..3 {
+        app.session.set_active(active);
+        let shown = crate::canvas::arranged_cells(&app, rect).unwrap();
+        let order: Vec<usize> = shown.iter().map(|(d, _)| *d).collect();
+        assert_eq!(order, vec![0, 1, 2], "active {active}");
+        assert!(shown.windows(2).all(|w| w[0].1.left() < w[1].1.left()), "document 0 on the left");
+    }
+    app.ui.view.arrange = "twoUpVertical".into();
+    // As `documents` draws them: the shown run is kept from frame to frame.
+    let docs = |app: &mut PhotocraftApp, active: usize| {
+        app.session.set_active(active);
+        let shown: Vec<usize> = crate::canvas::arranged_cells(app, rect).unwrap().iter().map(|(d, _)| *d).collect();
+        app.arrange_start = shown[0];
+        shown
+    };
+    assert_eq!(docs(&mut app, 0), vec![0, 1]);
+    assert_eq!(docs(&mut app, 1), vec![0, 1], "the second tile's document stays on the right");
+    assert_eq!(docs(&mut app, 2), vec![1, 2], "the third document slides in next to the second");
+    assert_eq!(docs(&mut app, 1), vec![1, 2], "a click into the visible document 1 leaves the tiles as they are");
+    assert_eq!(docs(&mut app, 0), vec![0, 1], "a hidden document slides in from the left");
+    assert_eq!(docs(&mut app, 1), vec![0, 1]);
+}
+
+/// #6017: rulers showed in the active tile only; the other tile had none and no room for them.
+#[test]
+fn every_arranged_tile_has_rulers() {
+    use egui_kittest::Harness;
+    let (mut app, _) = app_with(2);
+    app.ui.view.arrange = "tileAllVertically".into();
+    app.ui.extras.rulers = true;
+    let mut h = Harness::builder().with_size(egui::vec2(1000.0, 600.0)).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                return;
+            }
+            egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h.run_steps(4);
+    let right = h.state().last_canvas_rect.center().x;
+    // Ruler labels are 9 pt text: some lie in each half of the document area.
+    let mut labels = [0, 0];
+    for s in &h.output().shapes {
+        if let egui::Shape::Text(t) = &s.shape
+            && t.galley.job.sections.first().is_some_and(|sec| sec.format.font_id.size == 9.0)
+            && t.galley.text().chars().all(|c| c.is_ascii_digit())
+        {
+            labels[usize::from(t.pos.x > right)] += 1;
+        }
+    }
+    assert!(labels[0] > 0 && labels[1] > 0, "ruler labels per tile: {labels:?}");
+}
+
+#[test]
+fn file_info_dialog_matches_photoshop_field_order_and_labels() {
+    crate::i18n::with_language(crate::i18n::Lang::EN, || {
+        let (mut app, ctx) = app_with(1);
+        let d = menu(&mut app, &ctx, "file.fileInfo", json!({})).unwrap()["dialog"].as_u64().unwrap();
+        let fields = app.ui.dialog_mut(d).unwrap().fields.clone();
+        assert_eq!(
+            form_keys(&fields).iter().map(String::as_str).collect::<Vec<_>>(),
+            ["title", "author", "authorTitle", "description", "keywords", "copyrightStatus", "copyright", "copyrightUrl"]
+        );
+        let labels = fields["__labels"].as_object().unwrap();
+        assert_eq!(labels["title"], "Document Title");
+        assert_eq!(labels["copyright"], "Copyright Notice");
+        assert_eq!(labels["copyrightUrl"], "Copyright Info URL");
+    });
+}
+
+#[test]
+fn form_keys_orders_by_order_then_catalogue() {
+    let f = json!({"zeta": "", "alpha": "", "mid": "", "__order": ["mid", "zeta", "ghost"]}).as_object().unwrap().clone();
+    assert_eq!(form_keys(&f).iter().map(String::as_str).collect::<Vec<_>>(), ["mid", "zeta", "alpha"]);
+    let f = json!({"zeta": "", "alpha": ""}).as_object().unwrap().clone();
+    assert_eq!(form_keys(&f).iter().map(String::as_str).collect::<Vec<_>>(), ["alpha", "zeta"]);
 }

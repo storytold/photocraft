@@ -1,5 +1,6 @@
 # cargo-nextest (https://nexte.st): runs every test in its own process, in parallel across test
-# binaries. Optional for local runs; `cargo test` keeps working and stays what CI runs (#2204).
+# binaries. CI runs it with the `ci` profile below (#6117); locally it is optional and `cargo test`
+# keeps working (#2204).
 #
 #   cargo nextest run --workspace        # all tests except doctests
 #   cargo test --doc --workspace         # nextest does not run doctests
@@ -11,5 +12,13 @@
 gpu = { max-threads = 4 }
 
 [[profile.default.overrides]]
-filter = 'package(photocraft-gpu) | (package(photocraft-ui-egui) & (kind(test) | test(/canvas|gpu|mip|type_tool/)))'
+filter = 'package(photocraft-gpu) | (package(photocraft-ui-egui) & (kind(test) | test(/canvas|gpu|mip|type_tool|background_redraw::|floating_group_titles|swap_arrow::tests::rendered_glyph/)))'
 test-group = 'gpu'
+
+# CI (`--profile ci`, .github/workflows/ci.yml). Stops at the first failure so a red PR frees its
+# runner, fails a test that hangs instead of letting it hold the runner, and repeats every failure
+# at the end of the log. The default profile's GPU override still applies.
+[profile.ci]
+fail-fast = true
+slow-timeout = { period = "60s", terminate-after = 10 }
+failure-output = "immediate-final"

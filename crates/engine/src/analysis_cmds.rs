@@ -177,6 +177,12 @@ fn set_quiet(s: &mut Session, f: impl FnOnce(&mut Document)) -> Result<()> {
 pub(crate) fn compound<R>(s: &mut Session, label: &str, f: impl FnOnce(&mut Session) -> Result<R>) -> Result<R> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let (before, history, prior) = (st.doc.clone(), st.history.clone(), st.layer_target());
+    // An inner command may select a layer that disappears when the compound rolls back.
+    // Selection, channel targeting and coalescing must roll back with the document (#4975).
+    let anchor = st.layer_anchor;
+    let channel_view = st.channel_view.clone();
+    let coalesce = st.coalesce.clone();
+    let was_clean = !st.is_dirty();
     let journal = s.journal.len();
     // Color Sampler points are view state a step may move (crop, rotation): roll them back too, so
     // a failed second step can't leave them pinned to pixels the restored document no longer has.
@@ -187,23 +193,37 @@ pub(crate) fn compound<R>(s: &mut Session, label: &str, f: impl FnOnce(&mut Sess
     }
     let st = s.active_mut().ok_or(EngineError::NoDocument)?;
     st.history = history;
-    match r {
+    let result = match r {
         Ok(v) => {
             // As in `Session::edit`: undo targets what was selected just before the step (#1356).
             st.history.set_current_layers(prior);
             st.history.record(label, before, st.layer_target());
-            st.history.trim(&st.doc);
+            st.trim_history();
             st.coalesce = None;
             Ok(v)
         }
         Err(e) => {
             st.doc = before;
+            st.active_layer = prior.active;
+            st.selected_layers = prior.selected;
+            st.layer_anchor = anchor;
+            st.channel_view = channel_view;
+            st.coalesce = coalesce;
             st.color_samplers = samplers;
             st.revision += 1;
+            // A failed compound does not make an otherwise untouched document dirty.
+            if was_clean {
+                st.saved_revision = st.revision;
+            }
             st.last_damage = None;
             Err(e)
         }
+    };
+    if result.is_err() {
+        // The app-wide tool colours/mask mode follow the restored channel target.
+        s.sync_tools_mask_target();
     }
+    result
 }
 
 /// Current time as ISO 8601 UTC (`2026-10-01T12:34:56Z`); empty on the web (no clock).
@@ -211,22 +231,34 @@ pub fn now_iso() -> String {
     #[cfg(not(target_arch = "wasm32"))]
     {
         let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
-        let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
-        // Civil date from days since 1970-01-01 (Howard Hinnant's algorithm).
-        let z = days + 719_468;
-        let era = z.div_euclid(146_097);
-        let doe = z - era * 146_097;
-        let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-        let mp = (5 * doy + 2) / 153;
-        let d = doy - (153 * mp + 2) / 5 + 1;
-        let m = if mp < 10 { mp + 3 } else { mp - 9 };
-        let y = yoe + era * 400 + i64::from(m <= 2);
-        format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z", rem / 3600, rem % 3600 / 60, rem % 60)
+        iso_from_unix(secs)
     }
     #[cfg(target_arch = "wasm32")]
     {
         String::new()
+    }
+}
+
+/// `YYYY-MM-DDTHH:MM:SSZ` for Unix seconds `secs` (UTC, proleptic Gregorian). A time outside
+/// chrono's year range still converts (the calendar repeats every 400 years, so the instant is
+/// moved into range by whole cycles and only the year is carried, matching the old hand-rolled
+/// code), never a silent reset to the epoch. chrono is the only calendar logic.
+#[cfg(not(target_arch = "wasm32"))]
+fn iso_from_unix(secs: i64) -> String {
+    use chrono::Datelike;
+    let (days, sod) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
+    let (cycles, rest) = (days.div_euclid(146_097), days.rem_euclid(146_097));
+    // `rest + 719_163` (1970-01-01 is CE day 719_163) is always a valid CE day, and `sod` < 86_400.
+    let date = i32::try_from(rest + 719_163).ok().and_then(chrono::NaiveDate::from_num_days_from_ce_opt);
+    let time = u32::try_from(sod).ok().and_then(|s| chrono::NaiveTime::from_num_seconds_from_midnight_opt(s, 0));
+    match (date, time) {
+        (Some(d), Some(t)) => {
+            let y = i128::from(d.year()) + i128::from(cycles) * 400;
+            let y = i64::try_from(y).unwrap_or(if y < 0 { i64::MIN } else { i64::MAX });
+            // `{:04}` rather than `%Y`, which writes a `+` before years past 9999.
+            format!("{y:04}-{}", d.and_time(t).format("%m-%dT%H:%M:%SZ"))
+        }
+        _ => "1970-01-01T00:00:00Z".to_string(), // unreachable
     }
 }
 
@@ -702,10 +734,12 @@ fn group_index(d: &Document, p: &Value) -> Option<usize> {
     (i < d.measurement.count_groups.len()).then_some(i)
 }
 
-fn color_of(p: &Value, key: &str) -> Option<Color> {
-    p.get(key)?;
-    let c = crate::commands::color_param(p, key, [1.0, 0.0, 0.0, 1.0]);
-    Some(Color::rgb(c[0], c[1], c[2]))
+fn color_of(cmd: &str, p: &Value, key: &str) -> Result<Option<Color>> {
+    if p.get(key).is_none() {
+        return Ok(None);
+    }
+    let c = crate::commands::color_param(cmd, p, key, [1.0, 0.0, 0.0, 1.0])?;
+    Ok(Some(Color::rgb(c[0], c[1], c[2])))
 }
 
 /// Photoshop's colours for new count groups, in order.
@@ -735,7 +769,12 @@ fn count_add(s: &mut Session, p: &Value) -> Result<Value> {
     if !at[0].is_finite() || !at[1].is_finite() {
         return Err(bad("count.add", "coordinates must be finite"));
     }
-    let gi = p.get("group").and_then(Value::as_u64).map(|v| v as usize);
+    let gi = p.get("group").and_then(Value::as_u64).map(|v| usize::try_from(v).map_err(|_| bad("count.add", "no such group"))).transpose()?;
+    // The first marker creates group zero, but an explicit target must never be redirected.
+    let group_count = doc(s)?.measurement.count_groups.len().max(1);
+    if gi.is_some_and(|i| i >= group_count) {
+        return Err(bad("count.add", "no such group"));
+    }
     let n = s.edit("Count", |d, _| {
         if d.measurement.count_groups.is_empty() {
             let g = new_group(d, None, None);
@@ -820,7 +859,7 @@ fn count_clear(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn count_new_group(s: &mut Session, p: &Value) -> Result<Value> {
     let name = p.get("name").and_then(Value::as_str).map(str::to_string);
-    let color = color_of(p, "color");
+    let color = color_of("count.newGroup", p, "color")?;
     s.edit("New Count Group", |d, _| {
         let g = new_group(d, name, color);
         d.measurement.count_groups.push(g);
@@ -836,7 +875,9 @@ fn count_delete_group(s: &mut Session, p: &Value) -> Result<Value> {
     s.edit("Delete Count Group", |d, _| {
         d.measurement.count_groups.remove(g);
         let n = d.measurement.count_groups.len();
-        d.measurement.active_count_group = d.measurement.active_count_group.min(n.saturating_sub(1));
+        // Removing a group before the active one shifts it down a slot.
+        let a = d.measurement.active_count_group;
+        d.measurement.active_count_group = (if g < a { a - 1 } else { a }).min(n.saturating_sub(1));
         Ok(())
     })?;
     Ok(count_json(doc(s)?.as_ref()))
@@ -867,7 +908,7 @@ fn count_set_group(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(n) = p.get("name").and_then(Value::as_str) {
         grp.name = n.to_string();
     }
-    if let Some(c) = color_of(p, "color") {
+    if let Some(c) = color_of(CMD, p, "color")? {
         grp.color = c;
     }
     if let Some(v) = whole_size(CMD, p, "markerSize", 1, 10)? {
@@ -1101,8 +1142,12 @@ fn place_scale_marker(s: &mut Session, p: &Value) -> Result<Value> {
     };
     // Bottom-left with a margin; the text sits under (or over) the bar.
     let margin = (w.min(h) * 0.03).round().max(2.0);
-    let bar_h = (font_size / 4.0).round().clamp(2.0, h / 4.0);
-    let text_h = if show_text { font_size * 1.25 } else { 0.0 };
+    // `fontSize` is in points; `type.create` renders it at resolution/72 px per point, so lay out
+    // the bar and label in those pixels (at 300 ppi, 12 pt is 50 px) (#5754).
+    let dpi = f64::from(d.resolution_dpi);
+    let font_px = font_size * if dpi.is_finite() && dpi > 0.0 { dpi / 72.0 } else { 1.0 };
+    let bar_h = (font_px / 4.0).round().clamp(2.0, h / 4.0);
+    let text_h = if show_text { font_px * 1.25 } else { 0.0 };
     // Keep the bar on the canvas when the text under it doesn't fit; the label is clipped instead (#932).
     let bar_y = if text_top { h - margin - bar_h } else { h - margin - bar_h - text_h }.max(0.0);
     // Likewise pull a bar nearly as wide as the image in from the right edge (#932).
@@ -1123,7 +1168,7 @@ fn place_scale_marker(s: &mut Session, p: &Value) -> Result<Value> {
         })?;
         let mut text_layer = Value::Null;
         if show_text {
-            let baseline = if text_top { f64::from(bar.y0) - font_size * 0.3 } else { f64::from(bar.y1) + font_size };
+            let baseline = if text_top { f64::from(bar.y0) - font_px * 0.3 } else { f64::from(bar.y1) + font_px };
             let mut tp = json!({"x": bar.x0, "y": baseline, "text": label, "size": font_size, "color": [rgb[0], rgb[1], rgb[2], 1.0], "name": label});
             if let Some(f) = &font {
                 tp["font"] = json!(f);

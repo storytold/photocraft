@@ -8,8 +8,10 @@
 //! states: `history.newSnapshot` takes one, `history.selectSnapshot` brings it back as a new,
 //! undoable state. They live on [`crate::DocState::snapshots`] for the session only, as in
 //! Photoshop, and are addressed by an id that is never reused. Their tiles are shared
-//! copy-on-write with the document and its history, and are not counted in the history's pixel
-//! budget.
+//! copy-on-write with the document and its history; the tiles only snapshots hold count against
+//! the history's pixel budget ([`crate::DocState::trim_history`]), so a Merged Layers snapshot
+//! (a full flattened copy) makes room by dropping the oldest states rather than taking memory
+//! beyond the budget unseen (#4530). Edit › Purge keeps them.
 
 use std::sync::Arc;
 
@@ -99,6 +101,12 @@ fn snapshot_index(s: &Session, cmd: &str, p: &Value) -> Result<usize> {
     st.snapshots.iter().position(|snap| snap.id == id).ok_or_else(|| bad(cmd, format!("no snapshot {id}")))
 }
 
+/// The name `history.newSnapshot` gives a snapshot without one: "Snapshot N" (the New Snapshot
+/// dialog suggests it too).
+pub fn next_snapshot_name(st: &crate::DocState) -> String {
+    format!("Snapshot {}", st.next_snapshot)
+}
+
 /// A non-blank `name` param, trimmed; `None` when absent.
 fn name_param(cmd: &str, p: &Value) -> Result<Option<String>> {
     match p.get("name") {
@@ -138,9 +146,9 @@ fn new_snapshot(s: &mut Session, p: &Value) -> Result<Value> {
         _ => (st.doc.clone(), st.layer_target()),
     };
     let st = s.active_mut().ok_or(EngineError::NoDocument)?;
+    let name = name.unwrap_or_else(|| next_snapshot_name(st));
     let id = st.next_snapshot;
     st.next_snapshot = id.saturating_add(1);
-    let name = name.unwrap_or_else(|| format!("Snapshot {id}"));
     st.snapshots.push(Snapshot { id, name: name.clone(), doc, layers });
     Ok(json!({ "snapshot": id, "name": name }))
 }
@@ -192,7 +200,7 @@ fn delete_snapshot(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn can_delete(s: &Session) -> std::result::Result<(), String> {
-    s.active().filter(|d| d.history.can_undo()).map(|_| ()).ok_or_else(|| "the oldest state can't be deleted".into())
+    s.active().filter(|d| d.history.past_len() > 0).map(|_| ()).ok_or_else(|| "the oldest state can't be deleted".into())
 }
 
 fn has_doc(s: &Session) -> std::result::Result<(), String> {
@@ -411,7 +419,8 @@ mod tests {
         assert_eq!(entries(&s), before, "taking a snapshot is not a step");
         let r = s.execute("history.newSnapshot", json!({"name": "Before green"})).unwrap();
         assert_eq!(r, json!({"snapshot": 2, "name": "Before green"}));
-        assert_eq!(snapshots(&s), json!([{"id": 1, "name": "Snapshot 1"}, {"id": 2, "name": "Before green"}]));
+        let first = json!({"id": 0, "name": s.active().unwrap().doc.name});
+        assert_eq!(snapshots(&s), json!([first, {"id": 1, "name": "Snapshot 1"}, {"id": 2, "name": "Before green"}]));
     }
 
     #[test]
@@ -431,7 +440,7 @@ mod tests {
         assert!(s.active().unwrap().active_layer.is_some());
         s.execute("edit.undo", json!({})).unwrap();
         assert_eq!(top_pixel(&s), blue, "undo leaves the snapshot");
-        assert_eq!(snapshots(&s).as_array().unwrap().len(), 1, "snapshots are not history");
+        assert_eq!(snapshots(&s).as_array().unwrap().len(), 2, "snapshots are not history");
     }
 
     #[test]
@@ -451,6 +460,54 @@ mod tests {
         assert_eq!(s.active().unwrap().doc.layers.len(), 2);
     }
 
+    fn tile_bytes(doc: &Document) -> usize {
+        doc.layers.iter().filter_map(|l| l.surface()).flat_map(|s| s.tiles().map(|(_, t)| t.bytes().len())).sum()
+    }
+
+    /// A Merged Layers snapshot is a flattened copy only it holds (#4530): it counts in the
+    /// document's memory and against the history budget, so the same edits keep one state less.
+    #[test]
+    fn merged_snapshot_counts_against_the_history_budget() {
+        let (mut with, mut without) = (session(), session());
+        let base = with.active().unwrap().memory_bytes();
+        with.execute("history.newSnapshot", json!({"from": "mergedLayers"})).unwrap();
+        let st = with.active().unwrap();
+        let flat = tile_bytes(&st.snapshots.last().unwrap().doc);
+        assert!(flat > 0);
+        assert_eq!(st.memory_bytes(), base + flat);
+        // Room for the document's tiles and four fill tiles.
+        let cur = tile_bytes(&st.doc);
+        let fill = tile_bytes(&Document { layers: st.doc.layers[1..].to_vec(), ..(*st.doc).clone() });
+        assert!(flat <= fill, "the flattened tile is no bigger than a fill's");
+        let budget = cur + 4 * fill;
+        for s in [&mut with, &mut without] {
+            s.active_mut().unwrap().history.max_bytes = budget;
+            for i in 0..6 {
+                s.execute("edit.fill", json!({"color": format!("#0000{:02x}", 0x40 + i * 0x20)})).unwrap();
+            }
+        }
+        let held = |s: &Session| s.active().unwrap().history.past_len();
+        assert_eq!(held(&without), 4);
+        assert_eq!(held(&with), 3, "the snapshot's tile takes one state's room");
+        assert!(with.active().unwrap().memory_bytes() <= budget);
+    }
+
+    /// Purge › Histories keeps the snapshots, so it doesn't report the tiles they share with
+    /// the states as freed (#4530).
+    #[test]
+    fn purging_histories_frees_only_what_no_snapshot_keeps() {
+        let mut s = session();
+        s.execute("history.newSnapshot", json!({})).unwrap();
+        s.execute("edit.fill", json!({"color": "#0000ff"})).unwrap();
+        let st = s.active().unwrap();
+        // The snapshot's green layer tile, now only in it and the last state.
+        let shared = tile_bytes(&Document { layers: st.snapshots.last().unwrap().doc.layers[1..].to_vec(), ..(*st.doc).clone() });
+        let all = st.history.unique_bytes(&st.doc);
+        let r = s.execute("edit.purge.histories", json!({})).unwrap();
+        assert_eq!(r["bytes"], json!(all - shared), "the green tile stays with the snapshot");
+        assert_eq!(s.active().unwrap().snapshots.len(), 2, "the first snapshot and the new one");
+    }
+
     #[test]
     fn rename_and_delete_snapshots_keep_the_other_ids() {
         let mut s = session();
@@ -459,9 +516,29 @@ mod tests {
         }
         s.execute("history.renameSnapshot", json!({"snapshot": 2, "name": "Lesson start"})).unwrap();
         s.execute("history.deleteSnapshot", json!({"snapshot": 1})).unwrap();
-        assert_eq!(snapshots(&s), json!([{"id": 2, "name": "Lesson start"}, {"id": 3, "name": "Snapshot 3"}]));
+        s.execute("history.deleteSnapshot", json!({"snapshot": 0})).unwrap();
+        assert_eq!(snapshots(&s), json!([{"id": 2, "name": "Lesson start"}, {"id": 3, "name": "Snapshot 3"}]), "the first snapshot can go too");
         let r = s.execute("history.newSnapshot", json!({})).unwrap();
         assert_eq!(r["snapshot"], json!(4), "ids are never reused");
+    }
+
+    /// Photoshop's first snapshot (#2966): every document starts with a snapshot of itself as
+    /// opened, named after it, so the opening state can always be brought back, even after
+    /// History has dropped its oldest states.
+    #[test]
+    fn a_document_starts_with_a_first_snapshot_of_itself() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 20, "height": 10})).unwrap();
+        let name = s.active().unwrap().doc.name.clone();
+        assert_eq!(snapshots(&s), json!([{"id": 0, "name": name}]));
+        let opened = top_pixel(&s);
+        for _ in 0..3 {
+            s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+        }
+        s.active_mut().unwrap().history.purge_last();
+        s.execute("history.selectSnapshot", json!({"snapshot": 0})).unwrap();
+        assert_eq!(top_pixel(&s), opened, "back to the document as opened");
+        assert_eq!(entries(&s).last(), Some(&name), "a state named after the document");
     }
 
     #[test]

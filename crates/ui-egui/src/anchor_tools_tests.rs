@@ -230,3 +230,67 @@ fn the_pen_cursor_shows_what_auto_add_delete_would_do() {
     app.ui.tool_options.pen_auto_add_delete = false;
     assert_eq!(badge(&app, Tool::Pen, Modifiers::NONE), None);
 }
+
+fn pen_anchors(app: &PhotocraftApp) -> Vec<[f64; 2]> {
+    app.ui.pen.as_ref().map(|p| p.knots.iter().map(|k| k[0]).collect()).unwrap_or_default()
+}
+
+/// #6140: while drawing, a Pen click on the path being drawn adds an anchor on a segment or
+/// deletes a middle anchor, and drawing carries on from the last anchor. Nothing reaches History.
+#[test]
+fn the_pen_adds_and_deletes_anchors_on_the_path_being_drawn() {
+    let mut app = app(Tool::Pen);
+    let before = steps(&app);
+    for at in [[40.0, 40.0], [120.0, 40.0], [120.0, 120.0]] {
+        click(&mut app, at, Modifiers::NONE);
+    }
+    click(&mut app, [80.0, 40.0], Modifiers::NONE);
+    assert_eq!(pen_anchors(&app), vec![[40.0, 40.0], [80.0, 40.0], [120.0, 40.0], [120.0, 120.0]], "added on the first segment");
+    click(&mut app, [40.0, 120.0], Modifiers::NONE);
+    assert_eq!(pen_anchors(&app).last(), Some(&[40.0, 120.0]), "the next click carries on from the last anchor");
+    assert_eq!(pen_anchors(&app).len(), 5);
+
+    click(&mut app, [120.0, 40.0], Modifiers::NONE);
+    assert_eq!(pen_anchors(&app), vec![[40.0, 40.0], [80.0, 40.0], [120.0, 120.0], [40.0, 120.0]], "a middle anchor is deleted");
+    assert_eq!(steps(&app), before, "the path being drawn is not in the document yet");
+}
+
+/// The path being drawn keeps its end points (the first closes it, the last breaks its handle), ⇧
+/// or the option turned off places an anchor on its segment, and another path takes no edit.
+#[test]
+fn the_pen_draws_on_the_path_being_drawn_where_auto_add_delete_does_not_apply() {
+    let mut app = app(Tool::Pen);
+    with_path(&mut app);
+    let work_before = work(&app);
+    for at in [[20.0, 160.0], [180.0, 160.0], [180.0, 180.0]] {
+        click(&mut app, at, Modifiers::NONE);
+    }
+    click(&mut app, [180.0, 180.0], Modifiers::NONE);
+    assert_eq!(pen_anchors(&app).len(), 3, "a click on the last anchor breaks its handle");
+    click(&mut app, [100.0, 160.0], Modifiers::SHIFT);
+    assert_eq!(pen_anchors(&app).len(), 4, "⇧ places an anchor");
+    app.ui.tool_options.pen_auto_add_delete = false;
+    click(&mut app, [100.0, 160.0], Modifiers::NONE);
+    assert_eq!(pen_anchors(&app).len(), 5, "with the option off the Pen places an anchor");
+    app.ui.tool_options.pen_auto_add_delete = true;
+    click(&mut app, [80.0, 120.0], Modifiers::NONE);
+    assert_eq!((pen_anchors(&app).len(), work(&app)), (6, work_before), "another path takes no edit while drawing");
+    click(&mut app, [20.0, 160.0], Modifiers::NONE);
+    assert!(app.ui.pen.is_none(), "the first anchor closes the path");
+}
+
+#[test]
+fn the_pen_cursor_shows_auto_add_delete_on_the_path_being_drawn() {
+    use crate::tool_feedback::{Badge, badge};
+    let mut app = app(Tool::Pen);
+    for at in [[40.0, 40.0], [120.0, 40.0], [120.0, 120.0]] {
+        click(&mut app, at, Modifiers::NONE);
+    }
+    let cases = [([80.0, 40.0], Some(Badge::Add)), ([120.0, 40.0], Some(Badge::Subtract)), ([40.0, 40.0], None), ([120.0, 120.0], None), ([60.0, 100.0], None)];
+    for (at, want) in cases {
+        app.hover_doc = Some(at);
+        assert_eq!(badge(&app, Tool::Pen, Modifiers::NONE), want, "{at:?}");
+    }
+    app.hover_doc = Some([80.0, 40.0]);
+    assert_eq!(badge(&app, Tool::Pen, Modifiers::SHIFT), None);
+}

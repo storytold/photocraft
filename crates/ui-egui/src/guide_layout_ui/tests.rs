@@ -104,6 +104,32 @@ fn tab_skips_disabled_rows_and_margins() {
     assert_eq!(f["gutter"], 4.0);
 }
 
+/// The disabled Number field must not clamp a zero count to 1 and so switch its axis on (#5625).
+#[test]
+fn disabled_number_fields_do_not_turn_their_axis_on() {
+    let mut app = app();
+    let id = open(&mut app);
+    let mut h = harness(app);
+    h.run_steps(3);
+    let f = &h.state().ui.dialogs.first().unwrap().fields;
+    assert_eq!(f["rows"], 0, "the default layout has no rows");
+    assert!(!on(f, "__rowsEnabled", positive(f, "rows")), "Rows stays off");
+    let mut app = h.into_state();
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    let guides = &app.session.active().unwrap().doc.guides;
+    assert!(!guides.vertical.is_empty(), "the columns were created");
+    assert!(guides.horizontal.is_empty(), "no row guides at the top and bottom");
+
+    let mut app = self::app();
+    let id = open(&mut app);
+    app.ui.dialog_mut(id).unwrap().fields.insert("columns".into(), json!(0));
+    let mut h = harness(app);
+    h.run_steps(3);
+    let f = &h.state().ui.dialogs.first().unwrap().fields;
+    assert_eq!(f["columns"], 0);
+    assert!(!on(f, "__columnsEnabled", positive(f, "columns")), "Columns stays off");
+}
+
 /// New Guide Layout offers New Guide's colours, by value, and keeps another one as Custom.
 #[test]
 fn color_list_is_new_guides() {

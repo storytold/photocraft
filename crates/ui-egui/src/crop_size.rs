@@ -30,8 +30,6 @@ pub const FRONT: &str = "front";
 /// Resolution units of the resolution field.
 pub const PX_PER_IN: &str = "px/in";
 pub const PX_PER_CM: &str = "px/cm";
-/// Points per inch for pt / pica lengths (PostScript, Photoshop's default).
-const POINTS_PER_INCH: f64 = 72.0;
 /// The largest number a length or resolution field keeps (well past any canvas or ppi limit,
 /// which `image.crop` enforces with its own message).
 const MAX_FIELD: f64 = 1e9;
@@ -101,7 +99,10 @@ pub fn normalize_length(typed: &str, previous: &str) -> String {
         return String::new();
     }
     match parse_length(typed, field_unit(previous)) {
-        Some((v, u)) => format_length(v, u),
+        Some((v, u)) => {
+            let text = format_length(v, u);
+            if parse_length(&text, u).is_some() { text } else { previous.to_string() }
+        }
         None => previous.to_string(),
     }
 }
@@ -125,8 +126,9 @@ pub fn resolution_ppi(o: &ToolOptions) -> Option<f64> {
 
 /// W x H x Resolution's target: the size in pixels the crop is resampled to (unrounded) and the
 /// resolution it sets, when the mode is on and both W and H hold lengths. Physical lengths convert
-/// at the typed resolution, or at `doc_dpi` when there is none.
-pub fn target(o: &ToolOptions, doc_dpi: f64) -> Option<(f64, f64, Option<f64>)> {
+/// at the typed resolution, or at `doc_dpi` when there is none; points and picas at `pt_per_in`
+/// (the Point/Pica Size preference).
+pub fn target(o: &ToolOptions, doc_dpi: f64, pt_per_in: f64) -> Option<(f64, f64, Option<f64>)> {
     if o.crop_ratio != WHR {
         return None;
     }
@@ -134,16 +136,24 @@ pub fn target(o: &ToolOptions, doc_dpi: f64) -> Option<(f64, f64, Option<f64>)> 
     let dpi = res.unwrap_or(doc_dpi);
     let px = |text: &str| {
         let (v, u) = parse_length(text, Unit::Pixels)?;
-        let px = u.to_px(v, dpi, 0.0, POINTS_PER_INCH);
+        let px = u.to_px(v, dpi, 0.0, pt_per_in);
         (px.is_finite() && px > 0.0).then_some(px)
     };
     Some((px(&o.crop_width)?, px(&o.crop_height)?, res))
 }
 
 /// The ratio W x H x Resolution holds while the frame is drawn or resized (width / height).
-pub fn ratio(o: &ToolOptions, doc_dpi: f64) -> Option<f64> {
-    let (w, h, _) = target(o, doc_dpi)?;
+pub fn ratio(o: &ToolOptions, doc_dpi: f64, pt_per_in: f64) -> Option<f64> {
+    let (w, h, _) = target(o, doc_dpi, pt_per_in)?;
     Some(w / h).filter(|k| k.is_finite() && *k > 0.0)
+}
+
+/// Decimals a custom ratio side keeps and shows: 1.414 : 1 (ISO A sizes) as in Photoshop (#6487).
+pub const RATIO_DECIMALS: u32 = 3;
+
+/// A ratio side as stored in a `crop_ratio` key ("1.414", "16").
+pub fn fmt_ratio(v: f64) -> String {
+    crate::widgets::fmt_num_prec(v, RATIO_DECIMALS)
 }
 
 /// Editable W and H shown for a custom aspect ratio. An existing valid ratio is authoritative;
@@ -170,7 +180,7 @@ pub fn set_custom_ratio_fields(o: &mut ToolOptions, width: f32, height: f32) {
     o.crop_custom_ratio_width = width;
     o.crop_custom_ratio_height = height;
     if width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0 {
-        o.crop_ratio = format!("{}:{}", crate::widgets::fmt_num(f64::from(width)), crate::widgets::fmt_num(f64::from(height)));
+        o.crop_ratio = format!("{}:{}", fmt_ratio(f64::from(width)), fmt_ratio(f64::from(height)));
     } else {
         o.crop_ratio.clear();
     }
@@ -186,7 +196,8 @@ pub fn commit_params(app: &PhotocraftApp, p: &mut Value) {
     }
     let doc_dpi = app.session.active().map_or(72.0, |st| f64::from(st.doc.resolution_dpi));
     let px = |v: f64| v.round().clamp(1.0, MAX_FIELD) as u64;
-    if let Some((w, h, _)) = target(o, doc_dpi) {
+    let pt_per_in = app.session.prefs().units_and_rulers.point_size.per_inch();
+    if let Some((w, h, _)) = target(o, doc_dpi, pt_per_in) {
         p["targetWidth"] = json!(px(w));
         p["targetHeight"] = json!(px(h));
         p["resample"] = json!(crate::sizing::pref_resample(app.session.prefs().general.image_interpolation));
@@ -215,13 +226,28 @@ pub fn clear(o: &mut ToolOptions) {
     o.crop_resolution.clear();
 }
 
-/// Swaps W and H (the ⇄ button, X). False outside W x H x Resolution mode.
+/// The options bar's Clear: W, H and the resolution in W x H x Resolution mode, else the ratio.
+pub fn clear_ratio(o: &mut ToolOptions) {
+    if o.crop_ratio == WHR {
+        clear(o);
+    } else {
+        o.crop_ratio.clear();
+    }
+}
+
+/// Swaps W and H for the Crop tool's X. False outside W x H x Resolution mode.
 pub fn swap(o: &mut ToolOptions) -> bool {
     if o.crop_ratio != WHR {
         return false;
     }
-    std::mem::swap(&mut o.crop_width, &mut o.crop_height);
+    swap_fields(o);
     true
+}
+
+/// The ⇄ button between the W and H fields: always swaps, as Perspective Crop shows the fields
+/// without the Crop tool's W x H x Resolution mode.
+fn swap_fields(o: &mut ToolOptions) {
+    std::mem::swap(&mut o.crop_width, &mut o.crop_height);
 }
 
 /// After the preset dropdown chose `crop_ratio`: a size preset fills the fields and Front Image
@@ -260,7 +286,7 @@ pub fn keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
 /// normalised into `value` (by `normalize(typed, previous)`) when it loses it. Returns true then.
 fn text_field(ui: &mut egui::Ui, id: &str, value: &mut String, hint: &str, width: f32, normalize: fn(&str, &str) -> String) -> bool {
     let t = Tokens::get(ui.ctx());
-    let id = ui.id().with(id);
+    let id = ui.scope_id().with(id);
     let mut buf = ui.data(|d| d.get_temp::<String>(id)).unwrap_or_else(|| value.clone());
     let (rect, _) = ui.allocate_exact_size(vec2(width, 24.0), egui::Sense::hover());
     crate::widgets::surface(ui, rect, t.field, false);
@@ -268,7 +294,10 @@ fn text_field(ui: &mut egui::Ui, id: &str, value: &mut String, hint: &str, width
         ui.painter().rect_stroke(rect, t.radius_sm, Stroke::new(1.0, t.field_border), StrokeKind::Inside);
     }
     let inner = rect.shrink2(vec2(4.0, 2.0));
-    let r = ui.put(inner, egui::TextEdit::singleline(&mut buf).id(id).char_limit(32).hint_text(hint).frame(egui::Frame::NONE).font(crate::theme::mono(12.0)));
+    let r = ui.put(
+        inner,
+        egui::TextEdit::singleline(&mut buf).id(id).char_limit(32).hint_text(hint.to_owned()).frame(egui::Frame::NONE).font(crate::theme::mono(12.0)),
+    );
     if r.has_focus() {
         ui.data_mut(|d| d.insert_temp(id, buf));
         return false;
@@ -287,13 +316,13 @@ fn text_field(ui: &mut egui::Ui, id: &str, value: &mut String, hint: &str, width
 pub fn fields(o: &mut ToolOptions, ui: &mut egui::Ui) {
     text_field(ui, "crop-width", &mut o.crop_width, tl!("Width"), 64.0, normalize_length);
     if crate::icons::button(ui, "arrow-left-right", 22.0, false, tl!("Swaps height and width")).clicked() {
-        swap(o);
+        swap_fields(o);
     }
     text_field(ui, "crop-height", &mut o.crop_height, tl!("Height"), 64.0, normalize_length);
     text_field(ui, "crop-resolution", &mut o.crop_resolution, tl!("Resolution"), 64.0, normalize_resolution);
     let units = [(PX_PER_IN.to_string(), "px/in"), (PX_PER_CM.to_string(), "px/cm")];
     let before = o.crop_resolution_unit.clone();
-    if crate::widgets::dropdown(ui, "crop-resolution-unit", &mut o.crop_resolution_unit, &units, 64.0) && before != o.crop_resolution_unit {
+    if crate::widgets::dropdown(ui, "crop-resolution-unit", tl!("Resolution"), &mut o.crop_resolution_unit, &units, 64.0) && before != o.crop_resolution_unit {
         // The same resolution in the other unit, as in Photoshop.
         if let Some(v) = crate::widgets::parse_num(&o.crop_resolution.trim().replace(',', ".")).filter(|v| v.is_finite() && *v > 0.0) {
             let v = if o.crop_resolution_unit == PX_PER_CM { v / 2.54 } else { v * 2.54 };
@@ -306,6 +335,15 @@ pub fn fields(o: &mut ToolOptions, ui: &mut egui::Ui) {
 mod tests {
     use super::*;
     use photocraft_doc::{Color, ColorMode, Document, SampleType, Size};
+
+    #[test]
+    fn normalize_length_keeps_previous_when_rounding_gives_zero() {
+        assert_eq!(normalize_length("0.001", "100 px"), "100 px");
+        for typed in ["0.004 in", "0.0001 cm"] {
+            let out = normalize_length(typed, "100 px");
+            assert!(parse_length(&out, Unit::Pixels).is_some(), "{typed} -> {out}");
+        }
+    }
 
     fn app(depth: SampleType) -> PhotocraftApp {
         let mut doc = Document::with_background("crop", Size::new(400, 300), ColorMode::Rgb, depth, Color::WHITE);
@@ -348,6 +386,15 @@ mod tests {
     }
 
     #[test]
+    fn custom_ratio_keeps_three_decimals() {
+        // #6487: 1.414 : 1 (ISO A sizes) stays 1.414, not 1.4, as in Photoshop.
+        let mut options = ToolOptions::default();
+        set_custom_ratio_fields(&mut options, 1.414, 1.0);
+        assert_eq!(options.crop_ratio, "1.414:1");
+        assert_eq!(custom_ratio_fields(&options, (0.0, 0.0)), (1.414, 1.0));
+    }
+
+    #[test]
     fn selecting_free_ratio_clears_previous_custom_dimensions() {
         let mut options = ToolOptions { crop_ratio: "16:9".into(), ..ToolOptions::default() };
         select_custom_ratio(&mut options);
@@ -385,24 +432,24 @@ mod tests {
     #[test]
     fn target_converts_physical_units_at_the_resolution_or_the_documents() {
         let close = |a: f64, b: f64| (a - b).abs() < 1e-6;
-        let (w, h, r) = target(&whr("4 in", "5 in", "300", PX_PER_IN), 72.0).unwrap();
+        let (w, h, r) = target(&whr("4 in", "5 in", "300", PX_PER_IN), 72.0, 72.0).unwrap();
         assert!(close(w, 1200.0) && close(h, 1500.0) && r == Some(300.0));
-        let (w, h, r) = target(&whr("10 cm", "25 mm", "100", PX_PER_CM), 72.0).unwrap();
+        let (w, h, r) = target(&whr("10 cm", "25 mm", "100", PX_PER_CM), 72.0, 72.0).unwrap();
         assert!(close(w, 1000.0) && close(h, 250.0), "{w} {h}");
         assert!(close(r.unwrap(), 254.0), "100 px/cm is 254 ppi");
         // No resolution: inches convert at the document's, and none is set.
-        let (w, h, r) = target(&whr("2 in", "100 px", "", PX_PER_IN), 72.0).unwrap();
+        let (w, h, r) = target(&whr("2 in", "100 px", "", PX_PER_IN), 72.0, 72.0).unwrap();
         assert!(close(w, 144.0) && close(h, 100.0) && r.is_none());
         // W or H missing, or another mode: no target (a free crop).
-        assert_eq!(target(&whr("2 in", "", "300", PX_PER_IN), 72.0), None);
-        assert_eq!(target(&ToolOptions { crop_ratio: "1:1".into(), ..whr("2 in", "3 in", "", PX_PER_IN) }, 72.0), None);
+        assert_eq!(target(&whr("2 in", "", "300", PX_PER_IN), 72.0, 72.0), None);
+        assert_eq!(target(&ToolOptions { crop_ratio: "1:1".into(), ..whr("2 in", "3 in", "", PX_PER_IN) }, 72.0, 72.0), None);
     }
 
     #[test]
     fn the_frame_holds_w_by_h() {
         let mut app = app(SampleType::U8);
         app.ui.tool_options = whr("4 in", "5 in", "300", PX_PER_IN);
-        assert!((ratio(&app.ui.tool_options, 72.0).unwrap() - 0.8).abs() < 1e-9);
+        assert!((ratio(&app.ui.tool_options, 72.0, 72.0).unwrap() - 0.8).abs() < 1e-9);
         let mods = Modifiers::NONE;
         use crate::canvas::{ToolEvent, tool_event};
         tool_event(&mut app, ToolEvent::Down { x: 10.0, y: 10.0, pressure: 1.0 }, mods);
@@ -508,9 +555,70 @@ mod tests {
         assert_eq!(app.session.active().unwrap().doc.size, Size::new(100, 50));
     }
 
+    /// A commit `image.crop` refuses (here a resolution past its 10 000 ppi) keeps the frame, its
+    /// turn and its box Undo; leaving the tool then drops the frame instead of retrying.
+    #[test]
+    fn a_refused_commit_keeps_the_frame_and_its_history() {
+        use crate::canvas::{ToolEvent, tool_event};
+        let mut app = app(SampleType::U8);
+        app.ui.tool_options = whr("4 in", "2 in", "20000", PX_PER_IN);
+        app.ui.tool_options.crop_shield.classic_mode = true;
+        crate::crop_ui::ensure_frame(&mut app);
+        tool_event(&mut app, ToolEvent::Down { x: 10.0, y: 10.0, pressure: 1.0 }, egui::Modifiers::NONE);
+        tool_event(&mut app, ToolEvent::Move { x: 110.0, y: 60.0, pressure: 1.0 }, egui::Modifiers::NONE);
+        tool_event(&mut app, ToolEvent::Up { x: 110.0, y: 60.0 }, egui::Modifiers::NONE);
+        app.ui.crop_angle = 12.0;
+        let frame = (app.ui.crop_rect, app.ui.crop_angle);
+        assert!(frame.0.is_some() && !app.crop.default_frame);
+        crate::canvas::commit_crop(&mut app);
+        assert_eq!(app.session.active().unwrap().doc.size, Size::new(400, 300), "refused");
+        assert_eq!((app.ui.crop_rect, app.ui.crop_angle), frame);
+        assert!(!app.crop.default_frame);
+        assert_eq!(crate::crop_ui::is_enabled(&app, "edit.undo"), Some(true), "the box Undo stays");
+        app.ui.tool = Tool::Move;
+        crate::crop_ui::ensure_frame(&mut app);
+        assert_eq!(app.ui.crop_rect, None);
+        crate::crop_ui::ensure_frame(&mut app);
+        assert_eq!(app.session.active().unwrap().doc.size, Size::new(400, 300));
+    }
+
+    #[test]
+    fn points_and_picas_follow_the_point_size_preference() {
+        let mut app = app(SampleType::U8);
+        app.ui.tool_options = whr("72 pt", "1 in", "300", PX_PER_IN);
+        let target_size = |app: &PhotocraftApp| {
+            let mut p = json!({});
+            commit_params(app, &mut p);
+            (p["targetWidth"].as_u64(), p["targetHeight"].as_u64())
+        };
+        assert_eq!(target_size(&app), (Some(300), Some(300)), "PostScript: 72 pt is an inch");
+        app.session.edit_prefs(|p| p.units_and_rulers.point_size = photocraft_engine::prefs::PointSize::Traditional);
+        assert_eq!(target_size(&app), (Some(299), Some(300)), "Traditional: 72.27 pt per inch");
+        let (w, h, _) = target(&app.ui.tool_options, 72.0, 72.27).unwrap();
+        assert!((w - 300.0 * 72.0 / 72.27).abs() < 1e-9 && (h - 300.0).abs() < 1e-9, "{w} {h}");
+        app.ui.tool_options = whr("6 pc", "1 in", "300", PX_PER_IN);
+        assert_eq!(target_size(&app), (Some(299), Some(300)), "a pica is 12 points");
+    }
+
     #[test]
     fn older_tool_options_load_without_the_new_fields() {
         let o: ToolOptions = serde_json::from_str(r#"{"crop_ratio": "1:1"}"#).unwrap();
         assert_eq!((o.crop_width.as_str(), o.crop_resolution_unit.as_str()), ("", PX_PER_IN));
+    }
+
+    /// Perspective Crop's W and H follow Preferences › Point/Pica Size, as the Crop tool's do.
+    #[test]
+    fn perspective_crop_points_follow_the_point_size_preference() {
+        let doc = Document::with_background("p", Size::new(200, 150), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+        let mut s = photocraft_engine::Session::new();
+        s.add_document(doc, None);
+        let mut app = PhotocraftApp::new(s, crate::Services::default());
+        app.session.edit_prefs(|p| p.units_and_rulers.point_size = photocraft_engine::prefs::PointSize::Traditional);
+        let o = &mut app.ui.tool_options;
+        (o.crop_width, o.crop_height, o.crop_resolution) = ("7227 pt".into(), "100 px".into(), "72".into());
+        o.crop_resolution_unit = PX_PER_IN.into();
+        let mut p = json!({});
+        crate::perspective_crop_ui::size_params(&app, &mut p);
+        assert_eq!((p["width"].as_f64(), p["height"].as_f64()), (Some(7200.0), Some(100.0)), "{p}");
     }
 }

@@ -1,4 +1,4 @@
-//! The Photocraft engine façade: open documents, history, and the command registry.
+//! The PhotoCraft engine façade: open documents, history, and the command registry.
 //!
 //! Every user-visible action is a command with a stable id (Photoshop-style, such as
 //! `layer.newAdjustmentLayer.invert`) and JSON parameters. Every frontend goes through the same
@@ -30,15 +30,20 @@ pub mod color_cmds;
 pub mod color_to_alpha_cmds;
 pub mod commands;
 pub mod comps_cmds;
+pub mod contour_lib_cmds;
+mod crop_fill;
 pub mod cutout_cmds;
 pub mod display_color;
 pub mod distort_cmds;
+pub mod doc_path;
 pub mod document_preset_cmds;
 pub mod edit_cmds;
 pub mod edit_menu_cmds;
 pub mod eraser_cmds;
+pub mod export_preset_cmds;
 pub mod exr_cmds;
 pub mod extra_cmds;
+pub mod face_cmds;
 pub mod file_cmds;
 pub mod fill_cmds;
 pub mod fill_key_cmds;
@@ -54,7 +59,9 @@ pub mod group_view_cmds;
 pub mod guide_layout;
 pub mod hidden_target;
 pub mod history_cmds;
+pub mod history_menu_cmds;
 pub mod history_select_cmds;
+pub mod history_source_cmds;
 pub mod image_cmds;
 pub mod inspect;
 pub mod installed_profiles;
@@ -62,11 +69,13 @@ pub mod jobs;
 pub mod kys;
 pub mod layer_copy_cmds;
 pub mod layer_label_cmds;
+pub mod layer_list_cmds;
 pub mod layer_mask_props_cmds;
 pub mod layer_menu_cmds;
 pub mod layer_multi_cmds;
 pub mod layer_nav_cmds;
 pub mod layer_style;
+pub mod layer_xmp_cmds;
 pub mod lens_cmds;
 pub mod link_watch;
 pub mod magnetic_cmds;
@@ -99,24 +108,30 @@ pub mod retouch_cmds;
 pub mod sample_cmds;
 pub mod sampler_cmds;
 pub mod select_extra_cmds;
+pub mod select_mask_edits;
 pub mod selection_cmds;
+pub mod shell_commands;
+pub mod shortcut_sets;
 pub mod slice_cmds;
 pub mod smart_cmds;
 pub mod smartselect_cmds;
 pub mod snap;
 pub mod solid_fill_cmds;
 pub mod stamp_cmds;
+pub mod style_asl_cmds;
 pub mod swatch_cmds;
 pub mod symmetry_cmds;
 mod timeline_cmds;
 pub mod transform_cmds;
 mod trap_cmds;
+pub mod type_area_cmds;
 pub mod type_caret_cmds;
 pub mod type_cmds;
 pub mod type_extra_cmds;
 pub mod type_mask_cmds;
 pub mod type_spell_cmds;
 pub mod type_styles_cmds;
+pub mod updates_cmds;
 mod variables_cmds;
 pub use variables_cmds::{export_data_sets_with, import_data_sets_text};
 pub mod vector_cmds;
@@ -150,6 +165,10 @@ pub enum EngineError {
     NoDocument,
     #[error("no such layer {0:?}")]
     NoLayer(LayerId),
+    /// [`Self::NoLayer`] as a command reports it: with the layers the document does have, as
+    /// ids are not positions (#5058).
+    #[error("no such layer {}; {known}", id.0)]
+    UnknownLayer { id: LayerId, known: String },
     #[error("{0}")]
     Other(String),
     /// A background job was cancelled (see [`jobs`]); nothing changed.
@@ -198,6 +217,8 @@ pub struct DocState {
     /// Increments on every change; UIs re-render when it moves.
     pub revision: u64,
     pub saved_revision: u64,
+    /// Native save cache shared with this document's workers, released with the editing state.
+    pub pcraft_cache: photocraft_io::PcraftExportCache,
     /// How much of `revision` came from view-only changes (channel eyes, targeting): pixel caches can ignore those.
     pub view_revision: u64,
     /// Area changed by the latest revision (None = assume everything changed).
@@ -223,20 +244,43 @@ pub struct DocState {
     /// pixel coordinates. Per-document view state: discarded when the document closes, never saved
     /// to `.pcraft` or PSD, and not a history step.
     pub color_samplers: Vec<[f64; 2]>,
-    /// History panel snapshots, oldest first (`history.newSnapshot`, #2966). Kept for the
-    /// session only, as in Photoshop: not history states, and not saved with the document.
+    /// History panel snapshots, oldest first (`history.newSnapshot`, #2966): the first (id 0) is
+    /// the document as opened. Kept for the session only, as in Photoshop: not history states,
+    /// and not saved with the document.
     pub snapshots: Vec<history_cmds::Snapshot>,
     /// The id the next snapshot gets; ids are never reused, so deleting one keeps the others.
     next_snapshot: u64,
+    /// The snapshot set as the History Brush's source (`history.setSource {snapshot}`); `None`:
+    /// the source is a state, kept by the history ([`photocraft_ops::History::brush_source`]).
+    pub(crate) source_snapshot: Option<u64>,
 }
 
 impl DocState {
+    /// Trim the history to its budget, counting the tiles only History panel snapshots hold
+    /// against it too (#4530). Returns how many states were dropped.
+    pub fn trim_history(&mut self) -> usize {
+        let snaps: Vec<&Document> = self.snapshots.iter().map(|s| &*s.doc).collect();
+        self.history.trim_with(&self.doc, &snaps)
+    }
+
+    /// Pixel bytes of the document, the tiles only its history holds and the tiles only its
+    /// History panel snapshots hold.
+    pub fn memory_bytes(&self) -> usize {
+        let snaps: Vec<&Document> = self.snapshots.iter().map(|s| &*s.doc).collect();
+        self.history.pixel_bytes(&self.doc).saturating_add(self.history.extra_bytes(&self.doc, &snaps))
+    }
+
     pub fn new(doc: Document, path: Option<String>) -> Self {
         let active_layer = doc.top_layer();
         let mut history = History::default();
-        history.set_current_layers(LayerTarget { active: active_layer, selected: active_layer.into_iter().collect() });
+        let target = LayerTarget { active: active_layer, selected: active_layer.into_iter().collect() };
+        history.set_current_layers(target.clone());
+        let doc = Arc::new(doc);
+        // Photoshop's first snapshot: the document as opened, named after it, so the History
+        // panel's top row can always bring it back (#2966).
+        let first = history_cmds::Snapshot { id: 0, name: doc.name.clone(), doc: doc.clone(), layers: target };
         Self {
-            doc: Arc::new(doc),
+            doc,
             history,
             active_layer,
             selected_layers: active_layer.into_iter().collect(),
@@ -245,6 +289,7 @@ impl DocState {
             source_read_only: false,
             revision: 1,
             saved_revision: 1,
+            pcraft_cache: Default::default(),
             view_revision: 0,
             last_damage: None,
             coalesce: None,
@@ -255,8 +300,9 @@ impl DocState {
             show_only: None,
             floating: None,
             color_samplers: Vec::new(),
-            snapshots: Vec::new(),
+            snapshots: vec![first],
             next_snapshot: 1,
+            source_snapshot: None,
         }
     }
     /// The selected layers in bottom-to-top document order, always including the active layer.
@@ -272,6 +318,21 @@ impl DocState {
     }
     pub fn is_dirty(&self) -> bool {
         self.revision != self.saved_revision
+    }
+    /// Whether the step from `before` to the current document leaves a clean document clean:
+    /// it changed nothing but the selection (#6865). Making, changing or dropping a selection
+    /// (marquee, lasso, Magic Wand, Quick / Object Selection, Select › …) is a history step but
+    /// not an edit, so it neither marks the file modified nor makes closing ask to save.
+    pub(crate) fn keeps_clean(&self, before: &Document) -> bool {
+        self.saved_revision == self.revision && layer_multi_cmds::selection_only_change(before, &self.doc)
+    }
+    /// Move to the next revision; `keep_clean` (from [`Self::keeps_clean`]) moves the saved
+    /// revision with it.
+    pub(crate) fn bump_revision(&mut self, keep_clean: bool) {
+        self.revision += 1;
+        if keep_clean {
+            self.saved_revision = self.revision;
+        }
     }
     /// The targeted layers, as history stores them with each state.
     fn layer_target(&self) -> LayerTarget {
@@ -388,10 +449,39 @@ impl Default for ToolState {
     }
 }
 
+/// Layer › Layer Style › Copy Layer Style: the effects and the Blending Options, as Photoshop
+/// copies them (Paste Layer Style puts them all on each target).
+#[derive(Clone, Debug)]
+pub struct CopiedStyle {
+    pub effects: photocraft_doc::Effects,
+    pub blend: photocraft_color::BlendMode,
+    pub fill: f32,
+    pub advanced: photocraft_doc::AdvancedBlending,
+    pub blend_if: photocraft_doc::BlendIf,
+    pub excluded_channels: u32,
+    /// The colour mode it was copied in: Blend If's channel ranges and the channel restrictions
+    /// only carry over to a document in the same mode.
+    pub mode: photocraft_color::ColorMode,
+}
+
+/// The commands whose [`Session::precheck`] is complete: it accepts what `execute` does (Free
+/// Transform applies its box before these, and only when they will run), but for the group
+/// nesting limit ([`photocraft_doc::MAX_GROUP_DEPTH`]): grouping layers already that deep is
+/// refused only as the edit is made. Layer via Copy and
+/// Cut aren't: whether they have anything to copy (a selection over transparent pixels, a group
+/// or fill layer) is known only when they run.
+pub const PRECHECKED: &[&str] = &["layer.new.layer", "layer.new.group", "layer.new.groupFromLayers", "layer.new.layerFromBackground"];
+
 #[derive(Default)]
 pub struct Session {
     docs: Vec<DocState>,
     active: Option<usize>,
+    /// Monotonic counter, bumped whenever a different document becomes active (including a
+    /// switch away and back inside one pass). UI work that must not cross documents (control
+    /// screenshots, automation input) binds to it.
+    active_generation: u64,
+    /// The document id [`Self::active_generation`] was last bumped for.
+    active_doc_for_generation: Option<photocraft_doc::DocId>,
     pub tools: ToolState,
     /// Log of executed commands (for action recording and debugging).
     pub journal: Vec<(String, Value)>,
@@ -399,9 +489,9 @@ pub struct Session {
     coalesce_request: Option<String>,
     /// Pixels copied with Edit › Copy / Cut (shared by all documents, like Photoshop).
     pub clipboard: Option<edit_cmds::Clip>,
-    /// Layer › Layer Style › Copy Layer Style: effects, blend mode, fill opacity and the Advanced
-    /// Blending switches.
-    pub style_clipboard: Option<(photocraft_doc::Effects, photocraft_color::BlendMode, f32, photocraft_doc::AdvancedBlending)>,
+    /// Layer › Layer Style › Copy Layer Style: the effects and the Blending Options
+    /// ([`CopiedStyle`]: blend mode, fill opacity, Advanced Blending, Blend If, channels).
+    pub style_clipboard: Option<CopiedStyle>,
     /// Shape path context menu: copied vector fill and stroke styles.
     pub path_fill_clipboard: Option<photocraft_doc::Fill>,
     pub path_stroke_clipboard: Option<photocraft_doc::ShapeStroke>,
@@ -415,8 +505,13 @@ pub struct Session {
     pub quick_mask_options: channel_cmds::QuickMaskOptions,
     /// Colour channel the running command may change (a single colour channel is targeted).
     color_restrict: Option<usize>,
+    /// Smart object whose filter mask the running command edits (`"target":"filterMask"`): each
+    /// edit re-renders it, in the same history step.
+    filter_mask_layer: Option<LayerId>,
     /// Edit › Preferences, keyboard shortcuts, menu and toolbar customisation (see `prefs`).
     pub prefs: prefs::PrefsStore,
+    /// Release checks use an injected platform transport; no network I/O in the engine.
+    pub updates: updates_cmds::Updates,
     /// Edit menu state: Fade source, custom shape library (see `edit_menu_cmds`).
     pub edit_state: edit_menu_cmds::EditState,
     /// The pattern library (Window › Patterns; see `pattern.*`).
@@ -438,6 +533,9 @@ pub struct Session {
     /// the same check a top-level request sees. `None` runs everything, which is what a local
     /// UI and `photocraft-cli run` do.
     pub authorize: Option<fn(&str, &serde_json::Value) -> Result<()>>,
+    /// A further route for File › Print when neither `lp` nor a CUPS server over IPP is
+    /// reachable (the XDG Print portal in a Flatpak); see `print_cmds::Spooler`.
+    pub print_spooler: Option<print_cmds::Spooler>,
     /// Background jobs (see [`jobs`]).
     jobs: jobs::Jobs,
     /// Color Sampler points dropped by the last canvas-size change (crop, Canvas Size, Image Size,
@@ -446,6 +544,9 @@ pub struct Session {
     /// The canvas-geometry map the next [`Session::edit`] applies to the Color Sampler points (crop,
     /// Canvas Size, Image Size, rotation set it just before their edit). Consumed by the edit.
     sampler_map: Option<photocraft_geom::Affine>,
+    /// The same edit's map in edge coordinates, for the painting symmetry (Image Rotation maps the
+    /// samplers' pixel centres instead). Consumed by the edit.
+    symmetry_map: Option<photocraft_geom::Affine>,
     /// Each open document's linked smart objects' files: size and modification time when last
     /// seen ([`link_watch`]).
     pub link_stamps: std::collections::HashMap<(u64, String), link_watch::Stamp>,
@@ -495,9 +596,25 @@ impl Session {
     pub fn active_mut(&mut self) -> Option<&mut DocState> {
         self.active.and_then(|i| self.docs.get_mut(i))
     }
+    /// Monotonic active-document generation. It changes when a different document becomes
+    /// active, including a switch away and back between two observations; equal values therefore
+    /// mean the document was not switched in between.
+    pub fn active_generation(&self) -> u64 {
+        self.active_generation
+    }
+    /// Bump [`Self::active_generation`] when the active document id changed. Call after every
+    /// assignment to `self.active`.
+    pub(crate) fn note_active_change(&mut self) {
+        let id = self.active().map(|st| st.doc.id);
+        if id != self.active_doc_for_generation {
+            self.active_doc_for_generation = id;
+            self.active_generation = self.active_generation.wrapping_add(1);
+        }
+    }
     pub fn set_active(&mut self, index: usize) -> bool {
         if index < self.docs.len() {
             self.active = Some(index);
+            self.note_active_change();
             self.sync_tools_mask_target();
             true
         } else {
@@ -514,8 +631,16 @@ impl Session {
     /// Move the Color Sampler points through `a` in the next [`Session::edit`] (crop, Canvas Size,
     /// Image Size, rotation), dropping the ones that land outside the new canvas. View state: the
     /// points stay pinned to their pixels, no history step. Cleared by the edit it is set for.
+    /// The painting symmetry moves through `a` too.
     pub(crate) fn set_sampler_map(&mut self, a: photocraft_geom::Affine) {
-        self.sampler_map = Some(a);
+        self.set_canvas_map(a, a);
+    }
+
+    /// [`set_sampler_map`](Self::set_sampler_map) for an edit whose sampler map differs from its
+    /// geometry map (a flip or rotation maps pixel centres): `geometry` moves the painting symmetry.
+    pub(crate) fn set_canvas_map(&mut self, geometry: photocraft_geom::Affine, samplers: photocraft_geom::Affine) {
+        self.sampler_map = Some(samplers);
+        self.symmetry_map = Some(geometry);
     }
 
     pub fn sync_tools_mask_target(&mut self) {
@@ -529,6 +654,7 @@ impl Session {
         let active = self.active().map(|d| d.doc.id);
         let to = move_item(&mut self.docs, from, to)?;
         self.active = active.and_then(|id| self.docs.iter().position(|d| d.doc.id == id));
+        self.note_active_change();
         Some(to)
     }
 
@@ -546,6 +672,7 @@ impl Session {
         self.docs.push(st);
         let i = self.docs.len() - 1;
         self.active = Some(i);
+        self.note_active_change();
         i
     }
 
@@ -584,6 +711,7 @@ impl Session {
                 _ => index.min(self.docs.len() - 1),
             })
         };
+        self.note_active_change();
         Some(d)
     }
 
@@ -621,9 +749,67 @@ impl Session {
         Ok(())
     }
 
+    /// [`Self::offer_live_stroke`] for a live Dodge, Burn, Sponge, Blur, Sharpen or Smudge stroke,
+    /// taken by the command it was drawn for: the stroke's finishing dabs are run first. Refused
+    /// when the brush, tool options or layer changed during the stroke.
+    pub fn offer_live_dab(&mut self, live: retouch_cmds::LiveDab) -> Result<()> {
+        // A refused offer withdraws the previous one too.
+        self.live_commit = None;
+        let commit = live.into_commit(self)?;
+        self.live_commit = Some(commit);
+        Ok(())
+    }
+
     /// Withdraw an offer the command didn't take.
     pub fn clear_live_stroke(&mut self) {
         self.live_commit = None;
+    }
+
+    /// Check a call without running it: the command exists, its params have the shape
+    /// [`Self::execute`] requires (New Layer's fully), and it can run now. For a caller that does
+    /// something first only when the command will go through: Free Transform applies its box
+    /// before a new layer is made.
+    ///
+    /// Complete for the commands in [`PRECHECKED`]: there it accepts what `execute` accepts, but
+    /// for the group nesting limit (a test holds the two together). For others it checks only what they share.
+    pub fn precheck(&mut self, id: &str, params: &Value) -> Result<()> {
+        let spec = crate::commands::find(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
+        if !(params.is_object() || params.is_null()) {
+            return Err(EngineError::BadParams { cmd: id.to_string(), msg: "params must be a JSON object".into() });
+        }
+        crate::param_check::check(spec, params)?;
+        crate::filters::validate_params(id, params)?;
+        if id == "layer.new.layer" {
+            crate::new_layer::parse(params)?;
+        }
+        // A command that takes `"layer"` (an id or a name, as it resolves it) fails on one the
+        // document doesn't have.
+        if spec.params.contains("\"layer\":id")
+            && let Some(l) = commands::explicit_layer(self, params)?
+            && self.active().is_none_or(|st| st.doc.layer(l).is_none())
+        {
+            return Err(EngineError::BadParams { cmd: id.to_string(), msg: format!("no layer {}", l.0) });
+        }
+        self.admit(id, spec, params).map(|_| ())
+    }
+
+    /// What `dispatch` checks once the params are valid and a floating selection has dropped:
+    /// the precondition (on a named layer for commands that take one), a job running on the
+    /// document, a hidden target. The run params (the Channels panel's target filled in) when it
+    /// may run.
+    pub(crate) fn admit(&mut self, id: &str, spec: &commands::CommandSpec, params: &Value) -> Result<Value> {
+        let run_params = channel_cmds::inject_target(self, id, commands::inject_kind(id, params.clone()));
+        if let Err(why) = self.explicit_layer_enabled(spec, params).unwrap_or_else(|| self.precondition(spec, &run_params)) {
+            return Err(EngineError::Disabled(id.to_string(), why));
+        }
+        if let Some(why) = self.job_conflict(id, spec.journal) {
+            return Err(EngineError::Disabled(id.to_string(), why));
+        }
+        // Painting on or moving a hidden layer is refused, as in Photoshop (#571).
+        if let Some(why) = hidden_target::refusal(self, id, params) {
+            return Err(EngineError::Other(why.into()));
+        }
+        Ok(run_params)
     }
 
     /// Is the command currently runnable? (drives menu enablement)
@@ -681,7 +867,7 @@ impl Session {
         let d = self.active_mut()?;
         d.doc.layer(target)?;
         let active = d.active_layer.replace(target);
-        let r = (spec.enabled)(self);
+        let r = self.precondition(spec, params);
         if let Some(d) = self.active_mut() {
             d.active_layer = active;
         }
@@ -690,8 +876,14 @@ impl Session {
 
     /// Apply an undoable edit to the active document.
     pub fn edit<R>(&mut self, label: &str, f: impl FnOnce(&mut Document, &mut Option<LayerId>) -> Result<R>) -> Result<R> {
+        // Every mutation path (linked-file refresh, transform, place) re-renders smart objects
+        // through this entry; the requesting session's authority must reach those renders.
+        let _authorization = crate::jobs::render_authorization_scope(self.authorize);
+        let _document = crate::doc_path::scope(self.active().and_then(|d| d.path.as_deref()).map(std::path::Path::new));
         let restrict = self.color_restrict;
+        let filter_mask_layer = self.filter_mask_layer;
         let sampler_map = self.sampler_map.take();
+        let symmetry_map = self.symmetry_map.take();
         let st = self.active_mut().ok_or(EngineError::NoDocument)?;
         let before = st.doc.clone();
         // Selecting layers is not a step, so the state this edit leaves behind targets what was
@@ -702,6 +894,9 @@ impl Session {
         let r = f(&mut doc, &mut active)?;
         if let (Some(k), Some(id)) = (restrict, active) {
             channel_cmds::restrict_to_color(&before, &mut doc, id, k);
+        }
+        if let Some(id) = filter_mask_layer {
+            smart_cmds::refresh_after_filter_mask_edit(&mut doc, id)?;
         }
         st.doc = Arc::new(doc);
         st.active_layer = active;
@@ -727,24 +922,29 @@ impl Session {
             st.color_samplers.retain(|p| bounds.contains(p[0].floor() as i32, p[1].floor() as i32));
             samplers_removed = n - st.color_samplers.len();
         }
+        // The painting symmetry stays on its pixels too (Photoshop keeps it as a path).
+        if let Some(a) = symmetry_map {
+            st.symmetry = st.symmetry.take().and_then(|sym| sym.transform(&a));
+        }
         // The pixels the edit can have changed, as its undo would report them: nothing for a
         // selection, guides or a layer's name (a new lasso selection used to recomposite a large
         // document, seconds on the CPU path, #1773), a new or deleted layer's bounds (a
         // duplicate or a paste), and everything when that can't be bounded. A command may still
         // report its own, tighter damage after this.
         let damage = layer_multi_cmds::step_damage(&before, &st.doc);
+        let keep_clean = st.keeps_clean(&before);
         let key = self.coalesce_request.clone();
         let st = self.active_mut().ok_or(EngineError::NoDocument)?;
         let layers = st.layer_target();
         if key.is_none() || st.coalesce != key || !st.history.can_undo() {
             st.history.set_current_layers(prior);
             st.history.record(label, before, layers);
-            st.history.trim(&st.doc);
+            st.trim_history();
         } else {
             st.history.set_current_layers(layers);
         }
         st.coalesce = key;
-        st.revision += 1;
+        st.bump_revision(keep_clean);
         st.last_damage = damage;
         self.samplers_removed += samplers_removed;
         if damage.is_none_or(|d| !d.is_empty()) {
@@ -766,6 +966,31 @@ impl Session {
         st.layer_anchor = Some(id);
         channel_cmds::fix_view(st);
         // Selecting a layer is not an edit: keep a clean document clean.
+        let clean = st.saved_revision == st.revision;
+        st.revision += 1;
+        if clean {
+            st.saved_revision = st.revision;
+        }
+        st.last_damage = Some(photocraft_geom::Rect::EMPTY);
+        Ok(())
+    }
+
+    /// Put back a layer selection (active layer, selected layers, anchor) that a step moved, such
+    /// as the undo ending an empty Type Mask, which restores the selection from before it. `None`
+    /// is no layer selected. Selected layers that are gone are dropped; an active layer that is
+    /// gone is an error and changes nothing. Like [`Self::select_layer`], not an edit.
+    pub fn restore_layer_selection(&mut self, active: Option<LayerId>, selected: &[LayerId], anchor: Option<LayerId>) -> Result<()> {
+        let st = self.active_mut().ok_or(EngineError::NoDocument)?;
+        if let Some(id) = active
+            && st.doc.layer(id).is_none()
+        {
+            return Err(EngineError::NoLayer(id));
+        }
+        st.active_layer = active;
+        st.selected_layers = selected.to_vec();
+        st.layer_anchor = anchor.filter(|_| active.is_some());
+        fix_selection(st);
+        channel_cmds::fix_view(st);
         let clean = st.saved_revision == st.revision;
         st.revision += 1;
         if clean {
@@ -825,6 +1050,18 @@ impl Session {
         let Some(st) = self.active_mut() else { return false };
         st.coalesce = None;
         match st.history.undo(st.doc.clone()) {
+            // Undo Clear History: the list comes back, the document is the same one. Not an
+            // edit: keep a clean document clean (the revision still moves for the panels).
+            Some((d, layers)) if Arc::ptr_eq(&d, &st.doc) => {
+                restore_target(st, layers);
+                let clean = !st.is_dirty();
+                st.revision += 1;
+                if clean {
+                    st.saved_revision = st.revision;
+                }
+                st.last_damage = Some(photocraft_geom::Rect::EMPTY);
+                true
+            }
             Some((mut d, layers)) => {
                 // Save As changes file identity outside history, just like the saved path.
                 if d.name != st.doc.name {
@@ -833,9 +1070,10 @@ impl Session {
                 // Pixels this step can have touched, so the canvas recomposites only that
                 // (it recomposited everything before).
                 let damage = layer_multi_cmds::step_damage(&d, &st.doc);
-                st.doc = d;
+                let before = std::mem::replace(&mut st.doc, d);
+                let keep_clean = st.keeps_clean(&before);
                 restore_target(st, layers);
-                st.revision += 1;
+                st.bump_revision(keep_clean);
                 st.last_damage = damage;
                 true
             }
@@ -855,9 +1093,10 @@ impl Session {
                     Arc::make_mut(&mut d).name.clone_from(&st.doc.name);
                 }
                 let damage = layer_multi_cmds::step_damage(&st.doc, &d);
-                st.doc = d;
+                let before = std::mem::replace(&mut st.doc, d);
+                let keep_clean = st.keeps_clean(&before);
                 restore_target(st, layers);
-                st.revision += 1;
+                st.bump_revision(keep_clean);
                 st.last_damage = damage;
                 true
             }

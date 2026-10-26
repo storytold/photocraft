@@ -682,18 +682,23 @@ fn hue_chroma([r, g, b]: [f32; 3]) -> (f32, f32) {
 
 /// Color Range › Select: Reds, Yellows, Greens, Cyans, Blues or Magentas (`center` = 0, 60,
 /// 120, 180, 240, 300°). A pixel belongs to a family by how close its hue is (full at the
-/// family's hue, none 60° away, so an orange is half red, half yellow) times its chroma, so
-/// neutrals are never selected and muted colours only partly.
+/// family's hue, none 60° away, so an orange is half red, half yellow) times its chroma
+/// (max − min), so neutrals are never selected and muted colours only partly. Darker colours
+/// weigh more, by `2 − max`: measured against Photoshop 2025's presets on 126 colours each for
+/// Reds, Yellows and Blues (hue ±40°, saturation 5..100 %, brightness 33..100 %), this matches
+/// its selection to within one level, where chroma alone fell up to 61 levels short (#5243).
 pub fn hue_range(px: &[[f32; 4]], center: f32) -> Vec<f32> {
     px.iter()
         .map(|&[r, g, b, a]| {
             if a <= 0.0 {
                 return 0.0;
             }
-            let (h, chroma) = hue_chroma([r, g, b].map(|v| v.clamp(0.0, 1.0)));
+            let rgb = [r, g, b].map(|v| v.clamp(0.0, 1.0));
+            let (h, chroma) = hue_chroma(rgb);
+            let max = rgb[0].max(rgb[1]).max(rgb[2]);
             let dh = (h - center).rem_euclid(360.0);
             let dh = dh.min(360.0 - dh);
-            ((1.0 - dh / 60.0).clamp(0.0, 1.0) * chroma).clamp(0.0, 1.0)
+            ((1.0 - dh / 60.0).clamp(0.0, 1.0) * chroma * (2.0 - max)).clamp(0.0, 1.0)
         })
         .collect()
 }
@@ -756,10 +761,13 @@ pub fn tone_range(px: &[[f32; 4]], lo: f32, hi: f32, falloff: f32) -> Vec<f32> {
 }
 
 mod distance;
+mod lasso;
 mod marquee;
 
 pub use distance::edt;
-pub use marquee::{combine_surfaces, ellipse_surface};
+pub(crate) use lasso::clip_segment;
+pub use lasso::{MAX_PAINTED_TILES, polygon_edge_tiles, polygon_surface};
+pub use marquee::{combine_sparse, combine_surfaces, ellipse_surface};
 
 /// Grows the selection by `r` pixels.
 pub fn expand(m: &[f32], w: usize, h: usize, r: f32) -> Vec<f32> {
@@ -1178,6 +1186,17 @@ mod tests {
         // Magentas wrap around 360°.
         assert_eq!(hue_range(&[[1.0, 0.0, 1.0, 1.0]], 300.0)[0], 1.0);
         assert!((hue_range(&[[1.0, 0.0, 0.5, 1.0]], 300.0)[0] - 0.5).abs() < 1e-5);
+    }
+
+    #[test]
+    fn hue_families_weigh_dark_colours_like_photoshop() {
+        // Photoshop 2025's Blues on an 8-bit sRGB document (selection levels 0..255, #5243): the
+        // muted navy #3d3f54, a dark blue (0, 0, 84) and a mid blue (61, 61, 153).
+        let c = |r: u8, g: u8, b: u8| [f32::from(r) / 255.0, f32::from(g) / 255.0, f32::from(b) / 255.0, 1.0];
+        let blues = hue_range(&[c(0x3d, 0x3f, 0x54), c(0, 0, 84), c(61, 61, 153)], 240.0);
+        for (got, want) in blues.iter().zip([35.0, 140.0, 129.0]) {
+            assert!((got * 255.0 - want).abs() <= 1.0, "{} vs Photoshop {want}", got * 255.0);
+        }
     }
 
     #[test]

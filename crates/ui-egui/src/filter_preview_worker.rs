@@ -95,8 +95,11 @@ impl Worker {
 
 /// Stop and release previews of closed dialogs even when their canvas is no longer being drawn.
 pub(crate) fn discard_closed(app: &mut crate::PhotocraftApp) {
-    let visible =
-        app.ui.dialogs.iter().any(|d| d.fields.contains_key("__filter") && d.fields.get("__preview").and_then(serde_json::Value::as_bool) == Some(true));
+    let visible = app.ui.dialogs.iter().any(|d| {
+        d.fields.contains_key("__filter")
+            && d.fields.get("__preview").and_then(serde_json::Value::as_bool) == Some(true)
+            && d.fields.get("__smartFilter").is_none_or(|target| crate::smart_filter_dialog::validate_target(app, target).is_ok())
+    });
     if !visible {
         if let Some(r) = &app.filter_preview_worker.running {
             r.job.cancel();
@@ -160,7 +163,7 @@ mod tests {
         let (old, result) = finish(&mut worker);
         assert!(result.is_ok());
         let latest = key(1, 0, 256);
-        assert_ne!(old, latest); // The canvas must discard this result before uploading.
+        assert_ne!(old, latest); // The canvas paints this as the drag's frame; the newest one is computed next.
         assert!(worker.start(latest.clone(), ctx, |_| Computed { result: None, ms: 1.0 }).unwrap());
         assert_eq!(finish(&mut worker).0, latest);
     }

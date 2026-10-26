@@ -130,7 +130,7 @@ fn bad_params_and_states_fail_without_changing_anything() {
         json!({"document": -1}),
         json!({"document": "1"}),
         json!({"document": 1, "source": 9}),
-        json!({"document": 1, "layers": [999_999]}),
+        json!({"document": 1, "layers": [u64::MAX]}),
         json!({"document": 1, "layers": "all"}),
         json!({"document": 1, "layers": []}),
         json!({"document": 1, "at": [1.0]}),
@@ -314,7 +314,7 @@ fn duplicate_destinations_that_are_not_new_fail_cleanly() {
         json!({"document": []}),
         json!({"document": {}}),
         json!({"document": "other"}),
-        json!({"document": "new", "layer": 999_999}),
+        json!({"document": "new", "layer": u64::MAX}),
     ] {
         let before = (doc(&s, 0).clone(), s.documents().len(), s.active_index());
         let err = s.execute("layer.duplicate", p.clone()).unwrap_err().to_string();
@@ -341,4 +341,31 @@ fn a_named_duplicate_takes_the_name_in_one_step() {
     s.execute("layer.select", json!({"layer": paint.0})).unwrap();
     let r = s.execute("layer.copyToDocument", json!({"document": 1, "name": "Ink"})).unwrap();
     assert_eq!(doc(&s, 1).layer(copied(&r)).unwrap().name, "Ink");
+}
+
+#[test]
+fn a_copied_group_cannot_nest_the_destination_past_the_group_depth_limit() {
+    use photocraft_doc::{Layer, MAX_GROUP_DEPTH};
+    let (mut s, paint) = two_docs(40, 30, 8);
+    // A group in the source, and a destination whose active layer sits at the deepest legal level.
+    s.execute("layer.groupLayers", json!({"layers": [paint.0]})).unwrap();
+    let group = s.active().unwrap().active_layer.unwrap();
+    s.set_active(1);
+    let mut inner = None;
+    s.edit("nest", |doc, active| {
+        let mut l = Layer::new("deep", LayerContent::Raster(Surface::new(PixelFormat::RGBA8)));
+        inner = Some(l.id);
+        for _ in 0..MAX_GROUP_DEPTH {
+            l = Layer::group("g", vec![l]);
+        }
+        doc.layers.push(l);
+        *active = inner;
+        Ok(())
+    })
+    .unwrap();
+    s.set_active(0);
+    let before = doc(&s, 1).clone();
+    let e = s.execute("layer.copyToDocument", json!({"document": 1, "layers": [group.0]})).unwrap_err();
+    assert!(e.to_string().contains("deeper than"), "{e}");
+    assert_eq!(*doc(&s, 1), before, "nothing was copied");
 }

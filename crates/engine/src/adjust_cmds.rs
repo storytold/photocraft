@@ -168,6 +168,44 @@ fn base_name(path: &str) -> String {
     path.rsplit(['/', '\\']).next().unwrap_or(path).to_string()
 }
 
+/// Most LUT files [`folder_luts`] lists.
+const MAX_FOLDER_LUTS: usize = 500;
+/// Largest LUT file [`folder_luts`] lists: a 129³ `.cube` (the parser's largest) is about 60 MB.
+const MAX_FOLDER_LUT_BYTES: u64 = 64 << 20;
+
+/// The `.cube`, `.3dl` and `.look` files directly in `dir`, as (file name, path) sorted by name,
+/// for Color Lookup's dropdown (Preferences › File Handling › LUT Folder, #6558). An empty,
+/// missing or unreadable folder lists nothing; hidden files, subfolders and files too large to be
+/// a LUT are skipped. A symlink to a LUT file is listed, as a studio's shared library often is.
+/// Contents are only parsed when one is picked, which reports a malformed file.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn folder_luts(dir: &str) -> Vec<(String, String)> {
+    let dir = dir.trim();
+    let Some(entries) = (!dir.is_empty()).then(|| std::fs::read_dir(dir).ok()).flatten() else { return Vec::new() };
+    let mut out: Vec<(String, String)> = entries
+        .flatten()
+        .filter_map(|e| {
+            let name = e.file_name().into_string().ok()?;
+            let ext = name.rsplit_once('.')?.1.to_ascii_lowercase();
+            if name.starts_with('.') || !matches!(ext.as_str(), "cube" | "3dl" | "look") {
+                return None;
+            }
+            let path = e.path();
+            let meta = std::fs::metadata(&path).ok()?;
+            (meta.is_file() && meta.len() <= MAX_FOLDER_LUT_BYTES).then_some((name, path.to_str()?.to_string()))
+        })
+        .collect();
+    out.sort_by_key(|(name, _)| name.to_lowercase());
+    out.truncate(MAX_FOLDER_LUTS);
+    out
+}
+
+/// No file system on the web: a LUT folder lists nothing there.
+#[cfg(target_arch = "wasm32")]
+pub fn folder_luts(_: &str) -> Vec<(String, String)> {
+    Vec::new()
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn read_file(path: &str) -> Option<Vec<u8>> {
     std::fs::read(path).ok()
@@ -270,6 +308,8 @@ pub(crate) fn adjust_as_smart_filter(s: &mut Session, kind: &str, label: &str, p
     if !smart {
         return Ok(false);
     }
+    // A pixel or full lock refuses the smart filter, as for `filter.*` on a smart object.
+    crate::commands::check_pixels_unlocked(&s.active().ok_or(EngineError::NoDocument)?.doc, id)?;
     // The recorded params are the command's own, minus the engine's private `__kind` key.
     let mut params = p.clone();
     if let Value::Object(m) = &mut params {
@@ -296,6 +336,18 @@ fn has_doc(s: &Session) -> std::result::Result<(), String> {
 /// Image › Adjustments run as a smart filter (`image.adjustments.<kind>` recorded on a smart
 /// object): the adjustment applied to a copy of `surf`. `None` for kinds or params it can't run.
 pub(crate) fn adjust_as_filter(kind: &str, p: &Value, surf: &Surface) -> Option<Surface> {
+    // A Color Lookup filter re-reads its LUT `file`, a path stored in the document: followed only
+    // as `doc_path` allows, else the filter can't run (like a missing file).
+    let resolved;
+    let p = match p.get("file").and_then(Value::as_str).filter(|f| kind == "colorLookup" && !f.is_empty()) {
+        Some(file) => {
+            let mut q = p.clone();
+            q["file"] = json!(crate::doc_path::resolve(file).ok()?.to_str()?);
+            resolved = q;
+            &resolved
+        }
+        None => p,
+    };
     let mut out = surf.clone();
     if kind == "shadowsHighlights" {
         let sh = shadows_highlights_params(p);
@@ -303,7 +355,7 @@ pub(crate) fn adjust_as_filter(kind: &str, p: &Value, surf: &Surface) -> Option<
     } else {
         let mode = surf.format().mode;
         let adj = crate::adjust_params::from_params(kind, p, None, mode).ok()?;
-        crate::pixels::adjust_surface(&mut out, &adj, None, mode);
+        crate::pixels::adjust_surface(&mut out, &adj, None, mode).ok()?;
     }
     out.prune();
     Some(out)
@@ -335,7 +387,7 @@ fn shadows_highlights_params(p: &Value) -> ShadowsHighlights {
 
 fn replace_color(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "image.adjustments.replaceColor";
-    let c = crate::commands::color_param(p, "color", s.tools.foreground);
+    let c = crate::commands::color_param(CMD, p, "color", s.tools.foreground)?;
     let fuzz = num(p, "fuzziness", 40.0).clamp(0.0, 200.0);
     let (h, sat, l) = (num(p, "hue", 0.0).clamp(-180.0, 180.0), num(p, "saturation", 0.0).clamp(-100.0, 100.0), num(p, "lightness", 0.0).clamp(-100.0, 100.0));
     // Localized Color Clusters, as in Select › Color Range: the colour only matches within Range

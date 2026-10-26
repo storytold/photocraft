@@ -1,7 +1,7 @@
-//! UI for the retouching tools (healing, patch, clone, history brush, blur/sharpen/smudge,
-//! dodge/burn/sponge, Mixer Brush, Color Replacement) and the smart selection tools (Quick
-//! Selection, Object Selection): gesture → engine command, options bars, and the clone-source
-//! marker.
+//! UI for the retouching tools (healing, patch, clone, history brush, art history brush,
+//! blur/sharpen/smudge, dodge/burn/sponge, Mixer Brush, Color Replacement) and the smart
+//! selection tools (Quick Selection, Object Selection): gesture → engine command, options bars,
+//! and the clone-source marker.
 
 use egui::{Color32, Stroke, vec2};
 use serde_json::{Value, json};
@@ -27,7 +27,9 @@ pub(crate) fn alt_flipped(tool: Tool, alt: bool) -> Tool {
 /// point is set yet.
 pub(crate) fn clone_params(app: &PhotocraftApp) -> Option<Value> {
     let o = &app.ui.tool_options;
-    let mut p = json!({"aligned": o.clone_aligned, "sampleLayer": o.clone_sample});
+    // The options bar's Mode is the tool's own brush's.
+    let mode = crate::blend_keys::brush_tool_mode(app.ui.tool, app.session.tools.brush.mode);
+    let mut p = json!({"aligned": o.clone_aligned, "sampleLayer": o.clone_sample, "mode": mode.label()});
     if app.ui.tool == Tool::CloneStamp {
         p["wrap"] = json!(app.ui.view.pattern_preview);
         p["opacity"] = json!(app.session.tools.brush.opacity * 100.0);
@@ -45,14 +47,20 @@ pub(crate) fn clone_params(app: &PhotocraftApp) -> Option<Value> {
     Some(p)
 }
 
+/// History Brush params for the live preview and the commit (without `points` and `target`): the
+/// options bar's Mode, which is the tool's own brush's.
+pub(crate) fn history_brush_params(app: &PhotocraftApp) -> Value {
+    json!({"mode": app.session.tools.brush.mode.label()})
+}
+
 /// The command and options-bar params (without `points` and `target`) of a sequential-dab tool:
 /// Blur, Sharpen, Smudge, Dodge, Burn, Sponge. Shared by the live preview and the commit.
 pub(crate) fn dab_params(app: &PhotocraftApp, tool: Tool) -> Option<(&'static str, Value)> {
     let o = &app.ui.tool_options;
     Some(match tool {
-        Tool::Blur => ("paint.blur", json!({"strength": o.strength, "sampleAllLayers": o.sample_all_layers})),
-        Tool::Sharpen => ("paint.sharpen", json!({"strength": o.strength, "protectDetail": o.protect_detail, "sampleAllLayers": o.sample_all_layers})),
-        Tool::Smudge => ("paint.smudge", json!({"strength": o.strength, "fingerPainting": o.finger_painting, "sampleAllLayers": o.sample_all_layers})),
+        Tool::Blur => ("paint.blur", json!({"strength": o.strength, "sampleAllLayers": o.sample_all.blur})),
+        Tool::Sharpen => ("paint.sharpen", json!({"strength": o.strength, "protectDetail": o.protect_detail, "sampleAllLayers": o.sample_all.sharpen})),
+        Tool::Smudge => ("paint.smudge", json!({"strength": o.strength, "fingerPainting": o.finger_painting, "sampleAllLayers": o.sample_all.smudge})),
         Tool::Dodge | Tool::Burn => (
             if tool == Tool::Dodge { "paint.dodge" } else { "paint.burn" },
             json!({"range": o.tone_range, "exposure": o.exposure, "protectTones": o.protect_tones}),
@@ -79,12 +87,46 @@ pub(crate) fn color_replacement_params(app: &PhotocraftApp) -> Value {
     })
 }
 
+/// `paint.patternStamp` params from the options bar and the Patterns panel (without `points` and
+/// `target`): shared by the live preview and the commit. The jitter `seed` comes from the stroke's
+/// first point, so the live stroke (which starts with only that point) and the commit agree.
+pub(crate) fn pattern_stamp_params(app: &PhotocraftApp, points: &[[f64; 3]]) -> Value {
+    let o = &app.ui.tool_options;
+    let mut p = json!({
+        "aligned": o.pattern_stamp_aligned,
+        "impressionist": o.pattern_stamp_impressionist,
+        "scale": o.pattern_stamp_scale,
+        "angle": o.pattern_stamp_angle,
+        "seed": stroke_seed(points),
+        // The options bar's Mode is the tool's own brush's.
+        "mode": app.session.tools.brush.mode.label(),
+    });
+    if o.pattern_stamp_aligned
+        && let Some(ph) = app.ui.pattern_stamp_phase
+    {
+        p["phase"] = json!(ph);
+    }
+    if let Some(id) = photocraft_engine::presets::patterns::current(&app.session).or(app.session.patterns.items.first()).map(|x| x.id.clone()) {
+        p["pattern"] = json!(id);
+    }
+    p
+}
+
+/// The jitter seed of a stroke drawn live and committed on release: from its first position, which
+/// the live stroke and the commit share (the engine's default hashes every point, which the live
+/// stroke doesn't have yet).
+pub(crate) fn stroke_seed(points: &[[f64; 3]]) -> u64 {
+    // Position only: a pen tap raises the first point's pressure on release (#1798).
+    let first = points.first().map(|p| json!([p[0], p[1]]).to_string()).unwrap_or_default();
+    photocraft_engine::paint::rng::seed_from_bytes(first.as_bytes())
+}
+
 /// Finish a stroke with a retouching tool. Returns false if `tool` isn't one.
 pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], mods: egui::Modifiers) -> bool {
     let o = app.ui.tool_options.clone();
     let pts = json!(points);
     let (cmd, mut p): (&str, Value) = match tool {
-        Tool::SpotHealing => ("paint.spotHealing", json!({"type": o.spot_type, "sampleAllLayers": o.sample_all_layers})),
+        Tool::SpotHealing => ("paint.spotHealing", json!({"type": o.spot_type, "sampleAllLayers": o.sample_all.spot_healing})),
         Tool::Remove => {
             if !o.remove_after_each_stroke {
                 remove_pending_add(app, points);
@@ -94,23 +136,7 @@ pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], m
         }
         Tool::MixerBrush => ("paint.mixerBrush", json!({})),
         Tool::ColorReplacement => ("paint.colorReplacement", color_replacement_params(app)),
-        Tool::PatternStamp => {
-            let mut p = json!({
-                "aligned": o.pattern_stamp_aligned,
-                "impressionist": o.pattern_stamp_impressionist,
-                "scale": o.pattern_stamp_scale,
-                "angle": o.pattern_stamp_angle,
-            });
-            if o.pattern_stamp_aligned
-                && let Some(ph) = app.ui.pattern_stamp_phase
-            {
-                p["phase"] = json!(ph);
-            }
-            if let Some(id) = photocraft_engine::presets::patterns::current(&app.session).or(app.session.patterns.items.first()).map(|x| x.id.clone()) {
-                p["pattern"] = json!(id);
-            }
-            ("paint.patternStamp", p)
-        }
+        Tool::PatternStamp => ("paint.patternStamp", pattern_stamp_params(app, points)),
         Tool::Healing | Tool::CloneStamp => {
             let Some(p) = clone_params(app) else {
                 // Option-click on the Mac, Alt-click on Windows.
@@ -125,7 +151,15 @@ pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], m
             };
             (if tool == Tool::Healing { "paint.healingBrush" } else { "paint.cloneStamp" }, p)
         }
-        Tool::HistoryBrush => ("paint.historyBrush", json!({})),
+        Tool::HistoryBrush => ("paint.historyBrush", history_brush_params(app)),
+        Tool::ArtHistoryBrush => (
+            "paint.artHistoryBrush",
+            json!({
+                "style": o.art_history_style,
+                "area": o.art_history_area,
+                "tolerance": o.art_history_tolerance,
+            }),
+        ),
         Tool::Blur | Tool::Sharpen | Tool::Smudge | Tool::Dodge | Tool::Burn | Tool::Sponge => match dab_params(app, tool) {
             Some(cp) => cp,
             None => return false,
@@ -134,7 +168,7 @@ pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], m
             let size = app.session.tools.brush.size;
             let mode = if mods.alt { "subtract" } else { "add" };
             let xy: Vec<[f64; 2]> = points.iter().map(|q| [q[0], q[1]]).collect();
-            let (sample_all, enhance) = (o.sample_all_layers, o.enhance_edge);
+            let (sample_all, enhance) = (o.sample_all.quick_selection, o.enhance_edge);
             let r = app.run("select.quick", json!({"points": xy, "size": size, "mode": mode, "enhanceEdge": enhance, "sampleAllLayers": sample_all}));
             report_smart_result(app, r, tl!("Quick Selection found nothing there"));
             return true;
@@ -144,7 +178,9 @@ pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], m
     p["points"] = pts;
     // The layer mask, an alpha channel or the Quick Mask when targeted, as the Brush paints.
     p["target"] = crate::canvas::paint_target(app);
-    match app.run(cmd, p) {
+    let result = app.run(cmd, p);
+    app.retouch_from_live = matches!(&result, Ok(r) if r.get("fromLive").and_then(Value::as_bool) == Some(true));
+    match result {
         Ok(r) if matches!(tool, Tool::Healing | Tool::CloneStamp) => {
             // Aligned: keep the offset for later strokes; non-aligned: every stroke restarts at the source.
             app.ui.clone_offset = r.get("offset").and_then(|v| serde_json::from_value(v.clone()).ok()).filter(|_| o.clone_aligned);
@@ -163,21 +199,37 @@ pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], m
 
 /// `paint.remove` params from the options bar (without the strokes).
 fn remove_params(o: &crate::state::ToolOptions) -> Value {
-    json!({"sampleAllLayers": o.sample_all_layers, "newLayer": o.remove_new_layer})
+    json!({"sampleAllLayers": o.sample_all.remove, "newLayer": o.remove_new_layer})
+}
+
+/// The selection a queued Remove stroke was drawn against. A later selection must not
+/// redirect the queued strokes to a different layer or colour component.
+#[derive(Clone, PartialEq)]
+pub(crate) struct RemoveTarget {
+    doc: photocraft_doc::DocId,
+    layer: Option<photocraft_doc::LayerId>,
+    channel: photocraft_engine::channel_cmds::ChannelTarget,
+    paint: Value,
+}
+
+fn remove_target(app: &PhotocraftApp) -> Option<RemoveTarget> {
+    let st = app.session.active()?;
+    Some(RemoveTarget { doc: st.doc.id, layer: st.active_layer, channel: st.channel_view.target, paint: crate::canvas::paint_target(app) })
 }
 
 /// Remove after each stroke off: a finished stroke waits with the others, tinted on the canvas,
 /// until ↩ or the options bar's ✓ applies them all as one removal (Esc or ⊘ drops them).
 pub fn remove_pending_add(app: &mut PhotocraftApp, points: &[[f64; 3]]) {
+    let Some(target) = remove_target(app) else { return };
     let Some(st) = app.session.active() else { return };
-    let (doc, size) = (st.doc.id, [st.doc.size.width, st.doc.size.height]);
-    if app.remove_pending_doc != Some(doc) {
+    let size = [st.doc.size.width, st.doc.size.height];
+    if app.remove_pending_target.as_ref() != Some(&target) {
         app.remove_pending.clear();
         app.remove_trail = None;
-        app.remove_pending_doc = Some(doc);
+        app.remove_pending_target = Some(target);
     }
     let diameter = app.session.tools.brush.size;
-    app.remove_trail.get_or_insert_with(|| crate::stroke_trail::Trail::new(size)).feed(points, diameter);
+    app.remove_trail.get_or_insert_with(|| crate::stroke_trail::Trail::new(size)).feed_stroke(points, diameter);
     app.remove_pending.push(points.to_vec());
     app.ui.status = crate::i18n::fmt(tl!("Strokes to remove: {n} (Enter applies, Esc cancels)"), &[("n", &app.remove_pending.len().to_string())]);
     app.ui.status_error = false;
@@ -185,12 +237,13 @@ pub fn remove_pending_add(app: &mut PhotocraftApp, points: &[[f64; 3]]) {
 
 /// Apply the waiting strokes as one removal (one job, one undo step). False when none wait.
 pub fn remove_pending_commit(app: &mut PhotocraftApp) -> bool {
-    if app.remove_pending.is_empty() {
+    // Enter can arrive before the next canvas frame checks pending-stroke lifetime.
+    if !remove_pending_live(app) {
         return false;
     }
     let strokes = std::mem::take(&mut app.remove_pending);
     app.remove_trail = None;
-    app.remove_pending_doc = None;
+    app.remove_pending_target = None;
     let mut p = remove_params(&app.ui.tool_options);
     p["strokes"] = json!(strokes);
     p["target"] = crate::canvas::paint_target(app);
@@ -209,7 +262,7 @@ pub fn remove_pending_cancel(app: &mut PhotocraftApp) -> bool {
     }
     app.remove_pending.clear();
     app.remove_trail = None;
-    app.remove_pending_doc = None;
+    app.remove_pending_target = None;
     app.ui.status.clear();
     app.ui.status_error = false;
     true
@@ -221,8 +274,7 @@ pub fn remove_pending_live(app: &mut PhotocraftApp) -> bool {
     if app.remove_pending.is_empty() {
         return false;
     }
-    let doc = app.session.active().map(|st| st.doc.id);
-    if app.ui.tool == Tool::Remove && doc.is_some() && app.remove_pending_doc == doc {
+    if app.ui.tool == Tool::Remove && remove_target(app).as_ref() == app.remove_pending_target.as_ref() {
         return true;
     }
     remove_pending_cancel(app);
@@ -291,7 +343,7 @@ pub fn finish_patch(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
             "contentAware": true,
             "structure": o.patch_structure.round().clamp(1.0, 7.0),
             "color": o.patch_color.round().clamp(0.0, 10.0),
-            "sampleAllLayers": o.sample_all_layers,
+            "sampleAllLayers": o.sample_all.patch,
             "target": crate::canvas::paint_target(app),
         });
         if let Err(e) = app.run("paint.patch", p) {
@@ -337,7 +389,7 @@ pub fn content_aware_move_params(app: &PhotocraftApp, offset: [i64; 2]) -> Value
         "mode": o.cam_mode,
         "structure": o.cam_structure.round().clamp(1.0, 7.0),
         "color": o.cam_color.round().clamp(0.0, 10.0),
-        "sampleAllLayers": o.sample_all_layers,
+        "sampleAllLayers": o.sample_all.content_aware_move,
         "target": crate::canvas::paint_target(app),
     })
 }
@@ -351,7 +403,7 @@ pub fn content_aware_move_params(app: &PhotocraftApp, offset: [i64; 2]) -> Value
 pub fn finish_object_selection(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) {
     let (x, y) = (start[0].min(end[0]), start[1].min(end[1]));
     let (w, h) = ((end[0] - start[0]).abs(), (end[1] - start[1]).abs());
-    let sample_all = app.ui.tool_options.sample_all_layers;
+    let sample_all = app.ui.tool_options.sample_all.object_selection;
     if (w < 2.0 || h < 2.0) && app.ui.tool_options.object_finder {
         // Object Finder (#4087): the object under the click, as hovering highlighted it.
         let mode = match (mods.shift, mods.alt) {
@@ -430,7 +482,9 @@ pub fn draw_source_marker(app: &PhotocraftApp, painter: &egui::Painter, xf: &Vie
 
 fn opt(ui: &mut egui::Ui, text: &str) {
     let t = Tokens::get(ui.ctx());
-    ui.label(egui::RichText::new(tl!(&text)).color(t.text_dim).size(12.0));
+    let label = ui.label(egui::RichText::new(tl!(&text)).color(t.text_dim).size(12.0));
+    // The caption scrubs and names the field or dropdown drawn right after it.
+    crate::widgets::scrub_option_label(ui, &label);
 }
 
 fn pct(ui: &mut egui::Ui, label: &str, v: &mut f32) {
@@ -456,12 +510,12 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                 }
             }
             crate::widgets::vline(ui, 22.0);
-            crate::widgets::checkbox(ui, &mut o.sample_all_layers, tl!("Sample All Layers"));
+            crate::widgets::checkbox(ui, &mut o.sample_all.spot_healing, tl!("Sample All Layers"));
         }
         Tool::Remove => {
             // Photoshop's options bar: Sample All Layers, Create a new layer, Remove after each
             // stroke; with strokes waiting, ✓ applies them and ⊘ drops them.
-            crate::widgets::checkbox(ui, &mut o.sample_all_layers, tl!("Sample All Layers"));
+            crate::widgets::checkbox(ui, &mut o.sample_all.remove, tl!("Sample All Layers"));
             crate::widgets::checkbox(ui, &mut o.remove_new_layer, tl!("Create a new layer"));
             crate::widgets::checkbox(ui, &mut o.remove_after_each_stroke, tl!("Remove after each stroke"));
             if !app.remove_pending.is_empty() {
@@ -483,14 +537,14 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             opt(ui, tl!("Patch:"));
             let kinds = [("normal".to_string(), tl!("Normal")), ("contentAware".to_string(), tl!("Content-Aware"))];
             let mut kind = if o.patch_content_aware { "contentAware" } else { "normal" }.to_string();
-            crate::widgets::dropdown(ui, "patch-kind", &mut kind, &kinds, 120.0);
+            crate::widgets::dropdown(ui, "patch-kind", tl!("Type"), &mut kind, &kinds, 120.0);
             o.patch_content_aware = kind == "contentAware";
             if o.patch_content_aware {
                 opt(ui, tl!("Structure:"));
                 crate::widgets::value_field(ui, &mut o.patch_structure, 1.0..=7.0, "", 40.0);
                 opt(ui, tl!("Color:"));
                 crate::widgets::value_field(ui, &mut o.patch_color, 0.0..=10.0, "", 40.0);
-                crate::widgets::checkbox(ui, &mut o.sample_all_layers, tl!("Sample All Layers"));
+                crate::widgets::checkbox(ui, &mut o.sample_all.patch, tl!("Sample All Layers"));
             } else {
                 for (k, l) in [("source", tl!("Source")), ("destination", tl!("Destination"))] {
                     let mut on = o.patch_mode == k;
@@ -505,24 +559,24 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         Tool::ContentAwareMove => {
             opt(ui, tl!("Mode:"));
             let modes = [("move".to_string(), tl!("Move")), ("extend".to_string(), tl!("Extend"))];
-            crate::widgets::dropdown(ui, "cam-mode", &mut o.cam_mode, &modes, 90.0);
+            crate::widgets::dropdown(ui, "cam-mode", tl!("Mode"), &mut o.cam_mode, &modes, 90.0);
             opt(ui, tl!("Structure:"));
             crate::widgets::value_field(ui, &mut o.cam_structure, 1.0..=7.0, "", 40.0);
             opt(ui, tl!("Color:"));
             crate::widgets::value_field(ui, &mut o.cam_color, 0.0..=10.0, "", 40.0);
-            crate::widgets::checkbox(ui, &mut o.sample_all_layers, tl!("Sample All Layers"));
+            crate::widgets::checkbox(ui, &mut o.sample_all.content_aware_move, tl!("Sample All Layers"));
             crate::widgets::checkbox(ui, &mut o.cam_transform_on_drop, tl!("Transform On Drop"));
             crate::widgets::vline(ui, 22.0);
             if crate::cam_transform::active(app) {
                 // The box on the dropped patch: ✓ computes the move, ⊘ drops it (as ↩ / Esc).
                 let tip = crate::i18n::fmt(tl!("Commit transform ({key})"), &[("key", &crate::shortcuts::pretty("Enter"))]);
                 let commit = crate::icons::button(ui, "check", 26.0, false, &tip);
-                commit.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Commit transform"));
+                commit.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Commit transform"));
                 if commit.clicked() {
                     crate::cam_transform::commit(app);
                 }
                 let cancel = crate::icons::button(ui, "ban", 26.0, false, tl!("Cancel transform (Esc)"));
-                cancel.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Cancel transform"));
+                cancel.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Cancel transform"));
                 if cancel.clicked() {
                     crate::cam_transform::cancel(app);
                 }
@@ -541,7 +595,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                 ("currentAndBelow".to_string(), tl!("Current & Below")),
                 ("all".to_string(), tl!("All Layers")),
             ];
-            crate::widgets::dropdown(ui, "clone-sample", &mut o.clone_sample, &opts, 130.0);
+            crate::widgets::dropdown(ui, "clone-sample", tl!("Source"), &mut o.clone_sample, &opts, 130.0);
             if app.ui.clone_source.is_none() {
                 crate::widgets::vline(ui, 22.0);
                 opt(ui, &crate::i18n::fmt(tl!("{key}-click to set the source"), &[("key", &crate::shortcuts::pretty("Alt"))]));
@@ -550,19 +604,21 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         Tool::Dodge | Tool::Burn => {
             opt(ui, tl!("Range:"));
             let opts = [("shadows".to_string(), tl!("Shadows")), ("midtones".to_string(), tl!("Midtones")), ("highlights".to_string(), tl!("Highlights"))];
-            crate::widgets::dropdown(ui, "tone-range", &mut o.tone_range, &opts, 100.0);
+            crate::widgets::dropdown(ui, "tone-range", tl!("Range"), &mut o.tone_range, &opts, 100.0);
             pct(ui, tl!("Exposure:"), &mut o.exposure);
             crate::widgets::checkbox(ui, &mut o.protect_tones, tl!("Protect Tones"));
         }
         Tool::Sponge => {
             opt(ui, tl!("Mode:"));
             let opts = [("desaturate".to_string(), tl!("Desaturate")), ("saturate".to_string(), tl!("Saturate"))];
-            crate::widgets::dropdown(ui, "sponge-mode", &mut o.sponge_mode, &opts, 110.0);
+            crate::widgets::dropdown(ui, "sponge-mode", tl!("Mode"), &mut o.sponge_mode, &opts, 110.0);
             crate::widgets::checkbox(ui, &mut o.vibrance, tl!("Vibrance"));
         }
         Tool::Blur | Tool::Sharpen | Tool::Smudge => {
             pct(ui, tl!("Strength:"), &mut o.strength);
-            crate::widgets::checkbox(ui, &mut o.sample_all_layers, tl!("Sample All Layers"));
+            if let Some(all) = o.sample_all.slot(tool) {
+                crate::widgets::checkbox(ui, all, tl!("Sample All Layers"));
+            }
             if tool == Tool::Sharpen {
                 crate::widgets::checkbox(ui, &mut o.protect_detail, tl!("Protect Detail"));
             }
@@ -579,7 +635,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                 ("color".to_string(), tl!("Color")),
                 ("luminosity".to_string(), tl!("Luminosity")),
             ];
-            crate::widgets::dropdown(ui, "color-replacement-mode", &mut o.cr_mode, &modes, 100.0);
+            crate::widgets::dropdown(ui, "color-replacement-mode", tl!("Mode"), &mut o.cr_mode, &modes, 100.0);
             crate::widgets::vline(ui, 22.0);
             ui.spacing_mut().item_spacing.x = 2.0;
             for (k, icon, tip) in [
@@ -599,14 +655,34 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                 ("contiguous".to_string(), tl!("Contiguous")),
                 ("findEdges".to_string(), tl!("Find Edges")),
             ];
-            crate::widgets::dropdown(ui, "color-replacement-limits", &mut o.cr_limits, &limits, 110.0);
+            crate::widgets::dropdown(ui, "color-replacement-limits", tl!("Limits:"), &mut o.cr_limits, &limits, 110.0);
             opt(ui, tl!("Tolerance:"));
             crate::widgets::value_field(ui, &mut o.cr_tolerance, 0.0..=100.0, "%", 62.0);
             crate::widgets::checkbox(ui, &mut o.cr_anti_alias, tl!("Anti-alias"));
         }
-        Tool::HistoryBrush => opt(ui, "Paints from the document's opening state"),
+        Tool::HistoryBrush => opt(ui, tl!("Paints from the History panel's source state")),
+        Tool::ArtHistoryBrush => {
+            opt(ui, tl!("Style"));
+            let styles = [
+                ("tightShort".to_string(), tl!("Tight Short")),
+                ("tightMedium".to_string(), tl!("Tight Medium")),
+                ("tightLong".to_string(), tl!("Tight Long")),
+                ("looseMedium".to_string(), tl!("Loose Medium")),
+                ("looseLong".to_string(), tl!("Loose Long")),
+                ("dab".to_string(), tl!("Dab")),
+                ("tightCurl".to_string(), tl!("Tight Curl")),
+                ("looseCurl".to_string(), tl!("Loose Curl")),
+            ];
+            crate::widgets::dropdown(ui, "art-history-style", tl!("Style"), &mut o.art_history_style, &styles, 130.0);
+            opt(ui, tl!("Area"));
+            crate::widgets::value_field(ui, &mut o.art_history_area, 0.0..=100.0, "", 50.0);
+            opt(ui, tl!("Tolerance"));
+            crate::widgets::value_field(ui, &mut o.art_history_tolerance, 0.0..=100.0, "", 50.0);
+            crate::widgets::vline(ui, 22.0);
+            opt(ui, tl!("Stylized dabs from a history state"));
+        }
         Tool::QuickSelection => {
-            crate::widgets::checkbox(ui, &mut o.sample_all_layers, tl!("Sample All Layers"));
+            crate::widgets::checkbox(ui, &mut o.sample_all.quick_selection, tl!("Sample All Layers"));
             crate::widgets::checkbox(ui, &mut o.enhance_edge, tl!("Enhance Edge"));
             opt(ui, &crate::i18n::fmt(tl!("{key} to subtract"), &[("key", &crate::shortcuts::pretty("Alt"))]));
             crate::widgets::vline(ui, 22.0);
@@ -617,7 +693,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         }
         Tool::ObjectSelection => {
             crate::widgets::checkbox(ui, &mut o.object_finder, tl!("Object Finder"));
-            crate::widgets::checkbox(ui, &mut o.sample_all_layers, tl!("Sample All Layers"));
+            crate::widgets::checkbox(ui, &mut o.sample_all.object_selection, tl!("Sample All Layers"));
             opt(ui, tl!("Drag a rectangle around the object"));
             crate::widgets::vline(ui, 22.0);
             if crate::widgets::secondary_button(ui, tl!("Select Subject"), 0.0).clicked() {
@@ -651,7 +727,7 @@ fn pattern_stamp_options(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         ui.label(egui::RichText::new(tl!("No patterns")).color(Tokens::get(ui.ctx()).text_faint));
         false
     } else {
-        crate::widgets::dropdown(ui, "pattern-stamp-pat", &mut pat, &opts_ref, 140.0)
+        crate::widgets::dropdown(ui, "pattern-stamp-pat", tl!("Pattern"), &mut pat, &opts_ref, 140.0)
     };
     opt(ui, tl!("Scale"));
     crate::widgets::value_field(ui, &mut o.pattern_stamp_scale, 1.0..=1000.0, "%", 58.0);
@@ -763,6 +839,67 @@ mod tests {
         assert_eq!(params["flow"], 50.0);
     }
 
+    /// A Healing Brush whose brush holds a mode outside its menu (Overlay, restored with the tool
+    /// active, so no tool switch sees it) heals in Normal; the Clone Stamp keeps Overlay.
+    #[test]
+    fn healing_brush_heals_in_normal_with_a_mode_outside_its_menu() {
+        for (tool, want) in [(Tool::Healing, "Normal"), (Tool::CloneStamp, "Overlay")] {
+            let mut app = app();
+            app.ui.tool = tool;
+            crate::paint_mouse::sync_tool_brush(&mut app);
+            app.session.tools.brush.mode = photocraft_color::BlendMode::Overlay;
+            app.ui.clone_source = Some([10.0, 10.0]);
+            drag(&mut app, tool);
+            let (_, params) = app.session.journal.last().unwrap();
+            assert_eq!(params["mode"], want, "{tool:?}");
+        }
+    }
+
+    /// The options bar's Mode (each tool's own brush's) reaches the stamps', the History Brush's
+    /// and the Healing Brush's strokes, live and committed.
+    #[test]
+    fn retouch_mode_reaches_the_command() {
+        for (tool, cmd, mode) in [
+            (Tool::CloneStamp, "paint.cloneStamp", "Multiply"),
+            (Tool::Healing, "paint.healingBrush", "Luminosity"),
+            (Tool::HistoryBrush, "paint.historyBrush", "Screen"),
+            (Tool::PatternStamp, "paint.patternStamp", "Overlay"),
+        ] {
+            let mut app = app();
+            app.ui.tool = tool;
+            crate::paint_mouse::sync_tool_brush(&mut app);
+            app.run("tools.setBrush", json!({"brush": {"mode": mode}})).unwrap();
+            app.ui.clone_source = Some([10.0, 10.0]);
+            drag(&mut app, tool);
+            let (id, params) = app.session.journal.last().unwrap();
+            assert_eq!((id.as_str(), params["mode"].as_str()), (cmd, Some(mode)), "{tool:?}");
+        }
+    }
+
+    /// The Paint Bucket's Mode reaches the fill: Multiply darkens, Clear erases.
+    #[test]
+    fn paint_bucket_mode_reaches_the_fill() {
+        let mut app = app();
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.ui.tool = Tool::PaintBucket;
+        app.session.tools.foreground = [0.5, 0.5, 0.5, 1.0];
+        let click = |app: &mut PhotocraftApp| {
+            let m = egui::Modifiers::NONE;
+            tool_event(app, ToolEvent::Down { x: 20.0, y: 20.0, pressure: 1.0 }, m);
+            tool_event(app, ToolEvent::Up { x: 20.0, y: 20.0 }, m);
+        };
+        click(&mut app);
+        app.session.tools.foreground = [1.0, 0.0, 0.0, 1.0];
+        app.ui.tool_options.bucket_blend_mode = photocraft_color::BlendMode::Multiply;
+        click(&mut app);
+        let px = active(&app).surface().unwrap().rgba(20, 20);
+        assert!((px[0] - 0.5).abs() < 0.02 && px[1] < 0.02, "multiplied: {px:?}");
+        app.ui.tool_options.bucket_clear = true;
+        click(&mut app);
+        assert_eq!(app.session.journal.last().unwrap().1["mode"], "clear");
+        assert!(active(&app).surface().unwrap().rgba(20, 20)[3] < 0.01, "cleared");
+    }
+
     #[test]
     fn clone_without_a_source_names_the_platform_modifier() {
         // Option-click on the Mac, Alt-click elsewhere (#251).
@@ -804,11 +941,47 @@ mod tests {
                 let mut app = app();
                 stripes(&mut app, 4, "pixels");
                 app.run("layer.new.layer", json!({})).unwrap();
-                app.ui.tool_options.sample_all_layers = all;
+                *app.ui.tool_options.sample_all.slot(tool).unwrap() = all;
                 drag(&mut app, tool);
                 let a = active(&app).surface().unwrap().rgba(30, 30)[3];
                 assert_eq!(a > 0.0, all, "{tool:?} sampleAllLayers={all}: alpha {a}");
             }
+        }
+    }
+
+    #[test]
+    fn sample_all_layers_is_each_tools_own() {
+        // #5524: Sample All Layers turned on for another tool (the Magic Wand, say) left Blur and
+        // Smudge copying the composite onto an annotation layer, freezing a sharp patch above the
+        // picture. Photoshop keeps the option per tool, so those strokes leave the empty layer empty.
+        for tool in [Tool::Blur, Tool::Sharpen, Tool::Smudge] {
+            let mut app = app();
+            stripes(&mut app, 4, "pixels");
+            app.run("layer.new.layer", json!({})).unwrap();
+            let mut others = crate::state::SampleAllLayers::default();
+            for t in [
+                Tool::MagicWand,
+                Tool::QuickSelection,
+                Tool::ObjectSelection,
+                Tool::PaintBucket,
+                Tool::MagicEraser,
+                Tool::SpotHealing,
+                Tool::Patch,
+                Tool::ContentAwareMove,
+                Tool::Remove,
+                Tool::Blur,
+                Tool::Sharpen,
+                Tool::Smudge,
+            ] {
+                if let Some(v) = others.slot(t).filter(|_| t != tool) {
+                    *v = true;
+                }
+            }
+            app.ui.tool_options.sample_all = others;
+            assert!(!app.ui.tool_options.sample_all.get(tool));
+            drag(&mut app, tool);
+            let a = active(&app).surface().unwrap().rgba(30, 30)[3];
+            assert_eq!(a, 0.0, "{tool:?} sampled all layers through another tool's option");
         }
     }
 
@@ -1142,6 +1315,95 @@ mod tests {
     }
 
     #[test]
+    fn every_waiting_remove_stroke_is_tinted_in_full() {
+        // #6555: each stroke used to be stamped only past the previous stroke's point count.
+        let mut app = app();
+        app.ui.tool = Tool::Remove;
+        app.ui.tool_options.remove_after_each_stroke = false;
+        let strokes: [&[[f64; 3]]; 3] = [
+            &[[10.0, 10.0, 1.0], [40.0, 10.0, 1.0], [70.0, 10.0, 1.0]],
+            &[[10.0, 30.0, 1.0], [40.0, 30.0, 1.0]],
+            &[[10.0, 50.0, 1.0], [20.0, 50.0, 1.0], [30.0, 50.0, 1.0], [50.0, 50.0, 1.0], [90.0, 50.0, 1.0]],
+        ];
+        for s in strokes {
+            remove_pending_add(&mut app, s);
+        }
+        assert_eq!(app.remove_pending.len(), 3);
+        let t = app.remove_trail.as_ref().expect("the waiting strokes are tinted");
+        let k = f64::from(t.scale());
+        for s in strokes {
+            for w in s.windows(2) {
+                for i in 0..=8 {
+                    let f = f64::from(i) / 8.0;
+                    let (x, y) = (w[0][0] + (w[1][0] - w[0][0]) * f, w[0][1] + (w[1][1] - w[0][1]) * f);
+                    assert_eq!(t.coverage((x / k) as usize, (y / k) as usize), 255, "({x}, {y}) on a waiting stroke is tinted");
+                }
+            }
+        }
+        // Enter, Esc, another tool and another document all drop the tint with the strokes.
+        assert!(remove_pending_commit(&mut app));
+        assert!(app.remove_trail.is_none());
+        remove_pending_add(&mut app, strokes[0]);
+        assert!(remove_pending_cancel(&mut app) && app.remove_trail.is_none());
+        remove_pending_add(&mut app, strokes[1]);
+        app.ui.tool = Tool::SpotHealing;
+        assert!(!remove_pending_live(&mut app) && app.remove_trail.is_none());
+        app.ui.tool = Tool::Remove;
+        remove_pending_add(&mut app, strokes[2]);
+        app.run("file.new", json!({"width": 100, "height": 60})).unwrap();
+        assert!(!remove_pending_live(&mut app) && app.remove_trail.is_none());
+    }
+
+    #[test]
+    fn queued_remove_cannot_commit_after_layer_or_channel_target_changes() {
+        for change in ["layer", "color", "mask"] {
+            let mut app = app();
+            app.run("layer.new.layer", json!({"name": "Original"})).unwrap();
+            if change == "color" {
+                app.run("channel.target", json!({"channel": "red"})).unwrap();
+            }
+            app.ui.tool = Tool::Remove;
+            app.ui.tool_options.remove_after_each_stroke = false;
+            remove_pending_add(&mut app, &[[12.0, 10.0, 1.0], [16.0, 12.0, 1.0]]);
+            assert_eq!(app.remove_pending.len(), 1);
+            assert!(remove_pending_live(&mut app));
+
+            match change {
+                "layer" => {
+                    app.run("layer.new.layer", json!({"name": "Other"})).unwrap();
+                }
+                "color" => {
+                    app.run("channel.target", json!({"channel": "blue"})).unwrap();
+                }
+                _ => {
+                    app.run("layer.layerMask.revealAll", json!({})).unwrap();
+                    app.ui.mask_target = true;
+                }
+            }
+
+            let journal = app.session.journal.len();
+            assert!(!remove_pending_commit(&mut app), "{change}: Enter must not retarget a queued stroke");
+            assert_eq!(app.session.journal.len(), journal, "{change}: no Remove command ran");
+            assert!(app.remove_pending.is_empty() && app.remove_trail.is_none(), "{change}: queue cleared");
+            assert!(app.remove_pending_target.is_none());
+        }
+    }
+
+    #[test]
+    fn queued_remove_starts_a_new_queue_after_target_switch() {
+        let mut app = app();
+        app.run("layer.new.layer", json!({"name": "Original"})).unwrap();
+        app.ui.tool = Tool::Remove;
+        app.ui.tool_options.remove_after_each_stroke = false;
+        remove_pending_add(&mut app, &[[12.0, 10.0, 1.0], [16.0, 12.0, 1.0]]);
+        app.run("layer.new.layer", json!({"name": "Other"})).unwrap();
+        remove_pending_add(&mut app, &[[40.0, 10.0, 1.0], [44.0, 12.0, 1.0]]);
+        assert_eq!(app.remove_pending.len(), 1, "strokes from different layers must not be combined");
+        assert_eq!(app.remove_pending[0][0][0], 40.0);
+        assert!(remove_pending_live(&mut app));
+    }
+
+    #[test]
     fn remove_strokes_waiting_are_dropped_when_the_tool_changes() {
         let mut app = app();
         app.ui.tool = Tool::Remove;
@@ -1215,5 +1477,51 @@ mod tests {
         assert!(finish_stroke(&mut app, Tool::PatternStamp, &[[12.0, 30.0, 1.0]], egui::Modifiers::NONE));
         assert!(!app.ui.status_error, "{}", app.ui.status);
         assert!(app.ui.clone_source.is_none());
+    }
+
+    #[test]
+    fn art_history_is_in_the_y_flyout() {
+        let y = [Tool::HistoryBrush, Tool::ArtHistoryBrush];
+        assert_eq!(y[0], Tool::HistoryBrush);
+        assert_eq!(y[1], Tool::ArtHistoryBrush);
+        assert!(y.iter().all(|t| t.key() == 'Y'));
+        assert!(Tool::ArtHistoryBrush.is_brushlike());
+    }
+
+    #[test]
+    fn art_history_options_bar_defaults() {
+        use crate::theme::ThemeKind;
+        use egui::vec2;
+        use egui_kittest::kittest::Queryable;
+        let mut app = app();
+        app.ui.tool = Tool::ArtHistoryBrush;
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 60.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    return;
+                }
+                crate::panels::options_bar(app, ui);
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, ThemeKind::Studio);
+        h.run_steps(4);
+        h.get_by_label("Style");
+        h.get_by_label("Area");
+        h.get_by_label("Tolerance");
+        assert_eq!(h.state().ui.tool_options.art_history_style, "tightMedium");
+        assert_eq!(h.state().ui.tool_options.art_history_area, 50.0);
+        assert_eq!(h.state().ui.tool_options.art_history_tolerance, 0.0);
+    }
+
+    #[test]
+    fn art_history_stroke_runs_the_command() {
+        let mut app = app();
+        app.run("paint.pencil", json!({"points": [[0, 30], [100, 30]], "size": 20, "color": "#3060c0"})).unwrap();
+        app.ui.tool = Tool::ArtHistoryBrush;
+        app.ui.tool_options.art_history_style = "tightMedium".into();
+        app.ui.tool_options.art_history_tolerance = 0.0;
+        drag(&mut app, Tool::ArtHistoryBrush);
+        assert_eq!(app.session.journal.last().map(|(id, _)| id.as_str()), Some("paint.artHistoryBrush"));
     }
 }

@@ -6,7 +6,6 @@ use photocraft_doc::LayerId;
 use serde_json::json;
 
 use crate::PhotocraftApp;
-use crate::dock::{Group, last_rects};
 use crate::theme::ThemeKind;
 
 /// 30 layers above a closed group holding `inner` (near the bottom of the panel).
@@ -35,7 +34,7 @@ fn harness(app: PhotocraftApp, theme: ThemeKind) -> Harness<'static, PhotocraftA
             if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 return;
             }
-            crate::panels::right_dock(app, ui);
+            crate::panels::dock_area(app, ui);
             egui::CentralPanel::default().show(ui, |_| {});
         },
         app,
@@ -46,15 +45,19 @@ fn harness(app: PhotocraftApp, theme: ThemeKind) -> Harness<'static, PhotocraftA
     h
 }
 
+fn layers_group(h: &Harness<'static, PhotocraftApp>) -> Option<Rect> {
+    crate::panel_docking::probe::group_rect(h.state(), &h.ctx, "layers")
+}
+
 /// The Layers panel row of `name`, if drawn.
 fn row(h: &Harness<'static, PhotocraftApp>, name: &str) -> Option<Rect> {
-    let layers = last_rects(&h.ctx).into_iter().find(|(g, _)| *g == Group::Layers)?.1;
+    let layers = layers_group(h)?;
     h.query_all_by_label(name).map(|n| n.rect()).find(|r| layers.contains(r.center()) || (r.left() >= layers.left() && r.right() <= layers.right()))
 }
 
 /// Fully inside the rows viewport (below the strip and the blend/lock rows, above the footer).
 fn in_view(h: &Harness<'static, PhotocraftApp>, r: Rect) -> bool {
-    let layers = last_rects(&h.ctx).into_iter().find(|(g, _)| *g == Group::Layers).unwrap().1;
+    let layers = layers_group(h).unwrap();
     r.top() >= layers.top() + 26.0 && r.bottom() <= layers.bottom() - (crate::widgets::FOOTER_BAR + 1.0)
 }
 
@@ -131,4 +134,33 @@ fn reveal_survives_odd_documents() {
     h.state_mut().run("file.close", json!({})).ok();
     h.state_mut().sync_views();
     h.run_steps(3);
+}
+#[test]
+fn layers_scroll_position_survives_document_switches() {
+    for theme in [ThemeKind::ProMedium, ThemeKind::Studio] {
+        let (app, inner, _, _, _) = tall_doc();
+        let mut h = harness(app, theme);
+        h.state_mut().run("layer.select", json!({"layer": inner.0})).unwrap();
+        h.run_steps(4);
+        let before = row(&h, "Deep inside").unwrap();
+        assert!(in_view(&h, before));
+
+        // A short second document clamps its own scroll offset to zero. That must
+        // not erase the first document's position or trigger a selection change.
+        h.state_mut().run("file.new", json!({"width": 20, "height": 20})).unwrap();
+        h.state_mut().sync_views();
+        h.run_steps(4);
+        for _ in 0..3 {
+            h.state_mut().session.set_active(0);
+            h.state_mut().sync_views();
+            h.run_steps(4);
+            assert_eq!(h.state().session.active().unwrap().active_layer, Some(inner));
+            let restored = row(&h, "Deep inside").unwrap();
+            assert!(in_view(&h, restored), "{theme:?}: restored bottom row: {restored:?}");
+            assert!((restored.top() - before.top()).abs() < 0.5, "{theme:?}: restored exact scroll position");
+            h.state_mut().session.set_active(1);
+            h.state_mut().sync_views();
+            h.run_steps(4);
+        }
+    }
 }

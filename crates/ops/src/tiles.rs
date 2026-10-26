@@ -1,7 +1,7 @@
 //! Tile references owned by history snapshots. The snapshots keep these addresses alive;
 //! COW edits cannot change a retained tile in place. Count occurrences (including aliases
 //! within one document), so removing a state releases a tile only after its last reference.
-use photocraft_doc::{Document, Surface};
+use photocraft_doc::{Document, LayerContent, Surface};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -17,6 +17,14 @@ pub(crate) fn surfaces(doc: &Document, mut visit: impl FnMut(&Surface)) {
             visit(surface);
         }
         if let Some(mask) = &layer.mask {
+            visit(&mask.surface);
+        }
+        if let Some(cache) = &layer.fill_cache {
+            visit(&cache.surface);
+        }
+        if let LayerContent::Smart(smart) = &layer.content
+            && let Some(mask) = &smart.filter_mask
+        {
             visit(&mask.surface);
         }
         if let Some(video) = &layer.video {

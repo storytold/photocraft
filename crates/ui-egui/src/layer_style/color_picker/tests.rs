@@ -163,7 +163,7 @@ fn stale_targets_and_invalid_colors_never_apply_or_leave_preview() {
                 app.ui.dialog_mut(picker).unwrap().fields.insert(TARGET.into(), json!(null));
             }
             _ => {
-                app.ui.dialog_mut(parent).unwrap().fields.insert("layer".into(), json!(999999));
+                app.ui.dialog_mut(parent).unwrap().fields.insert("layer".into(), json!(u64::MAX));
             }
         }
         let current_parent = app.ui.dialogs.iter().find(|d| d.id == parent).cloned();

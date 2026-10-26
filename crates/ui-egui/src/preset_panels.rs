@@ -176,7 +176,7 @@ pub(crate) fn run(app: &mut PhotocraftApp, id: &str, p: Value) -> Option<Value> 
 // ------------------------------------------------------------------ textures
 
 fn cached_texture(ctx: &egui::Context, key: impl std::hash::Hash + std::fmt::Debug, make: impl FnOnce() -> ColorImage) -> TextureHandle {
-    let id = egui::Id::new(("preset-tex", key));
+    let id = egui::Id::unique(("preset-tex", key));
     if let Some(t) = ctx.data(|d| d.get_temp::<TextureHandle>(id)) {
         return t;
     }
@@ -223,8 +223,8 @@ fn pattern_texture(ctx: &egui::Context, pat: &photocraft_doc::Pattern) -> Textur
     cached_texture(ctx, ("pattern", pat.id.clone()), || {
         let (w, h) = (pat.width.max(1), pat.height.max(1));
         let fmt = pat.surface.format();
-        let px = pat.surface.read_region(photocraft_geom::Rect::new(0, 0, w as i32, h as i32));
-        let n = fmt.channels();
+        // Only the pixels the swatch shows are read: a pattern file can declare a padded source
+        // of any size, and reading it whole to pick 4096 of its pixels is gigabytes of floats.
         // Tiles smaller than the swatch repeat; larger ones are shown shrunk.
         const S: u32 = 64;
         let step = (w.max(h) as f32 / S as f32).max(1.0);
@@ -233,8 +233,8 @@ fn pattern_texture(ctx: &egui::Context, pat: &photocraft_doc::Pattern) -> Textur
             for x in 0..S {
                 let sx = ((x as f32 * step) as u32) % w;
                 let sy = ((y as f32 * step) as u32) % h;
-                let i = (sy * w + sx) as usize * n;
-                img.pixels[(y * S + x) as usize] = c32(photocraft_raster::to_rgba(&fmt, &px[i..i + n]));
+                let px = pat.surface.read_region(photocraft_geom::Rect::from_xywh(sx as i32, sy as i32, 1, 1));
+                img.pixels[(y * S + x) as usize] = c32(photocraft_raster::to_rgba(&fmt, &px));
             }
         }
         img
@@ -258,25 +258,37 @@ pub(crate) fn pattern_picker(app: &PhotocraftApp, ui: &mut egui::Ui, selected: &
     ui.painter().rect_stroke(r, 0.0, Stroke::new(1.0, t.field_border), egui::StrokeKind::Outside);
     let name = current.map_or(String::new(), |p| p.display_name().to_string());
     let resp = resp.on_hover_text(&name);
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Patterns")));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Patterns")));
     let mut picked = None;
     egui::Popup::menu(&resp).show(|ui| {
-        ui.set_max_width(6.0 * (SWATCH + 4.0));
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
-            for p in pats {
-                let (r, cell) = ui.allocate_exact_size(vec2(SWATCH, SWATCH), Sense::click());
-                ui.painter().image(pattern_texture(&ctx, p).id(), r, uv, Color32::WHITE);
-                let (w, c) = if p.id == selected { (2.0, t.accent) } else { (1.0, t.field_border) };
-                ui.painter().rect_stroke(r, 0.0, Stroke::new(w, c), egui::StrokeKind::Outside);
-                let cell = cell.on_hover_text(p.display_name());
-                cell.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, p.display_name()));
-                if cell.clicked() {
-                    picked = Some(p.id.clone());
-                    ui.close();
-                }
+        picked = pattern_grid(app, ui, selected);
+    });
+    picked
+}
+
+/// Library grid shared by the standalone picker and paint popups. Drawing it inline avoids
+/// replacing an already-open paint popup with a second memory-backed popup.
+pub(crate) fn pattern_grid(app: &PhotocraftApp, ui: &mut egui::Ui, selected: &str) -> Option<String> {
+    const SWATCH: f32 = 40.0;
+    let t = Tokens::get(ui.ctx());
+    let ctx = ui.ctx().clone();
+    let uv = Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0));
+    let mut picked = None;
+    ui.set_max_width(6.0 * (SWATCH + 4.0));
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
+        for p in &app.session.patterns.items {
+            let (r, cell) = ui.allocate_exact_size(vec2(SWATCH, SWATCH), Sense::click());
+            ui.painter().image(pattern_texture(&ctx, p).id(), r, uv, Color32::WHITE);
+            let (w, c) = if p.id == selected { (2.0, t.accent) } else { (1.0, t.field_border) };
+            ui.painter().rect_stroke(r, 0.0, Stroke::new(w, c), egui::StrokeKind::Outside);
+            let cell = cell.on_hover_text(p.display_name());
+            cell.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), p.display_name()));
+            if cell.clicked() {
+                picked = Some(p.id.clone());
+                ui.close();
             }
-        });
+        }
     });
     picked.filter(|id| id != selected)
 }
@@ -334,11 +346,19 @@ const FOOTER_GUESS: f32 = 32.0;
 
 /// Draws the folders and footer; `thumb` paints item `(group, item)` into a rect.
 /// Where a browser sits: the canvas (drop target), its height cap and the New button's tooltip.
+/// `flush` lays the grid out as Photoshop's Swatches panel: the cells touch, square-cornered and
+/// without a border of their own, so no screen is spent on gaps (#5103); gradients, patterns and
+/// the other preset grids keep their [`GRID_GAP`] and card borders.
 pub(crate) struct Place<'a> {
     pub(crate) canvas: Rect,
     pub(crate) max_h: f32,
     pub(crate) new_tip: &'a str,
+    pub(crate) flush: bool,
 }
+
+/// Space between the cells of a preset grid, and the grid's inset from the panel's left edge.
+const GRID_GAP: f32 = 4.0;
+const GRID_INSET: f32 = 8.0;
 
 pub(crate) fn browser(
     ui: &mut egui::Ui,
@@ -349,7 +369,7 @@ pub(crate) fn browser(
     thumb: &mut dyn FnMut(&egui::Ui, Rect, usize, usize),
 ) -> Vec<Ev> {
     let t = Tokens::get(ui.ctx());
-    let Place { canvas, max_h, new_tip } = place;
+    let Place { canvas, max_h, new_tip, flush } = place;
     let mut ev = Vec::new();
     let size = *st.sizes.get(panel).unwrap_or(&40.0);
     let list = size <= MIN_THUMB + 0.5;
@@ -358,8 +378,8 @@ pub(crate) fn browser(
     if let Some((p, key, mut text)) = st.renaming.clone().filter(|r| r.0 == panel) {
         let mut done = None;
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(tl!("Name:")).color(t.text_dim).size(11.5));
-            let r = ui.add(egui::TextEdit::singleline(&mut text).desired_width(ui.available_width() - 4.0));
+            let name_label = ui.label(egui::RichText::new(tl!("Name:")).color(t.text_dim).size(11.5));
+            let r = ui.add(egui::TextEdit::singleline(&mut text).desired_width(ui.available_width() - 4.0)).labelled_by(name_label.id);
             if !r.has_focus() && !r.lost_focus() {
                 r.request_focus();
             }
@@ -388,7 +408,7 @@ pub(crate) fn browser(
     let display = st.display_order(panel, &group_names);
     // The footer stays in view: the list gets the height left after it (as measured last frame)
     // and scrolls, rather than pushing the footer out of a short dock group (#4790).
-    let footer_id = egui::Id::new(("preset-footer", panel));
+    let footer_id = egui::Id::unique(("preset-footer", panel));
     let footer_h = ui.data(|d| d.get_temp::<f32>(footer_id)).unwrap_or(FOOTER_GUESS);
     let max_h = max_h.min((ui.available_height() - footer_h).max(0.0));
     egui::ScrollArea::vertical().id_salt(("preset-scroll", panel)).max_height(max_h).min_scrolled_height(max_h.min(64.0)).auto_shrink([false, true]).show(
@@ -439,21 +459,21 @@ pub(crate) fn browser(
                     continue;
                 }
                 let w = ui.available_width();
+                let pad = if list { 0.0 } else { GRID_INSET };
+                let gap = if list || flush { 0.0 } else { GRID_GAP };
                 let (cell, cols) = if list {
                     (vec2(w, 24.0), 1)
                 } else {
-                    let cols = ((w - 8.0 + 4.0) / (size + 4.0)).floor().max(1.0) as usize;
+                    let cols = ((w - pad + gap) / (size + gap)).floor().max(1.0) as usize;
                     (vec2(size, size), cols)
                 };
                 let rows = g.items.len().div_ceil(cols);
-                let pad = if list { 0.0 } else { 8.0 };
-                let gap = if list { 0.0 } else { 4.0 };
                 let (area, _) = ui.allocate_exact_size(vec2(w, rows as f32 * (cell.y + gap) + 2.0), Sense::hover());
                 for (ii, it) in g.items.iter().enumerate() {
                     let (cx, cy) = ((ii % cols) as f32, (ii / cols) as f32);
                     let r = Rect::from_min_size(area.min + vec2(pad + cx * (cell.x + gap), cy * (cell.y + gap)), cell);
-                    let resp = ui.interact(r, ui.id().with((panel, gi, ii)), Sense::click_and_drag());
-                    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &it.name));
+                    let resp = ui.interact(r, ui.scope_id().with((panel, gi, ii)), Sense::click_and_drag());
+                    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &it.name));
                     let is_sel = selected.as_deref() == Some(&it.key);
                     if list {
                         if is_sel {
@@ -466,14 +486,20 @@ pub(crate) fn browser(
                         ui.painter().text(pos2(tr.right() + 8.0, r.center().y), Align2::LEFT_CENTER, &it.name, FontId::proportional(11.5), t.text);
                     } else {
                         thumb(ui, r, gi, ii);
-                        let (stroke, kind) = if is_sel {
-                            (Stroke::new(2.0, t.accent), egui::StrokeKind::Outside)
+                        // Touching cells draw no border of their own: only the selected and the
+                        // hovered one are outlined, over their neighbours, as in Photoshop.
+                        let stroke = if is_sel {
+                            Some((Stroke::new(2.0, t.accent), egui::StrokeKind::Outside))
                         } else if resp.hovered() {
-                            (Stroke::new(1.0, t.text_dim), egui::StrokeKind::Outside)
+                            Some((Stroke::new(1.0, t.text_dim), egui::StrokeKind::Outside))
+                        } else if flush {
+                            None
                         } else {
-                            (Stroke::new(1.0, t.card_border), egui::StrokeKind::Inside)
+                            Some((Stroke::new(1.0, t.card_border), egui::StrokeKind::Inside))
                         };
-                        ui.painter().rect_stroke(r, CornerRadius::same(2), stroke, kind);
+                        if let Some((stroke, kind)) = stroke {
+                            ui.painter().rect_stroke(r, CornerRadius::same(if flush { 0 } else { 2 }), stroke, kind);
+                        }
                     }
                     let resp = if list { resp } else { resp.on_hover_text(&it.name) };
                     if resp.double_clicked() {
@@ -485,7 +511,7 @@ pub(crate) fn browser(
                         && let Some(pp) = ui.ctx().pointer_interact_pos()
                     {
                         // A ghost of the swatch follows the pointer.
-                        let lp = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("preset-drag")));
+                        let lp = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("preset-drag")));
                         let gr = Rect::from_center_size(pp, vec2(28.0, 28.0));
                         lp.rect_filled(gr, 3.0, t.card.gamma_multiply(0.8));
                         lp.rect_stroke(gr, 3.0, Stroke::new(1.0, t.accent), egui::StrokeKind::Outside);
@@ -541,7 +567,7 @@ pub(crate) fn browser(
         }
     }
     let recorded: Vec<(String, Rect)> = headers.iter().map(|(_, r, n)| (n.clone(), *r)).collect();
-    ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(("preset-group-headers", panel)), recorded));
+    ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique(("preset-group-headers", panel)), recorded));
     if let Some((key, pos)) = dropped {
         if let Some((_, _, g)) = headers.iter().find(|(_, r, _)| r.contains(pos)) {
             ev.push(Ev::Move(key, g.clone()));
@@ -555,7 +581,9 @@ pub(crate) fn browser(
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
         let mut s = size;
-        ui.add_sized(vec2(90.0, 18.0), egui::Slider::new(&mut s, MIN_THUMB..=96.0).show_value(false)).on_hover_text(tl!("Thumbnail size (smallest: list)"));
+        ui.add_sized(vec2(90.0, 18.0), egui::Slider::new(&mut s, MIN_THUMB..=96.0).show_value(false))
+            .accessible_name(tl!("Thumbnail size (smallest: list)"))
+            .on_hover_text(tl!("Thumbnail size (smallest: list)"));
         if (s - size).abs() > 0.01 {
             st.sizes.insert(panel.to_string(), s);
         }
@@ -597,7 +625,7 @@ fn group_drop_before(headers: &[(usize, Rect, String)], from: usize, y: f32) -> 
 
 /// Folder header rects drawn last frame (name → rect), in display order; for tests and automation.
 pub fn last_group_headers(ctx: &egui::Context, panel: &str) -> Vec<(String, Rect)> {
-    ctx.data(|d| d.get_temp(egui::Id::new(("preset-group-headers", panel)))).unwrap_or_default()
+    ctx.data(|d| d.get_temp(egui::Id::unique(("preset-group-headers", panel)))).unwrap_or_default()
 }
 
 /// Shared handling of the generic events through `<prefix>.edit` / `.new`.
@@ -667,10 +695,11 @@ pub fn gradients_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let canvas = canvas_drop_rect(app);
     let mut st = std::mem::take(&mut app.ui.presets_ui);
     let max_h = (ui.available_height() - 40.0).clamp(90.0, 260.0);
-    let events = browser(ui, &mut st, "gradients", &groups, Place { canvas, max_h, new_tip: tl!("Create new gradient") }, &mut |ui, r, gi, ii| {
-        let stops = groups_src[gi].items[ii].resolve(fg, bg);
-        paint_gradient(ui, r, &stops);
-    });
+    let events =
+        browser(ui, &mut st, "gradients", &groups, Place { canvas, max_h, new_tip: tl!("Create new gradient"), flush: false }, &mut |ui, r, gi, ii| {
+            let stops = groups_src[gi].items[ii].resolve(fg, bg);
+            paint_gradient(ui, r, &stops);
+        });
     app.ui.presets_ui = st;
     for e in events {
         match &e {
@@ -715,11 +744,17 @@ pub fn patterns_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let mut st = std::mem::take(&mut app.ui.presets_ui);
     let max_h = (ui.available_height() - 40.0).clamp(90.0, 280.0);
     let ctx = ui.ctx().clone();
-    let events =
-        browser(ui, &mut st, "patterns", &groups, Place { canvas, max_h, new_tip: tl!("Create new pattern from the selection") }, &mut |ui, r, gi, ii| {
+    let events = browser(
+        ui,
+        &mut st,
+        "patterns",
+        &groups,
+        Place { canvas, max_h, new_tip: tl!("Create new pattern from the selection"), flush: false },
+        &mut |ui, r, gi, ii| {
             let tex = pattern_texture(&ctx, &pats[gi][ii]);
             ui.painter().image(tex.id(), r, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
-        });
+        },
+    );
     app.ui.presets_ui = st;
     for e in events {
         match &e {
@@ -759,7 +794,7 @@ fn float_window(
     let canvas = canvas_drop_rect(app);
     let mut close = false;
     egui::Window::new(title)
-        .id(egui::Id::new(("preset-window", key)))
+        .id(egui::Id::unique(("preset-window", key)))
         .title_bar(false)
         .resizable(false)
         .frame(frame)
@@ -772,6 +807,14 @@ fn float_window(
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if crate::icons::button(ui, "x", 20.0, false, tl!("Close")).clicked() {
                         close = true;
+                    }
+                    if key == "styles" {
+                        let resp = crate::icons::button(ui, "ellipsis", 20.0, false, tl!("Panel menu"));
+                        egui::Popup::menu(&resp).show(|ui| {
+                            crate::widgets::style_spectrum_popup_menu(ui);
+                            ui.set_min_width(180.0);
+                            styles_menu(app, ui);
+                        });
                     }
                 });
             });
@@ -820,7 +863,7 @@ pub fn styles_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         &mut st,
         "styles",
         &groups,
-        Place { canvas, max_h: 300.0, new_tip: tl!("Create new style from the selected layer") },
+        Place { canvas, max_h: 300.0, new_tip: tl!("Create new style from the selected layer"), flush: false },
         &mut |ui, r, gi, ii| {
             ui.painter().rect_filled(r, 2.0, t.field);
             ui.painter().image(texes[gi][ii].id(), r, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
@@ -847,6 +890,61 @@ pub fn styles_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
 }
 
+/// The Styles panel menu ("…"): Import Styles… / Export Selected Styles… / Export Styles…
+/// (Photoshop layer style libraries, `.asl`).
+fn styles_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    let any = app.session.presets.styles.iter().any(|g| !g.items.is_empty());
+    let selected = app.ui.presets_ui.selected.get("styles").cloned();
+    let mut act: Option<&str> = None;
+    if ui.button(tl!("Import Styles…")).clicked() {
+        act = Some("import");
+    }
+    if ui.add_enabled(selected.is_some(), egui::Button::new(tl!("Export Selected Styles…"))).clicked() {
+        act = Some("selected");
+    }
+    if ui.add_enabled(any, egui::Button::new(tl!("Export Styles…"))).clicked() {
+        act = Some("all");
+    }
+    let Some(a) = act else { return };
+    ui.close();
+    let r = match a {
+        "import" => app.pick_file_bytes_filtered(&["asl"], |app, name, bytes| match crate::preset_files_ui::open(app, &name, &bytes) {
+            Some(r) => r.map(|()| Value::Null),
+            None => Err(crate::i18n::fmt(tl!("{file} is not a style library (.asl)"), &[("file", &crate::file_open::display_name(&name))])),
+        }),
+        "selected" => match selected {
+            Some(name) => export_styles(app, json!({"styles": [name.clone()]}), &name),
+            None => Ok(Value::Null),
+        },
+        _ => export_styles(app, json!({}), "Styles"),
+    };
+    if let Err(e) = r
+        && e != "cancelled"
+    {
+        app.ui.status = e;
+        app.ui.status_error = true;
+    }
+}
+
+/// Builds the `.asl` through `style.presets.exportAsl`, then asks where to save it.
+fn export_styles(app: &mut PhotocraftApp, params: Value, suggested: &str) -> Result<Value, String> {
+    let r = app.run("style.presets.exportAsl", params)?;
+    let bytes = r["data"].as_str().and_then(photocraft_engine::paint::tile::b64_decode).ok_or("the export returned no data")?;
+    let n = r["count"].as_u64().unwrap_or(0);
+    let stem: String = suggested.chars().filter(|c| !matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|')).collect();
+    let stem = if stem.trim().is_empty() { "Styles".to_string() } else { stem.trim().to_string() };
+    app.pick_save(&format!("{stem}.asl"), move |app, path| {
+        let write = app.services.write.as_mut().ok_or("no writer configured")?;
+        write(&path, &bytes)?;
+        app.ui.status_error = false;
+        app.ui.status = crate::i18n::fmt(
+            &crate::i18n::trn(crate::i18n::current(), n, "Exported {n} style to {file}", "Exported {n} styles to {file}"),
+            &[("file", &crate::file_open::display_name(&path))],
+        );
+        Ok(json!({"path": path, "count": n}))
+    })
+}
+
 // ------------------------------------------------------------------ Shapes
 
 pub fn shapes_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
@@ -864,7 +962,7 @@ pub fn shapes_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         &mut st,
         "shapes",
         &groups,
-        Place { canvas, max_h: 300.0, new_tip: tl!("Create new shape from the current path") },
+        Place { canvas, max_h: 300.0, new_tip: tl!("Create new shape from the current path"), flush: false },
         &mut |ui, r, gi, ii| {
             let tex = shape_texture(&ctx, &src[gi].items[ii]);
             ui.painter().image(tex.id(), r.shrink(2.0), Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), t.text);
@@ -981,9 +1079,10 @@ fn tool_id(t: Tool) -> String {
 
 /// Apply a tool preset: the engine sets the brush/colour, the shell switches tool and options.
 pub fn select_tool_preset(app: &mut PhotocraftApp, name: &str) {
+    let before_ratio = crate::crop_ui::preset_ratio(app);
     let Some(r) = run(app, "tool.presets.select", json!({"preset": name})) else { return };
     if let Some(tool) = r["tool"].as_str().and_then(Tool::from_name) {
-        app.ui.tool = tool;
+        crate::tool_memory::select(app, tool);
         // Each tool keeps its own brush (#218), so switch it in before the preset's brush lands
         // on it, and re-apply the brush the command just set for the old tool.
         crate::paint_mouse::sync_tool_brush(app);
@@ -995,13 +1094,39 @@ pub fn select_tool_preset(app: &mut PhotocraftApp, name: &str) {
         let mut cur = serde_json::to_value(&app.ui.tool_options).unwrap_or_default();
         if let Some(c) = cur.as_object_mut() {
             for (k, v) in o {
-                c.insert(k.clone(), v.clone());
+                // An object option (`sample_all`, one per tool) takes only the entries the
+                // preset stored, so the other tools' keep theirs (#5524).
+                match (c.get_mut(k), v) {
+                    (Some(Value::Object(have)), Value::Object(set)) => have.extend(set.clone()),
+                    _ => {
+                        c.insert(k.clone(), v.clone());
+                    }
+                }
             }
         }
         if let Ok(opts) = serde_json::from_value(cur) {
             app.ui.tool_options = opts;
         }
     }
+    // As the options bar does: a crop preset's ratio (or W x H) fits the frame at once.
+    if crate::crop_ui::preset_ratio(app) != before_ratio {
+        crate::crop_ui::apply_ratio(app);
+    }
+}
+
+/// The `tool.presets.new` params for the + button: `tool`'s own options only, so choosing the
+/// preset later leaves the other tools' settings alone.
+fn new_tool_preset_params(app: &PhotocraftApp, tool: Tool) -> Value {
+    let all = serde_json::to_value(&app.ui.tool_options).unwrap_or_default();
+    let mut own: serde_json::Map<String, Value> =
+        crate::tool_reset::option_keys(tool).iter().filter_map(|k| Some(((*k).to_string(), all.get(*k)?.clone()))).collect();
+    // Sample All Layers is each tool's own (#5524): store `tool`'s alone.
+    if let Some(k) = crate::tool_reset::sample_all_key(tool)
+        && let Some(v) = all.get("sample_all").and_then(|m| m.get(&k))
+    {
+        own.insert("sample_all".into(), json!({ k: v }));
+    }
+    json!({"name": tool.label(), "tool": tool_id(tool), "options": {"toolOptions": own}})
 }
 
 pub fn tool_presets_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
@@ -1016,8 +1141,8 @@ pub fn tool_presets_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // Rename field.
     if let Some((_, key, mut text)) = app.ui.presets_ui.renaming.clone().filter(|r| r.0 == "toolPresets") {
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(tl!("Name:")).color(t.text_dim).size(11.5));
-            let r = ui.add(egui::TextEdit::singleline(&mut text).desired_width(ui.available_width() - 4.0));
+            let name_label = ui.label(egui::RichText::new(tl!("Name:")).color(t.text_dim).size(11.5));
+            let r = ui.add(egui::TextEdit::singleline(&mut text).desired_width(ui.available_width() - 4.0)).labelled_by(name_label.id);
             if !r.has_focus() && !r.lost_focus() {
                 r.request_focus();
             }
@@ -1072,9 +1197,7 @@ pub fn tool_presets_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 action = Some(("tool.presets.edit".into(), json!({"action": "delete", "preset": n})));
             }
             if crate::icons::button(ui, "plus", 24.0, false, tl!("Create new tool preset")).clicked() {
-                let label = cur.label().to_string();
-                let opts = json!({"toolOptions": serde_json::to_value(&app.ui.tool_options).unwrap_or_default()});
-                action = Some(("tool.presets.new".into(), json!({"name": label, "tool": tool_id(cur), "options": opts})));
+                action = Some(("tool.presets.new".into(), new_tool_preset_params(app, cur)));
             }
         });
     });
@@ -1133,7 +1256,8 @@ pub fn clone_source_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     ui.label(egui::RichText::new(src_line).color(t.text_dim).size(11.0));
     ui.add_space(4.0);
     let lbl = |ui: &mut egui::Ui, s: &str| {
-        ui.add_sized(vec2(18.0, 18.0), egui::Label::new(egui::RichText::new(s).color(t.text_dim).size(11.5)));
+        let label = ui.add_sized(vec2(18.0, 18.0), egui::Label::new(egui::RichText::new(s).color(t.text_dim).size(11.5)));
+        crate::widgets::scrub_option_label(ui, &label);
     };
     let off = slot.offset().unwrap_or([0.0, 0.0]);
     let (mut ox, mut oy) = (off[0] as f32, off[1] as f32);
@@ -1195,14 +1319,14 @@ pub fn clone_source_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         ui.add_space(18.0);
         ui.label(egui::RichText::new(tl!("Opacity:")).color(t.text_dim).size(11.5));
-        crate::widgets::value_field(ui, &mut o.opacity, 0.0..=100.0, "%", 56.0);
+        crate::widgets::value_field(ui, &mut o.opacity, 0.0..=100.0, "%", 56.0).accessible_name(tl!("Opacity:"));
         let opts = [
             ("normal".to_string(), tl!("Normal")),
             ("darken".to_string(), tl!("Darken")),
             ("lighten".to_string(), tl!("Lighten")),
             ("difference".to_string(), tl!("Difference")),
         ];
-        crate::widgets::dropdown(ui, "clone-overlay-mode", &mut o.blend, &opts, 90.0);
+        crate::widgets::dropdown(ui, "clone-overlay-mode", tl!("Blend Mode"), &mut o.blend, &opts, 90.0);
     });
     ui.horizontal(|ui| {
         ui.add_space(18.0);
@@ -1241,6 +1365,7 @@ pub fn clone_sample_point(app: &PhotocraftApp, at: Option<[f64; 2]>) -> Option<[
 mod tests {
     use super::*;
     use crate::menus::invoke;
+    use crate::state::ToolOptions;
 
     fn app() -> (PhotocraftApp, egui::Context) {
         let ctx = egui::Context::default();
@@ -1288,6 +1413,59 @@ mod tests {
         assert_eq!(tool_id(Tool::CloneStamp), "cloneStamp");
         assert_eq!(tool_id(Tool::PatternStamp), "patternStamp");
         assert_eq!(Tool::from_name(&tool_id(Tool::CustomShape)), Some(Tool::CustomShape));
+    }
+
+    /// A crop preset picked in Tool Presets fits the frame to its ratio at once, as the options
+    /// bar's dropdown does.
+    #[test]
+    fn a_crop_tool_preset_fits_the_frame_to_its_ratio() {
+        let (mut app, _) = app();
+        app.ui.tool = Tool::Crop;
+        crate::crop_ui::ensure_frame(&mut app);
+        assert_eq!(app.ui.crop_rect, Some([0.0, 0.0, 64.0, 48.0]));
+        app.run("tool.presets.new", json!({"name": "Square", "tool": "crop", "options": {"toolOptions": {"crop_ratio": "1:1"}}})).unwrap();
+        select_tool_preset(&mut app, "Square");
+        assert_eq!(app.ui.tool_options.crop_ratio, "1:1");
+        assert_eq!(app.ui.crop_rect, Some([8.0, 0.0, 56.0, 48.0]));
+    }
+
+    /// #7356: a preset made with + keeps only its own tool's options, so choosing it doesn't
+    /// reset the Crop tool's Delete Cropped Pixels or the Move tool's Auto-Select.
+    #[test]
+    fn new_tool_preset_stores_only_its_tools_options() {
+        let (mut app, _) = app();
+        app.ui.tool = Tool::RectMarquee;
+        app.ui.tool_options.feather = 5.0;
+        let p = new_tool_preset_params(&app, Tool::RectMarquee);
+        let r = app.run("tool.presets.new", p).unwrap();
+        let name = r["name"].as_str().unwrap().to_string();
+        let stored = &app.session.presets.tool_presets.iter().find(|t| t.name == name).unwrap().options["toolOptions"];
+        assert_eq!(stored["feather"], json!(5.0));
+        assert!(stored.as_object().unwrap().keys().all(|k| !k.starts_with("crop_") && !k.starts_with("move_")), "{stored}");
+        app.ui.tool_options.feather = 0.0;
+        app.ui.tool_options.crop_delete = !ToolOptions::default().crop_delete;
+        app.ui.tool_options.move_auto_select = !ToolOptions::default().move_auto_select;
+        select_tool_preset(&mut app, &name);
+        assert_eq!(app.ui.tool_options.feather, 5.0);
+        assert_eq!(app.ui.tool_options.crop_delete, !ToolOptions::default().crop_delete);
+        assert_eq!(app.ui.tool_options.move_auto_select, !ToolOptions::default().move_auto_select);
+    }
+
+    /// #5524 with #7356: a Blur preset keeps Blur's Sample All Layers and leaves the Magic Wand's
+    /// alone, both when it is made and when it is chosen.
+    #[test]
+    fn new_tool_preset_stores_only_its_tools_sample_all_layers() {
+        let (mut app, _) = app();
+        app.ui.tool = Tool::Blur;
+        app.ui.tool_options.sample_all.blur = true;
+        let p = new_tool_preset_params(&app, Tool::Blur);
+        assert_eq!(p["options"]["toolOptions"]["sample_all"], json!({"blur": true}));
+        let name = app.run("tool.presets.new", p).unwrap()["name"].as_str().unwrap().to_string();
+        app.ui.tool_options.sample_all.blur = false;
+        app.ui.tool_options.sample_all.magic_wand = true;
+        select_tool_preset(&mut app, &name);
+        assert!(app.ui.tool_options.sample_all.blur);
+        assert!(app.ui.tool_options.sample_all.magic_wand, "the Magic Wand's Sample All Layers is not Blur's");
     }
 
     #[test]
@@ -1353,7 +1531,18 @@ mod tests {
     fn preset_drops_map_through_the_ruler_inset() {
         let (mut app, _) = app();
         app.last_canvas_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
-        app.ui.views[0] = crate::state::View { zoom: 2.0, center: [32.0, 24.0], fit_pending: false, fill_pending: false, doc_size: [64, 48], rotation: 0.0 };
+        app.ui.views[0] = crate::state::View {
+            zoom: 2.0,
+            center: [32.0, 24.0],
+            fit_pending: false,
+            fill_pending: false,
+            doc_size: [64, 48],
+            rotation: 0.0,
+            zoom_animating: false,
+            zoom_anchor: None,
+            display_camera: None,
+            zoom_transition: None,
+        };
         let p = egui::pos2(400.0, 300.0);
         let off = crate::canvas::doc_point_at(&app, p).unwrap();
         assert_eq!(off, [32.0, 24.0], "without rulers the widget rect is the whole mapping");

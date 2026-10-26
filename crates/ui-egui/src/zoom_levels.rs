@@ -74,16 +74,20 @@ pub fn percent_range(view: &crate::state::View) -> std::ops::RangeInclusive<f32>
     (min(view.doc_size).min(z) * 100.0)..=(MAX.max(z) * 100.0)
 }
 
-/// Zoom In (`dir` > 0) or Zoom Out (`dir` < 0) from `zoom`, for a document of `size` px.
-pub fn step(zoom: f32, dir: i32, size: [u32; 2]) -> f32 {
-    let z = clamp(zoom, size);
+/// Zoom In (`dir` > 0) or Zoom Out (`dir` < 0) within an explicit range.
+pub fn step_in_range(zoom: f32, dir: i32, lo: f32, hi: f32) -> f32 {
+    let z = if zoom.is_finite() { zoom.clamp(lo, hi) } else { 1.0 };
     let next = if dir > 0 {
-        LADDER.iter().copied().find(|s| *s > z * 1.001).unwrap_or(MAX)
+        LADDER.iter().copied().find(|s| *s > z * 1.001).unwrap_or(hi)
     } else {
-        // Below the ladder's lowest step (reached by the wheel), Zoom Out stays put.
         LADDER.iter().rev().copied().find(|s| *s < z * 0.999).unwrap_or(z)
     };
-    clamp(next, size)
+    if next.is_finite() { next.clamp(lo, hi) } else { z }
+}
+
+/// Zoom In (`dir` > 0) or Zoom Out (`dir` < 0) from `zoom`, for a document of `size` px.
+pub fn step(zoom: f32, dir: i32, size: [u32; 2]) -> f32 {
+    step_in_range(zoom, dir, min(size), MAX)
 }
 
 #[cfg(test)]
@@ -144,6 +148,18 @@ mod tests {
         assert_eq!(min([1, 1]), 2.0);
         assert_eq!(step(2.0, -1, [1, 1]), 2.0);
         assert_eq!(min([0, 0]), 0.001, "unknown size");
+    }
+
+    #[test]
+    fn step_in_range_respects_custom_bounds() {
+        assert_eq!(step_in_range(1.0, 1, 0.0001, 16.0), 2.0);
+        assert!((step_in_range(1.0, -1, 0.0001, 16.0) - 2.0 / 3.0).abs() < 1e-6);
+        assert_eq!(step_in_range(16.0, 1, 0.0001, 16.0), 16.0, "at max stays put");
+        assert_eq!(step_in_range(0.0001, -1, 0.0001, 16.0), 0.0001, "at min stays put");
+        assert_eq!(step_in_range(f32::NAN, 1, 0.0001, 16.0), 2.0, "NaN → 100% → step");
+        assert_eq!(step_in_range(8.8, 1, 0.0001, 16.0), 12.0, "off-ladder steps up");
+        assert_eq!(step_in_range(8.8, -1, 0.0001, 16.0), 8.0, "off-ladder steps down");
+        assert_eq!(step(1.0, 1, PHOTO), step_in_range(1.0, 1, min(PHOTO), MAX), "step delegates");
     }
 
     #[test]

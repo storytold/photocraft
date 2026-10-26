@@ -20,6 +20,8 @@ A standalone reader and writer for Adobe Photoshop **PSD** (version 1) and **PSB
 ```rust
 // Top level
 PsdFile::from_bytes(&[u8]) -> Result<PsdFile>
+PsdFile::from_bytes_and_merged(&[u8], want) -> Result<(PsdFile, Option<Result<Vec<u8>>>)>
+                                            // + decode_merged() when want(&file): ZIP inflated once
 PsdFile::to_bytes(&self) -> Result<Vec<u8>>
 PsdFile::open(path) / save(path)            // native only
 PsdFile { header, color_mode_data, resources, layer_info, layer_info_placement,
@@ -104,6 +106,7 @@ testgen::{all_cases, merged_only, layered, small, sample_descriptor, pattern_pla
 | PSB 8-byte-length keys | ✓ | ✓ | – | LMsk Lr16 Lr32 Layr Mt16 Mt32 Mtrn Alph FMsk lnk2 FEid FXid PxSD |
 | Lr16 / Lr32 / Layr layer info | ✓ | ✓ | ✓ | lifted into `layer_info`; re-inserted at its original position |
 | luni lsct lsdk lyid lnsr clbl infx knko lspf lclr iOpa shmd | ✓ | ✓ | ✓ | `TaggedBlock::parsed()` |
+| Layer XMP (`shmd` › `cust` › `layerXMP`) | ✓ | ✓ | ✓ | `metadata::layer_xmp` / `take_layer_xmp` / `put_layer_xmp`, laid out as Photoshop 2026 writes it |
 | ActionDescriptor (all OSTypes) | ✓ | ✓ | ✓ | including references, `ObAr` (best effort), `UnFl`, `Pth `, version-16 wrapper |
 | Layer tree (groups) | ✓ | ✓ | ✓ | open/closed folders plus bounding dividers; tolerant of malformed nesting |
 | RGBA8 extraction | ✓ | – | – | RGB / gray / CMYK layers; merged image also supports indexed / bitmap / duotone |
@@ -112,10 +115,12 @@ testgen::{all_cases, merged_only, layered, small, sample_descriptor, pattern_pla
 | Actions (`.atn`) | ✓ | ✓ | ✓ | `atn::parse` / `atn::write`: version-16 sets (Photoshop 6+): actions with function key, modifiers and colour; steps with event code or string name, panel name, enabled/dialog flags and their descriptor. Exact round trip; version-12 (Photoshop 5) files are rejected as unsupported |
 
 Pattern channel subrectangles are padded with zeroes to the tile rectangle. All channel
-metadata and the total padded size are checked against `MAX_DECODED_BYTES` before any
-plane is decoded. Fully populated channels reuse their decoded buffer without a second
-copy; allocations for padded channels return an error on failure. There is no additional
-padding-specific size limit.
+metadata is checked before any plane is decoded, against one `PatternBudget` shared by every
+pattern of a parse (a block, a `.pat` file): `MAX_DECODED_BYTES` decoded and 512 MiB of zero
+padding in total. `parse_pattern_block_with` lets several blocks of one document share a budget;
+`.abr` patterns are charged to the file's sample budget. All channels of a pattern must have the
+same depth. Fully populated channels reuse their decoded buffer without a second copy;
+allocations for padded channels return an error on failure.
 
 ### Preserved raw, not yet typed (parsers planned for M8)
 
@@ -140,7 +145,7 @@ padding-specific size limit.
 * Builder → `rgba8` correctness.
 * Unknown blend modes and unknown blocks pass through unchanged.
 
-`tests/corpus.rs` walks `corpus/psd/**/*.{psd,psb}` at the workspace root when that directory exists. For each file it asserts that parsing succeeds and the file round-trips byte for byte, and it prints a result per file. Without the directory it skips silently.
+`tests/it/corpus.rs` walks `corpus/psd/**/*.{psd,psb}` at the workspace root when that directory exists. For each file it asserts that parsing succeeds and the file round-trips byte for byte, and it prints a result per file. Without the directory it skips silently.
 
 A `cargo-fuzz` skeleton lives in `fuzz/`. It is its own workspace and is excluded from photocraft's. Run it with `cargo +nightly fuzz run parse` (or `descriptor`) from `crates/psd`.
 

@@ -156,8 +156,13 @@ pub fn status_bar_pro(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     );
     let mut pct = app.ui.views[i].zoom * 100.0;
     let control_h = crate::panels::status_bar_heights(&t).1;
-    if widgets::compact_wrapping_value_field(ui, &mut pct, crate::zoom_levels::percent_range(&app.ui.views[i]), "%", vec2(64.0, control_h)).changed() {
+    if widgets::compact_wrapping_value_field(ui, &mut pct, crate::zoom_levels::percent_range(&app.ui.views[i]), "%", vec2(64.0, control_h))
+        .accessible_name(tl!("Zoom"))
+        .changed()
+    {
         app.ui.views[i].zoom = crate::zoom_levels::clamp(pct / 100.0, app.ui.views[i].doc_size);
+        app.ui.views[i].zoom_animating = false;
+        app.ui.views[i].zoom_anchor = None;
         app.ui.views[i].fit_pending = false;
     }
     ui.add_space(12.0);
@@ -181,6 +186,24 @@ pub fn status_bar_pro(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         }
     });
     status_message(app, ui, &t);
+}
+
+/// The active document's layers don't fit the GPU memory budget (`perf.gpuLayerFit`): edits that
+/// redraw the whole document do it on the CPU, so say so in the status bar until they fit again.
+/// Clicking it opens Preferences › Performance, where GPU Memory raises the budget.
+pub fn gpu_memory_status(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    let Some(doc) = app.session.active().map(|st| st.doc.id.0) else { return };
+    let Some(fit) = app.perf.gpu_layer_fit.filter(|f| f.doc == doc && !f.fits()) else { return };
+    let t = Tokens::get(ui.ctx());
+    let resp = ui
+        .add(egui::Label::new(RichText::new(tl!("GPU Memory Full")).color(t.warning).size(12.0)).sense(Sense::click()))
+        .on_hover_text(crate::i18n::fmt(
+            tl!("The layers need {needed} of GPU memory and may hold {budget}, so edits that redraw the whole document do it on the CPU. Click to set GPU Memory."),
+            &[("needed", &fmt_bytes(fit.needed)), ("budget", &fmt_bytes(fit.budget))],
+        ));
+    if resp.clicked() {
+        crate::shortcut_dispatch::dispatch(app, ui.ctx(), "edit.preferences.performance");
+    }
 }
 
 /// The latest status message after a separator, in the warning colour when it is an error.
@@ -293,6 +316,39 @@ mod tests {
         assert_eq!(status_info_text_with_units(&d, "dimensions", "", "", &units), "722.7 pt x 451.7 pt (240 ppi)");
     }
 
+    /// L3: layers over the GPU memory budget show "GPU Memory Full" in the status bar, for that
+    /// document only, and clicking it opens Preferences › Performance (GPU Memory).
+    #[test]
+    fn status_bar_says_when_layers_dont_fit_gpu_memory() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        for theme in [crate::theme::ThemeKind::Pro, crate::theme::ThemeKind::Studio] {
+            let mut h = Harness::builder().with_size(vec2(1200.0, 700.0)).with_max_steps(64).build_eframe(move |cc| {
+                PhotocraftApp::setup_context(&cc.egui_ctx, theme);
+                let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+                app.ui.theme = theme;
+                app
+            });
+            h.state_mut().run("file.new", json!({"width": 800, "height": 600})).unwrap();
+            h.state_mut().sync_views();
+            h.run_steps(4);
+            let doc = h.state().session.active().unwrap().doc.id.0;
+            assert!(h.query_by_label("GPU Memory Full").is_none(), "{theme:?}: nothing measured yet");
+            let over = crate::gpu_canvas::LayerFit { doc, needed: 3 << 30, budget: 2 << 30 };
+            h.state_mut().perf.gpu_layer_fit = Some(crate::gpu_canvas::LayerFit { doc: doc + 1, ..over });
+            h.run_steps(2);
+            assert!(h.query_by_label("GPU Memory Full").is_none(), "{theme:?}: another document's layers");
+            h.state_mut().perf.gpu_layer_fit = Some(crate::gpu_canvas::LayerFit { budget: 4 << 30, ..over });
+            h.run_steps(2);
+            assert!(h.query_by_label("GPU Memory Full").is_none(), "{theme:?}: they fit");
+            h.state_mut().perf.gpu_layer_fit = Some(over);
+            h.run_steps(2);
+            h.get_by_label("GPU Memory Full").click();
+            h.run_steps(4);
+            let open = h.state().ui.dialogs.iter().any(|d| d.fields.get("section") == Some(&json!("performance")));
+            assert!(open, "{theme:?}: Preferences › Performance opens");
+        }
+    }
+
     #[test]
     fn status_bar_updates_dimensions_after_a_ruler_preference_change() {
         use egui_kittest::{Harness, kittest::Queryable};
@@ -339,7 +395,7 @@ mod tests {
         let mut gray = doc();
         gray.mode = photocraft_doc::ColorMode::Grayscale;
         gray.icc_profile = Some(photocraft_engine::color_cmds::working_profile(gray.mode).to_bytes());
-        assert_eq!(profile_name(&gray), "Dot Gain 20%-compatible (gamma 1.732, Photocraft)");
+        assert_eq!(profile_name(&gray), "Dot Gain 20%-compatible (gamma 1.732, PhotoCraft)");
 
         let mut custom = (*photocraft_engine::color_cmds::working_profile(photocraft_doc::ColorMode::Cmyk)).clone();
         custom.description = "PhotoCraft Studio CMYK".into();

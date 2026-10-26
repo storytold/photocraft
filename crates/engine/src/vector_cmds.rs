@@ -163,6 +163,11 @@ pub(crate) fn color(v: &Value) -> Option<Color> {
                 _ => None,
             }
         }
+        // A stored `Color` (mode + components), so a CMYK or Lab gradient stop survives a
+        // read-modify-write through the shape swatches.
+        Value::Object(_) => serde_json::from_value::<Color>(v.clone())
+            .ok()
+            .filter(|c| c.c.iter().all(|x| x.is_finite()) && c.alpha.is_finite() && (0.0..=1.0).contains(&c.alpha)),
         _ => None,
     }
 }
@@ -247,15 +252,21 @@ pub fn path_json(p: &Path) -> Value {
 fn fill_json(f: &Fill) -> Value {
     match f {
         Fill::Solid(c) => json!(hex(c)),
-        Fill::Gradient { stops, angle, scale, style, reverse, .. } => json!({ "gradient": {
+        Fill::Gradient { stops, angle, scale, style, reverse, opacity_stops, midpoints, offset, dither, align } => json!({ "gradient": {
             "stops": stops.iter().map(|(t, c)| json!([t, hex(c)])).collect::<Vec<_>>(),
-            "angle": angle, "scale": scale * 100.0, "style": format!("{style:?}").to_ascii_lowercase(), "reverse": reverse } }),
+            "angle": angle, "scale": scale * 100.0, "style": format!("{style:?}").to_ascii_lowercase(), "reverse": reverse,
+            "opacityStops": opacity_stops, "midpoints": midpoints, "offset": [offset.0, offset.1], "dither": dither, "align": align } }),
         Fill::Pattern { name, scale, .. } => json!({ "pattern": name, "scale": scale * 100.0 }),
     }
 }
 
-/// `"#rrggbb"` / `[r,g,b,a]` / `{"gradient":{"stops":[[t,"#hex"],…],"angle","scale","style","reverse"}}` /
-/// `{"pattern":name,"scale"}`. `null` → `Ok(None)` (no fill).
+/// The most colour stops, opacity stops or midpoints a gradient fill takes, as the gradient stop
+/// edits (`gradient.fill.stop`, `gradient.presets.stop`) cap them.
+const MAX_GRADIENT_STOPS: usize = 1024;
+
+/// `"#rrggbb"` / `[r,g,b,a]` / `{"gradient":{"stops":[[t,"#hex"|[r,g,b,a]],…],"angle","scale","style","reverse",
+/// "opacityStops":[[t,0..1],…],"midpoints":[0..1,…],"offset":[x,y],"dither","align"}}` / `{"pattern":name,"scale"}`.
+/// `null` → `Ok(None)` (no fill).
 fn parse_fill(v: &Value) -> std::result::Result<Option<Fill>, String> {
     if v.is_null() {
         return Ok(None);
@@ -264,9 +275,14 @@ fn parse_fill(v: &Value) -> std::result::Result<Option<Fill>, String> {
         return Ok(Some(Fill::Solid(c)));
     }
     if let Some(g) = v.get("gradient") {
-        let stops: Vec<(f32, Color)> = g
-            .get("stops")
-            .and_then(Value::as_array)
+        // Stop lists are capped as `gradient.fill.stop` caps them: more is an error, not a cut.
+        let list = |key: &str, what: &str| match g.get(key) {
+            None | Some(Value::Null) => Ok(None),
+            Some(Value::Array(a)) if a.len() > MAX_GRADIENT_STOPS => Err(format!("too many {what} (max {MAX_GRADIENT_STOPS})")),
+            Some(Value::Array(a)) => Ok(Some(a)),
+            Some(_) => Err(format!("gradient `{key}` must be an array")),
+        };
+        let stops: Vec<(f32, Color)> = list("stops", "colour stops")?
             .map(|a| a.iter().filter_map(|s| Some((s.get(0)?.as_f64()? as f32, color(s.get(1)?)?))).collect())
             .unwrap_or_else(|| vec![(0.0, Color::BLACK), (1.0, Color::WHITE)]);
         let style = match g.get("style").and_then(Value::as_str).unwrap_or("linear") {
@@ -276,13 +292,35 @@ fn parse_fill(v: &Value) -> std::result::Result<Option<Fill>, String> {
             "diamond" => GradientStyle::Diamond,
             _ => GradientStyle::Linear,
         };
-        return Ok(Some(Fill::gradient(
+        let mut fill = Fill::gradient(
             stops,
             f64p(g, "angle").unwrap_or(90.0) as f32,
             f64p(g, "scale").unwrap_or(100.0) as f32 / 100.0,
             style,
             g.get("reverse").and_then(Value::as_bool).unwrap_or(false),
-        )));
+        );
+        // The rest of a gradient, so a read-modify-write (the shape swatches) loses nothing.
+        if let Fill::Gradient { opacity_stops, midpoints, offset, dither, align, .. } = &mut fill {
+            let unit = |v: &Value| v.as_f64().map(|n| n.clamp(0.0, 1.0) as f32);
+            if let Some(a) = list("opacityStops", "opacity stops")? {
+                *opacity_stops = a.iter().filter_map(|s| Some((unit(s.get(0)?)?, unit(s.get(1)?)?))).collect();
+                opacity_stops.sort_by(|a, b| a.0.total_cmp(&b.0));
+            }
+            if let Some(a) = list("midpoints", "midpoints")? {
+                *midpoints = a.iter().filter_map(unit).collect();
+            }
+            if let Some(o) = g.get("offset") {
+                let at = |i: usize| o.get(i).and_then(Value::as_f64).map(|n| n.clamp(-1000.0, 1000.0) as f32);
+                *offset = (at(0).ok_or("gradient offset must be [x, y]")?, at(1).ok_or("gradient offset must be [x, y]")?);
+            }
+            if let Some(d) = g.get("dither").and_then(Value::as_bool) {
+                *dither = d;
+            }
+            if let Some(a) = g.get("align").and_then(Value::as_bool) {
+                *align = a;
+            }
+        }
+        return Ok(Some(fill));
     }
     if let Some(name) = v.get("pattern").and_then(Value::as_str) {
         return Ok(Some(Fill::Pattern {
@@ -412,13 +450,19 @@ fn live_from_params(cmd: &str, kind: &str, p: &Value, prev: Option<&LiveShape>) 
         }
         "ellipse" => LiveShape::Ellipse { rect: rect()? },
         "polygon" | "star" => {
-            let (ps, pr) = match prev {
-                Some(LiveShape::Polygon { sides, star_ratio, .. }) => (*sides, *star_ratio),
-                _ => (5, if kind == "star" { 0.5 } else { 1.0 }),
+            let (ps, pr, pc) = match prev {
+                Some(LiveShape::Polygon { sides, star_ratio, corner_radius, .. }) => (*sides, *star_ratio, *corner_radius),
+                _ => (5, if kind == "star" { 0.5 } else { 1.0 }, 0.0),
             };
+            let corner_radius = f64p(p, "cornerRadius").map_or(pc, |v| if v.is_finite() { v.clamp(0.0, 1.0e6) } else { pc });
             let sides = f64p(p, "sides").map_or(ps, |v| v.round().clamp(3.0, 100.0) as u32);
             let ratio = f64p(p, "starRatio").map_or(if kind == "star" && pr >= 1.0 { 0.5 } else { pr }, |v| v.clamp(0.01, 1.0));
-            LiveShape::Polygon { rect: rect()?, sides, star_ratio: if kind == "polygon" && f64p(p, "starRatio").is_none() { 1.0 } else { ratio } }
+            LiveShape::Polygon {
+                rect: rect()?,
+                sides,
+                star_ratio: if kind == "polygon" && f64p(p, "starRatio").is_none() { 1.0 } else { ratio },
+                corner_radius,
+            }
         }
         "line" => {
             let (pf, pto, pw) = match prev {
@@ -481,16 +525,38 @@ pub fn translate_vectors(doc: &Document, l: &mut Layer, dx: f64, dy: f64) {
         vm.path = vm.path.transform(&a);
     }
     match &mut l.content {
-        LayerContent::Shape(sh) => {
-            transform_shape(sh, &a);
-            refresh_shape(doc, sh);
-        }
+        LayerContent::Shape(sh) => shift_shape(doc, sh, dx, dy),
         LayerContent::Group(g) => {
             for c in &mut g.children {
                 translate_vectors(doc, c, dx, dy);
             }
         }
         _ => {}
+    }
+}
+
+/// Moves a shape by `(dx, dy)`. A whole-pixel move shifts the rendered pixels as they are, so a
+/// shape from a PSD keeps Photoshop's anti-aliasing (as moved type does). The render is cut at
+/// the canvas, so a shape reaching past it renders again, as does a fractional move.
+pub(crate) fn shift_shape(doc: &Document, sh: &mut ShapeLayer, dx: f64, dy: f64) {
+    transform_shape(sh, &Affine::translate(dx, dy));
+    let whole = |v: f64| (v.fract() == 0.0 && v.abs() <= f64::from(i32::MAX)).then_some(v as i32);
+    let canvas = doc.bounds();
+    let inside = sh.cache.as_ref().is_some_and(|c| {
+        let b = photocraft_compose::bounds::content_bounds(c);
+        // An empty cache can be an off-canvas shape moving back into view.
+        !b.is_empty() && b.x0 > canvas.x0 && b.y0 > canvas.y0 && b.x1 < canvas.x1 && b.y1 < canvas.y1
+    });
+    let stroke_pad = sh.stroke.as_ref().filter(|s| s.opacity > 0.0).map_or(0.0, |s| f64::from(s.width.ceil()));
+    let stays_inside = sh.path.control_bounds().is_some_and(|(x0, y0, x1, y1)| {
+        (x0 - stroke_pad) > canvas.x0 as f64
+            && (y0 - stroke_pad) > canvas.y0 as f64
+            && (x1 + stroke_pad) < canvas.x1 as f64
+            && (y1 + stroke_pad) < canvas.y1 as f64
+    });
+    match (&mut sh.cache, whole(dx), whole(dy)) {
+        (Some(c), Some(dx), Some(dy)) if inside && stays_inside => *c = crate::layer_multi_cmds::shift_surface(c, dx, dy),
+        _ => refresh_shape(doc, sh),
     }
 }
 
@@ -510,7 +576,9 @@ pub fn transform_shape(sh: &mut ShapeLayer, a: &Affine) {
                     LiveShape::Rect { rect: r(rect), radii: radii.map(|v| v * k) }
                 }
                 LiveShape::Ellipse { rect } => LiveShape::Ellipse { rect: r(rect) },
-                LiveShape::Polygon { rect, sides, star_ratio } => LiveShape::Polygon { rect: r(rect), sides, star_ratio },
+                LiveShape::Polygon { rect, sides, star_ratio, corner_radius } => {
+                    LiveShape::Polygon { rect: r(rect), sides, star_ratio, corner_radius: corner_radius * m0.min(m3) }
+                }
                 LiveShape::Line { from, to, weight } => {
                     // Live-shape edits regenerate the line's filled bar from its parameters.
                     // Keep the weight in sync with a positive scale of the path, or an
@@ -704,7 +772,7 @@ fn shape_edit(s: &mut Session, p: &Value) -> Result<Value> {
             sh.live = None;
             sh.psd_raw = None;
         }
-        let geom_keys = ["kind", "rect", "radii", "radius", "sides", "starRatio", "from", "to", "weight"];
+        let geom_keys = ["kind", "rect", "radii", "radius", "sides", "starRatio", "cornerRadius", "from", "to", "weight"];
         if geom_keys.iter().any(|k| p.get(*k).is_some()) {
             let kind = p.get("kind").and_then(Value::as_str).map(str::to_string).or_else(|| sh.live.as_ref().map(|l| live_kind(l).to_string()));
             let kind = kind.ok_or_else(|| bad(CMD, "this shape has no live-shape parameters; pass `kind` or `path`"))?;
@@ -1091,9 +1159,25 @@ fn path_rename(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn path_to_selection(s: &mut Session, p: &Value) -> Result<Value> {
     let path = resolve_path(s, p.get("name").and_then(Value::as_str))?;
-    let feather = f64p(p, "feather").unwrap_or(0.0) as f32;
-    let aa = p.get("antiAlias").and_then(Value::as_bool).unwrap_or(true);
-    let mode = SelectionMode::parse(p.get("mode").and_then(Value::as_str).unwrap_or("replace"));
+    // Validate before rasterizing or touching selection history. An unchecked feather value
+    // could silently become zero (negative/string), or expand into an excessive blur.
+    let feather = match p.get("feather") {
+        None => 0.0,
+        Some(v) => v
+            .as_f64()
+            .filter(|n| n.is_finite() && (0.0..=1000.0).contains(n))
+            .ok_or_else(|| bad("path.toSelection", "`feather` must be a finite number within 0..1000"))? as f32,
+    };
+    let aa = match p.get("antiAlias") {
+        None => true,
+        Some(Value::Bool(v)) => *v,
+        _ => return Err(bad("path.toSelection", "`antiAlias` must be a boolean")),
+    };
+    let mode = match p.get("mode") {
+        None => SelectionMode::Replace,
+        Some(Value::String(v)) if matches!(v.as_str(), "replace" | "add" | "subtract" | "intersect") => SelectionMode::parse(v),
+        _ => return Err(bad("path.toSelection", "`mode` must be replace, add, subtract or intersect")),
+    };
     let area = s.active().ok_or(EngineError::NoDocument)?.doc.bounds();
     let mut mask = vector::fill_rasterizer(&path, vector::DEFAULT_TOLERANCE).render(area);
     if !aa {
@@ -1369,11 +1453,15 @@ fn path_stroke(s: &mut Session, p: &Value) -> Result<Value> {
 fn vector_mask_info(s: &Session, id: LayerId) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let l = d.doc.layer(id).ok_or(EngineError::NoLayer(id))?;
-    Ok(match &l.vector_mask {
-        Some(v) => {
+    Ok(match (&l.vector_mask, &l.content) {
+        (Some(v), _) => {
             json!({ "layer": id.0, "path": path_json(&v.path), "enabled": v.enabled, "linked": v.linked, "density": v.density * 100.0, "feather": v.feather })
         }
-        None => json!({ "layer": id.0, "vectorMask": null }),
+        // A shape layer's path is its vector mask.
+        (None, LayerContent::Shape(sh)) => {
+            json!({ "layer": id.0, "path": path_json(&sh.path), "enabled": true, "linked": true, "shape": true, "density": sh.density * 100.0, "feather": sh.feather })
+        }
+        (None, _) => json!({ "layer": id.0, "vectorMask": null }),
     })
 }
 
@@ -1405,7 +1493,8 @@ fn vector_mask_add(s: &mut Session, p: &Value, from_path: bool) -> Result<Value>
         if locked {
             return Err(EngineError::Other(format!("layer \"{}\" is locked", l.name)));
         }
-        l.vector_mask = Some(VectorMask::new(path));
+        crate::extra_cmds::background_to_layer(doc, id);
+        doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?.vector_mask = Some(VectorMask::new(path));
         Ok(())
     })?;
     vector_mask_info(s, id)
@@ -1425,6 +1514,35 @@ fn vector_mask_edit(s: &mut Session, p: &Value) -> Result<Value> {
                 .ok_or_else(|| bad(CMD, "`feather` must be a finite number within 0..1000"))
         })
         .transpose()?;
+    let density = p
+        .get("density")
+        .map(|v| {
+            v.as_f64()
+                .filter(|n| n.is_finite() && (0.0..=100.0).contains(n))
+                .map(|n| (n / 100.0) as f32)
+                .ok_or_else(|| bad(CMD, "`density` must be a finite number within 0..100 (%)"))
+        })
+        .transpose()?;
+    // A shape layer's path is its vector mask (Photoshop's Properties › Masks): Density and
+    // Feather soften its fill; the path itself is edited with the shape and path commands.
+    if s.active().and_then(|d| d.doc.layer(id)).is_some_and(|l| matches!(l.content, LayerContent::Shape(_)) && l.vector_mask.is_none()) {
+        if let Some(k) = ["path", "enabled", "linked", "invert"].into_iter().find(|k| p.get(*k).is_some()) {
+            return Err(bad(CMD, format!("`{k}`: a shape layer's vector mask is its path; only `density` and `feather` apply")));
+        }
+        if density.is_none() && feather.is_none() {
+            return vector_mask_info(s, id);
+        }
+        with_shape(s, id, "Edit Vector Mask", |sh, _| {
+            if let Some(d) = density {
+                sh.density = d;
+            }
+            if let Some(f) = feather {
+                sh.feather = f;
+            }
+            Ok(())
+        })?;
+        return vector_mask_info(s, id);
+    }
     s.edit("Edit Vector Mask", |doc, _| {
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
         let vm = l.vector_mask.as_mut().ok_or_else(|| EngineError::Other("layer has no vector mask".into()))?;
@@ -1437,8 +1555,8 @@ fn vector_mask_edit(s: &mut Session, p: &Value) -> Result<Value> {
         if let Some(b) = p.get("linked").and_then(Value::as_bool) {
             vm.linked = b;
         }
-        if let Some(d) = f64p(p, "density") {
-            vm.density = (d / 100.0).clamp(0.0, 1.0) as f32;
+        if let Some(d) = density {
+            vm.density = d;
         }
         if let Some(f) = feather {
             vm.feather = f;
@@ -1676,14 +1794,14 @@ pub(crate) fn leak(s: String) -> &'static str {
 
 pub fn specs() -> Vec<CommandSpec> {
     let stroke = r##""stroke":{"width":px,"color":"#rrggbb"|fill,"opacity":0..100,"align":"inside|center|outside","cap":"butt|round|square","join":"miter|round|bevel","miterLimit":n,"dashes":[multiples of width],"dashOffset":n}|null"##;
-    let fill = r##""fill":"#rrggbb"|[r,g,b,a]|{"gradient":{"stops":[[t,"#hex"]],"angle":deg,"scale":%,"style":"linear|radial|angle|reflected|diamond","reverse":bool}}|{"pattern":name}|null (no fill)"##;
+    let fill = r##""fill":"#rrggbb"|[r,g,b,a]|{"gradient":{"stops":[[t,"#hex"|[r,g,b,a]|stored Color]],"angle":deg,"scale":%,"style":"linear|radial|angle|reflected|diamond","reverse":bool,"opacityStops":[[t,0..1]]?,"midpoints":[0..1]?,"offset":[x,y]?,"dither":bool?,"align":bool?}}|{"pattern":name}|null (no fill)"##;
     vec![
         spec!(
             "shape.create",
             "New Shape Layer",
             ["Layer", "New"],
             leak(format!(
-                r##"{{"kind":"rect|roundedRect|ellipse|polygon|star|line|path"="rect","rect":[x,y,w,h] (rect/roundedRect/ellipse/polygon/star),"radii":[tl,tr,br,bl]|r (roundedRect=10),"sides":3..100=5,"starRatio":0..1 (star=0.5),"from":[x,y],"to":[x,y],"weight":px=1 (line),"path":{{…}} (kind path),{fill}=foreground,{stroke}=none,"name":str?,"addTo":layerId? + "op":"combine|subtract|intersect|exclude" (append to an existing shape layer)}} → shape.info. {PATH_FORM}"##
+                r##"{{"kind":"rect|roundedRect|ellipse|polygon|star|line|path"="rect","rect":[x,y,w,h] (rect/roundedRect/ellipse/polygon/star),"radii":[tl,tr,br,bl]|r (roundedRect=10),"sides":3..100=5,"starRatio":0..1 (star=0.5),"cornerRadius":px=0 (polygon/star: rounds every vertex; the Triangle tool is a 3-sided polygon),"from":[x,y],"to":[x,y],"weight":px=1 (line),"path":{{…}} (kind path),{fill}=foreground,{stroke}=none,"name":str?,"addTo":layerId? + "op":"combine|subtract|intersect|exclude" (append to an existing shape layer)}} → shape.info. {PATH_FORM}"##
             )),
             has_doc,
             shape_create
@@ -1693,7 +1811,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Edit Shape",
             [],
             leak(format!(
-                r##"{{"layer":id?,"path":{{…}}? (replaces; drops live shape),"kind":str?,"rect":[x,y,w,h]?,"radii":[tl,tr,br,bl]|r?,"sides":n?,"starRatio":r?,"from":[x,y]?,"to":[x,y]?,"weight":px? (live-shape params regenerate the path),"move":[dx,dy]?,"transform":[a,b,c,d,e,f]?,"op":"combine|…"? + "subpath":index? (default all but the first),"fillRule":"nonzero|evenodd"?,{fill}?,{stroke}? (merged into the current stroke),"name":str?}} → shape.info"##
+                r##"{{"layer":id?,"path":{{…}}? (replaces; drops live shape),"kind":str?,"rect":[x,y,w,h]?,"radii":[tl,tr,br,bl]|r?,"sides":n?,"starRatio":r?,"cornerRadius":px?,"from":[x,y]?,"to":[x,y]?,"weight":px? (live-shape params regenerate the path),"move":[dx,dy]?,"transform":[a,b,c,d,e,f]?,"op":"combine|…"? + "subpath":index? (default all but the first),"fillRule":"nonzero|evenodd"?,{fill}?,{stroke}? (merged into the current stroke),"name":str?}} → shape.info"##
             )),
             has_layer,
             shape_edit
@@ -1832,7 +1950,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Edit Vector Mask",
             [],
             leak(format!(
-                r##"{{"layer":id?,"path":{{…}}?,"enabled":bool?,"linked":bool?,"density":0..100?,"feather":0..1000? (pixels),"invert":true?}}. {PATH_FORM}"##
+                r##"{{"layer":id?,"path":{{…}}?,"enabled":bool?,"linked":bool?,"density":0..100?,"feather":0..1000? (pixels),"invert":true?}}. On a shape layer (whose path is its vector mask) only density and feather apply: they soften its fill, which shows beyond the path at 100 − density %. {PATH_FORM}"##
             )),
             has_layer,
             vector_mask_edit

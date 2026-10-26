@@ -33,7 +33,7 @@ use crate::image_data::ImageData;
 use crate::io::{Reader, WriteExt};
 use crate::layer::{LayerInfo, LayerMask, mask_parameter_bytes};
 use crate::resources::ImageResource;
-use crate::tagged::{TaggedBlock, read_blocks, uses_long_length, write_blocks};
+use crate::tagged::{TaggedBlock, read_blocks, uses_long_length};
 
 /// The byte order of a TIFF container (and so of the Photoshop data inside it).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -153,7 +153,7 @@ impl ImageSourceData {
     /// dropped because they could not be converted to a little-endian layout.
     pub fn to_bytes(&self, order: ByteOrder) -> Result<(Vec<u8>, Vec<String>)> {
         let version = self.version;
-        let mut blocks = Vec::with_capacity(self.global_blocks.len() + 2);
+        let mut body = Vec::new();
         if let Some(info) = &self.layer_info {
             // Pad to 4 without cloning the layers (and all their pixel data) just to set `padding`.
             let pad = info.pad_len(version, 4)?;
@@ -161,21 +161,17 @@ impl ImageSourceData {
             data.try_reserve(info.channel_data_len().saturating_add(pad)).map_err(|_| PsdError::LimitExceeded("not enough memory for the layer data"))?;
             info.write_unpadded(&mut data, version)?;
             data.resize(data.len() + pad, 0);
-            blocks.push(padded_block(self.layer_info_key, data));
+            padded_block(self.layer_info_key, data).write(&mut body, version, 4)?;
         }
+        // Blocks without explicit padding are padded to 4 as they are written (alignment 4), so
+        // the global mask and blocks are written from the model, without a copy of their data.
+        // The signature stays (a foreign-order marker included).
         if let Some(m) = &self.global_layer_mask {
-            blocks.push(padded_block(*b"LMsk", m.data.clone()));
+            TaggedBlock::write_parts(&mut body, *b"8BIM", *b"LMsk", &m.data, None, version, 4)?;
         }
         for b in &self.global_blocks {
-            let mut b = b.clone();
-            if b.padding.is_none() {
-                // Padded to 4 like the others; the signature stays (a foreign-order marker included).
-                b.padding = Some(vec![0; (4 - b.data.len() % 4) % 4]);
-            }
-            blocks.push(b);
+            b.write(&mut body, version, 4)?;
         }
-        let mut body = Vec::new();
-        write_blocks(&mut body, &blocks, version, 2)?;
         body.put(&self.trailing);
         let (body, warnings) =
             if order.is_little() { transcode::transcode_blocks(&body, version, ByteOrder::Big, ByteOrder::Little)? } else { (body, Vec::new()) };
@@ -344,6 +340,19 @@ pub mod transcode {
             (self.out, self.warnings)
         }
 
+        /// A walker over `data` (a nested structure) that writes into this walker's output: it
+        /// takes the buffer, so a nested structure is written once, not copied up per level. Hand
+        /// the buffer back with [`Self::adopt`] before returning, error or not.
+        fn nested<'b>(&mut self, data: &'b [u8], depth: usize) -> Tx<'b> {
+            let r = if self.from.is_little() { Reader::new_little(data) } else { Reader::new(data) };
+            Tx { r, out: std::mem::take(&mut self.out), from: self.from, to: self.to, version: self.version, warnings: Vec::new(), depth }
+        }
+
+        /// Takes the output buffer back from a [`Self::nested`] walker.
+        fn adopt(&mut self, child: &mut Tx<'_>) {
+            self.out = std::mem::take(&mut child.out);
+        }
+
         fn same_order(&self) -> bool {
             self.from == self.to
         }
@@ -469,15 +478,15 @@ pub mod transcode {
         /// Transcodes the next `len` bytes with `f`; whatever `f` leaves is copied verbatim.
         fn region(&mut self, len: u64, f: impl FnOnce(&mut Tx<'_>) -> Result<()>) -> Result<()> {
             let data = self.r.bytes_u64(len)?;
-            let mut child = Tx::new(data, self.version, self.from, self.to);
-            child.depth = self.depth;
-            f(&mut child)?;
-            child.rest()?;
-            if child.out.len() != data.len() {
+            let start = self.out.len();
+            let mut child = self.nested(data, self.depth);
+            let res = f(&mut child).and_then(|()| child.rest());
+            self.adopt(&mut child);
+            res?;
+            if self.out.len() - start != data.len() {
                 return Err(PsdError::invalid("byte-order conversion changed a structure's length"));
             }
             self.warnings.append(&mut child.warnings);
-            self.out.extend_from_slice(&child.out);
             Ok(())
         }
 
@@ -500,13 +509,13 @@ pub mod transcode {
                 len = len.checked_sub(4).ok_or_else(|| PsdError::invalid("length shorter than its own field"))?;
             }
             let data = self.r.bytes_u64(len)?;
-            let mut child = Tx::new(data, self.version, self.from, self.to);
-            child.depth = self.depth;
-            f(&mut child)?;
-            child.rest()?;
+            let start = self.out.len();
+            let mut child = self.nested(data, self.depth);
+            let res = f(&mut child).and_then(|()| child.rest());
+            self.adopt(&mut child);
+            res?;
             self.warnings.append(&mut child.warnings);
-            self.patch_len(at, long, child.out.len() as u64 + if inclusive { 4 } else { 0 })?;
-            self.out.extend_from_slice(&child.out);
+            self.patch_len(at, long, (self.out.len() - start) as u64 + if inclusive { 4 } else { 0 })?;
             Ok(())
         }
 
@@ -672,13 +681,12 @@ pub mod transcode {
             if !self.from.is_little() && TaggedBlock::is_foreign_order_signature(self.r.peek_rest()) {
                 let sig = self.r.array::<4>()?;
                 let mut key = self.r.array::<4>()?;
-                let long = uses_long_length(self.version, &{
-                    let mut k = key;
-                    if self.to.is_little() {
-                        k.reverse();
-                    }
-                    k
-                });
+                // Only reached with `from == Big`: the key is canonical here whatever the
+                // target order. `TaggedBlock::write` sizes the length field from that same key.
+                // Reversing it for the target order before the check
+                // asked about a key `PSB_LONG_KEYS` never contains, so a PSB long key's 8-byte
+                // length was read as 4 and every later block was copied unconverted.
+                let long = uses_long_length(self.version, &key);
                 let len = self.r.len_field(long)?;
                 let data = self.r.bytes_u64(len)?;
                 if self.to.is_little() {
@@ -704,8 +712,9 @@ pub mod transcode {
             let len_at = self.out.len();
             self.out.extend_from_slice(if long { &[0u8; 8] } else { &[0u8; 4] });
             let data = self.r.bytes_u64(len)?;
-            let mut child = Tx::new(data, self.version, self.from, self.to);
-            child.depth = self.depth + 1;
+            // The body is transcoded straight into this output, after the length placeholder.
+            let data_at = self.out.len();
+            let mut child = self.nested(data, self.depth + 1);
             let handled = if child.depth > MAX_DEPTH {
                 Err(PsdError::LimitExceeded("tagged block nesting too deep"))
             } else if data.is_empty() {
@@ -713,16 +722,21 @@ pub mod transcode {
             } else {
                 child.block_body(&key)
             };
+            let rest = if matches!(handled, Ok(true)) { child.rest() } else { Ok(()) };
+            self.adopt(&mut child);
+            rest?;
+            if !matches!(handled, Ok(true)) {
+                // A body that was not transcoded leaves nothing: it is copied as stored or dropped.
+                self.out.truncate(data_at);
+            }
             // Padding: the smallest k in 0..=3 after which the next block (or the end) starts.
             let rest = self.r.peek_rest();
             let pad = (0..=3usize).find(|&k| k == rest.len() || (k < rest.len() && is_sig(&rest[k..], self.from.is_little()))).unwrap_or(0);
             let pad_bytes = self.r.bytes(pad)?;
             match handled {
                 Ok(true) => {
-                    child.rest()?;
                     self.warnings.append(&mut child.warnings);
-                    self.patch_len(len_at, long, child.out.len() as u64)?;
-                    self.out.extend_from_slice(&child.out);
+                    self.patch_len(len_at, long, (self.out.len() - data_at) as u64)?;
                     self.out.extend_from_slice(pad_bytes);
                 }
                 Ok(false) if self.same_order() => {
@@ -845,15 +859,7 @@ pub mod transcode {
                 // Type: version, transform, text version + descriptor, warp version + descriptor,
                 // and the bounds as four 32-bit values (the specification says doubles; Photoshop
                 // writes 16 bytes).
-                b"TySh" => {
-                    self.u16()?;
-                    self.f64s(6)?;
-                    self.u16()?;
-                    self.versioned_descriptor()?;
-                    self.u16()?;
-                    self.versioned_descriptor()?;
-                    self.i32s(4)?;
-                }
+                b"TySh" => self.type_layer()?,
                 b"vmsk" | b"vsms" => {
                     self.u32()?;
                     self.u32()?;
@@ -1151,6 +1157,31 @@ pub mod transcode {
 
         // ---- descriptors ----
 
+        /// Photoshop's Intel-order TIFF type blocks can use PSD byte order for the
+        /// text descriptor, then container order again for warp and bounds (#4758).
+        fn type_layer(&mut self) -> Result<()> {
+            self.u16()?;
+            self.f64s(6)?;
+            self.type_descriptor(50, ByteOrder::Big)?;
+            self.type_descriptor(1, self.to)?;
+            self.i32s(4)
+        }
+
+        fn type_descriptor(&mut self, version: u16, to: ByteOrder) -> Result<()> {
+            let [hi, lo] = version.to_be_bytes();
+            let from = if self.from.is_little() && self.r.peek_rest().starts_with(&[hi, lo, 0, 0, 0, 16]) { ByteOrder::Big } else { self.from };
+            let data = self.r.peek_rest();
+            let mut descriptor = Tx::new(data, self.version, from, to);
+            descriptor.depth = self.depth;
+            descriptor.u16()?;
+            descriptor.versioned_descriptor()?;
+            let used = data.len() - descriptor.remaining();
+            self.r.bytes(used)?;
+            self.warnings.append(&mut descriptor.warnings);
+            self.out.extend_from_slice(&descriptor.out);
+            Ok(())
+        }
+
         fn versioned_descriptor(&mut self) -> Result<()> {
             self.u32()?;
             self.descriptor()
@@ -1270,6 +1301,7 @@ pub mod transcode {
                     self.i32()?;
                 }
                 b"Idnt" | b"indx" => {
+                    self.class()?;
                     self.u32()?;
                 }
                 b"name" => {
@@ -1396,9 +1428,27 @@ pub mod transcode {
             })
         }
 
-        /// `FEid` / `FXid`: version, u64 length, items with per-channel planes (4-byte RLE counts).
+        /// `FEid` / `FXid`: version, then one section per smart object (u64 length, items with
+        /// per-channel planes and 4-byte RLE counts), each padded to 4 bytes.
         fn filter_effects(&mut self) -> Result<()> {
             self.u32()?;
+            loop {
+                let len = self.r.clone().len_field(true)?;
+                self.filter_effects_section()?;
+                // Mirrors `FilterEffects::parse`: the last section's padding may be cut short.
+                let pad = usize::try_from((4 - len % 4) % 4).unwrap_or(0).min(self.remaining());
+                self.raw(pad)?;
+                let rest = self.r.peek_rest();
+                if rest.len() <= 3 && rest.iter().all(|&b| b == 0) {
+                    return Ok(());
+                }
+                if rest.len() < 8 {
+                    return Err(PsdError::invalid(format!("filter effects: {} unexpected bytes after the data", rest.len())));
+                }
+            }
+        }
+
+        fn filter_effects_section(&mut self) -> Result<()> {
             self.sized_region(true, |t| {
                 while !t.r.is_empty() {
                     t.pascal(1)?;
@@ -1776,6 +1826,143 @@ mod tests {
     }
 
     #[test]
+    fn descriptor_references_by_identifier_and_index_keep_their_class() {
+        use crate::descriptor::{Class, ReferenceItem};
+        let class = || Class { name: UnicodeString::new(""), class_id: Id::new("Lyr ") };
+        let desc = Descriptor::new("null")
+            .with("null", Value::Reference(vec![ReferenceItem::Identifier { class: class(), id: 7 }, ReferenceItem::Index { class: class(), index: 2 }]));
+        let mut data = 0u32.to_be_bytes().to_vec();
+        data.extend(VersionedDescriptor::new(desc).to_bytes());
+        block_rt(*b"lfx2", data);
+    }
+
+    fn type_layer_data() -> Vec<u8> {
+        let mut data = Vec::new();
+        data.put_u16(1);
+        for value in [1.5, 0.0, -0.25, 1.75, 12.5, -3.25] {
+            data.put_f64(value);
+        }
+        data.put_u16(50);
+        let text = Descriptor::new("TxLr").with("Txt ", Value::Text(UnicodeString::new_nul("Synthetic Ω 🦀")));
+        data.extend(VersionedDescriptor::new(text).to_bytes());
+        data.put_u16(1);
+        data.extend(VersionedDescriptor::new(Descriptor::new("warp")).to_bytes());
+        for value in [11, -22, 333, 4_444] {
+            data.put_i32(value);
+        }
+        data
+    }
+
+    fn tagged_payload<'a>(bytes: &'a [u8], signature_and_key: &[u8; 8], little: bool) -> &'a [u8] {
+        let block_at = bytes.windows(8).position(|window| window == signature_and_key).expect("tagged block");
+        let length_at = block_at + 8;
+        let length_bytes: [u8; 4] = bytes.get(length_at..length_at + 4).expect("tagged block length").try_into().expect("four-byte length");
+        let length = if little { u32::from_le_bytes(length_bytes) } else { u32::from_be_bytes(length_bytes) };
+        let data_at = length_at + 4;
+        let data_end = data_at + usize::try_from(length).expect("test block length fits usize");
+        bytes.get(data_at..data_end).expect("tagged block payload")
+    }
+
+    fn legacy_little_endian_type_block() -> Vec<u8> {
+        let mut tysh = Vec::new();
+        tysh.extend_from_slice(&1u16.to_le_bytes());
+        for value in [1.5f64, 0.0, -0.25, 1.75, 12.5, -3.25] {
+            tysh.extend_from_slice(&value.to_le_bytes());
+        }
+        tysh.extend_from_slice(&50u16.to_le_bytes());
+        // Independently encode a little-endian `VersionedDescriptor` with a single TEXT value.
+        tysh.extend_from_slice(&16u32.to_le_bytes());
+        tysh.extend_from_slice(&0u32.to_le_bytes()); // empty descriptor name
+        tysh.extend_from_slice(&0u32.to_le_bytes()); // four-character class id
+        tysh.extend_from_slice(b"rLxT"); // little-endian four-character class id
+        tysh.extend_from_slice(&1u32.to_le_bytes()); // one item
+        tysh.extend_from_slice(&0u32.to_le_bytes()); // four-character key
+        tysh.extend_from_slice(b" txT"); // little-endian four-character key
+        tysh.extend_from_slice(b"TXET"); // little-endian OSType
+        let mut units: Vec<u16> = "Synthetic Ω 🦀".encode_utf16().collect();
+        units.push(0); // `new_nul`, matching the canonical fixture
+        tysh.extend_from_slice(&u32::try_from(units.len()).expect("short test string").to_le_bytes());
+        for unit in units {
+            tysh.extend_from_slice(&unit.to_le_bytes());
+        }
+        tysh.extend_from_slice(&1u16.to_le_bytes());
+        // Empty warp descriptor, also encoded independently in little-endian order.
+        tysh.extend_from_slice(&16u32.to_le_bytes());
+        tysh.extend_from_slice(&0u32.to_le_bytes()); // empty descriptor name
+        tysh.extend_from_slice(&4u32.to_le_bytes()); // `warp` is a four-byte string id
+        tysh.extend_from_slice(b"warp");
+        tysh.extend_from_slice(&0u32.to_le_bytes()); // no items
+        for value in [11i32, -22, 333, 4_444] {
+            tysh.extend_from_slice(&value.to_le_bytes());
+        }
+
+        let mut image_source = super::SIGNATURE.to_vec();
+        image_source.extend_from_slice(b"MIB8hSyT");
+        image_source.extend_from_slice(&u32::try_from(tysh.len()).expect("short test block").to_le_bytes());
+        image_source.extend_from_slice(&tysh);
+        let padding = (4 - tysh.len() % 4) % 4;
+        image_source.resize(image_source.len() + padding, 0);
+        image_source
+    }
+
+    #[test]
+    fn type_block_write_keeps_text_descriptor_in_psd_order() {
+        let canonical = type_layer_data();
+        let source = ImageSourceData { global_blocks: vec![TaggedBlock::new(*b"TySh", canonical.clone())], ..Default::default() };
+
+        let (little, warnings) = source.to_bytes(ByteOrder::Little).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let payload = tagged_payload(&little, b"MIB8hSyT", true);
+        assert_eq!(payload.get(..2), Some(&[1, 0][..]), "TySh header stays in TIFF order");
+        for (index, expected) in [1.5f64, 0.0, -0.25, 1.75, 12.5, -3.25].into_iter().enumerate() {
+            let start = 2 + index * 8;
+            let bytes: [u8; 8] = payload.get(start..start + 8).unwrap().try_into().unwrap();
+            assert_eq!(f64::from_le_bytes(bytes), expected, "matrix element {index}");
+        }
+
+        let (text_descriptor, descriptor_len) = VersionedDescriptor::parse_prefix(canonical.get(52..).unwrap()).unwrap();
+        let text_section_len = 2 + descriptor_len;
+        assert_eq!(payload.get(50..52), Some(&50u16.to_be_bytes()[..]));
+        assert_eq!(payload.get(52..56), Some(&16u32.to_be_bytes()[..]));
+        assert_eq!(payload.get(50..50 + text_section_len), canonical.get(50..50 + text_section_len));
+        assert!(matches!(text_descriptor.descriptor.get("Txt "), Some(Value::Text(value)) if value.to_string_lossy() == "Synthetic Ω 🦀"));
+        let text_descriptor_from_output = VersionedDescriptor::parse_prefix(payload.get(52..).unwrap()).unwrap().0;
+        assert!(matches!(text_descriptor_from_output.descriptor.get("Txt "), Some(Value::Text(value)) if value.to_string_lossy() == "Synthetic Ω 🦀"));
+
+        let warp_at = 50 + text_section_len;
+        assert_eq!(payload.get(warp_at..warp_at + 2), Some(&1u16.to_le_bytes()[..]));
+        let (_, warp_len) = VersionedDescriptor::parse_prefix(canonical.get(warp_at + 2..).unwrap()).unwrap();
+        let warp_descriptor_at = warp_at + 2;
+        assert_eq!(payload.get(warp_descriptor_at..warp_descriptor_at + 4), Some(&16u32.to_le_bytes()[..]));
+        assert_eq!(payload.get(warp_descriptor_at + 4..warp_descriptor_at + 8), Some(&0u32.to_le_bytes()[..]));
+        assert_eq!(payload.get(warp_descriptor_at + 8..warp_descriptor_at + 12), Some(&4u32.to_le_bytes()[..]));
+        assert_eq!(payload.get(warp_descriptor_at + 12..warp_descriptor_at + 16), Some(b"warp".as_slice()));
+        assert_eq!(payload.get(warp_descriptor_at + 16..warp_descriptor_at + 20), Some(&0u32.to_le_bytes()[..]));
+        let bounds_at = warp_descriptor_at + warp_len;
+        for (index, expected) in [11i32, -22, 333, 4_444].into_iter().enumerate() {
+            let start = bounds_at + index * 4;
+            assert_eq!(payload.get(start..start + 4), Some(&expected.to_le_bytes()[..]), "bound {index}");
+        }
+
+        let (big, warnings) = source.to_bytes(ByteOrder::Big).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(tagged_payload(&big, b"8BIMTySh", false), canonical);
+
+        let (reopened, warnings) = ImageSourceData::from_bytes(&little).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(reopened.global_blocks[0].data, canonical);
+        assert_eq!(reopened.to_bytes(ByteOrder::Big).unwrap().0, big);
+    }
+
+    #[test]
+    fn legacy_little_endian_type_descriptor_still_imports() {
+        let input = legacy_little_endian_type_block();
+        let (reopened, warnings) = ImageSourceData::from_bytes(&input).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(reopened.global_blocks[0].data, type_layer_data());
+    }
+
+    #[test]
     fn type_block_layout() {
         let mut data = Vec::new();
         data.put_u16(1);
@@ -1792,6 +1979,39 @@ mod tests {
         let (_, little) = block_rt(*b"TySh", data);
         assert!(little[48..].starts_with(&[1, 0]));
         assert_eq!(&little[50..58], &1.0f64.to_le_bytes());
+    }
+
+    #[test]
+    fn photoshop_type_block_switches_to_big_endian_after_its_matrix() {
+        let mut data = Vec::new();
+        data.put_u16(1);
+        for v in [1.8054202887117468, 0.0, -0.143, 1.8063853899082987, 247.25, 2864.5] {
+            data.put_f64(v);
+        }
+        data.put_u16(50);
+        let text = Descriptor::new("TxLr").with("Txt ", Value::Text(UnicodeString::new_nul("Synthetic headline")));
+        data.extend(VersionedDescriptor::new(text).to_bytes());
+        data.put_u16(1);
+        data.extend(VersionedDescriptor::new(Descriptor::new("warp")).to_bytes());
+        for v in [0, 0, 120, 30] {
+            data.put_i32(v);
+        }
+        let (_, mut little) = block_rt(*b"TySh", data.clone());
+        // Photoshop uses big-endian text but returns to little-endian for warp/bounds.
+        let (_, used) = VersionedDescriptor::parse_prefix(&data[52..]).unwrap();
+        little[98..100 + used].copy_from_slice(&data[50..52 + used]);
+        let (back, warnings) = ImageSourceData::from_bytes(&little).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert!(!back.global_blocks[0].is_foreign_order());
+        assert_eq!(back.global_blocks[0].data, data);
+        // The normalized model remains writable in either order.
+        for order in [ByteOrder::Big, ByteOrder::Little] {
+            let (bytes, warnings) = back.to_bytes(order).unwrap();
+            assert!(warnings.is_empty());
+            let (again, warnings) = ImageSourceData::from_bytes(&bytes).unwrap();
+            assert!(warnings.is_empty());
+            assert_eq!(again.global_blocks[0].data, data);
+        }
     }
 
     #[test]
@@ -2038,6 +2258,39 @@ mod tests {
         assert_eq!(FilterEffects::parse(&back.global_blocks[0].data).unwrap(), fx);
     }
 
+    /// Photoshop writes one `FEid` section per smart object: every section's lengths and
+    /// numbers are swapped, not only the first one's.
+    #[test]
+    fn filter_effects_block_swaps_every_section() {
+        use crate::filter_effects::{EffectsPlane, FilterEffects, FilterEffectsItem};
+        let rect = crate::layer::Rect { top: 0, left: 0, bottom: 2, right: 3 };
+        let item = |id: &str, v: u8| FilterEffectsItem {
+            id: id.into(),
+            version: 1,
+            rect,
+            depth: 8,
+            max_channels: 1,
+            slots: vec![Some(EffectsPlane::encode(Compression::Raw, &[v; 6], 3, 2, 8).unwrap()), None, None],
+            mask: None,
+        };
+        let fx = FilterEffects { version: 1, items: vec![item("first", 1), item("second-object", 2)] };
+        let data = fx.to_bytes();
+        let len1 = u64::from_be_bytes(data[4..12].try_into().unwrap()) as usize;
+        let second = 12 + len1 + (4 - len1 % 4) % 4;
+        let len2 = &data[second..second + 8];
+        block_rt(*b"FEid", data.clone());
+        let d = ImageSourceData { global_blocks: vec![TaggedBlock::new(*b"FEid", data.clone())], ..Default::default() };
+        let (little, _) = d.to_bytes(ByteOrder::Little).unwrap();
+        // 36-byte signature, then `MIB8`, the reversed key and a u32 length: the block data.
+        let body = &little[36 + 12..];
+        let mut swapped = len2.to_vec();
+        swapped.reverse();
+        assert_eq!(&body[second..second + 8], &swapped[..], "second section's length is little-endian");
+        let (back, w) = ImageSourceData::from_bytes(&little).unwrap();
+        assert!(w.is_empty(), "{w:?}");
+        assert_eq!(FilterEffects::parse(&back.global_blocks[0].data).unwrap(), fx);
+    }
+
     #[test]
     fn metadata_setting_items() {
         let desc = VersionedDescriptor::new(Descriptor::new("null")).to_bytes();
@@ -2196,6 +2449,25 @@ mod tests {
         assert_eq!(ImageSourceData::from_bytes(&big).unwrap().0.global_blocks, back.global_blocks);
     }
 
+    /// A PSB keeps `Mt16`/`Mt32`/`Mtrn`/`Alph` blocks of unknown layout verbatim, and their
+    /// length field is 8 bytes (a PSB long key). Writing them into a little-endian TIFF must
+    /// read that width; the old code looked the key up after reversing it for the target
+    /// order, which never matches `PSB_LONG_KEYS`.
+    #[test]
+    fn psb_foreign_order_long_key_roundtrips() {
+        let d = ImageSourceData {
+            version: Version::Psb,
+            byte_order: ByteOrder::Little,
+            global_blocks: vec![TaggedBlock { signature: *b"MIB8", key: *b"Mt16", data: vec![9, 8, 7, 6, 5, 4], padding: None }],
+            ..Default::default()
+        };
+        let (little, w) = d.to_bytes(ByteOrder::Little).unwrap();
+        assert!(w.is_empty(), "{w:?}");
+        let (back, w) = ImageSourceData::from_bytes(&little).unwrap();
+        assert!(w.is_empty(), "{w:?}");
+        assert_eq!(back.global_blocks, d.global_blocks, "the 8-byte length and the bytes survive");
+    }
+
     #[test]
     fn rle_counts_follow_the_container_and_samples_do_not() {
         let file = testgen::layered(Version::Psd, ColorMode::Rgb, 16, Compression::Rle);
@@ -2329,5 +2601,72 @@ mod tests {
         assert_eq!(known(&ImageSourceData::from_psd(&again)).layer_info, expected.layer_info);
         assert_eq!(again.global_blocks, expected.global_blocks);
         assert_eq!(again.layer_tree().len(), file.layer_tree().len());
+    }
+
+    /// Global blocks are padded as they are written, not on a copy: the bytes are those of the
+    /// former path (each block cloned with explicit padding to 4, written with `write_blocks`).
+    #[test]
+    fn global_blocks_written_without_copies_keep_their_bytes() {
+        for version in [Version::Psd, Version::Psb] {
+            let mut d = ImageSourceData { version, global_layer_mask: Some(GlobalLayerMask { data: vec![0, 1, 0, 2, 0, 3, 0, 4, 9] }), ..Default::default() };
+            for n in 0..8u8 {
+                d.global_blocks.push(TaggedBlock::new(*b"FMsk", (0..n).collect()));
+            }
+            let mut explicit = TaggedBlock::new(*b"FMsk", vec![1, 2, 3]);
+            explicit.padding = Some(vec![]);
+            d.global_blocks.push(explicit);
+            let mut odd = TaggedBlock::new(*b"FMsk", vec![1, 2]);
+            odd.padding = Some(vec![0, 0, 0, 0, 0]);
+            d.global_blocks.push(odd);
+            let mut copies = vec![padded_block(*b"LMsk", d.global_layer_mask.as_ref().unwrap().data.clone())];
+            for b in &d.global_blocks {
+                let mut b = b.clone();
+                if b.padding.is_none() {
+                    b.padding = Some(vec![0; (4 - b.data.len() % 4) % 4]);
+                }
+                copies.push(b);
+            }
+            let mut body = Vec::new();
+            crate::tagged::write_blocks(&mut body, &copies, version, 2).unwrap();
+            let signature = if version.is_psb() { SIGNATURE_PSB } else { SIGNATURE };
+            assert_eq!(d.to_bytes(ByteOrder::Big).unwrap().0, [signature, &body[..]].concat());
+            let (little, _) = transcode_blocks(&body, version, ByteOrder::Big, ByteOrder::Little).unwrap();
+            assert_eq!(d.to_bytes(ByteOrder::Little).unwrap().0, [signature, &little[..]].concat());
+        }
+    }
+
+    /// Nested structures are transcoded into one shared buffer. A block whose body fails
+    /// part-way leaves no partial bytes: dropped on the way out (with the enclosing lengths
+    /// patched as if it had never been there), or kept exactly as stored on the way in.
+    #[test]
+    fn a_nested_block_that_fails_part_way_leaves_nothing_behind() {
+        let clean = sample_layers();
+        let mut fx = Vec::new();
+        fx.put_u32(0);
+        fx.extend_from_slice(&VersionedDescriptor::new(Descriptor::new("null").with("Opct", Value::Double(1.0))).to_bytes());
+        // A whole number of 4-byte units, so dropping it cannot change any padding.
+        fx.resize(fx.len().next_multiple_of(4), 0);
+        let mut d = clean.clone();
+        d.layer_info.as_mut().unwrap().layers[0].blocks.insert(0, TaggedBlock::new(*b"lfx2", fx.clone()));
+        let (mut little, w) = d.to_bytes(ByteOrder::Little).unwrap();
+        assert!(!w.iter().any(|w| w.starts_with("lfx2")), "{w:?}");
+        // An unknown value type after the descriptor's header: parsing fails part-way.
+        let at = little.windows(4).position(|w| w == b"buod").unwrap();
+        little[at..at + 4].copy_from_slice(b"????");
+        let (back, w) = ImageSourceData::from_bytes(&little).unwrap();
+        assert_eq!(w.iter().filter(|w| w.starts_with("lfx2 block")).count(), 1, "{w:?}");
+        let kept = &back.layer_info.as_ref().unwrap().layers[0].blocks[0];
+        assert!(kept.is_foreign_order());
+        let stored = little.windows(4).position(|w| w == b"2xfl").unwrap() + 8;
+        assert_eq!(kept.data, little[stored..stored + fx.len()]);
+        // Big-endian data that fails part-way cannot go into a little-endian file: dropped.
+        let mut big_bad = d.clone();
+        let mut broken = fx.clone();
+        let at = broken.windows(4).position(|w| w == b"doub").unwrap();
+        broken[at..at + 4].copy_from_slice(b"????");
+        big_bad.layer_info.as_mut().unwrap().layers[0].blocks[0].data = broken;
+        let (little, w) = big_bad.to_bytes(ByteOrder::Little).unwrap();
+        assert_eq!(w.iter().filter(|w| w.starts_with("lfx2 block")).count(), 1, "{w:?}");
+        assert_eq!(little, clean.to_bytes(ByteOrder::Little).unwrap().0);
     }
 }

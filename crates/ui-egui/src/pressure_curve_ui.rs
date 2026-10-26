@@ -1,5 +1,6 @@
 //! Preferences › Tools › Pressure Curve: the pen's pressure response, edited as points on a curve
 //! (`tools.pressureCurve`, read by the stylus through `photocraft_engine::prefs::PressureCurve`).
+//! Brush Settings uses the same editor for each dynamic's own curve ([`edit_points`]).
 //! Drag a point to move it, click empty space to add one, right-click a point to remove it.
 
 use egui::{Pos2, Sense, Stroke, Vec2, pos2};
@@ -46,17 +47,25 @@ fn round2(x: f32) -> f64 {
 
 /// The editor. Returns the new value when the curve changed.
 pub(crate) fn editor(ui: &mut egui::Ui, value: &Value) -> Option<Value> {
-    let t = Tokens::get(ui.ctx());
     let mut points = points_of(value);
+    let changed = edit_points(ui, egui::Id::unique(RECT_KEY), &mut points);
+    changed.then(|| value_of(&points))
+}
+
+/// The editor over a list of points (fewer than two reads as linear). `rect_key` is the egui
+/// memory key the editing square's rectangle is stored under, for tests and automation. Returns
+/// whether the points changed; they are rounded to two decimals then.
+pub(crate) fn edit_points(ui: &mut egui::Ui, rect_key: egui::Id, points: &mut Vec<[f32; 2]>) -> bool {
+    let t = Tokens::get(ui.ctx());
     if points.len() < 2 {
-        points = vec![[0.0, 0.0], [1.0, 1.0]];
+        *points = vec![[0.0, 0.0], [1.0, 1.0]];
     }
     let mut changed = false;
     // The square with the presets beside it, so the control fits the preferences page's height.
     ui.horizontal_top(|ui| {
         let (rect, resp) = ui.allocate_exact_size(Vec2::splat(SIZE), Sense::click_and_drag());
         // Where the square is this frame (tests and automation point at curve coordinates).
-        ui.data_mut(|d| d.insert_temp(egui::Id::new(RECT_KEY), rect));
+        ui.data_mut(|d| d.insert_temp(rect_key, rect));
         let to_screen = |p: [f32; 2]| pos2(rect.left() + p[0] * rect.width(), rect.bottom() - p[1] * rect.height());
         let to_curve = |s: Pos2| [((s.x - rect.left()) / rect.width()).clamp(0.0, 1.0), ((rect.bottom() - s.y) / rect.height()).clamp(0.0, 1.0)];
         let painter = ui.painter_at(rect.expand(4.0));
@@ -80,7 +89,7 @@ pub(crate) fn editor(ui: &mut egui::Ui, value: &Value) -> Option<Value> {
         if resp.drag_started()
             && let Some(at) = ui.input(|i| i.pointer.press_origin()).or(resp.interact_pointer_pos())
         {
-            let grabbed = nearest(at, &points);
+            let grabbed = nearest(at, points);
             ui.data_mut(|d| d.insert_temp(drag_id, grabbed));
         }
         let dragging: Option<usize> = ui.data(|d| d.get_temp(drag_id)).flatten();
@@ -95,7 +104,7 @@ pub(crate) fn editor(ui: &mut egui::Ui, value: &Value) -> Option<Value> {
         }
         if resp.clicked()
             && let Some(at) = resp.interact_pointer_pos()
-            && nearest(at, &points).is_none()
+            && nearest(at, points).is_none()
             && points.len() < PressureCurve::MAX_POINTS
         {
             points.push(to_curve(at));
@@ -103,14 +112,14 @@ pub(crate) fn editor(ui: &mut egui::Ui, value: &Value) -> Option<Value> {
         }
         if resp.secondary_clicked()
             && let Some(at) = resp.interact_pointer_pos()
-            && let Some(i) = nearest(at, &points)
+            && let Some(i) = nearest(at, points)
             && points.len() > 2
         {
             points.remove(i);
             changed = true;
         }
 
-        let curve = PressureCurve::new(&points);
+        let curve = PressureCurve::new(points);
         let line: Vec<Pos2> = (0..=64).map(|i| i as f32 / 64.0).map(|x| to_screen([x, curve.eval(x)])).collect();
         painter.add(egui::Shape::line(line, Stroke::new(2.0, t.accent)));
         for (i, p) in points.iter().enumerate() {
@@ -122,13 +131,19 @@ pub(crate) fn editor(ui: &mut egui::Ui, value: &Value) -> Option<Value> {
         ui.vertical(|ui| {
             for (name, preset) in PRESETS {
                 if ui.small_button(tl!(name)).clicked() {
-                    points = preset.to_vec();
+                    *points = preset.to_vec();
                     changed = true;
                 }
             }
         });
     });
-    changed.then(|| value_of(&points))
+    if changed {
+        // Two decimals: the stored value stays readable and a drag doesn't write float noise.
+        for p in points.iter_mut() {
+            *p = [round2(p[0]) as f32, round2(p[1]) as f32];
+        }
+    }
+    changed
 }
 
 #[cfg(test)]
@@ -152,7 +167,7 @@ mod tests {
 
     /// The screen position of curve point `p` (the editor's square starts at the panel's origin).
     fn at(h: &Harness<'static, Value>, p: [f32; 2]) -> Pos2 {
-        let r: egui::Rect = h.ctx.data(|d| d.get_temp(egui::Id::new(RECT_KEY))).expect("the editor ran");
+        let r: egui::Rect = h.ctx.data(|d| d.get_temp(egui::Id::unique(RECT_KEY))).expect("the editor ran");
         pos2(r.left() + p[0] * r.width(), r.bottom() - p[1] * r.height())
     }
 

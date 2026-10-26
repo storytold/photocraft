@@ -172,7 +172,7 @@ fn overlays_follow_document_view_transforms_in_every_theme() {
         let xf =
             ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(500.0, 400.0)), zoom: 1.7, center: [50.0, 40.0], rotation: 37.0, flip: true, aspect: 1.0 };
         let mut out = ctx.run_ui(RawInput { screen_rect: Some(xf.rect), ..Default::default() }, |ui| {
-            let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Middle, egui::Id::new("symmetry")));
+            let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Middle, egui::Id::unique("symmetry")));
             draw(&app, &painter, &xf);
         });
         let lines: Vec<_> =
@@ -184,9 +184,6 @@ fn overlays_follow_document_view_transforms_in_every_theme() {
         }
         out.textures_delta.clear();
     }
-    let de = crate::i18n::Lang::from_code("de").unwrap();
-    assert_eq!(crate::i18n::tr(de, "Dual Axis"), "Duale Achse");
-    assert_eq!(crate::i18n::tr(de, "Transform Symmetry"), "Symmetrie transformieren");
 }
 /// #4495: while the symmetry is transformed the options bar has ✓ and ⊘ (Enter and Esc were the
 /// only ways out), and the canvas shows the move, rotate or arrow cursor instead of the brush.

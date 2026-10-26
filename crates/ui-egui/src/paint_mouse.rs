@@ -30,9 +30,17 @@ pub fn sync_tool_brush(app: &mut PhotocraftApp) {
     let current = app.session.tools.brush.clone();
     save_brush(app, app.ui.brush_tool, current.clone());
     app.session.tools.brush = match app.ui.tool_brushes.iter().find(|(t, _)| *t == tool) {
-        Some((_, b)) => session_fields(&current, b),
-        // A tool seen for the first time takes what the brush has, at Photoshop's smoothing.
-        None => BrushSettings { smoothing: first_smoothing(), ..current },
+        Some((_, b)) => {
+            // A brush remembered from the previous run holds its stored tips as references:
+            // load their full bitmaps (a missing one keeps painting with its preview).
+            let mut b = session_fields(&current, b);
+            let _ = app.session.load_brush_tips(&mut b);
+            b
+        }
+        // A tool seen for the first time takes what the brush has, at Photoshop's smoothing, but
+        // in Normal mode: each tool's Mode starts at Normal, so a Multiply Brush doesn't make the
+        // first Clone Stamp stroke multiply (or give Healing a mode its menu doesn't have).
+        None => BrushSettings { smoothing: first_smoothing(), mode: photocraft_color::BlendMode::Normal, ..current },
     };
     // The picked preset was the outgoing tool's brush: forget it, so Update Brush can't overwrite
     // that preset with this tool's brush.
@@ -86,9 +94,15 @@ pub struct Buttons {
     pub clicked: bool,
 }
 
-/// Tools whose right-click opens the Brush Preset picker (those with the options-bar brush chip).
+/// Tools with the options-bar brush chip, which opens the Brush Preset picker.
 pub fn has_brush_picker(tool: Tool) -> bool {
     tool.is_brushlike() || tool == Tool::QuickSelection
+}
+
+/// Tools whose canvas right-click opens the Brush Preset picker: the painting tools. The Quick
+/// Selection tool has the picker too, but its right-click opens the selection menu (#7268).
+pub fn right_click_picker(tool: Tool) -> bool {
+    has_brush_picker(tool) && !crate::canvas_tool_menu::applies(tool)
 }
 
 /// Does a right-button drag with `tool` erase (rather than open the picker)?
@@ -100,26 +114,37 @@ pub fn right_erases(app: &PhotocraftApp, tool: Tool) -> bool {
 /// brush with Alt held (#297), erases (Erase preference) or opens the Brush Preset picker. Arms
 /// `secondary_erase` or `brush_resize_armed` for this frame's `Down`.
 pub fn canvas_buttons(app: &mut PhotocraftApp, response: &Response, tool: Tool) -> Buttons {
-    let (mods, right_down) = response.ctx.input(|i| (i.modifiers, i.pointer.secondary_down()));
+    let physical_right = app.services.right_button_down.as_ref().is_some_and(|f| f());
+    let (mods, mut right_down) = response.ctx.input(|i| (i.modifiers, i.pointer.secondary_down()));
+    right_down |= physical_right;
+    let right_started = response.drag_started_by(PointerButton::Secondary) || (physical_right && response.drag_started());
+    let right_dragged = response.dragged_by(PointerButton::Secondary) || (physical_right && response.dragged());
+    let resizing = app.brush_resize.is_some_and(|r| r.secondary);
+    let right_stopped = response.drag_stopped_by(PointerButton::Secondary) || (resizing && response.drag_stopped());
+
+    if physical_right && crate::brush_resize::is_right_gesture(crate::workspace_ui::sticky_mods(app, mods)) {
+        app.alt_sampling = false;
+    }
+
     // Alt+right-drag resizes the brush (brush_resize.rs); its events reach `tool_event` like a
     // left drag's, and nothing paints. A resize whose release was missed ends here.
-    crate::brush_resize::release_stale(app, right_down || response.drag_stopped_by(PointerButton::Secondary));
+    crate::brush_resize::release_stale(app, right_down || response.drag_stopped_by(PointerButton::Secondary) || response.drag_stopped());
     let resize_start = crate::brush_resize::applies(tool)
         && app.drag.is_none()
         && crate::brush_resize::is_right_gesture(crate::workspace_ui::sticky_mods(app, mods))
-        && response.drag_started_by(PointerButton::Secondary);
+        && (right_started || (physical_right && response.dragged() && app.brush_resize.is_none()));
     let resizing = app.brush_resize.is_some_and(|r| r.secondary);
-    app.brush_resize_armed = resize_start;
+    app.brush_resize_armed = resize_start || (physical_right && resizing);
     // ⌘/Ctrl+right-click lists the layers under the pointer instead (layer_pick_ui.rs, #307).
     let layer_menu = crate::layer_pick_ui::is_gesture(tool, mods);
     let erase = right_erases(app, tool) && !resize_start && !resizing && !layer_menu;
     let right_stroke = erase && app.drag.is_some();
-    let right_start = erase && response.drag_started_by(PointerButton::Secondary);
+    let right_start = erase && right_started;
     let right_click = response.secondary_clicked();
     if right_click
         && !erase
         && !layer_menu
-        && has_brush_picker(tool)
+        && right_click_picker(tool)
         && let Some(p) = response.interact_pointer_pos()
     {
         crate::brush_picker::open(&mut app.ui, &response.ctx, [p.x, p.y]);
@@ -129,8 +154,8 @@ pub fn canvas_buttons(app: &mut PhotocraftApp, response: &Response, tool: Tool) 
     let right_drag = right_stroke || resizing;
     Buttons {
         started: response.drag_started_by(PointerButton::Primary) || right_start || resize_start,
-        dragged: response.dragged_by(PointerButton::Primary) || (right_drag && response.dragged_by(PointerButton::Secondary)),
-        stopped: response.drag_stopped_by(PointerButton::Primary) || (right_drag && response.drag_stopped_by(PointerButton::Secondary)),
+        dragged: response.dragged_by(PointerButton::Primary) || (right_drag && right_dragged),
+        stopped: response.drag_stopped_by(PointerButton::Primary) || (right_drag && right_stopped),
         clicked: response.clicked() || erase_click,
     }
 }
@@ -149,7 +174,7 @@ pub fn pointer_secondary(app: &mut PhotocraftApp, ctx: &egui::Context, down: boo
         app.secondary_erase = down;
         return true;
     }
-    if down && has_brush_picker(tool) {
+    if down && right_click_picker(tool) {
         crate::brush_picker::open(&mut app.ui, ctx, at);
     }
     false
@@ -335,7 +360,7 @@ mod tests {
         assert!(strokes(&h).is_empty());
         // The picker shows over the canvas at the pointer, moved up just enough to stay on screen.
         h.run_steps(2);
-        let shown = h.ctx.memory(|m| m.area_rect(egui::Id::new("canvas-brush-picker"))).expect("picker shown");
+        let shown = h.ctx.memory(|m| m.area_rect(egui::Id::unique("canvas-brush-picker"))).expect("picker shown");
         let screen = h.ctx.content_rect();
         assert!((shown.min.x - c.x).abs() < 1.0 && shown.min.y <= c.y + 1.0, "{shown:?}");
         assert!(screen.contains_rect(shown.shrink(0.5)) && shown.width() > 250.0 && shown.height() > 150.0, "{shown:?}");
@@ -426,11 +451,11 @@ mod tests {
         let c = h.state().last_canvas_rect.center();
         h.state_mut().ui.brush_picker = Some([c.x, c.y]);
         h.run_steps(2);
-        assert!(h.query_by_label("Hardness").is_some());
+        assert!(h.query_all_by_label("Hardness").next().is_some());
         let sampled = h.state().session.tools.presets.iter().find(|p| p.brush.tip != photocraft_engine::paint::TipShape::Round).map(|p| p.name.clone());
         h.state_mut().run("tools.setBrush", json!({ "preset": sampled.expect("a sampled preset") })).unwrap();
         h.run_steps(2);
-        assert!(h.query_by_label("Hardness").is_none());
+        assert!(h.query_all_by_label("Hardness").next().is_none());
         assert!(h.state().ui.brush_picker.is_some());
     }
 
@@ -600,6 +625,7 @@ mod tests {
         // Mode, opacity, flow and the dynamics sections are per tool too.
         app.ui.tool = Tool::CloneStamp;
         sync_tool_brush(&mut app);
+        assert_eq!(mode(&brush(&app)), photocraft_color::BlendMode::Normal, "a new tool starts in Normal, not the Brush's Multiply");
         app.run("tools.setBrush", json!({"brush": {"mode": "Screen", "opacity": 0.3}})).unwrap();
         app.ui.tool = Tool::Brush;
         sync_tool_brush(&mut app);

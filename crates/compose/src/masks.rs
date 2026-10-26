@@ -171,146 +171,13 @@ fn key(layer: &Layer, canvas: Rect) -> u64 {
     h.finish()
 }
 
-/// Gaussian sigma of a mask feather of `px` pixels (Properties › Feather). Fitted on the
-/// psd-tools corpus (layer_mask_data.psd, mask-parameters-no-real-channel.psd: sigma = feather
-/// beats 0.33, 0.5, 0.7, 1.3 and 1.6 times it).
-pub fn feather_sigma(px: f32) -> f32 {
-    if px.is_finite() { (px * FEATHER_SIGMA).clamp(0.0, MAX_FEATHER_SIGMA) } else { 0.0 }
-}
-
-const FEATHER_SIGMA: f32 = 1.0;
-/// Photoshop's feather tops out at 1000 px.
-const MAX_FEATHER_SIGMA: f32 = 1000.0 * FEATHER_SIGMA;
+pub use photocraft_vector::feather::feather_sigma;
+use photocraft_vector::feather::gaussian;
 
 /// Whether `layer` has an enabled mask with a feather (rendered through [`combined_mask`]).
 pub fn has_feather(layer: &Layer) -> bool {
     layer.mask.as_ref().is_some_and(|m| m.enabled && feather_sigma(m.feather) > 0.0)
         || layer.vector_mask.as_ref().is_some_and(|v| v.enabled && feather_sigma(v.feather) > 0.0)
-}
-
-/// Apply one of the three box passes to a single line. `scratch` preserves the input while
-/// the sliding sum writes the output, matching the previous sequential implementation exactly.
-fn blur_line(line: &mut [f32], scratch: &mut [f32], r: usize) {
-    if line.is_empty() {
-        return;
-    }
-    let Ok(radius) = isize::try_from(r) else { return };
-    scratch.copy_from_slice(line);
-    let get = |i: isize| scratch[i.clamp(0, scratch.len() as isize - 1) as usize];
-    let mut acc: f32 = (-radius..=radius).map(get).sum();
-    let n = (2 * r + 1) as f32;
-    for (i, dst) in line.iter_mut().enumerate() {
-        *dst = acc / n;
-        let i = i as isize;
-        acc += get(i + radius + 1) - get(i - radius);
-    }
-}
-
-/// Apply three clamped box passes to independent contiguous rows. Scoped OS threads are used
-/// instead of Rayon because mask construction can happen inside a Rayon tile job; nested Rayon
-/// work here can deadlock when every worker waits on the same OnceLock (#276).
-fn blur_rows_chunk(v: &mut [f32], w: usize, r: usize) {
-    let mut scratch = vec![0.0; w];
-    for row in v.chunks_mut(w) {
-        for _ in 0..3 {
-            blur_line(row, &mut scratch, r);
-        }
-    }
-}
-
-fn blur_rows(v: &mut [f32], w: usize, r: usize) {
-    if w == 0 || v.is_empty() {
-        return;
-    }
-    let h = v.len() / w;
-    let threads = if cfg!(target_arch = "wasm32") || v.len() < 1 << 16 {
-        1
-    } else {
-        std::thread::available_parallelism().map_or(1, |n| n.get()).clamp(1, 16).min(h.max(1))
-    };
-    if threads == 1 {
-        blur_rows_chunk(v, w, r);
-        return;
-    }
-    let rows_per_worker = h.div_ceil(threads);
-    let chunk_len = rows_per_worker.saturating_mul(w);
-    std::thread::scope(|scope| {
-        for chunk in v.chunks_mut(chunk_len) {
-            scope.spawn(move || blur_rows_chunk(chunk, w, r));
-        }
-    });
-}
-
-/// Cache-friendly blocked transpose. It makes the vertical blur contiguous without a Rayon job
-/// or unsafe disjoint-column access; the temporary is released before the next mask is built.
-fn transpose_into(v: &[f32], out: &mut [f32], w: usize, h: usize) {
-    const BLOCK: usize = 32;
-    for by in (0..h).step_by(BLOCK) {
-        for bx in (0..w).step_by(BLOCK) {
-            for y in by..(by + BLOCK).min(h) {
-                for x in bx..(bx + BLOCK).min(w) {
-                    out[x * h + y] = v[y * w + x];
-                }
-            }
-        }
-    }
-}
-
-/// Approximate Gaussian blur of a `w`×`h` plane: three box passes per axis (edges clamp, which
-/// is exact here since the planes extend into constant mask regions). The axes are processed in
-/// parallel on bounded OS threads, preserving each line's floating-point operation order.
-fn gaussian(v: &mut [f32], w: usize, h: usize, sigma: f32) {
-    if sigma <= 0.0 || w == 0 || h == 0 || v.len() != w.saturating_mul(h) {
-        return;
-    }
-    // Box widths whose three-pass variance matches sigma² (Wells 1986 / Kovesi).
-    let ideal = (12.0 * sigma * sigma / 3.0 + 1.0).sqrt();
-    let r = (((ideal.floor() as usize) | 1).max(1) - 1) / 2;
-    if r == 0 {
-        return;
-    }
-    // Reserve before modifying the input so allocation failure can use the sequential fallback
-    // without leaving a half-blurred mask.
-    let mut transposed = Vec::new();
-    if transposed.try_reserve_exact(v.len()).is_err() {
-        gaussian_sequential(v, w, h, r);
-        return;
-    }
-    transposed.resize(v.len(), 0.0);
-    blur_rows(v, w, r);
-    transpose_into(v, &mut transposed, w, h);
-    blur_rows(&mut transposed, h, r);
-    transpose_into(&transposed, v, h, w);
-}
-
-/// Allocation-light reference path used if parallel transpose storage cannot be reserved.
-fn gaussian_sequential(v: &mut [f32], w: usize, h: usize, r: usize) {
-    let mut line = Vec::new();
-    let mut scratch = Vec::new();
-    let len = w.max(h);
-    if line.try_reserve_exact(len).is_err() || scratch.try_reserve_exact(len).is_err() {
-        return;
-    }
-    line.resize(len, 0.0);
-    scratch.resize(len, 0.0);
-    for axis in [false, true] {
-        let (lines, line_len) = if axis { (w, h) } else { (h, w) };
-        for k in 0..lines {
-            for i in 0..line_len {
-                line[i] = if axis { v[i * w + k] } else { v[k * w + i] };
-            }
-            for _ in 0..3 {
-                blur_line(&mut line[..line_len], &mut scratch[..line_len], r);
-            }
-            for i in 0..line_len {
-                if axis {
-                    v[i * w + k] = line[i];
-                } else {
-                    v[k * w + i] = line[i];
-                }
-            }
-        }
-    }
 }
 
 /// The layer's mask values (pixel mask with density × vector mask, each blurred by its feather,
@@ -336,29 +203,14 @@ fn build_mask(layer: &Layer, canvas: Rect) -> Surface {
         let d = m.surface.default_pixel().first().copied().unwrap_or(1.0);
         1.0 - m.density * (1.0 - d)
     });
-    let grow = |r: Rect, sigma: f32| {
-        let m = (sigma * 3.0).ceil() as i32 + 2;
-        if r.is_empty() { r } else { Rect::new(r.x0.saturating_sub(m), r.y0.saturating_sub(m), r.x1.saturating_add(m), r.y1.saturating_add(m)) }
-    };
     // Where the product can differ from `p_def × v_out`: the path's bounds, plus the pixel
     // mask's painted tiles when the vector mask lets them through outside the path, each grown
     // by its feather.
-    let mut area = match vm.and_then(|vm| vm.path.control_bounds()) {
-        Some((x0, y0, x1, y1)) => grow(
-            Rect::new(
-                (x0.floor() as i32).saturating_sub(2),
-                (y0.floor() as i32).saturating_sub(2),
-                (x1.ceil() as i32).saturating_add(2),
-                (y1.ceil() as i32).saturating_add(2),
-            ),
-            sv,
-        ),
-        None => Rect::EMPTY,
-    };
+    let mut area = vm.map_or(Rect::EMPTY, |vm| photocraft_vector::feather::path_area(&vm.path, sv));
     if let Some(m) = pixel
         && v_out > 0.0
     {
-        let b = grow(m.surface.content_bounds(), sp);
+        let b = photocraft_vector::feather::grow(m.surface.content_bounds(), sp);
         area = if area.is_empty() {
             b
         } else if b.is_empty() {
@@ -369,7 +221,14 @@ fn build_mask(layer: &Layer, canvas: Rect) -> Surface {
     }
     let area = area.intersect(&canvas);
     let mut s = Surface::with_default(FORMAT, &[p_def * v_out]);
-    if !area.is_empty() {
+    // Bound the transient dense working set: `area` is derived from sparse mask geometry grown
+    // by feather, so two distant changed pixels could span a canvas-sized rectangle. Building
+    // f32 planes over it (coverage, pixel-mask values, blur scratch) could be gigabytes during
+    // a one-pixel render. Above the budget, fall back to the constant default mask rather than
+    // allocating; feather detail is lost only for pathological geometry.
+    const MAX_MASK_WORKING_BYTES: u64 = 512 << 20;
+    let working = (area.width() as u64).saturating_mul(area.height() as u64).saturating_mul(std::mem::size_of::<f32>() as u64).saturating_mul(3);
+    if !area.is_empty() && working <= MAX_MASK_WORKING_BYTES {
         let (w, h) = (area.width() as usize, area.height() as usize);
         // A slot initializer must not enter Rayon: another tile requesting the
         // same mask could be stolen onto its stack and wait for its own build.
@@ -691,39 +550,6 @@ mod tests {
             let warm = combined_mask(&layer, canvas).unwrap();
             assert!(repainted.tiles().zip(warm.tiles()).all(|((_, a), (_, b))| Arc::ptr_eq(a, b)));
         }
-    }
-
-    #[test]
-    fn parallel_gaussian_matches_the_sequential_reference() {
-        let (w, h, sigma): (usize, usize, f32) = (320, 256, 13.0);
-        let mut parallel: Vec<_> = (0..w * h).map(|i| ((i * 37 % 1009) as f32) / 1008.0).collect();
-        let mut sequential = parallel.clone();
-        let ideal = (12.0 * sigma * sigma / 3.0 + 1.0).sqrt();
-        let r = (((ideal.floor() as usize) | 1).max(1) - 1) / 2;
-        gaussian_sequential(&mut sequential, w, h, r);
-        gaussian(&mut parallel, w, h, sigma);
-        assert_eq!(parallel, sequential, "parallel blur must retain the exact per-line arithmetic");
-    }
-
-    #[test]
-    #[ignore = "manual 50 MP sequential-vs-parallel mask blur measurement"]
-    fn benchmark_50mp_mask_blur() {
-        use std::time::Instant;
-
-        let (w, h, sigma): (usize, usize, f32) = (6336, 7920, 1000.0);
-        let ideal = (12.0 * sigma * sigma / 3.0 + 1.0).sqrt();
-        let r = (((ideal.floor() as usize) | 1).max(1) - 1) / 2;
-        let source: Vec<_> = (0..w * h).map(|i| ((i * 37 % 1009) as f32) / 1008.0).collect();
-        let mut sequential = source.clone();
-        let start = Instant::now();
-        gaussian_sequential(&mut sequential, w, h, r);
-        let sequential_time = start.elapsed();
-        let mut parallel = source;
-        let start = Instant::now();
-        gaussian(&mut parallel, w, h, sigma);
-        let parallel_time = start.elapsed();
-        assert_eq!(parallel, sequential);
-        eprintln!("50 MP mask blur: sequential={sequential_time:?}, parallel={parallel_time:?}");
     }
 
     #[test]

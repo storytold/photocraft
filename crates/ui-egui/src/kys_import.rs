@@ -32,12 +32,19 @@ pub fn plan(app: &PhotocraftApp, set: &KysSet) -> Plan {
     photocraft_engine::kys::plan(menu.chain(specs), set)
 }
 
+/// The set's tool keys matched to our tools by name (Photoshop's names are ours): tool
+/// shortcut id (`tools.select.move`) → letter, and the tools PhotoCraft doesn't have.
+pub fn plan_tools(set: &KysSet) -> (BTreeMap<String, String>, Vec<String>) {
+    photocraft_engine::kys::plan_tools(photocraft_engine::shell_commands::TOOLS.iter().map(|t| (t.0, t.1)), set)
+}
+
 /// Put the plan into the open Keyboard Shortcuts dialog (opening one when none is), as
 /// overrides the OK button applies: a key equal to the command's default clears its override.
 /// Returns the dialog id and the plan as JSON.
 pub fn import_text(app: &mut PhotocraftApp, file_name: &str, text: &str) -> Result<Value, String> {
     let set = parse(text).map_err(|e| format!("{file_name}: {e}"))?;
     let plan = plan(app, &set);
+    let (tool_keys, unknown_tools) = plan_tools(&set);
     let id = match app.ui.dialogs.iter().find(|d| d.fields.get("__prefsui").and_then(Value::as_str) == Some("shortcuts")) {
         Some(d) => d.id,
         None => crate::prefs_ui::open_shortcuts(app, 0),
@@ -52,16 +59,38 @@ pub fn import_text(app: &mut PhotocraftApp, file_name: &str, text: &str) -> Resu
             overrides.insert(cmd.clone(), sc.clone());
         }
     }
+    // Tool keys (#5036): a letter other than the tool's own becomes its override; its own
+    // letter clears one, so the tool keeps cycling with the others that share it.
+    for tool in crate::state::Tool::ALL {
+        let id = crate::tool_shortcuts::id(tool);
+        let Some(key) = tool_keys.get(&id) else { continue };
+        if crate::tool_shortcuts::default(tool).is_some_and(|d| d.eq_ignore_ascii_case(key)) {
+            overrides.remove(&id);
+        } else {
+            overrides.insert(id, key.clone());
+        }
+    }
+    // A row's other keys are the command's further keys (#3665): Copy's F3 beside ⌘C.
+    let mut alternates: BTreeMap<String, Vec<String>> = f.get("alternates").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
+    for (cmd, keys) in &plan.alternate_keys {
+        let main = plan.set.get(cmd).map(String::as_str);
+        if photocraft_engine::prefs::Preferences::default().alternates(cmd, main) == *keys {
+            alternates.remove(cmd);
+        } else {
+            alternates.insert(cmd.clone(), keys.clone());
+        }
+    }
     let shown = std::path::Path::new(file_name).file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| file_name.to_string());
-    let n = plan.set.len().to_string();
+    let n = (plan.set.len() + tool_keys.len()).to_string();
     let mut message = crate::i18n::fmt(tl!("Imported {n} shortcuts from {file}. Click OK to keep them."), &[("n", &n), ("file", &shown)]);
-    if !plan.unknown.is_empty() {
-        let u = plan.unknown.len().to_string();
+    if !plan.unknown.is_empty() || !unknown_tools.is_empty() {
+        let u = (plan.unknown.len() + unknown_tools.len()).to_string();
         message.push(' ');
         message.push_str(&crate::i18n::fmt(tl!("{n} commands are not in PhotoCraft."), &[("n", &u)]));
     }
     f.insert("tab".into(), json!(0));
     f.insert("overrides".into(), json!(overrides));
+    f.insert("alternates".into(), json!(alternates));
     f.insert("selected".into(), json!(""));
     f.insert("capture".into(), json!(false));
     f.insert("message".into(), json!(message));
@@ -74,7 +103,11 @@ pub fn import_text(app: &mut PhotocraftApp, file_name: &str, text: &str) -> Resu
         "unknown": plan.unknown,
         "unreadable": plan.unreadable,
         "alternates": plan.alternates,
+        "alternateKeys": plan.alternate_keys,
         "toolKeys": set.tool_keys,
+        "tools": tool_keys,
+        "unknownTools": unknown_tools,
+        "windows": set.windows,
     }))
 }
 
@@ -189,7 +222,7 @@ pub fn show_offer(app: &mut PhotocraftApp, ctx: &egui::Context) {
     );
     let mut answer = None;
     egui::Window::new(tl!("Import keyboard shortcuts?"))
-        .id(egui::Id::new("kys-offer"))
+        .id(egui::Id::unique("kys-offer"))
         .collapsible(false)
         .resizable(false)
         .default_width(440.0)

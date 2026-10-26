@@ -8,6 +8,87 @@ use egui_kittest::kittest::{NodeT, Queryable};
 use super::*;
 
 #[test]
+fn dragging_a_brush_shows_its_tip_preview() {
+    for theme in crate::theme::ThemeKind::ALL {
+        for mode in 0..3 {
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+            app.run("prefs.set", json!({"path": "interface.theme", "value": theme.id()})).unwrap();
+            app.ui.panels.brush_settings = mode != 2;
+            app.ui.brush_tab = 1;
+            app.ui.brushes_panel.view = if mode == 1 { BrushesView::Grid } else { BrushesView::List };
+            if mode == 2 {
+                app.ui.brush_picker = Some([300.0, 120.0]);
+            }
+            let name = app.session.tools.presets[0].name.clone();
+            let brush = app.session.tools.brush.clone();
+            let presets = app.session.tools.presets.clone();
+            let mut h = Harness::builder().with_size(vec2(1200.0, 900.0)).build_eframe(move |cc| {
+                PhotocraftApp::setup_context(&cc.egui_ctx, theme);
+                app
+            });
+            h.run_steps(4);
+            let start = h.get_by_role_and_label(Role::Button, &name).rect().center();
+            h.hover_at(start);
+            h.run_steps(1);
+            h.event(egui::Event::PointerButton { pos: start, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+            h.run_steps(1);
+            let end = start + vec2(50.0, 10.0);
+            h.event(egui::Event::PointerMoved(end));
+            h.run_steps(4);
+            assert!(matches!(egui::DragAndDrop::payload::<BrushDrag>(&h.ctx).as_deref(), Some(BrushDrag::Preset(n)) if n == &name));
+            assert!(h.query_by_role_and_label(Role::Image, &name).is_some(), "dragged brush needs a real tip thumbnail, not only its name");
+            let renders = brush_preview::render_count(&h.ctx);
+            h.run_steps(2);
+            assert_eq!(brush_preview::render_count(&h.ctx), renders, "unchanged drag preview stays cached");
+            h.event(egui::Event::PointerMoved(start));
+            h.run_steps(1);
+            h.event(egui::Event::PointerButton { pos: start, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+            h.run_steps(4);
+            assert!(h.query_by_role_and_label(Role::Image, &name).is_none(), "preview disappears on release");
+            assert_eq!(h.state().session.tools.brush, brush, "preview does not change brush settings");
+            assert_eq!(h.state().session.tools.presets, presets, "dropping on the source preserves the library");
+        }
+    }
+}
+
+/// #5741: a brush dragged to the list's bottom edge (or below it) scrolls the list, so it can be
+/// dropped on rows out of view; the list used to stay put, and the drag stopped at the last
+/// visible row.
+#[test]
+fn dragging_a_brush_to_the_list_edge_scrolls_the_list() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.ui.panels.brush_settings = true;
+    app.ui.brush_tab = 1;
+    app.ui.brushes_panel.view = BrushesView::List;
+    app.ui.brushes_panel.collapsed.clear();
+    let name = app.session.tools.presets[0].name.clone();
+    let (w, h_px) = (1200.0, 520.0);
+    let mut h = Harness::builder().with_size(vec2(w, h_px)).build_eframe(move |cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, crate::theme::ThemeKind::ALL[0]);
+        app
+    });
+    h.run_steps(4);
+    let start = h.get_by_role_and_label(Role::Button, &name).rect();
+    h.hover_at(start.center());
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: start.center(), button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+    h.run_steps(1);
+    h.event(egui::Event::PointerMoved(start.center() + vec2(0.0, 12.0)));
+    h.run_steps(2);
+    assert!(egui::DragAndDrop::has_payload_of_type::<BrushDrag>(&h.ctx), "the brush is being dragged");
+    // Held at the bottom of the window, below the list's last visible row.
+    let bottom = egui::pos2(start.center().x, h_px - 2.0);
+    for _ in 0..12 {
+        h.event(egui::Event::PointerMoved(bottom));
+        h.run_steps(1);
+    }
+    let moved = h.query_by_role_and_label(Role::Button, &name).map(|n| n.rect());
+    assert!(moved.is_none_or(|r| r.top() < start.top() - 1.0), "the list scrolled down: {start:?} → {moved:?}");
+    h.event(egui::Event::PointerButton { pos: bottom, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+    h.run_steps(2);
+}
+
+#[test]
 fn grid_columns_centre_whole_columns_past_the_indent() {
     // 6 × 44 + 5 × 3 = 279 of the 290 past a 4 pt indent: 5 spare on each side (rounded down).
     assert_eq!(grid_columns(294.0, 44.0, 4.0, GRID_GAP), (9.0, 6));
@@ -181,7 +262,7 @@ fn brush_picker_menu_closes_when_a_slider_or_the_grip_is_grabbed() {
     h.state_mut().ui.tool = crate::state::Tool::Brush;
     h.state_mut().ui.brush_picker = Some([300.0, 120.0]);
     h.run_steps(8);
-    let picker = h.ctx.memory(|m| m.area_rect(egui::Id::new("canvas-brush-picker"))).expect("the picker is shown");
+    let picker = h.ctx.memory(|m| m.area_rect(egui::Id::unique("canvas-brush-picker"))).expect("the picker is shown");
     assert!(!egui::Popup::is_any_open(&h.ctx), "nothing open to start with");
     click_gear(&h);
     h.run_steps(2);
@@ -231,7 +312,7 @@ fn brush_picker_upper_controls_stop_at_their_max_width() {
     h.state_mut().ui.brush_picker = Some([300.0, 120.0]);
     h.state_mut().ui.brush_picker_size = Some([500.0, 420.0]);
     h.run_steps(8);
-    let picker = h.ctx.memory(|m| m.area_rect(egui::Id::new("canvas-brush-picker"))).expect("the picker is shown");
+    let picker = h.ctx.memory(|m| m.area_rect(egui::Id::unique("canvas-brush-picker"))).expect("the picker is shown");
     let size_label = h.query_all_by_label(crate::i18n::t("Size")).find(|n| picker.contains(n.rect().center())).expect("the picker's Size label").rect();
     // The Size slider's middle: 12 pt below the label's (the row stands as tall as its 24 pt value
     // field, the label centred in it), the style's spacing, then half the slider's 18 pt — 27 pt
@@ -317,4 +398,40 @@ fn card_tips_never_cover_their_size_number() {
         let r = card_tip_rect(cell, Some(n), size, scale);
         assert!(r.min.is_finite() && r.max.is_finite(), "{n} {size} {scale}: {r:?}");
     }
+}
+
+/// #7256: the Brushes tab's preview slider scales the grid cells and list rows; it is not the
+/// Size of the current brush.
+#[test]
+fn the_preview_slider_scales_the_previews_not_the_brush_size() {
+    for grid in [true, false] {
+        let mut sizes = Vec::new();
+        for scale in [0.5f32, 1.0, 2.0] {
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+            app.ui.panels.brush_settings = true;
+            app.ui.brush_tab = 1;
+            app.ui.brushes_panel.view = if grid { BrushesView::Grid } else { BrushesView::List };
+            app.ui.brushes_panel.scale = scale;
+            let size = app.session.tools.brush.size;
+            let name = app.session.tools.presets[0].name.clone();
+            let mut h = Harness::builder().with_size(vec2(1200.0, 900.0)).build_eframe(move |cc| {
+                PhotocraftApp::setup_context(&cc.egui_ctx, crate::theme::ThemeKind::ALL[0]);
+                app
+            });
+            h.run_steps(4);
+            let r = h.get_by_role_and_label(Role::Button, &name).rect();
+            sizes.push(if grid { r.width() } else { r.height() });
+            assert_eq!(h.state().session.tools.brush.size, size, "the preview slider leaves the brush size alone");
+        }
+        assert!(sizes[0] < sizes[1] && sizes[1] < sizes[2], "grid {grid}: previews grow with the slider: {sizes:?}");
+    }
+}
+
+#[test]
+fn preview_scale_is_clamped_to_its_range() {
+    assert_eq!(list_row_height(1.0), 44.0);
+    assert_eq!(list_row_height(100.0), 88.0);
+    assert_eq!(list_row_height(f32::NAN), 44.0);
+    assert_eq!(grid_cell_width(52.0, 0.0), 26.0);
+    assert_eq!(grid_cell_width(52.0, f32::INFINITY), 52.0);
 }
