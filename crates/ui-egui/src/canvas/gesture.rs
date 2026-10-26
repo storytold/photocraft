@@ -86,8 +86,10 @@ pub(crate) fn finish_gesture(app: &mut PhotocraftApp, d: Drag) {
                 crate::vector_ui::freeform_finish_owned(app, &d.points, d.lasso.as_ref().map_or(&[], |l| l.straight()), owner);
             }
         }
-        // Photoshop: a click without dragging opens Create Rectangle / Ellipse / … instead.
+        // Photoshop: a click without dragging opens Create Rectangle / Ellipse / … instead. Not in
+        // Path mode: the dialog makes a shape layer, and Path mode never draws one.
         t if crate::vector_ui::is_shape_tool(t)
+            && !crate::vector_ui::draws_path(&app.ui.tool_options)
             && crate::shape_dialog::is_click(d.start, &d.points, app.point_zoom())
             && crate::shape_dialog::open(app, t, d.start).is_some() => {}
         t if crate::vector_ui::is_shape_tool(t) => crate::vector_ui::finish_shape(app, t, d.start, [end[0], end[1]], d.live),
