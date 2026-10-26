@@ -28,28 +28,57 @@ pub(crate) fn reach() -> f32 {
     (2 * MAX_LUMA_R + 2 * MAX_CHROMA_R + 6) as f32
 }
 
-/// Guided filter of `p` with guide `g` (both `w × h`), box radius `r`.
-fn guided(g: &[f32], p: &[f32], w: usize, h: usize, r: usize, eps: f32) -> Vec<f32> {
-    let len = w * h;
-    // Interleave the four box-filtered moments to run one pass.
-    let mut m = vec![0.0f32; len * 4];
-    for i in 0..len {
-        m[i * 4] = g[i];
-        m[i * 4 + 1] = p[i];
-        m[i * 4 + 2] = g[i] * g[i];
-        m[i * 4 + 3] = g[i] * p[i];
+/// Shared first and second moments of a guide (two filtered channels).
+fn guide_moments(g: &[f32], w: usize, h: usize, r: usize) -> Vec<f32> {
+    let mut moments = Vec::with_capacity(g.len() * 2);
+    for &v in g {
+        moments.extend_from_slice(&[v, v * v]);
     }
-    box_blur_n(&mut m, w, h, 4, r);
-    let mut ab = vec![0.0f32; len * 2];
-    for i in 0..len {
-        let (mg, mp, mgg, mgp) = (m[i * 4], m[i * 4 + 1], m[i * 4 + 2], m[i * 4 + 3]);
-        let var = (mgg - mg * mg).max(0.0);
-        let a = (mgp - mg * mp) / (var + eps);
-        ab[i * 2] = a;
-        ab[i * 2 + 1] = mp - a * mg;
+    box_blur_n(&mut moments, w, h, 2, r);
+    moments
+}
+
+/// Self-guided luminance: mean(p) = mean(g), mean(g*p) = mean(g*g).
+fn guided_luma(g: &[f32], w: usize, h: usize, r: usize, eps: f32) -> Vec<f32> {
+    let mut ab = guide_moments(g, w, h, r);
+    for pair in ab.chunks_exact_mut(2) {
+        let mean = pair[0];
+        let covariance = pair[1] - mean * mean;
+        // Keep the original unclamped numerator, including roundoff below zero.
+        let a = covariance / (covariance.max(0.0) + eps);
+        pair[0] = a;
+        pair[1] = mean - a * mean;
     }
     box_blur_n(&mut ab, w, h, 2, r);
-    (0..len).map(|i| ab[i * 2] * g[i] + ab[i * 2 + 1]).collect()
+    g.iter().zip(ab.chunks_exact(2)).map(|(&v, pair)| pair[0] * v + pair[1]).collect()
+}
+
+/// Chroma planes share the cleaned guide's mean and regularised variance.
+/// Two guide channels plus two moments and two coefficients per chroma plane:
+/// ten filtered channels, versus twelve for two independent guided filters.
+fn guided_chroma(g: &[f32], planes: [&mut [f32]; 2], w: usize, h: usize, r: usize, eps: f32, amount: f32) {
+    let mut stats = guide_moments(g, w, h, r);
+    for pair in stats.chunks_exact_mut(2) {
+        pair[1] = (pair[1] - pair[0] * pair[0]).max(0.0) + eps;
+    }
+    for plane in planes {
+        let mut ab = Vec::with_capacity(g.len() * 2);
+        for (&guide, &p) in g.iter().zip(plane.iter()) {
+            ab.extend_from_slice(&[p, guide * p]);
+        }
+        box_blur_n(&mut ab, w, h, 2, r);
+        for (pair, guide) in ab.chunks_exact_mut(2).zip(stats.chunks_exact(2)) {
+            let mean = pair[0];
+            let a = (pair[1] - guide[0] * mean) / guide[1];
+            pair[0] = a;
+            pair[1] = mean - a * guide[0];
+        }
+        box_blur_n(&mut ab, w, h, 2, r);
+        for ((v, &guide), pair) in plane.iter_mut().zip(g).zip(ab.chunks_exact(2)) {
+            let filtered = pair[0] * guide + pair[1];
+            *v += (filtered - *v) * amount;
+        }
+    }
 }
 
 pub(crate) fn reduce_noise(src: &Image, out: Rect, ctx: &Ctx, spec: &DenoiseSpec) -> Vec<f32> {
@@ -125,7 +154,7 @@ pub(crate) fn reduce_noise(src: &Image, out: Rect, ctx: &Ctx, spec: &DenoiseSpec
         let r = (1.0 + spec.strength.clamp(0.0, 10.0) * 0.4).round() as usize;
         let keep = spec.preserve.clamp(0.0, 100.0) / 100.0;
         let eps = (0.004 + 0.05 * s).powi(2) * (1.05 - keep);
-        let d = guided(&yv, &yv, ww, wh, r.min(MAX_LUMA_R), eps);
+        let d = guided_luma(&yv, ww, wh, r.min(MAX_LUMA_R), eps);
         let k = s.sqrt();
         for (v, dv) in yv.iter_mut().zip(d) {
             *v += (dv - *v) * k;
@@ -135,12 +164,7 @@ pub(crate) fn reduce_noise(src: &Image, out: Rect, ctx: &Ctx, spec: &DenoiseSpec
     if col > 0.0 && model != Model::Gray {
         let r = (1.0 + col * 8.0).round() as usize;
         let eps = (0.01 + 0.05 * col).powi(2);
-        for plane in [&mut c1, &mut c2] {
-            let d = guided(&yv, plane, ww, wh, r.min(MAX_CHROMA_R), eps);
-            for (v, dv) in plane.iter_mut().zip(d) {
-                *v += (dv - *v) * col;
-            }
-        }
+        guided_chroma(&yv, [&mut c1, &mut c2], ww, wh, r.min(MAX_CHROMA_R), eps, col);
     }
     // Sharpen Details: unsharp mask on luma.
     if sh > 0.0 {
@@ -177,4 +201,69 @@ pub(crate) fn reduce_noise(src: &Image, out: Rect, ctx: &Ctx, spec: &DenoiseSpec
         }
     }
     res
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Guided filter of `p` with guide `g` (both `w × h`), box radius `r`.
+    fn reference_guided(g: &[f32], p: &[f32], w: usize, h: usize, r: usize, eps: f32) -> Vec<f32> {
+        let len = w * h;
+        // Interleave the four box-filtered moments to run one pass.
+        let mut m = vec![0.0f32; len * 4];
+        for i in 0..len {
+            m[i * 4] = g[i];
+            m[i * 4 + 1] = p[i];
+            m[i * 4 + 2] = g[i] * g[i];
+            m[i * 4 + 3] = g[i] * p[i];
+        }
+        box_blur_n(&mut m, w, h, 4, r);
+        let mut ab = vec![0.0f32; len * 2];
+        for i in 0..len {
+            let (mg, mp, mgg, mgp) = (m[i * 4], m[i * 4 + 1], m[i * 4 + 2], m[i * 4 + 3]);
+            let var = (mgg - mg * mg).max(0.0);
+            let a = (mgp - mg * mp) / (var + eps);
+            ab[i * 2] = a;
+            ab[i * 2 + 1] = mp - a * mg;
+        }
+        box_blur_n(&mut ab, w, h, 2, r);
+        (0..len).map(|i| ab[i * 2] * g[i] + ab[i * 2 + 1]).collect()
+    }
+
+    #[test]
+    fn shared_statistics_match_independent_filters_bit_for_bit() {
+        for (w, h) in [(1, 1), (1, 19), (23, 1), (7, 5), (33, 17)] {
+            let len = w * h;
+            for flat in [false, true] {
+                let g: Vec<f32> = (0..len).map(|i| if flat { 0.1 } else { ((i * 37 % 101) as f32 - 20.0) / 63.0 }).collect();
+                let p: Vec<f32> = (0..len).map(|i| (i * 13 % 71) as f32 / 70.0 - 0.5).collect();
+                let q: Vec<f32> = (0..len).map(|i| (i * 29 % 83) as f32 / 41.0 - 1.0).collect();
+                for r in [0, 1, MAX_LUMA_R, MAX_CHROMA_R, 25] {
+                    for eps in [0.000001, 0.0036] {
+                        let expected = reference_guided(&g, &g, w, h, r, eps);
+                        let actual = guided_luma(&g, w, h, r, eps);
+                        assert_bits(&actual, &expected);
+                        for amount in [0.01, 0.45, 1.0] {
+                            let mut actual_p = p.clone();
+                            let mut actual_q = q.clone();
+                            guided_chroma(&g, [&mut actual_p, &mut actual_q], w, h, r, eps, amount);
+                            for (original, actual) in [(&p, &actual_p), (&q, &actual_q)] {
+                                let filtered = reference_guided(&g, original, w, h, r, eps);
+                                let expected: Vec<f32> = original.iter().zip(filtered).map(|(&v, d)| v + (d - v) * amount).collect();
+                                assert_bits(actual, &expected);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn assert_bits(actual: &[f32], expected: &[f32]) {
+        assert_eq!(actual.len(), expected.len());
+        for (i, (actual, expected)) in actual.iter().zip(expected).enumerate() {
+            assert_eq!(actual.to_bits(), expected.to_bits(), "pixel {i}: {actual} != {expected}");
+        }
+    }
 }
