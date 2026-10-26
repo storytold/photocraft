@@ -3290,7 +3290,11 @@ fn layer_row(
     let t = Tokens::get(ctx);
     // The Layers Panel Options thumbnail size controls rows and both layer/mask thumbnails.
     let (base, row_h) = crate::layers_panel_ui::thumbnail_geometry(app.ui.layers_panel_options.thumbnail_size, t.pro);
-    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), row_h), Sense::click_and_drag());
+    let source = app.stylus.feed.source();
+    let item = egui::Id::new(("layer-row", l.id.0));
+    let sense = crate::list_drag::row_sense(ctx, source, item);
+    let (rect, raw_resp) = ui.allocate_exact_size(vec2(ui.available_width(), row_h), sense);
+    let resp = crate::list_drag::after_row(ctx, source, item, &raw_resp);
     // With thumbnails off no mask thumbnail is drawn, so none may keep catching drags from older frames.
     if base == 0.0 {
         crate::mask_thumbs_ui::forget(ctx, l.id.0);
@@ -3304,7 +3308,7 @@ fn layer_row(
     layer_drag_and_drop(app, ctx, ui, l, rect, &resp, actions);
     fx_drop(ctx, ui, l, rect, actions);
     crate::smart_ui::drop_on_row(ctx, ui, l, rect, actions);
-    if resp.drag_started() && !mask_drag {
+    if crate::list_drag::may_begin_drag(ctx, source, item, &resp) && !mask_drag {
         crate::layer_transfer::begin_from_panel(app, ctx, l.id);
     }
     // Rows are painted: name them for screen readers and UI tests.
@@ -3346,7 +3350,8 @@ fn layer_row(
     let mut x = rect.left() + 6.0;
     // The whole eye column takes drags too (so a drag starting on it never reorders the row): dragging down
     // the eyes gives every row swept over the visibility the first eye toggled to (#8467).
-    let eye_resp = ui.interact(eye_cell, ui.scope_id().with(("eye", l.id.0)), Sense::click_and_drag());
+    let eye_sense = if crate::list_drag::prefers_scroll(source) { Sense::click() } else { Sense::click_and_drag() };
+    let eye_resp = ui.interact(eye_cell, ui.scope_id().with(("eye", l.id.0)), eye_sense);
     // A hidden layer's eye box is left empty (still clickable; the whole column takes the click, #8467).
     if l.visible {
         // Centre the drawing in the column while preserving the visibility hit area.
@@ -3415,10 +3420,11 @@ fn layer_row(
     let (name_right, indicators, fx_toggled) = crate::layer_row_ui::indicators(ui, &painter, rect, x, l, fx_open, actions);
     // Dragging the fx badge drags all the layer's effects, not the layer (Photoshop). Like the eye,
     // it takes the drag from the row; clicks still reach the row.
-    if let Some(&(_, badge)) = indicators.iter().find(|(k, _)| *k == crate::layer_row_ui::Indicator::Fx)
-        && ui.interact(badge, ui.scope_id().with(("fx-badge", l.id.0)), Sense::drag()).drag_started()
-    {
-        start_fx_drag(ctx, l.id, None);
+    if let Some(&(_, badge)) = indicators.iter().find(|(k, _)| *k == crate::layer_row_ui::Indicator::Fx) {
+        let fx_resp = ui.interact(badge, ui.scope_id().with(("fx-badge", l.id.0)), crate::list_drag::row_sense(ctx, source, item));
+        if crate::list_drag::may_begin_drag(ctx, source, item, &fx_resp) {
+            start_fx_drag(ctx, l.id, None);
+        }
     }
     // Clicking the lock icon unlocks the layer, and makes the Background a normal one (Photoshop,
     // #4723). It takes the click from the row, so the row isn't selected.
@@ -4651,7 +4657,9 @@ fn layer_drag_and_drop(
     let key = egui::Id::unique("layer-drag");
     // A drag from the mask thumbnail (`starts_mask_drag`) moves the mask, not the layer.
     let mask_drag = ctx.data(|d| d.get_temp::<MaskDrag>(mask_drag_key())).is_some_and(|(id, _)| id == l.id.0);
-    if resp.drag_started() && !mask_drag {
+    let source = app.stylus.feed.source();
+    let item = egui::Id::new(("layer-row", l.id.0));
+    if crate::list_drag::may_begin_drag(ctx, source, item, resp) && !mask_drag {
         ctx.data_mut(|d| d.insert_temp(key, l.id.0));
     }
     let Some(dragged) = ctx.data(|d| d.get_temp::<u64>(key)) else { return };
@@ -4857,6 +4865,7 @@ fn fx_drop(ctx: &egui::Context, ui: &egui::Ui, l: &Layer, rect: Rect, actions: &
 /// on "Effects" shows or hides them all, the eye on an effect's row just that one (#1622).
 fn effect_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui, l: &Layer, depth: usize, actions: &mut Vec<(String, Value)>) {
     let t = Tokens::get(ui.ctx());
+    let source = app.stylus.feed.source();
     let indent = 30.0 + depth as f32 * 14.0 + 34.0;
     // English `Effect::label` keys stay for kind matching; display goes through `tl!` (catalogs
     // already have Drop Shadow → 投影, Effects → 效果, …).
@@ -4866,9 +4875,13 @@ fn effect_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui, l: &Layer, depth: usi
         rows.push((tl!(e.label()).into(), e.enabled(), kind));
     }
     for (i, (name, on, kind)) in rows.into_iter().enumerate() {
-        let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::click_and_drag());
+        let item = ui.id().with(("layer-fx-row", l.id.0, i));
+        let sense = crate::list_drag::row_sense(ui.ctx(), source, item);
+        let (rect, raw_resp) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), sense);
+        let resp = crate::list_drag::after_row(ui.ctx(), source, item, &raw_resp);
+        let can_drag = !crate::list_drag::prefers_scroll(source) || crate::list_drag::is_armed(ui.ctx(), item);
         // Drag the row onto another layer to move its effects there, ⌥-drag to copy them.
-        if resp.drag_started() {
+        if can_drag && resp.drag_started() {
             start_fx_drag(ui.ctx(), l.id, i.checked_sub(1));
         }
         if !ui.is_rect_visible(rect) {

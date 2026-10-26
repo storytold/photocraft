@@ -120,25 +120,30 @@ pub fn start() {
 /// the app's stylus feed. The sample is kept through `pointerup` so the stroke's last points keep
 /// their pressure; hovering, a mouse, or leaving the canvas clears it.
 fn listen_pen(target: &web_sys::HtmlCanvasElement, feed: photocraft_ui_egui::stylus::StylusFeed) {
-    use photocraft_ui_egui::stylus::PenSample;
+    use photocraft_ui_egui::stylus::{PenSample, PointerSource};
     use wasm_bindgen::closure::Closure;
     for kind in ["pointerdown", "pointermove", "pointerup", "pointercancel", "pointerleave"] {
         let feed = feed.clone();
         let cb = Closure::<dyn FnMut(web_sys::PointerEvent)>::new(move |e: web_sys::PointerEvent| {
             let ty = e.type_();
-            if ty == "pointerup" && e.pointer_type() == "pen" {
+            let source = PointerSource::from_pointer_type(&e.pointer_type());
+            // Keep the last pen sample through `pointerup` so the stroke's last points keep their
+            // pressure; the next non-pen event switches the source.
+            if ty == "pointerup" && source == PointerSource::Pen {
                 return;
             }
-            let pen = e.pointer_type() == "pen" && e.buttons() != 0 && ty != "pointercancel" && ty != "pointerleave";
+            let leaving = ty == "pointercancel" || ty == "pointerleave";
+            let down = e.buttons() != 0 && !leaving;
             // W3C Pointer Events: `buttons` bit 5 (32) is the pen's eraser.
             let eraser = e.buttons() & 32 != 0;
-            feed.set(pen.then(|| PenSample {
+            let sample = (source == PointerSource::Pen && down).then(|| PenSample {
                 pressure: e.pressure(),
                 tilt_x: e.tilt_x() as f32,
                 tilt_y: e.tilt_y() as f32,
                 rotation: e.twist() as f32,
                 eraser,
-            }));
+            });
+            feed.report(source, sample);
         });
         if target.add_event_listener_with_callback(kind, cb.as_ref().unchecked_ref()).is_ok() {
             cb.forget();

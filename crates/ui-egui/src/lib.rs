@@ -140,6 +140,7 @@ pub mod layers_panel_ui;
 mod layout_keys;
 pub mod links;
 pub mod liquify_ui;
+pub mod list_drag;
 pub mod magnetic_lasso_ui;
 mod mask_props_ui;
 pub mod mask_thumbs_ui;

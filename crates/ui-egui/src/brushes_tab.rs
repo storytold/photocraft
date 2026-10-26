@@ -13,12 +13,14 @@
 //! The list itself ([`preset_list`]) is shared with the Brush Preset picker (`brush_picker`), so
 //! both show, pick and organise presets the same way; each keeps its own view state.
 
-use egui::{Color32, RichText, Sense, Stroke, pos2, vec2};
+use egui::{Color32, RichText, Stroke, pos2, vec2};
 use photocraft_engine::paint::{BrushPreset, MAX_BRUSH_SIZE};
 use serde_json::json;
 
 use crate::brush_panel::{BrushesPanelState, BrushesView, Renaming, UNGROUPED, commit_gesture, full_uv, grouped_presets, run_or_status};
 use crate::brush_preview;
+use crate::list_drag;
+use crate::stylus::PointerSource;
 use crate::theme::{self, Tokens};
 use crate::{PhotocraftApp, icons, widgets};
 
@@ -298,15 +300,30 @@ fn second_half(ui: &egui::Ui, r: egui::Rect, grid: bool) -> bool {
 }
 
 /// Drag, drop and context menu of one preset cell or row.
-fn preset_interactions(ui: &egui::Ui, resp: &egui::Response, r: egui::Rect, p: &BrushPreset, presets: &[BrushPreset], grid: bool, acts: &mut Vec<Action>) {
+#[allow(clippy::too_many_arguments)]
+fn preset_interactions(
+    ui: &egui::Ui,
+    resp: &egui::Response,
+    source: PointerSource,
+    r: egui::Rect,
+    p: &BrushPreset,
+    presets: &[BrushPreset],
+    grid: bool,
+    acts: &mut Vec<Action>,
+) {
     let t = Tokens::get(ui.ctx());
-    resp.dnd_set_drag_payload(BrushDrag::Preset(p.name.clone()));
-    if let Some(d) = resp.dnd_hover_payload::<BrushDrag>()
+    let drag_active = !list_drag::prefers_scroll(source) || list_drag::drag_is_armed(ui.ctx());
+    if drag_active {
+        resp.dnd_set_drag_payload(BrushDrag::Preset(p.name.clone()));
+    }
+    if drag_active
+        && let Some(d) = resp.dnd_hover_payload::<BrushDrag>()
         && matches!(&*d, BrushDrag::Preset(n) if *n != p.name)
     {
         widgets::drop_line(ui, r, second_half(ui, r, grid), grid, &t);
     }
-    if let Some(d) = resp.dnd_release_payload::<BrushDrag>()
+    if drag_active
+        && let Some(d) = resp.dnd_release_payload::<BrushDrag>()
         && let BrushDrag::Preset(n) = &*d
         && *n != p.name
         && let Some((group, folder, index)) = drop_target(presets, n, &p.name, second_half(ui, r, grid))
@@ -347,10 +364,13 @@ pub(crate) fn grid_cell_width(cell: f32, scale: f32) -> f32 {
     cell * if scale.is_finite() { scale.clamp(*PREVIEW_SCALE_RANGE.start(), *PREVIEW_SCALE_RANGE.end()) } else { 1.0 }
 }
 
-fn list_row(ui: &mut egui::Ui, p: &BrushPreset, current: bool, presets: &[BrushPreset], indent: f32, scale: f32, acts: &mut Vec<Action>) {
+fn list_row(ui: &mut egui::Ui, p: &BrushPreset, current: bool, presets: &[BrushPreset], indent: f32, scale: f32, source: PointerSource, acts: &mut Vec<Action>) {
     let t = Tokens::get(ui.ctx());
     let k = list_row_height(scale) / 44.0;
-    let (full, resp) = ui.allocate_exact_size(vec2(ui.available_width(), list_row_height(scale)), Sense::click_and_drag());
+    let item = egui::Id::new(("brush-preset", p.name.as_str()));
+    let sense = list_drag::row_sense(ui.ctx(), source, item);
+    let (full, raw_resp) = ui.allocate_exact_size(vec2(ui.available_width(), list_row_height(scale)), sense);
+    let resp = list_drag::after_row(ui.ctx(), source, item, &raw_resp);
     // Rows inside nested folders are indented; the whole width stays the drop target.
     let r = egui::Rect::from_min_max(full.min + vec2(indent.min(full.width() / 2.0), 0.0), full.max);
     resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, current, &p.name));
@@ -381,7 +401,7 @@ fn list_row(ui: &mut egui::Ui, p: &BrushPreset, current: bool, presets: &[BrushP
     let sr = egui::Rect::from_min_size(pos2(cell.right() + 8.0, r.top() + 4.0 * k), vec2(w, 36.0 * k));
     ui.painter().image(stroke.id(), sr, full_uv(), Color32::WHITE);
     crate::layer_row_ui::label(ui.painter(), sr.right() + 12.0, r.center().y, r.right() - 4.0, &p.name, egui::FontId::proportional(12.0), t.text_dim);
-    preset_interactions(ui, &resp, r, p, presets, false, acts);
+    preset_interactions(ui, &resp, source, r, p, presets, false, acts);
 }
 
 /// The gap between grid cells, across and down.
@@ -404,9 +424,12 @@ pub(crate) fn grid_columns(width: f32, cell: f32, indent: f32, gap: f32) -> (f32
     (if left.is_finite() { left } else { 0.0 }, cols)
 }
 
-fn grid_cell(ui: &mut egui::Ui, p: &BrushPreset, current: bool, presets: &[BrushPreset], cell: f32, acts: &mut Vec<Action>) {
+fn grid_cell(ui: &mut egui::Ui, p: &BrushPreset, current: bool, presets: &[BrushPreset], cell: f32, source: PointerSource, acts: &mut Vec<Action>) {
     let t = Tokens::get(ui.ctx());
-    let (r, resp) = ui.allocate_exact_size(vec2(cell, cell + 6.0), Sense::click_and_drag());
+    let item = egui::Id::new(("brush-preset", p.name.as_str()));
+    let sense = list_drag::row_sense(ui.ctx(), source, item);
+    let (r, raw_resp) = ui.allocate_exact_size(vec2(cell, cell + 6.0), sense);
+    let resp = list_drag::after_row(ui.ctx(), source, item, &raw_resp);
     resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, current, &p.name));
     if !ui.is_rect_visible(r) {
         return;
@@ -430,7 +453,7 @@ fn grid_cell(ui: &mut egui::Ui, p: &BrushPreset, current: bool, presets: &[Brush
         t.text_dim,
     );
     let resp = resp.on_hover_text(&p.name);
-    preset_interactions(ui, &resp, r, p, presets, true, acts);
+    preset_interactions(ui, &resp, source, r, p, presets, true, acts);
 }
 
 /// Padding, tip cell width and name row height, at scale 1; the footer slider multiplies them
@@ -529,6 +552,7 @@ fn preset_card(
     show: (bool, bool, bool),
     width: f32,
     scale: f32,
+    source: PointerSource,
     acts: &mut Vec<Action>,
 ) {
     let (show_name, show_stroke, show_tip) = show;
@@ -554,7 +578,10 @@ fn preset_card(
     } else {
         0.0
     };
-    let (full, resp) = ui.allocate_exact_size(vec2(width, pad_y * 2.0 + top_h + name_h), Sense::click_and_drag());
+    let item = egui::Id::new(("brush-preset", p.name.as_str()));
+    let sense = list_drag::row_sense(ui.ctx(), source, item);
+    let (full, raw_resp) = ui.allocate_exact_size(vec2(width, pad_y * 2.0 + top_h + name_h), sense);
+    let resp = list_drag::after_row(ui.ctx(), source, item, &raw_resp);
     resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, current, &p.name));
     if !ui.is_rect_visible(full) {
         return;
@@ -629,7 +656,7 @@ fn preset_card(
     let resp = resp.on_hover_text(&p.name);
     // A tip-only card's grid drops between columns, like the Brushes tab's: the rest drop between
     // rows (there is a row under the tip there).
-    preset_interactions(ui, &resp, card, p, presets, tip_only, acts);
+    preset_interactions(ui, &resp, source, card, p, presets, tip_only, acts);
 }
 
 /// Indent of one nested folder level.
@@ -671,9 +698,13 @@ pub fn folder_drop(src_group: &str, src_folder: &[String], group: &str, folder: 
 /// folder dragged here lands before it (its upper edge) or goes into it ([`folder_drop`]); a
 /// preset dropped here moves to the end of the group or folder. `key` is the group key, `folder` the nested folder's path (empty for the
 /// group), `label` the group's panel label.
-fn group_header(ui: &mut egui::Ui, label: &str, key: &str, folder: &[String], open: bool, count: usize, acts: &mut Vec<Action>) {
+#[allow(clippy::too_many_arguments)]
+fn group_header(ui: &mut egui::Ui, label: &str, key: &str, folder: &[String], open: bool, count: usize, source: PointerSource, acts: &mut Vec<Action>) {
     let t = Tokens::get(ui.ctx());
-    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::click_and_drag());
+    let item = egui::Id::new(("brush-group", key, folder));
+    let sense = list_drag::row_sense(ui.ctx(), source, item);
+    let (r, raw_resp) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), sense);
+    let resp = list_drag::after_row(ui.ctx(), source, item, &raw_resp);
     if resp.hovered() {
         ui.painter().rect_filled(r, t.radius_sm, t.hover);
     }
@@ -701,7 +732,10 @@ fn group_header(ui: &mut egui::Ui, label: &str, key: &str, folder: &[String], op
         [] => BrushDrag::Group(key.to_string()),
         f => BrushDrag::Folder { group: key.to_string(), folder: f.to_vec() },
     };
-    resp.dnd_set_drag_payload(me);
+    let drag_active = !list_drag::prefers_scroll(source) || list_drag::drag_is_armed(ui.ctx());
+    if drag_active {
+        resp.dnd_set_drag_payload(me);
+    }
     // The upper third of the header places a dragged folder before this one; the rest drops it in.
     let edge = ui.ctx().pointer_interact_pos().is_some_and(|p| p.y < r.top() + r.height() / 3.0);
     let folder_action = |d: &BrushDrag| match d {
@@ -709,7 +743,7 @@ fn group_header(ui: &mut egui::Ui, label: &str, key: &str, folder: &[String], op
         BrushDrag::Folder { group, folder: f } => folder_drop(group, f, key, folder, edge),
         BrushDrag::Preset(_) => None,
     };
-    if let Some(d) = resp.dnd_hover_payload::<BrushDrag>() {
+    if drag_active && let Some(d) = resp.dnd_hover_payload::<BrushDrag>() {
         match (&*d, folder_action(&d)) {
             (BrushDrag::Preset(_), _) | (_, Some(Action::MoveInto { before: None, .. })) => {
                 ui.painter().rect_stroke(r, t.radius_sm, Stroke::new(1.5, t.accent), egui::StrokeKind::Inside);
@@ -718,7 +752,7 @@ fn group_header(ui: &mut egui::Ui, label: &str, key: &str, folder: &[String], op
             _ => {}
         }
     }
-    if let Some(d) = resp.dnd_release_payload::<BrushDrag>() {
+    if drag_active && let Some(d) = resp.dnd_release_payload::<BrushDrag>() {
         match &*d {
             BrushDrag::Preset(n) => acts.push(Action::Move { name: n.clone(), group: key.to_string(), folder: Some(folder.to_vec()), index: None }),
             other => acts.extend(folder_action(other)),
@@ -762,7 +796,7 @@ struct Draw<'a> {
 /// Draw `nodes` (a group's or folder's content) at nesting `depth`: runs of presets as rows or a
 /// grid, nested folders as headers with their content below when open. `depth` is bounded by
 /// [`folder_tree`] (paths are cut at [`MAX_VIEW_DEPTH`]).
-fn draw_nodes(ui: &mut egui::Ui, d: &Draw, nodes: &[Node], depth: usize, acts: &mut Vec<Action>) {
+fn draw_nodes(ui: &mut egui::Ui, d: &Draw, nodes: &[Node], depth: usize, source: PointerSource, acts: &mut Vec<Action>) {
     let indent = FOLDER_INDENT * depth as f32;
     let mut run: Vec<&BrushPreset> = Vec::new();
     let flush = |ui: &mut egui::Ui, run: &mut Vec<&BrushPreset>, acts: &mut Vec<Action>| {
@@ -795,7 +829,7 @@ fn draw_nodes(ui: &mut egui::Ui, d: &Draw, nodes: &[Node], depth: usize, acts: &
                         ui.horizontal(|ui| {
                             ui.add_space(left);
                             for p in row {
-                                preset_card(ui, p, d.current.is_some_and(|n| p.name.eq_ignore_ascii_case(n)), d.presets, d.show, cell, scale, acts);
+                                preset_card(ui, p, d.current.is_some_and(|n| p.name.eq_ignore_ascii_case(n)), d.presets, d.show, cell, scale, source, acts);
                             }
                         });
                     }
@@ -805,7 +839,7 @@ fn draw_nodes(ui: &mut egui::Ui, d: &Draw, nodes: &[Node], depth: usize, acts: &
                         ui.horizontal(|ui| {
                             ui.add_space(indent);
                             for p in row {
-                                preset_card(ui, p, d.current.is_some_and(|n| p.name.eq_ignore_ascii_case(n)), d.presets, d.show, card_w, scale, acts);
+                                preset_card(ui, p, d.current.is_some_and(|n| p.name.eq_ignore_ascii_case(n)), d.presets, d.show, card_w, scale, source, acts);
                             }
                         });
                     }
@@ -827,6 +861,7 @@ fn draw_nodes(ui: &mut egui::Ui, d: &Draw, nodes: &[Node], depth: usize, acts: &
                                 d.current.is_some_and(|n| p.name.eq_ignore_ascii_case(n)),
                                 d.presets,
                                 grid_cell_width(d.layout.cell, d.scale),
+                                source,
                                 acts,
                             );
                         }
@@ -835,7 +870,7 @@ fn draw_nodes(ui: &mut egui::Ui, d: &Draw, nodes: &[Node], depth: usize, acts: &
             });
         } else {
             for p in run.iter() {
-                list_row(ui, p, d.current.is_some_and(|n| p.name.eq_ignore_ascii_case(n)), d.presets, indent, d.scale, acts);
+                list_row(ui, p, d.current.is_some_and(|n| p.name.eq_ignore_ascii_case(n)), d.presets, indent, d.scale, source, acts);
             }
         }
         run.clear();
@@ -846,9 +881,9 @@ fn draw_nodes(ui: &mut egui::Ui, d: &Draw, nodes: &[Node], depth: usize, acts: &
             Node::Folder(f) => {
                 flush(ui, &mut run, acts);
                 let open = !d.collapsed.contains(&folder_view_key(d.label, &f.path));
-                group_header(ui, d.label, d.key, &f.path, open, f.count, acts);
+                group_header(ui, d.label, d.key, &f.path, open, f.count, source, acts);
                 if open && depth < MAX_VIEW_DEPTH {
-                    draw_nodes(ui, d, &f.children, depth + 1, acts);
+                    draw_nodes(ui, d, &f.children, depth + 1, source, acts);
                 }
             }
         }
@@ -900,7 +935,14 @@ fn rename_bar(ui: &mut egui::Ui, st: &mut BrushesPanelState, acts: &mut Vec<Acti
 /// above them while a rename is open. `current` is the selected preset's name: selection is by
 /// identity, so it survives edits and tells look-alike duplicates apart. Group toggles and renames
 /// update `st`; the returned actions are commands for [`apply`].
-pub fn preset_list(ui: &mut egui::Ui, presets: &[BrushPreset], current: Option<&str>, st: &mut BrushesPanelState, layout: ListLayout) -> Vec<Action> {
+pub fn preset_list(
+    ui: &mut egui::Ui,
+    presets: &[BrushPreset],
+    current: Option<&str>,
+    st: &mut BrushesPanelState,
+    layout: ListLayout,
+    source: PointerSource,
+) -> Vec<Action> {
     let mut acts = Vec::new();
     rename_bar(ui, st, &mut acts);
     let filter = st.filter.trim().to_lowercase();
@@ -926,12 +968,12 @@ pub fn preset_list(ui: &mut egui::Ui, presets: &[BrushPreset], current: Option<&
             }
             let key = group_key(presets, &label);
             let open = !filter.is_empty() || !collapsed.contains(&label);
-            group_header(ui, &label, &key, &[], open, items.len(), &mut acts);
+            group_header(ui, &label, &key, &[], open, items.len(), source, &mut acts);
             if !open {
                 continue;
             }
             let d = Draw { label: &label, key: &key, presets, current, collapsed, grid, layout, show, scale: st.scale };
-            draw_nodes(ui, &d, &folder_tree(&items), 0, &mut acts);
+            draw_nodes(ui, &d, &folder_tree(&items), 0, source, &mut acts);
             ui.add_space(2.0);
         }
         if presets.is_empty() {
@@ -1042,7 +1084,14 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         });
     });
     ui.add_space(6.0);
-    let acts = preset_list(ui, &app.session.tools.presets, app.session.tools.current_preset.as_deref(), &mut app.ui.brushes_panel, responsive_list_layout(ui));
+    let acts = preset_list(
+        ui,
+        &app.session.tools.presets,
+        app.session.tools.current_preset.as_deref(),
+        &mut app.ui.brushes_panel,
+        responsive_list_layout(ui),
+        app.stylus.feed.source(),
+    );
     apply(app, acts);
     ui.add_space(4.0);
     widgets::hairline(ui);

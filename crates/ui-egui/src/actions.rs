@@ -937,7 +937,11 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 continue;
             }
             let indent = if set.is_some() { 14.0 } else { 0.0 };
-            let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::click_and_drag());
+            let source = app.stylus.feed.source();
+            let item = egui::Id::new(("action-row", i));
+            let sense = crate::list_drag::row_sense(ui.ctx(), source, item);
+            let (rect, raw_resp) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), sense);
+            let resp = crate::list_drag::after_row(ui.ctx(), source, item, &raw_resp);
             let x0 = rect.left() + indent;
             if reveal == Some((i, 0)) {
                 ui.scroll_to_rect(rect, Some(egui::Align::BOTTOM));

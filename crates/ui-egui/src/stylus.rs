@@ -65,6 +65,26 @@ impl PenSample {
     }
 }
 
+/// What last wrote the pointer slot: a mouse, a pen, or a finger.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PointerSource {
+    #[default]
+    Mouse,
+    Pen,
+    Touch,
+}
+
+impl PointerSource {
+    /// W3C `pointerType`: `"pen"`, `"touch"`, `"mouse"`, or anything else.
+    pub fn from_pointer_type(ty: &str) -> Self {
+        match ty {
+            "pen" => Self::Pen,
+            "touch" => Self::Touch,
+            _ => Self::Mouse,
+        }
+    }
+}
+
 /// Most samples a [`StylusFeed`] keeps between two frames (a stalled UI drops the oldest).
 const FEED_QUEUE: usize = 1024;
 
@@ -74,6 +94,8 @@ struct FeedState {
     latest: Option<PenSample>,
     /// Every sample set since the canvas last drained them, oldest first.
     queue: VecDeque<PenSample>,
+    /// Last pointer device that wrote this slot (mouse / pen / touch).
+    source: PointerSource,
 }
 
 /// Shared state a platform backend writes pen samples into. Cloning shares it. Each sample both
@@ -84,20 +106,33 @@ pub struct StylusFeed(Arc<Mutex<FeedState>>);
 
 impl StylusFeed {
     /// The current sample (`None` = no pen down); a sample is also queued for [`Self::drain`].
+    /// For native tablet monitors that only provide pen samples: `Some` marks the slot as a pen,
+    /// `None` clears the sample and returns the source to mouse.
     pub fn set(&self, s: Option<PenSample>) {
+        let source = if s.is_some() { PointerSource::Pen } else { PointerSource::Mouse };
+        self.report(source, s);
+    }
+
+    pub fn get(&self) -> Option<PenSample> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner).latest
+    }
+
+    /// Last pointer device that wrote this slot.
+    pub fn source(&self) -> PointerSource {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner).source
+    }
+
+    /// Record the device and, for a pen contact, its sample.
+    pub fn report(&self, source: PointerSource, sample: Option<PenSample>) {
         let mut g = self.0.lock().unwrap_or_else(PoisonError::into_inner);
-        let s = s.map(PenSample::sanitized);
-        g.latest = s;
-        if let Some(s) = s {
+        g.source = source;
+        g.latest = if source == PointerSource::Pen { sample.map(PenSample::sanitized) } else { None };
+        if let Some(s) = g.latest {
             if g.queue.len() >= FEED_QUEUE {
                 g.queue.pop_front();
             }
             g.queue.push_back(s);
         }
-    }
-
-    pub fn get(&self) -> Option<PenSample> {
-        self.0.lock().unwrap_or_else(PoisonError::into_inner).latest
     }
 
     /// The samples set since the last drain, oldest first.
@@ -219,6 +254,11 @@ impl Stylus {
                         // screen) reports a force.
                         if !down || force.is_some() {
                             self.touch_pen = true;
+                        }
+                        // Hosts that only emit egui Touch (no Pointer Events adapter) still need
+                        // the shared list-drag gate to prefer scrolling over reorder.
+                        if self.feed.source() != PointerSource::Pen {
+                            self.feed.report(PointerSource::Touch, None);
                         }
                         // Windows reports a pen pressed lighter than its first pressure level with
                         // no force at all (winit maps pressure 0 to `None`): a light tap is

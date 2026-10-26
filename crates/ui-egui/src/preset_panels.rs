@@ -353,6 +353,8 @@ pub(crate) struct Place<'a> {
     pub(crate) canvas: Rect,
     pub(crate) max_h: f32,
     pub(crate) new_tip: &'a str,
+    /// Mouse keeps press-drag reorder; touch/pen scroll unless double-press-and-hold.
+    pub(crate) pointer: crate::stylus::PointerSource,
     pub(crate) flush: bool,
 }
 
@@ -369,7 +371,7 @@ pub(crate) fn browser(
     thumb: &mut dyn FnMut(&egui::Ui, Rect, usize, usize),
 ) -> Vec<Ev> {
     let t = Tokens::get(ui.ctx());
-    let Place { canvas, max_h, new_tip, flush } = place;
+    let Place { canvas, max_h, new_tip, pointer, flush } = place;
     let mut ev = Vec::new();
     let size = *st.sizes.get(panel).unwrap_or(&40.0);
     let list = size <= MIN_THUMB + 0.5;
@@ -418,7 +420,11 @@ pub(crate) fn browser(
             for &gi in &display {
                 let Some(g) = groups.get(gi) else { continue };
                 let open = group_open(st, panel, gi, &g.name);
-                let (hr, hresp) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::click_and_drag());
+                let item = egui::Id::new(("preset-group-row", panel, gi));
+                let sense = crate::list_drag::row_sense(ui.ctx(), pointer, item);
+                let (hr, raw_hresp) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), sense);
+                let hresp = crate::list_drag::after_row(ui.ctx(), pointer, item, &raw_hresp);
+                let can_drag = !crate::list_drag::prefers_scroll(pointer) || crate::list_drag::is_armed(ui.ctx(), item);
                 if hresp.hovered() || hresp.dragged() {
                     ui.painter().rect_filled(hr, 2.0, t.hover.gamma_multiply(0.5));
                 }
@@ -443,13 +449,15 @@ pub(crate) fn browser(
                         ui.close();
                     }
                 });
-                if hresp.dragged()
+                if can_drag
+                    && hresp.dragged()
                     && let Some(p) = ui.ctx().pointer_interact_pos()
                 {
                     drag = Some((gi, p));
                     ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
                 }
-                if hresp.drag_stopped()
+                if can_drag
+                    && hresp.drag_stopped()
                     && let Some(p) = ui.ctx().pointer_interact_pos()
                 {
                     released = Some((gi, p));
@@ -472,7 +480,10 @@ pub(crate) fn browser(
                 for (ii, it) in g.items.iter().enumerate() {
                     let (cx, cy) = ((ii % cols) as f32, (ii / cols) as f32);
                     let r = Rect::from_min_size(area.min + vec2(pad + cx * (cell.x + gap), cy * (cell.y + gap)), cell);
-                    let resp = ui.interact(r, ui.scope_id().with((panel, gi, ii)), Sense::click_and_drag());
+                    let item = ui.scope_id().with((panel, gi, ii));
+                    let sense = crate::list_drag::row_sense(ui.ctx(), pointer, item);
+                    let resp = ui.interact(r, item, sense);
+                    let resp = crate::list_drag::after_row(ui.ctx(), pointer, item, &resp);
                     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &it.name));
                     let is_sel = selected.as_deref() == Some(&it.key);
                     if list {
@@ -507,7 +518,9 @@ pub(crate) fn browser(
                     } else if resp.clicked() {
                         ev.push(Ev::Select(it.key.clone()));
                     }
-                    if resp.dragged()
+                    let can_drag = !crate::list_drag::prefers_scroll(pointer) || crate::list_drag::is_armed(ui.ctx(), item);
+                    if can_drag
+                        && resp.dragged()
                         && let Some(pp) = ui.ctx().pointer_interact_pos()
                     {
                         // A ghost of the swatch follows the pointer.
@@ -517,7 +530,8 @@ pub(crate) fn browser(
                         lp.rect_stroke(gr, 3.0, Stroke::new(1.0, t.accent), egui::StrokeKind::Outside);
                         lp.text(gr.center(), Align2::CENTER_CENTER, "+", FontId::proportional(16.0), t.accent);
                     }
-                    if resp.drag_stopped()
+                    if can_drag
+                        && resp.drag_stopped()
                         && let Some(pp) = ui.ctx().pointer_interact_pos()
                         && !r.contains(pp)
                     {
@@ -695,11 +709,17 @@ pub fn gradients_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let canvas = canvas_drop_rect(app);
     let mut st = std::mem::take(&mut app.ui.presets_ui);
     let max_h = (ui.available_height() - 40.0).clamp(90.0, 260.0);
-    let events =
-        browser(ui, &mut st, "gradients", &groups, Place { canvas, max_h, new_tip: tl!("Create new gradient"), flush: false }, &mut |ui, r, gi, ii| {
+    let events = browser(
+        ui,
+        &mut st,
+        "gradients",
+        &groups,
+        Place { canvas, max_h, new_tip: tl!("Create new gradient"), pointer: app.stylus.feed.source(), flush: false },
+        &mut |ui, r, gi, ii| {
             let stops = groups_src[gi].items[ii].resolve(fg, bg);
             paint_gradient(ui, r, &stops);
-        });
+        },
+    );
     app.ui.presets_ui = st;
     for e in events {
         match &e {
@@ -749,7 +769,7 @@ pub fn patterns_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         &mut st,
         "patterns",
         &groups,
-        Place { canvas, max_h, new_tip: tl!("Create new pattern from the selection"), flush: false },
+        Place { canvas, max_h, new_tip: tl!("Create new pattern from the selection"), pointer: app.stylus.feed.source(), flush: false },
         &mut |ui, r, gi, ii| {
             let tex = pattern_texture(&ctx, &pats[gi][ii]);
             ui.painter().image(tex.id(), r, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
@@ -863,7 +883,7 @@ pub fn styles_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         &mut st,
         "styles",
         &groups,
-        Place { canvas, max_h: 300.0, new_tip: tl!("Create new style from the selected layer"), flush: false },
+        Place { canvas, max_h: 300.0, new_tip: tl!("Create new style from the selected layer"), pointer: app.stylus.feed.source(), flush: false },
         &mut |ui, r, gi, ii| {
             ui.painter().rect_filled(r, 2.0, t.field);
             ui.painter().image(texes[gi][ii].id(), r, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
@@ -962,7 +982,7 @@ pub fn shapes_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         &mut st,
         "shapes",
         &groups,
-        Place { canvas, max_h: 300.0, new_tip: tl!("Create new shape from the current path"), flush: false },
+        Place { canvas, max_h: 300.0, new_tip: tl!("Create new shape from the current path"), pointer: app.stylus.feed.source(), flush: false },
         &mut |ui, r, gi, ii| {
             let tex = shape_texture(&ctx, &src[gi].items[ii]);
             ui.painter().image(tex.id(), r.shrink(2.0), Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), t.text);
