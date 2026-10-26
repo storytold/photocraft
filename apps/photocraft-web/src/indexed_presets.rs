@@ -9,10 +9,10 @@ use crate::preset_bridge::{Batch, Bridge, MAX_RECORDS, record_limit};
 use photocraft_engine::preset_store::MAX_STORE_BYTES;
 
 const DATABASE: &str = "photocraft.presets";
-const FILES: &str = "files";
-const TIMEOUT_MS: f64 = 10_000.0;
+pub const FILES: &str = "files";
+pub const TIMEOUT_MS: f64 = 10_000.0;
 
-fn js(e: JsValue) -> String {
+pub fn js(e: JsValue) -> String {
     if let Some(exception) = e.dyn_ref::<web_sys::DomException>() {
         format!("{}: {}", exception.name(), exception.message())
     } else {
@@ -42,12 +42,12 @@ impl Drop for Listeners {
     }
 }
 
-struct Pending {
-    promise: Promise,
+pub struct Pending {
+    pub promise: Promise,
     _listeners: Listeners,
 }
 
-fn request(request: &IdbRequest) -> Pending {
+pub fn request(request: &IdbRequest) -> Pending {
     let mut listeners = Listeners::new();
     let promise = Promise::new(&mut |resolve, reject| {
         let req = request.clone();
@@ -75,13 +75,13 @@ fn request(request: &IdbRequest) -> Pending {
 }
 
 /// A single deadline bounds the whole startup read, not ten seconds per record.
-async fn before(promise: &Promise, deadline: f64) -> Result<JsValue, String> {
+pub async fn before(promise: &Promise, deadline: f64) -> Result<JsValue, String> {
     let window = web_sys::window().ok_or("no window")?;
     let mut timer = None;
     let mut callback = None;
     let timeout = Promise::new(&mut |_, reject| {
         let cb = Closure::<dyn FnMut()>::new(move || {
-            let _ = reject.call1(&JsValue::NULL, &JsValue::from_str("browser preset storage timed out"));
+            let _ = reject.call1(&JsValue::NULL, &JsValue::from_str("browser storage timed out"));
         });
         timer = Some(window.set_timeout_with_callback_and_timeout_and_arguments_0(
             cb.as_ref().unchecked_ref(),
@@ -96,9 +96,9 @@ async fn before(promise: &Promise, deadline: f64) -> Result<JsValue, String> {
     result
 }
 
-async fn open(deadline: f64) -> Result<IdbDatabase, String> {
+pub async fn open(database: &str, deadline: f64) -> Result<IdbDatabase, String> {
     let factory = web_sys::window().ok_or("no window")?.indexed_db().map_err(js)?.ok_or("IndexedDB unavailable")?;
-    let req = factory.open_with_u32(DATABASE, 1).map_err(js)?;
+    let req = factory.open_with_u32(database, 1).map_err(js)?;
     let mut upgrade = Listeners::new();
     let upgrade_req = req.clone();
     upgrade
@@ -133,7 +133,7 @@ async fn open(deadline: f64) -> Result<IdbDatabase, String> {
 
 pub async fn load() -> Result<(IdbDatabase, Bridge, Vec<String>), String> {
     let deadline = js_sys::Date::now() + TIMEOUT_MS;
-    let db = open(deadline).await?;
+    let db = open(DATABASE, deadline).await?;
     let result = read(&db, deadline).await;
     match result {
         Ok((bridge, warnings)) => Ok((db, bridge, warnings)),
