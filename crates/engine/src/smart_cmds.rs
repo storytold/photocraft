@@ -644,6 +644,40 @@ fn smart_mut(doc: &mut Document, id: LayerId) -> Result<&mut SmartObject> {
     }
 }
 
+/// Whether `l`'s filter mask can be painted (`"target":"filterMask"`): a smart object with smart
+/// filters. Its filter mask need not exist yet: painting starts it white (Reveal All), the mask
+/// Photoshop adds with the first smart filter.
+pub(crate) fn filter_mask_paintable(l: &Layer) -> std::result::Result<(), String> {
+    match &l.content {
+        LayerContent::Smart(sm) if !sm.smart_filters.is_empty() => Ok(()),
+        LayerContent::Smart(_) => Err(format!("smart object \"{}\" has no smart filters, so no filter mask", l.name)),
+        other => Err(format!("the active layer is {} {} layer, not a smart object", other.article(), other.kind_name())),
+    }
+}
+
+/// The filter mask surface of smart object `id` for painting into, made white (Reveal All) first
+/// when the object has smart filters but no filter mask yet. The caller re-renders the object
+/// afterwards ([`refresh_after_filter_mask_edit`]).
+pub(crate) fn filter_mask_surface(doc: &mut Document, id: LayerId) -> Result<&mut Surface> {
+    let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
+    filter_mask_paintable(l).map_err(EngineError::Other)?;
+    let sm = smart_mut_of(l)?;
+    Ok(&mut sm.filter_mask.get_or_insert_with(LayerMask::reveal_all).surface)
+}
+
+/// Re-renders smart object `id` after its filter mask was painted, filled or filtered, so the
+/// stroke shows (where the mask is black the smart filters don't). Part of the same history step.
+pub(crate) fn refresh_after_filter_mask_edit(doc: &mut Document, id: LayerId) -> Result<()> {
+    if matches!(doc.layer(id).map(|l| &l.content), Some(LayerContent::Smart(_))) { refresh_or_fail(doc, id) } else { Ok(()) }
+}
+
+fn smart_mut_of(l: &mut Layer) -> Result<&mut SmartObject> {
+    match &mut l.content {
+        LayerContent::Smart(sm) => Ok(sm),
+        _ => Err(other("the layer is not a smart object")),
+    }
+}
+
 fn mask_from_selection(sel: &Surface) -> LayerMask {
     LayerMask { surface: sel.clone(), enabled: true, linked: true, density: 1.0, feather: 0.0 }
 }

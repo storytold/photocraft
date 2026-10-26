@@ -582,13 +582,13 @@ impl VpSession {
             let changed = match pv.work.as_mut() {
                 Some(work) => {
                     let before = work.clone();
-                    let (_, a) = clone_dabs_from(&sc, work, source, c.source, *anchor, points, c.size, hard, opacity);
+                    let (_, a) = clone_dabs_from(&sc, work, source, c.source, *anchor, points, c.size, hard, opacity, Some(canvas));
                     // As OK does: only the canvas (the dabs' boxes can span far off it).
                     let a = a.intersect(&canvas);
                     copy_changed(&mut pv.out, &before, work, a);
                     a
                 }
-                None => clone_dabs_from(&sc, &mut pv.out, source, c.source, *anchor, points, c.size, hard, opacity).1.intersect(&canvas),
+                None => clone_dabs_from(&sc, &mut pv.out, source, c.source, *anchor, points, c.size, hard, opacity, Some(canvas)).1,
             };
             area = union(area, changed);
         }

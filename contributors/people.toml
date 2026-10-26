@@ -265,6 +265,9 @@ sync_github_name = false
 [people.drunkeninja42]
 real_name = "Kushagra Sharma"
 
+[people.WebWork-rrs]
+display_name = "Ratul Paul"
+
 [people.softwaregames1]
 sync_github_name = true
 
@@ -275,3 +278,7 @@ sync_github_name = false
 [people.erenova]
 display_name = "Erenova"
 sync_github_name = false
+
+[people.jasallen]
+real_name = "Jason DeBoever"
+sync_github_name = true

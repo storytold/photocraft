@@ -369,7 +369,7 @@ fn metric(inv: &Homography, l: (f64, f64), p: [f64; 2]) -> [f64; 2] {
 /// first dab. `size` is the brush diameter in px at the first dab; `hardness` 0..=1.
 pub fn clone_stroke(scene: &Scene, surf: &mut Surface, source: [f64; 2], points: &[[f64; 2]], size: f64, hardness: f64, opacity: f32) -> usize {
     let Some(first) = points.first() else { return 0 };
-    clone_dabs(scene, surf, source, *first, points, size, hardness, opacity).0
+    clone_dabs(scene, surf, source, *first, points, size, hardness, opacity, None).0
 }
 
 /// Where a clone stroke that starts at `anchor` copying from `source` samples for destination
@@ -384,7 +384,8 @@ pub fn clone_source(scene: &Scene, source: [f64; 2], anchor: [f64; 2], p: [f64; 
 /// [`clone_stroke`]'s dabs at `points` for a stroke anchored at `anchor` (its first dab, which
 /// fixes the offset and the brush's metric size). Samples a snapshot taken at this call.
 /// For incremental painting use [`clone_dabs_from`] with one snapshot per stroke.
-/// Returns the dabs painted and the area they changed.
+/// With `clip`, every dab is cut to it before any read or write (a document passes its canvas,
+/// so far off-canvas points allocate no tiles). Returns the dabs painted and the area they changed.
 #[allow(clippy::too_many_arguments)]
 pub fn clone_dabs(
     scene: &Scene,
@@ -395,13 +396,15 @@ pub fn clone_dabs(
     size: f64,
     hardness: f64,
     opacity: f32,
+    clip: Option<Rect>,
 ) -> (usize, Rect) {
     let src_copy = surf.clone();
-    clone_dabs_from(scene, surf, &src_copy, source, anchor, points, size, hardness, opacity)
+    clone_dabs_from(scene, surf, &src_copy, source, anchor, points, size, hardness, opacity, clip)
 }
 
 /// Paint a batch of one stroke using the same immutable source snapshot for every batch.
 /// Source and destination must have the same pixel format; otherwise no dabs are painted.
+/// `clip` as in [`clone_dabs`].
 #[allow(clippy::too_many_arguments)]
 pub fn clone_dabs_from(
     scene: &Scene,
@@ -413,6 +416,7 @@ pub fn clone_dabs_from(
     size: f64,
     hardness: f64,
     opacity: f32,
+    clip: Option<Rect>,
 ) -> (usize, Rect) {
     if surf.format() != src_copy.format() {
         return (0, Rect::EMPTY);
@@ -443,6 +447,10 @@ pub fn clone_dabs_from(
         };
         let area = footprint(&hd, lud, lvd, mc);
         if area.is_empty() || area.width() > 4096 || area.height() > 4096 {
+            continue;
+        }
+        let area = clip.map_or(area, |c| area.intersect(&c));
+        if area.is_empty() {
             continue;
         }
         // The source footprint, read once; `sample` reads any pixel outside it from the surface.
@@ -639,10 +647,25 @@ mod tests {
             assert_eq!(clone_stroke(&sc, &mut whole, [36.0, 50.0], &points, 12.0, 0.8, 1.0), 4);
             let mut pieces = original.clone();
             for part in points.chunks(2) {
-                clone_dabs_from(&sc, &mut pieces, &original, [36.0, 50.0], points[0], part, 12.0, 0.8, 1.0);
+                clone_dabs_from(&sc, &mut pieces, &original, [36.0, 50.0], points[0], part, 12.0, 0.8, 1.0, None);
             }
             assert_eq!(whole.read_region(Rect::new(0, 0, 100, 100)), pieces.read_region(Rect::new(0, 0, 100, 100)));
         }
+    }
+
+    /// A clip cuts every dab before it reads or writes: dabs far outside it allocate no tiles.
+    #[test]
+    fn clipped_clone_allocates_no_tiles_outside_the_clip() {
+        let sc = Scene::new(VpPlane { corners: [[0.0, 0.0], [100.0, 0.0], [100.0, 100.0], [0.0, 100.0]] }, [50.0, 50.0], None, 800.0);
+        let clip = Rect::new(0, 0, 100, 100);
+        let mut s = Surface::new(PixelFormat::RGBA8);
+        s.fill_rect(clip, &[0.5, 0.5, 0.5, 1.0]);
+        let tiles = s.tiles().count();
+        let points = [[50.0, 50.0], [-40.0, 50.0], [5000.0, 5000.0], [-90_000.0, 70_000.0]];
+        let (dabs, area) = clone_dabs(&sc, &mut s, [40.0, 50.0], points[0], &points, 20.0, 0.8, 1.0, Some(clip));
+        assert_eq!(dabs, 1);
+        assert!(clip.contains_rect(&area), "{area:?}");
+        assert_eq!(s.tiles().count(), tiles);
     }
 
     #[test]

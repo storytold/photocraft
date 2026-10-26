@@ -136,17 +136,17 @@ pub fn clone_specs(p: &Value) -> Result<Vec<CloneSpec>> {
     Ok(out)
 }
 
-/// Paints clone stroke `c` on `surf`, or, with `work` (the image it samples), on `work` and copies
-/// the pixels it changed inside `canvas` to `surf`. Returns the dabs painted.
+/// Paints clone stroke `c` on `surf` inside `canvas`, or, with `work` (the image it samples), on
+/// `work` and copies the pixels it changed to `surf`. Returns the dabs painted.
 pub fn clone_into(sc: &Scene, surf: &mut Surface, work: Option<&mut Surface>, c: &CloneSpec, canvas: Rect) -> usize {
     let Some(first) = c.points.first() else { return 0 };
     let Some(work) = work else {
-        return clone_dabs(sc, surf, c.source, *first, &c.points, c.size, c.hardness, c.opacity as f32).0;
+        return clone_dabs(sc, surf, c.source, *first, &c.points, c.size, c.hardness, c.opacity as f32, Some(canvas)).0;
     };
     let before = work.clone();
-    let (dabs, area) = clone_dabs(sc, work, c.source, *first, &c.points, c.size, c.hardness, c.opacity as f32);
-    // The dabs' boxes can span far off the canvas (points up to 1e7 px apart): reading their
-    // union back would allocate without bound.
+    // The dabs are cut to the canvas before they touch `work` or `surf`: points up to 1e7 px off
+    // it would otherwise allocate tiles there (and reading their union back, without bound).
+    let (dabs, area) = clone_dabs(sc, work, c.source, *first, &c.points, c.size, c.hardness, c.opacity as f32, Some(canvas));
     copy_changed(surf, &before, work, area.intersect(&canvas));
     dabs
 }
@@ -436,6 +436,26 @@ mod tests {
             assert!(l.rgba(100, 100)[0] > 0.9, "{:?}", l.rgba(100, 100));
             s.undo();
         }
+    }
+
+    /// Without a new layer the strokes paint the layer itself, and only inside the canvas, as in
+    /// Photoshop: a dab off it painted pixels there (and allocated tiles for every dab, up to
+    /// 1e7 px away).
+    #[test]
+    fn layer_clone_stays_on_the_canvas() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 200, "height": 200})).unwrap();
+        s.execute("layer.new.layer", json!({})).unwrap();
+        s.execute("edit.fill", json!({"color": "#40c040"})).unwrap();
+        let id = s.active().unwrap().active_layer.unwrap();
+        let planes = json!([{"corners": [[0, 0], [200, 0], [200, 200], [0, 200]]}]);
+        // The second dab lies left of the canvas and samples the canvas 50 px to its right; the
+        // third is far off it.
+        let points = json!([[100, 100], [-30, 100], [9_000_000, 9_000_000]]);
+        let r = s.execute(VP, json!({"planes": planes, "clone": [{"source": [150, 100], "points": points, "size": 20}]})).unwrap();
+        assert_eq!(r["dabs"].as_u64(), Some(1), "{r}");
+        let b = s.active().unwrap().doc.layer(id).unwrap().surface().unwrap().content_bounds();
+        assert!(Rect::new(0, 0, 200, 200).contains_rect(&b), "{b:?}");
     }
 
     #[test]

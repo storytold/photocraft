@@ -1408,7 +1408,7 @@ fn export_import(s: &mut Session, p: &Value) -> Result<Value> {
         .get("kinds")
         .and_then(Value::as_array)
         .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
-        .unwrap_or_else(|| ["brushes", "customShapes", "tools"].iter().map(|k| k.to_string()).collect());
+        .unwrap_or_else(|| ["brushes", "customShapes", "tools"].iter().map(ToString::to_string).collect());
     let want = |k: &str| kinds.iter().any(|x| x == k);
     match str_or(p, "action", "export") {
         "export" => {

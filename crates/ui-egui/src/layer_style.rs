@@ -21,6 +21,8 @@ use serde_json::{Map, Value, json};
 use crate::theme::Tokens;
 use crate::{PhotocraftApp, widgets};
 
+#[cfg(test)]
+mod bevel_modes_tests;
 pub(crate) mod color_picker;
 mod contour;
 #[cfg(test)]
@@ -643,6 +645,54 @@ fn validate_params(f: &Map<String, Value>) -> Result<(), String> {
     Ok(())
 }
 
+fn effect_entry(e: &Value, kind: &str, mut params: Value, initial_light_angle: Option<f64>) -> Value {
+    match e.get("fx").filter(|fx| fx.is_object()) {
+        Some(fx) => {
+            if kind == "bevelEmboss"
+                && let Ok(original) = serde_json::from_value::<Effect>(fx.clone())
+                && let Some(edits) = params.as_object_mut()
+            {
+                let shown = values_of(&original, initial_light_angle.unwrap_or(120.0) as f32);
+                // Unedited display values must not quantize imported shading in the snapshot.
+                for key in ["highlightBlend", "highlightColor", "highlightOpacity", "shadowBlend", "shadowColor", "shadowOpacity"] {
+                    if edits.get(key) == shown.get(key) {
+                        edits.remove(key);
+                    }
+                }
+            }
+            json!({"kind": kind, "fx": fx, "params": params})
+        }
+        None => {
+            // A new instance: the page shows the factory defaults merged with
+            // the edits, and the engine builds from the full set.
+            let mut p = defaults(kind);
+            if let (Some(o), Some(pv)) = (p.as_object_mut(), params.as_object()) {
+                for (k, v) in pv {
+                    o.insert(k.clone(), v.clone());
+                }
+            }
+            json!({"kind": kind, "params": p})
+        }
+    }
+}
+
+fn find_light_angle(f: &Map<String, Value>, initial_light_angle: Option<f64>) -> Option<f64> {
+    let mut light_angle: Option<f64> = None;
+    for e in effects_of(f) {
+        if e.get("on").and_then(Value::as_bool) != Some(true) {
+            continue;
+        }
+        let params = e.get("params").cloned().unwrap_or_else(|| json!({}));
+        if params.get("useGlobalLight").and_then(Value::as_bool) == Some(true)
+            && let Some(angle) = params.get("angle").and_then(Value::as_f64)
+            && initial_light_angle.is_none_or(|initial| angle != initial)
+        {
+            light_angle = Some(angle);
+        }
+    }
+    light_angle
+}
+
 /// Runs the dialog's commands through `run`: blending options, then the whole
 /// effect list in one `layer.layerStyle.replace` (instances keep their order;
 /// their snapshots carry what the dialog doesn't model).
@@ -662,55 +712,14 @@ fn apply(f: &Map<String, Value>, mut run: impl FnMut(&str, Value) -> Result<Valu
     for e in effects_of(f) {
         let (Some(kind), Some(_)) = (e.get("kind").and_then(Value::as_str), e.get("id").and_then(Value::as_str)) else { continue };
         let on = e.get("on").and_then(Value::as_bool).unwrap_or(true);
-        let params = e.get("params").cloned().unwrap_or_else(|| json!({}));
-        let mut params = params;
+        let mut params = e.get("params").cloned().unwrap_or_else(|| json!({}));
         params["enabled"] = json!(on);
-        let entry = match e.get("fx").filter(|fx| fx.is_object()) {
-            Some(fx) => {
-                if kind == "bevelEmboss"
-                    && let Ok(original) = serde_json::from_value::<Effect>(fx.clone())
-                    && let Some(edits) = params.as_object_mut()
-                {
-                    let shown = values_of(&original, initial_light_angle.unwrap_or(120.0) as f32);
-                    // Unedited display values must not quantize imported shading in the snapshot.
-                    for key in ["highlightBlend", "highlightColor", "highlightOpacity", "shadowBlend", "shadowColor", "shadowOpacity"] {
-                        if edits.get(key) == shown.get(key) {
-                            edits.remove(key);
-                        }
-                    }
-                }
-                json!({"kind": kind, "fx": fx, "params": params})
-            }
-            None => {
-                // A new instance: the page shows the factory defaults merged with
-                // the edits, and the engine builds from the full set.
-                let mut p = defaults(kind);
-                if let (Some(o), Some(pv)) = (p.as_object_mut(), params.as_object()) {
-                    for (k, v) in pv {
-                        o.insert(k.clone(), v.clone());
-                    }
-                }
-                json!({"kind": kind, "params": p})
-            }
-        };
-        entries.push(entry);
+        entries.push(effect_entry(e, kind, params, initial_light_angle));
     }
     run("layer.layerStyle.replace", json!({"layer": layer, "effects": entries}))?;
     // An effect lit by the global light follows the document's light angle, so the Angle slider
     // drives that shared angle rather than the per-effect angle the compositor ignores.
-    let mut light_angle: Option<f64> = None;
-    for e in effects_of(f) {
-        if e.get("on").and_then(Value::as_bool) != Some(true) {
-            continue;
-        }
-        let params = e.get("params").cloned().unwrap_or_else(|| json!({}));
-        if params.get("useGlobalLight").and_then(Value::as_bool) == Some(true)
-            && let Some(angle) = params.get("angle").and_then(Value::as_f64)
-            && initial_light_angle.is_none_or(|initial| angle != initial)
-        {
-            light_angle = Some(angle);
-        }
-    }
+    let light_angle = find_light_angle(f, initial_light_angle);
     if let Some(angle) = f.get("pendingGlobalLight").and_then(Value::as_f64).or(light_angle) {
         run("layer.layerStyle.globalLight", json!({"angle": angle}))?;
     }
@@ -1048,7 +1057,8 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                             let mut cur = disp.get(key).and_then(Value::as_str).unwrap_or("Normal").to_string();
                             let opts: Vec<(String, &str)> =
                                 photocraft_color::BlendMode::LAYER_MODES.iter().map(|m| (m.label().to_string(), m.label())).collect();
-                            if widgets::dropdown(ui, &format!("fx-blend-{sel_kind}"), tl!("Blend Mode"), &mut cur, &opts, 150.0) {
+                            // One id per mode: Bevel & Emboss has two (Highlight, Shadow), which must not share a list (#9368).
+                            if widgets::dropdown(ui, &format!("fx-blend-{sel_kind}-{key}"), tl!("Blend Mode"), &mut cur, &opts, 150.0) {
                                 let value = json!(cur);
                                 disp[key] = value.clone();
                                 set_param(f, &selected, key, value);
