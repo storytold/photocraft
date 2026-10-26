@@ -4130,3 +4130,28 @@ curves	Smooth	スムーズ
 	Tight Curl	タイトカール
 	Loose Curl	ルーズカール
 	Stylized dabs from a history state	履歴状態から様式化したダブを描きます
+# File › Automate › PDF Presentation (#6637)
+	Multi-Page Document	複数ページのドキュメント
+	Output Options	出力オプション
+# PDF Presentation: Presentation Options (#6637)
+	Presentation Options	プレゼンテーションオプション
+	Advance Every	自動で進む間隔
+	Seconds	秒
+	Loop after Last Page	最後のページの後に繰り返す
+	Acrobat and Adobe Reader only	Acrobat と Adobe Reader のみ
+	Blinds Horizontal	ブラインド（横）
+	Blinds Vertical	ブラインド（縦）
+	Box In	ボックス（内側へ）
+	Box Out	ボックス（外側へ）
+	Glitter Down	グリッター（下へ）
+	Glitter Right	グリッター（右へ）
+	Glitter Right-Down	グリッター（右下へ）
+	Split Horizontal In	スプリット（横・内側へ）
+	Split Horizontal Out	スプリット（横・外側へ）
+	Split Vertical In	スプリット（縦・内側へ）
+	Split Vertical Out	スプリット（縦・外側へ）
+	Wipe Down	ワイプ（下へ）
+	Wipe Left	ワイプ（左へ）
+	Wipe Right	ワイプ（右へ）
+	Wipe Up	ワイプ（上へ）
+	Uses the saved file: save {name} first to include its latest changes	保存済みのファイルを使用します：最新の変更を含めるには、先に {name} を保存してください

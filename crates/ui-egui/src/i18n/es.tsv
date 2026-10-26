@@ -4413,3 +4413,28 @@ navigator	Zoom	Zoom
 	Tight Curl	Rizo apretado
 	Loose Curl	Rizo suelto
 	Stylized dabs from a history state	Toques estilizados desde un estado del historial
+# File › Automate › PDF Presentation (#6637)
+	Multi-Page Document	Documento de varias páginas
+	Output Options	Opciones de salida
+# PDF Presentation: Presentation Options (#6637)
+	Presentation Options	Opciones de presentación
+	Advance Every	Avanzar cada
+	Seconds	segundos
+	Loop after Last Page	Repetir tras la última página
+	Acrobat and Adobe Reader only	Solo Acrobat y Adobe Reader
+	Blinds Horizontal	Persianas horizontales
+	Blinds Vertical	Persianas verticales
+	Box In	Cuadro hacia dentro
+	Box Out	Cuadro hacia fuera
+	Glitter Down	Destello hacia abajo
+	Glitter Right	Destello hacia la derecha
+	Glitter Right-Down	Destello hacia abajo a la derecha
+	Split Horizontal In	Dividir horizontal hacia dentro
+	Split Horizontal Out	Dividir horizontal hacia fuera
+	Split Vertical In	Dividir vertical hacia dentro
+	Split Vertical Out	Dividir vertical hacia fuera
+	Wipe Down	Barrido hacia abajo
+	Wipe Left	Barrido hacia la izquierda
+	Wipe Right	Barrido hacia la derecha
+	Wipe Up	Barrido hacia arriba
+	Uses the saved file: save {name} first to include its latest changes	Se usa el archivo guardado: guarde {name} primero para incluir sus últimos cambios

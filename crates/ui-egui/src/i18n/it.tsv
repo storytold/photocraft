@@ -4568,3 +4568,28 @@ shape	Appearance	Aspetto
 	Tight Curl	Riccio stretto
 	Loose Curl	Riccio largo
 	Stylized dabs from a history state	Tocchi stilizzati da uno stato della storia
+# File › Automate › PDF Presentation (#6637)
+	Multi-Page Document	Documento multipagina
+	Output Options	Opzioni di output
+# PDF Presentation: Presentation Options (#6637)
+	Presentation Options	Opzioni presentazione
+	Advance Every	Avanza ogni
+	Seconds	secondi
+	Loop after Last Page	Ripeti dopo l'ultima pagina
+	Acrobat and Adobe Reader only	Solo Acrobat e Adobe Reader
+	Blinds Horizontal	Veneziane orizzontali
+	Blinds Vertical	Veneziane verticali
+	Box In	Riquadro verso l'interno
+	Box Out	Riquadro verso l'esterno
+	Glitter Down	Luccichio verso il basso
+	Glitter Right	Luccichio verso destra
+	Glitter Right-Down	Luccichio in basso a destra
+	Split Horizontal In	Dividi orizzontale verso l'interno
+	Split Horizontal Out	Dividi orizzontale verso l'esterno
+	Split Vertical In	Dividi verticale verso l'interno
+	Split Vertical Out	Dividi verticale verso l'esterno
+	Wipe Down	Tendina verso il basso
+	Wipe Left	Tendina verso sinistra
+	Wipe Right	Tendina verso destra
+	Wipe Up	Tendina verso l'alto
+	Uses the saved file: save {name} first to include its latest changes	Usa il file salvato: salva prima {name} per includere le ultime modifiche

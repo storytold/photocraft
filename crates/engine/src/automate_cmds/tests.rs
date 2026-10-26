@@ -527,3 +527,89 @@ fn scripts_nested_deeper_than_the_limit_fail() {
     assert!(r.to_string().contains("nested more than"), "{r}");
     assert_eq!(s.actions.script_depth, 0, "the depth is released");
 }
+
+// ---------- PDF Presentation (#6637) ----------
+
+/// Each page's MediaBox `[0 0 w h]`, in page-tree order (pages are written in that order).
+fn media_boxes(pdf: &[u8]) -> Vec<(f64, f64)> {
+    let text = String::from_utf8_lossy(pdf).into_owned();
+    text.match_indices("/MediaBox [0 0 ")
+        .map(|(i, m)| {
+            let rest = &text[i + m.len()..];
+            let v: Vec<f64> = rest[..rest.find(']').unwrap()].split_whitespace().map(|n| n.parse().unwrap()).collect();
+            (v[0], v[1])
+        })
+        .collect()
+}
+
+#[test]
+fn pdf_presentation_writes_one_page_per_file_in_list_order() {
+    let dir = tmp("pdf-presentation");
+    let wide = images(&tmp("pdf-presentation-wide"), 1, 30, 20).remove(0);
+    let tall = images(&tmp("pdf-presentation-tall"), 1, 10, 40).remove(0);
+    let out = format!("{dir}/deck.pdf");
+    let missing = format!("{dir}/missing.png");
+    let mut s = Session::new();
+    let r = s.execute("file.automate.pdfPresentation", json!({"files": [tall, wide, missing, tall], "path": out})).unwrap();
+    assert_eq!(r["pages"], 3, "a repeated file is a page each time; the missing one is skipped");
+    let errors = r["errors"].as_array().unwrap();
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0]["file"], missing);
+    let pdf = std::fs::read(&out).unwrap();
+    assert!(pdf.starts_with(b"%PDF-1.4") && pdf.ends_with(b"%%EOF\n"));
+    let boxes = media_boxes(&pdf);
+    let shape: Vec<bool> = boxes.iter().map(|(w, h)| h > w).collect();
+    assert_eq!(shape, [true, false, true], "tall, wide, tall: list order ({boxes:?})");
+    assert!((boxes[0].1 / boxes[0].0 - 4.0).abs() < 1e-6, "pages keep the image's proportions");
+    assert!(s.active().is_none(), "nothing is left open");
+    // A folder works as the list too, in its sorted order.
+    let folder = tmp("pdf-presentation-folder");
+    images(&folder, 3, 8, 8);
+    let r = s.execute("file.automate.pdfPresentation", json!({"files": folder, "path": out, "background": "black"})).unwrap();
+    assert_eq!(r["pages"], 3);
+}
+
+#[test]
+fn pdf_presentation_refuses_what_it_cannot_do() {
+    let dir = tmp("pdf-presentation-refusals");
+    let img = images(&dir, 1, 4, 4).remove(0);
+    let out = format!("{dir}/x.pdf");
+    let mut s = Session::new();
+    let err = |s: &mut Session, p: Value| s.execute("file.automate.pdfPresentation", p).unwrap_err().to_string();
+    assert!(err(&mut s, json!({"path": out})).contains("files"));
+    assert!(err(&mut s, json!({"files": [], "path": out})).contains("no files"));
+    assert!(err(&mut s, json!({"files": [img]})).contains("path"));
+    assert!(err(&mut s, json!({"files": [img], "path": out, "saveAs": "presentation", "advance": 0})).contains("Advance Every"));
+    assert!(err(&mut s, json!({"files": [img], "path": out, "saveAs": "presentation", "advance": "5"})).contains("advance"));
+    let e = err(&mut s, json!({"files": [img], "path": out, "saveAs": "presentation", "transition": "fade"}));
+    assert!(e.contains("transition") && e.contains("wipeDown"), "names the choices: {e}");
+    assert!(err(&mut s, json!({"files": [img], "path": out, "saveAs": "slides"})).contains("saveAs"));
+    assert!(err(&mut s, json!({"files": [img], "path": out, "background": "purple"})).contains("background"));
+    let e = err(&mut s, json!({"files": [format!("{dir}/a.png"), format!("{dir}/b.png")], "path": out}));
+    assert!(e.contains("none of the 2 files"), "{e}");
+    assert!(!std::path::Path::new(&out).exists(), "nothing is written when nothing could be placed");
+}
+
+#[test]
+fn pdf_presentation_saves_a_full_screen_presentation() {
+    let dir = tmp("pdf-presentation-show");
+    let imgs = images(&dir, 2, 8, 8);
+    let out = format!("{dir}/show.pdf");
+    let mut s = Session::new();
+    let r = s
+        .execute(
+            "file.automate.pdfPresentation",
+            json!({"files": imgs, "path": out, "saveAs": "presentation", "advance": 5, "loop": true, "transition": "dissolve"}),
+        )
+        .unwrap();
+    assert_eq!(r["pages"], 2);
+    let text = String::from_utf8_lossy(&std::fs::read(&out).unwrap()).into_owned();
+    assert!(text.contains("/PageMode /FullScreen"));
+    assert_eq!(text.matches("/Dur 5").count(), 2);
+    assert_eq!(text.matches("/S /Dissolve").count(), 2);
+    assert!(text.contains("app.fs.loop = true;"));
+    // The presentation options don't touch a Multi-Page Document.
+    s.execute("file.automate.pdfPresentation", json!({"files": imgs, "path": out, "advance": 5, "loop": true, "transition": "dissolve"})).unwrap();
+    let text = String::from_utf8_lossy(&std::fs::read(&out).unwrap()).into_owned();
+    assert!(!text.contains("/PageMode") && !text.contains("/Dur") && !text.contains("/Trans") && !text.contains("JavaScript"));
+}

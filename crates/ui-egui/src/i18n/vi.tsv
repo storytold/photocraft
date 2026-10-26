@@ -3949,3 +3949,29 @@ curves	Smooth	Làm mượt
 
 # Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
 	Aspect Ratio	Tỷ lệ khung hình
+# File › Automate › PDF Presentation (#6637)
+	PDF Presentation…	Trình chiếu PDF…
+	Multi-Page Document	Tài liệu nhiều trang
+	Output Options	Tùy chọn đầu ra
+# PDF Presentation: Presentation Options (#6637)
+	Presentation Options	Tùy chọn trình chiếu
+	Advance Every	Chuyển trang sau mỗi
+	Seconds	giây
+	Loop after Last Page	Lặp lại sau trang cuối
+	Acrobat and Adobe Reader only	Chỉ Acrobat và Adobe Reader
+	Blinds Horizontal	Rèm ngang
+	Blinds Vertical	Rèm dọc
+	Box In	Hộp vào trong
+	Box Out	Hộp ra ngoài
+	Glitter Down	Lấp lánh xuống
+	Glitter Right	Lấp lánh sang phải
+	Glitter Right-Down	Lấp lánh xuống phải
+	Split Horizontal In	Tách ngang vào trong
+	Split Horizontal Out	Tách ngang ra ngoài
+	Split Vertical In	Tách dọc vào trong
+	Split Vertical Out	Tách dọc ra ngoài
+	Wipe Down	Quét xuống
+	Wipe Left	Quét sang trái
+	Wipe Right	Quét sang phải
+	Wipe Up	Quét lên
+	Uses the saved file: save {name} first to include its latest changes	Dùng tệp đã lưu: hãy lưu {name} trước để đưa vào các thay đổi mới nhất

@@ -3475,3 +3475,31 @@ curves	Smooth	Glätten
 	Interpolation	Interpolation
 	Target	Ziel
 	Units	Einheiten
+# File › Automate › PDF Presentation (#6637)
+	PDF Presentation…	PDF-Präsentation…
+	Multi-Page Document	Mehrseitiges Dokument
+	Output Options	Ausgabeoptionen
+	Duplicate	Duplizieren
+	Save As	Speichern unter
+# PDF Presentation: Presentation Options (#6637)
+	Presentation Options	Präsentationsoptionen
+	Advance Every	Weiter alle
+	Seconds	Sekunden
+	Loop after Last Page	Nach letzter Seite wiederholen
+	Acrobat and Adobe Reader only	Nur Acrobat und Adobe Reader
+	Blinds Horizontal	Jalousie horizontal
+	Blinds Vertical	Jalousie vertikal
+	Box In	Rechteck nach innen
+	Box Out	Rechteck nach außen
+	Glitter Down	Glitzern nach unten
+	Glitter Right	Glitzern nach rechts
+	Glitter Right-Down	Glitzern nach rechts unten
+	Split Horizontal In	Teilen horizontal nach innen
+	Split Horizontal Out	Teilen horizontal nach außen
+	Split Vertical In	Teilen vertikal nach innen
+	Split Vertical Out	Teilen vertikal nach außen
+	Wipe Down	Wischen nach unten
+	Wipe Left	Wischen nach links
+	Wipe Right	Wischen nach rechts
+	Wipe Up	Wischen nach oben
+	Uses the saved file: save {name} first to include its latest changes	Verwendet die gespeicherte Datei: {name} zuerst speichern, um die letzten Änderungen einzuschließen

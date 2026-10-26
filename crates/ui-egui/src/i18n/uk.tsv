@@ -4164,3 +4164,28 @@ curves	Smooth	Згладити
 
 # Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
 	Target	Ціль
+# File › Automate › PDF Presentation (#6637)
+	Multi-Page Document	Багатосторінковий документ
+	Output Options	Параметри виводу
+# PDF Presentation: Presentation Options (#6637)
+	Presentation Options	Параметри презентації
+	Advance Every	Перехід кожні
+	Seconds	секунд
+	Loop after Last Page	Повтор після останньої сторінки
+	Acrobat and Adobe Reader only	Лише Acrobat і Adobe Reader
+	Blinds Horizontal	Жалюзі горизонтально
+	Blinds Vertical	Жалюзі вертикально
+	Box In	Прямокутник усередину
+	Box Out	Прямокутник назовні
+	Glitter Down	Мерехтіння вниз
+	Glitter Right	Мерехтіння праворуч
+	Glitter Right-Down	Мерехтіння праворуч униз
+	Split Horizontal In	Розділення горизонтально всередину
+	Split Horizontal Out	Розділення горизонтально назовні
+	Split Vertical In	Розділення вертикально всередину
+	Split Vertical Out	Розділення вертикально назовні
+	Wipe Down	Витирання вниз
+	Wipe Left	Витирання ліворуч
+	Wipe Right	Витирання праворуч
+	Wipe Up	Витирання вгору
+	Uses the saved file: save {name} first to include its latest changes	Використовується збережений файл: спершу збережіть {name}, щоб включити останні зміни

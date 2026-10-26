@@ -3670,3 +3670,29 @@ curves	Smooth	매끄럽게
 	Category	카테고리
 	Target	대상
 	Units	단위
+# File › Automate › PDF Presentation (#6637)
+	PDF Presentation…	PDF 프레젠테이션…
+	Multi-Page Document	여러 페이지 문서
+	Output Options	출력 옵션
+# PDF Presentation: Presentation Options (#6637)
+	Presentation Options	프레젠테이션 옵션
+	Advance Every	자동 넘김 간격
+	Seconds	초
+	Loop after Last Page	마지막 페이지 후 반복
+	Acrobat and Adobe Reader only	Acrobat 및 Adobe Reader 전용
+	Blinds Horizontal	블라인드 가로
+	Blinds Vertical	블라인드 세로
+	Box In	상자 안쪽으로
+	Box Out	상자 바깥쪽으로
+	Glitter Down	반짝임 아래로
+	Glitter Right	반짝임 오른쪽으로
+	Glitter Right-Down	반짝임 오른쪽 아래로
+	Split Horizontal In	분할 가로 안쪽으로
+	Split Horizontal Out	분할 가로 바깥쪽으로
+	Split Vertical In	분할 세로 안쪽으로
+	Split Vertical Out	분할 세로 바깥쪽으로
+	Wipe Down	닦아내기 아래로
+	Wipe Left	닦아내기 왼쪽으로
+	Wipe Right	닦아내기 오른쪽으로
+	Wipe Up	닦아내기 위로
+	Uses the saved file: save {name} first to include its latest changes	저장된 파일을 사용합니다: 최근 변경 사항을 포함하려면 먼저 {name}을(를) 저장하세요

@@ -10,6 +10,7 @@
 use photocraft_color::{Color, ColorMode, PixelFormat, SampleType};
 use photocraft_doc::{Artboard, ArtboardBackground, Document, Layer, LayerContent, LayerId, Size};
 use photocraft_geom::{Affine, Rect};
+use photocraft_io::pdf::{self, ImageEncoding, Marks, OtherModes, PdfWriter, PrintImage, PrintPage};
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
 
@@ -588,76 +589,47 @@ fn artboards_to_files(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"files": files}))
 }
 
-/// A minimal PDF with one page per JPEG image: (width px, height px, dpi, JPEG bytes).
-/// Pages are sized so the image prints at its resolution.
-pub fn raster_pdf(pages: &[(u32, u32, f32, Vec<u8>)]) -> Vec<u8> {
-    let mut out: Vec<u8> = b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n".to_vec();
-    let mut offsets: Vec<usize> = Vec::new();
-    let mut obj = |out: &mut Vec<u8>, body: &[u8]| {
-        offsets.push(out.len());
-        out.extend_from_slice(format!("{} 0 obj\n", offsets.len()).as_bytes());
-        out.extend_from_slice(body);
-        out.extend_from_slice(b"\nendobj\n");
-    };
-    // Objects: 1 catalog, 2 page tree, then per page: page, contents, image.
-    let kids: Vec<String> = (0..pages.len()).map(|i| format!("{} 0 R", 3 + i * 3)).collect();
-    obj(&mut out, b"<< /Type /Catalog /Pages 2 0 R >>");
-    obj(&mut out, format!("<< /Type /Pages /Kids [{}] /Count {} >>", kids.join(" "), pages.len()).as_bytes());
-    for (i, (w, h, dpi, jpeg)) in pages.iter().enumerate() {
-        let k = 72.0 / f64::from(dpi.max(1.0));
-        let (pw, ph) = (f64::from(*w) * k, f64::from(*h) * k);
-        let (contents, image) = (4 + i * 3, 5 + i * 3);
-        obj(
-            &mut out,
-            format!(
-                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {pw:.3} {ph:.3}] /Resources << /XObject << /Im0 {image} 0 R >> >> /Contents {contents} 0 R >>"
-            )
-            .as_bytes(),
-        );
-        let stream = format!("q {pw:.3} 0 0 {ph:.3} 0 0 cm /Im0 Do Q");
-        obj(&mut out, format!("<< /Length {} >>\nstream\n{stream}\nendstream", stream.len()).as_bytes());
-        let mut img = format!(
-            "<< /Type /XObject /Subtype /Image /Width {w} /Height {h} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length {} >>\nstream\n",
-            jpeg.len()
-        )
-        .into_bytes();
-        img.extend_from_slice(jpeg);
-        img.extend_from_slice(b"\nendstream");
-        obj(&mut out, &img);
-    }
-    let xref = out.len();
-    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", offsets.len() + 1).as_bytes());
-    for o in &offsets {
-        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
-    }
-    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", offsets.len() + 1).as_bytes());
-    out
+/// One board as a JPEG page: flattened over white to 8-bit RGB (the encoder's only space here),
+/// at the board's print size.
+fn jpeg_page(one: &Document, quality: Option<f64>) -> Result<PrintPage> {
+    let buf = photocraft_compose::flatten(one).over_background([1.0, 1.0, 1.0]);
+    let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::U8, true);
+    let mut flat = Document::new(&one.name, one.size, ColorMode::Rgb, SampleType::U8);
+    let mut surf = Surface::new(fmt);
+    let vals: Vec<f32> = buf.px.iter().flat_map(|px| photocraft_raster::from_rgba(&fmt, *px)).collect();
+    surf.write_region(one.bounds(), &vals);
+    flat.layers.push(Layer::new("Background", LayerContent::Raster(surf)));
+    let (jpeg, _) = encode(&flat, "page.jpg", quality)?;
+    let image = PrintImage { width: one.size.width, height: one.size.height, channels: 3, data: jpeg, icc: None, encoding: ImageEncoding::Jpeg };
+    let (pw, ph) = pdf::print_size(one);
+    Ok(PrintPage { paper: (pw, ph), image, rect: (0.0, 0.0, pw, ph), marks: Marks::default(), description: None, label: None })
 }
 
-/// File › Export › Artboards to PDF: one page per board (flattened over white, JPEG-encoded).
+/// File › Export › Artboards to PDF: one page per board, flattened over white. ZIP keeps the
+/// document's Gray/RGB/CMYK samples and profile losslessly; JPEG is smaller, always RGB.
 fn artboards_to_pdf(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.export.artboardsToPdf";
     let path = str_param(p, "path", cmd)?.to_string();
+    let jpeg = match p.get("encoding").and_then(Value::as_str).unwrap_or("zip") {
+        "zip" => false,
+        "jpeg" | "jpg" => true,
+        other => return Err(bad(cmd, format!("\"encoding\" must be \"zip\" or \"jpeg\", not {other:?}"))),
+    };
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let doc = d.doc.clone();
     let quality = f64_param(p, "quality").or(Some(10.0));
-    let mut pages = Vec::new();
+    let mut out = PdfWriter::new();
+    // One board at a time: its samples are compressed into the file before the next is drawn.
     for one in chosen_documents(&doc, p)? {
-        let buf = photocraft_compose::flatten(&one).over_background([1.0, 1.0, 1.0]);
-        let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::U8, true);
-        let mut flat = Document::new(&one.name, one.size, ColorMode::Rgb, SampleType::U8);
-        let mut surf = Surface::new(fmt);
-        let vals: Vec<f32> = buf.px.iter().flat_map(|px| photocraft_raster::from_rgba(&fmt, *px)).collect();
-        surf.write_region(one.bounds(), &vals);
-        flat.layers.push(Layer::new("Background", LayerContent::Raster(surf)));
-        let (jpeg, _) = encode(&flat, "page.jpg", quality)?;
-        pages.push((one.size.width, one.size.height, doc.resolution_dpi, jpeg));
+        let page = if jpeg { jpeg_page(&one, quality)? } else { pdf::flat_page(&one, OtherModes::AsRgb).map_err(|e| bad(cmd, e.to_string()))? };
+        out.add_page(&page).map_err(|e| bad(cmd, e.to_string()))?;
     }
-    if pages.is_empty() {
+    let pages = out.pages();
+    if pages == 0 {
         return Err(bad(cmd, "no matching artboards"));
     }
-    write_file(&path, &raster_pdf(&pages))?;
-    Ok(json!({"path": path, "pages": pages.len()}))
+    write_file(&path, &out.finish())?;
+    Ok(json!({"path": path, "pages": pages}))
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -727,7 +699,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.export.artboardsToPdf",
             "Artboards to PDF…",
             &["File", "Export"],
-            r##"{"path":str (.pdf),"artboards":[id]?,"quality":0..12=10} → {path, pages} (one raster page per board)"##,
+            r##"{"path":str (.pdf),"artboards":[id]?,"encoding":"zip|jpeg"="zip","quality":0..12=10 (jpeg)} → {path, pages} (one raster page per board; zip keeps Gray/RGB/CMYK and the profile)"##,
             export_artboards,
             artboards_to_pdf
         ),

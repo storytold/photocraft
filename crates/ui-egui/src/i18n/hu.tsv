@@ -4366,3 +4366,28 @@ cameraRaw	Yellow	Sárga
 	Tight Curl	Szoros göndör
 	Loose Curl	Laza göndör
 	Stylized dabs from a history state	Stilizált pöttyök egy előzményállapotból
+# File › Automate › PDF Presentation (#6637)
+	Multi-Page Document	Többoldalas dokumentum
+	Output Options	Kimeneti beállítások
+# PDF Presentation: Presentation Options (#6637)
+	Presentation Options	Bemutató beállításai
+	Advance Every	Továbblépés minden
+	Seconds	másodpercben
+	Loop after Last Page	Ismétlés az utolsó oldal után
+	Acrobat and Adobe Reader only	Csak Acrobat és Adobe Reader
+	Blinds Horizontal	Reluxa vízszintesen
+	Blinds Vertical	Reluxa függőlegesen
+	Box In	Doboz befelé
+	Box Out	Doboz kifelé
+	Glitter Down	Csillogás lefelé
+	Glitter Right	Csillogás jobbra
+	Glitter Right-Down	Csillogás jobbra le
+	Split Horizontal In	Szétválás vízszintesen befelé
+	Split Horizontal Out	Szétválás vízszintesen kifelé
+	Split Vertical In	Szétválás függőlegesen befelé
+	Split Vertical Out	Szétválás függőlegesen kifelé
+	Wipe Down	Törlés lefelé
+	Wipe Left	Törlés balra
+	Wipe Right	Törlés jobbra
+	Wipe Up	Törlés felfelé
+	Uses the saved file: save {name} first to include its latest changes	A mentett fájlt használja: előbb mentse a(z) {name} fájlt, hogy a legutóbbi módosítások is bekerüljenek

@@ -4180,3 +4180,28 @@ cameraData	Lens	Lens
 	Tight Curl	Sıkı Kıvrım
 	Loose Curl	Gevşek Kıvrım
 	Stylized dabs from a history state	Bir geçmiş durumundan stilize benekler
+# File › Automate › PDF Presentation (#6637)
+	Multi-Page Document	Çok sayfalı belge
+	Output Options	Çıktı seçenekleri
+# PDF Presentation: Presentation Options (#6637)
+	Presentation Options	Sunum seçenekleri
+	Advance Every	Şu aralıkla ilerle
+	Seconds	saniye
+	Loop after Last Page	Son sayfadan sonra döngü
+	Acrobat and Adobe Reader only	Yalnızca Acrobat ve Adobe Reader
+	Blinds Horizontal	Panjur yatay
+	Blinds Vertical	Panjur dikey
+	Box In	Kutu içe
+	Box Out	Kutu dışa
+	Glitter Down	Parıltı aşağı
+	Glitter Right	Parıltı sağa
+	Glitter Right-Down	Parıltı sağ aşağı
+	Split Horizontal In	Bölme yatay içe
+	Split Horizontal Out	Bölme yatay dışa
+	Split Vertical In	Bölme dikey içe
+	Split Vertical Out	Bölme dikey dışa
+	Wipe Down	Silme aşağı
+	Wipe Left	Silme sola
+	Wipe Right	Silme sağa
+	Wipe Up	Silme yukarı
+	Uses the saved file: save {name} first to include its latest changes	Kaydedilmiş dosya kullanılır: son değişiklikleri eklemek için önce {name} dosyasını kaydedin

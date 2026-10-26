@@ -4493,3 +4493,28 @@ shape	Appearance	Apparence
 	Tight Curl	Boucle serrée
 	Loose Curl	Boucle lâche
 	Stylized dabs from a history state	Touches stylisées depuis un état d'historique
+# File › Automate › PDF Presentation (#6637)
+	Multi-Page Document	Document multipage
+	Output Options	Options de sortie
+# PDF Presentation: Presentation Options (#6637)
+	Presentation Options	Options de présentation
+	Advance Every	Avancer toutes les
+	Seconds	secondes
+	Loop after Last Page	Boucler après la dernière page
+	Acrobat and Adobe Reader only	Acrobat et Adobe Reader uniquement
+	Blinds Horizontal	Stores horizontaux
+	Blinds Vertical	Stores verticaux
+	Box In	Boîte vers l'intérieur
+	Box Out	Boîte vers l'extérieur
+	Glitter Down	Scintillement vers le bas
+	Glitter Right	Scintillement vers la droite
+	Glitter Right-Down	Scintillement en bas à droite
+	Split Horizontal In	Fractionner horizontalement vers l'intérieur
+	Split Horizontal Out	Fractionner horizontalement vers l'extérieur
+	Split Vertical In	Fractionner verticalement vers l'intérieur
+	Split Vertical Out	Fractionner verticalement vers l'extérieur
+	Wipe Down	Balayage vers le bas
+	Wipe Left	Balayage vers la gauche
+	Wipe Right	Balayage vers la droite
+	Wipe Up	Balayage vers le haut
+	Uses the saved file: save {name} first to include its latest changes	Utilise le fichier enregistré : enregistrez d'abord {name} pour inclure ses dernières modifications

@@ -4211,3 +4211,28 @@ curves	Smooth	Vloeiend maken
 	Tight Curl	Strakke krul
 	Loose Curl	Losse krul
 	Stylized dabs from a history state	Gestileerde tikken uit een historiestatus
+# File › Automate › PDF Presentation (#6637)
+	Multi-Page Document	Document met meerdere pagina’s
+	Output Options	Uitvoeropties
+# PDF Presentation: Presentation Options (#6637)
+	Presentation Options	Presentatieopties
+	Advance Every	Ga verder elke
+	Seconds	seconden
+	Loop after Last Page	Herhalen na laatste pagina
+	Acrobat and Adobe Reader only	Alleen Acrobat en Adobe Reader
+	Blinds Horizontal	Jaloezie horizontaal
+	Blinds Vertical	Jaloezie verticaal
+	Box In	Kader naar binnen
+	Box Out	Kader naar buiten
+	Glitter Down	Glinstering omlaag
+	Glitter Right	Glinstering naar rechts
+	Glitter Right-Down	Glinstering rechtsonder
+	Split Horizontal In	Splitsen horizontaal naar binnen
+	Split Horizontal Out	Splitsen horizontaal naar buiten
+	Split Vertical In	Splitsen verticaal naar binnen
+	Split Vertical Out	Splitsen verticaal naar buiten
+	Wipe Down	Vegen omlaag
+	Wipe Left	Vegen naar links
+	Wipe Right	Vegen naar rechts
+	Wipe Up	Vegen omhoog
+	Uses the saved file: save {name} first to include its latest changes	Gebruikt het opgeslagen bestand: sla {name} eerst op om de laatste wijzigingen mee te nemen

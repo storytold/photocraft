@@ -175,6 +175,7 @@ pub mod parity;
 pub mod patch_preview;
 pub(crate) mod pattern_fill_ui;
 pub mod pattern_preview;
+pub mod pdf_presentation_ui;
 pub mod perspective_crop_ui;
 pub mod perspective_ui;
 pub mod pixel_grid;

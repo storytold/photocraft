@@ -4654,3 +4654,28 @@ shape	Appearance	Оформление
 	Tight Curl	Плотный завиток
 	Loose Curl	Свободный завиток
 	Stylized dabs from a history state	Стилизованные мазки из состояния истории
+# File › Automate › PDF Presentation (#6637)
+	Multi-Page Document	Многостраничный документ
+	Output Options	Параметры вывода
+# PDF Presentation: Presentation Options (#6637)
+	Presentation Options	Параметры презентации
+	Advance Every	Переход каждые
+	Seconds	секунд
+	Loop after Last Page	Повтор после последней страницы
+	Acrobat and Adobe Reader only	Только Acrobat и Adobe Reader
+	Blinds Horizontal	Жалюзи горизонтально
+	Blinds Vertical	Жалюзи вертикально
+	Box In	Прямоугольник внутрь
+	Box Out	Прямоугольник наружу
+	Glitter Down	Мерцание вниз
+	Glitter Right	Мерцание вправо
+	Glitter Right-Down	Мерцание вправо-вниз
+	Split Horizontal In	Разделение горизонтально внутрь
+	Split Horizontal Out	Разделение горизонтально наружу
+	Split Vertical In	Разделение вертикально внутрь
+	Split Vertical Out	Разделение вертикально наружу
+	Wipe Down	Вытеснение вниз
+	Wipe Left	Вытеснение влево
+	Wipe Right	Вытеснение вправо
+	Wipe Up	Вытеснение вверх
+	Uses the saved file: save {name} first to include its latest changes	Используется сохранённый файл: сначала сохраните {name}, чтобы включить последние изменения

@@ -4201,3 +4201,29 @@ cameraRaw	Dehaze	Odstranění oparu
 
 # Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
 	Aspect Ratio	Poměr stran
+# File › Automate › PDF Presentation (#6637)
+	PDF Presentation…	Prezentace PDF…
+	Multi-Page Document	Vícestránkový dokument
+	Output Options	Možnosti výstupu
+# PDF Presentation: Presentation Options (#6637)
+	Presentation Options	Možnosti prezentace
+	Advance Every	Posunout každých
+	Seconds	sekund
+	Loop after Last Page	Opakovat po poslední stránce
+	Acrobat and Adobe Reader only	Pouze Acrobat a Adobe Reader
+	Blinds Horizontal	Žaluzie vodorovně
+	Blinds Vertical	Žaluzie svisle
+	Box In	Rámeček dovnitř
+	Box Out	Rámeček ven
+	Glitter Down	Třpyt dolů
+	Glitter Right	Třpyt doprava
+	Glitter Right-Down	Třpyt doprava dolů
+	Split Horizontal In	Rozdělit vodorovně dovnitř
+	Split Horizontal Out	Rozdělit vodorovně ven
+	Split Vertical In	Rozdělit svisle dovnitř
+	Split Vertical Out	Rozdělit svisle ven
+	Wipe Down	Setřít dolů
+	Wipe Left	Setřít doleva
+	Wipe Right	Setřít doprava
+	Wipe Up	Setřít nahoru
+	Uses the saved file: save {name} first to include its latest changes	Použije se uložený soubor: nejprve uložte {name}, aby zahrnoval poslední změny

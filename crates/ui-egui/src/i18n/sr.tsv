@@ -4524,3 +4524,28 @@ shape	Appearance	Izgled
 	Tight Curl	Usko uvijeno
 	Loose Curl	Labavo uvijeno
 	Stylized dabs from a history state	Stilizovane mrlje iz stanja istorije
+# File › Automate › PDF Presentation (#6637)
+	Multi-Page Document	Dokument sa više stranica
+	Output Options	Opcije izlaza
+# PDF Presentation: Presentation Options (#6637)
+	Presentation Options	Opcije prezentacije
+	Advance Every	Napred na svakih
+	Seconds	sekundi
+	Loop after Last Page	Ponovi posle poslednje stranice
+	Acrobat and Adobe Reader only	Samo Acrobat i Adobe Reader
+	Blinds Horizontal	Roletne vodoravno
+	Blinds Vertical	Roletne uspravno
+	Box In	Okvir ka unutra
+	Box Out	Okvir ka spolja
+	Glitter Down	Svetlucanje nadole
+	Glitter Right	Svetlucanje udesno
+	Glitter Right-Down	Svetlucanje udesno nadole
+	Split Horizontal In	Podela vodoravno ka unutra
+	Split Horizontal Out	Podela vodoravno ka spolja
+	Split Vertical In	Podela uspravno ka unutra
+	Split Vertical Out	Podela uspravno ka spolja
+	Wipe Down	Brisanje nadole
+	Wipe Left	Brisanje ulevo
+	Wipe Right	Brisanje udesno
+	Wipe Up	Brisanje nagore
+	Uses the saved file: save {name} first to include its latest changes	Koristi se sačuvana datoteka: prvo sačuvajte {name} da bi bile uključene poslednje izmene

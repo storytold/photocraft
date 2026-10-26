@@ -3473,3 +3473,30 @@ curves	Smooth	Haluskan
 	Gamma	Gamma
 	Profile	Profil
 	Target	Target
+# File › Automate › PDF Presentation (#6637)
+	Multi-Page Document	Dokumen multihalaman
+	Output Options	Opsi keluaran
+	Save As	Simpan sebagai
+# PDF Presentation: Presentation Options (#6637)
+	Presentation Options	Opsi presentasi
+	Advance Every	Maju setiap
+	Seconds	detik
+	Loop after Last Page	Ulangi setelah halaman terakhir
+	Acrobat and Adobe Reader only	Hanya Acrobat dan Adobe Reader
+	Blinds Horizontal	Kerai horizontal
+	Blinds Vertical	Kerai vertikal
+	Box In	Kotak ke dalam
+	Box Out	Kotak ke luar
+	Glitter Down	Kilau ke bawah
+	Glitter Right	Kilau ke kanan
+	Glitter Right-Down	Kilau ke kanan bawah
+	Split Horizontal In	Belah horizontal ke dalam
+	Split Horizontal Out	Belah horizontal ke luar
+	Split Vertical In	Belah vertikal ke dalam
+	Split Vertical Out	Belah vertikal ke luar
+	Wipe Down	Sapu ke bawah
+	Wipe Left	Sapu ke kiri
+	Wipe Right	Sapu ke kanan
+	Wipe Up	Sapu ke atas
+	Transition	Transisi
+	Uses the saved file: save {name} first to include its latest changes	Memakai berkas yang tersimpan: simpan {name} dulu agar perubahan terakhirnya ikut masuk

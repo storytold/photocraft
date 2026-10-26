@@ -4154,3 +4154,28 @@ curves	Smooth	Εξομάλυνση
 
 # Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
 	Target	Στόχος
+# File › Automate › PDF Presentation (#6637)
+	Multi-Page Document	Έγγραφο πολλών σελίδων
+	Output Options	Επιλογές εξόδου
+# PDF Presentation: Presentation Options (#6637)
+	Presentation Options	Επιλογές παρουσίασης
+	Advance Every	Προώθηση κάθε
+	Seconds	δευτερόλεπτα
+	Loop after Last Page	Επανάληψη μετά την τελευταία σελίδα
+	Acrobat and Adobe Reader only	Μόνο Acrobat και Adobe Reader
+	Blinds Horizontal	Περσίδες οριζόντια
+	Blinds Vertical	Περσίδες κάθετα
+	Box In	Πλαίσιο προς τα μέσα
+	Box Out	Πλαίσιο προς τα έξω
+	Glitter Down	Λάμψη προς τα κάτω
+	Glitter Right	Λάμψη προς τα δεξιά
+	Glitter Right-Down	Λάμψη δεξιά-κάτω
+	Split Horizontal In	Διαχωρισμός οριζόντια προς τα μέσα
+	Split Horizontal Out	Διαχωρισμός οριζόντια προς τα έξω
+	Split Vertical In	Διαχωρισμός κάθετα προς τα μέσα
+	Split Vertical Out	Διαχωρισμός κάθετα προς τα έξω
+	Wipe Down	Σάρωση προς τα κάτω
+	Wipe Left	Σάρωση προς τα αριστερά
+	Wipe Right	Σάρωση προς τα δεξιά
+	Wipe Up	Σάρωση προς τα πάνω
+	Uses the saved file: save {name} first to include its latest changes	Χρησιμοποιείται το αποθηκευμένο αρχείο: αποθηκεύστε πρώτα το {name} για να συμπεριληφθούν οι τελευταίες αλλαγές

@@ -1,6 +1,6 @@
-//! File › Automate › Contact Sheet II and Create Droplet, File › Scripts › Statistics, Browse
-//! and Script Events Manager, plus the session state the File-menu commands share
-//! ([`FileMenuState`]).
+//! File › Automate › Contact Sheet II, PDF Presentation and Create Droplet, File › Scripts ›
+//! Statistics, Browse and Script Events Manager, plus the session state the File-menu commands
+//! share ([`FileMenuState`]).
 //!
 //! "Scripts" are PhotoCraft action scripts: JSON (`[[id, params], …]`, `{"steps": …}` or a
 //! droplet) or a plain-text list with one `command.id {json params}` per line (`#` comments).
@@ -13,11 +13,12 @@
 //! Close, Print and Export itself; the app shell fires Start, Open and Save.
 
 use photocraft_doc::{DocId, Layer, LayerContent};
+use photocraft_io::pdf::{self, OtherModes, PdfWriter};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
-use crate::file_cmds::{file_name, import, join, list_images, read_file, stem, write_file};
+use crate::file_cmds::{file_name, import, import_opened, join, list_images, read_file, stem, str_param, write_file};
 use crate::{EngineError, Result, Session};
 
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
@@ -565,6 +566,78 @@ fn contact_sheet(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"documents": docs, "pages": docs.len(), "images": placed, "errors": errors, "width": pw, "height": ph}))
 }
 
+/// Save As Presentation's options: Advance Every (`advance`, seconds; absent or null = when the
+/// viewer is told to), Loop after Last Page (`loop`) and Transition (`transition`).
+fn presentation_options(p: &Value, cmd: &str) -> Result<pdf::Presentation> {
+    let advance = match p.get("advance") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(v.as_f64().ok_or_else(|| bad(cmd, "\"advance\" is a number of seconds (or null)"))?),
+    };
+    let transition = match p.get("transition").and_then(Value::as_str) {
+        None => pdf::Transition::None,
+        Some(id) => pdf::Transition::from_id(id).ok_or_else(|| {
+            let ids: Vec<&str> = pdf::Transition::ALL.iter().map(|t| t.id()).collect();
+            bad(cmd, format!("unknown \"transition\" {id:?}; one of {}", ids.join(", ")))
+        })?,
+    };
+    Ok(pdf::Presentation { advance, loop_after_last: p.get("loop").and_then(Value::as_bool).unwrap_or(false), transition })
+}
+
+/// File › Automate › PDF Presentation: each file flattened onto a page of its own print size,
+/// in list order (a file listed twice is two pages), as a Multi-Page Document or a full-screen
+/// Presentation. Files are opened, drawn and compressed one at a time; one that can't be read
+/// lands in `errors` and the rest still go in.
+fn pdf_presentation(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "file.automate.pdfPresentation";
+    let path = str_param(p, "path", cmd)?.to_string();
+    let files: Vec<String> = match p.get("files").or_else(|| p.get("input")) {
+        Some(Value::Array(a)) => a.iter().filter_map(Value::as_str).map(str::to_string).collect(),
+        Some(Value::String(dir)) => list_images(dir)?,
+        _ => return Err(bad(cmd, "missing \"files\" (an array of files, or a folder)")),
+    };
+    if files.is_empty() {
+        return Err(bad(cmd, "no files to place"));
+    }
+    if files.len() > pdf::MAX_PAGES {
+        return Err(bad(cmd, format!("{} files; a PDF presentation holds at most {}", files.len(), pdf::MAX_PAGES)));
+    }
+    // The presentation options only apply to a presentation, as in the dialog.
+    let show = match p.get("saveAs").and_then(Value::as_str).unwrap_or("multiPage") {
+        "multiPage" => None,
+        "presentation" => Some(presentation_options(p, cmd)?),
+        other => return Err(bad(cmd, format!("\"saveAs\" must be \"multiPage\" or \"presentation\", not {other:?}"))),
+    };
+    let paper = match p.get("background").and_then(Value::as_str).unwrap_or("white") {
+        "white" => 1.0,
+        "gray" | "grey" => 0.5,
+        "black" => 0.0,
+        other => return Err(bad(cmd, format!("\"background\" must be \"white\", \"gray\" or \"black\", not {other:?}"))),
+    };
+    let mut out = match show {
+        Some(show) => PdfWriter::presentation(show).map_err(|e| bad(cmd, e.to_string()))?,
+        None => PdfWriter::new(),
+    };
+    let mut errors = Vec::new();
+    for file in &files {
+        let page = (|| -> Result<pdf::PrintPage> {
+            let bytes = read_file(file)?;
+            let doc = import_opened(s, &file_name(file), &bytes)?;
+            pdf::flat_page_over(&doc, OtherModes::AsRgb, paper).map_err(|e| EngineError::Other(format!("{file}: {e}")))
+        })();
+        match page {
+            Ok(page) => out.add_page(&page).map_err(|e| bad(cmd, e.to_string()))?,
+            Err(e) => errors.push(json!({"file": file, "error": e.to_string()})),
+        }
+    }
+    let pages = out.pages();
+    if pages == 0 {
+        let first = errors.first().and_then(|e| e["error"].as_str()).unwrap_or_default().to_string();
+        return Err(bad(cmd, format!("none of the {} files could be placed; first: {first}", files.len())));
+    }
+    write_file(&path, &out.finish())?;
+    Ok(json!({"path": path, "pages": pages, "errors": errors}))
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     macro_rules! spec {
         ($id:expr, $label:expr, $menu:expr, $params:expr, $enabled:expr, $run:expr) => {
@@ -580,6 +653,14 @@ pub fn specs() -> Vec<CommandSpec> {
             r##"{"input":folder|[paths],"units":"inches|cm|mm|pixels"="inches","width":8,"height":10,"resolution":ppi=300,"mode":"rgb|gray|cmyk|lab"="rgb","depth":8|16=8,"columns":5,"rows":6,"placeAcrossFirst":bool=true,"autoSpacing":bool=true,"horizontal":units?,"vertical":units?,"rotateForBestFit":bool=false,"caption":bool=true (file name as caption),"font":family?,"fontSize":pt=12,"flatten":bool=false} → {documents, pages, images}"##,
             native,
             contact_sheet
+        ),
+        spec!(
+            "file.automate.pdfPresentation",
+            "PDF Presentation…",
+            &["File", "Automate"],
+            r##"{"files":[paths] (page order; repeats allowed)|folder,"path":str (.pdf),"saveAs":"multiPage|presentation"="multiPage","background":"white|gray|black"="white","advance":seconds? (presentation: Advance Every; 0 < s ≤ 3600),"loop":bool=false (presentation: Loop after Last Page; Acrobat/Reader only),"transition":"none|blindsHorizontal|blindsVertical|boxIn|boxOut|dissolve|glitterDown|glitterRight|glitterRightDown|random|splitHorizontalIn|splitHorizontalOut|splitVerticalIn|splitVerticalOut|wipeDown|wipeLeft|wipeRight|wipeUp"="none" (presentation)} → {path, pages, errors} (one flattened page per file at its print size; Gray/RGB/CMYK and the profile kept, other modes as RGB; a presentation opens full screen)"##,
+            native,
+            pdf_presentation
         ),
         spec!(
             "file.automate.createDroplet",

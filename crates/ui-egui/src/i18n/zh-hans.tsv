@@ -3134,3 +3134,32 @@ curves	Smooth	平滑
 	Profile	配置文件
 	Target	目标
 	Units	单位
+# File › Automate › PDF Presentation (#6637)
+	PDF Presentation…	PDF 演示文稿…
+	Multi-Page Document	多页文档
+	Output Options	输出选项
+	Duplicate	复制
+	Save As	另存为
+# PDF Presentation: Presentation Options (#6637)
+	Presentation Options	演示选项
+	Advance Every	自动翻页间隔
+	Seconds	秒
+	Loop after Last Page	最后一页后循环
+	Acrobat and Adobe Reader only	仅限 Acrobat 和 Adobe Reader
+	Blinds Horizontal	百叶窗水平
+	Blinds Vertical	百叶窗垂直
+	Box In	盒状向内
+	Box Out	盒状向外
+	Glitter Down	闪烁向下
+	Glitter Right	闪烁向右
+	Glitter Right-Down	闪烁向右下
+	Split Horizontal In	分割水平向内
+	Split Horizontal Out	分割水平向外
+	Split Vertical In	分割垂直向内
+	Split Vertical Out	分割垂直向外
+	Wipe Down	擦除向下
+	Wipe Left	擦除向左
+	Wipe Right	擦除向右
+	Wipe Up	擦除向上
+	Transition	过渡
+	Uses the saved file: save {name} first to include its latest changes	使用已保存的文件：请先保存 {name} 以包含其最新更改
