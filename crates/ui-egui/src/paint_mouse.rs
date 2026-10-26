@@ -37,8 +37,10 @@ pub fn sync_tool_brush(app: &mut PhotocraftApp) {
             let _ = app.session.load_brush_tips(&mut b);
             b
         }
-        // A tool seen for the first time takes what the brush has, at Photoshop's smoothing.
-        None => BrushSettings { smoothing: first_smoothing(), ..current },
+        // A tool seen for the first time takes what the brush has, at Photoshop's smoothing, but
+        // in Normal mode: each tool's Mode starts at Normal, so a Multiply Brush doesn't make the
+        // first Clone Stamp stroke multiply (or give Healing a mode its menu doesn't have).
+        None => BrushSettings { smoothing: first_smoothing(), mode: photocraft_color::BlendMode::Normal, ..current },
     };
     // The picked preset was the outgoing tool's brush: forget it, so Update Brush can't overwrite
     // that preset with this tool's brush.
@@ -623,6 +625,7 @@ mod tests {
         // Mode, opacity, flow and the dynamics sections are per tool too.
         app.ui.tool = Tool::CloneStamp;
         sync_tool_brush(&mut app);
+        assert_eq!(mode(&brush(&app)), photocraft_color::BlendMode::Normal, "a new tool starts in Normal, not the Brush's Multiply");
         app.run("tools.setBrush", json!({"brush": {"mode": "Screen", "opacity": 0.3}})).unwrap();
         app.ui.tool = Tool::Brush;
         sync_tool_brush(&mut app);

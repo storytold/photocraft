@@ -642,6 +642,10 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, shown: &[Group], mut bod
                 crate::brush_panel::panel_menu(app, ui);
                 ui.separator();
             }
+            if tabs.get(sel) == Some(&"Histogram") {
+                crate::histogram_panel::panel_menu(app, ui);
+                ui.separator();
+            }
             if tabs.get(sel) == Some(&"Actions") {
                 crate::actions::panel_menu(app, ui);
                 ui.separator();

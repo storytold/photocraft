@@ -61,7 +61,7 @@ choice!(DarkTheme { Pro = "pro", ProMedium = "proMedium", Studio = "studio", Sol
 choice!(LightTheme { ProLight = "proLight", ProLightGray = "proLightGray", StudioLight = "studioLight", Classic = "classic", Adwaita = "adwaita", BreezeLight = "breezeLight", SoftLight = "softLight" } default ProLight);
 choice!(CanvasColor { Default = "default", Black = "black", DarkGray = "darkGray", MediumGray = "mediumGray", LightGray = "lightGray", Custom = "custom" } default Default);
 choice!(CanvasBorder { DropShadow = "dropShadow", Line = "line", None = "none" } default DropShadow);
-choice!(UiScale { Auto = "auto", P75 = "75", P80 = "80", P85 = "85", P90 = "90", P95 = "95", P100 = "100", P125 = "125", P150 = "150", P175 = "175", P200 = "200", P250 = "250", P300 = "300" } default Auto);
+choice!(UiScale { Auto = "auto", P75 = "75", P80 = "80", P85 = "85", P90 = "90", P95 = "95", P100 = "100", P105 = "105", P110 = "110", P115 = "115", P120 = "120", P125 = "125", P150 = "150", P175 = "175", P200 = "200", P250 = "250", P300 = "300" } default Auto);
 choice!(
     /// Graphics backend of the desktop app's window and GPU canvas (applies at next launch).
     /// `auto` lets PhotoCraft pick (DX12 for Intel adapters on Windows); `cpu` composites on the
@@ -223,6 +223,7 @@ pub struct General {
     pub always_create_smart_objects_when_placing: bool,
     /// Scroll wheel zooms instead of panning.
     pub zoom_with_scroll_wheel: bool,
+    /// Wheel zoom eases over the frames of a notch; off, a notch is one instant ×1.1 step.
     pub animated_zoom: bool,
     pub zoom_resizes_windows: bool,
     pub use_legacy_free_transform: bool,
@@ -549,7 +550,11 @@ pub struct Performance {
     pub memory_usage_mb: u32,
     /// Undo steps kept per document (History panel states).
     pub history_states: u32,
-    /// Display cache levels (mip levels kept for zoomed-out views).
+    /// Cache Levels, 1–8: the highest cache level the Histogram panel counts a large document at
+    /// (level n counts a proxy 2^(n-1) times smaller; 1 counts every pixel). Lower is more
+    /// accurate, higher faster. The panel picks the level from the document's size up to this;
+    /// the web build, which counts on the UI thread, reduces documents from a quarter of the size
+    /// the desktop does. Uncached Refresh always counts at level 1.
     pub cache_levels: u32,
     /// Side of the GPU canvas texture tiles, in pixels (applies at next launch).
     pub cache_tile_size: u32,
@@ -901,6 +906,35 @@ pub struct RawDefaults {
     pub open_in_camera_raw: bool,
     /// The demosaic method raws are developed with; the open-time Camera Raw dialog starts from it.
     pub demosaic: RawDemosaic,
+    /// Keep a raw file's develop settings in a sidecar (`IMG_0001.xmp` beside `IMG_0001.CR2`),
+    /// as Camera Raw's "Save image settings in: Sidecar .xmp files"; the sidecar is read again
+    /// when the file is next opened. Off reads sidecars but never writes one.
+    pub write_xmp_sidecars: bool,
+}
+
+impl RawColorSpace {
+    /// The built-in profile `edit.convertToProfile` knows this space as.
+    pub fn profile_id(self) -> &'static str {
+        match self {
+            RawColorSpace::Srgb => "srgb",
+            RawColorSpace::AdobeRgb => "adobe-rgb-compat",
+            RawColorSpace::ProPhoto => "prophoto-compat",
+            RawColorSpace::DisplayP3 => "display-p3",
+        }
+    }
+}
+
+impl RawSharpen {
+    /// Camera Raw's output sharpening for this medium as the Detail panel's (amount, radius):
+    /// none, Screen (light, fine), Matte paper (stronger, wider: ink spreads), Glossy paper.
+    pub fn preset(self) -> Option<(f32, f32)> {
+        match self {
+            RawSharpen::None => None,
+            RawSharpen::Screen => Some((25.0, 1.0)),
+            RawSharpen::Matte => Some((35.0, 1.2)),
+            RawSharpen::Glossy => Some((40.0, 1.0)),
+        }
+    }
 }
 
 impl RawDemosaic {
@@ -925,6 +959,7 @@ impl Default for RawDefaults {
             apply_auto_tone: false,
             open_in_camera_raw: true,
             demosaic: RawDemosaic::Ahd,
+            write_xmp_sidecars: true,
         }
     }
 }
@@ -1119,7 +1154,6 @@ pub const HIDDEN_UNTIL_IMPLEMENTED: &[&str] = &[
     "general.colorPicker",
     "workspace.autoShowHiddenPanels",
     "workspace.enableFloatingDocumentWindowDocking",
-    "performance.cacheLevels",
     "performance.effectCacheMb",
     "performance.legacyCompositing",
     "scratchDisks.disks",
@@ -1129,15 +1163,6 @@ pub const HIDDEN_UNTIL_IMPLEMENTED: &[&str] = &[
     "plugIns.allowScriptsToConnect",
     "type.textEngine",
     "enhancedControls.scrubbySliderAcceleration",
-    "rawDefaults.colorSpace",
-    "rawDefaults.bitDepth",
-    "rawDefaults.sharpenFor",
-    "rawDefaults.openAsSmartObject",
-    "rawDefaults.applyAutoTone",
-    // Agent access is governed by the launch flags (`--control`, the automation roots), not
-    // by these yet.
-    "integrations.allowAgentControl",
-    "integrations.controlPort",
 ];
 
 /// Is the preference at `path` (`"section.key"`) hidden from the Preferences dialog?

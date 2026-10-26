@@ -287,6 +287,12 @@ pub(crate) fn delete_key_command(app: &PhotocraftApp, id: String) -> String {
         return id;
     }
     let Some(st) = app.session.active() else { return id };
+    // A targeted filter mask (FILE-215-3) takes a selection's Delete as a layer mask does: the
+    // selection fills with the background colour there. With no selection Photoshop deletes the
+    // layer, as below.
+    if app.filter_mask_targeted() && st.doc.selection.is_some() {
+        return "edit.fillBackground".into();
+    }
     let composite = st.channel_view.target == photocraft_engine::channel_cmds::ChannelTarget::Composite && st.doc.quick_mask.is_none();
     let has_mask = st.active_layer.and_then(|l| st.doc.layer(l)).is_some_and(|l| l.mask.is_some());
     let colors_off = st.channel_view.visible_colors(photocraft_engine::channel_cmds::color_count(&st.doc)) == 0;

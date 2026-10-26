@@ -1,5 +1,6 @@
 use super::*;
 
+mod filter_mask_paint;
 mod selection;
 mod stack_cache;
 

@@ -34,9 +34,9 @@ pub const MAX_NAME: usize = 255;
 /// The `ToolOptions` fields a crop preset saves.
 const KEYS: [&str; 5] = ["crop_ratio", "crop_width", "crop_height", "crop_resolution", "crop_resolution_unit"];
 
-/// One entry of the preset dropdown.
+/// One entry of the preset dropdown (and of the Crop tool's canvas menu).
 #[derive(Clone, Debug, PartialEq)]
-enum Choice {
+pub(crate) enum Choice {
     /// A built-in key (`crop_ratio` value, size preset or Front Image), see [`crop_size::chosen`].
     Builtin(String),
     /// A saved crop preset, by name.
@@ -139,7 +139,7 @@ pub fn dropdown(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let users = user_presets(app);
     let o = &app.ui.tool_options;
     let label = button_label(o, &builtin, &users);
-    let current_user = users.iter().rev().find(|(_, f)| matches(o, f)).map(|(n, _)| n.clone());
+    let current_user = current_user(app);
     let can_new = savable(o).is_some();
     let mut chosen: Option<Choice> = None;
     let parent_layer = ui.layer_id();
@@ -171,25 +171,38 @@ pub fn dropdown(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             }
         });
     let _ = combo.response.accessible_name(tl!("Aspect Ratio"));
-    match chosen {
-        Some(Choice::Builtin(k)) => {
+    if let Some(c) = chosen {
+        apply_choice(app, c);
+    }
+}
+
+/// What picking a dropdown entry does; the Crop tool's canvas menu picks through it too.
+pub(crate) fn apply_choice(app: &mut PhotocraftApp, choice: Choice) {
+    match choice {
+        Choice::Builtin(k) => {
             app.ui.tool_options.crop_ratio = k;
             // A size preset or Front Image fills W x H x Resolution (#2443).
             crop_size::chosen(app);
             sync_custom_ratio_fields(app);
         }
-        Some(Choice::User(name)) => {
+        Choice::User(name) => {
             select(app, &name);
             sync_custom_ratio_fields(app);
         }
-        Some(Choice::New) => {
+        Choice::New => {
             open_new(app);
         }
-        Some(Choice::Delete) => {
+        Choice::Delete => {
             open_delete(app);
         }
-        None => {}
     }
+}
+
+/// The saved crop preset whose values the fields hold (the latest saved one first), as the
+/// dropdown shows it.
+pub(crate) fn current_user(app: &PhotocraftApp) -> Option<String> {
+    let o = &app.ui.tool_options;
+    user_presets(app).into_iter().rev().find(|(_, f)| matches(o, f)).map(|(n, _)| n)
 }
 
 /// A newly chosen ratio fills the editable custom W/H fields (free Ratio clears them, #3188).
