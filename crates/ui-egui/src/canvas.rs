@@ -1125,6 +1125,15 @@ pub enum ToolEvent {
     Up { x: f64, y: f64 },
 }
 
+impl ToolEvent {
+    /// The document point the event is at.
+    pub(crate) fn point(self) -> [f64; 2] {
+        match self {
+            Self::Down { x, y, .. } | Self::Move { x, y, .. } | Self::Up { x, y } => [x, y],
+        }
+    }
+}
+
 /// View › Show › Layer Edges: the colour of the active layer's outline.
 pub(crate) const LAYER_EDGES: Color32 = Color32::from_rgb(0x2d, 0x8c, 0xeb);
 
@@ -6232,15 +6241,16 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
             }
         }
         ToolEvent::Move { x, y, .. } => {
-            if let Some(d) = app.guide_drag.as_mut().filter(|d| d.index.is_some()) {
-                d.pos = if d.vertical { x } else { y };
+            if let Some(mut d) = app.guide_drag.filter(|d| d.index.is_some()) {
+                d.follow_pointer(app, raw.point(), [x, y], mods.shift);
+                app.guide_drag = Some(d);
                 return;
             }
         }
         ToolEvent::Up { x, y } => {
             if let Some(mut d) = app.guide_drag.filter(|d| d.index.is_some()) {
                 app.guide_drag = None;
-                d.pos = if d.vertical { x } else { y };
+                d.follow_pointer(app, raw.point(), [x, y], mods.shift);
                 crate::rulers::finish_drag(app, d);
                 return;
             }

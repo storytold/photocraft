@@ -102,6 +102,10 @@ pub struct GuideDrag {
     pub vertical: bool,
     pub index: Option<usize>,
     pub pos: f64,
+    /// Where the guide follows the pointer to before a Shift snap to a ruler tick moves it to
+    /// `pos` (`follow_pointer`): what a release is judged by, a click there and a drop off the
+    /// document there.
+    pub pointer: f64,
     /// Where the pointer went down, on the guide's axis: released there, an existing guide is
     /// clicked (selected), not moved.
     pub press: f64,
@@ -114,7 +118,41 @@ impl GuideDrag {
     /// An existing guide taken at document point `p`.
     pub fn existing(vertical: bool, index: usize, p: [f64; 2]) -> Self {
         let at = if vertical { p[0] } else { p[1] };
-        Self { vertical, index: Some(index), pos: at, press: at, over_ruler: false }
+        Self { vertical, index: Some(index), pos: at, pointer: at, press: at, over_ruler: false }
+    }
+
+    /// Whether the pointer is still where it went down: let go there, an existing guide is clicked
+    /// (selected), not moved.
+    fn held_in_place(&self, app: &PhotocraftApp) -> bool {
+        (self.pointer - self.press).abs() * f64::from(app.point_zoom().max(0.01)) < 0.5
+    }
+
+    /// An existing guide follows the pointer: `p` is the document point View › Snap made of the
+    /// pointer's `raw` one. With Shift the guide lands on the ruler tick nearest the pointer
+    /// instead, as a guide dragged out of a ruler does (#3770) and as in Photoshop: Snap To targets
+    /// (layer edges, the grid, the document's centre) neither pull it first nor hold it on a target
+    /// it sits on. Not while the pointer is still where it went down, so a Shift-click selects the
+    /// guide without moving it, nor off the document, where letting go removes the guide; a tick
+    /// past the document's edge leaves the guide on the edge.
+    pub fn follow_pointer(&mut self, app: &mut PhotocraftApp, raw: [f64; 2], p: [f64; 2], shift: bool) {
+        let vertical = self.vertical;
+        let along = |q: [f64; 2]| if vertical { q[0] } else { q[1] };
+        if !shift {
+            self.pointer = along(p);
+            self.pos = self.pointer;
+            return;
+        }
+        // The snap lines View › Snap drew for this move don't apply.
+        app.prefs_rt.snap_lines.clear();
+        self.pointer = along(raw);
+        self.pos = self.pointer;
+        let extent = app.session.active().map_or(0.0, |s| f64::from(if vertical { s.doc.size.width } else { s.doc.size.height }));
+        if (0.0..=extent).contains(&self.pointer)
+            && !self.held_in_place(app)
+            && let Some(xf) = ViewXform::active(app)
+        {
+            self.pos = snap_to_tick(app, &xf, vertical, self.pointer).clamp(0.0, extent);
+        }
     }
 }
 
@@ -294,14 +332,14 @@ pub fn finish_drag(app: &mut PhotocraftApp, d: GuideDrag) {
     // reads as a click: dragged sideways onto the left ruler, a horizontal guide never moves in y.
     if let Some(i) = d.index
         && !d.over_ruler
-        && (d.pos - d.press).abs() * f64::from(app.point_zoom().max(0.01)) < 0.5
+        && d.held_in_place(app)
     {
         crate::guide_select::select(app, d.vertical, i);
         return;
     }
     let extent = if d.vertical { size.width } else { size.height } as f64;
     let orientation = if d.vertical { "vertical" } else { "horizontal" };
-    let inside = !d.over_ruler && d.pos >= 0.0 && d.pos <= extent;
+    let inside = !d.over_ruler && d.pointer >= 0.0 && d.pointer <= extent;
     let pos = (d.pos * 1000.0).round() / 1000.0;
     let _ = match (d.index, inside) {
         (None, true) => app.run("view.newGuide", json!({"orientation": orientation, "position": pos})),
@@ -396,14 +434,24 @@ fn ruler_scale_of(app: &PhotocraftApp, doc: Option<&photocraft_doc::Document>, x
     (px_per_unit, nice_step(60.0 / (zoom as f64 * px_per_unit).max(1e-6), unit == Unit::Pixels))
 }
 
+/// The spacing (document px) of the ruler ticks Shift snaps to: the minor ticks, tenths of the
+/// labelled `step` in `unit` (`px_per_unit` px each). A ruler in pixels snaps no closer than a
+/// whole pixel: deep in, its minor ticks fall between pixels, and a guide or the zero point put on
+/// one would sit across a pixel.
+fn snap_tick(unit: Unit, px_per_unit: f64, step: f64) -> f64 {
+    let tick = step / 10.0 * px_per_unit;
+    if unit == Unit::Pixels { tick.max(1.0) } else { tick }
+}
+
 /// `pos` (document px) moved to the nearest tick mark the ruler draws (counted from the zero point): where a guide lands when
-/// Shift is held while dragging it out of a ruler, as in Photoshop (#3770).
+/// Shift is held while dragging it out of a ruler or moving it, as in Photoshop (#3770). In pixels, on whole pixels at least
+/// ([`snap_tick`]).
 fn snap_to_tick(app: &PhotocraftApp, xf: &ViewXform, vertical: bool, pos: f64) -> f64 {
     // A vertical guide sits at an x position, which the top ruler measures.
     let (px_per_unit, step) = ruler_scale(app, xf, !vertical);
     // Ticks count from the zero point (#2955), which a vertical guide measures along x.
     let origin = app.session.active().map_or(0.0, |d| d.doc.ruler_origin[usize::from(!vertical)]);
-    snap_px_to_tick(pos, origin, step / 10.0 * px_per_unit)
+    snap_px_to_tick(pos, origin, snap_tick(app.session.prefs().units_and_rulers.rulers, px_per_unit, step))
 }
 
 /// The number a ruler prints at the tick `v` (in ruler units). Like Photoshop, rulers show the
@@ -414,7 +462,8 @@ fn ruler_label(v: f64, step: f64, whole: bool) -> String {
 }
 
 /// The rulers of `doc`'s view in `full`: background, ticks and labels from its zero point.
-/// Returns the top, left and corner rects, the painter, the zero point and the minor tick sizes.
+/// Returns the top, left and corner rects, the painter, the zero point and the tick sizes Shift
+/// snaps to ([`snap_tick`]).
 #[allow(clippy::type_complexity)]
 fn paint(
     app: &PhotocraftApp,
@@ -445,7 +494,7 @@ fn paint(
     for vertical in [false, true] {
         let p = p.with_clip_rect(if vertical { left } else { top });
         let (px_per_unit, step) = ruler_scale_of(app, Some(doc), xf, vertical);
-        ticks[usize::from(vertical)] = step * px_per_unit / 10.0;
+        ticks[usize::from(vertical)] = snap_tick(unit, px_per_unit, step);
         let (u0, u1) = if vertical {
             ruler_range(xf, left.left_top(), left.left_bottom(), 1, px_per_unit, origin)
         } else {
@@ -519,7 +568,7 @@ pub fn draw_rulers(app: &mut PhotocraftApp, ui: &mut egui::Ui, full: Rect, xf: &
             let d = xf.to_doc(pos);
             let along = if vertical { d[0] } else { d[1] };
             let pos = if ui.input(|i| i.modifiers.shift) { snap_to_tick(app, xf, vertical, along) } else { crate::snap_ui::snap_guide(app, vertical, along) };
-            app.guide_drag = Some(GuideDrag { vertical, index: None, pos, press: pos, over_ruler: false });
+            app.guide_drag = Some(GuideDrag { vertical, index: None, pos, pointer: pos, press: pos, over_ruler: false });
         }
         if resp.drag_stopped()
             && let Some(mut d) = app.guide_drag.take()
@@ -781,13 +830,13 @@ mod tests {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.run("file.new", json!({"width": 200, "height": 100})).unwrap();
         app.hover_doc = None;
-        app.guide_drag = Some(GuideDrag { vertical: true, index: None, pos: 42.0, press: 42.0, over_ruler: false });
+        app.guide_drag = Some(GuideDrag { vertical: true, index: None, pos: 42.0, pointer: 42.0, press: 42.0, over_ruler: false });
         let mut h = egui_kittest::Harness::builder()
             .with_size(vec2(260.0, 240.0))
             .build_ui_state(|ui, app| crate::panels::dock_body(app, ui, crate::dock::Group::Navigator, 2), app);
         h.run_steps(2);
         assert!(h.query_by_label("42").is_some(), "vertical guide: X readout");
-        h.state_mut().guide_drag = Some(GuideDrag { vertical: false, index: None, pos: 17.0, press: 17.0, over_ruler: false });
+        h.state_mut().guide_drag = Some(GuideDrag { vertical: false, index: None, pos: 17.0, pointer: 17.0, press: 17.0, over_ruler: false });
         h.run_steps(2);
         assert!(h.query_by_label("17").is_some(), "horizontal guide: Y readout");
     }
@@ -799,15 +848,16 @@ mod tests {
         use egui_kittest::kittest::Queryable;
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.run("file.new", json!({"width": 200, "height": 100})).unwrap();
-        let v = GuideDrag { vertical: true, index: Some(0), pos: 103.24, press: 50.0, over_ruler: false };
+        let v = GuideDrag { vertical: true, index: Some(0), pos: 103.24, pointer: 103.24, press: 50.0, over_ruler: false };
         assert_eq!(guide_drag_readout(&app, v), Some(("X:", "103.2 px".to_owned())));
-        let h = GuideDrag { vertical: false, index: None, pos: 40.0, press: 40.0, over_ruler: false };
+        let h = GuideDrag { vertical: false, index: None, pos: 40.0, pointer: 40.0, press: 40.0, over_ruler: false };
         assert_eq!(guide_drag_readout(&app, h), Some(("Y:", "40 px".to_owned())));
         app.run("view.setRulerOrigin", json!({"x": 3.0, "y": 10.0})).unwrap();
         assert_eq!(guide_drag_readout(&app, h), Some(("Y:", "30 px".to_owned())), "from the zero point");
         app.run("view.resetRulerOrigin", json!({})).unwrap();
         app.run("prefs.set", json!({"path": "unitsAndRulers.rulers", "value": "percent"})).unwrap();
-        assert_eq!(guide_drag_readout(&app, GuideDrag { vertical: true, index: None, pos: 103.0, press: 0.0, over_ruler: false }).map(|r| r.0), Some("X:"));
+        let out_of_ruler = GuideDrag { vertical: true, index: None, pos: 103.0, pointer: 103.0, press: 0.0, over_ruler: false };
+        assert_eq!(guide_drag_readout(&app, out_of_ruler).map(|r| r.0), Some("X:"));
         app.run("prefs.set", json!({"path": "unitsAndRulers.rulers", "value": "pixels"})).unwrap();
 
         app.guide_drag = Some(v);
@@ -1035,14 +1085,14 @@ mod tests {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.session.execute("file.new", json!({"width": 200, "height": 100})).unwrap();
         app.sync_views();
-        finish_drag(&mut app, GuideDrag { vertical: true, index: None, pos: 50.0, press: 50.0, over_ruler: false });
-        finish_drag(&mut app, GuideDrag { vertical: false, index: None, pos: 500.0, press: 500.0, over_ruler: false }); // off canvas: ignored
+        finish_drag(&mut app, GuideDrag { vertical: true, index: None, pos: 50.0, pointer: 50.0, press: 50.0, over_ruler: false });
+        finish_drag(&mut app, GuideDrag { vertical: false, index: None, pos: 500.0, pointer: 500.0, press: 500.0, over_ruler: false }); // off canvas: ignored
         assert_eq!(app.session.active().unwrap().doc.guides.vertical, vec![50.0]);
         assert!(app.session.active().unwrap().doc.guides.horizontal.is_empty());
         assert_eq!(guide_at(&app, 51.0, 10.0), Some((true, 0)));
-        finish_drag(&mut app, GuideDrag { vertical: true, index: Some(0), pos: 120.0, press: 50.0, over_ruler: false });
+        finish_drag(&mut app, GuideDrag { vertical: true, index: Some(0), pos: 120.0, pointer: 120.0, press: 50.0, over_ruler: false });
         assert_eq!(app.session.active().unwrap().doc.guides.vertical, vec![120.0]);
-        finish_drag(&mut app, GuideDrag { vertical: true, index: Some(0), pos: -30.0, press: 120.0, over_ruler: false });
+        finish_drag(&mut app, GuideDrag { vertical: true, index: Some(0), pos: -30.0, pointer: -30.0, press: 120.0, over_ruler: false });
         assert!(app.session.active().unwrap().doc.guides.vertical.is_empty());
         app.ui.extras.lock_guides = true;
         assert_eq!(guide_at(&app, 0.0, 0.0), None);
@@ -1278,20 +1328,20 @@ mod tests {
         app.sync_views();
         let horizontal = |app: &PhotocraftApp| app.session.active().unwrap().doc.guides.horizontal.clone();
         for drag in [
-            GuideDrag { vertical: false, index: Some(0), pos: 50.0, press: 10.0, over_ruler: true },
+            GuideDrag { vertical: false, index: Some(0), pos: 50.0, pointer: 50.0, press: 10.0, over_ruler: true },
             // Dragged sideways onto the left ruler, a horizontal guide holds its y, which on its own
             // reads as a click: the ruler still removes it.
-            GuideDrag { vertical: false, index: Some(0), pos: 50.0, press: 50.0, over_ruler: true },
+            GuideDrag { vertical: false, index: Some(0), pos: 50.0, pointer: 50.0, press: 50.0, over_ruler: true },
         ] {
             app.run("view.newGuide", json!({"orientation": "horizontal", "position": 50})).unwrap();
             finish_drag(&mut app, drag);
             assert!(horizontal(&app).is_empty(), "let go on a ruler: removed, {drag:?}");
         }
         app.run("view.newGuide", json!({"orientation": "horizontal", "position": 50})).unwrap();
-        finish_drag(&mut app, GuideDrag { vertical: false, index: Some(0), pos: 80.0, press: 10.0, over_ruler: false });
+        finish_drag(&mut app, GuideDrag { vertical: false, index: Some(0), pos: 80.0, pointer: 80.0, press: 10.0, over_ruler: false });
         assert_eq!(horizontal(&app), vec![80.0], "let go on the canvas: moved");
         // Clicked where it was pressed, on the canvas: selected and kept, as before.
-        finish_drag(&mut app, GuideDrag { vertical: false, index: Some(0), pos: 80.0, press: 80.0, over_ruler: false });
+        finish_drag(&mut app, GuideDrag { vertical: false, index: Some(0), pos: 80.0, pointer: 80.0, press: 80.0, over_ruler: false });
         assert_eq!(horizontal(&app), vec![80.0], "clicked on the canvas: kept");
         assert!(app.ui.selected_guide.is_some(), "clicked on the canvas: selected");
     }
@@ -1444,5 +1494,158 @@ mod tests {
         app.run("view.setRulerOrigin", json!({"x": 3, "y": 0})).unwrap();
         assert_eq!(snap_to_tick(&app, &xf, true, 37.0), 33.0);
         assert_eq!(snap_to_tick(&app, &xf, false, 37.0), 40.0);
+    }
+
+    /// In pixels Shift snaps to whole pixels at least: deep in, where the ruler's minor ticks are
+    /// 0.5 px (labels every 5 px) or 0.1 px (labels every pixel) apart, a guide still lands on a
+    /// pixel. Other units keep their minor ticks.
+    #[test]
+    fn deep_in_shift_snaps_pixel_rulers_to_whole_pixels() {
+        let full = Rect::from_min_size(Pos2::ZERO, vec2(400.0, 300.0));
+        let rect = Rect::from_min_max(full.min + vec2(RULER, RULER), full.max);
+        let xf = |zoom: f32| ViewXform { rect, zoom, center: [128.0, 64.0], flip: false, rotation: 0.0, aspect: 1.0 };
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 256, "height": 128})).unwrap();
+        assert_eq!(ruler_scale(&app, &xf(16.0), false).1, 5.0, "labels every 5 px at 1600 %");
+        assert_eq!(snap_to_tick(&app, &xf(16.0), true, 37.3), 37.0);
+        assert_eq!(snap_to_tick(&app, &xf(16.0), true, 37.6), 38.0);
+        assert_eq!(ruler_scale(&app, &xf(64.0), true).1, 1.0, "labels every pixel at 6400 %");
+        assert_eq!(snap_to_tick(&app, &xf(64.0), false, 37.3), 37.0);
+        // Ticks coarser than a pixel stay as they were: every 5 px at 200 %.
+        assert_eq!(snap_to_tick(&app, &xf(2.0), true, 37.0), 35.0);
+        // Millimetres: deep in, the ticks a fraction of a pixel apart are kept.
+        app.run("prefs.set", json!({"path": "unitsAndRulers.rulers", "value": "mm"})).unwrap();
+        let (px_per_mm, step) = ruler_scale(&app, &xf(16.0), false);
+        let tick = step / 10.0 * px_per_mm;
+        assert!(tick < 1.0, "a sub-pixel tick: {tick}");
+        assert!((snap_to_tick(&app, &xf(16.0), true, 37.3) - (37.3 / tick).round() * tick).abs() < 1e-9);
+    }
+
+    /// A guide already on the canvas, Shift-dragged with the Move tool, lands on the nearest ruler
+    /// tick, as one dragged out of a ruler does (#3770); a Shift-click selects it where it is.
+    #[test]
+    fn shift_moving_a_guide_lands_on_ruler_ticks() {
+        // The guide at y = `from` (off the ticks), dragged to `to` and let go.
+        let move_guide = |from: f64, to: f32, modifiers: egui::Modifiers| {
+            let mut h = canvas_harness(false);
+            h.state_mut().run("view.moveGuide", json!({"orientation": "horizontal", "index": 0, "position": from})).unwrap();
+            h.run_steps(2);
+            let press = canvas_at(&h, 200.0, from as f32);
+            h.event_modifiers(egui::Event::PointerMoved(press), modifiers);
+            h.run_steps(1);
+            h.event_modifiers(egui::Event::PointerButton { pos: press, button: egui::PointerButton::Primary, pressed: true, modifiers }, modifiers);
+            h.run_steps(1);
+            let up = canvas_at(&h, 210.0, to);
+            for p in [canvas_at(&h, 205.0, (from as f32 + to) / 2.0), up] {
+                h.event_modifiers(egui::Event::PointerMoved(p), modifiers);
+                h.run_steps(2);
+            }
+            h.event_modifiers(egui::Event::PointerButton { pos: up, button: egui::PointerButton::Primary, pressed: false, modifiers }, modifiers);
+            h.run_steps(2);
+            let app = h.state();
+            (app.session.active().unwrap().doc.guides.horizontal[0], crate::guide_select::selected(app))
+        };
+        let (y, _) = move_guide(103.4, 123.6, egui::Modifiers::NONE);
+        assert!((y - 123.6).abs() < 0.01, "without Shift the guide lands where it's let go: {y}");
+        // Pixels at 100%: labels every 100 px, ticks every 10 px.
+        assert_eq!(move_guide(103.4, 123.6, egui::Modifiers::SHIFT).0, 120.0);
+        assert_eq!(move_guide(103.4, 146.2, egui::Modifiers::SHIFT).0, 150.0);
+        let (y, selected) = move_guide(103.4, 103.4, egui::Modifiers::SHIFT);
+        assert!((y - 103.4).abs() < 0.01, "a Shift-click doesn't move the guide: {y}");
+        assert_eq!(selected, Some((false, 0)), "it selects it");
+    }
+
+    /// With Shift a moved guide goes to the ruler tick nearest the pointer, as one dragged out of a
+    /// ruler does: View › Snap's targets neither pull it first nor hold it on a target it sits on.
+    #[test]
+    fn shift_moving_a_guide_ignores_snap_targets() {
+        let move_guide = |from: f64, to: f32, modifiers: egui::Modifiers| {
+            let mut h = canvas_harness(false);
+            let app = h.state_mut();
+            app.ui.extras.snap = true;
+            // A grid every 100 px in thirds: its lines sit at fractions of a pixel (133.33…).
+            let grid = json!({"guidesGridAndSlices.gridlineEvery": 100, "guidesGridAndSlices.gridUnit": "pixels", "guidesGridAndSlices.subdivisions": 3});
+            app.run("prefs.set", json!({ "values": grid })).unwrap();
+            (app.ui.extras.grid, app.ui.view.snap_to.grid) = (true, true);
+            app.run("view.moveGuide", json!({"orientation": "horizontal", "index": 0, "position": from})).unwrap();
+            h.run_steps(2);
+            let press = canvas_at(&h, 200.0, from as f32);
+            h.event_modifiers(egui::Event::PointerMoved(press), modifiers);
+            h.run_steps(1);
+            h.event_modifiers(egui::Event::PointerButton { pos: press, button: egui::PointerButton::Primary, pressed: true, modifiers }, modifiers);
+            h.run_steps(1);
+            let up = canvas_at(&h, 210.0, to);
+            for p in [canvas_at(&h, 205.0, (from as f32 + to) / 2.0), up] {
+                h.event_modifiers(egui::Event::PointerMoved(p), modifiers);
+                h.run_steps(2);
+            }
+            h.event_modifiers(egui::Event::PointerButton { pos: up, button: egui::PointerButton::Primary, pressed: false, modifiers }, modifiers);
+            h.run_steps(2);
+            h.state().session.active().unwrap().doc.guides.horizontal[0]
+        };
+        let third = 400.0 / 3.0;
+        let y = move_guide(103.0, 136.5, egui::Modifiers::NONE);
+        assert!((y - third).abs() < 0.01, "without Shift the guide snaps to the grid line by the pointer: {y}");
+        // Pixels at 100%: ticks every 10 px. A guide on a grid line, Shift-moved within the line's
+        // reach, still goes to the tick by the pointer.
+        assert_eq!(move_guide(third, 136.5, egui::Modifiers::SHIFT), 140.0);
+        // The document's centre (y = 150) doesn't pull it off the tick by the pointer either.
+        assert_eq!(move_guide(103.0, 144.0, egui::Modifiers::SHIFT), 140.0);
+    }
+
+    /// A Shift-moved guide's release is judged by the pointer, not by the tick the guide snapped to:
+    /// let go 1.2 px from where it was pressed it moves onto the tick, though the tick is 0.3 px from
+    /// where it was; let go above the document it is removed, not put on the 0 tick.
+    #[test]
+    fn a_shift_moved_guide_is_let_go_where_the_pointer_is() {
+        let drag = |from: f64, path: &[f32]| {
+            let mut h = canvas_harness(false);
+            h.state_mut().run("view.moveGuide", json!({"orientation": "horizontal", "index": 0, "position": from})).unwrap();
+            h.run_steps(2);
+            let shift = egui::Modifiers::SHIFT;
+            let press = canvas_at(&h, 200.0, from as f32);
+            h.event_modifiers(egui::Event::PointerMoved(press), shift);
+            h.run_steps(1);
+            h.event_modifiers(egui::Event::PointerButton { pos: press, button: egui::PointerButton::Primary, pressed: true, modifiers: shift }, shift);
+            h.run_steps(1);
+            let mut at = press;
+            for &y in path {
+                at = canvas_at(&h, 210.0, y);
+                h.event_modifiers(egui::Event::PointerMoved(at), shift);
+                h.run_steps(2);
+            }
+            h.event_modifiers(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: shift }, shift);
+            h.run_steps(2);
+            h.state().session.active().unwrap().doc.guides.horizontal.clone()
+        };
+        // Out past the click distance and back: a move onto the tick, not a click.
+        assert_eq!(drag(100.3, &[115.0, 101.5]), vec![100.0]);
+        // Above the document, by the 0 tick: removed.
+        assert_eq!(drag(100.3, &[60.0, -4.0]), Vec::<f64>::new());
+    }
+
+    /// A tick past the document's edge leaves a Shift-moved guide on the edge, not off the document:
+    /// with the zero point at y = 3 the ticks by the bottom of the 300 px document are 293 and 303,
+    /// and a guide let go at 298.5 lands on 300.
+    #[test]
+    fn a_shift_moved_guide_stops_at_the_documents_edge() {
+        let mut h = canvas_harness(false);
+        h.state_mut().run("view.setRulerOrigin", json!({"x": 0.0, "y": 3.0})).unwrap();
+        h.run_steps(2);
+        let shift = egui::Modifiers::SHIFT;
+        let press = canvas_at(&h, 200.0, 100.0);
+        h.event_modifiers(egui::Event::PointerMoved(press), shift);
+        h.run_steps(1);
+        h.event_modifiers(egui::Event::PointerButton { pos: press, button: egui::PointerButton::Primary, pressed: true, modifiers: shift }, shift);
+        h.run_steps(1);
+        let mut at = press;
+        for y in [250.0, 298.5] {
+            at = canvas_at(&h, 210.0, y);
+            h.event_modifiers(egui::Event::PointerMoved(at), shift);
+            h.run_steps(2);
+        }
+        h.event_modifiers(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: shift }, shift);
+        h.run_steps(2);
+        assert_eq!(h.state().session.active().unwrap().doc.guides.horizontal, vec![300.0]);
     }
 }
