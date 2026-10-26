@@ -900,19 +900,8 @@ pub fn convert_mode(s: &mut Session, mode: ColorMode, p: &Value) -> Result<Value
 pub fn gamut_mask(doc: &Document, setup: &ProofSetup, threshold: f32) -> Result<(Vec<u8>, usize)> {
     let check = GamutCheck::new(&composite_profile(doc), &setup.profile, threshold).map_err(cms_err)?;
     let buf = photocraft_compose::flatten(doc);
-    let mut count = 0;
-    let mask = buf
-        .px
-        .iter()
-        .map(|p| {
-            if p[3] > 0.0 && check.out_of_gamut(&p[..3]) {
-                count += 1;
-                255
-            } else {
-                0
-            }
-        })
-        .collect();
+    let mut mask = vec![0u8; buf.px.len()];
+    let count = check.mask_rgba(&buf.px, &mut mask);
     Ok((mask, count))
 }
 
