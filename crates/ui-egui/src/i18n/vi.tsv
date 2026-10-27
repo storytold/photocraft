@@ -3952,3 +3952,15 @@ curves	Smooth	Làm mượt
 
 # Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
 	Aspect Ratio	Tỷ lệ khung hình
+	Artboards	Bảng vẽ
+	Calculating…	Đang tính…
+	Click to refresh histogram with uncached data	Nhấp để làm mới biểu đồ với dữ liệu không lưu trong bộ nhớ đệm
+	Count:	Số đếm:
+	Level:	Mức:
+	Percentile:	Phân vị:
+	Release Notes	Ghi chú phát hành
+	Show Channels in Color	Hiển thị kênh bằng màu
+	Show Statistics	Hiển thị thống kê
+	Source:	Nguồn:
+	Uncached Refresh	Làm mới không dùng bộ nhớ đệm
+	Update and Restart	Cập nhật và khởi động lại

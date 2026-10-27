@@ -4204,3 +4204,14 @@ cameraRaw	Dehaze	Odstranění oparu
 
 # Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
 	Aspect Ratio	Poměr stran
+	Calculating…	Počítání…
+	Click to refresh histogram with uncached data	Kliknutím obnovíte histogram z dat bez mezipaměti
+	Count:	Počet:
+	Level:	Úroveň:
+	Percentile:	Percentil:
+	Release Notes	Poznámky k vydání
+	Show Channels in Color	Zobrazit kanály barevně
+	Show Statistics	Zobrazit statistiku
+	Source:	Zdroj:
+	Uncached Refresh	Obnovit bez mezipaměti
+	Update and Restart	Aktualizovat a restartovat

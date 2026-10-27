@@ -4157,3 +4157,14 @@ curves	Smooth	Εξομάλυνση
 
 # Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
 	Target	Στόχος
+	Calculating…	Υπολογισμός…
+	Click to refresh histogram with uncached data	Κάντε κλικ για να ανανεώσετε το ιστόγραμμα χωρίς cache
+	Count:	Πλήθος:
+	Level:	Επίπεδο:
+	Percentile:	Εκατοστημόριο:
+	Release Notes	Σημειώσεις έκδοσης
+	Show Channels in Color	Εμφάνιση καναλιών σε χρώμα
+	Show Statistics	Εμφάνιση στατιστικών
+	Source:	Προέλευση:
+	Uncached Refresh	Ανανέωση χωρίς cache
+	Update and Restart	Ενημέρωση και επανεκκίνηση

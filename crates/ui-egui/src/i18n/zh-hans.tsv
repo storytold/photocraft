@@ -3137,3 +3137,15 @@ curves	Smooth	平滑
 	Profile	配置文件
 	Target	目标
 	Units	单位
+	Artboards	画板
+	Release Notes	发行说明
+	Update and Restart	更新并重启
+	Calculating…	计算中…
+	Click to refresh histogram with uncached data	点击以使用未缓存的数据刷新直方图
+	Count:	数量:
+	Level:	色阶:
+	Percentile:	百分位数:
+	Show Channels in Color	以彩色显示通道
+	Show Statistics	显示统计数据
+	Source:	源:
+	Uncached Refresh	不使用缓存刷新

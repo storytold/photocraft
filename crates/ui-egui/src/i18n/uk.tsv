@@ -4167,3 +4167,15 @@ curves	Smooth	Згладити
 
 # Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
 	Target	Ціль
+	Calculating…	Обчислення…
+	Click to refresh histogram with uncached data	Натисніть, щоб оновити гістограму з даних без кешу
+	Count:	Кількість:
+	Level:	Рівень:
+	Percentile:	Перцентиль:
+	Release Notes	Нотатки до випуску
+	Show Channels in Color	Показувати канали кольором
+	Show Statistics	Показувати статистику
+	Source:	Джерело:
+	Uncached Refresh	Оновити без кешу
+	Update and Restart	Оновити та перезапустити
+	Artboards	Артборди

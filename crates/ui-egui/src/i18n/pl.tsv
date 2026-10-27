@@ -4074,3 +4074,15 @@ curves	Smooth	Wygładź
 
 # Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
 	Target	Cel
+	Artboards	Artboards
+	Calculating…	Obliczanie…
+	Click to refresh histogram with uncached data	Kliknij, aby odświeżyć histogram z danych nieprzechowywanych w pamięci podręcznej
+	Count:	Liczba:
+	Level:	Poziom:
+	Percentile:	Percentyl:
+	Release Notes	Informacje o wersji
+	Show Channels in Color	Pokaż kanały w kolorze
+	Show Statistics	Pokaż statystyki
+	Source:	Źródło:
+	Uncached Refresh	Odśwież bez pamięci podręcznej
+	Update and Restart	Zaktualizuj i uruchom ponownie

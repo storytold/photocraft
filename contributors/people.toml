@@ -282,3 +282,7 @@ sync_github_name = false
 [people.jasallen]
 real_name = "Jason DeBoever"
 sync_github_name = true
+
+[people.pavlenkosa]
+real_name = "Stepan Pavlenko"
+display_name = "Stepan Pavlenko"

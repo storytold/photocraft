@@ -86,15 +86,16 @@ Rows and evidence: [target-app-parity › Feature areas](docs/target-app-parity.
 
 ## Languages
 
-Measured with the `cargo xtask i18n-coverage` key universe (1,608 keys). `partial` everywhere
-because engine messages are still English. Detail: [localization-parity](docs/localization-parity.md).
+Measured with the `cargo xtask i18n-coverage` key universe (2,054 keys on 2026-10-26). the `partial` status applies everywhere because engine messages are still English; every catalog but Hindi is at 100% of
+measured keys — Hindi (14%) is the remaining gap: the dynamic-labels batch (like #6283 did for Russian) is its own follow-up.
+Detail: [localization-parity](docs/localization-parity.md).
 
 | Language | Code | UI strings | Status |
 |---|---|---:|---|
 | English | `en` | 100% | full |
 | Simplified Chinese | `zh-hans` | 100% | partial |
 | Spanish | `es` | 100% | partial |
-| Hindi | `hi` | 0% | none |
+| Hindi | `hi` | 14% | partial |
 | Arabic | `ar` | 0% (RTL shell only) | none |
 | French | `fr` | 100% | partial |
 | Portuguese (Brazil) | `pt-br` | 100% | partial |
@@ -102,9 +103,9 @@ because engine messages are still English. Detail: [localization-parity](docs/lo
 | Japanese | `ja` | 100% | partial |
 | German | `de` | 100% | partial |
 | Korean | `ko` | 100% | partial |
-| Vietnamese | `vi` | 0% | none |
+| Vietnamese | `vi` | 100% | partial |
 
-Also shipped: Traditional Chinese, Russian (every dynamic label, [notes](docs/localization-ru.md)), Ukrainian, Czech, Polish, Greek, Dutch, Italian (8).
+Also shipped: Traditional Chinese, Russian (every dynamic label, [notes](docs/localization-ru.md)), Ukrainian, Czech, Polish, Greek, Dutch, Italian, Hungarian, Turkish, Serbian (11).
 
 ## Upcoming
 
@@ -122,6 +123,7 @@ Detail and the next releases: [docs/roadmap.md](docs/roadmap.md).
 
 | Date | Entry |
 |---|---|
+| 2026-10-26 | i18n: histogram, self-update (#9322) and Artboards strings translated in 20 catalogs (229 rows); every catalog but Hindi (14%) is at 100% of the 2,054-key universe |
 | 2026-10-17 | Object Finder classifies background by boundary coverage, retaining large enclosed foregrounds and rejecting surrounding backdrop (#6548); learned segmentation remains open (#2788) |
 | 2026-10-10 | Full re-measure against Photoshop 2026 27.11.0 (installed bundle inspected): breadth ~76%, ready ~45%, alpha. Progress docs reorganized to the craftrules standard (`parity.md` → `parity-checklist.md`, `parity-estimate.md` merged into `target-app-parity.md`). 0.6.0 released. |
 | 2026-10-09 | Remove tool, Rotate View, crop rotation; OpenRaster and Paint.NET; 39 Affinity documents in the corpus |
