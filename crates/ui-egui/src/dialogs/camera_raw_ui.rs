@@ -30,6 +30,7 @@ use crate::widgets;
 
 mod controls;
 mod convert;
+mod filmstrip;
 mod menu;
 mod open;
 mod proxy;
@@ -38,6 +39,7 @@ mod sidecar;
 pub use controls::show;
 #[cfg(test)]
 use convert::open_pixels;
+pub use filmstrip::HeldRaw;
 pub use menu::menu;
 #[cfg(test)]
 use open::{Coverage, commit_open_raw, document_index, finish_redevelop, open_raw, replace_raw_document};
