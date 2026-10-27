@@ -139,6 +139,49 @@ impl Tile {
         }
         (x0 != usize::MAX).then_some((x0 as u16, y0 as u16, x1 as u16, y1 as u16))
     }
+
+    /// Tile-local half-open bounds `(x0, y0, x1, y1)` of the pixels whose alpha sample is not
+    /// zero, or `None` when every pixel is clear. `alpha_at` is the alpha sample's byte offset
+    /// within a pixel of `bpp` bytes.
+    ///
+    /// The colour stored under a clear pixel is invisible, so it is not content: comparing whole
+    /// pixels against a transparent default (`content_bounds`) would count the white an encoder
+    /// leaves there, and a layer whose clear pixels are white would measure as its whole canvas
+    /// where Photoshop measures the artwork.
+    pub fn alpha_bounds(&self, alpha_at: usize, bpp: usize, sample: SampleType) -> Option<(u16, u16, u16, u16)> {
+        if bpp == 0 || alpha_at + sample.bytes() > bpp {
+            return None;
+        }
+        let clear = |px: &[u8]| alpha_is_clear(px, alpha_at, sample);
+        let ts = TILE_SIZE as usize;
+        let (mut x0, mut y0, mut x1, mut y1) = (usize::MAX, usize::MAX, 0usize, 0usize);
+        for (y, row) in self.data.chunks_exact(ts * bpp).enumerate() {
+            let pixels = row.chunks_exact(bpp);
+            let Some(first) = pixels.clone().position(|px| !clear(px)) else { continue };
+            let last = pixels.clone().rposition(|px| !clear(px)).unwrap_or(first);
+            x0 = x0.min(first);
+            x1 = x1.max(last + 1);
+            y0 = y0.min(y);
+            y1 = y + 1;
+        }
+        (x0 != usize::MAX).then_some((x0 as u16, y0 as u16, x1 as u16, y1 as u16))
+    }
+}
+
+/// Whether the alpha sample at `alpha_at` in an encoded pixel is zero, so the pixel is clear.
+///
+/// Every path that measures a layer by its alpha ([`Tile::alpha_bounds`],
+/// [`Surface::content_bounds`], and `photocraft_compose::bounds`) decides "clear" with this one
+/// predicate, so they cannot disagree. The alternative — comparing the decoded `f32` in one place
+/// and the raw bytes in another — splits on a `-0.0` alpha (`00 00 00 80`), which is zero and
+/// whose bytes are not: the compose-side bounds then measure by alpha where the surface scans
+/// whole pixels, and the same layer reports two bounds (#9824).
+pub fn alpha_is_clear(px: &[u8], alpha_at: usize, sample: SampleType) -> bool {
+    match sample {
+        SampleType::U8 => px[alpha_at] == 0,
+        SampleType::U16 => px[alpha_at] == 0 && px[alpha_at + 1] == 0,
+        SampleType::F32 => f32::from_ne_bytes([px[alpha_at], px[alpha_at + 1], px[alpha_at + 2], px[alpha_at + 3]]) == 0.0,
+    }
 }
 
 /// Bytes compared at once while looking for a difference in a tile row.
@@ -495,11 +538,32 @@ impl Surface {
         self.tiles.keys().fold(Rect::EMPTY, |r, c| r.union(&c.rect()))
     }
 
-    /// Exact bounds of pixels that differ from the default pixel.
+    /// Exact bounds of the pixels that differ from the default pixel — everything the surface
+    /// stores, clear or not. A reader that re-derives something from the stored samples (the
+    /// alpha an Indexed document's colour table implies, say) needs these: [`content_bounds`]
+    /// leaves out a clear pixel whose colour an encoder left behind, and that pixel is stored.
+    pub fn stored_bounds(&self) -> Rect {
+        self.scan_bounds(false)
+    }
+
+    /// Exact bounds of pixels that differ from the default pixel; for a surface that carries an
+    /// alpha channel and defaults to transparent, the bounds of the pixels that are not clear
+    /// (see [`Tile::alpha_bounds`]).
     pub fn content_bounds(&self) -> Rect {
+        self.scan_bounds(true)
+    }
+
+    fn scan_bounds(&self, content: bool) -> Rect {
         if self.tiles.is_empty() {
             return Rect::EMPTY;
         }
+        // A clear pixel's colour is invisible, so it is not content: a layer whose clear pixels
+        // hold white measures as the artwork, as Photoshop's bounds have it, instead of as its
+        // whole canvas.
+        let bpp = self.format.bytes_per_pixel();
+        let sample = self.format.sample;
+        let alpha_at = self.format.mode.color_channels() * sample.bytes();
+        let by_alpha = content && self.format.alpha && alpha_is_clear(&self.default_pixel, alpha_at, sample);
         // Scan tiles from the outside of the tile grid inwards; a tile lying entirely inside the
         // bounds found so far cannot extend them and is skipped (so a full-canvas selection scans
         // roughly its outer ring of tiles instead of every pixel).
@@ -515,7 +579,8 @@ impl Surface {
             if !out.is_empty() && out.contains_rect(&origin) {
                 continue;
             }
-            if let Some((x0, y0, x1, y1)) = t.content_bounds(&self.default_pixel) {
+            let found = if by_alpha { t.alpha_bounds(alpha_at, bpp, sample) } else { t.content_bounds(&self.default_pixel) };
+            if let Some((x0, y0, x1, y1)) = found {
                 out = out.union(&Rect::new(x0.into(), y0.into(), x1.into(), y1.into()).translate(origin.x0, origin.y0));
             }
         }
