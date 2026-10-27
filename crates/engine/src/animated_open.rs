@@ -1,7 +1,9 @@
-//! How an animated GIF or WebP opens (Preferences › File Handling, or the prompt File › Open
-//! shows when they say Ask). The file reads as a frame animation, a layer per frame
-//! (`photocraft_io`'s flat import), and the choice reshapes that document before it opens: kept
-//! as frames, turned into one video layer on the timeline, or cut to its first frame.
+//! How an animated GIF or WebP opens. File › Open follows Preferences › File Handling, or shows a
+//! prompt when they say Ask: the file reads as a frame animation, a layer per frame
+//! (`photocraft_io`'s flat import with [`photocraft_io::AnimationImport::Frames`]), and the choice
+//! reshapes that document before it opens: kept as frames, turned into one video layer on the
+//! timeline, or cut to its first frame. Headless opens (scripts, the CLI, MCP) read the first frame
+//! only, unless the caller asks for frames or a video layer ([`requested`]).
 
 use photocraft_doc::{Document, Layer, LayerContent, Timeline, VideoData, VideoSource};
 use serde_json::{Value, json};
@@ -26,6 +28,34 @@ fn preferred(prefs: &Preferences, name: &str) -> Option<AnimatedOpen> {
         "animatedGif" => prefs.file_handling.animated_gif,
         _ => prefs.file_handling.animated_webp,
     })
+}
+
+/// How File › Open reads `name`: an animated GIF's or WebP's frames when File Handling says to
+/// open them as frames or a video layer, or to ask (the prompt needs them, to count and to apply
+/// the answer); its first frame when it says so, and for every other file.
+pub fn import_mode(prefs: &Preferences, name: &str) -> photocraft_io::AnimationImport {
+    preferred(prefs, name).map_or(photocraft_io::AnimationImport::FirstFrame, import_for)
+}
+
+/// What the import has to read for `choice`: the frames for a frame animation or a video layer
+/// (and to ask), else the first frame.
+pub fn import_for(choice: AnimatedOpen) -> photocraft_io::AnimationImport {
+    match choice {
+        AnimatedOpen::Ask | AnimatedOpen::Frames | AnimatedOpen::Video => photocraft_io::AnimationImport::Frames,
+        AnimatedOpen::FirstFrame => photocraft_io::AnimationImport::FirstFrame,
+    }
+}
+
+/// How an automation caller (MCP and RPC `doc.open`, the bridge's `app.open`) asks an animated
+/// GIF or WebP to open, from its `animation` parameter: `firstFrame` (also when it doesn't say,
+/// as before frame animations), `frames` or `video`. Automation never prompts, so `ask` is refused.
+pub fn requested(param: Option<&str>) -> Result<AnimatedOpen> {
+    match param {
+        None => Ok(AnimatedOpen::FirstFrame),
+        Some(v) => AnimatedOpen::parse(v)
+            .filter(|c| *c != AnimatedOpen::Ask)
+            .ok_or_else(|| EngineError::BadParams { cmd: "doc.open".into(), msg: format!("`animation` is firstFrame, frames or video, not `{v}`") }),
+    }
 }
 
 /// Whether `doc`, just read from `name`, is an animation the choice applies to.
@@ -55,10 +85,13 @@ pub fn apply_preferred(prefs: &Preferences, name: &str, doc: &mut Document, path
 }
 
 /// Reshapes a just-read frame animation (a layer per frame, "Frame 1" at the bottom) as
-/// `choice` says. Frames and Ask keep it as it is.
+/// `choice` says. Frames and Ask keep it as it is, and a document without a frame animation is
+/// left alone.
 pub fn apply(doc: &mut Document, choice: AnimatedOpen, path: Option<&str>) -> Result<()> {
     match choice {
         AnimatedOpen::Ask | AnimatedOpen::Frames => Ok(()),
+        // Read as its first frame already (or not an animation): nothing to cut.
+        AnimatedOpen::FirstFrame if doc.frame_animation.is_none() => Ok(()),
         AnimatedOpen::FirstFrame => {
             doc.frame_animation = None;
             doc.layers.truncate(1);

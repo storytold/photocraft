@@ -84,8 +84,8 @@ use photocraft_psd::{PsdError, PsdFile};
 
 pub use adjust_map::ADJUSTMENT_KEYS;
 pub use flat::{
-    DEFAULT_LOSSY_WEBP_QUALITY, MAX_GIF_LAYER_FRAMES, apply_file_encoding, document_to_image, file_encoding, import_animation_frames, import_gif_frames, import_tiff_page, import_webp_frames,
-    tga_alpha_channel_to_transparency, tga_default_bits,
+    DEFAULT_LOSSY_WEBP_QUALITY, MAX_GIF_LAYER_FRAMES, apply_file_encoding, document_to_image, file_encoding, import_animation_frames, import_gif_frames,
+    import_tiff_page, import_webp_frames, tga_alpha_channel_to_transparency, tga_default_bits,
 };
 pub use psd_export::{PsdExportOptions, document_to_psd, document_to_psd_with};
 pub use psd_import::{psd_to_document, psd_to_document_with};
@@ -327,6 +327,18 @@ pub fn import_with_svg_group_depth_and_interrupt(
     import_with_options_and_interrupt(name, bytes, &ImportOptions { max_group_depth, ..Default::default() }, ctl)
 }
 
+/// How an animated GIF or WebP imports. A caller that doesn't say gets the first frame, as a
+/// still image with a warning naming how many frames the file has.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AnimationImport {
+    /// The first frame only.
+    #[default]
+    FirstFrame,
+    /// A raster layer per frame and a frame animation with the file's delays (within
+    /// [`MAX_GIF_LAYER_FRAMES`] and the memory budget, with a warning when frames are left out).
+    Frames,
+}
+
 /// The user's settings that shape an import.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ImportOptions {
@@ -334,11 +346,13 @@ pub struct ImportOptions {
     pub max_group_depth: usize,
     /// The demosaic method camera raws are developed with.
     pub demosaic: raw::Demosaic,
+    /// How an animated GIF or WebP opens: its first frame unless asked for its frames.
+    pub animation: AnimationImport,
 }
 
 impl Default for ImportOptions {
     fn default() -> Self {
-        ImportOptions { max_group_depth: photocraft_doc::MAX_GROUP_DEPTH, demosaic: raw::Demosaic::default() }
+        ImportOptions { max_group_depth: photocraft_doc::MAX_GROUP_DEPTH, demosaic: raw::Demosaic::default(), animation: AnimationImport::default() }
     }
 }
 
@@ -440,7 +454,7 @@ fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, o
     if is_psd_input(name, bytes) {
         return import_psd(name, bytes, ctl, damaged);
     }
-    flat::import_flat(name, bytes)
+    flat::import_flat_with(name, bytes, opts.animation)
 }
 
 /// Extension names can be wrong (for example, an image downloaded as WebP and renamed `.svg`).

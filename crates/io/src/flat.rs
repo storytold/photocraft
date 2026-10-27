@@ -8,21 +8,28 @@ use photocraft_doc::{AlphaChannel, Document, Layer, LayerContent};
 use photocraft_geom::{Rect, Size, TILE_SIZE};
 use photocraft_raster::Surface;
 
-use crate::{ExportOptions, ExportResult, ImportResult, IoError, TgaBits, XmpEmbed};
+use crate::{AnimationImport, ExportOptions, ExportResult, ImportResult, IoError, TgaBits, XmpEmbed};
 
 /// Bytes per band when converting or exporting a band of rows at a time.
 const BAND_BYTES: usize = 32 << 20;
 
 /// Decodes a flat image into a single-layer document; a TIFF with Photoshop layer data opens
-/// layered (see [`crate::tiff_layers`]).
+/// layered (see [`crate::tiff_layers`]). An animated GIF or WebP opens as its first frame, with a
+/// warning saying how many there are: [`import_flat_with`] can open all of them.
 pub fn import_flat(name: &str, bytes: &[u8]) -> Result<ImportResult, IoError> {
+    import_flat_with(name, bytes, AnimationImport::FirstFrame)
+}
+
+/// [`import_flat`], with `animation` saying how an animated GIF or WebP opens.
+pub fn import_flat_with(name: &str, bytes: &[u8], animation: AnimationImport) -> Result<ImportResult, IoError> {
     // Detected once; every step below branches on it.
     let format = codecs::detect(bytes);
     if format == Some(Format::Tiff) {
         return import_tiff_page(name, bytes, None);
     }
-    // An animated GIF or WebP opens with every frame as its own layer, to edit by hand.
-    if matches!(format, Some(Format::Gif | Format::WebP))
+    // Asked for: every frame of an animated GIF or WebP as its own layer, to edit by hand.
+    if animation == AnimationImport::Frames
+        && matches!(format, Some(Format::Gif | Format::WebP))
         && let Some(r) = import_animation_layers(name, bytes)?
     {
         return Ok(r);
@@ -102,12 +109,17 @@ pub const MAX_GIF_LAYER_FRAMES: usize = 1000;
 /// [`MAX_GIF_LAYER_FRAMES`], and says so.
 pub const MAX_GIF_LAYER_BYTES: u64 = 1 << 30;
 
-/// How many frames of a GIF whose header says it is `bytes` long fit [`MAX_GIF_LAYER_BYTES`]: at most
+/// How many frames of a `width` × `height` animation fit [`MAX_GIF_LAYER_BYTES`]: at most
 /// [`MAX_GIF_LAYER_FRAMES`] and at least two, since one is not an animation.
+fn layer_frames(width: u64, height: u64) -> usize {
+    let per_frame = width.saturating_mul(height).saturating_mul(8).max(1);
+    usize::try_from(MAX_GIF_LAYER_BYTES / per_frame).unwrap_or(usize::MAX).clamp(2, MAX_GIF_LAYER_FRAMES)
+}
+
+/// [`layer_frames`] for a GIF whose header (its logical screen) is in `bytes`.
 fn gif_layer_frames(bytes: &[u8]) -> usize {
     let dim = |at: usize| bytes.get(at..at + 2).and_then(|b| <[u8; 2]>::try_from(b).ok()).map_or(0, |b| u64::from(u16::from_le_bytes(b)));
-    let per_frame = (dim(6) * dim(8) * 8).max(1);
-    usize::try_from(MAX_GIF_LAYER_BYTES / per_frame).unwrap_or(usize::MAX).clamp(2, MAX_GIF_LAYER_FRAMES)
+    layer_frames(dim(6), dim(8))
 }
 
 /// An animated GIF or WebP as one document with a raster layer per frame ("Frame 1" at the
@@ -120,8 +132,13 @@ fn import_animation_layers(name: &str, bytes: &[u8]) -> Result<Option<ImportResu
     let (frames, more) = if gif {
         codecs::decode_gif_frames_prefix(bytes, &codecs::DecodeOptions::default(), gif_layer_frames(bytes))?
     } else {
+        // The WebP decoder reads every frame (within its own limits); the layers keep the budget's share.
         let Some(frames) = codecs::decode_frames(bytes, &codecs::DecodeOptions::default()) else { return Ok(None) };
-        (frames?, false)
+        let mut frames = frames?;
+        let keep = frames.first().map_or(0, |f| layer_frames(u64::from(f.image.width()), u64::from(f.image.height())));
+        let more = frames.len() > keep;
+        frames.truncate(keep);
+        (frames, more)
     };
     if frames.len() < 2 {
         return Ok(None);
@@ -144,7 +161,8 @@ fn import_animation_layers(name: &str, bytes: &[u8]) -> Result<Option<ImportResu
     }
     if let Some(r) = result.as_mut() {
         if more {
-            r.warnings.push(format!("only the first {} frames of the GIF were opened", delays.len()));
+            let format = if gif { "GIF" } else { "WebP" };
+            r.warnings.push(format!("only the first {} frames of the {format} were opened", delays.len()));
         }
         let doc = &mut r.document;
         let ids: Vec<_> = doc.layers.iter().map(|l| l.id).collect();
@@ -159,7 +177,7 @@ fn import_animation_layers(name: &str, bytes: &[u8]) -> Result<Option<ImportResu
                 })
                 .collect(),
             current: 0,
-            loops: if gif { gif_loop_count(bytes) } else { photocraft_doc::LoopCount::Forever },
+            loops: if gif { gif_loop_count(bytes) } else { webp_loop_count(bytes) },
             defaults: Default::default(),
         };
         animation.fill_opacities(&doc.layers);
@@ -215,6 +233,33 @@ fn gif_loop_count(bytes: &[u8]) -> photocraft_doc::LoopCount {
         }
     }
     scan(bytes).unwrap_or(LoopCount::Once)
+}
+
+/// How many times an animated WebP plays, from its `ANIM` chunk: a loop count of 0 means forever,
+/// N means N plays. A file without one (or whose chunks end early) plays forever, as browsers do.
+fn webp_loop_count(bytes: &[u8]) -> photocraft_doc::LoopCount {
+    use photocraft_doc::LoopCount;
+    fn scan(b: &[u8]) -> Option<u16> {
+        if b.get(0..4)? != b"RIFF" || b.get(8..12)? != b"WEBP" {
+            return None;
+        }
+        let mut at = 12usize;
+        loop {
+            let fourcc = b.get(at..at + 4)?;
+            let size = u32::from_le_bytes(b.get(at + 4..at + 8)?.try_into().ok()?);
+            let data = at.checked_add(8)?;
+            if fourcc == b"ANIM" {
+                // The background colour (4 bytes), then the loop count.
+                return Some(u16::from_le_bytes(b.get(data + 4..data + 6)?.try_into().ok()?));
+            }
+            // Chunks are padded to an even size.
+            at = data.checked_add(usize::try_from(size).ok()?.checked_add(1)? & !1)?;
+        }
+    }
+    match scan(bytes) {
+        Some(0) | None => LoopCount::Forever,
+        Some(n) => LoopCount::from_plays(u32::from(n)),
+    }
 }
 
 /// Every frame of a GIF or WebP as a single-layer document, handed to `each` in order with its delay in

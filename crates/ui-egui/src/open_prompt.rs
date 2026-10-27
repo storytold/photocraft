@@ -181,7 +181,10 @@ pub fn answer_remembering(app: &mut PhotocraftApp, action: &str) -> Result<Value
     };
     app.run("edit.colorSettings", json!({key: policy, "askOnMismatch": false}))?;
     let same = |h: &Held| {
-        !h.damage_pending && h.animated.is_none() && policy_key(h.doc.mode) == Some(key) && h.question.as_ref().is_some_and(|q| q.get("missing").and_then(Value::as_bool) != Some(true))
+        !h.damage_pending
+            && h.animated.is_none()
+            && policy_key(h.doc.mode) == Some(key)
+            && h.question.as_ref().is_some_and(|q| q.get("missing").and_then(Value::as_bool) != Some(true))
     };
     let Some(held) = app.held_opens.pop_front() else { return Err("no file is waiting to open".into()) };
     let r = open(app, held, Some(action));

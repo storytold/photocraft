@@ -503,6 +503,7 @@ pub fn import_options(prefs: &crate::prefs::Preferences) -> photocraft_io::Impor
     photocraft_io::ImportOptions {
         max_group_depth: prefs.file_handling.rasterize_svg_groups_deeper_than as usize,
         demosaic: prefs.raw_defaults.demosaic.method(),
+        ..Default::default()
     }
 }
 
@@ -527,10 +528,11 @@ impl Session {
     /// The job's result is `{document, docId, name, warnings, color}`; on wasm it runs inline.
     /// `document` is the tab index at apply time; resolve `docId` before handling a delayed
     /// completion, since earlier handlers may have moved or closed tabs. When
-    /// Color Settings ask about the file's profile, or it is an animation the File Handling
-    /// preference says to ask about ([`crate::animated_open::question`]), the document is held
-    /// back instead and the result is `{held, name, warnings, color, damaged, animated}` (the
-    /// questions, `null` when not asked): take it with [`Session::take_held_open`] once answered.
+    /// Color Settings ask about the file's profile, the document is held back instead and the
+    /// result is `{held, name, warnings, color, damaged, animated}` (the questions, `null` when
+    /// not asked): take it with [`Session::take_held_open`] once answered. An animated GIF or WebP
+    /// opens as its first frame here; [`Self::start_open_for_user`] opens it as File Handling says
+    /// (asking, `animated`, when it says Ask).
     pub fn start_open(&mut self, name: &str, source: OpenSource) -> Result<Started> {
         self.start_open_inner(name, source, false)
     }
@@ -542,13 +544,19 @@ impl Session {
         self.start_open_inner(name, source, true)
     }
 
-    /// Decodes a file in a job and optionally holds damaged PSD content for
-    /// interactive confirmation while leaving headless opens non-interactive.
-    fn start_open_inner(&mut self, name: &str, source: OpenSource, confirm_damage: bool) -> Result<Started> {
+    /// Decodes a file in a job. `for_user` (File › Open) holds damaged PSD content for
+    /// interactive confirmation and opens an animated GIF or WebP as File Handling says; headless
+    /// opens stay non-interactive and take an animation's first frame.
+    fn start_open_inner(&mut self, name: &str, source: OpenSource, for_user: bool) -> Result<Started> {
         let label = format!("Opening {name}");
         let name_w = name.to_string();
         let name_a = name.to_string();
-        let opts = import_options(self.prefs());
+        let mut opts = import_options(self.prefs());
+        // File › Open reads an animated GIF's or WebP's frames when File Handling wants them or
+        // asks (`animated_open`); a headless open keeps its first frame.
+        if for_user {
+            opts.animation = crate::animated_open::import_mode(self.prefs(), name);
+        }
         let path = match &source {
             OpenSource::Path(p) => Some(p.clone()),
             OpenSource::Bytes(_) => None,
@@ -588,15 +596,16 @@ impl Session {
                 // File Handling's ACEScg option, before the colour prompt looks at the profile.
                 crate::file_cmds::tag_exr_colorspace(s, &name_a, &mut r.document);
                 crate::file_cmds::raw_defaults(s, &r.warnings, &mut r.document);
-                // An animated GIF or WebP opens as the preference says, or is held back to ask.
-                let animated = crate::animated_open::question(s.prefs(), &name_a, &r.document);
-                if animated.is_none() {
+                // File › Open: an animated GIF or WebP opens as File Handling says, or is held back
+                // to ask how. A headless open has read its first frame only.
+                let animated = for_user.then(|| crate::animated_open::question(s.prefs(), &name_a, &r.document)).flatten();
+                if for_user && animated.is_none() {
                     crate::animated_open::apply_preferred(s.prefs(), &name_a, &mut r.document, path.as_deref())?;
                 }
                 // Ask When Opening: held back until the prompt is answered (`take_held_open`). A
                 // developed raw has no embedded profile to ask about.
                 let raw = r.warnings.iter().any(|w| w.contains(photocraft_io::raw::DEVELOPED_NOTE));
-                let damaged = confirm_damage && damaged;
+                let damaged = for_user && damaged;
                 let question = s.color.open_question(&r.document).filter(|_| !raw);
                 if damaged || question.is_some() || animated.is_some() {
                     let held = s.hold_open(r.document, r.source_read_only);

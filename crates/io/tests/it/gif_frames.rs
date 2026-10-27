@@ -1,11 +1,23 @@
 //! `import_animation_frames`: each GIF frame as a single-layer document, in order, with its delay.
 
-use photocraft_codecs::web::{GifFrame, encode_gif_animated};
-use photocraft_io::{IoError, import_animation_frames};
+use photocraft_codecs::web::{GifFrame, WebpFrame, encode_gif_animated, encode_webp_animated};
+use photocraft_io::{AnimationImport, ImportOptions, IoError, import_animation_frames};
 
 fn gif(colours: &[([u8; 3], u16)]) -> Vec<u8> {
     let frames: Vec<GifFrame> = colours.iter().map(|&(c, delay_cs)| GifFrame { indices: vec![0; 6], palette: vec![c], transparent: None, delay_cs }).collect();
     encode_gif_animated(3, 2, &frames, true).unwrap()
+}
+
+/// A lossless 3×2 animated WebP of solid frames, each `(colour, delay in ms)`, played `loops` times
+/// (0: forever).
+fn webp(colours: &[([u8; 3], u32)], loops: u16) -> Vec<u8> {
+    let frames: Vec<WebpFrame> = colours.iter().map(|&([r, g, b], delay_ms)| WebpFrame { rgba: [r, g, b, 255].repeat(6), delay_ms }).collect();
+    encode_webp_animated(3, 2, &frames, loops).unwrap()
+}
+
+/// An import that asks for an animation's frames, as File › Open does for a frame animation.
+fn import_frames(name: &str, bytes: &[u8]) -> Result<photocraft_io::ImportResult, IoError> {
+    photocraft_io::import_with_options(name, bytes, &ImportOptions { animation: AnimationImport::Frames, ..Default::default() })
 }
 
 #[test]
@@ -42,7 +54,7 @@ fn garbage_is_an_error() {
 #[test]
 fn opening_an_animated_gif_keeps_every_delay() {
     let bytes = gif(&[([255, 0, 0], 3), ([0, 0, 255], 30), ([0, 255, 0], 7)]);
-    let r = photocraft_io::import("a.gif", &bytes).unwrap();
+    let r = import_frames("a.gif", &bytes).unwrap();
     let a = r.document.frame_animation.as_ref().unwrap();
     assert_eq!(a.frames.iter().map(|f| f.delay_ms).collect::<Vec<_>>(), [30, 300, 70]);
     assert_eq!(r.document.layers.iter().map(|l| l.visible).collect::<Vec<_>>(), [true, false, false]);
@@ -63,10 +75,10 @@ fn delays_of(bytes: &[u8]) -> Vec<u32> {
 #[test]
 fn saving_an_opened_animated_gif_round_trips_frames_and_delays() {
     let bytes = gif(&[([255, 0, 0], 3), ([0, 0, 255], 30), ([0, 255, 0], 7)]);
-    let opened = photocraft_io::import("a.gif", &bytes).unwrap().document;
+    let opened = import_frames("a.gif", &bytes).unwrap().document;
     let saved = photocraft_io::export(&opened, "a.gif", &Default::default()).unwrap().bytes;
     assert_eq!(delays_of(&saved), [30, 300, 70]);
-    let again = photocraft_io::import("a.gif", &saved).unwrap().document;
+    let again = import_frames("a.gif", &saved).unwrap().document;
     assert_eq!(again.layers.len(), 3);
     // Each frame keeps its own colour: red, blue, green.
     let colours: Vec<[u8; 3]> = (0..3)
@@ -84,7 +96,7 @@ fn saving_an_opened_animated_gif_round_trips_frames_and_delays() {
 #[test]
 fn edits_to_the_animation_reach_the_saved_gif() {
     let bytes = gif(&[([255, 0, 0], 3), ([0, 0, 255], 30)]);
-    let mut d = photocraft_io::import("a.gif", &bytes).unwrap().document;
+    let mut d = import_frames("a.gif", &bytes).unwrap().document;
     let a = d.frame_animation.as_mut().unwrap();
     a.frame_mut(0).unwrap().delay_ms = 500;
     a.frames.reverse();
@@ -98,7 +110,7 @@ fn the_loop_count_is_written_to_the_file() {
     use photocraft_doc::LoopCount;
     let bytes = gif(&[([255, 0, 0], 3), ([0, 0, 255], 30)]);
     let ext = |loops: LoopCount| {
-        let mut d = photocraft_io::import("a.gif", &bytes).unwrap().document;
+        let mut d = import_frames("a.gif", &bytes).unwrap().document;
         d.frame_animation.as_mut().unwrap().loops = loops;
         let saved = photocraft_io::export(&d, "a.gif", &Default::default()).unwrap().bytes;
         saved.windows(16).position(|w| w.starts_with(b"NETSCAPE2.0")).map(|at| (saved[at + 13], saved[at + 14]))
@@ -112,7 +124,7 @@ fn the_loop_count_is_written_to_the_file() {
 #[test]
 fn a_document_without_an_animation_saves_a_still_gif() {
     let bytes = gif(&[([255, 0, 0], 3), ([0, 0, 255], 30)]);
-    let mut d = photocraft_io::import("a.gif", &bytes).unwrap().document;
+    let mut d = import_frames("a.gif", &bytes).unwrap().document;
     d.frame_animation = None;
     let saved = photocraft_io::export(&d, "a.gif", &Default::default()).unwrap().bytes;
     assert_eq!(delays_of(&saved).len(), 1);
@@ -124,7 +136,7 @@ fn a_gif_with_too_many_frames_opens_the_first_ones_with_a_warning() {
     let frames: Vec<GifFrame> =
         (0..MAX_GIF_LAYER_FRAMES + 5).map(|_| GifFrame { indices: vec![0], palette: vec![[9, 9, 9]], transparent: None, delay_cs: 2 }).collect();
     let bytes = encode_gif_animated(1, 1, &frames, true).unwrap();
-    let r = photocraft_io::import("many.gif", &bytes).unwrap();
+    let r = import_frames("many.gif", &bytes).unwrap();
     assert_eq!(r.document.layers.len(), MAX_GIF_LAYER_FRAMES);
     assert_eq!(r.document.frame_animation.as_ref().unwrap().frames.len(), MAX_GIF_LAYER_FRAMES);
     assert!(r.warnings.iter().any(|w| w.contains(&format!("first {MAX_GIF_LAYER_FRAMES} frames of the GIF"))), "{:?}", r.warnings);
@@ -179,10 +191,10 @@ fn an_opened_gif_keeps_its_own_loop_count_and_saves_it_back() {
         [([255, 0, 0], 3), ([0, 0, 255], 5)].iter().map(|&(c, d)| GifFrame { indices: vec![0; 6], palette: vec![c], transparent: None, delay_cs: d }).collect();
     let loops_of = |l: GifLoops| {
         let bytes = encode_gif_animated_loops(3, 2, &frames, l).unwrap();
-        let r = photocraft_io::import("a.gif", &bytes).unwrap();
+        let r = import_frames("a.gif", &bytes).unwrap();
         // Open and save again without touching anything.
         let again = photocraft_io::export(&r.document, "a.gif", &Default::default()).unwrap().bytes;
-        let back = photocraft_io::import("a.gif", &again).unwrap();
+        let back = import_frames("a.gif", &again).unwrap();
         (r.document.frame_animation.unwrap().loops, back.document.frame_animation.unwrap().loops)
     };
     assert_eq!(loops_of(GifLoops::Forever), (LoopCount::Forever, LoopCount::Forever));
@@ -201,7 +213,7 @@ fn a_truncated_gif_keeps_the_loop_count_it_declared_or_plays_once() {
     let loops_of = |l: GifLoops| {
         let mut bytes = encode_gif_animated_loops(3, 2, &frames, l).unwrap();
         bytes.pop(); // lose the trailer: the blocks now end early
-        photocraft_io::import("a.gif", &bytes).unwrap().document.frame_animation.unwrap().loops
+        import_frames("a.gif", &bytes).unwrap().document.frame_animation.unwrap().loops
     };
     assert_eq!(loops_of(GifLoops::Forever), LoopCount::Forever, "the extension came first, so it is still read");
     assert_eq!(loops_of(GifLoops::Times(4)), LoopCount::Times(4));
@@ -291,4 +303,39 @@ fn an_export_that_cannot_be_held_at_once_is_refused_and_compression_can_be_cance
         !(calls > 4 && done == total)
     });
     assert!(matches!(r, Err(IoError::Cancelled)));
+}
+
+/// #6898 review: a caller that doesn't ask for frames (`import`, scripts, the CLI and MCP) gets an
+/// animated GIF's or WebP's first frame, with the warning it had before frame animations, and
+/// the same document as before: one layer, no frame animation.
+#[test]
+fn without_an_animation_option_an_animated_gif_or_webp_opens_as_its_first_frame() {
+    let cases = [
+        ("a.gif", gif(&[([255, 0, 0], 3), ([0, 0, 255], 7), ([0, 255, 0], 7)])),
+        ("a.webp", webp(&[([255, 0, 0], 30), ([0, 0, 255], 70), ([0, 255, 0], 70)], 0)),
+    ];
+    for (name, bytes) in &cases {
+        for r in [photocraft_io::import(name, bytes).unwrap(), photocraft_io::import_with_options(name, bytes, &ImportOptions::default()).unwrap()] {
+            assert_eq!(r.document.layers.len(), 1, "{name}");
+            assert!(r.document.frame_animation.is_none(), "{name}");
+            assert_eq!(r.warnings, ["only the first of 3 frames was imported"], "{name}");
+        }
+        let frames = import_frames(name, bytes).unwrap();
+        assert_eq!(frames.document.layers.len(), 3, "{name}");
+        assert_eq!(frames.document.frame_animation.as_ref().map(|a| a.frames.len()), Some(3), "{name}");
+        assert!(frames.warnings.is_empty(), "{name}: {:?}", frames.warnings);
+    }
+}
+
+/// An animated WebP's frames keep their durations and its `ANIM` loop count: 0 plays forever,
+/// N plays N times.
+#[test]
+fn an_animated_webp_opened_as_frames_keeps_its_durations_and_loop_count() {
+    use photocraft_doc::LoopCount;
+    let colours = [([255, 0, 0], 40), ([0, 0, 255], 120)];
+    let a = import_frames("a.webp", &webp(&colours, 0)).unwrap().document.frame_animation.unwrap();
+    assert_eq!(a.frames.iter().map(|f| f.delay_ms).collect::<Vec<_>>(), [40, 120]);
+    assert_eq!(a.loops, LoopCount::Forever);
+    let a = import_frames("a.webp", &webp(&colours, 3)).unwrap().document.frame_animation.unwrap();
+    assert_eq!(a.loops, LoopCount::from_plays(3));
 }

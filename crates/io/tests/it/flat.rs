@@ -793,10 +793,14 @@ fn gif_frames(frames: usize) -> Vec<u8> {
 /// opens as a single Background layer.
 #[test]
 fn animation_imports_every_frame_as_a_layer() {
-    let one = import("a.gif", &gif_frames(1)).unwrap();
+    let frames = photocraft_io::ImportOptions { animation: photocraft_io::AnimationImport::Frames, ..Default::default() };
+    let one = photocraft_io::import_with_options("a.gif", &gif_frames(1), &frames).unwrap();
     assert_eq!(one.warnings, Vec::<String>::new());
     assert_eq!(one.document.layers.len(), 1);
-    let three = import("a.gif", &gif_frames(3)).unwrap();
+    // Unasked, the first frame only (#6898 review).
+    let first = import("a.gif", &gif_frames(3)).unwrap();
+    assert_eq!((first.document.layers.len(), first.warnings), (1, vec!["only the first of 3 frames was imported".to_string()]));
+    let three = photocraft_io::import_with_options("a.gif", &gif_frames(3), &frames).unwrap();
     assert_eq!(three.warnings, Vec::<String>::new());
     let names: Vec<&str> = three.document.layers.iter().map(|l| l.name.as_str()).collect();
     assert_eq!(names, ["Frame 1", "Frame 2", "Frame 3"]);

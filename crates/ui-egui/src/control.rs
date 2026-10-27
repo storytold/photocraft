@@ -1356,6 +1356,11 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
         }
         "app.open" => match s("path") {
             Some(path) => {
+                // An animated GIF or WebP: its first frame unless `animation` asks for more.
+                let animation = match photocraft_engine::animated_open::requested(s("animation")) {
+                    Ok(a) => a,
+                    Err(e) => return err(e.to_string()),
+                };
                 // Directory .pcraft (the native on-disk form) loads through a capability-scoped
                 // source; the single-file (zip) form falls back to the bytes path, as do all
                 // other formats.
@@ -1383,7 +1388,7 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 };
                 wrap(opened.and_then(|(name, bytes)| {
                     let name = app.open_name(&name);
-                    let warnings = app.open_automation_bytes(&name, &bytes)?;
+                    let warnings = app.open_automation_bytes_as(&name, &bytes, animation)?;
                     // Brushes/gradients go to the preset libraries: no document, no Open Recent entry.
                     if !crate::preset_files_ui::is_preset_file(&name) {
                         app.opened_from(path);
