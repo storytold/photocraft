@@ -175,13 +175,14 @@ pub struct PerPixel {
 
 impl CameraRaw {
     /// Whether developing needs a stage that reads neighbouring pixels: Dehaze, Shadows and
-    /// Highlights, Texture, Clarity, sharpening or noise reduction.
+    /// Highlights, Texture, Clarity, sharpening, noise reduction or a Geometry warp.
     pub fn spatial(&self) -> bool {
         self.dehaze != 0.0
             || [self.highlights, self.shadows, self.texture, self.clarity].iter().any(|v| *v != 0.0)
             || self.sharpen_amount > 0.0
             || self.noise_luminance > 0.0
             || self.noise_color > 0.0
+            || !self.geometry_neutral()
     }
 }
 

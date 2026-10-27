@@ -4527,3 +4527,26 @@ shape	Appearance	Apparence
 	Font size presets	Tailles de police prédéfinies
 	Leading presets	Interlignages prédéfinis
 	Tracking presets	Approches prédéfinies
+	Upright	Redressement
+	Manual Transformations	Transformations manuelles
+	Draw two or more guides on the image along lines that should be vertical or horizontal (Shift+T).	Tracez au moins deux repères sur l'image le long de lignes qui doivent être verticales ou horizontales (Maj+T).
+	Drag a guide's end to move it; select a guide and press Delete to remove it. Up to four guides.	Faites glisser l'extrémité d'un repère pour la déplacer ; sélectionnez un repère et appuyez sur Suppr pour le supprimer. Quatre repères au maximum.
+cameraRaw	Geometry	Géométrie
+cameraRaw	Off	Désactivé
+cameraRaw	Auto	Auto
+cameraRaw	Level	Niveau
+cameraRaw	Vertical	Vertical
+cameraRaw	Full	Totale
+cameraRaw	Disable Upright	Désactiver le redressement
+cameraRaw	Auto: apply balanced perspective corrections	Auto : appliquer des corrections de perspective équilibrées
+cameraRaw	Level: apply only level correction	Niveau : appliquer uniquement la correction de niveau
+cameraRaw	Vertical: apply level and vertical perspective correction	Vertical : appliquer la correction de niveau et de perspective verticale
+cameraRaw	Full: apply level, horizontal, and vertical perspective corrections	Complet : appliquer les corrections de niveau et de perspective horizontale et verticale
+cameraRaw	Guided: draw two or more guides to customize perspective corrections	Guidé : tracer au moins deux repères pour personnaliser les corrections de perspective
+cameraRaw	Horizontal	Horizontal
+cameraRaw	Rotate	Rotation
+cameraRaw	Aspect	Aspect
+cameraRaw	Scale	Mise à l'échelle
+cameraRaw	Offset X	Décalage X
+cameraRaw	Offset Y	Décalage Y
+cameraRaw	Guided	Guidé

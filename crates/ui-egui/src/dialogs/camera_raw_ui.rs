@@ -116,6 +116,8 @@ pub struct CameraRawDialog {
     redo: Vec<CameraRaw>,
     /// Params at pointer-down. One drag is one undo step.
     edit_origin: Option<CameraRaw>,
+    /// Geometry › Upright › Guided's tool (Shift+T).
+    pub(crate) guides: crate::camera_raw_guides_ui::GuideTool,
 }
 
 impl CameraRawDialog {
@@ -133,6 +135,7 @@ impl CameraRawDialog {
         result["openingRaw"] = json!(self.raw_open.as_ref().map(|r| json!({"name": r.name, "path": r.path, "demosaic": r.demosaic.id()})));
         result["view"] = json!(navigation);
         result["sourceSize"] = json!([self.full_w, self.full_h]);
+        result["guidedUprightTool"] = json!({"active": self.guides.active, "selected": self.guides.selected});
         result["previewPending"] = json!(self.render_pending());
         result["previewApproximate"] = json!(!self.detail.ready && (self.pw != self.full_w || self.ph != self.full_h));
         result["detailPending"] = json!(self.detail.pending());

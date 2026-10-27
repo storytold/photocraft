@@ -4164,3 +4164,26 @@ curves	Smooth	スムーズ
 	Font size presets	フォントサイズのプリセット
 	Leading presets	行送りのプリセット
 	Tracking presets	トラッキングのプリセット
+	Upright	アップライト
+	Manual Transformations	手動変形
+	Draw two or more guides on the image along lines that should be vertical or horizontal (Shift+T).	垂直または水平にしたい線に沿って、画像上にガイドを 2 本以上描画します (Shift+T)。
+	Drag a guide's end to move it; select a guide and press Delete to remove it. Up to four guides.	ガイドの端をドラッグして移動します。ガイドを選択して Delete キーを押すと削除されます。ガイドは最大 4 本です。
+cameraRaw	Geometry	ジオメトリ
+cameraRaw	Off	オフ
+cameraRaw	Auto	自動
+cameraRaw	Level	レベル
+cameraRaw	Vertical	縦書き
+cameraRaw	Full	フル
+cameraRaw	Disable Upright	アップライトを無効化
+cameraRaw	Auto: apply balanced perspective corrections	自動: バランスの取れた遠近補正を適用
+cameraRaw	Level: apply only level correction	水平: 傾き補正のみを適用
+cameraRaw	Vertical: apply level and vertical perspective correction	垂直: 傾き補正と垂直方向の遠近補正を適用
+cameraRaw	Full: apply level, horizontal, and vertical perspective corrections	フル: 傾き補正と水平・垂直方向の遠近補正を適用
+cameraRaw	Guided: draw two or more guides to customize perspective corrections	ガイド付き: 2 本以上のガイドを描いて遠近補正を調整
+cameraRaw	Horizontal	横書き
+cameraRaw	Rotate	回転
+cameraRaw	Aspect	縦横比
+cameraRaw	Scale	拡大・縮小
+cameraRaw	Offset X	X オフセット
+cameraRaw	Offset Y	Y オフセット
+cameraRaw	Guided	ガイド付き

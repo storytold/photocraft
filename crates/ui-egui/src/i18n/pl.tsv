@@ -4105,3 +4105,26 @@ curves	Smooth	Wygładź
 	Font size presets	Ustawienia wstępne rozmiaru czcionki
 	Leading presets	Ustawienia wstępne interlinii
 	Tracking presets	Ustawienia wstępne światła
+	Upright	Prostowanie
+	Manual Transformations	Przekształcenia ręczne
+	Draw two or more guides on the image along lines that should be vertical or horizontal (Shift+T).	Narysuj na obrazie co najmniej dwie prowadnice wzdłuż linii, które powinny być pionowe lub poziome (Shift+T).
+	Drag a guide's end to move it; select a guide and press Delete to remove it. Up to four guides.	Przeciągnij koniec prowadnicy, aby go przesunąć; zaznacz prowadnicę i naciśnij Delete, aby ją usunąć. Maksymalnie cztery prowadnice.
+cameraRaw	Geometry	Geometria
+cameraRaw	Off	Wyłączone
+cameraRaw	Auto	Automatycznie
+cameraRaw	Level	Poziom
+cameraRaw	Vertical	Pionowo
+cameraRaw	Full	Pełna
+cameraRaw	Disable Upright	Wyłącz prostowanie
+cameraRaw	Auto: apply balanced perspective corrections	Automatycznie: zastosuj zrównoważone korekcje perspektywy
+cameraRaw	Level: apply only level correction	Poziom: zastosuj tylko korekcję poziomu
+cameraRaw	Vertical: apply level and vertical perspective correction	Pionowe: zastosuj korekcję poziomu i perspektywy pionowej
+cameraRaw	Full: apply level, horizontal, and vertical perspective corrections	Pełne: zastosuj korekcję poziomu oraz perspektywy poziomej i pionowej
+cameraRaw	Guided: draw two or more guides to customize perspective corrections	Z prowadnicami: narysuj co najmniej dwie prowadnice, aby dostosować korekcje perspektywy
+cameraRaw	Horizontal	Poziomo
+cameraRaw	Rotate	Obróć
+cameraRaw	Aspect	Proporcje
+cameraRaw	Scale	Skaluj
+cameraRaw	Offset X	Przesunięcie X
+cameraRaw	Offset Y	Przesunięcie Y
+cameraRaw	Guided	Z prowadnicami

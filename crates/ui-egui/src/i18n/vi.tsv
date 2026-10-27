@@ -3983,3 +3983,26 @@ curves	Smooth	Làm mượt
 	Font size presets	Cỡ chữ đặt sẵn
 	Leading presets	Giãn dòng đặt sẵn
 	Tracking presets	Khoảng cách chữ đặt sẵn
+	Upright	Dựng thẳng
+	Manual Transformations	Biến đổi thủ công
+	Draw two or more guides on the image along lines that should be vertical or horizontal (Shift+T).	Vẽ hai đường căn trở lên trên ảnh dọc theo các đường cần thẳng đứng hoặc nằm ngang (Shift+T).
+	Drag a guide's end to move it; select a guide and press Delete to remove it. Up to four guides.	Kéo đầu của đường căn để di chuyển; chọn một đường căn rồi nhấn Delete để xóa. Tối đa bốn đường căn.
+cameraRaw	Geometry	Hình học
+cameraRaw	Off	Tắt
+cameraRaw	Auto	Tự động
+cameraRaw	Level	Cân ngang
+cameraRaw	Vertical	Dọc
+cameraRaw	Full	Toàn phần
+cameraRaw	Disable Upright	Tắt dựng thẳng
+cameraRaw	Auto: apply balanced perspective corrections	Tự động: chỉnh phối cảnh cân đối
+cameraRaw	Level: apply only level correction	Ngang bằng: chỉ chỉnh ngang bằng
+cameraRaw	Vertical: apply level and vertical perspective correction	Dọc: chỉnh ngang bằng và phối cảnh dọc
+cameraRaw	Full: apply level, horizontal, and vertical perspective corrections	Đầy đủ: chỉnh ngang bằng, phối cảnh ngang và dọc
+cameraRaw	Guided: draw two or more guides to customize perspective corrections	Theo đường căn: vẽ hai đường căn trở lên để tùy chỉnh phối cảnh
+cameraRaw	Horizontal	Ngang
+cameraRaw	Rotate	Xoay
+cameraRaw	Aspect	Tỷ lệ khung
+cameraRaw	Scale	Tỷ lệ
+cameraRaw	Offset X	Dịch X
+cameraRaw	Offset Y	Dịch Y
+cameraRaw	Guided	Theo đường căn

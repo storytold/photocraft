@@ -4557,3 +4557,26 @@ shape	Appearance	Izgled
 	Font size presets	Unapred podešene veličine fonta
 	Leading presets	Unapred podešeni proredi
 	Tracking presets	Unapred podešeni razmaci slova
+	Upright	Uspravljanje
+	Manual Transformations	Ručne transformacije
+	Draw two or more guides on the image along lines that should be vertical or horizontal (Shift+T).	Nacrtajte na slici dve ili više vodilja duž linija koje treba da budu vertikalne ili horizontalne (Shift+T).
+	Drag a guide's end to move it; select a guide and press Delete to remove it. Up to four guides.	Prevucite kraj vodilje da biste ga pomerili; izaberite vodilju i pritisnite Delete da biste je uklonili. Najviše četiri vodilje.
+cameraRaw	Geometry	Geometrija
+cameraRaw	Off	Isključeno
+cameraRaw	Auto	Automatski
+cameraRaw	Level	Nivo
+cameraRaw	Vertical	Vertikalno
+cameraRaw	Full	Potpuna
+cameraRaw	Disable Upright	Isključi uspravljanje
+cameraRaw	Auto: apply balanced perspective corrections	Automatski: primeni uravnotežene korekcije perspektive
+cameraRaw	Level: apply only level correction	Nivo: primeni samo korekciju nivoa
+cameraRaw	Vertical: apply level and vertical perspective correction	Vertikalno: primeni korekciju nivoa i vertikalne perspektive
+cameraRaw	Full: apply level, horizontal, and vertical perspective corrections	Puno: primeni korekcije nivoa, horizontalne i vertikalne perspektive
+cameraRaw	Guided: draw two or more guides to customize perspective corrections	Vođeno: nacrtajte dve ili više vodilja da prilagodite korekcije perspektive
+cameraRaw	Horizontal	Horizontalno
+cameraRaw	Rotate	Rotacija
+cameraRaw	Aspect	Odnos stranica
+cameraRaw	Scale	Skaliranje
+cameraRaw	Offset X	Pomak X
+cameraRaw	Offset Y	Pomak Y
+cameraRaw	Guided	Vođeno
