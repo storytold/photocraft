@@ -84,6 +84,7 @@ pub(super) enum Target {
     Class,
     Offset(i32),
     Index(u32),
+    Id(u32),
     Other,
 }
 
@@ -93,6 +94,7 @@ pub(super) fn target(r: &[ReferenceItem]) -> Target {
         Some(ReferenceItem::Name { name, .. }) => Target::Name(name.to_string_lossy()),
         Some(ReferenceItem::Property { key, .. }) => Target::Property(trimmed(key)),
         Some(ReferenceItem::Class(_)) => Target::Class,
+        Some(ReferenceItem::Identifier { id, .. }) => Target::Id(*id),
         Some(ReferenceItem::Offset { offset, .. }) => Target::Offset(*offset),
         Some(ReferenceItem::Index { index, .. }) => Target::Index(*index),
         _ => Target::Other,
@@ -100,7 +102,8 @@ pub(super) fn target(r: &[ReferenceItem]) -> Target {
 }
 
 /// `{"layer": name}` for a reference that names a layer, `{}` for the target layer, `None`
-/// for anything else (an index or id: meaningless in another document).
+/// for anything else (an index: meaningless in another document). A layer id reference
+/// (`Idnt`) comes back as the id the engine's `layer` param takes.
 pub(super) fn layer_target(r: &[ReferenceItem]) -> Option<Map<String, Value>> {
     let mut m = Map::new();
     match target(r) {
@@ -110,6 +113,10 @@ pub(super) fn layer_target(r: &[ReferenceItem]) -> Option<Map<String, Value>> {
         }
         Target::Property(p) if p == "Bckg" => {
             m.insert("layer".into(), json!("Background"));
+        }
+        // Photoshop's layer id: exact in the document whose ids the file refers to.
+        Target::Id(id) if ref_class(r).as_deref() == Some("Lyr") => {
+            m.insert("layer".into(), json!(id));
         }
         _ => return None,
     }
@@ -172,11 +179,16 @@ pub(super) fn class_ref(cls: &str) -> D {
     D::Reference(vec![ReferenceItem::Class(class(cls))])
 }
 
-/// The `null` reference for a command's `layer` param: by name, else the target layer.
+/// The `null` reference for a command's `layer` param: by name, by id (a numeric `layer`
+/// is an imported `Idnt`: Photoshop's own layer-id reference), else the target layer.
 pub(super) fn layer_ref(p: &Value) -> Option<D> {
     match p.get("layer") {
         None | Some(Value::Null) => Some(target_ref("Lyr ")),
         Some(Value::String(n)) => Some(name_ref("Lyr ", n)),
+        Some(Value::Number(n)) => match n.as_u64() {
+            Some(i) if i <= u32::MAX as u64 => Some(D::Reference(vec![ReferenceItem::Identifier { class: class("Lyr "), id: i as u32 }])),
+            _ => None,
+        },
         _ => None,
     }
 }
