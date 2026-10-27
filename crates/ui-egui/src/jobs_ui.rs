@@ -175,6 +175,9 @@ pub struct JobsUi {
     pub focus: Option<JobId>,
     /// The job the latest [`run`] started (the control channel waits on it).
     pub(crate) last_started: Option<JobId>,
+    /// Scanner opens started by automation or with script events disabled keep that policy
+    /// when their result arrives after the command's temporary suppression has ended.
+    wia_without_script_events: Vec<JobId>,
 }
 
 /// Run command `id`: in the background when background jobs are on and the command is a job
@@ -188,6 +191,9 @@ pub fn run(app: &mut PhotocraftApp, id: &str, params: Value) -> Result<Value, St
         Started::Done(v) => Ok(v),
         Started::Job(job) => {
             app.jobs.last_started = Some(job);
+            if id == "file.import.wiaSupport" && (app.automation_input || !app.session.prefs().script_events.enabled) {
+                app.jobs.wia_without_script_events.push(job);
+            }
             // The status bar's progress readout names the job; clear any old message.
             app.ui.status.clear();
             app.ui.status_error = false;
@@ -447,6 +453,15 @@ pub fn cancel(app: &mut PhotocraftApp, id: JobId) -> bool {
 }
 
 fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
+    let suppress_wia_events = app
+        .jobs
+        .wia_without_script_events
+        .iter()
+        .position(|job| *job == e.id)
+        .map(|i| {
+            app.jobs.wia_without_script_events.remove(i);
+        })
+        .is_some();
     // Preferences ▸ General ▸ Beep When Done (off by default): a finished operation beeps, like
     // Photoshop's cue. Cancelling is the user's own action and stays silent.
     if matches!(e.outcome, JobOutcome::Done(_))
@@ -510,6 +525,19 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
         return;
     }
     match e.outcome {
+        JobOutcome::Done(ref result) if e.command == "file.import.wiaSupport" => {
+            let events_enabled = app.session.prefs().script_events.enabled;
+            if suppress_wia_events && events_enabled {
+                app.session.edit_prefs(|prefs| prefs.script_events.enabled = false);
+            }
+            let finished = finish_wia(app, result);
+            if suppress_wia_events && events_enabled {
+                app.session.edit_prefs(|prefs| prefs.script_events.enabled = true);
+            }
+            if let Err(err) = finished {
+                app.open_failed("Scan", &err);
+            }
+        }
         JobOutcome::Done(v) if e.command == "brush.presets.importAbr" => {
             let n = v.get("count").and_then(Value::as_u64).unwrap_or(0);
             let group = v.get("group").and_then(Value::as_str).unwrap_or_default();
@@ -541,6 +569,34 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
             app.ui.status = crate::i18n::fmt(tl!("Cancelled {label}"), &[("label", &e.label)]);
             app.ui.status_error = false;
         }
+    }
+}
+
+/// Finish a scanner result through the same colour-policy prompts, warnings and Open Document
+/// hooks as a file open. Discovery has no shell effects; scans have no recent-file location.
+pub(crate) fn finish_wia(app: &mut PhotocraftApp, result: &Value) -> Result<(), String> {
+    if result.get("acquired").and_then(Value::as_bool) == Some(true) {
+        let suppress_events = app.automation_input && app.session.prefs().script_events.enabled;
+        if suppress_events {
+            app.session.edit_prefs(|prefs| prefs.script_events.enabled = false);
+        }
+        let finished = finish_open(app, "Scan", None, result, None);
+        if suppress_events {
+            app.session.edit_prefs(|prefs| prefs.script_events.enabled = true);
+        }
+        if finished.is_ok() {
+            // A previously focused opening tab or Home overlay must give way to this scan.
+            // Other opens remain running and keep their tabs.
+            app.jobs.focus = None;
+            app.ui.chrome.home = None;
+        }
+        finished
+    } else {
+        if result.get("cancelled").and_then(Value::as_bool) == Some(true) {
+            app.ui.status = crate::i18n::fmt(tl!("Cancelled {label}"), &[("label", "WIA scanner")]);
+            app.ui.status_error = false;
+        }
+        Ok(())
     }
 }
 
@@ -889,3 +945,6 @@ pub fn bytes(b: &[u8]) -> OpenSource {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod wia_tests;

@@ -579,3 +579,36 @@ fn absolute_paths_are_checked_against_the_authority_s_own_root() {
     let none = AuthorizedWorkspace::default();
     assert!(none.read(&target.to_string_lossy()).is_err());
 }
+
+#[test]
+fn wia_options_are_authorized_but_caller_paths_and_other_file_commands_are_rejected() {
+    let command = "file.import.wiaSupport";
+    for params in [
+        serde_json::json!({}),
+        serde_json::json!({"action": "list"}),
+        serde_json::json!({"action": "acquire"}),
+        serde_json::json!({"action": "acquire", "deviceId": "test-scanner", "showUI": false, "dpi": 300, "mode": "gray"}),
+    ] {
+        // Only check authorization: these valid requests must not start scanner hardware
+        // or native dialogs in the regression test.
+        assert!(authorize_engine_command(command, &params).is_ok(), "{params}");
+        assert!(authorize_desktop_engine_command(command, &params).is_ok(), "{params}");
+        assert!(authorize_engine_step(command, &params).is_ok(), "{params}");
+    }
+    let path = serde_json::json!({"path": "/outside/scanner.tif"});
+    for denied in ["file.save", "file.import.wiaSupportExtra", "file.futureFilesystemCommand"] {
+        assert!(authorize_engine_command(denied, &path).is_err(), "{denied}");
+    }
+    let mut headless = crate::Headless::new();
+    for action in ["list", "acquire"] {
+        let params = serde_json::json!({"action": action, "deviceId": "test-scanner", "showUI": false, "path": "/outside/scanner.tif"});
+        match headless.command_run(command, params) {
+            Err(AutomationError::Engine(photocraft_engine::EngineError::BadParams { cmd, msg })) => {
+                assert_eq!(cmd, command);
+                assert!(msg.contains("path"), "{msg}");
+            }
+            other => panic!("unexpected WIA path validation result: {other:?}"),
+        }
+    }
+    assert!(headless.session.documents().is_empty());
+}

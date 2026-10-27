@@ -259,6 +259,8 @@ fn file_error(operation: &str, path: &str, error: std::io::Error) -> AutomationE
 /// directory capabilities. Automation must use `doc.open`, `doc.save` and
 /// `doc.render` for file effects until those commands are migrated.
 pub fn authorize_engine_command(id: &str, params: &Value) -> Result<(), AutomationError> {
+    // WIA accepts strict scan options, never caller file paths; the bridge uses private
+    // temporary files and imports scanner bytes into an unsaved document.
     let safe_file_command = matches!(
         id,
         "file.new"
@@ -266,6 +268,7 @@ pub fn authorize_engine_command(id: &str, params: &Value) -> Result<(), Automati
             | "file.close"
             | "file.closeAll"
             | "file.closeOthers"
+            | "file.import.wiaSupport"
             | "file.fileInfo"
             | "file.automate.fitImage"
             | "file.automate.conditionalModeChange"

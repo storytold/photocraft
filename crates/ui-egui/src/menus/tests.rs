@@ -528,3 +528,22 @@ fn proof_setup_presets_and_checkmarks() {
     let params = crate::filter_dialog::parse_spec(spec.params);
     assert!(matches!(&params[0].kind, crate::filter_dialog::Kind::Choice { options, .. } if options[0] == "srgb" && !options.iter().any(|v| v.contains('/'))));
 }
+
+#[test]
+fn wia_menu_requests_acquisition_without_a_document() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let capture = seen.clone();
+    app.automation_input = true;
+    app.services.automation_command = Some(Box::new(move |id, params| {
+        capture.borrow_mut().push((id.to_string(), params.clone()));
+        if params.get("action") == Some(&json!("acquire")) { Err("test intercepted before scanner access".into()) } else { Ok(()) }
+    }));
+    let item = menu_items(&app).into_iter().find(|item| item.id == "file.import.wiaSupport").unwrap();
+    assert!(item.enabled);
+    assert_eq!(item.path, ["File", "Import"]);
+    let error = invoke(&mut app, &egui::Context::default(), &item.id, json!({})).unwrap_err();
+    assert_eq!(error, "test intercepted before scanner access");
+    assert!(seen.borrow().iter().any(|(id, params)| id == "file.import.wiaSupport" && *params == json!({"action": "acquire"})));
+    assert!(app.session.documents().is_empty());
+}

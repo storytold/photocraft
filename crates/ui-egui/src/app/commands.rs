@@ -107,13 +107,20 @@ impl PhotocraftApp {
             id,
             "layer.vectorMask.add" | "layer.vectorMask.fromPath" | "layer.vectorMask.revealAll" | "layer.vectorMask.hideAll" | "layer.vectorMask.currentPath"
         ) && on_active_layer;
-        let r = if id == "actions.play" {
+        let mut r = if id == "actions.play" {
             actions::play(self, &params)
         } else if photocraft_engine::actions_cmds::shell_view_command(id) {
             actions::run_view(self, id, params)
         } else {
             jobs_ui::run(self, id, params)
         };
+        if id == "file.import.wiaSupport"
+            && let Ok(result) = &r
+            && result.get("pending").and_then(Value::as_bool) != Some(true)
+            && let Err(err) = jobs_ui::finish_wia(self, result)
+        {
+            r = Err(err);
+        }
         let creates_adjustment_or_fill = id.starts_with("layer.newAdjustmentLayer.") || id.starts_with("layer.newFillLayer.");
         if r.is_ok() && ADDS_LAYER_MASK.contains(&id) {
             // Adding an explicit mask targets it, as in Photoshop (#2166).

@@ -254,6 +254,10 @@ fn open(app: &mut PhotocraftApp, held: Held, action: Option<&str>) -> Result<Val
     let document = app.session.documents().get(index).map(|st| st.doc.id).ok_or("the opened document is missing")?;
     if let Some(st) = app.session.active_mut() {
         st.source_read_only = read_only;
+        // In-memory imports, including scans, have no durable source to return to.
+        if path.is_none() {
+            st.saved_revision = 0;
+        }
     }
     let index = match slot {
         Some(slot) => app

@@ -1,6 +1,6 @@
 # Hardware parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-17 · **Change:** minor (Camera Raw's preview develops its per-pixel stages on the GPU) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-26 · **Change:** minor (Windows WIA flatbed acquisition implemented and Epson V500 menu scan confirmed; Camera Raw's preview develops its per-pixel stages on the GPU) · **Target:** Adobe Photoshop 2026
 
 Each hardware feature Photoshop 2026 (27.11.0) uses, per platform, against PhotoCraft. Photoshop
 side: its bundle (Metal and OpenCL paths, "Precise Color Management for HDR Display" and EDR
@@ -56,12 +56,13 @@ HDR display to verify.
 | Touch Bar | yes (Intel Macs) | no | missing (low value) |
 | Touch screens (Windows) | yes | basic pointer only | partial |
 | 3D mouse, MIDI, Surface Dial | Surface Dial on Windows | no | missing (low value) |
-| Scanners (WIA / TWAIN) | WIA menu (Windows) | menu item live; no driver integration | partial |
+| Scanners (WIA / TWAIN) | WIA menu (Windows) | WIA discovery/settings plus Windows ImageScanner flatbed acquisition; cancellable desktop jobs import new unsaved documents; Epson V500 physical scans verified through automation and the menu; transfer cancellation and film/slide checks pending; feeder/TWAIN absent ([test guide](wia-scanning.md)) | partial |
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-26 | minor | Windows WIA flatbed scanner discovery/settings and acquisition implemented; Epson V500 physical 300 dpi automation and 100 dpi menu scans imported successfully; remaining driver checks documented; estimates unchanged |
 | 2026-10-10 | major | First version |
 | 2026-10-17 | minor | GPU filters: Camera Raw's preview, per-pixel stages (#6916 step 1) |
 | 2026-10-19 | minor | Graphics Adapter choice on Linux (#1885) |
