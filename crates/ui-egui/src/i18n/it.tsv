@@ -227,6 +227,7 @@
 	Integrations…	Integrazioni…
 	AI Integrations…	Integrazioni IA…
 	Install Plug-in…	Installa plug-in…
+	Install 8BF Plug-in…	Installa plug-in (8BF)…
 	Language Options	Opzioni lingua
 	Settings…	Impostazioni…
 	Mode	Metodo
@@ -4507,6 +4508,9 @@ shape	Appearance	Aspetto
 	In Front	Davanti
 	Behind	Dietro
 
+	Plug-in folders	Cartelle dei plug-in
+
+	Subfolders are included.	Le sottocartelle sono incluse.
 # DDS Options (#1327)
 	DDS Options	Opzioni DDS
 	Generate Mipmaps	Genera mipmap

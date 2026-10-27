@@ -97,17 +97,20 @@ pub struct FolderReport {
     pub failed: Vec<(String, String)>,
 }
 
-/// Installs every `*.wasm` directly in `dir` (not recursive), in file-name order. A bad module is
-/// reported and skipped; the others still load.
+/// Recursively installs `*.wasm` in `dir`. A bad module is reported and skipped.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn load_folder(dir: &std::path::Path) -> Result<FolderReport> {
-    let rd = std::fs::read_dir(dir).map_err(|e| Error::Io(format!("{}: {e}", dir.display())))?;
-    let mut files: Vec<std::path::PathBuf> =
-        rd.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("wasm"))).collect();
-    files.sort();
-    files.truncate(1000);
-    let mut report = FolderReport::default();
-    for f in files {
+    // Keep the original single-folder API's error contract; multi-root scans
+    // instead report inaccessible roots while continuing with the others.
+    drop(std::fs::read_dir(dir).map_err(|e| Error::Io(format!("{}: {e}", dir.display())))?);
+    load_folders(&[dir.to_path_buf()])
+}
+/// Recursively loads multiple roots once per canonical path, with bounded traversal.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn load_folders(dirs: &[std::path::PathBuf]) -> Result<FolderReport> {
+    let scan = crate::discovery::scan(dirs, "wasm");
+    let mut report = FolderReport { loaded: Vec::new(), failed: scan.failed.into_iter().map(|(p, e)| (p.display().to_string(), e)).collect() };
+    for f in scan.files {
         match load_file(&f, Limits::default()) {
             Ok(p) => report.loaded.push(install(p).id().to_string()),
             Err(e) => report.failed.push((f.display().to_string(), e.to_string())),

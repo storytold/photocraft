@@ -217,6 +217,7 @@
 	Integrations…	Integracije…
 	AI Integrations…	AI integracije…
 	Install Plug-in…	Instaliraj dodatak…
+	Install 8BF Plug-in…	Instaliraj dodatak (8BF)…
 	Language Options	Jezičke opcije
 	Settings…	Podešavanja…
 	Mode	Režim
@@ -4450,6 +4451,9 @@ shape	Appearance	Izgled
 	In Front	Ispred
 	Behind	Iza
 
+	Plug-in folders	Фасцикле додатака
+
+	Subfolders are included.	Укључене су и потфасцикле.
 # DDS Options (#1327)
 	DDS Options	DDS opcije
 	Generate Mipmaps	Generiši mipmape

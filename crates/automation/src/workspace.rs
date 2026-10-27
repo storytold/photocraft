@@ -410,6 +410,9 @@ fn command_uses_ambient_path(id: &str, params: &Value) -> bool {
             params.get("path").is_some() || ["importKys", "exportKys", "summarize"].iter().any(|k| params.get(*k).and_then(|v| v.get("path")).is_some())
         }
         "plugin.reload" => true,
+        // Directory read/write capabilities cannot confine a native DLL's execution or its
+        // ambient filesystem access. Only explicitly trusted local sessions may register/run it.
+        "plugin.8bf.install" | "plugin.8bf.run" => true,
         _ => false,
     }
 }

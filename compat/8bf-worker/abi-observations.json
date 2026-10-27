@@ -1,0 +1,323 @@
+{
+  "method": "Numeric observations from GPL Filter Foundry 1.7.0.25 binaries correlated with independently authored application routines. SDK headers not fetched or read. No product code copied.",
+  "release": "https://github.com/danielmarschall/filter_foundry/releases/tag/1.7.0.25",
+  "license": "GPL v2 or later (author source notices)",
+  "binary_sha256": {
+    "FilterFoundry.8bf": "6df7335255eeb9cfdd41931fafaf02f788bd13f255a9d1dcd2e0077ec28c2da7",
+    "FilterFoundry64.8bf": "efbd227f9a66d1900c52ac6c3c0226d7064cecbfbcdc133912dd7b42caaa2766"
+  },
+  "entry": {
+    "x86": {
+      "rva": "0x5880",
+      "convention": "cdecl",
+      "evidence": "VA0x405894..4058a9 four arguments; VA0x405924 plain ret"
+    },
+    "x64": {
+      "rva": "0x1280",
+      "convention": "Windows x64",
+      "evidence": "VA0x1800012b8..12eb preserve CX,RDX,R8,R9"
+    }
+  },
+  "entry_signature": "void(i16 selector, record pointer, intptr pointer, i16 result pointer)",
+  "selectors": {
+    "0": "about",
+    "1": "parameters",
+    "2": "prepare",
+    "3": "start",
+    "4": "continue",
+    "5": "finish"
+  },
+  "selector_table_evidence": {
+    "x86": "VA0x405864 -> 4059c5,405b04,405b10,405b3f,405dc5,405dd7",
+    "x64": "RVA0x1a1c -> 1480,15b3,15bf,1708,19e0,19f1"
+  },
+  "fields": {
+    "abortProc": {
+      "x86": 4,
+      "x64": 4,
+      "type": "pointer"
+    },
+    "progressProc": {
+      "x86": 8,
+      "x64": 12,
+      "type": "pointer"
+    },
+    "parameters": {
+      "x86": 12,
+      "x64": 20,
+      "type": "pointer"
+    },
+    "imageSize": {
+      "x86": 16,
+      "x64": 28,
+      "type": "v,h i16"
+    },
+    "planes": {
+      "x86": 20,
+      "x64": 32,
+      "type": "i16"
+    },
+    "filterRect": {
+      "x86": 22,
+      "x64": 34,
+      "type": "top,left,bottom,right i16"
+    },
+    "maxSpace": {
+      "x86": 44,
+      "x64": 56,
+      "type": "i32"
+    },
+    "inRect": {
+      "x86": 52,
+      "x64": 64,
+      "type": "four i16"
+    },
+    "inLoPlane": {
+      "x86": 60,
+      "x64": 72,
+      "type": "i16"
+    },
+    "inHiPlane": {
+      "x86": 62,
+      "x64": 74,
+      "type": "i16"
+    },
+    "outRect": {
+      "x86": 64,
+      "x64": 76,
+      "type": "four i16"
+    },
+    "outLoPlane": {
+      "x86": 72,
+      "x64": 84,
+      "type": "i16"
+    },
+    "outHiPlane": {
+      "x86": 74,
+      "x64": 86,
+      "type": "i16"
+    },
+    "inData": {
+      "x86": 76,
+      "x64": 88,
+      "type": "pointer"
+    },
+    "inRowBytes": {
+      "x86": 80,
+      "x64": 96,
+      "type": "i32"
+    },
+    "outData": {
+      "x86": 84,
+      "x64": 100,
+      "type": "pointer"
+    },
+    "outRowBytes": {
+      "x86": 88,
+      "x64": 108,
+      "type": "i32"
+    },
+    "maskRect": {
+      "x86": 96,
+      "x64": 116,
+      "type": "four i16"
+    },
+    "hostSig": {
+      "x86": 120,
+      "x64": 144,
+      "type": "u32"
+    },
+    "imageMode": {
+      "x86": 128,
+      "x64": 156,
+      "type": "i16"
+    },
+    "platformData": {
+      "x86": 188,
+      "x64": 216,
+      "type": "pointer"
+    },
+    "bufferProcs": {
+      "x86": 192,
+      "x64": 224,
+      "type": "pointer"
+    },
+    "displayPixels": {
+      "x86": 204,
+      "x64": 248,
+      "type": "pointer"
+    },
+    "handleProcs": {
+      "x86": 208,
+      "x64": 256,
+      "type": "pointer"
+    },
+    "advanceState": {
+      "x86": 224,
+      "x64": 280,
+      "type": "pointer"
+    },
+    "propertyProcs": {
+      "x86": 320,
+      "x64": 392,
+      "type": "pointer"
+    },
+    "sSPBasic": {
+      "x86": 372,
+      "x64": 464,
+      "type": "pointer"
+    },
+    "depth": {
+      "x86": 380,
+      "x64": 480,
+      "type": "i32"
+    },
+    "bigDocumentData": {
+      "x86": 400,
+      "x64": 504,
+      "type": "pointer"
+    },
+    "maxSpace64": {
+      "x86": 432,
+      "x64": 552,
+      "type": "i64"
+    }
+  },
+  "field_evidence": {
+    "entry": "x86 VA0x405880..405de5; x64 VA0x180001280..1a34",
+    "rectangles": "x86 VA0x406a70..406f80; x64 VA0x180001000..1c1a",
+    "input_pixels": "x86 VA0x40d270..40d88c; x64 VA0x180004390..4910",
+    "depth": "x86 setup routine; x64 VA0x1800049c6",
+    "handle_procs": "x86 VA0x401068..17e7; x64 VA0x1800110bb..11837",
+    "buffer_procs": "x86 VA0x401b0b..401d51; x64 VA0x180011981..11c42",
+    "display_property": "x86 VA0x40c618..40c694; x64 VA0x18000927a..92fa",
+    "advance": "x86 VA0x40bdaa; x64 VA0x180009d35"
+  },
+  "platform_hwnd_offset": 0,
+  "about_platform_pointer_offset": 0,
+  "buffer_table": {
+    "count_word": 2,
+    "slots": {
+      "allocate": [
+        4,
+        8,
+        "i16(i32 size, pointer-to-pointer id)"
+      ],
+      "lock": [
+        8,
+        16,
+        "pointer(id pointer, u8 moveHigh)"
+      ],
+      "unlock": [
+        12,
+        24,
+        "void(id pointer)"
+      ],
+      "free": [
+        16,
+        32,
+        "void(id pointer)"
+      ]
+    }
+  },
+  "handle_table": {
+    "slots": {
+      "new": [
+        4,
+        8,
+        "handle pointer(i32 size)"
+      ],
+      "dispose": [
+        8,
+        16,
+        "void(handle pointer)"
+      ],
+      "get_size": [
+        12,
+        24,
+        "i32(handle pointer)"
+      ],
+      "set_size": [
+        16,
+        32,
+        "i16(handle pointer,i32 size)"
+      ],
+      "lock": [
+        20,
+        40,
+        "pointer(handle pointer,u8 moveHigh)"
+      ],
+      "unlock": [
+        24,
+        48,
+        "void(handle pointer)"
+      ]
+    }
+  },
+  "table_call_conventions": {
+    "x86": "cdecl caller cleans arguments",
+    "x64": "Windows x64"
+  },
+  "pixel_map": {
+    "version_i32": 0,
+    "bounds_four_i32": 4,
+    "mode_i32": 20,
+    "row_bytes_i32": 24,
+    "column_bytes_i32": 28,
+    "plane_bytes_i32": 32,
+    "base_pointer": [
+      36,
+      40
+    ],
+    "evidence": "x86 VA0x40c5fd + mapbase0x470f9c; x64 VA0x18000a68c..a754 and VA0x18000924a"
+  },
+  "display_signature": "i16(pixelmap pointer, rect pointer fouri32, i32 dstRow, i32 dstCol, HDC pointer)",
+  "constants": {
+    "rgb8_mode": 3,
+    "grayscale_mode": 1,
+    "grayscale_evidence": "x86 VA0x40c88d imageMode+0x80 compare1; x64 VA0x180004ed8 imageMode+0x9c read then compare1 at0x180004edf; author-written preview.c copies imageMode to PixelMap",
+    "cancel_result": -128,
+    "evidence": "RGB VA0x18000a72d; depth VA0x1800049c6..49e6; cancel VA0x180004911",
+    "grayscale16_mode": 10,
+    "rgb16_mode": 11,
+    "sample_depths": [
+      8,
+      16
+    ],
+    "sample16_maximum": 32768,
+    "sample16_evidence": "x86 VA0x40ca5a..40caad and x64 VA0x1800049ec..4aaa: two bytes per sample, max0x8000; mode11 at x860x40af0d/x640x18000a6ca; mode10 at x860x40af6c/x640x180004ee5"
+  },
+  "unverified": [
+    "Canonical version words in legacy tables",
+    "bufferSpace offset",
+    "maskData/maskRowBytes offsets",
+    "complete FilterRecord size",
+    "fields unused by Filter Foundry",
+    "Vicanek/FilterMeister runtime compatibility",
+    "canonical property callback return width",
+    "complete modern Basic interface beyond observed acquire/release slots"
+  ],
+  "source_note": "preview.c local research copy excludes a commented SDK-example-derived block, which was not used. Other selected sources carry Toby Thain/Daniel Marschall author notices.",
+  "property_table": {
+    "record_offset": [
+      320,
+      392
+    ],
+    "get_slot": [
+      4,
+      8
+    ],
+    "set_slot": [
+      8,
+      16
+    ],
+    "signature": "8BIM",
+    "key": "wtch",
+    "index": 0,
+    "simple_type": "pointer-sized signed integer",
+    "get_arguments": "u32 signature, u32 key, i32 index, intptr output pointer, complex handle output pointer",
+    "set_arguments": "u32 signature, u32 key, i32 index, intptr value, complex handle",
+    "evidence": "x86 VA0x40c62a..40c666; x64 VA0x18000928f..1800092d8; author-written preview saves, increments and restores watch suspension",
+    "return_note": "Observed caller ignores return; implementation returns 0/-1 in EAX for compatibility with 16- or 32-bit consumers."
+  }
+}

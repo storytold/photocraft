@@ -233,6 +233,7 @@
 	Integrations…	Integrationen…
 	AI Integrations…	KI-Integrationen…
 	Install Plug-in…	Plug-in installieren…
+	Install 8BF Plug-in…	Plug-in installieren (8BF)…
 	Language Options	Sprachoptionen
 	Settings…	Einstellungen…
 	Mode	Modus
@@ -3402,6 +3403,9 @@ curves	Smooth	Glätten
 	Behind	Dahinter
 	Blend	Mischen
 
+	Plug-in folders	Plug-in-Ordner
+
+	Subfolders are included.	Unterordner werden einbezogen.
 # DDS Options (#1327)
 	DDS Options	DDS-Optionen
 	Compression	Komprimierung

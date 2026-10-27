@@ -413,6 +413,52 @@ fn automation_rejects_ambient_path_commands_and_preferences() {
     assert!(authorize_engine_command("prefs.set", &serde_json::json!({"path": "fileHandling.autosave", "value": false})).is_ok());
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn native_filter_execution_and_registration_require_trusted_local_callers() {
+    let (_, _, workspace) = roots("native-filter-policy");
+    for mut headless in [crate::Headless::new(), crate::Headless::with_workspace(workspace)] {
+        headless.command_run("file.new", serde_json::json!({"width":4,"height":4})).unwrap();
+        let depth = headless.session.active().unwrap().history.past_len();
+        for (id, params) in [
+            ("plugin.8bf.install", serde_json::json!({"path":"inside.8bf"})),
+            ("plugin.8bf.install", serde_json::json!({"path":"inside.8bf","data":"QUJD"})),
+            ("plugin.8bf.run", serde_json::json!({"id":"already-installed","show_ui":false})),
+        ] {
+            assert!(authorize_engine_command(id, &params).is_err(), "{id} must be denied without relying on request paths");
+            assert!(authorize_desktop_engine_command(id, &params).is_err());
+            let error = headless.command_run(id, params).unwrap_err().to_string();
+            assert!(error.contains("ambient filesystem paths"), "{id}: {error}");
+            assert_eq!(headless.session.active().unwrap().history.past_len(), depth);
+        }
+    }
+    let mut trusted = crate::Headless::trusted_local();
+    trusted.command_run("file.new", serde_json::json!({"width":4,"height":4})).unwrap();
+    for id in ["plugin.8bf.install", "plugin.8bf.run"] {
+        let error = trusted.command_run(id, serde_json::json!({})).unwrap_err().to_string();
+        assert!(!error.contains("ambient filesystem paths"), "trusted local caller reaches normal parameter validation: {error}");
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn recorded_actions_cannot_bypass_native_filter_policy() {
+    for (id, params) in
+        [("plugin.8bf.install", serde_json::json!({"path":"inside.8bf"})), ("plugin.8bf.run", serde_json::json!({"id":"already-installed","show_ui":false}))]
+    {
+        let mut session = photocraft_engine::Session::new();
+        session.execute("file.new", serde_json::json!({"width":4,"height":4})).unwrap();
+        session.authorize = Some(authorize_engine_step);
+        session.actions.list.push(photocraft_engine::actions_cmds::Action::new("Native", vec![(id.into(), params)]));
+        let depth = session.active().unwrap().history.past_len();
+        let result = session.execute("actions.play", serde_json::json!({"action":"Native"})).unwrap();
+        assert_eq!(result["ran"], 0);
+        assert_eq!(result["failed"]["id"], id);
+        assert!(result["failed"]["error"].as_str().unwrap().contains("ambient filesystem paths"), "{result}");
+        assert_eq!(session.active().unwrap().history.past_len(), depth);
+    }
+}
+
 #[test]
 fn registry_filesystem_path_params_are_classified() {
     let probe = serde_json::json!({

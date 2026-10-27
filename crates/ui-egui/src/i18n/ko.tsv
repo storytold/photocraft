@@ -221,6 +221,7 @@
 	Integrations…	연동…
 	AI Integrations…	AI 연동…
 	Install Plug-in…	플러그인 설치…
+	Install 8BF Plug-in…	플러그인 설치 (8BF)…
 	Language Options	언어 옵션
 	Settings…	설정…
 	Mode	모드
@@ -3600,6 +3601,9 @@ curves	Smooth	매끄럽게
 	Behind	뒤
 	Blend	혼합
 
+	Plug-in folders	플러그인 폴더
+
+	Subfolders are included.	하위 폴더도 포함됩니다.
 # DDS Options (#1327)
 	DDS Options	DDS 옵션
 	Compression	압축

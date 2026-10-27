@@ -229,6 +229,7 @@
 	Integrations…	連携…
 	AI Integrations…	AI 連携…
 	Install Plug-in…	プラグインをインストール…
+	Install 8BF Plug-in…	プラグインをインストール (8BF)…
 	Language Options	言語オプション
 	Settings…	設定…
 	Mode	モード
@@ -4068,6 +4069,9 @@ curves	Smooth	スムーズ
 	In Front	前面
 	Behind	背面
 
+	Plug-in folders	プラグインフォルダー
+
+	Subfolders are included.	サブフォルダーも含まれます。
 # DDS Options (#1327)
 	DDS Options	DDS オプション
 	Compression	圧縮

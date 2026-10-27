@@ -227,6 +227,7 @@
 	Integrations…	Integracje…
 	AI Integrations…	Integracje AI…
 	Install Plug-in…	Zainstaluj wtyczkę…
+	Install 8BF Plug-in…	Zainstaluj wtyczkę (8BF)…
 	Language Options	Opcje językowe
 	Settings…	Ustawienia…
 	Mode	Tryb
@@ -4006,6 +4007,9 @@ curves	Smooth	Wygładź
 	In Front	Z przodu
 	Behind	Z tyłu
 
+	Plug-in folders	Foldery wtyczek
+
+	Subfolders are included.	Podfoldery są uwzględniane.
 # DDS Options (#1327)
 	DDS Options	Opcje DDS
 	Compression	Kompresja

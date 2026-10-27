@@ -121,6 +121,8 @@ pub use cmd::pattern_fill_cmds;
 pub use cmd::perspective_crop_cmds;
 pub use cmd::photo_cmds;
 pub use cmd::pick_cmds;
+#[cfg(not(target_arch = "wasm32"))]
+pub use cmd::plugin_8bf_cmds;
 pub use cmd::plugin_cmds;
 pub use cmd::preset_import_cmds;
 pub use cmd::print_cmds;
@@ -270,6 +272,8 @@ pub struct Session {
     /// document, source read-only)`. The shell takes them with [`Session::take_held_open`].
     held_opens: Vec<(u64, Document, bool)>,
     next_held_open: u64,
+    /// Plug-ins registered from the Plug-ins preference folders (see `plugin_cmds`).
+    pub(crate) plugin_folders: plugin_cmds::FolderPlugins,
 }
 
 #[cfg(test)]

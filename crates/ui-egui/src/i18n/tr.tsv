@@ -207,6 +207,7 @@
 	Integrations…	Entegrasyonlar…
 	AI Integrations…	Yapay Zeka Entegrasyonları…
 	Install Plug-in…	Eklentiyi Yükle…
+	Install 8BF Plug-in…	Eklentiyi Yükle (8BF)…
 	Language Options	Dil Seçenekleri
 	Settings…	Ayarlar…
 	Mode	Mod
@@ -4119,6 +4120,9 @@ cameraData	Lens	Lens
 	In Front	Önde
 	Behind	Arkada
 
+	Plug-in folders	Eklenti klasörleri
+
+	Subfolders are included.	Alt klasörler de dahil edilir.
 # DDS Options (#1327)
 	DDS Options	DDS Seçenekleri
 	Generate Mipmaps	Mipmap oluştur

@@ -23,6 +23,22 @@ fn defaults_match_photoshop() {
 }
 
 #[test]
+fn plugin_folder_list_round_trips_without_losing_legacy_folder() {
+    let mut s = Session::new();
+    s.load_prefs_json(r#"{"plugIns":{"additionalPluginsFolder":"/legacy/plugins"}}"#).unwrap();
+    s.execute("prefs.set", json!({"path":"plugIns.additionalPluginsFolders","value":["/first/plugins","/second/plugins"]})).unwrap();
+    assert_eq!(s.execute("prefs.get", json!({"path":"plugIns.additionalPluginsFolder"})).unwrap(), "/legacy/plugins");
+    let mut restarted = Session::new();
+    restarted.load_prefs_json(&s.prefs_to_json()).unwrap();
+    assert_eq!(restarted.execute("prefs.get", json!({"path":"plugIns.additionalPluginsFolders"})).unwrap(), json!(["/first/plugins", "/second/plugins"]));
+    assert_eq!(restarted.execute("prefs.get", json!({"path":"plugIns.additionalPluginsFolder"})).unwrap(), "/legacy/plugins");
+    for bad in [json!("/not/a/list"), json!(["/valid", 3]), json!(null)] {
+        assert!(s.execute("prefs.set", json!({"path":"plugIns.additionalPluginsFolders","value":bad})).is_err());
+    }
+    assert_eq!(s.execute("prefs.get", json!({"path":"plugIns.additionalPluginsFolders"})).unwrap(), json!(["/first/plugins", "/second/plugins"]));
+}
+
+#[test]
 fn intermediate_ui_scale_presets_survive_restart() {
     let mut s = Session::new();
     assert_eq!(s.execute("prefs.get", json!({"path": "interface.uiScale"})).unwrap(), json!("auto"));

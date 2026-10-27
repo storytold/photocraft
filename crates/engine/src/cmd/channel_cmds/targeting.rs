@@ -183,6 +183,7 @@ const PASTE_IDS: &[&str] = &["edit.paste", "edit.pasteSpecial.pasteInPlace", "ed
 pub(crate) fn routed(id: &str) -> bool {
     id.starts_with("filter.")
         || id == "plugin.run"
+        || id == "plugin.8bf.run"
         || id.starts_with("image.adjustments.")
         || matches!(id, "edit.fill" | "image.applyImage")
         || crate::fill_key_cmds::IDS.contains(&id)

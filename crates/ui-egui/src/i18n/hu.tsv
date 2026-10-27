@@ -620,6 +620,7 @@
 	Info	Információ
 	Install Plug-in	Bővítmény telepítése
 	Install Plug-in…	Bővítmény telepítése…
+	Install 8BF Plug-in…	Bővítmény telepítése (8BF)…
 	Internet Standard RGB	Internetes szabványos RGB
 	Inverse	Megfordítás
 	Iris Blur…	Íriszelmosás…
@@ -4307,6 +4308,9 @@ cameraRaw	Yellow	Sárga
 	In Front	Elöl
 	Behind	Mögött
 
+	Plug-in folders	Bővítménymappák
+
+	Subfolders are included.	Az almappák is szerepelnek.
 # DDS Options (#1327)
 	DDS Options	DDS-beállítások
 	Generate Mipmaps	Mipmapek létrehozása

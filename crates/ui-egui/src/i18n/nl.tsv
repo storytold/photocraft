@@ -220,6 +220,7 @@
 	Integrations…	Integraties…
 	AI Integrations…	AI-integraties…
 	Install Plug-in…	Plug-in installeren…
+	Install 8BF Plug-in…	Plug-in installeren (8BF)…
 	Language Options	Taalopties
 	Settings…	Instellingen…
 	Mode	Modus
@@ -4150,6 +4151,9 @@ curves	Smooth	Vloeiend maken
 	In Front	Voor
 	Behind	Achter
 
+	Plug-in folders	Plug-inmappen
+
+	Subfolders are included.	Submappen worden meegenomen.
 # DDS Options (#1327)
 	DDS Options	DDS-opties
 	Generate Mipmaps	Mipmaps genereren

@@ -60,6 +60,22 @@ if [[ "$SKIP_BUILD" = 0 ]]; then
     (cd "$ROOT" && cargo build --release --locked -p photocraft-cli --features heif --example man-and-completions)
   fi
 fi
+# Windows workers are supplied by the native-8bf CI artifact or a local worker build.
+WORKER_DIR="${PHOTOCRAFT_8BF_WORKER_DIR:-$ROOT/compat/8bf-worker/dist}"
+HAVE_8BF_WORKERS=1
+for bits in 32 64; do
+  if [ ! -f "$WORKER_DIR/photocraft-8bf-worker$bits.exe" ]; then
+    if [ -n "${PHOTOCRAFT_8BF_WORKER_DIR:-}" ]; then
+      echo "error: missing $WORKER_DIR/photocraft-8bf-worker$bits.exe" >&2
+      exit 1
+    fi
+    HAVE_8BF_WORKERS=0
+  fi
+done
+if [ "$HAVE_8BF_WORKERS" = 0 ]; then
+  echo "warning: packaging without native 8BF workers; supply PHOTOCRAFT_8BF_WORKER_DIR from the native-8bf-workers CI artifact to include the bridge" >&2
+fi
+
 BIN="$CARGO_TARGET_DIR/${CROSS_TARGET:+$CROSS_TARGET/}release"
 WORK="$CARGO_TARGET_DIR/linux-package"
 STAGE="$WORK/root"
@@ -68,6 +84,11 @@ rm -rf "$WORK"
 # ---- stage an FHS tree (shared by every format) -------------------------------------------------
 install -Dm755 "$BIN/photocraft" "$STAGE/usr/bin/photocraft"
 install -Dm755 "$BIN/photocraft-cli" "$STAGE/usr/bin/photocraft-cli"
+if [ "$HAVE_8BF_WORKERS" = 1 ]; then
+for bits in 32 64; do
+  install -Dm644 "$WORKER_DIR/photocraft-8bf-worker$bits.exe" "$STAGE/usr/bin/photocraft-8bf-worker$bits.exe"
+done
+fi
 "${CROSS_COMPILE:-}strip" "$STAGE/usr/bin/photocraft" "$STAGE/usr/bin/photocraft-cli" 2>/dev/null || true
 install -Dm644 "$HERE/$APP_ID.desktop" "$STAGE/usr/share/applications/$APP_ID.desktop"
 install -Dm644 "$HERE/$APP_ID.mime.xml" "$STAGE/usr/share/mime/packages/$APP_ID.xml"
@@ -120,6 +141,12 @@ fi
 # ---- .deb / .rpm --------------------------------------------------------------------------------
 if has deb || has rpm; then
   command -v nfpm >/dev/null || { echo "error: nfpm not found (https://nfpm.goreleaser.com/install/)" >&2; exit 1; }
+  if [ "$HAVE_8BF_WORKERS" = 0 ]; then
+    # Remove the two complete optional payload entries from this private staging config.
+    awk '/^  - src: .*photocraft-8bf-worker/ { skip=3 } skip > 0 { skip--; next } { print }' "$HERE/nfpm.yaml" >"$WORK/nfpm-template.yaml"
+  else
+    cp "$HERE/nfpm.yaml" "$WORK/nfpm-template.yaml"
+  fi
   export VERSION
   export NFPM_ARCH="$DEB_ARCH"
   # nfpm expands env vars in fields like `version` and `arch`, but not in `contents[].src`.
@@ -127,7 +154,7 @@ if has deb || has rpm; then
   # so its entry is dropped too.
   DROP_ZSH_LINK=
   [[ -f "$STAGE/usr/share/zsh/site-functions/_photocraft-cli" ]] || DROP_ZSH_LINK='\|^  - src: /usr/share/zsh/site-functions/|,/packager: deb/d;'
-  sed "${DROP_ZSH_LINK}s|\${STAGE}|$STAGE|g" "$HERE/nfpm.yaml" >"$WORK/nfpm.yaml"
+  sed "${DROP_ZSH_LINK}s|\${STAGE}|$STAGE|g" "$WORK/nfpm-template.yaml" >"$WORK/nfpm.yaml"
   for fmt in deb rpm; do
     if has "$fmt"; then (cd "$ROOT" && nfpm package -f "$WORK/nfpm.yaml" -p "$fmt" -t "$DIST/$BASENAME.$fmt"); fi
   done

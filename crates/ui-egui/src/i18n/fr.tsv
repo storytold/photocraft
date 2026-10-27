@@ -231,6 +231,7 @@
 	Integrations…	Intégrations…
 	AI Integrations…	Intégrations d'IA…
 	Install Plug-in…	Installer une extension…
+	Install 8BF Plug-in…	Installer une extension (8BF)…
 	Language Options	Options de langue
 	Settings…	Paramètres…
 	Mode	Mode
@@ -3401,6 +3402,9 @@ curves	Smooth	Lisser
 	In Front	Devant
 	Behind	Derrière
 
+	Plug-in folders	Dossiers de modules externes
+
+	Subfolders are included.	Les sous-dossiers sont inclus.
 # DDS Options (#1327)
 	DDS Options	Options DDS
 	Compression	Compression

@@ -72,6 +72,12 @@ contents:
   - src: ${STAGE}/usr/bin/photocraft-cli
     dst: /usr/bin/photocraft-cli
     file_info: { mode: 0755 }
+  - src: ${STAGE}/usr/bin/photocraft-8bf-worker32.exe
+    dst: /usr/bin/photocraft-8bf-worker32.exe
+    file_info: { mode: 0644 }
+  - src: ${STAGE}/usr/bin/photocraft-8bf-worker64.exe
+    dst: /usr/bin/photocraft-8bf-worker64.exe
+    file_info: { mode: 0644 }
   - src: ${STAGE}/usr/share/
     dst: /usr/share/
     type: tree

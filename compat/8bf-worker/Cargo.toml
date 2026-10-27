@@ -1,0 +1,21 @@
+[package]
+name = "photocraft-8bf-worker"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+# Kept outside the host workspace: the only native DLL/FFI boundary.
+[workspace]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_LibraryLoader", "Win32_System_Memory", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi", "Win32_System_Threading", "Win32_System_Console", "Win32_System_Diagnostics_Debug"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "abort"

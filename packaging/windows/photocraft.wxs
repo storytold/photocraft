@@ -159,6 +159,12 @@
         <RegistryValue Root="HKLM" Key="Software\PhotoCraft" Name="InstallDir" Value="[INSTALLFOLDER]" Type="string" />
       </Component>
 
+      <Component Id="Photocraft8bfWorker32">
+        <File Id="Photocraft8bfWorker32Exe" Source="$(var.BinDir)\photocraft-8bf-worker32.exe" KeyPath="yes" />
+      </Component>
+      <Component Id="Photocraft8bfWorker64">
+        <File Id="Photocraft8bfWorker64Exe" Source="$(var.BinDir)\photocraft-8bf-worker64.exe" KeyPath="yes" />
+      </Component>
       <Component Id="PhotocraftCli">
         <File Id="PhotocraftCliExe" Source="$(var.BinDir)\photocraft-cli.exe" KeyPath="yes" />
       </Component>

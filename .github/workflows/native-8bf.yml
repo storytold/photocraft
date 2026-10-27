@@ -1,0 +1,55 @@
+name: Native 8BF workers
+on:
+  pull_request:
+    paths: ['compat/**', 'crates/plugins/**', 'crates/engine/**', 'packaging/**', 'apps/photocraft/**', '.github/workflows/native-8bf.yml']
+  workflow_dispatch:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  workers:
+    runs-on: windows-latest
+    env:
+      CARGO_BUILD_JOBS: '4'
+      RUST_TEST_THREADS: '4'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4, existing project pin
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: i686-pc-windows-msvc,x86_64-pc-windows-msvc
+      - name: Build both workers and original fixtures
+        shell: pwsh
+        run: ./compat/build-8bf-workers.ps1
+      - name: Test both architectures on Windows
+        shell: pwsh
+        run: python compat/8bf-worker/tools/validate-workers.py --workers-dir compat/8bf-worker/dist --fixtures-dir compat/8bf-worker/fixtures --runner native
+      - name: Test safe host IPC against both Windows workers
+        shell: pwsh
+        run: cargo run --locked -p photocraft-plugins --example native_8bf_smoke -- compat/8bf-worker/dist compat/8bf-worker/fixtures
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-8bf-workers
+          path: compat/8bf-worker/dist/*.exe
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-8bf-fixtures
+          path: compat/8bf-worker/fixtures/
+          if-no-files-found: error
+
+  host:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-15-intel, macos-15]
+    runs-on: ${{ matrix.os }}
+    env:
+      CARGO_BUILD_JOBS: '4'
+      RUST_TEST_THREADS: '4'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4, existing project pin
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build and link native editor
+        run: cargo build --locked -p photocraft
+      - name: Test safe bridge and platform launch paths
+        run: cargo test --locked -p photocraft-plugins --lib

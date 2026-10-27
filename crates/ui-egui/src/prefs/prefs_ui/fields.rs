@@ -7,7 +7,7 @@ use super::*;
 // ------------------------------------------------------------------ bodies
 
 /// Render one of our dialogs' bodies.
-pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
+pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, id: u64) {
     match f.get("__prefsui").and_then(Value::as_str).unwrap_or("") {
         "prefs" => {
             let mut info = app.perf.gpu_info.lines();
@@ -15,7 +15,10 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
             f.insert("__gpuInfo".into(), json!(info));
             f.insert("__gpuAdapters".into(), json!(app.perf.gpu_info.adapters));
             let system = system_theme(app, ui.ctx());
-            prefs_body(ui, f, system);
+            prefs_body(ui, f, system, app.services.file_dialog.is_some() && !app.file_dialog_open());
+            if let Some(request) = ui.ctx().data_mut(|data| data.remove_temp::<PluginFolderBrowse>(egui::Id::unique("prefs-plugin-folder-browse"))) {
+                browse_plugin_folder(app, id, request);
+            }
         }
         "shortcuts" => shortcuts_body(app, ui, f),
         "presets" => presets_body(app, ui, f),
@@ -29,6 +32,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
 /// split camelCase into words (`convertToSrgb` → "Convert to srgb").
 pub(super) fn humanize(key: &str) -> String {
     match key {
+        "additionalPluginsFolders" => return "Plug-in folders".into(),
         "appearanceMode" => return "Appearance Mode".into(),
         "exrAcesCg" => return "Open color-less EXR as ACEScg".into(),
         "darkTheme" => return "Dark Theme".into(),
@@ -158,7 +162,7 @@ pub(super) fn preference_sections(values: &Value, search: &str) -> Vec<(&'static
 }
 
 /// Preferences: section list on the left, the section's settings on the right.
-fn prefs_body(ui: &mut egui::Ui, f: &mut Map<String, Value>, system: Option<egui::Theme>) {
+fn prefs_body(ui: &mut egui::Ui, f: &mut Map<String, Value>, system: Option<egui::Theme>, can_browse: bool) {
     let t = Tokens::get(ui.ctx());
     let mut section = f.get("section").and_then(Value::as_str).unwrap_or("general").to_string();
     let mut values = f.get("values").cloned().unwrap_or(Value::Null);
@@ -230,7 +234,7 @@ fn prefs_body(ui: &mut egui::Ui, f: &mut Map<String, Value>, system: Option<egui
                     ui.add_space(4.0);
                     ui.label(RichText::new(tl!("These settings aren't available in PhotoCraft yet.")).color(t.text_faint));
                 } else if let Some(obj) = values.get_mut(&section).and_then(Value::as_object_mut) {
-                    section_fields(ui, &section, obj, &order, lang, system, filter);
+                    section_fields(ui, &section, obj, &order, lang, system, filter, can_browse);
                     if section == "fileHandling" {
                         ui.label(
                             RichText::new(tl!("0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized."))
@@ -355,7 +359,8 @@ pub(super) fn field_visible(section: &str, obj: &Map<String, Value>, k: &str, qu
         // The browser presents frames itself: Low-Latency Drawing does nothing there.
         || (cfg!(target_arch = "wasm32") && path == "performance.lowLatencyDrawing")
         || (section == "export" && !export_field_visible(obj, k))
-        || (section == "tools" && !tools_field_visible(obj, k));
+        || (section == "tools" && !tools_field_visible(obj, k))
+        || (section == "plugIns" && matches!(k, "additionalPluginsFolder" | "additionalPluginsFolders"));
     (query.is_empty() || preference_matches(section, k, query))
         && !drawn_elsewhere
         && !prefs::is_hidden(&path)
@@ -364,6 +369,7 @@ pub(super) fn field_visible(section: &str, obj: &Map<String, Value>, k: &str, qu
 
 /// Generic editor for a section's fields: checkboxes, dropdowns for choices, colour swatches,
 /// number fields with the preference's range, text fields.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn section_fields(
     ui: &mut egui::Ui,
     section: &str,
@@ -372,6 +378,7 @@ pub(super) fn section_fields(
     lang: crate::i18n::Lang,
     system: Option<egui::Theme>,
     search: &str,
+    can_browse: bool,
 ) {
     let query = search.to_lowercase();
     let mut keys: Vec<String> = order.iter().filter(|k| obj.contains_key(*k)).cloned().collect();
@@ -388,6 +395,120 @@ pub(super) fn section_fields(
     }
     keys.retain(|k| field_visible(section, obj, k, &query));
     egui::Grid::new(("prefs-grid", section)).num_columns(2).spacing([14.0, 7.0]).show(ui, |ui| field_rows(ui, section, obj, keys, lang));
+    if section == "plugIns"
+        && (query.is_empty()
+            || preference_matches(section, "additionalPluginsFolder", &query)
+            || preference_matches(section, "additionalPluginsFolders", &query))
+    {
+        plugin_folder_rows(ui, obj, can_browse);
+    }
+}
+
+/// A folder picker edits the preferences draft, never the saved preferences directly.
+#[derive(Clone, Default)]
+struct PluginFolderBrowse {
+    index: Option<usize>,
+    previous: String,
+    folders: Value,
+}
+
+fn browse_plugin_folder(app: &mut PhotocraftApp, id: u64, request: PluginFolderBrowse) {
+    let initial_dir = if request.previous.trim().is_empty() { None } else { Some(request.previous.clone()) };
+    let result = app.ask_file(crate::FileDialogRequest::Folder { initial_dir }, move |app, answer| {
+        let crate::FileDialogAnswer::FolderTo(folder) = answer else { return Err("expected a folder".into()) };
+        let Some(obj) = app.ui.dialog_mut(id).and_then(|d| d.fields.get_mut("values")).and_then(|v| v.get_mut("plugIns")).and_then(Value::as_object_mut) else {
+            return Ok(Value::Null);
+        };
+        if let Some(index) = request.index {
+            // Removing, reordering or editing rows while a picker is open must not target
+            // a different folder when its asynchronous answer arrives.
+            if obj.get("additionalPluginsFolders") == Some(&request.folders)
+                && let Some(value) = obj.get_mut("additionalPluginsFolders").and_then(Value::as_array_mut).and_then(|folders| folders.get_mut(index))
+            {
+                *value = json!(folder);
+            }
+        } else if obj.get("additionalPluginsFolder").and_then(Value::as_str) == Some(request.previous.as_str()) {
+            obj.insert("additionalPluginsFolder".into(), json!(folder));
+        }
+        Ok(Value::Null)
+    });
+    if let Err(error) = result
+        && error != crate::file_dialog::CANCELLED
+    {
+        app.ui.status = error;
+    }
+}
+
+/// Keep the original preference in place while making all configured folders editable.
+fn plugin_folder_rows(ui: &mut egui::Ui, obj: &mut Map<String, Value>, can_browse: bool) {
+    let t = Tokens::get(ui.ctx());
+    ui.add_space(12.0);
+    let heading = ui.label(RichText::new(tl!("Plug-in folders")).font(crate::theme::semibold(13.0))).id;
+    ui.label(RichText::new(tl!("Subfolders are included.")).color(t.text_faint));
+    let mut legacy = obj.get("additionalPluginsFolder").and_then(Value::as_str).unwrap_or("").to_string();
+    let mut folders: Vec<String> = obj.get("additionalPluginsFolders").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
+    let mut browse = None;
+    let mut remove = None;
+    let mut changed = false;
+    if !legacy.trim().is_empty() {
+        let previous = legacy.clone();
+        let (edited, picked, removed) = plugin_folder_row(ui, None, &mut legacy, can_browse, heading);
+        changed |= edited || removed;
+        if picked {
+            browse = Some((None, previous));
+        }
+        if removed {
+            legacy.clear();
+        }
+    }
+    for (index, folder) in folders.iter_mut().enumerate() {
+        let previous = folder.clone();
+        let (edited, picked, removed) = plugin_folder_row(ui, Some(index), folder, can_browse, heading);
+        changed |= edited;
+        if picked {
+            browse = Some((Some(index), previous));
+        }
+        if removed {
+            remove = Some(index);
+        }
+    }
+    if let Some(index) = remove {
+        folders.remove(index);
+        changed = true;
+        browse = None;
+    }
+    if crate::widgets::secondary_button(ui, tl!("Add"), 72.0).clicked() {
+        folders.push(String::new());
+        changed = true;
+    }
+    if changed {
+        obj.insert("additionalPluginsFolder".into(), json!(legacy));
+        obj.insert("additionalPluginsFolders".into(), json!(folders));
+    }
+    if let Some((index, previous)) = browse {
+        let request = PluginFolderBrowse { index, previous, folders: json!(folders) };
+        ui.ctx().data_mut(|data| data.insert_temp(egui::Id::unique("prefs-plugin-folder-browse"), request));
+    }
+}
+
+/// Each path field is named by the "Plug-in folders" heading (`heading`) for screen readers.
+fn plugin_folder_row(ui: &mut egui::Ui, index: Option<usize>, folder: &mut String, can_browse: bool, heading: egui::Id) -> (bool, bool, bool) {
+    ui.push_id(("plugin-folder", index), |ui| {
+        ui.horizontal(|ui| {
+            let t = Tokens::get(ui.ctx());
+            let button_width =
+                |label: &str, minimum: f32| (ui.painter().layout_no_wrap(label.to_string(), crate::theme::medium(13.0), t.text).size().x + 28.0).max(minimum);
+            let browse_width = button_width(tl!("Browse…"), 78.0);
+            let remove_width = button_width(tl!("Remove"), 72.0);
+            let width = (ui.available_width() - browse_width - remove_width - 2.0 * ui.spacing().item_spacing.x).max(100.0);
+            let edited = crate::widgets::text_field(ui, ui.scope_id().with("path"), folder, "", width, false).labelled_by(heading).changed();
+            let picked = ui.add_enabled_ui(can_browse, |ui| crate::widgets::secondary_button(ui, tl!("Browse…"), 78.0)).inner.clicked();
+            let removed = crate::widgets::secondary_button(ui, tl!("Remove"), 72.0).clicked();
+            (edited, picked, removed)
+        })
+        .inner
+    })
+    .inner
 }
 
 /// One grid row per setting in `keys` (already filtered by `field_visible`).

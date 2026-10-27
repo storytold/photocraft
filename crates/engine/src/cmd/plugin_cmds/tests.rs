@@ -332,3 +332,92 @@ fn preference_folder_is_loaded() {
     registry::remove("test.cmds.folder");
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn all_preference_folders_include_legacy_and_recursive_modules_once() {
+    let dir = std::env::temp_dir().join(format!("pc-plugin-multiple-prefs-{}", std::process::id()));
+    let legacy = dir.join("legacy");
+    let first = dir.join("first");
+    let second = dir.join("second");
+    for folder in [&legacy, &first, &second] {
+        std::fs::create_dir_all(folder.join("nested")).unwrap();
+    }
+    for (folder, id) in [(&legacy, "test.cmds.multiple.legacy"), (&first, "test.cmds.multiple.first"), (&second, "test.cmds.multiple.second")] {
+        std::fs::write(folder.join("nested/filter.wasm"), wat_plugin(id, "{}", GREY)).unwrap();
+    }
+    let mut s = Session::new();
+    s.execute(
+        "prefs.set",
+        json!({"values":{
+            "plugIns.additionalPluginsFolder":legacy,
+            "plugIns.additionalPluginsFolders":[format!(" {} ",first.display()),"",first,second]
+        }}),
+    )
+    .unwrap();
+    assert!(registry::get("test.cmds.multiple.first").is_none(), "disabled preference must not scan");
+    s.execute("prefs.set", json!({"path":"plugIns.useAdditionalPluginsFolder","value":true})).unwrap();
+    for id in ["test.cmds.multiple.legacy", "test.cmds.multiple.first", "test.cmds.multiple.second"] {
+        assert!(registry::get(id).is_some(), "missing {id}");
+        registry::remove(id);
+    }
+    let report = s.execute("plugin.reload", json!({})).unwrap();
+    assert_eq!(report["folders"], json!([legacy, first, second]));
+    assert_eq!(report["loaded"].as_array().unwrap().len(), 3);
+    for id in ["test.cmds.multiple.legacy", "test.cmds.multiple.first", "test.cmds.multiple.second"] {
+        registry::remove(id);
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn reload_paths_validates_every_folder_before_loading_and_supports_legacy_path() {
+    let dir = std::env::temp_dir().join(format!("pc-plugin-reload-paths-{}", std::process::id()));
+    let first = dir.join("first");
+    let second = dir.join("second");
+    for (folder, id) in [(&first, "test.cmds.paths.first"), (&second, "test.cmds.paths.second")] {
+        std::fs::create_dir_all(folder).unwrap();
+        std::fs::write(folder.join("filter.wasm"), wat_plugin(id, "{}", GREY)).unwrap();
+    }
+    let mut s = Session::new();
+    s.execute("prefs.set", json!({"path":"plugIns.additionalPluginsFolder","value":first})).unwrap();
+    for params in [json!({"paths":7}), json!({"paths":[]}), json!({"paths":[first,3]}), json!({"paths":[first,""]}), json!({"path":first,"paths":[second]})] {
+        assert!(s.execute("plugin.reload", params.clone()).is_err(), "{params}");
+        assert!(registry::get("test.cmds.paths.first").is_none(), "invalid list must not partially scan");
+    }
+    let report = s.execute("plugin.reload", json!({"paths":[first,second,first]})).unwrap();
+    assert_eq!(report["folders"], json!([first, second]));
+    assert_eq!(report["loaded"].as_array().unwrap().len(), 2);
+    registry::remove("test.cmds.paths.first");
+    registry::remove("test.cmds.paths.second");
+    let legacy = s.execute("plugin.reload", json!({"path":first})).unwrap();
+    assert_eq!(legacy["folder"], json!(first));
+    assert_eq!(legacy["loaded"], json!(["test.cmds.paths.first"]));
+    registry::remove("test.cmds.paths.first");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn removed_or_disabled_preference_folders_unregister_their_plugins_but_keep_explicit_installs() {
+    let dir = std::env::temp_dir().join(format!("pc-plugin-prune-{}", std::process::id()));
+    let (kept, removed) = (dir.join("kept"), dir.join("removed"));
+    for (folder, id) in [(&kept, "test.cmds.prune.kept"), (&removed, "test.cmds.prune.removed")] {
+        std::fs::create_dir_all(folder).unwrap();
+        std::fs::write(folder.join("filter.wasm"), wat_plugin(id, "{}", GREY)).unwrap();
+    }
+    let mut s = Session::new();
+    s.execute("prefs.set", json!({"values":{"plugIns.additionalPluginsFolders":[kept, removed],"plugIns.useAdditionalPluginsFolder":true}})).unwrap();
+    assert!(registry::get("test.cmds.prune.kept").is_some() && registry::get("test.cmds.prune.removed").is_some());
+    s.execute("prefs.set", json!({"path":"plugIns.additionalPluginsFolders","value":[kept]})).unwrap();
+    assert!(registry::get("test.cmds.prune.removed").is_none(), "a removed folder's plug-in must be unregistered");
+    assert!(registry::get("test.cmds.prune.kept").is_some());
+    // Another session with folders off must not unregister this session's plug-ins.
+    Session::new().execute("prefs.set", json!({"path":"plugIns.useAdditionalPluginsFolder","value":false})).unwrap();
+    assert!(registry::get("test.cmds.prune.kept").is_some());
+    // An explicit install outlives the folders that also provide it.
+    s.execute("plugin.reload", json!({"path":removed})).unwrap();
+    s.execute("prefs.set", json!({"path":"plugIns.useAdditionalPluginsFolder","value":false})).unwrap();
+    assert!(registry::get("test.cmds.prune.kept").is_none(), "turning folders off must unregister their plug-ins");
+    assert!(registry::get("test.cmds.prune.removed").is_some(), "explicitly loaded plug-ins stay");
+    registry::remove("test.cmds.prune.removed");
+    std::fs::remove_dir_all(dir).unwrap();
+}

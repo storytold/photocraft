@@ -5,7 +5,7 @@
 .DESCRIPTION
   Produces, in $env:DIST (default: dist/release):
     photocraft-<version>-windows-<arch>.msi            per-machine installer (WiX v5)
-    photocraft-<version>-windows-<arch>-portable.zip   photocraft.exe + photocraft-cli.exe + portable.txt
+    photocraft-<version>-windows-<arch>-portable.zip   photocraft.exe + photocraft-cli.exe + both 8BF workers + portable.txt
 
   The binaries link the C runtime statically (+crt-static), so neither the MSI nor the portable
   zip needs the Visual C++ redistributable. Signing is delegated to sign.ps1 (skipped with a
@@ -66,6 +66,16 @@ if (-not $SkipBuild) {
   Invoke-Native "cargo build ($Target)" { cargo build --release --locked -p photocraft -p photocraft-cli --features heif --target $Target }
 }
 
+$WorkerDir = if ($env:PHOTOCRAFT_8BF_WORKER_DIR) { $env:PHOTOCRAFT_8BF_WORKER_DIR } else { Join-Path $Root 'compat\8bf-worker\dist' }
+# A normal source build refreshes cached helpers too; -SkipBuild trusts prepared payloads.
+if (-not $env:PHOTOCRAFT_8BF_WORKER_DIR -and (-not $SkipBuild -or -not (Test-Path (Join-Path $WorkerDir 'photocraft-8bf-worker32.exe')) -or -not (Test-Path (Join-Path $WorkerDir 'photocraft-8bf-worker64.exe')))) {
+  & (Join-Path $Root 'compat\build-8bf-workers.ps1') -OutputDir $WorkerDir
+}
+foreach ($bits in @('32', '64')) {
+  if (-not (Test-Path (Join-Path $WorkerDir "photocraft-8bf-worker$bits.exe") -PathType Leaf)) {
+    throw "Missing 8BF worker in $WorkerDir. Run compat/build-8bf-workers.ps1 or set PHOTOCRAFT_8BF_WORKER_DIR to the downloaded native-8bf-workers artifact."
+  }
+}
 $Bin = Join-Path $TargetDir "$Target\release"
 
 # Check both binaries' PE headers before packaging. Machine (COFF header) must match -Arch, so an
@@ -89,7 +99,12 @@ Remove-Item -Recurse -Force $Stage -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $Stage | Out-Null
 Copy-Item (Join-Path $Bin 'photocraft.exe'), (Join-Path $Bin 'photocraft-cli.exe') $Stage
 
-& (Join-Path $PSScriptRoot 'sign.ps1') (Join-Path $Stage 'photocraft.exe') (Join-Path $Stage 'photocraft-cli.exe')
+foreach ($spec in @(@('32', 0x14C), @('64', 0x8664))) {
+  $worker = Join-Path $WorkerDir "photocraft-8bf-worker$($spec[0]).exe"
+  if ((Get-PeHeader $worker).Machine -ne $spec[1]) { throw "Wrong PE architecture: $worker" }
+  Copy-Item $worker $Stage
+}
+& (Join-Path $PSScriptRoot 'sign.ps1') (Join-Path $Stage 'photocraft.exe') (Join-Path $Stage 'photocraft-cli.exe') (Join-Path $Stage 'photocraft-8bf-worker32.exe') (Join-Path $Stage 'photocraft-8bf-worker64.exe')
 
 # ---- font notices for the MSI ------------------------------------------------------------------
 # The portable ZIP already carries these notices; stage the complete files before MSI creation too.

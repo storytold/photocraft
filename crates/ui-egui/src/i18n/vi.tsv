@@ -2186,6 +2186,7 @@ layers	Fill:	Độ tô:
 	Imported {n} shortcuts from {file}. Click OK to keep them.	Đã nhập {n} phím tắt từ {file}. Nhấp OK để giữ.
 	Indexed Color…	Màu lập chỉ mục…
 	Install Plug-in…	Cài plug-in…
+	Install 8BF Plug-in…	Cài plug-in (8BF)…
 	Labels	Nhãn
 	Large document: redrawing on the CPU	Tài liệu lớn: đang vẽ lại trên CPU
 	Redrawing	Đang vẽ lại
@@ -3882,6 +3883,9 @@ curves	Smooth	Làm mượt
 	In Front	Phía trước
 	Behind	Phía sau
 
+	Plug-in folders	Thư mục trình bổ sung
+
+	Subfolders are included.	Bao gồm các thư mục con.
 # DDS Options (#1327)
 	DDS Options	Tùy chọn DDS
 	Compression	Nén

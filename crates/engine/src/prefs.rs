@@ -838,9 +838,10 @@ impl GuidesGridAndSlices {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct PlugIns {
-    /// Load the WebAssembly plug-ins (`*.wasm`) in `additional_plugins_folder` (native only).
+    /// Recursively discover plug-ins in the configured folders (desktop only).
     pub use_additional_plugins_folder: bool,
     pub additional_plugins_folder: String,
+    pub additional_plugins_folders: Vec<String>,
     pub show_extension_panels: bool,
     pub allow_scripts_to_connect: bool,
     pub generator_enabled: bool,
@@ -851,10 +852,25 @@ impl Default for PlugIns {
         Self {
             use_additional_plugins_folder: false,
             additional_plugins_folder: String::new(),
+            additional_plugins_folders: Vec::new(),
             show_extension_panels: true,
             allow_scripts_to_connect: false,
             generator_enabled: false,
         }
+    }
+}
+
+impl PlugIns {
+    /// Retains the original folder alongside newer entries, preserving their order.
+    pub fn effective_folders(&self) -> Vec<String> {
+        let mut folders = Vec::new();
+        for folder in std::iter::once(&self.additional_plugins_folder).chain(&self.additional_plugins_folders) {
+            let folder = folder.trim();
+            if !folder.is_empty() && !folders.iter().any(|f| f == folder) {
+                folders.push(folder.to_string());
+            }
+        }
+        folders
     }
 }
 

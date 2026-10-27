@@ -234,6 +234,7 @@
 	Integrations…	Integrace…
 	AI Integrations…	Integrace AI…
 	Install Plug-in…	Instalovat zásuvný modul…
+	Install 8BF Plug-in…	Instalovat zásuvný modul (8BF)…
 	Language Options	Jazykové možnosti
 	Settings…	Nastavení…
 	Mode	Režim
@@ -4135,6 +4136,9 @@ cameraRaw	Dehaze	Odstranění oparu
 	In Front	Vpředu
 	Behind	Vzadu
 
+	Plug-in folders	Složky zásuvných modulů
+
+	Subfolders are included.	Podsložky jsou zahrnuty.
 # DDS Options (#1327)
 	DDS Options	Možnosti DDS
 	Generate Mipmaps	Generovat mipmapy

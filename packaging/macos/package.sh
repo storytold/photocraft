@@ -17,6 +17,22 @@ set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/../env.sh"
 HERE="$ROOT/packaging/macos"
 
+# Windows workers are supplied by the native-8bf CI artifact or a local worker build.
+WORKER_DIR="${PHOTOCRAFT_8BF_WORKER_DIR:-$ROOT/compat/8bf-worker/dist}"
+HAVE_8BF_WORKERS=1
+for bits in 32 64; do
+  if [ ! -f "$WORKER_DIR/photocraft-8bf-worker$bits.exe" ]; then
+    if [ -n "${PHOTOCRAFT_8BF_WORKER_DIR:-}" ]; then
+      echo "error: missing $WORKER_DIR/photocraft-8bf-worker$bits.exe" >&2
+      exit 1
+    fi
+    HAVE_8BF_WORKERS=0
+  fi
+done
+if [ "$HAVE_8BF_WORKERS" = 0 ]; then
+  echo "warning: packaging without native 8BF workers; supply PHOTOCRAFT_8BF_WORKER_DIR from the native-8bf-workers CI artifact to include the bridge" >&2
+fi
+
 ARCH=universal
 SKIP_BUILD=0
 while [[ $# -gt 0 ]]; do
@@ -121,6 +137,11 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 # Executable and icon carry the display name (CFBundleExecutable / CFBundleIconFile).
 cp "$WORK/bin/photocraft" "$APP/Contents/MacOS/PhotoCraft"
 cp "$ROOT/assets/app-icon/photocraft.icns" "$APP/Contents/Resources/PhotoCraft.icns"
+# Windows 8BF workers are data for the external Wine runtime, not Mach-O code.
+if [ "$HAVE_8BF_WORKERS" = 1 ]; then
+  mkdir -p "$APP/Contents/Resources/8bf"
+  cp "$WORKER_DIR"/photocraft-8bf-worker{32,64}.exe "$APP/Contents/Resources/8bf/"
+fi
 # Notices for the bundled font fallback, included before the bundle is signed.
 cp "$ROOT/NOTICE" "$ROOT/ATTRIBUTION.md" "$APP/Contents/Resources/"
 # Licences of the embedded craft-fonts fonts (only when built with CRAFT_FONTS_DIR).
@@ -177,6 +198,9 @@ echo "==> building $CLI_ZIP"
 CLI_DIR="$WORK/photocraft-cli-$VERSION-macos-$ARCH"
 mkdir -p "$CLI_DIR"
 cp "$WORK/bin/photocraft-cli" "$CLI_DIR/"
+if [ "$HAVE_8BF_WORKERS" = 1 ]; then
+  cp "$WORKER_DIR"/photocraft-8bf-worker{32,64}.exe "$CLI_DIR/"
+fi
 copy_docs "$CLI_DIR"
 # Same Developer ID and hardened runtime as the app, with an explicit reverse-DNS identifier
 # (codesign would otherwise use the bare file name).

@@ -1,8 +1,6 @@
 # Plug-ins: the WebAssembly plug-in API (ABI v1)
 
-PhotoCraft does not host native Photoshop plug-ins (`.8BF`, CEP, UXP): that needs unsafe FFI into
-arbitrary machine code and cannot work in the browser build. Instead, plug-ins are **WebAssembly
-modules** run in a sandbox. One `.wasm` file works on macOS, Windows, Linux and the web.
+PhotoCraft runs portable plug-ins as sandboxed **WebAssembly modules**. One `.wasm` file works on macOS, Windows, Linux and the web. Desktop builds also offer experimental Windows x86/x64 `.8bf` filter compatibility through separate Rust workers; see [Desktop 8BF filters](native-8bf.md) for setup and supported inputs. CEP and UXP panels are not supported.
 
 This page is the contract for plug-in authors and the reference for the host
 (`crates/plugins`, the `plugin.*` commands in `crates/engine/src/plugin_cmds.rs`).
@@ -15,15 +13,21 @@ This page is the contract for plug-in authors and the reference for the host
 | `plugin.list` | `{}` | `{"plugins": [{id, name, version, kind, author, description, params, paramsSchema, overlap, area, size, source}], "folder": report}` |
 | `plugin.run` | `{"id": "…", "params": {…}}` (plug-in params may also be top-level keys) | Runs a filter plug-in on the active pixel layer, targeted alpha channel / Quick Mask, or smart object. One undo step. |
 | `plugin.remove` | `{"id": "…"}` | Uninstalls. |
-| `plugin.reload` | `{"path": "folder"}` (default: the preference folder) | Loads every `*.wasm` in a folder; a bad module is reported and skipped. |
+| `plugin.reload` | `{"path": "folder"}` or `{"paths": ["folder", "another folder"]}` (default: all preference folders) | Recursively loads `*.wasm` and discovers desktop `*.8bf` filters; a bad module is reported and skipped. |
 
 In the app, installed filters appear under **Filter › Plug-ins** (with a generated dialog and live
 preview when they have parameters), next to **Install Plug-in…**.
 
-**Preference folder.** Edit › Preferences › Plug-ins › *Use Additional Plug-ins Folder* plus
-*Additional Plug-ins Folder*: when both are set, every `*.wasm` in that folder (not recursive) is
-installed at startup and whenever the preference changes (native builds only; the web build installs
-from bytes).
+**Preference folders.** In Edit › Preferences › Plug-ins, enable *Use Additional Plug-ins Folder*,
+then use **Add**, **Browse…**, or the editable paths under **Plug-in folders**. Scans include all
+subfolders and deduplicate overlapping folders and symbolic links. **Apply** saves, and scans when the
+folder list changed; `plugin.reload` rescans unchanged folders. **Cancel** discards changes made
+since the last Apply. Your original single-folder setting is retained.
+Desktop startup and preference changes install `*.wasm` modules and register `.8bf` files through
+metadata-only discovery. A missing folder is reported without preventing other valid folders from
+loading. Scans are bounded to 64 roots, 32 nested levels, 100,000 entries and 4,096 matching files per
+plug-in type; reaching a bound is reported and keeps what was found before it. Removing a folder or
+turning folders off unregisters what that folder installed; explicit installs stay. The web build continues installing WASM modules from bytes.
 
 Plug-ins are installed **per process**, not per document. A smart filter recorded from a plug-in
 (`{"command": "plugin.run", "params": {"id", "params"}}`) re-runs on re-render while that plug-in is

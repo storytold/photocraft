@@ -118,6 +118,8 @@ pub mod pattern_fill_cmds;
 pub mod perspective_crop_cmds;
 pub mod photo_cmds;
 pub mod pick_cmds;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod plugin_8bf_cmds;
 pub mod plugin_cmds;
 pub mod preset_import_cmds;
 pub mod print_cmds;
@@ -1298,6 +1300,8 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::rasterize_style_cmds::specs());
     v.extend(crate::variables_cmds::specs());
     v.extend(crate::plugin_cmds::specs());
+    #[cfg(not(target_arch = "wasm32"))]
+    v.extend(crate::plugin_8bf_cmds::specs());
     v.extend(crate::group_view_cmds::specs());
     v.extend(crate::fx_view_cmds::specs());
     v.extend(crate::fx_visibility_cmds::specs());

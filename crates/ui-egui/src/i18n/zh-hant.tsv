@@ -238,6 +238,7 @@
 	Integrations…	整合…
 	AI Integrations…	AI 整合…
 	Install Plug-in…	安裝增效模組…
+	Install 8BF Plug-in…	安裝增效模組 (8BF)…
 	Language Options	語言選項
 	Settings…	設定…
 	Mode	模式
@@ -3015,6 +3016,9 @@ curves	Smooth	平滑
 	Behind	後面
 	Blend	混合
 
+	Plug-in folders	增效模組資料夾
+
+	Subfolders are included.	包含子資料夾。
 # DDS Options (#1327)
 	DDS Options	DDS 選項
 	Compression	壓縮

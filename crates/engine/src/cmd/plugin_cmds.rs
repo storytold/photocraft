@@ -5,7 +5,7 @@
 //! channel, or a smart object (recorded as a smart filter, re-run on re-render while the plug-in
 //! is installed). Runs respect the selection and are one undo step.
 
-use std::sync::Mutex;
+use std::collections::BTreeSet;
 
 use photocraft_doc::{LayerContent, SmartFilter};
 use photocraft_plugins::{Plugin, registry};
@@ -187,7 +187,7 @@ fn b64_decode(s: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
-fn install(_s: &mut Session, p: &Value) -> Result<Value> {
+fn install(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "plugin.install";
     let plugin = if let Some(data) = p.get("data") {
         let data = data.as_str().ok_or_else(|| bad(CMD, "`data` must be a base64 string"))?;
@@ -206,6 +206,7 @@ fn install(_s: &mut Session, p: &Value) -> Result<Value> {
     if !replace && registry::get(plugin.id()).is_some() {
         return Err(bad(CMD, format!("a plug-in with id {:?} is already installed", plugin.id())));
     }
+    s.plugin_folders.wasm.remove(plugin.id());
     Ok(describe(&registry::install(plugin)))
 }
 
@@ -219,50 +220,149 @@ fn load_path(_: &str) -> Result<Plugin> {
     Err(EngineError::Other("installing from a path is not available on the web; pass the module as base64 `data`".into()))
 }
 
-/// The plug-in folder last loaded from the preferences, and what happened.
-static FOLDER: Mutex<Option<(String, Value)>> = Mutex::new(None);
+/// What this session's preference folders registered, so a changed or disabled folder list
+/// unregisters the plug-ins it no longer provides. Explicit installs are not tracked.
+#[derive(Default)]
+pub struct FolderPlugins {
+    /// Folders of the last preference scan; `None` while the folders are off.
+    folders: Option<Vec<String>>,
+    /// The last scan's report, shown by `plugin.list`.
+    report: Option<Value>,
+    wasm: BTreeSet<String>,
+    native: BTreeSet<String>,
+}
 
-/// Loads the Plug-ins preference folder (`*.wasm`) when it is enabled and has changed since the
-/// last load. Called whenever preferences are applied (startup, `prefs.set`). Native only.
-pub(crate) fn sync_prefs(s: &Session) {
-    let pi = &s.prefs().plug_ins;
-    let folder = pi.additional_plugins_folder.trim();
-    if !pi.use_additional_plugins_folder || folder.is_empty() {
+impl FolderPlugins {
+    /// Owns what `report` registered and unregisters what the previous preference scan
+    /// registered but this one did not.
+    fn adopt(&mut self, report: &Value) {
+        let wasm = loaded_ids(report, "loaded", Value::as_str);
+        let native = loaded_ids(report, "native_loaded", |v| v.get("id").and_then(Value::as_str));
+        for id in self.wasm.difference(&wasm) {
+            registry::remove(id);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        for id in self.native.difference(&native) {
+            photocraft_plugins::native_8bf::remove(id);
+        }
+        self.wasm = wasm;
+        self.native = native;
+    }
+
+    /// Plug-ins the user loaded explicitly stay installed when the preference folders change.
+    fn disown(&mut self, report: &Value) {
+        for id in loaded_ids(report, "loaded", Value::as_str) {
+            self.wasm.remove(&id);
+        }
+        for id in loaded_ids(report, "native_loaded", |v| v.get("id").and_then(Value::as_str)) {
+            self.native.remove(&id);
+        }
+    }
+
+    /// An explicitly installed native filter stays installed when the preference folders change.
+    pub(crate) fn disown_native(&mut self, id: &str) {
+        self.native.remove(id);
+    }
+}
+
+fn loaded_ids(report: &Value, key: &str, id: fn(&Value) -> Option<&str>) -> BTreeSet<String> {
+    report.get(key).and_then(Value::as_array).into_iter().flatten().filter_map(id).map(str::to_owned).collect()
+}
+
+/// Loads the configured folders when enabled and changed (startup and `prefs.set`), and
+/// unregisters plug-ins from folders that were removed or turned off.
+pub(crate) fn sync_prefs(s: &mut Session) {
+    let enabled = s.prefs().plug_ins.use_additional_plugins_folder;
+    let folders = s.prefs().plug_ins.effective_folders();
+    let state = &mut s.plugin_folders;
+    if !enabled || folders.is_empty() {
+        if state.folders.take().is_some() {
+            state.adopt(&Value::Null);
+            state.report = None;
+        }
         return;
     }
-    let mut last = FOLDER.lock().unwrap_or_else(|e| e.into_inner());
-    if last.as_ref().is_some_and(|(f, _)| f == folder) {
+    if state.folders.as_ref() == Some(&folders) {
         return;
     }
-    *last = Some((folder.to_string(), load_folder(folder)));
+    let report = load_folders(&folders);
+    state.adopt(&report);
+    state.folders = Some(folders);
+    state.report = Some(report);
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn load_folder(folder: &str) -> Value {
-    match registry::load_folder(std::path::Path::new(folder)) {
-        Ok(r) => json!({"folder": folder, "loaded": r.loaded, "failed": r.failed.iter().map(|(f, e)| json!({"file": f, "error": e})).collect::<Vec<_>>()}),
-        Err(e) => json!({"folder": folder, "error": e.to_string()}),
+fn load_folders(folders: &[String]) -> Value {
+    let paths: Vec<std::path::PathBuf> = folders.iter().map(std::path::PathBuf::from).collect();
+    let folder = if folders.len() == 1 { folders.first().cloned() } else { None };
+    // Preserve an error for an entirely missing configuration, while permitting partial scans.
+    if !paths.iter().any(|path| path.is_dir()) {
+        return json!({"folder": folder, "folders": folders, "error": "none of the plug-in folders is an accessible directory"});
+    }
+    match registry::load_folders(&paths) {
+        Ok(r) => {
+            // Native discovery only inspects PE/PiPL metadata; it never starts a worker.
+            match photocraft_plugins::native_8bf::load_folders(&paths) {
+                Ok(native) => {
+                    json!({"folder": folder, "folders": folders, "loaded": r.loaded, "failed": r.failed.iter().map(|(f, e)| json!({"file": f, "error": e})).collect::<Vec<_>>(),
+                    "native_loaded": native.loaded, "native_failed": native.failed.iter().map(|(f,e)|json!({"file":f,"error":e})).collect::<Vec<_>>()})
+                }
+                Err(e) => {
+                    json!({"folder": folder, "folders": folders, "loaded": r.loaded, "failed": r.failed.iter().map(|(f, e)| json!({"file": f, "error": e})).collect::<Vec<_>>(), "native_error": e.to_string()})
+                }
+            }
+        }
+        Err(e) => json!({"folder": folder, "folders": folders, "error": e.to_string()}),
     }
 }
 
 #[cfg(target_arch = "wasm32")]
-fn load_folder(folder: &str) -> Value {
-    json!({"folder": folder, "error": "plug-in folders are not available on the web"})
+fn load_folders(folders: &[String]) -> Value {
+    let folder = if folders.len() == 1 { folders.first().cloned() } else { None };
+    json!({"folder": folder, "folders": folders, "error": "plug-in folders are not available on the web"})
 }
 
 fn reload(s: &mut Session, p: &Value) -> Result<Value> {
-    let folder = match p.get("path") {
-        Some(v) => v.as_str().filter(|f| !f.trim().is_empty()).ok_or_else(|| bad("plugin.reload", "`path` must be a folder"))?.trim().to_string(),
-        None => s.prefs().plug_ins.additional_plugins_folder.trim().to_string(),
-    };
-    if folder.is_empty() {
-        return Err(bad("plugin.reload", "no folder: pass `path` or set Preferences › Plug-ins › Additional Plug-ins Folder"));
+    const CMD: &str = "plugin.reload";
+    if p.get("path").is_some() && p.get("paths").is_some() {
+        return Err(bad(CMD, "give either `path` or `paths`, not both"));
     }
-    let report = load_folder(&folder);
+    let folders = if let Some(paths) = p.get("paths") {
+        let paths = paths.as_array().filter(|paths| !paths.is_empty()).ok_or_else(|| bad(CMD, "`paths` must be a nonempty array of folders"))?;
+        // Validate the complete argument before any discovery can mutate the registries.
+        let paths = paths
+            .iter()
+            .map(|v| v.as_str().filter(|f| !f.trim().is_empty()).map(str::trim).ok_or_else(|| bad(CMD, "every `paths` entry must be a folder")))
+            .collect::<Result<Vec<_>>>()?;
+        let mut folders = Vec::new();
+        for path in paths {
+            if !folders.iter().any(|f| f == path) {
+                folders.push(path.to_string());
+            }
+        }
+        folders
+    } else if let Some(path) = p.get("path") {
+        vec![path.as_str().filter(|f| !f.trim().is_empty()).ok_or_else(|| bad(CMD, "`path` must be a folder"))?.trim().to_string()]
+    } else {
+        s.prefs().plug_ins.effective_folders()
+    };
+    let from_prefs = p.get("path").is_none() && p.get("paths").is_none() && s.prefs().plug_ins.use_additional_plugins_folder;
+    if folders.is_empty() {
+        return Err(bad(CMD, "no folders: pass `path` or `paths`, or add folders in Preferences › Plug-ins"));
+    }
+    let report = load_folders(&folders);
+    let state = &mut s.plugin_folders;
+    if from_prefs {
+        // A rescan of the enabled preference folders replaces what they provided before.
+        state.adopt(&report);
+        state.folders = report.get("error").is_none().then_some(folders);
+    } else {
+        state.disown(&report);
+    }
     if let Some(e) = report.get("error").and_then(Value::as_str) {
         return Err(EngineError::Other(e.to_string()));
     }
-    *FOLDER.lock().unwrap_or_else(|e| e.into_inner()) = Some((folder, report.clone()));
+    state.report = Some(report.clone());
     Ok(report)
 }
 
@@ -276,8 +376,8 @@ pub fn specs() -> Vec<CommandSpec> {
             shortcut: None,
             params: "{}",
             enabled: always,
-            run: |_, _| {
-                let folder = FOLDER.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map(|(_, r)| r.clone());
+            run: |s, _| {
+                let folder = s.plugin_folders.report.clone();
                 Ok(json!({"plugins": registry::list().iter().map(|p| describe(p)).collect::<Vec<_>>(), "folder": folder}))
             },
             journal: false,
@@ -310,7 +410,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Reload Plug-ins",
             menu: &[],
             shortcut: None,
-            params: r##"{"path":text} (a folder of .wasm plug-ins; default: the Plug-ins preference folder)"##,
+            params: r##"{"path":text,"paths":json} (one folder or an array; includes subfolders; default: all Plug-ins preference folders)"##,
             enabled: always,
             run: reload,
             journal: false,

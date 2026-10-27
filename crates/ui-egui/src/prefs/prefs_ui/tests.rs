@@ -5,7 +5,7 @@ fn memory_usage_has_a_dedicated_explanation_and_keeps_its_value() {
     assert!(!field_visible("performance", &values, "memoryUsageMb", ""));
     let mut h = Harness::builder()
         .with_size(vec2(680.0, 350.0))
-        .build_ui_state(|ui, values| section_fields(ui, "performance", values, &["memoryUsageMb".into()], crate::i18n::Lang::EN, None, ""), values);
+        .build_ui_state(|ui, values| section_fields(ui, "performance", values, &["memoryUsageMb".into()], crate::i18n::Lang::EN, None, "", false), values);
     h.run_steps(2);
     h.get_by_label("Memory Usage");
     h.get_by_label("Per-document RAM limit (MB)");
@@ -1655,7 +1655,7 @@ fn rendering_mode_explains_next_launch() {
     use egui_kittest::{Harness, kittest::Queryable};
     let obj = json!({"renderingMode": "auto", "historyStates": 50}).as_object().unwrap().clone();
     let mut h = Harness::new_ui_state(
-        |ui, obj: &mut Map<String, Value>| section_fields(ui, "performance", obj, &[], crate::i18n::Lang::from_pref("en"), None, ""),
+        |ui, obj: &mut Map<String, Value>| section_fields(ui, "performance", obj, &[], crate::i18n::Lang::from_pref("en"), None, "", false),
         obj,
     );
     h.run_steps(4);
@@ -1664,7 +1664,7 @@ fn rendering_mode_explains_next_launch() {
     // A search that leaves Rendering Mode out leaves its notice out too.
     let obj = json!({"renderingMode": "auto", "historyStates": 50}).as_object().unwrap().clone();
     let mut h = Harness::new_ui_state(
-        |ui, obj: &mut Map<String, Value>| section_fields(ui, "performance", obj, &[], crate::i18n::Lang::from_pref("en"), None, "history"),
+        |ui, obj: &mut Map<String, Value>| section_fields(ui, "performance", obj, &[], crate::i18n::Lang::from_pref("en"), None, "history", false),
         obj,
     );
     h.run_steps(4);
@@ -1677,7 +1677,7 @@ fn integrations_explain_next_launch() {
     use egui_kittest::{Harness, kittest::Queryable};
     let obj = json!({"allowAgentControl": true, "controlPort": 0}).as_object().unwrap().clone();
     let mut h = Harness::new_ui_state(
-        |ui, obj: &mut Map<String, Value>| section_fields(ui, "integrations", obj, &[], crate::i18n::Lang::from_pref("en"), None, ""),
+        |ui, obj: &mut Map<String, Value>| section_fields(ui, "integrations", obj, &[], crate::i18n::Lang::from_pref("en"), None, "", false),
         obj,
     );
     h.run_steps(4);
@@ -1689,8 +1689,10 @@ fn integrations_explain_next_launch() {
 fn next_launch_notice_does_not_mark_unrelated_interface_preferences() {
     use egui_kittest::{Harness, kittest::Queryable};
     let obj = json!({"showTooltips": true}).as_object().unwrap().clone();
-    let mut h =
-        Harness::new_ui_state(|ui, obj: &mut Map<String, Value>| section_fields(ui, "interface", obj, &[], crate::i18n::Lang::from_pref("en"), None, ""), obj);
+    let mut h = Harness::new_ui_state(
+        |ui, obj: &mut Map<String, Value>| section_fields(ui, "interface", obj, &[], crate::i18n::Lang::from_pref("en"), None, "", false),
+        obj,
+    );
     h.run_steps(4);
     assert!(h.query_by_label("Applies at next launch.").is_none());
     h.get_by_label("Show tooltips").click();
@@ -1998,4 +2000,39 @@ fn edit_dialogs_open() {
     crate::transform_tool::cancel(&mut app);
     let d = crate::menus::invoke(&mut app, &ctx, "edit.presets.presetManager", json!({})).unwrap()["dialog"].as_u64().unwrap();
     assert!(crate::dialogs::confirm(&mut app, d).is_ok());
+}
+
+#[test]
+fn plugin_folder_rows_browse_apply_and_cancel_preserve_saved_paths() {
+    use egui_kittest::{Harness, kittest::Queryable};
+    let (mut app, _) = app_with_store();
+    app.run("prefs.set", json!({"values":{"interface.language":"en","plugIns.additionalPluginsFolder":"/legacy/plugins"}})).unwrap();
+    app.services.file_dialog = Some(Box::new(|request, _, reply| {
+        assert!(matches!(request, crate::FileDialogRequest::Folder { .. }));
+        reply.send(Some(crate::FileDialogAnswer::FolderTo("/chosen/plugins".into())));
+    }));
+    let id = open_preferences(&mut app, "plugIns");
+    let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).build_eframe(move |cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        app
+    });
+    h.run_steps(4);
+    h.get_by_label("Add").click();
+    h.run_steps(2);
+    h.query_all_by_label("Browse…").last().unwrap().click();
+    h.run_steps(4);
+    let values = &h.state().ui.dialogs.iter().find(|d| d.id == id).unwrap().fields["values"];
+    assert_eq!(values["plugIns"]["additionalPluginsFolders"], json!(["/chosen/plugins"]));
+    assert_eq!(h.state().session.prefs_value()["plugIns"]["additionalPluginsFolders"], json!([]), "Browse only edits the draft");
+    h.get_by_label("Apply").click();
+    h.run_steps(4);
+    assert_eq!(h.state().session.prefs_value()["plugIns"]["additionalPluginsFolder"], "/legacy/plugins");
+    assert_eq!(h.state().session.prefs_value()["plugIns"]["additionalPluginsFolders"], json!(["/chosen/plugins"]));
+    h.query_all_by_label("Remove").next().unwrap().click();
+    h.run_steps(2);
+    assert_eq!(h.state().ui.dialogs.iter().find(|d| d.id == id).unwrap().fields["values"]["plugIns"]["additionalPluginsFolder"], "");
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+    assert_eq!(h.state().session.prefs_value()["plugIns"]["additionalPluginsFolder"], "/legacy/plugins", "Cancel keeps the last applied folders");
+    assert_eq!(h.state().session.prefs_value()["plugIns"]["additionalPluginsFolders"], json!(["/chosen/plugins"]));
 }

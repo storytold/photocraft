@@ -689,6 +689,7 @@
 	Export/Import Presets…	Экспорт/импорт наборов…
 	Additional plugins folder	Дополнительная папка плагинов
 	Install Plug-in…	Установить плагин…
+	Install 8BF Plug-in…	Установить плагин (8BF)…
 	Export Presets	Экспортировать наборы
 	Import brushes (.abr)	Импортировать кисти (.abr)
 	Migrate Presets	Перенести наборы
@@ -3870,6 +3871,9 @@ curves	Smooth	Сгладить
 	In Front	Спереди
 	Behind	Сзади
 
+	Plug-in folders	Папки плагинов
+
+	Subfolders are included.	Вложенные папки тоже включены.
 # DDS Options (#1327)
 	DDS Options	Параметры DDS
 	Compression	Сжатие
