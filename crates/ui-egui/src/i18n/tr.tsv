@@ -2010,6 +2010,7 @@
 	Zoom clicked point to center	Tıklanan noktayı merkeze yakınlaştır
 	Zoom resizes windows	Yakınlaştırma pencereleri yeniden boyutlandırır
 	Zoom with scroll wheel	Kaydırma tekerleği ile yakınlaştırma
+	Zoom with Ctrl + Scroll Wheel	Ctrl + kaydırma tekerleği ile yakınlaştırma
 	Zoom with trackpad pinch	Dokunmatik yüzeyde sıkıştırarak yakınlaştır
 	Pass Through	Geçirgen
 	Dissolve	Eritme

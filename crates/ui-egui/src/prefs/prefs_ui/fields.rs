@@ -34,6 +34,8 @@ pub(super) fn humanize(key: &str) -> String {
         "darkTheme" => return "Dark Theme".into(),
         "lightTheme" => return "Light Theme".into(),
         "automaticallyCheckUpdates" => return "Automatically Check for Updates".into(),
+        // General: opt-in Windows/Linux Ctrl + mouse-notch zoom (⇧+Ctrl snaps). Off, Ctrl pans.
+        "ctrlWheelZooms" => return "Zoom with Ctrl + Scroll Wheel".into(),
         _ => {}
     }
     // These controls appear only for WebP, so reuse the existing translated labels.
@@ -409,7 +411,8 @@ fn field_rows(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>, ke
         let path = format!("{section}.{k}");
         let v = obj.get(&k).cloned().unwrap_or(Value::Null);
         let human = humanize(&k);
-        let label = tl!(&human).to_string();
+        // A literal so every complete catalog translates this checkbox; other keys stay dynamic.
+        let label = if k == "ctrlWheelZooms" { tl!("Zoom with Ctrl + Scroll Wheel").to_string() } else { tl!(&human).to_string() };
         match &v {
             Value::Bool(b) => {
                 ui.label("");

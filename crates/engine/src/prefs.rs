@@ -224,6 +224,9 @@ pub struct General {
     pub always_create_smart_objects_when_placing: bool,
     /// Scroll wheel zooms instead of panning.
     pub zoom_with_scroll_wheel: bool,
+    /// Windows/Linux Ctrl + a whole mouse notch zooms (⇧+Ctrl snaps to the zoom ladder).
+    /// Off, that gesture scrolls sideways, as in Photoshop. Mac ⌘ is unchanged either way.
+    pub ctrl_wheel_zooms: bool,
     /// Wheel zoom eases over the frames of a notch; off, a notch is one instant ×1.1 step.
     pub animated_zoom: bool,
     pub zoom_resizes_windows: bool,
@@ -243,6 +246,7 @@ impl Default for General {
             resize_image_during_place: true,
             always_create_smart_objects_when_placing: true,
             zoom_with_scroll_wheel: false,
+            ctrl_wheel_zooms: false,
             animated_zoom: true,
             zoom_resizes_windows: false,
             use_legacy_free_transform: false,

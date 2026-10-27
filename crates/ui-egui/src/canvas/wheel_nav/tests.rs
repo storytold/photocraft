@@ -3,7 +3,18 @@ use egui::TouchPhase;
 use super::*;
 
 fn input(scroll: Vec2, alt: bool) -> Input {
-    Input { scroll, raw: scroll, zoom_delta: 1.0, alt, shift: false, zoom_with_wheel: false, pinch_zooms: true, animated_zoom: true, notch: 40.0 }
+    Input {
+        scroll,
+        raw: scroll,
+        zoom_delta: 1.0,
+        alt,
+        shift: false,
+        zoom_with_wheel: false,
+        pinch_zooms: true,
+        animated_zoom: true,
+        notch: 40.0,
+        ctrl_zoom: false,
+    }
 }
 
 fn wheel(delta: Vec2, modifiers: Modifiers) -> Event {
@@ -22,6 +33,11 @@ fn gesture(frames: Vec<Vec<Event>>, zoom_with_wheel: bool, legacy: bool) -> (Vec
 }
 
 fn gesture_with(frames: Vec<Vec<Event>>, zoom_with_wheel: bool, legacy: bool, animated_zoom: bool) -> (Vec2, f32, i32) {
+    gesture_opts(frames, zoom_with_wheel, legacy, animated_zoom, false)
+}
+
+/// [`gesture_with`] with Preferences › General › Zoom with Ctrl + Scroll Wheel (`ctrl_wheel_zooms`).
+fn gesture_opts(frames: Vec<Vec<Event>>, zoom_with_wheel: bool, legacy: bool, animated_zoom: bool, ctrl_wheel_zooms: bool) -> (Vec2, f32, i32) {
     let owner = Id::unique("test-gesture");
     let ctx = Context::default();
     configure(&ctx);
@@ -32,7 +48,7 @@ fn gesture_with(frames: Vec<Vec<Event>>, zoom_with_wheel: bool, legacy: bool, an
         if legacy {
             fold_legacy_pinch(&ctx, &mut raw);
         }
-        let mut out = ctx.run_ui(raw, |ui| match read(ui.ctx(), zoom_with_wheel, true, animated_zoom, owner, true) {
+        let mut out = ctx.run_ui(raw, |ui| match read_with(ui.ctx(), zoom_with_wheel, true, animated_zoom, owner, true, true, true, ctrl_wheel_zooms) {
             Some(Wheel::Pan(d)) => pan += d,
             Some(Wheel::Zoom(f)) => zoom *= f,
             Some(Wheel::SnapZoom(n)) => snaps += n,
@@ -65,7 +81,7 @@ fn unsmoothed_wheel_pans_at_once_without_a_glide() {
                 let raw = RawInput { time: Some(f64::from(n) / 60.0), predicted_dt: 1.0 / 60.0, events, ..Default::default() };
                 let mut pan = Vec2::ZERO;
                 let mut out = ctx.run_ui(raw, |ui| {
-                    if let Some(Wheel::Pan(d)) = read_with(ui.ctx(), false, true, true, owner, true, smooth, true) {
+                    if let Some(Wheel::Pan(d)) = read_with(ui.ctx(), false, true, true, owner, true, smooth, true, false) {
                         pan = d;
                     }
                 });
@@ -102,7 +118,7 @@ fn animated_wheel_zoom_keeps_its_eased_tail_when_pan_smoothing_is_off() {
                 let raw = RawInput { time: Some(f64::from(n) / 60.0), predicted_dt: 1.0 / 60.0, events, ..Default::default() };
                 let mut factor = 1.0;
                 let mut out = ctx.run_ui(raw, |ui| {
-                    if let Some(Wheel::Zoom(f)) = read_with(ui.ctx(), true, true, true, owner, true, smooth, true) {
+                    if let Some(Wheel::Zoom(f)) = read_with(ui.ctx(), true, true, true, owner, true, smooth, true, false) {
                         factor = f;
                     }
                 });
@@ -385,7 +401,7 @@ fn animated_zoom_keeps_the_sideways_wheel_unsmoothed_with_animations_off() {
             let raw = RawInput { time: Some(f64::from(n) / 60.0), predicted_dt: 1.0 / 60.0, events, ..Default::default() };
             let mut pan = Vec2::ZERO;
             let mut out = ctx.run_ui(raw, |ui| {
-                if let Some(Wheel::Pan(d)) = read_with(ui.ctx(), true, true, true, owner, true, false, true) {
+                if let Some(Wheel::Pan(d)) = read_with(ui.ctx(), true, true, true, owner, true, false, true, false) {
                     pan = d;
                 }
             });
@@ -631,6 +647,102 @@ fn pinch_zooms_and_ctrl_wheel_pans() {
     assert!(near(pan, Vec2::new(40.0, 0.0)) && zoom == 1.0, "Ctrl + mouse wheel scrolls sideways: {pan:?} {zoom}");
 }
 
+fn ctrl_released() -> Event {
+    Event::Key { key: egui::Key::ControlLeft, physical_key: None, pressed: false, repeat: false, modifiers: Modifiers::NONE }
+}
+
+/// Default mapping: a whole Ctrl notch, a fractional touchpad step, and the tail after Ctrl is
+/// released still pan. The opt-in turns only a whole notch into ×1.1; that tail neither pans
+/// nor adds another step.
+#[test]
+fn default_ctrl_wheel_pans_and_opt_in_notch_zooms() {
+    let notch = Vec2::new(0.0, 1.0);
+    let release = vec![vec![wheel(notch, CTRL)], vec![ctrl_released()]];
+    for (legacy, animated) in [(false, false), (true, false), (false, true), (true, true)] {
+        let (pan, zoom, snaps) = gesture_opts(release.clone(), false, legacy, animated, false);
+        assert_eq!(snaps, 0, "default does not snap (legacy {legacy}, animated {animated})");
+        assert_eq!(zoom, 1.0, "default does not zoom (legacy {legacy}, animated {animated})");
+        assert!(near(pan, Vec2::new(40.0, 0.0)), "default pans sideways, including the release tail: {pan:?}");
+    }
+    // Opt-in, whether or not Zoom with Scroll Wheel is on: one ×1.1, no pan, no snap.
+    // Animated Zoom does not ease a second step out of the sideways tail.
+    for zoom_with_wheel in [false, true] {
+        for animated in [false, true] {
+            let (pan, zoom, snaps) = gesture_opts(release.clone(), zoom_with_wheel, true, animated, true);
+            assert_eq!(snaps, 0, "zoom-with-wheel {zoom_with_wheel}, animated {animated}");
+            assert!(pan == Vec2::ZERO, "tail after Ctrl is released does not pan: {pan:?}");
+            assert!((zoom - NOTCH).abs() < 1e-4, "one notch is ×1.1: {zoom}");
+        }
+    }
+    let (pan, zoom, snaps) = gesture_opts(vec![vec![wheel(notch, Modifiers::CTRL)], vec![ctrl_released()]], false, false, true, true);
+    assert_eq!(snaps, 0);
+    assert!(pan == Vec2::ZERO && (zoom - NOTCH).abs() < 1e-4, "ctrl without command still zooms: {pan:?} {zoom}");
+    let (pan, zoom, snaps) = gesture_opts(vec![vec![wheel(notch, CMD)]], false, false, false, true);
+    assert_eq!(snaps, 0);
+    assert!(zoom == 1.0 && near(pan, Vec2::new(40.0, 0.0)), "Mac ⌘ still pans when the preference is on: {pan:?} {zoom}");
+
+    // A fractional touchpad step is not a notch. Folded, it pinches; unfolded, it pans.
+    let speed = egui::InputOptions::default().scroll_zoom_speed;
+    let fraction = vec![vec![wheel(Vec2::new(0.0, 0.25), CTRL)], vec![wheel(Vec2::new(0.0, 0.5), CTRL)]];
+    for opt_in in [false, true] {
+        let (pan, zoom, snaps) = gesture_opts(fraction.clone(), false, true, false, opt_in);
+        assert_eq!(snaps, 0, "opt-in {opt_in}");
+        assert!(pan == Vec2::ZERO && (zoom - (speed * 40.0 * 0.75).exp()).abs() < 1e-4, "folded fraction pinches (opt-in {opt_in}): {pan:?} {zoom}");
+        let (pan, zoom, snaps) = gesture_opts(vec![vec![wheel(Vec2::new(0.0, 0.25), CTRL)]], false, false, false, opt_in);
+        assert_eq!(snaps, 0, "opt-in {opt_in}");
+        assert!(zoom == 1.0 && near(pan, Vec2::new(10.0, 0.0)), "unfolded fraction pans (opt-in {opt_in}): {pan:?} {zoom}");
+    }
+}
+
+/// ⇧+Ctrl is a sideways pan until Zoom with Ctrl + Scroll Wheel is on, then one ladder step
+/// per whole notch. The tail after the modifiers are released neither pans nor steps again.
+#[test]
+fn default_shift_ctrl_pans_and_opt_in_snaps() {
+    let shift_ctrl = Modifiers { shift: true, ..CTRL };
+    let release = |delta: Vec2| vec![vec![wheel(delta, shift_ctrl)], vec![ctrl_released()]];
+    for zoom_with_wheel in [false, true] {
+        let (pan, zoom, snaps) = gesture_opts(release(Vec2::new(0.0, 1.0)), zoom_with_wheel, false, true, false);
+        assert_eq!(snaps, 0, "default does not snap (zoom-with-wheel {zoom_with_wheel})");
+        assert_eq!(zoom, 1.0, "default does not zoom");
+        assert!(near(pan, Vec2::new(40.0, 0.0)), "default ⇧+Ctrl pans sideways: {pan:?}");
+        let (pan, zoom, snaps) = gesture_opts(release(Vec2::new(0.0, 1.0)), zoom_with_wheel, true, true, true);
+        assert_eq!(snaps, 1, "opt-in snaps one step (zoom-with-wheel {zoom_with_wheel})");
+        assert!(pan == Vec2::ZERO && zoom == 1.0, "the release tail does not pan or zoom: {pan:?} {zoom}");
+        let (pan, zoom, snaps) = gesture_opts(release(Vec2::new(0.0, -1.0)), zoom_with_wheel, false, false, true);
+        assert_eq!(snaps, -1, "opt-in snaps out");
+        assert!(pan == Vec2::ZERO && zoom == 1.0, "{pan:?} {zoom}");
+    }
+    let (pan, zoom, snaps) = gesture_opts(vec![vec![wheel(Vec2::new(1.0, 0.0), shift_ctrl)]], false, false, false, true);
+    assert_eq!(snaps, 1, "a horizontal notch is one step");
+    assert!(pan == Vec2::ZERO && zoom == 1.0, "{pan:?} {zoom}");
+    let (_, _, snaps) = gesture_opts(vec![vec![wheel(Vec2::new(0.0, 2.0), shift_ctrl)]], false, false, true, true);
+    assert_eq!(snaps, 2, "two notches are two steps");
+    let (pan, zoom, snaps) = gesture_opts(vec![vec![wheel(Vec2::new(0.0, 0.25), shift_ctrl)]], false, true, false, true);
+    assert_eq!(snaps, 0, "a folded fraction is not a snap");
+    assert!(pan == Vec2::ZERO && zoom > 1.0, "a folded fraction pinches: {pan:?} {zoom}");
+    let (pan, zoom, snaps) = gesture_opts(vec![vec![wheel(Vec2::new(0.0, 0.25), shift_ctrl)]], false, false, false, true);
+    assert_eq!(snaps, 0, "an unfolded fraction is not a snap");
+    assert!(zoom == 1.0 && near(pan, Vec2::new(10.0, 0.0)), "an unfolded fraction pans sideways: {pan:?} {zoom}");
+    let shift_cmd = Modifiers { shift: true, ..CMD };
+    for opt_in in [false, true] {
+        let (pan, zoom, snaps) = gesture_opts(vec![vec![wheel(Vec2::new(0.0, 1.0), shift_cmd)]], false, false, false, opt_in);
+        assert_eq!(snaps, 0, "Mac ⇧+⌘ does not snap (opt-in {opt_in})");
+        assert!(zoom == 1.0 && near(pan, Vec2::new(40.0, 0.0)), "Mac ⇧+⌘ pans sideways (opt-in {opt_in}): {pan:?} {zoom}");
+    }
+}
+
+/// The opt-in zoom reads the notch, not egui's sideways smoothed delta.
+#[test]
+fn ctrl_notch_classify_ignores_the_sideways_tail() {
+    let sideways = Vec2::new(40.0, 0.0);
+    let arrival = Input { raw: Vec2::new(0.0, 40.0), ctrl_zoom: true, ..input(sideways, false) };
+    let Some(Wheel::Zoom(f)) = classify(arrival) else { panic!("zoom") };
+    assert!((f - 1.1).abs() < 1e-5, "{f}");
+    let tail = Input { raw: Vec2::ZERO, ctrl_zoom: true, ..input(sideways, false) };
+    assert_eq!(classify(tail), None, "the smoothed sideways tail is not a pan");
+    assert_eq!(classify(input(sideways, false)), Some(Wheel::Pan(sideways)), "without the flag a sideways delta still pans");
+}
+
 #[test]
 fn linux_wayland_point_unit_pinch_keeps_mouse_notches_for_sideways_scroll() {
     // Some Wayland compositors report fractional Ctrl-wheel pinch steps in points
@@ -710,6 +822,7 @@ fn hostile_numbers_never_produce_a_bad_zoom() {
                         pinch_zooms: true,
                         animated_zoom,
                         notch,
+                        ctrl_zoom: false,
                     };
                     if let Some(Wheel::Zoom(f)) = classify(i) {
                         assert!(f.is_finite() && f > 0.0, "{f} from {i:?}");
@@ -727,6 +840,7 @@ fn hostile_numbers_never_produce_a_bad_zoom() {
                             pinch_zooms: true,
                             animated_zoom,
                             notch,
+                            ctrl_zoom: false,
                         }
                     };
                     if let Some(Wheel::SnapZoom(n)) = classify(si) {
@@ -983,7 +1097,7 @@ fn touch_zoom(frames: Vec<Vec<Event>>, touch_gestures: bool) -> f32 {
     for (n, events) in (0u32..).zip(frames) {
         let raw = RawInput { time: Some(f64::from(n) / 60.0), predicted_dt: 1.0 / 60.0, events, ..Default::default() };
         let mut out = ctx.run_ui(raw, |ui| {
-            if let Some(Wheel::Zoom(f)) = read_with(ui.ctx(), false, true, true, owner, true, true, touch_gestures) {
+            if let Some(Wheel::Zoom(f)) = read_with(ui.ctx(), false, true, true, owner, true, true, touch_gestures, false) {
                 zoom *= f;
             }
         });

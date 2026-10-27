@@ -1559,6 +1559,7 @@ cameraRaw	Shadows	Vùng tối
 	Vulkan	Vulkan
 	Webp	WebP
 	Zoom with scroll wheel	Thu phóng bằng bánh xe cuộn
+	Zoom with Ctrl + Scroll Wheel	Thu phóng bằng Ctrl + bánh xe cuộn
 
 
 # Phase 4.2 — general dialogs, status/progress, warnings/errors

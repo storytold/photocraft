@@ -249,6 +249,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                 hover_here,
                 app.session.prefs().interface.enable_animations,
                 app.session.prefs().enhanced_controls.touch_gestures,
+                app.session.prefs().general.ctrl_wheel_zooms,
             )
             .is_some());
     if direct_input {
@@ -611,6 +612,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         crate::spring_tools::note_canvas_press(app);
     }
     // Navigation (wheel_nav.rs): scroll pans (⇧ or ⌘/Ctrl sideways); pinch and ⌥-scroll zoom around the pointer.
+    // Zoom with Ctrl + Scroll Wheel (off by default) turns a Windows/Linux Ctrl notch into that zoom.
     // The wheel also scrolls over the scrollbars drawn on top of the canvas (last frame's hover).
     let bars_id = egui::Id::unique(("pc-canvas-bars-hover", idx));
     let over_bars = ctx.data(|d| d.get_temp::<bool>(bars_id)).unwrap_or(false);
@@ -629,6 +631,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         nav_hovered,
         app.session.prefs().interface.enable_animations,
         touch_gestures,
+        app.session.prefs().general.ctrl_wheel_zooms,
     );
     if nav_hovered {
         let pointer = ui.input(|i| i.pointer.hover_pos());

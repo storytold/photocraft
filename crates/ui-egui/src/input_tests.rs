@@ -552,7 +552,26 @@ fn alt_scroll_zooms_in_steps_around_the_pointer() {
     assert_eq!(zoom(&h), z_shift, "Shift + wheel does not zoom");
     assert!(h.state().ui.views[0].center[0] > c_shift[0] && h.state().ui.views[0].center[1] == c_shift[1], "Shift + wheel pans sideways");
 
-    // Ctrl + a mouse notch zooms around the pointer (#5363). The tail must not pan sideways.
+    // Default: Ctrl + a mouse notch pans sideways, like Photoshop. The preference is off.
+    assert!(!h.state().session.prefs().general.ctrl_wheel_zooms);
+    let (z_ctrl, c_ctrl) = (zoom(&h), h.state().ui.views[0].center);
+    wheel(&h, 1.0, Modifiers { ctrl: true, command: true, ..Modifiers::NONE });
+    h.run_steps(40);
+    assert_eq!(zoom(&h), z_ctrl, "Ctrl + wheel does not zoom until the preference is on");
+    assert!(
+        h.state().ui.views[0].center[0] != c_ctrl[0] && h.state().ui.views[0].center[1] == c_ctrl[1],
+        "Ctrl + wheel pans sideways: {c_ctrl:?} -> {:?}",
+        h.state().ui.views[0].center
+    );
+    // Default ⇧+Ctrl is the same sideways pan, not a zoom-ladder step.
+    let (z_snap, c_snap) = (zoom(&h), h.state().ui.views[0].center);
+    wheel(&h, 1.0, Modifiers { shift: true, ctrl: true, command: true, ..Modifiers::NONE });
+    h.run_steps(40);
+    assert_eq!(zoom(&h), z_snap, "⇧+Ctrl does not snap until the preference is on");
+    assert!(h.state().ui.views[0].center[0] != c_snap[0] && h.state().ui.views[0].center[1] == c_snap[1], "⇧+Ctrl pans sideways");
+
+    // Opt-in: Ctrl + a mouse notch zooms around the pointer (#5363). The tail must not pan sideways.
+    h.state_mut().session.edit_prefs(|p| p.general.ctrl_wheel_zooms = true);
     let p = pos2(h.state().last_canvas_rect.center().x + 80.0, h.state().last_canvas_rect.center().y - 40.0);
     h.hover_at(p);
     h.run_steps(2);
@@ -565,6 +584,12 @@ fn alt_scroll_zooms_in_steps_around_the_pointer() {
     assert_eq!(at_once, zoom(&h), "the notch is applied the frame it arrives, with no easing");
     let d_after = doc_at(&h, p);
     assert!((d_after[0] - d_ctrl[0]).abs() < 0.05 && (d_after[1] - d_ctrl[1]).abs() < 0.05, "centred on the pointer: {d_ctrl:?} -> {d_after:?}");
+    // ⇧+Ctrl is one zoom-ladder step, not another ×1.1.
+    let z_before = zoom(&h);
+    let stepped = crate::zoom_levels::step(z_before, 1, h.state().ui.views[0].doc_size);
+    wheel(&h, 1.0, Modifiers { shift: true, ctrl: true, command: true, ..Modifiers::NONE });
+    h.run_steps(40);
+    assert!((zoom(&h) - stepped).abs() < 1e-3, "⇧+Ctrl snaps one ladder step: {z_before} -> {}, expected {stepped}", zoom(&h));
     // A pinch still zooms around the pointer, on top of the Ctrl notch.
     let z_pinch = zoom(&h);
     h.event(egui::Event::Zoom(1.25));

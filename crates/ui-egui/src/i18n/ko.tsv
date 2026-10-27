@@ -2054,6 +2054,7 @@
 	Zoom clicked point to center	클릭한 지점을 중앙으로 확대
 	Zoom resizes windows	확대/축소 시 창 크기 조절
 	Zoom with scroll wheel	스크롤 휠로 확대/축소
+	Zoom with Ctrl + Scroll Wheel	Ctrl + 스크롤 휠로 확대/축소
 	Zoom with trackpad pinch	트랙패드 핀치로 확대/축소
 	Pass Through	통과
 	Dissolve	디졸브
