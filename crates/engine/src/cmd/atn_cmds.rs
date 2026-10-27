@@ -144,3 +144,6 @@ mod tests;
 
 #[cfg(test)]
 mod layer_props_tests;
+
+#[cfg(test)]
+mod layer_list_tests;
