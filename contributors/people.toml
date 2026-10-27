@@ -306,6 +306,9 @@ sync_github_name = false
 real_name = "Jason DeBoever"
 sync_github_name = true
 
+[people.yadser]
+real_name = "Sergey Yadryshnikov"
+
 [people.dylanmtaylor]
 sync_github_name = true
 
