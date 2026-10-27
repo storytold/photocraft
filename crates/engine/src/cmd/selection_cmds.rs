@@ -11,6 +11,8 @@ use serde_json::{Value, json};
 use crate::commands::CommandSpec;
 use crate::{EngineError, Result, Session};
 
+mod modify_window;
+
 fn has_doc(s: &Session) -> std::result::Result<(), String> {
     s.active().map(|_| ()).ok_or_else(|| "no document open".into())
 }
@@ -452,17 +454,21 @@ fn modify(s: &mut Session, p: &Value, op: &str) -> Result<Value> {
     // or a Select All would border to nothing.
     let at_bounds = op == "border" || b(p, "applyAtCanvasBounds", false);
     let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
-    let area = doc.bounds();
-    if area.size().area() > MAX_MODIFY_PIXELS as u64 {
+    let canvas = doc.bounds();
+    if canvas.size().area() > MAX_MODIFY_PIXELS as u64 {
         return Err(EngineError::BadParams { cmd: format!("select.modify.{op}"), msg: "the selection is too large to modify".into() });
     }
-    let (_, m) = current_mask(doc);
+    // Keep both mask conversion and tiled replacement within the affected region. The
+    // zero halo makes internal window edges inert; nonzero edges can only be canvas edges,
+    // so the existing Apply effect at canvas bounds padding still has the same meaning.
+    let area = if matches!(op, "expand" | "contract" | "border") { modify_window::area(doc, r) } else { canvas };
+    let m = sel::mask_from_surface(doc.selection.as_ref(), area);
     let (w, h) = (area.width() as usize, area.height() as usize);
-    // Feather reaches 3σ = 3 r (σ = r, as in Photoshop); the others reach r. A margin past that
+    // Feather reaches ⌈3σ⌉ (σ = r, as in Photoshop); the others reach r. A margin past that
     // keeps the canvas edge out of reach. A selection clear of the canvas edge needs none: both
     // readings agree there.
-    let reach = if op == "feather" { r * 3.0 } else { r };
-    let pad = if touches_edge(&m, w, h) { reach.ceil() as usize + 2 } else { 0 };
+    let reach = if op == "feather" { sel::feather_reach(r) } else { r.ceil() as usize };
+    let pad = if touches_edge(&m, w, h) { reach.saturating_add(2) } else { 0 };
     let grown = |n: usize| pad.checked_mul(2).and_then(|p| n.checked_add(p));
     let (Some(pw), Some(ph)) = (grown(w), grown(h)) else {
         return Err(EngineError::BadParams { cmd: format!("select.modify.{op}"), msg: "the selection is too large to modify".into() });
@@ -616,10 +622,26 @@ pub(crate) fn polygon_selection(s: &mut Session, cmd: &str, label: &str, pts: &[
     }
     let area = s.active().ok_or(EngineError::NoDocument)?.doc.bounds();
     if feather > 0.0 {
-        // The blur spreads past the polygon and isn't bit-identical over a smaller window.
-        let mut mask = sel::polygon(pts, area, b(p, "antiAlias", true));
-        mask = sel::feather(&mask, area.width() as usize, area.height() as usize, feather);
-        return set_selection(s, label, area, mask, mode(p));
+        let (mut lo, mut hi) = ((f32::INFINITY, f32::INFINITY), (f32::NEG_INFINITY, f32::NEG_INFINITY));
+        for &(x, y) in pts {
+            if x.is_finite() && y.is_finite() {
+                lo = (lo.0.min(x), lo.1.min(y));
+                hi = (hi.0.max(x), hi.1.max(y));
+            }
+        }
+        let bounds = if lo.0 <= hi.0 && lo.1 <= hi.1 {
+            Rect::new(lo.0.floor() as i32, lo.1.floor() as i32, hi.0.ceil() as i32, hi.1.ceil() as i32)
+        } else {
+            Rect::EMPTY
+        };
+        let window = feather_window(bounds, area, feather);
+        let mask = sel::polygon_window(pts, area, window, b(p, "antiAlias", true));
+        let mask = sel::feather(&mask, window.width() as usize, window.height() as usize, feather);
+        let selected = s.edit(label, |doc, _| {
+            doc.selection = combine_band(doc.selection.as_ref(), &mask, window, mode(p));
+            Ok(doc.selection.is_some())
+        })?;
+        return Ok(json!({ "selected": selected }));
     }
     // Only the rows the polygon spans (#4532): rows outside it are empty, and full-width rows
     // keep `polygon`'s coverage bit-identical (its x arithmetic is relative to the area's left
@@ -649,7 +671,7 @@ fn polygon_rows(pts: &[(f32, f32)], area: Rect) -> Rect {
 /// [`sel::combine`] of a mask covering only `band` (zero elsewhere), giving exactly what the
 /// whole-canvas combine gives: Replace and Intersect are empty outside the band, and Add and
 /// Subtract keep the old selection there.
-fn combine_band(old: Option<&Surface>, mask: &[f32], band: Rect, m: SelectionMode) -> Option<Surface> {
+pub(crate) fn combine_band(old: Option<&Surface>, mask: &[f32], band: Rect, m: SelectionMode) -> Option<Surface> {
     let inside = sel::combine(old, mask, band, m);
     let Some(old) = old.filter(|_| matches!(m, SelectionMode::Add | SelectionMode::Subtract)) else { return inside };
     if band.is_empty() {
@@ -660,6 +682,17 @@ fn combine_band(old: Option<&Surface>, mask: &[f32], band: Rect, m: SelectionMod
     s.write_region(band, &values);
     s.prune();
     (s.tile_count() > 0).then_some(s)
+}
+
+/// Keep dense feather masks local to the drawn shape. Clip before inflating: pixels outside
+/// the canvas never contribute to the original full-canvas blur, even near a canvas edge.
+pub(crate) fn feather_window(bounds: Rect, canvas: Rect, feather: f32) -> Rect {
+    let bounds = bounds.intersect(&canvas);
+    if bounds.is_empty() {
+        return Rect::EMPTY;
+    }
+    let reach = i32::try_from(sel::feather_reach(feather)).unwrap_or(i32::MAX);
+    bounds.inflate(reach.saturating_add(1)).intersect(&canvas)
 }
 
 macro_rules! spec {

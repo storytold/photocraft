@@ -733,17 +733,11 @@ fn combine_region_matches_combine() {
 fn color_matcher_bounds_tightly_clustered_leaves() {
     let colors: Vec<_> = (0..1000).map(|i| [i as f32 * 1e-10, 0.0, 0.0, 1.0]).collect();
     let matcher = ColorMatcher::new(colors.iter().copied(), 0.0).unwrap();
-    fn check(tree: &ColorBvh) {
-        match tree {
-            ColorBvh::Empty => (),
-            ColorBvh::Leaf(points) => assert!(points.len() <= 16),
-            ColorBvh::Node { left, right, .. } => {
-                check(left);
-                check(right);
-            }
+    for node in &matcher.tree.nodes {
+        if let ColorNode::Leaf { start, end } = node {
+            assert!(end - start <= 16);
         }
     }
-    check(&matcher.tree);
     assert!(matcher.matches(colors[999]));
     assert!(!matcher.matches([0.1, 0.0, 0.0, 1.0]));
 }
@@ -754,4 +748,46 @@ fn color_matcher_limits_distinct_colors_but_not_duplicates() {
     let blue = [0.0, 0.0, 1.0, 1.0];
     assert!(ColorMatcher::with_limit([red, red, blue], 0.0, 2).is_ok());
     assert!(ColorMatcher::with_limit([red, blue], 0.0, 1).is_err());
+}
+
+#[test]
+fn polygon_window_keeps_full_canvas_fractional_coverage() {
+    for canvas in [Rect::new(0, 0, 110_000, 12), Rect::new(-123, -7, 109_877, 5)] {
+        let points = [(100_003.12, -2.3), (100_043.71, 2.19), (100_032.39, 9.2), (100_001.52, 4.17)];
+        for aa in [false, true] {
+            let full = polygon(&points, canvas, aa);
+            for requested in [Rect::new(99_998, -10, 100_048, 15), Rect::new(100_010, -3, 100_030, 6), Rect::EMPTY] {
+                let area = requested.intersect(&canvas);
+                let local = polygon_window(&points, canvas, requested, aa);
+                let mut crop = Vec::new();
+                for y in area.y0..area.y1 {
+                    let start = (y - canvas.y0) as usize * canvas.width() as usize + (area.x0 - canvas.x0) as usize;
+                    crop.extend_from_slice(&full[start..start + area.width() as usize]);
+                }
+                assert_eq!(local, crop, "canvas={canvas:?}, requested={requested:?}, aa={aa}");
+            }
+        }
+    }
+}
+
+#[test]
+fn feather_leaves_everything_beyond_its_reach_at_zero() {
+    for radius in [0.05, 0.5, 2.5, 7.0, 40.0] {
+        let reach = feather_reach(radius);
+        let w = 3 * reach + 20;
+        let mut m = vec![0.0; w];
+        m[0] = 1.0;
+        let out = feather(&m, w, 1, radius);
+        assert!(out[0] > 0.0, "radius {radius}");
+        assert!(out[reach + 1..].iter().all(|v| *v == 0.0), "radius {radius}: nonzero past reach {reach}");
+    }
+}
+
+#[test]
+fn color_matcher_tree_reservation_failure_is_reported() {
+    assert!(ColorBvh::reserve_nodes(usize::MAX).is_err());
+    for n in 0..1024 {
+        let tree = ColorBvh::build(vec![[0.0; 4]; n]).unwrap();
+        assert_eq!(tree.nodes.len(), ColorBvh::node_count(n));
+    }
 }

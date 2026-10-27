@@ -763,6 +763,7 @@ pub fn tone_range(px: &[[f32; 4]], lo: f32, hi: f32, falloff: f32) -> Vec<f32> {
 mod distance;
 mod lasso;
 mod marquee;
+mod morphology;
 
 pub use distance::edt;
 pub(crate) use lasso::clip_segment;
@@ -770,18 +771,15 @@ pub use lasso::{MAX_PAINTED_TILES, polygon_edge_tiles, polygon_surface};
 pub use marquee::{combine_sparse, combine_surfaces, ellipse_surface};
 
 /// Grows the selection by `r` pixels.
+/// Invalid dimensions or nonfinite/negative radii return an empty buffer.
 pub fn expand(m: &[f32], w: usize, h: usize, r: f32) -> Vec<f32> {
-    let inside: Vec<bool> = m.iter().map(|v| *v >= 0.5).collect();
-    let d = edt(&inside, w, h);
-    // A pixel whose centre is `d` away from the nearest selected centre is
-    // covered when d ≤ r (fractional radii give partial coverage).
-    m.iter().zip(d).map(|(v, d)| v.max((r + 1.0 - d).clamp(0.0, 1.0))).collect()
+    morphology::modify(m, w, h, r, morphology::Kind::Expand)
 }
 
 /// Shrinks the selection by `r` pixels.
+/// Invalid dimensions or nonfinite/negative radii return an empty buffer.
 pub fn contract(m: &[f32], w: usize, h: usize, r: f32) -> Vec<f32> {
-    let inv: Vec<f32> = m.iter().map(|v| 1.0 - v).collect();
-    expand(&inv, w, h, r).into_iter().map(|v| 1.0 - v).collect()
+    morphology::modify(m, w, h, r, morphology::Kind::Contract)
 }
 
 /// Select › Modify › Border: a soft band `2r` wide centred on the selection edge, as in
@@ -790,14 +788,9 @@ pub fn contract(m: &[f32], w: usize, h: usize, r: f32) -> Vec<f32> {
 /// either side (measured on Photoshop 27.11, Border 4: 63, 127, 191, 255 | 255, 191, 127, 63
 /// across a straight edge, the same along the inside of a corner). It used to be a hard band
 /// `r` wide.
+/// Invalid dimensions or nonfinite/negative radii return an empty buffer.
 pub fn border(m: &[f32], w: usize, h: usize, r: f32) -> Vec<f32> {
-    let inside: Vec<bool> = m.iter().map(|v| *v >= 0.5).collect();
-    let outside: Vec<bool> = inside.iter().map(|v| !v).collect();
-    let (to_inside, to_outside) = (edt(&inside, w, h), edt(&outside, w, h));
-    if r <= 0.0 || to_inside.len() != m.len() || to_outside.len() != m.len() {
-        return vec![0.0; m.len()];
-    }
-    inside.iter().zip(to_inside.iter().zip(&to_outside)).map(|(&sel, (&di, &dout))| (1.0 - ((if sel { dout } else { di }) - 1.0) / r).clamp(0.0, 1.0)).collect()
+    morphology::modify(m, w, h, r, morphology::Kind::Border)
 }
 
 /// Smooth: removes specks and rounds corners (box average of radius `round(r)`, edges
@@ -813,18 +806,35 @@ pub fn feather(m: &[f32], w: usize, h: usize, radius: f32) -> Vec<f32> {
     crate::selection_blur::feather(m, w, h, radius)
 }
 
+/// How far [`feather`] spreads, in pixels (`⌈3σ⌉` with σ = `radius`, 0 when it changes nothing).
+/// Samples farther than this from every nonzero sample stay 0, so a working window grown by this
+/// much gives the same result as the whole canvas.
+pub fn feather_reach(radius: f32) -> usize {
+    crate::selection_blur::feather_reach(radius)
+}
+
 /// Anti-aliased polygon (even-odd) coverage over `area`: exact horizontal
 /// coverage, 4 sub-rows per pixel row (or 1 when not anti-aliased). Bands of
 /// rows are filled in parallel, and each sub-row tests only the edges that
 /// cross it (an active edge list over the edges sorted by their top).
 pub fn polygon(points: &[(f32, f32)], area: Rect, anti_alias: bool) -> Vec<f32> {
+    polygon_window(points, area, area, anti_alias)
+}
+
+/// Rasterizes only `window` intersected with `canvas`, retaining the coordinate arithmetic of
+/// [`polygon`] over the whole canvas. Keeping that origin avoids rounding changes in fractional
+/// edge coverage when a feathered lasso uses a smaller working mask.
+pub fn polygon_window(points: &[(f32, f32)], canvas: Rect, window: Rect, anti_alias: bool) -> Vec<f32> {
+    let area = window.intersect(&canvas);
     let (w, h) = (area.width() as usize, area.height() as usize);
     let mut m = vec![0.0f32; w * h];
     if points.len() < 3 || w == 0 {
         return m;
     }
     let sub = if anti_alias { 4 } else { 1 };
-    let sample_y = |py: usize, s: usize| area.y0 as f32 + py as f32 + (s as f32 + 0.5) / sub as f32;
+    let dx = (i64::from(area.x0) - i64::from(canvas.x0)) as usize;
+    let dy = (i64::from(area.y0) - i64::from(canvas.y0)) as usize;
+    let sample_y = |py: usize, s: usize| canvas.y0 as f32 + (dy + py) as f32 + (s as f32 + 0.5) / sub as f32;
     // A sub-row at y crosses the edge a→b iff top <= y < bottom; horizontal and NaN edges
     // never cross one.
     struct Edge {
@@ -871,12 +881,13 @@ pub fn polygon(points: &[(f32, f32)], area: Rect, anti_alias: bool) -> Vec<f32> 
                 xs.extend(active.iter().map(|&&Edge { a, b, .. }| a.0 + (y - a.1) / (b.1 - a.1) * (b.0 - a.0)));
                 xs.sort_by(|a, b| a.total_cmp(b));
                 for span in xs.as_chunks::<2>().0 {
-                    let (x0, x1) = ((span[0] - area.x0 as f32).max(0.0), (span[1] - area.x0 as f32).min(w as f32));
+                    let (x0, x1) = ((span[0] - canvas.x0 as f32).max(0.0), (span[1] - canvas.x0 as f32).min(canvas.width() as f32));
                     if x1 <= x0 {
                         continue;
                     }
-                    let (c0, c1) = (x0.floor() as usize, (x1.ceil() as usize).min(w));
+                    let (c0, c1) = ((x0.floor() as usize).saturating_sub(dx), (x1.ceil() as usize).saturating_sub(dx).min(w));
                     for (cx, v) in row.iter_mut().enumerate().take(c1).skip(c0) {
+                        let cx = cx + dx;
                         let cov = if anti_alias {
                             ((cx + 1) as f32).min(x1) - (cx as f32).max(x0)
                         } else {
@@ -911,49 +922,79 @@ pub struct ColorMatcher {
 }
 
 #[derive(Clone, Debug)]
-enum ColorBvh {
-    Empty,
-    Leaf(Vec<[f32; 4]>),
-    Node { min: [f32; 4], max: [f32; 4], left: Box<ColorBvh>, right: Box<ColorBvh> },
+struct ColorBvh {
+    points: Vec<[f32; 4]>,
+    nodes: Vec<ColorNode>,
+}
+
+#[derive(Clone, Debug)]
+enum ColorNode {
+    Leaf { start: usize, end: usize },
+    Branch { min: [f32; 4], max: [f32; 4], left: usize, right: usize },
 }
 
 impl ColorBvh {
-    fn build(mut points: Vec<[f32; 4]>) -> Self {
-        if points.is_empty() {
-            return ColorBvh::Empty;
+    fn build(mut points: Vec<[f32; 4]>) -> Result<Self, &'static str> {
+        let capacity = Self::node_count(points.len());
+        let mut nodes = Self::reserve_nodes(capacity)?;
+        if !points.is_empty() {
+            Self::build_nodes(&mut points, 0, &mut nodes);
         }
+        Ok(Self { points, nodes })
+    }
+
+    fn node_count(len: usize) -> usize {
+        if len == 0 {
+            0
+        } else if len <= 16 {
+            1
+        } else {
+            1 + Self::node_count(len / 2) + Self::node_count(len - len / 2)
+        }
+    }
+
+    fn reserve_nodes(capacity: usize) -> Result<Vec<ColorNode>, &'static str> {
+        let mut nodes = Vec::new();
+        nodes.try_reserve_exact(capacity).map_err(|_| "not enough memory to index selection colours")?;
+        Ok(nodes)
+    }
+
+    // Reserve the exact node count before recursion so pushes cannot allocate.
+    fn build_nodes(points: &mut [[f32; 4]], start: usize, nodes: &mut Vec<ColorNode>) -> usize {
         if points.len() <= 16 {
-            return ColorBvh::Leaf(points);
+            let index = nodes.len();
+            nodes.push(ColorNode::Leaf { start, end: start + points.len() });
+            return index;
         }
         let (mut min, mut max) = ([f32::MAX; 4], [f32::MIN; 4]);
-        for p in &points {
+        for p in points.iter() {
             for c in 0..4 {
                 min[c] = min[c].min(p[c]);
                 max[c] = max[c].max(p[c]);
             }
         }
-        let mut best_axis = 0;
-        let mut max_spread = -1.0;
-        for c in 0..4 {
-            let spread = max[c] - min[c];
-            if spread > max_spread {
-                max_spread = spread;
-                best_axis = c;
+        let mut axis = 0;
+        for c in 1..4 {
+            if max[c] - min[c] > max[axis] - min[axis] {
+                axis = c;
             }
         }
         let mid = points.len() / 2;
-        points.select_nth_unstable_by(mid, |a, b| a[best_axis].total_cmp(&b[best_axis]));
-        let right_pts = points.split_off(mid);
-        let left = ColorBvh::build(points);
-        let right = ColorBvh::build(right_pts);
-        ColorBvh::Node { min, max, left: Box::new(left), right: Box::new(right) }
+        points.select_nth_unstable_by(mid, |a, b| a[axis].total_cmp(&b[axis]));
+        let (left_points, right_points) = points.split_at_mut(mid);
+        let left = Self::build_nodes(left_points, start, nodes);
+        let right = Self::build_nodes(right_points, start + mid, nodes);
+        let index = nodes.len();
+        nodes.push(ColorNode::Branch { min, max, left, right });
+        index
     }
 
-    fn matches(&self, q: &[f32; 4], tol: f32) -> bool {
-        match self {
-            ColorBvh::Empty => false,
-            ColorBvh::Leaf(pts) => pts.iter().any(|p| (0..4).all(|c| (q[c] - p[c]).abs() <= tol + 1e-6)),
-            ColorBvh::Node { min, max, left, right } => {
+    fn matches_node(&self, index: usize, q: &[f32; 4], tol: f32) -> bool {
+        match self.nodes.get(index) {
+            Some(ColorNode::Leaf { start, end }) => {
+                self.points.get(*start..*end).is_some_and(|pts| pts.iter().any(|p| (0..4).all(|c| (q[c] - p[c]).abs() <= tol + 1e-6)))
+            }
+            Some(ColorNode::Branch { min, max, left, right }) => {
                 for c in 0..4 {
                     let d = if q[c] < min[c] {
                         min[c] - q[c]
@@ -966,9 +1007,14 @@ impl ColorBvh {
                         return false;
                     }
                 }
-                left.matches(q, tol) || right.matches(q, tol)
+                self.matches_node(*left, q, tol) || self.matches_node(*right, q, tol)
             }
+            None => false,
         }
+    }
+
+    fn matches(&self, q: &[f32; 4], tol: f32) -> bool {
+        self.nodes.len().checked_sub(1).is_some_and(|root| self.matches_node(root, q, tol))
     }
 }
 
@@ -1005,13 +1051,13 @@ impl ColorMatcher {
         });
         opaque_or_semi.dedup_by(|a, b| a == b);
 
-        Ok(Self { has_transparent, tree: ColorBvh::build(opaque_or_semi), tol: tol.max(0.0) })
+        Ok(Self { has_transparent, tree: ColorBvh::build(opaque_or_semi)?, tol: tol.max(0.0) })
     }
 
     /// Returns `true` if no colors (including transparent pixels) were provided.
     #[inline]
     pub fn is_empty(&self) -> bool {
-        !self.has_transparent && matches!(self.tree, ColorBvh::Empty)
+        !self.has_transparent && self.tree.nodes.is_empty()
     }
 
     /// Returns `true` if `q` falls within `tol` of any selected color.
