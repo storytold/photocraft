@@ -1,4 +1,8 @@
-use super::*;
+use super::DOCUMENT_ITEM;
+use crate::PhotocraftApp;
+use crate::state::DialogKind;
+use serde_json::{Value, json};
+
 
 /// Photoshop's Window › <panel> ids for the panels the shell already has, as `window.toggle.*`.
 pub(crate) fn panel_alias(id: &str) -> Option<&'static str> {

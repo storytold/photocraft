@@ -13,6 +13,7 @@ use crate::PhotocraftApp;
 use crate::canvas::ViewXform;
 use crate::shape_gradient_ui::GradientChoices;
 use crate::shape_paint_ui::{PaintChange, paint_param, swatch};
+
 use crate::state::{Tool, ToolOptions};
 use crate::theme::Tokens;
 

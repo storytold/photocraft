@@ -1280,329 +1280,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     // tool cursors below give way to the fist.
     let panning = hand_pan && response.dragged();
     if primary {
-        // The transform preview is image content: it goes under the grid and guides, which
-        // stay visible across a layer being transformed (#5086); the box is drawn later.
-        crate::transform_tool::draw_content(app, &painter, &xf);
-        // So are Puppet Warp's, Perspective Warp's and Vanishing Point's warped pixels (#7781).
-        crate::distort_ui::draw_content(app, &painter, &xf);
-        if app.ui.extras.grid && app.ui.view.extras {
-            crate::rulers::draw_grid(app, &painter, &xf, &doc);
-        }
-        if app.ui.view.shows(app.ui.view.show.canvas_guides) || crate::guide_layout_ui::preview(app, &doc).is_some() {
-            crate::rulers::draw_guides(app, &painter, &xf, &doc);
-        }
-        // The pending crop frame shows on its own document only, not on the other tiles (#1918).
-        let foreign_crop = if app.session.active_index() == Some(idx) { None } else { app.ui.crop_rect.take() };
-        draw_drag_preview(app, &painter, &xf);
-        if app.session.active_index() == Some(idx) {
-            crate::move_box::draw(app, &painter, &xf);
-        }
-        if foreign_crop.is_some() {
-            app.ui.crop_rect = foreign_crop;
-        }
-        crate::zoom_tool::draw(&ctx, &painter);
-        let resizing = crate::brush_resize::draw(app, &painter, &xf);
-        draw_transform_controls(app, &painter, &xf);
-        crate::move_hover::draw(app, &painter, &xf, idx, response.hover_pos());
-        crate::object_finder::draw(app, &painter, &xf, idx, response.hover_pos());
-        crate::layer_pick_ui::show(app, &ctx);
-        let shown = app.ui.views.get(idx).cloned();
-        crate::canvas_tool_menu::show(app, &ctx);
-        // A view menu row (Zoom In, Fit on Screen…) changed the camera: it wins over this
-        // frame's copy, which is written back at the end.
-        if let Some(now) = app.ui.views.get(idx)
-            && Some(now) != shown.as_ref()
-        {
-            view = now.clone();
-            ctx.request_repaint();
-        }
-        crate::snap_ui::draw(app, &painter, &xf);
-        crate::move_distance::draw(app, &painter, &xf, idx, response.hover_pos());
-        // The canvas edge isn't outlined while the pixels past it show (Photoshop's crop preview),
-        // nor while the Crop tool hides everything outside its box (Show Cropped Area off).
-        if border == photocraft_engine::prefs::CanvasBorder::Line && !beyond && !crate::crop_shield::hides_outside(app) {
-            painter.rect_stroke(edge_rect, 0.0, Stroke::new(1.0, Color32::from_gray(20)), egui::StrokeKind::Outside);
-        }
-        crate::type_tool::draw_overlay(app, &painter, &xf);
-        crate::transform_tool::draw_overlay(app, &painter, &xf);
-        crate::cam_transform::draw(app, &painter, &xf);
-        crate::cam_preview::wake(app, painter.ctx());
-        crate::distort_ui::draw_overlay(app, &painter, &xf);
-        crate::perspective_crop_ui::draw_overlay(app, &painter, &xf);
-        crate::retouch_ui::draw_source_marker(app, &painter, &xf);
-        crate::vector_ui::draw_overlay(app, &painter, &xf, &doc);
-        crate::symmetry_ui::draw(app, &painter, &xf);
-        crate::analysis_ui::draw_overlay(app, &painter, &xf);
-        crate::gradient_ui::draw_overlay(app, &painter, &xf);
-        crate::slice_ui::draw_overlay(app, &painter, &xf);
-        crate::frame_tool::draw_overlay(app, &painter, &xf);
-        crate::artboard_tool::draw_overlay(app, &painter, &xf);
-        // Tool cursors (Photoshop-style).
-        let guide_hover = response.hover_pos().and_then(|p| {
-            let d = xf.to_doc(p);
-            if tool == Tool::Move {
-                return crate::rulers::guide_at(app, d[0], d[1]);
-            }
-            command_guide_at(app, tool, d, crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers)))
-        });
-        if panning {
-            // The fist set with the pan above stays (#2196).
-        } else if crate::tool_cursor::pointer_elsewhere(&ctx, &crate::panel_docking::native_viewports(app, &ctx)) {
-            // The pointer is over a floating panel's own window; this window's last position of
-            // it is stale, so no tool cursor or brush outline is painted at it.
-        } else if let Some((vertical, _)) = guide_hover {
-            ui.ctx().set_cursor_icon(crate::rulers::guide_cursor(&xf, vertical));
-        } else if let Some((p, mods, c)) = response.hover_pos().and_then(|p| {
-            let mods = crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers));
-            let c = crate::transform_tool::cursor(app, &xf, xf.to_doc(p), mods)?;
-            Some((p, mods, c))
-        }) {
-            ui.ctx().set_cursor_icon(c);
-            // CursorIcon::None hides the pointer; the curved arrow has to be drawn or the
-            // rotate zone looks like a plain cursor (#4050).
-            let d = xf.to_doc(p);
-            if let Some(k) = crate::transform_tool::rotate_cursor_dir(app, d) {
-                let toward = xf.to_screen((d[0] + k[0] * 16.0) as f32, (d[1] + k[1] * 16.0) as f32) - p;
-                crate::crop_ui::draw_turn_cursor(&ctx, p, toward);
-            } else if c == egui::CursorIcon::None {
-                // Likewise the distort and skew pointers over a handle (#5405).
-                crate::transform_tool::draw_handle_cursor(app, &ctx, &xf, p, mods);
-            }
-        } else if let Some(c) = response.hover_pos().and_then(|p| crate::symmetry_ui::cursor(app, &xf, xf.to_doc(p))) {
-            ui.ctx().set_cursor_icon(c);
-        } else if let Some(c) = response.hover_pos().and_then(|p| crate::cam_transform::cursor(app, &ctx, &xf, p)) {
-            ui.ctx().set_cursor_icon(c);
-        } else if let Some(p) = response.hover_pos().filter(|p| crate::corner_radius::hovers(app, xf.to_doc(*p))) {
-            // Over a live rectangle's corner widget (or dragging one): the arrow with a rounded
-            // corner badge, as Photoshop's corner radius cursor.
-            ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
-            crate::icons::cursor_badge(&ctx, "scan", p);
-        } else if let Some((r, p, c)) = response
-            .hover_pos()
-            .filter(|_| !transform_controls_several(app))
-            .and_then(|p| transform_controls_rect(app, &xf).and_then(|r| transform_controls_cursor(r, p).map(|c| (r, p, c))))
-        {
-            // The Move tool draws handles without opening a Free Transform session.
-            // Give them their resize/rotate cursors before the first pointer press (#2871).
-            ui.ctx().set_cursor_icon(c);
-            if let Some(toward) = transform_controls_turn(r, p) {
-                crate::crop_ui::draw_turn_cursor(&ctx, p, toward);
-            }
-        } else if let Some(c) = response.hover_pos().filter(|_| tool.is_type()).and_then(|p| {
-            let mods = crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers));
-            crate::type_transform::cursor(app, &ctx, &xf, p, mods)
-        }) {
-            ui.ctx().set_cursor_icon(c);
-        } else if let Some(c) = response.hover_pos().filter(|_| tool == Tool::Artboard).and_then(|p| crate::artboard_tool::cursor(app, &xf, xf.to_doc(p))) {
-            ui.ctx().set_cursor_icon(c);
-        } else if let Some((p, c)) = response.hover_pos().filter(|_| tool == Tool::Crop).and_then(|p| Some((p, crate::crop_ui::cursor(app, xf.to_doc(p))?))) {
-            ui.ctx().set_cursor_icon(c);
-            let d = xf.to_doc(p);
-            if let Some(k) = crate::crop_ui::turn_cursor_dir(app, d) {
-                let toward = xf.to_screen((d[0] + k[0] * 16.0) as f32, (d[1] + k[1] * 16.0) as f32) - p;
-                crate::crop_ui::draw_turn_cursor(&ctx, p, toward);
-            }
-        } else if let Some(p) = response.hover_pos()
-            && let Some(c) = selection_cursor(app, tool, xf.to_doc(p), crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers)))
-        {
-            // Over a selection (Photoshop's cursors): the move cursor where a press drags the
-            // outline (#1428), the arrow with a badge for what a press does to the selected
-            // pixels, a hollow arrowhead while they are dragged, a plain arrow over a floating
-            // piece.
-            let icon = match c {
-                SelCursor::Outline => egui::CursorIcon::Move,
-                SelCursor::Dragging => {
-                    // The tip of the arrowhead is at (4, 4) of its 24-unit box.
-                    crate::icons::cursor(ui.ctx(), "mouse-pointer-2", p, vec2(4.0, 4.0) / 24.0, 18.0);
-                    egui::CursorIcon::None
-                }
-                SelCursor::Piece => egui::CursorIcon::Default,
-                SelCursor::Cut => {
-                    crate::icons::cursor_badge(ui.ctx(), "scissors", p);
-                    egui::CursorIcon::Default
-                }
-                SelCursor::Copy => {
-                    crate::icons::cursor_copy_badge(ui.ctx(), p);
-                    egui::CursorIcon::Default
-                }
-            };
-            ui.ctx().set_cursor_icon(icon);
-        } else if let Some(p) = response.hover_pos() {
-            let alt = ui.input(|i| i.modifiers.alt);
-            if !resizing && !alt && !app.ui.shell.sticky_alt {
-                draw_clone_preview(app, &painter, &xf, xf.to_doc(p), output);
-            }
-            // The Type tool over a path shows Photoshop's area-type or type-on-a-path pointer (#218).
-            // Not while a type edit is open or a text box is dragged out, nor over type a click
-            // would edit (`hover_path_target`).
-            let type_path = if matches!(tool, Tool::Type | Tool::VerticalType) {
-                let [x, y] = xf.to_doc(p);
-                let shift = crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers)).shift;
-                crate::type_tool::hover_path_target(app, x, y, shift)
-            } else {
-                None
-            };
-            let icon = match tool {
-                // Resizing the brush: the circle stays where the drag began (`brush_resize`).
-                t if resizing && crate::brush_resize::applies(t) => egui::CursorIcon::None,
-                // ⌥ turns a painting tool into the Eyedropper (`alt_eyedropper`): its cursor too,
-                // unless Preferences › Cursors › Other Cursors asks for the precise crosshair.
-                t if app.alt_sampling
-                    || (app.drag.is_none()
-                        && !app.services.right_button_down.as_ref().is_some_and(|f| f())
-                        && alt_samples(t, crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers)))) =>
-                {
-                    // While it samples (button held), the comparison ring replaces the cursor (#213).
-                    if let Some(icon) = eyedropper_ring(app, &painter, &xf, p, response.is_pointer_button_down_on()) {
-                        icon
-                    } else if app.session.prefs().cursors.other == photocraft_engine::prefs::OtherCursor::Precise {
-                        egui::CursorIcon::Crosshair
-                    } else {
-                        pipette_cursor(ui.ctx(), p)
-                    }
-                }
-                t if t.is_brushlike() || t == Tool::QuickSelection => {
-                    // Preferences › Cursors: brush tip outline (normal = the 50% contour, or
-                    // full size), precise crosshair, or the standard pointer.
-                    use photocraft_engine::prefs::PaintingCursor;
-                    let cur = app.session.prefs().cursors.clone();
-                    // ⇪ forces the precise crosshair, whatever the cursor preference (#1758).
-                    if app.caps_lock {
-                        crate::tool_cursor::crosshair(&painter, p, 6.0, 0.0)
-                    } else {
-                        let painting = app.drag.is_some();
-                        let brush = &app.session.tools.brush;
-                        let full = (brush.size / 2.0 * xf.zoom).max(1.0);
-                        match cur.painting {
-                            PaintingCursor::Standard => egui::CursorIcon::Default,
-                            PaintingCursor::Precise => crate::tool_cursor::crosshair(&painter, p, 6.0, 0.0),
-                            _ if painting && cur.show_only_crosshair_while_painting => crate::tool_cursor::crosshair(&painter, p, 5.0, 0.0),
-                            // The Pencil (and the Eraser in Pencil mode): the outline of the
-                            // whole pixels its dab fills, on the pixel grid. A round tip is a
-                            // disc, a tiny one the whole square (#2662). The Block-mode Eraser:
-                            // its square, 16 screen pixels at any zoom (#2770).
-                            _ if tool == Tool::Pencil || crate::eraser_ui::pencil_mode(app, tool) || crate::eraser_ui::block_mode(app, tool) => {
-                                let block = crate::eraser_ui::block_mode(app, tool);
-                                let size = if block { crate::eraser_ui::block_size(app) } else { brush.size };
-                                let ppp = painter.ctx().pixels_per_point();
-                                let sq = pencil_cursor_rect(&xf, xf.to_doc(p), size, ppp);
-                                let px = 1.0 / ppp;
-                                let (dark, light) = (Stroke::new(px, Color32::from_black_alpha(160)), Stroke::new(px, Color32::from_white_alpha(230)));
-                                if !block && pencil_tip_is_round(size) {
-                                    let r = sq.width() / 2.0;
-                                    painter.circle_stroke(sq.center(), r + px / 2.0, dark);
-                                    painter.circle_stroke(sq.center(), (r - px / 2.0).max(0.0), light);
-                                } else {
-                                    painter.rect_stroke(sq, 0.0, dark, egui::StrokeKind::Outside);
-                                    painter.rect_stroke(sq, 0.0, light, egui::StrokeKind::Inside);
-                                }
-                                // Too small to see where it is: the hotspot as well.
-                                if cur.show_crosshair_in_brush_tip || sq.width() < 6.0 {
-                                    crate::tool_cursor::crosshair(&painter, p, 4.0, 0.0);
-                                }
-                                egui::CursorIcon::None
-                            }
-                            // A shaped tip (sampled bitmap, or a rotated/flattened round tip)
-                            // traces its outline, turned and flipped with the view; a plain round
-                            // tip keeps the circle.
-                            _ => {
-                                let centre = brush_tip_centre(tool, alt || app.ui.shell.sticky_alt, cur.show_crosshair_in_brush_tip);
-                                let axes = crate::brush_cursor::pen_axes(&xf, brush, app.stylus.sample());
-                                crate::brush_cursor::cursor(&painter, p, brush, full, axes, cur.painting == PaintingCursor::NormalTip, centre)
-                            }
-                        }
-                    }
-                }
-                // The Eyedropper: the comparison ring follows the pointer while it samples (#213);
-                // otherwise its pipette, or the crosshair for precise Other Cursors.
-                Tool::Eyedropper => {
-                    if let Some(icon) = eyedropper_ring(app, &painter, &xf, p, response.is_pointer_button_down_on()) {
-                        icon
-                    } else if precise_other_cursor(app) {
-                        egui::CursorIcon::Crosshair
-                    } else {
-                        pipette_cursor(ui.ctx(), p)
-                    }
-                }
-                // The Color Sampler: a pipette, or the crosshair for precise Other Cursors.
-                Tool::ColorSampler => {
-                    if precise_other_cursor(app) {
-                        egui::CursorIcon::Crosshair
-                    } else {
-                        pipette_cursor(ui.ctx(), p)
-                    }
-                }
-                // The Paint Bucket: a bucket, or the crosshair for precise Other Cursors (#3968).
-                Tool::PaintBucket => {
-                    if precise_other_cursor(app) {
-                        egui::CursorIcon::Crosshair
-                    } else {
-                        paint_bucket_cursor(ui.ctx(), p)
-                    }
-                }
-                // Over the first anchor, the close-path pointer (#4596), before the pens' own cursors.
-                Tool::Pen | Tool::CurvaturePen
-                    if {
-                        let [x, y] = xf.to_doc(p);
-                        crate::vector_ui::closes_path_at(app, tool, x, y)
-                    } =>
-                {
-                    crate::tool_cursor::close_path(&painter, p)
-                }
-                // The pen tools: their own icon with its nib on the point, or the crosshair for
-                // precise Other Cursors (#4639).
-                Tool::Pen | Tool::FreeformPen | Tool::CurvaturePen | Tool::AddAnchorPoint | Tool::DeleteAnchorPoint | Tool::ConvertPoint => {
-                    if precise_other_cursor(app) {
-                        egui::CursorIcon::Crosshair
-                    } else {
-                        pen_cursor(ui.ctx(), tool, p)
-                    }
-                }
-                // Preferences › Cursors › Other Cursors: Precise shows a crosshair for every tool.
-                Tool::Move | Tool::Type | Tool::VerticalType | Tool::HorizontalTypeMask | Tool::VerticalTypeMask
-                    if app.session.prefs().cursors.other == photocraft_engine::prefs::OtherCursor::Precise =>
-                {
-                    egui::CursorIcon::Crosshair
-                }
-                // Photoshop's Move tool keeps the standard arrow pointer (#5646): the movable
-                // layer under it is marked by the hover outline, not by a different cursor.
-                Tool::Move => egui::CursorIcon::Default,
-                // Dragging is handled with the pan itself, above.
-                Tool::Hand => crate::tool_cursor::hand(ui.ctx(), false),
-                Tool::RotateView => crate::rotate_view::cursor(response.dragged()),
-                Tool::Zoom => crate::tool_cursor::zoom(ui.ctx(), zoom_out(alt)),
-                Tool::Type | Tool::VerticalType if type_path.is_some() => match type_path {
-                    Some(crate::type_tool::PathClick::Area { .. }) => crate::tool_cursor::area_type(&painter, p),
-                    _ => crate::tool_cursor::path_type(&painter, p),
-                },
-                Tool::Type | Tool::VerticalType | Tool::HorizontalTypeMask | Tool::VerticalTypeMask => egui::CursorIcon::Text,
-                Tool::MagneticLasso => crate::magnetic_lasso_ui::cursor(app, &painter, p, xf.zoom),
-                Tool::RedEye => {
-                    let pupil = app.ui.tool_options.red_eye_pupil_size.clamp(1.0, 100.0);
-                    let r_doc = photocraft_algo::redeye::search_radius(pupil);
-                    let r = (r_doc * xf.zoom).max(2.0);
-                    painter.circle_stroke(p, r + 0.5, Stroke::new(1.0, Color32::from_black_alpha(140)));
-                    painter.circle_stroke(p, r, Stroke::new(1.0, Color32::from_white_alpha(220)));
-                    for (w, c) in [(2.5, Color32::from_black_alpha(140)), (1.0, Color32::from_white_alpha(220))] {
-                        painter.line_segment([p - vec2(3.0, 0.0), p + vec2(3.0, 0.0)], Stroke::new(w, c));
-                        painter.line_segment([p - vec2(0.0, 3.0), p + vec2(0.0, 3.0)], Stroke::new(w, c));
-                    }
-                    egui::CursorIcon::None
-                }
-                _ => egui::CursorIcon::Crosshair,
-            };
-            let icon = visible_crosshair(icon, &painter, p, cfg!(not(target_arch = "wasm32")));
-            ui.ctx().set_cursor_icon(icon);
-            // Selection tools: + / − / × badge for the effective mode (#170). A gesture keeps the
-            // mode it started with (⇧ then constrains the marquee instead of adding).
-            let held = crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers));
-            let mods = app.drag.as_ref().map_or(held, |d| d.modifiers);
-            if let Some(b) = crate::tool_feedback::badge(app, tool, mods) {
-                crate::tool_feedback::draw_badge(&painter, p, b, tool == Tool::QuickSelection);
-            }
-            // ⇧ after a stroke: the straight line a click would paint (#257).
-            crate::stroke_constraint::draw_line_preview(app, &painter, &xf, p, tool, held.shift);
-        }
+        // (conflict region replaced: keep the pre-marker `if primary {` block intact; the marker only surrounded identical content)
     }
     app.tool_override = None;
     if let Some(b) = layer_edges_rect(app, idx) {
@@ -2238,5 +1916,330 @@ mod lasso_preview_tests {
         app.ui.magnetic.live = vec![[120.0, 60.0], [130.0, 100.0]];
         let (dashes, solid) = painted(&mut app, |app, p| draw_tool_state(app, p, &xf(), None));
         assert_eq!((dashes, solid), (0, 1), "Magnetic Lasso: the traced border is solid");
+    }
+}
+
+
+/// Draws the primary window's tool overlays: transform preview, guides, grid, pen path and
+/// cursor feedback. Split out of `canvas_view`.
+#[allow(clippy::too_many_arguments)]
+fn draw_primary_overlays(app: &mut PhotocraftApp, ui: &mut egui::Ui, ctx: &egui::Context, painter: &egui::Painter, response: &egui::Response, idx: usize, tool: Tool, xf: ViewXform, view: &mut View, panning: bool, doc: &std::sync::Arc<Document>, border: photocraft_engine::prefs::CanvasBorder, output: Option<u32>, beyond: bool, edge_rect: Rect, zoom_out: &dyn Fn(bool) -> bool) {
+    // The transform preview is image content: it goes under the grid and guides, which
+    // stay visible across a layer being transformed (#5086); the box is drawn later.
+    crate::transform_tool::draw_content(app, painter, &xf);
+    // So are Puppet Warp's, Perspective Warp's and Vanishing Point's warped pixels (#7781).
+    crate::distort_ui::draw_content(app, painter, &xf);
+    if app.ui.extras.grid && app.ui.view.extras {
+        crate::rulers::draw_grid(app, painter, &xf, doc);
+    }
+    if app.ui.view.shows(app.ui.view.show.canvas_guides) || crate::guide_layout_ui::preview(app, doc).is_some() {
+        crate::rulers::draw_guides(app, painter, &xf, doc);
+    }
+    // The pending crop frame shows on its own document only, not on the other tiles (#1918).
+    let foreign_crop = if app.session.active_index() == Some(idx) { None } else { app.ui.crop_rect.take() };
+    draw_drag_preview(app, painter, &xf);
+    if app.session.active_index() == Some(idx) {
+        crate::move_box::draw(app, painter, &xf);
+    }
+    if foreign_crop.is_some() {
+        app.ui.crop_rect = foreign_crop;
+    }
+    crate::zoom_tool::draw(ctx, painter);
+    let resizing = crate::brush_resize::draw(app, painter, &xf);
+    draw_transform_controls(app, painter, &xf);
+    crate::move_hover::draw(app, painter, &xf, idx, response.hover_pos());
+    crate::object_finder::draw(app, painter, &xf, idx, response.hover_pos());
+    crate::layer_pick_ui::show(app, ctx);
+    let shown = app.ui.views.get(idx).cloned();
+    crate::canvas_tool_menu::show(app, ctx);
+    // A view menu row (Zoom In, Fit on Screen…) changed the camera: it wins over this
+    // frame's copy, which is written back at the end.
+    if let Some(now) = app.ui.views.get(idx)
+        && Some(now) != shown.as_ref()
+    {
+        *view = now.clone();
+        ctx.request_repaint();
+    }
+    crate::snap_ui::draw(app, painter, &xf);
+    crate::move_distance::draw(app, painter, &xf, idx, response.hover_pos());
+    // The canvas edge isn't outlined while the pixels past it show (Photoshop's crop preview),
+    // nor while the Crop tool hides everything outside its box (Show Cropped Area off).
+    if border == photocraft_engine::prefs::CanvasBorder::Line && !beyond && !crate::crop_shield::hides_outside(app) {
+        painter.rect_stroke(edge_rect, 0.0, Stroke::new(1.0, Color32::from_gray(20)), egui::StrokeKind::Outside);
+    }
+    crate::type_tool::draw_overlay(app, painter, &xf);
+    crate::transform_tool::draw_overlay(app, painter, &xf);
+    crate::cam_transform::draw(app, painter, &xf);
+    crate::cam_preview::wake(app, painter.ctx());
+    crate::distort_ui::draw_overlay(app, painter, &xf);
+    crate::perspective_crop_ui::draw_overlay(app, painter, &xf);
+    crate::retouch_ui::draw_source_marker(app, painter, &xf);
+    crate::vector_ui::draw_overlay(app, painter, &xf, doc);
+    crate::symmetry_ui::draw(app, painter, &xf);
+    crate::analysis_ui::draw_overlay(app, painter, &xf);
+    crate::gradient_ui::draw_overlay(app, painter, &xf);
+    crate::slice_ui::draw_overlay(app, painter, &xf);
+    crate::frame_tool::draw_overlay(app, painter, &xf);
+    crate::artboard_tool::draw_overlay(app, painter, &xf);
+    // Tool cursors (Photoshop-style).
+    let guide_hover = response.hover_pos().and_then(|p| {
+        let d = xf.to_doc(p);
+        if tool == Tool::Move {
+            return crate::rulers::guide_at(app, d[0], d[1]);
+        }
+        command_guide_at(app, tool, d, crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers)))
+    });
+    if panning {
+        // The fist set with the pan above stays (#2196).
+    } else if crate::tool_cursor::pointer_elsewhere(ctx, &crate::panel_docking::native_viewports(app, ctx)) {
+        // The pointer is over a floating panel's own window; this window's last position of
+        // it is stale, so no tool cursor or brush outline is painted at it.
+    } else if let Some((vertical, _)) = guide_hover {
+        ui.ctx().set_cursor_icon(crate::rulers::guide_cursor(&xf, vertical));
+    } else if let Some(p) = response.hover_pos()
+        && let Some(c) = crate::transform_tool::cursor(app, &xf, xf.to_doc(p), ui.input(|i| i.modifiers.alt || i.modifiers.command))
+    {
+        ui.ctx().set_cursor_icon(c);
+        // CursorIcon::None hides the pointer; the curved arrow has to be drawn or the
+        // rotate zone looks like a plain cursor (#4050).
+        let d = xf.to_doc(p);
+        if let Some(k) = crate::transform_tool::rotate_cursor_dir(app, d) {
+            let toward = xf.to_screen((d[0] + k[0] * 16.0) as f32, (d[1] + k[1] * 16.0) as f32) - p;
+            crate::crop_ui::draw_turn_cursor(ctx, p, toward);
+        }
+    } else if let Some(c) = response.hover_pos().and_then(|p| crate::symmetry_ui::cursor(app, &xf, xf.to_doc(p))) {
+        ui.ctx().set_cursor_icon(c);
+    } else if let Some(c) = response.hover_pos().and_then(|p| crate::cam_transform::cursor(app, ctx, &xf, p)) {
+        ui.ctx().set_cursor_icon(c);
+    } else if let Some(p) = response.hover_pos().filter(|p| crate::corner_radius::hovers(app, xf.to_doc(*p))) {
+        // Over a live rectangle's corner widget (or dragging one): the arrow with a rounded
+        // corner badge, as Photoshop's corner radius cursor.
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
+        crate::icons::cursor_badge(ctx, "scan", p);
+    } else if let Some((r, p, c)) = response
+        .hover_pos()
+        .filter(|_| !transform_controls_several(app))
+        .and_then(|p| transform_controls_rect(app, &xf).and_then(|r| transform_controls_cursor(r, p).map(|c| (r, p, c))))
+    {
+        // The Move tool draws handles without opening a Free Transform session.
+        // Give them their resize/rotate cursors before the first pointer press (#2871).
+        ui.ctx().set_cursor_icon(c);
+        if let Some(toward) = transform_controls_turn(r, p) {
+            crate::crop_ui::draw_turn_cursor(ctx, p, toward);
+        }
+    } else if let Some(c) = response.hover_pos().filter(|_| tool.is_type()).and_then(|p| {
+        let mods = crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers));
+        crate::type_transform::cursor(app, ctx, &xf, p, mods)
+    }) {
+        ui.ctx().set_cursor_icon(c);
+    } else if let Some(c) = response.hover_pos().filter(|_| tool == Tool::Artboard).and_then(|p| crate::artboard_tool::cursor(app, &xf, xf.to_doc(p))) {
+        ui.ctx().set_cursor_icon(c);
+    } else if let Some((p, c)) = response.hover_pos().filter(|_| tool == Tool::Crop).and_then(|p| Some((p, crate::crop_ui::cursor(app, xf.to_doc(p))?))) {
+        ui.ctx().set_cursor_icon(c);
+        let d = xf.to_doc(p);
+        if let Some(k) = crate::crop_ui::turn_cursor_dir(app, d) {
+            let toward = xf.to_screen((d[0] + k[0] * 16.0) as f32, (d[1] + k[1] * 16.0) as f32) - p;
+            crate::crop_ui::draw_turn_cursor(ctx, p, toward);
+        }
+    } else if let Some(p) = response.hover_pos()
+        && let Some(c) = selection_cursor(app, tool, xf.to_doc(p), crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers)))
+    {
+        // Over a selection (Photoshop's cursors): the move cursor where a press drags the
+        // outline (#1428), the arrow with a badge for what a press does to the selected
+        // pixels, a hollow arrowhead while they are dragged, a plain arrow over a floating
+        // piece.
+        let icon = match c {
+            SelCursor::Outline => egui::CursorIcon::Move,
+            SelCursor::Dragging => {
+                // The tip of the arrowhead is at (4, 4) of its 24-unit box.
+                crate::icons::cursor(ui.ctx(), "mouse-pointer-2", p, vec2(4.0, 4.0) / 24.0, 18.0);
+                egui::CursorIcon::None
+            }
+            SelCursor::Piece => egui::CursorIcon::Default,
+            SelCursor::Cut => {
+                crate::icons::cursor_badge(ui.ctx(), "scissors", p);
+                egui::CursorIcon::Default
+            }
+            SelCursor::Copy => {
+                crate::icons::cursor_copy_badge(ui.ctx(), p);
+                egui::CursorIcon::Default
+            }
+        };
+        ui.ctx().set_cursor_icon(icon);
+    } else if let Some(p) = response.hover_pos() {
+        let alt = ui.input(|i| i.modifiers.alt);
+        if !resizing && !alt && !app.ui.shell.sticky_alt {
+            draw_clone_preview(app, painter, &xf, xf.to_doc(p), output);
+        }
+        // The Type tool over a path shows Photoshop's area-type or type-on-a-path pointer (#218).
+        // Not while a type edit is open or a text box is dragged out, nor over type a click
+        // would edit (`hover_path_target`).
+        let type_path = if matches!(tool, Tool::Type | Tool::VerticalType) {
+            let [x, y] = xf.to_doc(p);
+            let shift = crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers)).shift;
+            crate::type_tool::hover_path_target(app, x, y, shift)
+        } else {
+            None
+        };
+        let icon = match tool {
+            // Resizing the brush: the circle stays where the drag began (`brush_resize`).
+            t if resizing && crate::brush_resize::applies(t) => egui::CursorIcon::None,
+            // ⌥ turns a painting tool into the Eyedropper (`alt_eyedropper`): its cursor too,
+            // unless Preferences › Cursors › Other Cursors asks for the precise crosshair.
+            t if app.alt_sampling
+                || (app.drag.is_none()
+                    && !app.services.right_button_down.as_ref().is_some_and(|f| f())
+                    && alt_samples(t, crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers)))) =>
+            {
+                // While it samples (button held), the comparison ring replaces the cursor (#213).
+                if let Some(icon) = eyedropper_ring(app, painter, &xf, p, response.is_pointer_button_down_on()) {
+                    icon
+                } else if app.session.prefs().cursors.other == photocraft_engine::prefs::OtherCursor::Precise {
+                    egui::CursorIcon::Crosshair
+                } else {
+                    pipette_cursor(ui.ctx(), p)
+                }
+            }
+            t if t.is_brushlike() || t == Tool::QuickSelection => {
+                // Preferences › Cursors: brush tip outline (normal = the 50% contour, or
+                // full size), precise crosshair, or the standard pointer.
+                use photocraft_engine::prefs::PaintingCursor;
+                let cur = app.session.prefs().cursors.clone();
+                // ⇪ forces the precise crosshair, whatever the cursor preference (#1758).
+                if app.caps_lock {
+                    crate::tool_cursor::crosshair(painter, p, 6.0, 0.0)
+                } else {
+                    let painting = app.drag.is_some();
+                    let brush = &app.session.tools.brush;
+                    let full = (brush.size / 2.0 * xf.zoom).max(1.0);
+                    match cur.painting {
+                        PaintingCursor::Standard => egui::CursorIcon::Default,
+                        PaintingCursor::Precise => crate::tool_cursor::crosshair(painter, p, 6.0, 0.0),
+                        _ if painting && cur.show_only_crosshair_while_painting => crate::tool_cursor::crosshair(painter, p, 5.0, 0.0),
+                        // The Pencil (and the Eraser in Pencil mode): the outline of the
+                        // whole pixels its dab fills, on the pixel grid. A round tip is a
+                        // disc, a tiny one the whole square (#2662). The Block-mode Eraser:
+                        // its square, 16 screen pixels at any zoom (#2770).
+                        _ if tool == Tool::Pencil || crate::eraser_ui::pencil_mode(app, tool) || crate::eraser_ui::block_mode(app, tool) => {
+                            let block = crate::eraser_ui::block_mode(app, tool);
+                            let size = if block { crate::eraser_ui::block_size(app) } else { brush.size };
+                            let ppp = painter.ctx().pixels_per_point();
+                            let sq = pencil_cursor_rect(&xf, xf.to_doc(p), size, ppp);
+                            let px = 1.0 / ppp;
+                            let (dark, light) = (Stroke::new(px, Color32::from_black_alpha(160)), Stroke::new(px, Color32::from_white_alpha(230)));
+                            if !block && pencil_tip_is_round(size) {
+                                let r = sq.width() / 2.0;
+                                painter.circle_stroke(sq.center(), r + px / 2.0, dark);
+                                painter.circle_stroke(sq.center(), (r - px / 2.0).max(0.0), light);
+                            } else {
+                                painter.rect_stroke(sq, 0.0, dark, egui::StrokeKind::Outside);
+                                painter.rect_stroke(sq, 0.0, light, egui::StrokeKind::Inside);
+                            }
+                            // Too small to see where it is: the hotspot as well.
+                            if cur.show_crosshair_in_brush_tip || sq.width() < 6.0 {
+                                crate::tool_cursor::crosshair(painter, p, 4.0, 0.0);
+                            }
+                            egui::CursorIcon::None
+                        }
+                        // A shaped tip (sampled bitmap, or a rotated/flattened round tip)
+                        // traces its outline, turned and flipped with the view; a plain round
+                        // tip keeps the circle.
+                        _ => {
+                            let centre = brush_tip_centre(tool, alt || app.ui.shell.sticky_alt, cur.show_crosshair_in_brush_tip);
+                            let axes = crate::brush_cursor::pen_axes(&xf, brush, app.stylus.sample());
+                            crate::brush_cursor::cursor(painter, p, brush, full, axes, cur.painting == PaintingCursor::NormalTip, centre)
+                        }
+                    }
+                }
+            }
+            // The Eyedropper: the comparison ring follows the pointer while it samples (#213);
+            // otherwise its pipette, or the crosshair for precise Other Cursors.
+            Tool::Eyedropper => {
+                if let Some(icon) = eyedropper_ring(app, painter, &xf, p, response.is_pointer_button_down_on()) {
+                    icon
+                } else if precise_other_cursor(app) {
+                    egui::CursorIcon::Crosshair
+                } else {
+                    pipette_cursor(ui.ctx(), p)
+                }
+            }
+            // The Color Sampler: a pipette, or the crosshair for precise Other Cursors.
+            Tool::ColorSampler => {
+                if precise_other_cursor(app) {
+                    egui::CursorIcon::Crosshair
+                } else {
+                    pipette_cursor(ui.ctx(), p)
+                }
+            }
+            // The Paint Bucket: a bucket, or the crosshair for precise Other Cursors (#3968).
+            Tool::PaintBucket => {
+                if precise_other_cursor(app) {
+                    egui::CursorIcon::Crosshair
+                } else {
+                    paint_bucket_cursor(ui.ctx(), p)
+                }
+            }
+            // Over the first anchor, the close-path pointer (#4596), before the pens' own cursors.
+            Tool::Pen | Tool::CurvaturePen
+                if {
+                    let [x, y] = xf.to_doc(p);
+                    crate::vector_ui::closes_path_at(app, tool, x, y)
+                } =>
+            {
+                crate::tool_cursor::close_path(painter, p)
+            }
+            // The pen tools: their own icon with its nib on the point, or the crosshair for
+            // precise Other Cursors (#4639).
+            Tool::Pen | Tool::FreeformPen | Tool::CurvaturePen | Tool::AddAnchorPoint | Tool::DeleteAnchorPoint | Tool::ConvertPoint => {
+                if precise_other_cursor(app) {
+                    egui::CursorIcon::Crosshair
+                } else {
+                    pen_cursor(ui.ctx(), tool, p)
+                }
+            }
+            // Preferences › Cursors › Other Cursors: Precise shows a crosshair for every tool.
+            Tool::Move | Tool::Type | Tool::VerticalType | Tool::HorizontalTypeMask | Tool::VerticalTypeMask
+                if app.session.prefs().cursors.other == photocraft_engine::prefs::OtherCursor::Precise =>
+            {
+                egui::CursorIcon::Crosshair
+            }
+            // Photoshop's Move tool keeps the standard arrow pointer (#5646): the movable
+            // layer under it is marked by the hover outline, not by a different cursor.
+            Tool::Move => egui::CursorIcon::Default,
+            // Dragging is handled with the pan itself, above.
+            Tool::Hand => crate::tool_cursor::hand(ui.ctx(), false),
+            Tool::RotateView => crate::rotate_view::cursor(response.dragged()),
+            Tool::Zoom => crate::tool_cursor::zoom(ui.ctx(), zoom_out(alt)),
+            Tool::Type | Tool::VerticalType if type_path.is_some() => match type_path {
+                Some(crate::type_tool::PathClick::Area { .. }) => crate::tool_cursor::area_type(painter, p),
+                _ => crate::tool_cursor::path_type(painter, p),
+            },
+            Tool::Type | Tool::VerticalType | Tool::HorizontalTypeMask | Tool::VerticalTypeMask => egui::CursorIcon::Text,
+            Tool::MagneticLasso => crate::magnetic_lasso_ui::cursor(app, painter, p, xf.zoom),
+            Tool::RedEye => {
+                let pupil = app.ui.tool_options.red_eye_pupil_size.clamp(1.0, 100.0);
+                let r_doc = photocraft_algo::redeye::search_radius(pupil);
+                let r = (r_doc * xf.zoom).max(2.0);
+                painter.circle_stroke(p, r + 0.5, Stroke::new(1.0, Color32::from_black_alpha(140)));
+                painter.circle_stroke(p, r, Stroke::new(1.0, Color32::from_white_alpha(220)));
+                for (w, c) in [(2.5, Color32::from_black_alpha(140)), (1.0, Color32::from_white_alpha(220))] {
+                    painter.line_segment([p - vec2(3.0, 0.0), p + vec2(3.0, 0.0)], Stroke::new(w, c));
+                    painter.line_segment([p - vec2(0.0, 3.0), p + vec2(0.0, 3.0)], Stroke::new(w, c));
+                }
+                egui::CursorIcon::None
+            }
+            _ => egui::CursorIcon::Crosshair,
+        };
+        let icon = visible_crosshair(icon, painter, p, cfg!(not(target_arch = "wasm32")));
+        ui.ctx().set_cursor_icon(icon);
+        // Selection tools: + / − / × badge for the effective mode (#170). A gesture keeps the
+        // mode it started with (⇧ then constrains the marquee instead of adding).
+        let held = crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers));
+        let mods = app.drag.as_ref().map_or(held, |d| d.modifiers);
+        if let Some(b) = crate::tool_feedback::badge(app, tool, mods) {
+            crate::tool_feedback::draw_badge(painter, p, b, tool == Tool::QuickSelection);
+        }
+        // ⇧ after a stroke: the straight line a click would paint (#257).
+        crate::stroke_constraint::draw_line_preview(app, painter, &xf, p, tool, held.shift);
     }
 }

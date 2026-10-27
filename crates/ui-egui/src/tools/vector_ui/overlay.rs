@@ -1,7 +1,8 @@
+use super::{Color32, Document, PhotocraftApp, Pos2, Rect, Stroke, Tokens, Tool, ViewXform, pos2, vec2};
+use photocraft_doc::{LayerContent, Path};
 use super::curvature::curvature_refresh;
 use super::path_ops::{active_type_path, targeted_vector_mask};
 use super::pen::{closing, over_first_anchor, shift_45};
-use super::*;
 
 // ---------------------------------------------------------------------------------------------
 // Drawing

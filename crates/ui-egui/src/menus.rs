@@ -3,7 +3,6 @@
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
-use crate::state::DialogKind;
 
 mod bar;
 pub mod enable_rules;
