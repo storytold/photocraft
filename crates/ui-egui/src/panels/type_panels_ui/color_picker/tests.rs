@@ -99,8 +99,8 @@ fn invalidated_targets_never_redirect_and_bad_color_never_commits() {
                 app.run("type.characterStyle.set", json!({"id":id,"attrs":{"size":42}})).unwrap();
             }
             3 => app.ui.type_panels.options = None,
-            4 => app.ui.type_panels.styles = false,
-            _ => app.ui.type_panels.styles_tab = 1,
+            4 => app.ui.type_panels.character_styles = false,
+            _ => app.ui.type_panels.options = Some((true, 0)),
         }
         let doc = app.session.active().unwrap().doc.clone();
         assert!(confirm(&mut app, &pending).is_err());
@@ -136,8 +136,7 @@ fn inherited_colors_and_invalid_open_requests_are_atomic() {
 
 fn harness(kind: Kind) -> Harness<'static, PhotocraftApp> {
     let (mut app, id) = fixture(kind, 8);
-    app.ui.type_panels.styles = true;
-    app.ui.type_panels.styles_tab = usize::from(kind.paragraph());
+    *if kind.paragraph() { &mut app.ui.type_panels.paragraph_styles } else { &mut app.ui.type_panels.character_styles } = true;
     app.ui.type_panels.options = Some((kind.paragraph(), id));
     let mut h = Harness::builder().with_size(vec2(1500.0, 1000.0)).build_ui_state(
         move |ui, app| {

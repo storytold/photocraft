@@ -307,17 +307,19 @@ fn clicking_around_the_ui_keeps_the_panels_put() {
         h.run_steps(2);
         h.key_press(egui::Key::Escape);
         h.run_steps(2);
-        // Popups and dialogs opened by a click are fine; panels changing aren't.
+        // Popups, dialogs and the Brush Settings panel the options bar's button floats are fine;
+        // panels changing aren't.
         let app = h.state();
         assert_eq!(app.ui.panels.layers, panels.layers, "click at {p:?} hid/showed Layers");
         assert_eq!(app.ui.panels.properties, panels.properties, "click at {p:?} hid/showed Properties");
         assert_eq!(app.ui.panels.color, panels.color, "click at {p:?} hid/showed Color");
         assert_eq!(app.ui.dock_tabs, tabs, "click at {p:?} switched a dock tab");
         assert!(app.ui.dock.collapsed.is_empty(), "click at {p:?} collapsed a group");
-        if app.ui.dialogs.is_empty() && app.ui.shell.dialog.is_none() {
+        if app.ui.dialogs.is_empty() && app.ui.shell.dialog.is_none() && !app.ui.panels.brush_settings {
             assert_eq!(drawn(&h), rects, "click at {p:?} moved the dock groups");
         }
         h.state_mut().ui.dialogs.clear();
+        h.state_mut().ui.panels.brush_settings = false;
     }
 }
 

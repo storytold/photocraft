@@ -313,6 +313,10 @@ pub(super) fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &Contr
 
                 let bridge_pro = matches!(theme.unwrap_or(app.ui.theme), crate::theme::ThemeKind::Pro | crate::theme::ThemeKind::ProMedium);
                 let legacy_update = crate::panel_docking::prepare_legacy_update(app, p, panels.as_ref(), dock_tabs.as_ref(), dock.as_ref(), bridge_pro)?;
+                // The old Brushes tab opens the Brushes panel below, which an invalid saved layout refuses.
+                if brush_tab.is_some_and(|i| i >= 1) && app.ui.docking.as_ref().is_some_and(|w| !crate::panel_docking::valid_workspace(w)) {
+                    return Err("invalid panel layout; reset the workspace first".into());
+                }
 
                 // Apply (nothing below can fail).
                 if let Some(stroke) = shape_stroke {
@@ -461,8 +465,9 @@ pub(super) fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &Contr
                 if let Some(i) = brush_section {
                     app.ui.brush_section = (i as usize).min(crate::brush_panel::SECTIONS.len() - 1);
                 }
-                if let Some(i) = brush_tab {
-                    app.ui.brush_tab = (i as usize).min(1);
+                // Brush Settings no longer has a Brushes tab; older scripts' tab 1 shows the panel.
+                if brush_tab.is_some_and(|i| i >= 1) {
+                    app.run("window.panel.activate", json!({"panel": "brushes"}))?;
                 }
                 if let Some(v) = brushes_view {
                     app.ui.brushes_panel.view = v;
