@@ -1,6 +1,6 @@
 //! Select menu and selection tools: Magic Wand, Color Range, Modify
 //! (expand/contract/border/smooth/feather), Grow, Similar, Lasso.
-//! Selections are grayscale coverage surfaces clipped to the canvas.
+//! Selections are grayscale coverage surfaces; Fixed Size marquees may extend past the canvas.
 
 use photocraft_algo::selection::{self as sel, SelectionMode};
 use photocraft_doc::Document;
@@ -666,6 +666,31 @@ pub(crate) fn combine_band(old: Option<&Surface>, mask: &[f32], band: Rect, m: S
     s.write_region(band, &values);
     s.prune();
     (s.tile_count() > 0).then_some(s)
+}
+
+/// Fixed Size has no canvas clipping to bound its allocation. Include the feather halo and
+/// charge both tiles and dense blur buffers against Memory Usage before building anything.
+pub(crate) fn unclipped_marquee_area(bounds: Rect, feather: f32) -> Result<Rect> {
+    if bounds.is_empty() {
+        return Ok(Rect::EMPTY);
+    }
+    let reach = i32::try_from(sel::feather_reach(feather)).unwrap_or(i32::MAX);
+    let area = bounds.inflate(reach.saturating_add(1));
+    let tile = i64::from(photocraft_geom::TILE_SIZE);
+    let bytes = (u64::from(area.width()) + 2 * tile as u64).saturating_mul(u64::from(area.height()) + 2 * tile as u64).saturating_mul(if feather > 0.0 {
+        32
+    } else {
+        1
+    });
+    // Tile rectangles and feather halos must remain representable at either coordinate end.
+    let safe = |v: i32| i64::from(v) > i64::from(i32::MIN) + tile && i64::from(v) < i64::from(i32::MAX) - tile;
+    if ![area.x0, area.y0, area.x1, area.y1].into_iter().all(safe) || bytes > crate::transform_cmds::budget() {
+        return Err(EngineError::BadParams {
+            cmd: "select.rect".into(),
+            msg: "the full marquee is too large or outside the pixel coordinate range; reduce its size or increase Memory Usage in Preferences".into(),
+        });
+    }
+    Ok(area)
 }
 
 /// Keep dense feather masks local to the drawn shape. Clip before inflating: pixels outside

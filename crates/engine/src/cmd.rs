@@ -378,11 +378,16 @@ fn build() -> Vec<CommandSpec> {
             "Rectangular Selection",
             [],
             None,
-            r##"{"x":i32,"y":i32,"width":u32,"height":u32,"mode":"replace|add|subtract|intersect"="replace","ellipse":bool=false,"line":"row|column"?,"antiAlias":bool=true,"feather":px=0}"##,
+            r##"{"x":i32,"y":i32,"width":u32,"height":u32,"mode":"replace|add|subtract|intersect"="replace","ellipse":bool=false,"clipToCanvas":bool=true (false keeps the full Fixed Size marquee outside the canvas),"line":"row|column"?,"antiAlias":bool=true,"feather":px=0}"##,
             has_doc,
             |s, p| {
                 let get = |k: &str| int_i32("select.rect", p, k).and_then(|v| v.ok_or_else(|| bad("select.rect", format!("missing `{k}`"))));
-                let r = Rect::from_xywh(get("x")?, get("y")?, get("width")?.max(0) as u32, get("height")?.max(0) as u32);
+                let (x, y, w, h) = (get("x")?, get("y")?, get("width")?.max(0) as u32, get("height")?.max(0) as u32);
+                let clip = p.get("clipToCanvas").and_then(Value::as_bool).unwrap_or(true);
+                if !clip && (x.checked_add_unsigned(w).is_none() || y.checked_add_unsigned(h).is_none()) {
+                    return Err(bad("select.rect", "the full marquee exceeds the pixel coordinate range"));
+                }
+                let r = Rect::from_xywh(x, y, w, h);
                 let mode = p.get("mode").and_then(Value::as_str).unwrap_or("replace").to_string();
                 let ellipse = p.get("ellipse").and_then(Value::as_bool).unwrap_or(false);
                 // The History step is named after the tool: the Single Row / Single Column
@@ -398,9 +403,9 @@ fn build() -> Vec<CommandSpec> {
                 let aa = p.get("antiAlias").and_then(Value::as_bool).unwrap_or(true);
                 let feather = p.get("feather").and_then(Value::as_f64).unwrap_or(0.0).clamp(0.0, 1000.0) as f32;
                 s.edit(step, |doc, _| {
-                    let area = doc.bounds();
-                    // A marquee dragged past the canvas stops at its edge (Photoshop); the ellipse
-                    // keeps the dragged shape and is only cut there.
+                    // Fixed Size keeps the entire shape so moving its outline can recover the
+                    // part initially outside the canvas. Normal marquees retain their clipping.
+                    let area = if clip { doc.bounds() } else { selection_cmds::unclipped_marquee_area(r, feather)? };
                     use photocraft_algo::selection as sel;
                     let shape = if ellipse {
                         sel::ellipse_surface(r, area, aa)
@@ -417,14 +422,14 @@ fn build() -> Vec<CommandSpec> {
                     }
                     let old = doc.selection.take();
                     let combined = match (mode.as_str(), old) {
-                        ("add", Some(o)) => sel::combine_surfaces(&o, &shape, area, |a, b| a.max(b)),
-                        ("subtract", Some(o)) => sel::combine_surfaces(&o, &shape, area, |a, b| a * (1.0 - b)),
+                        ("add", Some(o)) => sel::combine_sparse(&o, &shape, area, |a, b| a.max(b)),
+                        ("subtract", Some(o)) => sel::combine_sparse(&o, &shape, area, |a, b| a * (1.0 - b)),
                         ("intersect", Some(o)) => sel::combine_surfaces(&o, &shape, area, |a, b| a.min(b)),
                         // With no existing selection, neither operation can select new pixels.
                         ("subtract" | "intersect", None) => Surface::new(photocraft_color::PixelFormat::GRAY8),
                         _ => shape,
                     };
-                    // Nothing selected on the canvas (e.g. dragged entirely outside it) deselects.
+                    // An empty mask deselects; an unclipped marquee can live entirely outside the canvas.
                     doc.selection = (!combined.content_bounds().is_empty()).then_some(combined);
                     Ok(())
                 })?;
