@@ -97,6 +97,10 @@ fn over_text(b: Cmyka, s: Cmyka, opacity: f32) -> Cmyka {
     if sa <= 0.0 {
         return b;
     }
+    // Source-over at full coverage is exactly the source, even through a nonlinear space.
+    if sa == 1.0 {
+        return [s[0], s[1], s[2], s[3], 1.0];
+    }
     let a = sa + b[4] * (1.0 - sa);
     if a <= 0.0 {
         return [0.0; 5];
@@ -689,6 +693,16 @@ fn clips_onto_pass_through(layers: &[LayerSpec]) -> bool {
         matches!(w[0], LayerSpec::Group { pass_through: true, fill, .. } if fill >= 1.0)
             && matches!(w[1], LayerSpec::Pixels { clipped: true, visible: true, .. })
     }) || layers.iter().any(|l| matches!(l, LayerSpec::Group { children, .. } if clips_onto_pass_through(children)))
+}
+
+#[test]
+fn opaque_text_reference_preserves_source_inks_exactly() {
+    for alpha in [0.25, 0.5, 1.0] {
+        let backdrop = [1.0, 0.8, 0.6, 0.4, alpha];
+        for source in [[0.0, 0.0, 0.0, 0.0, 1.0], [0.2, 0.7, 0.3, 0.1, 1.0]] {
+            assert_eq!(over_text(backdrop, source, 1.0), source);
+        }
+    }
 }
 
 proptest! {
@@ -1797,4 +1811,40 @@ fn every_cmyk_route_rounds_after_an_adjustment_layer() {
         let export = render_cmyk(&d, rect).unwrap_or_else(|| panic!("supported")).px[0][4];
         assert_eq!((display, export), (105.0 / 255.0, 105.0 / 255.0), "opacity {opacity}");
     }
+}
+
+#[test]
+fn opaque_text_in_a_vivid_light_group_matches_reference() {
+    let magenta = [0.0, 1.0, 0.0, 0.0, 1.0];
+    let mut group = group_spec(
+        vec![
+            raster_spec(BlendMode::Normal, (Rect::new(0, 0, 4, 2), magenta), 1.0, false),
+            LayerSpec::Pixels {
+                kind: Kind::Text,
+                blend: BlendMode::Normal,
+                fills: vec![(Rect::new(0, 0, 3, 2), [0.0, 0.0, 0.0, 0.0, 1.0])],
+                opacity: 1.0,
+                fill: 1.0,
+                clipped: false,
+                visible: true,
+                mask: None,
+            },
+        ],
+        false,
+    );
+    if let LayerSpec::Group { blend, .. } = &mut group {
+        *blend = BlendMode::VividLight;
+    }
+    let spec = Spec { w: 5, h: 3, layers: vec![raster_spec(BlendMode::Normal, (Rect::new(2, 1, 4, 3), magenta), 1.0, false), group] };
+    let mut d = doc(5, 3);
+    d.layers = spec.layers.iter().map(build).collect();
+    assert!(supports(&d));
+    assert_matches_reference(&d);
+}
+
+#[test]
+fn saved_cmyk_regressions_are_loaded_from_the_moved_source() {
+    use proptest::test_runner::{FailurePersistence, FileFailurePersistence};
+    let seeds = FileFailurePersistence::default().load_persisted_failures2(Some(file!()));
+    assert!(seeds.iter().any(|seed| seed.to_string() == "cc 02784050450ba620dd7c64320250a3e6a135b0f0da8cb9f707a5ca3beb7e83fd"));
 }
