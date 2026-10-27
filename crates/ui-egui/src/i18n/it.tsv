@@ -4626,3 +4626,16 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Colore del punto
 	Shapes can't use patterns yet	Le forme non possono ancora usare pattern
 	Edit Brush…	Modifica pennello…
+
+# Histogram panel options and statistics, and the update notice (2026-10)
+	Calculating…	Calcolo in corso…
+	Click to refresh histogram with uncached data	Fai clic per aggiornare l'istogramma con dati non in cache
+	Count:	Conteggio:
+	Level:	Livello:
+	Percentile:	Percentile:
+	Source:	Sorgente:
+	Uncached Refresh	Aggiorna senza cache
+	Show Statistics	Mostra statistiche
+	Show Channels in Color	Mostra canali a colori
+	Update and Restart	Aggiorna e riavvia
+	Release Notes	Note di rilascio
