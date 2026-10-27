@@ -514,36 +514,38 @@ mod tests {
 
     #[test]
     fn constraint_overlay_reuses_the_preview_mesh_on_redraw() {
+        fn constraint_line(shape: &egui::Shape) -> Option<&[Pos2]> {
+            match shape {
+                egui::Shape::Path(p) if p.points.len() == 25 => Some(&p.points),
+                egui::Shape::Vec(shapes) => shapes.iter().find_map(constraint_line),
+                _ => None,
+            }
+        }
         let mut app = grey_layer();
         let ctx = egui::Context::default();
         PhotocraftApp::setup_context(&ctx, Default::default());
         open_with_a_constraint(&mut app, &ctx);
         let input = || egui::RawInput { screen_rect: Some(ERect::from_min_size(Pos2::ZERO, vec2(1000.0, 600.0))), ..Default::default() };
         ctx.run_ui(input(), |ui| show(&mut app, ui.ctx())).textures_delta.clear();
-        // Collapse only the cached warp. A fresh solve would draw the original line instead.
+        // Move only the cached warp. A fresh solve would draw the original line instead.
         let d = app.wide_angle.as_mut().unwrap();
         for (out, _) in &mut d.mesh.as_mut().unwrap().verts {
-            *out = [80.0, 50.0];
+            out[0] += 10.0;
         }
         let verts = d.mesh.as_ref().unwrap().verts.clone();
         let render_ms = d.render_ms;
-        for (preview, dragging, collapsed) in [(true, false, true), (false, false, false), (true, true, false), (true, false, true)] {
+        for (preview, dragging, shifted) in [(true, false, true), (false, false, false), (true, true, false), (true, false, true)] {
             let d = app.wide_angle.as_mut().unwrap();
             d.preview = preview;
             d.drag = dragging.then_some(([20.0, 30.0], [140.0, 30.0]));
             let mut output = ctx.run_ui(input(), |ui| show(&mut app, ui.ctx()));
             output.textures_delta.clear();
-            let accent = Tokens::get(&ctx).accent;
-            let line = output
-                .shapes
-                .iter()
-                .find_map(|s| match &s.shape {
-                    egui::Shape::Path(p) if p.points.len() == 25 && p.stroke.color == egui::epaint::ColorMode::Solid(accent) => Some(&p.points),
-                    _ => None,
-                })
-                .expect("painted constraint line");
-            let length = line.first().unwrap().distance(*line.last().unwrap());
-            assert_eq!(length < 0.01, collapsed, "preview={preview}, dragging={dragging}");
+            let line = output.shapes.iter().find_map(|s| constraint_line(&s.shape)).expect("painted constraint line");
+            // The 160×100 image fits the 668-point-wide viewport. The source line is centred;
+            // the altered cached warp moves its centre ten proxy pixels to the right.
+            let centre_x = (line.first().unwrap().x + line.last().unwrap().x) * 0.5;
+            let expected_x = 350.0 + if shifted { 10.0 * (668.0 / 160.0) } else { 0.0 };
+            assert!((centre_x - expected_x).abs() < 0.1, "preview={preview}, dragging={dragging}: centre={centre_x}, expected={expected_x}");
             let d = app.wide_angle.as_ref().unwrap();
             assert_eq!(d.mesh.as_ref().unwrap().verts, verts, "redraw retains the cached warp");
             assert_eq!(d.render_ms, render_ms, "redraw does not render the preview again");
