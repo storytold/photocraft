@@ -269,7 +269,6 @@ fn print_paper_controls(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         }
         dropdown_str(ui, "print-orient", tl!("Orientation"), f, "orientation", &[("portrait", tl!("Portrait")), ("landscape", tl!("Landscape"))], 110.0);
     });
-    check(ui, f, "autoRotate", tl!("Auto-Rotate Image"), true);
     if f.get("paper").is_some_and(Value::is_array) {
         let (mut w, mut h) = print_paper_size(f.get("paper"));
         let units = s(f, "units", "cm");
@@ -517,7 +516,15 @@ pub(super) fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map
                     }
                 });
                 check(ui, f, "collate", tl!("Collate"), true);
-                dropdown_str(ui, "print-duplex", tl!("Two-Sided"), f, "duplex", &[("printerDefault", tl!("Printer Default")), ("simplex", tl!("Off")), ("longEdge", tl!("Long Edge")), ("shortEdge", tl!("Short Edge"))], 220.0);
+                dropdown_str(
+                    ui,
+                    "print-duplex",
+                    tl!("Two-Sided"),
+                    f,
+                    "duplex",
+                    &[("printerDefault", tl!("Printer Default")), ("simplex", tl!("Off")), ("longEdge", tl!("Long Edge")), ("shortEdge", tl!("Short Edge"))],
+                    220.0,
+                );
                 // Photoshop's Layout: Portrait / Landscape turn the driver settings, so the paper
                 // and the preview turn with them without opening Print Settings….
                 ui.horizontal(|ui| {
@@ -550,9 +557,18 @@ pub(super) fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map
                 });
                 number(ui, f, "copies", tl!("Copies"), 1.0..=999.0, "", 1.0);
                 check(ui, f, "collate", tl!("Collate"), true);
-                dropdown_str(ui, "print-duplex", tl!("Two-Sided"), f, "duplex", &[("printerDefault", tl!("Printer Default")), ("simplex", tl!("Off")), ("longEdge", tl!("Long Edge")), ("shortEdge", tl!("Short Edge"))], 220.0);
+                dropdown_str(
+                    ui,
+                    "print-duplex",
+                    tl!("Two-Sided"),
+                    f,
+                    "duplex",
+                    &[("printerDefault", tl!("Printer Default")), ("simplex", tl!("Off")), ("longEdge", tl!("Long Edge")), ("shortEdge", tl!("Short Edge"))],
+                    220.0,
+                );
                 print_paper_controls(ui, f);
             }
+            check(ui, f, "autoRotate", tl!("Auto-Rotate Image"), true);
             check(ui, f, "grayscale", tl!("Print in Grayscale"), false);
             head(ui, tl!("Color Management"));
             dropdown_str(
@@ -718,7 +734,7 @@ pub(super) fn print_params(f: &Map<String, Value>) -> Value {
 /// Updates the status for completed results only; pending jobs report completion later.
 pub(super) fn print_confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
     let mut p = print_params(f);
-    p["systemDialog"] = json!(true);
+    p["systemDialog"] = json!(app.session.system_print_dialog.is_some());
     let r = app.run("file.print", p)?;
     if r["pending"] != json!(true) {
         print_status(app, &r);
