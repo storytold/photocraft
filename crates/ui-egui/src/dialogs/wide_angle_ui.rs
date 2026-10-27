@@ -11,7 +11,8 @@
 
 use egui::{Align2, Color32, FontId, Pos2, Rect as ERect, Sense, Stroke, TextureHandle, pos2, vec2};
 use photocraft_algo::transform::Interp;
-use photocraft_algo::wideangle::{self, Camera, Constraint, Orientation, WideAngle, WideModel};
+use photocraft_algo::wideangle::{self, Camera, Constraint, Orientation, WideAngle, WideMesh, WideModel};
+use photocraft_color::PixelFormat;
 use photocraft_doc::LayerId;
 use photocraft_geom::Rect;
 use photocraft_raster::Surface;
@@ -38,6 +39,8 @@ pub struct WideAngleDialog {
     ph: usize,
     src_tex: Option<TextureHandle>,
     out_tex: Option<TextureHandle>,
+    /// The proxy warp used by both the rendered preview and its constraint overlays.
+    mesh: Option<WideMesh>,
     dirty: bool,
     pub preview: bool,
     drag: Option<([f64; 2], [f64; 2])>,
@@ -82,6 +85,7 @@ impl WideAngleDialog {
         {
             photocraft_engine::color_channels::restrict_surface_in(&self.proxy, &mut out, colors, pf).map_err(|e| e.to_string())?;
         }
+        self.mesh = Some(mesh);
         Ok(out)
     }
 
@@ -153,6 +157,7 @@ pub fn open(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> 
         ph,
         src_tex: None,
         out_tex: None,
+        mesh: None,
         dirty: true,
         preview: true,
         drag: None,
@@ -344,9 +349,9 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             Orientation::Vertical => t.danger,
         };
         let pf = Rect::new(0, 0, d.pw as i32, d.ph as i32);
-        let mesh = (!show_src && !d.params.constraints.is_empty()).then(|| wideangle::solve(&d.proxy_params(), pf));
+        let mesh = if show_src { None } else { d.mesh.as_ref() };
         for c in &d.params.constraints {
-            let pts: Vec<Pos2> = match &mesh {
+            let pts: Vec<Pos2> = match mesh {
                 Some(m) => cam
                     .arc(c.a, c.b, 24)
                     .iter()
@@ -544,6 +549,62 @@ mod tests {
     /// Open the dialog with one free constraint across the middle of the layer.
     fn open_with_a_constraint(app: &mut PhotocraftApp, ctx: &egui::Context) {
         menu(app, ctx, "filter.adaptiveWideAngle", &json!({"ui": {"add": {"a": [20, 50], "b": [140, 50]}}})).unwrap().unwrap();
+    }
+
+    #[test]
+    fn constraint_overlay_reuses_the_preview_mesh_on_redraw() {
+        let mut app = grey_layer();
+        let ctx = egui::Context::default();
+        PhotocraftApp::setup_context(&ctx, Default::default());
+        open_with_a_constraint(&mut app, &ctx);
+        let input = || egui::RawInput { screen_rect: Some(ERect::from_min_size(Pos2::ZERO, vec2(1000.0, 600.0))), ..Default::default() };
+        let _ = ctx.run_ui(input(), |ui| show(&mut app, ui.ctx()));
+        // Collapse only the cached warp. A fresh solve would draw the original line instead.
+        let d = app.wide_angle.as_mut().unwrap();
+        for (out, _) in &mut d.mesh.as_mut().unwrap().verts {
+            *out = [80.0, 50.0];
+        }
+        let verts = d.mesh.as_ref().unwrap().verts.clone();
+        let render_ms = d.render_ms;
+        for (preview, dragging, collapsed) in [(true, false, true), (false, false, false), (true, true, false), (true, false, true)] {
+            let d = app.wide_angle.as_mut().unwrap();
+            d.preview = preview;
+            d.drag = dragging.then_some(([20.0, 30.0], [140.0, 30.0]));
+            let output = ctx.run_ui(input(), |ui| show(&mut app, ui.ctx()));
+            let accent = Tokens::get(&ctx).accent;
+            let line = output
+                .shapes
+                .iter()
+                .find_map(|s| match &s.shape {
+                    egui::Shape::Path(p) if p.points.len() == 25 && p.stroke.color == accent.into() => Some(&p.points),
+                    _ => None,
+                })
+                .expect("painted constraint line");
+            let length = line.first().unwrap().distance(*line.last().unwrap());
+            assert_eq!(length < 0.01, collapsed, "preview={preview}, dragging={dragging}");
+            let d = app.wide_angle.as_ref().unwrap();
+            assert_eq!(d.mesh.as_ref().unwrap().verts, verts, "redraw retains the cached warp");
+            assert_eq!(d.render_ms, render_ms, "redraw does not render the preview again");
+        }
+    }
+
+    #[test]
+    fn preview_mesh_refreshes_after_edits_and_history_steps() {
+        let mut app = grey_layer();
+        let ctx = egui::Context::default();
+        open_with_a_constraint(&mut app, &ctx);
+        let original = app.wide_angle.as_ref().unwrap().mesh.as_ref().unwrap().verts.clone();
+        menu(&mut app, &ctx, "filter.adaptiveWideAngle", &json!({"ui": {"set": {"scale": 120.0}}})).unwrap().unwrap();
+        let edited = app.wide_angle.as_ref().unwrap().mesh.as_ref().unwrap().verts.clone();
+        assert_ne!(edited, original);
+        for (step, expected) in [(Step::Undo, &original), (Step::Redo, &edited)] {
+            let d = app.wide_angle.as_mut().unwrap();
+            d.step(step);
+            assert!(d.dirty);
+            d.render(&ctx);
+            assert!(!d.dirty);
+            assert_eq!(&d.mesh.as_ref().unwrap().verts, expected);
+        }
     }
 
     /// `orient` sets a constraint's orientation, as the right-click menu does; a bad index is
