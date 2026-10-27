@@ -210,6 +210,10 @@ fn invoke_file_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, 
             let d = app.ui.open_dialog(DialogKind::NewDocument, fields);
             Ok(json!({"dialog": d}))
         }
+        "view.artboardOverview" => {
+            app.artboard_overview.open = true;
+            Ok(Value::Null)
+        }
         "file.open" => {
             if let Some(path) = params.get("path").and_then(Value::as_str) {
                 open_path(app, path)

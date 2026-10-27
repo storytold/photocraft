@@ -33,6 +33,8 @@ pub(crate) enum Command {
     Info(InfoArgs),
     Run(RunArgs),
     Batch(BatchArgs),
+    /// Apply named artboard sizes (and optional responsive templates) to every layered document
+    ResponsiveBatch(ResponsiveBatchArgs),
     Droplet(DropletArgs),
     Commands(CommandsArgs),
     Mcp(McpArgs),
@@ -169,6 +171,27 @@ pub(crate) struct BatchArgs {
     /// originals; --in-place allows it
     #[arg(long)]
     pub(crate) in_place: bool,
+    #[command(flatten)]
+    pub(crate) export: ExportArgs,
+}
+
+/// Create responsive artboard variants of every layered document in a folder
+///
+/// For every document and every responsive preset, a semantic or proportional artboard variant
+/// is created, an optional `.responsive.json` template applied, and that artboard exported.
+/// Config format: {"presets":[{"name":"Story","width":1080,"height":1920,"layout":"semantic",
+/// "template":"story.responsive.json"}]}.
+#[derive(Args)]
+pub(crate) struct ResponsiveBatchArgs {
+    /// The responsive preset config (presets.json)
+    #[arg(long, value_name = "FILE")]
+    pub(crate) presets: PathBuf,
+    /// The folder of layered documents to process
+    #[arg(long = "in", value_name = "DIR")]
+    pub(crate) in_dir: PathBuf,
+    /// The folder to write each document's preset exports to (as <index>/<stem>_<preset>.<ext>)
+    #[arg(long, value_name = "DIR")]
+    pub(crate) out: PathBuf,
     #[command(flatten)]
     pub(crate) export: ExportArgs,
 }

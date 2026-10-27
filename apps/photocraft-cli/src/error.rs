@@ -37,6 +37,8 @@ pub(crate) enum CliError {
     OutputClaimed(String),
     #[error("{0} file(s) failed")]
     FilesFailed(usize),
+    #[error("{0}")]
+    Message(String),
 }
 
 pub(crate) type Result<T = (), E = CliError> = std::result::Result<T, E>;

@@ -48,6 +48,14 @@ fn fill_field(app: &mut PhotocraftApp, id: u64, key: &str, path: String) -> Resu
 /// Where this frame's dialogs are on screen (the canvas reads last frame's: it draws first).
 const RECTS: &str = "pc-dialog-rects";
 
+pub(crate) fn responsive_artboards_to_export(all: &[u64], affected: &[u64], skip: bool) -> Vec<u64> {
+    if !skip {
+        return all.to_vec();
+    }
+    let affected: std::collections::HashSet<u64> = affected.iter().copied().collect();
+    all.iter().copied().filter(|id| !affected.contains(id)).collect()
+}
+
 fn rects(ctx: &egui::Context) -> Vec<egui::Rect> {
     ctx.data(|m| m.get_temp(egui::Id::unique(RECTS))).unwrap_or_default()
 }
@@ -180,6 +188,59 @@ fn older_dialog_above(ctx: &egui::Context, live: egui::LayerId, dialogs: &[Dialo
     let others: Vec<egui::LayerId> =
         dialogs.iter().map(|d| egui::LayerId::new(egui::Order::Foreground, egui::Id::unique(("dialog", d.id)))).filter(|l| *l != live).collect();
     ctx.memory(|m| m.layer_ids().skip_while(|l| *l != live).skip(1).any(|l| others.contains(&l)))
+}
+/// Prepare the responsive-artboard export dialog once per document revision. Any board whose
+/// diagnostics report findings, truncation, or an error is considered affected for the optional
+/// skip action; uncertainty is never treated as a clean board.
+fn refresh_artboard_export_preflight(app: &PhotocraftApp, fields: &mut serde_json::Map<String, Value>) {
+    let Some(command) = fields.get("__command").and_then(Value::as_str) else { return };
+    if !matches!(command, "file.export.artboardsToFiles" | "file.export.artboardsToPdf") {
+        return;
+    }
+    let Some(state) = app.session.active() else { return };
+    if fields.get("__responsiveRevision").and_then(Value::as_u64) == Some(state.revision) {
+        return;
+    }
+    let board_ids: Vec<u64> = state.doc.artboards().into_iter().rev().map(|board| board.0.0).collect();
+    let mut affected = Vec::new();
+    let mut findings = 0usize;
+    let mut unverified = 0usize;
+    let mut incomplete = 0usize;
+    for id in &board_ids {
+        match photocraft_engine::artboard_cmds::diagnose_document_artboard(&state.doc, photocraft_doc::LayerId(*id), state.revision) {
+            Ok(diagnostics) => {
+                let count = ["overflow", "collisions", "safeAreas"]
+                    .iter()
+                    .filter_map(|key| diagnostics.get(*key).and_then(Value::as_array))
+                    .map(Vec::len)
+                    .sum::<usize>();
+                let truncated = diagnostics.get("truncated").and_then(Value::as_bool).unwrap_or(false);
+                findings = findings.saturating_add(count);
+                if count > 0 || truncated {
+                    affected.push(*id);
+                }
+                if truncated {
+                    incomplete = incomplete.saturating_add(1);
+                }
+            }
+            Err(_) => {
+                affected.push(*id);
+                unverified = unverified.saturating_add(1);
+            }
+        }
+    }
+    let skip = fields.get("__skipResponsiveAffected").and_then(Value::as_bool).unwrap_or(false);
+    let chosen = responsive_artboards_to_export(&board_ids, &affected, skip);
+    fields.insert("artboards".into(), json!(chosen));
+    fields.insert("__responsiveAllBoards".into(), json!(board_ids));
+    fields.insert("__responsiveAffectedBoards".into(), json!(affected.clone()));
+    fields.insert("__responsiveFindingCount".into(), json!(findings));
+    fields.insert("__responsiveAffectedCount".into(), json!(affected.len()));
+    fields.insert("__responsiveBoardCount".into(), json!(board_ids.len()));
+    fields.insert("__responsiveUnverifiedCount".into(), json!(unverified));
+    fields.insert("__responsiveIncompleteCount".into(), json!(incomplete));
+    fields.insert("__responsiveRevision".into(), json!(state.revision));
+    fields.insert("__responsivePreflight".into(), json!(true));
 }
 
 /// The size a resizable dialog opens at, or `None` for a dialog sized by its contents.
@@ -553,6 +614,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         let _language = crate::i18n::language_scope(lang);
         let interactive = top == Some(d.id);
         let mut fields = d.fields.clone();
+        refresh_artboard_export_preflight(app, &mut fields);
         let mut outcome: Option<bool> = None; // Some(true)=OK, Some(false)=Cancel
         let mut apply_requested = false;
         let title = display_title(&d);

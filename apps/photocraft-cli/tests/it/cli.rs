@@ -65,7 +65,7 @@ fn usage_and_unknown_command() {
 #[test]
 fn every_subcommand_answers_help() {
     let d = tmp("help");
-    for sub in ["convert", "info", "run", "batch", "droplet", "commands", "mcp", "serve"] {
+    for sub in ["convert", "info", "run", "batch", "responsive-batch", "droplet", "commands", "mcp", "serve"] {
         for help in ["--help", "-h"] {
             let o = bin().current_dir(&d).arg(sub).arg(help).arg("--out").arg("x.png").stdin(Stdio::null()).output().unwrap();
             let out = String::from_utf8_lossy(&o.stdout);
@@ -1421,6 +1421,63 @@ fn control_token_env_vars_are_the_flags_fallbacks() {
     let err = serve_tcp_stderr(bin().args(["serve", "--port"]).arg(free_port().to_string()).env("PHOTOCRAFT_CONTROL_TOKEN", ""));
     assert!(err.contains("photocraft-cli serving on") && err.contains("photocraft-cli control token: "), "{err}");
 }
+
+/// `responsive-batch` writes one artboard variant per preset into a per-document folder.
+#[test]
+fn responsive_batch_exports_one_variant_per_preset() {
+    let d = tmp("rbatch-ok");
+    let (in_dir, out_dir) = (d.join("in"), d.join("out"));
+    std::fs::create_dir_all(&in_dir).unwrap();
+    let presets = d.join("presets.json");
+    std::fs::write(&presets, r#"{"presets":[{"name":"Sq","width":32,"height":32},{"name":"Tall","width":16,"height":48,"layout":"proportional"}]}"#).unwrap();
+    let doc = in_dir.join("one.pcraft");
+    ok(bin()
+        .args([
+            "run",
+            "--new",
+            r#"{"width":64,"height":64}"#,
+            // A fresh layer becomes the artboard master; the locked Background stays out of it.
+            "--cmd",
+            "layer.new.layer",
+            "--cmd",
+            "layer.select",
+            "--params",
+            r#"{"name":"Background"}"#,
+            "--cmd",
+            "layer.delete",
+            "--cmd",
+            "layer.new.artboardFromLayers",
+        ])
+        .arg("--out")
+        .arg(&doc));
+    let p = ok(bin().arg("responsive-batch").arg("--presets").arg(&presets).arg("--in").arg(&in_dir).arg("--out").arg(&out_dir));
+    assert!(
+        p.stdout.contains("1 succeeded, 0 failed; 2 presets"),
+        "stdout: {}
+stderr: {}",
+        p.stdout,
+        p.stderr
+    );
+    assert!(out_dir.join("0000").join("one_Sq.png").is_file(), "stdout: {}", p.stdout);
+    assert!(out_dir.join("0000").join("one_Tall.png").is_file());
+}
+
+/// The batch refuses `--out` being `--in`, and rejects unknown preset fields before any work.
+#[test]
+fn responsive_batch_refuses_bad_configuration() {
+    let d = tmp("rbatch-err");
+    let dir = d.join("d");
+    std::fs::create_dir_all(&dir).unwrap();
+    let presets = d.join("presets.json");
+    std::fs::write(&presets, r#"{"presets":[{"name":"X","width":10,"height":10,"bogus":1}]}"#).unwrap();
+    let o = bin().arg("responsive-batch").arg("--presets").arg(&presets).arg("--in").arg(&dir).arg("--out").arg(&dir).output().unwrap();
+    assert!(!o.status.success());
+    assert!(String::from_utf8_lossy(&o.stderr).contains("--in folder"), "stderr: {}", String::from_utf8_lossy(&o.stderr));
+    let out_dir = d.join("out");
+    let o = bin().arg("responsive-batch").arg("--presets").arg(&presets).arg("--in").arg(&dir).arg("--out").arg(&out_dir).output().unwrap();
+    assert!(!o.status.success());
+    assert!(String::from_utf8_lossy(&o.stderr).contains("unknown field"), "stderr: {}", String::from_utf8_lossy(&o.stderr));
+    assert!(!out_dir.exists(), "nothing was written for a refused config");
 
 /// #8802: Deselect with nothing selected is skipped in a `run`, as action playback does (#6744),
 /// so a script that deselects after Reveal Selection still finishes and saves.
