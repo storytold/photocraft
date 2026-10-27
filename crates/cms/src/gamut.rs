@@ -81,11 +81,19 @@ impl GamutCheck {
         self.delta_e(px) > self.threshold
     }
 
-    /// Out-of-gamut mask for RGBA pixels: `255` where the pixel has alpha > 0 and its first
-    /// `inputs()` channels are out of gamut, `0` elsewhere. Returns the number of flagged
-    /// pixels. Only `min(px.len(), mask.len())` pixels are processed. Runs on the rayon pool
-    /// (not on wasm); the result is identical to calling [`Self::out_of_gamut`] per pixel.
-    pub fn mask_rgba(&self, px: &[[f32; 4]], mask: &mut [u8]) -> usize {
+    /// Out-of-gamut mask for RGBA pixels: `255` where the pixel has alpha > 0 and its RGB
+    /// channels are out of gamut, `0` elsewhere. Returns the number of flagged pixels. Only
+    /// `min(px.len(), mask.len())` pixels are processed. Runs on the rayon pool (not on wasm);
+    /// the result is identical to calling [`Self::out_of_gamut`] per pixel.
+    ///
+    /// # Errors
+    /// [`CmsError::Invalid`] when the check was not built from a three-channel (RGB) source
+    /// profile: an RGBA pixel carries only three colour channels, so it cannot be tested
+    /// against a CMYK or gray source. Nothing is written to `mask` in that case.
+    pub fn mask_rgba(&self, px: &[[f32; 4]], mask: &mut [u8]) -> Result<usize, CmsError> {
+        if self.inputs != 3 {
+            return Err(CmsError::Invalid(format!("gamut mask needs a 3-channel (RGB) source profile, got {} channels", self.inputs)));
+        }
         let n = px.len().min(mask.len());
         let (px, mask) = (&px[..n], &mut mask[..n]);
         let run = |p: &[[f32; 4]], m: &mut [u8]| {
@@ -100,9 +108,9 @@ impl GamutCheck {
         #[cfg(not(target_arch = "wasm32"))]
         if n >= PAR_MIN_PIXELS {
             use rayon::prelude::*;
-            return px.par_chunks(PAR_CHUNK_PIXELS).zip(mask.par_chunks_mut(PAR_CHUNK_PIXELS)).map(|(p, m)| run(p, m)).sum();
+            return Ok(px.par_chunks(PAR_CHUNK_PIXELS).zip(mask.par_chunks_mut(PAR_CHUNK_PIXELS)).map(|(p, m)| run(p, m)).sum());
         }
-        run(px, mask)
+        Ok(run(px, mask))
     }
 }
 
@@ -133,10 +141,22 @@ mod tests {
                 let px = image(n);
                 let want: Vec<u8> = px.iter().map(|p| if p[3] > 0.0 && check.out_of_gamut(&p[..3]) { 255 } else { 0 }).collect();
                 let mut got = vec![7u8; n];
-                let count = check.mask_rgba(&px, &mut got);
+                let count = check.mask_rgba(&px, &mut got).unwrap();
                 assert_eq!(got, want, "{proof:?} threshold {threshold} n {n}");
                 assert_eq!(count, want.iter().filter(|&&m| m == 255).count());
             }
+        }
+    }
+
+    #[test]
+    fn mask_rgba_rejects_non_rgb_source() {
+        // A CMYK (4-channel) and a gray (1-channel) source cannot be tested from RGBA pixels.
+        for src in [Builtin::CoatedCmyk, Builtin::GrayGamma22] {
+            let check = GamutCheck::new(src.profile(), Builtin::Srgb.profile(), 4.0).unwrap();
+            let px = image(64);
+            let mut mask = vec![9u8; 64];
+            assert!(matches!(check.mask_rgba(&px, &mut mask), Err(CmsError::Invalid(_))), "{src:?}");
+            assert!(mask.iter().all(|&m| m == 9), "mask must stay untouched");
         }
     }
 }

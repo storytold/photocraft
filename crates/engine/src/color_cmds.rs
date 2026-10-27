@@ -901,7 +901,7 @@ pub fn gamut_mask(doc: &Document, setup: &ProofSetup, threshold: f32) -> Result<
     let check = GamutCheck::new(&composite_profile(doc), &setup.profile, threshold).map_err(cms_err)?;
     let buf = photocraft_compose::flatten(doc);
     let mut mask = vec![0u8; buf.px.len()];
-    let count = check.mask_rgba(&buf.px, &mut mask);
+    let count = check.mask_rgba(&buf.px, &mut mask).map_err(cms_err)?;
     Ok((mask, count))
 }
 
