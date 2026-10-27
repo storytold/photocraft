@@ -537,7 +537,7 @@ mod tests {
                 .shapes
                 .iter()
                 .find_map(|s| match &s.shape {
-                    egui::Shape::Path(p) if p.points.len() == 25 && p.stroke.color == accent.into() => Some(&p.points),
+                    egui::Shape::Path(p) if p.points.len() == 25 && p.stroke.color == egui::epaint::ColorMode::Solid(accent) => Some(&p.points),
                     _ => None,
                 })
                 .expect("painted constraint line");
