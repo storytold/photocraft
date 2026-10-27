@@ -410,8 +410,9 @@ fn build() -> Vec<CommandSpec> {
                         s
                     };
                     if feather > 0.0 {
-                        let m = sel::feather(&sel::mask_from_surface(Some(&shape), area), area.width() as usize, area.height() as usize, feather);
-                        doc.selection = sel::combine(doc.selection.as_ref(), &m, area, sel::SelectionMode::parse(&mode));
+                        let window = selection_cmds::feather_window(r, area, feather);
+                        let m = sel::feather(&sel::mask_from_surface(Some(&shape), window), window.width() as usize, window.height() as usize, feather);
+                        doc.selection = selection_cmds::combine_band(doc.selection.as_ref(), &m, window, sel::SelectionMode::parse(&mode));
                         return Ok(());
                     }
                     let old = doc.selection.take();

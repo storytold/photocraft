@@ -600,10 +600,26 @@ pub(crate) fn polygon_selection(s: &mut Session, cmd: &str, label: &str, pts: &[
     }
     let area = s.active().ok_or(EngineError::NoDocument)?.doc.bounds();
     if feather > 0.0 {
-        // The blur spreads past the polygon and isn't bit-identical over a smaller window.
-        let mut mask = sel::polygon(pts, area, b(p, "antiAlias", true));
-        mask = sel::feather(&mask, area.width() as usize, area.height() as usize, feather);
-        return set_selection(s, label, area, mask, mode(p));
+        let (mut lo, mut hi) = ((f32::INFINITY, f32::INFINITY), (f32::NEG_INFINITY, f32::NEG_INFINITY));
+        for &(x, y) in pts {
+            if x.is_finite() && y.is_finite() {
+                lo = (lo.0.min(x), lo.1.min(y));
+                hi = (hi.0.max(x), hi.1.max(y));
+            }
+        }
+        let bounds = if lo.0 <= hi.0 && lo.1 <= hi.1 {
+            Rect::new(lo.0.floor() as i32, lo.1.floor() as i32, hi.0.ceil() as i32, hi.1.ceil() as i32)
+        } else {
+            Rect::EMPTY
+        };
+        let window = feather_window(bounds, area, feather);
+        let mask = sel::polygon_window(pts, area, window, b(p, "antiAlias", true));
+        let mask = sel::feather(&mask, window.width() as usize, window.height() as usize, feather);
+        let selected = s.edit(label, |doc, _| {
+            doc.selection = combine_band(doc.selection.as_ref(), &mask, window, mode(p));
+            Ok(doc.selection.is_some())
+        })?;
+        return Ok(json!({ "selected": selected }));
     }
     // Only the rows the polygon spans (#4532): rows outside it are empty, and full-width rows
     // keep `polygon`'s coverage bit-identical (its x arithmetic is relative to the area's left
@@ -633,7 +649,7 @@ fn polygon_rows(pts: &[(f32, f32)], area: Rect) -> Rect {
 /// [`sel::combine`] of a mask covering only `band` (zero elsewhere), giving exactly what the
 /// whole-canvas combine gives: Replace and Intersect are empty outside the band, and Add and
 /// Subtract keep the old selection there.
-fn combine_band(old: Option<&Surface>, mask: &[f32], band: Rect, m: SelectionMode) -> Option<Surface> {
+pub(crate) fn combine_band(old: Option<&Surface>, mask: &[f32], band: Rect, m: SelectionMode) -> Option<Surface> {
     let inside = sel::combine(old, mask, band, m);
     let Some(old) = old.filter(|_| matches!(m, SelectionMode::Add | SelectionMode::Subtract)) else { return inside };
     if band.is_empty() {
@@ -644,6 +660,16 @@ fn combine_band(old: Option<&Surface>, mask: &[f32], band: Rect, m: SelectionMod
     s.write_region(band, &values);
     s.prune();
     (s.tile_count() > 0).then_some(s)
+}
+
+/// Keep dense feather masks local to the drawn shape. Clip before inflating: pixels outside
+/// the canvas never contribute to the original full-canvas blur, even near a canvas edge.
+pub(crate) fn feather_window(bounds: Rect, canvas: Rect, feather: f32) -> Rect {
+    let bounds = bounds.intersect(&canvas);
+    if bounds.is_empty() {
+        return Rect::EMPTY;
+    }
+    bounds.inflate(((feather * 3.0).ceil() as i32).saturating_add(1)).intersect(&canvas)
 }
 
 macro_rules! spec {

@@ -818,13 +818,23 @@ pub fn feather(m: &[f32], w: usize, h: usize, radius: f32) -> Vec<f32> {
 /// rows are filled in parallel, and each sub-row tests only the edges that
 /// cross it (an active edge list over the edges sorted by their top).
 pub fn polygon(points: &[(f32, f32)], area: Rect, anti_alias: bool) -> Vec<f32> {
+    polygon_window(points, area, area, anti_alias)
+}
+
+/// Rasterizes only `window` intersected with `canvas`, retaining the coordinate arithmetic of
+/// [`polygon`] over the whole canvas. Keeping that origin avoids rounding changes in fractional
+/// edge coverage when a feathered lasso uses a smaller working mask.
+pub fn polygon_window(points: &[(f32, f32)], canvas: Rect, window: Rect, anti_alias: bool) -> Vec<f32> {
+    let area = window.intersect(&canvas);
     let (w, h) = (area.width() as usize, area.height() as usize);
     let mut m = vec![0.0f32; w * h];
     if points.len() < 3 || w == 0 {
         return m;
     }
     let sub = if anti_alias { 4 } else { 1 };
-    let sample_y = |py: usize, s: usize| area.y0 as f32 + py as f32 + (s as f32 + 0.5) / sub as f32;
+    let dx = (i64::from(area.x0) - i64::from(canvas.x0)) as usize;
+    let dy = (i64::from(area.y0) - i64::from(canvas.y0)) as usize;
+    let sample_y = |py: usize, s: usize| canvas.y0 as f32 + (dy + py) as f32 + (s as f32 + 0.5) / sub as f32;
     // A sub-row at y crosses the edge a→b iff top <= y < bottom; horizontal and NaN edges
     // never cross one.
     struct Edge {
@@ -871,12 +881,13 @@ pub fn polygon(points: &[(f32, f32)], area: Rect, anti_alias: bool) -> Vec<f32> 
                 xs.extend(active.iter().map(|&&Edge { a, b, .. }| a.0 + (y - a.1) / (b.1 - a.1) * (b.0 - a.0)));
                 xs.sort_by(|a, b| a.total_cmp(b));
                 for span in xs.as_chunks::<2>().0 {
-                    let (x0, x1) = ((span[0] - area.x0 as f32).max(0.0), (span[1] - area.x0 as f32).min(w as f32));
+                    let (x0, x1) = ((span[0] - canvas.x0 as f32).max(0.0), (span[1] - canvas.x0 as f32).min(canvas.width() as f32));
                     if x1 <= x0 {
                         continue;
                     }
-                    let (c0, c1) = (x0.floor() as usize, (x1.ceil() as usize).min(w));
+                    let (c0, c1) = ((x0.floor() as usize).saturating_sub(dx), (x1.ceil() as usize).saturating_sub(dx).min(w));
                     for (cx, v) in row.iter_mut().enumerate().take(c1).skip(c0) {
+                        let cx = cx + dx;
                         let cov = if anti_alias {
                             ((cx + 1) as f32).min(x1) - (cx as f32).max(x0)
                         } else {
