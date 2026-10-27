@@ -11,6 +11,10 @@ on:
     types: [opened, synchronize, reopened, labeled]
   workflow_dispatch:
     inputs:
+      selection_morphology:
+        description: "Compare selection morphology on 36 MP (Linux, exact outputs)"
+        type: boolean
+        default: false
       fuzz:
         description: "Run the fuzz job"
         type: boolean
@@ -156,9 +160,13 @@ jobs:
       # A panic still names its file and line; only backtrace frames lose theirs (Linux keeps
       # line-tables-only, so a backtrace with lines is one OS away).
       CARGO_PROFILE_DEV_DEBUG: "0"
-      # The runner has no Japanese or Simplified Chinese system font, and egui 0.37 panics on a
-      # missing glyph: the localized UI tests need the same craft-fonts input the gate and FreeBSD
-      # build with (crates/text/build.rs). Same commit as the gate above and release.yml.
+      # The all-language UI tests shape real Japanese, Chinese, Korean and Devanagari labels
+      # with kittest's strict `MissingGlyphPolicy::Panic`. A hosted Windows image has no
+      # guaranteed Japanese or Simplified Chinese system font, and egui 0.37 panics on a
+      # missing glyph; the app's lazy system fallback runs after layout, too late for the
+      # first headless frame. Use the same pinned central fonts as Linux and release, so every
+      # language is drawn by a real embedded face rather than skipping. Same commit as the gate
+      # above and release.yml.
       CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
       CRAFT_FONTS_REQUIRED: "1"
     steps:
@@ -215,7 +223,7 @@ jobs:
 
       - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
-          tool: cargo-nextest@0.9.149
+          tool: cargo-nextest@0.9.150
 
       # The unit leg runs `--lib --bins` and the integration leg `--test '*'` (every
       # integration-test target); the feature selection stays the same, so both legs share the
@@ -272,7 +280,7 @@ jobs:
 
       - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
-          tool: cargo-nextest@0.9.149
+          tool: cargo-nextest@0.9.150
 
       - name: Test without heif
         run: cargo nextest run -p photocraft-heif -p photocraft-codecs -p photocraft-io --locked --profile ci
@@ -415,3 +423,61 @@ jobs:
         with:
           name: fuzz-${{ matrix.target.crate }}-${{ matrix.target.name }}
           path: crates/${{ matrix.target.crate }}/fuzz/artifacts
+
+  selection-morphology:
+    if: inputs.selection_morphology == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      RAYON_NUM_THREADS: "4"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Linux build dependencies
+        uses: storytold/craft-common-actions/actions/install-apt-packages@main
+        with:
+          packages: >-
+            libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev
+            libgtk-3-dev
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: selection-morphology-perf
+      - name: Compare exact outputs and release timings on 36 MP
+        run: |
+          set -o pipefail
+          cargo run --release -p photocraft-algo --example bench_selection_morphology | tee selection-morphology-perf.txt
+      - name: Compare cropped command reads and writeback on 36 MP
+        run: |
+          set -o pipefail
+          cargo test --release -p photocraft-engine --lib sparse_modify_release_comparison -- --ignored --nocapture | tee -a selection-morphology-perf.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: selection-morphology-performance
+          path: selection-morphology-perf.txt
+
+  selection-morphology-quick-perf:
+    if: inputs.selection_morphology == true
+    # Match perf-nightly.yml: Linux llvmpipe lacks the float render targets needed by
+    # bevel_bench, so its required GPU rows cannot be measured there.
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: perf-release
+      - name: Quick performance suite
+        run: cargo xtask perf --quick
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: selection-morphology-quick-perf
+          path: |
+            target/perf/*.json
+            target/perf/summary.md

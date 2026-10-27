@@ -749,6 +749,8 @@
 	Gradients	Degradeler
 	Histogram	Histogram
 	History	Geçmiş
+	Allow Non-Linear History	Doğrusal Olmayan Geçmişe İzin Ver
+	Make Layer Visibility Changes Undoable	Katman Görünürlüğü Değişikliklerini Geri Alınabilir Yap
 	Info	Bilgi
 	Measurement Log	Ölçüm Günlüğü
 	Modifier Keys	Değiştirici Tuşlar
@@ -1894,7 +1896,7 @@
 	Full size tip	Tam boyutlu uç
 	Gamut warning color	Gamut uyarı rengi
 	Gamut warning opacity	Gamut uyarı opaklığı
-	Generator enabled	Oluşturucu etkin
+	Enable Generator	Oluşturucuyu etkinleştir
 	Gif	GIF
 	Glossy	parlak
 	Grid color	Izgara rengi

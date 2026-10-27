@@ -1149,7 +1149,6 @@ pub fn specs() -> Vec<crate::commands::CommandSpec> {
 }
 
 #[cfg(test)]
-#[path = "jobs_tests.rs"]
 mod tests;
 
 #[cfg(test)]

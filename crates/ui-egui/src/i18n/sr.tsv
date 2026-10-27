@@ -1895,7 +1895,7 @@
 	Full size tip	Vrh pune veličine
 	Gamut warning color	Boja upozorenja o gamutu
 	Gamut warning opacity	Neprozirnost upozorenja o gamutu
-	Generator enabled	Generator je omogućen
+	Enable Generator	Omogući generator
 	Gif	GIF
 	Glossy	Sjajno
 	Grid color	Boja mreže
@@ -2304,6 +2304,8 @@
 	Automatically Create New Snapshot When Saving	Automatski napravi novi snimak stanja pri čuvanju
 	Show New Snapshot Dialog by Default	Podrazumevano prikaži dijalog za novi snimak stanja
 	Clear History	Obriši istoriju
+	Allow Non-Linear History	Dozvoli nelinearnu istoriju
+	Make Layer Visibility Changes Undoable	Omogući opozivanje promena vidljivosti slojeva
 	Panel Options…	Opcije panela…
 	View menu	Meni prikaza
 	Keep view in sync	Drži prikaz usklađenim

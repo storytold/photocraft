@@ -1950,7 +1950,7 @@
 	Full size tip	実寸の先端
 	Gamut warning color	色域外警告の色
 	Gamut warning opacity	色域外警告の不透明度
-	Generator enabled	自動生成を有効にする
+	Enable Generator	自動生成を有効にする
 	Gif	GIF
 	Glossy	光沢
 	Grid color	グリッドの色
@@ -3774,6 +3774,9 @@ curves	Smooth	スムーズ
 # History panel menu (#2966)
 	New Snapshot…	新規スナップショット…
 	History Options…	ヒストリーオプション…
+# History panel › History Options… (#2966)
+	Allow Non-Linear History	非線形のヒストリーを許可
+	Make Layer Visibility Changes Undoable	レイヤーの表示/非表示の変更を取り消し可能にする
 # Print dialog (#2697)
 	Emulsion Down	乳剤面を下
 	Functions	機能

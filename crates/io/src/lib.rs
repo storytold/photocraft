@@ -75,6 +75,7 @@ pub mod text_styles_map;
 pub mod tiff_layers;
 pub mod vector_map;
 mod xcf;
+pub mod xml;
 
 use photocraft_codecs::{CodecError, EncodeOptions};
 pub use photocraft_codecs::{DdsCompression, DdsOptions, DpxBits};

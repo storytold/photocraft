@@ -50,6 +50,7 @@ mod psd_block_layout;
 mod psd_damaged_merged;
 mod psd_empty_channels;
 mod psd_font_identity;
+mod psd_frame_stroke;
 mod psd_kerning;
 mod psd_layer_block_length;
 mod psd_maximize_compatibility;

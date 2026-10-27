@@ -1938,7 +1938,7 @@
 	Full size tip	전체 크기 브러시 끝
 	Gamut warning color	색상 범위 경고 색상
 	Gamut warning opacity	색상 범위 경고 불투명도
-	Generator enabled	생성기 활성화
+	Enable Generator	생성기 활성화
 	Gif	GIF
 	Glossy	광택
 	Grid color	격자 색상
@@ -3379,6 +3379,9 @@ curves	Smooth	매끄럽게
 	Clear History	작업 내역 지우기
 	New Snapshot…	새 스냅샷…
 	History Options…	작업 내역 옵션…
+# History panel › History Options… (#2966)
+	Allow Non-Linear History	비선형 작업 내역 허용
+	Make Layer Visibility Changes Undoable	레이어 표시 여부 변경을 실행 취소할 수 있게 하기
 # Print dialog (#2697)
 	Emulsion Down	감광면 아래로
 	Functions	기능

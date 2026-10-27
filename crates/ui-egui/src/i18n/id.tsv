@@ -1932,7 +1932,7 @@
 	Full size tip	Ujung ukuran penuh
 	Gamut warning color	Warna peringatan gamut
 	Gamut warning opacity	Opasitas peringatan gamut
-	Generator enabled	Generator aktif
+	Enable Generator	Aktifkan Generator
 	Gif	GIF
 	Glossy	Mengilap
 	Grid color	Warna grid
@@ -3187,6 +3187,9 @@ curves	Smooth	Haluskan
 # History panel menu (#2966)
 	New Snapshot…	Snapshot Baru…
 	History Options…	Opsi Riwayat…
+# History panel › History Options… (#2966)
+	Allow Non-Linear History	Izinkan Riwayat Non-Linier
+	Make Layer Visibility Changes Undoable	Perubahan Visibilitas Layer Dapat Diurungkan
 # Print dialog (#2697)
 	Emulsion Down	Emulsi di Bawah
 	Functions	Fungsi

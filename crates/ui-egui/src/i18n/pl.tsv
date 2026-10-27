@@ -1960,7 +1960,7 @@
 	Full size tip	Końcówka w pełnym rozmiarze
 	Gamut warning color	Kolor ostrzeżenia o gamucie
 	Gamut warning opacity	Krycie ostrzeżenia o gamucie
-	Generator enabled	Generator włączony
+	Enable Generator	Włącz generator
 	Gif	GIF
 	Glossy	Błyszczący
 	Grid color	Kolor siatki
@@ -3792,6 +3792,9 @@ curves	Smooth	Wygładź
 # History panel menu (#2966)
 	New Snapshot…	Nowa migawka…
 	History Options…	Opcje historii…
+# History panel › History Options… (#2966)
+	Allow Non-Linear History	Zezwalaj na nieliniową historię
+	Make Layer Visibility Changes Undoable	Pozwalaj cofać zmiany widoczności warstw
 # Print dialog (#2697)
 	Emulsion Down	Emulsja w dół
 	Functions	Funkcje

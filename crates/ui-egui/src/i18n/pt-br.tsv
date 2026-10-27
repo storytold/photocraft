@@ -1916,7 +1916,7 @@
 	Full size tip	Ponta em tamanho real
 	Gamut warning color	Cor do aviso de gama
 	Gamut warning opacity	Opacidade do aviso de gama
-	Generator enabled	Gerador ativado
+	Enable Generator	Ativar gerador
 	Gif	GIF
 	Glossy	Brilhante
 	Grid color	Cor da grade
@@ -3952,6 +3952,9 @@ layerLabel	No Color	Sem cor
 # History panel menu (#2966)
 	New Snapshot…	Novo instantâneo…
 	History Options…	Opções de histórico…
+# History panel › History Options… (#2966)
+	Allow Non-Linear History	Permitir histórico não linear
+	Make Layer Visibility Changes Undoable	Permitir desfazer alterações de visibilidade das camadas
 # Print dialog (#2697)
 	Emulsion Down	Emulsão para baixo
 	Functions	Funções
