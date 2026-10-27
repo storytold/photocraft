@@ -50,7 +50,7 @@ pub fn place_source(
     if near(a, 1.0) && near(b, 0.0) && near(c, 0.0) && near(d, 1.0) && near(e, e.round()) && near(f, f.round()) {
         return Ok(crate::resample::translate_surface(src, e.round() as i32, f.round() as i32));
     }
-    crate::transform::warp_surface(src, src_rect, &crate::transform::Homography([a, c, e, b, d, f, 0.0, 0.0, 1.0]), Interp::Bicubic)
+    crate::transform::warp_surface(src, src_rect, &crate::transform::Homography([a, c, e, b, d, f, 0.0, 0.0, 1.0]), Interp::BicubicCoverage)
 }
 
 /// [`place_source`] through a projective map `h` (source → document; Distort, Perspective): the
@@ -68,7 +68,7 @@ pub fn place_source_projective(
         };
         return Ok(warp_mesh_surface(src, src_rect, &map, Interp::Bicubic));
     }
-    crate::transform::warp_surface(src, src_rect, h, Interp::Bicubic)
+    crate::transform::warp_surface(src, src_rect, h, Interp::BicubicCoverage)
 }
 
 /// Warps the content of `src` inside `src_rect` through the forward map `f` (source document
@@ -323,6 +323,7 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
             return None;
         }
         let mut px = src.read_region(foot);
+        let nonnegative_alpha = px.chunks_exact(n).all(|p| p[a].is_finite() && p[a] >= 0.0);
         for p in px.chunks_exact_mut(n) {
             let al = p[a];
             for v in &mut p[..a] {
@@ -378,12 +379,21 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
                         }
                     }
                 }
-                Interp::Bicubic => {
+                Interp::Bicubic | Interp::BicubicCoverage => {
                     // Snap to the pixel grid when within float noise, so identity is exact.
                     let snap = |t: f64| if (t - t.round()).abs() < 1e-7 { t.round() } else { t };
                     let (u, v) = (snap(u), snap(v));
                     let (ix, iy) = (u.floor() as i32, v.floor() as i32);
                     let (wx, wy) = (bicubic(u - f64::from(ix)), bicubic(v - f64::from(iy)));
+                    if interp == Interp::BicubicCoverage
+                        && nonnegative_alpha
+                        && !wy
+                            .iter()
+                            .enumerate()
+                            .any(|(j, wy)| *wy > 0.0 && wx.iter().enumerate().any(|(i, wx)| *wx > 0.0 && at(ix - 1 + i as i32, iy - 1 + j as i32, a) > 0.0))
+                    {
+                        return;
+                    }
                     if let Some(o) = base(ix - 1, iy - 1, 4) {
                         for (j, wyj) in wy.iter().enumerate() {
                             for (i, wxi) in wx.iter().enumerate() {
@@ -523,6 +533,20 @@ mod tests {
             }
         }
         surf
+    }
+
+    #[test]
+    fn smart_placement_does_not_turn_negative_lobes_into_covered_pixels() {
+        for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+            let mut src = Surface::new(PixelFormat::new(ColorMode::Rgb, depth, true));
+            src.write_pixel(12, 12, &[0.1, 0.5, 0.85, 1.0]);
+            // This is authored faint coverage, not a generated negative-lobe product.
+            src.fill_rect(Rect::new(3, 3, 5, 5), &[0.1, 0.5, 0.85, 1.0 / 255.0]);
+            let out = place_source(&src, Rect::new(0, 0, 24, 24), &photocraft_geom::Affine::translate(0.5, 0.5), None).unwrap();
+            assert_eq!(out.pixel(11, 11)[3], 0.0, "{depth:?}: negative × negative invented alpha");
+            assert!(out.pixel(4, 4)[3] >= 1.0 / 255.0, "{depth:?}: authored faint coverage erased");
+            assert!(out.pixel(12, 12)[3] > 0.3, "{depth:?}: positive footprint erased");
+        }
     }
 
     #[test]

@@ -408,6 +408,12 @@ fn chamfer_from(mut d: Vec<f32>, w: usize, h: usize) -> (Vec<f32>, Vec<usize>) {
     (d, near)
 }
 
+/// Group strokes follow the subpixel contour of their composited children.
+/// Other layers retain their fitted Photoshop stroke fields (including vector outlines).
+pub fn stroke_uses_contour(layer: &Layer) -> bool {
+    matches!(layer.content, photocraft_doc::LayerContent::Group(_))
+}
+
 /// Distance from each pixel centre outside the shape to the shape's edge.
 /// Pixels with non-zero alpha are inside; the edge inside the nearest such
 /// pixel is placed by its alpha (coverage), as Photoshop does. Inside pixels
@@ -456,6 +462,214 @@ fn dist_outside_by(s: &Map, m: Metric) -> Vec<f32> {
         for (x, out) in row.iter_mut().enumerate() {
             let i = y * s.w + x;
             *out = if inside[i] { -0.5 } else { d[i] - 0.5 + (1.0 - s.v[near[i] as usize].min(1.0)) };
+        }
+    })
+}
+
+/// A segment of the half-coverage contour, in map coordinates.
+#[derive(Clone, Copy)]
+struct StrokeEdge {
+    a: [f64; 2],
+    b: [f64; 2],
+}
+
+impl StrokeEdge {
+    fn distance_squared(self, x: f64, y: f64) -> f64 {
+        let (vx, vy) = (self.b[0] - self.a[0], self.b[1] - self.a[1]);
+        let length = vx * vx + vy * vy;
+        let t = if length > 0.0 { ((x - self.a[0]) * vx + (y - self.a[1]) * vy) / length } else { 0.0 }.clamp(0.0, 1.0);
+        let (dx, dy) = (x - self.a[0] - t * vx, y - self.a[1] - t * vy);
+        dx * dx + dy * dy
+    }
+}
+
+/// Balanced bounds tree for exact nearest-segment queries. A nearest raster cell need not
+/// contain the nearest segment, even among its immediate neighbours on a smooth curve.
+struct StrokeEdges {
+    edges: Vec<StrokeEdge>,
+    nodes: Vec<StrokeEdgeNode>,
+}
+
+struct StrokeEdgeNode {
+    bounds: [f64; 4],
+    range: std::ops::Range<usize>,
+    children: Option<[usize; 2]>,
+}
+
+impl StrokeEdges {
+    fn new(mut edges: Vec<StrokeEdge>) -> Self {
+        fn build(edges: &mut [StrokeEdge], start: usize, nodes: &mut Vec<StrokeEdgeNode>, depth: usize) -> usize {
+            let bounds = edges.iter().fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |mut b, e| {
+                for p in [e.a, e.b] {
+                    b[0] = b[0].min(p[0]);
+                    b[1] = b[1].min(p[1]);
+                    b[2] = b[2].max(p[0]);
+                    b[3] = b[3].max(p[1]);
+                }
+                b
+            });
+            let at = nodes.len();
+            nodes.push(StrokeEdgeNode { bounds, range: start..start + edges.len(), children: None });
+            // The contour budget bounds the normal depth below 20; also cap it explicitly.
+            if edges.len() > 8 && depth < 24 {
+                let axis = usize::from(bounds[3] - bounds[1] > bounds[2] - bounds[0]);
+                let mid = edges.len() / 2;
+                edges.select_nth_unstable_by(mid, |a, b| (a.a[axis] + a.b[axis]).total_cmp(&(b.a[axis] + b.b[axis])));
+                let (left, right) = edges.split_at_mut(mid);
+                let children = [build(left, start, nodes, depth + 1), build(right, start + mid, nodes, depth + 1)];
+                if let Some(node) = nodes.get_mut(at) {
+                    node.children = Some(children);
+                }
+            }
+            at
+        }
+        let mut nodes = Vec::new();
+        build(&mut edges, 0, &mut nodes, 0);
+        Self { edges, nodes }
+    }
+
+    fn distance(&self, x: usize, y: usize) -> f32 {
+        let (x, y) = (x as f64, y as f64);
+        let lower = |b: [f64; 4]| {
+            let (dx, dy) = ((b[0] - x).max(0.0).max(x - b[2]), (b[1] - y).max(0.0).max(y - b[3]));
+            dx * dx + dy * dy
+        };
+        let mut best = f64::INFINITY;
+        // At most one pending sibling per tree level (build caps the depth at 24).
+        let mut stack = [(0usize, 0.0f64); 32];
+        let mut count = 1;
+        while count > 0 {
+            count -= 1;
+            let (at, bound) = stack[count];
+            if bound >= best {
+                continue;
+            }
+            let Some(node) = self.nodes.get(at) else { continue };
+            if let Some([a, b]) = node.children {
+                let da = self.nodes.get(a).map_or(f64::INFINITY, |n| lower(n.bounds));
+                let db = self.nodes.get(b).map_or(f64::INFINITY, |n| lower(n.bounds));
+                // Visit the nearer child first to tighten the pruning distance.
+                for (child, bound) in if da <= db { [(b, db), (a, da)] } else { [(a, da), (b, db)] } {
+                    if bound >= best {
+                        continue;
+                    }
+                    if let Some(slot) = stack.get_mut(count) {
+                        *slot = (child, bound);
+                        count += 1;
+                    } else {
+                        return self.edges.iter().fold(best, |d, e| d.min(e.distance_squared(x, y))).sqrt() as f32;
+                    }
+                }
+            } else if let Some(edges) = self.edges.get(node.range.clone()) {
+                for edge in edges {
+                    best = best.min(edge.distance_squared(x, y));
+                }
+            }
+        }
+        best.sqrt() as f32
+    }
+}
+
+/// Outside strokes measure to the subpixel contour, rather than to covered pixel centres.
+/// The old scalar `1 - alpha` seed assumes an axis-aligned edge. Oblique edges then ripple,
+/// and changing which antialiased pixel is nearest can move the stroke by almost a pixel.
+/// Marching squares places the half-coverage contour between samples, including two-pixel
+/// antialiased edges from smart-object resampling. No blur is applied to the authored pixels.
+/// Fully hard masks and genuinely soft/translucent edges keep the existing fitted metric.
+fn stroke_dist_outside(s: &Map, metric: Metric, reach: f32) -> Vec<f32> {
+    // A hostile high-frequency alpha mask must not allocate a segment list per canvas pixel.
+    // Beyond this contour budget, retain the bounded renderer's existing distance transform.
+    const MAX_EDGE_CELLS: usize = 262_144;
+    if s.w < 2 || s.h < 2 || !s.v.iter().any(|&a| a > INSIDE_EPS && a < 1.0 - INSIDE_EPS) {
+        return dist_outside_by(s, metric);
+    }
+    // Sparse edge cells: one 4-byte slot per pixel, and at most two segments per edge cell.
+    let mut slot = vec![0u32; s.v.len()];
+    let mut cells: Vec<Vec<StrokeEdge>> = Vec::new();
+    for y in 0..s.h - 1 {
+        for x in 0..s.w - 1 {
+            let values = [s.get(x as i64, y as i64), s.get(x as i64 + 1, y as i64), s.get(x as i64 + 1, y as i64 + 1), s.get(x as i64, y as i64 + 1)];
+            if values.iter().all(|&a| a >= 0.5) || values.iter().all(|&a| a < 0.5) {
+                continue;
+            }
+            // Restrict reconstruction to a sharp opaque silhouette, with empty and full pixels
+            // within two samples of the contour. Soft ramps and translucent artwork retain their
+            // alpha-seeded distances rather than acquiring a hard threshold.
+            let (mut lo, mut hi) = (1.0f32, 0.0f32);
+            let mut partial = false;
+            for dy in -1..=2 {
+                for dx in -1..=2 {
+                    let a = s.get(x as i64 + dx, y as i64 + dy);
+                    lo = lo.min(a);
+                    hi = hi.max(a);
+                    partial |= a > INSIDE_EPS && a < 1.0 - INSIDE_EPS;
+                }
+            }
+            if !partial || lo > INSIDE_EPS || hi < 1.0 - INSIDE_EPS {
+                continue;
+            }
+            let corners = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
+            let mut crossings = Vec::with_capacity(4);
+            for k in 0..4 {
+                let j = (k + 1) % 4;
+                let (a, b) = (values[k], values[j]);
+                if (a >= 0.5) != (b >= 0.5) {
+                    let t = (0.5 - a) / (b - a);
+                    crossings.push([corners[k][0] + t * (corners[j][0] - corners[k][0]), corners[k][1] + t * (corners[j][1] - corners[k][1])]);
+                }
+            }
+            // A saddle has four crossings. Connect around the corners on the opposite side of
+            // the cell centre, preserving the topology of the bilinear alpha samples.
+            if crossings.len() == 4 && (values.iter().sum::<f32>() >= 2.0) != (values[0] >= 0.5) {
+                crossings.rotate_left(1);
+            }
+            let segments: Vec<StrokeEdge> = crossings
+                .chunks_exact(2)
+                .map(|p| StrokeEdge {
+                    a: [f64::from(p[0][0]) + x as f64, f64::from(p[0][1]) + y as f64],
+                    b: [f64::from(p[1][0]) + x as f64, f64::from(p[1][1]) + y as f64],
+                })
+                .collect();
+            if !segments.is_empty() {
+                if cells.len() >= MAX_EDGE_CELLS {
+                    return dist_outside_by(s, metric);
+                }
+                cells.push(segments);
+                slot[y * s.w + x] = cells.len() as u32;
+            }
+        }
+    }
+    if cells.is_empty() {
+        return dist_outside_by(s, metric);
+    }
+    let seeds: Vec<bool> = slot.iter().map(|&k| k != 0).collect();
+    let (distance, _) = edt_nearest(&seeds, s.w, s.h);
+    let edges = StrokeEdges::new(cells.into_iter().flatten().collect());
+    let edge_distance = |x: usize, y: usize| edges.distance(x, y);
+    // Reconstruct only the samples belonging to that sharp contour. Retain every other source
+    // sample as a distance seed: a nearby translucent feature must still receive its own stroke,
+    // and a faint isolated sample must not become a detached white arc around an unfilled gap.
+    let residual = Map {
+        w: s.w,
+        h: s.h,
+        v: par_fill(s.w, s.h, 0.0f32, |y, row| {
+            for (x, out) in row.iter_mut().enumerate() {
+                let i = y * s.w + x;
+                *out = if s.v[i] > INSIDE_EPS && distance[i] < 3.5 && edge_distance(x, y) <= 2.0 { 0.0 } else { s.v[i] };
+            }
+        }),
+    };
+    let fallback = dist_outside_by(&residual, metric);
+    par_fill(s.w, s.h, 0.0f32, |y, row| {
+        for (x, out) in row.iter_mut().enumerate() {
+            let i = y * s.w + x;
+            *out = if s.v[i] >= 0.5 {
+                -0.5
+            } else if distance[i] <= reach + 2.0 {
+                fallback[i].min(edge_distance(x, y))
+            } else {
+                fallback[i]
+            };
         }
     })
 }
@@ -1913,22 +2127,19 @@ pub(crate) fn build_maps_prepared(
         .collect();
     let has_stroke = items.iter().any(|e| matches!(e, Effect::Stroke(_)));
     let vector_shape = matches!(layer.content, photocraft_doc::LayerContent::Shape(_));
-    // A stroke's outer edge keeps the 5 × 5 chamfer while its outside width is under
-    // `STROKE_CHAMFER_MAX` — Photoshop matches the chamfer's sub-pixel edge seeding at small
-    // offsets — and uses the exact Euclidean transform at or above it, where the chamfer's octagon
-    // facets a wide stroke (#3646). Inside stroke distances always keep the chamfer. Each outer
+    // Sharp antialiased edges use their subpixel contour. Other source samples keep the
+    // 5 × 5 chamfer below `STROKE_CHAMFER_MAX` and the exact Euclidean transform at or above
+    // it, where the chamfer's octagon facets a wide stroke (#3646). Inside distances keep the chamfer. Each outer
     // field is built only when a stroke of that width is present; the compositor picks per stroke,
     // so one layer may hold both a narrow and a wide stroke.
     let out_widths: Vec<f32> =
         items.iter().filter_map(|e| if let Effect::Stroke(st) = e { Some(stroke_widths(st).1) } else { None }).filter(|w| *w > 0.0).collect();
+    let reach = out_widths.iter().copied().fold(0.0, f32::max);
+    let outside = |metric| if stroke_uses_contour(layer) { stroke_dist_outside(&shape, metric, reach) } else { dist_outside_by(&shape, metric) };
     let chamfer_out = out_widths.iter().any(|&w| !stroke_outside_exact(w));
     let exact_out = out_widths.iter().any(|&w| stroke_outside_exact(w));
     let (din, dout, dout_exact) = if has_stroke {
-        (
-            Some(dist_inside_by(&shape, Metric::Chamfer)),
-            chamfer_out.then(|| dist_outside_by(&shape, Metric::Chamfer)),
-            exact_out.then(|| dist_outside_by(&shape, Metric::Euclidean)),
-        )
+        (Some(dist_inside_by(&shape, Metric::Chamfer)), chamfer_out.then(|| outside(Metric::Chamfer)), exact_out.then(|| outside(Metric::Euclidean)))
     } else {
         (None, None, None)
     };
@@ -2395,10 +2606,12 @@ pub enum FieldKind {
     BevelOutside,
     /// `bevel_dist_inside` of the shape: the inside distance of chiselled bevels.
     BevelInside,
-    /// Chamfer distance outside the shape: a narrow raster stroke's outer edge (see
-    /// [`stroke_outside_exact`]), and the spread of drop shadows and softer outer glows
-    /// ([`dilate`]); their metric is fitted to Photoshop (#224) and keeps the sub-pixel seeding.
+    /// Fitted chamfer distance outside the shape: narrow layer strokes and shadow/glow spread.
     StrokeOutside,
+    /// Subpixel contour distance for group strokes, with a chamfer fallback.
+    StrokeContourOutside,
+    /// Subpixel contour distance for wide group strokes, with a Euclidean fallback.
+    StrokeContourOutsideExact,
     /// Chamfer distance outside `1 - alpha`: the choke of inner shadows and softer inner glows.
     ChokeInside,
     /// Stroke distance inside the shape.
@@ -2424,6 +2637,8 @@ pub fn distance_field(kind: FieldKind, alpha: Vec<f32>, w: usize, h: usize, reac
         FieldKind::BevelOutside => bevel_dist_outside(&s, &sharp_edges(&s), reach),
         FieldKind::BevelInside => bevel_dist_inside(&s, &sharp_edges(&s), reach),
         FieldKind::StrokeOutside => dist_outside_by(&s, Metric::Chamfer),
+        FieldKind::StrokeContourOutside => stroke_dist_outside(&s, Metric::Chamfer, reach),
+        FieldKind::StrokeContourOutsideExact => stroke_dist_outside(&s, Metric::Euclidean, reach),
         FieldKind::ChokeInside => dist_outside_by(&s.map(|a| 1.0 - a), Metric::Chamfer),
         FieldKind::StrokeInside => dist_inside_by(&s, Metric::Chamfer),
         FieldKind::StrokeOutsideExact => dist_outside_by(&s, Metric::Euclidean),

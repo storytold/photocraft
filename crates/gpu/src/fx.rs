@@ -87,6 +87,9 @@ pub(crate) fn field_radius(kind: FieldKind, reach: i32) -> i32 {
         // those read their own 3×3 coverage neighbourhood (2 px). Measured, the smallest exact halo
         // is reach + 1 (`banded_bevel_fields_match_whole_region_on_anti_aliased_edges`).
         FieldKind::BevelInside | FieldKind::BevelOutside => reach + 9,
+        // Contour strokes inspect neighbouring edge cells, their alpha neighbourhoods and
+        // retained source seeds. Keep the same conservative halo as the refined bevel fields.
+        FieldKind::StrokeContourOutside | FieldKind::StrokeContourOutsideExact => reach + 9,
         _ => reach + 3,
     }
 }
@@ -298,12 +301,12 @@ fn offset(angle: f32, distance: f32) -> (f32, f32) {
 /// The map program of one enabled effect (`build_maps`), without pattern sources.
 #[cfg(test)]
 pub(crate) fn program(e: &Effect, light: &GlobalLight, vector_shape: bool) -> MapProgram {
-    program_with(e, light, vector_shape, &[], (0.0, 0.0))
+    program_with(e, light, vector_shape, false, &[], (0.0, 0.0))
 }
 
 /// The map program of one enabled effect (`build_maps`); bevel textures tile `patterns` from
 /// `anchor` (`effects::TextureCtx`).
-pub(crate) fn program_with(e: &Effect, light: &GlobalLight, vector_shape: bool, patterns: &[Pattern], anchor: (f64, f64)) -> MapProgram {
+pub(crate) fn program_with(e: &Effect, light: &GlobalLight, vector_shape: bool, contour: bool, patterns: &[Pattern], anchor: (f64, f64)) -> MapProgram {
     let mut b = B { stages: Vec::new(), fields: Vec::new() };
     let maps = match e {
         Effect::DropShadow(s) | Effect::InnerShadow(s) => {
@@ -440,11 +443,13 @@ pub(crate) fn program_with(e: &Effect, light: &GlobalLight, vector_shape: bool, 
             if out_w > 0.0 {
                 // Narrow strokes keep the fitted chamfer, wide ones the exact transform (#3646);
                 // the CPU picks the same field by the same width (`stroke_outside_exact`).
-                let kind = match (vector_shape, photocraft_compose::effects::stroke_outside_exact(out_w)) {
-                    (true, true) => FieldKind::StrokeOutsideVector,
-                    (true, false) => FieldKind::StrokeOutsideVectorChamfer,
-                    (false, true) => FieldKind::StrokeOutsideExact,
-                    (false, false) => FieldKind::StrokeOutside,
+                let kind = match (contour, vector_shape, photocraft_compose::effects::stroke_outside_exact(out_w)) {
+                    (true, _, true) => FieldKind::StrokeContourOutsideExact,
+                    (true, _, false) => FieldKind::StrokeContourOutside,
+                    (false, true, true) => FieldKind::StrokeOutsideVector,
+                    (false, true, false) => FieldKind::StrokeOutsideVectorChamfer,
+                    (false, false, true) => FieldKind::StrokeOutsideExact,
+                    (false, false, false) => FieldKind::StrokeOutside,
                 };
                 let d = b.field(kind, out_w);
                 let mut s = stage(Kernel::MStroke, Some(d), None, [out_w, 0.0, 0.0, 0.0], 0);
@@ -535,7 +540,16 @@ pub(crate) fn field(kind: FieldKind, reach: i32, shape: &[f32], region: Rect, ou
 /// threads (wasm) there is nothing to spread over, and bands keep the memory small.
 fn threaded_inside(kind: FieldKind) -> bool {
     !cfg!(target_arch = "wasm32")
-        && matches!(kind, FieldKind::Outside | FieldKind::Inside | FieldKind::BevelOutside | FieldKind::BevelInside | FieldKind::StrokeOutsideExact)
+        && matches!(
+            kind,
+            FieldKind::Outside
+                | FieldKind::Inside
+                | FieldKind::BevelOutside
+                | FieldKind::BevelInside
+                | FieldKind::StrokeOutsideExact
+                | FieldKind::StrokeContourOutside
+                | FieldKind::StrokeContourOutsideExact
+        )
 }
 
 /// [`field`] with the halo given (the tests shrink it to see that they notice).
@@ -881,6 +895,8 @@ mod tests {
             FieldKind::BevelInside,
             FieldKind::ChokeInside,
             FieldKind::StrokeOutside,
+            FieldKind::StrokeContourOutside,
+            FieldKind::StrokeContourOutsideExact,
             FieldKind::StrokeInside,
             FieldKind::StrokeOutsideExact,
             FieldKind::StrokeOutsideVector,
