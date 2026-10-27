@@ -283,8 +283,14 @@ pub(crate) fn import(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<Im
     }
     let xml = zip.read_by_name("maindoc.xml", MAX_MAINDOC).map_err(|e| invalid(e.to_string()))?;
     let xml = std::str::from_utf8(&xml).map_err(|_| invalid("maindoc.xml is not UTF-8"))?;
-    // maindoc.xml declares Krita's DTD by public id; roxmltree only reads internal subsets and
-    // guards entity expansion.
+    // maindoc.xml declares Krita's DTD by public id, so the DOCTYPE must be allowed. roxmltree
+    // never loads an external DTD, but it expands internal entities with only a depth and
+    // per-reference count limit and no size cap (it has no option for one): repeated references
+    // to one large entity turn a few KB into megabytes. Krita never writes entity declarations,
+    // so refuse them before parsing.
+    if xml.contains("<!ENTITY") {
+        return Err(invalid("maindoc.xml declares XML entities, which Krita never writes; refusing to expand them"));
+    }
     let opts = roxmltree::ParsingOptions { allow_dtd: true, ..Default::default() };
     let tree = roxmltree::Document::parse_with_options(xml, opts).map_err(|e| invalid(format!("maindoc.xml: {e}")))?;
     let image = tree.root_element().children().find(|n| n.has_tag_name("IMAGE")).ok_or_else(|| invalid("maindoc.xml has no IMAGE"))?;

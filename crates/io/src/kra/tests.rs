@@ -302,3 +302,27 @@ fn the_mimetype_wins_over_the_extension() {
     assert!(is_kra(&bytes));
     assert!(crate::import("download", &bytes).is_ok_and(|r| r.source_read_only));
 }
+
+/// Krita never writes entity declarations, and roxmltree expands internal entities without a size
+/// cap: a few KB of `&a;` references to a 1 KB entity would become megabytes of text. The reader
+/// refuses the declarations before parsing, so a small maindoc can't amplify into a large one.
+#[test]
+fn maindoc_entity_declarations_are_refused_before_expansion() {
+    let value = "A".repeat(1024);
+    for (subset, refs) in [
+        (format!("<!ENTITY a \"{value}\">"), "&a;".repeat(1_000)),
+        (format!("<!ENTITY a \"{value}\"><!ENTITY b \"&a;&a;&a;&a;&a;&a;&a;&a;\">"), "&b;".repeat(1_000)),
+        (format!("<!ENTITY % p \"{value}\">"), String::new()),
+    ] {
+        let xml = format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?><!DOCTYPE DOC [{subset}]><DOC><IMAGE width=\"1\" height=\"1\" colorspacename=\"RGBA\" name=\"x\">{refs}</IMAGE></DOC>"
+        );
+        let err = match crate::import("x.kra", &archive(&xml, &[])) {
+            Ok(_) => panic!("a maindoc declaring entities must not import ({} input bytes)", xml.len()),
+            Err(e) => e.to_string(),
+        };
+        assert!(err.contains("declares XML entities"), "unexpected error: {err}");
+    }
+    // Krita's own DOCTYPE (a public id, no internal subset) still reads.
+    assert!(crate::import("x.kra", &archive(&maindoc("RGBA", ""), &[])).is_ok());
+}
