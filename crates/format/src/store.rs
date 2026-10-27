@@ -64,6 +64,34 @@ fn png(img: &Rgba8Image) -> Result<Vec<u8>> {
     photocraft_codecs::encode(&image, photocraft_codecs::Format::Png, &Default::default()).map_err(|e| FormatError::Unsupported(format!("preview: {e}")))
 }
 
+fn previews(opts: &SaveOptions) -> Result<Vec<(&'static str, Vec<u8>)>> {
+    let (composite, thumbnail) = beside(
+        opts.thumbnail.is_some() && opts.composite.is_some(),
+        || opts.composite.as_ref().map(png).transpose(),
+        || opts.thumbnail.as_ref().map(png).transpose(),
+    );
+    let mut out = Vec::new();
+    if let Some(t) = thumbnail? {
+        out.push((THUMB, t));
+    }
+    if let Some(t) = composite? {
+        out.push((COMPOSITE, t));
+    }
+    Ok(out)
+}
+
+fn beside<A: Send, B>(parallel: bool, a: impl FnOnce() -> Result<A> + Send, b: impl FnOnce() -> B) -> (Result<A>, B) {
+    if !parallel || cfg!(target_arch = "wasm32") {
+        let a = a();
+        return (a, b());
+    }
+    std::thread::scope(|sc| {
+        let h = sc.spawn(a);
+        let b = b();
+        (h.join().unwrap_or_else(|_| Err(FormatError::Io(std::io::Error::other("preview worker panicked")))), b)
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Sources
 // ---------------------------------------------------------------------------
@@ -126,10 +154,17 @@ pub fn read_entry(file: &mut impl std::io::Read, len: u64, max: usize, path: &st
 /// The saver checks the same bound, so every bundle it writes loads again.
 const MAX_MANIFEST_DEPTH: usize = 3 * (convert::MAX_GROUP_DEPTH + 1) + 64;
 
-/// Rejects JSON nested deeper than [`MAX_MANIFEST_DEPTH`] with a linear scan (no recursion), so
-/// parsing with serde_json's recursion limit disabled can't exhaust the stack on hostile input.
+/// Most JSON items (arrays and objects opened, plus elements and members after a comma) a
+/// manifest may hold. Parsing builds a `serde_json::Value` tree of tens of bytes per item, so
+/// `[0,0,…]` costs about 16× its size in memory; a typical manifest spends 20 bytes or more per
+/// item, so this still admits manifests of about 80 MiB.
+const MAX_MANIFEST_ITEMS: usize = 4 << 20;
+
+/// Rejects JSON nested deeper than [`MAX_MANIFEST_DEPTH`] or holding more than
+/// [`MAX_MANIFEST_ITEMS`] items with a linear scan (no recursion), so parsing with serde_json's
+/// recursion limit disabled can't exhaust the stack, nor tiny values the memory, on hostile input.
 fn check_manifest_depth(json: &[u8]) -> Result<()> {
-    let (mut depth, mut in_str, mut escaped) = (0usize, false, false);
+    let (mut depth, mut items, mut in_str, mut escaped) = (0usize, 0usize, false, false);
     for &b in json {
         if in_str {
             match b {
@@ -150,6 +185,12 @@ fn check_manifest_depth(json: &[u8]) -> Result<()> {
             }
             b']' | b'}' => depth = depth.saturating_sub(1),
             _ => {}
+        }
+        if matches!(b, b'[' | b'{' | b',') {
+            items += 1;
+            if items > MAX_MANIFEST_ITEMS {
+                return Err(FormatError::LimitExceeded(format!("manifest JSON holds more than {MAX_MANIFEST_ITEMS} values")));
+            }
         }
     }
     Ok(())
@@ -468,7 +509,6 @@ struct FileSignature {
 struct Prepared {
     manifest: Vec<u8>,
     objects: BTreeMap<String, Object>,
-    previews: Vec<(&'static str, Vec<u8>)>,
     stats: SaveStats,
 }
 
@@ -587,6 +627,50 @@ fn validate_bundle_file(root: &Path, path: &Path) -> Result<()> {
     plain_file_or_missing(path)
 }
 
+/// Flush `dir`, the folder `written` was just renamed into, as `atomic_write` does (with the
+/// full-flush fallback of `sync_file`, #1336). Windows flushes through the injected `AtomicFs`
+/// and fails on any error (#7858).
+#[cfg(not(windows))]
+fn flush_bundle_dir(dir: &Path, written: &Path) -> std::io::Result<()> {
+    use crate::atomic::AtomicFs;
+    #[cfg(test)]
+    {
+        FLUSHED.with(|f| f.borrow_mut().push(dir.to_path_buf()));
+        let named = |p: Option<&Path>, name: &str| p.and_then(Path::file_name).is_some_and(|n| n == name);
+        if FAIL_DIR_FLUSH.with(|f| {
+            let hit = f.get().is_some_and(|name| named(Some(written), name) || named(written.parent(), name));
+            if hit {
+                f.set(None);
+            }
+            hit
+        }) {
+            return Err(std::io::Error::other("injected folder flush failure"));
+        }
+    }
+    let _ = written;
+    crate::atomic::RealFs.sync_dir(dir)
+}
+
+/// [`flush_bundle_dir`], as the save's error when the flush was attempted and failed: `written`
+/// is in place, but may not survive a power loss or crash (#4968).
+#[cfg(not(windows))]
+fn confirm_flushed(dir: &Path, written: &Path) -> Result<()> {
+    crate::atomic::dir_synced(flush_bundle_dir(dir, written)).map_err(|e| {
+        FormatError::Io(std::io::Error::new(
+            e.kind(),
+            format!("{} was written, but its folder could not be flushed to disk, so the save may not survive a power loss or crash: {e}", written.display()),
+        ))
+    })
+}
+
+#[cfg(all(test, not(windows)))]
+thread_local! {
+    /// Tests: the bundle file, or folder, whose next folder flush fails, once, on this thread.
+    static FAIL_DIR_FLUSH: std::cell::Cell<Option<&'static str>> = const { std::cell::Cell::new(None) };
+    /// Tests: the folders flushed on this thread, in order.
+    static FLUSHED: std::cell::RefCell<Vec<PathBuf>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
 /// Publish a validated bundle entry through a flushed temporary file and replacing rename.
 /// On Windows, propagate a failed directory barrier even though the new entry is already visible.
 fn write_bundle_file(root: &Path, path: &Path, data: &[u8], fs: &dyn crate::atomic::AtomicFs) -> Result<()> {
@@ -598,7 +682,14 @@ fn write_bundle_file(root: &Path, path: &Path, data: &[u8], fs: &dyn crate::atom
     let mut temporary = None;
     for _ in 0..8 {
         let candidate = parent.join(crate::atomic::temp_name(&name.to_string_lossy()));
-        match std::fs::OpenOptions::new().write(true).create_new(true).open(&candidate) {
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        match opts.open(&candidate) {
             Ok(file) => {
                 temporary = Some((candidate, file));
                 break;
@@ -632,10 +723,10 @@ fn write_bundle_file(root: &Path, path: &Path, data: &[u8], fs: &dyn crate::atom
         {
             fs.sync_dir(parent).map_err(|e| crate::atomic::publication_error(e, path))?;
         }
-        #[cfg(unix)]
-        {
-            let _ = std::fs::File::open(parent).and_then(|d| d.sync_all());
-        }
+        // Elsewhere a failed flush is reported too (#4968), but a file system that can't flush a
+        // directory at all still saves, as in `atomic_write`.
+        #[cfg(not(windows))]
+        confirm_flushed(parent, path)?;
         Ok(())
     })();
     if result.is_err() && validate_bundle_file(root, &tmp).is_ok() {
@@ -818,13 +909,6 @@ impl PcraftWriter {
         convert::check_nesting(&doc.layers)?;
         let mut c = Collect { hash_cache: Some(&mut self.hash_cache), blob_hash_cache: Some(&mut self.blob_hash_cache), ..Default::default() };
         let document = convert::doc_m(doc, &mut c);
-        let mut previews = Vec::new();
-        if let Some(t) = &opts.thumbnail {
-            previews.push((THUMB, png(t)?));
-        }
-        if let Some(t) = &opts.composite {
-            previews.push((COMPOSITE, png(t)?));
-        }
         let manifest = Manifest {
             format_version: FORMAT_VERSION,
             generator: format!("photocraft-format {}", env!("CARGO_PKG_VERSION")),
@@ -848,23 +932,33 @@ impl PcraftWriter {
         for (h, b) in c.blobs {
             objects.insert(blob_path(&h), Object::Blob(b));
         }
-        Ok(Prepared { manifest, objects, previews, stats })
+        Ok(Prepared { manifest, objects, stats })
     }
 
     /// Save as a ZIP bundle in memory.
     pub fn save_zip(&mut self, doc: &Document, opts: &SaveOptions) -> Result<(Vec<u8>, SaveStats)> {
-        let p = self.prepare(doc, opts)?;
+        // Another thread encodes the previews while the document is collected and its new
+        // objects are compressed on all cores (zstd dominates a full save).
+        let (previews, prepared) = beside(
+            opts.thumbnail.is_some() || opts.composite.is_some(),
+            || previews(opts),
+            || -> Result<_> {
+                let p = self.prepare(doc, opts)?;
+                let todo: Vec<(&String, &Object)> = p.objects.iter().filter(|(path, _)| !self.compressed.contains_key(*path)).collect();
+                let fresh: HashMap<String, Arc<Vec<u8>>> = par_compress(&todo)?.into_iter().map(|(path, data)| (path.clone(), data)).collect();
+                Ok((p, fresh))
+            },
+        );
+        let (p, mut fresh) = prepared?;
+        let previews = previews?;
         let mut stats = p.stats;
         let mut z = ZipWriter::new();
         z.add(MANIFEST, &p.manifest)?;
-        for (name, data) in &p.previews {
+        for (name, data) in &previews {
             z.add(name, data)?;
         }
         let mut next = HashMap::with_capacity(p.objects.len());
         let mut cached_bytes = 0usize;
-        // New objects are compressed on all cores first (zstd dominates a full save).
-        let todo: Vec<(&String, &Object)> = p.objects.iter().filter(|(path, _)| !self.compressed.contains_key(*path)).collect();
-        let mut fresh: HashMap<&String, Arc<Vec<u8>>> = par_compress(&todo)?.into_iter().collect();
         for (path, obj) in &p.objects {
             let (key, data) = match self.compressed.remove_entry(path) {
                 Some((key, data)) => {
@@ -912,6 +1006,7 @@ impl PcraftWriter {
             validate_bundle_file(dir, &dir.join(path))?;
         }
         let p = self.prepare(doc, opts)?;
+        let previews = previews(opts)?;
         let mut stats = p.stats;
         if self.verified_directory.as_ref().is_none_or(|cache| cache.directory != canonical_dir) {
             self.verified_directory = Some(DirectoryVerificationCache { directory: canonical_dir.clone(), ..Default::default() });
@@ -971,7 +1066,7 @@ impl PcraftWriter {
                 }
             }
         }
-        for (name, data) in &p.previews {
+        for (name, data) in &previews {
             write_bundle_file(dir, &dir.join(name), data, fs)?;
         }
         // Pin all GC directories before removing stale previews or objects.
@@ -987,11 +1082,18 @@ impl PcraftWriter {
                 fs.sync_dir(&dir.join(sub)).map_err(|e| crate::atomic::publication_error(e, &dir.join(sub)))?;
             }
         }
+        #[cfg(not(windows))]
+        for sub in ["tiles", "blobs"] {
+            let folder = dir.join(sub);
+            if folder.is_dir() {
+                confirm_flushed(&folder, &folder)?;
+            }
+        }
         write_bundle_file(dir, &dir.join(MANIFEST), &p.manifest, fs)?;
         // Omitted previews belong to the previous manifest until the new one commits.
         // After commit, a locked leftover is only housekeeping, just like unused objects.
         for stale in [THUMB, COMPOSITE] {
-            if !p.previews.iter().any(|(n, _)| *n == stale) {
+            if !previews.iter().any(|(n, _)| *n == stale) {
                 let _ = remove_bundle_file(dir, &dir.join(stale), &gc);
             }
         }
@@ -1119,6 +1221,53 @@ fn compressed_cache_budget_limits_retained_capacity_without_changing_bytes() {
     assert!(writer.compressed.is_empty());
 }
 
+#[cfg(test)]
+#[test]
+fn previews_follow_the_manifest_with_the_bytes_of_a_serial_encode() {
+    use photocraft_doc::{Layer, LayerContent};
+    use photocraft_geom::Size;
+    use photocraft_raster::Surface;
+
+    let mut doc = Document::new("previews", Size::new(600, 3), photocraft_color::ColorMode::Rgb, SampleType::U8);
+    let mut surface = Surface::new(doc.pixel_format());
+    for x in 0..600 {
+        surface.write_pixel(x, 1, &[x as f32 / 600.0, 0.5, 0.25, 1.0]);
+    }
+    doc.layers.push(Layer::new("pixels", LayerContent::Raster(surface)));
+    let image = |w: u32, h: u32, k: u8| {
+        let mut i = Rgba8Image::new(w, h);
+        i.pixels.iter_mut().enumerate().for_each(|(j, p)| *p = (j as u8).wrapping_mul(k));
+        i
+    };
+    let (thumb, composite) = (image(4, 3, 7), image(9, 5, 13));
+    for (t, c) in [(true, true), (true, false), (false, true), (false, false)] {
+        let opts = SaveOptions { thumbnail: t.then(|| thumb.clone()), composite: c.then(|| composite.clone()) };
+        let (bytes, _) = PcraftWriter::new().save_zip(&doc, &opts).unwrap();
+        let zip = ZipReader::new(&bytes).unwrap();
+        let names: Vec<&str> = zip.entries.iter().map(|e| e.name.as_str()).collect();
+        let mut want = vec![MANIFEST];
+        want.extend(t.then_some(THUMB));
+        want.extend(c.then_some(COMPOSITE));
+        assert_eq!(names[..want.len()], want[..]);
+        assert!(names[want.len()..].iter().all(|n| n.starts_with("tiles/") || n.starts_with("blobs/")), "{names:?}");
+        for (name, img) in [(THUMB, opts.thumbnail.as_ref()), (COMPOSITE, opts.composite.as_ref())] {
+            assert_eq!(zip.read_by_name(name, usize::MAX).ok(), img.map(|i| png(i).unwrap()), "{name}");
+        }
+    }
+    let bad = SaveOptions { thumbnail: Some(Rgba8Image { width: 4, height: 3, pixels: vec![0; 5] }), composite: Some(composite.clone()) };
+    assert!(matches!(PcraftWriter::new().save_zip(&doc, &bad), Err(FormatError::Unsupported(m)) if m.starts_with("preview")));
+    let bad = SaveOptions { thumbnail: Some(thumb.clone()), composite: Some(Rgba8Image { width: 9, height: 5, pixels: vec![0; 5] }) };
+    assert!(matches!(PcraftWriter::new().save_zip(&doc, &bad), Err(FormatError::Unsupported(m)) if m.starts_with("preview")));
+
+    let dir = std::env::temp_dir().join(format!("pcraft-previews-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let opts = SaveOptions { thumbnail: Some(thumb.clone()), composite: Some(composite.clone()) };
+    PcraftWriter::new().save_dir(&doc, &dir, &opts).unwrap();
+    assert_eq!(std::fs::read(dir.join(THUMB)).unwrap(), png(&thumb).unwrap());
+    assert_eq!(std::fs::read(dir.join(COMPOSITE)).unwrap(), png(&composite).unwrap());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 #[cfg(all(test, unix))]
 #[test]
 fn gc_pinned_directory_handles_resist_subdirectory_swap() {
@@ -1147,6 +1296,72 @@ fn gc_pinned_directory_handles_resist_subdirectory_swap() {
     assert!(!bundle.join("old-tiles").join(&filename).exists());
     assert_eq!(std::fs::read(outside.join(&filename)).unwrap(), b"outside file must survive");
     std::fs::remove_dir_all(root).unwrap();
+}
+
+/// #4968: a manifest whose folder can't be flushed fails the save, and the objects the previous
+/// manifest references stay in place; the next save that flushes removes what is unreferenced.
+#[cfg(all(test, not(windows)))]
+#[test]
+fn a_failed_manifest_flush_keeps_the_previous_objects() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let dir = std::env::temp_dir().join(format!("pcraft-flush-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+    std::fs::create_dir_all(&dir).unwrap();
+    let dir = std::fs::canonicalize(dir).unwrap();
+    let mut doc = Document::new("flush", photocraft_doc::Size::new(64, 64), photocraft_color::ColorMode::Rgb, SampleType::U8);
+    let id = doc.insert_above(None, photocraft_doc::Layer::raster("paint", doc.pixel_format()));
+    let paint = |doc: &mut Document, red: f32| {
+        doc.layer_mut(id).unwrap().surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(0, 0, 64, 64), &[red, 0.5, 0.25, 1.0]);
+    };
+    paint(&mut doc, 1.0);
+    let mut w = PcraftWriter::new();
+    w.save_dir(&doc, &dir, &SaveOptions::default()).unwrap();
+    let old = list_objects(&dir).unwrap();
+    paint(&mut doc, 0.0);
+    FAIL_DIR_FLUSH.with(|f| f.set(Some(MANIFEST)));
+    let e = w.save_dir(&doc, &dir, &SaveOptions::default()).unwrap_err();
+    assert!(e.to_string().contains("could not be flushed"), "{e}");
+    let now = list_objects(&dir).unwrap();
+    assert!(old.is_subset(&now), "the previous manifest's objects are kept");
+    assert!(now.len() > old.len(), "the new objects were written");
+    let stats = w.save_dir(&doc, &dir, &SaveOptions::default()).unwrap();
+    assert!(stats.objects_removed > 0, "the next save removes the unreferenced objects");
+    assert_eq!(crate::load_path(&dir).unwrap(), doc);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// An object whose folder flush failed is reused by the retried save, which writes no new object
+/// there: that save still flushes the object folder before committing a manifest that names it.
+#[cfg(all(test, not(windows)))]
+#[test]
+fn a_retried_save_flushes_the_folder_of_a_reused_object() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let dir = std::env::temp_dir().join(format!("pcraft-retry-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+    std::fs::create_dir_all(&dir).unwrap();
+    let dir = std::fs::canonicalize(dir).unwrap();
+    // One layer of one tile: the retry finds its only object already written.
+    let mut doc = Document::new("retry", photocraft_doc::Size::new(16, 16), photocraft_color::ColorMode::Rgb, SampleType::U8);
+    let id = doc.insert_above(None, photocraft_doc::Layer::raster("paint", doc.pixel_format()));
+    doc.layer_mut(id).unwrap().surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(0, 0, 16, 16), &[1.0, 0.5, 0.25, 1.0]);
+    let mut w = PcraftWriter::new();
+    FAIL_DIR_FLUSH.with(|f| f.set(Some("tiles")));
+    let e = w.save_dir(&doc, &dir, &SaveOptions::default()).unwrap_err();
+    assert!(e.to_string().contains("could not be flushed"), "{e}");
+    assert!(!dir.join(MANIFEST).exists(), "nothing committed");
+    let written = list_objects(&dir).unwrap();
+    assert_eq!(written.iter().filter(|o| o.starts_with("tiles/")).count(), 1, "{written:?}");
+    FLUSHED.with(|f| f.borrow_mut().clear());
+    let stats = w.save_dir(&doc, &dir, &SaveOptions::default()).unwrap();
+    assert_eq!(stats.tiles_written, 0, "the tile is reused");
+    let flushed = FLUSHED.with(|f| f.borrow().clone());
+    let tiles = flushed.iter().position(|d| *d == dir.join("tiles"));
+    let manifest = flushed.iter().rposition(|d| *d == dir);
+    assert!(tiles.is_some() && tiles < manifest, "tiles flushed before the manifest: {flushed:?}");
+    assert_eq!(crate::load_path(&dir).unwrap(), doc);
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 fn list_objects(dir: &Path) -> Result<HashSet<String>> {

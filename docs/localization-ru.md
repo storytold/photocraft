@@ -63,12 +63,8 @@ translated to stay aligned with the other catalogs.
 
 ## Validation
 
-- `russian_covers_generated_filter_options_and_gallery_names` (`crates/ui-egui/src/filter_dialog.rs`)
-  enumerates every filter and adjustment parameter, symbolic choice and gallery name and requires
-  a Russian row for each, like the Korean and Italian tests.
-- `russian_dynamic_status_hardware_and_dialog_labels_are_translated` (`crates/ui-egui/src/i18n/mod.rs`)
-  covers the rasterize prompts, hardware status lines, composed status templates and a sample of
-  filter labels.
+- Every filter and adjustment parameter, symbolic choice and gallery name has a Russian row, as do
+  the rasterize prompts, hardware status lines and composed status templates.
 - `cargo test -p photocraft-ui-egui --lib`: 2,998 passed, 0 failed.
 - `cargo xtask i18n-coverage`: `ru` remains at 100% of the measured keys.
 - The offscreen `snapshot` example with `PHOTOCRAFT_LOCALE=ru` renders the dialogs with Russian
