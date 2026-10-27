@@ -34,7 +34,7 @@ fn run_with(args: &[&str], vars: &[(&str, &str)]) -> Run {
     let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let dir = std::env::temp_dir().join(format!("photocraft-usage-{}-{n}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_photocraft"));
+    let mut cmd = std::process::Command::new(crate::binary());
     for var in VARS {
         cmd.env_remove(var);
     }
