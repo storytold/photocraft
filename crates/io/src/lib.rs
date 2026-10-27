@@ -38,6 +38,7 @@ pub mod abr_map;
 mod adjust_map;
 pub mod affinity;
 pub mod annotations_map;
+pub mod asl_map;
 pub mod blocks;
 pub mod camera_raw_xmp;
 mod channel_map;
@@ -74,6 +75,7 @@ pub mod text_styles_map;
 pub mod tiff_layers;
 pub mod vector_map;
 mod xcf;
+pub mod xml;
 
 use photocraft_codecs::{CodecError, EncodeOptions};
 pub use photocraft_codecs::{DdsCompression, DdsOptions, DpxBits};
@@ -124,6 +126,9 @@ pub enum IoError {
     /// An SVG that does not parse (or is too large to rasterise).
     #[error("SVG: {0}")]
     Svg(String),
+    /// The file could not be read.
+    #[error("{0}")]
+    Read(String),
     /// A background import or save was cancelled ([`import_with`], [`export_with`]).
     #[error("cancelled")]
     Cancelled,
@@ -232,6 +237,9 @@ pub struct ExportOptions {
     pub document_path: Option<std::path::PathBuf>,
     /// Reuse one cache per open document for native saves; other formats ignore it.
     pub pcraft_cache: Option<PcraftExportCache>,
+    /// PSD/PSB and layered TIFF: read and embed the files linked smart objects name (see
+    /// [`PsdExportOptions::read_linked_files`]). On by default; automation turns it off.
+    pub read_linked_files: bool,
 }
 
 impl Default for ExportOptions {
@@ -246,6 +254,7 @@ impl Default for ExportOptions {
             psd_maximize_compatibility: true,
             document_path: None,
             pcraft_cache: None,
+            read_linked_files: true,
         }
     }
 }
@@ -343,32 +352,110 @@ pub fn import_with_options(name: &str, bytes: &[u8], opts: &ImportOptions) -> Re
 
 /// [`import_with`] with the user's import settings.
 pub fn import_with_options_and_interrupt(name: &str, bytes: &[u8], opts: &ImportOptions, ctl: &photocraft_raster::Interrupt) -> Result<ImportResult, IoError> {
-    ctl.check().map_err(|_| IoError::Cancelled)?;
-    let r = import_stages(name, bytes, ctl, opts)?;
-    ctl.check().map_err(|_| IoError::Cancelled)?;
-    ctl.progress(1.0);
-    Ok(r)
+    import_for_open_with(name, bytes, opts, ctl).map(|(result, _)| result)
 }
 
-fn import_psd(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt) -> Result<ImportResult, IoError> {
+/// The ordinary import result plus whether PSD/PSB decoding encountered damaged data.
+/// Interactive callers can ask whether to continue before adding the document. This is
+/// information, not a save policy: accepting it opens an ordinary, writable document.
+/// Non-interactive callers keep using [`import`], which still returns readable content
+/// and warnings without requiring confirmation.
+///
+/// The flag is independent of the wording of `warnings`. An ordinary compatibility
+/// warning does not set it. No file is decoded a second time to obtain this information.
+pub fn import_for_open(name: &str, bytes: &[u8], opts: &ImportOptions) -> Result<(ImportResult, bool), IoError> {
+    import_for_open_with(name, bytes, opts, &photocraft_raster::Interrupt::NONE)
+}
+
+/// [`import_for_open`] with cancellation and progress, shared with [`import_with_options_and_interrupt`].
+pub fn import_for_open_with(name: &str, bytes: &[u8], opts: &ImportOptions, ctl: &photocraft_raster::Interrupt) -> Result<(ImportResult, bool), IoError> {
+    ctl.check().map_err(|_| IoError::Cancelled)?;
+    let mut damaged = false;
+    let result = import_stages(name, bytes, ctl, opts, &mut damaged)?;
+    ctl.check().map_err(|_| IoError::Cancelled)?;
+    ctl.progress(1.0);
+    Ok((result, damaged))
+}
+
+/// The PSD/PSB part of an import, from a parse that takes [`PsdFile::from_bytes_and_merged_recovering`]'s
+/// `want` and `recover`: of the file's bytes, or of the file itself ([`import_file_for_open_with`]).
+fn import_psd(
+    name: &str,
+    ctl: &photocraft_raster::Interrupt,
+    damaged: &mut bool,
+    parse: impl FnOnce(&dyn Fn(&PsdFile) -> bool, &dyn Fn(&PsdFile) -> bool) -> photocraft_psd::Result<(PsdFile, Option<photocraft_psd::Result<Vec<u8>>>)>,
+) -> Result<ImportResult, IoError> {
     // A merged image the import reads is decoded with the parse: a ZIP one is inflated once.
-    let (file, merged) = PsdFile::from_bytes_and_merged_recovering(
-        bytes,
-        |f| psd_import::check_group_depth(f).is_ok() && psd_import::merged_needed(f),
-        psd_import::can_recover_layers,
-    )?;
+    // A failed read of the file (one parsed from its source) is a read error, as reading the
+    // whole file first would report it.
+    let (file, merged) =
+        parse(&|f| psd_import::check_group_depth(f).is_ok() && psd_import::merged_needed(f), &psd_import::can_recover_layers).map_err(|e| match e {
+            photocraft_psd::PsdError::Read(msg) => IoError::Read(msg),
+            e => e.into(),
+        })?;
     // Nesting past the document model's cap could never be saved; reject the file with the
     // actionable limit.
     psd_import::check_group_depth(&file)?;
     ctl.check().map_err(|_| IoError::Cancelled)?;
     ctl.progress(0.05);
-    let (mut document, warnings) = psd_import::psd_to_document_decoded(&file, ctl, merged).ok_or(IoError::Cancelled)?;
+    // Read before the conversion, which moves the global blocks into the document.
+    let txt2 = file.global_blocks.iter().find(|b| &b.key == b"Txt2").and_then(|b| photocraft_text::psd::parse_txt2(&b.data));
+    let (mut document, warnings, psd_damaged, read_error) = psd_import::psd_to_document_owned(file, ctl, merged).ok_or(IoError::Cancelled)?;
+    // The file became unreadable while its layers were read from it (`import_file_for_open_with`):
+    // the open fails, rather than opening with those layers empty.
+    if let Some(e) = read_error {
+        return Err(IoError::Read(e));
+    }
+    *damaged = psd_damaged;
     document.name = name.to_string();
-    text_import::prepare(&mut document);
+    text_import::prepare(&mut document, txt2.as_ref());
     Ok(ImportResult { document, warnings, source_read_only: false, preview_only: false })
 }
 
-fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, opts: &ImportOptions) -> Result<ImportResult, IoError> {
+/// [`import_for_open_with`] for the file at `path`. A PSD/PSB is parsed from the open file
+/// ([`PsdFile::from_source`]) rather than read whole: its channel data is read layer by layer as
+/// it is decoded, so opening it needs memory for the document, not for the document plus the
+/// file. A read that fails meanwhile (the file is truncated or rewritten, its drive goes away)
+/// fails the open. Other formats are read whole.
+#[cfg(any(unix, windows))]
+pub fn import_file_for_open_with(
+    name: &str,
+    path: &std::path::Path,
+    opts: &ImportOptions,
+    ctl: &photocraft_raster::Interrupt,
+) -> Result<(ImportResult, bool), IoError> {
+    let read_failed = |e: std::io::Error| IoError::Read(format!("{}: {e}", path.display()));
+    ctl.check().map_err(|_| IoError::Cancelled)?;
+    let source = photocraft_psd::FileSource::open(path).map_err(read_failed)?;
+    let mut magic = [0u8; 4];
+    let psd = !has_extension(name, photocraft_format::EXTENSION) && photocraft_psd::ReadAt::read_at(&source, 0, &mut magic).is_ok() && is_psd(&magic);
+    if !psd {
+        drop(source);
+        let bytes = photocraft_format::read_file(path).map_err(read_failed)?;
+        return import_for_open_with(name, &bytes, opts, ctl);
+    }
+    import_source_for_open_with(name, photocraft_psd::Source::new(source), ctl)
+}
+
+/// [`import_file_for_open_with`] for a PSD/PSB in any [`photocraft_psd::ReadAt`] source.
+pub fn import_source_for_open_with(name: &str, source: photocraft_psd::Source, ctl: &photocraft_raster::Interrupt) -> Result<(ImportResult, bool), IoError> {
+    ctl.check().map_err(|_| IoError::Cancelled)?;
+    let mut damaged = false;
+    let r = import_psd(name, ctl, &mut damaged, |want, recover| PsdFile::from_source_and_merged_recovering(source, want, recover))?;
+    ctl.check().map_err(|_| IoError::Cancelled)?;
+    ctl.progress(1.0);
+    Ok((r, damaged))
+}
+
+/// [`import_file_for_open_with`] without the damage flag.
+#[cfg(any(unix, windows))]
+pub fn import_file(name: &str, path: &std::path::Path, opts: &ImportOptions, ctl: &photocraft_raster::Interrupt) -> Result<ImportResult, IoError> {
+    import_file_for_open_with(name, path, opts, ctl).map(|(result, _)| result)
+}
+
+/// Dispatches format-specific importers and propagates a structured PSD damage
+/// flag alongside the ordinary best-effort import result.
+fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, opts: &ImportOptions, damaged: &mut bool) -> Result<ImportResult, IoError> {
     // A declared native extension must reach its loader so malformed bundles retain format errors.
     if has_extension(name, photocraft_format::EXTENSION) || photocraft_format::is_pcraft(bytes) {
         let document = photocraft_format::load_from_bytes(bytes)?;
@@ -377,7 +464,7 @@ fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, o
     // Magic first: an Affinity file renamed .psd is still Affinity (#5258 corpus
     // preview_never_saves_back_to_its_native_or_renamed_source).
     if is_psd(bytes) {
-        return import_psd(name, bytes, ctl);
+        return import_psd(name, ctl, damaged, |want, recover| PsdFile::from_bytes_and_merged_recovering(bytes, want, recover));
     }
     if affinity::is_affinity(bytes) || affinity::has_extension(name) {
         return affinity::import(name, bytes);
@@ -410,7 +497,7 @@ fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, o
     // A `.psd`/`.psb`/`.psdt` with no raster signature keeps the PSD error instead of
     // `codec: unrecognized image format` (#5258). Magic already returned above.
     if is_psd_input(name, bytes) {
-        return import_psd(name, bytes, ctl);
+        return import_psd(name, ctl, damaged, |want, recover| PsdFile::from_bytes_and_merged_recovering(bytes, want, recover));
     }
     flat::import_flat(name, bytes)
 }
@@ -526,6 +613,7 @@ fn export_stages(doc: &Document, name_or_ext: &str, opts: &ExportOptions, ctl: &
             force_psb: opts.force_psb || ext == "psb",
             maximize_compatibility: opts.psd_maximize_compatibility,
             document_path: opts.document_path.clone(),
+            read_linked_files: opts.read_linked_files,
             ..Default::default()
         };
         let (mut file, mut warnings) = with_span(ctl, 0.0, PSD_MODEL_DONE, |ctl| psd_export::document_to_psd_interruptible(doc, &o, ctl));
@@ -641,7 +729,44 @@ pub fn merged_composite(file: &PsdFile) -> Result<Vec<[f32; 4]>, IoError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{import, is_psd_input, is_svg_input};
+    use super::{ImportOptions, import, import_for_open, is_psd_input, is_svg_input};
+    use photocraft_psd::{Compression, Version, testgen};
+
+    /// Verifies a valid PSD remains editable after import.
+    #[test]
+    fn valid_psd_can_still_be_edited() {
+        let bytes = testgen::small(Version::Psd, Compression::Raw).to_bytes().unwrap();
+        let imported = import("valid.psd", &bytes).unwrap();
+        assert!(!imported.source_read_only);
+    }
+
+    /// Verifies corrupt PSD channels produce warnings and an interactive damage flag
+    /// without rejecting otherwise readable headless imports.
+    #[test]
+    fn unreadable_psd_channel_keeps_best_effort_import_and_reports_damage() {
+        let mut file = testgen::small(Version::Psd, Compression::Raw);
+        let channel = file.layers_mut()[0].channels.iter_mut().find(|c| c.id == 0).unwrap();
+        channel.data.clear();
+        let bytes = file.to_bytes().unwrap();
+        let imported = import("damaged.psd", &bytes).unwrap();
+        assert!(!imported.source_read_only);
+        assert!(imported.warnings.iter().any(|w| w.contains("could not be decoded")));
+        let (opened, damaged) = import_for_open("damaged.psd", &bytes, &ImportOptions::default()).unwrap();
+        assert!(damaged);
+        assert!(!opened.source_read_only);
+        assert!(!opened.preview_only);
+        assert_eq!(opened.warnings, imported.warnings);
+        assert_eq!(opened.document.layers.len(), imported.document.layers.len());
+    }
+
+    /// Verifies healthy PSD data never requires damage confirmation.
+    #[test]
+    fn valid_psd_does_not_request_damage_confirmation() {
+        let bytes = testgen::small(Version::Psd, Compression::Raw).to_bytes().unwrap();
+        let (result, damaged) = import_for_open("valid.psd", &bytes, &ImportOptions::default()).unwrap();
+        assert!(!damaged);
+        assert!(!result.source_read_only);
+    }
 
     #[test]
     fn svg_extension_does_not_override_another_format_signature() {
