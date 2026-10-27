@@ -661,6 +661,15 @@ except Place, which is a job that `poll_jobs` steps on the UI thread (a *coopera
 
 ## Indexed Color timings
 
+The stock Indexed Color dialog exposes Matte: None, Foreground Color, Background Color,
+White, Black and Other… (the shared Color Picker). Automation accepts `matte` as `none`,
+`foreground`, `background`, `white`, `black` or `#rrggbb`. A selected matte blends all
+partially transparent edges; with Transparency on, fully clear pixels stay transparent.
+With Transparency off, the selected matte also fills clear pixels. None retains the existing
+hard-edged transparency/default flattening behavior. Indexed conversion retains the document's
+ICC profile and encoded RGB sample representation; matte colours are interpreted in the document
+RGB coordinate space. This follows Adobe's documented
+[Indexed Color conversion options](https://helpx.adobe.com/photoshop/desktop/adjust-color/color-modes/conversion-options-for-indexed-color-images.html).
 `cargo run --release -p photocraft-engine --example indexed_color_perf -- image.png` measures
 palette construction, Floyd–Steinberg diffusion, and the complete full-resolution CPU preview
 path (proxy copy, engine command, result composition; excludes GPU upload/presentation).

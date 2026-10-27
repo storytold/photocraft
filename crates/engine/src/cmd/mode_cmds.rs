@@ -255,6 +255,32 @@ fn parse_dither(s: &str) -> Option<Dither> {
     })
 }
 
+fn indexed_matte(s: &Session, p: &Value) -> Result<Option<[f32; 3]>> {
+    const CMD: &str = "image.mode.indexedColor";
+    let rgba = |color: [f32; 4]| [color[0], color[1], color[2]];
+    let matte = match p.get("matte") {
+        None | Some(Value::Null) => return Ok(None),
+        Some(Value::String(value)) => match value.as_str() {
+            "none" => return Ok(None),
+            "white" => [1.0; 3],
+            "black" => [0.0; 3],
+            "foreground" => rgba(s.tools.foreground),
+            "background" => rgba(s.tools.background),
+            value if value.len() == 7 && value.starts_with('#') => p
+                .get("matte")
+                .and_then(parse_color)
+                .ok_or_else(|| bad(CMD, "matte must be none, foreground, background, white, black or #rrggbb"))?
+                .map(|v| f32::from(v) / 255.0),
+            _ => return Err(bad(CMD, "matte must be none, foreground, background, white, black or #rrggbb")),
+        },
+        _ => return Err(bad(CMD, "matte must be a colour string")),
+    };
+    if matte.iter().any(|v| !v.is_finite() || !(0.0..=1.0).contains(v)) {
+        return Err(bad(CMD, "matte channels must be finite and in 0..=1"));
+    }
+    Ok(Some(matte))
+}
+
 fn indexed_color(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "image.mode.indexedColor";
     let kind = PaletteKind::from_id(str_or(p, "palette", "selective"))
@@ -273,8 +299,23 @@ fn indexed_color(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let amount = num(p, "amount", 75.0).clamp(0.0, 100.0) / 100.0;
     let transparency = p.get("transparency").and_then(Value::as_bool).unwrap_or(true);
+    let matte = indexed_matte(s, p)?;
     let (pal_len, transparent) = s.edit("Indexed Color", |doc, active| {
-        let mut px = composite(doc, !transparency);
+        let mut px = composite(doc, !transparency && matte.is_none());
+        if let Some(matte) = matte {
+            for pixel in &mut px {
+                let alpha = pixel[3].clamp(0.0, 1.0);
+                if alpha == 1.0 {
+                    continue;
+                }
+                if !transparency || alpha > 0.0 {
+                    for (channel, background) in pixel[..3].iter_mut().zip(matte) {
+                        *channel = *channel * alpha + background * (1.0 - alpha);
+                    }
+                    pixel[3] = 1.0;
+                }
+            }
+        }
         let has_clear = transparency && px.iter().any(|q| q[3] < 0.5);
         let mut pal = quantize::build_palette(&px, kind, if has_clear { colors.saturating_sub(1).max(2) } else { colors }, forced).map_err(|e| bad(CMD, e))?;
         let transparent = if has_clear && pal.len() < 256 {
@@ -689,7 +730,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "image.mode.indexedColor",
             "Indexed Color…",
             ["Image", "Mode"],
-            r##"{"palette":"selective|perceptual|adaptive|exact|systemMac|systemWindows|web|uniform"="selective","colors":2..256=256,"forced":"blackWhite|none|primaries|web"="blackWhite","transparency":bool=true,"dither":"diffusion|none|pattern|noise"="diffusion","amount":0..100=75} (flattens)"##,
+            r##"{"palette":"selective|perceptual|adaptive|exact|systemMac|systemWindows|web|uniform"="selective","colors":2..256=256,"forced":"blackWhite|none|primaries|web"="blackWhite","transparency":bool=true,"matte":color,"dither":"diffusion|none|pattern|noise"="diffusion","amount":0..100=75} (flattens; matte: none|foreground|background|white|black|#rrggbb)"##,
             |s| mode_is(
                 s,
                 &[ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Indexed, ColorMode::Duotone, ColorMode::Cmyk, ColorMode::Lab],

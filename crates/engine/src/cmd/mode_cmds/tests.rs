@@ -248,6 +248,61 @@ fn indexed_color_palettes_and_dithers() {
 }
 
 #[test]
+fn indexed_matte_blends_edges_without_replacing_clear_pixels() {
+    for depth in [8, 16, 32] {
+        for (matte, color) in [
+            ("black", [0.0, 0.0, 0.0]),
+            ("white", [1.0, 1.0, 1.0]),
+            ("#0000ff", [0.0, 0.0, 1.0]),
+            ("foreground", [0.0, 0.0, 1.0]),
+            ("background", [0.0, 1.0, 0.0]),
+        ] {
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width": 4, "height": 1, "depth": depth, "background": "transparent"})).unwrap();
+            s.execute("tools.setColors", json!({"foreground": "#0000ff", "background": "#00ff00"})).unwrap();
+            paint(&mut s, |x, _| match x {
+                0 => [0.0, 1.0, 0.0, 1.0],
+                1 => [1.0, 0.0, 0.0, 0.75],
+                2 => [1.0, 0.0, 0.0, 0.25],
+                _ => [0.0; 4],
+            });
+            let source = [1, 2].map(|x| doc(&s).layers[0].surface().unwrap().rgba(x, 0));
+            let expected = source.map(|pixel| [0, 1, 2].map(|i| pixel[i] * pixel[3] + color[i] * (1.0 - pixel[3])));
+            s.execute("image.mode.indexedColor", json!({"palette": "exact", "forced": "none", "dither": "none", "matte": matte})).unwrap();
+            let surface = doc(&s).layers[0].surface().unwrap();
+            let edges = [1, 2].map(|x| surface.rgba(x, 0));
+            for (edge, expected) in edges.iter().zip(expected) {
+                for i in 0..3 {
+                    assert!((edge[i] - expected[i]).abs() <= 1.0 / 255.0, "{depth}-bit {matte}: {edge:?} vs {expected:?}");
+                }
+                assert_eq!(edge[3], 1.0);
+            }
+            assert_eq!(surface.rgba(3, 0)[3], 0.0, "{matte}: fully transparent pixels stay clear");
+            assert_eq!(surface.rgba(0, 0), [0.0, 1.0, 0.0, 1.0]);
+            s.execute("edit.undo", json!({})).unwrap();
+            assert_eq!([1, 2].map(|x| doc(&s).layers[0].surface().unwrap().rgba(x, 0)), source);
+            s.execute("edit.redo", json!({})).unwrap();
+            assert_eq!([1, 2].map(|x| doc(&s).layers[0].surface().unwrap().rgba(x, 0)), edges);
+        }
+    }
+}
+
+#[test]
+fn indexed_matte_without_transparency_fills_clear_pixels_and_rejects_bad_input_atomically() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 2, "height": 1, "background": "transparent"})).unwrap();
+    let before = s.active().unwrap().revision;
+    for matte in [json!(false), json!(12), json!("#gg0000"), json!("#000000ff"), json!("unknown")] {
+        assert!(s.execute("image.mode.indexedColor", json!({"matte": matte})).is_err(), "{matte}");
+        assert_eq!(s.active().unwrap().revision, before);
+        assert_eq!(doc(&s).mode, ColorMode::Rgb);
+    }
+    s.execute("image.mode.indexedColor", json!({"palette": "exact", "forced": "none", "dither": "none", "transparency": false, "matte": "#0000ff"})).unwrap();
+    assert_eq!(doc(&s).layers[0].surface().unwrap().rgba(0, 0), [0.0, 0.0, 1.0, 1.0]);
+    assert_eq!(doc(&s).color_table.as_ref().unwrap().transparent, None);
+}
+
+#[test]
 fn indexed_exact_transparency_and_sources() {
     // Two colours + transparency: exact palette with a transparent entry.
     let mut s = Session::new();

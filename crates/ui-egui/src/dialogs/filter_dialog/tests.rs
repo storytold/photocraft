@@ -1642,3 +1642,47 @@ fn replace_color_localized_color_clusters() {
     assert!(px(2)[1] > 0.5, "near the point: shifted to green {:?}", px(2));
     assert!(px(38)[0] > 0.9 && px(38)[1] < 0.1, "far away: still red {:?}", px(38));
 }
+
+#[test]
+fn indexed_matte_dropdown_and_picker_change_the_applied_edge_color() {
+    use egui::accesskit::Role;
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    for (choice, blue) in [("Black", 0.0), ("Other…", 0.25)] {
+        let mut session = photocraft_engine::Session::new();
+        session.execute("file.new", json!({"width": 2, "height": 1, "depth": 32, "background": "transparent"})).unwrap();
+        session
+            .edit("fixture", |doc, active| {
+                let bounds = doc.bounds();
+                doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().write_region(bounds, &[1.0, 0.0, 0.0, 0.75, 0.0, 0.0, 0.0, 0.0]);
+                Ok(())
+            })
+            .unwrap();
+        let mut app = PhotocraftApp::new(session, crate::Services::default());
+        let mut harness = Harness::builder().with_size(egui::vec2(900.0, 1000.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), &mut app);
+        PhotocraftApp::setup_context(&harness.ctx, crate::theme::ThemeKind::ALL[0]);
+        let id = open(harness.state_mut(), "image.mode.indexedColor").unwrap();
+        harness.state_mut().ui.dialog_mut(id).unwrap().fields.insert("palette".into(), json!("exact"));
+        harness.run_steps(3);
+        harness.query_all_by_role(Role::ComboBox).find(|node| node.value().as_deref() == Some("None")).expect("Matte dropdown").click();
+        harness.run_steps(2);
+        harness.get_by_label(choice).click();
+        harness.run_steps(3);
+        if choice == "Other…" {
+            let picker = harness.state().ui.dialogs.last().unwrap().id;
+            assert_ne!(picker, id);
+            harness.state_mut().ui.dialog_mut(picker).unwrap().fields.insert("color".into(), json!("#0000ff"));
+            crate::dialogs::confirm(harness.state_mut(), picker).unwrap();
+            harness.state_mut().ui.dialogs.retain(|dialog| dialog.id != picker);
+            harness.run_steps(3);
+        }
+        harness.get_by_label("OK").click();
+        harness.run_steps(3);
+        let doc = &harness.state().session.active().unwrap().doc;
+        assert_eq!(doc.mode, photocraft_color::ColorMode::Indexed);
+        let surface = doc.layers[0].surface().unwrap();
+        let edge = surface.rgba(0, 0);
+        assert!((edge[0] - 0.75).abs() <= 1.0 / 255.0 && edge[1] == 0.0 && (edge[2] - blue).abs() <= 1.0 / 255.0 && edge[3] == 1.0, "{choice}: {edge:?}");
+        assert_eq!(surface.rgba(1, 0)[3], 0.0);
+    }
+}

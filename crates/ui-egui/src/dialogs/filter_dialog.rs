@@ -840,6 +840,44 @@ fn replace_color_result(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     }
 }
 
+fn indexed_matte_row(ui: &mut egui::Ui, fields: &mut Map<String, Value>) {
+    let value = fields.get("matte").and_then(Value::as_str).unwrap_or("none");
+    let mut choice = if value.starts_with('#') { "custom" } else { value };
+    let color = crate::color_picker_ui::parse_hex(value).unwrap_or([1.0; 3]);
+    let mut changed = false;
+    let mut pick = false;
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(tl!("Matte")).color(Tokens::get(ui.ctx()).text_dim));
+        changed = crate::widgets::dropdown(
+            ui,
+            "indexed-matte",
+            "Matte",
+            &mut choice,
+            &[
+                ("none", "None"),
+                ("foreground", "Foreground Color"),
+                ("background", "Background Color"),
+                ("white", "White"),
+                ("black", "Black"),
+                ("custom", "Other…"),
+            ],
+            170.0,
+        );
+        if choice == "custom" {
+            let bytes = color.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
+            pick = crate::widgets::color_swatch_button(ui, egui::Color32::from_rgb(bytes[0], bytes[1], bytes[2]), tl!("Matte")).clicked();
+        }
+    });
+    let custom = choice == "custom";
+    if changed {
+        let next = if custom { crate::color_picker_ui::hex(color) } else { choice.to_owned() };
+        fields.insert("matte".into(), json!(next));
+    }
+    if custom && (changed || pick) {
+        crate::color_picker_ui::request_field(fields, "matte", &crate::color_picker_ui::title_for("Matte"));
+    }
+}
+
 /// Dialog body for filter commands.
 pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let t = Tokens::get(ui.ctx());
@@ -856,6 +894,10 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         crate::select_mask_view::controls(ui, f);
     }
     for p in parse_spec(&spec) {
+        if cmd == "image.mode.indexedColor" && p.key == "matte" {
+            indexed_matte_row(ui, f);
+            continue;
+        }
         if zoom_center::owns(&cmd, f) && matches!(p.key.as_str(), "centerX" | "centerY") {
             if p.key == "centerX" {
                 zoom_center::row(ui, f);
