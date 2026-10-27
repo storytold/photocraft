@@ -64,6 +64,7 @@ winsafe = { version = "=0.0.29", default-features = false, features = ["kernel"]
 photocraft-ipp = { workspace = true }
 
 [dev-dependencies]
+proptest = { workspace = true }
 photocraft-affinity = { workspace = true, features = ["synth"] }
 photocraft-io = { workspace = true, features = ["testgen"] }
 # Synthetic camera raw files for the open tests.

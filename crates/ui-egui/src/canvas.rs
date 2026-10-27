@@ -581,6 +581,7 @@ fn paint_canvas(
         }
         if primary {
             crate::artboard_ui::draw_frames(app, painter, &xf);
+            crate::artboard_ui::draw_responsive_markers(app, painter, &xf);
         }
     }
 

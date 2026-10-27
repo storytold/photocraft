@@ -79,8 +79,10 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
         i if proof_preset(i).is_some() => app.session.active().is_some(),
         // "Custom…" is the full Proof Setup dialog.
         "view.proofSetup.custom" => app.session.active().is_some(),
-        "view.rulers" | "view.show.grid" | "view.show.guides" | "view.snap" | "view.lockGuides" => true,
-        "view.editSelectedGuides" | "view.clearSelectedGuides" => crate::guide_select::selected(app).is_some(),
+        "view.rulers" | "view.show.grid" | "view.show.guides" | "view.show.safeAreas" | "view.show.responsiveWarnings" | "view.snap" | "view.lockGuides" => {
+            true
+        }
+>>>>>>> 5b8899bd9 (port onto the app/ + cmd/ module split (#9697's restructure))
         "edit.cut" | "edit.copy" if app.ui.text_edit.is_some() => crate::type_tool::selected_range(app).is_some(),
         "edit.paste" | "select.all" if app.ui.text_edit.is_some() => true,
         // An image copied in another app can only be seen by reading the OS clipboard, which happens
@@ -184,6 +186,8 @@ pub(super) fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
         "view.rulers" => return Some(e.rulers),
         "view.show.grid" => return Some(e.grid),
         "view.show.guides" => return Some(e.guides),
+        "view.show.safeAreas" => return Some(e.safe_areas),
+        "view.show.responsiveWarnings" => return Some(e.responsive_warnings),
         "view.snap" => return Some(e.snap),
         "view.lockGuides" => return Some(e.lock_guides),
         _ => {}

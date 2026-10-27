@@ -640,3 +640,58 @@ fn file_info_keeps_multiline_metadata_on_confirm_and_reopen() {
         assert_eq!(app.ui.dialog_mut(id).unwrap().fields[key], "First line\nSecond line");
     }
 }
+
+
+
+#[test]
+fn responsive_export_can_skip_only_affected_artboards() {
+    assert_eq!(responsive_artboards_to_export(&[9, 5, 2], &[5], false), vec![9, 5, 2]);
+    assert_eq!(responsive_artboards_to_export(&[9, 5, 2], &[5], true), vec![9, 2]);
+    assert_eq!(responsive_artboards_to_export(&[9, 5, 2], &[5, 5, 99], true), vec![9, 2]);
+    assert!(responsive_artboards_to_export(&[9], &[9], true).is_empty());
+    assert_eq!(
+        crate::i18n::tr(crate::i18n::Lang::from_code("de").unwrap(), "Skip artboards with findings or incomplete checks"),
+        "Zeichenflächen mit Befunden oder unvollständiger Prüfung überspringen"
+    );
+    assert_eq!(
+        crate::i18n::fmt(crate::i18n::tr(crate::i18n::Lang::from_code("de").unwrap(), "No layout findings on {boards} artboards."), &[("boards", "1")]),
+        "Keine Layout-Befunde auf den Zeichenflächen (1)."
+    );
+}
+
+#[test]
+fn artboard_export_dialog_preflights_every_board_for_its_revision() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", serde_json::json!({"width": 64, "height": 64})).unwrap();
+    let created = app.run("layer.new.artboard", serde_json::json!({"rect": [0, 0, 20, 20]})).unwrap();
+    let id = created["layer"].as_u64().unwrap();
+    let layer = app
+        .session
+        .edit("create test layer", |doc, _| {
+            let format = doc.pixel_format();
+            let mut layer = photocraft_doc::Layer::raster(doc.next_layer_name("Layer"), format);
+            let Some(surface) = layer.surface_mut() else {
+                return Err(photocraft_engine::EngineError::Other("test raster layer has no surface".into()));
+            };
+            surface.fill_rect(photocraft_geom::Rect::new(30, 30, 40, 40), &photocraft_raster::from_rgba(&format, [1.0, 0.0, 0.0, 1.0]));
+            Ok(doc.insert_above(None, layer))
+        })
+        .unwrap();
+    app.run("layer.moveTo", json!({"layer":layer.0,"target":id,"position":"into"})).unwrap();
+    let revision = app.session.active().unwrap().revision;
+    for command in ["file.export.artboardsToFiles", "file.export.artboardsToPdf"] {
+        let mut fields = serde_json::Map::new();
+        fields.insert("__command".into(), json!(command));
+        refresh_artboard_export_preflight(&app, &mut fields);
+        assert_eq!(fields.get("__responsiveRevision").and_then(Value::as_u64), Some(revision));
+        assert_eq!(fields.get("__responsiveFindingCount").and_then(Value::as_u64), Some(1));
+        assert_eq!(fields.get("__responsiveBoardCount").and_then(Value::as_u64), Some(1));
+        assert_eq!(fields.get("__responsiveAffectedBoards"), Some(&json!([id])));
+        assert_eq!(fields.get("artboards"), Some(&json!([id])));
+        assert_eq!(fields.get("__responsivePreflight"), Some(&json!(true)));
+    }
+    let mut skip_fields =
+        serde_json::Map::from_iter([("__command".to_owned(), json!("file.export.artboardsToFiles")), ("__skipResponsiveAffected".to_owned(), json!(true))]);
+    refresh_artboard_export_preflight(&app, &mut skip_fields);
+    assert_eq!(skip_fields.get("artboards"), Some(&json!([])));
+}

@@ -45,7 +45,7 @@ fn the_example_writes_the_files_the_packages_install() {
     let mut written: Vec<String> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
     written.sort();
     let completions = ["photocraft-cli.bash", "_photocraft-cli", "photocraft-cli.fish", "photocraft-cli.elv", "_photocraft-cli.ps1"];
-    let subcommands = ["convert", "info", "run", "batch", "droplet", "commands", "mcp", "serve"];
+    let subcommands = ["convert", "info", "run", "batch", "responsive-batch", "droplet", "commands", "mcp", "serve"];
     let mut expected: Vec<String> = completions.map(String::from).into();
     expected.push("photocraft-cli.1".into());
     expected.extend(subcommands.iter().map(|s| format!("photocraft-cli-{s}.1")));

@@ -5356,6 +5356,7 @@ dependencies = [
  "photocraft-testkit",
  "photocraft-text",
  "photocraft-vector",
+ "proptest",
  "rayon",
  "roxmltree 0.21.1",
  "same-file",
