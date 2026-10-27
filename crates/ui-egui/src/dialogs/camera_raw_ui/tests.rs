@@ -1,5 +1,10 @@
 use super::*;
 
+/// The first raw waiting for the open-time dialog, taken off its filmstrip.
+fn take_queued(app: &mut PhotocraftApp) -> Option<RawOpen> {
+    (!app.raw_shelf.is_empty()).then(|| app.raw_shelf.remove(0).raw)
+}
+
 /// #9550: a Color Mixer Hue track runs through the neighbouring bands' hues (Reds: magenta to
 /// orange, wrapping round), not from grey; Saturation and Luminance keep grey to the colour.
 #[test]
@@ -358,7 +363,7 @@ fn raw_opens_in_camera_raw_and_open_redevelops() {
     // A raw has no embedded profile (ProPhoto RGB is the space it is developed into), so Ask
     // When Opening (on by default) has nothing to ask about.
     assert!(app.ui.dialogs.is_empty(), "no profile prompt for a raw");
-    let raw = app.pending_raw_open.take().expect("a raw open queues the dialog");
+    let raw = take_queued(&mut app).expect("a raw open queues the dialog");
     open_raw(&mut app, &ctx, raw).unwrap();
     let d = app.camera_raw.as_ref().unwrap();
     assert_eq!(d.target, Target::OpenRaw);
@@ -388,7 +393,7 @@ fn the_demosaic_method_is_chosen_at_open() {
     let ctx = egui::Context::default();
     app.open_bytes("IMG_0002.dng", &dng).unwrap();
     let ahd = pixels(&app);
-    let raw = app.pending_raw_open.take().unwrap();
+    let raw = take_queued(&mut app).unwrap();
     open_raw(&mut app, &ctx, raw).unwrap();
     let d = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"demosaic": "bilinear"}})).unwrap().unwrap();
     assert_eq!(d["openingRaw"]["demosaic"], "bilinear");
@@ -405,7 +410,7 @@ fn the_demosaic_method_is_chosen_at_open() {
     app.run("prefs.set", json!({"path": "rawDefaults.demosaic", "value": "bilinear"})).unwrap();
     app.open_bytes("IMG_0003.dng", &dng).unwrap();
     assert_eq!(pixels(&app), bilinear, "developed with the preference's method");
-    let raw = app.pending_raw_open.take().unwrap();
+    let raw = take_queued(&mut app).unwrap();
     open_raw(&mut app, &ctx, raw).unwrap();
     let d = app.camera_raw.as_ref().unwrap().describe(&app.ui.camera_raw_scope, &app.ui.camera_raw_preview);
     assert_eq!(d["openingRaw"]["demosaic"], "bilinear");
@@ -419,11 +424,11 @@ fn the_demosaic_method_is_chosen_at_open() {
     // The preference may change while a background open runs: the dialog starts from the
     // method the open developed with (its note), not from the newer preference.
     let warnings = app.open_bytes("IMG_0004.dng", &dng).unwrap();
-    app.pending_raw_open.take();
+    take_queued(&mut app);
     app.run("prefs.set", json!({"path": "rawDefaults.demosaic", "value": "ahd"})).unwrap();
     let document = app.session.active().unwrap().doc.id;
     queue_open_dialog(&mut app, document, "IMG_0004.dng", None, Some(&dng), &warnings).unwrap();
-    let raw = app.pending_raw_open.take().unwrap();
+    let raw = take_queued(&mut app).unwrap();
     use photocraft_io::raw::Demosaic;
     assert_eq!((raw.developed_with, raw.demosaic), (Demosaic::Bilinear, Demosaic::Bilinear));
 }
@@ -433,7 +438,7 @@ fn shadows_of_a_raw_open_act_on_the_raw_data_and_the_preview_shows_it() {
     let (mut app, dng) = raw_app();
     let ctx = egui::Context::default();
     app.open_bytes("IMG_0002.dng", &dng).unwrap();
-    let raw = app.pending_raw_open.take().unwrap();
+    let raw = take_queued(&mut app).unwrap();
     open_raw(&mut app, &ctx, raw).unwrap();
     assert!(app.camera_raw.as_ref().unwrap().raw_curve.is_some(), "the preview knows how the raw was developed");
     let mean = |px: &[[f32; 4]]| px.iter().map(|p| p[0] + p[1] + p[2]).sum::<f32>() / px.len() as f32;
@@ -454,7 +459,7 @@ fn clarity_texture_and_dehaze_of_a_raw_open_act_on_the_raw_data() {
     let (mut app, dng) = raw_app();
     let ctx = egui::Context::default();
     app.open_bytes("IMG_0003.dng", &dng).unwrap();
-    let raw = app.pending_raw_open.take().unwrap();
+    let raw = take_queued(&mut app).unwrap();
     open_raw(&mut app, &ctx, raw).unwrap();
     let before = mean_red(&app);
     let preview_before = app.camera_raw.as_ref().unwrap().processed.clone();
@@ -476,7 +481,7 @@ fn background_redevelop_keeps_the_tab_position_and_view() {
     app.open_bytes("mid.dng", &dng).unwrap();
     app.run("file.new", json!({"width": 12, "height": 12})).unwrap();
     app.sync_views();
-    let raw = app.pending_raw_open.take().unwrap();
+    let raw = take_queued(&mut app).unwrap();
     let old_id = raw.document;
     assert_eq!(document_index(&app, old_id), Some(1));
     app.ui.views[1].zoom = 3.0;
@@ -516,7 +521,7 @@ fn a_raw_opens_and_redevelops_at_the_raw_defaults_resolution() {
     app.run("prefs.set", json!({"path": "rawDefaults.resolution", "value": 240})).unwrap();
     app.open_bytes("IMG_0004.dng", &dng).unwrap();
     assert_eq!(app.session.active().unwrap().doc.resolution_dpi, 240.0);
-    let raw = app.pending_raw_open.take().unwrap();
+    let raw = take_queued(&mut app).unwrap();
     open_raw(&mut app, &ctx, raw).unwrap();
     menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": 1.0}}})).unwrap().unwrap();
     let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
@@ -526,19 +531,55 @@ fn a_raw_opens_and_redevelops_at_the_raw_defaults_resolution() {
     assert_eq!(app.session.active().unwrap().doc.resolution_dpi, 240.0, "automation open");
 }
 
+/// Raws opened together share the dialog in a filmstrip, each with its own settings; Open
+/// develops them all, Cancel closes them all.
+#[test]
+fn several_raws_share_the_dialog_and_keep_their_own_settings() {
+    let (mut app, dng) = raw_app();
+    let ctx = egui::Context::default();
+    app.open_bytes("one.dng", &dng).unwrap();
+    app.open_bytes("two.dng", &dng).unwrap();
+    app.open_bytes("three.dng", &dng).unwrap();
+    assert_eq!(app.raw_shelf.len(), 3);
+    assert!(app.raw_shelf.iter().all(|h| h.thumb.is_some()), "each has a thumbnail");
+    let ids: Vec<_> = app.raw_shelf.iter().map(|h| h.raw.document).collect();
+    filmstrip::open_held(&mut app, &ctx, 0).unwrap();
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": 1.0}}})).unwrap().unwrap();
+    app.camera_raw.as_mut().unwrap().render(&ctx);
+    filmstrip::show_raw(&mut app, &ctx, 1).unwrap();
+    let d = app.camera_raw.as_ref().unwrap();
+    assert_eq!((d.raw_open.as_ref().unwrap().document, d.layer_name.as_str(), d.params.exposure), (ids[1], "two.dng", 0.0));
+    assert_eq!(app.raw_shelf[0].kept.as_ref().map(|(p, _)| p.exposure), Some(1.0), "the first keeps its settings");
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"contrast": 30}}})).unwrap().unwrap();
+    filmstrip::show_raw(&mut app, &ctx, 0).unwrap();
+    assert_eq!(app.camera_raw.as_ref().unwrap().params.exposure, 1.0, "back to the first, as it was left");
+    let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
+    assert_eq!(r["opened"].as_array().map(Vec::len), Some(3), "{r}");
+    assert!(app.raw_shelf.is_empty() && app.camera_raw.is_none());
+    assert_eq!(app.session.documents().len(), 3, "the never-shown third opens too");
+    assert!(app.session.documents().iter().all(|st| st.saved_revision == st.revision), "Open leaves them unmodified");
+    // Cancel closes every raw in the filmstrip.
+    app.open_bytes("four.dng", &dng).unwrap();
+    app.open_bytes("five.dng", &dng).unwrap();
+    filmstrip::open_held(&mut app, &ctx, 0).unwrap();
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"cancel": true}})).unwrap().unwrap();
+    assert!(app.raw_shelf.is_empty());
+    assert_eq!(app.session.documents().len(), 3);
+}
+
 #[test]
 fn cancel_closes_the_raw_and_the_preference_skips_the_dialog() {
     let (mut app, dng) = raw_app();
     let ctx = egui::Context::default();
     app.open_bytes("a.dng", &dng).unwrap();
-    let raw = app.pending_raw_open.take().unwrap();
+    let raw = take_queued(&mut app).unwrap();
     open_raw(&mut app, &ctx, raw).unwrap();
     let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"cancel": true}})).unwrap().unwrap();
     assert_eq!(r["cancelled"], true);
     assert!(app.session.documents().is_empty(), "Cancel closes the raw being opened");
     // Unchanged settings: Open keeps the default develop and adds no step.
     app.open_bytes("b.dng", &dng).unwrap();
-    let raw = app.pending_raw_open.take().unwrap();
+    let raw = take_queued(&mut app).unwrap();
     open_raw(&mut app, &ctx, raw).unwrap();
     let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
     assert_eq!((r["document"].as_u64(), r["redeveloped"].as_bool(), r.get("filter")), (Some(0), Some(false), None), "{r}");
@@ -546,7 +587,7 @@ fn cancel_closes_the_raw_and_the_preference_skips_the_dialog() {
     // Preference off: raws open straight away.
     app.run("prefs.set", json!({"path": "rawDefaults.openInCameraRaw", "value": false})).unwrap();
     app.open_bytes("c.dng", &dng).unwrap();
-    assert!(app.pending_raw_open.is_none());
+    assert!(app.raw_shelf.is_empty());
     // A non-raw never queues the dialog; a closed document is an error, not a panic.
     assert!(
         open_raw(
@@ -570,7 +611,7 @@ fn calibration_changes_the_preview_and_round_trips_through_xmp() {
     let (mut app, dng) = raw_app();
     let ctx = egui::Context::default();
     app.open_bytes("IMG_0005.dng", &dng).unwrap();
-    let raw = app.pending_raw_open.take().unwrap();
+    let raw = take_queued(&mut app).unwrap();
     open_raw(&mut app, &ctx, raw).unwrap();
     let before = app.camera_raw.as_ref().unwrap().processed.clone();
     menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"shadowTint": 100, "calibrationHue": [100, 0, 0], "calibrationSat": [0, 0, -100]}}}))
@@ -595,7 +636,7 @@ fn auto_sets_the_light_sliders_from_the_image() {
     let (mut app, dng) = raw_app();
     let ctx = egui::Context::default();
     app.open_bytes("IMG_0006.dng", &dng).unwrap();
-    let raw = app.pending_raw_open.take().unwrap();
+    let raw = take_queued(&mut app).unwrap();
     open_raw(&mut app, &ctx, raw).unwrap();
     assert!(app.camera_raw.as_ref().unwrap().params.is_identity());
     menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"auto": true}})).unwrap().unwrap();
@@ -605,7 +646,7 @@ fn auto_sets_the_light_sliders_from_the_image() {
     // The preference does the same when a raw opens without a sidecar.
     app.run("prefs.set", json!({"path": "rawDefaults.applyAutoTone", "value": true})).unwrap();
     app.open_bytes("IMG_0007.dng", &dng).unwrap();
-    let raw = app.pending_raw_open.take().unwrap();
+    let raw = take_queued(&mut app).unwrap();
     open_raw(&mut app, &ctx, raw).unwrap();
     assert_eq!(app.camera_raw.as_ref().unwrap().params, p, "Apply auto tone opens the dialog with Auto's settings");
 }
@@ -635,7 +676,7 @@ fn a_sidecar_fills_the_dialog_and_open_writes_it_back() {
     }));
     let ctx = egui::Context::default();
     app.open_bytes("IMG_0008.cr2", &dng).unwrap();
-    let mut raw = app.pending_raw_open.take().unwrap();
+    let mut raw = take_queued(&mut app).unwrap();
     raw.path = Some(raw_path.clone());
     open_raw(&mut app, &ctx, raw).unwrap();
     let d = app.camera_raw.as_ref().unwrap();
@@ -657,14 +698,14 @@ fn a_sidecar_fills_the_dialog_and_open_writes_it_back() {
     let dng_path = dir.join("IMG_0009.dng").to_string_lossy().into_owned();
     std::fs::write(&dng_path, &dng).unwrap();
     app.open_bytes("IMG_0009.dng", &dng).unwrap();
-    let mut raw = app.pending_raw_open.take().unwrap();
+    let mut raw = take_queued(&mut app).unwrap();
     raw.path = Some(dng_path);
     open_raw(&mut app, &ctx, raw).unwrap();
     menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"contrast": 15}, "commit": true}})).unwrap().unwrap();
     assert!(written.lock().unwrap().is_empty(), "no sidecar for a DNG");
     app.run("prefs.set", json!({"path": "rawDefaults.writeXmpSidecars", "value": false})).unwrap();
     app.open_bytes("IMG_0008.cr2", &dng).unwrap();
-    let mut raw = app.pending_raw_open.take().unwrap();
+    let mut raw = take_queued(&mut app).unwrap();
     raw.path = Some(raw_path.clone());
     open_raw(&mut app, &ctx, raw).unwrap();
     menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"contrast": 30}, "commit": true}})).unwrap().unwrap();
@@ -673,7 +714,7 @@ fn a_sidecar_fills_the_dialog_and_open_writes_it_back() {
     app.run("prefs.set", json!({"path": "rawDefaults.openInCameraRaw", "value": false})).unwrap();
     let before = app.session.documents().len();
     app.open_file(&raw_path, &dng).unwrap();
-    assert!(app.pending_raw_open.is_none());
+    assert!(app.raw_shelf.is_empty());
     assert_eq!(app.session.documents().len(), before + 1);
     let st = app.session.active().unwrap();
     assert_eq!(st.saved_revision, st.revision, "opening with a sidecar leaves the document unmodified");
@@ -686,7 +727,7 @@ fn camera_raw_defaults_apply_when_a_raw_opens() {
     let (mut app, dng) = raw_app();
     app.run("prefs.set", json!({"values": {"rawDefaults.openInCameraRaw": false, "rawDefaults.colorSpace": "srgb", "rawDefaults.bitDepth": "8", "rawDefaults.resolution": 240.0, "rawDefaults.sharpenFor": "screen", "rawDefaults.openAsSmartObject": true}})).unwrap();
     app.open_bytes("IMG_0010.dng", &dng).unwrap();
-    assert!(app.pending_raw_open.is_none());
+    assert!(app.raw_shelf.is_empty());
     let st = app.session.active().unwrap();
     assert_eq!(st.doc.depth, photocraft_color::SampleType::U8, "Bit depth 8");
     assert_eq!(st.doc.resolution_dpi, 240.0, "Resolution");
@@ -700,7 +741,7 @@ fn camera_raw_defaults_apply_when_a_raw_opens() {
         .unwrap();
     let ctx = egui::Context::default();
     app.open_bytes("IMG_0011.dng", &dng).unwrap();
-    let raw = app.pending_raw_open.take().unwrap();
+    let raw = take_queued(&mut app).unwrap();
     open_raw(&mut app, &ctx, raw).unwrap();
     let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
     assert_eq!(r["defaults"], json!(["sharpenFor", "colorSpace"]), "{r}");
@@ -756,7 +797,7 @@ fn raw_with_sidecar(tag: &str, sidecar: Option<&str>) -> (PhotocraftApp, Vec<u8>
 /// Opens the raw at `raw_path` in the open-time dialog, as File › Open does.
 fn open_dialog_at(app: &mut PhotocraftApp, ctx: &egui::Context, dng: &[u8], raw_path: &str) {
     app.open_bytes("IMG_0100.cr2", dng).unwrap();
-    let mut raw = app.pending_raw_open.take().unwrap();
+    let mut raw = take_queued(app).unwrap();
     raw.path = Some(raw_path.to_string());
     open_raw(app, ctx, raw).unwrap();
 }
@@ -808,7 +849,7 @@ fn opening_without_the_dialog_does_not_rewrite_the_sidecar() {
     let (mut app, dng, dir, raw_path, written) = raw_with_sidecar("nodialog", Some(LIGHTROOM_SIDECAR));
     app.run("prefs.set", json!({"path": "rawDefaults.openInCameraRaw", "value": false})).unwrap();
     app.open_file(&raw_path, &dng).unwrap();
-    assert!(app.pending_raw_open.is_none());
+    assert!(app.raw_shelf.is_empty());
     assert_eq!(app.session.documents().len(), 1);
     assert!(written.lock().unwrap().is_empty(), "just opening never writes the sidecar");
     assert_eq!(std::fs::read_to_string(sidecar_path(&raw_path)).unwrap(), LIGHTROOM_SIDECAR);
@@ -855,7 +896,7 @@ fn a_sidecar_write_error_stays_reported() {
 
 fn open_with_settings(app: &mut PhotocraftApp, ctx: &egui::Context, dng: &[u8], name: &str) {
     app.open_bytes(name, dng).unwrap();
-    let raw = app.pending_raw_open.take().unwrap();
+    let raw = take_queued(app).unwrap();
     open_raw(app, ctx, raw).unwrap();
     menu(app, ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": 0.5, "contrast": 60, "saturation": 40, "vibrance": 30}}})).unwrap().unwrap();
 }

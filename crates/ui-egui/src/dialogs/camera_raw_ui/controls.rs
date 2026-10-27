@@ -1,4 +1,4 @@
-use super::open::{Target, cancel, commit_open_raw, open_raw, raw_stage};
+use super::open::{Target, cancel, raw_stage};
 use super::sidecar::{load_settings, report_file_error, save_settings};
 use super::{
     Align2, BANDS, CameraRaw, CameraRawDialog, Color32, ERect, FontId, PANEL_W, PhotocraftApp, Pos2, Sense, Stroke, Tokens, ToneZone, Value, Wheel, curve_lut,
@@ -69,7 +69,7 @@ pub(super) fn commit(app: &mut PhotocraftApp) -> Result<Value, String> {
         Target::OpenRaw => {
             let raw = d.raw_open.clone().ok_or("no raw file is being opened")?;
             let (params, original) = (d.params.clone(), d.original.clone());
-            commit_open_raw(app, &params, &raw, Some(&original))?
+            super::filmstrip::open_all(app, &params, &raw, &original)?
         }
     };
     app.camera_raw = None;
@@ -294,10 +294,11 @@ fn curve_editor(ui: &mut egui::Ui, p: &mut CameraRaw, dirty: &mut bool, state: &
 
 pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if app.camera_raw.is_none()
-        && let Some(raw) = app.pending_raw_open.take()
-        && let Err(e) = open_raw(app, ctx, raw)
+        && !app.raw_shelf.is_empty()
+        && let Err(e) = super::filmstrip::open_held(app, ctx, 0)
     {
         // The document stays open, developed with the defaults.
+        app.raw_shelf.remove(0);
         app.ui.status = e;
         app.ui.status_error = true;
     }
@@ -365,6 +366,7 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
     let screen = ctx.content_rect();
     let current_display = app.session.active().and_then(|st| app.session.color.canvas_display(&st.doc).ok());
     let mut action: Option<&str> = None;
+    let mut show_held: Option<usize> = None;
     egui::Area::new(egui::Id::unique("camera-raw-dialog")).order(egui::Order::Foreground).fixed_pos(screen.min).show(ctx, |ui| {
         let Some(d) = app.camera_raw.as_mut() else { return };
         history_keys(d, ctx);
@@ -409,7 +411,16 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         let animated_zoom = app.session.prefs().general.animated_zoom;
         let scope = &mut app.ui.camera_raw_scope;
         // Clip both pixels and scope overlays before painting the settings dock/footer.
-        let preview_body = ERect::from_min_max(body.min, pos2((body.right() - PANEL_W).max(body.left() + 1.0), body.bottom()));
+        // Several raws being opened: the filmstrip on the left.
+        let film_w = if d.target == Target::OpenRaw && app.raw_shelf.len() > 1 { super::filmstrip::FILM_W } else { 0.0 };
+        if film_w > 0.0 {
+            let film = ERect::from_min_max(body.min, pos2(body.left() + film_w - 1.0, body.bottom()));
+            painter.rect_filled(film, 0.0, t.dock);
+            painter.line_segment([film.right_top(), film.right_bottom()], Stroke::new(1.0, t.separator));
+            show_held = super::filmstrip::filmstrip(ui, film, &mut app.raw_shelf, d.raw_open.as_ref().map(|r| r.document), &t);
+        }
+        let preview_body =
+            ERect::from_min_max(pos2(body.left() + film_w, body.top()), pos2((body.right() - PANEL_W).max(body.left() + film_w + 1.0), body.bottom()));
         let view = ERect::from_min_max(
             preview_body.min + vec2(16.0, 16.0),
             pos2((preview_body.right() - 16.0).max(preview_body.left() + 17.0), (preview_body.bottom() - 48.0).max(preview_body.top() + 17.0)),
@@ -650,6 +661,12 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         }
     });
     crate::camera_raw_scope_ui::persist(app, ctx);
+    if let Some(i) = show_held
+        && let Err(e) = super::filmstrip::show_raw(app, ctx, i)
+    {
+        app.ui.status = e;
+        app.ui.status_error = true;
+    }
     if ctx.input(|i| i.key_pressed(egui::Key::Y))
         && let Some(d) = app.camera_raw.as_mut()
     {
