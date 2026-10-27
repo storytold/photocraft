@@ -156,9 +156,13 @@ jobs:
       # A panic still names its file and line; only backtrace frames lose theirs (Linux keeps
       # line-tables-only, so a backtrace with lines is one OS away).
       CARGO_PROFILE_DEV_DEBUG: "0"
-      # The runner has no Japanese or Simplified Chinese system font, and egui 0.37 panics on a
-      # missing glyph: the localized UI tests need the same craft-fonts input the gate and FreeBSD
-      # build with (crates/text/build.rs). Same commit as the gate above and release.yml.
+      # The all-language UI tests shape real Japanese, Chinese, Korean and Devanagari labels
+      # with kittest's strict `MissingGlyphPolicy::Panic`. A hosted Windows image has no
+      # guaranteed Japanese or Simplified Chinese system font, and egui 0.37 panics on a
+      # missing glyph; the app's lazy system fallback runs after layout, too late for the
+      # first headless frame. Use the same pinned central fonts as Linux and release, so every
+      # language is drawn by a real embedded face rather than skipping. Same commit as the gate
+      # above and release.yml.
       CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
       CRAFT_FONTS_REQUIRED: "1"
     steps:
@@ -215,7 +219,7 @@ jobs:
 
       - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
-          tool: cargo-nextest@0.9.149
+          tool: cargo-nextest@0.9.150
 
       # The unit leg runs `--lib --bins` and the integration leg `--test '*'` (every
       # integration-test target); the feature selection stays the same, so both legs share the
@@ -272,7 +276,7 @@ jobs:
 
       - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
-          tool: cargo-nextest@0.9.149
+          tool: cargo-nextest@0.9.150
 
       - name: Test without heif
         run: cargo nextest run -p photocraft-heif -p photocraft-codecs -p photocraft-io --locked --profile ci

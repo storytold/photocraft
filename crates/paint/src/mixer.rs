@@ -440,5 +440,4 @@ mod tests {
 }
 
 #[cfg(test)]
-#[path = "mixer_reference_tests.rs"]
 mod reference_tests;
