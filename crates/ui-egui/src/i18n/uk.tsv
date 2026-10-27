@@ -4164,3 +4164,8 @@ curves	Smooth	Згладити
 
 # Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
 	Target	Ціль
+
+# DPX Options (#1049)
+	DPX Options	Параметри DPX
+	10 Bits/Channel	10 біт/канал
+	12 Bits/Channel	12 біт/канал

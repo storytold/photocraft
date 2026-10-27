@@ -4524,3 +4524,8 @@ shape	Appearance	Izgled
 	Tight Curl	Usko uvijeno
 	Loose Curl	Labavo uvijeno
 	Stylized dabs from a history state	Stilizovane mrlje iz stanja istorije
+
+# DPX Options (#1049)
+	DPX Options	DPX opcije
+	10 Bits/Channel	10 bita/kanal
+	12 Bits/Channel	12 bita/kanal

@@ -121,6 +121,7 @@ pub use dialogs::dialog_blend_ui;
 pub use dialogs::discard_ui;
 pub use dialogs::disk_change_prompt;
 pub use dialogs::distort_ui;
+pub use dialogs::dpx_options_ui;
 pub use dialogs::duplicate_layer_ui;
 pub use dialogs::edit_history;
 pub use dialogs::export_dialog;
@@ -633,6 +634,8 @@ pub struct PhotocraftApp {
     pub(crate) jpeg_options: Option<jpeg_options_ui::Prompt>,
     /// A save to a DDS texture parked behind the DDS Options prompt (see `dds_options_ui`).
     pub(crate) dds_options: Option<dds_options_ui::Prompt>,
+    /// A save to a DPX frame parked behind the DPX Options prompt (see `dpx_options_ui`).
+    pub(crate) dpx_options: Option<dpx_options_ui::Prompt>,
     /// Files read but not opened yet: the first waits on its profile prompt, the rest behind it
     /// (see `open_prompt`).
     pub(crate) held_opens: std::collections::VecDeque<open_prompt::Held>,

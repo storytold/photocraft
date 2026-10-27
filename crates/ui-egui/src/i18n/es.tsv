@@ -4413,3 +4413,8 @@ navigator	Zoom	Zoom
 	Tight Curl	Rizo apretado
 	Loose Curl	Rizo suelto
 	Stylized dabs from a history state	Toques estilizados desde un estado del historial
+
+# DPX Options (#1049)
+	DPX Options	Opciones de DPX
+	10 Bits/Channel	10 bits/canal
+	12 Bits/Channel	12 bits/canal

@@ -4071,3 +4071,8 @@ curves	Smooth	Wygładź
 
 # Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
 	Target	Cel
+
+# DPX Options (#1049)
+	DPX Options	Opcje DPX
+	10 Bits/Channel	10 bitów/kanał
+	12 Bits/Channel	12 bitów/kanał

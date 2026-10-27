@@ -563,3 +563,8 @@ cameraRaw	Yellow	पीला
 	Target	लक्ष्य
 	Units	इकाइयाँ
 	Demosaic	डिमोज़ेक
+
+# DPX Options (#1049)
+	DPX Options	DPX विकल्प
+	10 Bits/Channel	10 बिट्स/चैनल
+	12 Bits/Channel	12 बिट्स/चैनल

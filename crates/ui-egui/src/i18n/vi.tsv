@@ -3949,3 +3949,8 @@ curves	Smooth	Làm mượt
 
 # Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
 	Aspect Ratio	Tỷ lệ khung hình
+
+# DPX Options (#1049)
+	DPX Options	Tùy chọn DPX
+	10 Bits/Channel	10 bit/kênh
+	12 Bits/Channel	12 bit/kênh

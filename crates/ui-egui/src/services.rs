@@ -1,16 +1,18 @@
 use super::*;
 
 /// The error a save gets while another save waits on its format prompt.
-pub(crate) const SAVE_OPTIONS_OPEN: &str = "Answer the TIFF, Targa, DDS or JPEG Options before starting another save";
+pub(crate) const SAVE_OPTIONS_OPEN: &str = "Answer the TIFF, Targa, DDS, DPX or JPEG Options before starting another save";
 
 /// The format answers a save takes instead of asking: the Targa bits per pixel (`"tgaBits"`),
-/// the DDS options (`"ddsCompression"`, `"ddsMipmaps"`) and JPEG Options (`"quality"` 0–12,
+/// the DDS options (`"ddsCompression"`, `"ddsMipmaps"`), the DPX bits per sample (`"dpxBits"`)
+/// and JPEG Options (`"quality"` 0–12,
 /// `"jpegFormat"`). `None` asks in Save As and takes the default in automation saves, which never
 /// prompt.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct FormatChoices {
     pub tga_bits: Option<photocraft_io::TgaBits>,
     pub dds: Option<photocraft_io::DdsOptions>,
+    pub dpx_bits: Option<photocraft_io::DpxBits>,
     pub jpeg: Option<jpeg_options_ui::JpegChoice>,
 }
 
@@ -20,6 +22,7 @@ impl FormatChoices {
         Ok(FormatChoices {
             tga_bits: targa_options_ui::bits_param(params, cmd)?,
             dds: dds_options_ui::options_param(params, cmd)?,
+            dpx_bits: dpx_options_ui::bits_param(params, cmd)?,
             jpeg: jpeg_options_ui::choice_param(params, cmd)?,
         })
     }
@@ -30,13 +33,19 @@ impl FormatChoices {
         Ok(FormatChoices {
             tga_bits: targa_options_ui::bits_param(params, cmd)?,
             dds: dds_options_ui::options_param(params, cmd)?,
+            dpx_bits: dpx_options_ui::bits_param(params, cmd)?,
             jpeg: jpeg_options_ui::recorded_choice(params, cmd)?,
         })
     }
 
     /// The export settings with these answers applied.
     pub fn apply(self, settings: ExportSettings) -> ExportSettings {
-        let settings = ExportSettings { tga_bits: self.tga_bits.or(settings.tga_bits), dds: self.dds.unwrap_or(settings.dds), ..settings };
+        let settings = ExportSettings {
+            tga_bits: self.tga_bits.or(settings.tga_bits),
+            dds: self.dds.unwrap_or(settings.dds),
+            dpx_bits: self.dpx_bits.or(settings.dpx_bits),
+            ..settings
+        };
         match self.jpeg {
             Some(j) => j.apply(settings),
             None => settings,
@@ -50,6 +59,9 @@ impl FormatChoices {
         }
         if let Some(dds) = self.dds {
             dds_options_ui::record(dds, step);
+        }
+        if let Some(bits) = self.dpx_bits {
+            step["dpxBits"] = bits.bits().into();
         }
         if let Some(j) = self.jpeg {
             j.record(step);
@@ -83,6 +95,8 @@ pub struct ExportSettings {
     /// DDS: the compression and mip chain from DDS Options (uncompressed without mipmaps unless
     /// chosen).
     pub dds: photocraft_io::DdsOptions,
+    /// DPX: bits per sample from DPX Options (`None`: 8 for an 8-bit document, else 16).
+    pub dpx_bits: Option<photocraft_io::DpxBits>,
     /// PSD/PSB: embed a thumbnail (Preferences › File Handling › Image Previews; see
     /// [`PhotocraftApp::save_settings`]).
     pub image_previews: bool,
@@ -116,6 +130,7 @@ impl Default for ExportSettings {
             xmp_all: true,
             tga_bits: None,
             dds: photocraft_io::DdsOptions::default(),
+            dpx_bits: None,
             image_previews: true,
             psd_maximize_compatibility: true,
             embed_icc: true,
@@ -146,6 +161,7 @@ impl ExportSettings {
         opts.xmp = if self.xmp_all { photocraft_io::XmpEmbed::All } else { photocraft_io::XmpEmbed::None };
         opts.tga_bits = self.tga_bits;
         opts.encode.dds = self.dds;
+        opts.encode.dpx_bits = self.dpx_bits;
         opts.image_previews = self.image_previews;
         opts.psd_maximize_compatibility = self.psd_maximize_compatibility;
         opts.document_path = self.document_path.clone();

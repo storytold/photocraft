@@ -1003,6 +1003,7 @@ pub mod dialog_blend_ui;
 pub mod discard_ui;
 pub mod disk_change_prompt;
 pub mod distort_ui;
+pub mod dpx_options_ui;
 pub mod duplicate_layer_ui;
 pub mod edit_history;
 pub mod export_dialog;

@@ -4568,3 +4568,8 @@ shape	Appearance	Aspetto
 	Tight Curl	Riccio stretto
 	Loose Curl	Riccio largo
 	Stylized dabs from a history state	Tocchi stilizzati da uno stato della storia
+
+# DPX Options (#1049)
+	DPX Options	Opzioni DPX
+	10 Bits/Channel	10 bit/canale
+	12 Bits/Channel	12 bit/canale

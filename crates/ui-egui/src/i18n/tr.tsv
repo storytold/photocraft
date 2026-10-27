@@ -4180,3 +4180,8 @@ cameraData	Lens	Lens
 	Tight Curl	Sıkı Kıvrım
 	Loose Curl	Gevşek Kıvrım
 	Stylized dabs from a history state	Bir geçmiş durumundan stilize benekler
+
+# DPX Options (#1049)
+	DPX Options	DPX Seçenekleri
+	10 Bits/Channel	10 Bit/Kanal
+	12 Bits/Channel	12 Bit/Kanal

@@ -584,6 +584,9 @@ mod targa_tests;
 #[path = "tests/dds_tests.rs"]
 mod dds_tests;
 
+#[path = "tests/dpx_tests.rs"]
+mod dpx_tests;
+
 #[path = "tests/jpeg_tests.rs"]
 mod jpeg_tests;
 

@@ -4201,3 +4201,8 @@ cameraRaw	Dehaze	Odstranění oparu
 
 # Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
 	Aspect Ratio	Poměr stran
+
+# DPX Options (#1049)
+	DPX Options	Možnosti DPX
+	10 Bits/Channel	10 bitů/kanál
+	12 Bits/Channel	12 bitů/kanál

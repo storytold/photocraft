@@ -4654,3 +4654,8 @@ shape	Appearance	Оформление
 	Tight Curl	Плотный завиток
 	Loose Curl	Свободный завиток
 	Stylized dabs from a history state	Стилизованные мазки из состояния истории
+
+# DPX Options (#1049)
+	DPX Options	Параметры DPX
+	10 Bits/Channel	10 бит/канал
+	12 Bits/Channel	12 бит/канал
