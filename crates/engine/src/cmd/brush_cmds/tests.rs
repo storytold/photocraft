@@ -1129,6 +1129,8 @@ fn a_commit_takes_the_live_strokes_pixels_and_they_equal_a_fresh_render() {
         ("paint.stroke", json!({"preset": "Spatter", "smoothing": 0.0, "target": "pixels"})),
         ("paint.stroke", json!({"brush": {"size": 12}, "erase": true, "target": "pixels"})),
         ("paint.pencil", json!({"smoothing": 0.0})),
+        ("paint.stroke", json!({"brush": {"size": 9, "hardness": 0.0, "flow": 0.5}, "pixelSteps": true, "target": "pixels"})),
+        ("paint.pencil", json!({"size": 3, "smoothing": 0.0, "pixelSteps": true})),
     ] {
         let mut s = session(200, 100);
         let (live, p) = live_and_commit(&s, cmd, base.clone(), &pts);
@@ -1319,4 +1321,25 @@ fn brush_and_pencil_paint_a_cmyk_pick_with_the_picked_inks() {
         let got: Vec<f32> = surf.read_region(Rect::new(8, 8, 9, 9)).into_iter().take(4).collect();
         assert!(got.iter().zip(cyan).all(|(a, b)| (a - b).abs() < 0.02), "{cmd}: {got:?}");
     }
+}
+
+#[test]
+fn pixel_steps_paint_on_the_pixel_grid() {
+    // #9188: with the pixel grid showing, a stroke moves a whole pixel at a time, so where inside
+    // its pixels the pointer was makes no difference to a soft brush.
+    let paint = |pts: Value, steps: bool| {
+        let mut s = session(64, 32);
+        s.execute("paint.stroke", json!({"points": pts, "brush": {"size": 9, "hardness": 0.0}, "pixelSteps": steps, "seed": 1})).unwrap();
+        surface(&s)
+    };
+    let all = Rect::new(0, 0, 64, 32);
+    let click = |x: f64, y: f64, steps| paint(json!([[x, y]]), steps);
+    assert!(same_pixels(&click(20.1, 12.8, true), &click(20.5, 12.5, true), all), "a click lands on its pixel's centre");
+    assert!(!same_pixels(&click(20.1, 12.8, false), &click(20.5, 12.5, false), all), "without pixel steps it stays sub-pixel");
+    // Two drags along the same pixel row, from and to the same pixels, paint the same pixels.
+    let drag = |x0: f64, x1: f64, y: f64| paint(json!([[x0, y], [x1, y]]), true);
+    assert!(same_pixels(&drag(8.1, 50.9, 10.2), &drag(8.8, 50.3, 10.9), all), "a drag steps from pixel to pixel");
+    // Bad values are ignored, like the other flags.
+    let mut s = session(16, 16);
+    s.execute("paint.stroke", json!({"points": [[4, 4]], "pixelSteps": "yes"})).unwrap();
 }

@@ -21,6 +21,11 @@ pub const SPEED_SPACING_MS: f64 = 8.0;
 
 /// Longest pixel-grid segment (in pixels) before falling back to distance spacing.
 const MAX_GRID_STEPS: f64 = 1e7;
+/// Widest tip (in pixels) that pixel steps stamp at every pixel. Each dab rasterises its whole
+/// square, so a dab per pixel costs the diameter squared per pixel of travel; wider tips step by
+/// their own spacing in whole pixels instead. At the pixel grid's zoom (over 500 %) a tip this wide
+/// already fills over 320 screen pixels.
+pub const PIXEL_STEP_MAX_DIAMETER: f32 = 64.0;
 
 /// Densest speed spacing, in pixels between dabs (a slow, long stroke never floods the buffer).
 const MIN_SPEED_STEP: f64 = 0.5;
@@ -242,6 +247,12 @@ pub struct PathWalker {
     /// Pixel-grid stepping for small aliased tips: the dab-centre offset inside a pixel (see
     /// [`PathWalker::pixel_grid`]).
     grid: Option<f64>,
+    /// Every emitted point sits on the grid too (see [`PathWalker::pixel_steps`]).
+    snap: bool,
+    /// Pixel steps per emitted grid step (1 = every pixel; see [`DabGenerator::pixel_steps`]), and
+    /// how many have passed since the last one emitted.
+    stride: u64,
+    since: u64,
 }
 
 impl PathWalker {
@@ -258,6 +269,9 @@ impl PathWalker {
             speed: None,
             speed_acc: 0.0,
             grid: None,
+            snap: false,
+            stride: 1,
+            since: 0,
         }
     }
 
@@ -272,6 +286,21 @@ impl PathWalker {
     /// (#6336).
     pub fn pixel_grid(mut self, offset: f64) -> Self {
         self.grid = Some(offset);
+        self
+    }
+
+    /// Step pixel by pixel for any tip, as [`PathWalker::pixel_grid`] does for the Pencil, and put
+    /// every step on the grid: the first point, a lone click and airbrush steps included. Painting
+    /// with the pixel grid showing then moves one pixel row or column at a time, so every pixel
+    /// step of the stroke shows (#9188). Speed spacing (Spacing unchecked) would skip pixels, so
+    /// it gives way. Only the dabs are quantised: the pointer and its cursor stay smooth (#8944).
+    /// `stride` (at least 1) emits every `stride`-th pixel step, so a wide tip keeps its own
+    /// spacing in whole pixels.
+    pub fn pixel_steps(mut self, offset: f64, stride: u64) -> Self {
+        self.grid = Some(offset);
+        self.snap = true;
+        self.speed = None;
+        self.stride = stride.max(1);
         self
     }
 
@@ -296,7 +325,11 @@ impl PathWalker {
             let mut q = lerp_pt(a, p, t.clamp(0.0, 1.0));
             let cn = grid_cell(an + dn * t, offset);
             (q.x, q.y) = if steep { (cn, c) } else { (c, cn) };
-            self.emit(q, out);
+            self.since += 1;
+            if self.since >= self.stride {
+                self.since = 0;
+                self.emit(q, out);
+            }
         }
         true
     }
@@ -308,7 +341,10 @@ impl PathWalker {
         self
     }
 
-    fn emit(&mut self, point: StrokePoint, out: &mut impl FnMut(StepInput)) {
+    fn emit(&mut self, mut point: StrokePoint, out: &mut impl FnMut(StepInput)) {
+        if let Some(offset) = self.grid.filter(|_| self.snap) {
+            (point.x, point.y) = (grid_cell(point.x, offset), grid_cell(point.y, offset));
+        }
         let s = StepInput { point, direction: self.dir, initial_direction: self.initial_dir.unwrap_or(self.dir), step: self.step };
         self.step += 1;
         out(s);
@@ -529,11 +565,14 @@ pub struct DabBuilder {
     /// Per-stroke colour (Color Dynamics with per-tip off), computed at the first step.
     stroke_color: Option<[f32; 4]>,
     next_index: u64,
+    /// Pixel steps' dab-centre offset ([`DabGenerator::pixel_steps`]): scattered dabs land back
+    /// on the grid.
+    grid: Option<f64>,
 }
 
 impl DabBuilder {
     pub fn new(brush: &BrushSettings) -> Self {
-        Self { brush: brush.clone(), seed: brush.seed, stroke_color: None, next_index: 0 }
+        Self { brush: brush.clone(), seed: brush.seed, stroke_color: None, next_index: 0, grid: None }
     }
 
     pub fn step_len(&self, p: &StrokePoint) -> f64 {
@@ -612,6 +651,9 @@ impl DabBuilder {
                     c.x += -dy * ox;
                     c.y += dx * ox;
                 }
+            }
+            if let Some(offset) = self.grid {
+                (c.x, c.y) = (grid_cell(c.x, offset), grid_cell(c.y, offset));
             }
             // Transfer.
             let tr = &b.transfer;
@@ -770,6 +812,19 @@ impl DabGenerator {
             dual: dual_on.then(|| DualBuilder::new(&brush)),
             scratch: Vec::new(),
         }
+    }
+
+    /// Step the primary dabs pixel by pixel on the pixel grid ([`PathWalker::pixel_steps`]): the
+    /// stroke drawn while the pixel grid shows.
+    /// Tips wider than [`PIXEL_STEP_MAX_DIAMETER`] keep their spacing, rounded to whole pixels:
+    /// a dab per pixel would cost the diameter squared per pixel of travel.
+    pub fn pixel_steps(mut self) -> Self {
+        let size = self.builder.brush.size;
+        let offset = f64::from(crate::render::grid_center(0.0, 0.0, size).0);
+        let stride = if size > PIXEL_STEP_MAX_DIAMETER { (size * self.builder.brush.spacing.max(0.01)).round().max(1.0) as u64 } else { 1 };
+        self.walker = self.walker.pixel_steps(offset, stride);
+        self.builder.grid = Some(offset);
+        self
     }
 
     fn walk(&mut self, pts: &[StrokePoint], dabs: &mut Vec<Dab>, dual: &mut Vec<Dab>) {

@@ -31,6 +31,10 @@ pub struct Drag {
     /// keeps the locked direction stable between events. The Move tool's own drags use `move_mods`.
     pub sel_axis: Option<[f64; 2]>,
     pub lasso: Option<crate::lasso_ui::Lasso>,
+    /// Whether this painting stroke steps pixel by pixel (`pixelSteps`), latched at the press so
+    /// zooming or toggling the pixel grid mid-stroke can't make the commit differ from the live
+    /// preview. `None` reads the current view.
+    pub pixel_steps: Option<bool>,
 }
 
 impl Drag {
@@ -49,6 +53,7 @@ impl Drag {
             sel_move: None,
             sel_axis: None,
             lasso: None,
+            pixel_steps: None,
         }
     }
 

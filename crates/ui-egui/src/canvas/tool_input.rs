@@ -2,7 +2,7 @@ use super::cursors::{alt_eyedropper, sample_eyedropper};
 use super::drag::Drag;
 use super::gesture::{finish_gesture, polygon_click, selection_mode};
 use super::selection::finish_selection_drag;
-use super::strokes::{HOLD_REPEAT_MS, begin_live_stroke, feed_live_stroke, paint_target, snap_aliased_tip, stroke_params, strokes_live};
+use super::strokes::{HOLD_REPEAT_MS, begin_live_stroke, feed_live_stroke, paint_target, pixel_grid_visible, snap_aliased_tip, stroke_params, strokes_live};
 use super::*;
 
 /// Abstract tool event, produced by the mouse or by automation (`ui.pointer`).
@@ -456,7 +456,8 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
             }
             // ⌥ flips Dodge/Burn and Blur/Sharpen for this stroke.
             let tool = crate::retouch_ui::alt_flipped(tool, mods.alt);
-            app.drag = Some(Drag { clear, ..Drag::new(tool, from.map_or([x, y], |p| [p[0], p[1]]), points, mods, erase) });
+            let pixel_steps = Some(pixel_grid_visible(app));
+            app.drag = Some(Drag { clear, pixel_steps, ..Drag::new(tool, from.map_or([x, y], |p| [p[0], p[1]]), points, mods, erase) });
             app.trail = None;
             app.stylus.begin_stroke();
             if from.is_some() {

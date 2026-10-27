@@ -247,7 +247,18 @@ pub(super) fn stroke_params(app: &PhotocraftApp, d: &Drag, points: &[Vec<f64>]) 
     if crate::eraser_ui::block_mode(app, tool) {
         p["block"] = json!(true);
     }
+    // With the pixel grid showing, the stroke steps one pixel row or column at a time (#9188).
+    if d.pixel_steps.unwrap_or_else(|| pixel_grid_visible(app)) {
+        p["pixelSteps"] = json!(true);
+    }
     p
+}
+
+/// Is the pixel grid drawn over the active view (View › Show › Pixel Grid, at a zoom that shows
+/// it)? `ViewState::zoom` is in device pixels per document pixel, the unit
+/// [`super::pixel_grid::shows_at`] takes.
+pub(super) fn pixel_grid_visible(app: &PhotocraftApp) -> bool {
+    app.ui.view.shows(app.ui.view.show.pixel_grid) && super::pixel_grid::shows_at(app.current_zoom())
 }
 
 /// Tools whose strokes the engine renders while they are drawn (`LiveStroke`).
@@ -652,4 +663,35 @@ pub fn paint_target(app: &PhotocraftApp) -> serde_json::Value {
     let viewing = photocraft_engine::mask_view_cmds::current(st).is_some_and(|v| !v.filter);
     let mask = app.ui.mask_target || viewing || crate::adjustment_layer_active(st);
     json!(if mask && has_mask { "mask" } else { "pixels" })
+}
+
+#[cfg(test)]
+mod pixel_steps_tests {
+    use super::*;
+
+    #[test]
+    fn strokes_step_pixel_by_pixel_only_while_the_pixel_grid_shows() {
+        // #9188: the Brush, Pencil and Eraser step one pixel at a time while the pixel grid is
+        // drawn (View › Show › Pixel Grid, zoomed in past its threshold), and only then.
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+        app.sync_views();
+        for tool in [Tool::Brush, Tool::Pencil, Tool::Eraser] {
+            for (grid, extras, zoom, steps) in [(true, true, 16.0, true), (true, true, 2.0, false), (false, true, 16.0, false), (true, false, 16.0, false)] {
+                app.ui.view.show.pixel_grid = grid;
+                app.ui.view.extras = extras;
+                app.ui.views[0].zoom = zoom;
+                let d = Drag::new(tool, [4.2, 4.7], vec![[4.2, 4.7, 1.0]], egui::Modifiers::NONE, tool == Tool::Eraser);
+                let p = stroke_params(&app, &d, &[vec![4.2, 4.7, 1.0]]);
+                assert_eq!(p.get("pixelSteps").is_some(), steps, "{tool:?}: grid {grid}, extras {extras}, zoom {zoom}");
+                // Latched at the press: the commit keeps the live stroke's mode whatever the view
+                // does mid-stroke.
+                for latched in [true, false] {
+                    let d = Drag { pixel_steps: Some(latched), ..d.clone() };
+                    let p = stroke_params(&app, &d, &[vec![4.2, 4.7, 1.0]]);
+                    assert_eq!(p.get("pixelSteps").is_some(), latched, "{tool:?}: latched {latched}, view {steps}");
+                }
+            }
+        }
+    }
 }
