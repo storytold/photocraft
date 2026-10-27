@@ -3191,3 +3191,6 @@ cameraRaw	Scale	缩放
 cameraRaw	Offset X	X 偏移
 cameraRaw	Offset Y	Y 偏移
 cameraRaw	Guided	引导
+	Saved Camera Raw settings to {file}	已将 Camera Raw 设置保存到 {file}
+	Save the settings to each raw's sidecar without opening it	将设置保存到每个 Raw 的附属文件，不打开它
+	No settings saved: these raws can't keep a sidecar here	未保存任何内容：这些 Raw 在此处无法拥有附属文件

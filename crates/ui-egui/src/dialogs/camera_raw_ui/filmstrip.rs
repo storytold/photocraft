@@ -175,6 +175,37 @@ pub(super) fn open_all(app: &mut PhotocraftApp, params: &CameraRaw, raw: &RawOpe
     Ok(json!({"opened": opened}))
 }
 
+/// Done: saves each raw's settings to its sidecar, as Camera Raw's Done does, and opens none of
+/// them (they close again).
+pub(super) fn done(app: &mut PhotocraftApp) -> Value {
+    keep_settings(app);
+    let Some(d) = app.camera_raw.take() else { return Value::Null };
+    let Some(raw) = d.raw_open.clone() else { return Value::Null };
+    let mut raws = vec![(raw.clone(), d.params.clone())];
+    for held in std::mem::take(&mut app.raw_shelf).into_iter().filter(|h| h.raw.document != raw.document) {
+        let p = match held.kept {
+            Some((p, _)) => p,
+            None => first_settings(app, &held.raw).0,
+        };
+        raws.push((held.raw, p));
+    }
+    let mut saved = Vec::new();
+    for (raw, p) in &raws {
+        saved.extend(super::sidecar::store_sidecar(app, raw, p));
+        if let Some(index) = super::open::document_index(app, raw.document) {
+            app.session.close(index);
+        }
+    }
+    app.sync_views();
+    app.ui.status = if saved.is_empty() {
+        tl!("No settings saved: these raws can't keep a sidecar here").to_string()
+    } else {
+        crate::i18n::fmt(tl!("Saved Camera Raw settings to {file}"), &[("file", &saved.join(", "))])
+    };
+    app.ui.status_error = saved.is_empty();
+    json!({"done": true, "saved": saved})
+}
+
 /// The filmstrip of raws being opened: a thumbnail and name each, the shown one outlined, a dot
 /// on edited ones. Returns the one clicked.
 pub(super) fn filmstrip(ui: &mut egui::Ui, rect: ERect, shelf: &mut [HeldRaw], current: Option<photocraft_doc::DocId>, t: &Tokens) -> Option<usize> {

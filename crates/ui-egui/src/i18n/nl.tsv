@@ -4268,3 +4268,6 @@ cameraRaw	Scale	Schalen
 cameraRaw	Offset X	Verschuiving X
 cameraRaw	Offset Y	Verschuiving Y
 cameraRaw	Guided	Begeleid
+	Saved Camera Raw settings to {file}	Camera Raw-instellingen opgeslagen in {file}
+	Save the settings to each raw's sidecar without opening it	De instellingen in het sidecarbestand van elke raw opslaan zonder die te openen
+	No settings saved: these raws can't keep a sidecar here	Niets opgeslagen: deze raws kunnen hier geen sidecarbestand krijgen

@@ -4438,3 +4438,6 @@ cameraRaw	Scale	Escala
 cameraRaw	Offset X	Deslocamento X
 cameraRaw	Offset Y	Deslocamento Y
 cameraRaw	Guided	Guiado
+	Saved Camera Raw settings to {file}	Configurações do Camera Raw salvas em {file}
+	Save the settings to each raw's sidecar without opening it	Salvar as configurações no arquivo sidecar de cada raw sem abri-lo
+	No settings saved: these raws can't keep a sidecar here	Nada foi salvo: estes raw não podem ter um arquivo sidecar aqui

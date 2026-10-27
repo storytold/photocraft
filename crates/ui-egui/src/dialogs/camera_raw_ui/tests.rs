@@ -1102,3 +1102,29 @@ fn save_and_load_settings_round_trip_through_xmp_files() {
     frame(&mut app);
     assert_eq!(app.camera_raw.as_ref().unwrap().params.clarity, 25.0);
 }
+
+/// Done keeps the settings in the raw's sidecar (Upright's guides included) and opens nothing,
+/// even with the preference that writes sidecars on Open turned off.
+#[test]
+fn done_saves_the_sidecar_and_opens_nothing() {
+    let (mut app, dng, dir, raw_path, written) = raw_with_sidecar("done", None);
+    let ctx = egui::Context::default();
+    app.run("prefs.set", json!({"path": "rawDefaults.writeXmpSidecars", "value": false})).unwrap();
+    let before = app.session.documents().len();
+    open_dialog_at(&mut app, &ctx, &dng, &raw_path);
+    let set = json!({"upright": "guided", "uprightGuides": [[[0.2, 0.1], [0.18, 0.9]], [[0.8, 0.1], [0.82, 0.9]]], "contrast": 20});
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": set}})).unwrap().unwrap();
+    let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"done": true}})).unwrap().unwrap();
+    assert_eq!(r["saved"], json!(["IMG_0100.xmp"]), "{r}");
+    assert!(app.camera_raw.is_none() && app.raw_shelf.is_empty());
+    assert_eq!(app.session.documents().len(), before, "Done opens nothing");
+    let w = written.lock().unwrap().clone();
+    assert_eq!(w.len(), 1);
+    let mut back = CameraRaw::default();
+    photocraft_io::camera_raw_xmp::load(&mut back, &w[0].1).unwrap();
+    assert_eq!((back.upright.as_str(), back.upright_guides.len(), back.contrast), ("guided", 2, 20.0));
+    // Done is only for raws being opened.
+    app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+    assert!(menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"done": true}})).unwrap().is_err());
+    let _ = std::fs::remove_dir_all(&dir);
+}

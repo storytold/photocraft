@@ -4625,3 +4625,6 @@ cameraRaw	Aspect	Proporzioni
 cameraRaw	Scale	Scala
 cameraRaw	Offset X	Spostamento X
 cameraRaw	Offset Y	Spostamento Y
+	Saved Camera Raw settings to {file}	Impostazioni Camera Raw salvate in {file}
+	Save the settings to each raw's sidecar without opening it	Salva le impostazioni nel file sidecar di ogni raw senza aprirlo
+	No settings saved: these raws can't keep a sidecar here	Nulla salvato: questi raw non possono avere un file sidecar qui

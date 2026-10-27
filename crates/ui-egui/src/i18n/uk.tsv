@@ -4221,3 +4221,6 @@ cameraRaw	Scale	Масштаб
 cameraRaw	Offset X	Зсув по X
 cameraRaw	Offset Y	Зсув по Y
 cameraRaw	Guided	За напрямними
+	Saved Camera Raw settings to {file}	Налаштування Camera Raw збережено в {file}
+	Save the settings to each raw's sidecar without opening it	Зберегти налаштування в супровідний файл кожного raw, не відкриваючи його
+	No settings saved: these raws can't keep a sidecar here	Нічого не збережено: ці raw тут не можуть мати супровідного файлу

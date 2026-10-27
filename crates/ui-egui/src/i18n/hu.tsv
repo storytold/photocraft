@@ -4422,3 +4422,6 @@ cameraRaw	Scale	Méretarány
 cameraRaw	Offset X	X eltolás
 cameraRaw	Offset Y	Y eltolás
 cameraRaw	Guided	Vezetett
+	Saved Camera Raw settings to {file}	Camera Raw-beállítások mentve ide: {file}
+	Save the settings to each raw's sidecar without opening it	A beállítások mentése minden raw kísérőfájljába megnyitás nélkül
+	No settings saved: these raws can't keep a sidecar here	Nincs mentve semmi: ezek a raw fájlok itt nem kaphatnak kísérőfájlt

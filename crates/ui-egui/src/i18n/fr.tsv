@@ -4550,3 +4550,6 @@ cameraRaw	Scale	Mise à l'échelle
 cameraRaw	Offset X	Décalage X
 cameraRaw	Offset Y	Décalage Y
 cameraRaw	Guided	Guidé
+	Saved Camera Raw settings to {file}	Réglages Camera Raw enregistrés dans {file}
+	Save the settings to each raw's sidecar without opening it	Enregistrer les réglages dans le fichier annexe de chaque raw sans l’ouvrir
+	No settings saved: these raws can't keep a sidecar here	Rien n’a été enregistré : ces raw ne peuvent pas avoir de fichier annexe ici

@@ -4236,3 +4236,6 @@ cameraRaw	Scale	Ölçekle
 cameraRaw	Offset X	Ofset X
 cameraRaw	Offset Y	Ofset Y
 cameraRaw	Guided	Kılavuzlu
+	Saved Camera Raw settings to {file}	Camera Raw ayarları {file} dosyasına kaydedildi
+	Save the settings to each raw's sidecar without opening it	Ayarları her raw dosyasının yan dosyasına kaydet, açmadan
+	No settings saved: these raws can't keep a sidecar here	Hiçbir şey kaydedilmedi: bu raw dosyaları burada yan dosyaya sahip olamaz

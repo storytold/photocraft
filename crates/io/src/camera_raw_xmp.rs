@@ -3,8 +3,10 @@
 //! `x:xmpmeta/rdf:RDF/rdf:Description`, as attributes or as child elements.
 //!
 //! Loading applies only the settings the file holds, over the current ones, as Camera Raw's
-//! Load Settings does; settings PhotoCraft has no control for (lens corrections, geometry,
-//! defringe, …) are ignored and named in the report. The same reader fills the dialog from a
+//! Load Settings does; settings PhotoCraft has no control for (lens corrections, defringe, …)
+//! are ignored and named in the report. Geometry maps to `crs:PerspectiveUpright` and the
+//! `crs:Perspective*` sliders; Guided Upright's guides, which Camera Raw keeps in its own
+//! precomputed form, are PhotoCraft's `photocraft:UprightGuides` (see [`PHOTOCRAFT_NS`]). The same reader fills the dialog from a
 //! raw file's sidecar (`IMG_0001.xmp` beside `IMG_0001.CR2`), and the writer keeps it. Saving writes every supported
 //! control, so loading the file in Photoshop reproduces the dialog.
 //!
@@ -13,11 +15,15 @@
 //! and Tint. The absolute `Temperature` (kelvin) / `Tint` of raw-file settings have no
 //! counterpart and are ignored.
 
-use photocraft_algo::camera_raw::{CameraRaw, validate_curve};
+use photocraft_algo::camera_raw::{CameraRaw, UPRIGHT_MODES, validate_curve};
 
 /// The Camera Raw settings namespace.
 pub const CRS_NS: &str = "http://ns.adobe.com/camera-raw-settings/1.0/";
 const RDF_NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+/// PhotoCraft's own settings namespace: Guided Upright's guides (`photocraft:UprightGuides`, a
+/// JSON array of `[[x, y], [x, y]]` endpoints as fractions of the frame).
+pub const PHOTOCRAFT_NS: &str = "https://photocraft.app/ns/camera-raw/1.0/";
+const GUIDES_ATTR: &str = "UprightGuides";
 /// Largest settings file read; real ones are a few kilobytes.
 pub const MAX_XMP_BYTES: usize = 4 * 1024 * 1024;
 
@@ -109,6 +115,14 @@ const SCALARS: &[(&str, Field, f32, f32)] = &[
     ("GreenSaturation", |p| &mut p.calibration_sat[1], -100.0, 100.0),
     ("BlueHue", |p| &mut p.calibration_hue[2], -100.0, 100.0),
     ("BlueSaturation", |p| &mut p.calibration_sat[2], -100.0, 100.0),
+    // Geometry › Manual Transformations
+    ("PerspectiveVertical", |p| &mut p.transform_vertical, -100.0, 100.0),
+    ("PerspectiveHorizontal", |p| &mut p.transform_horizontal, -100.0, 100.0),
+    ("PerspectiveRotate", |p| &mut p.transform_rotate, -10.0, 10.0),
+    ("PerspectiveScale", |p| &mut p.transform_scale, 50.0, 150.0),
+    ("PerspectiveAspect", |p| &mut p.transform_aspect, -100.0, 100.0),
+    ("PerspectiveX", |p| &mut p.transform_offset_x, -100.0, 100.0),
+    ("PerspectiveY", |p| &mut p.transform_offset_y, -100.0, 100.0),
 ];
 
 type Curve = fn(&mut CameraRaw) -> &mut Vec<[f32; 2]>;
@@ -192,7 +206,6 @@ fn neutral(name: &str, value: &str) -> bool {
     match name {
         "GrainSeed" => true,
         "VignetteMidpoint" => number(v) == Some(50.0),
-        "PerspectiveScale" => number(v) == Some(100.0),
         _ => name.starts_with("Defringe") && name.contains("Hue"),
     }
 }
@@ -214,9 +227,24 @@ fn apply(params: &mut CameraRaw, report: &mut LoadReport, name: &str, value: &st
             }
             None => report.ignored.push(name.to_string()),
         }
+    } else if name == "PerspectiveUpright" {
+        // 0 Off, 1 Auto, 2 Level, 3 Vertical, 4 Full, 5 Guided: the order of `UPRIGHT_MODES`.
+        match value.trim().parse::<usize>().ok().and_then(|i| UPRIGHT_MODES.get(i)) {
+            Some(mode) => {
+                params.upright = (*mode).into();
+                report.applied += 1;
+            }
+            None => report.ignored.push(name.to_string()),
+        }
     } else if !METADATA.contains(&name) && !neutral(name, value) {
         report.ignored.push(name.to_string());
     }
+}
+
+/// `photocraft:UprightGuides`: at most four guides with finite endpoints in `0..=1`.
+fn guides(value: &str) -> Option<Vec<[[f32; 2]; 2]>> {
+    let g: Vec<[[f32; 2]; 2]> = serde_json::from_str(value).ok()?;
+    (g.len() <= 4 && g.iter().flatten().flatten().all(|v| v.is_finite() && (0.0..=1.0).contains(v))).then_some(g)
 }
 
 /// Apply a Camera Raw settings file over `params`. Fails on input that isn't XMP or holds no
@@ -236,6 +264,15 @@ pub fn load(params: &mut CameraRaw, bytes: &[u8]) -> Result<LoadReport, String> 
         for a in desc.attributes().filter(|a| a.namespace() == Some(CRS_NS)) {
             found = true;
             apply(&mut next, &mut report, a.name(), a.value());
+        }
+        if let Some(value) = desc.attribute((PHOTOCRAFT_NS, GUIDES_ATTR)) {
+            match guides(value) {
+                Some(g) => {
+                    next.upright_guides = g;
+                    report.applied += 1;
+                }
+                None => report.ignored.push(GUIDES_ATTR.to_string()),
+            }
         }
         for c in desc.children().filter(|c| c.is_element() && c.tag_name().namespace() == Some(CRS_NS)) {
             found = true;
@@ -307,7 +344,7 @@ pub fn save(params: &CameraRaw) -> String {
         // Exposure has two decimals in Camera Raw, the sharpening radius one; the rest are levels.
         let text = match *name {
             "Exposure2012" => signed(v, 2),
-            "SharpenRadius" => signed(v, 1),
+            "SharpenRadius" | "PerspectiveRotate" => signed(v, 1),
             _ if *lo < 0.0 => signed(v.round(), 0),
             _ => format!("{:.0}", v.round()),
         };
@@ -315,6 +352,13 @@ pub fn save(params: &CameraRaw) -> String {
     }
     let style = STYLES.iter().find(|(_, s)| *s == p.vignette_style).map_or("1", |(n, _)| n);
     out.push_str(&format!("   crs:PostCropVignetteStyle=\"{}\"\n", escape(style)));
+    let upright = UPRIGHT_MODES.iter().position(|m| *m == p.upright).unwrap_or(0);
+    out.push_str(&format!("   crs:PerspectiveUpright=\"{upright}\"\n"));
+    if !p.upright_guides.is_empty() {
+        let json = serde_json::to_string(&p.upright_guides).unwrap_or_default();
+        out.push_str(&format!("   photocraft:{GUIDES_ATTR}=\"{}\"\n", escape(&json)));
+        out = out.replacen("    xmlns:crs=", &format!("    xmlns:photocraft=\"{PHOTOCRAFT_NS}\"\n    xmlns:crs="), 1);
+    }
     out.push_str("   crs:ToneCurveName2012=\"Custom\"\n   crs:HasSettings=\"True\">\n");
     for (name, field) in CURVES {
         let points = field(&mut p);
@@ -384,7 +428,7 @@ mod tests {
         assert!(p.point_curve.is_empty());
         assert_eq!(p.point_curve_red, vec![[0.0, 0.0], [128.0, 140.0], [255.0, 255.0]]);
         assert_eq!(p.dehaze, 12.0);
-        // Lens vignetting, calibration and geometry have no counterpart.
+        // Lens vignetting has no counterpart.
         assert_eq!(r.ignored, vec!["VignetteAmount".to_string()], "the Calibration panel's keys load now");
         assert_eq!(p.calibration_hue[0], -5.0);
     }
@@ -423,6 +467,42 @@ mod tests {
         let r = load(&mut back, text.as_bytes()).unwrap();
         assert!(r.ignored.is_empty(), "{:?}", r.ignored);
         assert_eq!(back, p);
+    }
+
+    /// Geometry: Upright's mode and the Manual Transformations are Camera Raw's own fields;
+    /// Guided Upright's guides round-trip through PhotoCraft's namespace.
+    #[test]
+    fn geometry_round_trips_and_reads_camera_raws_fields() {
+        let p = CameraRaw {
+            upright: "guided".into(),
+            upright_guides: vec![[[0.22, 0.1], [0.18, 0.9]], [[0.78, 0.1], [0.82, 0.9]]],
+            transform_rotate: 2.5,
+            transform_scale: 110.0,
+            transform_offset_y: -10.0,
+            ..CameraRaw::default()
+        };
+        let text = save(&p);
+        assert!(text.contains("crs:PerspectiveUpright=\"5\"") && text.contains("crs:PerspectiveRotate=\"+2.5\""), "{text}");
+        assert!(text.contains("xmlns:photocraft=") && is_photocraft_xmp(text.as_bytes()));
+        let mut back = CameraRaw::default();
+        let r = load(&mut back, text.as_bytes()).unwrap();
+        assert!(r.ignored.is_empty(), "{:?}", r.ignored);
+        assert_eq!(back, p);
+        // Without guides there is no PhotoCraft attribute; Camera Raw's Vertical is mode 3.
+        let text = save(&CameraRaw { upright: "vertical".into(), ..CameraRaw::default() });
+        assert!(!text.contains("photocraft:") && text.contains("crs:PerspectiveUpright=\"3\""));
+        let mut q = CameraRaw::default();
+        load(&mut q, FIXTURE.to_vec().as_slice()).unwrap();
+        assert_eq!((q.upright.as_str(), q.transform_scale), ("off", 100.0), "Camera Raw's neutral Scale is 100");
+        // Malformed guides are reported, not applied.
+        let bad = text.replacen(
+            "crs:HasSettings",
+            "photocraft:UprightGuides=\"[[[2,0],[0,0]]]\" xmlns:photocraft=\"https://photocraft.app/ns/camera-raw/1.0/\" crs:HasSettings",
+            1,
+        );
+        let mut q = CameraRaw::default();
+        assert_eq!(load(&mut q, bad.as_bytes()).unwrap().ignored, vec!["UprightGuides".to_string()]);
+        assert!(q.upright_guides.is_empty());
     }
 
     #[test]
