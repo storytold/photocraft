@@ -1,4 +1,3 @@
-
 #[test]
 fn color_matcher_bvh_and_transparency() {
     let red = [1.0, 0.0, 0.0, 1.0];
