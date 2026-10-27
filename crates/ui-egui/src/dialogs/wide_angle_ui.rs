@@ -519,7 +519,7 @@ mod tests {
         PhotocraftApp::setup_context(&ctx, Default::default());
         open_with_a_constraint(&mut app, &ctx);
         let input = || egui::RawInput { screen_rect: Some(ERect::from_min_size(Pos2::ZERO, vec2(1000.0, 600.0))), ..Default::default() };
-        let _ = ctx.run_ui(input(), |ui| show(&mut app, ui.ctx()));
+        ctx.run_ui(input(), |ui| show(&mut app, ui.ctx())).textures_delta.clear();
         // Collapse only the cached warp. A fresh solve would draw the original line instead.
         let d = app.wide_angle.as_mut().unwrap();
         for (out, _) in &mut d.mesh.as_mut().unwrap().verts {
@@ -531,7 +531,8 @@ mod tests {
             let d = app.wide_angle.as_mut().unwrap();
             d.preview = preview;
             d.drag = dragging.then_some(([20.0, 30.0], [140.0, 30.0]));
-            let output = ctx.run_ui(input(), |ui| show(&mut app, ui.ctx()));
+            let mut output = ctx.run_ui(input(), |ui| show(&mut app, ui.ctx()));
+            output.textures_delta.clear();
             let accent = Tokens::get(&ctx).accent;
             let line = output
                 .shapes
