@@ -1,5 +1,8 @@
 use super::*;
 use photocraft_color::{PixelFormat, SampleType};
+mod ext;
+mod mosaic;
+mod selection_mix;
 
 fn fmt(s: SampleType) -> PixelFormat {
     PixelFormat::new(ColorMode::Rgb, s, true)
@@ -267,6 +270,32 @@ fn minimum_maximum_spread() {
     assert!((mx.pixel(12, 10)[0] - 0.5).abs() < 1e-6);
     let mn = run(&s, &FilterParams::Minimum { radius: 1.0, preserve: Preserve::Squareness });
     assert!((mn.pixel(10, 10)[0] - 0.5).abs() < 1e-6);
+}
+
+/// CMYK samples are ink, so Maximum spreads paper white and Minimum spreads ink, as Photoshop
+/// does: Maximum r 1 removes a 1-px C 100% line on white, Minimum widens it to 3 px. Alpha keeps
+/// the usual polarity (Maximum grows opaque areas, Minimum grows transparent ones).
+#[test]
+fn minimum_maximum_treat_cmyk_as_ink() {
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        let mut s = Surface::new(PixelFormat::new(ColorMode::Cmyk, depth, true));
+        s.fill_rect(R, &[0.0, 0.0, 0.0, 0.0, 1.0]);
+        s.fill_rect(Rect::new(20, 0, 21, 30), &[1.0, 0.0, 0.0, 0.0, 1.0]);
+        s.write_pixel(5, 5, &[0.0, 0.0, 0.0, 0.0, 0.0]);
+        for preserve in [Preserve::Squareness, Preserve::Roundness] {
+            let mx = run(&s, &FilterParams::Maximum { radius: 1.0, preserve });
+            for x in 17..24 {
+                assert!(mx.pixel(x, 15)[0].abs() < 1e-6, "{depth:?} {preserve:?} Maximum C at x {x}: {:?}", mx.pixel(x, 15));
+            }
+            assert!((mx.pixel(5, 5)[4] - 1.0).abs() < 1e-6, "{depth:?} {preserve:?} Maximum grows alpha");
+            let mn = run(&s, &FilterParams::Minimum { radius: 1.0, preserve });
+            for x in 17..24 {
+                let want = if (19..=21).contains(&x) { 1.0 } else { 0.0 };
+                assert!((mn.pixel(x, 15)[0] - want).abs() < 1e-6, "{depth:?} {preserve:?} Minimum C at x {x}: {:?}", mn.pixel(x, 15));
+            }
+            assert!(mn.pixel(6, 5)[4].abs() < 1e-6, "{depth:?} {preserve:?} Minimum shrinks alpha");
+        }
+    }
 }
 
 #[test]
@@ -613,4 +642,13 @@ fn mix_selection_reads_the_selection_once_per_tile() {
         mix_selection_reference(&mut b, t, &sel, &orig, alpha);
         assert!(a.iter().zip(&b).all(|(x, y)| x.to_bits() == y.to_bits()), "alpha {alpha}: results differ");
     }
+}
+
+#[test]
+fn blur_halos_follow_the_clamped_radius_and_never_overflow() {
+    let smart = |radius| FilterParams::SmartBlur { radius, threshold: 25.0, quality: BlurQuality::default(), mode: SmartBlurMode::default() };
+    assert_eq!(smart(1e9).halo(), Halo::Radius(101));
+    assert_eq!(smart(f32::INFINITY).halo(), Halo::Radius(101));
+    let gaussian = FilterParams::GaussianBlur { radius: f32::INFINITY };
+    assert_eq!(gaussian.halo(), Halo::Radius(i32::MAX));
 }

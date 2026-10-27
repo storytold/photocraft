@@ -752,6 +752,38 @@ fn object_at_finds_the_disc_under_the_cursor() {
 }
 
 #[test]
+fn object_at_keeps_large_foregrounds_but_not_the_surrounding_background() {
+    let (w, h) = (400, 300);
+    for margin in [30, 20, 8] {
+        let inside = |x: usize, y: usize| x >= margin && x < w - margin && y >= margin && y < h - margin;
+        let img = RgbImage::from_fn(w, h, |x, y| {
+            let noise = ((x * 13 + y * 7) % 17) as f32 / 850.0;
+            if inside(x, y) { [0.8 + noise, 0.2, 0.1] } else { [0.1, 0.2, 0.8 + noise] }
+        });
+        let truth: Vec<_> = (0..w * h).map(|i| inside(i % w, i / w)).collect();
+        let sampler = ImageSampler { img: &img, origin: (-40, 25) };
+        let canvas = Rect::new(-40, 25, w as i32 - 40, h as i32 + 25);
+        let region = grabcut::object_at(&sampler, canvas, 160.0, 175.0, grabcut::OBJECT_AT_WORK_PX)
+            .unwrap_or_else(|| panic!("missing large foreground with margin {margin}"));
+        let local = Region { bbox: region.bbox.translate(40, -25), mask: region.mask };
+        assert!(iou(&local, &truth, w, h) > 0.95, "margin {margin}");
+        assert!(grabcut::object_at(&sampler, canvas, -39.0, 26.0, grabcut::OBJECT_AT_WORK_PX).is_none(), "background margin {margin}");
+    }
+}
+
+#[test]
+fn object_at_allows_a_foreground_touching_one_edge_but_rejects_a_flat_image() {
+    let img = RgbImage::from_fn(400, 300, |x, y| if x < 360 && (20..280).contains(&y) { [0.8, 0.2, 0.1] } else { [0.1, 0.2, 0.8] });
+    let sampler = ImageSampler { img: &img, origin: (0, 0) };
+    let canvas = Rect::new(0, 0, 400, 300);
+    let region = grabcut::object_at(&sampler, canvas, 200.0, 150.0, grabcut::OBJECT_AT_WORK_PX).unwrap();
+    assert!(region.at(0, 150) > 0.9 && region.at(350, 150) > 0.9);
+    assert!(region.at(380, 150) < 0.1 && region.at(200, 5) < 0.1);
+    let flat = RgbImage::from_fn(400, 300, |_, _| [0.5; 3]);
+    assert!(grabcut::object_at(&ImageSampler { img: &flat, origin: (0, 0) }, canvas, 200.0, 150.0, grabcut::OBJECT_AT_WORK_PX).is_none());
+}
+
+#[test]
 fn object_at_on_the_background_or_off_canvas_finds_nothing() {
     let (img, _) = disc_scene(320, 240, 160.0, 120.0, 70.0, 7);
     let s = ImageSampler { img: &img, origin: (0, 0) };
@@ -760,6 +792,28 @@ fn object_at_on_the_background_or_off_canvas_finds_nothing() {
     assert!(grabcut::object_at(&s, canvas, -5.0, 10.0, 20_000).is_none());
     assert!(grabcut::object_at(&s, canvas, f32::NAN, 10.0, 20_000).is_none());
     assert!(grabcut::object_at(&s, canvas, 400.0, 10.0, 0).is_none());
+}
+
+/// #6576: a 24 px object in a 4000×3000 document is found (a 1000×800 one still is).
+#[test]
+fn object_at_finds_small_object_in_large_canvas() {
+    let (w, h) = (4000usize, 3000usize);
+    let canvas = Rect::new(0, 0, w as i32, h as i32);
+    for (ox, oy, ow, oh) in [(188usize, 138usize, 24usize, 24usize), (1500, 1100, 1000, 800)] {
+        let inside = |x: usize, y: usize| x >= ox && x < ox + ow && y >= oy && y < oy + oh;
+        let img = RgbImage::from_fn(w, h, |x, y| if inside(x, y) { [0.8, 0.1, 0.1] } else { [0.9, 0.9, 0.9] });
+        let truth: Vec<bool> = (0..w * h).map(|i| inside(i % w, i / w)).collect();
+        let s = ImageSampler { img: &img, origin: (0, 0) };
+        let (cx, cy) = ((ox + ow / 2) as f32, (oy + oh / 2) as f32);
+        let reg = grabcut::object_at(&s, canvas, cx, cy, grabcut::OBJECT_AT_WORK_PX);
+        let reg = reg.unwrap_or_else(|| panic!("the {ow}×{oh} object is not found"));
+        let v = iou(&reg, &truth, w, h);
+        assert!(v > 0.8, "{ow}×{oh}: IoU {v}");
+    }
+    // The flat background around the small object is still nothing.
+    let img = RgbImage::from_fn(w, h, |x, y| if (188..212).contains(&x) && (138..162).contains(&y) { [0.8, 0.1, 0.1] } else { [0.9, 0.9, 0.9] });
+    let s = ImageSampler { img: &img, origin: (0, 0) };
+    assert!(grabcut::object_at(&s, canvas, 400.0, 300.0, grabcut::OBJECT_AT_WORK_PX).is_none());
 }
 
 // ---------- Select Subject on the cases reported in #2788 ----------
@@ -847,6 +901,50 @@ fn select_subject_leaves_a_background_coloured_gap_open() {
     assert!(g < 0.1, "the backdrop inside the ring stays unselected: covered {g}");
     let v = iou(&reg, &truth, w, h);
     assert!(v > 0.9, "IoU {v}");
+}
+
+#[test]
+fn antialias_blends_edge_pixels_with_their_neighbourhood() {
+    // A lone selected pixel keeps most of its coverage and its neighbours get half of a ninth;
+    // neighbours outside the mask count as the pixel itself.
+    let mut m = vec![0, 0, 0, 0, 255, 0, 0, 0, 0];
+    antialias_u8(&mut m, 3, 3);
+    assert_eq!(m, [14, 14, 14, 14, 142, 14, 14, 14, 14]);
+}
+
+#[test]
+fn antialias_skips_only_spans_without_edge_pixels() {
+    // Every pixel through the per-pixel rule, no span skipped.
+    let every_pixel = |mask: &mut [u8], w: usize, h: usize| {
+        let src = mask.to_vec();
+        for y in 0..h {
+            for x in 0..w {
+                if let Some(v) = edge_value(&src, w, h, x, y) {
+                    mask[y * w + x] = v;
+                }
+            }
+        }
+    };
+    let mut rng = Rng::new(11);
+    // Widths around the 64-pixel span, single rows and columns, discs, noise and stripes.
+    for (w, h) in [(1usize, 1usize), (1, 9), (9, 1), (63, 4), (64, 3), (65, 5), (127, 2), (129, 70), (300, 200)] {
+        let (cx, cy, r) = (w as f32 * 0.6, h as f32 * 0.4, w.min(h) as f32 / 3.0);
+        let masks: Vec<Vec<u8>> = vec![
+            vec![255; w * h],
+            vec![0; w * h],
+            (0..w * h).map(|i| if ((i % w) as f32 - cx).hypot((i / w) as f32 - cy) < r { 255 } else { 0 }).collect(),
+            (0..w * h).map(|_| if rng.f32() < 0.02 { 255 } else { 0 }).collect(),
+            (0..w * h).map(|_| if rng.f32() < 0.5 { 255 } else { 0 }).collect(),
+            (0..w * h).map(|i| if (i % w) / 64 % 2 == 0 { 255 } else { 0 }).collect(),
+            (0..w * h).map(|i| if i % w == w - 1 || i / w == h / 2 { 255 } else { 0 }).collect(),
+        ];
+        for (k, m) in masks.into_iter().enumerate() {
+            let (mut fast, mut slow) = (m.clone(), m);
+            antialias_u8(&mut fast, w, h);
+            every_pixel(&mut slow, w, h);
+            assert!(fast == slow, "{w}×{h} mask {k}");
+        }
+    }
 }
 
 /// Timing on a 6 MP figure, for before/after numbers (`cargo test --release -- --ignored select_subject_timing --nocapture`).

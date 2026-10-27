@@ -22,11 +22,12 @@ pub fn import_flat(name: &str, bytes: &[u8]) -> Result<ImportResult, IoError> {
         return import_tiff_page(name, bytes, None);
     }
     let img = codecs::decode_as(format.ok_or(codecs::CodecError::UnknownFormat)?, bytes)?;
-    // A palette BMP or PNG opens in Indexed Color mode with its colour table, as in Photoshop
-    // (#3802, #4804).
+    // A palette BMP, PNG or GIF opens in Indexed Color mode with its colour table, as in
+    // Photoshop (#3802, #4804, #7886). A GIF is always palette-based: the first frame's table.
     let palette = match format {
         Some(Format::Bmp) => codecs::bmp_palette(bytes).ok().flatten().map(|c| (c, None)),
         Some(Format::Png) => codecs::png_palette(bytes).ok().flatten().map(|p| (p.colors, p.transparent)),
+        Some(Format::Gif) => codecs::gif_palette(bytes),
         _ => None,
     };
     let mut r = image_to_document(name, &img)?;
@@ -51,14 +52,57 @@ pub fn import_flat(name: &str, bytes: &[u8]) -> Result<ImportResult, IoError> {
             _ => None,
         };
     }
+    if d.icc_profile.is_none() && d.mode == ColorMode::Rgb {
+        d.icc_profile = cicp_profile(&img);
+        if d.icc_profile.is_none()
+            && let Some((profile, warning)) = hdr_fallback(&img)
+        {
+            d.icc_profile = Some(profile);
+            r.warnings.push(warning);
+        }
+    }
     Ok(r)
+}
+
+/// A PQ or HLG image, which the decoder turned into linear light, on primaries
+/// [`cicp_profile`] has no profile for: left untagged it would be read as sRGB-encoded, so it is
+/// tagged linear sRGB (its tones right, its primaries assumed) and the warning says so.
+fn hdr_fallback(img: &Image) -> Option<(Arc<Vec<u8>>, String)> {
+    let c = img.cicp.filter(|c| c.is_hdr() && img.sample_type().is_float())?;
+    let warning = format!("the HDR colour primaries (H.273 code {}) aren't supported; the image is read as linear sRGB", c.primaries);
+    Some((photocraft_cms::Builtin::LinearSrgb.profile().to_bytes(), warning))
+}
+
+/// The profile a HEIF's `nclx` colour description stands for, when the file has no ICC profile
+/// (#6752): a BT.2020 or P3 image is tagged so, and a PQ or HLG one, which the decoder turned into
+/// linear light, gets a linear profile on its primaries. BT.709 SDR stays untagged, read as sRGB
+/// as before; BT.709 with a linear transfer (8) is tagged linear sRGB.
+fn cicp_profile(img: &Image) -> Option<Arc<Vec<u8>>> {
+    let c = img.cicp?;
+    let linear = img.sample_type().is_float();
+    if c.primaries == 1 && !linear && matches!(c.transfer, 1 | 2 | 6 | 13 | 14 | 15) {
+        return None;
+    }
+    // Unspecified primaries on an HDR image: BT.2100's, which PQ and HLG are defined with.
+    let primaries = if c.primaries == 2 && c.is_hdr() { 9 } else { c.primaries };
+    photocraft_cms::builtin::cicp_rgb(primaries, c.transfer, linear).map(|p| p.to_bytes())
 }
 
 /// Every frame of a GIF as a single-layer document, handed to `each` in order with its delay in
 /// milliseconds (a still GIF has one). One frame at a time becomes a document, so the caller
 /// can flatten and drop it. Returns the number of frames; stops at the first error `each` gives.
 pub fn import_gif_frames(name: &str, bytes: &[u8], each: &mut dyn FnMut(Document, u32) -> Result<(), IoError>) -> Result<usize, IoError> {
-    let frames = codecs::decode_gif_frames(bytes, &codecs::DecodeOptions::default())?;
+    import_frames(name, codecs::decode_gif_frames(bytes, &codecs::DecodeOptions::default())?, each)
+}
+
+/// Every frame of a WebP as a single-layer document, as [`import_gif_frames`] does for a GIF: an
+/// animation's frames composited onto its canvas, with their durations in milliseconds; a still
+/// WebP is one frame.
+pub fn import_webp_frames(name: &str, bytes: &[u8], each: &mut dyn FnMut(Document, u32) -> Result<(), IoError>) -> Result<usize, IoError> {
+    import_frames(name, codecs::decode_webp_frames(bytes, &codecs::DecodeOptions::default())?, each)
+}
+
+fn import_frames(name: &str, frames: Vec<codecs::AnimationFrame>, each: &mut dyn FnMut(Document, u32) -> Result<(), IoError>) -> Result<usize, IoError> {
     let n = frames.len();
     for f in frames {
         each(image_to_document(name, &f.image)?.document, f.delay_ms)?;
@@ -67,8 +111,9 @@ pub fn import_gif_frames(name: &str, bytes: &[u8], each: &mut dyn FnMut(Document
 }
 
 /// The lossy settings `bytes` were encoded with, for File › Save to keep: a JPEG's quality
-/// (estimated from its quantisation tables) and a WebP's lossless or lossy encoding with its
-/// quality. A lossy WebP whose quality can't be read gets [`DEFAULT_LOSSY_WEBP_QUALITY`].
+/// (estimated from its quantisation tables), a WebP's lossless or lossy encoding with its
+/// quality, and a PNG's `sTER` stereo pairing. A lossy WebP whose quality can't be read gets
+/// [`DEFAULT_LOSSY_WEBP_QUALITY`].
 pub fn file_encoding(bytes: &[u8]) -> photocraft_doc::FileEncoding {
     file_encoding_as(codecs::detect(bytes), bytes)
 }
@@ -78,6 +123,7 @@ fn file_encoding_as(format: Option<Format>, bytes: &[u8]) -> photocraft_doc::Fil
     let mut e = photocraft_doc::FileEncoding::default();
     match format {
         Some(Format::Jpeg) => e.jpeg_quality = codecs::jpeg_quality(bytes),
+        Some(Format::Png) => e.png_stereo = codecs::png_stereo(bytes).map(codecs::PngStereo::mode),
         Some(Format::WebP) => match codecs::webp_encoding(bytes) {
             Some(codecs::WebpEncoding::Lossless) => e.webp_lossless = Some(true),
             Some(codecs::WebpEncoding::Lossy { quality }) => {
@@ -95,8 +141,8 @@ fn file_encoding_as(format: Option<Format>, bytes: &[u8]) -> photocraft_doc::Fil
 pub const DEFAULT_LOSSY_WEBP_QUALITY: u8 = 75;
 
 /// Applies the settings `doc`'s file was encoded with (see [`file_encoding`]) to `opts`: what a
-/// save that chose no quality writes, so a JPEG keeps its quality and a WebP stays lossy or
-/// lossless.
+/// save that chose no quality writes, so a JPEG keeps its quality, a WebP stays lossy or lossless,
+/// and a stereo PNG keeps its `sTER` pairing (#6063).
 pub fn apply_file_encoding(doc: &Document, opts: &mut codecs::EncodeOptions) {
     let e = &doc.file_encoding;
     if let Some(q) = e.jpeg_quality {
@@ -108,6 +154,7 @@ pub fn apply_file_encoding(doc: &Document, opts: &mut codecs::EncodeOptions) {
     if let Some(q) = e.webp_quality {
         opts.webp_quality = q.min(100);
     }
+    opts.png_stereo = e.png_stereo.and_then(codecs::PngStereo::from_mode);
 }
 
 /// Photoshop opens a 32-bit Targa as an opaque Background plus an "Alpha 1" channel holding the
@@ -233,9 +280,10 @@ pub(crate) fn image_to_document(name: &str, img: &Image) -> Result<ImportResult,
         bg
     };
     doc.layers.push(layer);
+    warnings.extend(crate::tiff_layers::channels_from_extras(&mut doc, img));
     doc.icc_profile = img.icc.clone().map(Arc::new);
     doc.metadata.exif = img.meta.exif.clone().map(Arc::new);
-    doc.metadata.xmp = img.meta.xmp.clone();
+    doc.metadata.xmp = img.meta.xmp.as_deref().map(Arc::from);
     doc.metadata.text = img.meta.text.clone();
     if let Some((x, y)) = img.meta.dpi {
         doc.resolution_dpi = x;
@@ -368,10 +416,11 @@ fn document_to_image_for(doc: &Document, warnings: &mut Vec<String>, cmyk_target
             let count = doc.layer_count();
             warnings.push(format!("{count} layer(s) flattened; layers, masks and blend modes are not kept"));
         }
-        let cmyk = fmt.mode == ColorMode::Cmyk && cmyk_target;
-        // Only a CMYK target needs the document's profile; RGB-only targets keep the compositor's
-        // own handling (built-in coated CMYK when the embedded profile is unusable).
-        let space = if cmyk {
+        let cs = csample(fmt.sample);
+        if fmt.mode == ColorMode::Cmyk && cmyk_target {
+            // A CMYK target is written as CMYK with the document's own profile (#2220), which it
+            // therefore needs; RGB-only targets keep the compositor's own handling (built-in
+            // coated CMYK when the embedded profile is unusable).
             use photocraft_cms::{Builtin, ColorSpace, Intent, Profile, Transform};
             let profile = match doc.icc_profile.as_ref() {
                 Some(bytes) => Profile::parse(bytes).map_err(|e| IoError::Unsupported(format!("invalid CMYK composite profile: {e}")))?,
@@ -386,32 +435,24 @@ fn document_to_image_for(doc: &Document, warnings: &mut Vec<String>, cmyk_target
             if icc.is_none() {
                 icc = Some(profile.to_bytes().to_vec());
             }
-            photocraft_compose::cmyk_space(doc)
+            let (data, opaque) = cmyk_composite(doc, canvas, cs, n, warnings)?;
+            Image::from_raw(w, h, layout_for(ColorMode::Cmyk, !opaque), cs, data)?
         } else {
-            None
-        };
-        let gray = fmt.mode == ColorMode::Grayscale;
-        if (fmt.mode == ColorMode::Cmyk && !cmyk) || fmt.mode == ColorMode::Lab {
-            // RGB-only targets use the sRGB composite directly, without reseparating CMYK.
-            warnings.push(format!("{:?} composite written as sRGB RGB (colour-managed conversion)", fmt.mode));
-            icc = Some(photocraft_cms::Builtin::Srgb.profile().to_bytes().to_vec());
-        }
-        let cs = csample(fmt.sample);
-        let colors = if cmyk {
-            4
-        } else if gray {
-            1
-        } else {
-            3
-        };
-        // Rendered and quantised in bands (no full-size float composite), with alpha; the alpha
-        // is dropped afterwards, in place, when every pixel turned out opaque.
-        let mut data = try_buffer(n, (colors + 1) * cs.bytes())?;
-        let mut opaque = true;
-        let _ = photocraft_compose::render_bands(doc, canvas, 0, |band| -> Result<(), ()> {
-            opaque &= band.px.iter().all(|p| p[3] >= 1.0);
-            let parts = crate::pixels::par_map(crate::pixels::bands(band.px.len()), |range| {
-                photocraft_color::convert::with_cmyk_space(space.as_ref(), || {
+            let gray = fmt.mode == ColorMode::Grayscale;
+            if matches!(fmt.mode, ColorMode::Cmyk | ColorMode::Lab) {
+                // RGB-only targets use the sRGB composite directly, without separating CMYK; the
+                // compositor renders Lab documents in sRGB. Either way the file is tagged sRGB.
+                warnings.push(format!("{:?} composite written as sRGB RGB (colour-managed conversion)", fmt.mode));
+                icc = Some(photocraft_cms::Builtin::Srgb.profile().to_bytes().to_vec());
+            }
+            let colors = if gray { 1 } else { 3 };
+            // Rendered and quantised in bands (no full-size float composite), with alpha; the
+            // alpha is dropped afterwards, in place, when every pixel turned out opaque.
+            let mut data = try_buffer(n, (colors + 1) * cs.bytes())?;
+            let mut opaque = true;
+            let _ = photocraft_compose::render_bands(doc, canvas, 0, |band| -> Result<(), ()> {
+                opaque &= band.px.iter().all(|p| p[3] >= 1.0);
+                let parts = crate::pixels::par_map(crate::pixels::bands(band.px.len()), |range| {
                     let mut out = Vec::with_capacity(range.len() * (colors + 1) * cs.bytes());
                     let mut put = |v: f32| {
                         let v = if v.is_nan() { 0.0 } else { v };
@@ -421,15 +462,8 @@ fn document_to_image_for(doc: &Document, warnings: &mut Vec<String>, cmyk_target
                             CSample::F16 | CSample::F32 => out.extend_from_slice(&v.to_ne_bytes()),
                         }
                     };
-                    let mut converted = [0.0; 5];
                     for p in &band.px[range] {
-                        if cmyk {
-                            let channels = photocraft_raster::from_rgba_into(&fmt, *p, &mut converted);
-                            for value in converted.iter().take(channels) {
-                                put(*value);
-                            }
-                            continue;
-                        } else if gray {
+                        if gray {
                             put(photocraft_color::convert::rgb_to_gray([p[0], p[1], p[2]]));
                         } else {
                             put(p[0]);
@@ -439,6 +473,80 @@ fn document_to_image_for(doc: &Document, warnings: &mut Vec<String>, cmyk_target
                         put(p[3]);
                     }
                     out
+                });
+                for part in parts {
+                    data.extend_from_slice(&part);
+                }
+                Ok(())
+            });
+            if opaque {
+                drop_alpha(&mut data, colors * cs.bytes(), cs.bytes());
+            }
+            let layout = layout_for(if gray { ColorMode::Grayscale } else { ColorMode::Rgb }, !opaque);
+            Image::from_raw(w, h, layout, cs, data)?
+        }
+    };
+    let meta = codecs::Metadata {
+        exif: doc.metadata.exif.as_ref().map(|e| e.to_vec()),
+        xmp: doc.metadata.xmp.as_deref().map(str::to_owned),
+        text: doc.metadata.text.clone(),
+        dpi: Some((doc.resolution_dpi, doc.resolution_dpi)),
+        ..Default::default()
+    };
+    Ok(img.with_icc(icc).with_meta(meta))
+}
+
+/// A CMYK document's composite as interleaved CMYK + alpha samples (`cs`), with whether every
+/// pixel came out opaque (the caller then drops the alpha). Stacks the native CMYK compositor
+/// handles are mixed on their ink values, so opaque pixels keep their exact inks; any other
+/// document is composited in RGB and converted back through its own CMYK profile, as PSD
+/// export's merged image is. Rendered and quantised in bands on every core.
+fn cmyk_composite(doc: &Document, canvas: Rect, cs: CSample, n: usize, warnings: &mut Vec<String>) -> Result<(Vec<u8>, bool), IoError> {
+    let mut data = try_buffer(n, 5 * cs.bytes())?;
+    let mut opaque = true;
+    let put = |out: &mut Vec<u8>, v: f32| {
+        let v = if v.is_finite() { v } else { 0.0 };
+        match cs {
+            CSample::U8 => out.push((v.clamp(0.0, 1.0) * 255.0).round() as u8),
+            CSample::U16 => out.extend_from_slice(&((v.clamp(0.0, 1.0) * 65535.0).round() as u16).to_ne_bytes()),
+            CSample::F16 | CSample::F32 => out.extend_from_slice(&v.to_ne_bytes()),
+        }
+    };
+    let native = photocraft_compose::cmyk::render_cmyk_bands(doc, canvas, 0, |band| -> Result<(), ()> {
+        opaque &= band.px.iter().all(|p| p[4] >= 1.0);
+        let parts = crate::pixels::par_map(crate::pixels::bands(band.px.len()), |range| {
+            let mut out = Vec::with_capacity(range.len() * 5 * cs.bytes());
+            for p in band.px.get(range).unwrap_or_default() {
+                for v in p {
+                    put(&mut out, *v);
+                }
+            }
+            out
+        });
+        for part in parts {
+            data.extend_from_slice(&part);
+        }
+        Ok(())
+    });
+    if native.is_none() {
+        // Through RGB and back: the colour model is kept, exact ink values are not.
+        warnings.push("CMYK composite converted back through the document's CMYK profile; ink values can differ from the layers'".to_string());
+        let space = photocraft_compose::cmyk_space(doc);
+        let to = PixelFormat::new(ColorMode::Cmyk, SampleType::F32, true);
+        let _ = photocraft_compose::render_bands(doc, canvas, 0, |band| -> Result<(), ()> {
+            opaque &= band.px.iter().all(|p| p[3] >= 1.0);
+            let parts = crate::pixels::par_map(crate::pixels::bands(band.px.len()), |range| {
+                // The composite came through the document's CMYK profile: convert back through it.
+                photocraft_color::convert::with_cmyk_space(space.as_ref(), || {
+                    let mut out = Vec::with_capacity(range.len() * 5 * cs.bytes());
+                    let mut v = [0.0f32; 5];
+                    for p in band.px.get(range).unwrap_or_default() {
+                        photocraft_raster::from_rgba_into(&to, *p, &mut v);
+                        for x in v {
+                            put(&mut out, x);
+                        }
+                    }
+                    out
                 })
             });
             for part in parts {
@@ -446,29 +554,11 @@ fn document_to_image_for(doc: &Document, warnings: &mut Vec<String>, cmyk_target
             }
             Ok(())
         });
-        if opaque {
-            drop_alpha(&mut data, colors * cs.bytes(), cs.bytes());
-        }
-        let layout = layout_for(
-            if cmyk {
-                ColorMode::Cmyk
-            } else if gray {
-                ColorMode::Grayscale
-            } else {
-                ColorMode::Rgb
-            },
-            !opaque,
-        );
-        Image::from_raw(w, h, layout, cs, data)?
-    };
-    let meta = codecs::Metadata {
-        exif: doc.metadata.exif.as_ref().map(|e| e.to_vec()),
-        xmp: doc.metadata.xmp.clone(),
-        text: doc.metadata.text.clone(),
-        dpi: Some((doc.resolution_dpi, doc.resolution_dpi)),
-        ..Default::default()
-    };
-    Ok(img.with_icc(icc).with_meta(meta))
+    }
+    if opaque {
+        drop_alpha(&mut data, 4 * cs.bytes(), cs.bytes());
+    }
+    Ok((data, opaque))
 }
 
 /// An empty buffer with room for `pixels × bytes_per_pixel` bytes, or an error (not an abort)
@@ -492,7 +582,7 @@ fn drop_alpha(data: &mut Vec<u8>, color: usize, alpha: usize) {
 }
 
 /// Whether every pixel of `s` over `r` is fully opaque (read from the tiles, no copy).
-fn opaque_surface(s: &Surface, r: Rect) -> bool {
+pub(crate) fn opaque_surface(s: &Surface, r: Rect) -> bool {
     let fmt = s.format();
     let (ch, bps) = (fmt.channels(), fmt.sample.bytes());
     let a = ch - 1;
@@ -579,6 +669,12 @@ pub(crate) fn export_flat_with(doc: &Document, format: Format, opts: &ExportOpti
     if format == Format::Tga {
         img = tga_image(doc, img, opts.tga_bits, &mut warnings)?;
     }
+    if format == Format::Dds {
+        img = dds_image(doc, img, &mut warnings)?;
+    }
+    if format == Format::Tiff {
+        warnings.extend(crate::tiff_layers::stamp_flat_channels(doc, &mut img));
+    }
     encode_image(&img, format, opts, warnings)
 }
 
@@ -617,7 +713,7 @@ fn tga_image(doc: &Document, img: Image, bits: Option<TgaBits>, warnings: &mut V
             warnings.push("transparency composited over white; a 24-bit Targa has no alpha".into());
             matte_over_white(&img)
         }
-        (TgaBits::Bits32, [channel]) => tga_with_alpha_channel(doc, img, channel, warnings),
+        (TgaBits::Bits32, [channel]) => with_alpha_channel(doc, img, channel, "Targa", warnings),
         (TgaBits::Bits32, alphas) => {
             if !alphas.is_empty() {
                 warnings.push("Targa holds one alpha channel; with several, none was written (as in Photoshop)".into());
@@ -630,11 +726,32 @@ fn tga_image(doc: &Document, img: Image, bits: Option<TgaBits>, warnings: &mut V
     }
 }
 
-/// A 32-bit Targa's image: the colours (composited over white where the layers are transparent)
-/// and `channel`'s values as the alpha.
-fn tga_with_alpha_channel(doc: &Document, img: Image, channel: &AlphaChannel, warnings: &mut Vec<String>) -> Result<Image, IoError> {
+/// The image a DDS texture holds (#8563): as with a 32-bit Targa, the document's alpha channel
+/// becomes the texture's alpha when it has exactly one (spot channels don't count), the colours
+/// composited over white where the layers are transparent; BC1 keeps it as on/off, BC2 and BC3
+/// in full. With none, the layers' transparency is the alpha as before; with several, none of
+/// them is written. Grayscale textures keep their transparency.
+fn dds_image(doc: &Document, img: Image, warnings: &mut Vec<String>) -> Result<Image, IoError> {
+    let alphas: Vec<&AlphaChannel> = doc.channels.iter().filter(|c| c.spot.is_none()).collect();
+    match alphas.as_slice() {
+        [] => Ok(img),
+        [channel] if img.layout().is_rgb() => with_alpha_channel(doc, img, channel, "texture", warnings),
+        [_] => {
+            warnings.push("a grayscale DDS keeps the layers' transparency; the alpha channel was not saved".into());
+            Ok(img)
+        }
+        _ => {
+            warnings.push("a DDS texture holds one alpha channel; with several, none was written".into());
+            Ok(img)
+        }
+    }
+}
+
+/// A 32-bit Targa's or a texture's image: the colours (composited over white where the layers are
+/// transparent) and `channel`'s values as the alpha. `what` names the file in the warning.
+fn with_alpha_channel(doc: &Document, img: Image, channel: &AlphaChannel, what: &str, warnings: &mut Vec<String>) -> Result<Image, IoError> {
     let img = if img.layout().has_alpha() {
-        warnings.push("transparency composited over white; the alpha channel is the Targa's alpha".into());
+        warnings.push(format!("transparency composited over white; the alpha channel is the {what}'s alpha"));
         matte_over_white(&img)?
     } else {
         img
@@ -810,15 +927,16 @@ fn cmyk_image_to_srgb(img: &Image) -> Result<Image, IoError> {
     Ok(Image::from_normalized(w, h, layout, sample, &out)?.with_icc(Some(dst.to_bytes().to_vec())).with_meta(img.meta.clone()))
 }
 
-/// Indexed Color → PNG-8 with its colour table; Duotone → the inks rendered as RGB.
+/// Indexed Color → PNG-8 or an 8-bit BMP with its colour table; Duotone → the inks rendered as RGB.
 fn export_mode_specific(doc: &Document, format: Format, opts: &ExportOptions) -> Result<Option<ExportResult>, IoError> {
     match doc.mode {
-        ColorMode::Indexed if format == Format::Png => {
+        ColorMode::Indexed if matches!(format, Format::Png | Format::Bmp) => {
             let Some(table) = doc.color_table.as_ref().filter(|t| !t.colors.is_empty() && t.colors.len() <= 256) else { return Ok(None) };
             // PNG transparency belongs to a palette index, not its RGB value. Keep the
             // transparent entry out of opaque lookup, even when it duplicates an opaque colour.
+            let png_transparent_index = table.transparent.map(usize::from).filter(|_| format == Format::Png);
             let (opaque_indices, colors): (Vec<u8>, Vec<_>) =
-                table.colors.iter().copied().enumerate().filter(|(i, _)| Some(*i) != table.transparent.map(usize::from)).map(|(i, c)| (i as u8, c)).unzip();
+                table.colors.iter().copied().enumerate().filter(|(i, _)| Some(*i) != png_transparent_index).map(|(i, c)| (i as u8, c)).unzip();
             let opaque = photocraft_doc::ColorTable { colors, transparent: None };
             let mut idx = try_buffer(doc.size.area() as usize, 1)?;
             photocraft_compose::render_bands(doc, doc.bounds(), 0, |band| -> Result<(), IoError> {
@@ -827,15 +945,23 @@ fn export_mode_specific(doc: &Document, format: Format, opts: &ExportOptions) ->
                         Some(t) if p[3] < 0.5 => t,
                         _ => *opaque_indices
                             .get(opaque.nearest([p[0], p[1], p[2]]))
-                            .ok_or_else(|| IoError::Unsupported("Indexed PNG palette has no opaque entry; add an opaque colour or convert to RGB".into()))?,
+                            .ok_or_else(|| IoError::Unsupported("Indexed palette has no opaque entry; add an opaque colour or convert to RGB".into()))?,
                     };
                     idx.push(i);
                 }
                 Ok(())
             })?;
+            if format == Format::Bmp {
+                let bytes = codecs::encode_bmp_indexed(doc.size.width, doc.size.height, &idx, &table.colors)?;
+                let mut warnings = vec![format!("written as an 8-bit palette BMP ({} colours)", table.colors.len())];
+                if let Some(t) = table.transparent {
+                    warnings.push(format!("BMP has no transparency; transparent pixels are written in the colour of palette entry {t}"));
+                }
+                return Ok(Some(ExportResult { bytes, warnings }));
+            }
             // Same rule as the ordinary PNG encoder: the resolution goes into `pHYs` with the metadata.
             let dpi = opts.encode.embed_metadata.then_some((doc.resolution_dpi, doc.resolution_dpi));
-            let bytes = codecs::encode_png_indexed(doc.size.width, doc.size.height, &idx, &table.colors, table.transparent, dpi)?;
+            let bytes = codecs::encode_png_indexed(doc.size.width, doc.size.height, &idx, &table.colors, table.transparent, dpi, opts.encode.png_stereo)?;
             let mut warnings = vec![format!("written as an 8-bit palette PNG ({} colours)", table.colors.len())];
             if opts.encode.embed_metadata && opts.xmp == XmpEmbed::All && !doc.metadata.text.is_empty() {
                 warnings.push("text metadata is not supported by the palette PNG exporter; it will be dropped".into());
@@ -855,6 +981,59 @@ fn export_mode_specific(doc: &Document, format: Format, opts: &ExportOptions) ->
             Ok(Some(r))
         }
         _ => Ok(None),
+    }
+}
+
+#[cfg(test)]
+mod cicp_tests {
+    use super::*;
+    use photocraft_cms::{Builtin, Profile};
+
+    fn tagged(sample: CSample, cicp: codecs::Cicp) -> Image {
+        let mut img = Image::new(1, 1, ChannelLayout::Rgb, sample).unwrap();
+        img.cicp = Some(cicp);
+        img
+    }
+
+    fn description(p: Option<Arc<Vec<u8>>>) -> Option<String> {
+        p.map(|b| Profile::parse(&b).unwrap().description)
+    }
+
+    #[test]
+    fn hlg_bt2020_is_tagged_linear_bt2020() {
+        let hlg = codecs::Cicp { primaries: 9, transfer: codecs::Cicp::TRANSFER_HLG, matrix: 9, full_range: true };
+        let d = description(cicp_profile(&tagged(CSample::F32, hlg))).unwrap();
+        assert!(d.contains("BT.2020") && d.contains("linear"), "{d}");
+        // Unspecified primaries on HLG are BT.2100's.
+        let d = description(cicp_profile(&tagged(CSample::F32, codecs::Cicp { primaries: 2, ..hlg }))).unwrap();
+        assert!(d.contains("BT.2020"), "{d}");
+    }
+
+    #[test]
+    fn sdr_nclx_is_unchanged_or_tagged_with_its_builtin() {
+        // BT.709 / sRGB: untagged, as before.
+        for transfer in [1, 2, 13] {
+            assert_eq!(cicp_profile(&tagged(CSample::U16, codecs::Cicp { primaries: 1, transfer, matrix: 6, full_range: false })), None);
+        }
+        // BT.709 with a linear transfer: linear sRGB, not read as sRGB.
+        let linear = codecs::Cicp { primaries: 1, transfer: 8, matrix: 6, full_range: true };
+        assert_eq!(description(cicp_profile(&tagged(CSample::U16, linear))).as_deref(), Some(Builtin::LinearSrgb.description()));
+        let p3 = codecs::Cicp { primaries: 12, transfer: 13, matrix: 6, full_range: true };
+        assert_eq!(description(cicp_profile(&tagged(CSample::U8, p3))).as_deref(), Some(Builtin::DisplayP3.description()));
+        assert_eq!(cicp_profile(&Image::new(1, 1, ChannelLayout::Rgb, CSample::U8).unwrap()), None, "no nclx, no profile");
+    }
+
+    #[test]
+    fn hdr_on_unsupported_primaries_is_tagged_linear_srgb_with_a_warning() {
+        // DCI-P3 (11) primaries: no profile, but the linear pixels must not be read as sRGB.
+        let hlg = codecs::Cicp { primaries: 11, transfer: codecs::Cicp::TRANSFER_HLG, matrix: 9, full_range: true };
+        let img = tagged(CSample::F32, hlg);
+        assert_eq!(cicp_profile(&img), None);
+        let (profile, warning) = hdr_fallback(&img).unwrap();
+        assert_eq!(description(Some(profile)).as_deref(), Some(Builtin::LinearSrgb.description()));
+        assert!(warning.contains("11"), "{warning}");
+        // SDR on the same primaries keeps its samples as decoded: no fallback.
+        assert!(hdr_fallback(&tagged(CSample::U16, codecs::Cicp { transfer: 13, ..hlg })).is_none());
     }
 }
 

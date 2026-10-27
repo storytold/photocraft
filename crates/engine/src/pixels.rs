@@ -58,20 +58,55 @@ pub fn composite_layers_uncropped(solo: &Document, format: photocraft_color::Pix
     photocraft_compose::composite_to_surface(solo, area, format, None)
 }
 
+/// Most bytes of tiles an adjustment may materialize beyond the ones a surface stores: two distant
+/// tiles make the content bounds a grid of millions of tiles that hold nothing. Written tiles are
+/// copies, so the peak is about twice this.
+const MAX_UNSTORED_BYTES: u64 = 1 << 30;
+
+/// Tiles in the grid that covers `r` (one extra per axis for a tile straddling its edge).
+fn grid_tiles(r: Rect) -> u64 {
+    (u64::from(r.width()).div_ceil(TILE_SIZE as u64) + 1) * (u64::from(r.height()).div_ceil(TILE_SIZE as u64) + 1)
+}
+
+/// Bytes the tiles of the grid over `r` take beyond the `stored` ones, in format `fmt`.
+fn unstored_bytes(r: Rect, stored: u64, fmt: &photocraft_color::PixelFormat) -> u64 {
+    grid_tiles(r).saturating_sub(stored).saturating_mul((TILE_SIZE as u64).pow(2)).saturating_mul(fmt.bytes_per_pixel() as u64)
+}
+
+/// The tile-sized pieces of `r`, each cut to `r`.
+fn tile_rects(r: Rect) -> impl Iterator<Item = Rect> {
+    let t = i64::from(TILE_SIZE);
+    let cols = i64::from(r.x0).div_euclid(t)..=(i64::from(r.x1) - 1).div_euclid(t);
+    let rows = i64::from(r.y0).div_euclid(t)..=(i64::from(r.y1) - 1).div_euclid(t);
+    rows.flat_map(move |cy| cols.clone().map(move |cx| Rect::new((cx * t) as i32, (cy * t) as i32, ((cx + 1) * t) as i32, ((cy + 1) * t) as i32).intersect(&r)))
+}
+
+const TOO_SPARSE: &str = "the adjustment would have to fill too large an area around the pixels the layer holds";
+
 /// Apply an adjustment destructively to a surface, weighted by an optional selection.
 /// Applies `adj` to a surface (any colour model and depth, via straight RGBA) through the
 /// selection; `mode` is the document's, for the tone transfer (e.g. Exposure in Grayscale).
 /// Works tile by tile in parallel, so a large layer needs one tile's buffers per thread rather
 /// than four full-layer copies, and the result is the same as one pass over the whole region.
-pub fn adjust_surface(s: &mut Surface, adj: &Adjustment, selection: Option<&Surface>, mode: photocraft_color::ColorMode) {
+pub fn adjust_surface(s: &mut Surface, adj: &Adjustment, selection: Option<&Surface>, mode: photocraft_color::ColorMode) -> Result<(), String> {
     use rayon::prelude::*;
     let r = s.content_bounds();
     if r.is_empty() {
-        return;
+        return Ok(());
     }
     let fmt = s.format();
-    let done: Vec<_> = s
-        .take_tiles(r)
+    // Two distant tiles make the content bounds a grid of millions of tiles that hold nothing.
+    // Past a budget a transparent default needs only the stored tiles adjusted (the gaps stay
+    // transparent); an opaque default would change under the adjustment everywhere in that grid,
+    // so the adjustment is refused rather than left half applied.
+    let stored: Vec<_> = s.tiles().map(|(c, _)| *c).filter(|c| !c.rect().intersect(&r).is_empty()).collect();
+    let transparent = fmt.alpha && s.default_pixel().last().is_some_and(|a| *a <= 0.0);
+    let over = unstored_bytes(r, stored.len() as u64, &fmt) > MAX_UNSTORED_BYTES;
+    if over && !transparent {
+        return Err(TOO_SPARSE.into());
+    }
+    let taken = if over { stored.into_iter().flat_map(|c| s.take_tiles(c.rect())).collect() } else { s.take_tiles(r) };
+    let done: Vec<_> = taken
         .into_par_iter()
         .flat_map_iter(|(tc, tile)| {
             // A one-tile surface, so `adjusted` reads and writes this tile only.
@@ -84,38 +119,57 @@ pub fn adjust_surface(s: &mut Surface, adj: &Adjustment, selection: Option<&Surf
         })
         .collect();
     s.put_tiles(done);
+    Ok(())
 }
 
 #[cfg(test)]
-#[path = "flatten_cmyk_tests.rs"]
 mod flatten_cmyk_tests;
 #[cfg(test)]
-#[path = "pixels_tests.rs"]
 mod tests;
 
 /// Applies `adj` to a layer mask through the selection. Untouched mask pixels count (they read as
 /// the mask's default value), and without a selection the default changes too, since a mask
 /// reaches past the canvas: Invert turns a reveal-all mask into a hide-all one (#780).
-pub fn adjust_mask(s: &mut Surface, adj: &Adjustment, selection: Option<&Surface>) {
+pub fn adjust_mask(s: &mut Surface, adj: &Adjustment, selection: Option<&Surface>) -> Result<(), String> {
     let mode = photocraft_color::ColorMode::Grayscale;
     if let Some(sel) = selection {
         let r = sel.content_bounds();
-        if !r.is_empty() {
-            let out = adjusted(s, r, adj, Some(sel), mode);
-            s.write_region(r, &out);
+        // Tile by tile, and only where the selection stores something (it is unselected, so
+        // unchanged, elsewhere): its content bounds can span a grid of mostly nothing.
+        let sparse = sel.default_pixel().iter().all(|v| *v == 0.0);
+        let tiles: Vec<Rect> = if sparse {
+            sel.tiles().map(|(c, _)| c.rect().intersect(&r)).filter(|t| !t.is_empty()).collect()
+        } else if r.is_empty() {
+            Vec::new()
+        } else {
+            // Unselected pixels count too, so every tile of the span is adjusted, one at a time
+            // (not one read of the whole span), and the span is bounded by what that writes.
+            if unstored_bytes(r, 0, &s.format()) > MAX_UNSTORED_BYTES {
+                return Err(TOO_SPARSE.into());
+            }
+            tile_rects(r).collect()
+        };
+        for t in &tiles {
+            let out = adjusted(s, *t, adj, Some(sel), mode);
+            s.write_region(*t, &out);
+        }
+        if !tiles.is_empty() {
             s.prune();
         }
-        return;
+        return Ok(());
     }
     let fmt = s.format();
     let unit = Rect::from_xywh(0, 0, 1, 1);
     let mut out = Surface::with_default(fmt, &adjusted(&Surface::with_default(fmt, &s.default_pixel()), unit, adj, None, mode));
-    let r = s.tile_bounds();
-    if !r.is_empty() {
+    // Everything the mask doesn't store reads as its default, which `out` already holds adjusted.
+    // So only the stored tiles are adjusted, not the (possibly huge) rectangle around them.
+    let stored: Vec<Rect> = s.tiles().map(|(c, _)| c.rect()).collect();
+    for r in stored {
         out.write_region(r, &adjusted(s, r, adj, None, mode));
     }
     out.prune();
     *s = out;
+    Ok(())
 }
 
 /// `s`'s pixels over `r` (untouched ones included) with `adj` applied through the selection, encoded.
@@ -239,15 +293,20 @@ pub(crate) fn try_fill_surface(s: &mut Surface, area: Rect, color: [f32; 4], sel
     let fmt = s.format();
     // Coverage 1 of an opaque colour replaces the colour (and the alpha, unless it is kept).
     let opaque = color[3] == 1.0 && (!lock_transparency || !fmt.alpha) && selection.is_none_or(|m| m.format().sample != photocraft_color::SampleType::F32);
-    let solid = opaque.then(|| {
-        let mut enc = [0.0f32; 8];
-        let n = photocraft_raster::from_rgba_into(&fmt, [color[0], color[1], color[2], 1.0], &mut enc);
-        s.solid_tile(enc.get(..n).unwrap_or(&[]))
-    });
+    let mut enc = [0.0f32; 8];
+    let enc_len = opaque.then(|| photocraft_raster::from_rgba_into(&fmt, [color[0], color[1], color[2], 1.0], &mut enc));
+    let solid = enc_len.map(|n| s.solid_tile(enc.get(..n).unwrap_or(&[])));
     let whole = |full: bool| solid.as_ref().filter(|_| full).map(|t| TileEdit::Put(t.clone()));
     edit_tiles(s, area, selection, "filling pixels", whole, |k, px| {
         if k <= 0.0 {
             return false;
+        }
+        if k >= 1.0
+            && let Some(m) = enc_len
+            && let Some(src) = enc.get(..px.len().min(m))
+        {
+            px.copy_from_slice(src);
+            return true;
         }
         fill_pixel(&fmt, px, color, k, lock_transparency);
         true
@@ -294,9 +353,31 @@ pub(crate) fn try_clear_surface(s: &mut Surface, area: Rect, selection: Option<&
             px.fill(0.0);
         }
         true
-    })?;
-    s.prune();
-    Ok(())
+    })
+}
+
+/// Take the coverage a floating selection lifts out of `s` over `area`: each pixel loses its
+/// selection coverage k of alpha, down to none, so a selection made from the layer's own
+/// transparency leaves nothing behind (#7655), where [`try_clear_surface`] would leave a ghost.
+pub(crate) fn try_lift_coverage(s: &mut Surface, area: Rect, selection: &Surface) -> crate::Result<()> {
+    let fmt = s.format();
+    let n = fmt.channels();
+    if !fmt.alpha {
+        return Ok(());
+    }
+    let empty_default = s.default_bytes().iter().all(|&b| b == 0);
+    let whole = |full: bool| (full && empty_default).then_some(TileEdit::Drop);
+    edit_tiles(s, area, Some(selection), "lifting pixels", whole, |k, px| {
+        if k <= 0.0 {
+            return false;
+        }
+        let Some(a) = px.get_mut(n - 1) else { return false };
+        *a = (*a - k).max(0.0);
+        if *a <= 0.0 {
+            px.fill(0.0);
+        }
+        true
+    })
 }
 
 /// A whole-tile shortcut of [`edit_tiles`].
@@ -331,6 +412,7 @@ fn edit_tiles(
     coords.extend(area.tiles());
     // Untouched pixels read as the default where the surface has no tile.
     let blank = if coords.iter().any(|&tc| s.tile(tc).is_none()) { Some(s.try_default_tile().map_err(oom)?) } else { None };
+    let dp = s.default_bytes();
     let surf = &*s;
     let edits = coords
         .into_par_iter()
@@ -371,7 +453,11 @@ fn edit_tiles(
                     }
                 }
             }
-            Ok(out.map(|t| (tc, Some(Arc::new(t)))))
+            Ok(match out {
+                Some(t) if bpp > 0 && t.bytes().chunks_exact(bpp).all(|p| p == dp) => current.map(|_| (tc, None)),
+                Some(t) => Some((tc, Some(Arc::new(t)))),
+                None => None,
+            })
         })
         .collect::<crate::Result<Vec<_>>>()?;
     for (tc, tile) in edits.into_iter().flatten() {
