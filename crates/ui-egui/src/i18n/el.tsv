@@ -4211,3 +4211,6 @@ cameraRaw	Scale	Κλίμακα
 cameraRaw	Offset X	Μετατόπιση X
 cameraRaw	Offset Y	Μετατόπιση Y
 cameraRaw	Guided	Με οδηγούς
+	Saved Camera Raw settings to {file}	Οι ρυθμίσεις Camera Raw αποθηκεύτηκαν στο {file}
+	Save the settings to each raw's sidecar without opening it	Αποθήκευση των ρυθμίσεων στο συνοδευτικό αρχείο κάθε raw χωρίς άνοιγμα
+	No settings saved: these raws can't keep a sidecar here	Δεν αποθηκεύτηκε τίποτα: αυτά τα raw δεν μπορούν να έχουν συνοδευτικό αρχείο εδώ

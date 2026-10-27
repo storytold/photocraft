@@ -3532,3 +3532,6 @@ cameraRaw	Scale	Skalieren
 cameraRaw	Offset X	Versatz X
 cameraRaw	Offset Y	Versatz Y
 cameraRaw	Guided	Geführt
+	Saved Camera Raw settings to {file}	Camera-Raw-Einstellungen in {file} gespeichert
+	Save the settings to each raw's sidecar without opening it	Die Einstellungen in der Filialdatei jeder Raw-Datei speichern, ohne sie zu öffnen
+	No settings saved: these raws can't keep a sidecar here	Nichts gespeichert: Diese Raw-Dateien können hier keine Filialdatei haben

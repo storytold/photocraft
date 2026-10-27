@@ -634,6 +634,15 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         ) {
             action = Some(if role == widgets::ButtonRole::Default { "ok" } else { "cancel" });
         }
+        // Done (open-time dialog): keep the settings in the raws' sidecars, open nothing.
+        if d.target == Target::OpenRaw
+            && fu
+                .add_sized([90.0, 28.0], egui::Button::new(tl!("Done")))
+                .on_hover_text(tl!("Save the settings to each raw's sidecar without opening it"))
+                .clicked()
+        {
+            action = Some("done");
+        }
         fu.add_space(12.0);
         widgets::checkbox(&mut fu, &mut d.show_before, tl!("Before (Y)"));
         fu.label(egui::RichText::new(format!("{:.0} ms", d.render_ms)).color(t.text_faint));
@@ -675,6 +684,9 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
             }
         }
         Some("cancel") => cancel(app),
+        Some("done") => {
+            super::filmstrip::done(app);
+        }
         Some("save") => {
             let r = save_settings(app);
             report_file_error(app, r);
