@@ -260,7 +260,7 @@ pub(super) fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &Contr
                 let brush_section = uint_field(p, "brushSection")?;
                 let brush_tab = uint_field(p, "brushTab")?;
                 let brushes_view = match p.get("brushesView") {
-                    Some(v) => serde_json::from_value(v.clone()).map(Some).map_err(|e| format!("brushesView: {e} (list, grid)"))?,
+                    Some(v) => serde_json::from_value(v.clone()).map(Some).map_err(|e| format!("brushesView: {e} (list, columns, grid)"))?,
                     None => None,
                 };
                 // The three parts of the picker's cards. At least one stays on (a rejected call

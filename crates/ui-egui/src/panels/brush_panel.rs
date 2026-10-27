@@ -63,6 +63,8 @@ pub enum BrushesView {
     /// Rows: tip, size, stroke preview, name.
     #[default]
     List,
+    /// The list's rows side by side, as many as fit the panel's width.
+    Columns,
     /// Tip thumbnails with their sizes.
     Grid,
 }
@@ -551,7 +553,7 @@ pub fn window(app: &mut PhotocraftApp, ctx: &egui::Context) {
             widgets::hairline(ui);
             ui.add_space(6.0);
             if app.ui.brush_tab == 1 {
-                crate::brushes_tab::show(app, ui);
+                crate::brushes_tab::show(app, ui, false);
             } else {
                 settings_tab(app, ui);
             }
