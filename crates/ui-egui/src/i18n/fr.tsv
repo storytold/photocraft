@@ -4513,6 +4513,8 @@ shape	Appearance	Apparence
 	Grayscale Ramp	Barre de niveaux de gris
 	Current Colors	Couleurs actuelles
 	Make Ramp Web Safe	Limiter la barre aux couleurs Web
+	Frame Delay	Délai de l’image
+	All Frames	Toutes les images
 # Art History Brush (#213).
 	Art History Brush Tool	Outil Pinceau d'historique artistique
 	Tight Short	Serré court

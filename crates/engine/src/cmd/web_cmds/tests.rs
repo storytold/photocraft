@@ -1168,3 +1168,70 @@ fn quick_export_exr_preserves_linear_hdr_and_alpha() {
     s.execute("file.export.quickExport", json!({"path": format!("{dir}/explicit.exr")})).unwrap();
     assert_eq!(decode(&format!("{dir}/explicit.exr")).dimensions(), (2, 1));
 }
+
+/// The bytes Save for Web writes for `params`, one file expected.
+fn saved_for_web(s: &mut Session, params: &Value) -> (Value, Vec<u8>) {
+    let mut written = Vec::new();
+    let r = save_for_web_with_writer(s, params, &mut |path, bytes| {
+        written.push((path.to_string(), bytes.to_vec()));
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(written.len(), 1, "{written:?}");
+    let (path, bytes) = written.remove(0);
+    assert_eq!(path, params["path"].as_str().unwrap());
+    (r, bytes)
+}
+
+/// Save for Web as GIF with a timeline writes every frame, each for its own delay.
+#[test]
+fn save_for_web_gif_writes_every_frame_with_its_delay() {
+    let mut s = session(8);
+    s.execute("timeline.create", json!({"duration": 3, "fps": 10.0})).unwrap();
+    s.execute("layer.videoLayers.newBlankVideoLayer", json!({})).unwrap();
+    s.execute("timeline.setFrameDelay", json!({"frame": 0, "ms": 50})).unwrap();
+    s.execute("timeline.setFrameDelay", json!({"frame": 1, "ms": 200})).unwrap();
+    let (r, gif) = saved_for_web(&mut s, &json!({"format": "gif", "path": "anim.gif"}));
+    assert_eq!(r["frames"], 3);
+    assert!(gif.starts_with(b"GIF89a"));
+    // Each Graphic Control Extension is `21 F9 04 flags delay(lo hi) transparent 00`; the last
+    // frame has no delay of its own and shows at the 10 fps rate.
+    let delays: Vec<u16> = gif.windows(8).filter(|w| w[..3] == [0x21, 0xF9, 0x04]).map(|w| u16::from_le_bytes([w[4], w[5]])).collect();
+    assert_eq!(delays, [5, 20, 10]);
+    // Control: PNG-8 and a document without a timeline stay one still image.
+    let (r, _) = saved_for_web(&mut s, &json!({"format": "png8", "path": "still.png"}));
+    assert_eq!(r["frames"], Value::Null);
+    s.execute("timeline.delete", json!({})).unwrap();
+    let (r, gif) = saved_for_web(&mut s, &json!({"format": "gif", "path": "still.gif"}));
+    assert_eq!(r["frames"], Value::Null);
+    assert_eq!(photocraft_codecs::decode_gif_frames(&gif, &photocraft_codecs::DecodeOptions::default()).unwrap().len(), 1);
+}
+
+/// Paint on the frame at the playhead is in the animated GIF, and only on that frame.
+#[test]
+fn save_for_web_gif_keeps_paint_on_the_current_frame() {
+    let mut s = session(8);
+    s.execute("timeline.create", json!({"duration": 2, "fps": 10.0})).unwrap();
+    s.execute("layer.videoLayers.newBlankVideoLayer", json!({})).unwrap();
+    s.execute("edit.fill", json!({"color": "#00ff00"})).unwrap();
+    let (_, gif) = saved_for_web(&mut s, &json!({"format": "gif", "path": "anim.gif"}));
+    let frames = photocraft_codecs::decode_gif_frames(&gif, &photocraft_codecs::DecodeOptions::default()).unwrap();
+    assert_eq!(frames.len(), 2);
+    assert_eq!(&frames[0].image.data()[..4], &[0, 255, 0, 255]);
+    assert_ne!(&frames[1].image.data()[..4], &[0, 255, 0, 255]);
+}
+
+/// A timeline too long for its image size (a million 64 × 48 frames) is an error before anything is allocated or written.
+#[test]
+fn save_for_web_gif_rejects_an_oversized_animation() {
+    let mut s = session(8);
+    s.execute("timeline.create", json!({"duration": 1_000_000, "fps": 30.0})).unwrap();
+    let mut wrote = false;
+    let r = save_for_web_with_writer(&mut s, &json!({"format": "gif", "path": "big.gif"}), &mut |_, _| {
+        wrote = true;
+        Ok(())
+    });
+    let e = r.expect_err("a million 64 × 48 frames are over the limit");
+    assert!(e.to_string().contains("1000000 frames of 64 × 48 are too many"), "{e}");
+    assert!(!wrote);
+}

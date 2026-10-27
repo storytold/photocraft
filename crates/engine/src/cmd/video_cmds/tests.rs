@@ -365,6 +365,31 @@ fn an_explicit_fps_beats_the_gif_delays() {
     assert_eq!(s.active().unwrap().doc.layer(id).unwrap().video.as_ref().unwrap().fps, 12.0);
 }
 
+/// Each GIF frame keeps its own delay on the timeline it creates, and Render Video writes them
+/// back; the rate is the most common delay, for frames without one. An existing timeline, or an
+/// explicit rate, keeps its own timing.
+#[test]
+fn gif_frame_delays_time_the_timeline_and_render_back() {
+    let dir = tmpdir("gifin-delays");
+    let path = format!("{dir}/anim.gif");
+    // 0 cs shows at 100 ms, as browsers show it.
+    write_gif(&path, 8, 8, &[([255, 0, 0], 5), ([0, 255, 0], 50), ([0, 0, 255], 5), ([9, 9, 9], 0)]);
+    let mut s = session();
+    s.execute("layer.videoLayers.newVideoLayerFromFile", json!({"path": path})).unwrap();
+    let t = s.active().unwrap().doc.timeline.clone().unwrap();
+    assert_eq!(*t.delays_ms, [50, 500, 50, 100]);
+    assert_eq!(t.fps, 20.0);
+    assert_eq!(rendered_gif_delays(&s), [5, 50, 5, 10]);
+    // A second GIF on the same timeline leaves its timing alone.
+    s.execute("layer.videoLayers.newVideoLayerFromFile", json!({"path": path})).unwrap();
+    assert_eq!(*s.active().unwrap().doc.timeline.as_ref().unwrap().delays_ms, [50, 500, 50, 100]);
+
+    let mut s = session();
+    s.execute("layer.videoLayers.newVideoLayerFromFile", json!({"path": path, "fps": 10.0})).unwrap();
+    assert!(s.active().unwrap().doc.timeline.as_ref().unwrap().delays_ms.is_empty());
+    assert_eq!(rendered_gif_delays(&s), [10, 10, 10, 10]);
+}
+
 #[test]
 fn a_still_gif_is_one_frame_at_the_default_rate() {
     let dir = tmpdir("gifin-still");

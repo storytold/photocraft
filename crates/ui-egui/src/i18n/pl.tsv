@@ -4102,6 +4102,8 @@ curves	Smooth	Wygładź
 
 # Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
 	Target	Cel
+	Frame Delay	Opóźnienie klatki
+	All Frames	Wszystkie klatki
 	Font size presets	Ustawienia wstępne rozmiaru czcionki
 	Leading presets	Ustawienia wstępne interlinii
 	Tracking presets	Ustawienia wstępne światła

@@ -94,6 +94,87 @@ pub(super) fn web_warnings(st: &WebSettings, exif: Option<&[u8]>, dpi: f32) -> V
         .collect()
 }
 
+/// A GIF or PNG-8 image: palette indices, the palette they index (colour edits applied, the
+/// transparent slot last), the opaque colour table before edits, and the transparent index.
+pub(super) struct Indexed {
+    pub(super) indices: Vec<u8>,
+    pub(super) palette: Vec<[u8; 3]>,
+    pub(super) color_table: Vec<[u8; 3]>,
+    pub(super) transparent: Option<usize>,
+}
+
+/// Quantizes `rect` of `px` (straight RGBA, `bw` wide) for GIF or PNG-8 with `st`: pixels over the
+/// matte, see-through ones given the transparent index when transparency is on.
+pub(super) fn indexed_pixels(px: &[[f32; 4]], bw: usize, rect: Rect, st: &WebSettings) -> Result<Indexed> {
+    if bw == 0 || rect.x0 < 0 || rect.y0 < 0 || rect.is_empty() || rect.x1 as usize > bw || (rect.y1 as usize).checked_mul(bw).is_none_or(|end| end > px.len())
+    {
+        return Err(other("slice is outside the pixel buffer"));
+    }
+    let w = rect.width() as usize;
+    let row = |y: i32| {
+        let o = y as usize * bw;
+        px.get(o + rect.x0 as usize..o + rect.x1 as usize).unwrap_or(&[])
+    };
+    let region = || (rect.y0..rect.y1).flat_map(row);
+    let matte = st.matte.unwrap_or([1.0, 1.0, 1.0]);
+    let over = |p: &[f32; 4]| -> [f32; 4] {
+        [p[0] * p[3] + matte[0] * (1.0 - p[3]), p[1] * p[3] + matte[1] * (1.0 - p[3]), p[2] * p[3] + matte[2] * (1.0 - p[3]), 1.0]
+    };
+    let transparent = st.transparency && region().any(|p| p[3] < 0.5);
+    // Partially transparent edges blend with the matte; with transparency off everything does.
+    let mut work: Vec<[f32; 4]> = region()
+        .map(|p| {
+            if st.transparency && p[3] < 0.5 {
+                [0.0, 0.0, 0.0, 0.0]
+            } else if st.transparency && st.matte.is_none() {
+                [p[0], p[1], p[2], 1.0]
+            } else {
+                over(p)
+            }
+        })
+        .collect();
+    let room = if transparent { st.colors.saturating_sub(1).max(2) } else { st.colors };
+    let mut pal = if let Some(table) = &st.color_table {
+        if table.is_empty() || table.len() > if transparent { 255 } else { 256 } {
+            return Err(other("colorTable has too many entries for this image's transparency"));
+        }
+        table.clone()
+    } else {
+        // Large images: build adaptive palettes from an even ~1 MP sample (Exact needs all).
+        let n_opaque = work.iter().filter(|p| p[3] >= 0.5).count();
+        let step = if n_opaque > 1 << 20 && st.palette != PaletteKind::Exact { n_opaque / (1 << 20) + 1 } else { 1 };
+        let mut src: Vec<[f32; 4]> = work.iter().filter(|p| p[3] >= 0.5).step_by(step).copied().collect();
+        if src.is_empty() {
+            src = work.clone();
+        }
+        quantize::build_palette(&src, st.palette, room, Forced::None).map_err(other)?
+    };
+    if st.web_snap > 0.0 && st.color_table.is_none() {
+        let tol = (st.web_snap * 255.0) as u8;
+        for c in &mut pal {
+            let snap = c.map(|x| ((f32::from(x) / 51.0).round() * 51.0) as u8);
+            if c.iter().zip(snap).all(|(a, b)| a.abs_diff(b) <= tol) {
+                *c = snap;
+            }
+        }
+    }
+    if transparent {
+        pal.truncate(255);
+    }
+    let first = pal.first().copied().ok_or_else(|| other("empty colour table"))?;
+    let color_table = pal.clone();
+    let t = transparent.then(|| {
+        pal.push(first);
+        pal.len() - 1
+    });
+    let idx = quantize_rows(&mut work, w, &pal, st.dither, st.dither_amount, t);
+    for (index, color) in &st.color_table_edits {
+        let slot = pal.get_mut(*index).filter(|_| Some(*index) != t).ok_or_else(|| other("colour edit is outside the opaque palette"))?;
+        *slot = *color;
+    }
+    Ok(Indexed { indices: idx, palette: pal, color_table, transparent: t })
+}
+
 /// Optimises `rect` of `px` (straight RGBA, `bw` wide) with `st`. `preview` also returns what
 /// the file looks like (the dialog's panes); exports skip it.
 #[allow(clippy::too_many_arguments)]
@@ -191,59 +272,10 @@ pub fn optimize(
             (photocraft_codecs::web::encode_wbmp(ww, hh, &white).map_err(e)?, Some(2))
         }
         WebFormat::Gif | WebFormat::Png8 => {
-            let transparent = st.transparency && region().any(|p| p[3] < 0.5);
-            // Partially transparent edges blend with the matte; with transparency off everything does.
-            let mut work: Vec<[f32; 4]> = region()
-                .map(|p| {
-                    if st.transparency && p[3] < 0.5 {
-                        [0.0, 0.0, 0.0, 0.0]
-                    } else if st.transparency && st.matte.is_none() {
-                        [p[0], p[1], p[2], 1.0]
-                    } else {
-                        over(p)
-                    }
-                })
-                .collect();
-            let room = if transparent { st.colors.saturating_sub(1).max(2) } else { st.colors };
-            let mut pal = if let Some(table) = &st.color_table {
-                if table.is_empty() || table.len() > if transparent { 255 } else { 256 } {
-                    return Err(other("colorTable has too many entries for this image's transparency"));
-                }
-                table.clone()
-            } else {
-                // Large images: build adaptive palettes from an even ~1 MP sample (Exact needs all).
-                let n_opaque = work.iter().filter(|p| p[3] >= 0.5).count();
-                let step = if n_opaque > 1 << 20 && st.palette != PaletteKind::Exact { n_opaque / (1 << 20) + 1 } else { 1 };
-                let mut src: Vec<[f32; 4]> = work.iter().filter(|p| p[3] >= 0.5).step_by(step).copied().collect();
-                if src.is_empty() {
-                    src = work.clone();
-                }
-                quantize::build_palette(&src, st.palette, room, Forced::None).map_err(other)?
-            };
-            if st.web_snap > 0.0 && st.color_table.is_none() {
-                let tol = (st.web_snap * 255.0) as u8;
-                for c in &mut pal {
-                    let snap = c.map(|x| ((f32::from(x) / 51.0).round() * 51.0) as u8);
-                    if c.iter().zip(snap).all(|(a, b)| a.abs_diff(b) <= tol) {
-                        *c = snap;
-                    }
-                }
-            }
-            if transparent {
-                pal.truncate(255);
-            }
+            let Indexed { indices: idx, palette: pal, color_table: table, transparent: t } = indexed_pixels(px, bw, rect, st)?;
             let first = pal.first().copied().ok_or_else(|| other("empty colour table"))?;
-            color_table = pal.clone();
-            let t = transparent.then(|| {
-                pal.push(first);
-                pal.len() - 1
-            });
+            color_table = table;
             transparent_index = t;
-            let idx = quantize_rows(&mut work, w, &pal, st.dither, st.dither_amount, t);
-            for (index, color) in &st.color_table_edits {
-                let slot = pal.get_mut(*index).filter(|_| Some(*index) != t).ok_or_else(|| other("colour edit is outside the opaque palette"))?;
-                *slot = *color;
-            }
             if preview {
                 look = idx
                     .iter()
