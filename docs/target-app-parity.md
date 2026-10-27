@@ -1,6 +1,6 @@
 # PhotoCraft vs Adobe Photoshop: target-app parity
 
-> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-25 · **Change:** minor (12 of 178 preferences do nothing, from the scorecard; the Camera Raw row names per-camera colour for non-DNG cameras as missing, not the Calibration panel, which landed 2026-10-13; Content-Aware Scale measurements added, #5236; Help › Check for Updates and an opt-out check once per launch, DIST-220-1 partial, #5485; area type, TYPE-218-10 partial, Type scorecard 5 / 5 / 0; compound layer properties export as separate Photoshop Set events, #8304; JPEG Options dialog landed, FILE-215-19 partial; Print › Functions › Bleed through `file.print`; Content-Aware Move live preview for every selection size, TOOL-213-4 done, #6680; retouching evidence: Pattern Stamp and Background Eraser draw live, only the Mixer Brush is left of TOOL-213-7; fill and adjustment layers copy and paste whole, UI-217-23 partial, #2344; shape layers take Density and Feather, TOOL-214-12 done, #5846; on-canvas corner radius widgets, TOOL-214-12; `.atn` import maps 112 events; Free Transform H/V skew fields; stale rows corrected against `main` and the scorecard, estimates unchanged; Photoshop Actions `.atn` load and save; 2026-10-10: Tilt-Shift measurements added; earlier the same day: major, full re-measure against Photoshop 2026 27.11.0; merged `parity-estimate.md` and the roadmap's honest assessment; stale missing-tool rows corrected: Color Replacement and Red Eye are live toolbar tools, Frame landed; percentages unchanged; PSD spot plates in Photoshop's polarity, #7415 split; TIFF spot plates, FILE-215-17's TIFF part, #7415) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-26 · **Change:** minor (cropped selection morphology and command mask conversion performance evidence added; 12 of 178 preferences do nothing, from the scorecard; the Camera Raw row names per-camera colour for non-DNG cameras as missing, not the Calibration panel, which landed 2026-10-13; Content-Aware Scale measurements added, #5236; Help › Check for Updates and an opt-out check once per launch, DIST-220-1 partial, #5485; area type, TYPE-218-10 partial, Type scorecard 5 / 5 / 0; compound layer properties export as separate Photoshop Set events, #8304; JPEG Options dialog landed, FILE-215-19 partial; Print › Functions › Bleed through `file.print`; Content-Aware Move live preview for every selection size, TOOL-213-4 done, #6680; retouching evidence: Pattern Stamp and Background Eraser draw live, only the Mixer Brush is left of TOOL-213-7; fill and adjustment layers copy and paste whole, UI-217-23 partial, #2344; shape layers take Density and Feather, TOOL-214-12 done, #5846; on-canvas corner radius widgets, TOOL-214-12; `.atn` import maps 112 events; Free Transform H/V skew fields; stale rows corrected against `main` and the scorecard, estimates unchanged; Photoshop Actions `.atn` load and save; 2026-10-10: Tilt-Shift measurements added; earlier the same day: major, full re-measure against Photoshop 2026 27.11.0; merged `parity-estimate.md` and the roadmap's honest assessment; stale missing-tool rows corrected: Color Replacement and Red Eye are live toolbar tools, Frame landed; percentages unchanged; PSD spot plates in Photoshop's polarity, #7415 split; TIFF spot plates, FILE-215-17's TIFF part, #7415) · **Target:** Adobe Photoshop 2026
 
 The authoritative answer to "how close is PhotoCraft to Photoshop, and how much work is left". The
 one-page summary is [`ROADMAP.md`](../ROADMAP.md); the ranked work list is [`gaps.md`](gaps.md);
@@ -363,6 +363,12 @@ i7-9750H, 12 workers, 24 MP RGBA8, Good quality, amount 1: Spin 66.10 → 16.43 
 (4.02×), Zoom 19.19 → 5.35 s (3.59×), one paired run each, exact output equality.
 These are local measurements at amount 1; see [method and limits](radial-blur-performance.md).
 
+2026-10-26: cropped Expand, Contract and Border measure 1.54–37.82× faster across eight
+36 MP synthetic mask cases on GitHub Actions, with exact output equality. Radii up to 5 px
+use capped distances; Contract avoids inverted float masks and Border retains one distance
+plane. Command reads/writeback also use the cropped bounds; flat algorithm outputs retain input size; no GUI budget or percentage changes.
+See [measurements and limits](selection-distance-performance.md#cropped-selection-morphology-2026-10-26).
+
 2026-10-10: native selection distance transforms measured 7.59–10.57x faster on six
 24–36 MP synthetic masks on an AWS c7i.4xlarge (16 workers, three paired release runs).
 The transform also corrects f32 envelope errors past coordinate 4096, including nonzero
@@ -574,6 +580,7 @@ See [method, raw measurements and reproduction](five-algorithm-performance.md).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-26 | minor | Expand/Contract/Border distance work, mask reads and replacement cropped to nonzero bounds; bounded distances for radii ≤5; 36 MP exact-output comparisons improve 1.54–37.82× across eight cases; percentages, estimates and scorecard budgets unchanged |
 | 2026-10-25 | minor | UI / UX and Workspace rows: 12 of 178 preferences do nothing, the scorecard's count. Camera Raw row: the Calibration panel landed on 2026-10-13 (#5128); what is missing is per-camera colour for non-DNG cameras ([gaps.md](gaps.md) G14). Percentages and estimates unchanged |
 | 2026-10-23 | minor | Colour management and modes: PSD spot plates are stored as Photoshop stores them (ink 0 = solid), and PSDs from earlier PhotoCraft versions keep their ink (#7415 split, part 4); estimates unchanged |
 | 2026-10-23 | minor | Colour management and modes: spot plates now save and open in TIFF (#7415); estimates unchanged |

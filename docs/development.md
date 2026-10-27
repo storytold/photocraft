@@ -344,7 +344,7 @@ the live command registry (`menus::is_live`) and rewrites [`docs/parity-checklis
 `parity::tests::parity_does_not_regress` fails if the live count drops below `parity::FLOOR`.
 
 `cargo xtask i18n-coverage` prints the UI translation coverage for each language in the
-`crates/ui-egui/src/i18n/mod.rs` registry, in stable language-code order. Its English-key set is
+`crates/ui-egui/src/i18n.rs` registry, in stable language-code order. Its English-key set is
 derived from UI `tl!` literals, the menu catalog and UI command table, and menu command labels in
 the engine source. Catalog rows are validated for malformed and duplicate keys; unused legacy
 translations do not affect the denominator. Unregistered locale TSV files are ignored. After the

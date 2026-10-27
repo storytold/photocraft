@@ -124,6 +124,7 @@ pub fn merged_only(version: Version, mode: ColorMode, depth: u16, compression: C
         global_blocks: Vec::new(),
         layer_mask_trailing: Vec::new(),
         image_data,
+        write_as_psb: false,
     }
 }
 
@@ -316,6 +317,7 @@ pub fn layered(version: Version, mode: ColorMode, depth: u16, compression: Compr
         global_blocks: blocks,
         layer_mask_trailing: Vec::new(),
         image_data,
+        write_as_psb: false,
     }
 }
 
@@ -351,6 +353,7 @@ pub fn small(version: Version, compression: Compression) -> PsdFile {
         global_blocks: vec![TaggedBlock::new(*b"Patt", vec![1, 2])],
         layer_mask_trailing: Vec::new(),
         image_data: ImageData::encode(compression, &planes, &header).expect("encode"),
+        write_as_psb: false,
     }
 }
 

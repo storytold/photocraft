@@ -1964,7 +1964,7 @@
 	Full size tip	完整大小筆尖
 	Gamut warning color	色域警告顏色
 	Gamut warning opacity	色域警告不透明度
-	Generator enabled	啟用 Generator
+	Enable Generator	啟用 Generator
 	Gif	GIF
 	Glossy	光亮
 	Grid color	格點顏色
@@ -2775,6 +2775,9 @@ curves	Smooth	平滑
 	Clear History	清除步驟記錄
 	New Snapshot…	新增快照…
 	History Options…	步驟記錄選項…
+# History panel › History Options… (#2966)
+	Allow Non-Linear History	允許非線性步驟記錄
+	Make Layer Visibility Changes Undoable	允許復原圖層可見度變更
 # Print dialog (#2697)
 	Emulsion Down	感光乳劑面朝下
 	Functions	功能

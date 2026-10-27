@@ -1941,7 +1941,7 @@
 	Full size tip	Spitze in voller Größe
 	Gamut warning color	Farbumfang-Warnfarbe
 	Gamut warning opacity	Deckkraft der Farbumfang-Warnung
-	Generator enabled	Generator aktiviert
+	Enable Generator	Generator aktivieren
 	Gif	GIF
 	Glossy	Glänzend
 	Grid color	Rasterfarbe
@@ -2814,6 +2814,9 @@ curves	Smooth	Glätten
 	Clear History	Protokoll löschen
 	New Snapshot…	Neuer Schnappschuss…
 	History Options…	Protokolloptionen…
+# History panel › History Options… (#2966)
+	Allow Non-Linear History	Nicht-lineare Protokolle zulassen
+	Make Layer Visibility Changes Undoable	Änderungen der Ebenensichtbarkeit widerrufbar machen
 # Print dialog (#2697)
 	Emulsion Down	Schichtseite unten
 	Functions	Funktionen

@@ -611,6 +611,8 @@
 	High Pass…	Felüláteresztő…
 	Histogram	Hisztogram
 	History	Előzmények
+	Allow Non-Linear History	Nem lineáris előzmények engedélyezése
+	Make Layer Visibility Changes Undoable	A rétegláthatósági változások visszavonhatók
 	Horizontal	Vízszintes
 	HSB/HSL	HSB/HSL
 	Huge	Óriási
@@ -3278,7 +3280,7 @@ cameraRaw	Yellow	Sárga
 	Full size tip	Teljes méretű hegy
 	Fullscreen	Teljes képernyő
 	General…	Általános…
-	Generator enabled	Generátor bekapcsolva
+	Enable Generator	Generátor bekapcsolása
 	Generators	Generátorok
 	Generic	Általános
 	GitHub	GitHub
