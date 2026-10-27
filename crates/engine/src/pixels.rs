@@ -546,6 +546,10 @@ pub fn merge_down(doc: &Document, lower: &Layer, upper: &Layer) -> Layer {
     merged.id = lower.id;
     merged.blend = lower.blend;
     merged.opacity = 1.0;
+    // And the fill: Photoshop inherits the lower layer's fill opacity onto the merged layer,
+    // so a zero-fill layer keeps its ink in the pixels but invisible, with only its style
+    // visible — instead of resetting the property (observed in the PR fixtures).
+    merged.fill_opacity = lower.fill_opacity;
     // Merge Down replaces the lower layer, so keep its editing restrictions.
     // In particular, a merged Background must remain opaque and position-locked.
     merged.locks = lower.locks;
