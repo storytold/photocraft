@@ -1,6 +1,8 @@
 use super::*;
 use photocraft_doc::vector::Subpath;
 
+static PURGE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn session(depth: u32) -> Session {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 64, "height": 48, "depth": depth, "background": "white"})).unwrap();
@@ -154,6 +156,7 @@ fn fade_ignores_a_target_the_command_doesnt_take() {
 
 #[test]
 fn purge_commands() {
+    let _purge_test_guard = PURGE_TEST_LOCK.lock().unwrap();
     let mut s = session(8);
     assert!(!s.is_enabled("edit.purge.undo"));
     assert!(s.is_enabled("edit.purge.videoCache"));
@@ -182,6 +185,7 @@ fn purge_commands() {
 
 #[test]
 fn purge_all_releases_prepared_brush_tips_even_without_a_document() {
+    let _purge_test_guard = PURGE_TEST_LOCK.lock().unwrap();
     use photocraft_paint::{BrushContext, BrushSettings, Dab, GrayTile, TipShape};
     let mut s = Session::new();
     let brush = BrushSettings { tip: TipShape::Sampled(GrayTile::from_fn(31, 17, |x, y| ((x + y) % 5) as f32 / 4.0)), ..Default::default() };
