@@ -638,6 +638,10 @@
 	Fit Layer(s) on Screen	Ajustar camada(s) à tela
 	Fit Artboard on Screen	Ajustar prancheta à tela
 	100%	100%
+	105%	105%
+	110%	110%
+	115%	115%
+	120%	120%
 	200%	200%
 	75%	75%
 	80%	80%
@@ -1001,6 +1005,9 @@
 	Create new pattern from the selection	Criar novo padrão a partir da seleção
 	Create new shape from the current path	Criar nova forma a partir do demarcador atual
 	Create new snapshot	Criar novo instantâneo
+	From:	De:
+	Full Document	Documento inteiro
+	Merged Layers	Camadas mescladas
 	Create new style (from the selected type)	Criar novo estilo (a partir do texto selecionado)
 	Create new style from the selected layer	Criar novo estilo a partir da camada selecionada
 	Create new tool preset	Criar nova predefinição de ferramenta
@@ -3151,6 +3158,8 @@ curves	Smooth	Suavizar
 	Vanishing Point is not active	Ponto de fuga não está ativo
 	Apply Vanishing Point ({key})	Aplicar ponto de fuga ({key})
 	Fix the red plane first: its corners must form a convex quad	Corrija primeiro o plano vermelho: seus cantos devem formar um quadrilátero convexo
+	Alt-click a plane to set the clone source	Clique com Alt em um plano para definir a origem da clonagem
+	Too many clone strokes: apply Vanishing Point first	Traços de clonagem demais: aplique Ponto de fuga primeiro
 # Select and Mask view modes (#1754)
 	Onion Skin	Papel vegetal
 	Marching Ants	Formigas marchando
@@ -4029,6 +4038,17 @@ layerLabel	No Color	Sem cor
 	Sent to {printer}	Enviado para {printer}
 	set in Print Settings…	definido nas configurações de impressão…
 	ICO is limited to 256 × 256 pixels	ICO é limitado a 256 × 256 pixels
+	Calibration	Calibração
+	Red Primary	Primária vermelha
+	Green Primary	Primária verde
+	Blue Primary	Primária azul
+	Write xmp sidecars	Gravar arquivos auxiliares XMP
+	Set the tone sliders from the image	Definir os controles de tom a partir da imagem
+	Settings from {name}	Configurações de {name}
+	Settings from {name}; {count} not supported: {names}	Configurações de {name}; {count} sem suporte: {names}
+	Could not write {name}: {error}	Não foi possível gravar {name}: {error}
+	Kept {name}: written by another application	{name} mantido: gravado por outro aplicativo
+	Shadow Tint	Matiz das sombras
 # PhotoCraft release checks.
 	Check for Updates…	Verificar atualizações…
 	PhotoCraft Updates	Atualizações do PhotoCraft
@@ -4350,3 +4370,14 @@ layerLabel	No Color	Sem cor
 	Grayscale Ramp	Rampa de tons de cinza
 	Current Colors	Cores atuais
 	Make Ramp Web Safe	Tornar rampa segura para a Web
+# Art History Brush (#213).
+	Art History Brush Tool	Ferramenta Pincel do histórico da arte
+	Tight Short	Curto cerrado
+	Tight Medium	Médio cerrado
+	Tight Long	Longo cerrado
+	Loose Medium	Médio solto
+	Loose Long	Longo solto
+	Dab	Toque
+	Tight Curl	Curva cerrada
+	Loose Curl	Curva solta
+	Stylized dabs from a history state	Toques estilizados a partir de um estado do histórico

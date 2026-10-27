@@ -430,9 +430,16 @@ impl Ctx<'_> {
                 })
                 .flatten();
             if let Some(mut t) = parsed {
+                let mut path_error = None;
                 if let Some(txt2) = &self.txt2 {
                     photocraft_text::psd::apply_txt2(&mut t, &block.data, txt2);
+                    // Type on a path keeps its path only in its `Txt2` frame (#7962).
+                    path_error = photocraft_text::psd::apply_txt2_path(&mut t, &block.data, txt2).err();
                     photocraft_text::psd::apply_txt2_frame(&mut t, &block.data, txt2);
+                }
+                if let Some(e) = path_error {
+                    let shape = if matches!(t.shape, photocraft_doc::text::TextShape::Box { .. }) { "paragraph" } else { "point" };
+                    self.warn(format!("layer \"{name}\": its type path could not be read ({e}); it opens as {shape} text"));
                 }
                 // Photoshop's pixels stay until edited. Writers without type pixels are
                 // rendered by text_import::prepare instead of retaining an empty cache.
@@ -724,7 +731,7 @@ fn be_to_ne_plane(plane: &[u8], s: SampleType, n: usize) -> Vec<u8> {
     interleave(&[Some(plane)], &[zero_sample(s)], n, s, &[false])
 }
 
-fn unicode_names(data: &[u8]) -> Vec<String> {
+pub(crate) fn unicode_names(data: &[u8]) -> Vec<String> {
     let mut out = Vec::new();
     let mut at = 0;
     while at + 4 <= data.len() {
@@ -876,6 +883,69 @@ pub fn psd_to_document_with(file: &PsdFile, ctl: &photocraft_raster::Interrupt) 
     psd_to_document_decoded(file, ctl, None)
 }
 
+/// Whether `file` stores spot planes the way earlier PhotoCraft versions (releases 0.1.0 to
+/// 0.16.0) wrote them: straight (the maximum = solid ink), the opposite of Photoshop, which
+/// stores 0 = solid ink in every PSD and TIFF it saves. Their files are recognised by three
+/// things together:
+///
+/// - DisplayInfo (1077) marks at least one spot channel;
+/// - there is no Alpha Identifiers resource (1053), or one that lists fewer channels than the
+///   file has ([`photoshop_identified_channels`]). Photoshop has written it, one identifier per
+///   extra channel, in every file with an extra channel since version 6, and PhotoCraft writes it
+///   now. No earlier PhotoCraft wrote one of its own, but each kept the 1053 of a Photoshop file
+///   it opened (a transparent document's `[0]`, for one) and wrote it back unchanged, after the
+///   channels added in it, which it stored straight;
+/// - the version info (1057) is byte for byte what those versions wrote: writer "Adobe Photoshop"
+///   with reader "Adobe Photoshop CS6", both NUL-terminated (0.1.0 to 0.7.0), or reader "Adobe
+///   Photoshop 2026" without a NUL (0.8.2 on), with either merged-data flag.
+///
+/// Any other file is read in Photoshop's polarity. psd-tools' `cmyk-spot.psd`, for one, also has
+/// spots and no 1053, but names psd-tools in 1057 and stores Photoshop's polarity. A Photoshop
+/// file that an earlier PhotoCraft opened and saved again kept Photoshop's 1053 and its planes as
+/// Photoshop stored them, so it is read in Photoshop's polarity too; when channels were added
+/// there, only the planes after the ones the kept 1053 lists are read straight.
+///
+/// Keeping these files' ink is the only reason this exists: deleting it (and its one caller)
+/// reads every file in Photoshop's polarity, at the cost of inverting the spot ink of PSDs saved
+/// by those versions.
+pub(crate) fn earlier_photocraft_spot_planes(file: &PsdFile) -> bool {
+    use photocraft_psd::descriptor::UnicodeString;
+    use photocraft_psd::resources::VersionInfo;
+
+    let marks_spot = file.resource(crate::channel_map::DISPLAY_INFO).is_some_and(|r| crate::channel_map::display_info_marks_spot(&r.data));
+    let identifies_every_channel = match file.header.color_mode.color_channels() {
+        Some(color) => {
+            let channels = file.header.channels.saturating_sub(color).saturating_sub(u16::from(file.merged_has_alpha()));
+            photoshop_identified_channels(file) >= usize::from(channels)
+        }
+        // Multichannel has no fixed number of colour channels to count from.
+        None => file.resource(crate::channel_map::ALPHA_IDENTIFIERS).is_some(),
+    };
+    if !marks_spot || identifies_every_channel {
+        return false;
+    }
+    let Some(r) = file.resource(ids::VERSION_INFO) else { return false };
+    // Byte for byte: a resource with anything after the fields is someone else's.
+    let Ok(v) = VersionInfo::from_bytes(&r.data) else { return false };
+    if v.to_bytes() != r.data {
+        return false;
+    }
+    let writers = [
+        (UnicodeString::new_nul("Adobe Photoshop"), UnicodeString::new_nul("Adobe Photoshop CS6")),
+        (UnicodeString::new("Adobe Photoshop"), UnicodeString::new("Adobe Photoshop 2026")),
+    ];
+    v.version == 1 && v.file_version == 1 && writers.iter().any(|(writer, reader)| v.writer == *writer && v.reader == *reader)
+}
+
+/// How many extra channels, after the merged transparency, the Alpha Identifiers resource (1053)
+/// lists: its identifiers other than 0, which Photoshop gives the merged transparency (first, and
+/// in some files with no transparency plane at all). 0 without a 1053. In a file from an earlier
+/// PhotoCraft ([`earlier_photocraft_spot_planes`]) these are the channels of the Photoshop file
+/// it opened, stored as Photoshop stored them; the channels after them were added there.
+pub(crate) fn photoshop_identified_channels(file: &PsdFile) -> usize {
+    file.resource(crate::channel_map::ALPHA_IDENTIFIERS).map_or(0, |r| r.data.as_chunks::<4>().0.iter().filter(|id| **id != [0; 4]).count())
+}
+
 /// Whether the import reads the merged composite: for a flattened or multichannel file (it *is*
 /// the image), a file without layers, or extra alpha/spot channels behind the colour ones.
 pub(crate) fn merged_needed(file: &PsdFile) -> bool {
@@ -965,6 +1035,10 @@ pub(crate) fn psd_to_document_decoded_integrity(
                 doc.clipping_path = Some(photocraft_doc::ClippingPath { name, flatness: 0.0 });
                 doc.metadata.psd_resources.push((r.id, String::from_utf8_lossy(&r.name).into_owned(), Arc::new(r.data.clone())));
             }
+            // Resource 1053 is written afresh with the extra channels on every save, so a kept copy
+            // would be new metadata after each round trip. Multichannel has no such rewrite: the
+            // imported bytes are the channel ids, copied back while they still match.
+            crate::channel_map::ALPHA_IDENTIFIERS if !multichannel => {}
             id if MAPPED_RESOURCES.contains(&id) => {}
             id => doc.metadata.psd_resources.push((id, String::from_utf8_lossy(&r.name).into_owned(), Arc::new(r.data.clone()))),
         }
@@ -1197,13 +1271,29 @@ pub(crate) fn psd_to_document_decoded_integrity(
         // Photoshop lists every extra channel, the merged transparency first when there is one.
         let skip = usize::from(file.merged_has_alpha() && names.len() == usize::from(h.channels).saturating_sub(cc));
         let names = names.get(skip..).unwrap_or_default();
+        // Which planes hold spot ink in Photoshop's polarity (0 = solid): the DisplayInfo records
+        // the channel options are read from below, the transparency's first when `skip` is 1.
+        // A file from an earlier PhotoCraft stores them straight and is read as it was written,
+        // past the channels of the Photoshop file it opened, if any.
+        let straight_from = if earlier_photocraft_spot_planes(file) { photoshop_identified_channels(file) } else { usize::MAX };
+        let photoshop_spots = if let Some(r) = file.resource(crate::channel_map::DISPLAY_INFO) {
+            crate::channel_map::spot_flags(&r.data, true, skip)
+        } else if let Some(r) = file.resource(crate::channel_map::DISPLAY_INFO_OLD) {
+            crate::channel_map::spot_flags(&r.data, false, skip)
+        } else {
+            Vec::new()
+        };
         for (k, idx) in (first..usize::from(h.channels)).enumerate() {
             let Some(p) = merged_plane(all, idx, plane) else {
                 cx.warn_unreadable_data(format!("merged extra channel {idx} is incomplete and was not imported"));
                 break;
             };
+            let mut raw = be_to_ne_plane(p, depth, n);
+            if k < straight_from && photoshop_spots.get(k).copied().unwrap_or(false) {
+                crate::channel_map::photoshop_spot_plane(&mut raw, depth);
+            }
             let mut s = Surface::new(cx.mask_fmt);
-            s.write_interleaved(canvas, &be_to_ne_plane(p, depth, n));
+            s.write_interleaved(canvas, &raw);
             s.prune();
             let name = names.get(k).cloned().unwrap_or_else(|| format!("Alpha {}", k + 1));
             doc.channels.push(AlphaChannel::new(name, s));
@@ -1243,110 +1333,4 @@ pub(crate) fn psd_to_document_decoded_integrity(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use photocraft_psd::{Compression, PsdError, Version, testgen};
-
-    /// #5200: the Multichannel fallback checks its RGBA output against the budget before
-    /// allocating it (here a 2x2 image, 16 bytes, against caps of 15 and 16 bytes).
-    #[test]
-    fn flat_fallback_refuses_an_output_over_the_cap() {
-        let file = testgen::merged_only(Version::Psd, PsdMode::Multichannel, 8, Compression::Raw, 2, 2);
-        assert!(file.composite_rgba8().is_err(), "Multichannel goes through the fallback");
-        let merged = file.decode_merged();
-        assert!(matches!(flat_composite(&file, Some(&merged), 15), Err(PsdError::LimitExceeded(_))));
-        let img = flat_composite(&file, Some(&merged), 16).unwrap();
-        assert_eq!(img.data.len(), 16);
-    }
-
-    /// #5200: a composite over the budget is not retried by the fallback (which allocated the
-    /// refused buffer: 14.4 GB for this 60000x60000 Bitmap header).
-    #[test]
-    fn flat_fallback_does_not_retry_an_over_budget_composite() {
-        let mut file = testgen::small(Version::Psb, Compression::Raw);
-        file.header.color_mode = PsdMode::Bitmap;
-        file.header.depth = 1;
-        file.header.channels = 1;
-        file.header.width = 60_000;
-        file.header.height = 60_000;
-        let merged = Ok(vec![0u8; 16]);
-        let cap = photocraft_psd::compression::MAX_DECODED_BYTES;
-        assert!(matches!(flat_composite(&file, Some(&merged), cap), Err(PsdError::LimitExceeded(_))));
-    }
-
-    /// #5202: a hostile name length ends the list instead of overflowing.
-    #[test]
-    fn unicode_names_stop_at_a_hostile_length() {
-        let mut data = 1u32.to_be_bytes().to_vec();
-        data.extend([0, b'A']);
-        data.extend(u32::MAX.to_be_bytes());
-        data.extend([0, b'B']);
-        assert_eq!(unicode_names(&data), ["A"]);
-    }
-
-    /// Verifies an unreadable layer channel sets the structured damage indicator.
-    #[test]
-    fn unreadable_layer_channel_marks_conversion_damaged() {
-        let mut file = testgen::small(Version::Psd, Compression::Raw);
-        let channel = file.layers_mut()[0].channels.iter_mut().find(|c| c.id == 0).unwrap();
-        channel.data.clear();
-        assert!(file.layers()[0].decode_channel(0, file.header.depth, file.header.version).is_err());
-
-        let (_, warnings, damaged) = psd_to_document_decoded_integrity(&file, &photocraft_raster::Interrupt::NONE, None).unwrap();
-        assert!(damaged);
-        assert!(warnings.iter().any(|w| w.contains("could not be decoded")));
-    }
-
-    /// Verifies an unreadable user-mask channel sets the structured damage indicator.
-    #[test]
-    fn unreadable_mask_channel_marks_conversion_damaged() {
-        let mut file = testgen::small(Version::Psd, Compression::Raw);
-        let channel = file.layers_mut()[0].channels.iter_mut().find(|c| c.id == CHANNEL_USER_MASK).unwrap();
-        channel.data.clear();
-
-        let (_, warnings, damaged) = psd_to_document_decoded_integrity(&file, &photocraft_raster::Interrupt::NONE, None).unwrap();
-        assert!(damaged);
-        assert!(warnings.iter().any(|w| w.contains("could not be decoded")));
-    }
-
-    /// A layer whose bounds hold pixels but whose colour and transparency channels are missing
-    /// lost its pixel data: the open asks before continuing.
-    #[test]
-    fn layer_bounds_without_channel_data_mark_conversion_damaged() {
-        let mut file = testgen::small(Version::Psd, Compression::Raw);
-        file.layers_mut()[0].channels.retain(|c| c.id == CHANNEL_USER_MASK);
-
-        let (_, warnings, damaged) = psd_to_document_decoded_integrity(&file, &photocraft_raster::Interrupt::NONE, None).unwrap();
-        assert!(damaged);
-        assert!(warnings.iter().any(|w| w.contains("no channel data")));
-    }
-
-    /// A layer without pixels (an empty layer, or a text or shape layer written without a
-    /// pixel cache) has empty bounds: nothing is missing, so the file is not damaged even when
-    /// it lists no colour or transparency channel.
-    #[test]
-    fn empty_layer_without_channel_data_is_not_damaged() {
-        let mut file = testgen::small(Version::Psd, Compression::Raw);
-        file.layers_mut()[0].channels.retain(|c| c.id == CHANNEL_USER_MASK);
-        file.layers_mut()[0].rect = Default::default();
-
-        let (_, warnings, damaged) = psd_to_document_decoded_integrity(&file, &photocraft_raster::Interrupt::NONE, None).unwrap();
-        assert!(!damaged, "an empty layer marked the PSD damaged: {warnings:?}");
-    }
-
-    /// Verifies healthy layer channels do not mark the PSD as damaged.
-    #[test]
-    fn valid_layer_channels_keep_conversion_editable() {
-        let file = testgen::small(Version::Psd, Compression::Raw);
-        let (_, warnings, damaged) = psd_to_document_decoded_integrity(&file, &photocraft_raster::Interrupt::NONE, None).unwrap();
-        assert!(!damaged, "unexpectedly marked good PSD damaged: {warnings:?}");
-    }
-
-    #[test]
-    fn merged_plane_checks_offsets() {
-        let all = [1u8, 2, 3, 4];
-        assert_eq!(merged_plane(&all, 1, 2), Some(&[3u8, 4][..]));
-        assert_eq!(merged_plane(&all, 2, 2), None);
-        assert_eq!(merged_plane(&all, usize::MAX, 2), None);
-    }
-}
+mod tests;

@@ -629,6 +629,10 @@
 	Fit Layer(s) on Screen	Katmanları Ekrana Sığdır
 	Fit Artboard on Screen	Çalışma Yüzeyini Ekrana Sığdır
 	100%	100%
+	105%	105%
+	110%	110%
+	115%	115%
+	120%	120%
 	200%	200%
 	Print Size	Baskı Boyutu
 	Pixel Aspect Ratio	Piksel En Boy Oranı
@@ -2708,6 +2712,9 @@ cameraRaw	Color	Renk
 	Color indicates	Renk şunu gösterir:
 	Create Snapshot	Anlık Görüntü Oluştur
 	Delete Snapshot	Anlık Görüntüyü Sil
+	From:	Kaynak:
+	Full Document	Tam Belge
+	Merged Layers	Birleştirilmiş Katmanlar
 	New Snapshot	Yeni Anlık Görüntü
 	New Snapshot…	Yeni Anlık Görüntü…
 	History Options…	Geçmiş Seçenekleri…
@@ -3830,6 +3837,8 @@ cameraData	Lens	Lens
 	Draw to modify the curve	Eğriyi değiştirmek için çiz
 	Edit points to modify the curve	Eğriyi değiştirmek için noktaları düzenle
 	Fix the red plane first: its corners must form a convex quad	Önce kırmızı düzlemi düzeltin: köşeleri dışbükey bir dörtgen oluşturmalı
+	Alt-click a plane to set the clone source	Klon kaynağını ayarlamak için bir düzleme Alt+tıklayın
+	Too many clone strokes: apply Vanishing Point first	Çok fazla klon darbesi: önce Kaybolma Noktası'nı uygulayın
 	Grid Size:	Izgara Boyutu:
 	Light Blue	Açık Mavi
 	Light Gray	Açık Gri
@@ -3945,6 +3954,17 @@ cameraData	Lens	Lens
 	Color Indicates:	Rengin Gösterdiği:
 	Ink Characteristics	Mürekkep Özellikleri
 	Solidity:	Doluluk:
+	Calibration	Kalibrasyon
+	Red Primary	Kırmızı ana renk
+	Green Primary	Yeşil ana renk
+	Blue Primary	Mavi ana renk
+	Write xmp sidecars	XMP yan dosyalarını yaz
+	Set the tone sliders from the image	Ton kaydırıcılarını görüntüden ayarla
+	Settings from {name}	{name} ayarları
+	Settings from {name}; {count} not supported: {names}	{name} ayarları; {count} desteklenmiyor: {names}
+	Could not write {name}: {error}	{name} yazılamadı: {error}
+	Kept {name}: written by another application	{name} korundu: başka bir uygulama tarafından yazılmış
+	Shadow Tint	Gölge tonu
 	Redrawing	Yeniden çiziliyor
 # Bevel & Emboss shading controls.
 	Highlight Mode	Vurgu Modu
@@ -4149,3 +4169,14 @@ cameraData	Lens	Lens
 	Grayscale Ramp	Gri Tonlama Şeridi
 	Current Colors	Geçerli Renkler
 	Make Ramp Web Safe	Şeridi Web Renkleriyle Sınırla
+# Art History Brush (#213).
+	Art History Brush Tool	Sanat Tarihi Fırçası Aracı
+	Tight Short	Sıkı Kısa
+	Tight Medium	Sıkı Orta
+	Tight Long	Sıkı Uzun
+	Loose Medium	Gevşek Orta
+	Loose Long	Gevşek Uzun
+	Dab	Benek
+	Tight Curl	Sıkı Kıvrım
+	Loose Curl	Gevşek Kıvrım
+	Stylized dabs from a history state	Bir geçmiş durumundan stilize benekler

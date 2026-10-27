@@ -423,6 +423,10 @@
 # Menus: Type, Filter, View, Window; UI and engine commands
 	(coming soon)	(hamarosan)
 	100%	100%
+	105%	105%
+	110%	110%
+	115%	115%
+	120%	120%
 	2-up Horizontal	2 nézet vízszintesen
 	2-up Vertical	2 nézet függőlegesen
 	200%	200%
@@ -3897,6 +3901,9 @@ cameraRaw	Yellow	Sárga
 	New document…     ⌘N	Új dokumentum…     ⌘N
 	New Layer from Brush	Új réteg ecsetből
 	New Path	Új útvonal
+	From:	Forrás:
+	Full Document	Teljes dokumentum
+	Merged Layers	Egyesített rétegek
 	New Snapshot	Új pillanatkép
 	New Snapshot…	Új pillanatkép…
 	History Options…	Előzménybeállítások…
@@ -4029,6 +4036,8 @@ cameraRaw	Yellow	Sárga
 	Amount:	Mérték:
 	Apply Vanishing Point ({key})	Enyészpont alkalmazása ({key})
 	Apply the removal ({key})	Eltávolítás alkalmazása ({key})
+	Alt-click a plane to set the clone source	Alt-kattintás egy síkra a klónforrás beállításához
+	Too many clone strokes: apply Vanishing Point first	Túl sok klónvonás: először alkalmazza az Enyészpontot
 	Drag to draw the curve · {key}-click draws a straight line	Húzással rajzold meg a görbét · {key}+kattintás: egyenes vonal
 	Draw to modify the curve	Rajzolj a görbe módosításához
 	Edit points to modify the curve	Szerkeszd a pontokat a görbe módosításához
@@ -4133,6 +4142,17 @@ cameraRaw	Yellow	Sárga
 	Color Indicates:	A szín jelzése:
 	Ink Characteristics	Festék jellemzői
 	Solidity:	Fedőképesség:
+	Calibration	Kalibrálás
+	Red Primary	Vörös alapszín
+	Green Primary	Zöld alapszín
+	Blue Primary	Kék alapszín
+	Write xmp sidecars	XMP kísérőfájlok írása
+	Set the tone sliders from the image	Tónuscsúszkák beállítása a kép alapján
+	Settings from {name}	Beállítások innen: {name}
+	Settings from {name}; {count} not supported: {names}	Beállítások innen: {name}; {count} nem támogatott: {names}
+	Could not write {name}: {error}	Nem sikerült írni: {name}: {error}
+	Kept {name}: written by another application	{name} megtartva: egy másik alkalmazás írta
+	Shadow Tint	Árnyék színezet
 	Redrawing	Újrarajzolás
 # Bevel & Emboss shading controls.
 	Highlight Mode	Csúcsfény módja
@@ -4335,3 +4355,14 @@ cameraRaw	Yellow	Sárga
 	Grayscale Ramp	Szürkeárnyalatos sáv
 	Current Colors	Aktuális színek
 	Make Ramp Web Safe	Sáv korlátozása webes színekre
+# Art History Brush (#213).
+	Art History Brush Tool	Művészi előzményecset eszköz
+	Tight Short	Szoros, rövid
+	Tight Medium	Szoros, közepes
+	Tight Long	Szoros, hosszú
+	Loose Medium	Laza, közepes
+	Loose Long	Laza, hosszú
+	Dab	Pötty
+	Tight Curl	Szoros göndör
+	Loose Curl	Laza göndör
+	Stylized dabs from a history state	Stilizált pöttyök egy előzményállapotból

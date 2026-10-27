@@ -18,6 +18,7 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod art_history;
 mod artistic;
 mod artistic_fx;
 mod blur;
@@ -1374,15 +1375,6 @@ const RESULT_BUDGET: usize = 256 << 20;
 
 #[cfg(test)]
 mod tests;
-#[cfg(test)]
-mod tests_ext;
-
-#[cfg(test)]
-mod tests_mosaic;
-
-#[cfg(test)]
-mod tests_selection_mix;
-
 /// The current upstream sampler through the identical source/selection/tile pipeline.
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)]

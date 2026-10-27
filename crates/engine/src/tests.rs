@@ -1823,3 +1823,25 @@ fn history_states_share_large_document_payloads() {
     };
     assert!(std::sync::Arc::ptr_eq(&raw(now), &raw(then)), "the adjustment's bytes are shared");
 }
+
+#[test]
+fn the_document_activation_generation_bumps_on_switch_and_back() {
+    let mut s = session_with_doc();
+    let first = s.active().unwrap().doc.id;
+    let g1 = s.active_generation();
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let second = s.active().unwrap().doc.id;
+    assert_ne!(second, first);
+    let g2 = s.active_generation();
+    assert!(g2 > g1, "opening a document activates it");
+    let i = s.documents().iter().position(|d| d.doc.id == first).expect("the first document");
+    assert!(s.set_active(i));
+    let g3 = s.active_generation();
+    assert!(g3 > g2, "switching back is a new activation");
+    // Re-selecting the already-active document is not a switch; neither is an edit.
+    assert!(s.set_active(i));
+    assert_eq!(s.active_generation(), g3);
+    s.execute("layer.new.layer", json!({})).unwrap();
+    assert_eq!(s.active_generation(), g3);
+    assert_eq!(s.active().unwrap().doc.id, first);
+}

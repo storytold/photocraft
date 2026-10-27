@@ -47,7 +47,7 @@ The transport is `apps/photocraft/src/control_server.rs`, and the handlers are i
 - `engine.execute {command, params}`: run any engine or UI command by id. Engine commands run directly with their default params and never open a dialog. Use `ui.menu.invoke` for menu-click behaviour, which opens a command's dialog when no params are given. `params` must be a JSON object (omit it or pass `null` for none); an array, string, number or boolean is an error naming the command, in every transport (control channel, `serve`, MCP and the CLI)
 - `engine.commands`: list commands with enablement; the `result` is a JSON array of command objects (see [Command list replies](#command-list-replies))
 - `ui.inspect`: full UI state (tool, panels, views, dialogs, windows, window size). The menu tree is not included; use `ui.menu.list`. `brushPicker` is `null` while closed and `{pos: [x, y], size: [w, h]?, list: {collapsed, filter, renaming, showName, showStroke, showTip, scale}}` while the Brush Preset picker is open (coordinates in screen points; `size` is the picker's content size once its corner grip was dragged, `null` before that, and the drag remembers both dimensions; the three `show*` flags pick the parts of each preset's card — at least one is always on; `scale` is the footer slider, 0.15–2 with 1 the standard, multiplying the cards' width and height — the heights stop at half size and the name and tip-size text hold their 1.0 size — and dropping the tips' size numbers at 0.40 and below; the parts and the scale are remembered across restarts, while the search, collapsed groups and a rename in progress are not). `view` holds the View/Window/Type preferences: `screen_mode`, `extras`, `show` and `snap_to` flags, `flip_horizontal`, `arrange` (Window › Arrange layout), pixel aspect, font preview size, language options. `perf.timings.gpuInfo` holds the graphics adapter, backend, driver, the backend chosen at launch and why, the canvas renderer (`gpu`/`cpu`) and, after a device loss, `lost` (`help.systemInfo` returns the same as `info`)
-- `ui.set {tool?, panels?, dockTabs?, dock?, dockWidth?, colorPanel?, maskTarget?, vectorMaskTarget?, selectionMode?, zoom?, center?, rotation?, fit?, theme?, brushSize?, brushSection?, brushTab?, brushesView?, brushPicker?, brushPickerName?, brushPickerStroke?, brushPickerTip?, brushPickerScale?, gradientBlendMode?, gradientClassic?, shapeStroke?}`: change UI state; any other field is an error, checked before anything changes (`zoom` is the canvas zoom where 1 = 100%, one document pixel per physical display pixel, so a scaled display doesn't magnify the image; `theme` is `pro`, `proMedium`, `studio`, `studioLight` or `classic`; `selectionMode` is the selection tools' options-bar mode, 0 New, 1 Add, 2 Subtract, 3 Intersect; `brushSection` indexes the Brush Settings sections, `brushTab` 0 = Brush Settings, 1 = Brushes; `brushesView` is `list` or `grid` for the Brushes panel; `brushPickerName`, `brushPickerStroke` and `brushPickerTip` are the Brush Preset picker's card parts (booleans, at least one on), and `brushPickerScale` its footer card-scale slider (0.15 to 2, 1 the standard); `brushPicker` is `[x, y]` in screen points to open the Brush Preset picker there (as a right-click with a painting tool does) or `null` to close it, and picking a preset in it is `tools.setBrush {"preset": name}`; `dock` is `{order: ["layers", …], heights: {"properties": 180}, collapsed: ["color"], tabOrder: {"layers": ["Paths", "Layers", "Channels"]}}`, the right-dock groups top to bottom, their heights in points, the groups collapsed to their tab strip and each group's tab order left to right by panel name (a group left out keeps its default order, unknown names are ignored and tabs not listed follow in their default order; `dockTabs` keeps indexing tabs in their default order); `dockWidth` sets the right dock width in points, clamped to 250..520; `colorPanel` is `{background?, mode?, ramp?, webSafeRamp?}`, merged into the Color panel's state: `background` is whether it edits the background colour, `mode` its panel-menu display (`hueCube`, `brightnessCube`, `colorWheel`, `grayscaleSlider`, `rgbSliders`, `hsbSliders`, `cmykSliders`, `labSliders` or `webColorSliders`), `ramp` the colour ramp under the sliders (`rgbSpectrum`, `cmykSpectrum`, `grayscaleRamp` or `currentColors`) and `webSafeRamp` Make Ramp Web Safe; `maskTarget` targets the active layer's mask, which, like Photoshop, swaps in the foreground/background pair kept for masks (white/black until one is picked) and swaps the pixels' pair back when the pixels are targeted again)
+- `ui.set {tool?, panels?, dockTabs?, dock?, dockWidth?, colorPanel?, maskTarget?, vectorMaskTarget?, filterMaskTarget?, selectionMode?, zoom?, center?, rotation?, fit?, theme?, brushSize?, brushSection?, brushTab?, brushesView?, brushPicker?, brushPickerName?, brushPickerStroke?, brushPickerTip?, brushPickerScale?, gradientBlendMode?, gradientClassic?, shapeStroke?}`: change UI state; any other field is an error, checked before anything changes (`zoom` is the canvas zoom where 1 = 100%, one document pixel per physical display pixel, so a scaled display doesn't magnify the image; `theme` is `pro`, `proMedium`, `studio`, `studioLight` or `classic`; `selectionMode` is the selection tools' options-bar mode, 0 New, 1 Add, 2 Subtract, 3 Intersect; `brushSection` indexes the Brush Settings sections, `brushTab` 0 = Brush Settings, 1 = Brushes; `brushesView` is `list` or `grid` for the Brushes panel; `brushPickerName`, `brushPickerStroke` and `brushPickerTip` are the Brush Preset picker's card parts (booleans, at least one on), and `brushPickerScale` its footer card-scale slider (0.15 to 2, 1 the standard); `brushPicker` is `[x, y]` in screen points to open the Brush Preset picker there (as a right-click with a painting tool does) or `null` to close it, and picking a preset in it is `tools.setBrush {"preset": name}`; `dock` is `{order: ["layers", …], heights: {"properties": 180}, collapsed: ["color"], tabOrder: {"layers": ["Paths", "Layers", "Channels"]}}`, the right-dock groups top to bottom, their heights in points, the groups collapsed to their tab strip and each group's tab order left to right by panel name (a group left out keeps its default order, unknown names are ignored and tabs not listed follow in their default order; `dockTabs` keeps indexing tabs in their default order); `dockWidth` sets the right dock width in points, clamped to 250..520; `colorPanel` is `{background?, mode?, ramp?, webSafeRamp?}`, merged into the Color panel's state: `background` is whether it edits the background colour, `mode` its panel-menu display (`hueCube`, `brightnessCube`, `colorWheel`, `grayscaleSlider`, `rgbSliders`, `hsbSliders`, `cmykSliders`, `labSliders` or `webColorSliders`), `ramp` the colour ramp under the sliders (`rgbSpectrum`, `cmykSpectrum`, `grayscaleRamp` or `currentColors`) and `webSafeRamp` Make Ramp Web Safe; `maskTarget` targets the active layer's mask, which, like Photoshop, swaps in the foreground/background pair kept for masks (white/black until one is picked) and swaps the pixels' pair back when the pixels are targeted again; `filterMaskTarget` targets the active smart object's filter mask (an error without smart filters), so painting, fills, filters and adjustments edit it (`"target":"filterMask"`) while Move and Edit › Transform still act on the smart object)
   - `typeTransform` is `null` outside a temporary Ctrl/Cmd Type-tool drag. During a drag it reports its source document/revision, original affine, oriented `frame` (layer, local bounds, document-space corners and pivot), and captured `gesture`. Drive it with `ui.pointer` and `command: true` at `down`; `move`/`up` may release the modifier. The document/history remain unchanged during preview, and `up` applies one `type.edit` within `textEdit`'s session. Pressing Escape during the drag cancels only the preview. This pointer state is never restored from saved UI state.
 - `ui.menu.invoke {id, params?, wait?}` / `ui.menu.list`: activate a menu item by id; list the menu tree. A menu item that starts a background job (a filter without a dialog, such as Blur More) replies with the job's result once it has been applied; with `"wait": false` the reply is `{job, pending: true}` at once. Window ends with the open documents as `window.document.<index>` (tab order, the active one checked, #2991); invoking one brings that document to the front and replies `{document: index}`. Camera Raw and the full-window workspaces (Liquify, Content-Aware Fill, Filter Gallery, Adaptive Wide Angle) are modal: while one is open, `ui.menu.invoke` refuses every other menu item ("menu command is unavailable while a modal dialog is open") and accepts only that workspace's own `{"ui": {...}}` requests (`filter.liquify`, `edit.contentAwareFill`, `filter.filterGallery`, `filter.adaptiveWideAngle`, `filter.cameraRaw`; `params` must hold only the `ui` object), so finish it with `{"ui":{"commit":true}}` or `{"ui":{"cancel":true}}` first. Those requests are refused too while a dialog, an unsaved-changes prompt or a crop that blocks the command is open: resolve that first, then commit or cancel the workspace. `ui.menu.list` reports the same gate: an item the modal state refuses is listed with `enabled: false`. `engine.execute` is not a menu click and is not gated
 - `ui.set` also accepts `gradientBlendMode` (a layer blend mode name, such as `Difference`) and `gradientClassic` (boolean) for the Gradient tool options bar.
@@ -55,6 +55,7 @@ The transport is `apps/photocraft/src/control_server.rs`, and the handlers are i
 - `ui.set` also accepts `tileGrid` (boolean), a developer overlay of the active layer's storage tiles: the tile grid over the document, every stored tile filled and labelled `tx,ty`, tiles with identical pixels in a shared colour and unique ones in blue. It has no menu item and View › Extras doesn't hide it. `ui.inspect` reports it as `view.tile_grid`.
 - `ui.set` also accepts `strokeTrace` (`true`, `false`, `"stderr"` or `"off"`): turn the stroke latency trace on or off at runtime; each stroke's summary is in `ui.inspect` `perf.strokeTrace`. A CSV file of every frame is set only at launch (`PHOTOCRAFT_STROKE_TRACE=<file.csv>` / `--stroke-trace <file.csv>`): the control channel doesn't write files outside the automation write root
 - `ui.set` also accepts `layerFilter` (#5048), the Layers panel filter row: `{by?, kinds?, name?, mode?}`, any subset. `by` is `kind`, `name` or `mode` (the filter-type dropdown); `kinds` lists the Kind toggles that are on (`pixel`, `adjustment`, `type`, `shape`, `smart`); `name` matches part of a layer name, ignoring case; `mode` is a blend mode name (`Multiply`, `Pass Through`). Kind and Name filter only once a kind is on or text is typed; Mode always filters, by Normal at first, as in Photoshop. Fields left out keep their value; a bad one is an error and changes nothing.
+- `ui.set` also accepts the Histogram panel: `histogramPanel` `{view?, channel?, showChannelsInColor?, showStatistics?, source?}` (any subset, kept with the preferences): `view` is `compact`, `expanded` or `allChannels`; `channel` is `composite`, `red`, `green`, `blue`, `cyan`, `magenta`, `yellow`, `black`, `a`, `b`, `luminosity` or `colors` (one the document's mode lacks shows as its composite); `source` is `entireImage`, `selectedLayer` or `adjustmentComposite` (Entire Image is counted in Compact View, when the document has one layer, or when no adjustment layer is selected for Adjustment Composite). `histogramRange` is `[from, to]` (levels 0..255) or `null`: the dragged tonal range whose Count and Percentile the statistics show. `histogramRefresh: true` is Uncached Refresh: the current state is recounted at cache level 1. `ui.inspect` › `histogram` reports the options, the channel and source as they apply, the channels the document offers, whether the shown histogram is `current` (counted for the document's revision, source and cache level the panel wants now), its `cacheLevel`, `maxCacheLevel` (Preferences › Performance › Cache Levels), `preview` (an adjustment's preview is counted) and `stats` (`mean`, `stdDev`, `median`, `pixels`, `level`, `count`, `percentile`, `clipped` percent at 0 and 255). Histograms are counted while the panel is shown.
 - Each painting tool keeps its own brush, as in Photoshop: `tools.setBrush` and `ui.set {brushSize}` change the active tool's brush, and switching tools swaps in that tool's own (size, hardness, mode, opacity, flow, dynamics, smoothing). A tool used for the first time starts from the brush in hand. The colours, the erase flag and the stroke seed stay shared. So `ui.set {tool: "eraser", brushSize: 12}` sets the Eraser's size, and `ui.set {tool: "brush"}` afterwards brings the Brush's own size back.
 - Brush Pose's `pose.overrideTiltX` and `pose.overrideTiltY` are independent booleans. For example, `engine.execute {"command":"tools.setBrush","params":{"pose":{"enabled":true,"tiltX":45,"overrideTiltX":true,"overrideTiltY":false}}}` fixes X at 45° while Y follows the stylus. Pose tilts are degrees (±90); the Brush Settings panel displays percentages (±100). Old stored `overrideTilt` values migrate to both axes. In command patches, `overrideTilt` sets both axes unless an explicit axis field in the same patch overrides it. `brush.get` includes both axis flags and the legacy combined readback (`overrideTilt` is true only when both flags are true). Axis-only journals omit that derived combined key so replay retains the other axis. Present flag values must be booleans; null and other types return an error.
 - `ui.set` also accepts the Eyedropper options bar (#1649): `eyedropperSampleSize` (`"point"` or 1, 3, 5, 11, 31, 51, 101: the side of the averaged square, shared by the Eyedropper, a painting tool's Alt-click eyedropper, the Curves/Color Picker eyedroppers and the Info panel), `eyedropperSample` (`current`, `currentAndBelow`, `all`, `allNoAdjustments`, `currentAndBelowNoAdjustments`) and `eyedropperRing` (boolean, Show Sampling Ring). `ui.inspect` reports them under `toolOptions` (`eyedropper_size`, `eyedropper_sample`, `eyedropper_ring`). The engine command `document.sampleColor {x, y, size, sampleLayer}` returns the colour such a sample picks, as four floats 0..1 (not 0..255).
@@ -89,7 +90,19 @@ The transport is `apps/photocraft/src/control_server.rs`, and the handlers are i
 - `ui.gpu.simulateLoss {error?}`: act as if the wgpu device was lost (or reported an error with `error: true`). The app switches to the CPU image compositor (after a loss for the rest of the session; after an error until a successful Retry GPU) and shows the same recovery warning as on a real loss. `gpuFallbackNotice` in `ui.inspect` contains the reason while the warning is open. Keep Using CPU saves CPU compatibility for the next launch. Retry GPU saves GPU mode; after an error (`error: true`) it also builds a new GPU canvas on the same device at once (`gpuInfo.canvas` is `gpu` again, #6577), and after a loss it asks the user to save and restart. The window renderer still requires a working graphics or software adapter. Returns `wasActive` and `gpuInfo`. For testing the fallback. With `destroy: true` it destroys the window's real wgpu device instead, as a driver reset does (see `docs/development.md` › device loss): the app saves every unsaved document for recovery and closes. Returns `destroyed`
 - `ui.screenshot {path?, focus?}`: capture the main window (PNG). With no path the reply contains
   base64 PNG data; a path is relative to the automation write root. Raises the window first
-  (default) because occluded macOS windows stop rendering
+  (default) because occluded macOS windows stop rendering. A request sent before the first frame
+  is queued (within the same limits and deadline) and captures once the window geometry is known,
+  as on 0.15. At most four captures may be outstanding (waiting for geometry, rendered or awaiting
+  collection), one image may use at most 128 MiB and all of them at most 256 MiB; the budget is
+  re-checked when the window changes before a queued request is captured, and an over-budget
+  request is refused before it is captured. A request gives up after 8 s (including retries after
+  a resize/DPI/zoom change), and a result that arrives after it was cancelled or timed out is
+  discarded without a file or a second reply. Any size, scale, zoom, texture-side or minimized
+  change between issuance and collection retries the capture even if the values change back, and
+  a minimized window fails with an error instead of waiting for the timeout. The
+  document (and its activation: a switch away and back) is fixed when the request is accepted: if
+  another document becomes active before the capture, the request fails with an error rather than
+  saving the wrong document
 - `ui.focus`: bring the main window to the front
 - `app.open {path}` / `app.save {path?, tgaBits?, ddsCompression?, ddsMipmaps?, quality?, jpegFormat?}` (JPEG: `quality` on the 0–12 scale, `jpegFormat` `baseline`, `optimized` or `progressive`; automation never shows JPEG Options): relative file I/O through the configured automation roots (`app.open` reads under the read root, `app.save` writes under the write root; absolute paths, `..` and paths escaping the root are refused, and both fail closed when no root was granted). Both reply with `warnings` (import/export notes such as "adjustment layer flattened"; `[]` when none), also shown to the user in the status bar and as a notice (`notices` in `ui.inspect`); `app.open` also returns the `path` and document `name` (directory `.pcraft` — the native on-disk form — loads through the read root's capability; the single-file (zip) form takes the bytes path), `app.save` the `path` written. `app.save` without `path` writes back only to the document's own PSD, PSB or `.pcraft` file, like File › Save. `tgaBits` (24 or 32) sets a TGA's bits per pixel: 32 writes the alpha channel (or else the transparency) as its alpha, 24 none; without it, 32 with an alpha channel or transparency, else 24. `ddsCompression` (`none`, `bc1`, `bc2` or `bc3`) and `ddsMipmaps` (bool) set a DDS texture's compression and mip chain; without them, uncompressed without mipmaps. Automation saves never show TGA, DDS, JPEG or TIFF options. Automation opens and saves never fire script events. Use these two rather than `file.open`, `file.save`, `file.saveAs` or `file.saveACopy`, which the control channel refuses (see [Engine commands](#engine-commands))
 - `app.quit`
@@ -118,7 +131,7 @@ store expose and persist the same setting; scripts keep using canonical command 
 | `layer.newAdjustmentLayer.hueSaturation` | `{"hue":30,"saturation":10}` |
 | `paint.stroke` | `{"points":[[x,y,pressure],…],"size":20,"color":"#ff0000"}` |
 | `select.rect` | `{"x":0,"y":0,"width":100,"height":50,"mode":"add","ellipse":false}` |
-| `document.inspect` | `{}`: layer tree, history, snapshots (`[{id, name}]`, for `history.selectSnapshot`), selection bounds |
+| `document.inspect` | `{}`: layer tree, history, snapshots (`[{id, name}]`, for `history.selectSnapshot`; id 0 is the document as opened), selection bounds |
 | `layer.list` | `{"document":index?,"flat":bool?}`: just the layers, top-down: `id`, `name`, `kind`, `visible`, `bounds` (`[x,y,w,h]` or null), `selected`, `active`; groups list their `children`, or with `flat` every layer is one row with its `depth` and `parent` group id |
 | `document.pixel` | `{"x":10,"y":10}`: composite RGBA, four floats 0..1 (not 0..255) |
 | `document.presets.list` | `{}` → `{presets:[{name,settings}]}`: saved New Document configurations |
@@ -498,14 +511,25 @@ viewports, so the dialog is drawn over the main window and appears in the image.
 RGB/Grayscale layer. `params: {"smartFilter": {"layer": id, "index": i}}` opens it on an existing
 Camera Raw smart filter instead (as double-clicking the filter in the Layers panel does): the
 stored settings over the pixels below that filter, previewed through the filter mask; commit
-then runs `layer.smartFilter.setParams` with every setting. `params.ui` accepts `set` (filter settings), `before`, `scope`, `view`, `commit` and
+then runs `layer.smartFilter.setParams` with every setting. `params.ui` accepts `set` (filter settings), `before`, `scope`, `view`, `auto` (true: the Light
+sliders from the image's histogram, the panel's Auto button), `commit` and
 `cancel`, and while a raw file opens also `demosaic` (below). All parts of one request are validated before any is applied; a rejected request
 leaves the settings, view state, preferences and document unchanged (and closes a dialog it
-opened). Unknown `ui` or settings properties, non-boolean `before` / `commit` / `cancel`, and
+opened). Unknown `ui` or settings properties, non-boolean `before` / `auto` / `commit` / `cancel`, and
 `commit` together with `cancel` are errors. Point curves (`pointCurve`, `pointCurveRed`,
 `pointCurveGreen`, `pointCurveBlue`) are empty or 2–16 finite points in 0–255 with inputs at
 least one level apart. Commit dispatches one `filter.cameraRaw` engine command; a failed commit
 keeps the dialog open for correction. Nothing else writes document history.
+
+A raw file opened from a path reads its sidecar (`IMG_0001.xmp` beside `IMG_0001.CR2`, Camera
+Raw's `crs:` settings) into the open-time dialog, and Open writes changed settings back
+(Preferences › Camera Raw Defaults › Write xmp sidecars). It never writes beside a DNG, over a
+sidecar another application wrote (a notice says it was kept), or for a control or MCP request.
+Open also applies the other Camera Raw Defaults (Sharpen For as part of the Camera Raw step, then
+colour space, bit depth and Open as Smart Object, so the step works on the pixels the dialog
+previewed; Apply auto tone fills the dialog), reported as `defaults` in the commit's reply; the
+resolution is set when the file opens. With "Open in Camera Raw" off the sidecar and the defaults
+apply without the dialog.
 
 **Opening a raw file.** An interactive open (File › Open, Open Recent, drag and drop, the
 command line) of a camera raw developed from its sensor data shows this dialog first, titled
@@ -646,21 +670,37 @@ layer names. Selection is captured before opening the dialog; an unselected laye
 ## Shared panel docking
 
 Panel arrangements support tab grouping and reordering, horizontal and vertical splits,
-and movable, resizable floating groups inside the application window. Drag a panel tab,
-or use its context menu. Floating groups remain within the application viewport.
+and movable, resizable floating groups. Drag a panel tab or a group's drag bar, or use its
+context menu. On the desktop a floating group opens in its own OS window; on Wayland, in the
+web build and for the Studio Properties card it stays inside the application window.
 
 The shared layout begins with the existing workspace on the first docking operation.
-Workspace saves retain its groups, active tabs, split sizes, floating geometry, and the
+Workspace saves keep its groups, active tabs, split sizes, floating geometry, and the
 positions of hidden panels. Resetting a built-in workspace restores its default dock.
 
-- `window.panel.move {panel, anchor, zone?, before?}` moves a panel into the target group.
-  `zone` is `tab` (default), `center`, `left`, `right`, `top`, or `bottom`; `before` reorders
-  tabs by panel ID. The destination must already be visible.
-- `window.panel.float {panel, x?, y?, width?, height?}` detaches a panel.
-- `window.panel.dock {panel, anchor?, zone?, before?}` returns a panel to its previous
-  dock placement when possible, or to the supplied destination.
+The docking commands are craft-ui's shared vocabulary (`DockCommand`). Panels may be named
+by ID or label, and `onto` is accepted for `anchor`.
+
+- `window.panel.move {panel, anchor, zone?, before?, group?, placement?}` moves a panel into the
+  target group. `zone` is `tab` (default), `center`, `left`, `right`, `top`, `bottom`, `above`
+  or `below`; `before` reorders tabs by panel ID; `group: true` moves the panel's whole group.
+- `window.panel.float {panel, x?, y?, width?, height?, group?, column?}` detaches a panel (at
+  400, 140 and 300x400 by default) or its group.
+- `window.panel.dock {panel, anchor?, zone?, before?, group?, side?}` returns a floating panel to
+  the dock place it floated from when possible, or to the supplied destination.
 - `window.panel.activate {panel}` reveals and selects a panel, restoring its saved
-  position when possible. `window.panel.close {panel}` hides it.
+  position when possible. `window.panel.close {panel}` hides it; `window.panel.closeGroup` and
+  `window.panel.closeOthers` close its group or the group's other panels.
+- `window.panel.minimize {panel, minimized?}` collapses a floating window to its title bar.
+- `window.panel.window {panel, native?}` floats a docked panel's group and gives its floating
+  window its own OS window. On the desktop every floating window has one, except the Studio
+  themes' Properties card, which stays over the canvas, and on Wayland, where floating windows
+  stay in the main window. The web refuses the command: floating panels stay in the page.
+- `ui.dock {operation, …}` takes the shared `ui.dock` operations (`open`, `close`, `activate`,
+  `float`, `moveFloating`, `move`, `setStackOpen`, `resizeStack`, `resizeSplit`) or `{action}`.
+- `window.workspace.lock {locked?}` sets Lock Workspace; `window.workspace {name}`,
+  `window.workspace.new {name}`, `window.workspace.delete {name}` and `window.workspace.reset`
+  run the Window › Workspace commands.
 
 Panel IDs are stable across themes. Invalid IDs, non-finite or invalid geometry, and
 invalid destinations return an error without changing the arrangement.
@@ -676,6 +716,13 @@ resizes the root divider (`false`/`true` path entries select first/second childr
 The UI dispatches these same commands. Unknown panel IDs, invalid geometry, and stale
 split paths return an error without changing the workspace.
 
+The `docking` object in `ui.state` and in saved workspaces is craft-ui's `Workspace`:
+`version` (2), `layout`, `hidden` (each closed panel with its return place), `saved` and
+`locked`. `dockingReturns` holds where each floating panel docks back, and
+`dockingCollapsed` the panels of collapsed custom groups. Any other saved `docking` value,
+such as a bare layout with `dockingHidden`, loads as the default layout, built from the
+saved `panels`, `dockTabs` and `dock`.
+
 The existing `ui.set` panel visibility, `dockTabs` selection and `dockWidth` controls
 remain available after customization. Width keeps its 250–520 point clamp. Named
 `dock.hidden_tabs` and intact native-group collapse settings are also preserved. A
@@ -690,7 +737,7 @@ or `down` to the panel's entire current group. With `operation:"move"`, provide
 `anchor` and optional `zone`/`before` (as for panel.move), or a serialized `placement`,
 to transfer all members atomically while preserving their order and selecting the
 requested `panel`.
-The floating group's header grip also transfers the whole group when dropped on a
+A floating group's drag bar or title bar also transfers the whole group when dropped on a
 dock target. The panel menu and icon rail remain
 available in custom workspaces. `window.panel.<id> {show:true}` always reveals, selects
 and expands the panel, including when another tab is selected. Workspace snapshots

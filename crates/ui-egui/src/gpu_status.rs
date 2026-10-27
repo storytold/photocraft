@@ -263,7 +263,7 @@ pub fn show_fallback(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let t = crate::theme::Tokens::get(ctx);
     let mut choice = None;
     egui::Window::new(tl!("Switched to CPU rendering"))
-        .id(egui::Id::new("gpu-fallback-warning"))
+        .id(egui::Id::unique("gpu-fallback-warning"))
         .collapsible(false)
         .resizable(false)
         .default_width(440.0)
