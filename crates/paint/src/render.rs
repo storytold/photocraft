@@ -1293,5 +1293,4 @@ impl RoundTip {
 }
 
 #[cfg(test)]
-#[path = "render_reference.rs"]
 mod reference;

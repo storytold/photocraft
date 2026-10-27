@@ -443,5 +443,4 @@ pub fn apply(app: &mut PhotocraftApp, v: &Value) {
 }
 
 #[cfg(test)]
-#[path = "dock_tests.rs"]
 mod tests;
