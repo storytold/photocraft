@@ -37,6 +37,31 @@ fn intermediate_ui_scale_presets_survive_restart() {
     assert_eq!(s.execute("prefs.get", json!({"path": "interface.uiScale"})).unwrap(), json!("125"));
 }
 
+/// Preferences › General › Zoom with Ctrl + Scroll Wheel is off unless the user turns it on,
+/// and an older preferences file without the key keeps the Photoshop sideways pan.
+#[test]
+fn ctrl_wheel_zoom_defaults_off_persists_and_resets() {
+    let mut s = Session::new();
+    assert!(!s.prefs().general.ctrl_wheel_zooms, "Ctrl + wheel still pans until the user opts in");
+    assert_eq!(s.execute("prefs.get", json!({"path": "general.ctrlWheelZooms"})).unwrap(), json!(false));
+
+    s.execute("prefs.set", json!({"path": "general.ctrlWheelZooms", "value": true})).unwrap();
+    assert!(s.prefs().general.ctrl_wheel_zooms);
+    let mut restored = Session::new();
+    restored.load_prefs_json(&s.prefs_to_json()).unwrap();
+    assert!(restored.prefs().general.ctrl_wheel_zooms, "the choice must survive restart");
+
+    let mut legacy = Session::new();
+    legacy.load_prefs_json(r#"{"general": {"zoomWithScrollWheel": false}}"#).unwrap();
+    assert!(!legacy.prefs().general.ctrl_wheel_zooms, "a file from before the preference keeps the sideways pan");
+
+    assert!(s.execute("prefs.set", json!({"path": "general.ctrlWheelZooms", "value": "yes"})).is_err());
+    assert!(s.prefs().general.ctrl_wheel_zooms, "an invalid type must not change the preference");
+
+    s.execute("prefs.reset", json!({"path": "general.ctrlWheelZooms"})).unwrap();
+    assert!(!s.prefs().general.ctrl_wheel_zooms);
+}
+
 /// #2264: the Studio workspace dot pattern can be hidden without changing themes.
 #[test]
 fn canvas_dot_grid_can_be_disabled_persisted_and_reset() {

@@ -2110,6 +2110,7 @@
 	Zoom clicked point to center	将单击点缩放到中心
 	Zoom resizes windows	缩放时调整窗口大小
 	Zoom with scroll wheel	使用滚轮缩放
+	Zoom with Ctrl + Scroll Wheel	使用 Ctrl + 滚轮缩放
 	Zoom with trackpad pinch	使用触控板捏合缩放
 	Pass Through	穿透
 	Dissolve	溶解

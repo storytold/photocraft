@@ -2500,6 +2500,7 @@
 	Zoom clicked point to center	Точка клика в центр при масштабировании
 	Zoom resizes windows	Масштаб меняет размер окон
 	Zoom with scroll wheel	Масштаб колесом мыши
+	Zoom with Ctrl + Scroll Wheel	Масштаб Ctrl + колесом мыши
 	Zoom with trackpad pinch	Масштаб щипком на трекпаде
 	Alt-click to define a source point to clone from	Alt+щелчок, чтобы задать точку-источник клонирования
 	No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.	Нет контура для создания выделения: нарисуйте его инструментом «Перо» или выберите на панели «Контуры».

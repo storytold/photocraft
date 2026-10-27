@@ -118,8 +118,16 @@ fn the_nudge_pause_is_hidden_while_nudges_are_not_bundled() {
     assert!(tools_field_visible(&tools, "bundleNudges") && tools_field_visible(&tools, "showTooltips"));
     // A section without the flag (an older preferences object) shows the field.
     assert!(tools_field_visible(&Map::new(), "nudgeBundlePauseMs"));
+    assert_eq!(humanize("ctrlWheelZooms"), "Zoom with Ctrl + Scroll Wheel");
     assert_eq!(humanize("bundleNudges"), "Bundle Arrow-Key Nudges");
     assert_eq!(humanize("nudgeBundlePauseMs"), "Nudge Bundle Pause (ms)");
+}
+
+#[test]
+fn ctrl_wheel_zoom_label_is_translated_in_every_complete_catalog() {
+    for lang in crate::i18n::Lang::all().filter(|lang| lang.complete_menus()) {
+        assert!(crate::i18n::has(lang, "Zoom with Ctrl + Scroll Wheel"), "{} is missing the Ctrl wheel preference", lang.code());
+    }
 }
 
 #[test]

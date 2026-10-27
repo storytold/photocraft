@@ -2082,6 +2082,7 @@
 	Zoom clicked point to center	將點按處縮放至中央
 	Zoom resizes windows	縮放時調整視窗大小
 	Zoom with scroll wheel	以滾輪縮放
+	Zoom with Ctrl + Scroll Wheel	以 Ctrl + 滾輪縮放
 	Zoom with trackpad pinch	以觸控板捏合縮放
 	Pass Through	穿過
 	Dissolve	溶解

@@ -2469,6 +2469,7 @@
 	Zoom clicked point to center	Масштабувати натиснуту точку до центру
 	Zoom resizes windows	Змінювати розміри вікон під час масштабування
 	Zoom with scroll wheel	Масштабувати коліщатком миші
+	Zoom with Ctrl + Scroll Wheel	Масштабувати Ctrl + коліщатком миші
 	Zoom with trackpad pinch	Масштабувати щипком на трекпаді
 	Alt-click to define a source point to clone from	Alt+клацання, щоб визначити точку джерела клонування
 	No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.	Немає контуру для створення виділення: намалюйте його пером або виберіть на панелі контурів.

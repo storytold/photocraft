@@ -2068,6 +2068,7 @@
 	Zoom clicked point to center	クリックした位置を中央にズーム
 	Zoom resizes windows	ズームでウィンドウをリサイズ
 	Zoom with scroll wheel	スクロールホイールでズーム
+	Zoom with Ctrl + Scroll Wheel	Ctrl + スクロールホイールでズーム
 	Zoom with trackpad pinch	トラックパッドのピンチでズーム
 	Pass Through	通過
 	Dissolve	ディザ合成

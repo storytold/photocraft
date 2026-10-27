@@ -3683,6 +3683,7 @@ cameraRaw	Yellow	Sárga
 	Zoom clicked point to center	Kattintott pont nagyítása középre
 	Zoom resizes windows	Nagyításkor az ablak is átméreteződik
 	Zoom with scroll wheel	Nagyítás görgővel
+	Zoom with Ctrl + Scroll Wheel	Nagyítás Ctrl + görgővel
 	Zoom with trackpad pinch	Nagyítás csippentéssel az érintőpárnán
 	{name} options	{name}: beállítások
 	{size} (was {old})	{size} (korábban: {old})
