@@ -941,6 +941,7 @@ macro_rules! spec {
     };
 }
 
+/// The Layer-menu command specs this module adds (see the module docs), including Export Layer.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         spec!("layer.layerMask.apply", "Apply", ["Layer", "Layer Mask"], r##"{"layer":id?}"##, has_raster_with_mask, apply_mask),
@@ -1031,7 +1032,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "layer.exportAs",
             "Export As…",
             ["Layer"],
-            r##"{"layer":id?,"path":text,"scale":1..1000=100,"resample":"bicubicAutomatic|bicubic|bicubicSmoother|bicubicSharper|bilinear|nearest"="bicubicAutomatic"} (format from the path's extension; the document is not resampled)"##,
+            r##"{"layer":id?,"path":text,"scale":1..1000=100,"resample":"bicubicAutomatic|preserveDetails|bicubic|bicubicSmoother|bicubicSharper|bilinear|nearest|lanczos|lanczos2|lanczos4|mitchell|catmullRom|bSpline|gaussian|hermite|spline16|spline36"="bicubicAutomatic"} (format from the path's extension; the document is not resampled)"##,
             has_layer,
             |s, p| export_layer(s, p, "layer.exportAs", false)
         ),

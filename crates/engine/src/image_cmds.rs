@@ -175,6 +175,8 @@ enum Method {
     Automatic,
 }
 
+/// An Image Size `resample` name as a method: `none` (keep the pixels), `automatic`, or a filter;
+/// an unknown name is Bicubic, Image Size's own default.
 fn parse_resample(s: &str) -> Method {
     Method::Filter(match s {
         "none" => return Method::None,
@@ -184,8 +186,17 @@ fn parse_resample(s: &str) -> Method {
         "bicubicSmoother" => Resample::BicubicSmoother,
         "bicubicSharper" => Resample::BicubicSharper,
         "bicubicAutomatic" => Resample::BicubicAutomatic,
-        "lanczos" => Resample::Lanczos,
+        "lanczos" | "lanczos3" => Resample::Lanczos,
         "preserveDetails" => Resample::PreserveDetails,
+        "lanczos2" => Resample::Lanczos2,
+        "lanczos4" => Resample::Lanczos4,
+        "mitchell" => Resample::Mitchell,
+        "catmullRom" => Resample::CatmullRom,
+        "bSpline" => Resample::BSpline,
+        "gaussian" => Resample::Gaussian,
+        "hermite" => Resample::Hermite,
+        "spline16" => Resample::Spline16,
+        "spline36" => Resample::Spline36,
         _ => Resample::Bicubic,
     })
 }
@@ -970,7 +981,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "image.imageSize",
             "Image Size…",
             ["Image"],
-            r##"{"width":px,"height":px,"percent":%? (both sides; an explicit side wins),"resolution":ppi,"keepPrintSize":bool=false (with only a resolution: resample the pixels to keep the print size),"resample":"automatic|preserveDetails|bicubicSmoother|bicubicSharper|bicubicAutomatic|bicubic|nearest|bilinear|lanczos|none"="bicubic"} → {width,height} (the document's size after the command; "none" changes the resolution only)"##,
+            r##"{"width":px,"height":px,"percent":%? (both sides; an explicit side wins),"resolution":ppi,"keepPrintSize":bool=false (with only a resolution: resample the pixels to keep the print size),"resample":"automatic|preserveDetails|bicubicSmoother|bicubicSharper|bicubicAutomatic|bicubic|nearest|bilinear|lanczos|lanczos2|lanczos4|mitchell|catmullRom|bSpline|gaussian|hermite|spline16|spline36|none"="bicubic"} → {width,height} (the document's size after the command; "none" changes the resolution only)"##,
             has_doc,
             image_size
         ),
@@ -986,7 +997,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "image.crop",
             "Crop",
             ["Image"],
-            r##"{"x":px,"y":px,"width":px,"height":px,"angle":-3600..3600=0,"deleteCroppedPixels":bool=true,"contentAware":bool=false,"targetWidth":px,"targetHeight":px,"resolution":ppi,"resample":"bicubic|bilinear|nearest|lanczos|preserveDetails"="bicubic"} → {x,y,width,height,documentWidth,documentHeight,resolution} (targetWidth/targetHeight, both or neither: the cropped area is resampled to exactly that size, as Image Size, in the same undo step; resolution: the document's new ppi; contentAware: the Crop tool's Fill › Content-Aware Fill, the area a rotated or extending crop uncovers filled from its surroundings on the Background, else the active pixel layer)"##,
+            r##"{"x":px,"y":px,"width":px,"height":px,"angle":-3600..3600=0,"deleteCroppedPixels":bool=true,"contentAware":bool=false,"targetWidth":px,"targetHeight":px,"resolution":ppi,"resample":"bicubic|bilinear|nearest|lanczos|preserveDetails|lanczos2|lanczos4|mitchell|catmullRom|bSpline|gaussian|hermite|spline16|spline36"="bicubic"} → {x,y,width,height,documentWidth,documentHeight,resolution} (targetWidth/targetHeight, both or neither: the cropped area is resampled to exactly that size, as Image Size, in the same undo step; resolution: the document's new ppi; contentAware: the Crop tool's Fill › Content-Aware Fill, the area a rotated or extending crop uncovers filled from its surroundings on the Background, else the active pixel layer)"##,
             has_doc,
             crop
         ),
@@ -1040,6 +1051,34 @@ pub fn specs() -> Vec<CommandSpec> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every name Image Size accepted before the new filters still means the same method, the
+    /// Lanczos alias is kept, and an unknown name still falls back to Bicubic.
+    #[test]
+    fn existing_resample_names_keep_their_meaning() {
+        let filter = |n: &str| match parse_resample(n) {
+            Method::Filter(r) => Some(r),
+            _ => None,
+        };
+        assert!(matches!(parse_resample("none"), Method::None));
+        assert!(matches!(parse_resample("automatic"), Method::Automatic));
+        for (n, r) in [
+            ("nearest", Resample::Nearest),
+            ("bilinear", Resample::Bilinear),
+            ("bicubic", Resample::Bicubic),
+            ("bicubicSmoother", Resample::BicubicSmoother),
+            ("bicubicSharper", Resample::BicubicSharper),
+            ("bicubicAutomatic", Resample::BicubicAutomatic),
+            ("lanczos", Resample::Lanczos),
+            ("lanczos3", Resample::Lanczos),
+            ("preserveDetails", Resample::PreserveDetails),
+            ("sinc", Resample::Bicubic),
+        ] {
+            assert_eq!(filter(n), Some(r), "{n}");
+        }
+        assert_eq!(crate::export_preset_cmds::RESAMPLE[0].0, crate::export_preset_cmds::DEFAULT_RESAMPLE);
+        assert_eq!(crate::export_preset_cmds::DEFAULT_RESAMPLE, "bicubicAutomatic");
+    }
 
     #[test]
     fn crop_rejects_rectangles_that_would_wrap() {
@@ -1183,7 +1222,26 @@ mod tests {
 
     #[test]
     fn image_size_scales_everything() {
-        for resample in ["bicubic", "bicubicSmoother", "bicubicSharper", "bicubicAutomatic", "automatic", "bilinear", "nearest", "lanczos", "preserveDetails"] {
+        for resample in [
+            "bicubic",
+            "bicubicSmoother",
+            "bicubicSharper",
+            "bicubicAutomatic",
+            "automatic",
+            "bilinear",
+            "nearest",
+            "lanczos",
+            "preserveDetails",
+            "lanczos2",
+            "lanczos4",
+            "mitchell",
+            "catmullRom",
+            "bSpline",
+            "gaussian",
+            "hermite",
+            "spline16",
+            "spline36",
+        ] {
             let mut s = session();
             s.execute("image.imageSize", json!({"width": 80, "resample": resample})).unwrap();
             let d = doc(&s);

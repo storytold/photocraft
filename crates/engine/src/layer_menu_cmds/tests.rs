@@ -408,7 +408,7 @@ fn export_layer_resamples_with_the_chosen_method() {
                 assert_eq!(surf.rgba(x, y), want, "{depth}-bit pixel {x},{y}");
             }
         }
-        for bad in [json!("lanczos"), json!("Nearest"), json!(""), json!(2)] {
+        for bad in [json!("sinc"), json!("Nearest"), json!(""), json!(2)] {
             let err = s.execute("layer.exportAs", json!({"path": path, "scale": 200, "resample": bad})).unwrap_err().to_string();
             assert!(err.contains("resample"), "{depth}-bit {bad}: {err}");
         }
