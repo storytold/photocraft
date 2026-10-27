@@ -242,6 +242,8 @@ struct Sizes {
     big_layer: (u32, u32),
     /// Layers in the "150-layer document".
     many_layers: usize,
+    /// The full-canvas layers document (L3): size and layer count.
+    full_layers: (u32, u32, usize),
     /// The 16-bit document (15000 × 10000).
     huge16: (u32, u32),
     /// The 32-bit document with 20 layers.
@@ -252,28 +254,34 @@ struct Sizes {
     big_photo: (u32, u32),
     /// A4 at 300 ppi.
     a4: (u32, u32),
+    /// A new 10 × 5 m document at 200 ppi (3.1 GP, #4017).
+    huge_new: (u32, u32),
 }
 
 const FULL: Sizes = Sizes {
     layered: (5472, 3648),
     big_layer: (4243, 2828),
     many_layers: 150,
+    full_layers: (3000, 2000, 150),
     huge16: (15000, 10000),
     float32: (4000, 3000),
     ten_mp: (3872, 2592),
     big_photo: (6000, 4000),
     a4: (2480, 3508),
+    huge_new: (78_740, 39_370),
 };
 
 const QUICK: Sizes = Sizes {
     layered: (1600, 1066),
     big_layer: (1200, 800),
     many_layers: 40,
+    full_layers: (800, 600, 20),
     huge16: (2400, 1600),
     float32: (1200, 900),
     ten_mp: (1200, 800),
     big_photo: (1600, 1066),
     a4: (1240, 1754),
+    huge_new: (20_000, 10_000),
 };
 
 /// The layered document of #209: a background, six pixel layers with a drop shadow and a stroke,
@@ -357,9 +365,10 @@ fn main() {
     // A panic in one group (a crash the scenario found) is reported against the row that was
     // running, and the other groups still run.
     type Group = fn(&mut Bench, &Sizes);
-    let groups: [(&str, Group); 5] = [
+    let groups: [(&str, Group); 6] = [
         ("layered", layered_scenarios),
         ("many layers", many_layer_scenarios),
+        ("full-canvas layers", full_canvas_layer_scenarios),
         ("bit depths", depth_scenarios),
         ("long operations", job_scenarios),
         ("algorithms", algorithm_scenarios),
@@ -535,6 +544,67 @@ fn layered_scenarios(b: &mut Bench, sz: &Sizes) {
         exec(s, "edit.undo", json!({}))?;
         b.refresh(s, false)?;
         Ok(v)
+    });
+}
+
+/// Layers overhaul L3: edits that redraw the whole document (a layer's opacity, hiding it) with
+/// many full-canvas layers, under the app's own GPU memory budget (Memory Usage at its default,
+/// the adapter's kind; `gpu_canvas::memory_budget`). Past what the budget holds, each one went to
+/// the CPU compositor (2.6 s at 150 layers of 6 MP on a discrete card).
+fn full_canvas_layer_scenarios(b: &mut Bench, sz: &Sizes) {
+    let opacity = "opacity of a layer among many full-canvas layers + refresh";
+    let hide = "hide a layer among many full-canvas layers + refresh";
+    if !b.wanted(opacity) && !b.wanted(hide) {
+        return;
+    }
+    b.current = Some(opacity.to_string());
+    let (w, h, n) = sz.full_layers;
+    let mut s = Session::new();
+    let built = (|| -> Res<u64> {
+        exec(&mut s, "file.new", json!({"width": w, "height": h, "background": "white"}))?;
+        let mut mid = 0;
+        for i in 0..n as u32 {
+            exec(&mut s, "layer.new.layer", json!({"name": format!("full {i}")}))?;
+            exec(&mut s, "edit.fill", json!({"color": format!("#{:02x}{:02x}80", (i * 37) % 256, (i * 91) % 256), "opacity": 3}))?;
+            if i % 7 == 3 {
+                exec(&mut s, "layer.layerStyle.dropShadow", json!({"distance": 6, "size": 8}))?;
+            }
+            if i as usize == n / 2 {
+                mid = active_layer(&s)?;
+            }
+        }
+        Ok(mid)
+    })();
+    let mid = match built {
+        Ok(v) => v,
+        Err(e) => {
+            b.errors.push((opacity.to_string(), e));
+            return;
+        }
+    };
+    if let (Some((g, _)), Some(st)) = (&b.gpu, s.active()) {
+        // As the app counts it (`canvas::gpu_budget`).
+        let pixels = st.memory_bytes() as u64;
+        let allowance = u64::from(photocraft_engine::prefs::Performance::default().memory_usage_mb) << 20;
+        g.set_memory_budget(photocraft_ui_egui::gpu_canvas::memory_budget(
+            allowance,
+            pixels,
+            photocraft_ui_egui::gpu_canvas::physical_memory(),
+            g.video_memory(),
+            0,
+        ));
+    }
+    let _ = b.refresh(&s, true);
+    let reps = b.reps;
+    b.time(opacity, &mut s, reps, true, |b, s, i| {
+        let t = Instant::now();
+        exec(s, "layer.setProps", json!({"layer": mid, "opacity": if i % 2 == 0 { 0.5 } else { 1.0 }}))?;
+        Ok(ms(t) + b.refresh(s, false)?)
+    });
+    b.time(hide, &mut s, reps, true, |b, s, i| {
+        let t = Instant::now();
+        exec(s, "layer.setProps", json!({"layer": mid, "visible": i % 2 == 1}))?;
+        Ok(ms(t) + b.refresh(s, false)?)
     });
 }
 
@@ -866,6 +936,7 @@ fn algorithm_scenarios(b: &mut Bench, sz: &Sizes) {
         }
     }
     liquify_preview_scenario(b);
+    huge_new_scenario(b, sz);
     let cmyk = "brush dab on A4 300 ppi CMYK + refresh";
     if b.wanted(cmyk) {
         let (w, h) = sz.a4;
@@ -927,6 +998,30 @@ fn algorithm_scenarios(b: &mut Bench, sz: &Sizes) {
             Ok(ms(t) + b.refresh_rect(s, photocraft_geom::Rect::EMPTY)?)
         });
     }
+}
+
+/// #4017: File > New at 10 × 5 m, 200 ppi (3.1 GP), and the first refresh of the canvas that
+/// draws a document too large for GPU textures (the reduced CPU canvas, `canvas::ensure_texture`).
+fn huge_new_scenario(b: &mut Bench, sz: &Sizes) {
+    let name = "new 3 GP document + first reduced canvas refresh";
+    if !b.wanted(name) {
+        return;
+    }
+    let (w, h) = sz.huge_new;
+    let reps = b.reps.min(3);
+    b.time(name, &mut Session::new(), reps, false, |_, s, _| {
+        let t = Instant::now();
+        exec(s, "file.new", json!({"width": w, "height": h, "resolution": 200, "background": "white"}))?;
+        let doc = &s.active().ok_or("no document")?.doc;
+        let factor = w.max(h).div_ceil(photocraft_ui_egui::canvas::MAX_TEXTURE).max(1);
+        let reduced = photocraft_compose::render_reduced(doc, w / factor, h / factor);
+        if reduced.px.first() != Some(&[1.0; 4]) {
+            return Err("the new document is not white".into());
+        }
+        let v = ms(t);
+        exec(s, "file.close", json!({}))?;
+        Ok(v)
+    });
 }
 
 /// A source-resolution Liquify brush update on the visible part of a 3500×2200 layer.

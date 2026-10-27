@@ -23,6 +23,7 @@ jobs:
     uses: storytold/craft-common-actions/.github/workflows/packaging-lint.yml@main
 
   verified-appimage-inputs:
+    timeout-minutes: 10
     name: Verified AppImage inputs
     runs-on: ubuntu-latest
     steps:

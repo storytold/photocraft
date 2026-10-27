@@ -146,7 +146,7 @@ fn every_theme_shows_the_auto_select_toggle() {
         PhotocraftApp::setup_context(&h.ctx, theme);
         h.run_steps(4);
         assert!(h.state().ui.tool_options.move_auto_select);
-        h.get_by_label("Auto-Select:").click();
+        h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Auto-Select:").click();
         h.run_steps(2);
         assert!(!h.state().ui.tool_options.move_auto_select, "{theme:?}: the toggle turns Auto-Select off");
     }
@@ -235,4 +235,25 @@ fn every_theme_shows_the_gradient_options() {
             .collect();
         assert!(combos.iter().any(|c| c.contains("Normal")), "{theme:?}: the blend mode picker shows; combo boxes: {combos:?}");
     }
+}
+
+#[test]
+fn shift_click_adds_shape_layers_one_after_another() {
+    // Shapes, as in Photoshop: a click selects one, each ⇧-click adds the one under it.
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.session.execute("file.new", json!({"width": 200, "height": 200})).unwrap();
+    for rect in [[10, 10, 40, 40], [80, 10, 40, 40], [10, 100, 40, 40]] {
+        app.session.execute("shape.create", json!({"kind": "rect", "rect": rect, "fill": "#ff0000"})).unwrap();
+    }
+    app.sync_views();
+    app.ui.tool = Tool::Move;
+    app.ui.extras.snap = false;
+    app.ui.view.show.smart_guides = false;
+    let ids: Vec<LayerId> = app.session.active().unwrap().doc.layers.iter().skip(1).map(|l| l.id).collect();
+    drag(&mut app, [30.0, 30.0], [0.0, 0.0], egui::Modifiers::NONE);
+    drag(&mut app, [100.0, 30.0], [0.0, 0.0], egui::Modifiers::SHIFT);
+    drag(&mut app, [30.0, 120.0], [0.0, 0.0], egui::Modifiers::SHIFT);
+    let mut selected = app.session.active().unwrap().selected_layers();
+    selected.sort_by_key(|l| l.0);
+    assert_eq!(selected, ids);
 }

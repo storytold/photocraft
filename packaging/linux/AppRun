@@ -53,6 +53,16 @@ integrate() {
       break
     fi
   done
+  # AM / AppMan (#6392) install their own launcher, whose Exec runs a command on
+  # PATH rather than this AppImage, so the check above misses it. AM's author
+  # names the only two places it writes one: system-wide for AM, per user for
+  # AppMan and rootless installs.
+  for f in /usr/local/share/applications/photocraft-AM.desktop "$apps/photocraft-AM.desktop"; do
+    if [ -f "$f" ]; then
+      external=1
+      break
+    fi
+  done
   if [ "$external" = 1 ]; then
     if [ -f "$apps/$DESK_ID.desktop" ]; then
       rm -f "$apps/$DESK_ID.desktop" 2>/dev/null || true

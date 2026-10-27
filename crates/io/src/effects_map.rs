@@ -85,7 +85,7 @@ pub(crate) fn blend_long_value(m: BlendMode) -> Value {
     Value::Enumerated { type_id: Id::new("BlnM"), value: Id::new(n) }
 }
 
-fn blend_value(m: BlendMode) -> Value {
+pub(crate) fn blend_value(m: BlendMode) -> Value {
     let n = BLEND_NAMES.iter().find(|(b, _)| *b == m).map_or("Nrml", |(_, n)| n);
     Value::Enumerated { type_id: Id::new("BlnM"), value: Id::new(n) }
 }
@@ -213,6 +213,7 @@ fn parse_stroke(d: &Descriptor) -> StrokeFx {
             _ => StrokePosition::Outside,
         },
         paint,
+        overprint: bool_of(d, "overprint"),
     }
 }
 
@@ -239,6 +240,7 @@ fn parse_bevel(d: &Descriptor) -> Bevel {
         altitude: f(d, "Lald", 30.0),
         use_global_light: !matches!(d.get("uglg"), Some(Value::Boolean(false))),
         gloss_contour: contour(d, "TrnS"),
+        gloss_anti_alias: bool_of(d, "antialiasGloss"),
         highlight: FxCommon { enabled: true, blend: blend_of(d, "hglM", BlendMode::Screen), opacity: pct(d, "hglO", 0.75) },
         highlight_color: get_desc(d, "hglC").and_then(color_from_desc).unwrap_or(Color::WHITE),
         shadow: FxCommon { enabled: true, blend: blend_of(d, "sdwM", BlendMode::Multiply), opacity: pct(d, "sdwO", 0.75) },
@@ -263,7 +265,9 @@ fn parse_one(key: &str, d: &Descriptor) -> Option<Effect> {
         "IrGl" => Effect::InnerGlow(parse_glow(d, true)),
         "FrFX" => Effect::Stroke(parse_stroke(d)),
         "SoFi" => Effect::ColorOverlay { common: common(d, BlendMode::Normal, 1.0), color: color(d, "Clr ") },
-        "GrFl" => Effect::GradientOverlay { common: common(d, BlendMode::Normal, 1.0), gradient: gradient_from(d), dither: bool_of(d, "Dthr") },
+        "GrFl" => {
+            Effect::GradientOverlay { common: common(d, BlendMode::Normal, 1.0), gradient: gradient_from(d), dither: bool_of(d, "Dthr"), interpolation: None }
+        }
         "patternFill" => {
             let (name, id) = pattern_ref(d);
             let (angle, link, phase) = pattern_placement(d);
@@ -301,7 +305,19 @@ const KINDS: [(&str, &str); 10] = [
 /// Parses `lfx2` block data: `(master switch, effects)`.
 pub fn parse_lfx2(data: &[u8]) -> Option<(bool, Vec<Effect>)> {
     let (vd, _) = VersionedDescriptor::parse_prefix(data.get(4..)?).ok()?;
-    let d = vd.descriptor;
+    Some(effects_from_descriptor(&vd.descriptor))
+}
+
+/// Keys of an effects descriptor (`lfx2`, a style library's `Lefx`) that
+/// [`effects_from_descriptor`] reads, or that carry no effect of their own.
+pub fn is_known_effects_key(key: &[u8]) -> bool {
+    KINDS.iter().any(|(single, multi)| single.as_bytes() == key || (!multi.is_empty() && multi.as_bytes() == key))
+        || matches!(key, b"masterFXSwitch" | b"Scl " | b"numModifyingFX")
+}
+
+/// The effects of an effects descriptor (the body of `lfx2`, a style library's `Lefx`):
+/// `(master switch, effects)`.
+pub fn effects_from_descriptor(d: &Descriptor) -> (bool, Vec<Effect>) {
     let master = !matches!(d.get("masterFXSwitch"), Some(Value::Boolean(false)));
     let mut out = Vec::new();
     for (single, multi) in KINDS {
@@ -317,7 +333,7 @@ pub fn parse_lfx2(data: &[u8]) -> Option<(bool, Vec<Effect>)> {
                 }
             }
             _ => {
-                if let Some(x) = get_desc(&d, single)
+                if let Some(x) = get_desc(d, single)
                     && let Some(e) = parse_one(single, x)
                 {
                     out.push(e);
@@ -325,7 +341,7 @@ pub fn parse_lfx2(data: &[u8]) -> Option<(bool, Vec<Effect>)> {
             }
         }
     }
-    Some((master, out))
+    (master, out)
 }
 
 fn unit(u: &[u8; 4], v: f32) -> Value {
@@ -404,7 +420,8 @@ fn write_one(e: &Effect) -> (&'static str, Descriptor) {
             };
             let mut d = with_common(Descriptor::new("FrFX"), &s.common)
                 .with("Styl", Value::Enumerated { type_id: Id::new("FStl"), value: Id::new(styl) })
-                .with("Sz  ", unit(b"#Pxl", s.size));
+                .with("Sz  ", unit(b"#Pxl", s.size))
+                .with("overprint", Value::Boolean(s.overprint));
             d = match &s.paint {
                 FxPaint::Color(c) => {
                     d.with("PntT", Value::Enumerated { type_id: Id::new("FrFl"), value: Id::new("SClr") }).with("Clr ", Value::Descriptor(color_to_desc(c)))
@@ -425,7 +442,7 @@ fn write_one(e: &Effect) -> (&'static str, Descriptor) {
             ("FrFX", d)
         }
         Effect::ColorOverlay { common: c, color } => ("SoFi", with_common(Descriptor::new("SoFi"), c).with("Clr ", Value::Descriptor(color_to_desc(color)))),
-        Effect::GradientOverlay { common: c, gradient, dither } => {
+        Effect::GradientOverlay { common: c, gradient, dither, .. } => {
             ("GrFl", gradient_keys(with_common(Descriptor::new("GrFl"), c), gradient).with("Dthr", Value::Boolean(*dither)))
         }
         Effect::PatternOverlay { common: c, name, id, scale, angle, link, phase } => (
@@ -482,6 +499,7 @@ fn write_one(e: &Effect) -> (&'static str, Descriptor) {
                 .with("blur", unit(b"#Pxl", b.size))
                 .with("bvlD", Value::Enumerated { type_id: Id::new("BESs"), value: Id::new(if b.up { "In  " } else { "Out " }) })
                 .with("TrnS", contour_value(&b.gloss_contour))
+                .with("antialiasGloss", Value::Boolean(b.gloss_anti_alias))
                 .with("Sftn", unit(b"#Pxl", b.soften));
             let d = match &b.contour {
                 Some(c) => d
@@ -511,6 +529,13 @@ fn write_one(e: &Effect) -> (&'static str, Descriptor) {
 
 /// Serializes effects as `lfx2` block data.
 pub fn write_lfx2(master: bool, items: &[Effect]) -> Vec<u8> {
+    let mut out = 0u32.to_be_bytes().to_vec();
+    out.extend(VersionedDescriptor::new(effects_descriptor(master, items)).to_bytes());
+    out
+}
+
+/// Effects as an effects descriptor (the body of `lfx2`, a style library's `Lefx`).
+pub fn effects_descriptor(master: bool, items: &[Effect]) -> Descriptor {
     let mut d = Descriptor::new("null").with("Scl ", unit(b"#Prc", 100.0)).with("masterFXSwitch", Value::Boolean(master));
     for (single, multi) in KINDS {
         let of_kind: Vec<Descriptor> = items.iter().map(write_one).filter(|(k, _)| *k == single).map(|(_, d)| d).collect();
@@ -522,9 +547,7 @@ pub fn write_lfx2(master: bool, items: &[Effect]) -> Vec<u8> {
             _ => d = d.with(single, Value::Descriptor(of_kind.into_iter().next().unwrap_or_default())),
         }
     }
-    let mut out = 0u32.to_be_bytes().to_vec();
-    out.extend(VersionedDescriptor::new(d).to_bytes());
-    out
+    d
 }
 
 fn fixed(v: u32) -> f32 {
@@ -618,232 +641,4 @@ pub fn parse_lrfx(data: &[u8]) -> Option<(bool, Vec<Effect>)> {
 
 #[cfg(test)]
 #[allow(clippy::unreachable)] // clippy.toml exempts unwrap/expect/panic in tests, not unreachable!
-mod tests {
-    use super::*;
-
-    fn sample_effects() -> Vec<Effect> {
-        let g = Gradient {
-            stops: vec![(0.0, Color::rgb(1.0, 0.0, 0.0)), (1.0, Color::rgb(0.0, 0.0, 1.0))],
-            opacity_stops: vec![(0.0, 1.0), (1.0, 0.5)],
-            ..Gradient::default()
-        };
-        vec![
-            Effect::default_drop_shadow(),
-            Effect::DropShadow(Shadow {
-                distance: 9.0,
-                spread: 0.25,
-                contour: Contour::Custom {
-                    name: "Cone".into(),
-                    points: vec![CurvePoint { input: 0.0, output: 0.0 }, CurvePoint { input: 0.5, output: 1.0 }, CurvePoint { input: 1.0, output: 0.0 }],
-                    corners: vec![false, true, false],
-                },
-                ..match Effect::default_drop_shadow() {
-                    Effect::DropShadow(s) => s,
-                    _ => unreachable!(),
-                }
-            }),
-            Effect::InnerShadow(Shadow {
-                knocks_out: false,
-                ..match Effect::default_drop_shadow() {
-                    Effect::DropShadow(s) => s,
-                    _ => unreachable!(),
-                }
-            }),
-            Effect::OuterGlow(Glow {
-                common: FxCommon::new(BlendMode::Screen, 0.5),
-                paint: FxPaint::Color(Color::rgb(1.0, 1.0, 0.0)),
-                technique: GlowTechnique::Precise,
-                spread: 0.1,
-                size: 8.0,
-                contour: Contour::Linear,
-                anti_alias: true,
-                range: 0.5,
-                jitter: 0.0,
-                noise: 0.0,
-                source: GlowSource::Edge,
-            }),
-            Effect::InnerGlow(Glow {
-                common: FxCommon::new(BlendMode::Screen, 0.75),
-                paint: FxPaint::Gradient(g.clone()),
-                technique: GlowTechnique::Softer,
-                spread: 0.0,
-                size: 5.0,
-                contour: Contour::Linear,
-                anti_alias: false,
-                range: 0.5,
-                jitter: 0.0,
-                noise: 0.0,
-                source: GlowSource::Center,
-            }),
-            Effect::Stroke(StrokeFx {
-                common: FxCommon::new(BlendMode::Normal, 1.0),
-                size: 3.0,
-                position: StrokePosition::Inside,
-                paint: FxPaint::Color(Color::rgb(0.0, 1.0, 0.0)),
-            }),
-            Effect::Stroke(StrokeFx {
-                common: FxCommon::new(BlendMode::Multiply, 0.5),
-                size: 6.0,
-                position: StrokePosition::Center,
-                paint: FxPaint::Gradient(g.clone()),
-            }),
-            Effect::ColorOverlay { common: FxCommon::new(BlendMode::Overlay, 0.5), color: Color::rgb(0.0, 0.0, 1.0) },
-            Effect::GradientOverlay { common: FxCommon::new(BlendMode::Normal, 1.0), gradient: g, dither: true },
-            Effect::PatternOverlay {
-                common: FxCommon::new(BlendMode::Normal, 1.0),
-                name: "Bubbles".into(),
-                id: "abc".into(),
-                scale: 1.0,
-                angle: 15.0,
-                link: false,
-                phase: (4.0, 2.0),
-            },
-            Effect::Satin(Satin {
-                common: FxCommon::new(BlendMode::Multiply, 0.5),
-                color: Color::BLACK,
-                angle: 19.0,
-                distance: 11.0,
-                size: 14.0,
-                contour: Contour::Linear,
-                anti_alias: true,
-                invert: true,
-            }),
-            Effect::BevelEmboss(Bevel {
-                enabled: true,
-                style: BevelStyle::Emboss,
-                technique: BevelTechnique::ChiselSoft,
-                depth: 1.5,
-                up: false,
-                size: 7.0,
-                soften: 2.0,
-                angle: 45.0,
-                altitude: 40.0,
-                use_global_light: false,
-                gloss_contour: Contour::Linear,
-                highlight: FxCommon::new(BlendMode::Screen, 0.75),
-                highlight_color: Color::WHITE,
-                shadow: FxCommon::new(BlendMode::Multiply, 0.6),
-                shadow_color: Color::BLACK,
-                contour: Some(BevelContour { contour: Contour::Linear, range: 0.7, anti_alias: true }),
-                texture: Some(BevelTexture { name: "Bubbles".into(), id: "abc".into(), scale: 0.5, depth: -2.0, invert: true, link: false, phase: (3.0, 1.0) }),
-            }),
-        ]
-    }
-
-    fn approx(a: &[Effect], b: &[Effect]) {
-        // Colours go through 0..255 doubles; compare via re-serialization.
-        assert_eq!(a.len(), b.len());
-        assert_eq!(write_lfx2(true, a), write_lfx2(true, b));
-    }
-
-    #[test]
-    fn lfx2_roundtrip_all_kinds() {
-        let fx = sample_effects();
-        let data = write_lfx2(false, &fx);
-        let (master, back) = parse_lfx2(&data).unwrap();
-        assert!(!master);
-        approx(&fx, &back);
-        // Kind order is canonical: shadows first ... strokes last.
-        assert!(matches!(back[0], Effect::DropShadow(_)));
-        assert!(matches!(back.last().unwrap(), Effect::Stroke(_)));
-    }
-
-    #[test]
-    fn lfx2_ignores_absent_effects_but_keeps_disabled_configured_effects() {
-        let d = Descriptor::new("null")
-            .with("DrSh", Value::Descriptor(Descriptor::new("DrSh").with("present", Value::Boolean(false)).with("enab", Value::Boolean(false))))
-            .with("FrFX", Value::Descriptor(Descriptor::new("FrFX").with("present", Value::Boolean(true)).with("enab", Value::Boolean(false))))
-            .with("SoFi", Value::Descriptor(Descriptor::new("SoFi").with("enab", Value::Boolean(false))));
-        let mut data = 0u32.to_be_bytes().to_vec();
-        data.extend(VersionedDescriptor::new(d).to_bytes());
-
-        let (_, effects) = parse_lfx2(&data).unwrap();
-
-        assert_eq!(effects.len(), 2);
-        assert!(effects.iter().all(|effect| !effect.enabled()));
-        assert!(effects.iter().any(|effect| effect.label() == "Stroke"));
-        assert!(effects.iter().any(|effect| effect.label() == "Color Overlay"));
-    }
-
-    #[test]
-    fn multi_instances_use_multi_keys() {
-        let fx = sample_effects();
-        let data = write_lfx2(true, &fx);
-        let (vd, _) = VersionedDescriptor::parse_prefix(&data[4..]).unwrap();
-        assert!(vd.descriptor.get("dropShadowMulti").is_some());
-        assert!(vd.descriptor.get("frameFXMulti").is_some());
-        assert!(vd.descriptor.get("SoFi").is_some());
-    }
-
-    #[test]
-    fn blend_names_are_unique() {
-        let mut s = std::collections::HashSet::new();
-        for (_, n) in BLEND_NAMES {
-            assert!(s.insert(n));
-        }
-    }
-
-    #[test]
-    fn long_string_blend_ids_parse() {
-        // Some writers store effect modes as long string IDs (`BlnM` `multiply`, `colorDodge`)
-        // instead of the four-character codes (psd-tools effects/blend-modes.psd).
-        let long = |v: &str| Value::Enumerated { type_id: Id::new("BlnM"), value: Id::new(v) };
-        let d = Descriptor::new("null")
-            .with("masterFXSwitch", Value::Boolean(true))
-            .with("DrSh", Value::Descriptor(Descriptor::new("DrSh").with("enab", Value::Boolean(true)).with("Md  ", long("linearBurn"))))
-            .with("ebbl", Value::Descriptor(Descriptor::new("ebbl").with("hglM", long("colorDodge")).with("sdwM", long("colorBurn"))))
-            .with("SoFi", Value::Descriptor(Descriptor::new("SoFi").with("Md  ", long("hue"))));
-        let mut data = 0u32.to_be_bytes().to_vec();
-        data.extend(VersionedDescriptor { version: 16, descriptor: d }.to_bytes());
-        let (_, fx) = parse_lfx2(&data).unwrap();
-        let modes: Vec<BlendMode> = fx
-            .iter()
-            .flat_map(|e| match e {
-                Effect::DropShadow(s) => vec![s.common.blend],
-                Effect::BevelEmboss(b) => vec![b.highlight.blend, b.shadow.blend],
-                Effect::ColorOverlay { common, .. } => vec![common.blend],
-                _ => vec![],
-            })
-            .collect();
-        assert_eq!(modes, vec![BlendMode::LinearBurn, BlendMode::ColorDodge, BlendMode::ColorBurn, BlendMode::Hue]);
-        for (m, n) in BLEND_LONG_NAMES {
-            assert_eq!(blend_from_id(n.as_bytes()), Some(m));
-        }
-    }
-
-    #[test]
-    fn garbage_is_none() {
-        assert!(parse_lfx2(&[0, 0]).is_none());
-        assert!(parse_lrfx(&[0, 0, 0, 1, b'X']).is_none());
-    }
-
-    #[test]
-    fn lrfx_drop_shadow() {
-        // version 0, count 1, 'dsdw' v2 record.
-        let mut d = vec![0, 0, 0, 1];
-        d.extend_from_slice(b"8BIMdsdw");
-        let mut rec = Vec::new();
-        rec.extend_from_slice(&2u32.to_be_bytes()); // version
-        rec.extend_from_slice(&(7u32 << 16).to_be_bytes()); // blur (16.16)
-        rec.extend_from_slice(&0u32.to_be_bytes()); // intensity
-        rec.extend_from_slice(&(90u32 << 16).to_be_bytes()); // angle
-        rec.extend_from_slice(&(4u32 << 16).to_be_bytes()); // distance
-        rec.extend_from_slice(&[0, 0, 0xff, 0xff, 0, 0, 0, 0, 0, 0]); // color: red
-        rec.extend_from_slice(b"8BIMmul ");
-        rec.extend_from_slice(&[1, 1, 128]);
-        rec.extend_from_slice(&[0; 10]);
-        d.extend_from_slice(&(rec.len() as u32).to_be_bytes());
-        d.extend(rec);
-        let (_, fx) = parse_lrfx(&d).unwrap();
-        match &fx[0] {
-            Effect::DropShadow(s) => {
-                assert_eq!(s.size, 7.0);
-                assert_eq!(s.distance, 4.0);
-                assert_eq!(s.common.blend, BlendMode::Multiply);
-                assert!((s.common.opacity - 128.0 / 255.0).abs() < 1e-6);
-                assert_eq!(s.color.c[0], 1.0);
-            }
-            other => panic!("{other:?}"),
-        }
-    }
-}
+mod tests;

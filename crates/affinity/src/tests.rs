@@ -1,4 +1,4 @@
-//! Unit tests on synthetic inputs; `tests/real_files.rs` covers public Affinity documents.
+//! Unit tests on synthetic inputs; `tests/it/real_files.rs` covers public Affinity documents.
 
 mod preview {
     use crate::container::header;
@@ -259,6 +259,20 @@ mod archive {
     }
 
     #[test]
+    fn a_failed_read_still_spends_the_extraction_allowance() {
+        let d = doc();
+        let file = synth::container(&[("doc.dat", &d, Method::Zstd)], None);
+        let mut broken = file.clone();
+        broken[90] ^= 0x55;
+        // Room for exactly one read: the failed attempt must use it up, so a caller that
+        // recovers from the checksum error cannot make the same entry decode again.
+        let mut a = Archive::open(&broken, Limits { max_entry: usize::MAX, max_total: d.len(), ..Limits::default() }).unwrap();
+        assert!(a.read("doc.dat").is_err());
+        assert_eq!(a.extracted(), d.len());
+        assert!(matches!(a.read("doc.dat"), Err(Error::Limit(_))));
+    }
+
+    #[test]
     fn a_declared_size_smaller_than_the_data_is_rejected_not_truncated() {
         let big = vec![7u8; 1 << 20];
         let mut file = synth::container(&[("doc.dat", &big, Method::Zlib)], None);
@@ -300,6 +314,17 @@ mod archive {
         for end in 0..d.len() {
             assert!(stream::parse(&d[..end]).is_err(), "{end}");
         }
+    }
+
+    #[test]
+    fn fixed_records_of_zero_width_are_rejected_before_any_value_is_made() {
+        // Four million records of no bytes each pass a length check that multiplies by the width.
+        let mut f = vec![0x80 | 0x2c];
+        f.extend(tag(b"Big_").0.to_le_bytes());
+        f.extend(4_000_000u32.to_le_bytes());
+        f.extend(0u16.to_le_bytes());
+        let d = synth::stream(&[(tag(b"Big_"), F::Raw(f))]);
+        assert_eq!(stream::parse(&d).unwrap_err(), Error::Malformed("array longer than its data"));
     }
 
     #[test]
@@ -396,6 +421,29 @@ mod shapes {
             Kind::Shape { path, .. } => path,
             other => panic!("expected shape, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn artistic_text_reads_its_characters_runs_and_anchor() {
+        let glyphs = F::Obj(tag(b"Glyp"), vec![(tag(b"Utf8"), F::Str("Hi".into()))]);
+        let run = F::Obj(tag(b"Item"), vec![]);
+        let attributes = F::Obj(tag(b"GAtt"), vec![(tag(b"Runs"), F::Objs(tag(b"Runs"), vec![vec![(tag(b"Indx"), F::I32(2)), (tag(b"Item"), run)]]))]);
+        let block = vec![(tag(b"Glyp"), glyphs), (tag(b"GAtt"), attributes)];
+        let text = F::Def(
+            100,
+            vec![tag(b"TxtA")],
+            vec![
+                (tag(b"TxtH"), F::Obj(tag(b"ArFr"), vec![(tag(b"FrmB"), F::F64s(vec![0.0, 0.0, 100.0, 50.0]))])),
+                (tag(b"StSt"), F::Obj(tag(b"StSt"), vec![(tag(b"Blok"), F::Objs(tag(b"Blok"), vec![block]))])),
+            ],
+        );
+        let document = read(vec![text], 100);
+        let Kind::Text(t) = &document.spreads[0].nodes[0].kind else { panic!("expected text") };
+        assert_eq!(t.runs.len(), 1);
+        assert_eq!(t.runs[0].text, "Hi");
+        assert_eq!(t.align, crate::model::Align::Left);
+        assert_eq!(t.anchor, Point { x: 0.0, y: 0.0 });
+        assert!(t.frame.is_none());
     }
 
     #[test]
@@ -536,5 +584,176 @@ mod pixels {
             matches!(crate::model::read(&document(&[(2048, 2048)]), limits), Err(Error::Limit(_))),
             "16 MiB of declared pixels materialized under a 1 MiB budget"
         );
+    }
+}
+
+/// Spot colours that link to themselves or to each other. Each document is read on a 1 MiB
+/// stack, the smallest main-thread stack PhotoCraft runs on (Windows), first in a child process
+/// that must finish within 20 s. A stack overflow aborts the process it happens in, so unbounded
+/// recursion fails the one test that caused it instead of taking the other tests in the binary
+/// down with it.
+mod spot_colours {
+    use std::io::{Read, Write};
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    use crate::container::Limits;
+    use crate::model::{Document, Kind};
+    use crate::paint::{Color, Paint};
+    use crate::stream::Tag;
+    use crate::synth::{self, F, Method, tag};
+
+    /// A one-page document whose page holds `top`, read in a child process first and then here.
+    fn read(top: Vec<F>) -> Document {
+        let spread = F::Def(2, vec![tag(b"Sprd")], vec![(tag(b"SprB"), F::F64s(vec![0.0, 0.0, 400.0, 300.0])), (tag(b"Chld"), F::Shared(top))]);
+        let data = synth::stream(&[(tag(b"DocR"), F::Def(1, vec![tag(b"DocN")], vec![(tag(b"Chld"), F::Shared(vec![spread]))]))]);
+        let bytes = synth::container(&[("doc.dat", &data, Method::Zlib)], None);
+        let test = std::thread::current().name().unwrap_or("reader").to_owned();
+        read_in_child(&bytes, &test);
+        read_on_small_stack(bytes, &test).unwrap()
+    }
+
+    /// Reads on a 1 MiB thread named after the test, so a stack overflow message names the test.
+    fn read_on_small_stack(bytes: Vec<u8>, test: &str) -> Result<Document, crate::Error> {
+        let reader = std::thread::Builder::new().name(test.to_owned()).stack_size(1 << 20).spawn(move || crate::read(&bytes, Limits::default())).unwrap();
+        reader.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+    }
+
+    /// Set in the child process to the name of the test it reads for.
+    const CHILD: &str = "PHOTOCRAFT_AFFINITY_READ_CHILD";
+
+    /// Runs `read_child` in a new process of this test binary on `bytes` and fails the test if
+    /// that process crashes, panics or takes over 20 s, or never read the document.
+    fn read_in_child(bytes: &[u8], test: &str) {
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args(["tests::spot_colours::read_child", "--exact", "--ignored", "--nocapture", "--test-threads=1"])
+            .env(CHILD, test)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let drain = |mut pipe: Box<dyn Read + Send>| {
+            std::thread::spawn(move || {
+                let mut text = String::new();
+                let _ = pipe.read_to_string(&mut text);
+                text
+            })
+        };
+        let stdout = drain(Box::new(child.stdout.take().unwrap()));
+        let stderr = drain(Box::new(child.stderr.take().unwrap()));
+        // Fed from a thread, so a child that never reads cannot block the deadline below; a child
+        // that dies first breaks the pipe and is reported by its exit status.
+        let (mut stdin, input) = (child.stdin.take().unwrap(), bytes.to_vec());
+        let feed = std::thread::spawn(move || {
+            let _ = stdin.write_all(&input);
+        });
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break Some(status);
+            }
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        feed.join().unwrap();
+        let output = format!("{}{}", stdout.join().unwrap(), stderr.join().unwrap());
+        match status {
+            None => panic!("reading the document did not finish within 20 s:\n{output}"),
+            Some(status) if !status.success() => panic!("reading the document failed in a child process ({status}):\n{output}"),
+            // A filter that matched no test would also exit successfully, having read nothing.
+            Some(_) => assert!(output.contains(&format!("read {} bytes", bytes.len())), "the child process did not read the document:\n{output}"),
+        }
+    }
+
+    /// Not a test of its own: `read_in_child` runs it in a child process to read the document on
+    /// its stdin. Without the variable, as when run with `--ignored`, it does nothing.
+    #[test]
+    #[ignore = "run by read_in_child in a child process"]
+    fn read_child() {
+        let Some(test) = std::env::var_os(CHILD) else { return };
+        let mut bytes = Vec::new();
+        std::io::stdin().read_to_end(&mut bytes).unwrap();
+        let len = bytes.len();
+        let _ = read_on_small_stack(bytes, &test.to_string_lossy());
+        println!("read {len} bytes");
+    }
+
+    /// An ellipse filled with `colour`.
+    fn filled(id: u32, colour: F) -> F {
+        F::Def(
+            id,
+            vec![tag(b"ShpN")],
+            vec![
+                (tag(b"ShpB"), F::F64s(vec![0.0, 0.0, 1.0, 1.0])),
+                (tag(b"Shpe"), F::Def(id + 1_000_000, vec![tag(b"ShpE")], vec![])),
+                (tag(b"BFFl"), F::Shared(vec![F::Def(id + 2_000_000, vec![tag(b"FilS")], vec![(tag(b"Colr"), colour)])])),
+            ],
+        )
+    }
+
+    fn spot(id: u32, fields: Vec<(Tag, F)>) -> F {
+        F::Def(id, vec![tag(b"Pant")], fields)
+    }
+
+    fn fills(doc: &Document) -> &[Paint] {
+        match &doc.spreads[0].nodes[0].kind {
+            Kind::Shape { fills, .. } => fills,
+            other => panic!("expected a shape, got {other:?}"),
+        }
+    }
+
+    fn warned(doc: &Document, what: &str) -> bool {
+        doc.warnings.iter().any(|w| w.contains(what))
+    }
+
+    #[test]
+    fn a_spot_colour_that_is_its_own_rgb_equivalent_is_refused() {
+        let doc = read(vec![filled(10, spot(20, vec![(tag(b"srgb"), F::Ref(20))]))]);
+        assert!(fills(&doc).is_empty(), "{:?}", fills(&doc));
+        assert!(warned(&doc, "spot colours nested deeper than 4 levels"), "{:?}", doc.warnings);
+    }
+
+    #[test]
+    fn spot_colours_that_are_each_others_base_and_rgb_equivalent_are_refused() {
+        let doc = read(vec![filled(10, spot(20, vec![(tag(b"base"), spot(21, vec![(tag(b"srgb"), F::Ref(20))]))]))]);
+        assert!(fills(&doc).is_empty(), "{:?}", fills(&doc));
+        assert!(warned(&doc, "spot colours nested deeper than 4 levels"), "{:?}", doc.warnings);
+    }
+
+    #[test]
+    fn spot_colours_of_spot_colours_do_not_take_exponential_time() {
+        // Each level's RGB equivalent and base are the next level, and the last is in an unknown
+        // model, so both are followed everywhere: 2^41 colour reads before the fix.
+        fn level(id: u32, left: u32) -> F {
+            if left == 0 {
+                return F::Def(id, vec![tag(b"XXXX")], vec![]);
+            }
+            spot(id, vec![(tag(b"srgb"), level(id + 1, left - 1)), (tag(b"base"), F::Ref(id + 1))])
+        }
+        let doc = read(vec![filled(10, level(100, 40))]);
+        assert!(fills(&doc).is_empty(), "{:?}", fills(&doc));
+    }
+
+    /// `spots` spot colours, each defined through the next, around an opaque RGB colour.
+    fn spots(id: u32, spots: u32) -> F {
+        if spots == 0 {
+            let rgba: Vec<u8> = [1.0f32, 0.5, 0.25, 1.0].iter().flat_map(|c| c.to_le_bytes()).collect();
+            return F::Def(id, vec![tag(b"RGBA")], vec![(tag(b"_col"), F::Struct(rgba))]);
+        }
+        spot(id, vec![(tag(b"srgb"), self::spots(id + 1, spots - 1))])
+    }
+
+    #[test]
+    fn spot_colours_nest_four_levels_and_no_deeper() {
+        let doc = read(vec![filled(10, spots(100, 4))]);
+        assert_eq!(fills(&doc), [Paint::Solid(Color::Rgb { r: 1.0, g: 0.5, b: 0.25, a: 1.0 })]);
+        let doc = read(vec![filled(10, spots(100, 5))]);
+        assert!(fills(&doc).is_empty(), "{:?}", fills(&doc));
+        assert!(warned(&doc, "spot colours nested deeper than 4 levels"), "{:?}", doc.warnings);
     }
 }

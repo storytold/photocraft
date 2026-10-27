@@ -61,8 +61,15 @@ pub enum Dither {
     Noise,
 }
 
+/// `(v.clamp(0, 1) * 255).round() as u8`, without the libm `roundf` call per channel (that call
+/// was about a tenth of the palette scan on a large image). `x` is in 0..=255, so truncating
+/// with an integer cast and adding one when the exact remainder is at least a half is
+/// round-half-away-from-zero, the same as `f32::round`; NaN gives 0 in both. The
+/// `to8_matches_round_for_every_float` test checks every input.
 fn to8(v: f32) -> u8 {
-    (v.clamp(0.0, 1.0) * 255.0).round() as u8
+    let x = v.clamp(0.0, 1.0) * 255.0;
+    let t = x as u32;
+    (t + u32::from(x - t as f32 >= 0.5)) as u8
 }
 
 fn rgb8(p: &[f32; 4]) -> Rgb8 {
@@ -166,15 +173,116 @@ fn forced_colors(f: Forced) -> Vec<Rgb8> {
     }
 }
 
-/// Unique 8-bit colours with counts (opaque pixels only).
+/// Unique 8-bit colours with counts (opaque pixels only), sorted by colour.
 fn histogram(px: &[[f32; 4]]) -> Vec<(Rgb8, u32)> {
-    let mut m: std::collections::HashMap<Rgb8, u32> = std::collections::HashMap::new();
-    for p in px.iter().filter(|p| p[3] >= 0.5) {
-        *m.entry(rgb8(p)).or_default() += 1;
+    // Pack each opaque pixel into one u32 (r, g, b from the top, so the numeric order is the
+    // `[u8; 3]` order), sort the plain integers and count the runs. This replaces a SipHash
+    // `HashMap` insert per pixel: counts are integers, so any order of work gives the same
+    // result, and equal colours sit next to each other after the sort. One 4-byte value per
+    // pixel is the only large allocation (no per-thread tables).
+    let pack = |p: &[f32; 4]| {
+        let [r, g, b] = rgb8(p);
+        u32::from(r) << 16 | u32::from(g) << 8 | u32::from(b)
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    let keys = {
+        use rayon::prelude::*;
+        let mut keys: Vec<u32> = px.par_iter().filter(|p| p[3] >= 0.5).map(pack).collect();
+        keys.par_sort_unstable();
+        keys
+    };
+    #[cfg(target_arch = "wasm32")]
+    let keys = {
+        let mut keys: Vec<u32> = px.iter().filter(|p| p[3] >= 0.5).map(pack).collect();
+        keys.sort_unstable();
+        keys
+    };
+    let mut out: Vec<(Rgb8, u32)> = Vec::new();
+    for k in keys {
+        let c = [(k >> 16) as u8, (k >> 8) as u8, k as u8];
+        match out.last_mut() {
+            Some((last, n)) if *last == c => *n = n.saturating_add(1),
+            _ => out.push((c, 1)),
+        }
     }
-    let mut v: Vec<(Rgb8, u32)> = m.into_iter().collect();
-    v.sort_unstable();
-    v
+    out
+}
+
+/// Widest axis of `b` and its split score (weighted extent), or `None` for a box that cannot
+/// be split. Every score is bit for bit what the old per-iteration scan gave.
+fn split_score(b: &[([f32; 3], u32)]) -> Option<(usize, f32)> {
+    if b.len() <= 1 {
+        return None;
+    }
+    // One pass per axis, then the weight sum: the same folds the old per-iteration scan ran
+    // (measured faster than a single fused pass, which the compiler does not vectorise).
+    let mut best = (0usize, -1.0f32);
+    for a in 0..3 {
+        let (lo, hi) = b.iter().fold((f32::MAX, f32::MIN), |(lo, hi), p| (lo.min(p.0[a]), hi.max(p.0[a])));
+        if hi - lo > best.1 {
+            best = (a, hi - lo);
+        }
+    }
+    let w: f32 = b.iter().map(|p| p.1 as f32).sum();
+    Some((best.0, best.1 * w.sqrt()))
+}
+
+/// Maps an f32 to a u32 whose unsigned order is exactly `f32::total_cmp` order.
+fn total_order_key(v: f32) -> u32 {
+    let bits = v.to_bits();
+    // Negative: flip every bit (reverses their order, puts them below). Positive: set the sign bit.
+    bits ^ ((((bits as i32) >> 31) as u32) | 0x8000_0000)
+}
+
+/// Stable LSD radix sort of `b` along `axis`, in the order of `f32::total_cmp`. Stable like
+/// `sort_by`, so ties keep their original order and the result is element for element the same;
+/// it is several times faster than a comparison sort on millions of points.
+fn radix_sort_along(b: &mut Vec<([f32; 3], u32)>, axis: usize) {
+    let n = b.len();
+    let Some(&fill) = b.first() else { return };
+    if n < 2 {
+        return;
+    }
+    // Three digits of 11, 11 and 10 bits; count all of them in one read.
+    let mut counts = [[0u32; 2048]; 3];
+    for e in b.iter() {
+        let k = total_order_key(e.0[axis]);
+        counts[0][(k & 0x7ff) as usize] += 1;
+        counts[1][((k >> 11) & 0x7ff) as usize] += 1;
+        counts[2][(k >> 22) as usize] += 1;
+    }
+    let mut src = std::mem::take(b);
+    let mut dst = vec![fill; n];
+    for (pass, count) in counts.iter_mut().enumerate() {
+        // A digit that is the same for every point would not move anything.
+        if count.iter().any(|&c| c as usize == n) {
+            continue;
+        }
+        let mut sum = 0u32;
+        for c in count.iter_mut() {
+            let here = *c;
+            *c = sum;
+            sum += here;
+        }
+        let shift = 11 * pass as u32;
+        for e in &src {
+            let d = ((total_order_key(e.0[axis]) >> shift) & 0x7ff) as usize;
+            dst[count[d] as usize] = *e;
+            count[d] += 1;
+        }
+        std::mem::swap(&mut src, &mut dst);
+    }
+    *b = src;
+}
+
+/// Stable sort of `b` along `axis`. Boxes this small are quicker with `sort_by` than with the
+/// radix sort's fixed counting cost.
+fn sort_along(b: &mut Vec<([f32; 3], u32)>, axis: usize) {
+    if b.len() >= 256 {
+        radix_sort_along(b, axis);
+    } else {
+        b.sort_by(|p, q| p.0[axis].total_cmp(&q.0[axis]));
+    }
 }
 
 /// Median cut over `pts` (feature vectors + weights) into at most `n` boxes; returns box means.
@@ -183,29 +291,23 @@ fn median_cut(pts: &[([f32; 3], u32)], n: usize) -> Vec<[f32; 3]> {
         return Vec::new();
     }
     let mut boxes: Vec<Vec<([f32; 3], u32)>> = vec![pts.to_vec()];
+    // Each box's (axis, score), kept in lockstep with `boxes` (same swap_remove and pushes).
+    // Only the two boxes made by a split change, so only those are scanned again; rescanning
+    // every box on every iteration was most of the time here.
+    let mut scores: Vec<Option<(usize, f32)>> = vec![split_score(pts)];
     while boxes.len() < n {
-        // Split the box with the largest weighted extent.
-        let (bi, axis, score) = boxes
+        // Split the box with the largest weighted extent (first one wins a tie, as before).
+        let (bi, axis, score) = scores
             .iter()
             .enumerate()
-            .filter(|(_, b)| b.len() > 1)
-            .map(|(i, b)| {
-                let mut best = (0usize, -1.0f32);
-                for a in 0..3 {
-                    let (lo, hi) = b.iter().fold((f32::MAX, f32::MIN), |(lo, hi), p| (lo.min(p.0[a]), hi.max(p.0[a])));
-                    if hi - lo > best.1 {
-                        best = (a, hi - lo);
-                    }
-                }
-                let w: f32 = b.iter().map(|p| p.1 as f32).sum();
-                (i, best.0, best.1 * w.sqrt())
-            })
+            .filter_map(|(i, s)| s.map(|(axis, score)| (i, axis, score)))
             .fold((usize::MAX, 0, -1.0f32), |acc, x| if x.2 > acc.2 { x } else { acc });
         if bi == usize::MAX || score <= 0.0 {
             break;
         }
         let mut b = boxes.swap_remove(bi);
-        b.sort_by(|p, q| p.0[axis].total_cmp(&q.0[axis]));
+        scores.swap_remove(bi);
+        sort_along(&mut b, axis);
         let total: u64 = b.iter().map(|p| u64::from(p.1)).sum();
         let mut acc = 0u64;
         let mut cut = 1;
@@ -217,6 +319,8 @@ fn median_cut(pts: &[([f32; 3], u32)], n: usize) -> Vec<[f32; 3]> {
             }
         }
         let rest = b.split_off(cut);
+        scores.push(split_score(&b));
+        scores.push(split_score(&rest));
         boxes.push(b);
         boxes.push(rest);
     }
@@ -239,8 +343,18 @@ fn kmeans(pts: &[([f32; 3], u32)], centers: &mut [[f32; 3]], iters: usize) {
         let lookup = Nearest::new(centers.iter().copied());
         let mut sum = vec![[0.0f64; 3]; centers.len()];
         let mut cnt = vec![0.0f64; centers.len()];
-        for (p, w) in pts {
-            let i = lookup.find(*p);
+        // The nearest-centre search is the expensive part and has no cross-point state, so it
+        // runs in parallel. The f64 sums below stay sequential in the original point order:
+        // float addition is not associative, and this keeps every bit of the result unchanged.
+        #[cfg(not(target_arch = "wasm32"))]
+        let nearest: Vec<u32> = {
+            use rayon::prelude::*;
+            pts.par_iter().map(|(p, _)| lookup.find(*p) as u32).collect()
+        };
+        #[cfg(target_arch = "wasm32")]
+        let nearest: Vec<u32> = pts.iter().map(|(p, _)| lookup.find(*p) as u32).collect();
+        for ((p, w), &i) in pts.iter().zip(&nearest) {
+            let i = i as usize;
             for a in 0..3 {
                 sum[i][a] += f64::from(p[a]) * f64::from(*w);
             }
@@ -256,6 +370,20 @@ fn kmeans(pts: &[([f32; 3], u32)], centers: &mut [[f32; 3]], iters: usize) {
 
 fn lab_to_rgb8(lab: [f32; 3]) -> Rgb8 {
     photocraft_color::convert::lab_to_srgb(lab).map(to8)
+}
+
+/// Histogram colours as CIE Lab points with their counts. Each point depends only on its own
+/// colour and `collect` keeps the order, so the parallel map gives the same list; the log/pow
+/// in `srgb_to_lab` made this a visible serial cost with millions of unique colours.
+fn lab_points(hist: &[(Rgb8, u32)]) -> Vec<([f32; 3], u32)> {
+    let lab = |(c, n): &(Rgb8, u32)| (srgb_to_lab(c.map(|v| f32::from(v) / 255.0)), *n);
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use rayon::prelude::*;
+        hist.par_iter().map(lab).collect()
+    }
+    #[cfg(target_arch = "wasm32")]
+    hist.iter().map(lab).collect()
 }
 
 /// Builds the palette for `px`. `colors` is the requested count (2..=256) for the computed
@@ -296,7 +424,7 @@ pub fn build_palette(px: &[[f32; 4]], kind: PaletteKind, colors: usize, forced: 
             if hist.len() <= room {
                 hist.iter().map(|h| h.0).collect()
             } else {
-                let pts: Vec<([f32; 3], u32)> = hist.iter().map(|(c, n)| (srgb_to_lab(c.map(|v| f32::from(v) / 255.0)), *n)).collect();
+                let pts = lab_points(&hist);
                 let mut centers = median_cut(&pts, room);
                 kmeans(&pts, &mut centers, 4);
                 let mut v: Vec<Rgb8> = centers.iter().map(|c| lab_to_rgb8(*c)).collect();
@@ -562,164 +690,45 @@ pub fn to_bitmap(gray: &mut [f32], w: usize, method: BitmapMethod) {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn gradient(w: usize, h: usize) -> Vec<[f32; 4]> {
-        (0..w * h).map(|i| [(i % w) as f32 / (w - 1) as f32, (i / w) as f32 / (h - 1) as f32, 0.3, 1.0]).collect()
-    }
-
-    #[test]
-    fn fixed_palettes_have_expected_sizes() {
-        assert_eq!(web_palette().len(), 216);
-        assert_eq!(mac_palette().len(), 256);
-        assert_eq!(windows_palette().len(), 256);
-        assert_eq!(uniform_palette(27).len(), 27);
-        let mut m = mac_palette();
-        m.sort_unstable();
-        m.dedup();
-        assert_eq!(m.len(), 256, "mac palette entries are unique");
-    }
-
-    #[test]
-    fn exact_palette_and_failure() {
-        let px = vec![[1.0, 0.0, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0], [1.0, 0.0, 0.0, 1.0]];
-        assert_eq!(build_palette(&px, PaletteKind::Exact, 256, Forced::None).unwrap().len(), 2);
-        assert!(build_palette(&gradient(64, 64), PaletteKind::Exact, 256, Forced::None).is_err());
-    }
-
-    #[test]
-    fn adaptive_and_perceptual_respect_count_and_forced() {
-        let px = gradient(40, 40);
-        for kind in [PaletteKind::Adaptive, PaletteKind::Perceptual, PaletteKind::Selective] {
-            let pal = build_palette(&px, kind, 16, Forced::BlackWhite).unwrap();
-            assert!(pal.len() <= 16 && pal.len() >= 8, "{kind:?} {}", pal.len());
-            assert_eq!(&pal[..2], &[[0, 0, 0], [255, 255, 255]]);
-        }
-    }
-
-    #[test]
-    fn forced_colours_filling_the_count_do_not_panic() {
-        // 2 colours + Black and White (or 8 + Primaries) leaves no room for
-        // computed entries; the median cut used to return no centres and
-        // k-means indexed into the empty list.
-        let px = vec![[1.0, 1.0, 1.0, 1.0]; 16];
-        for kind in [PaletteKind::Adaptive, PaletteKind::Perceptual, PaletteKind::Selective] {
-            let pal = build_palette(&px, kind, 2, Forced::BlackWhite).unwrap();
-            assert_eq!(pal, vec![[0, 0, 0], [255, 255, 255]], "{kind:?}");
-            let pal = build_palette(&gradient(8, 8), kind, 8, Forced::Primaries).unwrap();
-            assert_eq!(pal.len(), 8, "{kind:?}");
-        }
-    }
-
-    #[test]
-    #[ignore = "24 MP release timing comparison; run with --release --ignored --nocapture"]
-    fn indexed_diffusion_24mp_release_comparison() {
-        let source = gradient(6000, 4000);
-        let pal = web_palette();
-        for run in 0..4 {
-            let mut linear = source.clone();
-            let mut accelerated = source.clone();
-            let mut before = None;
-            let mut after = None;
-            // Reverse the order on alternating rounds; exclude the first round as warmup.
-            for old in if run % 2 == 0 { [true, false] } else { [false, true] } {
-                let start = std::time::Instant::now();
-                if old {
-                    let indices = quantize_with(&mut linear, 6000, &pal, Dither::Diffusion, 0.75, None, |c| linear_rgb_nearest(&pal, c));
-                    before = Some((start.elapsed().as_secs_f64() * 1000.0, indices));
-                } else {
-                    let indices = quantize(&mut accelerated, 6000, &pal, Dither::Diffusion, 0.75, None);
-                    after = Some((start.elapsed().as_secs_f64() * 1000.0, indices));
-                }
-            }
-            let (before_ms, before_indices) = before.unwrap();
-            let (after_ms, after_indices) = after.unwrap();
-            assert_eq!(before_indices.iter().zip(&after_indices).position(|(a, b)| a != b), None, "first differing index");
-            assert_eq!(linear.iter().zip(&accelerated).position(|(a, b)| a != b), None, "first differing pixel");
-            println!(
-                "{}",
-                serde_json::json!({"run":run,"warmup":run==0,"pixels":24_000_000,"palette_entries":216,"linear_ms":before_ms,"accelerated_ms":after_ms})
-            );
-        }
-    }
-
-    fn linear_rgb_nearest(pal: &[Rgb8], c: [f32; 3]) -> usize {
-        let mut best = (f32::MAX, 0);
-        for (i, e) in pal.iter().enumerate() {
-            let d: f32 = (0..3).map(|k| (c[k] * 255.0 - f32::from(e[k])).powi(2)).sum();
-            if d < best.0 {
-                best = (d, i);
+/// The threshold map of Bitmap's Custom Pattern from a pattern's lightness (0..=1, row-major):
+/// pattern pixels ranked by lightness, ties sharing their average rank, the lightest pixel
+/// thresholding lowest (it turns white first). A map of `n` pixels thus spreads `n` evenly
+/// spaced levels `(k + 0.5) / n`, whatever the pattern's own contrast, as Photoshop's does
+/// (measured: a 2x2 pattern of 32/96/160/224, a 3x1 of 50/128/200 and a 7x1 ramp all give
+/// exactly those levels).
+pub fn custom_pattern_thresholds(lightness: &[f32]) -> Vec<f32> {
+    let n = lightness.len();
+    let key = |i: usize| lightness.get(i).copied().filter(|v| v.is_finite()).unwrap_or(0.0);
+    let mut order: Vec<usize> = (0..n).collect();
+    order.sort_by(|a, b| key(*a).total_cmp(&key(*b)));
+    let mut out = vec![0.5; n];
+    let mut start = 0;
+    while start < n {
+        let v = order.get(start).map(|i| key(*i));
+        let end = (start..n).find(|&j| order.get(j).map(|i| key(*i)) != v).unwrap_or(n);
+        // Ranks start..end share their mean.
+        let rank = (start + end - 1) as f32 / 2.0;
+        let t = 1.0 - (rank + 0.5) / n as f32;
+        for i in order.get(start..end).unwrap_or_default() {
+            if let Some(o) = out.get_mut(*i) {
+                *o = t;
             }
         }
-        best.1
+        start = end;
     }
+    out
+}
 
-    #[test]
-    fn all_dithers_match_the_original_linear_palette_search_exactly() {
-        let mut source = gradient(93, 61);
-        for (i, p) in source.iter_mut().enumerate() {
-            p[2] = (i % 71) as f32 / 70.0;
-            p[3] = [0.0, 0.2, 0.7, 1.0][i % 4];
-        }
-        for count in [8, 16, 32, 64, 128, 256] {
-            let pal = build_palette(&source, PaletteKind::Selective, count, Forced::BlackWhite).unwrap();
-            for dither in [Dither::None, Dither::Diffusion, Dither::Pattern, Dither::Noise] {
-                for transparent in [None, Some(1)] {
-                    let mut actual = source.clone();
-                    let mut expected = source.clone();
-                    let indices = quantize(&mut actual, 93, &pal, dither, 0.75, transparent);
-                    let old_indices = quantize_with(&mut expected, 93, &pal, dither, 0.75, transparent, |c| linear_rgb_nearest(&pal, c));
-                    assert_eq!(indices, old_indices, "{count} {dither:?} {transparent:?}");
-                    assert_eq!(actual, expected, "{count} {dither:?} {transparent:?}");
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn quantize_maps_to_palette_with_each_dither() {
-        let pal = vec![[0, 0, 0], [255, 255, 255]];
-        for d in [Dither::None, Dither::Diffusion, Dither::Pattern, Dither::Noise] {
-            let mut px: Vec<[f32; 4]> = (0..64)
-                .map(|i| [i as f32 / 63.0; 4])
-                .map(|mut p| {
-                    p[3] = 1.0;
-                    p
-                })
-                .collect();
-            let idx = quantize(&mut px, 8, &pal, d, 1.0, None);
-            assert!(px.iter().all(|p| p[0] == 0.0 || p[0] == 1.0), "{d:?}");
-            assert_eq!(idx.len(), 64);
-            // Mean brightness is preserved by dithering (not by plain thresholding).
-            if d == Dither::Diffusion {
-                let mean = px.iter().map(|p| p[0]).sum::<f32>() / 64.0;
-                assert!((mean - 0.5).abs() < 0.08, "{mean}");
-            }
-        }
-        let mut px = vec![[1.0, 1.0, 1.0, 0.2]];
-        let idx = quantize(&mut px, 1, &pal, Dither::None, 1.0, Some(1));
-        assert_eq!((idx[0], px[0][3]), (1, 0.0));
-    }
-
-    #[test]
-    fn bitmap_methods_are_binary_and_track_tone() {
-        for m in [
-            BitmapMethod::Threshold,
-            BitmapMethod::Pattern,
-            BitmapMethod::Diffusion,
-            BitmapMethod::Halftone { cell: 6.0, angle: 45.0, shape: HalftoneShape::Round },
-        ] {
-            let mut g = vec![0.25f32; 32 * 32];
-            to_bitmap(&mut g, 32, m);
-            assert!(g.iter().all(|v| *v == 0.0 || *v == 1.0));
-            let mean = g.iter().sum::<f32>() / g.len() as f32;
-            if m != BitmapMethod::Threshold {
-                assert!((mean - 0.25).abs() < 0.15, "{m:?} {mean}");
-            } else {
-                assert_eq!(mean, 0.0);
-            }
-        }
+/// Bitmap's Custom Pattern: each gray value (0..=1, row-major `w` wide) turns white where it
+/// reaches the threshold `map` (`mw` x `mh`, from [`custom_pattern_thresholds`]) tiled from the
+/// image's top-left corner, black elsewhere. A map that doesn't fit `mw` x `mh` thresholds at 50%.
+pub fn to_bitmap_custom(gray: &mut [f32], w: usize, map: &[f32], mw: usize, mh: usize) {
+    let fits = w > 0 && mw > 0 && mh > 0 && mw.checked_mul(mh) == Some(map.len());
+    for (i, v) in gray.iter_mut().enumerate() {
+        let t = if fits { map.get((i / w) % mh * mw + (i % w) % mw).copied().unwrap_or(0.5) } else { 0.5 };
+        *v = if *v >= t { 1.0 } else { 0.0 };
     }
 }
+
+#[cfg(test)]
+mod tests;

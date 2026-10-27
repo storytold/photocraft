@@ -12,6 +12,8 @@ use crate::commands::{CommandSpec, blend_from_str};
 use crate::presets::{always, bad};
 use crate::{EngineError, Result, Session};
 
+mod gradient_overlay;
+
 /// Parses a gradient style name (`linear`, `radial`, `angle`, `reflected`, `diamond`).
 pub fn gradient_style(s: &str) -> GradientStyle {
     match s.to_ascii_lowercase().as_str() {
@@ -69,7 +71,7 @@ fn gradient(p: &Value) -> Gradient {
         stops: gradient_stops(p, color(p, "from", [0.0; 3]), color(p, "to", [1.0; 3])),
         style: gradient_style(p.get("style").and_then(Value::as_str).unwrap_or("linear")),
         angle: f(p, "angle", 90.0),
-        scale: f(p, "scale", 100.0) / 100.0,
+        scale: (f(p, "scale", 100.0) / 100.0).clamp(0.1, 1.5),
         reverse: b(p, "reverse", false),
         ..Gradient::default()
     }
@@ -86,19 +88,19 @@ pub fn effect_defaults(kind: &str) -> Value {
             json!({"blend": "Multiply", "color": "#000000", "opacity": 75, "angle": 120, "useGlobalLight": true, "distance": 5, "choke": 0, "size": 5, "contour": "Linear", "antiAlias": false, "noise": 0})
         }
         "outerGlow" => {
-            json!({"blend": "Screen", "opacity": 75, "color": "#ffffbe", "spread": 0, "size": 5, "range": 50, "contour": "Linear", "antiAlias": false, "noise": 0})
+            json!({"blend": "Screen", "opacity": 75, "color": "#ffffbe", "technique": "softer", "spread": 0, "size": 5, "range": 50, "contour": "Linear", "antiAlias": false, "noise": 0})
         }
         "innerGlow" => {
-            json!({"blend": "Screen", "opacity": 75, "color": "#ffffbe", "source": "edge", "choke": 0, "size": 5, "contour": "Linear", "antiAlias": false, "noise": 0})
+            json!({"blend": "Screen", "opacity": 75, "color": "#ffffbe", "technique": "softer", "source": "edge", "choke": 0, "size": 5, "range": 50, "contour": "Linear", "antiAlias": false, "noise": 0})
         }
-        "stroke" => json!({"size": 3, "position": "outside", "blend": "Normal", "opacity": 100, "color": "#000000"}),
+        "stroke" => json!({"size": 1, "position": "inside", "blend": "Normal", "opacity": 100, "overprint": false, "color": "#000000"}),
         "colorOverlay" => json!({"blend": "Normal", "color": "#ff0000", "opacity": 100}),
         "gradientOverlay" => {
-            json!({"blend": "Normal", "opacity": 100, "from": "#000000", "to": "#ffffff", "reverse": false, "style": "linear", "angle": 90, "scale": 100})
+            json!({"blend": "Normal", "opacity": 100, "from": "#000000", "to": "#ffffff", "reverse": false, "style": "linear", "angle": 90, "scale": 100, "method": "custom"})
         }
         "patternOverlay" => json!({"blend": "Normal", "opacity": 100, "pattern": "", "angle": 0, "scale": 100, "link": true}),
         "bevelEmboss" => {
-            json!({"style": "inner", "technique": "smooth", "depth": 100, "direction": "up", "size": 5, "soften": 0, "angle": 120, "useGlobalLight": true, "altitude": 30, "glossContour": "Linear", "contour": false, "contourName": "Linear", "contourRange": 50, "contourAntiAlias": false})
+            json!({"style": "inner", "technique": "smooth", "depth": 100, "direction": "up", "size": 5, "soften": 0, "angle": 120, "useGlobalLight": true, "altitude": 30, "glossContour": "Linear", "glossAntiAlias": false, "highlightBlend": "Screen", "highlightColor": "#ffffff", "highlightOpacity": 75, "shadowBlend": "Multiply", "shadowColor": "#000000", "shadowOpacity": 75, "contour": false, "contourName": "Linear", "contourRange": 50, "contourAntiAlias": false})
         }
         "satin" => {
             json!({"blend": "Multiply", "color": "#000000", "opacity": 50, "angle": 19, "distance": 11, "size": 14, "contour": "Linear", "antiAlias": true, "invert": true})
@@ -460,16 +462,27 @@ pub fn contours_from_shc(bytes: &[u8]) -> Result<Vec<Value>> {
 
 /// An `.shc` file holding `contour` (Contour Editor › Save…).
 pub fn contour_to_shc(contour: &Contour) -> Result<Vec<u8>> {
-    let (name, points) = match contour {
-        Contour::Linear => ("Linear".to_string(), vec![CurvePoint { input: 0.0, output: 0.0 }, CurvePoint { input: 1.0, output: 1.0 }]),
-        Contour::Custom { name, points, .. } => (name.clone(), points.clone()),
-    };
-    let points = points
+    contour_to_shc_all(&[contour])
+}
+
+/// An `.shc` file holding every contour of `list` (Save Contours…).
+pub fn contour_to_shc_all(list: &[&Contour]) -> Result<Vec<u8>> {
+    let file: Vec<photocraft_psd::shc::ShcContour> = list
         .iter()
-        .enumerate()
-        .map(|(i, p)| photocraft_psd::shc::ShcPoint { input: p.input * 255.0, output: p.output * 255.0, continuous: !contour.is_corner(i) })
+        .map(|contour| {
+            let (name, points) = match contour {
+                Contour::Linear => ("Linear".to_string(), vec![CurvePoint { input: 0.0, output: 0.0 }, CurvePoint { input: 1.0, output: 1.0 }]),
+                Contour::Custom { name, points, .. } => (name.clone(), points.clone()),
+            };
+            let points = points
+                .iter()
+                .enumerate()
+                .map(|(i, p)| photocraft_psd::shc::ShcPoint { input: p.input * 255.0, output: p.output * 255.0, continuous: !contour.is_corner(i) })
+                .collect();
+            photocraft_psd::shc::ShcContour { name, points }
+        })
         .collect();
-    photocraft_psd::shc::write(&[photocraft_psd::shc::ShcContour { name, points }]).map_err(|e| EngineError::Other(format!("can't write the contour: {e}")))
+    photocraft_psd::shc::write(&file).map_err(|e| EngineError::Other(format!("can't write the contour: {e}")))
 }
 
 /// An effect of `kind` with its factory settings (before params are applied).
@@ -507,12 +520,15 @@ fn fresh_effect(kind: &str) -> Option<Effect> {
         "innerGlow" => Effect::InnerGlow(glow()),
         "stroke" => Effect::Stroke(StrokeFx {
             common: FxCommon::new(BlendMode::Normal, 1.0),
-            size: 3.0,
-            position: StrokePosition::Outside,
-            paint: FxPaint::Color(Color::rgb(1.0, 0.0, 0.0)),
+            size: 1.0,
+            position: StrokePosition::Inside,
+            paint: FxPaint::Color(Color::BLACK),
+            overprint: false,
         }),
         "colorOverlay" => Effect::ColorOverlay { common: FxCommon::new(BlendMode::Normal, 1.0), color: Color::rgb(1.0, 0.0, 0.0) },
-        "gradientOverlay" => Effect::GradientOverlay { common: FxCommon::new(BlendMode::Normal, 1.0), gradient: Gradient::default(), dither: false },
+        "gradientOverlay" => {
+            Effect::GradientOverlay { common: FxCommon::new(BlendMode::Normal, 1.0), gradient: Gradient::default(), dither: false, interpolation: None }
+        }
         "patternOverlay" => Effect::PatternOverlay {
             common: FxCommon::new(BlendMode::Normal, 1.0),
             name: String::new(),
@@ -544,6 +560,7 @@ fn fresh_effect(kind: &str) -> Option<Effect> {
             altitude: 30.0,
             use_global_light: true,
             gloss_contour: Contour::Linear,
+            gloss_anti_alias: false,
             highlight: FxCommon::new(BlendMode::Screen, 0.75),
             highlight_color: Color::WHITE,
             shadow: FxCommon::new(BlendMode::Multiply, 0.75),
@@ -582,7 +599,7 @@ fn overlay_gradient(g: &mut Gradient, p: &Value) {
         g.angle = x;
     }
     if let Some(x) = f_of(p, "scale") {
-        g.scale = (x / 100.0).clamp(0.01, 10.0);
+        g.scale = (x / 100.0).clamp(0.1, 1.5);
     }
     if let Some(x) = b_of(p, "reverse") {
         g.reverse = x;
@@ -594,6 +611,9 @@ fn overlay_gradient(g: &mut Gradient, p: &Value) {
 /// a dialog round trip never touches what it doesn't model: an imported
 /// gradient stroke keeps its gradient while its opacity is edited.
 pub fn overlay_effect(fx: &mut Effect, p: &Value) {
+    if crate::commands::check_f32_values("layer.layerStyle", p).is_err() {
+        return;
+    }
     fn set_color(p: &Value, k: &str, c: &mut Color) {
         if let Some(x) = color_of(p, k) {
             *c = x;
@@ -690,6 +710,7 @@ pub fn overlay_effect(fx: &mut Effect, p: &Value) {
                     _ => StrokePosition::Outside,
                 };
             }
+            set_bool(p, "overprint", &mut s.overprint);
             if p.get("from").is_some() {
                 s.paint = FxPaint::Gradient(gradient(p));
             } else if let Some(c) = color_of(p, "color") {
@@ -700,9 +721,9 @@ pub fn overlay_effect(fx: &mut Effect, p: &Value) {
             common(c, p);
             set_color(p, "color", color);
         }
-        Effect::GradientOverlay { common: c, gradient: g, dither } => {
+        Effect::GradientOverlay { common: c, gradient: g, dither, interpolation } => {
             common(c, p);
-            overlay_gradient(g, p);
+            gradient_overlay::overlay(g, interpolation, p);
             if let Some(x) = b_of(p, "dither") {
                 *dither = x;
             }
@@ -789,6 +810,22 @@ pub fn overlay_effect(fx: &mut Effect, p: &Value) {
                 bv.use_global_light = x;
             }
             set_contour(p, "glossContour", &mut bv.gloss_contour);
+            set_bool(p, "glossAntiAlias", &mut bv.gloss_anti_alias);
+            // Keep imported PSD shading settings when a command edits other bevel fields.
+            if let Some(blend) = p.get("highlightBlend").and_then(Value::as_str).and_then(blend_from_str) {
+                bv.highlight.blend = blend;
+            }
+            if let Some(blend) = p.get("shadowBlend").and_then(Value::as_str).and_then(blend_from_str) {
+                bv.shadow.blend = blend;
+            }
+            set_color(p, "highlightColor", &mut bv.highlight_color);
+            set_color(p, "shadowColor", &mut bv.shadow_color);
+            if let Some(x) = f_of(p, "highlightOpacity") {
+                bv.highlight.opacity = (x / 100.0).clamp(0.0, 1.0);
+            }
+            if let Some(x) = f_of(p, "shadowOpacity") {
+                bv.shadow.opacity = (x / 100.0).clamp(0.0, 1.0);
+            }
             // The Contour element: `contour` turns it on/off; its curve, Range and
             // Anti-aliased edit the element in place, so an imported curve survives.
             match b_of(p, "contour") {
@@ -821,6 +858,7 @@ pub fn overlay_effect(fx: &mut Effect, p: &Value) {
 /// Builds an effect of `kind` from JSON params (Photoshop units: opacity,
 /// spread, range in percent; sizes in px; angles in degrees).
 pub fn effect_from_params(kind: &str, p: &Value) -> Option<Effect> {
+    crate::commands::check_f32_values("layer.layerStyle", p).ok()?;
     let mut fx = fresh_effect(kind)?;
     overlay_effect(&mut fx, p);
     Some(fx)
@@ -856,6 +894,7 @@ const MAX_EFFECTS: usize = 256;
 /// mismatches and malformed snapshots are errors, never panics.
 fn replace_effects(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "layer.layerStyle.replace";
+    crate::commands::check_f32_values(CMD, p)?;
     let id = crate::commands::layer_param(s, p)?;
     let entries = p.get("effects").and_then(Value::as_array).ok_or_else(|| bad(CMD, "need `effects`: [{kind, params, fx?}]"))?;
     if entries.len() > MAX_EFFECTS {
@@ -894,6 +933,9 @@ fn replace_effects(s: &mut Session, p: &Value) -> Result<Value> {
             crate::pattern_cmds::ensure_in_doc(doc, pat);
         }
         let mode = doc.mode;
+        if !list.is_empty() {
+            crate::extra_cmds::background_to_layer(doc, id);
+        }
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
         // The list's master switch (`layer.setEffectsVisible`, the Layers panel's "Effects" eye)
         // survives the edit: the dialog models per-effect state, not the switch (#3648). A layer
@@ -905,6 +947,7 @@ fn replace_effects(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn set_effect(s: &mut Session, p: &Value, kind: &str) -> Result<Value> {
+    crate::commands::check_f32_values(&format!("layer.layerStyle.{kind}"), p)?;
     let fx = effect_from_params(kind, p).ok_or_else(|| EngineError::Other(format!("unknown effect {kind}")))?;
     let (fx, pattern) = crate::pattern_cmds::resolve_effect(s, fx)?;
     let label = format!("Layer Style: {}", fx.label());
@@ -916,6 +959,7 @@ fn set_effect(s: &mut Session, p: &Value, kind: &str) -> Result<Value> {
         }
         // Colours in the document's mode, as Image › Mode keeps them.
         let fx = fx.in_mode(doc.mode);
+        crate::extra_cmds::background_to_layer(doc, id);
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
         // Adding or replacing one effect leaves the list's master switch alone (#3648); a fresh
         // effects list already has the default `enabled: true`, so a first effect still shows.
@@ -936,6 +980,7 @@ fn make_default(s: &mut Session, p: &Value) -> Result<Value> {
         Some(v) if v.is_object() => v.clone(),
         _ => return Err(bad(CMD, "`params` must be an object")),
     };
+    crate::commands::check_f32_values(CMD, &params)?;
     s.presets.layer_defaults.insert(kind.to_string(), params);
     s.presets_changed();
     Ok(json!({"kind": kind}))
@@ -995,23 +1040,23 @@ pub fn specs() -> Vec<CommandSpec> {
         style_cmd!(
             "outerGlow",
             "Outer Glow…",
-            r##"{"color":"#rrggbb","opacity":0..100=75,"blend":str="screen","technique":"softer|precise","spread":0..100,"size":px,"range":0..100,"contour":name|curve,"antiAlias":bool,"noise":0..100,"add":bool}"##
+            r##"{"color":"#rrggbb","opacity":0..100=75,"blend":str="screen","technique":"softer|precise","spread":0..100,"size":px,"range":1..100=50,"contour":name|curve,"antiAlias":bool,"noise":0..100,"add":bool}"##
         ),
         style_cmd!(
             "innerGlow",
             "Inner Glow…",
-            r##"{"color":"#rrggbb","opacity":0..100=75,"blend":str="screen","technique":"softer|precise","source":"edge|center","choke":0..100,"size":px,"contour":name|curve,"antiAlias":bool,"noise":0..100,"add":bool}"##
+            r##"{"color":"#rrggbb","opacity":0..100=75,"blend":str="screen","technique":"softer|precise","source":"edge|center","choke":0..100,"size":px,"range":1..100=50,"contour":name|curve,"antiAlias":bool,"noise":0..100,"add":bool}"##
         ),
         style_cmd!(
             "stroke",
             "Stroke…",
-            r##"{"size":px=3,"position":"outside|inside|center","color":"#rrggbb","from":"#rrggbb","to":"#rrggbb","method":"classic|perceptual|linear|smooth"?,"smoothness":0..100=100,"style":str,"angle":deg,"opacity":0..100,"blend":str,"add":bool}"##
+            r##"{"size":px=1,"position":"inside|outside|center","color":"#rrggbb","from":"#rrggbb","to":"#rrggbb","method":"classic|perceptual|linear|smooth"?,"smoothness":0..100=100,"style":str,"angle":deg,"opacity":0..100,"blend":str,"overprint":bool,"add":bool}"##
         ),
         style_cmd!("colorOverlay", "Color Overlay…", r##"{"color":"#rrggbb","opacity":0..100=100,"blend":str,"add":bool}"##),
         style_cmd!(
             "gradientOverlay",
             "Gradient Overlay…",
-            r##"{"from":"#rrggbb","to":"#rrggbb","method":"classic|perceptual|linear|smooth"? (Photoshop's interpolation; omitted: straight stops),"smoothness":0..100=100,"style":"linear|radial|angle|reflected|diamond","angle":deg=90,"scale":10..150=100,"reverse":bool,"opacity":0..100,"blend":str,"add":bool}"##
+            r##"{"from":"#rrggbb","to":"#rrggbb","method":"classic|perceptual|linear|smooth"? (Photoshop's interpolation; omitted on new effects: straight stops; edits retain the recorded method),"smoothness":0..100=100,"style":"linear|radial|angle|reflected|diamond","angle":deg=90,"scale":10..150=100,"reverse":bool,"opacity":0..100,"blend":str,"add":bool}"##
         ),
         style_cmd!(
             "patternOverlay",
@@ -1021,7 +1066,7 @@ pub fn specs() -> Vec<CommandSpec> {
         style_cmd!(
             "bevelEmboss",
             "Bevel & Emboss…",
-            r##"{"style":"inner|outer|emboss|pillow|stroke","technique":"smooth|chiselHard|chiselSoft","contour":bool,"contourName":name|curve,"contourRange":1..100=50,"contourAntiAlias":bool,"glossContour":name|curve,"texture":pattern id|name?,"textureScale":1..1000=100,"textureDepth":-1000..1000=100,"textureInvert":bool,"textureLink":bool=true,"depth":1..1000=100,"direction":"up|down","size":px=5,"soften":px,"angle":deg,"altitude":deg,"add":bool}"##
+            r##"{"style":"inner|outer|emboss|pillow|stroke","technique":"smooth|chiselHard|chiselSoft","contour":bool,"contourName":name|curve,"contourRange":1..100=50,"contourAntiAlias":bool,"glossContour":name|curve,"glossAntiAlias":bool,"texture":pattern id|name?,"textureScale":1..1000=100,"textureDepth":-1000..1000=100,"textureInvert":bool,"textureLink":bool=true,"depth":1..1000=100,"direction":"up|down","size":px=5,"soften":px,"angle":deg,"altitude":deg,"add":bool}"##
         ),
         style_cmd!(
             "satin",
@@ -1109,456 +1154,4 @@ fn delete_effect(s: &mut Session, p: &Value, effect: &Value) -> Result<Value> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    fn session() -> Session {
-        let mut s = Session::new();
-        s.execute("file.new", json!({"width": 32, "height": 32})).unwrap();
-        s.execute("layer.new.layer", json!({})).unwrap();
-        s
-    }
-
-    fn effects(s: &Session) -> Vec<Effect> {
-        let d = s.active().unwrap();
-        d.doc.layer(d.active_layer.unwrap()).unwrap().effects.items.clone()
-    }
-
-    #[test]
-    fn bevel_command_sets_technique_contour_and_texture() {
-        let mut s = session();
-        s.execute("layer.layerStyle.bevelEmboss", json!({"style": "pillow", "technique": "chiselHard", "contour": true, "contourRange": 70, "texture": "Bubbles", "textureDepth": -200, "textureInvert": true})).unwrap();
-        let fx = effects(&s);
-        let Effect::BevelEmboss(b) = &fx[0] else { panic!("{fx:?}") };
-        assert_eq!((b.style, b.technique), (photocraft_doc::BevelStyle::PillowEmboss, BevelTechnique::ChiselHard));
-        assert!((b.contour.as_ref().unwrap().range - 0.7).abs() < 1e-6);
-        let t = b.texture.as_ref().unwrap();
-        assert_eq!((t.name.as_str(), t.depth, t.invert), ("Bubbles", -2.0, true));
-    }
-
-    #[test]
-    fn every_style_command_adds_its_effect() {
-        for kind in ["dropShadow", "innerShadow", "outerGlow", "innerGlow", "stroke", "colorOverlay", "gradientOverlay", "bevelEmboss", "satin"] {
-            let mut s = session();
-            s.execute(&format!("layer.layerStyle.{kind}"), json!({})).unwrap();
-            let fx = effects(&s);
-            assert_eq!(fx.len(), 1, "{kind}");
-            assert!(fx[0].enabled());
-        }
-    }
-
-    /// #1543: a Satin or Bevel & Emboss size or softness far past Photoshop's range rendered a
-    /// blur kernel of 2^62 taps ("capacity overflow"), or ran for minutes at 1e6. The blur width
-    /// is capped at the effect reach, so the document still renders, quickly.
-    #[test]
-    fn oversized_satin_and_bevel_sizes_render() {
-        for (cmd, p) in [
-            ("satin", json!({"size": 1e308})),
-            ("satin", json!({"size": 1_000_000})),
-            ("bevelEmboss", json!({"size": 1e308})),
-            ("bevelEmboss", json!({"soften": 1e308})),
-            ("bevelEmboss", json!({"size": 1_000_000, "soften": 1_000_000})),
-        ] {
-            let mut s = session();
-            s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
-            s.execute(&format!("layer.layerStyle.{cmd}"), p.clone()).unwrap();
-            let start = std::time::Instant::now();
-            s.execute("document.pixel", json!({"x": 0, "y": 0})).unwrap_or_else(|e| panic!("{cmd} {p}: {e}"));
-            assert!(start.elapsed().as_secs() < 20, "{cmd} {p}: {:?}", start.elapsed());
-        }
-    }
-
-    #[test]
-    fn params_are_applied_and_replace_or_add() {
-        let mut s = session();
-        s.execute("layer.layerStyle.stroke", json!({"size": 7, "position": "inside", "color": "#00ff00", "opacity": 50})).unwrap();
-        match &effects(&s)[0] {
-            Effect::Stroke(st) => {
-                assert_eq!(st.size, 7.0);
-                assert_eq!(st.position, StrokePosition::Inside);
-                assert_eq!(st.common.opacity, 0.5);
-                assert_eq!(st.paint, FxPaint::Color(Color::rgb(0.0, 1.0, 0.0)));
-            }
-            other => panic!("{other:?}"),
-        }
-        s.execute("layer.layerStyle.stroke", json!({"size": 2})).unwrap();
-        assert_eq!(effects(&s).len(), 1, "replaces");
-        s.execute("layer.layerStyle.stroke", json!({"size": 4, "add": true})).unwrap();
-        assert_eq!(effects(&s).len(), 2, "adds a second instance");
-        s.execute("layer.layerStyle.dropShadow", json!({"blend": "normal", "distance": 12})).unwrap();
-        assert!(matches!(&effects(&s)[2], Effect::DropShadow(sh) if sh.common.blend == BlendMode::Normal && sh.distance == 12.0));
-    }
-
-    #[test]
-    fn clear_and_undo() {
-        let mut s = session();
-        s.execute("layer.layerStyle.colorOverlay", json!({"color": "#ff0000"})).unwrap();
-        s.execute("layer.layerStyle.clear", json!({})).unwrap();
-        assert!(effects(&s).is_empty());
-        s.execute("edit.undo", json!({})).unwrap();
-        assert_eq!(effects(&s).len(), 1);
-    }
-
-    fn pixel(s: &mut Session) -> Vec<f32> {
-        serde_json::from_value(s.execute("document.pixel", json!({"x": 3, "y": 3})).unwrap()).unwrap()
-    }
-
-    fn list_enabled(s: &Session) -> bool {
-        let d = s.active().unwrap();
-        d.doc.layer(d.active_layer.unwrap()).unwrap().effects.enabled
-    }
-
-    /// #3648: the Layers panel's "Effects" eye (`layer.setEffectsVisible`) must survive a Layer
-    /// Style dialog OK: the dialog's whole-list replace re-creates the items but leaves the
-    /// list's master switch alone.
-    #[test]
-    fn replacing_the_list_keeps_a_disabled_effect_list_disabled() {
-        let mut s = session();
-        s.execute("edit.fill", json!({"contents": "color", "color": "#ff0000"})).unwrap();
-        s.execute("layer.layerStyle.colorOverlay", json!({"color": "#0000ff"})).unwrap();
-        let shown = pixel(&mut s);
-        s.execute("layer.setEffectsVisible", json!({"visible": false})).unwrap();
-        let hidden = pixel(&mut s);
-        assert_ne!(hidden, shown, "the eye really hides the style");
-        let r = s.execute("layer.layerStyle.replace", json!({"effects": [{"kind": "colorOverlay", "params": {"color": "#00ff00"}}]})).unwrap();
-        assert_eq!(r["effects"], 1, "the list itself is updated");
-        assert!(!list_enabled(&s), "the whole-list switch survives the edit");
-        assert!(effects(&s)[0].enabled(), "the effect's own state is updated");
-        assert_eq!(pixel(&mut s), hidden, "a disabled list still draws nothing");
-        s.execute("layer.setEffectsVisible", json!({"visible": true})).unwrap();
-        assert_ne!(pixel(&mut s), hidden, "re-showing the list draws the edited effect");
-    }
-
-    /// #3648: adding or replacing one effect (`layer.layerStyle.<kind>`) also leaves the master
-    /// switch as the user left it.
-    #[test]
-    fn set_effect_keeps_a_disabled_effect_list_disabled() {
-        let mut s = session();
-        s.execute("edit.fill", json!({"contents": "color", "color": "#ff0000"})).unwrap();
-        s.execute("layer.layerStyle.colorOverlay", json!({"color": "#0000ff"})).unwrap();
-        s.execute("layer.setEffectsVisible", json!({"visible": false})).unwrap();
-        let hidden = pixel(&mut s);
-        s.execute("layer.layerStyle.colorOverlay", json!({"color": "#00ff00"})).unwrap();
-        assert!(!list_enabled(&s), "the whole-list switch survives the edit");
-        assert!(effects(&s)[0].enabled(), "the effect's own state is updated");
-        assert_eq!(pixel(&mut s), hidden, "a disabled list still draws nothing");
-    }
-
-    /// A layer that never had effects keeps the default: its first effect shows.
-    #[test]
-    fn a_first_effect_shows_on_a_layer_that_never_had_effects() {
-        let mut s = session();
-        s.execute("edit.fill", json!({"contents": "color", "color": "#ff0000"})).unwrap();
-        let plain = pixel(&mut s);
-        s.execute("layer.layerStyle.colorOverlay", json!({"color": "#00ff00"})).unwrap();
-        assert!(list_enabled(&s), "a fresh effects list defaults to enabled");
-        assert_ne!(pixel(&mut s), plain, "the first effect renders");
-    }
-
-    /// #3102: an effect row dropped on the Delete button deletes only that effect, in one step.
-    #[test]
-    fn clear_one_effect_by_index() {
-        let mut s = session();
-        s.execute("layer.layerStyle.dropShadow", json!({})).unwrap();
-        s.execute("layer.layerStyle.colorOverlay", json!({"color": "#ff0000"})).unwrap();
-        let layer = s.active().unwrap().active_layer.unwrap().0;
-        s.execute("layer.layerStyle.clear", json!({"layer": layer, "effect": 0})).unwrap();
-        assert!(matches!(effects(&s)[..], [Effect::ColorOverlay { .. }]));
-        for bad in [json!({"effect": 5}), json!({"effect": -1}), json!({"effect": "x"}), json!({"effect": 0, "layer": u64::MAX})] {
-            assert!(s.execute("layer.layerStyle.clear", bad).is_err());
-        }
-        assert_eq!(effects(&s).len(), 1, "bad params change nothing");
-        s.execute("edit.undo", json!({})).unwrap();
-        assert_eq!(effects(&s).len(), 2);
-    }
-
-    #[test]
-    fn color_overlay_renders() {
-        let mut s = Session::new();
-        s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
-        s.execute("layer.layerStyle.colorOverlay", json!({"color": "#ff0000"})).unwrap();
-        let px: Vec<f32> = serde_json::from_value(s.execute("document.pixel", json!({"x": 3, "y": 3})).unwrap()).unwrap();
-        assert!(px[0] > 0.99 && px[1] < 0.01, "{px:?}");
-    }
-
-    #[test]
-    fn gradient_styles_parse() {
-        assert_eq!(gradient_style("Radial"), GradientStyle::Radial);
-        assert_eq!(gradient_style("diamond"), GradientStyle::Diamond);
-        assert_eq!(gradient_style("?"), GradientStyle::Linear);
-    }
-
-    fn snapshot(fx: &Effect) -> Value {
-        serde_json::to_value(fx).unwrap()
-    }
-
-    #[test]
-    fn every_kind_has_factory_defaults() {
-        for kind in
-            ["dropShadow", "innerShadow", "outerGlow", "innerGlow", "stroke", "colorOverlay", "gradientOverlay", "patternOverlay", "satin", "bevelEmboss"]
-        {
-            assert!(effect_defaults(kind).as_object().is_some_and(|o| !o.is_empty()), "{kind}");
-            assert!(effect_from_params(kind, &json!({})).is_some(), "{kind}");
-        }
-        assert!(effect_from_params("nope", &json!({})).is_none());
-    }
-
-    #[test]
-    fn replace_builds_edits_and_preserves_instances() {
-        let mut s = session();
-        // Two strokes: the first edits a snapshot (params overlay), the second is fresh.
-        let first = Effect::Stroke(StrokeFx {
-            common: photocraft_doc::FxCommon::new(BlendMode::Normal, 1.0),
-            size: 7.0,
-            position: StrokePosition::Outside,
-            paint: FxPaint::Gradient(Gradient { stops: vec![(0.0, Color::rgb(0.0, 0.0, 1.0)), (1.0, Color::WHITE)], ..Gradient::default() }),
-        });
-        let r = s
-            .execute(
-                "layer.layerStyle.replace",
-                json!({"effects": [
-                    {"kind": "stroke", "fx": snapshot(&first), "params": {"opacity": 50}},
-                    {"kind": "stroke", "params": {"size": 2, "color": "#ffffff"}},
-                ]}),
-            )
-            .unwrap();
-        assert_eq!(r["effects"], 2);
-        let fx = effects(&s);
-        assert_eq!(fx.len(), 2, "order preserved");
-        match (&fx[0], &fx[1]) {
-            (Effect::Stroke(a), Effect::Stroke(b)) => {
-                assert_eq!(a.common.opacity, 0.5);
-                // The overlay must not clobber the gradient paint it doesn't model.
-                assert!(matches!(&a.paint, FxPaint::Gradient(g) if g.stops.len() == 2 && g.stops[0].1 == Color::rgb(0.0, 0.0, 1.0)));
-                assert_eq!(b.size, 2.0);
-                assert_eq!(b.paint, FxPaint::Color(Color::rgb(1.0, 1.0, 1.0)));
-            }
-            other => panic!("{other:?}"),
-        }
-        // Replacing with an empty list clears the layer.
-        s.execute("layer.layerStyle.replace", json!({"effects": []})).unwrap();
-        assert!(effects(&s).is_empty());
-    }
-
-    #[test]
-    fn replace_rejects_bad_entries_gracefully() {
-        let mut s = session();
-        let stroke = Effect::Stroke(StrokeFx {
-            common: photocraft_doc::FxCommon::new(BlendMode::Normal, 1.0),
-            size: 3.0,
-            position: StrokePosition::Outside,
-            paint: FxPaint::Color(Color::BLACK),
-        });
-        for p in [
-            json!({}),
-            json!({"effects": "nope"}),
-            json!({"effects": [{"params": {}}]}),
-            json!({"effects": [{"kind": "nope"}]}),
-            json!({"effects": [{"kind": "stroke", "fx": {"Bogus": {}}}]}),
-            json!({"effects": [{"kind": "stroke", "fx": 3}]}),
-            json!({"effects": [{"kind": "dropShadow", "fx": snapshot(&stroke)}]}),
-            json!({"effects": [{"kind": "stroke", "fx": snapshot(&stroke), "params": "nope"}]}),
-        ] {
-            assert!(s.execute("layer.layerStyle.replace", p).is_err());
-        }
-        // A long list is refused, not run.
-        let many: Vec<_> = (0..257).map(|_| json!({"kind": "stroke"})).collect();
-        assert!(s.execute("layer.layerStyle.replace", json!({"effects": many})).is_err());
-        assert!(effects(&s).is_empty(), "nothing was applied");
-    }
-
-    #[test]
-    fn contour_and_noise_params_edit_existing_effects() {
-        let mut s = session();
-        s.execute("layer.layerStyle.dropShadow", json!({})).unwrap();
-        let before = effects(&s);
-        let Effect::DropShadow(_) = &before[0] else { panic!("{before:?}") };
-        let fx0 = snapshot(&before[0]);
-        // Unknown contour names are carried, not clobbered to Linear.
-        s.execute("layer.layerStyle.replace", json!({"effects": [{"kind": "dropShadow", "fx": fx0, "params": {"contour": "Cone", "noise": 30}}]})).unwrap();
-        let fx = effects(&s);
-        let Effect::DropShadow(sh) = &fx[0] else { panic!("{fx:?}") };
-        assert_eq!(sh.contour, builtin_contour("Cone").unwrap(), "known preset applies");
-        assert!((sh.noise - 0.3).abs() < 1e-6, "noise in percent");
-        // An imported contour with an unknown name survives the same round trip.
-        let imported = Contour::Custom {
-            name: "Photoshop contour".into(),
-            points: vec![photocraft_doc::adjust::CurvePoint { input: 0.0, output: 1.0 }, photocraft_doc::adjust::CurvePoint { input: 1.0, output: 0.0 }],
-            corners: vec![],
-        };
-        let mut carried = before[0].clone();
-        if let Effect::DropShadow(c) = &mut carried {
-            c.contour = imported.clone();
-        }
-        overlay_effect(&mut carried, &json!({"contour": "Photoshop contour"}));
-        let Effect::DropShadow(after) = &carried else { panic!() };
-        assert_eq!(after.contour, imported);
-        // Linear applies by name.
-        let mut back = carried;
-        overlay_effect(&mut back, &json!({"contour": "Linear"}));
-        let Effect::DropShadow(lin) = &back else { panic!() };
-        assert_eq!(lin.contour, Contour::Linear);
-    }
-
-    #[test]
-    fn contour_presets_match_photoshop() {
-        // Photoshop 27.11, measured through Satin: Cone and Cone − Inverted Satins are identical,
-        // and Gaussian reads 0.36 at 0.5 through Satin but 0.64 as the preset curve (glows, gloss).
-        let lut = |name: &str| {
-            let Some(Contour::Custom { points, corners, .. }) = builtin_contour(name) else { panic!("{name}") };
-            photocraft_compose::adjust::contour_curve_lut(&points, &corners)
-        };
-        let satin = |name: &str| photocraft_compose::effects::satin_lut(&builtin_contour(name).unwrap()).unwrap();
-        let at = |l: &[f32], x: f32| l[(x * (l.len() - 1) as f32).round() as usize];
-        let (cone, inverted) = (satin("Cone"), satin("Cone - Inverted"));
-        for x in [0.1, 0.25, 0.5, 0.8] {
-            assert!((at(&cone, x) - at(&inverted, x)).abs() < 0.03, "{x}: {} vs {}", at(&cone, x), at(&inverted, x));
-        }
-        assert!((at(&satin("Gaussian"), 0.5) - 0.36).abs() < 0.04, "{}", at(&satin("Gaussian"), 0.5));
-        assert!((at(&lut("Gaussian"), 0.5) - 0.64).abs() < 0.03, "{}", at(&lut("Gaussian"), 0.5));
-        assert!((at(&lut("Cove - Deep"), 0.0) - 0.26).abs() < 0.02, "Cove - Deep starts above zero");
-    }
-
-    #[test]
-    fn gradient_overlay_method_matches_photoshop() {
-        // Photoshop 27.11, Classic Gradient Overlay #000000 → #ffffff (Smoothness 100 %): 0.037 at
-        // t = 1/16 and 0.5 in the middle; straight stops would give 0.0625.
-        let mut s = session();
-        s.execute("layer.layerStyle.gradientOverlay", json!({"from": "#000000", "to": "#ffffff", "method": "classic"})).unwrap();
-        let Effect::GradientOverlay { gradient, .. } = &effects(&s)[0] else { panic!() };
-        let at = |t: f32| {
-            let w = gradient.stops.windows(2).find(|w| t >= w[0].0 && t <= w[1].0).unwrap();
-            let u = (t - w[0].0) / (w[1].0 - w[0].0).max(1e-6);
-            w[0].1.to_rgb()[0] + (w[1].1.to_rgb()[0] - w[0].1.to_rgb()[0]) * u
-        };
-        assert!((at(1.0 / 16.0) - 0.037).abs() < 0.004, "{}", at(1.0 / 16.0));
-        assert!((at(0.5) - 0.5).abs() < 0.004, "{}", at(0.5));
-        // Without a method the two stops stay as they are.
-        s.execute("layer.layerStyle.gradientOverlay", json!({"from": "#000000", "to": "#ffffff", "add": true})).unwrap();
-        let plain = effects(&s).iter().filter(|e| matches!(e, Effect::GradientOverlay { gradient, .. } if gradient.stops.len() == 2)).count();
-        assert_eq!(plain, 1, "the added overlay keeps its two stops");
-    }
-
-    #[test]
-    fn contour_presets_and_custom_curves_apply_in_one_undo_step() {
-        let mut s = session();
-        // Picking Cone: the preset's own curve, its points corners, in one undo step.
-        s.execute("layer.layerStyle.dropShadow", json!({"contour": "Cone", "antiAlias": true})).unwrap();
-        let Effect::DropShadow(sh) = &effects(&s)[0] else { panic!() };
-        assert_eq!(sh.contour, builtin_contour("Cone").unwrap());
-        assert!(sh.contour.is_corner(1) && sh.anti_alias);
-        let Contour::Custom { points, corners, .. } = &sh.contour else { panic!() };
-        let lut = photocraft_compose::adjust::contour_curve_lut(points, corners);
-        let at = |x: f32| lut[(x * (lut.len() - 1) as f32).round() as usize];
-        // Photoshop's measured Cone: 0 at both ends, a 0.99 peak at 0.5, symmetric.
-        assert!(at(0.0).abs() < 1e-3 && at(1.0).abs() < 1e-3 && at(0.5) > 0.98, "a Λ: {} {} {}", at(0.0), at(0.5), at(1.0));
-        assert!((at(0.25) - at(0.75)).abs() < 0.03, "symmetric: {} vs {}", at(0.25), at(0.75));
-        assert_eq!(contour_param(&sh.contour), json!("Cone"));
-        s.execute("edit.undo", json!({})).unwrap();
-        assert!(effects(&s).is_empty(), "one undo removes it");
-
-        // An edited curve (the Contour Editor's param) round trips exactly, in every effect.
-        let curve = json!({"name": "Mine", "points": [[0.0, 0.2], [0.4, 0.9], [1.0, 0.1]], "corners": [false, true, false]});
-        for kind in ["dropShadow", "innerShadow", "outerGlow", "innerGlow", "satin"] {
-            let mut fx = fresh_effect(kind).unwrap();
-            overlay_effect(&mut fx, &json!({"contour": curve}));
-            let v = values(&fx, "contour");
-            assert_eq!(v, curve, "{kind}");
-        }
-        let mut bevel = fresh_effect("bevelEmboss").unwrap();
-        overlay_effect(&mut bevel, &json!({"contour": true, "contourName": curve, "glossContour": "Ring"}));
-        let Effect::BevelEmboss(b) = &bevel else { panic!() };
-        assert_eq!(contour_param(&b.contour.as_ref().unwrap().contour), curve);
-        assert_eq!(b.gloss_contour, builtin_contour("Ring").unwrap());
-        // Malformed curves leave the contour alone.
-        for bad in [json!({"points": [[0.5, 0.5]]}), json!({"points": [[0.0, "x"], [1.0, 1.0]]}), json!({"points": "no"}), json!(7)] {
-            let mut fx = fresh_effect("dropShadow").unwrap();
-            overlay_effect(&mut fx, &json!({"contour": bad}));
-            assert_eq!(values(&fx, "contour"), json!("Linear"));
-        }
-
-        // `.shc` round trip of a curve with a corner.
-        let mine = contour_from_param(&curve).unwrap();
-        let back = contours_from_shc(&contour_to_shc(&mine).unwrap()).unwrap();
-        let back = contour_from_param(&back[0]).unwrap();
-        let Contour::Custom { points, corners, .. } = &back else { panic!() };
-        assert_eq!(corners, &vec![false, true, false]);
-        assert!((points[1].input - 0.4).abs() < 0.003 && (points[1].output - 0.9).abs() < 0.003, "{points:?}");
-    }
-
-    fn values(fx: &Effect, key: &str) -> Value {
-        let c = match fx {
-            Effect::DropShadow(s) | Effect::InnerShadow(s) => &s.contour,
-            Effect::OuterGlow(g) | Effect::InnerGlow(g) => &g.contour,
-            Effect::Satin(s) => &s.contour,
-            _ => panic!("{key}: no contour"),
-        };
-        contour_param(c)
-    }
-
-    #[test]
-    fn make_default_then_reset_restores_it() {
-        let mut s = session();
-        // Factory default first: Reset without a saved default gives the factory set.
-        let r = s.execute("layer.layerStyle.defaultFor", json!({"kind": "stroke"})).unwrap();
-        assert_eq!(r["user"], json!(false));
-        assert_eq!(r["params"]["size"], json!(3));
-        s.execute(
-            "layer.layerStyle.makeDefault",
-            json!({"kind": "stroke", "params": {"size": 9, "position": "inside", "blend": "Normal", "opacity": 100, "color": "#000000"}}),
-        )
-        .unwrap();
-        let r = s.execute("layer.layerStyle.defaultFor", json!({"kind": "stroke"})).unwrap();
-        assert_eq!(r["user"], json!(true));
-        assert_eq!(r["params"]["size"], json!(9));
-        // Bad kinds and params are graceful errors.
-        assert!(s.execute("layer.layerStyle.makeDefault", json!({"kind": "nope", "params": {}})).is_err());
-        assert!(s.execute("layer.layerStyle.makeDefault", json!({"kind": "stroke", "params": "x"})).is_err());
-        assert!(s.execute("layer.layerStyle.defaultFor", json!({"kind": "nope"})).is_err());
-    }
-
-    #[test]
-    fn layer_style_defaults_persist_with_presets() {
-        let mut s = session();
-        s.execute("layer.layerStyle.makeDefault", json!({"kind": "stroke", "params": {"size": 9}})).unwrap();
-        let blob = s.presets.to_json(&s);
-        let mut t = Session::new();
-        t.load_presets_json(blob);
-        let r = t.execute("layer.layerStyle.defaultFor", json!({"kind": "stroke"})).unwrap();
-        assert_eq!(r["user"], json!(true));
-        assert_eq!(r["params"]["size"], json!(9));
-    }
-
-    #[test]
-    fn double_stroke_bands_render_and_survive_an_edit() {
-        // The manga/typesetting case (#157): a 7 px white stroke under a 3 px black one.
-        let mut s = Session::new();
-        s.execute("file.new", json!({"width": 48, "height": 48})).unwrap();
-        s.execute("layer.new.layer", json!({})).unwrap();
-        s.execute("select.rect", json!({"x": 16, "y": 16, "width": 16, "height": 16})).unwrap();
-        s.execute("edit.fill", json!({"color": "#000000"})).unwrap();
-        s.execute("select.deselect", json!({})).unwrap();
-        s.execute("layer.layerStyle.stroke", json!({"size": 3, "color": "#000000", "position": "outside"})).unwrap();
-        s.execute("layer.layerStyle.stroke", json!({"size": 7, "color": "#ffffff", "position": "outside", "add": true})).unwrap();
-        let px = |s: &mut Session, x: i32, y: i32| -> [f32; 4] {
-            let mut v: Vec<f32> = serde_json::from_value(s.execute("document.pixel", json!({"x": x, "y": y})).unwrap()).unwrap();
-            v.resize(4, 1.0);
-            [v[0], v[1], v[2], v[3]]
-        };
-        // Bands from the square edge outward: 0..3 px black (the first stroke renders on top),
-        // 3..7 px white, then the white background.
-        assert!(px(&mut s, 24, 24)[0] < 0.1, "the square is black");
-        assert!(px(&mut s, 24, 14)[0] < 0.1, "the first stroke covers the wider one");
-        assert!(px(&mut s, 24, 11)[0] > 0.9, "the second stroke shows outside it");
-        assert!(px(&mut s, 24, 5)[0] > 0.9, "background beyond both");
-        // A dialog round trip (replace with the same snapshots) keeps both bands.
-        let before = px(&mut s, 24, 14);
-        let st = s.active().unwrap();
-        let id = st.active_layer.unwrap();
-        let items = st.doc.layer(id).unwrap().effects.items.clone();
-        let entries: Vec<Value> = items.iter().map(|fx| json!({"kind": "stroke", "fx": serde_json::to_value(fx).unwrap(), "params": {}})).collect();
-        s.execute("layer.layerStyle.replace", json!({"layer": id.0, "effects": entries})).unwrap();
-        assert_eq!(px(&mut s, 24, 14), before, "both strokes render identically after the round trip");
-    }
-}
+mod tests;

@@ -22,6 +22,21 @@ fn defaults_match_photoshop() {
     }
 }
 
+#[test]
+fn intermediate_ui_scale_presets_survive_restart() {
+    let mut s = Session::new();
+    assert_eq!(s.execute("prefs.get", json!({"path": "interface.uiScale"})).unwrap(), json!("auto"));
+    for scale in ["100", "105", "110", "115", "120", "125"] {
+        s.execute("prefs.set", json!({"path": "interface.uiScale", "value": scale})).unwrap();
+        let mut restored = Session::new();
+        restored.load_prefs_json(&s.prefs_to_json()).unwrap();
+        assert_eq!(restored.execute("prefs.get", json!({"path": "interface.uiScale"})).unwrap(), json!(scale));
+    }
+    // Presets remain discrete choices: arbitrary values must not silently replace a valid scale.
+    assert!(s.execute("prefs.set", json!({"path": "interface.uiScale", "value": "112"})).is_err());
+    assert_eq!(s.execute("prefs.get", json!({"path": "interface.uiScale"})).unwrap(), json!("125"));
+}
+
 /// #2264: the Studio workspace dot pattern can be hidden without changing themes.
 #[test]
 fn canvas_dot_grid_can_be_disabled_persisted_and_reset() {
@@ -343,6 +358,11 @@ fn shortcuts_normalise_and_detect_conflicts() {
     assert_eq!(normalize_shortcut("Cmd++").as_deref(), Some("Cmd++"));
     assert_eq!(normalize_shortcut("Cmd+Shift"), None);
     assert_eq!(normalize_shortcut("Cmd+A+B"), None);
+    // #6827: multi-word key names keep egui's spelling (Title case made `Pageup`, matching no key).
+    assert_eq!(normalize_shortcut("shift+pageup").as_deref(), Some("Shift+PageUp"));
+    assert_eq!(normalize_shortcut("Ctrl+Alt+PAGEDOWN").as_deref(), Some("Ctrl+Alt+PageDown"));
+    assert_eq!(normalize_shortcut("Cmd+openbracket").as_deref(), Some("Cmd+OpenBracket"));
+    assert_eq!(normalize_shortcut("home").as_deref(), Some("Home"));
     let c = conflicts([("a", "Cmd+J"), ("b", "cmd+j"), ("c", "Cmd+K")]);
     assert_eq!(c, vec![("Cmd+J".to_string(), vec!["a".to_string(), "b".to_string()])]);
 }
@@ -494,6 +514,32 @@ fn right_click_with_painting_tools_pref() {
 }
 
 #[test]
+fn gpu_adapter_round_trips_and_defaults_to_automatic() {
+    let mut s = session();
+    assert_eq!(s.prefs().performance.gpu_adapter, "");
+    s.execute("prefs.set", json!({"path": "performance.gpuAdapter", "value": "NVIDIA"})).unwrap();
+    assert_eq!(s.prefs().performance.gpu_adapter, "NVIDIA");
+    assert!(s.execute("prefs.set", json!({"path": "performance.gpuAdapter", "value": 3})).is_err());
+    assert_eq!(s.prefs().performance.gpu_adapter, "NVIDIA");
+    let mut t = Session::new();
+    t.load_prefs_json(&s.prefs_to_json()).unwrap();
+    assert_eq!(t.prefs().performance.gpu_adapter, "NVIDIA");
+    let mut u = Session::new();
+    u.load_prefs_json(r#"{"performance": {"useGpu": true}}"#).unwrap();
+    assert_eq!(u.prefs().performance.gpu_adapter, "");
+}
+
+#[test]
+fn gpu_adapter_names_match_by_word_ignoring_case() {
+    let arc = "Intel(R) Arc(tm) A370M Graphics (DG2)";
+    assert!(gpu_adapter_matches("NVIDIA GeForce RTX 5060 Ti", "nvidia"));
+    assert!(gpu_adapter_matches(arc, " ARC A370M "));
+    assert!(!gpu_adapter_matches(arc, "arc a380"));
+    assert!(!gpu_adapter_matches(arc, ""));
+    assert!(!gpu_adapter_matches(arc, "   "));
+}
+
+#[test]
 fn gpu_backend_round_trips_and_validates() {
     let mut s = session();
     assert_eq!(s.prefs().performance.gpu_backend, GpuBackend::Auto);
@@ -553,7 +599,9 @@ fn notification_autohide_preferences() {
 fn linux_only_preferences_show_only_on_linux() {
     assert_eq!(is_hidden("performance.linuxDisplayServer"), !cfg!(target_os = "linux"));
     assert!(!is_hidden("performance.gpuBackend"));
-    assert!(LINUX_ONLY.iter().all(|p| choices(p).is_some()), "every Linux-only preference is a real one");
+    assert!(LINUX_ONLY.contains(&"performance.gpuAdapter"));
+    let free_text = ["performance.gpuAdapter"];
+    assert!(LINUX_ONLY.iter().all(|p| free_text.contains(p) || choices(p).is_some()), "every Linux-only preference is a real one");
 }
 
 #[test]
@@ -826,4 +874,162 @@ fn shift_key_tool_switch_is_on_by_default_and_a_stored_false_is_kept() {
     assert!(missing.use_shift_key_for_tool_switch, "a settings file without the key gets the new default");
     let stored: Tools = serde_json::from_value(json!({"useShiftKeyForToolSwitch": false})).unwrap();
     assert!(!stored.use_shift_key_for_tool_switch);
+}
+
+/// #5647: a settings file from before version 2 stored the switch off only because that was the
+/// old default, so it loads with the new default (on); one saved since keeps an explicit off.
+#[test]
+fn old_settings_files_take_the_shift_key_tool_switch_default() {
+    for old in
+        [json!({"tools": {"useShiftKeyForToolSwitch": false}}), json!({"version": 1, "tools": {"useShiftKeyForToolSwitch": false, "showTooltips": false}})]
+    {
+        let mut s = Session::new();
+        s.load_prefs_json(&old.to_string()).unwrap();
+        assert!(s.prefs().tools.use_shift_key_for_tool_switch, "{old}");
+    }
+    let mut s = Session::new();
+    s.load_prefs_json(&json!({"version": 1, "tools": {"showTooltips": false}}).to_string()).unwrap();
+    assert!(!s.prefs().tools.show_tooltips, "other tool settings are kept");
+    // Chosen off and saved now: kept on the next start.
+    s.edit_prefs(|p| p.tools.use_shift_key_for_tool_switch = false);
+    let saved = s.prefs_to_json();
+    assert_eq!(serde_json::from_str::<Value>(&saved).unwrap()["version"], json!(PREFS_VERSION));
+    let mut restored = Session::new();
+    restored.load_prefs_json(&saved).unwrap();
+    assert!(!restored.prefs().tools.use_shift_key_for_tool_switch);
+}
+
+/// Shortcut exports are all or nothing (#5801): a rename that fails after the first file was
+/// moved in puts the user's files back as they were and leaves nothing staged.
+#[test]
+fn exports_are_written_all_or_nothing() {
+    use super::write_files_atomically;
+    let dir = std::env::temp_dir().join(format!("photocraft-atomic-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (a, b) = (dir.join("a.kys"), dir.join("b.html"));
+    std::fs::write(&a, "old A").unwrap();
+    std::fs::write(&b, "old B").unwrap();
+    let (pa, pb) = (a.to_str().unwrap(), b.to_str().unwrap());
+    let staged_moves = std::cell::Cell::new(0);
+    let failing = |from: &std::path::Path, to: &std::path::Path| {
+        if from.to_string_lossy().ends_with("photocraft-tmp") {
+            staged_moves.set(staged_moves.get() + 1);
+            if staged_moves.get() == 2 {
+                return Err(std::io::Error::other("disk gone"));
+            }
+        }
+        std::fs::rename(from, to)
+    };
+    assert!(write_files_atomically(&[(pa, "new A"), (pb, "new B")], &failing).is_err());
+    assert_eq!((std::fs::read_to_string(&a).unwrap(), std::fs::read_to_string(&b).unwrap()), ("old A".into(), "old B".into()));
+    let leftovers = || std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok()).filter(|e| e.file_name().to_string_lossy().contains(".photocraft-")).count();
+    assert_eq!(leftovers(), 0);
+    // A backup move that fails leaves no empty placeholder behind.
+    let backups = std::cell::Cell::new(0);
+    let failing_backup = |from: &std::path::Path, to: &std::path::Path| {
+        if to.to_string_lossy().ends_with("photocraft-bak") {
+            backups.set(backups.get() + 1);
+            if backups.get() == 2 {
+                return Err(std::io::Error::other("locked"));
+            }
+        }
+        std::fs::rename(from, to)
+    };
+    assert!(write_files_atomically(&[(pa, "new A"), (pb, "new B")], &failing_backup).is_err());
+    assert_eq!((std::fs::read_to_string(&a).unwrap(), std::fs::read_to_string(&b).unwrap()), ("old A".into(), "old B".into()));
+    assert_eq!(leftovers(), 0);
+    // The same target twice is refused before anything is written.
+    assert!(write_files_atomically(&[(pa, "x"), (pa, "y")], &|f, t| std::fs::rename(f, t)).is_err());
+    assert_eq!(std::fs::read_to_string(&a).unwrap(), "old A");
+    // A target named like a staging file is just a file.
+    let odd = dir.join("c.kys.photocraft-tmp");
+    std::fs::write(&odd, "old C").unwrap();
+    write_files_atomically(&[(pa, "new A"), (odd.to_str().unwrap(), "new C")], &|f, t| std::fs::rename(f, t)).unwrap();
+    assert_eq!((std::fs::read_to_string(&a).unwrap(), std::fs::read_to_string(&odd).unwrap()), ("new A".into(), "new C".into()));
+    assert_eq!(leftovers(), 1, "only c.kys.photocraft-tmp itself");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A backup that can't be put back after a failed export is named in the error, and stays where
+/// it is with the user's previous text.
+#[test]
+fn a_stranded_backup_is_named_in_the_error() {
+    use super::write_files_atomically;
+    let dir = std::env::temp_dir().join(format!("photocraft-stranded-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (a, b) = (dir.join("a.kys"), dir.join("b.html"));
+    std::fs::write(&a, "old A").unwrap();
+    std::fs::write(&b, "old B").unwrap();
+    let (pa, pb) = (a.to_str().unwrap(), b.to_str().unwrap());
+    let staged = std::cell::Cell::new(0);
+    // The second staged move fails, and so does putting a.kys's backup back.
+    let rename = |from: &std::path::Path, to: &std::path::Path| {
+        let f = from.to_string_lossy();
+        if f.ends_with("photocraft-tmp") {
+            staged.set(staged.get() + 1);
+            if staged.get() == 2 {
+                return Err(std::io::Error::other("disk gone"));
+            }
+        }
+        if f.ends_with("photocraft-bak") && to == a.as_path() {
+            return Err(std::io::Error::other("locked"));
+        }
+        std::fs::rename(from, to)
+    };
+    let e = write_files_atomically(&[(pa, "new A"), (pb, "new B")], &rename).unwrap_err();
+    assert!(e.contains(&format!("the previous {} is at", a.display())), "{e}");
+    let backup: Vec<_> =
+        std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.to_string_lossy().ends_with("photocraft-bak")).collect();
+    assert_eq!(backup.len(), 1, "{backup:?}");
+    assert!(e.contains(&backup[0].display().to_string()), "{e}");
+    assert_eq!(std::fs::read_to_string(&backup[0]).unwrap(), "old A");
+    assert_eq!(std::fs::read_to_string(&b).unwrap(), "old B");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_wrongly_typed_value_resets_only_that_field() {
+    // #6611: one bad value used to reset every preference.
+    let mut s = Session::new();
+    let invalid = s
+        .load_prefs_json(
+            r#"{"general": {"beepWhenDone": true}, "fileHandling": {"recentFileCount": "ten", "autosaveMinutes": 5},
+                "performance": {"historyStates": 20}, "shortcuts": {"edit.fill": "Cmd+Shift+F", "file.open": 7}}"#,
+        )
+        .unwrap();
+    assert!(s.prefs().general.beep_when_done);
+    assert_eq!(s.prefs().file_handling.autosave_minutes, 5, "a sibling in the same section survives");
+    assert_eq!(s.prefs().file_handling.recent_file_count, 20, "the bad value takes the default");
+    assert_eq!(s.prefs().performance.history_states, 20);
+    assert_eq!(s.prefs().shortcuts.get("edit.fill").map(String::as_str), Some("Cmd+Shift+F"));
+    assert!(!s.prefs().shortcuts.contains_key("file.open"));
+    let paths: Vec<String> = invalid.iter().map(InvalidPref::path).collect();
+    assert_eq!(paths, ["fileHandling.recentFileCount", "shortcuts.file.open"]);
+    assert_eq!(invalid[0].value, json!("ten"));
+    assert_eq!(invalid[1].keys, ["shortcuts", "file.open"]);
+}
+
+#[test]
+fn a_wrongly_typed_section_or_colour_setting_resets_only_that_part() {
+    let mut s = Session::new();
+    let invalid = s
+        .load_prefs_json(
+            r#"{"general": "loud", "performance": {"historyStates": 20},
+                "colorSettings": {"workingRgb": "display-p3", "askOnMismatch": "yes"}}"#,
+        )
+        .unwrap();
+    assert_eq!(s.prefs().general, General::default());
+    assert_eq!(s.prefs().performance.history_states, 20);
+    assert_eq!(s.color.settings.working_rgb, "display-p3", "the rest of the colour settings load");
+    let paths: Vec<String> = invalid.iter().map(InvalidPref::path).collect();
+    assert_eq!(paths, ["general", "colorSettings.askOnMismatch"]);
+    // A valid file reports nothing; one that isn't an object still fails as a whole.
+    assert!(s.load_prefs_json(&s.prefs_to_json()).unwrap().is_empty());
+    for bad in ["[1, 2]", "42", "\"prefs\"", "null", "{", ""] {
+        assert!(s.load_prefs_json(bad).is_err(), "{bad}");
+    }
+    // Deep nesting and odd values don't panic.
+    let deep = format!("{{\"general\": {}1{}}}", "{\"a\":".repeat(100), "}".repeat(100));
+    assert!(s.load_prefs_json(&deep).is_ok());
+    assert!(s.load_prefs_json(r#"{"interface": {"theme": 3, "uiScale": [1]}, "workspaces": {"x": 1}, "menus": 1}"#).is_ok());
 }

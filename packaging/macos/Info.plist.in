@@ -71,7 +71,7 @@
   <key>NSHumanReadableCopyright</key>
   <string>Copyright © the PhotoCraft authors. MIT OR Apache-2.0.</string>
 
-  <!-- Photocraft's own format. -->
+  <!-- PhotoCraft's own format. -->
   <key>UTExportedTypeDeclarations</key>
   <array>
     <dict>

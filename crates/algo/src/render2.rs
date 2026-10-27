@@ -274,15 +274,13 @@ pub fn composite(surface: &mut Surface, prims: &[Prim], clip: Rect, selection: O
 pub struct Rng(u64);
 
 impl Rng {
+    /// A generator whose sequence is fixed by `seed` and `salt`.
     pub fn new(seed: u32, salt: u64) -> Rng {
         Rng(((seed as u64) << 32) ^ salt.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ 0x2545_F491_4F6C_DD1D)
     }
+    /// The next value of the SplitMix64 sequence.
     pub fn next_u64(&mut self) -> u64 {
-        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = self.0;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^ (z >> 31)
+        crate::photo_util::splitmix64(&mut self.0)
     }
     /// Uniform in [0, 1).
     pub fn f(&mut self) -> f32 {
