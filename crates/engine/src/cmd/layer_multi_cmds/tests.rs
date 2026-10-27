@@ -881,6 +881,36 @@ fn merging_selected_layers_bakes_the_bottom_layers_style_to_pixels() {
 }
 
 #[test]
+fn merging_down_drops_the_style_of_a_zero_fill_lower_layer() {
+    // Photoshop drops a zero-fill lower layer's whole contribution at Merge Down: the fill
+    // already shows nothing and the style goes with it, so the glow that outlined its shape
+    // before the merge is gone after it and nothing re-appears on the union (fixtures in
+    // PR #8750, a Fill-0% layer with Outer Glow and a disjoint upper layer).
+    let probe = |s: &Session| {
+        let d = doc(s);
+        photocraft_compose::render(d, d.bounds()).get(32, 20)
+    };
+    for depth in [8, 16, 32] {
+        let mut s = session(depth);
+        let lower = rect_layer(&mut s, Rect::new(10, 10, 30, 30));
+        let upper = rect_layer(&mut s, Rect::new(60, 20, 72, 32));
+        s.execute("layer.layerStyle.outerGlow", json!({"layer": lower.0, "blend": "normal", "size": 6, "color": "#000000", "add": true})).unwrap();
+        s.edit("zero fill", |doc, _| {
+            doc.layer_mut(lower).unwrap().fill_opacity = 0.0;
+            Ok(())
+        })
+        .unwrap();
+        let before = probe(&s);
+        assert!(before.iter().take(3).all(|v| *v < 0.97), "depth {depth}: the glow outlines the invisible shape before the merge: {before:?}");
+        s.execute("layer.mergeDown", json!({"layer": upper.0})).unwrap();
+        let merged = doc(&s).layer(lower).unwrap().clone();
+        assert!(merged.effects.items.is_empty(), "depth {depth}: the zero-fill style is dropped with the fill");
+        let after = probe(&s);
+        assert!(after.iter().take(3).zip(&before).all(|(a, b)| *a > *b + 0.03), "depth {depth}: the glow went with the zero fill: {before:?} -> {after:?}");
+    }
+}
+
+#[test]
 fn merging_down_inside_the_shaped_layer_is_a_pixel_match() {
     // With the upper layer fully inside the lower one's shape, the union is the same shape, so
     // a correct merge is a pixel-for-pixel match: the style is neither lost, nor applied
