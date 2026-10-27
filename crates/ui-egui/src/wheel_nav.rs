@@ -538,6 +538,27 @@ pub fn pinch_factor(i: &InputState, touch_gestures: bool) -> f32 {
         .product()
 }
 
+/// Suppress new tool presses from wheel/trackpad compatibility pointer events through release,
+/// including after wheel smoothing. A contact already held before navigation keeps its tool
+/// input, even before egui's drag threshold or on the release frame.
+pub fn blocks_tool_input(ctx: &Context, navigated: bool) -> bool {
+    let down = ctx.input(|i| i.pointer.any_down() || i.any_touches());
+    let frame = ctx.cumulative_frame_nr();
+    let id = Id::new("pc-wheel-contact");
+    ctx.data_mut(|d| {
+        let previous = d.get_temp::<(u64, bool, bool, bool)>(id);
+        if let Some((at, blocked, _, _)) = previous
+            && at == frame
+        {
+            return blocked;
+        }
+        let was_down = previous.is_some_and(|(_, _, _, down)| down);
+        let blocked = previous.is_some_and(|(_, _, held, _)| held) || (navigated && !was_down);
+        d.insert_temp(id, (frame, blocked, blocked && down, down));
+        blocked
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use egui::TouchPhase;

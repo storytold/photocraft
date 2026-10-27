@@ -1248,6 +1248,14 @@ pub fn cancel(app: &mut PhotocraftApp) {
     }
 }
 
+/// Drop an in-progress handle drag without cancelling Free Transform itself.
+pub fn abort_pointer(app: &mut PhotocraftApp) {
+    if let Some(pv) = app.transform_preview.as_mut() {
+        pv.gesture = None;
+        pv.warp_drag = None;
+    }
+}
+
 /// The session's starting box: where Undo stops.
 fn start_steps(app: &mut PhotocraftApp) {
     if let (Some(t), Some(pv)) = (&app.ui.transform, app.transform_preview.as_mut()) {

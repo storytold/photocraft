@@ -9,10 +9,31 @@ use serde_json::json;
 use crate::PhotocraftApp;
 
 fn harness() -> Harness<'static, PhotocraftApp> {
+    harness_with_step_dt(None)
+}
+
+fn touch_harness() -> Harness<'static, PhotocraftApp> {
+    harness_with_step_dt(Some(1.0 / 60.0))
+}
+
+fn run_touch_steps(h: &mut Harness<'static, PhotocraftApp>, steps: usize) {
+    // Harness has no eframe raw_input_hook: mirror its touch normalization before every frame.
+    for _ in 0..steps {
+        let ctx = h.ctx.clone();
+        if crate::touch_nav::normalize_pointer(&ctx, h.input_mut()) {
+            crate::touch_nav::abort_tools(h.state_mut(), &ctx);
+        }
+        h.run_steps(1);
+    }
+}
+
+fn harness_with_step_dt(step_dt: Option<f32>) -> Harness<'static, PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
     app.sync_views();
-    let mut h = Harness::builder().with_size(vec2(1200.0, 800.0)).build_ui_state(
+    let builder = Harness::builder().with_size(vec2(1200.0, 800.0));
+    let builder = if let Some(dt) = step_dt { builder.with_step_dt(dt) } else { builder };
+    let mut h = builder.build_ui_state(
         |ui, app: &mut PhotocraftApp| {
             let ctx = ui.ctx().clone();
             // Fonts set up after the first frame only apply from the next one.
@@ -32,6 +53,14 @@ fn harness() -> Harness<'static, PhotocraftApp> {
 
 fn zoom(h: &Harness<'static, PhotocraftApp>) -> f32 {
     h.state().current_zoom()
+}
+
+fn pointer_button(pos: egui::Pos2, pressed: bool) -> egui::Event {
+    egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE }
+}
+
+fn touch(id: u64, phase: egui::TouchPhase, pos: egui::Pos2) -> egui::Event {
+    egui::Event::Touch { device_id: egui::TouchDeviceId(0), id: egui::TouchId(id), phase, pos, force: None }
 }
 
 fn open_dialog(h: &mut Harness<'static, PhotocraftApp>) {
@@ -1193,6 +1222,560 @@ fn escape_with_targa_options_open_does_not_deselect() {
     h.key_press(Key::Escape);
     h.run_steps(2);
     assert!(h.state().session.active().unwrap().doc.selection.is_some(), "Esc belongs to Targa Options");
+}
+
+#[test]
+fn two_fingers_pan_the_canvas_and_do_not_paint() {
+    let mut h = touch_harness();
+    h.state_mut().ui.tool = crate::state::Tool::Brush;
+    let _ = h.state_mut().run("tools.setBrush", json!({"brush": {"size": 40, "hardness": 1.0}}));
+    let r = h.state().last_canvas_rect;
+    let a = r.center();
+    let b = a + vec2(48.0, 0.0);
+    h.hover_at(a);
+    run_touch_steps(&mut h, 1);
+    let (rev0, c0) = (h.state().session.active().unwrap().revision, h.state().ui.views[0].center);
+    h.input_mut().events.extend([pointer_button(a, true), touch(1, egui::TouchPhase::Start, a), touch(2, egui::TouchPhase::Start, b)]);
+    run_touch_steps(&mut h, 1);
+    let moved = a + vec2(36.0, 24.0);
+    h.input_mut().events.extend([
+        egui::Event::PointerMoved(moved),
+        touch(1, egui::TouchPhase::Move, moved),
+        touch(2, egui::TouchPhase::Move, b + vec2(36.0, 24.0)),
+    ]);
+    run_touch_steps(&mut h, 2);
+    h.input_mut().events.extend([pointer_button(moved, false), touch(1, egui::TouchPhase::End, moved), touch(2, egui::TouchPhase::End, b + vec2(36.0, 24.0))]);
+    run_touch_steps(&mut h, 2);
+    assert_eq!(h.state().session.active().unwrap().revision, rev0, "two fingers must not commit a tool");
+    let c1 = h.state().ui.views[0].center;
+    assert!((c1[0] - c0[0]).abs() > 1.0 || (c1[1] - c0[1]).abs() > 1.0, "two fingers pan: {c0:?} -> {c1:?}");
+}
+
+#[test]
+fn wheel_scroll_owns_mixed_pointer_input_and_never_paints() {
+    for delta in [vec2(-80.0, 0.0), vec2(80.0, 0.0), vec2(0.0, -80.0), vec2(0.0, 80.0)] {
+        for touch_compat in [false, true] {
+            let mut h = harness();
+            h.state_mut().ui.tool = crate::state::Tool::Brush;
+            let p = h.state().last_canvas_rect.center();
+            h.hover_at(p);
+            h.run_steps(1);
+            let revision = h.state().session.active().unwrap().revision;
+            let center = h.state().ui.views[0].center;
+            // A scroll can arrive with compatibility pointer events or a button still held. It
+            // must own the whole gesture, including frames after egui's wheel smoothing settles.
+            h.input_mut().events.extend([
+                pointer_button(p, true),
+                egui::Event::PointerMoved(p + delta),
+                egui::Event::MouseWheel { source: egui::MouseWheelSource::Unknown, unit: egui::MouseWheelUnit::Point, delta, phase: egui::TouchPhase::Move, modifiers: Modifiers::NONE },
+            ]);
+            if touch_compat {
+                h.event(touch(1, egui::TouchPhase::Start, p));
+            }
+            h.run_steps(40);
+            assert!(h.state().drag.is_none(), "wheel navigation must never start a brush stroke");
+            h.event(egui::Event::PointerMoved(p + delta * 1.5));
+            h.run_steps(2);
+            h.event(pointer_button(p + delta * 1.5, false));
+            if touch_compat {
+                h.event(touch(1, egui::TouchPhase::End, p + delta * 1.5));
+            }
+            h.run_steps(3);
+            assert_eq!(h.state().session.active().unwrap().revision, revision, "scrolling {delta:?} must not paint");
+            let end = h.state().ui.views[0].center;
+            if delta.x != 0.0 {
+                assert!((end[0] - center[0]) * delta.x < 0.0, "horizontal wheel must pan: {center:?} -> {end:?}");
+                assert_eq!(end[1], center[1]);
+            } else {
+                assert!((end[1] - center[1]) * delta.y < 0.0, "vertical wheel must pan: {center:?} -> {end:?}");
+                assert_eq!(end[0], center[0]);
+            }
+            // Normal mouse/pen drawing resumes after release.
+            h.event(pointer_button(p, true));
+            h.event(pointer_button(p, false));
+            h.run_steps(3);
+            assert!(h.state().session.active().unwrap().revision > revision);
+        }
+    }
+}
+
+#[test]
+fn a_second_finger_aborts_an_in_progress_stroke() {
+    let mut h = touch_harness();
+    h.state_mut().ui.tool = crate::state::Tool::Brush;
+    let _ = h.state_mut().run("tools.setBrush", json!({"brush": {"size": 40, "hardness": 1.0}}));
+    let r = h.state().last_canvas_rect;
+    let a = r.center();
+    h.hover_at(a);
+    run_touch_steps(&mut h, 1);
+    let rev0 = h.state().session.active().unwrap().revision;
+    h.input_mut().events.extend([pointer_button(a, true), touch(1, egui::TouchPhase::Start, a)]);
+    run_touch_steps(&mut h, 1);
+    h.input_mut().events.extend([egui::Event::PointerMoved(a + vec2(20.0, 0.0)), touch(1, egui::TouchPhase::Move, a + vec2(20.0, 0.0))]);
+    run_touch_steps(&mut h, 1);
+    h.input_mut().events.push(touch(2, egui::TouchPhase::Start, a + vec2(40.0, 8.0)));
+    run_touch_steps(&mut h, 1);
+    h.input_mut().events.extend([
+        pointer_button(a + vec2(20.0, 0.0), false),
+        touch(1, egui::TouchPhase::End, a + vec2(20.0, 0.0)),
+        touch(2, egui::TouchPhase::End, a + vec2(40.0, 8.0)),
+    ]);
+    run_touch_steps(&mut h, 2);
+    assert_eq!(h.state().session.active().unwrap().revision, rev0, "the interrupted stroke must not commit");
+}
+
+#[test]
+fn one_finger_still_paints() {
+    let mut h = harness();
+    h.state_mut().ui.tool = crate::state::Tool::Brush;
+    let _ = h.state_mut().run("tools.setBrush", json!({"brush": {"size": 40, "hardness": 1.0}}));
+    let a = h.state().last_canvas_rect.center();
+    h.hover_at(a);
+    h.run_steps(1);
+    let rev0 = h.state().session.active().unwrap().revision;
+    h.event(pointer_button(a, true));
+    h.event(egui::Event::PointerMoved(a + vec2(40.0, 0.0)));
+    h.event(pointer_button(a + vec2(40.0, 0.0), false));
+    h.run_steps(2);
+    assert!(h.state().session.active().unwrap().revision > rev0, "one finger still paints");
+}
+
+#[test]
+fn two_fingers_can_pinch_zoom() {
+    let mut h = touch_harness();
+    let r = h.state().last_canvas_rect;
+    let mid = r.center();
+    let a = mid - vec2(20.0, 0.0);
+    let b = mid + vec2(20.0, 0.0);
+    h.hover_at(mid);
+    run_touch_steps(&mut h, 1);
+    let z0 = zoom(&h);
+    h.input_mut().events.extend([pointer_button(a, true), touch(1, egui::TouchPhase::Start, a), touch(2, egui::TouchPhase::Start, b)]);
+    run_touch_steps(&mut h, 1);
+    // Spread the fingers: egui's pinch zoom is the change in distance, not Event::Zoom
+    // (Event::Zoom is ignored while two touches are down).
+    let a2 = mid - vec2(40.0, 0.0);
+    let b2 = mid + vec2(40.0, 0.0);
+    h.hover_at(mid);
+    h.input_mut().events.extend([egui::Event::PointerMoved(a2), touch(1, egui::TouchPhase::Move, a2), touch(2, egui::TouchPhase::Move, b2)]);
+    run_touch_steps(&mut h, 2);
+    assert!(zoom(&h) > z0, "pinch zooms the canvas: {z0} -> {}", zoom(&h));
+}
+
+#[test]
+fn consecutive_two_finger_pinches_both_zoom() {
+    // Acceptance: rapid consecutive two-finger zoom/pan must both take effect (latch must
+    // not stick on a leftover Primary after the first gesture ends).
+    let mut h = touch_harness();
+    let r = h.state().last_canvas_rect;
+    let mid = r.center();
+    let pinch = |h: &mut Harness<'static, PhotocraftApp>, spread: f32| {
+        let a = mid - vec2(spread, 0.0);
+        let b = mid + vec2(spread, 0.0);
+        h.input_mut().events.extend([pointer_button(a, true), touch(1, egui::TouchPhase::Start, a), touch(2, egui::TouchPhase::Start, b)]);
+        // A web Touch End removes the pointer. egui starts a new multi-touch baseline using the
+        // previous frame's pointer position, so let its newly pressed pointer settle before moving.
+        run_touch_steps(h, 2);
+        let a2 = mid - vec2(spread * 2.0, 0.0);
+        let b2 = mid + vec2(spread * 2.0, 0.0);
+        h.hover_at(mid);
+        h.input_mut().events.extend([egui::Event::PointerMoved(a2), touch(1, egui::TouchPhase::Move, a2), touch(2, egui::TouchPhase::Move, b2)]);
+        run_touch_steps(h, 2);
+        h.input_mut().events.extend([pointer_button(a2, false), touch(1, egui::TouchPhase::End, a2), touch(2, egui::TouchPhase::End, b2)]);
+        run_touch_steps(h, 1);
+        // Leftover Primary must not keep nav latched across the gap before the next pinch.
+        run_touch_steps(h, 1);
+    };
+    h.hover_at(mid);
+    run_touch_steps(&mut h, 1);
+    let z0 = zoom(&h);
+    pinch(&mut h, 20.0);
+    let z1 = zoom(&h);
+    assert!(z1 > z0, "first pinch must zoom: {z0} -> {z1}");
+    pinch(&mut h, 24.0);
+    let z2 = zoom(&h);
+    assert!(z2 > z1, "second rapid pinch must also zoom: {z1} -> {z2}");
+    assert!(!h.state().touch_nav, "nav latch must clear between gestures");
+}
+
+#[test]
+fn staggered_pinch_promotes_and_aborts_the_first_finger_stroke() {
+    // Acceptance: the first finger paints immediately, but a second finger during grace promotes
+    // the gesture to navigation and aborts that provisional stroke.
+    let mut h = touch_harness();
+    h.state_mut().ui.tool = crate::state::Tool::Brush;
+    let _ = h.state_mut().run("tools.setBrush", json!({"brush": {"size": 40, "hardness": 1.0}}));
+    let r = h.state().last_canvas_rect;
+    let a = r.center();
+    let b = a + vec2(48.0, 0.0);
+    h.hover_at(a);
+    run_touch_steps(&mut h, 1);
+    let rev0 = h.state().session.active().unwrap().revision;
+    h.input_mut().events.extend([pointer_button(a, true), touch(1, egui::TouchPhase::Start, a)]);
+    run_touch_steps(&mut h, 1);
+    assert!(h.state().live_stroke.is_some() && h.state().drag.is_some(), "the first finger must acquire the tool during pinch grace");
+    h.input_mut().events.push(touch(2, egui::TouchPhase::Start, b));
+    run_touch_steps(&mut h, 1);
+    assert!(h.state().touch_nav, "second finger enters touch-nav");
+    assert!(h.state().live_stroke.is_none() && h.state().drag.is_none(), "nav must keep tools clear");
+    let moved = a + vec2(30.0, 20.0);
+    h.input_mut().events.extend([
+        egui::Event::PointerMoved(moved),
+        touch(1, egui::TouchPhase::Move, moved),
+        touch(2, egui::TouchPhase::Move, b + vec2(30.0, 20.0)),
+    ]);
+    run_touch_steps(&mut h, 2);
+    h.input_mut().events.extend([pointer_button(moved, false), touch(1, egui::TouchPhase::End, moved), touch(2, egui::TouchPhase::End, b + vec2(30.0, 20.0))]);
+    run_touch_steps(&mut h, 2);
+    assert_eq!(h.state().session.active().unwrap().revision, rev0, "pinch must not commit ink");
+    assert!(!h.state().touch_nav);
+}
+
+#[test]
+fn one_finger_with_touch_events_paints_without_stylus() {
+    // Acceptance: without a stylus, a lone finger (Touch + Primary) paints immediately and keeps
+    // painting after pinch grace ends.
+    let mut h = touch_harness();
+    h.state_mut().ui.tool = crate::state::Tool::Brush;
+    let _ = h.state_mut().run("tools.setBrush", json!({"brush": {"size": 40, "hardness": 1.0}}));
+    let a = h.state().last_canvas_rect.center();
+    h.hover_at(a);
+    run_touch_steps(&mut h, 1);
+    let rev0 = h.state().session.active().unwrap().revision;
+    h.input_mut().events.extend([pointer_button(a, true), touch(1, egui::TouchPhase::Start, a)]);
+    run_touch_steps(&mut h, 1);
+    assert!(!h.state().touch_nav, "one finger must not enter touch-nav");
+    assert!(h.state().live_stroke.is_some(), "the first touch must start the stroke during grace");
+    // Hold through grace, then move while the same stroke remains active.
+    run_touch_steps(&mut h, 3);
+    let moved = a + vec2(40.0, 12.0);
+    h.input_mut().events.extend([egui::Event::PointerMoved(moved), touch(1, egui::TouchPhase::Move, moved)]);
+    run_touch_steps(&mut h, 2);
+    h.input_mut().events.extend([pointer_button(moved, false), touch(1, egui::TouchPhase::End, moved)]);
+    run_touch_steps(&mut h, 2);
+    assert!(h.state().session.active().unwrap().revision > rev0, "one finger with touch events must paint without a stylus");
+}
+
+#[test]
+fn quick_single_touch_commits_before_pinch_grace_expires() {
+    // A tap shorter than the 50 ms pinch grace must still receive the tool and commit on release.
+    let mut h = touch_harness();
+    h.state_mut().ui.tool = crate::state::Tool::Brush;
+    h.state_mut().run("tools.setBrush", json!({"brush": {"size": 40, "hardness": 1.0}})).unwrap();
+    let p = h.state().last_canvas_rect.center();
+    h.hover_at(p);
+    run_touch_steps(&mut h, 1);
+    let revision = h.state().session.active().unwrap().revision;
+    h.input_mut().events.extend([pointer_button(p, true), touch(1, egui::TouchPhase::Start, p)]);
+    run_touch_steps(&mut h, 1);
+    assert!(h.state().live_stroke.is_some(), "a short touch must start the tool before grace expires");
+    h.input_mut().events.extend([pointer_button(p, false), touch(1, egui::TouchPhase::End, p)]);
+    run_touch_steps(&mut h, 1);
+    assert!(!h.state().touch_nav);
+    assert!(h.state().live_stroke.is_none() && h.state().drag.is_none(), "release must finish the short stroke");
+    assert!(h.state().session.active().unwrap().revision > revision, "a short touch must commit a stroke");
+}
+
+#[test]
+fn stationary_single_touch_keeps_pinch_grace_open() {
+    // Holding the first finger still must not consume the grace timeout. A second finger can
+    // still promote the gesture even after more than 50 ms of stationary contact.
+    let mut h = touch_harness();
+    h.state_mut().ui.tool = crate::state::Tool::Brush;
+    h.state_mut().run("tools.setBrush", json!({"brush": {"size": 40, "hardness": 1.0}})).unwrap();
+    let a = h.state().last_canvas_rect.center();
+    h.hover_at(a);
+    run_touch_steps(&mut h, 1);
+    h.input_mut().events.extend([pointer_button(a, true), touch(1, egui::TouchPhase::Start, a)]);
+    run_touch_steps(&mut h, 1);
+    run_touch_steps(&mut h, 8);
+    assert!(!crate::touch_nav::tool_owned(&h.ctx), "stationary contact must keep the grace window open");
+    assert!(h.state().live_stroke.is_some(), "the stationary first finger keeps its tool active");
+
+    h.input_mut().events.push(touch(2, egui::TouchPhase::Start, a + vec2(48.0, 0.0)));
+    run_touch_steps(&mut h, 1);
+    assert!(h.state().touch_nav, "a delayed second finger must still acquire navigation while stationary");
+    assert!(h.state().live_stroke.is_none() && h.state().drag.is_none(), "navigation must abort the provisional stroke");
+}
+
+fn touch_view(h: &Harness<'static, PhotocraftApp>) -> ([f32; 2], f32, f32) {
+    let view = &h.state().ui.views[0];
+    (view.center, view.zoom, view.rotation)
+}
+
+fn cursor_sized_shapes_near(h: &Harness<'static, PhotocraftApp>, p: Pos2) -> usize {
+    fn count(shape: &egui::Shape, near: egui::Rect) -> usize {
+        if let egui::Shape::Vec(children) = shape {
+            return children.iter().map(|s| count(s, near)).sum();
+        }
+        let bounds = shape.visual_bounding_rect();
+        usize::from(bounds.is_finite() && bounds.is_positive() && bounds.width() < 60.0 && bounds.height() < 60.0 && bounds.intersects(near))
+    }
+    let near = egui::Rect::from_center_size(p, vec2(80.0, 80.0));
+    h.output().shapes.iter().filter(|s| s.clip_rect.intersects(near)).map(|s| count(&s.shape, near)).sum()
+}
+
+#[test]
+fn two_finger_navigation_hides_native_and_painted_tool_cursors() {
+    for tool in [crate::state::Tool::Brush, crate::state::Tool::PaintBucket, crate::state::Tool::Hand] {
+        let mut h = touch_harness();
+        h.state_mut().ui.tool = tool;
+        h.state_mut().run("tools.setBrush", json!({"brush": {"size": 20, "hardness": 1.0}})).unwrap();
+        let p = h.state().last_canvas_rect.center();
+        h.hover_at(p);
+        run_touch_steps(&mut h, 2);
+        let hover = &h.output().platform_output;
+        assert!(
+            hover.cursor_icon != egui::CursorIcon::None || hover.cursor_image.is_some() || cursor_sized_shapes_near(&h, p) > 0,
+            "{tool:?} must show a cursor before navigation"
+        );
+        let b = p + vec2(48.0, 0.0);
+        h.input_mut().events.extend([pointer_button(p, true), touch(1, egui::TouchPhase::Start, p), touch(2, egui::TouchPhase::Start, b)]);
+        run_touch_steps(&mut h, 1);
+        assert!(h.state().touch_nav);
+        let nav = &h.output().platform_output;
+        assert_eq!(nav.cursor_icon, egui::CursorIcon::None, "{tool:?}: navigation must hide the OS pointer");
+        assert!(nav.cursor_image.is_none(), "{tool:?}: a native tool bitmap must not survive navigation");
+        assert_eq!(cursor_sized_shapes_near(&h, p), 0, "{tool:?}: navigation must not paint a brush tip or tool icon");
+
+        let moved = p + vec2(20.0, 12.0);
+        h.input_mut().events.extend([
+            egui::Event::PointerMoved(moved),
+            touch(1, egui::TouchPhase::Move, moved),
+            touch(2, egui::TouchPhase::Move, b + vec2(20.0, 12.0)),
+        ]);
+        run_touch_steps(&mut h, 1);
+        let nav = &h.output().platform_output;
+        assert_eq!(nav.cursor_icon, egui::CursorIcon::None, "{tool:?}: moving fingers must keep the OS pointer hidden");
+        assert!(nav.cursor_image.is_none());
+        assert_eq!(cursor_sized_shapes_near(&h, moved), 0, "{tool:?}: moving fingers must keep painted tool cursors hidden");
+    }
+}
+
+#[test]
+fn an_early_second_finger_does_not_replay_pointer_motion_when_navigation_starts() {
+    let mut h = touch_harness();
+    h.state_mut().ui.tool = crate::state::Tool::Brush;
+    let a = h.state().last_canvas_rect.center() - vec2(30.0, 10.0);
+    let b = a + vec2(60.0, 0.0);
+    h.hover_at(a);
+    run_touch_steps(&mut h, 1);
+    let revision = h.state().session.active().unwrap().revision;
+    h.input_mut().events.extend([pointer_button(a, true), touch(1, egui::TouchPhase::Start, a)]);
+    run_touch_steps(&mut h, 1);
+    assert!(h.state().live_stroke.is_some() && h.state().drag.is_some());
+    let before = touch_view(&h);
+
+    // This is a staggered pinch within grace, with a nonzero compatibility pointer delta.
+    // egui resets its centroid delta when the contact count changes; that zero must not fall
+    // back to the preceding single-finger drag and jump the canvas on the acquisition frame.
+    let moved = a + vec2(25.0, 12.0);
+    h.input_mut().events.extend([
+        egui::Event::PointerMoved(moved),
+        pointer_button(moved, true),
+        touch(1, egui::TouchPhase::Move, moved),
+        touch(2, egui::TouchPhase::Start, b),
+    ]);
+    run_touch_steps(&mut h, 1);
+    assert!(h.state().touch_nav, "a second finger within grace must acquire navigation");
+    assert_eq!(touch_view(&h), before, "acquiring navigation must not replay one-finger movement");
+    assert!(h.state().live_stroke.is_none() && h.state().drag.is_none());
+
+    let a2 = moved + vec2(20.0, 20.0);
+    let b2 = b + vec2(40.0, 20.0);
+    h.input_mut().events.extend([egui::Event::PointerMoved(a2), touch(1, egui::TouchPhase::Move, a2), touch(2, egui::TouchPhase::Move, b2)]);
+    run_touch_steps(&mut h, 1);
+    let navigated = touch_view(&h);
+    assert_ne!(navigated.0, before.0, "subsequent centroid movement must still pan");
+    assert!(navigated.1 > before.1, "subsequent spreading must still zoom");
+
+    // Topology changes during navigation likewise have no movement of their own.
+    let a3 = a2 + vec2(18.0, 8.0);
+    let c = b2 + vec2(30.0, 20.0);
+    h.input_mut().events.extend([
+        egui::Event::PointerMoved(a3),
+        pointer_button(a3, true),
+        touch(1, egui::TouchPhase::Move, a3),
+        touch(3, egui::TouchPhase::Start, c),
+    ]);
+    run_touch_steps(&mut h, 1);
+    assert_eq!(touch_view(&h), navigated, "adding a third finger must not jump the view");
+    h.input_mut().events.extend([pointer_button(a3, false), egui::Event::PointerGone, touch(3, egui::TouchPhase::End, c)]);
+    run_touch_steps(&mut h, 1);
+    assert_eq!(touch_view(&h), navigated, "returning to two fingers must not jump the view");
+    h.input_mut().events.extend([pointer_button(a3, false), egui::Event::PointerGone, touch(2, egui::TouchPhase::End, b2)]);
+    run_touch_steps(&mut h, 1);
+    assert_eq!(touch_view(&h), navigated, "lifting down to one finger must not replay pointer movement");
+    h.input_mut().events.extend([pointer_button(a3, false), egui::Event::PointerGone, touch(1, egui::TouchPhase::End, a3)]);
+    run_touch_steps(&mut h, 2);
+    assert!(!h.state().touch_nav);
+    assert_eq!(h.state().session.active().unwrap().revision, revision, "navigation must not commit ink");
+}
+
+#[test]
+fn a_late_second_finger_commits_the_first_stroke_and_promotes_navigation() {
+    let mut h = touch_harness();
+    h.state_mut().ui.tool = crate::state::Tool::Brush;
+    h.state_mut().run("tools.setBrush", json!({"brush": {"size": 20, "hardness": 1.0}})).unwrap();
+    let p = h.state().last_canvas_rect.center() - vec2(60.0, 20.0);
+    h.hover_at(p);
+    run_touch_steps(&mut h, 1);
+    let revision = h.state().session.active().unwrap().revision;
+    let history = h.state().session.active().unwrap().history.past_len();
+    let view = touch_view(&h);
+
+    h.input_mut().events.extend([pointer_button(p, true), touch(1, egui::TouchPhase::Start, p)]);
+    run_touch_steps(&mut h, 1);
+    run_touch_steps(&mut h, 3);
+    let a = p + vec2(40.0, 12.0);
+    h.input_mut().events.extend([egui::Event::PointerMoved(a), touch(1, egui::TouchPhase::Move, a)]);
+    run_touch_steps(&mut h, 1);
+    run_touch_steps(&mut h, 6);
+    assert!(crate::touch_nav::tool_owned(&h.ctx), "the first finger owns the tool after grace expires");
+    assert!(h.state().live_stroke.is_some() && h.state().drag.is_some());
+
+    // Once the first finger owns the stroke, a later finger commits the received points and
+    // immediately promotes the gesture to navigation.
+    let b = a + vec2(48.0, 0.0);
+    h.input_mut().events.extend([pointer_button(a, true), touch(2, egui::TouchPhase::Start, b)]);
+    run_touch_steps(&mut h, 1);
+    assert!(h.state().touch_nav, "a late second finger must acquire navigation");
+    assert!(h.state().live_stroke.is_none() && h.state().drag.is_none(), "the first stroke must be cut off");
+    assert_eq!(h.state().session.active().unwrap().revision, revision + 1, "the first stroke must be committed once");
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), history + 1);
+    assert_eq!(touch_view(&h), view, "navigation acquisition must not jump the view");
+
+    let a2 = a + vec2(16.0, 10.0);
+    let b2 = b + vec2(36.0, 24.0);
+    h.input_mut().events.extend([egui::Event::PointerMoved(a2), touch(1, egui::TouchPhase::Move, a2), touch(2, egui::TouchPhase::Move, b2)]);
+    run_touch_steps(&mut h, 1);
+    let navigated = touch_view(&h);
+    assert_ne!(navigated.0, view.0, "the promoted gesture must pan");
+    assert!(navigated.1 > view.1, "the promoted gesture must pinch-zoom");
+
+    h.input_mut().events.extend([
+        pointer_button(a2, false),
+        egui::Event::PointerGone,
+        touch(1, egui::TouchPhase::End, a2),
+        touch(2, egui::TouchPhase::End, b2),
+    ]);
+    run_touch_steps(&mut h, 2);
+    assert!(!h.state().touch_nav);
+    assert_eq!(h.state().session.active().unwrap().revision, revision + 1, "navigation must not commit another stroke");
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), history + 1);
+}
+
+fn non_touch_navigation_events() -> [egui::Event; 3] {
+    [
+        egui::Event::MouseWheel { source: egui::MouseWheelSource::Unknown, unit: egui::MouseWheelUnit::Point, delta: vec2(0.0, -24.0), phase: egui::TouchPhase::Move, modifiers: Modifiers::NONE },
+        egui::Event::MouseWheel { source: egui::MouseWheelSource::Unknown, unit: egui::MouseWheelUnit::Line, delta: vec2(0.0, 1.0), phase: egui::TouchPhase::Move, modifiers: Modifiers::ALT },
+        egui::Event::Zoom(1.1),
+    ]
+}
+
+#[test]
+fn wheel_or_trackpad_navigation_during_a_mouse_stroke_keeps_it_live_and_commits_once() {
+    for event in non_touch_navigation_events() {
+        // Also cover a held press before egui recognises a drag: the first Brush dab is already
+        // a live stroke and must survive a Wacom touch ring, mouse wheel or trackpad scroll.
+        for moved_before_navigation in [false, true] {
+            let mut h = harness();
+            h.state_mut().ui.tool = crate::state::Tool::Brush;
+            h.state_mut().run("tools.setBrush", json!({"brush": {"size": 20, "hardness": 1.0}})).unwrap();
+            let p = h.state().last_canvas_rect.center() - vec2(60.0, 20.0);
+            h.hover_at(p);
+            h.run_steps(1);
+            let revision = h.state().session.active().unwrap().revision;
+            let history = h.state().session.active().unwrap().history.past_len();
+            press(&mut h, p, true);
+            if moved_before_navigation {
+                h.event(egui::Event::PointerMoved(p + vec2(30.0, 0.0)));
+                h.run_steps(1);
+            }
+            assert!(h.state().live_stroke.is_some(), "the mouse press must start live ink");
+            let before = h.state().drag.as_ref().unwrap().clone();
+
+            h.event(event.clone());
+            h.run_steps(1);
+            assert!(h.state().live_stroke.is_some(), "{event:?} must preserve live ink");
+            let drag = h.state().drag.as_ref().expect("navigation must preserve the existing stroke");
+            assert_eq!(drag.start, before.start);
+            assert!(drag.points.starts_with(&before.points), "navigation must preserve all earlier stroke points");
+            assert_eq!(h.state().session.active().unwrap().revision, revision, "navigation must not commit early");
+
+            // Keep the button held beyond egui's wheel smoothing, then draw more. Navigation
+            // must not leave a latch that blocks the remaining stroke or its eventual release.
+            h.run_steps(40);
+            assert!(h.state().live_stroke.is_some(), "ink must survive after navigation settles");
+            let last = *h.state().drag.as_ref().unwrap().points.last().unwrap();
+            let end = p + vec2(75.0, 25.0);
+            h.event(egui::Event::PointerMoved(end));
+            h.run_steps(1);
+            let drag = h.state().drag.as_ref().unwrap();
+            assert_ne!(drag.points.last().unwrap(), &last, "the stroke must keep accepting pointer moves");
+            assert!(drag.points.starts_with(&before.points));
+            assert_eq!(h.state().session.active().unwrap().history.past_len(), history);
+            press(&mut h, end, false);
+            h.run_steps(3);
+            assert!(h.state().live_stroke.is_none() && h.state().drag.is_none());
+            assert_eq!(h.state().session.active().unwrap().revision, revision + 1, "{event:?}: release commits exactly once");
+            assert_eq!(h.state().session.active().unwrap().history.past_len(), history + 1, "one undo step for the whole stroke");
+        }
+    }
+}
+
+#[test]
+fn wheel_or_trackpad_navigation_on_mouse_release_still_commits_the_stroke() {
+    for event in non_touch_navigation_events() {
+        let mut h = harness();
+        h.state_mut().ui.tool = crate::state::Tool::Brush;
+        let p = h.state().last_canvas_rect.center();
+        h.hover_at(p);
+        h.run_steps(1);
+        let revision = h.state().session.active().unwrap().revision;
+        let history = h.state().session.active().unwrap().history.past_len();
+        press(&mut h, p, true);
+        let end = p + vec2(40.0, 12.0);
+        h.event(egui::Event::PointerMoved(end));
+        h.run_steps(1);
+        assert!(h.state().live_stroke.is_some());
+        h.input_mut().events.extend([event.clone(), pointer_button(end, false)]);
+        h.run_steps(3);
+        assert!(h.state().live_stroke.is_none() && h.state().drag.is_none());
+        assert_eq!(h.state().session.active().unwrap().revision, revision + 1, "{event:?}: navigation on release must commit");
+        assert_eq!(h.state().session.active().unwrap().history.past_len(), history + 1);
+    }
+}
+
+#[test]
+fn wheel_or_trackpad_navigation_preserves_an_existing_shape_drag() {
+    for event in non_touch_navigation_events() {
+        let mut h = harness();
+        h.state_mut().ui.tool = crate::state::Tool::Rectangle;
+        let p = h.state().last_canvas_rect.center() - vec2(60.0, 30.0);
+        h.hover_at(p);
+        h.run_steps(1);
+        let revision = h.state().session.active().unwrap().revision;
+        let history = h.state().session.active().unwrap().history.past_len();
+        let layers = h.state().session.active().unwrap().doc.layers.len();
+        press(&mut h, p, true);
+        h.event(egui::Event::PointerMoved(p + vec2(40.0, 20.0)));
+        h.run_steps(1);
+        let start = h.state().drag.as_ref().expect("moving must start the shape drag").start;
+        h.event(event.clone());
+        h.run_steps(40);
+        assert_eq!(h.state().drag.as_ref().expect("navigation must preserve the shape drag").start, start);
+        assert_eq!(h.state().session.active().unwrap().revision, revision);
+        let end = p + vec2(90.0, 60.0);
+        h.event(egui::Event::PointerMoved(end));
+        h.run_steps(1);
+        press(&mut h, end, false);
+        h.run_steps(3);
+        assert!(h.state().drag.is_none());
+        assert_eq!(h.state().session.active().unwrap().revision, revision + 1, "{event:?}: release commits the shape");
+        assert_eq!(h.state().session.active().unwrap().history.past_len(), history + 1);
+        assert_eq!(h.state().session.active().unwrap().doc.layers.len(), layers + 1);
+    }
 }
 
 /// How much of the 400 × 300 document is on screen: the visible document span on each axis,

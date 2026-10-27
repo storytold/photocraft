@@ -244,6 +244,7 @@ pub mod tool_feedback;
 pub(crate) mod tool_memory;
 mod tool_reset;
 mod tool_shortcuts;
+pub mod touch_nav;
 pub mod touch_twins;
 pub mod transform_fx;
 pub mod transform_tex;
@@ -712,6 +713,8 @@ pub struct PhotocraftApp {
     /// Display profile readings (#569).
     monitors: monitor_status::State,
     checker: Option<egui::TextureHandle>,
+    /// Two-or-more-finger canvas pan/zoom is in progress (`touch_nav`).
+    touch_nav: bool,
     drag: Option<canvas::Drag>,
     /// A Move-tool press landed on a locked layer: the first pointer move shows Photoshop's
     /// message (`move_lock`), a plain click shows nothing.
@@ -1078,6 +1081,7 @@ impl PhotocraftApp {
             info_samplers: None,
             monitors: Default::default(),
             checker: None,
+            touch_nav: false,
             drag: None,
             move_blocked: false,
             tool_override: None,
@@ -2733,6 +2737,10 @@ impl eframe::App for PhotocraftApp {
         // A pen held still is no touch screen's press-and-hold right click (stylus.rs).
         let pen_down = self.stylus.pen_contacts.observe(&raw_input.events);
         stylus::pen_hold_is_no_right_click(ctx, pen_down);
+        #[cfg(target_arch = "wasm32")]
+        if touch_nav::normalize_pointer(ctx, raw_input) {
+            touch_nav::abort_tools(self, ctx);
+        }
         if self.custom_titlebar {
             titlebar::release_after_os_resize(ctx, raw_input);
         }

@@ -244,6 +244,11 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
     true
 }
 
+/// Drop an in-progress live-gradient drag without committing it.
+pub fn abort_drag(app: &mut PhotocraftApp) {
+    app.gradient.drag = None;
+}
+
 fn drag_to(app: &mut PhotocraftApp, p: [f32; 2], mods: egui::Modifiers) {
     let zoom = app.point_zoom().max(0.01);
     let active = active_gradient(app);

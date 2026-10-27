@@ -75,7 +75,9 @@ pub fn start() {
             }
         };
         let pen_target = canvas.clone();
-        let result = eframe::WebRunner::new()
+        let touch_target = canvas.clone();
+        let runner = eframe::WebRunner::new();
+        let result = runner
             .start(
                 canvas,
                 options,
@@ -107,6 +109,10 @@ pub fn start() {
                 }),
             )
             .await;
+        if result.is_ok() {
+            listen_touch_pointer(&runner, &touch_target);
+            finish_touch_input(&runner, &touch_target, &document);
+        }
         if let Some(el) = document.get_element_by_id("photocraft_loading") {
             match result {
                 Ok(()) => el.remove(),
@@ -114,6 +120,54 @@ pub fn start() {
             }
         }
     });
+}
+
+/// The browser also sends Pointer Events for touches. eframe runs a frame immediately for those
+/// down/up events, before the Touch Events that identify which finger changed. Route touch
+/// buttons through Touch Events only; the app reconstructs the first finger's pointer lifecycle.
+fn listen_touch_pointer(runner: &eframe::WebRunner, target: &web_sys::HtmlCanvasElement) {
+    let options = web_sys::AddEventListenerOptions::new();
+    options.set_capture(true);
+    for kind in ["pointerdown", "pointerup"] {
+        let canvas = target.clone();
+        let result = runner.add_event_listener_ex::<web_sys::PointerEvent>(target.as_ref(), kind, &options, move |e, app_runner, _| {
+            if e.pointer_type() != "touch" {
+                return;
+            }
+            if !app_runner.has_focus() {
+                let focus = web_sys::FocusOptions::new();
+                focus.set_prevent_scroll(true);
+                canvas.focus_with_options(&focus).ok();
+                app_runner.update_focus();
+            }
+            e.stop_immediate_propagation();
+        });
+        if let Err(e) = result {
+            log::warn!("could not route touch pointer events: {e:?}");
+        }
+    }
+}
+
+/// Run the queued Touch End inside its browser gesture, after eframe's document listener. This
+/// preserves iOS keyboard focus and user activation for clipboard/download/file-picker actions
+/// without letting a pointer-only release finish the wrong finger's stroke.
+fn finish_touch_input(runner: &eframe::WebRunner, canvas: &web_sys::HtmlCanvasElement, document: &web_sys::Document) {
+    let canvas = canvas.clone();
+    let result = runner.add_event_listener::<web_sys::TouchEvent>(document.as_ref(), "touchend", move |event, app_runner| {
+        let target: &web_sys::EventTarget = canvas.as_ref();
+        if event.target().as_ref() != Some(target) {
+            return;
+        }
+        if !app_runner.has_focus() {
+            let focus = web_sys::FocusOptions::new();
+            focus.set_prevent_scroll(true);
+            canvas.focus_with_options(&focus).ok();
+        }
+        app_runner.logic();
+    });
+    if let Err(e) = result {
+        log::warn!("could not preserve touch user activation: {e:?}");
+    }
 }
 
 /// Pen pressure, tilt, twist and the eraser button from Pointer Events (eframe forwards none of them for pens) into
