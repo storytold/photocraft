@@ -329,7 +329,7 @@ pub struct MenuParams {
 pub struct UiSetParams {
     /// Fields for the control method `ui.set`: tool, panels, dock, dockTabs, dockWidth, colorPanel
     /// ({background: bool} picks which swatch the Color panel edits), maskTarget,
-    /// vectorMaskTarget, selectionMode, zoom, center, rotation (view angle in degrees), fit, theme (pro, proMedium, studio,
+    /// vectorMaskTarget, filterMaskTarget (paint the active smart object's filter mask), selectionMode, zoom, center, rotation (view angle in degrees), fit, theme (pro, proMedium, studio,
     /// studioLight, classic, solarizedDark, adwaita, adwaitaDark, breezeLight, breezeDark, softLight, softDark), brushSection, brushTab,
     /// brushesView, brushPicker ([x, y] opens the Brush Preset picker there, null closes it),
     /// brushPickerName, brushPickerStroke, brushPickerTip (the picker card's parts, at least one
@@ -350,8 +350,14 @@ pub struct UiSetParams {
     /// "mode"), kinds (a list of layer kinds), name (matches part of the layer name) and mode (a
     /// blend mode name) for the Layers panel filter). strokeTrace (true, false, "stderr" or "off":
     /// the stroke latency trace at runtime; a CSV file is set at launch with --stroke-trace, not
-    /// over this channel). updatesOpen (bool, the Help › Check for Updates window). Other fields
-    /// are an error.
+    /// over this channel). updatesOpen (bool, the Help › Check for Updates window).
+    /// histogramPanel (an object patching view ("compact", "expanded" or "allChannels"), channel
+    /// ("composite", "red", "green", "blue", "cyan", "magenta", "yellow", "black", "a", "b",
+    /// "luminosity" or "colors"), showChannelsInColor, showStatistics and source ("entireImage",
+    /// "selectedLayer" or "adjustmentComposite") for the Histogram panel), histogramRange ([from,
+    /// to] levels 0..255 whose Count and Percentile the panel shows, or null) and histogramRefresh
+    /// (true: an Uncached Refresh); `ui.inspect` reports them and the statistics under
+    /// `histogram`. Other fields are an error.
     pub fields: Value,
 }
 

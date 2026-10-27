@@ -37,12 +37,14 @@ serde_json = { workspace = true }
 log = { workspace = true }
 # Display order of right-to-left labels (`bidi_text.rs`); already linked through usvg.
 unicode-bidi = "0.3"
-base64 = "0.22"
+base64 = "0.23"
 # Inflating the translation catalogs, stored deflated (build.rs); already linked through photocraft-io.
 flate2 = { workspace = true }
 web-time = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# Floating panels open in their own OS windows on the desktop; the web keeps them in the page.
+craft-ui = { workspace = true, features = ["native-windows"] }
 craft-update = { workspace = true }
 rayon = { workspace = true }
 # Safe native UI-language APIs (Windows/macOS); no subprocess or web dependency.

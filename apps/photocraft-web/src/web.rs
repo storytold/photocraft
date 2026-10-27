@@ -4,7 +4,7 @@ use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use photocraft_codecs::{ChannelLayout, EncodeOptions, Image};
 use photocraft_doc::Document;
@@ -219,7 +219,7 @@ fn load_font_manifest(served: Served, ctx: egui::Context) {
             files.entry(f.family.clone()).or_default().push((f.file.clone(), f.integrity.clone()));
         }
         log::info!("photocraft-web: {} served font families", files.len());
-        served.lock().unwrap_or_else(|e| e.into_inner()).files = files;
+        served.lock().unwrap_or_else(PoisonError::into_inner).files = files;
         // The families for the font menus, and the script fallbacks (the manifest's `scripts`).
         served_fonts::add_fonts(&fonts);
         // Fetch now the fallbacks of the scripts the browser's languages use (an Arabic reader gets
@@ -296,7 +296,7 @@ impl WebShell {
     fn serve_fonts(&mut self, ctx: &egui::Context) {
         let requested = served_fonts::take_requests();
         let (fetch, arrived) = {
-            let mut s = self.served.lock().unwrap_or_else(|e| e.into_inner());
+            let mut s = self.served.lock().unwrap_or_else(PoisonError::into_inner);
             let mut fetch = Vec::new();
             for family in requested {
                 if let Some(files) = s.files.get(&family).cloned()
@@ -313,7 +313,7 @@ impl WebShell {
             wasm_bindgen_futures::spawn_local(async move {
                 match fetch_bytes(&file, integrity.as_deref()).await {
                     Ok(bytes) => {
-                        served.lock().unwrap_or_else(|e| e.into_inner()).arrived.push((family, bytes));
+                        served.lock().unwrap_or_else(PoisonError::into_inner).arrived.push((family, bytes));
                         ctx.request_repaint();
                     }
                     Err(e) => log::error!("couldn't fetch served font {file}: {e}"),
@@ -352,7 +352,7 @@ impl eframe::App for WebShell {
                     match f.bytes_async().await {
                         Ok(bytes) => {
                             let queue = if place { &place_inbox } else { &inbox };
-                            queue.lock().unwrap_or_else(|e| e.into_inner()).push((name, bytes));
+                            queue.lock().unwrap_or_else(PoisonError::into_inner).push((name, bytes));
                             ctx.request_repaint();
                         }
                         Err(e) => log::error!("couldn't read dropped file {name}: {e}"),

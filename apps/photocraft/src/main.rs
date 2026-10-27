@@ -92,6 +92,53 @@ fn custom_titlebar(prefs_file: Option<&std::path::Path>) -> bool {
     CUSTOM_TITLEBAR && !prefs.interface.system_title_bar
 }
 
+/// Preferences › Integrations, read before the window opens the way [`custom_titlebar`] is:
+/// whether agents may drive this launch at all, and the port to listen on when no `--control`
+/// was given (0 = only with `--control`). A missing or unreadable file keeps the defaults.
+///
+/// The section is read on its own, and when it doesn't read as a whole each value on its own,
+/// as the app's lenient load reads them (#6611): a wrong-typed value elsewhere in the file, or
+/// in the other field, must not turn Allow Agent Control back on while the dialog shows it off.
+fn integrations(prefs_file: Option<&std::path::Path>) -> photocraft_engine::prefs::Integrations {
+    use serde_json::Value;
+    let mut out = photocraft_engine::prefs::Preferences::default().integrations;
+    let file: Option<Value> = prefs_file.and_then(|p| std::fs::read_to_string(p).ok()).and_then(|t| serde_json::from_str(&t).ok());
+    let Some(section) = file.as_ref().and_then(|v| v.get("integrations")) else {
+        return out;
+    };
+    if let Ok(whole) = serde_json::from_value(section.clone()) {
+        return whole;
+    }
+    if let Some(allow) = section.get("allowAgentControl").and_then(Value::as_bool) {
+        out.allow_agent_control = allow;
+    }
+    if let Some(port) = section.get("controlPort").and_then(Value::as_u64).and_then(|p| u32::try_from(p).ok()) {
+        out.control_port = port;
+    }
+    out
+}
+
+/// The control port this launch listens on, and the warning to print when a request was refused.
+/// `--control` (or `PHOTOCRAFT_CONTROL_PORT`) wins over the preference; Allow Agent Control off
+/// refuses both, and says so rather than ignoring the flag silently. A preferred port outside
+/// 1..=65535 is refused the same way.
+fn control_port_for(cli: Option<u16>, prefs: &photocraft_engine::prefs::Integrations) -> (Option<u16>, Option<String>) {
+    if !prefs.allow_agent_control {
+        let warning = cli.map(|p| format!("photocraft: Preferences › Integrations › Allow Agent Control is off: not listening on port {p}\n"));
+        return (None, warning);
+    }
+    if let Some(port) = cli {
+        return (Some(port), None);
+    }
+    match prefs.control_port {
+        0 => (None, None),
+        p => match u16::try_from(p).ok().filter(|p| *p != 0) {
+            Some(port) => (Some(port), None),
+            None => (None, Some(format!("photocraft: Preferences › Integrations › Control Port {p} is not a usable port: not listening\n"))),
+        },
+    }
+}
+
 /// The main window: 1440 × 900 (shrunk to fit the monitor, and maximized on the first frame
 /// when it still doesn't fit, `work_area::fit_window`), centred on the main monitor. Without
 /// `centered`, Windows cascades each new window from the top-left corner, so it opened at a
@@ -274,6 +321,10 @@ fn main() -> eframe::Result {
         std::process::exit(1);
     }
 
+    let (control_port, control_pref_warning) = control_port_for(control_port, &integrations(services::prefs_file().as_deref()));
+    if let Some(warning) = &control_pref_warning {
+        eprint!("{warning}");
+    }
     let control = if let Some(port) = control_port {
         let (supplied, token_file) = (auth.control_token, auth.control_token_file);
         let token = match photocraft_automation::security::server_token(supplied.as_deref(), token_file.as_deref()) {
@@ -841,6 +892,91 @@ mod tests {
         if super::CUSTOM_TITLEBAR {
             assert_eq!(super::native_options(true).viewport.decorations, Some(false));
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn integrations_preferences_decide_the_control_port() {
+        use photocraft_engine::prefs::Integrations;
+        let off = Integrations { allow_agent_control: false, control_port: 0 };
+        let on = Integrations { allow_agent_control: true, control_port: 0 };
+        let preferred = Integrations { allow_agent_control: true, control_port: 7878 };
+
+        // Nothing asked for, nothing listening.
+        assert_eq!(super::control_port_for(None, &on), (None, None));
+        // --control wins over the preference.
+        assert_eq!(super::control_port_for(Some(9000), &preferred), (Some(9000), None));
+        // The preference opens the port when --control is absent.
+        assert_eq!(super::control_port_for(None, &preferred), (Some(7878), None));
+
+        // Allow Agent Control off refuses both, and says so when --control asked for one
+        // rather than ignoring the flag.
+        assert_eq!(super::control_port_for(None, &off), (None, None));
+        let (port, warning) = super::control_port_for(Some(9000), &off);
+        assert_eq!(port, None);
+        assert!(warning.is_some_and(|w| w.contains("Allow Agent Control") && w.contains("9000")), "the refusal names the port");
+        let off_with_port = Integrations { allow_agent_control: false, control_port: 7878 };
+        assert_eq!(super::control_port_for(None, &off_with_port), (None, None), "off beats a preferred port");
+
+        // A port a hand-edited file could hold, outside 1..=65535, is refused and named.
+        let huge = Integrations { allow_agent_control: true, control_port: 70_000 };
+        let (port, warning) = super::control_port_for(None, &huge);
+        assert_eq!(port, None);
+        assert!(warning.is_some_and(|w| w.contains("70000")), "the refusal names the value");
+    }
+
+    #[test]
+    fn integrations_fall_back_to_the_defaults_without_a_readable_file() {
+        let dir = std::env::temp_dir().join(format!("pc-integrations-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("prefs.json");
+        let default = photocraft_engine::prefs::Integrations::default();
+
+        assert_eq!(super::integrations(None), default, "no preferences file");
+        std::fs::write(&file, "not json").unwrap();
+        assert_eq!(super::integrations(Some(&file)), default, "an unreadable file");
+        std::fs::write(&file, r#"{"integrations":{"allowAgentControl":false,"controlPort":7878}}"#).unwrap();
+        let read = super::integrations(Some(&file));
+        assert!(!read.allow_agent_control);
+        assert_eq!(read.control_port, 7878);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The app loads preferences leniently (#6611): one wrong-typed value resets only itself. So
+    /// a bad value elsewhere, or in the port, must not turn Allow Agent Control back on.
+    #[test]
+    fn a_bad_value_elsewhere_keeps_agent_control_off() {
+        let dir = std::env::temp_dir().join(format!("pc-integrations-lenient-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("prefs.json");
+        // What the Preferences dialog shows for the same file.
+        let shown = |text: &str| {
+            let mut session = photocraft_engine::Session::new();
+            session.load_prefs_json(text).unwrap();
+            session.prefs().integrations.clone()
+        };
+        let read = |text: &str| {
+            std::fs::write(&file, text).unwrap();
+            let read = super::integrations(Some(&file));
+            assert_eq!(read, shown(text), "{text}");
+            read
+        };
+
+        let r = read(r#"{"interface":{"enableAnimations":"nope"},"integrations":{"allowAgentControl":false,"controlPort":7878}}"#);
+        assert!(!r.allow_agent_control, "a bad value in another section");
+        assert_eq!(r.control_port, 7878);
+        let r = read(r#"{"integrations":{"allowAgentControl":false,"controlPort":"x"}}"#);
+        assert!(!r.allow_agent_control, "a bad port");
+        assert_eq!(r.control_port, 0, "the bad port alone takes its default");
+        // A bad Allow Agent Control alone takes its default.
+        let r = read(r#"{"integrations":{"allowAgentControl":"no","controlPort":7878}}"#);
+        assert_eq!(r, photocraft_engine::prefs::Integrations { allow_agent_control: true, control_port: 7878 });
+        read(r#"{"integrations":{"allowAgentControl":false,"controlPort":-1}}"#);
+        read(r#"{"integrations":{"allowAgentControl":false,"controlPort":4294967296}}"#);
+        read(r#"{"integrations":"off"}"#);
+        // serde reads a struct from a list too; the app does.
+        assert!(!read(r#"{"integrations":[false]}"#).allow_agent_control, "a list");
+        assert_eq!(read(r#"{"integrations":[false,7878]}"#).control_port, 7878);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

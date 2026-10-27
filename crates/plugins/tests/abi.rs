@@ -220,6 +220,25 @@ fn malformed_and_oversized_modules_are_refused() {
 }
 
 #[test]
+fn a_code_section_claiming_no_functions_but_many_bytes_is_refused() {
+    // Header, then a code section (id 10) declaring 2000 bytes whose function count is 0, cut off
+    // after the count (a truncated download) or padded to its full size. The spec makes the
+    // count's own byte the whole section; wasmi's strict limits divided the size by the count.
+    let truncated = b"\0asm\x01\0\0\0\x0a\xd0\x0f\x00".to_vec();
+    let mut padded = truncated.clone();
+    padded.resize(padded.len() + 1999, 0);
+    // The same section after a valid empty one: a duplicate reaches the division before validation.
+    let mut second = b"\0asm\x01\0\0\0\x0a\x01\x00".to_vec();
+    second.extend_from_slice(&padded[8..]);
+    for (name, bytes) in [("truncated", truncated), ("padded", padded), ("second", second)] {
+        assert!(matches!(Plugin::load(&bytes, Limits::default()), Err(Error::Module(_))), "{name}");
+    }
+    // An empty code section (count 0, nothing after it) is valid; it fails only for the missing ABI exports.
+    let empty = b"\0asm\x01\0\0\0\x0a\x01\x00";
+    assert!(matches!(Plugin::load(empty, Limits::default()), Err(Error::Abi(_))));
+}
+
+#[test]
 fn budgets_stop_runaway_plugins() {
     let spin = ok_module("(loop $l (br $l)) (i32.const 0)");
     // Instruction budget.
@@ -348,7 +367,11 @@ fn a_fifo_in_place_of_a_module_file_does_not_block_loading() {
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("evil.wasm");
     let _ = std::fs::remove_file(&path);
-    rustix::fs::mknodat(rustix::fs::CWD, &path, rustix::fs::FileType::Fifo, rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR, 0).unwrap();
+    // `rustix::fs::mknodat` is unavailable on Apple targets. `mkfifo` is the
+    // POSIX utility for creating this special file and keeps this regression
+    // test available on macOS as well as other Unix platforms.
+    let status = std::process::Command::new("mkfifo").arg(&path).status().unwrap();
+    assert!(status.success(), "mkfifo failed with {status}");
     let (tx, rx) = std::sync::mpsc::channel();
     let p = path.clone();
     std::thread::spawn(move || {

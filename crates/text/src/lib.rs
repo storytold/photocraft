@@ -26,6 +26,7 @@ pub mod glyphs;
 pub mod layout;
 pub mod optical;
 pub mod psd;
+mod psd_path;
 pub mod psd_styles;
 pub mod raster;
 pub mod render;
