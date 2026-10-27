@@ -1147,5 +1147,4 @@ mod tests {
 }
 
 #[cfg(test)]
-#[path = "font_names_tests.rs"]
 mod font_names_tests;
