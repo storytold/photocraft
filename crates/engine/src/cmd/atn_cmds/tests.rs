@@ -2168,7 +2168,6 @@ fn options_the_descriptors_cannot_carry_refuse_strict_export() {
         ("select.loadSelection", json!({"channel": "Alpha 1", "operation": "subtract"})),
         ("layer.setProps", json!({"opacity": 0.5, "locked": true})),
         ("layer.setProps", json!({"opacity": 0.5, "clipped": true})),
-        ("layer.setProps", json!({"layers": [2, 3], "opacity": 0.5})),
         ("filter.noise.addNoise", json!({"amount": 30, "seed": 2147483648_u64})),
         ("filter.noise.addNoise", json!({"amount": 30, "seed": 4294967295_u64})),
     ];
@@ -2345,8 +2344,9 @@ fn numeric_layer_references_refuse_silent_fallback_to_current_selection() {
         other => panic!("expected Trgt enumerated reference, got {other:?}"),
     }
 
-    // Explicit numeric ID reference cannot be silently converted to current target in strict export
-    s.actions.list.push(Action::new("DeleteNumeric", vec![("layer.delete".into(), json!({"layer": 42}))]));
+    // An id beyond the u32 the `Idnt` reference holds cannot be carried and must never silently
+    // fall back to the current target; an in-range id exports as the `Idnt` itself (#7246).
+    s.actions.list.push(Action::new("DeleteNumeric", vec![("layer.delete".into(), json!({"layer": u32::MAX as u64 + 1}))]));
     let before_actions = s.actions.list.clone();
     let before_rev = s.active().unwrap().revision;
     let err_delete = s.execute("actions.save", json!({"action": "DeleteNumeric"}));
@@ -2354,24 +2354,24 @@ fn numeric_layer_references_refuse_silent_fallback_to_current_selection() {
     assert_eq!(s.actions.list, before_actions, "session actions must remain unchanged when save fails");
     assert_eq!(s.active().unwrap().revision, before_rev, "document revision must remain unchanged when save fails");
     let err_msg = err_delete.unwrap_err().to_string();
-    assert!(err_msg.contains("(`layer.delete` with numeric layer 42)"), "error message should name the numeric layer: {err_msg}");
+    assert!(err_msg.contains("(`layer.delete` with numeric layer 4294967296)"), "error message should name the numeric layer: {err_msg}");
 
     // Same rejection and state invariance for remaining commands with numeric layer reference
     for (name, id, params) in [
-        ("DuplicateNumeric", "layer.duplicate", json!({"layer": 42, "name": "Copy"})),
-        ("DuplicateNewDocNumeric", "layer.duplicate", json!({"layer": 42, "document": "new"})),
-        ("TranslateNumeric", "layer.translate", json!({"layer": 42, "dx": 5, "dy": 5})),
-        ("SetPropsNumeric", "layer.setProps", json!({"layer": 42, "opacity": 0.5})),
-        ("HideNumeric", "layer.hideLayers", json!({"layer": 42})),
-        ("TransformNumeric", "edit.transform", json!({"layer": 42, "dx": 5, "dy": 5})),
-        ("RenameNumeric", "layer.renameLayer", json!({"layer": 42, "name": "Renamed"})),
-        ("LabelNumeric", "layer.setLabelColor", json!({"layer": 42, "color": "red"})),
-        ("ShowNumeric", "layer.showLayers", json!({"layer": 42})),
-        ("SelectNumeric", "layer.select", json!({"layer": 42})),
-        ("BringToFrontNumeric", "layer.arrange.bringToFront", json!({"layer": 42})),
-        ("SendToBackNumeric", "layer.arrange.sendToBack", json!({"layer": 42})),
-        ("BringForwardNumeric", "layer.arrange.bringForward", json!({"layer": 42})),
-        ("SendBackwardNumeric", "layer.arrange.sendBackward", json!({"layer": 42})),
+        ("DuplicateNumeric", "layer.duplicate", json!({"layer": u32::MAX as u64 + 1, "name": "Copy"})),
+        ("DuplicateNewDocNumeric", "layer.duplicate", json!({"layer": u32::MAX as u64 + 1, "document": "new"})),
+        ("TranslateNumeric", "layer.translate", json!({"layer": u32::MAX as u64 + 1, "dx": 5, "dy": 5})),
+        ("SetPropsNumeric", "layer.setProps", json!({"layer": u32::MAX as u64 + 1, "opacity": 0.5})),
+        ("HideNumeric", "layer.hideLayers", json!({"layer": u32::MAX as u64 + 1})),
+        ("TransformNumeric", "edit.transform", json!({"layer": u32::MAX as u64 + 1, "dx": 5, "dy": 5})),
+        ("RenameNumeric", "layer.renameLayer", json!({"layer": u32::MAX as u64 + 1, "name": "Renamed"})),
+        ("LabelNumeric", "layer.setLabelColor", json!({"layer": u32::MAX as u64 + 1, "color": "red"})),
+        ("ShowNumeric", "layer.showLayers", json!({"layer": u32::MAX as u64 + 1})),
+        ("SelectNumeric", "layer.select", json!({"layer": u32::MAX as u64 + 1})),
+        ("BringToFrontNumeric", "layer.arrange.bringToFront", json!({"layer": u32::MAX as u64 + 1})),
+        ("SendToBackNumeric", "layer.arrange.sendToBack", json!({"layer": u32::MAX as u64 + 1})),
+        ("BringForwardNumeric", "layer.arrange.bringForward", json!({"layer": u32::MAX as u64 + 1})),
+        ("SendBackwardNumeric", "layer.arrange.sendBackward", json!({"layer": u32::MAX as u64 + 1})),
     ] {
         s.actions.list.push(Action::new(name, vec![(id.into(), params)]));
         let before_actions = s.actions.list.clone();
