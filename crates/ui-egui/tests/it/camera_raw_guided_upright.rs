@@ -76,6 +76,14 @@ fn shift_t_then_two_guides_straighten_and_undo_one_at_a_time() {
     assert_eq!(guides.as_array().unwrap().len(), 2);
     let g0 = &guides[0];
     assert!((g0[0][0].as_f64().unwrap() - 0.22).abs() < 0.01 && (g0[1][1].as_f64().unwrap() - 0.9).abs() < 0.01, "{g0}");
+    // The preview develops on a worker: give it up to 10 s to land (CI runners are busy).
+    for _ in 0..2000 {
+        if inspect(&h)["previewRevision"] != revision {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        h.run_steps(1);
+    }
     assert_ne!(inspect(&h)["previewRevision"], revision, "the second guide re-renders the preview");
     // Delete removes the selected (last drawn) guide; ⌘Z brings it back.
     key(&mut h, Key::Delete, Modifiers::NONE);
