@@ -276,6 +276,25 @@ fn edit_contents_is_available_only_for_smart_objects() {
     );
 }
 
+/// A type layer's menu offers Photoshop's outline conversions after Rasterize Type, and Convert
+/// to Shape from it turns the text into a shape layer.
+#[test]
+fn type_layer_menu_converts_to_shape() {
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
+    s.execute("type.create", json!({"text": "Hi", "size": 24, "x": 8, "y": 32})).unwrap();
+    let layer = |s: &photocraft_engine::Session| {
+        let st = s.active().unwrap();
+        st.doc.layer(st.active_layer.unwrap()).unwrap().clone()
+    };
+    let ids: Vec<_> = entries(&layer(&s), false, false).into_iter().flatten().map(|e| e.1).collect();
+    let r = ids.iter().position(|id| *id == "layer.rasterize.type").expect("Rasterize Type entry");
+    assert_eq!(ids[r + 1..r + 3], ["type.createWorkPath", "type.convertToShape"]);
+    assert!(!entries(&layer(&s), true, false).iter().flatten().any(|e| e.1 == "type.convertToShape"), "the selection menu keeps one Rasterize item");
+    s.execute("type.convertToShape", json!({})).unwrap();
+    assert!(matches!(layer(&s).content, LayerContent::Shape(_)));
+}
+
 /// Right-clicking inside a multi-layer selection offers one Rasterize item for the whole
 /// selection, whatever kind the clicked layer is, and no single-layer Smart Object items.
 #[test]
