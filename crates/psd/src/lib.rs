@@ -42,7 +42,9 @@
 
 pub mod abr;
 pub mod aco;
+pub mod act;
 pub mod ase;
+pub mod asl;
 pub mod atn;
 pub mod blend;
 pub mod builder;
@@ -51,6 +53,8 @@ pub mod descriptor;
 pub mod error;
 pub mod file;
 pub mod filter_effects;
+#[cfg(any(test, feature = "testgen"))]
+pub mod fixtures;
 pub mod grd;
 pub mod hdr;
 pub mod header;
