@@ -469,6 +469,58 @@ fn a_result_computed_before_a_selection_change_is_not_cached() {
     assert!(Arc::ptr_eq(&after.hist, &before.hist), "the previous histogram still stands");
 }
 
+/// A result computed for the revision just before a pixel edit still lands: the panel shows the
+/// newer data, marked stale, instead of dropping it and lagging behind continuous edits. Only
+/// another document or selection is dropped at the door.
+#[test]
+fn a_result_one_revision_behind_still_lands() {
+    let mut app = app_with(json!({"width": 64, "height": 64}));
+    settle(&mut app);
+    let before = app.doc_hist.clone().expect("landed");
+    app.run("edit.fill", json!({"color": "#000000"})).unwrap(); // a newer revision exists
+    let (tx, rx) = std::sync::mpsc::channel();
+    let _ = tx.send((before.key, 1.0, before.hist.clone()));
+    app.hist_job = Some((before.key, rx));
+    let ctx = egui::Context::default();
+    update(&mut app, &ctx);
+    assert!(app.hist_job.is_none(), "the job was consumed");
+    let landed = app.doc_hist.clone().expect("the one-revision-old result lands");
+    assert_eq!(landed.key.revision, before.key.revision, "landed as computed");
+    assert!(Arc::ptr_eq(&landed.hist, &before.hist));
+    assert_eq!(inspect(&app)["current"], false, "still marked stale for the newer revision");
+}
+
+/// The selection key is hashed once per document revision, not per frame: a memo for the
+/// current revision is served as-is, and a new revision (any selection change is one) rehashes.
+#[test]
+fn the_selection_key_is_memoized_per_revision() {
+    let mut app = app_with(json!({"width": 16, "height": 16}));
+    settle(&mut app);
+    let (doc, rev) = {
+        let st = app.session.active().unwrap();
+        (st.doc.id, st.revision)
+    };
+    let (_, _, real) = app.hist_sel_key.expect("refreshed while the panel updates");
+    // A poisoned memo for the same revision is served verbatim: the mask is not rehashed.
+    app.hist_sel_key = Some((doc, rev, real ^ 0xdead_beef));
+    let key_of = |app: &PhotocraftApp| {
+        let st = app.session.active().unwrap();
+        let (_, source) = resolve_source(st, source_choice(&app.ui.histogram_panel));
+        let poisoned = app.hist_sel_key.is_some_and(|(d, r, _)| d == st.doc.id && r == st.revision);
+        (poisoned, tone::tag(source, tone_space(st.doc.mode), HistScope::Selection, app.hist_sel_key.map_or(0, |(_, _, k)| k)))
+    };
+    assert_eq!(key_of(&app), (true, committed_key(&app).unwrap().0.source), "the memo is served, not rehashed");
+    app.run("select.rect", json!({"x": 0, "y": 0, "width": 8, "height": 8})).unwrap();
+    let (rev2, fresh) = {
+        let st = app.session.active().unwrap();
+        (st.revision, tone::selection_key(&st.doc))
+    };
+    assert_ne!(rev2, rev, "a selection change is a new revision");
+    let ctx = egui::Context::default();
+    update(&mut app, &ctx);
+    assert_eq!(app.hist_sel_key, Some((doc, rev2, fresh)), "the new revision rehashed the mask");
+}
+
 /// The panel's Pixels statistic counts the pixels the selection covers, transparent ones
 /// included, while the histogram bins keep skipping them: a selection over a transparent canvas
 /// reports the selection's size.

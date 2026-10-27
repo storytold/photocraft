@@ -691,7 +691,10 @@ mod tests {
             tag(HistSource::Channel { layer, surface: GraySurface::Alpha(0) }, ToneSpace::Rgb, HistScope::WholeInput, 0),
             tag(HistSource::Channel { layer, surface: GraySurface::LayerMask }, ToneSpace::Rgb, HistScope::WholeInput, 0)
         );
-        assert_ne!(tag(HistSource::Channel { layer, surface: GraySurface::LayerMask }, ToneSpace::Rgb, HistScope::WholeInput, 0), tag(HistSource::Layer(layer), ToneSpace::Rgb, HistScope::WholeInput, 0));
+        assert_ne!(
+            tag(HistSource::Channel { layer, surface: GraySurface::LayerMask }, ToneSpace::Rgb, HistScope::WholeInput, 0),
+            tag(HistSource::Layer(layer), ToneSpace::Rgb, HistScope::WholeInput, 0)
+        );
         // Every source of one layer has its own tag (the filter mask and the Adjustment
         // Composite once shared one), and so does each scope of one source.
         let sources = [
@@ -708,7 +711,11 @@ mod tests {
             }
         }
         for source in sources {
-            assert_ne!(tag(source, ToneSpace::Rgb, HistScope::WholeInput, 0), tag(source, ToneSpace::Rgb, HistScope::Selection, 0), "{source:?}: each scope has its own tag");
+            assert_ne!(
+                tag(source, ToneSpace::Rgb, HistScope::WholeInput, 0),
+                tag(source, ToneSpace::Rgb, HistScope::Selection, 0),
+                "{source:?}: each scope has its own tag"
+            );
         }
     }
 

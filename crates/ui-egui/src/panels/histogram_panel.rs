@@ -358,7 +358,14 @@ fn committed_key(app: &PhotocraftApp) -> Option<(HistKey, ToneSpace, HistSource)
     let space = tone_space(st.doc.mode);
     let (_, source) = resolve_source(st, source_choice(&app.ui.histogram_panel));
     let max_level = if app.hist_uncached == Some((doc, revision)) { 1 } else { max_cache_level(app) };
-    let source_tag = tone::tag(source, space, HistScope::Selection, tone::selection_key(&st.doc));
+    // The panel counts the selected pixels (HistScope::Selection), so its key carries the
+    // selection's identity: a selection change makes every cached histogram stale. The mask is
+    // hashed per revision (refreshed by `update`); hashing here is the between-frames cold path.
+    let sel = match app.hist_sel_key {
+        Some((d, r, k)) if d == doc && r == revision => k,
+        _ => tone::selection_key(&st.doc),
+    };
+    let source_tag = tone::tag(source, space, HistScope::Selection, sel);
     Some((HistKey { doc, revision, source: source_tag, preview: 0, max_level }, space, source))
 }
 
@@ -390,21 +397,35 @@ fn want(app: &mut PhotocraftApp) -> Option<Want> {
     Some(Want { committed, preview, space, source })
 }
 
+/// Refreshes the memoized selection key for the active document's revision: the panel's keying
+/// asks for it every frame, the hash walks every tile of the selection mask, and any change to
+/// the selection arrives as a new document revision — so the same revision always keeps its key.
+fn refresh_sel_key(app: &mut PhotocraftApp) {
+    let Some(st) = app.session.active() else { return };
+    if matches!(app.hist_sel_key, Some((d, r, _)) if d == st.doc.id && r == st.revision) {
+        return;
+    }
+    app.hist_sel_key = Some((st.doc.id, st.revision, tone::selection_key(&st.doc)));
+}
+
 /// Brings the panel's histograms up to date as far as one frame should: lands a finished count,
 /// keeps entries a view-only revision didn't invalidate, and starts the next count (at most one at
 /// a time, at most every 250 ms per entry). `ctx` repaints when a worker delivers.
 pub fn update(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    refresh_sel_key(app);
     let want = want(app);
-    // A finished worker lands its histogram in the slot its key names — but only a result
-    // computed for the key on screen now: the selection (or preview) can change while the
-    // worker runs, and caching a stale landing would reset the panel's 250 ms throttle without
-    // ever being shown fresh. A worker that died without sending clears the job so the next
-    // frame schedules a new one.
+    // A finished worker lands its histogram in the slot its key names — unless it was computed
+    // for another document or selection, which is dropped at the door: caching it would reset
+    // the panel's 250 ms throttle without ever being shown fresh. A result for the same
+    // document and selection still lands when the revision moved on under it (continuous
+    // edits): the panel shows the newer data, marked stale, instead of waiting for an edit-free
+    // moment. A worker that died without sending clears the job so the next frame schedules a
+    // new one.
     if let Some((_, rx)) = &app.hist_job {
         match rx.try_recv() {
             Ok((key, ms, hist)) => {
                 app.perf.span("histogram", ms);
-                let wanted = want.as_ref().is_some_and(|w| key == w.committed || w.preview.as_ref().is_some_and(|(_, k)| *k == key));
+                let wanted = want.as_ref().is_some_and(|w| key.doc == w.committed.doc && key.source == w.committed.source);
                 if wanted {
                     // egui's clock works on every target; `gpu_canvas::now_ms` is always 0 on wasm32.
                     let entry = PanelHist { key, at: ctx.input(|i| i.time) * 1000.0, hist };
@@ -432,10 +453,7 @@ pub fn update(app: &mut PhotocraftApp, ctx: &egui::Context) {
         }
         let same_selection = want.as_ref().map(|w| w.committed.source);
         for e in [app.doc_hist.as_mut(), app.doc_hist_preview.as_mut()].into_iter().flatten() {
-            if e.key.doc == doc
-                && e.key.revision.wrapping_add(1) == rev
-                && same_selection.is_none_or(|s| e.key.source == s)
-            {
+            if e.key.doc == doc && e.key.revision.wrapping_add(1) == rev && same_selection.is_none_or(|s| e.key.source == s) {
                 e.key.revision = rev;
             }
         }
