@@ -79,6 +79,8 @@ pub struct CameraRawDialog {
     pub(crate) detail: crate::camera_raw_detail_ui::DetailPreview,
     display: std::sync::Arc<photocraft_engine::display_color::CanvasDisplay>,
     pub(crate) viewport: Option<ERect>,
+    /// Whether the main window had focus last frame (see [`show`]).
+    main_focused: bool,
     pub(crate) float: bool,
     tex: Option<TextureHandle>,
     before_tex: Option<TextureHandle>,
