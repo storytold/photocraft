@@ -670,21 +670,37 @@ layer names. Selection is captured before opening the dialog; an unselected laye
 ## Shared panel docking
 
 Panel arrangements support tab grouping and reordering, horizontal and vertical splits,
-and movable, resizable floating groups inside the application window. Drag a panel tab,
-or use its context menu. Floating groups remain within the application viewport.
+and movable, resizable floating groups. Drag a panel tab or a group's drag bar, or use its
+context menu. On the desktop a floating group opens in its own OS window; on Wayland, in the
+web build and for the Studio Properties card it stays inside the application window.
 
 The shared layout begins with the existing workspace on the first docking operation.
-Workspace saves retain its groups, active tabs, split sizes, floating geometry, and the
+Workspace saves keep its groups, active tabs, split sizes, floating geometry, and the
 positions of hidden panels. Resetting a built-in workspace restores its default dock.
 
-- `window.panel.move {panel, anchor, zone?, before?}` moves a panel into the target group.
-  `zone` is `tab` (default), `center`, `left`, `right`, `top`, or `bottom`; `before` reorders
-  tabs by panel ID. The destination must already be visible.
-- `window.panel.float {panel, x?, y?, width?, height?}` detaches a panel.
-- `window.panel.dock {panel, anchor?, zone?, before?}` returns a panel to its previous
-  dock placement when possible, or to the supplied destination.
+The docking commands are craft-ui's shared vocabulary (`DockCommand`). Panels may be named
+by ID or label, and `onto` is accepted for `anchor`.
+
+- `window.panel.move {panel, anchor, zone?, before?, group?, placement?}` moves a panel into the
+  target group. `zone` is `tab` (default), `center`, `left`, `right`, `top`, `bottom`, `above`
+  or `below`; `before` reorders tabs by panel ID; `group: true` moves the panel's whole group.
+- `window.panel.float {panel, x?, y?, width?, height?, group?, column?}` detaches a panel (at
+  400, 140 and 300x400 by default) or its group.
+- `window.panel.dock {panel, anchor?, zone?, before?, group?, side?}` returns a floating panel to
+  the dock place it floated from when possible, or to the supplied destination.
 - `window.panel.activate {panel}` reveals and selects a panel, restoring its saved
-  position when possible. `window.panel.close {panel}` hides it.
+  position when possible. `window.panel.close {panel}` hides it; `window.panel.closeGroup` and
+  `window.panel.closeOthers` close its group or the group's other panels.
+- `window.panel.minimize {panel, minimized?}` collapses a floating window to its title bar.
+- `window.panel.window {panel, native?}` floats a docked panel's group and gives its floating
+  window its own OS window. On the desktop every floating window has one, except the Studio
+  themes' Properties card, which stays over the canvas, and on Wayland, where floating windows
+  stay in the main window. The web refuses the command: floating panels stay in the page.
+- `ui.dock {operation, …}` takes the shared `ui.dock` operations (`open`, `close`, `activate`,
+  `float`, `moveFloating`, `move`, `setStackOpen`, `resizeStack`, `resizeSplit`) or `{action}`.
+- `window.workspace.lock {locked?}` sets Lock Workspace; `window.workspace {name}`,
+  `window.workspace.new {name}`, `window.workspace.delete {name}` and `window.workspace.reset`
+  run the Window › Workspace commands.
 
 Panel IDs are stable across themes. Invalid IDs, non-finite or invalid geometry, and
 invalid destinations return an error without changing the arrangement.
@@ -700,6 +716,13 @@ resizes the root divider (`false`/`true` path entries select first/second childr
 The UI dispatches these same commands. Unknown panel IDs, invalid geometry, and stale
 split paths return an error without changing the workspace.
 
+The `docking` object in `ui.state` and in saved workspaces is craft-ui's `Workspace`:
+`version` (2), `layout`, `hidden` (each closed panel with its return place), `saved` and
+`locked`. `dockingReturns` holds where each floating panel docks back, and
+`dockingCollapsed` the panels of collapsed custom groups. Any other saved `docking` value,
+such as a bare layout with `dockingHidden`, loads as the default layout, built from the
+saved `panels`, `dockTabs` and `dock`.
+
 The existing `ui.set` panel visibility, `dockTabs` selection and `dockWidth` controls
 remain available after customization. Width keeps its 250–520 point clamp. Named
 `dock.hidden_tabs` and intact native-group collapse settings are also preserved. A
@@ -714,7 +737,7 @@ or `down` to the panel's entire current group. With `operation:"move"`, provide
 `anchor` and optional `zone`/`before` (as for panel.move), or a serialized `placement`,
 to transfer all members atomically while preserving their order and selecting the
 requested `panel`.
-The floating group's header grip also transfers the whole group when dropped on a
+A floating group's drag bar or title bar also transfers the whole group when dropped on a
 dock target. The panel menu and icon rail remain
 available in custom workspaces. `window.panel.<id> {show:true}` always reveals, selects
 and expands the panel, including when another tab is selected. Workspace snapshots

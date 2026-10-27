@@ -2719,7 +2719,7 @@ shape	Appearance	Diện mạo
 	Extra large	Rất lớn
 	Fill new type layers with placeholder	Tô lớp chữ mới bằng nội dung tạm
 	Font preview	Xem trước phông chữ
-	Generator enabled	Đã bật bộ tạo
+	Enable Generator	Bật bộ tạo
 	Glossy	Bóng
 	Gutter	Lề
 	Ignore exif profile tag	Bỏ qua thẻ hồ sơ exif
@@ -3697,6 +3697,9 @@ curves	Smooth	Làm mượt
 	Clear History	Xóa lịch sử
 	History Options…	Tùy chọn lịch sử…
 	Background (Default)	Nền (mặc định)
+# History panel › History Options… (#2966)
+	Allow Non-Linear History	Cho phép lịch sử không tuyến tính
+	Make Layer Visibility Changes Undoable	Cho phép hoàn tác thay đổi hiển thị lớp
 	Presentation	Trình bày
 # Batch / Image Processor
 	Include All Subfolders	Bao gồm tất cả thư mục con

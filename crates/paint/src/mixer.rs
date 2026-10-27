@@ -378,9 +378,7 @@ mod tests {
     }
 
     /// Spatial paint reservoirs honor independent automatic clean and reload choices.
-
     #[test]
-
     fn spatial_load_obeys_automatic_clean_and_load() {
         let foreground = [0.0, 0.0, 1.0, 1.0];
         let sampled = [1.0, 0.0, 0.0, 1.0];
@@ -402,9 +400,7 @@ mod tests {
     }
 
     /// Older serialized reload settings remain compatible with the automatic load field.
-
     #[test]
-
     fn earlier_reload_setting_deserializes_as_automatic_load() {
         let settings: MixerSettings = serde_json::from_value(serde_json::json!({"reloadAfterStroke":false})).unwrap();
         assert!(!settings.load_after_stroke);
@@ -444,5 +440,4 @@ mod tests {
 }
 
 #[cfg(test)]
-#[path = "mixer_reference_tests.rs"]
 mod reference_tests;

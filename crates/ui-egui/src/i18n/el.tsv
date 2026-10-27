@@ -1714,7 +1714,7 @@
 	Full size tip	Άκρη πλήρους μεγέθους
 	Gamut warning color	Χρώμα προειδοποίησης χρωματικής γκάμας
 	Gamut warning opacity	Αδιαφάνεια προειδοποίησης χρωματικής γκάμας
-	Generator enabled	Ενεργοποίηση γεννήτριας
+	Enable Generator	Ενεργοποίηση γεννήτριας
 	Click the first point or press ↵ to close · Esc cancels	Κάντε κλικ στο πρώτο σημείο ή πατήστε ↵ για κλείσιμο · Esc για ακύρωση
 	Click to add a point · drag off or ⌘/Ctrl-click or Delete to remove	Κλικ για προσθήκη σημείου · σύρσιμο εκτός ή ⌘/Ctrl-κλικ ή Delete για αφαίρεση
 	Click to apply, ⌥-click to clear overrides, double-click for Style Options	Κλικ για εφαρμογή, ⌥-κλικ για εκκαθάριση παρακάμψεων, διπλό κλικ για επιλογές στυλ
@@ -3860,6 +3860,9 @@ curves	Smooth	Εξομάλυνση
 # History panel menu (#2966)
 	New Snapshot…	Νέο στιγμιότυπο…
 	History Options…	Επιλογές ιστορικού…
+# History panel › History Options… (#2966)
+	Allow Non-Linear History	Να επιτρέπεται μη γραμμικό ιστορικό
+	Make Layer Visibility Changes Undoable	Οι αλλαγές ορατότητας επιπέδων να αναιρούνται
 # Print dialog (#2697)
 	Emulsion Down	Γαλάκτωμα προς τα κάτω
 	Functions	Λειτουργίες

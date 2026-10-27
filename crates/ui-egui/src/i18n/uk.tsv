@@ -2347,7 +2347,7 @@
 	Gamut warning color	Колір попередження про колірне охоплення
 	Gamut warning opacity	Непрозорість попередження про колірне охоплення
 	General	Загальні
-	Generator enabled	Генератор увімкнено
+	Enable Generator	Увімкнути генератор
 	Gif	GIF
 	Glossy	Глянцевий
 	Grid color	Колір сітки
@@ -3862,6 +3862,9 @@ curves	Smooth	Згладити
 # History panel menu (#2966)
 	New Snapshot…	Новий знімок стану…
 	History Options…	Параметри історії…
+# History panel › History Options… (#2966)
+	Allow Non-Linear History	Дозволити нелінійну історію
+	Make Layer Visibility Changes Undoable	Дозволити скасування змін видимості шарів
 # Print dialog (#2697)
 	Emulsion Down	Емульсією донизу
 	Functions	Функції
