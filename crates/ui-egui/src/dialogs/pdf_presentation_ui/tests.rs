@@ -248,3 +248,37 @@ fn turning_advance_off_leaves_pages_until_the_viewer_moves_on() {
     let text = String::from_utf8_lossy(&std::fs::read(&out).unwrap()).into_owned();
     assert!(text.contains("/PageMode /FullScreen") && !text.contains("/Dur") && !text.contains("JavaScript"));
 }
+
+#[test]
+fn cancelling_the_save_dialog_brings_the_list_back() {
+    let (_, paths) = pngs("cancel", &[("one.png", 8, 8), ("two.png", 8, 8)]);
+    let (mut h, asked) = harness(vec![Some(FileDialogAnswer::Paths(paths)), None]);
+    open_dialog(&mut h);
+    h.get_by_label("Browse…").click();
+    h.run_steps(4);
+    h.get_by_label("Presentation").click();
+    h.run_steps(2);
+    h.get_by_label("Save…").click();
+    h.run_steps(4);
+    assert!(matches!(asked.borrow().last(), Some(FileDialogRequest::Save { .. })), "the save dialog was asked");
+    let (_, f) = dialog(&h).expect("Cancel in the save dialog returns to PDF Presentation");
+    assert_eq!(listed(&h), ["one.png", "two.png"]);
+    assert_eq!(f["saveAs"], "presentation", "and keeps the options");
+}
+
+#[test]
+fn a_failed_save_brings_the_list_back() {
+    let (dir, paths) = pngs("failed", &[("gone.png", 8, 8)]);
+    let out = format!("{dir}/x.pdf");
+    let (mut h, _) = harness(vec![Some(FileDialogAnswer::Paths(paths.clone())), Some(FileDialogAnswer::SaveTo(out.clone()))]);
+    open_dialog(&mut h);
+    h.get_by_label("Browse…").click();
+    h.run_steps(4);
+    // The only file disappears before Save…: nothing can be placed.
+    std::fs::remove_file(&paths[0]).unwrap();
+    h.get_by_label("Save…").click();
+    h.run_steps(4);
+    assert!(!std::path::Path::new(&out).exists());
+    assert!(h.state().ui.status.contains("none of the 1 files"), "{}", h.state().ui.status);
+    assert_eq!(listed(&h), ["gone.png"], "the dialog comes back with its list");
+}

@@ -338,7 +338,7 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
         params["loop"] = json!(f.get("loop").and_then(Value::as_bool).unwrap_or(false));
         params["transition"] = json!(f.get("transition").and_then(Value::as_str).unwrap_or("none"));
     }
-    app.pick_save("Untitled.pdf", move |app, path| {
+    let r = app.pick_save("Untitled.pdf", move |app, path| {
         params["path"] = json!(path);
         let r = app.run(COMMAND, params);
         match &r {
@@ -355,7 +355,23 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
             }
         }
         r
-    })
+    });
+    // The dialog closed for the save dialog. Unless the PDF was written (the save dialog was
+    // cancelled, couldn't open, or the command failed), bring it back with its list and options.
+    if r.is_err() {
+        // Failed at once (no picker, or one answered on the spot): the pending dialog, if any,
+        // isn't ours to watch.
+        app.ui.open_dialog(DialogKind::Command, f.clone());
+    } else {
+        let reopen = f.clone();
+        app.after_file_dialog(move |app, result| {
+            if result.is_err() {
+                app.ui.open_dialog(DialogKind::Command, reopen);
+            }
+            result
+        });
+    }
+    r
 }
 
 #[cfg(test)]
