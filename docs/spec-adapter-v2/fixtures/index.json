@@ -1,0 +1,15 @@
+{
+  "notice": "SYNTHETIC JSON HEADERS ONLY; NOT BINARY GOLDENS, NOT EXECUTABLE MODELS, NOT HARDWARE EVIDENCE",
+  "fixtures": [
+    {"file": "hello-request.json", "schema": "wire-request.schema.json"},
+    {"file": "hello-response.json", "schema": "wire-response.schema.json"},
+    {"file": "control-probe-request.json", "schema": "wire-request.schema.json"},
+    {"file": "control-prepare-request.json", "schema": "wire-request.schema.json"},
+    {"file": "run-subject-request.json", "schema": "wire-request.schema.json"},
+    {"file": "status-ready-response.json", "schema": "wire-response.schema.json"},
+    {"file": "status-needs-model-response.json", "schema": "wire-response.schema.json"},
+    {"file": "ok-mask-response.json", "schema": "wire-response.schema.json"},
+    {"file": "model-resource-example.json", "schema": "model-resource.schema.json"},
+    {"file": "package-manifest-example.json", "schema": "manifest.schema.json"}
+  ]
+}

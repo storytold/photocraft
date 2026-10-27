@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <!-- Keep restore/build/publish properties identical: the RID is not a publish-only flag. -->
+    <RuntimeIdentifier>win-arm64</RuntimeIdentifier>
+    <PlatformTarget>ARM64</PlatformTarget>
+    <SelfContained>true</SelfContained>
+    <AssemblyName>photocraft-onnx-qnn</AssemblyName>
+    <RootNamespace>PhotoCraft.OnnxQnn</RootNamespace>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <NuGetAudit>true</NuGetAudit>
+    <NuGetAuditMode>all</NuGetAuditMode>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <PublishTrimmed>false</PublishTrimmed>
+    <PublishSingleFile>false</PublishSingleFile>
+    <PublishReadyToRun>false</PublishReadyToRun>
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Core/**/*.cs" />
+    <Compile Include="Runtime/**/*.cs" />
+    <Compile Include="Program.cs" />
+    <!-- QNN is native-only. Pin its managed dependency too; never add the CPU ORT package. -->
+    <PackageReference Include="Microsoft.ML.OnnxRuntime.QNN" Version="[1.24.4]" GeneratePathProperty="true" />
+    <PackageReference Include="Microsoft.ML.OnnxRuntime.Managed" Version="[1.24.4]" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(PkgMicrosoft_ML_OnnxRuntime_QNN)' != ''">
+    <!-- The NuGet build/native props alone do not copy the complete HTP/DSP payload. -->
+    <None Include="$(PkgMicrosoft_ML_OnnxRuntime_QNN)/runtimes/win-arm64/native/*"
+          Link="%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

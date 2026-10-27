@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://photocraft.dev/schemas/adapter/v2/wire-request.schema.json",
+  "title": "UNREVIEWED DRAFT wire request v2; NOT IMPLEMENTED",
+  "type": "object", "additionalProperties": false,
+  "required": ["protocol", "request_id", "type", "sections"],
+  "properties": {
+    "protocol": {"const": 2}, "request_id": {"$ref": "common.schema.json#/$defs/token"},
+    "type": {"enum": ["hello", "control", "run"]},
+    "sections": {"$ref": "common.schema.json#/$defs/sections"},
+    "negotiation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["wire_versions", "supported_features", "required_features"],
+      "properties": {"wire_versions": {"$ref": "common.schema.json#/$defs/versions"}, "supported_features": {"$ref": "common.schema.json#/$defs/features"}, "required_features": {"$ref": "common.schema.json#/$defs/features"}}
+    },
+    "action": {"enum": ["probe", "prepare", "listResources", "evict"]},
+    "evict_scope": {"enum": ["sessions", "derived_cache"]},
+    "operation": {"$ref": "common.schema.json#/$defs/token"}, "operation_version": {"$ref": "common.schema.json#/$defs/version"},
+    "resource": {"$ref": "common.schema.json#/$defs/resourceIdentity"}, "device_policy": {"$ref": "common.schema.json#/$defs/devicePolicy"},
+    "params": {"type": "object", "maxProperties": 64, "propertyNames": {"type": "string", "minLength": 1, "maxLength": 128}},
+    "inputs": {"$ref": "common.schema.json#/$defs/ports"}
+  },
+  "oneOf": [
+    {"properties": {"type": {"const": "hello"}, "sections": {"maxItems": 0}}, "required": ["negotiation"], "not": {"anyOf": [{"required": ["action"]}, {"required": ["evict_scope"]}, {"required": ["operation"]}, {"required": ["operation_version"]}, {"required": ["resource"]}, {"required": ["device_policy"]}, {"required": ["params"]}, {"required": ["inputs"]}]}},
+    {"properties": {"type": {"const": "control"}, "sections": {"maxItems": 0}}, "required": ["action", "operation", "operation_version", "device_policy"], "not": {"anyOf": [{"required": ["negotiation"]}, {"required": ["params"]}, {"required": ["inputs"]}]}, "allOf": [
+      {"if": {"properties": {"action": {"enum": ["probe", "prepare", "evict"]}}}, "then": {"required": ["resource"]}},
+      {"if": {"properties": {"action": {"const": "evict"}}}, "then": {"required": ["evict_scope"]}, "else": {"not": {"required": ["evict_scope"]}}}
+    ]},
+    {"properties": {"type": {"const": "run"}, "sections": {"minItems": 1}, "inputs": {"required": ["source"], "properties": {"source": {"properties": {"kind": {"const": "image"}}}}}}, "required": ["operation", "operation_version", "resource", "device_policy", "params", "inputs"], "not": {"anyOf": [{"required": ["action"]}, {"required": ["evict_scope"]}, {"required": ["negotiation"]}]}}
+  ]
+}

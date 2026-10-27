@@ -1,0 +1,5 @@
+{
+  "protocol": 2, "request_id": "synthetic-prepare", "type": "control", "action": "prepare", "status": "needs_model",
+  "message": "SYNTHETIC FIXTURE: example.synthetic.unavailable-model is a non-runnable placeholder. No weights, download permission or license verification is supplied.",
+  "error": {"code": "resource_missing", "retryable": false}, "sections": []
+}

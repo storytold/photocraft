@@ -13,6 +13,7 @@ macro_rules! tl {
         $crate::i18n::t($s)
     };
 }
+pub mod adapter_ui;
 pub mod canvas;
 pub mod control;
 pub mod dialogs;
@@ -633,6 +634,7 @@ pub struct PhotocraftApp {
     pub(crate) jpeg_options: Option<jpeg_options_ui::Prompt>,
     /// A save to a DDS texture parked behind the DDS Options prompt (see `dds_options_ui`).
     pub(crate) dds_options: Option<dds_options_ui::Prompt>,
+    pub(crate) adapter_ui: adapter_ui::State,
     /// Files read but not opened yet: the first waits on its profile prompt, the rest behind it
     /// (see `open_prompt`).
     pub(crate) held_opens: std::collections::VecDeque<open_prompt::Held>,

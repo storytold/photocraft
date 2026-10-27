@@ -1,0 +1,5 @@
+{
+  "protocol": 2, "request_id": "synthetic-hello", "type": "hello", "status": "negotiated", "sections": [],
+  "message": "SYNTHETIC FIXTURE: proposed v2 feature intersection only; no worker was started.",
+  "negotiation": {"selected_wire_version": 2, "enabled_features": ["image-mask-v2", "same-geometry", "resource-control"]}
+}

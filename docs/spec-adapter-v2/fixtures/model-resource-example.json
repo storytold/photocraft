@@ -1,0 +1,18 @@
+{
+  "schema_version": 2, "deployment": "placeholder", "resource_id": "example.synthetic.unavailable-model",
+  "format": "example.synthetic-format", "version": "0.0.0-example", "manifest_digest": null,
+  "operation": "synthetic-mask", "operation_version": "0.0.0-example",
+  "description": "NON-RUNNABLE SYNTHETIC PLACEHOLDER. No artifact, real shape, digest, license or runtime compatibility is asserted.",
+  "source": {"uri": "urn:example:synthetic:unavailable-model", "revision": "UNVERIFIED", "exporter": "example.synthetic", "exporter_version": "not-an-exporter", "verification": "unverified_placeholder"},
+  "license": {"expression": "LicenseRef-UNVERIFIED-NOT-FOR-USE", "review_status": "unverified"},
+  "files": [],
+  "bindings": {
+    "profile_id": "example.synthetic-profile", "profile_version": "0.0.0-example",
+    "inputs": [{"port": "source", "name": "synthetic-input", "dtype": "f32", "layout": "nchw", "shape": [1, 3, 2, 3]}],
+    "outputs": [{"port": "mask", "name": "synthetic-output", "dtype": "f32", "layout": "nchw", "shape": [1, 1, 2, 3]}],
+    "color_policy": "not_applicable", "alpha_policy": "not_applicable",
+    "preprocess": {"id": "example.synthetic-noop", "version": "0.0.0-example", "params": {}},
+    "postprocess": {"id": "example.synthetic-noop", "version": "0.0.0-example", "params": {}}
+  },
+  "runtime_constraints": [{"runtime_id": "example.synthetic", "minimum_version": "0.0.0-example", "backends": ["example.synthetic"], "architectures": ["example.synthetic"], "operating_systems": ["example.synthetic"], "max_memory_bytes": 1024}]
+}

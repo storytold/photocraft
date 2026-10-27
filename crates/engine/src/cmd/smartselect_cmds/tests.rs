@@ -675,3 +675,411 @@ fn refine_edge_rejects_bad_edits_and_keeps_the_selection() {
         assert_eq!(sel_bytes(&s, 80, 40), before, "{bad}");
     }
 }
+    use photocraft_plugins::adapter::{Adapter, Context, Descriptor, Device, DeviceKind, Execution, Operation, Output, Response};
+
+    const CPU_DEVICE: &str = "cpu.synthetic.0";
+    const CPU_DEVICE_2: &str = "cpu.synthetic.1";
+    const CPU_BACKEND: &str = "synthetic-cpu";
+
+    #[derive(Clone, Copy)]
+    enum MockMask {
+        Disc(i32, i32, i32),
+        LeftHalf,
+        Selection,
+        Failure,
+        Canceled,
+        BadGeometry,
+        BadExecution,
+    }
+
+    struct MockSubjectAdapter {
+        descriptor: Descriptor,
+        mask: MockMask,
+        seen: Mutex<Vec<Request>>,
+        cancel: Option<crate::jobs::JobCtx>,
+    }
+
+    impl MockSubjectAdapter {
+        fn new(id: &str, mask: MockMask) -> Self {
+            Self {
+                descriptor: Descriptor {
+                    api_version: adapter::API_VERSION,
+                    id: id.into(),
+                    name: "Synthetic CPU subject test (not AI)".into(),
+                    version: "1".into(),
+                    operations: vec![Operation {
+                        id: SUBJECT_OPERATION.into(),
+                        output_kind: OutputKind::Mask,
+                        color_modes: vec!["rgb".into(), "gray".into(), "cmyk".into(), "lab".into()],
+                    }],
+                    devices: [CPU_DEVICE, CPU_DEVICE_2]
+                        .into_iter()
+                        .map(|id| Device {
+                            id: id.into(),
+                            kind: DeviceKind::Cpu,
+                            backend: CPU_BACKEND.into(),
+                            name: "Synthetic CPU test".into(),
+                            operations: vec![SUBJECT_OPERATION.into()],
+                        })
+                        .collect(),
+                    resource_formats: Vec::new(),
+                    params_schema: json!({}),
+                },
+                mask,
+                seen: Mutex::new(Vec::new()),
+                cancel: None,
+            }
+        }
+
+        fn requests(&self) -> Vec<Request> {
+            self.seen.lock().unwrap_or_else(PoisonError::into_inner).clone()
+        }
+    }
+
+    impl Adapter for MockSubjectAdapter {
+        fn descriptor(&self) -> Descriptor {
+            self.descriptor.clone()
+        }
+
+        fn run(&self, request: &Request, ctx: &dyn Context) -> adapter::Result<Response> {
+            self.seen.lock().unwrap_or_else(PoisonError::into_inner).push(request.clone());
+            ctx.progress(0.5);
+            if let Some(cancel) = &self.cancel {
+                cancel.cancel();
+            }
+            match self.mask {
+                MockMask::Failure => return Err(adapter::Error::Failed("synthetic failure".into())),
+                MockMask::Canceled => return Err(adapter::Error::Canceled),
+                _ => {}
+            }
+            let (w, h) = (request.image.width, request.image.height);
+            let mut data = vec![0.0; Limits::default().check_image_size(w, h, 1)?];
+            for y in 0..h as i32 {
+                for x in 0..w as i32 {
+                    let index = y as usize * w as usize + x as usize;
+                    data[index] = match self.mask {
+                        MockMask::Disc(cx, cy, radius) => f32::from((x - cx).pow(2) + (y - cy).pow(2) <= radius.pow(2)),
+                        MockMask::Selection => request.selection.as_ref().map_or(0.0, |s| s.data[index]),
+                        _ => f32::from(x < w as i32 / 2),
+                    };
+                }
+            }
+            let image = Image {
+                x: request.image.x + i32::from(matches!(self.mask, MockMask::BadGeometry)),
+                y: request.image.y,
+                width: w,
+                height: h,
+                channels: 1,
+                color_mode: "gray".into(),
+                source_depth: 32,
+                alpha: false,
+                icc_profile: Vec::new(),
+                data,
+            };
+            Ok(Response {
+                output: Output { kind: OutputKind::Mask, image },
+                execution: Execution {
+                    devices: vec![if matches!(self.mask, MockMask::BadExecution) {
+                        "cpu.unregistered".into()
+                    } else {
+                        request.device.clone().unwrap_or_else(|| CPU_DEVICE.into())
+                    }],
+                    backend: CPU_BACKEND.into(),
+                    fallback_reason: None,
+                },
+            })
+        }
+    }
+
+    fn register_subject(s: &mut Session, id: &str, mask: MockMask) -> Arc<MockSubjectAdapter> {
+        let adapter = Arc::new(MockSubjectAdapter::new(id, mask));
+        s.register_adapter(adapter.clone()).unwrap();
+        adapter
+    }
+
+    #[test]
+    fn select_subject_dispatches_to_registered_adapter_and_undoes() {
+        for depth in [8, 16, 32] {
+            let mut s = session_with(80, 40, depth, |_, _| [0.5; 3]);
+            let adapter = register_subject(&mut s, "test.subject", MockMask::Disc(40, 20, 10));
+            let before = Arc::clone(&s.active().unwrap().doc);
+            let res = s.execute(SUBJECT, json!({"device": CPU_DEVICE})).unwrap();
+            assert_eq!(res["selected"], true);
+            assert_eq!(res["changed"], true);
+            assert_eq!(res["provider"], "test.subject");
+            assert_eq!(res["execution"]["devices"], json!([CPU_DEVICE]));
+            assert_eq!(res["execution"]["backend"], CPU_BACKEND);
+            assert!(cov(&s, 40, 20) > 0.99 && cov(&s, 5, 5) < 0.01);
+            assert!(s.subject_cache.doc_id.is_none(), "adapter masks must not populate the classical cache");
+            s.execute("edit.undo", json!({})).unwrap();
+            assert_eq!(s.active().unwrap().doc.selection, before.selection);
+            assert_eq!(s.active().unwrap().doc.layers, before.layers);
+            let res = s.execute(SUBJECT, json!({"forceClassical": true})).unwrap();
+            assert_eq!(res["changed"], false, "a flat field has no classical subject");
+            assert_eq!(adapter.requests().len(), 1);
+        }
+    }
+
+    #[test]
+    fn select_subject_routes_before_classical_cache_and_registry_mutations() {
+        let mut s = session_with(80, 40, 8, |_, _| [0.5; 3]);
+        s.execute(SUBJECT, json!({})).unwrap(); // A cached empty classical result.
+        let a = register_subject(&mut s, "test.a", MockMask::LeftHalf);
+        s.execute(SUBJECT, json!({})).unwrap();
+        assert!(cov(&s, 5, 20) > 0.99 && cov(&s, 60, 20) < 0.01);
+        let b = register_subject(&mut s, "test.b", MockMask::Disc(60, 20, 10));
+        s.execute(SUBJECT, json!({"provider": "test.b"})).unwrap();
+        assert!(cov(&s, 60, 20) > 0.99 && cov(&s, 5, 20) < 0.01);
+        s.execute(SUBJECT, json!({"provider": "test.a"})).unwrap();
+        assert_eq!((a.requests().len(), b.requests().len()), (2, 1));
+        assert!(s.execute(SUBJECT, json!({"provider": "missing"})).is_err());
+        assert!(s.execute(SUBJECT, json!({"provider": "test.a", "device": "missing"})).is_err());
+        s.execute("select.deselect", json!({})).unwrap();
+        assert_eq!(s.execute(SUBJECT, json!({"forceClassical": true})).unwrap()["changed"], false);
+        assert!(s.active().unwrap().doc.selection.is_none());
+        assert_eq!(a.requests().len(), 2);
+        assert_eq!(s.execute(SUBJECT, json!({"method": "classical"})).unwrap()["changed"], false);
+        assert!(s.unregister_adapter("test.a"));
+        // Automatic routing must observe removal, not the old provider's mask.
+        s.execute(SUBJECT, json!({})).unwrap();
+        assert!(cov(&s, 60, 20) > 0.99);
+        assert_eq!(b.requests().len(), 2);
+        assert!(s.unregister_adapter("test.b"));
+        let replacement = register_subject(&mut s, "test.a", MockMask::Disc(15, 20, 5));
+        s.execute(SUBJECT, json!({})).unwrap();
+        assert!(cov(&s, 15, 20) > 0.99 && cov(&s, 60, 20) < 0.01);
+        assert_eq!(replacement.requests().len(), 1);
+    }
+
+    #[test]
+    fn automatic_subject_routing_skips_incompatible_providers_without_running_them() {
+        for incompatible in ["kind", "color", "device"] {
+            let mut s = session_with(80, 40, 16, |_, _| [0.5; 3]);
+            let mut first = MockSubjectAdapter::new("test.a.incompatible", MockMask::Failure);
+            match incompatible {
+                "kind" => first.descriptor.operations[0].output_kind = OutputKind::Image,
+                "color" => first.descriptor.operations[0].color_modes = vec!["cmyk".into()],
+                "device" => {
+                    for device in &mut first.descriptor.devices {
+                        device.id = format!("other.{}", device.id);
+                    }
+                }
+                _ => {}
+            }
+            let first = Arc::new(first);
+            s.register_adapter(first.clone()).unwrap();
+            let working = register_subject(&mut s, "test.b.compatible", MockMask::LeftHalf);
+            let result = s.execute(SUBJECT, json!({ "device": CPU_DEVICE })).unwrap();
+            assert_eq!(result["provider"], "test.b.compatible", "{incompatible}");
+            assert!(first.requests().is_empty(), "incompatible providers must not run");
+            assert_eq!(working.requests().len(), 1);
+            assert!(s.execute(SUBJECT, json!({ "provider": "test.a.incompatible", "device": CPU_DEVICE })).is_err(), "explicit choice stays strict");
+            assert_eq!(working.requests().len(), 1, "explicit failure must not retry another provider");
+        }
+    }
+
+    #[test]
+    fn automatic_subject_routing_keeps_classical_path_when_no_provider_matches() {
+        let mut s = session_with(80, 40, 8, |_, _| [0.5; 3]);
+        let mut adapter = MockSubjectAdapter::new("test.incompatible", MockMask::Failure);
+        adapter.descriptor.operations[0].color_modes = vec!["lab".into()];
+        let adapter = Arc::new(adapter);
+        s.register_adapter(adapter.clone()).unwrap();
+        assert_eq!(s.execute(SUBJECT, json!({})).unwrap()["changed"], false);
+        assert!(adapter.requests().is_empty());
+        assert!(s.execute(SUBJECT, json!({ "resource": "model.explicit" })).is_err(), "opaque model options must not be silently ignored");
+    }
+
+    #[test]
+    fn select_subject_adapter_forwards_options_and_current_selection_every_run() {
+        let mut s = session_with(80, 40, 16, |_, _| [0.5; 3]);
+        let adapter = register_subject(&mut s, "test.seed", MockMask::Selection);
+        for (device, resource, params, x) in
+            [(CPU_DEVICE, "  opaque:original/resource  ", json!({"threshold": 0.25}), 3), (CPU_DEVICE_2, "resource.two", json!({"threshold": 0.75}), 50)]
+        {
+            s.execute("select.rect", json!({"x": x, "y": 4, "width": 8, "height": 6})).unwrap();
+            s.execute(SUBJECT, json!({"provider": "test.seed", "device": device, "resource": resource, "params": params, "allowFallback": true})).unwrap();
+            assert!(cov(&s, x + 2, 6) > 0.99);
+            assert!(cov(&s, if x < 20 { 52 } else { 5 }, 6) < 0.01);
+            let seen = adapter.requests().pop().unwrap();
+            assert_eq!(seen.resource.as_deref(), Some(resource));
+            assert_eq!(seen.device.as_deref(), Some(device));
+            assert_eq!(seen.params, params);
+            assert!(seen.allow_fallback);
+            assert_eq!(seen.selection.as_ref().unwrap().data[(6 * 80 + x + 2) as usize], 1.0);
+        }
+        s.execute("select.deselect", json!({})).unwrap();
+        assert_eq!(s.execute(SUBJECT, json!({"provider": "test.seed"})).unwrap()["changed"], false);
+        assert_eq!(adapter.requests().len(), 3);
+        assert!(adapter.requests().last().unwrap().selection.is_none());
+    }
+
+    #[test]
+    fn select_subject_adapter_enhancement_refines_each_requested_mask() {
+        for depth in [8, 16, 32] {
+            let mut s = blurred_edge_selected_at(depth);
+            let adapter = register_subject(&mut s, "test.edge", MockMask::LeftHalf);
+            s.execute("select.deselect", json!({})).unwrap();
+            s.execute(SUBJECT, json!({"provider": "test.edge", "enhanceEdge": false})).unwrap();
+            assert_eq!(soft_count(s.active().unwrap().doc.selection.as_ref().unwrap(), 20), 0);
+            let doc = Arc::clone(&s.active().unwrap().doc);
+            let hard = Region { bbox: Rect::new(0, 0, 40, 40), mask: vec![255; 40 * 40] };
+            let expected = enhance_subject(&doc, None, true, Some(hard), true).unwrap();
+            s.execute(SUBJECT, json!({"provider": "test.edge", "enhanceEdge": true})).unwrap();
+            for x in 0..80 {
+                assert!((cov(&s, x, 20) - expected.at(x, 20)).abs() < 1.0 / 255.0, "depth {depth}, x {x}");
+            }
+            assert!(soft_count(s.active().unwrap().doc.selection.as_ref().unwrap(), 20) > 0);
+            assert_eq!(adapter.requests().len(), 2);
+            s.execute("edit.undo", json!({})).unwrap();
+            assert_eq!(soft_count(s.active().unwrap().doc.selection.as_ref().unwrap(), 20), 0);
+        }
+    }
+
+    #[test]
+    fn select_subject_classical_cache_distinguishes_enhancement() {
+        let (mut s, _) = disc(8);
+        s.execute(SUBJECT, json!({"forceClassical": true})).unwrap();
+        let plain = s.subject_cache.region.clone().unwrap();
+        s.execute(SUBJECT, json!({"forceClassical": true, "enhanceEdge": true})).unwrap();
+        let enhanced = s.subject_cache.region.clone().unwrap();
+        assert!(!Arc::ptr_eq(&plain, &enhanced));
+        assert!(s.subject_cache.enhance_edge);
+        s.execute("select.deselect", json!({})).unwrap();
+        s.execute(SUBJECT, json!({"enhanceEdge": true})).unwrap();
+        assert!(Arc::ptr_eq(&enhanced, s.subject_cache.region.as_ref().unwrap()));
+        s.execute(SUBJECT, json!({"enhanceEdge": false})).unwrap();
+        assert!(!s.subject_cache.enhance_edge);
+        assert!(!Arc::ptr_eq(&enhanced, s.subject_cache.region.as_ref().unwrap()));
+    }
+
+    #[test]
+    fn select_subject_adapter_failure_or_invalid_response_keeps_document_and_history() {
+        for mask in [MockMask::Failure, MockMask::Canceled, MockMask::BadGeometry, MockMask::BadExecution] {
+            let mut s = blurred_edge_selected();
+            register_subject(&mut s, "test.failure", mask);
+            let before = Arc::clone(&s.active().unwrap().doc);
+            let label = s.active().unwrap().history.undo_label().map(str::to_string);
+            assert!(s.execute(SUBJECT, json!({})).is_err());
+            assert!(Arc::ptr_eq(&before, &s.active().unwrap().doc));
+            assert_eq!(s.active().unwrap().history.undo_label(), label.as_deref());
+            assert!(s.subject_cache.doc_id.is_none());
+        }
+    }
+
+    #[test]
+    fn select_subject_adapter_honors_job_context_cancellation_before_and_after_run() {
+        for already_cancelled in [true, false] {
+            let mut s = blurred_edge_selected();
+            let ctx = crate::jobs::JobCtx::new();
+            let mut adapter = MockSubjectAdapter::new("test.cancel", MockMask::LeftHalf);
+            adapter.cancel = Some(ctx.clone());
+            let adapter = Arc::new(adapter);
+            s.register_adapter(adapter.clone()).unwrap();
+            let before = Arc::clone(&s.active().unwrap().doc);
+            if already_cancelled {
+                ctx.cancel();
+            }
+            s.set_inline_job_ctx(Some(ctx.clone()));
+            assert!(matches!(s.execute(SUBJECT, json!({})), Err(EngineError::Cancelled)));
+            assert!(Arc::ptr_eq(&before, &s.active().unwrap().doc));
+            assert_eq!(adapter.requests().len(), usize::from(!already_cancelled));
+            if !already_cancelled {
+                assert_eq!(ctx.fraction(), 0.5);
+            }
+            s.set_inline_job_ctx(None);
+        }
+    }
+
+    #[test]
+    fn select_subject_rejects_invalid_params_even_with_a_hot_classical_cache() {
+        let mut s = session_with(80, 40, 8, |_, _| [0.5; 3]);
+        s.execute(SUBJECT, json!({})).unwrap();
+        let adapter = register_subject(&mut s, "test.validation", MockMask::LeftHalf);
+        let before = Arc::clone(&s.active().unwrap().doc);
+        for p in [
+            Value::Null,
+            json!({"provider": 7}),
+            json!({"provider": ""}),
+            json!({"provider": "not an id"}),
+            json!({"device": false}),
+            json!({"device": ""}),
+            json!({"resource": []}),
+            json!({"params": []}),
+            json!({"params": null}),
+            json!({"sampleAllLayers": 1}),
+            json!({"enhanceEdge": "true"}),
+            json!({"forceClassical": "false"}),
+            json!({"allowFallback": 1}),
+            json!({"mode": "xor"}),
+            json!({"mode": 5}),
+            json!({"method": "npu"}),
+            json!({"method": false}),
+            json!({"target": "mask"}),
+            json!({"coalesce": []}),
+            json!({"provder": "test.validation"}),
+            json!({"provider": "x".repeat(129)}),
+            json!({"resource": "x".repeat(Limits::default().max_resource_bytes + 1)}),
+        ] {
+            assert!(s.execute(SUBJECT, p.clone()).is_err(), "accepted {p}");
+            assert!(Arc::ptr_eq(&before, &s.active().unwrap().doc), "mutated document for {p}");
+        }
+        assert!(adapter.requests().is_empty());
+        // Iterative preflight rejects a deep object without cloning it into a worker snapshot.
+        let mut nested = json!({});
+        for _ in 0..40 {
+            nested = json!({"nested": nested});
+        }
+        assert!(preflight(SUBJECT, &json!({"params": nested})).is_err());
+    }
+
+    #[test]
+    fn select_subject_adapter_native_color_contract_and_selection_context() {
+        use photocraft_color::SampleType;
+        use photocraft_doc::Size;
+        use photocraft_raster::Surface;
+        for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab] {
+            for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+                let mut doc = Document::new("Native subject test", Size::new(8, 4), mode, depth);
+                doc.icc_profile = Some(Arc::new(vec![1, 2, 3, 4]));
+                let mut surface = Surface::new(doc.pixel_format());
+                surface.fill_rect(doc.bounds(), &vec![0.25; surface.channels()]);
+                let input = surface.read_region(doc.bounds());
+                doc.layers.push(Layer::new("Pixels", LayerContent::Raster(surface)));
+                let mut s = Session::new();
+                s.add_document(doc, None);
+                let adapter = register_subject(&mut s, "test.native", MockMask::LeftHalf);
+                s.execute("select.all", json!({})).unwrap();
+                s.execute(SUBJECT, json!({"sampleAllLayers": false})).unwrap();
+                let request = adapter.requests().pop().unwrap();
+                assert_eq!(request.image.color_mode, subject_color_mode(mode).unwrap());
+                assert_eq!(request.image.source_depth, depth.bits() as u8);
+                assert_eq!(request.image.icc_profile, vec![1, 2, 3, 4]);
+                assert_eq!(request.image.data, input);
+                assert_eq!(request.selection.unwrap().data, vec![1.0; 32]);
+                if mode != ColorMode::Rgb {
+                    let before = Arc::clone(&s.active().unwrap().doc);
+                    assert!(s.execute(SUBJECT, json!({"sampleAllLayers": true})).is_err());
+                    assert!(Arc::ptr_eq(&before, &s.active().unwrap().doc));
+                    assert_eq!(adapter.requests().len(), 1);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn select_subject_invalid_selection_context_is_not_silently_dropped() {
+        use photocraft_raster::Surface;
+        let mut s = session_with(8, 4, 8, |_, _| [0.5; 3]);
+        let adapter = register_subject(&mut s, "test.context", MockMask::LeftHalf);
+        s.edit("invalid selection format", |doc, _| {
+            doc.selection = Some(Surface::new(PixelFormat::RGBA8));
+            Ok(())
+        })
+        .unwrap();
+        let before = Arc::clone(&s.active().unwrap().doc);
+        assert!(s.execute(SUBJECT, json!({})).is_err());
+        assert!(Arc::ptr_eq(&before, &s.active().unwrap().doc));
+        assert!(adapter.requests().is_empty());
+    }
+}

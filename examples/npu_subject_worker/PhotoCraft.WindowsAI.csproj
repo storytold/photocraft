@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows10.0.22621.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.22621.0</TargetPlatformMinVersion>
+    <RuntimeIdentifier>win-arm64</RuntimeIdentifier>
+    <Platforms>ARM64</Platforms>
+    <PlatformTarget>ARM64</PlatformTarget>
+    <AssemblyName>photocraft-windows-ai</AssemblyName>
+    <RootNamespace>PhotoCraft.WindowsAI</RootNamespace>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>false</PublishSingleFile>
+    <PublishTrimmed>false</PublishTrimmed>
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <WindowsPackageType>MSIX</WindowsPackageType>
+    <!-- Manual MakeAppx packaging below; no XAML/WinUI/VS packaging project. -->
+    <EnableMsixTooling>false</EnableMsixTooling>
+    <WindowsAppSdkBootstrapInitialize>false</WindowsAppSdkBootstrapInitialize>
+    <WindowsAppSdkDeploymentManagerInitialize>false</WindowsAppSdkDeploymentManagerInitialize>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Version>0.1.0</Version>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Extractor remains experimental; stable 2.0.1 is NOT a substitute. -->
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="[2.0.0-experimental7]" />
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="[10.0.28000.2705]" PrivateAssets="all" GeneratePathProperty="true" />
+    <Compile Remove="tests\**\*.cs" />
+    <!-- The host-neutral fixture executable links Protocol.cs; do not compile its entry point here. -->
+    <Compile Remove="ProtocolTests/**/*.cs" />
+  </ItemGroup>
+  <Target Name="RecordPackageFragments" AfterTargets="Publish">
+    <WriteLinesToFile File="$(PublishDir)windowsappsdk-fragments.txt"
+                      Lines="@(MicrosoftWindowsAppSDKAppxFragmentFiles)"
+                      Overwrite="true" Encoding="UTF-8" />
+    <WriteLinesToFile File="$(PublishDir)windows-sdk-tools.txt"
+                      Lines="$(PkgMicrosoft_Windows_SDK_BuildTools)"
+                      Overwrite="true" Encoding="UTF-8" />
+  </Target>
+</Project>

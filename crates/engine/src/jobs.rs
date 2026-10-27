@@ -31,6 +31,68 @@ use crate::{EngineError, Result, Session};
 
 type Authorization = fn(&str, &Value) -> Result<()>;
 
+/// Own adapter input safely until admission has proved its JSON depth is bounded. Merely
+/// rejecting a deep caller-built Value is not enough: its ordinary destructor is recursive.
+struct IncomingParams {
+    value: Value,
+    iterative_drop: bool,
+}
+
+enum AdapterJsonChildren {
+    Array(std::vec::IntoIter<Value>),
+    Object(serde_json::map::IntoIter),
+}
+
+impl AdapterJsonChildren {
+    fn next(&mut self) -> Option<Value> {
+        match self {
+            Self::Array(values) => values.next(),
+            Self::Object(values) => values.next().map(|(_, value)| value),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        match self {
+            Self::Array(values) => values.len() == 0,
+            Self::Object(values) => values.len() == 0,
+        }
+    }
+}
+
+impl Drop for IncomingParams {
+    fn drop(&mut self) {
+        if !self.iterative_drop {
+            return;
+        }
+        // Owned iterators avoid copying wide containers into another allocation. A chain
+        // of single-child containers needs no traversal-stack allocation, however deep.
+        let mut stack: Vec<AdapterJsonChildren> = Vec::new();
+        let mut current = Some(std::mem::take(&mut self.value));
+        loop {
+            if let Some(value) = current.take() {
+                let children = match value {
+                    Value::Array(values) => Some(AdapterJsonChildren::Array(values.into_iter())),
+                    Value::Object(values) => Some(AdapterJsonChildren::Object(values.into_iter())),
+                    _ => None,
+                };
+                if let Some(mut children) = children {
+                    current = children.next();
+                    if !children.is_empty() {
+                        stack.push(children);
+                    }
+                }
+            } else if let Some(children) = stack.last_mut() {
+                current = children.next();
+                if children.is_empty() {
+                    stack.pop();
+                }
+            } else {
+                break;
+            }
+        }
+    }
+}
+
 thread_local! {
     // Smart-filter rendering has no Session argument. Carry the requesting session's gate
     // through synchronous rendering and explicitly reinstall it on background workers.
@@ -767,6 +829,8 @@ impl Session {
         // The offer belongs to this one dispatch. Early errors drop it locally, including
         // authorization, validation, floating-selection and admission failures.
         let live_commit = self.live_commit.take();
+        let mut incoming = IncomingParams { value: params, iterative_drop: id.starts_with("plugin.adapter.") || id == "select.subject" };
+        let params = &incoming.value;
         let spec = crate::commands::find(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
         // Params are named fields: anything but an object (or null, meaning none) is a caller
         // mistake, not "use every default".
@@ -777,7 +841,7 @@ impl Session {
         // behalf (`file.automate.conditionalModeChange` runs `image.mode.*`), before any side
         // effect.
         if let Some(gate) = self.authorize {
-            gate(id, &params)?;
+            gate(id, params)?;
         }
         let _authorization = AuthorizationScope::enter(self.authorize);
         let _document = crate::doc_path::scope(self.active().and_then(|d| d.path.as_deref()).map(std::path::Path::new));
@@ -791,12 +855,22 @@ impl Session {
             return self.dispatch(&filter, p, background);
         }
         if id == "file.new" {
-            crate::document_preset_cmds::validate_new_params(self, &params)?;
+            crate::document_preset_cmds::validate_new_params(self, params)?;
         }
+        crate::adapter_cmds::preflight(id, params)?;
+        // Adapter preflight has now bounded every accepted nested value, so subsequent
+        // command snapshots/journals may own and normally drop the validated parameters.
+        let params = std::mem::take(&mut incoming.value);
+        incoming.iterative_drop = false;
         crate::param_check::check(spec, &params)?;
         crate::filters::validate_params(id, &params)?;
-        // A floating selection drops before any other command (Undo puts it back instead).
-        if let Some(v) = crate::float_cmds::before_command(self, id)? {
+        // Compatibility-adapter discovery must be a query, and a failed/cancelled adapter must
+        // not first commit a floating selection. Its run path explicitly rejects floating input;
+        // the user can drop/return it separately. Existing command behavior is unchanged.
+        if !id.starts_with("plugin.adapter.")
+            && id != "select.subject"
+            && let Some(v) = crate::float_cmds::before_command(self, id)?
+        {
             return Ok(Started::Done(v));
         }
         // Pixel commands follow the Channels panel target unless the caller names one.
@@ -1112,6 +1186,82 @@ pub fn specs() -> Vec<crate::commands::CommandSpec> {
 mod tests;
 
 #[cfg(test)]
+mod adapter_input_drop_tests {
+    use super::*;
+
+    fn deep_value() -> Value {
+        let mut value = Value::Null;
+        for _ in 0..20_000 {
+            value = Value::Array(vec![value]);
+        }
+        value
+    }
+
+    fn deep_params(shape: usize) -> Value {
+        if shape == 0 {
+            return deep_value();
+        }
+        let mut params = json!({"provider": "unused", "operation": "unused", "output": "pixels"});
+        if let Some(map) = params.as_object_mut() {
+            map.insert(if shape == 1 { "params" } else { "unknown" }.into(), deep_value());
+        }
+        params
+    }
+
+    #[test]
+    fn adapter_cmds_reject_and_iteratively_drop_extremely_deep_owned_input() {
+        for command in [crate::adapter_cmds::LIST, crate::adapter_cmds::RUN] {
+            for background in [false, true] {
+                for shape in 0..3 {
+                    let mut session = Session::new();
+                    let params = deep_params(shape);
+                    let result = if background { session.start(command, params).map(|_| ()) } else { session.execute(command, params).map(|_| ()) };
+                    assert!(matches!(result, Err(EngineError::BadParams { .. })));
+                    assert!(session.active().is_none());
+                    assert!(session.journal.is_empty());
+                    assert!(session.jobs.running.is_empty());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn adapter_cmds_query_preflight_rejects_deep_json_and_bounds_error_names() {
+        for command in [crate::adapter_cmds::LIST, crate::adapter_cmds::RUN] {
+            let mut session = Session::new();
+            let incoming = IncomingParams { value: deep_params(1), iterative_drop: true };
+            assert!(matches!(session.precheck(command, &incoming.value), Err(EngineError::BadParams { .. })));
+            assert!(session.disabled_reason_with(command, &incoming.value).is_some());
+            assert!(!session.is_enabled_with(command, &incoming.value));
+        }
+        let mut session = Session::new();
+        let mut params = serde_json::Map::new();
+        params.insert("🦄".repeat(20_000), Value::Null);
+        let error = session.execute(crate::adapter_cmds::RUN, Value::Object(params)).unwrap_err().to_string();
+        assert!(error.contains("unknown parameter"));
+        assert!(error.len() < 1024);
+    }
+
+    #[test]
+    fn adapter_cmds_authorization_refusal_also_iteratively_drops_owned_input() {
+        fn deny(_: &str, _: &Value) -> Result<()> {
+            Err(EngineError::Other("adapter execution denied by test policy".into()))
+        }
+        for command in [crate::adapter_cmds::LIST, crate::adapter_cmds::RUN] {
+            for background in [false, true] {
+                let mut session = Session::new();
+                session.authorize = Some(deny);
+                let params = deep_params(1);
+                let result = if background { session.start(command, params).map(|_| ()) } else { session.execute(command, params).map(|_| ()) };
+                assert!(matches!(result, Err(EngineError::Other(message)) if message == "adapter execution denied by test policy"));
+                assert!(session.active().is_none());
+                assert!(session.journal.is_empty());
+                assert!(session.jobs.running.is_empty());
+            }
+        }
+    }
+}
+
 #[path = "../../io/tests/support/recovery_psd.rs"]
 mod psd_open_fixture;
 

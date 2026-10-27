@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://photocraft.dev/schemas/adapter/v2/model-resource.schema.json",
+  "title": "UNREVIEWED DRAFT model resource v2; NOT IMPLEMENTED",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema_version", "deployment", "resource_id", "format", "version", "manifest_digest", "operation", "operation_version", "source", "license", "files", "bindings", "runtime_constraints"],
+  "properties": {
+    "schema_version": {"const": 2}, "deployment": {"enum": ["runnable", "placeholder"]},
+    "resource_id": {"$ref": "common.schema.json#/$defs/resourceId"}, "format": {"$ref": "common.schema.json#/$defs/token"},
+    "version": {"$ref": "common.schema.json#/$defs/version"}, "operation": {"$ref": "common.schema.json#/$defs/token"}, "operation_version": {"$ref": "common.schema.json#/$defs/version"},
+    "manifest_digest": {"oneOf": [{"$ref": "common.schema.json#/$defs/digest"}, {"type": "null"}]},
+    "description": {"type": "string", "minLength": 1, "maxLength": 512},
+    "source": {"type": "object", "additionalProperties": false, "required": ["uri", "revision", "exporter", "exporter_version", "verification"], "properties": {"uri": {"type": "string", "minLength": 1, "maxLength": 2048, "format": "uri"}, "revision": {"type": "string", "minLength": 1, "maxLength": 128}, "exporter": {"$ref": "common.schema.json#/$defs/token"}, "exporter_version": {"type": "string", "minLength": 1, "maxLength": 64}, "verification": {"enum": ["unverified_placeholder", "reviewed"]}}},
+    "license": {"type": "object", "additionalProperties": false, "required": ["expression", "review_status"], "properties": {"expression": {"type": "string", "minLength": 1, "maxLength": 256}, "review_status": {"enum": ["unverified", "reviewed"]}, "text_relative_path": {"$ref": "common.schema.json#/$defs/path"}, "source_uri": {"type": "string", "minLength": 1, "maxLength": 2048, "format": "uri"}}},
+    "files": {"type": "array", "maxItems": 128, "items": {"type": "object", "additionalProperties": false, "required": ["relative_path", "size_bytes", "sha256", "role"], "properties": {"relative_path": {"$ref": "common.schema.json#/$defs/path"}, "size_bytes": {"type": "integer", "minimum": 1, "maximum": 17179869184}, "sha256": {"$ref": "common.schema.json#/$defs/digest"}, "role": {"enum": ["model", "weights", "external_data", "configuration", "tokenizer", "license", "auxiliary"]}}}},
+    "bindings": {
+      "type": "object", "additionalProperties": false,
+      "required": ["profile_id", "profile_version", "inputs", "outputs", "color_policy", "alpha_policy", "preprocess", "postprocess"],
+      "properties": {
+        "profile_id": {"$ref": "common.schema.json#/$defs/token"}, "profile_version": {"$ref": "common.schema.json#/$defs/version"},
+        "inputs": {"$ref": "#/$defs/bindings"}, "outputs": {"$ref": "#/$defs/bindings"},
+        "color_policy": {"enum": ["reject_untagged", "explicit_srgb", "preserve_icc", "not_applicable"]},
+        "alpha_policy": {"enum": ["reject_alpha", "preserve_straight", "profile_defined", "not_applicable"]},
+        "preprocess": {"$ref": "#/$defs/transform"}, "postprocess": {"$ref": "#/$defs/transform"}
+      }
+    },
+    "runtime_constraints": {"type": "array", "minItems": 1, "maxItems": 16, "items": {"type": "object", "additionalProperties": false, "required": ["runtime_id", "minimum_version", "backends", "architectures", "operating_systems", "max_memory_bytes"], "properties": {"runtime_id": {"$ref": "common.schema.json#/$defs/token"}, "minimum_version": {"$ref": "common.schema.json#/$defs/version"}, "backends": {"type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": {"$ref": "common.schema.json#/$defs/token"}}, "architectures": {"type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": {"$ref": "common.schema.json#/$defs/token"}}, "operating_systems": {"type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": {"$ref": "common.schema.json#/$defs/token"}}, "max_memory_bytes": {"type": "integer", "minimum": 1, "maximum": 68719476736}}}}
+  },
+  "allOf": [
+    {"if": {"properties": {"deployment": {"const": "runnable"}}}, "then": {"properties": {"manifest_digest": {"$ref": "common.schema.json#/$defs/digest"}, "files": {"minItems": 1}, "bindings": {"properties": {"color_policy": {"enum": ["reject_untagged", "explicit_srgb", "preserve_icc"]}, "alpha_policy": {"enum": ["reject_alpha", "preserve_straight", "profile_defined"]}}}, "source": {"properties": {"verification": {"const": "reviewed"}}}, "license": {"required": ["text_relative_path", "source_uri"], "properties": {"review_status": {"const": "reviewed"}}}}}, "else": {"properties": {"resource_id": {"pattern": "^example\\.synthetic\\."}, "manifest_digest": {"type": "null"}, "files": {"maxItems": 0}, "source": {"properties": {"verification": {"const": "unverified_placeholder"}}}, "license": {"properties": {"review_status": {"const": "unverified"}, "expression": {"const": "LicenseRef-UNVERIFIED-NOT-FOR-USE"}}}}}}
+  ],
+  "$defs": {
+    "bindings": {"type": "array", "minItems": 1, "maxItems": 16, "items": {"type": "object", "additionalProperties": false, "required": ["port", "name", "dtype", "layout", "shape"], "properties": {"port": {"$ref": "common.schema.json#/$defs/token"}, "name": {"type": "string", "minLength": 1, "maxLength": 128}, "dtype": {"$ref": "common.schema.json#/$defs/token"}, "layout": {"$ref": "common.schema.json#/$defs/token"}, "shape": {"type": "array", "minItems": 1, "maxItems": 8, "items": {"type": "integer", "minimum": 1, "maximum": 65536}}}}},
+    "transform": {"type": "object", "additionalProperties": false, "required": ["id", "version", "params"], "properties": {"id": {"$ref": "common.schema.json#/$defs/token"}, "version": {"$ref": "common.schema.json#/$defs/version"}, "params": {"type": "object", "maxProperties": 64, "propertyNames": {"type": "string", "minLength": 1, "maxLength": 128}}}}
+  }
+}

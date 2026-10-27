@@ -259,6 +259,15 @@ fn file_error(operation: &str, path: &str, error: std::io::Error) -> AutomationE
 /// directory capabilities. Automation must use `doc.open`, `doc.save` and
 /// `doc.render` for file effects until those commands are migrated.
 pub fn authorize_engine_command(id: &str, params: &Value) -> Result<(), AutomationError> {
+    // Unlike the WASM filter sandbox, a trusted compatibility adapter can own native runtimes,
+    // workers or opaque resource references. Scanning parameters for a field named `path` cannot
+    // confine those effects. Keep execution closed to automation until an adapter-specific,
+    // capability-scoped policy exists; discovery remains safe and available.
+    if id.starts_with("plugin.adapter.") && !matches!(id, "plugin.adapter.list" | "plugin.adapter.packages") {
+        return Err(AutomationError::BadRequest(
+            "automation cannot execute trusted compatibility adapters; a capability-scoped adapter policy is required".into(),
+        ));
+    }
     let safe_file_command = matches!(
         id,
         "file.new"

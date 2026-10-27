@@ -1,0 +1,5 @@
+{
+  "protocol": 2, "request_id": "synthetic-probe", "type": "control", "action": "probe", "status": "ready",
+  "message": "SYNTHETIC FIXTURE ONLY: declared support level, not installed files, a session, inference or hardware evidence.",
+  "readiness": "declared", "sections": []
+}

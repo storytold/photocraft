@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://photocraft.dev/schemas/adapter/v2/manifest.schema.json",
+  "title": "UNREVIEWED DRAFT package manifest v2; NOT IMPLEMENTED",
+  "type": "object", "additionalProperties": false,
+  "required": ["manifest_version", "deployment", "id", "name", "version", "architecture", "entrypoint", "files", "wire_versions", "features", "operations", "devices", "supported_resource_formats"],
+  "properties": {
+    "manifest_version": {"const": 2}, "deployment": {"enum": ["runnable", "placeholder"]},
+    "id": {"$ref": "common.schema.json#/$defs/resourceId"}, "name": {"type": "string", "minLength": 1, "maxLength": 128}, "version": {"$ref": "common.schema.json#/$defs/version"},
+    "publisher": {"type": "string", "minLength": 1, "maxLength": 128}, "license": {"type": "string", "minLength": 1, "maxLength": 256},
+    "architecture": {"$ref": "common.schema.json#/$defs/token"},
+    "entrypoint": {"oneOf": [{"$ref": "common.schema.json#/$defs/path"}, {"type": "null"}]},
+    "files": {"type": "array", "maxItems": 512, "items": {"type": "object", "additionalProperties": false, "required": ["relative_path", "size_bytes", "sha256"], "properties": {"relative_path": {"$ref": "common.schema.json#/$defs/path"}, "size_bytes": {"type": "integer", "minimum": 1, "maximum": 268435456}, "sha256": {"$ref": "common.schema.json#/$defs/digest"}}}},
+    "wire_versions": {"type": "array", "minItems": 1, "maxItems": 2, "uniqueItems": true, "items": {"enum": [1, 2]}},
+    "features": {"$ref": "common.schema.json#/$defs/features"},
+    "supported_resource_formats": {"type": "array", "minItems": 1, "maxItems": 32, "uniqueItems": true, "items": {"$ref": "common.schema.json#/$defs/token"}},
+    "operations": {
+      "type": "array", "minItems": 1, "maxItems": 32,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "semantic_version", "input_ports", "output_ports", "geometry_strategy", "accepted_color_modes", "accepted_source_depths", "accepted_alpha", "accepted_sample_ranges", "max_pixels", "max_memory_bytes", "params_schema"],
+        "properties": {
+          "id": {"$ref": "common.schema.json#/$defs/token"}, "semantic_version": {"$ref": "common.schema.json#/$defs/version"},
+          "input_ports": {"type": "array", "minItems": 1, "maxItems": 16, "items": {"$ref": "#/$defs/inputPort"}, "contains": {"properties": {"name": {"const": "source"}, "kind": {"const": "image"}, "required": {"const": true}}, "required": ["name", "kind", "required"]}, "minContains": 1, "maxContains": 1},
+          "output_ports": {"type": "array", "minItems": 1, "maxItems": 16, "items": {"type": "object", "additionalProperties": false, "required": ["name", "kind", "required", "primary"], "properties": {"name": {"$ref": "common.schema.json#/$defs/token"}, "kind": {"enum": ["image", "mask"]}, "required": {"type": "boolean"}, "primary": {"type": "boolean"}}, "if": {"properties": {"primary": {"const": true}}}, "then": {"properties": {"required": {"const": true}}}}, "contains": {"properties": {"primary": {"const": true}}, "required": ["primary"]}, "minContains": 1, "maxContains": 1},
+          "geometry_strategy": {"const": "same_geometry"},
+          "accepted_color_modes": {"type": "array", "minItems": 1, "maxItems": 4, "uniqueItems": true, "items": {"enum": ["rgb", "gray", "cmyk", "lab"]}},
+          "accepted_source_depths": {"type": "array", "minItems": 1, "maxItems": 3, "uniqueItems": true, "items": {"enum": [8, 16, 32]}},
+          "accepted_alpha": {"type": "array", "minItems": 1, "maxItems": 2, "uniqueItems": true, "items": {"enum": ["none", "straight"]}},
+          "accepted_sample_ranges": {"type": "array", "minItems": 1, "maxItems": 2, "uniqueItems": true, "items": {"enum": ["normalized", "finite-hdr"]}},
+          "max_pixels": {"type": "integer", "minimum": 1, "maximum": 67108864}, "max_memory_bytes": {"type": "integer", "minimum": 1, "maximum": 68719476736},
+          "params_schema": {"type": "object", "additionalProperties": false, "required": ["id", "version", "dialect", "schema"], "properties": {"id": {"type": "string", "minLength": 1, "maxLength": 2048, "format": "uri"}, "version": {"$ref": "common.schema.json#/$defs/version"}, "dialect": {"const": "https://json-schema.org/draft/2020-12/schema"}, "schema": {"type": "object", "maxProperties": 128}}}
+        }
+      }
+    },
+    "devices": {"type": "array", "minItems": 1, "maxItems": 16, "items": {"type": "object", "additionalProperties": false, "required": ["id", "kind", "backend", "name", "operations"], "properties": {"id": {"$ref": "common.schema.json#/$defs/token"}, "kind": {"enum": ["npu", "gpu", "cpu"]}, "backend": {"$ref": "common.schema.json#/$defs/token"}, "name": {"type": "string", "minLength": 1, "maxLength": 128}, "operations": {"type": "array", "minItems": 1, "maxItems": 32, "uniqueItems": true, "items": {"$ref": "common.schema.json#/$defs/token"}}}}}
+  },
+  "allOf": [{"if": {"properties": {"deployment": {"const": "runnable"}}}, "then": {"required": ["publisher", "license"], "properties": {"entrypoint": {"$ref": "common.schema.json#/$defs/path"}, "files": {"minItems": 1}}}, "else": {"properties": {"id": {"pattern": "^example\\.synthetic\\."}, "entrypoint": {"type": "null"}, "files": {"maxItems": 0}}}}],
+  "$defs": {"inputPort": {"type": "object", "additionalProperties": false, "required": ["name", "kind", "required"], "properties": {"name": {"$ref": "common.schema.json#/$defs/token"}, "kind": {"enum": ["image", "mask"]}, "required": {"type": "boolean"}}}}
+}

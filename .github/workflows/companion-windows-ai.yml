@@ -1,0 +1,148 @@
+name: Windows AI Companion Package and Protocol Contract
+
+on:
+  push:
+    branches:
+      - main
+      - "compat/**"
+    paths:
+      - "examples/npu_subject_worker/**"
+      - "crates/plugins/src/worker.rs"
+      - "crates/plugins/src/adapter.rs"
+      - "crates/plugins/tests/worker_companion_contract.rs"
+      - ".github/workflows/companion-windows-ai.yml"
+  pull_request:
+    paths:
+      - "examples/npu_subject_worker/**"
+      - "crates/plugins/src/worker.rs"
+      - "crates/plugins/src/adapter.rs"
+      - "crates/plugins/tests/worker_companion_contract.rs"
+      - ".github/workflows/companion-windows-ai.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  protocol-contract:
+    name: C# and Rust bidirectional production codecs (no AI hardware)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      PHOTOCRAFT_COMPANION_FIXTURES: ${{ github.workspace }}/artifacts/companion-protocol/fixtures
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target/companion-contract
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Setup stable Rust (not repository nightly)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build hardware-neutral protocol fixture executable
+        run: |
+          New-Item -ItemType Directory -Force ./artifacts/companion-protocol | Out-Null
+          dotnet build ./examples/npu_subject_worker/ProtocolTests/PhotoCraft.WindowsAI.ProtocolTests.csproj --configuration Release 2>&1 |
+            Tee-Object ./artifacts/companion-protocol/dotnet-build.log
+          if ($LASTEXITCODE -ne 0) { throw 'Standalone protocol fixture build failed.' }
+
+      - name: Run C# protocol assertions and generate real writer fixtures
+        run: |
+          dotnet run --no-build --configuration Release --project ./examples/npu_subject_worker/ProtocolTests/PhotoCraft.WindowsAI.ProtocolTests.csproj -- --fixtures "$env:PHOTOCRAFT_COMPANION_FIXTURES" --results ./artifacts/companion-protocol/csharp-test-results.json 2>&1 |
+            Tee-Object ./artifacts/companion-protocol/csharp-tests.log
+          if ($LASTEXITCODE -ne 0) { throw 'C# protocol assertions failed.' }
+
+      - name: Decode generated C# responses with the real Rust protocol and write Rust request fixtures
+        run: |
+          cargo +stable test --locked -p photocraft-plugins --test worker_companion_contract -- --ignored --nocapture 2>&1 |
+            Tee-Object ./artifacts/companion-protocol/rust-interop-tests.log
+          $code = $LASTEXITCODE
+          @{ suite = 'C# production writer <-> strict Rust codecs'; exit_code = $code; fixtures = $env:PHOTOCRAFT_COMPANION_FIXTURES; hardware_inference = $false } |
+            ConvertTo-Json | Set-Content ./artifacts/companion-protocol/rust-test-results.json
+          if ($code -ne 0) { throw 'C# -> Rust protocol contract failed.' }
+
+      - name: Verify Rust-generated request fixtures with C# protocol reader
+        run: |
+          dotnet run --no-build --configuration Release --project ./examples/npu_subject_worker/ProtocolTests/PhotoCraft.WindowsAI.ProtocolTests.csproj -- --verify-rust "$env:PHOTOCRAFT_COMPANION_FIXTURES/from-rust" --results ./artifacts/companion-protocol/csharp-bidirectional-results.json 2>&1 |
+            Tee-Object ./artifacts/companion-protocol/csharp-bidirectional-tests.log
+          if ($LASTEXITCODE -ne 0) { throw 'Rust -> C# request protocol contract failed.' }
+
+      - name: Require missing Rust input fixtures to fail (negative gate)
+        run: |
+          dotnet run --no-build --configuration Release --project ./examples/npu_subject_worker/ProtocolTests/PhotoCraft.WindowsAI.ProtocolTests.csproj -- --verify-rust ./artifacts/deliberately-missing-input --results ./artifacts/companion-protocol/missing-input-negative-results.json 2>&1 |
+            Tee-Object ./artifacts/companion-protocol/missing-input-negative.log
+          if ($LASTEXITCODE -ne 1) { throw 'Missing input must produce assertion failure exit 1, not a launch/configuration failure.' }
+          $negative = Get-Content ./artifacts/companion-protocol/missing-input-negative-results.json -Raw | ConvertFrom-Json
+          if ($negative.failed -ne 6 -or $negative.passed -ne 0 -or @($negative.tests).Count -ne 6) { throw 'Missing fixture negative gate did not execute all six expected assertions.' }
+          foreach ($test in $negative.tests) {
+            if ($test.error -notmatch 'System.IO.(DirectoryNotFoundException|FileNotFoundException)') { throw 'Negative gate failed for a reason other than missing input.' }
+          }
+          $global:LASTEXITCODE = 0
+
+      - name: Upload generated fixtures and protocol test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: photocraft-companion-protocol-evidence
+          path: ./artifacts/companion-protocol/**
+          if-no-files-found: error
+
+  build-companion:
+    name: Build and development-sign Windows AI MSIX (ARM64, no inference)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Build and sign ARM64 MSIX with ephemeral development certificate
+        run: |
+          New-Item -ItemType Directory -Force ./artifacts/package-evidence | Out-Null
+          ./examples/npu_subject_worker/Build-Package.ps1 -DevelopmentCertificate -OutputDirectory ./artifacts
+          $packages = @(Get-ChildItem ./artifacts/*.msix)
+          if ($packages.Count -ne 1) { throw 'Expected exactly one ARM64 MSIX.' }
+          $certificatePath = Join-Path $PWD 'artifacts/photocraft-windows-ai.cer'
+          if (!(Test-Path -LiteralPath $certificatePath)) { throw 'Missing development signing certificate.' }
+          $certificate = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($certificatePath)
+          try {
+            @{
+              package = $packages[0].Name
+              sha256 = (Get-FileHash -LiteralPath $packages[0].FullName -Algorithm SHA256).Hash
+              architecture = 'ARM64'
+              signing = 'ephemeral development certificate; not production trust'
+              signer_thumbprint = $certificate.Thumbprint
+              hardware_inference = $false
+            } | ConvertTo-Json | Set-Content ./artifacts/package-evidence/package-results.json
+          } finally { $certificate.Dispose() }
+
+      - name: Upload development-signed ARM64 companion
+        uses: actions/upload-artifact@v4
+        with:
+          name: photocraft-windows-ai-arm64
+          path: |
+            ./artifacts/*.msix
+            ./artifacts/*.cer
+            ./artifacts/adapter.json
+            ./artifacts/Install-Package.ps1
+          if-no-files-found: error
+
+      - name: Upload package build and signing evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: photocraft-windows-ai-package-evidence
+          path: ./artifacts/package-evidence/**
+          if-no-files-found: warn

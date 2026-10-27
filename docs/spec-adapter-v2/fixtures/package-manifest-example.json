@@ -1,0 +1,14 @@
+{
+  "manifest_version": 2, "deployment": "placeholder", "id": "example.synthetic.worker", "name": "Synthetic non-runnable schema fixture",
+  "version": "0.0.0-example", "architecture": "example.synthetic", "entrypoint": null, "files": [],
+  "wire_versions": [2], "features": ["image-mask-v2", "same-geometry", "resource-control"], "supported_resource_formats": ["example.synthetic-format"],
+  "operations": [{
+    "id": "synthetic-mask", "semantic_version": "0.0.0-example",
+    "input_ports": [{"name": "source", "kind": "image", "required": true}, {"name": "selection", "kind": "mask", "required": false}],
+    "output_ports": [{"name": "mask", "kind": "mask", "required": true, "primary": true}],
+    "geometry_strategy": "same_geometry", "accepted_color_modes": ["rgb"], "accepted_source_depths": [16, 32], "accepted_alpha": ["none"], "accepted_sample_ranges": ["normalized", "finite-hdr"],
+    "max_pixels": 6, "max_memory_bytes": 1024,
+    "params_schema": {"id": "urn:example:synthetic:params", "version": "0.0.0-example", "dialect": "https://json-schema.org/draft/2020-12/schema", "schema": {"type": "object", "properties": {}, "additionalProperties": false}}
+  }],
+  "devices": [{"id": "example.synthetic.cpu", "kind": "cpu", "backend": "example.synthetic", "name": "Synthetic device label; no hardware tested", "operations": ["synthetic-mask"]}]
+}

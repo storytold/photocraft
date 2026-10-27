@@ -23,6 +23,7 @@ wasmi = { version = "2.0.0", default-features = false, features = ["std", "valid
 # Bands run in parallel on native; wasm builds stay single-threaded.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rayon = { workspace = true }
+tempfile = "3"
 
 # Opening a plug-in file without blocking on a FIFO (the flag constant only).
 [target.'cfg(unix)'.dependencies]

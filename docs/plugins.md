@@ -1,8 +1,13 @@
 # Plug-ins: the WebAssembly plug-in API (ABI v1)
 
-PhotoCraft does not host native Photoshop plug-ins (`.8BF`, CEP, UXP): that needs unsafe FFI into
-arbitrary machine code and cannot work in the browser build. Instead, plug-ins are **WebAssembly
-modules** run in a sandbox. One `.wasm` file works on macOS, Windows, Linux and the web.
+PhotoCraft does not directly host native Photoshop plug-ins (`.8BF`, CEP, UXP). The sandboxed
+plug-ins documented on this page are **WebAssembly modules**; one `.wasm` file works on macOS,
+Windows, Linux and the web. Their no-imports ABI and security policy are unchanged.
+
+A separate, experimental [compatibility-adapter API](compatibility-adapters.md) lets trusted
+application code register a community backend for original filter/model resources, typed results
+and explicit CPU/GPU/NPU device policy. It does not include a native plug-in loader, vendor runtime
+or proprietary-model decoder; it is not an alternative way for a WASM module to escape its sandbox.
 
 This page is the contract for plug-in authors and the reference for the host
 (`crates/plugins`, the `plugin.*` commands in `crates/engine/src/plugin_cmds.rs`).

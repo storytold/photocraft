@@ -5,7 +5,9 @@ name: CI
 # test variant and the corpus, web and fuzz jobs are PhotoCraft's own.
 on:
   push:
-    branches: [main]
+    # Validate reviewed contribution branches on the fork without needing to run
+    # untrusted code on a self-hosted/NPU machine or alter upstream PR settings.
+    branches: [main, "compat/**"]
   pull_request:
     # `labeled` so that adding `full-ci` to an open PR starts a run with Windows in it.
     types: [opened, synchronize, reopened, labeled]

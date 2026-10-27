@@ -11,3 +11,7 @@ target/
 /craft-fonts
 *.log
 __pycache__/
+/companion-artifact/
+/pre-flash-baseline-diff.patch
+/examples/**/bin/
+/examples/**/obj/

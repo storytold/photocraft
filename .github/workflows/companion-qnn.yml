@@ -1,0 +1,161 @@
+name: QNN draft validation (no runtime distribution)
+
+on:
+  push:
+    branches: [main, "compat/**"]
+    paths:
+      - "examples/onnx_qnn_worker/**"
+      - ".github/workflows/companion-qnn.yml"
+  pull_request:
+    paths:
+      - "examples/onnx_qnn_worker/**"
+      - ".github/workflows/companion-qnn.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qnn-draft-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  pure-tests:
+    name: T1 pure Core and packaging policy (NO hardware inference)
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - uses: actions/setup-python@v5
+        id: policy_python
+        with:
+          python-version: "3.12"
+      - name: Install pinned workflow policy parser
+        id: policy_dependency
+        run: |
+          python -m pip install --disable-pip-version-check PyYAML==6.0.2
+          if ($LASTEXITCODE -ne 0) { throw 'Workflow policy dependency installation failed.' }
+      - name: Assert workflow gate regression cases
+        id: policy_tests
+        run: |
+          python ./examples/onnx_qnn_worker/Tests/WorkflowGate.Tests.py
+          if ($LASTEXITCODE -ne 0) { throw 'Workflow gate regression assertions failed.' }
+      - name: Build hardware-neutral executable assertions
+        run: |
+          New-Item -ItemType Directory -Force ./artifacts/qnn-tests | Out-Null
+          dotnet build ./examples/onnx_qnn_worker/Tests/PhotoCraft.OnnxQnn.Tests.csproj --configuration Release 2>&1 |
+            Tee-Object ./artifacts/qnn-tests/dotnet-build.log
+          if ($LASTEXITCODE -ne 0) { throw 'Pure Core assertion build failed.' }
+      - name: Run synthetic protocol, envelope, profile and fake scheduling assertions
+        run: |
+          dotnet run --no-build --configuration Release --project ./examples/onnx_qnn_worker/Tests/PhotoCraft.OnnxQnn.Tests.csproj -- --results ./artifacts/qnn-tests/core-results.json 2>&1 |
+            Tee-Object ./artifacts/qnn-tests/core-tests.log
+          if ($LASTEXITCODE -ne 0) { throw 'Pure Core assertions failed.' }
+      - name: Run pure packaging boundaries, manifest and script syntax assertions
+        run: |
+          ./examples/onnx_qnn_worker/Tests/Packaging.Tests.ps1 -ResultsPath ./artifacts/qnn-tests/packaging-results.json *>&1 |
+            Tee-Object ./artifacts/qnn-tests/packaging-tests.log
+      - name: Record exact validation scope
+        if: always()
+        run: |
+          @"
+          ## QNN draft scope
+          - T1 only: pure C# Core + PowerShell policy; synthetic envelope fixtures and FAKE scheduling.
+          - No ORT/native library/model/HTP/NPU inference; no Rust cross-language T2 evidence here.
+          - ARM64 publish/startup are a separate job. Neither job grants redistribution approval.
+          "@ >> $env:GITHUB_STEP_SUMMARY
+      - name: Validate workflow policy and exact evidence paths
+        id: evidence_gate
+        if: always()
+        run: |
+          if ('${{ steps.policy_python.outcome }}' -ne 'success' -or '${{ steps.policy_dependency.outcome }}' -ne 'success') { throw 'Policy prerequisites failed; no evidence upload is allowed.' }
+          if ('${{ steps.policy_tests.outcome }}' -ne 'success') { throw 'Policy regression assertions did not pass.' }
+          python ./examples/onnx_qnn_worker/Tests/WorkflowGate.py --job pure-tests
+          if ($LASTEXITCODE -ne 0) { throw 'QNN evidence gate failed; no artifact upload is allowed.' }
+      - name: Upload exact evidence only after this job gate succeeds
+        if: ${{ always() && steps.evidence_gate.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: photocraft-qnn-pure-evidence
+          path: |
+            artifacts/qnn-tests/dotnet-build.log
+            artifacts/qnn-tests/core-results.json
+            artifacts/qnn-tests/core-tests.log
+            artifacts/qnn-tests/packaging-results.json
+            artifacts/qnn-tests/packaging-tests.log
+          if-no-files-found: error
+          retention-days: 14
+
+  publish-inventory-smoke:
+    name: T4 full ARM64 publish, inventory and no-model process (NO NPU inference)
+    needs: pure-tests
+    # Public GitHub-hosted ARM64 runner, not a Snapdragon/NPU hardware acceptance machine.
+    runs-on: windows-11-arm
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - uses: actions/setup-python@v5
+        id: policy_python
+        with:
+          python-version: "3.12"
+      - name: Install pinned workflow policy parser
+        id: policy_dependency
+        run: |
+          python -m pip install --disable-pip-version-check PyYAML==6.0.2
+          if ($LASTEXITCODE -ne 0) { throw 'Workflow policy dependency installation failed.' }
+      - name: Publish complete ARM64 folder and audit exact native, DSP, legal and byte inventory
+        run: |
+          New-Item -ItemType Directory -Force ./artifacts/qnn-evidence | Out-Null
+          ./examples/onnx_qnn_worker/Build-Package.ps1 -Configuration Release -OutputDirectory ./artifacts 2>&1 |
+            Tee-Object ./artifacts/qnn-evidence/publish.log
+          if ($LASTEXITCODE -ne 0) { throw 'ARM64 restore/publish/signature verification failed.' }
+      - name: Run real self-contained ARM64 apphost without a model
+        run: |
+          ./examples/onnx_qnn_worker/Tests/ProcessSmoke.ps1 -WorkerDirectory ./artifacts/publish-qnn-arm64 -ResultsPath ./artifacts/qnn-evidence/process-smoke.json 2>&1 |
+            Tee-Object ./artifacts/qnn-evidence/process-smoke.log
+      - name: Enforce hard-closed runtime redistribution gate
+        if: always()
+        run: |
+          if (Test-Path ./artifacts/photocraft-onnx-qnn-arm64.zip) { throw 'Unreviewed runtime ZIP must never be produced/uploaded by this draft.' }
+          @"
+          ## ARM64 draft scope and legal gate
+          - Complete self-contained publish remains ONLY on this ephemeral runner.
+          - Native/DSP and all notices/docs are inventoried with SHA-256; host install records use BLAKE3 instead.
+          - Real process smoke covers startup, exit and no-model/error frames, not ORT/HTP/NPU inference.
+          - Qualcomm PDF/privacy/third-party redistribution review is BLOCKED. This workflow permits no release or runtime binary upload (historical unauthorized artifact 12413508676 under 17a8a7d3 is acknowledged).
+          - A green workflow is not model compatibility, quality, NPU placement or legal approval.
+          "@ >> $env:GITHUB_STEP_SUMMARY
+      - name: Validate workflow policy and exact evidence paths
+        id: evidence_gate
+        if: always()
+        run: |
+          if ('${{ steps.policy_python.outcome }}' -ne 'success' -or '${{ steps.policy_dependency.outcome }}' -ne 'success') { throw 'Policy prerequisites failed; no evidence upload is allowed.' }
+          python ./examples/onnx_qnn_worker/Tests/WorkflowGate.py --job publish-inventory-smoke
+          if ($LASTEXITCODE -ne 0) { throw 'QNN evidence gate failed; no artifact upload is allowed.' }
+      - name: Upload exact evidence only after this job gate succeeds
+        if: ${{ always() && steps.evidence_gate.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: photocraft-qnn-arm64-evidence-only
+          path: |
+            artifacts/qnn-evidence/validation-report.json
+            artifacts/qnn-evidence/nuget-packages.json
+            artifacts/qnn-evidence/native-dsp-inventory.json
+            artifacts/qnn-evidence/legal-inventory.json
+            artifacts/qnn-evidence/publish-inventory.json
+            artifacts/qnn-evidence/adapter.json
+            artifacts/qnn-evidence/process-smoke.json
+            artifacts/qnn-evidence/publish.log
+            artifacts/qnn-evidence/process-smoke.log
+          if-no-files-found: error
+          retention-days: 14

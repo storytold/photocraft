@@ -11,6 +11,7 @@ const PREFIX: &str = "plugin.filter.";
 
 /// Inserts the installed plug-ins into Filter › Plug-ins, above "Install Plug-in…".
 pub fn insert_menu_items(app: &PhotocraftApp, items: &mut Vec<MenuItem>) {
+    crate::adapter_ui::insert_menu_items(items);
     let plugins = photocraft_plugins::registry::list();
     let Some(at) = items.iter().position(|i| i.id == "plugin.install") else { return };
     // `MenuItem::path` is the untranslated English path from the command's engine spec: the menu
@@ -45,6 +46,9 @@ pub fn insert_menu_items(app: &PhotocraftApp, items: &mut Vec<MenuItem>) {
 
 /// Enabled state of a plug-in menu item (`None` for other ids).
 pub fn is_enabled(app: &PhotocraftApp, id: &str) -> Option<bool> {
+    if let Some(enabled) = crate::adapter_ui::is_enabled(id) {
+        return Some(enabled);
+    }
     let pid = id.strip_prefix(PREFIX)?;
     Some(photocraft_plugins::registry::get(pid).is_some() && app.session.is_enabled("plugin.run"))
 }
@@ -52,6 +56,9 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> Option<bool> {
 /// Runs a plug-in menu item: straight away when it has no parameters (or params were given),
 /// else through its dialog. "Install Plug-in…" without params opens its path dialog.
 pub fn menu(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
+    if let Some(result) = crate::adapter_ui::menu(app, id, params) {
+        return Some(result);
+    }
     let given = params.as_object().is_some_and(|o| !o.is_empty());
     if id == "plugin.install" && !given {
         return Some(Ok(json!({"dialog": crate::filter_dialog::open(app, "plugin.install")})));

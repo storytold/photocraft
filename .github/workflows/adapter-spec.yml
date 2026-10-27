@@ -1,0 +1,51 @@
+name: Adapter v2 draft review and candidate vectors (not hardware conformance)
+
+on:
+  push:
+    branches: [main, "compat/**"]
+    paths:
+      - "docs/spec-adapter-v2/**"
+      - ".github/workflows/adapter-spec.yml"
+  pull_request:
+    paths:
+      - "docs/spec-adapter-v2/**"
+      - ".github/workflows/adapter-spec.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  draft-spec-review:
+    name: Draft validation, candidate vectors and conformance suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: 1. Validate static semantics and inventory (stdlib only)
+        run: python docs/spec-adapter-v2/validate.py --static
+      - name: 2. Install pinned CI schema validator dependencies
+        run: python -m pip install --disable-pip-version-check -r docs/spec-adapter-v2/requirements-ci.txt
+      - name: 3. Validate draft schemas and positive and negative JSON examples
+        run: python docs/spec-adapter-v2/validate.py --schema
+      - name: 4. Generate candidate binary vectors and hash manifest
+        run: python docs/spec-adapter-v2/generate_binary_vectors.py
+      - name: 5. Run wire protocol conformance test suite
+        run: python docs/spec-adapter-v2/conformance_test.py
+      - name: 6. Archive candidate vectors and evidence (30 days retention)
+        uses: actions/upload-artifact@v4
+        with:
+          name: adapter-v2-candidate-vectors
+          path: |
+            docs/spec-adapter-v2/fixtures/binary/*.bin
+            docs/spec-adapter-v2/fixtures/binary/golden-hashes.json
+            docs/spec-adapter-v2/fixtures/binary/GOLDEN-VECTORS.md
+          retention-days: 30
+      - name: Scope and limitations of this run
+        run: |
+          echo '### Candidate Vectors & Draft Run Evidence' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Schema validation, candidate binary vectors generation, and wire conformance passed in pure software CI.' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Scope: candidate vectors & draft run evidence only. Fixed baseline, hostile boundary fuzzing, real hardware, model weights, and NPU execution remain OPEN.' >> "$GITHUB_STEP_SUMMARY"

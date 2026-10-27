@@ -1,0 +1,26 @@
+{
+  "package_version": 1,
+  "descriptor": {
+    "api_version": 1,
+    "id": "org.photocraft.windows-ai.foreground",
+    "name": "Windows AI Foreground Extraction (ARM64 companion)",
+    "version": "0.1.0",
+    "operations": [{ "id": "select-subject", "output_kind": "mask", "color_modes": ["rgb"] }],
+    "devices": [{
+      "id": "windows-ai.npu",
+      "kind": "npu",
+      "backend": "windows-ai",
+      "name": "Windows AI (system-managed NPU)",
+      "operations": ["select-subject"]
+    }],
+    "resource_formats": [],
+    "params_schema": {
+      "type": "object",
+      "properties": { "colorPolicy": { "type": "string", "enum": ["assume-srgb"] } },
+      "additionalProperties": false
+    }
+  },
+  "launch": { "kind": "execution_alias", "alias": "photocraft-windows-ai.exe" },
+  "files": [],
+  "timeout_ms": 120000
+}

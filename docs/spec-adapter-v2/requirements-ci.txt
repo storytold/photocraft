@@ -1,0 +1,8 @@
+# CI-only document/schema validation. No app JS/Rust/runtime dependency.
+# Python 3.12; exact direct + transitive versions (not a wheel hash lock).
+attrs==24.3.0
+jsonschema==4.23.0
+jsonschema-specifications==2024.10.1
+referencing==0.35.1
+rfc3986-validator==0.1.1
+rpds-py==0.22.3

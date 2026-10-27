@@ -1,0 +1,4 @@
+{
+  "protocol": 2, "request_id": "synthetic-hello", "type": "hello", "sections": [],
+  "negotiation": {"wire_versions": [2], "supported_features": ["image-mask-v2", "same-geometry", "resource-control"], "required_features": ["image-mask-v2", "same-geometry", "resource-control"]}
+}

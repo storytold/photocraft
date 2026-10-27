@@ -1,0 +1,12 @@
+{
+  "protocol": 2, "request_id": "synthetic-run", "type": "run",
+  "operation": "synthetic-mask", "operation_version": "0.0.0-example",
+  "resource": {"id": "example.synthetic.unavailable-model", "version": "0.0.0-example", "manifest_digest": "0000000000000000000000000000000000000000000000000000000000000000"},
+  "device_policy": {"mode": "auto", "allowed_backends": ["example.synthetic"], "allow_graph_fallback": false},
+  "params": {},
+  "inputs": {
+    "source": {"kind": "image", "x": -7, "y": 11, "width": 3, "height": 2, "channels": 3, "color_mode": "rgb", "source_depth": 16, "alpha": false, "color_encoding": "srgb", "data_section_index": 0},
+    "selection": {"kind": "mask", "x": -7, "y": 11, "width": 3, "height": 2, "channels": 1, "color_mode": "gray", "source_depth": 32, "alpha": false, "data_section_index": 1}
+  },
+  "sections": [{"kind": "f32", "offset": 0, "length": 72}, {"kind": "f32", "offset": 72, "length": 24}]
+}
