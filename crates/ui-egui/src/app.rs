@@ -42,6 +42,7 @@ impl PhotocraftApp {
         session.automation_gate = session.automation_gate.or(services.automation_authorize);
         let mut app = Self {
             session,
+            artboard_overview: Default::default(),
             ui: UiState::default(),
             services,
             canvases: HashMap::new(),

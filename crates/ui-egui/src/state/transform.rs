@@ -190,10 +190,16 @@ pub struct Extras {
     pub guides: bool,
     pub snap: bool,
     pub lock_guides: bool,
+    /// Responsive artboard safe-area boundaries (`View › Show › Safe Areas`).
+    #[serde(default)]
+    pub safe_areas: bool,
+    /// Responsive artboard overflow, collision and safe-area markers (`View › Show`).
+    #[serde(default)]
+    pub responsive_warnings: bool,
 }
 
 impl Default for Extras {
     fn default() -> Self {
-        Self { rulers: false, grid: false, guides: true, snap: true, lock_guides: false }
+        Self { rulers: false, grid: false, guides: true, snap: true, lock_guides: false, safe_areas: false, responsive_warnings: false }
     }
 }

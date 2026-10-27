@@ -314,6 +314,9 @@ impl PhotocraftApp {
         let toolbar_shown = ((chrome && self.ui.panels.toolbar) || tabbed_in) && !home;
         // craft-ui's layout holds the canvas as its protected `canvas` panel.
         let docking = ((chrome && self.ui.panels.dock) || tabbed_in) && !home;
+        // The artboard overview's diagnostics refresh before the canvas is laid out, so the
+        // overview's cached previews reflect this frame's layout.
+        crate::artboard_overview::refresh_canvas_diagnostics(self);
         let toolbar_side = self.ui.panels.toolbar_side.resolve();
         let toolbar_right = toolbar_side == crate::state::ToolbarSide::Right;
         // The compact layout stacks the dock, rail and toolbar on the dock's physical edge.
@@ -354,6 +357,7 @@ impl PhotocraftApp {
         // The floating editor windows belong to the editor: Home covers them (dialogs and notices
         // below stay).
         if !home {
+            crate::artboard_overview::show(self, &ctx);
             brush_panel::window(self, &ctx);
             preset_panels::windows(self, &ctx);
             gradient_ui::editor_window(self, &ctx);
