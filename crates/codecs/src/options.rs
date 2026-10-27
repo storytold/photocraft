@@ -14,7 +14,9 @@ pub struct Limits {
     /// Maximum bytes for the decoded pixel buffer (and passed on as the
     /// allocation budget to underlying decoders).
     /// PNG also applies this to the aggregate decoded text/XMP UTF-8 bytes,
-    /// including keywords, separately from pixels. This is not a total RSS cap.
+    /// including keywords, separately from pixels. Animated WebP charges
+    /// every retained frame's full pixel copy plus its own copy of the
+    /// file's ICC profile against this budget. This is not a total RSS cap.
     pub max_alloc: u64,
 }
 

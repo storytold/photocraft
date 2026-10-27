@@ -94,7 +94,7 @@ fn identity_float_curves_match_previous_mapping_bits() {
         px: vec![[2.0, -0.0, -0.2, 1.0], [f32::from_bits(0x7fc01234), f32::INFINITY, f32::NEG_INFINITY, 0.6], [0.7, -0.0, 1.5, 0.0], [0.1; 4]],
     };
     let mut previous = input.clone();
-    adjust::apply_tone(&mut previous, ToneSpace::Rgb, &adjust::tone_luts_depth(&adj, Some(SampleType::F32)), [true; 3]);
+    adjust::apply_tone(&mut previous, ToneSpace::Rgb, &adjust::tone_luts_depth(&adj, Some(SampleType::F32)), [true; 3], false);
     let mut actual = input.clone();
     adjust::apply_depth(&adj, &mut actual, adjust::Transfer::Gamma(1.0), Some(SampleType::F32));
     assert_buffer_bits(&actual, &previous);
@@ -1099,6 +1099,19 @@ fn cmyk_ink_compositing_inlines_open_groups() {
     assert!(close4(px(&d, 3, 1), [c[0], c[1], c[2], 1.0]), "outside the group's layer");
 }
 
+/// A CMYK layer without an alpha channel is opaque everywhere, its untouched pixels blank paper
+/// (no ink): the ink compositor keeps it under an adjustment rather than skipping it as empty.
+#[test]
+fn cmyk_ink_compositing_keeps_blank_paper_without_alpha() {
+    let mut d = Document::new("paper", Size::new(4, 4), ColorMode::Cmyk, SampleType::U8);
+    d.layers.push(Layer::raster("paper", PixelFormat::new(ColorMode::Cmyk, SampleType::U8, false)));
+    d.layers.push(Layer::new("t", LayerContent::Adjustment(Adjustment::Threshold { level: 0.5 })));
+    assert!(native::render_cmyk(&d, d.bounds(), 64).is_some());
+    // Paper is white, so Threshold keeps it paper.
+    let white = photocraft_color::convert::cmyk_to_rgb([0.0; 4]);
+    assert!(close4(px(&d, 2, 2), [white[0], white[1], white[2], 1.0]), "{:?}", px(&d, 2, 2));
+}
+
 #[test]
 fn cmyk_document_renders_via_rgb() {
     let mut d = Document::new("c", Size::new(2, 2), ColorMode::Cmyk, SampleType::U8);
@@ -1345,6 +1358,46 @@ fn group_effects_reach_past_children_effects() {
     assert!(close4(px(&d, 24, 43), [1.0; 4]), "nothing past the shadow: {:?}", px(&d, 24, 43));
 }
 
+/// An empty Photoshop Frame with an outside stroke along `points` (#4381).
+fn stroked_frame(points: &[(f64, f64)], width: f32) -> Layer {
+    use photocraft_doc::vector::{Path, ShapeStroke, StrokeAlign, Subpath, VectorMask};
+    let mut l = Layer::group("Frame 1", vec![]);
+    l.vector_mask = Some(VectorMask::new(Path::new(vec![Subpath::polygon(points)])));
+    if let LayerContent::Group(g) = &mut l.content {
+        g.frame_stroke = Some(ShapeStroke { width, align: StrokeAlign::Outside, paint: Fill::Solid(Color::rgb(0.0, 0.0, 1.0)), ..Default::default() });
+    }
+    l
+}
+
+#[test]
+fn frame_stroke_bounds_hold_its_mitered_corners() {
+    // A flat triangle's sharp corners miter far past the path (Photoshop's miter limit is 100):
+    // more than the stroke width, which is all the path's bounds grow by.
+    let canvas = Rect::new(0, 0, 64, 64);
+    let frame = stroked_frame(&[(20.0, 32.0), (44.0, 32.0), (32.0, 29.0)], 2.0);
+    let drawn = crate::bounds::content_bounds(&shape_split::frame_stroke(&frame, canvas, SampleType::U8).unwrap());
+    assert!(drawn.x0 < 20 - 2 && drawn.x1 > 44 + 2, "the miters reach past the width: {drawn:?}");
+    for b in [layer_bounds(&frame, canvas), composite_bounds(&frame, canvas).unwrap(), effect_source_bounds(&frame, canvas)] {
+        assert_eq!(b.union(&drawn), b, "{b:?} holds the stroke {drawn:?}");
+    }
+}
+
+#[test]
+fn an_empty_frames_effects_follow_its_stroke() {
+    // No children: the frame's drop shadow is shaped by its stroke alone.
+    let mut d = doc_white(48, 48);
+    let mut frame = stroked_frame(&[(14.0, 14.0), (34.0, 14.0), (34.0, 34.0), (14.0, 34.0)], 4.0);
+    frame.effects.items = vec![Effect::DropShadow(shadow(3.0, 90.0))];
+    d.layers.push(frame);
+    let canvas = d.bounds();
+    let drawn = crate::bounds::content_bounds(&shape_split::frame_stroke(&d.layers[1], canvas, SampleType::U8).unwrap());
+    let b = effect_source_bounds(&d.layers[1], canvas);
+    assert!(!drawn.is_empty() && b.union(&drawn) == b, "{b:?} holds the stroke {drawn:?}");
+    assert!(close4(px(&d, 24, 36), [0.0, 0.0, 1.0, 1.0]), "stroke below the frame: {:?}", px(&d, 24, 36));
+    assert!(close4(px(&d, 24, 39), [0.0, 0.0, 0.0, 1.0]), "shadow below the stroke: {:?}", px(&d, 24, 39));
+    assert!(close4(px(&d, 24, 24), [1.0; 4]), "the frame's inside is empty: {:?}", px(&d, 24, 24));
+}
+
 #[test]
 fn drop_shadow_uses_global_light_and_knockout() {
     let mut d = fx_doc(vec![Effect::DropShadow(Shadow { use_global_light: true, ..shadow(5.0, 0.0) })]);
@@ -1499,7 +1552,12 @@ fn glow_gradient_follows_the_shape() {
 // new pixels (#4053). Effects that don't depend on the frame repaint only what changed.
 #[test]
 fn relayout_damage_covers_a_layer_whose_gradient_frame_moved() {
-    let overlay = Effect::GradientOverlay { common: FxCommon::new(photocraft_color::BlendMode::Normal, 1.0), gradient: Gradient::default(), dither: false };
+    let overlay = Effect::GradientOverlay {
+        common: FxCommon::new(photocraft_color::BlendMode::Normal, 1.0),
+        gradient: Gradient::default(),
+        dither: false,
+        interpolation: None,
+    };
     let grown = |a: &Document, rect: Rect, rgba: [f32; 4]| {
         let mut b = a.clone();
         let old = b.layers.last().unwrap().clone();
@@ -1526,13 +1584,19 @@ fn relayout_damage_covers_a_layer_whose_gradient_frame_moved() {
 #[test]
 fn gradient_overlay_follows_angle_and_reverse() {
     let g = Gradient { stops: vec![(0.0, Color::BLACK), (1.0, Color::WHITE)], angle: 0.0, ..Gradient::default() };
-    let d = fx_doc(vec![Effect::GradientOverlay { common: FxCommon::new(photocraft_color::BlendMode::Normal, 1.0), gradient: g.clone(), dither: false }]);
+    let d = fx_doc(vec![Effect::GradientOverlay {
+        common: FxCommon::new(photocraft_color::BlendMode::Normal, 1.0),
+        gradient: g.clone(),
+        dither: false,
+        interpolation: None,
+    }]);
     let (l, r) = (px(&d, 10, 20), px(&d, 29, 20));
     assert!(l[0] < 0.1 && r[0] > 0.9, "{l:?} {r:?}");
     let d = fx_doc(vec![Effect::GradientOverlay {
         common: FxCommon::new(photocraft_color::BlendMode::Normal, 1.0),
         gradient: Gradient { reverse: true, style: GradientStyle::Linear, ..g },
         dither: false,
+        interpolation: None,
     }]);
     assert!(px(&d, 10, 20)[0] > 0.9);
 }
@@ -1735,6 +1799,20 @@ fn vector_mask_combines_with_pixel_mask() {
     d.layers[top].vector_mask.as_mut().unwrap().density = 1.0;
     assert!(close4(px(&d, 1, 1), [0.0, 0.0, 0.0, 1.0]));
     assert!(close4(px(&d, 6, 1), [1.0; 4]));
+}
+
+#[test]
+fn effect_maps_over_distant_pixels_are_not_built_over_the_canvas() {
+    // Two pixels 190000 apart: the effect source region spans 3.6·10¹⁰ px.
+    let mut doc = Document::new("big", Size::new(200_000, 200_000), ColorMode::Rgb, SampleType::U8);
+    let mut l = solid_layer("fx", Rect::new(0, 0, 1, 1), [1.0, 0.0, 0.0, 1.0]);
+    l.surface_mut().unwrap().fill_rect(Rect::new(190_000, 190_000, 190_001, 190_001), &[1.0, 0.0, 0.0, 1.0]);
+    l.effects.items.push(photocraft_doc::Effect::default_drop_shadow());
+    doc.layers.push(l);
+    let t = std::time::Instant::now();
+    let px = render(&doc, Rect::new(0, 0, 4, 4));
+    assert_eq!(px.px.len(), 16);
+    assert!(t.elapsed().as_secs() < 20, "{:?}", t.elapsed());
 }
 
 #[test]
@@ -2327,6 +2405,26 @@ fn blend_if_this_layer_hides_by_the_layers_own_value() {
 }
 
 #[test]
+fn nested_blend_if_groups_do_not_double_the_work_at_every_level() {
+    // Each Blend If group re-renders its children for its own colour; 40 levels would be 2^40.
+    let mut inner = solid_layer("dot", Rect::new(0, 0, 4, 4), [1.0, 1.0, 1.0, 1.0]);
+    inner.blend_if.set(0, [range([10, 10], [255, 255]), FULL]);
+    let mut layers = vec![inner];
+    for _ in 0..40 {
+        let mut g = Layer::group("g", layers);
+        g.blend_if.set(0, [range([10, 10], [255, 255]), FULL]);
+        layers = vec![g];
+    }
+    // A black backdrop, not doc_white's white: the asserted white can then only come from the
+    // inner layer rendered through the whole group chain, not from the backdrop itself.
+    let mut d = Document::with_background("t", Size::new(4, 4), ColorMode::Rgb, SampleType::U8, Color::BLACK);
+    d.layers.extend(layers);
+    let t = std::time::Instant::now();
+    assert!(close4(px(&d, 1, 1), [1.0, 1.0, 1.0, 1.0]));
+    assert!(t.elapsed().as_secs() < 10, "{:?}", t.elapsed());
+}
+
+#[test]
 fn blend_if_underlying_layer_hides_by_the_backdrop_value() {
     // Backdrop black on the left, white on the right; a red layer over all of it.
     let mut d = doc_white(8, 8);
@@ -2700,7 +2798,7 @@ fn levels_steps_match_photoshop() {
 // jump where it meets the power curve.
 #[test]
 fn levels_gamma_toe_is_monotone_for_any_gamma() {
-    for g in [1.0001, 1.05, 1.5, 3.0, 9.99, 1e6, f32::INFINITY] {
+    for g in [1.0001, 1.01, 1.0105422, 1.02, 1.05, 1.5, 3.0, 9.99, 1e6, f32::INFINITY] {
         let mut last = 0.0f32;
         for k in 0..=4096 {
             let u = k as f32 / 4096.0;
@@ -2762,6 +2860,53 @@ fn exposure_scales_32_bit_samples_as_stored() {
     for mode in [ColorMode::Rgb, ColorMode::Grayscale] {
         assert_eq!(adjust::Transfer::for_document(mode, SampleType::F32), adjust::Transfer::Gamma(1.0));
     }
+}
+
+/// #7157, measured on Photoshop 27.11: an edited Curves in a 32-bit RGB document continues past
+/// 0..1 along its end segments instead of clipping. The straight curve `[[0,0],[255,128]]` maps
+/// -0.5, 0.5 and 2 to -0.250980407, 0.250980407 and 1.003921628, through Image › Adjustments and
+/// through an adjustment layer alike. 8/16-bit documents still clip to the table.
+#[test]
+fn float_curves_extend_past_the_unit_range_like_photoshop() {
+    use photocraft_doc::adjust::CurvePoint;
+    let line = vec![CurvePoint { input: 0.0, output: 0.0 }, CurvePoint { input: 1.0, output: 128.0 / 255.0 }];
+    let ident = vec![CurvePoint { input: 0.0, output: 0.0 }, CurvePoint { input: 1.0, output: 1.0 }];
+    let adj = Adjustment::Curves { master: line, per_channel: std::array::from_fn(|_| ident.clone()), space: ToneSpace::Rgb, black: Vec::new(), pencil: false };
+    let input = Buffer { rect: Rect::new(0, 0, 3, 1), px: vec![[-0.5, -0.5, -0.5, 1.0], [0.5, 0.5, 0.5, 1.0], [2.0, 2.0, 2.0, 1.0]] };
+    // Photoshop's samples, compared in f64 so the reference keeps its printed digits.
+    let want = [-0.250980407f64, 0.250980407, 1.003921628];
+    let check = |got: &Buffer, what: &str| {
+        for (p, w) in got.px.iter().zip(want) {
+            assert!(p[..3].iter().all(|v| (f64::from(*v) - w).abs() < 2e-5), "{what}: {p:?} vs {w}");
+            assert_eq!(p[3], 1.0);
+        }
+    };
+    let mut destructive = input.clone();
+    adjust::apply_depth(&adj, &mut destructive, adjust::Transfer::Gamma(1.0), Some(SampleType::F32));
+    check(&destructive, "Image › Adjustments");
+    let doc = Document::new("hdr", Size::new(3, 1), ColorMode::Rgb, SampleType::F32);
+    let patterns = pattern::PreparedPatterns::new(&[], pattern::PREPARED_PATTERN_BYTES);
+    let cx = Ctx::for_doc(&doc, &patterns);
+    let mut layer = input.clone();
+    cx.apply_adjustment(&adj, &mut layer);
+    check(&layer, "adjustment layer");
+    // Not at 8 or 16 bits: those samples never leave 0..1, and the table's ends hold.
+    for depth in [SampleType::U8, SampleType::U16] {
+        let mut clipped = input.clone();
+        adjust::apply_depth(&adj, &mut clipped, adjust::Transfer::for_document(ColorMode::Rgb, depth), Some(depth));
+        assert!(clipped.px[2][..3].iter().all(|v| *v <= 128.0 / 255.0 + 1e-4), "{depth:?}: {:?}", clipped.px[2]);
+    }
+    // Only in RGB documents: a 32-bit grayscale document keeps the table's end.
+    let mut gray = input.clone();
+    adjust::apply_in(&adj, &mut gray, adjust::Transfer::Gamma(1.0), Some(SampleType::F32), ColorMode::Grayscale);
+    assert!(gray.px[2][..3].iter().all(|v| *v <= 128.0 / 255.0 + 1e-4), "grayscale: {:?}", gray.px[2]);
+    let mut rgb = input.clone();
+    adjust::apply_in(&adj, &mut rgb, adjust::Transfer::Gamma(1.0), Some(SampleType::F32), ColorMode::Rgb);
+    check(&rgb, "apply_in in RGB");
+    // Infinite samples don't become NaN on the way out.
+    let mut odd = Buffer { rect: Rect::new(0, 0, 1, 1), px: vec![[f32::INFINITY, f32::NEG_INFINITY, 0.5, 1.0]] };
+    adjust::apply_depth(&adj, &mut odd, adjust::Transfer::Gamma(1.0), Some(SampleType::F32));
+    assert!(odd.px[0].iter().all(|v| !v.is_nan()), "{:?}", odd.px[0]);
 }
 
 #[test]
@@ -3186,23 +3331,28 @@ fn effect_maps_with_nested_rayon_work_do_not_deadlock() {
     // #276: a tile building a layer's effect maps inside a once-init ran Rayon work; waiting on
     // it, its worker stole another tile of the same layer, which then blocked on the init held
     // further up its own stack. Eight threads (two rarely steal across that wait) and 64 tiles make that stealing likely; the cache is
-    // purged every round so the maps are rebuilt. A watchdog turns a hang into a failure.
+    // purged every round so the maps are rebuilt. A watchdog turns a hang into a failure: it
+    // fails when 120 s pass without a render finishing, however long all 101 renders take.
+    const ROUNDS: usize = 100;
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let Ok(pool) = rayon::ThreadPoolBuilder::new().num_threads(8).build() else { return };
         let d = nested_parallel_fx_doc();
         let first = pool.install(|| render_tiled(&d, d.bounds(), 64));
-        for _ in 0..100 {
+        let _ = tx.send(());
+        for _ in 0..ROUNDS {
             purge_effect_cache();
             let out = pool.install(|| render_tiled(&d, d.bounds(), 64));
             assert!(out.px == first.px, "renders differ between rounds");
+            let _ = tx.send(());
         }
-        let _ = tx.send(());
     });
-    match rx.recv_timeout(std::time::Duration::from_secs(120)) {
-        Ok(()) => {}
-        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => panic!("effect-map rendering deadlocked (#276)"),
-        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => panic!("render thread panicked"),
+    for _ in 0..=ROUNDS {
+        match rx.recv_timeout(std::time::Duration::from_secs(120)) {
+            Ok(()) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => panic!("effect-map rendering deadlocked (#276)"),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => panic!("render thread panicked"),
+        }
     }
 }
 
