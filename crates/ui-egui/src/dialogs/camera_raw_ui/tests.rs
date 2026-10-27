@@ -310,9 +310,26 @@ fn dialog_drives_the_engine() {
     assert!(menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": "x"}}})).unwrap().is_err());
 }
 
+std::thread_local! {
+    /// Held by a test's thread from its first `raw_app` to the test's end.
+    static RAW_OPEN_TURN: std::cell::RefCell<Option<std::sync::MutexGuard<'static, ()>>> = const { std::cell::RefCell::new(None) };
+}
+
 /// An app whose importer is the real one, opening a synthetic DNG.
+///
+/// Raw opens keep their decode in one process-wide list of two (`photocraft_io::raw`), so tests
+/// that open raws take turns: a parallel test's open would otherwise evict the decode another
+/// test is about to take. The turn is held until the test's thread ends (nextest runs each test
+/// in its own process, where this costs nothing).
 fn raw_app() -> (PhotocraftApp, Vec<u8>) {
     use photocraft_raw::testgen::{DngSpec, mosaic, scene};
+    static TURN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    RAW_OPEN_TURN.with(|held| {
+        let mut held = held.borrow_mut();
+        if held.is_none() {
+            *held = Some(TURN.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+        }
+    });
     let services = crate::Services {
         import: Some(Box::new(|name: &str, b: &[u8], opts: &photocraft_io::ImportOptions| {
             photocraft_io::import_with_options(name, b, opts).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())
