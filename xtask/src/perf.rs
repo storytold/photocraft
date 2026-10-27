@@ -620,6 +620,50 @@ pub fn updated_baseline(old: Option<&Value>, results: &Value) -> Value {
     json!({"schema": 1, "machine_class": class, "machine": results.get("machine"), "modes": modes})
 }
 
+// A performance reference must come from a complete, fresh and measurable run.
+// This gate does not change ordinary benchmark verdicts or the scorecard's legacy data.
+fn baseline_admission(
+    selected_benches: bool,
+    reused: bool,
+    skipped: usize,
+    planned: usize,
+    reports: &BTreeMap<String, Result<Value, String>>,
+    outcomes: &[Outcome],
+    cores: Option<u64>,
+    start: Option<[f64; 3]>,
+    end: Option<[f64; 3]>,
+) -> Result<(), String> {
+    if selected_benches || reused || skipped != 0 || planned == 0 {
+        return Err("baseline requires a fresh, complete run of all configured benches (no --bench, --reuse, or skipped benches)".into());
+    }
+    if reports.len() != planned || reports.values().any(Result::is_err) {
+        return Err("baseline rejected: a benchmark failed or its report is missing".into());
+    }
+    if outcomes.iter().any(|o| matches!(o.status, Status::Missing(_) | Status::NotRun)) {
+        return Err("baseline rejected: one or more measurable scenarios have no valid result".into());
+    }
+    if outcomes
+        .iter()
+        .filter(|o| !matches!(o.status, Status::NotMeasurable(_)))
+        .any(|o| o.stats.as_ref().is_none_or(|s| s.n == 0 || [s.p50, s.p95, s.max].iter().any(|v| !v.is_some_and(|n| n.is_finite() && n >= 0.0))))
+    {
+        return Err("baseline rejected: incomplete or non-finite scenario statistics".into());
+    }
+    // A conservative, explicitly documented signal; load average is not CPU utilization.
+    // Refuse auto-promotion when load or core count cannot be measured.
+    let Some(cores) = cores.filter(|n| *n > 0) else {
+        return Err("baseline rejected: available CPU count unavailable".into());
+    };
+    let (Some(start), Some(end)) = (start, end) else {
+        return Err("baseline rejected: system load average unavailable".into());
+    };
+    let limit = cores as f64 * 1.5;
+    if start.into_iter().chain(end).any(|v| !v.is_finite() || v < 0.0 || v > limit) {
+        return Err(format!("baseline rejected: invalid or excessive system load (1.5 x {cores} logical CPUs = {limit:.1})"));
+    }
+    Ok(())
+}
+
 // ---- running ---------------------------------------------------------------------------------
 
 struct Opts {
@@ -847,6 +891,17 @@ pub fn run(root: &Path, rest: &[&str]) -> Result<(), String> {
     println!("wrote {}", out_dir.join("results.json").display());
 
     if o.update_baseline {
+        baseline_admission(
+            !o.benches.is_empty(),
+            o.reuse,
+            skipped.len(),
+            plan.len(),
+            &reports,
+            &outcomes,
+            m.get("cores").and_then(Value::as_u64),
+            load_start,
+            load_end,
+        )?;
         let nb = updated_baseline(baseline_value.as_ref(), &results);
         let text = serde_json::to_string_pretty(&nb).map_err(|e| format!("encode baseline: {e}"))?;
         write(&root.join(BASELINE), &format!("{text}\n"))?;
@@ -1092,6 +1147,33 @@ not_measurable = "needs a frame harness"
         let other = json!({"mode": "quick", "machine": {"class": "other"}, "scenarios": {}});
         let b3 = updated_baseline(Some(&b2), &other);
         assert!(baseline_for(&b3, "other", "full").is_err());
+    }
+
+    #[test]
+    fn baseline_admission_rejects_unreliable_runs() {
+        let budgets = parse_budgets(TOML).unwrap();
+        let mut reports = BTreeMap::new();
+        reports.insert(
+            "b".into(),
+            Ok(report(json!([
+                {"name": "move row", "samples_ms": [8.0, 9.0, 10.0]},
+                {"name": "opacity row", "samples_ms": [9.0, 10.0, 11.0]}
+            ]))),
+        );
+        let outcomes = evaluate(&budgets, &reports, None, 15.0, true);
+        let valid = || baseline_admission(false, false, 0, 1, &reports, &outcomes, Some(14), Some([2.0, 1.0, 0.5]), Some([3.0, 2.0, 1.0]));
+        assert!(valid().is_ok());
+        assert!(baseline_admission(true, false, 0, 1, &reports, &outcomes, Some(14), Some([1.0; 3]), Some([1.0; 3])).is_err());
+        assert!(baseline_admission(false, true, 0, 1, &reports, &outcomes, Some(14), Some([1.0; 3]), Some([1.0; 3])).is_err());
+        assert!(baseline_admission(false, false, 1, 1, &reports, &outcomes, Some(14), Some([1.0; 3]), Some([1.0; 3])).is_err());
+        assert!(baseline_admission(false, false, 0, 1, &reports, &outcomes, Some(14), None, Some([1.0; 3])).is_err());
+        assert!(baseline_admission(false, false, 0, 1, &reports, &outcomes, Some(14), Some([224.9, 2.0, 1.0]), Some([289.9, 2.0, 1.0])).is_err());
+        assert!(baseline_admission(false, false, 0, 1, &reports, &outcomes, None, Some([1.0; 3]), Some([1.0; 3])).is_err());
+        let mut broken = reports.clone();
+        broken.insert("b".into(), Err("crash".into()));
+        assert!(baseline_admission(false, false, 0, 1, &broken, &outcomes, Some(14), Some([1.0; 3]), Some([1.0; 3])).is_err());
+        let missing = evaluate(&budgets, &BTreeMap::new(), None, 15.0, true);
+        assert!(baseline_admission(false, false, 0, 1, &reports, &missing, Some(14), Some([1.0; 3]), Some([1.0; 3])).is_err());
     }
 
     #[test]
