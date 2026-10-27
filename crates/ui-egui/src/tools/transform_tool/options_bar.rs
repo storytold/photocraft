@@ -1,5 +1,6 @@
 use super::begin::{enter_warp, interpolation_preference, leave_warp, warps_type};
 use super::commit::{cancel, commit};
+use super::cylinder::{cylinder_default, cylinder_values};
 use super::pointer::point_on_quad;
 use super::warp::edit_session_warp;
 use super::{BezierMesh, Homography, PhotocraftApp, SplitTool, Stroke, TransformSession, Warp, WarpStyle, json, vec2};
@@ -464,12 +465,14 @@ fn warp_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, w: &Warp) {
     };
     // Type takes only the styles (#3004): Split and Grid are greyed, and there is no Custom.
     let on_type = warps_type(app);
+    // A cylinder has no splits or grid either (#4112): its handles are its own.
+    let cylinder = w.style == WarpStyle::Cylinder;
     // Split, Grid, then the warp style with its bend fields.
-    ui.add_enabled_ui(!on_type, |ui| warp_mesh_fields(app, ui, w));
+    ui.add_enabled_ui(!on_type && !cylinder, |ui| warp_mesh_fields(app, ui, w));
     crate::widgets::vline(ui, 22.0);
     lbl(ui, tl!("Warp:"));
     let mut style = w.style;
-    let opts: Vec<(WarpStyle, &str)> = WarpStyle::all().filter(|s| !(on_type && *s == WarpStyle::Custom)).map(|s| (s, s.label())).collect();
+    let opts: Vec<(WarpStyle, &str)> = warp_style_options(on_type).map(|s| (s, s.label())).collect();
     if crate::widgets::dropdown(ui, "warp-style", tl!("Warp"), &mut style, &opts, 120.0)
         && let Some(t) = app.ui.transform.as_mut()
     {
@@ -478,10 +481,12 @@ fn warp_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, w: &Warp) {
             WarpStyle::Custom => Warp::custom(w.to_mesh(1, 1), b),
             WarpStyle::None if on_type => Warp::none(b),
             WarpStyle::None => Warp::custom(BezierMesh::identity(b, 1, 1), b),
+            // The cylinder the menu starts with over the box (a box too thin for one keeps its shape).
+            WarpStyle::Cylinder => cylinder_default(b).unwrap_or_else(|| Warp::custom(w.to_mesh(1, 1), b)),
             s => Warp { style: s, bend: if w.style.is_preset() { w.bend } else { 50.0 }, ..Warp::none(b) },
         });
     }
-    // Orientation and the bend fields are always there, and only act on a preset style.
+    // Orientation is always there and only acts on a preset style (a cylinder is horizontal).
     let preset = w.style.is_preset();
     ui.add_enabled_ui(preset, |ui| {
         let orient = crate::icons::button(ui, "arrow-left-right", 26.0, w.vertical, tl!("Vertical"));
@@ -491,6 +496,12 @@ fn warp_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, w: &Warp) {
         {
             cur.vertical = !cur.vertical;
         }
+    });
+    // A cylinder's values take the place of Bend, H and V, which are there for a preset style.
+    if cylinder {
+        return cylinder_fields(app, ui, w);
+    }
+    ui.add_enabled_ui(preset, |ui| {
         let fields: [(&str, f64); 3] = [(tl!("Bend:"), w.bend), ("H:", w.h_distort), ("V:", w.v_distort)];
         for (k, (name, v)) in fields.iter().enumerate() {
             lbl(ui, name);
@@ -506,6 +517,41 @@ fn warp_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, w: &Warp) {
             }
         }
     });
+}
+
+/// The Warp menu's styles in Photoshop's order: None, Custom and the presets, then Cylinder
+/// (#4112). Type takes only the styles its Warp Text has: no Custom, no Cylinder (#3004).
+pub(super) fn warp_style_options(on_type: bool) -> impl Iterator<Item = WarpStyle> {
+    WarpStyle::all().filter(move |s| !(on_type && *s == WarpStyle::Custom)).chain((!on_type).then_some(WarpStyle::Cylinder))
+}
+
+/// The Cylinder's fields of the Warp options bar, in place of Bend, H and V (#4112): the depth of
+/// the upper and lower ellipse in percent of the half axis (down is positive) and how far the
+/// contents wrap round. Typing one rebuilds the cylinder, as its handles do.
+fn cylinder_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, w: &Warp) {
+    let tk = crate::theme::Tokens::get(ui.ctx());
+    let lbl = |ui: &mut egui::Ui, s: &str| {
+        ui.label(egui::RichText::new(s).color(tk.text_dim).size(12.0));
+    };
+    let Some(v) = cylinder_values(w) else { return };
+    let fields: [(&str, &str, usize, std::ops::RangeInclusive<f32>); 3] = [
+        (tl!("Top:"), tl!("Top depth"), 4, -100.0..=100.0),
+        (tl!("Bottom:"), tl!("Bottom depth"), 5, -100.0..=100.0),
+        (tl!("Wrap:"), tl!("Wrap"), 6, 0.0..=100.0),
+    ];
+    for (name, access, k, range) in fields {
+        lbl(ui, name);
+        let mut f = (v[k] * 100.0) as f32;
+        if crate::widgets::value_field(ui, &mut f, range, "%", 58.0).accessible_name(access).on_hover_text(access).changed()
+            && let Some(Some(cur)) = app.ui.transform.as_mut().map(|t| t.warp.as_mut())
+        {
+            let mut nv = v;
+            nv[k] = f64::from(f) / 100.0;
+            if let Some(c) = Warp::cylinder(&nv, cur.bounds) {
+                *cur = c;
+            }
+        }
+    }
 }
 
 /// The Split icons and the Grid menu of the Warp options bar.
