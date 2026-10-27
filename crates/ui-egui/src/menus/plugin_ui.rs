@@ -66,6 +66,19 @@ pub fn menu(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<
     }
     let mut fixed = Map::new();
     fixed.insert("id".into(), json!(pid));
+    // The dotted line the canvas draws between two `point` params (`plugin_points`).
+    if let Some(g) = &m.guide {
+        fixed.insert("__guide".into(), json!([g.from, g.to]));
+    }
+    // Tabs for grouped params (`filter_dialog::body`); the selected one is kept per open dialog.
+    let tabs = m.tabs();
+    if !tabs.is_empty() {
+        let group_of: Map<String, Value> = m.params.iter().filter_map(|(k, _)| m.group(k).map(|g| (k.clone(), json!(g)))).collect();
+        fixed.insert("__tabs".into(), json!(tabs));
+        fixed.insert("__groupOf".into(), Value::Object(group_of));
+    }
+    // Named presets of this plug-in's values (kept by the shell, per plug-in id).
+    crate::plugin_presets_ui::open_fields(app, m, &mut fixed);
     let d = crate::filter_dialog::open_with_spec(app, "plugin.run", &m.name, &m.params_notation(), fixed);
     Some(Ok(json!({"dialog": d})))
 }

@@ -30,6 +30,43 @@ Plug-ins are installed **per process**, not per document. A smart filter recorde
 installed; if it is missing, the filter is skipped (the cached pixels stay as they were), like other
 filters PhotoCraft does not implement.
 
+### Presets
+
+Every plug-in dialog has a **Presets** row: a list of saved names (choosing one applies it and
+updates the live preview), **Save As…** and **Delete**. Plug-ins get this automatically; there is
+nothing to declare and the ABI is unchanged.
+
+The desktop app keeps each plug-in's presets in one file named after its id, in a `plugins` folder
+inside the settings folder (`PHOTOCRAFT_CONFIG_DIR`, the portable data folder, or
+`~/.config/photocraft` on Linux, `~/Library/Application Support/Photocraft` on macOS,
+`%APPDATA%\Photocraft` on Windows), for example
+`~/.config/photocraft/plugins/com.stack-tech.freecandy7.json`. Capital letters in an id are written
+as `%XX` (`Foo` → `%46oo`), so ids that differ only in case never share a file:
+
+```json
+{
+  "version": 1,
+  "presets": {
+    "Soft glow": { "amount": 25.0, "mode": "screen", "center": [50.0, 40.0] }
+  }
+}
+```
+
+- **Plug-ins have no file access.** The host reads and writes this file on the plug-in's behalf;
+  the plug-in never sees the path, the file or other plug-ins' presets, and only ever receives
+  parameter values through `pc_filter` as before.
+- The file name comes only from the validated plug-in id; ids with `..`, a leading dot or a path
+  separator get no presets. Preset names are 1–64 printable characters without `/`, `\` or `..`.
+- Saves are atomic (a temporary file in the same folder, then a rename).
+- A missing, unreadable or damaged file just means no presets (a warning is logged). Only a
+  missing or readable file is replaced on save: a damaged or unreadable file, or one with another
+  `version`, is never overwritten (saving reports an error instead), so its presets aren't lost.
+- Stored values are checked against the plug-in's current manifest when listed and applied:
+  unknown keys and values of the wrong type are dropped, numbers and points are clamped into
+  range, unknown choices are dropped (the parameter keeps its default), and a preset with nothing
+  usable left is skipped while the rest still load.
+- The web build has no presets store, so its plug-in dialogs show no Presets row.
+
 ## The sandbox
 
 The host is [`wasmi`](https://github.com/wasmi-labs/wasmi), a pure-Rust WebAssembly interpreter
@@ -101,8 +138,15 @@ exports. All integers are `i32` unless noted; pointers are offsets into the modu
   except the zero-width joiner and non-joiner, and at least one character must be visible.
   `kind`: `"filter"` (the only kind in v1).
 - `params`: in dialog order. Names are `[A-Za-z0-9_]`, not starting with `_`, not `id`/`layer`.
+  Types: `number`, `int`, `bool`, `choice`, `point`, `color` and `angle` (below).
   The host validates the user's values before calling: missing values take the default, numbers are
   clamped to `min..max` (ints rounded), a wrong type or an unknown choice is an error.
+- `group` (optional, any parameter type): the dialog tab the parameter sits on, 1–32 printable
+  characters (the same rules as `name`). The dialog shows parameters without a `group` first,
+  always visible, then one tab per group in the order each first appears; only the selected tab's
+  parameters are shown (the first tab at first). Groups change only the layout: presets and the
+  values the plug-in receives are the same.
+  `"start": {"type": "point", "default": [12, 12], "group": "Bolt"}`
 - `unit` (optional, on `number` and `int` params): `"px"` marks a length in document pixels (a
   radius, distance, shift or size); `"none"`, the default, is everything else (levels, factors,
   counts, percentages). Any other value (an unknown string, a number…) is treated as `"none"`, as
@@ -117,6 +161,63 @@ exports. All integers are `i32` unless noted; pointers are offsets into the modu
   off-canvas layer content), and keeps only the inner rectangle of the result.
 - `area`: `"content"` (default) filters the layer's non-transparent bounds grown by `overlap`;
   `"canvas"` filters the whole canvas, including transparent pixels (for generators).
+
+#### Points on the canvas: `point` and `guide`
+
+A `point` parameter is a position the user picks on the image. Its value is `[x, y]` in **percent of
+the canvas width and height** (0–100), like the other position-style numbers, so it does not depend
+on the document size. `default` is required: two numbers, each within 0–100.
+
+```json
+"params": {
+  "start": {"type": "point", "default": [12, 12]},
+  "end":   {"type": "point", "default": [88, 62]}
+},
+"guide": {"from": "start", "to": "end"}
+```
+
+- While the plug-in's dialog is open, every point shows a handle on the canvas. Pressing near a
+  handle drags it; pressing elsewhere on the image moves the first point there. The dialog's X / Y
+  fields and the live preview follow the handle as it moves.
+- `guide` (optional) names two different `point` parameters: the canvas draws a dotted line between
+  them. A manifest whose `guide` names a missing or non-`point` parameter is rejected.
+- The plug-in receives the value as an array in `params`, e.g. `{"start": [12.0, 12.0], …}`. The
+  host clamps both coordinates to 0–100; anything other than an array of two numbers is an error.
+- In the registry notation (`plugin.list` `params`) a point reads `"start":point=[12,12]`.
+
+#### Colours: `color`
+
+A `color` parameter is an opaque colour the user picks with a swatch and colour picker. `default` is
+required and must be a `"#rrggbb"` hex string (either case; no alpha, no `#rgb` short form); anything
+else rejects the manifest.
+
+```json
+"params": {
+  "inner": {"type": "color", "default": "#cfeaff"}
+}
+```
+
+- The plug-in receives the same string, lowercase, in `params`: `{"inner": "#cfeaff"}`. A value that
+  is not `"#rrggbb"` is an error. The live preview follows the picker as the colour changes.
+- Saved presets keep the hex string; a stored colour that is not a valid `"#rrggbb"` is dropped.
+- In the registry notation a colour reads `"inner":color=#cfeaff`.
+
+#### Angles: `angle`
+
+An `angle` parameter is a direction in degrees, set with a dial and a number field. `default` is a
+number from 0 to 360 inclusive (0 when omitted); anything else rejects the manifest.
+
+```json
+"params": {
+  "direction": {"type": "angle", "default": 45, "group": "Bolt"}
+}
+```
+
+- 0 points right (east) and the angle grows clockwise on screen: 90 is down, 270 is up.
+- The plug-in receives a plain number in `params`: `{"direction": 45}`, always within 0–360.
+  Values outside that range wrap around (370 becomes 10, -90 becomes 270); a non-number is an error.
+- Saved presets keep the number, wrapped the same way on load; a stored non-number is dropped.
+- In the registry notation an angle reads `"direction":angle=45`.
 
 ### Pixels
 

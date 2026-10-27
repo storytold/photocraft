@@ -316,6 +316,11 @@ pub type CaptionStyleFn = Box<dyn Fn(&egui::Context) -> CaptionStyle>;
 /// Physical right mouse button or stylus barrel button down (Windows; read for brush resize).
 pub type RightButtonDownFn = Box<dyn Fn() -> bool + Send + Sync>;
 
+/// A plug-in's saved presets, by plug-in id (empty when there are none or the file is unusable).
+pub type LoadPluginPresetsFn = fn(&str) -> photocraft_plugins::presets::Presets;
+/// Replace a plug-in's saved presets, by plug-in id.
+pub type SavePluginPresetsFn = fn(&str, &photocraft_plugins::presets::Presets) -> Result<(), String>;
+
 /// Platform services injected by the app binary (file dialogs, codecs), keeping this crate free of
 /// I/O dependencies.
 #[derive(Default)]
@@ -438,4 +443,9 @@ pub struct Services {
     /// while AppKit's run loop is still going crashes or hangs Touch Bar Macs (#1575, #1458).
     /// Without one, eframe closes the window and the app ends with it.
     pub quit: Option<QuitFn>,
+    /// Named presets for plug-in dialogs, one store per plug-in id (desktop: one JSON file per
+    /// plug-in in the settings folder). The plug-in never sees these; without them, plug-in
+    /// dialogs show no Presets row.
+    pub load_plugin_presets: Option<LoadPluginPresetsFn>,
+    pub save_plugin_presets: Option<SavePluginPresetsFn>,
 }
