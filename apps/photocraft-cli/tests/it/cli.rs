@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 
 /// The binary, without the variables `mcp` and `serve` fall back to: a test that wants one sets it.
 fn bin() -> Command {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_photocraft-cli"));
+    let mut cmd = Command::new(crate::binary());
     for var in ENV_VARS {
         cmd.env_remove(var);
     }
