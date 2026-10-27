@@ -123,10 +123,8 @@ pub fn adjust_surface(s: &mut Surface, adj: &Adjustment, selection: Option<&Surf
 }
 
 #[cfg(test)]
-#[path = "flatten_cmyk_tests.rs"]
 mod flatten_cmyk_tests;
 #[cfg(test)]
-#[path = "pixels_tests.rs"]
 mod tests;
 
 /// Applies `adj` to a layer mask through the selection. Untouched mask pixels count (they read as

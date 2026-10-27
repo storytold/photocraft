@@ -387,6 +387,19 @@ fn audit_sources(root: &Path) -> Vec<(PathBuf, String)> {
         .collect()
 }
 
+/// Each `foo.rs` that has a `foo/` directory, joined with every file under it, so a module split
+/// into child files still counts `.section` and `.field` as being in the same file.
+fn split_modules(sources: &[(PathBuf, String)]) -> Vec<String> {
+    sources
+        .iter()
+        .filter_map(|(path, src)| {
+            let dir = path.with_extension("");
+            let children: Vec<&str> = sources.iter().filter(|(p, _)| p.starts_with(&dir)).map(|(_, s)| s.as_str()).collect();
+            (!children.is_empty()).then(|| [src.as_str()].into_iter().chain(children).collect::<Vec<_>>().join("\n"))
+        })
+        .collect()
+}
+
 /// Preferences that nothing reads (sorted paths).
 pub fn prefs_audit(root: &Path) -> Result<(usize, Vec<String>), String> {
     let src = std::fs::read_to_string(root.join(PREFS_RS)).map_err(|e| format!("read {PREFS_RS}: {e}"))?;
@@ -394,7 +407,9 @@ pub fn prefs_audit(root: &Path) -> Result<(usize, Vec<String>), String> {
     if fields.is_empty() {
         return Err(format!("{PREFS_RS}: no `pub struct Preferences` fields found (did the struct move?)"));
     }
-    let mut files: Vec<Accesses> = audit_sources(root).iter().map(|(_, s)| accesses(s)).collect();
+    let sources = audit_sources(root);
+    let mut files: Vec<Accesses> = sources.iter().map(|(_, s)| accesses(s)).collect();
+    files.extend(split_modules(&sources).iter().map(|s| accesses(s)));
     files.push(accesses(&session_code(&strip_tests(&src))));
     let unread: Vec<String> = fields.iter().filter(|f| !is_read(f, &files)).map(PrefField::path).collect();
     Ok((fields.len(), unread))
