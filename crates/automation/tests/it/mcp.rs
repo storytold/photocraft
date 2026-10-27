@@ -1393,3 +1393,35 @@ async fn convention_resources_are_live_json() {
     assert!(preview.content.iter().any(|c| c.as_image().is_some()));
     client.cancel().await.unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn snapshot_comparison_is_discoverable_and_read_only_through_mcp() {
+    let client = connect(PhotocraftMcp::headless()).await;
+    json_of(&call(&client, "doc_new", json!({"width":32,"height":16,"background":"white"})).await);
+    let listed = json_of(&call(&client, "command_list", json!({"filter":"document.comparePixels"})).await);
+    assert!(listed.to_string().contains("document.comparePixels"));
+    let snapshot = json_of(&call(&client, "command_run", json!({"id":"history.newSnapshot","params":{"from":"fullDocument"}})).await)["snapshot"].clone();
+    json_of(&call(&client, "command_run", json!({"id":"select.rect","params":{"x":2,"y":3,"width":4,"height":5,"feather":0}})).await);
+    json_of(&call(&client, "command_run", json!({"id":"edit.fill","params":{"color":"#000000"}})).await);
+    let before = json_of(&call(&client, "doc_inspect", json!({})).await);
+    let params = json!({"snapshot":snapshot,"regions":[{"x":2,"y":3,"width":4,"height":5},{"x":15,"y":3,"width":4,"height":5}]});
+    let comparison = json_of(&call(&client, "command_run", json!({"id":"document.comparePixels","params":params})).await);
+    assert_eq!(comparison["space"], "composited-rgba-f32");
+    assert_eq!(comparison["regions"][0]["comparedPixels"], 20);
+    assert_eq!(comparison["regions"][0]["changedPixels"], 20);
+    assert_eq!(comparison["regions"][0]["maxChannelDifference"], 1.0);
+    assert_eq!(comparison["regions"][1]["comparedPixels"], 20);
+    assert_eq!(comparison["regions"][1]["changedPixels"], 0);
+    assert_eq!(comparison["regions"][1]["maxChannelDifference"], 0.0);
+    assert_eq!(json_of(&call(&client, "doc_inspect", json!({})).await), before);
+
+    let rejected = call(
+        &client,
+        "command_run",
+        json!({"id":"document.comparePixels","params":{"snapshot":snapshot,"regions":[{"x":0,"y":0,"width":u32::MAX,"height":1}]}}),
+    )
+    .await;
+    assert_eq!(rejected.is_error, Some(true));
+    assert_eq!(json_of(&call(&client, "doc_inspect", json!({})).await), before);
+    client.cancel().await.unwrap();
+}
