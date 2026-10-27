@@ -24,6 +24,7 @@ use crate::state::{MadeLayer, Tool, TransformMode, TransformSession};
 
 mod begin;
 mod commit;
+mod cylinder;
 mod drag_modes;
 mod draw;
 mod options_bar;
@@ -40,6 +41,9 @@ pub(crate) use commit::{SAVE_FOR_WEB, committing, nudge};
 pub use commit::{cancel, commit, end_if_left, follow_edits, intercept, is_enabled, on_job_event, track_steps};
 #[cfg(test)]
 use drag_modes::{HandleIndicator, handle_indicator, keep_convex, turns};
+use cylinder::CylinderHandle;
+#[cfg(test)]
+use cylinder::{cylinder_cursor, cylinder_default, cylinder_dragged, cylinder_handles, cylinder_hit, cylinder_values};
 pub(crate) use drag_modes::{apply_drag, corner_distorts, legacy_mods};
 #[cfg(test)]
 pub(crate) use drag_modes::{apply_mode_drag, unlinked_mods};
@@ -56,7 +60,7 @@ pub(crate) use options_bar::position_size_fields;
 #[cfg(test)]
 use options_bar::{
     POSITION_LIMIT_PX, Parts, SCALE_LIMIT_PCT, SIZE_UNIT_KEY, SKEW_LIMIT_DEG, matching_anchor, readout, rotate_about_pivot, scale_about_pivot, scale_limit_pct,
-    set_size_unit, size_pct, size_shown, size_unit, warp_grid_id,
+    set_size_unit, size_pct, size_shown, size_unit, warp_grid_id, warp_style_options,
 };
 pub use options_bar::{options_bar, reset_warp};
 pub(crate) use pointer::{Gesture, Hit, box_hit, hit, rotate_cursor_dir};
@@ -103,6 +107,9 @@ enum WarpDrag {
     Point { index: usize, start: [f64; 2], pts0: Vec<[f64; 2]> },
     /// Anywhere else on the grid: the surface under the pointer follows it.
     Surface { s: f64, t: f64, start: [f64; 2], pts0: Vec<[f64; 2]> },
+    /// A cylinder's handle, or its surface (which turns the wrap); `values0` are its seven values
+    /// at the press (cylinder.rs).
+    Cylinder { handle: CylinderHandle, start: [f64; 2], values0: [f64; 7] },
 }
 
 /// Preview state that isn't serialisable: the document without the transformed pixels, and
