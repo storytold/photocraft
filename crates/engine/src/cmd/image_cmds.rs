@@ -369,10 +369,18 @@ fn resample_doc_with_styles(doc: &mut Document, cmd: &str, nw: u32, nh: u32, fil
     check_hidden_resample_budget(cmd, doc, sx, sy, filter)?;
     // Content that reaches the canvas edge keeps it: a Background stays opaque to the border.
     let canvas = Rect::from_xywh(0, 0, ow, oh);
+    rescale_doc(doc, nw, nh, scale_styles, &mut |surf, is_mask| resize_surface_in_canvas(surf, sx, sy, if is_mask { Resample::Bilinear } else { filter }, canvas));
+    Ok(())
+}
+
+/// The body of [`resample_doc`] with the pixels resized by `resize(surface, is_mask)`; masks,
+/// channels and the selection pass `true`. Effects (when `scale_styles`), strokes, vectors and
+/// guides scale by `nw` x `nh` over the current size. Shared with Image › Pixel Art Upscale.
+pub(crate) fn rescale_doc(doc: &mut Document, nw: u32, nh: u32, scale_styles: bool, resize: &mut dyn FnMut(&Surface, bool) -> Surface) {
+    let (ow, oh) = (doc.size.width, doc.size.height);
+    let (sx, sy) = (nw as f64 / ow.max(1) as f64, nh as f64 / oh.max(1) as f64);
     let taken = crate::smart_cmds::take_caches(&mut doc.layers);
-    for_each_surface(&mut doc.layers, true, &mut |surf, is_mask| {
-        *surf = resize_surface_in_canvas(surf, sx, sy, if is_mask { Resample::Bilinear } else { filter }, canvas);
-    });
+    for_each_surface(&mut doc.layers, true, &mut |surf, is_mask| *surf = resize(surf, is_mask));
     let k = ((sx + sy) / 2.0) as f32;
     for_each_layer(&mut doc.layers, &mut |l| {
         if scale_styles {
@@ -387,17 +395,16 @@ fn resample_doc_with_styles(doc: &mut Document, cmd: &str, nw: u32, nh: u32, fil
         }
     });
     for ch in doc.channels.iter_mut().chain(doc.quick_mask.as_mut()) {
-        ch.surface = resize_surface_in_canvas(&ch.surface, sx, sy, Resample::Bilinear, canvas);
+        ch.surface = resize(&ch.surface, true);
     }
     if let Some(sel) = &doc.selection {
-        doc.selection = Some(resize_surface_in_canvas(sel, sx, sy, Resample::Bilinear, canvas));
+        doc.selection = Some(resize(sel, true));
     }
     // Vector geometry, guides and marks scale with the pixels; vectors re-render sharp.
     crate::canvas_geom::transform_geometry(doc, &photocraft_geom::Affine { m: [sx, 0.0, 0.0, sy, 0.0, 0.0] });
     doc.size = Size::new(nw, nh);
     crate::canvas_geom::refresh(doc, crate::canvas_geom::Refresh::All);
-    let Ok(()) = crate::smart_cmds::restore_unrendered(doc, taken, |c| Ok::<_, Infallible>(resize_surface_in_canvas(c, sx, sy, filter, canvas)));
-    Ok(())
+    let Ok(()) = crate::smart_cmds::restore_unrendered(doc, taken, |c| Ok::<_, Infallible>(resize(c, false)));
 }
 
 /// [`check_resample_budget`] for the largest surface [`resample_doc`] stores while scaling by

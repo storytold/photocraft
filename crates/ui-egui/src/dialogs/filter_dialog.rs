@@ -339,6 +339,7 @@ pub fn has_dialog(command: &str) -> bool {
         || matches!(
             command,
             "image.trim"
+                | "image.pixelArtUpscale"
                 | "select.refineEdge"
                 | "view.proofSetup"
                 | "layer.layerStyle.globalLight"
