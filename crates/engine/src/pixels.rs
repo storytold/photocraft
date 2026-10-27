@@ -555,7 +555,11 @@ pub fn merge_down(doc: &Document, lower: &Layer, upper: &Layer) -> Layer {
     merged.label = lower.label;
     merged.link_group = lower.link_group;
     // The fill opacity and the masks are in the pixels now; the layer style is kept, live, and
-    // recomposes over the union of both layers' content.
-    merged.effects = style;
+    // recomposes over the union of both layers' content. A zero-fill lower layer is the one
+    // exception: Photoshop drops its whole contribution at Merge Down — the fill shows nothing
+    // and the style goes with it, so nothing re-appears on the union (fixtures in the PR).
+    if lower.fill_opacity != 0.0 {
+        merged.effects = style;
+    }
     merged
 }
