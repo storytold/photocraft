@@ -281,4 +281,6 @@ sync_github_name = false
 
 [people.jasallen]
 real_name = "Jason DeBoever"
+
+[people.stoktiks]
 sync_github_name = true
