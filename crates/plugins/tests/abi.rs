@@ -143,6 +143,28 @@ fn params_and_image_context_reach_the_plugin() {
 }
 
 #[test]
+fn point_params_reach_the_plugin() {
+    // Writes params_len into every sample: the `[x, y]` arrays must reach the plug-in as JSON.
+    let fill = r#"(local $i i32)
+      (block $done (loop $l
+        (br_if $done (i32.ge_u (local.get $i) (local.get $len)))
+        (f32.store (i32.add (local.get $buf) (local.get $i)) (f32.convert_i32_u (local.get $pl)))
+        (local.set $i (i32.add (local.get $i) (i32.const 4)))
+        (br $l)))
+      (i32.const 0)"#;
+    let man = r#"{"id":"test.points","name":"P","kind":"filter","params":{"start":{"type":"point","default":[12,12]},"end":{"type":"point","default":[88,62]}},"guide":{"from":"start","to":"end"}}"#;
+    let p = Plugin::load(&module(man, 1, fill, ""), Limits::default()).unwrap();
+    assert_eq!(p.manifest().params_notation(), r#"{"start":point=[12,12],"end":point=[88,62]}"#);
+    let s = surface(PixelFormat::RGBA32F, 8, 8);
+    let len = |params: serde_json::Value| p.apply(&s, Rect::new(0, 0, 8, 8), None, &params).map(|out| out.pixel(1, 1)[0]);
+    // Same digits, so the same JSON length: defaults and given values travel the same way.
+    assert_eq!(len(json!({})).unwrap(), len(json!({"start": [12, 12], "end": [88, 62]})).unwrap());
+    assert!(len(json!({"start": [500, -3]})).is_ok(), "out-of-canvas points are clamped, not refused");
+    assert!(matches!(len(json!({"start": "here"})), Err(Error::Params(_))));
+    assert!(matches!(len(json!({"start": [1, 2, 3]})), Err(Error::Params(_))));
+}
+
+#[test]
 fn nan_and_out_of_range_output_is_sanitised() {
     // Fills the buffer with NaN: every pixel keeps its value.
     let nan = r#"(local $i i32)
@@ -176,8 +198,10 @@ fn hostile_modules_fail_quickly() {
         ("start function loops", module(MANIFEST, 1, "(i32.const 0)", "(func $spin (loop $l (br $l))) (start $spin)")),
         ("WASI import", module(MANIFEST, 1, "(i32.const 0)", r#"(import "wasi_snapshot_preview1" "fd_write" (func (param i32 i32 i32 i32) (result i32)))"#)),
     ];
+    // The web build's limits: the instruction budget ends runaway loops quickly. Desktop lifts it
+    // for `pc_filter`; see desktop_filters_have_no_instruction_budget_but_still_stop_at_the_deadline.
     for (name, bytes) in cases {
-        let (e, t) = run_err(&bytes, Limits::default());
+        let (e, t) = run_err(&bytes, budgeted());
         assert!(t < quick, "{name} took {t:?}");
         eprintln!("{name}: {e} ({t:?})");
     }
@@ -223,8 +247,79 @@ fn malformed_and_oversized_modules_are_refused() {
 fn budgets_stop_runaway_plugins() {
     let spin = ok_module("(loop $l (br $l)) (i32.const 0)");
     // Instruction budget.
-    let (e, _) = run_err(&spin, Limits { fuel_base: 1_000_000, fuel_per_sample: 10, ..Limits::default() });
+    let (e, _) = run_err(&spin, Limits { filter_instruction_budget: true, fuel_base: 1_000_000, fuel_per_sample: 10, ..Limits::default() });
     assert_eq!(e, Error::Limit("instruction budget".into()));
+}
+
+#[test]
+fn geometry_work_has_the_same_budget_in_grayscale_and_rgba() {
+    // Geometry/noise costs depend on pixels, even when fewer colour samples are written.
+    let wasm = ok_module(
+        r#"(local $remaining i32)
+        (local.set $remaining (i32.mul (i32.mul (local.get $w) (local.get $h)) (i32.const 100)))
+        (loop $work
+            (local.set $remaining (i32.sub (local.get $remaining) (i32.const 1)))
+            (br_if $work (local.get $remaining)))
+        (i32.const 0)"#,
+    );
+    let limits = Limits { filter_instruction_budget: true, fuel_base: 50_000, fuel_per_sample: 300, ..Limits::default() };
+    let plugin = Plugin::load(&wasm, limits).unwrap();
+    for format in [PixelFormat::RGBA8, PixelFormat { alpha: false, ..PixelFormat::RGBA8 }, PixelFormat::GRAY8] {
+        let input = surface(format, 32, 24);
+        let result = plugin.apply(&input, Rect::new(0, 0, 32, 24), None, &json!({}));
+        assert!(result.is_ok(), "same per-pixel geometry in {format:?}: {result:?}");
+    }
+}
+
+#[test]
+fn default_budget_supports_dense_per_pixel_work_but_remains_finite() {
+    let wasm = ok_module(
+        r#"(local $remaining i32)
+        (local.set $remaining (i32.mul (i32.mul (local.get $w) (local.get $h)) (i32.const 5000)))
+        (loop $work
+            (local.set $remaining (i32.sub (local.get $remaining) (i32.const 1)))
+            (br_if $work (local.get $remaining)))
+        (i32.const 0)"#,
+    );
+    let rect = Rect::new(0, 0, 64, 64);
+    let rgba = surface(PixelFormat::RGBA8, 64, 64);
+    let old = Plugin::load(&wasm, Limits { fuel_per_sample: 4_000, ..budgeted() }).unwrap();
+    assert_eq!(old.apply(&rgba, rect, None, &json!({})).unwrap_err(), Error::Limit("instruction budget".into()));
+    let plugin = Plugin::load(&wasm, budgeted()).unwrap();
+    for input in [&rgba, &surface(PixelFormat::GRAY8, 64, 64)] {
+        assert!(plugin.apply(input, rect, None, &json!({})).is_ok());
+    }
+    // The same default allowance must still stop an unbounded plug-in.
+    let (error, _) = run_err(&ok_module("(loop $forever (br $forever)) (i32.const 0)"), budgeted());
+    assert_eq!(error, Error::Limit("instruction budget".into()));
+}
+
+/// The web build's limits: `pc_filter` is held to the instruction budget.
+fn budgeted() -> Limits {
+    Limits { filter_instruction_budget: true, ..Limits::default() }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn desktop_filters_have_no_instruction_budget_but_still_stop_at_the_deadline() {
+    assert!(!Limits::default().filter_instruction_budget);
+    // Work far beyond the budgeted allowance (50,000 instructions per pixel) completes on desktop.
+    let wasm = ok_module(
+        r#"(local $remaining i32)
+        (local.set $remaining (i32.mul (i32.mul (local.get $w) (local.get $h)) (i32.const 50000)))
+        (loop $work
+            (local.set $remaining (i32.sub (local.get $remaining) (i32.const 1)))
+            (br_if $work (local.get $remaining)))
+        (i32.const 0)"#,
+    );
+    let rect = Rect::new(0, 0, 16, 16);
+    let input = surface(PixelFormat::RGBA8, 16, 16);
+    assert_eq!(Plugin::load(&wasm, budgeted()).unwrap().apply(&input, rect, None, &json!({})).unwrap_err(), Error::Limit("instruction budget".into()));
+    assert!(Plugin::load(&wasm, Limits::default()).unwrap().apply(&input, rect, None, &json!({})).is_ok());
+    // A runaway plug-in is still stopped by the wall clock.
+    let (error, t) = run_err(&ok_module("(loop $forever (br $forever)) (i32.const 0)"), Limits { wall_time_ms: 300, ..Limits::default() });
+    assert_eq!(error, Error::Limit("time budget".into()));
+    assert!(t < Duration::from_secs(3), "{t:?}");
 }
 
 #[test]
@@ -243,7 +338,7 @@ fn parallel_bands_preserve_the_originating_error() {
             "(if (result i32) (f32.gt (f32.load (local.get $buf)) (f32.const 0.5)) \
              (then {body}) (else (loop $spin (br $spin)) (i32.const 0)))"
         );
-        let limits = Limits { band_bytes: 1, fuel_base: 100_000_000, fuel_per_sample: 0, ..Limits::default() };
+        let limits = Limits { filter_instruction_budget: true, band_bytes: 1, fuel_base: 100_000_000, fuel_per_sample: 0, ..Limits::default() };
         let p = Plugin::load(&ok_module(&filter), limits).unwrap();
         let before = s.clone();
         let e = pool.install(|| p.apply(&s, Rect::new(0, 0, 256, 512), None, &json!({}))).unwrap_err();
@@ -257,7 +352,7 @@ fn parallel_bands_preserve_instruction_budget() {
     let pool = rayon::ThreadPoolBuilder::new().num_threads(4).build().unwrap();
     let p = Plugin::load(
         &ok_module("(loop $spin (br $spin)) (i32.const 0)"),
-        Limits { band_bytes: 1, fuel_base: 1_000_000, fuel_per_sample: 0, ..Limits::default() },
+        Limits { filter_instruction_budget: true, band_bytes: 1, fuel_base: 1_000_000, fuel_per_sample: 0, ..Limits::default() },
     )
     .unwrap();
     let mut s = Surface::new(PixelFormat::RGBA8);
@@ -272,7 +367,7 @@ fn parallel_bands_preserve_instruction_budget() {
 fn wall_clock_budget_stops_runaway_plugins() {
     let spin = ok_module("(loop $l (br $l)) (i32.const 0)");
     // Wall-clock budget, with an effectively unlimited instruction budget.
-    let (e, t) = run_err(&spin, Limits { fuel_base: u64::MAX / 4, wall_time_ms: 300, ..Limits::default() });
+    let (e, t) = run_err(&spin, Limits { filter_instruction_budget: true, fuel_base: u64::MAX / 4, wall_time_ms: 300, ..Limits::default() });
     assert_eq!(e, Error::Limit("time budget".into()));
     assert!(t < Duration::from_secs(3), "{t:?}");
 }

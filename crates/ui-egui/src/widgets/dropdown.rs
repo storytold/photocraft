@@ -15,6 +15,33 @@ pub fn dropdown_literal<T: PartialEq + Clone>(ui: &mut Ui, id: &str, name: &str,
     !chosen.is_empty()
 }
 
+/// `name` is the dropdown's accessible name, as for [`dropdown`].
+pub fn dropdown_sections<T: PartialEq + Clone>(ui: &mut Ui, id: &str, name: &str, current: &mut T, options: &[(Option<T>, &str)], width: f32) -> bool {
+    let label = options.iter().find(|(value, _)| value.as_ref() == Some(current)).map(|(_, label)| *label).unwrap_or("—");
+    let mut changed = false;
+    let response = egui::ComboBox::from_id_salt(id).selected_text(label).width(width).height(420.0).icon(chevron_icon).show_ui(ui, |ui| {
+        fit_widest_option(ui, options.iter().map(|(_, label)| *label));
+        for (value, label) in options {
+            if let Some(value) = value {
+                if ui.selectable_label(value == current, *label).clicked() {
+                    *current = value.clone();
+                    changed = true;
+                }
+            } else {
+                ui.add_enabled(false, egui::Label::new(*label));
+            }
+        }
+    });
+    let response = response.response.accessible_name(name);
+    if ui.is_enabled() && egui::ComboBox::is_open(ui.ctx(), response.id) {
+        // A cached popup can otherwise stay below a modal brought forward on the opening
+        // pointer press. Keep its visible rows above the dialog on every layout pass.
+        ui.ctx().move_to_top(egui::LayerId::new(egui::Order::Foreground, response.id.with("popup")));
+    }
+    let selectable: Vec<_> = options.iter().filter_map(|(value, label)| value.clone().map(|value| (value, *label))).collect();
+    changed || combo_box_arrow_keys(ui, &response, current, &selectable)
+}
+
 /// [`dropdown`], also returning the option under the pointer in its open list (live previews).
 pub fn dropdown_hovered<T: PartialEq + Clone>(ui: &mut Ui, id: &str, name: &str, current: &mut T, options: &[(T, &str)], width: f32) -> (bool, Option<T>) {
     let (chosen, hovered) = dropdown_with(ui, id, name, current, options, width, false, true);
@@ -293,4 +320,56 @@ pub fn dropdown_with_tooltips<T: PartialEq + Clone>(ui: &mut Ui, id: &str, name:
         response.on_hover_text(tl!(tip));
     }
     changed
+}
+
+#[cfg(test)]
+mod section_dropdown_tests {
+    use super::*;
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    #[test]
+    fn sections_open_in_an_anchored_modal_with_no_user_presets() {
+        let mut h = Harness::builder().with_size(vec2(1443.0, 1000.0)).build_ui_state(
+            |ui, selected: &mut String| {
+                egui::Modal::new(egui::Id::unique("preset-modal"))
+                    .area(egui::Modal::default_area(egui::Id::unique("preset-modal")).anchor(egui::Align2::LEFT_TOP, vec2(892.0, 157.0)))
+                    .show(ui.ctx(), |ui| {
+                        // Reproduce a modal's remembered foreground layer being raised after
+                        // the popup's cached area already exists.
+                        ui.ctx().move_to_top(ui.layer_id());
+                        ui.set_min_width(380.0);
+                        ui.label("Animal Fur");
+                        let options = [
+                            (Some(String::new()), "Custom"),
+                            (None, "Built-in presets"),
+                            (Some("Cheetah".into()), "Cheetah"),
+                            (Some("Giraffe".into()), "Giraffe"),
+                            (Some("Long Cream Fur".into()), "Long Cream Fur"),
+                            (Some("Short Golden Fur".into()), "Short Golden Fur"),
+                            (Some("Tiger".into()), "Tiger"),
+                            (Some("Zebra".into()), "Zebra"),
+                            (None, "Your presets"),
+                        ];
+                        dropdown_sections(ui, "animal-presets", "Presets", selected, &options, 150.0);
+                        ui.add_space(350.0);
+                    });
+            },
+            String::new(),
+        );
+        h.run_steps(4);
+        h.get_by_role(egui::accesskit::Role::ComboBox).click();
+        h.run_steps(4);
+        for name in ["Cheetah", "Giraffe", "Long Cream Fur", "Short Golden Fur", "Tiger", "Zebra"] {
+            h.get_by_label(name);
+        }
+        let giraffe = h.get_by_label("Giraffe").rect().center();
+        assert_ne!(
+            h.ctx.layer_id_at(giraffe),
+            Some(egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("preset-modal"))),
+            "the popup rows must be above the modal"
+        );
+        h.get_by_label("Giraffe").click();
+        h.run_steps(4);
+        assert_eq!(h.state(), "Giraffe");
+    }
 }

@@ -268,7 +268,9 @@ fn hostile_plugins_fail_without_touching_the_document() {
         ("test.cmds.spin", "(loop $l (br $l)) (i32.const 0)"),
         ("test.cmds.oob", "(i32.store (i32.const -4) (i32.const 1)) (i32.const 0)"),
     ] {
-        Session::new().execute("plugin.install", json!({"data": b64(&wat_plugin(id, "{}", body))})).unwrap();
+        // Desktop runs have no instruction budget, so a short wall-clock deadline ends the spin.
+        let limits = photocraft_plugins::Limits { wall_time_ms: 2_000, ..Default::default() };
+        registry::install(Plugin::load(&wat_plugin(id, "{}", body), limits).unwrap());
         let mut s = doc(8);
         let before = pixels(&s);
         let undo_before = s.active().unwrap().history.can_undo();
@@ -331,4 +333,55 @@ fn preference_folder_is_loaded() {
     assert_eq!(r["loaded"], json!(["test.cmds.folder"]));
     registry::remove("test.cmds.folder");
     std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn shape_selection_apply_matches_surface_preview_and_undo_restores_photo() {
+    let id = "test.cmds.shape-preview";
+    let params = r#"{"effect":{"type":"choice","options":["shape"],"default":"shape"}},"overlap":4,"area":"canvas","selectionShape":{"parameter":"effect","values":["shape"]}"#;
+    registry::install(Plugin::load(&wat_plugin(id, params, GREY), photocraft_plugins::Limits::default()).unwrap());
+    for depth in [8, 16, 32] {
+        let mut s = doc(depth);
+        select_partial(&mut s);
+        let before = pixels(&s);
+        let d = s.active().unwrap();
+        let params = json!({"id":id,"params":{"effect":"shape"}});
+        let preview = crate::filters::apply_filter_to_surface(
+            RUN,
+            &params,
+            d.doc.layer(d.active_layer.unwrap()).unwrap().surface().unwrap(),
+            d.doc.bounds(),
+            d.doc.selection.as_ref(),
+            d.doc.bounds(),
+        )
+        .unwrap()
+        .unwrap();
+        s.execute(RUN, params).unwrap();
+        assert_eq!(pixels(&s), preview.read_region(Rect::new(0, 0, 40, 28)), "depth {depth}");
+        assert_ne!(pixels(&s), before);
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(pixels(&s), before);
+    }
+    registry::remove(id);
+}
+
+#[test]
+fn selected_shape_filter_rejects_smart_object_without_recording_broken_filter() {
+    let id = "test.cmds.shape-smart";
+    let params = r#"{"effect":{"type":"choice","options":["shape","texture"],"default":"shape"}},"selectionShape":{"parameter":"effect","values":["shape"]}"#;
+    registry::install(Plugin::load(&wat_plugin(id, params, GREY), photocraft_plugins::Limits::default()).unwrap());
+    let mut s = doc(8);
+    s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    select_partial(&mut s);
+    let error = s.execute(RUN, json!({"id":id})).unwrap_err().to_string();
+    assert!(error.contains("needs a pixel layer"), "{error}");
+    let d = s.active().unwrap();
+    let LayerContent::Smart(sm) = &d.doc.layer(d.active_layer.unwrap()).unwrap().content else { panic!("smart object was rasterized") };
+    assert!(sm.smart_filters.is_empty());
+    // Non-shape choices keep the existing smart-filter behavior.
+    s.execute(RUN, json!({"id":id,"params":{"effect":"texture"}})).unwrap();
+    let d = s.active().unwrap();
+    let LayerContent::Smart(sm) = &d.doc.layer(d.active_layer.unwrap()).unwrap().content else { panic!("not smart") };
+    assert_eq!(sm.smart_filters.len(), 1);
+    registry::remove(id);
 }

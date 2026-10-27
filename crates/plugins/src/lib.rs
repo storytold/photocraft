@@ -6,7 +6,8 @@
 //! - **no host imports**: no WASI, file system, network, clock or randomness. A module that
 //!   imports anything is rejected;
 //! - an **instruction budget** (fuel) per call, metered in slices so a wall-clock deadline is
-//!   also enforced (native builds), so infinite loops end with an error;
+//!   also enforced (native builds), so infinite loops end with an error. Desktop builds lift the
+//!   budget for `pc_filter` itself and rely on the deadline and memory cap;
 //! - a **linear-memory cap**, a **recursion-depth cap** and wasmi's strict module limits;
 //! - a **fresh instance per band**, so no state leaks between calls.
 //!
@@ -22,11 +23,12 @@
 
 mod apply;
 pub mod manifest;
+pub mod presets;
 pub mod registry;
 mod runtime;
 
 pub use apply::format_code;
-pub use manifest::{Area, Kind, Manifest, ParamSpec, Unit};
+pub use manifest::{Area, Guide, Kind, Manifest, ParamSpec, SelectionShape, Unit, clamp_point, normalize_color, wrap_angle};
 pub use runtime::{ABI_VERSION, Limits, Plugin};
 
 /// A plug-in error. Every way a module can misbehave ends here, never in a panic.

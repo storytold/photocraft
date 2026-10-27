@@ -955,6 +955,24 @@ fn content_aware_fill_previews_at_full_resolution() {
     }
 }
 
+/// A plug-in that marks no param `"unit": "px"` doesn't say which lengths are document pixels,
+/// so a reduced proxy would enlarge its bevels, shadows and textures relative to Apply.
+#[test]
+fn plugin_previews_keep_document_pixel_scale_without_a_units_contract() {
+    for params in [
+        json!({"id": "test.preview-scale", "effect": "bevel", "bevel_size": 8.0}),
+        json!({"id": "test.preview-scale", "params": {"effect": "shadow", "shadow_distance": 15.0}}),
+        json!({"id": "test.preview-scale"}),
+    ] {
+        for requested in [1, 2, 3, 8] {
+            assert_eq!(preview_factor("plugin.run", &params, requested), 1, "{params}, factor {requested}");
+        }
+    }
+    // Built-ins whose pixel controls can be scaled retain their reduced previews.
+    assert_eq!(preview_factor("filter.blur.gaussianBlur", &json!({"radius": 8.0}), 4), 4);
+    assert_eq!(preview_factor("filter.pixelate.mosaic", &json!({"cellSize": 10.0}), 4), 2);
+}
+
 /// #2063: proxy previews scaled what isn't a length (Tree's canvas fraction, Lens Correction's
 /// perspective), clamped negative lengths to +0.1 (Offset left/up), left Shadows/Highlights'
 /// radii in document pixels and rounded Mosaic's 10 px cells to 3 proxy px (12 px).
@@ -1545,4 +1563,194 @@ fn replace_color_localized_color_clusters() {
     let px = |x: i32| doc.layers[0].surface().unwrap().read_region(photocraft_geom::Rect::new(x, 5, x + 1, 6));
     assert!(px(2)[1] > 0.5, "near the point: shifted to green {:?}", px(2));
     assert!(px(38)[0] > 0.9 && px(38)[1] < 0.1, "far away: still red {:?}", px(38));
+}
+
+#[test]
+fn point_params_open_with_their_defaults_and_pass_through_unchanged() {
+    let spec = r#"{"start":point=[12,12.5],"end":point=[88,62],"bad":point=[1],"amount":0..100=50}"#;
+    let kinds: Vec<Kind> = parse_spec(spec).into_iter().map(|p| p.kind).collect();
+    assert_eq!(kinds, [Kind::Point([12.0, 12.5]), Kind::Point([88.0, 62.0]), Kind::Point([50.0, 50.0]), Kind::Range { min: 0.0, max: 100.0, default: 50.0 }]);
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    let mut fixed = Map::new();
+    fixed.insert("id".into(), json!("org.example.bolt"));
+    open_with_spec(&mut app, "plugin.run", "Bolt", spec, fixed);
+    let fields = &mut app.ui.dialogs.last_mut().unwrap().fields;
+    assert_eq!(fields["start"], json!([12.0, 12.5]));
+    fields.insert("end".into(), json!([33.25, 70.0]));
+    let params = params_of(fields);
+    assert_eq!(params["start"], json!([12.0, 12.5]));
+    assert_eq!(params["end"], json!([33.25, 70.0]), "a point value reaches the command unchanged");
+    assert_eq!(params["id"], json!("org.example.bolt"));
+}
+
+#[test]
+fn plugin_color_params_open_with_their_defaults_and_pass_through_unchanged() {
+    let m = photocraft_plugins::Manifest::parse(
+        br##"{"id":"org.example.bolt","name":"Bolt","kind":"filter",
+            "params":{"inner":{"type":"color","default":"#CFEAFF"},"outer":{"type":"color","default":"#5a8cff"}}}"##,
+    )
+    .unwrap();
+    let spec = m.params_notation();
+    let kinds: Vec<Kind> = parse_spec(&spec).into_iter().map(|p| p.kind).collect();
+    assert_eq!(kinds, [Kind::Color(crate::color_picker_ui::parse_hex("#cfeaff")), Kind::Color(crate::color_picker_ui::parse_hex("#5a8cff"))]);
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    let mut fixed = Map::new();
+    fixed.insert("id".into(), json!("org.example.bolt"));
+    open_with_spec(&mut app, "plugin.run", "Bolt", &spec, fixed);
+    let fields = &mut app.ui.dialogs.last_mut().unwrap().fields;
+    assert_eq!((&fields["inner"], &fields["outer"]), (&json!("#cfeaff"), &json!("#5a8cff")));
+    // A colour the picker set survives drawing the dialog and reaches the plug-in unchanged.
+    fields.insert("inner".into(), json!("#ff8800"));
+    let ctx = egui::Context::default();
+    ctx.run_ui(Default::default(), |ui| body(ui, fields)).textures_delta.clear();
+    let params = params_of(fields);
+    assert_eq!(params["inner"], json!("#ff8800"));
+    assert_eq!(params["outer"], json!("#5a8cff"));
+    let resolved = m.resolve_params(&params).unwrap();
+    assert_eq!((&resolved["inner"], &resolved["outer"]), (&json!("#ff8800"), &json!("#5a8cff")));
+}
+
+#[test]
+fn plugin_tabs_default_to_the_first_and_keep_every_tabs_values() {
+    let m = photocraft_plugins::Manifest::parse(
+        br##"{"id":"org.example.bolt","name":"Bolt","kind":"filter","params":{
+            "effect":{"type":"choice","options":["a","b"]},
+            "glow":{"type":"number","min":0,"max":1,"default":0.5,"group":"Glow"},
+            "start":{"type":"point","default":[12,12],"group":"Bolt"},
+            "inner":{"type":"color","default":"#ffffff","group":"Colour"}}}"##,
+    )
+    .unwrap();
+    let mut fixed = Map::new();
+    fixed.insert("id".into(), json!("org.example.bolt"));
+    fixed.insert("__tabs".into(), json!(m.tabs()));
+    fixed.insert("__groupOf".into(), json!({"glow": "Glow", "start": "Bolt", "inner": "Colour"}));
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    open_with_spec(&mut app, "plugin.run", "Bolt", &m.params_notation(), fixed);
+    let fields = &mut app.ui.dialogs.last_mut().unwrap().fields;
+    let (tabs, group_of) = tabs_of(fields);
+    assert_eq!(tabs, ["Glow", "Bolt", "Colour"]);
+    assert_eq!(group_of.get("effect"), None, "ungrouped: always visible");
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts(&ctx);
+    ctx.run_ui(Default::default(), |ui| body(ui, fields)).textures_delta.clear();
+    assert_eq!(fields[TAB], json!("Glow"), "the first tab is selected");
+    // Another tab: the hidden tabs' values still reach the plug-in (and the live preview).
+    fields.insert(TAB.into(), json!("Colour"));
+    fields.insert("start".into(), json!([40.0, 60.0]));
+    ctx.run_ui(Default::default(), |ui| body(ui, fields)).textures_delta.clear();
+    assert_eq!(fields[TAB], json!("Colour"));
+    let params = params_of(fields);
+    assert_eq!((&params["effect"], &params["glow"], &params["start"], &params["inner"]), (&json!("a"), &json!(0.5), &json!([40.0, 60.0]), &json!("#ffffff")));
+    assert!(params.get("__tab").is_none() && params.get("__tabs").is_none());
+    // A stale or unknown tab falls back to the first.
+    fields.insert(TAB.into(), json!("Gone"));
+    assert_eq!(selected_tab(fields, &tabs), "Glow");
+}
+
+#[test]
+fn suite_controls_labels_and_tabs_follow_the_selected_effect_without_resetting_values() {
+    use egui_kittest::{Harness, kittest::Queryable};
+    let fields = json!({
+        "__command": "plugin.run", "__presetSelector": "effect",
+        "__spec": "{\"effect\":\"lightning|shadow|fire\",\"bolt_width\":0..100=5,\"glow_size\":0..100=10,\"inner_colour\":color=#ffffff,\"shadow_softness\":0..100=20,\"fire_style\":\"soft|hard\",\"fire_detail\":0..100=30}",
+        "__tabs": ["General", "Bolt", "Glow", "Colour", "Shadow"],
+        "__groupOf": {"effect": "General", "bolt_width": "Bolt", "glow_size": "Glow", "inner_colour": "Colour", "shadow_softness": "Shadow"},
+        "__labels": {"effect": "Effect", "bolt_width": "Bolt Width", "glow_size": "Glow Size", "inner_colour": "Inner Colour", "shadow_softness": "Shadow Softness", "fire_style": "Fire Style", "fire_detail": "Flame Detail"},
+        "__visibleWhen": {"bolt_width": {"effect": "lightning"}, "glow_size": {"effect": "lightning"}, "inner_colour": {"effect": "lightning"}, "shadow_softness": {"effect": "shadow"}, "fire_style": {"effect": "fire"}, "fire_detail": {"effect": "fire", "fire_style": "hard"}},
+        "effect": "lightning", "bolt_width": 7.0, "glow_size": 13.0, "inner_colour": "#ffaa00", "shadow_softness": 23.0, "fire_style": "soft", "fire_detail": 37.0
+    }).as_object().unwrap().clone();
+    let mut h = Harness::builder().with_size(egui::vec2(650.0, 600.0)).build_ui_state(
+        |ui, fields| {
+            if !ui.ctx().fonts(|fonts| fonts.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                return;
+            }
+            selector_body(ui, fields);
+            body(ui, fields);
+        },
+        fields,
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h.run_steps(4);
+    assert!(h.query_all_by_label("Effect").next().is_some(), "the hoisted selector is shown");
+    assert!(h.query_all_by_label("General").next().is_none(), "the hoisted selector cannot create an empty tab");
+    assert!(h.query_all_by_label("Bolt Width").next().is_some());
+    assert!(h.query_all_by_label("Shadow Softness").next().is_none());
+    h.get_by_label("Glow").click();
+    h.run_steps(2);
+    assert_eq!(h.state()[TAB], json!("Glow"), "a tab click survives later frames");
+    assert!(h.query_all_by_label("Glow Size").next().is_some());
+    let values = params_of(h.state());
+
+    h.state_mut().insert("effect".into(), json!("shadow"));
+    h.run_steps(2);
+    assert_eq!(h.state()[TAB], json!("Shadow"), "a stale Lightning tab repairs to the visible group");
+    assert!(h.query_all_by_label("Shadow Softness").next().is_some());
+    for label in ["Bolt", "Glow", "Colour", "Shadow", "Bolt Width", "Glow Size", "Inner Colour"] {
+        assert!(h.query_all_by_label(label).next().is_none(), "single-group effect has no tabs or Lightning controls: {label}");
+    }
+    h.state_mut().insert("effect".into(), json!("fire"));
+    h.run_steps(2);
+    assert_eq!(h.state()[TAB], json!(""));
+    assert!(h.query_all_by_label("Fire Style").next().is_some());
+    assert!(h.query_all_by_label("Flame Detail").next().is_none(), "AND predicates hide subordinate controls");
+    h.state_mut().insert("fire_style".into(), json!("hard"));
+    h.run_steps(2);
+    assert!(h.query_all_by_label("Flame Detail").next().is_some());
+    h.state_mut().insert("effect".into(), json!("lightning"));
+    h.run_steps(2);
+    for key in ["bolt_width", "glow_size", "inner_colour", "shadow_softness", "fire_detail"] {
+        assert_eq!(h.state()[key], values[key], "switching effects preserves {key}");
+    }
+}
+
+#[test]
+fn plugin_labels_use_explicit_text_or_readable_parameter_names() {
+    assert_eq!(source_label("shadow_softness"), "Shadow Softness");
+    assert_eq!(source_label("glowRadius"), "Glow Radius");
+    let f = json!({"__labels": {"lt_width": "Bolt Width"}}).as_object().unwrap().clone();
+    assert_eq!(field_label(&f, "lt_width"), "Bolt Width");
+    assert_eq!(field_label(&f, "shadow_softness"), label("shadow_softness"));
+}
+
+#[test]
+fn plugin_dial_points_east_at_0_and_turns_clockwise() {
+    assert_eq!(dial_angle(egui::vec2(20.0, 0.0)), Some(0.0), "due east");
+    assert_eq!(dial_angle(egui::vec2(0.0, 20.0)), Some(90.0), "due south: clockwise on screen");
+    assert_eq!(dial_angle(egui::vec2(-20.0, 0.0)), Some(180.0), "due west");
+    assert_eq!(dial_angle(egui::vec2(0.0, -20.0)), Some(270.0), "due north");
+    assert_eq!(dial_angle(egui::vec2(20.0, -0.1)), Some(0.0), "just above east rounds to 0, not 360");
+    assert_eq!(dial_angle(egui::vec2(0.2, 0.2)), None, "the centre has no direction");
+}
+
+#[test]
+fn plugin_angle_params_open_with_their_defaults_wrap_and_pass_through() {
+    let m = photocraft_plugins::Manifest::parse(
+        br#"{"id":"org.example.bolt","name":"Bolt","kind":"filter",
+            "params":{"direction":{"type":"angle","default":45,"group":"Bolt"},"tilt":{"type":"angle"}}}"#,
+    )
+    .unwrap();
+    let spec = m.params_notation();
+    let kinds: Vec<Kind> = parse_spec(&spec).into_iter().map(|p| p.kind).collect();
+    assert_eq!(kinds, [Kind::Angle(45.0), Kind::Angle(0.0)]);
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    let mut fixed = Map::new();
+    fixed.insert("id".into(), json!("org.example.bolt"));
+    open_with_spec(&mut app, "plugin.run", "Bolt", &spec, fixed);
+    let fields = &mut app.ui.dialogs.last_mut().unwrap().fields;
+    assert_eq!((&fields["direction"], &fields["tilt"]), (&json!(45.0), &json!(0.0)));
+    let ctx = egui::Context::default();
+    let draw = |fields: &mut Map<String, Value>| ctx.run_ui(Default::default(), |ui| body(ui, fields)).textures_delta.clear();
+    // A value the dial or field set survives drawing and reaches the plug-in unchanged.
+    fields.insert("direction".into(), json!(137.5));
+    draw(fields);
+    let params = params_of(fields);
+    assert_eq!((&params["direction"], &params["tilt"]), (&json!(137.5), &json!(0.0)));
+    let resolved = m.resolve_params(&params).unwrap();
+    assert_eq!(resolved["direction"], json!(137.5));
+    // Out-of-range values from the dialog wrap into 0-360.
+    for (given, want) in [(370.0, 10.0), (-90.0, 270.0), (360.0, 360.0)] {
+        fields.insert("direction".into(), json!(given));
+        draw(fields);
+        assert_eq!(fields["direction"], json!(want), "{given}");
+    }
 }

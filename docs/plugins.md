@@ -30,6 +30,45 @@ Plug-ins are installed **per process**, not per document. A smart filter recorde
 installed; if it is missing, the filter is skipped (the cached pixels stay as they were), like other
 filters PhotoCraft does not implement.
 
+### Presets
+
+Every plug-in dialog has a **Presets** row: a list of saved names (choosing one applies it and
+updates the live preview), **Save As…** and **Delete**. Plug-ins get this automatically; there is
+nothing to declare and the ABI is unchanged.
+
+The desktop app keeps each plug-in's presets in one file named after its id, in a `plugins` folder
+inside the settings folder (`PHOTOCRAFT_CONFIG_DIR`, the portable data folder, or
+`~/.config/photocraft` on Linux, `~/Library/Application Support/Photocraft` on macOS,
+`%APPDATA%\Photocraft` on Windows), for example
+`~/.config/photocraft/plugins/com.stack-tech.freecandy7.json`. Capital letters in an id are written
+as `%XX` (`Foo` → `%46oo`), so ids that differ only in case never share a file:
+
+```json
+{
+  "version": 1,
+  "presets": {
+    "Soft glow": { "amount": 25.0, "mode": "screen", "center": [50.0, 40.0] }
+  }
+}
+```
+
+- **Plug-ins have no file access.** The host reads and writes this file on the plug-in's behalf;
+  the plug-in never sees the path, the file or other plug-ins' presets, and only ever receives
+  parameter values through `pc_filter` as before.
+- The file name comes only from the validated plug-in id; ids with `..`, a leading dot or a path
+  separator get no presets. Preset names are 1–64 printable characters without `/`, `\` or `..`.
+- Saves are atomic (a temporary file in the same folder, then a rename).
+- A missing, unreadable or damaged file just means no presets (a warning is logged). Only a
+  missing or readable file is replaced on save: a damaged or unreadable file, or one with another
+  `version`, is never overwritten (saving reports an error instead), so its presets aren't lost.
+- Stored values are checked against the plug-in's current manifest when listed and applied:
+  unknown keys and values of the wrong type are dropped, numbers and points are clamped into
+  range, unknown choices are dropped (the parameter keeps its default), and a preset with nothing
+  usable left is skipped while the rest still load.
+- A plug-in may ship immutable factory settings in a top-level `presets` object mapping display names to parameter objects. These appear under **Built-in presets**, including when user storage is unavailable (such as the web build). With `presetSelector`, each built-in must explicitly include a supported selector value. Names and counts use the user-preset limits; values use the same normalization, bounds and schema filtering. The 64 KiB manifest limit still applies.
+- A top-level `presetPreserve` array may name parameters that built-in recipes leave unchanged when they omit those parameters. For example, hair-style recipes can retain the user's chosen coat type and colors. An explicitly supplied value still takes precedence. These retained controls do not mark the selected built-in recipe Custom when edited. Keys must be unique, refer to existing parameters, and exclude `presetSelector`. Omitted controls outside this list still reset to their defaults within the current effect. **Your presets** remain complete saved settings and are not affected by this list.
+- Stored settings appear under **Your presets** for the selected effect. **Save As…** always writes user settings, even when starting from a built-in. Identical names in the two sources remain distinct; **Delete** is available only for user settings. Without a user store, Save As and Delete are disabled.
+
 ## The sandbox
 
 The host is [`wasmi`](https://github.com/wasmi-labs/wasmi), a pure-Rust WebAssembly interpreter
@@ -40,8 +79,8 @@ build. Limits (`photocraft_plugins::Limits`, defaults):
 |---|---|---|
 | Host imports | none: no WASI, file system, network, clock or randomness | module rejected at install |
 | Module size | 32 MiB | rejected |
-| Linear memory | 512 MiB per instance | `memory.grow` returns -1; oversized initial memory fails |
-| Instructions (fuel) | 50 M per call + 4,000 per sample for `pc_filter` | `Limit("instruction budget")` |
+| Linear memory | 1 GiB per native instance; 512 MiB on the web | `memory.grow` returns -1; oversized initial memory fails |
+| Instructions (fuel) | 50 M per call + 8,000 per sample for `pc_filter`, with at least four samples of work allowed per pixel. Web only: desktop builds give `pc_filter` no instruction budget, so complex plug-ins are bounded by the wall clock and memory cap instead (a runaway plug-in stops after 60 s rather than at the budget) | `Limit("instruction budget")` |
 | Wall clock | 60 s per run (native; checked every 20 M instructions) | `Limit("time budget")` |
 | Call depth | 1,024 frames | trap |
 | Module shape | wasmi's strict limits (≤ 10,000 functions, 1 memory, …) | rejected |
@@ -71,6 +110,23 @@ exports. All integers are `i32` unless noted; pointers are offsets into the modu
 | `pc_manifest` | `() -> i64` | `(len << 32) \| ptr` of the UTF-8 manifest JSON (≤ 64 KiB). |
 | `pc_alloc` | `(size) -> ptr` | A block of `size` bytes the host may write, or `0` on failure. Never freed: each band gets a fresh instance. |
 | `pc_filter` | `(buf, buf_len, width, height, channels, format, params, params_len) -> i32` | Filters the pixels in place; `0` = success, anything else is an error code. |
+| `pc_overlap` (optional) | `(params, params_len) -> i32` | Required context in pixels for this run's resolved parameters. Replaces manifest `overlap` when present. |
+
+The optional `pc_overlap` export extends ABI v1 without changing its version. Before allocating
+pixel buffers, the host calls it once in a fresh instance with UTF-8 JSON containing the validated
+parameters, including defaults. This JSON has no `_image` field: no band exists yet. The function
+must return a deterministic non-negative radius that includes every source read and auxiliary
+stencil used by those parameters. The host uses the same result for input padding, content/shape
+output expansion, and `_image.overlap` in every filter band. No state from negotiation survives
+into the fresh filter instances.
+
+Native builds accept 0–1,536 pixels, supporting effects reaching 1,500 pixels with room for
+sampling stencils. Web builds retain a maximum of 256 pixels. A negative or excessive result is
+an explicit overlap-budget error; the host never clips a requested radius. An export with the
+wrong signature is rejected at installation. Negotiation runs under the ordinary base fuel,
+linear-memory and run-deadline limits. Plug-ins without the export keep their existing static
+manifest behavior. Older hosts ignore this optional export, so plug-ins requiring it must check
+the `_image.overlap` they receive and fail if it is insufficient.
 
 ### Manifest
 
@@ -100,9 +156,51 @@ exports. All integers are `i32` unless noted; pointers are offsets into the modu
   Unicode format characters (bidi overrides and marks, zero-width spaces, soft hyphens) are rejected,
   except the zero-width joiner and non-joiner, and at least one character must be visible.
   `kind`: `"filter"` (the only kind in v1).
-- `params`: in dialog order. Names are `[A-Za-z0-9_]`, not starting with `_`, not `id`/`layer`.
+- `params`: up to 256 controls, in dialog order. Names are `[A-Za-z0-9_]`, not starting with `_`, not `id`/`layer`.
+  Types: `number`, `int`, `bool`, `choice`, `point`, `color` and `angle` (below).
   The host validates the user's values before calling: missing values take the default, numbers are
   clamped to `min..max` (ints rounded), a wrong type or an unknown choice is an error.
+- `group` (optional, any parameter type): the dialog tab the parameter sits on, 1–32 printable
+  characters (the same rules as `name`). The dialog shows parameters without a `group` first,
+  then one tab per group in the order each first appears; only the selected tab's
+  parameters are shown (the first tab at first). Groups change only the layout: presets and the
+  values the plug-in receives are the same.
+  `"start": {"type": "point", "default": [12, 12], "group": "Bolt"}`
+- `label` (optional, any parameter type): a dialog label of 1–64 printable Unicode characters,
+  using the same visible-character and format-character rules as `name`. Leading and trailing
+  spaces are trimmed; control characters are rejected even at the edges. Without a label,
+  the dialog uses the parameter name. Labels do not change the keys the plug-in receives.
+- `visibleWhen` (optional, any parameter type): an object of 1–8 equality predicates. Every
+  predicate must match the current parameter values for the control to appear. Keys must name
+  another `choice` or `bool` parameter; values must be one of the choice's option strings or a
+  JSON boolean, respectively. A conditional controller is allowed only when the dependent
+  repeats **all** the controller's visibility predicates with the same values. Self references
+  and cycles are rejected. Hidden values are still validated, saved in presets, and sent to
+  the plug-in. This metadata can be combined with `group`.
+- `presetSelector` (optional, top level): names an unconditional `choice` parameter used by
+  the dialog to scope presets to the selected effect. The selector's stable option values
+  identify the preset scope; its parameter name remains an ordinary plug-in input.
+
+For example, a suite can show a style selector for Swirl and a strength control only for
+Swirl's Distort style. The strength control repeats the style selector's `effect` predicate:
+
+```json
+"presetSelector": "effect",
+"params": {
+  "effect": {"type": "choice", "options": ["swirl", "glow"], "label": "Effect"},
+  "swirl_style": {
+    "type": "choice", "options": ["distort", "rays"], "label": "Style",
+    "visibleWhen": {"effect": "swirl"}
+  },
+  "strength": {
+    "type": "number", "min": 0, "max": 100, "default": 50, "label": "Strength",
+    "visibleWhen": {"effect": "swirl", "swirl_style": "distort"}
+  }
+}
+```
+
+Manifests that omit these optional fields keep the existing dialog and preset behavior.
+
 - `unit` (optional, on `number` and `int` params): `"px"` marks a length in document pixels (a
   radius, distance, shift or size); `"none"`, the default, is everything else (levels, factors,
   counts, percentages). Any other value (an unknown string, a number…) is treated as `"none"`, as
@@ -111,12 +209,115 @@ exports. All integers are `i32` unless noted; pointers are offsets into the modu
   the host divides each `px` param by that reduction (ints rounded, kept within `min..max`) so the
   preview shows the same lengths OK applies; when a `px` param with a positive `min` would drop below
   it, the preview runs less reduced instead. Unitless params reach the preview unchanged, whatever
-  their name. OK, actions and smart filters always get the values as given.
-- `overlap` (0–256): pixels of context the filter needs around each output pixel (a blur radius).
+  their name. A plug-in that marks no param `px` previews at full resolution instead, since its
+  lengths can't be scaled. OK, actions and smart filters always get the values as given.
+- `overlap` (0–1,536 on native builds; 0–256 on the web): static pixels of context the filter needs
+  around each output pixel (a blur radius), or the fallback for hosts without `pc_overlap`.
   The host pads each band by `overlap` on every side, repeating the edge pixels of the canvas (or of
-  off-canvas layer content), and keeps only the inner rectangle of the result.
+  off-canvas layer content), and keeps only the inner rectangle of the result. When `pc_overlap`
+  is present, its per-run result replaces this value throughout the run.
 - `area`: `"content"` (default) filters the layer's non-transparent bounds grown by `overlap`;
   `"canvas"` filters the whole canvas, including transparent pixels (for generators).
+- `clampContext`: optional boolean, default `false`. A plug-in that understands the output
+  rectangle described below may opt into clipping source context to the image extent plus a
+  36-pixel boundary guard for native overlaps above 256 pixels. This avoids processing large
+  repeated margins beyond the image. The guard preserves edge stencils: source colour repeats
+  at the extent, while selection coverage remains zero outside it. Existing plug-ins and
+  ordinary overlaps of 256 pixels or less retain symmetric, untrimmed margins.
+- `clampContextWhen`: optional choice scope, using the same `{ "parameter": "effect", "values":
+  ["fire", "drip"] }` structure and validation as `selectionShape`. When present, clipping is
+  enabled only for a matching resolved choice and still requires `clampContext: true`. This lets
+  suites retain full source margins for effects whose derived fields need distant edge context.
+
+#### Selections as shape geometry
+
+Ordinary filters receive the original layer pixels, and the selection clips and feathers their
+output. An effect suite whose effects need a silhouette can opt in per choice:
+
+```json
+"selectionShape": {"parameter": "effect", "values": ["bevel", "shadow", "glow"]}
+```
+
+The parameter must be an unconditional `choice`; values must contain 1–64 unique supported
+choices. When a selection is active and the resolved choice matches, the host multiplies the
+input alpha by selection coverage. RGB/Gray inputs without alpha gain a temporary alpha channel
+in the filter buffer; `channels`, `format`, and `_image.alpha` describe that actual buffer. The
+output surface retains its original format. Other document colour models remain in their own
+channel layout, with the same temporary-alpha rule.
+
+The filter sees a cut-out of the selected photo, including feathering and existing layer alpha.
+Its output is composited back into the photo, replacing the selected cut-out while preserving the
+unselected remainder. This avoids doubling source alpha or applying feather coverage twice.
+Effects may extend outside the selection by at most the resolved `overlap`, within the filter's
+ordinary content/canvas output bounds; pixels beyond that region are unchanged. The selection
+mask has zero coverage outside its bounds, including in the band's neighbourhood pixels.
+
+`_image.shapeX`, `shapeY`, `shapeWidth`, and `shapeHeight` report the full selection's document
+bounds, identical in every band. Existing canvas and band coordinates keep their usual meaning.
+The extra geometry fields are omitted when shape selection is inactive. With no active selection,
+the plug-in sees the layer's original alpha and the usual filtering behavior.
+
+Preview and Apply dispatch the same engine command. Selected shape effects currently require a
+pixel layer: smart objects reject the operation with an actionable error because their shared
+smart-filter mask cannot retain per-effect input geometry. Clear the selection or rasterize the
+smart object explicitly before applying one. Existing ordinary smart filters are unaffected.
+
+#### Points on the canvas: `point` and `guide`
+
+A `point` parameter is a position the user picks on the image. Its value is `[x, y]` in **percent of
+the canvas width and height** (0–100), like the other position-style numbers, so it does not depend
+on the document size. `default` is required: two numbers, each within 0–100.
+
+```json
+"params": {
+  "start": {"type": "point", "default": [12, 12]},
+  "end":   {"type": "point", "default": [88, 62]}
+},
+"guide": {"from": "start", "to": "end"}
+```
+
+- While the plug-in's dialog is open, every point shows a handle on the canvas. Pressing near a
+  handle drags it; pressing elsewhere on the image moves the first point there. The dialog's X / Y
+  fields and the live preview follow the handle as it moves.
+- `guide` (optional) names two different `point` parameters: the canvas draws a dotted line between
+  them. A manifest whose `guide` names a missing or non-`point` parameter is rejected.
+- The plug-in receives the value as an array in `params`, e.g. `{"start": [12.0, 12.0], …}`. The
+  host clamps both coordinates to 0–100; anything other than an array of two numbers is an error.
+- In the registry notation (`plugin.list` `params`) a point reads `"start":point=[12,12]`.
+
+#### Colours: `color`
+
+A `color` parameter is an opaque colour the user picks with a swatch and colour picker. `default` is
+required and must be a `"#rrggbb"` hex string (either case; no alpha, no `#rgb` short form); anything
+else rejects the manifest.
+
+```json
+"params": {
+  "inner": {"type": "color", "default": "#cfeaff"}
+}
+```
+
+- The plug-in receives the same string, lowercase, in `params`: `{"inner": "#cfeaff"}`. A value that
+  is not `"#rrggbb"` is an error. The live preview follows the picker as the colour changes.
+- Saved presets keep the hex string; a stored colour that is not a valid `"#rrggbb"` is dropped.
+- In the registry notation a colour reads `"inner":color=#cfeaff`.
+
+#### Angles: `angle`
+
+An `angle` parameter is a direction in degrees, set with a dial and a number field. `default` is a
+number from 0 to 360 inclusive (0 when omitted); anything else rejects the manifest.
+
+```json
+"params": {
+  "direction": {"type": "angle", "default": 45, "group": "Bolt"}
+}
+```
+
+- 0 points right (east) and the angle grows clockwise on screen: 90 is down, 270 is up.
+- The plug-in receives a plain number in `params`: `{"direction": 45}`, always within 0–360.
+  Values outside that range wrap around (370 becomes 10, -90 becomes 270); a non-number is an error.
+- Saved presets keep the number, wrapped the same way on load; a stored non-number is dropped.
+- In the registry notation an angle reads `"direction":angle=45`.
 
 ### Pixels
 
@@ -134,10 +335,26 @@ conversion:
 
 Alpha channels and Quick Mask targets arrive as one grayscale channel.
 
-The host converts the layer into bands (tile-aligned blocks of at most ~4 MiB of `f32`), runs them in
+The host converts the layer into bands (tile-aligned output blocks of at most ~4 MiB of `f32`), runs them in
 parallel on native builds, writes the results back in the layer's format, then blends with the
 selection: `out = original + (filtered − original) × coverage`, exactly as built-in filters do. A
-plug-in never sees the selection and needs nothing special to support it.
+normal filter needs nothing special to support selection clipping; an opted-in shape effect
+receives the masked silhouette described above.
+
+Context margins are additional to the ordinary output-band target. Band width shrinks when
+necessary to fit the memory budget; an impossible minimum band fails before pixel allocation.
+For overlaps above 256 pixels, runs use larger tile-aligned rectangles in both dimensions,
+sized against the actual input, clipped when the plug-in opts in for that choice. This amortizes large neighborhoods
+across useful output pixels; it does not change the requested radius or effect geometry.
+
+Large-context runs reserve 16 MiB for module/allocator overhead, then limit input to one third
+of the remaining linear-memory cap, leaving room for source copies and intermediate fields.
+They use one worker and bound the estimated active memory to 2 GiB, counting the full instance
+cap and up to three host pixel buffers. Ordinary overlaps keep the existing band target and
+parallelism. Caller-supplied lower memory limits remain lower. These are planning budgets, not
+extra memory granted to the plug-in: the per-instance cap and 60-second native deadline still
+apply. Large effects must keep their own scratch allocations and work bounded; they can fail
+explicitly if those resource limits are exhausted.
 
 ### Parameters
 
@@ -153,6 +370,16 @@ the band's geometry:
 
 `x, y` is the document position of the buffer's top-left sample (including the margins), so
 position-dependent filters (gradients, vignettes) are seamless across bands.
+
+For a clipped `clampContext` run, `_image` also includes `outputX`, `outputY`, `outputWidth` and
+`outputHeight`. These are the output rectangle relative to the supplied buffer, in pixels.
+The plug-in must use this rectangle instead of assuming `overlap` pixels on every side; only
+this rectangle is retained by the host. `_image.overlap` still reports the requested dependency
+radius even when context at an image edge was trimmed. For example, a whole 64 × 64 image with
+300 pixels of requested context receives a 136 × 136 buffer at `x: -36, y: -36`, and its output is
+`outputX: 36, outputY: 36, outputWidth: 64, outputHeight: 64`. When these fields are absent, the
+original symmetric-margin contract applies. Sampling beyond a clipped input must clamp at its
+edge; plug-ins needing explicit extended margins should leave `clampContext` disabled.
 
 ## Writing a plug-in in Rust
 
