@@ -860,6 +860,45 @@ fn merging_down_keeps_the_lower_layers_style_live_on_the_union() {
 }
 
 #[test]
+fn merging_down_inherits_the_lower_layers_fill_opacity() {
+    // Photoshop inherits the fill onto the merged layer (fixtures in PR #8750): merging onto a
+    // Fill-0% lower layer keeps the union ink in the pixels but invisible, and only the live
+    // style — re-rendered around the union — shows. The property is not reset to opaque.
+    let ink = |s: &Session| {
+        let d = doc(s);
+        photocraft_compose::render(d, d.bounds()).get(66, 26)
+    };
+    let glow = |s: &Session| {
+        let d = doc(s);
+        photocraft_compose::render(d, d.bounds()).get(75, 26)
+    };
+    for depth in [8, 16, 32] {
+        let mut s = session(depth);
+        let lower = rect_layer(&mut s, Rect::new(10, 10, 30, 30));
+        let upper = rect_layer(&mut s, Rect::new(60, 20, 72, 32));
+        s.execute("layer.layerStyle.outerGlow", json!({"layer": lower.0, "blend": "normal", "size": 6, "color": "#000000", "add": true})).unwrap();
+        s.edit("zero fill", |doc, _| {
+            doc.layer_mut(lower).unwrap().fill_opacity = 0.0;
+            Ok(())
+        })
+        .unwrap();
+        let before_ink = ink(&s);
+        let before_glow = glow(&s);
+        s.execute("layer.mergeDown", json!({"layer": upper.0})).unwrap();
+        let merged = doc(&s).layer(lower).unwrap().clone();
+        assert_eq!(merged.fill_opacity, 0.0, "depth {depth}: the fill inherits onto the merged layer");
+        assert_eq!(merged.effects.items.len(), 1, "depth {depth}: the style stays live");
+        let after_ink = ink(&s);
+        assert!(after_ink.iter().take(3).all(|v| *v > 0.9), "depth {depth}: the inherited zero fill hides the union ink: {before_ink:?} -> {after_ink:?}");
+        let after_glow = glow(&s);
+        assert!(
+            after_glow.iter().take(3).zip(&before_glow).all(|(a, b)| *a < *b - 0.03),
+            "depth {depth}: the glow re-renders around the invisible union: {before_glow:?} -> {after_glow:?}"
+        );
+    }
+}
+
+#[test]
 fn merging_selected_layers_bakes_the_bottom_layers_style_to_pixels() {
     // Observed in Photoshop (fixtures in PR #8750): ⌘E over a selection merges the selected
     // layers preserving the visible composite — the bottommost layer's style is baked into
