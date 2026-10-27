@@ -733,6 +733,10 @@ colors, and changing those colors invalidates both cached frames and pending wor
 including when the preview proxy factor changes. A same-color frame at the old factor can
 remain visible during a drag until the new result arrives. This follows Adobe's documented
 [Indexed Color conversion options](https://helpx.adobe.com/photoshop/desktop/adjust-color/color-modes/conversion-options-for-indexed-color-images.html).
+Indexed Color converts the composited image from its composite ICC profile to encoded sRGB
+before palette construction and quantization, preserving alpha. The resulting expanded RGB
+samples and color table are tagged sRGB. Untagged/sRGB input retains the identity fast path;
+the stock dialog and quantizer are unchanged.
 `cargo run --release -p photocraft-engine --example indexed_color_perf -- image.png` measures
 palette construction, Floyd–Steinberg diffusion, and the complete full-resolution CPU preview
 path (proxy copy, engine command, result composition; excludes GPU upload/presentation).

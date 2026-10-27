@@ -10,6 +10,8 @@
 use craft_cms::{ColorSpace, TransformOptions};
 use photocraft_algo::quantize::{self, BitmapMethod, Dither, Forced, HalftoneShape, PaletteKind};
 use photocraft_algo::transform::{Homography, Interp};
+use photocraft_cms::{Builtin, TransformOptions};
+
 use photocraft_color::{ColorMode, PixelFormat, SampleType};
 use photocraft_doc::adjust::CurvePoint;
 use photocraft_doc::{ColorTable, Document, Duotone, DuotoneInk, Layer, LayerContent, LayerId, Size};
@@ -207,6 +209,32 @@ fn composite(doc: &Document, opaque: bool) -> Vec<[f32; 4]> {
     if opaque { buf.over_background([1.0, 1.0, 1.0]).into_px() } else { buf.into_px() }
 }
 
+/// Indexed storage and its palette are sRGB. Convert RGB/gray composites before quantisation so
+/// wide-gamut document samples are not interpreted as sRGB numbers by the quantizer.
+fn composite_in_srgb(doc: &Document, opaque: bool) -> Result<Vec<[f32; 4]>> {
+    const CMD: &str = "image.mode.indexedColor";
+    let mut pixels = composite(doc, opaque);
+    let channels = match doc.mode {
+        ColorMode::Grayscale | ColorMode::Bitmap | ColorMode::Duotone => 1,
+        ColorMode::Rgb | ColorMode::Indexed => 3,
+        _ => return Ok(pixels),
+    };
+    let source = crate::color_cmds::document_profile(doc);
+    let srgb = Builtin::Srgb.profile();
+    if source.same_colors(srgb) {
+        return Ok(pixels);
+    }
+    let transform =
+        photocraft_cms::cached(&source, srgb, TransformOptions::default()).map_err(|e| bad(CMD, format!("could not convert the composite to sRGB: {e}")))?;
+    let mut converted = [0.0f32; 16];
+    for pixel in &mut pixels {
+        let input = if channels == 1 { &pixel[..1] } else { &pixel[..3] };
+        transform.eval(input, &mut converted);
+        pixel[..3].copy_from_slice(&converted[..3]);
+    }
+    Ok(pixels)
+}
+
 /// Replace the document's layers by one 8-bit layer holding `px` in `mode`'s storage format.
 fn single_layer(doc: &mut Document, active: &mut Option<LayerId>, mode: ColorMode, px: &[[f32; 4]], name: &str, background: bool) {
     let fmt = storage_format(mode);
@@ -343,7 +371,7 @@ fn indexed_color(s: &mut Session, p: &Value) -> Result<Value> {
     let transparency = p.get("transparency").and_then(Value::as_bool).unwrap_or(true);
     let matte = indexed_matte(s, p)?;
     let (pal_len, transparent) = s.edit("Indexed Color", |doc, active| {
-        let mut px = composite(doc, !transparency && matte.is_none());
+        let mut px = composite_in_srgb(doc, !transparency && matte.is_none())?;
         if let Some(matte) = matte {
             for pixel in &mut px {
                 let alpha = pixel[3].clamp(0.0, 1.0);
@@ -369,6 +397,7 @@ fn indexed_color(s: &mut Session, p: &Value) -> Result<Value> {
         let w = doc.size.width as usize;
         quantize::quantize(&mut px, w, &pal, dither, amount, transparent);
         single_layer(doc, active, ColorMode::Indexed, &px, if transparent.is_some() { "Index" } else { "Background" }, transparent.is_none());
+        doc.icc_profile = Some(Builtin::Srgb.profile().to_bytes());
         doc.color_table = Some(ColorTable { colors: pal.clone(), transparent: transparent.map(|t| t as u8) });
         Ok((pal.len(), transparent))
     })?;

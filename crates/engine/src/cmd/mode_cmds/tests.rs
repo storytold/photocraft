@@ -355,6 +355,52 @@ fn indexed_matte_blends_edges_without_replacing_clear_pixels() {
             assert_eq!([1, 2].map(|x| doc(&s).layers[0].surface().unwrap().rgba(x, 0)), source);
             s.execute("edit.redo", json!({})).unwrap();
             assert_eq!([1, 2].map(|x| doc(&s).layers[0].surface().unwrap().rgba(x, 0)), edges);
+fn indexed_wide_gamut_composites_in_srgb_before_quantizing() {
+    for (profile_id, source) in [("display-p3", photocraft_cms::Builtin::DisplayP3), ("adobe-rgb-compat", photocraft_cms::Builtin::AdobeRgbCompat)] {
+        for depth in [8, 16, 32] {
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width": 2, "height": 1, "depth": depth, "mode": "rgb", "background": "transparent"})).unwrap();
+            paint(&mut s, |x, _| if x == 0 { [0.13, 0.41, 0.79, 1.0] } else { [0.71, 0.27, 0.19, 0.6] });
+            s.execute("edit.assignProfile", json!({"profile": profile_id})).unwrap();
+            let source_bytes = source.profile().to_bytes();
+            let source_profile = photocraft_cms::Profile::parse(&source_bytes).unwrap();
+            let to_srgb =
+                photocraft_cms::cached(&source_profile, photocraft_cms::Builtin::Srgb.profile(), photocraft_cms::TransformOptions::default()).unwrap();
+            let expected = |rgb: [f32; 3]| {
+                let mut out = [0.0f32; 16];
+                to_srgb.eval(&rgb, &mut out);
+                [0, 1, 2].map(|i| (out[i].clamp(0.0, 1.0) * 255.0).round() as u8)
+            };
+            let surface = doc(&s).layers[0].surface().unwrap();
+            let stored_a = surface.rgba(0, 0);
+            let stored_b = surface.rgba(1, 0);
+            let expected_a = expected([stored_a[0], stored_a[1], stored_a[2]]);
+            let expected_b = expected([stored_b[0], stored_b[1], stored_b[2]]);
+            assert_ne!(expected_a, [33, 105, 201], "{profile_id}: the regression colours must move");
+            assert_ne!(expected_b, [181, 69, 48], "{profile_id}: the regression colours must move");
+
+            s.execute("image.mode.indexedColor", json!({"palette": "exact", "forced": "none", "dither": "none"})).unwrap();
+            let d = doc(&s);
+            assert_eq!((d.mode, d.depth), (ColorMode::Indexed, SampleType::U8), "{profile_id} {depth}");
+            assert_eq!(d.icc_profile.as_deref(), Some(&*photocraft_cms::Builtin::Srgb.profile().to_bytes()), "{profile_id} {depth}");
+            let table = d.color_table.as_ref().unwrap();
+            assert!(table.colors.contains(&expected_a), "{profile_id} {depth}: {expected_a:?} not in {:?}", table.colors);
+            assert!(table.colors.contains(&expected_b), "{profile_id} {depth}: {expected_b:?} not in {:?}", table.colors);
+            let surface = d.layers[0].surface().unwrap();
+            for (x, (want, alpha)) in [(0, (expected_a, 1.0)), (1, (expected_b, 0.6))] {
+                let got = surface.rgba(x, 0);
+                let got8 = [0, 1, 2].map(|i| (got[i].clamp(0.0, 1.0) * 255.0).round() as u8);
+                assert_eq!(got8, want, "{profile_id} {depth} x={x}");
+                assert!((got[3] - alpha).abs() <= 1.0 / 255.0, "{profile_id} {depth} x={x}: {got:?}");
+            }
+
+            s.execute("edit.undo", json!({})).unwrap();
+            assert_eq!(doc(&s).mode, ColorMode::Rgb);
+            assert_eq!(doc(&s).icc_profile.as_deref(), Some(&*source_bytes));
+            s.execute("edit.redo", json!({})).unwrap();
+            assert_eq!(doc(&s).icc_profile.as_deref(), Some(&*photocraft_cms::Builtin::Srgb.profile().to_bytes()));
+            assert_eq!(doc(&s).layers[0].surface().unwrap().rgba(0, 0)[3], 1.0);
+            assert!((doc(&s).layers[0].surface().unwrap().rgba(1, 0)[3] - 0.6).abs() <= 1.0 / 255.0);
         }
     }
 }
