@@ -476,6 +476,10 @@ fn main() -> eframe::Result {
             let session = Session::new();
             PhotocraftApp::install_type_reset_hooks(&cc.egui_ctx);
             let mut app = PhotocraftApp::new(session, services);
+            // Desktop palette tools rewrite this file on a theme change; the app follows it live (#8112).
+            if let Some(dir) = app_dirs::config_dir() {
+                app.follow_theme_file(dir.join("theme.json"));
+            }
             app.min_frame_ms = uncapped.then_some(1000.0 / 240.0);
             app.integrated_titlebar = cfg!(target_os = "macos");
             app.custom_titlebar = custom_titlebar;

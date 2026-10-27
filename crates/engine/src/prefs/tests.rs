@@ -64,6 +64,31 @@ fn canvas_dot_grid_can_be_disabled_persisted_and_reset() {
     assert!(s.prefs().interface.show_canvas_dots);
 }
 
+/// The desktop-accent tint is on by default, the choice persists, and opting out restores the
+/// shipped accents.
+#[test]
+fn accent_colors_preference_defaults_on_persists_and_resets() {
+    let mut s = Session::new();
+    assert!(s.prefs().interface.accent_colors, "the desktop accent is followed by default");
+    assert_eq!(s.execute("prefs.get", json!({"path": "interface.accentColors"})).unwrap(), json!(true));
+
+    assert!(s.execute("prefs.set", json!({"path": "interface.accentColors", "value": "yes"})).is_err());
+    assert!(s.prefs().interface.accent_colors, "an invalid type must not change the preference");
+
+    s.execute("prefs.set", json!({"path": "interface.accentColors", "value": false})).unwrap();
+    assert!(!s.prefs().interface.accent_colors);
+    let mut restored = Session::new();
+    restored.load_prefs_json(&s.prefs_to_json()).unwrap();
+    assert!(!restored.prefs().interface.accent_colors, "the choice must survive restart");
+
+    let mut legacy = Session::new();
+    legacy.load_prefs_json(r#"{"interface": {"theme": "studio"}}"#).unwrap();
+    assert!(legacy.prefs().interface.accent_colors);
+
+    s.execute("prefs.reset", json!({"path": "interface.accentColors"})).unwrap();
+    assert!(s.prefs().interface.accent_colors);
+}
+
 /// UI-217-10: the Home screen's recent-files list can be switched off and the choice persists.
 #[test]
 fn home_recent_files_preference_defaults_on_persists_and_resets() {

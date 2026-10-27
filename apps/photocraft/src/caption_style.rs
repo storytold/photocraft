@@ -63,7 +63,7 @@ fn family(desktop: Desktop, gtk_theme: Option<&str>) -> CaptionFamily {
 
 /// The value of `key` in `[section]` of an INI-style file (GTK's `settings.ini`, KDE's `kwinrc`).
 #[cfg(target_os = "linux")]
-fn ini_value(text: &str, section: &str, key: &str) -> Option<String> {
+pub(crate) fn ini_value(text: &str, section: &str, key: &str) -> Option<String> {
     let mut inside = false;
     for line in text.lines().map(str::trim) {
         if let Some(name) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
@@ -133,7 +133,7 @@ fn resolve(desktop: Desktop, found: &Found, var: &dyn Fn(&str) -> Option<String>
 }
 
 #[cfg(target_os = "linux")]
-fn read_text(path: &std::path::Path) -> Option<String> {
+pub(crate) fn read_text(path: &std::path::Path) -> Option<String> {
     crate::icon_theme::read_small(path).map(|b| String::from_utf8_lossy(&b).into_owned())
 }
 

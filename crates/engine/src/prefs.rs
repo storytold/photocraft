@@ -262,6 +262,9 @@ pub struct Interface {
     pub light_theme: LightTheme,
     /// Theme shortcuts shown in the appearance button's context menu.
     pub favorite_themes: Vec<Theme>,
+    /// Tint the selected theme's accent family with the desktop accent colour (on by default;
+    /// off restores the shipped accents).
+    pub accent_colors: bool,
     /// Pasteboard colour in standard screen mode (`canvasCustomColor` when "custom").
     pub canvas_color: CanvasColor,
     pub canvas_custom_color: String,
@@ -316,6 +319,7 @@ impl Default for Interface {
             dark_theme: DarkTheme::ProMedium,
             light_theme: LightTheme::ProLight,
             favorite_themes: Vec::new(),
+            accent_colors: true,
             canvas_color: CanvasColor::Default,
             canvas_custom_color: "#282828".into(),
             show_canvas_dots: true,

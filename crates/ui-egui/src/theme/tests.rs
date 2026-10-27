@@ -149,6 +149,49 @@ fn field_selection_is_grey_only_for_the_monochrome_pro_themes() {
 }
 
 #[test]
+fn tint_accent_recolours_only_the_accent_family() {
+    for kind in [ThemeKind::Pro, ThemeKind::StudioLight, ThemeKind::AdwaitaDark] {
+        let base = Tokens::for_kind(kind);
+        let mut t = base;
+        let accent = Color32::from_rgb(0xed, 0x5b, 0x00);
+        tint_accent(&mut t, accent);
+        assert_eq!(t.accent, accent);
+        assert_eq!(t.accent_border, accent);
+        assert_eq!(t.primary_bg, accent);
+        assert_eq!(t.primary_text, Color32::BLACK, "orange takes black text: 6.1:1 against 3.4:1 for white ({kind:?})");
+        assert_eq!(t.accent_text, base.accent_text, "accent labels keep the theme's own colour ({kind:?})");
+        // The soft tints stay near the theme's own card colour, in both modes.
+        let near = |a: Color32, b: Color32| {
+            (a.r() as i32 - b.r() as i32).abs() < 90 && (a.g() as i32 - b.g() as i32).abs() < 90 && (a.b() as i32 - b.b() as i32).abs() < 90
+        };
+        assert!(near(t.accent_soft, t.card), "{kind:?} accent_soft {t:?} vs card {card:?}", card = base.card);
+        assert!(near(t.row_selected, t.card), "{kind:?} row_selected drifts from the card colour");
+        // Surfaces are untouched, so the stock contrast guarantees keep holding.
+        assert_eq!(t.card, base.card);
+        assert_eq!(t.text, base.text);
+        assert_eq!(t.chrome, base.chrome);
+    }
+}
+
+#[test]
+fn tint_accent_picks_on_accent_text_by_contrast() {
+    // Mid-tone desktop accents (GNOME's blue and green, and the orange) all take black:
+    // white on them sits under 4.5:1, the luminance midpoint used to miss that.
+    for (accent, want) in [
+        (Color32::from_rgb(0x0a, 0x0a, 0x0a), Color32::WHITE),
+        (Color32::from_rgb(0xf0, 0xf0, 0xf0), Color32::BLACK),
+        (Color32::from_rgb(0x35, 0x84, 0xe4), Color32::BLACK),
+        (Color32::from_rgb(0x3a, 0x94, 0x4a), Color32::BLACK),
+        (Color32::from_rgb(0xed, 0x5b, 0x00), Color32::BLACK),
+    ] {
+        let mut t = Tokens::for_kind(ThemeKind::Pro);
+        tint_accent(&mut t, accent);
+        assert_eq!(t.primary_text, want);
+        assert!(contrast(t.primary_text, t.primary_bg) >= 4.5, "{accent:?}: {}", contrast(t.primary_text, t.primary_bg));
+    }
+}
+
+#[test]
 fn theme_names_parse() {
     assert_eq!(ThemeKind::from_name("Classic"), Some(ThemeKind::Classic));
     assert_eq!(ThemeKind::from_name("studio (light)"), Some(ThemeKind::StudioLight));

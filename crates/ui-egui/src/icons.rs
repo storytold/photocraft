@@ -163,7 +163,7 @@ pub fn button_chrome(ui: &egui::Ui, rect: Rect, selected: bool, hovered: bool) -
         ui.painter().rect_filled(rect, t.radius_sm, t.hover);
     }
     if selected {
-        t.accent_text
+        t.icon
     } else if hovered {
         t.text
     } else {
@@ -189,7 +189,7 @@ pub fn button_with_icon_size_tip(ui: &mut egui::Ui, name: &str, box_size: f32, i
         normal: ButtonVisuals { fill: Color32::TRANSPARENT, stroke: egui::Stroke::NONE, icon: t.icon },
         hovered: ButtonVisuals { fill: t.hover, stroke: egui::Stroke::NONE, icon: t.text },
         pressed: None,
-        selected: ButtonVisuals { fill: t.accent_soft, stroke: egui::Stroke::new(1.0, t.accent_border), icon: t.accent_text },
+        selected: ButtonVisuals { fill: t.accent_soft, stroke: egui::Stroke::new(1.0, t.accent_border), icon: t.icon },
         corner_radius: t.radius_sm.into(),
         focus_stroke: egui::Stroke::new(1.0, t.accent),
     };

@@ -170,7 +170,7 @@ By default PhotoCraft's own crates log at `info` and everything else at `warn`. 
 | `PHOTOCRAFT_PRESENT_MODE=novsync` (or `--present-mode`) | Present mode for this launch: `fifo`, `autovsync`, or `novsync` (also `immediate`, `mailbox`: no vsync, the first of Immediate, Mailbox, Fifo the driver offers). Default: vsync, or no vsync when Preferences › Performance › Low-Latency Drawing is on (it ships off). For latency comparisons; shown in the stroke trace. A bad `--present-mode` is a usage error; a bad variable is logged and ignored |
 | `PHOTOCRAFT_FRAME_LATENCY=1` (or `--frame-latency`) | Frames the swap chain may queue, 1 to 3 (wgpu's GL backend ignores it). For latency comparisons; shown in the stroke trace. A bad `--frame-latency` is a usage error; a bad variable is logged and ignored |
 | `PHOTOCRAFT_PRINT_PORTAL=1` | Linux: File › Print always opens the system print dialog (the XDG print portal) instead of talking to CUPS; `0` never does. See [printing](printing.md). |
-| `PHOTOCRAFT_THEME_FILE=tokens.json` | **Debug builds only:** live design-token overrides, re-read on change |
+| `PHOTOCRAFT_THEME_FILE=tokens.json` | Live design-token overrides, re-read on change; overrides the default file the app follows, `theme.json` in the settings directory (the same directory as `preferences.json`) |
 
 ### Live design tokens
 
@@ -178,7 +178,9 @@ By default PhotoCraft's own crates log at `info` and everything else at `warn`. 
 { "card": "#323232", "tab_strip": "#262626", "accent": "#378ef0", "radius": 4 }
 ```
 
-Keys are the field names of `theme::Tokens` (`crates/ui-egui/src/theme.rs`). Edit and save the file while the app runs to see changes immediately, with no recompile. This is compiled out of release builds.
+Keys are the field names of `theme::Tokens` (`crates/ui-egui/src/theme.rs`). Edit and save the file while the app runs to see changes immediately, with no recompile.
+
+Release builds watch `theme.json` in the settings directory — the same directory as `preferences.json` (`~/.config/photocraft/theme.json` on Linux, honouring `PHOTOCRAFT_CONFIG_DIR` and portable mode) — the same way, so the app can follow the desktop: palette tools such as matugen, pywal or base16 rewrite the file when the scheme changes and PhotoCraft recolours live, including when the selected theme or the system dark/light appearance switches. The file overrides the colours of whichever theme is selected; the selected theme still decides the dark or light chrome, so AppearanceMode › Auto keeps following the system. Missing keys keep the base theme's value; an unreadable file is skipped with a warning, keeping the last good colours; removing the file falls back to the selected theme at once.
 
 ### Stroke latency trace
 
