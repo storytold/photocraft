@@ -5,3 +5,9 @@ allow-indexing-slicing-in-tests = true
 disallowed-types = [
     { path = "egui::ComboBox", reason = "use craft_ui::ComboBox: egui's combo box menu can't grow back while open (egui#5225)" },
 ]
+cognitive-complexity-threshold = 30
+
+[workspace.lints.clippy]
+cognitive_complexity = "deny"
+too_many_arguments = "deny"
+wildcard_imports = "deny"
