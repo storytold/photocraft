@@ -2,7 +2,7 @@
 fn color_matcher_bvh_and_transparency() {
     let red = [1.0, 0.0, 0.0, 1.0];
     let blue = [0.0, 0.0, 1.0, 1.0];
-    let matcher = ColorMatcher::new([red, blue], 10.0 / 255.0);
+    let matcher = ColorMatcher::new([red, blue], 10.0 / 255.0).unwrap();
     assert!(!matcher.is_empty());
 
     assert!(matcher.matches([0.98, 0.02, 0.0, 1.0]));
@@ -14,13 +14,13 @@ fn color_matcher_bvh_and_transparency() {
     assert!(!matcher.matches([0.5, 0.0, 0.5, 1.0]));
     assert!(!matcher.matches([0.0, 0.0, 0.0, 0.0]));
 
-    let matcher_trans = ColorMatcher::new([red, [0.0, 0.0, 0.0, 0.0]], 10.0 / 255.0);
+    let matcher_trans = ColorMatcher::new([red, [0.0, 0.0, 0.0, 0.0]], 10.0 / 255.0).unwrap();
     assert!(matcher_trans.matches([0.0, 0.0, 0.0, 0.0]));
     assert!(matcher_trans.matches([0.5, 0.2, 0.1, 0.0]));
     assert!(matcher_trans.matches([0.98, 0.0, 0.0, 1.0]));
     assert!(!matcher_trans.matches([0.0, 1.0, 0.0, 1.0]));
 
-    let empty = ColorMatcher::new([], 10.0 / 255.0);
+    let empty = ColorMatcher::new([], 10.0 / 255.0).unwrap();
     assert!(empty.is_empty());
     assert!(!empty.matches(red));
 
@@ -28,7 +28,7 @@ fn color_matcher_bvh_and_transparency() {
     let faint = [0.0, 0.0, 0.0, 1e-6];
     assert!(!matcher_trans.matches([0.5, 0.2, 0.1, 1e-6]));
     assert!(matcher_trans.matches(faint));
-    let matcher_faint = ColorMatcher::new([faint], 10.0 / 255.0);
+    let matcher_faint = ColorMatcher::new([faint], 10.0 / 255.0).unwrap();
     assert!(matcher_faint.matches([0.0, 0.0, 0.0, 0.0]));
     assert!(!matcher_faint.matches([0.5, 0.0, 0.0, 0.0]));
 }
@@ -37,7 +37,7 @@ fn color_matcher_bvh_and_transparency() {
 fn color_matcher_preserves_distinct_faint_32f_colors_at_zero_tolerance() {
     let zero = [0.0, 0.0, 0.0, 0.0];
     let faint = [0.0, 0.0, 0.0, 8e-6];
-    let matcher = ColorMatcher::new([zero, faint], 0.0);
+    let matcher = ColorMatcher::new([zero, faint], 0.0).unwrap();
     assert!(matcher.matches(zero));
     assert!(matcher.matches(faint));
     assert!(!matcher.matches([0.0, 0.0, 0.0, 2e-5]));
@@ -48,7 +48,7 @@ fn color_matcher_coalesces_exact_repeated_colors() {
     let red = [1.0, 0.0, 0.0, 1.0];
     let transparent = [0.0, 0.0, 0.0, 0.0];
     let colors = std::iter::repeat_n(red, 10_000).chain(std::iter::repeat_n(transparent, 10_000));
-    let matcher = ColorMatcher::new(colors, 0.0);
+    let matcher = ColorMatcher::new(colors, 0.0).unwrap();
     assert!(matcher.matches(red));
     assert!(matcher.matches(transparent));
     assert!(!matcher.matches([0.0, 1.0, 0.0, 1.0]));
@@ -64,7 +64,7 @@ fn color_matcher_tree_matches_brute_force() {
         })
         .collect();
     let tol = 0.05;
-    let matcher = ColorMatcher::new(selected.iter().copied(), tol);
+    let matcher = ColorMatcher::new(selected.iter().copied(), tol).unwrap();
     for i in 0..2000 {
         let t = i as f32 / 1999.0;
         let q = [(t * 3.0).fract(), (t * 5.0).fract(), (t * 11.0).fract(), if i % 7 == 0 { 0.0 } else { 1.0 }];
@@ -727,4 +727,31 @@ fn combine_region_matches_combine() {
         }
     }
     assert!(combine_region(None, None, SelectionMode::Subtract).is_none());
+}
+
+#[test]
+fn color_matcher_bounds_tightly_clustered_leaves() {
+    let colors: Vec<_> = (0..1000).map(|i| [i as f32 * 1e-10, 0.0, 0.0, 1.0]).collect();
+    let matcher = ColorMatcher::new(colors.iter().copied(), 0.0).unwrap();
+    fn check(tree: &ColorBvh) {
+        match tree {
+            ColorBvh::Empty => (),
+            ColorBvh::Leaf(points) => assert!(points.len() <= 16),
+            ColorBvh::Node { left, right, .. } => {
+                check(left);
+                check(right);
+            }
+        }
+    }
+    check(&matcher.tree);
+    assert!(matcher.matches(colors[999]));
+    assert!(!matcher.matches([0.1, 0.0, 0.0, 1.0]));
+}
+
+#[test]
+fn color_matcher_limits_distinct_colors_but_not_duplicates() {
+    let red = [1.0, 0.0, 0.0, 1.0];
+    let blue = [0.0, 0.0, 1.0, 1.0];
+    assert!(ColorMatcher::with_limit([red, red, blue], 0.0, 2).is_ok());
+    assert!(ColorMatcher::with_limit([red, blue], 0.0, 1).is_err());
 }

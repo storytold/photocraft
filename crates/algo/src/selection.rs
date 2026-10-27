@@ -941,9 +941,6 @@ impl ColorBvh {
                 best_axis = c;
             }
         }
-        if max_spread <= 1e-6 {
-            return ColorBvh::Leaf(points);
-        }
         let mid = points.len() / 2;
         points.select_nth_unstable_by(mid, |a, b| a[best_axis].total_cmp(&b[best_axis]));
         let right_pts = points.split_off(mid);
@@ -977,7 +974,12 @@ impl ColorBvh {
 
 impl ColorMatcher {
     /// Creates a color matcher from selected RGBA colors and an $L_\\infty$ tolerance in $[0, 1]$.
-    pub fn new(selected_colors: impl IntoIterator<Item = [f32; 4]>, tol: f32) -> Self {
+    pub fn new(selected_colors: impl IntoIterator<Item = [f32; 4]>, tol: f32) -> Result<Self, &'static str> {
+        Self::with_limit(selected_colors, tol, 1_000_000)
+    }
+
+    // Bound the index independently of the input image and fail without altering the selection.
+    fn with_limit(selected_colors: impl IntoIterator<Item = [f32; 4]>, tol: f32, limit: usize) -> Result<Self, &'static str> {
         let mut has_transparent = false;
         let mut seen = std::collections::HashSet::new();
         let mut opaque_or_semi = Vec::new();
@@ -987,16 +989,23 @@ impl ColorMatcher {
             has_transparent |= c[3] == 0.0;
             let norm = |x: f32| if x == 0.0 { 0.0f32.to_bits() } else { x.to_bits() };
             let key = [norm(c[0]), norm(c[1]), norm(c[2]), norm(c[3])];
-            if seen.insert(key) {
+            if !seen.contains(&key) {
+                if seen.len() >= limit {
+                    return Err("the selection contains too many distinct colours to match; select a smaller area");
+                }
+                seen.try_reserve(1).map_err(|_| "not enough memory to index selection colours")?;
+                opaque_or_semi.try_reserve(1).map_err(|_| "not enough memory to index selection colours")?;
+                seen.insert(key);
                 opaque_or_semi.push(c);
             }
         }
+        drop(seen);
         opaque_or_semi.sort_unstable_by(|a, b| {
             a[0].total_cmp(&b[0]).then_with(|| a[1].total_cmp(&b[1])).then_with(|| a[2].total_cmp(&b[2])).then_with(|| a[3].total_cmp(&b[3]))
         });
         opaque_or_semi.dedup_by(|a, b| a == b);
 
-        Self { has_transparent, tree: ColorBvh::build(opaque_or_semi), tol: tol.max(0.0) }
+        Ok(Self { has_transparent, tree: ColorBvh::build(opaque_or_semi), tol: tol.max(0.0) })
     }
 
     /// Returns `true` if no colors (including transparent pixels) were provided.

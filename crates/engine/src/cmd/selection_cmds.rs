@@ -541,7 +541,8 @@ fn grow_similar(s: &mut Session, p: &Value, contiguous: bool) -> Result<Value> {
     let tol = f(p, "tolerance", 32.0) / 255.0;
     let (area, px) = sample_pixels(s, b(p, "sampleAllLayers", false))?;
     let (_, m) = current_mask(&s.active().ok_or(EngineError::NoDocument)?.doc);
-    let matcher = sel::ColorMatcher::new(px.iter().zip(&m).filter_map(|(q, v)| (*v >= 0.5).then_some(*q)), tol);
+    let matcher =
+        sel::ColorMatcher::new(px.iter().zip(&m).filter_map(|(q, v)| (*v >= 0.5).then_some(*q)), tol).map_err(|message| EngineError::Other(message.into()))?;
     if matcher.is_empty() {
         return Err(EngineError::Other("selection is empty".into()));
     }
