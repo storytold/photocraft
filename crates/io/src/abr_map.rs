@@ -130,9 +130,11 @@ pub fn map_file_with(f: &AbrFile, group: &str, ctl: &photocraft_raster::Interrup
 
 // ------------------------------------------------------------------ descriptor helpers
 
+/// The value at `k`.
 fn get<'a>(d: &'a Descriptor, k: &str) -> Option<&'a Value> {
     d.get(k)
 }
+/// The finite number at `k`.
 fn num(d: &Descriptor, k: &str) -> Option<f64> {
     d.get_number(k).filter(|v| v.is_finite())
 }
@@ -141,6 +143,7 @@ fn pct(d: &Descriptor, k: &str) -> Option<f32> {
     num(d, k).map(|v| (v / 100.0) as f32)
 }
 
+/// The texture or dual brush blend mode a mode code names.
 fn mask_mode(code: Option<String>) -> Option<MaskMode> {
     Some(match code?.as_str() {
         "Mltp" => MaskMode::Multiply,
@@ -284,6 +287,7 @@ impl Mapper<'_> {
         Some((tip, Some(size)))
     }
 
+    /// The pattern a brush texture names, matched by id and then by name.
     fn pattern(&mut self, t: &Descriptor) -> Pattern {
         let id = t.get_text("Idnt").unwrap_or_default();
         let name = t.get_text("Nm  ").unwrap_or_default();
@@ -318,6 +322,7 @@ impl Mapper<'_> {
         }
     }
 
+    /// Brush settings from one brush preset, noting the keys it does not map.
     fn preset(&mut self, d: &Descriptor) -> Option<BrushSettings> {
         for (k, _) in &d.items {
             let k = String::from_utf8_lossy(k.as_bytes()).to_string();
@@ -494,6 +499,7 @@ impl Mapper<'_> {
     }
 }
 
+/// Whether `to` sets a blend mode other than Normal.
 fn mask_blend_is_set(to: &Descriptor) -> bool {
     to.get_enum("Md  ").is_some_and(|m| m != "Nrml")
 }

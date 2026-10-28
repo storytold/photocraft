@@ -74,6 +74,7 @@ pub struct PrintPage {
 // not UTF-8. Escape non-ASCII bytes as three octal digits so the content stays ASCII
 // and a following digit cannot become part of the escape. Other scripts still need
 // an embedded font; retain the existing '?' fallback for unsupported characters.
+/// A PDF literal string for `s` in WinAnsi encoding.
 fn pdf_string(s: &str) -> String {
     let mut o = String::from("(");
     for c in s.chars() {
@@ -170,6 +171,7 @@ pub fn print_pdf(page: &PrintPage) -> Vec<u8> {
     print_pdf_with_vectors(page, "", None)
 }
 
+/// The page content: paper, image, marks and texts, mirrored for Emulsion Down.
 fn content_stream(page: &PrintPage, vectors: &str) -> String {
     let (pw, ph) = page.paper;
     let (x, y, w, h) = page.rect;

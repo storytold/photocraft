@@ -192,6 +192,7 @@ pub struct DocumentPreset {
     pub settings: DocumentSettings,
 }
 
+/// The trimmed preset name, or an error when it is empty or too long.
 pub(crate) fn checked_name(name: &str) -> std::result::Result<String, String> {
     let name = name.trim();
     if name.is_empty() || name.chars().count() > crate::brush_preset_cmds::MAX_NAME {

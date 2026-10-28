@@ -1,5 +1,8 @@
 use super::adjustments::{HUE_RANGES, adjustment_by_class, adjustment_by_suffix, adjustment_steps, levels_complete};
-use super::descriptors::{PCT, PX, Target, ang, class, class_ref, code, color_desc, color_hex, desc, enm, get_enum, get_list, get_num, get_ref, jbool, jnum, jstr, layer_ref, layer_target, long, name_ref, pct, px, ref_class, target, target_ref, text, trimmed};
+use super::descriptors::{
+    PCT, PX, Target, ang, class, class_ref, code, color_desc, color_hex, desc, enm, get_enum, get_list, get_num, get_ref, jbool, jnum, jstr, layer_ref,
+    layer_target, long, name_ref, pct, px, ref_class, target, target_ref, text, trimmed,
+};
 use super::fields::{Mapped, none, step, steps};
 use super::steps_layer::quick_mask_ref;
 use super::tables::{LABEL_COLORS, MODES, blend_label, blend_ps, lookup, lookup_back};
@@ -83,6 +86,7 @@ const MASK_USING: &[(&str, &str)] = &[
     ("HdSl", "layer.layerMask.hideSelection"),
 ];
 
+/// Duplicate Layer into a new document, when the recorded Make step is one.
 fn duplicate_layer_from_descriptor(d: &Descriptor) -> Option<Mapped> {
     let r = get_ref(d, "null")?;
     if ref_class(r).as_deref() != Some("Dcmn") || !matches!(target(r), Target::Class) {
@@ -103,6 +107,7 @@ fn duplicate_layer_from_descriptor(d: &Descriptor) -> Option<Mapped> {
     Some(step("layer.duplicate", Value::Object(params)))
 }
 
+/// Add Layer Mask, when the recorded Make step makes a mask channel.
 fn mask_from_descriptor(d: &Descriptor) -> Option<Mapped> {
     let Some(D::Class(c)) = d.get("Nw  ") else { return None };
     if trimmed(&c.class_id) != "Chnl" {
@@ -615,6 +620,7 @@ fn selection_from(d: &Descriptor) -> Mapped {
     }
 }
 
+/// Background from Layer or Layer from Background, as the recorded step converts.
 fn background_from(d: &Descriptor) -> Mapped {
     let unsupported = Mapped::Unsupported { harmless: false };
     // On an image that opened as a normal layer there is no Background to convert;
@@ -761,6 +767,7 @@ fn layer_set_from(d: &Descriptor, r: &[ReferenceItem]) -> Mapped {
     }
 }
 
+/// The command a recorded Set step replays as.
 pub(super) fn set_from(d: &Descriptor) -> Mapped {
     let Some(r) = get_ref(d, "null") else { return Mapped::Unsupported { harmless: false } };
     let unsupported = Mapped::Unsupported { harmless: false };

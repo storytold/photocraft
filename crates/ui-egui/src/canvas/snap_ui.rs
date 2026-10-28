@@ -131,6 +131,7 @@ pub(crate) fn follow_cut(app: &mut PhotocraftApp) {
     }
 }
 
+/// Whether `t` drags from a point that snaps, as a marquee or crop corner does.
 fn is_point_tool(t: Tool) -> bool {
     matches!(
         t,
@@ -154,6 +155,7 @@ fn is_point_tool(t: Tool) -> bool {
     )
 }
 
+/// The bounding box of a quad as `[x0, y0, x1, y1]`.
 fn quad_rect(q: &[[f64; 2]; 4]) -> [f64; 4] {
     let xs = q.iter().map(|p| p[0]);
     let ys = q.iter().map(|p| p[1]);

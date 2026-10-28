@@ -1,4 +1,7 @@
-use super::descriptors::{PX, Target, ang, boolean, class, code, desc, enm, enumerated, get_enum, get_list, get_num, get_ref, jbool, jnum, jstr, layer_ref, layer_target, long, num, pct, px, ref_class, target, trimmed};
+use super::descriptors::{
+    PX, Target, ang, boolean, class, code, desc, enm, enumerated, get_enum, get_list, get_num, get_ref, jbool, jnum, jstr, layer_ref, layer_target, long, num,
+    pct, px, ref_class, target, trimmed,
+};
 use super::events::pixel_target;
 use super::fields::{F, Kind, Mapped, fields_from, fields_to, step};
 use super::tables::{CHANNELS, INTERPOLATION, RADIAL_METHOD, RADIAL_QUALITY, channel_of, lookup, lookup_back};
@@ -155,6 +158,7 @@ pub(super) const CALC_BLEND: &[(&str, &str)] = &[
 const SOURCE_CHANNELS: &[(&str, &str)] =
     &[("RGB", "composite"), ("CMYK", "composite"), ("Lab", "composite"), ("Trsp", "transparency"), ("Msk", "mask"), ("fsel", "selection")];
 
+/// The Apply Image command a recorded Apply Image step replays as.
 pub(super) fn apply_image_from(d: &Descriptor) -> Mapped {
     let unsupported = Mapped::Unsupported { harmless: false };
     let Some(with) = d.get_object("With") else { return unsupported };

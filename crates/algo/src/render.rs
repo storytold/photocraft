@@ -7,6 +7,7 @@ use crate::image::Image;
 use crate::noise::value_noise;
 use crate::{Ctx, Light, LightKind, TextureChannel};
 
+/// A hash of a lattice point to [0, 1] for the cloud filters.
 fn cloud_hash(x: i32, y: i32, seed: u32) -> f32 {
     let mut h = (x as u32).wrapping_mul(0x8da6_b343) ^ (y as u32).wrapping_mul(0xd816_3841) ^ seed.wrapping_mul(0xcb1a_b31f);
     h ^= h >> 13;

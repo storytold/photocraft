@@ -2,6 +2,7 @@
 use craft_print::rgb::{Primitive, Shape};
 use photocraft_io::pdf::{MARK_GAP, MARK_LEN, Marks, corner_crop_segments};
 
+/// The printer marks around `(x, y, w, h)` as line primitives for a Windows print.
 pub(super) fn primitives(marks: Marks, (x, y, w, h): (f64, f64, f64, f64)) -> Vec<Primitive> {
     let mut out = Vec::with_capacity(24);
     let line = |out: &mut Vec<Primitive>, x0, y0, x1, y1| {

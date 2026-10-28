@@ -179,10 +179,12 @@ struct PreparedGradient {
 }
 
 impl PreparedGradient {
+    /// A gradient's colour and opacity stops, ready to sample.
     fn new(g: &Gradient) -> Self {
         Self { color: g.stops.iter().map(|(p, c)| (*p, rgb(c))).collect(), opacity: g.opacity_stops.iter().map(|(p, a)| (*p, [*a; 3])).collect() }
     }
 
+    /// The RGBA colour at `t` along the gradient.
     fn sample(&self, t: f32) -> [f32; 4] {
         let color = crate::adjust::gradient(&self.color, t);
         let alpha = if self.opacity.is_empty() { 1.0 } else { crate::adjust::gradient(&self.opacity, t)[0] };

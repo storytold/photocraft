@@ -656,6 +656,7 @@ fn button_label_color(color: &str, t: &Tokens) -> Color32 {
     if color.is_empty() { t.text } else { Color32::from_rgb(20, 20, 20) }
 }
 
+/// Draws a checkbox in `rect`, ticked when `on`.
 fn paint_check(ui: &egui::Ui, rect: Rect, on: bool, t: &Tokens) {
     let b = Rect::from_center_size(rect.center(), vec2(11.0, 11.0));
     ui.painter().rect_stroke(b, 2.0, Stroke::new(1.0, t.text_faint), egui::StrokeKind::Inside);
@@ -665,6 +666,7 @@ fn paint_check(ui: &egui::Ui, rect: Rect, on: bool, t: &Tokens) {
     }
 }
 
+/// The label an action step shows in the Actions panel.
 fn step_label(id: &str, params: &Value) -> String {
     if id == "actions.play" {
         let target = params.get("action").map(|v| v.as_str().map(str::to_owned).unwrap_or_else(|| v.to_string())).unwrap_or_default();

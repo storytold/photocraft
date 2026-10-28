@@ -15,15 +15,18 @@ use crate::{EngineError, Result, Session};
 
 const ID: &str = "layer.setExpanded";
 
+/// A `layer.setExpanded` parameter error.
 fn bad(msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: ID.into(), msg: msg.into() }
 }
 
+/// Enabled while the document has a layer group.
 fn has_group(s: &Session) -> std::result::Result<(), String> {
     let d = s.active().ok_or("no document open")?;
     if d.doc.walk().iter().any(|(_, _, l)| l.is_group()) { Ok(()) } else { Err("the document has no layer groups".into()) }
 }
 
+/// Expands or collapses every group in `layers` and counts them.
 fn set_all(layers: &mut [Layer], expanded: bool) -> usize {
     let mut n = 0;
     for l in layers {

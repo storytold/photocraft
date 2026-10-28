@@ -73,9 +73,11 @@ fn finite(v: f64) -> Option<f32> {
     }
     Some(v.clamp(f64::from(f32::MIN), f64::from(f32::MAX)) as f32)
 }
+/// The finite `f32` at `k`, or 0.
 fn f(d: &Descriptor, k: &str) -> f32 {
     finite(d.get_number(k).unwrap_or(0.0)).unwrap_or(0.0)
 }
+/// `v` clamped to 0..=1.
 fn clamp01(v: f32) -> f32 {
     v.clamp(0.0, 1.0)
 }
@@ -87,6 +89,7 @@ fn hue(h: f32) -> f32 {
     if (0.0..=360.0).contains(&h) { h } else { h.rem_euclid(360.0) }
 }
 
+/// The list at `k`, empty when absent.
 fn list<'a>(d: &'a Descriptor, k: &str) -> &'a [Value] {
     match d.get(k) {
         Some(Value::List(v)) => v,
@@ -97,6 +100,7 @@ fn enum_is(d: &Descriptor, k: &str, v: &str) -> bool {
     matches!(d.get(k), Some(Value::Enumerated { value, .. }) if value.is(v))
 }
 
+/// A gradient stop colour in its recorded colour model.
 fn color(c: &Descriptor) -> Option<GrdColor> {
     let id = c.class_id.as_bytes();
     Some(match id {
@@ -117,13 +121,16 @@ fn color(c: &Descriptor) -> Option<GrdColor> {
     })
 }
 
+/// A stop's location as a 0..1 fraction.
 fn location(d: &Descriptor) -> f32 {
     (f(d, "Lctn") / 4096.0).clamp(0.0, 1.0)
 }
+/// A stop's midpoint as a 0..1 fraction, 0.5 when absent.
 fn midpoint(d: &Descriptor) -> f32 {
     finite(d.get_number("Mdpn").unwrap_or(50.0) / 100.0).unwrap_or(0.5).clamp(0.0, 1.0)
 }
 
+/// One gradient from its descriptor.
 fn gradient(g: &Descriptor) -> GrdGradient {
     let name = match g.get("Nm  ") {
         Some(Value::Text(t)) => t.to_string_lossy(),

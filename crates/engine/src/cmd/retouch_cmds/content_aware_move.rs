@@ -75,6 +75,7 @@ fn level(cmd: &str, p: &Value, k: &str, default: u8, (lo, hi): (u8, u8)) -> Resu
     }
 }
 
+/// The Structure (1..=7) and Color (0..=10) levels of a content-aware step.
 pub(super) fn structure_and_color(cmd: &str, p: &Value) -> Result<(u8, u8)> {
     Ok((level(cmd, p, "structure", 4, (1, 7))?, level(cmd, p, "color", 0, (0, 10))?))
 }
@@ -207,6 +208,7 @@ fn landed_mask(cov: &[f32], area: Rect, inv: &Homography, rect: Rect) -> Vec<boo
         .collect()
 }
 
+/// The checked params of a Content-Aware Move or Extend step.
 fn plan(s: &Session, p: &Value, margin: i32) -> Result<Plan> {
     let mode = match string(p, "mode", "move") {
         "move" => Mode::Move,

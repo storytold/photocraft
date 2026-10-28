@@ -10,6 +10,7 @@ use super::{
 // ---------------------------------------------------------------------------------------------
 // Channel management
 
+/// What a channel colour indicates, from its param.
 fn indicates_param(v: Option<&Value>) -> Option<ColorIndicates> {
     match v?.as_str()? {
         "masked" | "maskedAreas" => Some(ColorIndicates::MaskedAreas),
@@ -18,6 +19,7 @@ fn indicates_param(v: Option<&Value>) -> Option<ColorIndicates> {
     }
 }
 
+/// Adds an alpha channel (Channels › New Channel).
 pub(super) fn new_channel(s: &mut Session, p: &Value) -> Result<Value> {
     let fill = p.get("fill").and_then(Value::as_str).unwrap_or("black").to_string();
     let name = p.get("name").and_then(Value::as_str).map(str::to_string);
@@ -50,6 +52,7 @@ pub(super) fn new_channel(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "channel": i }))
 }
 
+/// Adds a spot colour channel (Channels › New Spot Channel).
 pub(super) fn new_spot(s: &mut Session, p: &Value) -> Result<Value> {
     let color = crate::analysis_cmds::color_of("channel.newSpot", p, "color")?.unwrap_or(Color::rgb(1.0, 0.0, 0.0));
     let solidity = p.get("solidity").and_then(Value::as_f64).unwrap_or(0.0).clamp(0.0, 100.0) as f32 / 100.0;
@@ -236,6 +239,7 @@ pub(super) fn move_channel(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "channel": to }))
 }
 
+/// Shows or hides a channel (the Channels panel's eye).
 pub(super) fn set_visible(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "channel.setVisible";
     let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
@@ -266,6 +270,7 @@ pub(super) fn set_visible(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(list(s))
 }
 
+/// Changes a channel's name, colour, opacity or what it indicates (Channel Options).
 pub(super) fn options(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "channel.options";
     let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;

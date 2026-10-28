@@ -253,6 +253,7 @@ pub fn apply_to_surface(id: &str, params: &Value, surf: &Surface, canvas: Rect) 
 
 // ---------- commands ----------
 
+/// The camera and lens the document's EXIF names.
 fn camera_info(doc: &Document) -> Option<exif::CameraInfo> {
     doc.metadata.exif.as_ref().map(|e| exif::read(e))
 }
@@ -386,6 +387,7 @@ pub fn encoding_gamma(doc: &Document) -> f32 {
         .map_or(0.0, |(_, g)| g)
 }
 
+/// Applies Camera Raw settings to the target layer, with the document's encoding gamma.
 fn camera_raw_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     // The document's transfer curve goes with the settings, so a Smart Filter keeps it.
     let mut p = p.clone();

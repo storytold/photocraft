@@ -19,10 +19,12 @@ use serde_json::{Value, json};
 use crate::commands::{CommandSpec, layer_param};
 use crate::{EngineError, Result, Session};
 
+/// Enabled while a document is open.
 fn has_doc(s: &Session) -> std::result::Result<(), String> {
     s.active().map(|_| ()).ok_or_else(|| "no document open".into())
 }
 
+/// A parameter error for `cmd`.
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: cmd.into(), msg: msg.into() }
 }
@@ -55,10 +57,12 @@ pub(crate) fn norm_text(s: &str) -> String {
     s.replace("\r\n", "\n").replace('\r', "\n")
 }
 
+/// The byte offset of character `ci` in `text`, or its length past the end.
 pub(crate) fn byte_at(text: &str, ci: usize) -> usize {
     text.char_indices().nth(ci).map_or(text.len(), |(b, _)| b)
 }
 
+/// The character index of byte offset `bi` in `text`.
 fn char_at(text: &str, bi: usize) -> usize {
     text[..bi.min(text.len())].chars().count()
 }
@@ -935,6 +939,7 @@ pub(crate) fn new_text_layer(s: &Session, p: &Value, cmd: &str) -> Result<TextLa
 
 const CHAR_PARAMS: &str = r##""font":str,"fontStyle":str,"weight":100..900,"italic":bool,"size":0.1..=1296 pt,"color":"#rrggbb"|[r,g,b,a],"tracking":-1000..=10000 (1/1000 em),"leading":pt|"auto","baselineShift":pt,"horizontalScale":%,"verticalScale":%,"underline":bool,"strikethrough":bool,"fauxBold":bool,"fauxItalic":bool,"kerning":1/1000em (manual, after each character)|"metrics"|"optical"|"off","caps":"normal|small|all","baseline":"normal|superscript|subscript","ligatures":bool,"discretionaryLigatures":bool,"features":{"ss01":1},"variations":{"wght":650},"language":str"##;
 
+/// The type commands.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec {
@@ -1192,6 +1197,7 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
+/// Enabled while the active layer is a type layer.
 pub(crate) fn has_type_layer(s: &Session) -> std::result::Result<(), String> {
     let st = s.active().ok_or("no document open")?;
     match st.active_layer.and_then(|id| st.doc.layer(id)) {

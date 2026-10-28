@@ -132,6 +132,7 @@ pub(super) fn pixel_target(p: &Value) -> bool {
     p.get("target").is_none_or(|t| t.as_str() == Some("pixels"))
 }
 
+/// The Levels, Auto Tone or Auto Contrast command a recorded Levels step replays as.
 fn levels_event_from(d: &Descriptor) -> Mapped {
     if d.get_bool("Auto") == Some(true) {
         return none("image.autoTone");

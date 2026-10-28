@@ -190,6 +190,7 @@ pub fn apply_to_surface(id: &str, params: &Value, surf: &Surface, canvas: Rect) 
 
 // ---------- commands ----------
 
+/// Enabled while the active layer is a pixel layer or a rendered smart object.
 fn pixel_layer(s: &Session) -> std::result::Result<(), String> {
     let d = s.active().ok_or("no document open")?;
     let id = d.active_layer.ok_or("no active layer")?;
@@ -223,6 +224,7 @@ type MaskFn<'a> = Option<&'a dyn Fn(&Surface, Option<&Surface>) -> Result<Surfac
 /// Deforms a layer's pixels (with the selection and canvas); an `Err` leaves the layer as it was.
 type LayerFn<'a> = &'a dyn Fn(&Surface, Option<&Surface>, Rect) -> Result<Surface>;
 
+/// Runs a distortion on the target layer as one undoable step.
 fn run_on_layer(s: &mut Session, cmd: &str, label: &str, p: &Value, moves: bool, f: LayerFn, mask: MaskFn) -> Result<Value> {
     let id = layer_param(s, p)?;
     let colors = crate::color_channels::target(s, p)?.is_some();
@@ -263,6 +265,7 @@ fn run_on_layer(s: &mut Session, cmd: &str, label: &str, p: &Value, moves: bool,
     Ok(json!({"layer": id.0, "changed": true}))
 }
 
+/// Applies Liquify strokes to the target layer.
 fn liquify(s: &mut Session, p: &Value) -> Result<Value> {
     let canvas = s.active().ok_or(EngineError::NoDocument)?.doc.bounds();
     let (strokes, cell) = liquify_params(LIQUIFY, p, canvas)?;
@@ -316,6 +319,7 @@ fn deform_selected(surf: &Surface, sel: Option<&Surface>, f: &dyn Fn(&Surface) -
     }
 }
 
+/// Applies a Puppet Warp to the target layer.
 fn puppet(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
     let w = puppet_params(cmd, p)?;
     let id = layer_param(s, p)?;
@@ -344,6 +348,7 @@ fn puppet(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
     run_on_layer(s, cmd, "Puppet Warp", p, true, &layer_fn, Some(&mask_fn))
 }
 
+/// Applies a Perspective Warp to the target layer.
 fn perspective(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
     let planes = perspective_params(cmd, p)?;
     let id = layer_param(s, p)?;
