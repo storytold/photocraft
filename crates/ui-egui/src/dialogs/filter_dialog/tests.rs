@@ -45,6 +45,18 @@ fn color_settings_working_spaces_list_installed_profiles_of_their_space() {
     // The profile dialogs keep listing every destination profile.
     assert_eq!(installed_choices("edit.convertToProfile", "profile", &installed).len(), 5);
     assert!(installed_choices("filter.blur.gaussianBlur", "profile", &installed).is_empty());
+
+    // #9851: a separator divides built-in profiles from installed ones whenever installed choices exist.
+    let cmyk_installed = installed_choices("edit.colorSettings", "workingCmyk", &installed);
+    let mut opts = vec![("coated-cmyk".to_string(), "Coated CMYK")];
+    append_installed_options(&mut opts, &cmyk_installed, None, "coated-cmyk", "coated-cmyk");
+    assert_eq!(opts, vec![("coated-cmyk".into(), "Coated CMYK"), (String::new(), crate::widgets::DROPDOWN_SEPARATOR), ("gracol.icc".into(), "GRACOL.ICC"),]);
+
+    // When Assign Profile's colour-mode filter excludes all installed profiles, no trailing separator is added.
+    let allowed = [json!("srgb")];
+    let mut rgb_only = vec![("srgb".to_string(), "sRGB"), ("coated-cmyk".to_string(), "Coated CMYK")];
+    append_installed_options(&mut rgb_only, &cmyk_installed, Some(&allowed), "srgb", "srgb");
+    assert_eq!(rgb_only, vec![("srgb".into(), "sRGB")]);
 }
 
 /// #5710: the seed field's Random button always gives a different seed the field can hold.

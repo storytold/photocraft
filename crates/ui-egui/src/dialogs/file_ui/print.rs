@@ -521,12 +521,16 @@ pub(super) fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map
                     ("display-p3", tl!("Display P3")),
                     ("gray-gamma-2.2", tl!("Gray Gamma 2.2")),
                 ];
-                profiles.extend(installed.iter().map(|p| (p.path.as_str(), p.description.as_str())));
                 // A remembered profile that is no longer installed still shows, by its file name.
                 let cur = s(f, "printerProfile", "coated-cmyk");
                 let stem = std::path::Path::new(&cur).file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                if !profiles.iter().any(|(v, _)| *v == cur) {
-                    profiles.push((cur.as_str(), stem.as_str()));
+                let mut extra: Vec<(&str, &str)> = installed.iter().map(|p| (p.path.as_str(), p.description.as_str())).collect();
+                if !profiles.iter().chain(extra.iter()).any(|(v, _)| *v == cur) {
+                    extra.push((cur.as_str(), stem.as_str()));
+                }
+                if !extra.is_empty() {
+                    profiles.push(("", crate::widgets::DROPDOWN_SEPARATOR));
+                    profiles.extend(extra);
                 }
                 dropdown_str(ui, "print-profile", tl!("Profile"), f, "printerProfile", &profiles, 240.0);
                 ui.horizontal(|ui| {
