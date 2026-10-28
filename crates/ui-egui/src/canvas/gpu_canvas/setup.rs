@@ -1,5 +1,5 @@
 use super::texels::texels;
-use super::*;
+use super::{egui_wgpu, wgpu};
 
 /// A CPU composite as the canvas texture stores it (`display`'s encoding; as is without one).
 pub(super) fn texture_buffer<'a>(

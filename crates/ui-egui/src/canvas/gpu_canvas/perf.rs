@@ -1,7 +1,7 @@
 use super::budget::video_memory;
 use super::setup::Refresh;
 use super::texels::LayerFit;
-use super::*;
+use super::wgpu;
 
 /// Milliseconds since the process (or page) started, from a monotonic clock.
 ///

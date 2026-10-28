@@ -301,71 +301,98 @@ pub(crate) fn program(e: &Effect, light: &GlobalLight, vector_shape: bool) -> Ma
     program_with(e, light, vector_shape, &[], (0.0, 0.0))
 }
 
+fn shadow_program(b: &mut B, s: &photocraft_doc::Shadow, inner: bool, light: &GlobalLight) -> usize {
+    let angle = if s.use_global_light { light.angle } else { s.angle };
+    let (dx, dy) = offset(angle, s.distance);
+    let src = b.shift(In::Shape, dx, dy, if inner { 1.0 } else { 0.0 }, inner);
+    let (r, bw) = photocraft_compose::effects::spread_split(s.size, s.spread);
+    let mut m = src;
+    if r > 0.0 {
+        let f = b.field(if inner { FieldKind::ChokeInside } else { FieldKind::StrokeOutside }, r);
+        let d = if dx == 0.0 && dy == 0.0 {
+            f
+        } else {
+            b.push(stage(Kernel::MShift, Some(f), None, [dx, dy, if inner { -0.5 } else { 1e10 }, 0.0], dx.abs().max(dy.abs()) as i32))
+        };
+        m = b.dilate(src, d, r);
+    }
+    let m = b.blur(m, bw);
+    b.finish(m, None, false, &s.contour, inner, 0);
+    1
+}
+
+fn glow_program(b: &mut B, g: &photocraft_doc::Glow, inner: bool) -> usize {
+    let center = inner && g.source == GlowSource::Center;
+    match g.technique {
+        GlowTechnique::Precise => {
+            let d = b.field(if inner { FieldKind::Inside } else { FieldKind::Outside }, g.size);
+            let solid = g.size * g.spread;
+            let soft = (g.size + 1.0 - solid).max(1e-3);
+            let m = b.push(stage(Kernel::MGlow, Some(d), None, [solid, soft, 0.0, 0.0], 0));
+            b.finish_glow(m, photocraft_compose::effects::glow_lut(g), inner, center);
+        }
+        GlowTechnique::Softer => {
+            let m = softer_glow_map(b, g, inner);
+            b.finish_glow(m, photocraft_compose::effects::glow_lut(g), inner, center);
+        }
+    }
+    1
+}
+
+fn softer_glow_map(b: &mut B, g: &photocraft_doc::Glow, inner: bool) -> In {
+    let src = if inner { b.shift(In::Shape, 0.0, 0.0, 0.0, true) } else { In::Shape };
+    let (r, bw) = photocraft_compose::effects::spread_split(g.size, g.spread);
+    let mut map = src;
+    if r > 0.0 {
+        let distance = b.field(if inner { FieldKind::ChokeInside } else { FieldKind::StrokeOutside }, r);
+        map = b.dilate(src, distance, r);
+    }
+    b.blur(map, bw)
+}
+
+fn satin_program(b: &mut B, s: &photocraft_doc::Satin) -> usize {
+    let (dx, dy) = offset(s.angle, photocraft_compose::effects::satin_distance(s));
+    let a = b.shift(In::Shape, dx, dy, 0.0, false);
+    let a = b.conv(a, photocraft_compose::effects::tent_kernel(s.size));
+    let c = b.shift(In::Shape, -dx, -dy, 0.0, false);
+    let c = b.conv(c, photocraft_compose::effects::tent_kernel(s.size));
+    b.finish_lut(a, Some(c), s.invert, photocraft_compose::effects::satin_lut(&s.contour), true, 0);
+    1
+}
+
+fn stroke_program(b: &mut B, st: &photocraft_doc::StrokeFx, vector_shape: bool) -> usize {
+    let (in_w, out_w) = stroke_widths(st);
+    if out_w > 0.0 {
+        // Narrow strokes keep the fitted chamfer, wide ones the exact transform (#3646);
+        // the CPU picks the same field by the same width (`stroke_outside_exact`).
+        let kind = match (vector_shape, photocraft_compose::effects::stroke_outside_exact(out_w)) {
+            (true, true) => FieldKind::StrokeOutsideVector,
+            (true, false) => FieldKind::StrokeOutsideVectorChamfer,
+            (false, true) => FieldKind::StrokeOutsideExact,
+            (false, false) => FieldKind::StrokeOutside,
+        };
+        let d = b.field(kind, out_w);
+        let mut s = stage(Kernel::MStroke, Some(d), None, [out_w, 0.0, 0.0, 0.0], 0);
+        s.out = Some(0);
+        b.stages.push(s);
+    }
+    if in_w > 0.0 {
+        let d = b.field(FieldKind::StrokeInside, in_w);
+        let mut s = stage(Kernel::MStroke, Some(d), None, [in_w, 0.0, 0.0, 0.0], 0);
+        s.out = Some(1);
+        b.stages.push(s);
+    }
+    2
+}
+
 /// The map program of one enabled effect (`build_maps`); bevel textures tile `patterns` from
 /// `anchor` (`effects::TextureCtx`).
 pub(crate) fn program_with(e: &Effect, light: &GlobalLight, vector_shape: bool, patterns: &[Pattern], anchor: (f64, f64)) -> MapProgram {
     let mut b = B { stages: Vec::new(), fields: Vec::new() };
     let maps = match e {
-        Effect::DropShadow(s) | Effect::InnerShadow(s) => {
-            // shadow_map
-            let inner = matches!(e, Effect::InnerShadow(_));
-            let angle = if s.use_global_light { light.angle } else { s.angle };
-            let (dx, dy) = offset(angle, s.distance);
-            let src = b.shift(In::Shape, dx, dy, if inner { 1.0 } else { 0.0 }, inner);
-            let (r, bw) = photocraft_compose::effects::spread_split(s.size, s.spread);
-            let mut m = src;
-            if r > 0.0 {
-                // dist_outside of the shifted map is the shifted field (integer offsets; shifted-in
-                // pixels are far away for a drop shadow, inside for an inner shadow).
-                let f = b.field(if inner { FieldKind::ChokeInside } else { FieldKind::StrokeOutside }, r);
-                let d = if dx == 0.0 && dy == 0.0 {
-                    f
-                } else {
-                    b.push(stage(Kernel::MShift, Some(f), None, [dx, dy, if inner { -0.5 } else { 1e10 }, 0.0], dx.abs().max(dy.abs()) as i32))
-                };
-                m = b.dilate(src, d, r);
-            }
-            let m = b.blur(m, bw);
-            b.finish(m, None, false, &s.contour, inner, 0);
-            1
-        }
-        Effect::OuterGlow(g) | Effect::InnerGlow(g) => {
-            // glow_map
-            let inner = matches!(e, Effect::InnerGlow(_));
-            let center = inner && g.source == GlowSource::Center;
-            match g.technique {
-                GlowTechnique::Precise => {
-                    let d = b.field(if inner { FieldKind::Inside } else { FieldKind::Outside }, g.size);
-                    let solid = g.size * g.spread;
-                    let soft = (g.size + 1.0 - solid).max(1e-3);
-                    let m = b.push(stage(Kernel::MGlow, Some(d), None, [solid, soft, 0.0, 0.0], 0));
-                    b.finish_glow(m, photocraft_compose::effects::glow_lut(g), inner, center);
-                }
-                GlowTechnique::Softer => {
-                    // Inner glows (edge, and centre as 1 - the edge result) spread 1 - alpha.
-                    let src = if inner { b.shift(In::Shape, 0.0, 0.0, 0.0, true) } else { In::Shape };
-                    let (r, bw) = photocraft_compose::effects::spread_split(g.size, g.spread);
-                    let mut m = src;
-                    if r > 0.0 {
-                        let d = b.field(if inner { FieldKind::ChokeInside } else { FieldKind::StrokeOutside }, r);
-                        m = b.dilate(src, d, r);
-                    }
-                    let m = b.blur(m, bw);
-                    b.finish_glow(m, photocraft_compose::effects::glow_lut(g), inner, center);
-                }
-            }
-            1
-        }
-        Effect::Satin(s) => {
-            // satin_map
-            let (dx, dy) = offset(s.angle, photocraft_compose::effects::satin_distance(s));
-            let a = b.shift(In::Shape, dx, dy, 0.0, false);
-            let a = b.conv(a, photocraft_compose::effects::tent_kernel(s.size));
-            let c = b.shift(In::Shape, -dx, -dy, 0.0, false);
-            let c = b.conv(c, photocraft_compose::effects::tent_kernel(s.size));
-            b.finish_lut(a, Some(c), s.invert, photocraft_compose::effects::satin_lut(&s.contour), true, 0);
-            1
-        }
+        Effect::DropShadow(s) | Effect::InnerShadow(s) => shadow_program(&mut b, s, matches!(e, Effect::InnerShadow(_)), light),
+        Effect::OuterGlow(g) | Effect::InnerGlow(g) => glow_program(&mut b, g, matches!(e, Effect::InnerGlow(_))),
+        Effect::Satin(s) => satin_program(&mut b, s),
         Effect::BevelEmboss(bv) => {
             // bevel_maps: height map (tent blur of the shape, or chiselled distance ramps), then
             // highlight / shadow shading inside and / or outside the shape.
@@ -434,31 +461,7 @@ pub(crate) fn program_with(e: &Effect, light: &GlobalLight, vector_shape: bool, 
             }
             out
         }
-        Effect::Stroke(st) => {
-            // composite_with_effects' stroke bands (maps 0 outside, 1 inside)
-            let (in_w, out_w) = stroke_widths(st);
-            if out_w > 0.0 {
-                // Narrow strokes keep the fitted chamfer, wide ones the exact transform (#3646);
-                // the CPU picks the same field by the same width (`stroke_outside_exact`).
-                let kind = match (vector_shape, photocraft_compose::effects::stroke_outside_exact(out_w)) {
-                    (true, true) => FieldKind::StrokeOutsideVector,
-                    (true, false) => FieldKind::StrokeOutsideVectorChamfer,
-                    (false, true) => FieldKind::StrokeOutsideExact,
-                    (false, false) => FieldKind::StrokeOutside,
-                };
-                let d = b.field(kind, out_w);
-                let mut s = stage(Kernel::MStroke, Some(d), None, [out_w, 0.0, 0.0, 0.0], 0);
-                s.out = Some(0);
-                b.stages.push(s);
-            }
-            if in_w > 0.0 {
-                let d = b.field(FieldKind::StrokeInside, in_w);
-                let mut s = stage(Kernel::MStroke, Some(d), None, [in_w, 0.0, 0.0, 0.0], 0);
-                s.out = Some(1);
-                b.stages.push(s);
-            }
-            2
-        }
+        Effect::Stroke(st) => stroke_program(&mut b, st, vector_shape),
         Effect::ColorOverlay { .. } | Effect::GradientOverlay { .. } | Effect::PatternOverlay { .. } => return MapProgram::empty(),
     };
     let mut h = std::collections::hash_map::DefaultHasher::new();

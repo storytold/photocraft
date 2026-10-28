@@ -1,4 +1,10 @@
-use super::*;
+use super::{
+    PhotocraftApp, analysis_ui, brush_panel, brush_picker, camera_raw_ui, canvas, dds_options_ui, dialogs, discard_ui, distort_ui, field_wheel, file_open,
+    gpu_canvas, gpu_status, gradient_ui, i18n, jobs_ui, jpeg_options_ui, kys_import, last_brush, layers_panel_ui, monitor_status, native_menu, notices,
+    paint_mouse, palette, panels, prefs_ui, preset_panels, rasterize_prompt, screen_picker, shape_stroke_ui, shortcuts, targa_options_ui, text_field_menu,
+    theme, tiff_options_ui, timeline_ui, titlebar, tool_cursor, tool_memory, transform_tool, type_panels_ui, type_tool, updates_ui, vector_ui, view_cmds,
+    wide_angle_ui, work_area, workspace_ui,
+};
 
 impl PhotocraftApp {
     /// Wait out the rest of [`Self::min_frame_ms`] since the last frame started.
@@ -74,7 +80,7 @@ impl PhotocraftApp {
         if !screen_picker::tick(self, ctx) {
             jobs_ui::tick(self, ctx);
             #[cfg(not(target_arch = "wasm32"))]
-            filter_preview_worker::discard_closed(self);
+            crate::dialogs::filter_preview_worker::discard_closed(self);
             if type_tool::in_ui_pass(ctx) {
                 if self.fonts_ready {
                     shortcuts::handle(self, ctx);

@@ -115,7 +115,7 @@ pub fn show<R>(button: &Response, content: impl FnOnce(&mut Ui, &PressMenu) -> R
     shown
 }
 
-/// The same press-drag-release for an `egui::ComboBox` (#2735): the list opens on the press, so one
+/// The same press-drag-release for a `craft_ui::ComboBox` (#2735): the list opens on the press, so one
 /// gesture can press the box, drag onto an option and release to choose it, and a plain click
 /// still opens the list for a second click. egui's combo box shows its own list and toggles it on
 /// a whole click, so this works around it: [`PressCombo::before`] runs before the box (and gives
@@ -348,7 +348,7 @@ mod tests {
         assert!(!rig.frame(Vec::new()).open, "and closed the menu");
     }
 
-    /// A bare context with one `egui::ComboBox` of three options, driven with [`PressCombo`].
+    /// A bare context with one `craft_ui::ComboBox` of three options, driven with [`PressCombo`].
     struct ComboRig {
         ctx: egui::Context,
         value: usize,
@@ -374,7 +374,7 @@ mod tests {
             let mut output = self.ctx.run_ui(egui::RawInput { screen_rect: Some(rect), events, ..Default::default() }, |ui| {
                 ui.add_space(20.0);
                 let (combo, close) = PressCombo::before(ui, "channel");
-                let shown = egui::ComboBox::from_id_salt("channel").selected_text(OPTIONS[value]).close_behavior(close).show_ui(ui, |ui| {
+                let shown = craft_ui::ComboBox::from_id_salt("channel").selected_text(OPTIONS[value]).close_behavior(close).show_ui(ui, |ui| {
                     out.open = true;
                     for (i, label) in OPTIONS.into_iter().enumerate() {
                         let item = ui.selectable_label(value == i, label);

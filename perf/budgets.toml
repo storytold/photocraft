@@ -24,6 +24,14 @@ quick_args = ["--quick"]
 note = "the #209/#210/#211 rows: layered 20 MP, 150 layers, 16/32-bit, open, retouch, selection"
 
 [[bench]]
+name = "perf_scenarios_cpu"
+package = "photocraft-ui-egui"
+example = "perf_scenarios"
+args = ["--cpu", "--group", "layered"]
+quick_args = ["--quick", "--cpu", "--group", "layered"]
+note = "the layered #209 rows on the forced CPU compositor (#9330); run with perf_scenarios so the machine class keeps the GPU"
+
+[[bench]]
 name = "interactive_bench"
 package = "photocraft-ui-egui"
 args = ["--reps", "5"]
@@ -631,3 +639,100 @@ issue = 7758
 bench = "bench_multiband"
 row = "Photomerge multiband blend"
 target = "track timing and peak RSS; no calibrated performance budget"
+
+# ---- cliff rows (#7494): off-happy-path paths, reported only ---------------------------------
+
+[[scenario]]
+id = "P69"
+title = "Move a layer with layer styles, CPU compositor"
+issue = 9330
+bench = "perf_scenarios_cpu"
+row = "move styled layer 10 px + refresh"
+enforce = false  # tracked only
+
+[[scenario]]
+id = "P70"
+title = "Change layer opacity, CPU compositor"
+issue = 9330
+bench = "perf_scenarios_cpu"
+row = "set layer opacity + refresh"
+budget_ms = 40
+enforce = false  # #9330 done-when: within 2x the GPU budget
+
+[[scenario]]
+id = "P71"
+title = "Change layer fill, CPU compositor"
+issue = 9330
+bench = "perf_scenarios_cpu"
+row = "set layer fill + refresh"
+budget_ms = 40
+enforce = false  # #9330 done-when: within 2x the GPU budget
+
+[[scenario]]
+id = "P72"
+title = "Change blend mode, CPU compositor"
+issue = 9330
+bench = "perf_scenarios_cpu"
+row = "set blend mode + refresh"
+budget_ms = 40
+enforce = false  # #9330 done-when: within 2x the GPU budget
+
+[[scenario]]
+id = "P73"
+title = "Toggle visibility, CPU compositor"
+issue = 9330
+bench = "perf_scenarios_cpu"
+row = "toggle visibility + refresh"
+budget_ms = 20
+enforce = false  # #9330 done-when: within 2x the GPU budget
+
+[[scenario]]
+id = "P74"
+title = "Undo a move, CPU compositor"
+issue = 9330
+bench = "perf_scenarios_cpu"
+row = "undo move + refresh"
+enforce = false  # tracked only
+
+[[scenario]]
+id = "P75"
+title = "Redo an opacity change, CPU compositor"
+issue = 9330
+bench = "perf_scenarios_cpu"
+row = "redo opacity change + refresh"
+enforce = false  # tracked only
+
+[[scenario]]
+id = "P76"
+title = "Change layer opacity with Advanced Blending on another layer"
+issue = 6689
+bench = "perf_scenarios"
+row = "set opacity on a layer with Advanced Blending + refresh"
+budget_ms = 40
+enforce = false  # new; 2x P2
+
+[[scenario]]
+id = "P77"
+title = "Toggle an adjustment layer's visibility"
+issue = 6535
+bench = "perf_scenarios"
+row = "toggle adjustment layer visibility + refresh"
+budget_ms = 10
+enforce = false  # new; as P5
+
+[[scenario]]
+id = "P78"
+title = "Hide the top adjustment layer among 150 full-canvas layers, 6 MP, GPU budget forced to 512 MB (CPU fallback)"
+issue = 6533
+bench = "perf_scenarios"
+row = "hide the top adjustment layer among many full-canvas layers, over the GPU budget + refresh"
+budget_ms = 30
+enforce = false  # new; as P61
+
+[[scenario]]
+id = "P79"
+title = "Zoomed-out reduced composite of a 30000x30000 document with one painted layer (#9330 target: 60000x60000)"
+issue = 1015
+bench = "perf_scenarios"
+row = "zoomed-out reduced composite of the huge document with one painted layer"
+enforce = false  # tracked only

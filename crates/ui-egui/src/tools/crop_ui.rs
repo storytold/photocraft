@@ -727,10 +727,11 @@ pub fn swap_orientation(app: &mut PhotocraftApp) -> bool {
     {
         app.ui.tool_options.crop_ratio = k;
     }
+    // The frame turns first: fitting the swapped ratio inside the old frame would shrink it.
+    keyed(app, swapped(r));
     if preset_ratio(app).is_some() {
         apply_ratio(app);
     } else {
-        keyed(app, swapped(r));
         crate::crop_mode::sync_frame(app);
         crate::crop_mode::auto_center(app);
     }

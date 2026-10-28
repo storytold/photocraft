@@ -11,7 +11,7 @@
 //! stay [`Adjustment::Unsupported`] and are written back verbatim.
 
 use photocraft_doc::Adjustment;
-use photocraft_doc::adjust::{CURVE_MAP_LEN, CurvePoint, HueRange, LevelsChannel, ToneSpace, curve_map, curve_map_outputs};
+use photocraft_doc::adjust::{CURVE_MAP_LEN, CurvePoint, HueRange, LevelsChannel, LutFormat, LutSource, ToneSpace, curve_map, curve_map_outputs};
 use photocraft_psd::descriptor::{Descriptor, Value, VersionedDescriptor};
 
 /// All PSD adjustment keys recognized as adjustment layers.
@@ -459,12 +459,12 @@ fn read_lookup(d: &[u8]) -> Result<Adjustment, String> {
         Some(_) => return Err("its LUT data is empty".into()),
         None => return Err("it uses a colour profile (abstract or device link), not a LUT file, which isn't supported yet".into()),
     };
-    let (ext, format) = match desc_enum(&desc, "LUTFormat") {
-        Some(b"LUTFormat3DL") => ("x.3dl", "3DL"),
-        Some(b"LUTFormatLOOK") => ("x.look", "LOOK"),
-        _ => ("x.cube", "CUBE"),
+    let format = match desc_enum(&desc, "LUTFormat") {
+        Some(b"LUTFormat3DL") => LutFormat::ThreeDl,
+        Some(b"LUTFormatLOOK") => LutFormat::Look,
+        _ => LutFormat::Cube,
     };
-    let lut = photocraft_cms::lutfile::parse(ext, bytes).map_err(|e| format!("its {format} LUT can't be read ({e})"))?;
+    let lut = parse_lut_source(format, bytes).map_err(|e| format!("its {} LUT can't be read ({e})", psd_lut_format(format).trim_start_matches("LUTFormat")))?;
     if !lut.domain_is_default() {
         return Err(format!(
             "its LUT has a non-default input domain (DOMAIN_MIN {:?}, DOMAIN_MAX {:?}), which is not supported yet",
@@ -478,7 +478,45 @@ fn read_lookup(d: &[u8]) -> Result<Adjustment, String> {
         lut: Some(std::sync::Arc::new(lut.data)),
         tetrahedral: false,
         dither: desc_bool(&desc, "Dthr").unwrap_or(false),
+        // Kept so a save embeds the file as loaded (Photoshop never converts it).
+        source: Some(LutSource { format, bytes: std::sync::Arc::new(bytes.clone()) }),
     })
+}
+
+/// A LUT file's table, read the way a PSD read does (an XML file tagged `.cube` is sniffed as `.look`).
+fn parse_lut_source(format: LutFormat, bytes: &[u8]) -> Result<photocraft_cms::lutfile::LutFile, photocraft_cms::lutfile::LutError> {
+    let format = match format {
+        LutFormat::Cube => photocraft_cms::lutfile::Format::Cube,
+        LutFormat::ThreeDl => photocraft_cms::lutfile::Format::ThreeDl,
+        LutFormat::Look => photocraft_cms::lutfile::Format::Look,
+    };
+    photocraft_cms::lutfile::parse(&format!("x.{}", format.extension()), bytes)
+}
+
+/// Photoshop's `LUTFormatType` value for a format.
+fn psd_lut_format(format: LutFormat) -> &'static str {
+    match format {
+        LutFormat::Cube => "LUTFormatCUBE",
+        LutFormat::ThreeDl => "LUTFormat3DL",
+        LutFormat::Look => "LUTFormatLOOK",
+    }
+}
+
+/// The source file of a Color Lookup to embed as is: only while it still parses to the
+/// layer's table, so an edited table is never saved with stale bytes.
+fn lut_source_for<'a>(source: Option<&'a LutSource>, table: &[f32], size: usize) -> Option<&'a LutSource> {
+    let source = source?;
+    let file = parse_lut_source(source.format, &source.bytes).ok()?;
+    (file.size == size && file.data == table).then_some(source)
+}
+
+/// `name` with a `.3dl` / `.look` extension swapped for `.cube`, for a table saved as `.cube`.
+fn cube_file_name(name: &str) -> String {
+    let lower = name.to_ascii_lowercase();
+    match [".3dl", ".look"].iter().find(|ext| lower.ends_with(*ext)) {
+        Some(ext) => format!("{}.cube", name.get(..name.len() - ext.len()).unwrap_or(name)),
+        None => name.to_string(),
+    }
 }
 
 /// The descriptor of a `vibA` / `blwh` block: a 4-byte descriptor version (16), then the descriptor.
@@ -735,31 +773,40 @@ pub fn write(adj: &Adjustment) -> Vec<([u8; 4], Vec<u8>)> {
             }
             return vec![(*b"selc", v)];
         }
-        Adjustment::ColorLookup { name, lut, size, dither, .. } => {
+        Adjustment::ColorLookup { name, lut, size, dither, source, .. } => {
             // A lookup without a usable table (none chosen yet, or a bad size) renders as the
             // identity, so it is written as a 2³ identity cube rather than dropped.
             let n = *size as usize;
             let cube = lut.as_deref().zip(photocraft_doc::adjust::lut3d_len(*size)).and_then(|(table, len)| table.get(..len)).filter(|_| n <= 256);
-            let (file, dither) = match cube {
-                Some(cube) => (
-                    photocraft_cms::lutfile::LutFile { title: String::new(), size: n, data: cube.to_vec(), domain_min: [0.0; 3], domain_max: [1.0; 3] },
-                    *dither,
-                ),
-                _ => (photocraft_cms::lutfile::LutFile { title: String::new(), ..photocraft_cms::lutfile::LutFile::identity(2) }, false),
+            // Like Photoshop, embed the LUT file as loaded, in its own format; a table made or
+            // changed in PhotoCraft is written as `.cube`, named to match.
+            let (format, data, name, dither) = match cube {
+                Some(cube) => match lut_source_for(source.as_ref(), cube, n) {
+                    Some(src) => (src.format, src.bytes.to_vec(), name.clone(), *dither),
+                    None => {
+                        let file =
+                            photocraft_cms::lutfile::LutFile { title: String::new(), size: n, data: cube.to_vec(), domain_min: [0.0; 3], domain_max: [1.0; 3] };
+                        (LutFormat::Cube, photocraft_cms::lutfile::write_cube(&file).into_bytes(), cube_file_name(name), *dither)
+                    }
+                },
+                _ => {
+                    let file = photocraft_cms::lutfile::LutFile { title: String::new(), ..photocraft_cms::lutfile::LutFile::identity(2) };
+                    (LutFormat::Cube, photocraft_cms::lutfile::write_cube(&file).into_bytes(), cube_file_name(name), false)
+                }
             };
             let en =
                 |t: &str, val: &str| Value::Enumerated { type_id: photocraft_psd::descriptor::Id::new(t), value: photocraft_psd::descriptor::Id::new(val) };
             let text = |t: &str| Value::Text(photocraft_psd::descriptor::UnicodeString::new_nul(t));
             let d = Descriptor::new("null")
                 .with("lookupType", en("colorLookupType", "3DLUT"))
-                .with("NM  ", text(name))
+                .with("NM  ", text(&name))
                 .with("Dthr", Value::Boolean(dither))
                 .with("profile", Value::RawData(Vec::new()))
-                .with("LUTFormat", en("LUTFormatType", "LUTFormatCUBE"))
+                .with("LUTFormat", en("LUTFormatType", psd_lut_format(format)))
                 .with("dataOrder", en("colorLookupOrder", "rgbOrder"))
                 .with("tableOrder", en("colorLookupOrder", "bgrOrder"))
-                .with("LUT3DFileData", Value::RawData(photocraft_cms::lutfile::write_cube(&file).into_bytes()))
-                .with("LUT3DFileName", text(name));
+                .with("LUT3DFileData", Value::RawData(data))
+                .with("LUT3DFileName", text(&name));
             put16(&mut v, 1);
             v.extend_from_slice(&VersionedDescriptor::new(d).to_bytes());
             return vec![(*b"clrL", v)];

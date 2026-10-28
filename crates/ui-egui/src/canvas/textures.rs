@@ -3,7 +3,7 @@ use super::filter_preview::filter_channel_preview;
 use super::navigator::navigator_waits_for_drag;
 use super::strokes::live_stroke;
 use super::view_xform::ViewXform;
-use super::*;
+use super::{CanvasCache, CpuTextures, DRect, DetailTexture, Document, InView, LayerContent, PhotocraftApp, TextureOptions, pos2};
 
 /// Largest texture side we upload; bigger documents are uploaded downsampled, with the part in
 /// view added at the screen's resolution when zoomed in (`detail_plan`).
