@@ -37,6 +37,40 @@ fn has_menu(h: &Harness<'_, PhotocraftApp>) -> bool {
 }
 
 #[test]
+fn transform_commits_on_tab_click() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    for name in ["first", "second"] {
+        app.run("file.new", json!({"width": 64, "height": 64, "name": name})).unwrap();
+    }
+    app.sync_views();
+    app.activate_document(0);
+
+    app.run("select.all", json!({})).unwrap();
+    let ctx = egui::Context::default();
+    crate::menus::invoke(&mut app, &ctx, "select.transformSelection", json!({})).unwrap();
+    assert!(app.ui.transform.is_some(), "transform must be active");
+
+    let mut h = Harness::builder().with_size(vec2(700.0, 40.0)).build_ui_state(
+        |ui, (app, ready): &mut (PhotocraftApp, bool)| {
+            if *ready {
+                super::tabs::tabs(app, ui);
+            }
+        },
+        (app, false),
+    );
+
+    PhotocraftApp::setup_context(&h.ctx, ThemeKind::Studio);
+    h.state_mut().1 = true;
+    h.run_steps(2);
+
+    h.get_by_label_contains("second").click_button(egui::PointerButton::Primary);
+    h.run_steps(2);
+
+    assert!(h.state().0.ui.transform.is_none(), "transform must clear on tab click");
+    assert_eq!(h.state().0.session.active_index(), Some(1), "active document must change");
+}
+
+#[test]
 fn overflowing_tabs_stay_on_the_strip_and_the_rest_move_to_the_menu() {
     let h = harness(14, ThemeKind::Pro);
     assert_eq!(h.state().session.documents().len(), 14);

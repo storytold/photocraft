@@ -78,7 +78,7 @@ fn documents(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             if d != idx {
                 app.ui.views[d] = v;
                 if ui.input(|i| i.pointer.primary_pressed() && i.pointer.interact_pos().is_some_and(|p| cell.contains(p))) {
-                    app.session.set_active(d);
+                    app.activate_document(d);
                 }
             }
             let stroke = if d == idx { Stroke::new(1.5, t.accent) } else { Stroke::new(1.0, Color32::from_black_alpha(160)) };
@@ -405,8 +405,10 @@ fn open_tab_clicks(
     cancel_open: Option<photocraft_engine::jobs::JobId>,
 ) {
     if let Some(i) = activate {
-        app.session.set_active(i);
-        app.jobs.focus = None;
+        app.activate_document(i);
+        if app.session.active_index() == Some(i) {
+            app.jobs.focus = None;
+        }
     }
     if let Some(job) = focus_open {
         app.jobs.focus = Some(job);

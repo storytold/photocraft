@@ -34,7 +34,7 @@ mod warp;
 pub(crate) use begin::begin_content_aware;
 pub use begin::{begin, begin_copy, begin_placed, begin_selection, begin_warp, enter_warp, leave_warp, warps_type};
 pub(crate) use commit::{SAVE_FOR_WEB, committing, nudge};
-pub use commit::{cancel, commit, end_if_left, follow_edits, intercept, is_enabled, on_job_event, track_steps};
+pub use commit::{cancel, commit, defer_after_commit, end_if_left, follow_edits, intercept, is_enabled, on_job_event, track_steps};
 #[cfg(test)]
 use drag_modes::{HandleIndicator, handle_indicator, keep_convex, turns};
 pub(crate) use drag_modes::{apply_drag, corner_distorts, legacy_mods};
@@ -67,6 +67,8 @@ use preview::{covering, preview_image, show_only};
 pub use warp::{edit_session_warp, split};
 #[cfg(test)]
 use warp::{on_section_edge, single_patch, split_cursor, surface_at, warp_hit, warp_pointer};
+
+type AfterCommit = Box<dyn FnOnce(&mut PhotocraftApp)>;
 
 /// Which Split button is armed. The guide follows the pointer and the split is added on release.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -135,6 +137,8 @@ pub struct TransformPreview {
     /// The commit running as a background job (#1015): the moving pixels stay on screen, without
     /// the box, until it lands; Esc cancels it. The session ends with the job.
     committing: Option<JobId>,
+    /// Deferred UI action to run when a background commit lands.
+    after_commit: Option<AfterCommit>,
     /// Content-Aware Scale's live preview (cas_transform.rs).
     pub(crate) content_aware: Option<crate::cas_transform::Live>,
 }

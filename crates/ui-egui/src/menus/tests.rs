@@ -528,3 +528,21 @@ fn proof_setup_presets_and_checkmarks() {
     let params = crate::filter_dialog::parse_spec(spec.params);
     assert!(matches!(&params[0].kind, crate::filter_dialog::Kind::Choice { options, .. } if options[0] == "srgb" && !options.iter().any(|v| v.contains('/'))));
 }
+
+#[test]
+fn transform_commits_on_window_next_document() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+    app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+    app.session.set_active(0);
+
+    app.run("select.all", json!({})).unwrap();
+    let ctx = egui::Context::default();
+    invoke(&mut app, &ctx, "select.transformSelection", json!({})).unwrap();
+    assert!(app.ui.transform.is_some(), "transform must be active on the first document");
+
+    invoke(&mut app, &ctx, "window.nextDocument", json!({})).unwrap();
+
+    assert!(app.ui.transform.is_none(), "transform must clear when switching documents via command");
+    assert_eq!(app.session.active_index(), Some(1), "focus must move to the second document");
+}

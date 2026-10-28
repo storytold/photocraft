@@ -61,6 +61,25 @@ impl PhotocraftApp {
         if let Some(r) = preset_files_ui::open(self, name, bytes) {
             return r.map(|()| Vec::new());
         }
+
+        if self.ui.transform.is_some() {
+            crate::transform_tool::commit(self);
+            if self.ui.transform.is_some() {
+                let name = name.to_owned();
+                let bytes = bytes.to_vec();
+                let path = path.map(str::to_owned);
+                if crate::transform_tool::defer_after_commit(self, move |app| {
+                    if let Err(err) = app.open_bytes_from(&name, &bytes, path.as_deref()) {
+                        app.ui.status = err;
+                        app.ui.status_error = true;
+                    }
+                }) {
+                    return Ok(Vec::new());
+                }
+                return Err("Cannot open file while transform is active".into());
+            }
+        }
+
         let name = &self.open_name(name);
         // Decoded on a worker: a tab with progress appears now, the document when it's ready
         // (warnings are shown then).

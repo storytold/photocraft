@@ -137,10 +137,28 @@ impl PhotocraftApp {
         // Documents opening in the background are read on the worker too (a 2 GB PSB read
         // would block the window). Preset files (brushes, gradients) go the usual way.
         let ext = std::path::Path::new(path).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+
+        // #9735: Commit any active transform before opening a file from disk.
+        if self.ui.transform.is_some() {
+            crate::transform_tool::commit(self);
+            if self.ui.transform.is_some() {
+                // #9735: If the commit is running as a background job, defer opening the
+                // file until the commit lands; otherwise abort if the commit was refused.
+                let path = path.to_owned();
+                if crate::transform_tool::defer_after_commit(self, move |app| {
+                    let _ = app.open_path(&path);
+                }) {
+                    return Ok(Vec::new());
+                }
+                return Err("Cannot open file while transform is active".into());
+            }
+        }
+
         if self.background_jobs && !crate::preset_files_ui::PRESET_EXTS.contains(&ext.as_str()) {
             crate::jobs_ui::start_open(self, &display_name(path), Some(path.to_string()), photocraft_engine::jobs::OpenSource::Path(path.to_string()))?;
             return Ok(Vec::new());
         }
+
         let bytes = photocraft_format::read_file(std::path::Path::new(path)).map_err(|e| format!("{path}: {e}"))?;
         self.open_file(path, &bytes)
     }
@@ -190,7 +208,11 @@ impl PhotocraftApp {
         let canon = canonical(path);
         let same = |p: &str| same_file(p, path, canon.as_deref());
         if let Some(i) = self.session.documents().iter().position(|d| d.path.as_deref().is_some_and(same)) {
-            self.session.set_active(i);
+            self.activate_document(i); // Commit any transform tool change before switching documents (#9735)
+            // If the activate_document fails, then do not proceed.
+            if self.session.active_index() != Some(i) {
+                return false;
+            }
             self.jobs.focus = None;
         } else if let Some(o) = self.jobs.opens.iter().find(|o| o.path.as_deref().is_some_and(|p| !is_template(p) && same(p))) {
             // A template still loading opens as another Untitled, as it does once loaded.

@@ -121,13 +121,29 @@ pub fn on_job_event(app: &mut PhotocraftApp, e: &JobEvent) {
     // unless picking another tool or layer started it: then the box ends, as Esc would.
     if let JobOutcome::Failed(msg) = &e.outcome {
         pv.committing = None;
+        pv.after_commit = None;
         keep_open(app, t, Some(pv), msg.clone());
         if switched_away(app) {
             cancel(app);
         }
         return;
     }
-    finish(app, Some(pv.doc.id), LayerId(t.layer), t.made, matches!(e.outcome, JobOutcome::Done(_)));
+    let landed = matches!(e.outcome, JobOutcome::Done(_));
+    let after = pv.after_commit.take();
+    finish(app, Some(pv.doc.id), LayerId(t.layer), t.made, landed);
+    if landed && let Some(action) = after {
+        action(app);
+    }
+}
+
+pub fn defer_after_commit(app: &mut PhotocraftApp, action: impl FnOnce(&mut PhotocraftApp) + 'static) -> bool {
+    if let Some(pv) = app.transform_preview.as_mut()
+        && pv.committing.is_some()
+    {
+        pv.after_commit = Some(Box::new(action));
+        return true;
+    }
+    false
 }
 
 /// A commit the engine refused (a result over the pixel budget, #3773): the box stays open as it

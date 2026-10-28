@@ -675,7 +675,10 @@ fn invoke_window_command(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str)
             let count = app.session.documents().len();
             let active = app.session.active_index().ok_or("no document open")?;
             let next = if id == "window.nextDocument" { (active + 1) % count } else { (active + count - 1) % count };
-            app.session.set_active(next);
+            app.activate_document(next);
+            if app.session.active_index() != Some(next) && crate::transform_tool::committing(app).is_none() {
+                return Err("could not activate document".into());
+            }
             app.jobs.focus = None;
             Ok(json!({"document": next}))
         })()),
@@ -683,7 +686,10 @@ fn invoke_window_command(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str)
             let count = app.session.documents().len();
             let next =
                 id.strip_prefix(DOCUMENT_ITEM).ok_or("no such document")?.parse::<usize>().ok().filter(|index| *index < count).ok_or("no such document")?;
-            app.session.set_active(next);
+            app.activate_document(next);
+            if app.session.active_index() != Some(next) && crate::transform_tool::committing(app).is_none() {
+                return Err("could not activate document".into());
+            }
             app.jobs.focus = None;
             Ok(json!({"document": next}))
         })()),
