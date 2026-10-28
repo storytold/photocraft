@@ -139,7 +139,11 @@ mkdir -p "$OUT_DIR"
 tar -C "$WORK" -czf "$OUT_DIR/$BASENAME.tar.gz" "$BASENAME"
 echo "wrote $OUT_DIR/$BASENAME.tar.gz"
 
-if [[ "$CROSS" = 0 ]]; then "$STAGE/bin/photocraft-cli" --version; fi
+if [[ -n "${CARGO_BUILD_TARGET:-}" ]]; then
+  echo "==> skipping photocraft-cli --version: CARGO_BUILD_TARGET is set, so the binary is not run on this host"
+else
+  "$STAGE/bin/photocraft-cli" --version
+fi
 if [[ "$DRY_RUN" = 1 ]]; then
   echo "==> dry run: tarball contents"
   tar -tzvf "$OUT_DIR/$BASENAME.tar.gz"
