@@ -156,7 +156,7 @@ impl Compositor {
         // render targets) can't: then layer effects use the CPU compositor and the rest stays here.
         let keys = Kernel::DRAWN.iter().filter(|k| !k.is_map()).map(|&k| (k, acc_format));
         let keys: Vec<_> = keys.chain(Kernel::DRAWN.iter().filter(|k| k.is_map()).flat_map(|&k| [(k, MAP32), (k, MAP16)])).collect();
-        let build_one = |key| {
+        let build_one = |key: (Kernel, wgpu::TextureFormat)| {
             let (built, error) = first_error(device, || pipeline(key.0, key.1));
             (key, built, error)
         };
