@@ -315,13 +315,13 @@ pub(crate) fn read_manifest(src: &dyn ByteSource, opts: &LoadOptions) -> Result<
     // A number past f32's range decodes as infinity, which no save could write back (#6862).
     if let Err(crate::finite::Problem::NonFinite { path }) = crate::finite::check(&m) {
         return Err(FormatError::corrupt(format!("`{path}` is out of range")));
-    fn count_layers(layers: &[LayerM]) -> usize {
-        layers.iter().fold(layers.len(), |count, layer| match &layer.content {
-            ContentM::Group { children, .. } => count.saturating_add(count_layers(children)),
-            _ => count,
-        })
-    }
-    m.document.responsive.validate(count_layers(&m.document.layers)).map_err(|message| FormatError::LimitExceeded(message.into()))?;
+        fn count_layers(layers: &[LayerM]) -> usize {
+            layers.iter().fold(layers.len(), |count, layer| match &layer.content {
+                ContentM::Group { children, .. } => count.saturating_add(count_layers(children)),
+                _ => count,
+            })
+        }
+        m.document.responsive.validate(count_layers(&m.document.layers)).map_err(|message| FormatError::LimitExceeded(message.into()))?;
     }
     fn count_layers(layers: &[LayerM]) -> usize {
         layers.iter().fold(layers.len(), |count, layer| match &layer.content {
@@ -1117,12 +1117,12 @@ impl PcraftWriter {
         model.thumbnail = opts.thumbnail.as_ref().map(|_| THUMB.to_owned());
         model.composite = opts.composite.as_ref().map(|_| COMPOSITE.to_owned());
         let full_composite = opts.full_composite.is_some();
-        let manifest = manifest_json(&model, full_composite)?;
+        model.document.responsive = responsive;
         // Compatibility: a document with no responsive data saves as version 1 (a v1-only
         // reader keeps opening it byte-compatibly); version 2 marks files that carry the
         // responsive layout program.
         model.format_version = if model.document.responsive.is_empty() { FORMAT_VERSION - 1 } else { FORMAT_VERSION };
-        model.document.responsive = responsive;
+        let manifest = manifest_json(&model, full_composite)?;
         let stats = SaveStats { tiles_total: c.tiles.len(), blobs_total: c.blobs.len(), manifest_bytes: manifest.len(), ..Default::default() };
         let invalid = |h: &str| FormatError::corrupt(format!("invalid object hash `{h}`"));
         let mut objects = BTreeMap::new();

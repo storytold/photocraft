@@ -641,8 +641,6 @@ fn file_info_keeps_multiline_metadata_on_confirm_and_reopen() {
     }
 }
 
-
-
 #[test]
 fn responsive_export_can_skip_only_affected_artboards() {
     assert_eq!(responsive_artboards_to_export(&[9, 5, 2], &[5], false), vec![9, 5, 2]);
