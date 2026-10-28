@@ -13,6 +13,7 @@ macro_rules! tl {
         $crate::i18n::t($s)
     };
 }
+pub(crate) mod automation_preview;
 pub mod canvas;
 pub mod control;
 pub mod dialogs;
@@ -504,6 +505,9 @@ pub struct PhotocraftApp {
     /// makes shortcut- and dialog-triggered commands pass the same policy as
     /// direct control calls.
     pub(crate) automation_input: bool,
+    /// Open dialogs a control request or synthetic input opened or edited: their live previews
+    /// pass the automation policy as confirming them would (`automation_preview`).
+    pub(crate) automation_dialogs: Vec<u64>,
     /// Action playbacks paused at a step dialog, by the token in that dialog's fields
     /// ([`actions::RESUME`]): what to play next and the automation gate it paused under.
     pub(crate) paused_playbacks: actions::PausedPlaybacks,

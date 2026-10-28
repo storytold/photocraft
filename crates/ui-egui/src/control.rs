@@ -174,7 +174,9 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest
     if let Some(gate) = app.services.automation_authorize {
         app.session.authorize = Some(gate);
     }
+    let before = crate::automation_preview::snapshot(app);
     let outcome = dispatch(app, ctx, req);
+    crate::automation_preview::note_changes(app, &before);
     app.session.authorize = saved;
     outcome
 }

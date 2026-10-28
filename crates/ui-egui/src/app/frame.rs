@@ -291,6 +291,10 @@ impl PhotocraftApp {
         // Remember the 0.37 panel sizes so a later 0.36 rollback's newer old-key values win on
         // the next upgrade (see `panels::migrate_panel_state`).
         panels::remember_panel_state(&ctx);
+        // Synthetic input could have edited any dialog open now: preview it under the policy.
+        if self.automation_input {
+            crate::automation_preview::note_open(self);
+        }
         self.automation_input = false;
         shape_stroke_ui::finish_frame(self, &ctx);
         native_menu::sync(self, &ctx);

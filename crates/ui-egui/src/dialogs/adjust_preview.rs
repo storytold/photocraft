@@ -191,7 +191,13 @@ fn dialog(app: &PhotocraftApp) -> Option<(String, Value, bool)> {
     }
     let kind = d.fields.get("__adjust")?.as_str()?.to_string();
     let preview = d.fields.get("__preview").and_then(Value::as_bool).unwrap_or(true);
-    Some((kind, crate::filter_dialog::params_of(&d.fields), preview))
+    let params = crate::filter_dialog::params_of(&d.fields);
+    // Building the preview reads what the params name (a Color Lookup `file`): a dialog
+    // automation drove has no layer preview the policy would refuse to confirm.
+    if crate::automation_preview::refusal(app, d.id, &d.fields, &format!("image.adjustments.{kind}"), &params).is_some() {
+        return None;
+    }
+    Some((kind, params, preview))
 }
 
 /// FNV-1a over `parts`, never 0.
