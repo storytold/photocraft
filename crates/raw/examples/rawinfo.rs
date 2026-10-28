@@ -9,11 +9,15 @@
 
 use std::time::Instant;
 
-use photocraft_raw::{Demosaic, DevelopOptions, decode, develop_sensor, dump_structure, embedded_preview, embedded_preview_color_space, identify};
+use photocraft_raw::{
+    DecodeBackend, Demosaic, DevelopOptions, decode, decode_with_backend, develop_sensor, dump_structure, embedded_preview, embedded_preview_color_space,
+    identify,
+};
 
 fn main() {
     let mut args = std::env::args().skip(1);
     let mut dump = false;
+    let mut backend = DecodeBackend::Auto;
     let mut ppm: Option<String> = None;
     let mut png: Option<String> = None;
     let mut opts = DevelopOptions::default();
@@ -21,6 +25,17 @@ fn main() {
     while let Some(a) = args.next() {
         match a.as_str() {
             "--dump" => dump = true,
+            "--backend" => {
+                backend = match args.next().as_deref() {
+                    Some("auto") => DecodeBackend::Auto,
+                    Some("flashraw") => DecodeBackend::FlashRaw,
+                    Some("builtin") => DecodeBackend::Builtin,
+                    _ => {
+                        eprintln!("--backend requires auto, flashraw or builtin");
+                        return;
+                    }
+                };
+            }
             "--ppm" => ppm = args.next(),
             "--png" => png = args.next(),
             "--demosaic" => opts.demosaic = args.next().and_then(|s| Demosaic::from_id(&s)).unwrap_or_default(),
@@ -89,7 +104,7 @@ fn main() {
             }
         }
         let t0 = Instant::now();
-        let sensor = match decode(&bytes, &opts.limits) {
+        let sensor = match decode_with_backend(&bytes, &opts.limits, backend) {
             Ok(s) => s,
             Err(e) => {
                 println!("   decode: {e}");
@@ -134,7 +149,7 @@ fn main() {
         };
         let t2 = Instant::now();
         println!(
-            "   developed {}x{} ({:?}) decode {:.0} ms, develop {:.0} ms; wb {:?}; warnings {:?}",
+            "   developed {}x{} ({:?}) decode {:.3} ms, develop {:.3} ms; wb {:?}; warnings {:?}",
             dev.width,
             dev.height,
             opts.demosaic,

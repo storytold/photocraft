@@ -1,0 +1,89 @@
+camera	mode	path	source	before_status	before_auto_ms	after_auto_ms	actual_backend	before_over_after	builtin_ms	flashraw_ms	flashraw_direct_ms
+Canon EOS 5D Mark III (Adobe DNG)	lossless JPEG DNG	corpus/raw-performance/a6ad9e1fcd37.dng	Adobe DNG Converter/Canon EOS 5D Mark III/5G4A9394-compressed-lossless.DNG	ok	68.956208	27.19575	Builtin	2.535550885708245	26.295749999999998	42.399834	21.203166
+Canon EOS 5D Mark III (Adobe DNG)	lossy JPEG DNG	corpus/raw-performance/49358ff27d34.dng	Adobe DNG Converter/Canon EOS 5D Mark III/5G4A9394-compressed-lossy.DNG	ok	145.445167	39.276041	Builtin	3.7031524384038605	40.561875		20.044417
+Canon EOS 5D Mark III (Adobe DNG)	uncompressed DNG	corpus/raw-performance/b39b61ce2b9b.dng	Adobe DNG Converter/Canon EOS 5D Mark III/5G4A9394-uncompressed.DNG	ok	38.249875	5.243292	Builtin	7.295011416491777	5.226833	6.226583	2.080667
+Apple iPhone 12 Pro	ProRAW	corpus/raw-performance/06d36df4a746.dng	Apple/iPhone 12 Pro/IMG_1361.DNG	ok	39.038000000000004	35.41425	Builtin	1.102324629209993	35.604542	37.442208	28.156541999999998
+Canon EOS R5 Mark II	RAW	corpus/raw-performance/5a59a3a928c2.cr3	Canon/Canon EOS R5m2/RAW.CR3	ok	84.00158400000001	83.78366700000001	FlashRaw	1.0026009484640963		83.371708	83.362875
+Canon EOS R6 Mark III	RAW	corpus/raw-performance/069e2ca9bf61.cr3	Canon/Canon EOS R6 Mark III/IMG_4241.CR3	ok	60.282375	59.655666000000004	FlashRaw	1.010505439667709		59.947125	59.995792
+Canon EOS 5D Mark IV	RAW	corpus/raw-performance/369ba631858c.cr2	Canon/EOS 5D Mark IV/B13A0734.CR2	ok	57.573625	54.767416	FlashRaw	1.0512386598630106	196.773125	54.412459000000005	30.515541
+Canon EOS 6D Mark II	RAW	corpus/raw-performance/0f8a0b79e727.cr2	Canon/EOS 6D Mark II/6DII-RAW.CR2	ok	50.1045	49.411417	FlashRaw	1.014026778467009	189.39766699999998	50.77475	28.959917
+Canon EOS 90D	RAW	corpus/raw-performance/3a50621f831d.cr3	Canon/EOS 90D/Canon-90D-RAW-ISO-100.CR3	ok	32.558834000000004	33.563083	FlashRaw	0.9700787618348411		33.186542	33.588542
+Canon EOS R5	C-RAW	corpus/pixls/Canon_EOS_R5_CRAW_ISO_100_nocrop_nodual.CR3	Canon/EOS R5/Canon_EOS_R5_CRAW_ISO_100_nocrop_nodual.CR3	ok	101.57900000000001	101.2055	FlashRaw	1.0036905108912066		101.230958	100.901958
+Canon EOS R5	RAW	corpus/pixls/Canon_EOS_R5_RAW_ISO_100_nocrop_nodual.CR3	Canon/EOS R5/Canon_EOS_R5_RAW_ISO_100_nocrop_nodual.CR3	ok	81.24891600000001	80.72274999999999	FlashRaw	1.006518187252045		80.89695900000001	80.719584
+Canon EOS R50	RAW	corpus/raw-performance/41b24c8c51ef.cr3	Canon/EOS R50/Canon_R50_ISO100_RAW_mechanicShutter.CR3	ok	45.158042	44.738042	FlashRaw	1.0093879834973556		44.950958	44.690583
+Canon EOS R6 Mark II	RAW	corpus/raw-performance/dd0250ba1060.cr3	Canon/EOS R6 Mark II/canon-r6m2-img_0346-raw-normal-full.cr3	ok	45.923209	45.244042	FlashRaw	1.0150111919708678		45.515666	45.470625
+Canon EOS R7	RAW	corpus/raw-performance/b74c41e31011.cr3	Canon/EOS R7/443A0157.CR3	ok	60.737334	59.515041	FlashRaw	1.0205375478108132		59.695625	60.217208
+Canon EOS R8	RAW	corpus/raw-performance/25e8d8102ded.cr3	Canon/EOS R8/RAW_FULL_FRAME.CR3	ok	45.560708999999996	45.167875	FlashRaw	1.0086971990601725		45.258167	45.0785
+Canon EOS Rebel T7 / 2000D	RAW	corpus/raw-performance/76c36b5d77d2.cr2	Canon/EOS Rebel T7/IMG_0662.CR2	ok	49.235583	49.267459	FlashRaw	0.9993530009331311	194.565	50.041125	30.485917
+Canon PowerShot G6	additional format coverage	corpus/raw-performance/01cc475347c2.crw	Canon/PowerShot G6/CRW_2097.CRW	error		31.896583999999997	FlashRaw			31.775291999999997	31.86075
+Canon PowerShot SX50 HS	existing regression corpus	corpus/pixls/CRW_4061.DNG	Canon/PowerShot SX50 HS/CRW_4061.DNG	ok	22.098584000000002	3.46475	FlashRaw	6.3781179017245115	7.991916	3.451	1.109292
+Canon PowerShot SX50 HS	existing regression corpus	corpus/pixls/IMG_4059.CR2	Canon/PowerShot SX50 HS/IMG_4059.CR2	ok	25.1555	24.54925	FlashRaw	1.0246952554558693	73.518125	24.611292	13.368916
+DJI Phantom 4 Pro	DNG	corpus/raw-performance/713539934402.dng	DJI/FC6310/DJI_0220.DNG	ok	34.759	5.082666	Builtin	6.838733845584188	5.178625	5.7525830000000004	1.780875
+Epson R-D1	additional format coverage	corpus/raw-performance/b3cb52861e31.erf	Epson/R-D1/_EPS0672.ERF	ok	8.824250000000001	8.853375	FlashRaw	0.996710294096884		8.857458000000001	5.601
+Fujifilm GFX100 II	lossless compressed	corpus/raw-performance/682ad9f5a739.raf	Fujifilm/GFX100 II/_DSF0267.RAF	ok	130.003084	127.978583	FlashRaw	1.0158190609127153		127.70625	118.86475
+Fujifilm X-H2	compressed	corpus/raw-performance/422fe3bdb8eb.raf	Fujifilm/X-H2/Fuji-X-H2-Compressed-Raw.RAF	ok	91.003791	88.634541	FlashRaw	1.026730549662349		90.2595	85.32225
+Fujifilm X-S20	lossless compressed	corpus/raw-performance/4776e3983db7.raf	Fujifilm/X-S20/DSCF2526.RAF	ok	41.530457999999996	41.162083	FlashRaw	1.0089493770273967		40.385334	36.401625
+Fujifilm X-T4	uncompressed	corpus/raw-performance/0cd6e466c339.raf	Fujifilm/X-T4/DSCF0266.RAF	ok	5.532583	5.6174170000000005	FlashRaw	0.9848980412171643	6.567082999999999	5.5695	2.274667
+Fujifilm X-T5	lossless compressed	corpus/pixls/DSCF0021.RAF	Fujifilm/X-T5/DSCF0021.RAF	ok	72.47187500000001	71.808542	FlashRaw	1.00923752218782		72.370208	68.277334
+Fujifilm X100VI	lossless compressed	corpus/raw-performance/5833b94443b6.raf	Fujifilm/X100VI/DSCF0075.RAF	ok	71.929625	71.93724999999999	FlashRaw	0.9998940048445001		72.2145	68.31504100000001
+Google Pixel 6 Pro	DNG	corpus/raw-performance/fea51f3ff235.dng	Google/Pixel 6 Pro/PXL_20220910_093206982.dng	ok	37.745041	13.952708	Builtin	2.7052125651880625	13.908541999999999	21.849292	11.170833
+Google Pixel 8 Pro	DNG	corpus/raw-performance/0a4863c49588.dng	Google/Pixel 8 Pro/PXL_20240415_103400204.RAW-02.ORIGINAL.dng	ok	147.807042	52.776625	Builtin	2.800615651341858	52.973625000000006	86.58487500000001	42.298209
+GoPro HERO10 Black	GPR	corpus/raw-performance/377f043e2f2e.gpr	GoPro/HERO10 Black/GOPR0018.GPR	ok	84.7435	48.851666	FlashRaw	1.7347105419086424		48.618416999999994	45.183541
+GoPro HERO11 Black	GPR	corpus/raw-performance/8bcd1008c029.gpr	GoPro/HERO11 Black/GOPR0123.GPR	ok	95.716	57.104833	FlashRaw	1.6761453448257173		56.689042	49.613125000000004
+Hasselblad CFV-50c	additional format coverage	corpus/raw-performance/166e19850bbf.3fr	Hasselblad/CFV-50c/20200215_BERLIN_OldNew_WestHafen_B0000420.3FR	error		63.239000000000004	FlashRaw			63.663290999999994	63.922292000000006
+Hasselblad X2D 100C	compressed	corpus/raw-performance/1415e8e162c9.fff	Hasselblad/X2D 100C/Job_0079.fff	error		135.37370800000002	FlashRaw			134.112333	134.26695899999999
+Kodak DC50	additional format coverage	corpus/raw-performance/35c99339957a.kdc	Kodak/DC50/RAW_KODAK_DC50.KDC	error		2.232959	FlashRaw			2.202542	2.2018340000000003
+Kodak DCS Pro 14N	additional format coverage	corpus/raw-performance/06c860380215.dcr	Kodak/DCS Pro 14N/D4C50031.DCR	ok	30.838791	30.690125	FlashRaw	1.0048440988754528		30.928082999999997	27.20175
+Leica M10-R	DNG	corpus/raw-performance/e037c4395128.dng	Leica Camera AG/LEICA M10-R/M10R0324.DNG	ok	114.574834	52.490750000000006	FlashRaw	2.182762372417997	240.26233399999998	53.506916000000004	46.967625
+Leica SL2	DNG	corpus/raw-performance/b125d0ac3350.dng	LEICA CAMERA AG/LEICA SL2/L1020010.DNG	ok	82.55525	13.319916	FlashRaw	6.1978806773255934	29.760375	13.504999999999999	4.35925
+Leica D-Lux 7	additional format coverage	corpus/raw-performance/cc427f638345.rwl	Leica/D-Lux 7/L1023208.RWL	ok	6.330291	6.416542	FlashRaw	0.9865580245559057	8.133417	6.396458	6.490875
+Leica Q2	DNG	corpus/raw-performance/1fbb8cbaccb3.dng	Leica/Q2/L1000750.DNG	ok	82.339916	12.404709	FlashRaw	6.637795050250675	29.091208	12.861292	4.3669590000000005
+Minolta Dynax 7D	additional format coverage	corpus/raw-performance/bc6d86951c67.mrw	Minolta/Dynax 7D/PICT3410.MRW	error		0.408542	FlashRaw			0.376583	0.389708
+Nikon Z6III	lossless	corpus/raw-performance/23927de107c3.nef	NIKON CORPORATION/NIKON Z6_3/Nikon_Z6__3_Lossless_compressed_FX.NEF	ok	56.081332999999994	51.106333	FlashRaw	1.0973460568967057	164.78737500000003	50.536792	48.184333
+Nikon Coolpix P7000	additional format coverage	corpus/raw-performance/48de19eb4aaa.nrw	Nikon/Coolpix P7000/RAW_NIKON_P7000.NRW	ok	9.538834	9.326167	FlashRaw	1.0228032588307714	7.581291	9.301666	6.1068750000000005
+Nikon D3	existing regression corpus	corpus/pixls/JD1_8203.NEF	Nikon/D3/JD1_8203.NEF	ok	32.072165999999996	28.810459	FlashRaw	1.1132126010210388	76.93841599999999	28.512834	25.316584
+Nikon D750	14-bit lossless	corpus/raw-performance/9d38c88bd0f3.nef	Nikon/D750/lossless_compressed_14_bit.NEF	ok	58.257542	50.118625	FlashRaw	1.1623930624593153	141.318042	49.77075	46.619458
+Nikon D850	14-bit lossless	corpus/raw-performance/0b60ddd17299.nef	Nikon/D850/Nikon-D850-14bit-lossless-compressed.NEF	ok	104.106166	90.49541699999999	FlashRaw	1.1504026330968784	281.995667	89.12370899999999	85.364542
+Nikon Z50	lossless	corpus/raw-performance/b065268bca83.nef	Nikon/Z 50/DSC_0450.NEF	ok	49.100583	44.599334	FlashRaw	1.1009263725776712	144.65254199999998	44.464208	40.725042
+Nikon Z 6	existing regression corpus	corpus/pixls/DSC_0750.NEF	Nikon/Z 6/DSC_0750.NEF	ok	5.700209	5.7024170000000005	FlashRaw	0.9996127957671281	69.955959	5.745374999999999	2.422917
+Nikon Z 6	existing regression corpus	corpus/pixls/DSC_0751.NEF	Nikon/Z 6/DSC_0751.NEF	ok	54.618041999999996	50.111875	FlashRaw	1.0899221392135097	151.458709	50.232583	45.916875000000005
+Nikon Z 6	existing regression corpus	corpus/pixls/DSC_0753.NEF	Nikon/Z 6/DSC_0753.NEF	ok	4.930375	4.77325	FlashRaw	1.032917823286021	69.71208299999999	4.641333	1.6622919999999999
+Nikon Z 6	existing regression corpus	corpus/pixls/DSC_0754.NEF	Nikon/Z 6/DSC_0754.NEF	ok	57.378833	53.546541000000005	FlashRaw	1.0715693661706365	150.465417	52.894625	48.915124999999996
+Nikon Z7II	lossless	corpus/raw-performance/3bcff7942d93.nef	Nikon/Z 7_2/Z72_0027.NEF	ok	101.54358300000001	89.98649999999999	FlashRaw	1.1284312980280378	285.192	89.79724999999999	85.2515
+Nikon Z8	14-bit lossless	corpus/raw-performance/01c343a76794.nef	Nikon/Z 8/Nikon_Z8_raw_14_bit_lossless_compression.NEF	ok	99.76420900000001	86.044167	FlashRaw	1.1594534816055573	311.503833	88.318583	84.560875
+Nikon Z9	14-bit lossless	corpus/raw-performance/f9f2927b8f45.nef	Nikon/Z 9/Nikon_-_NIKON_Z_9_-_14bit_compressed_(Lossless).NEF	ok	101.594625	88.925333	FlashRaw	1.1424711223740933	290.491	89.50800000000001	85.142292
+Nikon Zf	lossless	corpus/raw-performance/d4f3559bf184.nef	Nikon/Z f/DSC_0040.NEF	ok	53.515917	50.166166999999994	FlashRaw	1.0667730903180226	158.508958	49.093542	46.252583
+Olympus E-1	existing regression corpus	corpus/pixls/E_1__C106743_gredos.ORF	Olympus/E-1/E_1__C106743_gredos.ORF	ok	2.085125	0.72925	Builtin	2.8592732259170384	0.7981670000000001	2.1107500000000003	0.445125
+Olympus E-5	existing regression corpus	corpus/pixls/_7061961_copy.ORF	Olympus/E-5/_7061961_copy.ORF	error		76.77525	FlashRaw			76.738916	76.37079200000001
+Olympus E-M1 Mark III	ORF	corpus/raw-performance/ecc2d5c4d709.orf	Olympus/E-M1MarkIII/_3160531.ORF	error		123.129958	FlashRaw			123.598458	124.271584
+OM System OM-1 Mark II	ORF	corpus/raw-performance/ad25ef89c1ff.orf	OM System/OM-1 Mark II/20mp-12bit.orf	error		114.145208	FlashRaw			114.112583	114.204916
+OM System OM-5	ORF	corpus/raw-performance/6655cd154298.orf	OM System/OM-5/C1291096.ORF	error		123.528584	FlashRaw			124.423625	124.213458
+Panasonic DC-G9	existing regression corpus	corpus/pixls/P1000475.RW2	Panasonic/DC-G9/P1000475.RW2	ok	14.433834	12.495833	Builtin	1.1550917813962462	12.633000000000001	13.839791	13.961834
+Panasonic Lumix G9II	RW2	corpus/raw-performance/9037155290ed.rw2	Panasonic/DC-G9M2/P1000019.RW2	error		25.927249999999997	FlashRaw			25.186875	25.994
+Panasonic Lumix GH5	RW2	corpus/raw-performance/747180b47e53.rw2	Panasonic/DC-GH5/_T012010.RW2	ok	7.583833	7.138208	FlashRaw	1.0624281332233525	9.64725	7.132208	7.1983749999999995
+Panasonic Lumix GH6	RW2	corpus/raw-performance/d338b479d220.rw2	Panasonic/DC-GH6/4-3.RW2	error		27.607917	FlashRaw			27.363584	27.813208
+Panasonic Lumix S1R	RW2	corpus/raw-performance/036d15936fe3.rw2	Panasonic/DC-S1R/P1000077.RW2	error		14.817709	FlashRaw			14.667	14.715584
+Panasonic Lumix S5	RW2	corpus/raw-performance/2d12edad2a22.rw2	Panasonic/DC-S5/P1047510.RW2	error		3.424541	FlashRaw			3.399167	3.4319580000000003
+Panasonic Lumix S5II	RW2	corpus/raw-performance/ebf84792fc82.rw2	Panasonic/DC-S5M2/P1126458_mechanical.RW2	error		25.330042	FlashRaw			25.432790999999998	24.994374999999998
+Pentax K-1 Mark II	PEF	corpus/raw-performance/ee333784a4c9.pef	Pentax/K-1 Mark II/_K1I9780.PEF	error		73.1285	FlashRaw			74.18412500000001	71.561542
+Pentax K-3 Mark III	PEF	corpus/raw-performance/d0e9637bf77e.pef	Pentax/K-3 Mark III/_IMG0115.PEF	error		55.959250000000004	FlashRaw			57.202125	56.161792000000005
+Phase One IQ4 150MP	IIQ L	corpus/raw-performance/0880ec05da49.iiq	Phase One/IQ4 150MP/IQ4_150MP_L_14.iiq	error		79.527292	FlashRaw			78.492167	79.05624999999999
+Ricoh GR III	DNG	corpus/raw-performance/6a3fb5c1a75f.dng	Ricoh/GR III/R0000357.DNG	ok	70.195541	32.735082999999996	FlashRaw	2.144352009127333	133.68025	32.985375	29.010334
+Samsung Galaxy S23 Ultra	DNG	corpus/raw-performance/d536d3b92cde.dng	Samsung/Galaxy S23 Ultra/20231214_130645.dng	ok	782.231042	139.114709	FlashRaw	5.622921167883117	783.177334	138.958125	206.336083
+Samsung NX1	additional format coverage	corpus/raw-performance/e427f75ab121.srw	Samsung/NX1/2016-07-23-142101_sam_9364.srw	error		147.00125	FlashRaw			147.32125	146.93683399999998
+Samsung Galaxy S22	JPEG XL	corpus/raw-performance/a940a485a57d.dng	samsung/SM-S901E/20250305_173647.dng	ok	193.379417	190.69125	Builtin	1.0140969604006476	190.80366700000002	260.178584	259.470292
+Sigma fp L	DNG	corpus/raw-performance/5f8c9cf7937f.dng	Sigma/fp L/SDIM0915.DNG	ok	180.743834	67.675917	Builtin	2.6707260427664394	64.35775000000001	105.719375	52.4165
+Sigma SIGMA DP2 Merrill	additional format coverage	corpus/raw-performance/0edc87d4f233.x3f	Sigma/SIGMA DP2 Merrill/DP2M1726.X3F	error		101.7625	FlashRaw			102.086167	100.09925
+Sony DSC-F828	additional format coverage	corpus/raw-performance/02aeb1bea751.srf	Sony/DSC-F828/DSC06227.SRF	error		2.9299999999999997	FlashRaw			2.938	2.915625
+Sony DSC-R1	additional format coverage	corpus/raw-performance/bd77354b5f56.sr2	Sony/DSC-R1/_DSC1477.SR2	ok	4.188083000000001	4.1402920000000005	FlashRaw	1.0115429056694552	3.902666	4.149208	0.877167
+Sony DSC-RX0	existing regression corpus	corpus/pixls/DSC00009.ARW	Sony/DSC-RX0/DSC00009.ARW	ok	8.349083	8.200624999999999	Builtin	1.0181032543251278	8.168083		4.637458
+Sony A1	compressed	corpus/raw-performance/c27a27c71727.arw	Sony/ILCE-1/A1_full_compressed.ARW	ok	16.125875	15.729291	Builtin	1.0252130881169406	15.2545		13.594375000000001
+Sony A6400	compressed	corpus/raw-performance/3e71fe61fed1.arw	Sony/ILCE-6400/DSC00087.ARW	ok	6.943875	7.073083	Builtin	0.981732435488174	7.410333		7.000916
+Sony A6700	lossless	corpus/raw-performance/60733d1a3750.arw	Sony/ILCE-6700/DSC00001.ARW	ok	30.483708	30.416291	FlashRaw	1.0022164766900736	31.790833	30.33975	31.165708
+Sony A7C II	compressed	corpus/raw-performance/b8633a60be62.arw	Sony/ILCE-7CM2/DSC02435.ARW	ok	10.0185	9.753458	Builtin	1.0271741571040751	10.113833		9.289957999999999
+Sony A7 III	compressed	corpus/raw-performance/7f2d9b4697f8.arw	Sony/ILCE-7M3/_DSC0009.ARW	ok	7.792000000000001	7.685	Builtin	1.0139232270657126	7.447291		6.724167
+Sony A7 IV	lossless	corpus/raw-performance/617816e63913.arw	Sony/ILCE-7M4/ILCE-7M4_DSC06674_FullFrame-LossLess-Compressed-Large.ARW	ok	35.251625000000004	34.834542000000006	FlashRaw	1.011973259186241	34.621166	34.878792	36.072374999999994
+Sony A7 IV	compressed	corpus/raw-performance/ba537742469c.arw	Sony/ILCE-7M4/ILCE-7M4_DSC06677_FullFrame-Raw-Compressed.ARW	ok	10.888041	10.453624999999999	Builtin	1.0415564935608461	10.935167000000002		9.873666
+Sony A7R V	lossless	corpus/raw-performance/81c7c164a56b.arw	Sony/ILCE-7RM5/7RM5-LosslessCompressedLarge.ARW	ok	63.745042000000005	60.893375	FlashRaw	1.0468304967494413	61.477	60.573750000000004	60.795
+Sony A9 III	compressed	corpus/raw-performance/9023c10614e0.arw	Sony/ILCE-9M3/DSC00111.ARW	ok	7.779083	7.805041	Builtin	0.9966742006864537	7.842999999999999		6.664
+Sony ZV-E10	compressed	corpus/raw-performance/7a89c405e3e3.arw	Sony/ZV-E10/DSC00002.ARW	ok	7.1969590000000006	6.949958	Builtin	1.0355399270038756	7.208709		6.946417

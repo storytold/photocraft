@@ -50,8 +50,15 @@ for wasm in "$APP"/*_bg.wasm; do
 done
 [[ -n "$WASM" ]] || { echo "error: no .wasm in $APP" >&2; exit 1; }
 STEM="$(basename "$WASM" _bg.wasm)" # photocraft-web-<content hash>
-GLUE="$APP/$STEM.js"
-[[ -f "$GLUE" ]] || { echo "error: $GLUE missing" >&2; exit 1; }
+# Trunk can hash the JS glue and wasm independently. The boot module supplies
+# the wasm explicitly, so the glue need not have the wasm's hash in its name.
+GLUE=""
+for glue in "$APP"/photocraft-web*.js; do
+  [[ -f "$glue" ]] || continue
+  [[ -z "$GLUE" ]] || { echo "error: more than one app glue file in $APP" >&2; exit 1; }
+  GLUE="$glue"
+done
+[[ -n "$GLUE" ]] || { echo "error: no PhotoCraft JS glue in $APP" >&2; exit 1; }
 
 NAME="photocraft-web-$VERSION"
 WORK="$CARGO_TARGET_DIR/web-package"
@@ -60,6 +67,9 @@ mkdir -p "$WORK/$NAME/app"
 cp -R "$BOOT/." "$WORK/$NAME/"
 # The boot module imports the app's glue by this name (it can't know Trunk's content hash).
 cp "$GLUE" "$WORK/$NAME/app/photocraft-web.js"
+if [[ -d "$APP/snippets" ]]; then
+  cp -R "$APP/snippets" "$WORK/$NAME/app/"
+fi
 # The parts keep the content hash, so they can be cached forever. Their extension is one no
 # server knows: a server that recognised gzip might decode it or label it, and the page inflates
 # the parts itself.

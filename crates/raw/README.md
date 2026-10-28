@@ -1,8 +1,12 @@
 # photocraft-raw
 
-A clean-room, pure-Rust camera raw decoder and developer. The crate is standalone (no workspace
-dependencies; its decoding dependencies are `flate2` for Deflate DNG and `jxl-oxide`, a pure-Rust
-JPEG XL decoder, for DNG 1.7, native builds only), has no `unsafe`, does no I/O (`&[u8]` in), builds for `wasm32-unknown-unknown`
+Pure-Rust camera raw decoding and PhotoCraft development. The default `flashraw` feature uses
+FlashRaw 0.1.1 as the primary sensor decoder, selecting PhotoCraft's clean-room decoder for
+measured faster encodings or representation compatibility. Development stays in PhotoCraft.
+
+The built-in decoder is clean-room. The crate is standalone (no workspace
+dependencies; decoding uses `flate2` for Deflate DNG, `zune-jpeg` for lossy JPEG and native-only
+`jxl-oxide`, a pure-Rust JPEG XL decoder, for DNG 1.7), has no `unsafe`, does no I/O (`&[u8]` in), builds for `wasm32-unknown-unknown`
 (sequential there, rayon-parallel on native) and never panics on hostile input: every offset is
 bounds-checked and sizes are checked against `Limits` before allocating.
 
@@ -16,6 +20,46 @@ let dev = develop(&bytes, &DevelopOptions { demosaic: Demosaic::Ahd, ..Default::
 
 `photocraft-io` uses it so opening a raw file yields a normal 16-bit RGB document tagged with the
 built-in ProPhoto-compatible profile.
+
+## Decoder selection
+
+`decode` selects `DecodeBackend::Auto`. For reproducible diagnostics use
+`decode_with_backend(bytes, limits, DecodeBackend::FlashRaw)` or `Builtin`; explicit selections
+never silently switch decoders. `--no-default-features` removes FlashRaw entirely.
+
+Both backends feed PhotoCraft's 16-bit ProPhoto development. Existing metadata readers retain
+measured Nikon profiles, preview-colour fitting, CFA origin, levels, crop, white balance, DNG
+opcodes and orientation. Newly supported vendor layouts use validated FlashRaw frame geometry,
+levels and white balance, with black patterns/deltas reanchored to PhotoCraft's active area.
+FlashRaw's camera-database colour matrices and RGB development are not used. No mmap, FlashRaw
+ICC or GPU feature is enabled. Native uses CPU/SIMD and rayon, with native JPEG XL enabled;
+wasm uses one calling thread without browser workers and does not include JPEG XL.
+
+Auto chooses from the file's encoding/layout, without timing or decoding twice at open time.
+On ARM64, the measured policy prefers Builtin for small tiled lossless-JPEG DNGs, whole
+uncompressed 16-bit DNG strips, JPEG XL DNG, RW2 RawFormat 5 and uncompressed 16-bit ORF.
+Other architectures retain FlashRaw first for these performance choices until measured.
+Target-independent compatibility choices include floating DNG, lossy JPEG DNG, sub-16-bit
+Deflate and Sony cRAW tone curves. Unsupported representations may fall back; damaged inputs
+and exceeded limits return errors. Caller limits also cover padded tiles/JPEG frames and
+bounded codec scratch. `decode_with_backend_traced` reports the backend that supplied samples.
+
+Lossless-JPEG DNG uses FlashRaw's public low-level codec when stored samples must be retained,
+including non-injective LinearizationTable values; PhotoCraft applies linearization during
+development. Exact bounded integer-domain MapPolynomial lookup and a parallel periodic
+saturation histogram avoid repeated work without changing stored samples or metadata.
+
+The default backend covers CR3 RAW/C-RAW, compressed Bayer/X-Trans RAF, compressed ORF/PEF,
+modern RW2, CRW, MRW, SRW, X3F, IIQ, SRF, KDC, 3FR and FFF in the measured corpus. The native
+file picker includes these extensions, and identification uses bytes rather than filenames.
+All 20 formerly failed integration files now pass full-resolution RGB16 import and Camera Raw
+Exposure re-development, including the IQ4 150 MP file. This is evidence for those files, not
+an assertion that every camera/mode is supported. Non-DNG camera colour calibration remains
+incomplete. Sony F828 RGBE preserves emerald sensor/CFA values, but RGB development projects
+emerald onto green and explicitly reports approximate colour; four-channel calibration is open.
+
+See the [88-file optimization report](../../docs/raw-decode-optimization.md) for measured
+routes, complete before/after results, independent sample checks and practical limits.
 
 ## Sources (clean-room)
 
@@ -63,7 +107,14 @@ Implemented only from public specifications, papers and observation of files:
 No code from dcraw, LibRaw, rawspeed, rawler, rawloader or darktable was read or used, and no
 camera colour tables were copied.
 
-## Support matrix
+## Built-in support matrix
+
+The 88-file matrix found incorrect Builtin samples in P7000 NRW, R1 SR2, GH5 RW2 and D-Lux 7
+RWL. Default Auto retains independently validated FlashRaw for these encodings; see the report.
+
+The table describes the fallback decoder. The default FlashRaw route additionally supports
+the additional vendor codecs described above. A Builtin-only build retains the limitations
+below; Auto with the default FlashRaw feature need not share them.
 
 | Format | Status |
 |---|---|
@@ -77,7 +128,7 @@ camera colour tables were copied.
 | Panasonic / Leica RW2, RawFormat 5 (12- and 14-bit packed) | Decoded, with PanasonicRaw black / white / WB / sensor borders |
 | Panasonic / Leica RW2, RawFormat 3 and 4 (vendor-compressed, 12-bit) | Decoded; the black level is read 15 counts above the recorded tag; PanasonicRaw white / WB / sensor borders |
 | Olympus ORF, uncompressed 16-bit (E-1, E-400…) | Decoded, with ImageProcessing black / WB / ValidBits / crop |
-| Nikon "lossy after split" NEF, Sony "Compressed RAW 2", Pentax compressed PEF, RW2 RawFormat 6 and newer, Olympus compressed ORF | Unsupported: no public description of these codes was found apart from GPL decoder source, which this crate may not use (clean-room). `photocraft-io` opens the embedded JPEG preview instead |
+| Nikon "lossy after split" NEF, Sony "Compressed RAW 2", Pentax compressed PEF, RW2 RawFormat 6 and newer, Olympus compressed ORF | Unsupported in Builtin: no public clean-room description was found. Default Auto can use FlashRaw for supported vendor codecs; preview fallback remains available if sensor decoding is unsupported |
 | Fujifilm RAF, uncompressed (X-Trans I–V, GFX and Bayer bodies since about 2010) | Decoded: 16-bit containers (either byte order), 12-bit LSB-first packing, 14-bit packing in 32-bit words; X-Trans 6×6 or Bayer 2×2 layout, black, as-shot WB, crop, RawExposureBias, orientation from the preview's EXIF |
 | Fujifilm compressed RAF, early FinePix / SuperCCD RAF (no CFA TIFF) | Unsupported (no public description of the compression); preview fallback |
 | CR3 | Native CRX unsupported; bounded JPEG-track/PRVW preview fallback with CMT1 orientation. I/O labels the result as an 8-bit camera preview |
@@ -168,3 +219,25 @@ embedded JPEG previews.
 camera-JPEG colour fit, reports ΔE against the embedded JPEG with the neutral fallback and with the
 fit, and can write 1200-pixel sRGB PNGs of both and of the JPEG; `--synthetic` times it on a
 generated 24 MP file.
+
+For backend comparisons, `rawinfo --backend auto|builtin|flashraw` selects the decoder.
+`cargo run --release -p photocraft-raw --example rawbench -- auto|builtin|flashraw FILE...`
+reports decode/develop medians after two warmups and seven measured runs, with input read once.
+Decode includes parsing, the bridge and PhotoCraft metadata; combined time excludes I/O,
+preview-colour fitting and document construction. Use the same files and machine for comparisons.
+
+Native performance and safety evidence: [FlashRaw integration report](../../docs/raw-decoding-flashraw.md).
+
+For decode-only measurements across camera brands, use
+`cargo run --release -p photocraft-raw --example rawdecodebench -- FILE...`.
+It interleaves Builtin, forced FlashRaw, Auto and the FlashRaw library directly, with two
+warmups and nine measured runs each. JSON lines include median/min/max, every measured run,
+errors and untimed exact sample/metadata comparisons. Library-direct results omit PhotoCraft's
+metadata bridge and can use different sample representations; they are diagnostics, not app
+speedups. The [historical camera benchmark](../../docs/raw-decode-performance.md),
+[optimization report](../../docs/raw-decode-optimization.md) and `perf/raw-decode/run.py` provide
+the pinned sample set, current routes and reproducible suite.
+
+`cargo run --release -p photocraft-raw --example rawsamplediff -- FILE...` diagnoses Auto/Builtin
+sample differences across the whole sensor, active area and output crop, with coordinates,
+common deltas and metadata. It does not assume Builtin is a correctness oracle.

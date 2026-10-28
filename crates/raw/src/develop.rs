@@ -220,7 +220,7 @@ fn develop(s: &Sensor, opts: &DevelopOptions, allow_fused: bool) -> Result<Devel
             || cfa.width > 16
             || cfa.height > 16
             || cfa.colors.len() != cfa.width * cfa.height
-            || cfa.colors.iter().any(|c| *c > 2))
+            || cfa.colors.iter().any(|c| *c > 3))
     {
         return Err(RawError::malformed("invalid sensor CFA pattern"));
     }
@@ -232,6 +232,9 @@ fn develop(s: &Sensor, opts: &DevelopOptions, allow_fused: bool) -> Result<Devel
     let orient_copy = opts.orient && (2..=8).contains(&s.orientation);
     let jobs = working_memory(c.width, c.height, s.cfa.is_some(), bayer, Shape { fused, orient_copy }, opts, par::workers())?;
     let mut warnings = s.warnings.clone();
+    if s.cfa.as_ref().is_some_and(|cfa| cfa.colors.contains(&3)) {
+        warnings.push("RGBE sensor: emerald is reconstructed as green; four-channel colour calibration is not available, colours are approximate".into());
+    }
     let sc = Scale::new(s);
 
     let neutral = resolve_neutral(s, opts, &sc, &mut warnings)?;
@@ -369,10 +372,26 @@ fn develop(s: &Sensor, opts: &DevelopOptions, allow_fused: bool) -> Result<Devel
                 }
             };
             let names = |p: &[u8]| p.iter().map(|c| ['R', 'G', 'B'][usize::from(*c).min(2)]).collect::<String>();
+            let bayer_name = || {
+                if cfa.colors.contains(&3) {
+                    [(c.x, c.y), (c.x + 1, c.y), (c.x, c.y + 1), (c.x + 1, c.y + 1)]
+                        .into_iter()
+                        .map(|(x, y)| match cfa.sensor_color(x, y) {
+                            0 => 'R',
+                            1 => 'G',
+                            2 => 'B',
+                            3 => 'E',
+                            _ => '?',
+                        })
+                        .collect::<String>()
+                } else {
+                    names(&cfa.phase(c.x, c.y))
+                }
+            };
             if bayer && fused {
                 // No padded plane either: every band normalizes its own rows.
                 let p = cfa.phase(c.x, c.y);
-                pattern = Some(names(&p));
+                pattern = Some(bayer_name());
                 let mut o = vec![0u16; w * h * 3];
                 demosaic_fused(w, h, p, opts.demosaic, &to_xyz, jobs, &fill_row, &mut o, &encode_plain);
                 fused_out = Some(o);
@@ -387,7 +406,7 @@ fn develop(s: &Sensor, opts: &DevelopOptions, allow_fused: bool) -> Result<Devel
                 plane.fill_borders();
                 if bayer {
                     let p = cfa.phase(c.x, c.y);
-                    pattern = Some(names(&p));
+                    pattern = Some(bayer_name());
                     rgb = demosaic(&plane, p, opts.demosaic, &to_xyz, jobs);
                 } else {
                     let pat = Pattern::of(cfa, c.x, c.y);

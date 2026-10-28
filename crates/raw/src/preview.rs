@@ -93,6 +93,18 @@ pub fn embedded_previews(bytes: &[u8]) -> Vec<Preview<'_>> {
             }
         }
     }
+    #[cfg(feature = "flashraw")]
+    if (found.is_empty() || crate::identify_builtin(bytes).is_none())
+        && let Ok(raw) = flashraw::FlashRaw::open_with(bytes, flashraw::Limits::default().with_max_samples(Limits::default().max_pixels.saturating_mul(3)))
+    {
+        for p in &raw.metadata().previews {
+            if p.encoding == flashraw::PreviewEncoding::Jpeg
+                && let (Ok(offset), Ok(length)) = (usize::try_from(p.offset), usize::try_from(p.length))
+            {
+                found.extend(candidate(bytes, offset, length));
+            }
+        }
+    }
     let mut seen = Vec::new();
     found.retain(|p| {
         let key = (p.jpeg.as_ptr() as usize, p.jpeg.len());

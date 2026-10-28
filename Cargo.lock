@@ -650,7 +650,7 @@ dependencies = [
  "bitflags 2.13.2",
  "cexpr",
  "clang-sys",
- "itertools 0.10.5",
+ "itertools 0.13.0",
  "proc-macro2",
  "quote",
  "regex",
@@ -2244,6 +2244,66 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b7ac824320a75a52197e8f2d787f6a38b6718bb6897a35142d749af3c0e8f4fe"
 
 [[package]]
+name = "flashraw"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "19b9e98fcbfa0ebbcd891315b00e49ffe1efb338c3ba7a1c2d3e4a145cf6be19"
+dependencies = [
+ "flashraw-camera-db",
+ "flashraw-codecs",
+ "flashraw-core",
+ "flashraw-formats",
+ "rayon",
+]
+
+[[package]]
+name = "flashraw-camera-db"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a31e41773f47a27f5ffd91cd54a2a6f165e6d9253f720143a04502cb863bfd1b"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "flashraw-codecs"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5003f7d9cb205d4808c6d4744962d5791bd3c0f90a25b3c3cf58f43990160356"
+dependencies = [
+ "flashraw-core",
+ "jxl-oxide",
+ "rayon",
+ "zlib-rs",
+ "zune-inflate",
+ "zune-jpeg 0.4.21",
+]
+
+[[package]]
+name = "flashraw-core"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "17e44e91643ffccded486415de5b9c29ca92e8abd04c707b86666a9e92d8a378"
+dependencies = [
+ "libc",
+ "rayon",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "flashraw-formats"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bd3a56dffdd7c00b5eb7e664475f27ce04669158c02a4ec736fceff1294a5bdd"
+dependencies = [
+ "flashraw-camera-db",
+ "flashraw-codecs",
+ "flashraw-core",
+ "rayon",
+]
+
+[[package]]
 name = "flate2"
 version = "1.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3342,15 +3402,6 @@ name = "is_terminal_polyfill"
 version = "1.70.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a6cb138bb79a146c1bd460005623e142ef0181e3d0219cb493e02f7d08a35695"
-
-[[package]]
-name = "itertools"
-version = "0.10.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b0fd2260e829bddf4cb6ea802289de2f86d6a7a690192fbe91b3f46e0f2c8473"
-dependencies = [
- "either",
-]
 
 [[package]]
 name = "itertools"
@@ -5341,12 +5392,15 @@ dependencies = [
 name = "photocraft-raw"
 version = "0.16.0"
 dependencies = [
+ "flashraw",
  "flate2",
  "image",
  "jxl-oxide",
+ "log",
  "photocraft-raw",
  "png 0.18.1",
  "rayon",
+ "serde_json",
  "zune-core 0.5.3",
  "zune-jpeg 0.5.15",
  "zune-jpegxl",

@@ -155,7 +155,7 @@ pub(crate) fn read_craw(t: &Tiff, ifd: &Ifd, limits: &Limits) -> Result<Plane> {
             }
         }
     });
-    Ok(Plane { width, height, samples: 1, bits: 14, data, float_scale: None })
+    Ok(Plane { width, height, samples: 1, bits: 14, data, float_scale: None, linearized: false })
 }
 
 #[cfg(test)]

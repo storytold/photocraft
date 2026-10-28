@@ -80,7 +80,7 @@ id = "FILE-215-11"
 target = "RAW: lossy DNG, highlight modes, .xmp sidecars, RAW prefs wired, per-camera corpus"
 status = "partial"
 issue = 215
-note = "2026-10-13: lossy DNG (34892) decodes stored 8-bit samples with padded edge tiles (raw sensor.rs lossy_jpeg, #5112); a raw's sidecar IMG.xmp fills the open-time dialog and Open writes it back (camera_raw_ui.rs read_sidecar/write_sidecar, pref rawDefaults.writeXmpSidecars); every Camera Raw Defaults preference is read (colour space, bit depth, resolution, Sharpen For, Open as Smart Object, Apply auto tone: apply_raw_defaults); Calibration panel (shadow tint, primaries hue/saturation) in the dialog, the filter and the crs: keys. Still missing: highlight recovery modes, the absolute (kelvin) white balance of raw sidecars, a per-camera corpus"
+note = "2026-10-28: optimized Auto decodes 88/88 pinned CC0 files; all 20 former integration gaps pass RGB16 import and Exposure re-development, with 694,104,304 full-plane samples equal to LibRaw; measured ARM64 encoding-based backend selection, RGBE emerald-to-green approximation reported (docs/raw-decode-optimization.md). 2026-10-27: FlashRaw 0.1.1 decodes CR3 RAW/C-RAW and compressed RAF sensor data with PhotoCraft metadata/development and guarded built-in fallback on native and wasm; 14 pinned CC0 raw fixtures including EOS R5 RAW/C-RAW and X-T5 compressed RAF. 2026-10-13: lossy DNG (34892) decodes stored 8-bit samples with padded edge tiles (raw sensor.rs lossy_jpeg, #5112); a raw's sidecar IMG.xmp fills the open-time dialog and Open writes it back (camera_raw_ui.rs read_sidecar/write_sidecar, pref rawDefaults.writeXmpSidecars); every Camera Raw Defaults preference is read (colour space, bit depth, resolution, Sharpen For, Open as Smart Object, Apply auto tone: apply_raw_defaults); Calibration panel (shadow tint, primaries hue/saturation) in the dialog, the filter and the crs: keys. Still missing: highlight recovery modes, the absolute (kelvin) white balance of raw sidecars, broad per-camera coverage"
 
 [[item]]
 id = "FILE-215-12"
@@ -171,7 +171,7 @@ id = "FILE-216-3"
 target = "TIFF, RAW and EXR corpora read by tests; per-camera RAW coverage reported"
 status = "partial"
 issue = 216
-note = "EXR: corpus/exr (the OpenEXR deep test images, pinned) is read by codecs tests/it/deep_exr.rs in the CI corpus job, against the ID manifests of the upstream sidecars. corpus/tiff and corpus/raw are still copied in by hand and no test reads them; no per-camera RAW report"
+note = "EXR: corpus/exr (the OpenEXR deep test images, pinned) is read by codecs tests/it/deep_exr.rs in the CI corpus job, against the ID manifests of the upstream sidecars. TIFF corpus remains manual; RAW has 14 SHA-256-pinned CC0 corpus/pixls fixtures, including CR3 RAW/C-RAW and compressed RAF, tested by raw_corpus plus default/tuned I/O import regressions; broad per-camera coverage reporting remains open"
 
 [[item]]
 id = "FILE-216-4"

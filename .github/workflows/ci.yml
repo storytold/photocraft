@@ -319,7 +319,7 @@ jobs:
       - name: Fetch and verify corpora
         run: cargo xtask corpus --all
       - name: Corpus tests
-        run: cargo xtask test-corpus
+        run: cargo xtask test-corpus --pixls
 
   web:
     timeout-minutes: 60
@@ -350,6 +350,8 @@ jobs:
           trunk --version
       # package.sh runs Trunk's release builds, validates relative URLs, cuts the wasm into
       # parts, checks the 24 MiB per-file limit and exercises the packaging step release.yml uses.
+      - name: Web packaging regressions
+        run: bash packaging/web/package-test.sh
       - name: Build and verify browser release
         run: packaging/web/package.sh
       - name: Report wasm size

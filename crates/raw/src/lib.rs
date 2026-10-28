@@ -1,4 +1,8 @@
-//! `photocraft-raw`: a clean-room, pure-Rust camera raw decoder and developer.
+//! `photocraft-raw`: pure-Rust camera raw decoding and PhotoCraft development.
+//!
+//! The default `flashraw` feature uses pinned FlashRaw sensor decoding with a
+//! built-in compatibility fallback and measured encoding-based choices. Both routes use PhotoCraft metadata, camera profiles and
+//! development; the built-in decoder described below is clean-room.
 //!
 //! Implemented only from public specifications and papers: TIFF 6.0,
 //! TIFF/EP (ISO 12234-2), the Adobe DNG Specification 1.7, ITU-T T.81
@@ -33,8 +37,9 @@
 //! lossless-JPEG TIFF/EP raws (NEF, ARW, PEF… when not vendor-compressed),
 //! Nikon compressed NEF (lossless and lossy), Sony compressed ARW (cRAW),
 //! Panasonic RW2 (RawFormat 5 packed and RawFormat 3/4 vendor-compressed),
-//! uncompressed Olympus ORF and uncompressed Fujifilm RAF (Bayer and
-//! X-Trans). Everything else reports [`RawError::Unsupported`].
+//! uncompressed Olympus ORF and Fujifilm RAF (Bayer and X-Trans). With
+//! `flashraw`, Canon CR3 RAW/C-RAW and compressed RAF also decode sensor data.
+//! Unsupported variants report [`RawError::Unsupported`].
 //!
 //! The crate is standalone (no workspace dependencies), does no I/O, builds for
 //! `wasm32-unknown-unknown` and never panics on hostile input: sizes are
@@ -51,6 +56,8 @@ mod demosaic;
 mod develop;
 mod dng;
 mod error;
+#[cfg(feature = "flashraw")]
+mod flashraw_backend;
 mod jxl;
 mod ljpeg;
 mod look;
@@ -60,6 +67,8 @@ mod orf;
 mod par;
 mod preview;
 mod raf;
+#[cfg(feature = "flashraw")]
+mod routing;
 mod rw2;
 mod saturation;
 mod sensor;
@@ -117,6 +126,24 @@ pub enum RawFormat {
     Rw2,
     /// Fujifilm RAF.
     Raf,
+    /// Canon CIFF RAW.
+    Crw,
+    /// Minolta RAW.
+    Mrw,
+    /// Samsung RAW.
+    Srw,
+    /// Sigma Foveon RAW.
+    X3f,
+    /// Phase One RAW.
+    Iiq,
+    /// Sony encrypted RAW.
+    Srf,
+    /// Kodak RAW.
+    Kdc,
+    /// Hasselblad 3FR.
+    ThreeFr,
+    /// Hasselblad FFF.
+    Fff,
     /// Another TIFF/EP raw.
     TiffEp,
 }
@@ -133,13 +160,25 @@ impl RawFormat {
             RawFormat::Orf => "ORF",
             RawFormat::Rw2 => "RW2",
             RawFormat::Raf => "RAF",
+            RawFormat::Crw => "CRW",
+            RawFormat::Mrw => "MRW",
+            RawFormat::Srw => "SRW",
+            RawFormat::X3f => "X3F",
+            RawFormat::Iiq => "IIQ",
+            RawFormat::Srf => "SRF",
+            RawFormat::Kdc => "KDC",
+            RawFormat::ThreeFr => "3FR",
+            RawFormat::Fff => "FFF",
             RawFormat::TiffEp => "TIFF/EP raw",
         }
     }
 }
 
 /// File extensions of the raw formats this crate recognises.
-pub const EXTENSIONS: &[&str] = &["dng", "cr2", "cr3", "nef", "nrw", "arw", "srf", "sr2", "pef", "orf", "rw2", "raf"];
+pub const EXTENSIONS: &[&str] = &[
+    "dng", "cr2", "cr3", "nef", "nrw", "arw", "srf", "sr2", "pef", "orf", "rw2", "rwl", "raf", "crw", "mrw", "srw", "x3f", "iiq", "kdc", "dcr", "erf", "3fr",
+    "fff", "gpr",
+];
 
 /// Decompression-bomb guards, checked on header values before allocating
 /// (the same shape and defaults as `photocraft-codecs`' limits).
@@ -200,6 +239,18 @@ fn make_format(make: Option<&str>) -> RawFormat {
 
 /// Recognises a camera raw file from its bytes (cheap: header and IFDs only).
 pub fn identify(bytes: &[u8]) -> Option<RawFormat> {
+    let format = identify_builtin(bytes);
+    #[cfg(feature = "flashraw")]
+    {
+        format.or_else(|| flashraw_backend::identify(bytes))
+    }
+    #[cfg(not(feature = "flashraw"))]
+    {
+        format
+    }
+}
+
+fn identify_builtin(bytes: &[u8]) -> Option<RawFormat> {
     if bytes.get(4..12) == Some(b"ftypcrx ") {
         return Some(RawFormat::Cr3);
     }
@@ -234,9 +285,70 @@ pub fn is_raw(bytes: &[u8]) -> bool {
     identify(bytes).is_some()
 }
 
-/// Reads the undeveloped sensor data and metadata.
+/// Sensor decoder selection. Development and colour always belong to PhotoCraft.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum DecodeBackend {
+    /// Prefer FlashRaw, with measured encoding choices and built-in compatibility fallback.
+    #[default]
+    Auto,
+    /// Require FlashRaw; report unsupported data rather than using another decoder.
+    FlashRaw,
+    /// PhotoCraft's original decoder, also available without the `flashraw` feature.
+    Builtin,
+}
+
+/// Reads the undeveloped sensor data and metadata using automatic backend selection.
 pub fn decode(bytes: &[u8], limits: &Limits) -> Result<Sensor, RawError> {
+    decode_with_backend(bytes, limits, DecodeBackend::Auto)
+}
+
+/// Reads sensor data with an explicit backend, for diagnostics and reproducible comparisons.
+/// Only unsupported codecs/representations fall back; damage and limit errors remain errors.
+pub fn decode_with_backend(bytes: &[u8], limits: &Limits, backend: DecodeBackend) -> Result<Sensor, RawError> {
+    decode_with_backend_traced(bytes, limits, backend).map(|(sensor, _)| sensor)
+}
+
+/// Decodes with the same policy as [`decode_with_backend`], returning the backend
+/// that actually supplied the samples. Diagnostics need not guess from timings.
+pub fn decode_with_backend_traced(bytes: &[u8], limits: &Limits, backend: DecodeBackend) -> Result<(Sensor, DecodeBackend), RawError> {
+    if backend == DecodeBackend::Builtin {
+        return decode_builtin(bytes, limits).map(|s| (s, DecodeBackend::Builtin));
+    }
     let format = identify(bytes).ok_or(RawError::NotRaw)?;
+    #[cfg(feature = "flashraw")]
+    {
+        if backend == DecodeBackend::Auto && routing::prefer_builtin(bytes, format) {
+            match decode_builtin(bytes, limits) {
+                Ok(sensor) => return Ok((sensor, DecodeBackend::Builtin)),
+                Err(RawError::Unsupported(_) | RawError::NotRaw) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        match flashraw_backend::decode(bytes, format, limits) {
+            Ok(s) => {
+                log::debug!("RAW sensor decoded with FlashRaw");
+                Ok((s, DecodeBackend::FlashRaw))
+            }
+            Err(RawError::Unsupported(reason)) if backend == DecodeBackend::Auto => {
+                let s = decode_builtin(bytes, limits)?;
+                log::debug!("built-in RAW decoder used: {reason}");
+                Ok((s, DecodeBackend::Builtin))
+            }
+            Err(e) => Err(e),
+        }
+    }
+    #[cfg(not(feature = "flashraw"))]
+    {
+        let _ = format;
+        if backend == DecodeBackend::FlashRaw {
+            return Err(RawError::unsupported("FlashRaw is disabled in this build"));
+        }
+        decode_builtin(bytes, limits).map(|s| (s, DecodeBackend::Builtin))
+    }
+}
+
+fn decode_builtin(bytes: &[u8], limits: &Limits) -> Result<Sensor, RawError> {
+    let format = identify_builtin(bytes).ok_or(RawError::NotRaw)?;
     match format {
         RawFormat::Cr3 => Err(RawError::unsupported("Canon CR3 (ISO BMFF / CRX) is not decoded yet")),
         RawFormat::Raf => raf::decode(bytes, limits),

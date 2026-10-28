@@ -104,8 +104,13 @@ fn decode_packed(src: &[u8], width: usize, height: usize, bits: u32) -> Result<V
     }
     let row_bytes = width / ppb * 16;
     let need = row_bytes * height;
-    // Whole pages are stored; tolerate a short final page (its missing bytes read as 0).
-    if src.len() < need.saturating_sub(PAGE) {
+    // A final page may omit unused bytes, but every physical byte holding
+    // actual samples must exist. Zero-filling a missing half-block would turn
+    // a truncated file into plausible (wrong) pixels under the fast Auto route.
+    let page_start = need.saturating_sub(1) / PAGE * PAGE;
+    let tail = need.saturating_sub(page_start);
+    let last = if tail <= PAGE - SPLIT { SPLIT + tail } else { PAGE };
+    if src.len() < page_start.saturating_add(last) {
         return Err(RawError::malformed("RW2 raw data is truncated"));
     }
     let half = |l: usize| -> [u8; 8] { src.get(physical(l)..).and_then(|b| b.get(..8)).and_then(|b| <[u8; 8]>::try_from(b).ok()).unwrap_or([0; 8]) };
@@ -228,11 +233,17 @@ fn decode_compressed(src: &[u8], width: usize, height: usize, bits: u32) -> Resu
 }
 
 pub(crate) fn decode(t: &Tiff, limits: &Limits) -> Result<Sensor> {
+    decode_with_plane(t, limits, None)
+}
+
+/// Builds PhotoCraft metadata around either decoder's sensor-domain samples.
+pub(crate) fn decode_with_plane(t: &Tiff, limits: &Limits, plane: Option<crate::sensor::Plane>) -> Result<Sensor> {
     let ifd = t.ifd_at(t.first_ifd, 0).ok_or_else(|| RawError::malformed("RW2 has no IFD0"))?;
     let raw_format = t.tag_uint(&ifd, RAW_FORMAT);
     let compressed = match raw_format {
         Some(5) => false,
         Some(3 | 4) => true,
+        Some(6..=8) if plane.is_some() => false,
         other => {
             let f = other.map(|v| v.to_string()).unwrap_or_else(|| "unknown".into());
             return Err(RawError::unsupported(format!("Panasonic RW2 raw format {f} (vendor-compressed) is not decoded yet")));
@@ -254,7 +265,14 @@ pub(crate) fn decode(t: &Tiff, limits: &Limits) -> Result<Sensor> {
         t.tag_uint(&ifd, RAW_DATA_OFFSET).or_else(|| t.tag_uint(&ifd, tag::STRIP_OFFSETS)).ok_or_else(|| RawError::malformed("RW2 has no raw data offset"))?
             as usize;
     let src = t.data.get(offset..).ok_or_else(|| RawError::malformed("RW2 raw data lies outside the file"))?;
-    let data = if compressed { decode_compressed(src, width, height, bits)? } else { decode_packed(src, width, height, bits)? };
+    let data = if let Some(p) = plane {
+        p.validate_geometry(width, height, 1, limits)?;
+        p.data
+    } else if compressed {
+        decode_compressed(src, width, height, bits)?
+    } else {
+        decode_packed(src, width, height, bits)?
+    };
 
     let full = Rect::new(0, 0, width, height);
     let level = |tg: u16| t.tag_uint(&ifd, tg).map(f64::from);
@@ -312,6 +330,13 @@ pub(crate) fn decode(t: &Tiff, limits: &Limits) -> Result<Sensor> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_physical_sample_byte_is_not_zero_filled() {
+        let src = vec![1; SPLIT + 16];
+        assert!(decode_packed(&src, 10, 1, 12).is_ok());
+        assert!(matches!(decode_packed(&src[..src.len() - 1], 10, 1, 12), Err(RawError::Malformed(_))));
+    }
 
     #[test]
     fn pages_are_split() {

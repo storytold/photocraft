@@ -1,0 +1,2 @@
+# TSVs preserve empty trailing fields and the historical export's CRLF endings.
+*.tsv whitespace=-blank-at-eol,cr-at-eol
