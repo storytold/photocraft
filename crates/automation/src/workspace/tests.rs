@@ -383,6 +383,15 @@ fn filesystem_command_paths_and_profiles_fail_closed() {
     assert!(authorize_engine_command("prefs.set", &serde_json::json!({"path": "colorSettings.workingRgb", "value": "outside.icc"})).is_err());
     assert!(authorize_engine_step("file.open", &serde_json::json!({})).is_err());
     assert!(authorize_engine_step("actions.play", &serde_json::json!({})).is_ok());
+    let fill = authorize_desktop_engine_command("edit.generativeFill", &serde_json::json!({"prompt": "x"})).unwrap_err().to_string();
+    assert!(fill.contains("AI service"), "{fill}");
+    for id in ["edit.generativeFill", "layer.generative.more", "layer.generative.retry", "layer.generative.agree"] {
+        assert!(authorize_engine_step(id, &serde_json::json!({"fill": 1, "term": "until_revoked"})).is_err(), "{id}");
+    }
+    // Looking at fills, flipping variations and discarding send nothing.
+    for id in ["layer.generative.fills", "layer.generative.selectVariation", "layer.generative.discard"] {
+        assert!(authorize_engine_step(id, &serde_json::json!({})).is_ok(), "{id}");
+    }
     // An allowed command can't reach a denied one by running it on its own behalf.
     let mut session = photocraft_engine::Session::new();
     session.execute("file.new", serde_json::json!({"width": 4, "height": 4})).unwrap();

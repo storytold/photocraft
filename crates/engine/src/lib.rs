@@ -19,6 +19,7 @@ pub mod display_color;
 pub mod doc_path;
 pub mod filters;
 pub mod filters_ext;
+pub mod genai;
 mod group_options;
 pub mod guide_layout;
 pub mod hidden_target;
@@ -98,6 +99,7 @@ use cmd::frame_cmds;
 pub use cmd::fx_view_cmds;
 pub use cmd::fx_visibility_cmds;
 pub use cmd::gallery_cmds;
+pub use cmd::genai_cmds;
 pub use cmd::gradient_fill_cmds;
 pub use cmd::group_view_cmds;
 pub use cmd::history_cmds;
@@ -299,6 +301,12 @@ pub struct Session {
     /// command reporting too narrow a redraw area (#4053). Counted in debug and test builds only;
     /// tests read it.
     pub damage_misses: usize,
+    /// Generative AI the app installed (see [`genai`]); `None` keeps generative commands off and
+    /// the session network-free.
+    genai: Option<genai::SharedAi>,
+    /// What each generative layer made in this session was generated from, and the fills still
+    /// running (see [`genai_cmds`]).
+    genai_state: genai_cmds::GenState,
 }
 
 #[cfg(test)]
