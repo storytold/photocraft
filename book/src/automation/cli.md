@@ -35,6 +35,22 @@ Warnings do not change the saved document's font declarations and do not stop
 the operation. To list or replace the missing families intentionally, use
 `type.resolveMissingFonts` on the document.
 
+### Document metadata
+
+`convert`, `run --out` and `batch` keep the document's XMP packet and
+free-form text in a flat export (PNG, JPEG, WebP, TIFF, …), as Save As does.
+`--metadata none` leaves them out, as Export As's Metadata: None does: a
+Photoshop file's XMP can list every placed document's id
+(`DocumentAncestors`) and the text of every type layer, and can be far larger
+than the image. `--metadata all` is the default. The option changes nothing
+else: the ICC profile, EXIF and resolution are written either way, and PSD,
+PSB and `.pcraft` saves always keep the XMP. It is not a full metadata scrub.
+
+```sh
+photocraft-cli batch --actions resize.json --in masters/ --out web/ \
+  --format webp --metadata none
+```
+
 ### Export selected adjustment layers as a .cube LUT
 
 The engine command `file.export.colorLookupTables` creates a 3D LUT from an
