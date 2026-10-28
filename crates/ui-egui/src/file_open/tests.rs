@@ -180,17 +180,20 @@ fn web_drops_onto_the_canvas_are_placed_from_their_bytes() {
     let ctx = egui::Context::default();
     let mut app = app_with_canvas();
     let names = vec!["photo.png".to_string(), "brushes.abr".to_string()];
+    let doc = app.session.active().unwrap().doc.id;
     // No pointer known: nothing is placed.
-    assert_eq!(app.dropped_on_canvas(&ctx, &names), [false, false]);
+    assert_eq!(app.dropped_on_canvas(&ctx, &names), [None, None]);
     let at = Rc::new(std::cell::Cell::new(egui::pos2(400.0, 300.0)));
     let reported = at.clone();
     app.services.cursor_pos = Some(Box::new(move |_: &egui::Context| Some(reported.get())));
-    assert_eq!(app.dropped_on_canvas(&ctx, &names), [true, false]);
+    assert_eq!(app.dropped_on_canvas(&ctx, &names), [Some(doc), None]);
     at.set(egui::pos2(20.0, 20.0));
-    assert_eq!(app.dropped_on_canvas(&ctx, &names), [false, false], "off the canvas: opened");
+    assert_eq!(app.dropped_on_canvas(&ctx, &names), [None, None], "off the canvas: opened");
     let layers = layer_count(&app);
-    app.queue_place(crate::file_open::DropPlace::Bytes("photo.png".into(), png_bytes(4, 3)));
-    app.queue_place(crate::file_open::DropPlace::Bytes("bad.png".into(), b"bad".to_vec()));
+    let inbox: crate::PlaceInbox = std::sync::Arc::default();
+    app.services.place_inbox = Some(inbox.clone());
+    inbox.lock().unwrap().extend([(doc, "photo.png".to_string(), png_bytes(4, 3)), (doc, "bad.png".to_string(), b"bad".to_vec())]);
+    app.take_place_inbox();
     app.place_next_dropped(&ctx);
     assert_eq!(layer_count(&app), layers + 1);
     assert_eq!(app.ui.transform.as_ref().and_then(|t| t.made), Some(crate::state::MadeLayer::Place));
@@ -611,6 +614,31 @@ fn queued_drops_go_to_the_document_they_were_dropped_on() {
     assert!(app.drop_places.is_empty());
     assert_eq!(layer_count(&app), other_layers, "a closed document's file goes nowhere else");
     assert!(app.ui.notices.iter().any(|n| n.error && n.title.contains("three.png")), "{:?}", app.ui.notices);
+}
+
+/// A web drop is read asynchronously after the shell routed it: a tab selected while it was read
+/// doesn't receive it. It goes to the document [`PhotocraftApp::dropped_on_canvas`] named.
+#[test]
+fn a_web_drop_read_after_a_tab_switch_goes_to_the_document_it_was_dropped_on() {
+    let ctx = egui::Context::default();
+    let mut app = app_with_canvas();
+    let inbox: crate::PlaceInbox = std::sync::Arc::default();
+    app.services.place_inbox = Some(inbox.clone());
+    app.services.cursor_pos = Some(Box::new(|_: &egui::Context| Some(egui::pos2(400.0, 300.0))));
+    let source = app.session.active().unwrap().doc.id;
+    let layers = layer_count(&app);
+    let [Some(doc)] = app.dropped_on_canvas(&ctx, &["photo.png".to_string()])[..] else { panic!("placed on the canvas") };
+    assert_eq!(doc, source);
+    // The read is still pending when another tab is selected.
+    app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+    let (other, other_layers) = (app.session.active().unwrap().doc.id, layer_count(&app));
+    inbox.lock().unwrap().push((doc, "photo.png".into(), png_bytes(4, 3)));
+    app.take_place_inbox();
+    app.place_next_dropped(&ctx);
+    assert_eq!(app.session.active().unwrap().doc.id, other, "the selected tab stays selected");
+    assert_eq!(layer_count(&app), other_layers, "nothing lands in the selected document");
+    let source_layers = app.session.documents().iter().find(|st| st.doc.id == source).map(|st| st.doc.layers.len());
+    assert_eq!(source_layers, Some(layers + 1));
 }
 
 /// #1099: switching tabs after an actual canvas drop cancels the place in its source document.

@@ -267,18 +267,19 @@ impl PhotocraftApp {
     }
 
     /// Which of the files called `names`, dropped onto the window just now, are placed on the
-    /// active document's canvas rather than opened, for a shell that reads dropped files itself
+    /// active document's canvas rather than opened (that document's id; `None` opens the file),
+    /// for a shell that reads dropped files itself
     /// (the browser reads them asynchronously, so the web shell can't hand them to
     /// [`open_dropped`](Self::open_dropped)). It delivers those through
     /// [`Services::place_inbox`](crate::Services::place_inbox) and the rest through
     /// [`Services::inbox`](crate::Services::inbox). The pointer comes from
     /// [`Services::cursor_pos`](crate::Services::cursor_pos). As with a desktop canvas drop, a Free
     /// Transform still open is applied first (#4833).
-    pub fn dropped_on_canvas(&mut self, ctx: &egui::Context, names: &[String]) -> Vec<bool> {
+    pub fn dropped_on_canvas(&mut self, ctx: &egui::Context, names: &[String]) -> Vec<Option<DocId>> {
         let at = self.services.cursor_pos.as_mut().and_then(|f| f(ctx));
-        let canvas = self.drop_target(ctx, at) == DropTarget::Canvas;
-        let places: Vec<bool> = names.iter().map(|n| canvas && !crate::preset_files_ui::is_preset_file(n)).collect();
-        if places.contains(&true) && self.ui.transform.is_some() {
+        let canvas = (self.drop_target(ctx, at) == DropTarget::Canvas).then(|| self.active_doc_id().ok()).flatten();
+        let places: Vec<Option<DocId>> = names.iter().map(|n| canvas.filter(|_| !crate::preset_files_ui::is_preset_file(n))).collect();
+        if places.iter().any(Option::is_some) && self.ui.transform.is_some() {
             crate::transform_tool::commit(self);
         }
         places
@@ -324,6 +325,13 @@ impl PhotocraftApp {
             Ok(doc) => self.drop_places.push_back(QueuedPlace { doc, what }),
             Err(e) => self.failed(crate::i18n::fmt(tl!("Couldn't place {name}: {error}"), &[("name", &what.name()), ("error", &e)])),
         }
+    }
+
+    /// Queue the web drops read since the last frame, each for the document named when it was
+    /// dropped ([`Self::dropped_on_canvas`]), not the one selected now.
+    pub(crate) fn take_place_inbox(&mut self) {
+        let arrived = self.services.place_inbox.as_ref().map(|q| std::mem::take(&mut *q.lock().unwrap_or_else(|e| e.into_inner()))).unwrap_or_default();
+        self.drop_places.extend(arrived.into_iter().map(|(doc, name, bytes)| QueuedPlace { doc, what: DropPlace::Bytes(name, bytes) }));
     }
 
     /// Place the next file dropped on the canvas and start Free Transform on it, once no other
