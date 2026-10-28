@@ -45,6 +45,15 @@ craft-jpeg = { git = "https://github.com/storytold/craft-libs", rev = "c5a1cbfb5
 craft-pcraft-format = { git = "https://github.com/storytold/craft-libs", rev = "b8f7d93b00dfb8f172938f3d2d796ae62dcfe123" }
 # craft-update: app-specific pretend versions apply to startup and manual checks.
 craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "c5a1cbfb5f9049f9270955caffb5bee5997aebf7", features = ["egui"] }
+# The Craft suite's shared AI layer (connections, keys, models, consent, jobs). Native only: the
+# desktop app depends on it (apps/photocraft/src/genai.rs); the engine and UI reach it through
+# `photocraft_engine::genai`. One revision for all four, never mixed with craft-libs' ai-core.
+# Until storytold/craft-ai-integrations takes FLUX.1 Fill, Gemini fill and `Plan::provider`, this
+# is the commit of that pull request on texjer's fork; it moves back to a storytold revision then.
+craft-ai-client = { git = "https://github.com/texjer/craft-ai-integrations", rev = "1e8f490f254cebb1c96fdaf48fd84b35e34fa72b" }
+craft-ai-core = { git = "https://github.com/texjer/craft-ai-integrations", rev = "1e8f490f254cebb1c96fdaf48fd84b35e34fa72b" }
+craft-ai-features = { git = "https://github.com/texjer/craft-ai-integrations", rev = "1e8f490f254cebb1c96fdaf48fd84b35e34fa72b" }
+craft-ai-native = { git = "https://github.com/texjer/craft-ai-integrations", rev = "1e8f490f254cebb1c96fdaf48fd84b35e34fa72b" }
 thiserror = "2"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"

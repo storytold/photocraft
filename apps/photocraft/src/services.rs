@@ -801,6 +801,9 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
         os_events: None,
         // Set by main, which starts loading the store before the window opens.
         preset_store: None,
+        // Generative Fill through the Craft suite's shared AI layer (genai.rs). Reads settings
+        // only when asked; nothing is sent until a fill starts.
+        genai: Some(crate::genai::shared()),
         is_wayland: false,
         ..recovery_services(recovery_dir())
     }

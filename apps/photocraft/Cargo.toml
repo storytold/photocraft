@@ -48,6 +48,13 @@ arboard = { version = "3.7", features = ["wayland-data-control"] }
 open = "5"
 # Reads the saved window layout (eframe persistence) to drop values that would abort startup.
 ron = "0.12"
+# Generative Fill (genai.rs) through the Craft suite's shared AI layer: connections, keys,
+# models and consent are shared with the other Craft apps.
+craft-ai-client = { workspace = true }
+craft-ai-core = { workspace = true }
+craft-ai-features = { workspace = true }
+# The shared connections file, key stores and consent file the client above is built from.
+craft-ai-native = { workspace = true }
 # Background release checks; HTTPS with Rust TLS, no async runtime.
 
 [target.'cfg(target_os = "macos")'.dependencies]
