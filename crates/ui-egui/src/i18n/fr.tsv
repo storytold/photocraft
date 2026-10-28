@@ -4556,3 +4556,73 @@ shape	Appearance	Apparence
 	Stop Color	Couleur du point
 	Shapes can't use patterns yet	Les formes ne peuvent pas encore utiliser de motifs
 	Edit Brush…	Modifier le pinceau…
+
+# Generative Fill through the Craft suite's shared AI layer (#41): prompt, consent, setup, fills in progress
+	Allow sending to it:	Autoriser l’envoi :
+	API key	Clé d’API
+	Cancel this Generative Fill	Annuler ce remplissage génératif
+	Checking…	Vérification…
+	Connect a service	Connecter un service
+	Connect	Connecter
+	Connected.	Connecté.
+	Connecting asks the service for its models with your key. Nothing from your documents is sent.	La connexion demande au service la liste de ses modèles avec votre clé. Rien de vos documents n’est envoyé.
+	Connections and the model you choose are shared with the other Craft apps. Keys are kept in this computer's keychain, never in PhotoCraft's settings.	Les connexions et le modèle choisi sont partagés avec les autres apps Craft. Les clés sont gardées dans le trousseau de cet ordinateur, jamais dans les réglages de PhotoCraft.
+	Connections	Connexions
+	Describe what to generate in the selection, or leave it empty to continue the image through it.	Décrivez ce qu’il faut générer dans la sélection, ou laissez vide pour prolonger l’image à travers elle.
+	Discard	Abandonner
+	Don't Send	Ne pas envoyer
+	Each area becomes its own Generative Fill and layer, generated side by side; each sends its own requests.	Chaque zone devient son propre remplissage génératif, avec son calque, généré en parallèle ; chacune envoie ses propres requêtes.
+	Empty: removes what is selected and continues the image through it.	Vide : supprime le contenu sélectionné et prolonge l’image à travers la sélection.
+	Failed: {name}	Échec : {name}
+	Fill the selection from a prompt	Remplir la sélection à partir d’une description
+	For a day	Pendant un jour
+	For an hour	Pendant une heure
+	Generate More	En générer plus
+	Generated {name}	Généré : {name}
+	Generating: {name}	Génération : {name}
+	Generating	Génération
+	Generative AI	IA générative
+	Generative Fill failed: {error}	Échec du remplissage génératif : {error}
+	Generative Fill uses {model} ({connection}).	Le remplissage génératif utilise {model} ({connection}).
+	Generative Fill will send this to {destination}:	Le remplissage génératif enverra ceci à {destination} :
+	Generative Fill	Remplissage génératif
+	Generative Fill…	Remplissage génératif…
+	Generative Fills in progress	Remplissages génératifs en cours
+	Go to area	Aller à la zone
+	It runs on this computer: nothing leaves it.	Il s’exécute sur cet ordinateur : rien n’en sort.
+	It runs online: PhotoCraft asks before anything is sent.	Il s’exécute en ligne : PhotoCraft demande avant tout envoi.
+	Locked until its layer lands	Verrouillé jusqu’à l’arrivée de son calque
+	Model for Generative Fill	Modèle du remplissage génératif
+	Needs your OK: {name}	Attend votre accord : {name}
+	Needs your OK	Attend votre accord
+	No connected model can do Generative Fill yet. Connect a service below.	Aucun modèle connecté ne sait encore faire le remplissage génératif. Connectez un service ci-dessous.
+	No key saved	Aucune clé enregistrée
+	No prompt: continues the image	Sans description : prolonge l'image
+	No prompt: removes what is selected	Sans description : supprime le contenu sélectionné
+	On this computer	Sur cet ordinateur
+	Online	En ligne
+	Only this time	Cette fois seulement
+	Other data	Autres données
+	Prompt (optional)	Description (facultative)
+	Review…	Examiner…
+	Send	Envoyer
+	Sends the same area and prompt again for three more.	Renvoie la même zone et la même description pour trois de plus.
+	Set Up Generative AI…	Configurer l’IA générative…
+	Something went wrong in the shared AI layer: {error}	Un problème est survenu dans la couche d’IA partagée : {error}
+	Switched off	Désactivée
+	The AI service is busy. Try again shortly.	Le service d’IA est occupé. Réessayez dans un instant.
+	The key can't be read	La clé ne peut pas être lue
+	The picture around the selection	L’image autour de la sélection
+	The selection has {n} separate areas, too many to fill one by one (at most {max}): it is filled as one.	La sélection compte {n} zones distinctes, trop pour les remplir une par une (au plus {max}) : elle est remplie d’un seul tenant.
+	The selection's shape	La forme de la sélection
+	Until I turn it off	Jusqu’à ce que je le désactive
+	Variations	Variantes
+	Waiting ({n})	En attente ({n})
+	Waiting: {name}	En attente : {name}
+	Your prompt	Votre description
+@plural	{n} Generative Fill waits for this answer.|{n} Generative Fills wait for this answer.	{n} remplissage génératif attend cette réponse.|{n} remplissages génératifs attendent cette réponse.
+@plural	Fill each of the {n} separate areas on its own|Fill each of the {n} separate areas on its own	Remplir séparément chacune des {n} zones|Remplir séparément chacune des {n} zones
+@plural	{n} needs your OK|{n} need your OK	{n} attend votre accord|{n} attendent votre accord
+@plural	{n} failed|{n} failed	{n} en échec|{n} en échec
+@plural	{n} waiting|{n} waiting	{n} en attente|{n} en attente
+@plural	{n} generating|{n} generating	{n} en cours|{n} en cours

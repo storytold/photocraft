@@ -4266,3 +4266,73 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Barva zarážky
 	Shapes can't use patterns yet	Tvary zatím nemohou používat vzorky
 	Edit Brush…	Upravit štětec…
+
+# Generative Fill through the Craft suite's shared AI layer (#41): prompt, consent, setup, fills in progress
+	Allow sending to it:	Povolit odesílání:
+	API key	Klíč API
+	Cancel this Generative Fill	Zrušit tuto generativní výplň
+	Checking…	Ověřování…
+	Connect a service	Připojit službu
+	Connect	Připojit
+	Connected.	Připojeno.
+	Connecting asks the service for its models with your key. Nothing from your documents is sent.	Při připojení se služba s vaším klíčem dotáže na své modely. Z vašich dokumentů se nic neodesílá.
+	Connections and the model you choose are shared with the other Craft apps. Keys are kept in this computer's keychain, never in PhotoCraft's settings.	Připojení a zvolený model sdílejí i ostatní aplikace Craft. Klíče se ukládají do klíčenky tohoto počítače, nikdy do nastavení PhotoCraftu.
+	Connections	Připojení
+	Describe what to generate in the selection, or leave it empty to continue the image through it.	Popište, co se má ve výběru vytvořit, nebo nechte prázdné a obraz bude výběrem plynule pokračovat.
+	Discard	Zahodit
+	Don't Send	Neodesílat
+	Each area becomes its own Generative Fill and layer, generated side by side; each sends its own requests.	Každá oblast se stane samostatnou generativní výplní a vrstvou, generují se souběžně; každá posílá vlastní požadavky.
+	Empty: removes what is selected and continues the image through it.	Prázdné: odstraní vybraný obsah a obraz bude výběrem plynule pokračovat.
+	Failed: {name}	Selhalo: {name}
+	Fill the selection from a prompt	Vyplnit výběr podle popisu
+	For a day	Na den
+	For an hour	Na hodinu
+	Generate More	Generovat další
+	Generated {name}	Vygenerováno: {name}
+	Generating: {name}	Generuje se: {name}
+	Generating	Generuje se
+	Generative AI	Generativní AI
+	Generative Fill failed: {error}	Generativní výplň selhala: {error}
+	Generative Fill uses {model} ({connection}).	Generativní výplň používá {model} ({connection}).
+	Generative Fill will send this to {destination}:	Generativní výplň odešle na {destination} toto:
+	Generative Fill	Generativní výplň
+	Generative Fill…	Generativní výplň…
+	Generative Fills in progress	Probíhající generativní výplně
+	Go to area	Přejít na oblast
+	It runs on this computer: nothing leaves it.	Běží na tomto počítači: nic z něj neodchází.
+	It runs online: PhotoCraft asks before anything is sent.	Běží online: PhotoCraft se před každým odesláním zeptá.
+	Locked until its layer lands	Zamčeno, dokud nedorazí její vrstva
+	Model for Generative Fill	Model pro generativní výplň
+	Needs your OK: {name}	Čeká na váš souhlas: {name}
+	Needs your OK	Čeká na váš souhlas
+	No connected model can do Generative Fill yet. Connect a service below.	Žádný připojený model zatím generativní výplň neumí. Níže připojte službu.
+	No key saved	Není uložen klíč
+	No prompt: continues the image	Bez popisu: pokračuje v obrázku
+	No prompt: removes what is selected	Bez popisu: odstraní vybrané
+	On this computer	Na tomto počítači
+	Online	Online
+	Only this time	Jen tentokrát
+	Other data	Jiná data
+	Prompt (optional)	Popis (nepovinný)
+	Review…	Zkontrolovat…
+	Send	Odeslat
+	Sends the same area and prompt again for three more.	Znovu odešle stejnou oblast a popis pro další tři.
+	Set Up Generative AI…	Nastavit generativní AI…
+	Something went wrong in the shared AI layer: {error}	Ve sdílené vrstvě AI se něco pokazilo: {error}
+	Switched off	Vypnuto
+	The AI service is busy. Try again shortly.	Služba AI je zaneprázdněná. Zkuste to za chvíli znovu.
+	The key can't be read	Klíč nelze přečíst
+	The picture around the selection	Obraz kolem výběru
+	The selection has {n} separate areas, too many to fill one by one (at most {max}): it is filled as one.	Výběr má {n} samostatných oblastí, příliš mnoho na vyplnění po jedné (nejvýše {max}): vyplní se jako celek.
+	The selection's shape	Tvar výběru
+	Until I turn it off	Dokud to nevypnu
+	Variations	Varianty
+	Waiting ({n})	Čeká ({n})
+	Waiting: {name}	Čeká: {name}
+	Your prompt	Váš popis
+@plural	{n} Generative Fill waits for this answer.|{n} Generative Fills wait for this answer.	Na tuto odpověď čeká {n} generativní výplň.|Na tuto odpověď čekají {n} generativní výplně.|Na tuto odpověď čeká {n} generativních výplní.
+@plural	Fill each of the {n} separate areas on its own|Fill each of the {n} separate areas on its own	Vyplnit každou z {n} oblastí zvlášť|Vyplnit každou z {n} oblastí zvlášť|Vyplnit každou z {n} oblastí zvlášť
+@plural	{n} needs your OK|{n} need your OK	{n} čeká na souhlas|{n} čekají na souhlas|{n} čeká na souhlas
+@plural	{n} failed|{n} failed	{n} selhala|{n} selhaly|{n} selhalo
+@plural	{n} waiting|{n} waiting	{n} čeká|{n} čekají|{n} čeká
+@plural	{n} generating|{n} generating	{n} se generuje|{n} se generují|{n} se generuje

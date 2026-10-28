@@ -597,3 +597,76 @@ cameraRaw	Yellow	पीला
 @plural	{n} action file loaded|{n} action files loaded	{n} एक्शन फ़ाइल लोड हुई|{n} एक्शन फ़ाइलें लोड हुईं
 	{set} from {file} replaced the one from {earlier}	{file} के सेट {set} ने {earlier} वाले सेट की जगह ले ली
 @plural	{n} file could not be loaded: {errors}|{n} files could not be loaded: {errors}	{n} फ़ाइल लोड नहीं हो सकी: {errors}|{n} फ़ाइलें लोड नहीं हो सकीं: {errors}
+# Generative Fill through the Craft suite's shared AI layer (#41): prompt, consent, setup, fills in progress
+	Allow sending to it:	भेजने की अनुमति दें:
+	API key	API कुंजी
+	Cancel this Generative Fill	यह जनरेटिव फ़िल रद्द करें
+	Checking…	जाँच हो रही है…
+	Connect a service	कोई सेवा जोड़ें
+	Connect	जोड़ें
+	Connected.	जुड़ गया।
+	Connecting asks the service for its models with your key. Nothing from your documents is sent.	जोड़ते समय आपकी कुंजी से सेवा से उसके मॉडल पूछे जाते हैं। आपके दस्तावेज़ों से कुछ नहीं भेजा जाता।
+	Connections and the model you choose are shared with the other Craft apps. Keys are kept in this computer's keychain, never in PhotoCraft's settings.	कनेक्शन और आपका चुना मॉडल अन्य Craft ऐप्स के साथ साझा होते हैं। कुंजियाँ इस कंप्यूटर के कीचेन में रखी जाती हैं, PhotoCraft की सेटिंग्स में कभी नहीं।
+	Connections	कनेक्शन
+	Describe what to generate in the selection, or leave it empty to continue the image through it.	बताएँ कि चयन में क्या बनाना है, या चित्र को उसके भीतर जारी रखने के लिए इसे खाली छोड़ दें।
+	Discard	हटा दें
+	Don't Send	न भेजें
+	Each area becomes its own Generative Fill and layer, generated side by side; each sends its own requests.	हर क्षेत्र अपना अलग जनरेटिव फ़िल और लेयर बनता है, सब साथ-साथ बनते हैं; हर एक अपने अनुरोध भेजता है।
+	Empty: removes what is selected and continues the image through it.	खाली: चुनी हुई चीज़ हटाता है और चित्र को उसके भीतर जारी रखता है।
+	Failed: {name}	विफल: {name}
+	Failed	विफल
+	Fill the selection from a prompt	विवरण से चयन भरें
+	For a day	एक दिन के लिए
+	For an hour	एक घंटे के लिए
+	Generate More	और बनाएँ
+	Generate	बनाएँ
+	Generated {name}	बनाया गया: {name}
+	Generating: {name}	बन रहा है: {name}
+	Generating	बन रहा है
+	Generative AI	जनरेटिव AI
+	Generative Fill failed: {error}	जनरेटिव फ़िल विफल: {error}
+	Generative Fill uses {model} ({connection}).	जनरेटिव फ़िल {model} ({connection}) का उपयोग करता है।
+	Generative Fill will send this to {destination}:	जनरेटिव फ़िल यह {destination} को भेजेगा:
+	Generative Fill	जनरेटिव फ़िल
+	Generative Fill…	जनरेटिव फ़िल…
+	Generative Fills in progress	चल रहे जनरेटिव फ़िल
+	Go to area	क्षेत्र पर जाएँ
+	It runs on this computer: nothing leaves it.	यह इसी कंप्यूटर पर चलता है: कुछ भी बाहर नहीं जाता।
+	It runs online: PhotoCraft asks before anything is sent.	यह ऑनलाइन चलता है: कुछ भी भेजने से पहले PhotoCraft पूछता है।
+	Locked until its layer lands	इसकी लेयर आने तक लॉक
+	Model for Generative Fill	जनरेटिव फ़िल का मॉडल
+	Needs your OK: {name}	आपकी अनुमति चाहिए: {name}
+	Needs your OK	आपकी अनुमति चाहिए
+	No connected model can do Generative Fill yet. Connect a service below.	अभी कोई जुड़ा मॉडल जनरेटिव फ़िल नहीं कर सकता। नीचे कोई सेवा जोड़ें।
+	No key saved	कोई कुंजी सहेजी नहीं
+	No prompt: continues the image	कोई विवरण नहीं: चित्र जारी रखता है
+	No prompt: removes what is selected	कोई विवरण नहीं: चुनी हुई चीज़ हटाता है
+	On this computer	इसी कंप्यूटर पर
+	Online	ऑनलाइन
+	Only this time	सिर्फ़ इस बार
+	Other data	अन्य डेटा
+	Prompt (optional)	विवरण (वैकल्पिक)
+	Remove	हटाएँ
+	Retry	फिर कोशिश करें
+	Review…	देखें…
+	Send	भेजें
+	Sends the same area and prompt again for three more.	तीन और पाने के लिए वही क्षेत्र और विवरण फिर भेजता है।
+	Set Up Generative AI…	जनरेटिव AI सेट करें…
+	Something went wrong in the shared AI layer: {error}	साझा AI परत में कुछ गड़बड़ हुई: {error}
+	Switched off	बंद है
+	The AI service is busy. Try again shortly.	AI सेवा व्यस्त है। थोड़ी देर में फिर कोशिश करें।
+	The key can't be read	कुंजी पढ़ी नहीं जा सकती
+	The picture around the selection	चयन के आसपास की तस्वीर
+	The selection has {n} separate areas, too many to fill one by one (at most {max}): it is filled as one.	चयन में {n} अलग क्षेत्र हैं, एक-एक करके भरने के लिए बहुत ज़्यादा (अधिकतम {max}): इसे एक साथ भरा जाता है।
+	The selection's shape	चयन का आकार
+	Until I turn it off	जब तक मैं बंद न करूँ
+	Variations	विविधताएँ
+	Waiting ({n})	प्रतीक्षा में ({n})
+	Waiting: {name}	प्रतीक्षा में: {name}
+	Your prompt	आपका विवरण
+@plural	{n} Generative Fill waits for this answer.|{n} Generative Fills wait for this answer.	{n} जनरेटिव फ़िल इस जवाब का इंतज़ार कर रहा है।|{n} जनरेटिव फ़िल इस जवाब का इंतज़ार कर रहे हैं।
+@plural	Fill each of the {n} separate areas on its own|Fill each of the {n} separate areas on its own	{n} अलग क्षेत्र को अलग से भरें|{n} अलग क्षेत्रों में से हर एक को अलग से भरें
+@plural	{n} needs your OK|{n} need your OK	{n} को आपकी अनुमति चाहिए|{n} को आपकी अनुमति चाहिए
+@plural	{n} failed|{n} failed	{n} विफल|{n} विफल
+@plural	{n} waiting|{n} waiting	{n} प्रतीक्षा में|{n} प्रतीक्षा में
+@plural	{n} generating|{n} generating	{n} बन रहा है|{n} बन रहे हैं

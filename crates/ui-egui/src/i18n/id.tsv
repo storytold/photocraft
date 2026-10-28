@@ -3543,3 +3543,75 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Solid Color	Warna Solid
 	Tint Color	Warna Tint
 	Edit Brush…	Edit Kuas…
+
+# Generative Fill through the Craft suite's shared AI layer (#41): prompt, consent, setup, fills in progress
+	Allow sending to it:	Izinkan pengiriman:
+	API key	Kunci API
+	Cancel this Generative Fill	Batalkan isian generatif ini
+	Checking…	Memeriksa…
+	Connect a service	Hubungkan layanan
+	Connect	Hubungkan
+	Connected.	Terhubung.
+	Connecting asks the service for its models with your key. Nothing from your documents is sent.	Saat menghubungkan, layanan dimintai daftar modelnya dengan kunci Anda. Tidak ada isi dokumen Anda yang dikirim.
+	Connections and the model you choose are shared with the other Craft apps. Keys are kept in this computer's keychain, never in PhotoCraft's settings.	Koneksi dan model pilihan Anda dipakai bersama aplikasi Craft lain. Kunci disimpan di gantungan kunci komputer ini, tidak pernah di pengaturan PhotoCraft.
+	Connections	Koneksi
+	Describe what to generate in the selection, or leave it empty to continue the image through it.	Jelaskan apa yang akan dibuat di dalam seleksi, atau biarkan kosong untuk melanjutkan gambar di dalamnya.
+	Discard	Buang
+	Don't Send	Jangan Kirim
+	Each area becomes its own Generative Fill and layer, generated side by side; each sends its own requests.	Setiap area menjadi isian generatif dan lapisan tersendiri, dibuat bersamaan; masing-masing mengirim permintaannya sendiri.
+	Empty: removes what is selected and continues the image through it.	Kosong: menghapus yang diseleksi dan melanjutkan gambar di dalam seleksi.
+	Failed: {name}	Gagal: {name}
+	Failed	Gagal
+	Fill the selection from a prompt	Isi seleksi berdasarkan deskripsi
+	For a day	Selama sehari
+	For an hour	Selama sejam
+	Generate More	Buat Lagi
+	Generated {name}	Selesai dibuat: {name}
+	Generating: {name}	Sedang membuat: {name}
+	Generating	Sedang membuat
+	Generative AI	AI generatif
+	Generative Fill failed: {error}	Isian generatif gagal: {error}
+	Generative Fill uses {model} ({connection}).	Isian generatif memakai {model} ({connection}).
+	Generative Fill will send this to {destination}:	Isian generatif akan mengirim ini ke {destination}:
+	Generative Fill	Isian generatif
+	Generative Fill…	Isian generatif…
+	Generative Fills in progress	Isian generatif yang sedang berjalan
+	Go to area	Ke area
+	It runs on this computer: nothing leaves it.	Berjalan di komputer ini: tidak ada yang keluar.
+	It runs online: PhotoCraft asks before anything is sent.	Berjalan daring: PhotoCraft bertanya sebelum mengirim apa pun.
+	Locked until its layer lands	Terkunci sampai lapisannya tiba
+	Model for Generative Fill	Model untuk isian generatif
+	Needs your OK: {name}	Perlu persetujuan Anda: {name}
+	Needs your OK	Perlu persetujuan Anda
+	No connected model can do Generative Fill yet. Connect a service below.	Belum ada model terhubung yang bisa melakukan isian generatif. Hubungkan layanan di bawah.
+	No key saved	Belum ada kunci tersimpan
+	No prompt: continues the image	Tanpa deskripsi: melanjutkan gambar
+	No prompt: removes what is selected	Tanpa deskripsi: menghapus yang dipilih
+	On this computer	Di komputer ini
+	Online	Daring
+	Only this time	Hanya kali ini
+	Other data	Data lain
+	Prompt (optional)	Deskripsi (opsional)
+	Retry	Coba lagi
+	Review…	Tinjau…
+	Send	Kirim
+	Sends the same area and prompt again for three more.	Mengirim ulang area dan deskripsi yang sama untuk tiga lagi.
+	Set Up Generative AI…	Siapkan AI generatif…
+	Something went wrong in the shared AI layer: {error}	Terjadi kesalahan di lapisan AI bersama: {error}
+	Switched off	Dimatikan
+	The AI service is busy. Try again shortly.	Layanan AI sedang sibuk. Coba lagi sebentar lagi.
+	The key can't be read	Kunci tidak bisa dibaca
+	The picture around the selection	Gambar di sekitar seleksi
+	The selection has {n} separate areas, too many to fill one by one (at most {max}): it is filled as one.	Seleksi memiliki {n} area terpisah, terlalu banyak untuk diisi satu per satu (paling banyak {max}): diisi sebagai satu kesatuan.
+	The selection's shape	Bentuk seleksi
+	Until I turn it off	Sampai saya matikan
+	Variations	Variasi
+	Waiting ({n})	Menunggu ({n})
+	Waiting: {name}	Menunggu: {name}
+	Your prompt	Deskripsi Anda
+@plural	{n} Generative Fill waits for this answer.|{n} Generative Fills wait for this answer.	{n} isian generatif menunggu jawaban ini.
+@plural	Fill each of the {n} separate areas on its own|Fill each of the {n} separate areas on its own	Isi masing-masing dari {n} area terpisah secara tersendiri
+@plural	{n} needs your OK|{n} need your OK	{n} perlu persetujuan Anda
+@plural	{n} failed|{n} failed	{n} gagal
+@plural	{n} waiting|{n} waiting	{n} menunggu
+@plural	{n} generating|{n} generating	{n} sedang dibuat

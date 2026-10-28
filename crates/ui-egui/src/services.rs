@@ -454,6 +454,10 @@ pub struct Services {
     /// Photoshop's live keyboard shortcut set, imported once at first launch (`kys_import`).
     pub photoshop_shortcuts: Option<PhotoshopShortcutsFn>,
     pub system_theme: Option<SystemThemeFn>,
+    /// Generative Fill's link to the Craft suite's shared AI layer (desktop; see
+    /// `photocraft_engine::genai`). Installed on the session at startup; `None` (the web build,
+    /// tests) keeps Generative Fill unavailable and nothing is ever sent.
+    pub genai: Option<photocraft_engine::genai::SharedAi>,
     /// The native window is connected directly to a Wayland compositor.
     pub is_wayland: bool,
     /// On Wayland, the shell command that starts this install under XWayland, where native file

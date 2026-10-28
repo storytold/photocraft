@@ -4277,3 +4277,73 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Kleur van het punt
 	Shapes can't use patterns yet	Vormen kunnen nog geen patronen gebruiken
 	Edit Brush…	Penseel bewerken…
+
+# Generative Fill through the Craft suite's shared AI layer (#41): prompt, consent, setup, fills in progress
+	Allow sending to it:	Verzenden toestaan:
+	API key	API-sleutel
+	Cancel this Generative Fill	Deze generatieve vulling annuleren
+	Checking…	Controleren…
+	Connect a service	Dienst verbinden
+	Connect	Verbinden
+	Connected.	Verbonden.
+	Connecting asks the service for its models with your key. Nothing from your documents is sent.	Bij verbinden wordt de dienst met uw sleutel om zijn modellen gevraagd. Er wordt niets uit uw documenten verzonden.
+	Connections and the model you choose are shared with the other Craft apps. Keys are kept in this computer's keychain, never in PhotoCraft's settings.	Verbindingen en het gekozen model worden gedeeld met de andere Craft-apps. Sleutels staan in de sleutelhanger van deze computer, nooit in de instellingen van PhotoCraft.
+	Connections	Verbindingen
+	Describe what to generate in the selection, or leave it empty to continue the image through it.	Beschrijf wat er in de selectie moet komen, of laat leeg om de afbeelding erdoorheen voort te zetten.
+	Discard	Verwerpen
+	Don't Send	Niet verzenden
+	Each area becomes its own Generative Fill and layer, generated side by side; each sends its own requests.	Elk gebied wordt een eigen generatieve vulling met een eigen laag, tegelijk gegenereerd; elk stuurt zijn eigen verzoeken.
+	Empty: removes what is selected and continues the image through it.	Leeg: verwijdert wat geselecteerd is en zet de afbeelding erdoorheen voort.
+	Failed: {name}	Mislukt: {name}
+	Fill the selection from a prompt	De selectie vullen op basis van een beschrijving
+	For a day	Een dag lang
+	For an hour	Een uur lang
+	Generate More	Meer genereren
+	Generated {name}	Gegenereerd: {name}
+	Generating: {name}	Bezig met genereren: {name}
+	Generating	Bezig met genereren
+	Generative AI	Generatieve AI
+	Generative Fill failed: {error}	Generatief vullen mislukt: {error}
+	Generative Fill uses {model} ({connection}).	Generatief vullen gebruikt {model} ({connection}).
+	Generative Fill will send this to {destination}:	Generatief vullen stuurt dit naar {destination}:
+	Generative Fill	Generatief vullen
+	Generative Fill…	Generatief vullen…
+	Generative Fills in progress	Generatieve vullingen bezig
+	Go to area	Naar gebied
+	It runs on this computer: nothing leaves it.	Het draait op deze computer: er gaat niets naar buiten.
+	It runs online: PhotoCraft asks before anything is sent.	Het draait online: PhotoCraft vraagt het voordat er iets wordt verzonden.
+	Locked until its layer lands	Vergrendeld tot de laag binnenkomt
+	Model for Generative Fill	Model voor generatief vullen
+	Needs your OK: {name}	Wacht op uw akkoord: {name}
+	Needs your OK	Wacht op uw akkoord
+	No connected model can do Generative Fill yet. Connect a service below.	Nog geen verbonden model kan generatief vullen. Verbind hieronder een dienst.
+	No key saved	Geen sleutel opgeslagen
+	No prompt: continues the image	Geen beschrijving: zet de afbeelding voort
+	No prompt: removes what is selected	Geen beschrijving: verwijdert wat geselecteerd is
+	On this computer	Op deze computer
+	Online	Online
+	Only this time	Alleen deze keer
+	Other data	Overige gegevens
+	Prompt (optional)	Beschrijving (optioneel)
+	Review…	Bekijken…
+	Send	Verzenden
+	Sends the same area and prompt again for three more.	Stuurt hetzelfde gebied en dezelfde beschrijving opnieuw voor nog drie.
+	Set Up Generative AI…	Generatieve AI instellen…
+	Something went wrong in the shared AI layer: {error}	Er ging iets mis in de gedeelde AI-laag: {error}
+	Switched off	Uitgeschakeld
+	The AI service is busy. Try again shortly.	De AI-dienst is bezet. Probeer het zo meteen opnieuw.
+	The key can't be read	De sleutel kan niet worden gelezen
+	The picture around the selection	Het beeld rond de selectie
+	The selection has {n} separate areas, too many to fill one by one (at most {max}): it is filled as one.	De selectie heeft {n} losse gebieden, te veel om één voor één te vullen (maximaal {max}): ze wordt als geheel gevuld.
+	The selection's shape	De vorm van de selectie
+	Until I turn it off	Tot ik het uitzet
+	Variations	Variaties
+	Waiting ({n})	Wachtend ({n})
+	Waiting: {name}	Wachtend: {name}
+	Your prompt	Uw beschrijving
+@plural	{n} Generative Fill waits for this answer.|{n} Generative Fills wait for this answer.	{n} generatieve vulling wacht op dit antwoord.|{n} generatieve vullingen wachten op dit antwoord.
+@plural	Fill each of the {n} separate areas on its own|Fill each of the {n} separate areas on its own	Elk van de {n} losse gebieden apart vullen|Elk van de {n} losse gebieden apart vullen
+@plural	{n} needs your OK|{n} need your OK	{n} wacht op uw akkoord|{n} wachten op uw akkoord
+@plural	{n} failed|{n} failed	{n} mislukt|{n} mislukt
+@plural	{n} waiting|{n} waiting	{n} wachtend|{n} wachtend
+@plural	{n} generating|{n} generating	{n} bezig|{n} bezig

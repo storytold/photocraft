@@ -4254,3 +4254,73 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Durak Rengi
 	Shapes can't use patterns yet	Şekiller henüz desen kullanamaz
 	Edit Brush…	Fırçayı Düzenle…
+
+# Generative Fill through the Craft suite's shared AI layer (#41): prompt, consent, setup, fills in progress
+	Allow sending to it:	Göndermeye izin ver:
+	API key	API anahtarı
+	Cancel this Generative Fill	Bu Üretken Dolguyu iptal et
+	Checking…	Denetleniyor…
+	Connect a service	Hizmet bağla
+	Connect	Bağla
+	Connected.	Bağlandı.
+	Connecting asks the service for its models with your key. Nothing from your documents is sent.	Bağlanırken hizmete anahtarınızla modelleri sorulur. Belgelerinizden hiçbir şey gönderilmez.
+	Connections and the model you choose are shared with the other Craft apps. Keys are kept in this computer's keychain, never in PhotoCraft's settings.	Bağlantılar ve seçtiğiniz model diğer Craft uygulamalarıyla paylaşılır. Anahtarlar bu bilgisayarın anahtar zincirinde tutulur, asla PhotoCraft ayarlarında değil.
+	Connections	Bağlantılar
+	Describe what to generate in the selection, or leave it empty to continue the image through it.	Seçimde ne oluşturulacağını açıklayın veya görüntünün seçim boyunca devam etmesi için boş bırakın.
+	Discard	Vazgeç
+	Don't Send	Gönderme
+	Each area becomes its own Generative Fill and layer, generated side by side; each sends its own requests.	Her alan kendi Üretken Dolgusu ve katmanı olur, aynı anda üretilir; her biri kendi isteklerini gönderir.
+	Empty: removes what is selected and continues the image through it.	Boş: seçili içeriği kaldırır ve görüntüyü seçimin içinden sürdürür.
+	Failed: {name}	Başarısız: {name}
+	Fill the selection from a prompt	Seçimi bir istemle doldur
+	For a day	Bir gün boyunca
+	For an hour	Bir saat boyunca
+	Generate More	Daha Fazla Üret
+	Generated {name}	Oluşturuldu: {name}
+	Generating: {name}	Oluşturuluyor: {name}
+	Generating	Oluşturuluyor
+	Generative AI	Üretken Yapay Zekâ
+	Generative Fill failed: {error}	Üretken Dolgu başarısız oldu: {error}
+	Generative Fill uses {model} ({connection}).	Üretken Dolgu {model} ({connection}) kullanır.
+	Generative Fill will send this to {destination}:	Üretken Dolgu şunları {destination} adresine gönderecek:
+	Generative Fill	Üretken Dolgu
+	Generative Fill…	Üretken Dolgu…
+	Generative Fills in progress	Süren Üretken Dolgular
+	Go to area	Alana git
+	It runs on this computer: nothing leaves it.	Bu bilgisayarda çalışır: hiçbir şey dışarı çıkmaz.
+	It runs online: PhotoCraft asks before anything is sent.	Çevrimiçi çalışır: PhotoCraft bir şey göndermeden önce sorar.
+	Locked until its layer lands	Katmanı gelene kadar kilitli
+	Model for Generative Fill	Üretken Dolgu modeli
+	Needs your OK: {name}	Onayınız gerekiyor: {name}
+	Needs your OK	Onayınız gerekiyor
+	No connected model can do Generative Fill yet. Connect a service below.	Bağlı modellerin hiçbiri henüz Üretken Dolgu yapamıyor. Aşağıdan bir hizmet bağlayın.
+	No key saved	Kayıtlı anahtar yok
+	No prompt: continues the image	İstem yok: görüntü devam eder
+	No prompt: removes what is selected	Açıklama yok: seçili olanı kaldırır
+	On this computer	Bu bilgisayarda
+	Online	Çevrimiçi
+	Only this time	Yalnızca bu kez
+	Other data	Diğer veriler
+	Prompt (optional)	İstem (isteğe bağlı)
+	Review…	Gözden geçir…
+	Send	Gönder
+	Sends the same area and prompt again for three more.	Üç tane daha için aynı alanı ve istemi yeniden gönderir.
+	Set Up Generative AI…	Üretken Yapay Zekâyı Kur…
+	Something went wrong in the shared AI layer: {error}	Paylaşılan yapay zekâ katmanında bir sorun oluştu: {error}
+	Switched off	Kapalı
+	The AI service is busy. Try again shortly.	Yapay zekâ hizmeti meşgul. Birazdan yeniden deneyin.
+	The key can't be read	Anahtar okunamıyor
+	The picture around the selection	Seçimin çevresindeki görüntü
+	The selection has {n} separate areas, too many to fill one by one (at most {max}): it is filled as one.	Seçimde {n} ayrı alan var; tek tek doldurmak için çok fazla (en fazla {max}): tek parça olarak doldurulur.
+	The selection's shape	Seçimin şekli
+	Until I turn it off	Ben kapatana kadar
+	Variations	Varyasyonlar
+	Waiting ({n})	Bekliyor ({n})
+	Waiting: {name}	Bekliyor: {name}
+	Your prompt	İsteminiz
+@plural	{n} Generative Fill waits for this answer.|{n} Generative Fills wait for this answer.	{n} Üretken Dolgu bu yanıtı bekliyor.
+@plural	Fill each of the {n} separate areas on its own|Fill each of the {n} separate areas on its own	{n} ayrı alanın her birini ayrı ayrı doldur
+@plural	{n} needs your OK|{n} need your OK	{n} onay bekliyor
+@plural	{n} failed|{n} failed	{n} başarısız
+@plural	{n} waiting|{n} waiting	{n} bekliyor
+@plural	{n} generating|{n} generating	{n} oluşturuluyor

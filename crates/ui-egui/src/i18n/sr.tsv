@@ -4599,3 +4599,73 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Boja tačke
 	Shapes can't use patterns yet	Oblici još ne mogu da koriste šare
 	Edit Brush…	Uredi četkicu…
+
+# Generative Fill through the Craft suite's shared AI layer (#41): prompt, consent, setup, fills in progress
+	Allow sending to it:	Dozvoli slanje:
+	API key	API ključ
+	Cancel this Generative Fill	Otkaži ovu generativnu popunu
+	Checking…	Provera…
+	Connect a service	Poveži uslugu
+	Connect	Poveži
+	Connected.	Povezano.
+	Connecting asks the service for its models with your key. Nothing from your documents is sent.	Pri povezivanju usluga se pita za svoje modele pomoću vašeg ključa. Ništa iz vaših dokumenata se ne šalje.
+	Connections and the model you choose are shared with the other Craft apps. Keys are kept in this computer's keychain, never in PhotoCraft's settings.	Veze i izabrani model dele se sa ostalim Craft aplikacijama. Ključevi se čuvaju u privesku za ključeve ovog računara, nikada u podešavanjima PhotoCraft-a.
+	Connections	Veze
+	Describe what to generate in the selection, or leave it empty to continue the image through it.	Opišite šta da se stvori u selekciji ili ostavite prazno da se slika nastavi kroz nju.
+	Discard	Odbaci
+	Don't Send	Ne šalji
+	Each area becomes its own Generative Fill and layer, generated side by side; each sends its own requests.	Svaka oblast postaje zasebna generativna popuna sa svojim slojem, generišu se istovremeno; svaka šalje svoje zahteve.
+	Empty: removes what is selected and continues the image through it.	Prazno: uklanja selektovano i nastavlja sliku kroz selekciju.
+	Failed: {name}	Neuspešno: {name}
+	Fill the selection from a prompt	Popuni selekciju prema opisu
+	For a day	Jedan dan
+	For an hour	Jedan sat
+	Generate More	Napravi još
+	Generated {name}	Generisano: {name}
+	Generating: {name}	Generiše se: {name}
+	Generating	Generiše se
+	Generative AI	Generativna AI
+	Generative Fill failed: {error}	Generativna popuna nije uspela: {error}
+	Generative Fill uses {model} ({connection}).	Generativna popuna koristi {model} ({connection}).
+	Generative Fill will send this to {destination}:	Generativna popuna će poslati ovo na {destination}:
+	Generative Fill	Generativna popuna
+	Generative Fill…	Generativna popuna…
+	Generative Fills in progress	Generativne popune u toku
+	Go to area	Idi na oblast
+	It runs on this computer: nothing leaves it.	Radi na ovom računaru: ništa ne izlazi iz njega.
+	It runs online: PhotoCraft asks before anything is sent.	Radi na mreži: PhotoCraft pita pre nego što bilo šta pošalje.
+	Locked until its layer lands	Zaključano dok ne stigne njen sloj
+	Model for Generative Fill	Model za generativnu popunu
+	Needs your OK: {name}	Potrebna je vaša saglasnost: {name}
+	Needs your OK	Potrebna je vaša saglasnost
+	No connected model can do Generative Fill yet. Connect a service below.	Nijedan povezani model još ne ume generativnu popunu. Povežite uslugu ispod.
+	No key saved	Ključ nije sačuvan
+	No prompt: continues the image	Bez opisa: slika se nastavlja
+	No prompt: removes what is selected	Bez opisa: uklanja izabrano
+	On this computer	Na ovom računaru
+	Online	Na mreži
+	Only this time	Samo ovaj put
+	Other data	Ostali podaci
+	Prompt (optional)	Opis (opciono)
+	Review…	Pregledaj…
+	Send	Pošalji
+	Sends the same area and prompt again for three more.	Ponovo šalje istu oblast i opis za još tri.
+	Set Up Generative AI…	Podesi generativnu AI…
+	Something went wrong in the shared AI layer: {error}	Nešto nije u redu u zajedničkom AI sloju: {error}
+	Switched off	Isključeno
+	The AI service is busy. Try again shortly.	AI usluga je zauzeta. Pokušajte ponovo uskoro.
+	The key can't be read	Ključ ne može da se pročita
+	The picture around the selection	Slika oko izbora
+	The selection has {n} separate areas, too many to fill one by one (at most {max}): it is filled as one.	Izbor ima {n} zasebnih oblasti, previše da bi se popunjavale jedna po jedna (najviše {max}): popunjava se kao celina.
+	The selection's shape	Oblik izbora
+	Until I turn it off	Dok to ne isključim
+	Variations	Varijacije
+	Waiting ({n})	Čeka ({n})
+	Waiting: {name}	Čeka: {name}
+	Your prompt	Vaš opis
+@plural	{n} Generative Fill waits for this answer.|{n} Generative Fills wait for this answer.	Ovaj odgovor čeka {n} generativna popuna.|Ovaj odgovor čekaju {n} generativne popune.|Ovaj odgovor čeka {n} generativnih popuna.
+@plural	Fill each of the {n} separate areas on its own|Fill each of the {n} separate areas on its own	Popuni posebno svaku od {n} odvojenih oblasti|Popuni posebno svaku od {n} odvojenih oblasti|Popuni posebno svaku od {n} odvojenih oblasti
+@plural	{n} needs your OK|{n} need your OK	{n} čeka saglasnost|{n} čekaju saglasnost|{n} čeka saglasnost
+@plural	{n} failed|{n} failed	{n} neuspešna|{n} neuspešne|{n} neuspešnih
+@plural	{n} waiting|{n} waiting	{n} čeka|{n} čekaju|{n} čeka
+@plural	{n} generating|{n} generating	{n} se generiše|{n} se generišu|{n} se generiše

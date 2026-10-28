@@ -300,6 +300,7 @@ fn command_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: 
         _ if crate::actions::owns_new_set(fields) => crate::actions::new_set_body(ui, fields),
         _ if crate::new_layer_ui::owns(fields) => crate::new_layer_ui::body(ui, fields),
         _ if crate::mask_trash_prompt::owns(fields) => crate::mask_trash_prompt::body(ui, fields),
+        _ if crate::genai_ui::owns(fields) => crate::genai_ui::body(app, ui, fields),
         _ if crate::rasterize_prompt::owns(fields) => crate::rasterize_prompt::body(ui, fields),
         _ if crate::duplicate_layer_ui::owns(fields) => crate::duplicate_layer_ui::body(app, ui, fields),
         _ if crate::stack_dialog::owns(fields) => crate::stack_dialog::body(app, ui, fields, d.id),
@@ -449,7 +450,7 @@ fn button_row(
     } else {
         let ok_label = ok_label(d);
         // Dialogs that need an input first (a preset name, a selection) grey OK out.
-        let can_ok = crate::crop_presets::can_confirm(app, fields) && crate::stack_dialog::can_confirm(fields);
+        let can_ok = crate::crop_presets::can_confirm(app, fields) && crate::stack_dialog::can_confirm(fields) && crate::genai_ui::can_confirm(app, fields);
         let ok = DialogButton::new(ButtonRole::Default, ok_label, 84.0).enabled(can_ok);
         // Photoshop: holding Alt turns Cancel into Reset (the dialog stays open).
         // Dialogs opt in via `dialog_alt_reset::supported` (per marker).
@@ -458,6 +459,8 @@ fn button_row(
             tl!("Reset")
         } else if d.kind == DialogKind::NewDocument {
             tl!("Close")
+        } else if let Some(label) = crate::genai_ui::cancel_label(fields) {
+            label
         } else {
             tl!("Cancel")
         };
@@ -531,6 +534,8 @@ fn ok_label(d: &Dialog) -> &'static str {
         tl!("Replace")
     } else if d.fields.contains_key("__export") {
         tl!("Export")
+    } else if let Some(label) = crate::genai_ui::ok_label(&d.fields) {
+        label
     } else {
         crate::file_ui::ok_label(&d.fields).unwrap_or(tl!("OK"))
     }
@@ -853,6 +858,7 @@ const ROUTES: &[fn(&Fields) -> bool] = &[
     crate::new_layer_ui::owns,
     crate::new_group_ui::owns,
     crate::mask_trash_prompt::owns,
+    crate::genai_ui::owns,
     crate::rasterize_prompt::owns,
     crate::duplicate_layer_ui::owns,
     crate::stack_dialog::owns,
@@ -1012,6 +1018,7 @@ fn confirm_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, String> 
         _ if crate::actions::owns_new_set(&d.fields) => crate::actions::new_set_confirm(app, &d.fields),
         _ if crate::new_layer_ui::owns(&d.fields) => crate::new_layer_ui::confirm(app, &d.fields),
         _ if crate::mask_trash_prompt::owns(&d.fields) => crate::mask_trash_prompt::confirm(app, &d.fields),
+        _ if crate::genai_ui::owns(&d.fields) => crate::genai_ui::confirm(app, &d.fields),
         _ if crate::rasterize_prompt::owns(&d.fields) => crate::rasterize_prompt::confirm(app, &d.fields),
         _ if crate::duplicate_layer_ui::owns(&d.fields) => crate::duplicate_layer_ui::confirm(app, &d.fields),
         _ if crate::stack_dialog::owns(&d.fields) => crate::stack_dialog::confirm(app, &d.fields),
@@ -1061,6 +1068,10 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
 pub fn cancel(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
     let closed = app.ui.close_dialog(id).ok_or_else(|| format!("no dialog {id}"))?;
     crate::actions::stopped(app, &closed.fields);
+    // Don't Send on the consent prompt discards the fills it asked about.
+    if crate::genai_ui::owns(&closed.fields) {
+        crate::genai_ui::cancelled(app, &closed.fields);
+    }
     if crate::guide_layout_ui::owns(&closed.fields) {
         app.ui.dialogs.retain(|child| child.fields.get("__dialog").and_then(Value::as_u64) != Some(id));
     }

@@ -4717,3 +4717,73 @@ shape	Appearance	Оформление
 	Stop Color	Цвет контрольной точки
 	Shapes can't use patterns yet	Фигуры пока не могут использовать узоры
 	Edit Brush…	Изменить кисть…
+
+# Generative Fill through the Craft suite's shared AI layer (#41): prompt, consent, setup, fills in progress
+	Allow sending to it:	Разрешить отправку:
+	API key	Ключ API
+	Cancel this Generative Fill	Отменить эту генеративную заливку
+	Checking…	Проверка…
+	Connect a service	Подключить службу
+	Connect	Подключить
+	Connected.	Подключено.
+	Connecting asks the service for its models with your key. Nothing from your documents is sent.	При подключении служба запрашивается о своих моделях с вашим ключом. Ничего из ваших документов не отправляется.
+	Connections and the model you choose are shared with the other Craft apps. Keys are kept in this computer's keychain, never in PhotoCraft's settings.	Подключения и выбранная модель общие для всех приложений Craft. Ключи хранятся в связке ключей этого компьютера, а не в настройках PhotoCraft.
+	Connections	Подключения
+	Describe what to generate in the selection, or leave it empty to continue the image through it.	Опишите, что нужно создать в выделенной области, или оставьте поле пустым, чтобы изображение продолжилось сквозь неё.
+	Discard	Отбросить
+	Don't Send	Не отправлять
+	Each area becomes its own Generative Fill and layer, generated side by side; each sends its own requests.	Каждая область станет отдельной генеративной заливкой со своим слоем; они создаются одновременно, и каждая отправляет свои запросы.
+	Empty: removes what is selected and continues the image through it.	Пусто: удаляет выделенное и продолжает изображение через выделенную область.
+	Failed: {name}	Ошибка: {name}
+	Fill the selection from a prompt	Заполнить выделение по описанию
+	For a day	На день
+	For an hour	На час
+	Generate More	Создать ещё
+	Generated {name}	Создано: {name}
+	Generating: {name}	Создаётся: {name}
+	Generating	Создаётся
+	Generative AI	Генеративный ИИ
+	Generative Fill failed: {error}	Генеративная заливка не удалась: {error}
+	Generative Fill uses {model} ({connection}).	Генеративная заливка использует {model} ({connection}).
+	Generative Fill will send this to {destination}:	Генеративная заливка отправит в {destination} следующее:
+	Generative Fill	Генеративная заливка
+	Generative Fill…	Генеративная заливка…
+	Generative Fills in progress	Генеративные заливки в работе
+	Go to area	Перейти к области
+	It runs on this computer: nothing leaves it.	Работает на этом компьютере: ничего не покидает его.
+	It runs online: PhotoCraft asks before anything is sent.	Работает онлайн: PhotoCraft спрашивает перед любой отправкой.
+	Locked until its layer lands	Заблокировано, пока не появится слой
+	Model for Generative Fill	Модель для генеративной заливки
+	Needs your OK: {name}	Нужно ваше согласие: {name}
+	Needs your OK	Нужно ваше согласие
+	No connected model can do Generative Fill yet. Connect a service below.	Ни одна подключённая модель пока не умеет генеративную заливку. Подключите службу ниже.
+	No key saved	Ключ не сохранён
+	No prompt: continues the image	Без описания: продолжает изображение
+	No prompt: removes what is selected	Без описания: удаляет выделенное
+	On this computer	На этом компьютере
+	Online	Онлайн
+	Only this time	Только сейчас
+	Other data	Другие данные
+	Prompt (optional)	Описание (необязательно)
+	Review…	Просмотреть…
+	Send	Отправить
+	Sends the same area and prompt again for three more.	Снова отправляет ту же область и описание, чтобы получить ещё три.
+	Set Up Generative AI…	Настроить генеративный ИИ…
+	Something went wrong in the shared AI layer: {error}	В общем слое ИИ что-то пошло не так: {error}
+	Switched off	Отключено
+	The AI service is busy. Try again shortly.	Служба ИИ занята. Попробуйте ещё раз чуть позже.
+	The key can't be read	Не удаётся прочитать ключ
+	The picture around the selection	Изображение вокруг выделения
+	The selection has {n} separate areas, too many to fill one by one (at most {max}): it is filled as one.	В выделении {n} отдельных областей — слишком много, чтобы заливать их по одной (не больше {max}): оно заливается целиком.
+	The selection's shape	Форма выделения
+	Until I turn it off	Пока я не отключу
+	Variations	Варианты
+	Waiting ({n})	В очереди ({n})
+	Waiting: {name}	В очереди: {name}
+	Your prompt	Ваше описание
+@plural	{n} Generative Fill waits for this answer.|{n} Generative Fills wait for this answer.	Этого ответа ждёт {n} генеративная заливка.|Этого ответа ждут {n} генеративные заливки.|Этого ответа ждут {n} генеративных заливок.
+@plural	Fill each of the {n} separate areas on its own|Fill each of the {n} separate areas on its own	Залить каждую из {n} отдельных областей по отдельности|Залить каждую из {n} отдельных областей по отдельности|Залить каждую из {n} отдельных областей по отдельности
+@plural	{n} needs your OK|{n} need your OK	{n} ждёт согласия|{n} ждут согласия|{n} ждут согласия
+@plural	{n} failed|{n} failed	{n} с ошибкой|{n} с ошибкой|{n} с ошибкой
+@plural	{n} waiting|{n} waiting	{n} в очереди|{n} в очереди|{n} в очереди
+@plural	{n} generating|{n} generating	{n} создаётся|{n} создаются|{n} создаются

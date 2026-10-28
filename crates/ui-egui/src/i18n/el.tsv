@@ -4220,3 +4220,73 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Χρώμα στάσης
 	Shapes can't use patterns yet	Τα σχήματα δεν μπορούν ακόμη να χρησιμοποιούν μοτίβα
 	Edit Brush…	Επεξεργασία πινέλου…
+
+# Generative Fill through the Craft suite's shared AI layer (#41): prompt, consent, setup, fills in progress
+	Allow sending to it:	Να επιτρέπεται η αποστολή:
+	API key	Κλειδί API
+	Cancel this Generative Fill	Ακύρωση αυτού του παραγωγικού γεμίσματος
+	Checking…	Έλεγχος…
+	Connect a service	Σύνδεση υπηρεσίας
+	Connect	Σύνδεση
+	Connected.	Συνδέθηκε.
+	Connecting asks the service for its models with your key. Nothing from your documents is sent.	Κατά τη σύνδεση ζητούνται από την υπηρεσία τα μοντέλα της με το κλειδί σας. Δεν αποστέλλεται τίποτα από τα έγγραφά σας.
+	Connections and the model you choose are shared with the other Craft apps. Keys are kept in this computer's keychain, never in PhotoCraft's settings.	Οι συνδέσεις και το μοντέλο που επιλέγετε είναι κοινά με τις άλλες εφαρμογές Craft. Τα κλειδιά φυλάσσονται στην κλειδοθήκη αυτού του υπολογιστή, ποτέ στις ρυθμίσεις του PhotoCraft.
+	Connections	Συνδέσεις
+	Describe what to generate in the selection, or leave it empty to continue the image through it.	Περιγράψτε τι θα δημιουργηθεί στην επιλογή ή αφήστε το κενό για να συνεχιστεί η εικόνα μέσα της.
+	Discard	Απόρριψη
+	Don't Send	Να μη σταλεί
+	Each area becomes its own Generative Fill and layer, generated side by side; each sends its own requests.	Κάθε περιοχή γίνεται ξεχωριστό παραγωγικό γέμισμα και επίπεδο, και δημιουργούνται ταυτόχρονα· η καθεμία στέλνει τα δικά της αιτήματα.
+	Empty: removes what is selected and continues the image through it.	Κενό: αφαιρεί το επιλεγμένο περιεχόμενο και συνεχίζει την εικόνα μέσα από την επιλογή.
+	Failed: {name}	Απέτυχε: {name}
+	Fill the selection from a prompt	Γέμισμα της επιλογής από περιγραφή
+	For a day	Για μία ημέρα
+	For an hour	Για μία ώρα
+	Generate More	Δημιουργία περισσότερων
+	Generated {name}	Δημιουργήθηκε: {name}
+	Generating: {name}	Δημιουργείται: {name}
+	Generating	Δημιουργείται
+	Generative AI	Παραγωγική ΤΝ
+	Generative Fill failed: {error}	Το παραγωγικό γέμισμα απέτυχε: {error}
+	Generative Fill uses {model} ({connection}).	Το παραγωγικό γέμισμα χρησιμοποιεί το {model} ({connection}).
+	Generative Fill will send this to {destination}:	Το παραγωγικό γέμισμα θα στείλει τα εξής στο {destination}:
+	Generative Fill	Παραγωγικό γέμισμα
+	Generative Fill…	Παραγωγικό γέμισμα…
+	Generative Fills in progress	Παραγωγικά γεμίσματα σε εξέλιξη
+	Go to area	Μετάβαση στην περιοχή
+	It runs on this computer: nothing leaves it.	Εκτελείται σε αυτόν τον υπολογιστή: τίποτα δεν φεύγει από αυτόν.
+	It runs online: PhotoCraft asks before anything is sent.	Εκτελείται online: το PhotoCraft ρωτά πριν σταλεί οτιδήποτε.
+	Locked until its layer lands	Κλειδωμένο μέχρι να έρθει το επίπεδό του
+	Model for Generative Fill	Μοντέλο για παραγωγικό γέμισμα
+	Needs your OK: {name}	Χρειάζεται την έγκρισή σας: {name}
+	Needs your OK	Χρειάζεται την έγκρισή σας
+	No connected model can do Generative Fill yet. Connect a service below.	Κανένα συνδεδεμένο μοντέλο δεν μπορεί ακόμη να κάνει παραγωγικό γέμισμα. Συνδέστε μια υπηρεσία παρακάτω.
+	No key saved	Δεν έχει αποθηκευτεί κλειδί
+	No prompt: continues the image	Χωρίς περιγραφή: συνεχίζει την εικόνα
+	No prompt: removes what is selected	Χωρίς περιγραφή: αφαιρεί ό,τι είναι επιλεγμένο
+	On this computer	Σε αυτόν τον υπολογιστή
+	Online	Online
+	Only this time	Μόνο αυτή τη φορά
+	Other data	Άλλα δεδομένα
+	Prompt (optional)	Περιγραφή (προαιρετική)
+	Review…	Έλεγχος…
+	Send	Αποστολή
+	Sends the same area and prompt again for three more.	Στέλνει ξανά την ίδια περιοχή και περιγραφή για τρεις ακόμη.
+	Set Up Generative AI…	Ρύθμιση παραγωγικής ΤΝ…
+	Something went wrong in the shared AI layer: {error}	Κάτι πήγε στραβά στο κοινό επίπεδο ΤΝ: {error}
+	Switched off	Απενεργοποιημένη
+	The AI service is busy. Try again shortly.	Η υπηρεσία ΤΝ είναι απασχολημένη. Δοκιμάστε ξανά σε λίγο.
+	The key can't be read	Το κλειδί δεν μπορεί να διαβαστεί
+	The picture around the selection	Η εικόνα γύρω από την επιλογή
+	The selection has {n} separate areas, too many to fill one by one (at most {max}): it is filled as one.	Η επιλογή έχει {n} ξεχωριστές περιοχές, πάρα πολλές για να γεμίσουν μία μία (το πολύ {max}): γεμίζει ως μία.
+	The selection's shape	Το σχήμα της επιλογής
+	Until I turn it off	Μέχρι να το απενεργοποιήσω
+	Variations	Παραλλαγές
+	Waiting ({n})	Σε αναμονή ({n})
+	Waiting: {name}	Σε αναμονή: {name}
+	Your prompt	Η περιγραφή σας
+@plural	{n} Generative Fill waits for this answer.|{n} Generative Fills wait for this answer.	{n} παραγωγικό γέμισμα περιμένει αυτή την απάντηση.|{n} παραγωγικά γεμίσματα περιμένουν αυτή την απάντηση.
+@plural	Fill each of the {n} separate areas on its own|Fill each of the {n} separate areas on its own	Γέμισμα καθεμίας από τις {n} ξεχωριστές περιοχές χωριστά|Γέμισμα καθεμίας από τις {n} ξεχωριστές περιοχές χωριστά
+@plural	{n} needs your OK|{n} need your OK	{n} χρειάζεται έγκριση|{n} χρειάζονται έγκριση
+@plural	{n} failed|{n} failed	{n} απέτυχε|{n} απέτυχαν
+@plural	{n} waiting|{n} waiting	{n} σε αναμονή|{n} σε αναμονή
+@plural	{n} generating|{n} generating	{n} δημιουργείται|{n} δημιουργούνται

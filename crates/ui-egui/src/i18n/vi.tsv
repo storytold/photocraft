@@ -4027,3 +4027,75 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Màu điểm dừng
 	Shapes can't use patterns yet	Hình chưa thể dùng mẫu tô
 	Edit Brush…	Chỉnh sửa cọ…
+
+# Generative Fill through the Craft suite's shared AI layer (#41): prompt, consent, setup, fills in progress
+	Allow sending to it:	Cho phép gửi:
+	API key	Khóa API
+	Cancel this Generative Fill	Hủy lần tô tạo sinh này
+	Checking…	Đang kiểm tra…
+	Connect a service	Kết nối dịch vụ
+	Connect	Kết nối
+	Connected.	Đã kết nối.
+	Connecting asks the service for its models with your key. Nothing from your documents is sent.	Khi kết nối, dịch vụ được hỏi danh sách mô hình bằng khóa của bạn. Không gửi gì từ tài liệu của bạn.
+	Connections and the model you choose are shared with the other Craft apps. Keys are kept in this computer's keychain, never in PhotoCraft's settings.	Các kết nối và mô hình bạn chọn được dùng chung với các ứng dụng Craft khác. Khóa được lưu trong chuỗi khóa của máy này, không bao giờ trong cài đặt của PhotoCraft.
+	Connections	Kết nối
+	Describe what to generate in the selection, or leave it empty to continue the image through it.	Mô tả nội dung cần tạo trong vùng chọn, hoặc để trống để ảnh tiếp nối qua vùng đó.
+	Discard	Bỏ
+	Don't Send	Không gửi
+	Each area becomes its own Generative Fill and layer, generated side by side; each sends its own requests.	Mỗi vùng trở thành một lần tô tạo sinh và một lớp riêng, được tạo cùng lúc; mỗi vùng gửi yêu cầu riêng.
+	Empty: removes what is selected and continues the image through it.	Để trống: xóa nội dung được chọn và tiếp nối hình ảnh qua vùng chọn.
+	Failed: {name}	Thất bại: {name}
+	Failed	Thất bại
+	Fill the selection from a prompt	Tô vùng chọn theo lời nhắc
+	For a day	Trong một ngày
+	For an hour	Trong một giờ
+	Generate More	Tạo thêm
+	Generated {name}	Đã tạo: {name}
+	Generating: {name}	Đang tạo: {name}
+	Generating	Đang tạo
+	Generative AI	AI tạo sinh
+	Generative Fill failed: {error}	Tô tạo sinh thất bại: {error}
+	Generative Fill uses {model} ({connection}).	Tô tạo sinh dùng {model} ({connection}).
+	Generative Fill will send this to {destination}:	Tô tạo sinh sẽ gửi những thứ này tới {destination}:
+	Generative Fill	Tô tạo sinh
+	Generative Fill…	Tô tạo sinh…
+	Generative Fills in progress	Các lần tô tạo sinh đang chạy
+	Go to area	Đến vùng
+	It runs on this computer: nothing leaves it.	Chạy trên máy này: không có gì rời khỏi máy.
+	It runs online: PhotoCraft asks before anything is sent.	Chạy trực tuyến: PhotoCraft hỏi trước khi gửi bất cứ thứ gì.
+	Locked until its layer lands	Bị khóa cho đến khi lớp của nó xuất hiện
+	Model for Generative Fill	Mô hình cho Tô tạo sinh
+	Needs your OK: {name}	Cần bạn đồng ý: {name}
+	Needs your OK	Cần bạn đồng ý
+	No connected model can do Generative Fill yet. Connect a service below.	Chưa có mô hình nào đã kết nối làm được Tô tạo sinh. Hãy kết nối một dịch vụ bên dưới.
+	No key saved	Chưa lưu khóa
+	No prompt: continues the image	Không có lời nhắc: ảnh được tiếp nối
+	No prompt: removes what is selected	Không có mô tả: xóa phần được chọn
+	On this computer	Trên máy này
+	Online	Trực tuyến
+	Only this time	Chỉ lần này
+	Other data	Dữ liệu khác
+	Prompt (optional)	Lời nhắc (không bắt buộc)
+	Retry	Thử lại
+	Review…	Xem lại…
+	Send	Gửi
+	Sends the same area and prompt again for three more.	Gửi lại cùng vùng và lời nhắc để có thêm ba.
+	Set Up Generative AI…	Thiết lập AI tạo sinh…
+	Something went wrong in the shared AI layer: {error}	Đã xảy ra lỗi trong lớp AI dùng chung: {error}
+	Switched off	Đã tắt
+	The AI service is busy. Try again shortly.	Dịch vụ AI đang bận. Hãy thử lại sau ít phút.
+	The key can't be read	Không đọc được khóa
+	The picture around the selection	Hình quanh vùng chọn
+	The selection has {n} separate areas, too many to fill one by one (at most {max}): it is filled as one.	Vùng chọn có {n} vùng tách rời, quá nhiều để tô từng vùng (tối đa {max}): sẽ được tô như một vùng.
+	The selection's shape	Hình dạng vùng chọn
+	Until I turn it off	Cho đến khi tôi tắt
+	Variations	Biến thể
+	Waiting ({n})	Đang chờ ({n})
+	Waiting: {name}	Đang chờ: {name}
+	Your prompt	Lời nhắc của bạn
+@plural	{n} Generative Fill waits for this answer.|{n} Generative Fills wait for this answer.	{n} lần Tô tạo sinh đang chờ câu trả lời này.
+@plural	Fill each of the {n} separate areas on its own|Fill each of the {n} separate areas on its own	Tô riêng từng vùng trong {n} vùng tách rời
+@plural	{n} needs your OK|{n} need your OK	{n} cần bạn đồng ý
+@plural	{n} failed|{n} failed	{n} thất bại
+@plural	{n} waiting|{n} waiting	{n} đang chờ
+@plural	{n} generating|{n} generating	{n} đang tạo

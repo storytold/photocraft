@@ -4440,3 +4440,73 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Színpont színe
 	Shapes can't use patterns yet	Az alakzatok még nem használhatnak mintákat
 	Edit Brush…	Ecset szerkesztése…
+
+# Generative Fill through the Craft suite's shared AI layer (#41): prompt, consent, setup, fills in progress
+	Allow sending to it:	Küldés engedélyezése:
+	API key	API-kulcs
+	Cancel this Generative Fill	Generatív kitöltés megszakítása
+	Checking…	Ellenőrzés…
+	Connect a service	Szolgáltatás csatlakoztatása
+	Connect	Csatlakoztatás
+	Connected.	Csatlakoztatva.
+	Connecting asks the service for its models with your key. Nothing from your documents is sent.	Csatlakozáskor a szolgáltatás az Ön kulcsával lekérdezi a modelljeit. A dokumentumaiból semmi sem kerül elküldésre.
+	Connections and the model you choose are shared with the other Craft apps. Keys are kept in this computer's keychain, never in PhotoCraft's settings.	A kapcsolatokon és a választott modellen a többi Craft alkalmazás is osztozik. A kulcsok a számítógép kulcskarikáján vannak, sosem a PhotoCraft beállításaiban.
+	Connections	Kapcsolatok
+	Describe what to generate in the selection, or leave it empty to continue the image through it.	Írd le, mi jelenjen meg a kijelölésben, vagy hagyd üresen, hogy a kép folytatódjon rajta keresztül.
+	Discard	Elvetés
+	Don't Send	Ne küldje
+	Each area becomes its own Generative Fill and layer, generated side by side; each sends its own requests.	Minden terület külön generatív kitöltés és réteg lesz, egyszerre készülnek; mindegyik saját kéréseket küld.
+	Empty: removes what is selected and continues the image through it.	Üres: eltávolítja a kijelölt tartalmat, és a képet a kijelölésen át folytatja.
+	Failed: {name}	Sikertelen: {name}
+	Fill the selection from a prompt	A kijelölés kitöltése leírás alapján
+	For a day	Egy napig
+	For an hour	Egy óráig
+	Generate More	Továbbiak létrehozása
+	Generated {name}	Elkészült: {name}
+	Generating: {name}	Generálás: {name}
+	Generating	Generálás
+	Generative AI	Generatív MI
+	Generative Fill failed: {error}	A generatív kitöltés sikertelen: {error}
+	Generative Fill uses {model} ({connection}).	A generatív kitöltés ezt használja: {model} ({connection}).
+	Generative Fill will send this to {destination}:	A generatív kitöltés ezt küldi ide: {destination}:
+	Generative Fill	Generatív kitöltés
+	Generative Fill…	Generatív kitöltés…
+	Generative Fills in progress	Folyamatban lévő generatív kitöltések
+	Go to area	Ugrás a területre
+	It runs on this computer: nothing leaves it.	Ezen a számítógépen fut: semmi sem hagyja el.
+	It runs online: PhotoCraft asks before anything is sent.	Online fut: a PhotoCraft minden küldés előtt rákérdez.
+	Locked until its layer lands	Zárolva, amíg meg nem érkezik a rétege
+	Model for Generative Fill	A generatív kitöltés modellje
+	Needs your OK: {name}	Jóváhagyásra vár: {name}
+	Needs your OK	Jóváhagyásra vár
+	No connected model can do Generative Fill yet. Connect a service below.	Egyik csatlakoztatott modell sem tud még generatív kitöltést. Csatlakoztasson egy szolgáltatást lent.
+	No key saved	Nincs mentett kulcs
+	No prompt: continues the image	Nincs leírás: a kép folytatódik
+	No prompt: removes what is selected	Nincs leírás: eltávolítja a kijelölt részt
+	On this computer	Ezen a számítógépen
+	Online	Online
+	Only this time	Csak most
+	Other data	Egyéb adatok
+	Prompt (optional)	Leírás (nem kötelező)
+	Review…	Áttekintés…
+	Send	Küldés
+	Sends the same area and prompt again for three more.	Újra elküldi ugyanazt a területet és leírást három továbbiért.
+	Set Up Generative AI…	Generatív MI beállítása…
+	Something went wrong in the shared AI layer: {error}	Hiba történt a közös MI-rétegben: {error}
+	Switched off	Kikapcsolva
+	The AI service is busy. Try again shortly.	Az MI-szolgáltatás foglalt. Próbálja újra kicsit később.
+	The key can't be read	A kulcs nem olvasható
+	The picture around the selection	A kijelölés körüli kép
+	The selection has {n} separate areas, too many to fill one by one (at most {max}): it is filled as one.	A kijelölésnek {n} különálló területe van, túl sok ahhoz, hogy egyenként legyen kitöltve (legfeljebb {max}): egyben lesz kitöltve.
+	The selection's shape	A kijelölés alakja
+	Until I turn it off	Amíg ki nem kapcsolom
+	Variations	Változatok
+	Waiting ({n})	Várakozik ({n})
+	Waiting: {name}	Várakozik: {name}
+	Your prompt	Az Ön leírása
+@plural	{n} Generative Fill waits for this answer.|{n} Generative Fills wait for this answer.	{n} generatív kitöltés vár erre a válaszra.
+@plural	Fill each of the {n} separate areas on its own|Fill each of the {n} separate areas on its own	A(z) {n} különálló terület kitöltése egyenként
+@plural	{n} needs your OK|{n} need your OK	{n} jóváhagyásra vár
+@plural	{n} failed|{n} failed	{n} sikertelen
+@plural	{n} waiting|{n} waiting	{n} várakozik
+@plural	{n} generating|{n} generating	{n} készül

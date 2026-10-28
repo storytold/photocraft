@@ -4197,3 +4197,75 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	分岐点のカラー
 	Shapes can't use patterns yet	シェイプではまだパターンを使用できません
 	Edit Brush…	ブラシを編集…
+
+# Generative Fill through the Craft suite's shared AI layer (#41): prompt, consent, setup, fills in progress
+	Allow sending to it:	送信を許可:
+	API key	API キー
+	Cancel this Generative Fill	この生成塗りつぶしをキャンセル
+	Checking…	確認中…
+	Connect a service	サービスを接続
+	Connect	接続
+	Connected.	接続しました。
+	Connecting asks the service for its models with your key. Nothing from your documents is sent.	接続時は、キーを使ってサービスにモデルの一覧を問い合わせます。ドキュメントの内容は送信されません。
+	Connections and the model you choose are shared with the other Craft apps. Keys are kept in this computer's keychain, never in PhotoCraft's settings.	接続と選んだモデルはほかの Craft アプリと共有されます。キーはこのコンピューターのキーチェーンに保管され、PhotoCraft の設定には保存されません。
+	Connections	接続
+	Describe what to generate in the selection, or leave it empty to continue the image through it.	選択範囲に生成する内容を入力してください。空のままにすると、周囲の画像を選択範囲の中へ続けます。
+	Discard	破棄
+	Don't Send	送信しない
+	Each area becomes its own Generative Fill and layer, generated side by side; each sends its own requests.	各領域がそれぞれ別の生成塗りつぶしとレイヤーになり、同時に生成されます。リクエストは領域ごとに送信されます。
+	Empty: removes what is selected and continues the image through it.	空欄：選択した内容を削除し、周囲の画像を選択範囲内に続けます。
+	Failed: {name}	失敗：{name}
+	Failed	失敗
+	Fill the selection from a prompt	説明文から選択範囲を塗りつぶす
+	For a day	1 日間
+	For an hour	1 時間
+	Generate More	さらに生成
+	Generated {name}	生成完了：{name}
+	Generating: {name}	生成中：{name}
+	Generating	生成中
+	Generative AI	生成 AI
+	Generative Fill failed: {error}	生成塗りつぶしに失敗しました：{error}
+	Generative Fill uses {model} ({connection}).	生成塗りつぶしは {model}（{connection}）を使います。
+	Generative Fill will send this to {destination}:	生成塗りつぶしは次の内容を {destination} に送信します：
+	Generative Fill	生成塗りつぶし
+	Generative Fill…	生成塗りつぶし…
+	Generative Fills in progress	実行中の生成塗りつぶし
+	Go to area	領域へ移動
+	It runs on this computer: nothing leaves it.	このコンピューター上で動作します。外部には何も送られません。
+	It runs online: PhotoCraft asks before anything is sent.	オンラインで動作します。送信する前に PhotoCraft が確認します。
+	Locked until its layer lands	レイヤーが届くまでロックされています
+	Model for Generative Fill	生成塗りつぶしのモデル
+	Needs your OK: {name}	承認待ち：{name}
+	Needs your OK	承認待ち
+	No connected model can do Generative Fill yet. Connect a service below.	生成塗りつぶしができる接続済みのモデルはまだありません。下でサービスを接続してください。
+	No key saved	キーが保存されていません
+	No prompt: continues the image	説明文なし：画像を続けます
+	No prompt: removes what is selected	説明文なし：選択した内容を削除します
+	On this computer	このコンピューター
+	Online	オンライン
+	Only this time	今回のみ
+	Other data	その他のデータ
+	Prompt (optional)	説明文（省略可）
+	Retry	再試行
+	Review…	確認…
+	Send	送信
+	Sends the same area and prompt again for three more.	同じ範囲と説明文をもう一度送信して、さらに 3 つ生成します。
+	Set Up Generative AI…	生成 AI を設定…
+	Something went wrong in the shared AI layer: {error}	共有 AI レイヤーで問題が発生しました：{error}
+	Switched off	オフ
+	The AI service is busy. Try again shortly.	AI サービスが混み合っています。しばらくしてからもう一度お試しください。
+	The key can't be read	キーを読み取れません
+	The picture around the selection	選択範囲の周りの画像
+	The selection has {n} separate areas, too many to fill one by one (at most {max}): it is filled as one.	選択範囲に {n} 個の離れた領域があり、1 つずつ塗りつぶすには多すぎます（最大 {max}）。まとめて塗りつぶします。
+	The selection's shape	選択範囲の形
+	Until I turn it off	オフにするまで
+	Variations	バリエーション
+	Waiting ({n})	待機中（{n}）
+	Waiting: {name}	待機中：{name}
+	Your prompt	説明文
+@plural	{n} Generative Fill waits for this answer.|{n} Generative Fills wait for this answer.	{n} 件の生成塗りつぶしがこの回答を待っています。
+@plural	Fill each of the {n} separate areas on its own|Fill each of the {n} separate areas on its own	{n} 個の離れた領域をそれぞれ個別に塗りつぶす
+@plural	{n} needs your OK|{n} need your OK	{n} 件が承認待ち
+@plural	{n} failed|{n} failed	{n} 件失敗
+@plural	{n} waiting|{n} waiting	{n} 件待機中
+@plural	{n} generating|{n} generating	{n} 件生成中

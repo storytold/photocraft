@@ -4771,3 +4771,73 @@ cameraRaw	White Balance: As Shot	Vitbalans: som tagen
 	The path was discarded	Banan kasserades
 	The path was kept as the Work Path	Banan behölls som arbetsbana
 	Edit Brush…	Redigera pensel…
+
+# Generative Fill through the Craft suite's shared AI layer (#41): prompt, consent, setup, fills in progress
+	Allow sending to it:	Tillåt att skicka till den:
+	API key	API-nyckel
+	Cancel this Generative Fill	Avbryt den här generativa fyllningen
+	Checking…	Kontrollerar…
+	Connect a service	Anslut en tjänst
+	Connect	Anslut
+	Connected.	Ansluten.
+	Connecting asks the service for its models with your key. Nothing from your documents is sent.	När du ansluter frågas tjänsten om sina modeller med din nyckel. Inget från dina dokument skickas.
+	Connections and the model you choose are shared with the other Craft apps. Keys are kept in this computer's keychain, never in PhotoCraft's settings.	Anslutningar och modellen du väljer delas med de andra Craft-apparna. Nycklar sparas i datorns nyckelring, aldrig i PhotoCrafts inställningar.
+	Connections	Anslutningar
+	Describe what to generate in the selection, or leave it empty to continue the image through it.	Beskriv vad som ska genereras i markeringen, eller lämna tomt för att fortsätta bilden genom den.
+	Discard	Kassera
+	Don't Send	Skicka inte
+	Each area becomes its own Generative Fill and layer, generated side by side; each sends its own requests.	Varje område blir en egen generativ fyllning med ett eget lager, genererade sida vid sida; vart och ett skickar sina egna förfrågningar.
+	Empty: removes what is selected and continues the image through it.	Tomt: tar bort det markerade och fortsätter bilden genom det.
+	Failed: {name}	Misslyckades: {name}
+	Fill the selection from a prompt	Fyll markeringen utifrån en beskrivning
+	For a day	I en dag
+	For an hour	I en timme
+	Generate More	Generera fler
+	Generated {name}	Genererade {name}
+	Generating: {name}	Genererar: {name}
+	Generating	Genererar
+	Generative AI	Generativ AI
+	Generative Fill failed: {error}	Generativ fyllning misslyckades: {error}
+	Generative Fill uses {model} ({connection}).	Generativ fyllning använder {model} ({connection}).
+	Generative Fill will send this to {destination}:	Generativ fyllning skickar detta till {destination}:
+	Generative Fill	Generativ fyllning
+	Generative Fill…	Generativ fyllning…
+	Generative Fills in progress	Pågående generativa fyllningar
+	Go to area	Gå till området
+	It runs on this computer: nothing leaves it.	Det körs på den här datorn: inget lämnar den.
+	It runs online: PhotoCraft asks before anything is sent.	Det körs online: PhotoCraft frågar innan något skickas.
+	Locked until its layer lands	Låst tills lagret är klart
+	Model for Generative Fill	Modell för generativ fyllning
+	Needs your OK: {name}	Väntar på ditt OK: {name}
+	Needs your OK	Väntar på ditt OK
+	No connected model can do Generative Fill yet. Connect a service below.	Ingen ansluten modell kan göra generativ fyllning än. Anslut en tjänst nedan.
+	No key saved	Ingen nyckel sparad
+	No prompt: continues the image	Ingen beskrivning: fortsätter bilden
+	No prompt: removes what is selected	Ingen beskrivning: tar bort det markerade
+	On this computer	På den här datorn
+	Online	Online
+	Only this time	Bara den här gången
+	Other data	Övriga data
+	Prompt (optional)	Beskrivning (valfritt)
+	Review…	Granska…
+	Send	Skicka
+	Sends the same area and prompt again for three more.	Skickar samma område och beskrivning igen för tre till.
+	Set Up Generative AI…	Konfigurera generativ AI…
+	Something went wrong in the shared AI layer: {error}	Något gick fel i den delade AI-modulen: {error}
+	Switched off	Avstängd
+	The AI service is busy. Try again shortly.	AI-tjänsten är upptagen. Försök igen om en stund.
+	The key can't be read	Nyckeln kan inte läsas
+	The picture around the selection	Bilden runt markeringen
+	The selection has {n} separate areas, too many to fill one by one (at most {max}): it is filled as one.	Markeringen har {n} separata områden, för många för att fylla ett i taget (högst {max}): den fylls som en helhet.
+	The selection's shape	Markeringens form
+	Until I turn it off	Tills jag stänger av det
+	Variations	Variationer
+	Waiting ({n})	Väntar ({n})
+	Waiting: {name}	Väntar: {name}
+	Your prompt	Din beskrivning
+@plural	{n} Generative Fill waits for this answer.|{n} Generative Fills wait for this answer.	{n} generativ fyllning väntar på det här svaret.|{n} generativa fyllningar väntar på det här svaret.
+@plural	Fill each of the {n} separate areas on its own|Fill each of the {n} separate areas on its own	Fyll vart och ett av de {n} separata områdena för sig|Fyll vart och ett av de {n} separata områdena för sig
+@plural	{n} needs your OK|{n} need your OK	{n} väntar på ditt OK|{n} väntar på ditt OK
+@plural	{n} failed|{n} failed	{n} misslyckades|{n} misslyckades
+@plural	{n} waiting|{n} waiting	{n} väntar|{n} väntar
+@plural	{n} generating|{n} generating	{n} genereras|{n} genereras

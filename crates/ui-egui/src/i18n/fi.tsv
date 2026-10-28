@@ -4774,3 +4774,73 @@ cameraRaw	White Balance: As Shot	Valkotasapaino: kuvauksen mukainen
 	The path was discarded	Polku hylättiin
 	The path was kept as the Work Path	Polku säilytettiin työpolkuna
 	Edit Brush…	Muokkaa sivellintä…
+
+# Generative Fill through the Craft suite's shared AI layer (#41): prompt, consent, setup, fills in progress
+	Allow sending to it:	Salli lähettäminen sille:
+	API key	API-avain
+	Cancel this Generative Fill	Peruuta tämä generatiivinen täyttö
+	Checking…	Tarkistetaan…
+	Connect a service	Yhdistä palvelu
+	Connect	Yhdistä
+	Connected.	Yhdistetty.
+	Connecting asks the service for its models with your key. Nothing from your documents is sent.	Yhdistettäessä palvelulta kysytään sen mallit avaimellasi. Asiakirjoistasi ei lähetetä mitään.
+	Connections and the model you choose are shared with the other Craft apps. Keys are kept in this computer's keychain, never in PhotoCraft's settings.	Yhteydet ja valitsemasi malli jaetaan muiden Craft-sovellusten kanssa. Avaimet säilytetään tämän tietokoneen avainnipussa, ei koskaan PhotoCraftin asetuksissa.
+	Connections	Yhteydet
+	Describe what to generate in the selection, or leave it empty to continue the image through it.	Kuvaile, mitä valintaan luodaan, tai jätä kenttä tyhjäksi, jolloin kuvaa jatketaan sen läpi.
+	Discard	Hylkää
+	Don't Send	Älä lähetä
+	Each area becomes its own Generative Fill and layer, generated side by side; each sends its own requests.	Jokaisesta alueesta tulee oma generatiivinen täyttönsä ja tasonsa, ja ne luodaan rinnakkain; kukin lähettää omat pyyntönsä.
+	Empty: removes what is selected and continues the image through it.	Tyhjä: poistaa valitun sisällön ja jatkaa kuvaa sen läpi.
+	Failed: {name}	Epäonnistui: {name}
+	Fill the selection from a prompt	Täytä valinta kuvauksen perusteella
+	For a day	Päiväksi
+	For an hour	Tunniksi
+	Generate More	Luo lisää
+	Generated {name}	Luotu {name}
+	Generating: {name}	Luodaan: {name}
+	Generating	Luodaan
+	Generative AI	Generatiivinen tekoäly
+	Generative Fill failed: {error}	Generatiivinen täyttö epäonnistui: {error}
+	Generative Fill uses {model} ({connection}).	Generatiivinen täyttö käyttää mallia {model} ({connection}).
+	Generative Fill will send this to {destination}:	Generatiivinen täyttö lähettää tämän kohteeseen {destination}:
+	Generative Fill	Generatiivinen täyttö
+	Generative Fill…	Generatiivinen täyttö…
+	Generative Fills in progress	Käynnissä olevat generatiiviset täytöt
+	Go to area	Siirry alueeseen
+	It runs on this computer: nothing leaves it.	Se toimii tällä tietokoneella: mitään ei lähde siltä.
+	It runs online: PhotoCraft asks before anything is sent.	Se toimii verkossa: PhotoCraft kysyy ennen kuin mitään lähetetään.
+	Locked until its layer lands	Lukittu, kunnes sen taso valmistuu
+	Model for Generative Fill	Generatiivisen täytön malli
+	Needs your OK: {name}	Odottaa hyväksyntääsi: {name}
+	Needs your OK	Odottaa hyväksyntääsi
+	No connected model can do Generative Fill yet. Connect a service below.	Mikään yhdistetty malli ei vielä osaa generatiivista täyttöä. Yhdistä palvelu alla.
+	No key saved	Avainta ei ole tallennettu
+	No prompt: continues the image	Ei kuvausta: jatkaa kuvaa
+	No prompt: removes what is selected	Ei kuvausta: poistaa valitun sisällön
+	On this computer	Tällä tietokoneella
+	Online	Verkossa
+	Only this time	Vain tämän kerran
+	Other data	Muut tiedot
+	Prompt (optional)	Kuvaus (valinnainen)
+	Review…	Tarkista…
+	Send	Lähetä
+	Sends the same area and prompt again for three more.	Lähettää saman alueen ja kuvauksen uudelleen kolmen lisävaihtoehdon saamiseksi.
+	Set Up Generative AI…	Määritä generatiivinen tekoäly…
+	Something went wrong in the shared AI layer: {error}	Jaetussa tekoälymoduulissa tapahtui virhe: {error}
+	Switched off	Pois päältä
+	The AI service is busy. Try again shortly.	Tekoälypalvelu on varattu. Yritä hetken kuluttua uudelleen.
+	The key can't be read	Avainta ei voi lukea
+	The picture around the selection	Kuva valinnan ympärillä
+	The selection has {n} separate areas, too many to fill one by one (at most {max}): it is filled as one.	Valinnassa on {n} erillistä aluetta, liian monta täytettäväksi yksitellen (enintään {max}): se täytetään yhtenä.
+	The selection's shape	Valinnan muoto
+	Until I turn it off	Kunnes poistan sen käytöstä
+	Variations	Muunnelmat
+	Waiting ({n})	Odottaa ({n})
+	Waiting: {name}	Odottaa: {name}
+	Your prompt	Kuvauksesi
+@plural	{n} Generative Fill waits for this answer.|{n} Generative Fills wait for this answer.	{n} generatiivinen täyttö odottaa tätä vastausta.|{n} generatiivista täyttöä odottaa tätä vastausta.
+@plural	Fill each of the {n} separate areas on its own|Fill each of the {n} separate areas on its own	Täytä kukin {n} erillisestä alueesta erikseen|Täytä kukin {n} erillisestä alueesta erikseen
+@plural	{n} needs your OK|{n} need your OK	{n} odottaa hyväksyntääsi|{n} odottaa hyväksyntääsi
+@plural	{n} failed|{n} failed	{n} epäonnistui|{n} epäonnistui
+@plural	{n} waiting|{n} waiting	{n} odottaa|{n} odottaa
+@plural	{n} generating|{n} generating	{n} luodaan|{n} luodaan

@@ -3161,3 +3161,75 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Solid Color	純色
 	Tint Color	色調顏色
 	Edit Brush…	編輯筆刷…
+
+# Generative Fill through the Craft suite's shared AI layer (#41): prompt, consent, setup, fills in progress
+	Allow sending to it:	允許傳送：
+	API key	API 金鑰
+	Cancel this Generative Fill	取消此生成式填色
+	Checking…	正在檢查…
+	Connect a service	連接服務
+	Connect	連接
+	Connected.	已連接。
+	Connecting asks the service for its models with your key. Nothing from your documents is sent.	連接時會用你的金鑰向服務查詢其模型。不會傳送你文件中的任何內容。
+	Connections and the model you choose are shared with the other Craft apps. Keys are kept in this computer's keychain, never in PhotoCraft's settings.	連接和所選模型由其他 Craft 應用程式共用。金鑰保存在這台電腦的鑰匙圈中，絕不會存入 PhotoCraft 的設定。
+	Connections	連接
+	Describe what to generate in the selection, or leave it empty to continue the image through it.	描述要在選取範圍中產生的內容，留空則讓周圍的影像在選取範圍中自然延續。
+	Discard	捨棄
+	Don't Send	不傳送
+	Each area becomes its own Generative Fill and layer, generated side by side; each sends its own requests.	每個區域都會成為獨立的生成式填色與圖層，同時產生；每個區域各自傳送請求。
+	Empty: removes what is selected and continues the image through it.	留空：移除所選內容，並讓周圍的影像在選取範圍中延續。
+	Failed: {name}	失敗：{name}
+	Failed	失敗
+	Fill the selection from a prompt	依描述填滿選取範圍
+	For a day	一天內
+	For an hour	一小時內
+	Generate More	產生更多
+	Generated {name}	已產生：{name}
+	Generating: {name}	正在產生：{name}
+	Generating	正在產生
+	Generative AI	生成式 AI
+	Generative Fill failed: {error}	生成式填色失敗：{error}
+	Generative Fill uses {model} ({connection}).	生成式填色使用 {model}（{connection}）。
+	Generative Fill will send this to {destination}:	生成式填色將把以下內容傳送到 {destination}：
+	Generative Fill	生成式填色
+	Generative Fill…	生成式填色…
+	Generative Fills in progress	進行中的生成式填色
+	Go to area	前往區域
+	It runs on this computer: nothing leaves it.	在這台電腦上執行：不會有任何資料離開。
+	It runs online: PhotoCraft asks before anything is sent.	線上執行：傳送任何內容前 PhotoCraft 都會詢問。
+	Locked until its layer lands	在圖層產生前保持鎖定
+	Model for Generative Fill	生成式填色的模型
+	Needs your OK: {name}	需要你的同意：{name}
+	Needs your OK	需要你的同意
+	No connected model can do Generative Fill yet. Connect a service below.	還沒有已連接的模型能做生成式填色。請在下方連接服務。
+	No key saved	未儲存金鑰
+	No prompt: continues the image	無描述：延續影像
+	No prompt: removes what is selected	無描述：移除所選內容
+	On this computer	在這台電腦上
+	Online	線上
+	Only this time	僅此一次
+	Other data	其他資料
+	Prompt (optional)	描述（選填）
+	Retry	重試
+	Review…	檢視…
+	Send	傳送
+	Sends the same area and prompt again for three more.	再次傳送相同區域和描述，再產生三個。
+	Set Up Generative AI…	設定生成式 AI…
+	Something went wrong in the shared AI layer: {error}	共用 AI 層出錯：{error}
+	Switched off	已關閉
+	The AI service is busy. Try again shortly.	AI 服務忙碌中。請稍後再試。
+	The key can't be read	無法讀取金鑰
+	The picture around the selection	選取範圍周圍的影像
+	The selection has {n} separate areas, too many to fill one by one (at most {max}): it is filled as one.	選取範圍有 {n} 個分離的區域，太多而無法逐一填色（最多 {max} 個）：將整體填色。
+	The selection's shape	選取範圍的形狀
+	Until I turn it off	直到我關閉
+	Variations	變體
+	Waiting ({n})	等待中（{n}）
+	Waiting: {name}	等待中：{name}
+	Your prompt	你的描述
+@plural	{n} Generative Fill waits for this answer.|{n} Generative Fills wait for this answer.	{n} 個生成式填色正在等待此回答。
+@plural	Fill each of the {n} separate areas on its own|Fill each of the {n} separate areas on its own	分別填色 {n} 個分離的區域
+@plural	{n} needs your OK|{n} need your OK	{n} 個需要你的同意
+@plural	{n} failed|{n} failed	{n} 個失敗
+@plural	{n} waiting|{n} waiting	{n} 個等待中
+@plural	{n} generating|{n} generating	{n} 個正在產生

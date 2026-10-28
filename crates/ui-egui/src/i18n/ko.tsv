@@ -3740,3 +3740,75 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	정지점 색상
 	Shapes can't use patterns yet	모양에는 아직 패턴을 사용할 수 없습니다
 	Edit Brush…	브러시 편집…
+
+# Generative Fill through the Craft suite's shared AI layer (#41): prompt, consent, setup, fills in progress
+	Allow sending to it:	보내기 허용:
+	API key	API 키
+	Cancel this Generative Fill	이 생성형 채우기 취소
+	Checking…	확인 중…
+	Connect a service	서비스 연결
+	Connect	연결
+	Connected.	연결되었습니다.
+	Connecting asks the service for its models with your key. Nothing from your documents is sent.	연결할 때 키로 서비스에 모델 목록을 요청합니다. 문서의 내용은 보내지 않습니다.
+	Connections and the model you choose are shared with the other Craft apps. Keys are kept in this computer's keychain, never in PhotoCraft's settings.	연결과 선택한 모델은 다른 Craft 앱과 함께 사용됩니다. 키는 이 컴퓨터의 키체인에 보관되며 PhotoCraft 설정에는 저장되지 않습니다.
+	Connections	연결
+	Describe what to generate in the selection, or leave it empty to continue the image through it.	선택 영역에 생성할 내용을 설명하세요. 비워 두면 주변 이미지를 선택 영역 안으로 이어 그립니다.
+	Discard	버리기
+	Don't Send	보내지 않음
+	Each area becomes its own Generative Fill and layer, generated side by side; each sends its own requests.	각 영역이 별도의 생성형 채우기와 레이어가 되어 동시에 생성되며, 영역마다 요청을 따로 보냅니다.
+	Empty: removes what is selected and continues the image through it.	비워 두면: 선택한 내용을 제거하고 주변 이미지를 선택 영역에 이어 그립니다.
+	Failed: {name}	실패: {name}
+	Failed	실패
+	Fill the selection from a prompt	설명으로 선택 영역 채우기
+	For a day	하루 동안
+	For an hour	한 시간 동안
+	Generate More	더 생성
+	Generated {name}	생성됨: {name}
+	Generating: {name}	생성 중: {name}
+	Generating	생성 중
+	Generative AI	생성형 AI
+	Generative Fill failed: {error}	생성형 채우기 실패: {error}
+	Generative Fill uses {model} ({connection}).	생성형 채우기는 {model}({connection})을(를) 사용합니다.
+	Generative Fill will send this to {destination}:	생성형 채우기가 다음을 {destination}(으)로 보냅니다:
+	Generative Fill	생성형 채우기
+	Generative Fill…	생성형 채우기…
+	Generative Fills in progress	진행 중인 생성형 채우기
+	Go to area	영역으로 이동
+	It runs on this computer: nothing leaves it.	이 컴퓨터에서 실행됩니다. 외부로 나가는 것은 없습니다.
+	It runs online: PhotoCraft asks before anything is sent.	온라인에서 실행됩니다. 보내기 전에 PhotoCraft가 묻습니다.
+	Locked until its layer lands	레이어가 도착할 때까지 잠김
+	Model for Generative Fill	생성형 채우기 모델
+	Needs your OK: {name}	승인 필요: {name}
+	Needs your OK	승인 필요
+	No connected model can do Generative Fill yet. Connect a service below.	아직 생성형 채우기를 할 수 있는 연결된 모델이 없습니다. 아래에서 서비스를 연결하세요.
+	No key saved	저장된 키 없음
+	No prompt: continues the image	설명 없음: 이미지를 이어 채움
+	No prompt: removes what is selected	설명 없음: 선택한 내용을 제거합니다
+	On this computer	이 컴퓨터
+	Online	온라인
+	Only this time	이번만
+	Other data	기타 데이터
+	Prompt (optional)	설명(선택 사항)
+	Retry	다시 시도
+	Review…	검토…
+	Send	보내기
+	Sends the same area and prompt again for three more.	같은 영역과 설명을 다시 보내 세 개를 더 생성합니다.
+	Set Up Generative AI…	생성형 AI 설정…
+	Something went wrong in the shared AI layer: {error}	공유 AI 계층에서 문제가 발생했습니다: {error}
+	Switched off	꺼짐
+	The AI service is busy. Try again shortly.	AI 서비스가 바쁩니다. 잠시 후 다시 시도하세요.
+	The key can't be read	키를 읽을 수 없음
+	The picture around the selection	선택 영역 주변 이미지
+	The selection has {n} separate areas, too many to fill one by one (at most {max}): it is filled as one.	선택 영역에 떨어진 영역이 {n}개 있어 하나씩 채우기에는 너무 많습니다(최대 {max}개). 하나로 채웁니다.
+	The selection's shape	선택 영역의 모양
+	Until I turn it off	끌 때까지
+	Variations	변형
+	Waiting ({n})	대기 중 ({n})
+	Waiting: {name}	대기 중: {name}
+	Your prompt	설명
+@plural	{n} Generative Fill waits for this answer.|{n} Generative Fills wait for this answer.	생성형 채우기 {n}개가 이 답변을 기다립니다.
+@plural	Fill each of the {n} separate areas on its own|Fill each of the {n} separate areas on its own	떨어진 영역 {n}개를 각각 따로 채우기
+@plural	{n} needs your OK|{n} need your OK	{n}개 승인 필요
+@plural	{n} failed|{n} failed	{n}개 실패
+@plural	{n} waiting|{n} waiting	{n}개 대기 중
+@plural	{n} generating|{n} generating	{n}개 생성 중
