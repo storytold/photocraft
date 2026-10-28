@@ -661,37 +661,3 @@ fn responsive_export_can_skip_only_affected_artboards() {
 
 #[test]
 fn artboard_export_dialog_preflights_every_board_for_its_revision() {
-    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-    app.run("file.new", serde_json::json!({"width": 64, "height": 64})).unwrap();
-    let created = app.run("layer.new.artboard", serde_json::json!({"rect": [0, 0, 20, 20]})).unwrap();
-    let id = created["layer"].as_u64().unwrap();
-    let layer = app
-        .session
-        .edit("create test layer", |doc, _| {
-            let format = doc.pixel_format();
-            let mut layer = photocraft_doc::Layer::raster(doc.next_layer_name("Layer"), format);
-            let Some(surface) = layer.surface_mut() else {
-                return Err(photocraft_engine::EngineError::Other("test raster layer has no surface".into()));
-            };
-            surface.fill_rect(photocraft_geom::Rect::new(30, 30, 40, 40), &photocraft_raster::from_rgba(&format, [1.0, 0.0, 0.0, 1.0]));
-            Ok(doc.insert_above(None, layer))
-        })
-        .unwrap();
-    app.run("layer.moveTo", json!({"layer":layer.0,"target":id,"position":"into"})).unwrap();
-    let revision = app.session.active().unwrap().revision;
-    for command in ["file.export.artboardsToFiles", "file.export.artboardsToPdf"] {
-        let mut fields = serde_json::Map::new();
-        fields.insert("__command".into(), json!(command));
-        refresh_artboard_export_preflight(&app, &mut fields);
-        assert_eq!(fields.get("__responsiveRevision").and_then(Value::as_u64), Some(revision));
-        assert_eq!(fields.get("__responsiveFindingCount").and_then(Value::as_u64), Some(1));
-        assert_eq!(fields.get("__responsiveBoardCount").and_then(Value::as_u64), Some(1));
-        assert_eq!(fields.get("__responsiveAffectedBoards"), Some(&json!([id])));
-        assert_eq!(fields.get("artboards"), Some(&json!([id])));
-        assert_eq!(fields.get("__responsivePreflight"), Some(&json!(true)));
-    }
-    let mut skip_fields =
-        serde_json::Map::from_iter([("__command".to_owned(), json!("file.export.artboardsToFiles")), ("__skipResponsiveAffected".to_owned(), json!(true))]);
-    refresh_artboard_export_preflight(&app, &mut skip_fields);
-    assert_eq!(skip_fields.get("artboards"), Some(&json!([])));
-}

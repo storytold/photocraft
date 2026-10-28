@@ -136,7 +136,6 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     // Data-driven labels (a per-part checkbox shows the part's name, not a catalogue entry)
     // come from `__labels` verbatim; everything else goes through the catalogue.
     let labels = f.get("__labels").cloned().unwrap_or(Value::Null);
-<<<<<<< C:/Users/User1/AppData/Local/Temp\z_theirs
     let label = |k: &str| labels.get(k).and_then(Value::as_str).map_or_else(|| label_of(k), str::to_string);
     if f.get("__responsivePreflight").and_then(Value::as_bool) == Some(true) {
         let findings = f.get("__responsiveFindingCount").and_then(Value::as_u64).unwrap_or(0);
@@ -171,7 +170,6 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         f.insert("artboards".into(), json!(selected));
         ui.add_space(6.0);
     }
-=======
     let file_info = f.get("__command").and_then(Value::as_str) == Some("file.fileInfo");
     let label = |k: &str| {
         if file_info {
@@ -184,7 +182,6 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         }
         labels.get(k).and_then(Value::as_str).map_or_else(|| label_of(k), str::to_string)
     };
->>>>>>> C:/Users/User1/AppData/Local/Temp\z_ours
     let keys = form_keys(f);
     let mut browse: Option<String> = None;
     egui::Grid::new("form-dialog").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
