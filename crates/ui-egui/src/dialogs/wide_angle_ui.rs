@@ -38,7 +38,8 @@ pub struct WideAngleDialog {
     ph: usize,
     src_tex: Option<TextureHandle>,
     out_tex: Option<TextureHandle>,
-    /// The proxy warp used by both the rendered preview and its constraint overlays.
+    /// The proxy warp used by both the rendered preview and its constraint overlays. It is
+    /// replaced only by `render`, so every edit to `params` must set `dirty`.
     mesh: Option<WideMesh>,
     dirty: bool,
     pub preview: bool,
@@ -73,9 +74,14 @@ impl WideAngleDialog {
         p
     }
 
+    /// The proxy rectangle the mesh is solved over, shared by `render` and the overlays.
+    fn proxy_rect(&self) -> Rect {
+        Rect::new(0, 0, self.pw as i32, self.ph as i32)
+    }
+
     fn render(&mut self, ctx: &egui::Context) {
         let t0 = crate::gpu_canvas::now_ms();
-        let pf = Rect::new(0, 0, self.pw as i32, self.ph as i32);
+        let pf = self.proxy_rect();
         let p = self.proxy_params();
         let mesh = wideangle::solve(&p, pf);
         self.residual = mesh.residual / self.scale;
@@ -337,7 +343,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             Orientation::Horizontal => t.warning,
             Orientation::Vertical => t.danger,
         };
-        let pf = Rect::new(0, 0, d.pw as i32, d.ph as i32);
+        let pf = d.proxy_rect();
         let mesh = if show_src { None } else { d.mesh.as_ref() };
         for c in &d.params.constraints {
             let pts: Vec<Pos2> = match mesh {
@@ -451,6 +457,10 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             action = Some(if role == widgets::ButtonRole::Default { "ok" } else { "cancel" });
         }
         fu.label(egui::RichText::new(format!("{:.0} ms · straightness {:.1} px", d.render_ms, d.residual)).color(t.text_faint));
+        // Panel edits mark the warp dirty after the overlays were drawn: redraw so they catch up.
+        if d.dirty {
+            ctx.request_repaint();
+        }
     });
     if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
         action = Some("cancel");
@@ -526,7 +536,17 @@ mod tests {
         PhotocraftApp::setup_context(&ctx, Default::default());
         open_with_a_constraint(&mut app, &ctx);
         let input = || egui::RawInput { screen_rect: Some(ERect::from_min_size(Pos2::ZERO, vec2(1000.0, 600.0))), ..Default::default() };
+        // Baseline: the source-space line, from which the screen scale and centre are measured.
+        app.wide_angle.as_mut().unwrap().preview = false;
+        // egui panics if a frame's texture uploads are dropped unhandled, hence `clear`.
         ctx.run_ui(input(), |ui| show(&mut app, ui.ctx())).textures_delta.clear();
+        let mut output = ctx.run_ui(input(), |ui| show(&mut app, ui.ctx()));
+        output.textures_delta.clear();
+        let line = output.shapes.iter().find_map(|s| constraint_line(&s.shape)).expect("baseline constraint line");
+        let (first, last) = (line.first().unwrap().x, line.last().unwrap().x);
+        let base_x = (first + last) * 0.5;
+        // The constraint spans x = 20..140 of the 160 px layer; the proxy is 1:1 with it.
+        let px = (last - first) / 120.0;
         // Move only the cached warp. A fresh solve would draw the original line instead.
         let d = app.wide_angle.as_mut().unwrap();
         for (out, _) in &mut d.mesh.as_mut().unwrap().verts {
@@ -541,10 +561,10 @@ mod tests {
             let mut output = ctx.run_ui(input(), |ui| show(&mut app, ui.ctx()));
             output.textures_delta.clear();
             let line = output.shapes.iter().find_map(|s| constraint_line(&s.shape)).expect("painted constraint line");
-            // The 160×100 image fits the 668-point-wide viewport. The source line is centred;
-            // the altered cached warp moves its centre ten proxy pixels to the right.
+            // The source line is centred on the image; the altered cached warp moves its
+            // centre ten proxy pixels to the right. Measure against the unshifted baseline.
             let centre_x = (line.first().unwrap().x + line.last().unwrap().x) * 0.5;
-            let expected_x = 350.0 + if shifted { 10.0 * (668.0 / 160.0) } else { 0.0 };
+            let expected_x = base_x + if shifted { 10.0 * px } else { 0.0 };
             assert!((centre_x - expected_x).abs() < 0.1, "preview={preview}, dragging={dragging}: centre={centre_x}, expected={expected_x}");
             let d = app.wide_angle.as_ref().unwrap();
             assert_eq!(d.mesh.as_ref().unwrap().verts, verts, "redraw retains the cached warp");
