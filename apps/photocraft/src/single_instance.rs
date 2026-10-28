@@ -131,6 +131,8 @@ pub struct LaunchContext<'a> {
     pub control: bool,
     /// Paths that aren't valid Unicode: this launch reports them.
     pub unreadable_paths: bool,
+    /// `-`: the image piped on standard input, which only this process can read (#9468).
+    pub stdin: bool,
     /// Options that only apply to the process they're given to (`--safe-gpu`, …), including the
     /// ones this launch's environment sets (see [`env_launch_options`]).
     pub launch_options: &'a [PerProcess],
@@ -194,6 +196,9 @@ pub fn skip_reason(c: &LaunchContext) -> Option<String> {
     }
     if c.unreadable_paths {
         return Some("some paths aren't valid Unicode".into());
+    }
+    if c.stdin {
+        return Some("the image piped on standard input (-) opens in this process".into());
     }
     if !c.launch_options.is_empty() {
         let options: Vec<String> = c.launch_options.iter().map(ToString::to_string).collect();

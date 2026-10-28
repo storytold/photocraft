@@ -1456,6 +1456,64 @@ fn control_token_env_vars_are_the_flags_fallbacks() {
     assert!(err.contains("photocraft-cli serving on") && err.contains("photocraft-cli control token: "), "{err}");
 }
 
+/// Run the binary with `stdin` piped in.
+fn piped(cmd: &mut Command, stdin: &[u8]) -> std::process::Output {
+    let mut child = cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+    let mut pipe = child.stdin.take().unwrap();
+    // A refused input may exit before reading it all: a broken pipe here is fine.
+    let _ = pipe.write_all(stdin);
+    drop(pipe);
+    child.wait_with_output().unwrap()
+}
+
+/// #9468: `-` as the input reads the image piped on standard input, whatever its format; `./-`
+/// is still a file called `-`.
+#[test]
+fn convert_info_and_run_read_an_image_piped_on_stdin() {
+    let d = tmp("stdin");
+    write_png(&d.join("in.png"), 9, 5, 3);
+    let png = std::fs::read(d.join("in.png")).unwrap();
+
+    let o = piped(bin().current_dir(&d).args(["convert", "-", "out.jpg"]), &png);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let jpg = std::fs::read(d.join("out.jpg")).unwrap();
+    assert_eq!(photocraft_codecs::detect(&jpg), Some(photocraft_codecs::Format::Jpeg));
+
+    // The JPEG just written pipes in too: the format comes from the bytes.
+    let o = piped(bin().args(["info", "-", "--compact"]), &jpg);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let info: Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!((info["width"].as_u64(), info["height"].as_u64()), (Some(9), Some(5)), "{info}");
+    assert_eq!((info["name"].as_str(), info["file"].as_str()), (Some("Untitled-1"), Some("-")), "{info}");
+
+    let o = piped(bin().current_dir(&d).args(["run", "-", "--cmd", "image.adjustments.invert", "--out", "inverted.png"]), &png);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    assert!(d.join("inverted.png").is_file());
+
+    // A file called `-` is `./-`, and stdin isn't read for it.
+    std::fs::copy(d.join("in.png"), d.join("-")).unwrap();
+    let o = piped(bin().current_dir(&d).args(["info", "./-", "--compact"]), b"not read");
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    std::fs::remove_dir_all(d).unwrap();
+}
+
+/// #9468: an empty pipe and bytes that aren't an image fail with exit 1 and say so, writing
+/// nothing; no panic.
+#[test]
+fn empty_or_garbage_stdin_is_a_clear_error() {
+    let d = tmp("stdin-errors");
+    for (stdin, expected) in [(&b""[..], "standard input: nothing was piped in"), (&b"plain text, not an image"[..], "standard input: ")] {
+        for args in [&["convert", "-", "out.png"][..], &["info", "-"], &["run", "-", "--out", "out.png"]] {
+            let o = piped(bin().current_dir(&d).args(args), stdin);
+            let err = String::from_utf8_lossy(&o.stderr);
+            assert_eq!(o.status.code(), Some(1), "{args:?}: {err}");
+            assert!(err.contains(expected) && !err.contains("panicked"), "{args:?}: {err}");
+            assert!(!d.join("out.png").exists(), "{args:?}");
+        }
+    }
+    std::fs::remove_dir_all(d).unwrap();
+}
+
 /// #8802: Deselect with nothing selected is skipped in a `run`, as action playback does (#6744),
 /// so a script that deselects after Reveal Selection still finishes and saves.
 #[test]
