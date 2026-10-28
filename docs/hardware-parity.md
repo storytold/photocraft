@@ -19,7 +19,7 @@ HDR display to verify.
 |---|---|---|---|
 | GPU canvas, zoom/pan, rotate view | Metal (macOS), DirectX/OpenCL (Windows) | wgpu 30: Metal, Vulkan, DX12, GL; backend selectable | done |
 | GPU compositing of layers, blend modes, effects | partial (Photoshop composites mostly on CPU) | wgpu compositor, ≤ 1/255 vs CPU oracle; Multichannel and > texture-limit regions fall back to CPU | done (ahead in places) |
-| GPU compositor startup | available | Pipeline preparation runs in the background on native hardware; the CPU composites until ready. Windows stall measurements remain pending (#9157, #9364, #6419) | partial |
+| GPU compositor startup | available | Pipeline preparation runs in the background on native hardware; the CPU composites until ready. Windows WARP probe: 0.329 ms p95, 6.860 ms maximum device-work stall during two FXC builds; hardware measurements remain pending (#9157, #9364, #6419) | partial |
 | GPU filters (Blur Gallery, Liquify, Smart Sharpen, Camera Raw) | yes | CPU (rayon) for filters; GPU for compose and effects. Camera Raw's preview runs its per-pixel stages (white balance to grain) in one wgpu pass, about 2-3 ms vs 11-28 ms on the CPU for the 858×572 proxy, depending on the machine; spatial stages, Calibration and OK still develop on the CPU (#6916) | partial |
 | Documents larger than the GPU texture limit | yes (tiled) | CPU fallback; tiling in progress (#49) | partial |
 | CPU-only fallback when no GPU | yes, reduced | `cpu` canvas preference; fails to start without an adapter on some Linux systems (#2519, #2412) | partial |
