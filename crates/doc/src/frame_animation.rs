@@ -331,7 +331,7 @@ mod tests {
     use photocraft_geom::Size;
 
     fn layer(name: &str, visible: bool) -> Layer {
-        let mut l = Layer::new(name, LayerContent::Group(Group { children: Vec::new(), expanded: true, artboard: None }));
+        let mut l = Layer::new(name, LayerContent::Group(Group { children: Vec::new(), expanded: true, artboard: None, frame_stroke: None }));
         l.visible = visible;
         l
     }
