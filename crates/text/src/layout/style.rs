@@ -94,12 +94,21 @@ pub(super) fn variation_list(st: &CharStyle) -> Vec<String> {
     vars
 }
 
-pub(super) fn style_props(st: &CharStyle, k: f32, fallback: &[String], idx: u32, small_caps: SmallCapsMode) -> Vec<StyleProperty<'static, RunBrush>> {
+/// `substitute` is the installed family drawing a missing `st.font_family` ([`FontDb::substitute_family`]).
+pub(super) fn style_props(
+    st: &CharStyle,
+    substitute: Option<&str>,
+    k: f32,
+    fallback: &[String],
+    idx: u32,
+    small_caps: SmallCapsMode,
+) -> Vec<StyleProperty<'static, RunBrush>> {
     let px = (st.size_pt * k).max(0.01);
     let mut fam: Vec<String> = Vec::new();
     if !st.font_family.is_empty() {
         fam.push(quote(&st.font_family));
     }
+    fam.extend(substitute.map(quote));
     // Serif runs fall back to a Mincho face for Japanese (craft-fonts), others to a Gothic one.
     if crate::craft_fonts::is_serif_family(&st.font_family) {
         fam.extend(crate::craft_fonts::mincho_first(fallback).iter().map(|f| quote(f)));
