@@ -4715,6 +4715,7 @@ shape	Appearance	Оформление
 
 # Palette grid (Color Table / Indexed Color Custom…)
 	Set Transparent	Сделать прозрачным
+	{count} transparent pixels were made opaque	{count} прозрачных пикселей стали непрозрачными
 	Clear Transparency	Убрать прозрачность
 	Color Picker (First Color)	Палитра цветов (первый цвет)
 	Color Picker (Last Color)	Палитра цветов (последний цвет)

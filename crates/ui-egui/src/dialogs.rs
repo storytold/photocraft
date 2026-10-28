@@ -751,11 +751,10 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             let _ = crate::prefs_ui::apply(app, d.id);
         }
         match outcome {
-            Some(true) => {
-                if let Err(error) = confirm(app, d.id) {
-                    app.ui.status = error;
-                }
-            }
+            Some(true) => match confirm(app, d.id) {
+                Err(error) => app.ui.status = error,
+                Ok(result) => warn_flattened(app, &result),
+            },
             Some(false) => {
                 let _ = cancel(app, d.id);
             }
@@ -958,6 +957,14 @@ fn confirm_generic_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, 
         crate::actions::abandoned(app, &d.fields);
     }
     result
+}
+
+/// A palette operation that flattens transparency reports how many clear pixels it made opaque:
+/// warn in the status bar, since the change is easy to miss in an indexed image.
+pub(crate) fn warn_flattened(app: &mut PhotocraftApp, result: &Value) {
+    if let Some(n) = result.get("flattened").and_then(Value::as_u64).filter(|&n| n > 0) {
+        app.ui.status = crate::i18n::fmt(tl!("{count} transparent pixels were made opaque"), &[("count", &n.to_string())]);
+    }
 }
 
 /// The checks before a dialog is confirmed: no open child picker, the automation gate for a handler

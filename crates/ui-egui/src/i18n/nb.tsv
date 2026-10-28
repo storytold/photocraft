@@ -3901,6 +3901,14 @@ curves	Smooth	Jevn ut
 # Color Table (.act) dialog
 	There is no color table to save.	Det er ingen fargetabell å lagre.
 @plural	Saved {n} color to {file}|Saved {n} colors to {file}	Lagret {n} farge til {file}|Lagret {n} farger til {file}
+	Set Transparent	Sett som gjennomsiktig
+	{count} transparent pixels were made opaque	{count} gjennomsiktige piksler ble ugjennomsiktige
+	Clear Transparency	Fjern gjennomsiktighet
+	Color Picker (First Color)	Fargevelger (første farge)
+	Color Picker (Last Color)	Fargevelger (siste farge)
+	Pick a Palette Colour From the Image	Velg en palettfarge fra bildet
+	Table Color	Tabellfarge
+	Palette Color	Palettfarge
 
 # Graphics Adapter preference (#1885)
 	GPU adapter	GPU-adapter

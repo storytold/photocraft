@@ -300,8 +300,11 @@ fn indexed_color(s: &mut Session, p: &Value) -> Result<Value> {
         None | Some(Value::Null) => None,
         Some(v) => Some(v.as_u64().ok_or_else(|| bad(CMD, "transparent: an integer index into the palette"))?),
     };
-    let (pal_len, transparent) = s.edit("Indexed Color", |doc, active| {
+    let (pal_len, transparent, flattened) = s.edit("Indexed Color", |doc, active| {
         let mut px = composite(doc, !transparency);
+        // An explicit "no transparency" flattens the clear pixels to opaque: count them so the
+        // caller can warn that transparency was lost.
+        let flattened = if explicit_no_transparent { px.iter().filter(|q| q[3] < 0.5).count() } else { 0 };
         let has_clear = transparency && !explicit_no_transparent && px.iter().any(|q| q[3] < 0.5);
         let mut pal = match &custom_table {
             Some(t) => t.clone(),
@@ -330,9 +333,9 @@ fn indexed_color(s: &mut Session, p: &Value) -> Result<Value> {
         quantize::quantize(&mut px, w, &pal, dither, amount, transparent, explicit_no_transparent);
         single_layer(doc, active, ColorMode::Indexed, &px, if transparent.is_some() { "Index" } else { "Background" }, transparent.is_none());
         doc.color_table = Some(ColorTable { colors: pal.clone(), transparent: transparent.map(|t| t as u8) });
-        Ok((pal.len(), transparent))
+        Ok((pal.len(), transparent, flattened))
     })?;
-    Ok(json!({"colors": pal_len, "transparentIndex": transparent}))
+    Ok(json!({"colors": pal_len, "transparentIndex": transparent, "flattened": flattened}))
 }
 
 fn hex(c: [u8; 3]) -> String {
@@ -422,9 +425,11 @@ fn color_table(s: &mut Session, p: &Value) -> Result<Value> {
     if table == cur {
         return Ok(report(&cur));
     }
-    let out = report(&table);
-    s.edit("Color Table", |doc, _| {
+    let flattened = s.edit("Color Table", |doc, _| {
         let old = cur.clone();
+        // Clearing the transparent entry makes its own clear pixels opaque: count them so the
+        // caller can warn that transparency was lost.
+        let mut flattened = 0usize;
         let canvas = doc.bounds();
         for surf in doc.layers.iter_mut().filter_map(Layer::surface_mut) {
             // Entry 0 = black + transparent encodes as [0,0,0,0] (the surface's default pixel),
@@ -456,6 +461,7 @@ fn color_table(s: &mut Session, p: &Value) -> Result<Value> {
                 let alpha = if table.transparent == Some(i as u8) {
                     0.0
                 } else if c[3] <= 0.0 {
+                    flattened += 1; // A clear pixel loses its transparency: it becomes opaque.
                     1.0
                 } else {
                     c[3]
@@ -469,8 +475,10 @@ fn color_table(s: &mut Session, p: &Value) -> Result<Value> {
             surf.prune();
         }
         doc.color_table = Some(table.clone());
-        Ok(())
+        Ok(flattened)
     })?;
+    let mut out = report(&table);
+    out["flattened"] = json!(flattened);
     Ok(out)
 }
 

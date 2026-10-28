@@ -3159,6 +3159,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 
 # Palette grid (Color Table / Indexed Color Custom…)
 	Set Transparent	設為透明
+	{count} transparent pixels were made opaque	{count} 個透明像素已變為不透明
 	Clear Transparency	清除透明
 	Color Picker (First Color)	檢色器（第一個顏色）
 	Color Picker (Last Color)	檢色器（最後一個顏色）

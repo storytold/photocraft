@@ -1137,3 +1137,62 @@ fn color_table_clearing_transparency_leaves_empty_pixels_alone() {
     assert_eq!(surf.rgba(0, 0), [0.0; 4]);
     assert_eq!(surf.rgba(7, 3), [0.0; 4]);
 }
+
+/// An 8×4 doc: columns 0..=3 opaque red, columns 4..=7 clear (16 transparent pixels).
+fn half_clear() -> Session {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 4, "background": "transparent"})).unwrap();
+    paint(&mut s, |x, _| if x < 4 { [1.0, 0.0, 0.0, 1.0] } else { [0.0; 4] });
+    s
+}
+
+#[test]
+fn indexed_color_reports_flattened_transparent_pixels() {
+    // An explicit "transparent": null flattens the clear pixels to opaque and reports how many.
+    let mut s = half_clear();
+    let r = s
+        .execute("image.mode.indexedColor", json!({"palette": "custom", "paletteColors": ["#000000", "#ff0000"], "dither": "none", "transparent": null}))
+        .unwrap();
+    assert_eq!(r["flattened"].as_u64(), Some(16), "the 16 clear pixels are flattened");
+    assert_eq!(doc(&s).color_table.as_ref().unwrap().transparent, None);
+    // An opaque source has no clear pixels: nothing is flattened.
+    let mut s = session(8, 4, 8, "rgb");
+    let r = s
+        .execute("image.mode.indexedColor", json!({"palette": "custom", "paletteColors": ["#000000", "#ff0000"], "dither": "none", "transparent": null}))
+        .unwrap();
+    assert_eq!(r["flattened"].as_u64(), Some(0));
+}
+
+#[test]
+fn indexed_color_auto_path_keeps_clear_pixels_and_reports_zero() {
+    // The auto path (no explicit transparent) appends a white entry and keeps clear pixels:
+    // nothing is flattened, so the warning must not fire.
+    let mut s = half_clear();
+    let r = s.execute("image.mode.indexedColor", json!({"palette": "custom", "paletteColors": ["#000000", "#ff0000"], "dither": "none"})).unwrap();
+    assert_eq!(r["flattened"].as_u64(), Some(0));
+    let t = doc(&s).color_table.as_ref().unwrap();
+    assert_eq!(t.transparent, Some(2), "a white transparent entry is auto-appended");
+    assert_eq!(doc(&s).layers[0].surface().unwrap().rgba(6, 0)[3], 0.0, "clear pixels stay transparent");
+}
+
+#[test]
+fn color_table_reports_flattened_when_clearing_transparency() {
+    // Clearing the transparent entry makes its own clear pixels opaque and reports how many.
+    let mut s = indexed_with_transparency(); // 8×8, clear at columns 6..=7 (16 px), entry 2 transparent
+    let r = s.execute("image.mode.colorTable", json!({"transparent": null})).unwrap();
+    assert_eq!(r["flattened"].as_u64(), Some(16), "the 16 clear pixels become opaque");
+    let t = doc(&s).color_table.as_ref().unwrap();
+    assert_eq!(t.transparent, None);
+    // The formerly clear pixels are now opaque (the white entry colour at full alpha).
+    assert_eq!(doc(&s).layers[0].surface().unwrap().rgba(6, 0), [1.0, 1.0, 1.0, 1.0]);
+}
+
+#[test]
+fn color_table_reports_zero_flattened_when_setting_transparency() {
+    // Setting (not clearing) transparency makes pixels transparent, not opaque: no warning.
+    let mut s = session(8, 4, 8, "rgb");
+    s.execute("image.mode.indexedColor", json!({"palette": "custom", "paletteColors": ["#ff0000", "#00ffff"], "dither": "none"})).unwrap();
+    let r = s.execute("image.mode.colorTable", json!({"transparent": 1})).unwrap();
+    assert_eq!(r["flattened"].as_u64(), Some(0));
+    assert_eq!(doc(&s).color_table.as_ref().unwrap().transparent, Some(1));
+}

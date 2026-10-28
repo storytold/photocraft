@@ -3454,6 +3454,15 @@ curves	Smooth	تنعيم
 # Color Table (.act) dialog
 	There is no color table to save.	لا يوجد جدول ألوان للحفظ.
 @plural	Saved {n} color to {file}|Saved {n} colors to {file}	تم حفظ {n} لون في {file}|تم حفظ {n} لون في {file}|تم حفظ {n} لونين في {file}|تم حفظ {n} ألوان في {file}|تم حفظ {n} لونًا في {file}|تم حفظ {n} لون في {file}
+	Set Transparent	تعيين الشفافية
+	{count} transparent pixels were made opaque	{count} من البكسلات الشفافة أصبحت معتمة
+	Clear Transparency	إزالة الشفافية
+	Color Picker (First Color)	منتقي الألوان (اللون الأول)
+	Color Picker (Last Color)	منتقي الألوان (اللون الأخير)
+	Pick a Palette Colour From the Image	اختيار لون اللوحة من الصورة
+	Table Color	لون الجدول
+	Palette Color	لون اللوحة
+	Color Picker	منتقي الألوان
 
 # Graphics Adapter preference (#1885)
 	GPU adapter	محول GPU

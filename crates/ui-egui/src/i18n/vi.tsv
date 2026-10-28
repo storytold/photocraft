@@ -4025,6 +4025,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 
 # Palette grid (Color Table / Indexed Color Custom…)
 	Set Transparent	Đặt trong suốt
+	{count} transparent pixels were made opaque	{count} pixel trong suốt đã trở nên mờ đục
 	Clear Transparency	Xóa trong suốt
 	Color Picker (First Color)	Ống hút màu (màu đầu tiên)
 	Color Picker (Last Color)	Ống hút màu (màu cuối cùng)

@@ -4218,6 +4218,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 
 # Palette grid (Color Table / Indexed Color Custom…)
 	Set Transparent	Ορισμός διαφάνειας
+	{count} transparent pixels were made opaque	{count} διαφανή εικονοστοιχεία έγιναν αδιαφανή
 	Clear Transparency	Καθαρισμός διαφάνειας
 	Color Picker (First Color)	Επιλογέας χρώματος (Πρώτο χρώμα)
 	Color Picker (Last Color)	Επιλογέας χρώματος (Τελευταίο χρώμα)

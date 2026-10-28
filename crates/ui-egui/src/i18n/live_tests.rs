@@ -151,6 +151,7 @@ fn palette_dialog_strings_have_translations() {
         "Pick a Palette Colour From the Image",
         "Table Color",
         "Palette Color",
+        "{count} transparent pixels were made opaque",
     ];
     for language in Lang::all().filter(|language| language.complete_menus()) {
         for text in labels {

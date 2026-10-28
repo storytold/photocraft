@@ -4252,6 +4252,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 
 # Palette grid (Color Table / Indexed Color Custom…)
 	Set Transparent	Şeffaf Olarak Ayarla
+	{count} transparent pixels were made opaque	{count} saydam piksel opak hale geldi
 	Clear Transparency	Şeffaflığı Kaldır
 	Color Picker (First Color)	Renk Seçici (İlk Renk)
 	Color Picker (Last Color)	Renk Seçici (Son Renk)

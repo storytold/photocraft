@@ -4445,6 +4445,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 
 # Palette grid (Color Table / Indexed Color Custom…)
 	Set Transparent	Definir como transparente
+	{count} transparent pixels were made opaque	{count} pixels transparentes ficaram opacos
 	Clear Transparency	Remover transparência
 	Color Picker (First Color)	Seletor de cores (primeira cor)
 	Color Picker (Last Color)	Seletor de cores (última cor)
