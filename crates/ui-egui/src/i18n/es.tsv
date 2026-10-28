@@ -4382,18 +4382,31 @@ navigator	Zoom	Zoom
 	Use	Usar
 	In Front	Delante
 	Behind	Detrás
+	Create Frame Animation	Crear animación de fotogramas
+	Make Frames From Layers	Crear fotogramas a partir de capas
+	Forever	Siempre
+	Once	Una vez
+	No delay	Sin retardo
+	First frame	Primer fotograma
+	Duplicate Selected Frame	Duplicar fotograma seleccionado
+	Delete Selected Frame	Eliminar fotograma seleccionado
+	{seconds} sec.	{seconds} s
+	{count} times	{count} veces
+	{n} frames	{n} fotogramas
+	Frames before	Fotogramas anteriores
+	Frames after	Fotogramas posteriores
+	Tween	Interpolar
+	Last frame	Último fotograma
+	Frames to add	Fotogramas por añadir
 
 # DDS Options (#1327)
 	DDS Options	Opciones de DDS
 	Generate Mipmaps	Generar mipmaps
-
 # Color Table (.act) dialog
 	There is no color table to save.	No hay ninguna tabla de colores para guardar.
 @plural	Saved {n} color to {file}|Saved {n} colors to {file}	Se guardó {n} color en {file}|Se guardaron {n} colores en {file}
-
 # Graphics Adapter preference (#1885)
 	GPU adapter	Adaptador de GPU
-
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Importar estilos…
 	Export Selected Styles…	Exportar estilos seleccionados…
@@ -4444,6 +4457,18 @@ navigator	Zoom	Zoom
 	Tight Curl	Rizo apretado
 	Loose Curl	Rizo suelto
 	Stylized dabs from a history state	Toques estilizados desde un estado del historial
+	A layer per frame, each with its own delay, edited in Window › Timeline	Una capa por fotograma, cada una con su propio retardo, editable en Ventana › Línea de tiempo
+	A still image	Una imagen fija
+	Change it later in Preferences › File Handling.	Puedes cambiarlo en Preferencias › Gestión de archivos.
+	First frame only	Solo el primer fotograma
+	Frame animation	Animación de fotogramas
+	One layer holding every frame, played on the timeline	Una capa con todos los fotogramas, reproducida en la línea de tiempo
+	Open Animated {format}	Abrir {format} animado
+	Remember this choice for {format} files	Recordar esta opción para archivos {format}
+	Video layer	Capa de vídeo
+	“{name}” is an animated {format} with {frames} frames. Open it as:	«{name}» es un {format} animado con {frames} fotogramas. Abrirlo como:
+	Open animated GIF as	Abrir GIF animado como
+	Open animated WebP as	Abrir WebP animado como
 	Font size presets	Valores predefinidos de tamaño de fuente
 	Leading presets	Valores predefinidos de interlineado
 	Tracking presets	Valores predefinidos de tracking

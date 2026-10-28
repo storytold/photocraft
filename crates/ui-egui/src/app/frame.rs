@@ -89,6 +89,9 @@ impl PhotocraftApp {
                 }
             }
         }
+        // The Timeline's keys use where the panel was drawn last frame; a frame that doesn't draw it
+        // (full-screen modes hide the docked panel) must not leave the old place behind.
+        self.ui.timeline.panel_rect = None;
         let arrived: Vec<(String, Vec<u8>)> =
             self.services.inbox.as_ref().map(|q| std::mem::take(&mut *q.lock().unwrap_or_else(|e| e.into_inner()))).unwrap_or_default();
         for (name, bytes) in arrived {
@@ -236,6 +239,10 @@ impl PhotocraftApp {
         if docking {
             panels::dock_area(self, ui);
         } else {
+            // The docked frame-animation Timeline spans the canvas column, below the canvas.
+            if chrome {
+                timeline_ui::dock(self, ui);
+            }
             let t = theme::Tokens::get(&ctx);
             let backdrop = if chrome { prefs_ui::pasteboard_color(self).unwrap_or(t.canvas) } else { egui::Color32::BLACK };
             egui::CentralPanel::default().frame(egui::Frame::NONE.fill(backdrop)).show(ui, |ui| {

@@ -24,7 +24,7 @@ use print::{drag_print_position, driver_paper_is_wide, print_params, print_previ
 use print::{print_body, print_confirm};
 pub use web::open_web;
 #[cfg(test)]
-use web::{WEB_COMMAND, WebCache, WebProxy, advance_preview, download_for_web, web_frame_document};
+use web::{ANIMATION_PROXY, WEB_COMMAND, WebCache, WebProxy, advance_frames, advance_preview, download_for_web, web_frame_document, web_proxy};
 use web::{web_body, web_confirm};
 
 fn no_params(p: &Value) -> bool {
@@ -271,6 +271,156 @@ mod web_playback_tests {
         PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
         h.run_steps(3);
         h
+    }
+
+    /// A document whose frame animation shows one of three layers per frame, each held for 100 ms; the last is noisy.
+    fn frame_animation_app() -> PhotocraftApp {
+        sized_frame_animation_app(32, 24)
+    }
+
+    fn sized_frame_animation_app(width: u32, height: u32) -> PhotocraftApp {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": width, "height": height})).unwrap();
+        for color in ["#ff0000", "#00ff00"] {
+            app.run("layer.new.layer", json!({})).unwrap();
+            app.run("edit.fill", json!({"color": color})).unwrap();
+        }
+        // The last layer is noisy, so its frame is much bigger than the others as a GIF.
+        app.run("filter.noise.addNoise", json!({"amount": 60})).unwrap();
+        app.run("animation.makeFramesFromLayers", json!({"delayMs": 100})).unwrap();
+        app
+    }
+
+    #[test]
+    fn a_frame_animation_save_for_web_says_it_is_animated_and_plays() {
+        let mut app = frame_animation_app();
+        let id = open_web(&mut app);
+        let mut fields = app.ui.dialog_mut(id).unwrap().fields.clone();
+        fields.insert("__view".into(), json!("original"));
+        fields.insert("format".into(), json!("gif"));
+        let mut h = harness(app, fields);
+        assert!(h.query_by_label("3 frames").is_some(), "the bar says how many frames the GIF has");
+        assert!(h.query_all_by_label_contains("3 frames").count() >= 2, "and so does the original pane, which also names the frame count");
+        let st = h.state().0.session.active().unwrap();
+        let (doc, revision, past) = (st.doc.clone(), st.revision, st.history.past_len());
+        h.get_by_label("Play").click();
+        h.run_steps(2);
+        assert_eq!(h.state().1["__web_playing"], true);
+        h.run_steps(6);
+        assert_ne!(h.state().1["__web_frame"], 0, "the preview moves on through the frames");
+        h.get_by_label("Pause").click();
+        h.run_steps(2);
+        assert_eq!(h.state().1["__web_playing"], false);
+        let st = h.state().0.session.active().unwrap();
+        assert!(Arc::ptr_eq(&st.doc, &doc) && st.revision == revision && st.history.past_len() == past, "previewing changes nothing in the document");
+        assert!(params(&h.state().1).as_object().unwrap().keys().all(|k| !k.starts_with("__")));
+    }
+
+    #[test]
+    fn the_estimated_gif_size_is_the_same_whichever_frame_is_shown() {
+        let mut app = sized_frame_animation_app(320, 240);
+        let id = open_web(&mut app);
+        let mut fields = app.ui.dialog_mut(id).unwrap().fields.clone();
+        fields.insert("__view".into(), json!("optimized"));
+        fields.insert("format".into(), json!("gif"));
+        let mut h = harness(app, fields);
+        // The frames are sized one to a repaint; once all are, the size stops moving.
+        h.run_steps(12);
+        use egui_kittest::kittest::NodeT;
+        let size = |h: &Harness<'static, (PhotocraftApp, Map<String, Value>)>| {
+            h.query_all_by_label_contains("GIF")
+                .filter_map(|n| {
+                    let a = n.accesskit_node();
+                    a.value().or_else(|| a.label())
+                })
+                .find(|l| l.starts_with("GIF  "))
+                .unwrap_or_default()
+                .to_string()
+        };
+        let whole = size(&h);
+        assert!(!params(&h.state().1).as_object().unwrap().contains_key("colorTable"), "no one colour table is forced on every frame");
+        // The frames really do differ in size on their own, so a size that followed the shown frame would show.
+        let doc = h.state().0.session.active().unwrap().doc.clone();
+        let params = params(&h.state().1);
+        let alone: Vec<usize> = (0..3)
+            .map(|i| {
+                let (px, w, rows, _, _) = web_proxy(&doc, &params, Some(i), ANIMATION_PROXY).unwrap();
+                let st = WebSettings::from_params(&params, "test").unwrap();
+                web_cmds::optimize(&px, w as usize, photocraft_geom::Rect::new(0, 0, w as i32, rows as i32), &st, None, None, None, 72.0, false)
+                    .unwrap()
+                    .bytes
+                    .len()
+            })
+            .collect();
+        assert!(alone.iter().any(|b| *b != alone[0]), "{alone:?}");
+        let expected = format!("GIF  {}", crate::sizing::human_bytes(alone.iter().sum::<usize>() as f64));
+        assert_eq!(whole, expected, "the size is all the frames', not the shown frame's times the count");
+        assert!(whole.starts_with("GIF  ") && !whole.contains('~'), "all frames are sized: {whole:?}");
+        for frame in [1, 2, 0] {
+            h.state_mut().1.insert("__web_frame".into(), json!(frame));
+            h.run_steps(3);
+            assert_eq!(size(&h), whole, "frame {frame}");
+        }
+    }
+
+    #[test]
+    fn sizing_the_frames_waits_while_playing_and_finishes_once_paused() {
+        use egui_kittest::kittest::NodeT;
+        let mut app = sized_frame_animation_app(320, 240);
+        let id = open_web(&mut app);
+        let mut fields = app.ui.dialog_mut(id).unwrap().fields.clone();
+        fields.insert("__view".into(), json!("optimized"));
+        fields.insert("format".into(), json!("gif"));
+        fields.insert("__web_playing".into(), json!(true));
+        let mut h = harness(app, fields);
+        let size = |h: &Harness<'static, (PhotocraftApp, Map<String, Value>)>| {
+            h.query_all_by_label_contains("GIF")
+                .filter_map(|n| {
+                    let a = n.accesskit_node();
+                    a.value().or_else(|| a.label())
+                })
+                .find(|l| l.starts_with("GIF  "))
+                .unwrap_or_default()
+        };
+        h.run_steps(12);
+        assert_eq!(h.state().1["__web_playing"], true);
+        assert!(size(&h).starts_with("GIF  ~"), "still an estimate while it plays: {:?}", size(&h));
+        h.get_by_label("Pause").click();
+        h.run_steps(14);
+        assert_eq!(h.state().1["__web_playing"], false);
+        assert!(!size(&h).contains('~'), "every frame is sized once it is paused: {:?}", size(&h));
+    }
+
+    #[test]
+    fn the_play_bar_is_below_the_previews() {
+        let mut app = frame_animation_app();
+        let id = open_web(&mut app);
+        let mut fields = app.ui.dialog_mut(id).unwrap().fields.clone();
+        fields.insert("__view".into(), json!("original"));
+        fields.insert("format".into(), json!("gif"));
+        let h = harness(app, fields);
+        let play = h.get_by_label("Play").rect();
+        let rects = h.state().1["__previewRects"].as_array().unwrap().clone();
+        let bottom = rects.iter().filter_map(|r| r.get(3).and_then(Value::as_f64)).fold(0.0, f64::max);
+        assert!(f64::from(play.top()) >= bottom, "the bar is under the preview: bar {} preview {bottom}", play.top());
+    }
+
+    #[test]
+    fn frames_play_for_their_own_delays_and_loop() {
+        let delays = [100, 500, 0];
+        assert_eq!(advance_frames(0, &delays, 0.0, 0.05).0, 0, "still on the first frame");
+        assert_eq!(advance_frames(0, &delays, 0.0, 0.1).0, 1);
+        assert_eq!(advance_frames(0, &delays, 0.0, 0.59).0, 1, "the second frame holds for half a second");
+        assert_eq!(advance_frames(0, &delays, 0.0, 0.6).0, 2);
+        // A delay of 0 plays as 100 ms, and then the loop starts again.
+        assert_eq!(advance_frames(0, &delays, 0.0, 0.7).0, 0);
+        // Many loops later, and a clock that runs backwards, give a valid frame.
+        assert!(advance_frames(0, &delays, 0.0, 1.0e9).0 < 3);
+        assert_eq!(advance_frames(2, &delays, 5.0, 1.0).0, 2);
+        // The fraction of a delay already shown is kept.
+        let (frame, began) = advance_frames(0, &delays, 0.0, 0.13);
+        assert_eq!(frame, 1);
+        assert!((began - 0.1).abs() < 1e-9);
     }
 
     /// #9174: Save for Web reopens on the preview tab chosen last, as Photoshop's does; 2-Up at

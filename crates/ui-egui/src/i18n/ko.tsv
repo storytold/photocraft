@@ -3630,19 +3630,32 @@ curves	Smooth	매끄럽게
 	In Front	앞
 	Behind	뒤
 	Blend	혼합
+	Create Frame Animation	프레임 애니메이션 만들기
+	Make Frames From Layers	레이어에서 프레임 만들기
+	Forever	무한
+	Once	한 번
+	No delay	지연 없음
+	First frame	첫 프레임
+	Duplicate Selected Frame	선택한 프레임 복제
+	Delete Selected Frame	선택한 프레임 삭제
+	{seconds} sec.	{seconds}초
+	{count} times	{count}회
+	{n} frames	프레임 {n}개
+	Frames before	이전 프레임
+	Frames after	이후 프레임
+	Tween	트위닝
+	Last frame	마지막 프레임
+	Frames to add	추가할 프레임 수
 
 # DDS Options (#1327)
 	DDS Options	DDS 옵션
 	Compression	압축
 	Generate Mipmaps	밉맵 생성
-
 # Color Table (.act) dialog
 	There is no color table to save.	저장할 색상표가 없습니다.
 @plural	Saved {n} color to {file}|Saved {n} colors to {file}	{file}에 색상 {n}개 저장
-
 # Graphics Adapter preference (#1885)
 	GPU adapter	GPU 어댑터
-
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	스타일 가져오기…
 	Export Selected Styles…	선택한 스타일 내보내기…
@@ -3695,12 +3708,23 @@ curves	Smooth	매끄럽게
 	Tight Curl	타이트 컬
 	Loose Curl	루즈 컬
 	Stylized dabs from a history state	작업 내역 상태에서 양식화된 찍기
-
 # Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
 	Aspect Ratio	종횡비
 	Category	카테고리
 	Target	대상
 	Units	단위
+	A layer per frame, each with its own delay, edited in Window › Timeline	프레임마다 레이어 하나, 각각 고유한 지연 시간, 창 › 타임라인에서 편집
+	A still image	정지 이미지
+	Change it later in Preferences › File Handling.	나중에 환경 설정 › 파일 처리에서 변경할 수 있습니다.
+	First frame only	첫 프레임만
+	Frame animation	프레임 애니메이션
+	One layer holding every frame, played on the timeline	모든 프레임을 담은 레이어 하나, 타임라인에서 재생
+	Open Animated {format}	애니메이션 {format} 열기
+	Remember this choice for {format} files	{format} 파일에 이 선택 기억
+	Video layer	비디오 레이어
+	“{name}” is an animated {format} with {frames} frames. Open it as:	“{name}”은(는) 프레임 {frames}개의 애니메이션 {format}입니다. 다음으로 열기:
+	Open animated GIF as	애니메이션 GIF 열기 방식
+	Open animated WebP as	애니메이션 WebP 열기 방식
 	Font size presets	글꼴 크기 사전 설정
 	Leading presets	행간 사전 설정
 	Tracking presets	자간 사전 설정

@@ -572,6 +572,11 @@ fn handle_modal_canvas_keys(app: &mut PhotocraftApp, ctx: &egui::Context, focus:
         dispatch_pressed(app, ctx, focus, false);
         return true;
     }
+    // The Timeline's own keys (Space plays, ← → step, ⌘C / ⌘V copy and paste frames) while the
+    // pointer is over it.
+    if crate::timeline_ui::keys(app, ctx) {
+        return true;
+    }
     // Liquify / Puppet Warp / Perspective Warp: ↩ commits, Esc cancels.
     if crate::distort_ui::keys(app, ctx) {
         return true;

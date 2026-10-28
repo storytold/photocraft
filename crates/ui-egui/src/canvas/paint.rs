@@ -8,6 +8,16 @@ use super::textures::texture_side;
 use super::view_xform::ViewXform;
 use super::{Color32, DRect, Document, Mesh, PhotocraftApp, Pos2, Rect, Stroke, TextureOptions, Tool, json, pos2, vec2};
 
+/// A document-sized texture over the canvas, rotated or flipped like the view.
+pub(super) fn paint_overlay(painter: &egui::Painter, xf: &ViewXform, tex: egui::TextureId, tint: Color32, size: [f32; 2], img_rect: Rect, flip: bool) {
+    if xf.rotation.abs() > 0.05 {
+        paint_mapped_image_at(painter, xf, tex, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), [0.0, 0.0], size, tint);
+    } else {
+        let uv = if flip { Rect::from_min_max(pos2(1.0, 0.0), pos2(0.0, 1.0)) } else { Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)) };
+        painter.image(tex, img_rect, uv, tint);
+    }
+}
+
 /// A texture mapped over the `size` document area starting at `origin` (follows a rotated view).
 pub(super) fn paint_mapped_image_at(painter: &egui::Painter, xf: &ViewXform, tex: egui::TextureId, uv: Rect, origin: [f32; 2], size: [f32; 2], tint: Color32) {
     let ([x, y], [w, h]) = (origin, size);

@@ -69,7 +69,9 @@ impl PhotocraftApp {
             return Ok(Vec::new());
         }
         let import = self.services.import.as_ref().ok_or("no importer configured")?;
-        let opts = photocraft_engine::jobs::import_options(self.session.prefs());
+        let mut opts = photocraft_engine::jobs::import_options(self.session.prefs());
+        // An animated GIF or WebP reads its frames when File Handling wants them or asks.
+        opts.animation = photocraft_engine::animated_open::import_mode(self.session.prefs(), name);
         let (mut doc, warnings, damaged) = if photocraft_io::is_psd(bytes) {
             // Read PSD damage as structured information in the same decode, not by
             // retrying an error or matching the text of a compatibility warning.
@@ -81,6 +83,11 @@ impl PhotocraftApp {
         };
         // Preferences › Raw Defaults › Resolution, as the engine's open applies it.
         photocraft_engine::file_cmds::raw_defaults(&self.session, &warnings, &mut doc);
+        // An animated GIF or WebP opens as File Handling says, or asks first (`open_prompt`).
+        let animated = photocraft_engine::animated_open::question(self.session.prefs(), name, &doc);
+        if animated.is_none() {
+            photocraft_engine::animated_open::apply_preferred(self.session.prefs(), name, &mut doc, path).map_err(|e| e.to_string())?;
+        }
         // Edit › Color Settings policies apply on open; Ask When Opening holds the file back
         // until its prompt is answered, and later files wait behind it (`open_prompt`).
         // Missing fonts are read from the document itself: it may not be open yet (#4559).
@@ -101,6 +108,7 @@ impl PhotocraftApp {
                 bytes: (wants_raw && path.is_none()).then(|| std::sync::Arc::new(bytes.to_vec())),
                 slot: None,
                 question,
+                animated,
                 policy_applied: false,
             },
         );
@@ -112,13 +120,20 @@ impl PhotocraftApp {
     /// Returns the import warnings (also shown to the user). Brush and gradient
     /// files go to the preset libraries, as for interactive opens.
     pub fn open_automation_bytes(&mut self, name: &str, bytes: &[u8]) -> Result<Vec<String>, String> {
+        self.open_automation_bytes_as(name, bytes, photocraft_engine::prefs::AnimatedOpen::FirstFrame)
+    }
+
+    /// [`open_automation_bytes`](Self::open_automation_bytes), with `animation` saying how an
+    /// animated GIF or WebP opens (`app.open`'s `animation`): never asking, its first frame unless
+    /// the caller wants a frame animation or a video layer.
+    pub fn open_automation_bytes_as(&mut self, name: &str, bytes: &[u8], animation: photocraft_engine::prefs::AnimatedOpen) -> Result<Vec<String>, String> {
         let events_enabled = self.session.prefs().script_events.enabled;
         if events_enabled {
             self.session.edit_prefs(|prefs| prefs.script_events.enabled = false);
         }
         let result = match preset_files_ui::open(self, name, bytes) {
             Some(r) => r.map(|()| Vec::new()),
-            None => self.import_automation_document(name, bytes),
+            None => self.import_automation_document(name, bytes, animation),
         };
         if events_enabled {
             self.session.edit_prefs(|prefs| prefs.script_events.enabled = true);
@@ -128,11 +143,14 @@ impl PhotocraftApp {
 
     /// The document half of [`open_automation_bytes`](Self::open_automation_bytes): no script
     /// events and no Color Settings policy (which may read user-configured profile paths).
-    fn import_automation_document(&mut self, name: &str, bytes: &[u8]) -> Result<Vec<String>, String> {
+    fn import_automation_document(&mut self, name: &str, bytes: &[u8], animation: photocraft_engine::prefs::AnimatedOpen) -> Result<Vec<String>, String> {
         let import = self.services.import.as_ref().ok_or("no importer configured")?;
-        let opts = photocraft_engine::jobs::import_options(self.session.prefs());
+        let mut opts = photocraft_engine::jobs::import_options(self.session.prefs());
+        opts.animation = photocraft_engine::animated_open::import_for(animation);
         let (mut doc, warnings) = import(name, bytes, &opts)?;
         photocraft_engine::file_cmds::raw_defaults(&self.session, &warnings, &mut doc);
+        // No source path to reload a video layer from: the capability read the bytes.
+        photocraft_engine::animated_open::apply(&mut doc, animation, None).map_err(|e| e.to_string())?;
         // The caller records the path it read from.
         self.session.add_document(doc, None);
         if let Some(st) = self.session.active_mut() {

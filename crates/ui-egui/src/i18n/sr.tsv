@@ -4479,18 +4479,31 @@ shape	Appearance	Izgled
 	Use	Koristi
 	In Front	Ispred
 	Behind	Iza
+	Create Frame Animation	Napravi animaciju kadrova
+	Make Frames From Layers	Napravi kadrove od slojeva
+	Forever	Zauvek
+	Once	Jednom
+	No delay	Bez kašnjenja
+	First frame	Prvi kadar
+	Duplicate Selected Frame	Dupliraj izabrani kadar
+	Delete Selected Frame	Obriši izabrani kadar
+	{seconds} sec.	{seconds} s
+	{count} times	{count} puta
+	{n} frames	{n} кадрова
+	Frames before	Kadrovi pre
+	Frames after	Kadrovi posle
+	Tween	Međukadrovi
+	Last frame	Poslednji kadar
+	Frames to add	Kadrova za dodavanje
 
 # DDS Options (#1327)
 	DDS Options	DDS opcije
 	Generate Mipmaps	Generiši mipmape
-
 # Color Table (.act) dialog
 	There is no color table to save.	Нема табеле боја за чување.
 @plural	Saved {n} color to {file}|Saved {n} colors to {file}	Сачувана је {n} боја у {file}|Сачуване су {n} боје у {file}|Сачувано је {n} боја у {file}
-
 # Graphics Adapter preference (#1885)
 	GPU adapter	GPU adapter
-
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Uvezi stilove…
 	Export Selected Styles…	Izvezi izabrane stilove…
@@ -4554,6 +4567,18 @@ shape	Appearance	Izgled
 	Tight Curl	Usko uvijeno
 	Loose Curl	Labavo uvijeno
 	Stylized dabs from a history state	Stilizovane mrlje iz stanja istorije
+	A layer per frame, each with its own delay, edited in Window › Timeline	Jedan sloj po kadru, svaki sa svojim kašnjenjem, uređuje se u Prozor › Vremenska linija
+	A still image	Statična slika
+	Change it later in Preferences › File Handling.	Promenite to kasnije u Podešavanja › Rukovanje datotekama.
+	First frame only	Samo prvi kadar
+	Frame animation	Animacija po kadrovima
+	One layer holding every frame, played on the timeline	Jedan sloj sa svim kadrovima, reprodukuje se na vremenskoj liniji
+	Open Animated {format}	Otvori animirani {format}
+	Remember this choice for {format} files	Zapamti ovaj izbor za {format} datoteke
+	Video layer	Video sloj
+	“{name}” is an animated {format} with {frames} frames. Open it as:	„{name}“ je animirani {format} sa {frames} kadrova. Otvori kao:
+	Open animated GIF as	Animirani GIF otvori kao
+	Open animated WebP as	Animirani WebP otvori kao
 	Font size presets	Unapred podešene veličine fonta
 	Leading presets	Unapred podešeni proredi
 	Tracking presets	Unapred podešeni razmaci slova

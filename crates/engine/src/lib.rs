@@ -9,6 +9,7 @@
 
 pub mod adjust_params;
 mod allocation;
+pub mod animated_open;
 pub mod build_info;
 mod canvas_geom;
 mod channel_clip;
@@ -40,6 +41,7 @@ pub mod shell_commands;
 pub mod shortcut_sets;
 pub mod snap;
 pub use variables_cmds::{export_data_sets_with, import_data_sets_text};
+pub use animation_cmds::MAX_TWEEN;
 pub use video_cmds::render_video_with;
 
 use std::sync::Arc;
@@ -64,6 +66,7 @@ pub use cmd::actions_edit_cmds;
 pub use cmd::adjust_cmds;
 pub use cmd::align_cmds;
 pub use cmd::analysis_cmds;
+use cmd::animation_cmds;
 pub use cmd::artboard_cmds;
 pub use cmd::atn_cmds;
 pub use cmd::automate_cmds;

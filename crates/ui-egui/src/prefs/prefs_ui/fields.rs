@@ -1,5 +1,5 @@
 use super::appearance::{AppearanceRows, appearance_rows, system_theme};
-use super::dialogs::{mismatch_body, presets_body, presets_io_body, settings_height};
+use super::dialogs::{animated_body, mismatch_body, presets_body, presets_io_body, settings_height};
 use super::graphics::{gpu_memory_lines, gpu_status_rows, memory_usage_row, read_at_launch, rendering_mode_row};
 use super::shortcuts::shortcuts_body;
 use super::{Color32, Map, PhotocraftApp, RichText, SECTIONS, Sense, Tokens, Value, json, prefs, vec2};
@@ -21,6 +21,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
         "presets" => presets_body(app, ui, f),
         "presetsIO" => presets_io_body(ui, f),
         "mismatch" => mismatch_body(ui, f),
+        "animated" => animated_body(ui, f),
         _ => {}
     }
 }
@@ -31,6 +32,8 @@ pub(super) fn humanize(key: &str) -> String {
     match key {
         "appearanceMode" => return "Appearance Mode".into(),
         "exrAcesCg" => return "Open color-less EXR as ACEScg".into(),
+        "animatedGif" => return "Open animated GIF as".into(),
+        "animatedWebp" => return "Open animated WebP as".into(),
         "darkTheme" => return "Dark Theme".into(),
         "lightTheme" => return "Light Theme".into(),
         "automaticallyCheckUpdates" => return "Automatically Check for Updates".into(),
@@ -111,6 +114,9 @@ pub(super) fn choice_label(v: &str) -> String {
         "ahd" => "AHD (adaptive homogeneity)".into(),
         "mhc" => "Malvar–He–Cutler".into(),
         "cpu" => "CPU (no GPU acceleration)".into(),
+        "frames" => "Frame animation".into(),
+        "video" => "Video layer".into(),
+        "firstFrame" => "First frame only".into(),
         v => humanize(v),
     }
 }

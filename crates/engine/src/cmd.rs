@@ -55,6 +55,7 @@ pub mod adjust_cmds;
 mod adjust_params;
 pub mod align_cmds;
 pub mod analysis_cmds;
+pub(super) mod animation_cmds;
 pub mod artboard_cmds;
 pub mod atn_cmds;
 pub mod automate_cmds;
@@ -1315,6 +1316,7 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::migrate_cmds::specs());
     v.extend(crate::trap_cmds::specs());
     v.extend(crate::timeline_cmds::specs());
+    v.extend(crate::animation_cmds::specs());
     v.extend(crate::video_cmds::specs());
     v.extend(crate::jobs::specs());
     v.extend(crate::wia_cmds::specs());

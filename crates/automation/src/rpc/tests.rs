@@ -1010,3 +1010,39 @@ fn invalid_document_index_is_rejected_not_the_active_document() {
     assert_eq!(reply["ok"], true, "{reply}");
     assert_eq!(count(&h), 1);
 }
+
+/// #6898 review: `doc.open` of an animated GIF opens its first frame unless `animation` asks
+/// for frames or a video layer, from a trusted path and from a workspace alike; `ask` and
+/// unknown values are refused.
+#[test]
+fn doc_open_takes_an_animations_first_frame_unless_asked() {
+    use photocraft_codecs::web::{GifFrame, encode_gif_animated};
+    let frames: Vec<GifFrame> = [[255, 0, 0], [0, 0, 255], [0, 255, 0]]
+        .iter()
+        .map(|&c| GifFrame { indices: vec![0; 6], palette: vec![c], transparent: None, delay_cs: 5 })
+        .collect();
+    let base = std::env::temp_dir().join(format!("pc-rpc-animated-open-{}", std::process::id()));
+    std::fs::create_dir_all(&base).unwrap();
+    std::fs::write(base.join("a.gif"), encode_gif_animated(3, 2, &frames, true).unwrap()).unwrap();
+    let shape = |h: &mut Headless, params: Value| -> (usize, bool, bool) {
+        h.handle("doc.open", params).unwrap();
+        let d = &h.session.active().unwrap().doc;
+        (d.layers.len(), d.frame_animation.is_some(), d.timeline.is_some())
+    };
+    let trusted = base.join("a.gif").to_string_lossy().into_owned();
+    let mut h = Headless::trusted_local();
+    assert_eq!(shape(&mut h, json!({"path": trusted})), (1, false, false), "no option: the first frame");
+    assert_eq!(shape(&mut h, json!({"path": trusted, "animation": "firstFrame"})), (1, false, false));
+    assert_eq!(shape(&mut h, json!({"path": trusted, "animation": "frames"})), (3, true, false));
+    assert_eq!(shape(&mut h, json!({"path": trusted, "animation": "video"})), (1, false, true));
+    for bad in ["ask", "everything"] {
+        let e = h.handle("doc.open", json!({"path": trusted, "animation": bad})).unwrap_err().to_string();
+        assert!(e.contains("firstFrame, frames or video"), "{bad}: {e}");
+    }
+    let mut w = Headless::with_workspace(crate::AuthorizedWorkspace::new(Some(&base), None).unwrap());
+    assert_eq!(shape(&mut w, json!({"path": "a.gif"})), (1, false, false));
+    assert_eq!(shape(&mut w, json!({"path": "a.gif", "animation": "frames"})), (3, true, false));
+    // Release directory capabilities before cleanup on Windows.
+    drop(w);
+    std::fs::remove_dir_all(base).unwrap();
+}

@@ -104,7 +104,8 @@ impl Headless {
             "session.list" => Ok(self.session_list()),
             "doc.open" => {
                 let path = str_of(&p, "path").ok_or_else(|| bad("doc.open needs `path`"))?;
-                self.open(&PathBuf::from(path))
+                let animation = photocraft_engine::animated_open::requested(str_of(&p, "animation"))?;
+                self.open_as(&PathBuf::from(path), animation)
             }
             "doc.place" => {
                 let path = str_of(&p, "path").ok_or_else(|| bad("doc.place needs `path`"))?;

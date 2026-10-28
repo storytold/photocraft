@@ -526,7 +526,10 @@ async fn open_reports_decode_warnings() {
     let warnings = async |path: &str| json_of(&call(&client, "doc_open", json!({"path": path})).await)["warnings"].clone();
     assert_eq!(warnings("whole.jpg").await, json!([]));
     assert_eq!(warnings("cut.jpg").await, json!(["JPEG data ends early (the file is truncated or damaged); part of the image is missing"]));
+    // MCP opens an animated GIF's first frame unless `animation` asks for more (#6898 review).
     assert_eq!(warnings("anim.gif").await, json!(["only the first of 2 frames was imported"]));
+    let frames = json_of(&call(&client, "doc_open", json!({"path": "anim.gif", "animation": "frames"})).await);
+    assert_eq!((frames["layers"].clone(), frames["warnings"].clone()), (json!(2), json!([])), "{frames}");
     client.cancel().await.unwrap();
     cleanup(&dir);
 }

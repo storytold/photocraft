@@ -28,7 +28,7 @@ pub mod source_settings;
 pub mod web;
 pub use crate::cicp::Cicp;
 pub use crate::codecs::exr_cryptomatte::{cryptomatte_id, cryptomatte_key, cryptomatte_preview_color};
-pub use crate::codecs::gif_frames::{AnimationFrame, MAX_GIF_FRAMES};
+pub use crate::codecs::gif_frames::{AnimationFrame, MAX_GIF_FRAMES, decode_prefix as decode_gif_frames_prefix};
 pub use crate::codecs::png::{PngPalette, encode_indexed as encode_png_indexed, palette as png_palette, stereo as png_stereo};
 pub use crate::codecs::tiff::{PhotoshopTags as TiffPhotoshopTags, photoshop_tags as tiff_photoshop_tags, writes_little_endian as tiff_writes_little_endian};
 pub use crate::codecs::tiff_ifd::{TiffInfo, TiffPage, TiffPageKind};
@@ -185,6 +185,16 @@ pub fn decode_webp_frames(bytes: &[u8], opts: &DecodeOptions) -> Result<Vec<Anim
 /// first frame, with a warning, and [`decode_webp_frames`] reads whole).
 pub fn webp_is_animated(bytes: &[u8]) -> bool {
     crate::codecs::webp::is_animated(bytes)
+}
+
+/// Every frame of a GIF or WebP ([`decode_gif_frames`], [`decode_webp_frames`]); `None` for a
+/// format that has no frames to walk.
+pub fn decode_frames(bytes: &[u8], opts: &DecodeOptions) -> Option<Result<Vec<AnimationFrame>, CodecError>> {
+    match detect(bytes)? {
+        Format::Gif => Some(decode_gif_frames(bytes, opts)),
+        Format::WebP => Some(decode_webp_frames(bytes, opts)),
+        _ => None,
+    }
 }
 
 /// The Orientation (1–8) of the page [`decode`] opens from a TIFF or BigTIFF file; 1 when it is

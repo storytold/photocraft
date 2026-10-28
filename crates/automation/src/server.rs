@@ -50,6 +50,11 @@ pub struct DocIndex {
 pub struct OpenParams {
     /// Path beneath the configured automation read root: relative (forward slashes) or absolute.
     pub path: String,
+    /// How an animated GIF or WebP opens: `firstFrame` (the default), `frames` (a layer per
+    /// frame and a frame animation with the file's delays) or `video` (one video layer on the
+    /// timeline). Other files ignore it.
+    #[serde(default)]
+    pub animation: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
@@ -626,16 +631,29 @@ impl PhotocraftMcp {
         to_result(b.call_read("ui.inspect", json!({})).await)
     }
 
-    #[tool(description = "Open an image or document file and make it active. Returns index, size and import warnings.")]
+    #[tool(
+        description = "Open an image or document file and make it active. Returns index, size and import warnings. An animated GIF or WebP opens as its first frame unless `animation` is `frames` (a layer per frame, a frame animation) or `video` (one video layer)."
+    )]
     async fn doc_open(&self, Parameters(p): Parameters<OpenParams>) -> Result<CallToolResult, McpError> {
         let path = PathBuf::from(&p.path);
-        if let Some(r) = self.headless_op(move |h| h.open(&path)).await {
+        let animation = p.animation.clone();
+        if let Some(r) = self
+            .headless_op(move |h| {
+                let choice = photocraft_engine::animated_open::requested(animation.as_deref())?;
+                h.open_as(&path, choice)
+            })
+            .await
+        {
             return to_result(r);
         }
         let Some(b) = self.bridge_client() else {
             return Ok(no_backend());
         };
-        to_result(b.call("app.open", json!({"path": p.path})).await)
+        let mut params = json!({"path": p.path});
+        if let Some(a) = &p.animation {
+            params["animation"] = json!(a);
+        }
+        to_result(b.call("app.open", params).await)
     }
 
     #[tool(

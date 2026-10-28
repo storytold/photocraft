@@ -191,6 +191,13 @@ pub fn open_mismatch(app: &mut PhotocraftApp, message: &str, action: &str, missi
     open_kind(app, "mismatch", tl!("Embedded Profile Mismatch"), fields)
 }
 
+/// How to open an animated GIF or WebP (`open_prompt`): `format` names it in the remember box.
+pub fn open_animated(app: &mut PhotocraftApp, title: &str, message: &str, format: &str, marker: &str) -> u64 {
+    let mut fields = json!({"message": message, "format": format, "choice": "frames", "remember": false});
+    fields[marker] = json!(true);
+    open_kind(app, "animated", title, fields)
+}
+
 pub(super) fn toolbar_tab(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let mut hidden: Vec<String> = f.get("toolbarHidden").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
     egui::ScrollArea::vertical().max_height(380.0).id_salt("toolbar-scroll").show(ui, |ui| {
@@ -314,6 +321,28 @@ pub(super) fn mismatch_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     }
 }
 
+/// The animation prompt: the three ways to open it, and whether to remember the choice.
+pub(super) fn animated_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
+    let t = Tokens::get(ui.ctx());
+    ui.label(RichText::new(f.get("message").and_then(Value::as_str).unwrap_or("")).color(t.text));
+    ui.add_space(6.0);
+    let mut choice = f.get("choice").and_then(Value::as_str).unwrap_or("frames").to_string();
+    for (v, label, hint) in [
+        ("frames", tl!("Frame animation"), tl!("A layer per frame, each with its own delay, edited in Window › Timeline")),
+        ("video", tl!("Video layer"), tl!("One layer holding every frame, played on the timeline")),
+        ("firstFrame", tl!("First frame only"), tl!("A still image")),
+    ] {
+        ui.radio_value(&mut choice, v.to_string(), label).on_hover_text(hint);
+    }
+    f.insert("choice".into(), json!(choice));
+    ui.add_space(8.0);
+    let mut remember = f.get("remember").and_then(Value::as_bool).unwrap_or(false);
+    let format = f.get("format").and_then(Value::as_str).unwrap_or("GIF").to_string();
+    crate::widgets::checkbox(ui, &mut remember, &crate::i18n::fmt(tl!("Remember this choice for {format} files"), &[("format", &format)]))
+        .on_hover_text(tl!("Change it later in Preferences › File Handling."));
+    f.insert("remember".into(), json!(remember));
+}
+
 // ------------------------------------------------------------------ confirm
 
 /// OK on one of our dialogs.
@@ -425,6 +454,10 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
                 return crate::open_prompt::answer_remembering(app, action);
             }
             crate::open_prompt::answer(app, Some(action))
+        }
+        "animated" => {
+            let choice = f.get("choice").and_then(Value::as_str).unwrap_or("frames");
+            crate::open_prompt::answer_animated(app, choice, f.get("remember").and_then(Value::as_bool) == Some(true))
         }
         _ => Err("unknown dialog".into()),
     }

@@ -8,18 +8,31 @@ use photocraft_doc::{AlphaChannel, Document, Layer, LayerContent};
 use photocraft_geom::{Rect, Size, TILE_SIZE};
 use photocraft_raster::Surface;
 
-use crate::{ExportOptions, ExportResult, ImportResult, IoError, TgaBits, XmpEmbed};
+use crate::{AnimationImport, ExportOptions, ExportResult, ImportResult, IoError, TgaBits, XmpEmbed};
 
 /// Bytes per band when converting or exporting a band of rows at a time.
 const BAND_BYTES: usize = 32 << 20;
 
 /// Decodes a flat image into a single-layer document; a TIFF with Photoshop layer data opens
-/// layered (see [`crate::tiff_layers`]).
+/// layered (see [`crate::tiff_layers`]). An animated GIF or WebP opens as its first frame, with a
+/// warning saying how many there are: [`import_flat_with`] can open all of them.
 pub fn import_flat(name: &str, bytes: &[u8]) -> Result<ImportResult, IoError> {
+    import_flat_with(name, bytes, AnimationImport::FirstFrame)
+}
+
+/// [`import_flat`], with `animation` saying how an animated GIF or WebP opens.
+pub fn import_flat_with(name: &str, bytes: &[u8], animation: AnimationImport) -> Result<ImportResult, IoError> {
     // Detected once; every step below branches on it.
     let format = codecs::detect(bytes);
     if format == Some(Format::Tiff) {
         return import_tiff_page(name, bytes, None);
+    }
+    // Asked for: every frame of an animated GIF or WebP as its own layer, to edit by hand.
+    if animation == AnimationImport::Frames
+        && matches!(format, Some(Format::Gif | Format::WebP))
+        && let Some(r) = import_animation_layers(name, bytes)?
+    {
+        return Ok(r);
     }
     let img = codecs::decode_as(format.ok_or(codecs::CodecError::UnknownFormat)?, bytes)?;
     // A palette BMP, PNG or GIF opens in Indexed Color mode with its colour table, as in
@@ -88,8 +101,169 @@ fn cicp_profile(img: &Image) -> Option<Arc<Vec<u8>>> {
     photocraft_cms::builtin::cicp_rgb(primaries, c.transfer, linear).map(|p| p.to_bytes())
 }
 
-/// Every frame of a GIF as a single-layer document, handed to `each` in order with its delay in
-/// milliseconds (a still GIF has one). One frame at a time becomes a document, so the caller
+/// Most frames an animated GIF opens with, one layer each.
+pub const MAX_GIF_LAYER_FRAMES: usize = 1000;
+
+/// Most bytes an animated GIF may take while it opens as layers: per frame, its decoded RGBA and the
+/// layer made from it (both the size of the canvas). A big canvas opens with fewer frames than
+/// [`MAX_GIF_LAYER_FRAMES`], and says so.
+pub const MAX_GIF_LAYER_BYTES: u64 = 1 << 30;
+
+/// How many frames of a `width` × `height` animation fit [`MAX_GIF_LAYER_BYTES`]: at most
+/// [`MAX_GIF_LAYER_FRAMES`] and at least two, since one is not an animation.
+fn layer_frames(width: u64, height: u64) -> usize {
+    let per_frame = width.saturating_mul(height).saturating_mul(8).max(1);
+    usize::try_from(MAX_GIF_LAYER_BYTES / per_frame).unwrap_or(usize::MAX).clamp(2, MAX_GIF_LAYER_FRAMES)
+}
+
+/// [`layer_frames`] for a GIF whose header (its logical screen) is in `bytes`.
+fn gif_layer_frames(bytes: &[u8]) -> usize {
+    let dim = |at: usize| bytes.get(at..at + 2).and_then(|b| <[u8; 2]>::try_from(b).ok()).map_or(0, |b| u64::from(u16::from_le_bytes(b)));
+    layer_frames(dim(6), dim(8))
+}
+
+/// An animated GIF or WebP as one document with a raster layer per frame ("Frame 1" at the
+/// bottom), each a full picture of the canvas, and a frame animation that shows one layer per
+/// frame with the file's delays. `None` for a still image, which opens as any flat image does.
+fn import_animation_layers(name: &str, bytes: &[u8]) -> Result<Option<ImportResult>, IoError> {
+    let gif = codecs::detect(bytes) == Some(Format::Gif);
+    // Only a GIF's first frames are decoded: each is a full-canvas picture, and every frame hides all
+    // the other layers, so the animation grows with the square of the frame count.
+    let (frames, more) = if gif {
+        codecs::decode_gif_frames_prefix(bytes, &codecs::DecodeOptions::default(), gif_layer_frames(bytes))?
+    } else {
+        // The WebP decoder reads every frame (within its own limits); the layers keep the budget's share.
+        let Some(frames) = codecs::decode_frames(bytes, &codecs::DecodeOptions::default()) else { return Ok(None) };
+        let mut frames = frames?;
+        let keep = frames.first().map_or(0, |f| layer_frames(u64::from(f.image.width()), u64::from(f.image.height())));
+        let more = frames.len() > keep;
+        frames.truncate(keep);
+        (frames, more)
+    };
+    if frames.len() < 2 {
+        return Ok(None);
+    }
+    let mut result: Option<ImportResult> = None;
+    let mut delays = Vec::with_capacity(frames.len());
+    for (i, f) in frames.into_iter().enumerate() {
+        let mut r = image_to_document(name, &f.image)?;
+        let Some(mut layer) = r.document.layers.pop() else { continue };
+        layer.name = format!("Frame {}", i + 1);
+        layer.locks = photocraft_doc::Locks::default();
+        delays.push(f.delay_ms);
+        match result.as_mut() {
+            Some(first) => first.document.layers.push(layer),
+            None => {
+                r.document.layers.push(layer);
+                result = Some(r);
+            }
+        }
+    }
+    if let Some(r) = result.as_mut() {
+        if more {
+            let format = if gif { "GIF" } else { "WebP" };
+            r.warnings.push(format!("only the first {} frames of the {format} were opened", delays.len()));
+        }
+        let doc = &mut r.document;
+        let ids: Vec<_> = doc.layers.iter().map(|l| l.id).collect();
+        let mut animation = photocraft_doc::FrameAnimation {
+            frames: delays
+                .iter()
+                .enumerate()
+                .map(|(shown, &delay_ms)| {
+                    let mut hidden: Vec<_> = ids.iter().enumerate().filter(|(i, _)| *i != shown).map(|(_, id)| *id).collect();
+                    hidden.sort();
+                    std::sync::Arc::new(photocraft_doc::AnimFrame { delay_ms, hidden, ..Default::default() })
+                })
+                .collect(),
+            current: 0,
+            loops: if gif { gif_loop_count(bytes) } else { webp_loop_count(bytes) },
+            defaults: Default::default(),
+        };
+        animation.fill_opacities(&doc.layers);
+        animation.apply(0, &mut doc.layers);
+        doc.frame_animation = Some(animation);
+    }
+    Ok(result)
+}
+
+/// How many times a GIF plays, from its NETSCAPE2.0 (or ANIMEXTS1.0) application extension: none means
+/// once, a repeat count of 0 means forever, and a count of N means N + 1 plays. Walks the GIF's blocks
+/// rather than searching its bytes, so image data can't be mistaken for the extension. A file whose
+/// blocks end early (a truncated one; the extension, when there is one, comes before the image data)
+/// plays once.
+fn gif_loop_count(bytes: &[u8]) -> photocraft_doc::LoopCount {
+    use photocraft_doc::LoopCount;
+    fn skip_sub_blocks(b: &[u8], mut at: usize) -> Option<usize> {
+        loop {
+            let n = usize::from(*b.get(at)?);
+            at += 1 + n;
+            if n == 0 {
+                return Some(at);
+            }
+        }
+    }
+    fn scan(b: &[u8]) -> Option<LoopCount> {
+        if b.len() < 13 || !(b.starts_with(b"GIF87a") || b.starts_with(b"GIF89a")) {
+            return None;
+        }
+        let colour_table = |packed: u8| if packed & 0x80 != 0 { 3usize << ((packed & 7) + 1) } else { 0 };
+        let mut at = 13 + colour_table(b[10]);
+        loop {
+            match *b.get(at)? {
+                0x3B => return Some(LoopCount::Once),
+                0x21 => {
+                    let label = *b.get(at + 1)?;
+                    if label == 0xFF && b.get(at + 2) == Some(&11) {
+                        let id = b.get(at + 3..at + 14)?;
+                        if (id == b"NETSCAPE2.0" || id == b"ANIMEXTS1.0") && b.get(at + 14) == Some(&3) && b.get(at + 15) == Some(&1) {
+                            let repeats = u16::from_le_bytes([*b.get(at + 16)?, *b.get(at + 17)?]);
+                            return Some(if repeats == 0 { LoopCount::Forever } else { LoopCount::from_plays(u32::from(repeats) + 1) });
+                        }
+                    }
+                    at = skip_sub_blocks(b, at + 2)?;
+                }
+                0x2C => {
+                    let packed = *b.get(at + 9)?;
+                    // The descriptor, a local colour table, the LZW minimum code size, then the data.
+                    at = skip_sub_blocks(b, at + 10 + colour_table(packed) + 1)?;
+                }
+                _ => return None,
+            }
+        }
+    }
+    scan(bytes).unwrap_or(LoopCount::Once)
+}
+
+/// How many times an animated WebP plays, from its `ANIM` chunk: a loop count of 0 means forever,
+/// N means N plays. A file without one (or whose chunks end early) plays forever, as browsers do.
+fn webp_loop_count(bytes: &[u8]) -> photocraft_doc::LoopCount {
+    use photocraft_doc::LoopCount;
+    fn scan(b: &[u8]) -> Option<u16> {
+        if b.get(0..4)? != b"RIFF" || b.get(8..12)? != b"WEBP" {
+            return None;
+        }
+        let mut at = 12usize;
+        loop {
+            let fourcc = b.get(at..at + 4)?;
+            let size = u32::from_le_bytes(b.get(at + 4..at + 8)?.try_into().ok()?);
+            let data = at.checked_add(8)?;
+            if fourcc == b"ANIM" {
+                // The background colour (4 bytes), then the loop count.
+                return Some(u16::from_le_bytes(b.get(data + 4..data + 6)?.try_into().ok()?));
+            }
+            // Chunks are padded to an even size.
+            at = data.checked_add(usize::try_from(size).ok()?.checked_add(1)? & !1)?;
+        }
+    }
+    match scan(bytes) {
+        Some(0) | None => LoopCount::Forever,
+        Some(n) => LoopCount::from_plays(u32::from(n)),
+    }
+}
+
+/// Every frame of a GIF or WebP as a single-layer document, handed to `each` in order with its delay in
+/// milliseconds (a still image has one). One frame at a time becomes a document, so the caller
 /// can flatten and drop it. Returns the number of frames; stops at the first error `each` gives.
 pub fn import_gif_frames(name: &str, bytes: &[u8], each: &mut dyn FnMut(Document, u32) -> Result<(), IoError>) -> Result<usize, IoError> {
     import_frames(name, codecs::decode_gif_frames(bytes, &codecs::DecodeOptions::default())?, each)
@@ -108,6 +282,15 @@ fn import_frames(name: &str, frames: Vec<codecs::AnimationFrame>, each: &mut dyn
         each(image_to_document(name, &f.image)?.document, f.delay_ms)?;
     }
     Ok(n)
+}
+
+/// [`import_gif_frames`] or [`import_webp_frames`], whichever `bytes` is.
+pub fn import_animation_frames(name: &str, bytes: &[u8], each: &mut dyn FnMut(Document, u32) -> Result<(), IoError>) -> Result<usize, IoError> {
+    match codecs::detect(bytes) {
+        Some(Format::Gif) => import_gif_frames(name, bytes, each),
+        Some(Format::WebP) => import_webp_frames(name, bytes, each),
+        _ => Err(codecs::CodecError::UnknownFormat.into()),
+    }
 }
 
 /// The lossy settings `bytes` were encoded with, for File › Save to keep: a JPEG's quality
@@ -620,10 +803,19 @@ pub fn export_flat(doc: &Document, format: Format, opts: &ExportOptions) -> Resu
 /// [`export_flat`] reporting a coarse step through `ctl` once the composite is rendered; the
 /// encoder does the rest (#3389).
 pub(crate) fn export_flat_with(doc: &Document, format: Format, opts: &ExportOptions, ctl: &photocraft_raster::Interrupt) -> Result<ExportResult, IoError> {
-    use photocraft_cms::{Builtin, Intent};
     if let Some(r) = export_mode_specific(doc, format, opts)? {
         return Ok(r);
     }
+    let (img, warnings) = flat_image(doc, format, opts, ctl)?;
+    encode_image(&img, format, opts, warnings)
+}
+
+/// The composite as `format` stores it, with the fidelity warnings so far: transparency matted
+/// where the format has none, CMYK and tagged RGB or gray converted to sRGB (sGray) where it can't
+/// carry the profile. Everything of an export but the codec, so an animated GIF's frames get the same
+/// colours as a still one.
+pub(crate) fn flat_image(doc: &Document, format: Format, opts: &ExportOptions, ctl: &photocraft_raster::Interrupt) -> Result<(Image, Vec<String>), IoError> {
+    use photocraft_cms::{Builtin, Intent};
     let mut warnings = Vec::new();
     let cmyk_target = format.caps().layouts.iter().any(|layout| layout.is_cmyk());
     let lab_target = format.caps().layouts.iter().any(|layout| layout.is_lab());
@@ -675,7 +867,7 @@ pub(crate) fn export_flat_with(doc: &Document, format: Format, opts: &ExportOpti
     if format == Format::Tiff {
         warnings.extend(crate::tiff_layers::stamp_flat_channels(doc, &mut img));
     }
-    encode_image(&img, format, opts, warnings)
+    Ok((img, warnings))
 }
 
 /// What Targa Options offers first, as Photoshop does: 32 bits per pixel when the document has an
@@ -1063,5 +1255,21 @@ mod cmyk_band_tests {
         let first = out.data().get(..4).unwrap().to_vec();
         assert!(out.data().chunks(4).all(|p| p == first.as_slice()), "{:?}", out.data());
         assert_eq!(first[3], 255);
+    }
+}
+
+#[cfg(test)]
+mod gif_budget_tests {
+    use super::*;
+
+    #[test]
+    fn a_big_canvas_opens_with_fewer_gif_frames_and_a_small_one_with_the_cap() {
+        let header = |w: u16, h: u16| [b"GIF89a".as_slice(), &w.to_le_bytes(), &h.to_le_bytes()].concat();
+        assert_eq!(gif_layer_frames(&header(100, 100)), MAX_GIF_LAYER_FRAMES);
+        // 5000 × 5000 takes 200 MB a frame (decoded and as a layer): five fit a GiB.
+        assert_eq!(gif_layer_frames(&header(5000, 5000)), 5);
+        // Never fewer than two, or the file would not open as an animation; a damaged header gets the cap.
+        assert_eq!(gif_layer_frames(&header(65535, 65535)), 2);
+        assert_eq!(gif_layer_frames(b"GIF"), MAX_GIF_LAYER_FRAMES);
     }
 }

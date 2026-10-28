@@ -4,6 +4,7 @@
 use std::path::Path;
 
 use photocraft_doc::Document;
+use photocraft_engine::prefs::AnimatedOpen;
 use photocraft_format::{PcraftWriter, SaveOptions};
 use photocraft_io::ExportOptions;
 
@@ -16,19 +17,34 @@ pub struct Opened {
     pub source_read_only: bool,
 }
 
-/// Decode a document that was read through a filesystem capability.
+/// Decode a document that was read through a filesystem capability. An animated GIF or WebP
+/// opens as its first frame ([`open_bytes_as`] can open its frames).
 pub fn open_bytes(name: &str, bytes: &[u8]) -> Result<Opened, AutomationError> {
+    open_bytes_as(name, bytes, AnimatedOpen::FirstFrame, None)
+}
+
+/// [`open_bytes`], opening an animated GIF or WebP as `animation` says (a frame animation, a video
+/// layer, or its first frame; never asking). `path` is the file a video layer reloads from.
+pub fn open_bytes_as(name: &str, bytes: &[u8], animation: AnimatedOpen, path: Option<&str>) -> Result<Opened, AutomationError> {
     if Path::new(name).extension().is_some_and(|extension| extension.eq_ignore_ascii_case(photocraft_format::EXTENSION)) {
         let document = photocraft_format::load_from_bytes(bytes)?;
         return Ok(Opened { warnings: photocraft_io::open_warnings(&document), document, source_read_only: false });
     }
-    let r = photocraft_io::import(name, bytes)?;
+    let opts = photocraft_io::ImportOptions { animation: photocraft_engine::animated_open::import_for(animation), ..Default::default() };
+    let mut r = photocraft_io::import_with_options(name, bytes, &opts)?;
+    photocraft_engine::animated_open::apply(&mut r.document, animation, path)?;
     Ok(Opened { document: r.document, warnings: r.warnings, source_read_only: r.source_read_only })
 }
 
 /// Open a document from disk. Directory bundles and `.pcraft` ZIPs load
-/// natively; everything else goes through `photocraft-io` (PSD, PNG, …).
+/// natively; everything else goes through `photocraft-io` (PSD, PNG, …). An animated GIF or WebP
+/// opens as its first frame ([`open_as`] can open its frames).
 pub fn open(path: &Path) -> Result<Opened, AutomationError> {
+    open_as(path, AnimatedOpen::FirstFrame)
+}
+
+/// [`open`], opening an animated GIF or WebP as `animation` says.
+pub fn open_as(path: &Path, animation: AnimatedOpen) -> Result<Opened, AutomationError> {
     if path.is_dir() {
         let document = photocraft_format::load_path(path)?;
         return Ok(Opened { warnings: photocraft_io::open_warnings(&document), document, source_read_only: false });
@@ -38,17 +54,18 @@ pub fn open(path: &Path) -> Result<Opened, AutomationError> {
     // convert or info of a 2 GB file does not hold the file in memory next to the document.
     #[cfg(any(unix, windows))]
     {
-        let r =
-            photocraft_io::import_file(&name, path, &photocraft_io::ImportOptions::default(), &photocraft_raster::Interrupt::NONE).map_err(|e| match e {
-                photocraft_io::IoError::Read(msg) => AutomationError::Io(msg),
-                e => e.into(),
-            })?;
+        let opts = photocraft_io::ImportOptions { animation: photocraft_engine::animated_open::import_for(animation), ..Default::default() };
+        let mut r = photocraft_io::import_file(&name, path, &opts, &photocraft_raster::Interrupt::NONE).map_err(|e| match e {
+            photocraft_io::IoError::Read(msg) => AutomationError::Io(msg),
+            e => e.into(),
+        })?;
+        photocraft_engine::animated_open::apply(&mut r.document, animation, path.to_str())?;
         Ok(Opened { document: r.document, warnings: r.warnings, source_read_only: r.source_read_only })
     }
     #[cfg(not(any(unix, windows)))]
     {
         let bytes = photocraft_format::read_file(path).map_err(|e| AutomationError::Io(format!("{}: {e}", path.display())))?;
-        open_bytes(&name, &bytes)
+        open_bytes_as(&name, &bytes, animation, path.to_str())
     }
 }
 

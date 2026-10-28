@@ -26,6 +26,10 @@ pub(crate) fn canvas_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if app.ui.panels.rail && t.pro {
         rail(app, ui, &t);
     }
+    // The docked frame-animation Timeline spans the canvas column, below the canvas.
+    if !app.ui.view.hides_chrome() {
+        crate::timeline_ui::dock(app, ui);
+    }
     egui::CentralPanel::default().frame(egui::Frame::NONE.fill(backdrop)).show(ui, |ui| crate::canvas::document_area(app, ui));
 }
 
