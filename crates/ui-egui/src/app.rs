@@ -130,6 +130,7 @@ impl PhotocraftApp {
             type_clicks: None,
             type_transform_preview: None,
             type_font_preview: None,
+            color_picker_preview: None,
             guide_drag: None,
             layer_box: None,
             crop: Default::default(),

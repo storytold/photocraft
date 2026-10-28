@@ -112,6 +112,7 @@ use dialogs::camera_raw_preview_ui;
 use dialogs::camera_raw_scope_ui;
 pub use dialogs::camera_raw_ui;
 pub use dialogs::channel_options_ui;
+pub(crate) use dialogs::color_picker_preview;
 pub use dialogs::color_picker_ui;
 pub use dialogs::color_range_ui;
 pub use dialogs::color_table_ui;
@@ -591,6 +592,8 @@ pub struct PhotocraftApp {
     pub(crate) type_transform_preview: Option<type_transform::Preview>,
     /// A font hovered in the Type tool's font picker, shown live (`type_font_preview`).
     pub(crate) type_font_preview: Option<type_font_preview::TypeFontPreview>,
+    /// The colour under a text or gradient stop Color Picker, shown live before OK (`color_picker_preview`).
+    pub(crate) color_picker_preview: Option<color_picker_preview::Preview>,
     /// Channel thumbnails for one document snapshot; view-only revisions reuse their pixels.
     channel_thumbs: Option<(DocId, std::sync::Weak<Document>, bool, Vec<egui::TextureHandle>)>,
     /// Channels panel overlays / channel views drawn over the canvas, per document id.

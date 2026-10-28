@@ -182,6 +182,11 @@ pub fn open_for_command(app: &mut PhotocraftApp, label: &str, rgb: [f32; 3], com
     let mut f = fields_with_web(app, "command", label, rgb);
     f.insert("__command".into(), json!(command));
     f.insert("__params".into(), params);
+    // The document the picker was opened on: its live canvas preview never shows on another
+    // (`color_picker_preview`).
+    if let Some(st) = app.session.active() {
+        f.insert("__document".into(), json!(st.doc.id.0));
+    }
     app.ui.open_dialog(DialogKind::Command, f)
 }
 
