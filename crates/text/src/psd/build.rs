@@ -67,6 +67,57 @@ pub(crate) fn style_sheet_data(s: &CharStyle, font: usize, k: f32) -> E {
     E::Dict(dict)
 }
 
+/// Converts the fill colours inside a layer's existing `TySh` `EngineData`, leaving every other
+/// value, including style-run keys the model does not represent, as it is. Returns `None` when
+/// the layer has no readable block.
+pub fn recolor_tysh(layer: &TextLayer, mut convert: impl FnMut(&mut Color)) -> Option<Vec<u8>> {
+    let raw = layer.psd_raw.as_deref()?;
+    let mut tysh = parse_tysh(raw)?;
+    let mut engine = engine_data(&tysh.text)?;
+    if !recolor_engine_data(&mut engine, &mut convert) {
+        return Some(raw.to_vec());
+    }
+    let engine = D::RawData(ed::write(&engine));
+    match tysh.text.items.iter_mut().find(|(k, _)| k.is("EngineData")) {
+        Some(entry) => entry.1 = engine,
+        None => tysh.text.items.push((Id::new("EngineData"), engine)),
+    }
+    Some(write_tysh(&tysh))
+}
+
+fn recolor_engine_data(e: &mut E, convert: &mut impl FnMut(&mut Color)) -> bool {
+    let Some(E::Dict(items)) = e.get_mut("EngineDict") else { return false };
+    let Some(E::Dict(style)) = items.iter_mut().find(|(k, _)| k == "StyleRun").map(|(_, v)| v) else { return false };
+    let Some(E::Array(runs)) = style.iter_mut().find(|(k, _)| k == "RunArray").map(|(_, v)| v) else { return false };
+    let mut changed = false;
+    for run in runs {
+        let Some(data) = run.get_mut("StyleSheet").and_then(|v| v.get_mut("StyleSheetData")) else { continue };
+        let Some(color) = data.get_mut("FillColor") else { continue };
+        let Some(mut c) = engine_color(color) else { continue };
+        convert(&mut c);
+        let (kind, values) = fill_color(&c);
+        color.set("Type", E::Int(kind));
+        color.set("Values", E::Array(values));
+        changed = true;
+    }
+    changed
+}
+
+/// A `FillColor` dictionary (`Type` plus `Values`, alpha first) as a [`Color`].
+fn engine_color(v: &E) -> Option<Color> {
+    let kind = v.get("Type")?.as_i64()?;
+    let values = v.get("Values")?.as_array()?;
+    let f = |i: usize| values.get(i)?.as_f64().map(|x| x as f32);
+    let alpha = f(0)?;
+    let (mode, c) = match kind {
+        0 => (ColorMode::Grayscale, [f(1)?, 0.0, 0.0, 0.0]),
+        1 => (ColorMode::Rgb, [f(1)?, f(2)?, f(3)?, 0.0]),
+        2 => (ColorMode::Cmyk, [f(1)?, f(2)?, f(3)?, f(4)?]),
+        _ => return None,
+    };
+    Some(Color { mode, c, alpha })
+}
+
 pub(crate) fn paragraph_properties(p: &ParagraphStyle, k: f32) -> E {
     let j = match p.align {
         TextAlign::Left => 0,

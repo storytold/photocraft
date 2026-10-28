@@ -26,7 +26,7 @@ mod import;
 
 #[cfg(test)]
 pub(crate) use build::font_entry;
-pub use build::{MAX_TEXT_INDEX, build_engine_data, build_txt2, build_txt2_at, build_tysh, needs_txt2};
+pub use build::{MAX_TEXT_INDEX, build_engine_data, build_txt2, build_txt2_at, build_tysh, needs_txt2, recolor_tysh};
 pub(crate) use build::{font_set, paragraph_properties, style_sheet_data};
 pub use edit::{set_text_index, text_index, txt2_object_count};
 #[cfg(test)]
@@ -290,5 +290,54 @@ mod nonfinite_tests {
             TextLayer { text: "x".into(), runs: vec![TextRun { len: 1, style: CharStyle { size_pt: 12.0, ..Default::default() } }], ..Default::default() };
         let out = String::from_utf8_lossy(&crate::engine_data::write(&build_engine_data(&layer, None, f32::INFINITY))).into_owned();
         assert!(out.contains("/FontSize 12.0"), "{out}");
+    }
+}
+
+#[cfg(test)]
+mod recolor_tests {
+    use super::*;
+
+    /// #9674 follow-up: converting a document rewrites only the fill colours in an imported
+    /// `TySh`, so style-run keys the model does not hold survive the conversion.
+    #[test]
+    fn recolouring_keeps_unmodelled_style_data() {
+        let layer = TextLayer {
+            text: "x".into(),
+            runs: vec![TextRun { len: 1, style: CharStyle { size_pt: 12.0, color: Color::rgb(0.9, 0.2, 0.4), ..Default::default() } }],
+            ..Default::default()
+        };
+        let mut tysh = parse_tysh(&build_tysh(&layer, 72.0, None)).unwrap();
+        let mut e = engine_data(&tysh.text).unwrap();
+        let Some(E::Dict(engine)) = e.get_mut("EngineDict") else { panic!("no EngineDict") };
+        let Some(E::Dict(style)) = engine.iter_mut().find(|(k, _)| k == "StyleRun").map(|(_, v)| v) else { panic!("no StyleRun") };
+        let Some(E::Array(runs)) = style.iter_mut().find(|(k, _)| k == "RunArray").map(|(_, v)| v) else { panic!("no RunArray") };
+        let data = runs.first_mut().and_then(|r| r.get_mut("StyleSheet")).and_then(|v| v.get_mut("StyleSheetData")).unwrap();
+        data.set("StrokeFlag", E::Bool(true));
+        data.set(
+            "StrokeColor",
+            E::Dict(vec![("Type".into(), E::Int(2)), ("Values".into(), E::Array(vec![E::Real(1.0), E::Real(0.1), E::Real(0.2), E::Real(0.3), E::Real(0.4)]))]),
+        );
+        let set = |d: &mut Descriptor, key: &str, v: D| match d.items.iter_mut().find(|(k, _)| k.is(key)) {
+            Some(e) => e.1 = v,
+            None => d.items.push((Id::new(key), v)),
+        };
+        set(&mut tysh.text, "EngineData", D::RawData(crate::engine_data::write(&e)));
+        let mut layer = layer;
+        layer.psd_raw = Some(std::sync::Arc::new(write_tysh(&tysh)));
+
+        let out = recolor_tysh(&layer, |c| *c = c.in_mode(ColorMode::Cmyk)).unwrap();
+        let back = parse_tysh(&out).unwrap();
+        let e = engine_data(&back.text).unwrap();
+        let data = e
+            .path(&["EngineDict", "StyleRun", "RunArray"])
+            .and_then(E::as_array)
+            .and_then(|r| r.first())
+            .and_then(|r| r.path(&["StyleSheet", "StyleSheetData"]))
+            .unwrap();
+        let fill = data.get("FillColor").unwrap();
+        assert_eq!(fill.get("Type").and_then(E::as_i64), Some(2), "the fill was re-encoded as CMYK");
+        assert_eq!(fill.get("Values").and_then(E::as_array).map(|v| v.len()), Some(5), "alpha + four inks");
+        assert_eq!(data.get("StrokeFlag").and_then(E::as_bool), Some(true), "the unmodelled flag survived");
+        assert!(matches!(data.get("StrokeColor"), Some(E::Dict(items)) if items.len() == 2), "the unmodelled stroke survived");
     }
 }
