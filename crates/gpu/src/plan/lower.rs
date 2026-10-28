@@ -29,6 +29,7 @@ pub(super) fn placement(anchor: (f64, f64), link: bool, phase: (f32, f32), scale
     Placement { origin, cs: (a.cos(), a.sin()), inv_scale }
 }
 
+/// The shader index of a gradient style.
 pub(super) fn style_index(s: photocraft_doc::GradientStyle) -> f32 {
     match s {
         photocraft_doc::GradientStyle::Linear => 0.0,

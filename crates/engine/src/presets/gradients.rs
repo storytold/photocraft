@@ -649,6 +649,7 @@ fn apply(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"layer": id.0, "preset": g.name}))
 }
 
+/// Saves the current or given gradient as a new preset.
 fn new_preset(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "gradient.presets.new";
     let mut g = if p.get("stops").is_some() { GradientPreset::from_params("", p, CMD)? } else { s.presets.gradient.clone() };
@@ -660,6 +661,7 @@ fn new_preset(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"name": g.name, "group": group}))
 }
 
+/// Renames, moves, groups or deletes gradient presets.
 fn edit(s: &mut Session, p: &Value) -> Result<Value> {
     let action = req_str(p, "action", "gradient.presets.edit")?.to_string();
     let r = edit_groups(&mut s.presets.gradients, &action, p, "gradient.presets.edit")?;
@@ -667,12 +669,14 @@ fn edit(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(r)
 }
 
+/// Restores the default gradient groups, or appends them with `append`.
 fn reset(s: &mut Session, p: &Value) -> Result<Value> {
     let r = reset_groups(&mut s.presets.gradients, builtin(), p);
     s.presets_changed();
     Ok(r)
 }
 
+/// Replaces `groups` with `builtin`, or appends them under unique names with `append`, and reports the group count.
 pub(crate) fn reset_groups<T>(groups: &mut Vec<Group<T>>, mut builtin: Vec<Group<T>>, p: &Value) -> Value {
     if p.get("append").and_then(Value::as_bool).unwrap_or(false) {
         for g in &mut builtin {
@@ -685,6 +689,7 @@ pub(crate) fn reset_groups<T>(groups: &mut Vec<Group<T>>, mut builtin: Vec<Group
     json!({"groups": groups.len()})
 }
 
+/// A group name like `base` that no group in `groups` uses.
 pub(crate) fn unique_group<T>(groups: &[Group<T>], base: &str) -> String {
     let taken = |n: &str| groups.iter().any(|g| g.name == n);
     if !taken(base) { base.to_string() } else { (1..).map(|i| format!("{base} {i}")).find(|n| !taken(n)).unwrap_or_default() }

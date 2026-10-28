@@ -542,6 +542,7 @@ fn blur_filter_params(class: &str, f: &Descriptor) -> Option<J> {
     })
 }
 
+/// Params of a recorded Pixelate filter, by its class.
 fn pixel_filter_params(class: &str, f: &Descriptor, item: &Descriptor) -> Option<J> {
     Some(match (class, Some(f)) {
         ("Msc ", Some(f)) => json!({"cellSize": px(f, "ClSz")?}),
@@ -570,6 +571,7 @@ fn pixel_filter_params(class: &str, f: &Descriptor, item: &Descriptor) -> Option
     })
 }
 
+/// Params of a recorded Stylize filter, by its class.
 fn stylize_filter_params(class: &str, f: &Descriptor, item: &Descriptor) -> Option<J> {
     Some(match (class, Some(f)) {
         ("Wnd ", Some(f)) => json!({

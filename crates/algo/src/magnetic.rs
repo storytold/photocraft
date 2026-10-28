@@ -587,6 +587,7 @@ pub fn length(p: &[[f64; 2]]) -> f64 {
     p.windows(2).map(|w| dist(w[0], w[1])).sum()
 }
 
+/// The distance between two points.
 fn dist(a: [f64; 2], b: [f64; 2]) -> f64 {
     (a[0] - b[0]).hypot(a[1] - b[1])
 }

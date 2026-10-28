@@ -111,6 +111,7 @@ pub fn write_tysh(t: &TySh) -> Vec<u8> {
     v
 }
 
+/// The descriptor of an unwarped type layer.
 fn default_warp() -> Descriptor {
     Descriptor::new("warp")
         .with("warpStyle", enumv("warpStyle", "warpNone"))
@@ -120,10 +121,12 @@ fn default_warp() -> Descriptor {
         .with("warpRotate", enumv("Ornt", "Hrzn"))
 }
 
+/// An enumerated value of type `t`.
 fn enumv(t: &str, v: &str) -> D {
     D::Enumerated { type_id: Id::new(t), value: Id::new(v) }
 }
 
+/// A finite number from any numeric value.
 fn dnum(v: Option<&D>) -> Option<f64> {
     match v {
         Some(D::Double(x)) if x.is_finite() => Some(*x),

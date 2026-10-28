@@ -16,6 +16,7 @@ fn per_channel(d: &Descriptor) -> Option<Vec<(Option<&'static str>, &Descriptor)
         .collect()
 }
 
+/// Levels params from a recorded Levels adjustment, or `None` for Auto Levels.
 pub(super) fn levels_from(d: &Descriptor) -> Option<Value> {
     if d.get_bool("Auto") == Some(true) {
         return None;
@@ -140,6 +141,7 @@ const HUE_KEY: &str = "H   ";
 
 pub(super) const HUE_RANGES: [&str; 6] = ["reds", "yellows", "greens", "cyans", "blues", "magentas"];
 
+/// Hue/Saturation params from a recorded Hue/Saturation adjustment.
 fn hue_sat_from(d: &Descriptor) -> Option<Value> {
     let mut out = Map::new();
     if let Some(c) = d.get_bool("Clrz") {
@@ -212,10 +214,12 @@ fn triple(d: &Descriptor, k: &str) -> Option<Value> {
     Some(json!(v?))
 }
 
+/// The three numbers at `k` as a recorded list.
 fn triple_to(p: &Value, k: &str) -> Option<D> {
     Some(D::List(p.get(k)?.as_array()?.iter().map(|v| v.as_f64().map(long)).collect::<Option<Vec<_>>>()?))
 }
 
+/// Color Balance params from a recorded Color Balance adjustment.
 fn color_balance_from(d: &Descriptor) -> Option<Value> {
     let mut out = Map::new();
     for (key, param) in [("ShdL", "shadows"), ("MdtL", "midtones"), ("HghL", "highlights")] {
@@ -248,10 +252,12 @@ const BW: &[F] = &[
     F("tintColor", "tintColor", Kind::Color),
 ];
 
+/// The red, green, blue and constant weights of one Channel Mixer output.
 fn mixer_channel(e: &Descriptor) -> Option<Value> {
     Some(json!([get_num(e, "Rd  ").unwrap_or(0.0), get_num(e, "Grn ").unwrap_or(0.0), get_num(e, "Bl  ").unwrap_or(0.0), get_num(e, "Cnst").unwrap_or(0.0)]))
 }
 
+/// Channel Mixer params from a recorded Channel Mixer adjustment.
 fn channel_mixer_from(d: &Descriptor) -> Option<Value> {
     let mut out = Map::new();
     for (key, param) in [("Rd  ", "red"), ("Grn ", "green"), ("Bl  ", "blue"), ("Gry ", "gray")] {
@@ -525,6 +531,7 @@ const SHADOWS_HIGHLIGHTS_TONE: [(&str, &str, &str); 3] = [("Amnt", "amount", "Am
 const SHADOWS_HIGHLIGHTS: [(&str, &str, &str); 4] =
     [("BlcC", "blackClip", "blackClip"), ("WhtC", "whiteClip", "whiteClip"), ("Cntr", "center", "midtone"), ("ClrC", "colorCorrection", "color")];
 
+/// The Shadows/Highlights command a recorded Shadows/Highlights step replays as.
 pub(super) fn shadows_highlights_from(d: &Descriptor) -> Mapped {
     let mut m = Map::new();
     for (code, name, prefix) in SHADOWS_HIGHLIGHTS_TONES {

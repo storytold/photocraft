@@ -12,10 +12,12 @@ pub(super) fn num(v: &D) -> Option<f64> {
     .filter(|f| f.is_finite())
 }
 
+/// An id as text, trailing spaces removed.
 pub(super) fn trimmed(id: &Id) -> String {
     String::from_utf8_lossy(id.as_bytes()).trim_end().to_string()
 }
 
+/// The number at `k`.
 pub(super) fn get_num(d: &Descriptor, k: &str) -> Option<f64> {
     d.get(k).and_then(num)
 }
@@ -39,6 +41,7 @@ pub(super) fn get_enum(d: &Descriptor, k: &str) -> Option<String> {
     d.get(k).and_then(enumerated)
 }
 
+/// The list at `k`.
 pub(super) fn get_list<'a>(d: &'a Descriptor, k: &str) -> Option<&'a [D]> {
     match d.get(k) {
         Some(D::List(l)) => Some(l),

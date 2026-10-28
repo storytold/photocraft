@@ -108,6 +108,7 @@ fn d_u32(d: &Descriptor, key: &str) -> Option<u32> {
     }
 }
 
+/// Whether the boolean at `key` is true.
 fn d_bool(d: &Descriptor, key: &str) -> bool {
     matches!(d.get(key), Some(Value::Boolean(true)))
 }
@@ -127,6 +128,7 @@ fn origin_from(s: &str) -> u32 {
     }
 }
 
+/// The slice type code a slice type name stands for.
 fn kind_from(s: &str) -> u32 {
     match s {
         "noImage" => 0,
@@ -135,6 +137,7 @@ fn kind_from(s: &str) -> u32 {
     }
 }
 
+/// A slice record from its descriptor.
 fn slice_from_descriptor(d: &Descriptor) -> SliceRecord {
     let b = d_bounds(d, "bounds").unwrap_or_default();
     let color = match (d.get_enum("bgColorType").as_deref(), d.get("bgColor")) {

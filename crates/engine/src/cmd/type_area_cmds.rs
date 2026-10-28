@@ -17,6 +17,7 @@ const CMD: &str = "type.fillPath";
 // edge cap, so a big curved path gets "too many anchor points" rather than "encloses no area".
 use photocraft_text::area::MAX_AREA_KNOTS;
 
+/// An Area Type parameter error.
 fn bad(m: &str) -> EngineError {
     EngineError::BadParams { cmd: CMD.into(), msg: m.into() }
 }
@@ -45,6 +46,7 @@ fn area_source(doc: &Document, p: &Value) -> Result<Path> {
     Ok(path.clone())
 }
 
+/// Sets a type layer to wrap inside a path.
 fn fill_path(s: &mut Session, p: &Value) -> Result<Value> {
     let id = layer_param(s, p)?;
     let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
@@ -70,6 +72,7 @@ fn fill_path(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"layer": id.0, "subpaths": n}))
 }
 
+/// The Area Type command.
 pub fn specs() -> Vec<CommandSpec> {
     vec![CommandSpec {
         id: CMD,

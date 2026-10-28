@@ -223,10 +223,12 @@ fn kuwahara(win: &mut Win, r: usize) {
     });
 }
 
+/// How far a Kuwahara window of radius `r` reaches.
 fn kuwahara_reach(r: usize) -> i32 {
     2 * r.div_ceil(2).max(1) as i32 + 1
 }
 
+/// Sharpens the window with an unsharp mask of radius `sigma`.
 fn unsharp(win: &mut Win, sigma: f32, amount: f32) {
     if amount <= 0.0 {
         return;

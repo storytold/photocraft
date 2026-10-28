@@ -54,11 +54,13 @@ fn targets(s: &Session, p: &Value) -> Result<Vec<LayerId>> {
     Ok(ids.into_iter().filter(|id| text_of(&st.doc, *id).is_some()).collect())
 }
 
+/// Enabled while a type layer is selected.
 fn has_target(s: &Session) -> std::result::Result<(), String> {
     has_doc(s)?;
     if targets(s, &Value::Null).is_ok_and(|targets| !targets.is_empty()) { Ok(()) } else { Err("select a type layer".into()) }
 }
 
+/// The optional style id param.
 fn id_param(cmd: &str, p: &Value) -> Result<Option<u32>> {
     crate::commands::u32_id_param(cmd, p, "id")
 }

@@ -31,10 +31,12 @@ fn nul_name() -> UnicodeString {
     UnicodeString(vec![0])
 }
 
+/// An empty descriptor of class `class`.
 fn obj(class: &str) -> Descriptor {
     Descriptor { name: nul_name(), ..Descriptor::new(class) }
 }
 
+/// `v` padded with a zero byte to an even length.
 fn pad_even(mut v: Vec<u8>) -> Vec<u8> {
     if v.len() % 2 == 1 {
         v.push(0);
@@ -42,6 +44,7 @@ fn pad_even(mut v: Vec<u8>) -> Vec<u8> {
     v
 }
 
+/// The number at `key` as a whole number.
 fn int(d: &Descriptor, key: &str) -> Option<i64> {
     match d.get(key)? {
         Value::Integer(i) => Some(i64::from(*i)),
@@ -126,6 +129,7 @@ struct Setting {
     offset: Option<(i64, i64)>,
 }
 
+/// The layer comp settings in a `cmls` block.
 fn parse_cmls(data: &[u8]) -> Option<Vec<Setting>> {
     let (vd, _) = VersionedDescriptor::parse_prefix(data).ok()?;
     let Value::List(items) = vd.descriptor.get("layerSettings")? else { return None };

@@ -1,5 +1,8 @@
 use super::convert::clip_name;
-use super::descriptors::{PT, PX, Target, ang, class, code, color_desc, color_hex, desc, enm, get_enum, get_num, get_ref, jbool, jnum, jstr, layer_ref, layer_target, long, name_ref, pct, px, recorded_layer_ref, recorded_layer_target, ref_class, target, target_ref, text, trimmed};
+use super::descriptors::{
+    PT, PX, Target, ang, class, code, color_desc, color_hex, desc, enm, get_enum, get_num, get_ref, jbool, jnum, jstr, layer_ref, layer_target, long, name_ref,
+    pct, px, recorded_layer_ref, recorded_layer_target, ref_class, target, target_ref, text, trimmed,
+};
 use super::events::pixel_target;
 use super::fields::{F, Kind, Mapped, fields_to, none, step, steps};
 use super::steps_make::is_tool_class;
@@ -347,6 +350,7 @@ pub(super) fn move_to(id: &str, p: &Value) -> Option<Descriptor> {
     Some(desc("null").with("null", recorded_layer_ref(p)?).with("T   ", t))
 }
 
+/// The command a recorded Duplicate step replays as.
 pub(super) fn duplicate_from(d: &Descriptor) -> Mapped {
     let Some(r) = get_ref(d, "null") else { return Mapped::Unsupported { harmless: false } };
     match ref_class(r).as_deref() {
@@ -450,6 +454,7 @@ pub(super) fn apply_comp_to(_: &str, p: &Value) -> Option<Descriptor> {
     Some(desc("null").with("null", reference))
 }
 
+/// The Play Action command a recorded Play step replays as.
 pub(super) fn play_from(d: &Descriptor) -> Mapped {
     match get_ref(d, "null").map(target) {
         Some(Target::Name(n)) => step("actions.play", json!({"action": clip_name(&n)})),
@@ -457,6 +462,7 @@ pub(super) fn play_from(d: &Descriptor) -> Mapped {
     }
 }
 
+/// The recorded Play step for a play action command.
 pub(super) fn play_to(_: &str, p: &Value) -> Option<Descriptor> {
     let name = jstr(p, "action")?;
     // The Play Action descriptor written here carries no starting step, so a call from a later step is not a whole call.

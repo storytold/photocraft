@@ -20,6 +20,7 @@ use crate::commands::{CommandSpec, layer_param};
 use crate::type_cmds::{byte_at, check_text_unlocked, has_type_layer, norm_text, refresh_at, replace_text};
 use crate::{EngineError, Result, Session};
 
+/// A parameter error for `cmd`.
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: cmd.into(), msg: msg.into() }
 }
@@ -212,6 +213,7 @@ pub(crate) fn recorded_step(p: &Value) -> Value {
     json!({ "allLayers": !one_layer })
 }
 
+/// Spell-checks the type layers: lists, changes, suggests or learns words.
 fn check_spelling(s: &mut Session, p: &Value) -> Result<Value> {
     match p.get("action").and_then(Value::as_str).unwrap_or("list") {
         "list" | "check" => list(s, p),
@@ -231,6 +233,7 @@ fn check_spelling(s: &mut Session, p: &Value) -> Result<Value> {
     }
 }
 
+/// Inserts text into a type layer at the cursor or over a selection.
 fn insert_text(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "type.insertText";
     let id = layer_param(s, p)?;
@@ -264,6 +267,7 @@ fn insert_text(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "layer": id.0, "caret": caret }))
 }
 
+/// The spelling commands.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec {

@@ -65,15 +65,18 @@ impl<'a> Rd<'a> {
         let b = self.take(2)?;
         Ok(u16::from_be_bytes([b[0], b[1]]))
     }
+    /// The next big-endian `u32`.
     fn u32(&mut self) -> Result<u32> {
         let b = self.take(4)?;
         Ok(u32::from_be_bytes([b[0], b[1], b[2], b[3]]))
     }
+    /// Bytes left to read.
     fn remaining(&self) -> usize {
         self.b.len().saturating_sub(self.p)
     }
 }
 
+/// One style from an ASL body: its identity descriptor, then the style itself.
 fn read_style(body: &[u8]) -> Result<AslStyle> {
     let (identity, used) = VersionedDescriptor::parse_prefix(body)?;
     let rest = body.get(used..).ok_or(PsdError::UnexpectedEof { offset: used, needed: 4 })?;
