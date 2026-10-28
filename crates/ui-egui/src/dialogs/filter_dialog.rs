@@ -870,8 +870,13 @@ fn indexed_matte_row(ui: &mut egui::Ui, fields: &mut Map<String, Value>) {
     });
     let custom = choice == "custom";
     if changed {
-        let next = if custom { crate::color_picker_ui::hex(color) } else { choice.to_owned() };
-        fields.insert("matte".into(), json!(next));
+        if custom {
+            // Keep the previous matte until the picker confirms; the picker uses this only as
+            // its initial colour when switching from a named matte or None.
+            fields.insert("__pickColorDefault".into(), json!(crate::color_picker_ui::hex(color)));
+        } else {
+            fields.insert("matte".into(), json!(choice.to_owned()));
+        }
     }
     if custom && (changed || pick) {
         crate::color_picker_ui::request_field(fields, "matte", &crate::color_picker_ui::title_for("Matte"));

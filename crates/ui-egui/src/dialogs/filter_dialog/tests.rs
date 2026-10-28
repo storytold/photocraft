@@ -1686,3 +1686,34 @@ fn indexed_matte_dropdown_and_picker_change_the_applied_edge_color() {
         assert_eq!(surface.rgba(1, 0)[3], 0.0);
     }
 }
+
+/// Selecting Other… must not replace None until the custom colour picker is confirmed.
+#[test]
+fn indexed_matte_cancel_keeps_the_previous_choice() {
+    use egui::accesskit::Role;
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    let mut session = photocraft_engine::Session::new();
+    session.execute("file.new", json!({"width": 2, "height": 1, "depth": 32, "background": "transparent"})).unwrap();
+    let mut app = PhotocraftApp::new(session, crate::Services::default());
+    let mut harness = Harness::builder().with_size(egui::vec2(900.0, 1000.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), &mut app);
+    PhotocraftApp::setup_context(&harness.ctx, crate::theme::ThemeKind::ALL[0]);
+    let id = open(harness.state_mut(), "image.mode.indexedColor").unwrap();
+    harness.run_steps(3);
+    harness.query_all_by_role(Role::ComboBox).find(|node| node.value().as_deref() == Some("None")).expect("Matte dropdown").click();
+    harness.run_steps(2);
+    harness.get_by_label("Other…").click();
+    harness.run_steps(3);
+
+    let picker = harness.state().ui.dialogs.last().expect("custom matte picker").id;
+    assert_ne!(picker, id);
+    let parent = harness.state().ui.dialogs.iter().find(|dialog| dialog.id == id).expect("Indexed Color dialog");
+    assert_eq!(parent.fields.get("matte").and_then(Value::as_str), None, "opening Other… does not commit a matte");
+    assert_eq!(harness.state().ui.dialogs.last().unwrap().fields["color"], "#ffffff", "the previous default still seeds the picker");
+
+    crate::dialogs::cancel(harness.state_mut(), picker).unwrap();
+    harness.run_steps(3);
+    let parent = harness.state().ui.dialogs.iter().find(|dialog| dialog.id == id).expect("Indexed Color dialog");
+    assert_eq!(parent.fields.get("matte").and_then(Value::as_str), None, "cancel restores the previous None choice");
+    assert!(!parent.fields.contains_key("__pickColorDefault"));
+}
