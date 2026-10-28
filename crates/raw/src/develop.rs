@@ -813,6 +813,22 @@ mod tests {
     }
 
     #[test]
+    fn fused_rgbe_preserves_emerald_metadata_and_matches_full_frame() {
+        let cfa = crate::Cfa { width: 2, height: 2, colors: vec![0, 1, 3, 2], origin_x: 0, origin_y: 0 };
+        let s = test_sensor(67, 45, Some(cfa), 1);
+        for demosaic in [Demosaic::Ahd, Demosaic::Bilinear, Demosaic::Mhc] {
+            let opts = DevelopOptions { demosaic, ..Default::default() };
+            let full = develop(&s, &opts, false).unwrap();
+            let fused = develop(&s, &opts, true).unwrap();
+            assert_eq!(full.rgb, fused.rgb, "{demosaic:?}");
+            assert_eq!(full.info.cfa.as_deref(), Some("RGEB"));
+            assert_eq!(fused.info.cfa, full.info.cfa);
+            assert_eq!(fused.warnings, full.warnings);
+            assert!(fused.warnings.iter().any(|w| w.contains("RGBE") && w.contains("approximate")));
+        }
+    }
+
+    #[test]
     fn fused_development_matches_the_full_frame_path() {
         use crate::Cfa;
         // Odd sizes, tiny images, band borders (AHD bands are 32 rows) and several bands.

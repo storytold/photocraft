@@ -125,6 +125,16 @@ complete Vec and Debug metadata without data; these are consistency fingerprints
 proofs. The independent new-format checks retain SHA-256 hashes of both u16 little-endian
 planes. Corpus originals remain gitignored, CC0-attributed, and absent from distributables.
 
+## Integration with current main
+
+The PR was rebased onto `d5be9b8ae` after the recorded measurements. Upstream's fused RAW
+development, demosaicing helpers, test generators and other format work are retained. RGBE
+metadata and its approximation warning apply to both fused and full-frame development, with
+an equivalence regression. Decoder selection and the sensor codec/metadata implementation are
+unchanged by conflict resolution. Recorded source hashes describe the measured pre-rebase
+experiment; they are not hashes of every file in the rebased tree. The complete 88-file sensor
+matrix and the 20 full-resolution import/re-development cases are revalidated after rebasing.
+
 ## Complete same-file Auto comparison
 
 “Unsupported” has no successful time or numeric speedup. Each row is a separate file;
