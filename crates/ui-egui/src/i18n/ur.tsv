@@ -4571,3 +4571,13 @@ navigator	Zoom	زوم
 
 # RAW Develop feature labels
 	Saved RAW Develop settings to {file}	RAW ڈیولپمنٹ کی ترتیبات {file} میں محفوظ ہو گئیں
+# Palette grid (Color Table / Indexed Color Custom…)
+	Set Transparent	شفاف مقرر کریں
+	{count} transparent pixels were made opaque	{count} شفاف پکسلات غیرشفاف بن گئے
+	Clear Transparency	شفافیت ختم کریں
+	Color Picker (First Color)	رنگ انتخاب کنندہ (پہلا رنگ)
+	Color Picker (Last Color)	رنگ انتخاب کنندہ (آخری رنگ)
+	Pick a Palette Colour From the Image	تصویر سے پیلیٹ کا رنگ منتخب کریں
+	Table Color	ٹیبل کا رنگ
+	Palette Color	پیلیٹ کا رنگ
+	Color Picker	رنگ انتخاب کنندہ

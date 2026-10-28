@@ -4714,3 +4714,13 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 
 # RAW Develop feature labels
 	Saved RAW Develop settings to {file}	RAW დამუშავების პარამეტრები შენახულია {file}-ში
+# Palette grid (Color Table / Indexed Color Custom…)
+	Set Transparent	გამჭვირვალის დაყენება
+	{count} transparent pixels were made opaque	{count} გამჭვირვალე პიქსელი გახდა მყარი
+	Clear Transparency	გამჭვირვალობის მოხსნა
+	Color Picker (First Color)	ფერის არჩეველი (პირველი ფერი)
+	Color Picker (Last Color)	ფერის არჩეველი (ბოლო ფერი)
+	Pick a Palette Colour From the Image	პალიტრის ფერის არჩევა სურათიდან
+	Table Color	ცხრილის ფერი
+	Palette Color	პალიტრის ფერი
+	Color Picker	ფერის არჩეველი

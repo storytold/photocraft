@@ -4630,3 +4630,13 @@ smartSvg	SVG editor opened. Save the SVG to update this Smart Object.	SVG redakt
 
 # RAW Develop feature labels
 	Saved RAW Develop settings to {file}	RAW emalı ayarları {file} faylında saxlanıldı
+# Palette grid (Color Table / Indexed Color Custom…)
+	Set Transparent	Şəffaf rəngi təyin et
+	{count} transparent pixels were made opaque	{count} şəffaf piksel qeyri-şəffafa çevrildi
+	Clear Transparency	Şəffaflığı ləğv et
+	Color Picker (First Color)	Rəng seçicisi (Birinci rəng)
+	Color Picker (Last Color)	Rəng seçicisi (Son rəng)
+	Pick a Palette Colour From the Image	Paletadan rəngi şəkildən seçin
+	Table Color	Cədvəl rəngi
+	Palette Color	Paleta rəngi
+	Color Picker	Rəng seçicisi

@@ -4571,3 +4571,13 @@ navigator	Zoom	תקריב
 
 # RAW Develop feature labels
 	Saved RAW Develop settings to {file}	הגדרות פיתוח RAW נשמרו ב־{file}
+# Palette grid (Color Table / Indexed Color Custom…)
+	Set Transparent	הגדר שקוף
+	{count} transparent pixels were made opaque	{count} פיקסלים שקופים הוגדרו כבל־שקופים
+	Clear Transparency	בטל שקיפות
+	Color Picker (First Color)	בוחר צבעים (צבע ראשון)
+	Color Picker (Last Color)	בוחר צבעים (צבע אחרון)
+	Pick a Palette Colour From the Image	בחר צבע פלטטה מהתמונה
+	Table Color	צבע טבלה
+	Palette Color	צבע פלטטה
+	Color Picker	בוחר צבעים

@@ -4272,3 +4272,13 @@ navigator	Zoom	பெரிதாக்கல்
 
 # RAW Develop feature labels
 	Saved RAW Develop settings to {file}	RAW உருவாக்க அமைப்புகள் {file} இல் சேமிக்கப்பட்டன
+# Palette grid (Color Table / Indexed Color Custom…)
+	Set Transparent	பரவால்லாததை அமை
+	{count} transparent pixels were made opaque	{count} பரவால்லாத பிக்செல்கள் பரவாய் ஆகியுள்ளன
+	Clear Transparency	பரவால்லாப் பண்பை அழி
+	Color Picker (First Color)	நிறத் தேர்வு (முதல் நிறம்)
+	Color Picker (Last Color)	நிறத் தேர்வு (கடைசி நிறம்)
+	Pick a Palette Colour From the Image	படத்தில் இருந்து பேலட் நிறத்தைத் தேர்ந்தெடு
+	Table Color	அட்டவணை நிறம்
+	Palette Color	பேலட் நிறம்
+	Color Picker	நிறத் தேர்வு

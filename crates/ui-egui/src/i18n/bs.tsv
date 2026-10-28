@@ -4644,3 +4644,13 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 
 # RAW Develop feature labels
 	Saved RAW Develop settings to {file}	Postavke RAW obrade sačuvane u {file}
+# Palette grid (Color Table / Indexed Color Custom…)
+	Set Transparent	Postavi transparentno
+	{count} transparent pixels were made opaque	{count} transparentnih piksela je postalo neprozirno
+	Clear Transparency	Ukloni transparentnost
+	Color Picker (First Color)	Birač boja (Prva boja)
+	Color Picker (Last Color)	Birač boja (Posljednja boja)
+	Pick a Palette Colour From the Image	Odaberi paletnu boju iz slike
+	Table Color	Boja tabele
+	Palette Color	Paletna boja
+	Color Picker	Birač boja

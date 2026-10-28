@@ -4205,6 +4205,7 @@ shape	Appearance	화면 모양
 
 # Palette grid (Color Table / Indexed Color Custom…)
 	Set Transparent	투명으로 설정
+	{count} transparent pixels were made opaque	{count}개의 투명 픽셀이 불투명이 되었습니다
 	Clear Transparency	투명성 해제
 	Color Picker (First Color)	색상 선택기 (첫 번째 색상)
 	Color Picker (Last Color)	색상 선택기 (마지막 색상)

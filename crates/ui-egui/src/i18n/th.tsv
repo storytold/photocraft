@@ -4770,3 +4770,13 @@ cameraRaw	White Balance: As Shot	สมดุลแสงขาว: เท่า
 
 # RAW Develop feature labels
 	Saved RAW Develop settings to {file}	บันทึกการตั้งค่าการปรับแต่ง RAW ไปยัง {file} แล้ว
+# Palette grid (Color Table / Indexed Color Custom…)
+	Set Transparent	ตั้งโปร่งใส
+	{count} transparent pixels were made opaque	พิกเซลโปร่งใส {count} จุดกลายเป็นทึบแสง
+	Clear Transparency	ล้างความโปร่งใส
+	Color Picker (First Color)	ตัวเลือกสี (สีแรก)
+	Color Picker (Last Color)	ตัวเลือกสี (สีสุดท้าย)
+	Pick a Palette Colour From the Image	เลือกสีพาเลตจากภาพ
+	Table Color	สีตาราง
+	Palette Color	สีพาเลต
+	Color Picker	ตัวเลือกสี

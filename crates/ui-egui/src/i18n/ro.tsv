@@ -4613,3 +4613,13 @@ navigator	Zoom	Zoom
 
 # RAW Develop feature labels
 	Saved RAW Develop settings to {file}	Setările de developare RAW au fost salvate în {file}
+# Palette grid (Color Table / Indexed Color Custom…)
+	Set Transparent	Stabilește transparent
+	{count} transparent pixels were made opaque	{count} pixeli transparenți au devenit opaci
+	Clear Transparency	Elimină transparența
+	Color Picker (First Color)	Selector de culori (Culoarea primă)
+	Color Picker (Last Color)	Selector de culori (Ultima culoare)
+	Pick a Palette Colour From the Image	Alege o culoare din paletă din imagine
+	Table Color	Culoarea tabelului
+	Palette Color	Culoarea paletei
+	Color Picker	Selector de culori
