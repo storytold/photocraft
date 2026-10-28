@@ -86,9 +86,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let view = target.create_view(&Default::default());
                 let mut last_cpu = start;
                 loop {
-                    if let Ok((error, build_ms)) = build_rx.try_recv() {
-                        samples.push(Sample { build_ms, ok: error.is_none(), error });
-                        break;
+                    match build_rx.try_recv() {
+                        Ok((error, build_ms)) => {
+                            samples.push(Sample { build_ms, ok: error.is_none(), error });
+                            break;
+                        }
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                            samples.push(Sample { build_ms: start.elapsed().as_secs_f64() * 1000.0, ok: false, error: Some("build thread terminated".into()) });
+                            break;
+                        }
+                        Err(std::sync::mpsc::TryRecvError::Empty) => (),
                     }
                     let tick = Instant::now();
                     let mut encoder = device.create_command_encoder(&Default::default());

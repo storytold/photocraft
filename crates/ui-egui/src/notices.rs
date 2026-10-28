@@ -407,6 +407,14 @@ mod tests {
     }
 
     #[test]
+    fn preparing_compositor_does_not_warn_about_large_documents() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        slow_cpu_refresh(&mut app, 1, 60_000.0, Some(&crate::render_path::CpuReason::CompositorBuilding));
+        assert!(app.ui.notices.is_empty());
+        assert!(app.ui.slow_refresh_noticed.is_empty());
+    }
+
+    #[test]
     fn a_slow_cpu_refresh_is_explained_once_per_document() {
         let mut app = PhotocraftApp::new(Session::new(), Services::default());
         let over = crate::render_path::CpuReason::OverBudget { needed: 3600 << 20, budget: 3400 << 20 };

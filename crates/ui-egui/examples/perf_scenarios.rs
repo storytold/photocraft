@@ -372,6 +372,8 @@ fn main() {
     println!("perf_scenarios: {} mode, {} reps, {}", if quick { "quick" } else { "full" }, reps, adapter.as_deref().unwrap_or("CPU canvas"));
     let t_all = Instant::now();
 
+    first_document_scenarios(&mut b, if quick { (640, 480) } else { (1920, 1080) });
+
     // A panic in one group (a crash the scenario found) is reported against the row that was
     // running, and the other groups still run.
     type Group = fn(&mut Bench, &Sizes);
@@ -430,6 +432,78 @@ fn main() {
             std::process::exit(1);
         }
     }
+}
+
+/// Startup costs when a new canvas builds its compositor in the background, as the app does.
+fn first_document_scenarios(b: &mut Bench, (w, h): (u32, u32)) {
+    const FIRST: &str = "first document: UI-thread time to first pixels";
+    const READY: &str = "first document: GPU compositor ready";
+    let Some((_, rs)) = b.gpu.as_ref() else {
+        println!("GPU compositor startup scenarios skipped: no GPU canvas");
+        return;
+    };
+    let rs = rs.clone();
+    if rs.adapter.get_info().device_type == eframe::wgpu::DeviceType::Cpu {
+        println!("GPU compositor startup scenarios skipped: software adapter");
+        return;
+    }
+    for name in [FIRST, READY] {
+        if !b.wanted(name) {
+            continue;
+        }
+        b.current = Some(name.into());
+        b.sampler.reset();
+        let mut samples = Vec::with_capacity(b.reps);
+        let mut failure = None;
+        for _ in 0..b.reps {
+            let canvas = GpuCanvas::new(&rs);
+            let ctx = egui::Context::default();
+            let started = Instant::now();
+            canvas.start_compositor(&ctx);
+            let mut session = Session::new();
+            if let Err(e) = exec(&mut session, "file.new", json!({"width": w, "height": h, "background": "white"})) {
+                failure = Some(e);
+                break;
+            }
+            let first_ms = if name == FIRST {
+                let Some(doc) = session.active().map(|d| &d.doc) else {
+                    failure = Some("file.new did not create a document".into());
+                    break;
+                };
+                canvas.refresh(doc.id.0, doc, None, None);
+                Some(started.elapsed().as_secs_f64() * 1000.0)
+            } else {
+                None
+            };
+            // Wait before starting the next sample so builds cannot overlap or replace resources.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+            loop {
+                if let Some(result) = canvas.take_compositor_completion() {
+                    if let Err((message, _)) = result {
+                        failure = Some(format!("GPU compositor build failed: {message}"));
+                    }
+                    break;
+                }
+                if std::time::Instant::now() >= deadline {
+                    failure = Some("timed out waiting for GPU compositor build".into());
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            if failure.is_some() {
+                break;
+            }
+            samples.push(first_ms.unwrap_or_else(|| started.elapsed().as_secs_f64() * 1000.0));
+        }
+        if let Some(error) = failure {
+            println!("{name:<52} ERROR {error}");
+            b.errors.push((name.into(), error));
+        } else {
+            b.record(name, &Session::new(), &samples, Ok(()));
+        }
+    }
+    // Every fresh canvas replaced the renderer resources; restore the benchmark's canvas.
+    b.gpu = Some((GpuCanvas::new(&rs), rs));
 }
 
 /// #209 rows on the layered 20 MP document.

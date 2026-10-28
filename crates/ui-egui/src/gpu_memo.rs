@@ -152,6 +152,27 @@ mod tests {
     }
 
     #[test]
+    fn changing_any_identity_field_invalidates_a_failure() {
+        let original = MemoKey::default();
+        let mut memo = GpuMemo::new();
+        memo.remember(original.clone(), "compiler failed".into(), "now".into());
+        let variants = [
+            MemoKey { app_version: "new".into(), ..original.clone() },
+            MemoKey { shader_fingerprint: 1, ..original.clone() },
+            MemoKey { adapter_name: "new".into(), ..original.clone() },
+            MemoKey { vendor: 1, ..original.clone() },
+            MemoKey { device: 1, ..original.clone() },
+            MemoKey { driver: "new".into(), ..original.clone() },
+            MemoKey { driver_info: "new".into(), ..original.clone() },
+            MemoKey { backend: "new".into(), ..original.clone() },
+            MemoKey { shader_compiler: "new".into(), ..original.clone() },
+        ];
+        for variant in variants {
+            assert!(memo.get(&variant).is_none());
+        }
+    }
+
+    #[test]
     fn retains_only_eight_newest_entries() {
         let mut memo = GpuMemo::new();
         for n in 0..10 {

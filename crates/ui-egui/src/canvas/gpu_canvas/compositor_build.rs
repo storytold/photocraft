@@ -39,8 +39,8 @@ pub(super) fn start(device: &eframe::wgpu::Device, format: eframe::wgpu::Texture
                 Err(("building the GPU compositor panicked".into(), false)),
             ),
         };
-        *completion.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(outcome);
         *out.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = result;
+        *completion.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(outcome);
         ctx.request_repaint();
     });
     if spawned.is_err() {
