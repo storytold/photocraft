@@ -673,15 +673,13 @@ fn cmd_click_with_the_brush_picks_the_layer_under_the_pointer() {
 /// Tools that keep ⌘ for themselves, and the selection tools (their ⌘ is handled per press in
 /// `canvas`, #896), never become the Move tool this way.
 #[test]
-fn cmd_is_not_the_move_tool_for_selection_hand_zoom_pen_shape_or_type_tools() {
+fn cmd_is_not_the_move_tool_for_selection_hand_zoom_pen_or_shape_tools() {
     for tool in [
         Tool::Hand,
         Tool::RotateView,
         Tool::Zoom,
         Tool::Pen,
         Tool::Rectangle,
-        Tool::Type,
-        Tool::VerticalType,
         Tool::Crop,
         Tool::PathSelection,
         Tool::DirectSelection,
@@ -756,6 +754,69 @@ fn cmd_mid_pan_or_during_free_transform_is_not_the_hand_tools_zoom() {
     hold_mods(&mut h, Modifiers::COMMAND);
     assert_eq!(held_tool(h.state(), &h.ctx), None);
     hold_mods(&mut h, Modifiers::NONE);
+}
+
+/// The text layer's translation.
+fn text_offset(h: &Harness<'static, PhotocraftApp>, id: photocraft_doc::LayerId) -> (f64, f64) {
+    match &h.state().session.active().unwrap().doc.layer(id).unwrap().content {
+        photocraft_doc::LayerContent::Text(t) => (t.transform.m[4], t.transform.m[5]),
+        _ => panic!("not a text layer"),
+    }
+}
+
+/// With a Type tool, ⌘ is the Move tool once the text is committed: ⌘↵ ends the edit and ⌘ still
+/// held then nudges the text layer 1 px with the arrows, 10 px with ⇧, and ⌥ duplicates it first,
+/// from the arrows or a drag. While the text is edited ⌘ stays the type box's.
+#[test]
+fn cmd_after_committing_type_moves_and_duplicates_the_text_layer() {
+    for tool in [Tool::Type, Tool::VerticalType] {
+        let mut h = harness(tool);
+        h.state_mut().ui.tool_options.move_auto_select = false;
+        h.state_mut().ui.extras.snap = false;
+        h.state_mut().ui.view.show.smart_guides = false;
+        let id = photocraft_doc::LayerId(
+            h.state_mut().run("type.create", json!({"text": "HO", "size": 60, "x": 100, "y": 150})).unwrap()["layer"].as_u64().unwrap(),
+        );
+        h.run_steps(2);
+        click(&mut h, 115.0, 130.0, Modifiers::NONE);
+        assert!(h.state().ui.text_edit.is_some(), "{tool:?}: editing");
+        h.event(Event::ModifiersChanged(platform(Modifiers::COMMAND)));
+        h.run_steps(1);
+        assert_eq!(held_tool(h.state(), &h.ctx), None, "{tool:?}: ⌘ is the type box's while editing");
+        key(&mut h, Key::Enter, true, Modifiers::COMMAND);
+        key(&mut h, Key::Enter, false, Modifiers::COMMAND);
+        assert!(h.state().ui.text_edit.is_none(), "{tool:?}: committed");
+        assert_eq!(h.state().ui.tool, tool);
+        assert_eq!(held_tool(h.state(), &h.ctx), Some(Temporary::Move), "{tool:?}");
+        let (x0, y0) = text_offset(&h, id);
+        key(&mut h, Key::ArrowRight, true, Modifiers::COMMAND);
+        key(&mut h, Key::ArrowRight, false, Modifiers::COMMAND);
+        assert_eq!(text_offset(&h, id), (x0 + 1.0, y0), "{tool:?}: ⌘→ nudges 1 px");
+        key(&mut h, Key::ArrowDown, true, Modifiers::COMMAND | Modifiers::SHIFT);
+        key(&mut h, Key::ArrowDown, false, Modifiers::COMMAND | Modifiers::SHIFT);
+        assert_eq!(text_offset(&h, id), (x0 + 1.0, y0 + 10.0), "{tool:?}: ⌘⇧↓ nudges 10 px");
+        let n0 = h.state().session.active().unwrap().doc.layers.len();
+        key(&mut h, Key::ArrowLeft, true, Modifiers::COMMAND | Modifiers::ALT);
+        key(&mut h, Key::ArrowLeft, false, Modifiers::COMMAND | Modifiers::ALT);
+        let st = h.state().session.active().unwrap();
+        assert_eq!(st.doc.layers.len(), n0 + 1, "{tool:?}: ⌘⌥← duplicates");
+        let copy = st.active_layer.unwrap();
+        assert_ne!(copy, id);
+        assert_eq!(text_offset(&h, id), (x0 + 1.0, y0 + 10.0), "{tool:?}: the original stays");
+        assert_eq!(text_offset(&h, copy), (x0, y0 + 10.0), "{tool:?}: the copy moved");
+        assert!(h.state().ui.text_edit.is_none(), "{tool:?}: no new text was started");
+        // ⌘⌥-drag on the copy: another copy, moved by the drag.
+        let (cx, cy) = text_offset(&h, copy);
+        let n1 = h.state().session.active().unwrap().doc.layers.len();
+        drag_raw(&mut h, if cfg!(target_os = "macos") { MAC_CMD_ALT } else { CTRL_ALT }, cx as f32 + 10.0, cy as f32 - 20.0, cx as f32 + 50.0, cy as f32);
+        let st = h.state().session.active().unwrap();
+        assert_eq!(st.doc.layers.len(), n1 + 1, "{tool:?}: ⌘⌥-drag duplicates");
+        let copy2 = st.active_layer.unwrap();
+        assert_eq!(text_offset(&h, copy), (cx, cy), "{tool:?}: the dragged-from copy stays");
+        assert_eq!(text_offset(&h, copy2), (cx + 40.0, cy + 20.0), "{tool:?}: the new copy moved");
+        assert!(h.state().ui.text_edit.is_none(), "{tool:?}");
+        assert_eq!(h.state().ui.tool, tool, "{tool:?}: the tool stays");
+    }
 }
 
 /// The params of the last brush stroke (`paint.stroke`, or the Pencil's `paint.pencil`).
