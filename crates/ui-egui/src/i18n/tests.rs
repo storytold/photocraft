@@ -7,6 +7,7 @@ const CS: fn() -> Lang = || Lang::from_code("cs").expect("cs registered");
 const ID: fn() -> Lang = || Lang::from_code("id").expect("id registered");
 const VI: fn() -> Lang = || Lang::from_code("vi").expect("vi registered");
 const HI: fn() -> Lang = || Lang::from_code("hi").expect("hi registered");
+const NB: fn() -> Lang = || Lang::from_code("nb").expect("nb registered");
 
 #[test]
 fn hindi_tags_resolve() {
@@ -34,6 +35,21 @@ fn vietnamese_tags_resolve() {
     assert_eq!(VI().name(), "Tiếng Việt");
     assert_eq!(Lang::from_pref("vi"), VI());
     assert_eq!(Lang::from_pref("VI"), VI());
+}
+
+#[test]
+fn norwegian_tags_resolve() {
+    for tag in ["nb", "nb-NO", "nb_NO", "nb_NO.UTF-8", "no", "no-NO", "no_NO.UTF-8", "nn", "nn-NO", "nn_NO.UTF-8"] {
+        assert_eq!(lang_from_tag(tag), Some(NB()), "{tag}");
+    }
+    assert_eq!(candidates("nn_NO"), ["nn-no", "nb", "nn"]);
+    assert_eq!(NB().name(), "Norsk bokmål");
+    assert!(NB().complete_menus(), "Norwegian Bokmål translates every source key");
+    assert_eq!(Lang::from_pref("nb"), NB());
+    assert_eq!(Lang::from_pref("NB"), NB());
+    assert_eq!(tr(NB(), "Layer"), "Lag");
+    assert_eq!(trn(NB(), 1, "{n} item", "{n} items"), "1 element");
+    assert_eq!(trn(NB(), 2, "{n} item", "{n} items"), "2 elementer");
 }
 
 #[test]
