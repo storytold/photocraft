@@ -3932,12 +3932,12 @@ curves	Smooth	Làm mượt
 	Decrease Brush Hardness	Giảm độ cứng của cọ
 	Increase Brush Hardness	Tăng độ cứng của cọ
 	Demosaic	Giải khảm
-	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Cách lấp đầy khảm lọc màu của máy ảnh. Áp dụng khi mở tệp; bản xem trước hiển thị phương pháp đã dùng khi mở.
+	How the camera's color filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Cách lấp đầy khảm lọc màu của máy ảnh. Áp dụng khi mở tệp; bản xem trước hiển thị phương pháp đã dùng khi mở.
 	AHD (adaptive homogeneity)	AHD (đồng nhất thích ứng)
 	Malvar–He–Cutler	Malvar–He–Cutler
-	Hirakawa–Parks: the cleanest edges and the least colour fringing, the slowest.	Hirakawa–Parks: cạnh sạch nhất và ít viền màu nhất, chậm nhất.
-	Gradient-corrected interpolation: sharp and fast, with some colour fringing on fine detail.	Nội suy hiệu chỉnh gradient: sắc nét và nhanh, có chút viền màu ở chi tiết nhỏ.
-	The fastest and the softest, with colour fringing on fine detail.	Nhanh nhất và mềm nhất, có viền màu ở chi tiết nhỏ.
+	Hirakawa–Parks: the cleanest edges and the least color fringing, the slowest.	Hirakawa–Parks: cạnh sạch nhất và ít viền màu nhất, chậm nhất.
+	Gradient-corrected interpolation: sharp and fast, with some color fringing on fine detail.	Nội suy hiệu chỉnh gradient: sắc nét và nhanh, có chút viền màu ở chi tiết nhỏ.
+	The fastest and the softest, with color fringing on fine detail.	Nhanh nhất và mềm nhất, có viền màu ở chi tiết nhỏ.
 	“{name}” already exists. Replace it?	“{name}” đã tồn tại. Thay thế?
 	The name in the save dialog was “{name}”.	Tên trong hộp thoại lưu là “{name}”.
 	Previous Brush	Cọ trước

@@ -4342,12 +4342,12 @@ navigator	Zoom	Zoom
 	Decrease Brush Hardness	Reducir dureza del pincel
 	Increase Brush Hardness	Aumentar dureza del pincel
 	Demosaic	Demosaico
-	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Cómo se completa el mosaico del filtro de color de la cámara. Se aplica al abrir el archivo; la vista previa muestra el método con el que se abrió.
+	How the camera's color filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Cómo se completa el mosaico del filtro de color de la cámara. Se aplica al abrir el archivo; la vista previa muestra el método con el que se abrió.
 	AHD (adaptive homogeneity)	AHD (homogeneidad adaptativa)
 	Malvar–He–Cutler	Malvar–He–Cutler
-	Hirakawa–Parks: the cleanest edges and the least colour fringing, the slowest.	Hirakawa–Parks: los bordes más limpios y el menor halo de color; el más lento.
-	Gradient-corrected interpolation: sharp and fast, with some colour fringing on fine detail.	Interpolación con corrección de gradiente: nítida y rápida, con algo de halo de color en el detalle fino.
-	The fastest and the softest, with colour fringing on fine detail.	El más rápido y el más suave, con halo de color en el detalle fino.
+	Hirakawa–Parks: the cleanest edges and the least color fringing, the slowest.	Hirakawa–Parks: los bordes más limpios y el menor halo de color; el más lento.
+	Gradient-corrected interpolation: sharp and fast, with some color fringing on fine detail.	Interpolación con corrección de gradiente: nítida y rápida, con algo de halo de color en el detalle fino.
+	The fastest and the softest, with color fringing on fine detail.	El más rápido y el más suave, con halo de color en el detalle fino.
 	“{name}” already exists. Replace it?	«{name}» ya existe. ¿Reemplazarlo?
 	The name in the save dialog was “{name}”.	El nombre en el cuadro de diálogo Guardar era «{name}».
 	Previous Brush	Pincel anterior

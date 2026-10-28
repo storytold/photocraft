@@ -3907,12 +3907,12 @@ curves	Smooth	Сгладить
 	In White	Входной белый
 	Increase Brush Hardness	Увеличить жёсткость кисти
 	Demosaic	Демозаик
-	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Как восстанавливается мозаика цветного фильтра камеры. Применяется при открытии файла; превью показывает метод, с которым файл был открыт.
+	How the camera's color filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Как восстанавливается мозаика цветного фильтра камеры. Применяется при открытии файла; превью показывает метод, с которым файл был открыт.
 	AHD (adaptive homogeneity)	AHD (адаптивная однородность)
 	Malvar–He–Cutler	Malvar–He–Cutler
-	Hirakawa–Parks: the cleanest edges and the least colour fringing, the slowest.	Хиракава–Паркс: самые чистые края и меньше всего цветной каймы, самый медленный.
-	Gradient-corrected interpolation: sharp and fast, with some colour fringing on fine detail.	Интерполяция с коррекцией градиента: резкая и быстрая, с небольшой цветной каймой на мелких деталях.
-	The fastest and the softest, with colour fringing on fine detail.	Самый быстрый и самый мягкий, с цветной каймой на мелких деталях.
+	Hirakawa–Parks: the cleanest edges and the least color fringing, the slowest.	Хиракава–Паркс: самые чистые края и меньше всего цветной каймы, самый медленный.
+	Gradient-corrected interpolation: sharp and fast, with some color fringing on fine detail.	Интерполяция с коррекцией градиента: резкая и быстрая, с небольшой цветной каймой на мелких деталях.
+	The fastest and the softest, with color fringing on fine detail.	Самый быстрый и самый мягкий, с цветной каймой на мелких деталях.
 	“{name}” already exists. Replace it?	«{name}» уже существует. Заменить?
 	The name in the save dialog was “{name}”.	В окне сохранения было указано имя «{name}».
 	Previous Brush	Предыдущая кисть

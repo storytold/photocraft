@@ -3452,12 +3452,12 @@ curves	Smooth	Glätten
 	{name} was changed by another app after it was opened or saved here.	{name} wurde von einer anderen App geändert, nachdem es hier geöffnet oder gespeichert wurde.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Ersetze die Datei durch dieses Dokument oder brich ab und nutze Datei › Speichern unter, um beide zu behalten.
 	Demosaic	Demosaicing
-	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Wie das Farbfiltermosaik der Kamera aufgefüllt wird. Es wird beim Öffnen der Datei angewendet; die Vorschau zeigt die Methode, mit der sie geöffnet wurde.
+	How the camera's color filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Wie das Farbfiltermosaik der Kamera aufgefüllt wird. Es wird beim Öffnen der Datei angewendet; die Vorschau zeigt die Methode, mit der sie geöffnet wurde.
 	AHD (adaptive homogeneity)	AHD (adaptive Homogenität)
 	Malvar–He–Cutler	Malvar–He–Cutler
-	Hirakawa–Parks: the cleanest edges and the least colour fringing, the slowest.	Hirakawa–Parks: die saubersten Kanten und die wenigsten Farbsäume, am langsamsten.
-	Gradient-corrected interpolation: sharp and fast, with some colour fringing on fine detail.	Gradientenkorrigierte Interpolation: scharf und schnell, mit etwas Farbsäumen an feinen Details.
-	The fastest and the softest, with colour fringing on fine detail.	Am schnellsten und weichsten, mit Farbsäumen an feinen Details.
+	Hirakawa–Parks: the cleanest edges and the least color fringing, the slowest.	Hirakawa–Parks: die saubersten Kanten und die wenigsten Farbsäume, am langsamsten.
+	Gradient-corrected interpolation: sharp and fast, with some color fringing on fine detail.	Gradientenkorrigierte Interpolation: scharf und schnell, mit etwas Farbsäumen an feinen Details.
+	The fastest and the softest, with color fringing on fine detail.	Am schnellsten und weichsten, mit Farbsäumen an feinen Details.
 	“{name}” already exists. Replace it?	„{name}“ ist bereits vorhanden. Ersetzen?
 	The name in the save dialog was “{name}”.	Der Name im Speichern-Dialog war „{name}“.
 	Memory Usage	Speichernutzung

@@ -3101,12 +3101,12 @@ curves	Smooth	平滑
 	Decrease Brush Hardness	减小画笔硬度
 	Increase Brush Hardness	增大画笔硬度
 	Demosaic	去马赛克
-	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	如何填补相机彩色滤镜阵列的马赛克。在打开文件时应用；预览显示打开时所用的方法。
+	How the camera's color filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	如何填补相机彩色滤镜阵列的马赛克。在打开文件时应用；预览显示打开时所用的方法。
 	AHD (adaptive homogeneity)	AHD（自适应同质性）
 	Malvar–He–Cutler	Malvar–He–Cutler
-	Hirakawa–Parks: the cleanest edges and the least colour fringing, the slowest.	Hirakawa–Parks：边缘最干净、色边最少，速度最慢。
-	Gradient-corrected interpolation: sharp and fast, with some colour fringing on fine detail.	梯度校正插值：锐利且快速，细节处有些许色边。
-	The fastest and the softest, with colour fringing on fine detail.	最快也最柔和，细节处有色边。
+	Hirakawa–Parks: the cleanest edges and the least color fringing, the slowest.	Hirakawa–Parks：边缘最干净、色边最少，速度最慢。
+	Gradient-corrected interpolation: sharp and fast, with some color fringing on fine detail.	梯度校正插值：锐利且快速，细节处有些许色边。
+	The fastest and the softest, with color fringing on fine detail.	最快也最柔和，细节处有色边。
 	“{name}” already exists. Replace it?	“{name}”已存在。要替换它吗？
 	The name in the save dialog was “{name}”.	存储对话框中的名称是“{name}”。
 	Previous Brush	上一个画笔

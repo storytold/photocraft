@@ -3447,12 +3447,12 @@ curves	Smooth	Haluskan
 	Decrease Brush Hardness	Kurangi kekerasan kuas
 	Increase Brush Hardness	Tambah kekerasan kuas
 	Demosaic	Demosaik
-	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Cara mosaik filter warna kamera diisi. Diterapkan saat berkas dibuka; pratinjau menampilkan metode yang dipakai saat dibuka.
+	How the camera's color filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Cara mosaik filter warna kamera diisi. Diterapkan saat berkas dibuka; pratinjau menampilkan metode yang dipakai saat dibuka.
 	AHD (adaptive homogeneity)	AHD (homogenitas adaptif)
 	Malvar–He–Cutler	Malvar–He–Cutler
-	Hirakawa–Parks: the cleanest edges and the least colour fringing, the slowest.	Hirakawa–Parks: tepi paling bersih dan pinggiran warna paling sedikit, paling lambat.
-	Gradient-corrected interpolation: sharp and fast, with some colour fringing on fine detail.	Interpolasi terkoreksi gradien: tajam dan cepat, dengan sedikit pinggiran warna pada detail halus.
-	The fastest and the softest, with colour fringing on fine detail.	Paling cepat dan paling lembut, dengan pinggiran warna pada detail halus.
+	Hirakawa–Parks: the cleanest edges and the least color fringing, the slowest.	Hirakawa–Parks: tepi paling bersih dan pinggiran warna paling sedikit, paling lambat.
+	Gradient-corrected interpolation: sharp and fast, with some color fringing on fine detail.	Interpolasi terkoreksi gradien: tajam dan cepat, dengan sedikit pinggiran warna pada detail halus.
+	The fastest and the softest, with color fringing on fine detail.	Paling cepat dan paling lembut, dengan pinggiran warna pada detail halus.
 	“{name}” already exists. Replace it?	“{name}” sudah ada. Ganti?
 	The name in the save dialog was “{name}”.	Nama di dialog simpan adalah “{name}”.
 	Previous Brush	Kuas sebelumnya

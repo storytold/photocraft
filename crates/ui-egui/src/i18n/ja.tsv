@@ -4108,12 +4108,12 @@ curves	Smooth	スムーズ
 	Decrease Brush Hardness	ブラシの硬さを下げる
 	Increase Brush Hardness	ブラシの硬さを上げる
 	Demosaic	デモザイク
-	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	カメラのカラーフィルター配列をどのように補間するか。ファイルを開くときに適用されます。プレビューは開いたときの方式で表示されます。
+	How the camera's color filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	カメラのカラーフィルター配列をどのように補間するか。ファイルを開くときに適用されます。プレビューは開いたときの方式で表示されます。
 	AHD (adaptive homogeneity)	AHD（適応的均質性）
 	Malvar–He–Cutler	Malvar–He–Cutler
-	Hirakawa–Parks: the cleanest edges and the least colour fringing, the slowest.	Hirakawa–Parks：エッジが最もきれいで色にじみが最も少ないが、最も遅い。
-	Gradient-corrected interpolation: sharp and fast, with some colour fringing on fine detail.	勾配補正補間：シャープで高速だが、細部に多少の色にじみが出る。
-	The fastest and the softest, with colour fringing on fine detail.	最も高速で最も柔らかく、細部に色にじみが出る。
+	Hirakawa–Parks: the cleanest edges and the least color fringing, the slowest.	Hirakawa–Parks：エッジが最もきれいで色にじみが最も少ないが、最も遅い。
+	Gradient-corrected interpolation: sharp and fast, with some color fringing on fine detail.	勾配補正補間：シャープで高速だが、細部に多少の色にじみが出る。
+	The fastest and the softest, with color fringing on fine detail.	最も高速で最も柔らかく、細部に色にじみが出る。
 	“{name}” already exists. Replace it?	「{name}」は既に存在します。置き換えますか？
 	The name in the save dialog was “{name}”.	保存ダイアログで指定した名前は「{name}」でした。
 	Previous Brush	前のブラシ
