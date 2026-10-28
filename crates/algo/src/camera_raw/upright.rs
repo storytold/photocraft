@@ -330,28 +330,42 @@ fn solve4(mut a: [[f64; 4]; 4], mut b: [f64; 4]) -> Option<[f64; 4]> {
     x.iter().all(|v| v.is_finite()).then_some(x)
 }
 
+/// The size a `w × h` image is reduced to for line detection, and the reduction factor.
+fn detect_size(w: usize, h: usize) -> (usize, usize, f64) {
+    let long = w.max(h).max(1);
+    let scale = long as f64 / DETECT_SIDE.min(long) as f64;
+    (((w as f64 / scale).round() as usize).max(1), ((h as f64 / scale).round() as usize).max(1), scale)
+}
+
 /// Straight segments in a `w × h` RGBA image, in normalised frame coordinates.
 pub fn detect_segments(px: &[[f32; 4]], w: usize, h: usize) -> Vec<Segment> {
     if w < 8 || h < 8 || px.len() != w.saturating_mul(h) {
         return Vec::new();
     }
-    // Luminance, box-reduced so the long side is at most DETECT_SIDE.
-    let f = w.max(h).div_ceil(DETECT_SIDE).max(1);
-    let (sw, sh) = (w / f, h / f);
+    // Luminance, box-reduced to a long side of DETECT_SIDE (or the image's own, if smaller). A
+    // fixed size rather than an integer factor, so the preview proxy and the full image are
+    // detected at the same scale and the automatic modes fit the same pose to both.
+    let (sw, sh, scale) = detect_size(w, h);
     if sw < 8 || sh < 8 {
         return Vec::new();
     }
+    let span = |i: usize, n: usize| {
+        let lo = ((i as f64 * scale) as usize).min(n - 1);
+        lo..(((i + 1) as f64 * scale) as usize).clamp(lo + 1, n)
+    };
     let mut lum = vec![0.0f32; sw * sh];
     for (y, row) in lum.chunks_exact_mut(sw).enumerate() {
+        let ys = span(y, h);
         for (x, v) in row.iter_mut().enumerate() {
+            let xs = span(x, w);
             let mut acc = 0.0;
-            for yy in y * f..(y + 1) * f {
-                for xx in x * f..(x + 1) * f {
+            for yy in ys.clone() {
+                for xx in xs.clone() {
                     let q = px.get(yy * w + xx).copied().unwrap_or_default();
                     acc += 0.2126 * q[0] + 0.7152 * q[1] + 0.0722 * q[2];
                 }
             }
-            *v = acc / (f * f) as f32;
+            *v = acc / (ys.len() * xs.len()) as f32;
         }
     }
     // A [1 4 6 4 1] / 16 Gaussian each way, so stair-stepped and noisy edges keep one direction.
@@ -466,7 +480,6 @@ pub fn detect_segments(px: &[[f32; 4]], w: usize, h: usize) -> Vec<Segment> {
         if len < min_len || len / width < 5.0 {
             continue;
         }
-        let scale = f as f64;
         let end = |t: f64| [(mx + t * dx + 0.5) * scale, (my + t * dy + 0.5) * scale];
         out.push([to_normalised(end(lo), w, h), to_normalised(end(hi), w, h)]);
     }
@@ -580,6 +593,24 @@ mod tests {
             }
         }
         px
+    }
+
+    /// The preview proxy and the full image are detected at the same scale, so an automatic mode
+    /// fits them the same correction.
+    #[test]
+    fn auto_modes_agree_between_the_proxy_and_the_full_image() {
+        let probe = [[-0.4, -0.3], [0.4, -0.3], [-0.4, 0.3], [0.4, 0.3]];
+        let fit = |w: usize, h: usize| homography("vertical", &[], &picture(w, h, 0.25, 0.01 * 900.0 / w as f64), w, h).expect("a correction");
+        let (proxy, full) = (fit(900, 600), fit(3600, 2400));
+        for p in probe {
+            let (a, b) = (apply(&proxy, p), apply(&full, p));
+            assert!((a[0] - b[0]).hypot(a[1] - b[1]) < 0.01, "{p:?}: {a:?} vs {b:?}");
+        }
+        // The 900-pixel proxy and a 6000-pixel raw both reduce to the same long side.
+        for (w, h) in [(900, 600), (6000, 4000), (6720, 4480), (1600, 1066)] {
+            assert_eq!((detect_size(w, h).0, detect_size(w, h).1), (800, (800.0 * h as f64 / w as f64).round() as usize), "{w}×{h}");
+        }
+        assert_eq!(detect_size(400, 300).0, 400, "smaller images aren't enlarged");
     }
 
     #[test]

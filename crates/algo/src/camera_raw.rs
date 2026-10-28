@@ -1206,10 +1206,10 @@ fn vignette(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw) {
     });
 }
 
-/// Catmull-Rom bicubic sample of the RGB of `src` at pixel coordinates (`x`, `y`) (pixel
-/// centres at integers), clamped to the edges and to the range of the four nearest pixels so it
-/// never rings past them.
-fn bicubic_rgb(src: &[[f32; 4]], w: usize, h: usize, x: f64, y: f64) -> [f32; 3] {
+/// Catmull-Rom bicubic sample of `src` (all four channels) at pixel coordinates (`x`, `y`)
+/// (pixel centres at integers), clamped to the edges and to the range of the four nearest pixels
+/// so it never rings past them.
+fn bicubic(src: &[[f32; 4]], w: usize, h: usize, x: f64, y: f64) -> [f32; 4] {
     let x = if x.is_finite() { x.clamp(0.0, (w - 1) as f64) } else { 0.0 };
     let y = if y.is_finite() { y.clamp(0.0, (h - 1) as f64) } else { 0.0 };
     let (xf, yf) = (x.floor(), y.floor());
@@ -1217,19 +1217,19 @@ fn bicubic_rgb(src: &[[f32; 4]], w: usize, h: usize, x: f64, y: f64) -> [f32; 3]
     let (xi, yi) = (xf as usize, yf as usize);
     let col = |k: usize| (xi + k).saturating_sub(1).min(w - 1);
     let row = |k: usize| (yi + k).saturating_sub(1).min(h - 1);
-    let mut acc = [0.0f32; 3];
+    let mut acc = [0.0f32; 4];
     for (j, wyv) in wy.iter().enumerate() {
         let base = row(j) * w;
         for (i, wxv) in wx.iter().enumerate() {
             let q = src[base + col(i)];
             let k = wxv * wyv;
-            for c in 0..3 {
+            for c in 0..4 {
                 acc[c] += k * q[c];
             }
         }
     }
     let near = [src[row(1) * w + col(1)], src[row(1) * w + col(2)], src[row(2) * w + col(1)], src[row(2) * w + col(2)]];
-    for c in 0..3 {
+    for c in 0..4 {
         let (lo, hi) = near.iter().fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), q| (lo.min(q[c]), hi.max(q[c])));
         acc[c] = acc[c].clamp(lo.min(hi), hi.max(lo));
     }
@@ -1308,7 +1308,8 @@ impl GeometryMap {
 }
 
 /// [`GeometryMap`] over the pixels. The source is sampled with a Catmull-Rom bicubic clamped to
-/// its 2×2 neighbourhood; samples past the frame extend its edges; where the warp has no
+/// its 2×2 neighbourhood, with colour weighted by alpha so transparent pixels don't darken the
+/// edges next to them; samples past the frame extend its edges; where the warp has no
 /// preimage (past the horizon) the edge pixel in that direction is used. Alpha is warped too and
 /// fades out past the frame, so corners the warp uncovers are transparent.
 fn geometry(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw) {
@@ -1319,12 +1320,16 @@ fn geometry(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw) {
     let Some(map) = GeometryMap::new(p, w, h, up.as_ref()) else { return };
     let (cx, cy) = (w as f64 / 2.0, h as f64 / 2.0);
     let src = px.to_vec();
+    let premul: Vec<[f32; 4]> = src.iter().map(|q| [q[0] * q[3], q[1] * q[3], q[2] * q[3], q[3]]).collect();
     par_rows(px, w, 1, |y, row| {
         for (x, q) in row.iter_mut().enumerate() {
             let (ox, oy) = (x as f64 + 0.5, y as f64 + 0.5);
             let at = map.source_of(ox, oy).unwrap_or([cx + (ox - cx) * 1e4, cy + (oy - cy) * 1e4]);
-            let c = bicubic_rgb(&src, w, h, at[0] - 0.5, at[1] - 0.5);
-            q[..3].copy_from_slice(&c);
+            let s = bicubic(&premul, w, h, at[0] - 0.5, at[1] - 0.5);
+            let a = s[3];
+            for c in 0..3 {
+                q[c] = if a > 1e-6 { s[c] / a } else { 0.0 };
+            }
             q[3] = bilinear_alpha(&src, w, h, at[0] - 0.5, at[1] - 0.5) * coverage(at[0], w) * coverage(at[1], h);
         }
     });
@@ -1811,5 +1816,17 @@ mod tests {
             CameraRaw { transform_rotate: f32::NAN, transform_scale: 1e9, upright_guides: vec![[[f32::INFINITY, 0.0], [0.0, 0.0]]], ..Default::default() };
         p.clamp_geometry();
         assert_eq!((p.transform_rotate, p.transform_scale, p.upright_guides.len()), (0.0, 150.0, 0));
+    }
+
+    /// A warp blends colour weighted by alpha: the black under transparent pixels doesn't bleed
+    /// into the opaque white beside them as a dark fringe.
+    #[test]
+    fn geometry_keeps_edges_next_to_transparency_clean() {
+        let (w, h) = (40, 30);
+        let base: Vec<[f32; 4]> = (0..w * h).map(|i| if i % w < w / 2 { [1.0, 1.0, 1.0, 1.0] } else { [0.0; 4] }).collect();
+        let out = run(&base, w, h, &CameraRaw { transform_rotate: 3.0, ..Default::default() });
+        for q in out.iter().filter(|q| q[3] > 0.05) {
+            assert!(q[..3].iter().all(|&v| v > 0.99), "a dark fringe: {q:?}");
+        }
     }
 }

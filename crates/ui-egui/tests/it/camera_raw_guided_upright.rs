@@ -52,6 +52,18 @@ fn key(h: &mut Harness<'_, PhotocraftApp>, key: Key, modifiers: Modifiers) {
 fn params(h: &Harness<'_, PhotocraftApp>) -> Value {
     inspect(h)["params"].clone()
 }
+/// Runs frames until the preview worker has nothing in flight and `done` holds, for up to 10 s
+/// (CI runners are busy).
+fn settle(h: &mut Harness<'_, PhotocraftApp>, done: impl Fn(&Value) -> bool) {
+    for _ in 0..2000 {
+        let d = inspect(h);
+        if d["previewPending"] == false && done(&d) {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        h.run_steps(1);
+    }
+}
 /// A point at fractions of the preview image.
 fn at(r: Rect, x: f32, y: f32) -> Pos2 {
     pos2(r.left() + x * r.width(), r.top() + y * r.height())
@@ -70,20 +82,16 @@ fn shift_t_then_two_guides_straighten_and_undo_one_at_a_time() {
     drag(&mut h, at(r, 0.22, 0.1), at(r, 0.18, 0.9));
     assert_eq!(params(&h)["uprightGuides"].as_array().unwrap().len(), 1);
     assert_eq!(inspect(&h)["view"], zoom_before, "drawing a guide doesn't zoom");
+    // Let the first guide's render land, so the revision below can only move for the second.
+    settle(&mut h, |_| true);
     let revision = inspect(&h)["previewRevision"].clone();
     drag(&mut h, at(r, 0.78, 0.1), at(r, 0.82, 0.9));
     let guides = params(&h)["uprightGuides"].clone();
     assert_eq!(guides.as_array().unwrap().len(), 2);
     let g0 = &guides[0];
     assert!((g0[0][0].as_f64().unwrap() - 0.22).abs() < 0.01 && (g0[1][1].as_f64().unwrap() - 0.9).abs() < 0.01, "{g0}");
-    // The preview develops on a worker: give it up to 10 s to land (CI runners are busy).
-    for _ in 0..2000 {
-        if inspect(&h)["previewRevision"] != revision {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-        h.run_steps(1);
-    }
+    // The preview develops on a worker.
+    settle(&mut h, |d| d["previewRevision"] != revision);
     assert_ne!(inspect(&h)["previewRevision"], revision, "the second guide re-renders the preview");
     // Delete removes the selected (last drawn) guide; ⌘Z brings it back.
     key(&mut h, Key::Delete, Modifiers::NONE);
