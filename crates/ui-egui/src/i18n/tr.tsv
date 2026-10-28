@@ -4239,3 +4239,5 @@ cameraRaw	Guided	Kılavuzlu
 	Saved Camera Raw settings to {file}	Camera Raw ayarları {file} dosyasına kaydedildi
 	Save the settings to each raw's sidecar without opening it	Ayarları her raw dosyasının yan dosyasına kaydet, açmadan
 	No settings saved: these raws can't keep a sidecar here	Hiçbir şey kaydedilmedi: bu raw dosyaları burada yan dosyaya sahip olamaz
+	Some settings could not be saved; the raws stay open	Bazı ayarlar kaydedilemedi; raw dosyaları açık kalıyor
+	Nothing to save: these raws are at their default settings	Kaydedilecek bir şey yok: bu raw dosyaları varsayılan ayarlarda

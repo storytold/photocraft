@@ -4441,3 +4441,5 @@ cameraRaw	Guided	Guiado
 	Saved Camera Raw settings to {file}	Configurações do Camera Raw salvas em {file}
 	Save the settings to each raw's sidecar without opening it	Salvar as configurações no arquivo sidecar de cada raw sem abri-lo
 	No settings saved: these raws can't keep a sidecar here	Nada foi salvo: estes raw não podem ter um arquivo sidecar aqui
+	Some settings could not be saved; the raws stay open	Não foi possível salvar algumas configurações; os raw continuam abertos
+	Nothing to save: these raws are at their default settings	Nada para salvar: estes raw estão nas configurações padrão

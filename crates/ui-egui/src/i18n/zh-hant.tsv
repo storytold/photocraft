@@ -3150,3 +3150,5 @@ cameraRaw	Guided	引導
 	Saved Camera Raw settings to {file}	已將 Camera Raw 設定儲存到 {file}
 	Save the settings to each raw's sidecar without opening it	將設定儲存到每個 Raw 的附屬檔案，不開啟它
 	No settings saved: these raws can't keep a sidecar here	未儲存任何內容：這些 Raw 在此處無法擁有附屬檔案
+	Some settings could not be saved; the raws stay open	部分設定無法儲存；Raw 保持開啟
+	Nothing to save: these raws are at their default settings	無需儲存：這些 Raw 均為預設設定

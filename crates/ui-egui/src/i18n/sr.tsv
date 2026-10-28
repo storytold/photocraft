@@ -4583,3 +4583,5 @@ cameraRaw	Guided	Vođeno
 	Saved Camera Raw settings to {file}	Подешавања Camera Raw сачувана у {file}
 	Save the settings to each raw's sidecar without opening it	Sačuvaj podešavanja u prateću datoteku svakog raw snimka bez otvaranja
 	No settings saved: these raws can't keep a sidecar here	Ništa nije sačuvano: ovi raw snimci ovde ne mogu imati prateću datoteku
+	Some settings could not be saved; the raws stay open	Neka podešavanja nije moguće sačuvati; raw snimci ostaju otvoreni
+	Nothing to save: these raws are at their default settings	Nema šta da se sačuva: ovi raw snimci imaju podrazumevana podešavanja

@@ -4190,3 +4190,5 @@ cameraRaw	Guided	ガイド付き
 	Saved Camera Raw settings to {file}	Camera Raw の設定を {file} に保存しました
 	Save the settings to each raw's sidecar without opening it	各 Raw のサイドカーファイルに設定を保存し、開かずに閉じます
 	No settings saved: these raws can't keep a sidecar here	保存されませんでした：これらの Raw にはここでサイドカーファイルを作成できません
+	Some settings could not be saved; the raws stay open	一部の設定を保存できませんでした。Raw は開いたままです
+	Nothing to save: these raws are at their default settings	保存するものはありません：これらの Raw は初期設定のままです

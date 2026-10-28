@@ -4224,3 +4224,5 @@ cameraRaw	Guided	За напрямними
 	Saved Camera Raw settings to {file}	Налаштування Camera Raw збережено в {file}
 	Save the settings to each raw's sidecar without opening it	Зберегти налаштування в супровідний файл кожного raw, не відкриваючи його
 	No settings saved: these raws can't keep a sidecar here	Нічого не збережено: ці raw тут не можуть мати супровідного файлу
+	Some settings could not be saved; the raws stay open	Не вдалося зберегти деякі налаштування; raw залишаються відкритими
+	Nothing to save: these raws are at their default settings	Нічого зберігати: ці raw мають типові налаштування

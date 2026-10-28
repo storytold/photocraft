@@ -4261,3 +4261,5 @@ cameraRaw	Guided	S vodítky
 	Saved Camera Raw settings to {file}	Nastavení Camera Raw uložena do {file}
 	Save the settings to each raw's sidecar without opening it	Uložit nastavení do souboru sidecar každého snímku raw bez jeho otevření
 	No settings saved: these raws can't keep a sidecar here	Nic neuloženo: tyto snímky raw zde nemohou mít soubor sidecar
+	Some settings could not be saved; the raws stay open	Některá nastavení nelze uložit; snímky raw zůstávají otevřené
+	Nothing to save: these raws are at their default settings	Není co ukládat: tyto snímky raw mají výchozí nastavení
