@@ -3,6 +3,7 @@ use super::paths::{extension, file_name, join, list_images, read_file, stem};
 use super::processing::parse_steps;
 use super::save::{SaveOpts, save_doc};
 use super::{Arc, Document, EngineError, Result, Session, Value, batch_naming, json, str_param};
+use crate::jobs::JobCtx;
 
 /// Inputs of a batch command: `"input"` is a folder or an array of files.
 pub(crate) fn batch_inputs(p: &Value, cmd: &str) -> Result<Vec<String>> {
@@ -129,11 +130,15 @@ pub(crate) fn process_tree(
     suffix: &str,
     f: &dyn Fn(&mut Session, &str) -> Result<bool>,
 ) -> Value {
+    let raw_ppi = s.prefs().raw_defaults.resolution;
     let outputs = inputs.iter().map(|BatchInput { path, rel_dir }| {
         let ext = if format == "same" { same_format(path) } else { format.trim_start_matches('.').to_ascii_lowercase() };
-        (path.as_str(), join(&join(output, rel_dir), &format!("{}{suffix}.{ext}", stem(path))))
+        (path.clone(), join(&join(output, rel_dir), &format!("{}{suffix}.{ext}", stem(path))))
     });
-    process_outputs(s, outputs, save, f)
+    match process_outputs(raw_ppi, outputs, save, &JobCtx::default(), f) {
+        Ok(v) => v,
+        Err(e) => json!({"files": [], "errors": [{"error": e.to_string()}]}),
+    }
 }
 
 /// The extension a batch output takes with Format "Same": the input's own, except for formats
@@ -176,39 +181,47 @@ fn same_format_takes_the_file_names_extension() {
     assert_eq!(same_format("/in/.hidden"), "png");
 }
 
-fn process_outputs<'a>(
-    s: &Session,
-    outputs: impl IntoIterator<Item = (&'a str, String)>,
+pub(super) fn process_outputs(
+    raw_ppi: f64,
+    outputs: impl IntoIterator<Item = (String, String)>,
     save: SaveOpts,
+    ctx: &JobCtx,
     f: &dyn Fn(&mut Session, &str) -> Result<bool>,
-) -> Value {
-    // The scratch sessions have default preferences; a raw opens at the user's Raw Defaults.
-    let raw_ppi = s.prefs().raw_defaults.resolution;
+) -> Result<Value> {
+    let outputs: Vec<(String, String)> = outputs.into_iter().collect();
+    let total = outputs.len();
     let mut files = Vec::new();
     let mut errors = Vec::new();
     let mut written = OutputClaims::default();
-    for (path, out) in outputs {
+    for (i, (path, out)) in outputs.iter().enumerate() {
+        ctx.check()?;
+        if total > 0 {
+            ctx.progress(i as f32 / total as f32, &format!("{} ({}/{})", file_name(path), i + 1, total));
+        }
         let r = (|| -> Result<()> {
-            written.check(&out).map_err(EngineError::Other)?;
+            written.check(out).map_err(EngineError::Other)?;
             let bytes = read_file(path)?;
             let mut scratch = Session::new();
             let doc = import_at_raw_ppi(raw_ppi, &file_name(path), &bytes)?;
-            scratch.add_document(doc, Some(path.to_string()));
-            if !f(&mut scratch, &out)? {
+            scratch.add_document(doc, Some(path.clone()));
+            if !f(&mut scratch, out)? {
                 let d = scratch.active().ok_or(EngineError::NoDocument)?;
-                save_doc(&d.doc, &out, save)?;
+                save_doc(&d.doc, out, save)?;
             }
             Ok(())
         })();
         match r {
             Ok(()) => {
-                written.record(&out, path);
-                files.push(out);
+                written.record(out, path);
+                files.push(out.clone());
             }
             Err(e) => errors.push(json!({"file": path, "error": e.to_string()})),
         }
     }
-    json!({"files": files, "errors": errors})
+    if total > 0 {
+        ctx.progress(1.0, "");
+    }
+    Ok(json!({"files": files, "errors": errors}))
 }
 
 /// The output paths a batch run has written, so a later input whose output name matches an
@@ -244,18 +257,78 @@ pub(crate) fn batch_keeps_step(id: &str) -> bool {
     (batch_save_point(id) || !crate::actions_cmds::shell_save_command(id)) && !crate::actions_cmds::shell_view_command(id)
 }
 
+/// A recorded Open, skipped when Override Action "Open" Commands is on (the default): Batch
+/// already opened the source file.
+pub(crate) fn batch_open_command(id: &str) -> bool {
+    matches!(id, "file.open" | "file.openAs" | "file.openExrParts") || id.starts_with("file.openRecent")
+}
+
+/// Close after Destination Save and Close: Batch writes the result and discards the scratch session.
+fn batch_close_command(id: &str) -> bool {
+    matches!(id, "file.close" | "file.closeAll" | "file.closeOthers")
+}
+
+/// Photoshop Batch Destination: a folder of copies, or write each result over its source.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BatchDest {
+    Folder,
+    SaveAndClose,
+}
+
+fn batch_destination(p: &Value, cmd: &str) -> Result<BatchDest> {
+    match p.get("destination") {
+        None | Some(Value::Null) => Ok(BatchDest::Folder),
+        Some(Value::String(s)) if s == "folder" => Ok(BatchDest::Folder),
+        Some(Value::String(s)) if s == "saveAndClose" => Ok(BatchDest::SaveAndClose),
+        Some(Value::String(s)) => Err(EngineError::BadParams { cmd: cmd.into(), msg: format!("\"destination\" is `{s}`; it is `folder` or `saveAndClose`") }),
+        Some(_) => Err(EngineError::BadParams { cmd: cmd.into(), msg: "\"destination\" must be \"folder\" or \"saveAndClose\"".into() }),
+    }
+}
+
+fn override_open_param(p: &Value, cmd: &str) -> Result<bool> {
+    match p.get("overrideOpen") {
+        None | Some(Value::Null) => Ok(true),
+        Some(Value::Bool(b)) => Ok(*b),
+        Some(_) => Err(EngineError::BadParams { cmd: cmd.into(), msg: "\"overrideOpen\" must be true or false".into() }),
+    }
+}
+
+/// Destination Save and Close: overwrite the source, or write a sibling with a different extension.
+fn save_and_close_path(path: &str, format: &str) -> String {
+    if format == "same" {
+        return path.to_string();
+    }
+    let ext = format.trim_start_matches('.').to_ascii_lowercase();
+    let dir = std::path::Path::new(path).parent().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
+    join(&dir, &format!("{}.{ext}", stem(path)))
+}
+
 pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.automate.batch";
     let mut steps =
         parse_steps(p.get("steps").or_else(|| p.get("action")).ok_or_else(|| EngineError::BadParams { cmd: cmd.into(), msg: "missing \"steps\"".into() })?)?;
-    // Each result goes to the destination folder, which overrides the action's recorded Save /
-    // Save As steps: they only mark the result.
-    steps.retain(|(id, _)| batch_keeps_step(id) && id != "file.export.quickExport");
+    let dest = batch_destination(p, cmd)?;
+    let override_open = override_open_param(p, cmd)?;
+    let save_and_close = dest == BatchDest::SaveAndClose;
+    // Folder destination overrides recorded Save / Save As (they only mark the result). Save and
+    // Close also skips Open (the source file is already loaded) and Close (the scratch session ends).
+    steps.retain(|(id, _)| {
+        if override_open && batch_open_command(id) {
+            return false;
+        }
+        if save_and_close && batch_close_command(id) {
+            return false;
+        }
+        batch_keeps_step(id) && id != "file.export.quickExport"
+    });
     if let Some((id, _)) = steps.iter().find(|(id, _)| !batch_save_point(id) && crate::commands::find(id).is_none()) {
         return Err(EngineError::BadParams { cmd: cmd.into(), msg: format!("unknown command `{id}` in the action") });
     }
-    let output = str_param(p, "output", cmd)?.to_string();
+    let output = if save_and_close { String::new() } else { str_param(p, "output", cmd)?.to_string() };
     let inputs = batch_inputs_tree(p, cmd, &output)?;
+    if inputs.is_empty() {
+        return Err(EngineError::BadParams { cmd: cmd.into(), msg: "no input images".into() });
+    }
     let format = p.get("format").and_then(Value::as_str).unwrap_or("same").to_string();
     // Steps that call another action play it from the caller's actions; the playback stack comes
     // along so an action that batches itself is caught as a recursive call.
@@ -290,52 +363,71 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         playback_steps,
         ..Default::default()
     };
-    let names = batch_naming::plan(&inputs, &output, &format, p)?;
+    let names = if save_and_close { None } else { batch_naming::plan(&inputs, &output, &format, p)? };
     let save = SaveOpts::from_params(s, p, cmd)?;
     let authorize = s.authorize;
-    // Each input runs in its own scratch session, so what the played steps spend is carried from
-    // one input to the next (failed or not) and back to this session, not restarted per input.
-    let carried = std::cell::Cell::new(playback_steps);
-    let carried = &carried;
-    let run = move |scratch: &mut Session, out: &str| {
-        scratch.authorize = authorize;
-        scratch.actions = actions.clone();
-        scratch.actions.playback_steps = carried.get();
-        let result = (|| {
-            // The document as the last recorded save found it, written once the action has run so a
-            // failing step still writes nothing.
-            let mut saved: Option<Arc<Document>> = None;
-            for (id, params) in &steps {
-                if batch_save_point(id) {
-                    saved = Some(scratch.active().ok_or(EngineError::NoDocument)?.doc.clone());
-                    continue;
-                }
-                let r = scratch.execute(id, params.clone())?;
-                // A failed step inside a called action makes this file an error, not a saved result.
-                if let Some(error) = crate::actions_cmds::nested_failure(id, &r) {
-                    return Err(EngineError::Other(error));
-                }
-            }
-            // While the saved document is still open the steps after the save reach the result too
-            // (#3058), so it is saved after the action as usual. Closed after its save, or with another
-            // document left active, it is written as the save found it.
-            match saved {
-                Some(doc) if scratch.active().is_none_or(|d| d.doc.id != doc.id) => {
-                    save_doc(&doc, out, save)?;
-                    Ok(true)
-                }
-                _ => Ok(false),
-            }
-        })();
-        carried.set(scratch.actions.playback_steps);
-        result
+    let raw_ppi = s.prefs().raw_defaults.resolution;
+    let playing = s.actions.playing > 0;
+    let outputs: Vec<(String, String)> = if save_and_close {
+        inputs.iter().map(|i| (i.path.clone(), save_and_close_path(&i.path, &format))).collect()
+    } else if let Some(names) = names {
+        inputs.iter().map(|i| i.path.clone()).zip(names).collect()
+    } else {
+        inputs
+            .iter()
+            .map(|BatchInput { path, rel_dir }| {
+                let ext = if format == "same" { same_format(path) } else { format.trim_start_matches('.').to_ascii_lowercase() };
+                (path.clone(), join(&join(&output, rel_dir), &format!("{}.{ext}", stem(path))))
+            })
+            .collect()
     };
-    let r = match names {
-        Some(names) => process_outputs(s, inputs.iter().map(|i| i.path.as_str()).zip(names), save, &run),
-        None => process_tree(s, &inputs, &output, &format, save, "", &run),
-    };
-    if s.actions.playing > 0 {
-        s.actions.playback_steps = carried.get();
-    }
-    Ok(r)
+    crate::jobs::run(
+        s,
+        "Batch",
+        false,
+        move |ctx| {
+            let carried = std::cell::Cell::new(playback_steps);
+            let run = |scratch: &mut Session, out: &str| {
+                scratch.authorize = authorize;
+                scratch.actions = actions.clone();
+                scratch.actions.playback_steps = carried.get();
+                let result = (|| {
+                    // The document as the last recorded save found it, written once the action has run so a
+                    // failing step still writes nothing.
+                    let mut saved: Option<Arc<Document>> = None;
+                    for (id, params) in &steps {
+                        if batch_save_point(id) {
+                            saved = Some(scratch.active().ok_or(EngineError::NoDocument)?.doc.clone());
+                            continue;
+                        }
+                        let r = scratch.execute(id, crate::layer_multi_cmds::playback_retarget(scratch, params.clone()))?;
+                        // A failed step inside a called action makes this file an error, not a saved result.
+                        if let Some(error) = crate::actions_cmds::nested_failure(id, &r) {
+                            return Err(EngineError::Other(error));
+                        }
+                    }
+                    // While the saved document is still open the steps after the save reach the result too
+                    // (#3058), so it is saved after the action as usual. Closed after its save, or with another
+                    // document left active, it is written as the save found it.
+                    match saved {
+                        Some(doc) if scratch.active().is_none_or(|d| d.doc.id != doc.id) => {
+                            save_doc(&doc, out, save)?;
+                            Ok(true)
+                        }
+                        _ => Ok(false),
+                    }
+                })();
+                carried.set(scratch.actions.playback_steps);
+                result
+            };
+            let value = process_outputs(raw_ppi, outputs, save, ctx, &run)?;
+            Ok((value, carried.get()))
+        },
+        move |s, (value, playback)| {
+            if playing {
+                s.actions.playback_steps = playback;
+            }
+            Ok(value)
+        },
+    )
 }

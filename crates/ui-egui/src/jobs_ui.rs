@@ -525,6 +525,12 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
             app.sync_views();
             crate::file_ui::print_status(app, result);
         }
+        JobOutcome::Done(ref result) if matches!(e.command.as_str(), "file.automate.batch" | "file.scripts.imageProcessor") => {
+            crate::dialogs::report_batch_run(app, &e.command, Some(result));
+            if app.ui.status_error {
+                notices::error(app, app.ui.status.clone());
+            }
+        }
         JobOutcome::Done(_) => {
             app.sync_views();
             app.ui.status = e.label;
@@ -729,20 +735,32 @@ pub fn status_progress(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
 }
 
+/// Batch / Image Processor: a folder job that does not lock the open document, shown at once so
+/// Save and Close is not a silent freeze.
+fn folder_job(app: &PhotocraftApp) -> Option<JobInfo> {
+    app.session.jobs().into_iter().rev().find(|j| matches!(j.command.as_str(), "file.automate.batch" | "file.scripts.imageProcessor"))
+}
+
 /// The modal progress window for a job locking the active document (Photoshop shows one for
 /// long filters): title, status, bar, percentage and elapsed time, Cancel. Appears after
 /// [`DIALOG_DELAY_MS`]; Esc cancels (see [`tick`]). A save shows it only when it runs in the
 /// foreground (Save in Background off), and then at once, so nothing can be clicked meanwhile; a
-/// background save shows its progress in the tab and the status bar instead.
+/// background save shows its progress in the tab and the status bar instead. Batch shows at once
+/// even without a locked document.
 pub fn dialog(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let j = match foreground_save(app) {
         Some(j) => j,
         None => {
-            let Some(j) = app.session.active_job() else { return };
-            if j.elapsed_ms < DIALOG_DELAY_MS || app.jobs.saves.iter().any(|s| s.job == j.id) {
+            if let Some(j) = app.session.active_job() {
+                if j.elapsed_ms < DIALOG_DELAY_MS || app.jobs.saves.iter().any(|s| s.job == j.id) {
+                    return;
+                }
+                j
+            } else if let Some(j) = folder_job(app) {
+                j
+            } else {
                 return;
             }
-            j
         }
     };
     let t = Tokens::get(ctx);

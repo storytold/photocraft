@@ -1,5 +1,6 @@
 //! #7942 / #7531: path fields of command dialogs get a Browse… button (Artboards to Files'
-//! folder, Install Plug-in…'s .wasm file) that fills the field from a file dialog.
+//! folder, Batch/Image Processor source and destination, Install Plug-in…'s .wasm file) that
+//! fills the field from a file dialog.
 use crate::PhotocraftApp;
 use crate::file_dialog::{FileDialogAnswer, FileDialogRequest};
 use egui::vec2;
@@ -80,4 +81,28 @@ fn image_processor_folders_are_chosen_with_browse() {
     h.run_steps(4);
     assert_eq!(field(&h, "output"), Some(json!("/tmp/web")));
     assert!(matches!(asked.borrow().as_slice(), [FileDialogRequest::Folder { .. }, FileDialogRequest::Folder { .. }]));
+}
+
+#[test]
+fn batch_input_folder_is_chosen_with_browse() {
+    let (mut h, asked) = harness(vec![Some(FileDialogAnswer::FolderTo("/tmp/photos".into()))]);
+    h.state_mut().run("file.new", json!({"width": 64, "height": 64})).unwrap();
+    h.state_mut().run("actions.record", json!({"name": "Invert"})).unwrap();
+    h.state_mut().run("image.adjustments.invert", json!({})).unwrap();
+    h.state_mut().run("actions.stop", json!({})).unwrap();
+    h.state_mut().sync_views();
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "file.automate.batch", json!({})).unwrap();
+    h.run_steps(4);
+    assert!(field(&h, "input").is_some(), "the dialog has an Input field");
+    assert_eq!(field(&h, "destination"), Some(json!("saveAndClose")));
+    assert!(h.query_all_by_label("Destination").count() >= 1, "Destination is on the form");
+    assert!(h.query_by_label("Output").is_none(), "Save and Close hides the destination folder");
+    assert!(h.query_by_label("Override Action \"Open\" Commands").is_some());
+    assert_eq!(h.query_all_by_label("Browse…").count(), 1, "only Input has Browse… when Save and Close");
+    h.query_all_by_label("Browse…").next().unwrap().click();
+    h.run_steps(4);
+    assert!(matches!(asked.borrow().as_slice(), [FileDialogRequest::Folder { .. }]));
+    assert_eq!(field(&h, "input"), Some(json!("/tmp/photos")));
+    assert!(field(&h, crate::dialogs::BROWSE_FIELD).is_none(), "the request is consumed");
 }

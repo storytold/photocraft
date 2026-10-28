@@ -20,10 +20,10 @@ mod options;
 
 pub use arrange::cells;
 pub(crate) use arrange::float_window;
-pub(crate) use dialogs::write_copy;
 #[cfg(test)]
 use dialogs::{form, front, label_of};
 pub use dialogs::{form_body, form_keys, reset_form};
+pub(crate) use dialogs::{resolve_batch_action, write_copy};
 #[cfg(test)]
 use dispatch::is_enabled_with_engine;
 pub use dispatch::{checked, handles, invoke, is_enabled};

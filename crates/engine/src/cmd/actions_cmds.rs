@@ -390,7 +390,7 @@ fn run_recorded(s: &mut Session, action: &Action, from: usize) -> (u64, Option<V
             ran += 1;
             continue;
         }
-        match s.execute(id, params.clone()) {
+        match s.execute(id, crate::layer_multi_cmds::playback_retarget(s, params.clone())) {
             Ok(value) => {
                 if let Some(error) = nested_failure(id, &value) {
                     failed = Some(json!({"step": i, "id": id, "error": error}));

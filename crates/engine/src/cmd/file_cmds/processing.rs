@@ -1,6 +1,6 @@
-use super::batch_run::{batch_inputs_tree, process_tree};
+use super::batch_run::{BatchInput, batch_inputs_tree, process_outputs, same_format};
 use super::open::import_opened;
-use super::paths::{file_name, list_images, read_file, stem};
+use super::paths::{file_name, join, list_images, read_file, stem};
 use super::save::SaveOpts;
 use super::{
     ColorMode, Document, EngineError, Layer, LayerContent, LayerId, Result, Session, Surface, Value, buffer_surface, flattened_checked, json, size_param,
@@ -94,16 +94,35 @@ pub(super) fn image_processor(s: &mut Session, p: &Value) -> Result<Value> {
         (w, h) => Some(json!({"width": w.unwrap_or(1e9), "height": h.unwrap_or(1e9), "dontEnlarge": true})),
     };
     let to_srgb = p.get("convertToSrgb").and_then(Value::as_bool).unwrap_or(false);
-    let r = process_tree(s, &inputs, &output, &format, SaveOpts::from_params(s, p, cmd)?.or_quality(8.0), "", &|scratch, _| {
-        if to_srgb && scratch.active().is_some_and(|d| d.doc.mode != ColorMode::Rgb) {
-            scratch.execute("image.mode.rgb", json!({}))?;
-        }
-        if let Some(fp) = &fit {
-            fit_image(scratch, fp)?;
-        }
-        Ok(false)
-    });
-    Ok(r)
+    if inputs.is_empty() {
+        return Err(EngineError::BadParams { cmd: cmd.into(), msg: "no input images".into() });
+    }
+    let save = SaveOpts::from_params(s, p, cmd)?.or_quality(8.0);
+    let raw_ppi = s.prefs().raw_defaults.resolution;
+    let outputs: Vec<(String, String)> = inputs
+        .iter()
+        .map(|BatchInput { path, rel_dir }| {
+            let ext = if format == "same" { same_format(path) } else { format.trim_start_matches('.').to_ascii_lowercase() };
+            (path.clone(), join(&join(&output, rel_dir), &format!("{}.{ext}", stem(path))))
+        })
+        .collect();
+    crate::jobs::run(
+        s,
+        "Image Processor",
+        false,
+        move |ctx| {
+            process_outputs(raw_ppi, outputs, save, ctx, &|scratch, _| {
+                if to_srgb && scratch.active().is_some_and(|d| d.doc.mode != ColorMode::Rgb) {
+                    scratch.execute("image.mode.rgb", json!({}))?;
+                }
+                if let Some(fp) = &fit {
+                    fit_image(scratch, fp)?;
+                }
+                Ok(false)
+            })
+        },
+        |_, value| Ok(value),
+    )
 }
 
 pub(super) fn load_files_into_stack(s: &mut Session, p: &Value) -> Result<Value> {

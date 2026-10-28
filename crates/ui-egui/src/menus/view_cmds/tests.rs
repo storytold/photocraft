@@ -266,7 +266,12 @@ fn batch_menu_requires_a_recorded_action() {
 
     assert!(crate::menus::is_enabled(&app, "file.automate.batch"));
     let dialog = menu(&mut app, &ctx, "file.automate.batch", json!({})).unwrap()["dialog"].as_u64().unwrap();
-    assert_eq!(app.ui.dialog_mut(dialog).unwrap().fields["action"], "Invert");
+    let fields = &app.ui.dialog_mut(dialog).unwrap().fields;
+    assert_eq!(fields["action"], "Invert");
+    assert_eq!(fields["destination"], "saveAndClose");
+    assert_eq!(fields["__choices"]["destination"], json!(["saveAndClose", "folder"]));
+    assert_eq!(fields["overrideOpen"], true);
+    assert_eq!(fields["__labels"]["saveAndClose"], "Save and Close");
 }
 
 #[test]
@@ -438,12 +443,138 @@ fn batch_dialogs_include_all_subfolders() {
         assert_eq!(fields["includeSubfolders"], json!(false), "{id}");
         assert_eq!(fields["__labels"]["includeSubfolders"], json!("Include All Subfolders"), "{id}");
         fields.insert("input".into(), json!(input));
+        fields.insert("destination".into(), json!("folder"));
         fields.insert("output".into(), json!(dir.join(out).to_string_lossy()));
         fields.insert("includeSubfolders".into(), json!(true));
         let r = crate::dialogs::confirm(&mut app, d).unwrap();
         assert_eq!(r["files"].as_array().map(Vec::len), Some(1), "{id}: {r}");
         assert!(dir.join(out).join("sub").is_dir(), "{id} keeps the subfolder: {r}");
+        assert!(app.ui.status.contains("Processed"), "{id} reports that it ran: {}", app.ui.status);
+        assert!(!app.ui.status_error, "{id}: {}", app.ui.status);
     }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Choosing another recorded action in the Batch dialog runs that action, not the one selected
+/// in the Actions panel when the dialog opened.
+#[test]
+fn batch_dialog_runs_the_action_chosen_in_the_dialog() {
+    let (mut app, ctx) = app_with(1);
+    app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    let dir = std::env::temp_dir().join(format!("photocraft-ui-batch-action-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("in")).unwrap();
+    let input = dir.join("in").to_string_lossy().into_owned();
+    let output = dir.join("out").to_string_lossy().into_owned();
+    app.run("file.saveACopy", json!({"path": dir.join("in/a.png").to_string_lossy()})).unwrap();
+    app.session.actions.list = vec![
+        photocraft_engine::actions_cmds::Action::new("Invert", vec![("image.adjustments.invert".into(), json!({}))]),
+        photocraft_engine::actions_cmds::Action::new("FillGreen", vec![("edit.fill".into(), json!({"color": "#00ff00"}))]),
+    ];
+    let d = menu(&mut app, &ctx, "file.automate.batch", json!({})).unwrap()["dialog"].as_u64().unwrap();
+    let fields = &mut app.ui.dialog_mut(d).unwrap().fields;
+    assert_eq!(fields["action"], "Invert");
+    assert_eq!(fields["__choices"]["action"], json!(["Invert", "FillGreen"]));
+    fields.insert("action".into(), json!("FillGreen"));
+    fields.insert("input".into(), json!(input));
+    fields.insert("destination".into(), json!("folder"));
+    fields.insert("output".into(), json!(output));
+    crate::dialogs::confirm(&mut app, d).unwrap();
+    let bytes = std::fs::read(dir.join("out/a.png")).unwrap();
+    let data = photocraft_codecs::decode(&bytes).unwrap().data().to_vec();
+    // Invert of red is cyan (high blue); FillGreen is green (low blue).
+    assert!(data.len() >= 3 && data[1] > 200 && data[2] < 50, "FillGreen ran, not Invert: {:?}", &data[..3]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A folder with no images must not close the Batch dialog as if the run succeeded.
+#[test]
+fn batch_empty_folder_keeps_the_dialog_open() {
+    let (mut app, ctx) = app_with(1);
+    let dir = std::env::temp_dir().join(format!("photocraft-ui-batch-empty-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    app.session.actions.list.push(photocraft_engine::actions_cmds::Action::new("Invert", vec![("image.adjustments.invert".into(), json!({}))]));
+    let d = menu(&mut app, &ctx, "file.automate.batch", json!({})).unwrap()["dialog"].as_u64().unwrap();
+    let fields = &mut app.ui.dialog_mut(d).unwrap().fields;
+    fields.insert("input".into(), json!(dir.to_string_lossy()));
+    fields.insert("output".into(), json!(dir.join("out").to_string_lossy()));
+    let err = crate::dialogs::confirm(&mut app, d).unwrap_err();
+    assert!(err.contains("no input images"), "{err}");
+    assert!(app.ui.dialogs.iter().any(|dlg| dlg.id == d), "the dialog stays open after a failed run");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A run that fails on every file used to close the dialog with only a status line.
+#[test]
+fn batch_all_failed_keeps_the_dialog_open() {
+    let (mut app, ctx) = app_with(1);
+    let dir = std::env::temp_dir().join(format!("photocraft-ui-batch-all-failed-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    app.run("file.saveACopy", json!({"path": dir.join("a.png").to_string_lossy()})).unwrap();
+    app.session.actions.list.push(photocraft_engine::actions_cmds::Action::new("MissingLayer", vec![("layer.select".into(), json!({"name": "NoSuchLayer"}))]));
+    let d = menu(&mut app, &ctx, "file.automate.batch", json!({})).unwrap()["dialog"].as_u64().unwrap();
+    let fields = &mut app.ui.dialog_mut(d).unwrap().fields;
+    fields.insert("input".into(), json!(dir.to_string_lossy()));
+    fields.insert("destination".into(), json!("saveAndClose"));
+    let err = crate::dialogs::confirm(&mut app, d).unwrap_err();
+    assert!(err.contains("NoSuchLayer") || err.contains("failed"), "{err}");
+    assert!(app.ui.dialogs.iter().any(|dlg| dlg.id == d), "the dialog stays open so the error is editable");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn resolve_batch_action_replaces_stale_steps() {
+    let (mut app, _) = app_with(0);
+    app.session.actions.list = vec![
+        photocraft_engine::actions_cmds::Action::new("Invert", vec![("image.adjustments.invert".into(), json!({}))]),
+        photocraft_engine::actions_cmds::Action::new("Fill", vec![("edit.fill".into(), json!({"color": "#00ff00"}))]),
+    ];
+    let params = json!({"action": "Fill", "steps": [["image.adjustments.invert", {}]], "input": ".", "output": "."});
+    let resolved = resolve_batch_action(&app, params);
+    assert_eq!(resolved["steps"], json!([["edit.fill", {"color": "#00ff00"}]]));
+}
+
+/// Confirming Batch at Destination Save and Close overwrites each source and continues, instead of
+/// leaving one open document edited in the UI.
+#[test]
+fn batch_dialog_save_and_close_overwrites_the_folder() {
+    let (mut app, ctx) = app_with(1);
+    app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    let dir = std::env::temp_dir().join(format!("photocraft-ui-batch-save-close-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let input = dir.to_string_lossy().into_owned();
+    let a = dir.join("a.png").to_string_lossy().into_owned();
+    let b = dir.join("b.png").to_string_lossy().into_owned();
+    app.run("file.saveACopy", json!({"path": a})).unwrap();
+    app.run("edit.fill", json!({"color": "#00ff00"})).unwrap();
+    app.run("file.saveACopy", json!({"path": b})).unwrap();
+    let open_revision = app.session.active().unwrap().revision;
+    app.session.actions.list.push(photocraft_engine::actions_cmds::Action::new(
+        "InvertClose",
+        vec![
+            ("file.open".into(), json!({"path": a})),
+            ("image.adjustments.invert".into(), json!({})),
+            ("file.saveAs".into(), json!({})),
+            ("file.close".into(), json!({})),
+        ],
+    ));
+    let d = menu(&mut app, &ctx, "file.automate.batch", json!({})).unwrap()["dialog"].as_u64().unwrap();
+    let fields = &mut app.ui.dialog_mut(d).unwrap().fields;
+    assert_eq!(fields["destination"], "saveAndClose");
+    fields.insert("input".into(), json!(input));
+    let r = crate::dialogs::confirm(&mut app, d).unwrap();
+    assert_eq!(r["files"].as_array().map(Vec::len), Some(2), "{r}");
+    assert_eq!(r["errors"], json!([]), "{r}");
+    assert_eq!(app.session.active().unwrap().revision, open_revision, "the open document is not the batch");
+    let data = |path: &str| photocraft_codecs::decode(&std::fs::read(path).unwrap()).unwrap().data().to_vec();
+    let pa = data(&a);
+    let pb = data(&b);
+    assert!(pa.len() >= 3 && pa[0] < 50 && pa[1] > 200 && pa[2] > 200, "a.png inverted from red: {:?}", &pa[..3]);
+    assert!(pb.len() >= 3 && pb[0] > 200 && pb[1] < 50 && pb[2] > 200, "b.png inverted from green: {:?}", &pb[..3]);
+    assert!(app.ui.status.contains("Processed"), "{}", app.ui.status);
     let _ = std::fs::remove_dir_all(&dir);
 }
 

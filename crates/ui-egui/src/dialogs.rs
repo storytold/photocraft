@@ -725,6 +725,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             Some(true) => {
                 if let Err(error) = confirm(app, d.id) {
                     app.ui.status = error;
+                    app.ui.status_error = true;
                 }
             }
             Some(false) => {
@@ -885,14 +886,16 @@ fn confirm_generic_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, 
         }
         return result;
     }
-    let (cmd, params) = match crate::smart_ui::confirm_command(app, &d.fields, cmd, crate::filter_dialog::params_of(&d.fields)) {
+    let params = crate::filter_dialog::params_of(&d.fields);
+    let params = if cmd == "file.automate.batch" { crate::view_cmds::resolve_batch_action(app, params) } else { params };
+    let (cmd, params) = match crate::smart_ui::confirm_command(app, &d.fields, cmd, params) {
         Ok(edit) => edit,
         Err(e) => {
             app.filter_preview = None;
             return Err(e);
         }
     };
-    let result = app.run(&cmd, params.clone());
+    let result = batch_run_result(&cmd, app.run(&cmd, params.clone()));
     // A filter that runs as a background job keeps its preview on screen until the job
     // lands (`canvas::committed_filter_preview`) instead of flashing the unfiltered image.
     let running =
@@ -919,6 +922,11 @@ fn confirm_generic_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, 
         }
         // A step dialog of a playing action: the action continues after it.
         crate::actions::resume(app, &d.fields)?;
+        report_batch_run(app, &cmd, result.as_ref().ok());
+    } else if d.fields.contains_key("__form") {
+        // Keep Batch / Image Processor (and other form dialogs) open so a bad folder
+        // or missing action is editable, instead of vanishing with only a status line.
+        app.ui.dialogs.push(d);
     } else {
         crate::actions::abandoned(app, &d.fields);
     }
@@ -1014,6 +1022,64 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
         DialogKind::LayerStyle => crate::layer_style::confirm(app, &d.fields),
         DialogKind::About | DialogKind::Error => Ok(Value::Null),
     }
+}
+
+fn batch_job_pending(v: &Value) -> bool {
+    v.get("pending").and_then(Value::as_bool) == Some(true) || (v.get("job").is_some() && v.get("files").is_none())
+}
+
+/// When every input failed, treat the run as an error so the dialog stays open with the first
+/// file's message instead of closing as if nothing happened.
+fn batch_run_result(cmd: &str, result: Result<Value, String>) -> Result<Value, String> {
+    let Ok(v) = &result else { return result };
+    if !matches!(cmd, "file.automate.batch" | "file.scripts.imageProcessor") {
+        return result;
+    }
+    // Desktop Batch is a background job: `{job, pending}` is not a finished run.
+    if batch_job_pending(v) {
+        return result;
+    }
+    let files = v.get("files").and_then(Value::as_array).map(Vec::len).unwrap_or(0);
+    let Some(errors) = v.get("errors").and_then(Value::as_array).filter(|e| !e.is_empty()) else {
+        return result;
+    };
+    if files > 0 {
+        return result;
+    }
+    let first = errors.first();
+    let msg = first.and_then(|e| e.get("error").and_then(Value::as_str)).unwrap_or("all files failed");
+    let n = errors.len() as u64;
+    Err(match first.and_then(|e| e.get("file").and_then(Value::as_str)) {
+        Some(path) => {
+            let failed = crate::i18n::trn(crate::i18n::current(), n, "{n} failed", "{n} failed");
+            format!("{path}: {msg} ({failed})")
+        }
+        None => msg.to_string(),
+    })
+}
+
+/// Batch and Image Processor write into a destination folder and leave the open document
+/// alone, so a status line is the only sign they ran. The progress dialog covers the run itself.
+pub(crate) fn report_batch_run(app: &mut PhotocraftApp, cmd: &str, result: Option<&Value>) {
+    if !matches!(cmd, "file.automate.batch" | "file.scripts.imageProcessor") {
+        return;
+    }
+    let Some(v) = result else { return };
+    if batch_job_pending(v) {
+        app.ui.status.clear();
+        app.ui.status_error = false;
+        return;
+    }
+    let n = v.get("files").and_then(Value::as_array).map(|a| a.len() as u64).unwrap_or(0);
+    let e = v.get("errors").and_then(Value::as_array).map(|a| a.len() as u64).unwrap_or(0);
+    let processed = crate::i18n::trn(crate::i18n::current(), n, "Processed {n} file", "Processed {n} files");
+    app.ui.status = if e == 0 {
+        processed
+    } else {
+        let failed = crate::i18n::trn(crate::i18n::current(), e, "{n} failed", "{n} failed");
+        format!("{processed} ({failed})")
+    };
+    app.ui.status_error = n == 0 && e > 0;
 }
 
 /// Cancel a dialog and its dependent Layer Style picker, without applying edits.
