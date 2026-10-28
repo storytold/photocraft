@@ -248,6 +248,11 @@ impl eframe::App for PhotocraftApp {
         self.inject_synthetic(ctx, raw_input);
         // After the control channel's own events (`ui.type`) join the OS's, before any widget.
         widgets::cap_text_events(&mut raw_input.events);
+        // Windows Ink reports barrel-button contact as primary input. Normalize it before
+        // widgets see it, so the pen opens the same menus as a mouse and never paints a dab.
+        if let Some(barrel_down) = self.services.right_button_down.as_ref() {
+            self.stylus.pen_button.normalize(ctx, raw_input, barrel_down());
+        }
         self.control_click.normalize(&mut raw_input.events, cfg!(target_os = "macos"));
         // A pen held still is no touch screen's press-and-hold right click (stylus.rs).
         let pen_down = self.stylus.pen_contacts.observe(&raw_input.events);
