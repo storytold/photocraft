@@ -34,6 +34,8 @@ thiserror = { workspace = true }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 
 [dev-dependencies]
+# A real ICC profile for the --metadata test (#9466).
+photocraft-cms = { workspace = true }
 # Synthetic camera raws (#7789).
 photocraft-raw = { workspace = true, features = ["testgen"] }
 # Shell completions and man pages (examples/man-and-completions.rs, for the packages); not in

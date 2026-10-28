@@ -79,9 +79,9 @@ pub(crate) struct ExportArgs {
     #[arg(long)]
     pub(crate) pcraft_full_composite: bool,
     /// The document metadata a flat export embeds: all (the default) keeps the document's XMP
-    /// packet and free-form text, as Save As does; none leaves them out, as Export As's Metadata:
-    /// None. The ICC profile, EXIF and resolution are kept either way, and PSD, PSB and .pcraft
-    /// always keep the XMP
+    /// packet and free-form text where the format holds them, as Save As does; none leaves them
+    /// out, as Export As's Metadata: None. Nothing else changes: the ICC profile, EXIF and
+    /// resolution are written as they are without it. PSD, PSB and .pcraft always keep the XMP
     #[arg(long, value_name = "none|all", value_parser = metadata)]
     pub(crate) metadata: Option<XmpEmbed>,
 }

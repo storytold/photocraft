@@ -758,10 +758,11 @@ fn jpeg_format_chooses_the_scans() {
     }
 }
 
-/// #9466: `--metadata none` leaves the document's XMP packet out of a flat export from `convert`,
-/// `run --out` and `batch`, as Export As's Metadata: None does, and changes nothing else (pixels,
-/// ICC profile, resolution). The default, and `all`, keep it as before, and a PSD or `.pcraft`
-/// keeps it either way. A value it doesn't name is a usage error and nothing is written.
+/// #9466: `--metadata none` leaves the document's XMP packet and free-form text out of a flat
+/// export from `convert`, `run --out` and `batch`, as Export As's Metadata: None does, and changes
+/// nothing else (pixels, ICC profile, resolution). The default, and `all`, keep them as before (the
+/// text where the format holds it, as PNG does), and a PSD or `.pcraft` keeps the XMP either way.
+/// A value it doesn't name is a usage error and nothing is written.
 #[test]
 fn metadata_none_leaves_out_the_document_xmp() {
     const XMP: &str = "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\
@@ -776,10 +777,14 @@ fn metadata_none_leaves_out_the_document_xmp() {
     let mut img = photocraft_codecs::Image::from_u8(8, 6, photocraft_codecs::ChannelLayout::Rgba, data).unwrap();
     img.meta.xmp = Some(XMP.into());
     img.meta.dpi = Some((300.0, 300.0));
+    img.meta.text = vec![("Comment".into(), "free-form-note".into())];
+    // Display P3 rather than sRGB, so no export can pass for keeping it by writing its default.
+    img.icc = Some(photocraft_cms::Builtin::DisplayP3.profile().to_bytes().to_vec());
     std::fs::write(&a, photocraft_codecs::encode(&img, photocraft_codecs::Format::Png, &Default::default()).unwrap()).unwrap();
     let ancestors = |p: &Path| String::from_utf8_lossy(&std::fs::read(p).unwrap()).contains("DocumentAncestors");
     let decoded = |p: &Path| photocraft_codecs::decode(&std::fs::read(p).unwrap()).unwrap();
-    assert!(ancestors(&a), "the input carries the packet");
+    let note = |p: &Path| decoded(p).meta.text.iter().any(|(_, v)| v == "free-form-note");
+    assert!(ancestors(&a) && note(&a), "the input carries the packet and the text");
     let invert = r#"[{"command":"image.adjustments.invert"}]"#;
     for ext in ["png", "webp", "jpg", "tif"] {
         let mut converted_files = Vec::new();
@@ -795,12 +800,15 @@ fn metadata_none_leaves_out_the_document_xmp() {
             let batched = d.join(format!("batch-{name}")).join(format!("a.{ext}"));
             for out in [&converted, &ran, &batched] {
                 assert_eq!(ancestors(out), flag != Some("none"), "{name}: {}", out.display());
+                // PNG holds free-form text; JPEG, WebP and TIFF (but for its named tags) don't.
+                assert_eq!(note(out), ext == "png" && flag != Some("none"), "{name} text: {}", out.display());
             }
             converted_files.push(converted);
         }
-        // Only the XMP goes: the pixels, profile and resolution are the default export's.
+        // Only the XMP and text go: the pixels, profile and resolution are the default export's.
         let (default, none) = (decoded(&converted_files[0]), decoded(&converted_files[2]));
         assert_eq!(none.data(), default.data(), "{ext}: pixels");
+        assert!(default.icc.is_some(), "{ext}: the default export keeps the ICC profile");
         assert_eq!(none.icc, default.icc, "{ext}: ICC profile");
         assert_eq!(none.meta.dpi, default.meta.dpi, "{ext}: resolution");
         assert!(none.meta.dpi.is_some_and(|(x, y)| (x - 300.0).abs() < 0.5 && (y - 300.0).abs() < 0.5), "{ext}: {:?}", none.meta.dpi);
