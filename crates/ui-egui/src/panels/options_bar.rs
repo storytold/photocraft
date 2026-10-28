@@ -519,7 +519,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                 if pick_shield_color {
                                     crate::crop_shield::pick_custom_color(app);
                                 }
-                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                ui.with_layout(crate::direction::trailing(), |ui| {
                                     if icons::button(
                                         ui,
                                         "check",

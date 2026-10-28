@@ -309,7 +309,7 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             color_chips(app, ui, double, full.width());
             ui.add_space(8.0);
 
-            let layout = if double { egui::Layout::left_to_right(egui::Align::Min) } else { egui::Layout::top_down(egui::Align::Min) };
+            let layout = if double { crate::direction::row().with_cross_align(egui::Align::Min) } else { egui::Layout::top_down(egui::Align::Min) };
 
             ui.with_layout(layout, |ui| {
                 let quick_mask = app.session.active().is_some_and(|s| s.doc.quick_mask.is_some());
