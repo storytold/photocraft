@@ -4161,6 +4161,8 @@ curves	Smooth	スムーズ
 	Tight Curl	タイトカール
 	Loose Curl	ルーズカール
 	Stylized dabs from a history state	履歴状態から様式化したダブを描きます
+# Save for Web: AVIF (#2415, #6391)
+	AVIF files carry no color profile or metadata.	AVIF ファイルにはカラープロファイルもメタデータも含まれません。
 	Font size presets	フォントサイズのプリセット
 	Leading presets	行送りのプリセット
 	Tracking presets	トラッキングのプリセット

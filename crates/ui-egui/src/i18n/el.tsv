@@ -4182,9 +4182,10 @@ curves	Smooth	Εξομάλυνση
 	Tight Curl	Σφιχτή μπούκλα
 	Loose Curl	Χαλαρή μπούκλα
 	Stylized dabs from a history state	Στυλιζαρισμένες πινελιές από μια κατάσταση ιστορικού
-
 # Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
 	Target	Στόχος
+# Save for Web: AVIF (#2415, #6391)
+	AVIF files carry no color profile or metadata.	Τα αρχεία AVIF δεν περιέχουν χρωματικό προφίλ ούτε μεταδεδομένα.
 	Font size presets	Προεπιλογές μεγέθους γραμματοσειράς
 	Leading presets	Προεπιλογές διάστιχου
 	Tracking presets	Προεπιλογές διαστήματος χαρακτήρων

@@ -3111,7 +3111,6 @@ curves	Smooth	平滑
 	Loose Curl	寬鬆捲曲
 	Area	區域
 	Stylized dabs from a history state	從歷史狀態繪製風格化點塗
-
 # Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
 	Aspect Ratio	外觀比例
 	Category	類別
@@ -3121,6 +3120,8 @@ curves	Smooth	平滑
 	Profile	描述檔
 	Target	目標
 	Units	單位
+# Save for Web: AVIF (#2415, #6391)
+	AVIF files carry no color profile or metadata.	AVIF 檔案不含色彩描述檔與中繼資料。
 	Font size presets	字體大小預設
 	Leading presets	行距預設
 	Tracking presets	字距調整預設

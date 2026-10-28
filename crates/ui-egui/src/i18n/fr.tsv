@@ -4524,6 +4524,8 @@ shape	Appearance	Apparence
 	Tight Curl	Boucle serrée
 	Loose Curl	Boucle lâche
 	Stylized dabs from a history state	Touches stylisées depuis un état d'historique
+# Save for Web: AVIF (#2415, #6391)
+	AVIF files carry no color profile or metadata.	Les fichiers AVIF ne contiennent ni profil colorimétrique ni métadonnées.
 	Font size presets	Tailles de police prédéfinies
 	Leading presets	Interlignages prédéfinis
 	Tracking presets	Approches prédéfinies

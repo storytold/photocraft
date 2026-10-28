@@ -50,6 +50,13 @@ pub use half::f16;
 
 use crate::codecs::{dds, dicom, dpx, exr, fits, heif, iff, jpeg, pcx, png, pnm, tiff, via_image, webp, xpm};
 
+/// Decodes an AVIF that [`encode`] wrote, to RGBA8: Save for Web's preview of its artefacts.
+/// Not File › Open's AVIF support (container transforms, grids and the ICC profile aren't
+/// applied); an [`CodecError::Unsupported`] error in builds without the `avif` feature.
+pub fn decode_avif_preview(bytes: &[u8]) -> Result<Image, CodecError> {
+    crate::codecs::avif::decode_preview(bytes)
+}
+
 /// Detect the format and decode with default [`Limits`].
 pub fn decode(bytes: &[u8]) -> Result<Image, CodecError> {
     decode_with(bytes, &DecodeOptions::default())

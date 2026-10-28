@@ -4444,6 +4444,8 @@ navigator	Zoom	Zoom
 	Tight Curl	Rizo apretado
 	Loose Curl	Rizo suelto
 	Stylized dabs from a history state	Toques estilizados desde un estado del historial
+# Save for Web: AVIF (#2415, #6391)
+	AVIF files carry no color profile or metadata.	Los archivos AVIF no llevan perfil de color ni metadatos.
 	Font size presets	Valores predefinidos de tamaño de fuente
 	Leading presets	Valores predefinidos de interlineado
 	Tracking presets	Valores predefinidos de tracking

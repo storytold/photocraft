@@ -4599,6 +4599,8 @@ shape	Appearance	Aspetto
 	Tight Curl	Riccio stretto
 	Loose Curl	Riccio largo
 	Stylized dabs from a history state	Tocchi stilizzati da uno stato della storia
+# Save for Web: AVIF (#2415, #6391)
+	AVIF files carry no color profile or metadata.	I file AVIF non contengono profilo colore né metadati.
 	Font size presets	Predefiniti dimensione font
 	Leading presets	Predefiniti interlinea
 	Tracking presets	Predefiniti spaziatura

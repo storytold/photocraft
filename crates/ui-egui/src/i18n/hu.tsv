@@ -4396,6 +4396,8 @@ cameraRaw	Yellow	Sárga
 	Tight Curl	Szoros göndör
 	Loose Curl	Laza göndör
 	Stylized dabs from a history state	Stilizált pöttyök egy előzményállapotból
+# Save for Web: AVIF (#2415, #6391)
+	AVIF files carry no color profile or metadata.	Az AVIF-fájlok nem tartalmaznak színprofilt és metaadatokat.
 	Font size presets	Betűméret-előbeállítások
 	Leading presets	Sorköz-előbeállítások
 	Tracking presets	Betűköz-előbeállítások
