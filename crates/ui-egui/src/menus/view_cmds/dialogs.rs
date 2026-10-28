@@ -184,6 +184,18 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         f.insert("artboards".into(), json!(selected));
         ui.add_space(6.0);
     }
+    let file_info = f.get("__command").and_then(Value::as_str) == Some("file.fileInfo");
+    let label = |k: &str| {
+        if file_info {
+            match k {
+                "title" => return tl!("Document Title").to_owned(),
+                "copyright" => return tl!("Copyright Notice").to_owned(),
+                "copyrightUrl" => return tl!("Copyright Info URL").to_owned(),
+                _ => {}
+            }
+        }
+        labels.get(k).and_then(Value::as_str).map_or_else(|| label_of(k), str::to_string)
+    };
     let keys = form_keys(f);
     let mut browse: Option<String> = None;
     egui::Grid::new("form-dialog").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
