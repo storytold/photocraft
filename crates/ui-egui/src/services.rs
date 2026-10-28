@@ -441,4 +441,7 @@ pub struct Services {
     /// while AppKit's run loop is still going crashes or hangs Touch Bar Macs (#1575, #1458).
     /// Without one, eframe closes the window and the app ends with it.
     pub quit: Option<QuitFn>,
+    /// What kind of install this is and where it keeps its settings, log and crash-recovery
+    /// files (Help › System Info). `None` on the web.
+    pub install: Option<crate::system_info::InstallInfo>,
 }

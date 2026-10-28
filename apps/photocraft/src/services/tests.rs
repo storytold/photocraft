@@ -4,6 +4,22 @@ use photocraft_format::list_recovery;
 use photocraft_ui_egui::{PhotocraftApp, prefs_ui};
 use serde_json::{Value, json};
 
+#[test]
+fn install_kind_names_how_photocraft_was_installed() {
+    use crate::app_dirs::Mode;
+    let installed = Path::new(if cfg!(windows) { r"C:\Program Files\PhotoCraft\photocraft.exe" } else { "/usr/bin/photocraft" });
+    let built = Path::new(if cfg!(windows) { r"D:\src\photocraft\target\release\photocraft.exe" } else { "/src/photocraft/target/release/photocraft" });
+    assert_eq!(install_kind(Mode::Platform, Some(installed), false, false, false), "Installed");
+    assert_eq!(install_kind(Mode::Portable, Some(installed), false, false, false), "Portable");
+    assert_eq!(install_kind(Mode::Platform, Some(built), false, false, false), "Built from source");
+    assert_eq!(install_kind(Mode::Platform, Some(installed), true, false, false), "AppImage");
+    assert_eq!(install_kind(Mode::Platform, Some(installed), true, true, false), "Flatpak");
+    assert_eq!(install_kind(Mode::Platform, Some(installed), false, false, true), "Snap");
+    assert_eq!(install_kind(Mode::Override, Some(built), false, false, false), "Built from source, settings from PHOTOCRAFT_CONFIG_DIR");
+    assert_eq!(install_kind(Mode::Portable, Some(built), false, false, false), "Built from source, portable settings");
+    assert_eq!(install_kind(Mode::Platform, None, false, false, false), "Installed");
+}
+
 /// #6601: a chosen path whose name isn't valid Unicode is reported, never handed on lossily
 /// (Open would fail with "No such file", Save would write a second, renamed file).
 #[test]

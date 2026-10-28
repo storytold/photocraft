@@ -28,6 +28,57 @@
 	Solidity:	Gęstość:
 	Ink Characteristics	Właściwości farby
 
+# Help > System Info: section and row labels (the copied report stays in English)
+System Info	Application	Aplikacja
+System Info	System	System
+System Info	Graphics	Grafika
+System Info	Displays	Ekrany
+System Info	Pen input	Wejście pióra
+System Info	Fonts	Czcionki
+System Info	Session	Sesja
+System Info	Files	Pliki
+System Info	Version	Wersja
+System Info	Build	Kompilacja
+System Info	Install	Instalacja
+System Info	Language	Język
+System Info	Running for	Działa od
+System Info	OS	System operacyjny
+System Info	Kernel	Jądro
+System Info	Desktop	Pulpit
+System Info	CPU	Procesor
+System Info	Worker threads	Wątki robocze
+System Info	Memory	Pamięć
+System Info	Adapter	Karta graficzna
+System Info	Type	Typ
+System Info	Graphics API	API graficzne
+System Info	Driver	Sterownik
+System Info	Backend preference	Preferowany backend
+System Info	Startup fallback	Tryb awaryjny przy uruchomieniu
+System Info	Image compositor	Kompozytor obrazu
+System Info	This session	Ta sesja
+System Info	GPU memory budget	Budżet pamięci GPU
+System Info	Window's display	Ekran okna
+System Info	UI scale	Skala interfejsu
+System Info	Window	Okno
+System Info	Monitor profile	Profil monitora
+System Info	Monitor profile on {display}	Profil monitora na {display}
+System Info	Monitor profile on {display} (main window)	Profil monitora na {display} (okno główne)
+System Info	Display profiles	Profile ekranów
+System Info	Source	Źródło
+System Info	Seen this session	Wykryto w tej sesji
+System Info	Use Tablet Pressure	Użyj nacisku tabletu
+System Info	craft-fonts bundle	Pakiet craft-fonts
+System Info	Families	Rodziny
+System Info	Fallbacks	Czcionki zastępcze
+System Info	Open documents	Otwarte dokumenty
+System Info	Document {n}	Dokument {n}
+System Info	PhotoCraft memory	Pamięć PhotoCraft
+System Info	Memory Usage limit	Limit użycia pamięci
+System Info	Plug-ins	Wtyczki
+System Info	Settings	Ustawienia
+System Info	Log file	Plik dziennika
+System Info	Crash recovery	Odzyskiwanie po awarii
+
 # Guide layout dialog
 
 # Custom print paper (#3820)

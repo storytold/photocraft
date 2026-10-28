@@ -22,6 +22,57 @@
 # are; the trailing "…" of dialog commands is kept. A count that is not an @plural entry is kept
 # out of noun agreement ("Broj: {n}", "slojeva: {n}") so every number reads correctly.
 
+# Help > System Info: section and row labels (the copied report stays in English)
+System Info	Application	Aplikacija
+System Info	System	Sistem
+System Info	Graphics	Grafika
+System Info	Displays	Ekrani
+System Info	Pen input	Unos olovkom
+System Info	Fonts	Fontovi
+System Info	Session	Sesija
+System Info	Files	Datoteke
+System Info	Version	Verzija
+System Info	Build	Izdanje
+System Info	Install	Instalacija
+System Info	Language	Jezik
+System Info	Running for	Radi već
+System Info	OS	OS
+System Info	Kernel	Jezgro
+System Info	Desktop	Radna površina
+System Info	CPU	Procesor
+System Info	Worker threads	Radne niti
+System Info	Memory	Memorija
+System Info	Adapter	Adapter
+System Info	Type	Tip
+System Info	Graphics API	Grafički API
+System Info	Driver	Upravljački program
+System Info	Backend preference	Željeni pozadinski sistem
+System Info	Startup fallback	Rezervna opcija pri pokretanju
+System Info	Image compositor	Kompozitor slike
+System Info	This session	Ova sesija
+System Info	GPU memory budget	Budžet GPU memorije
+System Info	Window's display	Ekran prozora
+System Info	UI scale	Razmera interfejsa
+System Info	Window	Prozor
+System Info	Monitor profile	Profil monitora
+System Info	Monitor profile on {display}	Profil monitora na {display}
+System Info	Monitor profile on {display} (main window)	Profil monitora na {display} (glavni prozor)
+System Info	Display profiles	Profili ekrana
+System Info	Source	Izvor
+System Info	Seen this session	Viđeno u ovoj sesiji
+System Info	Use Tablet Pressure	Koristi pritisak tableta
+System Info	craft-fonts bundle	Paket craft-fonts
+System Info	Families	Porodice
+System Info	Fallbacks	Rezervni fontovi
+System Info	Open documents	Otvoreni dokumenti
+System Info	Document {n}	Dokument {n}
+System Info	PhotoCraft memory	Memorija programa PhotoCraft
+System Info	Memory Usage limit	Ograničenje korišćenja memorije
+System Info	Plug-ins	Dodaci
+System Info	Settings	Podešavanja
+System Info	Log file	Datoteka dnevnika
+System Info	Crash recovery	Oporavak posle pada
+
 # Guide layout dialog
 	Rows	Redovi
 	Number	Broj

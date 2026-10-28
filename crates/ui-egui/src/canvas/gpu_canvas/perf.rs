@@ -89,6 +89,10 @@ pub struct GpuInfo {
     /// The adapter's own memory in MB ([`video_memory`]): discrete GPUs where the platform
     /// reports it. It caps the GPU memory budgets.
     pub video_memory_mb: Option<u64>,
+    /// PCI vendor and device ids (0 when the backend doesn't report them), which pin down the
+    /// exact chip behind a marketing name.
+    pub vendor_id: u32,
+    pub device_id: u32,
     /// `performance.gpuBackend` at launch.
     pub preference: String,
     /// Every graphics adapter the window could have used, by name (Preferences › Performance ›
@@ -134,6 +138,8 @@ impl GpuInfo {
         .to_string();
         self.driver = [info.driver.as_str(), info.driver_info.as_str()].iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join(" ");
         self.video_memory_mb = video_memory(info).map(|b| b >> 20);
+        self.vendor_id = info.vendor;
+        self.device_id = info.device;
     }
 
     /// Human-readable lines for Help › System Info.

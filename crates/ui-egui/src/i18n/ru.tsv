@@ -29,6 +29,57 @@
 
 # Menus
 
+# Help > System Info: section and row labels (the copied report stays in English)
+System Info	Application	Приложение
+System Info	System	Система
+System Info	Graphics	Графика
+System Info	Displays	Дисплеи
+System Info	Pen input	Ввод пером
+System Info	Fonts	Шрифты
+System Info	Session	Сеанс
+System Info	Files	Файлы
+System Info	Version	Версия
+System Info	Build	Сборка
+System Info	Install	Установка
+System Info	Language	Язык
+System Info	Running for	Работает
+System Info	OS	ОС
+System Info	Kernel	Ядро
+System Info	Desktop	Рабочий стол
+System Info	CPU	ЦП
+System Info	Worker threads	Рабочие потоки
+System Info	Memory	Память
+System Info	Adapter	Видеоадаптер
+System Info	Type	Тип
+System Info	Graphics API	Графический API
+System Info	Driver	Драйвер
+System Info	Backend preference	Предпочитаемый бэкенд
+System Info	Startup fallback	Запасной вариант при запуске
+System Info	Image compositor	Компоновщик изображения
+System Info	This session	Этот сеанс
+System Info	GPU memory budget	Бюджет памяти GPU
+System Info	Window's display	Дисплей окна
+System Info	UI scale	Масштаб интерфейса
+System Info	Window	Окно
+System Info	Monitor profile	Профиль монитора
+System Info	Monitor profile on {display}	Профиль монитора на {display}
+System Info	Monitor profile on {display} (main window)	Профиль монитора на {display} (главное окно)
+System Info	Display profiles	Профили дисплеев
+System Info	Source	Источник
+System Info	Seen this session	Обнаружено в этом сеансе
+System Info	Use Tablet Pressure	Использовать нажим планшета
+System Info	craft-fonts bundle	Набор craft-fonts
+System Info	Families	Семейства
+System Info	Fallbacks	Резервные шрифты
+System Info	Open documents	Открытые документы
+System Info	Document {n}	Документ {n}
+System Info	PhotoCraft memory	Память PhotoCraft
+System Info	Memory Usage limit	Предел использования памяти
+System Info	Plug-ins	Плагины
+System Info	Settings	Настройки
+System Info	Log file	Файл журнала
+System Info	Crash recovery	Восстановление после сбоя
+
 # Guide layout dialog
 
 # Custom print paper (#3820)

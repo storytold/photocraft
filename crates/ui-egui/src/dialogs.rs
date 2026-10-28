@@ -338,16 +338,7 @@ fn dialog_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: &
                 outcome = Some(true);
             }
         }
-        DialogKind::About if fields.get("systemInfo").and_then(Value::as_bool) == Some(true) => {
-            let lines = crate::gpu_status::system_info_ui(app);
-            for l in &lines {
-                ui.add(egui::Label::new(egui::RichText::new(l).font(crate::theme::mono(12.0))).selectable(true));
-            }
-            ui.add_space(8.0);
-            if crate::widgets::secondary_button(ui, tl!("Copy"), 84.0).clicked() {
-                ui.ctx().copy_text(crate::gpu_status::system_info(app).join("\n"));
-            }
-        }
+        DialogKind::About if fields.get("systemInfo").and_then(Value::as_bool) == Some(true) => crate::system_info::body(app, ui, fields),
         DialogKind::About => {
             // Tabs About · Contributors · Models (craftrules standards/contributors.md). The
             // tab is a dialog field, so automation can switch it with `ui.dialog.set`.
@@ -508,11 +499,13 @@ fn ok_label(d: &Dialog) -> &'static str {
 }
 
 /// The widest a dialog grows when its body names no width of its own.
-fn default_max_width(d: &Dialog, compact: bool, curves: bool, about_tabs: bool, available: f32) -> f32 {
+fn default_max_width(d: &Dialog, compact: bool, curves: bool, about_tabs: bool, system_info: bool, available: f32) -> f32 {
     if d.kind == DialogKind::NewDocument {
         800.0
     } else if about_tabs {
         700.0
+    } else if system_info {
+        620.0
     } else if d.kind == DialogKind::LayerStyle || d.fields.contains_key("__export") || crate::color_picker_ui::owns(&d.fields) {
         600.0
     } else if compact {
@@ -606,11 +599,16 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 ui.set_min_width(800.0);
             }
             // The About window: room for the contributor table, the same width on every tab.
-            let about_tabs = d.kind == DialogKind::About && d.fields.get("systemInfo").and_then(Value::as_bool) != Some(true);
+            let system_info = d.kind == DialogKind::About && d.fields.get("systemInfo").and_then(Value::as_bool) == Some(true);
+            let about_tabs = d.kind == DialogKind::About && !system_info;
             if about_tabs {
                 ui.set_min_width(700.0);
             }
-            ui.set_max_width(wide.unwrap_or_else(|| default_max_width(&d, compact, curves, about_tabs, available.x)));
+            // System Info: room for a path or the fallback font list on one line.
+            if system_info {
+                ui.set_min_width(620.0);
+            }
+            ui.set_max_width(wide.unwrap_or_else(|| default_max_width(&d, compact, curves, about_tabs, system_info, available.x)));
             if web {
                 ui.set_max_width(available.x);
                 ui.set_min_size(available);
@@ -1130,6 +1128,7 @@ pub mod snapshot_dialog;
 pub(crate) mod solid_fill_ui;
 pub mod stack_dialog;
 pub mod stroke_ui;
+pub mod system_info;
 pub mod targa_options_ui;
 #[cfg(test)]
 mod tests;

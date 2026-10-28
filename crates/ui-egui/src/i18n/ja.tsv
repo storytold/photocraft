@@ -25,6 +25,57 @@
 	Solidity:	濃度:
 	Ink Characteristics	インキの特性
 
+# Help > System Info: section and row labels (the copied report stays in English)
+System Info	Application	アプリケーション
+System Info	System	システム
+System Info	Graphics	グラフィックス
+System Info	Displays	ディスプレイ
+System Info	Pen input	ペン入力
+System Info	Fonts	フォント
+System Info	Session	セッション
+System Info	Files	ファイル
+System Info	Version	バージョン
+System Info	Build	ビルド
+System Info	Install	インストール
+System Info	Language	言語
+System Info	Running for	実行時間
+System Info	OS	OS
+System Info	Kernel	カーネル
+System Info	Desktop	デスクトップ
+System Info	CPU	CPU
+System Info	Worker threads	ワーカースレッド
+System Info	Memory	メモリ
+System Info	Adapter	アダプター
+System Info	Type	種類
+System Info	Graphics API	グラフィックス API
+System Info	Driver	ドライバー
+System Info	Backend preference	優先するバックエンド
+System Info	Startup fallback	起動時のフォールバック
+System Info	Image compositor	画像コンポジター
+System Info	This session	このセッション
+System Info	GPU memory budget	GPU メモリ予算
+System Info	Window's display	ウィンドウのディスプレイ
+System Info	UI scale	UI スケール
+System Info	Window	ウィンドウ
+System Info	Monitor profile	モニタープロファイル
+System Info	Monitor profile on {display}	{display} のモニタープロファイル
+System Info	Monitor profile on {display} (main window)	{display} のモニタープロファイル（メインウィンドウ）
+System Info	Display profiles	ディスプレイプロファイル
+System Info	Source	取得元
+System Info	Seen this session	このセッションで検出
+System Info	Use Tablet Pressure	タブレットの筆圧を使用
+System Info	craft-fonts bundle	craft-fonts バンドル
+System Info	Families	ファミリー
+System Info	Fallbacks	フォールバック
+System Info	Open documents	開いているドキュメント
+System Info	Document {n}	ドキュメント {n}
+System Info	PhotoCraft memory	PhotoCraft のメモリ
+System Info	Memory Usage limit	メモリ使用量の上限
+System Info	Plug-ins	プラグイン
+System Info	Settings	設定
+System Info	Log file	ログファイル
+System Info	Crash recovery	クラッシュ復旧
+
 # Guide layout dialog
 
 # Custom print paper (#3820)

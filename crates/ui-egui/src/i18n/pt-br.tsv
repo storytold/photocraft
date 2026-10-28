@@ -25,6 +25,57 @@
 	Solidity:	Solidez:
 	Ink Characteristics	Características da tinta
 
+# Help > System Info: section and row labels (the copied report stays in English)
+System Info	Application	Aplicativo
+System Info	System	Sistema
+System Info	Graphics	Gráficos
+System Info	Displays	Telas
+System Info	Pen input	Entrada da caneta
+System Info	Fonts	Fontes
+System Info	Session	Sessão
+System Info	Files	Arquivos
+System Info	Version	Versão
+System Info	Build	Compilação
+System Info	Install	Instalação
+System Info	Language	Idioma
+System Info	Running for	Em execução há
+System Info	OS	SO
+System Info	Kernel	Kernel
+System Info	Desktop	Área de trabalho
+System Info	CPU	CPU
+System Info	Worker threads	Threads de trabalho
+System Info	Memory	Memória
+System Info	Adapter	Adaptador
+System Info	Type	Tipo
+System Info	Graphics API	API gráfica
+System Info	Driver	Driver
+System Info	Backend preference	Backend preferido
+System Info	Startup fallback	Alternativa na inicialização
+System Info	Image compositor	Compositor de imagem
+System Info	This session	Esta sessão
+System Info	GPU memory budget	Orçamento de memória da GPU
+System Info	Window's display	Tela da janela
+System Info	UI scale	Escala da interface
+System Info	Window	Janela
+System Info	Monitor profile	Perfil do monitor
+System Info	Monitor profile on {display}	Perfil do monitor em {display}
+System Info	Monitor profile on {display} (main window)	Perfil do monitor em {display} (janela principal)
+System Info	Display profiles	Perfis de tela
+System Info	Source	Origem
+System Info	Seen this session	Detectado nesta sessão
+System Info	Use Tablet Pressure	Usar pressão da mesa digitalizadora
+System Info	craft-fonts bundle	Pacote craft-fonts
+System Info	Families	Famílias
+System Info	Fallbacks	Fontes alternativas
+System Info	Open documents	Documentos abertos
+System Info	Document {n}	Documento {n}
+System Info	PhotoCraft memory	Memória do PhotoCraft
+System Info	Memory Usage limit	Limite de uso de memória
+System Info	Plug-ins	Plug-ins
+System Info	Settings	Configurações
+System Info	Log file	Arquivo de log
+System Info	Crash recovery	Recuperação de falhas
+
 # Guide layout dialog
 
 # Custom print paper (#3820)

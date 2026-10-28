@@ -22,6 +22,57 @@
 	Solidity:	Solidità:
 	Ink Characteristics	Caratteristiche inchiostro
 
+# Help > System Info: section and row labels (the copied report stays in English)
+System Info	Application	Applicazione
+System Info	System	Sistema
+System Info	Graphics	Grafica
+System Info	Displays	Schermi
+System Info	Pen input	Input penna
+System Info	Fonts	Font
+System Info	Session	Sessione
+System Info	Files	File
+System Info	Version	Versione
+System Info	Build	Build
+System Info	Install	Installazione
+System Info	Language	Lingua
+System Info	Running for	In esecuzione da
+System Info	OS	SO
+System Info	Kernel	Kernel
+System Info	Desktop	Desktop
+System Info	CPU	CPU
+System Info	Worker threads	Thread di lavoro
+System Info	Memory	Memoria
+System Info	Adapter	Scheda video
+System Info	Type	Tipo
+System Info	Graphics API	API grafica
+System Info	Driver	Driver
+System Info	Backend preference	Backend preferito
+System Info	Startup fallback	Ripiego all'avvio
+System Info	Image compositor	Compositore immagine
+System Info	This session	Questa sessione
+System Info	GPU memory budget	Budget di memoria GPU
+System Info	Window's display	Schermo della finestra
+System Info	UI scale	Scala interfaccia
+System Info	Window	Finestra
+System Info	Monitor profile	Profilo monitor
+System Info	Monitor profile on {display}	Profilo monitor su {display}
+System Info	Monitor profile on {display} (main window)	Profilo monitor su {display} (finestra principale)
+System Info	Display profiles	Profili schermo
+System Info	Source	Origine
+System Info	Seen this session	Rilevato in questa sessione
+System Info	Use Tablet Pressure	Usa pressione tavoletta
+System Info	craft-fonts bundle	Pacchetto craft-fonts
+System Info	Families	Famiglie
+System Info	Fallbacks	Font di ripiego
+System Info	Open documents	Documenti aperti
+System Info	Document {n}	Documento {n}
+System Info	PhotoCraft memory	Memoria di PhotoCraft
+System Info	Memory Usage limit	Limite di utilizzo della memoria
+System Info	Plug-ins	Plug-in
+System Info	Settings	Impostazioni
+System Info	Log file	File di log
+System Info	Crash recovery	Ripristino dopo arresto anomalo
+
 # Guide layout dialog
 
 # Custom print paper (#3820)

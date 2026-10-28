@@ -29,6 +29,57 @@
 	Solidity:	Plnost:
 	Ink Characteristics	Vlastnosti inkoustu
 
+# Help > System Info: section and row labels (the copied report stays in English)
+System Info	Application	Aplikace
+System Info	System	Systém
+System Info	Graphics	Grafika
+System Info	Displays	Displeje
+System Info	Pen input	Vstup pera
+System Info	Fonts	Písma
+System Info	Session	Relace
+System Info	Files	Soubory
+System Info	Version	Verze
+System Info	Build	Sestavení
+System Info	Install	Instalace
+System Info	Language	Jazyk
+System Info	Running for	Doba běhu
+System Info	OS	OS
+System Info	Kernel	Jádro
+System Info	Desktop	Pracovní prostředí
+System Info	CPU	Procesor
+System Info	Worker threads	Pracovní vlákna
+System Info	Memory	Paměť
+System Info	Adapter	Adaptér
+System Info	Type	Typ
+System Info	Graphics API	Grafické API
+System Info	Driver	Ovladač
+System Info	Backend preference	Preferovaný backend
+System Info	Startup fallback	Náhradní režim při spuštění
+System Info	Image compositor	Kompozice obrazu
+System Info	This session	Tato relace
+System Info	GPU memory budget	Rozpočet paměti GPU
+System Info	Window's display	Displej okna
+System Info	UI scale	Měřítko rozhraní
+System Info	Window	Okno
+System Info	Monitor profile	Profil monitoru
+System Info	Monitor profile on {display}	Profil monitoru na {display}
+System Info	Monitor profile on {display} (main window)	Profil monitoru na {display} (hlavní okno)
+System Info	Display profiles	Profily displejů
+System Info	Source	Zdroj
+System Info	Seen this session	Zjištěno v této relaci
+System Info	Use Tablet Pressure	Použít tlak tabletu
+System Info	craft-fonts bundle	Balík craft-fonts
+System Info	Families	Rodiny
+System Info	Fallbacks	Náhradní písma
+System Info	Open documents	Otevřené dokumenty
+System Info	Document {n}	Dokument {n}
+System Info	PhotoCraft memory	Paměť PhotoCraft
+System Info	Memory Usage limit	Limit využití paměti
+System Info	Plug-ins	Zásuvné moduly
+System Info	Settings	Nastavení
+System Info	Log file	Soubor protokolu
+System Info	Crash recovery	Obnova po pádu
+
 # Guide layout dialog
 
 # Custom print paper (#3820)

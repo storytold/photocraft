@@ -13,6 +13,57 @@
 	Solidity:	Συμπαγότητα:
 	Ink Characteristics	Χαρακτηριστικά μελανιού
 
+# Help > System Info: section and row labels (the copied report stays in English)
+System Info	Application	Εφαρμογή
+System Info	System	Σύστημα
+System Info	Graphics	Γραφικά
+System Info	Displays	Οθόνες
+System Info	Pen input	Είσοδος γραφίδας
+System Info	Fonts	Γραμματοσειρές
+System Info	Session	Συνεδρία
+System Info	Files	Αρχεία
+System Info	Version	Έκδοση
+System Info	Build	Έκδοση κώδικα
+System Info	Install	Εγκατάσταση
+System Info	Language	Γλώσσα
+System Info	Running for	Σε λειτουργία για
+System Info	OS	Λειτουργικό σύστημα
+System Info	Kernel	Πυρήνας
+System Info	Desktop	Επιφάνεια εργασίας
+System Info	CPU	CPU
+System Info	Worker threads	Νήματα εργασίας
+System Info	Memory	Μνήμη
+System Info	Adapter	Προσαρμογέας
+System Info	Type	Τύπος
+System Info	Graphics API	API γραφικών
+System Info	Driver	Πρόγραμμα οδήγησης
+System Info	Backend preference	Προτίμηση backend
+System Info	Startup fallback	Εναλλακτική λύση εκκίνησης
+System Info	Image compositor	Σύνθεση εικόνας
+System Info	This session	Αυτή η συνεδρία
+System Info	GPU memory budget	Προϋπολογισμός μνήμης GPU
+System Info	Window's display	Οθόνη του παραθύρου
+System Info	UI scale	Κλίμακα διεπαφής
+System Info	Window	Παράθυρο
+System Info	Monitor profile	Προφίλ οθόνης
+System Info	Monitor profile on {display}	Προφίλ οθόνης στην {display}
+System Info	Monitor profile on {display} (main window)	Προφίλ οθόνης στην {display} (κύριο παράθυρο)
+System Info	Display profiles	Προφίλ οθονών
+System Info	Source	Πηγή
+System Info	Seen this session	Εντοπίστηκε σε αυτή τη συνεδρία
+System Info	Use Tablet Pressure	Χρήση πίεσης tablet
+System Info	craft-fonts bundle	Πακέτο craft-fonts
+System Info	Families	Οικογένειες
+System Info	Fallbacks	Εναλλακτικές
+System Info	Open documents	Ανοιχτά έγγραφα
+System Info	Document {n}	Έγγραφο {n}
+System Info	PhotoCraft memory	Μνήμη PhotoCraft
+System Info	Memory Usage limit	Όριο χρήσης μνήμης
+System Info	Plug-ins	Πρόσθετα
+System Info	Settings	Ρυθμίσεις
+System Info	Log file	Αρχείο καταγραφής
+System Info	Crash recovery	Ανάκτηση μετά από σφάλμα
+
 # Guide layout dialog
 
 # Custom print paper (#3820)

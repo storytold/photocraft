@@ -24,6 +24,57 @@
 	Selected Areas	Áreas seleccionadas
 	Ink Characteristics	Características de la tinta
 
+# Help > System Info: section and row labels (the copied report stays in English)
+System Info	Application	Aplicación
+System Info	System	Sistema
+System Info	Graphics	Gráficos
+System Info	Displays	Pantallas
+System Info	Pen input	Entrada de lápiz
+System Info	Fonts	Fuentes
+System Info	Session	Sesión
+System Info	Files	Archivos
+System Info	Version	Versión
+System Info	Build	Compilación
+System Info	Install	Instalación
+System Info	Language	Idioma
+System Info	Running for	En ejecución desde hace
+System Info	OS	SO
+System Info	Kernel	Núcleo
+System Info	Desktop	Escritorio
+System Info	CPU	CPU
+System Info	Worker threads	Hilos de trabajo
+System Info	Memory	Memoria
+System Info	Adapter	Adaptador
+System Info	Type	Tipo
+System Info	Graphics API	API gráfica
+System Info	Driver	Controlador
+System Info	Backend preference	Backend preferido
+System Info	Startup fallback	Alternativa al iniciar
+System Info	Image compositor	Compositor de imagen
+System Info	This session	Esta sesión
+System Info	GPU memory budget	Presupuesto de memoria de GPU
+System Info	Window's display	Pantalla de la ventana
+System Info	UI scale	Escala de la interfaz
+System Info	Window	Ventana
+System Info	Monitor profile	Perfil del monitor
+System Info	Monitor profile on {display}	Perfil del monitor en {display}
+System Info	Monitor profile on {display} (main window)	Perfil del monitor en {display} (ventana principal)
+System Info	Display profiles	Perfiles de pantalla
+System Info	Source	Origen
+System Info	Seen this session	Detectado en esta sesión
+System Info	Use Tablet Pressure	Usar presión de la tableta
+System Info	craft-fonts bundle	Paquete craft-fonts
+System Info	Families	Familias
+System Info	Fallbacks	Fuentes alternativas
+System Info	Open documents	Documentos abiertos
+System Info	Document {n}	Documento {n}
+System Info	PhotoCraft memory	Memoria de PhotoCraft
+System Info	Memory Usage limit	Límite de uso de memoria
+System Info	Plug-ins	Plugins
+System Info	Settings	Ajustes
+System Info	Log file	Archivo de registro
+System Info	Crash recovery	Recuperación tras fallos
+
 # Guide layout dialog
 
 # Custom print paper (#3820)

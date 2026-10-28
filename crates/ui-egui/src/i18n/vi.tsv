@@ -30,6 +30,57 @@
 	Solidity:	Độ đặc:
 	Ink Characteristics	Đặc tính mực
 
+# Help > System Info: section and row labels (the copied report stays in English)
+System Info	Application	Ứng dụng
+System Info	System	Hệ thống
+System Info	Graphics	Đồ họa
+System Info	Displays	Màn hình
+System Info	Pen input	Nhập bằng bút
+System Info	Fonts	Phông chữ
+System Info	Session	Phiên
+System Info	Files	Tệp
+System Info	Version	Phiên bản
+System Info	Build	Bản dựng
+System Info	Install	Cài đặt
+System Info	Language	Ngôn ngữ
+System Info	Running for	Đã chạy
+System Info	OS	Hệ điều hành
+System Info	Kernel	Nhân
+System Info	Desktop	Màn hình nền
+System Info	CPU	CPU
+System Info	Worker threads	Luồng xử lý
+System Info	Memory	Bộ nhớ
+System Info	Adapter	Bộ điều hợp
+System Info	Type	Loại
+System Info	Graphics API	API đồ họa
+System Info	Driver	Trình điều khiển
+System Info	Backend preference	Backend ưu tiên
+System Info	Startup fallback	Phương án dự phòng khi khởi động
+System Info	Image compositor	Bộ tổng hợp ảnh
+System Info	This session	Phiên này
+System Info	GPU memory budget	Ngân sách bộ nhớ GPU
+System Info	Window's display	Màn hình của cửa sổ
+System Info	UI scale	Tỷ lệ giao diện
+System Info	Window	Cửa sổ
+System Info	Monitor profile	Cấu hình màu màn hình
+System Info	Monitor profile on {display}	Cấu hình màu trên {display}
+System Info	Monitor profile on {display} (main window)	Cấu hình màu trên {display} (cửa sổ chính)
+System Info	Display profiles	Cấu hình màu các màn hình
+System Info	Source	Nguồn
+System Info	Seen this session	Đã phát hiện trong phiên này
+System Info	Use Tablet Pressure	Dùng lực nhấn bảng vẽ
+System Info	craft-fonts bundle	Gói craft-fonts
+System Info	Families	Họ phông
+System Info	Fallbacks	Phông dự phòng
+System Info	Open documents	Tài liệu đang mở
+System Info	Document {n}	Tài liệu {n}
+System Info	PhotoCraft memory	Bộ nhớ PhotoCraft
+System Info	Memory Usage limit	Giới hạn dùng bộ nhớ
+System Info	Plug-ins	Trình cắm
+System Info	Settings	Cài đặt
+System Info	Log file	Tệp nhật ký
+System Info	Crash recovery	Khôi phục sau sự cố
+
 # Phase 3.1 — top-level menus, File menu, Edit menu
 # Custom paper dimensions in Print Settings.
 	Paper Width	Chiều rộng giấy

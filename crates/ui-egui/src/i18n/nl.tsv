@@ -18,6 +18,57 @@
 	Solidity:	Soliditeit:
 	Ink Characteristics	Inktkenmerken
 
+# Help > System Info: section and row labels (the copied report stays in English)
+System Info	Application	Toepassing
+System Info	System	Systeem
+System Info	Graphics	Grafisch
+System Info	Displays	Beeldschermen
+System Info	Pen input	Peninvoer
+System Info	Fonts	Lettertypen
+System Info	Session	Sessie
+System Info	Files	Bestanden
+System Info	Version	Versie
+System Info	Build	Build
+System Info	Install	Installatie
+System Info	Language	Taal
+System Info	Running for	Actief sinds
+System Info	OS	Besturingssysteem
+System Info	Kernel	Kernel
+System Info	Desktop	Bureaublad
+System Info	CPU	CPU
+System Info	Worker threads	Werkthreads
+System Info	Memory	Geheugen
+System Info	Adapter	Videokaart
+System Info	Type	Type
+System Info	Graphics API	Grafische API
+System Info	Driver	Stuurprogramma
+System Info	Backend preference	Voorkeursbackend
+System Info	Startup fallback	Terugval bij opstarten
+System Info	Image compositor	Beeldcompositor
+System Info	This session	Deze sessie
+System Info	GPU memory budget	GPU-geheugenbudget
+System Info	Window's display	Beeldscherm van het venster
+System Info	UI scale	UI-schaal
+System Info	Window	Venster
+System Info	Monitor profile	Monitorprofiel
+System Info	Monitor profile on {display}	Monitorprofiel op {display}
+System Info	Monitor profile on {display} (main window)	Monitorprofiel op {display} (hoofdvenster)
+System Info	Display profiles	Beeldschermprofielen
+System Info	Source	Bron
+System Info	Seen this session	Gezien in deze sessie
+System Info	Use Tablet Pressure	Tabletdruk gebruiken
+System Info	craft-fonts bundle	craft-fonts-bundel
+System Info	Families	Families
+System Info	Fallbacks	Terugvallettertypen
+System Info	Open documents	Geopende documenten
+System Info	Document {n}	Document {n}
+System Info	PhotoCraft memory	PhotoCraft-geheugen
+System Info	Memory Usage limit	Limiet geheugengebruik
+System Info	Plug-ins	Plug-ins
+System Info	Settings	Instellingen
+System Info	Log file	Logbestand
+System Info	Crash recovery	Herstel na crash
+
 # Guide layout dialog
 
 # Custom print paper (#3820)

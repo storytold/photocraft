@@ -353,6 +353,44 @@ fn recovery_dir() -> Option<PathBuf> {
     crate::app_dirs::recovery_dir()
 }
 
+/// What kind of install this is and where it keeps its files (Help › System Info).
+fn install_info() -> photocraft_ui_egui::system_info::InstallInfo {
+    let data = crate::app_dirs::current();
+    let exe = std::env::current_exe().ok();
+    let set = |k: &str| std::env::var_os(k).is_some_and(|v| !v.is_empty());
+    photocraft_ui_egui::system_info::InstallInfo {
+        kind: install_kind(data.mode, exe.as_deref(), set("APPIMAGE"), set("FLATPAK_ID"), set("SNAP")),
+        settings_dir: data.dir.clone(),
+        log_file: data.dir.as_ref().map(|d| d.join("logs").join(crate::logging::LOG_FILE)),
+        recovery_dir: recovery_dir(),
+    }
+}
+
+/// "Installed", "Portable", "AppImage", "Flatpak", "Snap" or "Built from source" (an executable
+/// under a Cargo `target` folder), plus a note when `PHOTOCRAFT_CONFIG_DIR` moved the settings.
+pub fn install_kind(mode: crate::app_dirs::Mode, exe: Option<&Path>, appimage: bool, flatpak: bool, snap: bool) -> String {
+    use crate::app_dirs::Mode;
+    let source = exe.is_some_and(|e| e.components().any(|c| c.as_os_str() == "target"));
+    let base = if flatpak {
+        "Flatpak"
+    } else if snap {
+        "Snap"
+    } else if appimage {
+        "AppImage"
+    } else if source {
+        "Built from source"
+    } else if mode == Mode::Portable {
+        "Portable"
+    } else {
+        "Installed"
+    };
+    match mode {
+        Mode::Override => format!("{base}, settings from PHOTOCRAFT_CONFIG_DIR"),
+        Mode::Portable if base != "Portable" => format!("{base}, portable settings"),
+        _ => base.to_string(),
+    }
+}
+
 /// Write `bytes` crash-safely (temp file beside the target, fsync, rename, directory fsync; see
 /// [`photocraft_format::atomic`]). Every document write (Save, Save As, Export, Save for Web) and
 /// the preferences go through here, so a failed or interrupted save never destroys the old file.
@@ -767,6 +805,7 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
         // Set by main, which starts loading the store before the window opens.
         preset_store: None,
         is_wayland: false,
+        install: Some(install_info()),
         ..recovery_services(recovery_dir())
     }
 }

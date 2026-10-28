@@ -1,3 +1,54 @@
+# Help > System Info: section and row labels (the copied report stays in English)
+System Info	Application	Uygulama
+System Info	System	Sistem
+System Info	Graphics	Grafik
+System Info	Displays	Ekranlar
+System Info	Pen input	Kalem girişi
+System Info	Fonts	Yazı tipleri
+System Info	Session	Oturum
+System Info	Files	Dosyalar
+System Info	Version	Sürüm
+System Info	Build	Derleme
+System Info	Install	Kurulum
+System Info	Language	Dil
+System Info	Running for	Çalışma süresi
+System Info	OS	İşletim sistemi
+System Info	Kernel	Çekirdek
+System Info	Desktop	Masaüstü
+System Info	CPU	İşlemci
+System Info	Worker threads	Çalışan iş parçacıkları
+System Info	Memory	Bellek
+System Info	Adapter	Ekran bağdaştırıcısı
+System Info	Type	Tür
+System Info	Graphics API	Grafik API'si
+System Info	Driver	Sürücü
+System Info	Backend preference	Tercih edilen arka uç
+System Info	Startup fallback	Başlangıç yedeği
+System Info	Image compositor	Görüntü birleştirici
+System Info	This session	Bu oturum
+System Info	GPU memory budget	GPU bellek bütçesi
+System Info	Window's display	Pencerenin ekranı
+System Info	UI scale	Arayüz ölçeği
+System Info	Window	Pencere
+System Info	Monitor profile	Monitör profili
+System Info	Monitor profile on {display}	{display} monitör profili
+System Info	Monitor profile on {display} (main window)	{display} monitör profili (ana pencere)
+System Info	Display profiles	Ekran profilleri
+System Info	Source	Kaynak
+System Info	Seen this session	Bu oturumda algılanan
+System Info	Use Tablet Pressure	Tablet basıncını kullan
+System Info	craft-fonts bundle	craft-fonts paketi
+System Info	Families	Aileler
+System Info	Fallbacks	Yedek yazı tipleri
+System Info	Open documents	Açık belgeler
+System Info	Document {n}	Belge {n}
+System Info	PhotoCraft memory	PhotoCraft belleği
+System Info	Memory Usage limit	Bellek kullanım sınırı
+System Info	Plug-ins	Eklentiler
+System Info	Settings	Ayarlar
+System Info	Log file	Günlük dosyası
+System Info	Crash recovery	Çökme kurtarma
+
 # Turkish (tr) catalog. Columns, separated by a TAB:  context <TAB> source <TAB> translation
 # (the format is described in ja.tsv).
 #

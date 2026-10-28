@@ -20,6 +20,57 @@
 	Spot Color	별색
 	Ink Characteristics	잉크 특성
 
+# Help > System Info: section and row labels (the copied report stays in English)
+System Info	Application	애플리케이션
+System Info	System	시스템
+System Info	Graphics	그래픽
+System Info	Displays	디스플레이
+System Info	Pen input	펜 입력
+System Info	Fonts	글꼴
+System Info	Session	세션
+System Info	Files	파일
+System Info	Version	버전
+System Info	Build	빌드
+System Info	Install	설치
+System Info	Language	언어
+System Info	Running for	실행 시간
+System Info	OS	운영 체제
+System Info	Kernel	커널
+System Info	Desktop	데스크톱
+System Info	CPU	CPU
+System Info	Worker threads	작업 스레드
+System Info	Memory	메모리
+System Info	Adapter	어댑터
+System Info	Type	유형
+System Info	Graphics API	그래픽 API
+System Info	Driver	드라이버
+System Info	Backend preference	선호 백엔드
+System Info	Startup fallback	시작 시 대체 수단
+System Info	Image compositor	이미지 합성기
+System Info	This session	이번 세션
+System Info	GPU memory budget	GPU 메모리 예산
+System Info	Window's display	창이 있는 디스플레이
+System Info	UI scale	UI 배율
+System Info	Window	창
+System Info	Monitor profile	모니터 프로파일
+System Info	Monitor profile on {display}	{display}의 모니터 프로파일
+System Info	Monitor profile on {display} (main window)	{display}의 모니터 프로파일(기본 창)
+System Info	Display profiles	디스플레이 프로파일
+System Info	Source	출처
+System Info	Seen this session	이번 세션에서 감지됨
+System Info	Use Tablet Pressure	태블릿 압력 사용
+System Info	craft-fonts bundle	craft-fonts 번들
+System Info	Families	패밀리
+System Info	Fallbacks	대체 글꼴
+System Info	Open documents	열린 문서
+System Info	Document {n}	문서 {n}
+System Info	PhotoCraft memory	PhotoCraft 메모리
+System Info	Memory Usage limit	메모리 사용 한도
+System Info	Plug-ins	플러그인
+System Info	Settings	설정
+System Info	Log file	로그 파일
+System Info	Crash recovery	충돌 복구
+
 # Guide layout dialog
 
 # Custom print paper (#3820)

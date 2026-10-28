@@ -24,6 +24,57 @@
 	Spot Color	专色
 	Ink Characteristics	油墨特性
 
+# Help > System Info: section and row labels (the copied report stays in English)
+System Info	Application	应用程序
+System Info	System	系统
+System Info	Graphics	图形
+System Info	Displays	显示器
+System Info	Pen input	笔输入
+System Info	Fonts	字体
+System Info	Session	会话
+System Info	Files	文件
+System Info	Version	版本
+System Info	Build	构建
+System Info	Install	安装
+System Info	Language	语言
+System Info	Running for	已运行
+System Info	OS	操作系统
+System Info	Kernel	内核
+System Info	Desktop	桌面
+System Info	CPU	CPU
+System Info	Worker threads	工作线程
+System Info	Memory	内存
+System Info	Adapter	适配器
+System Info	Type	类型
+System Info	Graphics API	图形 API
+System Info	Driver	驱动程序
+System Info	Backend preference	首选后端
+System Info	Startup fallback	启动回退
+System Info	Image compositor	图像合成器
+System Info	This session	本次会话
+System Info	GPU memory budget	GPU 内存预算
+System Info	Window's display	窗口所在显示器
+System Info	UI scale	界面缩放
+System Info	Window	窗口
+System Info	Monitor profile	显示器配置文件
+System Info	Monitor profile on {display}	{display} 上的显示器配置文件
+System Info	Monitor profile on {display} (main window)	{display} 上的显示器配置文件（主窗口）
+System Info	Display profiles	各显示器配置文件
+System Info	Source	来源
+System Info	Seen this session	本次会话检测到
+System Info	Use Tablet Pressure	使用数位板压力
+System Info	craft-fonts bundle	craft-fonts 字体包
+System Info	Families	字体系列
+System Info	Fallbacks	后备字体
+System Info	Open documents	打开的文档
+System Info	Document {n}	文档 {n}
+System Info	PhotoCraft memory	PhotoCraft 内存
+System Info	Memory Usage limit	内存使用上限
+System Info	Plug-ins	增效工具
+System Info	Settings	设置
+System Info	Log file	日志文件
+System Info	Crash recovery	崩溃恢复
+
 # Guide layout dialog
 
 # Custom print paper (#3820)

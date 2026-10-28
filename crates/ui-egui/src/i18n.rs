@@ -423,6 +423,11 @@ pub fn has(lang: Lang, s: &str) -> bool {
     lang.catalog().plain(s).is_some()
 }
 
+/// Does `lang` have a catalog entry for `s` under `context` (see [`tr_ctx`])?
+pub fn has_ctx(lang: Lang, context: &str, s: &str) -> bool {
+    lang.catalog().contextual(context, s).is_some()
+}
+
 /// Translate an English UI string into the current language ([`tr`] with [`current`]).
 pub fn t(s: &str) -> &str {
     tr(current(), s)

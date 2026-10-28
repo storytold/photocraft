@@ -29,6 +29,57 @@
 	Solidity:	Solidité :
 	Ink Characteristics	Caractéristiques de l’encre
 
+# Help > System Info: section and row labels (the copied report stays in English)
+System Info	Application	Application
+System Info	System	Système
+System Info	Graphics	Graphismes
+System Info	Displays	Écrans
+System Info	Pen input	Saisie au stylet
+System Info	Fonts	Polices
+System Info	Session	Session
+System Info	Files	Fichiers
+System Info	Version	Version
+System Info	Build	Compilation
+System Info	Install	Installation
+System Info	Language	Langue
+System Info	Running for	En cours depuis
+System Info	OS	Système d'exploitation
+System Info	Kernel	Noyau
+System Info	Desktop	Bureau
+System Info	CPU	Processeur
+System Info	Worker threads	Threads de travail
+System Info	Memory	Mémoire
+System Info	Adapter	Carte graphique
+System Info	Type	Type
+System Info	Graphics API	API graphique
+System Info	Driver	Pilote
+System Info	Backend preference	Backend préféré
+System Info	Startup fallback	Solution de repli au démarrage
+System Info	Image compositor	Compositeur d'image
+System Info	This session	Cette session
+System Info	GPU memory budget	Budget mémoire GPU
+System Info	Window's display	Écran de la fenêtre
+System Info	UI scale	Échelle de l'interface
+System Info	Window	Fenêtre
+System Info	Monitor profile	Profil du moniteur
+System Info	Monitor profile on {display}	Profil du moniteur sur {display}
+System Info	Monitor profile on {display} (main window)	Profil du moniteur sur {display} (fenêtre principale)
+System Info	Display profiles	Profils d'écran
+System Info	Source	Source
+System Info	Seen this session	Détecté pendant cette session
+System Info	Use Tablet Pressure	Utiliser la pression de la tablette
+System Info	craft-fonts bundle	Ensemble craft-fonts
+System Info	Families	Familles
+System Info	Fallbacks	Polices de repli
+System Info	Open documents	Documents ouverts
+System Info	Document {n}	Document {n}
+System Info	PhotoCraft memory	Mémoire de PhotoCraft
+System Info	Memory Usage limit	Limite d'utilisation de la mémoire
+System Info	Plug-ins	Modules externes
+System Info	Settings	Réglages
+System Info	Log file	Fichier journal
+System Info	Crash recovery	Récupération après plantage
+
 # Guide layout dialog
 
 # Custom print paper (#3820)

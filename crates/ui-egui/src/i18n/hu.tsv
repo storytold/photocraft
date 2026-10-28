@@ -16,6 +16,57 @@
 # letters; the trailing "…" of dialog commands is kept. Plural rule: a count is followed by the
 # singular noun in Hungarian, so every @plural entry has a single form.
 
+# Help > System Info: section and row labels (the copied report stays in English)
+System Info	Application	Alkalmazás
+System Info	System	Rendszer
+System Info	Graphics	Grafika
+System Info	Displays	Kijelzők
+System Info	Pen input	Tollbevitel
+System Info	Fonts	Betűtípusok
+System Info	Session	Munkamenet
+System Info	Files	Fájlok
+System Info	Version	Verzió
+System Info	Build	Build
+System Info	Install	Telepítés
+System Info	Language	Nyelv
+System Info	Running for	Futásidő
+System Info	OS	Operációs rendszer
+System Info	Kernel	Kernel
+System Info	Desktop	Asztali környezet
+System Info	CPU	Processzor
+System Info	Worker threads	Munkaszálak
+System Info	Memory	Memória
+System Info	Adapter	Videokártya
+System Info	Type	Típus
+System Info	Graphics API	Grafikus API
+System Info	Driver	Illesztőprogram
+System Info	Backend preference	Előnyben részesített háttérrendszer
+System Info	Startup fallback	Indítási tartalékmód
+System Info	Image compositor	Képkompozitor
+System Info	This session	Ez a munkamenet
+System Info	GPU memory budget	GPU-memóriakeret
+System Info	Window's display	Az ablak kijelzője
+System Info	UI scale	Felület méretezése
+System Info	Window	Ablak
+System Info	Monitor profile	Monitorprofil
+System Info	Monitor profile on {display}	Monitorprofil ({display})
+System Info	Monitor profile on {display} (main window)	Monitorprofil ({display}, főablak)
+System Info	Display profiles	Kijelzőprofilok
+System Info	Source	Forrás
+System Info	Seen this session	Ebben a munkamenetben észlelve
+System Info	Use Tablet Pressure	Tablet nyomásának használata
+System Info	craft-fonts bundle	craft-fonts csomag
+System Info	Families	Családok
+System Info	Fallbacks	Tartalék betűtípusok
+System Info	Open documents	Megnyitott dokumentumok
+System Info	Document {n}	{n}. dokumentum
+System Info	PhotoCraft memory	PhotoCraft memóriája
+System Info	Memory Usage limit	Memóriahasználati korlát
+System Info	Plug-ins	Bővítmények
+System Info	Settings	Beállítások
+System Info	Log file	Naplófájl
+System Info	Crash recovery	Összeomlás utáni helyreállítás
+
 # Plural messages and command id overrides
 # Custom paper dimensions in Print Settings.
 	Paper Width	Papír szélessége

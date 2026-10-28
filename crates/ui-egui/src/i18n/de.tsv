@@ -27,6 +27,57 @@
 	Selected Areas	Ausgewählte Bereiche
 	Ink Characteristics	Farbeigenschaften
 
+# Help > System Info: section and row labels (the copied report stays in English)
+System Info	Application	Anwendung
+System Info	System	System
+System Info	Graphics	Grafik
+System Info	Displays	Bildschirme
+System Info	Pen input	Stifteingabe
+System Info	Fonts	Schriften
+System Info	Session	Sitzung
+System Info	Files	Dateien
+System Info	Version	Version
+System Info	Build	Build
+System Info	Install	Installation
+System Info	Language	Sprache
+System Info	Running for	Läuft seit
+System Info	OS	Betriebssystem
+System Info	Kernel	Kernel
+System Info	Desktop	Desktop
+System Info	CPU	CPU
+System Info	Worker threads	Worker-Threads
+System Info	Memory	Arbeitsspeicher
+System Info	Adapter	Grafikkarte
+System Info	Type	Typ
+System Info	Graphics API	Grafik-API
+System Info	Driver	Treiber
+System Info	Backend preference	Bevorzugtes Backend
+System Info	Startup fallback	Ausweichlösung beim Start
+System Info	Image compositor	Bildzusammensetzung
+System Info	This session	Diese Sitzung
+System Info	GPU memory budget	GPU-Speicherbudget
+System Info	Window's display	Bildschirm des Fensters
+System Info	UI scale	UI-Skalierung
+System Info	Window	Fenster
+System Info	Monitor profile	Monitorprofil
+System Info	Monitor profile on {display}	Monitorprofil auf {display}
+System Info	Monitor profile on {display} (main window)	Monitorprofil auf {display} (Hauptfenster)
+System Info	Display profiles	Bildschirmprofile
+System Info	Source	Quelle
+System Info	Seen this session	In dieser Sitzung erkannt
+System Info	Use Tablet Pressure	Tablettdruck verwenden
+System Info	craft-fonts bundle	craft-fonts-Paket
+System Info	Families	Familien
+System Info	Fallbacks	Ersatzschriften
+System Info	Open documents	Geöffnete Dokumente
+System Info	Document {n}	Dokument {n}
+System Info	PhotoCraft memory	PhotoCraft-Speicher
+System Info	Memory Usage limit	Speicherbelegungsgrenze
+System Info	Plug-ins	Plug-ins
+System Info	Settings	Einstellungen
+System Info	Log file	Protokolldatei
+System Info	Crash recovery	Absturzwiederherstellung
+
 # Guide layout dialog
 
 # Custom print paper (#3820)

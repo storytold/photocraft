@@ -20,6 +20,57 @@
 
 # Menus
 
+# Help > System Info: section and row labels (the copied report stays in English)
+System Info	Application	Застосунок
+System Info	System	Система
+System Info	Graphics	Графіка
+System Info	Displays	Дисплеї
+System Info	Pen input	Введення пером
+System Info	Fonts	Шрифти
+System Info	Session	Сеанс
+System Info	Files	Файли
+System Info	Version	Версія
+System Info	Build	Збірка
+System Info	Install	Встановлення
+System Info	Language	Мова
+System Info	Running for	Працює
+System Info	OS	ОС
+System Info	Kernel	Ядро
+System Info	Desktop	Робочий стіл
+System Info	CPU	ЦП
+System Info	Worker threads	Робочі потоки
+System Info	Memory	Пам'ять
+System Info	Adapter	Відеоадаптер
+System Info	Type	Тип
+System Info	Graphics API	Графічний API
+System Info	Driver	Драйвер
+System Info	Backend preference	Бажаний бекенд
+System Info	Startup fallback	Резервний варіант під час запуску
+System Info	Image compositor	Компонувальник зображення
+System Info	This session	Цей сеанс
+System Info	GPU memory budget	Бюджет пам'яті GPU
+System Info	Window's display	Дисплей вікна
+System Info	UI scale	Масштаб інтерфейсу
+System Info	Window	Вікно
+System Info	Monitor profile	Профіль монітора
+System Info	Monitor profile on {display}	Профіль монітора на {display}
+System Info	Monitor profile on {display} (main window)	Профіль монітора на {display} (головне вікно)
+System Info	Display profiles	Профілі дисплеїв
+System Info	Source	Джерело
+System Info	Seen this session	Виявлено в цьому сеансі
+System Info	Use Tablet Pressure	Використовувати натиск планшета
+System Info	craft-fonts bundle	Набір craft-fonts
+System Info	Families	Родини
+System Info	Fallbacks	Резервні шрифти
+System Info	Open documents	Відкриті документи
+System Info	Document {n}	Документ {n}
+System Info	PhotoCraft memory	Пам'ять PhotoCraft
+System Info	Memory Usage limit	Межа використання пам'яті
+System Info	Plug-ins	Плагіни
+System Info	Settings	Налаштування
+System Info	Log file	Файл журналу
+System Info	Crash recovery	Відновлення після збою
+
 # Guide layout dialog
 
 # Custom print paper (#3820)

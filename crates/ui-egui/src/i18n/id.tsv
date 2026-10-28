@@ -22,6 +22,57 @@
 	Solidity:	Soliditas:
 	Ink Characteristics	Karakteristik Tinta
 
+# Help > System Info: section and row labels (the copied report stays in English)
+System Info	Application	Aplikasi
+System Info	System	Sistem
+System Info	Graphics	Grafis
+System Info	Displays	Layar
+System Info	Pen input	Input pena
+System Info	Fonts	Font
+System Info	Session	Sesi
+System Info	Files	Berkas
+System Info	Version	Versi
+System Info	Build	Build
+System Info	Install	Instalasi
+System Info	Language	Bahasa
+System Info	Running for	Berjalan selama
+System Info	OS	OS
+System Info	Kernel	Kernel
+System Info	Desktop	Desktop
+System Info	CPU	CPU
+System Info	Worker threads	Thread pekerja
+System Info	Memory	Memori
+System Info	Adapter	Adaptor
+System Info	Type	Jenis
+System Info	Graphics API	API grafis
+System Info	Driver	Driver
+System Info	Backend preference	Preferensi backend
+System Info	Startup fallback	Cadangan saat mulai
+System Info	Image compositor	Kompositor gambar
+System Info	This session	Sesi ini
+System Info	GPU memory budget	Anggaran memori GPU
+System Info	Window's display	Layar jendela
+System Info	UI scale	Skala UI
+System Info	Window	Jendela
+System Info	Monitor profile	Profil monitor
+System Info	Monitor profile on {display}	Profil monitor di {display}
+System Info	Monitor profile on {display} (main window)	Profil monitor di {display} (jendela utama)
+System Info	Display profiles	Profil layar
+System Info	Source	Sumber
+System Info	Seen this session	Terdeteksi di sesi ini
+System Info	Use Tablet Pressure	Gunakan tekanan tablet
+System Info	craft-fonts bundle	Paket craft-fonts
+System Info	Families	Keluarga
+System Info	Fallbacks	Font cadangan
+System Info	Open documents	Dokumen terbuka
+System Info	Document {n}	Dokumen {n}
+System Info	PhotoCraft memory	Memori PhotoCraft
+System Info	Memory Usage limit	Batas penggunaan memori
+System Info	Plug-ins	Plugin
+System Info	Settings	Pengaturan
+System Info	Log file	Berkas log
+System Info	Crash recovery	Pemulihan crash
+
 # Guide layout dialog
 
 # Custom print paper (#3820)

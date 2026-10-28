@@ -149,6 +149,18 @@ pub struct Stylus {
     /// Time of the tool event being processed, in milliseconds. The canvas spreads a frame's
     /// samples between the previous and the current frame time (egui's events carry none).
     pub(crate) clock_ms: f64,
+    /// What pen input has reported this session (Help › System Info).
+    pub(crate) seen: PenSeen,
+}
+
+/// Which pen data has arrived since launch: a pen whose pressure never shows up here isn't
+/// reaching the app at all, which is a different bug from one that paints wrong.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PenSeen {
+    pub pressure: bool,
+    pub tilt: bool,
+    pub rotation: bool,
+    pub eraser: bool,
 }
 
 impl Default for Stylus {
@@ -173,6 +185,7 @@ impl Default for Stylus {
             stroke: Vec::new(),
             times: Vec::new(),
             clock_ms: 0.0,
+            seen: PenSeen::default(),
         }
     }
 }
@@ -244,6 +257,17 @@ impl Stylus {
             self.frame.retain(|s| s.pressure > 0.0);
         }
         self.peak = self.frame.iter().fold(self.peak, |m, s| m.max(s.pressure));
+        for s in &self.frame {
+            self.seen.pressure |= s.pressure > 0.0;
+            self.seen.tilt |= s.tilt_x != 0.0 || s.tilt_y != 0.0;
+            self.seen.rotation |= s.rotation != 0.0;
+            self.seen.eraser |= s.eraser;
+        }
+    }
+
+    /// What pen input has reported since launch.
+    pub fn seen(&self) -> PenSeen {
+        self.seen
     }
 
     /// The pen's current sample. When the pen touched during this frame but has lifted since
