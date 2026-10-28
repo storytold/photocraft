@@ -220,7 +220,7 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
         };
         ui.label(provenance).on_hover_text(format!("{}: {} · {}", tl!("Suggested role"), tl!(role_label(suggestion_role)), tl!(suggestion.evidence)));
         let mut role = selected.to_owned();
-        egui::ComboBox::from_id_salt(("artboard-semantic-role", layer.id.0)).selected_text(selected_label).show_ui(ui, |ui| {
+        craft_ui::ComboBox::from_id_salt(("artboard-semantic-role", layer.id.0)).selected_text(selected_label).show_ui(ui, |ui| {
             for (value, label) in photocraft_engine::artboard_cmds::SEMANTIC_ROLES {
                 let text = if *value == "auto" {
                     format!("{} · {}: {}", tl!("Auto"), tl!("suggested"), tl!(role_label(suggestion_role)))
@@ -276,7 +276,7 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
         let original = (mode.clone(), horizontal.clone(), vertical.clone(), flow.clone());
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(tl!("Mode")).color(t.text_dim).size(12.0));
-            egui::ComboBox::from_id_salt(("artboard-layout-mode", layer.id.0))
+            craft_ui::ComboBox::from_id_salt(("artboard-layout-mode", layer.id.0))
                 .selected_text(tl!(match mode.as_str() {
                     "stretch" => "Stretch",
                     "fill" => "Fill",
@@ -326,7 +326,7 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
         });
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(tl!("Text reflow")).color(t.text_dim).size(12.0));
-            egui::ComboBox::from_id_salt(("artboard-text-flow", layer.id.0))
+            craft_ui::ComboBox::from_id_salt(("artboard-text-flow", layer.id.0))
                 .selected_text(tl!(match flow.as_str() {
                     "rewrap" => "Rewrap",
                     "rewrap_auto_height" => "Rewrap with auto height",
