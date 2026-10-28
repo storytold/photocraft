@@ -451,17 +451,17 @@ impl ThresholdPlan {
         (weighted, total)
     }
 
-    /// Returns a centred, CDF-calibrated threshold.  Strength is applied after calibration so
-    /// adding ingredients cannot silently bias the result or make their average exceed ±0.5.
+    /// Returns the colour threshold and the calibrated rank before colour strength is applied.
+    /// Computing both together lets alpha dithering share the raw ingredient and calibration work.
     #[inline]
-    fn value(&self, settings: &Settings, x: i64, y: i64) -> f32 {
+    fn values(&self, settings: &Settings, x: i64, y: i64) -> (f32, f32) {
         let (weighted, total) = self.raw_value(settings, x, y);
         if total <= 0.0 {
-            return 0.0;
+            return (0.0, 0.0);
         }
         let normalized = weighted / total;
         let rank = self.calibration.as_ref().map_or(normalized, |calibration| calibration.rank(normalized));
-        rank * total.min(1.0)
+        (rank * total.min(1.0), rank)
     }
 }
 
@@ -1082,8 +1082,14 @@ fn map_local_row(
             return;
         }
         let gx = i64::from(origin[0]) + column as i64;
-        let color_threshold = plan.value(settings, gx, gy);
-        let alpha_threshold = if settings.alpha == AlphaMode::Dither && !plan.has_ingredients { bayer_value(gx, gy, 4, 1, [0, 0]) } else { color_threshold };
+        let (color_threshold, rank_threshold) = plan.values(settings, gx, gy);
+        let alpha_threshold = if settings.alpha != AlphaMode::Dither {
+            color_threshold
+        } else if plan.has_ingredients {
+            rank_threshold
+        } else {
+            bayer_value(gx, gy, 4, 1, [0, 0])
+        };
         let mapped = map_pixel(*pixel, [0.0; 3], color_threshold, alpha_threshold, context);
         if let Some(indexes) = indexes.as_deref_mut() {
             indexes[column] = mapped.index;
@@ -1124,9 +1130,14 @@ fn render_diffusion(
             let current = (y % rows) * width + x;
             let gx = i64::from(origin[0]) + x as i64;
             let gy = i64::from(origin[1]) + y as i64;
-            let color_threshold = plan.value(settings, gx, gy);
-            let alpha_threshold =
-                if settings.alpha == AlphaMode::Dither && !plan.has_ingredients { bayer_value(gx, gy, 4, 1, [0, 0]) } else { color_threshold };
+            let (color_threshold, rank_threshold) = plan.values(settings, gx, gy);
+            let alpha_threshold = if settings.alpha != AlphaMode::Dither {
+                color_threshold
+            } else if plan.has_ingredients {
+                rank_threshold
+            } else {
+                bayer_value(gx, gy, 4, 1, [0, 0])
+            };
             let mapped = map_pixel(px[i], errors[current], color_threshold, alpha_threshold, context);
             if let Some(indexes) = indices.as_deref_mut() {
                 indexes[i] = mapped.index;
@@ -1193,8 +1204,14 @@ fn render_riemersma(
         let i = y * width + x;
         let gx = i64::from(origin[0]) + x as i64;
         let gy = i64::from(origin[1]) + y as i64;
-        let color_threshold = plan.value(settings, gx, gy);
-        let alpha_threshold = if settings.alpha == AlphaMode::Dither && !plan.has_ingredients { bayer_value(gx, gy, 4, 1, [0, 0]) } else { color_threshold };
+        let (color_threshold, rank_threshold) = plan.values(settings, gx, gy);
+        let alpha_threshold = if settings.alpha != AlphaMode::Dither {
+            color_threshold
+        } else if plan.has_ingredients {
+            rank_threshold
+        } else {
+            bayer_value(gx, gy, 4, 1, [0, 0])
+        };
         let mut feedback = [0.0f32; 3];
         for (offset, &weight) in weights.iter().enumerate() {
             let error = queue[(head + offset) % queue.len()];
@@ -1498,7 +1515,7 @@ mod tests {
     #[test]
     fn alpha_dither_has_expected_coverage_and_does_not_enable_rgb_dither() {
         let palette = black_white();
-        let settings = Settings { alpha: AlphaMode::Dither, ..Settings::default() };
+        let settings = Settings { method: Method::Bayer, amount: 0.0, alpha: AlphaMode::Dither, ..Settings::default() };
         for tone in [0.1f32, 0.25, 0.5, 0.75, 0.9] {
             let mut px = vec![[0.5, 0.5, 0.5, tone]; 16 * 16];
             let result = render(&mut px, 16, &palette, &settings, [0, 0], None);
@@ -1506,6 +1523,52 @@ mod tests {
             let coverage = px.iter().filter(|p| p[3] >= 0.5).count() as f32 / 256.0;
             assert!((coverage - tone).abs() < 0.1, "tone {tone} coverage {coverage}");
             assert!(result.ok().is_some_and(|indices| indices.iter().all(|&index| index == 0)));
+        }
+    }
+
+    #[test]
+    fn alpha_dither_uses_unscaled_rank_for_ordered_noise_and_stateful_paths() {
+        let palette = black_white();
+        let cases = [
+            (
+                "ordered",
+                Settings {
+                    method: Method::Bayer,
+                    amount: 0.3,
+                    alpha: AlphaMode::Dither,
+                    patterns: vec![Pattern { kind: PatternKind::WhiteNoise, amount: 0.3, seed: 37, ..Pattern::default() }],
+                    ..Settings::default()
+                },
+            ),
+            ("noise", Settings { method: Method::WhiteNoise, amount: 0.3, seed: 37, alpha: AlphaMode::Dither, ..Settings::default() }),
+            (
+                "diffusion",
+                Settings {
+                    method: Method::FloydSteinberg,
+                    amount: 0.3,
+                    alpha: AlphaMode::Dither,
+                    patterns: vec![Pattern { kind: PatternKind::WhiteNoise, amount: 0.3, seed: 37, ..Pattern::default() }],
+                    ..Settings::default()
+                },
+            ),
+            (
+                "riemersma",
+                Settings {
+                    method: Method::Riemersma,
+                    amount: 0.3,
+                    alpha: AlphaMode::Dither,
+                    history: 4,
+                    patterns: vec![Pattern { kind: PatternKind::Bayer, amount: 0.3, ..Pattern::default() }],
+                    ..Settings::default()
+                },
+            ),
+        ];
+        for (name, settings) in cases {
+            let mut px = vec![[0.5, 0.5, 0.5, 0.25]; 64 * 64];
+            let result = render(&mut px, 64, &palette, &settings, [-11, 23], None);
+            assert!(result.is_ok(), "{name}: {result:?}");
+            let coverage = px.iter().filter(|pixel| pixel[3] >= 0.5).count() as f32 / px.len() as f32;
+            assert!((coverage - 0.25).abs() < 0.08, "{name} coverage {coverage}");
         }
     }
 

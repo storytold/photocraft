@@ -222,11 +222,32 @@ fn composite_in_srgb(doc: &Document, opaque: bool) -> Result<Vec<[f32; 4]>> {
     }
     let transform =
         photocraft_cms::cached(&source, srgb, TransformOptions::default()).map_err(|e| bad(CMD, format!("could not convert the composite to sRGB: {e}")))?;
-    let mut converted = [0.0f32; 16];
-    for pixel in &mut pixels {
+    let convert = |converted: &mut [f32; 16], pixel: &mut [f32; 4]| {
         let input = if channels == 1 { &pixel[..1] } else { &pixel[..3] };
-        transform.eval(input, &mut converted);
+        transform.eval(input, converted);
         pixel[..3].copy_from_slice(&converted[..3]);
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        const PAR_MIN_PIXELS: usize = 16 * 1024;
+        if pixels.len() >= PAR_MIN_PIXELS {
+            use rayon::prelude::*;
+            // `cached` returns an Arc<Transform>; Transform's evaluation reads only immutable
+            // tables, so the same cached transform is safe to share between Rayon workers.
+            pixels.par_iter_mut().for_each_init(|| [0.0f32; 16], convert);
+        } else {
+            let mut converted = [0.0f32; 16];
+            for pixel in &mut pixels {
+                convert(&mut converted, pixel);
+            }
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let mut converted = [0.0f32; 16];
+        for pixel in &mut pixels {
+            convert(&mut converted, pixel);
+        }
     }
     Ok(pixels)
 }
@@ -515,7 +536,10 @@ fn indexed_color(s: &mut Session, raw: &Value) -> Result<Value> {
         };
         let mut transparent = transparent_hint;
         if custom_palette.is_some() {
-            let (mapped, slot) = crate::palette_cmds::indexed_palette(palette, reduce, transparent)?;
+            let (mapped, slot) = crate::palette_cmds::indexed_palette(palette, reduce, transparent).map_err(|e| match e {
+                EngineError::BadParams { msg, .. } => bad(CMD, msg),
+                other => other,
+            })?;
             palette = mapped;
             transparent = slot;
         } else if let Some(index) = transparent

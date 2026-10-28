@@ -186,10 +186,12 @@ impl WebSettings {
                 other => other,
             })?);
         }
-        st.palette_snapshot = crate::palette_cmds::resolve_palette(p).map_err(|e| match e {
-            EngineError::BadParams { msg, .. } => bad(cmd, msg),
-            other => other,
-        })?;
+        if !p.is_null() {
+            st.palette_snapshot = crate::palette_cmds::resolve_palette(p).map_err(|e| match e {
+                EngineError::BadParams { msg, .. } => bad(cmd, msg),
+                other => other,
+            })?;
+        }
         if let Some(id) = p.get("paletteId").filter(|value| !value.is_null()) {
             st.palette_id = Some(id.as_str().ok_or_else(|| bad(cmd, "paletteId must be a string"))?.to_string());
         }

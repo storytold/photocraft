@@ -1,6 +1,7 @@
 use super::settings::{WebFormat, WebMetadata, WebSettings};
 use super::{Dither, Document, EngineError, Forced, PaletteKind, Rect, Result, Session, Value, json, other, quantize};
 use photocraft_algo::palette_map::{AlphaMode, Palette};
+use std::borrow::Cow;
 
 // ---------- the image ----------
 
@@ -368,6 +369,28 @@ pub fn optimize(
     Ok(Optimized { bytes, ext: st.format.ext(), width: ww, height: hh, colors, color_table, transparent_index, indices, preview: look })
 }
 
+/// Match the stock opaque sampling rule without copying unsampled input. Exact must see every
+/// colour, and the quantizer already excludes transparent RGB values from its histogram.
+fn palette_source(work: &[[f32; 4]], kind: PaletteKind) -> Cow<'_, [[f32; 4]]> {
+    const LIMIT: usize = 1 << 20;
+    if !matches!(kind, PaletteKind::Adaptive | PaletteKind::Perceptual | PaletteKind::Selective) || work.len() <= LIMIT {
+        return Cow::Borrowed(work);
+    }
+    let opaque = work.iter().filter(|pixel| pixel[3] >= 0.5).count();
+    if opaque <= LIMIT {
+        return Cow::Borrowed(work);
+    }
+    let step = opaque / LIMIT + 1;
+    Cow::Owned(work.iter().filter(|pixel| pixel[3] >= 0.5).step_by(step).copied().collect())
+}
+
+fn palette_error(error: EngineError) -> EngineError {
+    match error {
+        EngineError::BadParams { msg, .. } => super::bad("file.export.saveForWebLegacy", msg),
+        other => other,
+    }
+}
+
 fn stock_indexed_palette(work: &[[f32; 4]], st: &WebSettings, transparent: bool) -> Result<Vec<[u8; 3]>> {
     let capacity = if transparent { 255 } else { 256 };
     let room = if transparent { st.colors.saturating_sub(1).max(2) } else { st.colors };
@@ -386,17 +409,12 @@ fn stock_indexed_palette(work: &[[f32; 4]], st: &WebSettings, transparent: bool)
                 return Err(other("reducing colorTable changes its indices; clear colorTableEdits before reducing the palette"));
             }
             let palette = Palette { name: "Color Table".into(), colors: table.iter().map(|color| color.map(|v| f32::from(v) / 255.0)).collect() };
-            crate::palette_cmds::reduce_palette(&palette, capacity)?.colors.iter().map(|color| color.map(to8)).collect()
+            crate::palette_cmds::reduce_palette(&palette, capacity).map_err(palette_error)?.colors.iter().map(|color| color.map(to8)).collect()
         } else {
             table.clone()
         }
     } else {
-        let n_opaque = work.iter().filter(|p| p[3] >= 0.5).count();
-        let step = if n_opaque > 1 << 20 && st.palette != PaletteKind::Exact { n_opaque / (1 << 20) + 1 } else { 1 };
-        let mut src: Vec<[f32; 4]> = work.iter().filter(|p| p[3] >= 0.5).step_by(step).copied().collect();
-        if src.is_empty() {
-            src = work.to_vec();
-        }
+        let src = palette_source(work, st.palette);
         let mut pal = quantize::build_palette(&src, st.palette, room, Forced::None).map_err(other)?;
         if st.web_snap > 0.0 {
             let tol = (st.web_snap * 255.0) as u8;
@@ -433,7 +451,7 @@ fn mapped_indexed_palette(work: &[[f32; 4]], st: &WebSettings, transparent: bool
                 return Err(other("reducing colorTable changes its indices; clear colorTableEdits before reducing the palette"));
             }
             let palette = Palette { name: "Color Table".into(), colors: table.iter().map(|color| color.map(|v| f32::from(v) / 255.0)).collect() };
-            crate::palette_cmds::reduce_palette(&palette, capacity)?.colors.iter().map(|color| color.map(to8)).collect()
+            crate::palette_cmds::reduce_palette(&palette, capacity).map_err(palette_error)?.colors.iter().map(|color| color.map(to8)).collect()
         } else {
             table.clone()
         }
@@ -446,7 +464,7 @@ fn mapped_indexed_palette(work: &[[f32; 4]], st: &WebSettings, transparent: bool
                     snapshot.colors.len()
                 )));
             }
-            crate::palette_cmds::reduce_palette(snapshot, capacity)?
+            crate::palette_cmds::reduce_palette(snapshot, capacity).map_err(palette_error)?
         } else {
             snapshot.clone()
         };
@@ -457,10 +475,11 @@ fn mapped_indexed_palette(work: &[[f32; 4]], st: &WebSettings, transparent: bool
         }
         palette.colors.iter().map(|color| color.map(to8)).collect()
     } else {
-        let generated = quantize::build_palette(work, st.palette, room, Forced::None).map_err(other)?;
+        let src = palette_source(work, st.palette);
+        let generated = quantize::build_palette(&src, st.palette, room, Forced::None).map_err(other)?;
         if !generated_black_white && generated.len() > room {
             let palette = Palette { name: "Generated".into(), colors: generated.iter().map(|c| c.map(|v| f32::from(v) / 255.0)).collect() };
-            crate::palette_cmds::reduce_palette(&palette, room)?.colors.iter().map(|c| c.map(to8)).collect()
+            crate::palette_cmds::reduce_palette(&palette, room).map_err(palette_error)?.colors.iter().map(|c| c.map(to8)).collect()
         } else {
             generated
         }
@@ -636,3 +655,36 @@ fn quantize_rows(px: &mut [[f32; 4]], w: usize, pal: &[[u8; 3]], dither: Dither,
 #[cfg(test)]
 #[path = "png_embed_icc_tests.rs"]
 mod png_embed_icc_tests;
+#[cfg(test)]
+
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mapped_generation_matches_stock_sampling_but_exact_keeps_unsampled_colors() {
+        const LIMIT: usize = 1 << 20;
+        let mut pixels: Vec<[f32; 4]> = (0..LIMIT + 2).map(|i| if i % 2 == 0 { [1.0, 0.0, 0.0, 1.0] } else { [0.0, 0.0, 1.0, 1.0] }).collect();
+        let mut settings = WebSettings { palette: PaletteKind::Adaptive, colors: 2, ..WebSettings::default() };
+        let both = vec![[0, 0, 255], [255, 0, 0]];
+        assert_eq!(mapped_indexed_palette(&pixels[..LIMIT], &settings, false, None).unwrap(), both);
+        let sampled = mapped_indexed_palette(&pixels, &settings, false, None).unwrap();
+        assert_eq!(sampled, [[255, 0, 0]], "the opaque stride above the stock limit samples the even red pixels");
+        assert_eq!(sampled, stock_indexed_palette(&pixels, &settings, false).unwrap());
+
+        settings.palette = PaletteKind::Exact;
+        assert_eq!(mapped_indexed_palette(&pixels, &settings, false, None).unwrap(), both, "Exact retains the unsampled blue pixels");
+
+        settings.palette = PaletteKind::Adaptive;
+        settings.colors = 3;
+        pixels.fill([0.0, 1.0, 0.0, 0.0]);
+        pixels[1] = [1.0, 0.0, 0.0, 0.5];
+        pixels[LIMIT] = [0.0, 0.0, 1.0, 1.0];
+        assert_eq!(mapped_indexed_palette(&pixels, &settings, true, None).unwrap(), both, "the sampling limit counts opaque pixels, not transparent RGB");
+        pixels.fill([0.0, 1.0, 0.0, 0.0]);
+        assert_eq!(
+            mapped_indexed_palette(&pixels, &settings, true, None).unwrap(),
+            [[0, 0, 0]],
+            "empty opaque histograms retain the quantizer's black fallback"
+        );
+    }
+}

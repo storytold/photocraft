@@ -268,10 +268,16 @@ fn indexed_color_rejects_invalid_counts_without_editing_the_document() {
 
 #[test]
 fn indexed_extended_mapping_is_opt_in_and_malformed_values_error() {
-    for params in [json!({"mapping": {"method": "not-a-method"}}), json!({"dither": 42}), json!({"paletteId": 42})] {
+    for params in [
+        json!({"mapping": {"method": "not-a-method"}}),
+        json!({"dither": 42}),
+        json!({"paletteId": 42}),
+        json!({"paletteSnapshot": {"name": "transparent only", "colors": [[0, 0, 0]]}, "transparentIndex": 0, "reducePalette": true}),
+    ] {
         let mut s = session(12, 12, 8, "rgb");
         let before = s.active().unwrap().history.past_len();
-        assert!(s.execute("image.mode.indexedColor", params.clone()).is_err(), "{params}");
+        let error = s.execute("image.mode.indexedColor", params.clone()).unwrap_err();
+        assert!(matches!(error, EngineError::BadParams { ref cmd, .. } if cmd == "image.mode.indexedColor"), "{params}: {error}");
         assert_eq!(s.active().unwrap().history.past_len(), before, "{params}");
         assert_eq!(doc(&s).mode, ColorMode::Rgb, "{params}");
     }
@@ -416,6 +422,80 @@ fn indexed_wide_gamut_composites_in_srgb_before_quantizing() {
             assert_eq!(doc(&s).icc_profile.as_deref(), Some(&*photocraft_cms::Builtin::Srgb.profile().to_bytes()));
             assert_eq!(doc(&s).layers[0].surface().unwrap().rgba(0, 0)[3], 1.0);
             assert!((doc(&s).layers[0].surface().unwrap().rgba(1, 0)[3] - 0.6).abs() <= 1.0 / 255.0);
+        }
+    }
+}
+
+fn srgb_reference_doc(mode: ColorMode, depth: SampleType, profile: &photocraft_cms::Profile) -> Document {
+    let size = Size::new(257, 65);
+    let mut d = Document::new("cms", size, mode, depth);
+    let fmt = d.pixel_format();
+    let mut layer = Layer::raster("Pixels", fmt);
+    let mut data = Vec::with_capacity(size.width as usize * size.height as usize * fmt.channels());
+    for y in 0..size.height as usize {
+        for x in 0..size.width as usize {
+            let n = y * size.width as usize + x;
+            let sample = |mul: usize, add: usize| ((n * mul + add) % 997) as f32 / 996.0;
+            let value = if mode == ColorMode::Grayscale {
+                let v = sample(37, 11);
+                [v, v, v]
+            } else {
+                [sample(17, 11), sample(29, 37), sample(43, 71)]
+            };
+            let alpha = match n % 5 {
+                0 => 0.0,
+                1 => 0.17,
+                2 => 0.43,
+                3 => 0.73,
+                _ => 1.0,
+            };
+            data.extend(photocraft_raster::from_rgba(&fmt, [value[0], value[1], value[2], alpha]));
+        }
+    }
+    layer.surface_mut().unwrap().write_region(d.bounds(), &data);
+    d.layers.push(layer);
+    d.icc_profile = Some(profile.to_bytes());
+    d
+}
+
+/// A non-cached, serial CMS evaluation used as the behavioral reference for the parallel helper.
+fn serial_srgb_reference(doc: &Document, opaque: bool) -> Vec<[f32; 4]> {
+    let mut pixels = composite(doc, opaque);
+    let channels = match doc.mode {
+        ColorMode::Grayscale | ColorMode::Bitmap | ColorMode::Duotone => 1,
+        ColorMode::Rgb | ColorMode::Indexed => 3,
+        _ => return pixels,
+    };
+    let source = crate::color_cmds::document_profile(doc);
+    let options = TransformOptions::default();
+    let transform = photocraft_cms::Transform::with_options(&source, Builtin::Srgb.profile(), options).unwrap();
+    let mut converted = [0.0f32; 16];
+    for pixel in &mut pixels {
+        let input = if channels == 1 { &pixel[..1] } else { &pixel[..3] };
+        transform.eval(input, &mut converted);
+        pixel[..3].copy_from_slice(&converted[..3]);
+    }
+    pixels
+}
+
+#[test]
+fn indexed_composite_srgb_matches_serial_cms_for_rgb_gray_depth_and_alpha() {
+    for (label, mode, profile) in
+        [("rgb", ColorMode::Rgb, photocraft_cms::Builtin::DisplayP3), ("gray", ColorMode::Grayscale, photocraft_cms::Builtin::GrayGamma22)]
+    {
+        for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+            let d = srgb_reference_doc(mode, depth, profile.profile());
+            for opaque in [false, true] {
+                let got = composite_in_srgb(&d, opaque).unwrap();
+                let want = serial_srgb_reference(&d, opaque);
+                assert_eq!(got, want, "{label} {depth:?}, opaque={opaque}");
+                if !opaque {
+                    assert!(got.iter().any(|pixel| pixel[3] == 0.0), "{label} {depth:?}: transparent alpha was lost");
+                    assert!(got.iter().any(|pixel| pixel[3] > 0.0 && pixel[3] < 1.0), "{label} {depth:?}: fractional alpha was lost");
+                } else {
+                    assert!(got.iter().all(|pixel| pixel[3] == 1.0), "{label} {depth:?}: opaque composite has non-opaque alpha");
+                }
+            }
         }
     }
 }

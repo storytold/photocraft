@@ -733,8 +733,10 @@ The bundled library contains only original algorithmically generated PhotoCraft 
 black/white, a 256-entry grayscale ramp, and a six-level-per-channel RGB cube (216 entries).
 Their Rust implementation is MIT OR Apache-2.0, like the repository; the root `ATTRIBUTION.md`
 records this source. No historical GIMP palette files or copied catalog data are bundled.
-GPL and ACT imports remain bounded, preserve order and duplicates, and validate channel/count
-limits before use. Import format support does not imply licensing rights over imported files.
+GPL and ACT imports remain bounded, preserve opaque-entry order and duplicates, and validate
+channel/count limits before use. An extended ACT's declared transparent slot is omitted from an
+opaque mapping palette; a transparent-only ACT is rejected. Classic 768-byte ACT files retain all
+256 entries. Import format support does not imply licensing rights over imported files.
 
 Engine adapters expose shared `Palette`/`Settings` resolution and legacy `dither`, `amount`,
 `ditherAmount`, `paletteId` and `paletteSnapshot` spellings in `crates/engine/src/palette_cmds.rs`.
@@ -746,6 +748,13 @@ remembered settings cannot turn an ordinary opaque conversion into advanced mapp
 The stock palette and dither dropdowns retain their original choices; the adapter-only
 `blackWhite` generation preset and advanced dither method ids remain explicit automation inputs.
 No Palette Map filter command or UI is registered by this backend change.
+Color-dither strength scales only the color threshold, not the normalized rank used for alpha
+coverage. Mapped Save-for-Web generation shares the stock opaque-pixel sampling bound of
+`1 << 20`; Exact retains full-input color discovery, and fixed palettes need no sampling pass.
+A null/no-parameter Save-for-Web request retains its default estimate behavior without changing
+the document or saved export settings.
+Palette-helper validation errors report the invoking Indexed Color/Save-for-Web command,
+not the shared helper id.
 
 `crates/engine/examples/indexed_color_perf.rs` measures palette construction and the full Indexed
 preview with warmup plus repeated runs. Keep reports local, and compare runs built with the same
@@ -777,6 +786,9 @@ Indexed Color converts the composited image from its composite ICC profile to en
 before palette construction and quantization, preserving alpha. The resulting expanded RGB
 samples and color table are tagged sRGB. Untagged/sRGB input retains the identity fast path;
 the stock dialog and quantizer are unchanged.
+Non-identity transforms reuse the cached CMS transform. Native composites of at least 16,384
+pixels convert in parallel with per-worker scratch; smaller images and WebAssembly retain the
+serial path. Both paths preserve alpha and the same RGB/gray channel routing.
 `cargo run --release -p photocraft-engine --example indexed_color_perf -- image.png` measures
 palette construction, Floyd–Steinberg diffusion, and the complete full-resolution CPU preview
 path (proxy copy, engine command, result composition; excludes GPU upload/presentation).

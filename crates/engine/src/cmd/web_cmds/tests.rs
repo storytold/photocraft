@@ -36,6 +36,18 @@ fn decode(path: &str) -> photocraft_codecs::Image {
 }
 
 #[test]
+fn null_save_for_web_uses_default_estimate_without_mutating_document_or_settings() {
+    let mut s = session(16);
+    let before = s.active().unwrap().revision;
+    let expected = s.execute("file.export.saveForWebLegacy", json!({})).unwrap();
+    let actual = s.execute("file.export.saveForWebLegacy", Value::Null).unwrap();
+    assert_eq!(actual, expected);
+    assert_eq!(s.active().unwrap().revision, before);
+    assert!(s.file_menu.last_web.is_none());
+    assert!(!s.prefs().dialogs.contains_key("file.export.saveForWebLegacy"));
+}
+
+#[test]
 fn estimates_preserve_last_successful_export_settings() {
     let dir = tmp("estimate_settings");
     let mut s = session(8);

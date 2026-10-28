@@ -138,34 +138,43 @@ pub fn parse_gpl(bytes: &[u8]) -> Result<Palette, String> {
 ///
 /// The classic 768-byte form contains 256 RGB entries. The extended 772-byte form appends a
 /// big-endian entry count (zero means 256) and a big-endian transparency index (`0xffff` means no
-/// transparency index).
+/// transparency index). [`Palette`] has no indexed transparency metadata, so a declared
+/// transparent entry is omitted from the returned non-index-preserving palette; all remaining
+/// entries retain their ACT order.
 pub fn parse_act(bytes: &[u8]) -> Result<Palette, String> {
     if bytes.len() > MAX_INPUT_BYTES {
         return Err(format!("ACT input exceeds {MAX_INPUT_BYTES} bytes"));
     }
-    let count = match bytes.len() {
-        ACT_TABLE_BYTES => 256usize,
+    let (count, transparent) = match bytes.len() {
+        ACT_TABLE_BYTES => (256usize, None),
         ACT_EXTENDED_BYTES => {
             let declared = u16::from_be_bytes([bytes[ACT_TABLE_BYTES], bytes[ACT_TABLE_BYTES + 1]]);
             let count = if declared == 0 { 256 } else { usize::from(declared) };
             if count == 0 || count > 256 {
                 return Err("ACT color count is outside 1..=256".to_owned());
             }
-            let transparent = u16::from_be_bytes([bytes[ACT_TABLE_BYTES + 2], bytes[ACT_TABLE_BYTES + 3]]);
-            if transparent != u16::MAX && usize::from(transparent) >= count {
+            let declared_transparent = u16::from_be_bytes([bytes[ACT_TABLE_BYTES + 2], bytes[ACT_TABLE_BYTES + 3]]);
+            let transparent = if declared_transparent == u16::MAX { None } else { Some(usize::from(declared_transparent)) };
+            if transparent.is_some_and(|index| index >= count) {
                 return Err("ACT transparency index is outside the declared palette".to_owned());
             }
-            count
+            (count, transparent)
         }
         actual => {
             return Err(format!("ACT input must be exactly {ACT_TABLE_BYTES} or {ACT_EXTENDED_BYTES} bytes (got {actual})"));
         }
     };
 
-    let mut colors = Vec::with_capacity(count);
+    let mut colors = Vec::with_capacity(if transparent.is_some() { count - 1 } else { count });
     for index in 0..count {
+        if transparent == Some(index) {
+            continue;
+        }
         let offset = index * 3;
         colors.push([f32::from(bytes[offset]) / 255.0, f32::from(bytes[offset + 1]) / 255.0, f32::from(bytes[offset + 2]) / 255.0]);
+    }
+    if colors.is_empty() {
+        return Err("ACT palette has no opaque colors".to_owned());
     }
     Ok(Palette { name: "Imported ACT".to_owned(), colors })
 }
@@ -299,5 +308,27 @@ mod tests {
         bad_transparency[768..770].copy_from_slice(&2u16.to_be_bytes());
         bad_transparency[770..772].copy_from_slice(&2u16.to_be_bytes());
         assert!(parse_act(&bad_transparency).is_err());
+    }
+
+    #[test]
+    fn act_extended_transparency_omits_only_declared_slot_and_rejects_transparent_only() {
+        let mut extended = vec![0u8; 772];
+        extended[0..3].copy_from_slice(&[10, 20, 30]);
+        extended[3..6].copy_from_slice(&[40, 50, 60]);
+        extended[6..9].copy_from_slice(&[70, 80, 90]);
+        extended[768..770].copy_from_slice(&3u16.to_be_bytes());
+        extended[770..772].copy_from_slice(&1u16.to_be_bytes());
+        let parsed = parse_act(&extended);
+        assert!(parsed.is_ok());
+        if let Ok(palette) = parsed {
+            assert_eq!(palette.colors, vec![[10.0 / 255.0, 20.0 / 255.0, 30.0 / 255.0], [70.0 / 255.0, 80.0 / 255.0, 90.0 / 255.0]]);
+        }
+
+        let mut transparent_only = vec![0u8; 772];
+        transparent_only[768..770].copy_from_slice(&1u16.to_be_bytes());
+        transparent_only[770..772].copy_from_slice(&0u16.to_be_bytes());
+        let error = parse_act(&transparent_only);
+        assert!(error.is_err());
+        assert!(matches!(error, Err(message) if message.contains("no opaque")));
     }
 }
