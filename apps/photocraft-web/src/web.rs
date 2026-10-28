@@ -1,7 +1,7 @@
 //! The browser shell: web `Services`, drag-and-drop, and the eframe web runner.
 
-use std::cell::Cell;
-use std::collections::{HashMap, HashSet};
+use std::cell::{Cell, RefCell};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -15,6 +15,199 @@ use photocraft_ui_egui::{FileDialogAnswer, FileDialogRequest, PhotocraftApp, Ser
 use wasm_bindgen::JsCast as _;
 
 type Inbox = Arc<Mutex<Vec<(String, Vec<u8>)>>>;
+
+/// Same-origin parent transport for the *visible* app's existing control channel.
+/// Identities never expire during a page lifetime: an evicted reply cannot re-run an edit.
+struct BrowserControl {
+    state: Rc<RefCell<BrowserRequests>>,
+    tx: std::sync::mpsc::Sender<photocraft_ui_egui::ControlRequest>,
+    listener: Option<wasm_bindgen::closure::Closure<dyn FnMut(web_sys::MessageEvent)>>,
+}
+
+#[derive(Default)]
+struct BrowserRequests {
+    queue: VecDeque<(String, String, serde_json::Value, f64)>,
+    identities: HashMap<String, String>,
+    identity_bytes: usize,
+    replies: VecDeque<(String, serde_json::Value, usize)>,
+    reply_bytes: usize,
+    active: Option<(String, std::sync::mpsc::Receiver<serde_json::Value>, photocraft_ui_egui::control::Dispatch, f64)>,
+}
+
+fn browser_post(value: serde_json::Value) {
+    let Some(window) = web_sys::window() else { return };
+    let Ok(origin) = window.location().origin() else { return };
+    let Ok(Some(parent)) = window.parent() else { return };
+    if let Ok(value) = js_sys::JSON::parse(&value.to_string()) {
+        let _ = parent.post_message(&value, &origin);
+    }
+}
+
+fn browser_reply(id: &str, result: serde_json::Value) {
+    browser_post(serde_json::json!({"type": "photocraft:control-result", "id": id, "result": result}));
+}
+
+fn browser_error(message: impl std::fmt::Display) -> serde_json::Value {
+    serde_json::json!({"ok": false, "error": message.to_string()})
+}
+
+impl BrowserRequests {
+    fn finish(&mut self, id: String, result: serde_json::Value) {
+        browser_reply(&id, result.clone());
+        let bytes = result.to_string().len();
+        // Keep request tombstones even when a large preview's cached reply is evicted.
+        while self.reply_bytes.saturating_add(bytes) > 16 * 1024 * 1024 || self.replies.len() >= 64 {
+            let Some((_, _, old)) = self.replies.pop_front() else { break };
+            self.reply_bytes = self.reply_bytes.saturating_sub(old);
+        }
+        if bytes <= 16 * 1024 * 1024 {
+            self.reply_bytes += bytes;
+            self.replies.push_back((id, result, bytes));
+        }
+    }
+}
+
+impl BrowserControl {
+    fn listen(ctx: egui::Context) -> (Self, std::sync::mpsc::Receiver<photocraft_ui_egui::ControlRequest>) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let state = Rc::new(RefCell::new(BrowserRequests::default()));
+        let mut bridge = Self { state: state.clone(), tx, listener: None };
+        let Some(window) = web_sys::window() else { return (bridge, rx) };
+        let Ok(origin) = window.location().origin() else { return (bridge, rx) };
+        let Ok(Some(parent)) = window.parent() else { return (bridge, rx) };
+        // A standalone editor has no caller. Siblings and cross-origin parents have no authority.
+        if origin == "null" || js_sys::Object::is(parent.as_ref(), window.as_ref()) {
+            return (bridge, rx);
+        }
+        let listener = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::MessageEvent)>::new(move |event: web_sys::MessageEvent| {
+            if event.origin() != origin || !event.source().is_some_and(|source| js_sys::Object::is(source.as_ref(), parent.as_ref())) {
+                return;
+            }
+            let Ok(text) = js_sys::JSON::stringify(&event.data()) else { return };
+            let Some(text) = text.as_string().filter(|text| text.len() <= 8 * 1024 * 1024) else { return };
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else { return };
+            if value.get("type").and_then(serde_json::Value::as_str) == Some("photocraft:hello") {
+                browser_post(serde_json::json!({"type": "photocraft:ready", "protocol": 1}));
+                return;
+            }
+            if value.get("type").and_then(serde_json::Value::as_str) != Some("photocraft:control") {
+                return;
+            }
+            let Some(id) = value.get("id").and_then(serde_json::Value::as_str).filter(|id| !id.is_empty() && id.len() <= 192) else { return };
+            let Some(method) = value.get("method").and_then(serde_json::Value::as_str).filter(|s| !s.is_empty() && s.len() <= 128) else {
+                browser_reply(id, browser_error("invalid control method"));
+                return;
+            };
+            let params = value.get("params").cloned().unwrap_or_else(|| serde_json::json!({}));
+            let identity = serde_json::json!([method, params]).to_string();
+            let mut state = state.borrow_mut();
+            if let Some(prior) = state.identities.get(id) {
+                if prior != &identity {
+                    browser_reply(id, browser_error("request identity reused with different parameters; not run"));
+                } else if let Some((_, result, _)) = state.replies.iter().find(|(prior, _, _)| prior == id) {
+                    browser_reply(id, result.clone());
+                } else if !state.queue.iter().any(|(prior, _, _, _)| prior == id) && !state.active.as_ref().is_some_and(|(prior, _, _, _)| prior == id) {
+                    browser_reply(id, browser_error("request already consumed; cached reply evicted; not run again"));
+                }
+                return;
+            }
+            if state.queue.len() >= 32 || state.identities.len() >= 4096 || state.identity_bytes.saturating_add(identity.len()) > 32 * 1024 * 1024 {
+                browser_reply(id, browser_error("browser control capacity exceeded; not run"));
+                return;
+            }
+            state.identity_bytes += identity.len();
+            state.identities.insert(id.to_owned(), identity);
+            state.queue.push_back((id.to_owned(), method.to_owned(), params, js_sys::Date::now()));
+            ctx.request_repaint();
+        });
+        if window.add_event_listener_with_callback("message", listener.as_ref().unchecked_ref()).is_ok() {
+            bridge.listener = Some(listener);
+            browser_post(serde_json::json!({"type": "photocraft:ready", "protocol": 1}));
+        }
+        (bridge, rx)
+    }
+
+    fn before_logic(&mut self, app: &mut PhotocraftApp, ctx: &egui::Context) {
+        let mut state = self.state.borrow_mut();
+        if state.active.is_some() {
+            return;
+        }
+        let Some((id, method, params, queued)) = state.queue.pop_front() else { return };
+        if js_sys::Date::now() - queued >= 60_000.0 {
+            state.finish(id, browser_error("timeout: not run; request expired before dispatch"));
+        } else if method == "engine.render" {
+            let result = browser_render(app, &params).unwrap_or_else(browser_error);
+            state.finish(id, result);
+        } else if method == "browser.open" {
+            let result = (|| -> Result<serde_json::Value, String> {
+                use base64::Engine as _;
+                let name = params.get("name").and_then(serde_json::Value::as_str).filter(|s| !s.is_empty()).ok_or("missing image name")?;
+                let data = params.get("base64").and_then(serde_json::Value::as_str).ok_or("missing base64 image bytes")?;
+                let bytes = base64::engine::general_purpose::STANDARD.decode(data).map_err(|e| e.to_string())?;
+                let warnings = app.open_bytes(name, &bytes)?;
+                Ok(serde_json::json!({"ok": true, "result": {"warnings": warnings}}))
+            })()
+            .unwrap_or_else(browser_error);
+            state.finish(id, result);
+        } else {
+            let (request, reply) = photocraft_ui_egui::ControlRequest::new(method, params);
+            let dispatch = request.dispatch.clone();
+            if self.tx.send(request).is_ok() {
+                state.active = Some((id, reply, dispatch, js_sys::Date::now()));
+            } else {
+                state.finish(id, browser_error("visible editor control channel closed; not run"));
+            }
+        }
+        ctx.request_repaint();
+    }
+
+    fn collect(&mut self, ctx: &egui::Context) {
+        let mut state = self.state.borrow_mut();
+        if let Some((id, receiver, dispatch, started)) = state.active.take() {
+            match receiver.try_recv() {
+                Ok(result) => state.finish(id, result),
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    state.finish(id, browser_error("visible editor reply channel closed; command may have applied"))
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) if js_sys::Date::now() - started >= 60_000.0 => state.finish(id, browser_error(dispatch.give_up())),
+                Err(std::sync::mpsc::TryRecvError::Empty) => state.active = Some((id, receiver, dispatch, started)),
+            }
+        }
+        if state.active.is_some() || !state.queue.is_empty() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+        }
+    }
+}
+
+impl Drop for BrowserControl {
+    fn drop(&mut self) {
+        if let (Some(window), Some(listener)) = (web_sys::window(), self.listener.as_ref()) {
+            let _ = window.remove_event_listener_with_callback("message", listener.as_ref().unchecked_ref());
+        }
+    }
+}
+
+/// Bounded flattened pixels from the exact document displayed by this app, using native preview primitives.
+fn browser_render(app: &PhotocraftApp, params: &serde_json::Value) -> Result<serde_json::Value, String> {
+    use base64::Engine as _;
+    let max = match params.get("max_side").or_else(|| params.get("maxSide")) {
+        None => 1024,
+        Some(value) => value.as_u64().filter(|n| (1..=2048).contains(n)).ok_or("max_side must be 1..2048")? as u32,
+    };
+    let state = match params.get("index") {
+        None | Some(serde_json::Value::Null) => app.session.active().ok_or("no document")?,
+        Some(index) => {
+            let index = index.as_u64().and_then(|i| usize::try_from(i).ok()).ok_or("index must be a non-negative integer")?;
+            app.session.documents().get(index).ok_or("document index unavailable")?
+        }
+    };
+    let preview = photocraft_compose::thumbnail(&state.doc, max);
+    let image = Image::from_u8(preview.width, preview.height, ChannelLayout::Rgba, preview.pixels).map_err(|e| e.to_string())?;
+    let bytes = photocraft_codecs::encode(&image, photocraft_codecs::Format::Png, &Default::default()).map_err(|e| e.to_string())?;
+    Ok(
+        serde_json::json!({"ok": true, "result": {"base64": base64::engine::general_purpose::STANDARD.encode(bytes), "mime": "image/png", "width": preview.width, "height": preview.height}}),
+    )
+}
 
 /// Everything File › Open reads: PhotoCraft, Photoshop, OpenRaster, Krita and Affinity documents, flat images, and
 /// Photoshop brushes (.abr), gradients (.grd), layer styles (.asl) and swatches (.aco, .act, .ase), which go to the preset libraries.
@@ -103,7 +296,9 @@ pub fn start() {
                     }
                     let unsaved = Arc::new(AtomicBool::new(false));
                     guard_unload(unsaved.clone());
-                    Ok(Box::new(WebShell { app, inbox, place_inbox, unsaved, served, database, presets }))
+                    let (control, receiver) = BrowserControl::listen(cc.egui_ctx.clone());
+                    app = app.with_control(receiver);
+                    Ok(Box::new(WebShell { app, inbox, place_inbox, unsaved, served, database, presets, control }))
                 }),
             )
             .await;
@@ -270,6 +465,7 @@ struct WebShell {
     served: Served,
     database: Option<web_sys::IdbDatabase>,
     presets: crate::preset_bridge::Bridge,
+    control: BrowserControl,
 }
 
 impl WebShell {
@@ -329,13 +525,13 @@ impl eframe::App for WebShell {
         // A tap reaches eframe as Pointer Events and Touch Events: keep one press per tap, or the
         // twin press closes the menu the first one opened (#2095).
         photocraft_ui_egui::touch_twins::drop_twins(ctx, raw_input);
-        // The browser build has no TCP control server, so `inject_synthetic` finds an empty
-        // queue, but the clipboard key mapping (`Event::PasteImage`), legacy pinch, pen-hold and
-        // titlebar normalization live in the app hook and must run here too.
+        // Reuse the shared clipboard normalization and synthetic parent-control input.
+        // Touch deduplication above still precedes the app's input handling.
         eframe::App::raw_input_hook(&mut self.app, ctx, raw_input);
     }
 
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        self.control.before_logic(&mut self.app, ctx);
         let dropped = ctx.input_mut(|i| std::mem::take(&mut i.raw.dropped_files));
         if !dropped.is_empty() {
             let names: Vec<String> =
@@ -362,6 +558,7 @@ impl eframe::App for WebShell {
         }
         self.serve_fonts(ctx);
         self.app.logic_frame(ctx, frame);
+        self.control.collect(ctx);
         self.save_presets(ctx);
         self.app.finish_type_reset_logic(ctx);
     }
