@@ -55,32 +55,46 @@ pub(super) fn write_sidecar(app: &mut PhotocraftApp, raw: &RawOpen, params: &Cam
     store_sidecar(app, raw, params);
 }
 
+/// What [`store_sidecar`] did.
+#[derive(Debug, PartialEq)]
+pub(super) enum Stored {
+    /// Written: the sidecar's name.
+    Written(String),
+    /// Nothing to keep: default settings and no sidecar of ours to update.
+    Defaults,
+    /// This raw can't keep a sidecar here: an automation request, a DNG or a raw without a path,
+    /// another application's sidecar, or no file writer.
+    Skipped,
+    /// The write failed (already reported in a notice).
+    Failed,
+}
+
 /// Writes `params` to `raw`'s sidecar under [`write_sidecar`]'s rules, whatever the preference
-/// (Done asks for it). Returns the sidecar's name when it was written.
-pub(super) fn store_sidecar(app: &mut PhotocraftApp, raw: &RawOpen, params: &CameraRaw) -> Option<String> {
+/// (Done asks for it).
+pub(super) fn store_sidecar(app: &mut PhotocraftApp, raw: &RawOpen, params: &CameraRaw) -> Stored {
     if app.automation_input || app.session.authorize.is_some() {
         log::info!("{}: sidecar not written for an automation request", raw.name);
-        return None;
+        return Stored::Skipped;
     }
-    let path = raw.path.as_deref().filter(|p| !is_dng(p))?;
+    let Some(path) = raw.path.as_deref().filter(|p| !is_dng(p)) else { return Stored::Skipped };
     let sidecar = sidecar_path(path);
     let name = crate::file_open::display_name(&sidecar);
     match existing_sidecar_is_ours(&sidecar) {
         Some(false) => {
             let kept = crate::i18n::fmt(tl!("Kept {name}: written by another application"), &[("name", &name)]);
             crate::notices::post(app, kept, Vec::new(), false, None);
-            return None;
+            return Stored::Skipped;
         }
-        None if params.is_identity() => return None,
+        None if params.is_identity() => return Stored::Defaults,
         _ => {}
     }
     let bytes = photocraft_io::camera_raw_xmp::save(params).into_bytes();
-    let write = app.services.write.as_mut()?;
+    let Some(write) = app.services.write.as_mut() else { return Stored::Skipped };
     if let Err(e) = write(&sidecar, &bytes) {
         crate::notices::error(app, crate::i18n::fmt(tl!("Could not write {name}: {error}"), &[("name", &name), ("error", &e)]));
-        return None;
+        return Stored::Failed;
     }
-    Some(name)
+    Stored::Written(name)
 }
 
 /// `None` when there is no sidecar at `sidecar`, else whether PhotoCraft wrote it. One that

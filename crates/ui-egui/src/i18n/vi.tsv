@@ -4009,3 +4009,5 @@ cameraRaw	Guided	Theo đường căn
 	Saved Camera Raw settings to {file}	Đã lưu cài đặt Camera Raw vào {file}
 	Save the settings to each raw's sidecar without opening it	Lưu thiết lập vào tệp sidecar của từng ảnh raw mà không mở
 	No settings saved: these raws can't keep a sidecar here	Không lưu được gì: các ảnh raw này không thể có tệp sidecar ở đây
+	Some settings could not be saved; the raws stay open	Không thể lưu một số cài đặt; các ảnh raw vẫn mở
+	Nothing to save: these raws are at their default settings	Không có gì để lưu: các ảnh raw này đang ở cài đặt mặc định

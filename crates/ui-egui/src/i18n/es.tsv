@@ -4473,3 +4473,5 @@ cameraRaw	Offset Y	Desplazamiento Y
 	Saved Camera Raw settings to {file}	Ajustes de Camera Raw guardados en {file}
 	Save the settings to each raw's sidecar without opening it	Guardar los ajustes en el archivo sidecar de cada raw sin abrirlo
 	No settings saved: these raws can't keep a sidecar here	No se guardó nada: estos raw no pueden tener un archivo sidecar aquí
+	Some settings could not be saved; the raws stay open	No se pudieron guardar algunos ajustes; los raw siguen abiertos
+	Nothing to save: these raws are at their default settings	Nada que guardar: estos raw tienen los ajustes predeterminados

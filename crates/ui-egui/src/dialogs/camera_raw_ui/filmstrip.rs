@@ -168,31 +168,43 @@ pub(super) fn open_all(app: &mut PhotocraftApp, params: &CameraRaw, raw: &RawOpe
 /// Done: saves each raw's settings to its sidecar, as Camera Raw's Done does, and opens none of
 /// them (they close again).
 pub(super) fn done(app: &mut PhotocraftApp) -> Value {
+    use super::sidecar::Stored;
     keep_settings(app);
-    let Some(d) = app.camera_raw.take() else { return Value::Null };
+    let Some(d) = app.camera_raw.as_ref() else { return Value::Null };
     let Some(raw) = d.raw_open.clone() else { return Value::Null };
     let mut raws = vec![(raw.clone(), d.params.clone())];
-    for held in std::mem::take(&mut app.raw_shelf).into_iter().filter(|h| h.raw.document != raw.document) {
-        let p = match held.kept {
-            Some((p, _)) => p,
+    for held in app.raw_shelf.iter().filter(|h| h.raw.document != raw.document) {
+        let p = match &held.kept {
+            Some((p, _)) => p.clone(),
             None => first_settings(app, &held.raw).0,
         };
-        raws.push((held.raw, p));
+        raws.push((held.raw.clone(), p));
     }
-    let mut saved = Vec::new();
-    for (raw, p) in &raws {
-        saved.extend(super::sidecar::store_sidecar(app, raw, p));
+    let stored: Vec<Stored> = raws.iter().map(|(raw, p)| super::sidecar::store_sidecar(app, raw, p)).collect();
+    let saved: Vec<&String> = stored.iter().filter_map(|s| if let Stored::Written(name) = s { Some(name) } else { None }).collect();
+    // A failed write (already in a notice) keeps the dialog and every raw open, so no edit is lost.
+    if stored.contains(&Stored::Failed) {
+        app.ui.status = tl!("Some settings could not be saved; the raws stay open").to_string();
+        app.ui.status_error = true;
+        return json!({"done": false, "saved": saved});
+    }
+    app.ui.status = if !saved.is_empty() {
+        crate::i18n::fmt(tl!("Saved Camera Raw settings to {file}"), &[("file", &saved.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "))])
+    } else if stored.iter().all(|s| *s == Stored::Defaults) {
+        tl!("Nothing to save: these raws are at their default settings").to_string()
+    } else {
+        tl!("No settings saved: these raws can't keep a sidecar here").to_string()
+    };
+    app.ui.status_error = saved.is_empty() && stored.contains(&Stored::Skipped);
+    let saved = json!(saved);
+    app.camera_raw = None;
+    app.raw_shelf.clear();
+    for (raw, _) in &raws {
         if let Some(index) = super::open::document_index(app, raw.document) {
             app.session.close(index);
         }
     }
     app.sync_views();
-    app.ui.status = if saved.is_empty() {
-        tl!("No settings saved: these raws can't keep a sidecar here").to_string()
-    } else {
-        crate::i18n::fmt(tl!("Saved Camera Raw settings to {file}"), &[("file", &saved.join(", "))])
-    };
-    app.ui.status_error = saved.is_empty();
     json!({"done": true, "saved": saved})
 }
 

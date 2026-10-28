@@ -1084,8 +1084,39 @@ fn done_saves_the_sidecar_and_opens_nothing() {
     let mut back = CameraRaw::default();
     photocraft_io::camera_raw_xmp::load(&mut back, &w[0].1).unwrap();
     assert_eq!((back.upright.as_str(), back.upright_guides.len(), back.contrast), ("guided", 2, 20.0));
-    // Done is only for raws being opened.
+    // Done is only for raws being opened, and checked before anything else in the request
+    // changes the dialog.
     app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
     assert!(menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"done": true}})).unwrap().is_err());
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({})).unwrap().unwrap();
+    let before = app.camera_raw.as_ref().unwrap().params.clone();
+    assert!(menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"contrast": 40}, "done": true}})).unwrap().is_err());
+    assert_eq!(app.camera_raw.as_ref().unwrap().params, before, "a refused Done changes nothing");
+    for other in ["commit", "cancel"] {
+        assert!(menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"done": true, other: true}})).unwrap().is_err(), "{other}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A sidecar that can't be written keeps the dialog and the raw open with their settings;
+/// default settings are nothing to save, not an error.
+#[test]
+fn done_keeps_the_raws_open_when_a_sidecar_write_fails() {
+    let (mut app, dng, dir, raw_path, _) = raw_with_sidecar("done-fails", None);
+    let ctx = egui::Context::default();
+    app.services.write = Some(Box::new(|_: &str, _: &[u8]| Err("read-only volume".to_string())));
+    open_dialog_at(&mut app, &ctx, &dng, &raw_path);
+    let docs = app.session.documents().len();
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"contrast": 20}}})).unwrap().unwrap();
+    let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"done": true}})).unwrap().unwrap();
+    assert_eq!(r["done"], false, "{r}");
+    assert_eq!(app.camera_raw.as_ref().map(|d| d.params.contrast), Some(20.0), "the edit is still there");
+    assert_eq!(app.session.documents().len(), docs, "the raw stays open");
+    assert!(app.ui.status_error);
+    // At the defaults there is nothing to write: Done closes, without an error.
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"contrast": 0}}})).unwrap().unwrap();
+    let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"done": true}})).unwrap().unwrap();
+    assert_eq!((r["done"].clone(), r["saved"].clone()), (json!(true), json!([])), "{r}");
+    assert!(app.camera_raw.is_none() && !app.ui.status_error, "{}", app.ui.status);
     let _ = std::fs::remove_dir_all(&dir);
 }

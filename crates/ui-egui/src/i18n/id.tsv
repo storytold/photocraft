@@ -3533,3 +3533,5 @@ cameraRaw	Guided	Terpandu
 	Saved Camera Raw settings to {file}	Pengaturan Camera Raw disimpan ke {file}
 	Save the settings to each raw's sidecar without opening it	Simpan pengaturan ke file sidecar setiap raw tanpa membukanya
 	No settings saved: these raws can't keep a sidecar here	Tidak ada yang disimpan: raw ini tidak dapat memiliki file sidecar di sini
+	Some settings could not be saved; the raws stay open	Beberapa pengaturan tidak dapat disimpan; raw tetap terbuka
+	Nothing to save: these raws are at their default settings	Tidak ada yang perlu disimpan: raw ini memakai pengaturan default

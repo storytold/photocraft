@@ -4553,3 +4553,5 @@ cameraRaw	Guided	Guidé
 	Saved Camera Raw settings to {file}	Réglages Camera Raw enregistrés dans {file}
 	Save the settings to each raw's sidecar without opening it	Enregistrer les réglages dans le fichier annexe de chaque raw sans l’ouvrir
 	No settings saved: these raws can't keep a sidecar here	Rien n’a été enregistré : ces raw ne peuvent pas avoir de fichier annexe ici
+	Some settings could not be saved; the raws stay open	Certains réglages n’ont pas pu être enregistrés ; les raw restent ouverts
+	Nothing to save: these raws are at their default settings	Rien à enregistrer : ces raw ont leurs réglages par défaut

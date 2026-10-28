@@ -15,7 +15,11 @@
 //! and Tint. The absolute `Temperature` (kelvin) / `Tint` of raw-file settings have no
 //! counterpart and are ignored.
 
-use photocraft_algo::camera_raw::{CameraRaw, UPRIGHT_MODES, validate_curve};
+use photocraft_algo::camera_raw::{CameraRaw, validate_curve};
+
+/// `crs:PerspectiveUpright` in Camera Raw's numbering (as ExifTool and Lightroom read it), which
+/// is not the order of `UPRIGHT_MODES`.
+const UPRIGHT: [(usize, &str); 6] = [(0, "off"), (1, "auto"), (2, "full"), (3, "level"), (4, "vertical"), (5, "guided")];
 
 /// The Camera Raw settings namespace.
 pub const CRS_NS: &str = "http://ns.adobe.com/camera-raw-settings/1.0/";
@@ -228,9 +232,8 @@ fn apply(params: &mut CameraRaw, report: &mut LoadReport, name: &str, value: &st
             None => report.ignored.push(name.to_string()),
         }
     } else if name == "PerspectiveUpright" {
-        // 0 Off, 1 Auto, 2 Level, 3 Vertical, 4 Full, 5 Guided: the order of `UPRIGHT_MODES`.
-        match value.trim().parse::<usize>().ok().and_then(|i| UPRIGHT_MODES.get(i)) {
-            Some(mode) => {
+        match value.trim().parse::<usize>().ok().and_then(|i| UPRIGHT.iter().find(|(n, _)| *n == i)) {
+            Some((_, mode)) => {
                 params.upright = (*mode).into();
                 report.applied += 1;
             }
@@ -352,7 +355,7 @@ pub fn save(params: &CameraRaw) -> String {
     }
     let style = STYLES.iter().find(|(_, s)| *s == p.vignette_style).map_or("1", |(n, _)| n);
     out.push_str(&format!("   crs:PostCropVignetteStyle=\"{}\"\n", escape(style)));
-    let upright = UPRIGHT_MODES.iter().position(|m| *m == p.upright).unwrap_or(0);
+    let upright = UPRIGHT.iter().find(|(_, m)| *m == p.upright).map_or(0, |(n, _)| *n);
     out.push_str(&format!("   crs:PerspectiveUpright=\"{upright}\"\n"));
     if !p.upright_guides.is_empty() {
         let json = serde_json::to_string(&p.upright_guides).unwrap_or_default();
@@ -488,9 +491,17 @@ mod tests {
         let r = load(&mut back, text.as_bytes()).unwrap();
         assert!(r.ignored.is_empty(), "{:?}", r.ignored);
         assert_eq!(back, p);
-        // Without guides there is no PhotoCraft attribute; Camera Raw's Vertical is mode 3.
+        // Without guides there is no PhotoCraft attribute; Camera Raw's Vertical is mode 4.
         let text = save(&CameraRaw { upright: "vertical".into(), ..CameraRaw::default() });
-        assert!(!text.contains("photocraft:") && text.contains("crs:PerspectiveUpright=\"3\""));
+        assert!(!text.contains("photocraft:") && text.contains("crs:PerspectiveUpright=\"4\""));
+        // Camera Raw's own numbering, both ways: 2 Full, 3 Level, 4 Vertical.
+        for (n, mode) in [(0, "off"), (1, "auto"), (2, "full"), (3, "level"), (4, "vertical"), (5, "guided")] {
+            let text = save(&CameraRaw { upright: mode.into(), ..CameraRaw::default() });
+            assert!(text.contains(&format!("crs:PerspectiveUpright=\"{n}\"")), "{mode}");
+            let mut back = CameraRaw::default();
+            load(&mut back, text.as_bytes()).unwrap();
+            assert_eq!(back.upright, mode);
+        }
         let mut q = CameraRaw::default();
         load(&mut q, FIXTURE.to_vec().as_slice()).unwrap();
         assert_eq!((q.upright.as_str(), q.transform_scale), ("off", 100.0), "Camera Raw's neutral Scale is 100");
