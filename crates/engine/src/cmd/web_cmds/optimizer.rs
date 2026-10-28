@@ -266,46 +266,7 @@ pub fn optimize(
                         }
                     })
                     .collect();
-                let capacity = if transparent { 255 } else { 256 };
-                let room = if transparent { st.colors.saturating_sub(1).max(2) } else { st.colors };
-                let mut pal = if let Some(table) = &st.color_table {
-                    if table.is_empty() {
-                        return Err(other("colorTable must contain at least one opaque entry"));
-                    }
-                    if table.len() > capacity {
-                        if !st.reduce_palette {
-                            return Err(other(format!(
-                                "colorTable has {} entries; this image allows {capacity}. Enable Reduce Palette explicitly or choose a smaller palette",
-                                table.len()
-                            )));
-                        }
-                        if !st.color_table_edits.is_empty() {
-                            return Err(other("reducing colorTable changes its indices; clear colorTableEdits before reducing the palette"));
-                        }
-                        let palette = Palette { name: "Color Table".into(), colors: table.iter().map(|color| color.map(|v| f32::from(v) / 255.0)).collect() };
-                        crate::palette_cmds::reduce_palette(&palette, capacity)?.colors.iter().map(|color| color.map(to8)).collect()
-                    } else {
-                        table.clone()
-                    }
-                } else {
-                    let n_opaque = work.iter().filter(|p| p[3] >= 0.5).count();
-                    let step = if n_opaque > 1 << 20 && st.palette != PaletteKind::Exact { n_opaque / (1 << 20) + 1 } else { 1 };
-                    let mut src: Vec<[f32; 4]> = work.iter().filter(|p| p[3] >= 0.5).step_by(step).copied().collect();
-                    if src.is_empty() {
-                        src = work.clone();
-                    }
-                    let mut pal = quantize::build_palette(&src, st.palette, room, Forced::None).map_err(other)?;
-                    if st.web_snap > 0.0 {
-                        let tol = (st.web_snap * 255.0) as u8;
-                        for c in &mut pal {
-                            let snap = c.map(|x| ((f32::from(x) / 51.0).round() * 51.0) as u8);
-                            if c.iter().zip(snap).all(|(a, b)| a.abs_diff(b) <= tol) {
-                                *c = snap;
-                            }
-                        }
-                    }
-                    pal
-                };
+                let mut pal = stock_indexed_palette(&work, st, transparent)?;
                 if transparent {
                     pal.truncate(255);
                 }
@@ -362,70 +323,8 @@ pub fn optimize(
                         }
                     })
                     .collect();
-                let capacity = 256 - usize::from(transparent);
-                let fixed = st.color_table.is_some() || st.palette_snapshot.is_some();
-                // BlackWhite is a fixed two-opaque-entry generation preset. Its count is independent
-                // of the indexed format's total-count field so transparency can add a third slot.
-                let generated_black_white = !fixed && st.palette == PaletteKind::BlackWhite;
-                let room = if generated_black_white { 2 } else { st.colors.saturating_sub(usize::from(transparent)).clamp(1, capacity) };
                 let profile = indexed_profile(icc)?;
-                let mut pal = if let Some(table) = &st.color_table {
-                    if table.is_empty() {
-                        return Err(other("colorTable must contain at least one opaque entry"));
-                    }
-                    if table.len() > capacity {
-                        if !st.reduce_palette {
-                            return Err(other(format!(
-                                "colorTable has {} entries; this image allows {capacity}. Enable Reduce Palette explicitly or choose a smaller palette",
-                                table.len()
-                            )));
-                        }
-                        if !st.color_table_edits.is_empty() {
-                            return Err(other("reducing colorTable changes its indices; clear colorTableEdits before reducing the palette"));
-                        }
-                        let palette = Palette { name: "Color Table".into(), colors: table.iter().map(|color| color.map(|v| f32::from(v) / 255.0)).collect() };
-                        crate::palette_cmds::reduce_palette(&palette, capacity)?.colors.iter().map(|color| color.map(to8)).collect()
-                    } else {
-                        table.clone()
-                    }
-                } else if let Some(snapshot) = &st.palette_snapshot {
-                    snapshot.validate().map_err(other)?;
-                    let palette = if snapshot.colors.len() > capacity {
-                        if !st.reduce_palette {
-                            return Err(other(format!(
-                                "palette has {} entries; this image allows {capacity}. Enable Reduce Palette explicitly or choose a smaller palette",
-                                snapshot.colors.len()
-                            )));
-                        }
-                        crate::palette_cmds::reduce_palette(snapshot, capacity)?
-                    } else {
-                        snapshot.clone()
-                    };
-                    // Library snapshots are sRGB. If conversion is disabled, encode palette
-                    // entries in the export document's profile, just like its other pixel data.
-                    let mut palette = palette;
-                    if let Some(profile) = &profile {
-                        convert_palette(&mut palette, photocraft_cms::Builtin::Srgb.profile(), profile)?;
-                    }
-                    palette.colors.iter().map(|color| color.map(to8)).collect()
-                } else {
-                    let generated = quantize::build_palette(&work, st.palette, room, Forced::None).map_err(other)?;
-                    if !generated_black_white && generated.len() > room {
-                        let palette = Palette { name: "Generated".into(), colors: generated.iter().map(|c| c.map(|v| f32::from(v) / 255.0)).collect() };
-                        crate::palette_cmds::reduce_palette(&palette, room)?.colors.iter().map(|c| c.map(to8)).collect()
-                    } else {
-                        generated
-                    }
-                };
-                if st.web_snap > 0.0 && !fixed {
-                    let tol = (st.web_snap * 255.0) as u8;
-                    for c in &mut pal {
-                        let snap = c.map(|x| ((f32::from(x) / 51.0).round() * 51.0) as u8);
-                        if c.iter().zip(snap).all(|(a, b)| a.abs_diff(b) <= tol) {
-                            *c = snap;
-                        }
-                    }
-                }
+                let mut pal = mapped_indexed_palette(&work, st, transparent, profile.as_ref())?;
                 let first = pal.first().copied().ok_or_else(|| other("empty colour table"))?;
                 color_table = pal.clone();
                 let t = transparent.then(|| {
@@ -467,6 +366,115 @@ pub fn optimize(
         }
     };
     Ok(Optimized { bytes, ext: st.format.ext(), width: ww, height: hh, colors, color_table, transparent_index, indices, preview: look })
+}
+
+fn stock_indexed_palette(work: &[[f32; 4]], st: &WebSettings, transparent: bool) -> Result<Vec<[u8; 3]>> {
+    let capacity = if transparent { 255 } else { 256 };
+    let room = if transparent { st.colors.saturating_sub(1).max(2) } else { st.colors };
+    let pal = if let Some(table) = &st.color_table {
+        if table.is_empty() {
+            return Err(other("colorTable must contain at least one opaque entry"));
+        }
+        if table.len() > capacity {
+            if !st.reduce_palette {
+                return Err(other(format!(
+                    "colorTable has {} entries; this image allows {capacity}. Enable Reduce Palette explicitly or choose a smaller palette",
+                    table.len()
+                )));
+            }
+            if !st.color_table_edits.is_empty() {
+                return Err(other("reducing colorTable changes its indices; clear colorTableEdits before reducing the palette"));
+            }
+            let palette = Palette { name: "Color Table".into(), colors: table.iter().map(|color| color.map(|v| f32::from(v) / 255.0)).collect() };
+            crate::palette_cmds::reduce_palette(&palette, capacity)?.colors.iter().map(|color| color.map(to8)).collect()
+        } else {
+            table.clone()
+        }
+    } else {
+        let n_opaque = work.iter().filter(|p| p[3] >= 0.5).count();
+        let step = if n_opaque > 1 << 20 && st.palette != PaletteKind::Exact { n_opaque / (1 << 20) + 1 } else { 1 };
+        let mut src: Vec<[f32; 4]> = work.iter().filter(|p| p[3] >= 0.5).step_by(step).copied().collect();
+        if src.is_empty() {
+            src = work.to_vec();
+        }
+        let mut pal = quantize::build_palette(&src, st.palette, room, Forced::None).map_err(other)?;
+        if st.web_snap > 0.0 {
+            let tol = (st.web_snap * 255.0) as u8;
+            for c in &mut pal {
+                let snap = c.map(|x| ((f32::from(x) / 51.0).round() * 51.0) as u8);
+                if c.iter().zip(snap).all(|(a, b)| a.abs_diff(b) <= tol) {
+                    *c = snap;
+                }
+            }
+        }
+        pal
+    };
+    Ok(pal)
+}
+
+fn mapped_indexed_palette(work: &[[f32; 4]], st: &WebSettings, transparent: bool, profile: Option<&photocraft_cms::Profile>) -> Result<Vec<[u8; 3]>> {
+    let capacity = 256 - usize::from(transparent);
+    let fixed = st.color_table.is_some() || st.palette_snapshot.is_some();
+    // BlackWhite has two opaque entries, independently of the total indexed colour count.
+    let generated_black_white = !fixed && st.palette == PaletteKind::BlackWhite;
+    let room = if generated_black_white { 2 } else { st.colors.saturating_sub(usize::from(transparent)).clamp(1, capacity) };
+    let mut pal = if let Some(table) = &st.color_table {
+        if table.is_empty() {
+            return Err(other("colorTable must contain at least one opaque entry"));
+        }
+        if table.len() > capacity {
+            if !st.reduce_palette {
+                return Err(other(format!(
+                    "colorTable has {} entries; this image allows {capacity}. Enable Reduce Palette explicitly or choose a smaller palette",
+                    table.len()
+                )));
+            }
+            if !st.color_table_edits.is_empty() {
+                return Err(other("reducing colorTable changes its indices; clear colorTableEdits before reducing the palette"));
+            }
+            let palette = Palette { name: "Color Table".into(), colors: table.iter().map(|color| color.map(|v| f32::from(v) / 255.0)).collect() };
+            crate::palette_cmds::reduce_palette(&palette, capacity)?.colors.iter().map(|color| color.map(to8)).collect()
+        } else {
+            table.clone()
+        }
+    } else if let Some(snapshot) = &st.palette_snapshot {
+        snapshot.validate().map_err(other)?;
+        let palette = if snapshot.colors.len() > capacity {
+            if !st.reduce_palette {
+                return Err(other(format!(
+                    "palette has {} entries; this image allows {capacity}. Enable Reduce Palette explicitly or choose a smaller palette",
+                    snapshot.colors.len()
+                )));
+            }
+            crate::palette_cmds::reduce_palette(snapshot, capacity)?
+        } else {
+            snapshot.clone()
+        };
+        // Snapshots are sRGB; encode their entries in the export document's profile.
+        let mut palette = palette;
+        if let Some(profile) = profile {
+            convert_palette(&mut palette, photocraft_cms::Builtin::Srgb.profile(), profile)?;
+        }
+        palette.colors.iter().map(|color| color.map(to8)).collect()
+    } else {
+        let generated = quantize::build_palette(work, st.palette, room, Forced::None).map_err(other)?;
+        if !generated_black_white && generated.len() > room {
+            let palette = Palette { name: "Generated".into(), colors: generated.iter().map(|c| c.map(|v| f32::from(v) / 255.0)).collect() };
+            crate::palette_cmds::reduce_palette(&palette, room)?.colors.iter().map(|c| c.map(to8)).collect()
+        } else {
+            generated
+        }
+    };
+    if st.web_snap > 0.0 && !fixed {
+        let tol = (st.web_snap * 255.0) as u8;
+        for c in &mut pal {
+            let snap = c.map(|x| ((f32::from(x) / 51.0).round() * 51.0) as u8);
+            if c.iter().zip(snap).all(|(a, b)| a.abs_diff(b) <= tol) {
+                *c = snap;
+            }
+        }
+    }
+    Ok(pal)
 }
 
 /// Save for Web has already converted its source to RGB, but may retain a non-sRGB profile.
