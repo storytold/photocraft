@@ -538,6 +538,25 @@ fn a_separate_drop_applies_the_open_transform_and_places_at_once() {
     assert_eq!(history_steps(&app), steps + 2);
 }
 
+/// #8492: with Skip Transform when Placing on, several files dropped on the canvas are all placed
+/// in one go: no Free Transform opens to hold the queue back.
+#[test]
+fn skip_transform_when_placing_places_every_queued_drop_at_once() {
+    let ctx = egui::Context::default();
+    let mut app = app_with_canvas();
+    app.session.execute("prefs.set", json!({"path": "general.skipTransformWhenPlacing", "value": true})).unwrap();
+    let (layers, steps) = (layer_count(&app), history_steps(&app));
+    for name in ["one.png", "two.png", "three.png"] {
+        app.drop_places.push_back(crate::file_open::DropPlace::Bytes(name.into(), png_bytes(4, 3)));
+    }
+    app.place_next_dropped(&ctx);
+    assert!(app.ui.transform.is_none(), "no Free Transform opens");
+    assert!(app.drop_places.is_empty(), "the whole queue is placed in one frame");
+    assert_eq!((layer_count(&app), history_steps(&app)), (layers + 3, steps + 3), "one Place Embedded step per file");
+    let st = app.session.active().unwrap();
+    assert_eq!(st.doc.layer(st.active_layer.unwrap()).unwrap().name, "three");
+}
+
 /// #1099: switching tabs after an actual canvas drop cancels the place in its source document.
 #[test]
 fn switching_documents_after_a_canvas_drop_undoes_only_the_place() {
