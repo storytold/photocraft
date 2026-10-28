@@ -779,7 +779,8 @@ fn metadata_none_leaves_out_the_document_xmp() {
     img.meta.dpi = Some((300.0, 300.0));
     img.meta.text = vec![("Comment".into(), "free-form-note".into())];
     // Display P3 rather than sRGB, so no export can pass for keeping it by writing its default.
-    img.icc = Some(photocraft_cms::Builtin::DisplayP3.profile().to_bytes().to_vec());
+    let p3 = photocraft_cms::Builtin::DisplayP3.profile().to_bytes().to_vec();
+    img.icc = Some(p3.clone());
     std::fs::write(&a, photocraft_codecs::encode(&img, photocraft_codecs::Format::Png, &Default::default()).unwrap()).unwrap();
     let ancestors = |p: &Path| String::from_utf8_lossy(&std::fs::read(p).unwrap()).contains("DocumentAncestors");
     let decoded = |p: &Path| photocraft_codecs::decode(&std::fs::read(p).unwrap()).unwrap();
@@ -808,7 +809,7 @@ fn metadata_none_leaves_out_the_document_xmp() {
         // Only the XMP and text go: the pixels, profile and resolution are the default export's.
         let (default, none) = (decoded(&converted_files[0]), decoded(&converted_files[2]));
         assert_eq!(none.data(), default.data(), "{ext}: pixels");
-        assert!(default.icc.is_some(), "{ext}: the default export keeps the ICC profile");
+        assert_eq!(default.icc.as_deref(), Some(&p3[..]), "{ext}: the default export keeps the input's Display P3 profile");
         assert_eq!(none.icc, default.icc, "{ext}: ICC profile");
         assert_eq!(none.meta.dpi, default.meta.dpi, "{ext}: resolution");
         assert!(none.meta.dpi.is_some_and(|(x, y)| (x - 300.0).abs() < 0.5 && (y - 300.0).abs() < 0.5), "{ext}: {:?}", none.meta.dpi);
