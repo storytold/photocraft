@@ -39,9 +39,18 @@ case "$MACHINE" in
 esac
 ARCH="$HOST_ARCH"
 if [[ -n "${CARGO_BUILD_TARGET:-}" ]]; then
+  # cargo's host-tuple alias means the host triple; resolve it so the binary dir matches cargo's output.
+  if [[ "$CARGO_BUILD_TARGET" = host-tuple ]]; then
+    CARGO_BUILD_TARGET="$(rustc -vV | sed -n 's/^host: //p')"
+    export CARGO_BUILD_TARGET
+  fi
   case "$CARGO_BUILD_TARGET" in
     aarch64-unknown-freebsd) ARCH=aarch64 ;;
-    *) ARCH=x86_64 ;;
+    x86_64-unknown-freebsd) ARCH=x86_64 ;;
+    *)
+      echo "error: unsupported CARGO_BUILD_TARGET $CARGO_BUILD_TARGET (use x86_64-unknown-freebsd or aarch64-unknown-freebsd)" >&2
+      exit 2
+      ;;
   esac
 fi
 # A cross-built binary cannot run on this host, so the --version check and the man-page example are skipped.
