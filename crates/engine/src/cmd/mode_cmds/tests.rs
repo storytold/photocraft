@@ -267,6 +267,21 @@ fn indexed_color_rejects_invalid_counts_without_editing_the_document() {
 }
 
 #[test]
+fn indexed_extended_mapping_is_opt_in_and_malformed_values_error() {
+    for params in [json!({"mapping": {"method": "not-a-method"}}), json!({"dither": 42}), json!({"paletteId": 42})] {
+        let mut s = session(12, 12, 8, "rgb");
+        let before = s.active().unwrap().history.past_len();
+        assert!(s.execute("image.mode.indexedColor", params.clone()).is_err(), "{params}");
+        assert_eq!(s.active().unwrap().history.past_len(), before, "{params}");
+        assert_eq!(doc(&s).mode, ColorMode::Rgb, "{params}");
+    }
+
+    let mut custom = session(12, 12, 8, "rgb");
+    custom.execute("image.mode.indexedColor", json!({"colors": 8, "mapping": {"method": "floydSteinberg"}})).unwrap();
+    assert_eq!(doc(&custom).mode, ColorMode::Indexed);
+}
+
+#[test]
 fn indexed_color_palettes_and_dithers() {
     for palette in ["selective", "perceptual", "adaptive", "web", "uniform", "systemMac", "systemWindows"] {
         for dither in ["none", "diffusion", "pattern", "noise"] {
@@ -521,6 +536,76 @@ fn indexed_exact_transparency_and_sources() {
     assert!(doc(&s).color_table.is_none());
     s.execute("edit.undo", json!({})).unwrap();
     assert!(doc(&s).color_table.is_some());
+}
+
+#[test]
+fn indexed_black_white_generation_keeps_both_opaque_entries_and_replays() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 1, "background": "transparent"})).unwrap();
+    paint(&mut s, |x, _| {
+        if x < 2 {
+            [0.0, 0.0, 0.0, 1.0]
+        } else if x < 4 {
+            [1.0, 1.0, 1.0, 1.0]
+        } else if x < 6 {
+            [0.4, 0.4, 0.4, 1.0]
+        } else {
+            [0.0, 0.0, 0.0, 0.0]
+        }
+    });
+    let params = json!({"palette": "blackWhite", "colors": 2, "forced": "none", "dither": "none"});
+    let result = s.execute("image.mode.indexedColor", params.clone()).unwrap();
+    let first_table = doc(&s).color_table.clone().unwrap();
+    assert_eq!(result["colors"], 3);
+    assert_eq!(result["transparentIndex"], 2);
+    assert_eq!(first_table.colors.as_slice(), &[[0, 0, 0], [255, 255, 255], [255, 255, 255]]);
+    assert_eq!(first_table.transparent, Some(2));
+    assert_eq!(colours(doc(&s)), std::collections::HashSet::from([[0, 0, 0], [255, 255, 255]]));
+    assert_eq!(doc(&s).layers[0].surface().unwrap().rgba(7, 0)[3], 0.0);
+
+    // Reapplying the same generated recipe to the indexed result is deterministic, including the
+    // transparent slot and expanded pixels.
+    let first_pixels = doc(&s).layers[0].surface().unwrap().to_interleaved(doc(&s).bounds());
+    s.execute("image.mode.indexedColor", params).unwrap();
+    assert_eq!(doc(&s).color_table.as_ref(), Some(&first_table));
+    assert_eq!(doc(&s).layers[0].surface().unwrap().to_interleaved(doc(&s).bounds()), first_pixels);
+}
+
+#[test]
+fn indexed_explicit_transparency_excludes_reserved_palette_entry() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 2, "height": 1, "background": "transparent"})).unwrap();
+    paint(&mut s, |x, _| if x == 0 { [0.0, 0.0, 0.0, 1.0] } else { [0.0; 4] });
+    let result =
+        s.execute("image.mode.indexedColor", json!({"palette": "blackWhite", "colors": 2, "forced": "none", "dither": "none", "transparentIndex": 0})).unwrap();
+    let d = doc(&s);
+    let table = d.color_table.as_ref().unwrap();
+    assert_eq!(result["transparentIndex"], 0);
+    assert_eq!(table.transparent, Some(0));
+    assert_eq!(table.colors.as_slice(), &[[0, 0, 0], [255, 255, 255]]);
+    assert_eq!(d.layers[0].surface().unwrap().rgba(0, 0), [1.0, 1.0, 1.0, 1.0], "opaque black must not use the transparent slot");
+    assert_eq!(d.layers[0].surface().unwrap().rgba(1, 0)[3], 0.0);
+
+    let png = photocraft_io::export(d, "png", &Default::default()).expect("indexed PNG export");
+    let image = photocraft_codecs::decode(&png.bytes).unwrap().convert(photocraft_codecs::ChannelLayout::Rgba, photocraft_codecs::SampleType::U8);
+    assert_eq!(&image.data()[..4], &[255, 255, 255, 255]);
+    assert_eq!(&image.data()[4..8], &[0, 0, 0, 0]);
+}
+
+#[test]
+fn indexed_non_black_white_generation_keeps_existing_total_count_semantics() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 3, "height": 1, "background": "transparent"})).unwrap();
+    paint(&mut s, |x, _| match x {
+        0 => [1.0, 0.0, 0.0, 1.0],
+        1 => [0.0, 0.0, 1.0, 1.0],
+        _ => [0.0, 0.0, 0.0, 0.0],
+    });
+    let result = s.execute("image.mode.indexedColor", json!({"palette": "selective", "colors": 2, "forced": "none", "dither": "none"})).unwrap();
+    let table = doc(&s).color_table.as_ref().unwrap();
+    assert_eq!(result["colors"], 2);
+    assert_eq!(table.colors.len(), 2, "one opaque entry plus one transparency slot");
+    assert_eq!(table.transparent, Some(1));
 }
 
 #[test]
