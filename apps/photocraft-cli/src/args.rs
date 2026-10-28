@@ -74,6 +74,11 @@ pub(crate) struct ExportArgs {
     /// and CMYK shrink) or progressive
     #[arg(long, value_name = "baseline|optimized|progressive", value_parser = jpeg_format)]
     pub(crate) jpeg_format: Option<JpegFormat>,
+    /// A layered PSD/PSB stores Photoshop's white placeholder instead of the merged image
+    /// (Maximize Compatibility off): a smaller file and a faster save, but readers that show only
+    /// the merged image see white
+    #[arg(long)]
+    pub(crate) no_maximize_compatibility: bool,
 }
 
 /// Convert between formats (.pcraft, .psd, .png, .jpg, .tif, .webp, .exr, …)

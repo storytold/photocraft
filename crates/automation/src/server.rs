@@ -191,6 +191,12 @@ pub struct SaveParams {
     /// DDS: also write the full mip chain, each level a box filter of the one above.
     #[serde(default, rename = "ddsMipmaps")]
     pub dds_mipmaps: bool,
+    /// PSD/PSB: write the real merged image (Photoshop's Maximize Compatibility). false writes
+    /// Photoshop's white placeholder instead: a smaller file and a faster save, but readers that
+    /// show only the merged image see white. Unset: the real image (in bridge mode, the app's
+    /// Preferences › File Handling decides).
+    #[serde(default, rename = "maximizeCompatibility")]
+    pub maximize_compatibility: Option<bool>,
     #[serde(default)]
     pub index: Option<usize>,
 }
@@ -1073,7 +1079,8 @@ impl PhotocraftMcp {
         if let Some(b) = self.bridge_client() {
             // The bridge forwards to the running app's `app.save`, which takes only an optional
             // path (without one it writes back to the document's own layered file, as headless
-            // does), the Targa bits and the DDS options, so the other options are headless-only. Saying so beats
+            // does), the Targa bits, the DDS options and Maximize Compatibility, so the other
+            // options are headless-only. Saying so beats
             // saving with defaults while the caller believes their quality or format was applied.
             let unsupported: Vec<&str> = [
                 p.format.is_some().then_some("format"),
@@ -1101,6 +1108,9 @@ impl PhotocraftMcp {
             if p.dds_mipmaps {
                 params["ddsMipmaps"] = json!(true);
             }
+            if let Some(maximize) = p.maximize_compatibility {
+                params["maximizeCompatibility"] = json!(maximize);
+            }
             return to_result(b.call("app.save", params).await);
         }
         let Some(r) = self
@@ -1108,6 +1118,9 @@ impl PhotocraftMcp {
                 let mut opts = photocraft_io::ExportOptions { tiff_layers: p.tiff_layers, tga_bits, ..Default::default() };
                 opts.encode.dpx_bits = dpx_bits;
                 opts.encode.dds = photocraft_io::DdsOptions { compression: dds_compression.unwrap_or_default(), mipmaps: p.dds_mipmaps };
+                if let Some(maximize) = p.maximize_compatibility {
+                    opts.psd_maximize_compatibility = maximize;
+                }
                 if let Some(q) = p.quality {
                     opts.encode.jpeg_quality = q;
                     opts.encode.webp_quality = q;

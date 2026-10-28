@@ -273,6 +273,28 @@ fn doc_save_rejects_a_bad_quality_instead_of_ignoring_or_clamping_it() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// #8064: `doc.save` takes `maximizeCompatibility` for a layered PSD's merged image (false: the
+/// placeholder, flagged in resource 1057); anything but a boolean writes nothing.
+#[test]
+fn doc_save_takes_maximize_compatibility() {
+    let dir = std::env::temp_dir().join(format!("pc-rpc-save-maximize-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut h = Headless::trusted_local();
+    h.handle("doc.new", json!({"width": 64, "height": 32})).unwrap();
+    h.handle("engine.execute", json!({"command": "layer.new.layer"})).unwrap();
+    let real_merged = |p: &std::path::Path| photocraft_psd::PsdFile::from_bytes(&std::fs::read(p).unwrap()).unwrap().has_real_merged_data();
+    for (name, maximize, real) in [("default.psd", json!(null), true), ("off.psd", json!(false), false), ("on.psd", json!(true), true)] {
+        let path = dir.join(name);
+        h.handle("doc.save", json!({"path": path.to_string_lossy(), "maximizeCompatibility": maximize})).unwrap();
+        assert_eq!(real_merged(&path), Some(real), "{name}");
+    }
+    let bad = dir.join("bad.psd");
+    let err = h.handle("doc.save", json!({"path": bad.to_string_lossy(), "maximizeCompatibility": 0})).unwrap_err().to_string();
+    assert!(err.contains("maximizeCompatibility"), "{err}");
+    assert!(!bad.exists(), "a bad value writes nothing");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn automation_preview_rejects_oversized_full_size_and_numeric_wraparound() {
     let mut h = Headless::new();

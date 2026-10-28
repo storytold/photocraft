@@ -7,14 +7,16 @@ use super::{
 pub(crate) const SAVE_OPTIONS_OPEN: &str = "Answer the TIFF, Targa, DDS or JPEG Options before starting another save";
 
 /// The format answers a save takes instead of asking: the Targa bits per pixel (`"tgaBits"`),
-/// the DDS options (`"ddsCompression"`, `"ddsMipmaps"`) and JPEG Options (`"quality"` 0–12,
-/// `"jpegFormat"`). `None` asks in Save As and takes the default in automation saves, which never
-/// prompt.
+/// the DDS options (`"ddsCompression"`, `"ddsMipmaps"`), JPEG Options (`"quality"` 0–12,
+/// `"jpegFormat"`) and a PSD/PSB's Maximize Compatibility (`"maximizeCompatibility"`). `None` asks
+/// in Save As and takes the default in automation saves, which never prompt (Maximize
+/// Compatibility: Preferences › File Handling decides).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct FormatChoices {
     pub tga_bits: Option<photocraft_io::TgaBits>,
     pub dds: Option<photocraft_io::DdsOptions>,
     pub jpeg: Option<jpeg_options_ui::JpegChoice>,
+    pub maximize_compatibility: Option<bool>,
 }
 
 impl FormatChoices {
@@ -24,6 +26,7 @@ impl FormatChoices {
             tga_bits: targa_options_ui::bits_param(params, cmd)?,
             dds: dds_options_ui::options_param(params, cmd)?,
             jpeg: jpeg_options_ui::choice_param(params, cmd)?,
+            maximize_compatibility: maximize_param(params, cmd)?,
         })
     }
 
@@ -34,12 +37,18 @@ impl FormatChoices {
             tga_bits: targa_options_ui::bits_param(params, cmd)?,
             dds: dds_options_ui::options_param(params, cmd)?,
             jpeg: jpeg_options_ui::recorded_choice(params, cmd)?,
+            maximize_compatibility: maximize_param(params, cmd)?,
         })
     }
 
     /// The export settings with these answers applied.
     pub fn apply(self, settings: ExportSettings) -> ExportSettings {
-        let settings = ExportSettings { tga_bits: self.tga_bits.or(settings.tga_bits), dds: self.dds.unwrap_or(settings.dds), ..settings };
+        let settings = ExportSettings {
+            tga_bits: self.tga_bits.or(settings.tga_bits),
+            dds: self.dds.unwrap_or(settings.dds),
+            psd_maximize_compatibility: self.maximize_compatibility.unwrap_or(settings.psd_maximize_compatibility),
+            ..settings
+        };
         match self.jpeg {
             Some(j) => j.apply(settings),
             None => settings,
@@ -57,7 +66,15 @@ impl FormatChoices {
         if let Some(j) = self.jpeg {
             j.record(step);
         }
+        if let Some(maximize) = self.maximize_compatibility {
+            step["maximizeCompatibility"] = maximize.into();
+        }
     }
+}
+
+/// `"maximizeCompatibility"` in command or control call `cmd`'s params, read as the engine reads it.
+fn maximize_param(params: &Value, cmd: &str) -> Result<Option<bool>, String> {
+    photocraft_engine::file_cmds::maximize_compatibility_param(params, cmd).map_err(|e| e.to_string())
 }
 
 /// Decode a file: (document, warnings about anything approximated or dropped).
