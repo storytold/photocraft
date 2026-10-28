@@ -336,16 +336,21 @@ impl PhotocraftApp {
 
     /// Place the next file dropped on the canvas and start Free Transform on it, once no other
     /// transform is in progress (so several files are placed and transformed one after another).
-    /// Each file goes to the document it was dropped on, even if another tab was selected since
-    /// (Free Transform then doesn't open); a closed document's files are reported, not placed
-    /// elsewhere. With Skip Transform when Placing on, one file is handled per frame, so a large
-    /// drop doesn't hold the UI until the whole queue is decoded.
+    /// Each file goes to the document it was dropped on: with Free Transform to open, a file
+    /// dropped on another tab waits until that tab is selected again (files for the selected one
+    /// go first); with Skip Transform when Placing on, it's placed there at once. A closed
+    /// document's files are reported, not placed elsewhere. With Skip Transform when Placing on,
+    /// one file is handled per frame, so a large drop doesn't hold the UI until the whole queue is
+    /// decoded.
     pub(crate) fn place_next_dropped(&mut self, ctx: &egui::Context) {
         let one_per_frame = self.session.prefs().general.skip_transform_when_placing;
         while self.ui.transform.is_none() {
-            let Some(QueuedPlace { doc, what }) = self.drop_places.pop_front() else { return };
+            let selected = self.session.active().map(|st| st.doc.id);
+            let docs = self.session.documents();
+            let due = |q: &QueuedPlace| one_per_frame || Some(q.doc) == selected || !docs.iter().any(|st| st.doc.id == q.doc);
+            let Some(QueuedPlace { doc, what }) = self.drop_places.iter().position(due).and_then(|i| self.drop_places.remove(i)) else { return };
             let name = what.name();
-            let active = self.session.active().map(|st| st.doc.id) == Some(doc);
+            let active = selected == Some(doc);
             let placed = if active { self.place_dropped(what) } else { self.with_document(doc, |app| app.place_dropped(what)) };
             match placed {
                 Ok(_) if active => {
