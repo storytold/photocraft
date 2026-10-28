@@ -14,7 +14,13 @@ use crate::commands::CommandSpec;
 use crate::{EngineError, Result, Session};
 
 mod validation;
-pub(crate) use validation::validate_params;
+pub(crate) fn validate_params(id: &str, params: &Value) -> Result<()> {
+    validation::validate_params(id, params)?;
+    if id == crate::palette_cmds::FILTER_ID {
+        crate::palette_cmds::validate_params(params)?;
+    }
+    Ok(())
+}
 
 fn f(p: &Value, k: &str, d: f32) -> f32 {
     p.get(k).and_then(Value::as_f64).map_or(d, |v| v as f32)
@@ -185,8 +191,9 @@ pub fn apply_filter_to_surface(
     bounds: photocraft_geom::Rect,
     selection: Option<&photocraft_raster::Surface>,
     canvas: photocraft_geom::Rect,
+    cancelled: &(dyn Fn() -> bool + Sync),
 ) -> Result<Option<photocraft_raster::Surface>> {
-    apply_filter_to_surface_in(id, params, surf, bounds, selection, canvas, &crate::jobs::JobCtx::new())
+    apply_filter_to_surface_with(id, params, surf, bounds, selection, canvas, &crate::jobs::JobCtx::new(), cancelled)
 }
 
 /// Render a stored filter with the caller's cancellation context, including custom kernel preparation.
@@ -199,11 +206,30 @@ pub(crate) fn apply_filter_to_surface_in(
     canvas: photocraft_geom::Rect,
     ctx: &crate::jobs::JobCtx,
 ) -> Result<Option<photocraft_raster::Surface>> {
+    let cancelled = || ctx.cancelled();
+    apply_filter_to_surface_with(id, params, surf, bounds, selection, canvas, ctx, &cancelled)
+}
+
+fn apply_filter_to_surface_with(
+    id: &str,
+    params: &Value,
+    surf: &photocraft_raster::Surface,
+    bounds: photocraft_geom::Rect,
+    selection: Option<&photocraft_raster::Surface>,
+    canvas: photocraft_geom::Rect,
+    ctx: &crate::jobs::JobCtx,
+    cancelled: &(dyn Fn() -> bool + Sync),
+) -> Result<Option<photocraft_raster::Surface>> {
     ctx.check()?;
+    if cancelled() {
+        return Err(EngineError::Cancelled);
+    }
     // Replays bypass command dispatch; nested paths must still obey the requesting session's
     // authority, including adjustment LUTs and plug-ins, before any resolver can read them.
     crate::jobs::authorize_render_command(id, params)?;
-    // Liquify / Puppet Warp / Perspective Warp smart filters (distort_cmds).
+    if id == crate::palette_cmds::FILTER_ID {
+        return Ok(Some(crate::palette_cmds::apply_to_surface(params, surf, selection, canvas, bounds, cancelled)?));
+    }
     if let Some(out) = crate::distort_cmds::apply_to_surface(id, params, surf, canvas) {
         return Ok(Some(out));
     }
@@ -223,7 +249,6 @@ pub(crate) fn apply_filter_to_surface_in(
     // A map that can no longer be read (moved or deleted since) leaves the pixels alone, like an
     // unknown filter; the command itself already refused an unreadable map when it was added.
     // The stack owns progress across filters; this operation only inherits cancellation.
-    let cancelled = || ctx.cancelled();
     let ctl = photocraft_raster::Interrupt::cancel_only(&cancelled);
     match crate::filters_ext::resolve_map_path(&mut fp, params, &ctl) {
         Err(EngineError::Cancelled) => return Err(EngineError::Cancelled),
@@ -268,6 +293,9 @@ fn edits_transparency(filter: &FilterParams, layer: &Layer) -> bool {
 
 pub(crate) fn run_filter(s: &mut Session, id: &str, p: &Value) -> Result<Value> {
     validate_params(id, p)?;
+    if id == crate::palette_cmds::FILTER_ID {
+        return crate::palette_cmds::run_filter(s, p);
+    }
     // Session state some filters read (colours) becomes explicit params; external inputs resolve here.
     let mut prepared = crate::filters_ext::prepare(s, id, p);
     if id == "filter.distort.displace" {
@@ -566,7 +594,12 @@ pub fn specs() -> Vec<CommandSpec> {
 /// such as the Filter Gallery record the layer they ran on, and Last Filter applies to the
 /// current layer, as in Photoshop (#1270).
 pub fn last_filter(s: &Session) -> Option<(String, Value)> {
-    let (id, mut params) = s.journal.iter().rev().find(|(id, _)| params_for(id, &Value::Null).is_some() && id.starts_with("filter.")).cloned()?;
+    let (id, mut params) = s
+        .journal
+        .iter()
+        .rev()
+        .find(|(id, _)| (id.as_str() == crate::palette_cmds::FILTER_ID || params_for(id, &Value::Null).is_some()) && id.starts_with("filter."))
+        .cloned()?;
     if let Value::Object(m) = &mut params {
         m.remove("layer");
         m.remove("target");

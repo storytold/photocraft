@@ -4,6 +4,7 @@ use super::{
     BlendMode, Document, EngineError, Layer, LayerContent, LayerId, LayerMask, Result, Session, SmartObject, Surface, Value, bad, blend_from_str, json,
     layer_param, other,
 };
+use crate::jobs::JobCtx;
 
 pub(super) fn smart(doc: &Document, id: LayerId) -> Result<&SmartObject> {
     match &doc.layer(id).ok_or(EngineError::NoLayer(id))?.content {
