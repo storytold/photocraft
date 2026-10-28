@@ -372,8 +372,6 @@ fn main() {
     println!("perf_scenarios: {} mode, {} reps, {}", if quick { "quick" } else { "full" }, reps, adapter.as_deref().unwrap_or("CPU canvas"));
     let t_all = Instant::now();
 
-    first_document_scenarios(&mut b, if quick { (640, 480) } else { (1920, 1080) });
-
     // A panic in one group (a crash the scenario found) is reported against the row that was
     // running, and the other groups still run.
     type Group = fn(&mut Bench, &Sizes);
@@ -416,6 +414,9 @@ fn main() {
         }
     }
 
+    if arg(&args, "--group").is_none() {
+        first_document_scenarios(&mut b, if quick { (640, 480) } else { (1920, 1080) });
+    }
     println!("total {:.1} s", t_all.elapsed().as_secs_f64());
     if let Some(out) = arg(&args, "--json") {
         let context = json!({
@@ -502,8 +503,6 @@ fn first_document_scenarios(b: &mut Bench, (w, h): (u32, u32)) {
             b.record(name, &Session::new(), &samples, Ok(()));
         }
     }
-    // Every fresh canvas replaced the renderer resources; restore the benchmark's canvas.
-    b.gpu = Some((GpuCanvas::new(&rs), rs));
 }
 
 /// #209 rows on the layered 20 MP document.

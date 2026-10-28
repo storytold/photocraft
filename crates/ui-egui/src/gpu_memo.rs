@@ -13,7 +13,7 @@ pub const MAX_GPU_MEMO_BYTES: usize = 64 * 1024;
 pub const MAX_GPU_MEMO_ENTRIES: usize = 8;
 
 /// Identifies the application, shader set, and graphics stack that produced a failure.
-#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct MemoKey {
     pub app_version: String,
     pub shader_fingerprint: u64,
@@ -112,22 +112,6 @@ impl GpuMemo {
     /// Whether the memo has no records.
     pub fn is_empty(&self) -> bool {
         self.failures.is_empty()
-    }
-}
-
-impl Default for MemoKey {
-    fn default() -> Self {
-        Self {
-            app_version: String::new(),
-            shader_fingerprint: 0,
-            adapter_name: String::new(),
-            vendor: 0,
-            device: 0,
-            driver: String::new(),
-            driver_info: String::new(),
-            backend: String::new(),
-            shader_compiler: String::new(),
-        }
     }
 }
 

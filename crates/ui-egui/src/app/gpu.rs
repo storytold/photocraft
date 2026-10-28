@@ -72,10 +72,10 @@ impl PhotocraftApp {
     }
 
     fn save_gpu_memo(&mut self, memo: &crate::gpu_memo::GpuMemo) {
-        if let (Ok(text), Some(save)) = (memo.serialize(), self.services.save_gpu_memo.as_mut()) {
-            if let Err(error) = save(&text) {
-                log::info!("could not save GPU compositor memo: {error}");
-            }
+        if let (Ok(text), Some(save)) = (memo.serialize(), self.services.save_gpu_memo.as_mut())
+            && let Err(error) = save(&text)
+        {
+            log::info!("could not save GPU compositor memo: {error}");
         }
     }
 

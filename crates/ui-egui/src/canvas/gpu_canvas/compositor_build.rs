@@ -6,7 +6,7 @@ pub(super) enum BuildState {
     #[default]
     NotStarted,
     Building,
-    Ready(photocraft_gpu::Compositor),
+    Ready(Box<photocraft_gpu::Compositor>),
     Failed(photocraft_gpu::Unsupported),
     Adopted,
 }
@@ -29,7 +29,7 @@ pub(super) fn start(device: &eframe::wgpu::Device, format: eframe::wgpu::Texture
             photocraft_gpu::Compositor::try_new_with_format_threads_classified(&device, format, threads)
         }));
         let (result, outcome) = match result {
-            Ok(Ok(comp)) => (BuildState::Ready(comp), Ok(())),
+            Ok(Ok(comp)) => (BuildState::Ready(Box::new(comp)), Ok(())),
             Ok(Err(error)) => {
                 let deterministic = error.kind == photocraft_gpu::BuildFailureKind::DeterministicShaderCompilation;
                 (BuildState::Failed(photocraft_gpu::Unsupported(error.message.clone())), Err((error.message, deterministic)))

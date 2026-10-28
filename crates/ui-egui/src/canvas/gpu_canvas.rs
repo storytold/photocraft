@@ -666,7 +666,7 @@ impl GpuCanvas {
                     *state = compositor_build::BuildState::Building;
                     return Err(photocraft_gpu::Unsupported("GPU compositor is building".into()));
                 }
-                compositor_build::BuildState::Ready(comp) => res.compositor = Some(comp),
+                compositor_build::BuildState::Ready(comp) => res.compositor = Some(*comp),
                 compositor_build::BuildState::Failed(error) => {
                     res.compositor_failed = Some(error.clone());
                     return Err(error);

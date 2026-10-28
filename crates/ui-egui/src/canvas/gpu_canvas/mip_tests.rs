@@ -190,7 +190,7 @@ fn background_compositor_switch_preserves_pixels(gpu: &GpuCanvas) {
     assert!(gpu.compositor_failed().is_none());
     let built = photocraft_gpu::Compositor::try_new_with_format(&gpu.rs.device, photocraft_gpu::Compositor::preferred_acc_format(&gpu.rs.adapter));
     let Ok(comp) = built else { return };
-    *gpu.compositor_build.lock().unwrap() = compositor_build::BuildState::Ready(comp);
+    *gpu.compositor_build.lock().unwrap() = compositor_build::BuildState::Ready(Box::new(comp));
     let damage = Rect::new(8, 8, 16, 16);
     if let LayerContent::Raster(surface) = &mut doc.layers[0].content {
         surface.fill_rect(damage, &[0.8, 0.2, 0.1, 1.0]);
