@@ -444,7 +444,7 @@ fn indexed_color(s: &mut Session, p: &Value) -> Result<Value> {
         None | Some(Value::Null) => None,
         Some(v) => Some(v.as_u64().ok_or_else(|| bad(CMD, "transparent: an integer index into the palette"))?),
     };
-    let (pal_len, transparent) = s.edit("Indexed Color", |doc, active| {
+    let (pal_len, transparent, flattened) = s.edit("Indexed Color", |doc, active| {
         let mut px = composite(doc, !transparency && matte.is_none());
         if let Some(matte) = matte {
             for pixel in &mut px {
@@ -460,6 +460,9 @@ fn indexed_color(s: &mut Session, p: &Value) -> Result<Value> {
                 }
             }
         }
+        // An explicit "no transparency" flattens the clear pixels to opaque: count them so the
+        // caller can warn that transparency was lost.
+        let flattened = if explicit_no_transparent { px.iter().filter(|q| q[3] < 0.5).count() } else { 0 };
         let has_clear = transparency && !explicit_no_transparent && px.iter().any(|q| q[3] < 0.5);
         let mut pal = match &custom_table {
             Some(t) => t.clone(),
@@ -491,9 +494,9 @@ fn indexed_color(s: &mut Session, p: &Value) -> Result<Value> {
         // Each pixel's index is known here: keep it for Color Table (#14342).
         let bounds = doc.bounds();
         doc.color_indices = doc.layers.first().and_then(|l| ColorIndices::new(l.id, l.surface()?, bounds, &indices));
-        Ok((pal.len(), transparent))
+        Ok((pal.len(), transparent, flattened))
     })?;
-    Ok(json!({"colors": pal_len, "transparentIndex": transparent}))
+    Ok(json!({"colors": pal_len, "transparentIndex": transparent, "flattened": flattened}))
 }
 
 fn hex(c: [u8; 3]) -> String {
@@ -583,8 +586,7 @@ fn color_table(s: &mut Session, p: &Value) -> Result<Value> {
     if table == cur {
         return Ok(report(&cur));
     }
-    let out = report(&table);
-    s.edit("Color Table", |doc, _| {
+    let flattened = s.edit("Color Table", |doc, _| {
         let old = cur.clone();
         // A pixel keeps its index where it is known, so entries of one colour keep their own
         // pixels; elsewhere it takes the nearest entry (#14342). The indices written here are
@@ -592,6 +594,9 @@ fn color_table(s: &mut Session, p: &Value) -> Result<Value> {
         let known = doc.color_indices.take();
         let has_pixels = |id: LayerId| doc.layers.iter().any(|l| l.id == id && l.surface().is_some());
         let record = known.as_ref().map(|k| k.layer).filter(|&id| has_pixels(id)).or_else(|| doc.layers.iter().find(|l| l.surface().is_some()).map(|l| l.id));
+        // Clearing the transparent entry makes its own clear pixels opaque: count them so the
+        // caller can warn that transparency was lost.
+        let mut flattened = 0usize;
         let canvas = doc.bounds();
         for l in doc.layers.iter_mut() {
             let id = l.id;
@@ -632,6 +637,7 @@ fn color_table(s: &mut Session, p: &Value) -> Result<Value> {
                 let alpha = if table.transparent == Some(i as u8) {
                     0.0
                 } else if c[3] <= 0.0 {
+                    flattened += 1; // A clear pixel loses its transparency: it becomes opaque.
                     1.0
                 } else {
                     c[3]
@@ -649,8 +655,10 @@ fn color_table(s: &mut Session, p: &Value) -> Result<Value> {
             }
         }
         doc.color_table = Some(table.clone());
-        Ok(())
+        Ok(flattened)
     })?;
+    let mut out = report(&table);
+    out["flattened"] = json!(flattened);
     Ok(out)
 }
 
