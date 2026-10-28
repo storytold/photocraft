@@ -502,6 +502,7 @@ fn first_document_scenarios(b: &mut Bench, sz: &Sizes) {
         if let Some(error) = failure {
             println!("{name:<52} ERROR {error}");
             b.errors.push((name.into(), error));
+            break;
         } else {
             b.record(name, &Session::new(), &samples, Ok(()));
         }

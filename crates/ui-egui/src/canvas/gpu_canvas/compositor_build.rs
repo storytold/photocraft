@@ -22,7 +22,7 @@ pub(super) fn start(device: &eframe::wgpu::Device, format: eframe::wgpu::Texture
     }
     *state = BuildState::Building;
     let (device, ctx, out) = (device.clone(), ctx.clone(), slot.clone());
-    let completion = completion.clone();
+    let worker_completion = completion.clone();
     let spawned = std::thread::Builder::new().name("gpu-compositor-build".into()).spawn(move || {
         let threads = std::thread::available_parallelism().map_or(1, |n| (n.get() / 2).max(1));
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -40,16 +40,31 @@ pub(super) fn start(device: &eframe::wgpu::Device, format: eframe::wgpu::Texture
             ),
         };
         *out.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = result;
-        *completion.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(outcome);
+        *worker_completion.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(outcome);
         ctx.request_repaint();
     });
-    if spawned.is_err() {
+    if let Err(error) = spawned {
+        record_spawn_failure(completion, &error);
         *state = BuildState::NotStarted;
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn record_spawn_failure(completion: &Completion, error: &std::io::Error) {
+    *completion.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Err((format!("failed to spawn GPU compositor build thread: {error}"), false)));
+}
+
 #[cfg(test)]
 mod tests {
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn spawn_failure_is_reported_as_retryable() {
+        let completion = super::Completion::default();
+        super::record_spawn_failure(&completion, &std::io::Error::other("resource exhausted"));
+        let outcome = completion.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
+        assert_eq!(outcome, Some(Err(("failed to spawn GPU compositor build thread: resource exhausted".into(), false))));
+    }
+
     #[test]
     fn compositor_is_send() {
         fn assert_send<T: Send>() {}
