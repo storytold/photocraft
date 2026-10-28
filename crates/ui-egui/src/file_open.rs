@@ -302,6 +302,8 @@ impl PhotocraftApp {
 
     /// Place the next file dropped on the canvas and start Free Transform on it, once no other
     /// transform is in progress (so several files are placed and transformed one after another).
+    /// With Skip Transform when Placing on, one file is placed per frame, so a large drop doesn't
+    /// hold the UI until the whole queue is decoded.
     pub(crate) fn place_next_dropped(&mut self, ctx: &egui::Context) {
         while self.ui.transform.is_none() {
             let Some(next) = self.drop_places.pop_front() else { return };
@@ -323,6 +325,11 @@ impl PhotocraftApp {
                 Ok(_) => {
                     if let Err(e) = crate::transform_tool::begin_placed(self, ctx) {
                         self.ui.status = e;
+                    }
+                    // No transform started (Skip Transform when Placing): the next file on the next frame.
+                    if self.ui.transform.is_none() && !self.drop_places.is_empty() {
+                        ctx.request_repaint();
+                        return;
                     }
                 }
                 Err(e) => self.failed(crate::i18n::fmt(tl!("Couldn't place {name}: {error}"), &[("name", &name), ("error", &e)])),
