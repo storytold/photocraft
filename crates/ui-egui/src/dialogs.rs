@@ -182,6 +182,10 @@ fn older_dialog_above(ctx: &egui::Context, live: egui::LayerId, dialogs: &[Dialo
     ctx.memory(|m| m.layer_ids().skip_while(|l| *l != live).skip(1).any(|l| others.contains(&l)))
 }
 
+fn palette_dialog(fields: &serde_json::Map<String, Value>) -> bool {
+    fields.contains_key("__filter") && fields.get("__command").and_then(Value::as_str) == Some("filter.paletteMap")
+}
+
 /// The size a resizable dialog opens at, or `None` for a dialog sized by its contents.
 fn resizable_dialog(fields: &serde_json::Map<String, Value>) -> Option<egui::Vec2> {
     if crate::prefs_ui::is_preferences(fields) {
@@ -190,6 +194,8 @@ fn resizable_dialog(fields: &serde_json::Map<String, Value>) -> Option<egui::Vec
         Some(egui::vec2(960.0, 900.0))
     } else if is_curves(fields) {
         Some(CURVES_SIZE)
+    } else if palette_dialog(fields) {
+        Some(egui::vec2(1100.0, 740.0))
     } else {
         None
     }
@@ -224,12 +230,17 @@ fn resizable_max(ctx: &egui::Context, fields: &serde_json::Map<String, Value>, m
     max
 }
 
+enum ModalSizing {
+    Fixed(egui::Vec2),
+    Resizable { size: egui::Vec2, min: egui::Vec2, max: egui::Vec2 },
+}
+
 fn show_modal<T>(
     modal: egui::Modal,
     ctx: &egui::Context,
     id: egui::Id,
-    resizable: Option<(egui::Vec2, egui::Vec2, egui::Vec2)>,
-    fixed: Option<egui::Vec2>,
+    sizing: Option<ModalSizing>,
+    palette: bool,
     interactive: bool,
     contents: impl FnOnce(&mut egui::Ui) -> T,
 ) -> egui::ModalResponse<T> {
@@ -238,19 +249,144 @@ fn show_modal<T>(
         if !interactive {
             ui.disable();
         }
-        if let Some(size) = fixed {
-            egui::Resize::default().id(id.with("resize")).with_stroke(false).fixed_size(size).show(ui, |ui| {
+        match sizing {
+            Some(ModalSizing::Fixed(size)) => egui::Resize::default().id(id.with("resize")).with_stroke(false).fixed_size(size).show(ui, |ui| {
                 ui.set_clip_rect(ui.clip_rect().expand(8.0));
                 contents(ui)
-            })
-        } else if let Some((size, min, max)) = resizable {
-            // No stroke: Resize outlines its contents 2 points out, an inner box inside the
-            // dialog's frame that left the title and buttons flush against it (#8199).
-            egui::Resize::default().id(id.with("resize")).with_stroke(false).default_size(size.min(max)).min_size(min).max_size(max).show(ui, contents)
-        } else {
-            contents(ui)
+            }),
+            Some(ModalSizing::Resizable { size, min, max }) => {
+                if palette {
+                    // Hide the idle palette resize grip without removing its native hit target.
+                    let content_style = ui.style().clone();
+                    let mut resize_style = content_style.as_ref().clone();
+                    resize_style.visuals.widgets.inactive.fg_stroke.color = egui::Color32::TRANSPARENT;
+                    let hovered_grip = resize_style.visuals.widgets.hovered.fg_stroke.color.linear_multiply(0.35);
+                    let active_grip = resize_style.visuals.widgets.active.fg_stroke.color.linear_multiply(0.35);
+                    resize_style.visuals.widgets.hovered.fg_stroke.color = hovered_grip;
+                    resize_style.visuals.widgets.active.fg_stroke.color = active_grip;
+                    let resize = egui::Resize::default().id(id.with("resize")).with_stroke(false).default_size(size.min(max)).min_size(min).max_size(max);
+                    ui.scope(|ui| {
+                        ui.set_style(resize_style);
+                        resize.show(ui, |content_ui| {
+                            content_ui.set_style(content_style.clone());
+                            contents(content_ui)
+                        })
+                    })
+                    .inner
+                } else {
+                    // No stroke: Resize outlines its contents 2 points out, an inner box inside the
+                    // dialog's frame that left the title and buttons flush against it (#8199).
+                    egui::Resize::default().id(id.with("resize")).with_stroke(false).default_size(size.min(max)).min_size(min).max_size(max).show(ui, contents)
+                }
+            }
+            None => contents(ui),
         }
     })
+}
+
+/// Keep parameter regions bounded while making overflow visible.  Palette dialogs use the solid
+/// scrollbar style even in themes whose global panels use thin overlay bars: the conversion recipe
+/// must not look clipped when a smaller window has more controls than fit.
+fn palette_scroll(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, max_height: f32, contents: impl FnOnce(&mut egui::Ui)) {
+    let old_scroll = ui.spacing().scroll;
+    let mut scroll = old_scroll;
+    scroll.floating = false;
+    scroll.foreground_color = true;
+    ui.spacing_mut().scroll = scroll;
+    egui::ScrollArea::vertical()
+        .id_salt(id)
+        .max_height(max_height.max(1.0))
+        .auto_shrink([false, true])
+        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded)
+        .show(ui, contents);
+    ui.spacing_mut().scroll = old_scroll;
+}
+
+fn palette_gutter(ui: &egui::Ui) -> f32 {
+    let row = palette_row_height(ui);
+    (row * 0.5).max(ui.spacing().item_spacing.x).max(ui.spacing().item_spacing.y)
+}
+
+fn palette_row_height(ui: &egui::Ui) -> f32 {
+    ui.spacing().interact_size.y.max(ui.text_style_height(&egui::TextStyle::Body))
+}
+
+/// Height consumed below the body by the Preview row and actions, including egui's inter-widget
+/// spacing. The body reserves this from the actual available height instead of guessing at nested
+/// frame margins.
+fn palette_footer_height(ui: &egui::Ui) -> f32 {
+    let row = palette_row_height(ui);
+    let spacing = ui.spacing().item_spacing.y;
+    spacing + palette_gutter(ui) + row + spacing + crate::widgets::button_height(ui.ctx()).max(row)
+}
+
+/// Height consumed by the comparison labels and zoom controls around its image panes.
+fn palette_preview_chrome(ui: &egui::Ui) -> f32 {
+    let spacing = ui.spacing().item_spacing.y;
+    ui.text_style_height(&egui::TextStyle::Body) + spacing + palette_row_height(ui).max(22.0) + spacing
+}
+
+/// Only split when both readable columns and a useful preview fit in the actual dialog.
+fn palette_columns(ui: &egui::Ui, height: f32) -> bool {
+    let minimum_column = 400.0_f32.max(ui.text_style_height(&egui::TextStyle::Body) * 26.0);
+    let gutter = palette_gutter(ui);
+    let minimum_settings = palette_row_height(ui) * 8.0 + ui.spacing().item_spacing.y * 7.0;
+    let minimum_height = 120.0 + palette_preview_chrome(ui) + gutter + minimum_settings;
+    ui.available_width() >= minimum_column * 2.0 + gutter && height >= minimum_height
+}
+
+fn palette_body(app: &PhotocraftApp, dialog: u64, ui: &mut egui::Ui, fields: &mut serde_json::Map<String, Value>) {
+    let preview_on = fields.get("__preview").and_then(Value::as_bool).unwrap_or(true);
+    // Reserve the footer from the real control/font metrics. Resize's content starts after one
+    // layout gap, so account for that gap separately from the footer's own gaps.
+    let height = (ui.available_height() - ui.spacing().item_spacing.y - palette_footer_height(ui)).max(1.0);
+    let width = ui.available_width();
+    let gutter = palette_gutter(ui);
+    ui.allocate_ui_with_layout(egui::vec2(width, height), egui::Layout::top_down(egui::Align::Min), |ui| {
+        ui.set_min_height(height);
+        ui.spacing_mut().item_spacing.x = gutter;
+        if !preview_on {
+            // Without a preview there is one settings column: mapping stays with the
+            // palette source instead of leaving a large empty comparison dock behind.
+            palette_scroll(ui, ("palette-settings", dialog), height, |ui| {
+                crate::dialogs::palette_map_ui::palette_controls(ui, fields);
+                ui.add_space(gutter);
+                crate::dialogs::palette_map_ui::mapping_controls(ui, fields);
+            });
+        } else {
+            let preview_height = (height * 0.35).clamp(120.0, 220.0);
+            let preview_chrome = palette_preview_chrome(ui);
+            let comparison_gap = gutter;
+            if palette_columns(ui, height) {
+                ui.columns(2, |columns| {
+                    for column in columns.iter_mut() {
+                        column.spacing_mut().item_spacing.x = gutter;
+                        column.set_min_height(height);
+                    }
+                    palette_scroll(&mut columns[0], ("palette-options", dialog), height, |ui| {
+                        crate::dialogs::palette_map_ui::palette_controls(ui, fields);
+                    });
+                    let mapping_height = (height - preview_height - preview_chrome - comparison_gap - columns[1].spacing().item_spacing.y).max(1.0);
+                    palette_scroll(&mut columns[1], ("palette-mapping", dialog), mapping_height, |ui| {
+                        crate::dialogs::palette_map_ui::mapping_controls(ui, fields);
+                    });
+                    columns[1].add_space(comparison_gap);
+                    crate::filter_preview_ui::comparison(app, dialog, &mut columns[1], fields, preview_height);
+                });
+            } else {
+                // Two columns, their gap, and the comparison's labels/navigation all belong
+                // inside the body budget; none may push the actions off-screen.
+                let settings_height = (height - preview_height - preview_chrome - comparison_gap - ui.spacing().item_spacing.y).max(1.0);
+                palette_scroll(ui, ("palette-stacked", dialog), settings_height, |ui| {
+                    crate::dialogs::palette_map_ui::palette_controls(ui, fields);
+                    ui.add_space(gutter);
+                    crate::dialogs::palette_map_ui::mapping_controls(ui, fields);
+                });
+                ui.add_space(comparison_gap);
+                crate::filter_preview_ui::comparison(app, dialog, ui, fields, preview_height);
+            }
+        }
+    });
 }
 
 /// Whether dialogs have a close box (×) in their title bar (#5496). Photoshop's modal dialogs have
@@ -390,6 +526,12 @@ fn dialog_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: &
 
 /// A filter-style dialog: scrolling parameters with the in-dialog preview window under them.
 fn filter_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: &mut Fields, id: egui::Id) {
+    // Palette Map owns its full custom layout, including the Before/After comparison.
+    if fields.get("__command").and_then(Value::as_str).is_some_and(crate::dialogs::palette_map_ui::owns_command) {
+        palette_body(app, d.id, ui, fields);
+        crate::dialogs::palette_map_ui::handle_import(app, d.id, fields);
+        return;
+    }
     // Color Settings: the monitor profile in use can change while it is open.
     if fields.get("__command").and_then(Value::as_str) == Some("edit.colorSettings") {
         fields.insert("__note".into(), Value::String(crate::monitor_status::note(app)));
@@ -446,7 +588,10 @@ fn button_row(
     } else {
         let ok_label = ok_label(d);
         // Dialogs that need an input first (a preset name, a selection) grey OK out.
-        let can_ok = crate::crop_presets::can_confirm(app, fields) && crate::stack_dialog::can_confirm(fields);
+        let can_ok = crate::crop_presets::can_confirm(app, fields)
+            && crate::stack_dialog::can_confirm(fields)
+            && (!fields.get("__command").and_then(Value::as_str).is_some_and(crate::dialogs::palette_map_ui::owns_command)
+                || crate::dialogs::palette_map_ui::can_confirm(fields));
         let ok = DialogButton::new(ButtonRole::Default, ok_label, 84.0).enabled(can_ok);
         // Photoshop: holding Alt turns Cancel into Reset (the dialog stays open).
         // Dialogs opt in via `dialog_alt_reset::supported` (per marker).
@@ -580,15 +725,25 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             ctx.move_to_top(area.layer());
         }
         let color_picker = crate::color_picker_ui::owns(&fields);
+        let palette = palette_dialog(&fields);
         let mut modal = egui::Modal::new(id).area(area).backdrop_color(egui::Color32::TRANSPARENT);
         if color_picker {
             modal = modal.frame(egui::Frame::popup(&ctx.global_style()).inner_margin(16));
+        } else if palette {
+            let t = crate::theme::Tokens::get(ctx);
+            modal = modal.frame(
+                egui::Frame::popup(&ctx.global_style())
+                    .fill(t.card)
+                    .stroke(egui::Stroke::NONE)
+                    .corner_radius(egui::CornerRadius::same(t.radius_lg as u8))
+                    .inner_margin(egui::Margin::same(16)),
+            );
         }
         // Tab / ⇧Tab walk the topmost dialog's text fields, not every widget (field_tab.rs).
-        let tab = if top == Some(d.id) && !egui::Popup::is_any_open(ctx) { crate::field_tab::take_step(ctx) } else { 0 };
+        let tab = if !palette && top == Some(d.id) && !egui::Popup::is_any_open(ctx) { crate::field_tab::take_step(ctx) } else { 0 };
         // Photoshop doesn't dim the window behind dialogs: previews must be judged at true contrast.
         let web = fields.contains_key("__web");
-        let web_popup_open = web && egui::Popup::is_any_open(ctx);
+        let parameter_popup_open = (web || palette) && egui::Popup::is_any_open(ctx);
         let resizable = resizable_dialog(&fields);
         // Curves reopens at the size it was left at (#8984).
         let remembered = if is_curves(&fields) { ctx.data_mut(|m| m.get_persisted::<egui::Vec2>(size_id(place))) } else { None };
@@ -599,16 +754,24 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         let mut given = None;
         let fixed = (d.kind == DialogKind::LayerStyle)
             .then(|| egui::vec2(800.0, 550.0).min((ctx.content_rect().size() - egui::vec2(40.0, 40.0)).max(egui::vec2(640.0, 360.0))));
-        let modal = show_modal(modal, ctx, id, resize, fixed, interactive, |ui| {
+        let modal_sizing = fixed.map(ModalSizing::Fixed).or_else(|| resize.map(|(size, min, max)| ModalSizing::Resizable { size, min, max }));
+        let modal = show_modal(modal, ctx, id, modal_sizing, palette, interactive, |ui| {
             sizing = ui.is_sizing_pass();
             let available = ui.available_size();
+            if palette {
+                for text_style in [egui::TextStyle::Body, egui::TextStyle::Button] {
+                    if let Some(font) = ui.style_mut().text_styles.get_mut(&text_style) {
+                        font.size = font.size.max(14.0);
+                    }
+                }
+            }
             given = Some(available);
             // A dialog of a few short fields (`__compact`, Fit Image) is narrower (#4673): the title
             // rule and the button row fill the width they are given, so it needs its own maximum too.
             let compact = d.fields.contains_key("__compact");
             // The curve editor's graph is as wide as the dialog lets it be (#5113, #8984).
             let curves = is_curves(&fields);
-            if !compact {
+            if !compact && !palette {
                 ui.set_min_width(if curves { 300.0 } else { 380.0 });
             }
             // A resizable dialog's contents fill its resizable area (#7420), the others the window.
@@ -626,7 +789,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 ui.set_min_width(700.0);
             }
             ui.set_max_width(wide.unwrap_or_else(|| default_max_width(&d, compact, curves, about_tabs, available.x)));
-            if web || fixed.is_some() {
+            if web || fixed.is_some() || palette {
                 ui.set_max_width(available.x);
                 ui.set_min_size(available);
             } else if let Some(w) = crate::file_ui::dialog_width(&d.fields) {
@@ -642,10 +805,10 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             if color_picker {
                 ui.set_width(crate::color_picker_ui::content_width(ui));
             }
-            let label = egui::Label::new(egui::RichText::new(&title).font(crate::theme::semibold(15.0))).selectable(false);
+            let label = egui::Label::new(egui::RichText::new(&title).font(crate::theme::semibold(if palette { 20.0 } else { 15.0 }))).selectable(false);
             let t = if crate::color_picker_ui::owns(&fields) { ui.add_sized(egui::vec2(ui.available_width(), 22.0), label).rect } else { ui.add(label).rect };
             // The whole title band drags (#1921): the full width plus a little of the popup's
-            // padding around it and the gap above the hairline, but none of the controls below.
+            // padding around it and the gap below it, but none of the controls below.
             // The close box (#5496) sits at the band's right end and is left out of the drag area:
             // egui would let a drag that starts on a button move the dialog.
             let close_rect = CLOSE_BOX.then(|| close_box_rect(ui.max_rect().right(), t.center().y));
@@ -655,9 +818,14 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             if let Some(r) = close_rect {
                 close_clicked = close_box(ui, r);
             }
-            ui.add_space(4.0);
-            crate::widgets::hairline(ui);
-            ui.add_space(8.0);
+            let title_gap = if palette { palette_gutter(ui) } else { 0.0 };
+            if palette {
+                ui.add_space(title_gap);
+            } else {
+                ui.add_space(4.0);
+                crate::widgets::hairline(ui);
+                ui.add_space(8.0);
+            }
             crate::field_tab::begin(ui.ctx());
             if let Some(done) = dialog_body(app, ui, &d, &mut fields, id, interactive) {
                 outcome = Some(done);
@@ -677,12 +845,23 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 if matches!(d.kind, DialogKind::Command) && crate::color_table_ui::owns(&fields) {
                     crate::color_table_ui::buttons(app, ui, d.id, &mut fields);
                 }
-                ui.add_space(8.0);
+                let footer_gutter = if palette { palette_gutter(ui) } else { 8.0 };
+                ui.add_space(footer_gutter);
+                if palette {
+                    let mut preview = fields.get("__preview").and_then(Value::as_bool).unwrap_or(true);
+                    ui.horizontal(|ui| {
+                        if ui.checkbox(&mut preview, tl!("Preview")).changed() {
+                            fields.insert("__preview".into(), json!(preview));
+                        }
+                    });
+                }
                 // Align::Min, not Center: a centred row fills the height left over from last frame's
                 // (larger) size, so a dialog whose body gets shorter would never shrink back.
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                    ui.spacing_mut().item_spacing.x = 10.0;
-                    let (done, apply) = button_row(app, ui, &d, &mut fields, id, interactive, web && (web_popup_open || egui::Popup::is_any_open(ui.ctx())));
+                    let action_spacing = if palette { palette_gutter(ui) } else { 10.0 };
+                    ui.spacing_mut().item_spacing.x = action_spacing;
+                    let (done, apply) =
+                        button_row(app, ui, &d, &mut fields, id, interactive, parameter_popup_open || ((web || palette) && egui::Popup::is_any_open(ui.ctx())));
                     outcome = done.or(outcome);
                     apply_requested |= apply;
                 });
@@ -704,7 +883,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             ctx.data_mut(|m| m.insert_persisted(size_id(place), size));
         }
         // Pin once laid out at its real size (the first frame is an invisible sizing pass).
-        if !sizing && (web || fixed.is_some() || pinned.is_none() || drag != egui::Vec2::ZERO) {
+        if !sizing && (web || fixed.is_some() || palette || pinned.is_none() || drag != egui::Vec2::ZERO) {
             let screen = ctx.content_rect();
             // Keep the whole dialog (and so its title bar) on screen.
             let room = (screen.size() - modal.response.rect.size()).max(egui::Vec2::ZERO);
@@ -1054,6 +1233,8 @@ pub fn cancel(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
         crate::replace_prompt::cancel(app)?;
     }
     app.ui.dialogs.retain(|d| !crate::layer_style::color_picker::child_of(&d.fields, id));
+    #[cfg(not(target_arch = "wasm32"))]
+    filter_preview_worker::cancel_dialog(app, id);
     app.filter_preview = None;
     app.color_range = None;
     crate::type_panels_ui::color_picker::prune(app);
@@ -1137,6 +1318,8 @@ pub mod new_guide_ui;
 pub mod new_layer_ui;
 pub mod open_prompt;
 pub mod palette;
+pub mod palette_map_ui;
+mod palette_pattern_ui;
 pub(crate) mod pattern_fill_ui;
 pub mod rasterize_prompt;
 pub mod replace_prompt;

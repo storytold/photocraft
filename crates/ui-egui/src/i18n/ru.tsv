@@ -4682,6 +4682,81 @@ shape	Appearance	Оформление
 	Tight Curl	Плотный завиток
 	Loose Curl	Свободный завиток
 	Stylized dabs from a history state	Стилизованные мазки из состояния истории
+
+	Generated palette	Созданная палитра
+	Palette library	Библиотека палитр
+	Search palettes…	Поиск палитр…
+	Import GPL…	Импорт GPL…
+	Import ACT…	Импорт ACT…
+	No bundled palette matches this search.	Встроенных палитр по этому запросу нет.
+	{name}  ·  {n} entries	{name}  ·  записей: {n}
+	Use generated palette	Использовать созданную палитру
+	Fixed snapshot	Фиксированный снимок
+	Generated palette selected. Choose a bundled palette or import a GPL/ACT file for a fixed, order-preserving snapshot.	Выбрана созданная палитра. Выберите встроенную палитру или импортируйте файл GPL/ACT, чтобы закрепить снимок с сохранением порядка.
+	No fixed palette selected; the engine's default palette will be used. Choose a bundled palette or import GPL/ACT to pin a snapshot.	Фиксированная палитра не выбрана; будет использована палитра движка по умолчанию. Выберите встроенную палитру или импортируйте GPL/ACT, чтобы закрепить снимок.
+	#{index}: {r}, {g}, {b}	#{index}: {r}, {g}, {b}
+	Imported snapshot · source order and duplicate entries are retained	Импортированный снимок · исходный порядок и повторяющиеся записи сохранены
+	Algorithm	Алгоритм
+	Ingredient {n}	Компонент {n}
+	Phase	Фаза
+	Custom threshold matrix (0–1)	Пользовательская матрица порога (0–1)
+	Mapping settings are invalid: {error}	Параметры сопоставления недействительны: {error}
+	Mapping	Сопоставление
+	Threshold ingredients	Компоненты порога
+	Add ingredient	Добавить компонент
+	Import matrix…	Импорт матрицы…
+	Generated palette options	Параметры созданной палитры
+	A fixed palette is used for GIF/PNG-8 only; JPEG/PNG-24 ignore it.	Фиксированная палитра используется только для GIF/PNG-8; JPEG/PNG-24 её игнорируют.
+	Clear snapshot and choose generated palette	Очистить снимок и выбрать созданную палитру
+	Palette invalid: {error}	Недействительная палитра: {error}
+	{name} has {entries} entries, but this format allows {limit} with one transparency slot reserved.	В {name} {entries} записей, но этот формат допускает {limit}, оставляя один слот для прозрачности.
+	{name} has {entries} entries, but this format allows {limit}.	В {name} {entries} записей, но этот формат допускает {limit}.
+	Intentional reduction enabled; the engine will quantize this snapshot for the adapter without changing the saved snapshot.	Включено намеренное сокращение; движок квантирует этот снимок для формата, не изменяя сохранённый снимок.
+	Do not reduce (reject oversized palette)	Не сокращать (отклонить слишком большую палитру)
+	Reduce to {limit} for this conversion/export	Сократить до {limit} для этого преобразования/экспорта
+	Palette reduction is enabled for this adapter.	Для этого формата включено сокращение палитры.
+	threshold matrix must be UTF-8 text	матрица порога должна быть текстом UTF-8
+	invalid threshold value `{token}`	недопустимое значение порога `{token}`
+	threshold values must be finite and between 0 and 1	значения порога должны быть конечными и находиться между 0 и 1
+	threshold matrices are limited to 256 entries	матрицы порогов ограничены 256 записями
+	threshold matrix must be a square of 2, 4, 8, or 16 entries per side	матрица порога должна быть квадратной, по 2, 4, 8 или 16 записей на сторону
+	palette dialog was closed	диалог палитры закрыт
+	threshold ingredient no longer exists	компонент порога больше не существует
+	Bayer	Байер
+	Clustered Dot	Кластерная точка
+	Floyd–Steinberg	Флойд–Стейнберг
+	Sierra Lite	Sierra Lite
+	Atkinson	Atkinson
+	Jarvis	Jarvis
+	Stucki	Stucki
+	Sierra	Sierra
+	Burkes	Burkes
+	Blue Noise	Синий шум
+	White Noise	Белый шум
+	Riemersma	Римерсма
+	Serpentine traversal	Змейка
+	Decay	Затухание
+	Binary	Двоичный
+	Matrix	Матрица
+	Palette source	Источник палитры
+	Generate from image	Создать из изображения
+	Choose a palette	Выберите палитру
+	Find a palette for this image.	Найти палитру для этого изображения.
+	Use a built-in or imported palette.	Использовать встроенную или импортированную палитру.
+	Generation method	Метод создания
+	Required colors	Требуемые цвета
+	Dithering	Дизеринг
+	Combine dither patterns	Объединить шаблоны дизеринга
+	Preserve transparency	Сохранять прозрачность
+	Transparency dithering	Дизеринг прозрачности
+	Resulting palette	Итоговая палитра
+	Updating preview…	Обновление предпросмотра…
+	Preview is off	Просмотр отключён.
+	Move up	Переместить вверх
+	Move down	Переместить вниз
+@id	filter.paletteMap	Карта палитры…
+	Palette Map…	Карта палитры…
+	Approximate preview	Приблизительный предпросмотр
 	Font size presets	Наборы размеров шрифта
 	Leading presets	Наборы интерлиньяжа
 	Tracking presets	Наборы трекинга

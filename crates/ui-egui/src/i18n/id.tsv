@@ -3503,6 +3503,85 @@ curves	Smooth	Haluskan
 	Gamma	Gamma
 	Profile	Profil
 	Target	Target
+
+	Generated palette	Palet yang dibuat
+	Palette library	Pustaka palet
+	Search palettes…	Cari palet…
+	Import GPL…	Impor GPL…
+	Import ACT…	Impor ACT…
+	No bundled palette matches this search.	Tidak ada palet bawaan yang cocok dengan pencarian ini.
+	{name}  ·  {n} entries	{name}  ·  {n} entri
+	Use generated palette	Gunakan palet yang dibuat
+	Fixed snapshot	Snapshot tetap
+	Generated palette selected. Choose a bundled palette or import a GPL/ACT file for a fixed, order-preserving snapshot.	Palet yang dibuat dipilih. Pilih palet bawaan atau impor berkas GPL/ACT untuk snapshot tetap yang mempertahankan urutan.
+	No fixed palette selected; the engine's default palette will be used. Choose a bundled palette or import GPL/ACT to pin a snapshot.	Tidak ada palet tetap yang dipilih; palet bawaan mesin akan digunakan. Pilih palet bawaan atau impor GPL/ACT untuk menetapkan snapshot.
+	#{index}: {r}, {g}, {b}	#{index}: {r}, {g}, {b}
+	Imported snapshot · source order and duplicate entries are retained	Snapshot yang diimpor · urutan sumber dan entri duplikat dipertahankan
+	Algorithm	Algoritme
+	Ingredient {n}	Bahan {n}
+	Phase	Fase
+	Custom threshold matrix (0–1)	Matriks ambang khusus (0–1)
+	Mapping settings are invalid: {error}	Pengaturan pemetaan tidak valid: {error}
+	Mapping	Pemetaan
+	Threshold ingredients	Bahan ambang
+	Add ingredient	Tambahkan bahan
+	Import matrix…	Impor matriks…
+	Generated palette options	Opsi palet yang dibuat
+	A fixed palette is used for GIF/PNG-8 only; JPEG/PNG-24 ignore it.	Palet tetap hanya digunakan untuk GIF/PNG-8; JPEG/PNG-24 mengabaikannya.
+	Clear snapshot and choose generated palette	Hapus snapshot dan pilih palet yang dibuat
+	Palette invalid: {error}	Palet tidak valid: {error}
+	{name} has {entries} entries, but this format allows {limit} with one transparency slot reserved.	{name} memiliki {entries} entri, tetapi format ini mengizinkan {limit} dengan satu slot transparansi dicadangkan.
+	{name} has {entries} entries, but this format allows {limit}.	{name} memiliki {entries} entri, tetapi format ini mengizinkan {limit}.
+	Intentional reduction enabled; the engine will quantize this snapshot for the adapter without changing the saved snapshot.	Pengurangan yang disengaja aktif; mesin akan mengkuantisasi snapshot ini untuk format tanpa mengubah snapshot tersimpan.
+	Do not reduce (reject oversized palette)	Jangan kurangi (tolak palet yang terlalu besar)
+	Reduce to {limit} for this conversion/export	Kurangi menjadi {limit} untuk konversi/ekspor ini
+	Palette reduction is enabled for this adapter.	Pengurangan palet diaktifkan untuk format ini.
+	threshold matrix must be UTF-8 text	matriks ambang harus berupa teks UTF-8
+	invalid threshold value `{token}`	nilai ambang tidak valid `{token}`
+	threshold values must be finite and between 0 and 1	nilai ambang harus berhingga dan antara 0 dan 1
+	threshold matrices are limited to 256 entries	matriks ambang dibatasi hingga 256 entri
+	threshold matrix must be a square of 2, 4, 8, or 16 entries per side	matriks ambang harus berupa persegi dengan 2, 4, 8, atau 16 entri per sisi
+	palette dialog was closed	dialog palet ditutup
+	threshold ingredient no longer exists	bahan ambang tidak ada lagi
+	Bayer	Bayer
+	Clustered Dot	Titik berkelompok
+	Floyd–Steinberg	Floyd–Steinberg
+	Sierra Lite	Sierra Lite
+	Atkinson	Atkinson
+	Jarvis	Jarvis
+	Stucki	Stucki
+	Sierra	Sierra
+	Burkes	Burkes
+	Blue Noise	Derau biru
+	White Noise	Derau putih
+	Riemersma	Riemersma
+	Serpentine traversal	Penelusuran berkelok
+	Decay	Peluruhan
+	Binary	Biner
+	Matrix	Matriks
+	Palette source	Sumber palet
+	Generate from image	Buat dari gambar
+	Choose a palette	Pilih palet
+	Find a palette for this image.	Cari palet untuk gambar ini.
+	Use a built-in or imported palette.	Gunakan palet bawaan atau yang diimpor.
+	Generation method	Metode pembuatan
+	Required colors	Warna yang diperlukan
+	Dithering	Dither
+	Combine dither patterns	Gabungkan pola dither
+	Preserve transparency	Pertahankan transparansi
+	Transparency dithering	Dither transparansi
+	Resulting palette	Palet yang dihasilkan
+	Before	Sebelum
+	After	Sesudah
+	Updating preview…	Memperbarui pratinjau…
+	Preview is off	Pratinjau nonaktif.
+	Move up	Pindahkan ke atas
+	Move down	Pindahkan ke bawah
+	Disable	Nonaktifkan
+	Seed	Benih acak
+@id	filter.paletteMap	Pemetaan Palet…
+	Palette Map…	Pemetaan Palet…
+	Approximate preview	Pratinjau perkiraan
 	Font size presets	Preset ukuran font
 	Leading presets	Preset leading
 	Tracking presets	Preset tracking

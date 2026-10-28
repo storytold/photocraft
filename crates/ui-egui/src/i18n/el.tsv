@@ -4184,6 +4184,81 @@ curves	Smooth	Εξομάλυνση
 	Loose Curl	Χαλαρή μπούκλα
 	Stylized dabs from a history state	Στυλιζαρισμένες πινελιές από μια κατάσταση ιστορικού
 	Target	Στόχος
+
+	Generated palette	Δημιουργημένη παλέτα
+	Palette library	Βιβλιοθήκη παλετών
+	Search palettes…	Αναζήτηση παλετών…
+	Import GPL…	Εισαγωγή GPL…
+	Import ACT…	Εισαγωγή ACT…
+	No bundled palette matches this search.	Καμία ενσωματωμένη παλέτα δεν ταιριάζει με αυτή την αναζήτηση.
+	{name}  ·  {n} entries	{name}  ·  {n} καταχωρίσεις
+	Use generated palette	Χρήση δημιουργημένης παλέτας
+	Fixed snapshot	Σταθερό στιγμιότυπο
+	Generated palette selected. Choose a bundled palette or import a GPL/ACT file for a fixed, order-preserving snapshot.	Επιλέχθηκε δημιουργημένη παλέτα. Επιλέξτε ενσωματωμένη παλέτα ή εισαγάγετε αρχείο GPL/ACT για σταθερό στιγμιότυπο που διατηρεί τη σειρά.
+	No fixed palette selected; the engine's default palette will be used. Choose a bundled palette or import GPL/ACT to pin a snapshot.	Δεν επιλέχθηκε σταθερή παλέτα· θα χρησιμοποιηθεί η προεπιλεγμένη παλέτα της μηχανής. Επιλέξτε ενσωματωμένη παλέτα ή εισαγάγετε GPL/ACT για να καρφιτσώσετε στιγμιότυπο.
+	#{index}: {r}, {g}, {b}	#{index}: {r}, {g}, {b}
+	Imported snapshot · source order and duplicate entries are retained	Εισηγμένο στιγμιότυπο · διατηρούνται η σειρά προέλευσης και οι διπλές καταχωρίσεις
+	Algorithm	Αλγόριθμος
+	Ingredient {n}	Συστατικό {n}
+	Phase	Φάση
+	Custom threshold matrix (0–1)	Προσαρμοσμένος πίνακας κατωφλίου (0–1)
+	Mapping settings are invalid: {error}	Οι ρυθμίσεις αντιστοίχισης δεν είναι έγκυρες: {error}
+	Mapping	Αντιστοίχιση
+	Threshold ingredients	Συστατικά κατωφλίου
+	Add ingredient	Προσθήκη συστατικού
+	Import matrix…	Εισαγωγή πίνακα…
+	Generated palette options	Επιλογές δημιουργημένης παλέτας
+	A fixed palette is used for GIF/PNG-8 only; JPEG/PNG-24 ignore it.	Μια σταθερή παλέτα χρησιμοποιείται μόνο για GIF/PNG-8· τα JPEG/PNG-24 την αγνοούν.
+	Clear snapshot and choose generated palette	Εκκαθάριση στιγμιότυπου και επιλογή δημιουργημένης παλέτας
+	Palette invalid: {error}	Μη έγκυρη παλέτα: {error}
+	{name} has {entries} entries, but this format allows {limit} with one transparency slot reserved.	Η {name} έχει {entries} καταχωρίσεις, αλλά αυτή η μορφή επιτρέπει {limit} με μία θέση διαφάνειας δεσμευμένη.
+	{name} has {entries} entries, but this format allows {limit}.	Η {name} έχει {entries} καταχωρίσεις, αλλά αυτή η μορφή επιτρέπει {limit}.
+	Intentional reduction enabled; the engine will quantize this snapshot for the adapter without changing the saved snapshot.	Η σκόπιμη μείωση είναι ενεργή· η μηχανή θα κβαντίσει αυτό το στιγμιότυπο για τη μορφή χωρίς να αλλάξει το αποθηκευμένο στιγμιότυπο.
+	Do not reduce (reject oversized palette)	Να μην μειωθεί (απόρριψη υπερβολικά μεγάλης παλέτας)
+	Reduce to {limit} for this conversion/export	Μείωση σε {limit} για αυτή τη μετατροπή/εξαγωγή
+	Palette reduction is enabled for this adapter.	Η μείωση παλέτας είναι ενεργή για αυτή τη μορφή.
+	threshold matrix must be UTF-8 text	ο πίνακας κατωφλίου πρέπει να είναι κείμενο UTF-8
+	invalid threshold value `{token}`	μη έγκυρη τιμή κατωφλίου `{token}`
+	threshold values must be finite and between 0 and 1	οι τιμές κατωφλίου πρέπει να είναι πεπερασμένες και μεταξύ 0 και 1
+	threshold matrices are limited to 256 entries	οι πίνακες κατωφλίου περιορίζονται σε 256 καταχωρίσεις
+	threshold matrix must be a square of 2, 4, 8, or 16 entries per side	ο πίνακας κατωφλίου πρέπει να είναι τετράγωνο με 2, 4, 8 ή 16 καταχωρίσεις ανά πλευρά
+	palette dialog was closed	ο διάλογος παλέτας έκλεισε
+	threshold ingredient no longer exists	το συστατικό κατωφλίου δεν υπάρχει πλέον
+	Bayer	Bayer
+	Clustered Dot	Ομαδοποιημένη κουκκίδα
+	Floyd–Steinberg	Floyd–Steinberg
+	Sierra Lite	Sierra Lite
+	Atkinson	Atkinson
+	Jarvis	Jarvis
+	Stucki	Stucki
+	Sierra	Sierra
+	Burkes	Burkes
+	Blue Noise	Μπλε θόρυβος
+	White Noise	Λευκός θόρυβος
+	Riemersma	Riemersma
+	Serpentine traversal	Ζιγκ-ζαγκ διέλευση
+	Decay	Φθορά
+	Binary	Δυαδικό
+	Matrix	Πίνακας
+	Palette source	Πηγή παλέτας
+	Generate from image	Δημιουργία από εικόνα
+	Choose a palette	Επιλέξτε μια παλέτα
+	Find a palette for this image.	Βρείτε μια παλέτα για αυτήν την εικόνα.
+	Use a built-in or imported palette.	Χρησιμοποιήστε μια ενσωματωμένη ή εισαγμένη παλέτα.
+	Generation method	Μέθοδος δημιουργίας
+	Required colors	Απαιτούμενα χρώματα
+	Dithering	Πρόσθεση θορύβου διαβάθμισης
+	Combine dither patterns	Συνδυασμός μοτίβων πρόσμειξης
+	Preserve transparency	Διατήρηση διαφάνειας
+	Transparency dithering	Πρόσμειξη διαφάνειας
+	Resulting palette	Παλέτα αποτελέσματος
+	Updating preview…	Ενημέρωση προεπισκόπησης…
+	Preview is off	Η προεπισκόπηση είναι απενεργοποιημένη.
+	Move up	Μετακίνηση προς τα πάνω
+	Move down	Μετακίνηση προς τα κάτω
+@id	filter.paletteMap	Αντιστοίχιση παλέτας…
+	Palette Map…	Αντιστοίχιση παλέτας…
+	Approximate preview	Προσεγγιστική προεπισκόπηση
 	Font size presets	Προεπιλογές μεγέθους γραμματοσειράς
 	Leading presets	Προεπιλογές διάστιχου
 	Tracking presets	Προεπιλογές διαστήματος χαρακτήρων

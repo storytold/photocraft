@@ -4159,6 +4159,84 @@ curves	Smooth	スムーズ
 	Tight Curl	タイトカール
 	Loose Curl	ルーズカール
 	Stylized dabs from a history state	履歴状態から様式化したダブを描きます
+
+	Generated palette	生成パレット
+	Palette library	パレットライブラリ
+	Search palettes…	パレットを検索…
+	Import GPL…	GPLを読み込む…
+	Import ACT…	ACTを読み込む…
+	No bundled palette matches this search.	この検索に一致する同梱パレットはありません。
+	{name}  ·  {n} entries	{name}  ·  {n} エントリ
+	Use generated palette	生成パレットを使用
+	Fixed snapshot	固定スナップショット
+	Generated palette selected. Choose a bundled palette or import a GPL/ACT file for a fixed, order-preserving snapshot.	生成パレットを選択中。同梱パレットを選ぶか、GPL/ACTファイルを読み込むと、順序を保った固定スナップショットになります。
+	No fixed palette selected; the engine's default palette will be used. Choose a bundled palette or import GPL/ACT to pin a snapshot.	固定パレットが選択されていません。エンジンの既定パレットを使用します。同梱パレットを選ぶか、GPL/ACTを読み込んでスナップショットを固定します。
+	#{index}: {r}, {g}, {b}	#{index}: {r}, {g}, {b}
+	Imported snapshot · source order and duplicate entries are retained	読み込んだスナップショット · 元の順序と重複エントリを保持
+	Algorithm	アルゴリズム
+	Ingredient {n}	成分 {n}
+	Phase	位相
+	Custom threshold matrix (0–1)	カスタムしきい値行列 (0–1)
+	Mapping settings are invalid: {error}	マッピング設定が無効です: {error}
+	Mapping	マッピング
+	Threshold ingredients	しきい値成分
+	Add ingredient	成分を追加
+	Import matrix…	行列を読み込む…
+	Generated palette options	生成パレットのオプション
+	A fixed palette is used for GIF/PNG-8 only; JPEG/PNG-24 ignore it.	GIF/PNG-8には固定パレットを使用します。JPEG/PNG-24では無視されます。
+	Clear snapshot and choose generated palette	スナップショットを消去して生成パレットを選択
+	Palette invalid: {error}	パレットが無効です: {error}
+	{name} has {entries} entries, but this format allows {limit} with one transparency slot reserved.	{name} には {entries} エントリありますが、この形式では透明用に1枠を確保して {limit} 個までです。
+	{name} has {entries} entries, but this format allows {limit}.	{name} には {entries} エントリありますが、この形式では {limit} 個までです。
+	Intentional reduction enabled; the engine will quantize this snapshot for the adapter without changing the saved snapshot.	意図的な削減が有効です。保存済みスナップショットを変更せず、エンジンがこの形式用に量子化します。
+	Do not reduce (reject oversized palette)	削減しない（大きすぎるパレットを拒否）
+	Reduce to {limit} for this conversion/export	この変換/書き出し用に {limit} 個へ削減
+	Palette reduction is enabled for this adapter.	この形式ではパレット削減が有効です。
+	threshold matrix must be UTF-8 text	しきい値行列は UTF-8 テキストでなければなりません
+	invalid threshold value `{token}`	無効なしきい値 `{token}`
+	threshold values must be finite and between 0 and 1	しきい値は有限で、0 から 1 の範囲でなければなりません
+	threshold matrices are limited to 256 entries	しきい値行列は256エントリまでです
+	threshold matrix must be a square of 2, 4, 8, or 16 entries per side	しきい値行列は1辺が2、4、8、16の正方形でなければなりません
+	palette dialog was closed	パレットダイアログは閉じられました
+	threshold ingredient no longer exists	しきい値成分は存在しません
+	Bayer	ベイヤー
+	Clustered Dot	クラスター化ドット
+	Floyd–Steinberg	フロイド–スタインバーグ
+	Sierra Lite	シエラライト
+	Atkinson	アトキンソン
+	Jarvis	ジャービス
+	Stucki	スタッキー
+	Sierra	シエラ
+	Burkes	バークス
+	Blue Noise	ブルーノイズ
+	White Noise	ホワイトノイズ
+	Riemersma	リーマースマ
+	Serpentine traversal	蛇行走査
+	Decay	減衰
+	Binary	バイナリ
+	Matrix	行列
+	Palette source	パレットソース
+	Generate from image	画像から生成
+	Choose a palette	パレットを選択
+	Find a palette for this image.	この画像に合うパレットを検索します。
+	Use a built-in or imported palette.	同梱または読み込んだパレットを使用します。
+	Generation method	生成方法
+	Required colors	必要な色数
+	Dithering	ディザ
+	Combine dither patterns	ディザパターンを組み合わせる
+	Preserve transparency	透明部分を保持
+	Transparency dithering	透明部分のディザ
+	Resulting palette	生成されるパレット
+	Before	前
+	After	後
+	Updating preview…	プレビューを更新中…
+	Preview is off	プレビューはオフです。
+	Move up	上に移動
+	Move down	下に移動
+	Disable	無効にする
+@id	filter.paletteMap	パレットマップ…
+	Palette Map…	パレットマップ…
+	Approximate preview	近似プレビュー
 	Font size presets	フォントサイズのプリセット
 	Leading presets	行送りのプリセット
 	Tracking presets	トラッキングのプリセット

@@ -613,7 +613,6 @@ reserved slot into an opaque colour or grow the palette. Explicit `transparentIn
 unchanged.
 The stock palette and dither dropdowns retain their original choices; the adapter-only
 `blackWhite` generation preset and advanced dither method ids remain explicit automation inputs.
-No Palette Map filter command or UI is registered by this backend change.
 Color-dither strength scales only the color threshold, not the normalized rank used for alpha
 coverage. Mapped Save-for-Web generation shares the stock opaque-pixel sampling bound of
 `1 << 20`; Exact retains full-input color discovery, and fixed palettes need no sampling pass.
@@ -622,10 +621,56 @@ the document or saved export settings.
 Palette-helper validation errors report the invoking Indexed Color/Save-for-Web command,
 not the shared helper id.
 
+Filter › PhotoCraft › Palette Map… is registered as `filter.paletteMap`. It accepts a bundled `paletteId` or
+an explicit `paletteSnapshot`; serialized `mapping` settings take precedence over legacy dither
+fields. The destructive filter preserves the document's colour mode and native sample depth,
+limits edits to the selection, and records the palette snapshot, mapping and compatible ICC
+source profile when applied as a Smart Filter.
+Imported text/CSV threshold matrices require finite entries in `0..=1`. An invalid import
+reports an error without replacing the current recipe, disabling a valid confirmation, or
+changing the document.
+
 `crates/engine/examples/indexed_color_perf.rs` measures palette construction and the full Indexed
 preview with warmup plus repeated runs. Keep reports local, and compare runs built with the same
 release settings and machine class. The `generate_blue_noise` example regenerates the committed
 deterministic threshold tile when algorithm data changes; normal startup does not regenerate it.
+
+## Palette Map filter workflow
+
+**Filter › PhotoCraft › Palette Map…** (`filter.paletteMap`) is the only UI that owns the
+advanced palette workflow. Its filter dialog starts with a bundled palette, offers a searchable
+palette browser with GPL/ACT snapshot import, shows the selected palette as a contiguous swatch
+grid, and exposes the shared mapping controls without the generated-palette controls used by
+Indexed Color. Palette cards wrap to the available width; the filter settings use visible
+scrollbars and switch between two columns and a stacked layout as the dialog permits.
+
+The filter's Before/After comparison is controlled by its Preview checkbox. Turning Preview off
+removes those panes and keeps palette and mapping settings in one scrolling column. Wheel events
+scroll the settings rather than changing a focused numeric field, slider or algorithm choice.
+Advanced mapping includes method-specific controls and a threshold-pattern editor: ingredients can
+be enabled, selected, reordered, removed and configured with amount, matrix, scale, phase and seed.
+Each ingredient has a generated synthetic preview; it does not preview an imported or personal
+photograph.
+
+When Preferences › Performance › Low Resolution Previews is enabled (the default), direct Palette Map previews on native desktop sessions use a whole-document proxy for documents above five megapixels, targeting at most 2.5 megapixels independently of canvas zoom. The panes identify this as an approximate preview; confirming still processes the full-resolution document. Superseded preview requests are cancelled and stale results are discarded. Turning Preview off or closing the dialog cancels outstanding preview work. Full-resolution application uses the existing background-job cancellation path and leaves document pixels and history unchanged on cancellation.
+
+Palette Map preserves the document's colour mode and native sample depth, maps the current
+selection only, and stores the normalized palette snapshot, mapping settings and compatible ICC
+source profile when a Smart Filter is recorded. Indexed Color and Save for Web retain their stock
+dialogs. Their shared palette/mapping engine and automation fields may remain available where
+their command schemas allow them; that does not add Palette Map's browser, responsive filter
+columns or Before/After workflow to those commands.
+Zero-coverage holes inside the selection bounds keep their native colour and alpha samples rather
+than round-tripping through sRGB. Selected regions requiring CMS retain the already-read native
+buffer and reuse it for encoded output; the mask is read once. The working-buffer bound includes
+the retained samples during feather blending, and the mask is released before surface writeback.
+
+Palette Map is disabled for Indexed Color and Bitmap documents so their fixed colour-table or
+one-bit representations remain authoritative; Indexed Color's own command remains the supported
+path for rebuilding that table.
+
+The stock palette and dither dropdowns retain their original choices; the adapter-only
+`blackWhite` generation preset and advanced dither method ids remain explicit automation inputs.
 
 ## Indexed Color timings
 

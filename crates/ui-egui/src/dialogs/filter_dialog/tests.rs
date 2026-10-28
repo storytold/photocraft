@@ -464,6 +464,29 @@ fn indexed_counts_are_integer_json_while_dither_amounts_keep_their_decimals() {
     assert_eq!(params["amount"].as_f64(), Some(37.5));
 }
 
+/// A newly opened Palette Map dialog must install its custom palette default before the
+/// generic schema fields are decoded.  Confirming without touching the controls therefore
+/// maps a real non-palette pixel instead of submitting the parser's integer placeholders.
+#[test]
+fn fresh_palette_map_dialog_maps_a_pixel_on_confirm() {
+    let mut session = photocraft_engine::Session::new();
+    session.execute("file.new", json!({"width": 1, "height": 1, "background": "#123456"})).unwrap();
+    let mut app = PhotocraftApp::new(session, crate::Services::default());
+    app.background_jobs = false;
+    let layer = app.session.active().unwrap().active_layer.unwrap();
+    let before = app.session.active().unwrap().doc.layer(layer).unwrap().surface().unwrap().pixel(0, 0);
+    let id = open(&mut app, "filter.paletteMap").expect("Palette Map dialog");
+    assert!(app.ui.dialog_mut(id).unwrap().fields.contains_key("paletteSnapshot"));
+    crate::dialogs::confirm(&mut app, id).expect("default Palette Map confirms");
+    let after = app.session.active().unwrap().doc.layer(layer).unwrap().surface().unwrap().pixel(0, 0);
+    assert_ne!(after, before, "the fresh dialog applied a mapping");
+    let cube = &photocraft_algo::palettes::builtin("photocraft-rgb-cube").expect("bundled PhotoCraft RGB cube palette").palette;
+    assert!(
+        cube.colors.iter().any(|color| color.iter().zip(&after).take(3).all(|(a, b)| (a - b).abs() <= 1.0 / 255.0)),
+        "mapped pixel is not in the selected palette: {after:?}"
+    );
+}
+
 /// #7400: Lens Blur's Source lists the document's alpha channels, by name, each choosable even
 /// when two share a name; `depthChannel` is set through that menu, not shown as a field, and
 /// like the other references it isn't remembered, so a remembered `channel` source opens as None.
@@ -985,6 +1008,12 @@ fn fixed_size_filters_preview_at_the_scale_they_apply() {
     assert_eq!(preview_factor("image.mode.bitmap", &json!({"method": "threshold"}), 4), 4);
 }
 
+#[test]
+fn palette_map_live_preview_uses_the_document_proxy() {
+    assert_eq!(preview_factor("filter.paletteMap", &json!({}), 4), 4);
+    assert_eq!(preview_factor("filter.paletteMap", &json!({}), 1), 1);
+}
+
 /// #6530: the Content-Aware Fill preview runs at full resolution, for every Sampling choice,
 /// because its patch search finds different matches on a reduced copy.
 #[test]
@@ -1100,6 +1129,46 @@ fn smart_object_curves_preview_keeps_its_size_on_a_reduced_proxy() {
     for (x, y) in [(2, 2), (9, 9), (12, 12), (15, 15)] {
         assert!(alpha(&shown, x, y) < 0.01, "({x}, {y}) is outside the reduced square");
     }
+}
+
+#[test]
+fn palette_map_on_a_reduced_smart_object_replays_scaled_existing_filters() {
+    let mut s = photocraft_engine::Session::new();
+    s.add_document(waves(64), None);
+    s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    let layer = s.active().unwrap().active_layer.unwrap();
+    s.execute("select.rect", json!({"x": 8, "y": 8, "width": 40, "height": 40})).unwrap();
+    s.execute("filter.blur.gaussianBlur", json!({"radius": 8.0})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    s.edit("set filter mask feather", |doc, _| {
+        let photocraft_doc::LayerContent::Smart(sm) = &mut doc.layer_mut(layer).unwrap().content else { panic!("a smart object") };
+        sm.filter_mask.as_mut().expect("the selection made a filter mask").feather = 6.0;
+        Ok(())
+    })
+    .unwrap();
+    let doc = s.active().unwrap().doc.clone();
+    let params = json!({
+        "paletteId": "photocraft-rgb-cube",
+        "paletteSnapshot": {"name": "saved", "colors": [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]},
+        "mapping": {"method": "none"},
+    });
+    let k = 4;
+    let shown = preview_document(&doc, Some(layer), "filter.paletteMap", &params, k).expect("Palette Map preview");
+
+    // Build the independent reference by preparing the proxy exactly as the existing
+    // full-resolution stack would be scaled: 8 px blur → 2 px, and 6 px feather → 1.5 px.
+    let mut reference_input = crate::proxy::proxy_document(&doc, k);
+    let photocraft_doc::LayerContent::Smart(sm) = &mut reference_input.layer_mut(layer).unwrap().content else { panic!("a smart object") };
+    assert_eq!(sm.smart_filters[0].command, "filter.blur.gaussianBlur");
+    sm.smart_filters[0].params["radius"] = json!(2.0);
+    sm.filter_mask.as_mut().expect("the proxy keeps the filter mask").feather = 1.5;
+    let reference = preview_document(&reference_input, Some(layer), "filter.paletteMap", &params, 1).expect("scaled Palette Map reference");
+
+    assert_eq!(shown.size, reference.size, "the reduced preview keeps the Smart Object geometry");
+    let actual = photocraft_compose::flatten(&shown);
+    let expected = photocraft_compose::flatten(&reference);
+    assert_eq!(actual.rect, expected.rect);
+    assert_eq!(actual.px, expected.px, "the preview replays existing filters in proxy units before Palette Map");
 }
 
 /// #2063: a pixel-sized parameter divided by the proxy factor was clamped to the command's
@@ -1300,7 +1369,10 @@ fn image_for<'a>(command: &str, rgb: &'a Document, gray: &'a Document) -> &'a Do
 /// (64 x 64 px): Picture Frame's minimum line widths, and Shadows/Highlights' 0.01 % black and
 /// white clips, which pick single pixels out of 4096 (its radii are checked in
 /// `proxy_previews_scale_only_lengths`).
+/// Palette Map is explicitly labelled approximate: diffusion follows the proxy grid rather
+/// than the full-resolution traversal, so the colour mix can match without matching dot size.
 const APPROXIMATE_AT_PROXY: &[&str] = &[
+    "filter.paletteMap",
     "filter.pixelate.colorHalftone",
     "filter.pixelate.pointillize",
     "filter.stylize.tiles",

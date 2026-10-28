@@ -4204,6 +4204,81 @@ cameraData	Lens	Lens
 	Tight Curl	Sıkı Kıvrım
 	Loose Curl	Gevşek Kıvrım
 	Stylized dabs from a history state	Bir geçmiş durumundan stilize benekler
+
+	Generated palette	Oluşturulan palet
+	Palette library	Palet kitaplığı
+	Search palettes…	Paletlerde ara…
+	Import GPL…	GPL içe aktar…
+	Import ACT…	ACT içe aktar…
+	No bundled palette matches this search.	Bu aramayla eşleşen yerleşik palet yok.
+	{name}  ·  {n} entries	{name}  ·  {n} giriş
+	Use generated palette	Oluşturulan paleti kullan
+	Fixed snapshot	Sabit anlık görüntü
+	Generated palette selected. Choose a bundled palette or import a GPL/ACT file for a fixed, order-preserving snapshot.	Oluşturulan palet seçildi. Sıralamayı koruyan sabit bir anlık görüntü için yerleşik bir palet seçin veya GPL/ACT dosyası içe aktarın.
+	No fixed palette selected; the engine's default palette will be used. Choose a bundled palette or import GPL/ACT to pin a snapshot.	Sabit palet seçilmedi; motorun varsayılan paleti kullanılacak. Bir yerleşik palet seçin veya anlık görüntüyü sabitlemek için GPL/ACT içe aktarın.
+	#{index}: {r}, {g}, {b}	#{index}: {r}, {g}, {b}
+	Imported snapshot · source order and duplicate entries are retained	İçe aktarılan anlık görüntü · kaynak sırası ve yinelenen girişler korunur
+	Algorithm	Algoritma
+	Ingredient {n}	Bileşen {n}
+	Phase	Aşama
+	Custom threshold matrix (0–1)	Özel eşik matrisi (0–1)
+	Mapping settings are invalid: {error}	Eşleme ayarları geçersiz: {error}
+	Mapping	Eşleme
+	Threshold ingredients	Eşik bileşenleri
+	Add ingredient	Bileşen ekle
+	Import matrix…	Matrisi içe aktar…
+	Generated palette options	Oluşturulan palet seçenekleri
+	A fixed palette is used for GIF/PNG-8 only; JPEG/PNG-24 ignore it.	Sabit palet yalnızca GIF/PNG-8 için kullanılır; JPEG/PNG-24 bunu yok sayar.
+	Clear snapshot and choose generated palette	Anlık görüntüyü temizle ve oluşturulan paleti seç
+	Palette invalid: {error}	Palet geçersiz: {error}
+	{name} has {entries} entries, but this format allows {limit} with one transparency slot reserved.	{name} {entries} giriş içeriyor, ancak bu biçim bir şeffaflık yuvası ayırarak {limit} girişe izin veriyor.
+	{name} has {entries} entries, but this format allows {limit}.	{name} {entries} giriş içeriyor, ancak bu biçim {limit} girişe izin veriyor.
+	Intentional reduction enabled; the engine will quantize this snapshot for the adapter without changing the saved snapshot.	Kasıtlı azaltma etkin; motor kaydedilmiş anlık görüntüyü değiştirmeden bu biçim için niceleyecek.
+	Do not reduce (reject oversized palette)	Azaltma (büyük paleti reddet)
+	Reduce to {limit} for this conversion/export	Bu dönüştürme/dışa aktarma için {limit} değerine azalt
+	Palette reduction is enabled for this adapter.	Bu biçim için palet azaltma etkin.
+	threshold matrix must be UTF-8 text	eşik matrisi UTF-8 metni olmalıdır
+	invalid threshold value `{token}`	geçersiz eşik değeri `{token}`
+	threshold values must be finite and between 0 and 1	eşik değerleri sonlu ve 0 ile 1 arasında olmalıdır
+	threshold matrices are limited to 256 entries	eşik matrisleri 256 girişle sınırlıdır
+	threshold matrix must be a square of 2, 4, 8, or 16 entries per side	eşik matrisi her kenarda 2, 4, 8 veya 16 girişli bir kare olmalıdır
+	palette dialog was closed	palet iletişim kutusu kapatıldı
+	threshold ingredient no longer exists	eşik bileşeni artık yok
+	Bayer	Bayer
+	Clustered Dot	Kümelenmiş Nokta
+	Floyd–Steinberg	Floyd–Steinberg
+	Sierra Lite	Sierra Lite
+	Atkinson	Atkinson
+	Jarvis	Jarvis
+	Stucki	Stucki
+	Sierra	Sierra
+	Burkes	Burkes
+	Blue Noise	Mavi Gürültü
+	White Noise	Beyaz Gürültü
+	Riemersma	Riemersma
+	Serpentine traversal	Yılan geçişi
+	Decay	Azalma
+	Binary	İkili
+	Matrix	Matris
+	Palette source	Palet kaynağı
+	Generate from image	Görüntüden oluştur
+	Choose a palette	Palet seç
+	Find a palette for this image.	Bu görüntü için bir palet bul.
+	Use a built-in or imported palette.	Yerleşik veya içe aktarılan paleti kullan.
+	Generation method	Oluşturma yöntemi
+	Required colors	Gerekli renkler
+	Dithering	Titreşim
+	Combine dither patterns	Titreşim desenlerini birleştir
+	Preserve transparency	Saydamlığı koru
+	Transparency dithering	Saydamlık titreşimi
+	Resulting palette	Ortaya çıkan palet
+	Updating preview…	Önizleme güncelleniyor…
+	Preview is off	Önizleme kapalı.
+	Move up	Yukarı taşı
+	Move down	Aşağı taşı
+@id	filter.paletteMap	Palet Eşleme…
+	Palette Map…	Palet Eşleme…
+	Approximate preview	Yaklaşık önizleme
 	Font size presets	Yazı tipi boyutu hazır ayarları
 	Leading presets	Satır aralığı hazır ayarları
 	Tracking presets	İzleme hazır ayarları
