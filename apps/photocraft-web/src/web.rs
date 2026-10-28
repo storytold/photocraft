@@ -75,6 +75,7 @@ pub fn start() {
             }
         };
         let pen_target = canvas.clone();
+        let fonts = crate::browser_fonts::Fonts::load().await;
         let result = eframe::WebRunner::new()
             .start(
                 canvas,
@@ -103,7 +104,7 @@ pub fn start() {
                     }
                     let unsaved = Arc::new(AtomicBool::new(false));
                     guard_unload(unsaved.clone());
-                    Ok(Box::new(WebShell { app, inbox, place_inbox, unsaved, served, database, presets }))
+                    Ok(Box::new(WebShell { app, inbox, place_inbox, unsaved, served, database, presets, fonts }))
                 }),
             )
             .await;
@@ -270,6 +271,7 @@ struct WebShell {
     served: Served,
     database: Option<web_sys::IdbDatabase>,
     presets: crate::preset_bridge::Bridge,
+    fonts: crate::browser_fonts::Fonts,
 }
 
 impl WebShell {
@@ -336,6 +338,7 @@ impl eframe::App for WebShell {
     }
 
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        self.fonts.tick(&mut self.app, ctx);
         let dropped = ctx.input_mut(|i| std::mem::take(&mut i.raw.dropped_files));
         if !dropped.is_empty() {
             let names: Vec<String> =
@@ -367,6 +370,7 @@ impl eframe::App for WebShell {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        self.fonts.ui(&self.app, ui);
         // Only while a preset change is unsaved. Storage the browser denies from the start (a
         // sandboxed iframe, blocked site data) loses nothing until the first change, and that
         // change brings the banner with the reason.

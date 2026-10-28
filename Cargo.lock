@@ -5457,6 +5457,7 @@ dependencies = [
  "photocraft-io",
  "photocraft-paint",
  "photocraft-psd",
+ "photocraft-text",
  "photocraft-ui-egui",
  "rfd",
  "serde_json",

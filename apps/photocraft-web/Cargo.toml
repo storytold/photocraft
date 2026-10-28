@@ -24,6 +24,8 @@ photocraft-io = { workspace = true }
 photocraft-codecs = { workspace = true }
 photocraft-doc = { workspace = true }
 photocraft-ui-egui = { workspace = true }
+photocraft-text = { workspace = true }
+serde_json = { workspace = true }
 egui = { workspace = true }
 log = { workspace = true }
 

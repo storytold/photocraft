@@ -75,7 +75,7 @@ fn request(request: &IdbRequest) -> Pending {
 }
 
 /// A single deadline bounds the whole startup read, not ten seconds per record.
-async fn before(promise: &Promise, deadline: f64) -> Result<JsValue, String> {
+pub(crate) async fn before(promise: &Promise, deadline: f64) -> Result<JsValue, String> {
     let window = web_sys::window().ok_or("no window")?;
     let mut timer = None;
     let mut callback = None;
@@ -96,9 +96,10 @@ async fn before(promise: &Promise, deadline: f64) -> Result<JsValue, String> {
     result
 }
 
-async fn open(deadline: f64) -> Result<IdbDatabase, String> {
+/// Open an isolated browser collection using the same bounded transaction machinery.
+pub(crate) async fn open(name: &str, deadline: f64) -> Result<IdbDatabase, String> {
     let factory = web_sys::window().ok_or("no window")?.indexed_db().map_err(js)?.ok_or("IndexedDB unavailable")?;
-    let req = factory.open_with_u32(DATABASE, 1).map_err(js)?;
+    let req = factory.open_with_u32(name, 1).map_err(js)?;
     let mut upgrade = Listeners::new();
     let upgrade_req = req.clone();
     upgrade
@@ -133,7 +134,7 @@ async fn open(deadline: f64) -> Result<IdbDatabase, String> {
 
 pub async fn load() -> Result<(IdbDatabase, Bridge, Vec<String>), String> {
     let deadline = js_sys::Date::now() + TIMEOUT_MS;
-    let db = open(deadline).await?;
+    let db = open(DATABASE, deadline).await?;
     let result = read(&db, deadline).await;
     match result {
         Ok((bridge, warnings)) => Ok((db, bridge, warnings)),
@@ -207,6 +208,39 @@ async fn read(db: &IdbDatabase, deadline: f64) -> Result<(Bridge, Vec<String>), 
         bridge.load(&name, Uint8Array::new(&buffer).to_vec())?;
     }
     Ok((bridge, warnings))
+}
+
+/// Font collection: enumerate Blobs before awaiting their bodies, with a single deadline.
+pub(crate) async fn read_fonts(db: &IdbDatabase) -> Result<Vec<(String, Vec<u8>)>, String> {
+    let deadline = js_sys::Date::now() + TIMEOUT_MS;
+    let tx = db.transaction_with_str_and_mode(FILES, IdbTransactionMode::Readonly).map_err(js)?;
+    let req = tx.object_store(FILES).map_err(js)?.open_cursor().map_err(js)?;
+    let mut next = request(&req);
+    let mut records = Vec::new();
+    let mut total = 0.0;
+    loop {
+        let value = before(&next.promise, deadline).await?;
+        if value.is_null() {
+            break;
+        }
+        let cursor = value.dyn_into::<web_sys::IdbCursorWithValue>().map_err(|_| "invalid font entry")?;
+        let name = cursor.key().map_err(js)?.as_string().ok_or("invalid font name")?;
+        let blob = cursor.value().map_err(js)?.dyn_into::<Blob>().map_err(|_| "invalid font data")?;
+        total += blob.size();
+        if records.len() >= 128 || name.len() > 512 || blob.size() > 16_777_216.0 || total > 67_108_864.0 {
+            return Err("Font collection exceeds its browser limits".into());
+        }
+        records.push((name, blob));
+        next = request(&req);
+        cursor.continue_().map_err(js)?;
+    }
+    let mut fonts = Vec::new();
+    for (key, blob) in records {
+        let family = key.split_once('/').map(|(family, _)| family).ok_or("invalid font identity")?;
+        let body = before(&blob.array_buffer(), deadline).await?;
+        fonts.push((family.to_owned(), Uint8Array::new(&body).to_vec()));
+    }
+    Ok(fonts)
 }
 
 pub async fn write(db: &IdbDatabase, batch: &Batch) -> Result<(), String> {
