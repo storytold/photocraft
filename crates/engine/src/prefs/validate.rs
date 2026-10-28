@@ -42,7 +42,6 @@ pub const HIDDEN_UNTIL_IMPLEMENTED: &[&str] = &[
     "performance.legacyCompositing",
     "plugIns.showExtensionPanels",
     "plugIns.allowScriptsToConnect",
-    "type.textEngine",
     "enhancedControls.scrubbySliderAcceleration",
 ];
 
