@@ -6,6 +6,7 @@
 //! are shown as errors (status bar + notice); import warnings as a notice.
 
 use crate::{PhotocraftApp, notices};
+use photocraft_doc::DocId;
 use photocraft_engine::file_cmds::{is_template, untitled_name};
 
 /// A request from the operating system, delivered by the platform shell through
@@ -40,6 +41,22 @@ pub(crate) enum DropPlace {
     /// Read by the shell itself (the browser reads dropped files asynchronously): its name and
     /// contents, delivered through [`Services::place_inbox`](crate::Services::place_inbox).
     Bytes(String, Vec<u8>),
+}
+
+impl DropPlace {
+    fn name(&self) -> String {
+        match self {
+            DropPlace::File(f) => dropped_name(f),
+            DropPlace::Bytes(name, _) => name.clone(),
+        }
+    }
+}
+
+/// A [`DropPlace`] bound to the document it was dropped on, so a file whose turn comes after the
+/// user switched tabs still lands there.
+pub(crate) struct QueuedPlace {
+    doc: DocId,
+    what: DropPlace,
 }
 
 /// `warnings` from an import, plus one for each font family the active document's type uses that
@@ -238,7 +255,7 @@ impl PhotocraftApp {
         for f in files {
             let name = dropped_name(&f);
             if target == DropTarget::Canvas && !crate::preset_files_ui::is_preset_file(&name) {
-                self.drop_places.push_back(DropPlace::File(f));
+                self.queue_place(DropPlace::File(f));
                 continue;
             }
             match self.open_dropped_file(&f, &name, slot) {
@@ -300,40 +317,53 @@ impl PhotocraftApp {
         Ok(self.run("document.move", serde_json::json!({"document": docs, "to": slot})).is_ok())
     }
 
+    /// Queue a file dropped on the canvas for the active document (the one whose canvas it was
+    /// dropped on); with no document open it can't be placed and is reported.
+    pub(crate) fn queue_place(&mut self, what: DropPlace) {
+        match self.active_doc_id() {
+            Ok(doc) => self.drop_places.push_back(QueuedPlace { doc, what }),
+            Err(e) => self.failed(crate::i18n::fmt(tl!("Couldn't place {name}: {error}"), &[("name", &what.name()), ("error", &e)])),
+        }
+    }
+
     /// Place the next file dropped on the canvas and start Free Transform on it, once no other
     /// transform is in progress (so several files are placed and transformed one after another).
-    /// With Skip Transform when Placing on, one file is placed per frame, so a large drop doesn't
-    /// hold the UI until the whole queue is decoded.
+    /// Each file goes to the document it was dropped on, even if another tab was selected since
+    /// (Free Transform then doesn't open); a closed document's files are reported, not placed
+    /// elsewhere. With Skip Transform when Placing on, one file is handled per frame, so a large
+    /// drop doesn't hold the UI until the whole queue is decoded.
     pub(crate) fn place_next_dropped(&mut self, ctx: &egui::Context) {
+        let one_per_frame = self.session.prefs().general.skip_transform_when_placing;
         while self.ui.transform.is_none() {
-            let Some(next) = self.drop_places.pop_front() else { return };
-            let (name, placed) = match next {
-                DropPlace::File(f) if f.path().is_absolute() => {
-                    (dropped_name(&f), path_text(f.path(), false).and_then(|path| self.run("file.placeEmbedded", serde_json::json!({"path": path}))))
-                }
-                DropPlace::File(f) => {
-                    let name = dropped_name(&f);
-                    let placed = crate::read_dropped(&*f).and_then(|bytes| self.place_bytes(&name, bytes, None));
-                    (name, placed)
-                }
-                DropPlace::Bytes(name, bytes) => {
-                    let placed = self.place_bytes(&name, bytes, None);
-                    (name, placed)
-                }
-            };
+            let Some(QueuedPlace { doc, what }) = self.drop_places.pop_front() else { return };
+            let name = what.name();
+            let active = self.session.active().map(|st| st.doc.id) == Some(doc);
+            let placed = if active { self.place_dropped(what) } else { self.with_document(doc, |app| app.place_dropped(what)) };
             match placed {
-                Ok(_) => {
+                Ok(_) if active => {
                     if let Err(e) = crate::transform_tool::begin_placed(self, ctx) {
                         self.ui.status = e;
                     }
-                    // No transform started (Skip Transform when Placing): the next file on the next frame.
-                    if self.ui.transform.is_none() && !self.drop_places.is_empty() {
-                        ctx.request_repaint();
-                        return;
-                    }
                 }
+                Ok(_) => {}
                 Err(e) => self.failed(crate::i18n::fmt(tl!("Couldn't place {name}: {error}"), &[("name", &name), ("error", &e)])),
             }
+            // No transform started (Skip Transform when Placing): the next file on the next frame.
+            if one_per_frame && self.ui.transform.is_none() && !self.drop_places.is_empty() {
+                ctx.request_repaint();
+                return;
+            }
+        }
+    }
+
+    /// Place one queued file as a layer of the active document.
+    fn place_dropped(&mut self, what: DropPlace) -> Result<serde_json::Value, String> {
+        match what {
+            DropPlace::File(f) if f.path().is_absolute() => {
+                path_text(f.path(), false).and_then(|path| self.run("file.placeEmbedded", serde_json::json!({"path": path})))
+            }
+            DropPlace::File(f) => crate::read_dropped(&*f).and_then(|bytes| self.place_bytes(&dropped_name(&f), bytes, None)),
+            DropPlace::Bytes(name, bytes) => self.place_bytes(&name, bytes, None),
         }
     }
 

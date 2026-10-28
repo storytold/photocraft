@@ -189,8 +189,8 @@ fn web_drops_onto_the_canvas_are_placed_from_their_bytes() {
     at.set(egui::pos2(20.0, 20.0));
     assert_eq!(app.dropped_on_canvas(&ctx, &names), [false, false], "off the canvas: opened");
     let layers = layer_count(&app);
-    app.drop_places.push_back(crate::file_open::DropPlace::Bytes("photo.png".into(), png_bytes(4, 3)));
-    app.drop_places.push_back(crate::file_open::DropPlace::Bytes("bad.png".into(), b"bad".to_vec()));
+    app.queue_place(crate::file_open::DropPlace::Bytes("photo.png".into(), png_bytes(4, 3)));
+    app.queue_place(crate::file_open::DropPlace::Bytes("bad.png".into(), b"bad".to_vec()));
     app.place_next_dropped(&ctx);
     assert_eq!(layer_count(&app), layers + 1);
     assert_eq!(app.ui.transform.as_ref().and_then(|t| t.made), Some(crate::state::MadeLayer::Place));
@@ -538,32 +538,79 @@ fn a_separate_drop_applies_the_open_transform_and_places_at_once() {
     assert_eq!(history_steps(&app), steps + 2);
 }
 
+/// A context with its first frames run, so a repaint request comes from what runs next.
+fn settled_ctx() -> egui::Context {
+    let ctx = egui::Context::default();
+    for _ in 0..4 {
+        ctx.run_ui(egui::RawInput::default(), |_| {}).textures_delta.clear();
+    }
+    assert!(!ctx.has_requested_repaint(), "idle");
+    ctx
+}
+
 /// #8492: with Skip Transform when Placing on, several files dropped on the canvas are all placed
 /// without Free Transform, one per frame (a repaint asks for the next while files remain), so a
-/// large drop doesn't hold the UI until the whole queue is decoded.
+/// large drop doesn't hold the UI until the whole queue is decoded. A file that can't be placed
+/// takes its frame too.
 #[test]
 fn skip_transform_when_placing_places_one_queued_drop_per_frame() {
     let mut app = app_with_canvas();
     app.session.execute("prefs.set", json!({"path": "general.skipTransformWhenPlacing", "value": true})).unwrap();
     let (layers, steps) = (layer_count(&app), history_steps(&app));
-    let names = ["one", "two", "three"];
-    for name in names {
-        app.drop_places.push_back(crate::file_open::DropPlace::Bytes(format!("{name}.png"), png_bytes(4, 3)));
+    let files = [("one", true), ("bad", false), ("two", true), ("three", true)];
+    for (name, good) in files {
+        let bytes = if good { png_bytes(4, 3) } else { b"bad".to_vec() };
+        app.queue_place(crate::file_open::DropPlace::Bytes(format!("{name}.png"), bytes));
     }
-    for (frame, name) in names.iter().enumerate() {
-        // A fresh context per frame: its repaint request is this frame's alone.
-        let ctx = egui::Context::default();
+    let mut placed = 0;
+    for (frame, (name, good)) in files.into_iter().enumerate() {
+        let ctx = settled_ctx();
         app.place_next_dropped(&ctx);
+        placed += usize::from(good);
         assert!(app.ui.transform.is_none(), "{name}: no Free Transform opens");
-        assert_eq!((layer_count(&app), history_steps(&app)), (layers + frame + 1, steps + frame + 1), "{name}: one Place Embedded step");
-        let st = app.session.active().unwrap();
-        assert_eq!(st.doc.layer(st.active_layer.unwrap()).unwrap().name, *name);
-        let left = names.len() - frame - 1;
-        assert_eq!(app.drop_places.len(), left);
-        if left > 0 {
-            assert!(ctx.has_requested_repaint(), "{name}: another frame is asked for while files remain");
+        assert_eq!((layer_count(&app), history_steps(&app)), (layers + placed, steps + placed), "{name}: one Place Embedded step");
+        if good {
+            let st = app.session.active().unwrap();
+            assert_eq!(st.doc.layer(st.active_layer.unwrap()).unwrap().name, name);
+        } else {
+            assert!(app.ui.notices.iter().any(|n| n.error && n.title.contains("bad.png")), "{:?}", app.ui.notices);
         }
+        let left = files.len() - frame - 1;
+        assert_eq!(app.drop_places.len(), left, "{name}: one file per frame");
+        assert_eq!(ctx.has_requested_repaint(), left > 0, "{name}: another frame is asked for while files remain");
     }
+}
+
+/// Queued canvas drops belong to the document they were dropped on: selecting another tab before
+/// their turn still places them there (without Free Transform, which needs the active canvas), and
+/// once that document is closed they are reported instead of placed in another.
+#[test]
+fn queued_drops_go_to_the_document_they_were_dropped_on() {
+    let mut app = app_with_canvas();
+    app.session.execute("prefs.set", json!({"path": "general.skipTransformWhenPlacing", "value": true})).unwrap();
+    let source = app.session.active().unwrap().doc.id;
+    let layers = layer_count(&app);
+    for name in ["one.png", "two.png", "three.png"] {
+        app.queue_place(crate::file_open::DropPlace::Bytes(name.into(), png_bytes(4, 3)));
+    }
+    app.place_next_dropped(&settled_ctx());
+    app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+    let other = app.session.active().unwrap().doc.id;
+    let other_layers = layer_count(&app);
+    app.place_next_dropped(&settled_ctx());
+    assert_eq!(app.session.active().unwrap().doc.id, other, "the selected tab stays selected");
+    assert_eq!(layer_count(&app), other_layers, "nothing lands in the other document");
+    assert!(app.ui.transform.is_none());
+    let source_doc = |app: &PhotocraftApp| app.session.documents().iter().find(|st| st.doc.id == source).map(|st| st.doc.layers.len());
+    assert_eq!(source_doc(&app), Some(layers + 2));
+    app.refocus(source).unwrap();
+    app.session.execute("file.close", json!({"save": false})).unwrap();
+    app.sync_views();
+    assert_eq!(source_doc(&app), None);
+    app.place_next_dropped(&settled_ctx());
+    assert!(app.drop_places.is_empty());
+    assert_eq!(layer_count(&app), other_layers, "a closed document's file goes nowhere else");
+    assert!(app.ui.notices.iter().any(|n| n.error && n.title.contains("three.png")), "{:?}", app.ui.notices);
 }
 
 /// #1099: switching tabs after an actual canvas drop cancels the place in its source document.
