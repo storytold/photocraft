@@ -767,6 +767,9 @@ mod smart_filter_rows_tests;
 mod blur_pins_tests;
 
 #[cfg(test)]
+mod filter_preview_locator_tests;
+
+#[cfg(test)]
 mod move_outline_tests;
 
 #[cfg(test)]
