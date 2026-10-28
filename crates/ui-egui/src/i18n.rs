@@ -187,7 +187,7 @@ fn expand(packed: &str, keys: &[&str]) -> Result<String, String> {
 }
 
 /// The registry. English first: it is the fallback and the source language.
-pub static LANGUAGES: [LangInfo; 22] = [
+pub static LANGUAGES: [LangInfo; 23] = [
     LangInfo { code: "en", name: "English", source: b"", plural: plural_one_other, complete_menus: false, catalog: OnceLock::new() },
     LangInfo { code: "ja", name: "日本語", source: catalog!("ja"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
     LangInfo { code: "zh-hans", name: "简体中文", source: catalog!("zh-hans"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
@@ -222,6 +222,8 @@ pub static LANGUAGES: [LangInfo; 22] = [
     LangInfo { code: "vi", name: "Tiếng Việt", source: catalog!("vi"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
     // Hindi; `hi`, `hi-IN` locales resolve here.
     LangInfo { code: "hi", name: "हिन्दी", source: catalog!("hi"), plural: plural_one_other, complete_menus: false, catalog: OnceLock::new() },
+    // Lithuanian; simplified one/other rule for the initial catalog.
+    LangInfo { code: "lt", name: "Lietuvių", source: catalog!("lt"), plural: plural_one_other, complete_menus: false, catalog: OnceLock::new() },
 ];
 
 impl LangInfo {
