@@ -741,14 +741,9 @@ fn main() -> eframe::Result {
             // `--safe-gpu` first: after a `--`, it would be a file name.
             let mut relaunch = std::process::Command::new(exe);
             relaunch.arg("--safe-gpu").args(std::env::args_os().skip(1)).env_remove("WGPU_BACKEND").env("PHOTOCRAFT_GPU_STARTUP_FAILURE", &reason);
-            // This process read the piped image (`-`): it pipes the same bytes to the new one.
-            let handed_on = match piped.take() {
-                Some(Ok(bytes)) => {
-                    relaunch.stdin(std::process::Stdio::piped());
-                    Some(bytes)
-                }
-                _ => None,
-            };
+            // This process read the piped image (`-`): it pipes the same bytes to the new one, or
+            // hands on the read's error so the new one doesn't read what's left of the stream.
+            let handed_on = piped_image::hand_on(&mut relaunch, piped.take());
             match relaunch.spawn() {
                 Ok(mut child) => {
                     if let (Some(bytes), Some(mut pipe)) = (handed_on, child.stdin.take()) {

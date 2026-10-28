@@ -93,15 +93,13 @@ pub(crate) fn convert(a: &ConvertArgs, _out: &mut dyn Write, err: &mut dyn Write
 pub(crate) fn info(a: &InfoArgs, out: &mut dyn Write) -> Result {
     let file = &a.file;
     let mut h = Headless::trusted_local();
-    let mut warnings = if is_stdin(file) {
+    // Both opens already list the missing fonts, so each warning is reported once.
+    let warnings: Vec<Value> = if is_stdin(file) {
         open_stdin_in(&mut h, a.approve_high_memory)?.into_iter().map(Value::String).collect()
     } else {
         h.open_with_approval(file, a.approve_high_memory)?["warnings"].as_array().cloned().unwrap_or_default()
     };
     let mut doc = h.inspect(None)?;
-    if let Some(st) = h.session.active() {
-        warnings.extend(missing_font_warnings(&st.doc).into_iter().map(Value::String));
-    }
     doc["warnings"] = Value::Array(warnings);
     doc["file"] = json!(file.to_string_lossy());
     // Drop per-session noise.
@@ -223,7 +221,8 @@ mod missing_font_warning_tests {
         let Invoke { code, stdout, stderr } = invoke(&["info", &native_str, "--compact"]);
         assert_eq!(code, 0, "{stderr}");
         let info: Value = serde_json::from_str(&stdout).unwrap();
-        assert!(info["warnings"].as_array().unwrap().iter().any(|w| w.as_str().is_some_and(|s| s.contains(family))));
+        let mentions = |info: &Value| info["warnings"].as_array().unwrap().iter().filter(|w| w.as_str().is_some_and(|s| s.contains(family))).count();
+        assert_eq!(mentions(&info), 1, "each missing font once: {info}");
         assert!(stderr.is_empty(), "info puts warnings in JSON, not stderr");
 
         let Invoke { code, stderr, .. } = invoke(&["convert", &native_str, &png_str]);

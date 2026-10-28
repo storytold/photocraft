@@ -1514,6 +1514,26 @@ fn empty_or_garbage_stdin_is_a_clear_error() {
     std::fs::remove_dir_all(d).unwrap();
 }
 
+/// #9978 review: `info -` lists a missing font once, as `info <file>` does. The font is one no
+/// system has, so no real fonts are needed.
+#[test]
+fn info_from_stdin_reports_each_missing_font_once() {
+    let d = tmp("stdin-fonts");
+    let family = "DefinitelyMissingPhotoCraftTypeface9978";
+    let params = json!({"x": 4, "y": 30, "text": "Missing", "font": family, "size": 18}).to_string();
+    let native = d.join("type.pcraft");
+    ok(bin().args(["run", "--new", r#"{"width":96,"height":48}"#, "--cmd", "type.create", "--params", &params, "--out"]).arg(&native));
+    let mentions = |info: &Value| info["warnings"].as_array().unwrap().iter().filter(|w| w.as_str().is_some_and(|s| s.contains(family))).count();
+
+    let o = piped(bin().args(["info", "-", "--compact"]), &std::fs::read(&native).unwrap());
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let info: Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(mentions(&info), 1, "{info}");
+    let info: Value = serde_json::from_str(&ok(bin().arg("info").arg(&native).arg("--compact")).stdout).unwrap();
+    assert_eq!(mentions(&info), 1, "{info}");
+    std::fs::remove_dir_all(d).unwrap();
+}
+
 /// #8802: Deselect with nothing selected is skipped in a `run`, as action playback does (#6744),
 /// so a script that deselects after Reveal Selection still finishes and saves.
 #[test]
