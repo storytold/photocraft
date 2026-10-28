@@ -284,7 +284,7 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
             let current = ui.ctx().data(|data| data.get_temp::<u64>(switch_id).unwrap_or(layer.id.0));
             let current_name =
                 variants.iter().find(|variant| variant.artboard.0 == current).map_or_else(|| tl!("Switch variant").to_owned(), |variant| variant.name.clone());
-            egui::ComboBox::from_id_salt(switch_id).selected_text(current_name).show_ui(ui, |ui| {
+            craft_ui::ComboBox::from_id_salt(switch_id).selected_text(current_name).show_ui(ui, |ui| {
                 for variant in &variants {
                     if ui.selectable_label(current == variant.artboard.0, &variant.name).clicked() {
                         ui.ctx().data_mut(|data| data.insert_temp(switch_id, variant.artboard.0));
@@ -300,7 +300,7 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
         let layout_id = egui::Id::unique(key("variant-layout"));
         let mut layout = ui.ctx().data(|d| d.get_temp::<usize>(layout_id).unwrap_or(0).min(1));
         ui.horizontal(|ui| {
-            egui::ComboBox::from_id_salt(variant_id).selected_text(VARIANT_SIZES[variant].0).width(150.0).show_ui(ui, |ui| {
+            craft_ui::ComboBox::from_id_salt(variant_id).selected_text(VARIANT_SIZES[variant].0).width(150.0).show_ui(ui, |ui| {
                 for (i, (label, _, _)) in VARIANT_SIZES.iter().enumerate() {
                     ui.selectable_value(&mut variant, i, *label);
                 }
@@ -317,7 +317,7 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
         });
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(tl!("Reflow")).color(t.text_dim).size(12.0));
-            egui::ComboBox::from_id_salt(layout_id).selected_text(if layout == 0 { tl!("Semantic reflow") } else { tl!("Proportional fit") }).show_ui(
+            craft_ui::ComboBox::from_id_salt(layout_id).selected_text(if layout == 0 { tl!("Semantic reflow") } else { tl!("Proportional fit") }).show_ui(
                 ui,
                 |ui| {
                     ui.selectable_value(&mut layout, 0, tl!("Semantic reflow · keep type size"));
@@ -339,7 +339,7 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
             selected_name = areas[0].name.clone();
         }
         ui.horizontal(|ui| {
-            egui::ComboBox::from_id_salt(selected_id).selected_text(&selected_name).show_ui(ui, |ui| {
+            craft_ui::ComboBox::from_id_salt(selected_id).selected_text(&selected_name).show_ui(ui, |ui| {
                 for area in &areas {
                     ui.selectable_value(&mut selected_name, area.name.clone(), &area.name);
                 }
