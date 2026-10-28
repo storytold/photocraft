@@ -32,6 +32,8 @@ pub enum CpuReason {
     CanvasTooLarge { bytes: u64, budget: u64 },
     /// The driver couldn't build the compositor's pipelines (such as DX12 FXC X3507, #8733).
     CompositorBuild(String),
+    /// The GPU compositor is being built in the background.
+    CompositorBuilding,
     /// The device was lost (the fault's text).
     DeviceLost(String),
     /// An uncaptured GPU error (the fault's text).
@@ -61,6 +63,7 @@ impl CpuReason {
             CpuReason::OverBudget { .. } => "overBudget",
             CpuReason::CanvasTooLarge { .. } => "canvasTooLarge",
             CpuReason::CompositorBuild(_) => "compositorBuild",
+            CpuReason::CompositorBuilding => "compositorBuilding",
             CpuReason::DeviceLost(_) => "deviceLost",
             CpuReason::GpuError(_) => "gpuError",
             CpuReason::Unsupported(_) => "unsupported",
@@ -87,6 +90,7 @@ impl fmt::Display for CpuReason {
             CpuReason::CanvasTooLarge { bytes, budget } => {
                 write!(f, "the canvas needs {} of GPU textures, budget {}; drawing it on the CPU canvas", fmt_bytes(*bytes), fmt_bytes(*budget))
             }
+            CpuReason::CompositorBuilding => f.write_str(tl!("The GPU compositor is still being prepared")),
             CpuReason::CompositorBuild(e) => write!(f, "the GPU compositor couldn't be built: {e}"),
             CpuReason::DeviceLost(e) | CpuReason::GpuError(e) | CpuReason::Unsupported(e) => f.write_str(e),
             CpuReason::AdjustPreview(why) => write!(f, "the adjustment preview uses the CPU proxy: {why}"),

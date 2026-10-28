@@ -120,7 +120,11 @@ pub fn clipboard_unreadable(app: &mut PhotocraftApp) {
 /// `ms`. The canvas doesn't respond while it runs, so once per document say why it was slow and
 /// which edits will do it again (#1015).
 pub fn slow_cpu_refresh(app: &mut PhotocraftApp, doc: u64, ms: f64, reason: Option<&crate::render_path::CpuReason>) {
-    if ms.is_nan() || ms < SLOW_CPU_REFRESH_MS || app.ui.slow_refresh_noticed.contains(&doc) {
+    if matches!(reason, Some(crate::render_path::CpuReason::CompositorBuilding))
+        || ms.is_nan()
+        || ms < SLOW_CPU_REFRESH_MS
+        || app.ui.slow_refresh_noticed.contains(&doc)
+    {
         return;
     }
     app.ui.slow_refresh_noticed.push(doc);

@@ -19,6 +19,7 @@ pub mod dialogs;
 pub mod dock;
 pub mod file_dialog;
 pub mod file_open;
+pub mod gpu_memo;
 pub mod gpu_status;
 pub mod i18n;
 mod icon_data;

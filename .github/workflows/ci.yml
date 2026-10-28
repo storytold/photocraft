@@ -140,6 +140,59 @@ jobs:
       # `--locked --features heif`, then the missing-translations report (xtask/src/main.rs).
       command: cargo xtask ci
 
+  gpu-fxc-probe:
+    needs: platforms
+    if: needs.platforms.outputs.windows == 'true'
+    timeout-minutes: 30
+    name: GPU compositor build probe (DX12/FXC)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
+      - name: Install sccache
+        uses: Mozilla-Actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: v0.18.0
+      - name: Use sccache
+        env:
+          MAIN: ${{ github.ref == 'refs/heads/main' }}
+        run: |
+          echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
+          echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+          if [ "$MAIN" != true ]; then echo "SCCACHE_GHA_RW_MODE=READ_ONLY" >> "$GITHUB_ENV"; fi
+        shell: bash
+      - name: Run compositor probe
+        run: cargo run --release -p photocraft-gpu --example compositor_build_probe -- dx12 fxc rounds=2 --background --json probe.json
+      - name: Report probe results and enforce stall ceiling
+        if: always() && hashFiles('probe.json') != ''
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          data = json.loads(Path("probe.json").read_text())
+          lines = ["### GPU compositor DX12/FXC probe", "", f"Adapter: {data['adapter']}", "", "| Round | Build ms | Result | Error |", "| ---: | ---: | --- | --- |"]
+          lines += [f"| {i + 1} | {r['build_ms']:.3f} | {'ok' if r['ok'] else 'error'} | {r['error'] or ''} |" for i, r in enumerate(data['rounds'])]
+          lines += ["", f"UI loop stall p95: {data['stall']['p95_ms']:.3f} ms; max: {data['stall']['max_ms']:.3f} ms", "", f"CPU composite idle: {data['cpu_composite_ms']['idle']} ms; during build: {data['cpu_composite_ms']['during_build']} ms"]
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write("\n".join(lines) + "\n")
+          if data['stall']['max_ms'] > 500:
+              raise SystemExit(f"UI-loop stall exceeded 500 ms: {data['stall']['max_ms']:.3f} ms")
+          PY
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: gpu-fxc-probe
+          path: probe.json
+          if-no-files-found: warn
+
   # Windows tests run as two legs in parallel: the unit tests and the integration tests. As one job
   # they took ~28 min on the Windows runner; the legs take ~13 and ~15. Splitting the integration
   # tests over a third runner (nextest --partition) saved ~2 min of wall time but cost ~7

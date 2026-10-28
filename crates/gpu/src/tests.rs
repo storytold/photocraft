@@ -388,3 +388,8 @@ fn colour_managed_tiles_match_the_per_pixel_conversion() {
 fn grid_rounds_out() {
     assert_eq!(tile_grid(Rect::new(0, 0, 300, 256)), Rect::new(0, 0, 512, 256));
 }
+
+#[test]
+fn shader_fingerprint_is_fnv1a_of_embedded_source() {
+    assert_eq!(super::shader_fingerprint(), 0xcef4_1171_6b85_f52b);
+}

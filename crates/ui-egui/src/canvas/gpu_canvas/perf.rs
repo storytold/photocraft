@@ -26,6 +26,8 @@ pub struct Perf {
     /// path the cost of *encoding and submitting* the composite — not of running it, which is
     /// `gpu_ms`.
     pub composite_ms: f64,
+    /// Time spent on a failed GPU composite attempt before CPU fallback.
+    pub gpu_attempt_ms: f64,
     /// Last canvas refresh: conversion + upload (ms).
     pub upload_ms: f64,
     /// Last canvas refresh kind: "full", "rect" or "none".
@@ -230,6 +232,7 @@ impl Perf {
 
     /// Record a canvas refresh and any GPU measurement that came back with it.
     pub fn record_refresh(&mut self, r: &Refresh) {
+        self.gpu_attempt_ms = r.gpu_attempt_ms;
         self.record(r.kind, r.px, r.composite_ms, r.upload_ms);
         if let Some(t) = r.gpu {
             self.record_gpu(t);
