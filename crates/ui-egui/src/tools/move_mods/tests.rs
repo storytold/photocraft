@@ -246,12 +246,13 @@ fn cmd_arrows_nudge_the_layer_from_the_brush() {
 }
 
 /// #2474: tools where ⌘ means something else in Photoshop (Pen and path tools, Hand, Zoom,
-/// Crop, Type) keep ⌘-arrows away from the layer, as does an active Free Transform.
+/// Crop) keep ⌘-arrows away from the layer, as does an active Free Transform. (Type keeps them
+/// only while text is being edited, `hold_keys`.)
 #[test]
 fn cmd_arrows_leave_the_layer_alone_where_cmd_is_not_the_move_tool() {
     let mut app = app_with_layer();
     let id = app.session.active().unwrap().active_layer.unwrap();
-    for tool in [Tool::Pen, Tool::PathSelection, Tool::DirectSelection, Tool::Rectangle, Tool::Hand, Tool::Zoom, Tool::Crop, Tool::Type] {
+    for tool in [Tool::Pen, Tool::PathSelection, Tool::DirectSelection, Tool::Rectangle, Tool::Hand, Tool::Zoom, Tool::Crop] {
         app.ui.tool = tool;
         assert!(!press(&mut app, egui::Key::ArrowRight, CTRL), "{tool:?}");
         assert!(!press(&mut app, egui::Key::ArrowRight, MAC_CMD | egui::Modifiers::SHIFT), "{tool:?}");
