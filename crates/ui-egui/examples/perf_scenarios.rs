@@ -259,6 +259,8 @@ struct Sizes {
     /// A huge document with one painted layer, refreshed zoomed out (#1015, #9330). The row name
     /// leaves out the size because `--quick` uses a smaller one.
     huge_doc: (u32, u32),
+    /// The new document whose compositor builds in the background.
+    first_document: (u32, u32),
 }
 
 const FULL: Sizes = Sizes {
@@ -273,6 +275,7 @@ const FULL: Sizes = Sizes {
     a4: (2480, 3508),
     huge_new: (78_740, 39_370),
     huge_doc: (30_000, 30_000),
+    first_document: (1920, 1080),
 };
 
 const QUICK: Sizes = Sizes {
@@ -287,6 +290,7 @@ const QUICK: Sizes = Sizes {
     a4: (1240, 1754),
     huge_new: (20_000, 10_000),
     huge_doc: (8_000, 8_000),
+    first_document: (640, 480),
 };
 
 /// The layered document of #209: a background, six pixel layers with a drop shadow and a stroke,
@@ -375,7 +379,7 @@ fn main() {
     // A panic in one group (a crash the scenario found) is reported against the row that was
     // running, and the other groups still run.
     type Group = fn(&mut Bench, &Sizes);
-    let groups: [(&str, Group); 7] = [
+    let groups: [(&str, Group); 8] = [
         ("layered", layered_scenarios),
         ("many layers", many_layer_scenarios),
         ("full-canvas layers", full_canvas_layer_scenarios),
@@ -383,6 +387,7 @@ fn main() {
         ("long operations", job_scenarios),
         ("algorithms", algorithm_scenarios),
         ("huge document", huge_document_scenarios),
+        ("first document", first_document_scenarios),
     ];
     let use_gpu = b.gpu.is_some();
     if let Some(wanted) = arg(&args, "--group")
@@ -414,9 +419,6 @@ fn main() {
         }
     }
 
-    if arg(&args, "--group").is_none() {
-        first_document_scenarios(&mut b, if quick { (640, 480) } else { (1920, 1080) });
-    }
     println!("total {:.1} s", t_all.elapsed().as_secs_f64());
     if let Some(out) = arg(&args, "--json") {
         let context = json!({
@@ -436,7 +438,8 @@ fn main() {
 }
 
 /// Startup costs when a new canvas builds its compositor in the background, as the app does.
-fn first_document_scenarios(b: &mut Bench, (w, h): (u32, u32)) {
+fn first_document_scenarios(b: &mut Bench, sz: &Sizes) {
+    let (w, h) = sz.first_document;
     const FIRST: &str = "first document: UI-thread time to first pixels";
     const READY: &str = "first document: GPU compositor ready";
     let Some((_, rs)) = b.gpu.as_ref() else {

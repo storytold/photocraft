@@ -49,8 +49,8 @@ mod texels;
 #[cfg(all(test, target_os = "linux"))]
 use budget::nvidia_video_memory;
 pub use budget::{
-    DEFER_PX, MIN_GPU_BUDGET, OVER_BUDGET, OVER_CANVAS_BUDGET, REFRESH_DEFERRED, REFRESH_OVER_BUDGET, canvas_budget, canvas_texture_bytes, memory_budget,
-    physical_memory, video_memory, vram_share,
+    COMPOSITOR_BUILDING, DEFER_PX, MIN_GPU_BUDGET, OVER_BUDGET, OVER_CANVAS_BUDGET, REFRESH_DEFERRED, REFRESH_OVER_BUDGET, canvas_budget, canvas_texture_bytes,
+    memory_budget, physical_memory, video_memory, vram_share,
 };
 #[cfg(test)]
 use budget::{NVIDIA_VENDOR, bounded_output, drm_video_memory, parse_nvidia_smi};
@@ -455,7 +455,7 @@ impl GpuCanvas {
             let (bytes, budget) = self.canvas_fit(doc).unwrap_or_default();
             return CpuReason::CanvasTooLarge { bytes, budget };
         }
-        if e.0 == "GPU compositor is building" {
+        if e.0 == COMPOSITOR_BUILDING {
             return CpuReason::CompositorBuilding;
         }
         if self.compositor_failed().is_some_and(|f| f == e.0) {
@@ -664,7 +664,7 @@ impl GpuCanvas {
             match std::mem::replace(&mut *state, compositor_build::BuildState::Adopted) {
                 compositor_build::BuildState::Building => {
                     *state = compositor_build::BuildState::Building;
-                    return Err(photocraft_gpu::Unsupported("GPU compositor is building".into()));
+                    return Err(photocraft_gpu::Unsupported(COMPOSITOR_BUILDING.into()));
                 }
                 compositor_build::BuildState::Ready(comp) => res.compositor = Some(*comp),
                 compositor_build::BuildState::Failed(error) => {
