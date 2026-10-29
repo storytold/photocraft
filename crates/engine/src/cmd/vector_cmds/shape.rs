@@ -349,12 +349,18 @@ pub(super) fn shape_create(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 pub(super) fn shape_edit(s: &mut Session, p: &Value) -> Result<Value> {
+    shape_edit_labelled(s, p, "Edit Shape")
+}
+
+/// [`shape_edit`] with the journal step's label: Combine Shapes names the operation it
+/// applied (Subtract Front Shape…), every other caller says "Edit Shape".
+fn shape_edit_labelled(s: &mut Session, p: &Value, label: &str) -> Result<Value> {
     const CMD: &str = "shape.edit";
     let id = layer_id(s, p)?;
     let fg = s.tools.foreground;
     let fgc = Color::rgba(fg[0], fg[1], fg[2], fg[3]);
     let name = p.get("name").and_then(Value::as_str).map(str::to_string);
-    with_shape(s, id, "Edit Shape", |sh, layer| {
+    with_shape(s, id, label, |sh, layer| {
         if let Some(v) = p.get("path") {
             sh.path = parse_path(v).map_err(|e| bad(CMD, e))?;
             sh.live = None;
@@ -544,7 +550,7 @@ pub(super) fn combine_shapes(s: &mut Session, p: &Value, op: &str, label: &str) 
         let op = op_from(op).ok_or_else(|| EngineError::Other(format!("unknown op `{op}`")))?;
         return merge_shape_layers(s, &ids, Some(op), label, None);
     }
-    shape_edit(s, &with(p, "op", json!(op)))
+    shape_edit_labelled(s, &with(p, "op", json!(op)), label)
 }
 
 pub(super) fn selection_to_shape(s: &mut Session, p: &Value) -> Result<Value> {
