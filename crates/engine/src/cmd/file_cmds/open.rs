@@ -125,18 +125,26 @@ pub fn open_bytes_as(s: &mut Session, name: &str, bytes: &[u8], as_ext: Option<&
     open_bytes_as_with_options(s, name, bytes, as_ext, path, false)
 }
 
-/// The Import PDF answers in a command's params (`page`, `resolution`, `crop`, `mode`, `depth`,
-/// `antiAlias`, `name`, `password`, `image`, `suppressWarnings`), or `None` when it names none:
-/// a PDF then opens with Photoshop's defaults (page 1, Bounding Box, 300 ppi, RGB, 8 bits).
+/// The Import PDF answers in a command's params (`layers`, `page`, `resolution`, `crop`, `mode`,
+/// `depth`, `antiAlias`, `name`, `password`, `image`, `suppressWarnings`), or `None` when none
+/// are given: a PDF then opens with Photoshop's defaults.
 pub fn pdf_options(p: &Value) -> Result<Option<photocraft_io::pdf_import::PdfOpenOptions>> {
     use photocraft_io::pdf_import::{CropTo, PdfOpenOptions};
     // A key set to `null` counts as absent, as in the other format params (`tgaBits`).
     let get = |k: &str| p.get(k).filter(|v| !v.is_null());
-    let keys = ["page", "resolution", "crop", "mode", "depth", "antiAlias", "name", "password", "image", "suppressWarnings"];
+    let keys = ["layers", "page", "resolution", "crop", "mode", "depth", "antiAlias", "name", "password", "image", "suppressWarnings"];
     if !keys.iter().any(|k| get(k).is_some()) {
         return Ok(None);
     }
     let mut o = PdfOpenOptions::default();
+    if let Some(v) = get("layers") {
+        o.layer_mode = match v.as_str() {
+            Some("auto") => photocraft_doc::PdfImportMode::Auto,
+            Some("layers") => photocraft_doc::PdfImportMode::Layers,
+            Some("render") => photocraft_doc::PdfImportMode::Render,
+            _ => return Err(EngineError::Other("layers: auto|layers|render".into())),
+        };
+    }
     if let Some(v) = get("page") {
         o.page = v.as_u64().filter(|n| *n >= 1).and_then(|n| usize::try_from(n).ok()).ok_or_else(|| EngineError::Other("page: a page number from 1".into()))?;
     }
@@ -353,14 +361,13 @@ pub fn place_bytes(s: &mut Session, name: &str, bytes: Vec<u8>, linked: Option<S
     opts.psd_high_memory_approved = approve;
     opts.psd_approved_estimate = None;
     opts.pdf = pdf_options(p)?;
-    // A linked smart object keeps only the path, so Update Modified Content would reopen the
-    // PDF with the defaults (page 1, 300 ppi) and lose these answers. Refuse rather than drift.
-    if linked.is_some() && opts.pdf.is_some() {
-        return Err(EngineError::BadParams {
-            cmd: "file.placeLinked".into(),
-            msg: "Import PDF options (page, resolution, crop, mode, depth, image, password…) aren't kept with a linked file yet; place it embedded instead"
-                .into(),
-        });
+    let pdf_import =
+        photocraft_io::is_pdf_input(name, &bytes).then(|| opts.pdf.as_ref().map(photocraft_io::pdf_import::PdfOpenOptions::projection).unwrap_or_default());
+    let password_protected = pdf_import.is_some() && opts.pdf.as_ref().is_some_and(|options| options.password.is_some());
+    if password_protected && linked.is_some() {
+        return Err(EngineError::Other(
+            "a password-protected PDF cannot stay linked; place it embedded so PhotoCraft can store the selected document without saving its password".into(),
+        ));
     }
     let imported = photocraft_io::import_with_options(name, &bytes, &opts).map_err(|e| crate::error::io_open_error(name, e))?;
     if imported.preview_only {
@@ -411,6 +418,9 @@ pub fn place_bytes(s: &mut Session, name: &str, bytes: Vec<u8>, linked: Option<S
         || p.get("smartObject").and_then(Value::as_bool).unwrap_or(s.prefs().general.always_create_smart_objects_when_placing);
     let source = match linked {
         Some(path) => SmartSource::Linked { path },
+        None if password_protected => {
+            SmartSource::Embedded { file_name: format!("{}.pcraft", stem(name)), bytes: Arc::new(crate::smart_cmds::encode_source(&src)?) }
+        }
         None => SmartSource::Embedded { file_name: file_name(name), bytes: Arc::new(bytes) },
     };
     let layer_name = stem(name);
@@ -418,6 +428,7 @@ pub fn place_bytes(s: &mut Session, name: &str, bytes: Vec<u8>, linked: Option<S
     let id = s.edit(label, |doc, active| {
         let layer = if smart {
             let mut so = SmartObject::new(source, placement, px);
+            so.pdf_import = pdf_import.filter(|_| !password_protected);
             // A vector source (SVG) renders at its placement scale instead of as a resampled raster.
             if (vector || frame.is_some())
                 && let Some(sharp) = crate::smart_cmds::render(doc, &so)?

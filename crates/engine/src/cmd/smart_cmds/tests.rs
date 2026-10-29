@@ -155,7 +155,7 @@ fn conversion_is_pixel_identical_at_every_depth() {
         let SmartSource::Embedded { file_name, bytes } = &sm.source else { panic!() };
         assert!(file_name.ends_with(".pcraft"));
         // The nested document is cropped to the content, including the off-canvas part.
-        let inner = decode_source(file_name, bytes).unwrap();
+        let inner = decode_source(file_name, bytes, None).unwrap();
         assert_eq!((inner.size.width, inner.size.height), (46, 33));
         assert_eq!(inner.depth, d.doc.depth);
         assert_eq!(sm.transform, Affine::translate(-6.0, 5.0));
@@ -204,7 +204,7 @@ fn pattern_fill_converts_to_editable_smart_object_without_losing_its_pattern() {
     assert!(max_diff(&flat(&s), &before) < 1e-6, "conversion keeps every pattern pixel");
     let sm = active_smart(&s);
     let SmartSource::Embedded { file_name, bytes } = &sm.source else { panic!("not embedded") };
-    let inner = decode_source(file_name, bytes).unwrap();
+    let inner = decode_source(file_name, bytes, None).unwrap();
     assert!(inner.patterns.iter().any(|p| p.id == pattern_id), "the embedded source keeps the pattern resource");
 
     // The smart object's source remains live after opening and editing its contents.

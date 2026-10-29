@@ -62,6 +62,7 @@
   <provides>
     <binary>photocraft</binary>
     <mediatype>application/x-photocraft</mediatype>
+    <mediatype>application/pdf</mediatype>
     <mediatype>image/x-paintnet</mediatype>
     <mediatype>image/openraster</mediatype>
     <mediatype>application/x-krita</mediatype>

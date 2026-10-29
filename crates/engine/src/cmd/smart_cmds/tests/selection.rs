@@ -16,7 +16,7 @@ fn selected_session(doc: Document, ids: &[LayerId]) -> Session {
 
 fn contents(s: &Session) -> Document {
     let SmartSource::Embedded { file_name, bytes } = active_smart(s).source else { panic!() };
-    decode_source(&file_name, &bytes).unwrap()
+    decode_source(&file_name, &bytes, None).unwrap()
 }
 
 #[test]
@@ -173,7 +173,7 @@ fn combined_contents_survive_native_and_psd_save_open() {
         assert_eq!(back.layers.len(), 1);
         let LayerContent::Smart(sm) = &back.layers[0].content else { panic!("PSD lost the smart object") };
         let (name, bytes) = source_bytes(&back.metadata, &sm.source).unwrap();
-        let inner = decode_source(&name, &bytes).unwrap();
+        let inner = decode_source(&name, &bytes, None).unwrap();
         let names: Vec<_> = inner.walk().into_iter().filter(|(_, _, l)| matches!(l.content, LayerContent::Raster(_))).map(|(_, _, l)| l.name.clone()).collect();
         assert_eq!(names, vec!["Bottom", "Top"], "{depth:?}");
     }

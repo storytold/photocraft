@@ -183,7 +183,7 @@ fn copy_excludes_unselected_linked_records_from_native_save() {
     let LayerContent::Smart(sm) = &mut unselected.content else { panic!("smart") };
     sm.source = SmartSource::Linked { path: "unselected-private-source".into() };
     doc.layers.push(unselected);
-    let mut private_child = photocraft_engine::smart_cmds::decode_source("source.psb", &expected).unwrap();
+    let mut private_child = photocraft_engine::smart_cmds::decode_source("source.psb", &expected, None).unwrap();
     for layer in &mut private_child.layers {
         if let Some(surface) = layer.surface_mut() {
             surface.fill_rect(Rect::new(0, 0, 8, 6), &[0.0, 0.0, 1.0, 1.0]);

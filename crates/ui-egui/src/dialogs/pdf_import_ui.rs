@@ -12,6 +12,7 @@
 use std::sync::Arc;
 
 use egui::{Color32, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
+use photocraft_doc::PdfImportMode;
 use photocraft_io::pdf_import::{self, CropTo, PdfImage, PdfInfo, PdfOpenOptions};
 use serde_json::{Map, Value, json};
 
@@ -33,6 +34,8 @@ pub const THUMB_SIZES: &[(&str, &str)] = &[("small", "Small"), ("large", "Large"
 pub const MODES: &[(&str, &str)] = &[("gray", "Grayscale"), ("rgb", "RGB Color"), ("cmyk", "CMYK Color"), ("lab", "Lab Color")];
 /// Bit Depth choices.
 pub const DEPTHS: &[(u64, &str)] = &[(8, "8 bit"), (16, "16 bit")];
+/// PDF import choices (field value, label). Auto preserves authored layers when possible.
+pub const LAYER_MODES: &[(&str, &str)] = &[("auto", "Auto"), ("layers", "Layers"), ("render", "Render")];
 /// Resolution unit choices (field value, label).
 pub const RES_UNITS: &[(&str, &str)] = &[("in", "Pixels/Inch"), ("cm", "Pixels/Centimeter")];
 /// Longest side of a thumbnail, per Thumbnail Size (Fit Page follows the panel).
@@ -184,12 +187,14 @@ pub fn open_placed(app: &mut PhotocraftApp, name: &str, path: Option<&str>, byte
 }
 
 /// Photoshop's defaults: the first page, Bounding Box, anti-aliased, 300 ppi, RGB, 8 bits, the
-/// ruler unit for the size, proportions free, warnings shown, pages opened in reverse order.
+/// ruler unit for the size, proportions free, warnings shown, pages opened in reverse order. Auto
+/// keeps authored PDF layers when the importer can preserve them.
 fn defaults(f: &mut Map<String, Value>, app: &PhotocraftApp) {
     f.insert("select".into(), json!("pages"));
     f.insert("pages".into(), json!([1]));
     f.insert("images".into(), json!([]));
     f.insert("thumbnailSize".into(), json!("small"));
+    f.insert("layers".into(), json!("auto"));
     f.insert("crop".into(), json!(CropTo::BoundingBox.id()));
     f.insert("antiAlias".into(), json!(true));
     // The ruler unit, when the size fields know it (percent falls back to pixels).
@@ -234,6 +239,11 @@ pub fn options(f: &Map<String, Value>, n: usize, images: bool, password: Option<
     let depth = if f.get("depth").and_then(Value::as_u64) == Some(16) { photocraft_color::SampleType::U16 } else { photocraft_color::SampleType::U8 };
     let sized = pixel_size_field(f);
     PdfOpenOptions {
+        layer_mode: match s(f, "layers", "auto") {
+            "layers" => PdfImportMode::Layers,
+            "render" => PdfImportMode::Render,
+            _ => PdfImportMode::Auto,
+        },
         page: if images { 1 } else { n },
         image: images.then_some(n),
         crop: CropTo::from_id(s(f, "crop", "boundingBox")).unwrap_or_default(),
@@ -557,6 +567,7 @@ fn right_column(ui: &mut egui::Ui, f: &mut Map<String, Value>, st: &mut PdfImpor
             add(ui);
         });
     };
+    let preserve_layers = s(f, "layers", "auto") == "layers";
     ui.add_enabled_ui(!images, |ui| {
         group(ui, t, tl!("Page Options"), |ui| {
             field(ui, "Name:", &mut |ui| {
@@ -566,98 +577,112 @@ fn right_column(ui: &mut egui::Ui, f: &mut Map<String, Value>, st: &mut PdfImpor
                     f.insert("name".into(), json!(name));
                 }
             });
-            field(ui, "Crop To:", &mut |ui| {
-                let mut cur = s(f, "crop", "boundingBox").to_string();
-                let opts: Vec<(String, &str)> = CropTo::ALL.iter().map(|c| (c.id().to_string(), c.label())).collect();
-                if widgets::dropdown(ui, "pdf-crop", "Crop To", &mut cur, &opts, 120.0) {
-                    f.insert("crop".into(), json!(cur));
-                    f.remove("pixelSize");
+            field(ui, "Layers", &mut |ui| {
+                let mut import_as = s(f, "layers", "auto").to_string();
+                let opts: Vec<(String, &str)> = LAYER_MODES.iter().map(|(v, l)| (v.to_string(), *l)).collect();
+                if widgets::dropdown(ui, "pdf-layers", "Layers", &mut import_as, &opts, 120.0) {
+                    f.insert("layers".into(), json!(import_as));
                 }
             });
-            let mut aa = flag(f, "antiAlias", true);
-            if widgets::checkbox(ui, &mut aa, tl!("Anti-aliased")).changed() {
-                f.insert("antiAlias".into(), json!(aa));
-            }
-        });
-        ui.add_space(6.0);
-        let (w, h) = pixel_size(st, f).unwrap_or((0, 0));
-        let mode = s(f, "mode", "rgb").to_string();
-        let depth = f.get("depth").and_then(Value::as_u64).unwrap_or(8);
-        let title =
-            if w == 0 { tl!("Image Size: --").to_string() } else { crate::i18n::fmt(tl!("Image Size: {size}"), &[("size", &size_label(w, h, &mode, depth))]) };
-        group(ui, t, &title, |ui| {
-            let unit = s(f, "unit", "px").to_string();
-            let ppi = num(f, "resolution", pdf_import::DEFAULT_RESOLUTION).clamp(pdf_import::MIN_RESOLUTION, pdf_import::MAX_RESOLUTION);
-            let constrain = flag(f, "constrain", false);
-            let units: Vec<(String, &str)> = crate::new_doc_ui::UNITS.iter().map(|(v, l, _)| (v.to_string(), *l)).collect();
-            let decimals = if unit == "px" { 0 } else { 2 };
-            for (key, label, cur, other) in [("width", "Width:", w, h), ("height", "Height:", h, w)] {
-                field(ui, label, &mut |ui| {
-                    let mut v = crate::new_doc_ui::to_unit(cur as f32, &unit, ppi);
-                    let r = widgets::value_field_prec(ui, &mut v, 0.0..=300_000.0, "", 70.0, decimals).accessible_name(tl!(label));
-                    if r.changed() && !r.dragged() {
-                        let px = crate::new_doc_ui::from_unit(v, &unit, ppi).round().clamp(1.0, 300_000.0) as u32;
-                        let (nw, nh) = if constrain && cur > 0 {
-                            let o = (f64::from(px) * f64::from(other) / f64::from(cur)).round().clamp(1.0, 300_000.0) as u32;
-                            if key == "width" { (px, o) } else { (o, px) }
-                        } else if key == "width" {
-                            (px, other.max(1))
-                        } else {
-                            (other.max(1), px)
-                        };
-                        f.insert("pixelSize".into(), json!([nw, nh]));
-                    }
-                    ui.add_space(6.0);
-                    let mut u = unit.clone();
-                    if widgets::dropdown(ui, &format!("pdf-unit-{key}"), "Units", &mut u, &units, 110.0) {
-                        f.insert("unit".into(), json!(u));
+            ui.add_enabled_ui(!preserve_layers, |ui| {
+                field(ui, "Crop To:", &mut |ui| {
+                    let mut cur = s(f, "crop", "boundingBox").to_string();
+                    let opts: Vec<(String, &str)> = CropTo::ALL.iter().map(|c| (c.id().to_string(), c.label())).collect();
+                    if widgets::dropdown(ui, "pdf-crop", "Crop To", &mut cur, &opts, 120.0) {
+                        f.insert("crop".into(), json!(cur));
+                        f.remove("pixelSize");
                     }
                 });
-            }
-            let mut c = constrain;
-            if widgets::checkbox(ui, &mut c, tl!("Constrain Proportions")).changed() {
-                f.insert("constrain".into(), json!(c));
-            }
-            field(ui, "Resolution:", &mut |ui| {
-                let res_unit = s(f, "resolutionUnit", "in").to_string();
-                let mut v = if res_unit == "cm" { ppi / 2.54 } else { ppi };
-                let r = widgets::value_field_prec(ui, &mut v, 0.1..=pdf_import::MAX_RESOLUTION, "", 70.0, if res_unit == "cm" { 2 } else { 0 })
-                    .accessible_name(tl!("Resolution:"));
-                if r.changed() && !r.dragged() {
-                    let new = (if res_unit == "cm" { v * 2.54 } else { v }).clamp(pdf_import::MIN_RESOLUTION, pdf_import::MAX_RESOLUTION);
-                    // A typed size is a physical size: it keeps its inches, so its pixels follow.
-                    if let Some([pw, ph]) = f
-                        .get("pixelSize")
-                        .and_then(Value::as_array)
-                        .map(|a| [a.first().and_then(Value::as_u64).unwrap_or(1), a.get(1).and_then(Value::as_u64).unwrap_or(1)])
-                    {
-                        let k = f64::from(new) / f64::from(ppi.max(0.001));
-                        f.insert(
-                            "pixelSize".into(),
-                            json!([(pw as f64 * k).round().clamp(1.0, 300_000.0) as u64, (ph as f64 * k).round().clamp(1.0, 300_000.0) as u64]),
-                        );
+                let mut aa = flag(f, "antiAlias", true);
+                if widgets::checkbox(ui, &mut aa, tl!("Anti-aliased")).changed() {
+                    f.insert("antiAlias".into(), json!(aa));
+                }
+            });
+        });
+        ui.add_space(6.0);
+        ui.add_enabled_ui(!preserve_layers, |ui| {
+            let (w, h) = pixel_size(st, f).unwrap_or((0, 0));
+            let mode = s(f, "mode", "rgb").to_string();
+            let depth = f.get("depth").and_then(Value::as_u64).unwrap_or(8);
+            let title = if w == 0 {
+                tl!("Image Size: --").to_string()
+            } else {
+                crate::i18n::fmt(tl!("Image Size: {size}"), &[("size", &size_label(w, h, &mode, depth))])
+            };
+            group(ui, t, &title, |ui| {
+                let unit = s(f, "unit", "px").to_string();
+                let ppi = num(f, "resolution", pdf_import::DEFAULT_RESOLUTION).clamp(pdf_import::MIN_RESOLUTION, pdf_import::MAX_RESOLUTION);
+                let constrain = flag(f, "constrain", false);
+                let units: Vec<(String, &str)> = crate::new_doc_ui::UNITS.iter().map(|(v, l, _)| (v.to_string(), *l)).collect();
+                let decimals = if unit == "px" { 0 } else { 2 };
+                for (key, label, cur, other) in [("width", "Width:", w, h), ("height", "Height:", h, w)] {
+                    field(ui, label, &mut |ui| {
+                        let mut v = crate::new_doc_ui::to_unit(cur as f32, &unit, ppi);
+                        let r = widgets::value_field_prec(ui, &mut v, 0.0..=300_000.0, "", 70.0, decimals).accessible_name(tl!(label));
+                        if r.changed() && !r.dragged() {
+                            let px = crate::new_doc_ui::from_unit(v, &unit, ppi).round().clamp(1.0, 300_000.0) as u32;
+                            let (nw, nh) = if constrain && cur > 0 {
+                                let o = (f64::from(px) * f64::from(other) / f64::from(cur)).round().clamp(1.0, 300_000.0) as u32;
+                                if key == "width" { (px, o) } else { (o, px) }
+                            } else if key == "width" {
+                                (px, other.max(1))
+                            } else {
+                                (other.max(1), px)
+                            };
+                            f.insert("pixelSize".into(), json!([nw, nh]));
+                        }
+                        ui.add_space(6.0);
+                        let mut u = unit.clone();
+                        if widgets::dropdown(ui, &format!("pdf-unit-{key}"), "Units", &mut u, &units, 110.0) {
+                            f.insert("unit".into(), json!(u));
+                        }
+                    });
+                }
+                let mut c = constrain;
+                if widgets::checkbox(ui, &mut c, tl!("Constrain Proportions")).changed() {
+                    f.insert("constrain".into(), json!(c));
+                }
+                field(ui, "Resolution:", &mut |ui| {
+                    let res_unit = s(f, "resolutionUnit", "in").to_string();
+                    let mut v = if res_unit == "cm" { ppi / 2.54 } else { ppi };
+                    let r = widgets::value_field_prec(ui, &mut v, 0.1..=pdf_import::MAX_RESOLUTION, "", 70.0, if res_unit == "cm" { 2 } else { 0 })
+                        .accessible_name(tl!("Resolution:"));
+                    if r.changed() && !r.dragged() {
+                        let new = (if res_unit == "cm" { v * 2.54 } else { v }).clamp(pdf_import::MIN_RESOLUTION, pdf_import::MAX_RESOLUTION);
+                        // A typed size is a physical size: it keeps its inches, so its pixels follow.
+                        if let Some([pw, ph]) = f
+                            .get("pixelSize")
+                            .and_then(Value::as_array)
+                            .map(|a| [a.first().and_then(Value::as_u64).unwrap_or(1), a.get(1).and_then(Value::as_u64).unwrap_or(1)])
+                        {
+                            let k = f64::from(new) / f64::from(ppi.max(0.001));
+                            f.insert(
+                                "pixelSize".into(),
+                                json!([(pw as f64 * k).round().clamp(1.0, 300_000.0) as u64, (ph as f64 * k).round().clamp(1.0, 300_000.0) as u64]),
+                            );
+                        }
+                        f.insert("resolution".into(), json!(new));
                     }
-                    f.insert("resolution".into(), json!(new));
-                }
-                ui.add_space(6.0);
-                let mut ru = res_unit.clone();
-                let opts: Vec<(String, &str)> = RES_UNITS.iter().map(|(v, l)| (v.to_string(), *l)).collect();
-                if widgets::dropdown(ui, "pdf-res-unit", "Resolution Units", &mut ru, &opts, 130.0) {
-                    f.insert("resolutionUnit".into(), json!(ru));
-                }
-            });
-            field(ui, "Mode:", &mut |ui| {
-                let mut m = mode.clone();
-                let opts: Vec<(String, &str)> = MODES.iter().map(|(v, l)| (v.to_string(), *l)).collect();
-                if widgets::dropdown(ui, "pdf-mode", "Mode", &mut m, &opts, 130.0) {
-                    f.insert("mode".into(), json!(m));
-                }
-            });
-            field(ui, "Bit Depth:", &mut |ui| {
-                let mut d = depth;
-                if widgets::dropdown(ui, "pdf-depth", "Bit Depth", &mut d, DEPTHS, 70.0) {
-                    f.insert("depth".into(), json!(d));
-                }
+                    ui.add_space(6.0);
+                    let mut ru = res_unit.clone();
+                    let opts: Vec<(String, &str)> = RES_UNITS.iter().map(|(v, l)| (v.to_string(), *l)).collect();
+                    if widgets::dropdown(ui, "pdf-res-unit", "Resolution Units", &mut ru, &opts, 130.0) {
+                        f.insert("resolutionUnit".into(), json!(ru));
+                    }
+                });
+                field(ui, "Mode:", &mut |ui| {
+                    let mut m = mode.clone();
+                    let opts: Vec<(String, &str)> = MODES.iter().map(|(v, l)| (v.to_string(), *l)).collect();
+                    if widgets::dropdown(ui, "pdf-mode", "Mode", &mut m, &opts, 130.0) {
+                        f.insert("mode".into(), json!(m));
+                    }
+                });
+                field(ui, "Bit Depth:", &mut |ui| {
+                    let mut d = depth;
+                    if widgets::dropdown(ui, "pdf-depth", "Bit Depth", &mut d, DEPTHS, 70.0) {
+                        f.insert("depth".into(), json!(d));
+                    }
+                });
             });
         });
     });

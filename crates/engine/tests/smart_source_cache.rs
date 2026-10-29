@@ -34,7 +34,7 @@ fn session_with_smart_object(bytes: &[u8]) -> Session {
 }
 
 fn decode(s: &Session, bytes: &[u8]) {
-    smart_cmds::source_image("art.png", bytes, s.active().unwrap().doc.pixel_format()).unwrap();
+    smart_cmds::source_image("art.png", bytes, s.active().unwrap().doc.pixel_format(), None).unwrap();
 }
 
 #[test]

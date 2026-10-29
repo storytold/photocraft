@@ -248,7 +248,7 @@ pub(crate) fn import_layered(name: &str, img: &Image, plan: LayeredPlan, ctl: &p
     // Spot planes are read in Photoshop's polarity (0 = solid ink), as from a PSD. The importer's
     // rule for PSDs from earlier PhotoCraft versions never applies: those versions stored no
     // extra samples in a TIFF, and a TIFF with them carries 1053.
-    let (mut doc, psd_warnings, _, fatal_error) = psd_to_document_owned(file, ctl, None).ok_or(IoError::Cancelled)?;
+    let (mut doc, psd_warnings, _, fatal_error) = psd_to_document_owned(file, ctl, None, true).ok_or(IoError::Cancelled)?;
     if let Some(error) = fatal_error {
         return Err(error);
     }

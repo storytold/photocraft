@@ -99,8 +99,35 @@ fn cache() -> std::sync::MutexGuard<'static, Vec<CacheEntry>> {
     SOURCE_CACHE.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-pub(super) fn cache_key(bytes: &[u8], fmt: PixelFormat) -> CacheKey {
-    (*blake3::hash(bytes).as_bytes(), fmt)
+pub(super) fn cache_key(bytes: &[u8], fmt: PixelFormat, pdf_import: Option<super::PdfImportOptions>) -> CacheKey {
+    let mut hash = blake3::Hasher::new();
+    hash.update(bytes);
+    if let Some(options) = pdf_import.filter(|options| *options != super::PdfImportOptions::default()) {
+        hash.update(b"\0pdf-import\0");
+        hash.update(&[options.mode as u8, options.crop_box as u8, options.color_mode as u8, options.depth as u8, u8::from(options.anti_alias)]);
+        hash.update(&options.page.to_le_bytes());
+        hash.update(&options.dpi.to_bits().to_le_bytes());
+        match options.pixel_size {
+            Some((width, height)) => {
+                hash.update(&[1]);
+                hash.update(&width.to_le_bytes());
+                hash.update(&height.to_le_bytes());
+            }
+            None => {
+                hash.update(&[0]);
+            }
+        }
+        match options.image {
+            Some(image) => {
+                hash.update(&[1]);
+                hash.update(&image.to_le_bytes());
+            }
+            None => {
+                hash.update(&[0]);
+            }
+        }
+    }
+    (*hash.finalize().as_bytes(), fmt)
 }
 
 pub(super) fn cache_get(key: &CacheKey) -> Option<SourceImage> {
@@ -135,7 +162,7 @@ fn cache_put_within(key: CacheKey, image: SourceImage, limit: usize) {
 
 /// How many times these contents were decoded at this pixel format (0 = never / evicted).
 pub fn source_decode_count(bytes: &[u8], fmt: PixelFormat) -> u32 {
-    let key = cache_key(bytes, fmt);
+    let key = cache_key(bytes, fmt, None);
     cache().iter().find(|e| e.key == key).map(|e| e.decodes).unwrap_or(0)
 }
 
@@ -351,13 +378,13 @@ pub(crate) fn vector_scale(sm: &SmartObject) -> f64 {
     ((k * 16.0).ceil() / 16.0).clamp(1.0 / 16.0, 64.0)
 }
 
-/// The composited source image of `bytes` in pixel format `fmt` (decoded once, then cached).
-pub fn source_image(file_name: &str, bytes: &[u8], fmt: PixelFormat) -> Result<SourceImage> {
-    let key = cache_key(bytes, fmt);
+/// The composited source image, decoded once per persisted PDF projection and pixel format.
+pub fn source_image(file_name: &str, bytes: &[u8], fmt: PixelFormat, pdf_import: Option<super::PdfImportOptions>) -> Result<SourceImage> {
+    let key = cache_key(bytes, fmt, pdf_import);
     if let Some(img) = cache_get(&key) {
         return Ok(img);
     }
-    let doc = decode_source(file_name, bytes)?;
+    let doc = decode_source(file_name, bytes, pdf_import)?;
     let img = SourceImage { surface: Arc::new(flattened_source(&doc, fmt)?), bounds: doc.bounds() };
     cache_put(key, img.clone());
     Ok(img)
@@ -375,7 +402,7 @@ mod tests {
 
     #[test]
     fn a_source_larger_than_the_limit_is_returned_but_not_cached() {
-        let key = cache_key(b"oversize", PixelFormat::RGBA8);
+        let key = cache_key(b"oversize", PixelFormat::RGBA8, None);
         let img = image(256);
         let bytes = super::super::stack_cache::surface_bytes(&img.surface);
         cache_put_within(key, img.clone(), bytes - 1);

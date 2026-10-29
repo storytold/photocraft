@@ -76,6 +76,7 @@ next to them.
 | `crates/algo/data/libfacedetection.bin` (face detection weights, read by `crates/algo/src/faces.rs`, whose network code is a port of the library's) | libfacedetection CNN (YuNet design) weights and inference code, weights converted to half precision | Shiqi Yu | [ShiqiYu/libfacedetection](https://github.com/ShiqiYu/libfacedetection) (`src/facedetectcnn-data.cpp`, `facedetectcnn.cpp`, `facedetectcnn-model.cpp`) | BSD-3-Clause, [`LICENSE-libfacedetection.txt`](crates/algo/data/LICENSE-libfacedetection.txt) |
 | (no file: compiled into the app from the `hayro-interpret` crate, `assets/Foxit*.pfb`) | Foxit base-14 PDF fonts (Sans, Serif, Fixed, Symbol, Dingbats): stand-ins for fonts a PDF names but doesn't embed, used by PDF import | Foxit Software Inc., PDFium Authors | <https://github.com/LaurenzV/hayro> (from <https://pdfium.googlesource.com/pdfium/>) | BSD-3-Clause (`LICENSE_FOXIT` beside the fonts in the crate) |
 | (no file: compiled into the app from the `hayro-interpret` crate, `assets/CGATS001Compat-v2-micro.icc`) | Compact CMYK profile hayro converts a PDF's DeviceCMYK through (within a level of Photoshop's SWOP conversion) | Clinton Ingram (Compact-ICC-Profiles) | <https://github.com/saucecontrol/Compact-ICC-Profiles> | CC0-1.0 |
+| (no file: compiled into the app from `hayro-cmap`, `assets/`) | Adobe predefined PDF character maps | Adobe | <https://github.com/LaurenzV/hayro> | BSD-3-Clause (`LICENSE.txt` beside the maps in the crate; reproduced in `NOTICE`) |
 
 ### Optional build input: craft-fonts (not files in this repo)
 

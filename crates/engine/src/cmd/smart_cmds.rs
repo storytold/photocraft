@@ -28,7 +28,7 @@ use std::sync::{Arc, Mutex};
 use photocraft_algo::resample::translate_surface;
 use photocraft_algo::transform::Homography;
 use photocraft_color::{BlendMode, ColorMode, PixelFormat, SampleType};
-use photocraft_doc::{DocId, Document, Layer, LayerContent, LayerId, LayerMask, Metadata, SmartContentsId, SmartFilter, SmartObject, SmartSource};
+use photocraft_doc::{DocId, Document, Layer, LayerContent, LayerId, LayerMask, Metadata, PdfImportOptions, SmartContentsId, SmartFilter, SmartObject, SmartSource};
 use photocraft_geom::{Affine, Rect, Size};
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
@@ -39,12 +39,16 @@ use crate::jobs::JobCtx;
 use crate::{EngineError, Result, Session};
 
 /// An open Edit Contents document and the shared contents it updates when saved or closed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SmartLink {
     pub child: DocId,
     pub parent: DocId,
     pub layer: LayerId,
     pub contents_id: SmartContentsId,
+    /// The family restored when parent history undoes the first projection commit.
+    pub original_contents_id: SmartContentsId,
+    /// The projection currently edited by this child.
+    pub pdf_import: PdfImportOptions,
 }
 
 /// PSD placed-layer keys that describe the smart object's source; stale once we change it.
@@ -68,14 +72,15 @@ pub fn encode_source(doc: &Document) -> Result<Vec<u8>> {
     photocraft_format::save_to_bytes(doc, &Default::default()).map_err(|e| other(format!("can't encode smart object contents: {e}")))
 }
 
-/// Decodes smart-object contents (a `.pcraft` bundle, PSD/PSB, or any flat image format).
-pub fn decode_source(file_name: &str, bytes: &[u8]) -> Result<Document> {
+/// Decodes smart-object contents with their persisted PDF projection.
+pub fn decode_source(file_name: &str, bytes: &[u8], pdf_import: Option<PdfImportOptions>) -> Result<Document> {
     if photocraft_io::svg::is_svg(bytes) {
         return photocraft_io::svg::import_svg_bounded_images(file_name, bytes, 24_000_000)
             .map(|imported| imported.document)
             .map_err(|e| other(format!("can't read SVG smart object contents: {e}")));
     }
-    crate::file_cmds::import(file_name, bytes).map_err(|e| other(format!("can't read smart object contents \"{file_name}\": {e}")))
+    let options = photocraft_io::ImportOptions { pdf: pdf_import.map(photocraft_io::pdf_import::PdfOpenOptions::from_projection), ..Default::default() };
+    crate::file_cmds::import_with_options(file_name, bytes, &options).map_err(|e| other(format!("can't read smart object contents \"{file_name}\": {e}")))
 }
 
 fn base_name(path: &str) -> String {

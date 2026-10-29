@@ -1898,7 +1898,7 @@ fn control_edits_nested_embedded_smart_objects_and_converts_an_explicit_target()
     let written = written.borrow();
     assert_eq!(written.len(), 1);
     assert_eq!(written[0].0, "out/template.pcraft");
-    let saved = photocraft_engine::smart_cmds::decode_source(&written[0].0, &written[0].1).unwrap();
+    let saved = photocraft_engine::smart_cmds::decode_source(&written[0].0, &written[0].1, None).unwrap();
     assert_eq!(photocraft_compose::flatten(&saved).px[0], [0.0, 0.0, 1.0, 1.0]);
 }
 

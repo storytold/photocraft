@@ -49,7 +49,7 @@ use hayro::vello_cpu::{self, Pixmap, RenderContext};
 use hayro::{RenderCache, RenderSettings, render_into};
 use photocraft_cms::{Builtin, Intent, Transform};
 use photocraft_color::{ColorMode, SampleType};
-use photocraft_doc::{Document, Layer, LayerContent};
+use photocraft_doc::{Document, Layer, LayerContent, PdfBox, PdfImportMode, PdfImportOptions};
 use photocraft_geom::Size;
 use photocraft_raster::{Interrupt, Surface};
 
@@ -167,6 +167,8 @@ impl CropTo {
 /// What the Import PDF dialog asked for.
 #[derive(Clone, PartialEq)]
 pub struct PdfOpenOptions {
+    /// Whether Photoshop's preserved tagged layers are opened when available.
+    pub layer_mode: PdfImportMode,
     /// The page to open, counted from 1.
     pub page: usize,
     pub crop: CropTo,
@@ -197,6 +199,7 @@ impl std::fmt::Debug for PdfOpenOptions {
         f.debug_struct("PdfOpenOptions")
             .field("page", &self.page)
             .field("crop", &self.crop)
+            .field("layer_mode", &self.layer_mode)
             .field("resolution", &self.resolution)
             .field("mode", &self.mode)
             .field("depth", &self.depth)
@@ -213,6 +216,7 @@ impl std::fmt::Debug for PdfOpenOptions {
 impl Default for PdfOpenOptions {
     fn default() -> Self {
         PdfOpenOptions {
+            layer_mode: PdfImportMode::Auto,
             page: 1,
             crop: CropTo::BoundingBox,
             resolution: DEFAULT_RESOLUTION,
@@ -223,6 +227,56 @@ impl Default for PdfOpenOptions {
             pixel_size: None,
             password: None,
             image: None,
+            suppress_warnings: false,
+        }
+    }
+}
+
+impl PdfOpenOptions {
+    /// The persistent PDF smart-object settings represented by this dialog.
+    /// Password, display name and warning suppression are intentionally transient.
+    pub fn projection(&self) -> PdfImportOptions {
+        PdfImportOptions {
+            mode: self.layer_mode,
+            page: self.page,
+            dpi: self.resolution,
+            crop_box: match self.crop {
+                CropTo::BoundingBox => PdfBox::BoundingBox,
+                CropTo::MediaBox => PdfBox::Media,
+                CropTo::CropBox => PdfBox::Crop,
+                CropTo::BleedBox => PdfBox::Bleed,
+                CropTo::TrimBox => PdfBox::Trim,
+                CropTo::ArtBox => PdfBox::Art,
+            },
+            color_mode: self.mode,
+            depth: self.depth,
+            anti_alias: self.anti_alias,
+            pixel_size: self.pixel_size,
+            image: self.image,
+        }
+    }
+
+    /// Reconstructs the persistent portion of an Import PDF dialog.
+    pub fn from_projection(projection: PdfImportOptions) -> Self {
+        PdfOpenOptions {
+            layer_mode: projection.mode,
+            page: projection.page,
+            crop: match projection.crop_box {
+                PdfBox::BoundingBox => CropTo::BoundingBox,
+                PdfBox::Media => CropTo::MediaBox,
+                PdfBox::Crop => CropTo::CropBox,
+                PdfBox::Bleed => CropTo::BleedBox,
+                PdfBox::Trim => CropTo::TrimBox,
+                PdfBox::Art => CropTo::ArtBox,
+            },
+            resolution: projection.dpi,
+            mode: projection.color_mode,
+            depth: projection.depth,
+            anti_alias: projection.anti_alias,
+            name: None,
+            pixel_size: projection.pixel_size,
+            password: None,
+            image: projection.image,
             suppress_warnings: false,
         }
     }
@@ -351,9 +405,17 @@ fn import_pdf_inner(name: &str, bytes: &[u8], opts: &PdfOpenOptions, ctl: &Inter
         return import_image(name, bytes, index, opts.name.as_deref(), opts.password.as_deref(), ctl);
     }
     ctl.check().map_err(|_| IoError::Cancelled)?;
+    crate::pdf_layers::validate_pdf_size_len(bytes.len()).map_err(crate::pdf_layers::LayeredPdfError::into_io)?;
     let pdf = load(bytes, opts.password.as_deref())?;
     let count = pdf.pages().len();
     let page = page_of(&pdf, opts.page)?;
+    if opts.layer_mode != photocraft_doc::PdfImportMode::Render {
+        match crate::pdf_layers::import_page(name, page, ctl) {
+            Ok(result) => return Ok(result),
+            Err(crate::pdf_layers::LayeredPdfError::Absent) if opts.layer_mode == photocraft_doc::PdfImportMode::Auto => {}
+            Err(error) => return Err(error.into_io()),
+        }
+    }
     let mut warnings = Vec::new();
     ctl.progress(0.05);
     // Every image the page can decode is sized from the file before any of it is decoded.
@@ -362,7 +424,7 @@ fn import_pdf_inner(name: &str, bytes: &[u8], opts: &PdfOpenOptions, ctl: &Inter
     if count == 1
         && let Some(document) = image_only(name, page)?
     {
-        return Ok(ImportResult { document, warnings, source_read_only: false, preview_only: false });
+        return Ok(ImportResult { document, warnings, source_read_only: true, preview_only: false });
     }
     let info = page_info(page);
     let bx = match opts.crop {
@@ -506,7 +568,7 @@ pub fn image_thumbnail(bytes: &[u8], index: usize, max_side: u32, password: Opti
 
 // ------------------------------------------------------------------------------------- reading
 
-fn load(bytes: &[u8], password: Option<&str>) -> Result<Pdf, IoError> {
+pub(crate) fn load(bytes: &[u8], password: Option<&str>) -> Result<Pdf, IoError> {
     let data = Arc::new(bytes.to_vec());
     let r = match password {
         Some(p) => Pdf::new_with_password(data, p),

@@ -40,6 +40,31 @@ pub const BUDGET: usize = 256 << 20;
 pub(super) fn placed_key(bytes: &[u8], fmt: PixelFormat, sm: &SmartObject, canvas: Rect) -> StageKey {
     let mut h = blake3::Hasher::new();
     h.update(bytes);
+    if let Some(options) = sm.pdf_import.filter(|options| *options != Default::default()) {
+        h.update(b"\0pdf-import\0");
+        h.update(&[options.mode as u8, options.crop_box as u8, options.color_mode as u8, options.depth as u8, u8::from(options.anti_alias)]);
+        h.update(&options.page.to_le_bytes());
+        h.update(&options.dpi.to_bits().to_le_bytes());
+        match options.pixel_size {
+            Some((width, height)) => {
+                h.update(&[1]);
+                h.update(&width.to_le_bytes());
+                h.update(&height.to_le_bytes());
+            }
+            None => {
+                h.update(&[0]);
+            }
+        }
+        match options.image {
+            Some(image) => {
+                h.update(&[1]);
+                h.update(&image.to_le_bytes());
+            }
+            None => {
+                h.update(&[0]);
+            }
+        }
+    }
     for v in sm.transform.m {
         h.update(&v.to_bits().to_le_bytes());
     }

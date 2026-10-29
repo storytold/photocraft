@@ -1443,8 +1443,8 @@ fn app_methods(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlReques
     Some(match req.method.as_str() {
         "app.open" => match str_param(p, "path") {
             Some(path) => match p.get("approveHighMemory") {
-                None | Some(Value::Null) => app_open(app, path, false),
-                Some(Value::Bool(approved)) => app_open(app, path, *approved),
+                None | Some(Value::Null) => app_open(app, path, false, p),
+                Some(Value::Bool(approved)) => app_open(app, path, *approved, p),
                 Some(_) => err("expected boolean for `approveHighMemory`"),
             },
             None => err("missing `path`"),
@@ -1467,7 +1467,13 @@ fn app_methods(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlReques
 
 /// The `app.open` control method: opens a path through the configured automation read
 /// capability, with optional high-memory approval.
-fn app_open(app: &mut PhotocraftApp, path: &str, approved: bool) -> Outcome {
+fn app_open(app: &mut PhotocraftApp, path: &str, approved: bool, params: &Value) -> Outcome {
+    let mut opts = photocraft_engine::jobs::import_options(app.session.prefs());
+    opts.psd_high_memory_approved = approved;
+    opts.pdf = match photocraft_engine::file_cmds::pdf_options(params) {
+        Ok(options) => options,
+        Err(error) => return err(error.to_string()),
+    };
     if let Some(outcome) = open_pcraft_directory(app, path) {
         return outcome;
     }
@@ -1477,7 +1483,7 @@ fn app_open(app: &mut PhotocraftApp, path: &str, approved: bool) -> Outcome {
     };
     wrap(opened.and_then(|(name, bytes)| {
         let name = app.open_name(&name);
-        let warnings = app.open_automation_bytes_with_approval(&name, &bytes, approved)?;
+        let warnings = app.open_automation_bytes_with(&name, &bytes, opts)?;
         // Brushes/gradients go to the preset libraries: no document, no Open Recent entry.
         if !crate::preset_files_ui::is_preset_file(&name) {
             app.opened_from(path);

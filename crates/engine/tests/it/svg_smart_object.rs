@@ -41,7 +41,7 @@ fn placed_svg_is_sharp_at_its_placement_scale_and_opens_as_shapes() {
 
     // Edit Contents on this smart object: the embedded source opens as shape layers.
     let photocraft_doc::SmartSource::Embedded { file_name, bytes } = &sm.source else { panic!("embedded") };
-    let inner = photocraft_engine::smart_cmds::decode_source(file_name, bytes).unwrap();
+    let inner = photocraft_engine::smart_cmds::decode_source(file_name, bytes, None).unwrap();
     assert_eq!(inner.layers.len(), 2);
     assert!(inner.layers.iter().all(|l| matches!(l.content, LayerContent::Shape(_))));
 }

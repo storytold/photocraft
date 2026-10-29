@@ -92,7 +92,7 @@ fn smart_objects_and_filters_survive_psd() {
         let doc = s.active().unwrap().doc.clone();
         let (_, before) = smart(&doc);
         let SmartSource::Embedded { bytes: pcraft, .. } = &before.source else { panic!("embedded") };
-        let nested = decode_source("x.pcraft", pcraft).unwrap();
+        let nested = decode_source("x.pcraft", pcraft, None).unwrap();
 
         let out = photocraft_io::export(&doc, "psd", &Default::default()).unwrap();
         assert!(!out.warnings.iter().any(|w| w.contains("pixels")), "{:?}", out.warnings);
@@ -126,7 +126,7 @@ fn smart_objects_and_filters_survive_psd() {
         // The nested document came back (as the embedded PSB), layer for layer.
         let (name, src) = source_bytes(&back.metadata, &after.source).unwrap();
         assert!(name.ends_with(".psb"), "{name}");
-        let inner = decode_source(&name, &src).unwrap();
+        let inner = decode_source(&name, &src, None).unwrap();
         assert_eq!((inner.size, inner.layers.len(), inner.depth), (nested.size, nested.layers.len(), nested.depth));
         assert!(max_diff(&photocraft_compose::flatten(&inner).px, &photocraft_compose::flatten(&nested).px) <= 1.0 / 255.0 + 1e-6);
         // And it re-renders from that source like the original did.
@@ -648,7 +648,7 @@ fn cs2_plld_only_smart_object_opens_its_contents() {
     let doc = s.active().unwrap().doc.clone();
     let (_, before) = smart(&doc);
     let SmartSource::Embedded { bytes: pcraft, .. } = &before.source else { panic!("embedded") };
-    let nested = decode_source("x.pcraft", pcraft).unwrap();
+    let nested = decode_source("x.pcraft", pcraft, None).unwrap();
 
     let back = photocraft_io::import("cs2.psd", &cs2_layout(&doc)).unwrap().document;
     let (bid, after) = smart(&back);
@@ -656,7 +656,7 @@ fn cs2_plld_only_smart_object_opens_its_contents() {
         assert!((a - b).abs() < 1e-9, "transform {:?} vs {:?}", after.transform, before.transform);
     }
     let (name, src) = photocraft_engine::smart_cmds::contents_of(&back, photocraft_doc::LayerId(bid)).expect("the contents are available");
-    let inner = decode_source(&name, &src).unwrap();
+    let inner = decode_source(&name, &src, None).unwrap();
     assert_eq!((inner.size, inner.layers.len()), (nested.size, nested.layers.len()));
     // It re-renders where it was placed.
     let mut l = back.layer(photocraft_doc::LayerId(bid)).unwrap().clone();

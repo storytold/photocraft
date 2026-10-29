@@ -190,7 +190,7 @@ pub fn layers_to_smart(doc: &Document, name: &str, layers: Vec<Layer>) -> Result
     sub.size = Size::new(b.width(), b.height());
     let bytes = encode_source(&sub)?;
     // Seed the decode cache with the composite we already have.
-    cache_put(cache_key(&bytes, fmt), SourceImage { surface: Arc::new(translate_surface(&cache, -b.x0, -b.y0)), bounds: sub.bounds() });
+    cache_put(cache_key(&bytes, fmt, None), SourceImage { surface: Arc::new(translate_surface(&cache, -b.x0, -b.y0)), bounds: sub.bounds() });
 
     let source = SmartSource::Embedded { file_name: sub.name.clone(), bytes: Arc::new(bytes) };
     Ok(Layer::new(name, LayerContent::Smart(SmartObject::new(source, Affine::translate(b.x0 as f64, b.y0 as f64), Some(cache)))))

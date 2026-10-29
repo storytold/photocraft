@@ -51,7 +51,7 @@ imagesize = "0.13"
 # PDF import (pdf_import.rs): hayro interprets and rasterises pages on the CPU in pure Rust; its
 # `embed-fonts` are the base-14 stand-ins for fonts a PDF doesn't embed, `embed-cmaps` the
 # predefined CJK CMaps. Accepted by the maintainers in #2011.
-hayro = { version = "0.8", default-features = false, features = ["embed-fonts", "embed-cmaps"] }
+hayro = { version = "=0.8.0", default-features = false, features = ["embed-fonts", "embed-cmaps", "simd"] }
 # SVG import (svg.rs): usvg parses, resvg rasterises what the shape model can't hold. Both are
 # already in the tree through the UI's icon loader; text shaping needs the fonts feature set.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

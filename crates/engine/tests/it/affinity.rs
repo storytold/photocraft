@@ -84,7 +84,7 @@ fn warningless_auxiliary_paths_cannot_silently_use_a_thumbnail() {
     let error = photocraft_engine::file_cmds::place_bytes(&mut s, "source.af", bytes.clone(), None, &json!({})).unwrap_err().to_string();
     assert!(error.contains("embedded preview could be read"), "{error}");
     assert_eq!(s.active().unwrap().doc.layers.len(), layers);
-    assert!(photocraft_engine::smart_cmds::decode_source("source.af", &bytes).unwrap_err().to_string().contains("export PSD or PNG"));
+    assert!(photocraft_engine::smart_cmds::decode_source("source.af", &bytes, None).unwrap_err().to_string().contains("export PSD or PNG"));
 }
 
 /// A minimal native document: one 10×10 px red square at (5, 5) on a 40×20 page.

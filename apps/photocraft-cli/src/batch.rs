@@ -21,7 +21,7 @@ fn same_dir(a: &Path, b: &Path) -> bool {
 
 pub(crate) fn is_input(p: &Path) -> bool {
     let known = |e: &str| {
-        matches!(e, "pcraft" | "psd" | "psb" | "pdn" | "ora" | "kra" | "krz" | "af" | "afdesign" | "afphoto" | "afpub")
+        matches!(e, "pcraft" | "psd" | "psb" | "pdf" | "pdn" | "ora" | "kra" | "krz" | "af" | "afdesign" | "afphoto" | "afpub")
             || photocraft_codecs::from_extension(e).is_some_and(|f| photocraft_codecs::caps(f).read)
     };
     p.is_file() && p.extension().is_some_and(|e| known(&e.to_string_lossy().to_ascii_lowercase()))
@@ -128,6 +128,14 @@ pub(crate) fn batch(a: &BatchArgs, out: &mut dyn Write, err: &mut dyn Write) -> 
             // stops an action that calls itself.
             h.session.actions.list = set.clone();
             h.open_with_approval(input, a.approve_high_memory)?;
+            if photocraft_engine::file_cmds::same_file(input, &target) {
+                if h.session.active().is_some_and(|state| state.source_read_only) {
+                    return Err(CliError::Other(format!("not written: {} is a read-only input", target.display())));
+                }
+                if !a.in_place {
+                    return Err(CliError::OutIsInput(target.clone()));
+                }
+            }
             for (id, p) in &actions {
                 if photocraft_engine::actions_cmds::shell_view_command(id)
                     || photocraft_engine::actions_cmds::shell_save_command(id)

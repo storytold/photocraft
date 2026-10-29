@@ -1741,3 +1741,87 @@ fn tiff_options_choose_compression_transparency_and_pyramid() {
         assert!(!out.exists(), "{flag} {bad} wrote a file");
     }
 }
+
+/// A PDF source is never an in-place Batch target, including a hard-linked output.
+#[test]
+fn batch_never_overwrites_a_pdf_source() {
+    let d = tmp("batch-pdf-output-alias");
+    let input = d.join("in");
+    let alias = d.join("alias");
+    std::fs::create_dir_all(&input).unwrap();
+    std::fs::create_dir_all(&alias).unwrap();
+    let source = input.join("page.pdf");
+    ok(bin().args(["run", "--new", r#"{"width":4,"height":2,"background":"white"}"#, "--out"]).arg(&source));
+    let original = std::fs::read(&source).unwrap();
+    let actions = d.join("actions.json");
+    std::fs::write(&actions, "[]").unwrap();
+    let batch = |out: &Path, in_place: bool| {
+        let mut command = bin();
+        command.args(["batch", "--actions"]).arg(&actions).args(["--in"]).arg(&input).args(["--out"]).arg(out);
+        if in_place {
+            command.arg("--in-place");
+        }
+        command.output().unwrap()
+    };
+    for result in [batch(&input, true), {
+        std::fs::hard_link(&source, alias.join("page.pdf")).unwrap();
+        batch(&alias, false)
+    }] {
+        let (stdout, stderr) = (String::from_utf8_lossy(&result.stdout), String::from_utf8_lossy(&result.stderr));
+        assert_eq!(result.status.code(), Some(1), "{stdout}{stderr}");
+        assert!(stdout.contains("0 succeeded, 1 failed"), "{stdout}");
+        assert!(stderr.contains("not written"), "{stderr}");
+        assert_eq!(std::fs::read(&source).unwrap(), original);
+    }
+    let output = d.join("output");
+    let result = batch(&output, false);
+    assert!(result.status.success(), "{}{}", String::from_utf8_lossy(&result.stdout), String::from_utf8_lossy(&result.stderr));
+    assert!(std::fs::read(output.join("page.pdf")).unwrap().starts_with(b"%PDF-"));
+}
+
+/// Content identification prevents a PDF disguised as PNG from becoming a Batch Save target.
+#[test]
+fn batch_never_overwrites_a_pdf_named_png() {
+    let d = tmp("batch-pdf-magic");
+    let input = d.join("in");
+    std::fs::create_dir_all(&input).unwrap();
+    let template = d.join("template.pdf");
+    ok(bin().args(["run", "--new", r#"{"width":4,"height":2,"background":"white"}"#, "--out"]).arg(&template));
+    let source = input.join("page.png");
+    std::fs::write(&source, std::fs::read(&template).unwrap()).unwrap();
+    let original = std::fs::read(&source).unwrap();
+    let actions = d.join("actions.json");
+    std::fs::write(&actions, "[]").unwrap();
+    let result = bin().args(["batch", "--actions"]).arg(&actions).args(["--in"]).arg(&input).args(["--out"]).arg(&input).arg("--in-place").output().unwrap();
+    let (stdout, stderr) = (String::from_utf8_lossy(&result.stdout), String::from_utf8_lossy(&result.stderr));
+    assert_eq!(result.status.code(), Some(1), "{stdout}{stderr}");
+    assert!(stdout.contains("0 succeeded, 1 failed"), "{stdout}");
+    assert!(stderr.contains("not written"), "{stderr}");
+    assert_eq!(std::fs::read(&source).unwrap(), original);
+}
+
+#[test]
+fn convert_and_run_never_overwrite_pdf_sources_even_in_place() {
+    let d = tmp("pdf-in-place");
+    let template = d.join("template.pdf");
+    ok(bin().args(["run", "--new", r#"{"width":4,"height":2,"background":"white"}"#, "--out"]).arg(&template));
+    let original = std::fs::read(&template).unwrap();
+    for name in ["source.pdf", "source.png"] {
+        let source = d.join(name);
+        std::fs::write(&source, &original).unwrap();
+        let alias = d.join(format!("alias-{name}"));
+        std::fs::hard_link(&source, &alias).unwrap();
+        for command in ["convert", "run"] {
+            let mut c = bin();
+            c.arg(command).arg(&source);
+            if command == "run" {
+                c.arg("--out");
+            }
+            let result = c.arg(&alias).arg("--in-place").output().unwrap();
+            let stderr = String::from_utf8_lossy(&result.stderr);
+            assert_eq!(result.status.code(), Some(1), "{command}: {stderr}");
+            assert!(stderr.contains("read-only input"), "{command}: {stderr}");
+            assert_eq!(std::fs::read(&source).unwrap(), original);
+        }
+    }
+}

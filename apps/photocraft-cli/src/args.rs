@@ -93,6 +93,9 @@ pub(crate) struct ExportArgs {
 // Other inputs ignore these.
 #[derive(Args)]
 pub(crate) struct PdfArgs {
+    /// PDF input: preserve authored layers automatically, require layers, or render the page
+    #[arg(long, value_name = "auto|layers|render", value_parser = ["auto", "layers", "render"], help_heading = "PDF input")]
+    pub(crate) layers: Option<String>,
     /// PDF input: the page to open, from 1 (default 1)
     #[arg(long, value_name = "N", help_heading = "PDF input")]
     pub(crate) page: Option<u64>,
@@ -131,6 +134,7 @@ impl PdfArgs {
                 p.insert(key.into(), v);
             }
         };
+        put("layers", self.layers.clone().map(Into::into));
         put("page", self.page.map(Into::into));
         put("image", self.image.map(Into::into));
         put("resolution", self.resolution.map(Into::into));
@@ -579,4 +583,26 @@ fn check_server(sub: &mut clap::Command, m: &ArgMatches, has_transport: bool, tr
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pdf_layers_flag_is_separate_from_color_mode() {
+        for args in [
+            vec!["info", "source.pdf", "--layers", "render", "--mode", "gray"],
+            vec!["convert", "source.pdf", "output.png", "--layers", "render", "--mode", "gray"],
+        ] {
+            let cli = parse(&args.into_iter().map(OsString::from).collect::<Vec<_>>()).unwrap();
+            let pdf = match cli.command {
+                Command::Info(a) => a.pdf.options().unwrap().unwrap(),
+                Command::Convert(a) => a.pdf.options().unwrap().unwrap(),
+                _ => panic!("unexpected subcommand"),
+            };
+            assert_eq!(pdf.layer_mode, photocraft_doc::PdfImportMode::Render);
+            assert_eq!(pdf.mode, photocraft_doc::ColorMode::Grayscale);
+        }
+    }
 }

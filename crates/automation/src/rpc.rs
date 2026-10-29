@@ -7,9 +7,9 @@
 //! Methods (camelCase params):
 //! - `engine.execute {command, params?, wait?}` / `engine.commands {filter?}`
 //! - `jobs.list` / `jobs.cancel {job?}`: background jobs (#210)
-//! - `session.list`, `doc.open {path}`, `doc.new {…file.new params}`,
-//!   `doc.place {path, scale?, fit?, center?, index?}` (#2810: the read root is the scope,
-//!   the counterpart of the refused ambient `file.placeEmbedded`),
+//! - `session.list`, `doc.open {path, layers?, approveHighMemory?}` (`layers`: auto, layers, render for PDFs),
+//!   `doc.new {…file.new params}`, `doc.place {path, scale?, fit?, center?, layers?, index?}`
+//!   (#2810: the read root is the scope, the counterpart of the refused ambient `file.placeEmbedded`),
 //!   `doc.replaceSmartObject {path, layer?, index?}` (#8061: the same scope for
 //!   `layer.smartObjects.replaceContents`),
 //!   `doc.exportLayers {dir, format?, prefix?, visibleOnly?, quality?, index?}`,
@@ -142,7 +142,11 @@ impl Headless {
                     Some(Value::Bool(b)) => *b,
                     Some(_) => return Err(bad("`approveHighMemory` must be a boolean")),
                 };
-                self.open_with_approval(&PathBuf::from(path), approve)
+                let mut opts = photocraft_engine::jobs::import_options(self.session.prefs());
+                opts.psd_high_memory_approved = approve;
+                opts.psd_approved_estimate = None;
+                opts.pdf = photocraft_engine::file_cmds::pdf_options(&p).map_err(|e| bad(e.to_string()))?;
+                self.open_with_options(&PathBuf::from(path), &opts)
             }
             "doc.place" => {
                 let path = str_of(&p, "path").ok_or_else(|| bad("doc.place needs `path`"))?;

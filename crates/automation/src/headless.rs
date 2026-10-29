@@ -348,6 +348,10 @@ impl Headless {
     /// saves to the document's own path.
     pub fn save(&mut self, index: Option<usize>, path: Option<&Path>, format: Option<&str>, opts: &ExportOptions) -> Result<Value, AutomationError> {
         let i = self.doc_index(index)?;
+        // Saving Edit Contents updates its parent in memory; it needs no ambient write path.
+        if path.is_none() && format.is_none() && photocraft_engine::smart_cmds::commit_child(&mut self.session, i)? {
+            return Ok(json!({"smartContents": true}));
+        }
         let (stored_path, doc) = {
             let state = &self.session.documents()[i];
             (state.path.clone(), state.doc.clone())

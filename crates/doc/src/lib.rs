@@ -513,6 +513,64 @@ pub struct VectorPreview {
     pub svg: Arc<Vec<u8>>,
 }
 
+/// How a PDF smart object's selected page is decoded.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PdfImportMode {
+    /// Preserve Photoshop PDF editing data when it is available.
+    #[default]
+    Auto,
+    /// Require preserved Photoshop layers.
+    Layers,
+    /// Render the selected PDF page.
+    Render,
+}
+
+/// The PDF page box used for an import.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PdfBox {
+    #[default]
+    BoundingBox,
+    Media,
+    Crop,
+    Bleed,
+    Trim,
+    Art,
+}
+
+/// The persistent portion of a PDF import. Passwords intentionally stay transient.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PdfImportOptions {
+    pub mode: PdfImportMode,
+    pub page: usize,
+    pub dpi: f32,
+    #[serde(rename = "box")]
+    pub crop_box: PdfBox,
+    pub color_mode: ColorMode,
+    pub depth: SampleType,
+    pub anti_alias: bool,
+    pub pixel_size: Option<(u32, u32)>,
+    pub image: Option<usize>,
+}
+
+impl Default for PdfImportOptions {
+    fn default() -> Self {
+        Self {
+            mode: PdfImportMode::Auto,
+            page: 1,
+            dpi: 300.0,
+            crop_box: PdfBox::BoundingBox,
+            color_mode: ColorMode::Rgb,
+            depth: SampleType::U8,
+            anti_alias: true,
+            pixel_size: None,
+            image: None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct SmartObject {
     /// Ordinary layer duplicates share this identity; independent contents receive a fresh one.
@@ -522,6 +580,9 @@ pub struct SmartObject {
     /// Optional source-pixel display preview for AI/PDF/EPS; ignored after source bytes change.
     pub vector_preview: Option<VectorPreview>,
     pub transform: Affine,
+    /// PDF source selection used by decoding, refresh and Edit Contents.
+    /// Retained for both embedded and linked sources when saving native documents.
+    pub pdf_import: Option<PdfImportOptions>,
     pub smart_filters: Vec<SmartFilter>,
     /// Rendered appearance.
     pub cache: Option<Surface>,
@@ -562,6 +623,7 @@ impl SmartObject {
             warp: None,
             stack_mode: None,
             perspective: None,
+            pdf_import: None,
         }
     }
 }

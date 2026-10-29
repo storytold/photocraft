@@ -21,7 +21,7 @@ use crate::{EngineError, Result, Session};
 fn contents(s: &Session, doc: &Document, sm: &SmartObject, intent: Intent, bpc: bool) -> Result<Vec<Layer>> {
     let (name, bytes) = authorized_source_bytes(s, "layer.smartObjects.convertToLayers", &doc.metadata, &sm.source)?
         .ok_or_else(|| other("the smart object's contents are unavailable (missing linked file?)"))?;
-    let mut src = decode_source(&name, &bytes)?;
+    let mut src = decode_source(&name, &bytes, sm.pdf_import)?;
     let mode = doc.pixel_format().mode;
     if src.pixel_format().mode != mode || src.icc_profile != doc.icc_profile {
         crate::color_cmds::convert_document(&mut src, &crate::color_cmds::document_profile(doc), intent, bpc)?;

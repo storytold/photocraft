@@ -3060,6 +3060,8 @@ fn bad_pdf_options_are_refused_before_opening_or_placing() {
     let dir = tmp("pdf-options");
     let pdf = pdf_file(&dir, "doc.pdf");
     let bad = [
+        ("layers", json!("flatten")),
+        ("layers", json!(3)),
         ("page", json!(0)),
         ("page", json!("two")),
         ("image", json!(0)),
@@ -3099,7 +3101,7 @@ fn bad_pdf_options_are_refused_before_opening_or_placing() {
 /// replaces the default.
 #[test]
 fn null_pdf_options_count_as_absent() {
-    let keys = ["page", "resolution", "crop", "mode", "depth", "antiAlias", "name", "password", "image", "suppressWarnings"];
+    let keys = ["layers", "page", "resolution", "crop", "mode", "depth", "antiAlias", "name", "password", "image", "suppressWarnings"];
     let all_null: serde_json::Map<String, Value> = keys.iter().map(|k| (k.to_string(), Value::Null)).collect();
     assert!(pdf_options(&Value::Object(all_null)).unwrap().is_none(), "only nulls: no Import PDF answers");
     let o = pdf_options(&json!({"page": null, "resolution": 72, "name": null, "image": null})).unwrap().expect("resolution was given");
@@ -3112,19 +3114,19 @@ fn null_pdf_options_count_as_absent() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A linked placement keeps only the path, so Import PDF answers would be lost on Update
-/// Modified Content: they're refused for `file.placeLinked`, and a linked PDF with none places.
+/// Linked PDFs retain their projection so re-rendering never silently reverts to page one.
 #[test]
-fn linked_pdf_placements_refuse_options_they_cannot_keep() {
+fn linked_pdf_placements_keep_import_options() {
     let dir = tmp("pdf-linked-options");
     let pdf = pdf_file(&dir, "doc.pdf");
     let mut s = session(100, 100, 8);
-    let layers = doc(&s).layers.len();
-    let e = s.execute("file.placeLinked", json!({"path": pdf, "page": 2})).expect_err("options can't be kept");
-    assert!(e.to_string().contains("embedded"), "{e}");
-    assert_eq!(doc(&s).layers.len(), layers, "nothing placed");
-    s.execute("file.placeLinked", json!({"path": pdf, "page": null})).expect("no options: places");
-    assert_eq!(doc(&s).layers.len(), layers + 1);
+    let id = s.execute("file.placeLinked", json!({"path": pdf, "page": 2, "layers": "render"})).unwrap()["layer"].as_u64().unwrap();
+    let smart = pdf_smart(&s, LayerId(id));
+    assert_eq!(smart.pdf_import.unwrap().page, 2);
+    assert_eq!(smart.pdf_import.unwrap().mode, photocraft_doc::PdfImportMode::Render);
+    s.execute("layer.smartObjects.updateModifiedContent", json!({"layer": id})).unwrap();
+    assert_eq!(pdf_smart(&s, LayerId(id)).pdf_import.unwrap().page, 2);
+    s.execute("file.placeLinked", json!({"path": pdf, "page": null})).expect("null options use defaults");
     s.execute("file.placeEmbedded", json!({"path": pdf, "page": 2})).expect("embedded keeps them");
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -3164,4 +3166,157 @@ fn pdf_pages_and_images_open_untitled() {
         assert!(st.path.is_none() && st.source_read_only, "{name}: Save must not write into the PDF");
     }
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+fn smart_pdf_pages() -> Vec<u8> {
+    let red = "1 0 0 rg 0 0 8 4 re f";
+    let green = "0 1 0 rg 0 0 8 4 re f";
+    let page = |contents| format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 8 4] /Resources << >> /Contents {contents} 0 R >>");
+    let objects = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>".to_string(),
+        page(5),
+        page(6),
+        format!("<< /Length {} >>\nstream\n{red}\nendstream", red.len()),
+        format!("<< /Length {} >>\nstream\n{green}\nendstream", green.len()),
+    ];
+    let mut bytes = b"%PDF-1.4\n".to_vec();
+    let mut offsets = Vec::new();
+    for (index, object) in objects.iter().enumerate() {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{} 0 obj\n{object}\nendobj\n", index + 1).as_bytes());
+    }
+    let xref = bytes.len();
+    bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
+    for offset in offsets {
+        bytes.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes());
+    bytes
+}
+
+fn place_smart_pdf(s: &mut Session) -> LayerId {
+    LayerId(
+        place_bytes(s, "pages.pdf", smart_pdf_pages(), None, &json!({"fit": false, "layers": "render", "page": 2, "resolution": 144, "crop": "mediaBox"}))
+            .unwrap()["layer"]
+            .as_u64()
+            .unwrap(),
+    )
+}
+
+fn pdf_smart(s: &Session, id: LayerId) -> &SmartObject {
+    let LayerContent::Smart(smart) = &doc(s).layer(id).unwrap().content else { panic!("smart") };
+    smart
+}
+
+#[test]
+fn pdf_smart_projection_is_captured_and_cache_separates_pages() {
+    use photocraft_doc::{PdfBox, PdfImportMode, PdfImportOptions};
+    let mut s = session(40, 24, 8);
+    let id = place_smart_pdf(&mut s);
+    let expected = PdfImportOptions {
+        mode: PdfImportMode::Render,
+        page: 2,
+        dpi: 144.0,
+        crop_box: PdfBox::Media,
+        color_mode: ColorMode::Rgb,
+        depth: photocraft_color::SampleType::U8,
+        anti_alias: true,
+        pixel_size: None,
+        image: None,
+    };
+    assert_eq!(pdf_smart(&s, id).pdf_import, Some(expected));
+    let bytes = smart_pdf_pages();
+    let selected = crate::smart_cmds::source_image("pages.pdf", &bytes, doc(&s).pixel_format(), Some(expected)).unwrap();
+    let first = crate::smart_cmds::source_image("pages.pdf", &bytes, doc(&s).pixel_format(), Some(PdfImportOptions { page: 1, ..expected })).unwrap();
+    assert_eq!(selected.surface.pixel(0, 0), [0.0, 1.0, 0.0, 1.0]);
+    assert_eq!(first.surface.pixel(0, 0), [1.0, 0.0, 0.0, 1.0]);
+}
+
+#[test]
+fn psd_export_materializes_selected_pdf_projection_as_psb() {
+    let mut s = session(40, 24, 8);
+    place_smart_pdf(&mut s);
+    let output = photocraft_io::export(doc(&s), "selected.psd", &Default::default()).unwrap();
+    let back = photocraft_io::import("selected.psd", &output.bytes).unwrap().document;
+    let smart = back
+        .walk()
+        .into_iter()
+        .find_map(|(_, _, layer)| match &layer.content {
+            LayerContent::Smart(smart) => Some(smart),
+            _ => None,
+        })
+        .unwrap();
+    let (name, bytes) = crate::smart_cmds::source_bytes(&back.metadata, &smart.source).unwrap();
+    assert!(name.ends_with(".psb"));
+    let selected = crate::smart_cmds::decode_source(&name, &bytes, None).unwrap();
+    assert_eq!((selected.size.width, selected.size.height), (16, 8));
+    assert_eq!(photocraft_compose::flatten(&selected).px[0], [0.0, 1.0, 0.0, 1.0]);
+}
+
+#[test]
+fn shared_pdf_replace_rolls_back_and_editing_one_projection_isolated() {
+    use photocraft_doc::PdfImportOptions;
+    let mut s = session(40, 24, 8);
+    let id = place_smart_pdf(&mut s);
+    let sibling = LayerId(s.execute("layer.duplicate", json!({"layer": id.0})).unwrap()["layer"].as_u64().unwrap());
+    s.edit("invalid sibling projection", |document, _| {
+        let LayerContent::Smart(smart) = &mut document.layer_mut(sibling).unwrap().content else { return Err(EngineError::NoLayer(sibling)) };
+        smart.pdf_import = Some(PdfImportOptions { page: 3, ..smart.pdf_import.unwrap() });
+        Ok(())
+    })
+    .unwrap();
+    let before = pdf_smart(&s, id).source.clone();
+    assert!(crate::smart_cmds::replace_contents_bytes(&mut s, id, "replacement.pdf", smart_pdf_pages()).is_err());
+    assert_eq!(pdf_smart(&s, id).source, before);
+    s.edit("valid sibling projection", |document, _| {
+        let LayerContent::Smart(smart) = &mut document.layer_mut(sibling).unwrap().content else { return Err(EngineError::NoLayer(sibling)) };
+        smart.pdf_import = Some(PdfImportOptions { page: 1, ..smart.pdf_import.unwrap() });
+        Ok(())
+    })
+    .unwrap();
+    crate::smart_cmds::replace_contents_bytes(&mut s, id, "replacement.pdf", smart_pdf_pages()).unwrap();
+    assert_eq!(pdf_smart(&s, id).pdf_import.unwrap().page, 2);
+    assert_eq!(pdf_smart(&s, sibling).pdf_import.unwrap().page, 1);
+    let replacement = std::env::temp_dir().join(format!("photocraft-pdf-relink-{}.pdf", std::process::id()));
+    std::fs::write(&replacement, smart_pdf_pages()).unwrap();
+    s.execute("layer.smartObjects.relinkToFile", json!({"layer": id.0, "path": replacement.to_string_lossy()})).unwrap();
+    assert_eq!(pdf_smart(&s, id).pdf_import.unwrap().page, 2);
+    assert_eq!(pdf_smart(&s, sibling).pdf_import.unwrap().page, 1);
+    let child = s.execute("layer.smartObjects.editContents", json!({"layer": id.0})).unwrap()["document"].as_u64().unwrap() as usize;
+    s.set_active(0);
+    let other = s.execute("layer.smartObjects.editContents", json!({"layer": sibling.0})).unwrap()["document"].as_u64().unwrap() as usize;
+    assert_ne!(child, other);
+    s.set_active(child);
+    s.execute("image.imageRotation.90cw", json!({})).unwrap();
+    assert!(crate::smart_cmds::commit_child(&mut s, child).unwrap());
+    s.set_active(0);
+    assert!(pdf_smart(&s, id).pdf_import.is_none());
+    assert_eq!(pdf_smart(&s, sibling).pdf_import.unwrap().page, 1);
+    // Re-saving the still-open child must work both after restoring the original PDF and
+    // after reapplying the committed native projection.
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(pdf_smart(&s, id).pdf_import.unwrap().page, 2);
+    s.set_active(child);
+    s.execute("image.imageRotation.90cw", json!({})).unwrap();
+    assert!(crate::smart_cmds::commit_child(&mut s, child).unwrap());
+    s.set_active(0);
+    assert!(pdf_smart(&s, id).pdf_import.is_none());
+    s.execute("edit.undo", json!({})).unwrap();
+    s.execute("edit.redo", json!({})).unwrap();
+    s.set_active(child);
+    s.execute("image.imageRotation.90cw", json!({})).unwrap();
+    assert!(crate::smart_cmds::commit_child(&mut s, child).unwrap());
+    let _ = std::fs::remove_file(replacement);
+}
+
+#[test]
+fn password_supplied_pdf_is_native_embedded_and_linking_is_refused() {
+    let mut s = session(40, 24, 8);
+    let params = json!({"password": "secret"});
+    assert!(matches!(place_bytes(&mut s, "pages.pdf", smart_pdf_pages(), Some("/tmp/pages.pdf".into()), &params), Err(EngineError::Other(_))));
+    let id = place_bytes(&mut s, "pages.pdf", smart_pdf_pages(), None, &params).unwrap()["layer"].as_u64().unwrap();
+    let LayerContent::Smart(smart) = &doc(&s).layer(LayerId(id)).unwrap().content else { panic!("smart") };
+    assert!(matches!(&smart.source, SmartSource::Embedded { file_name, .. } if file_name.ends_with(".pcraft")));
+    assert_eq!(smart.pdf_import, None);
 }

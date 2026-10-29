@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use photocraft_color::{ColorMode, SampleType};
-use photocraft_doc::{Document, Layer, LayerContent, LayerId, Size, SmartContentsId, SmartObject, SmartSource};
+use photocraft_doc::{Document, Layer, LayerContent, LayerId, PdfBox, PdfImportMode, PdfImportOptions, Size, SmartContentsId, SmartObject, SmartSource};
 use photocraft_format::{LoadOptions, SaveOptions, load_from_bytes, load_from_bytes_with, save_to_bytes, zip};
 use photocraft_geom::Affine;
 
@@ -174,4 +174,43 @@ fn native_vector_display_preview_roundtrips_separately_from_original_payload() {
     let LayerContent::Smart(smart) = &back.layers[0].content else { panic!("smart object lost") };
     assert!(smart.vector_preview.is_none());
     assert_eq!(smart.source, SmartSource::Embedded { file_name: "Artwork.ai".into(), bytes: source });
+}
+
+#[test]
+fn smart_pdf_projection_roundtrips_and_legacy_bundles_leave_it_absent() {
+    let mut doc = sample();
+    doc.layers.push(linked("/tmp/source.pdf"));
+    let selection = PdfImportOptions {
+        mode: PdfImportMode::Render,
+        page: 7,
+        dpi: 144.0,
+        crop_box: PdfBox::Media,
+        color_mode: ColorMode::Cmyk,
+        depth: SampleType::U16,
+        anti_alias: false,
+        pixel_size: Some((640, 480)),
+        image: Some(2),
+    };
+    for layer in &mut doc.layers[1..] {
+        let LayerContent::Smart(smart) = &mut layer.content else { panic!("smart") };
+        smart.pdf_import = Some(selection);
+    }
+    let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
+    let back = load_from_bytes(&bytes).unwrap();
+    assert_eq!(back, doc);
+    for layer in &back.layers[1..] {
+        let LayerContent::Smart(smart) = &layer.content else { panic!("smart") };
+        assert_eq!(smart.pdf_import, Some(selection));
+    }
+
+    let legacy = rewrite_manifest(&bytes, |manifest| {
+        for layer in manifest["document"]["layers"].as_array_mut().unwrap().iter_mut().skip(1) {
+            layer["content"].as_object_mut().unwrap().remove("pdf_import");
+        }
+    });
+    let back = load_from_bytes(&legacy).unwrap();
+    for layer in &back.layers[1..] {
+        let LayerContent::Smart(smart) = &layer.content else { panic!("smart") };
+        assert_eq!(smart.pdf_import, None);
+    }
 }

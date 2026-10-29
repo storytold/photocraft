@@ -40,7 +40,7 @@ fn decoding_a_smart_object_source_stays_within_16_bytes_a_source_pixel() {
         return;
     }
     let Some(before) = peak_rss_bytes() else { return };
-    let img = smart_cmds::source_image("big.png", &bytes, fmt).unwrap();
+    let img = smart_cmds::source_image("big.png", &bytes, fmt, None).unwrap();
     let grown = peak_rss_bytes().unwrap().saturating_sub(before);
     assert_eq!(img.bounds.width(), SIDE);
 

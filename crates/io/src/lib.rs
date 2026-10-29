@@ -64,6 +64,7 @@ pub mod pattern_map;
 mod pcraft_cache;
 pub mod pdf;
 pub mod pdf_import;
+mod pdf_layers;
 mod pdn;
 pub use pcraft_cache::PcraftExportCache;
 pub mod pixels;
@@ -753,7 +754,7 @@ fn import_psd(
 
     // Read before the conversion, which moves the global blocks into the document.
     let txt2 = file.global_blocks.iter().find(|b| &b.key == b"Txt2").and_then(|b| photocraft_text::psd::parse_txt2(&b.data));
-    let (mut document, warnings, psd_damaged, fatal_error) = psd_import::psd_to_document_owned(file, ctl, merged).ok_or(IoError::Cancelled)?;
+    let (mut document, warnings, psd_damaged, fatal_error) = psd_import::psd_to_document_owned(file, ctl, merged, true).ok_or(IoError::Cancelled)?;
     // Source reads and allocation failures fail the entire open; partial layers are discarded.
     if let Some(e) = fatal_error {
         return Err(e);
@@ -945,12 +946,8 @@ fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, o
     }
     // A PDF opens through the Import PDF options (a plain `import` takes Photoshop's defaults).
     if is_pdf_input(name, bytes) {
-        let Some(chosen) = opts.pdf.as_ref() else { return pdf_import::import_pdf(name, bytes, &pdf_import::PdfOpenOptions::default(), ctl) };
-        // What Import PDF answers open (a page, an embedded image) is untitled, as in Photoshop:
-        // only a one-image PDF opened directly, like a picture, takes the PDF as its file.
-        let mut r = pdf_import::import_pdf(name, bytes, chosen, ctl)?;
-        r.source_read_only = true;
-        return Ok(r);
+        let defaults = pdf_import::PdfOpenOptions::default();
+        return pdf_import::import_pdf(name, bytes, opts.pdf.as_ref().unwrap_or(&defaults), ctl);
     }
     if is_svg_input(name, bytes) {
         return svg::import_svg_with_group_depth(name, bytes, opts.max_group_depth);

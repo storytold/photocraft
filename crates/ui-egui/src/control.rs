@@ -28,7 +28,7 @@
 //! - `ui.screenshot {path?, focus?}`: capture the main window (PNG). Raises the window first (default)
 //!   because occluded macOS windows stop rendering
 //! - `ui.focus`: bring the main window to the front
-//! - `app.open {path}` / `app.save {path}`: relative file I/O under the automation roots; reply with `warnings`
+//! - `app.open {path, layers?}` / `app.save {path}`: relative file I/O under the automation roots; `layers` selects PDF auto, layers, or render; reply with `warnings`
 //! - `app.quit`
 //! - `jobs.list` / `jobs.cancel {job?}`: background jobs (#210) with progress; cancel one (or all).
 //!   `engine.execute`, `ui.menu.invoke` and `ui.dialog.confirm` wait for a command that runs as a

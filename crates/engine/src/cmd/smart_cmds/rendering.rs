@@ -10,14 +10,14 @@ use std::sync::Mutex;
 
 /// Layer › Smart Objects › Stack Mode: the source's layers (or, when it holds a single group, the
 /// group's layers) combined per pixel with `mode`. Cached like [`source_image`], keyed by mode.
-pub fn stack_image(file_name: &str, bytes: &[u8], fmt: PixelFormat, mode: photocraft_doc::StackMode) -> Result<SourceImage> {
+pub fn stack_image(file_name: &str, bytes: &[u8], fmt: PixelFormat, mode: photocraft_doc::StackMode, pdf_import: Option<super::PdfImportOptions>) -> Result<SourceImage> {
     use photocraft_algo::stack::Stat;
-    let mut key = cache_key(bytes, fmt);
+    let mut key = cache_key(bytes, fmt, pdf_import);
     key.0 = *blake3::hash(&[&key.0[..], b"stack:", mode.id().as_bytes()].concat()).as_bytes();
     if let Some(img) = cache_get(&key) {
         return Ok(img);
     }
-    let doc = decode_source(file_name, bytes)?;
+    let doc = decode_source(file_name, bytes, pdf_import)?;
     let layers: &[Layer] = match doc.layers.as_slice() {
         [only] if only.is_group() => only.children().unwrap_or_default(),
         all => all,
@@ -188,10 +188,10 @@ pub(super) fn place(name: &str, bytes: &[u8], doc: &Document, sm: &SmartObject) 
         });
     }
     let img = match sm.stack_mode {
-        Some(mode) if photocraft_io::svg::is_svg(bytes) => convert_svg_source(stack_image(name, bytes, PixelFormat::RGBA32F, mode)?, doc)?,
+        Some(mode) if photocraft_io::svg::is_svg(bytes) => convert_svg_source(stack_image(name, bytes, PixelFormat::RGBA32F, mode, sm.pdf_import)?, doc)?,
         None if photocraft_io::svg::is_svg(bytes) => svg_source_image_in(bytes, doc, 1.0)?,
-        Some(mode) => stack_image(name, bytes, fmt, mode)?,
-        None => source_image(name, bytes, fmt)?,
+        Some(mode) => stack_image(name, bytes, fmt, mode, sm.pdf_import)?,
+        None => source_image(name, bytes, fmt, sm.pdf_import)?,
     };
     // The placed stage is unclipped: a large enough placement (an image scaled to fill a huge
     // frame) would otherwise fill memory before any allocation could fail.
@@ -298,8 +298,8 @@ pub(crate) fn source_box(doc: &Document, sm: &SmartObject) -> Option<[f64; 4]> {
     let fmt = doc.pixel_format();
     let r = match sm.stack_mode {
         None if photocraft_io::svg::is_svg(&bytes) => photocraft_io::svg::bounded_canvas_bounds(&bytes, 24_000_000).ok()?,
-        Some(mode) => stack_image(&name, &bytes, fmt, mode).ok()?.bounds,
-        None => source_image(&name, &bytes, fmt).ok()?.bounds,
+        Some(mode) => stack_image(&name, &bytes, fmt, mode, sm.pdf_import).ok()?.bounds,
+        None => source_image(&name, &bytes, fmt, sm.pdf_import).ok()?.bounds,
     };
     Some([f64::from(r.x0), f64::from(r.y0), f64::from(r.x1), f64::from(r.y1)])
 }

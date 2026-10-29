@@ -95,6 +95,7 @@ fn opening_a_pdf_shows_the_dialog_with_photoshop_defaults() {
     assert_eq!(f.get("antiAlias"), Some(&json!(true)));
     assert_eq!(f.get("resolution"), Some(&json!(300.0)));
     assert_eq!(f.get("mode"), Some(&json!("rgb")));
+    assert_eq!(f.get("layers"), Some(&json!("auto")));
     assert_eq!(f.get("depth"), Some(&json!(8)));
     assert_eq!(f.get("constrain"), Some(&json!(false)));
     assert_eq!(f.get("suppressWarnings"), Some(&json!(false)));
@@ -146,6 +147,18 @@ fn the_name_field_and_the_page_options_reach_the_documents() {
     // The options the fields describe.
     let o = options(&dialog_fields_after(&app), 2, false, None);
     assert_eq!((o.page, o.crop, o.resolution, o.anti_alias, o.image), (2, CropTo::BoundingBox, 72.0, true, None));
+}
+
+#[test]
+fn layer_choice_reaches_pdf_open_options() {
+    let mut f = Map::new();
+    defaults(&mut f, &app());
+    for (value, expected) in
+        [("auto", photocraft_doc::PdfImportMode::Auto), ("layers", photocraft_doc::PdfImportMode::Layers), ("render", photocraft_doc::PdfImportMode::Render)]
+    {
+        f.insert("layers".into(), json!(value));
+        assert_eq!(options(&f, 1, false, None).layer_mode, expected);
+    }
 }
 
 /// The fields a closed dialog had, rebuilt from defaults plus the test's edits (the dialog is
@@ -228,7 +241,7 @@ fn ok_with_nothing_selected_keeps_the_dialog_up() {
 }
 
 #[test]
-fn a_one_image_pdf_opens_like_an_image_without_asking() {
+fn a_one_image_pdf_opens_read_only_without_asking() {
     let mut app = app();
     assert!(!wants_dialog("scan.pdf", &image_pdf(100, 50, 200.0)));
     app.open_file("/tmp/pc-test/scan.pdf", &image_pdf(100, 50, 200.0)).expect("open");
@@ -236,7 +249,7 @@ fn a_one_image_pdf_opens_like_an_image_without_asking() {
     let st = app.session.active().expect("the image document");
     assert_eq!((st.doc.name.as_str(), st.doc.size.width, st.doc.size.height, st.doc.resolution_dpi), ("scan.pdf", 100, 50, 36.0));
     assert_eq!(st.doc.layers[0].name, "Background");
-    assert!(!st.source_read_only && st.path.as_deref() == Some("/tmp/pc-test/scan.pdf"), "like any image file");
+    assert!(st.source_read_only && st.path.is_none(), "a PDF image shortcut must not be a Save target");
 }
 
 /// Two pages: the second draws an 8 × 4 image beside a rectangle, so the file isn't image-only.

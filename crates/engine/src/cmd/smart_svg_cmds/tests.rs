@@ -180,7 +180,9 @@ fn linked_sources_and_internal_editor_conflicts_reject_without_reads() {
     let params = request(&mut s, id, BLUE);
     let parent = s.active().unwrap().doc.id;
     let contents_id = smart(&s.active().unwrap().doc, id).unwrap().contents_id;
-    s.smart_links.push(crate::smart_cmds::SmartLink { child: DocId::fresh(), parent, layer: id, contents_id });
+    s.smart_links.push(crate::smart_cmds::SmartLink {
+        child: DocId::fresh(), parent, layer: id, contents_id, original_contents_id: contents_id, pdf_import: Default::default(),
+    });
     fails_without_edit(&mut s, params.clone());
     assert!(s.execute(EXPORT, json!({"layer":id.0})).is_err());
     s.smart_links.clear();

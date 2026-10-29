@@ -26,18 +26,39 @@ pub(super) fn set_source(
 ) -> Result<Value> {
     let id = layer_param(s, p)?;
     let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
+    let pdf_import = smart(doc, id)?.pdf_import;
     let new = make(&doc.metadata, &smart(doc, id)?.source)?;
-    set_shared_source(s, id, label, keep_psd, new)
+    set_shared_source(s, id, label, keep_psd, new, pdf_import)
 }
 
-// Keep the shared-instance transaction out of the per-command source-builder instantiations.
-fn set_shared_source(s: &mut Session, id: LayerId, label: &str, keep_psd: bool, new: SmartSource) -> Result<Value> {
+fn validate_replacement(meta: &Metadata, source: &SmartSource, pdf_import: Option<super::PdfImportOptions>) -> Result<bool> {
+    let Some((file_name, bytes)) = source_bytes(meta, source) else {
+        return Ok(matches!(source, SmartSource::Linked { path } if std::path::Path::new(path).extension().is_some_and(|ext| ext.eq_ignore_ascii_case("pdf"))));
+    };
+    let is_pdf = photocraft_io::is_pdf_input(&file_name, &bytes);
+    decode_source(&file_name, &bytes, pdf_import.filter(|_| is_pdf))?;
+    Ok(is_pdf)
+}
+
+fn set_shared_source(
+    s: &mut Session,
+    id: LayerId,
+    label: &str,
+    keep_psd: bool,
+    new: SmartSource,
+    target_pdf_import: Option<super::PdfImportOptions>,
+) -> Result<Value> {
+    let is_pdf = validate_replacement(&s.active().ok_or(EngineError::NoDocument)?.doc.metadata, &new, target_pdf_import)?;
     let (parent, contents_id, changed, warnings) = s.edit(label, |doc, _| {
         let contents_id = smart(doc, id)?.contents_id;
         let changed = instances(doc, contents_id);
         let mut warnings = std::collections::BTreeSet::new();
         for &instance in &changed {
-            smart_mut(doc, instance)?.source = new.clone();
+            let sm = smart_mut(doc, instance)?;
+            sm.source = new.clone();
+            if !is_pdf {
+                sm.pdf_import = None;
+            }
             if !keep_psd {
                 detach_psd(doc.layer_mut(instance).ok_or(EngineError::NoLayer(instance))?);
             }
@@ -49,7 +70,7 @@ fn set_shared_source(s: &mut Session, id: LayerId, label: &str, keep_psd: bool, 
     })?;
     // An old editor must not overwrite newly replaced/relinked contents on close. Keep its
     // document open, but the next Edit Contents opens the replacement source.
-    s.smart_links.retain(|l| l.parent != parent || l.contents_id != contents_id);
+    s.smart_links.retain(|link| link.parent != parent || (link.contents_id != contents_id && !changed.contains(&link.layer)));
     // Every instance changed, not only `layer`: list them, so a caller doesn't repeat the
     // command once per copy (#4075).
     Ok(json!({"layer": id.0, "instances": changed.iter().map(|l| l.0).collect::<Vec<_>>(), "warnings": warnings}))
@@ -71,8 +92,8 @@ pub fn replace_contents_from_bytes(s: &mut Session, p: &Value, file_name: &str, 
 
 /// Replace Contents from a file's name and bytes: what the desktop and web file pickers hand over.
 pub fn replace_contents_bytes(s: &mut Session, id: LayerId, file_name: &str, bytes: Vec<u8>) -> Result<Value> {
-    decode_source(file_name, &bytes)?; // fail before touching the document
-    set_shared_source(s, id, "Replace Contents", false, SmartSource::Embedded { file_name: file_name.to_string(), bytes: Arc::new(bytes) })
+    let pdf_import = smart(&s.active().ok_or(EngineError::NoDocument)?.doc, id)?.pdf_import;
+    set_shared_source(s, id, "Replace Contents", false, SmartSource::Embedded { file_name: file_name.to_string(), bytes: Arc::new(bytes) }, pdf_import)
 }
 
 /// The file name and bytes of smart object `id`'s contents.
@@ -98,7 +119,8 @@ pub(super) fn export_contents(s: &mut Session, p: &Value) -> Result<Value> {
         crate::file_cmds::write_file(path, &bytes)?;
         return Ok(json!({"path": path, "fileName": name, "bytes": bytes.len(), "converted": false}));
     }
-    let contents = decode_source(&name, &bytes)?;
+    let pdf_import = smart(&s.active().ok_or(EngineError::NoDocument)?.doc, id)?.pdf_import;
+    let contents = decode_source(&name, &bytes, pdf_import)?;
     let r = photocraft_io::export(&contents, path, &Default::default()).map_err(|e| other(format!("can't export the contents as {}: {e}", base_name(path))))?;
     crate::file_cmds::write_file(path, &r.bytes)?;
     Ok(json!({"path": path, "fileName": name, "bytes": r.bytes.len(), "converted": true, "warnings": r.warnings}))
@@ -108,18 +130,27 @@ pub(super) fn edit_contents(s: &mut Session, p: &Value) -> Result<Value> {
     let id = layer_param(s, p)?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let parent = st.doc.id;
-    let contents_id = smart(&st.doc, id)?.contents_id;
-    // Already open for editing: switch to that document rather than opening another copy.
-    if let Some(index) =
-        s.smart_links.iter().find(|l| l.parent == parent && l.contents_id == contents_id).and_then(|l| s.documents().iter().position(|d| d.doc.id == l.child))
+    let sm = smart(&st.doc, id)?;
+    let contents_id = sm.contents_id;
+    let pdf_import = sm.pdf_import.unwrap_or_default();
+    // A document edits one source projection. Different selected PDF pages stay independent.
+    if let Some(index) = s
+        .smart_links
+        .iter()
+        .find(|link| {
+            link.parent == parent
+                && (link.contents_id == contents_id || link.original_contents_id == contents_id)
+                && (link.pdf_import == pdf_import || sm.pdf_import.is_none())
+        })
+        .and_then(|link| s.documents().iter().position(|d| d.doc.id == link.child))
     {
         s.set_active(index);
         return Ok(json!({"document": index, "parentLayer": id.0}));
     }
-    let source = &smart(&st.doc, id)?.source;
+    let source = &sm.source;
     let (name, bytes) = authorized_source_bytes(s, "layer.smartObjects.editContents", &st.doc.metadata, source)?
         .ok_or_else(|| other("the smart object's contents are unavailable"))?;
-    let mut child = decode_source(&name, &bytes)?;
+    let mut child = decode_source(&name, &bytes, sm.pdf_import)?;
     // Bundles keep their document id; each open copy needs its own.
     child.id = DocId::fresh();
     child.name = name;
@@ -127,12 +158,12 @@ pub(super) fn edit_contents(s: &mut Session, p: &Value) -> Result<Value> {
     // Admission may replace an ID already owned by another open document.
     let child_id = s.documents().get(index).ok_or(EngineError::NoDocument)?.doc.id;
     s.smart_links.retain(|l| l.child != child_id);
-    s.smart_links.push(SmartLink { child: child_id, parent, layer: id, contents_id });
+    s.smart_links.push(SmartLink { child: child_id, parent, layer: id, contents_id, original_contents_id: contents_id, pdf_import });
     Ok(json!({"document": index, "parentLayer": id.0}))
 }
 
-/// Writes an Edit Contents document back into all its parent instances (one undoable step in the
-/// parent) and marks it saved. Returns false if `index` isn't an Edit Contents document.
+/// Writes an Edit Contents document back into matching parent projections (one undoable step in
+/// the parent) and marks it saved. Returns false if `index` isn't an Edit Contents document.
 pub fn commit_child(s: &mut Session, index: usize) -> Result<bool> {
     let Some(st) = s.docs.get(index) else { return Ok(false) };
     let child = st.doc.clone();
@@ -143,10 +174,34 @@ pub fn commit_child(s: &mut Session, index: usize) -> Result<bool> {
     s.active = Some(parent);
     s.note_active_change();
     let r = s.edit("Edit Contents", |doc, _| {
-        let ids = instances(doc, link.contents_id);
+        // Parent undo may restore the original PDF identity after a projection was detached.
+        let contents_id = match doc.layer(link.layer).map(|layer| &layer.content) {
+            Some(LayerContent::Smart(sm)) if sm.contents_id == link.original_contents_id && sm.pdf_import.unwrap_or_default() == link.pdf_import => {
+                link.original_contents_id
+            }
+            _ => link.contents_id,
+        };
+        let mut has_other_projection = false;
+        let ids: Vec<LayerId> = doc
+            .walk()
+            .into_iter()
+            .filter_map(|(_, _, layer)| match &layer.content {
+                LayerContent::Smart(sm)
+                    if sm.contents_id == contents_id && (sm.pdf_import.is_none() || sm.pdf_import.unwrap_or_default() == link.pdf_import) =>
+                {
+                    Some(layer.id)
+                }
+                LayerContent::Smart(sm) if sm.contents_id == contents_id => {
+                    has_other_projection = true;
+                    None
+                }
+                _ => None,
+            })
+            .collect();
         if ids.is_empty() {
             return Err(other("the smart object's instances were removed"));
         }
+        let detached_contents_id = has_other_projection.then(SmartContentsId::fresh);
         for id in ids {
             let sm = smart_mut(doc, id)?;
             let name = match &sm.source {
@@ -155,16 +210,23 @@ pub fn commit_child(s: &mut Session, index: usize) -> Result<bool> {
             };
             let stem = name.rsplit_once('.').map_or(name, |(stem, _)| stem);
             sm.source = SmartSource::Embedded { file_name: format!("{stem}.pcraft"), bytes: bytes.clone() };
+            sm.pdf_import = None;
+            if let Some(contents_id) = detached_contents_id {
+                sm.contents_id = contents_id;
+            }
             detach_psd(doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?);
             refresh_or_fail(doc, id)?;
         }
-        Ok(())
+        Ok(detached_contents_id.unwrap_or(contents_id))
     });
     s.active = prev;
     s.note_active_change();
-    r?;
+    let contents_id = r?;
     if let Some(st) = s.docs.get_mut(index) {
         st.saved_revision = st.revision;
+    }
+    if let Some(link) = s.smart_links.iter_mut().find(|candidate| candidate.child == child.id) {
+        link.contents_id = contents_id;
     }
     Ok(true)
 }

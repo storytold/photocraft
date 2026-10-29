@@ -366,7 +366,7 @@ fn a_page_that_is_one_image_opens_as_that_image() {
     assert_eq!(d.mode, ColorMode::Rgb);
     assert_eq!(d.layers[0].name, "Background");
     assert!(d.layers[0].locks.transparency && d.layers[0].locks.position);
-    assert!(!r.source_read_only, "it is the file's image: Save As defaults to it like any image");
+    assert!(r.source_read_only, "extracting an image must not make the enclosing PDF a Save target");
     assert_eq!(pixel(&r, 0, 0)[3], 1.0);
     // A gray image gives a Grayscale document; the matrix's rotation is ignored.
     let gray = image_pdf(300.0, 300.0, &[(64, 64, true, "0 64 -64 0 100 50")], "");
@@ -1230,14 +1230,14 @@ fn a_walk_past_its_limits_refuses_the_page() {
 // ---- What opening a PDF ties to the file, and which files open as PDFs. ----
 
 #[test]
-fn only_a_one_image_pdf_opened_directly_keeps_the_file() {
+fn pdf_sources_remain_read_only_for_pages_and_image_shortcuts() {
     let one = image_pdf(200.0, 100.0, &[(100, 50, false, "200 0 0 100 0 0")], "");
     let two = image_pdf(400.0, 300.0, &[(100, 50, false, "200 0 0 100 20 150"), (64, 64, true, "64 0 0 64 300 50")], "");
     let plain = |b: &[u8]| crate::import("f.pdf", b).unwrap().source_read_only;
     let chosen = |b: &[u8], o: PdfOpenOptions| {
         crate::import_with_options("f.pdf", b, &crate::ImportOptions { pdf: Some(o), ..Default::default() }).unwrap().source_read_only
     };
-    assert!(!plain(&one), "a one-image PDF opens like a picture");
+    assert!(plain(&one), "the enclosing PDF remains read-only");
     assert!(plain(&two), "a page is rasterised");
     assert!(chosen(&two, PdfOpenOptions { image: Some(1), ..Default::default() }), "Images mode");
     assert!(chosen(&two, PdfOpenOptions::default()), "a page chosen in Import PDF");

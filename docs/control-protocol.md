@@ -113,6 +113,34 @@ The transport is `apps/photocraft/src/control_server.rs`, and the handlers are i
 - `app.open {path}` / `app.save {path?, tgaBits?, ddsCompression?, ddsMipmaps?, quality?, jpegFormat?, tiffCompression?, tiffTransparency?, tiffPyramid?, tiffLayers?}` (JPEG: `quality` on the 0–12 scale, `jpegFormat` `baseline`, `optimized` or `progressive`; TIFF: `tiffCompression` `none`, `lzw` or `zip`, `tiffTransparency` and `tiffPyramid` bools; automation never shows JPEG or TIFF Options): relative file I/O through the configured automation roots (`app.open` reads under the read root, `app.save` writes under the write root; absolute paths beneath the canonical or configured root are accepted, while `..` and paths escaping the root are refused, and both fail closed when no root was granted). Both reply with `warnings` (import/export notes such as "adjustment layer flattened"; `[]` when none), also shown to the user in the status bar and as a notice (`notices` in `ui.inspect`); `app.open` also returns the `path` and document `name` (directory `.pcraft` — the native on-disk form — loads through the read root's capability; the single-file (zip) form takes the bytes path), `app.save` the `path` written. `app.save` without `path` writes back only to the document's own PSD, PSB or `.pcraft` file, like File › Save. `tgaBits` (24 or 32) sets a TGA's bits per pixel: 32 writes the alpha channel (or else the transparency) as its alpha, 24 none; without it, 32 with an alpha channel or transparency, else 24. `ddsCompression` (`none`, `bc1`, `bc2` or `bc3`) and `ddsMipmaps` (bool) set a DDS texture's compression and mip chain; without them, uncompressed without mipmaps. Automation saves never show TGA, DDS, JPEG or TIFF options. Automation opens and saves never fire script events. Use these two rather than `file.open`, `file.save`, `file.saveAs` or `file.saveACopy`, which the control channel refuses (see [Engine commands](#engine-commands))
 - `app.quit`
 
+## PDF import
+
+`file.openAs`, `file.placeEmbedded` and `file.placeLinked` accept
+`"layers":"auto|layers|render"`. This is independent of `"mode"`, which remains the raster
+colour model (`rgb`, `gray`, `cmyk`, `lab`). CLI `convert` and `info` expose `--layers`.
+
+- `auto` (default): recover Photoshop-preserved editing data, or use the existing page renderer
+  when no Photoshop data exists.
+- `layers`: require Photoshop editing data; absence, malformed records or damaged channels fail.
+- `render`: deliberately rasterise the selected page through the existing renderer.
+
+The existing `page`, `resolution`, `crop`, `mode`, `depth`, `antiAlias`, `name`, `password`,
+`image` and `suppressWarnings` fields remain available. Explicit `image` extraction takes the
+Images path, not the layer path. Raster size/colour choices do not reinterpret preserved layers.
+For example: `file.openAs {"path":"label.pdf","layers":"render","page":2,"resolution":144,"crop":"cropBox"}`.
+
+PDF sources never become the document's Save target, including one-image shortcuts.
+Batch same-file exports are refused even for a disguised extension or hard-link alias.
+Placed PDFs retain the full projection in native files and render-cache identity; Replace
+Contents/Relink preserves each shared instance's selection, and Edit Contents commits only
+matching projections. PSD export stores selected PSB contents rather than an ambiguous whole PDF.
+Passwords are not persisted: password-supplied embedded placement stores selected native
+contents; linked placement asks the caller to use embedded placement instead.
+For an open Edit Contents document, scoped `doc.save {}` commits into its parent in memory,
+including after parent undo/redo. It needs no filesystem write grant. Supplying `path` remains
+an explicit export governed by the workspace capability; generic ambient-path `file.save`
+stays blocked in headless automation.
+
 ## Engine commands
 
 Change the UI language without restarting with `prefs.set`:

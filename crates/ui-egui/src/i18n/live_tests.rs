@@ -159,9 +159,10 @@ fn import_pdf_dialog_choices_have_translations() {
         let crops = photocraft_io::pdf_import::CropTo::ALL.iter().map(|c| c.label());
         let sizes = crate::pdf_import_ui::THUMB_SIZES.iter().map(|(_, l)| *l);
         let modes = crate::pdf_import_ui::MODES.iter().map(|(_, l)| *l);
+        let layers = crate::pdf_import_ui::LAYER_MODES.iter().map(|(_, l)| *l);
         let depths = crate::pdf_import_ui::DEPTHS.iter().map(|(_, l)| *l);
         let res = crate::pdf_import_ui::RES_UNITS.iter().map(|(_, l)| *l);
-        for text in literals.into_iter().chain(crops).chain(sizes).chain(modes).chain(depths).chain(res) {
+        for text in literals.into_iter().chain(crops).chain(sizes).chain(modes).chain(layers).chain(depths).chain(res) {
             assert!(has(language, text), "{}: untranslated {text}", language.code());
         }
     }

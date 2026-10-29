@@ -723,6 +723,7 @@ impl Ctx<'_> {
             warp,
             stack_mode: None,
             perspective,
+            pdf_import: None,
         })
     }
 
@@ -1060,10 +1061,12 @@ pub fn psd_to_document_with(file: &PsdFile, ctl: &photocraft_raster::Interrupt) 
 /// file). The file's channel data may still be in its source ([`PsdFile::from_source`]): the
 /// fourth value is a failure to read it, which fails the open (a layer is never left empty
 /// because its file became unreadable while it opened).
+/// `preflighted` means the caller already checked the PSD memory estimate against its allowance.
 pub(crate) fn psd_to_document_owned(
     mut file: PsdFile,
     ctl: &photocraft_raster::Interrupt,
     decoded: Option<photocraft_psd::Result<Vec<u8>>>,
+    preflighted: bool,
 ) -> Option<(Document, Vec<String>, bool, Option<crate::IoError>)> {
     let global = file
         .global_blocks
@@ -1074,7 +1077,7 @@ pub(crate) fn psd_to_document_owned(
             (b.signature, b.key, Arc::new(data))
         })
         .collect();
-    psd_to_document_global(&file, ctl, decoded, global, true)
+    psd_to_document_global(&file, ctl, decoded, global, preflighted)
 }
 
 /// Whether `file` stores spot planes the way earlier PhotoCraft versions (releases 0.1.0 to

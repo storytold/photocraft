@@ -16,6 +16,44 @@ pub(super) fn contents_uuid(contents_id: SmartContentsId, bytes: &[u8]) -> Strin
     crate::smart_map::uuid_from(identity.finalize().as_bytes())
 }
 
+pub(super) fn pdf_selection_key(options: Option<&photocraft_doc::PdfImportOptions>) -> [u8; 32] {
+    let mut hash = blake3::Hasher::new();
+    if let Some(options) = options {
+        hash.update(b"\0pdf-import\0");
+        hash.update(&[options.mode as u8, options.crop_box as u8, options.color_mode as u8, options.depth as u8, u8::from(options.anti_alias)]);
+        hash.update(&options.page.to_le_bytes());
+        hash.update(&options.dpi.to_bits().to_le_bytes());
+        match options.pixel_size {
+            Some((width, height)) => {
+                hash.update(&[1]);
+                hash.update(&width.to_le_bytes());
+                hash.update(&height.to_le_bytes());
+            }
+            None => {
+                hash.update(&[0]);
+            }
+        }
+        match options.image {
+            Some(image) => {
+                hash.update(&[1]);
+                hash.update(&image.to_le_bytes());
+            }
+            None => {
+                hash.update(&[0]);
+            }
+        }
+    }
+    *hash.finalize().as_bytes()
+}
+
+#[derive(PartialEq, Eq, Hash)]
+pub(super) struct ConvertedSourceKey {
+    pub(super) contents: SmartContentsId,
+    pub(super) bytes: [u8; 32],
+    pub(super) linked: bool,
+    pub(super) projection: [u8; 32],
+}
+
 type OwnedSourceHash = (std::sync::Arc<Vec<u8>>, [u8; 32]);
 
 #[cfg(test)]
@@ -43,9 +81,9 @@ pub(super) struct SmartOut {
     pub(super) prune_ok: bool,
     /// Files to embed.
     pub(super) add: Vec<crate::linked::LinkedFile>,
-    /// Sources converted so far, by contents identity, bytes and whether they were read from a
-    /// link (`Err` = can't be embedded).
-    pub(super) converted: std::collections::HashMap<(SmartContentsId, [u8; 32], bool), Result<Source, String>>,
+    /// Sources converted so far, by contents identity, bytes, linked-file policy and PDF projection
+    /// (`Err` = can't be embedded).
+    pub(super) converted: std::collections::HashMap<ConvertedSourceKey, Result<Source, String>>,
     /// Only immutable embedded owners are memoized for this export; pinning prevents address reuse.
     pub(super) embedded_hashes: std::collections::HashMap<usize, OwnedSourceHash>,
     /// Each placed layer has its own id, even when it duplicates an imported layer.

@@ -55,6 +55,9 @@ pub struct OpenParams {
     /// Explicitly approve high-memory PSD/PSB imports that fit within the hard memory budget.
     #[serde(default)]
     pub approve_high_memory: bool,
+    /// PDF import: preserve authored layers when possible (`auto`), require layers, or render.
+    #[serde(default)]
+    pub layers: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
@@ -77,6 +80,9 @@ pub struct PlaceParams {
     /// Explicitly approve high-memory PSD/PSB imports that fit within the hard memory budget.
     #[serde(default)]
     pub approve_high_memory: bool,
+    /// PDF import: preserve authored layers when possible (`auto`), require layers, or render.
+    #[serde(default)]
+    pub layers: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
@@ -567,6 +573,9 @@ fn place_options(p: &PlaceParams) -> Value {
     if p.approve_high_memory {
         opts.insert("approveHighMemory".into(), json!(true));
     }
+    if let Some(v) = &p.layers {
+        opts.insert("layers".into(), json!(v));
+    }
     Value::Object(opts)
 }
 
@@ -715,25 +724,26 @@ impl PhotocraftMcp {
         to_result(b.call_read("ui.inspect", json!({})).await)
     }
 
-    #[tool(description = "Open an image or document file and make it active. Returns index, size and import warnings.")]
+    #[tool(
+        description = "Open an image or document file and make it active. PDF `layers` is auto, layers, or render; auto preserves authored layers when possible. Returns index, size and import warnings."
+    )]
     async fn doc_open(&self, Parameters(p): Parameters<OpenParams>) -> Result<CallToolResult, McpError> {
-        let path = PathBuf::from(&p.path);
-        let approve = p.approve_high_memory;
-        if let Some(r) = self.headless_op(move |h| h.open_with_approval(&path, approve)).await {
+        let mut open = json!({"path": p.path, "approveHighMemory": p.approve_high_memory});
+        if let Some(layers) = p.layers {
+            open["layers"] = json!(layers);
+        }
+        let direct = open.clone();
+        if let Some(r) = self.headless_op(move |h| h.handle("doc.open", direct)).await {
             return to_result(r);
         }
         let Some(b) = self.bridge_client() else {
             return Ok(no_backend());
         };
-        let mut params = json!({"path": p.path});
-        if approve {
-            params["approveHighMemory"] = json!(true);
-        }
-        to_result(b.call("app.open", params).await)
+        to_result(b.call("app.open", open).await)
     }
 
     #[tool(
-        description = "Place a file into the document as a Smart Object layer (Place Embedded), reading `path` beneath the read root. `scale` (percent), `fit`, `center` and `approve_high_memory` (one-shot PSD/PSB consent, default false) are the command's own."
+        description = "Place a file into the document as a Smart Object layer (Place Embedded), reading `path` beneath the read root. `scale` (percent), `fit`, `center` and `approve_high_memory` (one-shot PSD/PSB consent, default false) are the command's own; PDF `layers` is auto, layers, or render."
     )]
     async fn doc_place(&self, Parameters(p): Parameters<PlaceParams>) -> Result<CallToolResult, McpError> {
         let opts = place_options(&p);

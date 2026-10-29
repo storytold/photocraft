@@ -32,6 +32,9 @@ pub(crate) fn convert(a: &ConvertArgs, _out: &mut dyn Write, err: &mut dyn Write
     refuse_overwriting_input(a.in_place, input, output)?;
     let import_opts = photocraft_io::ImportOptions { psd_high_memory_approved: a.approve_high_memory, pdf: a.pdf.options()?, ..Default::default() };
     let mut o = files::open_with_options(input, &import_opts)?;
+    if o.source_read_only && photocraft_engine::file_cmds::same_file(input, output) {
+        return Err(CliError::Other(format!("not written: {} is a read-only input", output.display())));
+    }
     // Preferences › Raw Defaults › Resolution at its default, as `run` and `info` open a raw.
     photocraft_engine::file_cmds::raw_defaults(&photocraft_engine::Session::new(), &o.warnings, &mut o.document);
     let mut seen_warnings = std::collections::HashSet::<String>::new();
@@ -106,6 +109,12 @@ pub(crate) fn run_cmds(a: &RunArgs, out: &mut dyn Write, err: &mut dyn Write) ->
             refuse_overwriting_input(a.in_place, file, out)?;
         }
         let o = h.open_with_approval(file, a.approve_high_memory)?;
+        if let Some(out) = &a.out
+            && h.session.active().is_some_and(|state| state.source_read_only)
+            && photocraft_engine::file_cmds::same_file(file, out)
+        {
+            return Err(CliError::Other(format!("not written: {} is a read-only input", out.display())));
+        }
         let ws: Vec<String> = serde_json::from_value(o["warnings"].clone()).unwrap_or_default();
         warn_all(err, &ws);
         reported_fonts.extend(ws);

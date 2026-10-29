@@ -85,6 +85,7 @@
         <RegistryValue Root="HKMU" Key="Software\Classes\Photocraft.Image\shell\open\command" Value="&quot;[#PhotocraftExe]&quot; &quot;%1&quot;" Type="string" />
         <RegistryValue Root="HKMU" Key="Software\Classes\.psd\OpenWithProgids" Name="Photocraft.PhotoshopDocument" Value="" Type="string" />
         <RegistryValue Root="HKMU" Key="Software\Classes\.psb\OpenWithProgids" Name="Photocraft.PhotoshopDocument" Value="" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\.pdf\OpenWithProgids" Name="Photocraft.Image" Value="" Type="string" />
         <RegistryValue Root="HKMU" Key="Software\Classes\.pdn\OpenWithProgids" Name="Photocraft.Image" Value="" Type="string" />
         <RegistryValue Root="HKMU" Key="Software\Classes\.ora\OpenWithProgids" Name="Photocraft.Image" Value="" Type="string" />
         <RegistryValue Root="HKMU" Key="Software\Classes\.kra\OpenWithProgids" Name="Photocraft.Image" Value="" Type="string" />
@@ -110,6 +111,7 @@
         <RegistryValue Root="HKMU" Key="Software\Classes\Applications\photocraft.exe\SupportedTypes" Name=".pcraft" Value="" Type="string" />
         <RegistryValue Root="HKMU" Key="Software\Classes\Applications\photocraft.exe\SupportedTypes" Name=".psd" Value="" Type="string" />
         <RegistryValue Root="HKMU" Key="Software\Classes\Applications\photocraft.exe\SupportedTypes" Name=".psb" Value="" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\Applications\photocraft.exe\SupportedTypes" Name=".pdf" Value="" Type="string" />
         <RegistryValue Root="HKMU" Key="Software\Classes\Applications\photocraft.exe\SupportedTypes" Name=".pdn" Value="" Type="string" />
         <RegistryValue Root="HKMU" Key="Software\Classes\Applications\photocraft.exe\SupportedTypes" Name=".ora" Value="" Type="string" />
         <RegistryValue Root="HKMU" Key="Software\Classes\Applications\photocraft.exe\SupportedTypes" Name=".kra" Value="" Type="string" />
