@@ -4415,3 +4415,7 @@ cameraRaw	Yellow	Sárga
 	Font size presets	Betűméret-előbeállítások
 	Leading presets	Sorköz-előbeállítások
 	Tracking presets	Betűköz-előbeállítások
+
+# Default save format (Preferences › File Handling)
+	Default save format	Alapértelmezett mentési formátum
+	TIFF	TIFF

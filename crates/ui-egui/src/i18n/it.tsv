@@ -4618,3 +4618,7 @@ shape	Appearance	Aspetto
 	Font size presets	Predefiniti dimensione font
 	Leading presets	Predefiniti interlinea
 	Tracking presets	Predefiniti spaziatura
+
+# Default save format (Preferences › File Handling)
+	Default save format	Formato di salvataggio predefinito
+	TIFF	TIFF

@@ -4463,3 +4463,7 @@ navigator	Zoom	Zoom
 	Font size presets	Valores predefinidos de tamaño de fuente
 	Leading presets	Valores predefinidos de interlineado
 	Tracking presets	Valores predefinidos de tracking
+
+# Default save format (Preferences › File Handling)
+	Default save format	Formato de guardado predeterminado
+	TIFF	TIFF

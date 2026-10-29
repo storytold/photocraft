@@ -612,6 +612,52 @@ fn composite_share(format: Format) -> f32 {
     }
 }
 
+/// Whether a flat file in `format` keeps the whole of `doc`, assuming its layers already fit
+/// (one plain raster layer, the caller's question): its colour model and bit depth stored as they
+/// are, its profile, EXIF, XMP and text metadata kept, no alpha channels or PSD-only data
+/// ([`only_pixels`]), and transparency only where the format has an alpha (else the document must
+/// be the opaque Background). Anything else [`export_flat`] would convert or drop.
+pub fn flat_holds(doc: &Document, format: Format) -> bool {
+    let caps = format.caps();
+    let meta = &doc.metadata;
+    // Indexed, Bitmap, Duotone and Multichannel are written through mode-specific paths or
+    // converted, so they keep their own formats rather than a flat default.
+    let model = matches!(doc.mode, ColorMode::Rgb | ColorMode::Grayscale | ColorMode::Cmyk | ColorMode::Lab);
+    model
+        && caps.write
+        && caps.layouts.contains(&layout_for(doc.mode, false))
+        && caps.depths.contains(&csample(doc.depth))
+        && (doc.icc_profile.is_none() || caps.icc)
+        && (meta.exif.is_none() || caps.exif)
+        && (meta.xmp.is_none() || caps.xmp)
+        && (meta.text.is_empty() || caps.text)
+        && meta.psd_resources.is_empty()
+        && meta.psd_global_blocks.is_empty()
+        && doc.channels.is_empty()
+        && only_pixels(doc)
+        && (caps.alpha || doc.background().is_some())
+}
+
+/// Whether `doc` holds nothing a flat file has no place for: no Quick Mask, paths, guides,
+/// patterns, layer comps, measurements, notes, type styles, slices, variables or timeline, each
+/// as a new document has it. A PSD keeps them all.
+fn only_pixels(doc: &Document) -> bool {
+    doc.quick_mask.is_none()
+        && doc.paths.is_empty()
+        && doc.work_path.is_none()
+        && doc.clipping_path.is_none()
+        && doc.guides == Default::default()
+        && doc.patterns.is_empty()
+        && doc.layer_comps.is_empty()
+        && doc.last_document_state.is_none()
+        && doc.measurement == Default::default()
+        && doc.notes.is_empty()
+        && doc.text_styles == Default::default()
+        && doc.slices == Default::default()
+        && doc.variables == Default::default()
+        && doc.timeline.is_none()
+}
+
 /// Flattens and encodes as `format`.
 pub fn export_flat(doc: &Document, format: Format, opts: &ExportOptions) -> Result<ExportResult, IoError> {
     export_flat_with(doc, format, opts, &photocraft_raster::Interrupt::NONE)

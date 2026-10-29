@@ -4573,3 +4573,7 @@ shape	Appearance	Izgled
 	Font size presets	Unapred podešene veličine fonta
 	Leading presets	Unapred podešeni proredi
 	Tracking presets	Unapred podešeni razmaci slova
+
+# Default save format (Preferences › File Handling)
+	Default save format	Podrazumevani format čuvanja
+	TIFF	TIFF

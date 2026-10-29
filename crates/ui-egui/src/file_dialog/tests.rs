@@ -108,6 +108,177 @@ fn save_dialog_preserves_flat_and_existing_layered_format_defaults() {
     }
 }
 
+/// Preferences › File Handling › Default Save Format is what Save As suggests for a document
+/// without a file of its own to keep; a flat format only when it keeps the whole document.
+#[test]
+fn save_dialog_suggests_the_default_save_format() {
+    let ctx = egui::Context::default();
+    let suggest = |(mut app, open, written): (PhotocraftApp, Open, Rc<RefCell<Vec<String>>>), format: &str| {
+        app.run("prefs.set", json!({"path": "fileHandling.defaultSaveFormat", "value": format})).unwrap();
+        menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
+        app.poll_file_dialog(&ctx, None);
+        let suggested = match open.borrow().as_slice() {
+            [(FileDialogRequest::Save { suggested }, _)] => suggested.clone(),
+            other => panic!("{format}: expected one save dialog, got {}", other.len()),
+        };
+        answer(&open, None);
+        app.poll_file_dialog(&ctx, None);
+        assert!(written.borrow().is_empty(), "cancelling writes nothing");
+        suggested
+    };
+    let suggestion = |path: Option<&str>, layered: bool, format: &str| suggest(jpeg_app(path, layered), format);
+    for (format, flat, layered) in [("psd", "psd", "psd"), ("pcraft", "pcraft", "pcraft"), ("tif", "tif", "tif"), ("png", "png", "psd"), ("jpg", "jpg", "psd")]
+    {
+        assert_eq!(suggestion(None, false, format), format!("My image.{flat}"), "{format}, flat");
+        assert_eq!(suggestion(None, true, format), format!("My image.{layered}"), "{format}, layered: a flat format would lose the layers");
+    }
+    // A file that can be saved back in its own format keeps it.
+    assert_eq!(suggestion(Some("/pics/My image.PSD"), true, "png"), "/pics/My image.PSD");
+    assert_eq!(suggestion(Some("/pics/My image.JPEG"), false, "pcraft"), "/pics/My image.JPEG");
+    // A flat format that would drop something isn't suggested: JPEG can't store transparency,
+    // and neither PNG nor JPEG an alpha channel.
+    let transparent = || {
+        let (mut app, open, written) = app();
+        std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).layers[0].surface_mut().unwrap().write_pixel(0, 0, &[1.0, 0.0, 0.0, 0.0]);
+        let bytes = photocraft_io::export(&app.session.active().unwrap().doc, "transparent.PNG", &Default::default()).unwrap().bytes;
+        app.session.add_document(photocraft_io::import("transparent.PNG", &bytes).unwrap().document, None);
+        (app, open, written)
+    };
+    assert_eq!(suggest(transparent(), "png"), "transparent.png");
+    assert_eq!(suggest(transparent(), "jpg"), "transparent.psd");
+    for format in ["png", "jpg"] {
+        let (mut app, open, written) = jpeg_app(None, false);
+        app.run("channel.new", json!({"name": "Alpha", "fill": "black"})).unwrap();
+        assert_eq!(suggest((app, open, written), format), "My image.psd", "{format} with an alpha channel");
+    }
+    // Nor one that would drop what only a PSD keeps: a Quick Mask, a guide.
+    for (command, params) in [("select.editInQuickMaskMode", json!({"on": true})), ("view.newGuide", json!({"orientation": "vertical", "position": 2}))] {
+        for format in ["png", "jpg"] {
+            let (mut app, open, written) = jpeg_app(None, false);
+            app.run(command, params.clone()).unwrap();
+            assert_eq!(suggest((app, open, written), format), "My image.psd", "{format} after {command}");
+        }
+    }
+    // Only the listed formats are accepted.
+    let (mut app, _, _) = app();
+    assert!(app.run("prefs.set", json!({"path": "fileHandling.defaultSaveFormat", "value": "bmp"})).is_err());
+    assert_eq!(app.session.prefs().file_handling.default_save_format, photocraft_engine::prefs::SaveFormat::Psd);
+}
+
+/// The written files, by path.
+type Files = Rc<RefCell<Vec<(String, Vec<u8>)>>>;
+
+/// An app with no document whose saves go through the real exporter, keeping each file written.
+fn exporting_app() -> (PhotocraftApp, Open, Files) {
+    let (open, files): (Open, Files) = Default::default();
+    let (held, w) = (open.clone(), files.clone());
+    let services = Services {
+        export: Some(Box::new(|doc: &photocraft_doc::Document, path: &str, settings: &crate::ExportSettings| {
+            photocraft_io::export(doc, path, &settings.io_options()).map(|r| (r.bytes, r.warnings)).map_err(|e| e.to_string())
+        })),
+        write: Some(Box::new(move |path: &str, bytes: &[u8]| {
+            w.borrow_mut().push((path.to_string(), bytes.to_vec()));
+            Ok(())
+        })),
+        file_dialog: Some(Box::new(move |request, _parent, reply| held.borrow_mut().push((request, reply)))),
+        ..Default::default()
+    };
+    (PhotocraftApp::new(photocraft_engine::Session::new(), services), open, files)
+}
+
+/// The default format's guard against real files. A suggested PNG or JPEG is saved through Save
+/// As without an export warning, becomes the document's clean file and reopens with the same
+/// colour model, depth, profile, XMP, text and pixels (JPEG's within its compression); where a
+/// flat file would convert or drop something (depth, colour model, text metadata), PSD is
+/// suggested instead, and exporting the flat file anyway shows the loss.
+#[test]
+fn default_flat_formats_reopen_unchanged() {
+    use std::sync::Arc;
+    let ctx = egui::Context::default();
+    // (mode, depth, text metadata, default format, suggested extension)
+    let cases = [
+        ("rgb", 8, false, "png", "png"),
+        ("rgb", 8, true, "png", "png"),
+        ("rgb", 8, false, "jpg", "jpg"),
+        ("rgb", 8, true, "jpg", "psd"),
+        ("rgb", 16, false, "png", "png"),
+        ("rgb", 16, false, "jpg", "psd"),
+        ("rgb", 32, false, "png", "psd"),
+        ("rgb", 32, false, "jpg", "psd"),
+        ("gray", 8, false, "png", "png"),
+        ("gray", 16, false, "png", "png"),
+        ("gray", 8, false, "jpg", "jpg"),
+        ("cmyk", 8, false, "png", "psd"),
+        ("cmyk", 8, false, "jpg", "jpg"),
+        ("lab", 8, false, "png", "psd"),
+        ("lab", 8, false, "jpg", "psd"),
+    ];
+    for (mode, depth, text, format, ext) in cases {
+        let case = format!("{mode}/{depth}{} as {format}", if text { " with text" } else { "" });
+        let (mut app, open, files) = exporting_app();
+        // Tagged with a profile other than the working one (Lab needs none), so it must be embedded.
+        let mut new = json!({"width": 8, "height": 8, "mode": mode, "depth": depth, "background": "#336699", "name": "Shot"});
+        let profile = match mode {
+            "rgb" => Some("display-p3"),
+            "gray" => Some("gray-gamma-2.2"),
+            "cmyk" => Some("coated-cmyk"),
+            _ => None,
+        };
+        if let Some(profile) = profile {
+            new["profile"] = json!(profile);
+        }
+        app.run("file.new", new).unwrap();
+        app.run("prefs.set", json!({"path": "fileHandling.defaultSaveFormat", "value": format})).unwrap();
+        {
+            let doc = Arc::make_mut(&mut app.session.active_mut().unwrap().doc);
+            doc.metadata.xmp = Some(r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:dc="http://purl.org/dc/elements/1.1/" dc:format="photocraft-check"/></rdf:RDF></x:xmpmeta>"#.into());
+            if text {
+                doc.metadata.text = vec![("Comment".into(), "kept".into())];
+            }
+        }
+        let before = app.session.active().unwrap().doc.clone();
+        assert_eq!(before.icc_profile.is_some(), profile.is_some(), "{case}: tagged with its profile");
+        menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
+        app.poll_file_dialog(&ctx, None);
+        let suggested = match open.borrow().as_slice() {
+            [(FileDialogRequest::Save { suggested }, _)] => suggested.clone(),
+            other => panic!("{case}: expected one save dialog, got {}", other.len()),
+        };
+        answer(&open, None);
+        app.poll_file_dialog(&ctx, None);
+        assert_eq!(suggested, format!("Shot.{ext}"), "{case}");
+        if ext == "psd" {
+            // Not over-cautious: the flat file would have lost something.
+            let flat = format!("Shot.{format}");
+            let r = photocraft_io::export(&before, &flat, &Default::default()).unwrap();
+            let back = photocraft_io::import(&flat, &r.bytes).unwrap().document;
+            let lost = !r.warnings.is_empty() || back.mode != before.mode || back.depth != before.depth || back.metadata.text != before.metadata.text;
+            assert!(lost, "{case}: a {format} would have kept everything, so PSD wasn't needed");
+            continue;
+        }
+        // Saved as Save As writes it (JPEG Options answered at Maximum quality).
+        let choices = crate::FormatChoices::from_params(&json!({"quality": 12}), "file.saveAs").unwrap();
+        let r = app.save_as_with(Some(suggested.clone()), choices).unwrap();
+        // JPEG's compression is the one loss, said as for any Save As to a JPEG; it is still the
+        // document's own file afterwards, as a JPEG chosen by hand is (`saves_copy`).
+        let warnings = if format == "jpg" { json!(["lossy compression"]) } else { json!([]) };
+        assert_eq!(r["warnings"], warnings, "{case}: nothing else converted or dropped");
+        let st = app.session.active().unwrap();
+        assert_eq!(st.path.as_deref(), Some(suggested.as_str()), "{case}: the file becomes the document's own");
+        assert!(!st.is_dirty(), "{case}: and the document is saved");
+        let bytes = files.borrow().iter().find(|(p, _)| *p == suggested).map(|(_, b)| b.clone()).unwrap();
+        let back = photocraft_io::import(&suggested, &bytes).unwrap().document;
+        assert_eq!((back.mode, back.depth), (before.mode, before.depth), "{case}: colour model and depth");
+        assert_eq!(back.icc_profile, before.icc_profile, "{case}: profile");
+        assert!(back.metadata.xmp.as_deref().is_some_and(|x| x.contains("photocraft-check")), "{case}: XMP");
+        assert_eq!(back.metadata.text, before.metadata.text, "{case}: text metadata");
+        assert!(back.channels.is_empty() && back.layers.len() == 1, "{case}");
+        let (a, b) = (before.layers[0].surface().unwrap().pixel(4, 4), back.layers[0].surface().unwrap().pixel(4, 4));
+        let tolerance = if format == "jpg" { 3.0 / 255.0 } else { 1e-6 };
+        assert!(a.iter().zip(&b).all(|(x, y)| (x - y).abs() <= tolerance), "{case}: pixels {a:?} → {b:?}");
+    }
+}
+
 #[test]
 fn transparent_png_keeps_its_format_until_its_lone_layer_becomes_smart() {
     let (mut app, open, written) = app();

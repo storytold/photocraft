@@ -181,6 +181,14 @@ pub(crate) fn plain_raster(doc: &Document) -> Option<&photocraft_doc::Layer> {
     }
 }
 
+/// Whether a flat file in format `ext` keeps the whole of `doc`: a [`plain_raster`] whose
+/// colour model, depth, profile, metadata and transparency the format stores as they are
+/// ([`photocraft_io::flat_holds`]).
+pub(crate) fn flat_keeps(doc: &Document, ext: &str) -> bool {
+    let Some(format) = photocraft_codecs::from_extension(ext) else { return false };
+    plain_raster(doc).is_some() && photocraft_io::flat_holds(doc, format)
+}
+
 /// Encode a document: (file bytes, warnings about anything approximated or dropped).
 pub type ExportFn = Box<dyn Fn(&Document, &str, &ExportSettings) -> Result<(Vec<u8>, Vec<String>), String>>;
 

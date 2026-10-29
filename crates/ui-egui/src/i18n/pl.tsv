@@ -4122,3 +4122,7 @@ curves	Smooth	Wygładź
 	Font size presets	Ustawienia wstępne rozmiaru czcionki
 	Leading presets	Ustawienia wstępne interlinii
 	Tracking presets	Ustawienia wstępne światła
+
+# Default save format (Preferences › File Handling)
+	Default save format	Domyślny format zapisu
+	TIFF	TIFF

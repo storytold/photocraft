@@ -1,5 +1,5 @@
 use super::{
-    DocId, ExportSettings, FormatChoices, PhotocraftApp, SAVE_OPTIONS_OPEN, SaveKind, Value, camera_raw_ui, dds_options_ui, file_open, jobs_ui,
+    DocId, ExportSettings, FormatChoices, PhotocraftApp, SAVE_OPTIONS_OPEN, SaveKind, Value, camera_raw_ui, dds_options_ui, file_open, flat_keeps, jobs_ui,
     jpeg_options_ui, json, notices, open_prompt, plain_raster, preset_files_ui, saved_revision_after_write, targa_options_ui, tiff_options_ui,
 };
 
@@ -189,6 +189,12 @@ impl PhotocraftApp {
                 || (e == "ora" && holds_ora)
                 || (flat && photocraft_codecs::from_extension(&e).is_some_and(|f| f.caps().write))
         });
+        // Anything else gets Preferences › File Handling › Default Save Format; a flat format
+        // only when it keeps the whole document (no layers, depth, colour model, profile,
+        // metadata, alpha channels or, for JPEG, transparency to lose), since such a save isn't a
+        // copy and marks the document saved.
+        let default_format = self.session.prefs().file_handling.default_save_format;
+        let default_ext = if default_format.is_flat() && !flat_keeps(&st.doc, default_format.name()) { "psd" } else { default_format.name() };
         let suggested = match &st.path {
             Some(p) if writable => p.clone(),
             p => {
@@ -196,7 +202,7 @@ impl PhotocraftApp {
                 let ext = match photocraft_engine::file_cmds::extension(source).as_deref() {
                     Some("pdn") => "pcraft",
                     Some("kra" | "krz") => "ora",
-                    _ => "psd",
+                    _ => default_ext,
                 };
                 std::path::Path::new(source).with_extension(ext).to_string_lossy().into_owned()
             }

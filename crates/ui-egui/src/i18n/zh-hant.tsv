@@ -3141,3 +3141,7 @@ curves	Smooth	平滑
 	Font size presets	字體大小預設
 	Leading presets	行距預設
 	Tracking presets	字距調整預設
+
+# Default save format (Preferences › File Handling)
+	Default save format	預設儲存格式
+	TIFF	TIFF

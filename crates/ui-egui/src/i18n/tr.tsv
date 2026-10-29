@@ -4229,3 +4229,7 @@ cameraData	Lens	Lens
 	Font size presets	Yazı tipi boyutu hazır ayarları
 	Leading presets	Satır aralığı hazır ayarları
 	Tracking presets	İzleme hazır ayarları
+
+# Default save format (Preferences › File Handling)
+	Default save format	Varsayılan kaydetme biçimi
+	TIFF	TIFF

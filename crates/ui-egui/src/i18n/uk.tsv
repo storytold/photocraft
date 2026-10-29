@@ -4215,3 +4215,7 @@ curves	Smooth	Згладити
 	Font size presets	Набори розмірів шрифту
 	Leading presets	Набори інтерліньяжу
 	Tracking presets	Набори трекінгу
+
+# Default save format (Preferences › File Handling)
+	Default save format	Формат збереження за замовчуванням
+	TIFF	TIFF

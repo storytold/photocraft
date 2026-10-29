@@ -4261,3 +4261,7 @@ curves	Smooth	Vloeiend maken
 	Font size presets	Voorinstellingen lettergrootte
 	Leading presets	Voorinstellingen interlinie
 	Tracking presets	Voorinstellingen spatiëring
+
+# Default save format (Preferences › File Handling)
+	Default save format	Standaard opslagindeling
+	TIFF	TIFF

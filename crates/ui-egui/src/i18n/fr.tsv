@@ -4543,3 +4543,7 @@ shape	Appearance	Apparence
 	Font size presets	Tailles de police prédéfinies
 	Leading presets	Interlignages prédéfinis
 	Tracking presets	Approches prédéfinies
+
+# Default save format (Preferences › File Handling)
+	Default save format	Format d'enregistrement par défaut
+	TIFF	TIFF

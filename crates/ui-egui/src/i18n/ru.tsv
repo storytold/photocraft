@@ -4704,3 +4704,7 @@ shape	Appearance	Оформление
 	Font size presets	Наборы размеров шрифта
 	Leading presets	Наборы интерлиньяжа
 	Tracking presets	Наборы трекинга
+
+# Default save format (Preferences › File Handling)
+	Default save format	Формат сохранения по умолчанию
+	TIFF	TIFF

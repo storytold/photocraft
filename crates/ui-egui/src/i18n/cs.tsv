@@ -4251,3 +4251,7 @@ cameraRaw	Dehaze	Odstranění oparu
 	Font size presets	Předvolby velikosti písma
 	Leading presets	Předvolby prokladu
 	Tracking presets	Předvolby prostrkání
+
+# Default save format (Preferences › File Handling)
+	Default save format	Výchozí formát ukládání
+	TIFF	TIFF

@@ -3524,3 +3524,7 @@ curves	Smooth	Haluskan
 	Font size presets	Preset ukuran font
 	Leading presets	Preset leading
 	Tracking presets	Preset tracking
+
+# Default save format (Preferences › File Handling)
+	Default save format	Format penyimpanan default
+	TIFF	TIFF

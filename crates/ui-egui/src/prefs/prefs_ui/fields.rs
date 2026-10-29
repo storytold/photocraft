@@ -97,6 +97,9 @@ pub(super) fn humanize(key: &str) -> String {
 pub(super) fn choice_label(v: &str) -> String {
     match v {
         "exr" => "EXR".into(),
+        // File Handling › Default Save Format.
+        "pcraft" => "PhotoCraft".into(),
+        "tif" => "TIFF".into(),
         "cm" => "Centimeters".into(),
         "mm" => "Millimeters".into(),
         "75" | "80" | "85" | "90" | "95" | "100" | "105" | "110" | "115" | "120" | "125" | "150" | "175" | "200" | "250" | "300" => format!("{v}%"),
