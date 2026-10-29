@@ -1,9 +1,5 @@
 use super::paths::{file_name, read_file, stem, template_name};
-use super::{
-    Affine, Arc, Document, EngineError, Layer, LayerContent, PixelFormat, Resample, Result, Session, SmartObject, SmartSource, Value, f64_param,
-    flattened_checked, json, resize_surface, str_param, translate_surface,
-};
-use crate::jobs::JobCtx;
+use super::{Arc, Document, EngineError, Layer, LayerContent, PixelFormat, PlaceSteps, Result, Session, Value, json, str_param};
 
 pub(crate) fn import(name: &str, bytes: &[u8]) -> Result<Document> {
     import_result(name, bytes).map(|r| r.document)
@@ -157,31 +153,33 @@ pub const PLACE_EMBEDDED: &str = "Place Embedded";
 /// lands as a plain pixel layer instead (an explicit `"smartObject": false` asks for one).
 ///
 /// The decoding and resampling are a background job when the command was started with
-/// [`Session::start`] (see [`crate::jobs`]); inline otherwise. The layer is inserted by the apply
-/// step on the calling thread, as one undo step.
+/// [`Session::start`] (see [`crate::jobs`]): on a worker thread, or where there are none (the web
+/// build) a slice per frame on the calling thread ([`PlaceSteps`]); inline otherwise. The layer is
+/// inserted by the apply step on the calling thread, as one undo step.
 pub fn place_bytes(s: &mut Session, name: &str, bytes: Vec<u8>, linked: Option<String>, p: &Value) -> Result<Value> {
     let input = PlaceInput::new(s, name, bytes, linked, p)?;
     let label = input.job_label();
-    crate::jobs::run(s, &label, true, move |ctx| prepare_place(input, ctx), apply_place)
+    crate::jobs::run_stepped(s, &label, true, PlaceSteps::new(input, s.cooperative_jobs()), apply_place)
 }
 
-/// Everything a place reads from the session, taken up front so [`prepare_place`] can run on a
+/// Everything a place reads from the session, taken up front so [`PlaceSteps`] can run on a
 /// worker that never sees the [`Session`].
 pub(crate) struct PlaceInput {
-    name: String,
-    bytes: Vec<u8>,
-    linked: Option<String>,
-    params: Value,
-    canvas: (f64, f64),
-    fmt: PixelFormat,
-    opts: photocraft_io::ImportOptions,
+    pub(super) name: String,
+    /// Shared with the decoder and the embedded source, so the bytes exist once.
+    pub(super) bytes: Arc<Vec<u8>>,
+    pub(super) linked: Option<String>,
+    pub(super) params: Value,
+    pub(super) canvas: (f64, f64),
+    pub(super) fmt: PixelFormat,
+    pub(super) opts: photocraft_io::ImportOptions,
     /// Preferences ▸ General ▸ Resize Image During Place, unless the params say otherwise.
-    fit: bool,
+    pub(super) fit: bool,
     /// Preferences ▸ General ▸ Always Create Smart Objects When Placing, unless the params say
     /// otherwise. A linked place is always a smart object.
-    smart: bool,
+    pub(super) smart: bool,
     /// The document as the job sees it, for rendering a vector source at its placement scale.
-    doc: Arc<Document>,
+    pub(super) doc: Arc<Document>,
 }
 
 impl PlaceInput {
@@ -200,7 +198,7 @@ impl PlaceInput {
             smart: linked.is_some() || p.get("smartObject").and_then(Value::as_bool).unwrap_or(prefs.general.always_create_smart_objects_when_placing),
             doc: Arc::clone(&d.doc),
             params: p.clone(),
-            bytes,
+            bytes: Arc::new(bytes),
             linked,
         })
     }
@@ -218,73 +216,13 @@ impl PlaceInput {
 
 /// A place decoded, flattened and fitted, ready to be inserted by [`apply_place`].
 pub(crate) struct Prepared {
-    content: LayerContent,
-    layer_name: String,
+    pub(super) content: LayerContent,
+    pub(super) layer_name: String,
     /// The history step's name.
-    label: &'static str,
-    scale: f64,
-    bounds: [f64; 4],
-    smart: bool,
-}
-
-/// The heavy part of a place: decode, flatten, resize and translate (and render a vector source at
-/// its placement scale). Touches no [`Session`], so it can run on a worker; `ctx` reports progress
-/// and stops it between stages when cancelled.
-pub(crate) fn prepare_place(input: PlaceInput, ctx: &JobCtx) -> Result<Prepared> {
-    let PlaceInput { name, bytes, linked, params: p, canvas: (cw, ch), fmt, opts, fit, smart, doc } = input;
-    let vector = photocraft_io::svg::is_svg(&bytes);
-    let imported = ctx.stage(0.0, 0.6, "Decoding", |ctl| photocraft_io::import_with_options_and_interrupt(&name, &bytes, &opts, ctl)).map_err(|e| match e {
-        photocraft_io::IoError::Cancelled => EngineError::Cancelled,
-        e => EngineError::Other(format!("{name}: {e}")),
-    })?;
-    if imported.preview_only {
-        return Err(EngineError::Other(format!(
-            "{name}: only this Affinity file's embedded preview could be read; open it with File › Open to see the warning, or export PSD or PNG from Affinity before using it here"
-        )));
-    }
-    ctx.check()?;
-    let src = imported.document;
-    let (w, h) = (src.size.width as f64, src.size.height as f64);
-    let scale = match f64_param(&p, "scale") {
-        Some(k) => (k / 100.0).max(1e-4),
-        None if fit && (w > cw || h > ch) => (cw / w).min(ch / h),
-        None => 1.0,
-    };
-    let center = match p.get("center").and_then(Value::as_array) {
-        Some(c) if c.len() == 2 => (c[0].as_f64().unwrap_or(cw / 2.0), c[1].as_f64().unwrap_or(ch / 2.0)),
-        _ => (cw / 2.0, ch / 2.0),
-    };
-    let (dx, dy) = ((center.0 - w * scale / 2.0).round(), (center.1 - h * scale / 2.0).round());
-    ctx.progress(0.6, "Flattening");
-    let mut px = flattened_checked(&src, fmt, "file.place")?;
-    drop(src);
-    ctx.check()?;
-    if (scale - 1.0).abs() > 1e-9 {
-        ctx.progress(0.7, "Resizing");
-        px = resize_surface(&px, scale, scale, Resample::Bicubic);
-        ctx.check()?;
-    }
-    let px = translate_surface(&px, dx as i32, dy as i32);
-    let label = if linked.is_some() { "Place Linked" } else { PLACE_EMBEDDED };
-    let content = if smart {
-        let source = match linked {
-            Some(path) => SmartSource::Linked { path },
-            None => SmartSource::Embedded { file_name: file_name(&name), bytes: Arc::new(bytes) },
-        };
-        let mut so = SmartObject::new(source, Affine { m: [scale, 0.0, 0.0, scale, dx, dy] }, Some(px));
-        // A vector source (SVG) renders at its placement scale instead of as a resampled raster.
-        if vector {
-            ctx.progress(0.9, "Rendering");
-            ctx.check()?;
-            if let Some(sharp) = crate::smart_cmds::render(&doc, &so)? {
-                so.cache = Some(sharp);
-            }
-        }
-        LayerContent::Smart(so)
-    } else {
-        LayerContent::Raster(px)
-    };
-    Ok(Prepared { content, layer_name: stem(&name), label, scale, bounds: [dx, dy, dx + w * scale, dy + h * scale], smart })
+    pub(super) label: &'static str,
+    pub(super) scale: f64,
+    pub(super) bounds: [f64; 4],
+    pub(super) smart: bool,
 }
 
 /// Insert the prepared layer as one undo step and report the place. Runs on the session's thread.

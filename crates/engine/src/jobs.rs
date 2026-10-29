@@ -207,7 +207,8 @@ fn now_ms() -> f64 {
     START.get_or_init(web_time::Instant::now).elapsed().as_secs_f64() * 1000.0
 }
 
-/// How much of a frame [`Session::poll_jobs`] gives a [`StepWork`] job.
+/// How much of a frame [`Session::poll_jobs`] gives a [`StepWork`] job, unless
+/// [`Session::set_job_step_budget`] says otherwise.
 const STEP_BUDGET: std::time::Duration = std::time::Duration::from_millis(8);
 
 /// A deadline no job reaches, for running [`StepWork`] to the end in one go.
@@ -337,6 +338,8 @@ pub struct Jobs {
     /// No worker threads: [`StepWork`] jobs are stepped by [`Session::poll_jobs`], everything else
     /// runs inline. On for wasm; see [`Session::set_cooperative_jobs`].
     cooperative: bool,
+    /// How long [`Session::poll_jobs`] runs a cooperative job per call.
+    step_budget: std::time::Duration,
 }
 
 // Derivable on a desktop, where `cooperative` starts off; wasm starts it on.
@@ -354,6 +357,7 @@ impl Default for Jobs {
             draining: Vec::new(),
             inline: None,
             cooperative: cfg!(target_arch = "wasm32"),
+            step_budget: STEP_BUDGET,
         }
     }
 }
@@ -671,15 +675,17 @@ impl Session {
     /// insert the layer as one undo step when [`Session::poll_jobs`] applies it. `name` names the
     /// layer and the file; `params` are the command's (`scale`, `center`, `fit`, `smartObject`).
     /// The job's result is the command's: `{layer, scale, bounds, smartObject}`. The active
-    /// document is locked meanwhile, so this is refused while another job runs on it. Runs inline
-    /// on wasm.
+    /// document is locked meanwhile, so this is refused while another job runs on it. On wasm (and
+    /// in a [cooperative](Session::set_cooperative_jobs) session) it is not a worker's job but
+    /// one [`Session::poll_jobs`] runs a slice of per call.
     pub fn start_place_bytes(&mut self, name: &str, bytes: Vec<u8>, linked: Option<String>, params: Value) -> Result<Started> {
         let input = crate::file_cmds::PlaceInput::new(self, name, bytes, linked, &params)?;
         let (command, label) = (input.command(), input.job_label());
         if let Some(conflict) = self.job_conflict(command, true) {
             return Err(EngineError::Other(conflict));
         }
-        self.start_job(command, json!({"name": name}), &label, true, move |ctx| crate::file_cmds::prepare_place(input, ctx), crate::file_cmds::apply_place)
+        let work = crate::file_cmds::PlaceSteps::new(input, self.cooperative_jobs());
+        self.start_job_stepped(command, json!({"name": name}), &label, true, work, crate::file_cmds::apply_place)
     }
 
     /// Decodes a file in a job and optionally holds damaged PSD content for
@@ -809,6 +815,13 @@ impl Session {
         self.jobs.cooperative
     }
 
+    /// How long one [`Session::poll_jobs`] runs a cooperative job (8 ms by default, a share of a
+    /// frame). A slice always does one unit of work, so zero makes every poll do just that: tests
+    /// use it to count polls without depending on the machine's speed.
+    pub fn set_job_step_budget(&mut self, budget: std::time::Duration) {
+        self.jobs.step_budget = budget;
+    }
+
     /// Turn [`Session::cooperative_jobs`] on or off. Jobs already running keep running as they
     /// started.
     pub fn set_cooperative_jobs(&mut self, on: bool) {
@@ -821,6 +834,7 @@ impl Session {
     pub fn poll_jobs(&mut self) -> Vec<JobEvent> {
         let mut i = 0;
         let mut stepped = false;
+        let budget = self.jobs.step_budget;
         while i < self.jobs.running.len() {
             let Some(job) = self.jobs.running.get_mut(i) else { break };
             let finished = match &job.rx {
@@ -834,7 +848,7 @@ impl Session {
                 // One cooperative job gets the frame's budget; any others wait for the next poll.
                 None if !stepped => {
                     stepped = true;
-                    job.step(web_time::Instant::now() + STEP_BUDGET).transpose()
+                    job.step(web_time::Instant::now() + budget).transpose()
                 }
                 None => None,
             };

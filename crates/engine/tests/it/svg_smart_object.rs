@@ -100,3 +100,45 @@ fn an_svg_placed_as_a_job_is_as_sharp_as_the_inline_place() {
     let inline_doc = inline.active().unwrap().doc.clone();
     assert_eq!(surf.read_region(region), inline_doc.layers.last().unwrap().surface().unwrap().read_region(region), "same pixels as the inline place");
 }
+
+/// With no worker threads (the web build) an SVG place is stepped a poll at a time, and renders
+/// at its placement scale like the inline place does.
+#[test]
+fn an_svg_placed_in_steps_is_as_sharp_as_the_inline_place() {
+    use photocraft_engine::jobs::{JobOutcome, Started};
+    let params = json!({"scale": 1000});
+    let new_doc = || {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 400, "height": 400, "background": "white"})).unwrap();
+        s
+    };
+    let mut inline = new_doc();
+    let want = photocraft_engine::file_cmds::place_bytes(&mut inline, "logo.svg", SVG.as_bytes().to_vec(), None, &params).unwrap();
+
+    let mut s = new_doc();
+    s.set_cooperative_jobs(true);
+    s.set_job_step_budget(std::time::Duration::ZERO);
+    let Started::Job(id) = s.start_place_bytes("logo.svg", SVG.as_bytes().to_vec(), None, params).unwrap() else { panic!("expected a job") };
+    let mut polls = 0;
+    let event = loop {
+        polls += 1;
+        assert!(polls < 1000, "the place never ended");
+        if let Some(e) = s.poll_jobs().into_iter().find(|e| e.id == id) {
+            break e;
+        }
+    };
+    assert!(polls > 1, "{polls}");
+    let JobOutcome::Done(mut got) = event.outcome else { panic!("{:?}", event.outcome) };
+    let mut want = want;
+    assert!(got.as_object_mut().and_then(|o| o.remove("layer")).is_some() && want.as_object_mut().and_then(|o| o.remove("layer")).is_some());
+    assert_eq!(got, want);
+    let doc = s.active().unwrap().doc.clone();
+    let layer = doc.layers.last().unwrap();
+    assert!(matches!(layer.content, LayerContent::Smart(_)));
+    let surf = layer.surface().expect("rendered");
+    assert!(alpha(surf, 200, 148) < 0.01 && alpha(surf, 200, 151) > 0.99, "a pixel-exact top edge");
+    assert!(red(surf, 200, 192) < 0.02, "the thin line is a crisp band: {}", red(surf, 200, 192));
+    let region = Rect::new(90, 140, 310, 260);
+    let inline_doc = inline.active().unwrap().doc.clone();
+    assert_eq!(surf.read_region(region), inline_doc.layers.last().unwrap().surface().unwrap().read_region(region), "same pixels as the inline place");
+}
