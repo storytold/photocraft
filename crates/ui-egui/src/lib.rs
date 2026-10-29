@@ -30,6 +30,8 @@ pub mod links;
 pub mod menu_catalog;
 pub mod menus;
 pub mod monitor_status;
+#[cfg(network_print)]
+mod network_glue;
 pub mod notices;
 pub mod panels;
 pub mod preset_files_ui;
@@ -471,6 +473,9 @@ pub struct PhotocraftApp {
     /// Selection outline cache: (doc, revision, segments).
     /// Live filter preview (proxy document with the filter applied).
     pub(crate) filter_preview: Option<filter_dialog::FilterPreview>,
+    /// Print > Network printer: the destination's state, workers and the tracked print (`network_glue`).
+    #[cfg(network_print)]
+    pub(crate) net_print: network_glue::NetTasks,
     pub(crate) smart_filter_targets: smart_filter_dialog::Targets,
     #[cfg(not(target_arch = "wasm32"))]
     filter_preview_worker: crate::dialogs::filter_preview_worker::Worker,

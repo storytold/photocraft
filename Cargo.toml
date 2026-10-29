@@ -10,7 +10,8 @@ license = "MIT OR Apache-2.0"
 rust-version = "1.95"
 
 [workspace.dependencies]
-craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "92d392cff132eaf53e13afff77f38b5c11b73aa0", features = ["serde"] }
+# Shared frontend components; the network-printer destination (`printing::network`) is storytold/craft-libs#112 until it merges, then pin an immutable revision.
+craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "refs/pull/112/head", features = ["serde"] }
 # internal
 photocraft-geom = { path = "crates/geom" }
 photocraft-color = { path = "crates/color" }
@@ -37,9 +38,12 @@ photocraft-ui-egui = { path = "crates/ui-egui" }
 photocraft-testkit = { path = "crates/testkit" }
 photocraft-tablet = { path = "crates/tablet" }
 photocraft-ipp = { path = "crates/ipp" }
+photocraft-print = { path = "crates/print" }
 
 # external
-craft-print = { git = "https://github.com/storytold/craft-libs", rev = "92d392cff132eaf53e13afff77f38b5c11b73aa0" }
+# Shared print backends and registry (storytold/craft-libs#116: WS-Print, IPP, tracked jobs) until it merges. The `wsd` and `ipp` features are chosen by
+# photocraft-print's `network-print` feature, so a build without it has the spooler only.
+craft-print = { git = "https://github.com/storytold/craft-libs", rev = "refs/pull/116/head", default-features = false }
 craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "92d392cff132eaf53e13afff77f38b5c11b73aa0" }
 craft-jpeg = { git = "https://github.com/storytold/craft-libs", rev = "92d392cff132eaf53e13afff77f38b5c11b73aa0" }
 craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "92d392cff132eaf53e13afff77f38b5c11b73aa0", features = ["egui"] }

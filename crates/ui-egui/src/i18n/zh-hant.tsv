@@ -3019,6 +3019,77 @@ curves	Smooth	平滑
 	Increase Brush Size	放大筆刷大小
 	Decrease Brush Hardness	降低筆刷硬度
 	Increase Brush Hardness	提高筆刷硬度
+
+# Network printer destination and its print status (WS-Print and IPP). Machine-drafted by Claude; not reviewed by a native speaker.
+	Cancel print	取消列印
+	Ask the printer to cancel this print	要求印表機取消此列印
+	Retry	重試
+	Send this print again as a new attempt (check the printer first if it says so)	以新的嘗試再次傳送此列印（如有提示，請先檢查印表機）
+	Reconcile	核對
+	Look at the printer's job lists (reads only) for a job from the earlier attempt	在印表機的工作清單中尋找先前嘗試的工作（唯讀）
+	Accept found job	採用找到的工作
+	Follow the job the printer already has instead of sending again	追蹤印表機已有的工作，而不是再次傳送
+	Check now	立即檢查
+	Read the job's status now	立即讀取工作狀態
+	Printer address:	印表機位址：
+	Only IP addresses on this network are accepted (private, link-local or loopback), not host names.	僅接受此網路上的 IP 位址（私人、連結本機或回送），不接受主機名稱。
+	Query printer	查詢印表機
+	Asking the printer…	正在詢問印表機…
+	Query the printer first to see what it supports.	請先查詢印表機，以了解其支援的設定。
+	Printer status: {state}	印表機狀態：{state}
+	Reasons: {reasons}	原因：{reasons}
+	The printer accepts none of the formats this document can be sent in	印表機不接受此文件可傳送的任何格式
+	Copies:	份數：
+	Two-sided:	雙面：
+	Flip on long edge	沿長邊翻轉
+	Flip on short edge	沿短邊翻轉
+	Printer orientation:	印表機方向：
+	Reverse portrait	反向直向
+	Reverse landscape	反向橫向
+	Quality:	品質：
+	Draft	草稿
+	Colour:	色彩：
+	Colour	彩色
+	This printer prints one copy at a time.	此印表機一次只列印一份。
+	This printer only prints one-sided.	此印表機只能單面列印。
+	This printer does not take an orientation setting.	此印表機不接受方向設定。
+	This printer does not take a quality setting.	此印表機不接受品質設定。
+	This printer only prints in grayscale.	此印表機只能以灰階列印。
+	This printer does not take a resolution setting.	此印表機不接受解析度設定。
+	Not confirmed by the printer.	未經印表機確認。
+	I confirm sending this document to this printer	我確認將此文件傳送到此印表機
+	Sending to {printer}…	正在傳送到 {printer}…
+	Canceling…	正在取消…
+	Accepted by {printer}	{printer} 已接受
+	Waiting in the printer's queue	正在印表機佇列中等候
+	Held by the printer	被印表機保留
+	The printer is printing it	印表機正在列印
+	The printer paused the job; it needs attention	印表機已暫停工作，需要處理
+	Sheets printed: {n}	已列印張數：{n}
+	Sheets printed: {done} of {total}	已列印張數：{done}/{total}
+	Printed with warnings	已列印，但有警告
+	Printed with errors	已列印，但有錯誤
+	The job was canceled	工作已取消
+	The printer stopped the job	印表機已停止工作
+	The printer no longer lists the job; it most likely finished	印表機不再列出該工作，很可能已完成
+	Still printing; the job continues on the printer	仍在列印，工作在印表機上繼續
+	Sent. The printer can't say whether it printed.	已傳送。印表機無法告知是否已列印。
+	The printer may have received the document. Check the printer before sending again.	印表機可能已收到文件。再次傳送前請先檢查印表機。
+	The printer address was refused	印表機位址遭拒絕
+	Couldn't reach the printer	無法連線到印表機
+	The printer's reply couldn't be understood	無法理解印表機的回覆
+	The printer refused the request	印表機拒絕了要求
+	The printer doesn't support this setting	印表機不支援此設定
+	The document couldn't be prepared	無法準備文件
+	A setting isn't valid	某項設定無效
+	The print job stopped unexpectedly	列印工作意外停止
+	Print status	列印狀態
+	Network printer…	網路印表機…
+	network	網路
+	Use the printer's own paper if it lacks this one	如果印表機沒有此紙張，則使用印表機自己的紙張
+	Network printer	網路印表機
+	Query the printer and tick the confirmation first.	請先查詢印表機並勾選確認。
+	Sending to the network printer…	正在傳送到網路印表機…
 	Demosaic	去馬賽克
 	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	如何填補相機彩色濾鏡陣列的馬賽克。在開啟檔案時套用；預覽顯示開啟時所用的方法。
 	AHD (adaptive homogeneity)	AHD（自適應同質性）

@@ -4454,6 +4454,75 @@ shape	Appearance	Izgled
 	Increase Brush Size	Povećaj veličinu četkice
 	Decrease Brush Hardness	Smanji tvrdoću četkice
 	Increase Brush Hardness	Povećaj tvrdoću četkice
+
+# Network printer destination and its print status (WS-Print and IPP). Machine-drafted by Claude; not reviewed by a native speaker.
+	Cancel print	Otkaži štampanje
+	Ask the printer to cancel this print	Zatraži od štampača da otkaže ovo štampanje
+	Send this print again as a new attempt (check the printer first if it says so)	Pošalji ovo štampanje ponovo kao novi pokušaj (najpre proverite štampač ako to traži)
+	Reconcile	Uskladi
+	Look at the printer's job lists (reads only) for a job from the earlier attempt	Potraži u spiskovima poslova štampača posao iz ranijeg pokušaja (samo čitanje)
+	Accept found job	Prihvati pronađeni posao
+	Follow the job the printer already has instead of sending again	Prati posao koji štampač već ima umesto ponovnog slanja
+	Check now	Proveri sada
+	Read the job's status now	Pročitaj stanje posla sada
+	Printer address:	Adresa štampača:
+	Only IP addresses on this network are accepted (private, link-local or loopback), not host names.	Prihvataju se samo IP adrese na ovoj mreži (privatne, lokalne za vezu ili povratne), ne i imena hostova.
+	Query printer	Upitaj štampač
+	Asking the printer…	Upit štampaču…
+	Query the printer first to see what it supports.	Najpre uputite upit štampaču da vidite šta podržava.
+	Printer status: {state}	Stanje štampača: {state}
+	Reasons: {reasons}	Razlozi: {reasons}
+	The printer accepts none of the formats this document can be sent in	Štampač ne prihvata nijedan od formata u kojima se ovaj dokument može poslati
+	Copies:	Primerci:
+	Two-sided:	Dvostrano:
+	Flip on long edge	Okretanje po dužoj ivici
+	Flip on short edge	Okretanje po kraćoj ivici
+	Printer orientation:	Orijentacija na štampaču:
+	Reverse portrait	Obrnuto uspravno
+	Reverse landscape	Obrnuto položeno
+	Quality:	Kvalitet:
+	Colour:	Boja:
+	Colour	U boji
+	This printer prints one copy at a time.	Ovaj štampač štampa jedan po jedan primerak.
+	This printer only prints one-sided.	Ovaj štampač štampa samo jednostrano.
+	This printer does not take an orientation setting.	Ovaj štampač ne prihvata podešavanje orijentacije.
+	This printer does not take a quality setting.	Ovaj štampač ne prihvata podešavanje kvaliteta.
+	This printer only prints in grayscale.	Ovaj štampač štampa samo u nijansama sive.
+	This printer does not take a resolution setting.	Ovaj štampač ne prihvata podešavanje rezolucije.
+	Not confirmed by the printer.	Štampač nije potvrdio.
+	I confirm sending this document to this printer	Potvrđujem slanje ovog dokumenta na ovaj štampač
+	Sending to {printer}…	Slanje na {printer}…
+	Canceling…	Otkazivanje…
+	Accepted by {printer}	Prihvatio: {printer}
+	Waiting in the printer's queue	Čeka u redu štampača
+	Held by the printer	Štampač je zadržao posao
+	The printer is printing it	Štampač ga štampa
+	The printer paused the job; it needs attention	Štampač je pauzirao posao; potrebna je pažnja
+	Sheets printed: {n}	Odštampano listova: {n}
+	Sheets printed: {done} of {total}	Odštampano listova: {done} od {total}
+	Printed with warnings	Odštampano uz upozorenja
+	Printed with errors	Odštampano uz greške
+	The job was canceled	Posao je otkazan
+	The printer stopped the job	Štampač je zaustavio posao
+	The printer no longer lists the job; it most likely finished	Štampač više ne navodi posao; najverovatnije je završen
+	Still printing; the job continues on the printer	Štampanje traje; posao se nastavlja na štampaču
+	Sent. The printer can't say whether it printed.	Poslato. Štampač ne može da kaže da li je odštampano.
+	The printer may have received the document. Check the printer before sending again.	Štampač je možda primio dokument. Proverite štampač pre ponovnog slanja.
+	The printer address was refused	Adresa štampača je odbijena
+	Couldn't reach the printer	Štampač nije dostupan
+	The printer's reply couldn't be understood	Odgovor štampača nije razumljiv
+	The printer refused the request	Štampač je odbio zahtev
+	The printer doesn't support this setting	Štampač ne podržava ovo podešavanje
+	The document couldn't be prepared	Dokument nije mogao da se pripremi
+	A setting isn't valid	Neko podešavanje nije važeće
+	The print job stopped unexpectedly	Posao štampanja se neočekivano zaustavio
+	Print status	Stanje štampanja
+	Network printer…	Mrežni štampač…
+	network	mreža
+	Use the printer's own paper if it lacks this one	Koristi papir štampača ako nema ovaj
+	Network printer	Mrežni štampač
+	Query the printer and tick the confirmation first.	Najpre uputite upit štampaču i označite potvrdu.
+	Sending to the network printer…	Slanje na mrežni štampač…
 	Demosaic	Demozaikovanje
 	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Kako se popunjava mozaik filtera boja kamere. Primenjuje se pri otvaranju datoteke; pregled prikazuje metod kojim je datoteka otvorena.
 	AHD (adaptive homogeneity)	AHD (adaptivna homogenost)

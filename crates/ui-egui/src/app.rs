@@ -109,6 +109,8 @@ impl PhotocraftApp {
             proxy_uploaded: None,
             outline_cache: None,
             filter_preview: None,
+            #[cfg(network_print)]
+            net_print: Default::default(),
             smart_filter_targets: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             filter_preview_worker: Default::default(),

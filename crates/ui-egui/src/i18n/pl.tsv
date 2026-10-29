@@ -4011,6 +4011,76 @@ curves	Smooth	Wygładź
 	Increase Brush Size	Zwiększ rozmiar pędzla
 	Decrease Brush Hardness	Zmniejsz twardość pędzla
 	Increase Brush Hardness	Zwiększ twardość pędzla
+
+# Network printer destination and its print status (WS-Print and IPP). Machine-drafted by Claude; not reviewed by a native speaker.
+	Cancel print	Anuluj drukowanie
+	Ask the printer to cancel this print	Poproś drukarkę o anulowanie tego wydruku
+	Retry	Ponów
+	Send this print again as a new attempt (check the printer first if it says so)	Wyślij ten wydruk ponownie jako nową próbę (najpierw sprawdź drukarkę, jeśli o to prosi)
+	Reconcile	Uzgodnij
+	Look at the printer's job lists (reads only) for a job from the earlier attempt	Poszukaj na listach zadań drukarki zadania z wcześniejszej próby (tylko odczyt)
+	Accept found job	Przyjmij znalezione zadanie
+	Follow the job the printer already has instead of sending again	Śledź zadanie, które drukarka już ma, zamiast wysyłać ponownie
+	Check now	Sprawdź teraz
+	Read the job's status now	Odczytaj teraz stan zadania
+	Printer address:	Adres drukarki:
+	Only IP addresses on this network are accepted (private, link-local or loopback), not host names.	Akceptowane są tylko adresy IP w tej sieci (prywatne, link-local lub pętli zwrotnej), a nie nazwy hostów.
+	Query printer	Odpytaj drukarkę
+	Asking the printer…	Odpytywanie drukarki…
+	Query the printer first to see what it supports.	Najpierw odpytaj drukarkę, aby zobaczyć, co obsługuje.
+	Printer status: {state}	Stan drukarki: {state}
+	Reasons: {reasons}	Przyczyny: {reasons}
+	The printer accepts none of the formats this document can be sent in	Drukarka nie przyjmuje żadnego z formatów, w których można wysłać ten dokument
+	Copies:	Kopie:
+	Two-sided:	Dwustronnie:
+	Flip on long edge	Obracaj wzdłuż dłuższej krawędzi
+	Flip on short edge	Obracaj wzdłuż krótszej krawędzi
+	Printer orientation:	Orientacja w drukarce:
+	Reverse portrait	Odwrócona pionowa
+	Reverse landscape	Odwrócona pozioma
+	Quality:	Jakość:
+	Colour:	Kolor:
+	Colour	Kolorowy
+	This printer prints one copy at a time.	Ta drukarka drukuje jedną kopię naraz.
+	This printer only prints one-sided.	Ta drukarka drukuje tylko jednostronnie.
+	This printer does not take an orientation setting.	Ta drukarka nie przyjmuje ustawienia orientacji.
+	This printer does not take a quality setting.	Ta drukarka nie przyjmuje ustawienia jakości.
+	This printer only prints in grayscale.	Ta drukarka drukuje tylko w skali szarości.
+	This printer does not take a resolution setting.	Ta drukarka nie przyjmuje ustawienia rozdzielczości.
+	Not confirmed by the printer.	Niepotwierdzone przez drukarkę.
+	I confirm sending this document to this printer	Potwierdzam wysłanie tego dokumentu do tej drukarki
+	Sending to {printer}…	Wysyłanie do: {printer}…
+	Canceling…	Anulowanie…
+	Accepted by {printer}	Przyjęte przez: {printer}
+	Waiting in the printer's queue	Oczekuje w kolejce drukarki
+	Held by the printer	Wstrzymane przez drukarkę
+	The printer is printing it	Drukarka drukuje
+	The printer paused the job; it needs attention	Drukarka wstrzymała zadanie; wymaga uwagi
+	Sheets printed: {n}	Wydrukowane arkusze: {n}
+	Sheets printed: {done} of {total}	Wydrukowane arkusze: {done} z {total}
+	Printed with warnings	Wydrukowano z ostrzeżeniami
+	Printed with errors	Wydrukowano z błędami
+	The job was canceled	Zadanie zostało anulowane
+	The printer stopped the job	Drukarka zatrzymała zadanie
+	The printer no longer lists the job; it most likely finished	Drukarka nie wyświetla już zadania; najprawdopodobniej zostało ukończone
+	Still printing; the job continues on the printer	Nadal drukuje; zadanie jest kontynuowane w drukarce
+	Sent. The printer can't say whether it printed.	Wysłano. Drukarka nie potrafi powiedzieć, czy wydrukowano.
+	The printer may have received the document. Check the printer before sending again.	Drukarka mogła otrzymać dokument. Sprawdź drukarkę przed ponownym wysłaniem.
+	The printer address was refused	Adres drukarki został odrzucony
+	Couldn't reach the printer	Nie można połączyć się z drukarką
+	The printer's reply couldn't be understood	Nie można zrozumieć odpowiedzi drukarki
+	The printer refused the request	Drukarka odrzuciła żądanie
+	The printer doesn't support this setting	Drukarka nie obsługuje tego ustawienia
+	The document couldn't be prepared	Nie można przygotować dokumentu
+	A setting isn't valid	Ustawienie jest nieprawidłowe
+	The print job stopped unexpectedly	Zadanie drukowania nieoczekiwanie się zatrzymało
+	Print status	Stan drukowania
+	Network printer…	Drukarka sieciowa…
+	network	sieć
+	Use the printer's own paper if it lacks this one	Użyj papieru drukarki, jeśli nie ma tego
+	Network printer	Drukarka sieciowa
+	Query the printer and tick the confirmation first.	Najpierw odpytaj drukarkę i zaznacz potwierdzenie.
+	Sending to the network printer…	Wysyłanie do drukarki sieciowej…
 	Demosaic	Demozaikowanie
 	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Sposób uzupełniania mozaiki filtra barwnego aparatu. Stosowany przy otwieraniu pliku; podgląd pokazuje metodę, z którą plik został otwarty.
 	AHD (adaptive homogeneity)	AHD (adaptacyjna jednorodność)

@@ -7,8 +7,16 @@ license.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Network printing (WS-Print and IPP): the Print dialog's Network printer destination, its code and craft-print's
+# `wsd` and `ipp` backends. Web builds (wasm32) never have it: there is no socket to open (build.rs turns the
+# feature and the target into the `network_print` cfg).
+default = ["network-print"]
+network-print = ["photocraft-print/network-print"]
+
 [dependencies]
 craft-print = { workspace = true }
+photocraft-print = { workspace = true }
 craft-ui = { workspace = true }
 photocraft-geom = { workspace = true }
 photocraft-color = { workspace = true }
@@ -56,6 +64,8 @@ sys-locale = "=0.3.2"
 winsafe = { version = "=0.0.29", default-features = false, features = ["kernel", "dxgi"] }
 
 [dev-dependencies]
+# The in-process fake WS-Print and IPP printers for the network print tests (`craft_print::wsd::testing`).
+craft-print = { workspace = true, features = ["wsd", "ipp", "testing"] }
 # egui's own default fonts in tests: the oracle for egui_fonts.rs, and contexts made with
 # `Context::default()` (no install_fonts) can lay out text.
 egui = { workspace = true, features = ["default_fonts", "monochrome_emoji_fonts"] }

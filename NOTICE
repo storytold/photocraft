@@ -23,6 +23,15 @@ https://github.com/storytold/craft-fonts/blob/main/ATTRIBUTION.md (today BIZ UDP
 BIZ UDMincho; not the web build), under the SIL Open Font License 1.1. Their licence texts
 ship with the package as OFL-<family>.txt.
 
+Windows printing
+
+PhotoCraft's Windows builds print through craft-print (storytold/craft-libs), which uses winprint
+(https://github.com/ArcticLampyrid/winprint.rs; storytold's fork https://github.com/storytold/winprint.rs keeps its
+licence unchanged), BSD-3-Clause, Copyright (c) 2021 - 2024, alampy.com. The licence text is retained in
+licenses/winprint/LICENSE-BSD-3-Clause.txt: redistributions in source or binary form must reproduce that notice,
+the conditions and the disclaimer, and the names of the copyright holder and contributors may not be used to
+endorse products derived from it without written permission.
+
 The egui-icons font subset is embedded from epaint_default_fonts by crates/ui-egui/build.rs
 and registered in the native and web fallback stacks by crates/ui-egui/src/egui_fonts.rs.
 It is a subset of emoji-icon-font by John Slegers; the same upstream MIT license applies.

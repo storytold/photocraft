@@ -433,7 +433,7 @@ fn button_row(
     } else {
         let ok_label = ok_label(d);
         // Dialogs that need an input first (a preset name, a selection) grey OK out.
-        let can_ok = crate::crop_presets::can_confirm(app, fields) && crate::stack_dialog::can_confirm(fields);
+        let can_ok = crate::crop_presets::can_confirm(app, fields) && crate::stack_dialog::can_confirm(fields) && crate::file_ui::can_confirm(fields);
         let ok = DialogButton::new(ButtonRole::Default, ok_label, 84.0).enabled(can_ok);
         // Photoshop: holding Alt turns Cancel into Reset (the dialog stays open).
         // Dialogs opt in via `dialog_alt_reset::supported` (per marker).

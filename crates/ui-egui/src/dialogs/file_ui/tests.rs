@@ -652,6 +652,12 @@ fn save_as_pdf_browse_fills_the_output_from_a_save_dialog() {
     h.state_mut().run("file.new", json!({"width": 120, "height": 80, "name": "poster"})).unwrap();
     let id = open_print(h.state_mut());
     h.run_steps(3);
+    // The settings scroll (the dialog is taller than the window): bring Browse… into view and let the
+    // layout settle under the pointer before the click.
+    h.get_by_label("Browse…").scroll_to_me();
+    h.run_steps(3);
+    h.get_by_label("Browse…").hover();
+    h.run_steps(3);
     h.get_by_label("Browse…").click();
     h.run_steps(4);
     assert!(matches!(asked.borrow().as_slice(), [FileDialogRequest::Save { suggested }] if suggested.ends_with("poster.pdf")), "{:?}", asked.borrow());

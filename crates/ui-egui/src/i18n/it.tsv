@@ -4517,6 +4517,77 @@ shape	Appearance	Aspetto
 	{path}: the path is not valid Unicode; save under another name.	{path}: il percorso non è Unicode valido; salva con un altro nome.
 	{name} was changed by another app after it was opened or saved here.	{name} è stato modificato da un'altra app dopo essere stato aperto o salvato qui.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Sostituiscilo con questo documento, oppure annulla e usa File › Salva con nome per tenerli entrambi.
+
+# Network printer destination (WS-Print and IPP). Machine-drafted by Claude; not reviewed by a native speaker.
+	A setting isn't valid	Un'impostazione non è valida
+	Accepted by {printer}	Accettato da {printer}
+	Asking the printer…	Interrogazione della stampante…
+	Canceling…	Annullamento…
+	Colour	Colore
+	Colour:	Colore:
+	Copies:	Copie:
+	Couldn't reach the printer	Impossibile raggiungere la stampante
+	Flip on long edge	Capovolgi sul lato lungo
+	Flip on short edge	Capovolgi sul lato corto
+	Held by the printer	Trattenuto dalla stampante
+	I confirm sending this document to this printer	Confermo l'invio di questo documento a questa stampante
+	Network printer	Stampante di rete
+	Network printer…	Stampante di rete…
+	network	rete
+	Use the printer's own paper if it lacks this one	Usa la carta propria della stampante se non ha questa
+	Not confirmed by the printer.	Non confermato dalla stampante.
+	Only IP addresses on this network are accepted (private, link-local or loopback), not host names.	Sono accettati solo indirizzi IP di questa rete (privati, link-local o loopback), non nomi host.
+	Print status	Stato della stampa
+	Printed with errors	Stampato con errori
+	Printed with warnings	Stampato con avvisi
+	Printer address:	Indirizzo della stampante:
+	Printer orientation:	Orientamento della stampante:
+	Printer status: {state}	Stato della stampante: {state}
+	Quality:	Qualità:
+	Query printer	Interroga stampante
+	Query the printer and tick the confirmation first.	Interroga prima la stampante e spunta la conferma.
+	Query the printer first to see what it supports.	Interroga prima la stampante per vedere cosa supporta.
+	Reasons: {reasons}	Motivi: {reasons}
+	Reverse landscape	Orizzontale invertito
+	Reverse portrait	Verticale invertito
+	Sending to the network printer…	Invio alla stampante di rete…
+	Sending to {printer}…	Invio a {printer}…
+	Sent. The printer can't say whether it printed.	Inviato. La stampante non può dire se ha stampato.
+	Sheets printed: {done} of {total}	Fogli stampati: {done} di {total}
+	Sheets printed: {n}	Fogli stampati: {n}
+	Still printing; the job continues on the printer	Stampa ancora in corso; il lavoro continua sulla stampante
+	The document couldn't be prepared	Non è stato possibile preparare il documento
+	The job was canceled	Il lavoro è stato annullato
+	The print job stopped unexpectedly	Il lavoro di stampa si è interrotto in modo imprevisto
+	The printer accepts none of the formats this document can be sent in	La stampante non accetta nessuno dei formati in cui si può inviare questo documento
+	The printer address was refused	L'indirizzo della stampante è stato rifiutato
+	The printer doesn't support this setting	La stampante non supporta questa impostazione
+	The printer is printing it	La stampante lo sta stampando
+	The printer may have received the document. Check the printer before sending again.	La stampante potrebbe aver ricevuto il documento. Controlla la stampante prima di inviare di nuovo.
+	The printer no longer lists the job; it most likely finished	La stampante non elenca più il lavoro; molto probabilmente è terminato
+	The printer paused the job; it needs attention	La stampante ha messo in pausa il lavoro; richiede attenzione
+	The printer refused the request	La stampante ha rifiutato la richiesta
+	The printer stopped the job	La stampante ha interrotto il lavoro
+	The printer's reply couldn't be understood	La risposta della stampante non è stata compresa
+	This printer does not take a quality setting.	Questa stampante non supporta un'impostazione di qualità.
+	This printer does not take a resolution setting.	Questa stampante non supporta un'impostazione di risoluzione.
+	This printer does not take an orientation setting.	Questa stampante non supporta un'impostazione di orientamento.
+	This printer only prints in grayscale.	Questa stampante stampa solo in scala di grigi.
+	This printer only prints one-sided.	Questa stampante stampa solo su un lato.
+	This printer prints one copy at a time.	Questa stampante stampa una copia alla volta.
+	Two-sided:	Fronte/retro:
+	Waiting in the printer's queue	In attesa nella coda della stampante
+
+# Network printer destination and its print status (WS-Print and IPP). Machine-drafted by Claude; not reviewed by a native speaker.
+	Cancel print	Annulla stampa
+	Ask the printer to cancel this print	Chiedi alla stampante di annullare questa stampa
+	Send this print again as a new attempt (check the printer first if it says so)	Invia di nuovo questa stampa come nuovo tentativo (controlla prima la stampante se lo indica)
+	Reconcile	Riconcilia
+	Look at the printer's job lists (reads only) for a job from the earlier attempt	Cerca negli elenchi dei lavori della stampante un lavoro del tentativo precedente (sola lettura)
+	Accept found job	Accetta il lavoro trovato
+	Follow the job the printer already has instead of sending again	Segui il lavoro che la stampante ha già invece di inviarlo di nuovo
+	Check now	Controlla ora
+	Read the job's status now	Leggi ora lo stato del lavoro
 	Demosaic	Demosaicizzazione
 	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Come viene completato il mosaico del filtro colore della fotocamera. Si applica all'apertura del file; l'anteprima mostra il metodo con cui è stato aperto.
 	AHD (adaptive homogeneity)	AHD (omogeneità adattiva)

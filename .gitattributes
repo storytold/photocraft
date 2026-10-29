@@ -1,0 +1,3 @@
+# Files that `cargo xtask` regenerates and compares byte for byte: always LF, whatever core.autocrlf says
+# (a Windows checkout with autocrlf=true would otherwise look stale).
+docs/scorecard.md text eol=lf

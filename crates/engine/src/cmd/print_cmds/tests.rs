@@ -1183,6 +1183,161 @@ mod cups {
     }
 }
 
+// ---------- Grayscale and the queue's paper ----------
+
+#[test]
+fn grayscale_prints_gray_samples_with_rec_709_weights() {
+    let mut s = session("rgb", 8);
+    let dir = tmp("gray");
+    let colour = format!("{dir}/colour.pdf");
+    let gray = format!("{dir}/gray.pdf");
+    s.execute("file.print", json!({"output": colour, "send": false})).unwrap();
+    let r = s.execute("file.print", json!({"output": gray, "send": false, "grayscale": true})).unwrap();
+    assert_eq!(r["color"]["grayscale"], true);
+    let (_, _, cs, color_samples) = pdf_image(&std::fs::read(&colour).unwrap());
+    assert!(cs.contains("DeviceRGB") || cs.contains("ICCBased"), "{cs}");
+    assert_eq!(color_samples.len() % 3, 0);
+    let (w, h, cs, samples) = pdf_image(&std::fs::read(&gray).unwrap());
+    assert_eq!(cs, "/DeviceGray", "an RGB profile does not describe gray samples");
+    assert_eq!(samples.len(), (w * h) as usize);
+    let expect = luma709(0x33, 0x66, 0xcc);
+    assert!(samples.iter().all(|v| *v == expect), "{expect} vs {:?}", &samples[..4]);
+    // Rec. 709, not the average and not Rec. 601.
+    assert_eq!((luma709(255, 0, 0), luma709(0, 255, 0), luma709(0, 0, 255)), (54, 182, 18));
+    assert_eq!((luma709(0, 0, 0), luma709(255, 255, 255)), (0, 255));
+}
+
+#[test]
+fn a_gray_network_print_is_gray_in_the_pdf_and_the_raster() {
+    let s = session("rgb", 8);
+    let doc = s.active().unwrap().doc.as_ref().clone();
+    let colour = prepare_network_print(&doc, &json!({"paper": "a4"})).unwrap();
+    let gray = prepare_network_print(&doc, &json!({"paper": "a4", "grayscale": true})).unwrap();
+    assert_ne!(colour.pdf, gray.pdf);
+    assert!(String::from_utf8_lossy(&gray.pdf).contains("/DeviceGray"));
+    assert!(!String::from_utf8_lossy(&colour.pdf).contains("/DeviceGray"));
+    let page = gray.raster_pages((72, 72), true).unwrap().remove(0);
+    let centre = (page.height as usize / 2 * page.width as usize + page.width as usize / 2) * 3;
+    let px = &page.pixels[centre..centre + 3];
+    assert!(px[0] == px[1] && px[1] == px[2], "a gray page is gray even in an RGB raster: {px:?}");
+}
+
+#[test]
+fn a_gray_cmyk_print_is_one_channel_too() {
+    let img = PrintImage { width: 2, height: 1, channels: 4, data: vec![0, 0, 0, 0, 0, 0, 0, 255], icc: None };
+    let g = into_gray(img);
+    assert_eq!((g.channels, g.data), (1, vec![255, 0]));
+}
+
+#[test]
+fn the_local_job_asks_for_the_exact_sheet_and_the_gray_hint() {
+    let job = local_job(&json!({"printer": "Office", "grayscale": true}), "Doc", 2);
+    assert_eq!((job.scaling, job.grayscale, job.copies, job.printer.as_deref()), (craft_print::Scaling::Exact, true, 2, Some("Office")));
+    let job = local_job(&json!({}), "Doc", 1);
+    assert_eq!((job.scaling, job.grayscale, job.printer), (craft_print::Scaling::Exact, false, None));
+}
+
+const NO_PAPER: &str = "Office has no 11.69 × 8.27 inch paper; choose a paper size it has, or add this one in its driver";
+
+#[test]
+fn a_chosen_paper_the_queue_lacks_is_refused_plainly_unless_the_person_allowed_its_own() {
+    use craft_print::Scaling;
+    let seen = std::cell::RefCell::new(Vec::<Scaling>::new());
+    let job = local_job(&json!({"printer": "Office"}), "Doc", 1);
+    let mut lacks = |_: &[u8], j: &craft_print::Job| {
+        seen.borrow_mut().push(j.scaling);
+        if j.scaling == Scaling::Exact { Err(NO_PAPER.to_string()) } else { Ok("spooled on its own paper".to_string()) }
+    };
+    let refused = spool_with_paper_fallback(b"%PDF", &job, false, &mut lacks).unwrap_err().to_string();
+    assert!(refused.contains("has no 11.69") && refused.contains("own paper"), "{refused}");
+    assert_eq!(*seen.borrow(), [Scaling::Exact], "an explicit paper is not silently replaced");
+    seen.borrow_mut().clear();
+    let ok = spool_with_paper_fallback(b"%PDF", &job, true, &mut lacks).unwrap();
+    assert_eq!(ok, "spooled on its own paper");
+    assert_eq!(*seen.borrow(), [Scaling::Exact, Scaling::ShrinkToFit], "first the chosen paper, then the queue's own");
+}
+
+#[test]
+fn only_a_missing_paper_is_retried_and_a_listed_paper_stays_exact() {
+    use craft_print::Scaling;
+    let job = local_job(&json!({}), "Doc", 1);
+    let mut calls = 0;
+    let mut refuses = |_: &[u8], _: &craft_print::Job| {
+        calls += 1;
+        Err::<String, String>("the printer is not available: Office".to_string())
+    };
+    assert!(spool_with_paper_fallback(b"%PDF", &job, true, &mut refuses).is_err());
+    assert_eq!(calls, 1, "another failure is not a reason to change the paper");
+    let mut scalings = Vec::new();
+    let mut has_it = |_: &[u8], j: &craft_print::Job| {
+        scalings.push(j.scaling);
+        Ok::<String, String>("spooled".into())
+    };
+    spool_with_paper_fallback(b"%PDF", &job, true, &mut has_it).unwrap();
+    assert_eq!(scalings, [Scaling::Exact]);
+    assert!(is_missing_paper(NO_PAPER) && !is_missing_paper("queue refused"));
+}
+
+#[test]
+fn a_custom_size_page_goes_on_the_queues_own_paper_when_allowed_and_is_refused_when_not() {
+    use craft_print::Scaling;
+    let s = session("rgb", 8);
+    let doc = s.active().unwrap().doc.as_ref().clone();
+    let dir = tmp("custom-size");
+    // 16:9 at 13.33 x 7.50 in: a size no paper tray lists. `output` keeps the Windows driver route out of it.
+    let base = |extra: Value| {
+        let mut p = json!({"printer": "Office", "paper": [959.76, 540.0], "output": format!("{dir}/slide.pdf"), "send": true, "scaleToFit": true});
+        p.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        p
+    };
+    let seen = std::cell::RefCell::new(Vec::<(Scaling, bool)>::new());
+    let mut queue = |pdf: &[u8], j: &craft_print::Job| {
+        assert!(pdf.starts_with(b"%PDF-"));
+        seen.borrow_mut().push((j.scaling, j.grayscale));
+        if j.scaling == Scaling::Exact {
+            Err("Office has no 13.33 × 7.50 inch paper; choose a paper size it has, or add this one in its driver".to_string())
+        } else {
+            Ok("queued".to_string())
+        }
+    };
+    let refused = render_and_spool_via(&doc, &base(json!({})), "file.print", None, Some(&mut queue)).unwrap_err().to_string();
+    assert!(refused.contains("has no 13.33") && refused.contains("own paper"), "{refused}");
+    assert_eq!(*seen.borrow(), [(Scaling::Exact, false)]);
+    seen.borrow_mut().clear();
+    let r = render_and_spool_via(&doc, &base(json!({"paperFallback": true, "grayscale": true})), "file.print", None, Some(&mut queue)).unwrap();
+    assert_eq!((r["sent"].clone(), r["spooler"].clone()), (json!(true), json!("queued")));
+    assert_eq!(*seen.borrow(), [(Scaling::Exact, true), (Scaling::ShrinkToFit, true)], "the chosen sheet first, then the queue's own paper; gray both times");
+    // The PDF the person chose to keep is on the sheet they asked for either way.
+    let pdf = std::fs::read(format!("{dir}/slide.pdf")).unwrap();
+    assert!(String::from_utf8_lossy(&pdf).contains("/MediaBox [0 0 959.76 540.00]"));
+}
+
+/// Driver settings as the Windows dialog stores them: a bare 156-byte DEVMODEW (no private part),
+/// in colour, with only the paper size marked valid.
+fn windows_devmode() -> craft_print::rgb::DevMode {
+    let mut b = vec![0u8; 156];
+    b[68..70].copy_from_slice(&156u16.to_le_bytes());
+    b[72..76].copy_from_slice(&0x0002u32.to_le_bytes());
+    b[92..94].copy_from_slice(&2i16.to_le_bytes());
+    craft_print::rgb::DevMode::from_bytes(b).unwrap()
+}
+
+#[test]
+fn a_grayscale_windows_job_carries_the_drivers_monochrome_hint() {
+    let field = |dm: &craft_print::rgb::DevMode, at: usize, len: usize| dm.as_bytes()[at..at + len].to_vec();
+    let no_defaults = || -> Result<craft_print::rgb::DevMode> { panic!("the chosen settings are used") };
+    let gray = windows_settings(&json!({"grayscale": true}), Some(windows_devmode()), no_defaults).unwrap().unwrap();
+    assert_eq!(field(&gray, 92, 2), 1i16.to_le_bytes(), "dmColor is DMCOLOR_MONOCHROME");
+    assert_eq!(u32::from_le_bytes(gray.as_bytes()[72..76].try_into().unwrap()), 0x0802, "DM_COLOR is marked valid, the paper still is");
+    assert_eq!(gray.as_bytes().len(), 156);
+    // No settings chosen: the printer's own get the hint.
+    let from_defaults = windows_settings(&json!({"grayscale": true}), None, || Ok(windows_devmode())).unwrap().unwrap();
+    assert_eq!(field(&from_defaults, 92, 2), 1i16.to_le_bytes());
+    // Colour leaves the settings as they are, and asks the driver for nothing.
+    assert_eq!(windows_settings(&json!({}), Some(windows_devmode()), no_defaults).unwrap(), Some(windows_devmode()));
+    assert_eq!(windows_settings(&json!({"grayscale": false}), None, no_defaults).unwrap(), None);
+}
+
 #[cfg(target_os = "windows")]
 #[test]
 fn windows_pdf_component_is_detected_by_loading_its_dll() {

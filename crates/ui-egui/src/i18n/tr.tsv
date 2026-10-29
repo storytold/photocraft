@@ -4123,6 +4123,75 @@ cameraData	Lens	Lens
 	Increase Brush Size	Fırça boyutunu büyüt
 	Decrease Brush Hardness	Fırça sertliğini azalt
 	Increase Brush Hardness	Fırça sertliğini artır
+
+# Network printer destination and its print status (WS-Print and IPP). Machine-drafted by Claude; not reviewed by a native speaker.
+	Cancel print	Yazdırmayı iptal et
+	Ask the printer to cancel this print	Yazıcıdan bu yazdırmayı iptal etmesini iste
+	Send this print again as a new attempt (check the printer first if it says so)	Bu yazdırmayı yeni bir deneme olarak yeniden gönder (yazıcı belirtirse önce yazıcıyı kontrol edin)
+	Reconcile	Uzlaştır
+	Look at the printer's job lists (reads only) for a job from the earlier attempt	Önceki denemeden kalan bir iş için yazıcının iş listelerine bak (yalnızca okur)
+	Accept found job	Bulunan işi kabul et
+	Follow the job the printer already has instead of sending again	Yeniden göndermek yerine yazıcının zaten sahip olduğu işi izle
+	Check now	Şimdi denetle
+	Read the job's status now	İşin durumunu şimdi oku
+	Printer address:	Yazıcı adresi:
+	Only IP addresses on this network are accepted (private, link-local or loopback), not host names.	Yalnızca bu ağdaki IP adresleri kabul edilir (özel, bağlantı yerel veya geri döngü); ana bilgisayar adları kabul edilmez.
+	Query printer	Yazıcıyı sorgula
+	Asking the printer…	Yazıcıya soruluyor…
+	Query the printer first to see what it supports.	Neleri desteklediğini görmek için önce yazıcıyı sorgulayın.
+	Printer status: {state}	Yazıcı durumu: {state}
+	Reasons: {reasons}	Nedenler: {reasons}
+	The printer accepts none of the formats this document can be sent in	Yazıcı, bu belgenin gönderilebileceği biçimlerin hiçbirini kabul etmiyor
+	Copies:	Kopyalar:
+	Two-sided:	Çift taraflı:
+	Flip on long edge	Uzun kenardan çevir
+	Flip on short edge	Kısa kenardan çevir
+	Printer orientation:	Yazıcı yönü:
+	Reverse portrait	Ters portre
+	Reverse landscape	Ters manzara
+	Quality:	Kalite:
+	Colour:	Renk:
+	Colour	Renkli
+	This printer prints one copy at a time.	Bu yazıcı bir seferde bir kopya yazdırır.
+	This printer only prints one-sided.	Bu yazıcı yalnızca tek taraflı yazdırır.
+	This printer does not take an orientation setting.	Bu yazıcı yön ayarı kabul etmiyor.
+	This printer does not take a quality setting.	Bu yazıcı kalite ayarı kabul etmiyor.
+	This printer only prints in grayscale.	Bu yazıcı yalnızca gri tonlamalı yazdırır.
+	This printer does not take a resolution setting.	Bu yazıcı çözünürlük ayarı kabul etmiyor.
+	Not confirmed by the printer.	Yazıcı tarafından onaylanmadı.
+	I confirm sending this document to this printer	Bu belgenin bu yazıcıya gönderilmesini onaylıyorum
+	Sending to {printer}…	Gönderiliyor: {printer}…
+	Canceling…	İptal ediliyor…
+	Accepted by {printer}	Kabul eden: {printer}
+	Waiting in the printer's queue	Yazıcının kuyruğunda bekliyor
+	Held by the printer	Yazıcı tarafından bekletiliyor
+	The printer is printing it	Yazıcı yazdırıyor
+	The printer paused the job; it needs attention	Yazıcı işi duraklattı; ilgilenilmesi gerekiyor
+	Sheets printed: {n}	Yazdırılan sayfa: {n}
+	Sheets printed: {done} of {total}	Yazdırılan sayfa: {done} / {total}
+	Printed with warnings	Uyarılarla yazdırıldı
+	Printed with errors	Hatalarla yazdırıldı
+	The job was canceled	İş iptal edildi
+	The printer stopped the job	Yazıcı işi durdurdu
+	The printer no longer lists the job; it most likely finished	Yazıcı artık işi listelemiyor; büyük olasılıkla tamamlandı
+	Still printing; the job continues on the printer	Hâlâ yazdırılıyor; iş yazıcıda devam ediyor
+	Sent. The printer can't say whether it printed.	Gönderildi. Yazıcı yazdırılıp yazdırılmadığını söyleyemiyor.
+	The printer may have received the document. Check the printer before sending again.	Yazıcı belgeyi almış olabilir. Yeniden göndermeden önce yazıcıyı kontrol edin.
+	The printer address was refused	Yazıcı adresi reddedildi
+	Couldn't reach the printer	Yazıcıya ulaşılamadı
+	The printer's reply couldn't be understood	Yazıcının yanıtı anlaşılamadı
+	The printer refused the request	Yazıcı isteği reddetti
+	The printer doesn't support this setting	Yazıcı bu ayarı desteklemiyor
+	The document couldn't be prepared	Belge hazırlanamadı
+	A setting isn't valid	Bir ayar geçerli değil
+	The print job stopped unexpectedly	Yazdırma işi beklenmedik şekilde durdu
+	Print status	Yazdırma durumu
+	Network printer…	Ağ yazıcısı…
+	network	ağ
+	Use the printer's own paper if it lacks this one	Bu kağıt yoksa yazıcının kendi kağıdını kullan
+	Network printer	Ağ yazıcısı
+	Query the printer and tick the confirmation first.	Önce yazıcıyı sorgulayın ve onay kutusunu işaretleyin.
+	Sending to the network printer…	Ağ yazıcısına gönderiliyor…
 	Demosaic	Demozaikleme
 	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Kameranın renk filtresi mozaiğinin nasıl doldurulduğu. Dosya açılırken uygulanır; önizleme dosyanın açıldığı yöntemi gösterir.
 	AHD (adaptive homogeneity)	AHD (uyarlamalı homojenlik)

@@ -4357,6 +4357,77 @@ navigator	Zoom	Zoom
 	Increase Brush Size	Aumentar tamaño del pincel
 	Decrease Brush Hardness	Reducir dureza del pincel
 	Increase Brush Hardness	Aumentar dureza del pincel
+
+# Network printer destination (WS-Print and IPP). Machine-drafted by Claude; not reviewed by a native speaker.
+	A setting isn't valid	Un ajuste no es válido
+	Accepted by {printer}	Aceptado por {printer}
+	Asking the printer…	Consultando la impresora…
+	Canceling…	Cancelando…
+	Colour	Color
+	Colour:	Color:
+	Copies:	Copias:
+	Couldn't reach the printer	No se pudo conectar con la impresora
+	Flip on long edge	Girar por el borde largo
+	Flip on short edge	Girar por el borde corto
+	Held by the printer	Retenido por la impresora
+	I confirm sending this document to this printer	Confirmo el envío de este documento a esta impresora
+	Network printer	Impresora de red
+	Network printer…	Impresora de red…
+	network	red
+	Use the printer's own paper if it lacks this one	Usar el papel propio de la impresora si no tiene este
+	Not confirmed by the printer.	No confirmado por la impresora.
+	Only IP addresses on this network are accepted (private, link-local or loopback), not host names.	Solo se aceptan direcciones IP de esta red (privadas, de enlace local o de bucle), no nombres de host.
+	Print status	Estado de impresión
+	Printed with errors	Impreso con errores
+	Printed with warnings	Impreso con advertencias
+	Printer address:	Dirección de la impresora:
+	Printer orientation:	Orientación de la impresora:
+	Printer status: {state}	Estado de la impresora: {state}
+	Quality:	Calidad:
+	Query printer	Consultar impresora
+	Query the printer and tick the confirmation first.	Consulte primero la impresora y marque la confirmación.
+	Query the printer first to see what it supports.	Consulte primero la impresora para ver qué admite.
+	Reasons: {reasons}	Motivos: {reasons}
+	Reverse landscape	Horizontal invertido
+	Reverse portrait	Vertical invertido
+	Sending to the network printer…	Enviando a la impresora de red…
+	Sending to {printer}…	Enviando a {printer}…
+	Sent. The printer can't say whether it printed.	Enviado. La impresora no puede decir si imprimió.
+	Sheets printed: {done} of {total}	Hojas impresas: {done} de {total}
+	Sheets printed: {n}	Hojas impresas: {n}
+	Still printing; the job continues on the printer	Aún imprimiendo; el trabajo continúa en la impresora
+	The document couldn't be prepared	No se pudo preparar el documento
+	The job was canceled	Se canceló el trabajo
+	The print job stopped unexpectedly	El trabajo de impresión se detuvo de forma inesperada
+	The printer accepts none of the formats this document can be sent in	La impresora no acepta ninguno de los formatos en que se puede enviar este documento
+	The printer address was refused	Se rechazó la dirección de la impresora
+	The printer doesn't support this setting	La impresora no admite este ajuste
+	The printer is printing it	La impresora lo está imprimiendo
+	The printer may have received the document. Check the printer before sending again.	Es posible que la impresora haya recibido el documento. Compruebe la impresora antes de volver a enviar.
+	The printer no longer lists the job; it most likely finished	La impresora ya no muestra el trabajo; lo más probable es que haya terminado
+	The printer paused the job; it needs attention	La impresora pausó el trabajo; necesita atención
+	The printer refused the request	La impresora rechazó la solicitud
+	The printer stopped the job	La impresora detuvo el trabajo
+	The printer's reply couldn't be understood	No se pudo entender la respuesta de la impresora
+	This printer does not take a quality setting.	Esta impresora no admite un ajuste de calidad.
+	This printer does not take a resolution setting.	Esta impresora no admite un ajuste de resolución.
+	This printer does not take an orientation setting.	Esta impresora no admite un ajuste de orientación.
+	This printer only prints in grayscale.	Esta impresora solo imprime en escala de grises.
+	This printer only prints one-sided.	Esta impresora solo imprime por una cara.
+	This printer prints one copy at a time.	Esta impresora imprime una copia cada vez.
+	Two-sided:	A doble cara:
+	Waiting in the printer's queue	Esperando en la cola de la impresora
+
+# Network printer destination and its print status (WS-Print and IPP). Machine-drafted by Claude; not reviewed by a native speaker.
+	Cancel print	Cancelar impresión
+	Ask the printer to cancel this print	Pedir a la impresora que cancele esta impresión
+	Send this print again as a new attempt (check the printer first if it says so)	Enviar de nuevo esta impresión como un nuevo intento (compruebe antes la impresora si lo indica)
+	Reconcile	Conciliar
+	Look at the printer's job lists (reads only) for a job from the earlier attempt	Buscar en las listas de trabajos de la impresora un trabajo del intento anterior (solo lectura)
+	Accept found job	Aceptar trabajo encontrado
+	Follow the job the printer already has instead of sending again	Seguir el trabajo que la impresora ya tiene en lugar de enviarlo de nuevo
+	Check now	Comprobar ahora
+	Read the job's status now	Leer ahora el estado del trabajo
 	Demosaic	Demosaico
 	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Cómo se completa el mosaico del filtro de color de la cámara. Se aplica al abrir el archivo; la vista previa muestra el método con el que se abrió.
 	AHD (adaptive homogeneity)	AHD (homogeneidad adaptativa)

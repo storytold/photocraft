@@ -1,0 +1,23 @@
+[package]
+name = "photocraft-print"
+description = "Network printing for PhotoCraft: one network printer over WS-Print or IPP (craft-print), with a converter from the print-ready PDF to PWG raster"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+# Network printing over WS-Print and IPP (`network`): craft-print's `wsd` and `ipp` backends. Not
+# built for wasm32 (there is no socket to open). Nothing connects until the person adds a printer
+# and confirms a job.
+network-print = ["craft-print/wsd", "craft-print/ipp"]
+
+[dependencies]
+craft-print = { workspace = true }
+
+[dev-dependencies]
+# The tests build `network` without the feature (`cargo test -p photocraft-print` runs them), so they
+# bring its backends themselves.
+craft-print = { workspace = true, features = ["testing", "wsd", "ipp"] }

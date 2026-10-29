@@ -3055,6 +3055,77 @@ curves	Smooth	平滑
 	Increase Brush Size	增大画笔大小
 	Decrease Brush Hardness	减小画笔硬度
 	Increase Brush Hardness	增大画笔硬度
+
+# Network printer destination and its print status (WS-Print and IPP). Machine-drafted by Claude; not reviewed by a native speaker.
+	Cancel print	取消打印
+	Ask the printer to cancel this print	请求打印机取消此打印
+	Retry	重试
+	Send this print again as a new attempt (check the printer first if it says so)	作为新的尝试再次发送此打印（如有提示，请先检查打印机）
+	Reconcile	核对
+	Look at the printer's job lists (reads only) for a job from the earlier attempt	在打印机的作业列表中查找先前尝试的作业（只读）
+	Accept found job	采用找到的作业
+	Follow the job the printer already has instead of sending again	跟踪打印机已有的作业，而不是再次发送
+	Check now	立即检查
+	Read the job's status now	立即读取作业状态
+	Printer address:	打印机地址：
+	Only IP addresses on this network are accepted (private, link-local or loopback), not host names.	仅接受本网络中的 IP 地址（专用、链路本地或环回），不接受主机名。
+	Query printer	查询打印机
+	Asking the printer…	正在询问打印机…
+	Query the printer first to see what it supports.	请先查询打印机，以了解其支持的设置。
+	Printer status: {state}	打印机状态：{state}
+	Reasons: {reasons}	原因：{reasons}
+	The printer accepts none of the formats this document can be sent in	打印机不接受此文档可发送的任何格式
+	Copies:	份数：
+	Two-sided:	双面：
+	Flip on long edge	沿长边翻转
+	Flip on short edge	沿短边翻转
+	Printer orientation:	打印机方向：
+	Reverse portrait	反向纵向
+	Reverse landscape	反向横向
+	Quality:	质量：
+	Draft	草稿
+	Colour:	颜色：
+	Colour	彩色
+	This printer prints one copy at a time.	此打印机一次只打印一份。
+	This printer only prints one-sided.	此打印机只能单面打印。
+	This printer does not take an orientation setting.	此打印机不接受方向设置。
+	This printer does not take a quality setting.	此打印机不接受质量设置。
+	This printer only prints in grayscale.	此打印机只能以灰度打印。
+	This printer does not take a resolution setting.	此打印机不接受分辨率设置。
+	Not confirmed by the printer.	未经打印机确认。
+	I confirm sending this document to this printer	我确认将此文档发送到此打印机
+	Sending to {printer}…	正在发送到 {printer}…
+	Canceling…	正在取消…
+	Accepted by {printer}	{printer} 已接受
+	Waiting in the printer's queue	正在打印机队列中等待
+	Held by the printer	被打印机挂起
+	The printer is printing it	打印机正在打印
+	The printer paused the job; it needs attention	打印机已暂停作业，需要处理
+	Sheets printed: {n}	已打印张数：{n}
+	Sheets printed: {done} of {total}	已打印张数：{done}/{total}
+	Printed with warnings	已打印，但有警告
+	Printed with errors	已打印，但有错误
+	The job was canceled	作业已取消
+	The printer stopped the job	打印机已停止作业
+	The printer no longer lists the job; it most likely finished	打印机不再列出该作业，很可能已完成
+	Still printing; the job continues on the printer	仍在打印，作业在打印机上继续
+	Sent. The printer can't say whether it printed.	已发送。打印机无法告知是否已打印。
+	The printer may have received the document. Check the printer before sending again.	打印机可能已收到文档。再次发送前请先检查打印机。
+	The printer address was refused	打印机地址被拒绝
+	Couldn't reach the printer	无法连接到打印机
+	The printer's reply couldn't be understood	无法理解打印机的回复
+	The printer refused the request	打印机拒绝了请求
+	The printer doesn't support this setting	打印机不支持此设置
+	The document couldn't be prepared	无法准备文档
+	A setting isn't valid	某项设置无效
+	The print job stopped unexpectedly	打印作业意外停止
+	Print status	打印状态
+	Network printer…	网络打印机…
+	network	网络
+	Use the printer's own paper if it lacks this one	如果打印机没有此纸张，则使用打印机自己的纸张
+	Network printer	网络打印机
+	Query the printer and tick the confirmation first.	请先查询打印机并勾选确认。
+	Sending to the network printer…	正在发送到网络打印机…
 	Demosaic	去马赛克
 	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	如何填补相机彩色滤镜阵列的马赛克。在打开文件时应用；预览显示打开时所用的方法。
 	AHD (adaptive homogeneity)	AHD（自适应同质性）

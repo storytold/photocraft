@@ -4008,6 +4008,75 @@ navigator	Zoom	Zvětšení
 	Increase Brush Size	Zvětšit velikost štětce
 	Decrease Brush Hardness	Snížit tvrdost štětce
 	Increase Brush Hardness	Zvýšit tvrdost štětce
+
+# Network printer destination and its print status (WS-Print and IPP). Machine-drafted by Claude; not reviewed by a native speaker.
+	Cancel print	Zrušit tisk
+	Ask the printer to cancel this print	Požádat tiskárnu o zrušení tohoto tisku
+	Send this print again as a new attempt (check the printer first if it says so)	Odeslat tento tisk znovu jako nový pokus (pokud to tiskárna žádá, nejprve ji zkontrolujte)
+	Reconcile	Porovnat
+	Look at the printer's job lists (reads only) for a job from the earlier attempt	Vyhledat v seznamech úloh tiskárny úlohu z dřívějšího pokusu (pouze čtení)
+	Accept found job	Přijmout nalezenou úlohu
+	Follow the job the printer already has instead of sending again	Sledovat úlohu, kterou tiskárna již má, místo opětovného odeslání
+	Check now	Zkontrolovat nyní
+	Read the job's status now	Načíst stav úlohy nyní
+	Printer address:	Adresa tiskárny:
+	Only IP addresses on this network are accepted (private, link-local or loopback), not host names.	Přijímají se pouze IP adresy v této síti (soukromé, místní pro linku nebo zpětné smyčky), nikoli názvy hostitelů.
+	Query printer	Dotázat se tiskárny
+	Asking the printer…	Dotazování tiskárny…
+	Query the printer first to see what it supports.	Nejprve se dotažte tiskárny, abyste zjistili, co podporuje.
+	Printer status: {state}	Stav tiskárny: {state}
+	Reasons: {reasons}	Důvody: {reasons}
+	The printer accepts none of the formats this document can be sent in	Tiskárna nepřijímá žádný z formátů, ve kterých lze tento dokument odeslat
+	Copies:	Kopie:
+	Two-sided:	Oboustranně:
+	Flip on long edge	Otočit podél dlouhé hrany
+	Flip on short edge	Otočit podél krátké hrany
+	Printer orientation:	Orientace na tiskárně:
+	Reverse portrait	Obrácená na výšku
+	Reverse landscape	Obrácená na šířku
+	Quality:	Kvalita:
+	Colour:	Barva:
+	Colour	Barevně
+	This printer prints one copy at a time.	Tato tiskárna tiskne jednu kopii po druhé.
+	This printer only prints one-sided.	Tato tiskárna tiskne pouze jednostranně.
+	This printer does not take an orientation setting.	Tato tiskárna nepřijímá nastavení orientace.
+	This printer does not take a quality setting.	Tato tiskárna nepřijímá nastavení kvality.
+	This printer only prints in grayscale.	Tato tiskárna tiskne pouze ve stupních šedi.
+	This printer does not take a resolution setting.	Tato tiskárna nepřijímá nastavení rozlišení.
+	Not confirmed by the printer.	Tiskárna nepotvrdila.
+	I confirm sending this document to this printer	Potvrzuji odeslání tohoto dokumentu na tuto tiskárnu
+	Sending to {printer}…	Odesílání na {printer}…
+	Canceling…	Rušení…
+	Accepted by {printer}	Přijato: {printer}
+	Waiting in the printer's queue	Čeká ve frontě tiskárny
+	Held by the printer	Pozdrženo tiskárnou
+	The printer is printing it	Tiskárna tiskne
+	The printer paused the job; it needs attention	Tiskárna pozastavila úlohu; vyžaduje pozornost
+	Sheets printed: {n}	Vytištěno listů: {n}
+	Sheets printed: {done} of {total}	Vytištěno listů: {done} z {total}
+	Printed with warnings	Vytištěno s upozorněními
+	Printed with errors	Vytištěno s chybami
+	The job was canceled	Úloha byla zrušena
+	The printer stopped the job	Tiskárna úlohu zastavila
+	The printer no longer lists the job; it most likely finished	Tiskárna již úlohu neuvádí; nejspíše byla dokončena
+	Still printing; the job continues on the printer	Stále se tiskne; úloha na tiskárně pokračuje
+	Sent. The printer can't say whether it printed.	Odesláno. Tiskárna nedokáže říct, zda se vytisklo.
+	The printer may have received the document. Check the printer before sending again.	Tiskárna mohla dokument obdržet. Před dalším odesláním tiskárnu zkontrolujte.
+	The printer address was refused	Adresa tiskárny byla odmítnuta
+	Couldn't reach the printer	Nelze se spojit s tiskárnou
+	The printer's reply couldn't be understood	Odpovědi tiskárny nelze porozumět
+	The printer refused the request	Tiskárna požadavek odmítla
+	The printer doesn't support this setting	Tiskárna toto nastavení nepodporuje
+	The document couldn't be prepared	Dokument nelze připravit
+	A setting isn't valid	Některé nastavení není platné
+	The print job stopped unexpectedly	Tisková úloha se nečekaně zastavila
+	Print status	Stav tisku
+	Network printer…	Síťová tiskárna…
+	network	síť
+	Use the printer's own paper if it lacks this one	Použít papír tiskárny, pokud tento nemá
+	Network printer	Síťová tiskárna
+	Query the printer and tick the confirmation first.	Nejprve se dotažte tiskárny a zaškrtněte potvrzení.
+	Sending to the network printer…	Odesílání na síťovou tiskárnu…
 	Demosaic	Demozaikování
 	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Jak se doplňuje mozaika barevného filtru fotoaparátu. Použije se při otevření souboru; náhled ukazuje metodu, se kterou byl otevřen.
 	AHD (adaptive homogeneity)	AHD (adaptivní homogenita)

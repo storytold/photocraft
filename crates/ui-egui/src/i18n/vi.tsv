@@ -3887,6 +3887,76 @@ curves	Smooth	Làm mượt
 	Increase Brush Size	Tăng kích thước cọ
 	Decrease Brush Hardness	Giảm độ cứng của cọ
 	Increase Brush Hardness	Tăng độ cứng của cọ
+
+# Network printer destination and its print status (WS-Print and IPP). Machine-drafted by Claude; not reviewed by a native speaker.
+	Cancel print	Hủy in
+	Ask the printer to cancel this print	Yêu cầu máy in hủy lệnh in này
+	Retry	Thử lại
+	Send this print again as a new attempt (check the printer first if it says so)	Gửi lại lệnh in này như một lần thử mới (hãy kiểm tra máy in trước nếu máy báo vậy)
+	Reconcile	Đối chiếu
+	Look at the printer's job lists (reads only) for a job from the earlier attempt	Tìm trong danh sách lệnh in của máy in một lệnh từ lần thử trước (chỉ đọc)
+	Accept found job	Nhận lệnh in đã tìm thấy
+	Follow the job the printer already has instead of sending again	Theo dõi lệnh in máy in đã có thay vì gửi lại
+	Check now	Kiểm tra ngay
+	Read the job's status now	Đọc trạng thái lệnh in ngay
+	Printer address:	Địa chỉ máy in:
+	Only IP addresses on this network are accepted (private, link-local or loopback), not host names.	Chỉ chấp nhận địa chỉ IP trên mạng này (riêng, liên kết cục bộ hoặc loopback), không chấp nhận tên máy chủ.
+	Query printer	Truy vấn máy in
+	Asking the printer…	Đang hỏi máy in…
+	Query the printer first to see what it supports.	Hãy truy vấn máy in trước để xem máy in hỗ trợ những gì.
+	Printer status: {state}	Trạng thái máy in: {state}
+	Reasons: {reasons}	Lý do: {reasons}
+	The printer accepts none of the formats this document can be sent in	Máy in không chấp nhận định dạng nào mà tài liệu này có thể được gửi
+	Copies:	Số bản:
+	Two-sided:	In hai mặt:
+	Flip on long edge	Lật theo cạnh dài
+	Flip on short edge	Lật theo cạnh ngắn
+	Printer orientation:	Hướng trên máy in:
+	Reverse portrait	Dọc đảo ngược
+	Reverse landscape	Ngang đảo ngược
+	Quality:	Chất lượng:
+	Colour:	Màu:
+	Colour	Màu
+	This printer prints one copy at a time.	Máy in này in từng bản một.
+	This printer only prints one-sided.	Máy in này chỉ in một mặt.
+	This printer does not take an orientation setting.	Máy in này không nhận thiết lập hướng.
+	This printer does not take a quality setting.	Máy in này không nhận thiết lập chất lượng.
+	This printer only prints in grayscale.	Máy in này chỉ in thang xám.
+	This printer does not take a resolution setting.	Máy in này không nhận thiết lập độ phân giải.
+	Not confirmed by the printer.	Máy in chưa xác nhận.
+	I confirm sending this document to this printer	Tôi xác nhận gửi tài liệu này đến máy in này
+	Sending to {printer}…	Đang gửi đến {printer}…
+	Canceling…	Đang hủy…
+	Accepted by {printer}	{printer} đã nhận
+	Waiting in the printer's queue	Đang chờ trong hàng đợi của máy in
+	Held by the printer	Bị máy in giữ lại
+	The printer is printing it	Máy in đang in
+	The printer paused the job; it needs attention	Máy in đã tạm dừng lệnh in; cần được xử lý
+	Sheets printed: {n}	Số tờ đã in: {n}
+	Sheets printed: {done} of {total}	Số tờ đã in: {done}/{total}
+	Printed with warnings	Đã in kèm cảnh báo
+	Printed with errors	Đã in kèm lỗi
+	The job was canceled	Lệnh in đã bị hủy
+	The printer stopped the job	Máy in đã dừng lệnh in
+	The printer no longer lists the job; it most likely finished	Máy in không còn liệt kê lệnh in; nhiều khả năng đã xong
+	Still printing; the job continues on the printer	Vẫn đang in; lệnh in tiếp tục trên máy in
+	Sent. The printer can't say whether it printed.	Đã gửi. Máy in không thể cho biết đã in hay chưa.
+	The printer may have received the document. Check the printer before sending again.	Máy in có thể đã nhận tài liệu. Hãy kiểm tra máy in trước khi gửi lại.
+	The printer address was refused	Địa chỉ máy in bị từ chối
+	Couldn't reach the printer	Không thể kết nối với máy in
+	The printer's reply couldn't be understood	Không thể hiểu phản hồi của máy in
+	The printer refused the request	Máy in đã từ chối yêu cầu
+	The printer doesn't support this setting	Máy in không hỗ trợ thiết lập này
+	The document couldn't be prepared	Không thể chuẩn bị tài liệu
+	A setting isn't valid	Một thiết lập không hợp lệ
+	The print job stopped unexpectedly	Lệnh in dừng đột ngột
+	Print status	Trạng thái in
+	Network printer…	Máy in mạng…
+	network	mạng
+	Use the printer's own paper if it lacks this one	Dùng giấy của máy in nếu máy không có loại này
+	Network printer	Máy in mạng
+	Query the printer and tick the confirmation first.	Hãy truy vấn máy in và đánh dấu xác nhận trước.
+	Sending to the network printer…	Đang gửi đến máy in mạng…
 	Demosaic	Giải khảm
 	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Cách lấp đầy khảm lọc màu của máy ảnh. Áp dụng khi mở tệp; bản xem trước hiển thị phương pháp đã dùng khi mở.
 	AHD (adaptive homogeneity)	AHD (đồng nhất thích ứng)

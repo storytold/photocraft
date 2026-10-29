@@ -84,7 +84,7 @@ fn fields(h: &Harness<'_, PhotocraftApp>, id: u64) -> Map<String, Value> {
 /// so drag assertions detect visible lag in the same frame as a Center transition.
 fn painted_image(h: &Harness<'_, PhotocraftApp>) -> egui::Rect {
     let active = h.state().session.active().unwrap();
-    let key = egui::Id::unique(("print-thumb", active.doc.id.0, active.revision));
+    let key = egui::Id::unique(("print-thumb", active.doc.id.0, active.revision, false));
     let tex = h.ctx.data(|d| d.get_temp::<std::sync::Arc<egui::TextureHandle>>(key)).unwrap();
     h.output()
         .shapes

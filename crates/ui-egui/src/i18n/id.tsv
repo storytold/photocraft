@@ -3409,6 +3409,77 @@ curves	Smooth	Haluskan
 	Increase Brush Size	Perbesar ukuran kuas
 	Decrease Brush Hardness	Kurangi kekerasan kuas
 	Increase Brush Hardness	Tambah kekerasan kuas
+
+# Network printer destination and its print status (WS-Print and IPP). Machine-drafted by Claude; not reviewed by a native speaker.
+	Cancel print	Batalkan cetak
+	Ask the printer to cancel this print	Minta printer membatalkan cetakan ini
+	Retry	Coba lagi
+	Send this print again as a new attempt (check the printer first if it says so)	Kirim cetakan ini lagi sebagai percobaan baru (periksa printer terlebih dahulu jika diminta)
+	Reconcile	Cocokkan
+	Look at the printer's job lists (reads only) for a job from the earlier attempt	Cari di daftar pekerjaan printer pekerjaan dari percobaan sebelumnya (hanya membaca)
+	Accept found job	Terima pekerjaan yang ditemukan
+	Follow the job the printer already has instead of sending again	Ikuti pekerjaan yang sudah dimiliki printer alih-alih mengirim lagi
+	Check now	Periksa sekarang
+	Read the job's status now	Baca status pekerjaan sekarang
+	Printer address:	Alamat printer:
+	Only IP addresses on this network are accepted (private, link-local or loopback), not host names.	Hanya alamat IP di jaringan ini yang diterima (privat, link-local, atau loopback), bukan nama host.
+	Query printer	Tanyai printer
+	Asking the printer…	Menanyai printer…
+	Query the printer first to see what it supports.	Tanyai printer terlebih dahulu untuk melihat apa yang didukungnya.
+	Printer status: {state}	Status printer: {state}
+	Reasons: {reasons}	Alasan: {reasons}
+	The printer accepts none of the formats this document can be sent in	Printer tidak menerima satu pun format yang dapat digunakan untuk mengirim dokumen ini
+	Copies:	Salinan:
+	Two-sided:	Dua sisi:
+	Flip on long edge	Balik pada tepi panjang
+	Flip on short edge	Balik pada tepi pendek
+	Printer orientation:	Orientasi printer:
+	Reverse portrait	Potret terbalik
+	Reverse landscape	Lanskap terbalik
+	Quality:	Kualitas:
+	Draft	Draf
+	Colour:	Warna:
+	Colour	Berwarna
+	This printer prints one copy at a time.	Printer ini mencetak satu salinan setiap kali.
+	This printer only prints one-sided.	Printer ini hanya mencetak satu sisi.
+	This printer does not take an orientation setting.	Printer ini tidak menerima pengaturan orientasi.
+	This printer does not take a quality setting.	Printer ini tidak menerima pengaturan kualitas.
+	This printer only prints in grayscale.	Printer ini hanya mencetak dalam grayscale.
+	This printer does not take a resolution setting.	Printer ini tidak menerima pengaturan resolusi.
+	Not confirmed by the printer.	Tidak dikonfirmasi oleh printer.
+	I confirm sending this document to this printer	Saya mengonfirmasi pengiriman dokumen ini ke printer ini
+	Sending to {printer}…	Mengirim ke {printer}…
+	Canceling…	Membatalkan…
+	Accepted by {printer}	Diterima oleh {printer}
+	Waiting in the printer's queue	Menunggu di antrean printer
+	Held by the printer	Ditahan oleh printer
+	The printer is printing it	Printer sedang mencetaknya
+	The printer paused the job; it needs attention	Printer menjeda pekerjaan; perlu perhatian
+	Sheets printed: {n}	Lembar tercetak: {n}
+	Sheets printed: {done} of {total}	Lembar tercetak: {done} dari {total}
+	Printed with warnings	Dicetak dengan peringatan
+	Printed with errors	Dicetak dengan kesalahan
+	The job was canceled	Pekerjaan dibatalkan
+	The printer stopped the job	Printer menghentikan pekerjaan
+	The printer no longer lists the job; it most likely finished	Printer tidak lagi mencantumkan pekerjaan; kemungkinan besar sudah selesai
+	Still printing; the job continues on the printer	Masih mencetak; pekerjaan berlanjut di printer
+	Sent. The printer can't say whether it printed.	Terkirim. Printer tidak dapat memberi tahu apakah sudah tercetak.
+	The printer may have received the document. Check the printer before sending again.	Printer mungkin telah menerima dokumen. Periksa printer sebelum mengirim lagi.
+	The printer address was refused	Alamat printer ditolak
+	Couldn't reach the printer	Tidak dapat menjangkau printer
+	The printer's reply couldn't be understood	Balasan printer tidak dapat dipahami
+	The printer refused the request	Printer menolak permintaan
+	The printer doesn't support this setting	Printer tidak mendukung pengaturan ini
+	The document couldn't be prepared	Dokumen tidak dapat disiapkan
+	A setting isn't valid	Ada pengaturan yang tidak valid
+	The print job stopped unexpectedly	Pekerjaan cetak berhenti secara tak terduga
+	Print status	Status cetak
+	Network printer…	Printer jaringan…
+	network	jaringan
+	Use the printer's own paper if it lacks this one	Gunakan kertas printer sendiri jika tidak memiliki kertas ini
+	Network printer	Printer jaringan
+	Query the printer and tick the confirmation first.	Tanyai printer dan centang konfirmasi terlebih dahulu.
+	Sending to the network printer…	Mengirim ke printer jaringan…
 	Demosaic	Demosaik
 	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Cara mosaik filter warna kamera diisi. Diterapkan saat berkas dibuka; pratinjau menampilkan metode yang dipakai saat dibuka.
 	AHD (adaptive homogeneity)	AHD (homogenitas adaptif)

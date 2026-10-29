@@ -3604,6 +3604,76 @@ curves	Smooth	매끄럽게
 	Increase Brush Size	브러시 크기 늘리기
 	Decrease Brush Hardness	브러시 경도 줄이기
 	Increase Brush Hardness	브러시 경도 늘리기
+
+# Network printer destination and its print status (WS-Print and IPP). Machine-drafted by Claude; not reviewed by a native speaker.
+	Cancel print	인쇄 취소
+	Ask the printer to cancel this print	프린터에 이 인쇄를 취소하도록 요청합니다
+	Retry	다시 시도
+	Send this print again as a new attempt (check the printer first if it says so)	이 인쇄를 새 시도로 다시 보냅니다(프린터가 요청하면 먼저 프린터를 확인하세요)
+	Reconcile	대조
+	Look at the printer's job lists (reads only) for a job from the earlier attempt	이전 시도의 작업이 있는지 프린터의 작업 목록을 확인합니다(읽기 전용)
+	Accept found job	찾은 작업 수락
+	Follow the job the printer already has instead of sending again	다시 보내는 대신 프린터에 이미 있는 작업을 추적합니다
+	Check now	지금 확인
+	Read the job's status now	지금 작업 상태 읽기
+	Printer address:	프린터 주소:
+	Only IP addresses on this network are accepted (private, link-local or loopback), not host names.	이 네트워크의 IP 주소(사설, 링크 로컬 또는 루프백)만 허용되며 호스트 이름은 허용되지 않습니다.
+	Query printer	프린터 조회
+	Asking the printer…	프린터에 묻는 중…
+	Query the printer first to see what it supports.	지원 항목을 확인하려면 먼저 프린터를 조회하세요.
+	Printer status: {state}	프린터 상태: {state}
+	Reasons: {reasons}	이유: {reasons}
+	The printer accepts none of the formats this document can be sent in	프린터가 이 문서를 보낼 수 있는 형식을 하나도 받지 않습니다
+	Copies:	부수:
+	Two-sided:	양면:
+	Flip on long edge	긴 쪽으로 넘기기
+	Flip on short edge	짧은 쪽으로 넘기기
+	Printer orientation:	프린터 방향:
+	Reverse portrait	뒤집힌 세로 방향
+	Reverse landscape	뒤집힌 가로 방향
+	Quality:	품질:
+	Colour:	색상:
+	Colour	컬러
+	This printer prints one copy at a time.	이 프린터는 한 번에 한 부씩 인쇄합니다.
+	This printer only prints one-sided.	이 프린터는 단면만 인쇄합니다.
+	This printer does not take an orientation setting.	이 프린터는 방향 설정을 받지 않습니다.
+	This printer does not take a quality setting.	이 프린터는 품질 설정을 받지 않습니다.
+	This printer only prints in grayscale.	이 프린터는 회색 음영으로만 인쇄합니다.
+	This printer does not take a resolution setting.	이 프린터는 해상도 설정을 받지 않습니다.
+	Not confirmed by the printer.	프린터가 확인하지 않았습니다.
+	I confirm sending this document to this printer	이 문서를 이 프린터로 보내는 것을 확인합니다
+	Sending to {printer}…	{printer}(으)로 보내는 중…
+	Canceling…	취소하는 중…
+	Accepted by {printer}	{printer}에서 수락함
+	Waiting in the printer's queue	프린터 대기열에서 기다리는 중
+	Held by the printer	프린터에서 보류됨
+	The printer is printing it	프린터에서 인쇄하는 중
+	The printer paused the job; it needs attention	프린터가 작업을 일시 중지했습니다. 확인이 필요합니다
+	Sheets printed: {n}	인쇄된 매수: {n}
+	Sheets printed: {done} of {total}	인쇄된 매수: {done}/{total}
+	Printed with warnings	경고와 함께 인쇄됨
+	Printed with errors	오류와 함께 인쇄됨
+	The job was canceled	작업이 취소되었습니다
+	The printer stopped the job	프린터가 작업을 중단했습니다
+	The printer no longer lists the job; it most likely finished	프린터에 더 이상 작업이 표시되지 않습니다. 완료되었을 가능성이 높습니다
+	Still printing; the job continues on the printer	아직 인쇄 중이며 작업은 프린터에서 계속됩니다
+	Sent. The printer can't say whether it printed.	보냈습니다. 인쇄되었는지는 프린터가 알려 줄 수 없습니다.
+	The printer may have received the document. Check the printer before sending again.	프린터가 문서를 받았을 수 있습니다. 다시 보내기 전에 프린터를 확인하세요.
+	The printer address was refused	프린터 주소가 거부되었습니다
+	Couldn't reach the printer	프린터에 연결할 수 없습니다
+	The printer's reply couldn't be understood	프린터의 응답을 이해할 수 없습니다
+	The printer refused the request	프린터가 요청을 거부했습니다
+	The printer doesn't support this setting	프린터가 이 설정을 지원하지 않습니다
+	The document couldn't be prepared	문서를 준비할 수 없습니다
+	A setting isn't valid	설정이 올바르지 않습니다
+	The print job stopped unexpectedly	인쇄 작업이 예기치 않게 중지되었습니다
+	Print status	인쇄 상태
+	Network printer…	네트워크 프린터…
+	network	네트워크
+	Use the printer's own paper if it lacks this one	이 용지가 없으면 프린터의 용지 사용
+	Network printer	네트워크 프린터
+	Query the printer and tick the confirmation first.	먼저 프린터를 조회하고 확인란을 선택하세요.
+	Sending to the network printer…	네트워크 프린터로 보내는 중…
 	Demosaic	디모자이크
 	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	카메라 컬러 필터 모자이크를 채우는 방법입니다. 파일을 열 때 적용되며, 미리 보기는 파일을 연 방식으로 표시됩니다.
 	AHD (adaptive homogeneity)	AHD (적응형 균질성)

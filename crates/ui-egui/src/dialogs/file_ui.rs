@@ -17,8 +17,8 @@ use crate::theme::Tokens;
 mod print;
 mod web;
 
-pub use print::open_print;
 pub(crate) use print::print_status;
+pub use print::{can_confirm, open_print};
 #[cfg(test)]
 use print::{drag_print_position, driver_paper_is_wide, print_params, print_preview_image, printer_options, take_turned_page, turn_driver};
 use print::{print_body, print_confirm};

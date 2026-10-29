@@ -3411,6 +3411,78 @@ curves	Smooth	Glätten
 	{path}: the path is not valid Unicode; save under another name.	{path}: Der Dateipfad enthält ungültige Zeichen. Speichere unter einem anderen Namen.
 	{name} was changed by another app after it was opened or saved here.	{name} wurde von einer anderen App geändert, nachdem es hier geöffnet oder gespeichert wurde.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Ersetze die Datei durch dieses Dokument oder brich ab und nutze Datei › Speichern unter, um beide zu behalten.
+
+# Network printer destination (WS-Print and IPP). Machine-drafted by Claude; not reviewed by a native speaker.
+	A setting isn't valid	Eine Einstellung ist ungültig
+	Accepted by {printer}	Vom {printer} angenommen
+	Asking the printer…	Drucker wird gefragt…
+	Canceling…	Wird abgebrochen…
+	Colour	Farbe
+	Colour:	Farbe:
+	Copies:	Kopien:
+	Couldn't reach the printer	Der Drucker ist nicht erreichbar
+	Flip on long edge	An der langen Kante wenden
+	Flip on short edge	An der kurzen Kante wenden
+	Held by the printer	Vom Drucker zurückgehalten
+	I confirm sending this document to this printer	Ich bestätige das Senden dieses Dokuments an diesen Drucker
+	Network printer	Netzwerkdrucker
+	Network printer…	Netzwerkdrucker…
+	network	Netzwerk
+	Use the printer's own paper if it lacks this one	Eigenes Papier des Druckers verwenden, wenn es dieses nicht hat
+	Not confirmed by the printer.	Vom Drucker nicht bestätigt.
+	Only IP addresses on this network are accepted (private, link-local or loopback), not host names.	Es werden nur IP-Adressen in diesem Netzwerk akzeptiert (privat, Link-Local oder Loopback), keine Hostnamen.
+	Print status	Druckstatus
+	Printed with errors	Mit Fehlern gedruckt
+	Printed with warnings	Mit Warnungen gedruckt
+	Printer address:	Druckeradresse:
+	Printer orientation:	Druckerausrichtung:
+	Printer status: {state}	Druckerstatus: {state}
+	Quality:	Qualität:
+	Query printer	Drucker abfragen
+	Query the printer and tick the confirmation first.	Fragen Sie zuerst den Drucker ab und setzen Sie das Häkchen für die Bestätigung.
+	Query the printer first to see what it supports.	Fragen Sie zuerst den Drucker ab, um zu sehen, was er unterstützt.
+	Reasons: {reasons}	Gründe: {reasons}
+	Reverse landscape	Umgekehrtes Querformat
+	Reverse portrait	Umgekehrtes Hochformat
+	Sending to the network printer…	Wird an den Netzwerkdrucker gesendet…
+	Sending to {printer}…	Wird an {printer} gesendet…
+	Sent. The printer can't say whether it printed.	Gesendet. Der Drucker kann nicht sagen, ob gedruckt wurde.
+	Sheets printed: {done} of {total}	Gedruckte Blätter: {done} von {total}
+	Sheets printed: {n}	Gedruckte Blätter: {n}
+	Still printing; the job continues on the printer	Druckt noch; der Auftrag läuft am Drucker weiter
+	The document couldn't be prepared	Das Dokument konnte nicht vorbereitet werden
+	The job was canceled	Der Auftrag wurde abgebrochen
+	The print job stopped unexpectedly	Der Druckauftrag wurde unerwartet beendet
+	The printer accepts none of the formats this document can be sent in	Der Drucker akzeptiert keines der Formate, in denen dieses Dokument gesendet werden kann
+	The printer address was refused	Die Druckeradresse wurde abgelehnt
+	The printer doesn't support this setting	Der Drucker unterstützt diese Einstellung nicht
+	The printer is printing it	Der Drucker druckt gerade
+	The printer may have received the document. Check the printer before sending again.	Der Drucker hat das Dokument möglicherweise erhalten. Prüfen Sie den Drucker, bevor Sie erneut senden.
+	The printer no longer lists the job; it most likely finished	Der Drucker führt den Auftrag nicht mehr auf; er ist höchstwahrscheinlich fertig
+	The printer paused the job; it needs attention	Der Drucker hat den Auftrag angehalten; er braucht Aufmerksamkeit
+	The printer refused the request	Der Drucker hat die Anfrage abgelehnt
+	The printer stopped the job	Der Drucker hat den Auftrag gestoppt
+	The printer's reply couldn't be understood	Die Antwort des Druckers wurde nicht verstanden
+	This printer does not take a quality setting.	Dieser Drucker unterstützt keine Qualitätseinstellung.
+	This printer does not take a resolution setting.	Dieser Drucker unterstützt keine Auflösungseinstellung.
+	This printer does not take an orientation setting.	Dieser Drucker unterstützt keine Ausrichtungseinstellung.
+	This printer only prints in grayscale.	Dieser Drucker druckt nur in Graustufen.
+	This printer only prints one-sided.	Dieser Drucker druckt nur einseitig.
+	This printer prints one copy at a time.	Dieser Drucker druckt jeweils nur eine Kopie.
+	Two-sided:	Zweiseitig:
+	Waiting in the printer's queue	Wartet in der Warteschlange des Druckers
+
+# Network printer destination and its print status (WS-Print and IPP). Machine-drafted by Claude; not reviewed by a native speaker.
+	Cancel print	Druck abbrechen
+	Ask the printer to cancel this print	Den Drucker bitten, diesen Druck abzubrechen
+	Retry	Wiederholen
+	Send this print again as a new attempt (check the printer first if it says so)	Diesen Druck als neuen Versuch erneut senden (zuerst den Drucker prüfen, wenn er dazu auffordert)
+	Reconcile	Abgleichen
+	Look at the printer's job lists (reads only) for a job from the earlier attempt	In den Auftragslisten des Druckers nach einem Auftrag aus dem früheren Versuch suchen (nur lesend)
+	Accept found job	Gefundenen Auftrag übernehmen
+	Follow the job the printer already has instead of sending again	Dem Auftrag folgen, den der Drucker schon hat, statt erneut zu senden
+	Check now	Jetzt prüfen
+	Read the job's status now	Den Status des Auftrags jetzt lesen
 	Demosaic	Demosaicing
 	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Wie das Farbfiltermosaik der Kamera aufgefüllt wird. Es wird beim Öffnen der Datei angewendet; die Vorschau zeigt die Methode, mit der sie geöffnet wurde.
 	AHD (adaptive homogeneity)	AHD (adaptive Homogenität)

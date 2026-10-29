@@ -4073,6 +4073,76 @@ curves	Smooth	スムーズ
 	Increase Brush Size	ブラシサイズを大きく
 	Decrease Brush Hardness	ブラシの硬さを下げる
 	Increase Brush Hardness	ブラシの硬さを上げる
+
+# Network printer destination and its print status (WS-Print and IPP). Machine-drafted by Claude; not reviewed by a native speaker.
+	Cancel print	印刷をキャンセル
+	Ask the printer to cancel this print	この印刷のキャンセルをプリンターに要求します
+	Retry	再試行
+	Send this print again as a new attempt (check the printer first if it says so)	この印刷を新しい試行として再送信します (指示がある場合は先にプリンターを確認してください)
+	Reconcile	照合
+	Look at the printer's job lists (reads only) for a job from the earlier attempt	前回の試行のジョブがないか、プリンターのジョブ一覧を確認します (読み取りのみ)
+	Accept found job	見つかったジョブを採用
+	Follow the job the printer already has instead of sending again	再送信せずに、プリンターにすでにあるジョブを追跡します
+	Check now	今すぐ確認
+	Read the job's status now	ジョブの状態を今すぐ読み取ります
+	Printer address:	プリンターのアドレス:
+	Only IP addresses on this network are accepted (private, link-local or loopback), not host names.	このネットワーク上の IP アドレス (プライベート、リンクローカル、ループバック) のみ使用でき、ホスト名は使用できません。
+	Query printer	プリンターに問い合わせ
+	Asking the printer…	プリンターに問い合わせ中…
+	Query the printer first to see what it supports.	対応する設定を確認するには、まずプリンターに問い合わせてください。
+	Printer status: {state}	プリンターの状態: {state}
+	Reasons: {reasons}	理由: {reasons}
+	The printer accepts none of the formats this document can be sent in	このドキュメントを送信できる形式をプリンターが受け付けません
+	Copies:	部数:
+	Two-sided:	両面:
+	Flip on long edge	長辺とじ
+	Flip on short edge	短辺とじ
+	Printer orientation:	プリンターの向き:
+	Reverse portrait	縦向き (反転)
+	Reverse landscape	横向き (反転)
+	Quality:	品質:
+	Colour:	カラー:
+	Colour	カラー
+	This printer prints one copy at a time.	このプリンターは一度に 1 部ずつ印刷します。
+	This printer only prints one-sided.	このプリンターは片面印刷のみです。
+	This printer does not take an orientation setting.	このプリンターは向きの設定を受け付けません。
+	This printer does not take a quality setting.	このプリンターは品質の設定を受け付けません。
+	This printer only prints in grayscale.	このプリンターはグレースケールでのみ印刷します。
+	This printer does not take a resolution setting.	このプリンターは解像度の設定を受け付けません。
+	Not confirmed by the printer.	プリンターによる確認はありません。
+	I confirm sending this document to this printer	このドキュメントをこのプリンターに送信することを確認します
+	Sending to {printer}…	{printer} に送信中…
+	Canceling…	キャンセル中…
+	Accepted by {printer}	{printer} が受け付けました
+	Waiting in the printer's queue	プリンターのキューで待機中
+	Held by the printer	プリンターが保留中
+	The printer is printing it	プリンターが印刷中
+	The printer paused the job; it needs attention	プリンターがジョブを一時停止しました。対応が必要です
+	Sheets printed: {n}	印刷済みの枚数: {n}
+	Sheets printed: {done} of {total}	印刷済みの枚数: {done} / {total}
+	Printed with warnings	警告ありで印刷しました
+	Printed with errors	エラーありで印刷しました
+	The job was canceled	ジョブはキャンセルされました
+	The printer stopped the job	プリンターがジョブを中止しました
+	The printer no longer lists the job; it most likely finished	プリンターにジョブが表示されなくなりました。おそらく完了しています
+	Still printing; the job continues on the printer	印刷中です。ジョブはプリンター上で続行されます
+	Sent. The printer can't say whether it printed.	送信しました。印刷されたかどうかはプリンターから確認できません。
+	The printer may have received the document. Check the printer before sending again.	プリンターがドキュメントを受信している可能性があります。再送信する前にプリンターを確認してください。
+	The printer address was refused	プリンターのアドレスが拒否されました
+	Couldn't reach the printer	プリンターに接続できませんでした
+	The printer's reply couldn't be understood	プリンターの応答を解釈できませんでした
+	The printer refused the request	プリンターが要求を拒否しました
+	The printer doesn't support this setting	プリンターはこの設定に対応していません
+	The document couldn't be prepared	ドキュメントを準備できませんでした
+	A setting isn't valid	無効な設定があります
+	The print job stopped unexpectedly	印刷ジョブが予期せず停止しました
+	Print status	印刷の状態
+	Network printer…	ネットワークプリンター…
+	network	ネットワーク
+	Use the printer's own paper if it lacks this one	この用紙がない場合はプリンターの用紙を使用
+	Network printer	ネットワークプリンター
+	Query the printer and tick the confirmation first.	先にプリンターに問い合わせ、確認のチェックを入れてください。
+	Sending to the network printer…	ネットワークプリンターに送信中…
 	Demosaic	デモザイク
 	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	カメラのカラーフィルター配列をどのように補間するか。ファイルを開くときに適用されます。プレビューは開いたときの方式で表示されます。
 	AHD (adaptive homogeneity)	AHD（適応的均質性）

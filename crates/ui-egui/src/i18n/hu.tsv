@@ -4311,6 +4311,75 @@ cameraRaw	Yellow	Sárga
 	Increase Brush Size	Ecsetméret növelése
 	Decrease Brush Hardness	Ecsetkeménység csökkentése
 	Increase Brush Hardness	Ecsetkeménység növelése
+
+# Network printer destination and its print status (WS-Print and IPP). Machine-drafted by Claude; not reviewed by a native speaker.
+	Cancel print	Nyomtatás megszakítása
+	Ask the printer to cancel this print	Kérje a nyomtatót a nyomtatás megszakítására
+	Send this print again as a new attempt (check the printer first if it says so)	A nyomtatás újraküldése új kísérletként (ha a nyomtató jelzi, előbb ellenőrizze)
+	Reconcile	Egyeztetés
+	Look at the printer's job lists (reads only) for a job from the earlier attempt	A korábbi kísérlet feladatának keresése a nyomtató feladatlistáiban (csak olvasás)
+	Accept found job	Talált feladat elfogadása
+	Follow the job the printer already has instead of sending again	A nyomtatón már meglévő feladat követése újraküldés helyett
+	Check now	Ellenőrzés most
+	Read the job's status now	A feladat állapotának beolvasása most
+	Printer address:	Nyomtató címe:
+	Only IP addresses on this network are accepted (private, link-local or loopback), not host names.	Csak az ezen a hálózaton lévő IP-címek fogadhatók el (privát, kapcsolati helyi vagy visszacsatolási), gépnevek nem.
+	Query printer	Nyomtató lekérdezése
+	Asking the printer…	A nyomtató lekérdezése…
+	Query the printer first to see what it supports.	Előbb kérdezze le a nyomtatót, hogy lássa, mit támogat.
+	Printer status: {state}	Nyomtató állapota: {state}
+	Reasons: {reasons}	Okok: {reasons}
+	The printer accepts none of the formats this document can be sent in	A nyomtató egyik formátumot sem fogadja, amelyben ez a dokumentum elküldhető
+	Copies:	Példányszám:
+	Two-sided:	Kétoldalas:
+	Flip on long edge	Átfordítás a hosszú él mentén
+	Flip on short edge	Átfordítás a rövid él mentén
+	Printer orientation:	Tájolás a nyomtatón:
+	Reverse portrait	Fordított álló
+	Reverse landscape	Fordított fekvő
+	Quality:	Minőség:
+	Colour:	Szín:
+	Colour	Színes
+	This printer prints one copy at a time.	Ez a nyomtató egyszerre egy példányt nyomtat.
+	This printer only prints one-sided.	Ez a nyomtató csak egyoldalasan nyomtat.
+	This printer does not take an orientation setting.	Ez a nyomtató nem fogad tájolásbeállítást.
+	This printer does not take a quality setting.	Ez a nyomtató nem fogad minőségbeállítást.
+	This printer only prints in grayscale.	Ez a nyomtató csak szürkeárnyalatosan nyomtat.
+	This printer does not take a resolution setting.	Ez a nyomtató nem fogad felbontásbeállítást.
+	Not confirmed by the printer.	A nyomtató nem erősítette meg.
+	I confirm sending this document to this printer	Megerősítem a dokumentum elküldését erre a nyomtatóra
+	Sending to {printer}…	Küldés ide: {printer}…
+	Canceling…	Megszakítás…
+	Accepted by {printer}	Elfogadta: {printer}
+	Waiting in the printer's queue	Várakozik a nyomtató sorában
+	Held by the printer	A nyomtató visszatartja
+	The printer is printing it	A nyomtató nyomtatja
+	The printer paused the job; it needs attention	A nyomtató szüneteltette a feladatot; beavatkozás szükséges
+	Sheets printed: {n}	Kinyomtatott lapok: {n}
+	Sheets printed: {done} of {total}	Kinyomtatott lapok: {done} / {total}
+	Printed with warnings	Figyelmeztetésekkel nyomtatva
+	Printed with errors	Hibákkal nyomtatva
+	The job was canceled	A feladat megszakítva
+	The printer stopped the job	A nyomtató leállította a feladatot
+	The printer no longer lists the job; it most likely finished	A nyomtató már nem listázza a feladatot; valószínűleg befejeződött
+	Still printing; the job continues on the printer	Még nyomtat; a feladat folytatódik a nyomtatón
+	Sent. The printer can't say whether it printed.	Elküldve. A nyomtató nem tudja megmondani, hogy kinyomtatta-e.
+	The printer may have received the document. Check the printer before sending again.	Lehet, hogy a nyomtató megkapta a dokumentumot. Újraküldés előtt ellenőrizze a nyomtatót.
+	The printer address was refused	A nyomtató címe elutasítva
+	Couldn't reach the printer	A nyomtató nem érhető el
+	The printer's reply couldn't be understood	A nyomtató válasza nem értelmezhető
+	The printer refused the request	A nyomtató elutasította a kérést
+	The printer doesn't support this setting	A nyomtató nem támogatja ezt a beállítást
+	The document couldn't be prepared	A dokumentumot nem sikerült előkészíteni
+	A setting isn't valid	Egy beállítás érvénytelen
+	The print job stopped unexpectedly	A nyomtatási feladat váratlanul leállt
+	Print status	Nyomtatás állapota
+	Network printer…	Hálózati nyomtató…
+	network	hálózat
+	Use the printer's own paper if it lacks this one	A nyomtató saját papírjának használata, ha ez nincs benne
+	Network printer	Hálózati nyomtató
+	Query the printer and tick the confirmation first.	Előbb kérdezze le a nyomtatót, és jelölje be a megerősítést.
+	Sending to the network printer…	Küldés a hálózati nyomtatóra…
 	Demosaic	Demozaikolás
 	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Hogyan tölti ki a program a kamera színszűrő-mozaikját. A fájl megnyitásakor érvényesül; az előnézet a megnyitáskor használt módszert mutatja.
 	AHD (adaptive homogeneity)	AHD (adaptív homogenitás)
