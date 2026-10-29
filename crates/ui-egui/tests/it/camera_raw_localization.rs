@@ -47,11 +47,11 @@ fn raw_balance_menu_in_italian() {
     });
     h.run_steps(8);
     let tr = |s| i18n::tr_ctx(i18n::Lang::from_code("it").unwrap(), "cameraRaw", s);
-    h.get_by_role_and_label(Role::Button, tr("Light")).click();
+    h.get_by_role_and_label(Role::DisclosureTriangle, tr("Light")).click();
     h.run_steps(12);
-    h.get_by_role_and_label(Role::Button, tr("Color")).click();
+    h.get_by_role_and_label(Role::DisclosureTriangle, tr("Color")).click();
     h.run_steps(12);
-    assert!(h.query_by_label(tr("White Balance")).is_some());
+    assert!(h.query_by_role_and_label(Role::ComboBox, tr("White Balance")).is_some());
     h.get(egui_kittest::kittest::By::new().role(Role::ComboBox).value(tr("As Shot"))).click();
     h.run_steps(16);
     for label in ["As Shot", "Auto", "Daylight", "Cloudy", "Shade", "Tungsten", "Fluorescent", "Flash"] {

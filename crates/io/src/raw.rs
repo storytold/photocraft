@@ -168,18 +168,26 @@ pub fn import_raw_tuned(name: &str, bytes: &[u8], tuning: &RawTuning) -> Result<
     } else {
         (sensor.camera_wb, Vec::new())
     };
-    let wb_applied = match base_wb {
-        Some(m) => {
+    let wb_applied = match (base_wb, sensor.camera_wb.is_some()) {
+        (Some(m), true) => {
             let g = wb_gains(tuning.temperature, tuning.tint);
             opts.white_balance = WhiteBalance::Multipliers([m[0] * g[0], m[1] * g[1], m[2] * g[2]]);
             true
         }
-        None => false,
+        (Some(m), false) => {
+            // A preset still sets the baseline, but without as-shot metadata the
+            // public import contract leaves the relative sliders to the RGB filter.
+            opts.white_balance = WhiteBalance::Multipliers(m);
+            false
+        }
+        (None, _) => false,
     };
     let mut dev = photocraft_raw::develop_sensor(&sensor, &opts).map_err(IoError::Raw)?;
     dev.warnings.extend(balance_warnings);
     let wb = if wb_applied {
         format!("{} white balance, relative temperature {:+.0}, tint {:+.0}", tuning.white_balance.id(), tuning.temperature, tuning.tint)
+    } else if tuning.white_balance != RawWhiteBalance::AsShot {
+        format!("{} white balance; relative temperature and tint kept as RGB adjustments", tuning.white_balance.id())
     } else {
         "estimated white balance".into()
     };
@@ -412,6 +420,50 @@ mod tests {
         }
         assert_eq!(RawWhiteBalance::default(), RawWhiteBalance::AsShot);
         assert!(RawWhiteBalance::from_id("Adobe Color").is_none());
+    }
+
+    /// Missing as-shot metadata must not consume the RGB temperature/tint sliders.
+    #[test]
+    fn raw_presets_without_camera_balance_keep_relative_sliders_for_rgb() {
+        use photocraft_raw::testgen::{Cr2Spec, mosaic, scene};
+        let (w, h) = (48, 16);
+        for camera_balance in [None, Some([2048, 1024, 1024, 1536])] {
+            let bytes = Cr2Spec {
+                width: w,
+                height: h,
+                data: mosaic(&scene(w, h), w, [0, 1, 1, 2], 0, 12000),
+                precision: 14,
+                components: 2,
+                slices: vec![24, 24],
+                borders: None,
+                wb_rggb: camera_balance,
+                orientation: 1,
+                model_id: None,
+            }
+            .build();
+            assert_eq!(photocraft_raw::decode(&bytes, &limits()).unwrap().camera_wb.is_some(), camera_balance.is_some());
+            let mut daylight = None;
+            for preset in RawWhiteBalance::ALL {
+                let base = RawTuning { white_balance: preset, ..Default::default() };
+                let (normal, applied) = import_raw_tuned("balance.cr2", &bytes, &base).unwrap();
+                let (adjusted, adjusted_applied) = import_raw_tuned("balance.cr2", &bytes, &RawTuning { temperature: 25.0, tint: -15.0, ..base }).unwrap();
+                assert_eq!(applied, camera_balance.is_some(), "{preset:?}");
+                assert_eq!(adjusted_applied, applied);
+                let pixels = crate::document_to_image(&normal.document, &mut Vec::new()).unwrap();
+                let adjusted_pixels = crate::document_to_image(&adjusted.document, &mut Vec::new()).unwrap();
+                if camera_balance.is_none() {
+                    assert_eq!(pixels.data(), adjusted_pixels.data(), "{preset:?}: relative sliders must be deferred");
+                    if preset == RawWhiteBalance::Daylight {
+                        daylight = Some(pixels.data().to_vec());
+                    }
+                    if preset == RawWhiteBalance::Tungsten {
+                        assert_ne!(daylight.as_deref().unwrap(), pixels.data(), "the preset must still change the baseline");
+                    }
+                } else {
+                    assert_ne!(pixels.data(), adjusted_pixels.data(), "{preset:?}: sensor gains must still apply");
+                }
+            }
+        }
     }
 
     #[test]

@@ -122,7 +122,12 @@ impl CameraRawGpu {
     /// are the dialog's unchanged proxy ([`source_key`]), so they upload once. Neutral settings
     /// are `None` too: the CPU develop returns them at once, a GPU round trip would only cost.
     pub(crate) fn develop(&self, px: &[[f32; 4]], key: Option<u64>, w: usize, h: usize, p: &CameraRaw, float: bool) -> Option<Vec<[f32; 4]>> {
-        if p.spatial() || p.is_identity() || self.failed.load(Ordering::Relaxed) || !self.health.is_ok() {
+        if p.profile != photocraft_algo::camera_raw::ColorProfile::Standard
+            || p.spatial()
+            || p.is_identity()
+            || self.failed.load(Ordering::Relaxed)
+            || !self.health.is_ok()
+        {
             return None;
         }
         #[cfg(target_arch = "wasm32")]
@@ -208,6 +213,30 @@ mod tests {
         q.pixel_scale = (d.pw as f32 / d.full_w.max(1) as f32).min(1.0);
         develop(&mut cpu, d.pw, d.ph, &q, d.float);
         (d.develop_backend, d.processed.clone(), cpu)
+    }
+
+    /// Unsupported artistic looks must not populate the adaptive-points cache before falling back.
+    #[test]
+    fn artistic_profiles_skip_the_gpu_white_black_points_cache() {
+        use photocraft_algo::camera_raw::ColorProfile;
+        let _gpu = photocraft_testkit::gpu_lock();
+        let Ok(rs) = std::panic::catch_unwind(|| egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), Default::default())) else {
+            eprintln!("skipping: no GPU adapter");
+            return;
+        };
+        let Some(pass) = Pass::build_on(&rs.device) else { return };
+        let slot = Arc::new(OnceLock::new());
+        assert!(slot.set(Some(pass)).is_ok());
+        let gpu = CameraRawGpu::new(rs.device.clone(), rs.queue.clone(), DeviceHealth::new(), slot);
+        let px = [[0.2, 0.4, 0.7, 1.0]; 4];
+        for profile in ColorProfile::ALL.into_iter().filter(|p| *p != ColorProfile::Standard) {
+            let p = CameraRaw { profile, whites: 30.0, blacks: -10.0, ..Default::default() };
+            assert!(gpu.develop(&px, Some(12), 2, 2, &p, true).is_none());
+            assert!(gpu.points.lock().unwrap().is_none(), "{profile:?}: no full-image points pass before CPU fallback");
+        }
+        let standard = CameraRaw { whites: 30.0, blacks: -10.0, ..Default::default() };
+        let _ = gpu.develop(&px, Some(12), 2, 2, &standard, true);
+        assert!(gpu.points.lock().unwrap().is_some(), "Standard still calculates and caches its points");
     }
 
     #[test]
