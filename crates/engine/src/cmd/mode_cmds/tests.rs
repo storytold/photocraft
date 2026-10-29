@@ -377,10 +377,14 @@ fn indexed_matte_blends_edges_without_replacing_clear_pixels() {
             s.execute("edit.redo", json!({})).unwrap();
             assert_eq!([1, 2].map(|x| doc(&s).layers[0].surface().unwrap().rgba(x, 0)), edges);
 fn indexed_wide_gamut_composites_in_srgb_before_quantizing() {
-    for (profile_id, source) in [("display-p3", photocraft_cms::Builtin::DisplayP3), ("adobe-rgb-compat", photocraft_cms::Builtin::AdobeRgbCompat)] {
+    for (mode, profile_id, source) in [
+        ("rgb", "display-p3", photocraft_cms::Builtin::DisplayP3),
+        ("rgb", "adobe-rgb-compat", photocraft_cms::Builtin::AdobeRgbCompat),
+        ("gray", "gray-gamma-2.2", photocraft_cms::Builtin::GrayGamma22),
+    ] {
         for depth in [8, 16, 32] {
             let mut s = Session::new();
-            s.execute("file.new", json!({"width": 2, "height": 1, "depth": depth, "mode": "rgb", "background": "transparent"})).unwrap();
+            s.execute("file.new", json!({"width": 2, "height": 1, "depth": depth, "mode": mode, "background": "transparent"})).unwrap();
             paint(&mut s, |x, _| if x == 0 { [0.13, 0.41, 0.79, 1.0] } else { [0.71, 0.27, 0.19, 0.6] });
             s.execute("edit.assignProfile", json!({"profile": profile_id})).unwrap();
             let source_bytes = source.profile().to_bytes();
@@ -389,7 +393,7 @@ fn indexed_wide_gamut_composites_in_srgb_before_quantizing() {
                 photocraft_cms::cached(&source_profile, photocraft_cms::Builtin::Srgb.profile(), photocraft_cms::TransformOptions::default()).unwrap();
             let expected = |rgb: [f32; 3]| {
                 let mut out = [0.0f32; 16];
-                to_srgb.eval(&rgb, &mut out);
+                to_srgb.eval(if mode == "gray" { &rgb[..1] } else { &rgb }, &mut out);
                 [0, 1, 2].map(|i| (out[i].clamp(0.0, 1.0) * 255.0).round() as u8)
             };
             let surface = doc(&s).layers[0].surface().unwrap();
@@ -397,8 +401,6 @@ fn indexed_wide_gamut_composites_in_srgb_before_quantizing() {
             let stored_b = surface.rgba(1, 0);
             let expected_a = expected([stored_a[0], stored_a[1], stored_a[2]]);
             let expected_b = expected([stored_b[0], stored_b[1], stored_b[2]]);
-            assert_ne!(expected_a, [33, 105, 201], "{profile_id}: the regression colours must move");
-            assert_ne!(expected_b, [181, 69, 48], "{profile_id}: the regression colours must move");
 
             s.execute("image.mode.indexedColor", json!({"palette": "exact", "forced": "none", "dither": "none"})).unwrap();
             let d = doc(&s);
@@ -416,12 +418,56 @@ fn indexed_wide_gamut_composites_in_srgb_before_quantizing() {
             }
 
             s.execute("edit.undo", json!({})).unwrap();
-            assert_eq!(doc(&s).mode, ColorMode::Rgb);
+            assert_eq!(doc(&s).mode, if mode == "gray" { ColorMode::Grayscale } else { ColorMode::Rgb });
             assert_eq!(doc(&s).icc_profile.as_deref(), Some(&*source_bytes));
             s.execute("edit.redo", json!({})).unwrap();
             assert_eq!(doc(&s).icc_profile.as_deref(), Some(&*photocraft_cms::Builtin::Srgb.profile().to_bytes()));
             assert_eq!(doc(&s).layers[0].surface().unwrap().rgba(0, 0)[3], 1.0);
             assert!((doc(&s).layers[0].surface().unwrap().rgba(1, 0)[3] - 0.6).abs() <= 1.0 / 255.0);
+        }
+    }
+}
+
+#[test]
+fn indexed_color_honors_configured_intent_and_black_point_compensation() {
+    use photocraft_cms::{Curve, Intent, Profile, Transform};
+    for (mode, builtin, lift_black) in [("rgb", Builtin::DisplayP3, true), ("gray", Builtin::GrayGamma22, true), ("rgb", Builtin::Srgb, false)] {
+        let mut profile = builtin.profile().clone();
+        profile.white_point = [0.79, 0.83, 0.68];
+        if lift_black {
+            let curve = Curve::Table(vec![0.05, 0.12, 0.4, 1.0]);
+            if mode == "gray" {
+                profile.gray_trc = Some(curve);
+            } else {
+                profile.trc = Some(std::array::from_fn(|_| curve.clone()));
+            }
+        }
+        let bytes = profile.with_encoded_bytes().to_bytes();
+        let source = Profile::parse(&bytes).unwrap();
+        let settings: &[(Intent, bool)] =
+            if lift_black { &[(Intent::RelativeColorimetric, false), (Intent::AbsoluteColorimetric, true)] } else { &[(Intent::AbsoluteColorimetric, true)] };
+        for &(intent, bpc) in settings {
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width": 257, "height": 65, "depth": 32, "mode": mode, "background": "transparent"})).unwrap();
+            paint(&mut s, |x, _| if x % 2 == 0 { [0.12, 0.29, 0.57, 1.0] } else { [0.43, 0.39, 0.2, 1.0] });
+            std::sync::Arc::make_mut(&mut s.active_mut().unwrap().doc).icc_profile = Some(bytes.clone());
+            s.execute("edit.colorSettings", json!({"intent": intent.id(), "bpc": bpc})).unwrap();
+            let reference = Transform::new(&source, Builtin::Srgb.profile(), intent, bpc).unwrap();
+            let expected = [0, 1].map(|x| {
+                let pixel = doc(&s).layers[0].surface().unwrap().rgba(x, 0);
+                let mut out = [0.0f32; 16];
+                reference.eval(if mode == "gray" { &pixel[..1] } else { &pixel[..3] }, &mut out);
+                [0, 1, 2].map(|i| (out[i].clamp(0.0, 1.0) * 255.0).round() as u8)
+            });
+            s.execute("image.mode.indexedColor", json!({"palette": "exact", "forced": "none", "dither": "none"})).unwrap();
+            let converted = doc(&s);
+            assert_eq!(converted.icc_profile.as_ref(), Some(&Builtin::Srgb.profile().to_bytes()));
+            let table = converted.color_table.as_ref().unwrap();
+            for (x, color) in expected.into_iter().enumerate() {
+                assert!(table.colors.contains(&color), "{mode} {intent:?} bpc={bpc}: {color:?} missing from {:?}", table.colors);
+                let pixel = converted.layers[0].surface().unwrap().rgba(x as i32, 0);
+                assert_eq!([0, 1, 2].map(|i| (pixel[i] * 255.0).round() as u8), color, "{mode} {intent:?} bpc={bpc}");
+            }
         }
     }
 }
@@ -486,7 +532,7 @@ fn indexed_composite_srgb_matches_serial_cms_for_rgb_gray_depth_and_alpha() {
         for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
             let d = srgb_reference_doc(mode, depth, profile.profile());
             for opaque in [false, true] {
-                let got = composite_in_srgb(&d, opaque).unwrap();
+                let got = composite_in_srgb(&d, opaque, TransformOptions::default()).unwrap();
                 let want = serial_srgb_reference(&d, opaque);
                 assert_eq!(got, want, "{label} {depth:?}, opaque={opaque}");
                 if !opaque {

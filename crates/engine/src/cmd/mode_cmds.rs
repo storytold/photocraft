@@ -7,11 +7,10 @@
 //! inks (`Document::duotone`), which display and flat export render through. Like Photoshop the
 //! conversions flatten (Indexed, Bitmap) and require a grayscale source (Bitmap, Duotone).
 
-use craft_cms::{ColorSpace, TransformOptions};
+use craft_cms::{Builtin, ColorSpace, TransformOptions};
 use photocraft_algo::palette_map::{AlphaMode, Palette};
 use photocraft_algo::quantize::{self, BitmapMethod, Dither, Forced, HalftoneShape, PaletteKind};
 use photocraft_algo::transform::{Homography, Interp};
-use photocraft_cms::{Builtin, TransformOptions};
 use photocraft_color::{ColorMode, PixelFormat, SampleType};
 use photocraft_doc::adjust::CurvePoint;
 use photocraft_doc::{ColorTable, Document, Duotone, DuotoneInk, Layer, LayerContent, LayerId, Size};
@@ -207,7 +206,7 @@ fn composite(doc: &Document, opaque: bool) -> Vec<[f32; 4]> {
 
 /// Indexed storage and its palette are sRGB. Convert RGB/gray composites before quantisation so
 /// wide-gamut document samples are not interpreted as sRGB numbers by the quantizer.
-fn composite_in_srgb(doc: &Document, opaque: bool) -> Result<Vec<[f32; 4]>> {
+fn composite_in_srgb(doc: &Document, opaque: bool, options: TransformOptions) -> Result<Vec<[f32; 4]>> {
     const CMD: &str = "image.mode.indexedColor";
     let mut pixels = composite(doc, opaque);
     let channels = match doc.mode {
@@ -217,15 +216,17 @@ fn composite_in_srgb(doc: &Document, opaque: bool) -> Result<Vec<[f32; 4]>> {
     };
     let source = crate::color_cmds::document_profile(doc);
     let srgb = Builtin::Srgb.profile();
-    if source.same_colors(srgb) {
+    if source.same_colors(srgb)
+        && (options.intent != craft_cms::Intent::AbsoluteColorimetric || source.same_bytes(srgb) || source.media_white() == srgb.media_white())
+    {
         return Ok(pixels);
     }
-    let transform =
-        photocraft_cms::cached(&source, srgb, TransformOptions::default()).map_err(|e| bad(CMD, format!("could not convert the composite to sRGB: {e}")))?;
+    let transform = craft_cms::transform::cached(&source, srgb, options).map_err(|e| bad(CMD, format!("could not convert the composite to sRGB: {e}")))?;
     let convert = |converted: &mut [f32; 16], pixel: &mut [f32; 4]| {
         let input = if channels == 1 { &pixel[..1] } else { &pixel[..3] };
-        transform.eval(input, converted);
+        transform.eval(input, converted).map_err(|e| bad(CMD, format!("could not convert the composite to sRGB: {e}")))?;
         pixel[..3].copy_from_slice(&converted[..3]);
+        Ok(())
     };
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -234,11 +235,11 @@ fn composite_in_srgb(doc: &Document, opaque: bool) -> Result<Vec<[f32; 4]>> {
             use rayon::prelude::*;
             // `cached` returns an Arc<Transform>; Transform's evaluation reads only immutable
             // tables, so the same cached transform is safe to share between Rayon workers.
-            pixels.par_iter_mut().for_each_init(|| [0.0f32; 16], convert);
+            pixels.par_iter_mut().try_for_each_init(|| [0.0f32; 16], |scratch, pixel| convert(scratch, pixel))?;
         } else {
             let mut converted = [0.0f32; 16];
             for pixel in &mut pixels {
-                convert(&mut converted, pixel);
+                convert(&mut converted, pixel)?;
             }
         }
     }
@@ -246,7 +247,7 @@ fn composite_in_srgb(doc: &Document, opaque: bool) -> Result<Vec<[f32; 4]>> {
     {
         let mut converted = [0.0f32; 16];
         for pixel in &mut pixels {
-            convert(&mut converted, pixel);
+            convert(&mut converted, pixel)?;
         }
     }
     Ok(pixels)
@@ -482,8 +483,9 @@ fn indexed_color(s: &mut Session, raw: &Value) -> Result<Value> {
             ));
         }
     }
+    let options = TransformOptions { intent: s.color.settings.intent(), bpc: s.color.settings.bpc, ..TransformOptions::default() };
     let (pal_len, transparent, palette_snapshot) = s.edit("Indexed Color", |doc, active| {
-        let mut px = composite_in_srgb(doc, !transparency && matte.is_none())?;
+        let mut px = composite_in_srgb(doc, !transparency && matte.is_none(), options)?;
         if let Some(matte) = matte {
             for pixel in &mut px {
                 let alpha = pixel[3].clamp(0.0, 1.0);
@@ -586,7 +588,7 @@ fn indexed_color(s: &mut Session, raw: &Value) -> Result<Value> {
         single_layer(doc, active, ColorMode::Indexed, &px, if transparent.is_some() { "Index" } else { "Background" }, transparent.is_none());
         // Indexed storage holds expanded sRGB samples; retaining an AdobeRGB/Display-P3 tag here
         // would make those samples get transformed a second time by compositors and exporters.
-        doc.icc_profile = Some(photocraft_cms::Builtin::Srgb.profile().to_bytes());
+        doc.icc_profile = Some(Builtin::Srgb.profile().to_bytes());
         let mut table = crate::palette_cmds::palette_to_color_table(&palette);
         table.transparent = transparent.map(|index| index as u8);
         let snapshot = palette.clone();

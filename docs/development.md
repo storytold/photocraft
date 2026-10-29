@@ -791,6 +791,9 @@ the stock dialog and quantizer are unchanged.
 Non-identity transforms reuse the cached CMS transform. Native composites of at least 16,384
 pixels convert in parallel with per-worker scratch; smaller images and WebAssembly retain the
 serial path. Both paths preserve alpha and the same RGB/gray channel routing.
+The conversion honors Color Settings rendering intent and black-point compensation. The
+relative-color identity shortcut is not used for absolute-colorimetric profiles with a
+different media white.
 `cargo run --release -p photocraft-engine --example indexed_color_perf -- image.png` measures
 palette construction, Floyd–Steinberg diffusion, and the complete full-resolution CPU preview
 path (proxy copy, engine command, result composition; excludes GPU upload/presentation).
