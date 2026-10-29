@@ -120,6 +120,14 @@ pub struct ChannelReadout {
     pub name: String,
     pub spot: bool,
     pub percent: i32,
+    /// Counted by Total Spot Ink (Channel Options › Include in Total Spot Ink); a substrate such
+    /// as the shirt is a spot channel that is not.
+    #[serde(rename = "totalInk", default = "default_true")]
+    pub total_ink: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// The reading of every extra (alpha and spot) channel of `doc` over `rect` (document pixels,
@@ -142,7 +150,7 @@ pub fn channel_readouts_in(doc: &Document, rect: Rect) -> Vec<ChannelReadout> {
             }
             let v = if n == 0 { 0.0 } else { sum / n as f64 };
             let ink = if ch.spot.is_some() { v } else { 1.0 - v };
-            ChannelReadout { name: ch.name.clone(), spot: ch.spot.is_some(), percent: (ink * 100.0).round() as i32 }
+            ChannelReadout { name: ch.name.clone(), spot: ch.spot.is_some(), percent: (ink * 100.0).round() as i32, total_ink: ch.total_ink }
         })
         .collect()
 }
@@ -154,10 +162,11 @@ pub fn channel_readouts(doc: &Document, x: f64, y: f64, size: u32) -> Vec<Channe
     crate::sample_cmds::sample_rect(x, y, size, doc.bounds()).map(|r| channel_readouts_in(doc, r)).unwrap_or_default()
 }
 
-/// Total Spot Ink: every spot channel's ink % at the pixel added up (alpha channels left out). A
+/// Total Spot Ink: every spot channel's ink % at the pixel added up (alpha channels left out, and
+/// spot channels whose Channel Options say they are not an ink, such as a shirt substrate). A
 /// separations total, where Photoshop's Total Ink adds up the CMYK plates only.
 pub fn total_spot_ink(channels: &[ChannelReadout]) -> i32 {
-    channels.iter().filter(|c| c.spot).map(|c| c.percent).sum()
+    channels.iter().filter(|c| c.spot && c.total_ink).map(|c| c.percent).sum()
 }
 
 /// The Sample Size a sampler readout of `doc` uses for `size`: Bitmap and Multichannel documents
@@ -315,7 +324,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Add Color Sampler",
             menu: &[],
             shortcut: None,
-            params: r##"{"x":f64,"y":f64,"size":1|3|5|11|31|51|101|"point"=1 (the Sample Size the readout averages over, in document pixels)} → the new point {index, number, position, rgb, cmyk, gray, hsb, hsl, lab, web, totalInk, opacity, totalSpotInk, channels:[{name, spot, percent}]}; errors at the 10-point limit or off the canvas"##,
+            params: r##"{"x":f64,"y":f64,"size":1|3|5|11|31|51|101|"point"=1 (the Sample Size the readout averages over, in document pixels)} → {index, count, point: {index, number, position, rgb, cmyk, gray, hsb, hsl, lab, web, totalInk, opacity, totalSpotInk, channels:[{name, spot, percent, totalInk}]}}; errors at the 10-point limit or off the canvas"##,
             enabled: has_doc,
             run: add,
             journal: false,
@@ -355,7 +364,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Color Samplers",
             menu: &[],
             shortcut: None,
-            params: r##"{"size":1|3|5|11|31|51|101|"point"=1 (Sample Size: each readout is the size × size average of document pixels around the point)} → {max, size, samplers:[{index, number, position, rgb, cmyk, gray, hsb, hsl, lab, web, totalInk, opacity, totalSpotInk, channels:[{name, spot, percent}]}]} (each point's colour in every readout mode: RGB 0–255, CMYK %, Grayscale K %, HSB, HSL, Lab, web hex, Total Ink % (the CMYK plates), composite Opacity %, Total Spot Ink % (every spot channel added up) and each alpha/spot channel's %, as a channel targeted alone reads it, averaged over the same box)"##,
+            params: r##"{"size":1|3|5|11|31|51|101|"point"=1 (Sample Size: each readout is the size × size average of document pixels around the point)} → {max, size, samplers:[{index, number, position, rgb, cmyk, gray, hsb, hsl, lab, web, totalInk, opacity, totalSpotInk, channels:[{name, spot, percent, totalInk}]}]} (each point's colour in every readout mode: RGB 0–255, CMYK %, Grayscale K %, HSB, HSL, Lab, web hex, Total Ink % (the CMYK plates), composite Opacity %, Total Spot Ink % (the spot channels with Include in Total Spot Ink on, added up; alpha channels never count) and each alpha/spot channel's %, as a channel targeted alone reads it, averaged over the same box)"##,
             enabled: has_doc,
             run: list,
             journal: false,
@@ -365,7 +374,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Sample Channels",
             menu: &[],
             shortcut: None,
-            params: r##"{"x":f64,"y":f64,"size":"point"|1|3|5|11|31|51|101=1,"zoom":f64? (as `document.sampleColor`: the Sample Size and the view zoom its box follows)} → [{name, spot, percent}] (every alpha and spot channel's reading at that point, in Channels-panel order: ink % for a spot channel, masked % for an alpha channel with white = 0 %; the pixel under the point, or the mean over the same box `document.sampleColor` averages; empty off the canvas)"##,
+            params: r##"{"x":f64,"y":f64,"size":"point"|1|3|5|11|31|51|101=1,"zoom":f64? (as `document.sampleColor`: the Sample Size and the view zoom its box follows)} → [{name, spot, percent, totalInk}] (every alpha and spot channel's reading at that point, in Channels-panel order: ink % for a spot channel, masked % for an alpha channel with white = 0 %; `totalInk` is the channel's Include in Total Spot Ink setting, which only matters for a spot channel: Total Spot Ink adds up the spot channels with it on and never counts an alpha channel; the pixel under the point, or the mean over the same box `document.sampleColor` averages; empty off the canvas)"##,
             enabled: has_doc,
             run: sample_channels,
             journal: false,

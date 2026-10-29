@@ -1,7 +1,8 @@
 //! Channels panel › Channel Options… (double-click an alpha or spot channel's thumbnail, or the
 //! Quick Mask row): name, Color Indicates Masked Areas / Selected Areas / Spot Color, the overlay
-//! or ink colour, and opacity (solidity for spot channels). OK runs the engine's
-//! `channel.options`, which agents can also call directly with params (#3761).
+//! or ink colour, and opacity (solidity for spot channels). A spot channel also has Include in
+//! Total Spot Ink, off for one that is not an ink (the shirt under a separation). OK runs the
+//! engine's `channel.options`, which agents can also call directly with params (#3761).
 //!
 //! On the layer mask (double-click its Channels row, or Mask Options… on its Layers thumbnail)
 //! it is Photoshop's Layer Mask Display Options: just the rubylith's colour and opacity.
@@ -80,17 +81,23 @@ pub fn fields(app: &PhotocraftApp, channel: &Value) -> Option<DialogFields> {
         let o = &app.session.prefs().layer_mask_overlay;
         return Some(open_fields(None, None, o.rgb(), f64::from((o.alpha() * 100.0).round()), "opacity"));
     }
-    let (name, indicates, color, percent) = if channel.as_str() == Some("quickMask") {
+    let (name, indicates, color, percent, total_ink) = if channel.as_str() == Some("quickMask") {
         let o = app.session.quick_mask_options;
-        (None, kind(o.indicates), o.color, o.opacity)
+        (None, kind(o.indicates), o.color, o.opacity, None)
     } else {
         let ch = doc.channels.get(usize::try_from(channel.as_u64()?).ok()?)?;
         match ch.spot {
-            Some((ink, solidity)) => (Some(ch.name.clone()), "spot", ink, solidity),
-            None => (Some(ch.name.clone()), kind(ch.indicates), ch.color, ch.opacity),
+            Some((ink, solidity)) => (Some(ch.name.clone()), "spot", ink, solidity, Some(ch.total_ink)),
+            None => (Some(ch.name.clone()), kind(ch.indicates), ch.color, ch.opacity, Some(ch.total_ink)),
         }
     };
-    Some(open_fields(name, Some(indicates), color.to_rgb(), f64::from((percent.clamp(0.0, 1.0) * 100.0).round()), "opacity"))
+    let mut f = open_fields(name, Some(indicates), color.to_rgb(), f64::from((percent.clamp(0.0, 1.0) * 100.0).round()), "opacity");
+    // Include in Total Spot Ink: only spot channels are counted, but the flag is kept on every
+    // alpha channel, so a channel made spot in this dialog starts as it was.
+    if let Some(on) = total_ink {
+        f.set("totalInk", FieldValue::Bool(on));
+    }
+    Some(f)
 }
 
 /// The New Channel values: Channel Options' for a channel still to be made (the next "Alpha N"
@@ -150,6 +157,11 @@ fn rows(kind: Kind, spot: bool) -> Vec<Param> {
         ("opacity", tl!("Opacity:"))
     };
     rows.push(Param::new(key, label, ParamKind::number(Some(0.0), Some(100.0), if solid { 0.0 } else { 50.0 }, 1.0, 0)));
+    // A spot channel that is not an ink (the shirt under a separation) stays out of the Total
+    // Spot Ink readout.
+    if kind == Kind::Channel {
+        rows.push(Param::new("totalInk", tl!("Include in Total Spot Ink"), ParamKind::bool(true)).visible_when("indicates", "spot").not_remembered());
+    }
     rows
 }
 
@@ -202,6 +214,13 @@ pub fn params(f: &DialogFields, channel: &Value) -> Value {
     }
     if let Some(v) = f.number("opacity") {
         p.insert(if spot { "solidity" } else { "opacity" }.into(), json!(v));
+    }
+    // Only a channel that exists has the flag: New Channel makes an alpha channel, which counts
+    // from the start.
+    if !channel.is_null()
+        && let Some(on) = f.bool("totalInk")
+    {
+        p.insert("totalInk".into(), json!(on));
     }
     Value::Object(p)
 }
