@@ -28,6 +28,35 @@ fn copied(r: &Value) -> LayerId {
     LayerId(r["layers"][0].as_u64().unwrap())
 }
 
+#[test]
+fn selection_only_copy_preserves_source_and_soft_coverage_across_documents() {
+    for depth in [8, 16, 32] {
+        let (mut s, paint) = two_docs(40, 30, depth);
+        s.execute("select.rect", json!({"x": 7, "y": 8, "width": 3, "height": 4})).unwrap();
+        std::sync::Arc::make_mut(&mut s.active_mut().unwrap().doc).selection.as_mut().unwrap().write_pixel(7, 8, &[0.5]);
+        let before = doc(&s, 0).clone();
+        let r = s.execute("layer.copyToDocument", json!({"source": 0, "document": 1, "layers": [paint.0], "selectionOnly": true, "offset": [10, 5]})).unwrap();
+        let id = copied(&r);
+        assert_eq!(bounds(&s, 1, id), Rect::new(17, 13, 20, 17));
+        assert_eq!(*doc(&s, 0), before);
+        let pixel = doc(&s, 1).layer(id).unwrap().surface().unwrap().rgba(17, 13);
+        assert_eq!(&pixel[..3], &[1.0, 0.0, 0.0]);
+        assert!((pixel[3] - 0.5).abs() <= 1.0 / 255.0, "soft selection coverage survives depth conversion");
+        assert!(s.undo());
+        assert_eq!(doc(&s, 1).layers.len(), 1);
+        assert_eq!(*doc(&s, 0), before);
+    }
+}
+
+#[test]
+fn selection_only_copy_rejects_missing_selection_and_wrong_parameter_type() {
+    let (mut s, _) = two_docs(40, 30, 8);
+    for option in [json!(true), json!("yes")] {
+        assert!(s.execute("layer.copyToDocument", json!({"document": 1, "selectionOnly": option})).is_err());
+        assert_eq!(doc(&s, 1).layers.len(), 1);
+    }
+}
+
 fn bounds(s: &Session, i: usize, id: LayerId) -> Rect {
     crate::layer_multi_cmds::layer_bounds(doc(s, i).layer(id).unwrap()).unwrap()
 }

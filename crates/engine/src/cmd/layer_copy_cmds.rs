@@ -151,6 +151,7 @@ fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let (from, to) = (&s.documents()[src], &s.documents()[dest]);
     let (sdoc, ddoc) = (from.doc.clone(), to.doc.clone());
+    let floating = crate::float_cmds::floating(from).cloned();
     let ids: Vec<LayerId> = match p.get("layers") {
         None => from.selected_layers(),
         Some(v) => v
@@ -166,6 +167,14 @@ fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
     if ids.is_empty() {
         return Err(bad("no layers to copy"));
     }
+    let selection_only = match p.get("selectionOnly") {
+        None => false,
+        Some(Value::Bool(on)) => *on,
+        Some(_) => return Err(bad("`selectionOnly` must be a boolean")),
+    };
+    if selection_only && (ids.len() != 1 || sdoc.selection.is_none()) {
+        return Err(bad("copying selected pixels requires a selection and one pixel layer"));
+    }
     for (doc, role) in [(&sdoc, "source"), (&ddoc, "destination")] {
         if !layered(doc.mode) {
             return Err(EngineError::Other(format!("layers can't be copied with a {:?} {role} document", doc.mode)));
@@ -179,7 +188,22 @@ fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
     copies.resolution_dpi = sdoc.resolution_dpi;
     for id in &ids {
         let src_layer = sdoc.layer(*id).ok_or(EngineError::NoLayer(*id))?;
-        let mut l = src_layer.duplicate();
+        let mut l = if selection_only {
+            let parts = match floating.as_ref().filter(|f| f.layer == *id) {
+                Some(f) => f.parts.clone(),
+                None => std::sync::Arc::new(crate::float_cmds::CutParts::new(&sdoc, *id, true, s.tools.background, false)?),
+            };
+            if parts.selected_pixels().content_bounds().is_empty() {
+                return Err(bad("the selected pixels are empty"));
+            }
+            let mut layer = Layer::new(src_layer.name.clone(), LayerContent::Raster(parts.selected_pixels().clone()));
+            if let Some(f) = floating.as_ref().filter(|f| f.layer == *id) {
+                crate::commands::translate_layer(&sdoc, &mut layer, f.offset.0, f.offset.1);
+            }
+            layer
+        } else {
+            src_layer.duplicate()
+        };
         // A dragged Background arrives as an ordinary layer (the destination keeps its own).
         if sdoc.is_background(*id) {
             l.name = ddoc.next_layer_name("Layer");
@@ -305,7 +329,7 @@ pub fn specs() -> Vec<CommandSpec> {
         label: "Copy Layers to Document",
         menu: &[],
         shortcut: None,
-        params: r##"{"document":index (destination),"layers":[id,…]?=the source's selected layers,"source":index?=active,"center":bool=false (centre on the destination's canvas),"at":[x,y]? (centre the copies on this point),"offset":[dx,dy]?=[0,0] (from their place in the source),"name":str? (one layer: the copy's name)}"##,
+        params: r##"{"document":index (destination),"layers":[id,…]?=the source's selected layers,"source":index?=active,"selectionOnly":bool=false (copy selected pixels from one raster layer),"center":bool=false (centre on the destination's canvas),"at":[x,y]? (centre the copies on this point),"offset":[dx,dy]?=[0,0] (from their place in the source),"name":str? (one layer: the copy's name)}"##,
         enabled,
         run: copy_to_document,
         journal: true,

@@ -27,6 +27,9 @@ pub struct Drag {
     /// `Some(false)` moves the outline, `Some(true)` moves the floating piece (`select.float`), as
     /// every Move-tool drag with a selection does (`move_ui::moves_selected_pixels_with`).
     pub sel_move: Option<bool>,
+    /// Restore a pre-existing floating piece if this Move drag becomes a copy
+    /// into another document; a fresh float belongs only to this gesture.
+    pub transfer_floating_before: Option<photocraft_engine::float_cmds::Floating>,
     /// The last ⇧-locked offset of a selection-tool drag of the selection (`move_mods`, #6231);
     /// keeps the locked direction stable between events. The Move tool's own drags use `move_mods`.
     pub sel_axis: Option<[f64; 2]>,
@@ -47,6 +50,7 @@ impl Drag {
             released: egui::Modifiers::NONE,
             reposition: false,
             sel_move: None,
+            transfer_floating_before: None,
             sel_axis: None,
             lasso: None,
         }
