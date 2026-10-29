@@ -495,3 +495,292 @@ fn a_hidden_work_path_stays_hidden_when_another_tile_is_clicked() {
     assert!(right_outlines_on_switch(false) > 0, "a shown Work Path is drawn in that frame");
     assert_eq!(right_outlines_on_switch(true), 0, "the hidden one isn't");
 }
+
+/// The black arrow selects one subpath of a multi-subpath shape and moves only that one.
+#[test]
+fn path_selection_moves_only_the_clicked_subpath() {
+    let mut h = harness();
+    let layer = h.state_mut().run("shape.create", json!({"kind": "rect", "rect": [20, 20, 40, 40], "fill": "#ff0000"})).unwrap()["layer"].as_u64().unwrap();
+    // Two disjoint rectangles on one shape path (shape.edit replaces the path and clears the
+    // live shape, so the outline can't be regenerated from `live`).
+    let k = |x: f64, y: f64| json!({"anchor": [x, y]});
+    let two = json!({"subpaths": [
+        {"closed": true, "knots": [k(20.0, 20.0), k(60.0, 20.0), k(60.0, 60.0), k(20.0, 60.0)]},
+        {"closed": true, "knots": [k(100.0, 20.0), k(140.0, 20.0), k(140.0, 60.0), k(100.0, 60.0)]},
+    ]});
+    h.state_mut().run("shape.edit", json!({"layer": layer, "path": two})).unwrap();
+    h.state_mut().ui.tool = Tool::PathSelection;
+    h.run_steps(2);
+
+    // Click the second subpath: only it is selected, its layer becomes active.
+    crate::vector_ui::path_selection_finish(h.state_mut(), [120.0, 40.0], [120.0, 40.0]);
+    assert_eq!(h.state().ui.path_selection.subpaths, vec![1]);
+    assert_eq!(h.state().session.active().unwrap().active_layer.unwrap().0, layer);
+
+    // Drag it 10 px right: subpath 0 stays put, subpath 1 moves.
+    crate::vector_ui::path_selection_finish(h.state_mut(), [120.0, 40.0], [130.0, 40.0]);
+    let app = h.state();
+    let Some(l) = app.session.active().unwrap().doc.layer(photocraft_doc::LayerId(layer)) else { panic!("layer gone") };
+    let photocraft_doc::LayerContent::Shape(sh) = &l.content else { panic!("not a shape") };
+    assert_eq!(sh.path.subpaths[0].knots[0].anchor, photocraft_geom::Point::new(20.0, 20.0), "subpath 0 untouched");
+    assert_eq!(sh.path.subpaths[1].knots[0].anchor, photocraft_geom::Point::new(110.0, 20.0), "subpath 1 moved");
+
+    // Click empty canvas clears the component selection.
+    crate::vector_ui::path_selection_finish(h.state_mut(), [5.0, 5.0], [5.0, 5.0]);
+    assert!(h.state().ui.path_selection.subpaths.is_empty());
+}
+
+/// A shape layer holding two disjoint rectangles (subpath 0 at 20..60, subpath 1 at 100..140).
+fn two_rect_layer(h: &mut Harness<'_, PhotocraftApp>) -> u64 {
+    let layer = h.state_mut().run("shape.create", json!({"kind": "rect", "rect": [20, 20, 40, 40], "fill": "#ff0000"})).unwrap()["layer"].as_u64().unwrap();
+    let k = |x: f64, y: f64| json!({"anchor": [x, y]});
+    let two = json!({"subpaths": [
+        {"closed": true, "knots": [k(20.0, 20.0), k(60.0, 20.0), k(60.0, 60.0), k(20.0, 60.0)]},
+        {"closed": true, "knots": [k(100.0, 20.0), k(140.0, 20.0), k(140.0, 60.0), k(100.0, 60.0)]},
+    ]});
+    h.state_mut().run("shape.edit", json!({"layer": layer, "path": two})).unwrap();
+    layer
+}
+
+/// Edit › Copy/Paste with the black arrow: the selected component becomes the path clipboard,
+/// then a new saved path "Pasted Path" centred on the view; the shape is untouched.
+#[test]
+fn path_selection_copy_paste_flow() {
+    let mut h = harness();
+    let layer = two_rect_layer(&mut h);
+    h.state_mut().ui.tool = Tool::PathSelection;
+    h.run_steps(2);
+    crate::vector_ui::path_selection_finish(h.state_mut(), [120.0, 40.0], [120.0, 40.0]);
+    assert_eq!(h.state().ui.path_selection.subpaths, vec![1]);
+
+    // Edit › Copy routes to the path clipboard (the pixel clipboard is replaced)…
+    h.state_mut().run("edit.copy", json!({})).unwrap();
+    assert!(h.state().session.path_clipboard.is_some(), "{}", h.state().ui.status);
+    assert!(h.state().session.clipboard.is_none(), "a path clip replaces the pixel clip");
+    let l = h.state().session.active().unwrap().doc.layer(photocraft_doc::LayerId(layer)).unwrap();
+    let photocraft_doc::LayerContent::Shape(sh) = &l.content else { panic!("not a shape") };
+    assert_eq!(sh.path.subpaths.len(), 2, "copy leaves the shape alone");
+
+    // …and Edit › Paste lays it down as "Pasted Path", centred on the view centre.
+    let c = crate::canvas::ViewXform::active(h.state()).map(|xf| [f64::from(xf.center[0]), f64::from(xf.center[1])]).unwrap_or([100.0, 50.0]);
+    h.state_mut().run("edit.paste", json!({})).unwrap();
+    let app = h.state();
+    let pasted = app.session.active().unwrap().doc.paths.iter().find(|q| q.name == "Pasted Path").expect("pasted path");
+    assert_eq!(pasted.path.subpaths.len(), 1);
+    // The copied component's bounds centre (120, 40) lands on the paste centre; anchor (100, 20) follows.
+    assert_eq!(pasted.path.subpaths[0].knots[0].anchor, photocraft_geom::Point::new(c[0] - 20.0, c[1] - 20.0));
+    assert_eq!(app.ui.selected_path.as_deref(), Some("Pasted Path"), "Photoshop selects the pasted path in the Paths panel");
+}
+
+/// Edit › Cut with the black arrow: the selected component leaves the shape (one undo step)
+/// and lands on the clipboard; Paste lays it down again.
+#[test]
+fn path_selection_cut_flow() {
+    let mut h = harness();
+    let layer = two_rect_layer(&mut h);
+    h.state_mut().ui.tool = Tool::PathSelection;
+    h.run_steps(2);
+    crate::vector_ui::path_selection_finish(h.state_mut(), [120.0, 40.0], [120.0, 40.0]);
+
+    h.state_mut().run("edit.cut", json!({})).unwrap();
+    let app = h.state();
+    let l = app.session.active().unwrap().doc.layer(photocraft_doc::LayerId(layer)).unwrap();
+    let photocraft_doc::LayerContent::Shape(sh) = &l.content else { panic!("not a shape") };
+    assert_eq!(sh.path.subpaths.len(), 1, "the cut component left the shape");
+    assert_eq!(sh.path.subpaths[0].knots[0].anchor, photocraft_geom::Point::new(20.0, 20.0));
+    assert!(app.session.path_clipboard.is_some());
+    assert!(app.ui.path_selection.subpaths.is_empty(), "the cut cleared the component selection");
+
+    // One history step puts the component back.
+    assert_eq!(app.session.active().unwrap().history.undo_label(), Some("Cut"));
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    let l = h.state().session.active().unwrap().doc.layer(photocraft_doc::LayerId(layer)).unwrap();
+    let photocraft_doc::LayerContent::Shape(sh) = &l.content else { panic!("not a shape") };
+    assert_eq!(sh.path.subpaths.len(), 2, "undo restores the cut component");
+
+    // The clipboard still holds the component; Paste lays it down centred on the view.
+    let c = crate::canvas::ViewXform::active(h.state()).map(|xf| [f64::from(xf.center[0]), f64::from(xf.center[1])]).unwrap_or([100.0, 50.0]);
+    h.state_mut().run("edit.paste", json!({})).unwrap();
+    let pasted = h.state().session.active().unwrap().doc.paths.iter().find(|q| q.name == "Pasted Path").expect("pasted path");
+    assert_eq!(pasted.path.subpaths[0].knots[0].anchor, photocraft_geom::Point::new(c[0] - 20.0, c[1] - 20.0));
+}
+
+/// The selected component is marked on the canvas: its anchors draw filled with the accent
+/// colour, the unselected component's stay hollow (white inside), like Photoshop.
+#[test]
+fn path_selection_marks_the_selected_subpath() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 200, "height": 200})).unwrap();
+    app.sync_views();
+    let id = app.run("shape.create", json!({"kind": "rect", "rect": [20, 20, 40, 40], "fill": "#ff0000"})).unwrap()["layer"].as_u64().unwrap();
+    let k = |x: f64, y: f64| json!({"anchor": [x, y]});
+    app.run(
+        "shape.edit",
+        json!({"layer": id, "path": {"subpaths": [
+            {"closed": true, "knots": [k(20.0, 20.0), k(60.0, 20.0), k(60.0, 60.0), k(20.0, 60.0)]},
+            {"closed": true, "knots": [k(100.0, 20.0), k(140.0, 20.0), k(140.0, 60.0), k(100.0, 60.0)]},
+        ]}}),
+    )
+    .unwrap();
+    app.ui.tool = Tool::PathSelection;
+    crate::vector_ui::path_selection_finish(&mut app, [120.0, 40.0], [120.0, 40.0]);
+    assert_eq!(app.ui.path_selection.subpaths, vec![1]);
+
+    let mut h = Harness::builder().with_size(vec2(900.0, 700.0)).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            let ctx = ui.ctx().clone();
+            if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                return;
+            }
+            egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h.run_steps(6);
+    {
+        let v = &mut h.state_mut().ui.views[0];
+        v.zoom = 2.0;
+        v.center = [100.0, 100.0];
+        v.fit_pending = false;
+    }
+    h.run_steps(3);
+
+    let accent = crate::theme::Tokens::get(&h.ctx).accent;
+    let xf = crate::canvas::ViewXform::active(h.state()).expect("active document view");
+    let ppp = h.ctx.pixels_per_point();
+    let img = h.render().unwrap();
+    let px = |at: egui::Pos2| {
+        let x = (at.x * ppp).round() as u32;
+        let y = (at.y * ppp).round() as u32;
+        img.get_pixel(x, y).0
+    };
+    // The selected component's anchor (100, 20) is a filled accent square…
+    assert_eq!(&px(xf.to_screen(100.0, 20.0))[..3], &[accent.r(), accent.g(), accent.b()], "the selected component's anchor is filled");
+    // …the unselected component's anchor (20, 20) is a hollow (white) square.
+    assert_eq!(&px(xf.to_screen(20.0, 20.0))[..3], &[255, 255, 255], "the unselected component's anchor is hollow");
+}
+
+/// The black arrow edits the saved path selected in the Paths panel: click selects its
+/// component, a drag moves it, Copy takes its component and Paste appends it right back.
+#[test]
+fn path_selection_edits_the_selected_saved_path() {
+    let mut h = harness();
+    // A saved path with two disjoint rectangles.
+    let k = |x: f64, y: f64| json!({"anchor": [x, y]});
+    h.state_mut()
+        .run(
+            "path.set",
+            json!({"name": "Sister", "path": {"subpaths": [
+                {"closed": true, "knots": [k(20.0, 20.0), k(60.0, 20.0), k(60.0, 60.0), k(20.0, 60.0)]},
+                {"closed": true, "knots": [k(100.0, 20.0), k(140.0, 20.0), k(140.0, 60.0), k(100.0, 60.0)]},
+            ]}}),
+        )
+        .unwrap();
+    h.state_mut().ui.selected_path = Some("Sister".into());
+    h.state_mut().ui.tool = Tool::PathSelection;
+    h.run_steps(2);
+
+    // Click the second component: it becomes the selection…
+    crate::vector_ui::path_selection_finish(h.state_mut(), [120.0, 40.0], [120.0, 40.0]);
+    assert_eq!(h.state().ui.path_selection.subpaths, vec![1]);
+    // …and a drag moves only it, inside the saved path.
+    crate::vector_ui::path_selection_finish(h.state_mut(), [120.0, 40.0], [130.0, 40.0]);
+    let doc = &h.state().session.active().unwrap().doc;
+    let saved = doc.paths.iter().find(|q| q.name == "Sister").unwrap();
+    assert_eq!(saved.path.subpaths[0].knots[0].anchor, photocraft_geom::Point::new(20.0, 20.0), "component 0 untouched");
+    assert_eq!(saved.path.subpaths[1].knots[0].anchor, photocraft_geom::Point::new(110.0, 20.0), "component 1 moved");
+
+    // Copy takes the component; Paste appends it to the path selected in the Paths panel
+    // ("Sister"), centred on the view, and the panel selection stays — no new saved path.
+    h.state_mut().run("edit.copy", json!({})).unwrap();
+    h.state_mut().run("edit.paste", json!({})).unwrap();
+    let c = crate::canvas::ViewXform::active(h.state()).map(|xf| [f64::from(xf.center[0]), f64::from(xf.center[1])]).unwrap_or([100.0, 50.0]);
+    let app = h.state();
+    let doc = &app.session.active().unwrap().doc;
+    assert!(doc.paths.iter().all(|q| q.name != "Pasted Path"), "a targeted paste creates no new saved path");
+    let saved = doc.paths.iter().find(|q| q.name == "Sister").unwrap();
+    assert_eq!(saved.path.subpaths.len(), 3, "the copied component appended to the selected path");
+    // The copied bounds centre (130, 40) lands on the paste centre; anchor (110, 20) follows.
+    assert_eq!(saved.path.subpaths[2].knots[0].anchor, photocraft_geom::Point::new(c[0] - 20.0, c[1] - 20.0));
+    assert_eq!(app.ui.selected_path.as_deref(), Some("Sister"), "the panel selection stays on the pasted-into path");
+
+    // The pasted component is editable on the canvas too: clicking its (moved) first anchor
+    // selects it inside the saved path.
+    crate::vector_ui::path_selection_finish(h.state_mut(), [c[0] - 20.0, c[1] - 20.0], [c[0] - 20.0, c[1] - 20.0]);
+    assert_eq!(h.state().ui.path_selection.subpaths, vec![2], "the pasted component is editable on the canvas");
+}
+
+/// Edit › Paste lands the copied component in the path selected in the Paths panel, not in a
+/// new "Pasted Path": a saved path selected there receives the component, keeps the panel
+/// selection and centres it on the view, as in Photoshop.
+#[test]
+fn path_selection_paste_lands_in_the_panel_selected_path() {
+    let mut h = harness();
+    let layer = two_rect_layer(&mut h);
+    let k = |x: f64, y: f64| json!({"anchor": [x, y]});
+    h.state_mut()
+        .run(
+            "path.set",
+            json!({"name": "Sister", "path": {"subpaths": [
+                {"closed": true, "knots": [k(150.0, 20.0), k(190.0, 20.0), k(190.0, 60.0), k(150.0, 60.0)]},
+            ]}}),
+        )
+        .unwrap();
+    h.state_mut().ui.selected_path = Some("Sister".into());
+    h.state_mut().ui.tool = Tool::PathSelection;
+    h.run_steps(2);
+
+    // Select a component of the shape (not of the saved path) and copy it.
+    crate::vector_ui::path_selection_finish(h.state_mut(), [120.0, 40.0], [120.0, 40.0]);
+    assert_eq!(h.state().ui.path_selection.subpaths, vec![1]);
+    h.state_mut().run("edit.copy", json!({})).unwrap();
+
+    // Paste lands it in the panel-selected "Sister", centred on the view…
+    let c = crate::canvas::ViewXform::active(h.state()).map(|xf| [f64::from(xf.center[0]), f64::from(xf.center[1])]).unwrap_or([100.0, 50.0]);
+    h.state_mut().run("edit.paste", json!({})).unwrap();
+    let app = h.state();
+    let doc = &app.session.active().unwrap().doc;
+    let saved = doc.paths.iter().find(|q| q.name == "Sister").expect("Sister");
+    assert_eq!(saved.path.subpaths.len(), 2, "the copied component appended to the selected path");
+    // The copied bounds centre (120, 40) lands on the paste centre; anchor (100, 20) follows.
+    assert_eq!(saved.path.subpaths[1].knots[0].anchor, photocraft_geom::Point::new(c[0] - 20.0, c[1] - 20.0));
+    assert!(doc.paths.iter().all(|q| q.name != "Pasted Path"), "no new saved path is created");
+    assert_eq!(app.ui.selected_path.as_deref(), Some("Sister"), "the panel selection stays");
+    // …and the shape the component was copied from is untouched.
+    let l = app.session.active().unwrap().doc.layer(photocraft_doc::LayerId(layer)).unwrap();
+    let photocraft_doc::LayerContent::Shape(sh) = &l.content else { panic!("not a shape") };
+    assert_eq!(sh.path.subpaths.len(), 2, "the shape is untouched");
+}
+
+/// Layer › Combine Shapes with one component selected narrows to it: Subtract Front Shape
+/// sets only the selected component's path operation, the other keeps Combine, and the shape
+/// stops being live. Without a selection the command addresses every component but the
+/// first, as before.
+#[test]
+fn path_selection_combine_shapes_applies_to_the_selected_component() {
+    let mut h = harness();
+    let layer = two_rect_layer(&mut h);
+    h.state_mut().ui.tool = Tool::PathSelection;
+    h.run_steps(2);
+    crate::vector_ui::path_selection_finish(h.state_mut(), [120.0, 40.0], [120.0, 40.0]);
+    assert_eq!(h.state().ui.path_selection.subpaths, vec![1]);
+
+    // The selected component subtracts, the unselected one keeps Combine.
+    h.state_mut().run("layer.combineShapes.subtractFrontShape", json!({})).unwrap();
+    let l = h.state().session.active().unwrap().doc.layer(photocraft_doc::LayerId(layer)).unwrap();
+    let photocraft_doc::LayerContent::Shape(sh) = &l.content else { panic!("not a shape") };
+    assert_eq!(sh.path.subpaths[0].op, photocraft_doc::vector::PathOp::Combine, "the unselected component keeps its operation");
+    assert_eq!(sh.path.subpaths[1].op, photocraft_doc::vector::PathOp::Subtract, "only the selected component subtracts");
+    assert!(sh.live.is_none(), "a component operation stops the shape being live");
+    assert_eq!(h.state().session.active().unwrap().history.undo_label(), Some("Subtract Front Shape"), "one history step");
+
+    // No component selection: the command spreads over every component but the first again.
+    crate::vector_ui::path_selection_finish(h.state_mut(), [5.0, 5.0], [5.0, 5.0]);
+    assert!(h.state().ui.path_selection.subpaths.is_empty());
+    h.state_mut().run("layer.combineShapes.excludeOverlappingShapes", json!({})).unwrap();
+    let l = h.state().session.active().unwrap().doc.layer(photocraft_doc::LayerId(layer)).unwrap();
+    let photocraft_doc::LayerContent::Shape(sh) = &l.content else { panic!("not a shape") };
+    assert_eq!(sh.path.subpaths[0].op, photocraft_doc::vector::PathOp::Combine, "the first component stays the base");
+    assert_eq!(sh.path.subpaths[1].op, photocraft_doc::vector::PathOp::Exclude, "without a selection every component but the first takes the operation");
+}

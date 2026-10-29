@@ -1,6 +1,7 @@
 use super::paths_panel::{PathEntry, PathRow, path_rows};
 use super::pen::pen_commit;
-use super::{Affine, Document, LayerContent, Path, PhotocraftApp, Tool, Value, json};
+use super::{Document, LayerContent, Path, PhotocraftApp, Tool, Value, json};
+use serde::{Deserialize, Serialize};
 
 /// The path that path commands act on without a name: the one selected in the Paths panel, else
 /// the work path while it is shown (not after Make Selection hid it, #6079), else the selected
@@ -111,11 +112,21 @@ pub(crate) fn work_path_shown_in(app: &PhotocraftApp, doc: &Document) -> bool {
 // Path Selection
 
 /// What Path Selection edits.
-pub(super) enum PathTarget {
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", tag = "kind", content = "layer")]
+pub enum PathTarget {
     Shape(u64),
     /// The active layer's vector mask, when its Layers thumbnail is targeted (#196).
     VectorMask(u64),
     Work,
+    /// The work or saved path selected in the Paths panel (the content is the path's name).
+    Saved(String),
+}
+
+impl Default for PathTarget {
+    fn default() -> Self {
+        PathTarget::Shape(0)
+    }
 }
 
 /// The targeted vector mask of the active layer, if the Layers panel targets it.
@@ -175,17 +186,32 @@ pub(super) fn target_path(app: &PhotocraftApp) -> Option<(PathTarget, Path)> {
     app.session.active()?.doc.work_path.clone().map(|p| (PathTarget::Work, p))
 }
 
+/// The saved path selected in the Paths panel, with its name: the target path for the path
+/// tools, so the pasted path and its siblings are editable on the canvas like any other path.
+pub(super) fn saved_target(app: &PhotocraftApp) -> Option<(String, Path)> {
+    let name = selected_document_path(app)?;
+    if name == "work" {
+        return None;
+    }
+    let st = app.session.active()?;
+    let p = st.doc.paths.iter().find(|q| q.name == name)?.path.clone();
+    Some((name, p))
+}
+
 /// Edit › Free Transform Path (⌘T with Path Selection or Direct Selection): the path the
 /// box transforms (the one Path Selection edits) and `path.transform`'s params that name it.
 pub(crate) fn free_transform_path(app: &PhotocraftApp) -> Option<(Value, Path)> {
     if !matches!(app.ui.tool, Tool::PathSelection | Tool::DirectSelection) {
         return None;
     }
-    let (target, path) = target_path(app)?;
+    // The Paths panel's selection is the target path (as `active_path_name`), then the
+    // targeted vector mask, the active shape's path or the work path.
+    let (target, path) = saved_target(app).map(|(n, p)| (PathTarget::Saved(n), p)).or_else(|| target_path(app))?;
     path.control_bounds()?;
     let params = match target {
         PathTarget::Shape(id) | PathTarget::VectorMask(id) => json!({"name": "layer", "layer": id}),
         PathTarget::Work => json!({"name": "work"}),
+        PathTarget::Saved(name) => json!({"name": name}),
     };
     Some((params, path))
 }
@@ -208,6 +234,49 @@ fn point_in_subpath(sp: &photocraft_doc::vector::Subpath, pt: [f64; 2]) -> bool 
         }
     }
     inside
+}
+
+/// Path Selection's (black arrow) component selection: which subpaths of which path are
+/// selected, so a drag moves just those instead of the whole path.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PathSelection {
+    /// The document the selection belongs to.
+    pub doc: u64,
+    /// The path the selected subpaths belong to (`None` = nothing selected).
+    pub target: Option<PathTarget>,
+    /// Selected subpath indices into the target path.
+    pub subpaths: Vec<usize>,
+    /// Knot count per subpath when the selection was made: a structural edit (anchors or
+    /// subpaths added/removed) invalidates the selection instead of moving stale indices.
+    pub knots: Vec<usize>,
+}
+
+/// The subpaths `app.ui.path_selection` currently holds on `(doc, target, path)`: empty when
+/// the selection belongs to another document or path, or its knot signature no longer matches
+/// (a structural edit made the stored indices stale, so they are ignored, not moved).
+pub(crate) fn selected_subpaths(app: &PhotocraftApp, doc: &Document, target: PathTarget, path: &Path) -> Vec<usize> {
+    let sel = &app.ui.path_selection;
+    if sel.target.as_ref() != Some(&target) || sel.doc != doc.id.0 || sel.subpaths.is_empty() {
+        return Vec::new();
+    }
+    if sel.knots != path.subpaths.iter().map(|s| s.knots.len()).collect::<Vec<_>>() {
+        return Vec::new();
+    }
+    sel.subpaths.iter().copied().filter(|&i| i < path.subpaths.len()).collect()
+}
+
+/// The subpath of `path` under document point `at`: its outline within `tol`, else its filled
+/// interior. Overlapping components resolve to the topmost (the last subpath folded in).
+fn pick_subpath_at(path: &Path, at: [f64; 2], tol: f64) -> Option<usize> {
+    let outline = path.subpaths.iter().enumerate().find_map(|(i, sp)| {
+        if sp.knots.len() < 2 {
+            return None;
+        }
+        let single = Path { subpaths: vec![sp.clone()], fill_rule: path.fill_rule, inverted: false };
+        photocraft_vector::edit::hit(&single, photocraft_geom::Point::new(at[0], at[1]), tol, &[]).is_some().then_some(i)
+    });
+    outline.or_else(|| path.subpaths.iter().enumerate().rev().find(|(_, sp)| point_in_subpath(sp, at)).map(|(i, _)| i))
 }
 
 /// The topmost visible shape layer under `at` (document coordinates):
@@ -266,32 +335,118 @@ pub fn pick_shape_at(doc: &Document, at: [f64; 2], tol: f64) -> Option<photocraf
     None
 }
 
-pub fn path_selection_finish(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
-    let (dx, dy) = (end[0] - start[0], end[1] - start[1]);
-    let tol = 6.0 / f64::from(app.point_zoom().max(0.01));
-    if dx.abs() + dy.abs() < 0.5 {
-        let Some(st) = app.session.active() else { return };
-        if let Some(id) = pick_shape_at(&st.doc, start, tol) {
-            let _ = app.run("layer.select", json!({"layer": id.0}));
-        }
+/// Moves the selected subpaths by `(dx, dy)` through `path.moveAnchors`: one history step per
+/// drag; the command's target params address a layer's shape path, a targeted vector mask and
+/// the work path alike.
+fn move_selected(app: &mut PhotocraftApp, target: PathTarget, path: &Path, subpaths: &[usize], dx: f64, dy: f64) {
+    let anchors: Vec<[usize; 2]> =
+        subpaths.iter().filter_map(|&s| path.subpaths.get(s).map(|sp| (s, sp))).flat_map(|(s, sp)| (0..sp.knots.len()).map(move |k| [s, k])).collect();
+    if anchors.is_empty() {
         return;
     }
-    if target_path(app).is_none() {
-        let Some(st) = app.session.active() else { return };
-        if let Some(id) = pick_shape_at(&st.doc, start, tol) {
-            let _ = app.run("layer.select", json!({"layer": id.0}));
-        }
-    }
-    let Some((target, path)) = target_path(app) else { return };
-    let _ = match target {
-        PathTarget::Shape(id) => app.run("shape.edit", json!({"layer": id, "move": [dx.round(), dy.round()]})),
-        PathTarget::VectorMask(id) => {
-            let moved = path.transform(&Affine::translate(dx.round(), dy.round()));
-            app.run("layer.vectorMask.edit", json!({"layer": id, "path": photocraft_engine::vector_cmds::path_json(&moved)}))
-        }
-        PathTarget::Work => {
-            let moved = path.transform(&Affine::translate(dx.round(), dy.round()));
-            app.run("path.set", json!({"name": "work", "path": photocraft_engine::vector_cmds::path_json(&moved)}))
-        }
+    let mut params = json!({"anchors": anchors, "move": [dx, dy]});
+    let target = match target {
+        PathTarget::Shape(id) | PathTarget::VectorMask(id) => json!({"name": "layer", "layer": id}),
+        PathTarget::Work => json!({"name": "work"}),
+        PathTarget::Saved(name) => json!({"name": name}),
     };
+    if let (Some(p), Some(t)) = (params.as_object_mut(), target.as_object()) {
+        p.extend(t.clone());
+    }
+    if let Err(e) = app.run("path.moveAnchors", params) {
+        app.ui.status = e;
+        app.ui.status_error = true;
+    }
+}
+
+pub fn path_selection_finish(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
+    let tol = 6.0 / f64::from(app.point_zoom().max(0.01));
+    let (dx, dy) = (end[0] - start[0], end[1] - start[1]);
+    let clear = |app: &mut PhotocraftApp| app.ui.path_selection = PathSelection::default();
+
+    // The press's target: a shape layer under the pointer (selected on the press, as in
+    // Photoshop), else the path selected in the Paths panel (a saved path — the pasted path is
+    // one), else the targeted vector mask, the active shape's path or the work path.
+    let hit: Option<(PathTarget, Path, Option<usize>)> = app
+        .session
+        .active()
+        .and_then(|st| {
+            let id = pick_shape_at(&st.doc, start, tol)?;
+            let l = st.doc.layer(id)?;
+            let LayerContent::Shape(sh) = &l.content else { return None };
+            Some((PathTarget::Shape(id.0), sh.path.clone(), pick_subpath_at(&sh.path, start, tol)))
+        })
+        .or_else(|| {
+            saved_target(app).map(|(name, p)| {
+                let sub = pick_subpath_at(&p, start, tol);
+                (PathTarget::Saved(name), p, sub)
+            })
+        })
+        .or_else(|| {
+            target_path(app).map(|(t, p)| {
+                let sub = pick_subpath_at(&p, start, tol);
+                (t, p, sub)
+            })
+        });
+    let Some((target, path, hit_subpath)) = hit else {
+        clear(app);
+        return;
+    };
+
+    if let PathTarget::Shape(id) = &target
+        && app.session.active().and_then(|st| st.active_layer).map(|l| l.0) != Some(*id)
+    {
+        let _ = app.run("layer.select", json!({"layer": id}));
+    }
+
+    // The press landed on the path's layer but no subpath: keep/drop the layer selection and
+    // clear the component selection (a drag from empty canvas is a no-op; Photoshop
+    // marquee-selects here, a follow-up).
+    let Some(hit_subpath) = hit_subpath else {
+        clear(app);
+        return;
+    };
+
+    // Selection bookkeeping: a press on an already-selected subpath of the same, structurally
+    // unchanged path keeps the selection (a drag starting on it moves all of it); any other
+    // press makes the hit the new selection.
+    let knots: Vec<usize> = path.subpaths.iter().map(|s| s.knots.len()).collect();
+    let sel = &mut app.ui.path_selection;
+    let keep = sel.target.as_ref() == Some(&target)
+        && sel.doc == app.session.active().map_or(0, |st| st.doc.id.0)
+        && sel.knots == knots
+        && sel.subpaths.contains(&hit_subpath);
+    if !keep {
+        *sel = PathSelection { doc: app.session.active().map_or(0, |st| st.doc.id.0), target: Some(target.clone()), subpaths: vec![hit_subpath], knots };
+    }
+
+    if dx.abs() + dy.abs() >= 0.5 {
+        let subpaths = app.ui.path_selection.subpaths.clone();
+        move_selected(app, target, &path, &subpaths, dx, dy);
+    }
+}
+
+/// Layer › Combine Shapes narrows to the black arrow's selected component: with exactly one
+/// component of a shape layer selected (Path Selection tool), Unite / Subtract / Intersect /
+/// Exclude set that component's path operation alone, as Photoshop's options-bar
+/// path-operation buttons do; the other components keep theirs. `None` = not this context,
+/// dispatch as usual (every component but the first, or a merge of the selected layers).
+pub(crate) fn combine_shapes_intercept(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
+    if !matches!(
+        id,
+        "layer.combineShapes.unite"
+            | "layer.combineShapes.subtractFrontShape"
+            | "layer.combineShapes.intersectShapeAreas"
+            | "layer.combineShapes.excludeOverlappingShapes"
+    ) {
+        return None;
+    }
+    let (target, subpaths) = super::path_clip::live_selection(app)?;
+    let PathTarget::Shape(layer) = target else { return None };
+    let [sub] = subpaths.as_slice() else { return None };
+    // Explicit params address the command elsewhere; respect them.
+    if params.get("subpath").is_some() || params.get("layer").is_some_and(|v| v.as_u64() != Some(layer)) {
+        return None;
+    }
+    Some(app.run(id, json!({"layer": layer, "subpath": sub})))
 }
