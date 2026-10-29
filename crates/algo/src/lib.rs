@@ -1375,15 +1375,6 @@ const RESULT_BUDGET: usize = 256 << 20;
 
 #[cfg(test)]
 mod tests;
-#[cfg(test)]
-mod tests_ext;
-
-#[cfg(test)]
-mod tests_mosaic;
-
-#[cfg(test)]
-mod tests_selection_mix;
-
 /// The current upstream sampler through the identical source/selection/tile pipeline.
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)]

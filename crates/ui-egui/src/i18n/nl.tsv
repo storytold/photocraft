@@ -298,6 +298,7 @@
 	Layer…	Laag…
 	Group…	Groep…
 	Group from Layers…	Groep uit lagen…
+	New Group from Layers…	Nieuwe groep uit lagen…
 	Artboard…	Tekengebied…
 	Artboard from Group…	Tekengebied uit groep…
 	Artboard from Layers…	Tekengebied uit lagen…
@@ -1922,7 +1923,7 @@
 	Full size tip	Punt op volledige grootte
 	Gamut warning color	Kleur waarschuwing kleurbereik
 	Gamut warning opacity	Dekking waarschuwing kleurbereik
-	Generator enabled	Generator ingeschakeld
+	Enable Generator	Generator inschakelen
 	Gif	GIF
 	Glossy	Glanzend
 	Grid color	Rasterkleur
@@ -3922,6 +3923,9 @@ curves	Smooth	Vloeiend maken
 # History panel menu (#2966)
 	New Snapshot…	Nieuwe momentopname…
 	History Options…	Geschiedenisopties…
+# History panel › History Options… (#2966)
+	Allow Non-Linear History	Niet-lineaire geschiedenis toestaan
+	Make Layer Visibility Changes Undoable	Wijzigingen in laagzichtbaarheid ongedaan kunnen maken
 # Print dialog (#2697)
 	Emulsion Down	Emulsie omlaag
 	Functions	Functies
@@ -4008,6 +4012,33 @@ curves	Smooth	Vloeiend maken
 	Sent to {printer}	Verzonden naar {printer}
 	set in Print Settings…	instellen in de afdrukinstellingen…
 	ICO is limited to 256 × 256 pixels	ICO is beperkt tot 256 × 256 pixels
+	Show Favorite Fonts	Favoriete lettertypen tonen
+	No favorite fonts yet: click the star beside a font to add it.	Nog geen favoriete lettertypen: klik op de ster naast een lettertype om het toe te voegen.
+	Favorite fonts	Favoriete lettertypen
+	Add to Favorites	Toevoegen aan favorieten
+	Remove from Favorites	Verwijderen uit favorieten
+	Show All Fonts	Alle lettertypen tonen
+	All Classes	Alle klassen
+	Blackletter	Gebroken letter
+	Decorative	Decoratief
+	Font preview:	Lettertypevoorbeeld:
+	Handwritten	Handgeschreven
+	Hide Font Classes	Lettertypeklassen verbergen
+	Hide Styles	Stijlen verbergen
+	Monospace	Monospace
+	No fonts match these filters.	Geen lettertypen voldoen aan deze filters.
+	No similar fonts: the current font doesn't say what it looks like.	Geen vergelijkbare lettertypen: het huidige lettertype beschrijft zijn uiterlijk niet.
+	OpenType font	OpenType-lettertype
+	Sans Serif	Schreefloos
+	Script	Script
+	Serif	Schreef
+	Show Font Classes	Lettertypeklassen tonen
+	Show Similar Fonts	Vergelijkbare lettertypen tonen
+	Show Styles	Stijlen tonen
+	Show Variable Fonts	Variabele lettertypen tonen
+	Slab Serif	Slab-schreef
+	TrueType font	TrueType-lettertype
+	Variable font	Variabel lettertype
 	Calibration	Kalibratie
 	Red Primary	Primair rood
 	Green Primary	Primair groen
@@ -4184,6 +4215,20 @@ curves	Smooth	Vloeiend maken
 	Not rendered: this adjustment ({key}) is kept as imported.	Niet weergegeven: deze aanpassing ({key}) blijft behouden zoals geïmporteerd.
 # Print preview image (#8236)
 	Print preview image	Print preview image
+	Color Aware	Kleurbewust
+	Decontaminate Colors	Kleuren zuiveren
+	Edge Detection	Randdetectie
+	Global Refinements	Globale verfijningen
+	High Quality Preview	Voorvertoning in hoge kwaliteit
+	Object Aware	Objectbewust
+	Real-Time Refinement	Verfijning in realtime
+	Refine Edge Brush Tool	Gereedschap Penseel Rand verfijnen
+	Refine Hair	Haar verfijnen
+	Refine Mode	Verfijningsmodus
+	Remember Settings	Instellingen onthouden
+	View Mode	Weergavemodus
+	Object Aware needs a segmentation model, which isn't available yet	Objectbewust vereist een segmentatiemodel dat nog niet beschikbaar is
+	Refine Hair needs hair detection, which isn't available yet	Haar verfijnen vereist haardetectie die nog niet beschikbaar is
 # Color panel menu: modes, copy commands and colour ramps (#6000)
 	Hue Cube	Kleurtoonkubus
 	Brightness Cube	Helderheidskubus
@@ -4200,6 +4245,8 @@ curves	Smooth	Vloeiend maken
 	Grayscale Ramp	Grijswaardenbalk
 	Current Colors	Huidige kleuren
 	Make Ramp Web Safe	Balk beperken tot webkleuren
+	Select and Mask was closed: its document is no longer the active one	Selecteren en maskeren is gesloten: het document is niet meer het actieve document
+	Select and Mask was closed: another layer was selected	Selecteren en maskeren is gesloten: er is een andere laag geselecteerd
 # Art History Brush (#213).
 	Art History Brush Tool	Artistiek historiepenseel
 	Tight Short	Strak kort
@@ -4211,3 +4258,6 @@ curves	Smooth	Vloeiend maken
 	Tight Curl	Strakke krul
 	Loose Curl	Losse krul
 	Stylized dabs from a history state	Gestileerde tikken uit een historiestatus
+	Font size presets	Voorinstellingen lettergrootte
+	Leading presets	Voorinstellingen interlinie
+	Tracking presets	Voorinstellingen spatiëring
