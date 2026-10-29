@@ -48,7 +48,7 @@ fn mb(bytes: u64) -> String {
     let n = bytes.div_ceil(1 << 20).to_string();
     let mut out = String::with_capacity(n.len() + n.len() / 3);
     for (i, c) in n.chars().enumerate() {
-        if i > 0 && (n.len() - i) % 3 == 0 {
+        if i > 0 && (n.len() - i).is_multiple_of(3) {
             out.push(',');
         }
         out.push(c);
